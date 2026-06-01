@@ -1,43 +1,117 @@
+import type { ChannelAdapter, ChannelMessage, ChannelReply } from '../core/types.js';
+
 /**
- * Protocol Layer — 将 Agent Harness 暴露为 HTTP API
+ * HTTP Channel Adapter
  *
- * 设计原则：薄协议，只做格式转换和路由，不加业务逻辑
+ * 将 HTTP 请求转化为 Channel 消息，支持：
+ * - POST /messages — 发送消息给 agent
+ * - GET /health — 健康检查
  */
-
-import type { AgentHarness, Message, AgentConfig, AgentEventListener } from '../core/types.js';
-
-export interface ProtocolServer {
-  start(port: number): Promise<void>;
-  stop(): Promise<void>;
+export interface HttpAdapterOptions {
+  port: number;
+  path?: string;
 }
 
-/**
- * HTTP 协议适配器（占位）
- *
- * 将暴露以下端点：
- * POST   /sessions           — 创建 session
- * POST   /sessions/:id/send  — 发送消息
- * GET    /sessions/:id       — 获取 session 状态
- * DELETE /sessions/:id       — 结束 session
- * GET    /health             — 健康检查
- * GET    /tools              — 列出可用工具
- */
-export class HttpProtocol implements ProtocolServer {
-  constructor(private harness: AgentHarness) {}
+export class HttpChannelAdapter implements ChannelAdapter {
+  name = 'http';
+  private port: number;
+  private path: string;
+  private handler?: (msg: ChannelMessage) => Promise<void>;
+  private server?: any;
 
-  async start(_port: number): Promise<void> {
-    // TODO: 实现 HTTP server（使用原生 node:http 或 hono）
-    console.log('[HttpProtocol] Server placeholder — not yet implemented');
+  constructor(options: HttpAdapterOptions) {
+    this.port = options.port;
+    this.path = options.path ?? '/messages';
+  }
+
+  async start(handler: (msg: ChannelMessage) => Promise<void>): Promise<void> {
+    this.handler = handler;
+
+    // 使用 Node.js 原生 http 模块（避免额外依赖）
+    const { createServer } = await import('node:http');
+
+    this.server = createServer(async (req, res) => {
+      // CORS
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+      if (req.method === 'OPTIONS') {
+        res.writeHead(204);
+        res.end();
+        return;
+      }
+
+      if (req.method === 'GET' && req.url === '/health') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', adapter: 'http' }));
+        return;
+      }
+
+      if (req.method === 'POST' && req.url === this.path) {
+        try {
+          const body = await this.readBody(req);
+          const message: ChannelMessage = {
+            id: `http-${Date.now()}`,
+            channel: 'http',
+            senderId: body.senderId ?? 'anonymous',
+            senderName: body.senderName,
+            content: body.content ?? body.message ?? '',
+            conversationId: body.conversationId ?? 'default',
+            timestamp: Date.now(),
+            metadata: body.metadata,
+          };
+
+          // 异步处理，不阻塞响应
+          this.handler!(message).catch(console.error);
+
+          res.writeHead(202, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ accepted: true, messageId: message.id }));
+        } catch (error) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: String(error) }));
+        }
+        return;
+      }
+
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Not found' }));
+    });
+
+    await new Promise<void>((resolve) => {
+      this.server.listen(this.port, () => {
+        console.log(`[HTTP Adapter] Listening on port ${this.port}`);
+        resolve();
+      });
+    });
+  }
+
+  async send(reply: ChannelReply): Promise<void> {
+    // HTTP 模式下，回复通过 WebSocket 或轮询返回
+    // 这里仅记录日志，实际应用需要通过 WS 推送
+    console.log(`[HTTP Adapter] Reply to ${reply.conversationId}: ${reply.content.substring(0, 100)}...`);
   }
 
   async stop(): Promise<void> {
-    // TODO
+    if (this.server) {
+      await new Promise<void>((resolve) => {
+        this.server.close(() => resolve());
+      });
+    }
   }
-}
 
-/**
- * 适配器工厂 — 让应用层选择协议
- */
-export function createHttpProtocol(harness: AgentHarness): HttpProtocol {
-  return new HttpProtocol(harness);
+  private readBody(req: any): Promise<any> {
+    return new Promise((resolve, reject) => {
+      let data = '';
+      req.on('data', (chunk: string) => { data += chunk; });
+      req.on('end', () => {
+        try {
+          resolve(JSON.parse(data));
+        } catch (e) {
+          reject(new Error('Invalid JSON'));
+        }
+      });
+      req.on('error', reject);
+    });
+  }
 }

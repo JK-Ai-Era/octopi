@@ -1,0 +1,57 @@
+{
+  "a457154a-e7f3-4391-adb7-2942bc096061": {
+    "id": "a457154a-e7f3-4391-adb7-2942bc096061",
+    "agentId": "test-agent",
+    "channelId": "test",
+    "peerId": "main",
+    "status": "idle",
+    "createdAt": 1780285828126,
+    "sessionStartedAt": 1780285828126,
+    "lastInteractionAt": 1780285828126,
+    "updatedAt": 1780285828126
+  },
+  "9c3a955a-c850-4d6a-8848-3a6f6651597a": {
+    "id": "9c3a955a-c850-4d6a-8848-3a6f6651597a",
+    "agentId": "test-agent",
+    "channelId": "test",
+    "peerId": "main",
+    "status": "idle",
+    "createdAt": 1780285828135,
+    "sessionStartedAt": 1780285828135,
+    "lastInteractionAt": 1780285828135,
+    "updatedAt": 1780285828135
+  },
+  "1ceddedc-4b00-4dd6-973b-3f02702ebf56": {
+    "id": "1ceddedc-4b00-4dd6-973b-3f02702ebf56",
+    "agentId": "test-agent",
+    "channelId": "test",
+    "peerId": "main",
+    "status": "idle",
+    "createdAt": 1780285899256,
+    "sessionStartedAt": 1780285899256,
+    "lastInteractionAt": 1780285899256,
+    "updatedAt": 1780285899256
+  },
+  "8fc54375-bd93-4339-9d12-52807d2de518": {
+    "id": "8fc54375-bd93-4339-9d12-52807d2de518",
+    "agentId": "test-agent",
+    "channelId": "test",
+    "peerId": "main",
+    "status": "idle",
+    "createdAt": 1780285899260,
+    "sessionStartedAt": 1780285899260,
+    "lastInteractionAt": 1780285899260,
+    "updatedAt": 1780285899260
+  },
+  "f4f65b8b-68cb-4ef0-b95b-8075ead9c4ac": {
+    "id": "f4f65b8b-68cb-4ef0-b95b-8075ead9c4ac",
+    "agentId": "test-agent",
+    "channelId": "test",
+    "peerId": "main",
+    "status": "idle",
+    "createdAt": 1780285899260,
+    "sessionStartedAt": 1780285899260,
+    "lastInteractionAt": 1780285899260,
+    "updatedAt": 1780285899260
+  }
+}

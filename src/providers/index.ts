@@ -1,1 +1,1 @@
-export { LLMRouter } from './llm-router.js';
+export { LLMRouter } from './router.js';

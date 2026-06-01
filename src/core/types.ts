@@ -1,158 +1,180 @@
 /**
  * Agent Harness 核心类型定义
  *
- * 设计原则：
- * - 接口优先，实现后置
- * - 类型是文档，好的类型自解释
- * - 正交设计，各层独立可替换
+ * 参考 OpenClaw 架构，定义完整的消息、Session、Agent、工具、记忆、Plugin 等接口。
  */
 
 // ============================================================
-// 1. 消息系统 — 统一的通信协议
+// 1. 消息系统
 // ============================================================
 
-/** 消息角色 */
 export type MessageRole = 'user' | 'assistant' | 'system' | 'tool';
 
-/** 消息来源元数据 */
 export interface MessageSource {
-  /** 来源渠道：feishu, telegram, cli, api, ... */
   channel: string;
-  /** 发送者标识 */
   senderId?: string;
-  /** 发送者显示名 */
   senderName?: string;
-  /** 原始消息ID（用于回复/引用） */
   messageId?: string;
-  /** 会话标识 */
   conversationId?: string;
 }
 
-/** 工具调用 */
 export interface ToolCall {
   id: string;
   name: string;
   arguments: Record<string, unknown>;
 }
 
-/** 工具调用结果 */
 export interface ToolResult {
   toolCallId: string;
   name: string;
   result: unknown;
   error?: string;
-  /** 执行耗时 ms */
   durationMs?: number;
 }
 
-/** 统一消息格式 */
 export interface Message {
   role: MessageRole;
   content: string;
-  /** 来源元数据（user 消息必有） */
   source?: MessageSource;
-  /** 工具调用（assistant 消息可有） */
   toolCalls?: ToolCall[];
-  /** 工具结果（tool 消息必有） */
   toolResults?: ToolResult[];
-  /** 时间戳 */
   timestamp: number;
-  /** 扩展元数据 */
   metadata?: Record<string, unknown>;
 }
 
 // ============================================================
-// 2. Agent 定义
+// 2. Agent 定义 — 一个完整的独立 scope
 // ============================================================
 
-/** Agent 人设 */
 export interface AgentPersona {
   name: string;
   description: string;
   systemPrompt: string;
-  /** 角色标签 */
   tags?: string[];
 }
 
-/** Agent 配置 */
-export interface AgentConfig {
-  persona: AgentPersona;
-  /** 默认 LLM provider */
+export interface ModelConfig {
   provider: string;
-  /** 默认模型 */
   model: string;
-  /** 温度 */
   temperature?: number;
-  /** 最大 token */
   maxTokens?: number;
-  /** 可用工具列表（名称数组，运行时解析） */
-  tools?: string[];
-  /** 记忆配置 */
-  memory?: MemoryConfig;
+  fallbackModels?: string[];
 }
 
-// ============================================================
-// 3. Session 与 Turn
-// ============================================================
+export interface ToolPolicy {
+  /** 允许的工具列表（* 表示全部允许） */
+  allow: string[];
+  /** 拒绝的工具列表 */
+  deny?: string[];
+  /** 需要人工确认的工具 */
+  requireConfirmation?: string[];
+}
 
-/** 一次 LLM 调用 */
-export interface Turn {
+export interface AgentDefinition {
   id: string;
-  /** 输入消息 */
-  input: Message[];
-  /** LLM 输出 */
-  output: Message;
-  /** 使用的 token */
-  usage?: TokenUsage;
-  /** 耗时 */
-  durationMs: number;
-  /** 模型标识 */
-  model: string;
-  /** 时间戳 */
-  timestamp: number;
+  /** Agent 的工作区目录 */
+  workspace: string;
+  persona: AgentPersona;
+  tools: ToolPolicy;
+  model: ModelConfig;
+  /** 自定义上下文引擎 id（不设置则用 legacy） */
+  contextEngine?: string;
 }
 
-/** Token 使用量 */
+// ============================================================
+// 3. Session — 对话的完整生命周期
+// ============================================================
+
+export type SessionStatus = 'idle' | 'processing' | 'waiting_human' | 'error';
+
+export interface SessionMeta {
+  id: string;
+  agentId: string;
+  channelId: string;
+  peerId: string;
+  status: SessionStatus;
+  createdAt: number;
+  /** 当前 session 开始时间（daily reset 用） */
+  sessionStartedAt: number;
+  /** 最后一次用户交互（idle reset 用） */
+  lastInteractionAt: number;
+  updatedAt: number;
+}
+
+// ============================================================
+// 4. Turn — 一次完整的 Agent 调用
+// ============================================================
+
 export interface TokenUsage {
   promptTokens: number;
   completionTokens: number;
   totalTokens: number;
 }
 
-/** Session 状态 */
-export type SessionStatus = 'idle' | 'thinking' | 'executing' | 'waiting_human' | 'error';
-
-/** 一个完整的 Agent 会话 */
-export interface Session {
+export interface Turn {
   id: string;
-  agentId: string;
-  status: SessionStatus;
-  turns: Turn[];
-  /** 会话级记忆上下文 */
-  context: ContextWindow;
-  createdAt: number;
-  updatedAt: number;
+  input: Message[];
+  output: Message;
+  usage?: TokenUsage;
+  durationMs: number;
+  model: string;
+  timestamp: number;
 }
 
-/** 上下文窗口 */
-export interface ContextWindow {
-  /** 系统 prompt */
-  systemPrompt: string;
-  /** 对话历史 */
-  messages: Message[];
-  /** 记忆注入（RAG、长期记忆等） */
-  memoryContext?: string;
-  /** 当前 token 估算 */
+// ============================================================
+// 5. Context Engine — 上下文组装 4 阶段生命周期
+// ============================================================
+
+export interface AssembleResult {
+  messages: Array<{ role: string; content: string; tool_calls?: unknown[] }>;
   estimatedTokens: number;
-  /** token 上限 */
-  maxTokens: number;
+  systemPromptAddition?: string;
+}
+
+export interface CompactResult {
+  ok: boolean;
+  compacted: boolean;
+  sessionId?: string;
+  sessionFile?: string;
+}
+
+export interface ContextEngineInfo {
+  id: string;
+  name: string;
+  ownsCompaction: boolean;
+}
+
+export interface ContextEngine {
+  info: ContextEngineInfo;
+
+  /** 1. 新消息到达时调用 */
+  ingest(params: { sessionId: string; message: Message }): Promise<void>;
+
+  /** 2. 模型调用前组装上下文 */
+  assemble(params: {
+    sessionId: string;
+    messages: Message[];
+    tokenBudget: number;
+    availableTools: string[];
+  }): Promise<AssembleResult>;
+
+  /** 3. 上下文满了或手动触发压缩 */
+  compact(params: {
+    sessionId: string;
+    force: boolean;
+  }): Promise<CompactResult>;
+
+  /** 4. 一轮完成后 */
+  afterTurn(params: {
+    sessionId: string;
+    turn: Turn;
+  }): Promise<void>;
 }
 
 // ============================================================
-// 4. 工具系统
+// 6. 工具系统
 // ============================================================
 
-/** 工具参数定义 */
 export interface ToolParameter {
   type: 'string' | 'number' | 'boolean' | 'object' | 'array';
   description: string;
@@ -163,76 +185,43 @@ export interface ToolParameter {
   default?: unknown;
 }
 
-/** 工具定义（声明式） */
 export interface ToolDefinition {
   name: string;
   description: string;
   parameters: Record<string, ToolParameter>;
-  /** 权限标签 */
   permissions?: string[];
-  /** 是否需要人工确认 */
   requiresConfirmation?: boolean;
-  /** 超时 ms */
   timeoutMs?: number;
 }
 
-/** 工具执行上下文 */
 export interface ToolExecutionContext {
   sessionId: string;
   agentId: string;
-  /** 当前对话 */
   messages: Message[];
-  /** 取消信号 */
   abortSignal?: AbortSignal;
 }
 
-/** 工具执行器 */
 export type ToolHandler = (
   args: Record<string, unknown>,
   context: ToolExecutionContext,
 ) => Promise<unknown>;
 
-/** 注册的工具 */
 export interface RegisteredTool {
   definition: ToolDefinition;
   handler: ToolHandler;
 }
 
 // ============================================================
-// 5. 记忆系统
+// 7. 记忆系统
 // ============================================================
 
-/** 记忆配置 */
-export interface MemoryConfig {
-  /** 短期：对话历史保留条数 */
-  shortTermLimit?: number;
-  /** 中期：session 记忆 */
-  enableEpisodic?: boolean;
-  /** 长期：RAG 向量检索 */
-  enableSemantic?: boolean;
-  /** 向量存储配置 */
-  vectorStore?: VectorStoreConfig;
-}
-
-/** 向量存储配置 */
-export interface VectorStoreConfig {
-  provider: 'local' | 'pinecone' | 'qdrant' | 'chroma';
-  connectionString?: string;
-  collection?: string;
-}
-
-/** 记忆查询 */
 export interface MemoryQuery {
   text: string;
-  /** 返回条数 */
   limit?: number;
-  /** 最低相似度 */
   minScore?: number;
-  /** 过滤标签 */
   tags?: string[];
 }
 
-/** 记忆条目 */
 export interface MemoryEntry {
   id: string;
   content: string;
@@ -244,10 +233,9 @@ export interface MemoryEntry {
 }
 
 // ============================================================
-// 6. LLM Provider
+// 8. LLM Provider
 // ============================================================
 
-/** LLM 请求 */
 export interface LLMRequest {
   model: string;
   messages: Array<{ role: string; content: string; tool_calls?: unknown[] }>;
@@ -257,7 +245,6 @@ export interface LLMRequest {
   stream?: boolean;
 }
 
-/** LLM 响应 */
 export interface LLMResponse {
   content: string;
   toolCalls?: ToolCall[];
@@ -266,26 +253,115 @@ export interface LLMResponse {
   finishReason: 'stop' | 'tool_calls' | 'length' | 'error';
 }
 
-/** LLM Provider 接口 */
 export interface LLMProvider {
   name: string;
-  /** 支持的模型列表 */
   models: string[];
-  /** 发送请求 */
   complete(request: LLMRequest): Promise<LLMResponse>;
-  /** 流式请求（可选） */
   stream?(request: LLMRequest): AsyncIterable<LLMResponse>;
-  /** 健康检查 */
   healthCheck?(): Promise<boolean>;
 }
 
 // ============================================================
-// 7. 编排
+// 9. Channel Adapter — 消息渠道抽象
 // ============================================================
 
-/** Agent 循环事件 */
+export interface ChannelMessage {
+  id: string;
+  channel: string;
+  senderId: string;
+  senderName?: string;
+  content: string;
+  conversationId: string;
+  timestamp: number;
+  metadata?: Record<string, unknown>;
+}
+
+export interface ChannelReply {
+  channel: string;
+  conversationId: string;
+  content: string;
+  replyToId?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface ChannelAdapter {
+  name: string;
+  /** 启动适配器（监听消息） */
+  start(handler: (msg: ChannelMessage) => Promise<void>): Promise<void>;
+  /** 发送回复 */
+  send(reply: ChannelReply): Promise<void>;
+  /** 停止 */
+  stop(): Promise<void>;
+}
+
+// ============================================================
+// 10. Command Queue
+// ============================================================
+
+export type QueueMode = 'steer' | 'followup' | 'collect' | 'interrupt';
+
+export interface QueueParams {
+  message: ChannelMessage;
+  mode?: QueueMode;
+}
+
+// ============================================================
+// 11. Plugin Hooks
+// ============================================================
+
+export interface HookContext {
+  sessionId: string;
+  agentId: string;
+  [key: string]: unknown;
+}
+
+export interface PluginHooks {
+  /** 模型解析前：可以覆盖 provider/model */
+  before_model_resolve?(ctx: HookContext): Promise<{ provider?: string; model?: string } | null>;
+
+  /** Prompt 构建前：可以注入上下文 */
+  before_prompt_build?(ctx: HookContext & { messages: Message[] }): Promise<{
+    prependContext?: string;
+    systemPromptAddition?: string;
+  } | null>;
+
+  /** Agent 回复前：可以拦截并返回合成回复 */
+  before_agent_reply?(ctx: HookContext & { messages: Message[] }): Promise<Message | null>;
+
+  /** 工具调用前：可以拦截 */
+  before_tool_call?(ctx: HookContext & { call: ToolCall }): Promise<{ block: boolean } | null>;
+
+  /** 工具调用后 */
+  after_tool_call?(ctx: HookContext & { call: ToolCall; result: ToolResult }): Promise<void>;
+
+  /** 消息到达时 */
+  message_received?(ctx: HookContext & { message: ChannelMessage }): Promise<void>;
+
+  /** 消息发送前：可以取消 */
+  message_sending?(ctx: HookContext & { reply: ChannelReply }): Promise<{ cancel: boolean } | null>;
+
+  /** 消息发送后 */
+  message_sent?(ctx: HookContext & { reply: ChannelReply }): Promise<void>;
+
+  /** Session 开始 */
+  session_start?(ctx: HookContext): Promise<void>;
+
+  /** Session 结束 */
+  session_end?(ctx: HookContext): Promise<void>;
+}
+
+export interface Plugin {
+  id: string;
+  name: string;
+  hooks: PluginHooks;
+}
+
+// ============================================================
+// 12. Agent Event — 全链路可观测
+// ============================================================
+
 export type AgentEvent =
-  | { type: 'turn_start'; turnId: string }
+  | { type: 'turn_start'; turnId: string; sessionId: string }
   | { type: 'llm_request'; request: LLMRequest }
   | { type: 'llm_response'; response: LLMResponse }
   | { type: 'tool_call'; call: ToolCall }
@@ -293,29 +369,43 @@ export type AgentEvent =
   | { type: 'turn_end'; turn: Turn }
   | { type: 'error'; error: Error }
   | { type: 'waiting_human'; message: string }
-  | { type: 'session_end' };
+  | { type: 'session_end'; sessionId: string }
+  | { type: 'compaction'; sessionId: string };
 
-/** 事件监听器 */
 export type AgentEventListener = (event: AgentEvent) => void | Promise<void>;
 
-/** Agent Harness 核心接口 */
-export interface AgentHarness {
-  /** 注册工具 */
-  registerTool(tool: RegisteredTool): void;
-  /** 注册 LLM provider */
+// ============================================================
+// 13. Gateway 接口
+// ============================================================
+
+export interface GatewayConfig {
+  /** Gateway 监听端口 */
+  port?: number;
+  /** Agent 列表 */
+  agents: AgentDefinition[];
+  /** Session 配置 */
+  session?: {
+    dmScope?: 'main' | 'per-peer' | 'per-channel-peer';
+    reset?: {
+      dailyHour?: number;
+      idleMinutes?: number;
+    };
+    maintenance?: {
+      mode?: 'warn' | 'enforce';
+      pruneAfter?: string;
+      maxEntries?: number;
+    };
+  };
+}
+
+export interface Gateway {
+  start(): Promise<void>;
+  stop(): Promise<void>;
+  registerAgent(agent: AgentDefinition): void;
+  registerChannel(adapter: ChannelAdapter): void;
+  registerPlugin(plugin: Plugin): void;
+  registerTool(tool: RegisteredTool, agentId?: string): void;
   registerProvider(provider: LLMProvider): void;
-  /** 创建 session */
-  createSession(config: AgentConfig): Promise<Session>;
-  /** 发送消息并获取响应 */
-  send(sessionId: string, message: Message): Promise<Message>;
-  /** 流式发送 */
-  sendStream?(sessionId: string, message: Message): AsyncIterable<AgentEvent>;
-  /** 获取 session */
-  getSession(sessionId: string): Session | undefined;
-  /** 结束 session */
-  endSession(sessionId: string): Promise<void>;
-  /** 监听事件 */
-  on(listener: AgentEventListener): void;
-  /** 关闭 harness */
-  close(): Promise<void>;
+  send(message: ChannelMessage): Promise<void>;
+  getSession(sessionId: string): SessionMeta | undefined;
 }

@@ -1,60 +1,24 @@
-/**
- * Agent Harness — 可嵌入的 Agent 底座框架
- *
- * 用法：
- * ```ts
- * import { Agent, createHttpProtocol } from 'agent-harness';
- *
- * const agent = new Agent();
- * agent.registerProvider(myLLMProvider);
- * agent.registerTool(myTool);
- *
- * const session = await agent.createSession({ ... });
- * const reply = await agent.send(session.id, { role: 'user', content: '你好' });
- * ```
- */
+// Core types
+export * from './core/types.js';
 
-// Core
-export { Agent } from './core/agent.js';
-export { SessionManager } from './core/session-manager.js';
-export type {
-  Message,
-  MessageRole,
-  MessageSource,
-  ToolCall,
-  ToolResult,
-  AgentPersona,
-  AgentConfig,
-  Turn,
-  TokenUsage,
-  Session,
-  SessionStatus,
-  ContextWindow,
-  ToolParameter,
-  ToolDefinition,
-  ToolExecutionContext,
-  ToolHandler,
-  RegisteredTool,
-  MemoryConfig,
-  MemoryQuery,
-  MemoryEntry,
-  VectorStoreConfig,
-  LLMRequest,
-  LLMResponse,
-  LLMProvider,
-  AgentEvent,
-  AgentEventListener,
-  AgentHarness,
-} from './core/types.js';
+// Agent runtime
+export { AgentLoop } from './agent/agent-loop.js';
+export { SessionManager } from './agent/session-manager.js';
+
+// Gateway
+export { Gateway } from './gateway/gateway.js';
+
+// Context
+export { LegacyContextEngine } from './context/engine.js';
 
 // Tools
-export { ToolRegistry } from './tools/tool-registry.js';
+export { ToolRegistry } from './tools/registry.js';
 
 // Providers
-export { LLMRouter } from './providers/llm-router.js';
+export { LLMRouter } from './providers/router.js';
 
-// Memory
-export { ContextManager } from './memory/context-manager.js';
+// Plugins
+export { PluginManager } from './plugins/hooks.js';
 
 // Protocol
-export { HttpProtocol, createHttpProtocol } from './protocol/http.js';
+export { HttpChannelAdapter } from './protocol/http.js';

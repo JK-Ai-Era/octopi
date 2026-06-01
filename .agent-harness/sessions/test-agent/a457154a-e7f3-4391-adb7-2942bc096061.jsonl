@@ -1,0 +1,4 @@
+{"role":"user","content":"Hello, Agent!","source":{"channel":"test","senderId":"user-1","senderName":"Test User","messageId":"msg-1780285828134","conversationId":"conv-1"},"timestamp":1780285828134}
+{"role":"assistant","content":"","toolCalls":[{"id":"call-1","name":"greet","arguments":{"name":"World"}}],"timestamp":1780285828135}
+{"role":"tool","content":"[{\"toolCallId\":\"call-1\",\"name\":\"greet\",\"result\":\"Hello, World!\",\"durationMs\":0}]","toolResults":[{"toolCallId":"call-1","name":"greet","result":"Hello, World!","durationMs":0}],"timestamp":1780285828135}
+{"role":"assistant","content":"Tool executed successfully","timestamp":1780285828135}
