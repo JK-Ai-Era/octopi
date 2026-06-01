@@ -22,11 +22,48 @@
  * ```
  */
 
-import { loadConfig, toGatewayConfig } from '../src/config.js';
-import { Gateway } from '../src/gateway/gateway.js';
-import { OpenAIProvider } from '../src/providers/openai.js';
-import { getBuiltinTools } from '../src/tools/builtin.js';
+import { loadConfig, toGatewayConfig } from './config.js';
+import { Gateway } from './gateway/gateway.js';
+import { OpenAIProvider } from './providers/openai.js';
+import { AnthropicProvider } from './providers/anthropic.js';
+import { getBuiltinTools } from './tools/builtin.js';
 import { createInterface } from 'node:readline';
+import type { LLMProvider } from './core/types.js';
+import type { ProviderConfig } from './config.js';
+
+// ================================================================
+// Provider 工厂
+// ================================================================
+
+/**
+ * 根据配置创建 LLM Provider
+ *
+ * 支持两种协议：
+ * - openai: OpenAI Chat Completions API（/v1/chat/completions）
+ * - anthropic: Anthropic Messages API（/v1/messages）
+ */
+function createProvider(cfg: ProviderConfig): LLMProvider | null {
+  if (!cfg.apiKey) return null;
+
+  if (cfg.type === 'anthropic') {
+    return new AnthropicProvider({
+      name: cfg.name,
+      apiKey: cfg.apiKey,
+      baseUrl: cfg.baseUrl,
+      models: cfg.models,
+      defaultModel: cfg.defaultModel,
+    });
+  }
+
+  // 默认 openai（包括所有 OpenAI 兼容的自定义 endpoint）
+  return new OpenAIProvider({
+    name: cfg.name,
+    apiKey: cfg.apiKey,
+    baseUrl: cfg.baseUrl,
+    models: cfg.models,
+    defaultModel: cfg.defaultModel,
+  });
+}
 
 // ================================================================
 // 参数解析
@@ -87,6 +124,10 @@ Options:
   --port, -p <port>     Port override
   --help, -h            Show this help message
 
+Supported provider types:
+  openai      OpenAI Chat Completions API (/v1/chat/completions)
+  anthropic   Anthropic Messages API (/v1/messages)
+
 Examples:
   agent-harness serve -c ./my-config.json
   agent-harness chat -c ./my-config.json
@@ -104,20 +145,12 @@ async function serveCommand(args: CliArgs): Promise<void> {
 
   const gateway = new Gateway(gatewayConfig);
 
-  // 注册 providers
+  // 注册 providers（支持 OpenAI 和 Anthropic）
   for (const providerCfg of config.providers ?? []) {
-    if (providerCfg.type === 'openai') {
-      if (!providerCfg.apiKey) {
-        console.error(`[Error] Provider "${providerCfg.name}" requires apiKey`);
-        process.exit(1);
-      }
-      gateway.registerProvider(new OpenAIProvider({
-        name: providerCfg.name,
-        apiKey: providerCfg.apiKey,
-        baseUrl: providerCfg.baseUrl,
-        models: providerCfg.models,
-        defaultModel: providerCfg.defaultModel,
-      }));
+    const provider = createProvider(providerCfg);
+    if (provider) {
+      gateway.registerProvider(provider);
+      console.log(`[CLI] Registered provider: ${providerCfg.name} (${providerCfg.type})`);
     }
   }
 
@@ -129,7 +162,7 @@ async function serveCommand(args: CliArgs): Promise<void> {
   // 注册 HTTP channel
   const httpConfig = config.channels?.find((c) => c.type === 'http');
   if (httpConfig) {
-    const { HttpChannelAdapter } = await import('../src/protocol/http.js');
+    const { HttpChannelAdapter } = await import('./protocol/http.js');
     gateway.registerChannel(new HttpChannelAdapter({
       port: httpConfig.port ?? args.port ?? 3000,
       path: httpConfig.path ?? '/messages',
@@ -162,23 +195,22 @@ async function chatCommand(args: CliArgs): Promise<void> {
 
   // 找到 provider 配置
   const providerCfg = config.providers?.find((p) => p.name === agent.model.provider);
-  if (!providerCfg?.apiKey) {
-    console.error(`[Error] Provider "${agent.model.provider}" requires apiKey`);
+  if (!providerCfg) {
+    console.error(`[Error] Provider "${agent.model.provider}" not found in config`);
     process.exit(1);
   }
 
-  // 动态导入 AgentLoop（避免 serve 命令加载不必要的依赖）
-  const { AgentLoop } = await import('../src/agent/agent-loop.js');
+  const provider = createProvider(providerCfg);
+  if (!provider) {
+    console.error(`[Error] Provider "${providerCfg.name}" requires apiKey`);
+    process.exit(1);
+  }
+
+  // 动态导入 AgentLoop
+  const { AgentLoop } = await import('./agent/agent-loop.js');
   const loop = new AgentLoop();
 
-  // 注册 provider
-  loop.registerProvider(new OpenAIProvider({
-    name: providerCfg.name,
-    apiKey: providerCfg.apiKey,
-    baseUrl: providerCfg.baseUrl,
-    models: providerCfg.models,
-    defaultModel: providerCfg.defaultModel,
-  }));
+  loop.registerProvider(provider);
 
   // 注册内置工具
   for (const tool of getBuiltinTools()) {
@@ -199,7 +231,7 @@ async function chatCommand(args: CliArgs): Promise<void> {
 
   console.log(`\n🤖 Agent Harness Chat`);
   console.log(`   Agent: ${agent.persona.name}`);
-  console.log(`   Model: ${agent.model.provider}/${agent.model.model}`);
+  console.log(`   Model: ${providerCfg.type} / ${agent.model.model}`);
   console.log(`   Type "exit" or "quit" to end the conversation\n`);
 
   const rl = createInterface({
@@ -240,18 +272,14 @@ async function chatCommand(args: CliArgs): Promise<void> {
 
 async function healthCommand(args: CliArgs): Promise<void> {
   const config = loadConfig(args.config);
-  const { LLMRouter } = await import('../src/providers/router.js');
+  const { LLMRouter } = await import('./providers/router.js');
 
   const router = new LLMRouter();
 
   for (const providerCfg of config.providers ?? []) {
-    if (providerCfg.type === 'openai' && providerCfg.apiKey) {
-      router.register(new OpenAIProvider({
-        name: providerCfg.name,
-        apiKey: providerCfg.apiKey,
-        baseUrl: providerCfg.baseUrl,
-        models: providerCfg.models,
-      }));
+    const provider = createProvider(providerCfg);
+    if (provider) {
+      router.register(provider);
     }
   }
 

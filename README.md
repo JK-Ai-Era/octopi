@@ -58,14 +58,31 @@ cp agent-harness.example.json agent-harness.json
 
 ```json
 {
-  "providers": [{
-    "type": "openai",
-    "name": "openai",
-    "apiKey": "sk-your-key-here",
-    "models": ["gpt-4o", "gpt-4o-mini"]
-  }]
+  "providers": [
+    {
+      "type": "openai",
+      "name": "openai",
+      "apiKey": "sk-your-key-here",
+      "models": ["gpt-4o", "gpt-4o-mini"]
+    },
+    {
+      "type": "anthropic",
+      "name": "anthropic",
+      "apiKey": "sk-ant-your-key-here",
+      "models": ["claude-sonnet-4-20250514", "claude-haiku-4-20250414"]
+    }
+  ]
 }
 ```
+
+支持两种 LLM 协议（参考 OpenClaw 实现）：
+
+| 协议 | `type` | 端点 | 认证方式 | 适用场景 |
+|------|--------|------|----------|----------|
+| OpenAI Chat Completions | `openai` | `/v1/chat/completions` | `Authorization: Bearer` | OpenAI、自定义兼容 endpoint（vLLM、LiteLLM 等） |
+| Anthropic Messages | `anthropic` | `/v1/messages` | `x-api-key` | Claude 系列模型 |
+
+配置中的 `type` 字段决定使用哪个协议适配器。框架自动处理两种协议之间的格式转换（system prompt 提取、工具格式映射等），上层 AgentLoop 无需感知差异。
 
 ### 使用 CLI
 
@@ -126,6 +143,26 @@ console.log(reply.content);
 ```
 
 ## 核心概念
+
+### 多协议 LLM 支持
+
+框架通过 Provider 抽象层支持不同的 LLM 协议，每个协议有独立的适配器：
+
+```
+AgentLoop
+  ↓ LLMRequest（统一格式）
+LLMRouter
+  ↓ 路由到目标 Provider
+Provider（openai | anthropic）
+  ↓ 格式转换
+LLM API（/v1/chat/completions | /v1/messages）
+```
+
+每个 Provider 内部负责双向格式转换：
+- **OpenAI Provider**: 直接使用 OpenAI 格式，无需转换
+- **Anthropic Provider**: 将 system prompt 提取为顶层字段，工具定义从 `parameters` 转为 `input_schema`，响应从 `content[]` 数组转回统一格式
+
+这样 AgentLoop 和所有上层逻辑完全不需要关心底层协议差异。
 
 ### Agent Definition
 

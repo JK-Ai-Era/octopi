@@ -1,29 +1,18 @@
 {
-  "$schema": "https://raw.githubusercontent.com/JK-Ai-Era/agent-harness/main/schema.json",
-  "_comment": "Agent Harness 示例配置",
-
-  "agents": [
-    {
-      "id": "assistant",
-      "workspace": "./workspace",
-      "persona": {
-        "name": "Assistant",
-        "description": "A helpful AI assistant",
-        "systemPrompt": "You are a helpful AI assistant. You can use tools to help the user accomplish tasks. Be concise and direct in your responses."
-      },
-      "tools": {
-        "allow": ["*"],
-        "deny": [],
-        "requireConfirmation": ["shell"]
-      },
-      "model": {
-        "provider": "openai",
-        "model": "gpt-4o",
-        "temperature": 0.7,
-        "maxTokens": 4096
-      }
+  "agents": [{
+    "id": "assistant",
+    "workspace": "./workspace",
+    "persona": {
+      "name": "Assistant",
+      "description": "A helpful assistant",
+      "systemPrompt": "You are a helpful assistant. Use the available tools when needed."
+    },
+    "tools": { "allow": ["*"] },
+    "model": {
+      "provider": "openai",
+      "model": "gpt-4o"
     }
-  ],
+  }],
 
   "providers": [
     {
@@ -31,23 +20,24 @@
       "name": "openai",
       "apiKey": "${OPENAI_API_KEY}",
       "baseUrl": "https://api.openai.com/v1",
-      "models": ["gpt-4o", "gpt-4o-mini"],
-      "defaultModel": "gpt-4o"
+      "models": ["gpt-4o", "gpt-4o-mini"]
+    },
+    {
+      "type": "anthropic",
+      "name": "anthropic",
+      "apiKey": "${ANTHROPIC_API_KEY}",
+      "baseUrl": "https://api.anthropic.com",
+      "models": ["claude-sonnet-4-20250514", "claude-haiku-4-20250414"]
     }
   ],
 
-  "channels": [
-    {
-      "type": "http",
-      "port": 3000,
-      "path": "/messages"
-    }
-  ],
+  "channels": [{
+    "type": "http",
+    "port": 3000,
+    "path": "/messages"
+  }],
 
   "session": {
-    "dmScope": "per-peer",
-    "reset": {
-      "idleMinutes": 120
-    }
+    "dmScope": "per-peer"
   }
 }

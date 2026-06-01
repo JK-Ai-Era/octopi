@@ -18,6 +18,7 @@ export { getBuiltinTools, createShellTool, createFileReadTool, createFileWriteTo
 // Providers
 export { LLMRouter } from './providers/router.js';
 export { OpenAIProvider } from './providers/openai.js';
+export { AnthropicProvider } from './providers/anthropic.js';
 
 // Plugins
 export { PluginManager } from './plugins/hooks.js';

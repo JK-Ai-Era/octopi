@@ -46,8 +46,8 @@ import { resolve } from 'node:path';
  * Provider 配置
  */
 export interface ProviderConfig {
-  /** 类型（openai、custom） */
-  type: string;
+  /** 协议类型：openai=OpenAI Chat Completions, anthropic=Anthropic Messages */
+  type: 'openai' | 'anthropic';
   /** 名称 */
   name: string;
   /** API Key（支持 ${ENV_VAR} 语法） */
