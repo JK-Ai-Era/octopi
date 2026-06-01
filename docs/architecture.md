@@ -386,10 +386,14 @@ octopi/
 | 复杂度 | 高（生产级） | 中（框架级，应用层自由发挥） |
 | 学习成本 | 需要了解整个生态 | 接口优先，渐进式采用 |
 
-## 下一步
+## 路线图
 
-1. **Phase 1**: 核心类型 + Agent Loop + Session（当前骨架的重构）
-2. **Phase 2**: Context Engine + Memory System
-3. **Phase 3**: Plugin System + Hook 点
-4. **Phase 4**: Command Queue + Multi-Agent
-5. **Phase 5**: Protocol Layer (HTTP/WebSocket)
+| Phase | 模块 | 状态 | 说明 |
+|-------|------|------|------|
+| 1 | Core Types + Agent Loop + Session | ✅ 已完成 | types.ts、agent-loop.ts、session-manager.ts，27 个测试覆盖 |
+| 2 | Context Engine + Memory System | ⚠️ 骨架 | LegacyContextEngine 只做尾部裁剪，RAG/向量检索/Memory 未实现 |
+| 3 | Plugin System + Hook 点 | ⚠️ 骨架 | hooks.ts 有钩子注册/触发，缺完整插件生命周期（install/enable/disable） |
+| 4 | Command Queue + Multi-Agent | ❌ 待开发 | 多 Agent 协调、命令队列 |
+| 5 | Protocol Layer (HTTP/WebSocket) | ⚠️ 骨架 | HTTP server 有基础路由，缺 WebSocket/SSE 流式协议 |
+
+**下一步优先级**: Phase 5（补齐 WebSocket 流式）→ Phase 2（Context Engine 真正落地）→ Phase 3/4
