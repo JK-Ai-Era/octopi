@@ -30,7 +30,7 @@ export class PluginManager {
    * 执行具有拦截语义的 hook
    * 第一个返回非 null 的 plugin 胜出
    */
-  async runHook<T>(
+  async runHook<T = any>(
     hookName: keyof PluginHooks,
     ctx: HookContext & Record<string, unknown>,
     defaultValue: T,

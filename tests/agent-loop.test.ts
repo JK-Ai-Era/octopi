@@ -1,4 +1,15 @@
-import { describe, test, expect } from 'bun:test';
+/**
+ * Agent Harness 核心测试
+ *
+ * 覆盖所有核心模块：
+ * - ToolRegistry: 工具注册、获取、执行
+ * - LLMRouter: Provider 注册、模型列表
+ * - PluginManager: Hook 注册、拦截语义
+ * - AgentLoop: 端到端消息处理、工具调用循环、Plugin 拦截
+ * - Gateway: 创建和注册
+ */
+
+import { describe, test, expect } from 'vitest';
 import { AgentLoop } from '../src/agent/agent-loop.js';
 import { ToolRegistry } from '../src/tools/registry.js';
 import { LLMRouter } from '../src/providers/router.js';
@@ -17,6 +28,9 @@ import type {
 // 测试用 Mock
 // ============================================================
 
+/**
+ * 创建测试用 Agent 定义
+ */
 function createMockAgent(): AgentDefinition {
   return {
     id: 'test-agent',
@@ -35,6 +49,9 @@ function createMockAgent(): AgentDefinition {
   };
 }
 
+/**
+ * 创建 Mock LLM Provider（简单 echo 模式）
+ */
 function createMockLLMProvider(): LLMProvider {
   return {
     name: 'mock',
@@ -52,6 +69,10 @@ function createMockLLMProvider(): LLMProvider {
   };
 }
 
+/**
+ * 创建 Mock LLM Provider（工具调用模式）
+ * 第一次返回 tool call，第二次返回最终回复
+ */
 function createMockToolLLMProvider(toolName: string, toolArgs: Record<string, unknown>): LLMProvider {
   let callCount = 0;
   return {
@@ -60,7 +81,6 @@ function createMockToolLLMProvider(toolName: string, toolArgs: Record<string, un
     async complete(request) {
       callCount++;
       if (callCount === 1) {
-        // 第一次返回 tool call
         return {
           content: '',
           toolCalls: [{ id: 'call-1', name: toolName, arguments: toolArgs }],
@@ -68,7 +88,6 @@ function createMockToolLLMProvider(toolName: string, toolArgs: Record<string, un
           finishReason: 'tool_calls',
         };
       }
-      // 第二次返回最终回复
       return {
         content: 'Tool executed successfully',
         model: 'mock-gpt-4o',
@@ -78,6 +97,9 @@ function createMockToolLLMProvider(toolName: string, toolArgs: Record<string, un
   };
 }
 
+/**
+ * 创建测试用渠道消息
+ */
 function createMockChannelMessage(overrides?: Partial<ChannelMessage>): ChannelMessage {
   return {
     id: `msg-${Date.now()}`,
@@ -117,11 +139,7 @@ describe('ToolRegistry', () => {
   test('注册重复工具抛出错误', () => {
     const registry = new ToolRegistry();
     const tool: RegisteredTool = {
-      definition: {
-        name: 'dup_tool',
-        description: 'Duplicate',
-        parameters: {},
-      },
+      definition: { name: 'dup_tool', description: 'Duplicate', parameters: {} },
       handler: async () => null,
     };
 
@@ -132,18 +150,15 @@ describe('ToolRegistry', () => {
   test('Agent 级工具覆盖全局工具', () => {
     const registry = new ToolRegistry();
 
-    const globalTool: RegisteredTool = {
+    registry.register({
       definition: { name: 'shared', description: 'Global', parameters: {} },
       handler: async () => 'global',
-    };
+    });
 
-    const agentTool: RegisteredTool = {
+    registry.register({
       definition: { name: 'shared', description: 'Agent-specific', parameters: {} },
       handler: async () => 'agent',
-    };
-
-    registry.register(globalTool);
-    registry.register(agentTool, 'agent-1');
+    }, 'agent-1');
 
     expect(registry.get('shared')!.definition.description).toBe('Global');
     expect(registry.get('shared', 'agent-1')!.definition.description).toBe('Agent-specific');
@@ -227,6 +242,13 @@ describe('LLMRouter', () => {
 
     expect(router.listModels()).toEqual(['mock-gpt-4o']);
   });
+
+  test('列出所有 provider', () => {
+    const router = new LLMRouter();
+    router.register(createMockLLMProvider());
+
+    expect(router.listProviders()).toEqual(['mock']);
+  });
 });
 
 // ============================================================
@@ -303,6 +325,12 @@ describe('PluginManager', () => {
     await pm.runAllHooks('session_start', { sessionId: 's1', agentId: 'a1' });
     expect(calls).toEqual(['a', 'b']);
   });
+
+  test('重复注册 plugin 抛出错误', () => {
+    const pm = new PluginManager();
+    pm.register({ id: 'dup', name: 'Dup', hooks: {} });
+    expect(() => pm.register({ id: 'dup', name: 'Dup', hooks: {} })).toThrow('already registered');
+  });
 });
 
 // ============================================================
@@ -352,7 +380,7 @@ describe('AgentLoop', () => {
     expect(reply.content).toBe('Tool executed successfully');
 
     // 验证 session 中有 tool result 记录
-    const messages = (loop as any).sessions.getMessages(session.id) as any[];
+    const messages = loop.getSessionManager().getMessages(session.id) as any[];
     const toolMessages = messages.filter((m: any) => m.role === 'tool');
     expect(toolMessages.length).toBeGreaterThan(0);
 
@@ -389,25 +417,37 @@ describe('AgentLoop', () => {
   test('session write lock 保证串行', async () => {
     const loop = new AgentLoop();
 
-    // 测试 lock 本身
-    const lock1 = await loop['sessions'].acquireLock('test-session');
+    const lock1 = await loop.getSessionManager().acquireLock('test-session');
     let lock2Resolved = false;
 
-    // 尝试获取同一个 lock（应该等待）
-    const lock2Promise = loop['sessions'].acquireLock('test-session').then(() => {
+    const lock2Promise = loop.getSessionManager().acquireLock('test-session').then(() => {
       lock2Resolved = true;
     });
 
-    // 等一小会确认 lock2 还没拿到
     await new Promise((r) => setTimeout(r, 50));
     expect(lock2Resolved).toBe(false);
 
-    // 释放第一个 lock
     lock1();
 
-    // 等 lock2 完成
     await lock2Promise;
     expect(lock2Resolved).toBe(true);
+
+    await loop.close();
+  });
+
+  test('session 路由（per-peer）', async () => {
+    const agent = createMockAgent();
+    const loop = new AgentLoop();
+
+    const msg1 = createMockChannelMessage({ senderId: 'user-a' });
+    const msg2 = createMockChannelMessage({ senderId: 'user-b' });
+
+    const session1 = loop.resolveSession(agent, msg1, 'per-peer');
+    const session2 = loop.resolveSession(agent, msg2, 'per-peer');
+    const session1Again = loop.resolveSession(agent, msg1, 'per-peer');
+
+    expect(session1.id).not.toBe(session2.id);
+    expect(session1.id).toBe(session1Again.id);
 
     await loop.close();
   });
@@ -421,15 +461,11 @@ describe('Gateway', () => {
   test('创建和注册', async () => {
     const agent = createMockAgent();
     const gateway = new Gateway({
-      port: 0,
       agents: [agent],
     });
 
-    // 注册 provider
     gateway.registerProvider(createMockLLMProvider());
 
-    // 验证 session 路由
-    const session = gateway.getSession('nonexistent');
-    expect(session).toBeUndefined();
+    expect(gateway.getSession('nonexistent')).toBeUndefined();
   });
 });

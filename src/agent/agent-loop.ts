@@ -1,3 +1,35 @@
+/**
+ * Agent Loop — 核心执行循环
+ *
+ * 这是框架的"心脏"。参考 OpenClaw 的 agent-loop 设计，实现了完整的
+ * 消息处理流程：
+ *
+ *   intake → context assemble → model infer → tool exec → streaming reply → persistence
+ *
+ * 核心特性：
+ * - Session 级 write lock：同一 session 同时只有一个运行
+ * - Context Engine 4 阶段生命周期
+ * - Plugin hooks 全链路可拦截
+ * - 事件流全链路可观测
+ * - 最大迭代保护（防止无限工具调用循环）
+ *
+ * 执行流程：
+ *
+ *   1. 获取 session write lock
+ *   2. Context Engine: ingest（记录消息）
+ *   3. Plugin: before_agent_reply（可拦截返回合成回复）
+ *   4. 核心循环（最多 N 次）：
+ *      a. Context Engine: assemble（组装上下文）
+ *      b. Plugin: before_model_resolve（可覆盖模型）
+ *      c. Plugin: before_prompt_build（可注入上下文）
+ *      d. LLM 调用
+ *      e. 如果有 tool_calls → 执行工具 → 继续循环
+ *      f. 如果是纯文本 → 完成
+ *   5. Plugin: message_sending → 发送
+ *   6. Context Engine: afterTurn
+ *   7. 持久化 → 释放 lock
+ */
+
 import { randomUUID } from 'node:crypto';
 import type {
   AgentDefinition,
@@ -24,58 +56,115 @@ import { LegacyContextEngine } from '../context/engine.js';
 import { PluginManager } from '../plugins/hooks.js';
 
 /**
- * Agent Loop — 核心执行循环
+ * Agent Loop 配置
+ */
+export interface AgentLoopConfig {
+  /** 最大工具调用迭代次数（防止无限循环） */
+  maxIterations?: number;
+  /** Session 数据目录 */
+  dataDir?: string;
+}
+
+/**
+ * Agent Loop
  *
- * 参考 OpenClaw 的 agent-loop 设计：
- * intake → context assemble → model infer → tool exec → streaming reply → persistence
+ * 核心执行引擎。接收一条渠道消息，经过完整的处理流程后返回 Agent 回复。
  *
- * 特点：
- * - Session 级 write lock（一个 session 同时只有一个运行）
- * - Context Engine 4 阶段生命周期
- * - Plugin hooks 全链路可拦截
- * - 事件流全链路可观测
+ * 使用方式：
+ * ```ts
+ * const loop = new AgentLoop();
+ * loop.registerProvider(myProvider);
+ * loop.registerTool(myTool);
+ *
+ * const session = loop.resolveSession(agent, channelMsg, 'per-peer');
+ * const reply = await loop.processMessage(agent, session, channelMsg);
+ * ```
  */
 export class AgentLoop {
+  /** Session 管理器 */
   private sessions: SessionManager;
+  /** 工具注册中心 */
   private toolRegistry = new ToolRegistry();
+  /** LLM 路由器 */
   private llmRouter = new LLMRouter();
+  /** 上下文引擎注册表 */
   private contextEngines = new Map<string, ContextEngine>();
+  /** 插件管理器 */
   private pluginManager = new PluginManager();
+  /** 事件监听器列表 */
   private listeners: AgentEventListener[] = [];
+  /** 默认上下文引擎 */
   private defaultContextEngine: ContextEngine;
+  /** 最大迭代次数 */
+  private maxIterations: number;
 
-  constructor() {
-    this.sessions = new SessionManager();
+  constructor(config?: AgentLoopConfig) {
+    this.sessions = new SessionManager(config?.dataDir);
     this.defaultContextEngine = new LegacyContextEngine();
     this.contextEngines.set('legacy', this.defaultContextEngine);
+    this.maxIterations = config?.maxIterations ?? 10;
   }
 
-  // ---- 注册 ----
+  // ================================================================
+  // 注册接口
+  // ================================================================
 
+  /**
+   * 注册工具（全局或 Agent 级）
+   *
+   * @param tool - 工具定义和处理函数
+   * @param agentId - Agent ID（不传则为全局工具）
+   */
   registerTool(tool: RegisteredTool, agentId?: string): void {
     this.toolRegistry.register(tool, agentId);
   }
 
+  /**
+   * 注册 LLM Provider
+   */
   registerProvider(provider: LLMProvider): void {
     this.llmRouter.register(provider);
   }
 
+  /**
+   * 注册上下文引擎
+   */
   registerContextEngine(engine: ContextEngine): void {
     this.contextEngines.set(engine.info.id, engine);
   }
 
+  /**
+   * 注册插件
+   */
   registerPlugin(plugin: Plugin): void {
     this.pluginManager.register(plugin);
   }
 
+  /**
+   * 注册事件监听器
+   *
+   * 事件类型见 AgentEvent。监听器不应抛出异常（会被 catch 忽略）。
+   */
   on(listener: AgentEventListener): void {
     this.listeners.push(listener);
   }
 
-  // ---- Session 生命周期 ----
+  // ================================================================
+  // Session 生命周期
+  // ================================================================
 
   /**
    * 获取或创建 session（OpenClaw 的路由逻辑）
+   *
+   * 根据 dmScope 决定如何路由：
+   * - main: 所有消息共享一个 session
+   * - per-peer: 每个发送者一个 session
+   * - per-channel-peer: 每个渠道+发送者一个 session
+   *
+   * @param agent - Agent 定义
+   * @param channelMessage - 渠道消息
+   * @param dmScope - DM 作用域
+   * @returns session 元数据
    */
   resolveSession(
     agent: AgentDefinition,
@@ -96,6 +185,12 @@ export class AgentLoop {
     return session;
   }
 
+  /**
+   * 构建对等方标识
+   *
+   * 根据 dmScope 将渠道消息映射为唯一的对等方标识。
+   * 这个标识决定了 session 的复用策略。
+   */
   private buildPeerKey(msg: ChannelMessage, dmScope: string): string {
     switch (dmScope) {
       case 'per-peer':
@@ -109,32 +204,33 @@ export class AgentLoop {
     }
   }
 
-  // ---- 核心执行 ----
+  // ================================================================
+  // 核心执行
+  // ================================================================
 
   /**
    * 处理一条消息（完整的 Agent Loop）
    *
-   * OpenClaw 流程：
-   * 1. 获取 session write lock
-   * 2. Context Engine: ingest
-   * 3. Plugin: before_agent_reply（可拦截）
-   * 4. 循环：assemble → LLM → tool exec → 直到纯文本回复
-   * 5. Plugin: message_sending → 发送
-   * 6. Context Engine: afterTurn
-   * 7. 持久化 → 释放 lock
+   * 这是框架的核心方法。接收一条渠道消息，经过完整的处理流程后返回 Agent 回复。
+   *
+   * @param agent - Agent 定义
+   * @param session - Session 元数据
+   * @param channelMessage - 渠道消息
+   * @returns Agent 的回复消息
    */
   async processMessage(
     agent: AgentDefinition,
     session: SessionMeta,
     channelMessage: ChannelMessage,
   ): Promise<Message> {
-    // 1. 获取 session write lock
+    // ── Step 1: 获取 session write lock ──
+    // 保证同一 session 同时只有一个 Agent Loop 在运行
     const releaseLock = await this.sessions.acquireLock(session.id);
 
     try {
       const contextEngine = this.resolveContextEngine(agent);
 
-      // 构建用户消息
+      // ── Step 2: 构建用户消息 ──
       const userMessage: Message = {
         role: 'user',
         content: channelMessage.content,
@@ -148,16 +244,18 @@ export class AgentLoop {
         timestamp: channelMessage.timestamp,
       };
 
-      // 2. Context Engine: ingest
+      // ── Step 3: Context Engine — ingest ──
+      // 通知上下文引擎有新消息到达
       await contextEngine.ingest({
         sessionId: session.id,
         message: userMessage,
       });
 
-      // 加入 session 消息列表
+      // 加入 session 消息列表（内存 + JSONL）
       this.sessions.addMessage(session.id, userMessage);
 
-      // 3. Plugin: before_agent_reply（可以拦截返回合成回复）
+      // ── Step 4: Plugin — before_agent_reply ──
+      // 某些 plugin 可能返回合成回复（如缓存命中、规则引擎）
       const hookCtx: HookContext = {
         sessionId: session.id,
         agentId: agent.id,
@@ -171,16 +269,17 @@ export class AgentLoop {
         return syntheticReply;
       }
 
-      // 4. 核心循环：assemble → LLM → tool exec
-      const maxIterations = 10;
+      // ── Step 5: 核心循环 ──
+      // assemble → LLM → tool exec → 直到纯文本回复
       let iteration = 0;
 
-      while (iteration < maxIterations) {
+      while (iteration < this.maxIterations) {
         iteration++;
         const turnId = randomUUID();
         await this.emit({ type: 'turn_start', turnId, sessionId: session.id });
 
-        // 4a. Context Engine: assemble
+        // 5a. Context Engine — assemble
+        // 组装发送给 LLM 的消息列表（裁剪、注入系统提示词等）
         const availableTools = this.toolRegistry.listForAgent(agent.id).map((t) => t.name);
         const assembleResult = await contextEngine.assemble({
           sessionId: session.id,
@@ -189,15 +288,17 @@ export class AgentLoop {
           availableTools,
         });
 
-        // 4b. Plugin: before_model_resolve（可以覆盖模型）
-        const modelOverride = await this.pluginManager.runHook(
+        // 5b. Plugin — before_model_resolve
+        // 可以覆盖模型选择（如 A/B 测试、fallback）
+        const modelOverride = await this.pluginManager.runHook<{ model?: string; provider?: string } | null>(
           'before_model_resolve',
           hookCtx,
           null,
         );
 
-        // 4c. Plugin: before_prompt_build（可以注入上下文）
-        const promptInjection = await this.pluginManager.runHook(
+        // 5c. Plugin — before_prompt_build
+        // 可以注入额外上下文（如 RAG 结果、用户画像）
+        const promptInjection = await this.pluginManager.runHook<{ prependContext?: string } | null>(
           'before_prompt_build',
           { ...hookCtx, messages: this.sessions.getMessages(session.id) },
           null,
@@ -206,8 +307,8 @@ export class AgentLoop {
         // 组装最终的 LLM 请求
         const finalMessages = [...assembleResult.messages];
         if (promptInjection?.prependContext) {
-          // 在最后一条 user 消息前插入
-          const lastUserIdx = finalMessages.findLastIndex((m) => m.role === 'user');
+          // 在最后一条 user 消息前插入额外上下文
+          const lastUserIdx = finalMessages.map((m) => m.role).lastIndexOf('user');
           if (lastUserIdx >= 0) {
             finalMessages.splice(lastUserIdx, 0, {
               role: 'system',
@@ -226,10 +327,12 @@ export class AgentLoop {
 
         await this.emit({ type: 'llm_request', request: llmRequest });
 
-        // 4d. LLM 调用
+        // 5d. LLM 调用
         const providerName = modelOverride?.provider ?? agent.model.provider;
         const provider = this.llmRouter.getProvider(providerName);
-        if (!provider) throw new Error(`LLM provider "${providerName}" not found`);
+        if (!provider) {
+          throw new Error(`LLM provider "${providerName}" not found.`);
+        }
 
         const startTime = Date.now();
         const llmResponse = await provider.complete(llmRequest);
@@ -254,7 +357,7 @@ export class AgentLoop {
           timestamp: Date.now(),
         };
 
-        // 没有 tool call → 完成
+        // ── 没有 tool call → 完成 ──
         if (!llmResponse.toolCalls || llmResponse.toolCalls.length === 0) {
           this.sessions.addMessage(session.id, assistantMessage);
           this.sessions.addTurn(session.id, turn);
@@ -263,7 +366,7 @@ export class AgentLoop {
 
           await this.emit({ type: 'turn_end', turn });
 
-          // Context Engine: afterTurn
+          // Context Engine — afterTurn
           await contextEngine.afterTurn({
             sessionId: session.id,
             turn,
@@ -272,7 +375,7 @@ export class AgentLoop {
           return assistantMessage;
         }
 
-        // 4e. 有 tool call → 执行工具
+        // ── 有 tool call → 执行工具 ──
         session.status = 'processing';
         this.sessions.addMessage(session.id, assistantMessage);
         this.sessions.addTurn(session.id, turn);
@@ -283,7 +386,7 @@ export class AgentLoop {
           agent.id,
         );
 
-        // tool results 作为 tool 消息
+        // tool results 作为 tool 消息加入上下文
         const toolMessage: Message = {
           role: 'tool',
           content: JSON.stringify(toolResults),
@@ -293,35 +396,47 @@ export class AgentLoop {
         this.sessions.addMessage(session.id, toolMessage);
 
         await this.emit({ type: 'turn_end', turn });
-        // 继续循环
+        // 继续循环，让 LLM 看到 tool results 后生成最终回复
       }
 
-      // 超过最大迭代
+      // ── 超过最大迭代次数 ──
       session.status = 'error';
       const errorMessage: Message = {
         role: 'assistant',
-        content: '[Agent Harness] 达到最大迭代次数限制',
+        content: '[Agent Harness] 达到最大迭代次数限制，停止执行。请检查是否有无限工具调用循环。',
         timestamp: Date.now(),
       };
       this.sessions.addMessage(session.id, errorMessage);
       session.updatedAt = Date.now();
       return errorMessage;
     } finally {
-      // 7. 释放 session write lock
+      // ── Step 6: 释放 session write lock ──
       releaseLock();
     }
   }
 
-  // ---- 内部方法 ----
+  // ================================================================
+  // 内部方法
+  // ================================================================
 
+  /**
+   * 解析 Agent 使用的上下文引擎
+   */
   private resolveContextEngine(agent: AgentDefinition): ContextEngine {
     if (agent.contextEngine) {
       const engine = this.contextEngines.get(agent.contextEngine);
       if (engine) return engine;
+      console.warn(`[AgentLoop] Context engine "${agent.contextEngine}" not found, using legacy`);
     }
     return this.defaultContextEngine;
   }
 
+  /**
+   * 执行工具调用
+   *
+   * 并行执行所有 tool calls，每个都经过 plugin hook 拦截检查。
+   * 单个工具执行失败不会影响其他工具。
+   */
   private async executeToolCalls(
     toolCalls: ToolCall[],
     session: SessionMeta,
@@ -334,13 +449,14 @@ export class AgentLoop {
 
     const results = await Promise.allSettled(
       toolCalls.map(async (call) => {
-        // Plugin: before_tool_call
-        const blockResult = await this.pluginManager.runHook(
+        // Plugin — before_tool_call（可拦截阻止执行）
+        const blockResult = await this.pluginManager.runHook<{ block?: boolean } | null>(
           'before_tool_call',
           { ...hookCtx, call },
           null,
         );
         if (blockResult?.block) {
+          console.log(`[AgentLoop] Tool "${call.name}" blocked by plugin`);
           return {
             toolCallId: call.id,
             name: call.name,
@@ -366,7 +482,7 @@ export class AgentLoop {
             durationMs: Date.now() - startTime,
           };
 
-          // Plugin: after_tool_call
+          // Plugin — after_tool_call
           await this.pluginManager.runHook(
             'after_tool_call',
             { ...hookCtx, call, result: toolResult },
@@ -389,6 +505,7 @@ export class AgentLoop {
       }),
     );
 
+    // 将 Promise.allSettled 的结果转换为 ToolResult[]
     return results.map((r) =>
       r.status === 'fulfilled'
         ? r.value
@@ -396,6 +513,11 @@ export class AgentLoop {
     );
   }
 
+  /**
+   * 发射事件
+   *
+   * 通知所有监听器。单个监听器的异常不会影响其他监听器或主流程。
+   */
   private async emit(event: AgentEvent): Promise<void> {
     await Promise.allSettled(
       this.listeners.map((listener) => {
@@ -408,7 +530,24 @@ export class AgentLoop {
     );
   }
 
+  /**
+   * 关闭 Agent Loop，清理资源
+   */
   async close(): Promise<void> {
     this.listeners = [];
+  }
+
+  /**
+   * 获取 Session 管理器（供 Gateway 使用）
+   */
+  getSessionManager(): SessionManager {
+    return this.sessions;
+  }
+
+  /**
+   * 获取 LLM 路由器（供 Gateway 使用）
+   */
+  getLLMRouter(): LLMRouter {
+    return this.llmRouter;
   }
 }
