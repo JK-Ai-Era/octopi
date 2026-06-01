@@ -1,5 +1,5 @@
 {
-  "name": "agent-harness",
+  "name": "octopi",
   "version": "0.1.0",
   "description": "可嵌入的 Agent 底座框架",
   "type": "module",

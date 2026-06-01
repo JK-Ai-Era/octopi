@@ -1,4 +1,4 @@
-# Agent Harness — 架构设计文档 v2
+# Octopi — 架构设计文档 v2
 
 > 参考 OpenClaw 架构，重新设计的可嵌入 Agent 底座框架
 
@@ -333,7 +333,7 @@ OpenClaw 的关键洞察：多 Agent 不是 "多个实例"，而是 "多个完�
 ## 目录结构
 
 ```
-agent-harness/
+octopi/
 ├── src/
 │   ├── core/                 # 核心类型和接口
 │   │   ├── types.ts          # 所有类型定义
@@ -378,7 +378,7 @@ agent-harness/
 
 ## 与 OpenClaw 的差异
 
-| 维度 | OpenClaw | Agent Harness |
+| 维度 | OpenClaw | Octopi |
 |------|----------|---------------|
 | 定位 | 完整的 AI 助手平台 | 可嵌入的底座框架 |
 | 渠道 | 内置 WhatsApp/Telegram/Slack... | 不内置，通过 Channel Adapter 接入 |

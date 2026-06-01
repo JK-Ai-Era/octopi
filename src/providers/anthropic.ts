@@ -16,7 +16,7 @@
  * | 最大输出 | `max_tokens` 可选 | `max_tokens` 必填 |
  *
  * 兼容性说明：
- * - Agent Harness 的内部消息格式以 OpenAI 风格为基准
+ * - Octopi 的内部消息格式以 OpenAI 风格为基准
  * - 本 provider 在发送请求前将 OpenAI 格式转换为 Anthropic 格式
  * - 收到响应后将 Anthropic 格式转换回 OpenAI 格式
  * - 这样 AgentLoop 不需要关心底层协议差异

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * Agent Harness CLI
+ * Octopi — 多协议 LLM Agent 框架
  *
  * 框架的命令行入口。支持以下命令：
  *
@@ -12,13 +12,13 @@
  * 使用方式：
  * ```bash
  * # 启动服务
- * npx agent-harness serve --config ./agent-harness.json
+ * npx octopi serve --config ./octopi.json
  *
  * # 交互式聊天
- * npx agent-harness chat --config ./agent-harness.json
+ * npx octopi chat --config ./octopi.json
  *
  * # 健康检查
- * npx agent-harness health --config ./agent-harness.json
+ * npx octopi health --config ./octopi.json
  * ```
  */
 
@@ -108,10 +108,10 @@ function parseArgs(): CliArgs {
 
 function showHelp(): void {
   console.log(`
-Agent Harness — AI Agent Framework
+Octopi — AI Agent Framework
 
 Usage:
-  agent-harness <command> [options]
+  octopi <command> [options]
 
 Commands:
   serve     Start the Gateway server
@@ -120,7 +120,7 @@ Commands:
   help      Show this help message
 
 Options:
-  --config, -c <path>   Config file path (default: ./agent-harness.json)
+  --config, -c <path>   Config file path (default: ./octopi.json)
   --port, -p <port>     Port override
   --help, -h            Show this help message
 
@@ -129,9 +129,9 @@ Supported provider types:
   anthropic   Anthropic Messages API (/v1/messages)
 
 Examples:
-  agent-harness serve -c ./my-config.json
-  agent-harness chat -c ./my-config.json
-  agent-harness health -c ./my-config.json
+  octopi serve -c ./my-config.json
+  octopi chat -c ./my-config.json
+  octopi health -c ./my-config.json
 `);
 }
 
@@ -229,7 +229,7 @@ async function chatCommand(args: CliArgs): Promise<void> {
   };
   const session = loop.resolveSession(agent, mockMsg, config.session?.dmScope ?? 'main');
 
-  console.log(`\n🤖 Agent Harness Chat`);
+  console.log(`\n🐙 Octopi Chat`);
   console.log(`   Agent: ${agent.persona.name}`);
   console.log(`   Model: ${providerCfg.type} / ${agent.model.model}`);
   console.log(`   Type "exit" or "quit" to end the conversation\n`);

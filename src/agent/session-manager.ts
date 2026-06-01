@@ -8,7 +8,7 @@
  * - Daily reset 和 Idle reset
  *
  * 存储结构：
- *   .agent-harness/sessions/
+ *   .octopi/sessions/
  *     <agentId>/
  *       sessions.json          ← 所有 session 的元数据
  *       <sessionId>.jsonl      ← 每个 session 的对话记录（JSONL 格式）
@@ -41,7 +41,7 @@ export class SessionManager {
   private dataDir: string;
 
   constructor(dataDir?: string) {
-    this.dataDir = dataDir ?? '.agent-harness/sessions';
+    this.dataDir = dataDir ?? '.octopi/sessions';
   }
 
   // ================================================================

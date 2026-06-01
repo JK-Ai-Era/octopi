@@ -2,7 +2,7 @@
  * 配置系统
  *
  * 支持从 JSON 配置文件或环境变量加载 Gateway 配置。
- * 配置文件默认路径：./agent-harness.json
+ * 配置文件默认路径：./octopi.json
  *
  * 配置示例：
  * ```json
@@ -89,11 +89,11 @@ export interface HarnessConfig {
 /**
  * 从配置文件加载配置
  *
- * @param configPath - 配置文件路径（默认 ./agent-harness.json）
+ * @param configPath - 配置文件路径（默认 ./octopi.json）
  * @returns 解析后的配置
  */
 export function loadConfig(configPath?: string): HarnessConfig {
-  const filePath = resolve(configPath ?? './agent-harness.json');
+  const filePath = resolve(configPath ?? './octopi.json');
 
   if (!existsSync(filePath)) {
     throw new Error(`Config file not found: ${filePath}`);

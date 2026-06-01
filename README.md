@@ -1,4 +1,4 @@
-# Agent Harness
+# Octopi
 
 **可嵌入的 Agent 底座框架** — 把 OpenClaw 的底层 Agent 运行时抽象为通用框架。
 
@@ -51,10 +51,10 @@ npm install
 复制示例配置：
 
 ```bash
-cp agent-harness.example.json agent-harness.json
+cp octopi.example.json octopi.json
 ```
 
-编辑 `agent-harness.json`，设置你的 API Key：
+编辑 `octopi.json`，设置你的 API Key：
 
 ```json
 {
@@ -91,19 +91,19 @@ cp agent-harness.example.json agent-harness.json
 npm run build
 
 # 启动 Gateway 服务
-npx agent-harness serve
+npx octopi serve
 
 # 交互式聊天
-npx agent-harness chat
+npx octopi chat
 
 # 健康检查
-npx agent-harness health
+npx octopi health
 ```
 
 ### 作为库使用
 
 ```typescript
-import { AgentLoop, OpenAIProvider, getBuiltinTools } from 'agent-harness';
+import { AgentLoop, OpenAIProvider, getBuiltinTools } from 'octopi';
 
 const loop = new AgentLoop();
 loop.registerProvider(new OpenAIProvider({

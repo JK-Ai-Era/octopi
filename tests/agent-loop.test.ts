@@ -1,5 +1,5 @@
 /**
- * Agent Harness 核心测试
+ * Octopi 核心测试
  *
  * 覆盖所有核心模块：
  * - ToolRegistry: 工具注册、获取、执行

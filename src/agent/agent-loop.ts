@@ -403,7 +403,7 @@ export class AgentLoop {
       session.status = 'error';
       const errorMessage: Message = {
         role: 'assistant',
-        content: '[Agent Harness] 达到最大迭代次数限制，停止执行。请检查是否有无限工具调用循环。',
+        content: '[Octopi] 达到最大迭代次数限制，停止执行。请检查是否有无限工具调用循环。',
         timestamp: Date.now(),
       };
       this.sessions.addMessage(session.id, errorMessage);
