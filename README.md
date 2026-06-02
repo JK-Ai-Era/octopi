@@ -273,7 +273,11 @@ interface AgentDefinition {
 
 ### Plugin 系统
 
-8 个 hook,全部可拦截:
+完全对齐 OpenClaw 插件架构。每个 Plugin 是一个独立模块，通过 `openclaw.plugin.json` 声明能力，在 `register(api)` 中注册。
+
+#### 生命周期 Hook
+
+8 个 hook，全部可拦截，支持 priority 排序：
 
 | Hook | 返回值 | 语义 |
 |------|--------|------|
@@ -285,6 +289,39 @@ interface AgentDefinition {
 | `before_tool_call` | { block } \| null | 拦截:阻止工具执行 |
 | `after_tool_call` | - | 工具执行完成 |
 | `message_sending` | { cancel } \| null | 拦截:取消回复发送 |
+
+#### 能力注册 API
+
+Plugin 通过 `api.register*()` 注册各种能力：
+
+| 方法 | 用途 | 代表插件 |
+|------|------|----------|
+| `registerProvider()` | LLM Provider | LMStudio, OpenRouter |
+| `registerChannel()` | Channel Adapter | - |
+| `registerTool()` | Agent 工具 | - |
+| `registerWebSearchProvider()` | 搜索引擎 | DuckDuckGo, Moonshot |
+| `registerMediaUnderstandingProvider()` | 图片/媒体理解 | Moonshot, OpenRouter |
+| `registerImageGenerationProvider()` | 图片生成 | OpenRouter |
+| `registerMusicGenerationProvider()` | 音乐生成 | OpenRouter |
+| `registerVideoGenerationProvider()` | 视频生成 | OpenRouter |
+| `registerSpeechProvider()` | 语音合成 | OpenRouter |
+| `registerModelCatalogProvider()` | 模型目录 | OpenRouter |
+| `registerMemoryEmbeddingProvider()` | 记忆向量化 | LMStudio |
+| `registerCommand()` | 命令 | - |
+| `registerService()` | 后台服务 | - |
+| `registerContextEngine()` | 上下文引擎 | - |
+| `on()` | 生命周期 Hook | TaskManager |
+
+#### OpenClaw 兼容性
+
+已通过 4 种代表性插件模式的兼容性测试：
+
+- **DuckDuckGo** — 最简模式（WebSearch）
+- **Moonshot** — 双能力模式（WebSearch + MediaUnderstanding）
+- **LMStudio** — LLM + Memory Embedding
+- **OpenRouter** — 全能力注册（7 种 Provider）
+
+OpenClaw 插件是编译后的 bundle，无法直接加载原始 `.js` 文件。但 API 接口完全对齐，移植时只需替换内部依赖。
 
 ### 多协议 LLM
 
@@ -312,7 +349,7 @@ AgentLoop → LLMRequest(统一格式)→ LLMRouter → Provider → LLM API
 npm test
 ```
 
-27 个测试覆盖所有核心模块。
+120 个测试覆盖所有核心模块。
 
 ## 与 OpenClaw 的关系
 
