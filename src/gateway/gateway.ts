@@ -143,10 +143,24 @@ export class Gateway {
 
   /**
    * 注册 Agent
+   *
+   * 如果 agent 配置了 skillDirectory，自动扫描发现 Skill。
    */
   registerAgent(agent: AgentDefinition): void {
     this.agents.set(agent.id, agent);
     console.log(`[Gateway] Registered agent: ${agent.id}`);
+
+    // 自动扫描 Skill 目录
+    if (agent.skillDirectory) {
+      this.agentLoop.discoverSkills(agent.skillDirectory).then(() => {
+        const skills = this.agentLoop.getSkillManager().list();
+        if (skills.length > 0) {
+          console.log(`[Gateway] Discovered ${skills.length} skill(s) for agent ${agent.id}: ${skills.map(s => s.id).join(', ')}`);
+        }
+      }).catch((err) => {
+        console.warn(`[Gateway] Failed to discover skills for agent ${agent.id}:`, err);
+      });
+    }
   }
 
   /**

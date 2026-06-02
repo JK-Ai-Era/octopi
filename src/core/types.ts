@@ -162,6 +162,10 @@ export interface AgentDefinition {
   tools: ToolPolicy;
   /** 模型配置 */
   model: ModelConfig;
+  /** Skill 目录路径（扫描 SKILL.md 文件） */
+  skillDirectory?: string;
+  /** 显式启用的 Skill ID 列表（不设置则自动匹配） */
+  skills?: string[];
   /** 上下文引擎 ID（不设置则使用 legacy） */
   contextEngine?: string;
   /** 渠道绑定（如 { "feishu": "user:open_id_xxx" }） */
@@ -412,7 +416,90 @@ export interface RegisteredTool {
 }
 
 // ============================================================
-// 7. 记忆系统
+// 7. Skill 系统
+// ============================================================
+
+/**
+ * Skill 定义
+ *
+ * Skill 是 Tool 之上的结构化经验层。
+ * Tool 是原子能力（file_read, shell），Skill 是"怎么用工具做好一件事"。
+ *
+ * 例如：
+ * - Tool: shell → Skill: "怎么用 ffmpeg 从视频抽帧"
+ * - Tool: file_read → Skill: "怎么读 PDF 提取关键信息"
+ * - Tool: web_fetch → Skill: "怎么抓取网页并绕过反爬"
+ *
+ * Skill 以 Markdown 文件形式存在于 workspace/skills/ 目录下，
+ * Context Engine 在 assemble 阶段根据用户意图匹配并注入上下文。
+ */
+export interface SkillDefinition {
+  /** 唯一标识（通常是目录名） */
+  id: string;
+  /** 显示名称 */
+  name: string;
+  /** 描述 — 用于语义匹配（LLM 或关键词匹配） */
+  description: string;
+  /** 触发条件 — 关键词列表，任一匹配即激活 */
+  triggers?: string[];
+  /** Skill 指令内容（Markdown，注入 system prompt） */
+  content: string;
+  /** 依赖的工具列表（如果未注册，Skill 不可用） */
+  requiredTools?: string[];
+  /** 文件路径（用于热重载） */
+  filePath?: string;
+}
+
+/**
+ * Skill 匹配结果
+ */
+export interface SkillMatch {
+  /** 匹配到的 Skill */
+  skill: SkillDefinition;
+  /** 匹配分数（0-1） */
+  score: number;
+  /** 匹配方式 */
+  matchType: 'trigger' | 'semantic' | 'explicit';
+}
+
+/**
+ * Skill 管理器接口
+ *
+ * 负责 Skill 的发现、注册、匹配和加载。
+ * 设计参考 OpenClaw 的 SKILL.md 机制：
+ * - Skill 文件存放在 workspace/skills/<id>/SKILL.md
+ * - 每次任务最多激活一个 Skill（避免上下文污染）
+ * - 匹配后内容注入 system prompt
+ */
+export interface SkillManager {
+  /** 注册 Skill */
+  register(skill: SkillDefinition): void;
+
+  /** 注销 Skill */
+  unregister(skillId: string): void;
+
+  /** 扫描目录发现所有 Skill（读取 SKILL.md 文件） */
+  discover(directory: string): Promise<void>;
+
+  /** 根据用户消息匹配最相关的 Skill（最多返回 1 个） */
+  match(params: {
+    message: string;
+    agentId?: string;
+    availableTools?: string[];
+  }): Promise<SkillMatch | null>;
+
+  /** 加载 Skill 内容（从文件或缓存） */
+  load(skillId: string): Promise<string | null>;
+
+  /** 列出所有已注册的 Skill */
+  list(): SkillDefinition[];
+
+  /** 获取指定 Skill */
+  get(skillId: string): SkillDefinition | null;
+}
+
+// ============================================================
+// 8. 记忆系统
 // ============================================================
 
 /**

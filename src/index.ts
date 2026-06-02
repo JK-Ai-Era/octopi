@@ -23,6 +23,9 @@ export { AnthropicProvider } from './providers/anthropic.js';
 // Plugins
 export { PluginManager } from './plugins/hooks.js';
 
+// Skills
+export { DefaultSkillManager } from './skills/manager.js';
+
 // Protocol
 export { HttpChannelAdapter } from './protocol/http.js';
 

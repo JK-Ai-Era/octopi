@@ -54,6 +54,8 @@ import { ToolRegistry } from '../tools/registry.js';
 import { LLMRouter } from '../providers/router.js';
 import { LegacyContextEngine } from '../context/engine.js';
 import { PluginManager } from '../plugins/hooks.js';
+import { DefaultSkillManager } from '../skills/manager.js';
+import type { SkillManager } from '../core/types.js';
 
 /**
  * Agent Loop 配置
@@ -97,12 +99,15 @@ export class AgentLoop {
   private defaultContextEngine: ContextEngine;
   /** 最大迭代次数 */
   private maxIterations: number;
+  /** Skill 管理器 */
+  private skillManager: SkillManager;
 
   constructor(config?: AgentLoopConfig) {
     this.sessions = new SessionManager(config?.dataDir);
     this.defaultContextEngine = new LegacyContextEngine();
     this.contextEngines.set('legacy', this.defaultContextEngine);
     this.maxIterations = config?.maxIterations ?? 10;
+    this.skillManager = new DefaultSkillManager();
   }
 
   // ================================================================
@@ -138,6 +143,37 @@ export class AgentLoop {
    */
   registerPlugin(plugin: Plugin): void {
     this.pluginManager.register(plugin);
+  }
+
+  /**
+   * 注册 Skill
+   *
+   * @param skill - Skill 定义
+   */
+  registerSkill(skill: import('../core/types.js').SkillDefinition): void {
+    this.skillManager.register(skill);
+  }
+
+  /**
+   * 扫描目录发现所有 Skill
+   *
+   * 期望目录结构：
+   *   directory/
+   *   ├── skill-a/SKILL.md
+   *   ├── skill-b/SKILL.md
+   *   └── skill-c/SKILL.md
+   *
+   * @param directory - Skill 目录路径
+   */
+  async discoverSkills(directory: string): Promise<void> {
+    await this.skillManager.discover(directory);
+  }
+
+  /**
+   * 获取 Skill 管理器（供外部查询和管理）
+   */
+  getSkillManager(): SkillManager {
+    return this.skillManager;
   }
 
   /**
@@ -267,6 +303,29 @@ export class AgentLoop {
       );
       if (syntheticReply) {
         return syntheticReply;
+      }
+
+      // ── Step 4.5: Skill 匹配与注入 ──
+      // 根据用户消息匹配最相关的 Skill，注入其内容到上下文
+      // 每次任务最多激活一个 Skill，避免上下文污染
+      let activeSkillContent: string | null = null;
+      const availableToolNames = this.toolRegistry.listForAgent(agent.id).map((t) => t.name);
+      const skillMatch = await this.skillManager.match({
+        message: channelMessage.content,
+        agentId: agent.id,
+        availableTools: availableToolNames,
+      });
+      if (skillMatch) {
+        activeSkillContent = await this.skillManager.load(skillMatch.skill.id);
+        if (activeSkillContent) {
+          // 将 Skill 内容作为 system 消息注入 session
+          const skillMessage: Message = {
+            role: 'system',
+            content: `[Skill: ${skillMatch.skill.name}]\n${activeSkillContent}`,
+            timestamp: Date.now(),
+          };
+          this.sessions.addMessage(session.id, skillMessage);
+        }
       }
 
       // ── Step 5: 核心循环 ──
