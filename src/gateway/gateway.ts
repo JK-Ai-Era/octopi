@@ -36,14 +36,13 @@ import type {
   ChannelReply,
   GatewayConfig,
   LLMProvider,
-  Plugin,
-  PluginHooks,
   RegisteredTool,
   SessionMeta,
   QueueMode,
   AgentEvent,
   HookContext,
 } from '../core/types.js';
+import { PluginManager } from '../plugins/manager.js';
 import { AgentLoop } from '../agent/agent-loop.js';
 
 /**
@@ -174,10 +173,10 @@ export class Gateway {
   }
 
   /**
-   * 注册 Plugin
+   * 获取插件管理器
    */
-  registerPlugin(plugin: Plugin): void {
-    this.agentLoop.registerPlugin(plugin);
+  getPluginManager(): PluginManager {
+    return this.agentLoop.getPluginManager();
   }
 
   /**
@@ -249,7 +248,7 @@ export class Gateway {
     const agent = this.resolveAgent(msg);
     if (agent) {
       const session = this.agentLoop.resolveSession(agent, msg, this.dmScope);
-      await this.agentLoop['pluginManager'].runAllHooks(
+      await this.getPluginManager().runAllHooks(
         'message_received',
         { sessionId: session.id, agentId: agent.id, message: msg },
       );
@@ -284,7 +283,7 @@ export class Gateway {
         replyToId: msg.id,
       };
 
-      const sendBlock = await this.agentLoop['pluginManager'].runHook<{ cancel?: boolean } | null>(
+      const sendBlock = await this.getPluginManager().runHook<{ cancel?: boolean } | null>(
         'message_sending',
         { ...hookCtx, reply: channelReply },
         null,
@@ -301,7 +300,7 @@ export class Gateway {
         await adapter.send(channelReply);
 
         // 8. Plugin: message_sent
-        await this.agentLoop['pluginManager'].runAllHooks(
+        await this.getPluginManager().runAllHooks(
           'message_sent',
           { ...hookCtx, reply: channelReply },
         );

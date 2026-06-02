@@ -1,6 +1,6 @@
 export { TaskTracker } from './tracker.js';
 export { TaskManager } from './task-manager.js';
-export { TaskManagerPlugin } from './plugin.js';
+export { createTaskManagerPlugin } from './plugin.js';
 export type {
   Task,
   TaskEvent,

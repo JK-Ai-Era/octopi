@@ -16,7 +16,6 @@
  */
 
 import type {
-  AgentDefinition,
   ChannelMessage,
   ChannelReply,
   Message,
@@ -339,97 +338,6 @@ export class PluginManager {
     this.capabilities = this.loader.capabilities;
   }
 
-  // ── 旧版兼容接口 ──
-
-  /** @deprecated 使用 definePluginEntry() + discover() 代替 */
-  private legacyPlugins = new Map<string, import('../core/types.js').Plugin>();
-
-  /**
-   * @deprecated 使用 definePluginEntry() 创建 plugin，通过 discover() 加载
-   */
-  register(plugin: import('../core/types.js').Plugin): void {
-    if (this.legacyPlugins.has(plugin.id)) {
-      throw new Error(`Plugin "${plugin.id}" already registered`);
-    }
-    this.legacyPlugins.set(plugin.id, plugin);
-  }
-
-  /**
-   * @deprecated 使用 definePluginEntry() 创建 plugin，通过 discover() 加载
-   */
-  unregister(id: string): void {
-    this.legacyPlugins.delete(id);
-  }
-
-  /**
-   * @deprecated 使用 getAllPlugins() 代替
-   */
-  list(): import('../core/types.js').Plugin[] {
-    return Array.from(this.legacyPlugins.values());
-  }
-
-  /**
-   * 执行观察语义的 hook（所有 plugin 都执行，不拦截）
-   * 兼容旧版 API
-   */
-  async runAllHooks(
-    hookName: string,
-    event: Record<string, unknown>,
-  ): Promise<void> {
-    // 先运行旧版 plugin hooks
-    for (const plugin of this.legacyPlugins.values()) {
-      const hook = (plugin.hooks as Record<string, unknown>)[hookName];
-      if (!hook) continue;
-      try {
-        await (hook as Function)(event);
-      } catch (error) {
-        console.error(`[Plugin] ${plugin.id}.${hookName} error:`, error);
-      }
-    }
-
-    // 再运行新版 plugin hooks
-    const entries = this.collectHookEntries(hookName);
-    for (const entry of entries) {
-      try {
-        await entry.handler(event);
-      } catch (error) {
-        console.error(`[Plugin] ${entry.pluginId}.${hookName} error:`, error);
-      }
-    }
-  }
-
-  private collectHookEntries(hookName: string): Array<{
-    pluginId: string;
-    handler: (event: unknown) => Promise<unknown>;
-    priority: number;
-    timeoutMs?: number;
-  }> {
-    const entries: Array<{
-      pluginId: string;
-      handler: (event: unknown) => Promise<unknown>;
-      priority: number;
-      timeoutMs?: number;
-    }> = [];
-
-    for (const plugin of this.loader.getAllPlugins()) {
-      if (!plugin.registered) continue;
-      const hookEntries = plugin.api._hooks.get(hookName);
-      if (hookEntries) {
-        for (const entry of hookEntries) {
-          entries.push({
-            pluginId: entry.pluginId,
-            handler: entry.handler,
-            priority: entry.priority,
-            timeoutMs: entry.timeoutMs,
-          });
-        }
-      }
-    }
-
-    entries.sort((a, b) => b.priority - a.priority);
-    return entries;
-  }
-
   // ================================================================
   // Plugin Loading
   // ================================================================
@@ -439,17 +347,6 @@ export class PluginManager {
    */
   async discover(): Promise<LoadedPlugin[]> {
     return this.loader.discover();
-  }
-
-  /**
-   * 直接注册一个已有的 plugin（兼容旧接口）
-   *
-   * 对于代码中直接创建的 Plugin（不从文件系统加载），
-   * 使用此方法注册。
-   */
-  registerPlugin(plugin: { id: string; api: PluginApi }): void {
-    // 直接注册的 plugin 不经过 loader，但仍然通过 api 收集能力
-    // 这些 plugin 的 hooks 在 runHook 中被调用
   }
 
   /**
@@ -498,28 +395,7 @@ export class PluginManager {
     defaultResult: T,
     config?: PluginEntryConfig,
   ): Promise<T> {
-    // 收集所有已注册此 hook 的 handler（已按 priority 排序）
     const entries = this.collectHookEntries(hookName);
-
-    // 也检查旧版 plugin hooks（兼容）
-    const legacyResults: Array<unknown> = [];
-    for (const plugin of this.legacyPlugins.values()) {
-      const hook = (plugin.hooks as Record<string, unknown>)[hookName];
-      if (!hook) continue;
-      try {
-        const legacyResult = await (hook as Function)(event);
-        if (legacyResult !== null && legacyResult !== undefined) {
-          legacyResults.push(legacyResult);
-        }
-      } catch (error) {
-        console.error(`[Plugin] ${plugin.id}.${hookName} error:`, error);
-      }
-    }
-
-    // 旧版 plugin 的拦截结果优先
-    if (legacyResults.length > 0) {
-      return legacyResults[0] as T;
-    }
 
     if (entries.length === 0) {
       return defaultResult;
@@ -563,11 +439,62 @@ export class PluginManager {
           `[PluginManager] Hook "${hookName}" handler from plugin "${entry.pluginId}" failed:`,
           err,
         );
-        // 单个 handler 失败不影响后续 handlers
       }
     }
 
     return result;
+  }
+
+  /**
+   * 执行观察语义的 hook（所有 plugin 都执行，不拦截）
+   */
+  async runAllHooks(
+    hookName: string,
+    event: Record<string, unknown>,
+  ): Promise<void> {
+    const entries = this.collectHookEntries(hookName);
+    for (const entry of entries) {
+      try {
+        await entry.handler(event);
+      } catch (error) {
+        console.error(`[PluginManager] Hook "${hookName}" from "${entry.pluginId}" error:`, error);
+      }
+    }
+  }
+
+  /**
+   * 收集指定 hook 的所有 handler entries
+   */
+  private collectHookEntries(hookName: string): Array<{
+    pluginId: string;
+    handler: (event: unknown) => Promise<unknown>;
+    priority: number;
+    timeoutMs?: number;
+  }> {
+    const entries: Array<{
+      pluginId: string;
+      handler: (event: unknown) => Promise<unknown>;
+      priority: number;
+      timeoutMs?: number;
+    }> = [];
+
+    for (const plugin of this.loader.getAllPlugins()) {
+      if (!plugin.registered) continue;
+      const hookEntries = plugin.api._hooks.get(hookName);
+      if (hookEntries) {
+        for (const entry of hookEntries) {
+          entries.push({
+            pluginId: entry.pluginId,
+            handler: entry.handler,
+            priority: entry.priority,
+            timeoutMs: entry.timeoutMs,
+          });
+        }
+      }
+    }
+
+    entries.sort((a, b) => b.priority - a.priority);
+    return entries;
   }
 
   /**
@@ -732,7 +659,6 @@ export class PluginManager {
     const event: GatewayLifecycleEvent = { config, workspaceDir };
     await this.runHook('gateway_start', event, undefined);
 
-    // 启动所有 plugin 服务
     for (const service of this.getServices()) {
       try {
         await service.start();
@@ -750,7 +676,6 @@ export class PluginManager {
     const event: GatewayLifecycleEvent = {};
     await this.runHook('gateway_stop', event, undefined);
 
-    // 停止所有 plugin 服务
     for (const service of this.getServices()) {
       try {
         await service.stop();

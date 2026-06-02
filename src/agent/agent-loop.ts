@@ -45,15 +45,13 @@ import type {
   ToolCall,
   ToolResult,
   Turn,
-  Plugin,
-  PluginHooks,
   HookContext,
 } from '../core/types.js';
 import { SessionManager } from './session-manager.js';
 import { ToolRegistry } from '../tools/registry.js';
 import { LLMRouter } from '../providers/router.js';
 import { LegacyContextEngine } from '../context/engine.js';
-import { PluginManager } from '../plugins/hooks.js';
+import { PluginManager } from '../plugins/manager.js';
 import { DefaultSkillManager } from '../skills/manager.js';
 import type { SkillManager } from '../core/types.js';
 
@@ -139,10 +137,12 @@ export class AgentLoop {
   }
 
   /**
-   * 注册插件
+   * 获取插件管理器
+   *
+   * 使用 pluginManager.discover() 加载 plugins。
    */
-  registerPlugin(plugin: Plugin): void {
-    this.pluginManager.register(plugin);
+  getPluginManager(): PluginManager {
+    return this.pluginManager;
   }
 
   // registerSkill 已移除 — 两阶段加载不需要预注册，discover() 自动扫描
