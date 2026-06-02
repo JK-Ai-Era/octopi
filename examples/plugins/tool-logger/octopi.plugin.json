@@ -1,0 +1,19 @@
+{
+  "id": "tool-logger",
+  "name": "Tool Logger",
+  "description": "记录所有 tool 调用和消息事件",
+  "version": "1.0.0",
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "logLevel": {
+        "type": "string",
+        "enum": ["debug", "info", "warn", "error"],
+        "default": "info"
+      }
+    }
+  },
+  "activation": {
+    "onStartup": true
+  }
+}

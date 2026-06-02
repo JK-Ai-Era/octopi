@@ -5,6 +5,36 @@
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./plugin-sdk/plugin-entry": {
+      "types": "./dist/plugins/entry.d.ts",
+      "import": "./dist/plugins/entry.js"
+    },
+    "./plugin-sdk/api": {
+      "types": "./dist/plugins/api.d.ts",
+      "import": "./dist/plugins/api.js"
+    },
+    "./plugin-sdk/manifest": {
+      "types": "./dist/plugins/manifest.d.ts",
+      "import": "./dist/plugins/manifest.js"
+    },
+    "./plugin-sdk/capability": {
+      "types": "./dist/plugins/capability.d.ts",
+      "import": "./dist/plugins/capability.js"
+    },
+    "./plugin-sdk/loader": {
+      "types": "./dist/plugins/loader.d.ts",
+      "import": "./dist/plugins/loader.js"
+    },
+    "./plugin-sdk/manager": {
+      "types": "./dist/plugins/manager.d.ts",
+      "import": "./dist/plugins/manager.js"
+    }
+  },
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",

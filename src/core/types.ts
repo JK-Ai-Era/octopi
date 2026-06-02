@@ -772,7 +772,10 @@ export interface PluginHooks {
 }
 
 /**
- * Plugin 定义
+ * Plugin 定义（旧版兼容接口）
+ *
+ * 新代码请使用 definePluginEntry() + PluginApi。
+ * 此接口保留用于向后兼容。
  */
 export interface Plugin {
   /** 唯一 ID */

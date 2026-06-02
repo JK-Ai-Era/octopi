@@ -1,0 +1,27 @@
+{
+  "id": "tool-preflight",
+  "name": "Tool Preflight",
+  "description": "拦截并验证 tool 调用，支持 approval 机制",
+  "version": "1.0.0",
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "requireApprovalFor": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "需要审批的 tool 名称列表"
+      },
+      "blockedTools": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "被阻止的 tool 名称列表"
+      }
+    }
+  },
+  "contracts": {
+    "tools": []
+  },
+  "activation": {
+    "onStartup": true
+  }
+}

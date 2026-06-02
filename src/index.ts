@@ -21,7 +21,15 @@ export { OpenAIProvider } from './providers/openai.js';
 export { AnthropicProvider } from './providers/anthropic.js';
 
 // Plugins
-export { PluginManager } from './plugins/hooks.js';
+export { PluginManager } from './plugins/manager.js';
+export { definePluginEntry, defineChannelPluginEntry } from './plugins/entry.js';
+export type { OctopiPluginDefinition, OctopiChannelPluginDefinition } from './plugins/entry.js';
+export { PluginApi } from './plugins/api.js';
+export { PluginLoader } from './plugins/loader.js';
+export type { LoadedPlugin, PluginLoaderConfig, PluginEntryConfig } from './plugins/loader.js';
+export { CapabilityRegistry } from './plugins/capability.js';
+export { validateManifest, parseManifest } from './plugins/manifest.js';
+export type { PluginManifest, PluginContracts, ActivationConfig } from './plugins/manifest.js';
 
 // Skills
 export { DefaultSkillManager } from './skills/manager.js';
