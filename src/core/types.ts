@@ -416,7 +416,7 @@ export interface RegisteredTool {
 }
 
 // ============================================================
-// 7. Skill 系统
+// 7. Skill 系统（两阶段加载，对齐 OpenClaw / Agent Skills 标准）
 // ============================================================
 
 /**
@@ -425,73 +425,53 @@ export interface RegisteredTool {
  * Skill 是 Tool 之上的结构化经验层。
  * Tool 是原子能力（file_read, shell），Skill 是"怎么用工具做好一件事"。
  *
- * 例如：
- * - Tool: shell → Skill: "怎么用 ffmpeg 从视频抽帧"
- * - Tool: file_read → Skill: "怎么读 PDF 提取关键信息"
- * - Tool: web_fetch → Skill: "怎么抓取网页并绕过反爬"
+ * 两阶段加载设计（参考 OpenClaw）：
+ * - 阶段 1（启动时）：所有 Skill 的 name + description 始终在 system prompt 里
+ *   → LLM 看到有哪些 Skill 可用
+ * - 阶段 2（按需）：LLM 通过 read 工具读取 SKILL.md 获得完整指令
+ *   → LLM 自己判断哪个 Skill 相关
  *
- * Skill 以 Markdown 文件形式存在于 workspace/skills/ 目录下，
- * Context Engine 在 assemble 阶段根据用户意图匹配并注入上下文。
+ * 好处：100 个 Skill 也只占 system prompt 几百 token，
+ *       匹配精度由 LLM 判断，比触发词匹配更智能。
+ *
+ * 对齐标准：https://agentskills.io/integrate-skills
  */
 export interface SkillDefinition {
-  /** 唯一标识（通常是目录名） */
+  /** 唯一标识（目录名） */
   id: string;
   /** 显示名称 */
   name: string;
-  /** 描述 — 用于语义匹配（LLM 或关键词匹配） */
+  /** 描述 — 始终注入 system prompt，LLM 据此判断是否需要 */
   description: string;
-  /** 触发条件 — 关键词列表，任一匹配即激活 */
-  triggers?: string[];
-  /** Skill 指令内容（Markdown，注入 system prompt） */
-  content: string;
+  /** SKILL.md 文件绝对路径 — LLM 通过 read 工具读取 */
+  filePath: string;
+  /** Skill 来源 */
+  source: 'bundled' | 'workspace' | 'plugin';
+  /** 禁止模型自动调用 — 只能通过 /skill:<id> 显式触发 */
+  disableModelInvocation?: boolean;
   /** 依赖的工具列表（如果未注册，Skill 不可用） */
   requiredTools?: string[];
-  /** 文件路径（用于热重载） */
-  filePath?: string;
-}
-
-/**
- * Skill 匹配结果
- */
-export interface SkillMatch {
-  /** 匹配到的 Skill */
-  skill: SkillDefinition;
-  /** 匹配分数（0-1） */
-  score: number;
-  /** 匹配方式 */
-  matchType: 'trigger' | 'semantic' | 'explicit';
 }
 
 /**
  * Skill 管理器接口
  *
- * 负责 Skill 的发现、注册、匹配和加载。
- * 设计参考 OpenClaw 的 SKILL.md 机制：
- * - Skill 文件存放在 workspace/skills/<id>/SKILL.md
- * - 每次任务最多激活一个 Skill（避免上下文污染）
- * - 匹配后内容注入 system prompt
+ * 两阶段加载：
+ * - discover(): 启动时扫描目录，缓存元数据（name/description/filePath）
+ * - formatForPrompt(): 格式化所有 Skill 描述为 XML，注入 system prompt
+ * - load(skillId): LLM 按需读取 Skill 完整内容（阶段 2）
  */
 export interface SkillManager {
-  /** 注册 Skill */
-  register(skill: SkillDefinition): void;
-
-  /** 注销 Skill */
-  unregister(skillId: string): void;
-
-  /** 扫描目录发现所有 Skill（读取 SKILL.md 文件） */
+  /** 扫描目录发现所有 Skill（只读元数据，不读全文） */
   discover(directory: string): Promise<void>;
 
-  /** 根据用户消息匹配最相关的 Skill（最多返回 1 个） */
-  match(params: {
-    message: string;
-    agentId?: string;
-    availableTools?: string[];
-  }): Promise<SkillMatch | null>;
+  /** 格式化所有 Skill 描述为 system prompt 片段（XML 格式） */
+  formatForPrompt(): string;
 
-  /** 加载 Skill 内容（从文件或缓存） */
+  /** 加载指定 Skill 的完整内容（LLM 按需调用） */
   load(skillId: string): Promise<string | null>;
 
-  /** 列出所有已注册的 Skill */
+  /** 列出所有已发现的 Skill 元数据 */
   list(): SkillDefinition[];
 
   /** 获取指定 Skill */

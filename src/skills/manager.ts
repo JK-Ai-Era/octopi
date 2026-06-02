@@ -1,123 +1,81 @@
 /**
- * SkillManager — Skill 系统的核心实现
+ * SkillManager — 两阶段加载实现（对齐 OpenClaw / Agent Skills 标准）
  *
- * Skill 是 Tool 之上的结构化经验层：
- * - Tool = 原子能力（file_read, shell）
- * - Skill = "怎么用工具做好一件事"
+ * 阶段 1（启动时）：
+ *   discover() 扫描 skills/ 目录，只读 SKILL.md 的 frontmatter（name/description）
+ *   formatForPrompt() 输出 XML 格式，始终注入 system prompt
+ *   → 100 个 Skill 只占几百 token
  *
- * Skill 文件格式（SKILL.md）：
- * ---
- * name: 视频帧提取
- * description: 从视频中提取关键帧
- * triggers: 视频, 抽帧, ffmpeg, 关键帧
- * tools: shell
- * ---
- * # 从视频提取帧
- * 使用 ffmpeg 从视频中提取关键帧...
+ * 阶段 2（LLM 按需）：
+ *   LLM 判断需要某个 Skill 后，用 read 工具读取 SKILL.md 获得完整指令
+ *   load(skillId) 从文件重新读取（支持热重载）
  *
- * 设计原则：
- * 1. 每次任务最多激活一个 Skill（避免上下文污染）
- * 2. Skill 内容注入 system prompt，不是替换
- * 3. 文件变更自动热重载（下次匹配时读取最新内容）
+ * 对齐标准：https://agentskills.io/integrate-skills
  */
 
 import { readFileSync, readdirSync, existsSync } from 'fs';
 import { join, resolve } from 'path';
-import type {
-  SkillDefinition,
-  SkillMatch,
-  SkillManager,
-} from '../core/types.js';
+import type { SkillDefinition, SkillManager } from '../core/types.js';
 
 /**
  * SKILL.md 文件 frontmatter 解析
  */
 interface SkillFrontmatter {
-  name: string;
-  description: string;
-  triggers?: string;
+  name?: string;
+  description?: string;
+  'disable-model-invocation'?: string;
   tools?: string;
+  [key: string]: string | undefined;
 }
 
 /**
- * 解析 SKILL.md 文件的 frontmatter 和内容
+ * 解析 SKILL.md 的 YAML frontmatter（只读元数据，不读正文）
  */
-function parseSkillFile(filePath: string): SkillDefinition | null {
+function parseFrontmatter(filePath: string): {
+  meta: SkillFrontmatter;
+  content: string;
+} | null {
   try {
     const raw = readFileSync(filePath, 'utf-8');
-    // 匹配 YAML frontmatter（--- ... ---）
     const fmMatch = raw.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
-    if (!fmMatch) {
-      // 没有 frontmatter，跳过
-      return null;
-    }
+    if (!fmMatch) return null;
 
     const fmLines = fmMatch[1].split('\n');
     const content = fmMatch[2].trim();
 
     // 简单 YAML 解析（只支持 key: value）
-    const meta: Record<string, string> = {};
+    const meta: SkillFrontmatter = {};
     for (const line of fmLines) {
-      const m = line.match(/^(\w+):\s*(.+)$/);
+      const m = line.match(/^([\w-]+):\s*(.+)$/);
       if (m) {
         meta[m[1]] = m[2].trim();
       }
     }
 
-    if (!meta.name || !meta.description) {
-      return null; // 缺少必填字段
-    }
-
-    // 从文件路径推断 id
-    // skills/<id>/SKILL.md → id
-    const dirName = filePath.split('/').at(-2) ?? 'unknown';
-
-    return {
-      id: dirName,
-      name: meta.name,
-      description: meta.description,
-      triggers: meta.triggers
-        ? meta.triggers.split(/[,，]/).map((s) => s.trim())
-        : [],
-      requiredTools: meta.tools
-        ? meta.tools.split(/[,，]/).map((s) => s.trim())
-        : [],
-      content,
-      filePath,
-    };
+    return { meta, content };
   } catch {
     return null;
   }
 }
 
 /**
- * SkillManager 默认实现
+ * SkillManager 实现
  */
 export class DefaultSkillManager implements SkillManager {
   private skills = new Map<string, SkillDefinition>();
 
-  register(skill: SkillDefinition): void {
-    this.skills.set(skill.id, skill);
-  }
-
-  unregister(skillId: string): void {
-    this.skills.delete(skillId);
-  }
-
   /**
-   * 扫描目录发现所有 Skill
+   * 扫描目录发现所有 Skill（只读元数据）
    *
    * 期望目录结构：
-   *   directory/
-   *   ├── skill-a/SKILL.md
-   *   ├── skill-b/SKILL.md
-   *   └── skill-c/SKILL.md
+   *   skills/
+   *   ├── video-frames/SKILL.md
+   *   ├── pdf-reader/SKILL.md
+   *   └── web-scraper/SKILL.md
    */
   async discover(directory: string): Promise<void> {
     const absDir = resolve(directory);
-    if (!existsSync(absDir)) {
-      return;
-    }
+    if (!existsSync(absDir)) return;
 
     const entries = readdirSync(absDir, { withFileTypes: true });
     for (const entry of entries) {
@@ -126,93 +84,75 @@ export class DefaultSkillManager implements SkillManager {
       const skillFile = join(absDir, entry.name, 'SKILL.md');
       if (!existsSync(skillFile)) continue;
 
-      const skill = parseSkillFile(skillFile);
-      if (skill) {
-        this.skills.set(skill.id, skill);
-      }
+      const parsed = parseFrontmatter(skillFile);
+      if (!parsed?.meta.name || !parsed.meta.description) continue;
+
+      const skill: SkillDefinition = {
+        id: entry.name,
+        name: parsed.meta.name,
+        description: parsed.meta.description,
+        filePath: skillFile,
+        source: 'workspace',
+        disableModelInvocation:
+          parsed.meta['disable-model-invocation'] === 'true',
+        requiredTools: parsed.meta.tools
+          ? parsed.meta.tools.split(/[,，]/).map((s) => s.trim())
+          : undefined,
+      };
+
+      this.skills.set(skill.id, skill);
     }
   }
 
   /**
-   * 根据用户消息匹配最相关的 Skill
+   * 格式化所有 Skill 描述为 system prompt 片段
    *
-   * 匹配策略（优先级从高到低）：
-   * 1. 显式指定 — 用户消息中包含 skill:<id> 标记
-   * 2. 触发词匹配 — 消息包含 Skill 的 trigger 关键词
-   * 3. 描述匹配 — 简单关键词重叠（未来可升级为语义匹配）
+   * 输出 XML 格式（对齐 Agent Skills 标准）：
+   * <available_skills>
+   *   <skill>
+   *     <name>video-frames</name>
+   *     <description>Extract frames from videos using ffmpeg</description>
+   *   </skill>
+   * </available_skills>
    *
-   * 每次最多返回 1 个 Skill，避免上下文污染。
+   * disableModelInvocation 的 Skill 不输出（只能显式调用）
    */
-  async match(params: {
-    message: string;
-    agentId?: string;
-    availableTools?: string[];
-  }): Promise<SkillMatch | null> {
-    const { message, availableTools } = params;
-    const lower = message.toLowerCase();
+  formatForPrompt(): string {
+    const visible = Array.from(this.skills.values()).filter(
+      (s) => !s.disableModelInvocation,
+    );
 
-    // 策略 1：显式指定（skill:<id>）
-    const explicitMatch = lower.match(/skill[:\s]+(\w[\w-]*)/);
-    if (explicitMatch) {
-      const skillId = explicitMatch[1];
-      const skill = this.skills.get(skillId);
-      if (skill && this.isUsable(skill, availableTools)) {
-        return { skill, score: 1.0, matchType: 'explicit' };
-      }
+    if (visible.length === 0) return '';
+
+    const lines: string[] = ['<available_skills>'];
+    for (const skill of visible) {
+      lines.push('  <skill>');
+      lines.push(`    <name>${skill.id}</name>`);
+      lines.push(`    <description>${skill.description}</description>`);
+      lines.push('  </skill>');
     }
+    lines.push('</available_skills>');
+    lines.push('');
+    lines.push(
+      'Use the read tool to load a skill file when needed. ' +
+        'Example: read("skills/video-frames/SKILL.md")',
+    );
 
-    let bestMatch: SkillMatch | null = null;
-
-    for (const skill of this.skills.values()) {
-      // 跳过缺少必需工具的 Skill
-      if (!this.isUsable(skill, availableTools)) continue;
-
-      // 策略 2：触发词匹配
-      if (skill.triggers && skill.triggers.length > 0) {
-        for (const trigger of skill.triggers) {
-          if (lower.includes(trigger.toLowerCase())) {
-            const score = 0.8;
-            if (!bestMatch || score > bestMatch.score) {
-              bestMatch = { skill, score, matchType: 'trigger' };
-            }
-            break; // 一个 trigger 匹配就够了
-          }
-        }
-      }
-
-      // 策略 3：描述关键词重叠
-      // 把描述拆成词，看有多少在消息中出现
-      if (skill.description) {
-        const descWords = skill.description
-          .toLowerCase()
-          .split(/[\s,，。、；;：:]+/)
-          .filter((w) => w.length >= 2); // 至少 2 个字符
-        const matchCount = descWords.filter((w) => lower.includes(w)).length;
-        if (matchCount > 0) {
-          const score = Math.min(0.5 + matchCount * 0.1, 0.7);
-          if (!bestMatch || score > bestMatch.score) {
-            bestMatch = { skill, score, matchType: 'semantic' };
-          }
-        }
-      }
-    }
-
-    return bestMatch;
+    return lines.join('\n');
   }
 
   /**
-   * 加载 Skill 内容
+   * 加载 Skill 完整内容（LLM 按需调用）
    *
-   * 从文件重新读取（支持热重载），返回 Markdown 内容。
-   * 没有 frontmatter 的原始 Markdown（已剥离）。
+   * 从文件重新读取，剥离 frontmatter，返回纯 Markdown 内容。
+   * 支持热重载（每次从文件读取最新内容）。
    */
   async load(skillId: string): Promise<string | null> {
     const skill = this.skills.get(skillId);
-    if (!skill?.filePath) return null;
+    if (!skill) return null;
 
     try {
       const raw = readFileSync(skill.filePath, 'utf-8');
-      // 剥离 frontmatter
       const fmMatch = raw.match(/^---\n[\s\S]*?\n---\n?([\s\S]*)$/);
       return fmMatch ? fmMatch[1].trim() : raw.trim();
     } catch {
@@ -226,21 +166,5 @@ export class DefaultSkillManager implements SkillManager {
 
   get(skillId: string): SkillDefinition | null {
     return this.skills.get(skillId) ?? null;
-  }
-
-  /**
-   * 检查 Skill 的必需工具是否可用
-   */
-  private isUsable(
-    skill: SkillDefinition,
-    availableTools?: string[],
-  ): boolean {
-    if (!skill.requiredTools || skill.requiredTools.length === 0) {
-      return true; // 没有工具依赖
-    }
-    if (!availableTools || availableTools.length === 0) {
-      return false; // 有依赖但没有可用工具
-    }
-    return skill.requiredTools.every((t) => availableTools.includes(t));
   }
 }

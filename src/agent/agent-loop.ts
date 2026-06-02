@@ -145,14 +145,7 @@ export class AgentLoop {
     this.pluginManager.register(plugin);
   }
 
-  /**
-   * 注册 Skill
-   *
-   * @param skill - Skill 定义
-   */
-  registerSkill(skill: import('../core/types.js').SkillDefinition): void {
-    this.skillManager.register(skill);
-  }
+  // registerSkill 已移除 — 两阶段加载不需要预注册，discover() 自动扫描
 
   /**
    * 扫描目录发现所有 Skill
@@ -305,27 +298,17 @@ export class AgentLoop {
         return syntheticReply;
       }
 
-      // ── Step 4.5: Skill 匹配与注入 ──
-      // 根据用户消息匹配最相关的 Skill，注入其内容到上下文
-      // 每次任务最多激活一个 Skill，避免上下文污染
-      let activeSkillContent: string | null = null;
-      const availableToolNames = this.toolRegistry.listForAgent(agent.id).map((t) => t.name);
-      const skillMatch = await this.skillManager.match({
-        message: channelMessage.content,
-        agentId: agent.id,
-        availableTools: availableToolNames,
-      });
-      if (skillMatch) {
-        activeSkillContent = await this.skillManager.load(skillMatch.skill.id);
-        if (activeSkillContent) {
-          // 将 Skill 内容作为 system 消息注入 session
-          const skillMessage: Message = {
-            role: 'system',
-            content: `[Skill: ${skillMatch.skill.name}]\n${activeSkillContent}`,
-            timestamp: Date.now(),
-          };
-          this.sessions.addMessage(session.id, skillMessage);
-        }
+      // ── Step 4.5: Skill 描述注入（阶段 1）──
+      // 所有 Skill 的 name+description 始终在 system prompt 里
+      // LLM 自行判断是否需要，通过 read 工具读取 SKILL.md 获得完整指令（阶段 2）
+      const skillPromptFragment = this.skillManager.formatForPrompt();
+      if (skillPromptFragment) {
+        const skillMessage: Message = {
+          role: 'system',
+          content: skillPromptFragment,
+          timestamp: Date.now(),
+        };
+        this.sessions.addMessage(session.id, skillMessage);
       }
 
       // ── Step 5: 核心循环 ──

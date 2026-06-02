@@ -84,6 +84,24 @@ Skill 匹配策略（优先级从高到低）：
 2. **触发词匹配** — 消息包含 Skill 的 trigger 关键词
 3. **描述匹配** — 关键词重叠
 
+### 7. 任务系统：让 Agent 拥有工作记忆
+
+Agent 不应该只活在"当前对话"里。当用户说"帮我分析代码质量",然后突然聊起天气,Agent 应该记住自己正在干活,而不是把任务忘得一干二净。
+
+Octopi 的任务系统通过 Plugin 实现,对 Agent Loop 零侵入：
+
+- **TaskTracker** — 纯状态管理,JSONL 持久化,不依赖 LLM
+- **TaskManager** — 轻量 LLM 决策器,判断每条消息与当前任务的关系
+- **TaskManagerPlugin** — Hook 集成层,在 `before_agent_reply` 和 `before_prompt_build` 两个时机介入
+
+核心流程：用户消息到达 → 轻量模型判断"这条消息是不是在说我之前那个任务" → 更新任务状态 → 向主 Agent 注入任务上下文 → 主 Agent 自然地决定继续、询问还是忽略。
+
+恢复交互时,主 Agent 看到的不是"请继续你的任务"这种生硬指令,而是一段自然的上下文描述：
+
+> 你有一个被中断的任务：分析代码质量。用户回来了,向用户说明进展并询问是否继续。
+
+任务系统的完整设计详见 [docs/task-system.md](docs/task-system.md)。
+
 ## 架构
 
 ```
