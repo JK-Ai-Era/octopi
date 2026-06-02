@@ -77,7 +77,6 @@ tools: shell
 ```bash
 ffmpeg -ss 00:01:30 -i input.mp4 -frames:v 1 output.png
 ```
-```
 
 Skill 匹配策略（优先级从高到低）：
 1. **显式指定** — 用户消息中包含 `skill:<id>` 标记
