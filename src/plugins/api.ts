@@ -295,6 +295,109 @@ export class PluginApi {
     this.logger.info(`Registered service: ${service.id}`);
   }
 
+  // ================================================================
+  // Extended Registration — 对齐 OpenClaw 更多能力注册
+  // ================================================================
+
+  /** 已注册的 web search providers */
+  readonly _webSearchProviders: Array<{ id: string; provider: unknown }> = [];
+
+  /** 已注册的 media understanding providers */
+  readonly _mediaUnderstandingProviders: Array<{ id: string; provider: unknown }> = [];
+
+  /** 已注册的 image generation providers */
+  readonly _imageGenerationProviders: Array<{ id: string; provider: unknown }> = [];
+
+  /** 已注册的 music generation providers */
+  readonly _musicGenerationProviders: Array<{ id: string; provider: unknown }> = [];
+
+  /** 已注册的 video generation providers */
+  readonly _videoGenerationProviders: Array<{ id: string; provider: unknown }> = [];
+
+  /** 已注册的 speech providers */
+  readonly _speechProviders: Array<{ id: string; provider: unknown }> = [];
+
+  /** 已注册的 model catalog providers */
+  readonly _modelCatalogProviders: Array<{ provider: string; kinds: string[]; liveCatalog: unknown }> = [];
+
+  /** 已注册的 memory embedding providers */
+  readonly _memoryEmbeddingProviders: Array<{ id: string; provider: unknown }> = [];
+
+  /**
+   * 注册 Web Search Provider
+   */
+  registerWebSearchProvider(provider: unknown): void {
+    const id = (provider as any)?.id ?? 'unknown';
+    this._webSearchProviders.push({ id, provider });
+    this.logger.info(`Registered web search provider: ${id}`);
+  }
+
+  /**
+   * 注册 Media Understanding Provider
+   */
+  registerMediaUnderstandingProvider(provider: unknown): void {
+    const id = (provider as any)?.id ?? 'unknown';
+    this._mediaUnderstandingProviders.push({ id, provider });
+    this.logger.info(`Registered media understanding provider: ${id}`);
+  }
+
+  /**
+   * 注册 Image Generation Provider
+   */
+  registerImageGenerationProvider(provider: unknown): void {
+    const id = (provider as any)?.id ?? 'unknown';
+    this._imageGenerationProviders.push({ id, provider });
+    this.logger.info(`Registered image generation provider: ${id}`);
+  }
+
+  /**
+   * 注册 Music Generation Provider
+   */
+  registerMusicGenerationProvider(provider: unknown): void {
+    const id = (provider as any)?.id ?? 'unknown';
+    this._musicGenerationProviders.push({ id, provider });
+    this.logger.info(`Registered music generation provider: ${id}`);
+  }
+
+  /**
+   * 注册 Video Generation Provider
+   */
+  registerVideoGenerationProvider(provider: unknown): void {
+    const id = (provider as any)?.id ?? 'unknown';
+    this._videoGenerationProviders.push({ id, provider });
+    this.logger.info(`Registered video generation provider: ${id}`);
+  }
+
+  /**
+   * 注册 Speech Provider
+   */
+  registerSpeechProvider(provider: unknown): void {
+    const id = (provider as any)?.id ?? 'unknown';
+    this._speechProviders.push({ id, provider });
+    this.logger.info(`Registered speech provider: ${id}`);
+  }
+
+  /**
+   * 注册 Model Catalog Provider
+   */
+  registerModelCatalogProvider(catalog: { provider: string; kinds: string[]; liveCatalog: unknown }): void {
+    this._modelCatalogProviders.push(catalog);
+    this.logger.info(`Registered model catalog: ${catalog.provider} (${catalog.kinds.join(', ')})`);
+  }
+
+  /**
+   * 注册 Memory Embedding Provider
+   */
+  registerMemoryEmbeddingProvider(provider: unknown): void {
+    const id = (provider as any)?.id ?? 'unknown';
+    this._memoryEmbeddingProviders.push({ id, provider });
+    this.logger.info(`Registered memory embedding provider: ${id}`);
+  }
+
+  // ================================================================
+  // Utility
+  // ================================================================
+
   /**
    * 解析相对于 plugin root 的路径
    *

@@ -646,6 +646,62 @@ export class PluginManager {
     return result;
   }
 
+  /**
+   * 获取所有已注册的 web search providers
+   */
+  getWebSearchProviders(): Array<{ pluginId: string; provider: unknown }> {
+    const result: Array<{ pluginId: string; provider: unknown }> = [];
+    for (const plugin of this.loader.getAllPlugins()) {
+      if (!plugin.registered) continue;
+      for (const reg of plugin.api._webSearchProviders) {
+        result.push({ pluginId: plugin.id, provider: reg.provider });
+      }
+    }
+    return result;
+  }
+
+  /**
+   * 获取所有已注册的 media understanding providers
+   */
+  getMediaUnderstandingProviders(): Array<{ pluginId: string; provider: unknown }> {
+    const result: Array<{ pluginId: string; provider: unknown }> = [];
+    for (const plugin of this.loader.getAllPlugins()) {
+      if (!plugin.registered) continue;
+      for (const reg of plugin.api._mediaUnderstandingProviders) {
+        result.push({ pluginId: plugin.id, provider: reg.provider });
+      }
+    }
+    return result;
+  }
+
+  /**
+   * 获取所有已注册的 image generation providers
+   */
+  getImageGenerationProviders(): Array<{ pluginId: string; provider: unknown }> {
+    const result: Array<{ pluginId: string; provider: unknown }> = [];
+    for (const plugin of this.loader.getAllPlugins()) {
+      if (!plugin.registered) continue;
+      for (const reg of plugin.api._imageGenerationProviders) {
+        result.push({ pluginId: plugin.id, provider: reg.provider });
+      }
+    }
+    return result;
+  }
+
+  /**
+   * 获取所有已注册的 model catalog providers
+   */
+  getModelCatalogProviders(): Array<{ pluginId: string; provider: string; kinds: string[]; liveCatalog: unknown }> {
+    const result: Array<{ pluginId: string; provider: string; kinds: string[]; liveCatalog: unknown }> = [];
+    for (const plugin of this.loader.getAllPlugins()) {
+      if (!plugin.registered) continue;
+      for (const reg of plugin.api._modelCatalogProviders) {
+        result.push({ pluginId: plugin.id, ...reg });
+      }
+    }
+    return result;
+  }
+
   // ================================================================
   // Gateway Lifecycle
   // ================================================================
