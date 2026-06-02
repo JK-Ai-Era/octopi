@@ -245,7 +245,7 @@ export class AnthropicProvider implements LLMProvider {
     // 提取 system prompt
     const systemMessages = request.messages.filter((m) => m.role === 'system');
     const nonSystemMessages = request.messages.filter((m) => m.role !== 'system');
-    const systemPrompt = systemMessages.map((m) => m.content).join('\n\n');
+    const systemPrompt = systemMessages.map((m) => String(m.content ?? '')).join('\n\n');
 
     // 转换消息格式
     const messages = nonSystemMessages.map((m) => this.toAnthropicMessage(m));
@@ -280,30 +280,32 @@ export class AnthropicProvider implements LLMProvider {
    * - `assistant` 消息的 tool_calls 需要转换为 `content` 数组
    * - `tool` 角色的消息需要转换为 `user` 角色 + `tool_result` 内容块
    */
-  private toAnthropicMessage(msg: { role: string; content: string; tool_calls?: unknown[] }): Record<string, unknown> {
-    if (msg.role === 'assistant' && msg.tool_calls && msg.tool_calls.length > 0) {
+  private toAnthropicMessage(msg: Record<string, unknown>): Record<string, unknown> {
+    const role = String(msg.role);
+    const textContent = String(msg.content ?? '');
+    if (role === 'assistant' && msg.tool_calls && Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0) {
       // Assistant 消息带工具调用 → content 数组
-      const content: Array<Record<string, unknown>> = [];
-      if (msg.content) {
-        content.push({ type: 'text', text: msg.content });
+      const blocks: Array<Record<string, unknown>> = [];
+      if (textContent) {
+        blocks.push({ type: 'text', text: textContent });
       }
       for (const tc of msg.tool_calls as Array<Record<string, unknown>>) {
-        content.push({
+        blocks.push({
           type: 'tool_use',
           id: tc.id,
           name: tc.function ? (tc.function as Record<string, unknown>).name : tc.name,
           input: tc.function
-            ? this.safeParseJson((tc.function as Record<string, unknown>).arguments as string)
+            ? this.safeParseJson(String((tc.function as Record<string, unknown>).arguments ?? '{}'))
             : (tc.arguments ?? {}),
         });
       }
-      return { role: 'assistant', content };
+      return { role: 'assistant', content: blocks };
     }
 
     // 普通 user/assistant 消息
     return {
-      role: msg.role,
-      content: msg.content,
+      role,
+      content: textContent,
     };
   }
 

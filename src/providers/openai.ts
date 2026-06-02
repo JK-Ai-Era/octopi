@@ -227,13 +227,16 @@ export class OpenAIProvider implements LLMProvider {
    * 解析 tool_calls
    */
   private parseToolCalls(calls: any[]): ToolCall[] {
-    return calls.map((call) => ({
-      id: call.id,
-      name: call.function.name,
-      arguments: typeof call.function.arguments === 'string'
-        ? JSON.parse(call.function.arguments)
-        : call.function.arguments,
-    }));
+    return calls.map((call, i) => {
+      const fn = call.function ?? call;
+      return {
+        id: call.id ?? `call_${i}`,
+        name: fn.name,
+        arguments: typeof fn.arguments === 'string'
+          ? (() => { try { return JSON.parse(fn.arguments); } catch { return {}; } })()
+          : (fn.arguments ?? {}),
+      };
+    });
   }
 
   /**

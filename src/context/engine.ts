@@ -63,13 +63,42 @@ export class LegacyContextEngine implements ContextEngine {
     // 裁剪消息以适配 token 预算
     const trimmed = this.trimMessages(messages, tokenBudget);
 
-    // 转换为 LLM 消息格式
+    // 转换为 OpenAI API 兼容格式
+    const apiMessages: Array<Record<string, unknown>> = [];
+    for (const m of trimmed) {
+      if (m.role === 'tool' && m.toolResults) {
+        // 每个 tool result 拆成独立的 role:"tool" 消息
+        for (const tr of m.toolResults) {
+          apiMessages.push({
+            role: 'tool',
+            tool_call_id: tr.toolCallId,
+            content: tr.error ? `Error: ${tr.error}` : JSON.stringify(tr.result ?? null),
+          });
+        }
+      } else if (m.role === 'assistant' && m.toolCalls) {
+        // assistant 消息带 tool_calls → OpenAI 格式
+        apiMessages.push({
+          role: 'assistant',
+          content: m.content || null,
+          tool_calls: m.toolCalls.map((tc) => ({
+            id: tc.id,
+            type: 'function',
+            function: {
+              name: tc.name,
+              arguments: typeof tc.arguments === 'string' ? tc.arguments : JSON.stringify(tc.arguments),
+            },
+          })),
+        });
+      } else {
+        apiMessages.push({
+          role: m.role,
+          content: m.content,
+        });
+      }
+    }
+
     return {
-      messages: trimmed.map((m) => ({
-        role: m.role,
-        content: m.content,
-        ...(m.toolCalls && { tool_calls: m.toolCalls }),
-      })),
+      messages: apiMessages,
       estimatedTokens: this.estimateTokens(trimmed),
     };
   }

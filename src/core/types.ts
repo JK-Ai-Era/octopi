@@ -260,8 +260,8 @@ export interface Turn {
  * 包含发送给 LLM 的消息列表和 token 估算
  */
 export interface AssembleResult {
-  /** 发送给 LLM 的消息列表 */
-  messages: Array<{ role: string; content: string; tool_calls?: unknown[] }>;
+  /** 发送给 LLM 的消息列表（OpenAI API 兼容格式） */
+  messages: Array<Record<string, unknown>>;
   /** 估算的 token 数 */
   estimatedTokens: number;
   /** 系统提示词追加内容（由 plugin 注入） */
@@ -459,8 +459,8 @@ export interface MemoryEntry {
 export interface LLMRequest {
   /** 模型名称 */
   model: string;
-  /** 消息列表 */
-  messages: Array<{ role: string; content: string; tool_calls?: unknown[] }>;
+  /** 消息列表（OpenAI API 兼容格式） */
+  messages: Array<Record<string, unknown>>;
   /** 工具定义（function calling 格式） */
   tools?: unknown[];
   /** 温度参数 */
