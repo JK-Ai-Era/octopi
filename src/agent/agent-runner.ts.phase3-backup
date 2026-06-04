@@ -305,109 +305,178 @@ export class AgentRunner {
       // 不写入 session 持久化（避免重复注入），只在本轮 assemble 时使用
       const skillPromptFragment = this.skillManager.formatForPrompt();
 
-      // ── Step 5: 调用 runAgentLoop（核心循环由 loop 引擎处理） ──
-      const provider = this.llmRouter.getProvider(agent.model.provider);
-      if (!provider) {
-        throw new Error(`LLM provider "${agent.model.provider}" not found.`);
-      }
+      // ── Step 5: 核心循环 ──
+      // assemble → LLM → tool exec → 直到纯文本回复
+      let iteration = 0;
 
-      // 构建 AgentLoopConfig
-      const loopConfig: AgentLoopConfig = {
-        provider,
-        agentId: agent.id,
-        contextEngine,
-        toolRegistry: {
-          getDefinitions: () => this.toolRegistry.getDefinitionsForLLM(agent.id),
-          execute: async (name: string, args: unknown, ctx: unknown) => {
-            const tool = this.toolRegistry.get(name, agent.id);
-            if (!tool) {
-              return { error: `Tool "${name}" not found.` }; // 新类型定义
-            }
-            try {
-              const result = await tool.handler(args as Record<string, unknown>, ctx as any); // 类型断言
-              return { result }; // 新类型定义
-            } catch (err) {
-              return { error: err instanceof Error ? err.message : 'Tool execution failed.' }; // 新类型定义
-            }
-          },
-        },
-        messageConverter: {
-          toLlm: (msgs: Message[]) => msgs.map(m => ({ role: m.role, content: m.content ?? '' })),
-          fromLlm: (msg: any) => msg,
-        },
-        pluginManager: this.pluginManager,
-        skillManager: this.skillManager,
-        defaultModel: agent.model.model,
-        maxTurns: this.maxIterations,
-        iterationBudget: this.maxIterations * 3,
-        maxConsecutiveErrors: 3,
-        retry: { maxRetries: 2, baseDelayMs: 1000, maxDelayMs: 10000 },
-        onEvent: (event) => this.emit(event),
-      };
+      while (iteration < this.maxIterations) {
+        iteration++;
+        const turnId = randomUUID();
+        await this.emit({ type: 'turn_start', turnId, turnIndex: iteration - 1 });
 
+        // 5a. Context Engine — assemble
+        // 组装发送给 LLM 的消息列表（裁剪、注入系统提示词等）
+        const availableTools = this.toolRegistry.listForAgent(agent.id).map((t) => t.name);
+        const assembleResult = await contextEngine.assemble({
+          sessionId: session.id,
+          messages: this.sessions.getMessages(session.id),
+          tokenBudget: agent.model.maxTokens ?? 32768,
+          availableTools,
+        });
 
-      // ── Step 6: 执行 runAgentLoop ──
-      const messages = this.sessions.getMessages(session.id);
-      const messagesLengthBefore = messages.length; // 记录初始长度，用于同步新增消息
-      let finalAssistantMessage: Message | null = null;
-
-      for await (const event of runAgentLoop(loopConfig, messages)) {
-        // 转发事件
-        await this.emit(event);
-
-        // 捕获最终的 assistant message（纯文本回复）
-        if (event.type === 'llm_response' && !event.toolCalls) {
-          finalAssistantMessage = {
-            role: 'assistant',
-            content: event.content,
-            timestamp: Date.now(),
-          };
+        // 注入 skill 描述（不持久化，避免重复注入）
+        if (skillPromptFragment) {
+          assembleResult.messages.push({
+            role: 'system',
+            content: skillPromptFragment,
+          });
         }
-      }
 
-      // ── Step 6.5: 持久化 loop 中新增的消息（tool 调用/结果等） ──
-      // runAgentLoop 直接修改了 messages 数组，但绕过了 addMessage 的持久化
-      // 需要手动同步新增消息到 JSONL
-      const newMessages = messages.slice(messagesLengthBefore);
-      if (newMessages.length > 0) {
-        this.sessions.persistMessages(session.id, newMessages);
-      }
+        // 5b. Plugin — before_model_resolve
+        // 可以覆盖模型选择（如 A/B 测试、fallback）
+        const modelOverride = await this.pluginManager.runHook<{ model?: string; provider?: string } | null>(
+          'before_model_resolve',
+          hookCtx,
+          null,
+        );
 
-      // ── Step 7: 处理最终回复 ──
-      if (!finalAssistantMessage) {
-        session.status = 'error';
-        const errorMessage: Message = {
+        // 5c. Plugin — before_prompt_build
+        // 可以注入额外上下文（如 RAG 结果、用户画像）
+        const promptInjection = await this.pluginManager.runHook<{ prependContext?: string } | null>(
+          'before_prompt_build',
+          { ...hookCtx, messages: this.sessions.getMessages(session.id) },
+          null,
+        );
+
+        // 组装最终的 LLM 请求
+        const finalMessages = [...assembleResult.messages];
+        if (promptInjection?.prependContext) {
+          // 在最后一条 user 消息前插入额外上下文
+          const lastUserIdx = finalMessages.map((m) => m.role).lastIndexOf('user');
+          if (lastUserIdx >= 0) {
+            finalMessages.splice(lastUserIdx, 0, {
+              role: 'system',
+              content: promptInjection.prependContext,
+            });
+          }
+        }
+
+        const rawMessages = this.prepareLlmMessages(finalMessages);
+        const llmRequest: LLMRequest = {
+          model: modelOverride?.model ?? agent.model.model,
+          messages: rawMessages,
+          tools: this.toolRegistry.getDefinitionsForLLM(agent.id),
+          temperature: agent.model.temperature ?? 0.7,
+          maxTokens: agent.model.maxTokens ?? 4096,
+        };
+
+        await this.emit({ type: 'llm_request', model: llmRequest.model, estimatedTokens: 0 });
+
+        // 5d. LLM 调用
+        const providerName = modelOverride?.provider ?? agent.model.provider;
+        const provider = this.llmRouter.getProvider(providerName);
+        if (!provider) {
+          throw new Error(`LLM provider "${providerName}" not found.`);
+        }
+
+        const startTime = Date.now();
+        const llmResponse = await provider.complete(llmRequest);
+        await this.emit({
+          type: 'llm_response',
+          content: llmResponse.content,
+          toolCalls: llmResponse.toolCalls,
+          usage: llmResponse.usage,
+          durationMs: Date.now() - startTime,
+        });
+
+        // 构建 assistant 消息
+        const assistantMessage: Message = {
           role: 'assistant',
-          content: '[Octopi] Agent Loop 异常终止，未生成回复。',
+          content: llmResponse.content,
+          toolCalls: llmResponse.toolCalls,
           timestamp: Date.now(),
         };
-        this.sessions.addMessage(session.id, errorMessage);
-        session.updatedAt = Date.now();
-        return errorMessage;
+
+        // 记录 turn
+        const turn: Turn = {
+          id: turnId,
+          input: this.sessions.getMessages(session.id),
+          output: assistantMessage,
+          usage: llmResponse.usage,
+          durationMs: Date.now() - startTime,
+          model: llmResponse.model,
+          timestamp: Date.now(),
+        };
+
+        // ── 没有 tool call → 完成 ──
+        if (!llmResponse.toolCalls || llmResponse.toolCalls.length === 0) {
+          this.sessions.addMessage(session.id, assistantMessage);
+          this.sessions.addTurn(session.id, turn);
+          session.status = 'idle';
+          session.updatedAt = Date.now();
+
+          await this.emit({ type: 'turn_end', turnId, shouldContinue: false });
+
+          // Context Engine — afterTurn
+          await contextEngine.afterTurn({
+            sessionId: session.id,
+            turn,
+          });
+
+          return assistantMessage;
+        }
+
+        // ── 有 tool call → 执行工具 ──
+        session.status = 'processing';
+        this.sessions.addMessage(session.id, assistantMessage);
+        this.sessions.addTurn(session.id, turn);
+
+        const toolResults = await this.executeToolCalls(
+          llmResponse.toolCalls,
+          session,
+          agent.id,
+        );
+
+        // 每个 tool_call_id 对应一条独立的 tool 消息（OpenAI API 规范）
+        for (const result of toolResults) {
+          const content = result.error
+            ? `Error: ${result.error}`
+            : typeof result.result === 'string'
+              ? result.result
+              : JSON.stringify(result.result);
+          const toolMessage: Message = {
+            role: 'tool',
+            content,
+            toolResults: [result],
+            timestamp: Date.now(),
+          };
+          // 在内部 Message 上附加 LLM 所需字段
+          (toolMessage as any).tool_call_id = result.toolCallId;
+          (toolMessage as any).name = result.name;
+          this.sessions.addMessage(session.id, toolMessage);
+        }
+
+        await this.emit({ type: 'turn_end', turnId, shouldContinue: true });
+        // 继续循环，让 LLM 看到 tool results 后生成最终回复
       }
 
-      this.sessions.addMessage(session.id, finalAssistantMessage);
-      session.status = 'idle';
-      session.updatedAt = Date.now();
-
-      // ── Step 8: Context Engine — afterTurn ──
-      const turn: Turn = {
-        id: randomUUID(),
-        input: messages,
-        output: finalAssistantMessage,
-        usage: undefined,
-        durationMs: 0,
-        model: agent.model.model,
+      // ── 超过最大迭代次数 ──
+      session.status = 'error';
+      const errorMessage: Message = {
+        role: 'assistant',
+        content: '[Octopi] 达到最大迭代次数限制，停止执行。请检查是否有无限工具调用循环。',
         timestamp: Date.now(),
       };
-      await contextEngine.afterTurn({ sessionId: session.id, turn });
-
-      return finalAssistantMessage;
+      this.sessions.addMessage(session.id, errorMessage);
+      session.updatedAt = Date.now();
+      return errorMessage;
     } finally {
-      // ── Step 9: 释放 session write lock ──
+      // ── Step 6: 释放 session write lock ──
       releaseLock();
     }
   }
+
+  // ================================================================
   // 内部方法
   // ================================================================
 

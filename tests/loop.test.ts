@@ -13,8 +13,6 @@ import type {
   LLMProvider,
   LLMResponse,
   Message,
-  LoopAdvisor,
-  MetaDecision,
   ToolResult,
 } from '../src/core/types.js';
 
@@ -307,7 +305,6 @@ describe('runAgentLoop', () => {
       contextEngine: createMockContextEngine(),
       toolRegistry: createMockToolRegistry(),
       messageConverter: createMessageConverter(),
-      advisors: [],
       defaultModel: 'mock-model',
       maxTurns: 10,
       iterationBudget: 90,
@@ -347,7 +344,6 @@ describe('runAgentLoop', () => {
       contextEngine: createMockContextEngine(),
       toolRegistry: createMockToolRegistry({ search: 'search results' }),
       messageConverter: createMessageConverter(),
-      advisors: [],
       defaultModel: 'mock-model',
       maxTurns: 10,
       iterationBudget: 90,
@@ -371,88 +367,6 @@ describe('runAgentLoop', () => {
     expect(finalResponse).toBe('Found it!');
   });
 
-  it('advisor 可以注入消息', async () => {
-    const provider = createMockProvider([{
-      content: 'OK with context',
-      model: 'mock-model',
-      finishReason: 'stop',
-    }]);
-
-    const advisor: LoopAdvisor = {
-      name: 'test-advisor',
-      priority: 10,
-      async beforeTurn(): Promise<MetaDecision> {
-        return {
-          injectMessages: [{
-            role: 'system',
-            content: 'Injected context from advisor',
-            timestamp: Date.now(),
-          }],
-        };
-      },
-    };
-
-    const config: AgentLoopConfig = {
-      provider,
-      contextEngine: createMockContextEngine(),
-      toolRegistry: createMockToolRegistry(),
-      messageConverter: createMessageConverter(),
-      advisors: [advisor],
-      defaultModel: 'mock-model',
-      maxTurns: 10,
-      iterationBudget: 90,
-      maxConsecutiveErrors: 5,
-      retry: { maxRetries: 0, baseDelayMs: 100, maxDelayMs: 1000 },
-    };
-
-    const events: string[] = [];
-    for await (const event of runAgentLoop(config, makeInput('test'))) {
-      events.push(event.type);
-    }
-
-    expect(events).toContain('advisor_call');
-    expect(events).toContain('messages_injected');
-    expect(events).toContain('meta_decision');
-  });
-
-  it('advisor 可以停止循环', async () => {
-    const provider = createMockProvider([{
-      content: 'should not reach here',
-      model: 'mock-model',
-      finishReason: 'stop',
-    }]);
-
-    const advisor: LoopAdvisor = {
-      name: 'stopper',
-      priority: 10,
-      async beforeTurn(): Promise<MetaDecision> {
-        return { shouldStop: true, stopReason: 'blocked by advisor' };
-      },
-    };
-
-    const config: AgentLoopConfig = {
-      provider,
-      contextEngine: createMockContextEngine(),
-      toolRegistry: createMockToolRegistry(),
-      messageConverter: createMessageConverter(),
-      advisors: [advisor],
-      defaultModel: 'mock-model',
-      maxTurns: 10,
-      iterationBudget: 90,
-      maxConsecutiveErrors: 5,
-      retry: { maxRetries: 0, baseDelayMs: 100, maxDelayMs: 1000 },
-    };
-
-    const events: string[] = [];
-    for await (const event of runAgentLoop(config, makeInput('test'))) {
-      events.push(event.type);
-    }
-
-    expect(events).toContain('advisor_call');
-    expect(events).toContain('loop_end');
-    expect(events).not.toContain('llm_request');
-  });
-
   it('AbortSignal 中断', async () => {
     // 创建一个会延迟的 provider
     const provider: LLMProvider = {
@@ -473,7 +387,6 @@ describe('runAgentLoop', () => {
       contextEngine: createMockContextEngine(),
       toolRegistry: createMockToolRegistry(),
       messageConverter: createMessageConverter(),
-      advisors: [],
       defaultModel: 'mock-model',
       maxTurns: 10,
       iterationBudget: 90,

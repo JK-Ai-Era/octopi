@@ -10,8 +10,7 @@ tasks/
 ├── task-manager.ts # TaskManager — LLM 决策器（解析 JSON 响应）
 ├── plugin.ts      # TaskManagerPlugin — Plugin 系统集成
 ├── shared.ts      # applyDecision — 共享函数
-├── types.ts       # 类型定义（Task, TaskEvent, TaskDecision）
-└── advisor.ts     # [deprecated] LoopAdvisor 模式（迁移中）
+└── types.ts       # 类型定义（Task, TaskEvent, TaskDecision）
 ```
 
 ## 核心组件
@@ -184,13 +183,3 @@ await gateway.start();
 
 - `tests/task-system.test.ts` — CRUD + 持久化 + JSON 解析边界 case
 - `tests/task-integration.test.ts` — Plugin 集成 + Session 隔离 + 并发压力测试
-
-## 迁移状态
-
-- `advisor.ts` — **deprecated**（LoopAdvisor 模式，迁移中）
-- `shared.ts` — 新增（applyDecision 共享函数）
-
-## 参考
-
-- OpenClaw 的 `TaskTracker` 设计（持久化 + session 隔离）
-- OpenClaw 的 `LoopAdvisor` 模式（迭代级 hook）

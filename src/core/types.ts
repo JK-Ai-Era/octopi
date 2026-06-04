@@ -687,7 +687,6 @@ export type LoopEndReason =
   | 'completed'         // LLM 返回最终响应，无 tool calls
   | 'max_turns'         // 达到最大轮次
   | 'budget_exhausted'  // IterationBudget 耗尽
-  | 'advisor_stop'      // 某个 advisor 决定停止
   | 'plugin_stop'       // 某个 plugin 决定停止
   | 'interrupted'       // 用户中断
   | 'error';            // 不可恢复的错误
@@ -719,9 +718,7 @@ export type AgentEvent =
   | { type: 'turn_start'; turnId: string; turnIndex: number }
   | { type: 'turn_end'; turnId: string; shouldContinue: boolean }
 
-  // ── Meta-decision 阶段 ──
-  | { type: 'advisor_call'; advisor: string }
-  | { type: 'meta_decision'; decisions: MetaDecision[] }
+  // ── 上下文注入 ──
   | { type: 'messages_injected'; count: number; source: string }
 
   // ── LLM 阶段 ──
@@ -782,99 +779,6 @@ export interface ClassifiedError {
  * Thinking level
  */
 export type ThinkingLevel = 'off' | 'low' | 'medium' | 'high';
-
-/**
- * Meta-Decision
- *
- * LoopAdvisor 的输出。可以注入消息、覆盖参数、决定停止。
- */
-export interface MetaDecision {
-  /** 消息注入（添加到对话中） */
-  injectMessages?: Message[];
-  /** 覆盖模型 */
-  overrideModel?: string;
-  /** 覆盖 thinking level */
-  overrideThinking?: ThinkingLevel;
-  /** 覆盖最大输出 token */
-  overrideMaxTokens?: number;
-  /** 决定停止循环 */
-  shouldStop?: boolean;
-  /** 停止原因 */
-  stopReason?: string;
-  /** 任务上下文（注入到 system prompt） */
-  taskContext?: string;
-}
-
-/**
- * Advisor 上下文
- *
- * 每轮迭代前传递给 LoopAdvisor。
- */
-export interface AdvisorContext {
-  /** 当前 session ID */
-  sessionId: string;
-  /** 当前 turn ID */
-  turnId: string;
-  /** 当前 turn 索引 */
-  turnIndex: number;
-  /** 当前消息列表 */
-  messages: Message[];
-  /** 迭代预算 */
-  iterationBudget: { used: number; remaining: number; max: number };
-  /** 中止信号 */
-  abortSignal: AbortSignal;
-}
-
-/**
- * Turn 结果
- *
- * 传递给 LoopAdvisor.afterTurn()。
- */
-export interface TurnResult {
-  /** assistant 消息 */
-  assistantMessage: Message;
-  /** 工具结果 */
-  toolResults: ToolResult[];
-  /** Token 使用量 */
-  tokenUsage?: TokenUsage;
-  /** 执行耗时 */
-  durationMs: number;
-}
-
-/**
- * Loop Advisor
- *
- * 参与 Agent Loop 的每轮决策。按 priority 排序执行。
- * TaskManager、Steering、Policy 都是 LoopAdvisor 的实现。
- */
-export interface LoopAdvisor {
-  /** 名称（用于日志和事件） */
-  name: string;
-  /** 优先级（越小越先执行） */
-  priority: number;
-
-  /**
-   * 每轮迭代前调用
-   * 返回 MetaDecision 或 null（不干预）
-   */
-  beforeTurn(ctx: AdvisorContext): Promise<MetaDecision | null>;
-
-  /**
-   * 每轮迭代后调用（可选）
-   */
-  afterTurn?(ctx: AdvisorContext, result: TurnResult): Promise<void>;
-
-  /**
-   * Steering 消息到达时调用（可选）
-   * 返回 MetaDecision 或 null
-   */
-  onSteering?(messages: Message[]): Promise<MetaDecision | null>;
-
-  /**
-   * 循环结束时调用（可选）
-   */
-  onLoopEnd?(ctx: AdvisorContext): Promise<void>;
-}
 
 // ============================================================
 // 15. LLM Message — Provider 边界格式
@@ -941,16 +845,21 @@ export interface RetryConfig {
 export interface AgentLoopConfig {
   /** LLM Provider */
   provider: LLMProvider;
+  /** Agent ID（用于 HookContext） */
+  agentId: string;
   /** Context Engine */
   contextEngine: ContextEngine;
   /** Tool Registry */
-  toolRegistry: { getDefinitions(): unknown[]; execute(name: string, args: string, ctx: unknown): Promise<ToolResult> };
+  toolRegistry: {
+    getDefinitions(): unknown[];
+    execute(name: string, args: unknown, ctx: unknown): Promise<{ result?: unknown; error?: string }>;
+  };
   /** Message Converter */
   messageConverter: MessageConverter;
-  /** Advisor 链（deprecated — 使用 pluginManager 的 hooks 替代） */
-  advisors: LoopAdvisor[];
   /** Plugin Manager（可选，用于迭代级 hooks） */
   pluginManager?: import('../plugins/manager.js').PluginManager;
+  /** Skill Manager（可选，用于注入 skill 描述） */
+  skillManager?: SkillManager;
   /** 默认模型 */
   defaultModel: string;
   /** 最大轮次 */

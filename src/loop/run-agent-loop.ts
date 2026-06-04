@@ -13,16 +13,13 @@
 import type {
   AgentEvent,
   AgentLoopConfig,
-  AdvisorContext,
   ClassifiedError,
   LLMMessage,
   LLMStreamChunk,
   LoopEndReason,
   Message,
-  MetaDecision,
   ToolCall,
   ToolResult,
-  TurnResult,
 } from '../core/types.js';
 import type { PluginManager } from '../plugins/manager.js';
 import type { BeforeIterationResult } from '../plugins/manager.js';
@@ -142,12 +139,12 @@ function hasTruncatedArgs(toolCalls: LLMToolCallRaw[]): boolean {
  * 返回 AsyncIterable<AgentEvent>，调用方可以 for await 消费事件。
  *
  * @param config - 循环配置
- * @param input - 用户输入消息
+ * @param initialMessages - 初始消息列表（支持外部管理）
  * @param signal - 中止信号
  */
 export async function* runAgentLoop(
   config: AgentLoopConfig,
-  input: Message,
+  initialMessages: Message[],
   signal?: AbortSignal,
 ): AsyncIterable<AgentEvent> {
   const {
@@ -155,23 +152,23 @@ export async function* runAgentLoop(
     contextEngine,
     toolRegistry,
     messageConverter,
-    advisors,
     pluginManager,
   } = config;
 
-  // 排序 advisors（priority 越小越先执行）
-  const sortedAdvisors = [...advisors].sort((a, b) => a.priority - b.priority);
-
   const budget = new IterationBudget(config.iterationBudget);
-  const messages: Message[] = [input];
+  // 支持外部消息管理：如果传入数组，则使用外部消息列表
+  // 直接使用传入的数组引用，允许外部管理（agent-runner 需要）
+  // 如果传入单个消息，包装成数组
+  const messages: Message[] = Array.isArray(initialMessages) ? initialMessages : [initialMessages];
   let turnIndex = 0;
   let consecutiveErrors = 0;
   let lastResponse: string | undefined;
   let loopEndReason: LoopEndReason = 'error';
   let loopEndResponse: string | undefined;
 
-  // 构建 session ID（从 input 的 metadata 或生成）
-  const sessionId = (input.metadata?.sessionId as string) ?? generateId('session');
+  // 构建 session ID（从第一条消息的 metadata 或生成）
+  const firstMsg = Array.isArray(initialMessages) ? initialMessages[0] : initialMessages;
+  const sessionId = (firstMsg?.metadata?.sessionId as string) ?? generateId('session');
 
   yield { type: 'loop_start', sessionId };
 
@@ -201,72 +198,7 @@ export async function* runAgentLoop(
       yield { type: 'turn_start', turnId, turnIndex };
 
       // ══════════════════════════════════════════
-      // Layer 1: Meta-Decision (顾问层)
-      // ══════════════════════════════════════════
-
-      const advisorCtx: AdvisorContext = {
-        sessionId,
-        turnId,
-        turnIndex,
-        messages: [...messages],
-        iterationBudget: {
-          used: budget.used,
-          remaining: budget.remaining,
-          max: budget.max,
-        },
-        abortSignal: signal ?? new AbortController().signal,
-      };
-
-      const decisions: MetaDecision[] = [];
-
-      for (const advisor of sortedAdvisors) {
-        if (signal?.aborted) break;
-
-        yield { type: 'advisor_call', advisor: advisor.name };
-
-        try {
-          const decision = await advisor.beforeTurn(advisorCtx);
-          if (decision) {
-            decisions.push(decision);
-
-            // 处理消息注入
-            if (decision.injectMessages?.length) {
-              messages.push(...decision.injectMessages);
-              yield {
-                type: 'messages_injected',
-                count: decision.injectMessages.length,
-                source: advisor.name,
-              };
-            }
-
-            // 处理停止决策
-            if (decision.shouldStop) {
-              yield { type: 'turn_end', turnId, shouldContinue: false };
-              yield {
-                type: 'loop_end',
-                reason: 'advisor_stop',
-                response: decision.stopReason,
-              };
-              return;
-            }
-          }
-        } catch (error) {
-          // advisor 失败不应阻塞整个循环
-          yield {
-            type: 'error',
-            error: classifyError(error, undefined, undefined),
-            retrying: false,
-          };
-        }
-      }
-
-      yield { type: 'meta_decision', decisions };
-
-      // 合并所有 decisions 的覆盖项
-      const merged = mergeDecisions(decisions);
-
-      // ══════════════════════════════════════════
-      // Layer 2: LLM Decision (模型层)
+      // Layer 1: LLM Decision (模型层)
       // ══════════════════════════════════════════
 
       // 检查是否需要压缩上下文
@@ -292,10 +224,64 @@ export async function* runAgentLoop(
         }
       }
 
-      // 组装 LLM 请求
-      const llmMessages: LLMMessage[] = messageConverter.toLlm(messages);
+      // 组装 LLM 请求（使用 Context Engine assemble）
+      const availableTools = (config.toolRegistry.getDefinitions() as Array<{name: string}>).map(d => d.name);
+      const assembleResult = await contextEngine.assemble({
+        sessionId,
+        messages: [...messages],
+        tokenBudget: 100000, // 默认 token budget
+        availableTools,
+      });
+      const llmMessages = assembleResult.messages as unknown as LLMMessage[];
 
-      let model = merged.overrideModel ?? config.defaultModel;
+      // ══════════════════════════════════════════
+      // Plugin Hook: before_prompt_build（注入额外上下文）
+      // ══════════════════════════════════════════
+      if (pluginManager) {
+        const buildResult = await pluginManager.runHook<{ prependContext?: string; prependSystemContext?: string } | null>(
+          'before_prompt_build',
+          {
+            prompt: '', // 简化，实际 prompt 已在 llmMessages 里
+            messages: [...messages],
+            ctx: { sessionId, agentId: config.agentId },
+          },
+          null,
+        );
+
+        if (buildResult?.prependContext) {
+          // 在最后一条 user 消息前插入额外上下文
+          const lastUserIdx = llmMessages.map((m) => m.role).lastIndexOf('user');
+          if (lastUserIdx >= 0) {
+            llmMessages.splice(lastUserIdx, 0, {
+              role: 'system',
+              content: buildResult.prependContext,
+            });
+          }
+        }
+
+        if (buildResult?.prependSystemContext) {
+          // 在 system prompt 前置追加
+          const systemIdx = llmMessages.findIndex((m) => m.role === 'system');
+          if (systemIdx >= 0) {
+            llmMessages[systemIdx].content = buildResult.prependSystemContext + '\n\n' + (llmMessages[systemIdx].content ?? '');
+          } else {
+            llmMessages.unshift({ role: 'system', content: buildResult.prependSystemContext });
+          }
+        }
+      }
+
+      // 注入 skill 描述（不持久化，避免重复注入）
+      if (config.skillManager) {
+        const skillPromptFragment = config.skillManager.formatForPrompt();
+        if (skillPromptFragment) {
+          llmMessages.push({
+            role: 'system',
+            content: skillPromptFragment,
+          });
+        }
+      }
+
+      let model = config.defaultModel;
 
       // ══════════════════════════════════════════
       // Plugin Hook: before_iteration (迭代级，Octopi 独有)
@@ -309,7 +295,7 @@ export async function* runAgentLoop(
             iteration: turnIndex,
             messages: [...messages],
             model,
-            thinking: merged.overrideThinking,
+            thinking: undefined,
             sessionId,
             ctx: { sessionId, turnId, turnIndex },
           },
@@ -318,7 +304,9 @@ export async function* runAgentLoop(
 
         if (iterResult) {
           if (iterResult.model) model = iterResult.model;
-          if (iterResult.thinking) merged.overrideThinking = iterResult.thinking;
+          if (iterResult.thinking) {
+            // thinking 由 plugin 控制，存储到 iterationPluginContext
+          }
           if (iterResult.prependContext) iterationPluginContext = iterResult.prependContext;
           if (iterResult.stop) {
             yield { type: 'loop_end', reason: 'plugin_stop', response: iterResult.stopReason };
@@ -327,8 +315,8 @@ export async function* runAgentLoop(
         }
       }
 
-      // 合并 taskContext + iterationPluginContext 到 system prompt
-      const injectedContext = [merged.taskContext, iterationPluginContext]
+      // 合并 iterationPluginContext + assembleResult.systemPromptAddition 到 system prompt
+      const injectedContext = [iterationPluginContext, assembleResult.systemPromptAddition]
         .filter(Boolean)
         .join('\n\n');
 
@@ -379,7 +367,7 @@ export async function* runAgentLoop(
             );
           },
           config.retry,
-          merged.overrideThinking,
+          undefined, // thinking level
         );
         consecutiveErrors = 0;
       } catch (error) {
@@ -452,11 +440,6 @@ export async function* runAgentLoop(
         }
 
         yield { type: 'loop_end', reason: 'completed', response: lastResponse };
-
-        // 通知 advisors 循环结束
-        for (const advisor of sortedAdvisors) {
-          await advisor.onLoopEnd?.(advisorCtx);
-        }
         return;
       }
 
@@ -497,6 +480,54 @@ export async function* runAgentLoop(
         const tcName = tc.function.name;
         const tcArgs = tc.function.arguments;
 
+        // ══════════════════════════════════════════
+        // Plugin Hook: before_tool_call (工具级，OpenClaw 标准)
+        // ══════════════════════════════════════════
+        if (pluginManager) {
+          const blockResult = await pluginManager.runHook<{ block?: boolean } | null>(
+            'before_tool_call',
+            {
+              toolName: tcName,
+              params: JSON.parse(tcArgs || '{}'),
+              call: { id: tcId, name: tcName, arguments: JSON.parse(tcArgs || '{}') },
+              ctx: { sessionId, turnId, turnIndex },
+            },
+            null,
+          );
+          if (blockResult?.block) {
+            yield {
+              type: 'tool_call_result',
+              toolCallId: tcId,
+              toolName: tcName,
+              result: 'Blocked by plugin',
+              durationMs: 0,
+            };
+
+            // 工具结果加入消息
+            const blockedMsg: Message = {
+              role: 'tool',
+              content: 'Blocked by plugin',
+              timestamp: Date.now(),
+              toolResults: [{
+                toolCallId: tcId,
+                name: tcName,
+                result: null,
+                error: 'Blocked by plugin',
+                durationMs: 0,
+              }],
+            };
+            messages.push(blockedMsg);
+            toolResultsForTurn.push({
+              toolCallId: tcId,
+              name: tcName,
+              result: null,
+              error: 'Blocked by plugin',
+              durationMs: 0,
+            });
+            continue; // 跳过实际执行
+          }
+        }
+
         yield {
           type: 'tool_call_start',
           toolCallId: tcId,
@@ -510,7 +541,7 @@ export async function* runAgentLoop(
           const parsedArgs = JSON.parse(tcArgs || '{}');
           const result = await toolRegistry.execute(
             tcName,
-            parsedArgs,
+            parsedArgs, // 直接传 object
             {
               sessionId,
               turnId,
@@ -553,6 +584,23 @@ export async function* runAgentLoop(
             error: result.error,
             durationMs,
           });
+
+          // ══════════════════════════════════════════
+          // Plugin Hook: after_tool_call (工具级，OpenClaw 标准)
+          // ══════════════════════════════════════════
+          if (pluginManager) {
+            await pluginManager.runAllHooks('after_tool_call', {
+              call: { id: tcId, name: tcName, arguments: JSON.parse(tcArgs || '{}') },
+              result: {
+                toolCallId: tcId,
+                name: tcName,
+                result: result.result,
+                error: result.error,
+                durationMs,
+              },
+              ctx: { sessionId, turnId, turnIndex },
+            });
+          }
         } catch (error) {
           const durationMs = Date.now() - startTime;
           const errorMsg = error instanceof Error ? error.message : String(error);
@@ -590,19 +638,7 @@ export async function* runAgentLoop(
       }
 
       // ── Turn 后处理 ──
-      const turnResult: TurnResult = {
-        assistantMessage: assistantMsg,
-        toolResults: toolResultsForTurn,
-        tokenUsage: llmResponse.usage,
-        durationMs: llmResponse.durationMs,
-      };
-
       yield { type: 'turn_end', turnId, shouldContinue: true };
-
-      // 通知 advisors turn 结束
-      for (const advisor of sortedAdvisors) {
-        await advisor.afterTurn?.(advisorCtx, turnResult);
-      }
 
       // ══════════════════════════════════════════
       // Plugin Hook: after_iteration (迭代级，Octopi 独有)
@@ -623,27 +659,12 @@ export async function* runAgentLoop(
       if (config.onSteering) {
         const steeringMsgs = await config.onSteering();
         if (steeringMsgs.length > 0) {
-          // steering 消息经过 advisor 处理
-          let steeringBlocked = false;
-          for (const advisor of sortedAdvisors) {
-            const decision = await advisor.onSteering?.(steeringMsgs);
-            if (decision?.injectMessages) {
-              messages.push(...decision.injectMessages);
-            }
-            if (decision?.shouldStop) {
-              yield { type: 'loop_end', reason: 'advisor_stop' };
-              steeringBlocked = true;
-              break;
-            }
-          }
-          if (!steeringBlocked) {
-            messages.push(...steeringMsgs);
-            yield {
-              type: 'messages_injected',
-              count: steeringMsgs.length,
-              source: 'steering',
-            };
-          }
+          messages.push(...steeringMsgs);
+          yield {
+            type: 'messages_injected',
+            count: steeringMsgs.length,
+            source: 'steering',
+          };
         }
       }
 
@@ -673,34 +694,6 @@ export async function* runAgentLoop(
 // ══════════════════════════════════════════════════════
 // 辅助函数
 // ══════════════════════════════════════════════════════
-
-/**
- * 合并多个 MetaDecision
- *
- * 后面的 decision 优先级更高（覆盖前面的）。
- * injectMessages 累加。
- */
-function mergeDecisions(decisions: MetaDecision[]): MetaDecision {
-  const merged: MetaDecision = {};
-
-  for (const d of decisions) {
-    if (d.injectMessages?.length) {
-      merged.injectMessages = [...(merged.injectMessages ?? []), ...d.injectMessages];
-    }
-    if (d.overrideModel) merged.overrideModel = d.overrideModel;
-    if (d.overrideThinking) merged.overrideThinking = d.overrideThinking;
-    if (d.overrideMaxTokens) merged.overrideMaxTokens = d.overrideMaxTokens;
-    if (d.shouldStop) {
-      merged.shouldStop = true;
-      merged.stopReason = d.stopReason;
-    }
-    if (d.taskContext) {
-      merged.taskContext = (merged.taskContext ?? '') + '\n\n' + d.taskContext;
-    }
-  }
-
-  return merged;
-}
 
 /**
  * 粗略估算 token 数（4 字符 ≈ 1 token）

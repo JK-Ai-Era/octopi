@@ -70,9 +70,14 @@ function createMockToolLLMProvider(toolName: string, toolArgs: Record<string, un
     async complete(request) {
       callCount++;
       if (callCount === 1) {
+        // 返回框架内部格式（LLMResponse.toolCalls 是 ToolCall[]）
         return {
           content: '',
-          toolCalls: [{ id: 'call-1', name: toolName, arguments: toolArgs }],
+          toolCalls: [{
+            id: 'call-1',
+            name: toolName,
+            arguments: toolArgs,
+          }],
           model: 'mock-gpt-4o',
           finishReason: 'tool_calls',
         };

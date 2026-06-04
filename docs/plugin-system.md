@@ -396,7 +396,7 @@ Handler 按 priority 降序执行
 | `message_sending` | 拦截 | `{ cancel: true }` | 发送回复前触发 |
 | `message_sent` | 观察 | — | 回复发送后触发 |
 | `before_model_resolve` | 拦截 | `{ provider?, model? }` | LLM 调用前，可覆盖模型 |
-| `before_prompt_build` | 注入 | `{ prependContext?, systemPrompt? }` | Prompt 构建前，可注入上下文 |
+| `before_prompt_build` | 注入 | `{ prependContext?, systemPrompt? }` | Prompt 构建前（runAgentLoop），可注入上下文 |
 | `before_agent_run` | 拦截 | `{ outcome: 'block', message? }` | Agent 执行前，可阻止 |
 | `before_agent_reply` | 拦截 | `Message` | LLM 回复前，可返回合成回复 |
 | `before_agent_finalize` | 拦截 | `{ action: 'revise' }` | 回复定稿前，可要求修订 |
@@ -406,6 +406,45 @@ Handler 按 priority 降序执行
 | `before_compaction` | 观察 | — | Context 压缩前触发 |
 | `after_compaction` | 观察 | — | Context 压缩后触发 |
 | `before_install` | 拦截 | `{ block: true }` | Skill/Plugin 安装前触发 |
+
+### Hook 执行位置架构
+
+Hook 按执行位置分为两类：
+
+**Gateway 级 Hook**（在 `agent-runner.ts` 中调用）
+
+这些 Hook 处理 session 生命周期、消息路由、Agent 级拦截：
+
+| Hook | 执行位置 | 作用 |
+|------|----------|------|
+| `session_start` | resolveSession | 新 Session 创建时 |
+| `session_end` | Session 过期/关闭 | Session 结束时 |
+| `message_received` | AgentRunner | 消息到达 Gateway 时 |
+| `before_agent_run` | AgentRunner.run | Agent 执行前，可阻止 |
+| `before_agent_reply` | AgentRunner.run | LLM 回复前，可合成回复 |
+| `before_agent_finalize` | AgentRunner.run | 回复定稿前，可修订 |
+| `agent_end` | AgentRunner.run | Agent 执行完成时 |
+| `message_sending` | AgentRunner.run | 发送回复前，可取消 |
+| `message_sent` | AgentRunner.run | 回复发送后 |
+
+**Loop 级 Hook**（在 `runAgentLoop` 中调用）
+
+这些 Hook 处理迭代、工具执行、Prompt 构建等 Agent Loop 内部逻辑：
+
+| Hook | 执行位置 | 作用 |
+|------|----------|------|
+| `before_iteration` | runAgentLoop 每轮迭代前 | 注入消息/覆盖参数/决定停止 |
+| `before_tool_call` | runAgentLoop 工具执行前 | 阻止/审批/覆盖参数 |
+| `after_tool_call` | runAgentLoop 工具执行后 | 观察工具结果 |
+| `before_prompt_build` | runAgentLoop LLM 调用前 | 注入上下文（RAG、记忆） |
+| `before_compaction` | runAgentLoop 上下文压缩前 | 观察压缩前状态 |
+| `after_compaction` | runAgentLoop 上下文压缩后 | 观察压缩后状态 |
+
+**设计说明**
+
+- Gateway 级 Hook 处理跨 session 的决策（路由、审批、合成回复）
+- Loop 级 Hook 处理单次迭代的决策（工具执行、上下文注入）
+- `before_iteration` 综合了原 `before_model_resolve` 的功能（provider/model 覆盖）
 
 ### Hook Event 和 Result 类型
 
@@ -437,7 +476,17 @@ interface ToolCallResult {
 
 #### `before_prompt_build`
 
+执行位置：`runAgentLoop` —— 每轮迭代中，LLM 调用之前。
+
 ```ts
+// Event
+interface BeforePromptBuildEvent {
+  agentId: string;            // Agent ID
+  sessionId: string;          // Session ID
+  messages: Message[];        // 当前对话消息
+  ctx: HookContext;           // Hook 上下文
+}
+
 // Result
 interface PromptBuildResult {
   prependContext?: string;      // 在消息前插入

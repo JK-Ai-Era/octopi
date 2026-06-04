@@ -83,35 +83,15 @@ Skill 匹配策略（优先级从高到低）：
 2. **触发词匹配** — 消息包含 Skill 的 trigger 关键词
 3. **描述匹配** — 关键词重叠
 
-### 7. Loop Advisor：统一的循环扩展点
-
-Agent Loop 的每轮迭代前，会按 priority 依次调用所有注册的 `LoopAdvisor`。每个 Advisor 可以：
-
-- **注入消息** — 注入任务上下文、记忆摘要、Steering 指令
-- **覆盖参数** — 切换模型、调整 thinking level
-- **停止循环** — 决定不再调用 LLM
-
-```typescript
-interface LoopAdvisor {
-  name: string
-  priority: number  // 越小越先执行
-  beforeTurn(ctx: AdvisorContext): Promise<MetaDecision | null>
-  afterTurn?(ctx: AdvisorContext, result: TurnResult): Promise<void>
-  onLoopEnd?(ctx: AdvisorContext): Promise<void>
-}
-```
-
-任务系统、Steering 系统、Policy 系统都是 `LoopAdvisor` 的实现。详见 [docs/agent-loop-architecture.md](docs/agent-loop-architecture.md)。
-
-### 8. 任务系统：让 Agent 拥有工作记忆
+### 7. 任务系统：让 Agent 拥有工作记忆
 
 Agent 不应该只活在"当前对话"里。当用户说"帮我分析代码质量",然后突然聊起天气,Agent 应该记住自己正在干活,而不是把任务忘得一干二净。
 
-Octopi 的任务系统通过 `TaskManagerAdvisor`（LoopAdvisor 实现）集成到 Agent Loop：
+Octopi 的任务系统通过 `TaskManagerPlugin`（Plugin hook）集成到 Agent Loop：
 
 - **TaskTracker** — 纯状态管理,JSONL 持久化,不依赖 LLM
 - **TaskManager** — 轻量 LLM 决策器,判断每条消息与当前任务的关系
-- **TaskManagerAdvisor** — 包装为 LoopAdvisor，在每轮迭代前介入
+- **TaskManagerPlugin** — 通过 `before_iteration` hook 注入任务上下文
 
 核心流程：用户消息到达 → 轻量模型判断"这条消息是不是在说我之前那个任务" → 更新任务状态 → 向主 Agent 注入任务上下文 → 主 Agent 自然地决定继续、询问还是忽略。
 
@@ -145,7 +125,7 @@ Octopi 的任务系统通过 `TaskManagerAdvisor`（LoopAdvisor 实现）集成�
 │  ┌─────▼───────────────▼───────────────────▼───────────┐  │
 │  │               Agent Loop (AsyncIterable)             │  │
 │  │                                                     │  │
-│  │  Layer 1: Meta-Decision (LoopAdvisor[])              │  │
+│  │  Layer 1: Pre-Iteration (Plugin before_iteration hook)      │  │
 │  │       ↓                                             │  │
 │  │  Layer 2: LLM Decision (ContextEngine → LLM)        │  │
 │  │       ↓                                             │  │
@@ -179,7 +159,7 @@ Octopi 的任务系统通过 `TaskManagerAdvisor`（LoopAdvisor 实现）集成�
 
 | 层级 | 职责 | 组件 |
 |------|------|------|
-| **Layer 1: Meta-Decision** | 每轮迭代前做决策：注入消息、覆盖参数、决定停止 | `LoopAdvisor[]` (按 priority 排序) |
+| **Layer 1: Pre-Iteration** | 每轮迭代前：注入上下文、覆盖参数、决定停止 | `before_iteration` Plugin hook |
 | **Layer 2: LLM Decision** | 组装上下文 → 调用 LLM → 解析响应 | `ContextEngine` + `LLMProvider` + `MessageConverter` |
 | **Layer 3: Tool Execution** | 参数验证/去重/截断检测 → 执行工具 | `ToolRegistry` |
 
@@ -329,18 +309,27 @@ interface AgentDefinition {
 
 #### 生命周期 Hook
 
-8 个 hook，全部可拦截，支持 priority 排序：
+Hook 按执行位置分为两类：
+
+**Gateway 级 Hook**（session 生命周期、消息路由）
 
 | Hook | 返回值 | 语义 |
 |------|--------|------|
-| `message_received` | - | 消息到达通知 |
 | `session_start` | - | 新 session 创建 |
+| `message_received` | - | 消息到达通知 |
 | `before_agent_reply` | Message \| null | 拦截:返回合成回复 |
-| `before_model_resolve` | { model } \| null | 覆盖模型选择 |
-| `before_prompt_build` | { prependContext } \| null | 注入额外上下文 |
-| `before_tool_call` | { block } \| null | 拦截:阻止工具执行 |
-| `after_tool_call` | - | 工具执行完成 |
 | `message_sending` | { cancel } \| null | 拦截:取消回复发送 |
+
+**Loop 级 Hook**（Agent Loop 内部，runAgentLoop 中调用）
+
+| Hook | 返回值 | 语义 |
+|------|--------|------|
+| `before_iteration` | MetaDecision \| null | 每轮迭代前：注入消息/覆盖参数/决定停止 |
+| `before_tool_call` | { block } \| null | 工具执行前：阻止/审批 |
+| `before_prompt_build` | { prependContext } \| null | LLM 调用前：注入上下文 |
+| `after_tool_call` | - | 工具执行完成 |
+
+完整 Hook 列表和执行位置架构详见 [docs/plugin-system.md](docs/plugin-system.md)。
 
 #### 能力注册 API
 

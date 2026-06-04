@@ -226,6 +226,18 @@ export class SessionManager {
   }
 
   /**
+   * 批量持久化消息到 JSONL（不 push 到内存数组）
+   *
+   * 用于 runAgentLoop 结束后同步新增消息。
+   * 消息已经在内存中（通过直接修改数组），只需持久化。
+   */
+  persistMessages(sessionId: string, messages: Message[]): void {
+    for (const msg of messages) {
+      this.persistTranscript(sessionId, msg);
+    }
+  }
+
+  /**
    * 添加 turn 记录
    */
   addTurn(sessionId: string, turn: Turn): void {

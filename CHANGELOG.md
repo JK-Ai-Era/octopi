@@ -8,7 +8,7 @@
 - **applyDecision 去重** — 新建 `src/tasks/shared.ts` 提取共享函数
 - **AgentLoop 命名区分** — 重命名为 AgentRunner，保留向后兼容别名
 - **plugin.ts 迁移到迭代级 hook** — 从 OpenClaw per-message hook 改为 Octopi 迭代级 hook
-- **advisor.ts deprecated 标记** — 标注迁移路径
+- **advisor.ts 删除** — 移除 LoopAdvisor 模式，统一使用 Plugin hook
 
 ### 测试
 

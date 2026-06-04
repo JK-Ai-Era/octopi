@@ -1,14 +1,16 @@
 # Agent Loop 架构重构分析
 
-> **状态**: ✅ 已完成 — v0.1.1 (2026-06-04) 已实施本文档中的所有重构方案
+> **状态**: ✅ 已完成 — v0.1.2 (2026-06-04)
 >
-> - Phase 1: advisor.ts deprecated 标记 ✅
+> - Phase 1: advisor.ts 删除 ✅
 > - Phase 2: plugin.ts 迁移到迭代级 hook ✅
 > - Phase 3: TaskTracker 异步化 ✅
 > - Phase 4: applyDecision 去重（shared.ts）✅
 > - Phase 5: AgentLoop → AgentRunner 命名区分 ✅
-> - Phase 6: 测试补充（150 tests）✅
+> - Phase 6: 测试补充（148 tests）✅
 > - Phase 7: 文档更新 ✅
+>
+> **最终结论**: 采用方向 C（简化——去掉 Advisor，统一使用 Plugin hook），已实施完成。
 
 ## 一、现状：三个系统各自为政
 

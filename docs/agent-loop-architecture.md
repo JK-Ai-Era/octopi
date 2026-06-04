@@ -2,7 +2,9 @@
 
 > 从零设计，无历史包袱。基于 Octopi / OpenClaw / hermes-agent 三家的经验。
 >
-> **状态**: ✅ 已实现（2026-06-02）
+> **状态**: ✅ 已实现（v0.1.2, 2026-06-04）
+>
+> **重大更新**: v0.1.2 移除了 LoopAdvisor 层，统一使用 Plugin hook 扩展。
 
 ---
 
@@ -78,12 +80,13 @@ interface MessageConverter {
 │                    Agent Loop                        │
 │                                                     │
 │  ┌───────────────────────────────────────────────┐  │
-│  │  Layer 1: Meta-Decision (顾问层)               │  │
+│  │  Layer 1: Pre-iteration Hooks (扩展层)         │  │
 │  │                                               │  │
-│  │  LoopAdvisor[] — 按 priority 排序执行          │  │
+│  │  Plugin hook: before_iteration                │  │
 │  │  ┌─────────────┐ ┌──────────┐ ┌───────────┐  │  │
 │  │  │ TaskManager │ │ Steering │ │  Policy   │  │  │
-│  │  │  priority=10│ │ priority │ │  priority │  │  │
+│  │  │   Plugin     │ │  Plugin  │ │  Plugin   │  │  │
+│  │  │  priority=10 │ │ priority │ │  priority │  │  │
 │  │  │            │ │   =20    │ │    =30    │  │  │
 │  │  └─────────────┘ └──────────┘ └───────────┘  │  │
 │  │                                               │  │
@@ -116,14 +119,15 @@ interface MessageConverter {
 └─────────────────────────────────────────────────────┘
 ```
 
-### 决策 4: Task Management 是核心关注点，不是插件
+### 决策 4: Task Management 通过 Plugin Hook 集成
 
-**选择**: TaskManager 通过 `LoopAdvisor` 接口集成，loop 架构从设计之初就感知任务。
+**选择**: TaskManager 通过 `before_iteration` hook 集成，loop 架构从设计之初就感知任务。
 
 **理由**:
 - 任务状态影响循环行为（shouldStop、shouldContinue）
 - 任务上下文注入发生在每轮迭代前，与 loop 生命周期强耦合
-- 但具体实现应该是可替换的（可以有不同 TaskManager 策略）
+- 通过 Plugin hook 实现解耦，TaskManager 是一个普通 Plugin
+- 支持拦截语义：返回非 null 可中断后续 hooks
 
 ---
 
@@ -142,7 +146,6 @@ type AgentEvent =
   | { type: 'turn_end'; turnId: string; shouldContinue: boolean }
 
   // ── Meta-decision 阶段 ──
-  | { type: 'advisor_call'; advisor: string }
   | { type: 'meta_decision'; decisions: MetaDecision[] }
   | { type: 'messages_injected'; count: number; source: string }
 
@@ -174,7 +177,7 @@ type LoopEndReason =
   | 'completed'         // LLM 返回最终响应，无 tool calls
   | 'max_turns'         // 达到最大轮次
   | 'budget_exhausted'  // IterationBudget 耗尽
-  | 'advisor_stop'      // 某个 advisor 决定停止
+  | 'plugin_stop'       // before_iteration hook 返回 stop
   | 'interrupted'       // 用户中断
   | 'error';            // 不可恢复的错误
 ```
@@ -193,24 +196,10 @@ interface MetaDecision {
 }
 ```
 
-### LoopAdvisor
+### IterationContext
 
 ```typescript
-interface LoopAdvisor {
-  name: string
-  priority: number
-
-  beforeTurn(ctx: AdvisorContext): Promise<MetaDecision | null>
-  afterTurn?(ctx: AdvisorContext, result: TurnResult): Promise<void>
-  onSteering?(messages: Message[]): Promise<MetaDecision | null>
-  onLoopEnd?(ctx: AdvisorContext): Promise<void>
-}
-```
-
-### AdvisorContext
-
-```typescript
-interface AdvisorContext {
+interface IterationContext {
   sessionId: string
   turnId: string
   turnIndex: number
@@ -242,7 +231,7 @@ interface AgentLoopConfig {
   contextEngine: ContextEngine
   toolRegistry: { getDefinitions(): unknown[]; execute(name: string, args: string, ctx: unknown): Promise<ToolResult> }
   messageConverter: MessageConverter
-  advisors: LoopAdvisor[]
+  pluginManager: PluginManager  // 用于 before_iteration / after_iteration hooks
   defaultModel: string
   maxTurns: number
   iterationBudget: number
@@ -263,8 +252,7 @@ async function* runAgentLoop(
   input: Message,
   signal?: AbortSignal,
 ): AsyncIterable<AgentEvent> {
-  const { provider, contextEngine, toolRegistry, messageConverter, advisors } = config;
-  const sortedAdvisors = [...advisors].sort((a, b) => a.priority - b.priority);
+  const { provider, contextEngine, toolRegistry, messageConverter, pluginManager } = config;
   const budget = new IterationBudget(config.iterationBudget);
   const messages: Message[] = [input];
   let turnIndex = 0;
@@ -281,12 +269,13 @@ async function* runAgentLoop(
 
       yield { type: 'turn_start', turnId, turnIndex };
 
-      // ═══ Layer 1: Meta-Decision (顾问层) ═══
-      for (const advisor of sortedAdvisors) {
-        yield { type: 'advisor_call', advisor: advisor.name };
-        const decision = await advisor.beforeTurn(advisorCtx);
+      // ═══ Layer 1: Pre-iteration Hooks (扩展层) ═══
+      // 通过 PluginManager 触发 before_iteration hook
+      const decisions = await pluginManager.emit('before_iteration', { sessionId, messages, turnIndex });
+      // 应用 hook 返回的 MetaDecision（拦截语义：首个返回非 null 的中断后续）
+      for (const decision of decisions) {
         if (decision?.injectMessages) messages.push(...decision.injectMessages);
-        if (decision?.shouldStop) { yield { type: 'loop_end', reason: 'advisor_stop' }; return; }
+        if (decision?.shouldStop) { yield { type: 'loop_end', reason: 'plugin_stop' }; return; }
       }
       yield { type: 'meta_decision', decisions };
 
@@ -312,7 +301,8 @@ async function* runAgentLoop(
 
       // ── Turn 后处理 ──
       yield { type: 'turn_end', turnId, shouldContinue: true };
-      for (const advisor of sortedAdvisors) await advisor.afterTurn?.(advisorCtx, turnResult);
+      // 触发 after_iteration hook（观察语义：全部执行，不中断）
+      await pluginManager.emit('after_iteration', { sessionId, messages, turnResult });
       turnIndex++;
     }
   } catch (error) {
@@ -326,30 +316,48 @@ async function* runAgentLoop(
 
 ## 与 Task Management System 的集成
 
-TaskManager 通过 `TaskManagerAdvisor` 包装为 `LoopAdvisor`：
+TaskManager 通过 `before_iteration` hook 集成到 Agent Loop：
 
 ```typescript
-// src/tasks/advisor.ts
-function createTaskManagerAdvisor(tracker: TaskTracker, manager: TaskManager): LoopAdvisor {
-  return {
-    name: 'task-manager',
-    priority: 10,  // 在 steering (20) 和 policy (30) 之前
+// src/tasks/plugin.ts
+export const taskManagerPlugin: PluginDefinition = {
+  name: 'task-manager',
 
-    async beforeTurn(ctx) {
-      const lastUserMsg = getLastUserMessage(ctx.messages);
-      const currentTasks = tracker.getActiveTasks(ctx.sessionId);
-      const decision = await manager.decide({ sessionId, currentTasks, newMessage, recentContext });
-      applyDecision(ctx.sessionId, decision);
-      return decision.injectTaskContext ? { taskContext: decision.taskContext } : null;
+  hooks: {
+    // 在每轮迭代前做任务决策
+    before_iteration: {
+      priority: 10,  // 在 steering (20) 和 policy (30) 之前执行
+
+      handler: async (api, event) => {
+        const { sessionId, messages } = event.data;
+        const tracker = api.getService('taskTracker');
+        const manager = api.getService('taskManager');
+
+        const lastUserMsg = getLastUserMessage(messages);
+        const currentTasks = tracker.getActiveTasks(sessionId);
+        const decision = await manager.decide({ sessionId, currentTasks, newMessage, recentContext });
+        applyDecision(sessionId, decision);
+
+        return decision.injectTaskContext ? { taskContext: decision.taskContext } : null;
+      }
     },
-  };
-}
+
+    // 每轮迭代后的清理/状态更新
+    after_iteration: {
+      priority: 10,
+      handler: async (api, event) => {
+        // 目前不做自动更新，由 TaskManager 在下一轮 before_iteration 中判断
+      }
+    }
+  }
+};
 ```
 
 关键设计点：
-1. **TaskManager 是 advisor 链中的一环**，不是 loop 内部硬编码
-2. **优先级 10**：在 steering (20) 之前执行，确保任务状态先确定
-3. **可替换**：可以有不同的 TaskManager 实现（规则引擎 vs LLM）
+1. **TaskManager 是 Plugin hook 的一环**，不是 loop 内部硬编码
+2. **priority 10**：在 steering (20) 之前执行，确保任务状态先确定
+3. **拦截语义**：返回 MetaDecision 可中断后续 hooks 和 loop 执行
+4. **可替换**：可以有不同的 TaskManager 实现（规则引擎 vs LLM）
 
 ---
 
@@ -401,18 +409,19 @@ src/
 │   ├── message-converter.ts       # 内部/LLM 消息转换器
 │   └── index.ts                   # 统一导出
 ├── core/
-│   └── types.ts                   # 扩展：AgentEvent(28种)、LoopAdvisor、MetaDecision 等
+│   └── types.ts                   # 扩展：AgentEvent(28种)、MetaDecision 等
 ├── tasks/
-│   ├── advisor.ts                 # ✅ TaskManager → LoopAdvisor 桥接
 │   ├── task-manager.ts            # 不变
 │   ├── tracker.ts                 # 不变
-│   └── plugin.ts                  # 不变（旧 hook 模式，保留兼容）
+│   └── plugin.ts                  # ✅ 使用 before_iteration / after_iteration hooks
+├── plugins/
+│   └── manager.ts                 # Plugin hook 系统
 ├── agent/
-│   └── agent-loop.ts              # 旧 AgentLoop class（保留兼容，事件类型已更新）
+│   └── agent-runner.ts            # AgentRunner（调用 runAgentLoop）
 └── ...                            # 其余不变
 
 tests/
-└── loop.test.ts                   # ✅ 25 个新测试（IterationBudget / ErrorClassifier / MessageConverter / runAgentLoop）
+└── loop.test.ts                   # ✅ 新测试（IterationBudget / ErrorClassifier / MessageConverter / runAgentLoop）
 ```
 
 ---
@@ -421,15 +430,15 @@ tests/
 
 | 组件 | 状态 | 说明 |
 |------|------|------|
-| `src/agent/agent-loop.ts` (旧) | 保留兼容 | 事件类型已更新为新版 AgentEvent |
-| `src/loop/agent-loop.ts` (新) | ✅ 主力 | 异步生成器，三层架构 |
-| `PluginManager` | 不变 | hook 系统继续用 |
+| `src/loop/agent-loop.ts` | ✅ 主力 | 异步生成器，三层架构 |
+| `src/agent/agent-runner.ts` | ✅ 新增 | 替代旧 AgentLoop class |
+| `PluginManager` | 不变 | hook 系统继续用，新增 before_iteration/after_iteration |
 | `ContextEngine` 接口 | 不变 | 4 阶段生命周期保持 |
 | `ToolRegistry` | 不变 | 工具注册与执行 |
-| `TaskTracker` / `TaskManager` | 不变 | 包装成 TaskManagerAdvisor |
-| `Gateway` | 已更新 | handleEvent 适配新版 AgentEvent |
+| `TaskTracker` / `TaskManager` | 不变 | 通过 plugin.ts 集成 |
+| `src/tasks/advisor.ts` | ✅ 已删除 | 被 plugin.ts 替代 |
 
 ---
 
 _本设计基于 Octopi / OpenClaw / hermes-agent 三家经验，目标是"最优架构"而非"最小改动"。_
-_已实现并验证：145 tests 全通过，0 errors，0 拆坏。_
+_已实现并验证：v0.1.2, 148 tests 全通过，0 errors。_

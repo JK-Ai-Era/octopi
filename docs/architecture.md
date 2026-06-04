@@ -39,7 +39,7 @@
 │  ┌──────▼─────────────────▼────────────────────▼───────────┐  │
 │  │              Agent Loop (AsyncIterable<AgentEvent>)      │  │
 │  │                                                         │  │
-│  │  Layer 1: Meta-Decision (LoopAdvisor[])                 │  │
+│  │  Layer 1: Pre-Iteration (Plugin before_iteration hook)       │  │
 │  │       ↓                                                 │  │
 │  │  Layer 2: LLM Decision (ContextEngine → LLM → Response) │  │
 │  │       ↓                                                 │  │
@@ -58,14 +58,6 @@
 │  │  Tool         │  │  LLM         │  │  Skill             │  │
 │  │  Registry     │  │  Router      │  │  Manager           │  │
 │  └──────────────┘  └──────────────┘  └────────────────────┘  │
-│                                                              │
-│  ┌──────────────────────────────────────────────────────────┐ │
-│  │  Loop Advisor Chain                                      │ │
-│  │  ┌───────────────┐  ┌──────────┐  ┌──────────────────┐  │ │
-│  │  │ TaskManager    │  │ Steering │  │  Policy (future) │  │ │
-│  │  │ priority=10    │  │ prio=20  │  │  priority=30     │  │ │
-│  │  └───────────────┘  └──────────┘  └──────────────────┘  │ │
-│  └──────────────────────────────────────────────────────────┘ │
 │                                                              │
 │  ┌──────────────────────────────────────────────────────────┐ │
 │  │  Multi-Agent Runtime                                      │ │
@@ -108,11 +100,10 @@ src/
 ├── skills/
 │   └── manager.ts            # DefaultSkillManager（两阶段加载）
 ├── tasks/
-│   ├── advisor.ts            # ✅ TaskManagerAdvisor（LoopAdvisor 桥接，推荐）
 │   ├── shared.ts             # applyDecision 共享函数（去重）
 │   ├── tracker.ts            # TaskTracker（任务状态机 CRUD，全异步）
 │   ├── task-manager.ts       # TaskManager（LLM 轻量决策器）
-│   ├── plugin.ts             # TaskManagerPlugin（迭代级 hook 集成层，保留兼容）
+│   ├── plugin.ts             # TaskManagerPlugin（迭代级 hook 集成层）
 │   ├── types.ts              # 任务系统类型定义
 │   └── index.ts              # 统一导出
 ├── tools/
@@ -200,7 +191,7 @@ Agent Loop 是框架的"心脏"。采用事件流原生设计，是一个 `Async
 
 ```
 1. 检查中断 / 预算 / 最大轮次
-2. Layer 1: Meta-Decision（遍历 advisor 链）
+2. Layer 1: Pre-Iteration（Plugin before_iteration hook）
    → 消息注入 / 参数覆盖 / 决定停止
 3. Layer 2: LLM Decision（ContextEngine 组装 → LLM 调用）
    → 无 tool calls → 返回最终响应（loop_end completed）
@@ -216,14 +207,13 @@ for await (const event of runAgentLoop(config, input, signal)) {
   switch (event.type) {
     case 'loop_start':          // 循环开始
     case 'turn_start':          // 一轮开始
-    case 'advisor_call':        // advisor 被调用
     case 'messages_injected':   // 消息被注入
     case 'llm_request':         // LLM 请求发出
     case 'llm_stream_delta':    // 流式增量
     case 'llm_response':        // LLM 响应完成
     case 'tool_call_start':     // 工具开始执行
     case 'tool_call_result':    // 工具执行完成
-    case 'loop_end':            // 循环结束（completed/max_turns/budget_exhausted/advisor_stop/interrupted/error）
+    case 'loop_end':            // 循环结束（completed/max_turns/budget_exhausted/interrupted/error）
   }
 }
 ```
@@ -266,19 +256,6 @@ interface LoopAdvisor {
 | Thinking 覆盖 | `overrideThinking` | 调整 thinking level |
 | 停止循环 | `shouldStop + stopReason` | 决定不再调用 LLM |
 | 任务上下文 | `taskContext` | 注入到 system prompt |
-
-**已实现的 Advisor：**
-
-| Advisor | Priority | 职责 |
-|---------|----------|------|
-| `TaskManagerAdvisor` | 10 | 每轮前判断消息意图，注入任务上下文 |
-
-**预留的 Advisor 位置：**
-
-| Advisor | Priority | 职责 |
-|---------|----------|------|
-| `SteeringAdvisor` | 20 | 处理 steering 消息（中途指令） |
-| `PolicyAdvisor` | 30 | 安全策略检查（敏感词、权限等） |
 
 ### 4. Session Manager — 会话状态管理
 
@@ -430,31 +407,31 @@ Use the read tool to load a skill file when needed.
 - 支持热重载（每次从文件读取最新内容）
 - `disableModelInvocation: true` 的 Skill 不注入 prompt，只能显式调用
 
-### 9. Task System — 基于 LoopAdvisor 的任务管理
+### 9. Task System — 基于 Plugin Hook 的任务管理
 
 任务系统通过 `TaskManagerAdvisor`（LoopAdvisor 实现）集成到 Agent Loop，在每轮迭代前判断消息意图并注入任务上下文。
 
 **问题：** Agent 天然活在"当前对话"里，用户中途切换话题，Agent 就忘了之前的任务。
 
-**两种集成方式：**
+**集成方式：**
 
 | 方式 | 接口 | 状态 |
 |------|------|------|
-| LoopAdvisor | `TaskManagerAdvisor` | ✅ 新架构，推荐 |
-| Plugin Hook | `TaskManagerPlugin` | ✅ 保留兼容（已迁移到迭代级 hook） |
+| Plugin Hook | `TaskManagerPlugin` | ✅ 迭代级 hook 集成 |
+||
 
-**核心流程（LoopAdvisor 方式）：**
+**核心流程：**
 
 ```
 用户消息到达
     ↓
-TaskManagerAdvisor.beforeTurn()（priority=10，最先执行）
+TaskManagerPlugin.before_iteration() hook
     ↓
 TaskManager (轻量 LLM) 判断消息意图
     ↓
 更新任务状态 + 构建 taskContext
     ↓
-返回 MetaDecision { taskContext }
+返回 prependContext
     ↓
 Loop 注入 taskContext 到 system prompt
     ↓
@@ -477,8 +454,8 @@ Loop 注入 taskContext 到 system prompt
 **组件：**
 - **TaskTracker**: 纯状态管理，JSONL append-only 持久化
 - **TaskManager**: 轻量 LLM 做消息分类（gpt-4o-mini 级别即可）
-- **TaskManagerAdvisor**: 包装为 LoopAdvisor，新架构推荐
-- **TaskManagerPlugin**: 通过 hooks 集成，保留兼容
+
+- **TaskManagerPlugin**: 通过迭代级 hook 集成
 
 ### 10. Error Classifier — 智能错误处理
 
@@ -640,13 +617,12 @@ workspace/
 |------|------|------|
 | Core Types | ✅ 完整 | 消息、Agent、Session、Tool、Plugin、AgentEvent(28种) 等所有类型 |
 | Agent Loop (新) | ✅ 完整 | AsyncIterable 三层架构、IterationBudget、ErrorClassifier、MessageConverter |
-| Loop Advisor | ✅ 完整 | LoopAdvisor 接口 + TaskManagerAdvisor 桥接 |
 | Agent Loop (旧) | ✅ 兼容 | 旧 AgentRunner class（原 AgentLoop），保留向后兼容别名 |
 | Gateway | ✅ 完整 | 消息路由、Agent 管理、Plugin 生命周期 |
 | Session Manager | ✅ 完整 | CRUD、write lock、JSONL 持久化 |
 | Plugin System | ✅ 完整 | 4 层加载管线、hook 执行、capability ownership |
 | Skill System | ✅ 完整 | 两阶段加载、system prompt 注入、热重载 |
-| Task System | ✅ 完整 | 状态机、LLM 决策器、LoopAdvisor + Plugin 双集成、applyDecision 去重 |
+| Task System | ✅ 完整 | 状态机、LLM 决策器、Plugin hook 集成、applyDecision 去重 |
 | Tool Registry | ✅ 完整 | 全局/Agent 级、策略、LLM 格式转换 |
 | Builtin Tools | ✅ 完整 | shell、file_read、file_write、file_list |
 | LLM Providers | ✅ 完整 | OpenAI + Anthropic |
@@ -667,7 +643,7 @@ workspace/
 | 部署 | 单机守护进程 | 可嵌入现有应用，也可独立部署 |
 | 复杂度 | 高（生产级） | 中（框架级，应用层自由发挥） |
 | 学习成本 | 需要了解整个生态 | 接口优先，渐进式采用 |
-| Agent Loop | Plugin hook 驱动 | AsyncIterable 事件流 + LoopAdvisor 链 |
+| Agent Loop | Plugin hook 驱动 | AsyncIterable 事件流 + Plugin hook |
 
 ---
 
@@ -678,9 +654,9 @@ workspace/
 | P1 | Gateway 适配新 Loop | 高 | Gateway.handleEvent 全面切换到 runAgentLoop |
 | P1 | HTTP Protocol 补齐 | 高 | WebSocket/SSE 流式协议 |
 | P2 | Context Engine 增强 | 高 | 消息摘要、重要性排序、RAG 集成 |
-| P2 | Steering Advisor | 高 | 中途指令处理（LoopAdvisor 实现） |
+| P2 | Steering Plugin | 高 | 中途指令处理（Plugin hook 实现） |
 | P3 | Memory System 落地 | 中 | 文件记忆 + 语义搜索 + Dreaming |
-| P3 | Policy Advisor | 中 | 安全策略检查（LoopAdvisor 实现） |
+| P3 | Policy Plugin | 中 | 安全策略检查（Plugin hook 实现） |
 | P4 | Command Queue 实现 | 中 | steer/followup/collect/interrupt |
 | P5 | Multi-Agent 协调 | 低 | 命令队列 + Agent 间通信 |
 
