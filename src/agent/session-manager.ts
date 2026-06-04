@@ -16,7 +16,7 @@
 
 import { randomUUID } from 'node:crypto';
 import type { SessionMeta, Message, Turn } from '../core/types.js';
-import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
 /**
@@ -42,6 +42,59 @@ export class SessionManager {
 
   constructor(dataDir?: string) {
     this.dataDir = dataDir ?? '.octopi/sessions';
+    // 恢复已有的 session 元数据
+    this.loadExistingSessions();
+  }
+
+  /**
+   * 从磁盘恢复已有 session 元数据
+   *
+   * Gateway 重启后，扫描数据目录下的 sessions.json 文件，
+   * 将未过期的 session 恢复到内存缓存。
+   */
+  private loadExistingSessions(): void {
+    try {
+      if (!existsSync(this.dataDir)) return;
+
+      const agentDirs = readdirSync(this.dataDir, { withFileTypes: true })
+        .filter((d: any) => d.isDirectory());
+
+      for (const agentDir of agentDirs) {
+        const metaFile = join(this.dataDir, agentDir.name, 'sessions.json');
+        if (!existsSync(metaFile)) continue;
+
+        try {
+          const sessions: Record<string, SessionMeta> = JSON.parse(readFileSync(metaFile, 'utf-8'));
+          for (const [id, session] of Object.entries(sessions)) {
+            // 跳过已过期的 session
+            if (this.isSessionExpired(session)) {
+              console.log(`[SessionManager] Skipping expired session ${id}`);
+              continue;
+            }
+            this.sessions.set(id, session);
+            this.messages.set(id, []);
+            this.turns.set(id, []);
+
+            // 恢复 JSONL 消息记录
+            const transcriptFile = join(this.dataDir, agentDir.name, `${id}.jsonl`);
+            if (existsSync(transcriptFile)) {
+              try {
+                const lines = readFileSync(transcriptFile, 'utf-8').split('\n').filter(Boolean);
+                const msgs: Message[] = lines.map((line: string) => JSON.parse(line));
+                this.messages.set(id, msgs);
+              } catch {
+                // JSONL 解析失败，忽略
+              }
+            }
+          }
+          console.log(`[SessionManager] Restored ${Object.keys(sessions).length} session(s) for agent ${agentDir.name}`);
+        } catch {
+          // sessions.json 解析失败，跳过
+        }
+      }
+    } catch {
+      // 目录不存在或不可读，忽略
+    }
   }
 
   // ================================================================

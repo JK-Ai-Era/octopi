@@ -127,8 +127,8 @@ export class DefaultSkillManager implements SkillManager {
     const lines: string[] = ['<available_skills>'];
     for (const skill of visible) {
       lines.push('  <skill>');
-      lines.push(`    <name>${skill.id}</name>`);
-      lines.push(`    <description>${skill.description}</description>`);
+      lines.push(`    <name>${this.xmlEscape(skill.id)}</name>`);
+      lines.push(`    <description>${this.xmlEscape(skill.description)}</description>`);
       lines.push('  </skill>');
     }
     lines.push('</available_skills>');
@@ -166,5 +166,17 @@ export class DefaultSkillManager implements SkillManager {
 
   get(skillId: string): SkillDefinition | null {
     return this.skills.get(skillId) ?? null;
+  }
+
+  /**
+   * XML 转义：防止 skill 名称或描述中的特殊字符破坏 XML 格式
+   */
+  private xmlEscape(str: string): string {
+    return str
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&apos;');
   }
 }

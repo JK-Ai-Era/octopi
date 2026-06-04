@@ -1,5 +1,5 @@
 /**
- * Agent Loop — 核心执行循环
+ * Agent Runner — 核心执行引擎
  *
  * 这是框架的"心脏"。参考 OpenClaw 的 agent-loop 设计，实现了完整的
  * 消息处理流程：
@@ -56,9 +56,9 @@ import { DefaultSkillManager } from '../skills/manager.js';
 import type { SkillManager } from '../core/types.js';
 
 /**
- * Agent Loop 配置
+ * Agent Runner 配置
  */
-export interface AgentLoopConfig {
+export interface AgentRunnerConfig {
   /** 最大工具调用迭代次数（防止无限循环） */
   maxIterations?: number;
   /** Session 数据目录 */
@@ -66,21 +66,21 @@ export interface AgentLoopConfig {
 }
 
 /**
- * Agent Loop
+ * Agent Runner
  *
  * 核心执行引擎。接收一条渠道消息，经过完整的处理流程后返回 Agent 回复。
  *
  * 使用方式：
  * ```ts
- * const loop = new AgentLoop();
- * loop.registerProvider(myProvider);
- * loop.registerTool(myTool);
+ * const runner = new AgentRunner();
+ * runner.registerProvider(myProvider);
+ * runner.registerTool(myTool);
  *
- * const session = loop.resolveSession(agent, channelMsg, 'per-peer');
- * const reply = await loop.processMessage(agent, session, channelMsg);
+ * const session = runner.resolveSession(agent, channelMsg, 'per-peer');
+ * const reply = await runner.processMessage(agent, session, channelMsg);
  * ```
  */
-export class AgentLoop {
+export class AgentRunner {
   /** Session 管理器 */
   private sessions: SessionManager;
   /** 工具注册中心 */
@@ -100,7 +100,7 @@ export class AgentLoop {
   /** Skill 管理器 */
   private skillManager: SkillManager;
 
-  constructor(config?: AgentLoopConfig) {
+  constructor(config?: AgentRunnerConfig) {
     this.sessions = new SessionManager(config?.dataDir);
     this.defaultContextEngine = new LegacyContextEngine();
     this.contextEngines.set('legacy', this.defaultContextEngine);
@@ -298,18 +298,10 @@ export class AgentLoop {
         return syntheticReply;
       }
 
-      // ── Step 4.5: Skill 描述注入（阶段 1）──
+      // ── Step 4.5: Skill 描述注入 ──
       // 所有 Skill 的 name+description 始终在 system prompt 里
-      // LLM 自行判断是否需要，通过 read 工具读取 SKILL.md 获得完整指令（阶段 2）
+      // 不写入 session 持久化（避免重复注入），只在本轮 assemble 时使用
       const skillPromptFragment = this.skillManager.formatForPrompt();
-      if (skillPromptFragment) {
-        const skillMessage: Message = {
-          role: 'system',
-          content: skillPromptFragment,
-          timestamp: Date.now(),
-        };
-        this.sessions.addMessage(session.id, skillMessage);
-      }
 
       // ── Step 5: 核心循环 ──
       // assemble → LLM → tool exec → 直到纯文本回复
@@ -318,7 +310,7 @@ export class AgentLoop {
       while (iteration < this.maxIterations) {
         iteration++;
         const turnId = randomUUID();
-        await this.emit({ type: 'turn_start', turnId, sessionId: session.id });
+        await this.emit({ type: 'turn_start', turnId, turnIndex: iteration - 1 });
 
         // 5a. Context Engine — assemble
         // 组装发送给 LLM 的消息列表（裁剪、注入系统提示词等）
@@ -329,6 +321,14 @@ export class AgentLoop {
           tokenBudget: agent.model.maxTokens ?? 32768,
           availableTools,
         });
+
+        // 注入 skill 描述（不持久化，避免重复注入）
+        if (skillPromptFragment) {
+          assembleResult.messages.push({
+            role: 'system',
+            content: skillPromptFragment,
+          });
+        }
 
         // 5b. Plugin — before_model_resolve
         // 可以覆盖模型选择（如 A/B 测试、fallback）
@@ -359,15 +359,16 @@ export class AgentLoop {
           }
         }
 
+        const rawMessages = this.prepareLlmMessages(finalMessages);
         const llmRequest: LLMRequest = {
           model: modelOverride?.model ?? agent.model.model,
-          messages: finalMessages,
+          messages: rawMessages,
           tools: this.toolRegistry.getDefinitionsForLLM(agent.id),
           temperature: agent.model.temperature ?? 0.7,
           maxTokens: agent.model.maxTokens ?? 4096,
         };
 
-        await this.emit({ type: 'llm_request', request: llmRequest });
+        await this.emit({ type: 'llm_request', model: llmRequest.model, estimatedTokens: 0 });
 
         // 5d. LLM 调用
         const providerName = modelOverride?.provider ?? agent.model.provider;
@@ -378,7 +379,13 @@ export class AgentLoop {
 
         const startTime = Date.now();
         const llmResponse = await provider.complete(llmRequest);
-        await this.emit({ type: 'llm_response', response: llmResponse });
+        await this.emit({
+          type: 'llm_response',
+          content: llmResponse.content,
+          toolCalls: llmResponse.toolCalls,
+          usage: llmResponse.usage,
+          durationMs: Date.now() - startTime,
+        });
 
         // 构建 assistant 消息
         const assistantMessage: Message = {
@@ -406,7 +413,7 @@ export class AgentLoop {
           session.status = 'idle';
           session.updatedAt = Date.now();
 
-          await this.emit({ type: 'turn_end', turn });
+          await this.emit({ type: 'turn_end', turnId, shouldContinue: false });
 
           // Context Engine — afterTurn
           await contextEngine.afterTurn({
@@ -428,16 +435,26 @@ export class AgentLoop {
           agent.id,
         );
 
-        // tool results 作为 tool 消息加入上下文
-        const toolMessage: Message = {
-          role: 'tool',
-          content: JSON.stringify(toolResults),
-          toolResults,
-          timestamp: Date.now(),
-        };
-        this.sessions.addMessage(session.id, toolMessage);
+        // 每个 tool_call_id 对应一条独立的 tool 消息（OpenAI API 规范）
+        for (const result of toolResults) {
+          const content = result.error
+            ? `Error: ${result.error}`
+            : typeof result.result === 'string'
+              ? result.result
+              : JSON.stringify(result.result);
+          const toolMessage: Message = {
+            role: 'tool',
+            content,
+            toolResults: [result],
+            timestamp: Date.now(),
+          };
+          // 在内部 Message 上附加 LLM 所需字段
+          (toolMessage as any).tool_call_id = result.toolCallId;
+          (toolMessage as any).name = result.name;
+          this.sessions.addMessage(session.id, toolMessage);
+        }
 
-        await this.emit({ type: 'turn_end', turn });
+        await this.emit({ type: 'turn_end', turnId, shouldContinue: true });
         // 继续循环，让 LLM 看到 tool results 后生成最终回复
       }
 
@@ -462,13 +479,45 @@ export class AgentLoop {
   // ================================================================
 
   /**
+   * 将内部 Message[] 转换为 LLM API 所需的消息格式
+   *
+   * 剥离 source/timestamp/toolResults 等内部字段，
+   * 为 tool 消息补充 tool_call_id 和 name。
+   */
+  private prepareLlmMessages(messages: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+    return messages.map((msg) => {
+      const llmMsg: Record<string, unknown> = {
+        role: msg.role,
+        content: msg.content ?? '',
+      };
+
+      // assistant 消息保留 tool_calls
+      if (msg.role === 'assistant' && msg.tool_calls) {
+        llmMsg.tool_calls = msg.tool_calls;
+      }
+
+      // tool 消息：确保有 tool_call_id 和 name
+      if (msg.role === 'tool') {
+        if (msg.tool_call_id) llmMsg.tool_call_id = msg.tool_call_id;
+        else if (msg.toolResults && Array.isArray(msg.toolResults) && msg.toolResults[0]) {
+          llmMsg.tool_call_id = msg.toolResults[0].toolCallId;
+          llmMsg.name = msg.toolResults[0].name;
+        }
+        if (msg.name) llmMsg.name = msg.name;
+      }
+
+      return llmMsg;
+    });
+  }
+
+  /**
    * 解析 Agent 使用的上下文引擎
    */
   private resolveContextEngine(agent: AgentDefinition): ContextEngine {
     if (agent.contextEngine) {
       const engine = this.contextEngines.get(agent.contextEngine);
       if (engine) return engine;
-      console.warn(`[AgentLoop] Context engine "${agent.contextEngine}" not found, using legacy`);
+      console.warn(`[AgentRunner] Context engine "${agent.contextEngine}" not found, using legacy`);
     }
     return this.defaultContextEngine;
   }
@@ -498,7 +547,7 @@ export class AgentLoop {
           null,
         );
         if (blockResult?.block) {
-          console.log(`[AgentLoop] Tool "${call.name}" blocked by plugin`);
+          console.log(`[AgentRunner] Tool "${call.name}" blocked by plugin`);
           return {
             toolCallId: call.id,
             name: call.name,
@@ -507,7 +556,7 @@ export class AgentLoop {
           };
         }
 
-        await this.emit({ type: 'tool_call', call });
+        await this.emit({ type: 'tool_call_start', toolCallId: call.id, toolName: call.name, arguments: JSON.stringify(call.arguments) });
         const startTime = Date.now();
 
         try {
@@ -531,7 +580,7 @@ export class AgentLoop {
             undefined,
           );
 
-          await this.emit({ type: 'tool_result', result: toolResult });
+          await this.emit({ type: 'tool_call_result', toolCallId: call.id, toolName: call.name, result: typeof toolResult.result === 'string' ? toolResult.result : JSON.stringify(toolResult.result), durationMs: toolResult.durationMs });
           return toolResult;
         } catch (error) {
           const toolResult: ToolResult = {
@@ -541,7 +590,7 @@ export class AgentLoop {
             error: error instanceof Error ? error.message : String(error),
             durationMs: Date.now() - startTime,
           };
-          await this.emit({ type: 'tool_result', result: toolResult });
+          await this.emit({ type: 'tool_call_error', toolCallId: call.id, toolName: call.name, error: toolResult.error ?? 'Unknown error' });
           return toolResult;
         }
       }),

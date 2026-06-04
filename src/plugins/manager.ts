@@ -22,6 +22,7 @@ import type {
   ToolCall,
   ToolResult,
   HookContext,
+  ThinkingLevel,
 } from '../core/types.js';
 import type { PluginApi } from './api.js';
 import type { LoadedPlugin, PluginLoaderConfig, PluginEntryConfig } from './loader.js';
@@ -31,6 +32,8 @@ import { CapabilityRegistry } from './capability.js';
 // ================================================================
 // Hook Event Types — 对齐 OpenClaw Hook Catalog
 // ================================================================
+
+// ── OpenClaw 兼容 hooks ──
 
 /**
  * before_model_resolve 事件
@@ -214,6 +217,95 @@ export interface BeforeInstallEvent {
   source: string;
   /** 安装目标 */
   target: string;
+}
+
+// ── Octopi 扩展 hooks（迭代级生命周期） ──
+
+/**
+ * before_iteration 事件
+ *
+ * 每次 LLM 调用前触发（per-iteration）。
+ * 与 OpenClaw 的 before_agent_reply（per-message）不同，
+ * 这是 Octopi 独有的迭代级 hook。
+ */
+export interface BeforeIterationEvent {
+  /** 当前迭代索引（从 0 开始） */
+  iteration: number;
+  /** 当前消息历史 */
+  messages: Message[];
+  /** 当前模型 */
+  model: string;
+  /** 当前 thinking 级别 */
+  thinking?: ThinkingLevel;
+  /** Session ID */
+  sessionId: string;
+  /** 上下文 */
+  ctx: HookContext;
+}
+
+/**
+ * before_iteration 结果
+ *
+ * 返回 null/undefined 表示不干预，
+ * 返回对象可以覆盖本轮配置或停止循环。
+ */
+export interface BeforeIterationResult {
+  /** 覆盖本轮模型 */
+  model?: string;
+  /** 覆盖本轮 thinking 级别 */
+  thinking?: ThinkingLevel;
+  /** 注入到本轮 system prompt 的上下文 */
+  prependContext?: string;
+  /** 停止循环 */
+  stop?: boolean;
+  /** 停止原因 */
+  stopReason?: string;
+}
+
+/**
+ * after_iteration 事件
+ *
+ * 每次 LLM 调用 + 工具执行完成后触发（per-iteration）。
+ * 与 OpenClaw 的 after_tool_call（per-tool）不同，
+ * 这是 Octopi 独有的迭代级 hook。
+ */
+export interface AfterIterationEvent {
+  /** 当前迭代索引 */
+  iteration: number;
+  /** Assistant 回复 */
+  assistantMessage: Message;
+  /** 本轮工具调用 */
+  toolCalls: ToolCall[];
+  /** 本轮工具结果 */
+  toolResults: ToolResult[];
+  /** Token 用量 */
+  usage?: { promptTokens: number; completionTokens: number; totalTokens: number };
+  /** Session ID */
+  sessionId: string;
+  /** 上下文 */
+  ctx: HookContext;
+}
+
+/**
+ * loop_end 事件
+ *
+ * 循环结束时触发（per-message）。
+ */
+export interface LoopEndEvent {
+  /** 总迭代数 */
+  iterations: number;
+  /** 最终消息历史 */
+  messages: Message[];
+  /** 结束原因 */
+  reason: string;
+  /** 最终响应 */
+  response?: string;
+  /** 是否成功 */
+  success: boolean;
+  /** Session ID */
+  sessionId: string;
+  /** 上下文 */
+  ctx: HookContext;
 }
 
 // ================================================================

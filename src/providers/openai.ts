@@ -101,6 +101,7 @@ export class OpenAIProvider implements LLMProvider {
    *
    * 返回一个 AsyncIterable，逐步产出 LLMResponse。
    * 每个 chunk 的 content 是增量内容。
+   * 工具调用通过 buffer 拼接，在流结束时一次性输出。
    */
   async *stream(request: LLMRequest): AsyncIterable<LLMResponse> {
     const body = { ...this.buildRequestBody(request), stream: true };
@@ -125,6 +126,10 @@ export class OpenAIProvider implements LLMProvider {
     const decoder = new TextDecoder();
     let buffer = '';
 
+    // tool_calls 拼接 buffer（index → {id, name, argsBuffer}）
+    const toolCallBuffers = new Map<number, { id: string; name: string; argsBuffer: string }>();
+    let textContent = '';
+
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
@@ -137,18 +142,59 @@ export class OpenAIProvider implements LLMProvider {
         const trimmed = line.trim();
         if (!trimmed || !trimmed.startsWith('data: ')) continue;
         const data = trimmed.slice(6);
-        if (data === '[DONE]') return;
+        if (data === '[DONE]') {
+          // 流结束：如果有 buffer 中的 tool_calls，输出最终结果
+          if (toolCallBuffers.size > 0) {
+            const toolCalls: ToolCall[] = [];
+            for (const [, buf] of toolCallBuffers) {
+              toolCalls.push({
+                id: buf.id,
+                name: buf.name,
+                arguments: (() => { try { return JSON.parse(buf.argsBuffer); } catch { return {}; } })(),
+              });
+            }
+            yield {
+              content: textContent || '',
+              toolCalls,
+              model: request.model,
+              finishReason: 'tool_calls',
+            };
+          }
+          return;
+        }
 
         try {
           const parsed = JSON.parse(data);
           const delta = parsed.choices?.[0]?.delta;
-          if (delta) {
+          if (!delta) continue;
+
+          // 文本内容：增量输出
+          if (delta.content) {
+            textContent += delta.content;
             yield {
-              content: delta.content ?? '',
-              toolCalls: delta.tool_calls ? this.parseToolCalls(delta.tool_calls) : undefined,
+              content: delta.content,
               model: parsed.model ?? request.model,
               finishReason: parsed.choices?.[0]?.finish_reason ?? 'stop',
             };
+          }
+
+          // tool_calls：增量拼接到 buffer
+          if (delta.tool_calls) {
+            for (const tc of delta.tool_calls) {
+              const idx = tc.index ?? 0;
+              const existing = toolCallBuffers.get(idx);
+              if (existing) {
+                if (tc.id) existing.id = tc.id;
+                if (tc.function?.name) existing.name = tc.function.name;
+                if (tc.function?.arguments) existing.argsBuffer += tc.function.arguments;
+              } else {
+                toolCallBuffers.set(idx, {
+                  id: tc.id ?? `call_${idx}`,
+                  name: tc.function?.name ?? '',
+                  argsBuffer: tc.function?.arguments ?? '',
+                });
+              }
+            }
           }
         } catch {
           // 忽略解析错误
@@ -178,11 +224,13 @@ export class OpenAIProvider implements LLMProvider {
 
   /**
    * 构建 OpenAI API 请求体
+   *
+   * 消息格式净化：剥离框架内部字段，只保留 OpenAI API 所需字段。
    */
   private buildRequestBody(request: LLMRequest): Record<string, unknown> {
     const body: Record<string, unknown> = {
       model: request.model || this.defaultModel,
-      messages: request.messages,
+      messages: request.messages.map((msg: any) => this.sanitizeMessage(msg)),
     };
 
     if (request.temperature !== undefined) {
@@ -196,6 +244,31 @@ export class OpenAIProvider implements LLMProvider {
     }
 
     return body;
+  }
+
+  /**
+   * 净化消息：只保留 OpenAI API 所需字段
+   */
+  private sanitizeMessage(msg: any): any {
+    const clean: any = {
+      role: msg.role,
+      content: msg.content ?? null,
+    };
+
+    // assistant 消息：保留 tool_calls
+    if (msg.role === 'assistant' && msg.tool_calls?.length) {
+      clean.tool_calls = msg.tool_calls;
+    }
+
+    // tool 消息：必须有 tool_call_id 和 name
+    if (msg.role === 'tool') {
+      if (msg.tool_call_id) clean.tool_call_id = msg.tool_call_id;
+      else if (msg.toolResults?.[0]?.toolCallId) clean.tool_call_id = msg.toolResults[0].toolCallId;
+      if (msg.name) clean.name = msg.name;
+      else if (msg.toolResults?.[0]?.name) clean.name = msg.toolResults[0].name;
+    }
+
+    return clean;
   }
 
   /**

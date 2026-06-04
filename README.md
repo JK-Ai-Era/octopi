@@ -83,15 +83,35 @@ Skill 匹配策略（优先级从高到低）：
 2. **触发词匹配** — 消息包含 Skill 的 trigger 关键词
 3. **描述匹配** — 关键词重叠
 
-### 7. 任务系统：让 Agent 拥有工作记忆
+### 7. Loop Advisor：统一的循环扩展点
+
+Agent Loop 的每轮迭代前，会按 priority 依次调用所有注册的 `LoopAdvisor`。每个 Advisor 可以：
+
+- **注入消息** — 注入任务上下文、记忆摘要、Steering 指令
+- **覆盖参数** — 切换模型、调整 thinking level
+- **停止循环** — 决定不再调用 LLM
+
+```typescript
+interface LoopAdvisor {
+  name: string
+  priority: number  // 越小越先执行
+  beforeTurn(ctx: AdvisorContext): Promise<MetaDecision | null>
+  afterTurn?(ctx: AdvisorContext, result: TurnResult): Promise<void>
+  onLoopEnd?(ctx: AdvisorContext): Promise<void>
+}
+```
+
+任务系统、Steering 系统、Policy 系统都是 `LoopAdvisor` 的实现。详见 [docs/agent-loop-architecture.md](docs/agent-loop-architecture.md)。
+
+### 8. 任务系统：让 Agent 拥有工作记忆
 
 Agent 不应该只活在"当前对话"里。当用户说"帮我分析代码质量",然后突然聊起天气,Agent 应该记住自己正在干活,而不是把任务忘得一干二净。
 
-Octopi 的任务系统通过 Plugin 实现,对 Agent Loop 零侵入：
+Octopi 的任务系统通过 `TaskManagerAdvisor`（LoopAdvisor 实现）集成到 Agent Loop：
 
 - **TaskTracker** — 纯状态管理,JSONL 持久化,不依赖 LLM
 - **TaskManager** — 轻量 LLM 决策器,判断每条消息与当前任务的关系
-- **TaskManagerPlugin** — Hook 集成层,在 `before_agent_reply` 和 `before_prompt_build` 两个时机介入
+- **TaskManagerAdvisor** — 包装为 LoopAdvisor，在每轮迭代前介入
 
 核心流程：用户消息到达 → 轻量模型判断"这条消息是不是在说我之前那个任务" → 更新任务状态 → 向主 Agent 注入任务上下文 → 主 Agent 自然地决定继续、询问还是忽略。
 
@@ -123,8 +143,15 @@ Octopi 的任务系统通过 Plugin 实现,对 Agent Loop 零侵入：
 │  └─────┬──────┘  └─────┬──────┘  └────────┬───────────┘  │
 │        │               │                   │              │
 │  ┌─────▼───────────────▼───────────────────▼───────────┐  │
-│  │                  Agent Loop                          │  │
-│  │  intake → assemble → infer → tools → reply → save   │  │
+│  │               Agent Loop (AsyncIterable)             │  │
+│  │                                                     │  │
+│  │  Layer 1: Meta-Decision (LoopAdvisor[])              │  │
+│  │       ↓                                             │  │
+│  │  Layer 2: LLM Decision (ContextEngine → LLM)        │  │
+│  │       ↓                                             │  │
+│  │  Layer 3: Tool Execution (validate → execute)        │  │
+│  │                                                     │  │
+│  │  Cross-cutting: IterationBudget / ErrorClassifier    │  │
 │  └──────────┬──────────────────────────┬───────────────┘  │
 │             │                          │                  │
 │  ┌──────────▼────────┐  ┌──────────────▼───────────────┐  │
@@ -145,6 +172,32 @@ Octopi 的任务系统通过 Plugin 实现,对 Agent Loop 零侵入：
 │  └──────────────────────────────────────────────────────┘ │
 └──────────────────────────────────────────────────────────┘
 ```
+
+### Agent Loop 三层架构
+
+新版 Agent Loop 是一个 `AsyncIterable<AgentEvent>`，采用三层架构设计：
+
+| 层级 | 职责 | 组件 |
+|------|------|------|
+| **Layer 1: Meta-Decision** | 每轮迭代前做决策：注入消息、覆盖参数、决定停止 | `LoopAdvisor[]` (按 priority 排序) |
+| **Layer 2: LLM Decision** | 组装上下文 → 调用 LLM → 解析响应 | `ContextEngine` + `LLMProvider` + `MessageConverter` |
+| **Layer 3: Tool Execution** | 参数验证/去重/截断检测 → 执行工具 | `ToolRegistry` |
+
+跨层能力：`IterationBudget`（防无限循环）、`ErrorClassifier`（7 种错误分类 + 指数退避重试）、`AbortSignal`（任意点中断）。
+
+```typescript
+// 事件流原生 — 天然支持流式输出、中断控制、外部可观测性
+for await (const event of runAgentLoop(config, input, signal)) {
+  switch (event.type) {
+    case 'llm_stream_delta': updateUI(event.delta); break;
+    case 'tool_call_start': showSpinner(event.toolName); break;
+    case 'tool_call_result': hideSpinner(); break;
+    case 'loop_end': showResult(event.response); break;
+  }
+}
+```
+
+详见 [docs/agent-loop-architecture.md](docs/agent-loop-architecture.md)。
 
 ## 快速开始
 
@@ -272,7 +325,7 @@ interface AgentDefinition {
 
 ### Plugin 系统
 
-完全对齐 OpenClaw 插件架构。每个 Plugin 是一个独立模块，通过 `openclaw.plugin.json` 声明能力，在 `register(api)` 中注册。
+完全对齐 OpenClaw 插件架构。每个 Plugin 是一个独立模块，通过 `octopi.plugin.json`（兼容 `openclaw.plugin.json`）声明能力，在 `register(api)` 中注册。
 
 #### 生命周期 Hook
 
@@ -348,7 +401,7 @@ AgentLoop → LLMRequest(统一格式)→ LLMRouter → Provider → LLM API
 npm test
 ```
 
-120 个测试覆盖所有核心模块。
+150 个测试覆盖所有核心模块。
 
 ## 与 OpenClaw 的关系
 

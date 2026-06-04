@@ -43,7 +43,7 @@ import type {
   HookContext,
 } from '../core/types.js';
 import { PluginManager } from '../plugins/manager.js';
-import { AgentLoop } from '../agent/agent-loop.js';
+import { AgentRunner } from '../agent/agent-runner.js';
 
 /**
  * Gateway 实现
@@ -60,8 +60,8 @@ export class Gateway {
   private agents = new Map<string, AgentDefinition>();
   /** 已注册的 Channel Adapter（name → adapter） */
   private channels = new Map<string, ChannelAdapter>();
-  /** Agent Loop 实例 */
-  private agentLoop: AgentLoop;
+  /** Agent Runner 实例 */
+  private agentLoop: AgentRunner;
   /** Gateway 配置 */
   private config: GatewayConfig;
   /** DM 作用域 */
@@ -72,7 +72,7 @@ export class Gateway {
   constructor(config: GatewayConfig) {
     this.config = config;
     this.dmScope = config.session?.dmScope ?? 'main';
-    this.agentLoop = new AgentLoop();
+    this.agentLoop = new AgentRunner();
 
     // 注册配置中定义的 agents
     for (const agent of config.agents) {
@@ -221,7 +221,7 @@ export class Gateway {
   /**
    * 获取 Agent Loop 实例（高级用法）
    */
-  getAgentLoop(): AgentLoop {
+  getAgentLoop(): AgentRunner {
     return this.agentLoop;
   }
 
@@ -359,22 +359,25 @@ export class Gateway {
   private handleEvent(event: AgentEvent): void {
     switch (event.type) {
       case 'turn_start':
-        console.log(`[Gateway] Turn ${event.turnId} started for session ${event.sessionId}`);
+        console.log(`[Gateway] Turn ${event.turnId} started (index ${event.turnIndex})`);
         break;
       case 'llm_request':
-        console.log(`[Gateway] LLM request: model=${event.request.model}, messages=${event.request.messages.length}`);
+        console.log(`[Gateway] LLM request: model=${event.model}, estimatedTokens=${event.estimatedTokens}`);
         break;
       case 'llm_response':
-        console.log(`[Gateway] LLM response: model=${event.response.model}, finishReason=${event.response.finishReason}`);
+        console.log(`[Gateway] LLM response: content=${event.content.length}ch, durationMs=${event.durationMs}`);
         break;
-      case 'tool_call':
-        console.log(`[Gateway] Tool call: ${event.call.name}(${JSON.stringify(event.call.arguments).substring(0, 100)})`);
+      case 'tool_call_start':
+        console.log(`[Gateway] Tool call: ${event.toolName}(${event.arguments.substring(0, 100)})`);
         break;
-      case 'tool_result':
-        console.log(`[Gateway] Tool result: ${event.result.name} (${event.result.durationMs}ms) ${event.result.error ? 'ERROR: ' + event.result.error : 'OK'}`);
+      case 'tool_call_result':
+        console.log(`[Gateway] Tool result: ${event.toolName} (${event.durationMs}ms)`);
+        break;
+      case 'tool_call_error':
+        console.log(`[Gateway] Tool error: ${event.toolName}: ${event.error}`);
         break;
       case 'turn_end':
-        console.log(`[Gateway] Turn ${event.turn.id} ended (${event.turn.durationMs}ms)`);
+        console.log(`[Gateway] Turn ${event.turnId} ended (shouldContinue=${event.shouldContinue})`);
         break;
       case 'error':
         console.error(`[Gateway] Error:`, event.error.message);

@@ -1,20 +1,23 @@
 /**
- * TaskManagerPlugin — Hook 集成层
+ * TaskManagerPlugin — Iteration Hook 集成层
  *
- * 编排 TaskTracker 和 TaskManager LLM，通过 agent-loop 的 hook 系统集成。
+ * 编排 TaskTracker 和 TaskManager LLM，通过 agent-loop 的迭代级 hook 集成。
  *
- * 使用新的 definePluginEntry() API 创建 plugin。
+ * 使用 definePluginEntry() API 创建 plugin。
  *
  * 执行流程：
- *   before_agent_reply:
+ *   before_iteration:
  *     1. 加载 session 的任务状态
  *     2. 调用 TaskManager LLM 做决策
  *     3. 更新 TaskTracker（interrupt, create, complete, resume, cancel）
- *     4. 缓存 taskContext
- *     5. 返回 null（不拦截，让主 LLM 处理）
+ *     4. 注入 taskContext 到本轮 system prompt
  *
- *   before_prompt_build:
- *     6. 如果有缓存的 taskContext，注入到 system prompt
+ *   after_iteration:
+ *     5. 可选：根据 LLM 结果更新任务状态
+ *
+ * 注意：这个版本使用 Octopi 独有的迭代级 hook（before_iteration/after_iteration），
+ * 而非 OpenClaw 的 per-message hook（before_agent_reply/after_agent_reply）。
+ * 因为 TaskManager 需要在每次 LLM 调用前评估任务状态，而非每次用户消息前。
  */
 
 import type { Message } from '../core/types.js';
@@ -23,12 +26,13 @@ import { definePluginEntry } from '../plugins/entry.js';
 import type { OctopiPluginDefinition } from '../plugins/entry.js';
 import { TaskTracker } from './tracker.js';
 import { TaskManager } from './task-manager.js';
-import type { TaskManagerConfig, TaskDecision } from './types.js';
+import { applyDecision } from './shared.js';
+import type { TaskManagerConfig } from './types.js';
 
 /**
  * 创建 TaskManagerPlugin
  *
- * 使用新的 definePluginEntry() API。
+ * 使用迭代级 hook（before_iteration / after_iteration）。
  *
  * @param provider - LLM Provider
  * @param config - TaskManager 配置
@@ -42,34 +46,10 @@ export function createTaskManagerPlugin(
   const manager = new TaskManager(provider, config.model);
   const enabled = config.enabled;
 
-  /** 缓存每个 session 的最新决策（before_agent_reply 写，before_prompt_build 读） */
-  const pendingContext = new Map<string, string>();
-
-  /**
-   * 执行 TaskManager 的决策
-   */
-  function applyDecision(sessionId: string, decision: TaskDecision): void {
-    for (const taskId of decision.interruptedTasks) {
-      tracker.interrupt(taskId, decision.reason);
-    }
-    if (decision.resumeTask) {
-      tracker.resume(decision.resumeTask);
-    }
-    if (decision.completesTask) {
-      tracker.complete(decision.completesTask);
-    }
-    if ((decision as any).cancelTask) {
-      tracker.cancel((decision as any).cancelTask);
-    }
-    if (decision.newTask) {
-      tracker.create(sessionId, decision.newTask);
-    }
-  }
-
   return definePluginEntry({
     id: 'task-manager',
     name: 'Task Manager',
-    description: '任务编排系统 — 自动追踪和管理多任务',
+    description: '任务编排系统 — 自动追踪和管理多任务（迭代级 hook 集成）',
 
     register(api) {
       if (!enabled) {
@@ -77,15 +57,15 @@ export function createTaskManagerPlugin(
         return;
       }
 
-      // before_agent_reply — 任务决策（优先级 10，在默认 0 之前）
-      api.on('before_agent_reply', async (event: any) => {
-        const { messages, sessionId } = event;
+      // ── before_iteration — 每次 LLM 调用前的任务决策 ──
+      // 这是 Octopi 独有的迭代级 hook，不同于 OpenClaw 的 per-message hook。
+      // 优势：在每次 LLM 迭代前评估任务状态，而非仅在用户消息到达时。
+      api.on('before_iteration', async (event: any) => {
+        const { sessionId, iteration, messages } = event;
         if (!sessionId) return null;
 
-        // 确保任务状态已加载
-        tracker.loadSession(sessionId);
-
-        // 获取当前任务状态
+        // 加载 session 的任务状态
+        await tracker.loadSession(sessionId);
         const currentTasks = tracker.getActiveTasks(sessionId);
 
         // 提取最新用户消息
@@ -113,37 +93,29 @@ export function createTaskManagerPlugin(
           recentContext,
         });
 
-        api.logger.info(`Session ${sessionId}: ${decision.reason}`);
+        api.logger.info(
+          `[iteration ${iteration}] Session ${sessionId}: ${decision.reason}`
+        );
 
         // 执行决策
-        applyDecision(sessionId, decision);
+        await applyDecision(tracker, sessionId, decision);
 
-        // 缓存 taskContext
+        // 注入 taskContext 到本轮 system prompt
         if (decision.injectTaskContext && decision.taskContext) {
-          pendingContext.set(sessionId, decision.taskContext);
-        } else {
-          pendingContext.delete(sessionId);
+          return { prependContext: decision.taskContext };
         }
 
-        // 不拦截，让主 LLM 处理
         return null;
       }, { priority: 10 });
 
-      // before_prompt_build — 注入任务上下文
-      api.on('before_prompt_build', async (event: any) => {
-        const { sessionId } = event;
-        if (!sessionId) return null;
-
-        const taskContext = pendingContext.get(sessionId);
-        if (!taskContext) return null;
-
-        // 用完即删（只注入一次）
-        pendingContext.delete(sessionId);
-
-        return { prependContext: taskContext };
+      // ── after_iteration — 每次 LLM 调用 + 工具执行后 ──
+      // 可选：根据 LLM 的响应更新任务状态。
+      // 目前不做自动更新，由 TaskManager LLM 在下一轮 before_iteration 中判断。
+      api.on('after_iteration', async (_event: any) => {
+        // 未来可扩展：检测"任务完成"的 LLM 响应模式
       }, { priority: 10 });
 
-      // gateway_start — 初始化
+      // ── gateway_start — 初始化 ──
       api.on('gateway_start', async () => {
         api.logger.info('TaskManager plugin initialized');
       });

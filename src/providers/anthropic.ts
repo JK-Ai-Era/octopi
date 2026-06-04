@@ -181,6 +181,13 @@ export class AnthropicProvider implements LLMProvider {
                   name: currentToolName,
                   arguments: args,
                 });
+                // 每个工具块完成时立即 yield，避免在 message_delta 前丢失
+                yield {
+                  content: textContent || '',
+                  toolCalls: [...toolCalls],
+                  model: request.model,
+                  finishReason: 'tool_calls',
+                };
                 currentToolId = '';
                 currentToolName = '';
                 toolArgsBuffer = '';

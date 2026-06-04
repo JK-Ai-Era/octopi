@@ -132,25 +132,29 @@ export class TaskManager {
    */
   private parseResponse(content: string): TaskDecision {
     try {
-      // 提取 JSON（可能被 markdown 代码块包裹）
-      const jsonMatch = content.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) {
+      // 提取所有 JSON 对象（取最后一个，LLM 常在最后输出最终决策）
+      const jsonMatches = content.matchAll(/\{[^{}]*\}/g);
+      const matches = Array.from(jsonMatches);
+      
+      if (matches.length === 0) {
         console.warn('[TaskManager] No JSON found in response:', content);
         return DEFAULT_DECISION;
       }
 
-      const parsed = JSON.parse(jsonMatch[0]);
+      // 取最后一个匹配的 JSON
+      const lastMatch = matches[matches.length - 1][0];
+      const parsed = JSON.parse(lastMatch);
 
+      // 类型校验后再返回
       return {
-        injectTaskContext: Boolean(parsed.injectTaskContext),
-        taskContext: String(parsed.taskContext ?? ''),
-        interruptedTasks: Array.isArray(parsed.interruptedTasks)
-          ? parsed.interruptedTasks.map(String)
-          : [],
-        newTask: parsed.newTask ? String(parsed.newTask) : null,
-        completesTask: parsed.completesTask ? String(parsed.completesTask) : null,
-        resumeTask: parsed.resumeTask ? String(parsed.resumeTask) : null,
-        reason: String(parsed.reason ?? ''),
+        injectTaskContext: typeof parsed.injectTaskContext === 'boolean' ? parsed.injectTaskContext : false,
+        taskContext: typeof parsed.taskContext === 'string' ? parsed.taskContext : '',
+        interruptedTasks: Array.isArray(parsed.interruptedTasks) && parsed.interruptedTasks.every((t: any) => typeof t === 'string') ? parsed.interruptedTasks : [],
+        newTask: typeof parsed.newTask === 'string' ? parsed.newTask : null,
+        completesTask: typeof parsed.completesTask === 'string' ? parsed.completesTask : null,
+        resumeTask: typeof parsed.resumeTask === 'string' ? parsed.resumeTask : null,
+        cancelTask: typeof parsed.cancelTask === 'string' ? parsed.cancelTask : null,
+        reason: typeof parsed.reason === 'string' ? parsed.reason : 'TaskManager 未返回有效决策',
       };
     } catch (error) {
       console.warn('[TaskManager] Failed to parse response:', content, error);

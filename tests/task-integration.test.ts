@@ -5,7 +5,7 @@
  * - 通过 PluginManager 注册和发现
  * - Hook priority 排序
  * - runHook 拦截语义
- * - before_agent_reply → before_prompt_build 完整流水线
+ * - before_iteration → after_iteration 完整流水线
  * - Gateway 生命周期
  * - 多 plugin 共存
  * - 禁用状态
@@ -19,7 +19,7 @@ import { definePluginEntry } from '../src/plugins/entry.js';
 import type { TaskDecision, TaskManagerConfig } from '../src/tasks/types.js';
 import type { LLMProvider, LLMRequest, LLMResponse } from '../src/core/types.js';
 import type { LoadedPlugin } from '../src/plugins/loader.js';
-import { rmSync, existsSync } from 'fs';
+import { rmSync, existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
@@ -198,7 +198,7 @@ describe('TaskManagerPlugin Integration', () => {
         {
           id: 'observer-plugin',
           register(api) {
-            api.on('before_agent_reply', async () => {
+            api.on('before_iteration', async () => {
               return null; // 不拦截
             }, { priority: 0 });
           },
@@ -212,21 +212,21 @@ describe('TaskManagerPlugin Integration', () => {
       const taskPlugin = pm.getPlugin('task-manager')!;
       const observerPlugin = pm.getPlugin('observer-plugin')!;
 
-      const taskEntries = taskPlugin.api._hooks.get('before_agent_reply')!;
+      const taskEntries = taskPlugin.api._hooks.get('before_iteration')!;
       const origTaskHandler = taskEntries[0].handler;
       taskEntries[0].handler = async (event: any) => {
         callOrder.push('task-manager');
         return origTaskHandler(event);
       };
 
-      const obsEntries = observerPlugin.api._hooks.get('before_agent_reply')!;
+      const obsEntries = observerPlugin.api._hooks.get('before_iteration')!;
       const origObsHandler = obsEntries[0].handler;
       obsEntries[0].handler = async (event: any) => {
         callOrder.push('observer');
         return origObsHandler(event);
       };
 
-      await pm.runHook('before_agent_reply', {
+      await pm.runHook('before_iteration', {
         sessionId: TEST_SESSION,
         messages: [{ role: 'user', content: '测试', timestamp: Date.now() }],
       }, null);
@@ -238,7 +238,7 @@ describe('TaskManagerPlugin Integration', () => {
   });
 
   // ================================================================
-  // 3. before_agent_reply → before_prompt_build 完整流水线
+  // 3. before_iteration → after_iteration 完整流水线
   // ================================================================
 
   describe('完整流水线', () => {
@@ -260,23 +260,17 @@ describe('TaskManagerPlugin Integration', () => {
 
       const pm = createPluginManagerWithTaskPlugin(provider, config);
 
-      // Step 1: before_agent_reply 做决策
-      const replyResult = await pm.runHook('before_agent_reply', {
+      // before_iteration 返回 prependContext（一步到位）
+      const result = await pm.runHook('before_iteration', {
         sessionId: TEST_SESSION,
+        iteration: 0,
         messages: [{ role: 'user', content: '帮我分析代码质量', timestamp: Date.now() }],
+        model: 'test-model',
+        ctx: { sessionId: TEST_SESSION, turnId: 'turn-0', turnIndex: 0 },
       }, null);
 
-      // 不拦截主 LLM
-      expect(replyResult).toBeNull();
-
-      // Step 2: before_prompt_build 注入上下文
-      const promptResult = await pm.runHook('before_prompt_build', {
-        sessionId: TEST_SESSION,
-        messages: [{ role: 'user', content: '帮我分析代码质量', timestamp: Date.now() }],
-      }, null);
-
-      expect(promptResult).not.toBeNull();
-      expect(promptResult!.prependContext).toContain('分析代码质量');
+      expect(result).not.toBeNull();
+      expect(result!.prependContext).toContain('分析代码质量');
     });
 
     test('中断任务 → 注入被中断的任务上下文', async () => {
@@ -303,30 +297,31 @@ describe('TaskManagerPlugin Integration', () => {
 
       const pm = createPluginManagerWithTaskPlugin(provider, config);
 
-      // Step 1: 创建任务
-      await pm.runHook('before_agent_reply', {
+      // Step 1: 创建任务（无 taskContext，返回 null）
+      const createResult = await pm.runHook('before_iteration', {
         sessionId: TEST_SESSION,
+        iteration: 0,
         messages: [{ role: 'user', content: '重构认证模块', timestamp: Date.now() }],
+        model: 'test-model',
+        ctx: { sessionId: TEST_SESSION, turnId: 'turn-0', turnIndex: 0 },
       }, null);
+      expect(createResult).toBeNull();
 
-      // Step 2: 用户发无关消息，TaskManager 决定中断
-      await pm.runHook('before_agent_reply', {
+      // Step 2: 用户发无关消息，TaskManager 决定中断，返回 taskContext
+      const interruptResult = await pm.runHook('before_iteration', {
         sessionId: TEST_SESSION,
+        iteration: 1,
         messages: [
           { role: 'user', content: '重构认证模块', timestamp: Date.now() },
           { role: 'assistant', content: '好的，开始分析...', timestamp: Date.now() },
           { role: 'user', content: '帮我查天气', timestamp: Date.now() },
         ],
+        model: 'test-model',
+        ctx: { sessionId: TEST_SESSION, turnId: 'turn-1', turnIndex: 1 },
       }, null);
 
-      // Step 3: before_prompt_build 注入中断任务上下文
-      const promptResult = await pm.runHook('before_prompt_build', {
-        sessionId: TEST_SESSION,
-        messages: [],
-      }, null);
-
-      expect(promptResult).not.toBeNull();
-      expect(promptResult!.prependContext).toContain('被中断');
+      expect(interruptResult).not.toBeNull();
+      expect(interruptResult!.prependContext).toContain('被中断');
     });
 
     test('无活跃任务 → 不注入上下文', async () => {
@@ -345,54 +340,15 @@ describe('TaskManagerPlugin Integration', () => {
 
       const pm = createPluginManagerWithTaskPlugin(provider, config);
 
-      await pm.runHook('before_agent_reply', {
+      const result = await pm.runHook('before_iteration', {
         sessionId: TEST_SESSION,
+        iteration: 0,
         messages: [{ role: 'user', content: '你好', timestamp: Date.now() }],
+        model: 'test-model',
+        ctx: { sessionId: TEST_SESSION, turnId: 'turn-0', turnIndex: 0 },
       }, null);
 
-      const promptResult = await pm.runHook('before_prompt_build', {
-        sessionId: TEST_SESSION,
-        messages: [],
-      }, null);
-
-      expect(promptResult).toBeNull();
-    });
-
-    test('上下文注入只生效一次（用完即删）', async () => {
-      const decision = makeDecision({
-        injectTaskContext: true,
-        taskContext: '<task>活跃任务</task>',
-        reason: '有活跃任务',
-      });
-
-      const provider = createMockProvider([decision]);
-      const config: TaskManagerConfig = {
-        enabled: true,
-        provider: 'mock-task-manager',
-        model: 'mock-task-model',
-        dataDir,
-      };
-
-      const pm = createPluginManagerWithTaskPlugin(provider, config);
-
-      await pm.runHook('before_agent_reply', {
-        sessionId: TEST_SESSION,
-        messages: [{ role: 'user', content: '继续', timestamp: Date.now() }],
-      }, null);
-
-      // 第一次：有内容
-      const first = await pm.runHook('before_prompt_build', {
-        sessionId: TEST_SESSION,
-        messages: [],
-      }, null);
-      expect(first).not.toBeNull();
-
-      // 第二次：null（用完即删）
-      const second = await pm.runHook('before_prompt_build', {
-        sessionId: TEST_SESSION,
-        messages: [],
-      }, null);
-      expect(second).toBeNull();
+      expect(result).toBeNull();
     });
 
     test('恢复被中断的任务', async () => {
@@ -422,34 +378,38 @@ describe('TaskManagerPlugin Integration', () => {
       const pm = createPluginManagerWithTaskPlugin(provider, config);
 
       // 创建
-      await pm.runHook('before_agent_reply', {
+      await pm.runHook('before_iteration', {
         sessionId: TEST_SESSION,
+        iteration: 0,
         messages: [{ role: 'user', content: '编写单元测试', timestamp: Date.now() }],
+        model: 'test-model',
+        ctx: { sessionId: TEST_SESSION, turnId: 'turn-0', turnIndex: 0 },
       }, null);
 
       // 中断
-      await pm.runHook('before_agent_reply', {
+      await pm.runHook('before_iteration', {
         sessionId: TEST_SESSION,
+        iteration: 1,
         messages: [
           { role: 'user', content: '帮我查天气', timestamp: Date.now() },
         ],
+        model: 'test-model',
+        ctx: { sessionId: TEST_SESSION, turnId: 'turn-1', turnIndex: 1 },
       }, null);
 
       // 恢复
-      await pm.runHook('before_agent_reply', {
+      const result = await pm.runHook('before_iteration', {
         sessionId: TEST_SESSION,
+        iteration: 2,
         messages: [
           { role: 'user', content: '继续之前的任务', timestamp: Date.now() },
         ],
+        model: 'test-model',
+        ctx: { sessionId: TEST_SESSION, turnId: 'turn-2', turnIndex: 2 },
       }, null);
 
-      const promptResult = await pm.runHook('before_prompt_build', {
-        sessionId: TEST_SESSION,
-        messages: [],
-      }, null);
-
-      expect(promptResult).not.toBeNull();
-      expect(promptResult!.prependContext).toContain('恢复');
+      expect(result).not.toBeNull();
+      expect(result!.prependContext).toContain('恢复');
     });
   });
 
@@ -504,9 +464,9 @@ describe('TaskManagerPlugin Integration', () => {
               otherPluginHookCalls.push(`tool:${event.call?.toolName ?? 'unknown'}`);
             });
 
-            // 也注册一个 before_agent_reply，但不拦截
-            api.on('before_agent_reply', async () => {
-              otherPluginHookCalls.push('before_agent_reply:logger');
+            // 也注册一个 before_iteration，但不拦截
+            api.on('before_iteration', async () => {
+              otherPluginHookCalls.push('before_iteration:logger');
               return null;
             }, { priority: 5 });
           },
@@ -521,14 +481,14 @@ describe('TaskManagerPlugin Integration', () => {
         },
       ]);
 
-      // 运行 before_agent_reply — 两个 plugin 都应执行
-      await pm.runHook('before_agent_reply', {
+      // 运行 before_iteration — 两个 plugin 都应执行
+      await pm.runHook('before_iteration', {
         sessionId: TEST_SESSION,
         messages: [{ role: 'user', content: '分析代码', timestamp: Date.now() }],
       }, null);
 
-      // tool-logger 的 before_agent_reply 应该被调用
-      expect(otherPluginHookCalls).toContain('before_agent_reply:logger');
+      // tool-logger 的 before_iteration 应该被调用
+      expect(otherPluginHookCalls).toContain('before_iteration:logger');
 
       // 运行 after_tool_call — 只有 tool-logger 应响应
       await pm.runAllHooks('after_tool_call', {
@@ -590,7 +550,7 @@ describe('TaskManagerPlugin Integration', () => {
   // ================================================================
 
   describe('错误恢复', () => {
-    test('LLM 调用失败不中断 before_agent_reply 链', async () => {
+    test('LLM 调用失败不中断 before_iteration 链', async () => {
       const failProvider: LLMProvider = {
         name: 'fail-provider',
         models: ['fail-model'],
@@ -613,7 +573,7 @@ describe('TaskManagerPlugin Integration', () => {
         {
           id: 'fallback-plugin',
           register(api) {
-            api.on('before_agent_reply', async () => {
+            api.on('before_iteration', async () => {
               otherExecuted.value = true;
               return null;
             }, { priority: 0 });
@@ -622,7 +582,7 @@ describe('TaskManagerPlugin Integration', () => {
       ]);
 
       // TaskManager 的 LLM 会失败，但不应抛出异常
-      const result = await pm.runHook('before_agent_reply', {
+      const result = await pm.runHook('before_iteration', {
         sessionId: TEST_SESSION,
         messages: [{ role: 'user', content: '测试', timestamp: Date.now() }],
       }, null);
@@ -634,7 +594,7 @@ describe('TaskManagerPlugin Integration', () => {
       expect(otherExecuted.value).toBe(true);
     });
 
-    test('before_agent_reply handler 超时不阻塞后续 handlers', async () => {
+    test('before_iteration handler 超时不阻塞后续 handlers', async () => {
       const provider = createMockProvider([makeDecision()]);
       const config: TaskManagerConfig = {
         enabled: true,
@@ -649,7 +609,7 @@ describe('TaskManagerPlugin Integration', () => {
         {
           id: 'timeout-plugin',
           register(api) {
-            api.on('before_agent_reply', async () => {
+            api.on('before_iteration', async () => {
               // 模拟超长执行
               await new Promise((r) => setTimeout(r, 100));
               return null;
@@ -659,7 +619,7 @@ describe('TaskManagerPlugin Integration', () => {
         {
           id: 'after-plugin',
           register(api) {
-            api.on('before_agent_reply', async () => {
+            api.on('before_iteration', async () => {
               afterExecuted.value = true;
               return null;
             }, { priority: 0 });
@@ -667,7 +627,7 @@ describe('TaskManagerPlugin Integration', () => {
         },
       ]);
 
-      const result = await pm.runHook('before_agent_reply', {
+      const result = await pm.runHook('before_iteration', {
         sessionId: TEST_SESSION,
         messages: [{ role: 'user', content: '测试', timestamp: Date.now() }],
       }, null);
@@ -682,7 +642,7 @@ describe('TaskManagerPlugin Integration', () => {
   // ================================================================
 
   describe('拦截语义', () => {
-    test('其他 plugin 返回非 null 时中断 before_agent_reply 链', async () => {
+    test('其他 plugin 返回非 null 时中断 before_iteration 链', async () => {
       const provider = createMockProvider([makeDecision()]);
       const config: TaskManagerConfig = {
         enabled: true,
@@ -698,7 +658,7 @@ describe('TaskManagerPlugin Integration', () => {
           id: 'interceptor',
           register(api) {
             // priority 20 > TaskManager 的 10，先执行
-            api.on('before_agent_reply', async () => {
+            api.on('before_iteration', async () => {
               return { role: 'assistant', content: '拦截！', timestamp: Date.now() };
             }, { priority: 20 });
           },
@@ -707,14 +667,14 @@ describe('TaskManagerPlugin Integration', () => {
 
       // 替换 TaskManager handler 来追踪是否执行
       const taskPlugin = pm.getPlugin('task-manager')!;
-      const entries = taskPlugin.api._hooks.get('before_agent_reply')!;
+      const entries = taskPlugin.api._hooks.get('before_iteration')!;
       const origHandler = entries[0].handler;
       entries[0].handler = async (event: any) => {
         taskManagerExecuted.value = true;
         return origHandler(event);
       };
 
-      const result = await pm.runHook('before_agent_reply', {
+      const result = await pm.runHook('before_iteration', {
         sessionId: TEST_SESSION,
         messages: [{ role: 'user', content: '测试', timestamp: Date.now() }],
       }, null);
@@ -804,32 +764,116 @@ describe('TaskManagerPlugin Integration', () => {
 
       const pm = createPluginManagerWithTaskPlugin(provider, config);
 
-      // Session A: 创建任务
-      await pm.runHook('before_agent_reply', {
+      // Session A: before_iteration 返回 prependContext
+      const ctxA = await pm.runHook('before_iteration', {
         sessionId: sessionA,
+        iteration: 0,
         messages: [{ role: 'user', content: '任务 A', timestamp: Date.now() }],
+        model: 'test-model',
+        ctx: { sessionId: sessionA, turnId: 'turn-0', turnIndex: 0 },
       }, null);
 
-      // Session B: 创建任务
-      await pm.runHook('before_agent_reply', {
+      // Session B: before_iteration 返回 prependContext
+      const ctxB = await pm.runHook('before_iteration', {
         sessionId: sessionB,
+        iteration: 0,
         messages: [{ role: 'user', content: '任务 B', timestamp: Date.now() }],
-      }, null);
-
-      // Session A 的上下文
-      const ctxA = await pm.runHook('before_prompt_build', {
-        sessionId: sessionA,
-        messages: [],
-      }, null);
-
-      // Session B 的上下文
-      const ctxB = await pm.runHook('before_prompt_build', {
-        sessionId: sessionB,
-        messages: [],
+        model: 'test-model',
+        ctx: { sessionId: sessionB, turnId: 'turn-0', turnIndex: 0 },
       }, null);
 
       expect(ctxA!.prependContext).toContain('session A');
       expect(ctxB!.prependContext).toContain('session B');
+    });
+
+    // ─────────────────────────────────────────────
+    // Phase 6: 并发 session 隔离压力测试
+    // ─────────────────────────────────────────────
+
+    test('3+ 个 session 同时操作时隔离正确', async () => {
+      const sessions = ['concurrent-session-1', 'concurrent-session-2', 'concurrent-session-3'];
+      const taskNames = ['并发任务 A', '并发任务 B', '并发任务 C'];
+      const contexts = ['上下文 A', '上下文 B', '上下文 C'];
+
+      // 为每个 session 准备一个独立的决策响应
+      const provider = createMockProvider([
+        makeDecision({ newTask: taskNames[0], taskContext: contexts[0], injectTaskContext: true, reason: 'session-1' }),
+        makeDecision({ newTask: taskNames[1], taskContext: contexts[1], injectTaskContext: true, reason: 'session-2' }),
+        makeDecision({ newTask: taskNames[2], taskContext: contexts[2], injectTaskContext: true, reason: 'session-3' }),
+      ]);
+      const config: TaskManagerConfig = {
+        enabled: true,
+        provider: 'mock-task-manager',
+        model: 'mock-task-model',
+        dataDir,
+      };
+
+      const pm = createPluginManagerWithTaskPlugin(provider, config);
+
+      // 并发执行 3 个 session 的 before_iteration
+      const results = await Promise.all(sessions.map(async (sessionId, index) => {
+        return pm.runHook('before_iteration', {
+          sessionId,
+          iteration: 0,
+          messages: [{ role: 'user', content: taskNames[index], timestamp: Date.now() }],
+          model: 'test-model',
+          ctx: { sessionId, turnId: `turn-${index}`, turnIndex: 0 },
+        }, null);
+      }));
+
+      // 验证每个 session 收到正确的上下文
+      expect(results[0]!.prependContext).toContain(contexts[0]);
+      expect(results[1]!.prependContext).toContain(contexts[1]);
+      expect(results[2]!.prependContext).toContain(contexts[2]);
+
+      // 验证 session 间没有交叉污染
+      expect(results[0]!.prependContext).not.toContain(contexts[1]);
+      expect(results[1]!.prependContext).not.toContain(contexts[2]);
+      expect(results[2]!.prependContext).not.toContain(contexts[0]);
+    });
+
+    test('并发操作后文件持久化正确', async () => {
+      const sessions = ['persist-test-1', 'persist-test-2', 'persist-test-3'];
+      const taskDescs = ['持久化任务 A', '持久化任务 B', '持久化任务 C'];
+
+      const provider = createMockProvider([
+        makeDecision({ newTask: taskDescs[0], reason: 'persist-1' }),
+        makeDecision({ newTask: taskDescs[1], reason: 'persist-2' }),
+        makeDecision({ newTask: taskDescs[2], reason: 'persist-3' }),
+      ]);
+      const config: TaskManagerConfig = {
+        enabled: true,
+        provider: 'mock-task-manager',
+        model: 'mock-task-model',
+        dataDir,
+      };
+
+      const pm = createPluginManagerWithTaskPlugin(provider, config);
+
+      // 并发执行 3 个 session 的 before_iteration
+      await Promise.all(sessions.map(async (sessionId, index) => {
+        await pm.runHook('before_iteration', {
+          sessionId,
+          iteration: 0,
+          messages: [{ role: 'user', content: taskDescs[index], timestamp: Date.now() }],
+          model: 'test-model',
+          ctx: { sessionId, turnId: `turn-${index}`, turnIndex: 0 },
+        }, null);
+      }));
+
+      // 验证每个 session 的 JSONL 文件存在且内容正确
+      for (const sessionId of sessions) {
+        const filePath = join(dataDir, sessionId, 'tasks.jsonl');
+        expect(existsSync(filePath)).toBe(true);
+
+        const content = readFileSync(filePath, 'utf-8');
+        const lines = content.trim().split('\n');
+        expect(lines.length).toBeGreaterThan(0);
+
+        const createEvent = JSON.parse(lines[0]);
+        expect(createEvent.action).toBe('create');
+        expect(createEvent.sessionId).toBe(sessionId);
+      }
     });
   });
 
@@ -877,8 +921,8 @@ describe('TaskManagerPlugin Integration', () => {
 
       const pm = createPluginManagerWithTaskPlugin(provider, config);
 
-      // before_agent_reply 应该有 handler
-      const replyResult = await pm.runHook('before_agent_reply', {
+      // before_iteration 应该有 handler
+      const replyResult = await pm.runHook('before_iteration', {
         sessionId: TEST_SESSION,
         messages: [{ role: 'user', content: '测试', timestamp: Date.now() }],
       }, null);
@@ -886,8 +930,8 @@ describe('TaskManagerPlugin Integration', () => {
       // TaskManager 不拦截，返回 null
       expect(replyResult).toBeNull();
 
-      // before_prompt_build 应该没有内容（因为没有触发决策）
-      const promptResult = await pm.runHook('before_prompt_build', {
+      // after_iteration 应该没有内容（因为没有触发决策）
+      const promptResult = await pm.runHook('after_iteration', {
         sessionId: TEST_SESSION,
         messages: [],
       }, null);

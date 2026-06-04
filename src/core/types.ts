@@ -681,38 +681,294 @@ export interface HookContext {
 // ============================================================
 
 /**
+ * Loop 结束原因
+ */
+export type LoopEndReason =
+  | 'completed'         // LLM 返回最终响应，无 tool calls
+  | 'max_turns'         // 达到最大轮次
+  | 'budget_exhausted'  // IterationBudget 耗尽
+  | 'advisor_stop'      // 某个 advisor 决定停止
+  | 'plugin_stop'       // 某个 plugin 决定停止
+  | 'interrupted'       // 用户中断
+  | 'error';            // 不可恢复的错误
+
+/**
+ * LLM 流式 chunk 类型
+ */
+export interface LLMStreamChunk {
+  type: 'content' | 'thinking';
+  text: string;
+}
+
+/**
  * Agent 事件
  *
- * 覆盖 Agent Loop 的所有关键节点，用于：
+ * 覆盖 Agent Loop 全生命周期，用于：
+ * - 流式输出（SSE / WebSocket）
  * - 日志记录
  * - 指标收集
  * - 调试追踪
- * - 实时监控
+ * - 实时 UI 更新
  */
 export type AgentEvent =
-  /** Turn 开始 */
-  | { type: 'turn_start'; turnId: string; sessionId: string }
-  /** LLM 请求发出 */
-  | { type: 'llm_request'; request: LLMRequest }
-  /** LLM 响应收到 */
-  | { type: 'llm_response'; response: LLMResponse }
-  /** 工具调用开始 */
-  | { type: 'tool_call'; call: ToolCall }
-  /** 工具调用完成 */
-  | { type: 'tool_result'; result: ToolResult }
-  /** Turn 结束 */
-  | { type: 'turn_end'; turn: Turn }
-  /** 错误 */
-  | { type: 'error'; error: Error }
-  /** 等待人工输入 */
-  | { type: 'waiting_human'; message: string }
-  /** Session 结束 */
-  | { type: 'session_end'; sessionId: string }
-  /** 上下文压缩 */
-  | { type: 'compaction'; sessionId: string };
+  // ── 循环生命周期 ──
+  | { type: 'loop_start'; sessionId: string }
+  | { type: 'loop_end'; reason: LoopEndReason; response?: string }
+
+  // ── Turn 生命周期 ──
+  | { type: 'turn_start'; turnId: string; turnIndex: number }
+  | { type: 'turn_end'; turnId: string; shouldContinue: boolean }
+
+  // ── Meta-decision 阶段 ──
+  | { type: 'advisor_call'; advisor: string }
+  | { type: 'meta_decision'; decisions: MetaDecision[] }
+  | { type: 'messages_injected'; count: number; source: string }
+
+  // ── LLM 阶段 ──
+  | { type: 'llm_request'; model: string; estimatedTokens: number }
+  | { type: 'llm_thinking_delta'; delta: string }
+  | { type: 'llm_stream_delta'; delta: string }
+  | { type: 'llm_response'; content: string; toolCalls?: ToolCall[]; usage?: TokenUsage; durationMs: number }
+
+  // ── 工具阶段 ──
+  | { type: 'tool_call_start'; toolCallId: string; toolName: string; arguments: string }
+  | { type: 'tool_call_result'; toolCallId: string; toolName: string; result: string; durationMs?: number }
+  | { type: 'tool_call_error'; toolCallId: string; toolName: string; error: string }
+
+  // ── 错误和重试 ──
+  | { type: 'error'; error: ClassifiedError; retrying: boolean }
+  | { type: 'retry_wait'; attempt: number; maxRetries: number; waitMs: number }
+  | { type: 'context_compressed'; beforeTokens: number; afterTokens: number }
+
+  // ── 中断 ──
+  | { type: 'interrupt_requested' }
+  | { type: 'interrupted'; phase: string };
+
+// ============================================================
+// 13. Error Classification
+// ============================================================
 
 /**
- * 事件监听器
+ * 错误分类原因
+ */
+export type ErrorReason =
+  | 'rate_limit'
+  | 'context_length'
+  | 'auth'
+  | 'billing'
+  | 'network'
+  | 'timeout'
+  | 'server'
+  | 'unknown';
+
+/**
+ * 分类后的错误
+ */
+export interface ClassifiedError {
+  reason: ErrorReason;
+  provider?: string;
+  model?: string;
+  statusCode?: number;
+  retryAfterMs?: number;
+  message: string;
+  originalError: unknown;
+}
+
+// ============================================================
+// 14. Meta-Decision & Loop Advisor
+// ============================================================
+
+/**
+ * Thinking level
+ */
+export type ThinkingLevel = 'off' | 'low' | 'medium' | 'high';
+
+/**
+ * Meta-Decision
+ *
+ * LoopAdvisor 的输出。可以注入消息、覆盖参数、决定停止。
+ */
+export interface MetaDecision {
+  /** 消息注入（添加到对话中） */
+  injectMessages?: Message[];
+  /** 覆盖模型 */
+  overrideModel?: string;
+  /** 覆盖 thinking level */
+  overrideThinking?: ThinkingLevel;
+  /** 覆盖最大输出 token */
+  overrideMaxTokens?: number;
+  /** 决定停止循环 */
+  shouldStop?: boolean;
+  /** 停止原因 */
+  stopReason?: string;
+  /** 任务上下文（注入到 system prompt） */
+  taskContext?: string;
+}
+
+/**
+ * Advisor 上下文
+ *
+ * 每轮迭代前传递给 LoopAdvisor。
+ */
+export interface AdvisorContext {
+  /** 当前 session ID */
+  sessionId: string;
+  /** 当前 turn ID */
+  turnId: string;
+  /** 当前 turn 索引 */
+  turnIndex: number;
+  /** 当前消息列表 */
+  messages: Message[];
+  /** 迭代预算 */
+  iterationBudget: { used: number; remaining: number; max: number };
+  /** 中止信号 */
+  abortSignal: AbortSignal;
+}
+
+/**
+ * Turn 结果
+ *
+ * 传递给 LoopAdvisor.afterTurn()。
+ */
+export interface TurnResult {
+  /** assistant 消息 */
+  assistantMessage: Message;
+  /** 工具结果 */
+  toolResults: ToolResult[];
+  /** Token 使用量 */
+  tokenUsage?: TokenUsage;
+  /** 执行耗时 */
+  durationMs: number;
+}
+
+/**
+ * Loop Advisor
+ *
+ * 参与 Agent Loop 的每轮决策。按 priority 排序执行。
+ * TaskManager、Steering、Policy 都是 LoopAdvisor 的实现。
+ */
+export interface LoopAdvisor {
+  /** 名称（用于日志和事件） */
+  name: string;
+  /** 优先级（越小越先执行） */
+  priority: number;
+
+  /**
+   * 每轮迭代前调用
+   * 返回 MetaDecision 或 null（不干预）
+   */
+  beforeTurn(ctx: AdvisorContext): Promise<MetaDecision | null>;
+
+  /**
+   * 每轮迭代后调用（可选）
+   */
+  afterTurn?(ctx: AdvisorContext, result: TurnResult): Promise<void>;
+
+  /**
+   * Steering 消息到达时调用（可选）
+   * 返回 MetaDecision 或 null
+   */
+  onSteering?(messages: Message[]): Promise<MetaDecision | null>;
+
+  /**
+   * 循环结束时调用（可选）
+   */
+  onLoopEnd?(ctx: AdvisorContext): Promise<void>;
+}
+
+// ============================================================
+// 15. LLM Message — Provider 边界格式
+// ============================================================
+
+/**
+ * LLM Message
+ *
+ * 发送给 LLM provider 的消息格式。
+ * 与内部 Message 不同，这是 provider-specific 的格式。
+ */
+export interface LLMMessage {
+  role: string;
+  content: string | null;
+  tool_calls?: Array<{
+    id: string;
+    type: 'function';
+    function: { name: string; arguments: string };
+  }>;
+  tool_call_id?: string;
+  name?: string;
+}
+
+/**
+ * Message Converter
+ *
+ * 内部 Message ↔ LLM Message 的转换器。
+ */
+export interface MessageConverter {
+  /**
+   * 内部消息 → LLM 消息
+   * @param stripMeta 是否剥离内部元数据（source/taskId/turnId）
+   */
+  toLlm(messages: Message[], stripMeta?: boolean): LLMMessage[];
+
+  /**
+   * LLM 消息 → 内部消息
+   */
+  fromLlm(message: LLMMessage): Message;
+}
+
+// ============================================================
+// 16. Agent Loop Config
+// ============================================================
+
+/**
+ * 重试配置
+ */
+export interface RetryConfig {
+  /** 最大重试次数 */
+  maxRetries: number;
+  /** 基础延迟（毫秒） */
+  baseDelayMs: number;
+  /** 最大延迟（毫秒） */
+  maxDelayMs: number;
+}
+
+/**
+ * Agent Loop 配置
+ */
+/**
+ * Agent Loop 配置
+ */
+export interface AgentLoopConfig {
+  /** LLM Provider */
+  provider: LLMProvider;
+  /** Context Engine */
+  contextEngine: ContextEngine;
+  /** Tool Registry */
+  toolRegistry: { getDefinitions(): unknown[]; execute(name: string, args: string, ctx: unknown): Promise<ToolResult> };
+  /** Message Converter */
+  messageConverter: MessageConverter;
+  /** Advisor 链（deprecated — 使用 pluginManager 的 hooks 替代） */
+  advisors: LoopAdvisor[];
+  /** Plugin Manager（可选，用于迭代级 hooks） */
+  pluginManager?: import('../plugins/manager.js').PluginManager;
+  /** 默认模型 */
+  defaultModel: string;
+  /** 最大轮次 */
+  maxTurns: number;
+  /** 迭代预算 */
+  iterationBudget: number;
+  /** 最大连续错误数 */
+  maxConsecutiveErrors: number;
+  /** 重试配置 */
+  retry: RetryConfig;
+  /** 事件回调 */
+  onEvent?: (event: AgentEvent) => void;
+  /** Steering 消息获取 */
+  onSteering?: () => Promise<Message[]>;
+}
+
+/**
+ * 事件监听器（保留兼容）
  */
 export type AgentEventListener = (event: AgentEvent) => void | Promise<void>;
 

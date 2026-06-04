@@ -10,7 +10,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { appendFileSync, mkdirSync, readFileSync, existsSync } from 'node:fs';
+import { appendFile, readFile, mkdir, readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Task, TaskEvent, TaskTracker as ITaskTracker } from './types.js';
 
@@ -28,7 +28,7 @@ export class TaskTracker implements ITaskTracker {
   // CRUD
   // ================================================================
 
-  create(sessionId: string, description: string): Task {
+  async create(sessionId: string, description: string): Promise<Task> {
     const task: Task = {
       id: randomUUID(),
       sessionId,
@@ -39,7 +39,7 @@ export class TaskTracker implements ITaskTracker {
     };
 
     this.tasks.set(task.id, task);
-    this.appendEvent({
+    await this.appendEvent({
       action: 'create',
       taskId: task.id,
       sessionId,
@@ -50,13 +50,13 @@ export class TaskTracker implements ITaskTracker {
     return task;
   }
 
-  start(taskId: string): void {
+  async start(taskId: string): Promise<void> {
     const task = this.tasks.get(taskId);
     if (!task) return;
 
     task.status = 'in_progress';
     task.updatedAt = Date.now();
-    this.appendEvent({
+    await this.appendEvent({
       action: 'start',
       taskId,
       sessionId: task.sessionId,
@@ -64,14 +64,14 @@ export class TaskTracker implements ITaskTracker {
     });
   }
 
-  interrupt(taskId: string, reason: string): void {
+  async interrupt(taskId: string, reason: string): Promise<void> {
     const task = this.tasks.get(taskId);
     if (!task) return;
     if (task.status !== 'in_progress') return; // 只有进行中的才能被打断
 
     task.status = 'interrupted';
     task.updatedAt = Date.now();
-    this.appendEvent({
+    await this.appendEvent({
       action: 'interrupt',
       taskId,
       sessionId: task.sessionId,
@@ -80,14 +80,14 @@ export class TaskTracker implements ITaskTracker {
     });
   }
 
-  resume(taskId: string): void {
+  async resume(taskId: string): Promise<void> {
     const task = this.tasks.get(taskId);
     if (!task) return;
     if (task.status !== 'interrupted') return; // 只有被中断的才能恢复
 
     task.status = 'in_progress';
     task.updatedAt = Date.now();
-    this.appendEvent({
+    await this.appendEvent({
       action: 'resume',
       taskId,
       sessionId: task.sessionId,
@@ -95,13 +95,13 @@ export class TaskTracker implements ITaskTracker {
     });
   }
 
-  complete(taskId: string): void {
+  async complete(taskId: string): Promise<void> {
     const task = this.tasks.get(taskId);
     if (!task) return;
 
     task.status = 'completed';
     task.updatedAt = Date.now();
-    this.appendEvent({
+    await this.appendEvent({
       action: 'complete',
       taskId,
       sessionId: task.sessionId,
@@ -109,13 +109,13 @@ export class TaskTracker implements ITaskTracker {
     });
   }
 
-  cancel(taskId: string): void {
+  async cancel(taskId: string): Promise<void> {
     const task = this.tasks.get(taskId);
     if (!task) return;
 
     task.status = 'cancelled';
     task.updatedAt = Date.now();
-    this.appendEvent({
+    await this.appendEvent({
       action: 'cancel',
       taskId,
       sessionId: task.sessionId,
@@ -152,12 +152,19 @@ export class TaskTracker implements ITaskTracker {
   /**
    * 从 JSONL 文件恢复任务状态（session 启动时调用）
    */
-  loadSession(sessionId: string): void {
+  async loadSession(sessionId: string): Promise<void> {
     const filePath = this.getFilePath(sessionId);
-    if (!existsSync(filePath)) return;
+    
+    // 用 stat try/catch 替代 existsSync
+    try {
+      await stat(filePath);
+    } catch {
+      // 文件不存在，返回
+      return;
+    }
 
     try {
-      const content = readFileSync(filePath, 'utf-8');
+      const content = await readFile(filePath, 'utf-8');
       const lines = content.trim().split('\n').filter(Boolean);
       const events: TaskEvent[] = lines.map((l) => JSON.parse(l));
 
@@ -226,12 +233,12 @@ export class TaskTracker implements ITaskTracker {
   /**
    * 追加事件到 JSONL 文件
    */
-  private appendEvent(event: TaskEvent): void {
+  private async appendEvent(event: TaskEvent): Promise<void> {
     const dir = join(this.dataDir, event.sessionId);
-    mkdirSync(dir, { recursive: true });
+    await mkdir(dir, { recursive: true });
 
     const filePath = this.getFilePath(event.sessionId);
-    appendFileSync(filePath, JSON.stringify(event) + '\n');
+    await appendFile(filePath, JSON.stringify(event) + '\n');
   }
 
   private getFilePath(sessionId: string): string {

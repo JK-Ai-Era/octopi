@@ -64,6 +64,8 @@ export interface TaskDecision {
   completesTask: string | null;
   /** 是否恢复某个被中断的任务 */
   resumeTask: string | null;
+  /** 是否取消某个任务 */
+  cancelTask?: string | null;
   /** 决策理由 */
   reason: string;
 }
@@ -71,17 +73,19 @@ export interface TaskDecision {
 /** TaskTracker 接口 */
 export interface TaskTracker {
   /** 创建任务 */
-  create(sessionId: string, description: string): Task;
+  create(sessionId: string, description: string): Promise<Task>;
   /** 开始执行 */
-  start(taskId: string): void;
+  start(taskId: string): Promise<void>;
   /** 打断任务 */
-  interrupt(taskId: string, reason: string): void;
+  interrupt(taskId: string, reason: string): Promise<void>;
   /** 恢复任务 */
-  resume(taskId: string): void;
+  resume(taskId: string): Promise<void>;
   /** 完成任务 */
-  complete(taskId: string): void;
+  complete(taskId: string): Promise<void>;
   /** 取消任务 */
-  cancel(taskId: string): void;
+  cancel(taskId: string): Promise<void>;
+  /** 加载 session 的任务状态 */
+  loadSession(sessionId: string): Promise<void>;
   /** 获取 session 的所有任务 */
   getBySession(sessionId: string): Task[];
   /** 获取 session 的活跃任务（in_progress + interrupted） */

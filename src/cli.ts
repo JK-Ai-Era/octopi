@@ -206,9 +206,9 @@ async function chatCommand(args: CliArgs): Promise<void> {
     process.exit(1);
   }
 
-  // 动态导入 AgentLoop
-  const { AgentLoop } = await import('./agent/agent-loop.js');
-  const loop = new AgentLoop();
+  // 动态导入 AgentRunner
+  const { AgentRunner } = await import('./agent/agent-runner.js');
+  const loop = new AgentRunner();
 
   loop.registerProvider(provider);
 

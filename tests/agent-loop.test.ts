@@ -5,12 +5,12 @@
  * - ToolRegistry: 工具注册、获取、执行
  * - LLMRouter: Provider 注册、模型列表
  * - PluginManager: Hook 注册、拦截语义
- * - AgentLoop: 端到端消息处理、工具调用循环
+ * - AgentRunner: 端到端消息处理、工具调用循环
  * - Gateway: 创建和注册
  */
 
 import { describe, test, expect } from 'vitest';
-import { AgentLoop } from '../src/agent/agent-loop.js';
+import { AgentRunner } from '../src/agent/agent-runner.js';
 import { ToolRegistry } from '../src/tools/registry.js';
 import { LLMRouter } from '../src/providers/router.js';
 import { PluginManager } from '../src/plugins/manager.js';
@@ -270,13 +270,13 @@ describe('PluginManager', () => {
 });
 
 // ============================================================
-// AgentLoop 集成测试
+// AgentRunner 集成测试
 // ============================================================
 
-describe('AgentLoop', () => {
+describe('AgentRunner', () => {
   test('端到端消息处理', async () => {
     const agent = createMockAgent();
-    const loop = new AgentLoop();
+    const loop = new AgentRunner();
 
     loop.registerProvider(createMockLLMProvider());
 
@@ -292,7 +292,7 @@ describe('AgentLoop', () => {
 
   test('工具调用循环', async () => {
     const agent = createMockAgent();
-    const loop = new AgentLoop();
+    const loop = new AgentRunner();
 
     loop.registerProvider(createMockToolLLMProvider('greet', { name: 'World' }));
 
@@ -321,7 +321,7 @@ describe('AgentLoop', () => {
   });
 
   test('session write lock 保证串行', async () => {
-    const loop = new AgentLoop();
+    const loop = new AgentRunner();
 
     const lock1 = await loop.getSessionManager().acquireLock('test-session');
     let lock2Resolved = false;
@@ -343,7 +343,7 @@ describe('AgentLoop', () => {
 
   test('session 路由（per-peer）', async () => {
     const agent = createMockAgent();
-    const loop = new AgentLoop();
+    const loop = new AgentRunner();
 
     const msg1 = createMockChannelMessage({ senderId: 'user-a' });
     const msg2 = createMockChannelMessage({ senderId: 'user-b' });

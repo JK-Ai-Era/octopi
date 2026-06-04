@@ -2,7 +2,9 @@
 export * from './core/types.js';
 
 // Agent runtime
-export { AgentLoop } from './agent/agent-loop.js';
+export { AgentRunner, AgentRunnerConfig } from './agent/agent-runner.js';
+// Backward compatibility alias
+export { AgentRunner as AgentLoop } from './agent/agent-runner.js';
 export { SessionManager } from './agent/session-manager.js';
 
 // Gateway

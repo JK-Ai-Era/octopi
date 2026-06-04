@@ -44,6 +44,7 @@ function makeDecision(overrides: Partial<TaskDecision> = {}): string {
     newTask: null,
     completesTask: null,
     resumeTask: null,
+    cancelTask: null,
     reason: '',
   };
   return JSON.stringify({ ...base, ...overrides });
@@ -67,8 +68,8 @@ function extractHooks(pluginDef: { register: (api: PluginApi) => void }) {
   }
 
   return {
-    before_agent_reply: getHandler('before_agent_reply'),
-    before_prompt_build: getHandler('before_prompt_build'),
+    before_iteration: getHandler('before_iteration'),
+    after_iteration: getHandler('after_iteration'),
   };
 }
 
@@ -93,8 +94,8 @@ describe('TaskTracker', () => {
   });
 
   describe('CRUD', () => {
-    test('create 创建任务并设为 in_progress', () => {
-      const task = tracker.create(TEST_SESSION, '分析重构效果');
+    test('create 创建任务并设为 in_progress', async () => {
+      const task = await tracker.create(TEST_SESSION, '分析重构效果');
 
       expect(task.id).toBeTruthy();
       expect(task.sessionId).toBe(TEST_SESSION);
@@ -102,80 +103,80 @@ describe('TaskTracker', () => {
       expect(task.status).toBe('in_progress');
     });
 
-    test('interrupt 将 in_progress 任务标记为 interrupted', () => {
-      const task = tracker.create(TEST_SESSION, '分析重构效果');
-      tracker.interrupt(task.id, '用户发了新消息');
+    test('interrupt 将 in_progress 任务标记为 interrupted', async () => {
+      const task = await tracker.create(TEST_SESSION, '分析重构效果');
+      await tracker.interrupt(task.id, '用户发了新消息');
 
       const updated = tracker.get(task.id);
       expect(updated!.status).toBe('interrupted');
     });
 
-    test('interrupt 不影响非 in_progress 的任务', () => {
-      const task = tracker.create(TEST_SESSION, '分析重构效果');
-      tracker.complete(task.id);
-      tracker.interrupt(task.id, '不应生效');
+    test('interrupt 不影响非 in_progress 的任务', async () => {
+      const task = await tracker.create(TEST_SESSION, '分析重构效果');
+      await tracker.complete(task.id);
+      await tracker.interrupt(task.id, '不应生效');
 
       expect(tracker.get(task.id)!.status).toBe('completed');
     });
 
-    test('resume 将 interrupted 任务恢复为 in_progress', () => {
-      const task = tracker.create(TEST_SESSION, '分析重构效果');
-      tracker.interrupt(task.id, '被打断');
-      tracker.resume(task.id);
+    test('resume 将 interrupted 任务恢复为 in_progress', async () => {
+      const task = await tracker.create(TEST_SESSION, '分析重构效果');
+      await tracker.interrupt(task.id, '被打断');
+      await tracker.resume(task.id);
 
       expect(tracker.get(task.id)!.status).toBe('in_progress');
     });
 
-    test('resume 不影响非 interrupted 的任务', () => {
-      const task = tracker.create(TEST_SESSION, '分析重构效果');
-      tracker.resume(task.id);
+    test('resume 不影响非 interrupted 的任务', async () => {
+      const task = await tracker.create(TEST_SESSION, '分析重构效果');
+      await tracker.resume(task.id);
 
       expect(tracker.get(task.id)!.status).toBe('in_progress');
     });
 
-    test('complete 标记任务为 completed', () => {
-      const task = tracker.create(TEST_SESSION, '分析重构效果');
-      tracker.complete(task.id);
+    test('complete 标记任务为 completed', async () => {
+      const task = await tracker.create(TEST_SESSION, '分析重构效果');
+      await tracker.complete(task.id);
 
       expect(tracker.get(task.id)!.status).toBe('completed');
     });
 
-    test('cancel 标记任务为 cancelled', () => {
-      const task = tracker.create(TEST_SESSION, '分析重构效果');
-      tracker.cancel(task.id);
+    test('cancel 标记任务为 cancelled', async () => {
+      const task = await tracker.create(TEST_SESSION, '分析重构效果');
+      await tracker.cancel(task.id);
 
       expect(tracker.get(task.id)!.status).toBe('cancelled');
     });
   });
 
   describe('查询', () => {
-    test('getBySession 返回 session 的所有任务', () => {
-      tracker.create(TEST_SESSION, '任务 1');
-      tracker.create(TEST_SESSION, '任务 2');
-      tracker.create('other-session', '任务 3');
+    test('getBySession 返回 session 的所有任务', async () => {
+      await tracker.create(TEST_SESSION, '任务 1');
+      await tracker.create(TEST_SESSION, '任务 2');
+      await tracker.create('other-session', '任务 3');
 
       const tasks = tracker.getBySession(TEST_SESSION);
       expect(tasks).toHaveLength(2);
     });
 
-    test('getActiveTasks 只返回 in_progress 和 interrupted', () => {
-      const t1 = tracker.create(TEST_SESSION, '任务 1');
-      const t2 = tracker.create(TEST_SESSION, '任务 2');
-      const t3 = tracker.create(TEST_SESSION, '任务 3');
+    test('getActiveTasks 只返回 in_progress 和 interrupted', async () => {
+      const t1 = await tracker.create(TEST_SESSION, '任务 1');
+      const t2 = await tracker.create(TEST_SESSION, '任务 2');
+      const t3 = await tracker.create(TEST_SESSION, '任务 3');
 
-      tracker.interrupt(t2.id, '被打断');
-      tracker.complete(t3.id);
+      await tracker.interrupt(t2.id, '被打断');
+      await tracker.complete(t3.id);
 
       const active = tracker.getActiveTasks(TEST_SESSION);
       expect(active).toHaveLength(2);
       expect(active.map((t) => t.status).sort()).toEqual(['in_progress', 'interrupted']);
     });
 
-    test('getInterruptedTasks 只返回 interrupted', () => {
-      const t1 = tracker.create(TEST_SESSION, '任务 1');
-      const t2 = tracker.create(TEST_SESSION, '任务 2');
+    test('getInterruptedTasks 只返回 interrupted', async () => {
+      const t1 = await tracker.create(TEST_SESSION, '任务 1');
+      const t2 = await tracker.create(TEST_SESSION, '任务 2');
 
-      tracker.interrupt(t1.id, '被打断');
+      await tracker.interrupt(t1.id, '被打断');
 
       const interrupted = tracker.getInterruptedTasks(TEST_SESSION);
       expect(interrupted).toHaveLength(1);
@@ -193,9 +194,9 @@ describe('TaskTracker', () => {
   });
 
   describe('持久化', () => {
-    test('事件写入 JSONL 文件', () => {
-      const task = tracker.create(TEST_SESSION, '测试任务');
-      tracker.complete(task.id);
+    test('事件写入 JSONL 文件', async () => {
+      const task = await tracker.create(TEST_SESSION, '测试任务');
+      await tracker.complete(task.id);
 
       const filePath = join(dataDir, TEST_SESSION, 'tasks.jsonl');
       expect(existsSync(filePath)).toBe(true);
@@ -212,12 +213,12 @@ describe('TaskTracker', () => {
       expect(completeEvent.action).toBe('complete');
     });
 
-    test('loadSession 从 JSONL 重建状态', () => {
-      const task = tracker.create(TEST_SESSION, '持久化测试');
-      tracker.interrupt(task.id, '被打断');
+    test('loadSession 从 JSONL 重建状态', async () => {
+      const task = await tracker.create(TEST_SESSION, '持久化测试');
+      await tracker.interrupt(task.id, '被打断');
 
       const tracker2 = new TaskTracker(dataDir);
-      tracker2.loadSession(TEST_SESSION);
+      await tracker2.loadSession(TEST_SESSION);
 
       const tasks = tracker2.getBySession(TEST_SESSION);
       expect(tasks).toHaveLength(1);
@@ -225,34 +226,34 @@ describe('TaskTracker', () => {
       expect(tasks[0].status).toBe('interrupted');
     });
 
-    test('loadSession 不存在的 session 不报错', () => {
-      tracker.loadSession('nonexistent-session');
+    test('loadSession 不存在的 session 不报错', async () => {
+      await tracker.loadSession('nonexistent-session');
       expect(tracker.getBySession('nonexistent-session')).toHaveLength(0);
     });
   });
 
   describe('完整生命周期', () => {
-    test('create → interrupt → resume → complete', () => {
-      const task = tracker.create(TEST_SESSION, '完整生命周期测试');
+    test('create → interrupt → resume → complete', async () => {
+      const task = await tracker.create(TEST_SESSION, '完整生命周期测试');
 
-      tracker.interrupt(task.id, '用户发了新消息');
+      await tracker.interrupt(task.id, '用户发了新消息');
       expect(tracker.get(task.id)!.status).toBe('interrupted');
       expect(tracker.getActiveTasks(TEST_SESSION)).toHaveLength(1);
 
-      tracker.resume(task.id);
+      await tracker.resume(task.id);
       expect(tracker.get(task.id)!.status).toBe('in_progress');
 
-      tracker.complete(task.id);
+      await tracker.complete(task.id);
       expect(tracker.get(task.id)!.status).toBe('completed');
       expect(tracker.getActiveTasks(TEST_SESSION)).toHaveLength(0);
     });
 
-    test('多任务并发', () => {
-      const t1 = tracker.create(TEST_SESSION, '任务 1');
-      const t2 = tracker.create(TEST_SESSION, '任务 2');
+    test('多任务并发', async () => {
+      const t1 = await tracker.create(TEST_SESSION, '任务 1');
+      const t2 = await tracker.create(TEST_SESSION, '任务 2');
 
-      tracker.interrupt(t1.id, '被打断');
-      tracker.complete(t2.id);
+      await tracker.interrupt(t1.id, '被打断');
+      await tracker.complete(t2.id);
 
       expect(tracker.getActiveTasks(TEST_SESSION)).toHaveLength(1);
       expect(tracker.getInterruptedTasks(TEST_SESSION)).toHaveLength(1);
@@ -410,6 +411,93 @@ describe('TaskManager', () => {
 
     expect(result.completesTask).toBe('task-1');
   });
+
+  // ─────────────────────────────────────────────
+  // Phase 6: JSON 解析边界 case 测试
+  // ─────────────────────────────────────────────
+
+  test('LLM 输出包含多个 JSON 对象时取最后一个', async () => {
+    // LLM 可能在前面输出一些思考过程，最后才是真正的决策
+    const multipleJson = '{"thinking": "分析中..."} \n {"newTask": "最终任务", "reason": "用户描述了新工作"}';
+
+    const provider = createMockProvider([multipleJson]);
+    const manager = new TaskManager(provider, 'mock-task-model');
+
+    const result = await manager.decide({
+      sessionId: TEST_SESSION,
+      currentTasks: [],
+      newMessage: '测试',
+      recentContext: '',
+    });
+
+    // 应取最后一个 JSON 对象
+    expect(result.newTask).toBe('最终任务');
+  });
+
+  test('LLM 输出字段类型错误时正确处理', async () => {
+    // interruptedTasks 应该是数组，但 LLM 输出为字符串
+    const invalidTypes = JSON.stringify({
+      injectTaskContext: 'true', // 应该是 boolean
+      taskContext: null, // 应该是 string
+      interruptedTasks: 'not-an-array', // 应该是数组
+      newTask: { nested: 'object' }, // 应该是 string 或 null
+      completesTask: 123, // 应该是 string 或 null
+      reason: undefined, // 应该是 string
+    });
+
+    const provider = createMockProvider([invalidTypes]);
+    const manager = new TaskManager(provider, 'mock-task-model');
+
+    const result = await manager.decide({
+      sessionId: TEST_SESSION,
+      currentTasks: [],
+      newMessage: '测试',
+      recentContext: '',
+    });
+
+    // 类型校验后应返回正确的默认值
+    expect(result.injectTaskContext).toBe(false); // 'true' -> false
+    expect(result.taskContext).toBe(''); // null -> ''
+    expect(result.interruptedTasks).toEqual([]); // string -> []
+    expect(result.newTask).toBeNull(); // object -> null
+    expect(result.completesTask).toBeNull(); // number -> null
+    expect(result.reason).toBe('TaskManager 未返回有效决策'); // undefined -> default
+  });
+
+  test('LLM 输出无 JSON 内容时返回默认决策', async () => {
+    const provider = createMockProvider(['这是一段纯文本回复，没有任何 JSON。']);
+    const manager = new TaskManager(provider, 'mock-task-model');
+
+    const result = await manager.decide({
+      sessionId: TEST_SESSION,
+      currentTasks: [],
+      newMessage: '测试',
+      recentContext: '',
+    });
+
+    expect(result.injectTaskContext).toBe(false);
+    expect(result.newTask).toBeNull();
+    expect(result.interruptedTasks).toEqual([]);
+    expect(result.reason).toBe('TaskManager 未返回有效决策');
+  });
+
+  test('LLM 输出 JSON 语法错误时返回默认决策', async () => {
+    // 截断的 JSON
+    const truncatedJson = '{"newTask": "分析代码", "interruptedTasks": ["task-1", "task-2"'; // 缺少闭合
+
+    const provider = createMockProvider([truncatedJson]);
+    const manager = new TaskManager(provider, 'mock-task-model');
+
+    const result = await manager.decide({
+      sessionId: TEST_SESSION,
+      currentTasks: [],
+      newMessage: '测试',
+      recentContext: '',
+    });
+
+    expect(result.injectTaskContext).toBe(false);
+    expect(result.newTask).toBeNull();
+  });
 });
 
 // ─────────────────────────────────────────────
@@ -444,7 +532,7 @@ describe('createTaskManagerPlugin', () => {
     expect(typeof plugin.register).toBe('function');
   });
 
-  test('register 后有 before_agent_reply 和 before_prompt_build hooks', () => {
+  test('register 后有 before_iteration 和 after_iteration hooks', () => {
     const provider = createMockProvider([makeDecision()]);
     const config: TaskManagerConfig = {
       enabled: true,
@@ -456,8 +544,8 @@ describe('createTaskManagerPlugin', () => {
     const plugin = createTaskManagerPlugin(provider, config);
     const hooks = extractHooks(plugin);
 
-    expect(hooks.before_agent_reply).toBeDefined();
-    expect(hooks.before_prompt_build).toBeDefined();
+    expect(hooks.before_iteration).toBeDefined();
+    expect(hooks.after_iteration).toBeDefined();
   });
 
   test('决策新建任务后 tracker 有记录', async () => {
@@ -477,33 +565,26 @@ describe('createTaskManagerPlugin', () => {
     const plugin = createTaskManagerPlugin(provider, config);
     const hooks = extractHooks(plugin);
 
-    await hooks.before_agent_reply!({
+    await hooks.before_iteration!({
       sessionId: TEST_SESSION,
-      agentId: 'test-agent',
+      iteration: 0,
       messages: [
         { role: 'user', content: '帮我分析代码质量', timestamp: Date.now() },
       ],
+      model: 'test-model',
+      ctx: { sessionId: TEST_SESSION, turnId: 'turn-0', turnIndex: 0 },
     });
 
-    // 通过 plugin 定义访问 tracker（plugin 闭包中的 tracker）
-    // 需要通过 PluginApi 获取
-    const api = new PluginApi('test', 'test-plugin');
-    plugin.register(api);
-
     // 验证 hook 通过 PluginManager 执行
-    const { PluginManager } = await import('../src/plugins/manager.js');
-    const pm = new PluginManager({ loadPaths: [] });
-    // 手动注册 plugin 的 hooks
     const testApi = new PluginApi('test-task', 'task-manager');
     plugin.register(testApi);
 
-    // 通过 api._hooks 获取 handler 并执行
-    const entries = testApi._hooks.get('before_agent_reply');
+    const entries = testApi._hooks.get('before_iteration');
     expect(entries).toBeDefined();
     expect(entries!.length).toBeGreaterThan(0);
   });
 
-  test('before_prompt_build 注入任务上下文', async () => {
+  test('before_iteration 注入任务上下文', async () => {
     const decision = makeDecision({
       injectTaskContext: true,
       taskContext: '<task_context>\n你有一个未完成的任务：分析重构效果\n</task_context>',
@@ -521,32 +602,19 @@ describe('createTaskManagerPlugin', () => {
     const plugin = createTaskManagerPlugin(provider, config);
     const hooks = extractHooks(plugin);
 
-    // before_agent_reply 缓存 context
-    await hooks.before_agent_reply!({
+    // before_iteration 直接返回 prependContext
+    const result = await hooks.before_iteration!({
       sessionId: TEST_SESSION,
-      agentId: 'test-agent',
+      iteration: 0,
       messages: [
         { role: 'user', content: '继续', timestamp: Date.now() },
       ],
+      model: 'test-model',
+      ctx: { sessionId: TEST_SESSION, turnId: 'turn-0', turnIndex: 0 },
     });
 
-    // before_prompt_build 返回注入内容
-    const promptResult = await hooks.before_prompt_build!({
-      sessionId: TEST_SESSION,
-      agentId: 'test-agent',
-      messages: [],
-    });
-
-    expect(promptResult).not.toBeNull();
-    expect(promptResult!.prependContext).toContain('分析重构效果');
-
-    // 第二次调用应该返回 null（用完即删）
-    const secondResult = await hooks.before_prompt_build!({
-      sessionId: TEST_SESSION,
-      agentId: 'test-agent',
-      messages: [],
-    });
-    expect(secondResult).toBeNull();
+    expect(result).not.toBeNull();
+    expect(result!.prependContext).toContain('分析重构效果');
   });
 
   test('无任务时不注入上下文', async () => {
@@ -566,21 +634,17 @@ describe('createTaskManagerPlugin', () => {
     const plugin = createTaskManagerPlugin(provider, config);
     const hooks = extractHooks(plugin);
 
-    await hooks.before_agent_reply!({
+    const result = await hooks.before_iteration!({
       sessionId: TEST_SESSION,
-      agentId: 'test-agent',
+      iteration: 0,
       messages: [
         { role: 'user', content: '你好', timestamp: Date.now() },
       ],
+      model: 'test-model',
+      ctx: { sessionId: TEST_SESSION, turnId: 'turn-0', turnIndex: 0 },
     });
 
-    const promptResult = await hooks.before_prompt_build!({
-      sessionId: TEST_SESSION,
-      agentId: 'test-agent',
-      messages: [],
-    });
-
-    expect(promptResult).toBeNull();
+    expect(result).toBeNull();
   });
 
   test('决策中断任务后状态更新', async () => {
@@ -602,23 +666,27 @@ describe('createTaskManagerPlugin', () => {
     const hooks = extractHooks(plugin);
 
     // 第一次调用：创建任务
-    await hooks.before_agent_reply!({
+    await hooks.before_iteration!({
       sessionId: TEST_SESSION,
-      agentId: 'test-agent',
+      iteration: 0,
       messages: [
         { role: 'user', content: '分析重构效果', timestamp: Date.now() },
       ],
+      model: 'test-model',
+      ctx: { sessionId: TEST_SESSION, turnId: 'turn-0', turnIndex: 0 },
     });
 
     // 第二次调用：中断
-    await hooks.before_agent_reply!({
+    await hooks.before_iteration!({
       sessionId: TEST_SESSION,
-      agentId: 'test-agent',
+      iteration: 1,
       messages: [
         { role: 'user', content: '分析重构效果', timestamp: Date.now() },
         { role: 'assistant', content: '好的', timestamp: Date.now() },
         { role: 'user', content: '帮我查天气', timestamp: Date.now() },
       ],
+      model: 'test-model',
+      ctx: { sessionId: TEST_SESSION, turnId: 'turn-1', turnIndex: 1 },
     });
   });
 });

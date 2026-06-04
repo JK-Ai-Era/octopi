@@ -1,9 +1,9 @@
-# Octopi — 架构设计文档 v3
+# Octopi — 架构设计文档 v4
 
 > 可嵌入的 Agent 底座框架，参考 OpenClaw 架构设计
 
 **最后更新**: 2026-06-02
-**测试覆盖**: 120 tests, 6 test files (all passing)
+**测试覆盖**: 145 tests, 7 test files (all passing)
 
 ---
 
@@ -16,6 +16,7 @@
 5. **Skill 两阶段加载** — 元数据始终在 prompt，全文按需读取
 6. **Markdown 即记忆** — 记忆是文件，不是数据库 blob
 7. **Capability Ownership** — 每个能力有且仅有一个 owner
+8. **事件流原生** — Agent Loop 是 AsyncIterable，天然支持流式输出、中断、可观测性
 
 ---
 
@@ -36,8 +37,16 @@
 │  └──────┬───────┘  └──────┬───────┘  └────────┬───────────┘  │
 │         │                 │                    │              │
 │  ┌──────▼─────────────────▼────────────────────▼───────────┐  │
-│  │                   Agent Loop                              │  │
-│  │  ingest → assemble → model infer → tool exec → reply     │  │
+│  │              Agent Loop (AsyncIterable<AgentEvent>)      │  │
+│  │                                                         │  │
+│  │  Layer 1: Meta-Decision (LoopAdvisor[])                 │  │
+│  │       ↓                                                 │  │
+│  │  Layer 2: LLM Decision (ContextEngine → LLM → Response) │  │
+│  │       ↓                                                 │  │
+│  │  Layer 3: Tool Execution (validate → dedup → execute)   │  │
+│  │                                                         │  │
+│  │  Cross-cutting: IterationBudget / ErrorClassifier       │  │
+│  │                 AbortSignal / RetryPolicy               │  │
 │  └──────────────┬──────────────────────┬───────────────────┘  │
 │                 │                      │                      │
 │  ┌──────────────▼───────┐  ┌───────────▼──────────────────┐  │
@@ -49,6 +58,21 @@
 │  │  Tool         │  │  LLM         │  │  Skill             │  │
 │  │  Registry     │  │  Router      │  │  Manager           │  │
 │  └──────────────┘  └──────────────┘  └────────────────────┘  │
+│                                                              │
+│  ┌──────────────────────────────────────────────────────────┐ │
+│  │  Loop Advisor Chain                                      │ │
+│  │  ┌───────────────┐  ┌──────────┐  ┌──────────────────┐  │ │
+│  │  │ TaskManager    │  │ Steering │  │  Policy (future) │  │ │
+│  │  │ priority=10    │  │ prio=20  │  │  priority=30     │  │ │
+│  │  └───────────────┘  └──────────┘  └──────────────────┘  │ │
+│  └──────────────────────────────────────────────────────────┘ │
+│                                                              │
+│  ┌──────────────────────────────────────────────────────────┐ │
+│  │  Multi-Agent Runtime                                      │ │
+│  │  ┌──────┐ ┌──────┐ ┌──────┐                             │ │
+│  │  │Agent1│ │Agent2│ │Agent3│  ← 完全隔离                  │ │
+│  │  └──────┘ └──────┘ └──────┘                             │ │
+│  └──────────────────────────────────────────────────────────┘ │
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -59,11 +83,17 @@
 ```
 src/
 ├── core/
-│   └── types.ts              # 所有核心类型定义（消息、Agent、Session、Tool、Plugin 等）
+│   └── types.ts              # 所有核心类型定义（消息、Agent、Session、Tool、Plugin、AgentEvent 等）
+├── loop/                     # ✅ 新 Agent Loop 模块
+│   ├── agent-loop.ts         # runAgentLoop() 异步生成器（三层架构核心循环）
+│   ├── iteration-budget.ts   # IterationBudget（防无限循环计数器）
+│   ├── error-classifier.ts   # ErrorClassifier（7 种错误分类 + jitteredBackoff）
+│   ├── message-converter.ts  # MessageConverter（内部/LLM 消息格式转换）
+│   └── index.ts              # 统一导出
 ├── gateway/
 │   └── gateway.ts            # Gateway 守护进程（消息路由、Agent 管理、生命周期）
 ├── agent/
-│   ├── agent-loop.ts         # 核心执行循环（assemble → LLM → tool exec → reply）
+│   ├── agent-loop.ts         # 旧 AgentLoop class（保留兼容，事件类型已更新）
 │   └── session-manager.ts    # Session CRUD、write lock、JSONL 持久化
 ├── context/
 │   └── engine.ts             # LegacyContextEngine（尾部裁剪 + token 估算）
@@ -78,9 +108,10 @@ src/
 ├── skills/
 │   └── manager.ts            # DefaultSkillManager（两阶段加载）
 ├── tasks/
+│   ├── advisor.ts            # ✅ TaskManagerAdvisor（LoopAdvisor 桥接）
 │   ├── tracker.ts            # TaskTracker（任务状态机 CRUD）
 │   ├── task-manager.ts       # TaskManager（LLM 轻量决策器）
-│   ├── plugin.ts             # TaskManagerPlugin（hook 集成层）
+│   ├── plugin.ts             # TaskManagerPlugin（旧 hook 集成层，保留兼容）
 │   ├── types.ts              # 任务系统类型定义
 │   └── index.ts              # 统一导出
 ├── tools/
@@ -133,47 +164,122 @@ class Gateway {
 }
 ```
 
-### 2. Agent Loop — 核心执行循环
+### 2. Agent Loop — 三层架构核心执行循环
 
-Agent Loop 是框架的"心脏"，实现完整的消息处理流程。
+Agent Loop 是框架的"心脏"。采用事件流原生设计，是一个 `AsyncIterable<AgentEvent>`。
+
+**三层架构：**
+
+```
+┌───────────────────────────────────────────────┐
+│  Layer 1: Meta-Decision (顾问层)               │
+│                                               │
+│  LoopAdvisor[] — 按 priority 排序执行          │
+│  输出: MetaDecision (inject/override/stop)     │
+└───────────────────┬───────────────────────────┘
+                    ↓
+┌───────────────────────────────────────────────┐
+│  Layer 2: LLM Decision (模型层)                │
+│                                               │
+│  ContextEngine.assemble() → LLMProvider       │
+│  输出: content + toolCalls                     │
+└───────────────────┬───────────────────────────┘
+                    ↓
+┌───────────────────────────────────────────────┐
+│  Layer 3: Tool Execution (执行层)              │
+│                                               │
+│  参数验证 → 修复 → 去重 → 截断检测 → 执行      │
+│  输出: ToolResult[]                             │
+└───────────────────┬───────────────────────────┘
+                    ↓
+               检查 shouldContinue
+```
 
 **执行流程：**
 
 ```
-1. 获取 session write lock（保证同一 session 串行执行）
-2. Context Engine: ingest（通知新消息到达）
-3. Plugin: before_agent_reply（可拦截返回合成回复）
-4. Skill 描述注入（所有 Skill 的 name+description 注入 system prompt）
-5. 核心循环（最多 N 次迭代）：
-   a. Context Engine: assemble（组装上下文、裁剪消息）
-   b. Plugin: before_model_resolve（可覆盖模型选择）
-   c. Plugin: before_prompt_build（可注入额外上下文）
-   d. LLM 调用
-   e. 如果有 tool_calls → Plugin: before_tool_call → 执行工具 → Plugin: after_tool_call → 继续循环
-   f. 如果是纯文本 → 完成
-6. Context Engine: afterTurn
-7. 持久化 → 释放 session write lock
+1. 检查中断 / 预算 / 最大轮次
+2. Layer 1: Meta-Decision（遍历 advisor 链）
+   → 消息注入 / 参数覆盖 / 决定停止
+3. Layer 2: LLM Decision（ContextEngine 组装 → LLM 调用）
+   → 无 tool calls → 返回最终响应（loop_end completed）
+   → 有 tool calls → 进入执行层
+4. Layer 3: Tool Execution（参数验证/去重 → 逐个执行）
+5. Turn 后处理（通知 advisors → 检查 steering → 继续循环）
 ```
 
-**关键设计：**
-- **Session Write Lock**: 同一 session 同时只有一个 Agent Loop 运行，防止并发冲突
-- **最大迭代保护**: 默认 10 次，防止无限工具调用循环
-- **Plugin 全链路拦截**: 每个关键节点都可被 Plugin 拦截或观察
+**事件流示例：**
 
 ```typescript
-// AgentLoop 核心 API
-class AgentLoop {
-  registerTool(tool: RegisteredTool, agentId?: string): void;
-  registerProvider(provider: LLMProvider): void;
-  registerContextEngine(engine: ContextEngine): void;
-  getPluginManager(): PluginManager;
-  discoverSkills(directory: string): Promise<void>;
-  resolveSession(agent: AgentDefinition, msg: ChannelMessage, dmScope: string): SessionMeta;
-  processMessage(agent: AgentDefinition, session: SessionMeta, msg: ChannelMessage): Promise<Message>;
+for await (const event of runAgentLoop(config, input, signal)) {
+  switch (event.type) {
+    case 'loop_start':          // 循环开始
+    case 'turn_start':          // 一轮开始
+    case 'advisor_call':        // advisor 被调用
+    case 'messages_injected':   // 消息被注入
+    case 'llm_request':         // LLM 请求发出
+    case 'llm_stream_delta':    // 流式增量
+    case 'llm_response':        // LLM 响应完成
+    case 'tool_call_start':     // 工具开始执行
+    case 'tool_call_result':    // 工具执行完成
+    case 'loop_end':            // 循环结束（completed/max_turns/budget_exhausted/advisor_stop/interrupted/error）
+  }
 }
 ```
 
-### 3. Session Manager — 会话状态管理
+**关键设计：**
+- **AsyncIterable 原生** — 天然支持流式输出、中断控制、外部可观测性
+- **IterationBudget** — 默认 90 次迭代，防无限循环
+- **ErrorClassifier** — 7 种错误分类，各有不同的重试策略
+- **AbortSignal** — 任意点中断
+
+```typescript
+// 新 Loop 核心 API
+async function* runAgentLoop(
+  config: AgentLoopConfig,
+  input: Message,
+  signal?: AbortSignal,
+): AsyncIterable<AgentEvent>
+```
+
+### 3. Loop Advisor — 统一的循环扩展点
+
+Loop Advisor 是 Agent Loop 的核心扩展机制。每轮迭代前，按 priority 依次调用所有注册的 Advisor。
+
+```typescript
+interface LoopAdvisor {
+  name: string
+  priority: number  // 越小越先执行
+  beforeTurn(ctx: AdvisorContext): Promise<MetaDecision | null>
+  afterTurn?(ctx: AdvisorContext, result: TurnResult): Promise<void>
+  onLoopEnd?(ctx: AdvisorContext): Promise<void>
+}
+```
+
+**MetaDecision 能力：**
+
+| 能力 | 字段 | 说明 |
+|------|------|------|
+| 消息注入 | `injectMessages` | 向当前轮次注入额外消息 |
+| 模型覆盖 | `overrideModel` | 临时切换到其他模型 |
+| Thinking 覆盖 | `overrideThinking` | 调整 thinking level |
+| 停止循环 | `shouldStop + stopReason` | 决定不再调用 LLM |
+| 任务上下文 | `taskContext` | 注入到 system prompt |
+
+**已实现的 Advisor：**
+
+| Advisor | Priority | 职责 |
+|---------|----------|------|
+| `TaskManagerAdvisor` | 10 | 每轮前判断消息意图，注入任务上下文 |
+
+**预留的 Advisor 位置：**
+
+| Advisor | Priority | 职责 |
+|---------|----------|------|
+| `SteeringAdvisor` | 20 | 处理 steering 消息（中途指令） |
+| `PolicyAdvisor` | 30 | 安全策略检查（敏感词、权限等） |
+
+### 4. Session Manager — 会话状态管理
 
 Session 是对话的完整生命周期，一个 Session 对应一个 Agent + 一个渠道 + 一个对等方。
 
@@ -185,7 +291,7 @@ Session 是对话的完整生命周期，一个 Session 对应一个 Agent + 一
 
 **持久化格式：** JSONL（每行一个消息或 turn 记录）
 
-### 4. Context Engine — 上下文组装
+### 5. Context Engine — 上下文组装
 
 4 阶段生命周期，每个阶段可被 Plugin 替换：
 
@@ -202,7 +308,7 @@ Session 是对话的完整生命周期，一个 Session 对应一个 Agent + 一
 - `compact`: no-op（不自己管理压缩）
 - `afterTurn`: no-op
 
-### 5. Plugin System — 完整的插件生命周期
+### 6. Plugin System — 完整的插件生命周期
 
 Plugin 系统对齐 OpenClaw Plugin Architecture，提供 4 层加载管线。
 
@@ -247,7 +353,7 @@ my-plugin/
 - 冲突检测：两个 plugin 注册同名 tool 时报错
 - 排他性 Slots：某些能力类型（memory、context-engine）同一时刻只能有一个 active
 
-### 6. Hook System — 全链路拦截
+### 7. Hook System — 全链路拦截
 
 Hook 按 priority 降序执行，支持拦截语义和超时控制。
 
@@ -284,7 +390,7 @@ priority: 0   → handler_3() → 返回结果
 | `after_compaction` | 观察 | — | Context 压缩后触发 |
 | `before_install` | 拦截 | `{ block: true }` | Skill/Plugin 安装前触发 |
 
-### 7. Skill System — 两阶段加载
+### 8. Skill System — 两阶段加载
 
 Skill 是 Tool 之上的结构化经验层。Tool 是原子能力，Skill 是"怎么用工具做好一件事"。
 
@@ -323,25 +429,35 @@ Use the read tool to load a skill file when needed.
 - 支持热重载（每次从文件读取最新内容）
 - `disableModelInvocation: true` 的 Skill 不注入 prompt，只能显式调用
 
-### 8. Task System — 基于 Plugin 的任务管理
+### 9. Task System — 基于 LoopAdvisor 的任务管理
 
-任务系统通过 Plugin 机制实现，零侵入 Agent Loop。
+任务系统通过 `TaskManagerAdvisor`（LoopAdvisor 实现）集成到 Agent Loop，在每轮迭代前判断消息意图并注入任务上下文。
 
 **问题：** Agent 天然活在"当前对话"里，用户中途切换话题，Agent 就忘了之前的任务。
 
-**解决方案：**
+**两种集成方式：**
+
+| 方式 | 接口 | 状态 |
+|------|------|------|
+| LoopAdvisor | `TaskManagerAdvisor` | ✅ 新架构，推荐 |
+| Plugin Hook | `TaskManagerPlugin` | ✅ 保留兼容 |
+
+**核心流程（LoopAdvisor 方式）：**
+
 ```
-用户消息 → before_agent_reply hook
-               ↓
-         TaskManager (轻量 LLM) 判断消息意图
-               ↓
-         更新任务状态 + 缓存 taskContext
-               ↓
-         before_prompt_build hook
-               ↓
-         注入 taskContext 到 system prompt
-               ↓
-         主 LLM 看到上下文，自然地继续/确认/忽略
+用户消息到达
+    ↓
+TaskManagerAdvisor.beforeTurn()（priority=10，最先执行）
+    ↓
+TaskManager (轻量 LLM) 判断消息意图
+    ↓
+更新任务状态 + 构建 taskContext
+    ↓
+返回 MetaDecision { taskContext }
+    ↓
+Loop 注入 taskContext 到 system prompt
+    ↓
+主 LLM 看到上下文，自然地继续/确认/忽略
 ```
 
 **任务状态机：**
@@ -360,9 +476,42 @@ Use the read tool to load a skill file when needed.
 **组件：**
 - **TaskTracker**: 纯状态管理，JSONL append-only 持久化
 - **TaskManager**: 轻量 LLM 做消息分类（gpt-4o-mini 级别即可）
-- **TaskManagerPlugin**: 通过 `before_agent_reply` + `before_prompt_build` 集成
+- **TaskManagerAdvisor**: 包装为 LoopAdvisor，新架构推荐
+- **TaskManagerPlugin**: 通过 hooks 集成，保留兼容
 
-### 9. Tool System — 全局/Agent 级工具管理
+### 10. Error Classifier — 智能错误处理
+
+7 种错误类型，各有不同的重试策略：
+
+| 错误类型 | 可重试 | 策略 |
+|---------|--------|------|
+| `rate_limit` | ✅ | 尊重 Retry-After 头，exponential backoff |
+| `network` | ✅ | exponential backoff + jitter |
+| `timeout` | ✅ | exponential backoff |
+| `server` (5xx) | ✅ | exponential backoff |
+| `context_length` | ❌ | 压缩上下文后重试（不是 backoff 重试） |
+| `auth` | ❌ | 不重试，直接报错 |
+| `billing` | ❌ | 不重试，直接报错 |
+
+**重试策略：** `jitteredBackoff(attempt, baseDelayMs, maxDelayMs)`
+- 基础延迟 × 2^attempt
+- 加 0~25% 随机抖动（防止 thundering herd）
+- 尊重 rate limit 的 Retry-After 头
+
+### 11. IterationBudget — 循环防爆
+
+```typescript
+class IterationBudget {
+  consume(): boolean      // 消费一次迭代，返回是否允许
+  refund(): void          // 退还一次（如程序化工具调用）
+  consumeGrace(): boolean // 预算耗尽后给一次额外机会，仅一次
+  reset(): void           // 重置（新 session 时）
+}
+```
+
+默认预算：90 次迭代。父 Agent 的预算来自 `config.iterationBudget`。
+
+### 12. Tool System — 全局/Agent 级工具管理
 
 **工具优先级：** Agent 级工具 > 全局工具
 
@@ -382,7 +531,7 @@ registry.getDefinitionsForLLM(agentId);   // 转换为 OpenAI function calling �
 registry.execute(name, args, context);    // 执行（含参数校验）
 ```
 
-### 10. Provider System — LLM 路由
+### 13. Provider System — LLM 路由
 
 **LLMRouter** 管理多个 LLM Provider，按名称路由请求。
 
@@ -392,7 +541,7 @@ registry.execute(name, args, context);    // 执行（含参数校验）
 
 **Agent 通过 `ModelConfig` 指定 provider + model，支持 fallback。**
 
-### 11. Memory System — 文件即记忆
+### 14. Memory System — 文件即记忆
 
 设计目标：记忆不锁在数据库里，应该是人类可读可编辑的文件。
 
@@ -412,7 +561,7 @@ workspace/
 
 **当前状态：** 接口已定义，完整实现待开发。
 
-### 12. Command Queue — 消息队列模式
+### 15. Command Queue — 消息队列模式
 
 定义了多消息并发到达时的处理策略：
 
@@ -474,9 +623,10 @@ workspace/
 
 | 测试文件 | 覆盖模块 | 测试数 |
 |----------|----------|--------|
-| `agent-loop.test.ts` | AgentLoop, ToolRegistry, LLMRouter, PluginManager, Gateway | ~30 |
+| `loop.test.ts` | IterationBudget, ErrorClassifier, MessageConverter, runAgentLoop 集成 | 25 |
+| `agent-loop.test.ts` | AgentLoop, ToolRegistry, LLMRouter, PluginManager, Gateway | 17 |
 | `task-system.test.ts` | TaskTracker, TaskManager | ~40 |
-| `task-integration.test.ts` | TaskManagerPlugin 集成、多 Plugin 共存、错误恢复 | ~30 |
+| `task-integration.test.ts` | TaskManagerPlugin 集成、多 Plugin 共存、错误恢复 | ~19 |
 | `skill-manager.test.ts` | DefaultSkillManager 两阶段加载 | ~10 |
 | `openclaw-compat.test.ts` | OpenClaw 兼容性 | ~5 |
 | `anthropic-provider.test.ts` | AnthropicProvider | ~5 |
@@ -487,13 +637,15 @@ workspace/
 
 | 模块 | 状态 | 说明 |
 |------|------|------|
-| Core Types | ✅ 完整 | 消息、Agent、Session、Tool、Plugin、Channel 等所有类型 |
+| Core Types | ✅ 完整 | 消息、Agent、Session、Tool、Plugin、AgentEvent(28种) 等所有类型 |
+| Agent Loop (新) | ✅ 完整 | AsyncIterable 三层架构、IterationBudget、ErrorClassifier、MessageConverter |
+| Loop Advisor | ✅ 完整 | LoopAdvisor 接口 + TaskManagerAdvisor 桥接 |
+| Agent Loop (旧) | ✅ 兼容 | 旧 AgentLoop class，事件类型已更新 |
 | Gateway | ✅ 完整 | 消息路由、Agent 管理、Plugin 生命周期 |
-| Agent Loop | ✅ 完整 | 核心执行循环、session write lock、最大迭代保护 |
 | Session Manager | ✅ 完整 | CRUD、write lock、JSONL 持久化 |
 | Plugin System | ✅ 完整 | 4 层加载管线、hook 执行、capability ownership |
 | Skill System | ✅ 完整 | 两阶段加载、system prompt 注入、热重载 |
-| Task System | ✅ 完整 | 状态机、LLM 决策器、Plugin 集成 |
+| Task System | ✅ 完整 | 状态机、LLM 决策器、LoopAdvisor + Plugin 双集成 |
 | Tool Registry | ✅ 完整 | 全局/Agent 级、策略、LLM 格式转换 |
 | Builtin Tools | ✅ 完整 | shell、file_read、file_write、file_list |
 | LLM Providers | ✅ 完整 | OpenAI + Anthropic |
@@ -514,6 +666,7 @@ workspace/
 | 部署 | 单机守护进程 | 可嵌入现有应用，也可独立部署 |
 | 复杂度 | 高（生产级） | 中（框架级，应用层自由发挥） |
 | 学习成本 | 需要了解整个生态 | 接口优先，渐进式采用 |
+| Agent Loop | Plugin hook 驱动 | AsyncIterable 事件流 + LoopAdvisor 链 |
 
 ---
 
@@ -522,8 +675,11 @@ workspace/
 | Phase | 模块 | 优先级 | 说明 |
 |-------|------|--------|------|
 | P1 | HTTP Protocol 补齐 | 高 | WebSocket/SSE 流式协议 |
+| P1 | Gateway 适配新 Loop | 高 | Gateway.handleEvent 全面切换到 runAgentLoop |
 | P2 | Context Engine 增强 | 高 | 消息摘要、重要性排序、RAG 集成 |
+| P2 | Steering Advisor | 高 | 中途指令处理（LoopAdvisor 实现） |
 | P3 | Memory System 落地 | 中 | 文件记忆 + 语义搜索 + Dreaming |
+| P3 | Policy Advisor | 中 | 安全策略检查（LoopAdvisor 实现） |
 | P4 | Command Queue 实现 | 中 | steer/followup/collect/interrupt |
 | P5 | Multi-Agent 协调 | 低 | 命令队列 + Agent 间通信 |
 
