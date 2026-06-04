@@ -1,9 +1,9 @@
-# Octopi — 架构设计文档 v4
+# Octopi — 架构设计文档 v5
 
 > 可嵌入的 Agent 底座框架，参考 OpenClaw 架构设计
 
-**最后更新**: 2026-06-02
-**测试覆盖**: 145 tests, 7 test files (all passing)
+**最后更新**: 2026-06-04
+**测试覆盖**: 150 tests, 7 test files (all passing)
 
 ---
 
@@ -85,7 +85,7 @@ src/
 ├── core/
 │   └── types.ts              # 所有核心类型定义（消息、Agent、Session、Tool、Plugin、AgentEvent 等）
 ├── loop/                     # ✅ 新 Agent Loop 模块
-│   ├── agent-loop.ts         # runAgentLoop() 异步生成器（三层架构核心循环）
+│   ├── run-agent-loop.ts     # runAgentLoop() 异步生成器（三层架构核心循环）
 │   ├── iteration-budget.ts   # IterationBudget（防无限循环计数器）
 │   ├── error-classifier.ts   # ErrorClassifier（7 种错误分类 + jitteredBackoff）
 │   ├── message-converter.ts  # MessageConverter（内部/LLM 消息格式转换）
@@ -93,7 +93,7 @@ src/
 ├── gateway/
 │   └── gateway.ts            # Gateway 守护进程（消息路由、Agent 管理、生命周期）
 ├── agent/
-│   ├── agent-loop.ts         # 旧 AgentLoop class（保留兼容，事件类型已更新）
+│   ├── agent-runner.ts       # AgentRunner class（原 AgentLoop，保留向后兼容别名）
 │   └── session-manager.ts    # Session CRUD、write lock、JSONL 持久化
 ├── context/
 │   └── engine.ts             # LegacyContextEngine（尾部裁剪 + token 估算）
@@ -108,10 +108,11 @@ src/
 ├── skills/
 │   └── manager.ts            # DefaultSkillManager（两阶段加载）
 ├── tasks/
-│   ├── advisor.ts            # ✅ TaskManagerAdvisor（LoopAdvisor 桥接）
-│   ├── tracker.ts            # TaskTracker（任务状态机 CRUD）
+│   ├── advisor.ts            # ✅ TaskManagerAdvisor（LoopAdvisor 桥接，推荐）
+│   ├── shared.ts             # applyDecision 共享函数（去重）
+│   ├── tracker.ts            # TaskTracker（任务状态机 CRUD，全异步）
 │   ├── task-manager.ts       # TaskManager（LLM 轻量决策器）
-│   ├── plugin.ts             # TaskManagerPlugin（旧 hook 集成层，保留兼容）
+│   ├── plugin.ts             # TaskManagerPlugin（迭代级 hook 集成层，保留兼容）
 │   ├── types.ts              # 任务系统类型定义
 │   └── index.ts              # 统一导出
 ├── tools/
@@ -137,7 +138,7 @@ src/
 Gateway 是框架的入口，负责将外部消息路由到正确的 Agent 和 Session。
 
 ```
-外部消息 → Channel Adapter → Gateway.resolveAgent() → AgentLoop.processMessage()
+外部消息 → Channel Adapter → Gateway.resolveAgent() → AgentRunner.processMessage()
                                                     ↓
                                               Session Manager
                                                     ↓
@@ -440,7 +441,7 @@ Use the read tool to load a skill file when needed.
 | 方式 | 接口 | 状态 |
 |------|------|------|
 | LoopAdvisor | `TaskManagerAdvisor` | ✅ 新架构，推荐 |
-| Plugin Hook | `TaskManagerPlugin` | ✅ 保留兼容 |
+| Plugin Hook | `TaskManagerPlugin` | ✅ 保留兼容（已迁移到迭代级 hook） |
 
 **核心流程（LoopAdvisor 方式）：**
 
@@ -624,9 +625,9 @@ workspace/
 | 测试文件 | 覆盖模块 | 测试数 |
 |----------|----------|--------|
 | `loop.test.ts` | IterationBudget, ErrorClassifier, MessageConverter, runAgentLoop 集成 | 25 |
-| `agent-loop.test.ts` | AgentLoop, ToolRegistry, LLMRouter, PluginManager, Gateway | 17 |
-| `task-system.test.ts` | TaskTracker, TaskManager | ~40 |
-| `task-integration.test.ts` | TaskManagerPlugin 集成、多 Plugin 共存、错误恢复 | ~19 |
+| `agent-loop.test.ts` | AgentRunner, ToolRegistry, LLMRouter, PluginManager, Gateway | 17 |
+| `task-system.test.ts` | TaskTracker, TaskManager | 29 |
+| `task-integration.test.ts` | TaskManagerPlugin 集成、多 Plugin 共存、并发隔离、错误恢复 | 32 |
 | `skill-manager.test.ts` | DefaultSkillManager 两阶段加载 | ~10 |
 | `openclaw-compat.test.ts` | OpenClaw 兼容性 | ~5 |
 | `anthropic-provider.test.ts` | AnthropicProvider | ~5 |
@@ -640,12 +641,12 @@ workspace/
 | Core Types | ✅ 完整 | 消息、Agent、Session、Tool、Plugin、AgentEvent(28种) 等所有类型 |
 | Agent Loop (新) | ✅ 完整 | AsyncIterable 三层架构、IterationBudget、ErrorClassifier、MessageConverter |
 | Loop Advisor | ✅ 完整 | LoopAdvisor 接口 + TaskManagerAdvisor 桥接 |
-| Agent Loop (旧) | ✅ 兼容 | 旧 AgentLoop class，事件类型已更新 |
+| Agent Loop (旧) | ✅ 兼容 | 旧 AgentRunner class（原 AgentLoop），保留向后兼容别名 |
 | Gateway | ✅ 完整 | 消息路由、Agent 管理、Plugin 生命周期 |
 | Session Manager | ✅ 完整 | CRUD、write lock、JSONL 持久化 |
 | Plugin System | ✅ 完整 | 4 层加载管线、hook 执行、capability ownership |
 | Skill System | ✅ 完整 | 两阶段加载、system prompt 注入、热重载 |
-| Task System | ✅ 完整 | 状态机、LLM 决策器、LoopAdvisor + Plugin 双集成 |
+| Task System | ✅ 完整 | 状态机、LLM 决策器、LoopAdvisor + Plugin 双集成、applyDecision 去重 |
 | Tool Registry | ✅ 完整 | 全局/Agent 级、策略、LLM 格式转换 |
 | Builtin Tools | ✅ 完整 | shell、file_read、file_write、file_list |
 | LLM Providers | ✅ 完整 | OpenAI + Anthropic |
@@ -674,8 +675,8 @@ workspace/
 
 | Phase | 模块 | 优先级 | 说明 |
 |-------|------|--------|------|
-| P1 | HTTP Protocol 补齐 | 高 | WebSocket/SSE 流式协议 |
 | P1 | Gateway 适配新 Loop | 高 | Gateway.handleEvent 全面切换到 runAgentLoop |
+| P1 | HTTP Protocol 补齐 | 高 | WebSocket/SSE 流式协议 |
 | P2 | Context Engine 增强 | 高 | 消息摘要、重要性排序、RAG 集成 |
 | P2 | Steering Advisor | 高 | 中途指令处理（LoopAdvisor 实现） |
 | P3 | Memory System 落地 | 中 | 文件记忆 + 语义搜索 + Dreaming |

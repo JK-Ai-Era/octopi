@@ -92,24 +92,26 @@ Agent 天然活在"当前对话"里。用户说"帮我分析代码质量",Agent 
 const tracker = new TaskTracker(dataDir);
 
 // 创建任务 (自动设为 in_progress)
-const task = tracker.create(sessionId, '分析代码质量');
+const task = await tracker.create(sessionId, '分析代码质量');
 
 // 中断 (当用户发了无关消息时)
-tracker.interrupt(task.id, '用户发了新消息');
+await tracker.interrupt(task.id, '用户发了新消息');
 
 // 恢复 (当用户回来继续时)
-tracker.resume(task.id);
+await tracker.resume(task.id);
 
 // 完成
-tracker.complete(task.id);
+await tracker.complete(task.id);
 
 // 取消
-tracker.cancel(task.id);
+await tracker.cancel(task.id);
 
 // 查询
 tracker.getActiveTasks(sessionId);      // in_progress + interrupted
 tracker.getInterruptedTasks(sessionId);  // interrupted only
 ```
+
+> **注意**: 所有 CRUD 方法均为异步（`async`），内部使用 `stat()` / `readFile()` / `appendFile()` 替代同步 I/O。
 
 **持久化:** JSONL append-only 文件,每行一个事件。
 
@@ -170,11 +172,13 @@ interface TaskDecision {
 
 将 TaskTracker 和 TaskManager 接入 Agent Loop 的 Plugin 系统。
 
+> **v0.1.1 变更**: 已从 OpenClaw per-message hook (`before_agent_reply`) 迁移到 Octopi 迭代级 hook (`before_iteration`)，适配 Octopi 独有的 hook 时机（每次 LLM 调用前而非每次用户消息前）。
+
 **两个 Hook:**
 
 | Hook | 时机 | 作用 |
 |------|------|------|
-| `before_agent_reply` | 用户消息到达后,LLM 调用前 | 调用 TaskManager,更新状态,缓存 taskContext |
+| `before_iteration` | 每次 LLM 调用前 | 调用 TaskManager,更新状态,缓存 taskContext |
 | `before_prompt_build` | Prompt 构建前 | 注入 taskContext 到 system prompt |
 
 **恢复交互设计:**
@@ -253,11 +257,13 @@ const taskPlugin = new TaskManagerPlugin(provider, {
 
 ### Q: 被中断的任务怎么恢复?
 
-TaskManager 会判断用户的回归意图。当检测到用户在继续之前的话题时,`before_agent_reply` 会 `resume()` 任务,`before_prompt_build` 会注入包含恢复提示的上下文。主 Agent 看到上下文后,会自然地向用户确认是否继续。
+TaskManager 会判断用户的回归意图。当检测到用户在继续之前的话题时,`before_iteration` 会 `resume()` 任务,`before_prompt_build` 会注入包含恢复提示的上下文。主 Agent 看到上下文后,会自然地向用户确认是否继续。
 
 ### Q: 任务数据怎么存储?
 
 JSONL append-only 文件,按 session 隔离。每行是一个事件(`create`, `interrupt`, `resume`, `complete`, `cancel`)。系统启动时从 JSONL 重放恢复状态。这种设计简单、可靠、可审计。
+
+v0.1.1 起 `loadSession` 和 `appendEvent` 均改为异步，避免阻塞事件循环。
 
 ### Q: 子任务怎么办?
 
@@ -271,7 +277,7 @@ JSONL append-only 文件,按 session 隔离。每行是一个事件(`create`, `i
 
 | 系统 | 关系 |
 |------|------|
-| **Plugin 系统** | TaskManagerPlugin 通过 `before_agent_reply` 和 `before_prompt_build` 集成 |
+| **Plugin 系统** | TaskManagerPlugin 通过 `before_iteration` 和 `before_prompt_build` 集成 |
 | **Session 管理** | 任务按 session 隔离,随 session 生命周期管理 |
 | **Context Engine** | 通过 `before_prompt_build` 注入任务上下文到 system prompt |
 | **记忆系统** | 独立运作。记忆系统管长期知识,任务系统管当前工作 |
