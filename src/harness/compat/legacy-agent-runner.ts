@@ -54,7 +54,7 @@ import { DefaultSecurityGuard } from '../../core/security-guard.js';
 import { IterationBudget } from '../../core/budget.js';
 import { DefaultContextPipeline } from '../context/pipeline.js';
 import { SessionAwareRunner } from '../runner.js';
-import { adaptPluginHooks } from './plugin-adapter.js';
+import { adaptPluginHooks, AsyncHookAdapter } from './plugin-adapter.js';
 
 // 旧模块
 import { SessionManager } from '../../agent/session-manager.js';
@@ -199,19 +199,35 @@ export class LegacyAgentRunner {
       // ── Step 4: 加入 session 消息列表 ──
       this.sessions.addMessage(session.id, userMessage);
 
-      // ── Step 5: Plugin before_agent_reply（合成回复检查） ──
+      // ── Step 5: Plugin hooks（通过 AsyncHookAdapter） ──
       const hookCtx: HookContext = {
         sessionId: session.id,
         agentId: agent.id,
       };
-      const syntheticReply = await this.pluginManager.runHook(
-        'before_agent_reply',
-        { ...hookCtx, messages: this.sessions.getMessages(session.id) },
-        null,
+      const asyncHooks = new AsyncHookAdapter(this.pluginManager, hookCtx);
+
+      // before_agent_reply: 合成回复检查
+      const syntheticReply = await asyncHooks.onBeforeAgentReply(
+        this.sessions.getMessages(session.id),
       );
       if (syntheticReply) {
         return syntheticReply as Message;
       }
+
+      // before_model_resolve: 模型覆盖
+      const modelOverride = await asyncHooks.onBeforeModelResolve(
+        agent.persona.systemPrompt,
+        agent.model.model,
+      );
+      const effectiveModel = modelOverride?.model ?? agent.model.model;
+
+      // before_prompt_build: 上下文注入
+      const promptInjection = await asyncHooks.onBeforePromptBuild(
+        this.sessions.getMessages(session.id),
+      );
+      const effectiveSystemPrompt = promptInjection?.prependContext
+        ? agent.persona.systemPrompt + '\n\n' + promptInjection.prependContext
+        : agent.persona.systemPrompt;
 
       // ── Step 6: 构建新架构组件 ──
       const engine = this.buildEngine(agent);
@@ -222,10 +238,10 @@ export class LegacyAgentRunner {
       let finalAssistantMessage: Message | null = null;
 
       for await (const event of engine.run(messages, {
-        systemPrompt: agent.persona.systemPrompt,
+        systemPrompt: effectiveSystemPrompt,
         agentId: agent.id,
         sessionId: session.id,
-        model: agent.model.model,
+        model: effectiveModel,
         temperature: agent.model.temperature,
       })) {
         // 转发事件
