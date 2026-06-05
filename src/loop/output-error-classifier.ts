@@ -14,6 +14,66 @@ import type {
   RecoveryConfig,
 } from './output-quality-types.js';
 
+// ================================================================
+// 辅助函数
+// ================================================================
+
+/**
+ * 验证质量检测结果
+ */
+function validateQualityResult(result: unknown): result is QualityCheckResult {
+  if (typeof result !== 'object' || result === null) {
+    return false;
+  }
+  
+  const r = result as Record<string, unknown>;
+  
+  return (
+    typeof r.isAnomalous === 'boolean' &&
+    typeof r.qualityScore === 'number' &&
+    Array.isArray(r.anomalyHints) &&
+    typeof r.details === 'object' && r.details !== null
+  );
+}
+
+/**
+ * 验证分类上下文
+ */
+function validateContext(context: unknown): context is ClassificationContext {
+  if (typeof context !== 'object' || context === null) {
+    return false;
+  }
+  
+  const c = context as Record<string, unknown>;
+  
+  if (typeof c.iterationCount !== 'number' || c.iterationCount < 0) {
+    return false;
+  }
+  
+  if (!Array.isArray(c.previousErrors)) {
+    return false;
+  }
+  
+  return true;
+}
+
+/**
+ * 创建默认分类结果
+ */
+function createDefaultClassification(): ErrorClassification {
+  return {
+    type: 'unknown',
+    confidence: 0,
+    severity: 'minor',
+    recommendedStrategy: 'retry',
+    evidence: ['Invalid input'],
+  };
+}
+
+// ================================================================
+// 核心分类函数
+// ================================================================
+
 /**
  * 判断异常严重程度
  *
@@ -55,7 +115,7 @@ function determineAnomalyType(
   // 最高置信度的提示类型
   if (sortedHints.length > 0) {
     const topHint = sortedHints[0];
-    if (topHint.confidence >= 0.5) {
+    if (topHint && topHint.confidence >= 0.5) {
       return topHint.type;
     }
   }
@@ -144,6 +204,14 @@ function collectEvidence(
     evidence.push(`Tool calls: ${context.toolCalls.length}`);
   }
   
+  // 迭代次数
+  evidence.push(`Iteration: ${context.iterationCount}`);
+  
+  // 之前的错误
+  if (context.previousErrors.length > 0) {
+    evidence.push(`Previous errors: ${context.previousErrors.length}`);
+  }
+  
   return evidence;
 }
 
@@ -178,9 +246,29 @@ export class OutputErrorClassifier {
    * 分类异常
    */
   classify(
-    qualityResult: QualityCheckResult,
-    context: ClassificationContext
+    qualityResult: unknown,
+    context: unknown
   ): ErrorClassification {
+    // 输入验证
+    if (!validateQualityResult(qualityResult)) {
+      return createDefaultClassification();
+    }
+    
+    if (!validateContext(context)) {
+      return createDefaultClassification();
+    }
+    
+    // 如果不是异常，返回默认分类
+    if (!qualityResult.isAnomalous) {
+      return {
+        type: 'unknown',
+        confidence: 0,
+        severity: 'minor',
+        recommendedStrategy: 'retry',
+        evidence: collectEvidence(qualityResult, context),
+      };
+    }
+    
     // 确定异常类型
     const type = determineAnomalyType(qualityResult.anomalyHints, context.finishReason);
     

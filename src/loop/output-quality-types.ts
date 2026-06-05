@@ -86,6 +86,11 @@ export interface QualityCheckResult {
 export type CheckLevel = 'basic' | 'strict' | 'semantic';
 
 /**
+ * 语言类型
+ */
+export type Language = 'en' | 'zh' | 'auto';
+
+/**
  * 输出质量检测配置
  */
 export interface QualityGateConfig {
@@ -99,6 +104,8 @@ export interface QualityGateConfig {
   syntaxFragmentThreshold: number;
   /** 熵值阈值（过低表示异常） */
   entropyThreshold: number;
+  /** 语言设置（auto 为自动检测） */
+  language?: Language;
 }
 
 /**
@@ -108,8 +115,9 @@ export const DEFAULT_QUALITY_GATE_CONFIG: QualityGateConfig = {
   enabled: true,
   checkLevel: 'basic',
   anomalyThreshold: 0.6,
-  syntaxFragmentThreshold: 0.3,
+  syntaxFragmentThreshold: 0.5,
   entropyThreshold: 3.0,
+  language: 'auto',
 };
 
 // ================================================================

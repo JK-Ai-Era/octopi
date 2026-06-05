@@ -21,9 +21,12 @@ export { OutputErrorClassifier, createOutputErrorClassifier } from './output-err
 export type {
   QualityCheckResult,
   QualityGateConfig,
+  QualityCheckDetails,
   AnomalyHint,
   AnomalyType,
   AnomalySeverity,
+  CheckLevel,
+  Language,
   RecoveryStrategyType,
   ErrorClassification,
   ClassificationContext,
