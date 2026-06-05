@@ -1,460 +1,282 @@
 # Octopi 🐙
 
-**可嵌入的 Agent 底座框架** 
+**可嵌入的 Agent 底座框架**
 
-> Agent 不是一个 class,而是一个完整的 scope。
-> Session 不是聊天记录,而是一个完整的交互生命周期。
-> Agent 需要的不是一个 API,而是一个操作系统。
+> Agent 不是一个 class，而是一个完整的运行时。
+> Session 不是聊天记录，而是一个完整的交互生命周期。
+> 框架的价值不在于提供了多少默认实现，而在于定义了多少清晰的接口。
 
 ---
 
 ## 为什么做 Octopi
 
-OpenClaw 是一个完整的 AI 助手平台--内置飞书、Telegram、记忆系统、心跳调度......它很强,但也意味着:你只能用它做"AI 助手"。
+OpenClaw 是一个完整的 AI 助手平台——内置飞书、Telegram、记忆系统、心跳调度……它很强，但也意味着：你只能用它做"AI 助手"。
 
-我们想要的是 OpenClaw 里面那些**真正通用的东西**:
+Octopi 提炼了 OpenClaw 中**真正通用的 Agent 运行时能力**，去除所有平台绑定：
 
-- Agent Loop(消息 → 上下文组装 → 模型推理 → 工具执行 → 回复)
-- Session 管理(生命周期、持久化、并发控制)
-- 多 Provider 支持(OpenAI / Anthropic / 任何兼容协议)
-- Plugin 系统(每个生命周期阶段可拦截)
-- 工具注册与执行
+- Agent Loop（消息 → 上下文组装 → 模型推理 → 工具执行 → 回复）
+- Session 管理（生命周期、持久化、并发控制）
+- 多 Provider 支持（OpenAI / Anthropic / 任何兼容协议）
+- Plugin 系统（全生命周期 hook）
+- 安全守卫（注入检测、敏感信息过滤、信任分级）
 
-把这些抽出来,去掉所有平台绑定,就是 **Octopi**。
+你可以用它做一个 CLI bot、一个 Web 应用的 AI 后端、一个嵌入式助手、一个你自己都还没想到的东西。
 
-你可以用它做一个 CLI bot、一个 Web 应用的 AI 后端、一个嵌入式助手、一个你自己都还没想到的东西。它不预设你做什么,只负责 Agent 运行时该做的事。
-
-## 核心理念
-
-### 1. Agent 是一个世界,不是一段代码
-
-一个 Agent 拥有自己的 workspace、session store、tool set、model config、persona。两个 Agent 之间完全隔离,就像两个进程。
-
-### 2. Session 是一等公民
-
-所有状态归 Session,不归 Agent。同一 Agent 的不同用户有独立的 Session。Session 有完整的生命周期:创建 → 活跃 → 过期 → 重建。并发通过 write lock + lane-aware queue 管理,不是简单的锁。
-
-### 3. Context Engine 可插拔
-
-上下文组装不是"把消息拼起来",而是一个 4 阶段生命周期:`Ingest → Assemble → Compact → AfterTurn`。每个阶段都可以被 Plugin 替换。这意味着你可以在不改 Agent Loop 的情况下,实现 RAG、记忆注入、上下文压缩等任何策略。
-
-### 4. 协议无关,上层无感
-
-Agent Loop 发出的是统一的 `LLMRequest`,不关心底层是 OpenAI 还是 Anthropic。Provider 层负责双向格式转换。换模型只改配置,不改代码。
-
-### 5. Hook 覆盖全链路
-
-8 个生命周期 hook，全部可拦截：消息到达、模型选择、prompt 构建、工具执行、回复发送、session 生命周期。不是“可选功能”，是架构的核心。
-
-### 6. Skill 是 Tool 和 Agent 之间的桥梁
-
-Tool 是原子能力（`file_read`, `shell`），Skill 是“怎么用工具做好一件事”。
-
-- Tool: `shell` → Skill: “怎么用 ffmpeg 从视频抽帧”
-- Tool: `file_read` → Skill: “怎么读 PDF 提取关键信息”
-- Tool: `web_fetch` → Skill: “怎么抓取网页并绕过反爬”
-
-Skill 以 Markdown 文件（`SKILL.md`）存在于 `skills/` 目录下，Context Engine 在 assemble 阶段根据用户意图自动匹配并注入上下文。每次最多激活一个 Skill，避免上下文污染。
-
-```
-skills/
-├── video-frames/SKILL.md    # 视频帧提取
-├── pdf-reader/SKILL.md      # PDF 阅读
-└── web-scraper/SKILL.md     # 网页抓取
-```
-
-```markdown
-# SKILL.md 格式
 ---
-name: 视频帧提取
-description: 从视频中使用 ffmpeg 提取关键帧
-triggers: 视频, 抽帧, ffmpeg, 关键帧
-tools: shell
----
-# 从视频提取帧
-## 使用 ffmpeg 从视频中提取关键帧
-### 提取单帧（指定时间点）
-```bash
-ffmpeg -ss 00:01:30 -i input.mp4 -frames:v 1 output.png
-```
-
-Skill 匹配策略（优先级从高到低）：
-1. **显式指定** — 用户消息中包含 `skill:<id>` 标记
-2. **触发词匹配** — 消息包含 Skill 的 trigger 关键词
-3. **描述匹配** — 关键词重叠
-
-### 7. 任务系统：让 Agent 拥有工作记忆
-
-Agent 不应该只活在"当前对话"里。当用户说"帮我分析代码质量",然后突然聊起天气,Agent 应该记住自己正在干活,而不是把任务忘得一干二净。
-
-Octopi 的任务系统通过 `TaskManagerPlugin`（Plugin hook）集成到 Agent Loop：
-
-- **TaskTracker** — 纯状态管理,JSONL 持久化,不依赖 LLM
-- **TaskManager** — 轻量 LLM 决策器,判断每条消息与当前任务的关系
-- **TaskManagerPlugin** — 通过 `before_iteration` hook 注入任务上下文
-
-核心流程：用户消息到达 → 轻量模型判断"这条消息是不是在说我之前那个任务" → 更新任务状态 → 向主 Agent 注入任务上下文 → 主 Agent 自然地决定继续、询问还是忽略。
-
-恢复交互时,主 Agent 看到的不是"请继续你的任务"这种生硬指令,而是一段自然的上下文描述：
-
-> 你有一个被中断的任务：分析代码质量。用户回来了,向用户说明进展并询问是否继续。
-
-任务系统的完整设计详见 [docs/task-system.md](docs/task-system.md)。
-
-## 架构
-
-```
-外部消息 → Channel Adapter → Gateway → Agent Loop → LLM
-                                  ↓
-                            Session Manager
-                                  ↓
-                            Channel Adapter → 外部回复
-```
-
-核心循环:`intake → context assemble → model infer → tool exec → streaming reply → persistence`
-
-```
-┌──────────────────────────────────────────────────────────┐
-│                     Gateway (守护进程)                     │
-│                                                          │
-│  ┌────────────┐  ┌────────────┐  ┌────────────────────┐  │
-│  │  Channel    │  │  Session   │  │  Command Queue     │  │
-│  │  Router     │  │  Manager   │  │  (Lane-aware FIFO) │  │
-│  └─────┬──────┘  └─────┬──────┘  └────────┬───────────┘  │
-│        │               │                   │              │
-│  ┌─────▼───────────────▼───────────────────▼───────────┐  │
-│  │               Agent Loop (AsyncIterable)             │  │
-│  │                                                     │  │
-│  │  Layer 1: Pre-Iteration (Plugin before_iteration hook)      │  │
-│  │       ↓                                             │  │
-│  │  Layer 2: LLM Decision (ContextEngine → LLM)        │  │
-│  │       ↓                                             │  │
-│  │  Layer 3: Tool Execution (validate → execute)        │  │
-│  │                                                     │  │
-│  │  Cross-cutting: IterationBudget / ErrorClassifier    │  │
-│  └──────────┬──────────────────────────┬───────────────┘  │
-│             │                          │                  │
-│  ┌──────────▼────────┐  ┌──────────────▼───────────────┐  │
-│  │  Context Engine    │  │  Plugin System               │  │
-│  │  (4阶段生命周期)    │  │  (8个Hook点,全部可拦截)      │  │
-│  └────────────────────┘  └──────────────────────────────┘  │
-│                                                          │
-│  ┌────────────┐  ┌────────────┐  ┌────────────────────┐  │
-│  │  Tool       │  │  LLM       │  │  Skill             │  │
-│  │  Registry   │  │  Router    │  │  Manager           │  │
-│  └────────────┘  └────────────┘  └────────────────────┘  │
-│                                                          │
-│  ┌──────────────────────────────────────────────────────┐ │
-│  │  Multi-Agent Runtime                                  │ │
-│  │  ┌──────┐ ┌──────┐ ┌──────┐                         │ │
-│  │  │Agent1│ │Agent2│ │Agent3│  ← 完全隔离              │ │
-│  │  └──────┘ └──────┘ └──────┘                         │ │
-│  └──────────────────────────────────────────────────────┘ │
-└──────────────────────────────────────────────────────────┘
-```
-
-### Agent Loop 三层架构
-
-新版 Agent Loop 是一个 `AsyncIterable<AgentEvent>`，采用三层架构设计：
-
-| 层级 | 职责 | 组件 |
-|------|------|------|
-| **Layer 1: Pre-Iteration** | 每轮迭代前：注入上下文、覆盖参数、决定停止 | `before_iteration` Plugin hook |
-| **Layer 2: LLM Decision** | 组装上下文 → 调用 LLM → 解析响应 | `ContextEngine` + `LLMProvider` + `MessageConverter` |
-| **Layer 3: Tool Execution** | 参数验证/去重/截断检测 → 执行工具 | `ToolRegistry` |
-
-跨层能力：`IterationBudget`（防无限循环）、`ErrorClassifier`（7 种错误分类 + 指数退避重试）、`AbortSignal`（任意点中断）。
-
-```typescript
-// 事件流原生 — 天然支持流式输出、中断控制、外部可观测性
-for await (const event of runAgentLoop(config, input, signal)) {
-  switch (event.type) {
-    case 'llm_stream_delta': updateUI(event.delta); break;
-    case 'tool_call_start': showSpinner(event.toolName); break;
-    case 'tool_call_result': hideSpinner(); break;
-    case 'loop_end': showResult(event.response); break;
-  }
-}
-```
-
-详见 [docs/agent-loop-architecture.md](docs/agent-loop-architecture.md)。
 
 ## 快速开始
 
-```bash
-npm install
-npm run build
-```
+```typescript
+import { AgentBuilder } from 'octopi/harness';
+import { OpenAIProvider } from 'octopi';
 
-### 配置
+const { engine, runner } = await new AgentBuilder()
+  .model(new OpenAIProvider({ apiKey: process.env.OPENAI_API_KEY! }))
+  .persona('./my-agent')
+  .build();
 
-```bash
-cp octopi.example.json octopi.json
-```
-
-编辑 `octopi.json`,设置 LLM Provider:
-
-```json
-{
-  "providers": [
-    {
-      "type": "openai",
-      "name": "openai",
-      "apiKey": "sk-your-key-here",
-      "models": ["gpt-4o", "gpt-4o-mini"]
-    },
-    {
-      "type": "anthropic",
-      "name": "anthropic",
-      "apiKey": "sk-ant-your-key-here",
-      "models": ["claude-sonnet-4-20250514", "claude-haiku-4-20250414"]
-    }
-  ]
+// 处理消息
+for await (const event of runner.handle('session-1', userMessage, {
+  systemPrompt: 'You are a helpful assistant.',
+})) {
+  console.log(event);
 }
 ```
 
-也支持任何 OpenAI 兼容 endpoint(vLLM、Ollama、LiteLLM 等)。
+---
 
-### 启动
+## 架构：三层洋葱
 
-```bash
-# Gateway 服务
-npx octopi serve
-
-# 交互式聊天
-npx octopi chat
-
-# 健康检查
-npx octopi health
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Layer 3: Integration                                        │
+│  Gateway · Protocols · Storage Backends · Sandbox            │
+│                                                              │
+│  ┌─────────────────────────────────────────────────────────┐ │
+│  │  Layer 2: Harness                                        │ │
+│  │  Persona · Plugin · Skill · Task · ToolPolicy            │ │
+│  │  ContextPipeline · ErrorStrategy · SecurityPolicy        │ │
+│  │                                                          │ │
+│  │  ┌─────────────────────────────────────────────────────┐ │ │
+│  │  │  Layer 1: Core                                       │ │ │
+│  │  │  AgentEngine · EventBus · SecurityGuard · Budget     │ │ │
+│  │  └─────────────────────────────────────────────────────┘ │ │
+│  └─────────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-### 作为库使用
+**依赖方向：外 → 内。内层不知道外层的存在。**
+
+### Core 层（`src/core/`）
+
+纯引擎 + 接口契约。零实现依赖。
+
+| 组件 | 职责 |
+|---|---|
+| `AgentEngine` | 无状态循环引擎（输入 → 推理 → 工具 → 输出） |
+| `EventBus` | 内置事件总线（全链路可观测） |
+| `SecurityGuard` | 内置安全守卫（注入检测、敏感信息过滤，不可禁用） |
+| `IterationBudget` | 资源约束（迭代次数、工具调用、token、时间） |
+| `ModelProvider` | LLM 调用接口 |
+| `ToolExecutor` | 工具执行接口 |
+| `ContextPipeline` | 上下文组装管道接口 |
+| `ErrorStrategy` | 错误处理策略接口 |
+| `Observer` | 可观测性接口 |
+| `SessionStore` | Session 持久化接口 |
+
+### Harness 层（`src/harness/`）
+
+装具层。通过 Core 接口挂载增强功能。
+
+| 组件 | 职责 |
+|---|---|
+| `AgentBuilder` | Fluent API 组装器（一行代码启动 Agent） |
+| `SessionAwareRunner` | Session 生命周期管理（锁、持久化、重置） |
+| `PersonaLoader` | 文件式人格系统（AGENTS.md、SOUL.md 等） |
+| `DefaultContextPipeline` | 可插拔的上下文管道（Persona → Skill → History → Filter） |
+| `CapabilityEnforcer` | Plugin 信任分级运行时强制 |
+| `SecurityPresets` | 安全策略预设（development/testing/production/maximum） |
+| `LegacyAgentRunner` | v0.1.x API 兼容层（委托给新架构） |
+
+### Integration 层（`src/integration/`）
+
+集成层。协议适配、存储后端、可观测性。
+
+| 组件 | 职责 |
+|---|---|
+| `JsonlSessionStore` | JSONL 文件存储（默认） |
+| `InMemorySessionStore` | 内存存储（测试用） |
+| `NoopObserver` | 空观测器（零开销） |
+| `LogObserver` | 日志观测器（开发调试） |
+
+---
+
+## 核心设计
+
+### AgentEngine 是无状态的
 
 ```typescript
-import { AgentLoop, OpenAIProvider, getBuiltinTools } from 'octopi';
+// AgentEngine 不持有 Session，消息历史由调用方传入
+const engine = new AgentEngine(deps);
 
-const loop = new AgentLoop();
-loop.registerProvider(new OpenAIProvider({
-  apiKey: process.env.OPENAI_API_KEY!,
-  models: ['gpt-4o'],
-}));
-
-for (const tool of getBuiltinTools()) {
-  loop.registerTool(tool);
+for await (const event of engine.run(messages, { systemPrompt: '...' })) {
+  // 处理事件
 }
-
-const agent = {
-  id: 'my-agent',
-  workspace: './workspace',
-  persona: {
-    name: 'Assistant',
-    systemPrompt: 'You are a helpful assistant.',
-  },
-  tools: { allow: ['*'] },
-  model: { provider: 'openai', model: 'gpt-4o' },
-};
-
-const session = loop.resolveSession(agent, message, 'per-peer');
-const reply = await loop.processMessage(agent, session, message);
 ```
 
-## 核心概念
+### Persona 是文件式的
 
-### Agent Definition
-
-每个 Agent 是一个完全独立的隔离单元:
+```
+my-agent/
+├── AGENTS.md    ← 操作指令
+├── SOUL.md      ← 人格特质
+├── IDENTITY.md  ← 身份定义
+└── USER.md      ← 用户上下文
+```
 
 ```typescript
-interface AgentDefinition {
-  id: string;
-  workspace: string;          // 文件系统路径(persona、记忆、技能)
-  persona: {
-    name: string;
-    systemPrompt: string;
-  };
-  tools: {
-    allow: string[];           // 白名单(["*"] = 全部)
-    deny: string[];            // 黑名单
-    requireConfirmation: string[];
-  };
-  model: {
-    provider: string;
-    model: string;
-    fallbacks?: string[];
-  };
-}
+const engine = await new AgentBuilder()
+  .model('gpt-4')
+  .persona('./my-agent')  // 加载目录中的所有 .md 文件
+  .buildEngine();
 ```
 
-### Session 管理
+### 安全是内置的
 
-- **Write Lock** - 同一 session 同时只有一个 Agent Loop 在运行
-- **Per-Peer 隔离** - 每个发送者独立 session
-- **自动过期** - 24h daily reset + 2h idle reset
-- **JSONL 持久化** - 对话记录持久化到磁盘,人类可读
+- **SecurityGuard** 不可禁用——注入检测 + 敏感信息过滤
+- **IterationBudget** 不可绕过——资源消耗硬约束
+- **CapabilityEnforcer** 运行时强制——Plugin 信任分级
 
-### Context Engine
+### 扩展通过回调槽
 
-4 阶段生命周期,每阶段可被 Plugin 替换:
-
-| 阶段 | 时机 | 职责 |
-|------|------|------|
-| **Ingest** | 新消息到达 | 消息入库 |
-| **Assemble** | LLM 调用前 | 组装上下文(裁剪、注入、token 预算) |
-| **Compact** | 上下文溢出 | 压缩旧历史 |
-| **AfterTurn** | 一轮完成 | 持久化状态 |
-
-### Plugin 系统
-
-完全对齐 OpenClaw 插件架构。每个 Plugin 是一个独立模块，通过 `octopi.plugin.json`（兼容 `openclaw.plugin.json`）声明能力，在 `register(api)` 中注册。
-
-#### 生命周期 Hook
-
-Hook 按执行位置分为两类：
-
-**Gateway 级 Hook**（session 生命周期、消息路由）
-
-| Hook | 返回值 | 语义 |
-|------|--------|------|
-| `session_start` | - | 新 session 创建 |
-| `message_received` | - | 消息到达通知 |
-| `before_agent_reply` | Message \| null | 拦截:返回合成回复 |
-| `message_sending` | { cancel } \| null | 拦截:取消回复发送 |
-
-**Loop 级 Hook**（Agent Loop 内部，runAgentLoop 中调用）
-
-| Hook | 返回值 | 语义 |
-|------|--------|------|
-| `before_iteration` | MetaDecision \| null | 每轮迭代前：注入消息/覆盖参数/决定停止 |
-| `before_tool_call` | { block } \| null | 工具执行前：阻止/审批 |
-| `before_prompt_build` | { prependContext } \| null | LLM 调用前：注入上下文 |
-| `after_tool_call` | - | 工具执行完成 |
-
-完整 Hook 列表和执行位置架构详见 [docs/plugin-system.md](docs/plugin-system.md)。
-
-#### 能力注册 API
-
-Plugin 通过 `api.register*()` 注册各种能力：
-
-| 方法 | 用途 | 代表插件 |
-|------|------|----------|
-| `registerProvider()` | LLM Provider | LMStudio, OpenRouter |
-| `registerChannel()` | Channel Adapter | - |
-| `registerTool()` | Agent 工具 | - |
-| `registerWebSearchProvider()` | 搜索引擎 | DuckDuckGo, Moonshot |
-| `registerMediaUnderstandingProvider()` | 图片/媒体理解 | Moonshot, OpenRouter |
-| `registerImageGenerationProvider()` | 图片生成 | OpenRouter |
-| `registerMusicGenerationProvider()` | 音乐生成 | OpenRouter |
-| `registerVideoGenerationProvider()` | 视频生成 | OpenRouter |
-| `registerSpeechProvider()` | 语音合成 | OpenRouter |
-| `registerModelCatalogProvider()` | 模型目录 | OpenRouter |
-| `registerMemoryEmbeddingProvider()` | 记忆向量化 | LMStudio |
-| `registerCommand()` | 命令 | - |
-| `registerService()` | 后台服务 | - |
-| `registerContextEngine()` | 上下文引擎 | - |
-| `on()` | 生命周期 Hook | TaskManager |
-
-#### OpenClaw 兼容性
-
-已通过 4 种代表性插件模式的兼容性测试：
-
-- **DuckDuckGo** — 最简模式（WebSearch）
-- **Moonshot** — 双能力模式（WebSearch + MediaUnderstanding）
-- **LMStudio** — LLM + Memory Embedding
-- **OpenRouter** — 全能力注册（7 种 Provider）
-
-OpenClaw 插件是编译后的 bundle，无法直接加载原始 `.js` 文件。但 API 接口完全对齐，移植时只需替换内部依赖。
-
-### 多协议 LLM
-
-```
-AgentLoop → LLMRequest(统一格式)→ LLMRouter → Provider → LLM API
+```typescript
+engine.onMessage = (msg) => { /* 拦截/修改消息 */ };
+engine.beforeModelCall = (req) => { /* 覆盖模型选择 */ };
+engine.afterToolExec = (result) => { /* 过滤工具结果 */ };
 ```
 
-| 协议 | type | 适用场景 |
-|------|------|----------|
-| OpenAI Chat Completions | `openai` | OpenAI、vLLM、Ollama、LiteLLM 等 |
-| Anthropic Messages | `anthropic` | Claude 系列模型 |
+---
 
-### 内置工具
+## 使用示例
 
-| 工具 | 功能 |
-|------|------|
-| `shell` | 执行 shell 命令 |
-| `file_read` | 读取文件内容 |
-| `file_write` | 写入文件内容 |
-| `file_list` | 列出目录内容 |
+### 最简集成
 
-### Output Quality Gate（输出质量检测）
+```typescript
+import { createAgent } from 'octopi/harness';
 
-LLM 在特定上下文条件下可能输出崩溃的 token 序列（代码碎片混杂、无意义字符串组合）。Octopi 内置了自动检测和恢复机制。
+const { engine, runner } = await createAgent({
+  model: myProvider,
+  persona: './my-agent',
+});
+```
 
-#### 检测能力
+### 自定义存储
 
-| 异常类型 | 检测特征 |
-|----------|----------|
-| **模型崩溃** | 代码语法碎片高密度、中英混杂、无意义组合 |
-| **截断** | finish_reason='length'、不完整的代码块 |
-| **重复循环** | 相似片段重复超过阈值 |
+```typescript
+import { AgentBuilder, RedisSessionStore } from 'octopi/harness';
 
-#### 恢复策略
+const { engine, runner } = await new AgentBuilder()
+  .model('gpt-4')
+  .store(new RedisSessionStore({ host: 'localhost' }))
+  .build();
+```
 
-| 策略 | 适用场景 | 行为 |
-|------|----------|------|
-| **retry** | 崩溃、格式错误 | 清理上下文后重试（最多 N 次） |
-| **fallback** | 崩溃、重复循环 | 切换备用模型重试 |
-| **abort** | 严重崩溃、重试失败 | 报错终止，提示用户 |
-| **degrade** | 重复崩溃风险高 | 进入保守模式（禁用工具） |
+### Agent 调用 Agent
 
-#### 配置示例
+```typescript
+const reviewer = await new AgentBuilder()
+  .model('gpt-4')
+  .persona('./reviewer')
+  .buildEngine();
 
-```json
-{
-  "agents": [{
-    "outputQuality": {
-      "enabled": true,
-      "checkLevel": "basic",
-      "anomalyThreshold": 0.6
+const coder = await new AgentBuilder()
+  .model('claude')
+  .persona('./coder')
+  .tool({
+    definition: { name: 'review', description: '审查代码', parameters: {} },
+    handler: async (args) => {
+      const events = reviewer.run([{ role: 'user', content: args.code, timestamp: Date.now() }], { systemPrompt: '...' });
+      // 收集结果
     },
-    "recovery": {
-      "maxRetries": 2,
-      "fallbackModels": ["kimi-k2.5", "qwen3-max"],
-      "strategyPriority": {
-        "model_collapse": ["fallback", "retry", "abort"]
-      }
-    }
-  }]
-}
+  })
+  .buildEngine();
 ```
 
-#### 事件通知
+### 事件订阅
 
-| 事件类型 | 触发时机 | 包含信息 |
-|----------|----------|----------|
-| `quality_anomaly` | 检测到异常输出 | 检测结果、分类、推荐策略 |
-| `model_change` | 切换备用模型 | 新模型、切换原因 |
-| `degrade_mode` | 进入降级模式 | 异常类型、降级配置 |
+```typescript
+import { AgentEvents } from 'octopi/core';
 
-完整设计详见 [docs/output-quality-gate.md](docs/output-quality-gate.md)。
+engine.deps.events.on(AgentEvents.MODEL_CALL_END, (event) => {
+  console.log(`模型调用: ${event.data.durationMs}ms`);
+});
+
+engine.deps.events.on(AgentEvents.INJECTION_DETECTED, (event) => {
+  console.warn(`检测到注入: ${event.data}`);
+});
+```
+
+### 安全策略
+
+```typescript
+import { AgentBuilder, SecurityPresets } from 'octopi/harness';
+
+const { engine } = await new AgentBuilder()
+  .model('gpt-4')
+  .securityPolicy(SecurityPresets.production)  // 生产环境安全策略
+  .build();
+```
+
+---
+
+## 向后兼容
+
+v0.1.x API 仍然可用（deprecated）：
+
+```typescript
+// 旧方式
+import { AgentRunner } from 'octopi';
+const runner = new AgentRunner();
+runner.registerProvider(provider);
+runner.registerTool(tool);
+const reply = await runner.processMessage(agent, session, channelMsg);
+
+// 新方式（推荐）
+import { AgentBuilder } from 'octopi/harness';
+const { engine, runner } = await new AgentBuilder()
+  .model(provider)
+  .tool(tool)
+  .build();
+```
+
+---
 
 ## 测试
 
 ```bash
 npm test
+# 313 tests passed
 ```
 
-150 个测试覆盖所有核心模块。
+---
 
-## 与 OpenClaw 的关系
+## 技术栈
 
-| 维度 | OpenClaw | Octopi |
-|------|----------|--------|
-| 定位 | 完整的 AI 助手平台 | 可嵌入的 Agent 底座框架 |
-| 渠道 | 内置飞书/Telegram/Slack... | 不内置,通过 Channel Adapter 接入 |
-| 记忆 | 内置 Dreaming/RAG/Memory | 接口预留,实现自由选择 |
-| 部署 | 单机守护进程 | 可嵌入现有应用,也可独立运行 |
-| 目标用户 | 终端用户 | 开发者 |
+- **语言:** TypeScript (ESM, Node.js >=20)
+- **构建:** tsc
+- **测试:** Vitest (node --experimental-vm-modules)
 
-OpenClaw 是 Octopi 的"参考实现"和"灵感来源"。Octopi 从 OpenClaw 学到了 Session 一等公民、Context Engine 可插拔、Hook 覆盖全链路等核心设计理念,但只保留通用的 Agent 运行时。
+---
+
+## 文档
+
+- [架构设计](docs/ARCHITECTURE.md) — 设计哲学、决策记录、权衡分析
+- [重构方案](docs/REFACTORING-PLAN.md) — 完整的重构方案和迁移路径
+- [Plugin 系统](docs/plugin-system.md) — Plugin hook 详解
+- [Task 系统](docs/task-system.md) — 任务管理设计
+- [开发指南](docs/development-guide.md) — 开发环境搭建
+
+---
 
 ## License
 
