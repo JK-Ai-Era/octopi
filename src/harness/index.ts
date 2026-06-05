@@ -11,6 +11,8 @@ export { loadPersona, composePersonas } from './persona/loader.js';
 // ── Context Pipeline ──
 export { DefaultContextPipeline, PersonaStage, HistoryStage, FilterStage } from './context/pipeline.js';
 export type { ContextStage, StageContext } from './context/pipeline.js';
+export { TaskStage } from './context/stages/task-stage.js';
+export type { TaskStageConfig } from './context/stages/task-stage.js';
 
 // ── Runner ──
 export { SessionAwareRunner } from './runner.js';
@@ -27,3 +29,7 @@ export { adaptPluginHooks } from './compat/plugin-adapter.js';
 export { CapabilityEnforcer, PluginTrustLevel } from './security/capability-enforcer.js';
 export { SecurityPresets, getSecurityPolicy } from './security/policy.js';
 export type { Environment } from './security/policy.js';
+
+// ── Task System ──
+export { TaskTracker, TaskManager, applyDecision } from './tasks/index.js';
+export type { Task, TaskDecision, TaskDecisionInput } from './tasks/index.js';
