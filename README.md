@@ -1,6 +1,6 @@
 # Octopi 🐙
 
-**可嵌入的 Agent 底座框架** - 从 OpenClaw 提炼的核心 Agent 运行时。
+**可嵌入的 Agent 底座框架** 
 
 > Agent 不是一个 class,而是一个完整的 scope。
 > Session 不是聊天记录,而是一个完整的交互生命周期。
@@ -383,6 +383,58 @@ AgentLoop → LLMRequest(统一格式)→ LLMRouter → Provider → LLM API
 | `file_read` | 读取文件内容 |
 | `file_write` | 写入文件内容 |
 | `file_list` | 列出目录内容 |
+
+### Output Quality Gate（输出质量检测）
+
+LLM 在特定上下文条件下可能输出崩溃的 token 序列（代码碎片混杂、无意义字符串组合）。Octopi 内置了自动检测和恢复机制。
+
+#### 检测能力
+
+| 异常类型 | 检测特征 |
+|----------|----------|
+| **模型崩溃** | 代码语法碎片高密度、中英混杂、无意义组合 |
+| **截断** | finish_reason='length'、不完整的代码块 |
+| **重复循环** | 相似片段重复超过阈值 |
+
+#### 恢复策略
+
+| 策略 | 适用场景 | 行为 |
+|------|----------|------|
+| **retry** | 崩溃、格式错误 | 清理上下文后重试（最多 N 次） |
+| **fallback** | 崩溃、重复循环 | 切换备用模型重试 |
+| **abort** | 严重崩溃、重试失败 | 报错终止，提示用户 |
+| **degrade** | 重复崩溃风险高 | 进入保守模式（禁用工具） |
+
+#### 配置示例
+
+```json
+{
+  "agents": [{
+    "outputQuality": {
+      "enabled": true,
+      "checkLevel": "basic",
+      "anomalyThreshold": 0.6
+    },
+    "recovery": {
+      "maxRetries": 2,
+      "fallbackModels": ["kimi-k2.5", "qwen3-max"],
+      "strategyPriority": {
+        "model_collapse": ["fallback", "retry", "abort"]
+      }
+    }
+  }]
+}
+```
+
+#### 事件通知
+
+| 事件类型 | 触发时机 | 包含信息 |
+|----------|----------|----------|
+| `quality_anomaly` | 检测到异常输出 | 检测结果、分类、推荐策略 |
+| `model_change` | 切换备用模型 | 新模型、切换原因 |
+| `degrade_mode` | 进入降级模式 | 异常类型、降级配置 |
+
+完整设计详见 [docs/output-quality-gate.md](docs/output-quality-gate.md)。
 
 ## 测试
 

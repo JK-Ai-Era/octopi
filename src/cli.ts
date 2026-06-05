@@ -23,6 +23,7 @@
  */
 
 import { loadConfig, toGatewayConfig } from './config.js';
+import { resolve, dirname } from 'node:path';
 import { Gateway } from './gateway/gateway.js';
 import { OpenAIProvider } from './providers/openai.js';
 import { AnthropicProvider } from './providers/anthropic.js';
@@ -35,13 +36,6 @@ import type { ProviderConfig } from './config.js';
 // Provider 工厂
 // ================================================================
 
-/**
- * 根据配置创建 LLM Provider
- *
- * 支持两种协议：
- * - openai: OpenAI Chat Completions API（/v1/chat/completions）
- * - anthropic: Anthropic Messages API（/v1/messages）
- */
 function createProvider(cfg: ProviderConfig): LLMProvider | null {
   if (!cfg.apiKey) return null;
 
@@ -55,7 +49,6 @@ function createProvider(cfg: ProviderConfig): LLMProvider | null {
     });
   }
 
-  // 默认 openai（包括所有 OpenAI 兼容的自定义 endpoint）
   return new OpenAIProvider({
     name: cfg.name,
     apiKey: cfg.apiKey,
@@ -78,9 +71,7 @@ interface CliArgs {
 
 function parseArgs(): CliArgs {
   const args = process.argv.slice(2);
-  const result: CliArgs = {
-    command: args[0] ?? 'help',
-  };
+  const result: CliArgs = { command: args[0] ?? 'help' };
 
   for (let i = 1; i < args.length; i++) {
     switch (args[i]) {
@@ -124,10 +115,6 @@ Options:
   --port, -p <port>     Port override
   --help, -h            Show this help message
 
-Supported provider types:
-  openai      OpenAI Chat Completions API (/v1/chat/completions)
-  anthropic   Anthropic Messages API (/v1/messages)
-
 Examples:
   octopi serve -c ./my-config.json
   octopi chat -c ./my-config.json
@@ -139,13 +126,10 @@ async function serveCommand(args: CliArgs): Promise<void> {
   const config = loadConfig(args.config);
   const gatewayConfig = toGatewayConfig(config);
 
-  if (args.port) {
-    gatewayConfig.port = args.port;
-  }
+  if (args.port) gatewayConfig.port = args.port;
 
   const gateway = new Gateway(gatewayConfig);
 
-  // 注册 providers（支持 OpenAI 和 Anthropic）
   for (const providerCfg of config.providers ?? []) {
     const provider = createProvider(providerCfg);
     if (provider) {
@@ -154,12 +138,8 @@ async function serveCommand(args: CliArgs): Promise<void> {
     }
   }
 
-  // 注册内置工具
-  for (const tool of getBuiltinTools()) {
-    gateway.registerTool(tool);
-  }
+  for (const tool of getBuiltinTools()) gateway.registerTool(tool);
 
-  // 注册 HTTP channel
   const httpConfig = config.channels?.find((c) => c.type === 'http');
   if (httpConfig) {
     const { HttpChannelAdapter } = await import('./protocol/http.js');
@@ -169,7 +149,6 @@ async function serveCommand(args: CliArgs): Promise<void> {
     }));
   }
 
-  // 优雅关闭
   process.on('SIGINT', async () => {
     console.log('\n[CLI] Shutting down...');
     await gateway.stop();
@@ -193,10 +172,15 @@ async function chatCommand(args: CliArgs): Promise<void> {
     process.exit(1);
   }
 
-  // 找到 provider 配置
+  // 解析 workspace 为绝对路径
+  const configDir = args.config ? resolve(dirname(args.config)) : process.cwd();
+  if (agent.workspace && !agent.workspace.startsWith('/')) {
+    agent.workspace = resolve(configDir, agent.workspace);
+  }
+
   const providerCfg = config.providers?.find((p) => p.name === agent.model.provider);
   if (!providerCfg) {
-    console.error(`[Error] Provider "${agent.model.provider}" not found in config`);
+    console.error(`[Error] Provider "${agent.model.provider}" not found`);
     process.exit(1);
   }
 
@@ -206,18 +190,63 @@ async function chatCommand(args: CliArgs): Promise<void> {
     process.exit(1);
   }
 
-  // 动态导入 AgentRunner
   const { AgentRunner } = await import('./agent/agent-runner.js');
   const loop = new AgentRunner();
-
   loop.registerProvider(provider);
+  for (const tool of getBuiltinTools()) loop.registerTool(tool);
 
-  // 注册内置工具
-  for (const tool of getBuiltinTools()) {
-    loop.registerTool(tool);
-  }
+  // 进度显示状态
+  let hasShownThinking = false;
+  let streamedContent = '';
 
-  // 创建 session
+  // 事件监听器：实时显示进度
+  loop.on((event) => {
+    switch (event.type) {
+      case 'llm_request':
+        if (!hasShownThinking) {
+          process.stdout.write('  🤔 Thinking...');
+          hasShownThinking = true;
+        }
+        break;
+
+      case 'llm_stream_delta':
+        // 流式输出：清除 Thinking 后直接打印增量
+        if (event.delta) {
+          if (hasShownThinking) {
+            process.stdout.write('\r' + ' '.repeat(20) + '\r'); // 清除 "Thinking..."
+            hasShownThinking = false;
+          }
+          process.stdout.write(event.delta);
+          streamedContent += event.delta;
+        }
+        break;
+
+      case 'tool_call_start':
+        process.stdout.write(`\n  🔧 Running: ${event.toolName}...\n`);
+        break;
+
+      case 'tool_call_result':
+        process.stdout.write(`  ✅ Done (${event.durationMs}ms)\n`);
+        break;
+
+      case 'llm_response':
+        // 最终响应完成（纯文本回复时）
+        if (!event.toolCalls) {
+          if (streamedContent) {
+            process.stdout.write('\n'); // 流式输出结束，换行
+          } else if (event.content) {
+            // 非流式输出
+            console.log(`\n  ${event.content}`);
+          }
+        }
+        break;
+
+      case 'error':
+        console.error(`\n  ❌ Error: ${event.error?.message ?? 'Unknown'}`);
+        break;
+    }
+  });
+
   const mockMsg = {
     id: 'cli',
     channel: 'cli',
@@ -232,20 +261,14 @@ async function chatCommand(args: CliArgs): Promise<void> {
   console.log(`\n🐙 Octopi Chat`);
   console.log(`   Agent: ${agent.persona.name}`);
   console.log(`   Model: ${providerCfg.type} / ${agent.model.model}`);
-  console.log(`   Type "exit" or "quit" to end the conversation\n`);
+  console.log(`   Type "exit" or "quit" to end\n`);
 
-  const rl = createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  });
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
 
   const ask = () => {
     rl.question('You: ', async (input) => {
       const trimmed = input.trim();
-      if (!trimmed) {
-        ask();
-        return;
-      }
+      if (!trimmed) { ask(); return; }
       if (trimmed === 'exit' || trimmed === 'quit') {
         console.log('Goodbye! 👋');
         await loop.close();
@@ -256,8 +279,11 @@ async function chatCommand(args: CliArgs): Promise<void> {
       try {
         mockMsg.content = trimmed;
         mockMsg.timestamp = Date.now();
+        hasShownThinking = false;
+        streamedContent = '';
 
         const reply = await loop.processMessage(agent, session, mockMsg);
+        // 最终回复已通过事件监听器输出，这里只输出 agent 名前缀
         console.log(`\n${agent.persona.name}: ${reply.content}\n`);
       } catch (error) {
         console.error(`\n[Error] ${error instanceof Error ? error.message : String(error)}\n`);
@@ -273,30 +299,20 @@ async function chatCommand(args: CliArgs): Promise<void> {
 async function healthCommand(args: CliArgs): Promise<void> {
   const config = loadConfig(args.config);
   const { LLMRouter } = await import('./providers/router.js');
-
   const router = new LLMRouter();
 
   for (const providerCfg of config.providers ?? []) {
     const provider = createProvider(providerCfg);
-    if (provider) {
-      router.register(provider);
-    }
+    if (provider) router.register(provider);
   }
 
   console.log('\n🏥 Health Check\n');
   const results = await router.healthCheckAll();
-
   for (const [name, ok] of Object.entries(results)) {
-    const status = ok ? '✅ OK' : '❌ FAIL';
-    console.log(`  ${name}: ${status}`);
+    console.log(`  ${name}: ${ok ? '✅ OK' : '❌ FAIL'}`);
   }
-
   console.log();
 }
-
-// ================================================================
-// 主入口
-// ================================================================
 
 async function main(): Promise<void> {
   const args = parseArgs();
@@ -307,15 +323,9 @@ async function main(): Promise<void> {
   }
 
   switch (args.command) {
-    case 'serve':
-      await serveCommand(args);
-      break;
-    case 'chat':
-      await chatCommand(args);
-      break;
-    case 'health':
-      await healthCommand(args);
-      break;
+    case 'serve': await serveCommand(args); break;
+    case 'chat': await chatCommand(args); break;
+    case 'health': await healthCommand(args); break;
     default:
       console.error(`Unknown command: ${args.command}`);
       showHelp();

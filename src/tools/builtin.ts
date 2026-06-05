@@ -36,7 +36,7 @@ export function createShellTool(): RegisteredTool {
   return {
     definition: {
       name: 'shell',
-      description: 'Execute a shell command and return the output. Use this to run scripts, install packages, or interact with the system.',
+      description: 'Execute a shell command. Use sparingly - prefer file_read/file_list/file_write for file operations. Useful for: git commands, npm scripts, system info.',
       parameters: {
         command: {
           type: 'string',
@@ -56,17 +56,19 @@ export function createShellTool(): RegisteredTool {
     },
     handler: async (args, context) => {
       const command = args.command as string;
-      const cwd = args.cwd as string | undefined;
+      const cwd = (args.cwd as string | undefined) ?? (context as any)?.cwd ?? process.cwd();
       const timeout = (args.timeout as number) ?? 30_000;
 
       const { spawn } = await import('node:child_process');
 
       return new Promise((resolve, reject) => {
         const startTime = Date.now();
-        const child = spawn('bash', ['-c', command], {
+        // macOS/Linux: /bin/bash, 也尝试 PATH 中的 bash
+        const bashPath = process.platform === 'win32' ? 'bash' : '/bin/bash';
+        const child = spawn(bashPath, ['-c', command], {
           cwd: cwd ?? process.cwd(),
           timeout,
-          env: { ...process.env },
+          env: { ...process.env, PATH: process.env.PATH ?? '/usr/bin:/bin:/usr/local/bin' },
         });
 
         let stdout = '';
@@ -131,9 +133,13 @@ export function createFileReadTool(): RegisteredTool {
         },
       },
     },
-    handler: async (args) => {
+    handler: async (args, context) => {
       const { readFile } = await import('node:fs/promises');
-      const path = args.path as string;
+      const { resolve } = await import('node:path');
+      
+      const rawPath = args.path as string;
+      const cwd = (context as any)?.cwd ?? process.cwd();
+      const path = rawPath.startsWith('/') ? rawPath : resolve(cwd, rawPath); // ← 相对路径解析
       const offset = (args.offset as number) ?? 1;
       const limit = (args.limit as number) ?? 2000;
 
@@ -194,11 +200,13 @@ export function createFileWriteTool(): RegisteredTool {
         },
       },
     },
-    handler: async (args) => {
+    handler: async (args, context) => {
       const { writeFile, appendFile, mkdir } = await import('node:fs/promises');
-      const { dirname } = await import('node:path');
+      const { dirname, resolve } = await import('node:path');
 
-      const path = args.path as string;
+      const rawPath = args.path as string;
+      const cwd = (context as any)?.cwd ?? process.cwd();
+      const path = rawPath.startsWith('/') ? rawPath : resolve(cwd, rawPath); // ← 相对路径解析
       const content = args.content as string;
       const append = args.append as boolean ?? false;
 
@@ -257,12 +265,14 @@ export function createFileListTool(): RegisteredTool {
         },
       },
     },
-    handler: async (args) => {
+    handler: async (args, context) => {
       const { readdir, stat } = await import('node:fs/promises');
-      const { join, relative } = await import('node:path');
+      const { join, relative, resolve } = await import('node:path');
 
-      const basePath = args.path as string;
-      const recursive = args.recursive as boolean ?? false;
+      const rawPath = args.path as string;
+      const cwd = (context as any)?.cwd ?? process.cwd();
+      const basePath = rawPath.startsWith('/') ? rawPath : resolve(cwd, rawPath); // ← 相对路径解析
+      const recursive = (args.recursive as boolean) ?? false;
       const pattern = args.pattern ? new RegExp(args.pattern as string) : null;
 
       const entries: Array<{ name: string; path: string; type: 'file' | 'directory'; size?: number }> = [];

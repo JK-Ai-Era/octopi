@@ -29,6 +29,9 @@ import {
   isRetryable,
   jitteredBackoff,
 } from './error-classifier.js';
+import { createOutputQualityGate } from './output-quality-gate.js';
+import { createOutputErrorClassifier } from './output-error-classifier.js';
+import type { QualityGateConfig, RecoveryConfig } from './output-quality-types.js';
 
 // ── 内部工具类型（匹配 LLM 返回格式） ──
 
@@ -165,6 +168,9 @@ export async function* runAgentLoop(
   let lastResponse: string | undefined;
   let loopEndReason: LoopEndReason = 'error';
   let loopEndResponse: string | undefined;
+  
+  // 输出质量异常历史（用于恢复策略决策）
+  const qualityAnomalyHistory: Array<import('./output-quality-types.js').ErrorClassification> = [];
 
   // 构建 session ID（从第一条消息的 metadata 或生成）
   const firstMsg = Array.isArray(initialMessages) ? initialMessages[0] : initialMessages;
@@ -224,8 +230,9 @@ export async function* runAgentLoop(
         }
       }
 
-      // 组装 LLM 请求（使用 Context Engine assemble）
-      const availableTools = (config.toolRegistry.getDefinitions() as Array<{name: string}>).map(d => d.name);
+      // 获取完整工具定义（OpenAI function calling 格式）
+      const tools = config.toolRegistry.getDefinitions();
+      const availableTools = (tools as Array<{function?: {name?: string}}>).map(t => t.function?.name ?? 'unknown');
       const assembleResult = await contextEngine.assemble({
         sessionId,
         messages: [...messages],
@@ -353,6 +360,7 @@ export async function* runAgentLoop(
           provider,
           model,
           llmMessages,
+          tools, // ← 传入工具定义
           signal,
           (chunk) => {
             if (chunk.type === 'thinking') {
@@ -367,7 +375,6 @@ export async function* runAgentLoop(
             );
           },
           config.retry,
-          undefined, // thinking level
         );
         consecutiveErrors = 0;
       } catch (error) {
@@ -407,6 +414,108 @@ export async function* runAgentLoop(
         usage: llmResponse.usage,
         durationMs: llmResponse.durationMs,
       };
+
+      // ══════════════════════════════════════════
+      // Output Quality Gate（输出质量检测）
+      // ══════════════════════════════════════════
+      
+      if (config.outputQuality?.enabled) {
+        const qualityGate = createOutputQualityGate();
+        const classifier = createOutputErrorClassifier(config.recovery);
+        
+        const qualityResult = qualityGate.checkTextOutput(
+          llmResponse.content ?? '',
+          config.outputQuality
+        );
+        
+        if (qualityResult.isAnomalous) {
+          const classification = classifier.classify(qualityResult, {
+            toolCalls: llmResponse.toolCalls,
+            iterationCount: turnIndex,
+            previousErrors: qualityAnomalyHistory,
+          });
+          
+          // 发送异常事件
+          yield {
+            type: 'quality_anomaly',
+            checkResult: qualityResult,
+            classification,
+            strategy: classification.recommendedStrategy,
+          };
+          
+          // 根据策略执行恢复
+          const recoveryConfig = config.recovery ?? {
+            maxRetries: 2,
+            fallbackModels: [],
+            strategyPriority: {},
+            degradeConfig: { disableTools: true },
+          };
+          
+          // 检查是否还可以重试
+          const sameTypeAnomalies = qualityAnomalyHistory.filter(
+            e => e.type === classification.type
+          );
+          
+          if (classification.recommendedStrategy === 'abort' ||
+              sameTypeAnomalies.length >= recoveryConfig.maxRetries) {
+            // 终止循环
+            yield {
+              type: 'loop_end',
+              reason: 'error',
+              response: 'Output quality anomaly detected: ' + classification.type,
+            };
+            return;
+          }
+          
+          if (classification.recommendedStrategy === 'retry') {
+            // 记录异常历史
+            qualityAnomalyHistory.push(classification);
+            
+            // 清理当前迭代的 assistant 消息（不推入历史）
+            // 重试当前迭代
+            budget.refund();
+            continue;
+          }
+          
+          if (classification.recommendedStrategy === 'fallback' &&
+              recoveryConfig.fallbackModels.length > 0) {
+            // 切换到备用模型
+            const fallbackModel = recoveryConfig.fallbackModels[0];
+            if (fallbackModel) {
+              // 记录异常历史
+              qualityAnomalyHistory.push(classification);
+              
+              // 发送模型切换事件
+              yield {
+                type: 'model_change',
+                model: fallbackModel,
+                reason: 'quality_fallback',
+              };
+              
+              // 更新模型并重试
+              model = fallbackModel;
+              budget.refund();
+              continue;
+            }
+          }
+          
+          if (classification.recommendedStrategy === 'degrade') {
+            // 降级模式：禁用工具，限制输出长度
+            qualityAnomalyHistory.push(classification);
+            
+            yield {
+              type: 'degrade_mode',
+              reason: classification.type,
+              config: recoveryConfig.degradeConfig,
+            };
+            
+            // 下次迭代将使用降级配置（工具禁用等）
+            // 这里先继续，后续迭代会检查降级状态
+            budget.refund();
+            continue;
+          }
+        }
+      }
 
       // 记录 assistant 消息
       const assistantMsg: Message = {
@@ -546,6 +655,7 @@ export async function* runAgentLoop(
               sessionId,
               turnId,
               abortSignal: signal,
+              cwd: config.workspace, // ← 传递工作目录
             },
           );
 
@@ -721,10 +831,10 @@ async function streamLLMWithRetry(
   provider: any,
   model: string,
   messages: LLMMessage[],
+  tools: unknown[], // ← 工具定义
   signal: AbortSignal | undefined,
   onDelta: (chunk: LLMStreamChunk) => void,
   retryConfig: { maxRetries: number; baseDelayMs: number; maxDelayMs: number },
-  thinkingLevel?: string,
 ): Promise<{
   content: string;
   thinking?: string;
@@ -748,6 +858,7 @@ async function streamLLMWithRetry(
           model,
           messages: messages as any[],
           stream: true,
+          tools, // ← 包含工具定义
         };
 
         const streamIterable = provider.stream(request);
@@ -768,7 +879,22 @@ async function streamLLMWithRetry(
             onDelta({ type: 'thinking', text: chunk.thinking });
           }
           if (chunk.toolCalls) {
-            toolCalls = chunk.toolCalls;
+            // 处理 provider 返回的 toolCalls（可能是 ToolCall 或 LLMToolCallRaw 格式）
+            toolCalls = chunk.toolCalls.map((tc: any) => {
+              // 如果是 ToolCall 格式（id, name, arguments）
+              if (tc.name && !tc.function) {
+                return {
+                  id: tc.id,
+                  type: 'function' as const,
+                  function: {
+                    name: tc.name,
+                    arguments: typeof tc.arguments === 'object' ? JSON.stringify(tc.arguments) : (tc.arguments ?? '{}'),
+                  },
+                };
+              }
+              // 已经是 LLMToolCallRaw 格式
+              return tc;
+            });
           }
           if (chunk.usage) {
             usage = chunk.usage;
@@ -788,6 +914,7 @@ async function streamLLMWithRetry(
       const request: any = {
         model,
         messages: messages as any[],
+        tools, // ← 包含工具定义
       };
 
       const response = await provider.complete(request);

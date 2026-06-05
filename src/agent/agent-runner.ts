@@ -315,6 +315,7 @@ export class AgentRunner {
       const loopConfig: AgentLoopConfig = {
         provider,
         agentId: agent.id,
+        workspace: agent.workspace, // ← 传递工作目录
         contextEngine,
         toolRegistry: {
           getDefinitions: () => this.toolRegistry.getDefinitionsForLLM(agent.id),

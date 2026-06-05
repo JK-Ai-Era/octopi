@@ -739,7 +739,12 @@ export type AgentEvent =
 
   // ── 中断 ──
   | { type: 'interrupt_requested' }
-  | { type: 'interrupted'; phase: string };
+  | { type: 'interrupted'; phase: string }
+
+  // ── 输出质量 ──
+  | { type: 'quality_anomaly'; checkResult: unknown; classification: unknown; strategy: string }
+  | { type: 'model_change'; model: string; reason: string }
+  | { type: 'degrade_mode'; reason: string; config: unknown };
 
 // ============================================================
 // 13. Error Classification
@@ -847,6 +852,8 @@ export interface AgentLoopConfig {
   provider: LLMProvider;
   /** Agent ID（用于 HookContext） */
   agentId: string;
+  /** Agent 工作目录（用于工具执行） */
+  workspace?: string;
   /** Context Engine */
   contextEngine: ContextEngine;
   /** Tool Registry */
@@ -870,6 +877,10 @@ export interface AgentLoopConfig {
   maxConsecutiveErrors: number;
   /** 重试配置 */
   retry: RetryConfig;
+  /** 输出质量检测配置（可选） */
+  outputQuality?: import('../loop/output-quality-types.js').QualityGateConfig;
+  /** 恢复策略配置（可选） */
+  recovery?: import('../loop/output-quality-types.js').RecoveryConfig;
   /** 事件回调 */
   onEvent?: (event: AgentEvent) => void;
   /** Steering 消息获取 */

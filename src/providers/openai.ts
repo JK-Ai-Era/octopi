@@ -143,7 +143,7 @@ export class OpenAIProvider implements LLMProvider {
         if (!trimmed || !trimmed.startsWith('data: ')) continue;
         const data = trimmed.slice(6);
         if (data === '[DONE]') {
-          // 流结束：如果有 buffer 中的 tool_calls，输出最终结果
+          // 流结束：输出最终结果
           if (toolCallBuffers.size > 0) {
             const toolCalls: ToolCall[] = [];
             for (const [, buf] of toolCallBuffers) {
@@ -159,6 +159,13 @@ export class OpenAIProvider implements LLMProvider {
               model: request.model,
               finishReason: 'tool_calls',
             };
+          } else if (textContent) {
+            // 纯文本回复：输出最终结果
+            yield {
+              content: textContent,
+              model: request.model,
+              finishReason: 'stop',
+            };
           }
           return;
         }
@@ -173,6 +180,16 @@ export class OpenAIProvider implements LLMProvider {
             textContent += delta.content;
             yield {
               content: delta.content,
+              model: parsed.model ?? request.model,
+              finishReason: parsed.choices?.[0]?.finish_reason ?? 'stop',
+            };
+          }
+
+          // reasoning 输出（Ollama 特有）
+          if (delta.reasoning) {
+            textContent += delta.reasoning;
+            yield {
+              content: delta.reasoning,
               model: parsed.model ?? request.model,
               finishReason: parsed.choices?.[0]?.finish_reason ?? 'stop',
             };
