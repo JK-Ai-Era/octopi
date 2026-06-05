@@ -1,0 +1,246 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Octopi Configuration",
+  "description": "Octopi Agent Framework 配置文件 (v0.2.0)",
+  "type": "object",
+  "required": ["agents"],
+  "properties": {
+    "agents": {
+      "type": "array",
+      "description": "Agent 定义列表",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "model"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Agent 唯一标识"
+          },
+          "workspace": {
+            "type": "string",
+            "description": "工作目录路径"
+          },
+          "persona": {
+            "description": "Persona 配置：目录路径（string）或内联定义（object）",
+            "oneOf": [
+              {
+                "type": "string",
+                "description": "Persona 目录路径（包含 AGENTS.md、SOUL.md 等文件）"
+              },
+              {
+                "type": "object",
+                "required": ["systemPrompt"],
+                "properties": {
+                  "name": { "type": "string" },
+                  "description": { "type": "string" },
+                  "systemPrompt": { "type": "string" }
+                }
+              }
+            ]
+          },
+          "model": {
+            "type": "object",
+            "required": ["provider", "model"],
+            "properties": {
+              "provider": {
+                "type": "string",
+                "description": "Provider 名称（引用 providers[].name）"
+              },
+              "model": {
+                "type": "string",
+                "description": "模型名称"
+              },
+              "temperature": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 2
+              },
+              "maxTokens": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "fallbackModels": {
+                "type": "array",
+                "items": { "type": "string" }
+              }
+            }
+          },
+          "tools": {
+            "type": "object",
+            "properties": {
+              "allow": {
+                "type": "array",
+                "items": { "type": "string" }
+              },
+              "deny": {
+                "type": "array",
+                "items": { "type": "string" }
+              },
+              "requireConfirmation": {
+                "type": "array",
+                "items": { "type": "string" }
+              }
+            }
+          },
+          "skillDirectory": {
+            "type": "string",
+            "description": "Skill 目录路径"
+          },
+          "skills": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "channelBindings": {
+            "type": "object",
+            "additionalProperties": { "type": "string" }
+          }
+        }
+      }
+    },
+    "providers": {
+      "type": "array",
+      "description": "LLM Provider 列表",
+      "items": {
+        "type": "object",
+        "required": ["type", "name"],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": ["openai", "anthropic"],
+            "description": "协议类型"
+          },
+          "name": {
+            "type": "string",
+            "description": "Provider 名称（agent.model.provider 引用此名称）"
+          },
+          "apiKey": {
+            "type": "string",
+            "description": "API Key（支持 ${ENV_VAR} 语法）"
+          },
+          "baseUrl": {
+            "type": "string",
+            "format": "uri",
+            "description": "API Base URL"
+          },
+          "models": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "defaultModel": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "plugins": {
+      "type": "object",
+      "description": "Plugin 配置",
+      "properties": {
+        "loadPaths": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Plugin 目录扫描路径"
+        },
+        "configs": {
+          "type": "object",
+          "description": "单个 plugin 的配置（plugin id → config）",
+          "additionalProperties": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "budget": {
+      "type": "object",
+      "description": "迭代预算（资源约束）",
+      "properties": {
+        "maxIterations": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "最大迭代次数"
+        },
+        "maxToolCalls": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "最大工具调用次数"
+        },
+        "maxTokens": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "最大 token 数"
+        },
+        "maxWallClockMs": {
+          "type": "integer",
+          "minimum": 1000,
+          "description": "最大运行时间（毫秒）"
+        }
+      }
+    },
+    "security": {
+      "type": "object",
+      "description": "安全策略配置",
+      "properties": {
+        "preset": {
+          "type": "string",
+          "enum": ["development", "testing", "production", "maximum"],
+          "description": "安全预设"
+        },
+        "injectionSensitivity": {
+          "type": "string",
+          "enum": ["low", "medium", "high"],
+          "description": "注入检测灵敏度"
+        }
+      }
+    },
+    "store": {
+      "type": "object",
+      "description": "Session 存储配置",
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["memory", "jsonl"],
+          "description": "存储类型"
+        },
+        "dataDir": {
+          "type": "string",
+          "description": "数据目录（jsonl 类型必填）"
+        }
+      }
+    },
+    "channels": {
+      "type": "array",
+      "description": "Channel 适配器列表",
+      "items": {
+        "type": "object",
+        "required": ["type"],
+        "properties": {
+          "type": {
+            "type": "string",
+            "description": "Channel 类型"
+          },
+          "port": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 65535
+          },
+          "path": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "session": {
+      "type": "object",
+      "description": "Session 配置",
+      "properties": {
+        "dmScope": {
+          "type": "string",
+          "enum": ["main", "per-peer", "per-channel"],
+          "description": "DM 作用域"
+        }
+      }
+    }
+  }
+}

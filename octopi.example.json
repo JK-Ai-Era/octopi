@@ -1,17 +1,15 @@
 {
+  "$schema": "./octopi.schema.json",
+
   "agents": [{
     "id": "assistant",
     "workspace": "./workspace",
-    "persona": {
-      "name": "Assistant",
-      "description": "A helpful assistant",
-      "systemPrompt": "You are a helpful assistant. Use the available tools when needed."
-    },
-    "tools": { "allow": ["*"] },
+    "persona": "./personas/assistant",
     "model": {
       "provider": "openai",
       "model": "gpt-4o"
-    }
+    },
+    "tools": { "allow": ["*"] }
   }],
 
   "providers": [
@@ -30,6 +28,26 @@
       "models": ["claude-sonnet-4-20250514", "claude-haiku-4-20250414"]
     }
   ],
+
+  "plugins": {
+    "loadPaths": ["./plugins"]
+  },
+
+  "budget": {
+    "maxIterations": 15,
+    "maxToolCalls": 50,
+    "maxTokens": 100000,
+    "maxWallClockMs": 300000
+  },
+
+  "security": {
+    "preset": "production"
+  },
+
+  "store": {
+    "type": "jsonl",
+    "dataDir": "./data/sessions"
+  },
 
   "channels": [{
     "type": "http",

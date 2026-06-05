@@ -88,8 +88,12 @@ export { DefaultSkillManager } from './skills/manager.js';
 export { HttpChannelAdapter } from './protocol/http.js';
 
 // Config
-export { loadConfig, toGatewayConfig } from './config.js';
-export type { HarnessConfig, ProviderConfig, ChannelConfig } from './config.js';
+export { loadConfig, toGatewayConfig, createProviderFromConfig, createStoreFromConfig } from './config.js';
+export type { HarnessConfig, AgentConfig, ProviderConfig, ChannelConfig, PluginConfig, StoreConfig } from './config.js';
+
+// Config Bridge（配置文件 → 新架构）
+export { buildFromConfig, buildFromConfigFile } from './harness/config-bridge.js';
+export type { BuiltAgent } from './harness/config-bridge.js';
 
 // Core types（全部导出）
 export * from './core/types.js';

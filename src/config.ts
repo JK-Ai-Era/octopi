@@ -1,8 +1,11 @@
 /**
  * 配置系统
  *
- * 支持从 JSON 配置文件或环境变量加载 Gateway 配置。
+ * 支持从 JSON 配置文件加载 Gateway 配置。
  * 配置文件默认路径：./octopi.json
+ *
+ * v0.2.0: 扩展配置结构以支持新架构（AgentBuilder + SessionAwareRunner）。
+ * 保持向后兼容——旧字段仍然有效，新字段可选。
  *
  * 配置示例：
  * ```json
@@ -10,37 +13,34 @@
  *   "agents": [{
  *     "id": "assistant",
  *     "workspace": "./workspace",
- *     "persona": {
- *       "name": "Assistant",
- *       "description": "A helpful assistant",
- *       "systemPrompt": "You are a helpful assistant."
- *     },
- *     "tools": { "allow": ["*"] },
- *     "model": {
- *       "provider": "openai",
- *       "model": "gpt-4o"
- *     }
+ *     "persona": "./personas/assistant",
+ *     "model": { "provider": "openai", "model": "gpt-4o" },
+ *     "tools": { "allow": ["*"] }
  *   }],
  *   "providers": [{
  *     "type": "openai",
  *     "name": "openai",
  *     "apiKey": "${OPENAI_API_KEY}",
- *     "models": ["gpt-4o", "gpt-4o-mini"]
+ *     "models": ["gpt-4o"]
  *   }],
- *   "channels": [{
- *     "type": "http",
- *     "port": 3000
- *   }],
- *   "session": {
- *     "dmScope": "per-peer"
- *   }
+ *   "plugins": { "loadPaths": ["./plugins"] },
+ *   "budget": { "maxIterations": 15 },
+ *   "security": { "preset": "production" },
+ *   "store": { "type": "jsonl", "dataDir": "./data/sessions" },
+ *   "channels": [{ "type": "http", "port": 3000 }],
+ *   "session": { "dmScope": "per-peer" }
  * }
  * ```
  */
 
-import type { AgentDefinition, GatewayConfig } from './core/types.js';
+import type { AgentDefinition, GatewayConfig, ToolPolicy } from './core/types.js';
+import type { SessionStore } from './core/interfaces/session-store.js';
+import type { IterationBudgetConfig } from './core/budget.js';
+import type { SecurityGuardConfig } from './core/security-guard.js';
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
+
+// ── Provider 配置 ──
 
 /**
  * Provider 配置
@@ -48,7 +48,7 @@ import { resolve } from 'node:path';
 export interface ProviderConfig {
   /** 协议类型：openai=OpenAI Chat Completions, anthropic=Anthropic Messages */
   type: 'openai' | 'anthropic';
-  /** 名称 */
+  /** 名称（agent.model.provider 引用此名称） */
   name: string;
   /** API Key（支持 ${ENV_VAR} 语法） */
   apiKey?: string;
@@ -59,6 +59,79 @@ export interface ProviderConfig {
   /** 默认模型 */
   defaultModel?: string;
 }
+
+// ── Agent 配置 ──
+
+/**
+ * Agent 配置
+ *
+ * persona 字段支持两种形式：
+ * - string: persona 目录路径（文件式 persona）
+ * - object: 内联 persona 定义（向后兼容 v0.1.x）
+ */
+export interface AgentConfig {
+  /** Agent 唯一标识 */
+  id: string;
+  /** 工作目录 */
+  workspace?: string;
+  /**
+   * Persona 配置
+   * - string: persona 目录路径（如 "./personas/assistant"）
+   * - object: 内联定义（向后兼容）
+   */
+  persona?: string | {
+    name?: string;
+    description?: string;
+    systemPrompt: string;
+  };
+  /** 模型配置 */
+  model: {
+    /** Provider 名称（引用 providers[].name） */
+    provider: string;
+    /** 模型名称 */
+    model: string;
+    /** 温度 */
+    temperature?: number;
+    /** 最大 token 数 */
+    maxTokens?: number;
+    /** 失败时的备选模型 */
+    fallbackModels?: string[];
+  };
+  /** 工具策略 */
+  tools?: ToolPolicy;
+  /** Skill 目录 */
+  skillDirectory?: string;
+  /** 启用的 Skill 列表 */
+  skills?: string[];
+  /** Channel 绑定 */
+  channelBindings?: Record<string, string>;
+}
+
+// ── Plugin 配置 ──
+
+/**
+ * Plugin 配置
+ */
+export interface PluginConfig {
+  /** Plugin 目录扫描路径 */
+  loadPaths?: string[];
+  /** 单个 plugin 的配置（plugin id → config） */
+  configs?: Record<string, Record<string, unknown>>;
+}
+
+// ── Store 配置 ──
+
+/**
+ * Session 存储配置
+ */
+export interface StoreConfig {
+  /** 存储类型 */
+  type: 'memory' | 'jsonl';
+  /** 数据目录（jsonl 类型必填） */
+  dataDir?: string;
+}
+
+// ── Channel 配置 ──
 
 /**
  * Channel 配置
@@ -72,19 +145,36 @@ export interface ChannelConfig {
   path?: string;
 }
 
+// ── 完整配置 ──
+
 /**
- * 完整配置文件结构
+ * 完整配置文件结构（v0.2.0）
  */
 export interface HarnessConfig {
   /** Agent 列表 */
-  agents: AgentDefinition[];
-  /** Provider 列表 */
+  agents: AgentConfig[];
+  /** LLM Provider 列表 */
   providers?: ProviderConfig[];
+  /** Plugin 配置 */
+  plugins?: PluginConfig;
+  /** 迭代预算 */
+  budget?: Partial<IterationBudgetConfig>;
+  /** 安全策略 */
+  security?: {
+    /** 预设名称 */
+    preset?: 'development' | 'testing' | 'production' | 'maximum';
+    /** 注入检测灵敏度 */
+    injectionSensitivity?: 'low' | 'medium' | 'high';
+  };
+  /** Session 存储 */
+  store?: StoreConfig;
   /** Channel 列表 */
   channels?: ChannelConfig[];
   /** Session 配置 */
   session?: GatewayConfig['session'];
 }
+
+// ── 加载函数 ──
 
 /**
  * 从配置文件加载配置
@@ -115,20 +205,84 @@ export function loadConfig(configPath?: string): HarnessConfig {
 
   for (const agent of config.agents) {
     if (!agent.id) throw new Error('Agent must have an id');
-    if (!agent.persona?.systemPrompt) throw new Error(`Agent "${agent.id}" must have a systemPrompt`);
     if (!agent.model?.provider) throw new Error(`Agent "${agent.id}" must specify a model provider`);
     if (!agent.model?.model) throw new Error(`Agent "${agent.id}" must specify a model`);
+
+    // 内联 persona 必须有 systemPrompt
+    if (agent.persona && typeof agent.persona === 'object' && !agent.persona.systemPrompt) {
+      throw new Error(`Agent "${agent.id}" inline persona must have a systemPrompt`);
+    }
   }
 
   return config;
 }
 
 /**
- * 将 HarnessConfig 转换为 GatewayConfig
+ * 将 HarnessConfig 转换为旧版 GatewayConfig（向后兼容）
  */
 export function toGatewayConfig(config: HarnessConfig): GatewayConfig {
   return {
-    agents: config.agents,
+    agents: config.agents as unknown as AgentDefinition[],
     session: config.session,
   };
+}
+
+// ── Provider 工厂 ──
+
+/**
+ * 从 ProviderConfig 创建 LLMProvider 实例
+ *
+ * 根据 type 字段自动选择 OpenAI 或 Anthropic provider。
+ * 使用动态 import 以支持 ESM。
+ */
+export async function createProviderFromConfig(pc: ProviderConfig): Promise<any> {
+  const apiKey = pc.apiKey;
+  if (!apiKey) {
+    throw new Error(`Provider "${pc.name}" must have an apiKey`);
+  }
+
+  if (pc.type === 'openai') {
+    const { OpenAIProvider } = await import('./providers/openai.js');
+    return new OpenAIProvider({
+      name: pc.name,
+      apiKey,
+      baseUrl: pc.baseUrl,
+      models: pc.models,
+      defaultModel: pc.defaultModel,
+    });
+  }
+
+  if (pc.type === 'anthropic') {
+    const { AnthropicProvider } = await import('./providers/anthropic.js');
+    return new AnthropicProvider({
+      name: pc.name,
+      apiKey,
+      baseUrl: pc.baseUrl,
+      models: pc.models,
+      defaultModel: pc.defaultModel,
+    });
+  }
+
+  throw new Error(`Unknown provider type: "${pc.type}"`);
+}
+
+/**
+ * 从 StoreConfig 创建 SessionStore 实例
+ * 使用动态 import 以支持 ESM。
+ */
+export async function createStoreFromConfig(sc: StoreConfig): Promise<SessionStore> {
+  if (sc.type === 'memory') {
+    const { InMemorySessionStore } = await import('./integration/storage/memory.js');
+    return new InMemorySessionStore();
+  }
+
+  if (sc.type === 'jsonl') {
+    if (!sc.dataDir) {
+      throw new Error('Store type "jsonl" requires dataDir');
+    }
+    const { JsonlSessionStore } = await import('./integration/storage/jsonl.js');
+    return new JsonlSessionStore(sc.dataDir);
+  }
+
+  throw new Error(`Unknown store type: "${sc.type}"`);
 }

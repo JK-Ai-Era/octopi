@@ -175,7 +175,11 @@ async function chatCommand(args: CliArgs): Promise<void> {
   // 解析 workspace 为绝对路径
   const configDir = args.config ? resolve(dirname(args.config)) : process.cwd();
   if (agent.workspace && !agent.workspace.startsWith('/')) {
-    agent.workspace = resolve(configDir, agent.workspace);
+    (agent as any).workspace = resolve(configDir, agent.workspace);
+  }
+  // 确保 workspace 有默认值
+  if (!(agent as any).workspace) {
+    (agent as any).workspace = configDir;
   }
 
   const providerCfg = config.providers?.find((p) => p.name === agent.model.provider);
@@ -256,10 +260,13 @@ async function chatCommand(args: CliArgs): Promise<void> {
     conversationId: 'cli-session',
     timestamp: Date.now(),
   };
-  const session = loop.resolveSession(agent, mockMsg, config.session?.dmScope ?? 'main');
+  const session = loop.resolveSession(agent as any, mockMsg, config.session?.dmScope ?? 'main');
 
   console.log(`\n🐙 Octopi Chat`);
-  console.log(`   Agent: ${agent.persona.name}`);
+  const agentName = typeof agent.persona === 'string'
+    ? agent.persona
+    : agent.persona?.name ?? agent.id;
+  console.log(`   Agent: ${agentName}`);
   console.log(`   Model: ${providerCfg.type} / ${agent.model.model}`);
   console.log(`   Type "exit" or "quit" to end\n`);
 
@@ -282,9 +289,9 @@ async function chatCommand(args: CliArgs): Promise<void> {
         hasShownThinking = false;
         streamedContent = '';
 
-        const reply = await loop.processMessage(agent, session, mockMsg);
+        const reply = await loop.processMessage(agent as any, session, mockMsg);
         // 最终回复已通过事件监听器输出，这里只输出 agent 名前缀
-        console.log(`\n${agent.persona.name}: ${reply.content}\n`);
+        console.log(`\n${agentName}: ${reply.content}\n`);
       } catch (error) {
         console.error(`\n[Error] ${error instanceof Error ? error.message : String(error)}\n`);
       }
