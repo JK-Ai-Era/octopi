@@ -17,7 +17,8 @@ Octopi 提炼了 OpenClaw 中**真正通用的 Agent 运行时能力**，去除�
 - Agent Loop（消息 → 上下文组装 → 模型推理 → 工具执行 → 回复）
 - Session 管理（生命周期、持久化、并发控制）
 - 多 Provider 支持（OpenAI / Anthropic / 任何兼容协议）
-- Plugin 系统（全生命周期 hook）
+- Plugin 系统（全生命周期 hook，对齐 OpenClaw）
+- Task 系统（LLM 驱动的任务追踪与恢复）
 - 安全守卫（注入检测、敏感信息过滤、信任分级）
 
 你可以用它做一个 CLI bot、一个 Web 应用的 AI 后端、一个嵌入式助手、一个你自己都还没想到的东西。
@@ -36,9 +37,7 @@ const { engine, runner } = await new AgentBuilder()
   .build();
 
 // 处理消息
-for await (const event of runner.handle('session-1', userMessage, {
-  systemPrompt: 'You are a helpful assistant.',
-})) {
+for await (const event of runner.handle('session-1', userMessage)) {
   console.log(event);
 }
 ```
@@ -50,16 +49,19 @@ for await (const event of runner.handle('session-1', userMessage, {
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │  Layer 3: Integration                                        │
-│  Gateway · Protocols · Storage Backends · Sandbox            │
+│  Gateway · Protocols · Storage Backends · Observability      │
 │                                                              │
 │  ┌─────────────────────────────────────────────────────────┐ │
 │  │  Layer 2: Harness                                        │ │
 │  │  Persona · Plugin · Skill · Task · ToolPolicy            │ │
 │  │  ContextPipeline · ErrorStrategy · SecurityPolicy        │ │
+│  │  AgentBuilder · SessionAwareRunner                       │ │
 │  │                                                          │ │
 │  │  ┌─────────────────────────────────────────────────────┐ │ │
 │  │  │  Layer 1: Core                                       │ │ │
 │  │  │  AgentEngine · EventBus · SecurityGuard · Budget     │ │ │
+│  │  │  ModelProvider · ToolExecutor · ContextPipeline      │ │ │
+│  │  │  ErrorStrategy · Observer                            │ │ │
 │  │  └─────────────────────────────────────────────────────┘ │ │
 │  └─────────────────────────────────────────────────────────┘ │
 └─────────────────────────────────────────────────────────────┘
@@ -93,10 +95,12 @@ for await (const event of runner.handle('session-1', userMessage, {
 | `AgentBuilder` | Fluent API 组装器（一行代码启动 Agent） |
 | `SessionAwareRunner` | Session 生命周期管理（锁、持久化、重置） |
 | `PersonaLoader` | 文件式人格系统（AGENTS.md、SOUL.md 等） |
-| `DefaultContextPipeline` | 可插拔的上下文管道（Persona → Skill → History → Filter） |
+| `DefaultContextPipeline` | 可插拔的上下文管道（Persona → Skill → Task → History → Filter） |
+| `TaskTracker` / `TaskManager` | LLM 驱动的任务追踪与恢复 |
 | `CapabilityEnforcer` | Plugin 信任分级运行时强制 |
 | `SecurityPresets` | 安全策略预设（development/testing/production/maximum） |
-| `LegacyAgentRunner` | v0.1.x API 兼容层（委托给新架构） |
+| `OutputQualityGate` | 输出质量检测 |
+| `LegacyAgentRunner` | v0.1.x API 兼容层 |
 
 ### Integration 层（`src/integration/`）
 
@@ -115,14 +119,20 @@ for await (const event of runner.handle('session-1', userMessage, {
 
 ### AgentEngine 是无状态的
 
-```typescript
-// AgentEngine 不持有 Session，消息历史由调用方传入
-const engine = new AgentEngine(deps);
+AgentEngine 不持有 Session 状态。消息历史由调用方传入，处理后由调用方持久化。
 
-for await (const event of engine.run(messages, { systemPrompt: '...' })) {
-  // 处理事件
-}
+```typescript
+// AgentEngine 的 run 方法签名
+async *run(messages: Message[], config: RunConfig): AsyncGenerator<AgentEvent>
+
+// 消息从哪来？调用方决定。
+// AgentEngine 只负责：消息 → 推理 → 工具 → 输出
 ```
+
+**好处：**
+- 可测试 — 不需要 mock SessionStore
+- 可复用 — 同一个引擎可以有 Session 或无 Session
+- 关注点分离 — "怎么循环"和"怎么存储"是两个独立问题
 
 ### Persona 是文件式的
 
@@ -135,24 +145,50 @@ my-agent/
 ```
 
 ```typescript
-const engine = await new AgentBuilder()
+const { engine } = await new AgentBuilder()
   .model('gpt-4')
   .persona('./my-agent')  // 加载目录中的所有 .md 文件
-  .buildEngine();
+  .build();
 ```
+
+无 schema → 自由表达。扩展 = 加文件。组合 = 目录叠加。
 
 ### 安全是内置的
 
-- **SecurityGuard** 不可禁用——注入检测 + 敏感信息过滤
-- **IterationBudget** 不可绕过——资源消耗硬约束
-- **CapabilityEnforcer** 运行时强制——Plugin 信任分级
+- **SecurityGuard** 不可禁用 — 注入检测 + 敏感信息过滤
+- **IterationBudget** 不可绕过 — 资源消耗硬约束
+- **CapabilityEnforcer** 运行时强制 — Plugin 信任分级
 
-### 扩展通过回调槽
+### Plugin 系统对齐 OpenClaw
+
+完整的 hook 系统，支持拦截语义和观察语义：
 
 ```typescript
-engine.onMessage = (msg) => { /* 拦截/修改消息 */ };
-engine.beforeModelCall = (req) => { /* 覆盖模型选择 */ };
-engine.afterToolExec = (result) => { /* 过滤工具结果 */ };
+import { definePluginEntry } from 'octopi/plugin-sdk/plugin-entry';
+
+export default definePluginEntry({
+  id: 'my-plugin',
+  name: 'My Plugin',
+  register(api) {
+    api.on('before_tool_call', async (event) => {
+      if (event.toolName === 'shell') {
+        return { requireApproval: { title: 'Execute shell', severity: 'warning' } };
+      }
+      return null; // 放行
+    }, { priority: 50 });
+  },
+});
+```
+
+### Task 系统 — Agent 的工作记忆
+
+LLM 驱动的任务追踪。用户中途聊别的，回来后 Agent 自动恢复上下文：
+
+```typescript
+import { TaskTracker, TaskManager } from 'octopi/harness';
+
+// 通过 ContextPipeline 的 TaskStage 自动集成
+// Agent 在 system prompt 中看到任务上下文，自然地决定行为
 ```
 
 ---
@@ -173,33 +209,12 @@ const { engine, runner } = await createAgent({
 ### 自定义存储
 
 ```typescript
-import { AgentBuilder, RedisSessionStore } from 'octopi/harness';
+import { AgentBuilder } from 'octopi/harness';
 
 const { engine, runner } = await new AgentBuilder()
   .model('gpt-4')
   .store(new RedisSessionStore({ host: 'localhost' }))
   .build();
-```
-
-### Agent 调用 Agent
-
-```typescript
-const reviewer = await new AgentBuilder()
-  .model('gpt-4')
-  .persona('./reviewer')
-  .buildEngine();
-
-const coder = await new AgentBuilder()
-  .model('claude')
-  .persona('./coder')
-  .tool({
-    definition: { name: 'review', description: '审查代码', parameters: {} },
-    handler: async (args) => {
-      const events = reviewer.run([{ role: 'user', content: args.code, timestamp: Date.now() }], { systemPrompt: '...' });
-      // 收集结果
-    },
-  })
-  .buildEngine();
 ```
 
 ### 事件订阅
@@ -223,8 +238,29 @@ import { AgentBuilder, SecurityPresets } from 'octopi/harness';
 
 const { engine } = await new AgentBuilder()
   .model('gpt-4')
-  .securityPolicy(SecurityPresets.production)  // 生产环境安全策略
+  .securityPolicy(SecurityPresets.production)
   .build();
+```
+
+### Agent 调用 Agent
+
+```typescript
+const reviewer = await new AgentBuilder()
+  .model('gpt-4')
+  .persona('./reviewer')
+  .buildEngine();
+
+const coder = await new AgentBuilder()
+  .model('claude')
+  .persona('./coder')
+  .tool({
+    definition: { name: 'review', description: '审查代码', parameters: {} },
+    handler: async (args) => {
+      const events = reviewer.run([{ role: 'user', content: args.code, timestamp: Date.now() }], { systemPrompt: '...' });
+      // 收集结果
+    },
+  })
+  .buildEngine();
 ```
 
 ---
@@ -255,7 +291,7 @@ const { engine, runner } = await new AgentBuilder()
 
 ```bash
 npm test
-# 313 tests passed
+# 325 tests passed
 ```
 
 ---
@@ -270,11 +306,14 @@ npm test
 
 ## 文档
 
-- [架构设计](docs/ARCHITECTURE.md) — 设计哲学、决策记录、权衡分析
-- [重构方案](docs/REFACTORING-PLAN.md) — 完整的重构方案和迁移路径
-- [Plugin 系统](docs/plugin-system.md) — Plugin hook 详解
-- [Task 系统](docs/task-system.md) — 任务管理设计
-- [开发指南](docs/development-guide.md) — 开发环境搭建
+| 文档 | 内容 |
+|------|------|
+| [架构设计](docs/ARCHITECTURE.md) | 设计哲学、三层架构详解、设计决策记录 |
+| [Plugin 系统](docs/plugin-system.md) | Plugin hook 详解、Capability Ownership、完整示例 |
+| [Task 系统](docs/task-system.md) | 任务管理设计、LLM 决策器、状态机 |
+| [重构方案](docs/REFACTORING-PLAN.md) | 三层洋葱架构重构方案和迁移路径 |
+| [迁移审计](docs/MIGRATION-AUDIT.md) | 代码迁移状态、优先级、进度追踪 |
+| [开发指南](docs/development-guide.md) | 开发环境搭建、文档同步规范、测试规范 |
 
 ---
 
