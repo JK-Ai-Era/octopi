@@ -92,14 +92,16 @@
 
 ### P0：必须迁移（核心功能缺失）
 
-1. **Task System → Harness 层**
-   - `TaskTracker` → Session metadata 的一部分
-   - `TaskManager` → 通过 `beforeAssemble` 回调槽注入
-   - `TaskManagerPlugin` → 不再需要，直接集成到 AgentEngine
+1. **Task System → Harness 层 ContextPipeline Stage**
+   - `TaskTracker` → `harness/tasks/tracker.ts`（保留 JSONL 持久化）
+   - `TaskManager` → `harness/tasks/manager.ts`（保留 LLM 决策器）
+   - `TaskStage` → `harness/context/stages/task-stage.ts`（新增，ContextPipeline 阶段）
+   - `TaskManagerPlugin` → 不再需要，Task 直接作为管道阶段注入
+   - 集成方式：ContextPipeline Stage（不是回调槽）
 
-2. **Output Quality Gate → Core 层**
-   - `OutputQualityGate` → AgentEngine 的 `afterModelCall` 回调
-   - `OutputErrorClassifier` → Core 的 ErrorStrategy 接口
+2. **Output Quality Gate → Core 层回调槽**
+   - `OutputQualityGate` → Core 的 `afterModelCall` 回调槽
+   - `OutputErrorClassifier` → 集成到 ErrorStrategy
    - 这些是有价值的安全/质量保障，不应丢失
 
 ### P1：应该迁移（减少维护负担）
@@ -134,20 +136,34 @@
 ```
 src/tasks/ → src/harness/tasks/
 
+核心理念：
+  Task System 是“上下文增强机制”，不是“拦截/修改机制”。
+  它通过往 system prompt 注入任务上下文，让主 Agent 自然地决定行为。
+  因此，Task 应该是 ContextPipeline 的一个 Stage，不是回调槽。
+
 迁移内容：
 1. TaskTracker → harness/tasks/tracker.ts
    - JSONL 持久化保留
    - 状态管理保留
-   - 接口适配到 SessionStore
+   - 接口不变
 
 2. TaskManager → harness/tasks/manager.ts
    - LLM 决策器保留
    - 接口适配到 ModelProvider
 
-3. 集成方式：
-   - 通过 AgentEngine 的 beforeAssemble 回调槽注入任务上下文
-   - 通过 afterTurn 回调槽更新任务状态
-   - 不再需要 TaskManagerPlugin
+3. TaskStage → harness/context/stages/task-stage.ts（新增）
+   - 实现 ContextStage 接口
+   - 内部组合 TaskTracker + TaskManager
+   - 在 process() 中：
+     a. await tracker.loadSession(sessionId)
+     b. await manager.decide(input)
+     c. await applyDecision(tracker, ...)
+     d. ctx.systemPrompt += taskContext
+
+4. 管道阶段顺序：
+   PersonaStage → SkillStage → TaskStage → HistoryStage → CompactStage → FilterStage
+
+5. 不再需要 TaskManagerPlugin
 
 测试：
 - 迁移 task-system.test.ts 和 task-integration.test.ts
@@ -209,8 +225,30 @@ src/loop/output-*.ts → src/core/quality/
 
 | 阶段 | 内容 | 工作量 | 风险 |
 |---|---|---|---|
-| Phase 7 | Task System 迁移 | 2-3 天 | 高（LLM 决策器复杂） |
+| Phase 7 | Task System 迁移 | 2-3 天 | 中 |
 | Phase 8 | Output Quality Gate 迁移 | 1-2 天 | 中 |
 | Phase 9 | Plugin 完整适配 | 2-3 天 | 中 |
 | Phase 10 | 旧代码清理 | 1 天 | 低 |
 | **合计** | | **6-9 天** | |
+
+---
+
+## 附录：回调槽 vs ContextPipeline Stage
+
+迁移 Task System 时，有一个关键设计决策：用回调槽还是 ContextPipeline Stage？
+
+### 回调槽
+- **适合**：拦截、修改、过滤（同步，轻量）
+- **例子**：权限检查、输出过滤、模型覆盖
+- **特点**：同步执行，不改变上下文组装流程
+
+### ContextPipeline Stage
+- **适合**：上下文增强、注入（异步，可重量）
+- **例子**：Persona 注入、Skill 注入、任务上下文注入
+- **特点**：异步执行，直接修改 system prompt
+
+### 结论
+
+Task System 的核心理念是“对 Agent 透明”——主 Agent 只需要在 system prompt 里看到任务上下文，然后自然地行动。这本质上是上下文增强，不是拦截/修改。因此 Task System 应该是 ContextPipeline Stage，不是回调槽。
+
+回调槽保持同步不变，不需要为 Task System 改为 async。
