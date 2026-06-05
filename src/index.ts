@@ -48,7 +48,8 @@ export { SecurityPresets, getSecurityPolicy } from './harness/security/policy.js
 // ============================================================
 
 /** @deprecated 使用 AgentBuilder 代替 */
-export { AgentRunner, AgentRunnerConfig } from './agent/agent-runner.js';
+export { AgentRunner } from './agent/agent-runner.js';
+export type { AgentRunnerConfig } from './agent/agent-runner.js';
 /** @deprecated 使用 AgentBuilder 代替 */
 export { AgentRunner as AgentLoop } from './agent/agent-runner.js';
 /** @deprecated 使用 SessionAwareRunner 代替 */
