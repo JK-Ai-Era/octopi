@@ -1,33 +1,16 @@
 /**
  * Agent Runner — 核心执行引擎
  *
- * 这是框架的"心脏"。参考 OpenClaw 的 agent-loop 设计，实现了完整的
- * 消息处理流程：
+ * @deprecated 使用 LegacyAgentRunner 代替。此类保留用于向后兼容，内部不再维护。
+ * LegacyAgentRunner 委托给新架构的 AgentEngine，提供相同的公共 API。
  *
- *   intake → context assemble → model infer → tool exec → streaming reply → persistence
+ * ```ts
+ * // 旧方式（deprecated）:
+ * import { AgentRunner } from 'octopi';
  *
- * 核心特性：
- * - Session 级 write lock：同一 session 同时只有一个运行
- * - Context Engine 4 阶段生命周期
- * - Plugin hooks 全链路可拦截
- * - 事件流全链路可观测
- * - 最大迭代保护（防止无限工具调用循环）
- *
- * 执行流程：
- *
- *   1. 获取 session write lock
- *   2. Context Engine: ingest（记录消息）
- *   3. Plugin: before_agent_reply（可拦截返回合成回复）
- *   4. 核心循环（最多 N 次）：
- *      a. Context Engine: assemble（组装上下文）
- *      b. Plugin: before_model_resolve（可覆盖模型）
- *      c. Plugin: before_prompt_build（可注入上下文）
- *      d. LLM 调用
- *      e. 如果有 tool_calls → 执行工具 → 继续循环
- *      f. 如果是纯文本 → 完成
- *   5. Plugin: message_sending → 发送
- *   6. Context Engine: afterTurn
- *   7. 持久化 → 释放 lock
+ * // 新方式:
+ * import { LegacyAgentRunner } from 'octopi/harness';
+ * ```
  */
 
 import { randomUUID } from 'node:crypto';

@@ -18,21 +18,46 @@
  */
 
 // ============================================================
-// 向后兼容导出（v0.1.x API）
+// v2.0 新架构导出（推荐使用）
 // ============================================================
 
-// Core types
-export * from './core/types.js';
+// Core 层
+export { AgentEngine } from './core/engine.js';
+export { DefaultEventBus, NoopEventBus, AgentEvents } from './core/event-bus.js';
+export { DefaultSecurityGuard } from './core/security-guard.js';
+export { IterationBudget } from './core/budget.js';
 
-// Agent runtime (向后兼容)
+// Harness 层
+export { AgentBuilder, createAgent } from './harness/builder.js';
+export { SessionAwareRunner } from './harness/runner.js';
+export { loadPersona, composePersonas } from './harness/persona/loader.js';
+export { DefaultContextPipeline } from './harness/context/pipeline.js';
+
+// Integration 层
+export { JsonlSessionStore } from './integration/storage/jsonl.js';
+export { InMemorySessionStore } from './integration/storage/memory.js';
+export { NoopObserver } from './integration/observability/noop-observer.js';
+export { LogObserver } from './integration/observability/log-observer.js';
+
+// 安全
+export { CapabilityEnforcer, PluginTrustLevel } from './harness/security/capability-enforcer.js';
+export { SecurityPresets, getSecurityPolicy } from './harness/security/policy.js';
+
+// ============================================================
+// v0.1.x 向后兼容导出（deprecated）
+// ============================================================
+
+/** @deprecated 使用 AgentBuilder 代替 */
 export { AgentRunner, AgentRunnerConfig } from './agent/agent-runner.js';
+/** @deprecated 使用 AgentBuilder 代替 */
 export { AgentRunner as AgentLoop } from './agent/agent-runner.js';
+/** @deprecated 使用 SessionAwareRunner 代替 */
 export { SessionManager } from './agent/session-manager.js';
 
 // Gateway
 export { Gateway } from './gateway/gateway.js';
 
-// Context
+// Context（deprecated — 使用 DefaultContextPipeline）
 export { LegacyContextEngine } from './context/engine.js';
 
 // Tools
@@ -65,24 +90,5 @@ export { HttpChannelAdapter } from './protocol/http.js';
 export { loadConfig, toGatewayConfig } from './config.js';
 export type { HarnessConfig, ProviderConfig, ChannelConfig } from './config.js';
 
-// ============================================================
-// v2.0 新架构导出
-// ============================================================
-
-// Core 层
-export { AgentEngine } from './core/engine.js';
-export { DefaultEventBus, NoopEventBus, AgentEvents } from './core/event-bus.js';
-export { DefaultSecurityGuard } from './core/security-guard.js';
-export { IterationBudget } from './core/budget.js';
-
-// Harness 层
-export { AgentBuilder, createAgent } from './harness/builder.js';
-export { SessionAwareRunner } from './harness/runner.js';
-export { loadPersona, composePersonas } from './harness/persona/loader.js';
-export { DefaultContextPipeline } from './harness/context/pipeline.js';
-
-// Integration 层
-export { JsonlSessionStore } from './integration/storage/jsonl.js';
-export { InMemorySessionStore } from './integration/storage/memory.js';
-export { NoopObserver } from './integration/observability/noop-observer.js';
-export { LogObserver } from './integration/observability/log-observer.js';
+// Core types（全部导出）
+export * from './core/types.js';

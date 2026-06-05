@@ -1,6 +1,6 @@
 {
   "name": "octopi",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "可嵌入的 Agent 底座框架",
   "type": "module",
   "main": "dist/index.js",
@@ -36,6 +36,18 @@
     "./plugin-sdk/manager": {
       "types": "./dist/plugins/manager.d.ts",
       "import": "./dist/plugins/manager.js"
+    },
+    "./core": {
+      "types": "./dist/core/index.d.ts",
+      "import": "./dist/core/index.js"
+    },
+    "./harness": {
+      "types": "./dist/harness/index.d.ts",
+      "import": "./dist/harness/index.js"
+    },
+    "./integration": {
+      "types": "./dist/integration/index.d.ts",
+      "import": "./dist/integration/index.js"
     }
   },
   "scripts": {
