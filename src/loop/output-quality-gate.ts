@@ -182,6 +182,21 @@ function detectRepetition(text: string): number {
 }
 
 /**
+ * 移除 Markdown 代码块
+ *
+ * 代码块中的语法结构不应该被误判为碎片
+ */
+function removeCodeBlocks(text: string): string {
+  // 移除围栏代码块 (```...```)
+  let result = text.replace(/```[\s\S]*?```/g, '');
+  
+  // 移除行内代码 (`...`)
+  result = result.replace(/`[^`]+`/g, '');
+  
+  return result;
+}
+
+/**
  * 计算语法碎片密度
  *
  * 每100字符的语法碎片数量
@@ -189,11 +204,17 @@ function detectRepetition(text: string): number {
 function calculateSyntaxFragmentDensity(text: string): number {
   if (text.length === 0) return 0;
   
+  // 移除代码块（代码块中的语法不应被检测）
+  const cleanedText = removeCodeBlocks(text);
+  
   // 对于超长文本，采样检测
   const maxSampleSize = 5000;
-  const sampleText = text.length > maxSampleSize 
-    ? text.slice(0, maxSampleSize / 2) + text.slice(text.length - maxSampleSize / 2)
-    : text;
+  const sampleText = cleanedText.length > maxSampleSize 
+    ? cleanedText.slice(0, maxSampleSize / 2) + cleanedText.slice(cleanedText.length - maxSampleSize / 2)
+    : cleanedText;
+  
+  // 如果清理后的文本太短，返回 0
+  if (sampleText.length < 10) return 0;
   
   let fragmentCount = 0;
   
