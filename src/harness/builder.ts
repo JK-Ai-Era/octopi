@@ -311,6 +311,11 @@ export class AgentBuilder {
       }
     }
 
+    // 如果有工具但没有 systemPrompt，自动生成工具说明
+    if (!systemPrompt && this._tools.size > 0) {
+      systemPrompt = this.buildDefaultSystemPrompt();
+    }
+
     // 创建默认组件
     const events = this._events ?? new DefaultEventBus();
     const security = this._security ?? new DefaultSecurityGuard(events, this._securityConfig);
@@ -335,6 +340,27 @@ export class AgentBuilder {
     };
 
     return new AgentEngine(deps);
+  }
+
+  /**
+   * 生成默认 systemPrompt，包含可用工具说明
+   */
+  private buildDefaultSystemPrompt(): string {
+    const toolList = Array.from(this._tools.values())
+      .map(t => `- ${t.definition.name}: ${t.definition.description}`)
+      .join('\n');
+
+    return `You are a helpful AI assistant with access to the following tools:
+
+${toolList}
+
+When the user asks you to do something that requires these tools, use them directly. Do not say you cannot do something if a tool can help. For example:
+- If asked to read a file, use the file_read tool
+- If asked to run a command, use the shell tool
+- If asked to list files, use the file_list tool
+- If asked to write a file, use the file_write tool
+
+Always try to use tools before saying you cannot help.`;
   }
 }
 
