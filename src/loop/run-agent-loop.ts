@@ -33,6 +33,37 @@ import { createOutputQualityGate } from './output-quality-gate.js';
 import { createOutputErrorClassifier } from './output-error-classifier.js';
 import type { QualityGateConfig, RecoveryConfig } from './output-quality-types.js';
 
+// ── 重复内容检测 ──
+
+/**
+ * 检测模型输出是否为重复内容
+ *
+ * 将文本按句子/标点分割，检查是否有大量重复片段。
+ * 如果超过 60% 的片段是重复的，认为模型陷入循环。
+ */
+function isRepetitiveContent(text: string): boolean {
+  if (text.length < 20) return false;
+
+  // 按中文句号、感叹号、问号、换行分割
+  const segments = text.split(/[。！？\n]+/).filter(s => s.trim().length > 2);
+  if (segments.length < 3) return false;
+
+  // 统计每个片段出现的次数
+  const counts = new Map<string, number>();
+  for (const seg of segments) {
+    const key = seg.trim();
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+
+  // 计算重复片段占比
+  let repeatedCount = 0;
+  for (const [, count] of counts) {
+    if (count >= 2) repeatedCount += count;
+  }
+
+  return repeatedCount / segments.length > 0.6;
+}
+
 // ── 内部工具类型（匹配 LLM 返回格式） ──
 
 interface LLMToolCallRaw {
@@ -414,6 +445,19 @@ export async function* runAgentLoop(
         usage: llmResponse.usage,
         durationMs: llmResponse.durationMs,
       };
+
+      // ══════════════════════════════════════════
+      // 重复内容检测（防止模型陷入输出循环）
+      // ══════════════════════════════════════════
+
+      if (!llmResponse.toolCalls?.length && isRepetitiveContent(llmResponse.content ?? '')) {
+        yield {
+          type: 'loop_end',
+          reason: 'completed',
+          response: llmResponse.content,
+        } as any;
+        return;
+      }
 
       // ══════════════════════════════════════════
       // Output Quality Gate（输出质量检测）
