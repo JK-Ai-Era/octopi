@@ -38,6 +38,16 @@ export type { Task, TaskDecision, TaskDecisionInput } from './tasks/index.js';
 export { OutputQualityGate, createOutputQualityGate } from './quality/index.js';
 export { OutputErrorClassifier, createOutputErrorClassifier } from './quality/index.js';
 
+// ── AgentSupervisor ──
+export { AgentSupervisor, startSupervisor, SupervisorEvents, EventCollector } from './supervisor/index.js';
+export type {
+  Planner, Reflector,
+  AgentState, AgentStats,
+  Plan, PlanStep, StepResult, ExecutionRecord,
+  Assessment, Pattern,
+  SupervisorConfig,
+} from './supervisor/index.js';
+
 // ── Config Bridge ──
 export { buildFromConfig, buildFromConfigFile, resolveProviders, resolveStore, resolveSecurityConfig } from './config-bridge.js';
 export type { BuiltAgent } from './config-bridge.js';

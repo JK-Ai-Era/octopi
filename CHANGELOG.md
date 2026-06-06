@@ -1,5 +1,29 @@
 # Changelog
 
+## v0.2.2 (2026-06-06)
+
+### Harness 层 — AgentSupervisor（Phase 1）
+
+新增 AgentSupervisor 模块，让 Agent 从“单次对话”进化为“持续运行的进程”。
+
+**新增模块：**
+- `AgentSupervisor` — 持续运行的 Agent 核心（认知循环：感知→思考→执行→反思）
+- `EventCollector` — 事件收集器（聚合 EventBus + EventSource + 手动注入）
+- `Planner` 接口 — 规划器接口（决定 Agent 做什么）
+- `Reflector` 接口 — 反思器接口（评估执行质量、识别模式）
+- `SupervisorConfig` / `AgentState` / `Plan` / `PlanStep` / `StepResult` 等类型
+
+**设计原则：**
+- 基于 Core ProcessModel 实现，有独立生命周期
+- Planner 可替换（LLM 驱动、规则驱动、混合）
+- Reflector 可选（没有反思器也能运行）
+- 与 AgentEngine 共存（单次推理仍由 AgentEngine 完成）
+
+### 测试
+
+- 测试总数：367 → 381（+14）
+- 新增 `tests/harness/supervisor.test.ts` — 14 个测试
+
 ## v0.2.1 (2026-06-06)
 
 ### Core 层架构升级 — 异步原语 + 进程模型
