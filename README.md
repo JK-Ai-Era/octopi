@@ -102,8 +102,18 @@ for await (const event of runner.handle('session-1', userMessage)) {
 | `AgentBuilder` | Fluent API 组装器（一行代码启动 Agent） |
 | `SessionAwareRunner` | Session 生命周期管理（锁、持久化、重置） |
 | `PersonaLoader` | 文件式人格系统（AGENTS.md、SOUL.md 等） |
-| `DefaultContextPipeline` | 可插拔的上下文管道（Persona → Skill → Task → History → Filter） |
+| `DefaultContextPipeline` | 可插拔的上下文管道（Persona → Skill → Task → History → Knowledge → Filter） |
 | `TaskTracker` / `TaskManager` | LLM 驱动的任务追踪与恢复 |
+| `AgentSupervisor` | 持续运行的 Agent 核心（认知循环：感知→思考→执行→反思） |
+| `EventCollector` | 事件收集器（聚合 EventBus + EventSource + 手动注入） |
+| `RulePlanner` / `LLMPlanner` / `HybridPlanner` | 规划器（规则驱动 / LLM 驱动 / 混合） |
+| `TaskScheduler` | 任务调度（once / interval / cron / at） |
+| `MemoryKnowledgeStore` | 知识存储（CRUD、关键词检索、过滤） |
+| `KnowledgeStage` | 上下文管道知识注入阶段 |
+| `LLMReflector` | LLM 反思器（质量评估、模式识别、经验存储） |
+| `RuleTaskClassifier` | 任务分类（7 种类型、3 级复杂度） |
+| `DefaultStrategyRouter` | 策略路由（6 种推理策略） |
+| `ResourceManager` | 资源管理（token 预算、成本追踪、速率限制） |
 | `CapabilityEnforcer` | Plugin 信任分级运行时强制 |
 | `SecurityPresets` | 安全策略预设（development/testing/production/maximum） |
 | `OutputQualityGate` | 输出质量检测 |
@@ -298,7 +308,7 @@ const { engine, runner } = await new AgentBuilder()
 
 ```bash
 npm test
-# 367 tests passed
+# 453 tests passed
 ```
 
 ---

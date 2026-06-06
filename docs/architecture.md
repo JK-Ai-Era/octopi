@@ -1,6 +1,6 @@
 # Octopi 架构设计文档
 
-> 版本：v2.1 | 日期：2026-06-06
+> 版本：v2.2 | 日期：2026-06-06
 
 本文档是 Octopi 框架的完整架构设计，记录了设计决策的背景、权衡和原则。
 
@@ -95,6 +95,35 @@ src/
 │   ├── security/
 │   │   ├── capability-enforcer.ts # CapabilityEnforcer
 │   │   ├── policy.ts              # SecurityPresets
+│   │   └── index.ts
+│   ├── supervisor/                # AgentSupervisor — 持续运行的 Agent 核心
+│   │   ├── supervisor.ts          # AgentSupervisor — 认知循环
+│   │   ├── event-collector.ts     # EventCollector — 事件收集器
+│   │   ├── types.ts               # Planner/Reflector 接口 + 类型
+│   │   └── index.ts
+│   ├── planner/                   # Planner — 规划器
+│   │   ├── rule-planner.ts        # RulePlanner — 规则驱动
+│   │   ├── llm-planner.ts         # LLMPlanner — LLM 驱动
+│   │   ├── hybrid-planner.ts      # HybridPlanner — 混合
+│   │   └── index.ts
+│   ├── scheduler/                 # TaskScheduler — 任务调度
+│   │   ├── task-scheduler.ts      # once/interval/cron/at
+│   │   └── index.ts
+│   ├── knowledge/                 # KnowledgeStore — 知识存储
+│   │   ├── memory-store.ts        # MemoryKnowledgeStore — 内存存储
+│   │   ├── stage.ts               # KnowledgeStage — 上下文注入
+│   │   ├── types.ts               # 知识类型
+│   │   └── index.ts
+│   ├── reflector/                 # Reflector — 反思器
+│   │   ├── llm-reflector.ts       # LLMReflector — LLM 驱动
+│   │   └── index.ts
+│   ├── strategy/                  # StrategyRouter — 策略路由
+│   │   ├── classifier.ts          # RuleTaskClassifier — 任务分类
+│   │   ├── router.ts              # DefaultStrategyRouter — 路由
+│   │   ├── types.ts               # 策略类型
+│   │   └── index.ts
+│   ├── resources/                 # ResourceManager — 资源管理
+│   │   ├── manager.ts             # token/成本/速率
 │   │   └── index.ts
 │   ├── compat/
 │   │   ├── legacy-agent-runner.ts # v0.1.x 兼容层
@@ -489,6 +518,133 @@ in_progress ←→ interrupted → completed
 ### 4.5 Plugin 如何挂载到 Core
 
 Plugin 不直接访问 AgentEngine。PluginManager 负责将多个 Plugin 的 hooks 组合成回调函数，注入到 AgentEngine 的回调槽。
+
+### 4.6 AgentSupervisor — 持续运行的 Agent 核心
+
+让 Agent 从“单次对话”进化为“持续运行的进程”。基于 Core ProcessModel 实现，提供认知循环：
+
+```
+感知 → 思考 → 执行 → 反思 → (循环)
+```
+
+```
+AgentSupervisor
+├── EventCollector     — 聚合所有事件源
+├── Planner            — 决定做什么
+├── AgentEngine        — 单次推理执行
+├── Reflector          — 评估执行质量（可选）
+└── ProcessModel       — 进程生命周期
+```
+
+```typescript
+const supervisor = new AgentSupervisor({
+  agentId: 'my-agent',
+  planner: new HybridPlanner({ llm: { model: provider } }),
+  reflector: new LLMReflector({ model: provider }),
+  idleTimeoutMs: 30000,
+}, eventBus);
+
+supervisor.injectMessage(userMessage);  // 注入事件
+await supervisor.start(engine);          // 开始持续运行
+```
+
+### 4.7 Planner — 规划器
+
+决定 Agent 在给定事件和状态下应该做什么。三种实现：
+
+| 规划器 | 适用场景 | 是否需要 LLM |
+|--------|----------|-------------|
+| `RulePlanner` | 常见事件（用户消息、安全事件） | 否 |
+| `LLMPlanner` | 复杂场景（意图理解、目标分解） | 是 |
+| `HybridPlanner` | 通用场景（规则优先，LLM 兜底） | 按需 |
+
+```typescript
+// 规则优先，LLM fallback
+const planner = new HybridPlanner({
+  llm: { model: provider },
+  rules: [USER_MESSAGE_RULE, SECURITY_EVENT_RULE],
+});
+```
+
+### 4.8 TaskScheduler — 任务调度
+
+支持定时任务、延迟任务、循环任务。纯 JS 实现，不依赖外部 cron 库。
+
+```typescript
+const scheduler = new TaskScheduler({}, eventBus);
+scheduler.start();
+
+scheduler.scheduleOnce('cleanup', 60000, () => cleanup());
+scheduler.scheduleInterval('heartbeat', 300000, () => heartbeat());
+scheduler.scheduleCron('daily-report', '0 9 * * *', () => generateReport());
+```
+
+### 4.9 KnowledgeStore — 知识存储
+
+Agent 积累的知识：事实、模式、经验教训、偏好。通过 KnowledgeStage 注入上下文。
+
+```typescript
+const store = new MemoryKnowledgeStore();
+await store.store({ type: 'lesson', content: 'API 超时时应重试 3 次', confidence: 0.9, tags: ['api', 'retry'] });
+
+// 检索相关知识
+const entries = await store.retrieve('API timeout');
+
+// 作为上下文注入
+const stage = new KnowledgeStage({ store });
+const ctx = await stage.process({ messages, systemPrompt, tools });
+```
+
+### 4.10 Reflector — 反思器
+
+评估执行质量，识别模式，自动存储经验教训。
+
+```typescript
+const reflector = new LLMReflector({ model: provider, knowledgeStore: store });
+
+const assessment = await reflector.assess(executionRecord);
+// { quality: 0.8, success: true, suggestions: ['可以优化响应速度'] }
+
+const patterns = await reflector.detectPatterns(recentHistory);
+// [{ type: 'recurring_error', description: 'API 频繁超时', confidence: 0.9 }]
+// 高置信度模式自动存入 KnowledgeStore
+```
+
+### 4.11 StrategyRouter — 策略路由
+
+根据任务类型选择最合适的推理策略。
+
+| 策略 | 适用场景 |
+|------|----------|
+| `direct` | 简单问题，直接回答 |
+| `chain_of_thought` | 需要推理的问题 |
+| `plan_and_execute` | 复杂任务，先规划再执行 |
+| `tool_use` | 需要外部信息或操作 |
+| `reflect` | 需要高质量输出 |
+| `multi_agent` | 超复杂任务，多 Agent 协作 |
+
+### 4.12 ResourceManager — 资源管理
+
+统一管理 token 预算、成本追踪、速率限制。
+
+```typescript
+const rm = new ResourceManager({
+  tokenBudget: { perCall: 100000, perMinute: 500000, total: 10000000 },
+  pricing: { 'gpt-4': { inputPer1M: 30, outputPer1M: 60 } },
+  rateLimit: { requestsPerMinute: 60, maxConcurrent: 5 },
+});
+
+// 检查预算
+const check = rm.checkTokenBudget(50000);
+if (!check.allowed) console.warn(check.reason);
+
+// 记录使用
+rm.recordTokenUsage(1000, 500, 'gpt-4');
+
+// 查看统计
+console.log(rm.stats());
+// { token: { total: 1500 }, cost: { total: 0.06 }, rate: { concurrent: 0 } }
+```
 
 ---
 
