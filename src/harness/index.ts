@@ -38,6 +38,14 @@ export type { Task, TaskDecision, TaskDecisionInput } from './tasks/index.js';
 export { OutputQualityGate, createOutputQualityGate } from './quality/index.js';
 export { OutputErrorClassifier, createOutputErrorClassifier } from './quality/index.js';
 
+// ── Knowledge ──
+export { MemoryKnowledgeStore, KnowledgeStage } from './knowledge/index.js';
+export type { KnowledgeStore, KnowledgeEntry, KnowledgeType, KnowledgeStats, RetrieveOptions, KnowledgeStageConfig } from './knowledge/index.js';
+
+// ── Reflector ──
+export { LLMReflector } from './reflector/index.js';
+export type { LLMReflectorConfig } from './reflector/index.js';
+
 // ── Planner ──
 export { RulePlanner, LLMPlanner, HybridPlanner, USER_MESSAGE_RULE, SECURITY_EVENT_RULE, IDLE_RULE, getDefaultRules } from './planner/index.js';
 export type { Rule, RuleCondition, RuleAction, LLMPlannerConfig, HybridPlannerConfig } from './planner/index.js';

@@ -1,5 +1,33 @@
 # Changelog
 
+## v0.2.4 (2026-06-06)
+
+### Harness 层 — KnowledgeStore + Reflector（Phase 3）
+
+新增知识存储和反思器，让 Agent 能积累知识、从经验中学习。
+
+**新增 Knowledge 模块：**
+- `MemoryKnowledgeStore` — 内存知识存储（开发/测试用）
+  - CRUD 操作、关键词检索、按类型/标签/置信度过滤
+  - 访问计数追踪、统计信息
+- `KnowledgeStage` — 上下文管道知识注入阶段
+  - 从用户消息提取关键词，检索相关知识，注入 system prompt
+
+**新增 Reflector 模块：**
+- `LLMReflector` — LLM 驱动的反思器
+  - 执行质量评估（assess）
+  - 模式识别（detectPatterns）
+  - 高置信度模式自动存入 KnowledgeStore
+
+**类型定义：**
+- `KnowledgeEntry` — 知识条目（fact/pattern/lesson/preference/skill）
+- `KnowledgeStore` 接口 — 可替换的存储后端
+
+### 测试
+
+- 测试总数：410 → 430（+20）
+- 新增 `tests/harness/knowledge.test.ts` — 20 个测试
+
 ## v0.2.3 (2026-06-06)
 
 ### Harness 层 — Planner + TaskScheduler（Phase 2）
