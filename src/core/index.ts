@@ -21,6 +21,13 @@ export type { SecurityGuard, SecurityCheckResult, SecurityViolation, SecurityGua
 export { IterationBudget, DEFAULT_BUDGET } from './budget.js';
 export type { IterationBudgetConfig, BudgetStatus, BudgetReport } from './budget.js';
 
+// ── 核心原语 ──
+export { AsyncTask, TaskTimeoutError, TaskCancelledError, spawnTask, TaskEvents } from './async-task.js';
+export type { TaskOptions, TaskExecutor } from './async-task.js';
+
+export { ProcessModel, ProcessEvents, spawnProcess } from './process-model.js';
+export type { ProcessState, ExitReason, ExitInfo, ProcessOptions, ProcessBody, ProcessContext } from './process-model.js';
+
 // ── 核心类型 ──
 // 只从 types.ts 导出不与 interfaces 重叠的类型
 export type {

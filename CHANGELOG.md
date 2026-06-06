@@ -1,5 +1,37 @@
 # Changelog
 
+## v0.2.1 (2026-06-06)
+
+### Core 层架构升级 — 异步原语 + 进程模型
+
+在 Core 层新增两个底层原语，为 Agent 的高级能力（异步任务、多进程协作、消息传递）打基础。
+
+**新增核心原语：**
+- `AsyncTask` — 异步任务原语（420 行）
+  - 状态机：pending → running → completed | failed | cancelled
+  - 支持：取消（AbortSignal）、超时、重试、事件发射、持久化
+  - `spawnTask()` 便捷方法：发射后不管
+- `ProcessModel` — Agent 进程模型（502 行）
+  - 状态机：born → running → sleeping → waiting → dead
+  - 支持：父子进程（spawn）、进程间通信（send/receive）、sleep、kill、事件
+  - `spawnProcess()` 便捷方法
+
+**新增接口：**
+- `EventSource` — 外部事件源协议（webhook、file watcher、timer 等）
+- `TaskStore` — 任务持久化协议（内存、文件、Redis 等）
+- `MessageChannel` — 进程间通信协议（内存队列、WebSocket、消息队列等）
+
+**设计原则：**
+- 内核提供机制（mechanism），Harness 提供策略（policy）
+- 内核只做“如果它不做，别人就没法做”的事
+- Planner、Reflector、KnowledgeStore 等高级能力全部放 Harness 层
+
+### 测试
+
+- 测试总数：326 → 367（+41）
+- 新增 `tests/core/async-task.test.ts` — 22 个测试
+- 新增 `tests/core/process-model.test.ts` — 19 个测试
+
 ## v0.2.0 (2026-06-06)
 
 ### 架构重构 — 三层洋葱模型

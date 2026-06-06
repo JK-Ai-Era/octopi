@@ -47,3 +47,23 @@ export type {
   SessionStore,
   SessionData,
 } from './session-store.js';
+
+export type {
+  EventSource,
+  EventSourceDescriptor,
+  ExternalEvent,
+} from './event-source.js';
+
+export type {
+  TaskStore,
+  TaskRecord,
+  TaskStatus,
+  TaskPriority,
+  TaskFilter,
+} from './task-store.js';
+
+export type {
+  MessageChannel,
+  ProcessMessage,
+  MessageHandler,
+} from './message-channel.js';

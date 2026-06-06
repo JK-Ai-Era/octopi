@@ -1,6 +1,6 @@
 # Octopi 架构设计文档
 
-> 版本：v2.0 | 日期：2026-06-06
+> 版本：v2.1 | 日期：2026-06-06
 
 本文档是 Octopi 框架的完整架构设计，记录了设计决策的背景、权衡和原则。
 
@@ -57,6 +57,8 @@ src/
 │   ├── security-guard.ts          # SecurityGuard — 内置安全守卫
 │   ├── budget.ts                  # IterationBudget — 资源约束
 │   ├── types.ts                   # 核心类型定义
+│   ├── async-task.ts              # AsyncTask — 异步任务原语
+│   ├── process-model.ts           # ProcessModel — Agent 进程模型
 │   ├── interfaces/                # 接口契约
 │   │   ├── model-provider.ts      # ModelProvider
 │   │   ├── tool-executor.ts       # ToolExecutor
@@ -64,6 +66,9 @@ src/
 │   │   ├── error-strategy.ts      # ErrorStrategy
 │   │   ├── observer.ts            # Observer
 │   │   ├── session-store.ts       # SessionStore
+│   │   ├── event-source.ts        # EventSource — 外部事件源协议
+│   │   ├── task-store.ts          # TaskStore — 任务持久化协议
+│   │   ├── message-channel.ts     # MessageChannel — 进程间通信协议
 │   │   └── index.ts
 │   └── index.ts
 │
@@ -159,7 +164,123 @@ src/
 
 ## 3. Core 层详解
 
-### 3.1 AgentEngine — 无状态循环引擎
+### 3.1 核心原语
+
+Core 层提供两个底层原语，为 Agent 的高级能力打基础。
+
+#### AsyncTask — 异步任务原语
+
+Agent 的异步能力的最小单元。不是任务调度系统，是 Promise 的内核级扩展。
+
+```
+普通 Promise:     创建 → 执行 → resolve/reject
+                  （无法取消，无法查询状态，无法超时）
+
+AsyncTask:        创建 → pending → running → completed
+                                        → failed
+                                        → cancelled
+                  （可取消，可查询状态，可超时，可重试，可持久化）
+```
+
+**状态机：**
+```
+                  ┌─────────┐
+                  │ pending  │ ← 创建后
+                  └────┬────┘
+                       │ run()
+                       ▼
+                  ┌─────────┐
+            ┌─────│ running  │─────┐
+            │     └────┬────┘     │
+            │          │          │
+     cancel()    成功完成     失败/超时
+            │          │          │
+            ▼          ▼          ▼
+       ┌─────────┐ ┌──────────┐ ┌─────────┐
+       │cancelled│ │completed │ │ failed  │
+       └─────────┘ └──────────┘ └─────────┘
+```
+
+**六个关键机制：**
+
+| 机制 | 说明 |
+|------|------|
+| 取消（Cancel） | 通过 AbortSignal 传递取消信号，子操作同步取消 |
+| 超时（Timeout） | 自动计时，超时后 fail + abort，防止任务永远卡住 |
+| 重试（Retry） | 失败后自动重试，AbortController 重置，每次重试是干净的 |
+| 事件（Events） | 所有状态变化通过 EventBus 发射，可监控、审计 |
+| 持久化（Persistence） | 通过 TaskStore 接口持久化状态，进程重启后可恢复 |
+| AbortSignal 传递 | signal 可传给子操作（fetch、writeFile 等），取消时级联清理 |
+
+```typescript
+// 基本用法
+const task = new AsyncTask<string>({ type: 'llm-call', timeoutMs: 30000 });
+const result = await task.run(async (input, signal) => {
+  return await llm.complete(messages, { signal });
+});
+
+// 便捷方法：发射后不管
+const task = spawnTask({ type: 'background-scan' }, async () => scan());
+const results = await task.wait(30000); // 稍后获取结果
+```
+
+#### ProcessModel — Agent 进程模型
+
+Agent 进程生命周期的最小抽象。类比 Erlang OTP 的 process：有状态、可通信、可监控。
+
+**状态机：**
+```
+              ┌──────┐
+              │ born  │ ← new ProcessModel()
+              └──┬───┘
+                 │ run()
+                 ▼
+              ┌──────────┐
+     ┌───────│ running   │───────┐
+     │        └────┬─────┘       │
+     │             │             │
+  kill()      sleep(ms)      正常退出
+     │             │             │
+     ▼             ▼             ▼
+  ┌──────┐   ┌──────────┐   ┌──────┐
+  │ dead  │   │ sleeping  │   │ dead  │
+  └──────┘   └────┬─────┘   └──────┘
+                  │ 定时到/kill
+                  ▼
+              ┌──────────┐
+              │ running   │
+              └──────────┘
+```
+
+**六个关键机制：**
+
+| 机制 | 说明 |
+|------|------|
+| 进程体（Body） | 接收 ctx 上下文，可做任何事：循环、状态机、事件驱动 |
+| 父子进程（Spawn） | 子进程异步运行，继承 agentId，父退出时子自动 kill |
+| 消息传递（Send/Receive） | 进程树内直接投递（零开销），跨进程通过 MessageChannel |
+| 休眠（Sleep） | 进程状态变化，不消耗 CPU，可被 kill 唤醒 |
+| 通信协议（MessageChannel） | 接口抽象，可选 WebSocket、消息队列等实现 |
+| 事件可观测 | 所有状态变化通过 EventBus 发射 |
+
+```typescript
+// 创建 Agent 进程
+const agent = new ProcessModel({ name: 'my-agent' }, events);
+await agent.run(async (ctx) => {
+  while (true) {
+    const msg = await ctx.receive('user-message', 60000);
+    if (msg) {
+      // spawn 子进程处理复杂任务
+      ctx.spawn(async (childCtx) => {
+        const result = await doComplexWork();
+        await childCtx.send(ctx.id, 'result', result);
+      });
+    }
+  }
+});
+```
+
+### 3.2 AgentEngine — 无状态循环引擎
 
 ```typescript
 class AgentEngine {
@@ -232,7 +353,7 @@ class AgentEngine {
 - **可复用性** — 同一个引擎可以有 Session 或无 Session
 - **关注点分离** — "怎么循环"和"怎么存储"是两个独立问题
 
-### 3.2 回调槽而非 LifecycleHooks 接口
+### 3.3 回调槽而非 LifecycleHooks 接口
 
 Core 只暴露**回调槽**——AgentEngine 上的可选函数属性。Harness 层可以把任何东西注入到这些槽里。
 
@@ -250,7 +371,7 @@ engine.onMessage = (msg) => pluginManager.runHookChain('onMessage', msg);
 
 **好处：** Core 不预设扩展机制，Harness 可以用任何方式实现扩展。
 
-### 3.3 EventBus 是内置的
+### 3.4 EventBus 是内置的
 
 EventBus 不是可选插件，是 Core 的一部分。原因：
 
@@ -268,7 +389,7 @@ INJECTION_DETECTED                  — 安全事件
 BUDGET_EXCEEDED                     — 资源事件
 ```
 
-### 3.4 SecurityGuard 是内置的
+### 3.5 SecurityGuard 是内置的
 
 Prompt Injection 是 Agent 框架最严重的安全威胁。安全检查不可禁用。
 
@@ -279,7 +400,7 @@ Prompt Injection 是 Agent 框架最严重的安全威胁。安全检查不可�
 
 **不可禁用，不可绕过。** 但检查的**策略**（灵敏度、模式）由 Harness 层配置。
 
-### 3.5 ContextPipeline 是管道模型
+### 3.6 ContextPipeline 是管道模型
 
 上下文组装采用管道模型，每个阶段是一个独立的 `ContextStage`：
 

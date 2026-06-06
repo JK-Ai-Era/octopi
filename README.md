@@ -78,13 +78,20 @@ for await (const event of runner.handle('session-1', userMessage)) {
 | `AgentEngine` | 无状态循环引擎（输入 → 推理 → 工具 → 输出） |
 | `EventBus` | 内置事件总线（全链路可观测） |
 | `SecurityGuard` | 内置安全守卫（注入检测、敏感信息过滤，不可禁用） |
+| `AsyncTask` | 异步任务原语（取消、超时、重试、持久化） |
+| `ProcessModel` | Agent 进程模型（生命周期、spawn、消息传递） |
 | `IterationBudget` | 资源约束（迭代次数、工具调用、token、时间） |
+| `AsyncTask` | 异步任务原语（取消、超时、重试、持久化） |
+| `ProcessModel` | Agent 进程模型（生命周期、spawn、消息传递） |
 | `ModelProvider` | LLM 调用接口 |
 | `ToolExecutor` | 工具执行接口 |
 | `ContextPipeline` | 上下文组装管道接口 |
 | `ErrorStrategy` | 错误处理策略接口 |
 | `Observer` | 可观测性接口 |
 | `SessionStore` | Session 持久化接口 |
+| `EventSource` | 外部事件源协议 |
+| `TaskStore` | 任务持久化协议 |
+| `MessageChannel` | 进程间通信协议 |
 
 ### Harness 层（`src/harness/`）
 
@@ -291,7 +298,7 @@ const { engine, runner } = await new AgentBuilder()
 
 ```bash
 npm test
-# 325 tests passed
+# 367 tests passed
 ```
 
 ---
