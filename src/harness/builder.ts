@@ -151,6 +151,7 @@ export class AgentBuilder {
 
   // Harness 组件
   private _personaWorkspaces: string[] = [];
+  private _systemPrompt?: string;
   private _contextStages?: ContextStage[];
   private _securityConfig?: SecurityGuardConfig;
 
@@ -254,6 +255,12 @@ export class AgentBuilder {
     return this;
   }
 
+  /** 直接设置 systemPrompt（优先于 persona 目录） */
+  systemPrompt(prompt: string): this {
+    this._systemPrompt = prompt;
+    return this;
+  }
+
   // ── Runner 配置 ──
 
   /** 设置 Session 存储 */
@@ -294,9 +301,9 @@ export class AgentBuilder {
       throw new Error('ModelProvider is required. Call .model() before .build()');
     }
 
-    // 加载 persona
-    let systemPrompt = '';
-    if (this._personaWorkspaces.length > 0) {
+    // 加载 systemPrompt：直接设置优先于 persona 目录
+    let systemPrompt = this._systemPrompt ?? '';
+    if (!systemPrompt && this._personaWorkspaces.length > 0) {
       if (this._personaWorkspaces.length === 1) {
         systemPrompt = await loadPersona(this._personaWorkspaces[0]);
       } else {

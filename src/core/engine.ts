@@ -261,8 +261,14 @@ export class AgentEngine {
           let llmResponse: LLMResponse;
 
           try {
-            // 尝试流式调用，回退到同步调用
-            llmResponse = await this.callModel(llmRequest, signal);
+            // 流式调用，yield 流式事件
+            const callResult = this.callModel(llmRequest, signal);
+            let result = await callResult.next();
+            while (!result.done) {
+              yield result.value;
+              result = await callResult.next();
+            }
+            llmResponse = result.value;
           } catch (err) {
             modelSpan?.setStatus('error');
             modelSpan?.end();
@@ -505,7 +511,7 @@ export class AgentEngine {
   /**
    * 调用模型（流式优先，回退到同步）
    */
-  private async callModel(request: LLMRequest, signal?: AbortSignal): Promise<LLMResponse> {
+  private async *callModel(request: LLMRequest, signal?: AbortSignal): AsyncGenerator<EngineEvent, LLMResponse> {
     const { model } = this.deps;
 
     // 收集流式响应
@@ -519,6 +525,7 @@ export class AgentEngine {
 
         if (chunk.type === 'content' && chunk.content) {
           content += chunk.content;
+          yield { type: 'llm_stream_delta', timestamp: Date.now(), data: { delta: chunk.content } };
         }
 
         if (chunk.type === 'tool_call' && chunk.toolCall) {
@@ -549,7 +556,11 @@ export class AgentEngine {
     } catch (err) {
       // 流式失败，回退到同步
       if (err instanceof Error && err.message.includes('stream')) {
-        return model.chat(request);
+        const response = await model.chat(request);
+        if (response.content) {
+          yield { type: 'llm_stream_delta', timestamp: Date.now(), data: { delta: response.content } };
+        }
+        return response;
       }
       throw err;
     }

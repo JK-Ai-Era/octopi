@@ -195,8 +195,13 @@ async function chatCommand(args: CliArgs): Promise<void> {
     .model(provider)
     .store(new JsonlSessionStore(resolve(configDir, '.octopi/sessions')));
 
+  // 传递 systemPrompt 到 builder
   if (typeof agent.persona === 'object' && agent.persona?.systemPrompt) {
-    // persona 通过 systemPrompt 传入
+    builder.systemPrompt(agent.persona.systemPrompt);
+  } else if (typeof agent.persona === 'string') {
+    // persona 路径
+    const personaPath = agent.persona.startsWith('/') ? agent.persona : resolve(configDir, agent.persona);
+    builder.persona(personaPath);
   }
 
   for (const tool of getBuiltinTools()) {
