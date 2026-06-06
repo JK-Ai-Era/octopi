@@ -498,6 +498,7 @@ export interface AgentLoopConfig {
   provider: LLMProvider;
   agentId: string;
   workspace?: string;
+  systemPrompt?: string;
   contextEngine: ContextEngine;
   toolRegistry: {
     getDefinitions(): unknown[];

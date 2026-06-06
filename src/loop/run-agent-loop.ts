@@ -273,6 +273,19 @@ export async function* runAgentLoop(
       const llmMessages = assembleResult.messages as unknown as LLMMessage[];
 
       // ══════════════════════════════════════════
+      // System Prompt 注入
+      // ══════════════════════════════════════════
+      if (config.systemPrompt) {
+        const systemIdx = llmMessages.findIndex((m) => m.role === 'system');
+        if (systemIdx >= 0) {
+          llmMessages[systemIdx].content =
+            config.systemPrompt + '\n\n' + (llmMessages[systemIdx].content ?? '');
+        } else {
+          llmMessages.unshift({ role: 'system', content: config.systemPrompt });
+        }
+      }
+
+      // ══════════════════════════════════════════
       // Plugin Hook: before_prompt_build（注入额外上下文）
       // ══════════════════════════════════════════
       if (pluginManager) {

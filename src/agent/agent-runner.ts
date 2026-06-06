@@ -299,6 +299,7 @@ export class AgentRunner {
         provider,
         agentId: agent.id,
         workspace: agent.workspace, // ← 传递工作目录
+        systemPrompt: typeof agent.persona === 'object' ? agent.persona.systemPrompt : undefined,
         contextEngine,
         toolRegistry: {
           getDefinitions: () => this.toolRegistry.getDefinitionsForLLM(agent.id),
