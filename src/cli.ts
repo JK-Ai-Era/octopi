@@ -210,6 +210,9 @@ async function chatCommand(args: CliArgs): Promise<void> {
 
   const { engine, runner } = await builder.build();
 
+  // 每次 CLI 启动生成唯一 session，避免跨重启的上下文错乱
+  const cliSessionId = `${agent.id}:cli:${Date.now()}`;
+
   // 进度显示状态
   let hasShownThinking = false;
   let streamedContent = '';
@@ -244,16 +247,15 @@ async function chatCommand(args: CliArgs): Promise<void> {
           timestamp: Date.now(),
         };
 
-        const sessionKey = `${agent.id}:cli`;
         const runConfig = {
           agentId: agent.id,
-          sessionId: sessionKey,
+          sessionId: cliSessionId,
           model: agent.model.model,
           systemPrompt: typeof agent.persona === 'object' ? agent.persona?.systemPrompt : '',
         };
 
         let finalContent = '';
-        for await (const event of runner.handle(sessionKey, userMessage, runConfig)) {
+        for await (const event of runner.handle(cliSessionId, userMessage, runConfig)) {
           if (event.type === 'llm_request') {
             if (!hasShownThinking) {
               process.stdout.write('  🤔 Thinking...');
