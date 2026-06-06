@@ -1,6 +1,6 @@
 # Octopi 架构设计文档
 
-> 版本：v2.2 | 日期：2026-06-06
+> 版本：v2.3 | 日期：2026-06-06
 
 本文档是 Octopi 框架的完整架构设计，记录了设计决策的背景、权衡和原则。
 
@@ -353,7 +353,9 @@ class AgentEngine {
 │  beforeModelCall 回调（可覆盖模型）                    │
 │  │                                                   │
 │  ▼                                                   │
-│  ModelProvider.stream()                              │
+│  callModel() — 流式调用                              │
+│  │  ├─ yield llm_stream_delta（实时内容流）            │
+│  │  └─ yield tool_call（工具调用元数据）               │
 │  │                                                   │
 │  ▼                                                   │
 │  SecurityGuard.checkModelOutput()                    │
@@ -376,6 +378,11 @@ class AgentEngine {
 │  afterTurn 回调                                      │
 └──────────────────────────────────────────────────────┘
 ```
+
+**流式事件：**
+- `llm_stream_delta` — 模型输出的每个内容块，用于实时显示
+- `tool_call` — 工具调用元数据（支持多工具并行，每个有独立 index）
+- `tool.exec.start` / `tool.exec.end` — 工具执行生命周期
 
 **为什么 Core 是无状态的？**
 - **可测试性** — 不需要 mock SessionStore 就能测试循环
@@ -456,7 +463,8 @@ PersonaStage → SkillStage → TaskStage → HistoryStage → FilterStage
 ```typescript
 const { engine, runner } = await new AgentBuilder()
   .model(new OpenAIProvider({ apiKey: '...' }))
-  .persona('./my-agent')
+  .persona('./my-agent')          // 从目录加载 persona
+  .systemPrompt('You are ...')    // 或直接设置 systemPrompt（优先）
   .store(new JsonlSessionStore('./data'))
   .plugin(myPlugin)
   .budget({ maxIterations: 15, maxTokens: 100000 })
@@ -465,6 +473,11 @@ const { engine, runner } = await new AgentBuilder()
 ```
 
 AgentBuilder 组装 Core + Harness 组件，返回 `{ engine, runner }`。
+
+**systemPrompt 优先级：**
+1. `builder.systemPrompt()` — 直接设置（最高优先级）
+2. `builder.persona()` — 从目录加载
+3. 有工具但无 systemPrompt — 自动生成工具说明（最低优先级）
 
 ### 4.2 SessionAwareRunner
 
@@ -476,7 +489,11 @@ class SessionAwareRunner {
 }
 ```
 
-**职责：** 消息持久化、Session 锁（同一 session 同时只有一个运行）、Daily/Idle Reset。
+**职责：**
+- 消息持久化（通过 SessionStore）
+- Session 锁（Promise FIFO 队列，同一 session 同时只有一个运行，无 polling 开销）
+- Daily Reset（跨天自动清空上下文）
+- Idle Reset（空闲超时自动清空）
 
 ### 4.3 文件式 Persona
 
@@ -741,6 +758,38 @@ Observer 接口的实现：
 **理由：** Task 的核心是"上下文增强"——往 system prompt 注入任务上下文，让主 Agent 自然决定行为。这是上下文增强，不是拦截/修改。
 
 **权衡：** TaskStage 是异步的，需要管道支持 async stage。
+
+### ADR-008: callModel 流式事件 yield
+
+**决策：** `AgentEngine.callModel()` 改为 AsyncGenerator，实时 yield `llm_stream_delta` 事件，而非收集完整响应后再返回。
+
+**理由：** 流式输出是用户体验的核心需求。之前 callModel 收集流但不 yield，导致 CLI 无法实时显示内容。
+
+**权衡：** callModel 的返回类型从 `Promise<LLMResponse>` 变为 `AsyncGenerator<EngineEvent, LLMResponse>`，增加了调用方的复杂度。
+
+### ADR-009: ToolExecutor 返回原始结果
+
+**决策：** `ToolExecutor.execute()` 返回 `Promise<unknown>`（原始结果），Engine 负责包装为 `ToolResult`。
+
+**理由：** 职责清晰——Executor 只负责执行，Engine 负责结果格式化。之前 Executor 返回 `ToolResult` 但 Engine 又包一层，导致双层包装。
+
+**权衡：** Executor 的返回类型不够明确，需要文档说明。
+
+### ADR-010: 错误分类优先 HTTP 状态码
+
+**决策：** 错误分类优先从 error 对象提取 HTTP 状态码（status/statusCode），回退到消息文本匹配。同时提取 Retry-After 头部用于重试延迟。
+
+**理由：** 字符串匹配不可靠（`lower.includes('rate')` 可能误匹配）。HTTP 状态码是结构化信息，分类更准确。
+
+**权衡：** 需要 Provider 在 error 对象中携带 status 属性。
+
+### ADR-011: Plugin hook 超时可配置
+
+**决策：** Plugin hook 超时后默认跳过 handler 并继续执行后续 hook（不中断链）。可通过 `abortOnTimeout` 配置为中断。
+
+**理由：** 不同 hook 对超时的容忍度不同。迭代级 hook（before_iteration）超时应跳过继续，安全相关 hook（before_tool_call）超时应中断。
+
+**权衡：** 增加了配置复杂度。
 
 ---
 
