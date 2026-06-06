@@ -181,9 +181,10 @@ export class AnthropicProvider implements LLMProvider {
                   name: currentToolName,
                   arguments: args,
                 });
-                // 每个工具块完成时立即 yield，避免在 message_delta 前丢失
+                // 每个工具块完成时 yield toolCalls 元数据
+                // 不包含 content（已在 text_delta 中流式 yield 过）
                 yield {
-                  content: textContent || '',
+                  content: '',
                   toolCalls: [...toolCalls],
                   model: request.model,
                   finishReason: 'tool_calls',
@@ -195,8 +196,10 @@ export class AnthropicProvider implements LLMProvider {
             } else if (data.type === 'message_delta') {
               const delta = data.delta as Record<string, unknown> | undefined;
               const stopReason = delta?.stop_reason as string;
+              // 消息结束：只在无 toolCalls 时输出空 content（纯文本回复的结束信号）
+              // 有 toolCalls 时 content 已在 text_delta 中流式传输过
               const result: LLMResponse = {
-                content: textContent || '',
+                content: '',
                 model: request.model,
                 finishReason: stopReason === 'tool_calls' ? 'tool_calls' : 'stop',
               };

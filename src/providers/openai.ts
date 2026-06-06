@@ -143,7 +143,8 @@ export class OpenAIProvider implements LLMProvider {
         if (!trimmed || !trimmed.startsWith('data: ')) continue;
         const data = trimmed.slice(6);
         if (data === '[DONE]') {
-          // 流结束：输出最终结果
+          // 流结束：只输出元数据（toolCalls），不重复输出 content
+          // content 已在流式过程中作为增量 delta yield 过
           if (toolCallBuffers.size > 0) {
             const toolCalls: ToolCall[] = [];
             for (const [, buf] of toolCallBuffers) {
@@ -154,17 +155,10 @@ export class OpenAIProvider implements LLMProvider {
               });
             }
             yield {
-              content: textContent || '',
+              content: '',
               toolCalls,
               model: request.model,
               finishReason: 'tool_calls',
-            };
-          } else if (textContent) {
-            // 纯文本回复：输出最终结果
-            yield {
-              content: textContent,
-              model: request.model,
-              finishReason: 'stop',
             };
           }
           return;
