@@ -219,6 +219,8 @@ export interface ToolExecutionContext {
   agentId: string;
   messages: Message[];
   abortSignal?: AbortSignal;
+  /** 当前工作目录 */
+  cwd?: string;
 }
 
 /**

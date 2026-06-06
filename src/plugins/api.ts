@@ -327,7 +327,7 @@ export class PluginApi {
    * 注册 Web Search Provider
    */
   registerWebSearchProvider(provider: unknown): void {
-    const id = (provider as any)?.id ?? 'unknown';
+    const id = this.getProviderId(provider);
     this._webSearchProviders.push({ id, provider });
     this.logger.info(`Registered web search provider: ${id}`);
   }
@@ -336,7 +336,7 @@ export class PluginApi {
    * 注册 Media Understanding Provider
    */
   registerMediaUnderstandingProvider(provider: unknown): void {
-    const id = (provider as any)?.id ?? 'unknown';
+    const id = this.getProviderId(provider);
     this._mediaUnderstandingProviders.push({ id, provider });
     this.logger.info(`Registered media understanding provider: ${id}`);
   }
@@ -345,7 +345,7 @@ export class PluginApi {
    * 注册 Image Generation Provider
    */
   registerImageGenerationProvider(provider: unknown): void {
-    const id = (provider as any)?.id ?? 'unknown';
+    const id = this.getProviderId(provider);
     this._imageGenerationProviders.push({ id, provider });
     this.logger.info(`Registered image generation provider: ${id}`);
   }
@@ -354,7 +354,7 @@ export class PluginApi {
    * 注册 Music Generation Provider
    */
   registerMusicGenerationProvider(provider: unknown): void {
-    const id = (provider as any)?.id ?? 'unknown';
+    const id = this.getProviderId(provider);
     this._musicGenerationProviders.push({ id, provider });
     this.logger.info(`Registered music generation provider: ${id}`);
   }
@@ -363,7 +363,7 @@ export class PluginApi {
    * 注册 Video Generation Provider
    */
   registerVideoGenerationProvider(provider: unknown): void {
-    const id = (provider as any)?.id ?? 'unknown';
+    const id = this.getProviderId(provider);
     this._videoGenerationProviders.push({ id, provider });
     this.logger.info(`Registered video generation provider: ${id}`);
   }
@@ -372,7 +372,7 @@ export class PluginApi {
    * 注册 Speech Provider
    */
   registerSpeechProvider(provider: unknown): void {
-    const id = (provider as any)?.id ?? 'unknown';
+    const id = this.getProviderId(provider);
     this._speechProviders.push({ id, provider });
     this.logger.info(`Registered speech provider: ${id}`);
   }
@@ -389,7 +389,7 @@ export class PluginApi {
    * 注册 Memory Embedding Provider
    */
   registerMemoryEmbeddingProvider(provider: unknown): void {
-    const id = (provider as any)?.id ?? 'unknown';
+    const id = this.getProviderId(provider);
     this._memoryEmbeddingProviders.push({ id, provider });
     this.logger.info(`Registered memory embedding provider: ${id}`);
   }
@@ -397,6 +397,17 @@ export class PluginApi {
   // ================================================================
   // Utility
   // ================================================================
+
+  /**
+   * 从 provider 对象提取 id（兼容多种命名）
+   */
+  private getProviderId(provider: unknown): string {
+    if (provider && typeof provider === 'object') {
+      const p = provider as Record<string, unknown>;
+      return (p.id ?? p.name ?? 'unknown') as string;
+    }
+    return 'unknown';
+  }
 
   /**
    * 解析相对于 plugin root 的路径

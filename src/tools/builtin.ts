@@ -56,7 +56,7 @@ export function createShellTool(): RegisteredTool {
     },
     handler: async (args, context) => {
       const command = args.command as string;
-      const cwd = (args.cwd as string | undefined) ?? (context as any)?.cwd ?? process.cwd();
+      const cwd = (args.cwd as string | undefined) ?? context?.cwd ?? process.cwd();
       const timeout = (args.timeout as number) ?? 30_000;
 
       const { spawn } = await import('node:child_process');
@@ -138,7 +138,7 @@ export function createFileReadTool(): RegisteredTool {
       const { resolve } = await import('node:path');
       
       const rawPath = args.path as string;
-      const cwd = (context as any)?.cwd ?? process.cwd();
+      const cwd = context?.cwd ?? process.cwd();
       const path = rawPath.startsWith('/') ? rawPath : resolve(cwd, rawPath); // ← 相对路径解析
       const offset = (args.offset as number) ?? 1;
       const limit = (args.limit as number) ?? 2000;
@@ -205,7 +205,7 @@ export function createFileWriteTool(): RegisteredTool {
       const { dirname, resolve } = await import('node:path');
 
       const rawPath = args.path as string;
-      const cwd = (context as any)?.cwd ?? process.cwd();
+      const cwd = context?.cwd ?? process.cwd();
       const path = rawPath.startsWith('/') ? rawPath : resolve(cwd, rawPath); // ← 相对路径解析
       const content = args.content as string;
       const append = args.append as boolean ?? false;
@@ -270,7 +270,7 @@ export function createFileListTool(): RegisteredTool {
       const { join, relative, resolve } = await import('node:path');
 
       const rawPath = args.path as string;
-      const cwd = (context as any)?.cwd ?? process.cwd();
+      const cwd = context?.cwd ?? process.cwd();
       const basePath = rawPath.startsWith('/') ? rawPath : resolve(cwd, rawPath); // ← 相对路径解析
       const recursive = (args.recursive as boolean) ?? false;
       const pattern = args.pattern ? new RegExp(args.pattern as string) : null;

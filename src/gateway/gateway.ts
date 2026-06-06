@@ -23,7 +23,6 @@ import type {
   ChannelMessage,
   ChannelReply,
   GatewayConfig,
-  LLMProvider,
   RegisteredTool,
   SessionMeta,
   AgentEvent,
@@ -39,89 +38,6 @@ import { DefaultSecurityGuard } from '../core/security-guard.js';
 import { IterationBudget } from '../core/budget.js';
 import { DefaultContextPipeline } from '../harness/context/pipeline.js';
 import { SessionAwareRunner } from '../harness/runner.js';
-
-// ================================================================
-// LLMProvider → ModelProvider 适配器
-// ================================================================
-
-/**
- * 将旧 LLMProvider 适配为新 ModelProvider
- */
-function adaptLLMProvider(provider: LLMProvider): ModelProvider {
-  return {
-    name: provider.name,
-    chat: async (request) => {
-      const response = await provider.complete({
-        model: request.model ?? '',
-        messages: request.messages as any,
-        tools: request.tools as any,
-        temperature: request.temperature,
-        maxTokens: request.maxTokens,
-      });
-      return {
-        content: response.content,
-        toolCalls: response.toolCalls,
-        usage: response.usage ?? { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
-        model: response.model,
-        finishReason: response.finishReason,
-      };
-    },
-    stream: async function* (request) {
-      if (provider.stream) {
-        for await (const chunk of provider.stream({
-          model: request.model ?? '',
-          messages: request.messages as any,
-          tools: request.tools as any,
-          temperature: request.temperature,
-          maxTokens: request.maxTokens,
-        })) {
-          if (chunk.content) {
-            yield { type: 'content', content: chunk.content };
-          }
-          if (chunk.toolCalls) {
-            for (const tc of chunk.toolCalls) {
-              yield {
-                type: 'tool_call',
-                toolCall: {
-                  id: tc.id,
-                  name: tc.name,
-                  arguments: typeof tc.arguments === 'object' ? JSON.stringify(tc.arguments) : (tc.arguments as string ?? '{}'),
-                },
-              };
-            }
-          }
-        }
-        yield { type: 'done' };
-      } else {
-        const response = await provider.complete({
-          model: request.model ?? '',
-          messages: request.messages as any,
-          tools: request.tools as any,
-          temperature: request.temperature,
-          maxTokens: request.maxTokens,
-        });
-        yield { type: 'content', content: response.content };
-        if (response.toolCalls) {
-          for (const tc of response.toolCalls) {
-            yield {
-              type: 'tool_call',
-              toolCall: {
-                id: tc.id,
-                name: tc.name,
-                arguments: typeof tc.arguments === 'object' ? JSON.stringify(tc.arguments) : (tc.arguments as string ?? '{}'),
-              },
-            };
-          }
-        }
-        yield { type: 'done', usage: response.usage };
-      }
-    },
-    isAvailable: async () => {
-      if (provider.healthCheck) return provider.healthCheck();
-      return true;
-    },
-  };
-}
 
 // ================================================================
 // 内存 Session 存储
@@ -177,10 +93,12 @@ export class Gateway {
   private started = false;
   /** 事件监听器 */
   private listeners: Array<(event: AgentEvent) => void> = [];
-  /** Provider（旧接口，用于兼容） */
-  private providers = new Map<string, LLMProvider>();
+  /** Provider */
+  private providers = new Map<string, ModelProvider>();
   /** 工具 */
   private tools: RegisteredTool[] = [];
+  /** Agent 缓存（避免每条消息重建） */
+  private agentCache = new Map<string, { engine: AgentEngine; runner: SessionAwareRunner }>();
 
   constructor(config: GatewayConfig) {
     this.config = config;
@@ -251,7 +169,7 @@ export class Gateway {
     this.tools.push(tool);
   }
 
-  registerProvider(provider: LLMProvider): void {
+  registerProvider(provider: ModelProvider): void {
     this.providers.set(provider.name, provider);
     console.log(`[Gateway] Registered provider: ${provider.name}`);
   }
@@ -298,8 +216,13 @@ export class Gateway {
       { sessionId: sessionKey, agentId: agent.id, message: msg },
     );
 
-    // 3. 构建 AgentEngine + SessionAwareRunner
-    const { engine, runner } = await this.buildAgent(agent);
+    // 3. 获取或构建 AgentEngine + SessionAwareRunner
+    let cached = this.agentCache.get(agent.id);
+    if (!cached) {
+      cached = await this.buildAgent(agent);
+      this.agentCache.set(agent.id, cached);
+    }
+    const { runner } = cached;
 
     // 4. 构建用户消息
     const userMessage = {
@@ -376,11 +299,10 @@ export class Gateway {
     runner: SessionAwareRunner;
   }> {
     // 获取 provider
-    const llmProvider = this.providers.get(agent.model.provider);
-    if (!llmProvider) {
+    const modelProvider = this.providers.get(agent.model.provider);
+    if (!modelProvider) {
       throw new Error(`LLM provider "${agent.model.provider}" not found.`);
     }
-    const modelProvider = adaptLLMProvider(llmProvider);
 
     // 创建 Core 组件
     const events = new DefaultEventBus();
@@ -407,6 +329,7 @@ export class Gateway {
           const tool = tools.get(call.name);
           if (!tool) throw new Error(`Tool "${call.name}" not found`);
           const result = await tool.handler(call.arguments as Record<string, unknown>, {
+            cwd: agent.workspace ?? process.cwd(),
             sessionId: ctx.callerId ?? 'unknown',
             agentId: agent.id,
             messages: [],
@@ -429,14 +352,8 @@ export class Gateway {
         onContextOverflow: () => ({ action: 'compact' }),
         onSecurityViolation: (v) => ({ action: 'block', reason: v.description }),
       },
+      systemPrompt: typeof agent.persona === 'object' ? agent.persona?.systemPrompt ?? '' : '',
     });
-
-    // 加载 persona
-    let systemPrompt = '';
-    if (typeof agent.persona === 'object' && agent.persona?.systemPrompt) {
-      systemPrompt = agent.persona.systemPrompt;
-    }
-    (engine as any).__systemPrompt = systemPrompt;
 
     // 创建 SessionAwareRunner
     const runner = new SessionAwareRunner(engine, this.store);

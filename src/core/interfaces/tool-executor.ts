@@ -13,6 +13,8 @@ import type { ToolCall, ToolResult } from '../types.js';
 
 /** 工具执行上下文 — 安全约束 */
 export interface ExecutionContext {
+  /** 当前工作目录 */
+  cwd?: string;
   /** 最大执行时间（毫秒） */
   timeoutMs: number;
   /** 文件系统访问范围（白名单目录） */
@@ -23,8 +25,6 @@ export interface ExecutionContext {
   allowedEnvVars?: string[];
   /** 调用来源标识（用于权限追踪） */
   callerId?: string;
-  /** 当前工作目录 */
-  cwd?: string;
   /** 环境变量（过滤后的） */
   env?: Record<string, string>;
 }

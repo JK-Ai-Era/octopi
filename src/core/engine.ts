@@ -79,6 +79,8 @@ export interface AgentEngineDeps {
   errorStrategy: ErrorStrategy;
   /** 观测器（可选） */
   observer?: Observer;
+  /** 默认系统提示词（RunConfig.systemPrompt 优先） */
+  systemPrompt?: string;
 }
 
 /** 运行配置 */
@@ -145,7 +147,7 @@ export class AgentEngine {
 
     // 发射引擎启动事件
     events.emit({ type: AgentEvents.ENGINE_START, timestamp: Date.now(), agentId, sessionId });
-    yield { type: 'engine.start', timestamp: Date.now(), agentId, sessionId, data: {} } as any;
+    yield { type: 'engine.start', timestamp: Date.now(), agentId, sessionId, data: {} };
 
     // Observer span
     const engineSpan = observer?.startSpan('agent.engine.run', { agentId, sessionId });
@@ -175,7 +177,7 @@ export class AgentEngine {
         if (lastMsg) {
           const modified = this.onMessage(lastMsg);
           if (modified === null) {
-            yield { type: "message.filtered", timestamp: Date.now() } as any;
+            yield { type: "message.filtered", timestamp: Date.now() };
             return;
           }
         }
@@ -190,7 +192,7 @@ export class AgentEngine {
 
         // 预算检查
         if (!budget.checkAndEmit()) {
-          yield { type: AgentEvents.BUDGET_EXCEEDED, timestamp: Date.now(), data: budget.report() as any };
+          yield { type: AgentEvents.BUDGET_EXCEEDED, timestamp: Date.now(), data: budget.report() as unknown as Record<string, unknown> };
           return;
         }
 
@@ -204,7 +206,7 @@ export class AgentEngine {
         try {
           // 2a. 触发 beforeAssemble 回调
           let pipelineInput: PipelineInput = {
-            systemPrompt: config.systemPrompt,
+            systemPrompt: config.systemPrompt || this.deps.systemPrompt || '',
             tools: this.buildToolDefinitions(),
             signal,
           };
@@ -327,7 +329,7 @@ export class AgentEngine {
 
               // 预算检查
               if (!budget.checkAndEmit()) {
-                yield { type: AgentEvents.BUDGET_EXCEEDED, timestamp: Date.now(), data: budget.report() as any };
+                yield { type: AgentEvents.BUDGET_EXCEEDED, timestamp: Date.now(), data: budget.report() as unknown as Record<string, unknown> };
                 return;
               }
 
@@ -425,7 +427,7 @@ export class AgentEngine {
                 type: 'tool.exec.end',
                 timestamp: Date.now(),
                 data: { toolCallId: call.id, toolName: call.name, hasError: !!toolResult.error },
-              } as any;
+              };
             }
 
             // 将工具结果添加到消息历史

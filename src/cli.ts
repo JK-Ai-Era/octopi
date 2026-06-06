@@ -24,14 +24,14 @@ import { OpenAIProvider } from './providers/openai.js';
 import { AnthropicProvider } from './providers/anthropic.js';
 import { getBuiltinTools } from './tools/builtin.js';
 import { createInterface } from 'node:readline';
-import type { LLMProvider } from './core/types.js';
+import type { ModelProvider } from './core/interfaces/model-provider.js';
 import type { ProviderConfig } from './config.js';
 
 // ================================================================
 // Provider 工厂
 // ================================================================
 
-function createProvider(cfg: ProviderConfig): LLMProvider | null {
+function createProvider(cfg: ProviderConfig): ModelProvider | null {
   if (!cfg.apiKey) return null;
 
   if (cfg.type === 'anthropic') {
@@ -41,7 +41,7 @@ function createProvider(cfg: ProviderConfig): LLMProvider | null {
       baseUrl: cfg.baseUrl,
       models: cfg.models,
       defaultModel: cfg.defaultModel,
-    }) as any;
+    });
   }
 
   return new OpenAIProvider({
@@ -50,7 +50,7 @@ function createProvider(cfg: ProviderConfig): LLMProvider | null {
     baseUrl: cfg.baseUrl,
     models: cfg.models,
     defaultModel: cfg.defaultModel,
-  }) as any;
+  });
 }
 
 // ================================================================
@@ -169,10 +169,10 @@ async function chatCommand(args: CliArgs): Promise<void> {
 
   const configDir = args.config ? resolve(dirname(args.config)) : process.cwd();
   if (agent.workspace && !agent.workspace.startsWith('/')) {
-    (agent as any).workspace = resolve(configDir, agent.workspace);
+    agent.workspace = resolve(configDir, agent.workspace);
   }
-  if (!(agent as any).workspace) {
-    (agent as any).workspace = configDir;
+  if (!agent.workspace) {
+    agent.workspace = configDir;
   }
 
   const providerCfg = config.providers?.find((p) => p.name === agent.model.provider);
@@ -191,9 +191,8 @@ async function chatCommand(args: CliArgs): Promise<void> {
   const { AgentBuilder } = await import('./harness/builder.js');
   const { JsonlSessionStore } = await import('./integration/storage/jsonl.js');
 
-  const modelProvider = provider as any;
   const builder = new AgentBuilder()
-    .model(modelProvider)
+    .model(provider)
     .store(new JsonlSessionStore(resolve(configDir, '.octopi/sessions')));
 
   if (typeof agent.persona === 'object' && agent.persona?.systemPrompt) {
@@ -297,7 +296,7 @@ async function healthCommand(args: CliArgs): Promise<void> {
     if (provider) {
       try {
         // 通过 isAvailable 检查
-        const available = await (provider as any).isAvailable?.() ?? true;
+        const available = await provider.isAvailable();
         console.log(`  ${providerCfg.name}: ${available ? '✅ OK' : '❌ FAIL'}`);
       } catch {
         console.log(`  ${providerCfg.name}: ❌ FAIL`);

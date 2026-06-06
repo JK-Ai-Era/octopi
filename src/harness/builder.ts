@@ -324,14 +324,10 @@ export class AgentBuilder {
       budget,
       errorStrategy,
       observer: this._observer,
+      systemPrompt,
     };
 
-    const engine = new AgentEngine(deps);
-
-    // 存储 systemPrompt 供 runner 使用
-    (engine as any).__systemPrompt = systemPrompt;
-
-    return engine;
+    return new AgentEngine(deps);
   }
 }
 
