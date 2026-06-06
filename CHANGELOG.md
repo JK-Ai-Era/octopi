@@ -1,5 +1,33 @@
 # Changelog
 
+## v0.2.3 (2026-06-06)
+
+### Harness 层 — Planner + TaskScheduler（Phase 2）
+
+新增规划器和任务调度器，让 Agent 能自主规划和调度任务。
+
+**新增 Planner 模块：**
+- `RulePlanner` — 规则驱动的规划器（快速、低成本、可预测）
+  - 支持通配符匹配、自定义条件、优先级、once 规则
+  - 内置规则：用户消息、安全事件、空闲事件
+- `LLMPlanner` — LLM 驱动的规划器（灵活、处理复杂场景）
+  - 事件分析 → 结构化计划（JSON）
+  - 目标分解 → 可执行步骤
+- `HybridPlanner` — 混合规划器（规则优先，LLM fallback）
+
+**新增 Scheduler 模块：**
+- `TaskScheduler` — 任务调度器
+  - `scheduleOnce` — 延迟执行一次
+  - `scheduleInterval` — 按间隔重复执行
+  - `scheduleCron` — cron 表达式定时
+  - `scheduleAt` — 指定时间执行
+  - 支持：暂停/恢复/取消、事件发射
+
+### 测试
+
+- 测试总数：381 → 410（+29）
+- 新增 `tests/harness/planner.test.ts` — 29 个测试
+
 ## v0.2.2 (2026-06-06)
 
 ### Harness 层 — AgentSupervisor（Phase 1）

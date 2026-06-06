@@ -38,6 +38,14 @@ export type { Task, TaskDecision, TaskDecisionInput } from './tasks/index.js';
 export { OutputQualityGate, createOutputQualityGate } from './quality/index.js';
 export { OutputErrorClassifier, createOutputErrorClassifier } from './quality/index.js';
 
+// ── Planner ──
+export { RulePlanner, LLMPlanner, HybridPlanner, USER_MESSAGE_RULE, SECURITY_EVENT_RULE, IDLE_RULE, getDefaultRules } from './planner/index.js';
+export type { Rule, RuleCondition, RuleAction, LLMPlannerConfig, HybridPlannerConfig } from './planner/index.js';
+
+// ── Scheduler ──
+export { TaskScheduler, SchedulerEvents } from './scheduler/index.js';
+export type { ScheduledTask, ScheduleKind, TaskSchedulerConfig } from './scheduler/index.js';
+
 // ── AgentSupervisor ──
 export { AgentSupervisor, startSupervisor, SupervisorEvents, EventCollector } from './supervisor/index.js';
 export type {
