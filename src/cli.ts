@@ -223,36 +223,38 @@ async function chatCommand(args: CliArgs): Promise<void> {
     : agent.persona?.name ?? agent.id;
   console.log(`   Agent: ${agentName}`);
   console.log(`   Model: ${providerCfg.type} / ${agent.model.model}`);
-  console.log(`   Commands: /new (new session), /help, exit`);
-
   const rl = createInterface({ input: process.stdin, output: process.stdout });
 
-  // 可变 session ID
-  let currentSessionId = cliSessionId;
+  // 可变状态
+  const sessionIdRef = { current: cliSessionId };
+  const currentModelRef = { current: agent.model.model };
+
+  // 命令系统
+  const { CommandPlugin } = await import('./harness/commands/index.js');
+  const commands = new CommandPlugin({
+    sessionIdRef,
+    currentModelRef,
+    onNewSession: () => `${agent.id}:cli:${Date.now()}`,
+  });
+
+  console.log(`   Commands: ${Array.from(commands.getCommands().keys()).join(', ')}, exit`);
 
   const ask = () => {
     rl.question('You: ', async (input) => {
       const trimmed = input.trim();
       if (!trimmed) { ask(); return; }
 
-      // 命令处理
+      // exit 命令
       if (trimmed === 'exit' || trimmed === 'quit') {
         console.log('Goodbye! 👋');
         rl.close();
         return;
       }
-      if (trimmed === '/new') {
-        currentSessionId = `${agent.id}:cli:${Date.now()}`;
-        console.log('🆕 New session started\n');
-        ask();
-        return;
-      }
-      if (trimmed === '/help') {
-        console.log(`
-Commands:
-  /new   — Start a new session (clear context)
-  /help  — Show this help
-  exit   — Exit chat\n`);
+
+      // 斜杠命令拦截
+      const cmdResult = await commands.tryExecute(trimmed, sessionIdRef.current, agent.id);
+      if (cmdResult) {
+        console.log(cmdResult.message + '\n');
         ask();
         return;
       }
@@ -269,13 +271,13 @@ Commands:
 
         const runConfig = {
           agentId: agent.id,
-          sessionId: currentSessionId,
+          sessionId: sessionIdRef.current,
           model: agent.model.model,
           systemPrompt: typeof agent.persona === 'object' ? agent.persona?.systemPrompt : '',
         };
 
         let finalContent = '';
-        for await (const event of runner.handle(currentSessionId, userMessage, runConfig)) {
+        for await (const event of runner.handle(sessionIdRef.current, userMessage, runConfig)) {
           if (event.type === 'llm_request') {
             if (!hasShownThinking) {
               process.stdout.write('  🤔 Thinking...');
