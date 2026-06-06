@@ -289,22 +289,24 @@ async function chatCommand(args: CliArgs): Promise<void> {
               hasShownThinking = false;
             }
             process.stdout.write(event.data.delta as string);
-            streamedContent += event.data.delta;
+            streamedContent += event.data.delta as string;
           } else if (event.type === 'tool_call_start') {
             process.stdout.write(`\n  🔧 Running: ${event.data?.toolName}...\n`);
           } else if (event.type === 'tool_call_result') {
             process.stdout.write(`  ✅ Done (${event.data?.durationMs}ms)\n`);
-          } else if (event.type === 'turn.end' && event.data?.content) {
-            finalContent = event.data.content as string;
+          } else if (event.type === 'turn.end') {
+            finalContent = (event.data?.content as string) ?? '';
           }
         }
 
+        // 流式内容已实时输出，补换行；否则用 finalContent 回显
+        const displayContent = streamedContent || finalContent;
         if (streamedContent) {
           process.stdout.write('\n');
-        } else if (finalContent) {
-          console.log(`\n  ${finalContent}`);
+        } else if (displayContent) {
+          console.log(`\n  ${displayContent}`);
         }
-        console.log(`\n${agentName}: ${finalContent || streamedContent}\n`);
+        console.log(`\n${agentName}: ${displayContent}\n`);
       } catch (error) {
         console.error(`\n[Error] ${error instanceof Error ? error.message : String(error)}\n`);
       }
