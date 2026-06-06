@@ -143,13 +143,14 @@ export class OpenAIProvider implements ModelProvider {
         if (data === '[DONE]') {
           // 流结束：输出 tool_calls（如果有）
           if (toolCallBuffers.size > 0) {
-            for (const [, buf] of toolCallBuffers) {
+            for (const [idx, buf] of toolCallBuffers) {
               yield {
                 type: 'tool_call',
                 toolCall: {
                   id: buf.id,
                   name: buf.name,
                   arguments: buf.argsBuffer,
+                  index: idx,
                 },
               };
             }

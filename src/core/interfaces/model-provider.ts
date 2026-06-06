@@ -64,6 +64,8 @@ export interface LLMStreamChunk {
     id?: string;
     name?: string;
     arguments?: string;
+    /** 工具调用索引（支持多个并行 tool call） */
+    index?: number;
   };
   usage?: TokenUsage;
   error?: string;

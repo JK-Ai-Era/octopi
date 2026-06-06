@@ -121,6 +121,7 @@ export class AnthropicProvider implements ModelProvider {
     let currentToolId = '';
     let currentToolName = '';
     let toolArgsBuffer = '';
+    let toolCallIndex = 0;
 
     try {
       while (true) {
@@ -161,8 +162,10 @@ export class AnthropicProvider implements ModelProvider {
                     id: currentToolId,
                     name: currentToolName,
                     arguments: toolArgsBuffer,
+                    index: toolCallIndex,
                   },
                 };
+                toolCallIndex++;
                 currentToolId = '';
                 currentToolName = '';
                 toolArgsBuffer = '';

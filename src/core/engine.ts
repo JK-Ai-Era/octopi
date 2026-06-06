@@ -521,7 +521,7 @@ export class AgentEngine {
 
         if (chunk.type === 'tool_call' && chunk.toolCall) {
           const tc = chunk.toolCall;
-          const idx = 0; // 简化：单 tool call
+          const idx = tc.index ?? 0;
           const existing = toolCallBuffers.get(idx);
           if (existing) {
             if (tc.id) existing.id = tc.id;
