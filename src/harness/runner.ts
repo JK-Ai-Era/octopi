@@ -14,9 +14,9 @@ import type { Message, Turn } from '../core/types.js';
 import type { SessionStore, SessionData } from '../core/interfaces/session-store.js';
 import type { AgentEngine, RunConfig, EngineEvent } from '../core/engine.js';
 
-/** Session 锁 */
-interface SessionLock {
-  release: () => void;
+/** Session 锁队列项 */
+interface QueueEntry {
+  resolve: () => void;
 }
 
 /** 运行器配置 */
@@ -41,7 +41,10 @@ const DEFAULT_CONFIG: SessionAwareRunnerConfig = {
 export class SessionAwareRunner {
   private engine: AgentEngine;
   private store: SessionStore;
-  private locks = new Map<string, SessionLock>();
+  /** 锁状态：true = 已锁定，false = 空闲 */
+  private locked = new Map<string, boolean>();
+  /** 等待队列：每个 session 一个 FIFO 队列 */
+  private queues = new Map<string, QueueEntry[]>();
   private config: SessionAwareRunnerConfig;
 
   constructor(engine: AgentEngine, store: SessionStore, config?: SessionAwareRunnerConfig) {
@@ -127,25 +130,41 @@ export class SessionAwareRunner {
   /**
    * 获取 Session 锁
    * 同一 session 同时只有一个运行
+   *
+   * 使用 Promise 队列实现，避免 polling 开销。
+   * 请求按 FIFO 顺序获取锁，无饥饿问题。
    */
   private async acquireLock(sessionId: string): Promise<() => void> {
-    // 如果已有锁，等待释放
-    while (this.locks.has(sessionId)) {
-      await new Promise(resolve => setTimeout(resolve, 50));
+    // 如果已锁定，入队等待
+    if (this.locked.get(sessionId)) {
+      await new Promise<void>(resolve => {
+        if (!this.queues.has(sessionId)) {
+          this.queues.set(sessionId, []);
+        }
+        this.queues.get(sessionId)!.push({ resolve });
+      });
     }
 
-    let released = false;
-    const lock: SessionLock = {
-      release: () => {
-        if (!released) {
-          released = true;
-          this.locks.delete(sessionId);
-        }
-      },
-    };
+    // 获取锁
+    this.locked.set(sessionId, true);
 
-    this.locks.set(sessionId, lock);
-    return lock.release;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+
+      // 释放锁：唤醒队列中下一个等待者
+      const queue = this.queues.get(sessionId);
+      if (queue && queue.length > 0) {
+        const next = queue.shift()!;
+        next.resolve();
+      } else {
+        // 队列为空，标记为未锁定
+        this.locked.set(sessionId, false);
+        // 清理空队列
+        this.queues.delete(sessionId);
+      }
+    };
   }
 
   /**

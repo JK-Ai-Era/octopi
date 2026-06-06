@@ -71,6 +71,8 @@ export interface PluginEntryConfig {
     timeoutMs?: number;
     /** 按 hook 名称的超时 */
     timeouts?: Record<string, number>;
+    /** 超时后是否中断 hook 链（默认 false：跳过并继续） */
+    abortOnTimeout?: Record<string, boolean>;
     /** 是否允许 conversation access */
     allowConversationAccess?: boolean;
     /** 是否允许 prompt injection */

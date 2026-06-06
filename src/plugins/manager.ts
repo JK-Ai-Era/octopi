@@ -527,6 +527,16 @@ export class PluginManager {
           }
         }
       } catch (err) {
+        // 超时错误：默认跳过并继续，除非配置 abortOnTimeout
+        if (err instanceof Error && err.message.includes('timed out')) {
+          const shouldAbort = config?.hooks?.abortOnTimeout?.[hookName] ?? false;
+          console.error(
+            `[PluginManager] Hook "${hookName}" handler from plugin "${entry.pluginId}" timed out after ${timeoutMs}ms${shouldAbort ? ', aborting hook chain' : ', skipping'}`,
+          );
+          if (shouldAbort) break;
+          continue;
+        }
+        // 其他错误：记录并继续下一个 handler
         console.error(
           `[PluginManager] Hook "${hookName}" handler from plugin "${entry.pluginId}" failed:`,
           err,

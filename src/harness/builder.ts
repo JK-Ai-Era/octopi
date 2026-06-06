@@ -72,7 +72,9 @@ import type { SessionAwareRunnerConfig } from './runner.js';
 class DefaultErrorStrategy implements ErrorStrategy {
   onModelError(error: ClassifiedError, attempt: number): ErrorAction {
     if (error.reason === 'rate_limit' && attempt < 3) {
-      return { action: 'retry', delayMs: (attempt + 1) * 1000 };
+      // 优先使用服务端返回的 retry-after，否则用指数退避
+      const delayMs = error.retryAfterMs ?? (attempt + 1) * 1000;
+      return { action: 'retry', delayMs };
     }
     if (error.reason === 'timeout' && attempt < 2) {
       return { action: 'retry', delayMs: 500 };

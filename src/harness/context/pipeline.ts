@@ -14,6 +14,7 @@ import type {
   PipelineOutput,
 } from '../../core/interfaces/context-pipeline.js';
 import type { LLMMessage, ToolDefinition } from '../../core/interfaces/model-provider.js';
+import { estimateTokens } from '../../core/token-estimator.js';
 
 // ── 阶段接口 ──
 
@@ -149,7 +150,7 @@ export class DefaultContextPipeline implements ContextPipeline {
     const llmMessages = this.buildLlmMessages(ctx);
 
     // 估算 token
-    const estimatedTokens = this.estimateTokens(llmMessages);
+    const estimatedTokens = estimateTokens(llmMessages);
 
     return {
       messages: llmMessages,
@@ -208,16 +209,5 @@ export class DefaultContextPipeline implements ContextPipeline {
     return result;
   }
 
-  /**
-   * 估算 token 数（简单启发式）
-   */
-  private estimateTokens(messages: LLMMessage[]): number {
-    let total = 0;
-    for (const msg of messages) {
-      if (typeof msg.content === 'string') {
-        total += Math.ceil(msg.content.length / 4); // 粗略估算
-      }
-    }
-    return total;
-  }
+
 }
