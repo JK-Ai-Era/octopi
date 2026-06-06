@@ -1,5 +1,32 @@
 # Changelog
 
+## v0.2.5 (2026-06-06)
+
+### Harness 层 — StrategyRouter + ResourceManager（Phase 4）
+
+新增策略路由和资源管理，让 Agent 更高效、更经济。
+
+**新增 Strategy 模块：**
+- `RuleTaskClassifier` — 规则驱动的任务分类器
+  - 分类：question/lookup/analysis/creation/coding/planning/conversation
+  - 复杂度：simple/moderate/complex
+  - 中文分词优化
+- `DefaultStrategyRouter` — 默认策略路由器
+  - 6 种推理策略：direct/chain_of_thought/plan_and_execute/tool_use/reflect/multi_agent
+  - 规则匹配：根据分类结果选择最合适策略
+
+**新增 Resources 模块：**
+- `ResourceManager` — 统一资源管理器
+  - Token 预算：per-call/per-minute/per-hour/total 四维限制
+  - 成本追踪：按模型统计，自动计算费用
+  - 速率限制：请求频率 + 并发控制
+  - 完整统计报告
+
+### 测试
+
+- 测试总数：430 → 453（+23）
+- 新增 `tests/harness/strategy.test.ts` — 23 个测试
+
 ## v0.2.4 (2026-06-06)
 
 ### Harness 层 — KnowledgeStore + Reflector（Phase 3）

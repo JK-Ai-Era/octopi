@@ -38,6 +38,14 @@ export type { Task, TaskDecision, TaskDecisionInput } from './tasks/index.js';
 export { OutputQualityGate, createOutputQualityGate } from './quality/index.js';
 export { OutputErrorClassifier, createOutputErrorClassifier } from './quality/index.js';
 
+// ── Strategy ──
+export { RuleTaskClassifier, DefaultStrategyRouter } from './strategy/index.js';
+export type { TaskClassifier, TaskClassification, TaskCategory, TaskComplexity, StrategyRouter, Strategy, StrategyKind } from './strategy/index.js';
+
+// ── Resources ──
+export { ResourceManager } from './resources/index.js';
+export type { TokenBudgetConfig, ModelPricing, RateLimitConfig, TokenCheckResult, RateLimitCheckResult, ResourceStats } from './resources/index.js';
+
 // ── Knowledge ──
 export { MemoryKnowledgeStore, KnowledgeStage } from './knowledge/index.js';
 export type { KnowledgeStore, KnowledgeEntry, KnowledgeType, KnowledgeStats, RetrieveOptions, KnowledgeStageConfig } from './knowledge/index.js';
