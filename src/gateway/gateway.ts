@@ -1,23 +1,11 @@
 /**
  * Gateway — 核心守护进程
  *
- * OpenClaw 的关键洞察：Agent 需要的不是 "一个 API"，而是 "一个操作系统"。
- * Gateway 拥有所有通信面、管理所有 Agent、维护 session 状态、执行 command queue。
+ * 三层架构 Integration 层组件。
+ * 职责：组装 Agent + 挂载协议适配器 + 管理生命周期。
  *
  * 架构：
- *
- *   外部消息 → Channel Adapter → Gateway → Agent Loop → LLM
- *                                        ↓
- *                                  Session Manager
- *                                        ↓
- *                                  Channel Adapter → 外部回复
- *
- * 职责：
- * - Channel 路由：消息到达 → 找到正确的 Agent + Session
- * - Session 管理：创建/复用/隔离 session
- * - Agent Loop 编排：调用 agent loop 处理消息
- * - Plugin 注册：统一管理 hooks
- * - 健康检查：提供 /health 端点
+ *   外部消息 → Channel Adapter → Gateway → SessionAwareRunner → AgentEngine → LLM
  *
  * 使用方式：
  * ```ts
@@ -38,62 +26,178 @@ import type {
   LLMProvider,
   RegisteredTool,
   SessionMeta,
-  QueueMode,
   AgentEvent,
   HookContext,
 } from '../core/types.js';
+import type { ModelProvider } from '../core/interfaces/model-provider.js';
+import type { SessionStore, SessionData } from '../core/interfaces/session-store.js';
 import { PluginManager } from '../plugins/manager.js';
-import { AgentRunner } from '../agent/agent-runner.js';
+import { AgentEngine } from '../core/engine.js';
+import type { RunConfig } from '../core/engine.js';
+import { DefaultEventBus } from '../core/event-bus.js';
+import { DefaultSecurityGuard } from '../core/security-guard.js';
+import { IterationBudget } from '../core/budget.js';
+import { DefaultContextPipeline } from '../harness/context/pipeline.js';
+import { SessionAwareRunner } from '../harness/runner.js';
+
+// ================================================================
+// LLMProvider → ModelProvider 适配器
+// ================================================================
+
+/**
+ * 将旧 LLMProvider 适配为新 ModelProvider
+ */
+function adaptLLMProvider(provider: LLMProvider): ModelProvider {
+  return {
+    name: provider.name,
+    chat: async (request) => {
+      const response = await provider.complete({
+        model: request.model ?? '',
+        messages: request.messages as any,
+        tools: request.tools as any,
+        temperature: request.temperature,
+        maxTokens: request.maxTokens,
+      });
+      return {
+        content: response.content,
+        toolCalls: response.toolCalls,
+        usage: response.usage ?? { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+        model: response.model,
+        finishReason: response.finishReason,
+      };
+    },
+    stream: async function* (request) {
+      if (provider.stream) {
+        for await (const chunk of provider.stream({
+          model: request.model ?? '',
+          messages: request.messages as any,
+          tools: request.tools as any,
+          temperature: request.temperature,
+          maxTokens: request.maxTokens,
+        })) {
+          if (chunk.content) {
+            yield { type: 'content', content: chunk.content };
+          }
+          if (chunk.toolCalls) {
+            for (const tc of chunk.toolCalls) {
+              yield {
+                type: 'tool_call',
+                toolCall: {
+                  id: tc.id,
+                  name: tc.name,
+                  arguments: typeof tc.arguments === 'object' ? JSON.stringify(tc.arguments) : (tc.arguments as string ?? '{}'),
+                },
+              };
+            }
+          }
+        }
+        yield { type: 'done' };
+      } else {
+        const response = await provider.complete({
+          model: request.model ?? '',
+          messages: request.messages as any,
+          tools: request.tools as any,
+          temperature: request.temperature,
+          maxTokens: request.maxTokens,
+        });
+        yield { type: 'content', content: response.content };
+        if (response.toolCalls) {
+          for (const tc of response.toolCalls) {
+            yield {
+              type: 'tool_call',
+              toolCall: {
+                id: tc.id,
+                name: tc.name,
+                arguments: typeof tc.arguments === 'object' ? JSON.stringify(tc.arguments) : (tc.arguments as string ?? '{}'),
+              },
+            };
+          }
+        }
+        yield { type: 'done', usage: response.usage };
+      }
+    },
+    isAvailable: async () => {
+      if (provider.healthCheck) return provider.healthCheck();
+      return true;
+    },
+  };
+}
+
+// ================================================================
+// 内存 Session 存储
+// ================================================================
+
+class InMemorySessionStore implements SessionStore {
+  private sessions = new Map<string, SessionData>();
+
+  async load(sessionId: string): Promise<SessionData | null> {
+    return this.sessions.get(sessionId) ?? null;
+  }
+
+  async save(sessionId: string, data: SessionData): Promise<void> {
+    this.sessions.set(sessionId, data);
+  }
+
+  async list(_agentId: string): Promise<any[]> {
+    return Array.from(this.sessions.values());
+  }
+
+  async delete(sessionId: string): Promise<void> {
+    this.sessions.delete(sessionId);
+  }
+
+  async exists(sessionId: string): Promise<boolean> {
+    return this.sessions.has(sessionId);
+  }
+}
+
+// ================================================================
+// Gateway
+// ================================================================
 
 /**
  * Gateway 实现
  *
- * 生命周期：
- * 1. new Gateway(config) — 创建实例，注册配置中的 agents
- * 2. register*() — 注册 provider、channel、tool、plugin
- * 3. start() — 启动所有 channel adapter，开始监听消息
- * 4. send() / handleInboundMessage() — 处理消息
- * 5. stop() — 优雅关闭
+ * 使用 AgentEngine + SessionAwareRunner 架构。
  */
 export class Gateway {
-  /** 已注册的 Agent（id → AgentDefinition） */
+  /** 已注册的 Agent */
   private agents = new Map<string, AgentDefinition>();
-  /** 已注册的 Channel Adapter（name → adapter） */
+  /** 已注册的 Channel Adapter */
   private channels = new Map<string, ChannelAdapter>();
-  /** Agent Runner 实例 */
-  private agentLoop: AgentRunner;
+  /** Plugin Manager */
+  private pluginManager: PluginManager;
+  /** Session Store */
+  private store: SessionStore;
   /** Gateway 配置 */
   private config: GatewayConfig;
   /** DM 作用域 */
   private dmScope: string;
   /** 是否已启动 */
   private started = false;
+  /** 事件监听器 */
+  private listeners: Array<(event: AgentEvent) => void> = [];
+  /** Provider（旧接口，用于兼容） */
+  private providers = new Map<string, LLMProvider>();
+  /** 工具 */
+  private tools: RegisteredTool[] = [];
 
   constructor(config: GatewayConfig) {
     this.config = config;
     this.dmScope = config.session?.dmScope ?? 'main';
-    this.agentLoop = new AgentRunner();
+    this.pluginManager = new PluginManager();
+    this.store = new InMemorySessionStore();
 
     // 注册配置中定义的 agents
     for (const agent of config.agents) {
       this.agents.set(agent.id, agent);
     }
-
-    // 注册事件监听（日志）
-    this.agentLoop.on(async (event) => {
-      this.handleEvent(event);
-    });
   }
 
   // ================================================================
   // 生命周期
   // ================================================================
 
-  /**
-   * 启动 Gateway
-   *
-   * 启动所有已注册的 channel adapter，开始监听外部消息。
-   */
   async start(): Promise<void> {
     if (this.started) {
       console.warn('[Gateway] Already started');
@@ -104,7 +208,6 @@ export class Gateway {
     console.log(`[Gateway] Agents: ${Array.from(this.agents.keys()).join(', ') || '(none)'}`);
     console.log(`[Gateway] Channels: ${Array.from(this.channels.keys()).join(', ') || '(none)'}`);
 
-    // 启动所有 channel adapters
     for (const [name, adapter] of this.channels) {
       console.log(`[Gateway] Starting channel: ${name}`);
       await adapter.start(async (msg) => {
@@ -116,22 +219,16 @@ export class Gateway {
     console.log(`[Gateway] Ready. ${this.agents.size} agent(s), ${this.channels.size} channel(s)`);
   }
 
-  /**
-   * 停止 Gateway
-   *
-   * 优雅关闭所有 channel adapter 和 agent loop。
-   */
   async stop(): Promise<void> {
     if (!this.started) return;
 
     console.log('[Gateway] Stopping...');
-
     for (const [name, adapter] of this.channels) {
       console.log(`[Gateway] Stopping channel: ${name}`);
       await adapter.stop();
     }
 
-    await this.agentLoop.close();
+    await this.pluginManager.onGatewayStop();
     this.started = false;
     console.log('[Gateway] Stopped.');
   }
@@ -140,248 +237,245 @@ export class Gateway {
   // 注册接口
   // ================================================================
 
-  /**
-   * 注册 Agent
-   *
-   * 如果 agent 配置了 skillDirectory，自动扫描发现 Skill。
-   */
   registerAgent(agent: AgentDefinition): void {
     this.agents.set(agent.id, agent);
     console.log(`[Gateway] Registered agent: ${agent.id}`);
-
-    // 自动扫描 Skill 目录
-    if (agent.skillDirectory) {
-      this.agentLoop.discoverSkills(agent.skillDirectory).then(() => {
-        const skills = this.agentLoop.getSkillManager().list();
-        if (skills.length > 0) {
-          console.log(`[Gateway] Discovered ${skills.length} skill(s) for agent ${agent.id}: ${skills.map(s => s.id).join(', ')}`);
-        }
-      }).catch((err) => {
-        console.warn(`[Gateway] Failed to discover skills for agent ${agent.id}:`, err);
-      });
-    }
   }
 
-  /**
-   * 注册 Channel Adapter
-   *
-   * 必须在 start() 之前调用。
-   */
   registerChannel(adapter: ChannelAdapter): void {
     this.channels.set(adapter.name, adapter);
     console.log(`[Gateway] Registered channel: ${adapter.name}`);
   }
 
-  /**
-   * 获取插件管理器
-   */
-  getPluginManager(): PluginManager {
-    return this.agentLoop.getPluginManager();
-  }
-
-  /**
-   * 注册工具（全局或 Agent 级）
-   */
   registerTool(tool: RegisteredTool, agentId?: string): void {
-    this.agentLoop.registerTool(tool, agentId);
+    this.tools.push(tool);
   }
 
-  /**
-   * 注册 LLM Provider
-   */
   registerProvider(provider: LLMProvider): void {
-    this.agentLoop.registerProvider(provider);
+    this.providers.set(provider.name, provider);
+    console.log(`[Gateway] Registered provider: ${provider.name}`);
   }
 
-  /**
-   * 注册事件监听器
-   */
   on(listener: (event: AgentEvent) => void): void {
-    this.agentLoop.on(listener);
+    this.listeners.push(listener);
+  }
+
+  getPluginManager(): PluginManager {
+    return this.pluginManager;
   }
 
   // ================================================================
   // 核心消息处理
   // ================================================================
 
-  /**
-   * 手动发送消息（用于测试或外部集成）
-   */
   async send(message: ChannelMessage): Promise<void> {
     await this.handleInboundMessage(message);
   }
 
-  /**
-   * 获取 session 信息
-   */
   getSession(sessionId: string): SessionMeta | undefined {
-    return this.agentLoop.getSessionManager().get(sessionId);
-  }
-
-  /**
-   * 获取 Agent Loop 实例（高级用法）
-   */
-  getAgentLoop(): AgentRunner {
-    return this.agentLoop;
+    // 简化的 session 查询（通过 store）
+    return undefined;
   }
 
   // ================================================================
   // 内部
   // ================================================================
 
-  /**
-   * 入站消息处理（OpenClaw 的路由逻辑）
-   *
-   * 完整流程：
-   * 1. Plugin: message_received（通知所有 plugin 有新消息）
-   * 2. 找到绑定的 agent（基于 channel + sender）
-   * 3. 获取或创建 session
-   * 4. 执行 agent loop
-   * 5. Plugin: message_sending（可拦截回复）
-   * 6. 发送回复到 channel
-   * 7. Plugin: message_sent（通知所有 plugin 回复已发送）
-   */
   private async handleInboundMessage(msg: ChannelMessage): Promise<void> {
     console.log(`[Gateway] Inbound message from ${msg.channel}:${msg.senderId} — "${msg.content.substring(0, 50)}..."`);
 
-    // 1. Plugin: message_received
+    // 1. 找到 agent
     const agent = this.resolveAgent(msg);
-    if (agent) {
-      const session = this.agentLoop.resolveSession(agent, msg, this.dmScope);
-      await this.getPluginManager().runAllHooks(
-        'message_received',
-        { sessionId: session.id, agentId: agent.id, message: msg },
-      );
-    }
-
-    // 2. 找到 agent
     if (!agent) {
       console.warn(`[Gateway] No agent resolved for message from ${msg.channel}:${msg.senderId}`);
       return;
     }
 
-    // 3. 获取或创建 session
-    const session = this.agentLoop.resolveSession(agent, msg, this.dmScope);
+    // 2. Plugin: message_received
+    const sessionKey = this.buildSessionKey(agent, msg);
+    await this.pluginManager.runAllHooks(
+      'message_received',
+      { sessionId: sessionKey, agentId: agent.id, message: msg },
+    );
 
-    // 4. 更新交互时间
-    session.lastInteractionAt = Date.now();
-    session.status = 'processing';
+    // 3. 构建 AgentEngine + SessionAwareRunner
+    const { engine, runner } = await this.buildAgent(agent);
 
-    // 5. 执行 agent loop
-    try {
-      const reply = await this.agentLoop.processMessage(agent, session, msg);
-
-      // 6. Plugin: message_sending（可拦截回复）
-      const hookCtx: HookContext = {
-        sessionId: session.id,
-        agentId: agent.id,
-      };
-      const channelReply: ChannelReply = {
+    // 4. 构建用户消息
+    const userMessage = {
+      role: 'user' as const,
+      content: msg.content,
+      source: {
         channel: msg.channel,
+        senderId: msg.senderId,
+        senderName: msg.senderName,
+        messageId: msg.id,
         conversationId: msg.conversationId,
-        content: reply.content,
-        replyToId: msg.id,
-      };
+      },
+      timestamp: msg.timestamp,
+    };
 
-      const sendBlock = await this.getPluginManager().runHook<{ cancel?: boolean } | null>(
-        'message_sending',
-        { ...hookCtx, reply: channelReply },
-        null,
-      );
+    // 5. 运行 AgentEngine
+    const runConfig: RunConfig = {
+      agentId: agent.id,
+      sessionId: sessionKey,
+      model: agent.model.model,
+      systemPrompt: typeof agent.persona === 'object' ? agent.persona?.systemPrompt ?? '' : '',
+    };
 
-      if (sendBlock?.cancel) {
-        console.log(`[Gateway] Reply cancelled by plugin`);
-        return;
-      }
+    let finalContent = '';
 
-      // 7. 发送回复到 channel
-      const adapter = this.channels.get(msg.channel);
-      if (adapter && channelReply.content) {
-        await adapter.send(channelReply);
+    try {
+      for await (const event of runner.handle(sessionKey, userMessage, runConfig)) {
+        // 转发事件给监听器
+        this.emitEvent(event as any);
 
-        // 8. Plugin: message_sent
-        await this.getPluginManager().runAllHooks(
-          'message_sent',
-          { ...hookCtx, reply: channelReply },
-        );
+        // 捕获最终回复
+        if (event.type === 'turn.end' && event.data?.content) {
+          finalContent = event.data.content as string;
+        }
       }
     } catch (error) {
       console.error(`[Gateway] Error processing message:`, error);
-      session.status = 'error';
+      finalContent = `[Gateway Error] ${error instanceof Error ? error.message : String(error)}`;
+    }
 
-      // 尝试发送错误消息到 channel
-      const adapter = this.channels.get(msg.channel);
-      if (adapter) {
-        try {
-          await adapter.send({
-            channel: msg.channel,
-            conversationId: msg.conversationId,
-            content: `[Gateway Error] ${error instanceof Error ? error.message : String(error)}`,
-            replyToId: msg.id,
-          });
-        } catch {
-          // 发送错误消息也失败了，只能记日志
-        }
-      }
+    // 6. Plugin: message_sending
+    const hookCtx: HookContext = { sessionId: sessionKey, agentId: agent.id };
+    const channelReply: ChannelReply = {
+      channel: msg.channel,
+      conversationId: msg.conversationId,
+      content: finalContent,
+      replyToId: msg.id,
+    };
+
+    const sendBlock = await this.pluginManager.runHook<{ cancel?: boolean } | null>(
+      'message_sending',
+      { ...hookCtx, reply: channelReply },
+      null,
+    );
+
+    if (sendBlock?.cancel) {
+      console.log(`[Gateway] Reply cancelled by plugin`);
+      return;
+    }
+
+    // 7. 发送回复
+    const adapter = this.channels.get(msg.channel);
+    if (adapter && channelReply.content) {
+      await adapter.send(channelReply);
+      await this.pluginManager.runAllHooks('message_sent', { ...hookCtx, reply: channelReply });
     }
   }
 
   /**
-   * Agent 路由（OpenClaw 的 binding 逻辑）
-   *
-   * 路由策略：
-   * 1. 如果 agent 有 channelBindings，按 binding 匹配
-   * 2. 否则返回第一个 agent（单 agent 模式）
-   *
-   * TODO: 支持更复杂的路由规则（如按 senderId 路由到不同 agent）
+   * 为 Agent 构建 AgentEngine + SessionAwareRunner
    */
+  private async buildAgent(agent: AgentDefinition): Promise<{
+    engine: AgentEngine;
+    runner: SessionAwareRunner;
+  }> {
+    // 获取 provider
+    const llmProvider = this.providers.get(agent.model.provider);
+    if (!llmProvider) {
+      throw new Error(`LLM provider "${agent.model.provider}" not found.`);
+    }
+    const modelProvider = adaptLLMProvider(llmProvider);
+
+    // 创建 Core 组件
+    const events = new DefaultEventBus();
+    const security = new DefaultSecurityGuard(events);
+    const budget = new IterationBudget(events, {
+      maxIterations: 10,
+      maxToolCalls: 30,
+      maxTokens: 200_000,
+      maxWallClockMs: 600_000,
+    });
+
+    // 创建工具映射
+    const tools = new Map<string, RegisteredTool>();
+    for (const tool of this.tools) {
+      tools.set(tool.definition.name, tool);
+    }
+
+    // 创建 AgentEngine
+    const engine = new AgentEngine({
+      model: modelProvider,
+      tools,
+      executor: {
+        execute: async (call, ctx) => {
+          const tool = tools.get(call.name);
+          if (!tool) throw new Error(`Tool "${call.name}" not found`);
+          const result = await tool.handler(call.arguments as Record<string, unknown>, {
+            sessionId: ctx.callerId ?? 'unknown',
+            agentId: agent.id,
+            messages: [],
+          });
+          return { toolCallId: call.id, name: call.name, result };
+        },
+      },
+      context: new DefaultContextPipeline(),
+      events,
+      security,
+      budget,
+      errorStrategy: {
+        onModelError: (error, attempt) => {
+          if (error.reason === 'rate_limit' && attempt < 3) {
+            return { action: 'retry', delayMs: (attempt + 1) * 1000 };
+          }
+          return { action: 'abort', reason: error.message };
+        },
+        onToolError: () => ({ action: 'skip', reason: 'Tool failed' }),
+        onContextOverflow: () => ({ action: 'compact' }),
+        onSecurityViolation: (v) => ({ action: 'block', reason: v.description }),
+      },
+    });
+
+    // 加载 persona
+    let systemPrompt = '';
+    if (typeof agent.persona === 'object' && agent.persona?.systemPrompt) {
+      systemPrompt = agent.persona.systemPrompt;
+    }
+    (engine as any).__systemPrompt = systemPrompt;
+
+    // 创建 SessionAwareRunner
+    const runner = new SessionAwareRunner(engine, this.store);
+
+    return { engine, runner };
+  }
+
   private resolveAgent(msg: ChannelMessage): AgentDefinition | undefined {
-    // 按 channel binding 匹配
     for (const agent of this.agents.values()) {
       if (agent.channelBindings) {
         const binding = agent.channelBindings[msg.channel];
         if (binding) {
-          // binding 格式："user:open_id_xxx" 或 "group:chat_id_xxx"
           if (binding === '*' || binding === `user:${msg.senderId}`) {
             return agent;
           }
         }
       }
     }
-
-    // 默认：返回第一个 agent
     return this.agents.values().next().value;
   }
 
-  /**
-   * 事件处理（日志）
-   */
-  private handleEvent(event: AgentEvent): void {
-    switch (event.type) {
-      case 'turn_start':
-        console.log(`[Gateway] Turn ${event.turnId} started (index ${event.turnIndex})`);
-        break;
-      case 'llm_request':
-        console.log(`[Gateway] LLM request: model=${event.model}, estimatedTokens=${event.estimatedTokens}`);
-        break;
-      case 'llm_response':
-        console.log(`[Gateway] LLM response: content=${event.content.length}ch, durationMs=${event.durationMs}`);
-        break;
-      case 'tool_call_start':
-        console.log(`[Gateway] Tool call: ${event.toolName}(${event.arguments.substring(0, 100)})`);
-        break;
-      case 'tool_call_result':
-        console.log(`[Gateway] Tool result: ${event.toolName} (${event.durationMs}ms)`);
-        break;
-      case 'tool_call_error':
-        console.log(`[Gateway] Tool error: ${event.toolName}: ${event.error}`);
-        break;
-      case 'turn_end':
-        console.log(`[Gateway] Turn ${event.turnId} ended (shouldContinue=${event.shouldContinue})`);
-        break;
-      case 'error':
-        console.error(`[Gateway] Error:`, event.error.message);
-        break;
+  private buildSessionKey(agent: AgentDefinition, msg: ChannelMessage): string {
+    switch (this.dmScope) {
+      case 'per-peer':
+        return `${agent.id}:${msg.senderId}`;
+      case 'per-channel-peer':
+        return `${agent.id}:${msg.channel}:${msg.senderId}`;
+      default:
+        return `${agent.id}:main`;
+    }
+  }
+
+  private emitEvent(event: AgentEvent): void {
+    for (const listener of this.listeners) {
+      try {
+        listener(event);
+      } catch {
+        // listener 错误不应中断流程
+      }
     }
   }
 }

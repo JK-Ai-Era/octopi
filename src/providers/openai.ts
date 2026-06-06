@@ -4,11 +4,7 @@
  * 支持所有 OpenAI 兼容 API（OpenAI、Azure OpenAI、各种代理等）。
  * 通过 baseUrl 配置可以指向任何兼容端点。
  *
- * 支持的功能：
- * - 同步调用（complete）
- * - 流式调用（stream）
- * - Function calling（tool_calls）
- * - 健康检查
+ * 实现 ModelProvider 接口，支持同步和流式调用。
  *
  * 使用方式：
  * ```ts
@@ -21,7 +17,13 @@
  * ```
  */
 
-import type { LLMProvider, LLMRequest, LLMResponse, ToolCall, TokenUsage } from '../core/types.js';
+import type {
+  ModelProvider,
+  LLMRequest,
+  LLMResponse,
+  LLMStreamChunk,
+} from '../core/interfaces/model-provider.js';
+import type { ToolCall } from '../core/types.js';
 
 /**
  * OpenAI Provider 配置
@@ -43,10 +45,12 @@ export interface OpenAIProviderConfig {
 
 /**
  * OpenAI 兼容 LLM Provider
+ *
+ * 实现 ModelProvider 接口。
  */
-export class OpenAIProvider implements LLMProvider {
-  name: string;
-  models: string[];
+export class OpenAIProvider implements ModelProvider {
+  readonly name: string;
+  readonly models: string[];
   private apiKey: string;
   private baseUrl: string;
   private defaultModel: string;
@@ -63,11 +67,8 @@ export class OpenAIProvider implements LLMProvider {
 
   /**
    * 同步调用 LLM
-   *
-   * 将框架的 LLMRequest 转换为 OpenAI API 格式，发送请求，
-   * 然后将响应转换回框架的 LLMResponse 格式。
    */
-  async complete(request: LLMRequest): Promise<LLMResponse> {
+  async chat(request: LLMRequest): Promise<LLMResponse> {
     const body = this.buildRequestBody(request);
 
     const controller = new AbortController();
@@ -99,11 +100,9 @@ export class OpenAIProvider implements LLMProvider {
   /**
    * 流式调用 LLM
    *
-   * 返回一个 AsyncIterable，逐步产出 LLMResponse。
-   * 每个 chunk 的 content 是增量内容。
-   * 工具调用通过 buffer 拼接，在流结束时一次性输出。
+   * 返回 AsyncGenerator<LLMStreamChunk>，逐步产出内容。
    */
-  async *stream(request: LLMRequest): AsyncIterable<LLMResponse> {
+  async *stream(request: LLMRequest): AsyncGenerator<LLMStreamChunk> {
     const body = { ...this.buildRequestBody(request), stream: true };
 
     const response = await fetch(`${this.baseUrl}/chat/completions`, {
@@ -128,7 +127,6 @@ export class OpenAIProvider implements LLMProvider {
 
     // tool_calls 拼接 buffer（index → {id, name, argsBuffer}）
     const toolCallBuffers = new Map<number, { id: string; name: string; argsBuffer: string }>();
-    let textContent = '';
 
     while (true) {
       const { done, value } = await reader.read();
@@ -143,24 +141,20 @@ export class OpenAIProvider implements LLMProvider {
         if (!trimmed || !trimmed.startsWith('data: ')) continue;
         const data = trimmed.slice(6);
         if (data === '[DONE]') {
-          // 流结束：只输出元数据（toolCalls），不重复输出 content
-          // content 已在流式过程中作为增量 delta yield 过
+          // 流结束：输出 tool_calls（如果有）
           if (toolCallBuffers.size > 0) {
-            const toolCalls: ToolCall[] = [];
             for (const [, buf] of toolCallBuffers) {
-              toolCalls.push({
-                id: buf.id,
-                name: buf.name,
-                arguments: (() => { try { return JSON.parse(buf.argsBuffer); } catch { return {}; } })(),
-              });
+              yield {
+                type: 'tool_call',
+                toolCall: {
+                  id: buf.id,
+                  name: buf.name,
+                  arguments: buf.argsBuffer,
+                },
+              };
             }
-            yield {
-              content: '',
-              toolCalls,
-              model: request.model,
-              finishReason: 'tool_calls',
-            };
           }
+          yield { type: 'done' };
           return;
         }
 
@@ -171,22 +165,12 @@ export class OpenAIProvider implements LLMProvider {
 
           // 文本内容：增量输出
           if (delta.content) {
-            textContent += delta.content;
-            yield {
-              content: delta.content,
-              model: parsed.model ?? request.model,
-              finishReason: parsed.choices?.[0]?.finish_reason ?? 'stop',
-            };
+            yield { type: 'content', content: delta.content };
           }
 
           // reasoning 输出（Ollama 特有）
           if (delta.reasoning) {
-            textContent += delta.reasoning;
-            yield {
-              content: delta.reasoning,
-              model: parsed.model ?? request.model,
-              finishReason: parsed.choices?.[0]?.finish_reason ?? 'stop',
-            };
+            yield { type: 'content', content: delta.reasoning };
           }
 
           // tool_calls：增量拼接到 buffer
@@ -215,9 +199,9 @@ export class OpenAIProvider implements LLMProvider {
   }
 
   /**
-   * 健康检查
+   * 检查 provider 是否可用
    */
-  async healthCheck(): Promise<boolean> {
+  async isAvailable(): Promise<boolean> {
     try {
       const response = await fetch(`${this.baseUrl}/models`, {
         headers: { 'Authorization': `Bearer ${this.apiKey}` },
@@ -235,13 +219,11 @@ export class OpenAIProvider implements LLMProvider {
 
   /**
    * 构建 OpenAI API 请求体
-   *
-   * 消息格式净化：剥离框架内部字段，只保留 OpenAI API 所需字段。
    */
   private buildRequestBody(request: LLMRequest): Record<string, unknown> {
     const body: Record<string, unknown> = {
-      model: request.model || this.defaultModel,
-      messages: request.messages.map((msg: any) => this.sanitizeMessage(msg)),
+      model: request.model ?? this.defaultModel,
+      messages: request.messages.map((msg) => this.sanitizeMessage(msg)),
     };
 
     if (request.temperature !== undefined) {
@@ -274,9 +256,7 @@ export class OpenAIProvider implements LLMProvider {
     // tool 消息：必须有 tool_call_id 和 name
     if (msg.role === 'tool') {
       if (msg.tool_call_id) clean.tool_call_id = msg.tool_call_id;
-      else if (msg.toolResults?.[0]?.toolCallId) clean.tool_call_id = msg.toolResults[0].toolCallId;
       if (msg.name) clean.name = msg.name;
-      else if (msg.toolResults?.[0]?.name) clean.name = msg.toolResults[0].name;
     }
 
     return clean;
@@ -301,7 +281,7 @@ export class OpenAIProvider implements LLMProvider {
         promptTokens: data.usage.prompt_tokens,
         completionTokens: data.usage.completion_tokens,
         totalTokens: data.usage.total_tokens,
-      } : undefined,
+      } : { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
       model: data.model ?? 'unknown',
       finishReason: this.mapFinishReason(choice.finish_reason),
     };

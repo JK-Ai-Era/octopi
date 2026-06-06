@@ -20,12 +20,12 @@ describe('AnthropicProvider', () => {
     expect(p.models).toContain('claude-sonnet-4-20250514');
   });
 
-  test('healthCheck 不可达时返回 false', async () => {
+  test('isAvailable 不可达时返回 false', async () => {
     const p = new AnthropicProvider({
       apiKey: 'test-key',
       baseUrl: 'http://localhost:1',
     });
-    const result = await p.healthCheck();
+    const result = await p.isAvailable();
     expect(result).toBe(false);
   });
 
@@ -55,14 +55,14 @@ describe('Provider 协议差异对比', () => {
     expect(anthropic.name).toBe('anthropic');
   });
 
-  test('两个 provider 都支持 complete 和 healthCheck', () => {
+  test('两个 provider 都支持 chat 和 isAvailable', () => {
     const openai = new OpenAIProvider({ apiKey: 'key', models: ['gpt-4o'] });
     const anthropic = new AnthropicProvider({ apiKey: 'key', models: ['claude-sonnet-4-20250514'] });
 
-    expect(typeof openai.complete).toBe('function');
-    expect(typeof anthropic.complete).toBe('function');
-    expect(typeof openai.healthCheck).toBe('function');
-    expect(typeof anthropic.healthCheck).toBe('function');
+    expect(typeof openai.chat).toBe('function');
+    expect(typeof anthropic.chat).toBe('function');
+    expect(typeof openai.isAvailable).toBe('function');
+    expect(typeof anthropic.isAvailable).toBe('function');
   });
 
   test('两个 provider 都支持流式输出', () => {

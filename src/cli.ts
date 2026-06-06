@@ -6,18 +6,13 @@
  * 框架的命令行入口。支持以下命令：
  *
  * - serve: 启动 Gateway 服务
- * - chat: 交互式聊天（通过 HTTP 或直接调用 Agent Loop）
+ * - chat: 交互式聊天
  * - health: 健康检查
  *
  * 使用方式：
  * ```bash
- * # 启动服务
  * npx octopi serve --config ./octopi.json
- *
- * # 交互式聊天
  * npx octopi chat --config ./octopi.json
- *
- * # 健康检查
  * npx octopi health --config ./octopi.json
  * ```
  */
@@ -46,7 +41,7 @@ function createProvider(cfg: ProviderConfig): LLMProvider | null {
       baseUrl: cfg.baseUrl,
       models: cfg.models,
       defaultModel: cfg.defaultModel,
-    });
+    }) as any;
   }
 
   return new OpenAIProvider({
@@ -55,7 +50,7 @@ function createProvider(cfg: ProviderConfig): LLMProvider | null {
     baseUrl: cfg.baseUrl,
     models: cfg.models,
     defaultModel: cfg.defaultModel,
-  });
+  }) as any;
 }
 
 // ================================================================
@@ -172,12 +167,10 @@ async function chatCommand(args: CliArgs): Promise<void> {
     process.exit(1);
   }
 
-  // 解析 workspace 为绝对路径
   const configDir = args.config ? resolve(dirname(args.config)) : process.cwd();
   if (agent.workspace && !agent.workspace.startsWith('/')) {
     (agent as any).workspace = resolve(configDir, agent.workspace);
   }
-  // 确保 workspace 有默认值
   if (!(agent as any).workspace) {
     (agent as any).workspace = configDir;
   }
@@ -194,73 +187,28 @@ async function chatCommand(args: CliArgs): Promise<void> {
     process.exit(1);
   }
 
-  const { AgentRunner } = await import('./agent/agent-runner.js');
-  const loop = new AgentRunner();
-  loop.registerProvider(provider);
-  for (const tool of getBuiltinTools()) loop.registerTool(tool);
+  // 使用新架构
+  const { AgentBuilder } = await import('./harness/builder.js');
+  const { JsonlSessionStore } = await import('./integration/storage/jsonl.js');
+
+  const modelProvider = provider as any;
+  const builder = new AgentBuilder()
+    .model(modelProvider)
+    .store(new JsonlSessionStore(resolve(configDir, '.octopi/sessions')));
+
+  if (typeof agent.persona === 'object' && agent.persona?.systemPrompt) {
+    // persona 通过 systemPrompt 传入
+  }
+
+  for (const tool of getBuiltinTools()) {
+    builder.tool(tool);
+  }
+
+  const { engine, runner } = await builder.build();
 
   // 进度显示状态
   let hasShownThinking = false;
   let streamedContent = '';
-
-  // 事件监听器：实时显示进度
-  loop.on((event) => {
-    switch (event.type) {
-      case 'llm_request':
-        if (!hasShownThinking) {
-          process.stdout.write('  🤔 Thinking...');
-          hasShownThinking = true;
-        }
-        break;
-
-      case 'llm_stream_delta':
-        // 流式输出：清除 Thinking 后直接打印增量
-        if (event.delta) {
-          if (hasShownThinking) {
-            process.stdout.write('\r' + ' '.repeat(20) + '\r'); // 清除 "Thinking..."
-            hasShownThinking = false;
-          }
-          process.stdout.write(event.delta);
-          streamedContent += event.delta;
-        }
-        break;
-
-      case 'tool_call_start':
-        process.stdout.write(`\n  🔧 Running: ${event.toolName}...\n`);
-        break;
-
-      case 'tool_call_result':
-        process.stdout.write(`  ✅ Done (${event.durationMs}ms)\n`);
-        break;
-
-      case 'llm_response':
-        // 最终响应完成（纯文本回复时）
-        if (!event.toolCalls) {
-          if (streamedContent) {
-            process.stdout.write('\n'); // 流式输出结束，换行
-          } else if (event.content) {
-            // 非流式输出
-            console.log(`\n  ${event.content}`);
-          }
-        }
-        break;
-
-      case 'error':
-        console.error(`\n  ❌ Error: ${event.error?.message ?? 'Unknown'}`);
-        break;
-    }
-  });
-
-  const mockMsg = {
-    id: 'cli',
-    channel: 'cli',
-    senderId: 'user',
-    senderName: 'User',
-    content: '',
-    conversationId: 'cli-session',
-    timestamp: Date.now(),
-  };
-  const session = loop.resolveSession(agent as any, mockMsg, config.session?.dmScope ?? 'main');
 
   console.log(`\n🐙 Octopi Chat`);
   const agentName = typeof agent.persona === 'string'
@@ -278,20 +226,57 @@ async function chatCommand(args: CliArgs): Promise<void> {
       if (!trimmed) { ask(); return; }
       if (trimmed === 'exit' || trimmed === 'quit') {
         console.log('Goodbye! 👋');
-        await loop.close();
         rl.close();
         return;
       }
 
       try {
-        mockMsg.content = trimmed;
-        mockMsg.timestamp = Date.now();
         hasShownThinking = false;
         streamedContent = '';
 
-        const reply = await loop.processMessage(agent as any, session, mockMsg);
-        // 最终回复已通过事件监听器输出，这里只输出 agent 名前缀
-        console.log(`\n${agentName}: ${reply.content}\n`);
+        const userMessage = {
+          role: 'user' as const,
+          content: trimmed,
+          timestamp: Date.now(),
+        };
+
+        const sessionKey = `${agent.id}:cli`;
+        const runConfig = {
+          agentId: agent.id,
+          sessionId: sessionKey,
+          model: agent.model.model,
+          systemPrompt: typeof agent.persona === 'object' ? agent.persona?.systemPrompt : '',
+        };
+
+        let finalContent = '';
+        for await (const event of runner.handle(sessionKey, userMessage, runConfig)) {
+          if (event.type === 'llm_request') {
+            if (!hasShownThinking) {
+              process.stdout.write('  🤔 Thinking...');
+              hasShownThinking = true;
+            }
+          } else if (event.type === 'llm_stream_delta' && event.data?.delta) {
+            if (hasShownThinking) {
+              process.stdout.write('\r' + ' '.repeat(20) + '\r');
+              hasShownThinking = false;
+            }
+            process.stdout.write(event.data.delta as string);
+            streamedContent += event.data.delta;
+          } else if (event.type === 'tool_call_start') {
+            process.stdout.write(`\n  🔧 Running: ${event.data?.toolName}...\n`);
+          } else if (event.type === 'tool_call_result') {
+            process.stdout.write(`  ✅ Done (${event.data?.durationMs}ms)\n`);
+          } else if (event.type === 'turn.end' && event.data?.content) {
+            finalContent = event.data.content as string;
+          }
+        }
+
+        if (streamedContent) {
+          process.stdout.write('\n');
+        } else if (finalContent) {
+          console.log(`\n  ${finalContent}`);
+        }
+        console.log(`\n${agentName}: ${finalContent || streamedContent}\n`);
       } catch (error) {
         console.error(`\n[Error] ${error instanceof Error ? error.message : String(error)}\n`);
       }
@@ -305,18 +290,19 @@ async function chatCommand(args: CliArgs): Promise<void> {
 
 async function healthCommand(args: CliArgs): Promise<void> {
   const config = loadConfig(args.config);
-  const { LLMRouter } = await import('./providers/router.js');
-  const router = new LLMRouter();
-
-  for (const providerCfg of config.providers ?? []) {
-    const provider = createProvider(providerCfg);
-    if (provider) router.register(provider);
-  }
 
   console.log('\n🏥 Health Check\n');
-  const results = await router.healthCheckAll();
-  for (const [name, ok] of Object.entries(results)) {
-    console.log(`  ${name}: ${ok ? '✅ OK' : '❌ FAIL'}`);
+  for (const providerCfg of config.providers ?? []) {
+    const provider = createProvider(providerCfg);
+    if (provider) {
+      try {
+        // 通过 isAvailable 检查
+        const available = await (provider as any).isAvailable?.() ?? true;
+        console.log(`  ${providerCfg.name}: ${available ? '✅ OK' : '❌ FAIL'}`);
+      } catch {
+        console.log(`  ${providerCfg.name}: ❌ FAIL`);
+      }
+    }
   }
   console.log();
 }

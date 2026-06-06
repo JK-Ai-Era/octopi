@@ -21,10 +21,6 @@ export type { SessionAwareRunnerConfig } from './runner.js';
 // ── Builder ──
 export { AgentBuilder, createAgent } from './builder.js';
 
-// ── 兼容层 ──
-export { LegacyAgentRunner } from './compat/legacy-agent-runner.js';
-export { adaptPluginHooks } from './compat/plugin-adapter.js';
-
 // ── 安全 ──
 export { CapabilityEnforcer, PluginTrustLevel } from './security/capability-enforcer.js';
 export { SecurityPresets, getSecurityPolicy } from './security/policy.js';

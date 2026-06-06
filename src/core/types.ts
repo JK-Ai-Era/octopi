@@ -512,8 +512,6 @@ export interface AgentLoopConfig {
   iterationBudget: number;
   maxConsecutiveErrors: number;
   retry: RetryConfig;
-  outputQuality?: import('../loop/output-quality-types.js').QualityGateConfig;
-  recovery?: import('../loop/output-quality-types.js').RecoveryConfig;
   onEvent?: (event: AgentEvent) => void;
   onSteering?: () => Promise<Message[]>;
 }
