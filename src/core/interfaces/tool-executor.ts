@@ -7,7 +7,7 @@
  * 安全约束通过 ExecutionContext 传递，Core 层强制校验。
  */
 
-import type { ToolCall, ToolResult } from '../types.js';
+import type { ToolCall } from '../types.js';
 
 // ── 执行上下文 ──
 
@@ -43,8 +43,8 @@ export interface ToolExecutor {
    *
    * @param call - 工具调用请求（来自 LLM 的 tool_calls）
    * @param ctx - 执行上下文（安全约束）
-   * @returns 工具执行结果
+   * @returns 工具执行的原始结果（Engine 负责包装为 ToolResult）
    * @throws 工具不存在、参数错误、执行超时等情况下抛出错误
    */
-  execute(call: ToolCall, ctx: ExecutionContext): Promise<ToolResult>;
+  execute(call: ToolCall, ctx: ExecutionContext): Promise<unknown>;
 }

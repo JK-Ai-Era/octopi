@@ -328,13 +328,12 @@ export class Gateway {
         execute: async (call, ctx) => {
           const tool = tools.get(call.name);
           if (!tool) throw new Error(`Tool "${call.name}" not found`);
-          const result = await tool.handler(call.arguments as Record<string, unknown>, {
+          return tool.handler(call.arguments as Record<string, unknown>, {
             cwd: agent.workspace ?? process.cwd(),
             sessionId: ctx.callerId ?? 'unknown',
             agentId: agent.id,
             messages: [],
           });
-          return { toolCallId: call.id, name: call.name, result };
         },
       },
       context: new DefaultContextPipeline(),

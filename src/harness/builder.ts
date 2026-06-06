@@ -17,6 +17,7 @@
 import type {
   RegisteredTool,
   Message,
+  ToolCall,
 } from '../core/types.js';
 import type {
   ModelProvider,
@@ -100,10 +101,18 @@ class DefaultErrorStrategy implements ErrorStrategy {
 
 /** 默认工具执行器（直接调用 handler） */
 class DefaultToolExecutor implements ToolExecutor {
-  async execute(call: any, _ctx: ExecutionContext): Promise<any> {
-    // 工具执行由 AgentEngine 内部处理
-    // 这里是兜底，实际不会被调用
-    throw new Error(`Tool "${call.name}" executor not configured`);
+  private tools: Map<string, RegisteredTool>;
+
+  constructor(tools: Map<string, RegisteredTool>) {
+    this.tools = tools;
+  }
+
+  async execute(call: ToolCall, ctx: ExecutionContext): Promise<unknown> {
+    const tool = this.tools.get(call.name);
+    if (!tool) {
+      throw new Error(`Tool "${call.name}" not found`);
+    }
+    return tool.handler(call.arguments, ctx as any);
   }
 }
 
@@ -322,7 +331,7 @@ export class AgentBuilder {
     const budget = this._budget ?? new IterationBudget(events);
     const errorStrategy = this._errorStrategy ?? new DefaultErrorStrategy();
     const context = this._context ?? new DefaultContextPipeline(this._contextStages);
-    const executor = this._executor ?? new DefaultToolExecutor();
+    const executor = this._executor ?? new DefaultToolExecutor(this._tools);
 
     // 注入 systemPrompt 到引擎的运行时配置
     // AgentEngine 本身不存储 systemPrompt，由调用方在 run() 时传入
