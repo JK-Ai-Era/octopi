@@ -223,17 +223,37 @@ async function chatCommand(args: CliArgs): Promise<void> {
     : agent.persona?.name ?? agent.id;
   console.log(`   Agent: ${agentName}`);
   console.log(`   Model: ${providerCfg.type} / ${agent.model.model}`);
-  console.log(`   Type "exit" or "quit" to end\n`);
+  console.log(`   Commands: /new (new session), /help, exit`);
 
   const rl = createInterface({ input: process.stdin, output: process.stdout });
+
+  // 可变 session ID
+  let currentSessionId = cliSessionId;
 
   const ask = () => {
     rl.question('You: ', async (input) => {
       const trimmed = input.trim();
       if (!trimmed) { ask(); return; }
+
+      // 命令处理
       if (trimmed === 'exit' || trimmed === 'quit') {
         console.log('Goodbye! 👋');
         rl.close();
+        return;
+      }
+      if (trimmed === '/new') {
+        currentSessionId = `${agent.id}:cli:${Date.now()}`;
+        console.log('🆕 New session started\n');
+        ask();
+        return;
+      }
+      if (trimmed === '/help') {
+        console.log(`
+Commands:
+  /new   — Start a new session (clear context)
+  /help  — Show this help
+  exit   — Exit chat\n`);
+        ask();
         return;
       }
 
@@ -249,13 +269,13 @@ async function chatCommand(args: CliArgs): Promise<void> {
 
         const runConfig = {
           agentId: agent.id,
-          sessionId: cliSessionId,
+          sessionId: currentSessionId,
           model: agent.model.model,
           systemPrompt: typeof agent.persona === 'object' ? agent.persona?.systemPrompt : '',
         };
 
         let finalContent = '';
-        for await (const event of runner.handle(cliSessionId, userMessage, runConfig)) {
+        for await (const event of runner.handle(currentSessionId, userMessage, runConfig)) {
           if (event.type === 'llm_request') {
             if (!hasShownThinking) {
               process.stdout.write('  🤔 Thinking...');
