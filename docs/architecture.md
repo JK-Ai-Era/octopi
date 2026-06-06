@@ -805,3 +805,42 @@ Observer 接口的实现：
 | 安全 | 平台级安全策略 | Core 内置 + Harness 配置 |
 
 Octopi 保留了 OpenClaw 中通用的 Agent 运行时能力，去除了所有平台绑定。
+
+### 4.13 CommandPlugin — 斜杠命令系统
+
+会话内斜杠命令（`/new`、`/model`、`/help`、`/status`），在消息进入 Agent Loop 前拦截。
+
+```typescript
+const commands = new CommandPlugin({
+  sessionIdRef: { current: 'session-1' },
+  currentModelRef: { current: 'gpt-4' },
+  onNewSession: () => `agent:cli:${Date.now()}`,
+});
+
+// 注册自定义命令
+commands.register('/clear', {
+  description: 'Clear screen',
+  handler: async () => ({ success: true, message: 'Cleared' }),
+});
+```
+
+**架构分层：**
+```
+用户消息 → Plugin Hook (message_received) → CommandPlugin.tryExecute()
+                                                ├─ 匹配 → handler → 结果（不进 Agent Loop）
+                                                └─ 不匹配 → null → 进 Agent Loop
+```
+
+**设计原则：**
+- Plugin Hook 是触发机制，命令处理是独立关注点
+- 用 ref 而非回调管理可变状态（sessionId、model）
+- CLI 和 Gateway 共用同一套命令处理逻辑
+- 任何 Plugin 都可以通过 `register()` 扩展命令
+
+### ADR-012: 独立 CommandPlugin 模块
+
+**决策：** 斜杠命令处理抽成独立的 CommandPlugin 模块，通过 Plugin Hook 挂载，不内嵌到 CLI 或 Gateway。
+
+**理由：** 命令处理是独立关注点。CLI 和 Gateway 都需要命令能力，但触发机制不同（CLI 是 readline，Gateway 是 message_received hook）。抽成独立模块可以复用。
+
+**权衡：** 增加了一层抽象。对简单 CLI 场景来说可能过度设计，但为 Gateway 场景打下了基础。
