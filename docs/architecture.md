@@ -177,25 +177,12 @@ src/
 │   ├── builtin.ts                 # 内置工具
 │   └── index.ts
 │
-├── agent/                         # 旧架构（deprecated）
-│   ├── agent-runner.ts            # AgentRunner（v0.1.x）
-│   ├── session-manager.ts         # SessionManager（v0.1.x）
-│   └── index.ts
-│
-├── loop/                          # 旧循环（deprecated）
-│   ├── run-agent-loop.ts          # 旧 AgentLoop
-│   ├── output-quality-gate.ts     # 旧质量检测
-│   └── ...
-│
 ├── gateway/                       # Gateway
 │   ├── gateway.ts
 │   └── index.ts
 │
 ├── protocol/                      # 协议适配
 │   └── http.ts                    # HTTP 适配器
-│
-├── context/                       # 旧上下文（deprecated）
-│   └── engine.ts                  # LegacyContextEngine
 │
 ├── config.ts                      # 配置加载
 ├── init.ts                        # 系统初始化（目录脚手架）
