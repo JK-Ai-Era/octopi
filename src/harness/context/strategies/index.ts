@@ -6,3 +6,6 @@
 
 export { slidingWindow, createSlidingWindowCompressor } from './sliding-window.js';
 export type { CompressionConfig, CompressionResult } from './sliding-window.js';
+
+export { summarize, createSummarizeCompressor } from './summarize.js';
+export type { SummarizeConfig } from './summarize.js';
