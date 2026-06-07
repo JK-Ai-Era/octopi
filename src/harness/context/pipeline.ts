@@ -171,8 +171,9 @@ export class DefaultContextPipeline implements ContextPipeline {
       result.push({ role: 'system', content: ctx.systemPrompt });
     }
 
-    // 消息历史
-    for (const msg of ctx.messages) {
+    // 消息历史（先清理无效消息，避免干扰 LLM）
+    const cleanMessages = this.sanitizeMessages(ctx.messages);
+    for (const msg of cleanMessages) {
       if (msg.role === 'tool') {
         // 工具结果消息
         for (const tr of msg.toolResults ?? []) {
@@ -209,5 +210,29 @@ export class DefaultContextPipeline implements ContextPipeline {
     return result;
   }
 
+  /**
+   * 清理消息历史
+   *
+   * 过滤掉可能干扰 LLM 的无效消息：
+   * - 空 assistant 消息（无内容、无 toolCalls）
+   * - 空 tool 消息（无 toolResults）
+   */
+  private sanitizeMessages(messages: Message[]): Message[] {
+    return messages.filter((msg) => {
+      // assistant 消息：必须有内容或有 toolCalls
+      if (msg.role === 'assistant') {
+        if (!msg.content && (!msg.toolCalls || msg.toolCalls.length === 0)) {
+          return false;
+        }
+      }
+      // tool 消息：必须有 toolResults
+      if (msg.role === 'tool') {
+        if (!msg.toolResults || msg.toolResults.length === 0) {
+          return false;
+        }
+      }
+      return true;
+    });
+  }
 
 }

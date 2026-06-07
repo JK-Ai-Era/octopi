@@ -26,6 +26,7 @@ import { getBuiltinTools } from './tools/builtin.js';
 import { createInterface } from 'node:readline';
 import type { ModelProvider } from './core/interfaces/model-provider.js';
 import type { ProviderConfig } from './config.js';
+import { initOctopi, getOctopiHome, isInitialized, formatInitReport, ensureAgentDirs } from './init.js';
 
 // ================================================================
 // Provider 工厂
@@ -66,26 +67,39 @@ interface CliArgs {
 
 function parseArgs(): CliArgs {
   const args = process.argv.slice(2);
-  const result: CliArgs = { command: args[0] ?? 'help' };
 
-  for (let i = 1; i < args.length; i++) {
+  // 先提取 flags
+  let help = false;
+  let config: string | undefined;
+  let port: number | undefined;
+  const positional: string[] = [];
+
+  for (let i = 0; i < args.length; i++) {
     switch (args[i]) {
       case '--config':
       case '-c':
-        result.config = args[++i];
+        config = args[++i];
         break;
       case '--port':
       case '-p':
-        result.port = parseInt(args[++i], 10);
+        port = parseInt(args[++i], 10);
         break;
       case '--help':
       case '-h':
-        result.help = true;
+        help = true;
+        break;
+      default:
+        positional.push(args[i]);
         break;
     }
   }
 
-  return result;
+  return {
+    command: positional[0] ?? 'help',
+    config,
+    port,
+    help,
+  };
 }
 
 // ================================================================
@@ -100,6 +114,7 @@ Usage:
   octopi <command> [options]
 
 Commands:
+  init      Initialize Octopi directory structure and config
   serve     Start the Gateway server
   chat      Interactive chat with an agent
   health    Check the health of configured providers
@@ -111,14 +126,51 @@ Options:
   --help, -h            Show this help message
 
 Examples:
+  octopi init
   octopi serve -c ./my-config.json
   octopi chat -c ./my-config.json
   octopi health -c ./my-config.json
 `);
 }
 
+async function initCommand(args: CliArgs): Promise<void> {
+  const homeDir = args.config ? resolve(dirname(args.config)) : undefined;
+  const result = await initOctopi(homeDir);
+  console.log(formatInitReport(result));
+}
+
+/**
+ * 确保系统已初始化（serve/chat 启动时自动检测）
+ *
+ * 如果未初始化且没有指定配置文件，自动执行初始化。
+ * 返回最终使用的配置路径。
+ */
+async function ensureInitialized(args: CliArgs): Promise<string | undefined> {
+  // 如果明确指定了配置文件，跳过自动初始化
+  if (args.config) return args.config;
+
+  // 检查当前目录是否有配置
+  if (isInitialized(process.cwd())) return undefined; // 使用默认 ./octopi.json
+
+  // 检查 OCTOPI_HOME
+  const home = getOctopiHome();
+  if (isInitialized(home)) {
+    // 返回 home 下的配置路径，让 loadConfig 使用
+    return resolve(home, 'octopi.json');
+  }
+
+  // 未初始化 → 自动初始化
+  console.log('🐙 First run detected. Initializing Octopi...\n');
+  const result = await initOctopi();
+  console.log(formatInitReport(result));
+  console.log('');
+
+  return result.configPath;
+}
+
 async function serveCommand(args: CliArgs): Promise<void> {
-  const config = loadConfig(args.config);
+  const configPath = await ensureInitialized(args);
+  const config = loadConfig(configPath);
   const gatewayConfig = toGatewayConfig(config);
 
   if (args.port) gatewayConfig.port = args.port;
@@ -160,14 +212,16 @@ async function serveCommand(args: CliArgs): Promise<void> {
 }
 
 async function chatCommand(args: CliArgs): Promise<void> {
-  const config = loadConfig(args.config);
+  const configPath = await ensureInitialized(args);
+  const config = loadConfig(configPath);
   const agent = config.agents[0];
   if (!agent) {
     console.error('[Error] No agents defined in config');
     process.exit(1);
   }
 
-  const configDir = args.config ? resolve(dirname(args.config)) : process.cwd();
+  // 从实际使用的配置文件路径推导 configDir
+  const configDir = configPath ? resolve(dirname(configPath)) : process.cwd();
   if (agent.workspace && !agent.workspace.startsWith('/')) {
     agent.workspace = resolve(configDir, agent.workspace);
   }
@@ -191,9 +245,13 @@ async function chatCommand(args: CliArgs): Promise<void> {
   const { AgentBuilder } = await import('./harness/builder.js');
   const { JsonlSessionStore } = await import('./integration/storage/jsonl.js');
 
+  // 使用配置中的 dataDir，否则默认 .octopi/sessions
+  const storeDir = config.store?.dataDir
+    ? (config.store.dataDir.startsWith('/') ? config.store.dataDir : resolve(configDir, config.store.dataDir))
+    : resolve(configDir, '.octopi/sessions');
   const builder = new AgentBuilder()
     .model(provider)
-    .store(new JsonlSessionStore(resolve(configDir, '.octopi/sessions')));
+    .store(new JsonlSessionStore(storeDir));
 
   // 传递 systemPrompt 到 builder
   if (typeof agent.persona === 'object' && agent.persona?.systemPrompt) {
@@ -274,11 +332,12 @@ async function chatCommand(args: CliArgs): Promise<void> {
           sessionId: sessionIdRef.current,
           model: agent.model.model,
           systemPrompt: typeof agent.persona === 'object' ? agent.persona?.systemPrompt : '',
+          cwd: agent.workspace,
         };
 
         let finalContent = '';
         for await (const event of runner.handle(sessionIdRef.current, userMessage, runConfig)) {
-          if (event.type === 'llm_request') {
+          if (event.type === 'model.call.start') {
             if (!hasShownThinking) {
               process.stdout.write('  🤔 Thinking...');
               hasShownThinking = true;
@@ -290,10 +349,10 @@ async function chatCommand(args: CliArgs): Promise<void> {
             }
             process.stdout.write(event.data.delta as string);
             streamedContent += event.data.delta as string;
-          } else if (event.type === 'tool_call_start') {
+          } else if (event.type === 'tool.exec.start') {
             process.stdout.write(`\n  🔧 Running: ${event.data?.toolName}...\n`);
-          } else if (event.type === 'tool_call_result') {
-            process.stdout.write(`  ✅ Done (${event.data?.durationMs}ms)\n`);
+          } else if (event.type === 'tool.exec.end') {
+            process.stdout.write(`  ✅ Done (${event.data?.durationMs ?? '?'}ms)\n`);
           } else if (event.type === 'turn.end') {
             finalContent = (event.data?.content as string) ?? '';
           }
@@ -305,8 +364,9 @@ async function chatCommand(args: CliArgs): Promise<void> {
           process.stdout.write('\n');
         } else if (displayContent) {
           console.log(`\n  ${displayContent}`);
+        } else {
+          console.log('\n  ⚠️  Empty response from model. This may be a streaming issue or model quirk.\n     Try rephrasing your message or use /new to start a fresh session.\n');
         }
-        console.log(`\n${agentName}: ${displayContent}\n`);
       } catch (error) {
         console.error(`\n[Error] ${error instanceof Error ? error.message : String(error)}\n`);
       }
@@ -319,7 +379,8 @@ async function chatCommand(args: CliArgs): Promise<void> {
 }
 
 async function healthCommand(args: CliArgs): Promise<void> {
-  const config = loadConfig(args.config);
+  const configPath = await ensureInitialized(args);
+  const config = loadConfig(configPath);
 
   console.log('\n🏥 Health Check\n');
   for (const providerCfg of config.providers ?? []) {
@@ -340,12 +401,21 @@ async function healthCommand(args: CliArgs): Promise<void> {
 async function main(): Promise<void> {
   const args = parseArgs();
 
-  if (args.help || args.command === 'help') {
+  if (args.help) {
+    if (args.command && args.command !== 'help') {
+      // `octopi serve -h` → 显示 help
+    }
+    showHelp();
+    return;
+  }
+
+  if (args.command === 'help') {
     showHelp();
     return;
   }
 
   switch (args.command) {
+    case 'init': await initCommand(args); break;
     case 'serve': await serveCommand(args); break;
     case 'chat': await chatCommand(args); break;
     case 'health': await healthCommand(args); break;

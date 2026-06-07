@@ -39,6 +39,7 @@ import type { IterationBudgetConfig } from './core/budget.js';
 import type { SecurityGuardConfig } from './core/security-guard.js';
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { homedir } from 'node:os';
 
 // ── Provider 配置 ──
 
@@ -172,6 +173,19 @@ export interface HarnessConfig {
   channels?: ChannelConfig[];
   /** Session 配置 */
   session?: GatewayConfig['session'];
+  /** 可观测性配置 */
+  observability?: {
+    /** 日志级别: 0=FATAL, 1=ERROR, 2=WARN, 3=INFO, 4=DEBUG, 5=TRACE */
+    level?: number;
+    /** 控制台输出级别（null = 不输出到控制台） */
+    consoleLevel?: number | null;
+    /** Trace 文件输出目录（null = 不输出到文件） */
+    traceDir?: string | null;
+    /** 是否记录流式 delta（数据量大，默认关闭） */
+    captureStreamDeltas?: boolean;
+    /** 是否记录完整模型请求 */
+    captureModelRequest?: boolean;
+  };
 }
 
 // ── 加载函数 ──
@@ -183,7 +197,30 @@ export interface HarnessConfig {
  * @returns 解析后的配置
  */
 export function loadConfig(configPath?: string): HarnessConfig {
-  const filePath = resolve(configPath ?? './octopi.json');
+  // 配置文件查找优先级：
+  // 1. 明确指定的路径
+  // 2. 当前目录 ./octopi.json
+  // 3. OCTOPI_HOME/octopi.json（默认 ~/octopi/octopi.json）
+  let filePath: string;
+  if (configPath) {
+    filePath = resolve(configPath);
+  } else if (existsSync(resolve('./octopi.json'))) {
+    filePath = resolve('./octopi.json');
+  } else {
+    // 尝试 OCTOPI_HOME
+    const homeDir = process.env.OCTOPI_HOME ?? resolve(homedir(), 'octopi');
+    const homeConfig = resolve(homeDir, 'octopi.json');
+    if (existsSync(homeConfig)) {
+      filePath = homeConfig;
+    } else {
+      throw new Error(
+        `Config file not found. Searched:\n` +
+        `  1. ${resolve(configPath ?? './octopi.json')}\n` +
+        `  2. ${homeConfig}\n\n` +
+        `Run 'octopi init' to create a new configuration.`
+      );
+    }
+  }
 
   if (!existsSync(filePath)) {
     throw new Error(`Config file not found: ${filePath}`);

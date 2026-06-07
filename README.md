@@ -1,34 +1,120 @@
 # Octopi 🐙
 
-**可嵌入的 Agent 底座框架**
+**An Embeddable Agent Runtime Framework**
 
-> Agent 不是一个 class，而是一个完整的运行时。
-> Session 不是聊天记录，而是一个完整的交互生命周期。
-> 框架的价值不在于提供了多少默认实现，而在于定义了多少清晰的接口。
+> An agent is not a class — it's a complete runtime.
+> A session is not a chat log — it's a full interaction lifecycle.
+> A framework's value lies not in how many defaults it ships, but in how many clean interfaces it defines.
 
----
-
-## 为什么做 Octopi
-
-OpenClaw 是一个完整的 AI 助手平台——内置飞书、Telegram、记忆系统、心跳调度……它很强，但也意味着：你只能用它做"AI 助手"。
-
-Octopi 提炼了 OpenClaw 中**真正通用的 Agent 运行时能力**，去除所有平台绑定：
-
-- Agent Loop（消息 → 上下文组装 → 模型推理 → 工具执行 → 回复）
-- Session 管理（生命周期、持久化、并发控制）
-- 多 Provider 支持（OpenAI / Anthropic / 任何兼容协议）
-- Plugin 系统（全生命周期 hook，对齐 OpenClaw）
-- Task 系统（LLM 驱动的任务追踪与恢复）
-- 安全守卫（注入检测、敏感信息过滤、信任分级）
-
-你可以用它做一个 CLI bot、一个 Web 应用的 AI 后端、一个嵌入式助手、一个你自己都还没想到的东西。
+[中文文档](./README_CN.md)
 
 ---
 
-## 快速开始
+## Why Octopi
+
+Most agent frameworks give you a monolith: a fixed agent loop, a fixed session model, a fixed set of integrations. You can use them as-is, but the moment you need something different — a custom context pipeline, a different storage backend, an embedded agent inside your own product — you're fighting the framework.
+
+Octopi takes a different approach. It's a **runtime toolkit** built from first principles:
+
+- **AgentEngine** — a stateless message loop (input → context assembly → model inference → tool execution → output)
+- **Session management** — lifecycle, persistence, concurrency control, all pluggable
+- **Multi-provider LLM** — OpenAI, Anthropic, or any provider implementing the `ModelProvider` interface
+- **Plugin system** — full lifecycle hooks with interceptor and observer semantics
+- **Task system** — LLM-driven task tracking, context recovery, and autonomous planning
+- **Security built-in** — injection detection, sensitive data filtering, trust levels — not optional, not removable
+
+Use it to build a CLI bot, a web app AI backend, an embedded assistant, or something you haven't imagined yet.
+
+---
+
+## Architecture: Three-Layer Onion
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Layer 3: Integration                                        │
+│  Protocols · Storage Backends · Observability                │
+│                                                              │
+│  ┌─────────────────────────────────────────────────────────┐ │
+│  │  Layer 2: Harness                                        │ │
+│  │  Persona · Plugin · Skill · Task · Planner               │ │
+│  │  Strategy · Resources · Security Policy · Builder        │ │
+│  │                                                          │ │
+│  │  ┌─────────────────────────────────────────────────────┐ │ │
+│  │  │  Layer 1: Core                                       │ │ │
+│  │  │  AgentEngine · EventBus · SecurityGuard · Budget     │ │ │
+│  │  │  AsyncTask · ProcessModel · Interfaces               │ │ │
+│  │  └─────────────────────────────────────────────────────┘ │ │
+│  └─────────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Dependency direction: outer → inner. The core never knows about the harness.**
+
+### Core (Layer 1) — Pure Engine
+
+Zero implementation dependencies. Just interfaces and the minimal agent loop.
+
+| Component | Responsibility |
+|---|---|
+| `AgentEngine` | Stateless loop engine — the heart of the framework |
+| `EventBus` | Full-chain observability via typed events |
+| `SecurityGuard` | Injection detection + sensitive data filtering (non-disableable) |
+| `IterationBudget` | Resource constraints: iterations, tool calls, tokens, time |
+| `AsyncTask` | Async primitive: cancel, timeout, retry, persistence |
+| `ProcessModel` | Agent process model: lifecycle, spawn, IPC |
+| `ModelProvider` | LLM call interface |
+| `ToolExecutor` | Tool execution interface |
+| `ContextPipeline` | Context assembly pipeline interface |
+| `ErrorStrategy` | Error classification and recovery interface |
+
+### Harness (Layer 2) — Assembly Layer
+
+Where the agent gets its personality, tools, and intelligence.
+
+| Component | Responsibility |
+|---|---|
+| `AgentBuilder` | Fluent API — one line to launch an agent |
+| `SessionAwareRunner` | Session lifecycle: locks, persistence, reset |
+| `PersonaLoader` | File-based persona system (AGENTS.md, SOUL.md, etc.) |
+| `DefaultContextPipeline` | Pluggable pipeline: Persona → Skill → Task → History → Knowledge → Filter |
+| `AgentSupervisor` | Persistent agent core: Perceive → Think → Act → Reflect |
+| `TaskTracker` / `TaskManager` | LLM-driven task tracking and recovery |
+| `RulePlanner` / `LLMPlanner` / `HybridPlanner` | Planning: rule-driven, LLM-driven, or hybrid |
+| `TaskScheduler` | Scheduling: once, interval, cron, at |
+| `MemoryKnowledgeStore` | Knowledge CRUD, keyword search, confidence filtering |
+| `LLMReflector` | Quality assessment, pattern recognition, experience storage |
+| `RuleTaskClassifier` | 7 task types × 3 complexity levels |
+| `DefaultStrategyRouter` | 6 reasoning strategies: direct, chain-of-thought, plan-and-execute, tool-use, reflect, multi-agent |
+| `ResourceManager` | Token budget, cost tracking, rate limiting |
+| `CapabilityEnforcer` | Plugin trust-level runtime enforcement |
+| `SecurityPresets` | Preset policies: development / testing / production / maximum |
+
+### Integration (Layer 3) — Connectors
+
+Protocol adapters, storage backends, observability.
+
+| Component | Responsibility |
+|---|---|
+| `JsonlSessionStore` | JSONL file storage (default) |
+| `InMemorySessionStore` | In-memory storage (testing) |
+| `NoopObserver` | Zero-overhead no-op observer |
+| `LogObserver` | Logging observer for development |
+| `TraceLogger` | Structured event logging with level filtering |
+| `TraceCollector` | Auto-collect engine events into trace |
+| `ConsoleExporter` / `JsonlFileExporter` / `WebhookExporter` | Trace export backends (Exporter SPI) |
+| `MetricsAggregator` | LLM/token/latency/cost metrics from event stream |
+| `RecordingProvider` | Record real LLM interactions for replay |
+| `ReplayProvider` | Replay recorded interactions (deterministic testing) |
+| `ChaosProvider` | Fault injection: empty response, timeout, rate-limit, malformed |
+| `ScenarioRunner` | E2E scenario testing with built-in assertions |
+| `ScenarioComposer` | Compose, extend, parameterize test scenarios |
+
+---
+
+## Quick Start
 
 ```typescript
-import { AgentBuilder } from 'octopi/harness';
+import { AgentBuilder } from 'octopi';
 import { OpenAIProvider } from 'octopi';
 
 const { engine, runner } = await new AgentBuilder()
@@ -36,149 +122,81 @@ const { engine, runner } = await new AgentBuilder()
   .persona('./my-agent')
   .build();
 
-// 处理消息
+// Process a message
 for await (const event of runner.handle('session-1', userMessage)) {
   console.log(event);
 }
 ```
 
----
-
-## 架构：三层洋葱
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│  Layer 3: Integration                                        │
-│  Gateway · Protocols · Storage Backends · Observability      │
-│                                                              │
-│  ┌─────────────────────────────────────────────────────────┐ │
-│  │  Layer 2: Harness                                        │ │
-│  │  Persona · Plugin · Skill · Task · ToolPolicy            │ │
-│  │  ContextPipeline · ErrorStrategy · SecurityPolicy        │ │
-│  │  AgentBuilder · SessionAwareRunner                       │ │
-│  │                                                          │ │
-│  │  ┌─────────────────────────────────────────────────────┐ │ │
-│  │  │  Layer 1: Core                                       │ │ │
-│  │  │  AgentEngine · EventBus · SecurityGuard · Budget     │ │ │
-│  │  │  ModelProvider · ToolExecutor · ContextPipeline      │ │ │
-│  │  │  ErrorStrategy · Observer                            │ │ │
-│  │  └─────────────────────────────────────────────────────┘ │ │
-│  └─────────────────────────────────────────────────────────┘ │
-└─────────────────────────────────────────────────────────────┘
-```
-
-**依赖方向：外 → 内。内层不知道外层的存在。**
-
-### Core 层（`src/core/`）
-
-纯引擎 + 接口契约。零实现依赖。
-
-| 组件 | 职责 |
-|---|---|
-| `AgentEngine` | 无状态循环引擎（输入 → 推理 → 工具 → 输出） |
-| `EventBus` | 内置事件总线（全链路可观测） |
-| `SecurityGuard` | 内置安全守卫（注入检测、敏感信息过滤，不可禁用） |
-| `AsyncTask` | 异步任务原语（取消、超时、重试、持久化） |
-| `ProcessModel` | Agent 进程模型（生命周期、spawn、消息传递） |
-| `IterationBudget` | 资源约束（迭代次数、工具调用、token、时间） |
-| `AsyncTask` | 异步任务原语（取消、超时、重试、持久化） |
-| `ProcessModel` | Agent 进程模型（生命周期、spawn、消息传递） |
-| `ModelProvider` | LLM 调用接口 |
-| `ToolExecutor` | 工具执行接口 |
-| `ContextPipeline` | 上下文组装管道接口 |
-| `ErrorStrategy` | 错误处理策略接口 |
-| `Observer` | 可观测性接口 |
-| `SessionStore` | Session 持久化接口 |
-| `EventSource` | 外部事件源协议 |
-| `TaskStore` | 任务持久化协议 |
-| `MessageChannel` | 进程间通信协议 |
-
-### Harness 层（`src/harness/`）
-
-装具层。通过 Core 接口挂载增强功能。
-
-| 组件 | 职责 |
-|---|---|
-| `AgentBuilder` | Fluent API 组装器（一行代码启动 Agent） |
-| `SessionAwareRunner` | Session 生命周期管理（锁、持久化、重置） |
-| `PersonaLoader` | 文件式人格系统（AGENTS.md、SOUL.md 等） |
-| `DefaultContextPipeline` | 可插拔的上下文管道（Persona → Skill → Task → History → Knowledge → Filter） |
-| `TaskTracker` / `TaskManager` | LLM 驱动的任务追踪与恢复 |
-| `AgentSupervisor` | 持续运行的 Agent 核心（认知循环：感知→思考→执行→反思） |
-| `EventCollector` | 事件收集器（聚合 EventBus + EventSource + 手动注入） |
-| `RulePlanner` / `LLMPlanner` / `HybridPlanner` | 规划器（规则驱动 / LLM 驱动 / 混合） |
-| `TaskScheduler` | 任务调度（once / interval / cron / at） |
-| `MemoryKnowledgeStore` | 知识存储（CRUD、关键词检索、过滤） |
-| `KnowledgeStage` | 上下文管道知识注入阶段 |
-| `LLMReflector` | LLM 反思器（质量评估、模式识别、经验存储） |
-| `RuleTaskClassifier` | 任务分类（7 种类型、3 级复杂度） |
-| `DefaultStrategyRouter` | 策略路由（6 种推理策略） |
-| `ResourceManager` | 资源管理（token 预算、成本追踪、速率限制） |
-| `CapabilityEnforcer` | Plugin 信任分级运行时强制 |
-| `SecurityPresets` | 安全策略预设（development/testing/production/maximum） |
-| `OutputQualityGate` | 输出质量检测 |
-| `LegacyAgentRunner` | v0.1.x API 兼容层 |
-
-### Integration 层（`src/integration/`）
-
-集成层。协议适配、存储后端、可观测性。
-
-| 组件 | 职责 |
-|---|---|
-| `JsonlSessionStore` | JSONL 文件存储（默认） |
-| `InMemorySessionStore` | 内存存储（测试用） |
-| `NoopObserver` | 空观测器（零开销） |
-| `LogObserver` | 日志观测器（开发调试） |
-
----
-
-## 核心设计
-
-### AgentEngine 是无状态的
-
-AgentEngine 不持有 Session 状态。消息历史由调用方传入，处理后由调用方持久化。
+### With custom storage
 
 ```typescript
-// AgentEngine 的 run 方法签名
-async *run(messages: Message[], config: RunConfig): AsyncGenerator<AgentEvent>
+import { AgentBuilder } from 'octopi';
 
-// 消息从哪来？调用方决定。
-// AgentEngine 只负责：消息 → 推理 → 工具 → 输出
-```
-
-**好处：**
-- 可测试 — 不需要 mock SessionStore
-- 可复用 — 同一个引擎可以有 Session 或无 Session
-- 关注点分离 — "怎么循环"和"怎么存储"是两个独立问题
-
-### Persona 是文件式的
-
-```
-my-agent/
-├── AGENTS.md    ← 操作指令
-├── SOUL.md      ← 人格特质
-├── IDENTITY.md  ← 身份定义
-└── USER.md      ← 用户上下文
-```
-
-```typescript
-const { engine } = await new AgentBuilder()
+const { engine, runner } = await new AgentBuilder()
   .model('gpt-4')
-  .persona('./my-agent')  // 加载目录中的所有 .md 文件
+  .store(new RedisSessionStore({ host: 'localhost' }))
   .build();
 ```
 
-无 schema → 自由表达。扩展 = 加文件。组合 = 目录叠加。
+### Event subscription
 
-### 安全是内置的
+```typescript
+import { AgentEvents } from 'octopi';
 
-- **SecurityGuard** 不可禁用 — 注入检测 + 敏感信息过滤
-- **IterationBudget** 不可绕过 — 资源消耗硬约束
-- **CapabilityEnforcer** 运行时强制 — Plugin 信任分级
+engine.deps.events.on(AgentEvents.MODEL_CALL_END, (event) => {
+  console.log(`Model call: ${event.data.durationMs}ms`);
+});
 
-### Plugin 系统对齐 OpenClaw
+engine.deps.events.on(AgentEvents.INJECTION_DETECTED, (event) => {
+  console.warn(`Injection detected: ${event.data}`);
+});
+```
 
-完整的 hook 系统，支持拦截语义和观察语义：
+### Security policy
+
+```typescript
+import { AgentBuilder, SecurityPresets } from 'octopi';
+
+const { engine } = await new AgentBuilder()
+  .model('gpt-4')
+  .securityPolicy(SecurityPresets.production)
+  .build();
+```
+
+---
+
+## Design Principles
+
+### AgentEngine is stateless
+
+The engine doesn't hold session state. Message history is passed in by the caller, results are returned as an async generator. This means:
+
+- **Testable** — no need to mock a session store
+- **Reusable** — the same engine works with or without sessions
+- **Separation of concerns** — "how to loop" and "how to store" are independent problems
+
+### Persona is file-based
+
+```
+my-agent/
+├── AGENTS.md    ← Operating instructions
+├── SOUL.md      ← Personality traits
+├── IDENTITY.md  ← Identity definition
+└── USER.md      ← User context
+```
+
+No schema, no config format. Just markdown files. Extension = add a file. Composition = overlay directories.
+
+### Security is built-in, not bolted on
+
+- **SecurityGuard** cannot be disabled — injection detection + sensitive data filtering
+- **IterationBudget** cannot be bypassed — hard resource constraints
+- **CapabilityEnforcer** — runtime trust-level enforcement for plugins
+
+### Plugin system with dual semantics
+
+Plugins support both **interceptor** semantics (return a value to short-circuit the chain) and **observer** semantics (all handlers execute). Hooks are prioritized, with per-handler timeout support.
 
 ```typescript
 import { definePluginEntry } from 'octopi/plugin-sdk/plugin-entry';
@@ -191,146 +209,102 @@ export default definePluginEntry({
       if (event.toolName === 'shell') {
         return { requireApproval: { title: 'Execute shell', severity: 'warning' } };
       }
-      return null; // 放行
+      return null; // pass through
     }, { priority: 50 });
   },
 });
 ```
 
-### Task 系统 — Agent 的工作记忆
+### Task system — Agent's working memory
 
-LLM 驱动的任务追踪。用户中途聊别的，回来后 Agent 自动恢复上下文：
+LLM-driven task tracking. When a user drifts to a different topic and comes back, the agent automatically recovers context:
 
 ```typescript
 import { TaskTracker, TaskManager } from 'octopi/harness';
 
-// 通过 ContextPipeline 的 TaskStage 自动集成
-// Agent 在 system prompt 中看到任务上下文，自然地决定行为
+// Integrated via ContextPipeline's TaskStage
+// The agent sees task context in the system prompt and naturally decides how to proceed
 ```
 
 ---
 
-## 使用示例
+## What We Learned from OpenClaw
 
-### 最简集成
+Octopi started as an exploration of OpenClaw's architecture. OpenClaw is a full-featured AI assistant platform — it handles channels, memory, heartbeats, plugins, and more. We learned a great deal from studying its design:
 
-```typescript
-import { createAgent } from 'octopi/harness';
+- **Plugin hook semantics** — OpenClaw's dual interceptor/observer pattern is elegant and practical. We adopted the same model.
+- **Persona as files** — The AGENTS.md / SOUL.md pattern proved to be a powerful way to define agent behavior without code.
+- **Context pipeline thinking** — The idea of assembling context through a staged pipeline (rather than a single monolithic prompt builder) is something we refined from OpenClaw's approach.
+- **Session as first-class citizen** — OpenClaw treats sessions seriously, not as afterthoughts. We took this further by making session management completely pluggable.
 
-const { engine, runner } = await createAgent({
-  model: myProvider,
-  persona: './my-agent',
-});
-```
+Where we diverged:
 
-### 自定义存储
+| Aspect | OpenClaw | Octopi |
+|---|---|---|
+| **Scope** | Full AI assistant platform | Embeddable runtime toolkit |
+| **Architecture** | Integrated system | Three-layer separation (Core / Harness / Integration) |
+| **Agent model** | Class-based with state | Stateless engine + pluggable session |
+| **Coupling** | Platform-bound (channels, memory, scheduling) | Zero platform dependencies in Core |
+| **Target user** | End users building assistants | Developers embedding agents in products |
+| **Extensibility** | Plugin system | Plugin system + pluggable interfaces at every layer |
 
-```typescript
-import { AgentBuilder } from 'octopi/harness';
-
-const { engine, runner } = await new AgentBuilder()
-  .model('gpt-4')
-  .store(new RedisSessionStore({ host: 'localhost' }))
-  .build();
-```
-
-### 事件订阅
-
-```typescript
-import { AgentEvents } from 'octopi/core';
-
-engine.deps.events.on(AgentEvents.MODEL_CALL_END, (event) => {
-  console.log(`模型调用: ${event.data.durationMs}ms`);
-});
-
-engine.deps.events.on(AgentEvents.INJECTION_DETECTED, (event) => {
-  console.warn(`检测到注入: ${event.data}`);
-});
-```
-
-### 安全策略
-
-```typescript
-import { AgentBuilder, SecurityPresets } from 'octopi/harness';
-
-const { engine } = await new AgentBuilder()
-  .model('gpt-4')
-  .securityPolicy(SecurityPresets.production)
-  .build();
-```
-
-### Agent 调用 Agent
-
-```typescript
-const reviewer = await new AgentBuilder()
-  .model('gpt-4')
-  .persona('./reviewer')
-  .buildEngine();
-
-const coder = await new AgentBuilder()
-  .model('claude')
-  .persona('./coder')
-  .tool({
-    definition: { name: 'review', description: '审查代码', parameters: {} },
-    handler: async (args) => {
-      const events = reviewer.run([{ role: 'user', content: args.code, timestamp: Date.now() }], { systemPrompt: '...' });
-      // 收集结果
-    },
-  })
-  .buildEngine();
-```
+OpenClaw is a great project. Octopi is what happens when you ask: "What if we extracted just the runtime and made it composable?"
 
 ---
 
-## 向后兼容
-
-v0.1.x API 仍然可用（deprecated）：
-
-```typescript
-// 旧方式
-import { AgentRunner } from 'octopi';
-const runner = new AgentRunner();
-runner.registerProvider(provider);
-runner.registerTool(tool);
-const reply = await runner.processMessage(agent, session, channelMsg);
-
-// 新方式（推荐）
-import { AgentBuilder } from 'octopi/harness';
-const { engine, runner } = await new AgentBuilder()
-  .model(provider)
-  .tool(tool)
-  .build();
-```
-
----
-
-## 测试
+## Testing
 
 ```bash
 npm test
-# 453 tests passed
+# 428 tests passed
 ```
 
+### Test Pyramid
+
+| Layer | Tool | Description |
+|---|---|---|
+| L1: Unit | Mock + Vitest | Fast, deterministic, every save |
+| L2: Record/Replay | RecordingProvider + ReplayProvider | Record real interactions, replay for regression |
+| L3: E2E | ScenarioRunner + ChaosProvider | Real API, fault injection, full scenarios |
+
+### Observability
+
+```json
+{
+  "observability": {
+    "level": 3,
+    "consoleLevel": 2,
+    "traceDir": "~/.octopi/traces",
+    "exporters": [
+      { "type": "jsonl-file", "dir": "~/.octopi/traces" },
+      { "type": "webhook", "url": "https://monitoring.example.com/ingest" }
+    ]
+  }
+}
+```
+
+Trace levels: `FATAL(0)` → `ERROR(1)` → `WARN(2)` → `INFO(3)` → `DEBUG(4)` → `TRACE(5)`
+
 ---
 
-## 技术栈
+## Tech Stack
 
-- **语言:** TypeScript (ESM, Node.js >=20)
-- **构建:** tsc
-- **测试:** Vitest (node --experimental-vm-modules)
+- **Language:** TypeScript (ESM, Node.js >=20)
+- **Build:** tsc
+- **Test:** Vitest (node --experimental-vm-modules)
 
 ---
 
-## 文档
+## Documentation
 
-| 文档 | 内容 |
-|------|------|
-| [架构设计](docs/ARCHITECTURE.md) | 设计哲学、三层架构详解、设计决策记录 |
-| [Plugin 系统](docs/plugin-system.md) | Plugin hook 详解、Capability Ownership、完整示例 |
-| [Task 系统](docs/task-system.md) | 任务管理设计、LLM 决策器、状态机 |
-| [重构方案](docs/REFACTORING-PLAN.md) | 三层洋葱架构重构方案和迁移路径 |
-| [迁移审计](docs/MIGRATION-AUDIT.md) | 代码迁移状态、优先级、进度追踪 |
-| [开发指南](docs/development-guide.md) | 开发环境搭建、文档同步规范、测试规范 |
+| Document | Content |
+|---|---|
+| [Architecture](docs/ARCHITECTURE.md) | Design philosophy, three-layer architecture, decision records |
+| [Plugin System](docs/plugin-system.md) | Hook semantics, capability ownership, examples |
+| [Task System](docs/task-system.md) | Task management, LLM decision maker, state machine |
+| [Refactoring Plan](docs/REFACTORING-PLAN.md) | Three-layer refactoring strategy and migration path |
+| [Migration Audit](docs/MIGRATION-AUDIT.md) | Code migration status, priorities, progress |
+| [Development Guide](docs/development-guide.md) | Setup, conventions, testing |
 
 ---
 

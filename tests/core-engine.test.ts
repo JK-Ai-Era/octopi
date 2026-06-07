@@ -269,6 +269,96 @@ describe('AgentEngine', () => {
     expect(onMessageCalls.length).toBe(1);
     expect(onMessageCalls[0].content).toBe('你好');
   });
+
+  it('应该在流式返回空内容时 fallback 到同步调用', async () => {
+    const fallbackContent = 'Fallback response from chat()';
+    const chatFn = vi.fn().mockResolvedValue({
+      content: fallbackContent,
+      model: 'mock-model',
+      finishReason: 'stop',
+      usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+    });
+
+    const model: ModelProvider = {
+      name: 'mock',
+      chat: chatFn,
+      // 流式返回空内容（模拟不完整的流式响应）
+      stream: async function* () {
+        yield { type: 'done' as const };
+      },
+      isAvailable: vi.fn().mockResolvedValue(true),
+    };
+
+    const deps = createTestDeps({ model });
+    const engine = new AgentEngine(deps);
+    const messages = [createTestMessage('你好')];
+
+    const events: any[] = [];
+    for await (const event of engine.run(messages, { systemPrompt: 'test' })) {
+      events.push(event);
+    }
+
+    // 应该 fallback 到 chat()
+    expect(chatFn).toHaveBeenCalled();
+
+    // 应该有 turn.end 且内容非空
+    const turnEnd = events.find(e => e.type === 'turn.end');
+    expect(turnEnd).toBeDefined();
+    expect(turnEnd.data.content).toBe(fallbackContent);
+  });
+
+  it('应该在流式返回空内容且有工具调用时不 fallback', async () => {
+    const chatFn = vi.fn();
+    const model: ModelProvider = {
+      name: 'mock',
+      chat: chatFn,
+      // 流式返回工具调用（无文本内容）
+      stream: async function* () {
+        yield { type: 'tool_call' as const, toolCall: { id: 'c1', name: 'test_tool', arguments: '{}' } };
+        yield { type: 'done' as const };
+      },
+      isAvailable: vi.fn().mockResolvedValue(true),
+    };
+
+    const tools = new Map<string, RegisteredTool>();
+    tools.set('test_tool', {
+      definition: {
+        name: 'test_tool',
+        description: 'A test tool',
+        parameters: {},
+      },
+      handler: vi.fn().mockResolvedValue('tool executed'),
+    });
+
+    const deps = createTestDeps({ model, tools });
+    const engine = new AgentEngine(deps);
+
+    // 第二次调用返回文本
+    let callCount = 0;
+    (deps.model.stream as any) = async function* () {
+      callCount++;
+      if (callCount === 1) {
+        yield { type: 'tool_call' as const, toolCall: { id: 'c1', name: 'test_tool', arguments: '{}' } };
+        yield { type: 'done' as const };
+      } else {
+        yield { type: 'content' as const, content: 'Done!' };
+        yield { type: 'done' as const, usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 } };
+      }
+    };
+
+    const messages = [createTestMessage('执行工具')];
+    const events: any[] = [];
+    for await (const event of engine.run(messages, { systemPrompt: 'test' })) {
+      events.push(event);
+    }
+
+    // 不应该调用 chat() fallback（因为有工具调用）
+    expect(chatFn).not.toHaveBeenCalled();
+
+    // 应该有工具执行事件
+    expect(events.some(e => e.type === 'tool.exec.start')).toBe(true);
+    expect(events.some(e => e.type === 'turn.end')).toBe(true);
+  });
 });
 
 describe('EventBus', () => {

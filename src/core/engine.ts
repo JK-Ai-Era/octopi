@@ -95,6 +95,8 @@ export interface RunConfig {
   model?: string;
   /** 温度 */
   temperature?: number;
+  /** 工作目录（工具用于解析相对路径） */
+  cwd?: string;
 }
 
 /** Agent 事件（v2.0，与旧版 AgentEvent 兼容） */
@@ -144,6 +146,7 @@ export class AgentEngine {
     const { model, tools, executor, context, events, security, budget, errorStrategy, observer } = this.deps;
     const agentId = config.agentId ?? 'default';
     const sessionId = config.sessionId ?? 'inline';
+    this.currentCwd = config.cwd;
 
     // 发射引擎启动事件
     events.emit({ type: AgentEvents.ENGINE_START, timestamp: Date.now(), agentId, sessionId });
@@ -555,7 +558,7 @@ export class AgentEngine {
       }
     } catch (err) {
       // 流式失败，回退到同步
-      if (err instanceof Error && err.message.includes('stream')) {
+      if (err instanceof Error && (err.message.includes('stream') || err.message.includes('Aborted'))) {
         const response = await model.chat(request);
         if (response.content) {
           yield { type: 'llm_stream_delta', timestamp: Date.now(), data: { delta: response.content } };
@@ -563,6 +566,20 @@ export class AgentEngine {
         return response;
       }
       throw err;
+    }
+
+    // 流式正常结束但内容为空且无工具调用 → fallback 到同步调用
+    // 某些 provider 的流式响应可能不完整（缺少 content chunk 或 done chunk）
+    if (!content && toolCallBuffers.size === 0) {
+      try {
+        const response = await model.chat(request);
+        if (response.content) {
+          yield { type: 'llm_stream_delta', timestamp: Date.now(), data: { delta: response.content } };
+        }
+        return response;
+      } catch {
+        // 同步也失败了，返回空内容（让上层错误策略处理）
+      }
     }
 
     // 构建响应
@@ -616,9 +633,13 @@ export class AgentEngine {
   /**
    * 构建执行上下文
    */
+  /** 当前运行的 cwd（由 RunConfig 传入） */
+  private currentCwd?: string;
+
   private buildExecContext(signal?: AbortSignal): ExecutionContext {
     return {
       timeoutMs: 30_000,
+      cwd: this.currentCwd,
       signal,
     } as ExecutionContext & { signal?: AbortSignal };
   }

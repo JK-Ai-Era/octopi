@@ -140,6 +140,22 @@ src/
 │   │   └── index.ts
 │   └── index.ts
 │
+├── observability/                 # 可观测性模块
+│   ├── trace-events.ts            # 事件类型定义 + 级别映射
+│   ├── trace-logger.ts            # 核心日志器（分级过滤）
+│   ├── trace-collector.ts         # 引擎事件流自动收集器
+│   ├── exporters.ts               # Exporter SPI（Console/JsonlFile/Webhook）
+│   ├── metrics.ts                 # MetricsAggregator（指标聚合）
+│   └── index.ts
+│
+├── testing/                       # 测试工具模块
+│   ├── recording-provider.ts      # 录制真实 LLM 交互
+│   ├── replay-provider.ts         # 回放录制数据（确定性测试）
+│   ├── chaos-provider.ts          # 故障注入 Provider
+│   ├── scenario-runner.ts         # E2E 场景运行器 + 断言库
+│   ├── scenario-composer.ts       # 场景组合、扩展、参数化
+│   └── index.ts
+│
 ├── plugins/                       # Plugin 系统（跨层，SDK 形式）
 │   ├── manager.ts                 # PluginManager
 │   ├── loader.ts                  # PluginLoader
@@ -185,7 +201,8 @@ src/
 │   └── engine.ts                  # LegacyContextEngine
 │
 ├── config.ts                      # 配置加载
-├── cli.ts                         # CLI 入口
+├── init.ts                        # 系统初始化（目录脚手架）
+├── cli.ts                         # CLI 入口（init/serve/chat/health）
 └── index.ts                       # 统一导出
 ```
 
