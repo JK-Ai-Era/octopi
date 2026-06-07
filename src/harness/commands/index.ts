@@ -17,7 +17,7 @@
  * 扩展：任何 Plugin 都可以注册命令，CommandPlugin 只是协调者。
  */
 
-import type { PluginEntryConfig } from '../../plugins/loader.js';
+import type { PluginEntryConfig } from '../plugins/loader.js';
 
 // ── 类型定义 ──
 

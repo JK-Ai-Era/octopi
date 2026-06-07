@@ -22,8 +22,8 @@ import type {
   LLMRequest,
   LLMResponse,
   LLMStreamChunk,
-} from '../core/interfaces/model-provider.js';
-import type { ToolCall } from '../core/types.js';
+} from '../../core/interfaces/model-provider.js';
+import type { ToolCall } from '../../core/types.js';
 
 /**
  * OpenAI Provider 配置

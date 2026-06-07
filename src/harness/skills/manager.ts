@@ -15,7 +15,7 @@
 
 import { readFileSync, readdirSync, existsSync } from 'fs';
 import { join, resolve } from 'path';
-import type { SkillDefinition, SkillManager } from '../core/types.js';
+import type { SkillDefinition, SkillManager } from '../../core/types.js';
 
 /**
  * SKILL.md 文件 frontmatter 解析

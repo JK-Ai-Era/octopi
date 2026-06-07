@@ -23,7 +23,7 @@ import type {
   ToolResult,
   HookContext,
   ThinkingLevel,
-} from '../core/types.js';
+} from '../../core/types.js';
 import type { PluginApi } from './api.js';
 import type { LoadedPlugin, PluginLoaderConfig, PluginEntryConfig } from './loader.js';
 import { PluginLoader } from './loader.js';
@@ -631,8 +631,8 @@ export class PluginManager {
   /**
    * 获取所有已注册的 providers
    */
-  getProviders(): Array<{ pluginId: string; id: string; provider: import('../core/types.js').LLMProvider }> {
-    const result: Array<{ pluginId: string; id: string; provider: import('../core/types.js').LLMProvider }> = [];
+  getProviders(): Array<{ pluginId: string; id: string; provider: import('../../core/types.js').LLMProvider }> {
+    const result: Array<{ pluginId: string; id: string; provider: import('../../core/types.js').LLMProvider }> = [];
     for (const plugin of this.loader.getAllPlugins()) {
       if (!plugin.registered) continue;
       for (const reg of plugin.api._providers) {
@@ -645,8 +645,8 @@ export class PluginManager {
   /**
    * 获取所有已注册的 channels
    */
-  getChannels(): Array<{ pluginId: string; id: string; adapter: import('../core/types.js').ChannelAdapter }> {
-    const result: Array<{ pluginId: string; id: string; adapter: import('../core/types.js').ChannelAdapter }> = [];
+  getChannels(): Array<{ pluginId: string; id: string; adapter: import('../../core/types.js').ChannelAdapter }> {
+    const result: Array<{ pluginId: string; id: string; adapter: import('../../core/types.js').ChannelAdapter }> = [];
     for (const plugin of this.loader.getAllPlugins()) {
       if (!plugin.registered) continue;
       for (const reg of plugin.api._channels) {
@@ -661,13 +661,13 @@ export class PluginManager {
    */
   getTools(includeOptional = false): Array<{
     pluginId: string;
-    definition: import('../core/types.js').ToolDefinition;
-    handler: import('../core/types.js').ToolHandler;
+    definition: import('../../core/types.js').ToolDefinition;
+    handler: import('../../core/types.js').ToolHandler;
   }> {
     const result: Array<{
       pluginId: string;
-      definition: import('../core/types.js').ToolDefinition;
-      handler: import('../core/types.js').ToolHandler;
+      definition: import('../../core/types.js').ToolDefinition;
+      handler: import('../../core/types.js').ToolHandler;
     }> = [];
 
     for (const plugin of this.loader.getAllPlugins()) {
@@ -677,7 +677,7 @@ export class PluginManager {
         result.push({
           pluginId: plugin.id,
           definition: reg.definition,
-          handler: reg.handler as unknown as import('../core/types.js').ToolHandler,
+          handler: reg.handler as unknown as import('../../core/types.js').ToolHandler,
         });
       }
     }
@@ -687,8 +687,8 @@ export class PluginManager {
   /**
    * 获取所有已注册的 context engines
    */
-  getContextEngines(): Array<{ id: string; engine: import('../core/types.js').ContextEngine }> {
-    const result: Array<{ id: string; engine: import('../core/types.js').ContextEngine }> = [];
+  getContextEngines(): Array<{ id: string; engine: import('../../core/types.js').ContextEngine }> {
+    const result: Array<{ id: string; engine: import('../../core/types.js').ContextEngine }> = [];
     for (const plugin of this.loader.getAllPlugins()) {
       if (!plugin.registered) continue;
       for (const reg of plugin.api._contextEngines) {

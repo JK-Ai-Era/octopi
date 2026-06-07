@@ -15,7 +15,7 @@ import type {
   ToolDefinition,
   ToolHandler,
   ContextEngine,
-} from '../core/types.js';
+} from '../../core/types.js';
 
 /**
  * Hook 注册选项

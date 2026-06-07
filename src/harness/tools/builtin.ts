@@ -16,7 +16,7 @@
  * - 建议在 ToolPolicy 的 deny 列表中禁用不需要的工具
  */
 
-import type { RegisteredTool, ToolExecutionContext } from '../core/types.js';
+import type { RegisteredTool, ToolExecutionContext } from '../../core/types.js';
 
 /**
  * Shell 工具 — 执行 shell 命令

@@ -279,7 +279,7 @@ export async function createProviderFromConfig(pc: ProviderConfig): Promise<any>
   }
 
   if (pc.type === 'openai') {
-    const { OpenAIProvider } = await import('./providers/openai.js');
+    const { OpenAIProvider } = await import('./integration/providers/openai.js');
     return new OpenAIProvider({
       name: pc.name,
       apiKey,
@@ -290,7 +290,7 @@ export async function createProviderFromConfig(pc: ProviderConfig): Promise<any>
   }
 
   if (pc.type === 'anthropic') {
-    const { AnthropicProvider } = await import('./providers/anthropic.js');
+    const { AnthropicProvider } = await import('./integration/providers/anthropic.js');
     return new AnthropicProvider({
       name: pc.name,
       apiKey,

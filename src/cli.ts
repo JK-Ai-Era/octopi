@@ -19,10 +19,10 @@
 
 import { loadConfig, toGatewayConfig } from './config.js';
 import { resolve, dirname } from 'node:path';
-import { Gateway } from './gateway/gateway.js';
-import { OpenAIProvider } from './providers/openai.js';
-import { AnthropicProvider } from './providers/anthropic.js';
-import { getBuiltinTools } from './tools/builtin.js';
+import { Gateway } from './integration/gateway/gateway.js';
+import { OpenAIProvider } from './integration/providers/openai.js';
+import { AnthropicProvider } from './integration/providers/anthropic.js';
+import { getBuiltinTools } from './harness/tools/builtin.js';
 import { createInterface } from 'node:readline';
 import type { ModelProvider } from './core/interfaces/model-provider.js';
 import type { ProviderConfig } from './config.js';
@@ -189,7 +189,7 @@ async function serveCommand(args: CliArgs): Promise<void> {
 
   const httpConfig = config.channels?.find((c) => c.type === 'http');
   if (httpConfig) {
-    const { HttpChannelAdapter } = await import('./protocol/http.js');
+    const { HttpChannelAdapter } = await import('./integration/protocols/http.js');
     gateway.registerChannel(new HttpChannelAdapter({
       port: httpConfig.port ?? args.port ?? 3000,
       path: httpConfig.path ?? '/messages',

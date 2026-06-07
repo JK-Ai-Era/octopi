@@ -25,7 +25,7 @@
  * ```
  */
 
-import type { RegisteredTool, ToolDefinition, ToolExecutionContext } from '../core/types.js';
+import type { RegisteredTool, ToolDefinition, ToolExecutionContext } from '../../core/types.js';
 
 export class ToolRegistry {
   /** 全局工具 */

@@ -23,8 +23,8 @@ import type {
   LLMRequest,
   LLMResponse,
   LLMStreamChunk,
-} from '../core/interfaces/model-provider.js';
-import type { ToolCall } from '../core/types.js';
+} from '../../core/interfaces/model-provider.js';
+import type { ToolCall } from '../../core/types.js';
 
 export interface AnthropicProviderConfig {
   name?: string;

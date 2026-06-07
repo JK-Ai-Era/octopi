@@ -507,7 +507,7 @@ export interface AgentLoopConfig {
     execute(name: string, args: unknown, ctx: unknown): Promise<{ result?: unknown; error?: string }>;
   };
   messageConverter: MessageConverter;
-  pluginManager?: import('../plugins/manager.js').PluginManager;
+  pluginManager?: import('../harness/plugins/manager.js').PluginManager;
   skillManager?: SkillManager;
   defaultModel: string;
   maxTurns: number;

@@ -5,7 +5,7 @@
  * 不改变原始事件流的行为。
  */
 
-import type { EngineEvent } from '../core/engine.js';
+import type { EngineEvent } from '../../core/engine.js';
 import type { TraceEvent } from './trace-events.js';
 import { TraceLogger, type TraceLoggerConfig } from './trace-logger.js';
 import { TraceLevel, TRACE_EVENTS } from './trace-events.js';
