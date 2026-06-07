@@ -125,9 +125,6 @@ src/
 │   ├── resources/                 # ResourceManager — 资源管理
 │   │   ├── manager.ts             # token/成本/速率
 │   │   └── index.ts
-│   ├── compat/
-│   │   ├── legacy-agent-runner.ts # v0.1.x 兼容层
-│   │   └── plugin-adapter.ts      # Plugin 适配器
 │   └── index.ts
 │
 ├── integration/                   # Layer 3: 集成层
