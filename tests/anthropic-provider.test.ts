@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'vitest';
-import { AnthropicProvider } from '../src/providers/anthropic.js';
-import { OpenAIProvider } from '../src/providers/openai.js';
+import { AnthropicProvider } from '../src/integration/providers/anthropic.js';
+import { OpenAIProvider } from '../src/integration/providers/openai.js';
 
 describe('AnthropicProvider', () => {
   test('基本属性', () => {

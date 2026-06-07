@@ -7,9 +7,9 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { ChaosProvider } from '../src/testing/chaos-provider.js';
-import { MetricsAggregator, formatMetricsSnapshot } from '../src/observability/metrics.js';
+import { MetricsAggregator, formatMetricsSnapshot } from '../src/integration/observability/metrics.js';
 import { compose, extendScenario, BuiltinScenarios, runParameterized } from '../src/testing/scenario-composer.js';
-import type { TraceEvent } from '../src/observability/trace-events.js';
+import type { TraceEvent } from '../src/integration/observability/trace-events.js';
 import type { ModelProvider, LLMRequest, LLMResponse, LLMStreamChunk } from '../src/core/interfaces/model-provider.js';
 
 // ── Mock Provider ──

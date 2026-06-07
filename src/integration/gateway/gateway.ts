@@ -27,17 +27,17 @@ import type {
   SessionMeta,
   AgentEvent,
   HookContext,
-} from '../core/types.js';
-import type { ModelProvider } from '../core/interfaces/model-provider.js';
-import type { SessionStore, SessionData } from '../core/interfaces/session-store.js';
-import { PluginManager } from '../plugins/manager.js';
-import { AgentEngine } from '../core/engine.js';
-import type { RunConfig } from '../core/engine.js';
-import { DefaultEventBus } from '../core/event-bus.js';
-import { DefaultSecurityGuard } from '../core/security-guard.js';
-import { IterationBudget } from '../core/budget.js';
-import { DefaultContextPipeline } from '../harness/context/pipeline.js';
-import { SessionAwareRunner } from '../harness/runner.js';
+} from '../../core/types.js';
+import type { ModelProvider } from '../../core/interfaces/model-provider.js';
+import type { SessionStore, SessionData } from '../../core/interfaces/session-store.js';
+import { PluginManager } from '../../harness/plugins/manager.js';
+import { AgentEngine } from '../../core/engine.js';
+import type { RunConfig } from '../../core/engine.js';
+import { DefaultEventBus } from '../../core/event-bus.js';
+import { DefaultSecurityGuard } from '../../core/security-guard.js';
+import { IterationBudget } from '../../core/budget.js';
+import { DefaultContextPipeline } from '../../harness/context/pipeline.js';
+import { SessionAwareRunner } from '../../harness/runner.js';
 
 // ================================================================
 // 内存 Session 存储

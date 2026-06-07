@@ -13,9 +13,9 @@ import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from 'no
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { AgentBuilder } from '../../src/harness/builder.js';
-import { OpenAIProvider } from '../../src/providers/openai.js';
+import { OpenAIProvider } from '../../src/integration/providers/openai.js';
 import { JsonlSessionStore } from '../../src/integration/storage/jsonl.js';
-import { getBuiltinTools } from '../../src/tools/builtin.js';
+import { getBuiltinTools } from '../../src/harness/tools/builtin.js';
 import { initOctopi } from '../../src/init.js';
 import type { RunConfig } from '../../src/core/engine.js';
 import type { SessionAwareRunner } from '../../src/harness/runner.js';

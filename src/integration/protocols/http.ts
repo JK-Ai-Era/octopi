@@ -1,4 +1,4 @@
-import type { ChannelAdapter, ChannelMessage, ChannelReply } from '../core/types.js';
+import type { ChannelAdapter, ChannelMessage, ChannelReply } from '../../core/types.js';
 
 /**
  * HTTP Channel Adapter

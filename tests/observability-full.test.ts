@@ -8,8 +8,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { TraceLogger, TraceLevel, TRACE_LEVEL_NAMES, TraceCollector } from '../src/observability/index.js';
-import type { TraceEvent } from '../src/observability/index.js';
+import { TraceLogger, TraceLevel, TRACE_LEVEL_NAMES, TraceCollector } from '../src/integration/observability/index.js';
+import type { TraceEvent } from '../src/integration/observability/index.js';
 
 describe('TraceLogger', () => {
   let tempDir: string;

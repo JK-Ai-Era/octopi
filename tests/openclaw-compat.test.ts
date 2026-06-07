@@ -11,10 +11,10 @@
  * 4. OpenRouter — registerProvider + registerMediaUnderstanding + registerImageGeneration + registerModelCatalog + registerSpeech + registerMusic + registerVideo
  */
 import { describe, test, expect, beforeEach } from 'vitest';
-import { PluginApi } from '../src/plugins/api.js';
-import { PluginManager } from '../src/plugins/manager.js';
-import { definePluginEntry } from '../src/plugins/entry.js';
-import type { LoadedPlugin } from '../src/plugins/loader.js';
+import { PluginApi } from '../src/harness/plugins/api.js';
+import { PluginManager } from '../src/harness/plugins/manager.js';
+import { definePluginEntry } from '../src/harness/plugins/entry.js';
+import type { LoadedPlugin } from '../src/harness/plugins/loader.js';
 
 // ─────────────────────────────────────────────
 // 模拟 OpenClaw 插件的 register 逻辑

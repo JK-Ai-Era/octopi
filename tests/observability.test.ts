@@ -6,7 +6,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { TraceLogger, TraceLevel, TraceCollector, TRACE_EVENTS } from '../src/observability/index.js';
+import { TraceLogger, TraceLevel, TraceCollector, TRACE_EVENTS } from '../src/integration/observability/index.js';
 
 describe('TraceLogger', () => {
   let tempDir: string;

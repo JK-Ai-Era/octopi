@@ -8,7 +8,7 @@
  *
  * 快速开始：
  * ```ts
- * import { AgentBuilder } from 'octopi/harness';
+ * import { AgentBuilder } from 'octopi';
  *
  * const { engine, runner } = await new AgentBuilder()
  *   .model('gpt-4')
@@ -43,6 +43,32 @@ export { SessionAwareRunner } from './harness/runner.js';
 export { loadPersona, composePersonas } from './harness/persona/loader.js';
 export { DefaultContextPipeline } from './harness/context/pipeline.js';
 
+// Harness 安全
+export { CapabilityEnforcer, PluginTrustLevel } from './harness/security/capability-enforcer.js';
+export { SecurityPresets, getSecurityPolicy } from './harness/security/policy.js';
+
+// Harness Plugin 系统
+export { PluginManager } from './harness/plugins/manager.js';
+export { definePluginEntry, defineChannelPluginEntry } from './harness/plugins/entry.js';
+export type { OctopiPluginDefinition, OctopiChannelPluginDefinition } from './harness/plugins/entry.js';
+export { PluginApi } from './harness/plugins/api.js';
+export { PluginLoader } from './harness/plugins/loader.js';
+export type { LoadedPlugin, PluginLoaderConfig, PluginEntryConfig } from './harness/plugins/loader.js';
+export { CapabilityRegistry } from './harness/plugins/capability.js';
+export { validateManifest, parseManifest } from './harness/plugins/manifest.js';
+export type { PluginManifest, PluginContracts, ActivationConfig } from './harness/plugins/manifest.js';
+
+// Harness Skill 系统
+export { DefaultSkillManager } from './harness/skills/manager.js';
+
+// Harness Tool 系统
+export { ToolRegistry } from './harness/tools/registry.js';
+export { getBuiltinTools, createShellTool, createFileReadTool, createFileWriteTool, createFileListTool } from './harness/tools/builtin.js';
+
+// Config Bridge（配置文件 → 新架构）
+export { buildFromConfig, buildFromConfigFile } from './harness/config-bridge.js';
+export type { BuiltAgent } from './harness/config-bridge.js';
+
 // ============================================================
 // Integration 层
 // ============================================================
@@ -54,61 +80,20 @@ export { InMemorySessionStore } from './integration/storage/memory.js';
 // 可观测性
 export { NoopObserver } from './integration/observability/noop-observer.js';
 export { LogObserver } from './integration/observability/log-observer.js';
+export { TraceLogger, TraceCollector, getTraceLogger, resetTraceLogger, TraceLevel, TRACE_LEVEL_NAMES, TRACE_EVENTS, ConsoleExporter, JsonlFileExporter, WebhookExporter, createExporter, MetricsAggregator, formatMetricsSnapshot } from './integration/observability/index.js';
+export type { TraceEvent, TraceLoggerConfig, TraceCollectorConfig, TraceExporter, ExporterConfig, AnyExporterConfig, MetricsSnapshot, LatencyStats, MetricsAggregatorConfig } from './integration/observability/index.js';
 
-// ============================================================
-// 安全
-// ============================================================
+// LLM Providers
+export { OpenAIProvider } from './integration/providers/openai.js';
+export type { OpenAIProviderConfig } from './integration/providers/openai.js';
+export { AnthropicProvider } from './integration/providers/anthropic.js';
+export type { AnthropicProviderConfig } from './integration/providers/anthropic.js';
 
-export { CapabilityEnforcer, PluginTrustLevel } from './harness/security/capability-enforcer.js';
-export { SecurityPresets, getSecurityPolicy } from './harness/security/policy.js';
-
-// ============================================================
 // Gateway
-// ============================================================
+export { Gateway } from './integration/gateway/gateway.js';
 
-export { Gateway } from './gateway/gateway.js';
-
-// ============================================================
-// Tools
-// ============================================================
-
-export { ToolRegistry } from './tools/registry.js';
-export { getBuiltinTools, createShellTool, createFileReadTool, createFileWriteTool, createFileListTool } from './tools/builtin.js';
-
-// ============================================================
-// Providers
-// ============================================================
-
-export { OpenAIProvider } from './providers/openai.js';
-export type { OpenAIProviderConfig } from './providers/openai.js';
-export { AnthropicProvider } from './providers/anthropic.js';
-export type { AnthropicProviderConfig } from './providers/anthropic.js';
-
-// ============================================================
-// Plugins
-// ============================================================
-
-export { PluginManager } from './plugins/manager.js';
-export { definePluginEntry, defineChannelPluginEntry } from './plugins/entry.js';
-export type { OctopiPluginDefinition, OctopiChannelPluginDefinition } from './plugins/entry.js';
-export { PluginApi } from './plugins/api.js';
-export { PluginLoader } from './plugins/loader.js';
-export type { LoadedPlugin, PluginLoaderConfig, PluginEntryConfig } from './plugins/loader.js';
-export { CapabilityRegistry } from './plugins/capability.js';
-export { validateManifest, parseManifest } from './plugins/manifest.js';
-export type { PluginManifest, PluginContracts, ActivationConfig } from './plugins/manifest.js';
-
-// ============================================================
-// Skills
-// ============================================================
-
-export { DefaultSkillManager } from './skills/manager.js';
-
-// ============================================================
-// Protocol
-// ============================================================
-
-export { HttpChannelAdapter } from './protocol/http.js';
+// 协议适配
+export { HttpChannelAdapter } from './integration/protocols/http.js';
 
 // ============================================================
 // Config
@@ -117,22 +102,11 @@ export { HttpChannelAdapter } from './protocol/http.js';
 export { loadConfig, toGatewayConfig, createProviderFromConfig, createStoreFromConfig } from './config.js';
 export type { HarnessConfig, AgentConfig, ProviderConfig, ChannelConfig, PluginConfig, StoreConfig } from './config.js';
 
-// Config Bridge（配置文件 → 新架构）
-export { buildFromConfig, buildFromConfigFile } from './harness/config-bridge.js';
-export type { BuiltAgent } from './harness/config-bridge.js';
-
 // ============================================================
 // Init
 // ============================================================
 
 export { initOctopi, ensureAgentDirs, isInitialized, getOctopiHome, formatInitReport } from './init.js';
-
-// ============================================================
-// Observability
-// ============================================================
-
-export { TraceLogger, TraceCollector, getTraceLogger, resetTraceLogger, TraceLevel, TRACE_LEVEL_NAMES, TRACE_EVENTS, ConsoleExporter, JsonlFileExporter, WebhookExporter, createExporter, MetricsAggregator, formatMetricsSnapshot } from './observability/index.js';
-export type { TraceEvent, TraceLoggerConfig, TraceCollectorConfig, TraceExporter, ExporterConfig, AnyExporterConfig, MetricsSnapshot, LatencyStats, MetricsAggregatorConfig } from './observability/index.js';
 
 // ============================================================
 // Testing
