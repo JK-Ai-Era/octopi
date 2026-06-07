@@ -34,6 +34,11 @@ export type { ErrorStrategy, ErrorAction, OverflowAction, SecurityAction } from 
 export type { Observer, Span, LogLevel } from './core/interfaces/observer.js';
 export type { SessionStore, SessionData } from './core/interfaces/session-store.js';
 
+// Agent 通信
+export { DefaultAgentCommunicator, createAgentMessage } from './core/agent-communicator.js';
+export type { AgentMessage, AgentMessageType, AgentMessageMetadata, AgentCommunicator } from './core/interfaces/agent-message.js';
+export { AgentMessageEvents } from './core/interfaces/agent-message.js';
+
 // ============================================================
 // Harness 层
 // ============================================================
