@@ -299,12 +299,10 @@ Trace levels: `FATAL(0)` → `ERROR(1)` → `WARN(2)` → `INFO(3)` → `DEBUG(4
 
 | Document | Content |
 |---|---|
-| [Architecture](docs/ARCHITECTURE.md) | Design philosophy, three-layer architecture, decision records |
+| [Architecture](docs/ARCHITECTURE.md) | Design philosophy, three-layer architecture, decision records, API reference |
 | [Plugin System](docs/plugin-system.md) | Hook semantics, capability ownership, examples |
 | [Task System](docs/task-system.md) | Task management, LLM decision maker, state machine |
-| [Refactoring Plan](docs/REFACTORING-PLAN.md) | Three-layer refactoring strategy and migration path |
-| [Migration Audit](docs/MIGRATION-AUDIT.md) | Code migration status, priorities, progress |
-| [Development Guide](docs/development-guide.md) | Setup, conventions, testing |
+| [Contributing Guide](docs/CONTRIBUTING.md) | Setup, conventions, testing, documentation sync |
 
 ---
 

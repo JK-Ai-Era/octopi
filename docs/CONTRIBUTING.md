@@ -1,4 +1,9 @@
-# Octopi 开发指南
+# Octopi 贡献指南
+
+> 本文档面向 Octopi 项目的开发者和贡献者。
+> 如果你是集成开发者（选用 Octopi 作为 Agent 底座），请参考 [ARCHITECTURE.md](./ARCHITECTURE.md) 中的公共 API 示例。
+
+# Octopi 贡献指南
 
 ## 环境要求
 
