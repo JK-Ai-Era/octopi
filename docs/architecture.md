@@ -176,6 +176,7 @@ src/
 │   ├── multi-agent/                   # 多 Agent 系统
 │   │   ├── registry.ts                # DefaultAgentRegistry — Agent 注册与发现
 │   │   ├── swarm.ts                   # AgentSwarm — 多 Agent 编排器（4 种拓扑 + 3 种策略）
+│   │   ├── process.ts                 # AgentProcess — 推送式完成 + 上下文分叉
 │   │   ├── types.ts                   # Multi-Agent 类型定义
 │   │   └── index.ts
 │   │
@@ -787,6 +788,41 @@ const task = swarm.submitTask('实现新功能', '添加用户登录...');
 const result = await swarm.executeTask(task);
 ```
 
+### 4.16 AgentProcess — 推送式完成 + 上下文分叉
+
+将 AgentEngine 的一次运行包装为可追踪的进程。借鉴 OpenClaw 的 sub-agent 模式，基于 Octopi 架构实现。
+
+**推送式完成（Announce）：** 进程完成后通过 EventBus 自动通知父进程，无需轮询。
+
+```
+父进程 spawn → 子进程异步运行 → 完成后发射 agent_process.completed 事件
+                                                    ↓
+父进程通过 waitForCompletion() 或事件监听获取结果
+```
+
+**上下文分叉（Context Fork）：** 子进程可继承父进程的消息历史，拥有完整对话上下文。
+
+```typescript
+import { AgentProcess, forkAgentProcess } from 'octopi/harness';
+
+// 非阻塞启动 + 等待完成
+const process = new AgentProcess({
+  agentInfo: workerAgent,
+  engine: workerEngine,
+  events: eventBus,
+  systemPrompt: 'You are a coding assistant...',
+});
+process.start(userMessages);
+const announce = await process.waitForCompletion();
+
+// Context Fork：继承父上下文
+const child = forkAgentProcess(
+  { agentInfo: workerAgent, engine: workerEngine, events, systemPrompt: '...' },
+  [{ role: 'user', content: '子任务' }],
+  parentMessages, // 父进程的消息历史
+);
+```
+
 ---
 
 ## 5. Integration 层详解
@@ -984,3 +1020,11 @@ commands.register('/clear', {
 **理由：** 传统的上下文管道是纯确定性逻辑——滑动窗口、固定规则。但有些场景需要“智能”判断：哪些消息最相关？如何压缩长对话？SmartStage 让管道可以“思考”，同时保持安全网：超时、缓存、fallback。
 
 **权衡：** LLM 调用增加了延迟和成本。SmartStage 必须有 fallback 逻辑，不能让 LLM 失败阻塞整个管道。缓存是必须的。
+
+### ADR-015: AgentProcess — 推送式完成与上下文分叉
+
+**决策：** 引入 AgentProcess，将 AgentEngine 的一次运行包装为可追踪进程，支持推送式完成（announce）和上下文分叉（context fork）。
+
+**理由：** 多 Agent 协作中，父进程不应该轮询子进程状态。借鉴 OpenClaw 的 sub-agent announce 模式：子进程完成后通过 EventBus 自动通知父进程。同时，有些场景需要子进程继承父对话历史（context fork），而不是从零开始。
+
+**权衡：** AgentProcess 是 Harness 层的高级抽象，增加了多 Agent 系统的复杂度。单 Agent 场景不需要它。Context fork 会增加子进程的 token 消耗。
