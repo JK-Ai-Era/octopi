@@ -160,7 +160,7 @@ function generateDefaultConfig(homeDir: string, agentId: string = 'default'): ob
       maxIterations: 15,
       maxToolCalls: 50,
       maxTokens: 100000,
-      maxWallClockMs: 300000,
+      maxWallClockMs: 3600000, // 1 小时（安全兜底，实际由 TaskSupervisor 控制）
     },
     security: {
       preset: 'production',

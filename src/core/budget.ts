@@ -53,7 +53,7 @@ export const DEFAULT_BUDGET: IterationBudgetConfig = {
   maxIterations: 10,
   maxToolCalls: 20,
   maxTokens: 100_000,
-  maxWallClockMs: 300_000, // 5 分钟
+  maxWallClockMs: 3_600_000, // 1 小时（安全兜底，实际由 TaskSupervisor 控制）
 };
 
 // ── 实现 ──

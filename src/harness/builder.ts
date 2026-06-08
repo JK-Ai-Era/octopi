@@ -374,7 +374,6 @@ export class AgentBuilder {
     // 创建默认组件
     const events = this._events ?? new DefaultEventBus();
     const security = this._security ?? new DefaultSecurityGuard(events, this._securityConfig);
-    const budget = this._budget ?? new IterationBudget(events);
     const errorStrategy = this._errorStrategy ?? new DefaultErrorStrategy();
     const context = this._context ?? new DefaultContextPipeline(this._contextStages);
     const executor = this._executor ?? new DefaultToolExecutor(this._tools);
@@ -384,6 +383,18 @@ export class AgentBuilder {
       ?? (this._taskSupervisorConfig !== undefined
         ? new DefaultTaskSupervisor(this._taskSupervisorConfig, this._model)
         : undefined);
+
+    // 当有 TaskSupervisor 时，放宽 IterationBudget 的 wall-clock 限制
+    // 让 TaskSupervisor 成为主要的智能控制，IterationBudget 只做安全兜底
+    let budget = this._budget;
+    if (!budget && taskSupervisor) {
+      // 如果没有手动设置 budget 但有 TaskSupervisor，创建一个宽松的默认 budget
+      budget = new IterationBudget(events, {
+        maxWallClockMs: 3_600_000, // 1 小时（TaskSupervisor 会在此之前介入）
+      });
+    } else if (!budget) {
+      budget = new IterationBudget(events);
+    }
 
     // 注入 systemPrompt 到引擎的运行时配置
     // AgentEngine 本身不存储 systemPrompt，由调用方在 run() 时传入

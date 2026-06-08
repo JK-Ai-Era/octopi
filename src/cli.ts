@@ -266,6 +266,11 @@ async function chatCommand(args: CliArgs): Promise<void> {
     builder.tool(tool);
   }
 
+  // 配置预算（如果用户指定了）
+  if (config.budget) {
+    builder.budget(config.budget);
+  }
+
   // 配置 TaskSupervisor
   if (config.supervisor?.enabled !== false) {
     const supervisorCfg = { ...config.supervisor };
