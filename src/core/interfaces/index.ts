@@ -75,3 +75,12 @@ export type {
   AgentCommunicator,
 } from './agent-message.js';
 export { AgentMessageEvents } from './agent-message.js';
+
+export type {
+  AgentRegistry,
+  AgentInfo,
+  AgentQuery,
+  AgentRelation,
+  AgentRelationType,
+} from './agent-registry.js';
+export { AgentRegistryEvents } from './agent-registry.js';
