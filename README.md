@@ -67,6 +67,16 @@ Injection detection, sensitive data filtering, resource consumption constraints 
 
 Persona, skills, operating instructions — all defined as Markdown files. No schema, no config format. Extension = add a file. Composition = overlay directories. This is one of the most elegant designs we learned from OpenClaw: expressing the most flexible configuration in the simplest form.
 
+### Natively multi-agent
+
+An octopus has eight arms, each capable of independent perception and action, yet sharing the same body. Octopi is designed the same way — multi-agent collaboration is supported from the ground up. Each agent has its own isolated runtime scope (session, tool set, persona), with no interference between agents; at the same time, built-in communication and coordination mechanisms allow multiple agents to work together like tentacles. This isn't a feature bolted on after the fact — it's a native capability of the architecture.
+
+### Distributed intelligence
+
+In most agent frameworks, a session task runs entirely within a single LLM call chain — which means the system can only think on the main chain, and has difficulty planning for itself. Octopi takes a different approach: we embed independent LLM logic at key points in the workflow to plan and manage the main chain. For example, the LLMPlanner in the task system is not part of the main chain — it's an independent decision-maker responsible for reviewing task progress, adjusting execution strategy, and deciding the next steps.
+
+Just as an octopus's intelligence is not concentrated solely in its brain but distributed across ganglia in each arm — each capable of independent response — intelligence in Octopi is not a single point but a distributed network. We plan to embed more small autonomous agents at additional logic nodes in the future, making the entire architecture more flexible and powerful.
+
 ---
 
 ## Architecture: Three-Layer Onion
