@@ -51,143 +51,181 @@ Integration（集成）→ 协议、存储、沙盒、可观测性
 
 ```
 src/
-├── core/                          # Layer 1: 纯引擎
-│   ├── engine.ts                  # AgentEngine — 无状态循环引擎
-│   ├── event-bus.ts               # EventBus — 内置事件总线
-│   ├── security-guard.ts          # SecurityGuard — 内置安全守卫
-│   ├── budget.ts                  # IterationBudget — 资源约束
-│   ├── types.ts                   # 核心类型定义
-│   ├── async-task.ts              # AsyncTask — 异步任务原语
-│   ├── process-model.ts           # ProcessModel — Agent 进程模型
-│   ├── interfaces/                # 接口契约
-│   │   ├── model-provider.ts      # ModelProvider
-│   │   ├── tool-executor.ts       # ToolExecutor
-│   │   ├── context-pipeline.ts    # ContextPipeline
-│   │   ├── error-strategy.ts      # ErrorStrategy
-│   │   ├── observer.ts            # Observer
-│   │   ├── session-store.ts       # SessionStore
-│   │   ├── event-source.ts        # EventSource — 外部事件源协议
-│   │   ├── task-store.ts          # TaskStore — 任务持久化协议
-│   │   ├── message-channel.ts     # MessageChannel — 进程间通信协议
+├── core/                              # Layer 1: 纯引擎（零实现依赖）
+│   ├── engine.ts                      # AgentEngine — 无状态循环引擎
+│   ├── event-bus.ts                   # EventBus — 全链路可观测事件总线
+│   ├── security-guard.ts              # SecurityGuard — 注入检测 + 敏感信息过滤
+│   ├── budget.ts                      # IterationBudget — 资源约束
+│   ├── types.ts                       # 核心类型定义（Message, ToolCall, ContentBlock 等）
+│   ├── async-task.ts                  # AsyncTask — 异步原语（取消/超时/重试/持久化）
+│   ├── process-model.ts              # ProcessModel — Agent 进程模型（生命周期/spawn/IPC）
+│   ├── token-estimator.ts            # TokenEstimator — Token 估算器（支持多模态）
+│   ├── agent-communicator.ts         # DefaultAgentCommunicator — Agent 间通信（基于 EventBus）
+│   ├── interfaces/                    # 接口契约
+│   │   ├── model-provider.ts         # ModelProvider — LLM 调用接口
+│   │   ├── tool-executor.ts          # ToolExecutor — 工具执行接口
+│   │   ├── context-pipeline.ts       # ContextPipeline — 上下文组装接口
+│   │   ├── error-strategy.ts         # ErrorStrategy — 错误处理接口
+│   │   ├── observer.ts               # Observer — 可观测性接口
+│   │   ├── session-store.ts          # SessionStore — Session 持久化接口
+│   │   ├── event-source.ts           # EventSource — 外部事件源接口
+│   │   ├── task-store.ts             # TaskStore — 任务持久化接口
+│   │   ├── message-channel.ts        # MessageChannel — 进程间通信接口
+│   │   ├── agent-message.ts          # AgentCommunicator — Agent 间通信接口（7 种消息类型）
+│   │   ├── agent-registry.ts         # AgentRegistry — Agent 注册与发现接口
+│   │   └── index.ts                  # 接口统一导出
+│   └── index.ts                      # Core 层统一导出
+│
+├── harness/                           # Layer 2: 装具层（策略和高级功能）
+│   ├── builder.ts                     # AgentBuilder — Fluent API 组装器
+│   ├── runner.ts                      # SessionAwareRunner — Session 生命周期管理
+│   ├── config-bridge.ts              # buildFromConfig — 配置文件 → 新架构桥接
+│   ├── index.ts                       # Harness 层统一导出
+│   │
+│   ├── persona/                       # 文件式人格系统
+│   │   └── loader.ts                  # PersonaLoader — 读取 AGENTS.md/SOUL.md 等
+│   │
+│   ├── context/                       # 上下文管道
+│   │   ├── pipeline.ts                # DefaultContextPipeline — 可插拔阶段管道
+│   │   ├── smart-stage.ts            # SmartStage — 嵌入 LLM 决策点的上下文阶段
+│   │   ├── stages/
+│   │   │   └── task-stage.ts          # TaskStage — 任务上下文注入
+│   │   └── strategies/
+│   │       ├── sliding-window.ts      # SlidingWindowStrategy — 滑动窗口压缩
+│   │       ├── summarize.ts           # SummarizeStrategy — 摘要压缩
+│   │       └── index.ts
+│   │
+│   ├── tasks/                         # Task 系统
+│   │   ├── manager.ts                 # TaskManager — LLM 驱动的任务管理
+│   │   ├── tracker.ts                 # TaskTracker — 任务状态追踪
+│   │   ├── shared.ts                  # 共享函数
+│   │   ├── types.ts                   # Task 类型定义
 │   │   └── index.ts
+│   │
+│   ├── planner/                       # 规划器
+│   │   ├── rule-planner.ts            # RulePlanner — 规则驱动
+│   │   ├── llm-planner.ts             # LLMPlanner — LLM 驱动（独立 LLM 决策点）
+│   │   ├── hybrid-planner.ts          # HybridPlanner — 规则优先 + LLM 兜底
+│   │   └── index.ts
+│   │
+│   ├── scheduler/                     # 任务调度
+│   │   ├── task-scheduler.ts          # TaskScheduler — once/interval/cron/at
+│   │   └── index.ts
+│   │
+│   ├── knowledge/                     # 知识存储
+│   │   ├── memory-store.ts            # MemoryKnowledgeStore — 内存存储
+│   │   ├── stage.ts                   # KnowledgeStage — 知识上下文注入
+│   │   ├── types.ts                   # 知识类型定义
+│   │   └── index.ts
+│   │
+│   ├── reflector/                     # 反思器
+│   │   ├── llm-reflector.ts           # LLMReflector — LLM 驱动的质量评估和模式识别
+│   │   └── index.ts
+│   │
+│   ├── strategy/                      # 任务分类 + 策略路由
+│   │   ├── classifier.ts              # RuleTaskClassifier — 7 种任务类型 × 3 级复杂度
+│   │   ├── router.ts                  # DefaultStrategyRouter — 6 种推理策略
+│   │   ├── types.ts                   # 策略类型定义
+│   │   └── index.ts
+│   │
+│   ├── resources/                     # 资源管理
+│   │   ├── manager.ts                 # ResourceManager — token/成本/速率限制
+│   │   └── index.ts
+│   │
+│   ├── quality/                       # 输出质量
+│   │   ├── gate.ts                    # OutputQualityGate — 输出质量检测
+│   │   ├── classifier.ts             # OutputErrorClassifier — 错误分类
+│   │   ├── types.ts                   # 质量类型定义
+│   │   └── index.ts
+│   │
+│   ├── security/                      # 安全策略
+│   │   ├── capability-enforcer.ts     # CapabilityEnforcer — 信任分级运行时强制
+│   │   ├── policy.ts                  # SecurityPresets — 安全策略预设
+│   │   └── index.ts
+│   │
+│   ├── supervisor/                    # AgentSupervisor — 持续运行的 Agent 核心
+│   │   ├── supervisor.ts              # AgentSupervisor — 认知循环（感知→思考→执行→反思）
+│   │   ├── event-collector.ts         # EventCollector — 事件收集器
+│   │   ├── types.ts                   # Planner/Reflector 接口 + 类型
+│   │   └── index.ts
+│   │
+│   ├── commands/                      # 斜杠命令系统
+│   │   └── index.ts                   # CommandPlugin — /new, /model, /help, /status
+│   │
+│   ├── plugins/                       # Plugin 系统
+│   │   ├── manager.ts                 # PluginManager — Plugin 生命周期管理
+│   │   ├── loader.ts                  # PluginLoader — Plugin 发现与加载
+│   │   ├── api.ts                     # PluginApi — Plugin 访问框架的 API
+│   │   ├── hooks.ts                   # HookRegistry — Hook 注册与执行（拦截/观察双语义）
+│   │   ├── lifecycle.ts              # PluginLifecycle — Plugin 生命周期状态机
+│   │   ├── entry.ts                   # definePluginEntry — Plugin 入口定义
+│   │   ├── manifest.ts               # PluginManifest — 清单验证与解析
+│   │   ├── capability.ts             # CapabilityRegistry — 能力注册与所有权
+│   │   └── index.ts
+│   │
+│   ├── skills/                        # Skill 系统
+│   │   └── manager.ts                 # DefaultSkillManager — Skill 发现与管理
+│   │
+│   ├── tools/                         # 工具系统
+│   │   ├── registry.ts                # ToolRegistry — 工具注册表
+│   │   ├── builtin.ts                 # BuiltinTools — 内置工具（shell, file_read 等）
+│   │   ├── streaming.ts              # StreamingToolExecutor — 流式工具执行
+│   │   ├── versioning.ts             # ToolVersionManager — 工具版本管理
+│   │   └── index.ts
+│   │
+│   ├── multi-agent/                   # 多 Agent 系统
+│   │   ├── registry.ts                # DefaultAgentRegistry — Agent 注册与发现
+│   │   ├── swarm.ts                   # AgentSwarm — 多 Agent 编排器（4 种拓扑 + 3 种策略）
+│   │   ├── types.ts                   # Multi-Agent 类型定义
+│   │   └── index.ts
+│   │
+│   └── workflow/                      # 工作流引擎
+│       ├── engine.ts                  # WorkflowEngine — DAG 编排、步骤执行
+│       ├── types.ts                   # Workflow 类型定义
+│       └── index.ts
+│
+├── integration/                       # Layer 3: 集成层（具体实现）
+│   ├── storage/                       # Session 存储后端
+│   │   ├── jsonl.ts                   # JsonlSessionStore — JSONL 文件存储
+│   │   ├── memory.ts                  # InMemorySessionStore — 内存存储（测试用）
+│   │   └── index.ts
+│   │
+│   ├── observability/                 # 可观测性
+│   │   ├── noop-observer.ts           # NoopObserver — 零开销空观测器
+│   │   ├── log-observer.ts            # LogObserver — 日志观测器
+│   │   ├── trace-events.ts            # TraceEvent + TraceLevel — 事件类型与级别
+│   │   ├── trace-logger.ts            # TraceLogger — 分级结构化日志器
+│   │   ├── trace-collector.ts         # TraceCollector — 引擎事件自动收集
+│   │   ├── exporters.ts              # TraceExporter SPI — Console/JsonlFile/Webhook
+│   │   ├── metrics.ts                # MetricsAggregator — LLM/token/延迟/成本指标
+│   │   └── index.ts
+│   │
+│   ├── providers/                     # LLM Provider 实现
+│   │   ├── openai.ts                  # OpenAIProvider
+│   │   ├── anthropic.ts              # AnthropicProvider
+│   │   └── index.ts
+│   │
+│   ├── gateway/                       # 网关集成
+│   │   ├── gateway.ts                 # Gateway
+│   │   └── index.ts
+│   │
+│   ├── protocols/                     # 协议适配
+│   │   └── http.ts                    # HttpChannelAdapter — HTTP 适配器
+│   │
+│   └── index.ts                       # Integration 层统一导出
+│
+├── testing/                           # 测试工具
+│   ├── recording-provider.ts          # RecordingProvider — 录制真实 LLM 交互
+│   ├── replay-provider.ts             # ReplayProvider — 回放（确定性测试）
+│   ├── chaos-provider.ts             # ChaosProvider — 故障注入（7 种规则）
+│   ├── scenario-runner.ts            # ScenarioRunner — E2E 场景运行器 + 断言库
+│   ├── scenario-composer.ts          # ScenarioComposer — 场景组合/扩展/参数化
 │   └── index.ts
 │
-├── harness/                       # Layer 2: 装具层
-│   ├── builder.ts                 # AgentBuilder — Fluent API 组装器
-│   ├── runner.ts                  # SessionAwareRunner — Session 管理
-│   ├── persona/
-│   │   └── loader.ts              # PersonaLoader — 文件式人格
-│   ├── context/
-│   │   ├── pipeline.ts            # DefaultContextPipeline
-│   │   └── stages/
-│   │       └── task-stage.ts      # TaskStage — 任务上下文注入
-│   ├── tasks/
-│   │   ├── manager.ts             # TaskManager — LLM 决策器
-│   │   ├── tracker.ts             # TaskTracker — 状态管理
-│   │   ├── shared.ts              # 共享函数
-│   │   ├── types.ts               # Task 类型
-│   │   └── index.ts
-│   ├── quality/
-│   │   ├── gate.ts                # OutputQualityGate
-│   │   ├── classifier.ts          # OutputErrorClassifier
-│   │   ├── types.ts               # Quality 类型
-│   │   └── index.ts
-│   ├── security/
-│   │   ├── capability-enforcer.ts # CapabilityEnforcer
-│   │   ├── policy.ts              # SecurityPresets
-│   │   └── index.ts
-│   ├── supervisor/                # AgentSupervisor — 持续运行的 Agent 核心
-│   │   ├── supervisor.ts          # AgentSupervisor — 认知循环
-│   │   ├── event-collector.ts     # EventCollector — 事件收集器
-│   │   ├── types.ts               # Planner/Reflector 接口 + 类型
-│   │   └── index.ts
-│   ├── planner/                   # Planner — 规划器
-│   │   ├── rule-planner.ts        # RulePlanner — 规则驱动
-│   │   ├── llm-planner.ts         # LLMPlanner — LLM 驱动
-│   │   ├── hybrid-planner.ts      # HybridPlanner — 混合
-│   │   └── index.ts
-│   ├── scheduler/                 # TaskScheduler — 任务调度
-│   │   ├── task-scheduler.ts      # once/interval/cron/at
-│   │   └── index.ts
-│   ├── knowledge/                 # KnowledgeStore — 知识存储
-│   │   ├── memory-store.ts        # MemoryKnowledgeStore — 内存存储
-│   │   ├── stage.ts               # KnowledgeStage — 上下文注入
-│   │   ├── types.ts               # 知识类型
-│   │   └── index.ts
-│   ├── reflector/                 # Reflector — 反思器
-│   │   ├── llm-reflector.ts       # LLMReflector — LLM 驱动
-│   │   └── index.ts
-│   ├── strategy/                  # StrategyRouter — 策略路由
-│   │   ├── classifier.ts          # RuleTaskClassifier — 任务分类
-│   │   ├── router.ts              # DefaultStrategyRouter — 路由
-│   │   ├── types.ts               # 策略类型
-│   │   └── index.ts
-│   ├── resources/                 # ResourceManager — 资源管理
-│   │   ├── manager.ts             # token/成本/速率
-│   │   └── index.ts
-│   └── index.ts
-│
-├── integration/                   # Layer 3: 集成层
-│   ├── storage/
-│   │   ├── jsonl.ts               # JsonlSessionStore
-│   │   └── memory.ts              # InMemorySessionStore
-│   ├── observability/
-│   │   ├── noop-observer.ts       # NoopObserver
-│   │   ├── log-observer.ts        # LogObserver
-│   │   └── index.ts
-│   └── index.ts
-│
-├── observability/                 # 可观测性模块
-│   ├── trace-events.ts            # 事件类型定义 + 级别映射
-│   ├── trace-logger.ts            # 核心日志器（分级过滤）
-│   ├── trace-collector.ts         # 引擎事件流自动收集器
-│   ├── exporters.ts               # Exporter SPI（Console/JsonlFile/Webhook）
-│   ├── metrics.ts                 # MetricsAggregator（指标聚合）
-│   └── index.ts
-│
-├── testing/                       # 测试工具模块
-│   ├── recording-provider.ts      # 录制真实 LLM 交互
-│   ├── replay-provider.ts         # 回放录制数据（确定性测试）
-│   ├── chaos-provider.ts          # 故障注入 Provider
-│   ├── scenario-runner.ts         # E2E 场景运行器 + 断言库
-│   ├── scenario-composer.ts       # 场景组合、扩展、参数化
-│   └── index.ts
-│
-├── plugins/                       # Plugin 系统（跨层，SDK 形式）
-│   ├── manager.ts                 # PluginManager
-│   ├── loader.ts                  # PluginLoader
-│   ├── api.ts                     # PluginApi
-│   ├── hooks.ts                   # Hook 执行引擎
-│   ├── entry.ts                   # definePluginEntry
-│   ├── manifest.ts                # Manifest 验证
-│   ├── capability.ts              # CapabilityRegistry
-│   └── index.ts
-│
-├── providers/                     # LLM Provider 实现
-│   ├── openai.ts                  # OpenAIProvider
-│   ├── anthropic.ts               # AnthropicProvider
-│   ├── router.ts                  # LLMRouter
-│   └── index.ts
-│
-├── skills/                        # Skill 系统
-│   └── manager.ts                 # DefaultSkillManager
-│
-├── tools/                         # 工具系统
-│   ├── registry.ts                # ToolRegistry
-│   ├── builtin.ts                 # 内置工具
-│   └── index.ts
-│
-├── gateway/                       # Gateway
-│   ├── gateway.ts
-│   └── index.ts
-│
-├── protocol/                      # 协议适配
-│   └── http.ts                    # HTTP 适配器
-│
-├── config.ts                      # 配置加载
-├── init.ts                        # 系统初始化（目录脚手架）
-├── cli.ts                         # CLI 入口（init/serve/chat/health）
-└── index.ts                       # 统一导出
+├── config.ts                          # 配置加载（支持 OCTOPI_HOME）
+├── init.ts                            # 系统初始化（目录脚手架）
+├── cli.ts                             # CLI 入口（init/serve/chat/health）
+└── index.ts                           # 统一导出
 ```
 
 ---
