@@ -1,6 +1,6 @@
 # Octopi 架构设计文档
 
-> 版本：v2.3 | 日期：2026-06-06
+> 版本：v2.4 | 日期：2026-06-08
 
 本文档是 Octopi 框架的完整架构设计，记录了设计决策的背景、权衡和原则。
 
@@ -664,6 +664,91 @@ console.log(rm.stats());
 // { token: { total: 1500 }, cost: { total: 0.06 }, rate: { concurrent: 0 } }
 ```
 
+### 4.13 SmartStage — 嵌入 LLM 决策点的上下文阶段
+
+上下文管道中的每个阶段默认是确定性逻辑。SmartStage 打破了这个限制——它在管道中嵌入独立的 LLM 调用，让上下文组装可以“思考”。
+
+内置工厂：
+- `createSmartSummarizer` — 用 LLM 决定如何压缩长对话历史
+- `createSmartRelevanceFilter` — 用 LLM 评估哪些消息与当前任务最相关
+
+设计约束：
+- LLM 调用有超时（默认 5 秒），失败时 fallback 到原始上下文
+- 结果可缓存，避免重复调用
+- 所有 LLM 调用通过 EventBus 事件可追踪
+
+```typescript
+import { SmartStage, createSmartSummarizer } from 'octopi/harness';
+
+// 智能摘要
+const summarizer = createSmartSummarizer(modelProvider);
+pipeline.addStage(summarizer);
+
+// 自定义 SmartStage
+const smartFilter = new SmartStage({
+  name: 'smart-filter',
+  model: modelProvider,
+  systemPrompt: '你是上下文过滤专家...',
+  buildPrompt: (ctx) => `分析 ${ctx.messages.length} 条消息...`,
+  applyDecision: async (response, ctx) => {
+    // 解析 LLM 响应，变换上下文
+    return { ...ctx, messages: filteredMessages };
+  },
+});
+```
+
+### 4.14 AgentRegistry — Agent 注册与发现
+
+Core 层定义接口，Harness 层提供默认实现。让 Agent 之间能互相发现。
+
+```typescript
+import { DefaultAgentRegistry } from 'octopi/harness';
+
+const registry = new DefaultAgentRegistry(eventBus);
+
+// 注册 Agent
+registry.register({
+  id: 'coder',
+  name: 'Code Agent',
+  capabilities: ['coding', 'testing'],
+  status: 'active',
+});
+
+// 按能力发现
+const coders = registry.findByCapability('coding');
+
+// 管理关系
+registry.addRelation({ from: 'coordinator', to: 'coder', type: 'superior' });
+```
+
+### 4.15 AgentSwarm — 多 Agent 编排器
+
+管理多个 Agent 的协作。支持 4 种拓扑：
+
+| 拖扑 | 策略 | 说明 |
+|------|------|------|
+| `hierarchical` | CapabilityStrategy | 协调者按能力分配任务给工作者 |
+| `peer-to-peer` | CapabilityStrategy | Agent 之间对等通信 |
+| `pipeline` | PipelineStrategy | Agent 按顺序处理（前一个输出是后一个输入） |
+| `broadcast` | RoundRobinStrategy | 一个任务广播给所有 Agent |
+
+```typescript
+import { AgentSwarm, PipelineStrategy } from 'octopi/harness';
+
+const swarm = new AgentSwarm(
+  { name: 'dev-team', topology: 'hierarchical' },
+  registry,
+  eventBus,
+);
+
+swarm.addAgent({ info: coderInfo, engine: coderEngine });
+swarm.addAgent({ info: reviewerInfo, engine: reviewerEngine });
+
+// 提交任务
+const task = swarm.submitTask('实现新功能', '添加用户登录...');
+const result = await swarm.executeTask(task);
+```
+
 ---
 
 ## 5. Integration 层详解
@@ -845,3 +930,19 @@ commands.register('/clear', {
 **理由：** 命令处理是独立关注点。CLI 和 Gateway 都需要命令能力，但触发机制不同（CLI 是 readline，Gateway 是 message_received hook）。抽成独立模块可以复用。
 
 **权衡：** 增加了一层抽象。对简单 CLI 场景来说可能过度设计，但为 Gateway 场景打下了基础。
+
+### ADR-013: 多 Agent 基础设施（AgentRegistry + AgentSwarm）
+
+**决策：** 在 Core 层定义 AgentRegistry 接口，在 Harness 层提供 DefaultAgentRegistry 实现和 AgentSwarm 编排器。
+
+**理由：** 多 Agent 协作需要一个发现机制（谁在那里、谁能做什么）和一个编排机制（任务怎么分配）。这些是原生能力，不是事后附加。Core 层的 ProcessModel 和 MessageChannel 提供了通信基础设施，Harness 层的 AgentSwarm 在其之上构建编排逻辑。
+
+**权衡：** 增加了框架复杂度。单 Agent 场景不需要这些组件，但它们是可选的——不用就不引入。
+
+### ADR-014: SmartStage — 分布式 LLM 决策点
+
+**决策：** 在 ContextPipeline 中引入 SmartStage，允许上下文阶段嵌入独立的 LLM 调用进行决策。
+
+**理由：** 传统的上下文管道是纯确定性逻辑——滑动窗口、固定规则。但有些场景需要“智能”判断：哪些消息最相关？如何压缩长对话？SmartStage 让管道可以“思考”，同时保持安全网：超时、缓存、fallback。
+
+**权衡：** LLM 调用增加了延迟和成本。SmartStage 必须有 fallback 逻辑，不能让 LLM 失败阻塞整个管道。缓存是必须的。
