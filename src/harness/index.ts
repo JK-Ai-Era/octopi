@@ -75,5 +75,5 @@ export { buildFromConfig, buildFromConfigFile, resolveProviders, resolveStore, r
 export type { BuiltAgent } from './config-bridge.js';
 
 // ── Multi-Agent ──
-export { DefaultAgentRegistry, AgentSwarm, RoundRobinStrategy, CapabilityStrategy, PipelineStrategy, SwarmEvents } from './multi-agent/index.js';
-export type { SwarmTopology, SwarmConfig, SwarmAgent, SwarmTask, OrchestrationStrategy } from './multi-agent/index.js';
+export { DefaultAgentRegistry, AgentSwarm, RoundRobinStrategy, CapabilityStrategy, PipelineStrategy, SwarmEvents, AgentProcess, spawnAgentProcess, forkAgentProcess, AgentProcessEvents } from './multi-agent/index.js';
+export type { SwarmTopology, SwarmConfig, SwarmAgent, SwarmTask, OrchestrationStrategy, AgentProcessState, AgentProcessResult, AgentProcessAnnounce, AgentProcessConfig } from './multi-agent/index.js';

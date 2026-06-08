@@ -24,3 +24,8 @@ export {
   CapabilityStrategy,
   PipelineStrategy,
 } from './swarm.js';
+
+// ── 进程 ──
+export { AgentProcess, spawnAgentProcess, forkAgentProcess } from './process.js';
+export type { AgentProcessState, AgentProcessResult, AgentProcessAnnounce, AgentProcessConfig } from './process.js';
+export { AgentProcessEvents } from './process.js';

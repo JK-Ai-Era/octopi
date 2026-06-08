@@ -78,8 +78,8 @@ export { buildFromConfig, buildFromConfigFile } from './harness/config-bridge.js
 export type { BuiltAgent } from './harness/config-bridge.js';
 
 // Multi-Agent 系统
-export { DefaultAgentRegistry, AgentSwarm, RoundRobinStrategy, CapabilityStrategy, PipelineStrategy, SwarmEvents } from './harness/multi-agent/index.js';
-export type { SwarmTopology, SwarmConfig, SwarmAgent, SwarmTask, OrchestrationStrategy } from './harness/multi-agent/index.js';
+export { DefaultAgentRegistry, AgentSwarm, RoundRobinStrategy, CapabilityStrategy, PipelineStrategy, SwarmEvents, AgentProcess, spawnAgentProcess, forkAgentProcess, AgentProcessEvents } from './harness/multi-agent/index.js';
+export type { SwarmTopology, SwarmConfig, SwarmAgent, SwarmTask, OrchestrationStrategy, AgentProcessState, AgentProcessResult, AgentProcessAnnounce, AgentProcessConfig } from './harness/multi-agent/index.js';
 export type { AgentRegistry, AgentInfo, AgentQuery, AgentRelation, AgentRelationType } from './core/interfaces/agent-registry.js';
 export { AgentRegistryEvents } from './core/interfaces/agent-registry.js';
 
