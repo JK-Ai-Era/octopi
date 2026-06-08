@@ -267,7 +267,7 @@ export function toGatewayConfig(config: HarnessConfig): GatewayConfig {
 // ── Provider 工厂 ──
 
 /**
- * 从 ProviderConfig 创建 LLMProvider 实例
+ * 从 ProviderConfig 创建 ModelProvider 实例
  *
  * 根据 type 字段自动选择 OpenAI 或 Anthropic provider。
  * 使用动态 import 以支持 ESM。

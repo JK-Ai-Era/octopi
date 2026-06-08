@@ -17,6 +17,7 @@
  */
 
 import type { Message } from '../../../core/types.js';
+import { getTextContent } from '../../../core/types.js';
 import type { ContextStage, StageContext } from '../pipeline.js';
 import type { ModelProvider } from '../../../core/interfaces/model-provider.js';
 import { TaskTracker } from '../../tasks/tracker.js';
@@ -63,7 +64,7 @@ export class TaskStage implements ContextStage {
     const lastUserMessage = [...ctx.messages]
       .reverse()
       .find((m: Message) => m.role === 'user');
-    const newMessage = lastUserMessage?.content ?? '';
+    const newMessage = lastUserMessage ? getTextContent(lastUserMessage.content) : '';
 
     if (!newMessage) {
       return ctx;
@@ -73,8 +74,9 @@ export class TaskStage implements ContextStage {
     const recentMessages = ctx.messages.slice(-6);
     const recentContext = recentMessages
       .map((m: Message) => {
-        const preview = m.content.slice(0, 100);
-        return `[${m.role}] ${preview}${m.content.length > 100 ? '...' : ''}`;
+        const text = getTextContent(m.content);
+        const preview = text.slice(0, 100);
+        return `[${m.role}] ${preview}${text.length > 100 ? '...' : ''}`;
       })
       .join('\n');
 

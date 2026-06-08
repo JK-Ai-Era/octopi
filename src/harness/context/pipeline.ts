@@ -1,13 +1,14 @@
 /**
  * DefaultContextPipeline — 默认上下文管道
  *
- * 采用阶段化管道模型：
- *   PersonaStage → SkillStage → HistoryStage → CompactStage → FilterStage
+ * 阶段化管道模型：
+ *   PersonaStage → SkillStage → TaskStage → KnowledgeStage → HistoryStage → CompactStage → FilterStage
  *
  * 每个阶段可以独立替换或扩展。
  */
 
-import type { Message } from '../../core/types.js';
+import type { Message, SkillManager, ContentBlock } from '../../core/types.js';
+import { getTextContent } from '../../core/types.js';
 import type {
   ContextPipeline,
   PipelineInput,
@@ -74,6 +75,77 @@ export class HistoryStage implements ContextStage {
 }
 
 /**
+ * SkillStage — 注入 Skill 上下文
+ *
+ * 将可用 Skill 列表注入 system prompt，让 LLM 知道有哪些工具可用。
+ */
+export class SkillStage implements ContextStage {
+  readonly name = 'skill';
+  private skillManager: SkillManager;
+
+  constructor(skillManager: SkillManager) {
+    this.skillManager = skillManager;
+  }
+
+  async process(ctx: StageContext): Promise<StageContext> {
+    const skillPrompt = this.skillManager.formatForPrompt();
+    if (skillPrompt) {
+      ctx.systemPrompt = ctx.systemPrompt + '\n\n' + skillPrompt;
+    }
+    return ctx;
+  }
+}
+
+/**
+ * CompactStage — 上下文压缩
+ *
+ * 当 token 超限时，自动截断或摘要早期消息。
+ */
+export class CompactStage implements ContextStage {
+  readonly name = 'compact';
+
+  async process(ctx: StageContext): Promise<StageContext> {
+    if (!ctx.maxTokens) return ctx;
+
+    const currentTokens = estimateTokens(ctx.messages);
+    if (currentTokens <= ctx.maxTokens) return ctx;
+
+    // 策略：保留系统提示 + 最近 N 条消息，截断早期消息
+    // 简单实现：移除早期消息直到 token 降到阈值以下
+    const threshold = Math.floor(ctx.maxTokens * 0.8); // 留 20% 余量
+    const messages = [...ctx.messages];
+
+    // 保留最后 4 条消息
+    const keepCount = Math.min(4, messages.length);
+    const keepMessages = messages.slice(-keepCount);
+    const earlyMessages = messages.slice(0, -keepCount);
+
+    // 从早期消息中截断
+    let estimatedEarly = estimateTokens(earlyMessages);
+    const targetEarly = threshold - estimateTokens(keepMessages);
+
+    if (estimatedEarly > targetEarly && earlyMessages.length > 0) {
+      // 移除最早的消息
+      const removeCount = Math.min(earlyMessages.length, Math.ceil(earlyMessages.length * 0.5));
+      const removed = earlyMessages.splice(0, removeCount);
+      estimatedEarly = estimateTokens(earlyMessages);
+
+      // 在被移除消息的位置插入摘要提示
+      if (removed.length > 0) {
+        earlyMessages.unshift({
+          role: 'system',
+          content: `[上下文压缩：已省略 ${removed.length} 条早期消息]`,
+          timestamp: Date.now(),
+        });
+      }
+    }
+
+    ctx.messages = [...earlyMessages, ...keepMessages];
+    return ctx;
+  }
+}
+
+/**
  * FilterStage — 标记不可信内容
  *
  * 扫描消息历史中的工具返回值和外部内容，
@@ -86,25 +158,27 @@ export class FilterStage implements ContextStage {
     let offset = 0;
 
     for (const msg of ctx.messages) {
+      const textContent = getTextContent(msg.content);
+
       // 工具返回值是不可信的
-      if (msg.role === 'tool' && msg.content) {
+      if (msg.role === 'tool' && textContent) {
         ctx.untrustedRanges.push({
           start: offset,
-          end: offset + msg.content.length,
+          end: offset + textContent.length,
           source: 'tool_output',
         });
       }
 
       // 带有 external 标记的消息也是不可信的
-      if (msg.metadata?.external && msg.content) {
+      if (msg.metadata?.external && textContent) {
         ctx.untrustedRanges.push({
           start: offset,
-          end: offset + msg.content.length,
+          end: offset + textContent.length,
           source: 'external_content',
         });
       }
 
-      offset += msg.content?.length ?? 0;
+      offset += textContent.length;
     }
 
     return ctx;
@@ -188,7 +262,7 @@ export class DefaultContextPipeline implements ContextPipeline {
         // 带工具调用的 assistant 消息
         result.push({
           role: 'assistant',
-          content: msg.content || null,
+          content: getTextContent(msg.content) || null,
           tool_calls: msg.toolCalls.map(tc => ({
             id: tc.id,
             type: 'function' as const,
@@ -198,8 +272,30 @@ export class DefaultContextPipeline implements ContextPipeline {
             },
           })),
         });
+      } else if (Array.isArray(msg.content)) {
+        // 多模态消息：转换为 LLM 内容块格式
+        const llmContent = msg.content.map((block: ContentBlock) => {
+          if (block.type === 'text') {
+            return { type: 'text', text: block.text };
+          }
+          if (block.type === 'image') {
+            const source: Record<string, unknown> = { type: 'image' };
+            if (block.url) source.source = { type: 'url', url: block.url };
+            else if (block.data) source.source = { type: 'base64', media_type: block.mimeType ?? 'image/png', data: block.data };
+            return source;
+          }
+          if (block.type === 'audio') {
+            return { type: 'input_audio', input_audio: { data: block.data ?? '', format: block.mimeType?.split('/')[1] ?? 'mp3' } };
+          }
+          // 其他类型转为文本描述
+          return { type: 'text', text: `[${block.type} content]` };
+        });
+        result.push({
+          role: msg.role,
+          content: llmContent as Array<{ type: string; [key: string]: unknown }>,
+        });
       } else {
-        // 普通消息
+        // 普通文本消息
         result.push({
           role: msg.role,
           content: msg.content,
@@ -221,7 +317,10 @@ export class DefaultContextPipeline implements ContextPipeline {
     return messages.filter((msg) => {
       // assistant 消息：必须有内容或有 toolCalls
       if (msg.role === 'assistant') {
-        if (!msg.content && (!msg.toolCalls || msg.toolCalls.length === 0)) {
+        const hasContent = Array.isArray(msg.content)
+          ? msg.content.length > 0
+          : !!msg.content;
+        if (!hasContent && (!msg.toolCalls || msg.toolCalls.length === 0)) {
           return false;
         }
       }

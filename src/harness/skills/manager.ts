@@ -17,6 +17,55 @@ import { readFileSync, readdirSync, existsSync } from 'fs';
 import { join, resolve } from 'path';
 import type { SkillDefinition, SkillManager } from '../../core/types.js';
 
+// ── SkillSource 接口 ──
+
+/**
+ * 发现的 Skill 条目（SkillSource 返回的中间格式）
+ */
+export interface DiscoveredSkill {
+  /** Skill ID（通常是目录名） */
+  id: string;
+  /** SKILL.md 文件路径（用于后续 load） */
+  filePath: string;
+  /** Skill 元数据 */
+  meta: {
+    name: string;
+    description: string;
+    disableModelInvocation?: boolean;
+    requiredTools?: string[];
+  };
+}
+
+/**
+ * SkillSource — 抽象 Skill 来源
+ *
+ * 抽象 Skill 的发现和加载机制，支持多种后端：
+ * - 文件系统（默认）
+ * - 远程仓库
+ * - 数据库
+ * - 内存（测试用）
+ */
+export interface SkillSource {
+  /** 来源名称（用于日志和诊断） */
+  readonly name: string;
+
+  /**
+   * 发现所有可用 Skill
+n   * 返回 Skill 元数据列表（不包含完整内容）
+   */
+  discover(): Promise<DiscoveredSkill[]>;
+
+  /**
+   * 加载 Skill 完整内容
+n   * @param skillId - Skill ID
+n   * @param filePath - SKILL.md 文件路径（由 discover 返回）
+   * @returns Skill 完整 Markdown 内容（不含 frontmatter）
+   */
+  load(skillId: string, filePath: string): Promise<string | null>;
+}
+
+// ── 文件系统实现 ──
+
 /**
  * SKILL.md 文件 frontmatter 解析
  */
@@ -59,10 +108,84 @@ function parseFrontmatter(filePath: string): {
 }
 
 /**
+ * FileSystemSkillSource — 文件系统 Skill 来源
+ *
+ * 从本地目录扫描 SKILL.md 文件。
+ */
+export class FileSystemSkillSource implements SkillSource {
+  readonly name = 'filesystem';
+  private directory: string;
+
+  constructor(directory: string) {
+    this.directory = directory;
+  }
+
+  async discover(): Promise<DiscoveredSkill[]> {
+    const absDir = resolve(this.directory);
+    if (!existsSync(absDir)) return [];
+
+    const results: DiscoveredSkill[] = [];
+    const entries = readdirSync(absDir, { withFileTypes: true });
+
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+
+      const skillFile = join(absDir, entry.name, 'SKILL.md');
+      if (!existsSync(skillFile)) continue;
+
+      const parsed = parseFrontmatter(skillFile);
+      if (!parsed?.meta.name || !parsed.meta.description) continue;
+
+      results.push({
+        id: entry.name,
+        filePath: skillFile,
+        meta: {
+          name: parsed.meta.name,
+          description: parsed.meta.description,
+          disableModelInvocation:
+            parsed.meta['disable-model-invocation'] === 'true',
+          requiredTools: parsed.meta.tools
+            ? parsed.meta.tools.split(/[,，]/).map((s) => s.trim())
+            : undefined,
+        },
+      });
+    }
+
+    return results;
+  }
+
+  async load(_skillId: string, filePath: string): Promise<string | null> {
+    try {
+      const raw = readFileSync(filePath, 'utf-8');
+      const fmMatch = raw.match(/^---\n[\s\S]*?\n---\n?([\s\S]*)$/);
+      return fmMatch ? fmMatch[1].trim() : raw.trim();
+    } catch {
+      return null;
+    }
+  }
+}
+
+// ── 默认 SkillManager ──
+
+/**
  * SkillManager 实现
+ *
+ * 通过 SkillSource 抽象支持多种后端。默认使用 FileSystemSkillSource。
  */
 export class DefaultSkillManager implements SkillManager {
   private skills = new Map<string, SkillDefinition>();
+  private source: SkillSource;
+
+  /**
+   * @param sourceOrDirectory - SkillSource 实例或目录路径（向后兼容）
+   */
+  constructor(sourceOrDirectory?: SkillSource | string) {
+    if (typeof sourceOrDirectory === 'string') {
+      this.source = new FileSystemSkillSource(sourceOrDirectory);
+    } else {
+      this.source = sourceOrDirectory ?? new FileSystemSkillSource('./skills');
+    }
+  }
 
   /**
    * 扫描目录发现所有 Skill（只读元数据）
@@ -74,32 +197,22 @@ export class DefaultSkillManager implements SkillManager {
    *   └── web-scraper/SKILL.md
    */
   async discover(directory: string): Promise<void> {
-    const absDir = resolve(directory);
-    if (!existsSync(absDir)) return;
+    // 如果传入了目录路径，创建新的 FileSystemSkillSource
+    if (directory) {
+      this.source = new FileSystemSkillSource(directory);
+    }
 
-    const entries = readdirSync(absDir, { withFileTypes: true });
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
-
-      const skillFile = join(absDir, entry.name, 'SKILL.md');
-      if (!existsSync(skillFile)) continue;
-
-      const parsed = parseFrontmatter(skillFile);
-      if (!parsed?.meta.name || !parsed.meta.description) continue;
-
+    const discovered = await this.source.discover();
+    for (const item of discovered) {
       const skill: SkillDefinition = {
-        id: entry.name,
-        name: parsed.meta.name,
-        description: parsed.meta.description,
-        filePath: skillFile,
+        id: item.id,
+        name: item.meta.name,
+        description: item.meta.description,
+        filePath: item.filePath,
         source: 'workspace',
-        disableModelInvocation:
-          parsed.meta['disable-model-invocation'] === 'true',
-        requiredTools: parsed.meta.tools
-          ? parsed.meta.tools.split(/[,，]/).map((s) => s.trim())
-          : undefined,
+        disableModelInvocation: item.meta.disableModelInvocation,
+        requiredTools: item.meta.requiredTools,
       };
-
       this.skills.set(skill.id, skill);
     }
   }
@@ -144,20 +257,13 @@ export class DefaultSkillManager implements SkillManager {
   /**
    * 加载 Skill 完整内容（LLM 按需调用）
    *
-   * 从文件重新读取，剥离 frontmatter，返回纯 Markdown 内容。
-   * 支持热重载（每次从文件读取最新内容）。
+   * 通过 SkillSource 加载，支持热重载。
    */
   async load(skillId: string): Promise<string | null> {
     const skill = this.skills.get(skillId);
     if (!skill) return null;
 
-    try {
-      const raw = readFileSync(skill.filePath, 'utf-8');
-      const fmMatch = raw.match(/^---\n[\s\S]*?\n---\n?([\s\S]*)$/);
-      return fmMatch ? fmMatch[1].trim() : raw.trim();
-    } catch {
-      return null;
-    }
+    return this.source.load(skillId, skill.filePath);
   }
 
   list(): SkillDefinition[] {

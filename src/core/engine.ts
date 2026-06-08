@@ -30,6 +30,7 @@ import type {
   TokenUsage,
   RegisteredTool,
 } from './types.js';
+import { getTextContent } from './types.js';
 import type {
   ModelProvider,
   LLMRequest,
@@ -159,7 +160,7 @@ export class AgentEngine {
       // 1. 处理最后一条用户消息（安全检查）
       const lastMessage = messages[messages.length - 1];
       if (lastMessage?.role === 'user') {
-        const inputCheck = security.checkUserInput(lastMessage.content);
+        const inputCheck = security.checkUserInput(getTextContent(lastMessage.content));
         if (!inputCheck.isClean) {
           const action = errorStrategy.onSecurityViolation({
             ...inputCheck.violations[0],
@@ -559,6 +560,7 @@ export class AgentEngine {
     } catch (err) {
       // 流式失败，回退到同步
       if (err instanceof Error && (err.message.includes('stream') || err.message.includes('Aborted'))) {
+        yield { type: 'stream.fallback_to_sync', timestamp: Date.now(), data: { reason: 'stream_error', error: err.message } };
         const response = await model.chat(request);
         if (response.content) {
           yield { type: 'llm_stream_delta', timestamp: Date.now(), data: { delta: response.content } };
@@ -571,14 +573,15 @@ export class AgentEngine {
     // 流式正常结束但内容为空且无工具调用 → fallback 到同步调用
     // 某些 provider 的流式响应可能不完整（缺少 content chunk 或 done chunk）
     if (!content && toolCallBuffers.size === 0) {
+      yield { type: 'stream.fallback_to_sync', timestamp: Date.now(), data: { reason: 'empty_stream' } };
       try {
         const response = await model.chat(request);
         if (response.content) {
           yield { type: 'llm_stream_delta', timestamp: Date.now(), data: { delta: response.content } };
         }
         return response;
-      } catch {
-        // 同步也失败了，返回空内容（让上层错误策略处理）
+      } catch (syncErr) {
+        yield { type: 'stream.fallback_failed', timestamp: Date.now(), data: { error: syncErr instanceof Error ? syncErr.message : String(syncErr) } };
       }
     }
 

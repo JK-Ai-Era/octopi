@@ -18,7 +18,7 @@ export { AgentEngine } from './engine.js';
 export type { AgentEngineDeps, RunConfig, EngineEvent } from './engine.js';
 
 export { DefaultEventBus, NoopEventBus, AgentEvents } from './event-bus.js';
-export type { EventBus, AgentEvent as EventBusAgentEvent, EventHandler, Disposable } from './event-bus.js';
+export type { EventBus, AgentEvent as EventBusAgentEvent, EventHandler, Disposable, DefaultEventBusOptions } from './event-bus.js';
 
 export { DefaultSecurityGuard } from './security-guard.js';
 export type { SecurityGuard, SecurityCheckResult, SecurityViolation, SecurityGuardConfig } from './security-guard.js';
@@ -37,15 +37,14 @@ export type { ProcessState, ExitReason, ExitInfo, ProcessOptions, ProcessBody, P
 // 只从 types.ts 导出不与 interfaces 重叠的类型
 export type {
   MessageRole, MessageSource, Message, ToolCall, ToolResult,
+  ContentBlock, TextBlock, ImageBlock, AudioBlock, VideoBlock, FileBlock,
   AgentPersona, ModelConfig, ToolPolicy, AgentDefinition,
   SessionStatus, SessionMeta, TokenUsage, Turn,
   ToolParameter, ToolDefinition as CoreToolDefinition, ToolExecutionContext, ToolHandler, RegisteredTool,
   SkillDefinition, SkillManager,
-  LLMRequest as LegacyLLMRequest, LLMResponse as LegacyLLMResponse, LLMProvider,
   ChannelMessage, ChannelReply, ChannelAdapter,
   HookContext, AgentEvent, AgentEventListener, LoopEndReason, LLMStreamChunk,
   ClassifiedError, ErrorReason,
   AssembleResult, CompactResult, ContextEngineInfo, ContextEngine,
-  GatewayConfig, LLMMessage as CoreLLMMessage, MessageConverter,
-  AgentLoopConfig, RetryConfig, ThinkingLevel, QueueMode,
+  GatewayConfig, ThinkingLevel, QueueMode,
 } from './types.js';

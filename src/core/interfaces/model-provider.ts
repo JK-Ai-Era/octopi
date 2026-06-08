@@ -14,10 +14,14 @@ import type { TokenUsage, ToolCall } from '../types.js';
 
 // ── 请求/响应类型 ──
 
-/** LLM 消息格式（provider 边界格式） */
+/**
+ * LLM 消息格式（provider 边界格式）
+ *
+ * 支持多模态：content 可以是字符串或内容块数组（OpenAI vision/audio 格式）。
+ */
 export interface LLMMessage {
   role: string;
-  content: string | null;
+  content: string | Array<{ type: string; [key: string]: unknown }> | null;
   tool_calls?: Array<{
     id: string;
     type: 'function';

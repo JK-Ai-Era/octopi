@@ -12,7 +12,8 @@
  * 参考: https://docs.openclaw.ai/plugins/architecture#capability-ownership-model
  */
 
-import type { LLMProvider, ChannelAdapter, ContextEngine } from '../../core/types.js';
+import type { ModelProvider } from '../../core/interfaces/model-provider.js';
+import type { ChannelAdapter, ContextEngine } from '../../core/types.js';
 import type { PluginManifest } from './manifest.js';
 
 /**

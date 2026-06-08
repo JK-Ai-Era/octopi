@@ -8,8 +8,8 @@
  */
 
 import type { PluginManifest } from './manifest.js';
+import type { ModelProvider } from '../../core/interfaces/model-provider.js';
 import type {
-  LLMProvider,
   ChannelAdapter,
   RegisteredTool,
   ToolDefinition,
@@ -44,7 +44,7 @@ export interface ProviderRegistration {
   id: string;
 
   /** Provider 实例 */
-  provider: LLMProvider;
+  provider: ModelProvider;
 }
 
 /**

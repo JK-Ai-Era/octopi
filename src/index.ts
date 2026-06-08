@@ -64,7 +64,8 @@ export { validateManifest, parseManifest } from './harness/plugins/manifest.js';
 export type { PluginManifest, PluginContracts, ActivationConfig } from './harness/plugins/manifest.js';
 
 // Harness Skill 系统
-export { DefaultSkillManager } from './harness/skills/manager.js';
+export { DefaultSkillManager, FileSystemSkillSource } from './harness/skills/manager.js';
+export type { SkillSource, DiscoveredSkill } from './harness/skills/manager.js';
 
 // Harness Tool 系统
 export { ToolRegistry } from './harness/tools/registry.js';
@@ -125,3 +126,4 @@ export type { RecordingEntry, RecordingConfig, ReplayConfig, Scenario, ScenarioA
 // ============================================================
 
 export * from './core/types.js';
+export { getTextContent, hasMediaContent } from './core/types.js';

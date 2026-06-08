@@ -77,14 +77,26 @@ export interface EventBus {
 
 // ── 默认实现 ──
 
+/** DefaultEventBus 选项 */
+export interface DefaultEventBusOptions {
+  /** 启用 debug 模式：处理器异常会 console.warn 而非静默吞掉 */
+  debug?: boolean;
+}
+
 /**
  * 默认 EventBus 实现
  *
  * 基于 Map 的事件订阅，支持同步和异步处理器。
+ * debug 模式下，处理器异常会输出警告（不中断 Agent 循环）。
  */
 export class DefaultEventBus implements EventBus {
   private handlers = new Map<string, Set<EventHandler>>();
   private allHandlers = new Set<EventHandler>();
+  private debug: boolean;
+
+  constructor(options?: DefaultEventBusOptions) {
+    this.debug = options?.debug ?? false;
+  }
 
   emit(event: AgentEvent): void {
     const timestamped = { ...event, timestamp: event.timestamp ?? Date.now() };
@@ -95,8 +107,10 @@ export class DefaultEventBus implements EventBus {
       for (const handler of typeHandlers) {
         try {
           handler(timestamped);
-        } catch {
-          // 事件处理器的错误不应中断 Agent 循环
+        } catch (err) {
+          if (this.debug) {
+            console.warn(`[EventBus] handler error for "${event.type}":`, err);
+          }
         }
       }
     }
@@ -105,8 +119,10 @@ export class DefaultEventBus implements EventBus {
     for (const handler of this.allHandlers) {
       try {
         handler(timestamped);
-      } catch {
-        // 同上
+      } catch (err) {
+        if (this.debug) {
+          console.warn(`[EventBus] wildcard handler error for "${event.type}":`, err);
+        }
       }
     }
   }

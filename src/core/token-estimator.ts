@@ -14,12 +14,29 @@
 
 /**
  * 估算 LLM 消息列表的 token 数
+ *
+ * 支持 string 和 ContentBlock[] 两种 content 格式。
  */
-export function estimateTokens(messages: Array<{ content?: string | null; role?: string }>): number {
+export function estimateTokens(messages: Array<{ content?: string | unknown[] | null; role?: string }>): number {
   let total = 0;
   for (const msg of messages) {
     if (typeof msg.content === 'string' && msg.content.length > 0) {
       total += estimateTextTokens(msg.content);
+    } else if (Array.isArray(msg.content)) {
+      for (const block of msg.content) {
+        const b = block as Record<string, unknown>;
+        if (b.type === 'text' && typeof b.text === 'string') {
+          total += estimateTextTokens(b.text);
+        } else if (b.type === 'image') {
+          total += 85; // 典型图片 token 估算
+        } else if (b.type === 'audio') {
+          total += 50; // 音频 token 估算
+        } else if (b.type === 'video') {
+          total += 100; // 视频 token 估算
+        } else {
+          total += 10; // 其他块类型
+        }
+      }
     }
   }
   return total;

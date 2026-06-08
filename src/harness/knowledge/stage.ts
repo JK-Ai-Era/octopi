@@ -6,6 +6,7 @@
 
 import type { ContextStage, StageContext } from '../context/pipeline.js';
 import type { KnowledgeStore } from './types.js';
+import { getTextContent } from '../../core/types.js';
 
 export interface KnowledgeStageConfig {
   /** 知识存储 */
@@ -42,7 +43,7 @@ export class KnowledgeStage implements ContextStage {
     if (!lastUserMsg) return ctx;
 
     // 检索相关知识
-    const entries = await this._store.retrieve(lastUserMsg.content, {
+    const entries = await this._store.retrieve(getTextContent(lastUserMsg.content), {
       limit: this._limit,
       minConfidence: this._minConfidence,
       updateAccess: true,

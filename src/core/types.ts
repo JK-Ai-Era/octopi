@@ -35,6 +35,86 @@ export interface MessageSource {
   conversationId?: string;
 }
 
+// ── 多模态内容块 ──
+
+/**
+ * 文本内容块
+ */
+export interface TextBlock {
+  type: 'text';
+  text: string;
+}
+
+/**
+ * 图片内容块
+ */
+export interface ImageBlock {
+  type: 'image';
+  /** 图片 URL（http/https 或 data URI） */
+  url?: string;
+  /** Base64 编码的图片数据 */
+  data?: string;
+  /** MIME 类型（如 image/png, image/jpeg） */
+  mimeType?: string;
+  /** 图片描述（可选，用于无障碍和日志） */
+  alt?: string;
+}
+
+/**
+ * 音频内容块
+ */
+export interface AudioBlock {
+  type: 'audio';
+  /** 音频 URL */
+  url?: string;
+  /** Base64 编码的音频数据 */
+  data?: string;
+  /** MIME 类型（如 audio/mp3, audio/wav） */
+  mimeType?: string;
+  /** 音频时长（秒） */
+  durationSeconds?: number;
+}
+
+/**
+ * 视频内容块
+ */
+export interface VideoBlock {
+  type: 'video';
+  /** 视频 URL */
+  url?: string;
+  /** Base64 编码的视频数据 */
+  data?: string;
+  /** MIME 类型（如 video/mp4） */
+  mimeType?: string;
+  /** 视频时长（秒） */
+  durationSeconds?: number;
+}
+
+/**
+ * 文件内容块
+ */
+export interface FileBlock {
+  type: 'file';
+  /** 文件 URL */
+  url?: string;
+  /** Base64 编码的文件数据 */
+  data?: string;
+  /** 文件名 */
+  name?: string;
+  /** MIME 类型 */
+  mimeType?: string;
+  /** 文件大小（字节） */
+  sizeBytes?: number;
+}
+
+/**
+ * 内容块联合类型
+ *
+ * 支持多模态消息：文本、图片、音频、视频、文件。
+ * 向后兼容：Message.content 仍可以是纯字符串。
+ */
+export type ContentBlock = TextBlock | ImageBlock | AudioBlock | VideoBlock | FileBlock;
+
 /**
  * 工具调用请求（LLM 返回的 tool_calls）
  */
@@ -65,12 +145,14 @@ export interface ToolResult {
 
 /**
  * 核心消息结构
+ *
+ * 支持多模态内容：content 可以是纯字符串（向后兼容）或 ContentBlock 数组。
  */
 export interface Message {
   /** 消息角色 */
   role: MessageRole;
-  /** 消息内容（文本） */
-  content: string;
+  /** 消息内容：纯字符串（向后兼容）或多模态内容块数组 */
+  content: string | ContentBlock[];
   /** 消息来源（user 消息才有） */
   source?: MessageSource;
   /** LLM 请求的工具调用（assistant 消息才有） */
@@ -81,6 +163,27 @@ export interface Message {
   timestamp: number;
   /** 扩展元数据 */
   metadata?: Record<string, unknown>;
+}
+
+/**
+ * 从消息内容中提取纯文本
+ *
+ * 向后兼容工具：处理 string 和 ContentBlock[] 两种格式。
+ */
+export function getTextContent(content: string | ContentBlock[]): string {
+  if (typeof content === 'string') return content;
+  return content
+    .filter((block): block is TextBlock => block.type === 'text')
+    .map(block => block.text)
+    .join('');
+}
+
+/**
+ * 检查消息内容是否包含非文本块（图片、音频等）
+ */
+export function hasMediaContent(content: string | ContentBlock[]): boolean {
+  if (typeof content === 'string') return false;
+  return content.some(block => block.type !== 'text');
 }
 
 // ============================================================
@@ -268,45 +371,7 @@ export interface SkillManager {
 }
 
 // ============================================================
-// 7. LLM Provider（向后兼容）
-// ============================================================
-
-/**
- * LLM 请求（向后兼容）
- */
-export interface LLMRequest {
-  model: string;
-  messages: Array<Record<string, unknown>>;
-  tools?: unknown[];
-  temperature?: number;
-  maxTokens?: number;
-  stream?: boolean;
-}
-
-/**
- * LLM 响应（向后兼容）
- */
-export interface LLMResponse {
-  content: string;
-  toolCalls?: ToolCall[];
-  usage?: TokenUsage;
-  model: string;
-  finishReason: 'stop' | 'tool_calls' | 'length' | 'error';
-}
-
-/**
- * LLM Provider 接口（向后兼容）
- */
-export interface LLMProvider {
-  name: string;
-  models: string[];
-  complete(request: LLMRequest): Promise<LLMResponse>;
-  stream?(request: LLMRequest): AsyncIterable<LLMResponse>;
-  healthCheck?(): Promise<boolean>;
-}
-
-// ============================================================
-// 8. Channel Adapter
+// 7. Channel Adapter
 // ============================================================
 
 export interface ChannelMessage {
@@ -336,7 +401,7 @@ export interface ChannelAdapter {
 }
 
 // ============================================================
-// 9. Plugin Hooks
+// 8. Plugin Hooks
 // ============================================================
 
 export interface HookContext {
@@ -346,7 +411,7 @@ export interface HookContext {
 }
 
 // ============================================================
-// 10. Agent Event（向后兼容）
+// 9. Agent Event
 // ============================================================
 
 export type LoopEndReason =
@@ -385,7 +450,7 @@ export type AgentEvent =
   | { type: 'degrade_mode'; reason: string; config: unknown };
 
 // ============================================================
-// 11. Error Classification
+// 10. Error Classification
 // ============================================================
 
 export type ErrorReason =
@@ -409,7 +474,7 @@ export interface ClassifiedError {
 }
 
 // ============================================================
-// 12. Context Engine（向后兼容）
+// 11. Context Engine
 // ============================================================
 
 export interface AssembleResult {
@@ -445,7 +510,7 @@ export interface ContextEngine {
 }
 
 // ============================================================
-// 13. Gateway 配置
+// 12. Gateway 配置
 // ============================================================
 
 export interface GatewayConfig {
@@ -465,70 +530,17 @@ export interface GatewayConfig {
   };
 }
 
-// ============================================================
-// 14. Message Converter
-// ============================================================
-
-export interface LLMMessage {
-  role: string;
-  content: string | null;
-  tool_calls?: Array<{
-    id: string;
-    type: 'function';
-    function: { name: string; arguments: string };
-  }>;
-  tool_call_id?: string;
-  name?: string;
-}
-
-export interface MessageConverter {
-  toLlm(messages: Message[], stripMeta?: boolean): LLMMessage[];
-  fromLlm(message: LLMMessage): Message;
-}
-
-// ============================================================
-// 15. Agent Loop Config（向后兼容）
-// ============================================================
-
-export interface RetryConfig {
-  maxRetries: number;
-  baseDelayMs: number;
-  maxDelayMs: number;
-}
-
-export interface AgentLoopConfig {
-  provider: LLMProvider;
-  agentId: string;
-  workspace?: string;
-  systemPrompt?: string;
-  contextEngine: ContextEngine;
-  toolRegistry: {
-    getDefinitions(): unknown[];
-    execute(name: string, args: unknown, ctx: unknown): Promise<{ result?: unknown; error?: string }>;
-  };
-  messageConverter: MessageConverter;
-  pluginManager?: import('../harness/plugins/manager.js').PluginManager;
-  skillManager?: SkillManager;
-  defaultModel: string;
-  maxTurns: number;
-  iterationBudget: number;
-  maxConsecutiveErrors: number;
-  retry: RetryConfig;
-  onEvent?: (event: AgentEvent) => void;
-  onSteering?: () => Promise<Message[]>;
-}
-
 export type AgentEventListener = (event: AgentEvent) => void | Promise<void>;
 
 // ============================================================
-// 16. Queue Mode
+// 13. Queue Mode
 // ============================================================
 
 /** 队列模式 */
 export type QueueMode = 'steer' | 'followup' | 'collect' | 'interrupt';
 
 // ============================================================
-// 17. Thinking Level
+// 14. Thinking Level
 // ============================================================
 
 export type ThinkingLevel = 'off' | 'low' | 'medium' | 'high';

@@ -631,8 +631,8 @@ export class PluginManager {
   /**
    * 获取所有已注册的 providers
    */
-  getProviders(): Array<{ pluginId: string; id: string; provider: import('../../core/types.js').LLMProvider }> {
-    const result: Array<{ pluginId: string; id: string; provider: import('../../core/types.js').LLMProvider }> = [];
+  getProviders(): Array<{ pluginId: string; id: string; provider: import('../../core/interfaces/model-provider.js').ModelProvider }> {
+    const result: Array<{ pluginId: string; id: string; provider: import('../../core/interfaces/model-provider.js').ModelProvider }> = [];
     for (const plugin of this.loader.getAllPlugins()) {
       if (!plugin.registered) continue;
       for (const reg of plugin.api._providers) {
