@@ -10,11 +10,25 @@
 
 ---
 
+## The Future of Software
+
+What will the future look like? What will future software look like?
+
+The way users interact with systems may change fundamentally. The logic that drives systems may change. A large portion of business logic may no longer be code-driven, but LLM-driven. But LLMs are fundamentally stateless content generation models — they may know all the world's knowledge, yet they don't know the specifics of your work, and they can't directly read or write data on your computer. To make an LLM truly work for you, it needs **senses** — to perceive your environment and context; it needs **hands** — to operate files, call APIs, execute commands; it needs **memory** — to remember who you are, what you've done, and what you prefer.
+
+So how will software evolve? Will rich graphical interfaces simply be replaced by a chat window?
+
+We don't think so. Graphical interfaces still offer irreplaceable advantages in information density, interaction efficiency, and operational convenience. A well-designed dashboard, a structured data table, a smooth drag-and-drop workflow — none of these are easily replaced by a chat box.
+
+**Future software shouldn't replace all interfaces with chat windows and wait for LLMs to generate answers word by word.** Instead, it should integrate AI capabilities as part of the system, seamlessly. AI can handle ops monitoring, data analysis, content moderation, workflow orchestration, intelligent decision-making — but all of this requires a foundation: your system needs an agent runtime that is powerful enough, stable, secure, and highly extensible.
+
+---
+
 ## Why Octopi
 
 Most agent frameworks give you a monolith: a fixed agent loop, a fixed session model, a fixed set of integrations. You can use them as-is, but the moment you need something different — a custom context pipeline, a different storage backend, an embedded agent inside your own product — you're fighting the framework.
 
-Octopi takes a different approach. It's a **runtime toolkit** built from first principles:
+Octopi takes a different approach. It's an **embeddable agent runtime** built from first principles:
 
 - **AgentEngine** — a stateless message loop (input → context assembly → model inference → tool execution → output)
 - **Session management** — lifecycle, persistence, concurrency control, all pluggable
@@ -24,6 +38,34 @@ Octopi takes a different approach. It's a **runtime toolkit** built from first p
 - **Security built-in** — injection detection, sensitive data filtering, trust levels — not optional, not removable
 
 Use it to build a CLI bot, a web app AI backend, an embedded assistant, or something you haven't imagined yet.
+
+---
+
+## Core Philosophy
+
+### Agent is a runtime, not a class
+
+An agent is not an object you can `new` up. It's a complete runtime scope: workspace, session store, tool set, model configuration, persona definition — these together constitute an agent. The framework provides the engine and mechanisms; the integrator provides the policies and business logic.
+
+### Kernel and Harness separation
+
+The framework is split into two layers: the **Core** provides mechanisms — message loop, event bus, security guard, resource constraints; the **Harness** provides policies — persona, plugins, skills, task planning. The core never knows about the harness; the harness mounts onto the core through interfaces. This means you can write a minimal agent using just the core, or build a complex autonomous system with the full harness.
+
+### Session is a first-class citizen
+
+All state belongs to the session, not the agent. The agent engine itself is stateless — it takes messages and returns results. The lifecycle, persistence method, and concurrency control of state are all determined by the session layer. This allows the same engine to serve stateless API calls or power long-running conversational agents.
+
+### Interfaces > default implementations
+
+A framework's value lies not in how many defaults it ships, but in how many clean interfaces it defines. `ModelProvider` lets you swap LLM vendors by implementing one interface; `SessionStore` lets you change storage backends without touching any upper-layer logic; `ContextPipeline` lets you freely compose every stage of context assembly. Good interfaces are a framework's most precious asset.
+
+### Security is not optional
+
+Injection detection, sensitive data filtering, resource consumption constraints — these are not configuration toggles, but built-in constraints of the framework. The more powerful agents become, the less security can rely on developer discipline.
+
+### Files as configuration
+
+Persona, skills, operating instructions — all defined as Markdown files. No schema, no config format. Extension = add a file. Composition = overlay directories. This is one of the most elegant designs we learned from OpenClaw: expressing the most flexible configuration in the simplest form.
 
 ---
 
