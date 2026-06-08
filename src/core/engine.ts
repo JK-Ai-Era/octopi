@@ -51,6 +51,13 @@ import type {
   ErrorStrategy,
   ClassifiedError,
 } from './interfaces/error-strategy.js';
+import type {
+  TaskSupervisor,
+  CheckpointContext,
+  CheckpointVerdict,
+  TurnSummary,
+  RecoveryAction,
+} from './interfaces/task-supervisor.js';
 import type { Observer } from './interfaces/observer.js';
 import type { EventBus } from './event-bus.js';
 import { AgentEvents } from './event-bus.js';
@@ -82,6 +89,10 @@ export interface AgentEngineDeps {
   observer?: Observer;
   /** 默认系统提示词（RunConfig.systemPrompt 优先） */
   systemPrompt?: string;
+  /** 任务监督器（可选，替代硬预算限制） */
+  taskSupervisor?: TaskSupervisor;
+  /** 检查点间隔（迭代数，默认 15） */
+  checkpointInterval?: number;
 }
 
 /** 运行配置 */
@@ -127,6 +138,20 @@ export class AgentEngine {
   /** 依赖（供 Harness 层访问） */
   readonly deps: AgentEngineDeps;
 
+  /** 上下文是否已被截断（防止重复截断） */
+  private contextTruncated = false;
+
+  // ── 检查点追踪状态 ──
+  private checkpointIterationCount = 0;
+  private currentCheckpointInterval = 15;
+  private consecutiveErrors = 0;
+  private consecutiveSameTool = 0;
+  private lastToolName?: string;
+  private turnSummaries: TurnSummary[] = [];
+  private recentToolCalls: Array<{ name: string; success: boolean }> = [];
+  private tokensAtCheckpoint = 0;
+  private uniqueTools = new Set<string>();
+
   constructor(deps: AgentEngineDeps) {
     this.deps = deps;
   }
@@ -148,6 +173,16 @@ export class AgentEngine {
     const agentId = config.agentId ?? 'default';
     const sessionId = config.sessionId ?? 'inline';
     this.currentCwd = config.cwd;
+    this.contextTruncated = false;
+    this.checkpointIterationCount = 0;
+    this.currentCheckpointInterval = this.deps.checkpointInterval ?? 15;
+    this.consecutiveErrors = 0;
+    this.consecutiveSameTool = 0;
+    this.lastToolName = undefined;
+    this.turnSummaries = [];
+    this.recentToolCalls = [];
+    this.tokensAtCheckpoint = 0;
+    this.uniqueTools = new Set();
 
     // 发射引擎启动事件
     events.emit({ type: AgentEvents.ENGINE_START, timestamp: Date.now(), agentId, sessionId });
@@ -278,6 +313,23 @@ export class AgentEngine {
             modelSpan?.end();
 
             const classified = this.classifyError(err);
+
+            // ── context_length 特殊处理：尝试截断历史后重试 ──
+            if (classified.reason === 'context_length' && !this.contextTruncated) {
+              const originalLen = messages.length;
+              const truncated = this.truncateMessages(messages);
+              if (truncated) {
+                this.contextTruncated = true;
+                yield {
+                  type: 'context.truncated',
+                  timestamp: Date.now(),
+                  data: { from: originalLen, to: messages.length },
+                };
+                // 回到循环开头，用截断后的消息重新调用模型
+                continue;
+              }
+            }
+
             const action = errorStrategy.onModelError(classified, iteration - 1);
 
             events.emit({ type: AgentEvents.MODEL_CALL_ERROR, timestamp: Date.now(), data: { error: classified } });
@@ -453,6 +505,34 @@ export class AgentEngine {
               toolResults,
               timestamp: Date.now(),
             });
+
+            // ── 追踪检查点指标 ──
+            this.trackToolResults(llmResponse.toolCalls, toolResults, llmResponse.usage);
+
+            // ── 检查点审查 ──
+            const checkpointVerdict = await this.maybeCheckpoint(iteration, config);
+            if (checkpointVerdict) {
+              yield {
+                type: 'checkpoint',
+                timestamp: Date.now(),
+                data: { verdict: checkpointVerdict, iteration } as unknown as Record<string, unknown>,
+              };
+              if (checkpointVerdict.action === 'stop') {
+                yield {
+                  type: 'checkpoint.stop',
+                  timestamp: Date.now(),
+                  data: { reason: checkpointVerdict.reason, userMessage: checkpointVerdict.userMessage } as unknown as Record<string, unknown>,
+                };
+                return;
+              }
+              if (checkpointVerdict.action === 'recover' && checkpointVerdict.recoveryActions) {
+                this.executeRecoveryActions(checkpointVerdict.recoveryActions, messages);
+              }
+              // 调整下一次检查间隔
+              if (checkpointVerdict.nextCheckpointIn) {
+                this.currentCheckpointInterval = checkpointVerdict.nextCheckpointIn;
+              }
+            }
 
             // 继续循环（让 LLM 看到工具结果）
             continue;
@@ -741,6 +821,214 @@ export class AgentEngine {
       }
     }
     return undefined;
+  }
+
+  // ── 检查点方法 ──
+
+  /**
+   * 追踪工具执行结果（更新检查点指标）
+   */
+  private trackToolResults(
+    toolCalls: ToolCall[],
+    toolResults: ToolResult[],
+    usage: { totalTokens: number } | undefined,
+  ): void {
+    for (let i = 0; i < toolCalls.length; i++) {
+      const call = toolCalls[i];
+      const result = toolResults[i];
+      const success = !result?.error;
+
+      // 追踪连续同一工具
+      if (call.name === this.lastToolName) {
+        this.consecutiveSameTool++;
+      } else {
+        this.consecutiveSameTool = 1;
+        this.lastToolName = call.name;
+      }
+
+      // 追踪唯一工具
+      this.uniqueTools.add(call.name);
+
+      // 追踪最近工具调用（滑动窗口 10）
+      this.recentToolCalls.push({ name: call.name, success });
+      if (this.recentToolCalls.length > 10) {
+        this.recentToolCalls.shift();
+      }
+
+      // 追踪连续错误
+      if (success) {
+        this.consecutiveErrors = 0;
+      } else {
+        this.consecutiveErrors++;
+      }
+    }
+
+    // 追踪 turn 摘要
+    const tokenDelta = usage?.totalTokens ?? 0;
+    const toolErrors = toolResults.filter(r => r.error).map(r => r.name);
+    this.turnSummaries.push({
+      role: 'assistant',
+      contentPreview: '',
+      toolCalls: toolCalls.map(c => c.name),
+      toolErrors: toolErrors.length > 0 ? toolErrors : undefined,
+      tokenDelta,
+      timestamp: Date.now(),
+    });
+    // 只保留最近 10 轮摘要
+    if (this.turnSummaries.length > 10) {
+      this.turnSummaries = this.turnSummaries.slice(-10);
+    }
+  }
+
+  /**
+   * 判断是否需要检查点审查，并在需要时执行
+   */
+  private async maybeCheckpoint(
+    _iteration: number,
+    config: RunConfig,
+  ): Promise<CheckpointVerdict | null> {
+    const supervisor = this.deps.taskSupervisor;
+    if (!supervisor) return null;
+
+    this.checkpointIterationCount++;
+
+    // 未到检查点间隔
+    if (this.checkpointIterationCount < this.currentCheckpointInterval) {
+      return null;
+    }
+
+    // 重置计数
+    this.checkpointIterationCount = 0;
+
+    // 构建检查点上下文
+    const ctx = this.buildCheckpointContext(config);
+
+    // 调用监督节点
+    try {
+      const verdict = await supervisor.checkpoint(ctx);
+
+      // 根据裁决调整连续错误计数
+      if (verdict.action === 'continue') {
+        this.consecutiveErrors = 0;
+      }
+
+      return verdict;
+    } catch {
+      // 监督节点本身出错，不影响主循环
+      return null;
+    }
+  }
+
+  /**
+   * 构建检查点上下文
+   */
+  private buildCheckpointContext(config: RunConfig): CheckpointContext {
+    const budget = this.deps.budget;
+    const report = budget.report();
+
+    // 计算 token 增长率
+    const currentTokens = report.totalTokens;
+    const tokenGrowthRate = this.tokensAtCheckpoint > 0
+      ? (currentTokens - this.tokensAtCheckpoint) / this.tokensAtCheckpoint
+      : 0;
+    this.tokensAtCheckpoint = currentTokens;
+
+    // 计算工具失败率
+    const recentFailures = this.recentToolCalls.filter(t => !t.success).length;
+    const toolFailureRate = this.recentToolCalls.length > 0
+      ? recentFailures / this.recentToolCalls.length
+      : 0;
+
+    // 判断是否有进展（最近 3 轮有新工具调用或新内容）
+    const recentSummaries = this.turnSummaries.slice(-3);
+    const hasProgress = recentSummaries.some(s =>
+      (s.toolCalls && s.toolCalls.length > 0) || s.contentPreview.length > 0
+    );
+
+    return {
+      sessionId: config.sessionId ?? 'inline',
+      agentId: config.agentId ?? 'default',
+      iteration: report.iterations,
+      totalToolCalls: report.toolCalls,
+      totalTokens: report.totalTokens,
+      elapsedMs: report.elapsedMs,
+      recentSummaries: this.turnSummaries.slice(-5),
+      metrics: {
+        consecutiveErrors: this.consecutiveErrors,
+        consecutiveSameTool: this.consecutiveSameTool,
+        tokenGrowthRate,
+        toolFailureRate,
+        uniqueToolsUsed: this.uniqueTools.size,
+        hasProgress,
+      },
+    };
+  }
+
+  /**
+   * 执行恢复动作
+   */
+  private executeRecoveryActions(actions: RecoveryAction[], messages: Message[]): void {
+    for (const action of actions) {
+      switch (action.type) {
+        case 'truncate_context':
+          this.truncateMessages(messages, action.keepRecent);
+          break;
+        case 'inject_hint':
+          messages.push({
+            role: 'user',
+            content: `[System: ${action.hint}]`,
+            timestamp: Date.now(),
+          });
+          break;
+        case 'clear_recent_turns':
+          const removeCount = action.count * 2;
+          if (messages.length > removeCount) {
+            messages.splice(-removeCount, removeCount);
+          }
+          break;
+      }
+    }
+  }
+
+  /**
+   * 截断消息历史（应对 context_length 错误或监督节点恢复动作）
+   *
+   * 策略：保留 system 消息 + 最近的 keepRecent 条非 system 消息，
+   * 丢弃中间的历史。
+   * 返回 true 如果成功截断，false 如果无法进一步截断。
+   *
+   * 直接修改 messages 数组（引擎不持有状态，调用方传入的引用）。
+   */
+  private truncateMessages(messages: Message[], keepRecent = 8): boolean {
+    // 找到 system 消息的数量（通常在最前面）
+    let systemEnd = 0;
+    while (systemEnd < messages.length && messages[systemEnd].role === 'system') {
+      systemEnd++;
+    }
+
+    const nonSystemCount = messages.length - systemEnd;
+    // 至少保留最近 4 条非 system 消息（1 轮 user+assistant+tool 交互）
+    const minKeep = 4;
+    if (nonSystemCount <= minKeep) {
+      return false; // 无法进一步截断
+    }
+
+    // 使用参数指定的保留数量，不超过实际消息数
+    const actualKeep = Math.min(keepRecent, nonSystemCount);
+    const removeCount = nonSystemCount - actualKeep;
+    if (removeCount <= 0) return false;
+
+    // 插入一条摘要消息代替被删除的历史
+    const summary: Message = {
+      role: 'user',
+      content: `[System: ${removeCount} earlier messages omitted to fit context window. Conversation continues from here.]`,
+      timestamp: Date.now(),
+    };
+
+    // 执行截断：system + summary + 最近消息
+    messages.splice(systemEnd, removeCount, summary);
+
+    return true;
   }
 
   /**

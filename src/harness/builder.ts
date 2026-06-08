@@ -38,6 +38,11 @@ import type {
   SecurityAction,
 } from '../core/interfaces/error-strategy.js';
 import type {
+  TaskSupervisor,
+} from '../core/interfaces/task-supervisor.js';
+import type { TaskSupervisorConfig } from './supervisor/task-supervisor.js';
+import { DefaultTaskSupervisor } from './supervisor/task-supervisor.js';
+import type {
   Observer,
 } from '../core/interfaces/observer.js';
 import type {
@@ -72,19 +77,38 @@ import type { SessionAwareRunnerConfig } from './runner.js';
 /** 默认错误策略（简单重试 + 中止） */
 class DefaultErrorStrategy implements ErrorStrategy {
   onModelError(error: ClassifiedError, attempt: number): ErrorAction {
+    // ── 可重试错误：限流、超时、网络、服务端 ──
     if (error.reason === 'rate_limit' && attempt < 3) {
-      // 优先使用服务端返回的 retry-after，否则用指数退避
       const delayMs = error.retryAfterMs ?? (attempt + 1) * 1000;
       return { action: 'retry', delayMs };
     }
-    if (error.reason === 'timeout' && attempt < 2) {
-      return { action: 'retry', delayMs: 500 };
+    if (error.reason === 'timeout' && attempt < 3) {
+      return { action: 'retry', delayMs: (attempt + 1) * 1000 };
     }
+    if (error.reason === 'network' && attempt < 3) {
+      return { action: 'retry', delayMs: (attempt + 1) * 1500 };
+    }
+    if (error.reason === 'server' && attempt < 2) {
+      return { action: 'retry', delayMs: (attempt + 1) * 2000 };
+    }
+    // ── context_length：由引擎尝试 compact，这里返回 abort 让引擎决定 ──
+    if (error.reason === 'context_length') {
+      return { action: 'abort', reason: `Context length exceeded: ${error.message}` };
+    }
+    // ── 不可重试错误：认证、计费 ──
+    if (error.reason === 'auth') {
+      return { action: 'abort', reason: `Authentication failed: ${error.message}` };
+    }
+    if (error.reason === 'billing') {
+      return { action: 'abort', reason: `Billing issue: ${error.message}` };
+    }
+    // ── 默认：终止 ──
     return { action: 'abort', reason: error.message };
   }
 
-  onToolError(_error: ClassifiedError, _call: any): ErrorAction {
-    return { action: 'skip', reason: 'Tool execution failed' };
+  onToolError(error: ClassifiedError, _call: any): ErrorAction {
+    // 工具错误默认跳过，让 LLM 看到错误信息后自行调整
+    return { action: 'skip', reason: error.message || 'Tool execution failed' };
   }
 
   onContextOverflow(_tokenCount: number, _limit: number): OverflowAction {
@@ -157,6 +181,9 @@ export class AgentBuilder {
   private _budget?: IterationBudget;
   private _errorStrategy?: ErrorStrategy;
   private _observer?: Observer;
+  private _taskSupervisor?: TaskSupervisor;
+  private _taskSupervisorConfig?: TaskSupervisorConfig;
+  private _checkpointInterval?: number;
 
   // Harness 组件
   private _personaWorkspaces: string[] = [];
@@ -254,6 +281,25 @@ export class AgentBuilder {
     return this;
   }
 
+  /** 设置任务监督器（自动创建，使用主模型做 LLM 审查） */
+  taskSupervisor(config?: TaskSupervisorConfig): this;
+  /** 设置任务监督器（手动传入实例） */
+  taskSupervisor(supervisor: TaskSupervisor, checkpointInterval?: number): this;
+  taskSupervisor(supervisorOrConfig?: TaskSupervisor | TaskSupervisorConfig, checkpointInterval?: number): this {
+    if (!supervisorOrConfig) {
+      // 无参调用：使用默认配置自动创建，延迟到 buildEngine 时注入 model
+      this._taskSupervisorConfig = {};
+    } else if ('checkpointInterval' in supervisorOrConfig || 'enableLLMReview' in supervisorOrConfig || 'hardLimit' in supervisorOrConfig) {
+      // TaskSupervisorConfig 对象：延迟到 buildEngine 时注入 model
+      this._taskSupervisorConfig = supervisorOrConfig as TaskSupervisorConfig;
+    } else {
+      // TaskSupervisor 实例：直接使用
+      this._taskSupervisor = supervisorOrConfig as TaskSupervisor;
+    }
+    if (checkpointInterval !== undefined) this._checkpointInterval = checkpointInterval;
+    return this;
+  }
+
   // ── Harness 组件 ──
 
   /** 加载 persona 目录 */
@@ -333,6 +379,12 @@ export class AgentBuilder {
     const context = this._context ?? new DefaultContextPipeline(this._contextStages);
     const executor = this._executor ?? new DefaultToolExecutor(this._tools);
 
+    // 自动创建 TaskSupervisor（如果通过 config 配置但未手动传入实例）
+    const taskSupervisor = this._taskSupervisor
+      ?? (this._taskSupervisorConfig !== undefined
+        ? new DefaultTaskSupervisor(this._taskSupervisorConfig, this._model)
+        : undefined);
+
     // 注入 systemPrompt 到引擎的运行时配置
     // AgentEngine 本身不存储 systemPrompt，由调用方在 run() 时传入
     const deps: AgentEngineDeps = {
@@ -346,6 +398,8 @@ export class AgentBuilder {
       errorStrategy,
       observer: this._observer,
       systemPrompt,
+      taskSupervisor,
+      checkpointInterval: this._checkpointInterval,
     };
 
     return new AgentEngine(deps);

@@ -84,3 +84,13 @@ export type {
   AgentRelationType,
 } from './agent-registry.js';
 export { AgentRegistryEvents } from './agent-registry.js';
+
+export type {
+  TaskSupervisor,
+  CheckpointContext,
+  CheckpointVerdict,
+  CheckpointAction,
+  CheckpointMetrics,
+  TurnSummary,
+  RecoveryAction,
+} from './task-supervisor.js';

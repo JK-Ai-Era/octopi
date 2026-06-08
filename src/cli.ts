@@ -266,6 +266,16 @@ async function chatCommand(args: CliArgs): Promise<void> {
     builder.tool(tool);
   }
 
+  // 配置 TaskSupervisor
+  if (config.supervisor?.enabled !== false) {
+    const supervisorCfg = { ...config.supervisor };
+    // llmModel 格式: "provider/model" → 提取 model 部分
+    if (supervisorCfg.llmModel?.includes('/')) {
+      supervisorCfg.llmModel = supervisorCfg.llmModel.split('/')[1];
+    }
+    builder.taskSupervisor(supervisorCfg);
+  }
+
   const { engine, runner } = await builder.build();
 
   // 每次 CLI 启动生成唯一 session，避免跨重启的上下文错乱
@@ -336,6 +346,7 @@ async function chatCommand(args: CliArgs): Promise<void> {
         };
 
         let finalContent = '';
+        let engineTerminated = false;
         for await (const event of runner.handle(sessionIdRef.current, userMessage, runConfig)) {
           if (event.type === 'model.call.start') {
             if (!hasShownThinking) {
@@ -355,17 +366,57 @@ async function chatCommand(args: CliArgs): Promise<void> {
             process.stdout.write(`  ✅ Done (${event.data?.durationMs ?? '?'}ms)\n`);
           } else if (event.type === 'turn.end') {
             finalContent = (event.data?.content as string) ?? '';
+          } else if (event.type === 'budget.exceeded') {
+            engineTerminated = true;
+            const report = event.data as any;
+            const status = report?.status ?? 'unknown';
+            const detail = report?.report;
+            if (streamedContent) process.stdout.write('\n');
+            console.log(`\n  ⛔ 预算耗尽: ${status}`);
+            if (detail) {
+              console.log(`     迭代: ${detail.iterations}/${detail.iterations + (detail.remaining?.iterations ?? 0)}`);
+              console.log(`     工具调用: ${detail.toolCalls}/${detail.toolCalls + (detail.remaining?.toolCalls ?? 0)}`);
+              console.log(`     耗时: ${Math.round(detail.elapsedMs / 1000)}s`);
+            }
+            console.log('     使用 /new 开始新会话，或继续对话（上下文已保留）\n');
+          } else if (event.type === 'engine.error') {
+            engineTerminated = true;
+            const errorData = event.data as any;
+            const errorMsg = errorData?.error ?? 'unknown error';
+            if (streamedContent) process.stdout.write('\n');
+            console.log(`\n  ❌ 引擎错误: ${errorMsg}`);
+            console.log('     使用 /new 开始新会话，或重新输入重试\n');
+          } else if (event.type === 'context.truncated') {
+            const data = event.data as any;
+            console.log(`\n  ✂️  上下文过长，已自动截断 (${data?.from} → ${data?.to} 条消息)，重试中...`);
+          } else if (event.type === 'checkpoint') {
+            const data = event.data as any;
+            const verdict = data?.verdict;
+            if (verdict?.action === 'recover') {
+              console.log(`\n  🔄 检查点审查: ${verdict.reason}`);
+            }
+          } else if (event.type === 'checkpoint.stop') {
+            engineTerminated = true;
+            const data = event.data as any;
+            if (streamedContent) process.stdout.write('\n');
+            console.log(`\n  🛑 任务监督器终止: ${data?.reason ?? '未知原因'}`);
+            if (data?.userMessage) {
+              console.log(`     ${data.userMessage}`);
+            }
+            console.log('');
           }
         }
 
         // 流式内容已实时输出，补换行；否则用 finalContent 回显
-        const displayContent = streamedContent || finalContent;
-        if (streamedContent) {
-          process.stdout.write('\n');
-        } else if (displayContent) {
-          console.log(`\n  ${displayContent}`);
-        } else {
-          console.log('\n  ⚠️  Empty response from model. This may be a streaming issue or model quirk.\n     Try rephrasing your message or use /new to start a fresh session.\n');
+        if (!engineTerminated) {
+          const displayContent = streamedContent || finalContent;
+          if (streamedContent) {
+            process.stdout.write('\n');
+          } else if (displayContent) {
+            console.log(`\n  ${displayContent}`);
+          } else {
+            console.log('\n  ⚠️  Empty response from model. This may be a streaming issue or model quirk.\n     Try rephrasing your message or use /new to start a fresh session.\n');
+          }
         }
       } catch (error) {
         console.error(`\n[Error] ${error instanceof Error ? error.message : String(error)}\n`);

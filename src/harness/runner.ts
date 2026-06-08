@@ -88,11 +88,22 @@ export class SessionAwareRunner {
       session.meta.status = 'processing';
 
       // 5. 运行 AgentEngine
+      let hasTurnEnd = false;
+      let streamedContent = '';
+      let lastUsage: any = undefined;
+
       for await (const event of this.engine.run(session.messages, runConfig, signal)) {
         yield event;
 
+        // 收集流式内容（用于引擎异常退出时的 fallback）
+        if (event.type === 'llm_stream_delta' && event.data?.delta) {
+          streamedContent += event.data.delta as string;
+        }
+
         // 如果是 turn.end，记录 turn
         if (event.type === 'turn.end' && event.data) {
+          hasTurnEnd = true;
+          lastUsage = event.data.usage;
           const turn: Turn = {
             id: `turn_${Date.now()}`,
             input: session.messages.slice(0, -1),
@@ -117,7 +128,36 @@ export class SessionAwareRunner {
         }
       }
 
-      // 6. 持久化
+      // 6. 引擎异常退出时的 session 一致性修复
+      //    如果引擎以 budget.exceeded 或 engine.error 退出，没有 yield turn.end，
+      //    需要将已流式输出的内容保存到 session，避免下次加载时上下文断裂。
+      if (!hasTurnEnd) {
+        const fallbackContent = streamedContent || '';
+        if (fallbackContent) {
+          // 有流式内容但没有 turn.end → 保存为 assistant 消息
+          session.messages.push({
+            role: 'assistant',
+            content: fallbackContent,
+            timestamp: Date.now(),
+          });
+          session.turns.push({
+            id: `turn_${Date.now()}`,
+            input: session.messages.slice(0, -1),
+            output: {
+              role: 'assistant',
+              content: fallbackContent,
+              timestamp: Date.now(),
+            },
+            usage: lastUsage,
+            durationMs: 0,
+            model: runConfig.model ?? 'unknown',
+            timestamp: Date.now(),
+          });
+        }
+        // 即使没有内容，也标记 session 状态，不让它卡在 'processing'
+      }
+
+      // 7. 持久化
       session.meta.status = 'idle';
       session.meta.updatedAt = Date.now();
       await this.store.save(sessionId, session);

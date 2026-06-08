@@ -24,6 +24,9 @@ import type { AgentEngine } from '../core/engine.js';
 import type { SessionAwareRunner } from './runner.js';
 import { SecurityPresets } from './security/policy.js';
 import type { SecurityGuardConfig } from '../core/security-guard.js';
+import type { SupervisorConfig } from '../config.js';
+import { DefaultTaskSupervisor } from './supervisor/task-supervisor.js';
+import type { TaskSupervisorConfig } from './supervisor/task-supervisor.js';
 
 // ── 结果类型 ──
 
@@ -88,6 +91,53 @@ export function resolveSecurityConfig(config: HarnessConfig): SecurityGuardConfi
   return undefined;
 }
 
+// ── Supervisor 解析 ──
+
+/**
+ * 从配置中解析 TaskSupervisor
+ *
+ * 解析 llmModel 字段：
+ * - "model" → 使用主 provider
+ * - "provider/model" → 使用指定 provider
+ */
+export function resolveSupervisor(
+  config: SupervisorConfig | undefined,
+  providers: Map<string, ModelProvider>,
+): DefaultTaskSupervisor | undefined {
+  if (!config || config.enabled === false) return undefined;
+
+  // 解析审查用模型
+  let reviewModel: ModelProvider | undefined;
+  if (config.llmModel) {
+    const parts = config.llmModel.split('/');
+    if (parts.length === 2) {
+      // 格式: "provider/model"
+      const providerName = parts[0];
+      reviewModel = providers.get(providerName);
+      // 将 llmModel 改为只保留 model 部分
+      config = { ...config, llmModel: parts[1] };
+    } else {
+      // 格式: "model" → 使用第一个 provider
+      reviewModel = providers.values().next().value;
+    }
+  }
+
+  // 构建 TaskSupervisorConfig
+  const supervisorConfig: TaskSupervisorConfig = {
+    enabled: true,
+    checkpointInterval: config.checkpointInterval,
+    minCheckpointInterval: config.minCheckpointInterval,
+    maxCheckpointInterval: config.maxCheckpointInterval,
+    enableLLMReview: config.enableLLMReview,
+    llmReviewInterval: config.llmReviewInterval,
+    llmModel: config.llmModel,
+    hardLimit: config.hardLimit,
+    hardWallClockMs: config.hardWallClockMs,
+  };
+
+  return new DefaultTaskSupervisor(supervisorConfig, reviewModel);
+}
+
 // ── 核心桥接函数 ──
 
 /**
@@ -105,6 +155,7 @@ export async function buildFromConfig(config: HarnessConfig): Promise<Map<string
   const store = await resolveStore(config);
   const securityConfig = resolveSecurityConfig(config);
   const budgetConfig = config.budget;
+  const supervisorConfig = config.supervisor;
 
   // 2. 为每个 agent 构建
   const agents = new Map<string, BuiltAgent>();
@@ -116,6 +167,7 @@ export async function buildFromConfig(config: HarnessConfig): Promise<Map<string
         store,
         securityConfig,
         budgetConfig,
+        supervisorConfig,
       });
       agents.set(agentConfig.id, built);
     } catch (err) {
@@ -137,6 +189,7 @@ async function buildAgent(
     store?: SessionStore;
     securityConfig?: SecurityGuardConfig;
     budgetConfig?: Partial<IterationBudgetConfig>;
+    supervisorConfig?: SupervisorConfig;
   },
 ): Promise<BuiltAgent> {
   const builder = new AgentBuilder();
@@ -179,6 +232,14 @@ async function buildAgent(
   // ── Budget ──
   if (shared.budgetConfig) {
     builder.budget(shared.budgetConfig);
+  }
+
+  // ── Supervisor ──
+  if (shared.supervisorConfig?.enabled !== false) {
+    const supervisor = resolveSupervisor(shared.supervisorConfig, shared.providers);
+    if (supervisor) {
+      builder.taskSupervisor(supervisor);
+    }
   }
 
   // ── Build ──

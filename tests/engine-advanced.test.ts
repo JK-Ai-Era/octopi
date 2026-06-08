@@ -345,3 +345,149 @@ describe('Token 估算器', () => {
     expect(tokens).toBeGreaterThan(0);
   });
 });
+
+describe('context_length 错误自动截断', () => {
+  it('应该在 context_length 错误时截断消息历史并重试', async () => {
+    let callCount = 0;
+    const model: ModelProvider = {
+      name: 'mock',
+      chat: vi.fn(),
+      stream: async function* () {
+        callCount++;
+        if (callCount === 1) {
+          // 第一次：context_length 错误
+          throw Object.assign(new Error('context_length_exceeded'), { status: 400 });
+        }
+        // 截断后重试成功
+        yield { type: 'content', content: 'Recovered after truncation!' };
+        yield { type: 'done', usage: { promptTokens: 5, completionTokens: 2, totalTokens: 7 } };
+      },
+      isAvailable: vi.fn().mockResolvedValue(true),
+    };
+
+    const errorStrategy: ErrorStrategy = {
+      onModelError: vi.fn().mockReturnValue({ action: 'abort', reason: 'context length' }),
+      onToolError: vi.fn().mockReturnValue({ action: 'skip', reason: 'test' }),
+      onContextOverflow: vi.fn().mockReturnValue({ action: 'compact' }),
+      onSecurityViolation: vi.fn().mockReturnValue({ action: 'block', reason: 'test' }),
+    };
+
+    const deps = createTestDeps({ model, errorStrategy });
+    const engine = new AgentEngine(deps);
+    const events: any[] = [];
+
+    // 传入较多消息，确保截断有意义
+    const messages: Message[] = [
+      createTestMessage('msg1'),
+      { role: 'assistant', content: 'reply1', timestamp: Date.now() },
+      createTestMessage('msg2'),
+      { role: 'assistant', content: 'reply2', timestamp: Date.now() },
+      createTestMessage('msg3'),
+      { role: 'assistant', content: 'reply3', timestamp: Date.now() },
+      createTestMessage('msg4'),
+      { role: 'assistant', content: 'reply4', timestamp: Date.now() },
+      createTestMessage('msg5'),
+      { role: 'assistant', content: 'reply5', timestamp: Date.now() },
+      createTestMessage('current question'),
+    ];
+
+    for await (const event of engine.run(messages, { systemPrompt: 'test' })) {
+      events.push(event);
+    }
+
+    // 应该有 context.truncated 事件
+    expect(events.some(e => e.type === 'context.truncated')).toBe(true);
+    // 应该最终成功（turn.end）
+    expect(events.some(e => e.type === 'turn.end')).toBe(true);
+    // 模型应该被调用两次（第一次失败，截断后重试成功）
+    expect(callCount).toBe(2);
+  });
+
+  it('不应该重复截断上下文', async () => {
+    let callCount = 0;
+    const model: ModelProvider = {
+      name: 'mock',
+      chat: vi.fn(),
+      stream: async function* () {
+        callCount++;
+        // 每次都返回 context_length 错误
+        throw Object.assign(new Error('context_length_exceeded'), { status: 400 });
+      },
+      isAvailable: vi.fn().mockResolvedValue(true),
+    };
+
+    const errorStrategy: ErrorStrategy = {
+      onModelError: vi.fn().mockReturnValue({ action: 'abort', reason: 'context length' }),
+      onToolError: vi.fn().mockReturnValue({ action: 'skip', reason: 'test' }),
+      onContextOverflow: vi.fn().mockReturnValue({ action: 'compact' }),
+      onSecurityViolation: vi.fn().mockReturnValue({ action: 'block', reason: 'test' }),
+    };
+
+    const deps = createTestDeps({ model, errorStrategy });
+    const engine = new AgentEngine(deps);
+    const events: any[] = [];
+
+    const messages: Message[] = [
+      createTestMessage('msg1'),
+      { role: 'assistant', content: 'reply1', timestamp: Date.now() },
+      createTestMessage('msg2'),
+      { role: 'assistant', content: 'reply2', timestamp: Date.now() },
+      createTestMessage('msg3'),
+      { role: 'assistant', content: 'reply3', timestamp: Date.now() },
+      createTestMessage('msg4'),
+      { role: 'assistant', content: 'reply4', timestamp: Date.now() },
+      createTestMessage('msg5'),
+      { role: 'assistant', content: 'reply5', timestamp: Date.now() },
+      createTestMessage('current'),
+    ];
+
+    for await (const event of engine.run(messages, { systemPrompt: 'test' })) {
+      events.push(event);
+    }
+
+    // 只应该截断一次
+    const truncations = events.filter(e => e.type === 'context.truncated');
+    expect(truncations.length).toBe(1);
+    // 第二次应该走正常 error 路径
+    expect(errorStrategy.onModelError).toHaveBeenCalled();
+  });
+});
+
+describe('引擎异常退出事件', () => {
+  it('应该在预算耗尽时 yield budget.exceeded 事件', async () => {
+    const events = new DefaultEventBus();
+    const budget = new IterationBudget(events, { maxIterations: 2 });
+
+    // Mock: 总是返回 tool call，消耗迭代
+    let callCount = 0;
+    const model: ModelProvider = {
+      name: 'mock',
+      chat: vi.fn(),
+      stream: async function* () {
+        callCount++;
+        yield { type: 'tool_call', toolCall: { id: `call_${callCount}`, name: 'test_tool', arguments: '{}', index: 0 } };
+        yield { type: 'done', usage: { promptTokens: 5, completionTokens: 2, totalTokens: 7 } };
+      },
+      isAvailable: vi.fn().mockResolvedValue(true),
+    };
+
+    const tools = new Map<string, RegisteredTool>();
+    tools.set('test_tool', {
+      definition: { name: 'test_tool', description: 'test', parameters: {} },
+      handler: vi.fn().mockResolvedValue('ok'),
+    });
+
+    const deps = createTestDeps({ model, tools, budget, events });
+    const engine = new AgentEngine(deps);
+    const collected: any[] = [];
+
+    for await (const event of engine.run([createTestMessage('test')], { systemPrompt: 'test' })) {
+      collected.push(event);
+    }
+
+    // 应该有 budget.exceeded 事件
+    expect(collected.some(e => e.type === 'budget.exceeded')).toBe(true);
+    // 不应该有 turn.end
+    expect(collected.some(e => e.type === 'turn.end')).toBe(false);
+  });
+});

@@ -4,6 +4,8 @@
 
 export { AgentSupervisor, startSupervisor, SupervisorEvents } from './supervisor.js';
 export { EventCollector } from './event-collector.js';
+export { DefaultTaskSupervisor, createTaskSupervisor } from './task-supervisor.js';
+export type { TaskSupervisorConfig } from './task-supervisor.js';
 export type {
   Planner,
   Reflector,

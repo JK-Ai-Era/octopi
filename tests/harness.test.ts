@@ -10,6 +10,7 @@ import {
   composePersonas,
   DefaultContextPipeline,
   SessionAwareRunner,
+  DefaultTaskSupervisor,
 } from '../src/harness/index.js';
 import {
   InMemorySessionStore,
@@ -182,6 +183,154 @@ describe('createAgent', () => {
   });
 });
 
+describe('SessionAwareRunner — 异常退出 session 一致性', () => {
+  it('引擎以 budget.exceeded 退出时，应保持 session 状态为 idle', async () => {
+    const store = new InMemorySessionStore();
+    const events = new DefaultEventBus();
+
+    // Mock: 第一次返回 tool call，之后预算耗尽
+    let callCount = 0;
+    const model: ModelProvider = {
+      name: 'mock',
+      chat: vi.fn(),
+      stream: async function* () {
+        callCount++;
+        if (callCount === 1) {
+          yield { type: 'content', content: 'Let me check...' };
+          yield { type: 'tool_call', toolCall: { id: 'c1', name: 'test_tool', arguments: '{}', index: 0 } };
+          yield { type: 'done', usage: { promptTokens: 5, completionTokens: 2, totalTokens: 7 } };
+        }
+        // 第二次：直接结束（模拟预算耗尽后的引擎行为）
+      },
+      isAvailable: vi.fn().mockResolvedValue(true),
+    };
+
+    const testTool: RegisteredTool = {
+      definition: { name: 'test_tool', description: 'test', parameters: {} },
+      handler: vi.fn().mockResolvedValue('ok'),
+    };
+
+    const engine = await new AgentBuilder()
+      .model(model)
+      .tools(testTool)
+      .events(events)
+      .budget({ maxIterations: 1 })
+      .buildEngine();
+
+    const runner = new SessionAwareRunner(engine, store);
+    const collected: any[] = [];
+
+    for await (const event of runner.handle(
+      'consistency-test',
+      { role: 'user', content: 'test', timestamp: Date.now() },
+      { systemPrompt: 'test' },
+    )) {
+      collected.push(event);
+    }
+
+    // session 应该被保存
+    const session = await store.load('consistency-test');
+    expect(session).not.toBeNull();
+    // session 状态应该是 idle（不是 processing）
+    expect(session!.meta.status).toBe('idle');
+  });
+
+  it('引擎以 engine.error 退出时，session 应被正确保存', async () => {
+    const store = new InMemorySessionStore();
+    const events = new DefaultEventBus();
+
+    // Mock: 直接抛出认证错误
+    const model: ModelProvider = {
+      name: 'mock',
+      chat: vi.fn(),
+      stream: async function* () {
+        throw Object.assign(new Error('Unauthorized'), { status: 401 });
+      },
+      isAvailable: vi.fn().mockResolvedValue(true),
+    };
+
+    const errorStrategy = {
+      onModelError: vi.fn().mockReturnValue({ action: 'abort' as const, reason: 'auth failed' }),
+      onToolError: vi.fn().mockReturnValue({ action: 'skip' as const, reason: 'test' }),
+      onContextOverflow: vi.fn().mockReturnValue({ action: 'compact' as const }),
+      onSecurityViolation: vi.fn().mockReturnValue({ action: 'block' as const, reason: 'test' }),
+    };
+
+    const engine = await new AgentBuilder()
+      .model(model)
+      .events(events)
+      .errorStrategy(errorStrategy)
+      .buildEngine();
+
+    const runner = new SessionAwareRunner(engine, store);
+    const collected: any[] = [];
+
+    for await (const event of runner.handle(
+      'error-test',
+      { role: 'user', content: 'test', timestamp: Date.now() },
+      { systemPrompt: 'test' },
+    )) {
+      collected.push(event);
+    }
+
+    // session 应该被保存
+    const session = await store.load('error-test');
+    expect(session).not.toBeNull();
+    // session 状态应该是 idle
+    expect(session!.meta.status).toBe('idle');
+    // 应该有 engine.error 或 aborted 事件
+    const hasError = collected.some(e => e.type === 'engine.error' || e.type === 'aborted');
+    expect(hasError).toBe(true);
+  });
+
+  it('有流式内容但无 turn.end 时，应保存已输出的内容', async () => {
+    const store = new InMemorySessionStore();
+    const events = new DefaultEventBus();
+
+    // Mock: 输出部分内容后出错
+    const model: ModelProvider = {
+      name: 'mock',
+      chat: vi.fn(),
+      stream: async function* () {
+        yield { type: 'content', content: 'Partial response...' };
+        // 然后模拟错误（不会 yield done）
+        throw Object.assign(new Error('Connection lost'), { status: 500 });
+      },
+      isAvailable: vi.fn().mockResolvedValue(true),
+    };
+
+    const errorStrategy = {
+      onModelError: vi.fn().mockReturnValue({ action: 'abort' as const, reason: 'server error' }),
+      onToolError: vi.fn().mockReturnValue({ action: 'skip' as const, reason: 'test' }),
+      onContextOverflow: vi.fn().mockReturnValue({ action: 'compact' as const }),
+      onSecurityViolation: vi.fn().mockReturnValue({ action: 'block' as const, reason: 'test' }),
+    };
+
+    const engine = await new AgentBuilder()
+      .model(model)
+      .events(events)
+      .errorStrategy(errorStrategy)
+      .buildEngine();
+
+    const runner = new SessionAwareRunner(engine, store);
+
+    for await (const _ of runner.handle(
+      'partial-test',
+      { role: 'user', content: 'test', timestamp: Date.now() },
+      { systemPrompt: 'test' },
+    )) {}
+
+    const session = await store.load('partial-test');
+    expect(session).not.toBeNull();
+    // session 应该有 2 条消息：user + assistant（部分输出）
+    expect(session!.messages.length).toBe(2);
+    expect(session!.messages[1].role).toBe('assistant');
+    expect(session!.messages[1].content).toBe('Partial response...');
+    // session 状态应该是 idle
+    expect(session!.meta.status).toBe('idle');
+  });
+});
+
 describe('DefaultContextPipeline', () => {
   it('应该组装上下文', async () => {
     const pipeline = new DefaultContextPipeline();
@@ -228,5 +377,40 @@ describe('DefaultContextPipeline', () => {
     expect(output.messages[2].role).toBe('assistant');
     expect(output.messages[2].tool_calls).toBeDefined();
     expect(output.messages[3].role).toBe('tool');
+  });
+});
+
+describe('Config Bridge — Supervisor 解析', () => {
+  it('应该从配置创建 DefaultTaskSupervisor', async () => {
+    const { resolveSupervisor } = await import('../src/harness/config-bridge.js');
+    const providers = new Map<string, ModelProvider>();
+    providers.set('mock', createMockModelProvider());
+
+    const supervisor = resolveSupervisor({
+      enabled: true,
+      checkpointInterval: 10,
+      enableLLMReview: false,
+    }, providers);
+
+    expect(supervisor).toBeDefined();
+    expect(supervisor).toBeInstanceOf(DefaultTaskSupervisor);
+  });
+
+  it('enabled=false 应该返回 undefined', async () => {
+    const { resolveSupervisor } = await import('../src/harness/config-bridge.js');
+    const providers = new Map<string, ModelProvider>();
+
+    const supervisor = resolveSupervisor({ enabled: false }, providers);
+
+    expect(supervisor).toBeUndefined();
+  });
+
+  it('无配置应该返回 undefined', async () => {
+    const { resolveSupervisor } = await import('../src/harness/config-bridge.js');
+    const providers = new Map<string, ModelProvider>();
+
+    const supervisor = resolveSupervisor(undefined, providers);
+
+    expect(supervisor).toBeUndefined();
   });
 });

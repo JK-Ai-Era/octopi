@@ -151,14 +151,70 @@
         }
       }
     },
+    "supervisor": {
+      "type": "object",
+      "description": "任务监督器配置（智能监督，替代硬预算限制）",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "是否启用智能监督"
+        },
+        "checkpointInterval": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 15,
+          "description": "基础检查间隔（迭代数）"
+        },
+        "minCheckpointInterval": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 5,
+          "description": "最小检查间隔"
+        },
+        "maxCheckpointInterval": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 50,
+          "description": "最大检查间隔"
+        },
+        "enableLLMReview": {
+          "type": "boolean",
+          "default": true,
+          "description": "启用 LLM 审查（规则层不确定时用轻量模型判断）"
+        },
+        "llmReviewInterval": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 3,
+          "description": "LLM 审查频率（每 N 个检查点审查一次）"
+        },
+        "llmModel": {
+          "type": "string",
+          "description": "审查用模型。格式: \"model\"（用主 provider）或 \"provider/model\"（指定 provider）"
+        },
+        "hardLimit": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 1000,
+          "description": "硬上限：最大迭代数（安全兜底）"
+        },
+        "hardWallClockMs": {
+          "type": "integer",
+          "minimum": 1000,
+          "default": 36000000,
+          "description": "硬上限：最大运行时间（毫秒，默认 10 小时）"
+        }
+      }
+    },
     "budget": {
       "type": "object",
-      "description": "迭代预算（资源约束）",
+      "description": "迭代预算（安全兜底，由 supervisor 接管主要控制）",
       "properties": {
         "maxIterations": {
           "type": "integer",
           "minimum": 1,
-          "description": "最大迭代次数"
+          "description": "最大迭代次数（建议设为宽松值，如 1000）"
         },
         "maxToolCalls": {
           "type": "integer",

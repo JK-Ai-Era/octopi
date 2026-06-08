@@ -37,6 +37,7 @@ import type { AgentDefinition, GatewayConfig, ToolPolicy } from './core/types.js
 import type { SessionStore } from './core/interfaces/session-store.js';
 import type { IterationBudgetConfig } from './core/budget.js';
 import type { SecurityGuardConfig } from './core/security-guard.js';
+import type { TaskSupervisorConfig } from './harness/supervisor/task-supervisor.js';
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { homedir } from 'node:os';
@@ -146,6 +147,41 @@ export interface ChannelConfig {
   path?: string;
 }
 
+// ── Supervisor 配置 ──
+
+/**
+ * TaskSupervisor 配置
+ *
+ * 智能监督系统，替代 IterationBudget 的硬限制。
+ * 通过检查点机制实现：每 N 轮迭代审查一次，决定继续/恢复/终止。
+ */
+export interface SupervisorConfig {
+  /** 是否启用（默认 true） */
+  enabled?: boolean;
+  /** 基础检查间隔（迭代数，默认 15） */
+  checkpointInterval?: number;
+  /** 最小检查间隔（默认 5） */
+  minCheckpointInterval?: number;
+  /** 最大检查间隔（默认 50） */
+  maxCheckpointInterval?: number;
+  /** 启用 LLM 审查（默认 true） */
+  enableLLMReview?: boolean;
+  /** LLM 审查频率（每 N 个检查点审查一次，默认 3） */
+  llmReviewInterval?: number;
+  /**
+   * 审查用的模型
+   *
+   * 支持两种格式：
+   * - 模型名（如 "qwen-turbo"）：使用主 provider
+   * - 完整名（如 "ollama/qwen3:4b"）：使用指定 provider
+   */
+  llmModel?: string;
+  /** 硬上限：最大迭代数（默认 1000） */
+  hardLimit?: number;
+  /** 硬上限：最大 wall-clock 时间（毫秒，默认 10 小时） */
+  hardWallClockMs?: number;
+}
+
 // ── 完整配置 ──
 
 /**
@@ -158,8 +194,10 @@ export interface HarnessConfig {
   providers?: ProviderConfig[];
   /** Plugin 配置 */
   plugins?: PluginConfig;
-  /** 迭代预算 */
+  /** 迭代预算（安全兜底，由 TaskSupervisor 接管主要控制） */
   budget?: Partial<IterationBudgetConfig>;
+  /** 任务监督器配置（智能监督，替代硬限制） */
+  supervisor?: SupervisorConfig;
   /** 安全策略 */
   security?: {
     /** 预设名称 */

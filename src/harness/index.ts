@@ -61,13 +61,14 @@ export { TaskScheduler, SchedulerEvents } from './scheduler/index.js';
 export type { ScheduledTask, ScheduleKind, TaskSchedulerConfig } from './scheduler/index.js';
 
 // ── AgentSupervisor ──
-export { AgentSupervisor, startSupervisor, SupervisorEvents, EventCollector } from './supervisor/index.js';
+export { AgentSupervisor, startSupervisor, SupervisorEvents, EventCollector, DefaultTaskSupervisor, createTaskSupervisor } from './supervisor/index.js';
 export type {
   Planner, Reflector,
   AgentState, AgentStats,
   Plan, PlanStep, StepResult, ExecutionRecord,
   Assessment, Pattern,
   SupervisorConfig,
+  TaskSupervisorConfig,
 } from './supervisor/index.js';
 
 // ── Config Bridge ──
