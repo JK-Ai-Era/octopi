@@ -13,6 +13,8 @@ export { DefaultContextPipeline, PersonaStage, HistoryStage, FilterStage } from 
 export type { ContextStage, StageContext } from './context/pipeline.js';
 export { TaskStage } from './context/stages/task-stage.js';
 export type { TaskStageConfig } from './context/stages/task-stage.js';
+export { SmartStage, createSmartSummarizer, createSmartRelevanceFilter } from './context/smart-stage.js';
+export type { SmartStageConfig } from './context/smart-stage.js';
 
 // ── Runner ──
 export { SessionAwareRunner } from './runner.js';

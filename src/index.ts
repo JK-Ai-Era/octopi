@@ -47,6 +47,8 @@ export { AgentBuilder, createAgent } from './harness/builder.js';
 export { SessionAwareRunner } from './harness/runner.js';
 export { loadPersona, composePersonas } from './harness/persona/loader.js';
 export { DefaultContextPipeline } from './harness/context/pipeline.js';
+export { SmartStage, createSmartSummarizer, createSmartRelevanceFilter } from './harness/context/smart-stage.js';
+export type { SmartStageConfig } from './harness/context/smart-stage.js';
 
 // Harness 安全
 export { CapabilityEnforcer, PluginTrustLevel } from './harness/security/capability-enforcer.js';
