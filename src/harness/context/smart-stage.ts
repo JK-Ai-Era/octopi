@@ -102,7 +102,7 @@ export class SmartStage implements ContextStage {
     this._systemPrompt = config.systemPrompt;
     this._buildPrompt = config.buildPrompt;
     this._applyDecision = config.applyDecision;
-    this._timeoutMs = config.timeoutMs ?? 5000;
+    this._timeoutMs = config.timeoutMs ?? 15000;
     this._temperature = config.temperature ?? 0.3;
     this._maxTokens = config.maxTokens ?? 1000;
     this._events = config.events;
@@ -249,7 +249,7 @@ export function createSmartSummarizer(
         ],
       };
     },
-    timeoutMs: 8000,
+    timeoutMs: 15000,
     events: options?.events,
   });
 }
@@ -300,7 +300,7 @@ export function createSmartRelevanceFilter(
         return ctx;
       }
     },
-    timeoutMs: 5000,
+    timeoutMs: 15000,
     events: options?.events,
   });
 }
