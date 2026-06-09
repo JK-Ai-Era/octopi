@@ -343,7 +343,7 @@ export class DefaultSecurityGuard {
 
     // 4. 网络外传检测
     if (this.isHttpTool(call.name)) {
-      const method = (call.arguments?.method ?? 'GET').toUpperCase();
+      const method = (typeof call.arguments?.method === 'string' ? call.arguments.method : 'GET').toUpperCase();
       if (method === 'POST' || method === 'PUT') {
         const body = JSON.stringify(call.arguments?.body ?? call.arguments?.data ?? '');
         if (this.containsSensitivePattern(body)) {
