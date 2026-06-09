@@ -27,7 +27,7 @@ export interface CommandContext {
   sessionId: string;
   /** Agent ID */
   agentId: string;
-  /** 命令参数（/model gpt-4 → args = ['gpt-4']） */
+  /** 命令参数（/model gpt-5.5 → args = ['gpt-5.5']） */
   args: string[];
   /** 原始消息内容 */
   rawMessage: string;
@@ -59,7 +59,7 @@ export interface CommandResult {
 const BUILTIN_COMMANDS: Record<string, { description: string; usage: string }> = {
   '/new': { description: 'Start a new session (clear context)', usage: '/new' },
   '/help': { description: 'Show available commands', usage: '/help' },
-  '/model': { description: 'Switch model (e.g. /model gpt-4)', usage: '/model <name>' },
+  '/model': { description: 'Switch model (e.g. /model gpt-5.5)', usage: '/model <name>' },
   '/status': { description: 'Show current session status', usage: '/status' },
 };
 
@@ -152,7 +152,7 @@ export class CommandPlugin {
 
     // /model — 切换模型
     this.register('/model', {
-      description: 'Switch model (e.g. /model gpt-4)',
+      description: 'Switch model (e.g. /model gpt-5.5)',
       usage: '/model <name>',
       handler: async (ctx) => {
         if (ctx.args.length === 0) {

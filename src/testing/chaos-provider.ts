@@ -12,6 +12,7 @@
  */
 
 import type { ModelProvider, LLMRequest, LLMResponse, LLMStreamChunk } from '../core/interfaces/model-provider.js';
+import type { ModelInfo } from '../core/types.js';
 
 // ── 故障规则 ──
 
@@ -134,6 +135,10 @@ export class ChaosProvider implements ModelProvider {
 
   async isAvailable(): Promise<boolean> {
     return this.inner.isAvailable();
+  }
+
+  getModelInfo(modelName: string): ModelInfo | null {
+    return this.inner.getModelInfo(modelName);
   }
 
   /**

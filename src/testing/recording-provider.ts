@@ -8,6 +8,7 @@
 import { existsSync, mkdirSync, appendFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ModelProvider, LLMRequest, LLMResponse, LLMStreamChunk } from '../core/interfaces/model-provider.js';
+import type { ModelInfo } from '../core/types.js';
 
 /** 录制条目 */
 export interface RecordingEntry {
@@ -109,6 +110,10 @@ export class RecordingProvider implements ModelProvider {
 
   async isAvailable(): Promise<boolean> {
     return this.inner.isAvailable();
+  }
+
+  getModelInfo(modelName: string): ModelInfo | null {
+    return this.inner.getModelInfo(modelName);
   }
 
   /**

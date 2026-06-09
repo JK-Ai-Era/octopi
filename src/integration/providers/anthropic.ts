@@ -24,14 +24,21 @@ import type {
   LLMResponse,
   LLMStreamChunk,
 } from '../../core/interfaces/model-provider.js';
-import type { ToolCall } from '../../core/types.js';
+import type { ToolCall, ModelInfo } from '../../core/types.js';
 
 export interface AnthropicProviderConfig {
   name?: string;
   apiKey: string;
   baseUrl?: string;
   version?: string;
-  models?: string[];
+  /**
+   * 支持的模型列表
+   *
+   * 两种形式：
+   * - string: 只有模型名称
+   * - ModelInfo: 名称 + 能力声明（contextWindow, maxOutputTokens）
+   */
+  models?: (string | ModelInfo)[];
   defaultModel?: string;
 }
 
@@ -43,6 +50,7 @@ export interface AnthropicProviderConfig {
 export class AnthropicProvider implements ModelProvider {
   readonly name: string;
   readonly models: string[];
+  private modelInfoMap: Map<string, ModelInfo> = new Map();
 
   private apiKey: string;
   private baseUrl: string;
@@ -54,12 +62,33 @@ export class AnthropicProvider implements ModelProvider {
     this.apiKey = config.apiKey;
     this.baseUrl = (config.baseUrl ?? 'https://api.anthropic.com').replace(/\/$/, '');
     this.version = config.version ?? '2023-06-01';
-    this.models = config.models ?? [
-      'claude-sonnet-4-20250514',
-      'claude-haiku-4-20250414',
-      'claude-3-5-sonnet-20241022',
+
+    // 解析 models 配置：提取名称列表 + ModelInfo 映射
+    const rawModels = config.models ?? [
+      'claude-sonnet-4-6',
+      'claude-opus-4-6',
+      'claude-haiku-4-5',
     ];
+    this.models = [];
+    for (const entry of rawModels) {
+      if (typeof entry === 'string') {
+        this.models.push(entry);
+      } else {
+        this.models.push(entry.name);
+        this.modelInfoMap.set(entry.name, entry);
+      }
+    }
+
     this.defaultModel = config.defaultModel ?? this.models[0];
+  }
+
+  /**
+   * 查询模型能力声明
+   *
+   * 返回 ModelInfo（contextWindow, maxOutputTokens）或 null（未配置）。
+   */
+  getModelInfo(modelName: string): ModelInfo | null {
+    return this.modelInfoMap.get(modelName) ?? null;
   }
 
   /**

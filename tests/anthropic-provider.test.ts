@@ -7,17 +7,17 @@ describe('AnthropicProvider', () => {
     const provider = new AnthropicProvider({
       name: 'anthropic',
       apiKey: 'test-key',
-      models: ['claude-sonnet-4-20250514', 'claude-haiku-4-20250414'],
+      models: ['claude-sonnet-4-6', 'claude-haiku-4-5'],
     });
     expect(provider.name).toBe('anthropic');
-    expect(provider.models).toEqual(['claude-sonnet-4-20250514', 'claude-haiku-4-20250414']);
+    expect(provider.models).toEqual(['claude-sonnet-4-6', 'claude-haiku-4-5']);
   });
 
   test('默认模型列表', () => {
     const p = new AnthropicProvider({ apiKey: 'key' });
     expect(p.name).toBe('anthropic');
     expect(p.models.length).toBeGreaterThan(0);
-    expect(p.models).toContain('claude-sonnet-4-20250514');
+    expect(p.models).toContain('claude-sonnet-4-6');
   });
 
   test('isAvailable 不可达时返回 false', async () => {

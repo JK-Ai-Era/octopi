@@ -10,7 +10,7 @@
  * - 不关心 Session、Tool 等上层概念
  */
 
-import type { TokenUsage, ToolCall } from '../types.js';
+import type { TokenUsage, ToolCall, ModelInfo } from '../types.js';
 
 // ── 请求/响应类型 ──
 
@@ -84,6 +84,7 @@ export interface LLMStreamChunk {
  * - chat(): 同步调用
  * - stream(): 流式调用
  * - isAvailable(): 健康检查
+ * - getModelInfo(): 查询模型能力（可选，返回 null 表示未知）
  */
 export interface ModelProvider {
   /** Provider 名称（如 'openai', 'anthropic'） */
@@ -97,4 +98,12 @@ export interface ModelProvider {
 
   /** 检查 provider 是否可用 */
   isAvailable(): Promise<boolean>;
+
+  /**
+   * 查询模型能力声明
+   *
+   * 返回 ModelInfo（contextWindow, maxOutputTokens）或 null（未知）。
+   * Context Pipeline 用此信息做 token 预算规划。
+   */
+  getModelInfo(modelName: string): ModelInfo | null;
 }

@@ -139,7 +139,7 @@ function generateDefaultConfig(homeDir: string, agentId: string = 'default'): ob
         persona: join(homeDir, 'workspace', agentId),
         model: {
           provider: 'openai',
-          model: 'gpt-4o',
+          model: 'gpt-5.5',
         },
         tools: { allow: ['*'] },
       },
@@ -150,18 +150,13 @@ function generateDefaultConfig(homeDir: string, agentId: string = 'default'): ob
         name: 'openai',
         apiKey: '${OPENAI_API_KEY}',
         baseUrl: 'https://api.openai.com/v1',
-        models: ['gpt-4o', 'gpt-4o-mini'],
+        models: ['gpt-5.5', 'gpt-5-mini'],
       },
     ],
     plugins: {
       loadPaths: [join(homeDir, 'plugins')],
     },
-    budget: {
-      maxIterations: 15,
-      maxToolCalls: 50,
-      maxTokens: 100000,
-      maxWallClockMs: 3600000, // 1 小时（安全兜底，实际由 TaskSupervisor 控制）
-    },
+    // budget 使用默认值（1000 迭代/5000 工具调用/1M tokens/10h），无需显式配置
     security: {
       preset: 'production',
     },

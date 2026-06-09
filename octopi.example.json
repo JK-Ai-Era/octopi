@@ -7,7 +7,7 @@
     "persona": "./personas/assistant",
     "model": {
       "provider": "openai",
-      "model": "gpt-4o"
+      "model": "gpt-5.5"
     },
     "tools": { "allow": ["*"] }
   }],
@@ -16,41 +16,18 @@
     {
       "type": "openai",
       "name": "openai",
-      "apiKey": "${OPENAI_API_KEY}",
+      "apiKey": "***",
       "baseUrl": "https://api.openai.com/v1",
-      "models": ["gpt-4o", "gpt-4o-mini"]
+      "models": ["gpt-5.5", "gpt-5-mini"]
     },
     {
       "type": "anthropic",
       "name": "anthropic",
-      "apiKey": "${ANTHROPIC_API_KEY}",
+      "apiKey": "${ANTH…KEY}",
       "baseUrl": "https://api.anthropic.com",
-      "models": ["claude-sonnet-4-20250514", "claude-haiku-4-20250414"]
+      "models": ["claude-sonnet-4-6", "claude-opus-4-6", "claude-haiku-4-5"]
     }
   ],
-
-  "plugins": {
-    "loadPaths": ["./plugins"]
-  },
-
-  "supervisor": {
-    "enabled": true,
-    "checkpointInterval": 15,
-    "minCheckpointInterval": 5,
-    "maxCheckpointInterval": 50,
-    "enableLLMReview": true,
-    "llmReviewInterval": 3,
-    "llmModel": "openai/gpt-4o-mini",
-    "hardLimit": 1000,
-    "hardWallClockMs": 36000000
-  },
-
-  "budget": {
-    "maxIterations": 1000,
-    "maxToolCalls": 5000,
-    "maxTokens": 1000000,
-    "maxWallClockMs": 36000000
-  },
 
   "security": {
     "preset": "production"

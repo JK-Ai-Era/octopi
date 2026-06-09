@@ -172,7 +172,7 @@ tracker.getInterruptedTasks(sessionId);  // interrupted only
 **调用方式:**
 
 ```ts
-const manager = new TaskManager(provider, 'gpt-4o-mini');
+const manager = new TaskManager(provider, 'gpt-5.5-mini');
 
 const decision = await manager.decide({
   sessionId,
@@ -254,7 +254,7 @@ const { engine, runner } = await new AgentBuilder()
       new SkillStage(),
       new TaskStage({           // Task 作为管道阶段注入
         provider: provider,
-        model: 'gpt-4o-mini',
+        model: 'gpt-5.5-mini',
         dataDir: './data/tasks',
       }),
       new HistoryStage(),
@@ -275,7 +275,7 @@ const provider = new OpenAIProvider({ apiKey: '...' });
 
 const taskPlugin = createTaskManagerPlugin(provider, {
   enabled: true,
-  model: 'gpt-4o-mini',
+  model: 'gpt-5.5-mini',
   dataDir: './data/tasks',
 });
 
@@ -303,7 +303,7 @@ const { engine, runner } = await new AgentBuilder()
 
 ### Q: 为什么用轻量模型做决策?
 
-消息分类是简单的语义理解任务。`gpt-4o-mini` 级别的模型就能胜任,成本几乎为零。主 Agent 才需要用强模型做复杂推理。
+消息分类是简单的语义理解任务。`gpt-5.5-mini` 级别的模型就能胜任,成本几乎为零。主 Agent 才需要用强模型做复杂推理。
 
 ### Q: 被中断的任务怎么恢复?
 

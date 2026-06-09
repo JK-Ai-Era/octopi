@@ -7,6 +7,7 @@
 
 import { readFileSync, existsSync } from 'node:fs';
 import type { ModelProvider, LLMRequest, LLMResponse, LLMStreamChunk } from '../core/interfaces/model-provider.js';
+import type { ModelInfo } from '../core/types.js';
 import type { RecordingEntry } from './recording-provider.js';
 
 /** 回放配置 */
@@ -104,6 +105,10 @@ export class ReplayProvider implements ModelProvider {
 
   async isAvailable(): Promise<boolean> {
     return this.index < this.entries.length;
+  }
+
+  getModelInfo(_modelName: string): ModelInfo | null {
+    return null;
   }
 
   /**

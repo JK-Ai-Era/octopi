@@ -694,7 +694,7 @@ const patterns = await reflector.detectPatterns(recentHistory);
 ```typescript
 const rm = new ResourceManager({
   tokenBudget: { perCall: 100000, perMinute: 500000, total: 10000000 },
-  pricing: { 'gpt-4': { inputPer1M: 30, outputPer1M: 60 } },
+  pricing: { 'gpt-5.5': { inputPer1M: 30, outputPer1M: 60 } },
   rateLimit: { requestsPerMinute: 60, maxConcurrent: 5 },
 });
 
@@ -703,7 +703,7 @@ const check = rm.checkTokenBudget(50000);
 if (!check.allowed) console.warn(check.reason);
 
 // 记录使用
-rm.recordTokenUsage(1000, 500, 'gpt-4');
+rm.recordTokenUsage(1000, 500, 'gpt-5.5');
 
 // 查看统计
 console.log(rm.stats());
@@ -1016,7 +1016,7 @@ Octopi 保留了 OpenClaw 中通用的 Agent 运行时能力，去除了所有�
 ```typescript
 const commands = new CommandPlugin({
   sessionIdRef: { current: 'session-1' },
-  currentModelRef: { current: 'gpt-4' },
+  currentModelRef: { current: 'gpt-5.5' },
   onNewSession: () => `agent:cli:${Date.now()}`,
 });
 

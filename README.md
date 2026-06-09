@@ -186,7 +186,7 @@ for await (const event of runner.handle('session-1', userMessage)) {
 import { AgentBuilder } from 'octopi';
 
 const { engine, runner } = await new AgentBuilder()
-  .model('gpt-4')
+  .model('gpt-5.5')
   .store(new RedisSessionStore({ host: 'localhost' }))
   .build();
 ```
@@ -211,7 +211,7 @@ engine.deps.events.on(AgentEvents.INJECTION_DETECTED, (event) => {
 import { AgentBuilder, SecurityPresets } from 'octopi';
 
 const { engine } = await new AgentBuilder()
-  .model('gpt-4')
+  .model('gpt-5.5')
   .securityPolicy(SecurityPresets.production)
   .build();
 ```

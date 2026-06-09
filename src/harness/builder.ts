@@ -6,7 +6,7 @@
  * 使用示例：
  * ```ts
  * const { engine, runner } = new AgentBuilder()
- *   .model('gpt-4')
+ *   .model('gpt-5.5')
  *   .persona('./personas/my-agent')
  *   .tool(myTool)
  *   .budget({ maxIterations: 15 })
@@ -208,6 +208,7 @@ export class AgentBuilder {
         chat: async () => { throw new Error(`Model provider "${providerOrName}" not configured`); },
         stream: async function* () { throw new Error(`Model provider "${providerOrName}" not configured`); },
         isAvailable: async () => false,
+        getModelInfo: () => null,
       };
     } else {
       this._model = providerOrName;

@@ -201,12 +201,33 @@ export interface AgentPersona {
 }
 
 /**
+ * 模型能力声明
+ *
+ * 描述模型的固有能力（不是请求参数）。
+ * 用于 Context Pipeline 的 token 预算规划和智能路由。
+ */
+export interface ModelInfo {
+  /** 模型名称 */
+  name: string;
+  /** 上下文窗口大小（token 数） */
+  contextWindow?: number;
+  /** 最大输出 token 数 */
+  maxOutputTokens?: number;
+}
+
+/**
  * 模型配置
+ *
+ * 注意区分：
+ * - maxTokens: 请求参数，"我要多少 token"
+ * - ModelInfo.maxOutputTokens: 能力声明，"模型最多给多少"
+ * - ModelInfo.contextWindow: 能力声明，"模型能处理多少上下文"
  */
 export interface ModelConfig {
   provider: string;
   model: string;
   temperature?: number;
+  /** 请求的最大输出 token 数（请求参数，不是模型能力） */
   maxTokens?: number;
   fallbackModels?: string[];
 }

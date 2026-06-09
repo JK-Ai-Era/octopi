@@ -12,7 +12,7 @@
  *   name: 'openai',
  *   apiKey: process.env.OPENAI_API_KEY!,
  *   baseUrl: 'https://api.openai.com/v1',
- *   models: ['gpt-4o', 'gpt-4o-mini'],
+ *   models: ['gpt-5.5', 'gpt-5.5-mini'],
  * });
  * ```
  */
@@ -23,7 +23,7 @@ import type {
   LLMResponse,
   LLMStreamChunk,
 } from '../../core/interfaces/model-provider.js';
-import type { ToolCall } from '../../core/types.js';
+import type { ToolCall, ModelInfo } from '../../core/types.js';
 
 /**
  * OpenAI Provider 配置
@@ -35,8 +35,14 @@ export interface OpenAIProviderConfig {
   apiKey: string;
   /** API Base URL（默认 https://api.openai.com/v1） */
   baseUrl?: string;
-  /** 支持的模型列表 */
-  models?: string[];
+  /**
+   * 支持的模型列表
+   *
+   * 两种形式：
+   * - string: 只有模型名称
+   * - ModelInfo: 名称 + 能力声明（contextWindow, maxOutputTokens）
+   */
+  models?: (string | ModelInfo)[];
   /** 默认使用的模型 */
   defaultModel?: string;
   /** 请求超时（毫秒） */
@@ -51,6 +57,7 @@ export interface OpenAIProviderConfig {
 export class OpenAIProvider implements ModelProvider {
   readonly name: string;
   readonly models: string[];
+  private modelInfoMap: Map<string, ModelInfo> = new Map();
   private apiKey: string;
   private baseUrl: string;
   private defaultModel: string;
@@ -58,11 +65,32 @@ export class OpenAIProvider implements ModelProvider {
 
   constructor(config: OpenAIProviderConfig) {
     this.name = config.name ?? 'openai';
-    this.models = config.models ?? ['gpt-4o', 'gpt-4o-mini'];
     this.apiKey = config.apiKey;
     this.baseUrl = (config.baseUrl ?? 'https://api.openai.com/v1').replace(/\/$/, '');
-    this.defaultModel = config.defaultModel ?? this.models[0];
     this.timeoutMs = config.timeoutMs ?? 60_000;
+
+    // 解析 models 配置：提取名称列表 + ModelInfo 映射
+    const rawModels = config.models ?? ['gpt-5.5', 'gpt-5.5-mini'];
+    this.models = [];
+    for (const entry of rawModels) {
+      if (typeof entry === 'string') {
+        this.models.push(entry);
+      } else {
+        this.models.push(entry.name);
+        this.modelInfoMap.set(entry.name, entry);
+      }
+    }
+
+    this.defaultModel = config.defaultModel ?? this.models[0];
+  }
+
+  /**
+   * 查询模型能力声明
+   *
+   * 返回 ModelInfo（contextWindow, maxOutputTokens）或 null（未配置）。
+   */
+  getModelInfo(modelName: string): ModelInfo | null {
+    return this.modelInfoMap.get(modelName) ?? null;
   }
 
   /**

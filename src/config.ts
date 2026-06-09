@@ -14,17 +14,16 @@
  *     "id": "assistant",
  *     "workspace": "./workspace",
  *     "persona": "./personas/assistant",
- *     "model": { "provider": "openai", "model": "gpt-4o" },
+ *     "model": { "provider": "openai", "model": "gpt-5.5" },
  *     "tools": { "allow": ["*"] }
  *   }],
  *   "providers": [{
  *     "type": "openai",
  *     "name": "openai",
  *     "apiKey": "${OPENAI_API_KEY}",
- *     "models": ["gpt-4o"]
+ *     "models": ["gpt-5.5"]
  *   }],
  *   "plugins": { "loadPaths": ["./plugins"] },
- *   "budget": { "maxIterations": 15 },
  *   "security": { "preset": "production" },
  *   "store": { "type": "jsonl", "dataDir": "./data/sessions" },
  *   "channels": [{ "type": "http", "port": 3000 }],
@@ -33,7 +32,7 @@
  * ```
  */
 
-import type { AgentDefinition, GatewayConfig, ToolPolicy } from './core/types.js';
+import type { AgentDefinition, GatewayConfig, ToolPolicy, ModelInfo } from './core/types.js';
 import type { SessionStore } from './core/interfaces/session-store.js';
 import type { IterationBudgetConfig } from './core/budget.js';
 import type { SecurityGuardConfig } from './core/security-guard.js';
@@ -56,8 +55,14 @@ export interface ProviderConfig {
   apiKey?: string;
   /** Base URL */
   baseUrl?: string;
-  /** 支持的模型 */
-  models?: string[];
+  /**
+   * 支持的模型
+   *
+   * 两种形式：
+   * - string: 只有模型名称
+   * - ModelInfo: 名称 + 能力声明（contextWindow, maxOutputTokens）
+   */
+  models?: (string | ModelInfo)[];
   /** 默认模型 */
   defaultModel?: string;
 }

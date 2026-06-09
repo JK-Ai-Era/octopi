@@ -11,7 +11,7 @@
  * import { AgentBuilder } from 'octopi';
  *
  * const { engine, runner } = await new AgentBuilder()
- *   .model('gpt-4')
+ *   .model('gpt-5.5')
  *   .persona('./my-agent')
  *   .build();
  * ```
