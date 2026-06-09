@@ -54,6 +54,7 @@ export type OverflowAction =
 /** 安全违规动作 */
 export type SecurityAction =
   | { action: 'block'; reason: string }
+  | { action: 'reject'; reason: string }
   | { action: 'warn'; reason: string }
   | { action: 'sanitize'; replacement: string };
 
@@ -93,9 +94,12 @@ export interface ErrorStrategy {
 
 /** 安全违规详情 */
 export interface SecurityViolation {
-  type: 'injection' | 'sensitive_data' | 'policy_violation';
+  type: 'injection' | 'sensitive_data' | 'policy_violation'
+      | 'command_injection' | 'path_traversal' | 'unauthorized_tool'
+      | 'behavior_anomaly' | 'prompt_leak';
   severity: 'low' | 'medium' | 'high' | 'critical';
   description: string;
-  source: 'user_input' | 'tool_output' | 'model_output';
+  source: 'user_input' | 'tool_output' | 'model_output'
+       | 'tool_call' | 'behavior';
   range?: { start: number; end: number };
 }

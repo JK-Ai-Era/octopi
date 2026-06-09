@@ -61,8 +61,9 @@ import type {
 import type { Observer } from './interfaces/observer.js';
 import type { EventBus } from './event-bus.js';
 import { AgentEvents } from './event-bus.js';
-import type { SecurityGuard } from './security-guard.js';
-import { isValidSecurityGuard } from './security-guard.js';
+import type { SecurityGuard, SecurityCheckResult, BehaviorContext } from './security-guard.js';
+import { isValidSecurityGuard, severityToAction } from './security-guard.js';
+import type { SecurityAction } from './interfaces/error-strategy.js';
 import { IterationBudget } from './budget.js';
 import type { IterationBudgetConfig } from './budget.js';
 
@@ -162,6 +163,11 @@ export class AgentEngine {
       );
     }
     this.deps = deps;
+
+    // 如果 SecurityGuard 支持 setRegisteredTools，传入已注册工具列表
+    if (deps.security.setRegisteredTools) {
+      deps.security.setRegisteredTools(new Set(deps.tools.keys()));
+    }
   }
 
   /**
@@ -192,6 +198,11 @@ export class AgentEngine {
     this.tokensAtCheckpoint = 0;
     this.uniqueTools = new Set();
 
+    // 设置系统提示到 SecurityGuard（用于泄露检测）
+    if (security.setSystemPrompt) {
+      security.setSystemPrompt(config.systemPrompt || this.deps.systemPrompt || '');
+    }
+
     // 发射引擎启动事件
     events.emit({ type: AgentEvents.ENGINE_START, timestamp: Date.now(), agentId, sessionId });
     yield { type: 'engine.start', timestamp: Date.now(), agentId, sessionId, data: {} };
@@ -204,15 +215,10 @@ export class AgentEngine {
       const lastMessage = messages[messages.length - 1];
       if (lastMessage?.role === 'user') {
         const inputCheck = security.checkUserInput(getTextContent(lastMessage.content));
-        if (!inputCheck.isClean) {
-          const action = errorStrategy.onSecurityViolation({
-            ...inputCheck.violations[0],
-            source: 'user_input',
-          });
-          if (action.action === 'block') {
-            yield { type: 'security.blocked', timestamp: Date.now(), data: { reason: action.reason } };
-            return;
-          }
+        const inputResult = this.handleSecurityViolation(inputCheck, 'user_input');
+        if (inputResult.blocked) {
+          yield { type: 'security.blocked', timestamp: Date.now(), data: { reason: inputResult.reason } };
+          return;
         }
       }
 
@@ -372,8 +378,10 @@ export class AgentEngine {
 
           // 2g. SecurityGuard 检查模型输出
           const outputCheck = security.checkModelOutput(llmResponse.content);
-          if (!outputCheck.isClean) {
-            yield { type: 'security.output_flagged', timestamp: Date.now(), data: { violations: outputCheck.violations } };
+          const outputResult = this.handleSecurityViolation(outputCheck, 'model_output');
+          if (outputResult.blocked) {
+            yield { type: 'security.blocked', timestamp: Date.now(), data: { reason: outputResult.reason } };
+            return;
           }
 
           events.emit({
@@ -420,6 +428,30 @@ export class AgentEngine {
                   continue;
                 }
                 processedCall = modified;
+              }
+
+              // ToolGuard 检查（安全守卫 — 工具调用前）
+              const toolCallCheck = security.checkToolCall(processedCall);
+              const toolCallResult = this.handleSecurityViolation(toolCallCheck, 'tool_call');
+              if (toolCallResult.blocked) {
+                // critical：中断整个循环
+                yield { type: 'security.blocked', timestamp: Date.now(), data: { reason: toolCallResult.reason } };
+                return;
+              }
+              if (toolCallResult.rejected) {
+                // high：拒绝执行，注入上下文告知 LLM
+                toolResults.push({
+                  toolCallId: processedCall.id,
+                  name: processedCall.name,
+                  result: null,
+                  error: `安全守卫拒绝执行：${toolCallResult.reason}。请使用安全的参数重新尝试或换用其他方法。`,
+                });
+                yield {
+                  type: 'security.tool_rejected',
+                  timestamp: Date.now(),
+                  data: { toolCallId: processedCall.id, toolName: processedCall.name, reason: toolCallResult.reason },
+                };
+                continue;
               }
 
               // 执行工具
@@ -476,8 +508,18 @@ export class AgentEngine {
               // SecurityGuard 检查工具输出
               if (toolResult.result && typeof toolResult.result === 'string') {
                 const toolCheck = security.checkToolOutput(toolResult.result);
-                if (!toolCheck.isClean) {
-                  yield { type: 'security.tool_output_flagged', timestamp: Date.now(), data: { violations: toolCheck.violations } };
+                const toolOutputResult = this.handleSecurityViolation(toolCheck, 'tool_output');
+                if (toolOutputResult.blocked) {
+                  yield { type: 'security.blocked', timestamp: Date.now(), data: { reason: toolOutputResult.reason } };
+                  return;
+                }
+                if (toolOutputResult.rejected) {
+                  // 工具输出有问题，替换为安全消息
+                  toolResult = {
+                    ...toolResult,
+                    result: null,
+                    error: `安全守卫过滤了工具输出：${toolOutputResult.reason}`,
+                  };
                 }
               }
 
@@ -516,6 +558,38 @@ export class AgentEngine {
 
             // ── 追踪检查点指标 ──
             this.trackToolResults(llmResponse.toolCalls, toolResults, llmResponse.usage);
+
+            // ── BehaviorGuard 检查（安全守卫 — 行为异常） ──
+            const behaviorCtx: BehaviorContext = {
+              consecutiveErrors: this.consecutiveErrors,
+              consecutiveSameTool: this.consecutiveSameTool,
+              lastToolName: this.lastToolName,
+              recentToolCalls: this.recentToolCalls,
+              uniqueTools: this.uniqueTools.size,
+            };
+            const behaviorCheck = security.checkBehavior(behaviorCtx);
+            const behaviorResult = this.handleSecurityViolation(behaviorCheck, 'behavior');
+            if (behaviorResult.blocked) {
+              yield {
+                type: 'security.behavior_blocked',
+                timestamp: Date.now(),
+                data: { reason: behaviorResult.reason, violations: behaviorCheck.violations },
+              };
+              return;
+            }
+            if (behaviorResult.rejected) {
+              // 行为异常但不中断：注入警告到上下文
+              messages.push({
+                role: 'user',
+                content: `[System: ${behaviorResult.reason}。请调整策略，避免重复或危险操作。]`,
+                timestamp: Date.now(),
+              });
+              yield {
+                type: 'security.behavior_warning',
+                timestamp: Date.now(),
+                data: { reason: behaviorResult.reason },
+              };
+            }
 
             // ── 检查点审查 ──
             const checkpointVerdict = await this.maybeCheckpoint(iteration, config);
@@ -733,6 +807,47 @@ export class AgentEngine {
       cwd: this.currentCwd,
       signal,
     } as ExecutionContext & { signal?: AbortSignal };
+  }
+
+  /**
+   * 统一安全违规处理
+   *
+   * 根据违规的 severity 决定动作：
+   * - critical → block（中断循环）
+   * - high → reject（拒绝执行，注入上下文告知 LLM）
+   * - medium → warn（警告，继续执行）
+   * - low → warn（记录）
+   *
+   * @returns 处理结果，包含是否阻断和拒绝消息
+   */
+  private handleSecurityViolation(
+    check: SecurityCheckResult,
+    source: string,
+  ): { blocked: boolean; rejected: boolean; reason?: string } {
+    if (check.isClean) return { blocked: false, rejected: false };
+
+    const worst = check.violations.reduce((w, v) => {
+      const order = { critical: 4, high: 3, medium: 2, low: 1 };
+      return order[v.severity] > order[w.severity] ? v : w;
+    }, check.violations[0]);
+
+    const action = severityToAction(worst.severity);
+
+    // 发射安全事件（所有级别都发射）
+    this.deps.events.emit({
+      type: AgentEvents.INJECTION_DETECTED,
+      timestamp: Date.now(),
+      data: { source, violations: check.violations, action },
+    });
+
+    if (action === 'block') {
+      return { blocked: true, rejected: false, reason: worst.description };
+    }
+    if (action === 'reject') {
+      return { blocked: false, rejected: true, reason: worst.description };
+    }
+    // warn / sanitize
+    return { blocked: false, rejected: false };
   }
 
   /**
