@@ -55,7 +55,7 @@ export class AnthropicProvider implements ModelProvider {
   private apiKey: string;
   private baseUrl: string;
   private version: string;
-  private defaultModel: string;
+  readonly defaultModel: string;
 
   constructor(config: AnthropicProviderConfig) {
     this.name = config.name ?? 'anthropic';
@@ -250,9 +250,17 @@ export class AnthropicProvider implements ModelProvider {
     const messages = nonSystemMessages.map((m) => this.toAnthropicMessage(m as any));
     const tools = request.tools?.map((t) => this.toAnthropicTool(t as any));
 
+    // max_tokens: 请求值与模型能力取较小值，默认从 ModelInfo 取
+    const modelName = (request.model as string) || this.defaultModel;
+    const modelInfo = this.modelInfoMap.get(modelName);
+    const cap = modelInfo?.maxOutputTokens;
+    const maxTokens = request.maxTokens
+      ? (cap ? Math.min(request.maxTokens, cap) : request.maxTokens)
+      : (cap ?? 4096);
+
     const anthropicRequest: Record<string, unknown> = {
-      model: (request.model as string) || this.defaultModel,
-      max_tokens: request.maxTokens ?? 4096,
+      model: modelName,
+      max_tokens: maxTokens,
       messages,
     };
 

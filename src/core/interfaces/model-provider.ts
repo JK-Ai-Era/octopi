@@ -90,6 +90,14 @@ export interface ModelProvider {
   /** Provider 名称（如 'openai', 'anthropic'） */
   readonly name: string;
 
+  /**
+   * 默认模型名称
+   *
+   * 当 RunConfig.model 未指定时，Engine 使用此值。
+   * 可选——未设置时 Engine 不做 fallback。
+   */
+  readonly defaultModel?: string;
+
   /** 同步调用 */
   chat(request: LLMRequest): Promise<LLMResponse>;
 

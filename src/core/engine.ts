@@ -272,8 +272,9 @@ export class AgentEngine {
         try {
           // 2a. 触发 beforeAssemble 回调
           // 查询模型能力，自动注入 contextWindow
-          const modelName = config.model || this.deps.model.name;
-          const modelInfo = this.deps.model.getModelInfo(modelName);
+          // fallback: config.model → provider.defaultModel → 不查询
+          const modelName = config.model || this.deps.model.defaultModel;
+          const modelInfo = modelName ? this.deps.model.getModelInfo(modelName) : null;
 
           let pipelineInput: PipelineInput = {
             systemPrompt: config.systemPrompt || this.deps.systemPrompt || '',

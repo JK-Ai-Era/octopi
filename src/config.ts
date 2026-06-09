@@ -294,6 +294,43 @@ export function loadConfig(configPath?: string): HarnessConfig {
     }
   }
 
+  // 校验 providers
+  if (config.providers) {
+    for (const provider of config.providers) {
+      if (!provider.name) throw new Error('Provider must have a name');
+      if (!provider.type) throw new Error(`Provider "${provider.name}" must have a type`);
+      if (provider.type !== 'openai' && provider.type !== 'anthropic') {
+        throw new Error(`Provider "${provider.name}" type must be "openai" or "anthropic", got "${provider.type}"`);
+      }
+
+      // 校验 ModelInfo
+      if (provider.models) {
+        for (const entry of provider.models) {
+          if (typeof entry === 'object') {
+            if (!entry.name) throw new Error(`Provider "${provider.name}": model entry must have a name`);
+            if (entry.contextWindow !== undefined) {
+              if (typeof entry.contextWindow !== 'number' || entry.contextWindow <= 0) {
+                throw new Error(`Provider "${provider.name}", model "${entry.name}": contextWindow must be a positive number, got ${entry.contextWindow}`);
+              }
+            }
+            if (entry.maxOutputTokens !== undefined) {
+              if (typeof entry.maxOutputTokens !== 'number' || entry.maxOutputTokens <= 0) {
+                throw new Error(`Provider "${provider.name}", model "${entry.name}": maxOutputTokens must be a positive number, got ${entry.maxOutputTokens}`);
+              }
+            }
+            if (entry.contextWindow !== undefined && entry.maxOutputTokens !== undefined) {
+              if (entry.maxOutputTokens > entry.contextWindow) {
+                throw new Error(
+                  `Provider "${provider.name}", model "${entry.name}": maxOutputTokens (${entry.maxOutputTokens}) exceeds contextWindow (${entry.contextWindow})`
+                );
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
   return config;
 }
 

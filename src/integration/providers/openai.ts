@@ -60,7 +60,7 @@ export class OpenAIProvider implements ModelProvider {
   private modelInfoMap: Map<string, ModelInfo> = new Map();
   private apiKey: string;
   private baseUrl: string;
-  private defaultModel: string;
+  readonly defaultModel: string;
   private timeoutMs: number;
 
   constructor(config: OpenAIProviderConfig) {
@@ -258,8 +258,13 @@ export class OpenAIProvider implements ModelProvider {
     if (request.temperature !== undefined) {
       body.temperature = request.temperature;
     }
+    // maxTokens: 请求值与模型能力取较小值
+    const modelInfo = this.modelInfoMap.get(body.model as string);
+    const cap = modelInfo?.maxOutputTokens;
     if (request.maxTokens !== undefined) {
-      body.max_tokens = request.maxTokens;
+      body.max_tokens = cap ? Math.min(request.maxTokens, cap) : request.maxTokens;
+    } else if (cap) {
+      body.max_tokens = cap;
     }
     if (request.tools && request.tools.length > 0) {
       body.tools = request.tools;
