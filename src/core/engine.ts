@@ -5,10 +5,10 @@
  *   输入 → 上下文组装 → 模型推理 → [工具执行] → 输出
  *
  * 设计原则：
- * - 无状态：不持有 Session，消息历史由调用方传入
+ * - 不持有持久状态：Session 消息历史由调用方传入，per-run 循环状态在每次 run() 时重置
  * - 纯循环：只负责推理和工具执行，不关心 Session/Protocol
  * - 事件驱动：所有关键节点通过 EventBus 发射事件
- * - 安全内置：SecurityGuard 不可禁用
+ * - 安全内置：SecurityGuard 不可禁用（构造时验证有效性）
  * - 预算强制：IterationBudget 不可绕过
  *
  * 扩展点（回调槽）：
@@ -62,6 +62,7 @@ import type { Observer } from './interfaces/observer.js';
 import type { EventBus } from './event-bus.js';
 import { AgentEvents } from './event-bus.js';
 import type { SecurityGuard } from './security-guard.js';
+import { isValidSecurityGuard } from './security-guard.js';
 import { IterationBudget } from './budget.js';
 import type { IterationBudgetConfig } from './budget.js';
 
@@ -123,7 +124,7 @@ export interface EngineEvent {
 // ── 引擎实现 ──
 
 /**
- * AgentEngine — 无状态循环引擎
+ * AgentEngine — 循环引擎（不持有持久状态）
  */
 export class AgentEngine {
   // ── 扩展回调槽 ──
@@ -153,6 +154,13 @@ export class AgentEngine {
   private uniqueTools = new Set<string>();
 
   constructor(deps: AgentEngineDeps) {
+    // 安全守卫有效性验证：防止调用方传入 noop 实现绕过安全检查
+    if (!isValidSecurityGuard(deps.security)) {
+      throw new Error(
+        'SecurityGuard validation failed: the provided implementation appears to be a no-op. ' +
+        'SecurityGuard cannot be bypassed. Use DefaultSecurityGuard or provide a real implementation.',
+      );
+    }
     this.deps = deps;
   }
 

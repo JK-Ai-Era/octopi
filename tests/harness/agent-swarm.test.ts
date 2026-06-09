@@ -6,6 +6,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { AgentSwarm, RoundRobinStrategy, CapabilityStrategy, PipelineStrategy } from '../../src/harness/multi-agent/swarm.js';
 import { DefaultAgentRegistry } from '../../src/harness/multi-agent/registry.js';
 import { DefaultEventBus } from '../../src/core/event-bus.js';
+import { DefaultSecurityGuard } from '../../src/core/security-guard.js';
 import { AgentEngine } from '../../src/core/engine.js';
 import { SwarmEvents } from '../../src/harness/multi-agent/types.js';
 import type { SwarmAgent, SwarmTask } from '../../src/harness/multi-agent/types.js';
@@ -38,11 +39,7 @@ function createMockEngine(response?: string): AgentEngine {
     executor: { execute: async () => null },
     context: { process: async (msgs, input) => ({ messages: msgs, estimatedTokens: 100 }) },
     events: new DefaultEventBus(),
-    security: {
-      checkUserInput: () => ({ isClean: true, violations: [] }),
-      checkModelOutput: () => ({ isClean: true, violations: [] }),
-      checkToolOutput: () => ({ isClean: true, violations: [] }),
-    },
+    security: new DefaultSecurityGuard(new DefaultEventBus()),
     budget: { checkAndEmit: () => true, recordIteration: () => {}, recordToolCall: () => {}, consumeTokens: () => {}, report: () => ({}) },
     errorStrategy: {
       onModelError: () => ({ action: 'abort' }),

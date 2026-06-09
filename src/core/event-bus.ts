@@ -165,3 +165,61 @@ export class NoopEventBus implements EventBus {
     return { dispose: () => {} };
   }
 }
+
+// ── 节流 EventBus ──
+
+/** 节流配置 */
+export interface ThrottleConfig {
+  /** 事件类型的节流间隔（毫秒）。未列出的类型不节流。 */
+  intervals?: Record<string, number>;
+  /** 默认节流间隔（毫秒），应用于所有未在 intervals 中指定的类型 */
+  defaultIntervalMs?: number;
+}
+
+/**
+ * ThrottledEventBus — 节流事件总线
+ *
+ * 包装一个 EventBus，对高频事件（如 llm_stream_delta）按类型进行节流。
+ * 非节流类型的事件直接透传，零额外开销。
+ *
+ * 适用场景：
+ * - 流式输出的 delta 事件（每 token 一次 → 每 50ms 一次）
+ * - 高频迭代事件
+ */
+export class ThrottledEventBus implements EventBus {
+  private inner: EventBus;
+  private intervals: Map<string, number>;
+  private defaultIntervalMs: number;
+  private lastEmit = new Map<string, number>();
+
+  constructor(inner: EventBus, config?: ThrottleConfig) {
+    this.inner = inner;
+    this.intervals = new Map(Object.entries(config?.intervals ?? {}));
+    this.defaultIntervalMs = config?.defaultIntervalMs ?? 0;
+  }
+
+  emit(event: AgentEvent): void {
+    const interval = this.intervals.get(event.type) ?? this.defaultIntervalMs;
+    if (interval <= 0) {
+      // 不节流，直接透传
+      this.inner.emit(event);
+      return;
+    }
+
+    const now = Date.now();
+    const last = this.lastEmit.get(event.type) ?? 0;
+    if (now - last >= interval) {
+      this.lastEmit.set(event.type, now);
+      this.inner.emit(event);
+    }
+    // 否则丢弃此事件
+  }
+
+  on(eventType: string, handler: EventHandler): Disposable {
+    return this.inner.on(eventType, handler);
+  }
+
+  onAll(handler: EventHandler): Disposable {
+    return this.inner.onAll(handler);
+  }
+}

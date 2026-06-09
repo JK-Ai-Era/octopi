@@ -75,6 +75,8 @@ export interface SmartStageConfig {
  */
 export class SmartStage implements ContextStage {
   readonly name: string;
+  /** SmartStage 默认可选：LLM 调用失败不阻塞 pipeline */
+  readonly optional: boolean;
 
   private _model: ModelProvider;
   private _modelName?: string;
@@ -94,6 +96,7 @@ export class SmartStage implements ContextStage {
 
   constructor(config: SmartStageConfig) {
     this.name = config.name;
+    this.optional = true; // SmartStage 始终可选，失败时使用 fallback 或返回原始上下文
     this._model = config.model;
     this._modelName = config.modelName;
     this._systemPrompt = config.systemPrompt;

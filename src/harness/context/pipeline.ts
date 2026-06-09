@@ -42,6 +42,8 @@ export interface StageContext {
 /** 上下文阶段接口 */
 export interface ContextStage {
   readonly name: string;
+  /** 标记该 stage 是否可选。可选 stage 失败时不阻塞 pipeline，返回原始上下文 */
+  readonly optional?: boolean;
   process(ctx: StageContext): Promise<StageContext>;
 }
 
@@ -217,7 +219,18 @@ export class DefaultContextPipeline implements ContextPipeline {
     // 依次执行阶段
     for (const stage of this.stages) {
       if (ctx.signal?.aborted) break;
-      ctx = await stage.process(ctx);
+      try {
+        ctx = await stage.process(ctx);
+      } catch (err) {
+        if (stage.optional) {
+          // 可选 stage 失败：记录事件但不阻塞 pipeline
+          // 调用方可以通过 EventBus 监听此事件
+          const error = err instanceof Error ? err.message : String(err);
+          ctx.extra[`stage_${stage.name}_error`] = error;
+        } else {
+          throw err;
+        }
+      }
     }
 
     // 转换为 LLM 消息格式

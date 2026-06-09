@@ -17,10 +17,10 @@ export { AgentMessageEvents } from './interfaces/agent-message.js';
 export { AgentEngine } from './engine.js';
 export type { AgentEngineDeps, RunConfig, EngineEvent } from './engine.js';
 
-export { DefaultEventBus, NoopEventBus, AgentEvents } from './event-bus.js';
-export type { EventBus, AgentEvent as EventBusAgentEvent, EventHandler, Disposable, DefaultEventBusOptions } from './event-bus.js';
+export { DefaultEventBus, NoopEventBus, ThrottledEventBus, AgentEvents } from './event-bus.js';
+export type { EventBus, AgentEvent as EventBusAgentEvent, EventHandler, Disposable, DefaultEventBusOptions, ThrottleConfig } from './event-bus.js';
 
-export { DefaultSecurityGuard } from './security-guard.js';
+export { DefaultSecurityGuard, isValidSecurityGuard } from './security-guard.js';
 export type { SecurityGuard, SecurityCheckResult, SecurityViolation, SecurityGuardConfig } from './security-guard.js';
 
 export { IterationBudget, DEFAULT_BUDGET } from './budget.js';

@@ -63,6 +63,8 @@ describe('AsyncTask', () => {
 
     it('执行失败后状态为 failed', async () => {
       const task = new AsyncTask({ type: 'test' });
+      // 观察内部 promise（run 失败会 reject 它）
+      task.promise.catch(() => {});
       try {
         await task.run(async () => { throw new Error('boom'); });
         expect.unreachable('should have thrown');
@@ -85,6 +87,8 @@ describe('AsyncTask', () => {
   describe('取消', () => {
     it('可以取消 pending 任务', () => {
       const task = new AsyncTask({ type: 'test' });
+      // 观察内部 promise（cancel 会 reject 它）
+      task.promise.catch(() => {});
       task.cancel('no longer needed');
       expect(task.status).toBe('cancelled');
       expect(task.isDone).toBe(true);
@@ -100,6 +104,9 @@ describe('AsyncTask', () => {
           setTimeout(resolve, 10000);
         });
       }).catch(() => {}); // 捕获 rejection
+
+      // 也观察内部 promise（cancel 会 reject 它）
+      task.promise.catch(() => {});
 
       // 等一下让任务开始执行
       await new Promise(r => setTimeout(r, 10));
@@ -118,6 +125,7 @@ describe('AsyncTask', () => {
 
     it('wait 对取消的任务抛出 TaskCancelledError', async () => {
       const task = new AsyncTask({ type: 'test' });
+      task.promise.catch(() => {}); // 观察内部 promise
       task.cancel('test');
       await expect(task.wait()).rejects.toThrow(TaskCancelledError);
     });
@@ -126,6 +134,8 @@ describe('AsyncTask', () => {
   describe('超时', () => {
     it('超时后任务失败', async () => {
       const task = new AsyncTask({ type: 'test', timeoutMs: 50 });
+      // 观察内部 promise（超时会 reject 它）
+      task.promise.catch(() => {});
       await expect(task.run(async () => {
         await new Promise(r => setTimeout(r, 1000));
         return 'never';
@@ -142,6 +152,8 @@ describe('AsyncTask', () => {
         await new Promise(() => {});
         return 'never';
       }).catch(() => {});
+      // 观察内部 promise（wait 超时会 reject 它）
+      task.promise.catch(() => {});
 
       await expect(task.wait(50)).rejects.toThrow(TaskTimeoutError);
     });
@@ -166,6 +178,7 @@ describe('AsyncTask', () => {
     it('超过最大重试次数后失败', async () => {
       let attempts = 0;
       const task = new AsyncTask({ type: 'test', maxRetries: 1 });
+      task.promise.catch(() => {}); // 观察内部 promise
 
       try {
         await task.run(async () => {
@@ -197,15 +210,17 @@ describe('AsyncTask', () => {
     it('失败时发射 failed 事件', async () => {
       const { bus, events } = createEvents();
       const task = new AsyncTask({ type: 'test' }, bus);
+      task.promise.catch(() => {}); // 观察内部 promise
       try { await task.run(async () => { throw new Error('fail'); }); } catch { /* expected */ }
 
       expect(events.some(e => e.type === TaskEvents.FAILED)).toBe(true);
     });
 
-    it('取消时发射 cancelled 事件', () => {
+    it('取消时发射 cancelled 事件', async () => {
       const { bus, events } = createEvents();
       const task = new AsyncTask({ type: 'test' }, bus);
-      // cancel 会 reject promise，需要捕获
+      // cancel 会 reject promise，需要观察
+      task.promise.catch(() => {});
       task.cancel();
 
       expect(events.some(e => e.type === TaskEvents.CANCELLED)).toBe(true);
@@ -236,6 +251,7 @@ describe('AsyncTask', () => {
       const { bus } = createEvents();
       const store = createMockStore();
       const task = new AsyncTask({ type: 'test' }, bus, store);
+      task.promise.catch(() => {}); // 观察内部 promise
       try { await task.run(async () => { throw new Error('fail'); }); } catch { /* expected */ }
 
       const record = Array.from(store.records.values())[0];
@@ -274,6 +290,8 @@ describe('AsyncTask', () => {
       const abortSpy = vi.fn();
       task.signal.addEventListener('abort', abortSpy);
 
+      // 观察内部 promise（cancel 会 reject 它）
+      task.promise.catch(() => {});
       task.cancel();
       expect(abortSpy).toHaveBeenCalledOnce();
     });
@@ -282,10 +300,11 @@ describe('AsyncTask', () => {
       const task = new AsyncTask<AbortSignal>({ type: 'test' });
       let capturedSignal: AbortSignal | undefined;
 
-      task.run(async (_input, signal) => {
+      const runPromise = task.run(async (_input, signal) => {
         capturedSignal = signal;
         return signal;
       });
+      runPromise.catch(() => {}); // 观察 promise
 
       // signal 应该是同一个
       expect(capturedSignal).toBeDefined();

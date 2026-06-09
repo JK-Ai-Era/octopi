@@ -629,6 +629,39 @@ const allTools = registry.getCapabilitiesByType('tools');
 }
 ```
 
+### Capability 与 Hook 的关系
+
+Capability 和 Hook 是两个独立但互补的机制：
+
+| 维度 | Capability | Hook |
+|------|-----------|------|
+| **本质** | "是什么" — 声明 Plugin 拥有的能力 | "做什么" — 注册事件处理逻辑 |
+| **定义位置** | `manifest.contracts` | `register(api)` 回调中的 `api.on()` |
+| **运行时行为** | 无，纯注册表查询 | 有，按 priority 执行拦截/观察逻辑 |
+| **冲突检测** | 同一 capability ID 不能被两个 plugin 注册 | 无冲突概念，所有 plugin 的 handler 都可注册 |
+
+**典型模式：** 一个 Plugin 声明了某个 Capability 后，通常会注册相关的 Hook 来实现该能力的具体行为。
+
+```ts
+// 声明 capability（manifest.json）
+// { "contracts": { "tools": ["web_search"] } }
+
+// 实现 capability 行为（register 回调）
+register(api) {
+  api.registerTool(webSearchDef, webSearchHandler);
+
+  // 同时注册 hook 来增强该 capability 的行为
+  api.on('before_tool_call', async (event) => {
+    if (event.toolName === 'web_search') {
+      // 对 web_search 工具做额外的安全检查
+    }
+    return null;
+  });
+}
+```
+
+**注意：** Capability 声明不是必须的。Plugin 可以只注册 Hook（不声明 capability），也可以只声明 Capability（不注册 hook，由其他 Plugin 消费该能力）。两者是正交的。
+
 ---
 
 ## Plugin 加载流程

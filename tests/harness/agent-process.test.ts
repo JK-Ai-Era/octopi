@@ -6,6 +6,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { AgentProcess, spawnAgentProcess, forkAgentProcess, AgentProcessEvents } from '../../src/harness/multi-agent/process.js';
 import { DefaultEventBus } from '../../src/core/event-bus.js';
 import { AgentEngine } from '../../src/core/engine.js';
+import { DefaultSecurityGuard } from '../../src/core/security-guard.js';
 import type { AgentInfo } from '../../src/core/interfaces/agent-registry.js';
 import type { ModelProvider, LLMRequest, LLMResponse, LLMStreamChunk } from '../../src/core/interfaces/model-provider.js';
 import type { Message } from '../../src/core/types.js';
@@ -36,11 +37,7 @@ function createMockEngine(response?: string): AgentEngine {
     executor: { execute: async () => null },
     context: { process: async (msgs, input) => ({ messages: msgs, estimatedTokens: 100 }) },
     events: new DefaultEventBus(),
-    security: {
-      checkUserInput: () => ({ isClean: true, violations: [] }),
-      checkModelOutput: () => ({ isClean: true, violations: [] }),
-      checkToolOutput: () => ({ isClean: true, violations: [] }),
-    },
+    security: new DefaultSecurityGuard(new DefaultEventBus()),
     budget: { checkAndEmit: () => true, recordIteration: () => {}, recordToolCall: () => {}, consumeTokens: () => {}, report: () => ({}) },
     errorStrategy: {
       onModelError: () => ({ action: 'abort' }),
@@ -227,11 +224,7 @@ describe('AgentProcess', () => {
         executor: { execute: async () => null },
         context: { process: async (msgs, input) => ({ messages: msgs, estimatedTokens: 100 }) },
         events: new DefaultEventBus(),
-        security: {
-          checkUserInput: () => ({ isClean: true, violations: [] }),
-          checkModelOutput: () => ({ isClean: true, violations: [] }),
-          checkToolOutput: () => ({ isClean: true, violations: [] }),
-        },
+        security: new DefaultSecurityGuard(new DefaultEventBus()),
         budget: { checkAndEmit: () => true, recordIteration: () => {}, recordToolCall: () => {}, consumeTokens: () => {}, report: () => ({}) },
         errorStrategy: {
           onModelError: () => ({ action: 'abort' }),
@@ -278,11 +271,7 @@ describe('AgentProcess', () => {
         executor: { execute: async () => null },
         context: { process: async (msgs, input) => ({ messages: msgs, estimatedTokens: 100 }) },
         events: new DefaultEventBus(),
-        security: {
-          checkUserInput: () => ({ isClean: true, violations: [] }),
-          checkModelOutput: () => ({ isClean: true, violations: [] }),
-          checkToolOutput: () => ({ isClean: true, violations: [] }),
-        },
+        security: new DefaultSecurityGuard(new DefaultEventBus()),
         budget: { checkAndEmit: () => true, recordIteration: () => {}, recordToolCall: () => {}, consumeTokens: () => {}, report: () => ({}) },
         errorStrategy: {
           onModelError: () => ({ action: 'abort' }),
@@ -383,11 +372,7 @@ describe('AgentProcess', () => {
         executor: { execute: async () => null },
         context: { process: async (msgs, input) => ({ messages: msgs, estimatedTokens: 100 }) },
         events: new DefaultEventBus(),
-        security: {
-          checkUserInput: () => ({ isClean: true, violations: [] }),
-          checkModelOutput: () => ({ isClean: true, violations: [] }),
-          checkToolOutput: () => ({ isClean: true, violations: [] }),
-        },
+        security: new DefaultSecurityGuard(new DefaultEventBus()),
         budget: { checkAndEmit: () => true, recordIteration: () => {}, recordToolCall: () => {}, consumeTokens: () => {}, report: () => ({}) },
         errorStrategy: {
           onModelError: () => ({ action: 'abort' }),

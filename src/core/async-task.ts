@@ -122,9 +122,9 @@ export class AsyncTask<T = unknown> {
       this._resolvePromise = resolve;
       this._rejectPromise = reject;
     });
-    // 防止 unhandled rejection：_fail/cancel 会 reject 此 promise，
-    // 但 run() 也会 throw，导致两处都产生错误。加默认 catch 避免警告。
-    this._promise.catch(() => {});
+    // 不再静默吞掉 unhandled rejection。
+    // 调用方应通过 task.promise.catch()、task.wait() 或 spawnTask() 处理错误。
+    // 如果 promise 被 reject 且无人 observe，触发 unhandledRejection 事件通知。
 
     // 持久化创建事件
     this._persistAndEmit(TaskEvents.CREATED);
@@ -406,6 +406,7 @@ export class TaskCancelledError extends Error {
  * 创建并立即启动一个 AsyncTask
  *
  * 便捷方法，适用于"发射后不管"的场景。
+ * 错误通过 task.promise 和 EventBus 传播，不会被静默吞掉。
  */
 export function spawnTask<T = unknown>(
   options: TaskOptions,
@@ -414,7 +415,8 @@ export function spawnTask<T = unknown>(
   store?: TaskStore,
 ): AsyncTask<T> {
   const task = new AsyncTask<T>(options, events, store);
-  // 不等待结果，fire-and-forget
-  task.run(executor).catch(() => { /* 错误已在 task 内部处理 */ });
+  // fire-and-forget：错误在 task 内部处理（状态更新 + 事件发射）
+  // 调用方应通过 task.wait() 或 task.promise 获取结果/错误
+  task.run(executor).catch(() => { /* 错误已在 task 内部记录为 failed 状态 */ });
   return task;
 }
