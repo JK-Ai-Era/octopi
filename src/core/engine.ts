@@ -1226,13 +1226,27 @@ export class AgentEngine {
 
   // ── Planning-only 检测 ──
 
+  // 正则表达式（参考 OpenClaw）
+  private static readonly PLANNING_ONLY_PROMISE_RE = /\b(?:i(?:'ll| will)|let me|i(?:'m| am)\s+going to|first[, ]+i(?:'ll| will)|next[, ]+i(?:'ll| will)|i can do that)\b/i;
+  private static readonly PLANNING_ONLY_COMPLETION_RE = /\b(?:done|finished|implemented|updated|fixed|changed|ran|verified|found|here(?:'s| is) what|blocked by|the blocker is)\b/i;
+  private static readonly PLANNING_ONLY_HEADING_RE = /^(?:plan|steps?|next steps?)\s*:/i;
+  private static readonly PLANNING_ONLY_BULLET_RE = /^(?:[-*•]\s+|\d+[.)]\s+)/u;
+  private static readonly PLANNING_ONLY_MAX_VISIBLE_TEXT = 700;
+  private static readonly PLANNING_ONLY_ACTION_VERB_RE = /\b(?:inspect|investigate|check|look(?:\s+into|\s+at)?|read|search|find|debug|fix|patch|update|change|edit|write|implement|run|test|verify|review|analy(?:s|z)e|summari(?:s|z)e|explain|answer|show|share|report|prepare|capture|take|refactor|restart|deploy|ship)\b/i;
+
+  // 中文模式
+  private static readonly PLANNING_ONLY_PROMISE_ZH_RE = /(?:我会|让我|接下来我|我将|我需要|首先我|下一步我)/;
+  private static readonly PLANNING_ONLY_ACTION_VERB_ZH_RE = /(?:查看|分析|检查|读取|列出|搜索|研究|执行|运行|测试|验证|审查|总结|解释|回答|展示|分享|报告|准备|捕获|获取|重构|重启|部署)/;
+  private static readonly PLANNING_ONLY_COMPLETION_ZH_RE = /(?:完成|已完成|已实现|已更新|已修复|已更改|已运行|已验证|已找到|以下是|结果是|被阻塞|阻塞原因)/;
+
   /**
    * 检测模型响应是否是 "planning-only"（只描述了要做什么，但没有实际执行工具）
    *
    * 参考 OpenClaw 的 planning-only 检测逻辑：
    * 1. 检测是否包含承诺性语言（如 "I'll", "Let me", "I will" 等）
    * 2. 检测是否包含行动动词（如 "analyze", "check", "read" 等）
-   * 3. 排除已完成的响应（如 "Here is", "The result is" 等）
+   * 3. 检测结构化计划格式（如 "Plan:" 开头 + 列表项）
+   * 4. 排除已完成的响应（如 "done", "finished" 等）
    */
   private isPlanningOnlyResponse(response: LLMResponse): boolean {
     // 必须有内容
@@ -1252,8 +1266,8 @@ export class AgentEngine {
       return false;
     }
 
-    // 排除太长的响应（可能是详细分析）
-    if (text.length > 2000) {
+    // 排除太长的响应（可能是详细分析）- OpenClaw 使用 700 字符
+    if (text.length > AgentEngine.PLANNING_ONLY_MAX_VISIBLE_TEXT) {
       return false;
     }
 
@@ -1262,45 +1276,63 @@ export class AgentEngine {
       return false;
     }
 
-    // 检测承诺性语言
-    const promisePatterns = [
-      /(?:I'll|I will|I'm going to|Let me|Next,? I'll|I(?:'m)? going to)/i,
-      /(?:我会|让我|接下来我|我将|我需要)/,
-      /(?:going to|about to|ready to)/i,
-    ];
+    // 检测结构化计划格式
+    const hasStructuredFormat = this.hasStructuredPlanningOnlyFormat(text);
 
-    const hasPromise = promisePatterns.some(pattern => pattern.test(text));
-    if (!hasPromise) {
+    // 检测承诺性语言（英文 + 中文）
+    const hasPromise = AgentEngine.PLANNING_ONLY_PROMISE_RE.test(text) ||
+                       AgentEngine.PLANNING_ONLY_PROMISE_ZH_RE.test(text);
+
+    // 如果既没有结构化格式也没有承诺性语言，不是 planning-only
+    if (!hasPromise && !hasStructuredFormat) {
       return false;
     }
 
-    // 检测行动动词
-    const actionVerbs = [
-      'analyze', 'examine', 'check', 'look at', 'read', 'review',
-      'investigate', 'explore', 'search', 'find', 'list', 'show',
-      '查看', '分析', '检查', '读取', '列出', '搜索', '研究',
-    ];
-
-    const hasActionVerb = actionVerbs.some(verb =>
-      text.toLowerCase().includes(verb.toLowerCase())
-    );
-
-    if (!hasActionVerb) {
-      return false;
+    // 检测行动动词（英文 + 中文）- 结构化格式时可选
+    if (!hasStructuredFormat) {
+      const hasActionVerb = AgentEngine.PLANNING_ONLY_ACTION_VERB_RE.test(text) ||
+                            AgentEngine.PLANNING_ONLY_ACTION_VERB_ZH_RE.test(text);
+      if (!hasActionVerb) {
+        return false;
+      }
     }
 
-    // 排除已完成的响应
-    const completionPatterns = [
-      /(?:here is|here are|the result|the output|based on|according to)/i,
-      /(?:以下是|根据|结果显示|总结|综上所述)/,
-    ];
-
-    const isCompletion = completionPatterns.some(pattern => pattern.test(text));
+    // 排除已完成的响应（英文 + 中文）
+    const isCompletion = AgentEngine.PLANNING_ONLY_COMPLETION_RE.test(text) ||
+                         AgentEngine.PLANNING_ONLY_COMPLETION_ZH_RE.test(text);
     if (isCompletion) {
       return false;
     }
 
     return true;
+  }
+
+  /**
+   * 检测是否有结构化计划格式
+   *
+   * 特征：
+   * - 以 "Plan:" 或 "Steps:" 等标题开头
+   * - 包含列表项（- 或 1. 等）
+   * - 包含承诺性语言
+   */
+  private hasStructuredPlanningOnlyFormat(text: string): boolean {
+    const lines = text.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
+    if (lines.length === 0) return false;
+
+    // 检测列表项数量
+    const bulletLineCount = lines.filter(line =>
+      AgentEngine.PLANNING_ONLY_BULLET_RE.test(line)
+    ).length;
+
+    // 检测是否有承诺性语言
+    const hasPlanningCueLine = lines.some(line =>
+      AgentEngine.PLANNING_ONLY_PROMISE_RE.test(line) ||
+      AgentEngine.PLANNING_ONLY_PROMISE_ZH_RE.test(line)
+    );
+
+    // 结构化格式：标题行 + 承诺性语言，或 2+ 列表项 + 承诺性语言
+    return (AgentEngine.PLANNING_ONLY_HEADING_RE.test(lines[0] ?? '') && hasPlanningCueLine) ||
+           (bulletLineCount >= 2 && hasPlanningCueLine);
   }
 
   /**
