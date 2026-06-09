@@ -54,7 +54,7 @@ src/
 ├── core/                              # Layer 1: 纯引擎（零实现依赖）
 │   ├── engine.ts                      # AgentEngine — 无状态循环引擎
 │   ├── event-bus.ts                   # EventBus — 全链路可观测事件总线
-│   ├── security-guard.ts              # SecurityGuard — 注入检测 + 敏感信息过滤
+│   ├── security-guard.ts              # SecurityGuard — 五层安全防护（Input/Output/Tool/Behavior Guard）
 │   ├── budget.ts                      # IterationBudget — 资源约束
 │   ├── types.ts                       # 核心类型定义（Message, ToolCall, ContentBlock 等）
 │   ├── async-task.ts                  # AsyncTask — 异步原语（取消/超时/重试/持久化）
@@ -469,12 +469,19 @@ BUDGET_EXCEEDED                     — 资源事件
 
 Prompt Injection 是 Agent 框架最严重的安全威胁。安全检查不可禁用。
 
-**Core 层的安全检查：**
-- `checkUserInput()` — 消息到达时
-- `checkToolOutput()` — 每次工具执行后
-- `checkModelOutput()` — 每次模型调用后
+**Core 层的安全检查（五层防护）：**
+- `checkUserInput()` — InputGuard：消息到达时检测注入
+- `checkModelOutput()` — OutputGuard：模型调用后检测敏感数据 + 系统提示泄露
+- `checkToolCall()` — ToolGuard：工具执行前检测命令注入、路径遍历、未授权工具
+- `checkToolOutput()` — OutputGuard：工具执行后检测注入内容
+- `checkBehavior()` — BehaviorGuard：循环中检测死循环、攻击模式
 
-**不可禁用，不可绕过。** 但检查的**策略**（灵敏度、模式）由 Harness 层配置。
+**安全响应分级：**
+- critical → block（中断循环）
+- high → reject（拒绝执行 + 注入上下文告知 LLM）
+- medium/low → warn（警告继续）
+
+**不可禁用，不可绕过。** 但检查的**策略**（灵敏度、路径白名单、shell 元字符）由 Harness 层配置。
 
 ### 3.6 ContextPipeline 是管道模型
 
@@ -847,15 +854,49 @@ Observer 接口的实现：
 
 | 威胁 | 攻击面 | 防线 |
 |---|---|---|
-| Prompt Injection（直接） | 用户输入 | Core: SecurityGuard.checkUserInput() |
-| Prompt Injection（间接） | 工具返回值 | Core: SecurityGuard.checkToolOutput() |
-| 工具越权 | 工具调用参数 | Harness: ToolPolicyManager |
-| 跨 Session 泄露 | Session 访问 | Harness: SessionIsolation |
-| 敏感信息泄露 | 模型输出 | Core: SecurityGuard.checkModelOutput() |
-| 恶意 Plugin | Plugin 注册 | Harness: PluginTrustLevel |
+| Prompt Injection（直接） | 用户输入 | InputGuard: SecurityGuard.checkUserInput() |
+| Prompt Injection（间接） | 工具返回值 | OutputGuard: SecurityGuard.checkToolOutput() |
+| 命令注入 | 工具调用参数 | ToolGuard: SecurityGuard.checkToolCall() |
+| 路径遍历 | 文件工具参数 | ToolGuard: SecurityGuard.checkToolCall() |
+| 未授权工具 | LLM 调用未注册工具 | ToolGuard: SecurityGuard.checkToolCall() |
+| 数据外传 | HTTP 请求体 | ToolGuard: SecurityGuard.checkToolCall() |
+| 系统提示泄露 | 模型输出 | OutputGuard: SecurityGuard.checkModelOutput() |
+| 敏感信息泄露 | 模型输出 | OutputGuard: SecurityGuard.checkModelOutput() |
+| 死循环/发散 | Agent 循环 | BehaviorGuard: SecurityGuard.checkBehavior() |
+| 攻击模式 | 多种高危工具组合 | BehaviorGuard: SecurityGuard.checkBehavior() |
 | 资源耗尽 | Agent 循环 | Core: IterationBudget |
+| 恶意 Plugin | Plugin 注册 | Harness: PluginTrustLevel |
 
-### 6.2 不可信内容标记
+### 6.2 五层防护
+
+安全守卫在 Agent 循环的五个检查点执行检查：
+
+```
+用户输入 ──→ checkUserInput()     ← InputGuard
+  ↓
+LLM 推理 ──→ checkModelOutput()   ← OutputGuard（敏感数据 + 系统提示泄露）
+  ↓
+工具执行 ──→ checkToolCall()      ← ToolGuard（命令注入 + 路径遍历 + 未授权工具）
+  ↓
+工具结果 ──→ checkToolOutput()    ← OutputGuard（注入检测）
+  ↓
+循环检查 ──→ checkBehavior()      ← BehaviorGuard（死循环 + 攻击模式）
+```
+
+### 6.3 安全响应分级
+
+所有安全检查统一由 `handleSecurityViolation()` 处理，按 severity 分级响应：
+
+| severity | 动作 | 行为 |
+|----------|------|------|
+| critical | block | 中断整个 Agent 循环 |
+| high | reject | 拒绝执行危险操作，注入上下文告知 LLM 原因，LLM 可换方案 |
+| medium | warn | 警告，继续执行，发射安全事件 |
+| low | warn | 记录，继续执行 |
+
+**reject 语义**是核心创新：不中断对话，但不让危险操作执行。LLM 能看到拒绝原因并自行调整策略。
+
+### 6.4 不可信内容标记
 
 外部内容（工具返回值、网页抓取、文件读取）在 ContextPipeline 中被标记为不可信。SecurityGuard 在检查时使用这些标记。
 
@@ -887,13 +928,15 @@ Observer 接口的实现：
 
 **权衡：** 难以程序化查询 persona 属性。
 
-### ADR-004: SecurityGuard 内置
+### ADR-004: SecurityGuard 五层防护内置
 
-**决策：** Core 层的安全检查不可禁用。
+**决策：** Core 层的安全检查不可禁用，采用五层防护架构。
 
-**理由：** Prompt Injection 是最严重的安全威胁，不能是可选的。
+**理由：** Prompt Injection 是最严重的安全威胁，工具执行是最危险的攻击面。安全不能是可选的。
 
-**权衡：** 开发调试时可能不方便。可以通过配置降低灵敏度，但不能完全禁用。
+**架构：** InputGuard → OutputGuard → ToolGuard → BehaviorGuard，统一由 `handleSecurityViolation()` 按 severity 分级处理（block → reject → warn）。
+
+**权衡：** 开发调试时可能不方便。可以通过配置降低灵敏度、设置路径白名单、允许 shell 元字符，但不能完全禁用。
 
 ### ADR-005: ContextPipeline 管道模型
 
