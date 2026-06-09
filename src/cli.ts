@@ -394,6 +394,9 @@ async function chatCommand(args: CliArgs): Promise<void> {
           } else if (event.type === 'context.truncated') {
             const data = event.data as any;
             console.log(`\n  ✂️  上下文过长，已自动截断 (${data?.from} → ${data?.to} 条消息)，重试中...`);
+          } else if (event.type === 'planning_only_retry') {
+            const data = event.data as any;
+            console.log(`\n  🔄 检测到计划性响应，正在重试 (${data?.attempt}/${data?.maxAttempts})...`);
           } else if (event.type === 'checkpoint') {
             const data = event.data as any;
             const verdict = data?.verdict;

@@ -95,6 +95,13 @@ export interface AgentEngineDeps {
   taskSupervisor?: TaskSupervisor;
   /** 检查点间隔（迭代数，默认 15） */
   checkpointInterval?: number;
+  /** planning-only 重试配置 */
+  planningRetry?: {
+    /** 最大重试次数（默认 2） */
+    maxAttempts?: number;
+    /** 重试时附加的 steer 指令 */
+    steerInstruction?: string;
+  };
 }
 
 /** 运行配置 */
@@ -154,6 +161,10 @@ export class AgentEngine {
   private tokensAtCheckpoint = 0;
   private uniqueTools = new Set<string>();
 
+  // ── Planning-only 重试状态 ──
+  private planningOnlyRetryAttempts = 0;
+  private planningOnlySteerInjected = false;
+
   constructor(deps: AgentEngineDeps) {
     // 安全守卫有效性验证：防止调用方传入 noop 实现绕过安全检查
     if (!isValidSecurityGuard(deps.security)) {
@@ -197,6 +208,8 @@ export class AgentEngine {
     this.recentToolCalls = [];
     this.tokensAtCheckpoint = 0;
     this.uniqueTools = new Set();
+    this.planningOnlyRetryAttempts = 0;
+    this.planningOnlySteerInjected = false;
 
     // 设置系统提示到 SecurityGuard（用于泄露检测）
     if (security.setSystemPrompt) {
@@ -620,7 +633,53 @@ export class AgentEngine {
             continue;
           }
 
-          // 2i. 纯文本回复 → 完成
+          // 2i. Planning-only 检测与重试
+          //    当模型返回纯文本（没有 tool_calls）时，检测是否是 "planning-only" 响应
+          //    如果是，重试并附加 "act-now steer" 指令
+          if (this.isPlanningOnlyResponse(llmResponse) && this.hasAvailableTools()) {
+            const maxAttempts = this.deps.planningRetry?.maxAttempts ?? 2;
+            if (this.planningOnlyRetryAttempts < maxAttempts) {
+              this.planningOnlyRetryAttempts++;
+
+              // 构建 steer 指令
+              const steerInstruction = this.deps.planningRetry?.steerInstruction ??
+                'The user expects you to take action now, not just describe what you plan to do. ' +
+                'Use the available tools directly. Do not just describe what you will do — actually do it.';
+
+              // 注入 steer 指令到消息历史
+              if (!this.planningOnlySteerInjected) {
+                messages.push({
+                  role: 'user',
+                  content: `[System: ${steerInstruction}]`,
+                  timestamp: Date.now(),
+                });
+                this.planningOnlySteerInjected = true;
+              }
+
+              events.emit({
+                type: 'planning_only_retry',
+                timestamp: Date.now(),
+                data: {
+                  attempt: this.planningOnlyRetryAttempts,
+                  maxAttempts,
+                  content: llmResponse.content.substring(0, 200),
+                },
+              });
+              yield {
+                type: 'planning_only_retry',
+                timestamp: Date.now(),
+                data: {
+                  attempt: this.planningOnlyRetryAttempts,
+                  maxAttempts,
+                },
+              };
+
+              // 继续循环，重试
+              continue;
+            }
+          }
+
+          // 2j. 纯文本回复 → 完成
           const turn: Turn = {
             id: randomUUID(),
             input: messages.slice(0, -1),
@@ -1163,5 +1222,91 @@ export class AgentEngine {
       const timer = setTimeout(resolve, ms);
       signal?.addEventListener('abort', () => { clearTimeout(timer); reject(new Error('Aborted')); }, { once: true });
     });
+  }
+
+  // ── Planning-only 检测 ──
+
+  /**
+   * 检测模型响应是否是 "planning-only"（只描述了要做什么，但没有实际执行工具）
+   *
+   * 参考 OpenClaw 的 planning-only 检测逻辑：
+   * 1. 检测是否包含承诺性语言（如 "I'll", "Let me", "I will" 等）
+   * 2. 检测是否包含行动动词（如 "analyze", "check", "read" 等）
+   * 3. 排除已完成的响应（如 "Here is", "The result is" 等）
+   */
+  private isPlanningOnlyResponse(response: LLMResponse): boolean {
+    // 必须有内容
+    if (!response.content || response.content.trim().length === 0) {
+      return false;
+    }
+
+    // 有 tool_calls 不是 planning-only
+    if (response.toolCalls && response.toolCalls.length > 0) {
+      return false;
+    }
+
+    const text = response.content.trim();
+
+    // 排除太短的响应（可能是简单回答）
+    if (text.length < 20) {
+      return false;
+    }
+
+    // 排除太长的响应（可能是详细分析）
+    if (text.length > 2000) {
+      return false;
+    }
+
+    // 排除包含代码块的响应（可能是代码输出）
+    if (text.includes('```')) {
+      return false;
+    }
+
+    // 检测承诺性语言
+    const promisePatterns = [
+      /(?:I'll|I will|I'm going to|Let me|Next,? I'll|I(?:'m)? going to)/i,
+      /(?:我会|让我|接下来我|我将|我需要)/,
+      /(?:going to|about to|ready to)/i,
+    ];
+
+    const hasPromise = promisePatterns.some(pattern => pattern.test(text));
+    if (!hasPromise) {
+      return false;
+    }
+
+    // 检测行动动词
+    const actionVerbs = [
+      'analyze', 'examine', 'check', 'look at', 'read', 'review',
+      'investigate', 'explore', 'search', 'find', 'list', 'show',
+      '查看', '分析', '检查', '读取', '列出', '搜索', '研究',
+    ];
+
+    const hasActionVerb = actionVerbs.some(verb =>
+      text.toLowerCase().includes(verb.toLowerCase())
+    );
+
+    if (!hasActionVerb) {
+      return false;
+    }
+
+    // 排除已完成的响应
+    const completionPatterns = [
+      /(?:here is|here are|the result|the output|based on|according to)/i,
+      /(?:以下是|根据|结果显示|总结|综上所述)/,
+    ];
+
+    const isCompletion = completionPatterns.some(pattern => pattern.test(text));
+    if (isCompletion) {
+      return false;
+    }
+
+    return true;
+  }
+
+  /**
+   * 检查是否有可用的工具
+   */
+  private hasAvailableTools(): boolean {
+    return this.deps.tools.size > 0;
   }
 }
