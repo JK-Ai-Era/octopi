@@ -52,6 +52,7 @@ function createMockModel(responses: LLMResponse[]): ModelProvider {
       yield { type: 'done', usage: response.usage };
     }),
     isAvailable: vi.fn().mockResolvedValue(true),
+    getModelInfo: () => null,
   };
 }
 

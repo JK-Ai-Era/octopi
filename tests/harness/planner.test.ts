@@ -166,6 +166,7 @@ describe('LLMPlanner', () => {
       },
       async *stream() {},
       async isAvailable() { return true; },
+      getModelInfo() { return null; },
     };
 
     const planner = new LLMPlanner({ model: mockModel });
@@ -182,6 +183,7 @@ describe('LLMPlanner', () => {
       },
       async *stream() {},
       async isAvailable() { return true; },
+      getModelInfo() { return null; },
     };
 
     const planner = new LLMPlanner({ model: mockModel });
@@ -201,6 +203,7 @@ describe('LLMPlanner', () => {
       },
       async *stream() {},
       async isAvailable() { return true; },
+      getModelInfo() { return null; },
     };
 
     const planner = new LLMPlanner({ model: mockModel });
@@ -215,7 +218,8 @@ describe('LLMPlanner', () => {
 describe('HybridPlanner', () => {
   it('规则匹配时不用 LLM', async () => {
     const chatSpy = vi.fn().mockResolvedValue({ content: '{}', model: 'm', finishReason: 'stop' });
-    const mockModel = { name: 'mock', chat: chatSpy, async *stream() {}, async isAvailable() { return true; } };
+    const mockModel = { name: 'mock', chat: chatSpy, async *stream() {}, async isAvailable() { return true; },
+      getModelInfo() { return null; } };
 
     const planner = new HybridPlanner({ llm: { model: mockModel } });
     await planner.decide([event('user.message', { content: 'hi' })], createState());
@@ -229,7 +233,8 @@ describe('HybridPlanner', () => {
       model: 'm',
       finishReason: 'stop',
     });
-    const mockModel = { name: 'mock', chat: chatSpy, async *stream() {}, async isAvailable() { return true; } };
+    const mockModel = { name: 'mock', chat: chatSpy, async *stream() {}, async isAvailable() { return true; },
+      getModelInfo() { return null; } };
 
     const planner = new HybridPlanner({ llm: { model: mockModel } });
     const plan = await planner.decide([event('unknown.event')], createState());
@@ -240,7 +245,8 @@ describe('HybridPlanner', () => {
 
   it('禁用 fallback 时返回空计划', async () => {
     const chatSpy = vi.fn();
-    const mockModel = { name: 'mock', chat: chatSpy, async *stream() {}, async isAvailable() { return true; } };
+    const mockModel = { name: 'mock', chat: chatSpy, async *stream() {}, async isAvailable() { return true; },
+      getModelInfo() { return null; } };
 
     const planner = new HybridPlanner({ llm: { model: mockModel }, enableLLMFallback: false });
     const plan = await planner.decide([event('unknown.event')], createState());

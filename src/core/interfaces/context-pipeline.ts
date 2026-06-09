@@ -19,8 +19,15 @@ export interface PipelineInput {
   systemPrompt: string;
   /** 可用工具描述 */
   tools: ToolDefinition[];
-  /** 最大 token 数 */
+  /** 最大 token 数（请求参数，"我要多少"） */
   maxTokens?: number;
+  /**
+   * 模型上下文窗口大小（能力声明，"模型能处理多少"）
+   *
+   * 来自 ModelInfo.contextWindow。Pipeline 用此值做主动压缩决策。
+   * 当 maxTokens 未设置时，contextWindow 作为有效上限。
+   */
+  contextWindow?: number;
   /** 中止信号 */
   signal?: AbortSignal;
   /** 扩展配置（Harness 层自定义） */

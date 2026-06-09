@@ -152,6 +152,7 @@ describe('DefaultTaskSupervisor', () => {
         chat: vi.fn().mockResolvedValue({ content: 'OK', model: 'mock', usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 } }),
         stream: async function* () { yield { type: 'done' }; },
         isAvailable: vi.fn().mockResolvedValue(true),
+      getModelInfo: () => null,
       };
 
       const supervisor = new DefaultTaskSupervisor(
@@ -172,6 +173,7 @@ describe('DefaultTaskSupervisor', () => {
         chat: vi.fn().mockResolvedValue({ content: 'STOP: Agent is stuck in a loop', model: 'mock', usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 } }),
         stream: async function* () { yield { type: 'done' }; },
         isAvailable: vi.fn().mockResolvedValue(true),
+      getModelInfo: () => null,
       };
 
       const supervisor = new DefaultTaskSupervisor(
@@ -192,6 +194,7 @@ describe('DefaultTaskSupervisor', () => {
         chat: vi.fn().mockResolvedValue({ content: 'CONCERN: Agent seems to be repeating', model: 'mock', usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 } }),
         stream: async function* () { yield { type: 'done' }; },
         isAvailable: vi.fn().mockResolvedValue(true),
+      getModelInfo: () => null,
       };
 
       const supervisor = new DefaultTaskSupervisor(
@@ -212,6 +215,7 @@ describe('DefaultTaskSupervisor', () => {
         chat: vi.fn().mockRejectedValue(new Error('API error')),
         stream: async function* () { yield { type: 'done' }; },
         isAvailable: vi.fn().mockResolvedValue(true),
+      getModelInfo: () => null,
       };
 
       const supervisor = new DefaultTaskSupervisor(
@@ -265,6 +269,7 @@ describe('DefaultTaskSupervisor', () => {
         chat: vi.fn(),
         stream: async function* () { yield { type: 'done' }; },
         isAvailable: vi.fn().mockResolvedValue(true),
+      getModelInfo: () => null,
       };
 
       const supervisor = createTaskSupervisor({ checkpointInterval: 10 }, mockModel);
@@ -312,6 +317,7 @@ describe('DefaultTaskSupervisor', () => {
           yield { type: 'done', usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 } };
         },
         isAvailable: vi.fn().mockResolvedValue(true),
+      getModelInfo: () => null,
       };
 
       const engine = await new AgentBuilder()
@@ -333,6 +339,7 @@ describe('DefaultTaskSupervisor', () => {
           yield { type: 'done', usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 } };
         },
         isAvailable: vi.fn().mockResolvedValue(true),
+      getModelInfo: () => null,
       };
 
       const engine = await new AgentBuilder()

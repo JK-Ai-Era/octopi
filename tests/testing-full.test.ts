@@ -58,6 +58,7 @@ class MockProvider implements ModelProvider {
   }
 
   async isAvailable(): Promise<boolean> { return true; }
+  getModelInfo() { return null; }
   getRequestLog() { return this.requestLog; }
 }
 

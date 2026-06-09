@@ -22,6 +22,7 @@ function mockModel(response: string): ModelProvider {
     },
     async *stream() {},
     async isAvailable() { return true; },
+      getModelInfo() { return null; },
   };
 }
 

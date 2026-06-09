@@ -42,6 +42,7 @@ function createMockModelProvider(): ModelProvider {
       yield { type: 'done', usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 } };
     },
     isAvailable: vi.fn().mockResolvedValue(true),
+      getModelInfo: () => null,
   };
 }
 
@@ -203,6 +204,7 @@ describe('SessionAwareRunner — 异常退出 session 一致性', () => {
         // 第二次：直接结束（模拟预算耗尽后的引擎行为）
       },
       isAvailable: vi.fn().mockResolvedValue(true),
+      getModelInfo: () => null,
     };
 
     const testTool: RegisteredTool = {
@@ -247,6 +249,7 @@ describe('SessionAwareRunner — 异常退出 session 一致性', () => {
         throw Object.assign(new Error('Unauthorized'), { status: 401 });
       },
       isAvailable: vi.fn().mockResolvedValue(true),
+      getModelInfo: () => null,
     };
 
     const errorStrategy = {
@@ -297,6 +300,7 @@ describe('SessionAwareRunner — 异常退出 session 一致性', () => {
         throw Object.assign(new Error('Connection lost'), { status: 500 });
       },
       isAvailable: vi.fn().mockResolvedValue(true),
+      getModelInfo: () => null,
     };
 
     const errorStrategy = {

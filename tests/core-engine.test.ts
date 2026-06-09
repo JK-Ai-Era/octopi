@@ -52,6 +52,7 @@ function createMockModelProvider(response?: Partial<LLMResponse>): ModelProvider
       }
     },
     isAvailable: vi.fn().mockResolvedValue(true),
+      getModelInfo: () => null,
   };
 }
 
@@ -287,6 +288,7 @@ describe('AgentEngine', () => {
         yield { type: 'done' as const };
       },
       isAvailable: vi.fn().mockResolvedValue(true),
+      getModelInfo: () => null,
     };
 
     const deps = createTestDeps({ model });
@@ -318,6 +320,7 @@ describe('AgentEngine', () => {
         yield { type: 'done' as const };
       },
       isAvailable: vi.fn().mockResolvedValue(true),
+      getModelInfo: () => null,
     };
 
     const tools = new Map<string, RegisteredTool>();

@@ -27,8 +27,10 @@ export interface StageContext {
   systemPrompt: string;
   /** 工具定义 */
   tools: ToolDefinition[];
-  /** 最大 token 数 */
+  /** 最大 token 数（请求参数） */
   maxTokens?: number;
+  /** 模型上下文窗口大小（能力声明） */
+  contextWindow?: number;
   /** 中止信号 */
   signal?: AbortSignal;
   /** 估算的 token 数 */
@@ -102,19 +104,25 @@ export class SkillStage implements ContextStage {
  * CompactStage — 上下文压缩
  *
  * 当 token 超限时，自动截断或摘要早期消息。
+ * 优先使用 maxTokens（请求参数），其次使用 contextWindow（能力声明）。
  */
 export class CompactStage implements ContextStage {
   readonly name = 'compact';
 
   async process(ctx: StageContext): Promise<StageContext> {
-    if (!ctx.maxTokens) return ctx;
+    // 确定有效 token 上限：min(maxTokens, contextWindow)，忽略 undefined
+    const effectiveLimit = ctx.maxTokens !== undefined && ctx.contextWindow !== undefined
+      ? Math.min(ctx.maxTokens, ctx.contextWindow)
+      : ctx.maxTokens ?? ctx.contextWindow;
+
+    if (!effectiveLimit) return ctx;
 
     const currentTokens = estimateTokens(ctx.messages);
-    if (currentTokens <= ctx.maxTokens) return ctx;
+    if (currentTokens <= effectiveLimit) return ctx;
 
     // 策略：保留系统提示 + 最近 N 条消息，截断早期消息
     // 简单实现：移除早期消息直到 token 降到阈值以下
-    const threshold = Math.floor(ctx.maxTokens * 0.8); // 留 20% 余量
+    const threshold = Math.floor(effectiveLimit * 0.8); // 留 20% 余量
     const messages = [...ctx.messages];
 
     // 保留最后 4 条消息
@@ -210,6 +218,7 @@ export class DefaultContextPipeline implements ContextPipeline {
       systemPrompt: input.systemPrompt,
       tools: input.tools,
       maxTokens: input.maxTokens,
+      contextWindow: input.contextWindow,
       signal: input.signal,
       estimatedTokens: 0,
       untrustedRanges: [],

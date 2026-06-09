@@ -32,6 +32,8 @@ function createMockProvider(response?: Partial<LLMResponse>): ModelProvider {
     }),
     stream: async function* () {},
     isAvailable: async () => true,
+    getModelInfo: () => null,
+    getModelInfo: () => null,
   };
 }
 

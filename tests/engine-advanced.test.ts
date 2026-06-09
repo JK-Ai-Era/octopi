@@ -57,6 +57,7 @@ function createMockModelProvider(response?: Partial<LLMResponse>): ModelProvider
       yield { type: 'done', usage: resp.usage };
     },
     isAvailable: vi.fn().mockResolvedValue(true),
+      getModelInfo: () => null,
   };
 }
 
@@ -121,6 +122,7 @@ describe('流式 tool call 多工具并行', () => {
         }
       },
       isAvailable: vi.fn().mockResolvedValue(true),
+      getModelInfo: () => null,
     };
 
     const deps = createTestDeps({ model, executor });
@@ -153,6 +155,7 @@ describe('流式 tool call 多工具并行', () => {
         yield { type: 'done', usage: { promptTokens: 5, completionTokens: 2, totalTokens: 7 } };
       },
       isAvailable: vi.fn().mockResolvedValue(true),
+      getModelInfo: () => null,
     };
 
     const deps = createTestDeps({ model, executor });
@@ -188,6 +191,7 @@ describe('错误分类和重试', () => {
         throw Object.assign(new Error('Rate limited'), { status: 429 });
       })() as any,
       isAvailable: vi.fn().mockResolvedValue(true),
+      getModelInfo: () => null,
     };
 
     const deps = createTestDeps({ model, errorStrategy, events });
@@ -217,6 +221,7 @@ describe('错误分类和重试', () => {
         yield { type: 'done', usage: { promptTokens: 5, completionTokens: 2, totalTokens: 7 } };
       },
       isAvailable: vi.fn().mockResolvedValue(true),
+      getModelInfo: () => null,
     };
 
     const errorStrategy: ErrorStrategy = {
@@ -363,6 +368,7 @@ describe('context_length 错误自动截断', () => {
         yield { type: 'done', usage: { promptTokens: 5, completionTokens: 2, totalTokens: 7 } };
       },
       isAvailable: vi.fn().mockResolvedValue(true),
+      getModelInfo: () => null,
     };
 
     const errorStrategy: ErrorStrategy = {
@@ -414,6 +420,7 @@ describe('context_length 错误自动截断', () => {
         throw Object.assign(new Error('context_length_exceeded'), { status: 400 });
       },
       isAvailable: vi.fn().mockResolvedValue(true),
+      getModelInfo: () => null,
     };
 
     const errorStrategy: ErrorStrategy = {
@@ -469,6 +476,7 @@ describe('引擎异常退出事件', () => {
         yield { type: 'done', usage: { promptTokens: 5, completionTokens: 2, totalTokens: 7 } };
       },
       isAvailable: vi.fn().mockResolvedValue(true),
+      getModelInfo: () => null,
     };
 
     const tools = new Map<string, RegisteredTool>();

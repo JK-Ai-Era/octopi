@@ -30,6 +30,7 @@ class SimpleMockProvider implements ModelProvider {
     yield { type: 'done', usage: this.response.usage };
   }
   async isAvailable(): Promise<boolean> { return true; }
+  getModelInfo() { return null; }
 }
 
 // ═══════════════════════════════════════════════════

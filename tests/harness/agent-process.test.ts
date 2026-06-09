@@ -27,6 +27,8 @@ function createMockModelProvider(response?: string): ModelProvider {
       yield { type: 'done' as const };
     },
     isAvailable: async () => true,
+    getModelInfo: () => null,
+    getModelInfo: () => null,
   };
 }
 
