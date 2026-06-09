@@ -141,6 +141,10 @@ export class ChaosProvider implements ModelProvider {
     return this.inner.getModelInfo(modelName);
   }
 
+  getModelInfos(): ModelInfo[] {
+    return this.inner.getModelInfos();
+  }
+
   /**
    * 获取注入历史
    */

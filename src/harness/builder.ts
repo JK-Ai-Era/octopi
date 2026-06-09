@@ -209,6 +209,7 @@ export class AgentBuilder {
         stream: async function* () { throw new Error(`Model provider "${providerOrName}" not configured`); },
         isAvailable: async () => false,
         getModelInfo: () => null,
+        getModelInfos: () => [],
       };
     } else {
       this._model = providerOrName;

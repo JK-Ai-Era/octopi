@@ -114,6 +114,7 @@ export { HttpChannelAdapter } from './integration/protocols/http.js';
 // ============================================================
 
 export { loadConfig, toGatewayConfig, createProviderFromConfig, createStoreFromConfig } from './config.js';
+export { getBuiltinModelInfo, mergeWithBuiltinInfo } from './builtin-model-info.js';
 export type { HarnessConfig, AgentConfig, ProviderConfig, ChannelConfig, PluginConfig, StoreConfig } from './config.js';
 
 // ============================================================

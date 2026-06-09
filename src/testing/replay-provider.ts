@@ -111,6 +111,10 @@ export class ReplayProvider implements ModelProvider {
     return null;
   }
 
+  getModelInfos(): ModelInfo[] {
+    return [];
+  }
+
   /**
    * 获取剩余可回放条目数
    */

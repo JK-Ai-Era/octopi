@@ -24,6 +24,7 @@ import type {
   LLMStreamChunk,
 } from '../../core/interfaces/model-provider.js';
 import type { ToolCall, ModelInfo } from '../../core/types.js';
+import { mergeWithBuiltinInfo } from '../../builtin-model-info.js';
 
 /**
  * OpenAI Provider 配置
@@ -70,14 +71,18 @@ export class OpenAIProvider implements ModelProvider {
     this.timeoutMs = config.timeoutMs ?? 60_000;
 
     // 解析 models 配置：提取名称列表 + ModelInfo 映射
+    // 合并内置默认值（用户配置优先）
     const rawModels = config.models ?? ['gpt-5.5', 'gpt-5.5-mini'];
     this.models = [];
     for (const entry of rawModels) {
       if (typeof entry === 'string') {
         this.models.push(entry);
+        const builtin = mergeWithBuiltinInfo(entry);
+        if (builtin) this.modelInfoMap.set(entry, builtin);
       } else {
         this.models.push(entry.name);
-        this.modelInfoMap.set(entry.name, entry);
+        const merged = mergeWithBuiltinInfo(entry.name, entry);
+        if (merged) this.modelInfoMap.set(entry.name, merged);
       }
     }
 
@@ -91,6 +96,10 @@ export class OpenAIProvider implements ModelProvider {
    */
   getModelInfo(modelName: string): ModelInfo | null {
     return this.modelInfoMap.get(modelName) ?? null;
+  }
+
+  getModelInfos(): ModelInfo[] {
+    return Array.from(this.modelInfoMap.values());
   }
 
   /**

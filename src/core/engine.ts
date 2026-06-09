@@ -137,6 +137,21 @@ export interface EngineEvent {
 export class AgentEngine {
   // ── 扩展回调槽 ──
   onMessage?: (msg: Message) => Message | null;
+  /**
+   * 上下文组装前的回调
+   *
+   * 用于注入额外上下文或修改 PipelineInput。
+   *
+   * ⚠️ 注意：返回值必须保留 PipelineInput 的所有字段（包括 contextWindow）。
+   * 建议使用展开运算符：`return { ...input, extraField: value }`
+   *
+   * @example
+   * ```ts
+   * beforeAssemble: (input) => {
+   *   return { ...input, contextWindow: 128000 };
+   * }
+   * ```
+   */
   beforeAssemble?: (input: PipelineInput) => PipelineInput;
   beforeModelCall?: (req: LLMRequest) => LLMRequest | null;
   afterModelCall?: (resp: LLMResponse) => LLMResponse;

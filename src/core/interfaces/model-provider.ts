@@ -114,4 +114,11 @@ export interface ModelProvider {
    * Context Pipeline 用此信息做 token 预算规划。
    */
   getModelInfo(modelName: string): ModelInfo | null;
+
+  /**
+   * 获取所有已配置的 ModelInfo
+   *
+   * 用于模型选择 UI、能力发现等场景。
+   */
+  getModelInfos(): ModelInfo[];
 }
