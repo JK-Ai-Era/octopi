@@ -1,14 +1,14 @@
 /**
  * Task System — Harness 层
  *
- * 任务管理系统，通过 ContextPipeline Stage 集成。
+ * 任务管理系统。
  */
 
 export { TaskTracker } from './tracker.js';
 export { TaskManager } from './manager.js';
-export { TaskStage } from '../context/stages/task-stage.js';
-export type { TaskStageConfig } from '../context/stages/task-stage.js';
 export { applyDecision } from './shared.js';
+export { DefaultTaskDecisionProvider } from './task-decision-provider.js';
+export type { DefaultTaskDecisionProviderConfig } from './task-decision-provider.js';
 export type {
   Task,
   TaskEvent,

@@ -22,11 +22,26 @@ export type {
 } from './tool-executor.js';
 
 export type {
-  ContextPipeline,
-  PipelineInput,
-  PipelineOutput,
-  UntrustedRange,
-} from './context-pipeline.js';
+  ContextEngine,
+  ContextEngineInfo,
+  AssembleParams,
+  AssembleResult,
+  IngestParams,
+  CompactParams,
+  CompactResult,
+  AfterTurnParams,
+  TokenEstimator,
+  SummarizeFunction,
+  MessageSelector,
+  SelectResult,
+  SelectOptions,
+  Compressor,
+  CompressParams,
+  CompressResult,
+  BudgetAllocator,
+  BudgetAllocateParams,
+  BudgetAllocateResult,
+} from './context-engine.js';
 
 export type {
   ErrorStrategy,

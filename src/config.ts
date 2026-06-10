@@ -187,6 +187,34 @@ export interface SupervisorConfig {
   hardWallClockMs?: number;
 }
 
+// ── 上下文引擎配置 ──
+
+/**
+ * 上下文引擎配置
+ *
+ * 控制上下文管理行为：消息选择、压缩策略、预算分配。
+ */
+export interface ContextEngineConfig {
+  /** 引擎类型（默认 'default'） */
+  type?: 'default' | 'custom';
+  /** 头部保护消息数（默认 3） */
+  protectFirstN?: number;
+  /** 尾部保护消息数（默认 20） */
+  protectLastN?: number;
+  /** 触发压缩的阈值比例（默认 0.5） */
+  compactThreshold?: number;
+  /** 输出预留比例（默认 0.20） */
+  outputRatio?: number;
+  /** 输出预留最小值（默认 2000） */
+  minOutputReserve?: number;
+  /** 输出预留最大值（默认 8000） */
+  maxOutputReserve?: number;
+  /** 是否启用 LLM 摘要（默认 true） */
+  enableLLMSummary?: boolean;
+  /** 摘要模型（可选，使用主模型） */
+  summaryModel?: string;
+}
+
 // ── 完整配置 ──
 
 /**
@@ -203,6 +231,8 @@ export interface HarnessConfig {
   budget?: Partial<IterationBudgetConfig>;
   /** 任务监督器配置（智能监督，替代硬限制） */
   supervisor?: SupervisorConfig;
+  /** 上下文引擎配置 */
+  contextEngine?: ContextEngineConfig;
   /** 安全策略 */
   security?: {
     /** 预设名称 */

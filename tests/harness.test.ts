@@ -8,7 +8,7 @@ import {
   createAgent,
   loadPersona,
   composePersonas,
-  DefaultContextPipeline,
+  DefaultContextEngine,
   SessionAwareRunner,
   DefaultTaskSupervisor,
 } from '../src/harness/index.js';
@@ -335,16 +335,19 @@ describe('SessionAwareRunner — 异常退出 session 一致性', () => {
   });
 });
 
-describe('DefaultContextPipeline', () => {
+describe('DefaultContextEngine', () => {
   it('应该组装上下文', async () => {
-    const pipeline = new DefaultContextPipeline();
+    const engine = new DefaultContextEngine();
     const messages = [
       { role: 'user' as const, content: '你好', timestamp: Date.now() },
     ];
 
-    const output = await pipeline.process(messages, {
+    const output = await engine.assemble({
+      sessionId: 'test',
+      messages,
       systemPrompt: '你是一个助手',
       tools: [],
+      tokenBudget: 100000,
     });
 
     expect(output.messages.length).toBeGreaterThan(0);
@@ -354,7 +357,7 @@ describe('DefaultContextPipeline', () => {
   });
 
   it('应该处理工具调用消息', async () => {
-    const pipeline = new DefaultContextPipeline();
+    const engine = new DefaultContextEngine();
     const messages = [
       { role: 'user' as const, content: '搜索', timestamp: Date.now() },
       {
@@ -371,9 +374,12 @@ describe('DefaultContextPipeline', () => {
       },
     ];
 
-    const output = await pipeline.process(messages, {
+    const output = await engine.assemble({
+      sessionId: 'test',
+      messages,
       systemPrompt: 'test',
       tools: [],
+      tokenBudget: 100000,
     });
 
     // 应该有 system + user + assistant(with tool_calls) + tool

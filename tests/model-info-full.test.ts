@@ -15,7 +15,7 @@ import type { RegisteredTool } from '../src/core/types.js';
 import { DefaultEventBus } from '../src/core/event-bus.js';
 import { DefaultSecurityGuard } from '../src/core/security-guard.js';
 import { IterationBudget } from '../src/core/budget.js';
-import { DefaultContextPipeline } from '../src/harness/context/pipeline.js';
+import { DefaultContextEngine } from '../src/harness/context/default-context-engine.js';
 import { writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -256,7 +256,7 @@ describe('Engine defaultModel fallback', () => {
       model: provider,
       tools: new Map(),
       executor: { execute: vi.fn() },
-      context: new DefaultContextPipeline(),
+      contextEngine: new DefaultContextEngine(),
       events: new DefaultEventBus(),
       security: new DefaultSecurityGuard(new DefaultEventBus()),
       budget: new IterationBudget(new DefaultEventBus(), { maxIterations: 5 }),
@@ -283,7 +283,7 @@ describe('Engine defaultModel fallback', () => {
       model: provider,
       tools: new Map(),
       executor: { execute: vi.fn() },
-      context: new DefaultContextPipeline(),
+      contextEngine: new DefaultContextEngine(),
       events: new DefaultEventBus(),
       security: new DefaultSecurityGuard(new DefaultEventBus()),
       budget: new IterationBudget(new DefaultEventBus(), { maxIterations: 5 }),
@@ -310,7 +310,7 @@ describe('Engine defaultModel fallback', () => {
       model: provider,
       tools: new Map(),
       executor: { execute: vi.fn() },
-      context: new DefaultContextPipeline(),
+      contextEngine: new DefaultContextEngine(),
       events: new DefaultEventBus(),
       security: new DefaultSecurityGuard(new DefaultEventBus()),
       budget: new IterationBudget(new DefaultEventBus(), { maxIterations: 5 }),

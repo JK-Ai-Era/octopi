@@ -43,10 +43,10 @@ import type {
   ExecutionContext,
 } from './interfaces/tool-executor.js';
 import type {
-  ContextPipeline,
-  PipelineInput,
-  PipelineOutput,
-} from './interfaces/context-pipeline.js';
+  ContextEngine,
+  AssembleParams,
+  AssembleResult,
+} from './interfaces/context-engine.js';
 import type {
   ErrorStrategy,
   ClassifiedError,
@@ -77,8 +77,8 @@ export interface AgentEngineDeps {
   tools: Map<string, RegisteredTool>;
   /** 工具执行器 */
   executor: ToolExecutor;
-  /** 上下文管道 */
-  context: ContextPipeline;
+  /** 上下文引擎 */
+  contextEngine: ContextEngine;
   /** 事件总线 */
   events: EventBus;
   /** 安全守卫 */
@@ -118,6 +118,14 @@ export interface RunConfig {
   temperature?: number;
   /** 工作目录（工具用于解析相对路径） */
   cwd?: string;
+  /**
+   * 外部注入的上下文
+   *
+   * 由 Harness 层在 engine.run() 之前设置。
+   * Core 层不关心内容，只透传给 ContextEngine。
+   * 典型用途：任务上下文、用户画像、外部知识等。
+   */
+  injectedContext?: string;
 }
 
 /** Agent 事件（v2.0，与旧版 AgentEvent 兼容） */
@@ -140,10 +148,7 @@ export class AgentEngine {
   /**
    * 上下文组装前的回调
    *
-   * 用于注入额外上下文或修改 PipelineInput。
-   *
-   * ⚠️ 注意：返回值必须保留 PipelineInput 的所有字段（包括 contextWindow）。
-   * 建议使用展开运算符：`return { ...input, extraField: value }`
+   * 用于注入额外上下文或修改参数。
    *
    * @example
    * ```ts
@@ -152,7 +157,7 @@ export class AgentEngine {
    * }
    * ```
    */
-  beforeAssemble?: (input: PipelineInput) => PipelineInput;
+  beforeAssemble?: (input: { systemPrompt: string; tools: ModelToolDef[]; signal?: AbortSignal; contextWindow?: number }) => { systemPrompt: string; tools: ModelToolDef[]; signal?: AbortSignal; contextWindow?: number } | null;
   beforeModelCall?: (req: LLMRequest) => LLMRequest | null;
   afterModelCall?: (resp: LLMResponse) => LLMResponse;
   beforeToolExec?: (call: ToolCall) => ToolCall | null;
@@ -291,31 +296,49 @@ export class AgentEngine {
           const modelName = config.model || this.deps.model.defaultModel;
           const modelInfo = modelName ? this.deps.model.getModelInfo(modelName) : null;
 
-          let pipelineInput: PipelineInput = {
-            systemPrompt: config.systemPrompt || this.deps.systemPrompt || '',
-            tools: this.buildToolDefinitions(),
-            signal,
+          const basePrompt = config.systemPrompt || this.deps.systemPrompt || '';
+          // 将 injectedContext 追加到 systemPrompt（Core 层不关心内容，只透传）
+          const systemPrompt = config.injectedContext != null
+            ? basePrompt + '\n\n' + config.injectedContext
+            : basePrompt;
+          const toolDefs = this.buildToolDefinitions();
+          const sessionId = config.sessionId ?? 'inline';
+
+          // 2b. 调用 ContextEngine 组装上下文
+          const assembleParams: AssembleParams = {
+            sessionId,
+            messages,
+            systemPrompt,
+            tools: toolDefs,
+            tokenBudget: modelInfo?.contextWindow ?? 128000,
             contextWindow: modelInfo?.contextWindow,
+            signal,
           };
 
           if (this.beforeAssemble) {
-            const modified = this.beforeAssemble(pipelineInput);
-            if (modified) pipelineInput = modified;
+            const modified = this.beforeAssemble({
+              systemPrompt,
+              tools: toolDefs,
+              signal,
+              contextWindow: modelInfo?.contextWindow,
+            });
+            if (modified) {
+              assembleParams.systemPrompt = modified.systemPrompt;
+              assembleParams.contextWindow = modified.contextWindow;
+            }
           }
 
-          // 2b. 调用 ContextPipeline 组装上下文
-          const pipelineOutput: PipelineOutput = await context.process(messages, pipelineInput);
+          const assembled: AssembleResult = await this.deps.contextEngine.assemble(assembleParams);
+          const llmMessages = assembled.messages;
+          const estimatedTokens = assembled.estimatedTokens;
 
           // Observer: token 估算
-          observer?.recordMetric('agent.context.tokens', pipelineOutput.estimatedTokens);
-
-          // 2c. SecurityGuard 检查上下文中的不可信内容
-          // （由 ContextPipeline 的 filter stage 标记，SecurityGuard 在模型输出后检查）
+          observer?.recordMetric('agent.context.tokens', estimatedTokens);
 
           // 2d. 触发 beforeModelCall 回调
           const llmTools = this.buildToolDefinitions();
           let llmRequest: LLMRequest = {
-            messages: pipelineOutput.messages,
+            messages: llmMessages,
             tools: llmTools.length > 0 ? llmTools : undefined,
             model: config.model,
             temperature: config.temperature,
@@ -714,6 +737,18 @@ export class AgentEngine {
           // afterTurn 回调
           if (this.afterTurn) {
             this.afterTurn(turn);
+          }
+
+          // 调用 ContextEngine 的 afterTurn（如果可用）
+          if (this.deps.contextEngine?.afterTurn) {
+            await this.deps.contextEngine.afterTurn({
+              sessionId: config.sessionId ?? 'inline',
+              turn: [turn.output],
+              usage: llmResponse.usage ? {
+                promptTokens: llmResponse.usage.promptTokens,
+                completionTokens: llmResponse.usage.completionTokens,
+              } : undefined,
+            });
           }
 
           yield {

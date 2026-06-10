@@ -27,8 +27,9 @@ import type {
   ExecutionContext,
 } from '../core/interfaces/tool-executor.js';
 import type {
-  ContextPipeline,
-} from '../core/interfaces/context-pipeline.js';
+  ContextEngine,
+  SummarizeFunction,
+} from '../core/interfaces/context-engine.js';
 import type {
   ErrorStrategy,
   ClassifiedError,
@@ -67,8 +68,7 @@ import {
 import type { IterationBudgetConfig } from '../core/budget.js';
 
 import { loadPersona, composePersonas } from './persona/loader.js';
-import { DefaultContextPipeline } from './context/pipeline.js';
-import type { ContextStage } from './context/pipeline.js';
+import { DefaultContextEngine } from './context/default-context-engine.js';
 import { SessionAwareRunner } from './runner.js';
 import type { SessionAwareRunnerConfig } from './runner.js';
 
@@ -175,7 +175,8 @@ export class AgentBuilder {
   private _model?: ModelProvider;
   private _tools = new Map<string, RegisteredTool>();
   private _executor?: ToolExecutor;
-  private _context?: ContextPipeline;
+  private _contextEngine?: ContextEngine;
+  private _summarize?: SummarizeFunction;
   private _events?: EventBus;
   private _security?: SecurityGuard;
   private _budget?: IterationBudget;
@@ -188,7 +189,6 @@ export class AgentBuilder {
   // Harness 组件
   private _personaWorkspaces: string[] = [];
   private _systemPrompt?: string;
-  private _contextStages?: ContextStage[];
   private _securityConfig?: SecurityGuardConfig;
 
   // Runner 配置
@@ -235,15 +235,15 @@ export class AgentBuilder {
     return this;
   }
 
-  /** 设置上下文管道 */
-  contextPipeline(pipeline: ContextPipeline): this {
-    this._context = pipeline;
+  /** 设置上下文引擎 */
+  contextEngine(engine: ContextEngine): this {
+    this._contextEngine = engine;
     return this;
   }
 
-  /** 设置上下文阶段（替换默认阶段） */
-  contextStages(stages: ContextStage[]): this {
-    this._contextStages = stages;
+  /** 设置摘要函数（用于 LLM 摘要压缩） */
+  summarize(fn: SummarizeFunction): this {
+    this._summarize = fn;
     return this;
   }
 
@@ -377,8 +377,10 @@ export class AgentBuilder {
     const events = this._events ?? new DefaultEventBus();
     const security = this._security ?? new DefaultSecurityGuard(events, this._securityConfig);
     const errorStrategy = this._errorStrategy ?? new DefaultErrorStrategy();
-    const context = this._context ?? new DefaultContextPipeline(this._contextStages);
     const executor = this._executor ?? new DefaultToolExecutor(this._tools);
+
+    // 创建上下文引擎
+    const contextEngine = this._contextEngine ?? new DefaultContextEngine();
 
     // 自动创建 TaskSupervisor（如果通过 config 配置但未手动传入实例）
     const taskSupervisor = this._taskSupervisor
@@ -404,7 +406,7 @@ export class AgentBuilder {
       model: this._model,
       tools: this._tools,
       executor,
-      context,
+      contextEngine,
       events,
       security,
       budget,

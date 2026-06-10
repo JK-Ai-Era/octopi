@@ -25,9 +25,8 @@ import type {
   LLMResponse,
   LLMStreamChunk,
   ToolExecutor,
-  ContextPipeline,
-  PipelineInput,
-  PipelineOutput,
+  ContextEngine,
+  AssembleResult,
   ErrorStrategy,
   RegisteredTool,
   Message,
@@ -61,15 +60,16 @@ function createMockModelProvider(response?: Partial<LLMResponse>): ModelProvider
   };
 }
 
-function createMockContextPipeline(): ContextPipeline {
+function createMockContextEngine(): ContextEngine {
   return {
-    process: vi.fn().mockImplementation(async (messages: Message[], input: PipelineInput): Promise<PipelineOutput> => ({
+    info: { id: 'mock', name: 'Mock Context Engine', ownsCompaction: false },
+    assemble: vi.fn().mockImplementation(async (params): Promise<AssembleResult> => ({
       messages: [
-        { role: 'system', content: input.systemPrompt },
-        ...messages.map(m => ({ role: m.role, content: m.content })),
+        { role: 'system', content: params.systemPrompt },
+        ...params.messages.map(m => ({ role: m.role, content: m.content })),
       ],
       estimatedTokens: 100,
-      systemPrompt: input.systemPrompt,
+      systemPrompt: params.systemPrompt,
     })),
   };
 }
@@ -80,7 +80,7 @@ function createTestDeps(overrides?: Partial<AgentEngineDeps>): AgentEngineDeps {
     model: createMockModelProvider(),
     tools: new Map(),
     executor: { execute: vi.fn().mockResolvedValue('result') },
-    context: createMockContextPipeline(),
+    contextEngine: createMockContextEngine(),
     events,
     security: new DefaultSecurityGuard(events),
     budget: new IterationBudget(events),
@@ -247,36 +247,36 @@ describe('错误分类和重试', () => {
 });
 
 describe('Context pipeline 集成', () => {
-  it('应该将 systemPrompt 传递给 pipeline', async () => {
-    const pipelineProcess = vi.fn().mockImplementation(async (messages: Message[], input: PipelineInput): Promise<PipelineOutput> => ({
-      messages: [{ role: 'system', content: input.systemPrompt }, ...messages.map(m => ({ role: m.role, content: m.content }))],
+  it('应该将 systemPrompt 传递给 contextEngine', async () => {
+    const assemble = vi.fn().mockImplementation(async (params): Promise<AssembleResult> => ({
+      messages: [{ role: 'system', content: params.systemPrompt }, ...params.messages.map(m => ({ role: m.role, content: m.content }))],
       estimatedTokens: 100,
-      systemPrompt: input.systemPrompt,
+      systemPrompt: params.systemPrompt,
     }));
 
     const deps = createTestDeps({
-      context: { process: pipelineProcess },
+      contextEngine: { info: { id: 'mock', name: 'Mock', ownsCompaction: false }, assemble },
     });
     const engine = new AgentEngine(deps);
 
     for await (const _ of engine.run([createTestMessage('test')], { systemPrompt: 'You are a helpful assistant' })) {}
 
-    // pipeline 应该被调用
-    expect(pipelineProcess).toHaveBeenCalled();
+    // assemble 应该被调用
+    expect(assemble).toHaveBeenCalled();
     // systemPrompt 应该被传递
-    const callArgs = (pipelineProcess as any).mock.calls[0];
-    expect(callArgs[1].systemPrompt).toBe('You are a helpful assistant');
+    const callArgs = (assemble as any).mock.calls[0];
+    expect(callArgs[0].systemPrompt).toBe('You are a helpful assistant');
   });
 
   it('应该优先使用 RunConfig.systemPrompt，回退到 deps.systemPrompt', async () => {
-    const pipelineProcess = vi.fn().mockImplementation(async (messages: Message[], input: PipelineInput): Promise<PipelineOutput> => ({
-      messages: [{ role: 'system', content: input.systemPrompt }],
+    const assemble = vi.fn().mockImplementation(async (params): Promise<AssembleResult> => ({
+      messages: [{ role: 'system', content: params.systemPrompt }],
       estimatedTokens: 50,
-      systemPrompt: input.systemPrompt,
+      systemPrompt: params.systemPrompt,
     }));
 
     const deps = createTestDeps({
-      context: { process: pipelineProcess },
+      contextEngine: { info: { id: 'mock', name: 'Mock', ownsCompaction: false }, assemble },
       systemPrompt: 'From deps',
     });
     const engine = new AgentEngine(deps);
@@ -284,19 +284,19 @@ describe('Context pipeline 集成', () => {
     // RunConfig 有 systemPrompt，应该优先使用
     for await (const _ of engine.run([createTestMessage('test')], { systemPrompt: 'From RunConfig' })) {}
 
-    const callArgs = (pipelineProcess as any).mock.calls[0];
-    expect(callArgs[1].systemPrompt).toBe('From RunConfig');
+    const callArgs = (assemble as any).mock.calls[0];
+    expect(callArgs[0].systemPrompt).toBe('From RunConfig');
   });
 
   it('应该在 RunConfig 无 systemPrompt 时使用 deps.systemPrompt', async () => {
-    const pipelineProcess = vi.fn().mockImplementation(async (messages: Message[], input: PipelineInput): Promise<PipelineOutput> => ({
-      messages: [{ role: 'system', content: input.systemPrompt }],
+    const assemble = vi.fn().mockImplementation(async (params): Promise<AssembleResult> => ({
+      messages: [{ role: 'system', content: params.systemPrompt }],
       estimatedTokens: 50,
-      systemPrompt: input.systemPrompt,
+      systemPrompt: params.systemPrompt,
     }));
 
     const deps = createTestDeps({
-      context: { process: pipelineProcess },
+      contextEngine: { info: { id: 'mock', name: 'Mock', ownsCompaction: false }, assemble },
       systemPrompt: 'From deps',
     });
     const engine = new AgentEngine(deps);
@@ -304,8 +304,8 @@ describe('Context pipeline 集成', () => {
     // RunConfig.systemPrompt 为空，应该回退到 deps
     for await (const _ of engine.run([createTestMessage('test')], { systemPrompt: '' })) {}
 
-    const callArgs = (pipelineProcess as any).mock.calls[0];
-    expect(callArgs[1].systemPrompt).toBe('From deps');
+    const callArgs = (assemble as any).mock.calls[0];
+    expect(callArgs[0].systemPrompt).toBe('From deps');
   });
 });
 

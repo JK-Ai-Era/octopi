@@ -8,17 +8,21 @@
 // ── Persona ──
 export { loadPersona, composePersonas } from './persona/loader.js';
 
-// ── Context Pipeline ──
-export { DefaultContextPipeline, PersonaStage, HistoryStage, FilterStage } from './context/pipeline.js';
-export type { ContextStage, StageContext } from './context/pipeline.js';
-export { TaskStage } from './context/stages/task-stage.js';
-export type { TaskStageConfig } from './context/stages/task-stage.js';
-export { SmartStage, createSmartSummarizer, createSmartRelevanceFilter } from './context/smart-stage.js';
-export type { SmartStageConfig } from './context/smart-stage.js';
+// ── Context Engine ──
+export { DefaultContextEngine } from './context/default-context-engine.js';
+export type { DefaultContextEngineConfig } from './context/default-context-engine.js';
+export { HeuristicTokenEstimator, estimateTextTokens, estimateLLMMessages } from './context/token-estimator.js';
+export { DefaultMessageSelector } from './context/message-selector.js';
+export { TruncateCompressor } from './context/truncate-compressor.js';
+export { LLMSummaryCompressor } from './context/llm-summarizer.js';
+export { HybridCompressor } from './context/hybrid-compressor.js';
+export { DefaultBudgetAllocator } from './context/budget-allocator.js';
+export { SmartRouter } from './context/smart-router.js';
+export type { SmartRouterConfig, Route, RoutingDecision } from './context/smart-router.js';
 
 // ── Runner ──
 export { SessionAwareRunner } from './runner.js';
-export type { SessionAwareRunnerConfig } from './runner.js';
+export type { SessionAwareRunnerConfig, TaskDecisionProvider, TaskDecisionResult } from './runner.js';
 
 // ── Builder ──
 export { AgentBuilder, createAgent } from './builder.js';
@@ -29,8 +33,8 @@ export { SecurityPresets, getSecurityPolicy } from './security/policy.js';
 export type { Environment } from './security/policy.js';
 
 // ── Task System ──
-export { TaskTracker, TaskManager, applyDecision } from './tasks/index.js';
-export type { Task, TaskDecision, TaskDecisionInput } from './tasks/index.js';
+export { TaskTracker, TaskManager, applyDecision, DefaultTaskDecisionProvider } from './tasks/index.js';
+export type { Task, TaskDecision, TaskDecisionInput, DefaultTaskDecisionProviderConfig } from './tasks/index.js';
 
 // ── Output Quality ──
 export { OutputQualityGate, createOutputQualityGate } from './quality/index.js';

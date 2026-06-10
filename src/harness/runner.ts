@@ -14,6 +14,27 @@ import type { Message, Turn } from '../core/types.js';
 import type { SessionStore, SessionData } from '../core/interfaces/session-store.js';
 import type { AgentEngine, RunConfig, EngineEvent } from '../core/engine.js';
 
+/**
+ * 任务决策提供者接口
+ *
+ * Harness 层组件，在用户消息到达时调用 LLM 判断任务状态。
+ * SessionAwareRunner 在调用 engine.run() 之前调用一次。
+ */
+export interface TaskDecisionProvider {
+  decide(params: {
+    sessionId: string;
+    messages: Message[];
+  }): Promise<TaskDecisionResult>;
+}
+
+/** 任务决策结果 */
+export interface TaskDecisionResult {
+  /** 注入到 systemPrompt 的任务上下文 */
+  taskContext?: string;
+  /** 决策理由（用于日志/可观测性） */
+  reason?: string;
+}
+
 /** Session 锁队列项 */
 interface QueueEntry {
   resolve: () => void;
@@ -27,6 +48,16 @@ export interface SessionAwareRunnerConfig {
   idleExpiryMs?: number;
   /** 是否启用 daily reset */
   enableDailyReset?: boolean;
+  /**
+   * 任务决策提供者（可选）
+   *
+   * 在用户消息到达时调用 LLM 判断任务状态，
+   * 将结果注入到 runConfig.injectedContext，由 ContextEngine 透传到 systemPrompt。
+   *
+   * 调用时机：handle() 中追加用户消息后、engine.run() 前，只调用一次。
+   * 工具调用循环中不会重复调用。
+   */
+  taskDecisionProvider?: TaskDecisionProvider;
 }
 
 const DEFAULT_CONFIG: SessionAwareRunnerConfig = {
@@ -87,12 +118,33 @@ export class SessionAwareRunner {
       session.meta.updatedAt = Date.now();
       session.meta.status = 'processing';
 
-      // 5. 运行 AgentEngine
+      // 5. 任务决策（如果配置了 TaskDecisionProvider）
+      //    在用户消息到达时调用一次，不在工具调用循环中重复调用
+      let effectiveRunConfig = runConfig;
+      if (this.config.taskDecisionProvider && input.role === 'user') {
+        try {
+          const decision = await this.config.taskDecisionProvider.decide({
+            sessionId,
+            messages: session.messages,
+          });
+          if (decision.taskContext) {
+            effectiveRunConfig = {
+              ...runConfig,
+              injectedContext: decision.taskContext,
+            };
+          }
+        } catch (err) {
+          // 任务决策失败不阻塞主流程
+          console.warn('[SessionAwareRunner] TaskDecisionProvider failed:', err);
+        }
+      }
+
+      // 6. 运行 AgentEngine
       let hasTurnEnd = false;
       let streamedContent = '';
       let lastUsage: any = undefined;
 
-      for await (const event of this.engine.run(session.messages, runConfig, signal)) {
+      for await (const event of this.engine.run(session.messages, effectiveRunConfig, signal)) {
         yield event;
 
         // 收集流式内容（用于引擎异常退出时的 fallback）

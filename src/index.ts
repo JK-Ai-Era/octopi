@@ -29,10 +29,32 @@ export { IterationBudget } from './core/budget.js';
 // Core 接口
 export type { ModelProvider, LLMRequest, LLMResponse, LLMStreamChunk, ToolDefinition } from './core/interfaces/model-provider.js';
 export type { ToolExecutor, ExecutionContext } from './core/interfaces/tool-executor.js';
-export type { ContextPipeline, PipelineInput, PipelineOutput } from './core/interfaces/context-pipeline.js';
 export type { ErrorStrategy, ErrorAction, OverflowAction, SecurityAction } from './core/interfaces/error-strategy.js';
 export type { Observer, Span, LogLevel } from './core/interfaces/observer.js';
 export type { SessionStore, SessionData } from './core/interfaces/session-store.js';
+
+// Context Engine (new)
+export type {
+  ContextEngine,
+  ContextEngineInfo,
+  AssembleParams,
+  AssembleResult,
+  IngestParams,
+  CompactParams,
+  CompactResult,
+  AfterTurnParams,
+  TokenEstimator,
+  SummarizeFunction,
+  MessageSelector,
+  SelectResult,
+  SelectOptions,
+  Compressor,
+  CompressParams,
+  CompressResult,
+  BudgetAllocator,
+  BudgetAllocateParams,
+  BudgetAllocateResult,
+} from './core/interfaces/context-engine.js';
 
 // Agent 通信
 export { DefaultAgentCommunicator, createAgentMessage } from './core/agent-communicator.js';
@@ -46,9 +68,18 @@ export { AgentMessageEvents } from './core/interfaces/agent-message.js';
 export { AgentBuilder, createAgent } from './harness/builder.js';
 export { SessionAwareRunner } from './harness/runner.js';
 export { loadPersona, composePersonas } from './harness/persona/loader.js';
-export { DefaultContextPipeline } from './harness/context/pipeline.js';
-export { SmartStage, createSmartSummarizer, createSmartRelevanceFilter } from './harness/context/smart-stage.js';
-export type { SmartStageConfig } from './harness/context/smart-stage.js';
+
+// Context Engine
+export { DefaultContextEngine } from './harness/context/default-context-engine.js';
+export type { DefaultContextEngineConfig } from './harness/context/default-context-engine.js';
+export { HeuristicTokenEstimator, estimateTextTokens } from './harness/context/token-estimator.js';
+export { DefaultMessageSelector } from './harness/context/message-selector.js';
+export { TruncateCompressor } from './harness/context/truncate-compressor.js';
+export { LLMSummaryCompressor } from './harness/context/llm-summarizer.js';
+export { HybridCompressor } from './harness/context/hybrid-compressor.js';
+export { DefaultBudgetAllocator } from './harness/context/budget-allocator.js';
+export { SmartRouter } from './harness/context/smart-router.js';
+export type { SmartRouterConfig, Route, RoutingDecision } from './harness/context/smart-router.js';
 
 // Harness 安全
 export { CapabilityEnforcer, PluginTrustLevel } from './harness/security/capability-enforcer.js';

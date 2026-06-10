@@ -15,7 +15,7 @@ import type { RegisteredTool } from '../../src/core/types.js';
 import { DefaultEventBus } from '../../src/core/event-bus.js';
 import { DefaultSecurityGuard } from '../../src/core/security-guard.js';
 import { IterationBudget } from '../../src/core/budget.js';
-import { DefaultContextPipeline } from '../../src/harness/context/pipeline.js';
+import { DefaultContextEngine } from '../../src/harness/context/default-context-engine.js';
 
 // ── Helper ──
 
@@ -119,14 +119,14 @@ describe('Planning-only Retry', () => {
       onContextOverflow: vi.fn().mockReturnValue({ action: 'compact' }),
       onSecurityViolation: vi.fn().mockReturnValue({ action: 'block', reason: 'test' }),
     };
-    const context = new DefaultContextPipeline();
+    const contextEngine = new DefaultContextEngine();
     const executor = { execute: vi.fn().mockResolvedValue('result') };
 
     const deps: AgentEngineDeps = {
       model: mockModel,
       tools,
       executor,
-      context,
+      contextEngine,
       events,
       security,
       budget,
@@ -181,14 +181,14 @@ describe('Planning-only Retry', () => {
       onContextOverflow: vi.fn().mockReturnValue({ action: 'compact' }),
       onSecurityViolation: vi.fn().mockReturnValue({ action: 'block', reason: 'test' }),
     };
-    const context = new DefaultContextPipeline();
+    const contextEngine = new DefaultContextEngine();
     const executor = { execute: vi.fn().mockResolvedValue('result') };
 
     const deps: AgentEngineDeps = {
       model: mockModel,
       tools,
       executor,
-      context,
+      contextEngine,
       events,
       security,
       budget,
@@ -241,14 +241,14 @@ describe('Planning-only Retry', () => {
       onContextOverflow: vi.fn().mockReturnValue({ action: 'compact' }),
       onSecurityViolation: vi.fn().mockReturnValue({ action: 'block', reason: 'test' }),
     };
-    const context = new DefaultContextPipeline();
+    const contextEngine = new DefaultContextEngine();
     const executor = { execute: vi.fn().mockResolvedValue('result') };
 
     const deps: AgentEngineDeps = {
       model: mockModel,
       tools,
       executor,
-      context,
+      contextEngine,
       events,
       security,
       budget,
@@ -288,14 +288,14 @@ describe('Planning-only Retry', () => {
       onContextOverflow: vi.fn().mockReturnValue({ action: 'compact' }),
       onSecurityViolation: vi.fn().mockReturnValue({ action: 'block', reason: 'test' }),
     };
-    const context = new DefaultContextPipeline();
+    const contextEngine = new DefaultContextEngine();
     const executor = { execute: vi.fn().mockResolvedValue('result') };
 
     const deps: AgentEngineDeps = {
       model: mockModel,
       tools,
       executor,
-      context,
+      contextEngine,
       events,
       security,
       budget,
@@ -340,14 +340,14 @@ describe('Planning-only Retry', () => {
       onContextOverflow: vi.fn().mockReturnValue({ action: 'compact' }),
       onSecurityViolation: vi.fn().mockReturnValue({ action: 'block', reason: 'test' }),
     };
-    const context = new DefaultContextPipeline();
+    const contextEngine = new DefaultContextEngine();
     const executor = { execute: vi.fn().mockResolvedValue('result') };
 
     const deps: AgentEngineDeps = {
       model: mockModel,
       tools,
       executor,
-      context,
+      contextEngine,
       events,
       security,
       budget,
@@ -403,14 +403,14 @@ describe('Planning-only Retry', () => {
       onContextOverflow: vi.fn().mockReturnValue({ action: 'compact' }),
       onSecurityViolation: vi.fn().mockReturnValue({ action: 'block', reason: 'test' }),
     };
-    const context = new DefaultContextPipeline();
+    const contextEngine = new DefaultContextEngine();
     const executor = { execute: vi.fn().mockResolvedValue('result') };
 
     const deps: AgentEngineDeps = {
       model: mockModel,
       tools,
       executor,
-      context,
+      contextEngine,
       events,
       security,
       budget,

@@ -36,7 +36,7 @@ import type { RunConfig } from '../../core/engine.js';
 import { DefaultEventBus } from '../../core/event-bus.js';
 import { DefaultSecurityGuard } from '../../core/security-guard.js';
 import { IterationBudget } from '../../core/budget.js';
-import { DefaultContextPipeline } from '../../harness/context/pipeline.js';
+import { DefaultContextEngine } from '../../harness/context/default-context-engine.js';
 import { SessionAwareRunner } from '../../harness/runner.js';
 
 // ================================================================
@@ -336,7 +336,7 @@ export class Gateway {
           });
         },
       },
-      context: new DefaultContextPipeline(),
+      contextEngine: new DefaultContextEngine(),
       events,
       security,
       budget,

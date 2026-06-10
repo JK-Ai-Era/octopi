@@ -498,37 +498,14 @@ export interface ClassifiedError {
 // 11. Context Engine
 // ============================================================
 
-export interface AssembleResult {
-  messages: Array<Record<string, unknown>>;
-  estimatedTokens: number;
-  systemPromptAddition?: string;
-}
-
-export interface CompactResult {
-  ok: boolean;
-  compacted: boolean;
-  sessionId?: string;
-  sessionFile?: string;
-}
-
-export interface ContextEngineInfo {
-  id: string;
-  name: string;
-  ownsCompaction: boolean;
-}
-
-export interface ContextEngine {
-  info: ContextEngineInfo;
-  ingest(params: { sessionId: string; message: Message }): Promise<void>;
-  assemble(params: {
-    sessionId: string;
-    messages: Message[];
-    tokenBudget: number;
-    availableTools: string[];
-  }): Promise<AssembleResult>;
-  compact(params: { sessionId: string; force: boolean }): Promise<CompactResult>;
-  afterTurn(params: { sessionId: string; turn: Turn }): Promise<void>;
-}
+// ContextEngine 类型已移至 core/interfaces/context-engine.ts
+// 保留向后兼容的导出
+export type {
+  ContextEngine,
+  ContextEngineInfo,
+  AssembleResult,
+  CompactResult,
+} from './interfaces/context-engine.js';
 
 // ============================================================
 // 12. Gateway 配置

@@ -39,7 +39,7 @@ function createMockEngine(response?: string): AgentEngine {
     model: createMockModelProvider(response),
     tools: new Map(),
     executor: { execute: async () => null },
-    context: { process: async (msgs, input) => ({ messages: msgs, estimatedTokens: 100 }) },
+    contextEngine: { info: { id: 'mock', name: 'Mock', ownsCompaction: false }, assemble: async (params) => ({ messages: params.messages.map(m => ({ role: m.role, content: m.content })), estimatedTokens: 100, systemPrompt: params.systemPrompt }) },
     events: new DefaultEventBus(),
     security: new DefaultSecurityGuard(new DefaultEventBus()),
     budget: { checkAndEmit: () => true, recordIteration: () => {}, recordToolCall: () => {}, consumeTokens: () => {}, report: () => ({}) },

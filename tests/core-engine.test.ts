@@ -20,9 +20,8 @@ import type {
   LLMStreamChunk,
   ToolExecutor,
   ExecutionContext,
-  ContextPipeline,
-  PipelineInput,
-  PipelineOutput,
+  ContextEngine,
+  AssembleResult,
   ErrorStrategy,
   SecurityGuard,
   EventBus,
@@ -62,15 +61,16 @@ function createMockToolExecutor(): ToolExecutor {
   };
 }
 
-function createMockContextPipeline(): ContextPipeline {
+function createMockContextEngine(): ContextEngine {
   return {
-    process: vi.fn().mockImplementation(async (messages: Message[], input: PipelineInput): Promise<PipelineOutput> => ({
+    info: { id: 'mock', name: 'Mock Context Engine', ownsCompaction: false },
+    assemble: vi.fn().mockImplementation(async (params): Promise<AssembleResult> => ({
       messages: [
-        { role: 'system', content: input.systemPrompt },
-        ...messages.map(m => ({ role: m.role, content: m.content })),
+        { role: 'system', content: params.systemPrompt },
+        ...params.messages.map(m => ({ role: m.role, content: m.content })),
       ],
       estimatedTokens: 100,
-      systemPrompt: input.systemPrompt,
+      systemPrompt: params.systemPrompt,
     })),
   };
 }
@@ -90,7 +90,7 @@ function createTestDeps(overrides?: Partial<AgentEngineDeps>): AgentEngineDeps {
     model: createMockModelProvider(),
     tools: new Map(),
     executor: createMockToolExecutor(),
-    context: createMockContextPipeline(),
+    contextEngine: createMockContextEngine(),
     events,
     security: new DefaultSecurityGuard(events),
     budget: new IterationBudget(events),

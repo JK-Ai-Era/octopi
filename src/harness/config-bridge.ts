@@ -14,7 +14,7 @@
  * ```
  */
 
-import type { HarnessConfig, ProviderConfig, AgentConfig } from '../config.js';
+import type { HarnessConfig, ProviderConfig, AgentConfig, ContextEngineConfig } from '../config.js';
 import { createProviderFromConfig, createStoreFromConfig } from '../config.js';
 import type { ModelProvider } from '../core/interfaces/model-provider.js';
 import type { SessionStore } from '../core/interfaces/session-store.js';
@@ -27,6 +27,9 @@ import type { SecurityGuardConfig } from '../core/security-guard.js';
 import type { SupervisorConfig } from '../config.js';
 import { DefaultTaskSupervisor } from './supervisor/task-supervisor.js';
 import type { TaskSupervisorConfig } from './supervisor/task-supervisor.js';
+import type { ContextEngine } from '../core/interfaces/context-engine.js';
+import { DefaultContextEngine } from './context/default-context-engine.js';
+import { DefaultBudgetAllocator } from './context/budget-allocator.js';
 
 // ── 结果类型 ──
 
@@ -89,6 +92,30 @@ export function resolveSecurityConfig(config: HarnessConfig): SecurityGuardConfi
   }
 
   return undefined;
+}
+
+// ── 上下文引擎解析 ──
+
+/**
+ * 从配置中创建 ContextEngine 实例
+ */
+export function resolveContextEngine(config: ContextEngineConfig | undefined): ContextEngine {
+  if (!config || config.type === 'default') {
+    // 默认配置
+    return new DefaultContextEngine({
+      protectFirstN: config?.protectFirstN ?? 3,
+      protectLastN: config?.protectLastN ?? 20,
+      compactThreshold: config?.compactThreshold ?? 0.5,
+      budgetAllocator: new DefaultBudgetAllocator({
+        outputRatio: config?.outputRatio ?? 0.20,
+        minOutputReserve: config?.minOutputReserve ?? 2000,
+        maxOutputReserve: config?.maxOutputReserve ?? 8000,
+      }),
+    });
+  }
+
+  // 自定义类型（未来扩展）
+  throw new Error(`Unknown context engine type: ${config.type}`);
 }
 
 // ── Supervisor 解析 ──
@@ -156,6 +183,7 @@ export async function buildFromConfig(config: HarnessConfig): Promise<Map<string
   const securityConfig = resolveSecurityConfig(config);
   const budgetConfig = config.budget;
   const supervisorConfig = config.supervisor;
+  const contextEngineConfig = config.contextEngine;
 
   // 2. 为每个 agent 构建
   const agents = new Map<string, BuiltAgent>();
@@ -168,6 +196,7 @@ export async function buildFromConfig(config: HarnessConfig): Promise<Map<string
         securityConfig,
         budgetConfig,
         supervisorConfig,
+        contextEngineConfig,
       });
       agents.set(agentConfig.id, built);
     } catch (err) {
@@ -190,6 +219,7 @@ async function buildAgent(
     securityConfig?: SecurityGuardConfig;
     budgetConfig?: Partial<IterationBudgetConfig>;
     supervisorConfig?: SupervisorConfig;
+    contextEngineConfig?: ContextEngineConfig;
   },
 ): Promise<BuiltAgent> {
   const builder = new AgentBuilder();
@@ -233,6 +263,10 @@ async function buildAgent(
   if (shared.budgetConfig) {
     builder.budget(shared.budgetConfig);
   }
+
+  // ── Context Engine ──
+  const contextEngine = resolveContextEngine(shared.contextEngineConfig);
+  builder.contextEngine(contextEngine);
 
   // ── Supervisor ──
   if (shared.supervisorConfig?.enabled !== false) {
