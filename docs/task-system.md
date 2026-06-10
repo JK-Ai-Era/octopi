@@ -13,30 +13,26 @@ Agent 天然活在"当前对话"里。用户说"帮我分析代码质量",Agent 
 1. **对 Agent 透明** — 主 Agent 不需要"知道"任务系统的存在,它只需要在 system prompt 里看到"你有一个未完成的任务",然后自然地行动
 2. **对用户透明** — 用户不需要说"继续任务",他们只需要正常说话,系统自动判断意图
 3. **轻量决策** — 用一个小模型做消息分类,不做规则引擎,不写 if-else
-4. **可插拔** — 通过 ContextPipeline Stage 或 Plugin 系统集成,零侵入 Agent Loop
+4. **可插拔** — 通过 TaskDecisionProvider 集成,零侵入 Agent Loop
 
 ## 架构
 
-Task 系统有两种集成方式：
-
-### 方式一：ContextPipeline TaskStage（推荐）
-
-TaskStage 是 Task 系统在新架构中的主要集成方式。因为 Task 的本质是"上下文增强"——往 system prompt 注入任务上下文，让主 Agent 自然决定行为——它是 ContextPipeline 的一个 Stage，不是回调槽。
+Task 系统通过 TaskDecisionProvider 集成，在用户消息到达时调用一次：
 
 ```
 用户消息到达
     │
     ▼
-ContextPipeline.process()
+SessionAwareRunner.handle()
     │
     ▼
 ┌─────────────────────────────────────────────┐
-│  TaskStage.process()                         │
+│  TaskDecisionProvider.decide()               │
 │                                              │
 │  1. tracker.loadSession(sessionId)           │
 │  2. manager.decide(input) — LLM 决策         │
 │  3. applyDecision(tracker, ...) — 更新状态   │
-│  4. ctx.systemPrompt += taskContext           │
+│  4. 返回 taskContext 字符串                   │
 │                                              │
 │  ┌─────────────┐    ┌─────────────────────┐  │
 │  │ TaskTracker  │◄──│  TaskManager (LLM)  │  │
@@ -45,8 +41,14 @@ ContextPipeline.process()
 └─────────┼────────────────────────────────────┘
           │
           ▼
+runConfig.injectedContext = taskContext
+          │
+          ▼
 ┌─────────────────────────────────────────────┐
-│  主 Agent Loop (主 LLM 执行)                  │
+│  AgentEngine.run()                           │
+│                                              │
+│  systemPrompt += injectedContext             │
+│  (Core 层只做字符串透传，不知道"任务"概念)    │
 │                                              │
 │  主 LLM 看到 taskContext,自然地决定:          │
 │  - 继续之前的工作                              │
@@ -55,10 +57,7 @@ ContextPipeline.process()
 └─────────────────────────────────────────────┘
 ```
 
-**管道阶段顺序：**
-```
-PersonaStage → SkillStage → TaskStage → HistoryStage → CompactStage → FilterStage
-```
+**调用时机：** 用户消息到达时一次，工具调用循环中不重复。
 
 ### 方式二：Plugin Hook（兼容层）
 
@@ -236,45 +235,17 @@ interface TaskDecision {
 
 ## 使用方式
 
-### 方式一：通过 AgentBuilder + TaskStage（推荐）
+### 通过 SessionAwareRunner + TaskDecisionProvider（推荐）
 
 ```ts
-import { AgentBuilder } from 'octopi/harness';
-import { TaskStage } from 'octopi/harness/context/stages/task-stage';
+import { AgentBuilder, DefaultTaskDecisionProvider } from 'octopi/harness';
 import { OpenAIProvider } from 'octopi/providers/openai';
 
 const provider = new OpenAIProvider({ apiKey: '...' });
 
-const { engine, runner } = await new AgentBuilder()
-  .model(provider)
-  .persona('./my-agent')
-  .contextPipeline(new DefaultContextPipeline({
-    stages: [
-      new PersonaStage(),
-      new SkillStage(),
-      new TaskStage({           // Task 作为管道阶段注入
-        provider: provider,
-        model: 'gpt-5.5-mini',
-        dataDir: './data/tasks',
-      }),
-      new HistoryStage(),
-      new FilterStage(),
-    ],
-  }))
-  .build();
-```
-
-### 方式二：通过 Plugin Hook（兼容层）
-
-```ts
-import { AgentBuilder } from 'octopi/harness';
-import { createTaskManagerPlugin } from 'octopi/tasks/plugin';
-import { OpenAIProvider } from 'octopi/providers/openai';
-
-const provider = new OpenAIProvider({ apiKey: '...' });
-
-const taskPlugin = createTaskManagerPlugin(provider, {
-  enabled: true,
+// 创建 TaskDecisionProvider
+const taskDecisionProvider = new DefaultTaskDecisionProvider({
+  provider: provider,
   model: 'gpt-5.5-mini',
   dataDir: './data/tasks',
 });
@@ -282,8 +253,12 @@ const taskPlugin = createTaskManagerPlugin(provider, {
 const { engine, runner } = await new AgentBuilder()
   .model(provider)
   .persona('./my-agent')
-  .plugin(taskPlugin)
   .build();
+
+// 在 SessionAwareRunner 中注入
+const runner = new SessionAwareRunner(engine, store, {
+  taskDecisionProvider,
+});
 ```
 
 ### 配置说明
@@ -293,7 +268,6 @@ const { engine, runner } = await new AgentBuilder()
 | `provider` | 决策用的 ModelProvider | 必填 |
 | `model` | 决策用的模型名称 | 必填 |
 | `dataDir` | 任务数据持久化目录 | `./data/tasks` |
-| `enabled` | 是否启用（仅 Plugin 方式） | `true` |
 
 ## 设计决策
 
@@ -315,15 +289,13 @@ JSONL append-only 文件,按 session 隔离。每行是一个事件(`create`, `i
 
 v0.1.1 起 `loadSession` 和 `appendEvent` 均改为异步，避免阻塞事件循环。
 
-### Q: TaskStage 和 TaskManagerPlugin 有什么区别?
+### Q: TaskDecisionProvider 的调用时机是什么?
 
-TaskStage 是新架构的集成方式，通过 ContextPipeline 的管道阶段注入任务上下文。TaskManagerPlugin 是旧的 Plugin hook 方式，通过 `before_iteration` + `before_prompt_build` 集成。
+在用户消息到达时调用一次，不在工具调用循环中重复。具体位置是 `SessionAwareRunner.handle()` 中，追加用户消息后、调用 `engine.run()` 前。
 
-两者内部逻辑相同（都用 TaskTracker + TaskManager），区别在于集成位置：
-- **TaskStage**：在 ContextPipeline 中，每次 `process()` 时执行
-- **TaskManagerPlugin**：在 Plugin hook 链中，每次迭代时执行
+### Q: 旧的 TaskStage 和 TaskManagerPlugin 还能用吗?
 
-新项目推荐使用 TaskStage，TaskManagerPlugin 保留向后兼容。
+TaskStage 依赖已删除的 ContextPipeline 接口，已不可用。TaskManagerPlugin 仍可使用。新项目推荐使用 TaskDecisionProvider。
 
 ### Q: 子任务怎么办?
 
@@ -337,7 +309,7 @@ TaskStage 是新架构的集成方式，通过 ContextPipeline 的管道阶段�
 
 | 系统 | 关系 |
 |------|------|
-| **ContextPipeline** | TaskStage 作为管道阶段注入任务上下文（推荐） |
+| **TaskDecisionProvider** | 用户消息到达时调用一次，结果通过 RunConfig.injectedContext 透传（推荐） |
 | **Plugin 系统** | TaskManagerPlugin 通过 `before_iteration` 和 `before_prompt_build` 集成（兼容层） |
 | **Session 管理** | 任务按 session 隔离,随 session 生命周期管理 |
 | **记忆系统** | 独立运作。记忆系统管长期知识,任务系统管当前工作 |

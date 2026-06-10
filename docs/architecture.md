@@ -64,7 +64,7 @@ src/
 │   ├── interfaces/                    # 接口契约
 │   │   ├── model-provider.ts         # ModelProvider — LLM 调用接口
 │   │   ├── tool-executor.ts          # ToolExecutor — 工具执行接口
-│   │   ├── context-pipeline.ts       # ContextPipeline — 上下文组装接口
+│   │   ├── context-engine.ts         # ContextEngine — 上下文管理引擎接口
 │   │   ├── error-strategy.ts         # ErrorStrategy — 错误处理接口
 │   │   ├── observer.ts               # Observer — 可观测性接口
 │   │   ├── session-store.ts          # SessionStore — Session 持久化接口
@@ -85,15 +85,15 @@ src/
 │   ├── persona/                       # 文件式人格系统
 │   │   └── loader.ts                  # PersonaLoader — 读取 AGENTS.md/SOUL.md 等
 │   │
-│   ├── context/                       # 上下文管道
-│   │   ├── pipeline.ts                # DefaultContextPipeline — 可插拔阶段管道
-│   │   ├── smart-stage.ts            # SmartStage — 嵌入 LLM 决策点的上下文阶段
-│   │   ├── stages/
-│   │   │   └── task-stage.ts          # TaskStage — 任务上下文注入
-│   │   └── strategies/
-│   │       ├── sliding-window.ts      # SlidingWindowStrategy — 滑动窗口压缩
-│   │       ├── summarize.ts           # SummarizeStrategy — 摘要压缩
-│   │       └── index.ts
+│   ├── context/                       # 上下文管理引擎
+│   │   ├── default-context-engine.ts # DefaultContextEngine — 默认实现
+│   │   ├── token-estimator.ts        # HeuristicTokenEstimator — 启发式 Token 估算
+│   │   ├── message-selector.ts       # DefaultMessageSelector — 四区域消息选择
+│   │   ├── hybrid-compressor.ts      # HybridCompressor — 混合压缩器
+│   │   ├── llm-summarizer.ts         # LLMSummaryCompressor — LLM 摘要压缩
+│   │   ├── truncate-compressor.ts    # TruncateCompressor — 截断兜底
+│   │   ├── budget-allocator.ts       # DefaultBudgetAllocator — 预算分配
+│   │   └── smart-router.ts           # SmartRouter — 智能路由
 │   │
 │   ├── tasks/                         # Task 系统
 │   │   ├── manager.ts                 # TaskManager — LLM 驱动的任务管理
@@ -355,7 +355,7 @@ await agent.run(async (ctx) => {
 class AgentEngine {
   // 扩展回调槽 — Harness 层注入
   onMessage?: (msg: Message) => Message | null;
-  beforeAssemble?: (input: PipelineInput) => PipelineInput;
+  beforeAssemble?: (input: { systemPrompt: string; tools: ToolDefinition[]; signal?: AbortSignal; contextWindow?: number }) => { systemPrompt: string; tools: ToolDefinition[]; signal?: AbortSignal; contextWindow?: number } | null;
   beforeModelCall?: (req: LLMRequest) => LLMRequest | null;
   afterModelCall?: (resp: LLMResponse) => LLMResponse;
   beforeToolExec?: (call: ToolCall) => ToolCall | null;
@@ -384,7 +384,7 @@ class AgentEngine {
 │  beforeAssemble 回调（可注入额外上下文）                │
 │  │                                                   │
 │  ▼                                                   │
-│  ContextPipeline.process()                           │
+│  ContextEngine.assemble()                            │
 │  │                                                   │
 │  ▼                                                   │
 │  SecurityGuard.checkUserInput()                      │
@@ -483,23 +483,27 @@ Prompt Injection 是 Agent 框架最严重的安全威胁。安全检查不可�
 
 **不可禁用，不可绕过。** 但检查的**策略**（灵敏度、路径白名单、shell 元字符）由 Harness 层配置。
 
-### 3.6 ContextPipeline 是管道模型
+### 3.6 ContextEngine — 上下文管理引擎
 
-上下文组装采用管道模型，每个阶段是一个独立的 `ContextStage`：
+上下文管理采用组件化架构，核心组件可独立替换：
 
 ```typescript
-interface ContextStage {
-  readonly name: string;
-  process(ctx: StageContext): Promise<StageContext>;
+interface ContextEngine {
+  readonly info: ContextEngineInfo;
+  assemble(params: AssembleParams): Promise<AssembleResult>;
+  compact?(params: CompactParams): Promise<CompactResult>;
+  afterTurn?(params: AfterTurnParams): Promise<void>;
 }
 ```
 
-**默认管道顺序：**
-```
-PersonaStage → SkillStage → TaskStage → HistoryStage → FilterStage
-```
+**核心组件：**
+- `TokenEstimator` — Token 估算
+- `MessageSelector` — 消息选择（四区域划分）
+- `Compressor` — 压缩策略（LLM 摘要 + 截断兜底）
+- `BudgetAllocator` — 预算分配
+- `SmartRouter` — 智能路由（fits / truncate / compact / compact_then_truncate）
 
-阶段可以独立替换、组合、测试。
+组件可以独立替换、组合、测试。
 
 ---
 
@@ -557,21 +561,31 @@ Core 层不知道 Persona 的存在。Persona 只是生成 `systemPrompt` 字符
 
 ### 4.4 Task 系统
 
-LLM 驱动的任务追踪。通过 ContextPipeline 的 TaskStage 注入：
+LLM 驱动的任务追踪。通过 TaskDecisionProvider 在用户消息到达时调用：
 
 ```
 用户消息到达
     │
     ▼
-TaskStage.process()
+SessionAwareRunner.handle()
     │
-    ├─ TaskManager.decide() — LLM 判断消息与任务的关系
-    ├─ TaskTracker 更新状态（create/interrupt/resume/complete）
-    └─ 注入 taskContext 到 system prompt
+    ├─ TaskDecisionProvider.decide() — 用户消息到达时调用一次
+    │   ├─ TaskManager.decide() — LLM 判断消息与任务的关系
+    │   ├─ TaskTracker 更新状态（create/interrupt/resume/complete）
+    │   └─ 返回 taskContext 字符串
+    │
+    ├─ runConfig.injectedContext = taskContext
+    │
+    ▼
+AgentEngine.run()
+    ├─ systemPrompt += injectedContext — Core 层透传
+    └─ ContextEngine.assemble() — 正常组装
     │
     ▼
 主 Agent 看到上下文，自然地决定行为
 ```
+
+**调用时机：** 用户消息到达时一次，工具调用循环中不重复。
 
 **任务状态机：**
 ```
@@ -710,36 +724,34 @@ console.log(rm.stats());
 // { token: { total: 1500 }, cost: { total: 0.06 }, rate: { concurrent: 0 } }
 ```
 
-### 4.13 SmartStage — 嵌入 LLM 决策点的上下文阶段
+### 4.13 ContextEngine 组件化架构
 
-上下文管道中的每个阶段默认是确定性逻辑。SmartStage 打破了这个限制——它在管道中嵌入独立的 LLM 调用，让上下文组装可以“思考”。
+上下文管理采用组件化架构，各组件可独立替换：
 
-内置工厂：
-- `createSmartSummarizer` — 用 LLM 决定如何压缩长对话历史
-- `createSmartRelevanceFilter` — 用 LLM 评估哪些消息与当前任务最相关
+**智能路由（SmartRouter）：**
+参考 OpenClaw 的 `shouldPreemptivelyCompactBeforePrompt` 策略，根据溢出量和工具结果可压缩空间选择最优路由：
+- `fits` — 消息在预算内，不需要压缩
+- `truncate_tool_results_only` — 只截断工具输出
+- `compact_only` — 只做 LLM 摘要
+- `compact_then_truncate` — 先 LLM 摘要，再截断
 
-设计约束：
-- LLM 调用有超时（默认 5 秒），失败时 fallback 到原始上下文
-- 结果可缓存，避免重复调用
-- 所有 LLM 调用通过 EventBus 事件可追踪
+**LLM 摘要（LLMSummaryCompressor）：**
+使用 LLM 生成结构化摘要，保留关键信息。支持迭代式更新。
+
+**消息选择（DefaultMessageSelector）：**
+四区域划分：头部保护 + 中间可压缩 + 尾部保护。边界对齐：不拆分 tool_call/tool_result 对。
 
 ```typescript
-import { SmartStage, createSmartSummarizer } from 'octopi/harness';
+import { DefaultContextEngine, SmartRouter } from 'octopi/harness';
 
-// 智能摘要
-const summarizer = createSmartSummarizer(modelProvider);
-pipeline.addStage(summarizer);
+// 使用默认配置
+const engine = new DefaultContextEngine();
 
-// 自定义 SmartStage
-const smartFilter = new SmartStage({
-  name: 'smart-filter',
-  model: modelProvider,
-  systemPrompt: '你是上下文过滤专家...',
-  buildPrompt: (ctx) => `分析 ${ctx.messages.length} 条消息...`,
-  applyDecision: async (response, ctx) => {
-    // 解析 LLM 响应，变换上下文
-    return { ...ctx, messages: filteredMessages };
-  },
+// 自定义配置
+const engine = new DefaultContextEngine({
+  protectFirstN: 5,
+  protectLastN: 30,
+  router: { truncateOnlyThresholdChars: 3000 },
 });
 ```
 
@@ -898,7 +910,7 @@ LLM 推理 ──→ checkModelOutput()   ← OutputGuard（敏感数据 + 系�
 
 ### 6.4 不可信内容标记
 
-外部内容（工具返回值、网页抓取、文件读取）在 ContextPipeline 中被标记为不可信。SecurityGuard 在检查时使用这些标记。
+外部内容（工具返回值、网页抓取、文件读取）在 ContextEngine 中被标记为不可信。SecurityGuard 在检查时使用这些标记。
 
 ---
 
@@ -938,13 +950,13 @@ LLM 推理 ──→ checkModelOutput()   ← OutputGuard（敏感数据 + 系�
 
 **权衡：** 开发调试时可能不方便。可以通过配置降低灵敏度、设置路径白名单、允许 shell 元字符，但不能完全禁用。
 
-### ADR-005: ContextPipeline 管道模型
+### ADR-005: ContextEngine 组件化架构
 
-**决策：** 上下文组装采用管道模型，支持多阶段。
+**决策：** 上下文管理采用组件化架构，ContextEngine 接口 + 可替换组件。
 
-**理由：** 单一 `assemble()` 会变成上帝方法。
+**理由：** 单一管道模型（ContextPipeline）耦合度高，组件化更灵活。
 
-**权衡：** 管道阶段顺序很重要。
+**权衡：** 组件间交互需要协调。
 
 ### ADR-006: EventBus 内置
 
@@ -954,13 +966,13 @@ LLM 推理 ──→ checkModelOutput()   ← OutputGuard（敏感数据 + 系�
 
 **权衡：** 增加了 Core 的复杂度。NoopEventBus 开销为零。
 
-### ADR-007: Task 系统走 ContextPipeline Stage
+### ADR-007: Task 系统走 TaskDecisionProvider
 
-**决策：** Task 系统通过 ContextPipeline 的 TaskStage 注入，不通过回调槽。
+**决策：** Task 系统通过 TaskDecisionProvider 在用户消息到达时注入，结果通过 RunConfig.injectedContext 透传。
 
-**理由：** Task 的核心是"上下文增强"——往 system prompt 注入任务上下文，让主 Agent 自然决定行为。这是上下文增强，不是拦截/修改。
+**理由：** Task 的核心是"上下文增强"——往 system prompt 注入任务上下文。调用时机是用户消息到达时一次，不在工具循环中重复。
 
-**权衡：** TaskStage 是异步的，需要管道支持 async stage。
+**权衡：** 需要 Harness 层（SessionAwareRunner）协调调用时机。
 
 ### ADR-008: callModel 流式事件 yield
 
@@ -1002,7 +1014,7 @@ LLM 推理 ──→ checkModelOutput()   ← OutputGuard（敏感数据 + 系�
 |---|---|---|
 | 定位 | 完整的 AI 助手平台 | 可嵌入的 Agent 底座 |
 | 通信 | 内置飞书、Telegram 等 | 协议适配器可选 |
-| 记忆 | 内置记忆系统 | 通过 ContextPipeline 注入 |
+| 记忆 | 内置记忆系统 | 通过 ContextEngine 注入 |
 | 调度 | 内置心跳、定时任务 | 通过 Plugin 扩展 |
 | Persona | 内置文件系统 | 文件式 PersonaLoader |
 | 安全 | 平台级安全策略 | Core 内置 + Harness 配置 |
@@ -1056,13 +1068,13 @@ commands.register('/clear', {
 
 **权衡：** 增加了框架复杂度。单 Agent 场景不需要这些组件，但它们是可选的——不用就不引入。
 
-### ADR-014: SmartStage — 分布式 LLM 决策点
+### ADR-014: ContextEngine 智能路由与 LLM 摘要
 
-**决策：** 在 ContextPipeline 中引入 SmartStage，允许上下文阶段嵌入独立的 LLM 调用进行决策。
+**决策：** 在 ContextEngine 中引入 SmartRouter 智能路由和 LLMSummaryCompressor 摘要压缩。
 
-**理由：** 传统的上下文管道是纯确定性逻辑——滑动窗口、固定规则。但有些场景需要“智能”判断：哪些消息最相关？如何压缩长对话？SmartStage 让管道可以“思考”，同时保持安全网：超时、缓存、fallback。
+**理由：** 传统的上下文管理是固定规则（滑动窗口、截断）。但智能路由可以根据溢出量和工具结果可压缩空间选择最优策略，LLM 摘要可以保留关键信息。
 
-**权衡：** LLM 调用增加了延迟和成本。SmartStage 必须有 fallback 逻辑，不能让 LLM 失败阻塞整个管道。缓存是必须的。
+**权衡：** LLM 摘要增加了延迟和成本。必须有 fallback 逻辑（回退到截断），不能让 LLM 失败阻塞主循环。
 
 ### ADR-015: AgentProcess — 推送式完成与上下文分叉
 

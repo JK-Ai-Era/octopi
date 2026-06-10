@@ -59,7 +59,7 @@ npx vitest run --grep "SecurityGuard"
 | `core-engine.test.ts` | AgentEngine 核心循环 |
 | `harness.test.ts` | AgentBuilder + SessionAwareRunner |
 | `security.test.ts` | SecurityGuard + CapabilityEnforcer |
-| `task-stage.test.ts` | TaskStage ContextPipeline 集成 |
+| `context-engine.test.ts` | ContextEngine 组件测试 |
 | `task-system.test.ts` | TaskTracker + TaskManager |
 | `task-integration.test.ts` | Task 系统端到端 |
 | `agent-loop.test.ts` | 旧 AgentLoop（deprecated） |
