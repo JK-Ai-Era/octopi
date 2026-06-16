@@ -326,6 +326,18 @@ export class AgentEngine {
           const llmMessages = assembled.messages;
           const estimatedTokens = assembled.estimatedTokens;
 
+          // DEBUG: 记录每轮模型调用的上下文
+          if (process.env.OCTOPI_DEBUG) {
+            const msgSummary = llmMessages.map(m => {
+              const contentLen = typeof m.content === 'string' ? m.content.length : JSON.stringify(m.content ?? '').length;
+              const hasToolCalls = 'tool_calls' in m && Array.isArray((m as any).tool_calls) && (m as any).tool_calls.length > 0;
+              const hasToolCallId = 'tool_call_id' in m;
+              return `${m.role}${hasToolCalls ? '(+tool_calls)' : ''}${hasToolCallId ? `(id:${(m as any).tool_call_id})` : ''} [${contentLen}ch]`;
+            });
+            console.error(`[DEBUG] iteration=${iteration} messages=${llmMessages.length} estTokens=${estimatedTokens}`);
+            console.error(`[DEBUG] msgs: ${msgSummary.join(' → ')}`);
+          }
+
           // Observer: token 估算
           observer?.recordMetric('agent.context.tokens', estimatedTokens);
 
@@ -428,6 +440,17 @@ export class AgentEngine {
           }
 
           // 2g. SecurityGuard 检查模型输出
+          // DEBUG: 记录模型响应
+          if (process.env.OCTOPI_DEBUG) {
+            console.error(`[DEBUG] response: content=${llmResponse.content.length}ch toolCalls=${llmResponse.toolCalls?.length ?? 0} finish=${llmResponse.finishReason} model=${llmResponse.model}`);
+            if (llmResponse.content.length === 0 && !llmResponse.toolCalls?.length) {
+              console.error(`[DEBUG] ⚠️ EMPTY RESPONSE! Messages sent to model:`);
+              for (const m of llmMessages) {
+                console.error(`  ${m.role}: ${JSON.stringify(m).substring(0, 300)}`);
+              }
+            }
+          }
+
           const outputCheck = security.checkModelOutput(llmResponse.content);
           const outputResult = this.handleSecurityViolation(outputCheck, 'model_output');
           if (outputResult.blocked) {
@@ -843,6 +866,9 @@ export class AgentEngine {
 
     // 流式正常结束但内容为空且无工具调用 → fallback 到同步调用
     // 某些 provider 的流式响应可能不完整（缺少 content chunk 或 done chunk）
+    if (process.env.OCTOPI_DEBUG) {
+      console.error(`[DEBUG] stream结束: content=${content.length}ch toolCalls=${toolCallBuffers.size}`);
+    }
     if (!content && toolCallBuffers.size === 0) {
       yield { type: 'stream.fallback_to_sync', timestamp: Date.now(), data: { reason: 'empty_stream' } };
       try {
