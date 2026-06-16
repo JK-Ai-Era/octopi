@@ -4,7 +4,19 @@
  * 从 KnowledgeStore 检索相关知识，注入到 system prompt。
  */
 
-import type { ContextStage, StageContext } from '../context/pipeline.js';
+// ContextStage/StageContext types (pipeline.js 已移除，本地定义)
+import type { Message } from '../../core/types.js';
+
+export interface StageContext {
+  messages: Message[];
+  systemPrompt: string;
+  [key: string]: unknown;
+}
+
+export interface ContextStage {
+  readonly name: string;
+  process(ctx: StageContext): Promise<StageContext>;
+}
 import type { KnowledgeStore } from './types.js';
 import { getTextContent } from '../../core/types.js';
 

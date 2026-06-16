@@ -208,7 +208,7 @@ export class AgentEngine {
     config: RunConfig,
     signal?: AbortSignal,
   ): AsyncGenerator<AgentEvent> {
-    const { model, tools, executor, context, events, security, budget, errorStrategy, observer } = this.deps;
+    const { model, tools, executor, events, security, budget, errorStrategy, observer } = this.deps;
     const agentId = config.agentId ?? 'default';
     const sessionId = config.sessionId ?? 'inline';
     this.currentCwd = config.cwd;
