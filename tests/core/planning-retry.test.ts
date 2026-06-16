@@ -9,7 +9,8 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { AgentEngine } from '../../src/core/engine.js';
-import type { AgentEngineDeps, RunConfig, EngineEvent } from '../../src/core/engine.js';
+import type { AgentEngineDeps, RunConfig } from '../../src/core/engine.js'
+import type { AgentEvent } from '../../src/core/event-bus.js';
 import type { ModelProvider, LLMResponse } from '../../src/core/interfaces/model-provider.js';
 import type { RegisteredTool } from '../../src/core/types.js';
 import { DefaultEventBus } from '../../src/core/event-bus.js';
@@ -69,8 +70,8 @@ function createMockTool(name: string): RegisteredTool {
   };
 }
 
-async function collectEvents(engine: AgentEngine, messages: any[], config: RunConfig): Promise<EngineEvent[]> {
-  const events: EngineEvent[] = [];
+async function collectEvents(engine: AgentEngine, messages: any[], config: RunConfig): Promise<AgentEvent[]> {
+  const events: AgentEvent[] = [];
   for await (const event of engine.run(messages, config)) {
     events.push(event);
   }

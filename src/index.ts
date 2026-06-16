@@ -23,6 +23,7 @@
 
 export { AgentEngine } from './core/engine.js';
 export { DefaultEventBus, NoopEventBus, AgentEvents } from './core/event-bus.js';
+export type { AgentEvent, EventHandler, Disposable } from './core/event-bus.js';
 export { DefaultSecurityGuard } from './core/security-guard.js';
 export { IterationBudget } from './core/budget.js';
 

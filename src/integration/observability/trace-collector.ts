@@ -5,7 +5,7 @@
  * 不改变原始事件流的行为。
  */
 
-import type { EngineEvent } from '../../core/engine.js';
+import type { AgentEvent } from '../../core/event-bus.js';
 import type { TraceEvent } from './trace-events.js';
 import { TraceLogger, type TraceLoggerConfig } from './trace-logger.js';
 import { TraceLevel, TRACE_EVENTS } from './trace-events.js';
@@ -49,9 +49,9 @@ export class TraceCollector {
    * @yields 原始事件（不修改）
    */
   async *wrap(
-    events: AsyncGenerator<EngineEvent>,
+    events: AsyncGenerator<AgentEvent>,
     ctx: { sessionId?: string; agentId?: string } = {},
-  ): AsyncGenerator<EngineEvent> {
+  ): AsyncGenerator<AgentEvent> {
     const turnId = `turn_${++this.turnCount}`;
     this.currentTurnId = turnId;
 
@@ -72,7 +72,7 @@ export class TraceCollector {
    * 记录单个事件
    */
   private recordEvent(
-    event: EngineEvent,
+    event: AgentEvent,
     ctx: { sessionId?: string; agentId?: string },
     turnId: string,
   ): void {

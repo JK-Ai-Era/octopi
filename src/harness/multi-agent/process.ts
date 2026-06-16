@@ -14,7 +14,8 @@
 import { randomUUID } from 'node:crypto';
 import type { EventBus } from '../../core/event-bus.js';
 import type { Message } from '../../core/types.js';
-import type { AgentEngine, RunConfig, EngineEvent } from '../../core/engine.js';
+import type { AgentEngine, RunConfig } from '../../core/engine.js';
+import type { AgentEvent } from '../../core/event-bus.js';
 import type { AgentInfo } from '../../core/interfaces/agent-registry.js';
 
 // ── 进程状态 ──

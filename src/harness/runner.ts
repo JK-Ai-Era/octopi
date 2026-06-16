@@ -12,7 +12,8 @@
 
 import type { Message, Turn } from '../core/types.js';
 import type { SessionStore, SessionData } from '../core/interfaces/session-store.js';
-import type { AgentEngine, RunConfig, EngineEvent } from '../core/engine.js';
+import type { AgentEngine, RunConfig } from '../core/engine.js';
+import type { AgentEvent } from '../core/event-bus.js';
 
 /**
  * 任务决策提供者接口
@@ -91,14 +92,14 @@ export class SessionAwareRunner {
    * @param input - 用户输入消息
    * @param runConfig - Agent 运行配置
    * @param signal - 中止信号
-   * @yields EngineEvent 事件流
+   * @yields AgentEvent 事件流
    */
   async *handle(
     sessionId: string,
     input: Message,
     runConfig: RunConfig,
     signal?: AbortSignal,
-  ): AsyncGenerator<EngineEvent> {
+  ): AsyncGenerator<AgentEvent> {
     // 1. 获取锁
     const release = await this.acquireLock(sessionId);
 

@@ -15,10 +15,12 @@ export { AgentMessageEvents } from './interfaces/agent-message.js';
 
 // ── 内置组件 ──
 export { AgentEngine } from './engine.js';
-export type { AgentEngineDeps, RunConfig, EngineEvent } from './engine.js';
+export type { AgentEngineDeps, RunConfig } from './engine.js';
+/** @deprecated Use AgentEvent from event-bus instead */
+export type { AgentEvent as EngineEvent } from './event-bus.js';
 
 export { DefaultEventBus, NoopEventBus, ThrottledEventBus, AgentEvents } from './event-bus.js';
-export type { EventBus, AgentEvent as EventBusAgentEvent, EventHandler, Disposable, DefaultEventBusOptions, ThrottleConfig } from './event-bus.js';
+export type { EventBus, AgentEvent, AgentEvent as EventBusAgentEvent, EventHandler, Disposable, DefaultEventBusOptions, ThrottleConfig } from './event-bus.js';
 
 export { DefaultSecurityGuard, isValidSecurityGuard, severityToAction } from './security-guard.js';
 export type { SecurityGuard, SecurityCheckResult, SecurityViolation, SecurityViolationType, SecurityAction, BehaviorContext, SecurityGuardConfig } from './security-guard.js';
@@ -43,7 +45,7 @@ export type {
   ToolParameter, ToolDefinition as CoreToolDefinition, ToolExecutionContext, ToolHandler, RegisteredTool,
   SkillDefinition, SkillManager,
   ChannelMessage, ChannelReply, ChannelAdapter,
-  HookContext, AgentEvent, AgentEventListener, LoopEndReason, LLMStreamChunk,
+  HookContext, AgentEventDetail, AgentEventListener, LoopEndReason, LLMStreamChunk,
   ClassifiedError, ErrorReason,
   AssembleResult, CompactResult, ContextEngineInfo, ContextEngine,
   GatewayConfig, ThinkingLevel, QueueMode,

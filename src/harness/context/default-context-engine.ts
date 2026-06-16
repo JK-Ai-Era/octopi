@@ -139,12 +139,21 @@ export class DefaultContextEngine implements ContextEngine {
       toolTokens: estimator.estimateTools(tools),
     });
 
-    // 2. 智能路由决策
-    const routing = this.router.evaluate(messages, budget.messagesBudget, !!summarize);
+    // 2. 四区域消息选择（MessageSelector）
+    //    head（头部保护）+ overflow（可压缩）+ tail（尾部保护）
+    const selection = this.config.messageSelector.select(
+      messages,
+      {
+        maxTokens: budget.messagesBudget,
+        protectFirstN: this.config.protectFirstN,
+        protectLastN: this.config.protectLastN,
+      },
+      estimator,
+    );
 
-    // 3. 如果不需要压缩（fits）
-    if (!routing.shouldCompact) {
-      const llmMessages = this.buildLlmMessages([], messages, systemPrompt, tools);
+    // 3. 如果没有溢出，不需要压缩
+    if (selection.overflow.length === 0) {
+      const llmMessages = this.buildLlmMessages(selection.kept, systemPrompt, tools);
       const estimatedTokens = estimateLLMMessages(llmMessages);
 
       this.states.set(sessionId, { lastEstimatedTokens: estimatedTokens });
@@ -156,76 +165,80 @@ export class DefaultContextEngine implements ContextEngine {
       };
     }
 
-    // 4. 需要压缩：根据路由选择策略
+    // 4. 有溢出：SmartRouter 决定压缩策略
+    //    传入 messagesBudget=0，因为 MessageSelector 已确认这些消息是溢出部分
+    //    SmartRouter 只负责决定压缩方式（truncate vs compact），不负责判断是否需要压缩
+    const overflowTokens = estimator.estimateMessages(selection.overflow);
+    const routing = this.router.evaluate(
+      selection.overflow,
+      0,
+      !!summarize,
+    );
+
+    // 5. 压缩溢出消息
     const state = this.states.get(sessionId);
     const previousSummary = state?.previousSummary;
 
-    // 获取上次摘要（用于迭代式更新）
-    let compressedResult: Message[];
+    let compressedOverflow: Message[];
     let droppedSummary: string | undefined;
-    let compressedTokens: number;
+
+    // 计算溢出部分的压缩目标：head + selectedMiddle + tail 已占的 token
+    // selection.estimatedTokens = head + selectedMiddle + tail 的 token 数
+    // 压缩后 overflow 应使总 token 在预算内
+    const keptTokens = selection.estimatedTokens;
+    const overflowTargetTokens = Math.max(500, budget.messagesBudget - keptTokens);
 
     switch (routing.route) {
       case 'truncate_tool_results_only': {
-        // 只截断工具结果
         const compressed = await this.config.compressor.compress({
-          messages,
-          targetTokens: budget.messagesBudget,
+          messages: selection.overflow,
+          targetTokens: overflowTargetTokens,
           previousSummary,
           tokenEstimator: estimator,
         });
-        compressedResult = compressed.result;
-        compressedTokens = compressed.estimatedTokens;
+        compressedOverflow = compressed.result;
         droppedSummary = compressed.droppedSummary;
         break;
       }
 
-      case 'compact_only': {
-        // 只做 LLM 摘要
-        const compressed = await this.config.compressor.compress({
-          messages,
-          targetTokens: budget.messagesBudget,
-          previousSummary,
-          summarize,
-          tokenEstimator: estimator,
-        });
-        compressedResult = compressed.result;
-        compressedTokens = compressed.estimatedTokens;
-        droppedSummary = compressed.droppedSummary;
-        break;
-      }
-
+      case 'compact_only':
       case 'compact_then_truncate': {
-        // 先 LLM 摘要，再截断
         const compressed = await this.config.compressor.compress({
-          messages,
-          targetTokens: budget.messagesBudget,
+          messages: selection.overflow,
+          targetTokens: overflowTargetTokens,
           previousSummary,
           summarize,
           tokenEstimator: estimator,
         });
-        compressedResult = compressed.result;
-        compressedTokens = compressed.estimatedTokens;
+        compressedOverflow = compressed.result;
         droppedSummary = compressed.droppedSummary;
         break;
       }
 
       default: {
-        // fits 不应该到这里，但作为兜底
-        compressedResult = messages;
-        compressedTokens = routing.estimatedTokens;
+        // 兜底：直接截断
+        compressedOverflow = selection.overflow.slice(-4);
         break;
       }
     }
 
-    // 5. 更新状态
+    // 6. 重组：head + compressed overflow + tail
+    //    kept = head + (部分 middle) + tail，tail 和 kept 有重叠
+    //    head = kept 中去掉 tail 的部分（包含 head + 部分 middle）
+    const head = selection.kept.length > selection.tail.length
+      ? selection.kept.slice(0, selection.kept.length - selection.tail.length)
+      : [];
+    const reassembled = [...head, ...compressedOverflow, ...selection.tail];
+
+    // 7. 更新状态
+    const compressedTokens = estimator.estimateMessages(reassembled);
     this.states.set(sessionId, {
       previousSummary: droppedSummary,
       lastEstimatedTokens: compressedTokens,
     });
 
-    // 6. 构建 LLM 消息
-    const llmMessages = this.buildLlmMessages(compressedResult, [], systemPrompt, tools);
+    // 8. 构建 LLM 消息
+    const llmMessages = this.buildLlmMessages(reassembled, systemPrompt, tools);
     const estimatedTokens = estimateLLMMessages(llmMessages);
 
     return {
@@ -315,8 +328,7 @@ export class DefaultContextEngine implements ContextEngine {
    * 将内部 Message 格式转换为 LLM Message 格式。
    */
   private buildLlmMessages(
-    compressedMessages: Message[],
-    tailMessages: Message[],
+    messages: Message[],
     systemPrompt: string,
     tools: ToolDefinition[],
   ): LLMMessage[] {
@@ -327,13 +339,8 @@ export class DefaultContextEngine implements ContextEngine {
       result.push({ role: 'system', content: systemPrompt });
     }
 
-    // 压缩后的消息（如果有）
-    for (const msg of compressedMessages) {
-      result.push(...this.convertMessage(msg));
-    }
-
-    // 尾部保护的消息
-    for (const msg of tailMessages) {
+    // 消息
+    for (const msg of messages) {
       result.push(...this.convertMessage(msg));
     }
 

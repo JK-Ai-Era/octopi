@@ -448,7 +448,7 @@ export interface LLMStreamChunk {
   text: string;
 }
 
-export type AgentEvent =
+export type AgentEventDetail =
   | { type: 'loop_start'; sessionId: string }
   | { type: 'loop_end'; reason: LoopEndReason; response?: string }
   | { type: 'turn_start'; turnId: string; turnIndex: number }
@@ -528,7 +528,7 @@ export interface GatewayConfig {
   };
 }
 
-export type AgentEventListener = (event: AgentEvent) => void | Promise<void>;
+export type AgentEventListener = (event: AgentEventDetail) => void | Promise<void>;
 
 // ============================================================
 // 13. Queue Mode

@@ -59,7 +59,7 @@ import type {
   RecoveryAction,
 } from './interfaces/task-supervisor.js';
 import type { Observer } from './interfaces/observer.js';
-import type { EventBus } from './event-bus.js';
+import type { EventBus, AgentEvent } from './event-bus.js';
 import { AgentEvents } from './event-bus.js';
 import type { SecurityGuard, SecurityCheckResult, BehaviorContext } from './security-guard.js';
 import { isValidSecurityGuard, severityToAction } from './security-guard.js';
@@ -128,14 +128,8 @@ export interface RunConfig {
   injectedContext?: string;
 }
 
-/** Agent 事件（v2.0，与旧版 AgentEvent 兼容） */
-export interface EngineEvent {
-  type: string;
-  timestamp: number;
-  agentId?: string;
-  sessionId?: string;
-  data?: Record<string, unknown>;
-}
+/** @deprecated Use AgentEvent from event-bus instead */
+export type EngineEvent = AgentEvent;
 
 // ── 引擎实现 ──
 
@@ -207,13 +201,13 @@ export class AgentEngine {
    * @param messages - 当前完整消息历史（由调用方提供）
    * @param config - 运行配置
    * @param signal - 中止信号
-   * @yields EngineEvent 事件流
+   * @yields AgentEvent 事件流
    */
   async *run(
     messages: Message[],
     config: RunConfig,
     signal?: AbortSignal,
-  ): AsyncGenerator<EngineEvent> {
+  ): AsyncGenerator<AgentEvent> {
     const { model, tools, executor, context, events, security, budget, errorStrategy, observer } = this.deps;
     const agentId = config.agentId ?? 'default';
     const sessionId = config.sessionId ?? 'inline';
@@ -792,7 +786,7 @@ export class AgentEngine {
   /**
    * 调用模型（流式优先，回退到同步）
    */
-  private async *callModel(request: LLMRequest, signal?: AbortSignal): AsyncGenerator<EngineEvent, LLMResponse> {
+  private async *callModel(request: LLMRequest, signal?: AbortSignal): AsyncGenerator<AgentEvent, LLMResponse> {
     const { model } = this.deps;
 
     // 收集流式响应

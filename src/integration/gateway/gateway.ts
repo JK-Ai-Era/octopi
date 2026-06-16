@@ -25,9 +25,9 @@ import type {
   GatewayConfig,
   RegisteredTool,
   SessionMeta,
-  AgentEvent,
   HookContext,
 } from '../../core/types.js';
+import type { AgentEvent } from '../../core/event-bus.js';
 import type { ModelProvider } from '../../core/interfaces/model-provider.js';
 import type { SessionStore, SessionData } from '../../core/interfaces/session-store.js';
 import { PluginManager } from '../../harness/plugins/manager.js';

@@ -21,7 +21,7 @@
 
 import type { ModelProvider } from '../core/interfaces/model-provider.js';
 import type { SessionStore } from '../core/interfaces/session-store.js';
-import type { RegisteredTool, AgentEvent } from '../core/types.js';
+import type { RegisteredTool, AgentEventDetail } from '../core/types.js';
 import { AgentBuilder } from '../harness/builder.js';
 import { SessionAwareRunner } from '../harness/runner.js';
 import type { RunConfig, AgentEngine } from '../core/engine.js';
@@ -41,7 +41,7 @@ export interface TurnResult {
   /** 所有事件类型 */
   events: string[];
   /** 完整事件（可选） */
-  fullEvents?: AgentEvent[];
+  fullEvents?: AgentEventDetail[];
   /** 是否为空回复 */
   isEmpty: boolean;
   /** 耗时 */
