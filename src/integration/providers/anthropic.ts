@@ -311,6 +311,18 @@ export class AnthropicProvider implements ModelProvider {
       return { role: 'assistant', content: blocks };
     }
 
+    // Anthropic 格式：tool 消息 → user 消息 + tool_result content block
+    if (role === 'tool') {
+      return {
+        role: 'user',
+        content: [{
+          type: 'tool_result',
+          tool_use_id: msg.tool_call_id ?? msg.toolCallId,
+          content: textContent,
+        }],
+      };
+    }
+
     return { role, content: textContent };
   }
 
