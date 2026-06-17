@@ -469,7 +469,13 @@ export class AgentEngine {
           });
 
           // 2h. 如果有 tool_calls → 执行工具
+          if (process.env.OCTOPI_DEBUG) {
+            console.error(`[DEBUG] tool_calls check: toolCalls=${JSON.stringify(llmResponse.toolCalls?.length)} type=${typeof llmResponse.toolCalls} isArray=${Array.isArray(llmResponse.toolCalls)}`);
+          }
           if (llmResponse.toolCalls && llmResponse.toolCalls.length > 0) {
+            if (process.env.OCTOPI_DEBUG) {
+              console.error(`[DEBUG] ✅ 进入工具执行分支，工具数: ${llmResponse.toolCalls.length}`);
+            }
             const toolResults: ToolResult[] = [];
 
             for (const call of llmResponse.toolCalls) {
@@ -741,6 +747,9 @@ export class AgentEngine {
           }
 
           // 2j. 纯文本回复 → 完成
+          if (process.env.OCTOPI_DEBUG) {
+            console.error(`[DEBUG] 到达turn.end: content=${llmResponse.content.length}ch toolCalls=${llmResponse.toolCalls?.length ?? 0} iteration=${iteration}`);
+          }
           const turn: Turn = {
             id: randomUUID(),
             input: messages.slice(0, -1),
