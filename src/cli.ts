@@ -63,6 +63,7 @@ interface CliArgs {
   config?: string;
   port?: number;
   help?: boolean;
+  verbose?: boolean;
 }
 
 function parseArgs(): CliArgs {
@@ -70,6 +71,7 @@ function parseArgs(): CliArgs {
 
   // 先提取 flags
   let help = false;
+  let verbose = false;
   let config: string | undefined;
   let port: number | undefined;
   const positional: string[] = [];
@@ -88,6 +90,10 @@ function parseArgs(): CliArgs {
       case '-h':
         help = true;
         break;
+      case '--verbose':
+      case '-v':
+        verbose = true;
+        break;
       default:
         positional.push(args[i]);
         break;
@@ -98,6 +104,7 @@ function parseArgs(): CliArgs {
     command: positional[0] ?? 'help',
     config,
     port,
+    verbose,
     help,
   };
 }
@@ -123,12 +130,14 @@ Commands:
 Options:
   --config, -c <path>   Config file path (default: ./octopi.json)
   --port, -p <port>     Port override
+  --verbose, -v         Enable verbose mode (trace all engine events to file)
   --help, -h            Show this help message
 
 Examples:
   octopi init
   octopi serve -c ./my-config.json
   octopi chat -c ./my-config.json
+  octopi chat -v -c ./my-config.json   # with trace logging
   octopi health -c ./my-config.json
 `);
 }
@@ -283,6 +292,23 @@ async function chatCommand(args: CliArgs): Promise<void> {
 
   const { engine, runner } = await builder.build();
 
+  // --verbose: 接入 TraceCollector，记录所有引擎事件到文件
+  let traceCollector: import('./integration/observability/trace-collector.js').TraceCollector | undefined;
+  if (args.verbose) {
+    const { TraceCollector } = await import('./integration/observability/trace-collector.js');
+    const { getOctopiHome } = await import('./init.js');
+    const traceDir = resolve(getOctopiHome(), 'traces');
+    const { mkdirSync } = await import('node:fs');
+    mkdirSync(traceDir, { recursive: true });
+    traceCollector = new TraceCollector({
+      outputDir: traceDir,
+      captureStreamDeltas: true,
+      captureToolArgs: true,
+      captureToolResults: true,
+    });
+    console.log(`   🔍 Verbose mode: trace → ${traceDir}`);
+  }
+
   // 每次 CLI 启动生成唯一 session，避免跨重启的上下文错乱
   const cliSessionId = `${agent.id}:cli:${Date.now()}`;
 
@@ -352,7 +378,11 @@ async function chatCommand(args: CliArgs): Promise<void> {
 
         let finalContent = '';
         let engineTerminated = false;
-        for await (const event of runner.handle(sessionIdRef.current, userMessage, runConfig)) {
+        const eventStream = runner.handle(sessionIdRef.current, userMessage, runConfig);
+        const wrappedStream = traceCollector
+          ? traceCollector.wrap(eventStream, { sessionId: sessionIdRef.current, agentId: agent.id })
+          : eventStream;
+        for await (const event of wrappedStream) {
           if (event.type === 'model.call.start') {
             if (!hasShownThinking) {
               process.stdout.write('  🤔 Thinking...');
