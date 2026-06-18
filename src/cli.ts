@@ -484,7 +484,20 @@ function resolveGatewayUrl(config: any): string {
 }
 
 async function chatCommand(args: CliArgs): Promise<void> {
-  const configPath = await ensureInitialized(args);
+  // 检测 Gateway 是否在运行
+  // 如果在运行，使用 Gateway 的配置文件（保持一致）
+  const pidFile = readPidFile();
+  const gatewayRunning = pidFile && isProcessAlive(pidFile.pid);
+
+  let configPath: string | undefined;
+  if (gatewayRunning && !args.config) {
+    // Gateway 在运行 → 用 Gateway 的配置
+    configPath = pidFile!.config;
+    console.log(`[TUI] Gateway detected (PID: ${pidFile!.pid}), using its config: ${configPath}`);
+  } else {
+    configPath = await ensureInitialized(args);
+  }
+
   const config = loadConfig(configPath);
   const agent = config.agents[0];
   if (!agent) {
