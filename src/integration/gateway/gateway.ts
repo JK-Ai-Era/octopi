@@ -30,6 +30,7 @@ import type {
 import type { AgentEvent } from '../../core/event-bus.js';
 import type { ModelProvider } from '../../core/interfaces/model-provider.js';
 import type { SessionStore, SessionData } from '../../core/interfaces/session-store.js';
+import type { StreamingChannelAdapter } from '../protocols/http.js';
 import { PluginManager } from '../../harness/plugins/manager.js';
 import { AgentEngine } from '../../core/engine.js';
 import type { RunConfig } from '../../core/engine.js';
@@ -99,6 +100,8 @@ export class Gateway {
   private tools: RegisteredTool[] = [];
   /** Agent 缓存（避免每条消息重建） */
   private agentCache = new Map<string, { engine: AgentEngine; runner: SessionAwareRunner }>();
+  /** 流式 adapter 引用（用于广播事件） */
+  private streamingAdapters: StreamingChannelAdapter[] = [];
 
   constructor(config: GatewayConfig) {
     this.config = config;
@@ -162,6 +165,10 @@ export class Gateway {
 
   registerChannel(adapter: ChannelAdapter): void {
     this.channels.set(adapter.name, adapter);
+    // 检测是否支持流式广播
+    if ('broadcastEvent' in adapter && typeof adapter.broadcastEvent === 'function') {
+      this.streamingAdapters.push(adapter as StreamingChannelAdapter);
+    }
     console.log(`[Gateway] Registered channel: ${adapter.name}`);
   }
 
@@ -252,6 +259,11 @@ export class Gateway {
       for await (const event of runner.handle(sessionKey, userMessage, runConfig)) {
         // 转发事件给监听器
         this.emitEvent(event as any);
+
+        // 广播给 WebSocket 客户端
+        for (const adapter of this.streamingAdapters) {
+          adapter.broadcastEvent(sessionKey, event as any);
+        }
 
         // 捕获最终回复
         if (event.type === 'turn.end' && event.data?.content) {

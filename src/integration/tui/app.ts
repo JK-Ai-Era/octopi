@@ -1,7 +1,9 @@
 /**
  * Octopi TUI App
  *
- * 主 TUI 应用程序。管理 UI 组件、事件处理、Agent 集成。
+ * 主 TUI 应用程序。支持双模式：
+ * - Gateway 模式：连接 Gateway WebSocket，共享 session/provider
+ * - 本地模式：直接创建 AgentEngine（Gateway 未启动时）
  */
 
 import {
@@ -16,11 +18,11 @@ import {
   isKeyRelease,
   CombinedAutocompleteProvider,
 } from '@earendil-works/pi-tui';
-import { theme, editorTheme, markdownTheme } from './theme.js';
+import { theme, editorTheme } from './theme.js';
 import { ChatLog } from './components.js';
 import type { ModelProvider } from '../../core/interfaces/model-provider.js';
 import type { SessionStore } from '../../core/interfaces/session-store.js';
-import type { RegisteredTool } from '../../core/types.js';
+import type { RegisteredTool, AgentDefinition } from '../../core/types.js';
 import type { AgentEvent } from '../../core/event-bus.js';
 import type { RunConfig } from '../../core/engine.js';
 import { AgentBuilder } from '../../harness/builder.js';
@@ -28,6 +30,7 @@ import { SessionAwareRunner } from '../../harness/runner.js';
 import { CommandPlugin } from '../../harness/commands/index.js';
 import { getBuiltinTools } from '../../harness/tools/builtin.js';
 import type { TaskSupervisorConfig } from '../../harness/supervisor/task-supervisor.js';
+import { GatewayChatClient } from '../gateway/client.js';
 
 // ── Types ──
 
@@ -42,6 +45,8 @@ export interface TuiAppConfig {
   budget?: any;
   supervisor?: TaskSupervisorConfig;
   workspace?: string;
+  /** Gateway URL（如 http://localhost:3000）。不传则本地模式。 */
+  gatewayUrl?: string;
 }
 
 interface SlashCommand {
@@ -86,7 +91,7 @@ class OctopiEditor extends Editor {
   }
 }
 
-// ── Helper: format args for display ──
+// ── Helper ──
 
 function formatToolArgs(toolName: string, args: string): string {
   if (!args) return '';
@@ -117,7 +122,12 @@ export class TuiApp {
   private footer: Text;
   private statusText: Text;
 
-  private runner!: SessionAwareRunner;
+  // 本地模式
+  private runner: SessionAwareRunner | null = null;
+  // Gateway 模式
+  private gatewayClient: GatewayChatClient | null = null;
+  private useGateway = false;
+
   private commands!: CommandPlugin;
 
   private sessionIdRef = { current: '' };
@@ -132,22 +142,17 @@ export class TuiApp {
   constructor(config: TuiAppConfig) {
     this.config = config;
     this.currentModelRef.current = config.model;
-
-    // Build session ID
     this.sessionIdRef.current = `${config.agentId}:cli:${Date.now()}`;
 
-    // Create TUI
     const terminal = new ProcessTerminal();
     this.tui = new TUI(terminal);
 
-    // Create components
     this.header = new Text('', 1, 0);
     this.chatLog = new ChatLog();
     this.statusText = new Text('', 1, 0);
     this.footer = new Text('', 1, 0);
     this.editor = new OctopiEditor(this.tui, editorTheme);
 
-    // Layout
     const root = new Container();
     root.addChild(this.header);
     root.addChild(this.chatLog);
@@ -159,54 +164,79 @@ export class TuiApp {
   }
 
   async start(): Promise<void> {
-    // Build the agent
-    await this.buildAgent();
-
-    // Setup commands
-    this.setupCommands();
-
-    // Setup editor callbacks
-    this.setupEditor();
-
-    // Setup input handler (Ctrl+C fallback)
-    this.tui.addInputListener((data) => {
-      if (matchesKey(data, 'ctrl+c') && this.exitRequested) {
-        this.forceExit();
-        return { consume: true };
+    // 检测 Gateway
+    if (this.config.gatewayUrl) {
+      const available = await GatewayChatClient.detect(this.config.gatewayUrl);
+      if (available) {
+        await this.startGatewayMode();
+      } else {
+        this.chatLog.addSystem(`⚠️ Gateway not reachable at ${this.config.gatewayUrl}, falling back to local mode.`);
+        await this.startLocalMode();
       }
-    });
+    } else {
+      await this.startLocalMode();
+    }
 
-    // Update UI
+    this.setupCommands();
+    this.setupEditor();
+    this.setupInputHandler();
     this.updateHeader();
     this.updateFooter();
 
-    // Welcome message
-    this.chatLog.addSystem(`🐙 Octopi Chat — ${this.config.model}`);
-    this.chatLog.addSystem('Type /help for commands, Ctrl+C to exit.', { coalesceConsecutive: false });
+    this.chatLog.addSystem(`🐙 Octopi Chat — ${this.currentModelRef.current}`);
+    const mode = this.useGateway ? 'gateway' : 'local';
+    this.chatLog.addSystem(`Mode: ${mode} | Type /help for commands, Ctrl+C to exit.`);
     this.tui.requestRender();
 
-    // Start TUI
     this.tui.start();
 
-    // Wait for exit
     await new Promise<void>((resolve) => {
       const check = () => {
-        if (this.exitRequested) {
-          resolve();
-        } else {
-          setTimeout(check, 100);
-        }
+        if (this.exitRequested) resolve();
+        else setTimeout(check, 100);
       };
       check();
     });
 
-    // Cleanup
     this.tui.stop();
   }
 
-  // ── Agent Builder ──
+  // ── Gateway Mode ──
 
-  private async buildAgent(): Promise<void> {
+  private async startGatewayMode(): Promise<void> {
+    this.useGateway = true;
+    this.gatewayClient = new GatewayChatClient({ url: this.config.gatewayUrl! });
+
+    this.gatewayClient.on({
+      onEvent: (event) => this.handleAgentEvent(event),
+      onConnected: () => {
+        this.chatLog.addSystem('✅ Connected to Gateway');
+        this.tui.requestRender();
+      },
+      onDisconnected: (reason) => {
+        this.chatLog.addSystem(`❌ Disconnected from Gateway: ${reason ?? 'unknown'}`);
+        this.tui.requestRender();
+      },
+      onError: (err) => {
+        this.chatLog.addSystem(`⚠️ Gateway error: ${err.message}`);
+        this.tui.requestRender();
+      },
+    });
+
+    try {
+      await this.gatewayClient.connect();
+    } catch (err: any) {
+      this.chatLog.addSystem(`⚠️ Failed to connect to Gateway: ${err.message}`);
+      this.chatLog.addSystem('Falling back to local mode.');
+      this.useGateway = false;
+      this.gatewayClient = null;
+      await this.startLocalMode();
+    }
+  }
+
+  // ── Local Mode ──
+
+  private async startLocalMode(): Promise<void> {
     const builder = new AgentBuilder()
       .model(this.config.provider)
       .store(this.config.store);
@@ -217,23 +247,16 @@ export class TuiApp {
       builder.persona(this.config.personaPath);
     }
 
-    // Register tools
-    for (const tool of getBuiltinTools()) {
-      builder.tool(tool);
-    }
-    for (const tool of this.config.tools ?? []) {
-      builder.tool(tool);
-    }
+    for (const tool of getBuiltinTools()) builder.tool(tool);
+    for (const tool of this.config.tools ?? []) builder.tool(tool);
 
-    if (this.config.budget) {
-      builder.budget(this.config.budget);
-    }
+    if (this.config.budget) builder.budget(this.config.budget);
 
     if (this.config.supervisor?.enabled !== false) {
       builder.taskSupervisor(this.config.supervisor ?? {});
     }
 
-    const { engine, runner } = await builder.build();
+    const { runner } = await builder.build();
     this.runner = runner;
   }
 
@@ -246,13 +269,9 @@ export class TuiApp {
       onNewSession: () => `${this.config.agentId}:cli:${Date.now()}`,
     });
 
-    // Update autocomplete
     const slashCommands: SlashCommand[] = [];
     for (const [name, def] of this.commands.getCommands()) {
-      slashCommands.push({
-        name: name.replace(/^\//, ''),
-        description: def.description,
-      });
+      slashCommands.push({ name: name.replace(/^\//, ''), description: def.description });
     }
     slashCommands.push({ name: 'exit', description: 'Exit the TUI' });
     slashCommands.push({ name: 'quit', description: 'Exit the TUI' });
@@ -262,27 +281,15 @@ export class TuiApp {
     );
   }
 
-  // ── Editor Setup ──
+  // ── Editor ──
 
   private setupEditor(): void {
-    this.editor.onSubmit = (text: string) => {
-      this.handleSubmit(text);
-    };
-
+    this.editor.onSubmit = (text: string) => this.handleSubmit(text);
     this.editor.onEscape = () => {
-      if (this.isProcessing) {
-        this.abortProcessing();
-      }
+      if (this.isProcessing) this.abortProcessing();
     };
-
-    this.editor.onCtrlC = () => {
-      this.handleCtrlC();
-    };
-
-    this.editor.onCtrlD = () => {
-      this.requestExit();
-    };
-
+    this.editor.onCtrlC = () => this.handleCtrlC();
+    this.editor.onCtrlD = () => this.requestExit();
     this.editor.onCtrlO = () => {
       this.toolsExpanded = !this.toolsExpanded;
       this.chatLog.setToolsExpanded(this.toolsExpanded);
@@ -291,49 +298,185 @@ export class TuiApp {
     };
   }
 
-  // ── Submit Handler ──
+  private setupInputHandler(): void {
+    this.tui.addInputListener((data) => {
+      if (matchesKey(data, 'ctrl+c') && this.exitRequested) {
+        this.forceExit();
+        return { consume: true };
+      }
+    });
+  }
+
+  // ── Submit ──
 
   private async handleSubmit(text: string): Promise<void> {
     const trimmed = text.trim();
     if (!trimmed) return;
 
-    // Block if processing
     if (this.isProcessing) {
       this.chatLog.addSystem('Agent is busy — press Esc to abort.');
       this.tui.requestRender();
       return;
     }
 
-    // Exit commands
     if (trimmed === 'exit' || trimmed === 'quit') {
       this.requestExit();
       return;
     }
 
-    // Slash command interception
     if (trimmed.startsWith('/')) {
       const cmdResult = await this.commands.tryExecute(trimmed, this.sessionIdRef.current, this.config.agentId);
       if (cmdResult) {
-        if (cmdResult.message) {
-          this.chatLog.addSystem(cmdResult.message);
-        }
+        if (cmdResult.message) this.chatLog.addSystem(cmdResult.message);
         this.tui.requestRender();
         return;
       }
     }
 
-    // Send to agent
-    await this.sendToAgent(trimmed);
+    if (this.useGateway) {
+      await this.sendViaGateway(trimmed);
+    } else {
+      await this.sendLocal(trimmed);
+    }
   }
 
-  // ── Agent Communication ──
+  // ── Gateway Send ──
 
-  private async sendToAgent(text: string): Promise<void> {
+  private async sendViaGateway(text: string): Promise<void> {
+    if (!this.gatewayClient) return;
+
+    this.isProcessing = true;
+    this.streamedContent = '';
+    this.chatLog.addUser(text);
+    this.setStatus('sending to gateway...');
+    this.tui.requestRender();
+
+    try {
+      await this.gatewayClient.sendMessage(text, this.sessionIdRef.current, this.config.agentId);
+      this.setStatus('waiting for response...');
+      this.tui.requestRender();
+      // 事件通过 onEvent 回调异步到达
+    } catch (err: any) {
+      this.chatLog.addSystem(`❌ Send failed: ${err.message}`);
+      this.isProcessing = false;
+      this.setStatus('');
+      this.tui.requestRender();
+    }
+  }
+
+  // ── Gateway Event Handler ──
+
+  private handleAgentEvent(event: AgentEvent): void {
+    switch (event.type) {
+      case 'llm_stream_delta': {
+        const delta = event.data?.delta as string;
+        if (delta) {
+          if (!this.streamedContent) {
+            this.chatLog.startAssistant('', 'run');
+            this.setStatus('streaming...');
+          }
+          this.streamedContent += delta;
+          this.chatLog.updateAssistant(this.streamedContent, 'run');
+          this.tui.requestRender();
+        }
+        break;
+      }
+
+      case 'tool.exec.start': {
+        const toolName = event.data?.toolName as string ?? 'unknown';
+        const toolArgs = event.data?.args as string ?? '';
+        const toolCallId = event.data?.toolCallId as string ?? `tool_${Date.now()}`;
+        this.chatLog.startTool(toolCallId, toolName, formatToolArgs(toolName, toolArgs));
+        this.setStatus(`running ${toolName}...`);
+        this.tui.requestRender();
+        break;
+      }
+
+      case 'tool.exec.end': {
+        const toolCallId = event.data?.toolCallId as string;
+        const result = event.data?.result as string ?? '';
+        const isError = event.data?.isError as boolean ?? false;
+        if (toolCallId) {
+          const displayResult = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
+          this.chatLog.updateToolResult(toolCallId, displayResult, { isError });
+        }
+        this.setStatus('tool done');
+        this.tui.requestRender();
+        break;
+      }
+
+      case 'turn.end': {
+        const content = (event.data?.content as string) ?? '';
+        if (this.streamedContent || content) {
+          this.chatLog.finalizeAssistant(this.streamedContent || content, 'run');
+        } else {
+          this.chatLog.dropAssistant('run');
+          this.chatLog.addSystem('⚠️ Empty response.');
+        }
+        this.isProcessing = false;
+        this.setStatus('');
+        this.tui.requestRender();
+        break;
+      }
+
+      case 'model.call.start':
+        this.setStatus('calling model...');
+        this.tui.requestRender();
+        break;
+
+      case 'model.call.error': {
+        const errorData = event.data?.error as any;
+        const reason = errorData?.reason ?? 'unknown';
+        const statusCode = errorData?.statusCode;
+        const detail = statusCode ? ` (HTTP ${statusCode})` : '';
+        this.chatLog.addSystem(`❌ Model error: ${reason}${detail}`);
+        this.isProcessing = false;
+        this.setStatus('');
+        this.tui.requestRender();
+        break;
+      }
+
+      case 'budget.exceeded': {
+        const report = event.data as any;
+        if (this.streamedContent) this.chatLog.finalizeAssistant(this.streamedContent, 'run');
+        this.chatLog.addSystem(`⛔ Budget exceeded: ${report?.status ?? 'unknown'}`);
+        this.isProcessing = false;
+        this.setStatus('');
+        this.tui.requestRender();
+        break;
+      }
+
+      case 'engine.error': {
+        const errorData = event.data as any;
+        this.chatLog.dropAssistant('run');
+        this.chatLog.addSystem(`❌ Engine error: ${errorData?.error ?? 'unknown'}`);
+        this.isProcessing = false;
+        this.setStatus('');
+        this.tui.requestRender();
+        break;
+      }
+
+      case 'aborted': {
+        const reason = event.data?.reason as string;
+        if (this.streamedContent) this.chatLog.finalizeAssistant(this.streamedContent, 'run');
+        this.chatLog.addSystem(`🛑 Aborted: ${reason ?? 'unknown'}`);
+        this.isProcessing = false;
+        this.setStatus('');
+        this.tui.requestRender();
+        break;
+      }
+    }
+  }
+
+  // ── Local Send ──
+
+  private async sendLocal(text: string): Promise<void> {
+    if (!this.runner) return;
+
     this.isProcessing = true;
     this.streamedContent = '';
     this.abortController = new AbortController();
 
-    // Add user message to chat log
     this.chatLog.addUser(text);
     this.setStatus('thinking...');
     this.tui.requestRender();
@@ -428,13 +571,11 @@ export class TuiApp {
             const toolCallId = event.data?.toolCallId as string;
             const result = event.data?.result as string ?? '';
             const isError = event.data?.isError as boolean ?? false;
-            const durationMs = event.data?.durationMs as number;
             if (toolCallId) {
               const displayResult = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
               this.chatLog.updateToolResult(toolCallId, displayResult, { isError });
             }
-            const suffix = durationMs ? ` (${durationMs}ms)` : '';
-            this.setStatus(`tool done${suffix}`);
+            this.setStatus('tool done');
             this.tui.requestRender();
             break;
           }
@@ -447,7 +588,6 @@ export class TuiApp {
             const report = event.data as any;
             if (hasShownAssistant) this.chatLog.finalizeAssistant(this.streamedContent || finalContent, 'run');
             this.chatLog.addSystem(`⛔ Budget exceeded: ${report?.status ?? 'unknown'}`);
-            this.chatLog.addSystem('Use /new to start a new session.');
             break;
           }
 
@@ -466,7 +606,7 @@ export class TuiApp {
 
           case 'planning_only_retry': {
             const data = event.data as any;
-            this.chatLog.addSystem(`🔄 Planning-only response, retrying (${data?.attempt}/${data?.maxAttempts})...`);
+            this.chatLog.addSystem(`🔄 Planning-only, retrying (${data?.attempt}/${data?.maxAttempts})...`);
             break;
           }
 
@@ -481,13 +621,12 @@ export class TuiApp {
           case 'checkpoint.stop': {
             const data = event.data as any;
             if (hasShownAssistant) this.chatLog.finalizeAssistant(this.streamedContent || finalContent, 'run');
-            this.chatLog.addSystem(`🛑 Task supervisor stopped: ${data?.reason ?? 'unknown'}`);
+            this.chatLog.addSystem(`🛑 Supervisor stopped: ${data?.reason ?? 'unknown'}`);
             break;
           }
         }
       }
 
-      // Finalize assistant message
       if (hasShownAssistant) {
         const displayContent = this.streamedContent || finalContent;
         if (displayContent) {
@@ -516,6 +655,9 @@ export class TuiApp {
   // ── Abort ──
 
   private abortProcessing(): void {
+    if (this.useGateway && this.gatewayClient) {
+      this.gatewayClient.sendAbort();
+    }
     if (this.abortController) {
       this.abortController.abort();
     }
@@ -556,37 +698,36 @@ export class TuiApp {
 
   private requestExit(): void {
     this.exitRequested = true;
-    if (this.abortController) {
-      this.abortController.abort();
-    }
+    if (this.gatewayClient) this.gatewayClient.disconnect();
+    if (this.abortController) this.abortController.abort();
   }
 
   private forceExit(): void {
+    if (this.gatewayClient) this.gatewayClient.disconnect();
     this.tui.stop();
     process.exit(0);
   }
 
-  // ── UI Updates ──
+  // ── UI ──
 
   private updateHeader(): void {
-    const title = `🐙 Octopi — ${this.currentModelRef.current} — session ${this.sessionIdRef.current}`;
+    const mode = this.useGateway ? '🌐 gateway' : '💻 local';
+    const title = `🐙 Octopi — ${this.currentModelRef.current} — ${mode}`;
     this.header.setText(theme.header(title));
   }
 
   private updateFooter(): void {
+    const gwInfo = this.useGateway ? `gateway ${this.config.gatewayUrl}` : 'local mode';
     const parts = [
       `agent ${this.config.agentId}`,
       `model ${this.currentModelRef.current}`,
-      'Ctrl+C exit | Ctrl+O toggle tools | /help commands',
+      gwInfo,
+      'Ctrl+C exit | Ctrl+O tools | /help',
     ];
     this.footer.setText(theme.footer(parts.join(' | ')));
   }
 
   private setStatus(text: string): void {
-    if (text) {
-      this.statusText.setText(theme.statusBusy(`  ${text}`));
-    } else {
-      this.statusText.setText('');
-    }
+    this.statusText.setText(text ? theme.statusBusy(`  ${text}`) : '');
   }
 }

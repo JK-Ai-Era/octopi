@@ -460,6 +460,29 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
   await gateway.start();
 }
 
+/**
+ * 解析 Gateway URL
+ *
+ * 优先级：
+ * 1. 守护进程 PID 文件中的端口
+ * 2. 配置文件中的 channels[0].port
+ * 3. 默认 http://localhost:3000
+ */
+function resolveGatewayUrl(config: any): string {
+  // 1. PID 文件
+  const pidFile = readPidFile();
+  if (pidFile && isProcessAlive(pidFile.pid) && pidFile.port) {
+    return `http://localhost:${pidFile.port}`;
+  }
+  // 2. 配置文件
+  const httpChannel = config.channels?.find((c: any) => c.type === 'http');
+  if (httpChannel?.port) {
+    return `http://localhost:${httpChannel.port}`;
+  }
+  // 3. 默认
+  return 'http://localhost:3000';
+}
+
 async function chatCommand(args: CliArgs): Promise<void> {
   const configPath = await ensureInitialized(args);
   const config = loadConfig(configPath);
@@ -530,6 +553,7 @@ async function chatCommand(args: CliArgs): Promise<void> {
     budget: config.budget,
     supervisor: supervisorCfg,
     workspace: agent.workspace,
+    gatewayUrl: resolveGatewayUrl(config),
   });
 
   await app.start();
