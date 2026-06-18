@@ -292,7 +292,7 @@ async function chatCommand(args: CliArgs): Promise<void> {
 
   const { engine, runner } = await builder.build();
 
-  // --verbose: 接入 TraceCollector，记录所有引擎事件到文件
+  // --verbose: 接入 TraceCollector + MetricsAggregator
   let traceCollector: import('./integration/observability/trace-collector.js').TraceCollector | undefined;
   if (args.verbose) {
     const { TraceCollector } = await import('./integration/observability/trace-collector.js');
@@ -305,6 +305,7 @@ async function chatCommand(args: CliArgs): Promise<void> {
       captureStreamDeltas: true,
       captureToolArgs: true,
       captureToolResults: true,
+      enableMetrics: true,
     });
     console.log(`   🔍 Verbose mode: trace → ${traceDir}`);
   }
@@ -465,6 +466,18 @@ async function chatCommand(args: CliArgs): Promise<void> {
   };
 
   ask();
+
+  // 退出时打印指标摘要
+  rl.on('close', async () => {
+    if (traceCollector) {
+      const metrics = traceCollector.getMetricsAggregator();
+      if (metrics) {
+        const { formatMetricsSnapshot } = await import('./integration/observability/metrics.js');
+        console.error('\n' + formatMetricsSnapshot(metrics.snapshot()));
+      }
+      traceCollector.finalize();
+    }
+  });
 }
 
 async function healthCommand(args: CliArgs): Promise<void> {

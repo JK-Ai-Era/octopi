@@ -126,8 +126,8 @@ export { InMemorySessionStore } from './integration/storage/memory.js';
 // 可观测性
 export { NoopObserver } from './integration/observability/noop-observer.js';
 export { LogObserver } from './integration/observability/log-observer.js';
-export { TraceLogger, TraceCollector, getTraceLogger, resetTraceLogger, TraceLevel, TRACE_LEVEL_NAMES, TRACE_EVENTS, ConsoleExporter, JsonlFileExporter, WebhookExporter, createExporter, MetricsAggregator, formatMetricsSnapshot } from './integration/observability/index.js';
-export type { TraceEvent, TraceLoggerConfig, TraceCollectorConfig, TraceExporter, ExporterConfig, AnyExporterConfig, MetricsSnapshot, LatencyStats, MetricsAggregatorConfig } from './integration/observability/index.js';
+export { TraceLogger, TraceCollector, getTraceLogger, resetTraceLogger, TraceLevel, TRACE_LEVEL_NAMES, TRACE_EVENTS, ConsoleExporter, JsonlFileExporter, WebhookExporter, createExporter, MetricsAggregator, formatMetricsSnapshot, ObserverBridge } from './integration/observability/index.js';
+export type { TraceEvent, TraceLoggerConfig, TraceCollectorConfig, TraceExporter, ExporterConfig, AnyExporterConfig, MetricsSnapshot, LatencyStats, MetricsAggregatorConfig, ObserverBridgeConfig } from './integration/observability/index.js';
 
 // LLM Providers
 export { OpenAIProvider } from './integration/providers/openai.js';

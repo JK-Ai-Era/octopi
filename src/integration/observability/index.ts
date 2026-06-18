@@ -19,3 +19,5 @@ export { ConsoleExporter, JsonlFileExporter, WebhookExporter, createExporter } f
 export type { TraceExporter, ExporterConfig, AnyExporterConfig, ConsoleExporterConfig, JsonlFileExporterConfig, WebhookExporterConfig } from './exporters.js';
 export { MetricsAggregator, formatMetricsSnapshot } from './metrics.js';
 export type { MetricsSnapshot, LatencyStats, MetricsAggregatorConfig } from './metrics.js';
+export { ObserverBridge } from './observer-bridge.js';
+export type { ObserverBridgeConfig } from './observer-bridge.js';

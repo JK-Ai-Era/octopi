@@ -46,6 +46,9 @@ import { DefaultTaskSupervisor } from './supervisor/task-supervisor.js';
 import type {
   Observer,
 } from '../core/interfaces/observer.js';
+import type { TraceCollectorConfig } from '../integration/observability/trace-collector.js';
+import type { MetricsAggregatorConfig } from '../integration/observability/metrics.js';
+import type { TraceLoggerConfig } from '../integration/observability/trace-logger.js';
 import type {
   SessionStore,
 } from '../core/interfaces/session-store.js';
@@ -191,6 +194,11 @@ export class AgentBuilder {
   private _systemPrompt?: string;
   private _securityConfig?: SecurityGuardConfig;
 
+  // Observability 配置
+  private _traceConfig?: TraceCollectorConfig;
+  private _loggerConfig?: Partial<TraceLoggerConfig>;
+  private _metricsConfig?: MetricsAggregatorConfig;
+
   // Runner 配置
   private _store?: SessionStore;
   private _runnerConfig?: SessionAwareRunnerConfig;
@@ -280,6 +288,35 @@ export class AgentBuilder {
   /** 设置观测器 */
   observer(observer: Observer): this {
     this._observer = observer;
+    return this;
+  }
+
+  /**
+   * 启用完整可观测性
+   *
+   * 自动创建：
+   * - ObserverBridge（实现 Observer，桥接到 TraceLogger + MetricsAggregator）
+   * - 如果未手动设置 observer，则自动注入 ObserverBridge
+   *
+   * @param traceConfig - TraceCollector 配置（事件流包装）
+   * @param loggerConfig - TraceLogger 配置（日志输出）
+   * @param metricsConfig - MetricsAggregator 配置（指标聚合）
+   */
+  trace(
+    traceConfig?: Partial<TraceCollectorConfig>,
+    loggerConfig?: Partial<TraceLoggerConfig>,
+    metricsConfig?: MetricsAggregatorConfig,
+  ): this {
+    this._traceConfig = {
+      captureStreamDeltas: false,
+      captureModelRequest: false,
+      captureToolArgs: true,
+      captureToolResults: false,
+      enableMetrics: true,
+      ...traceConfig,
+    } as TraceCollectorConfig;
+    this._loggerConfig = loggerConfig;
+    this._metricsConfig = metricsConfig;
     return this;
   }
 
@@ -400,6 +437,20 @@ export class AgentBuilder {
       budget = new IterationBudget(events);
     }
 
+    // 自动创建 ObserverBridge（如果配置了 trace 但未手动设置 observer）
+    let observer = this._observer;
+    if (!observer && this._traceConfig) {
+      const { ObserverBridge } = await import('../integration/observability/observer-bridge.js');
+      observer = new ObserverBridge({
+        logger: {
+          level: 4, // TraceLevel.DEBUG
+          outputDir: this._traceConfig.outputDir,
+          ...this._loggerConfig,
+        },
+        metrics: this._metricsConfig,
+      });
+    }
+
     // 注入 systemPrompt 到引擎的运行时配置
     // AgentEngine 本身不存储 systemPrompt，由调用方在 run() 时传入
     const deps: AgentEngineDeps = {
@@ -411,7 +462,7 @@ export class AgentBuilder {
       security,
       budget,
       errorStrategy,
-      observer: this._observer,
+      observer,
       systemPrompt,
       taskSupervisor,
       checkpointInterval: this._checkpointInterval,

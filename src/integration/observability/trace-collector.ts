@@ -8,7 +8,8 @@
 import type { AgentEvent } from '../../core/event-bus.js';
 import type { TraceEvent } from './trace-events.js';
 import { TraceLogger, type TraceLoggerConfig } from './trace-logger.js';
-import { TraceLevel, TRACE_EVENTS } from './trace-events.js';
+import { TraceLevel, TRACE_EVENTS, getTraceLevelForEngineEvent } from './trace-events.js';
+import { MetricsAggregator, type MetricsAggregatorConfig } from './metrics.js';
 
 export interface TraceCollectorConfig extends Partial<TraceLoggerConfig> {
   /** 是否记录流式 delta（数据量大，默认关闭） */
@@ -19,6 +20,12 @@ export interface TraceCollectorConfig extends Partial<TraceLoggerConfig> {
   captureToolArgs?: boolean;
   /** 是否记录工具返回值 */
   captureToolResults?: boolean;
+  /** 是否自动聚合指标（默认 true） */
+  enableMetrics?: boolean;
+  /** MetricsAggregator 配置（enableMetrics=true 时生效） */
+  metricsConfig?: MetricsAggregatorConfig;
+  /** 预创建的 MetricsAggregator 实例 */
+  metricsInstance?: MetricsAggregator;
 }
 
 /**
@@ -26,6 +33,7 @@ export interface TraceCollectorConfig extends Partial<TraceLoggerConfig> {
  */
 export class TraceCollector {
   private logger: TraceLogger;
+  private metrics: MetricsAggregator | null;
   private config: TraceCollectorConfig;
   private turnCount = 0;
   private currentTurnId?: string;
@@ -36,9 +44,18 @@ export class TraceCollector {
       captureModelRequest: false,
       captureToolArgs: true,
       captureToolResults: false,
+      enableMetrics: true,
       ...config,
     };
     this.logger = new TraceLogger(this.config);
+
+    // 初始化 MetricsAggregator
+    if (this.config.enableMetrics) {
+      this.metrics = this.config.metricsInstance
+        ?? new MetricsAggregator(this.config.metricsConfig);
+    } else {
+      this.metrics = null;
+    }
   }
 
   /**
@@ -66,6 +83,15 @@ export class TraceCollector {
     }
 
     this.logger.info(TRACE_EVENTS.TURN_END, { turnId }, ctx);
+  }
+
+  /**
+   * 获取 MetricsAggregator 实例
+   *
+   * 在 wrap() 过程中自动收集指标，调用方可在结束后获取快照。
+   */
+  getMetricsAggregator(): MetricsAggregator | null {
+    return this.metrics;
   }
 
   /**
@@ -165,6 +191,19 @@ export class TraceCollector {
         this.logger.debug(event.type, event.data, base);
         break;
     }
+
+    // 喂给 MetricsAggregator
+    if (this.metrics) {
+      const traceEvent: TraceEvent = {
+        ts: Date.now(),
+        level: getTraceLevelForEngineEvent(event.type),
+        type: event.type,
+        sessionId: event.sessionId ?? ctx.sessionId,
+        agentId: event.agentId ?? ctx.agentId,
+        data: event.data as Record<string, unknown>,
+      };
+      this.metrics.processEvent(traceEvent);
+    }
   }
 
   /**
@@ -250,6 +289,7 @@ export class TraceCollector {
    */
   finalize(): void {
     this.logger.finalize();
+    // 不 destroy metrics，调用方可能还需要读快照
   }
 
   /**
