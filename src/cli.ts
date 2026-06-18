@@ -23,7 +23,6 @@ import { Gateway } from './integration/gateway/gateway.js';
 import { OpenAIProvider } from './integration/providers/openai.js';
 import { AnthropicProvider } from './integration/providers/anthropic.js';
 import { getBuiltinTools } from './harness/tools/builtin.js';
-import { createInterface } from 'node:readline';
 import { fork, execSync } from 'node:child_process';
 import { readFileSync, writeFileSync, unlinkSync, existsSync, mkdirSync } from 'node:fs';
 import type { ModelProvider } from './core/interfaces/model-provider.js';
@@ -178,7 +177,7 @@ Commands:
   serve restart     Restart the Gateway server
   serve status      Show Gateway server status
   serve fg          Start the Gateway server in foreground (for debugging)
-  chat              Interactive chat with an agent
+  chat  (or tui)        Interactive TUI chat with an agent
   health            Check the health of configured providers
   help              Show this help message
 
@@ -491,234 +490,49 @@ async function chatCommand(args: CliArgs): Promise<void> {
     process.exit(1);
   }
 
-  // 使用新架构
-  const { AgentBuilder } = await import('./harness/builder.js');
   const { JsonlSessionStore } = await import('./integration/storage/jsonl.js');
+  const { TuiApp } = await import('./integration/tui/app.js');
 
   // 使用配置中的 dataDir，否则默认 .octopi/sessions
   const storeDir = config.store?.dataDir
     ? (config.store.dataDir.startsWith('/') ? config.store.dataDir : resolve(configDir, config.store.dataDir))
     : resolve(configDir, '.octopi/sessions');
-  const builder = new AgentBuilder()
-    .model(provider)
-    .store(new JsonlSessionStore(storeDir));
 
-  // 传递 systemPrompt 到 builder
+  // 构建 systemPrompt
+  let systemPrompt: string | undefined;
   if (typeof agent.persona === 'object' && agent.persona?.systemPrompt) {
-    builder.systemPrompt(agent.persona.systemPrompt);
-  } else if (typeof agent.persona === 'string') {
-    // persona 路径
-    const personaPath = agent.persona.startsWith('/') ? agent.persona : resolve(configDir, agent.persona);
-    builder.persona(personaPath);
+    systemPrompt = agent.persona.systemPrompt;
   }
 
-  for (const tool of getBuiltinTools()) {
-    builder.tool(tool);
+  // persona 路径
+  let personaPath: string | undefined;
+  if (typeof agent.persona === 'string') {
+    personaPath = agent.persona.startsWith('/') ? agent.persona : resolve(configDir, agent.persona);
   }
 
-  // 配置预算（如果用户指定了）
-  if (config.budget) {
-    builder.budget(config.budget);
-  }
-
-  // 配置 TaskSupervisor
+  // TaskSupervisor 配置
+  let supervisorCfg: any = undefined;
   if (config.supervisor?.enabled !== false) {
-    const supervisorCfg = { ...config.supervisor };
-    // llmModel 格式: "provider/model" → 提取 model 部分
+    supervisorCfg = { ...config.supervisor };
     if (supervisorCfg.llmModel?.includes('/')) {
       supervisorCfg.llmModel = supervisorCfg.llmModel.split('/')[1];
     }
-    builder.taskSupervisor(supervisorCfg);
   }
 
-  const { engine, runner } = await builder.build();
-
-  // --verbose: 接入 TraceCollector + MetricsAggregator
-  let traceCollector: import('./integration/observability/trace-collector.js').TraceCollector | undefined;
-  if (args.verbose) {
-    const { TraceCollector } = await import('./integration/observability/trace-collector.js');
-    const { getOctopiHome } = await import('./init.js');
-    const traceDir = resolve(getOctopiHome(), 'traces');
-    const { mkdirSync } = await import('node:fs');
-    mkdirSync(traceDir, { recursive: true });
-    traceCollector = new TraceCollector({
-      outputDir: traceDir,
-      captureStreamDeltas: true,
-      captureToolArgs: true,
-      captureToolResults: true,
-      enableMetrics: true,
-    });
-    console.log(`   🔍 Verbose mode: trace → ${traceDir}`);
-  }
-
-  // 每次 CLI 启动生成唯一 session，避免跨重启的上下文错乱
-  const cliSessionId = `${agent.id}:cli:${Date.now()}`;
-
-  // 进度显示状态
-  let hasShownThinking = false;
-  let streamedContent = '';
-
-  console.log(`\n🐙 Octopi Chat`);
-  const agentName = typeof agent.persona === 'string'
-    ? agent.persona
-    : agent.persona?.name ?? agent.id;
-  console.log(`   Agent: ${agentName}`);
-  console.log(`   Model: ${providerCfg.type} / ${agent.model.model}`);
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-
-  // 可变状态
-  const sessionIdRef = { current: cliSessionId };
-  const currentModelRef = { current: agent.model.model };
-
-  // 命令系统
-  const { CommandPlugin } = await import('./harness/commands/index.js');
-  const commands = new CommandPlugin({
-    sessionIdRef,
-    currentModelRef,
-    onNewSession: () => `${agent.id}:cli:${Date.now()}`,
+  const app = new TuiApp({
+    agentId: agent.id,
+    model: agent.model.model,
+    provider,
+    store: new JsonlSessionStore(storeDir),
+    systemPrompt,
+    personaPath,
+    tools: [],
+    budget: config.budget,
+    supervisor: supervisorCfg,
+    workspace: agent.workspace,
   });
 
-  console.log(`   Commands: ${Array.from(commands.getCommands().keys()).join(', ')}, exit`);
-
-  const ask = () => {
-    rl.question('You: ', async (input) => {
-      const trimmed = input.trim();
-      if (!trimmed) { ask(); return; }
-
-      // exit 命令
-      if (trimmed === 'exit' || trimmed === 'quit') {
-        console.log('Goodbye! 👋');
-        rl.close();
-        return;
-      }
-
-      // 斜杠命令拦截
-      const cmdResult = await commands.tryExecute(trimmed, sessionIdRef.current, agent.id);
-      if (cmdResult) {
-        console.log(cmdResult.message + '\n');
-        ask();
-        return;
-      }
-
-      try {
-        hasShownThinking = false;
-        streamedContent = '';
-
-        const userMessage = {
-          role: 'user' as const,
-          content: trimmed,
-          timestamp: Date.now(),
-        };
-
-        const runConfig = {
-          agentId: agent.id,
-          sessionId: sessionIdRef.current,
-          model: agent.model.model,
-          systemPrompt: typeof agent.persona === 'object' ? agent.persona?.systemPrompt : '',
-          cwd: agent.workspace,
-        };
-
-        let finalContent = '';
-        let engineTerminated = false;
-        const eventStream = runner.handle(sessionIdRef.current, userMessage, runConfig);
-        const wrappedStream = traceCollector
-          ? traceCollector.wrap(eventStream, { sessionId: sessionIdRef.current, agentId: agent.id })
-          : eventStream;
-        for await (const event of wrappedStream) {
-          if (event.type === 'model.call.start') {
-            if (!hasShownThinking) {
-              process.stdout.write('  🤔 Thinking...');
-              hasShownThinking = true;
-            }
-          } else if (event.type === 'llm_stream_delta' && event.data?.delta) {
-            if (hasShownThinking) {
-              process.stdout.write('\r' + ' '.repeat(20) + '\r');
-              hasShownThinking = false;
-            }
-            process.stdout.write(event.data.delta as string);
-            streamedContent += event.data.delta as string;
-          } else if (event.type === 'tool.exec.start') {
-            process.stdout.write(`\n  🔧 Running: ${event.data?.toolName}...\n`);
-          } else if (event.type === 'tool.exec.end') {
-            process.stdout.write(`  ✅ Done (${event.data?.durationMs ?? '?'}ms)\n`);
-          } else if (event.type === 'turn.end') {
-            finalContent = (event.data?.content as string) ?? '';
-          } else if (event.type === 'budget.exceeded') {
-            engineTerminated = true;
-            const report = event.data as any;
-            const status = report?.status ?? 'unknown';
-            const detail = report?.report;
-            if (streamedContent) process.stdout.write('\n');
-            console.log(`\n  ⛔ 预算耗尽: ${status}`);
-            if (detail) {
-              console.log(`     迭代: ${detail.iterations}/${detail.iterations + (detail.remaining?.iterations ?? 0)}`);
-              console.log(`     工具调用: ${detail.toolCalls}/${detail.toolCalls + (detail.remaining?.toolCalls ?? 0)}`);
-              console.log(`     耗时: ${Math.round(detail.elapsedMs / 1000)}s`);
-            }
-            console.log('     使用 /new 开始新会话，或继续对话（上下文已保留）\n');
-          } else if (event.type === 'engine.error') {
-            engineTerminated = true;
-            const errorData = event.data as any;
-            const errorMsg = errorData?.error ?? 'unknown error';
-            if (streamedContent) process.stdout.write('\n');
-            console.log(`\n  ❌ 引擎错误: ${errorMsg}`);
-            console.log('     使用 /new 开始新会话，或重新输入重试\n');
-          } else if (event.type === 'context.truncated') {
-            const data = event.data as any;
-            console.log(`\n  ✂️  上下文过长，已自动截断 (${data?.from} → ${data?.to} 条消息)，重试中...`);
-          } else if (event.type === 'planning_only_retry') {
-            const data = event.data as any;
-            console.log(`\n  🔄 检测到计划性响应，正在重试 (${data?.attempt}/${data?.maxAttempts})...`);
-          } else if (event.type === 'checkpoint') {
-            const data = event.data as any;
-            const verdict = data?.verdict;
-            if (verdict?.action === 'recover') {
-              console.log(`\n  🔄 检查点审查: ${verdict.reason}`);
-            }
-          } else if (event.type === 'checkpoint.stop') {
-            engineTerminated = true;
-            const data = event.data as any;
-            if (streamedContent) process.stdout.write('\n');
-            console.log(`\n  🛑 任务监督器终止: ${data?.reason ?? '未知原因'}`);
-            if (data?.userMessage) {
-              console.log(`     ${data.userMessage}`);
-            }
-            console.log('');
-          }
-        }
-
-        // 流式内容已实时输出，补换行；否则用 finalContent 回显
-        if (!engineTerminated) {
-          const displayContent = streamedContent || finalContent;
-          if (streamedContent) {
-            process.stdout.write('\n');
-          } else if (displayContent) {
-            console.log(`\n  ${displayContent}`);
-          } else {
-            console.log('\n  ⚠️  Empty response from model. This may be a streaming issue or model quirk.\n     Try rephrasing your message or use /new to start a fresh session.\n');
-          }
-        }
-      } catch (error) {
-        console.error(`\n[Error] ${error instanceof Error ? error.message : String(error)}\n`);
-      }
-
-      ask();
-    });
-  };
-
-  ask();
-
-  // 退出时打印指标摘要
-  rl.on('close', async () => {
-    if (traceCollector) {
-      const metrics = traceCollector.getMetricsAggregator();
-      if (metrics) {
-        const { formatMetricsSnapshot } = await import('./integration/observability/metrics.js');
-        console.error('\n' + formatMetricsSnapshot(metrics.snapshot()));
-      }
-      traceCollector.finalize();
-    }
-  });
+  await app.start();
 }
 
 async function healthCommand(args: CliArgs): Promise<void> {
@@ -761,7 +575,8 @@ async function main(): Promise<void> {
     case 'init': await initCommand(args); break;
     case 'serve': await serveCommand(args); break;
     case 'stop':  await serveStopCommand(); break;  // 快捷方式
-    case 'chat': await chatCommand(args); break;
+    case 'chat':
+    case 'tui': await chatCommand(args); break;
     case 'health': await healthCommand(args); break;
     default:
       console.error(`Unknown command: ${args.command}`);
