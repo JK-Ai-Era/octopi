@@ -143,9 +143,14 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
   }
 
   broadcastEvent(sessionId: string, event: AgentEvent): void {
+    // 从 sessionId 提取 agentId（格式：agentId:rest）
+    const agentId = sessionId.split(':')[0];
     const data = JSON.stringify({ type: 'event', event });
     for (const session of this.wsSessions) {
-      if (session.sessionId === sessionId && session.ws.readyState === WebSocket.OPEN) {
+      // 匹配 agentId（Gateway sessionKey 的前缀）或精确 sessionId
+      const sessionAgentId = (session.sessionId ?? session.agentId ?? '').split(':')[0];
+      if ((sessionAgentId === agentId || session.sessionId === sessionId)
+        && session.ws.readyState === WebSocket.OPEN) {
         session.ws.send(data);
       }
     }
@@ -204,8 +209,7 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
 
   private async handleWsMessage(session: WsSession, msg: any): Promise<void> {
     if (msg.type === 'chat') {
-      // 绑定 session
-      session.sessionId = msg.sessionId;
+      // 绑定 agentId（sessionId 在 Gateway 处理后更新）
       session.agentId = msg.agentId;
 
       const channelMsg: ChannelMessage = {
@@ -219,6 +223,10 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
       };
 
       try {
+        // Gateway 处理消息后会广播事件，广播用的是 Gateway 自己的 sessionKey
+        // 需要从 Gateway 获取实际的 sessionKey，或让 Gateway 广播时匹配 agentId
+        // 这里先保存 conversationId 作为 fallback
+        session.sessionId = msg.sessionId;
         await this.handler!(channelMsg);
         session.ws.send(JSON.stringify({ type: 'accepted', messageId: channelMsg.id }));
       } catch (error) {
@@ -228,8 +236,6 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
         }));
       }
     } else if (msg.type === 'abort') {
-      // Abort signal — Gateway 需要处理
-      // 暂时通过 metadata 传递
       console.log(`[WS] Abort requested for session ${msg.sessionId}`);
     }
   }
