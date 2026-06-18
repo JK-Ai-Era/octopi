@@ -269,9 +269,12 @@ async function serveStartCommand(args: CliArgs): Promise<void> {
   if (args.port) childArgs.push('--port', String(args.port));
 
   // fork 子进程
+  // execArgv: [] 防止子进程继承父进程的 --inspect 等参数
+  // detached + stdio: ignore 让父进程可以独立退出
   const child = fork(process.argv[1], childArgs, {
     detached: true,
     stdio: 'ignore',
+    execArgv: [],
     env: { ...process.env, OCTOPI_DAEMON: '1' },
   });
 
@@ -288,12 +291,16 @@ async function serveStartCommand(args: CliArgs): Promise<void> {
     startedAt: new Date().toISOString(),
   });
 
-  // 父进程不等待子进程
+  // 断开父子进程连接，父进程可以安全退出
   child.unref();
+  child.disconnect?.();
 
   console.log(`✅ Gateway started in background (PID: ${child.pid})`);
   console.log(`   Config: ${configPath ?? './octopi.json'}`);
   console.log(`\nUse 'octopi serve stop' to stop, 'octopi serve status' to check.`);
+
+  // 强制父进程退出，防止 fork IPC 或其他异步句柄阻塞
+  process.exit(0);
 }
 
 /**
