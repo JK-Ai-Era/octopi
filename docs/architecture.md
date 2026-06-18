@@ -194,9 +194,10 @@ src/
 │   ├── observability/                 # 可观测性
 │   │   ├── noop-observer.ts           # NoopObserver — 零开销空观测器
 │   │   ├── log-observer.ts            # LogObserver — 日志观测器
+│   │   ├── observer-bridge.ts         # ObserverBridge — Observer → TraceLogger + MetricsAggregator
 │   │   ├── trace-events.ts            # TraceEvent + TraceLevel — 事件类型与级别
 │   │   ├── trace-logger.ts            # TraceLogger — 分级结构化日志器
-│   │   ├── trace-collector.ts         # TraceCollector — 引擎事件自动收集
+│   │   ├── trace-collector.ts         # TraceCollector — 引擎事件自动收集（内置 MetricsAggregator）
 │   │   ├── exporters.ts              # TraceExporter SPI — Console/JsonlFile/Webhook
 │   │   ├── metrics.ts                # MetricsAggregator — LLM/token/延迟/成本指标
 │   │   └── index.ts
@@ -854,9 +855,21 @@ const child = forkAgentProcess(
 
 ### 5.2 可观测性
 
+**双路径观测架构：**
+
+| 路径 | 模型 | 组件 | 说明 |
+|------|------|------|------|
+| Push | Observer 接口 | ObserverBridge → TraceLogger + MetricsAggregator | Engine 主动调用，细粒度 span/metric |
+| Pull | 事件流包装 | TraceCollector.wrap() → TraceLogger + MetricsAggregator | 包装 AsyncGenerator，全量事件 |
+
 Observer 接口的实现：
 - `NoopObserver` — 默认，零开销
-- `LogObserver` — 日志输出
+- `LogObserver` — 基础日志输出
+- `ObserverBridge` — **推荐**，桥接到 TraceLogger + MetricsAggregator
+
+`Builder.trace()` 一行启用完整观测链路，自动创建 ObserverBridge 并注入 Engine。
+
+TraceCollector 内置 MetricsAggregator（默认启用），wrap() 过程中自动喂事件。
 
 ---
 
