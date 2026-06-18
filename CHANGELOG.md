@@ -1,5 +1,59 @@
 # Changelog
 
+## v0.3.0 (2026-06-18)
+
+### CLI serve 命令重构 — 后台守护进程模式
+
+`octopi serve` 从阻塞命令改为后台守护进程，终端不再被占用。
+
+**新增子命令：**
+- `octopi serve start` — 后台启动 Gateway（fork 子进程，父进程立即退出）
+- `octopi serve stop` — 优雅停止（SIGTERM → 10s 超时 → SIGKILL）
+- `octopi serve restart` — 重启
+- `octopi serve status` — 查看运行状态（PID、配置、启动时间）
+- `octopi serve fg` — 前台模式（调试用）
+
+**技术细节：**
+- PID 文件：`~/.octopi/gateway.pid`（JSON 格式）
+- 自动检测已有实例，防止重复启动
+- 残留 PID 文件自动清理
+
+### 可观测性集成 — Observer + TraceCollector + MetricsAggregator
+
+统一两套观测系统，一行代码启用完整观测链路。
+
+**架构：**
+- `ObserverBridge` — 实现 Observer 接口，桥接到 TraceLogger + MetricsAggregator
+- `TraceCollector` 增强 — 接受可选 MetricsAggregator，wrap() 时自动喂事件
+- `Builder.trace()` — 一行启用完整观测链路
+- CLI `--verbose` 退出时自动打印 MetricsSnapshot 摘要
+
+### ContextEngine 智能路由
+
+根据溢出量和工具结果可压缩空间选择最优路由。
+
+**路由策略：**
+- `fits` — 上下文在预算内，不处理
+- `truncate_tool_results_only` — 只截断工具结果
+- `compact_only` — 只压缩历史消息
+- `compact_then_truncate` — 先压缩再截断
+
+**其他：**
+- 三层 Token 估算策略（LLM > tokenizer > 启发式）
+- LLM 摘要默认开启，失败时回退到截断
+- 边界对齐：不拆分 tool_call/tool_result 对
+
+### Bug 修复
+
+- Anthropic provider tool 消息格式错误 — tool 消息转为 user + tool_result content block
+- 类型系统统一 — AgentEvent union 重命名为 AgentEventDetail，event-bus 接口为唯一标准
+- ContextEngine MessageSelector 死代码修复 — 组件未被实际调用
+
+### 测试
+
+- 测试总数：453 → 642（+189）
+- 测试文件：36 → 38
+
 ## v0.2.5 (2026-06-06)
 
 ### Harness 层 — StrategyRouter + ResourceManager（Phase 4）
