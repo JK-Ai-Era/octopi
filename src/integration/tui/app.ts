@@ -717,11 +717,13 @@ export class TuiApp {
   }
 
   private updateFooter(): void {
-    const gwInfo = this.useGateway ? `gateway ${this.config.gatewayUrl}` : 'local mode';
+    const gwInfo = this.useGateway ? `gateway ${this.config.gatewayUrl}` : 'local';
+    const cwd = this.config.workspace ?? process.cwd();
     const parts = [
       `agent ${this.config.agentId}`,
       `model ${this.currentModelRef.current}`,
       gwInfo,
+      `cwd ${cwd}`,
       'Ctrl+C exit | Ctrl+O tools | /help',
     ];
     this.footer.setText(theme.footer(parts.join(' | ')));
