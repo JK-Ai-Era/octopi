@@ -235,10 +235,33 @@ async function ensureInitialized(args: CliArgs): Promise<string | undefined> {
 }
 
 /**
+ * 为守护进程解析配置路径
+ *
+ * 守护进程（serve）始终优先使用 OCTOPI_HOME 下的配置，
+ * 因为它是系统级服务，不应依赖运行目录。
+ */
+async function ensureDaemonConfig(args: CliArgs): Promise<string | undefined> {
+  if (args.config) return args.config;
+
+  const home = getOctopiHome();
+  if (isInitialized(home)) return resolve(home, 'octopi.json');
+
+  // 回退到当前目录
+  if (isInitialized(process.cwd())) return undefined;
+
+  // 都没有 → 自动初始化到 OCTOPI_HOME
+  console.log('🐙 First run detected. Initializing Octopi...\n');
+  const result = await initOctopi();
+  console.log(formatInitReport(result));
+  console.log('');
+  return result.configPath;
+}
+
+/**
  * 在前台运行 Gateway（阻塞模式，用于调试）
  */
 async function serveFgCommand(args: CliArgs): Promise<void> {
-  const configPath = await ensureInitialized(args);
+  const configPath = await ensureDaemonConfig(args);
   await startGatewayBlocking(configPath, args);
 }
 
@@ -260,7 +283,7 @@ async function serveStartCommand(args: CliArgs): Promise<void> {
   removePidFile();
 
   // 确保已初始化，获取配置路径
-  const configPath = await ensureInitialized(args);
+  const configPath = await ensureDaemonConfig(args);
 
   // 构建子进程参数
   const childArgs = ['serve', 'fg'];
