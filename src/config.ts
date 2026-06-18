@@ -65,6 +65,8 @@ export interface ProviderConfig {
   models?: (string | ModelInfo)[];
   /** 默认模型 */
   defaultModel?: string;
+  /** 请求超时（毫秒，默认 60000） */
+  timeoutMs?: number;
 }
 
 // ── Agent 配置 ──

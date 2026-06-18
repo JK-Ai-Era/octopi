@@ -99,6 +99,7 @@ function createProvider(cfg: ProviderConfig): ModelProvider | null {
     baseUrl: cfg.baseUrl,
     models: cfg.models,
     defaultModel: cfg.defaultModel,
+    timeoutMs: cfg.timeoutMs,
   });
 }
 
