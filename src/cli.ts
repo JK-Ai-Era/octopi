@@ -18,15 +18,64 @@
  */
 
 import { loadConfig, toGatewayConfig } from './config.js';
-import { resolve, dirname } from 'node:path';
+import { resolve, dirname, join } from 'node:path';
 import { Gateway } from './integration/gateway/gateway.js';
 import { OpenAIProvider } from './integration/providers/openai.js';
 import { AnthropicProvider } from './integration/providers/anthropic.js';
 import { getBuiltinTools } from './harness/tools/builtin.js';
 import { createInterface } from 'node:readline';
+import { fork, execSync } from 'node:child_process';
+import { readFileSync, writeFileSync, unlinkSync, existsSync, mkdirSync } from 'node:fs';
 import type { ModelProvider } from './core/interfaces/model-provider.js';
 import type { ProviderConfig } from './config.js';
 import { initOctopi, getOctopiHome, isInitialized, formatInitReport, ensureAgentDirs } from './init.js';
+
+// ================================================================
+// 守护进程管理
+// ================================================================
+
+interface DaemonPidFile {
+  pid: number;
+  config: string;
+  port?: number;
+  startedAt: string;
+}
+
+function getPidPath(): string {
+  return join(getOctopiHome(), 'gateway.pid');
+}
+
+function readPidFile(): DaemonPidFile | null {
+  const pidPath = getPidPath();
+  if (!existsSync(pidPath)) return null;
+  try {
+    return JSON.parse(readFileSync(pidPath, 'utf-8')) as DaemonPidFile;
+  } catch {
+    return null;
+  }
+}
+
+function writePidFile(data: DaemonPidFile): void {
+  const pidPath = getPidPath();
+  mkdirSync(dirname(pidPath), { recursive: true });
+  writeFileSync(pidPath, JSON.stringify(data, null, 2));
+}
+
+function removePidFile(): void {
+  const pidPath = getPidPath();
+  if (existsSync(pidPath)) {
+    try { unlinkSync(pidPath); } catch { /* ignore */ }
+  }
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 // ================================================================
 // Provider 工厂
@@ -60,6 +109,7 @@ function createProvider(cfg: ProviderConfig): ModelProvider | null {
 
 interface CliArgs {
   command: string;
+  subcommand?: string;
   config?: string;
   port?: number;
   help?: boolean;
@@ -102,6 +152,7 @@ function parseArgs(): CliArgs {
 
   return {
     command: positional[0] ?? 'help',
+    subcommand: positional[1],
     config,
     port,
     verbose,
@@ -121,11 +172,15 @@ Usage:
   octopi <command> [options]
 
 Commands:
-  init      Initialize Octopi directory structure and config
-  serve     Start the Gateway server
-  chat      Interactive chat with an agent
-  health    Check the health of configured providers
-  help      Show this help message
+  init              Initialize Octopi directory structure and config
+  serve start       Start the Gateway server (background daemon)
+  serve stop        Stop the Gateway server
+  serve restart     Restart the Gateway server
+  serve status      Show Gateway server status
+  serve fg          Start the Gateway server in foreground (for debugging)
+  chat              Interactive chat with an agent
+  health            Check the health of configured providers
+  help              Show this help message
 
 Options:
   --config, -c <path>   Config file path (default: ./octopi.json)
@@ -135,9 +190,12 @@ Options:
 
 Examples:
   octopi init
-  octopi serve -c ./my-config.json
+  octopi serve start -c ./my-config.json
+  octopi serve stop
+  octopi serve restart
+  octopi serve status
+  octopi serve fg -c ./my-config.json   # foreground mode
   octopi chat -c ./my-config.json
-  octopi chat -v -c ./my-config.json   # with trace logging
   octopi health -c ./my-config.json
 `);
 }
@@ -177,8 +235,175 @@ async function ensureInitialized(args: CliArgs): Promise<string | undefined> {
   return result.configPath;
 }
 
-async function serveCommand(args: CliArgs): Promise<void> {
+/**
+ * 在前台运行 Gateway（阻塞模式，用于调试）
+ */
+async function serveFgCommand(args: CliArgs): Promise<void> {
   const configPath = await ensureInitialized(args);
+  await startGatewayBlocking(configPath, args);
+}
+
+/**
+ * 启动 Gateway 守护进程（后台模式）
+ */
+async function serveStartCommand(args: CliArgs): Promise<void> {
+  // 检查是否已有运行中的实例
+  const existing = readPidFile();
+  if (existing && isProcessAlive(existing.pid)) {
+    console.log(`⚠️  Gateway is already running (PID: ${existing.pid})`);
+    console.log(`   Started at: ${existing.startedAt}`);
+    console.log(`   Config: ${existing.config}`);
+    console.log(`\nUse 'octopi serve restart' to restart.`);
+    return;
+  }
+
+  // 清理残留 PID 文件
+  removePidFile();
+
+  // 确保已初始化，获取配置路径
+  const configPath = await ensureInitialized(args);
+
+  // 构建子进程参数
+  const childArgs = ['serve', 'fg'];
+  if (configPath) childArgs.push('--config', configPath);
+  if (args.port) childArgs.push('--port', String(args.port));
+
+  // fork 子进程
+  const child = fork(process.argv[1], childArgs, {
+    detached: true,
+    stdio: 'ignore',
+    env: { ...process.env, OCTOPI_DAEMON: '1' },
+  });
+
+  if (!child.pid) {
+    console.error('❌ Failed to fork daemon process');
+    process.exit(1);
+  }
+
+  // 写 PID 文件
+  writePidFile({
+    pid: child.pid,
+    config: configPath ?? join(process.cwd(), 'octopi.json'),
+    port: args.port,
+    startedAt: new Date().toISOString(),
+  });
+
+  // 父进程不等待子进程
+  child.unref();
+
+  console.log(`✅ Gateway started in background (PID: ${child.pid})`);
+  console.log(`   Config: ${configPath ?? './octopi.json'}`);
+  console.log(`\nUse 'octopi serve stop' to stop, 'octopi serve status' to check.`);
+}
+
+/**
+ * 停止 Gateway 守护进程
+ */
+async function serveStopCommand(): Promise<void> {
+  const pidFile = readPidFile();
+  if (!pidFile) {
+    console.log('ℹ️  No Gateway instance found (no PID file).');
+    return;
+  }
+
+  if (!isProcessAlive(pidFile.pid)) {
+    console.log(`ℹ️  Gateway process (PID: ${pidFile.pid}) is not running.`);
+    console.log('   Cleaning up stale PID file.');
+    removePidFile();
+    return;
+  }
+
+  console.log(`🛑 Stopping Gateway (PID: ${pidFile.pid})...`);
+
+  try {
+    process.kill(pidFile.pid, 'SIGTERM');
+
+    // 等待进程退出（最多 10 秒）
+    const deadline = Date.now() + 10_000;
+    while (Date.now() < deadline) {
+      if (!isProcessAlive(pidFile.pid)) {
+        console.log('✅ Gateway stopped.');
+        removePidFile();
+        return;
+      }
+      await new Promise((r) => setTimeout(r, 200));
+    }
+
+    // 超时，强制 kill
+    console.log('⚠️  Graceful shutdown timed out. Sending SIGKILL...');
+    process.kill(pidFile.pid, 'SIGKILL');
+    await new Promise((r) => setTimeout(r, 500));
+    console.log('✅ Gateway force-killed.');
+    removePidFile();
+  } catch (error: any) {
+    if (error.code === 'ESRCH') {
+      console.log('ℹ️  Gateway process already exited.');
+    } else {
+      console.error(`❌ Failed to stop Gateway: ${error.message}`);
+    }
+    removePidFile();
+  }
+}
+
+/**
+ * 重启 Gateway 守护进程
+ */
+async function serveRestartCommand(args: CliArgs): Promise<void> {
+  await serveStopCommand();
+  // 短暂等待端口释放
+  await new Promise((r) => setTimeout(r, 500));
+  await serveStartCommand(args);
+}
+
+/**
+ * 查看 Gateway 状态
+ */
+async function serveStatusCommand(): Promise<void> {
+  const pidFile = readPidFile();
+  if (!pidFile) {
+    console.log('ℹ️  No Gateway instance found.');
+    return;
+  }
+
+  const alive = isProcessAlive(pidFile.pid);
+  console.log(`\n🐙 Gateway Status\n`);
+  console.log(`  PID:       ${pidFile.pid}`);
+  console.log(`  Status:    ${alive ? '🟢 Running' : '🔴 Stopped'}`);
+  console.log(`  Config:    ${pidFile.config}`);
+  console.log(`  Started:   ${pidFile.startedAt}`);
+  if (pidFile.port) console.log(`  Port:      ${pidFile.port}`);
+  console.log();
+
+  if (!alive) {
+    console.log('  ⚠️  Process is not running. PID file is stale.');
+    console.log(`     Run 'octopi serve start' to start a new instance.\n`);
+  }
+}
+
+/**
+ * serve 命令路由
+ */
+async function serveCommand(args: CliArgs): Promise<void> {
+  switch (args.subcommand) {
+    case 'start':    return serveStartCommand(args);
+    case 'stop':     return serveStopCommand();
+    case 'restart':  return serveRestartCommand(args);
+    case 'status':   return serveStatusCommand();
+    case 'fg':       return serveFgCommand(args);
+    case undefined:  // `octopi serve` 无子命令 → 兼容旧用法，前台运行
+      console.log('💡 Tip: Use "octopi serve start" for background mode.\n');
+      return serveFgCommand(args);
+    default:
+      console.error(`Unknown serve subcommand: ${args.subcommand}`);
+      console.error('Valid subcommands: start, stop, restart, status, fg');
+      process.exit(1);
+  }
+}
+
+/**
+ * 在前台阻塞运行 Gateway（核心逻辑，serve fg 和旧 serve 共用）
+ */
+async function startGatewayBlocking(configPath: string | undefined, args: CliArgs): Promise<void> {
   const config = loadConfig(configPath);
   const gatewayConfig = toGatewayConfig(config);
 
@@ -205,17 +430,26 @@ async function serveCommand(args: CliArgs): Promise<void> {
     }));
   }
 
-  process.on('SIGINT', async () => {
+  // 优雅关闭
+  const shutdown = async () => {
     console.log('\n[CLI] Shutting down...');
     await gateway.stop();
+    removePidFile();
     process.exit(0);
-  });
+  };
 
-  process.on('SIGTERM', async () => {
-    console.log('\n[CLI] Shutting down...');
-    await gateway.stop();
-    process.exit(0);
-  });
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
+
+  // 如果是守护进程模式，也写 PID 文件（方便 serve stop 发现）
+  if (process.env.OCTOPI_DAEMON === '1') {
+    writePidFile({
+      pid: process.pid,
+      config: configPath ?? join(process.cwd(), 'octopi.json'),
+      port: args.port,
+      startedAt: new Date().toISOString(),
+    });
+  }
 
   await gateway.start();
 }
@@ -519,6 +753,7 @@ async function main(): Promise<void> {
   switch (args.command) {
     case 'init': await initCommand(args); break;
     case 'serve': await serveCommand(args); break;
+    case 'stop':  await serveStopCommand(); break;  // 快捷方式
     case 'chat': await chatCommand(args); break;
     case 'health': await healthCommand(args); break;
     default:
