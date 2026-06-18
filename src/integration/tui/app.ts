@@ -374,6 +374,31 @@ export class TuiApp {
             }
             break;
 
+          case 'model.call.error': {
+            const errorData = event.data?.error as any;
+            const reason = errorData?.reason ?? errorData?.message ?? 'unknown';
+            const statusCode = errorData?.statusCode;
+            const detail = statusCode ? ` (HTTP ${statusCode})` : '';
+            this.chatLog.addSystem(`❌ Model error: ${reason}${detail}`);
+            this.tui.requestRender();
+            break;
+          }
+
+          case 'retry': {
+            const delayMs = event.data?.delayMs as number;
+            this.chatLog.addSystem(`🔄 Retrying in ${delayMs}ms...`);
+            this.tui.requestRender();
+            break;
+          }
+
+          case 'aborted': {
+            const reason = event.data?.reason as string;
+            if (hasShownAssistant) this.chatLog.finalizeAssistant(this.streamedContent || finalContent, 'run');
+            this.chatLog.addSystem(`🛑 Aborted: ${reason ?? 'model error'}`);
+            this.tui.requestRender();
+            break;
+          }
+
           case 'llm_stream_delta': {
             const delta = event.data?.delta as string;
             if (delta) {
