@@ -659,13 +659,19 @@ async function pluginCommand(args: CliArgs): Promise<void> {
   const subcommand = args.subcommand;
 
   if (subcommand === 'init') {
-    const pluginName = args.positionals[0];
+    // 从 process.argv 提取插件名和 --dir 参数
+    const rawArgs = process.argv.slice(2);
+    const positional = rawArgs.filter(a => !a.startsWith('-'));
+    const pluginName = positional[1]; // positional[0] = 'plugin', positional[1] = 'init', positional[2] = <name>
+    const dirIdx = rawArgs.indexOf('--dir');
+    const dirFlag = dirIdx >= 0 ? rawArgs[dirIdx + 1] : undefined;
+
     if (!pluginName) {
       console.error('Usage: octopi plugin init <plugin-name> [--dir <path>]');
       process.exit(1);
     }
 
-    const targetDir = args.flags.dir ?? `./plugins/${pluginName}`;
+    const targetDir = dirFlag ?? `./plugins/${pluginName}`;
     const { mkdirSync, writeFileSync, existsSync } = await import('node:fs');
     const { join } = await import('node:path');
 

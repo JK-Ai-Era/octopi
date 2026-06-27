@@ -126,19 +126,20 @@ export class PluginLoader {
 
     // 检查缺失的依赖
     const ids = new Set(ordered.map(p => p.manifest.id));
+    const disabled = new Set<string>();
     for (const plugin of ordered) {
       const deps = plugin.manifest.requiresPlugins ?? [];
       for (const dep of deps) {
         if (!ids.has(dep)) {
           console.warn(`[PluginLoader] Plugin "${plugin.manifest.id}" requires "${dep}", but it was not found. Skipping.`);
-          plugin.enabled = false;
+          disabled.add(plugin.manifest.id);
         }
       }
     }
 
     // 执行 register()
     for (const plugin of ordered) {
-      if (!plugin.enabled) continue;
+      if (disabled.has(plugin.manifest.id)) continue;
       await this.registerPlugin(plugin);
     }
 

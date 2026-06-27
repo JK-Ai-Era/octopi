@@ -11,6 +11,7 @@
  */
 
 import type { SessionStore, SessionData } from '../../core/interfaces/session-store.js';
+import type { SessionMeta } from '../../core/types.js';
 
 export interface SqliteSessionStoreOptions {
   /** 数据库文件路径（默认 ':memory:'） */
@@ -99,13 +100,16 @@ export class SqliteSessionStore implements SessionStore {
     this.stmts.upsert.run(sessionId, agentId, json, createdAt, now);
   }
 
-  async list(agentId: string): Promise<SessionData[]> {
+  async list(agentId: string): Promise<SessionMeta[]> {
     const rows = this.stmts.list.all(agentId) as { data: string }[];
     return rows
       .map(r => {
-        try { return JSON.parse(r.data) as SessionData; } catch { return null; }
+        try {
+          const s = JSON.parse(r.data) as SessionData;
+          return s.meta;
+        } catch { return null; }
       })
-      .filter((s): s is SessionData => s !== null);
+      .filter((m): m is SessionMeta => m !== null);
   }
 
   async delete(sessionId: string): Promise<void> {
