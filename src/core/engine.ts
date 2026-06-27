@@ -220,11 +220,6 @@ export class AgentEngine {
       metadata: { aborted: true, stopReason: 'aborted', reason },
     };
     messages.push(abortedMessage);
-    events.emit({
-      type: AgentEvents.ENGINE_END,
-      timestamp: Date.now(),
-      data: { reason: 'aborted' },
-    });
   }
 
   /**
@@ -637,7 +632,7 @@ export class AgentEngine {
                   messages.push({ role: 'assistant', content: llmResponse.content, toolCalls: llmResponse.toolCalls, timestamp: Date.now() });
                   messages.push({ role: 'tool', content: '', toolResults, timestamp: Date.now() });
                   messages.push(noopMsg);
-                  events.emit({ type: AgentEvents.ENGINE_END, timestamp: Date.now(), data: { reason: 'noop_loop' } });
+
                   yield { type: 'turn.end', timestamp: Date.now(), data: { content: noopMsg.content } };
                   return;
                 }
@@ -730,15 +725,6 @@ export class AgentEngine {
                 this.currentCheckpointInterval = checkpointVerdict.nextCheckpointIn;
               }
             }
-
-            // ── yield turn.end 通知调用方本轮工具执行完成 ──
-            // TUI 依赖此事件重置 isProcessing，Gateway 依赖此事件捕获回复。
-            // 引擎会继续下一轮迭代（如果有），调用方会收到后续的 model.call.start 等事件。
-            yield {
-              type: 'turn.end',
-              timestamp: Date.now(),
-              data: { content: llmResponse.content, usage: llmResponse.usage },
-            };
 
             // 继续循环（让 LLM 看到工具结果）
             continue;
@@ -837,7 +823,6 @@ export class AgentEngine {
           };
 
           // 循环正常结束
-          events.emit({ type: AgentEvents.ENGINE_END, timestamp: Date.now(), data: { reason: 'completed' } });
           engineSpan?.end();
           return;
 
@@ -852,17 +837,18 @@ export class AgentEngine {
       engineSpan?.setStatus('error');
       engineSpan?.end();
 
-      events.emit({
-        type: AgentEvents.ENGINE_END,
-        timestamp: Date.now(),
-        data: { reason: 'error', error: error instanceof Error ? error.message : String(error) },
-      });
-
       yield {
         type: 'engine.error',
         timestamp: Date.now(),
         data: { error: error instanceof Error ? error.message : String(error) },
       };
+    } finally {
+      // 保证 ENGINE_END 在所有退出路径上都被发射（TUI 依赖此事件重置 isProcessing）
+      events.emit({
+        type: AgentEvents.ENGINE_END,
+        timestamp: Date.now(),
+        data: { reason: 'finally' },
+      });
     }
   }
 

@@ -153,9 +153,9 @@ describe('Planning-only Retry', () => {
     );
     expect(steerMessage).toBeDefined();
 
-    // 应该有 turn.end 事件（工具执行后 + 最终文本响应后各一次）
+    // 最终应该有 turn.end 事件
     const turnEndEvents = eventsList.filter(e => e.type === 'turn.end');
-    expect(turnEndEvents.length).toBeGreaterThanOrEqual(1);
+    expect(turnEndEvents.length).toBe(1);
   });
 
   it('should not retry if max attempts reached', async () => {

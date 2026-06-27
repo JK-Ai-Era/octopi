@@ -14,8 +14,9 @@
 - 另外，TUI 没有处理 `engine.end` 事件作为安全网
 
 **修复内容：**
-- **引擎层：** 工具执行后 yield `turn.end` 再 `continue`，确保 TUI 及时收到状态更新
-- **TUI 层：** 新增 `engine.end` 事件处理作为安全网，确保 `isProcessing` 被重置
+- **引擎层：** 用 `finally` 块保证 `ENGINE_END` 在所有退出路径上都被发射（之前只有部分路径发射）
+- **TUI 层：** 新增 `engine.end` 事件处理，重置 `isProcessing` 状态（之前 TUI 不处理此事件）
+- **引擎层：** 移除 `emitAbortedMessage` 和正常完成路径中的冗余 `ENGINE_END` 发射（由 `finally` 统一处理）
 
 ### 改进：Agent 恢复/重试机制优化（参考 OpenClaw）
 
