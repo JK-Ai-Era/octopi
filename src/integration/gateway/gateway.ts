@@ -31,6 +31,7 @@ import type { AgentEvent } from '../../core/event-bus.js';
 import type { ModelProvider } from '../../core/interfaces/model-provider.js';
 import type { SessionStore, SessionData } from '../../core/interfaces/session-store.js';
 import type { StreamingChannelAdapter } from '../protocols/http.js';
+import { CircuitBreaker } from '../../core/circuit-breaker.js';
 import { PluginManager } from '../../harness/plugins/manager.js';
 import { AgentEngine } from '../../core/engine.js';
 import type { RunConfig } from '../../core/engine.js';
@@ -102,6 +103,8 @@ export class Gateway {
   private agentCache = new Map<string, { engine: AgentEngine; runner: SessionAwareRunner; budget: IterationBudget }>();
   /** 流式 adapter 引用（用于广播事件） */
   private streamingAdapters: StreamingChannelAdapter[] = [];
+  /** 每个 provider 的熔断器 */
+  private circuitBreakers = new Map<string, CircuitBreaker>();
 
   constructor(config: GatewayConfig) {
     this.config = config;
@@ -318,6 +321,39 @@ export class Gateway {
       throw new Error(`LLM provider "${agent.model.provider}" not found.`);
     }
 
+    // 获取熔断器
+    const cb = this.getCircuitBreaker(agent.model.provider);
+
+    // 包装 provider，在调用前检查熔断器
+    const wrappedProvider: ModelProvider = {
+      name: modelProvider.name,
+      chat: modelProvider.chat ? async (request) => {
+        if (!cb.allowRequest()) {
+          throw new Error(`Circuit breaker open for provider "${agent.model.provider}". Too many consecutive failures.`);
+        }
+        try {
+          const result = await modelProvider.chat!(request);
+          cb.recordSuccess();
+          return result;
+        } catch (err) {
+          cb.recordFailure();
+          throw err;
+        }
+      } : undefined,
+      stream: modelProvider.stream ? async function* (request) {
+        if (!cb.allowRequest()) {
+          throw new Error(`Circuit breaker open for provider "${agent.model.provider}". Too many consecutive failures.`);
+        }
+        try {
+          yield* modelProvider.stream!(request);
+          cb.recordSuccess();
+        } catch (err) {
+          cb.recordFailure();
+          throw err;
+        }
+      } : undefined,
+    } as ModelProvider;
+
     // 创建 Core 组件
     const events = new DefaultEventBus();
     const security = new DefaultSecurityGuard(events);
@@ -337,7 +373,7 @@ export class Gateway {
 
     // 创建 AgentEngine
     const engine = new AgentEngine({
-      model: modelProvider,
+      model: wrappedProvider,
       tools,
       executor: {
         execute: async (call, ctx) => {
@@ -357,6 +393,10 @@ export class Gateway {
       budget,
       errorStrategy: {
         onModelError: (error, attempt) => {
+          // 记录失败到熔断器
+          if (error.reason === 'rate_limit' || error.reason === 'network' || error.reason === 'server' || error.reason === 'timeout') {
+            cb.recordFailure();
+          }
           if (error.reason === 'rate_limit' && attempt < 3) {
             return { action: 'retry', delayMs: (attempt + 1) * 1000 };
           }
@@ -408,5 +448,32 @@ export class Gateway {
         // listener 错误不应中断流程
       }
     }
+  }
+
+  /**
+   * 获取或创建 provider 熔断器
+   */
+  getCircuitBreaker(providerName: string): CircuitBreaker {
+    let cb = this.circuitBreakers.get(providerName);
+    if (!cb) {
+      cb = new CircuitBreaker({
+        failureThreshold: 5,
+        recoveryTimeoutMs: 30_000,
+        name: providerName,
+      });
+      this.circuitBreakers.set(providerName, cb);
+    }
+    return cb;
+  }
+
+  /**
+   * 获取所有熔断器状态
+   */
+  getCircuitBreakerStatus(): Record<string, { state: string; failureCount: number }> {
+    const result: Record<string, { state: string; failureCount: number }> = {};
+    for (const [name, cb] of this.circuitBreakers) {
+      result[name] = cb.snapshot();
+    }
+    return result;
   }
 }

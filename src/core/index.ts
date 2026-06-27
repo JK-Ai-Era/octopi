@@ -35,6 +35,10 @@ export type { TaskOptions, TaskExecutor } from './async-task.js';
 export { ProcessModel, ProcessEvents, spawnProcess } from './process-model.js';
 export type { ProcessState, ExitReason, ExitInfo, ProcessOptions, ProcessBody, ProcessContext } from './process-model.js';
 
+// ── 熔断器 ──
+export { CircuitBreaker } from './circuit-breaker.js';
+export type { CircuitBreakerOptions } from './circuit-breaker.js';
+
 // ── 状态机 ──
 export { StateMachine, createSessionStateMachine } from './state-machine.js';
 export type { StateTransition, StateMachineConfig } from './state-machine.js';
