@@ -46,6 +46,10 @@ interface WsSession {
   ws: WS;
   sessionId?: string;
   agentId?: string;
+  /** 发送队列（背压处理） */
+  sendQueue: string[];
+  /** 队列是否正在消费 */
+  draining: boolean;
 }
 
 /**
@@ -184,9 +188,54 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
       const sessionAgentId = (session.sessionId ?? session.agentId ?? '').split(':')[0];
       if ((sessionAgentId === agentId || session.sessionId === sessionId)
         && session.ws.readyState === WebSocket.OPEN) {
-        session.ws.send(data);
+        this.enqueueSend(session, data);
       }
     }
+  }
+
+  /**
+   * 带背压的消息入队
+   *
+   * 队列上限 100 条。超过时丢弃最旧的非关键消息。
+   * 如果 WebSocket 缓冲区已满（bufferedAmount > 1MB），暂停入队。
+   */
+  private enqueueSend(session: WsSession, data: string): void {
+    const MAX_QUEUE = 100;
+    const MAX_BUFFER = 1024 * 1024; // 1MB
+
+    // 高水位丢弃：丢弃队列中最旧的消息
+    if (session.sendQueue.length >= MAX_QUEUE) {
+      session.sendQueue.shift();
+    }
+
+    session.sendQueue.push(data);
+    this.drainQueue(session);
+  }
+
+  /** 消费发送队列 */
+  private drainQueue(session: WsSession): void {
+    if (session.draining) return;
+    session.draining = true;
+
+    const MAX_BUFFER = 1024 * 1024; // 1MB
+
+    while (session.sendQueue.length > 0) {
+      // 检查 WebSocket 缓冲区
+      if (session.ws.readyState !== WebSocket.OPEN) {
+        session.sendQueue.length = 0;
+        break;
+      }
+      if (session.ws.bufferedAmount > MAX_BUFFER) {
+        // 缓冲区满，跳过剩余消息（避免内存堆积）
+        session.sendQueue.length = 0;
+        break;
+      }
+
+      const msg = session.sendQueue.shift()!;
+      session.ws.send(msg);
+    }
+
+    session.draining = false;
   }
 
   async stop(): Promise<void> {
@@ -212,7 +261,7 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
   // ── WebSocket handling ──
 
   private handleWsConnection(ws: WS): void {
-    const session: WsSession = { ws };
+    const session: WsSession = { ws, sendQueue: [], draining: false };
     this.wsSessions.add(session);
 
     ws.on('message', (data) => {
@@ -277,7 +326,7 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
     const json = JSON.stringify(data);
     for (const session of this.wsSessions) {
       if (session.sessionId === conversationId && session.ws.readyState === WebSocket.OPEN) {
-        session.ws.send(json);
+        this.enqueueSend(session, json);
       }
     }
   }
