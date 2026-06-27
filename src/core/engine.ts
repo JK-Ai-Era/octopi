@@ -179,6 +179,10 @@ export class AgentEngine {
   private planningOnlyRetryAttempts = 0;
   private planningOnlySteerInjected = false;
 
+  // ── No-op 检测状态（防止 tool-loop 死循环） ──
+  private consecutiveNoops = 0;
+  private static readonly MAX_CONSECUTIVE_NOOPS = 2;
+
   constructor(deps: AgentEngineDeps) {
     // 安全守卫有效性验证：防止调用方传入 noop 实现绕过安全检查
     if (!isValidSecurityGuard(deps.security)) {
@@ -193,6 +197,34 @@ export class AgentEngine {
     if (deps.security.setRegisteredTools) {
       deps.security.setRegisteredTools(new Set(deps.tools.keys()));
     }
+  }
+
+  /**
+   * 中止安全退出：写入一条 aborted assistant 消息，保持 session 语义完整性。
+   *
+   * 如果中止时直接 return，session 最后一条消息可能是 toolUse（无 toolResult），
+   * 导致后续 session 恢复/compact 时语义断裂。
+   */
+  private emitAbortedMessage(
+    messages: Message[],
+    signal: AbortSignal,
+    events: EventBus,
+  ): void {
+    const reason = signal.reason instanceof Error
+      ? signal.reason.message
+      : 'Agent run aborted';
+    const abortedMessage: Message = {
+      role: 'assistant',
+      content: '',
+      timestamp: Date.now(),
+      metadata: { aborted: true, stopReason: 'aborted', reason },
+    };
+    messages.push(abortedMessage);
+    events.emit({
+      type: AgentEvents.ENGINE_END,
+      timestamp: Date.now(),
+      data: { reason: 'aborted' },
+    });
   }
 
   /**
@@ -224,6 +256,7 @@ export class AgentEngine {
     this.uniqueTools = new Set();
     this.planningOnlyRetryAttempts = 0;
     this.planningOnlySteerInjected = false;
+    this.consecutiveNoops = 0;
 
     // 重置预算计数器，确保每次 run() 都从零开始
     budget.reset?.();
@@ -270,6 +303,7 @@ export class AgentEngine {
         // 中止检查
         if (signal?.aborted) {
           yield { type: 'interrupted', timestamp: Date.now(), data: { phase: 'iteration_start' } };
+          this.emitAbortedMessage(messages, signal, events);
           return;
         }
 
@@ -449,13 +483,15 @@ export class AgentEngine {
           });
 
           // 2h. 如果有 tool_calls → 执行工具
-          if (llmResponse.toolCalls && llmResponse.toolCalls.length > 0) {
+          // 只有 finishReason === 'tool_calls' 时才执行，防止截断/中断的 tool call 被误执行
+          if (llmResponse.finishReason === 'tool_calls' && llmResponse.toolCalls && llmResponse.toolCalls.length > 0) {
             const toolResults: ToolResult[] = [];
 
             for (const call of llmResponse.toolCalls) {
               // 中止检查
               if (signal?.aborted) {
                 yield { type: 'interrupted', timestamp: Date.now(), data: { phase: 'tool_execution' } };
+                this.emitAbortedMessage(messages, signal, events);
                 return;
               }
 
@@ -525,11 +561,15 @@ export class AgentEngine {
               let toolResult: ToolResult;
 
               try {
-                const result = await executor.execute(processedCall, this.buildExecContext(signal));
+                const rawResult = await executor.execute(processedCall, this.buildExecContext(signal));
+                // No-op 检测：工具返回 { __noop: true, result: ... } 表示未产生实际变化
+                const isNoop = rawResult != null && typeof rawResult === 'object' && '__noop' in rawResult && (rawResult as any).__noop === true;
+                const result = isNoop ? (rawResult as any).result : rawResult;
                 toolResult = {
                   toolCallId: processedCall.id,
                   name: processedCall.name,
                   result,
+                  noop: isNoop ? true : undefined,
                   durationMs: Date.now() - toolStartMs,
                 };
                 toolSpan?.end();
@@ -583,6 +623,27 @@ export class AgentEngine {
               }
 
               toolResults.push(toolResult);
+
+              // No-op 检测：防止 tool-loop 死循环
+              if (toolResult.noop) {
+                this.consecutiveNoops++;
+                if (this.consecutiveNoops >= AgentEngine.MAX_CONSECUTIVE_NOOPS) {
+                  const noopMsg: Message = {
+                    role: 'assistant',
+                    content: '[System] Tool loop detected: consecutive no-op executions. The tool is producing no changes. Stopping.',
+                    timestamp: Date.now(),
+                    metadata: { terminal: true, reason: 'consecutive_noops' },
+                  };
+                  messages.push({ role: 'assistant', content: llmResponse.content, toolCalls: llmResponse.toolCalls, timestamp: Date.now() });
+                  messages.push({ role: 'tool', content: '', toolResults, timestamp: Date.now() });
+                  messages.push(noopMsg);
+                  events.emit({ type: AgentEvents.ENGINE_END, timestamp: Date.now(), data: { reason: 'noop_loop' } });
+                  yield { type: 'turn.end', timestamp: Date.now(), data: { content: noopMsg.content } };
+                  return;
+                }
+              } else {
+                this.consecutiveNoops = 0;
+              }
 
               events.emit({
                 type: AgentEvents.TOOL_EXEC_END,
@@ -672,6 +733,18 @@ export class AgentEngine {
 
             // 继续循环（让 LLM 看到工具结果）
             continue;
+          }
+
+          // 2h-alt. 有 tool calls 但 finishReason 不是 'tool_calls' → 过滤掉，按纯文本处理
+          if (llmResponse.toolCalls && llmResponse.toolCalls.length > 0 && llmResponse.finishReason !== 'tool_calls') {
+            yield {
+              type: 'tool_calls.filtered',
+              timestamp: Date.now(),
+              data: {
+                finishReason: llmResponse.finishReason,
+                toolCallCount: llmResponse.toolCalls.length,
+              },
+            };
           }
 
           // 2i. Planning-only 检测与重试

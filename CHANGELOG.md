@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.3.2 (2026-06-27)
+
+### 改进：Agent 恢复/重试机制优化（参考 OpenClaw）
+
+**改进内容：**
+
+- **P0: 中止安全退出** — `AgentEngine` 中止时（`AbortSignal`）自动写入一条 `aborted` assistant 消息到 messages 数组，保持 session 语义完整性。防止中止后 session 卡在 toolUse（无 toolResult）状态
+- **P0: finishReason 校验** — 只有 `finishReason === 'tool_calls'` 时才执行工具调用，防止截断/中断的 tool call 被误执行。当 finishReason 不匹配时，yield `tool_calls.filtered` 事件并按纯文本处理
+- **P1: No-op 检测** — 新增 `ToolResult.noop` 字段 + `__noop` 工具返回约定。连续 2 次 no-op 工具执行后自动终止循环，防止 tool-loop 死循环
+
+**参考：** OpenClaw agent-core 的 `stopIfAborted()`、`removeNonExecutableToolCalls()`、no-op write/edit terminal failure 机制
+
 ## v0.3.1 (2026-06-27)
 
 ### Bug 修复：工具执行后卡死 + 超时机制 + Gateway 预算管理

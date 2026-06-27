@@ -515,3 +515,167 @@ describe('IterationBudget', () => {
     expect(report.remaining.tokens).toBe(900);
   });
 });
+
+describe('AgentEngine — 恢复/重试优化', () => {
+  it('中止时应该写入 aborted 消息到 messages 数组', async () => {
+    const model = createMockModelProvider({
+      content: 'thinking...',
+      finishReason: 'stop',
+    });
+    const deps = createTestDeps({ model });
+    const engine = new AgentEngine(deps);
+    const messages: Message[] = [createTestMessage('你好')];
+
+    const controller = new AbortController();
+    // 立即中止
+    controller.abort();
+
+    const events: any[] = [];
+    for await (const event of engine.run(messages, { systemPrompt: 'test' }, controller.signal)) {
+      events.push(event);
+    }
+
+    // 应该有 interrupted 事件
+    expect(events.some(e => e.type === 'interrupted')).toBe(true);
+
+    // messages 数组应该新增了一条 aborted assistant 消息
+    const abortedMsg = messages.find(m => m.metadata?.aborted === true);
+    expect(abortedMsg).toBeDefined();
+    expect(abortedMsg!.role).toBe('assistant');
+    expect(abortedMsg!.metadata?.stopReason).toBe('aborted');
+  });
+
+  it('finishReason 非 tool_calls 时不应执行工具调用', async () => {
+    const toolHandler = vi.fn().mockResolvedValue('tool result');
+    const model = createMockModelProvider({
+      content: '',
+      toolCalls: [{ id: 'call_1', name: 'test_tool', arguments: { query: 'test' } }],
+      finishReason: 'stop', // finishReason 是 stop，不是 tool_calls
+    });
+
+    const tools = new Map<string, RegisteredTool>();
+    tools.set('test_tool', {
+      definition: {
+        name: 'test_tool',
+        description: 'A test tool',
+        parameters: { query: { type: 'string', description: 'query', required: true } },
+      },
+      handler: toolHandler,
+    });
+
+    const deps = createTestDeps({ model, tools });
+    const engine = new AgentEngine(deps);
+    const messages: Message[] = [createTestMessage('你好')];
+
+    const events: any[] = [];
+    for await (const event of engine.run(messages, { systemPrompt: 'test' })) {
+      events.push(event);
+    }
+
+    // 工具不应该被执行
+    expect(toolHandler).not.toHaveBeenCalled();
+
+    // 应该有 tool_calls.filtered 事件
+    expect(events.some(e => e.type === 'tool_calls.filtered')).toBe(true);
+  });
+
+  it('finishReason 为 tool_calls 时应该执行工具调用', async () => {
+    const toolHandler = vi.fn().mockResolvedValue('tool result');
+    let callCount = 0;
+    const model: ModelProvider = {
+      name: 'mock',
+      chat: vi.fn().mockResolvedValue({
+        content: 'done',
+        model: 'mock-model',
+        finishReason: 'stop',
+      }),
+      stream: async function* () {
+        callCount++;
+        if (callCount === 1) {
+          yield { type: 'tool_call' as const, toolCall: { id: 'call_1', name: 'test_tool', arguments: '{"query":"test"}', index: 0 } };
+          yield { type: 'done' as const };
+        } else {
+          yield { type: 'content' as const, content: 'done' };
+          yield { type: 'done' as const };
+        }
+      },
+      isAvailable: vi.fn().mockResolvedValue(true),
+      getModelInfo: () => null,
+    };
+
+    // 创建一个能调用 toolHandler 的 executor
+    const tools = new Map<string, RegisteredTool>();
+    tools.set('test_tool', {
+      definition: {
+        name: 'test_tool',
+        description: 'A test tool',
+        parameters: { query: { type: 'string', description: 'query', required: true } },
+      },
+      handler: toolHandler,
+    });
+    const executor: ToolExecutor = {
+      execute: async (call) => {
+        const tool = tools.get(call.name);
+        if (tool) return tool.handler(call.arguments);
+        throw new Error(`Tool not found: ${call.name}`);
+      },
+    };
+
+    const deps = createTestDeps({ model, tools, executor });
+    const engine = new AgentEngine(deps);
+    const messages: Message[] = [createTestMessage('你好')];
+
+    const events: any[] = [];
+    for await (const event of engine.run(messages, { systemPrompt: 'test' })) {
+      events.push(event);
+    }
+
+    // 工具应该被执行
+    expect(toolHandler).toHaveBeenCalledOnce();
+  });
+
+  it('连续 no-op 工具结果应该终止循环', async () => {
+    let callCount = 0;
+    const model: ModelProvider = {
+      name: 'mock',
+      chat: vi.fn().mockResolvedValue({
+        content: 'done',
+        model: 'mock-model',
+        finishReason: 'stop',
+      }),
+      stream: async function* () {
+        callCount++;
+        if (callCount <= 3) {
+          yield { type: 'tool_call' as const, toolCall: { id: `call_${callCount}`, name: 'noop_tool', arguments: '{}', index: 0 } };
+          yield { type: 'done' as const };
+        } else {
+          yield { type: 'content' as const, content: 'done' };
+          yield { type: 'done' as const };
+        }
+      },
+      isAvailable: vi.fn().mockResolvedValue(true),
+      getModelInfo: () => null,
+    };
+
+    const noopExecutor: ToolExecutor = {
+      execute: vi.fn().mockResolvedValue({ __noop: true, result: 'no changes' }),
+    };
+
+    const deps = createTestDeps({ model, executor: noopExecutor });
+    const engine = new AgentEngine(deps);
+    const messages: Message[] = [createTestMessage('你好')];
+
+    const events: any[] = [];
+    for await (const event of engine.run(messages, { systemPrompt: 'test' })) {
+      events.push(event);
+    }
+
+    // 应该有 turn.end 事件（noop_loop 终止）
+    const turnEnd = events.find(e => e.type === 'turn.end');
+    expect(turnEnd).toBeDefined();
+
+    // 最后一条消息应该包含 noop 相关提示
+    const lastMsg = messages[messages.length - 1];
+    expect(lastMsg.metadata?.reason).toBe('consecutive_noops');
+  });
+});

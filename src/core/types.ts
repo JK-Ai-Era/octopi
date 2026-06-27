@@ -141,6 +141,8 @@ export interface ToolResult {
   error?: string;
   /** 执行耗时（毫秒） */
   durationMs?: number;
+  /** 标记为无操作（内容未变化），用于检测 tool-loop 死循环 */
+  noop?: boolean;
 }
 
 /**
