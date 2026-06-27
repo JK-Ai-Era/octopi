@@ -308,9 +308,13 @@ export function loadConfig(configPath?: string): HarnessConfig {
 
   const fileContent = readFileSync(filePath, 'utf-8');
 
-  // 支持 ${ENV_VAR} 环境变量替换
-  const expanded = fileContent.replace(/\$\{(\w+)\}/g, (_, key) => {
-    return process.env[key] ?? '';
+  // 支持 ${ENV_VAR} 和 ${ENV_VAR:-default} 环境变量替换
+  const expanded = fileContent.replace(/\$\{(\w+)(?::-(.*?))?\}/g, (_, key, defaultVal) => {
+    const val = process.env[key];
+    if (val !== undefined) return val;
+    if (defaultVal !== undefined) return defaultVal;
+    // 未设置且无默认值：返回空字符串（apiKey 等字段会在后续校验中报错）
+    return '';
   });
 
   const raw = JSON.parse(expanded);
