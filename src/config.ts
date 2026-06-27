@@ -37,6 +37,7 @@ import type { SessionStore } from './core/interfaces/session-store.js';
 import type { IterationBudgetConfig } from './core/budget.js';
 import type { SecurityGuardConfig } from './core/security-guard.js';
 import type { TaskSupervisorConfig } from './harness/supervisor/task-supervisor.js';
+import { validateConfigOrThrow } from './config-schema.js';
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { homedir } from 'node:os';
@@ -301,67 +302,17 @@ export function loadConfig(configPath?: string): HarnessConfig {
     throw new Error(`Config file not found: ${filePath}`);
   }
 
-  const raw = readFileSync(filePath, 'utf-8');
+  const fileContent = readFileSync(filePath, 'utf-8');
 
   // 支持 ${ENV_VAR} 环境变量替换
-  const expanded = raw.replace(/\$\{(\w+)\}/g, (_, key) => {
+  const expanded = fileContent.replace(/\$\{(\w+)\}/g, (_, key) => {
     return process.env[key] ?? '';
   });
 
-  const config = JSON.parse(expanded) as HarnessConfig;
+  const raw = JSON.parse(expanded);
 
-  // 基本校验
-  if (!config.agents || config.agents.length === 0) {
-    throw new Error('Config must define at least one agent');
-  }
-
-  for (const agent of config.agents) {
-    if (!agent.id) throw new Error('Agent must have an id');
-    if (!agent.model?.provider) throw new Error(`Agent "${agent.id}" must specify a model provider`);
-    if (!agent.model?.model) throw new Error(`Agent "${agent.id}" must specify a model`);
-
-    // 内联 persona 必须有 systemPrompt
-    if (agent.persona && typeof agent.persona === 'object' && !agent.persona.systemPrompt) {
-      throw new Error(`Agent "${agent.id}" inline persona must have a systemPrompt`);
-    }
-  }
-
-  // 校验 providers
-  if (config.providers) {
-    for (const provider of config.providers) {
-      if (!provider.name) throw new Error('Provider must have a name');
-      if (!provider.type) throw new Error(`Provider "${provider.name}" must have a type`);
-      if (provider.type !== 'openai' && provider.type !== 'anthropic') {
-        throw new Error(`Provider "${provider.name}" type must be "openai" or "anthropic", got "${provider.type}"`);
-      }
-
-      // 校验 ModelInfo
-      if (provider.models) {
-        for (const entry of provider.models) {
-          if (typeof entry === 'object') {
-            if (!entry.name) throw new Error(`Provider "${provider.name}": model entry must have a name`);
-            if (entry.contextWindow !== undefined) {
-              if (typeof entry.contextWindow !== 'number' || entry.contextWindow <= 0) {
-                throw new Error(`Provider "${provider.name}", model "${entry.name}": contextWindow must be a positive number, got ${entry.contextWindow}`);
-              }
-            }
-            if (entry.maxOutputTokens !== undefined) {
-              if (typeof entry.maxOutputTokens !== 'number' || entry.maxOutputTokens <= 0) {
-                throw new Error(`Provider "${provider.name}", model "${entry.name}": maxOutputTokens must be a positive number, got ${entry.maxOutputTokens}`);
-              }
-            }
-            if (entry.contextWindow !== undefined && entry.maxOutputTokens !== undefined) {
-              if (entry.maxOutputTokens > entry.contextWindow) {
-                throw new Error(
-                  `Provider "${provider.name}", model "${entry.name}": maxOutputTokens (${entry.maxOutputTokens}) exceeds contextWindow (${entry.contextWindow})`
-                );
-              }
-            }
-          }
-        }
-      }
-    }
-  }
+  // Zod schema 校验（结构化错误信息）
+  const config = validateConfigOrThrow(raw) as HarnessConfig;
 
   return config;
 }
