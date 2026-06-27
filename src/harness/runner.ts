@@ -122,7 +122,7 @@ export class SessionAwareRunner {
       session.meta.updatedAt = Date.now();
 
       // 状态机：idle → processing
-      const sm = this.getOrCreateStateMachine(sessionId);
+      const sm = this.getOrCreateStateMachine(sessionId, session.meta.status);
       sm.transition('processing');
       session.meta.status = sm.state;
 
@@ -307,11 +307,17 @@ export class SessionAwareRunner {
 
   /**
    * 获取或创建 Session 状态机
+   *
+   * 如果 session 已有状态，从该状态初始化状态机（避免重启后状态不同步）。
    */
-  private getOrCreateStateMachine(sessionId: string): StateMachine<SessionStatus> {
+  private getOrCreateStateMachine(sessionId: string, currentStatus?: SessionStatus): StateMachine<SessionStatus> {
     let sm = this.stateMachines.get(sessionId);
     if (!sm) {
       sm = createSessionStateMachine();
+      // 从 session 当前状态初始化（处理重启/恢复场景）
+      if (currentStatus && currentStatus !== 'idle') {
+        sm.force(currentStatus);
+      }
       this.stateMachines.set(sessionId, sm);
     }
     return sm;

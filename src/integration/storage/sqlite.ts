@@ -7,6 +7,8 @@
  * 表结构：
  * - sessions: session 元数据 + 完整数据（JSON blob）
  *
+ * 使用 SqliteSessionStore.create() 工厂方法创建实例（异步加载 better-sqlite3）。
+ *
  * @module
  */
 
@@ -25,7 +27,7 @@ export interface SqliteSessionStoreOptions {
  *
  * @example
  * ```ts
- * const store = new SqliteSessionStore({ dbPath: './data/sessions.db' });
+ * const store = await SqliteSessionStore.create({ dbPath: './data/sessions.db' });
  * await store.save('sess-1', sessionData);
  * const session = await store.load('sess-1');
  * ```
@@ -40,10 +42,26 @@ export class SqliteSessionStore implements SessionStore {
     exists: any;
   };
 
-  constructor(options?: SqliteSessionStoreOptions) {
-    // 动态导入 better-sqlite3（避免硬依赖）
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const Database = require('better-sqlite3');
+  /**
+   * 异步工厂方法
+   *
+   * 使用 dynamic import 加载 better-sqlite3，避免硬依赖。
+   * 未安装 better-sqlite3 时抛出明确错误。
+   */
+  static async create(options?: SqliteSessionStoreOptions): Promise<SqliteSessionStore> {
+    let Database: any;
+    try {
+      const mod = await import('better-sqlite3');
+      Database = mod.default ?? mod;
+    } catch {
+      throw new Error(
+        'SqliteSessionStore requires "better-sqlite3". Install it with: npm install better-sqlite3'
+      );
+    }
+    return new SqliteSessionStore(Database, options);
+  }
+
+  private constructor(Database: any, options?: SqliteSessionStoreOptions) {
     const dbPath = options?.dbPath ?? ':memory:';
     this.db = new Database(dbPath);
 

@@ -18,7 +18,7 @@
 
 import type { ChannelAdapter, ChannelMessage, ChannelReply } from '../../core/types.js';
 import type { AgentEvent } from '../../core/event-bus.js';
-import { createServer, type Server } from 'node:http';
+import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'node:http';
 import { WebSocketServer, WebSocket, type WebSocket as WS } from 'ws';
 
 export interface HttpAdapterOptions {
@@ -110,6 +110,7 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
       }
 
       if (req.method === 'GET' && req.url === '/metrics') {
+        if (!this.checkAuth(req, res)) return;
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
           connections: this.wsSessions.size,
@@ -231,23 +232,24 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
 
     const MAX_BUFFER = 1024 * 1024; // 1MB
 
-    while (session.sendQueue.length > 0) {
-      // 检查 WebSocket 缓冲区
-      if (session.ws.readyState !== WebSocket.OPEN) {
-        session.sendQueue.length = 0;
-        break;
+    const drain = () => {
+      while (session.sendQueue.length > 0) {
+        if (session.ws.readyState !== WebSocket.OPEN) {
+          session.sendQueue.length = 0;
+          break;
+        }
+        if (session.ws.bufferedAmount > MAX_BUFFER) {
+          // 缓冲区满，延迟重试剩余消息
+          setTimeout(drain, 50);
+          return;
+        }
+        const msg = session.sendQueue.shift()!;
+        session.ws.send(msg);
       }
-      if (session.ws.bufferedAmount > MAX_BUFFER) {
-        // 缓冲区满，跳过剩余消息（避免内存堆积）
-        session.sendQueue.length = 0;
-        break;
-      }
+      session.draining = false;
+    };
 
-      const msg = session.sendQueue.shift()!;
-      session.ws.send(msg);
-    }
-
-    session.draining = false;
+    drain();
   }
 
   async stop(): Promise<void> {
@@ -347,7 +349,7 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
    * 检查 Authorization: Bearer <apiKey> 头
    * @returns true 如果认证通过，false 如果已发送 401 响应
    */
-  private checkAuth(req: any, res: any): boolean {
+  private checkAuth(req: IncomingMessage, res: ServerResponse): boolean {
     if (!this.apiKey) return true;
 
     const authHeader = req.headers.authorization ?? '';

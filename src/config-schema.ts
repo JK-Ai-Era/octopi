@@ -66,12 +66,7 @@ export const AgentConfigSchema = z.object({
   skillDirectory: z.string().optional(),
   skills: z.array(z.string()).optional(),
   channelBindings: z.record(z.string(), z.string()).optional(),
-}).refine(
-  (data) => {
-    // 内联 persona 必须有 systemPrompt（由 InlinePersonaSchema 保证）
-    return true;
-  },
-);
+});
 
 // ── Plugin 配置 Schema ──
 

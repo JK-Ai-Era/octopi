@@ -393,10 +393,6 @@ export class Gateway {
       budget,
       errorStrategy: {
         onModelError: (error, attempt) => {
-          // 记录失败到熔断器
-          if (error.reason === 'rate_limit' || error.reason === 'network' || error.reason === 'server' || error.reason === 'timeout') {
-            cb.recordFailure();
-          }
           if (error.reason === 'rate_limit' && attempt < 3) {
             return { action: 'retry', delayMs: (attempt + 1) * 1000 };
           }
@@ -453,7 +449,7 @@ export class Gateway {
   /**
    * 获取或创建 provider 熔断器
    */
-  getCircuitBreaker(providerName: string): CircuitBreaker {
+  private getCircuitBreaker(providerName: string): CircuitBreaker {
     let cb = this.circuitBreakers.get(providerName);
     if (!cb) {
       cb = new CircuitBreaker({

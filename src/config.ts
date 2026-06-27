@@ -397,7 +397,7 @@ export async function createStoreFromConfig(sc: StoreConfig): Promise<SessionSto
 
   if (sc.type === 'sqlite') {
     const { SqliteSessionStore } = await import('./integration/storage/sqlite.js');
-    return new SqliteSessionStore({ dbPath: sc.dbPath });
+    return SqliteSessionStore.create({ dbPath: sc.dbPath });
   }
 
   throw new Error(`Unknown store type: "${sc.type}"`);

@@ -7,6 +7,8 @@
  * @module
  */
 
+import type { SessionStatus } from '../core/types.js';
+
 /**
  * 状态转换定义
  */
@@ -127,10 +129,6 @@ export class StateMachine<S extends string> {
     this._state = state;
   }
 }
-
-// ── 预定义的状态机 ──
-
-import type { SessionStatus } from '../core/types.js';
 
 /**
  * Session 状态机
