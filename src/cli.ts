@@ -180,6 +180,7 @@ Commands:
   serve fg          Start the Gateway server in foreground (for debugging)
   chat  (or tui)        Interactive TUI chat with an agent
   health            Check the health of configured providers
+  plugin init       Scaffold a new plugin project
   help              Show this help message
 
 Options:
@@ -641,11 +642,124 @@ async function main(): Promise<void> {
     case 'chat':
     case 'tui': await chatCommand(args); break;
     case 'health': await healthCommand(args); break;
+    case 'plugin': await pluginCommand(args); break;
     default:
       console.error(`Unknown command: ${args.command}`);
       showHelp();
       process.exit(1);
   }
+}
+
+/**
+ * Plugin 脚手架命令
+ *
+ * octopi plugin init <name> [--dir <path>]
+ */
+async function pluginCommand(args: CliArgs): Promise<void> {
+  const subcommand = args.subcommand;
+
+  if (subcommand === 'init') {
+    const pluginName = args.positionals[0];
+    if (!pluginName) {
+      console.error('Usage: octopi plugin init <plugin-name> [--dir <path>]');
+      process.exit(1);
+    }
+
+    const targetDir = args.flags.dir ?? `./plugins/${pluginName}`;
+    const { mkdirSync, writeFileSync, existsSync } = await import('node:fs');
+    const { join } = await import('node:path');
+
+    if (existsSync(targetDir)) {
+      console.error(`Directory already exists: ${targetDir}`);
+      process.exit(1);
+    }
+
+    mkdirSync(targetDir, { recursive: true });
+
+    // 生成 manifest
+    const manifest = {
+      id: pluginName,
+      name: `${pluginName} plugin`,
+      version: '0.1.0',
+      description: `A plugin for Octopi`,
+      main: 'index.js',
+      enabledByDefault: true,
+    };
+    writeFileSync(join(targetDir, 'octopi.plugin.json'), JSON.stringify(manifest, null, 2) + '\n');
+
+    // 生成入口文件
+    const entryCode = `/**
+ * ${pluginName} plugin
+ */
+
+import { definePluginEntry } from 'octopi/plugin-sdk/plugin-entry';
+
+export default definePluginEntry({
+  id: '${pluginName}',
+  name: '${pluginName}',
+  description: 'A plugin for Octopi',
+
+  register(api) {
+    // 注册 tools
+    // api.registerTool({ ... }, async (args, ctx) => { ... });
+
+    // 注册 providers
+    // api.registerProvider({ name: '${pluginName}', ... });
+
+    // 注册 commands
+    // api.registerCommand('${pluginName}', async (args) => { ... });
+
+    console.log('[${pluginName}] Registered');
+  },
+});
+`;
+    writeFileSync(join(targetDir, 'index.ts'), entryCode);
+
+    // 生成 package.json
+    const pkg = {
+      name: `@octopi/plugin-${pluginName}`,
+      version: '0.1.0',
+      type: 'module',
+      main: 'index.js',
+      types: 'index.d.ts',
+      peerDependencies: {
+        octopi: '>=0.4.0',
+      },
+    };
+    writeFileSync(join(targetDir, 'package.json'), JSON.stringify(pkg, null, 2) + '\n');
+
+    // 生成 tsconfig.json
+    const tsconfig = {
+      compilerOptions: {
+        target: 'ES2022',
+        module: 'ESNext',
+        moduleResolution: 'bundler',
+        declaration: true,
+        outDir: '.',
+        rootDir: '.',
+        strict: true,
+        esModuleInterop: true,
+        skipLibCheck: true,
+      },
+      include: ['*.ts'],
+    };
+    writeFileSync(join(targetDir, 'tsconfig.json'), JSON.stringify(tsconfig, null, 2) + '\n');
+
+    console.log(`\n🐙 Plugin "${pluginName}" created at ${targetDir}\n`);
+    console.log('Files:');
+    console.log(`  ${targetDir}/octopi.plugin.json  ← Plugin manifest`);
+    console.log(`  ${targetDir}/index.ts             ← Entry point`);
+    console.log(`  ${targetDir}/package.json         ← Package config`);
+    console.log(`  ${targetDir}/tsconfig.json         ← TypeScript config`);
+    console.log('\nNext steps:');
+    console.log(`  cd ${targetDir}`);
+    console.log('  # Edit index.ts to add your plugin logic');
+    console.log('  # Add plugins.loadPaths to your octopi.json config');
+    return;
+  }
+
+  console.error('Usage: octopi plugin init <plugin-name> [--dir <path>]');
+  process.exit(1);
 }
 
 main().catch((error) => {
