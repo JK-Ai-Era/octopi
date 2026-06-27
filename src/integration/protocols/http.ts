@@ -104,6 +104,18 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
           adapter: 'http',
           websocket: this.enableWebSocket,
           connections: this.wsSessions.size,
+          auth: !!this.apiKey,
+        }));
+        return;
+      }
+
+      if (req.method === 'GET' && req.url === '/metrics') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          connections: this.wsSessions.size,
+          uptime: process.uptime(),
+          memory: process.memoryUsage(),
+          timestamp: Date.now(),
         }));
         return;
       }
