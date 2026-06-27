@@ -10,10 +10,11 @@
  * AgentEngine 是无状态的循环引擎，Session 管理在这里。
  */
 
-import type { Message, Turn } from '../core/types.js';
+import type { Message, Turn, SessionStatus } from '../core/types.js';
 import type { SessionStore, SessionData } from '../core/interfaces/session-store.js';
 import type { AgentEngine, RunConfig } from '../core/engine.js';
 import type { AgentEvent } from '../core/event-bus.js';
+import { createSessionStateMachine, type StateMachine } from '../core/state-machine.js';
 
 /**
  * 任务决策提供者接口
@@ -78,6 +79,8 @@ export class SessionAwareRunner {
   /** 等待队列：每个 session 一个 FIFO 队列 */
   private queues = new Map<string, QueueEntry[]>();
   private config: SessionAwareRunnerConfig;
+  /** Session 状态机缓存 */
+  private stateMachines = new Map<string, StateMachine<SessionStatus>>();
 
   constructor(engine: AgentEngine, store: SessionStore, config?: SessionAwareRunnerConfig) {
     this.engine = engine;
@@ -117,7 +120,11 @@ export class SessionAwareRunner {
       session.messages.push(input);
       session.meta.lastInteractionAt = Date.now();
       session.meta.updatedAt = Date.now();
-      session.meta.status = 'processing';
+
+      // 状态机：idle → processing
+      const sm = this.getOrCreateStateMachine(sessionId);
+      sm.transition('processing');
+      session.meta.status = sm.state;
 
       // 5. 任务决策（如果配置了 TaskDecisionProvider）
       //    在用户消息到达时调用一次，不在工具调用循环中重复调用
@@ -211,10 +218,24 @@ export class SessionAwareRunner {
       }
 
       // 7. 持久化
-      session.meta.status = 'idle';
+      sm.transition('idle');
+      session.meta.status = sm.state;
       session.meta.updatedAt = Date.now();
       await this.store.save(sessionId, session);
 
+    } catch (err) {
+      // 引擎出错：状态机转到 error，持久化
+      const sm = this.stateMachines.get(sessionId);
+      if (sm?.canTransition('error')) {
+        sm.transition('error');
+        const session = await this.store.load(sessionId);
+        if (session) {
+          session.meta.status = sm.state;
+          session.meta.updatedAt = Date.now();
+          await this.store.save(sessionId, session);
+        }
+      }
+      throw err;
     } finally {
       release();
     }
@@ -282,6 +303,18 @@ export class SessionAwareRunner {
       turns: [],
       metadata: {},
     };
+  }
+
+  /**
+   * 获取或创建 Session 状态机
+   */
+  private getOrCreateStateMachine(sessionId: string): StateMachine<SessionStatus> {
+    let sm = this.stateMachines.get(sessionId);
+    if (!sm) {
+      sm = createSessionStateMachine();
+      this.stateMachines.set(sessionId, sm);
+    }
+    return sm;
   }
 
   /**

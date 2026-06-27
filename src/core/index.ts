@@ -35,6 +35,10 @@ export type { TaskOptions, TaskExecutor } from './async-task.js';
 export { ProcessModel, ProcessEvents, spawnProcess } from './process-model.js';
 export type { ProcessState, ExitReason, ExitInfo, ProcessOptions, ProcessBody, ProcessContext } from './process-model.js';
 
+// ── 状态机 ──
+export { StateMachine, createSessionStateMachine } from './state-machine.js';
+export type { StateTransition, StateMachineConfig } from './state-machine.js';
+
 // ── 核心类型 ──
 // 只从 types.ts 导出不与 interfaces 重叠的类型
 export type {
