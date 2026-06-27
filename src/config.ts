@@ -153,6 +153,10 @@ export interface ChannelConfig {
   port?: number;
   /** 路径（HTTP channel 用） */
   path?: string;
+  /** API Key（HTTP channel 认证） */
+  apiKey?: string;
+  /** 允许的 CORS 源 */
+  corsOrigins?: string[];
 }
 
 // ── Supervisor 配置 ──

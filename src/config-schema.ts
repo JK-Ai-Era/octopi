@@ -101,6 +101,8 @@ export const ChannelConfigSchema = z.object({
   type: z.string({ error: 'Channel must have a type' }).min(1),
   port: z.number().positive().optional(),
   path: z.string().optional(),
+  apiKey: z.string().optional(),
+  corsOrigins: z.array(z.string()).optional(),
 });
 
 // ── Supervisor 配置 Schema ──

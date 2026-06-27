@@ -457,6 +457,8 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
     gateway.registerChannel(new HttpChannelAdapter({
       port: httpConfig.port ?? args.port ?? 3000,
       path: httpConfig.path ?? '/messages',
+      apiKey: httpConfig.apiKey,
+      corsOrigins: httpConfig.corsOrigins,
     }));
   }
 

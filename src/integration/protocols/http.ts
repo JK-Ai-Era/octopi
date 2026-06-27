@@ -26,6 +26,20 @@ export interface HttpAdapterOptions {
   path?: string;
   /** 启用 WebSocket 支持（默认 true） */
   enableWebSocket?: boolean;
+  /**
+   * API Key 认证
+   *
+   * 设置后，所有请求必须携带 Authorization: Bearer <apiKey> 头。
+   * WebSocket 连接需要在 URL 查询参数中传递 token：ws://host/ws?token=<apiKey>
+   * health 端点不需要认证。
+   */
+  apiKey?: string;
+  /**
+   * 允许的 CORS 源（默认 '*'）
+   *
+   * 生产环境应设置为具体的域名列表。
+   */
+  corsOrigins?: string[];
 }
 
 interface WsSession {
@@ -49,6 +63,8 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
   private port: number;
   private path: string;
   private enableWebSocket: boolean;
+  private apiKey?: string;
+  private corsOrigins: string;
   private handler?: (msg: ChannelMessage) => Promise<void>;
   private server?: Server;
   private wss?: WebSocketServer;
@@ -58,6 +74,8 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
     this.port = options.port;
     this.path = options.path ?? '/messages';
     this.enableWebSocket = options.enableWebSocket ?? true;
+    this.apiKey = options.apiKey;
+    this.corsOrigins = options.corsOrigins?.join(', ') ?? '*';
   }
 
   async start(handler: (msg: ChannelMessage) => Promise<void>): Promise<void> {
@@ -65,9 +83,9 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
 
     this.server = createServer(async (req, res) => {
       // CORS
-      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Access-Control-Allow-Origin', this.corsOrigins);
       res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
-      res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
       if (req.method === 'OPTIONS') {
         res.writeHead(204);
@@ -87,6 +105,9 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
       }
 
       if (req.method === 'POST' && req.url === this.path) {
+        // 认证检查
+        if (!this.checkAuth(req, res)) return;
+
         try {
           const body = await this.readBody(req);
           const message: ChannelMessage = {
@@ -118,7 +139,19 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
     // WebSocket
     if (this.enableWebSocket) {
       this.wss = new WebSocketServer({ server: this.server, path: '/ws' });
-      this.wss.on('connection', (ws) => this.handleWsConnection(ws));
+      this.wss.on('connection', (ws, req) => {
+        // WebSocket 认证：从 URL 查询参数提取 token
+        if (this.apiKey) {
+          const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
+          const token = url.searchParams.get('token');
+          if (token !== this.apiKey) {
+            ws.send(JSON.stringify({ type: 'error', message: 'Unauthorized: invalid or missing token' }));
+            ws.close(4001, 'Unauthorized');
+            return;
+          }
+        }
+        this.handleWsConnection(ws);
+      });
     }
 
     await new Promise<void>((resolve) => {
@@ -247,6 +280,24 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
         session.ws.send(json);
       }
     }
+  }
+
+  /**
+   * 检查 Authorization: Bearer <apiKey> 头
+   * @returns true 如果认证通过，false 如果已发送 401 响应
+   */
+  private checkAuth(req: any, res: any): boolean {
+    if (!this.apiKey) return true;
+
+    const authHeader = req.headers.authorization ?? '';
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+
+    if (token !== this.apiKey) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Unauthorized: invalid or missing API key' }));
+      return false;
+    }
+    return true;
   }
 
   private readBody(req: any): Promise<any> {
