@@ -1,6 +1,6 @@
 # Octopi 🐙
 
-**An Embeddable Agent Runtime Framework**
+**The Embeddable Agent Engine**
 
 > An agent is not a class — it's a complete runtime.
 > A session is not a chat log — it's a full interaction lifecycle.
@@ -24,12 +24,13 @@ We don't think so. Graphical interfaces still offer irreplaceable advantages in 
 
 ---
 
-## Why Octopi
+## Why Octopi?
 
 Most agent frameworks give you a monolith: a fixed agent loop, a fixed session model, a fixed set of integrations. You can use them as-is, but the moment you need something different — a custom context pipeline, a different storage backend, an embedded agent inside your own product — you're fighting the framework.
 
-Octopi takes a different approach. It's an **embeddable agent runtime** built from first principles:
+**Octopi is not another framework. It's an engine.** Think of it as the "engine" for your AI agent — just like a car needs an engine to run, your product needs an agent engine to have AI capabilities.
 
+- **Embeddable by design** — Not a standalone app, but a component for your product
 - **AgentEngine** — a stateless message loop (input → context assembly → model inference → tool execution → output)
 - **Session management** — lifecycle, persistence, concurrency control, all pluggable
 - **Multi-provider LLM** — OpenAI, Anthropic, or any provider implementing the `ModelProvider` interface
@@ -102,13 +103,13 @@ Just as an octopus's intelligence is not concentrated solely in its brain but di
 
 **Dependency direction: outer → inner. The core never knows about the harness.**
 
-### Core (Layer 1) — Pure Engine
+### Core (Layer 1) — The Engine
 
 Zero implementation dependencies. Just interfaces and the minimal agent loop.
 
 | Component | Responsibility |
 |---|---|
-| `AgentEngine` | Stateless loop engine — the heart of the framework |
+| `AgentEngine` | Stateless loop engine — the heart of the engine |
 | `EventBus` | Full-chain observability via typed events |
 | `SecurityGuard` | Injection detection + sensitive data filtering (non-disableable) |
 | `IterationBudget` | Resource constraints: iterations, tool calls, tokens, time |
@@ -293,14 +294,14 @@ Where we diverged:
 
 | Aspect | OpenClaw | Octopi |
 |---|---|---|
-| **Scope** | Full AI assistant platform | Embeddable runtime toolkit |
+| **Scope** | Full AI assistant platform | Embeddable agent engine |
 | **Architecture** | Integrated system | Three-layer separation (Core / Harness / Integration) |
 | **Agent model** | Class-based with state | Stateless engine + pluggable session |
 | **Coupling** | Platform-bound (channels, memory, scheduling) | Zero platform dependencies in Core |
 | **Target user** | End users building assistants | Developers embedding agents in products |
 | **Extensibility** | Plugin system | Plugin system + pluggable interfaces at every layer |
 
-OpenClaw is a great project. Octopi is what happens when you ask: "What if we extracted just the runtime and made it composable?"
+OpenClaw is a great project. Octopi is what happens when you ask: "What if we extracted just the engine and made it composable?"
 
 ---
 
