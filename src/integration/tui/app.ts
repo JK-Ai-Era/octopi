@@ -474,6 +474,19 @@ export class TuiApp {
         this.tui.requestRender();
         break;
       }
+
+      case 'engine.end': {
+        // 安全网：确保 isProcessing 被重置，即使 turn.end 未被收到
+        if (this.isProcessing) {
+          if (this.streamedContent) {
+            this.chatLog.finalizeAssistant(this.streamedContent, 'run');
+          }
+          this.isProcessing = false;
+          this.setStatus('');
+          this.tui.requestRender();
+        }
+        break;
+      }
     }
   }
 

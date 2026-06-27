@@ -495,7 +495,7 @@ describe('引擎异常退出事件', () => {
 
     // 应该有 budget.exceeded 事件
     expect(collected.some(e => e.type === 'budget.exceeded')).toBe(true);
-    // 不应该有 turn.end
-    expect(collected.some(e => e.type === 'turn.end')).toBe(false);
+    // 工具执行后会 yield turn.end（通知调用方本轮完成），然后才检查预算
+    expect(collected.some(e => e.type === 'turn.end')).toBe(true);
   });
 });

@@ -2,6 +2,21 @@
 
 ## v0.3.2 (2026-06-27)
 
+### Bug 修复：TUI 第二轮对话无响应
+
+**问题描述：**
+- TUI 第一轮对话结束后一直显示 "streaming..."，导致第二轮对话无法正常开始
+
+**根因分析：**
+- 引擎在工具执行后直接 `continue` 进入下一轮迭代，没有 yield `turn.end` 事件
+- TUI 依赖 `turn.end` 事件重置 `isProcessing` 状态
+- 没有 `turn.end` → `isProcessing` 永远为 true → 用户无法发送第二条消息
+- 另外，TUI 没有处理 `engine.end` 事件作为安全网
+
+**修复内容：**
+- **引擎层：** 工具执行后 yield `turn.end` 再 `continue`，确保 TUI 及时收到状态更新
+- **TUI 层：** 新增 `engine.end` 事件处理作为安全网，确保 `isProcessing` 被重置
+
 ### 改进：Agent 恢复/重试机制优化（参考 OpenClaw）
 
 **改进内容：**

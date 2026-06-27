@@ -731,6 +731,15 @@ export class AgentEngine {
               }
             }
 
+            // ── yield turn.end 通知调用方本轮工具执行完成 ──
+            // TUI 依赖此事件重置 isProcessing，Gateway 依赖此事件捕获回复。
+            // 引擎会继续下一轮迭代（如果有），调用方会收到后续的 model.call.start 等事件。
+            yield {
+              type: 'turn.end',
+              timestamp: Date.now(),
+              data: { content: llmResponse.content, usage: llmResponse.usage },
+            };
+
             // 继续循环（让 LLM 看到工具结果）
             continue;
           }
