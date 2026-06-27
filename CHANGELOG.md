@@ -1,6 +1,22 @@
 # Changelog
 
-## v0.3.2 (2026-06-27)
+## v0.4.0 (2026-06-27)
+
+### 项目定位调整
+
+- 定位从“可嵌入的 Agent 运行时框架”调整为“可嵌入的 Agent 引擎”
+- 引擎 = 核心运行时 + 干净接口，强调可嵌入、可替换、最小核心
+
+### Bug 修复：TUI 第二轮对话无响应 + Empty Response
+
+- **引擎层：** `finally` 块保证 `ENGINE_END` 在所有退出路径发射
+- **TUI 层：** 新增 `engine.end` handler 重置 `isProcessing`
+- **引擎层：** 中止安全退出（`emitAbortedMessage`）保持 session 语义完整性
+
+### 改进：Agent 恢复/重试机制优化（参考 OpenClaw）
+
+- **P0:** finishReason 校验 — 只有 `tool_calls` 时才执行工具
+- **P1:** No-op 检测 — `ToolResult.noop` + `__noop` 约定，防止 tool-loop 死循环
 
 ### Bug 修复：TUI 第二轮对话无响应
 
