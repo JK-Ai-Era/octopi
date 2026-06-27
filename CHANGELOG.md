@@ -1,5 +1,39 @@
 # Changelog
 
+## v0.3.1 (2026-06-27)
+
+### Bug 修复：工具执行后卡死 + 超时机制 + Gateway 预算管理
+
+**问题描述：**
+- TUI 发送消息后，agent 调用工具成功但第二次模型调用永远卡住
+- Gateway 运行超过 10 分钟后所有请求立即报 "Budget exceeded: timeout"
+- Gateway 连接断开后 TUI 无法正常退出
+
+**根因分析：**
+1. **消息格式不匹配：** 引擎的 tool result 消息格式 `{ role: 'tool', toolResults: [...] }` 与 LLM API 期望的 `{ role: 'tool', tool_call_id, content }` 不一致，导致 API 请求卡住或报错
+2. **流式调用无超时：** `stream()` 方法的 `fetch` 调用没有超时设置，API 卡住时永远等待
+3. **Budget 不重置：** `IterationBudget` 在 Gateway 启动时创建一次，`startTime` 固定，运行超过 `maxWallClockMs` 后所有请求立即超时
+4. **断连状态未清理：** Gateway 断连时 `isProcessing` 状态未重置，Ctrl+C 被拦截
+
+**修复内容：**
+- **Provider 层：** 新增 `flattenMessages()` 将引擎格式的 tool results 展开为 API 格式（OpenAI + Anthropic）
+- **Provider 层：** `stream()` 方法添加连接超时 + 空闲超时（默认 60s，可通过 `timeoutMs` 配置）
+- **Core 层：** `IterationBudget` 新增 `reset()` 方法
+- **Core 层：** `AgentEngine.run()` 开头自动调用 `budget.reset?.()`，确保每次请求独立计时
+- **Gateway 层：** `GatewayConfig` 新增 `budget` 字段，支持从配置文件读取预算参数
+- **TUI 层：** Gateway 断连时重置 `isProcessing`，保留已流式内容，允许正常退出
+
+**配置示例：**
+```json
+{
+  "budget": {
+    "maxIterations": 10,
+    "maxToolCalls": 30,
+    "maxWallClockMs": 1800000
+  }
+}
+```
+
 ## v0.3.0 (2026-06-18)
 
 ### CLI serve 命令重构 — 后台守护进程模式

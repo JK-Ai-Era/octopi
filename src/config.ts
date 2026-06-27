@@ -373,6 +373,7 @@ export function toGatewayConfig(config: HarnessConfig): GatewayConfig {
   return {
     agents: config.agents as unknown as AgentDefinition[],
     session: config.session,
+    budget: config.budget,
   };
 }
 

@@ -55,7 +55,7 @@ src/
 │   ├── engine.ts                      # AgentEngine — 无状态循环引擎
 │   ├── event-bus.ts                   # EventBus — 全链路可观测事件总线
 │   ├── security-guard.ts              # SecurityGuard — 五层安全防护（Input/Output/Tool/Behavior Guard）
-│   ├── budget.ts                      # IterationBudget — 资源约束
+│   ├── budget.ts                      # IterationBudget — 资源约束（支持 reset() 用于长生命周期场景）
 │   ├── types.ts                       # 核心类型定义（Message, ToolCall, ContentBlock 等）
 │   ├── async-task.ts                  # AsyncTask — 异步原语（取消/超时/重试/持久化）
 │   ├── process-model.ts              # ProcessModel — Agent 进程模型（生命周期/spawn/IPC）

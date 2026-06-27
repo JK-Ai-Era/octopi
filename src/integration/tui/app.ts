@@ -215,6 +215,15 @@ export class TuiApp {
       },
       onDisconnected: (reason) => {
         this.chatLog.addSystem(`❌ Disconnected from Gateway: ${reason ?? 'unknown'}`);
+        // 断连时重置处理状态，否则 Ctrl+C 无法正常退出
+        if (this.isProcessing) {
+          if (this.streamedContent) {
+            this.chatLog.finalizeAssistant(this.streamedContent + '\n\n*(connection lost)*', 'run');
+          }
+          this.isProcessing = false;
+          this.abortController = null;
+          this.setStatus('disconnected');
+        }
         this.tui.requestRender();
       },
       onError: (err) => {

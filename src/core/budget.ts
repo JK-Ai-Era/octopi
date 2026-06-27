@@ -76,6 +76,19 @@ export class IterationBudget {
   }
 
   /**
+   * 重置预算计数器（每次请求前调用）
+   *
+   * 保留 config 和 eventBus，重置所有计数器和 startTime。
+   * 用于 Gateway 等长生命周期场景，避免 startTime 累积导致误超时。
+   */
+  reset(): void {
+    this.iterations = 0;
+    this.toolCalls = 0;
+    this.totalTokens = 0;
+    this.startTime = Date.now();
+  }
+
+  /**
    * 检查预算状态
    * @returns 'ok' 如果预算充足，否则返回具体限制类型
    */

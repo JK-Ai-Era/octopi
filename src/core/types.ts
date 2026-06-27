@@ -514,6 +514,12 @@ export type {
 export interface GatewayConfig {
   port?: number;
   agents: AgentDefinition[];
+  budget?: {
+    maxIterations?: number;
+    maxToolCalls?: number;
+    maxTokens?: number;
+    maxWallClockMs?: number;
+  };
   session?: {
     dmScope?: 'main' | 'per-peer' | 'per-channel-peer';
     reset?: {

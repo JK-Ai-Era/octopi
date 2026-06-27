@@ -142,14 +142,25 @@ export class OpenAIProvider implements ModelProvider {
   async *stream(request: LLMRequest): AsyncGenerator<LLMStreamChunk> {
     const body = { ...this.buildRequestBody(request), stream: true };
 
-    const response = await fetch(`${this.baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.apiKey}`,
-      },
-      body: JSON.stringify(body),
-    });
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+
+    let response: Response;
+    try {
+      response = await fetch(`${this.baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${this.apiKey}`,
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+    } catch (err) {
+      clearTimeout(timer);
+      throw err;
+    }
+    // 注意：不在这里 clearTimeout，流式读取完成后才清理
 
     if (!response.ok) {
       const errorText = await response.text().catch(() => 'unknown error');
@@ -157,17 +168,32 @@ export class OpenAIProvider implements ModelProvider {
     }
 
     const reader = response.body?.getReader();
-    if (!reader) throw new Error('No response body');
+    if (!reader) {
+      clearTimeout(timer);
+      throw new Error('No response body');
+    }
 
     const decoder = new TextDecoder();
     let buffer = '';
 
+    // 流式空闲超时：如果服务端在 timeoutMs 内没有发送数据，中断读取
+    const streamIdleTimeout = this.timeoutMs;
+    let idleTimer: ReturnType<typeof setTimeout> | null = null;
+    const resetIdleTimer = () => {
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => controller.abort(), streamIdleTimeout);
+    };
+    resetIdleTimer();
+
     // tool_calls 拼接 buffer（index → {id, name, argsBuffer}）
     const toolCallBuffers = new Map<number, { id: string; name: string; argsBuffer: string }>();
 
+    try {
     while (true) {
-      const { done, value } = await reader.read();
+      const readPromise = reader.read();
+      const { done, value } = await readPromise;
       if (done) break;
+      resetIdleTimer();
 
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split('\n');
@@ -234,6 +260,10 @@ export class OpenAIProvider implements ModelProvider {
         }
       }
     }
+    } finally {
+      clearTimeout(timer);
+      if (idleTimer) clearTimeout(idleTimer);
+    }
   }
 
   /**
@@ -261,7 +291,7 @@ export class OpenAIProvider implements ModelProvider {
   private buildRequestBody(request: LLMRequest): Record<string, unknown> {
     const body: Record<string, unknown> = {
       model: request.model ?? this.defaultModel,
-      messages: request.messages.map((msg) => this.sanitizeMessage(msg)),
+      messages: this.flattenMessages(request.messages).map((msg) => this.sanitizeMessage(msg)),
     };
 
     if (request.temperature !== undefined) {
@@ -284,6 +314,10 @@ export class OpenAIProvider implements ModelProvider {
 
   /**
    * 净化消息：只保留 OpenAI API 所需字段
+   *
+   * 注意：引擎的 tool 消息格式是 { role: 'tool', toolResults: [...] }，
+   * 但 OpenAI API 需要每个 tool result 作为独立的消息。
+   * 此方法将 toolResults 展开为多条消息（调用方需展平）。
    */
   private sanitizeMessage(msg: any): any {
     const clean: any = {
@@ -296,13 +330,43 @@ export class OpenAIProvider implements ModelProvider {
       clean.tool_calls = msg.tool_calls;
     }
 
-    // tool 消息：必须有 tool_call_id 和 name
+    // tool 消息：必须有 tool_call_id（由 flattenMessages 保证）
     if (msg.role === 'tool') {
       if (msg.tool_call_id) clean.tool_call_id = msg.tool_call_id;
       if (msg.name) clean.name = msg.name;
     }
 
     return clean;
+  }
+
+  /**
+   * 展平消息列表：将引擎格式的 tool 消息展开为 OpenAI API 格式
+   *
+   * 引擎格式：{ role: 'tool', toolResults: [r1, r2, ...] }
+   * API 格式：[{ role: 'tool', tool_call_id: r1.id, content: ... }, { role: 'tool', tool_call_id: r2.id, ... }]
+   *
+   * 单条 tool result 也会被展开，确保格式一致。
+   */
+  private flattenMessages(messages: any[]): any[] {
+    const result: any[] = [];
+    for (const msg of messages) {
+      if (msg.role === 'tool' && Array.isArray(msg.toolResults) && msg.toolResults.length > 0) {
+        // 展开每条 tool result 为独立消息
+        for (const tr of msg.toolResults) {
+          result.push({
+            role: 'tool',
+            tool_call_id: tr.toolCallId,
+            name: tr.name,
+            content: tr.error
+              ? JSON.stringify({ error: tr.error })
+              : (typeof tr.result === 'string' ? tr.result : JSON.stringify(tr.result ?? null)),
+          });
+        }
+      } else {
+        result.push(msg);
+      }
+    }
+    return result;
   }
 
   /**

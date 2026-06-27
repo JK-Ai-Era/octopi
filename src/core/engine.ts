@@ -225,6 +225,9 @@ export class AgentEngine {
     this.planningOnlyRetryAttempts = 0;
     this.planningOnlySteerInjected = false;
 
+    // 重置预算计数器，确保每次 run() 都从零开始
+    budget.reset?.();
+
     // 设置系统提示到 SecurityGuard（用于泄露检测）
     if (security.setSystemPrompt) {
       security.setSystemPrompt(config.systemPrompt || this.deps.systemPrompt || '');

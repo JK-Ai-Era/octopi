@@ -99,7 +99,7 @@ export class Gateway {
   /** 工具 */
   private tools: RegisteredTool[] = [];
   /** Agent 缓存（避免每条消息重建） */
-  private agentCache = new Map<string, { engine: AgentEngine; runner: SessionAwareRunner }>();
+  private agentCache = new Map<string, { engine: AgentEngine; runner: SessionAwareRunner; budget: IterationBudget }>();
   /** 流式 adapter 引用（用于广播事件） */
   private streamingAdapters: StreamingChannelAdapter[] = [];
 
@@ -229,7 +229,8 @@ export class Gateway {
       cached = await this.buildAgent(agent);
       this.agentCache.set(agent.id, cached);
     }
-    const { runner } = cached;
+    const { runner, budget } = cached;
+    budget.reset();
 
     // 4. 构建用户消息
     const userMessage = {
@@ -309,6 +310,7 @@ export class Gateway {
   private async buildAgent(agent: AgentDefinition): Promise<{
     engine: AgentEngine;
     runner: SessionAwareRunner;
+    budget: IterationBudget;
   }> {
     // 获取 provider
     const modelProvider = this.providers.get(agent.model.provider);
@@ -319,11 +321,12 @@ export class Gateway {
     // 创建 Core 组件
     const events = new DefaultEventBus();
     const security = new DefaultSecurityGuard(events);
+    const budgetConfig = this.config.budget ?? {};
     const budget = new IterationBudget(events, {
-      maxIterations: 10,
-      maxToolCalls: 30,
-      maxTokens: 200_000,
-      maxWallClockMs: 600_000,
+      maxIterations: budgetConfig.maxIterations ?? 10,
+      maxToolCalls: budgetConfig.maxToolCalls ?? 30,
+      maxTokens: budgetConfig.maxTokens ?? 200_000,
+      maxWallClockMs: budgetConfig.maxWallClockMs ?? 600_000,
     });
 
     // 创建工具映射
@@ -369,7 +372,7 @@ export class Gateway {
     // 创建 SessionAwareRunner
     const runner = new SessionAwareRunner(engine, this.store);
 
-    return { engine, runner };
+    return { engine, runner, budget };
   }
 
   private resolveAgent(msg: ChannelMessage): AgentDefinition | undefined {

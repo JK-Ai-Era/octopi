@@ -32,6 +32,8 @@ export interface AnthropicProviderConfig {
   apiKey: string;
   baseUrl?: string;
   version?: string;
+  /** 请求超时（毫秒） */
+  timeoutMs?: number;
   /**
    * 支持的模型列表
    *
@@ -56,6 +58,7 @@ export class AnthropicProvider implements ModelProvider {
   private apiKey: string;
   private baseUrl: string;
   private version: string;
+  private timeoutMs: number;
   readonly defaultModel: string;
 
   constructor(config: AnthropicProviderConfig) {
@@ -63,6 +66,7 @@ export class AnthropicProvider implements ModelProvider {
     this.apiKey = config.apiKey;
     this.baseUrl = (config.baseUrl ?? 'https://api.anthropic.com').replace(/\/$/, '');
     this.version = config.version ?? '2023-06-01';
+    this.timeoutMs = config.timeoutMs ?? 120_000;
 
     // 解析 models 配置：提取名称列表 + ModelInfo 映射
     // 合并内置默认值（用户配置优先）
@@ -136,15 +140,25 @@ export class AnthropicProvider implements ModelProvider {
       stream: true,
     };
 
-    const response = await fetch(`${this.baseUrl}/v1/messages`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': this.apiKey,
-        'anthropic-version': this.version,
-      },
-      body: JSON.stringify(anthropicRequest),
-    });
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+
+    let response: Response;
+    try {
+      response = await fetch(`${this.baseUrl}/v1/messages`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': this.apiKey,
+          'anthropic-version': this.version,
+        },
+        body: JSON.stringify(anthropicRequest),
+        signal: controller.signal,
+      });
+    } catch (err) {
+      clearTimeout(timer);
+      throw err;
+    }
 
     if (!response.ok) {
       const error = await response.text();
@@ -152,7 +166,10 @@ export class AnthropicProvider implements ModelProvider {
     }
 
     const reader = response.body?.getReader();
-    if (!reader) throw new Error('No response body');
+    if (!reader) {
+      clearTimeout(timer);
+      throw new Error('No response body');
+    }
 
     const decoder = new TextDecoder();
     let buffer = '';
@@ -161,10 +178,20 @@ export class AnthropicProvider implements ModelProvider {
     let toolArgsBuffer = '';
     let toolCallIndex = 0;
 
+    // 流式空闲超时
+    const streamIdleTimeout = this.timeoutMs;
+    let idleTimer: ReturnType<typeof setTimeout> | null = null;
+    const resetIdleTimer = () => {
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => controller.abort(), streamIdleTimeout);
+    };
+    resetIdleTimer();
+
     try {
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
+        resetIdleTimer();
 
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split('\n');
@@ -218,6 +245,8 @@ export class AnthropicProvider implements ModelProvider {
         }
       }
     } finally {
+      clearTimeout(timer);
+      if (idleTimer) clearTimeout(idleTimer);
       reader.releaseLock();
     }
   }
@@ -313,6 +342,18 @@ export class AnthropicProvider implements ModelProvider {
 
     // Anthropic 格式：tool 消息 → user 消息 + tool_result content block
     if (role === 'tool') {
+      // 引擎格式：{ role: 'tool', toolResults: [{ toolCallId, name, result, error }] }
+      if (Array.isArray(msg.toolResults) && msg.toolResults.length > 0) {
+        const blocks = msg.toolResults.map((tr: any) => ({
+          type: 'tool_result',
+          tool_use_id: tr.toolCallId,
+          content: tr.error
+            ? JSON.stringify({ error: tr.error })
+            : (typeof tr.result === 'string' ? tr.result : JSON.stringify(tr.result ?? null)),
+        }));
+        return { role: 'user', content: blocks };
+      }
+      // 兼容直接格式
       return {
         role: 'user',
         content: [{
