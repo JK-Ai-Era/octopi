@@ -121,12 +121,28 @@ export class PluginLoader {
     // 过滤：allowlist / blocklist / enabled
     const filtered = this.filterPlugins(discovered);
 
+    // 依赖解析：按 requiresPlugins 拓扑排序
+    const ordered = this.resolveDependencyOrder(filtered);
+
+    // 检查缺失的依赖
+    const ids = new Set(ordered.map(p => p.manifest.id));
+    for (const plugin of ordered) {
+      const deps = plugin.manifest.requiresPlugins ?? [];
+      for (const dep of deps) {
+        if (!ids.has(dep)) {
+          console.warn(`[PluginLoader] Plugin "${plugin.manifest.id}" requires "${dep}", but it was not found. Skipping.`);
+          plugin.enabled = false;
+        }
+      }
+    }
+
     // 执行 register()
-    for (const plugin of filtered) {
+    for (const plugin of ordered) {
+      if (!plugin.enabled) continue;
       await this.registerPlugin(plugin);
     }
 
-    return filtered;
+    return ordered;
   }
 
   /**
@@ -341,6 +357,60 @@ export class PluginLoader {
 
       return true;
     });
+  }
+
+  /**
+   * 拓扑排序：按依赖关系排列 plugin 顺序
+   *
+   * 使用 Kahn 算法。被依赖的 plugin 排在前面。
+   * 存在循环依赖时，剩余的 plugin 按原始顺序追加并警告。
+   */
+  private resolveDependencyOrder(plugins: LoadedPlugin[]): LoadedPlugin[] {
+    const idToPlugin = new Map<string, LoadedPlugin>();
+    for (const p of plugins) {
+      idToPlugin.set(p.id, p);
+    }
+
+    // 计算入度（有多少 plugin 依赖它）
+    const inDegree = new Map<string, number>();
+    const dependents = new Map<string, string[]>(); // dep → [plugins that depend on it]
+
+    for (const p of plugins) {
+      if (!inDegree.has(p.id)) inDegree.set(p.id, 0);
+      const deps = (p.manifest.requiresPlugins ?? []).filter(d => idToPlugin.has(d));
+      for (const dep of deps) {
+        inDegree.set(p.id, (inDegree.get(p.id) ?? 0) + 1);
+        if (!dependents.has(dep)) dependents.set(dep, []);
+        dependents.get(dep)!.push(p.id);
+      }
+    }
+
+    // Kahn 算法
+    const queue: string[] = [];
+    for (const [id, deg] of inDegree) {
+      if (deg === 0) queue.push(id);
+    }
+
+    const result: LoadedPlugin[] = [];
+    while (queue.length > 0) {
+      const id = queue.shift()!;
+      result.push(idToPlugin.get(id)!);
+      for (const dep of (dependents.get(id) ?? [])) {
+        const newDeg = (inDegree.get(dep) ?? 1) - 1;
+        inDegree.set(dep, newDeg);
+        if (newDeg === 0) queue.push(dep);
+      }
+    }
+
+    // 追加未解析的（循环依赖）
+    const resolved = new Set(result.map(p => p.id));
+    const remaining = plugins.filter(p => !resolved.has(p.id));
+    if (remaining.length > 0) {
+      console.warn(`[PluginLoader] Circular dependency detected among: ${remaining.map(p => p.id).join(', ')}. Appending in original order.`);
+      result.push(...remaining);
+    }
+
+    return result;
   }
 
   /**
