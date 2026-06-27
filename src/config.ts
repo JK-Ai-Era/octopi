@@ -136,9 +136,11 @@ export interface PluginConfig {
  */
 export interface StoreConfig {
   /** 存储类型 */
-  type: 'memory' | 'jsonl';
+  type: 'memory' | 'jsonl' | 'sqlite';
   /** 数据目录（jsonl 类型必填） */
   dataDir?: string;
+  /** 数据库文件路径（sqlite 类型可选，默认 :memory:） */
+  dbPath?: string;
 }
 
 // ── Channel 配置 ──
@@ -391,6 +393,11 @@ export async function createStoreFromConfig(sc: StoreConfig): Promise<SessionSto
     }
     const { JsonlSessionStore } = await import('./integration/storage/jsonl.js');
     return new JsonlSessionStore(sc.dataDir);
+  }
+
+  if (sc.type === 'sqlite') {
+    const { SqliteSessionStore } = await import('./integration/storage/sqlite.js');
+    return new SqliteSessionStore({ dbPath: sc.dbPath });
   }
 
   throw new Error(`Unknown store type: "${sc.type}"`);

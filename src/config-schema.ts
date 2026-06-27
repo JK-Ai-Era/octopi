@@ -83,8 +83,9 @@ export const PluginConfigSchema = z.object({
 // ── Store 配置 Schema ──
 
 export const StoreConfigSchema = z.object({
-  type: z.enum(['memory', 'jsonl'], { error: 'Store type must be "memory" or "jsonl"' }),
+  type: z.enum(['memory', 'jsonl', 'sqlite'], { error: 'Store type must be "memory", "jsonl", or "sqlite"' }),
   dataDir: z.string().optional(),
+  dbPath: z.string().optional(),
 }).refine(
   (data) => {
     if (data.type === 'jsonl' && !data.dataDir) {

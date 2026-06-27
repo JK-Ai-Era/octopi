@@ -122,6 +122,8 @@ export { AgentRegistryEvents } from './core/interfaces/agent-registry.js';
 // 存储
 export { JsonlSessionStore } from './integration/storage/jsonl.js';
 export { InMemorySessionStore } from './integration/storage/memory.js';
+export { SqliteSessionStore } from './integration/storage/sqlite.js';
+export type { SqliteSessionStoreOptions } from './integration/storage/sqlite.js';
 
 // 可观测性
 export { NoopObserver } from './integration/observability/noop-observer.js';

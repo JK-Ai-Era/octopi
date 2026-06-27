@@ -61,6 +61,7 @@
   },
   "license": "MIT",
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^25.9.1",
     "typescript": "^6.0.3",
     "vitest": "^4.1.7"
@@ -68,6 +69,7 @@
   "dependencies": {
     "@earendil-works/pi-tui": "^0.78.0",
     "@types/ws": "^8.18.1",
+    "better-sqlite3": "^12.11.1",
     "chalk": "^5.6.2",
     "ws": "^8.21.0",
     "zod": "^4.4.3"
