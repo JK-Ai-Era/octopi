@@ -33,6 +33,7 @@
  */
 
 import type { AgentDefinition, GatewayConfig, ToolPolicy, ModelInfo } from './core/types.js';
+import type { ModelProvider } from './core/interfaces/model-provider.js';
 import type { SessionStore } from './core/interfaces/session-store.js';
 import type { IterationBudgetConfig } from './core/budget.js';
 import type { SecurityGuardConfig } from './core/security-guard.js';
@@ -346,7 +347,7 @@ export function toGatewayConfig(config: HarnessConfig): GatewayConfig {
  * 根据 type 字段自动选择 OpenAI 或 Anthropic provider。
  * 使用动态 import 以支持 ESM。
  */
-export async function createProviderFromConfig(pc: ProviderConfig): Promise<any> {
+export async function createProviderFromConfig(pc: ProviderConfig): Promise<ModelProvider> {
   const apiKey = pc.apiKey;
   if (!apiKey) {
     throw new Error(`Provider "${pc.name}" must have an apiKey`);

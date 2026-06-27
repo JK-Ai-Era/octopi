@@ -35,6 +35,9 @@ export type { TaskOptions, TaskExecutor } from './async-task.js';
 export { ProcessModel, ProcessEvents, spawnProcess } from './process-model.js';
 export type { ProcessState, ExitReason, ExitInfo, ProcessOptions, ProcessBody, ProcessContext } from './process-model.js';
 
+// ── Provider 包装 ──
+export { wrapProviderWithCircuitBreaker, assertModelProvider } from './provider-wrapper.js';
+
 // ── 熔断器 ──
 export { CircuitBreaker } from './circuit-breaker.js';
 export type { CircuitBreakerOptions } from './circuit-breaker.js';

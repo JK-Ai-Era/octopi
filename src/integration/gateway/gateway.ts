@@ -32,6 +32,7 @@ import type { ModelProvider } from '../../core/interfaces/model-provider.js';
 import type { SessionStore, SessionData } from '../../core/interfaces/session-store.js';
 import type { StreamingChannelAdapter } from '../protocols/http.js';
 import { CircuitBreaker } from '../../core/circuit-breaker.js';
+import { wrapProviderWithCircuitBreaker } from '../../core/provider-wrapper.js';
 import { PluginManager } from '../../harness/plugins/manager.js';
 import { AgentEngine } from '../../core/engine.js';
 import type { RunConfig } from '../../core/engine.js';
@@ -325,40 +326,7 @@ export class Gateway {
     const cb = this.getCircuitBreaker(agent.model.provider);
 
     // 包装 provider，在调用前检查熔断器
-    const wrappedProvider: ModelProvider = new Proxy(modelProvider, {
-      get(target, prop, receiver) {
-        if (prop === 'chat' && target.chat) {
-          return async (request: any) => {
-            if (!cb.allowRequest()) {
-              throw new Error(`Circuit breaker open for provider "${agent.model.provider}". Too many consecutive failures.`);
-            }
-            try {
-              const result = await target.chat!(request);
-              cb.recordSuccess();
-              return result;
-            } catch (err) {
-              cb.recordFailure();
-              throw err;
-            }
-          };
-        }
-        if (prop === 'stream' && target.stream) {
-          return async function* (request: any) {
-            if (!cb.allowRequest()) {
-              throw new Error(`Circuit breaker open for provider "${agent.model.provider}". Too many consecutive failures.`);
-            }
-            try {
-              yield* target.stream!(request);
-              cb.recordSuccess();
-            } catch (err) {
-              cb.recordFailure();
-              throw err;
-            }
-          };
-        }
-        return Reflect.get(target, prop, receiver);
-      },
-    });
+    const wrappedProvider = wrapProviderWithCircuitBreaker(modelProvider, cb);
 
     // 创建 Core 组件
     const events = new DefaultEventBus();

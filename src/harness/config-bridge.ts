@@ -53,7 +53,7 @@ export async function resolveProviders(config: HarnessConfig): Promise<Map<strin
 
   for (const pc of config.providers) {
     try {
-      const provider = await createProviderFromConfig(pc) as ModelProvider;
+      const provider = await createProviderFromConfig(pc);
       providers.set(pc.name, provider);
     } catch (err) {
       console.warn(`[ConfigBridge] Failed to create provider "${pc.name}":`, err);
