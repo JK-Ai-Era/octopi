@@ -325,34 +325,40 @@ export class Gateway {
     const cb = this.getCircuitBreaker(agent.model.provider);
 
     // 包装 provider，在调用前检查熔断器
-    const wrappedProvider: ModelProvider = {
-      name: modelProvider.name,
-      chat: modelProvider.chat ? async (request) => {
-        if (!cb.allowRequest()) {
-          throw new Error(`Circuit breaker open for provider "${agent.model.provider}". Too many consecutive failures.`);
+    const wrappedProvider: ModelProvider = new Proxy(modelProvider, {
+      get(target, prop, receiver) {
+        if (prop === 'chat' && target.chat) {
+          return async (request: any) => {
+            if (!cb.allowRequest()) {
+              throw new Error(`Circuit breaker open for provider "${agent.model.provider}". Too many consecutive failures.`);
+            }
+            try {
+              const result = await target.chat!(request);
+              cb.recordSuccess();
+              return result;
+            } catch (err) {
+              cb.recordFailure();
+              throw err;
+            }
+          };
         }
-        try {
-          const result = await modelProvider.chat!(request);
-          cb.recordSuccess();
-          return result;
-        } catch (err) {
-          cb.recordFailure();
-          throw err;
+        if (prop === 'stream' && target.stream) {
+          return async function* (request: any) {
+            if (!cb.allowRequest()) {
+              throw new Error(`Circuit breaker open for provider "${agent.model.provider}". Too many consecutive failures.`);
+            }
+            try {
+              yield* target.stream!(request);
+              cb.recordSuccess();
+            } catch (err) {
+              cb.recordFailure();
+              throw err;
+            }
+          };
         }
-      } : undefined,
-      stream: modelProvider.stream ? async function* (request) {
-        if (!cb.allowRequest()) {
-          throw new Error(`Circuit breaker open for provider "${agent.model.provider}". Too many consecutive failures.`);
-        }
-        try {
-          yield* modelProvider.stream!(request);
-          cb.recordSuccess();
-        } catch (err) {
-          cb.recordFailure();
-          throw err;
-        }
-      } : undefined,
-    } as ModelProvider;
+        return Reflect.get(target, prop, receiver);
+      },
+    });
 
     // 创建 Core 组件
     const events = new DefaultEventBus();
