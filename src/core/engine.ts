@@ -358,6 +358,13 @@ export class AgentEngine {
           const llmMessages = assembled.messages;
           const estimatedTokens = assembled.estimatedTokens;
 
+          // assemble 完成后、model call 前检查中止信号
+          if (signal?.aborted) {
+            yield { type: 'interrupted', timestamp: Date.now(), data: { phase: 'after_assemble' } };
+            this.emitAbortedMessage(messages, signal, events);
+            return;
+          }
+
           // Observer: token 估算
           observer?.recordMetric('agent.context.tokens', estimatedTokens);
 

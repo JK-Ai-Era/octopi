@@ -110,15 +110,26 @@ export class AnthropicProvider implements ModelProvider {
   async chat(request: LLMRequest): Promise<LLMResponse> {
     const anthropicRequest = this.toAnthropicRequest(request);
 
-    const response = await fetch(`${this.baseUrl}/v1/messages`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': this.apiKey,
-        'anthropic-version': this.version,
-      },
-      body: JSON.stringify(anthropicRequest),
-    });
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+
+    // 合并外部 signal
+    if (request.signal) {
+      if (request.signal.aborted) { clearTimeout(timer); throw new Error('Request aborted'); }
+      request.signal.addEventListener('abort', () => controller.abort(), { once: true });
+    }
+
+    try {
+      const response = await fetch(`${this.baseUrl}/v1/messages`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': this.apiKey,
+          'anthropic-version': this.version,
+        },
+        body: JSON.stringify(anthropicRequest),
+        signal: controller.signal,
+      });
 
     if (!response.ok) {
       const error = await response.text();
@@ -127,6 +138,9 @@ export class AnthropicProvider implements ModelProvider {
 
     const data = await response.json() as Record<string, unknown>;
     return this.fromAnthropicResponse(data, request.model ?? this.defaultModel);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   /**
@@ -141,7 +155,15 @@ export class AnthropicProvider implements ModelProvider {
     };
 
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+
+    // 合并外部 signal
+    if (request.signal) {
+      if (request.signal.aborted) throw new Error('Request aborted');
+      request.signal.addEventListener('abort', () => controller.abort(), { once: true });
+    }
+
+    // 连接超时
+    const connectTimer = setTimeout(() => controller.abort(), this.timeoutMs);
 
     let response: Response;
     try {
@@ -156,9 +178,11 @@ export class AnthropicProvider implements ModelProvider {
         signal: controller.signal,
       });
     } catch (err) {
-      clearTimeout(timer);
+      clearTimeout(connectTimer);
       throw err;
     }
+    // 连接已建立，清除连接超时
+    clearTimeout(connectTimer);
 
     if (!response.ok) {
       const error = await response.text();
@@ -167,7 +191,6 @@ export class AnthropicProvider implements ModelProvider {
 
     const reader = response.body?.getReader();
     if (!reader) {
-      clearTimeout(timer);
       throw new Error('No response body');
     }
 
@@ -178,7 +201,7 @@ export class AnthropicProvider implements ModelProvider {
     let toolArgsBuffer = '';
     let toolCallIndex = 0;
 
-    // 流式空闲超时
+    // 空闲超时
     const streamIdleTimeout = this.timeoutMs;
     let idleTimer: ReturnType<typeof setTimeout> | null = null;
     const resetIdleTimer = () => {
@@ -245,7 +268,6 @@ export class AnthropicProvider implements ModelProvider {
         }
       }
     } finally {
-      clearTimeout(timer);
       if (idleTimer) clearTimeout(idleTimer);
       reader.releaseLock();
     }

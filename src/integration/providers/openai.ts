@@ -111,6 +111,15 @@ export class OpenAIProvider implements ModelProvider {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
 
+    // 合并外部 signal（engine 中止）和超时 signal
+    if (request.signal) {
+      if (request.signal.aborted) {
+        clearTimeout(timer);
+        throw new Error('Request aborted');
+      }
+      request.signal.addEventListener('abort', () => controller.abort(), { once: true });
+    }
+
     try {
       const response = await fetch(`${this.baseUrl}/chat/completions`, {
         method: 'POST',
@@ -143,7 +152,15 @@ export class OpenAIProvider implements ModelProvider {
     const body = { ...this.buildRequestBody(request), stream: true };
 
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+
+    // 合并外部 signal（engine 中止）和超时 signal
+    if (request.signal) {
+      if (request.signal.aborted) throw new Error('Request aborted');
+      request.signal.addEventListener('abort', () => controller.abort(), { once: true });
+    }
+
+    // 连接超时：fetch 建立连接的最大等待时间
+    const connectTimer = setTimeout(() => controller.abort(), this.timeoutMs);
 
     let response: Response;
     try {
@@ -157,10 +174,11 @@ export class OpenAIProvider implements ModelProvider {
         signal: controller.signal,
       });
     } catch (err) {
-      clearTimeout(timer);
+      clearTimeout(connectTimer);
       throw err;
     }
-    // 注意：不在这里 clearTimeout，流式读取完成后才清理
+    // 连接已建立，清除连接超时
+    clearTimeout(connectTimer);
 
     if (!response.ok) {
       const errorText = await response.text().catch(() => 'unknown error');
@@ -169,14 +187,13 @@ export class OpenAIProvider implements ModelProvider {
 
     const reader = response.body?.getReader();
     if (!reader) {
-      clearTimeout(timer);
       throw new Error('No response body');
     }
 
     const decoder = new TextDecoder();
     let buffer = '';
 
-    // 流式空闲超时：如果服务端在 timeoutMs 内没有发送数据，中断读取
+    // 空闲超时：如果服务端在 timeoutMs 内没有发送数据，中断读取
     const streamIdleTimeout = this.timeoutMs;
     let idleTimer: ReturnType<typeof setTimeout> | null = null;
     const resetIdleTimer = () => {
@@ -261,7 +278,6 @@ export class OpenAIProvider implements ModelProvider {
       }
     }
     } finally {
-      clearTimeout(timer);
       if (idleTimer) clearTimeout(idleTimer);
     }
   }
