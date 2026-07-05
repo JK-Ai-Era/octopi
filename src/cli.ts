@@ -440,6 +440,17 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
 
   if (args.port) gatewayConfig.port = args.port;
 
+  // --verbose 或配置文件中的 observability 启用 tracing
+  if (args.verbose && !gatewayConfig.trace) {
+    const os = await import('node:os');
+    const path = await import('node:path');
+    gatewayConfig.trace = {
+      outputDir: path.join(os.homedir(), '.octopi', 'traces'),
+      level: 'DEBUG',
+    };
+    console.log('[CLI] Verbose mode: tracing enabled');
+  }
+
   const gateway = new Gateway(gatewayConfig);
 
   for (const providerCfg of config.providers ?? []) {

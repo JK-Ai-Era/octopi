@@ -29,6 +29,7 @@ import type {
 } from '../../core/types.js';
 import type { AgentEvent } from '../../core/event-bus.js';
 import type { ModelProvider } from '../../core/interfaces/model-provider.js';
+import type { Observer } from '../../core/interfaces/observer.js';
 import type { SessionStore, SessionData } from '../../core/interfaces/session-store.js';
 import type { StreamingChannelAdapter } from '../protocols/http.js';
 import { CircuitBreaker } from '../../core/circuit-breaker.js';
@@ -339,6 +340,23 @@ export class Gateway {
       maxWallClockMs: budgetConfig.maxWallClockMs ?? 600_000,
     });
 
+    // 创建 ObserverBridge（如果配置了 trace）
+    let observer: Observer | undefined;
+    if (this.config.trace) {
+      const { ObserverBridge } = await import('../observability/observer-bridge.js');
+      const traceConfig = this.config.trace;
+      const os = await import('node:os');
+      const path = await import('node:path');
+      const defaultOutputDir = path.join(os.homedir(), '.octopi', 'traces');
+      observer = new ObserverBridge({
+        logger: {
+          level: this.parseTraceLevel(traceConfig.level ?? 'INFO'),
+          outputDir: traceConfig.outputDir ?? defaultOutputDir,
+        },
+      });
+      console.log(`[Gateway] Tracing enabled → ${traceConfig.outputDir ?? defaultOutputDir}`);
+    }
+
     // 创建工具映射
     const tools = new Map<string, RegisteredTool>();
     for (const tool of this.tools) {
@@ -376,6 +394,7 @@ export class Gateway {
         onContextOverflow: () => ({ action: 'compact' }),
         onSecurityViolation: (v) => ({ action: 'block', reason: v.description }),
       },
+      observer,
       systemPrompt: typeof agent.persona === 'object' ? agent.persona?.systemPrompt ?? '' : '',
     });
 
@@ -445,5 +464,15 @@ export class Gateway {
       result[name] = cb.snapshot();
     }
     return result;
+  }
+
+  /**
+   * 解析 trace 日志级别字符串为数字
+   */
+  private parseTraceLevel(level: string): number {
+    const levels: Record<string, number> = {
+      'ERROR': 1, 'WARN': 2, 'INFO': 3, 'DEBUG': 4, 'TRACE': 5,
+    };
+    return levels[level.toUpperCase()] ?? 3;
   }
 }

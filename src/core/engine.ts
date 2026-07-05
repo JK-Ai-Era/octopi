@@ -478,10 +478,19 @@ export class AgentEngine {
             type: AgentEvents.MODEL_CALL_END,
             timestamp: Date.now(),
             data: {
-              content: llmResponse.content.substring(0, 200),
+              content: llmResponse.content,
               toolCallCount: llmResponse.toolCalls?.length ?? 0,
               usage: llmResponse.usage,
+              toolCalls: llmResponse.toolCalls,
             },
+          });
+
+          // Observer: 记录模型输出（完整内容）
+          observer?.log('debug', 'model.response', {
+            content: llmResponse.content,
+            toolCalls: llmResponse.toolCalls,
+            finishReason: llmResponse.finishReason,
+            usage: llmResponse.usage,
           });
 
           // 2h. 如果有 tool_calls → 执行工具
@@ -650,7 +659,23 @@ export class AgentEngine {
               events.emit({
                 type: AgentEvents.TOOL_EXEC_END,
                 timestamp: Date.now(),
-                data: { toolCallId: call.id, toolName: call.name, hasError: !!toolResult.error },
+                data: {
+                  toolCallId: call.id,
+                  toolName: call.name,
+                  hasError: !!toolResult.error,
+                  result: toolResult.result,
+                  error: toolResult.error,
+                  durationMs: toolResult.durationMs,
+                },
+              });
+
+              // Observer: 记录工具结果（完整内容）
+              observer?.log('debug', 'tool.result', {
+                toolCallId: call.id,
+                toolName: call.name,
+                result: toolResult.result,
+                error: toolResult.error,
+                durationMs: toolResult.durationMs,
               });
               yield {
                 type: 'tool.exec.end',
@@ -671,6 +696,22 @@ export class AgentEngine {
               content: '',
               toolResults,
               timestamp: Date.now(),
+            });
+
+            // 发射消息快照（用于调试）
+            events.emit({
+              type: 'messages.snapshot',
+              timestamp: Date.now(),
+              data: {
+                messageCount: messages.length,
+                messages: messages,
+              },
+            });
+
+            // Observer: 记录完整消息历史
+            observer?.log('debug', 'messages.snapshot', {
+              messageCount: messages.length,
+              messages: messages,
             });
 
             // ── 追踪检查点指标 ──

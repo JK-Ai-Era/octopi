@@ -534,6 +534,17 @@ export interface GatewayConfig {
       maxEntries?: number;
     };
   };
+  /** 可观测性配置 */
+  trace?: {
+    /** trace 输出目录（默认 ~/.octopi/traces） */
+    outputDir?: string;
+    /** 日志级别（默认 INFO） */
+    level?: 'ERROR' | 'WARN' | 'INFO' | 'DEBUG' | 'TRACE';
+    /** 是否捕获工具参数（默认 true） */
+    captureToolArgs?: boolean;
+    /** 是否捕获工具结果（默认 true） */
+    captureToolResults?: boolean;
+  };
 }
 
 export type AgentEventListener = (event: AgentEventDetail) => void | Promise<void>;

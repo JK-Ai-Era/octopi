@@ -332,11 +332,22 @@ export function loadConfig(configPath?: string): HarnessConfig {
  * 将 HarnessConfig 转换为旧版 GatewayConfig（向后兼容）
  */
 export function toGatewayConfig(config: HarnessConfig): GatewayConfig {
-  return {
+  const gatewayConfig: GatewayConfig = {
     agents: config.agents as unknown as AgentDefinition[],
     session: config.session,
     budget: config.budget,
   };
+
+  // 传递可观测性配置
+  if (config.observability?.traceDir !== null && config.observability?.traceDir !== undefined) {
+    const levelMap: Record<number, string> = { 1: 'ERROR', 2: 'WARN', 3: 'INFO', 4: 'DEBUG', 5: 'TRACE' };
+    gatewayConfig.trace = {
+      outputDir: config.observability.traceDir,
+      level: levelMap[config.observability.level ?? 3] as any ?? 'INFO',
+    };
+  }
+
+  return gatewayConfig;
 }
 
 // ── Provider 工厂 ──
