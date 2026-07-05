@@ -369,10 +369,9 @@ export class AgentEngine {
           observer?.recordMetric('agent.context.tokens', estimatedTokens);
 
           // 2d. 触发 beforeModelCall 回调
-          const llmTools = this.buildToolDefinitions();
           let llmRequest: LLMRequest = {
             messages: llmMessages,
-            tools: llmTools.length > 0 ? llmTools : undefined,
+            tools: toolDefs.length > 0 ? toolDefs : undefined,
             model: config.model,
             temperature: config.temperature,
             signal,
