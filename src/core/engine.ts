@@ -757,10 +757,9 @@ export class AgentEngine {
             if (this.planningOnlyRetryAttempts < maxAttempts) {
               this.planningOnlyRetryAttempts++;
 
-              // 构建 steer 指令
+              // 构建 steer 指令 — 语气温和，避免模型误解为"我做错了"
               const steerInstruction = this.deps.planningRetry?.steerInstruction ??
-                'The user expects you to take action now, not just describe what you plan to do. ' +
-                'Use the available tools directly. Do not just describe what you will do — actually do it.';
+                'Continue with the task using available tools.';
 
               // 注入 steer 指令到消息历史
               if (!this.planningOnlySteerInjected) {
