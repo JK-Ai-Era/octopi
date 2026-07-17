@@ -1,5 +1,52 @@
 # Changelog
 
+## v0.5.0 (2026-07-17)
+
+### MCP Client — 连接外部工具生态
+
+新增 MCP (Model Context Protocol) Client 集成，让 Octopi Agent 能调用外部 MCP Server 提供的工具。
+
+**核心功能：**
+- 连接 MCP Server（stdio/HTTP 传输）
+- 自动发现并注册 MCP 工具到 ToolRegistry
+- 工具名命名空间管理（`{serverId}__{toolName}`）
+- 断开时自动注销工具
+- 运行时动态管理（`connectServer` / `disconnectServer`）
+- 目录自动发现（`loadMcpServersFromDir`）
+
+**架构设计（遵循三层模型）：**
+- Core 层：`McpClient` / `McpManager` 接口定义
+- Harness 层：`DefaultMcpManager` + MCP↔Octopi 格式桥接 + 目录发现
+- Integration 层：`SdkMcpClient`（包装 `@modelcontextprotocol/sdk`）
+
+**SDK API：**
+```ts
+// 构建时声明
+const { engine, runner, mcpManager } = await new AgentBuilder()
+  .model('gpt-5.5')
+  .mcp({ id: 'filesystem', transport: 'stdio', command: 'npx', args: [...] })
+  .build();
+
+// 运行时动态管理
+await mcpManager.connectServer({ id: 'db', transport: 'stdio', command: '...' });
+await mcpManager.disconnectServer('db');
+
+// 目录自动发现
+const configs = await loadMcpServersFromDir();
+for (const c of configs) await mcpManager.connectServer(c);
+```
+
+**健壮性：**
+- MCP 调用 30s 默认超时
+- callTool 兼容性结果处理
+- McpServerConfig 判别联合类型（编译时校验）
+- 工具错误内容透传
+
+**依赖：** `@modelcontextprotocol/sdk ^1.29.0`
+**测试：** 41 个 MCP 测试（bridge 16 + manager 17 + discovery 8）
+
+---
+
 ## v0.4.0 (2026-06-27)
 
 ### 项目定位调整

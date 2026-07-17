@@ -78,6 +78,25 @@ In most agent frameworks, a session task runs entirely within a single LLM call 
 
 Just as an octopus's intelligence is not concentrated solely in its brain but distributed across ganglia in each arm — each capable of independent response — intelligence in Octopi is not a single point but a distributed network. We plan to embed more small autonomous agents at additional logic nodes in the future, making the entire architecture more flexible and powerful.
 
+### MCP — Connect to the tool ecosystem
+
+Octopi supports [Model Context Protocol (MCP)](https://modelcontextprotocol.io/), the open standard for connecting AI applications to external tools and data. Any MCP Server — filesystem, GitHub, databases, Sentry, and hundreds more — can be connected to Octopi with a single line of code:
+
+```ts
+const { engine, runner, mcpManager } = await new AgentBuilder()
+  .model('gpt-5.5')
+  .mcp({
+    id: 'filesystem',
+    transport: 'stdio',
+    command: 'npx',
+    args: ['-y', '@modelcontextprotocol/server-filesystem', '/data'],
+  })
+  .build();
+// Agent can now use filesystem__read_file, filesystem__write_file, etc.
+```
+
+MCP tools are automatically namespaced (`{serverId}__{toolName}`), support runtime dynamic management, and can be auto-discovered from `~/.octopi/mcp-servers/`.
+
 ---
 
 ## Architecture: Three-Layer Onion
@@ -161,6 +180,7 @@ Protocol adapters, storage backends, observability.
 | `ChaosProvider` | Fault injection: empty response, timeout, rate-limit, malformed |
 | `ScenarioRunner` | E2E scenario testing with built-in assertions |
 | `ScenarioComposer` | Compose, extend, parameterize test scenarios |
+| `SdkMcpClient` | MCP Client (connect to external MCP Servers via stdio/HTTP) |
 
 ---
 

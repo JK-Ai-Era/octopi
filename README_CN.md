@@ -78,6 +78,25 @@ Persona、技能、操作指令——全部以 Markdown 文件定义。没有 sc
 
 就像八爪鱼的智能不只集中在大脑，而是分布在全身各条触手上——每条触手都有自己的神经节，能独立做出反应。Octopi 的架构中，智能不是单点的，而是分布式的。未来我们还计划在更多逻辑节点嵌入小型自治智能体，让整个架构更灵活、更强大。
 
+### MCP — 接入工具生态
+
+Octopi 支持 [MCP (Model Context Protocol)](https://modelcontextprotocol.io/)，连接 AI 应用与外部工具的开放标准。任何 MCP Server——文件系统、GitHub、数据库、Sentry 等——一行代码即可接入：
+
+```ts
+const { engine, runner, mcpManager } = await new AgentBuilder()
+  .model('gpt-5.5')
+  .mcp({
+    id: 'filesystem',
+    transport: 'stdio',
+    command: 'npx',
+    args: ['-y', '@modelcontextprotocol/server-filesystem', '/data'],
+  })
+  .build();
+// Agent 现在可以使用 filesystem__read_file、filesystem__write_file 等工具
+```
+
+MCP 工具自动命名空间管理（`{serverId}__{toolName}`），支持运行时动态管理，支持从 `~/.octopi/mcp-servers/` 目录自动发现。
+
 ---
 
 ## 架构：三层洋葱
