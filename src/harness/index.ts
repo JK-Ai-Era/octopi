@@ -82,3 +82,7 @@ export type { BuiltAgent } from './config-bridge.js';
 // ── Multi-Agent ──
 export { DefaultAgentRegistry, AgentSwarm, RoundRobinStrategy, CapabilityStrategy, PipelineStrategy, SwarmEvents, AgentProcess, spawnAgentProcess, forkAgentProcess, AgentProcessEvents } from './multi-agent/index.js';
 export type { SwarmTopology, SwarmConfig, SwarmAgent, SwarmTask, OrchestrationStrategy, AgentProcessState, AgentProcessResult, AgentProcessAnnounce, AgentProcessConfig } from './multi-agent/index.js';
+
+// ── MCP Client ──
+export { DefaultMcpManager, mcpToolToOctopiDefinition, extractMcpToolResult, splitNamespacedToolName, MCP_NAMESPACE_SEP } from './mcp/index.js';
+export type { McpClientFactory } from './mcp/index.js';

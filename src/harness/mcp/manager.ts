@@ -1,0 +1,178 @@
+/**
+ * MCP Manager — 管理 MCP Server 连接和工具注册
+ *
+ * 职责：
+ * - 连接/断开 MCP Server
+ * - 自动发现 MCP 工具并注册到 ToolRegistry
+ * - 断开时自动注销工具
+ * - 提供工具名称命名空间管理
+ *
+ * 设计原则：
+ * - 每个 MCP Server 的工具以 `{serverId}__{toolName}` 格式注册
+ * - 避免不同 Server 的同名工具冲突
+ * - 连接失败不影响已有的其他连接
+ */
+
+import type {
+  McpServerConfig,
+  McpToolDefinition,
+  McpClient,
+  McpServerCapabilities,
+} from '../../core/interfaces/mcp-client.js';
+import type { RegisteredTool, ToolExecutionContext } from '../../core/types.js';
+import type { ToolRegistry } from '../tools/registry.js';
+import { mcpToolToOctopiDefinition, extractMcpToolResult, splitNamespacedToolName } from './bridge.js';
+
+/** 已连接的 MCP Server 信息 */
+interface ConnectedServer {
+  client: McpClient;
+  /** 该 Server 注册的命名空间工具名列表 */
+  registeredTools: string[];
+  capabilities: McpServerCapabilities;
+}
+
+/**
+ * McpManager 实现
+ *
+ * 使用方式：
+ * ```ts
+ * const manager = new McpManager(toolRegistry, clientFactory);
+ * await manager.connectServer({
+ *   id: 'filesystem',
+ *   transport: 'stdio',
+ *   command: 'npx',
+ *   args: ['-y', '@modelcontextprotocol/server-filesystem', '/path'],
+ * });
+ * // 现在 ToolRegistry 中有 filesystem__read_file 等工具
+ * ```
+ */
+export class DefaultMcpManager {
+  private servers = new Map<string, ConnectedServer>();
+
+  constructor(
+    private toolRegistry: ToolRegistry,
+    private clientFactory: McpClientFactory,
+  ) {}
+
+  async connectServer(config: McpServerConfig): Promise<void> {
+    if (this.servers.has(config.id)) {
+      throw new Error(`MCP Server "${config.id}" already connected. Disconnect first.`);
+    }
+
+    const client = this.clientFactory(config);
+    let capabilities: McpServerCapabilities;
+
+    try {
+      capabilities = await client.connect();
+    } catch (err) {
+      await client.close().catch(() => {});
+      throw new Error(`Failed to connect MCP Server "${config.id}": ${err instanceof Error ? err.message : String(err)}`);
+    }
+
+    const registeredTools: string[] = [];
+
+    // 发现并注册工具
+    if (capabilities.tools) {
+      try {
+        const tools = await client.listTools();
+        for (const mcpTool of tools) {
+          const toolName = this.registerMcpTool(config.id, mcpTool, client);
+          registeredTools.push(toolName);
+        }
+      } catch (err) {
+        // 工具发现失败不阻塞连接，记录但继续
+        console.warn(`[McpManager] Failed to list tools from "${config.id}": ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
+    this.servers.set(config.id, { client, registeredTools, capabilities });
+  }
+
+  async disconnectServer(id: string): Promise<void> {
+    const server = this.servers.get(id);
+    if (!server) return;
+
+    // 注销所有工具
+    for (const toolName of server.registeredTools) {
+      this.toolRegistry.unregister(toolName);
+    }
+
+    await server.client.close().catch(() => {});
+    this.servers.delete(id);
+  }
+
+  listServers(): string[] {
+    return Array.from(this.servers.keys());
+  }
+
+  listServerTools(id: string): McpToolDefinition[] {
+    const server = this.servers.get(id);
+    if (!server) return [];
+
+    // 从注册的工具名反推 MCP 工具信息
+    const result: McpToolDefinition[] = [];
+    for (const namespaced of server.registeredTools) {
+      const split = splitNamespacedToolName(namespaced);
+      if (!split) continue;
+      const tool = this.toolRegistry.get(namespaced);
+      if (!tool) continue;
+      result.push({
+        name: split.toolName,
+        description: tool.definition.description,
+        inputSchema: {
+          type: 'object',
+          properties: Object.fromEntries(
+            Object.entries(tool.definition.parameters).map(([k, v]) => [k, { type: v.type, description: v.description }]),
+          ),
+          required: Object.entries(tool.definition.parameters)
+            .filter(([, v]) => v.required)
+            .map(([k]) => k),
+        },
+      });
+    }
+    return result;
+  }
+
+  async disconnectAll(): Promise<void> {
+    const ids = Array.from(this.servers.keys());
+    await Promise.all(ids.map((id) => this.disconnectServer(id)));
+  }
+
+  /** 获取已连接 Server 的客户端（用于高级操作如读取资源） */
+  getClient(id: string): McpClient | undefined {
+    return this.servers.get(id)?.client;
+  }
+
+  // ── 内部方法 ──
+
+  private registerMcpTool(serverId: string, mcpTool: McpToolDefinition, client: McpClient): string {
+    const definition = mcpToolToOctopiDefinition(mcpTool, serverId);
+    const toolName = definition.name;
+
+    const registeredTool: RegisteredTool = {
+      definition,
+      handler: async (_args: Record<string, unknown>, _ctx: ToolExecutionContext) => {
+        const result = await client.callTool(mcpTool.name, _args);
+        if (result.isError) {
+          const errorText = result.content
+            .filter((c) => c.type === 'text')
+            .map((c) => (c as { type: 'text'; text: string }).text)
+            .join('\n');
+          throw new Error(`MCP tool "${mcpTool.name}" error: ${errorText}`);
+        }
+        return extractMcpToolResult(result);
+      },
+    };
+
+    this.toolRegistry.register(registeredTool);
+    return toolName;
+  }
+}
+
+/**
+ * MCP Client 工厂函数类型
+ *
+ * 根据配置创建 McpClient 实例。
+ * Harness 层不直接依赖 MCP SDK，通过工厂注入。
+ */
+export type McpClientFactory = (config: McpServerConfig) => McpClient;

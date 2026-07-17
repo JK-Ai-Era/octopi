@@ -12,3 +12,6 @@ export { InMemorySessionStore } from './storage/memory.js';
 // ── Observability ──
 export { NoopObserver } from './observability/noop-observer.js';
 export { LogObserver } from './observability/log-observer.js';
+
+// ── MCP ──
+export { SdkMcpClient, createSdkMcpClient } from './mcp/index.js';

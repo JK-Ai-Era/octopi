@@ -1,0 +1,255 @@
+/**
+ * MCP Manager 测试 — 连接管理和工具注册
+ */
+
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { DefaultMcpManager } from '../../../src/harness/mcp/manager.js';
+import type { McpClientFactory } from '../../../src/harness/mcp/manager.js';
+import type { McpClient, McpServerCapabilities, McpToolDefinition, McpToolResult } from '../../../src/core/interfaces/mcp-client.js';
+import type { McpServerConfig } from '../../../src/core/interfaces/mcp-client.js';
+import { ToolRegistry } from '../../../src/harness/tools/registry.js';
+
+// ── Mock McpClient ──
+
+function createMockMcpClient(
+  tools: McpToolDefinition[] = [],
+  capabilities: McpServerCapabilities = { tools: {} },
+): McpClient {
+  let _connected = false;
+  return {
+    async connect() {
+      _connected = true;
+      return capabilities;
+    },
+    async listTools() {
+      return tools;
+    },
+    async callTool(name: string, _args: Record<string, unknown>): Promise<McpToolResult> {
+      return { content: [{ type: 'text', text: `result from ${name}` }] };
+    },
+    async listResources() { return []; },
+    async readResource() { return null; },
+    async listPrompts() { return []; },
+    async getPrompt() { return null; },
+    async close() { _connected = false; },
+    get connected() { return _connected; },
+    get serverInfo() { return _connected ? { name: 'test-server', version: '1.0.0' } : undefined; },
+  };
+}
+
+// ── Tests ──
+
+describe('DefaultMcpManager', () => {
+  let toolRegistry: ToolRegistry;
+  let mockClient: McpClient;
+  let factory: McpClientFactory;
+  let manager: DefaultMcpManager;
+
+  const defaultConfig: McpServerConfig = {
+    id: 'test-server',
+    transport: 'stdio',
+    command: 'echo',
+  };
+
+  beforeEach(() => {
+    toolRegistry = new ToolRegistry();
+    mockClient = createMockMcpClient([
+      {
+        name: 'read_file',
+        description: 'Read a file',
+        inputSchema: {
+          type: 'object',
+          properties: { path: { type: 'string', description: 'File path' } },
+          required: ['path'],
+        },
+      },
+      {
+        name: 'list_dir',
+        description: 'List directory contents',
+        inputSchema: {
+          type: 'object',
+          properties: { dir: { type: 'string', description: 'Directory path' } },
+        },
+      },
+    ]);
+    factory = () => mockClient;
+    manager = new DefaultMcpManager(toolRegistry, factory);
+  });
+
+  describe('connectServer', () => {
+    it('should connect and register tools', async () => {
+      await manager.connectServer(defaultConfig);
+
+      expect(manager.listServers()).toEqual(['test-server']);
+
+      const tools = toolRegistry.listForAgent('agent-1');
+      const names = tools.map((t) => t.name);
+      expect(names).toContain('test-server__read_file');
+      expect(names).toContain('test-server__list_dir');
+    });
+
+    it('should throw on duplicate connection', async () => {
+      await manager.connectServer(defaultConfig);
+      await expect(manager.connectServer(defaultConfig)).rejects.toThrow('already connected');
+    });
+
+    it('should handle connection failure', async () => {
+      const failFactory: McpClientFactory = () => ({
+        ...createMockMcpClient(),
+        async connect() { throw new Error('Connection refused'); },
+      });
+      const failManager = new DefaultMcpManager(toolRegistry, failFactory);
+
+      await expect(failManager.connectServer(defaultConfig)).rejects.toThrow('Failed to connect');
+    });
+
+    it('should handle tools without capabilities', async () => {
+      const noToolClient = createMockMcpClient([], {});
+      const noToolFactory: McpClientFactory = () => noToolClient;
+      const noToolManager = new DefaultMcpManager(toolRegistry, noToolFactory);
+
+      await noToolManager.connectServer(defaultConfig);
+
+      expect(noToolManager.listServers()).toEqual(['test-server']);
+      // No tools registered
+      const tools = toolRegistry.listForAgent('agent-1');
+      expect(tools).toHaveLength(0);
+    });
+  });
+
+  describe('disconnectServer', () => {
+    it('should disconnect and unregister tools', async () => {
+      await manager.connectServer(defaultConfig);
+      expect(toolRegistry.listForAgent('agent-1')).toHaveLength(2);
+
+      await manager.disconnectServer('test-server');
+
+      expect(manager.listServers()).toHaveLength(0);
+      expect(toolRegistry.listForAgent('agent-1')).toHaveLength(0);
+    });
+
+    it('should handle disconnect of non-existent server', async () => {
+      await manager.disconnectServer('non-existent');
+      // Should not throw
+    });
+  });
+
+  describe('callTool through registry', () => {
+    it('should call MCP tool through ToolRegistry', async () => {
+      await manager.connectServer(defaultConfig);
+
+      // 注册一个 agent 级工具来测试
+      const result = await toolRegistry.execute(
+        'test-server__read_file',
+        { path: '/test.txt' },
+        { sessionId: 's1', agentId: 'a1', messages: [] },
+      );
+
+      expect(result).toBe('result from read_file');
+    });
+
+    it('should propagate MCP tool errors', async () => {
+      const errorClient = createMockMcpClient([
+        {
+          name: 'fail_tool',
+          description: 'Always fails',
+          inputSchema: { type: 'object' },
+        },
+      ]);
+      // Override callTool to return error
+      errorClient.callTool = async (): Promise<McpToolResult> => ({
+        content: [{ type: 'text', text: 'Permission denied' }],
+        isError: true,
+      });
+
+      const errorFactory: McpClientFactory = () => errorClient;
+      const errorManager = new DefaultMcpManager(toolRegistry, errorFactory);
+
+      await errorManager.connectServer({ ...defaultConfig, id: 'error-server' });
+
+      await expect(
+        toolRegistry.execute(
+          'error-server__fail_tool',
+          {},
+          { sessionId: 's1', agentId: 'a1', messages: [] },
+        ),
+      ).rejects.toThrow('Permission denied');
+    });
+  });
+
+  describe('listServerTools', () => {
+    it('should return tools for connected server', async () => {
+      await manager.connectServer(defaultConfig);
+
+      const tools = manager.listServerTools('test-server');
+      expect(tools).toHaveLength(2);
+      expect(tools[0].name).toBe('read_file');
+      expect(tools[1].name).toBe('list_dir');
+    });
+
+    it('should return empty for non-existent server', () => {
+      expect(manager.listServerTools('non-existent')).toEqual([]);
+    });
+  });
+
+  describe('disconnectAll', () => {
+    it('should disconnect all servers', async () => {
+      const client1 = createMockMcpClient([{ name: 'tool1', inputSchema: { type: 'object' } }]);
+      const client2 = createMockMcpClient([{ name: 'tool2', inputSchema: { type: 'object' } }]);
+
+      let callCount = 0;
+      const multiFactory: McpClientFactory = () => {
+        callCount++;
+        return callCount === 1 ? client1 : client2;
+      };
+
+      const multiManager = new DefaultMcpManager(toolRegistry, multiFactory);
+      await multiManager.connectServer({ id: 'srv1', transport: 'stdio', command: 'echo' });
+      await multiManager.connectServer({ id: 'srv2', transport: 'stdio', command: 'echo' });
+
+      expect(multiManager.listServers()).toHaveLength(2);
+      expect(toolRegistry.listForAgent('a1')).toHaveLength(2);
+
+      await multiManager.disconnectAll();
+
+      expect(multiManager.listServers()).toHaveLength(0);
+      expect(toolRegistry.listForAgent('a1')).toHaveLength(0);
+    });
+  });
+
+  describe('getClient', () => {
+    it('should return client for connected server', async () => {
+      await manager.connectServer(defaultConfig);
+      const client = manager.getClient('test-server');
+      expect(client).toBeDefined();
+      expect(client!.connected).toBe(true);
+    });
+
+    it('should return undefined for non-existent server', () => {
+      expect(manager.getClient('non-existent')).toBeUndefined();
+    });
+  });
+
+  describe('multiple servers with same tool names', () => {
+    it('should namespace tools to avoid conflicts', async () => {
+      const tools: McpToolDefinition[] = [
+        { name: 'search', description: 'Server A search', inputSchema: { type: 'object' } },
+      ];
+
+      let serverId = '';
+      const factoryA: McpClientFactory = (config) => {
+        serverId = config.id;
+        return createMockMcpClient(tools);
+      };
+
+      const mgr = new DefaultMcpManager(toolRegistry, factoryA);
+      await mgr.connectServer({ id: 'server-a', transport: 'stdio', command: 'echo' });
+      await mgr.connectServer({ id: 'server-b', transport: 'stdio', command: 'echo' });
+
+      const allTools = toolRegistry.listForAgent('a1');
+      const names = allTools.map((t) => t.name);
+      expect(names).toContain('server-a__search');
+      expect(names).toContain('server-b__search');
+    });
+  });
+});

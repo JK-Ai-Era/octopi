@@ -109,3 +109,15 @@ export type {
   TurnSummary,
   RecoveryAction,
 } from './task-supervisor.js';
+
+export type {
+  McpServerConfig,
+  McpToolDefinition,
+  McpToolResult,
+  McpContentBlock,
+  McpResourceDefinition,
+  McpPromptDefinition,
+  McpServerCapabilities,
+  McpClient,
+  McpManager,
+} from './mcp-client.js';
