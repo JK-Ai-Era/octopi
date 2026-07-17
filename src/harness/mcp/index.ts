@@ -12,3 +12,4 @@ export {
   splitNamespacedToolName,
   MCP_NAMESPACE_SEP,
 } from './bridge.js';
+export { loadMcpServersFromDir, DEFAULT_MCP_SERVERS_DIR } from './discovery.js';

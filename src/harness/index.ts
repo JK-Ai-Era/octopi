@@ -84,5 +84,5 @@ export { DefaultAgentRegistry, AgentSwarm, RoundRobinStrategy, CapabilityStrateg
 export type { SwarmTopology, SwarmConfig, SwarmAgent, SwarmTask, OrchestrationStrategy, AgentProcessState, AgentProcessResult, AgentProcessAnnounce, AgentProcessConfig } from './multi-agent/index.js';
 
 // ── MCP Client ──
-export { DefaultMcpManager, mcpToolToOctopiDefinition, extractMcpToolResult, splitNamespacedToolName, MCP_NAMESPACE_SEP } from './mcp/index.js';
+export { DefaultMcpManager, mcpToolToOctopiDefinition, extractMcpToolResult, splitNamespacedToolName, MCP_NAMESPACE_SEP, loadMcpServersFromDir, DEFAULT_MCP_SERVERS_DIR } from './mcp/index.js';
 export type { McpClientFactory, McpManagerCallbacks } from './mcp/index.js';

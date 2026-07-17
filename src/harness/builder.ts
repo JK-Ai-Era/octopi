@@ -74,6 +74,9 @@ import { loadPersona, composePersonas } from './persona/loader.js';
 import { DefaultContextEngine } from './context/default-context-engine.js';
 import { SessionAwareRunner } from './runner.js';
 import type { SessionAwareRunnerConfig } from './runner.js';
+import { DefaultMcpManager } from './mcp/manager.js';
+import type { McpManagerCallbacks, McpClientFactory } from './mcp/manager.js';
+import type { McpServerConfig, McpManager } from '../core/interfaces/mcp-client.js';
 
 // ── 默认实现 ──
 
@@ -203,6 +206,9 @@ export class AgentBuilder {
   private _store?: SessionStore;
   private _runnerConfig?: SessionAwareRunnerConfig;
 
+  // MCP 配置
+  private _mcpConfigs: import('../core/interfaces/mcp-client.js').McpServerConfig[] = [];
+
   // ── Core 组件 ──
 
   /** 设置模型提供者 */
@@ -234,6 +240,30 @@ export class AgentBuilder {
   /** 批量注册工具 */
   tools(...tools: RegisteredTool[]): this {
     for (const t of tools) this.tool(t);
+    return this;
+  }
+
+  /**
+   * 配置 MCP Server 连接
+   *
+   * 构建时自动连接，工具注册到 ToolRegistry。
+   * 支持多次调用，连接多个 MCP Server。
+   *
+   * @example
+   * ```ts
+   * const { engine, runner } = await new AgentBuilder()
+   *   .model('gpt-5.5')
+   *   .mcp({
+   *     id: 'filesystem',
+   *     transport: 'stdio',
+   *     command: 'npx',
+   *     args: ['-y', '@modelcontextprotocol/server-filesystem', '/data'],
+   *   })
+   *   .build();
+   * ```
+   */
+  mcp(config: import('../core/interfaces/mcp-client.js').McpServerConfig): this {
+    this._mcpConfigs.push(config);
     return this;
   }
 
@@ -374,11 +404,15 @@ export class AgentBuilder {
   /**
    * 构建 AgentEngine + SessionAwareRunner
    */
-  async build(): Promise<{ engine: AgentEngine; runner: SessionAwareRunner }> {
+  async build(): Promise<{ engine: AgentEngine; runner: SessionAwareRunner; mcpManager: McpManager }> {
     const engine = await this.buildEngine();
     const store = this._store ?? new InMemorySessionStore();
     const runner = new SessionAwareRunner(engine, store, this._runnerConfig);
-    return { engine, runner };
+
+    // 创建 McpManager
+    const mcpManager = await this.buildMcpManager();
+
+    return { engine, runner, mcpManager };
   }
 
   /**
@@ -472,6 +506,37 @@ export class AgentBuilder {
   }
 
   /**
+   * 构建 McpManager 并连接所有配置的 MCP Server
+   */
+  private async buildMcpManager(): Promise<McpManager> {
+    const { createSdkMcpClient } = await import('../integration/mcp/sdk-client.js');
+
+    // 创建回调，桥接到 this._tools
+    const callbacks: McpManagerCallbacks = {
+      registerTool: (tool) => {
+        this._tools.set(tool.definition.name, tool);
+      },
+      unregisterTool: (name) => this._tools.delete(name),
+      getTool: (name) => this._tools.get(name),
+    };
+
+    const clientFactory: McpClientFactory = (config: McpServerConfig) => createSdkMcpClient(config);
+    const manager = new DefaultMcpManager(callbacks, clientFactory);
+
+    // 连接所有配置的 MCP Server
+    for (const config of this._mcpConfigs) {
+      try {
+        await manager.connectServer(config);
+      } catch (err) {
+        console.error(`[AgentBuilder] Failed to connect MCP Server "${config.id}": ${err instanceof Error ? err.message : String(err)}`);
+        throw err;
+      }
+    }
+
+    return manager;
+  }
+
+  /**
    * 生成默认 systemPrompt，包含可用工具说明
    */
   private buildDefaultSystemPrompt(): string {
@@ -510,7 +575,8 @@ export async function createAgent(config: {
   tools?: RegisteredTool[];
   store?: SessionStore;
   budget?: Partial<IterationBudgetConfig>;
-}): Promise<{ engine: AgentEngine; runner: SessionAwareRunner }> {
+  mcp?: McpServerConfig[];
+}): Promise<{ engine: AgentEngine; runner: SessionAwareRunner; mcpManager: McpManager }> {
   const builder = new AgentBuilder()
     .model(config.model);
 
@@ -518,6 +584,9 @@ export async function createAgent(config: {
   if (config.tools) builder.tools(...config.tools);
   if (config.store) builder.store(config.store);
   if (config.budget) builder.budget(config.budget);
+  if (config.mcp) {
+    for (const mcpConfig of config.mcp) builder.mcp(mcpConfig);
+  }
 
   return builder.build();
 }
