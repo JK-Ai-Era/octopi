@@ -85,4 +85,4 @@ export type { SwarmTopology, SwarmConfig, SwarmAgent, SwarmTask, OrchestrationSt
 
 // ── MCP Client ──
 export { DefaultMcpManager, mcpToolToOctopiDefinition, extractMcpToolResult, splitNamespacedToolName, MCP_NAMESPACE_SEP } from './mcp/index.js';
-export type { McpClientFactory } from './mcp/index.js';
+export type { McpClientFactory, McpManagerCallbacks } from './mcp/index.js';

@@ -11,6 +11,7 @@
  * - 每个 MCP Server 的工具以 `{serverId}__{toolName}` 格式注册
  * - 避免不同 Server 的同名工具冲突
  * - 连接失败不影响已有的其他连接
+ * - 通过回调注入 ToolRegistry 操作，遵循依赖倒置
  */
 
 import type {
@@ -20,8 +21,22 @@ import type {
   McpServerCapabilities,
 } from '../../core/interfaces/mcp-client.js';
 import type { RegisteredTool, ToolExecutionContext } from '../../core/types.js';
-import type { ToolRegistry } from '../tools/registry.js';
 import { mcpToolToOctopiDefinition, extractMcpToolResult, splitNamespacedToolName } from './bridge.js';
+
+/**
+ * MCP Manager 依赖注入接口
+ *
+ * McpManager 不直接依赖 ToolRegistry，通过回调注册/注销工具。
+ * 遵循 Harness 层规则：子模块不直接 import 兄弟模块。
+ */
+export interface McpManagerCallbacks {
+  /** 注册工具到 ToolRegistry */
+  registerTool: (tool: RegisteredTool) => void;
+  /** 从 ToolRegistry 注销工具 */
+  unregisterTool: (name: string) => boolean;
+  /** 从 ToolRegistry 获取工具 */
+  getTool: (name: string) => RegisteredTool | undefined;
+}
 
 /** 已连接的 MCP Server 信息 */
 interface ConnectedServer {
@@ -36,7 +51,14 @@ interface ConnectedServer {
  *
  * 使用方式：
  * ```ts
- * const manager = new McpManager(toolRegistry, clientFactory);
+ * const manager = new DefaultMcpManager(
+ *   {
+ *     registerTool: (t) => toolRegistry.register(t),
+ *     unregisterTool: (n) => toolRegistry.unregister(n),
+ *     getTool: (n) => toolRegistry.get(n),
+ *   },
+ *   createSdkMcpClient,
+ * );
  * await manager.connectServer({
  *   id: 'filesystem',
  *   transport: 'stdio',
@@ -50,7 +72,7 @@ export class DefaultMcpManager {
   private servers = new Map<string, ConnectedServer>();
 
   constructor(
-    private toolRegistry: ToolRegistry,
+    private callbacks: McpManagerCallbacks,
     private clientFactory: McpClientFactory,
   ) {}
 
@@ -94,7 +116,7 @@ export class DefaultMcpManager {
 
     // 注销所有工具
     for (const toolName of server.registeredTools) {
-      this.toolRegistry.unregister(toolName);
+      this.callbacks.unregisterTool(toolName);
     }
 
     await server.client.close().catch(() => {});
@@ -114,7 +136,7 @@ export class DefaultMcpManager {
     for (const namespaced of server.registeredTools) {
       const split = splitNamespacedToolName(namespaced);
       if (!split) continue;
-      const tool = this.toolRegistry.get(namespaced);
+      const tool = this.callbacks.getTool(namespaced);
       if (!tool) continue;
       result.push({
         name: split.toolName,
@@ -151,8 +173,8 @@ export class DefaultMcpManager {
 
     const registeredTool: RegisteredTool = {
       definition,
-      handler: async (_args: Record<string, unknown>, _ctx: ToolExecutionContext) => {
-        const result = await client.callTool(mcpTool.name, _args);
+      handler: async (args: Record<string, unknown>, _ctx: ToolExecutionContext) => {
+        const result = await client.callTool(mcpTool.name, args);
         if (result.isError) {
           const errorText = result.content
             .filter((c) => c.type === 'text')
@@ -164,7 +186,7 @@ export class DefaultMcpManager {
       },
     };
 
-    this.toolRegistry.register(registeredTool);
+    this.callbacks.registerTool(registeredTool);
     return toolName;
   }
 }

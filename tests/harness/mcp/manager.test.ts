@@ -2,9 +2,9 @@
  * MCP Manager 测试 — 连接管理和工具注册
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { DefaultMcpManager } from '../../../src/harness/mcp/manager.js';
-import type { McpClientFactory } from '../../../src/harness/mcp/manager.js';
+import type { McpClientFactory, McpManagerCallbacks } from '../../../src/harness/mcp/manager.js';
 import type { McpClient, McpServerCapabilities, McpToolDefinition, McpToolResult } from '../../../src/core/interfaces/mcp-client.js';
 import type { McpServerConfig } from '../../../src/core/interfaces/mcp-client.js';
 import { ToolRegistry } from '../../../src/harness/tools/registry.js';
@@ -37,6 +37,16 @@ function createMockMcpClient(
   };
 }
 
+// ── Helpers ──
+
+function createCallbacks(registry: ToolRegistry): McpManagerCallbacks {
+  return {
+    registerTool: (t) => registry.register(t),
+    unregisterTool: (n) => registry.unregister(n),
+    getTool: (n) => registry.get(n),
+  };
+}
+
 // ── Tests ──
 
 describe('DefaultMcpManager', () => {
@@ -44,6 +54,7 @@ describe('DefaultMcpManager', () => {
   let mockClient: McpClient;
   let factory: McpClientFactory;
   let manager: DefaultMcpManager;
+  let callbacks: McpManagerCallbacks;
 
   const defaultConfig: McpServerConfig = {
     id: 'test-server',
@@ -53,6 +64,7 @@ describe('DefaultMcpManager', () => {
 
   beforeEach(() => {
     toolRegistry = new ToolRegistry();
+    callbacks = createCallbacks(toolRegistry);
     mockClient = createMockMcpClient([
       {
         name: 'read_file',
@@ -73,7 +85,7 @@ describe('DefaultMcpManager', () => {
       },
     ]);
     factory = () => mockClient;
-    manager = new DefaultMcpManager(toolRegistry, factory);
+    manager = new DefaultMcpManager(callbacks, factory);
   });
 
   describe('connectServer', () => {
@@ -98,7 +110,7 @@ describe('DefaultMcpManager', () => {
         ...createMockMcpClient(),
         async connect() { throw new Error('Connection refused'); },
       });
-      const failManager = new DefaultMcpManager(toolRegistry, failFactory);
+      const failManager = new DefaultMcpManager(callbacks, failFactory);
 
       await expect(failManager.connectServer(defaultConfig)).rejects.toThrow('Failed to connect');
     });
@@ -106,12 +118,11 @@ describe('DefaultMcpManager', () => {
     it('should handle tools without capabilities', async () => {
       const noToolClient = createMockMcpClient([], {});
       const noToolFactory: McpClientFactory = () => noToolClient;
-      const noToolManager = new DefaultMcpManager(toolRegistry, noToolFactory);
+      const noToolManager = new DefaultMcpManager(callbacks, noToolFactory);
 
       await noToolManager.connectServer(defaultConfig);
 
       expect(noToolManager.listServers()).toEqual(['test-server']);
-      // No tools registered
       const tools = toolRegistry.listForAgent('agent-1');
       expect(tools).toHaveLength(0);
     });
@@ -130,7 +141,6 @@ describe('DefaultMcpManager', () => {
 
     it('should handle disconnect of non-existent server', async () => {
       await manager.disconnectServer('non-existent');
-      // Should not throw
     });
   });
 
@@ -138,7 +148,6 @@ describe('DefaultMcpManager', () => {
     it('should call MCP tool through ToolRegistry', async () => {
       await manager.connectServer(defaultConfig);
 
-      // 注册一个 agent 级工具来测试
       const result = await toolRegistry.execute(
         'test-server__read_file',
         { path: '/test.txt' },
@@ -156,14 +165,13 @@ describe('DefaultMcpManager', () => {
           inputSchema: { type: 'object' },
         },
       ]);
-      // Override callTool to return error
       errorClient.callTool = async (): Promise<McpToolResult> => ({
         content: [{ type: 'text', text: 'Permission denied' }],
         isError: true,
       });
 
       const errorFactory: McpClientFactory = () => errorClient;
-      const errorManager = new DefaultMcpManager(toolRegistry, errorFactory);
+      const errorManager = new DefaultMcpManager(callbacks, errorFactory);
 
       await errorManager.connectServer({ ...defaultConfig, id: 'error-server' });
 
@@ -203,7 +211,7 @@ describe('DefaultMcpManager', () => {
         return callCount === 1 ? client1 : client2;
       };
 
-      const multiManager = new DefaultMcpManager(toolRegistry, multiFactory);
+      const multiManager = new DefaultMcpManager(callbacks, multiFactory);
       await multiManager.connectServer({ id: 'srv1', transport: 'stdio', command: 'echo' });
       await multiManager.connectServer({ id: 'srv2', transport: 'stdio', command: 'echo' });
 
@@ -236,13 +244,9 @@ describe('DefaultMcpManager', () => {
         { name: 'search', description: 'Server A search', inputSchema: { type: 'object' } },
       ];
 
-      let serverId = '';
-      const factoryA: McpClientFactory = (config) => {
-        serverId = config.id;
-        return createMockMcpClient(tools);
-      };
+      const sharedFactory: McpClientFactory = () => createMockMcpClient(tools);
 
-      const mgr = new DefaultMcpManager(toolRegistry, factoryA);
+      const mgr = new DefaultMcpManager(callbacks, sharedFactory);
       await mgr.connectServer({ id: 'server-a', transport: 'stdio', command: 'echo' });
       await mgr.connectServer({ id: 'server-b', transport: 'stdio', command: 'echo' });
 
