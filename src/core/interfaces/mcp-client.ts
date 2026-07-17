@@ -12,21 +12,28 @@
 
 // ── MCP Server 配置 ──
 
-/** MCP Server 连接配置 */
-export interface McpServerConfig {
-  /** 唯一标识（用于管理连接和工具命名空间） */
+/** stdio 传输配置 */
+export interface McpStdioConfig {
   id: string;
-  /** 传输类型 */
-  transport: 'stdio' | 'http';
-  /** stdio 传输配置 */
-  command?: string;
+  transport: 'stdio';
+  /** 可执行命令（必填） */
+  command: string;
   args?: string[];
   env?: Record<string, string>;
   cwd?: string;
-  /** http 传输配置 */
-  url?: string;
+}
+
+/** HTTP 传输配置 */
+export interface McpHttpConfig {
+  id: string;
+  transport: 'http';
+  /** Server URL（必填） */
+  url: string;
   headers?: Record<string, string>;
 }
+
+/** MCP Server 连接配置（判别联合） */
+export type McpServerConfig = McpStdioConfig | McpHttpConfig;
 
 // ── MCP 原语类型 ──
 
@@ -146,4 +153,7 @@ export interface McpManager {
 
   /** 断开所有连接 */
   disconnectAll(): Promise<void>;
+
+  /** 获取已连接 Server 的底层客户端（用于读取资源等高级操作） */
+  getClient(id: string): McpClient | undefined;
 }

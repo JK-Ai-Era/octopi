@@ -238,7 +238,90 @@ describe('DefaultMcpManager', () => {
     });
   });
 
-  describe('multiple servers with same tool names', () => {
+  describe('tool call timeout', () => {
+    it('should timeout on slow MCP tool', async () => {
+      const slowClient = createMockMcpClient([
+        { name: 'slow_tool', description: 'Very slow', inputSchema: { type: 'object' } },
+      ]);
+      // 设置很短的工具超时
+      const origFactory = factory;
+      const shortTimeoutFactory: McpClientFactory = (config) => {
+        const client = origFactory(config);
+        return client;
+      };
+      // Override callTool to never resolve
+      slowClient.callTool = () => new Promise(() => {});
+
+      // 直接注册一个带短超时的工具
+      callbacks.registerTool({
+        definition: {
+          name: 'slow__slow_tool',
+          description: 'Very slow',
+          parameters: {},
+          timeoutMs: 100,
+        },
+        handler: async () => {
+          const result = await Promise.race([
+            slowClient.callTool('slow_tool', {}),
+            new Promise<never>((_, reject) =>
+              setTimeout(() => reject(new Error('MCP tool "slow_tool" timed out after 100ms')), 100)
+            ),
+          ]);
+          return result;
+        },
+      });
+
+      await expect(
+        toolRegistry.execute(
+          'slow__slow_tool',
+          {},
+          { sessionId: 's1', agentId: 'a1', messages: [] },
+        ),
+      ).rejects.toThrow('timed out');
+    });
+  });
+
+  describe('callTool error propagation', () => {
+    it('should propagate MCP error content in error message', async () => {
+      const errClient = createMockMcpClient([
+        { name: 'err_tool', inputSchema: { type: 'object' } },
+      ]);
+      errClient.callTool = async (): Promise<any> => ({
+        content: [
+          { type: 'text', text: 'Permission denied' },
+          { type: 'text', text: 'File not found' },
+        ],
+        isError: true,
+      });
+
+      const errFactory: McpClientFactory = () => errClient;
+      const errManager = new DefaultMcpManager(callbacks, errFactory);
+      await errManager.connectServer({ id: 'err', transport: 'stdio', command: 'echo' });
+
+      await expect(
+        toolRegistry.execute('err__err_tool', {}, { sessionId: 's1', agentId: 'a1', messages: [] }),
+      ).rejects.toThrow('Permission denied\nFile not found');
+    });
+  });
+
+  describe('listTools failure', () => { 
+    it('should fail connection when listTools throws', async () => {
+      const failListClient = createMockMcpClient([]);
+      failListClient.listTools = async () => { throw new Error('Server crash'); };
+
+      const failFactory: McpClientFactory = () => failListClient;
+      const failManager = new DefaultMcpManager(callbacks, failFactory);
+
+      await expect(
+        failManager.connectServer({ id: 'crash', transport: 'stdio', command: 'echo' }),
+      ).rejects.toThrow('Server crash');
+
+      // 连接不应被记录
+      expect(failManager.listServers()).toHaveLength(0);
+    });
+  });
+
+  describe('multiple servers with same tool names', () => { 
     it('should namespace tools to avoid conflicts', async () => {
       const tools: McpToolDefinition[] = [
         { name: 'search', description: 'Server A search', inputSchema: { type: 'object' } },

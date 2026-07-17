@@ -87,10 +87,28 @@ export class SdkMcpClient implements McpClient {
   async callTool(name: string, args: Record<string, unknown>): Promise<McpToolResult> {
     this.assertConnected();
     const result = await this.client!.callTool({ name, arguments: args });
-    return {
-      content: (result.content ?? []) as McpToolResult['content'],
-      isError: result.isError as boolean | undefined,
-    };
+
+    // MCP SDK 可能返回两种格式：
+    // 1. 标准格式: { content: [...], isError?: boolean }
+    // 2. 兼容格式: { toolResult: unknown }
+    if ('content' in result && Array.isArray(result.content)) {
+      return {
+        content: result.content as McpToolResult['content'],
+        isError: result.isError as boolean | undefined,
+      };
+    }
+
+    // 兼容格式：将 toolResult 包装为 content
+    if ('toolResult' in result) {
+      const toolResult = result.toolResult;
+      if (typeof toolResult === 'string') {
+        return { content: [{ type: 'text', text: toolResult }] };
+      }
+      return { content: [{ type: 'text', text: JSON.stringify(toolResult) }] };
+    }
+
+    // 空结果
+    return { content: [] };
   }
 
   async listResources(): Promise<McpResourceDefinition[]> {
@@ -139,33 +157,24 @@ export class SdkMcpClient implements McpClient {
   // ── 内部方法 ──
 
   private createTransport(): StdioClientTransport | StreamableHTTPClientTransport {
-    switch (this.config.transport) {
-      case 'stdio': {
-        if (!this.config.command) {
-          throw new Error(`MCP Server "${this.config.id}": stdio transport requires "command"`);
-        }
+    const config = this.config;
+    switch (config.transport) {
+      case 'stdio':
         return new StdioClientTransport({
-          command: this.config.command,
-          args: this.config.args,
-          env: this.config.env as Record<string, string> | undefined,
-          cwd: this.config.cwd,
+          command: config.command,
+          args: config.args,
+          env: config.env,
+          cwd: config.cwd,
         });
-      }
-      case 'http': {
-        if (!this.config.url) {
-          throw new Error(`MCP Server "${this.config.id}": http transport requires "url"`);
-        }
+      case 'http':
         return new StreamableHTTPClientTransport(
-          new URL(this.config.url),
+          new URL(config.url),
           {
-            requestInit: this.config.headers
-              ? { headers: this.config.headers }
+            requestInit: config.headers
+              ? { headers: config.headers }
               : undefined,
           },
         );
-      }
-      default:
-        throw new Error(`Unsupported MCP transport: ${this.config.transport}`);
     }
   }
 

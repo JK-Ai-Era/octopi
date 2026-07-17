@@ -93,23 +93,26 @@ function validateMcpServerConfig(raw: unknown): McpServerConfig | null {
   if (typeof obj.id !== 'string' || !obj.id) return null;
   if (obj.transport !== 'stdio' && obj.transport !== 'http') return null;
 
-  // stdio 必须有 command
-  if (obj.transport === 'stdio' && typeof obj.command !== 'string') return null;
+  if (obj.transport === 'stdio') {
+    if (typeof obj.command !== 'string') return null;
+    const config: McpServerConfig = {
+      id: obj.id,
+      transport: 'stdio',
+      command: obj.command,
+    };
+    if (Array.isArray(obj.args)) config.args = obj.args.filter((a): a is string => typeof a === 'string');
+    if (obj.env && typeof obj.env === 'object') config.env = obj.env as Record<string, string>;
+    if (typeof obj.cwd === 'string') config.cwd = obj.cwd;
+    return config;
+  }
 
-  // http 必须有 url
-  if (obj.transport === 'http' && typeof obj.url !== 'string') return null;
-
+  // transport === 'http'
+  if (typeof obj.url !== 'string') return null;
   const config: McpServerConfig = {
     id: obj.id,
-    transport: obj.transport,
+    transport: 'http',
+    url: obj.url,
   };
-
-  if (typeof obj.command === 'string') config.command = obj.command;
-  if (Array.isArray(obj.args)) config.args = obj.args.filter((a): a is string => typeof a === 'string');
-  if (obj.env && typeof obj.env === 'object') config.env = obj.env as Record<string, string>;
-  if (typeof obj.cwd === 'string') config.cwd = obj.cwd;
-  if (typeof obj.url === 'string') config.url = obj.url;
   if (obj.headers && typeof obj.headers === 'object') config.headers = obj.headers as Record<string, string>;
-
   return config;
 }

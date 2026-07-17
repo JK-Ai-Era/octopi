@@ -89,15 +89,15 @@ export function extractMcpToolResult(result: McpToolResult): unknown {
     if (textBlocks.length > 1) return textBlocks.map((b) => b.text);
   }
 
-  // 混合内容：返回结构化数据
+  // 混合内容：返回结构化数据（保留原始 base64 数据）
   return result.content.map((block) => {
     switch (block.type) {
       case 'text':
         return { type: 'text', text: block.text };
       case 'image':
-        return { type: 'image', mimeType: block.mimeType, data: `[base64 image, ${block.mimeType}]` };
+        return { type: 'image', mimeType: block.mimeType, data: block.data };
       case 'audio':
-        return { type: 'audio', mimeType: block.mimeType, data: `[base64 audio, ${block.mimeType}]` };
+        return { type: 'audio', mimeType: block.mimeType, data: block.data };
       case 'resource':
         return { type: 'resource', uri: block.resource.uri, text: block.resource.text ?? '' };
     }

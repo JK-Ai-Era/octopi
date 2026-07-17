@@ -158,7 +158,7 @@ describe('MCP Bridge', () => {
       const extracted = extractMcpToolResult(result) as Array<{ type: string }>;
       expect(extracted).toHaveLength(2);
       expect(extracted[0]).toEqual({ type: 'text', text: 'some text' });
-      expect(extracted[1].type).toBe('image');
+      expect(extracted[1]).toEqual({ type: 'image', mimeType: 'image/png', data: 'base64data' });
     });
 
     it('should handle empty content', () => {

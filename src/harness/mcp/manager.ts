@@ -95,15 +95,10 @@ export class DefaultMcpManager {
 
     // 发现并注册工具
     if (capabilities.tools) {
-      try {
-        const tools = await client.listTools();
-        for (const mcpTool of tools) {
-          const toolName = this.registerMcpTool(config.id, mcpTool, client);
-          registeredTools.push(toolName);
-        }
-      } catch (err) {
-        // 工具发现失败不阻塞连接，记录但继续
-        console.warn(`[McpManager] Failed to list tools from "${config.id}": ${err instanceof Error ? err.message : String(err)}`);
+      const tools = await client.listTools();
+      for (const mcpTool of tools) {
+        const toolName = this.registerMcpTool(config.id, mcpTool, client);
+        registeredTools.push(toolName);
       }
     }
 
@@ -174,7 +169,14 @@ export class DefaultMcpManager {
     const registeredTool: RegisteredTool = {
       definition,
       handler: async (args: Record<string, unknown>, _ctx: ToolExecutionContext) => {
-        const result = await client.callTool(mcpTool.name, args);
+        // 超时控制：MCP Server 可能卡住，不能拖垮主循环
+        const timeoutMs = definition.timeoutMs ?? 30_000;
+        const result = await Promise.race([
+          client.callTool(mcpTool.name, args),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error(`MCP tool "${mcpTool.name}" timed out after ${timeoutMs}ms`)), timeoutMs)
+          ),
+        ]);
         if (result.isError) {
           const errorText = result.content
             .filter((c) => c.type === 'text')
