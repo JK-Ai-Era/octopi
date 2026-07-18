@@ -336,9 +336,15 @@ export class OpenAIProvider implements ModelProvider {
    * 此方法将 toolResults 展开为多条消息（调用方需展平）。
    */
   private sanitizeMessage(msg: any): any {
+    // 规范化 content：空字符串转 null（OpenAI API 规范）
+    // 当 assistant 消息有 tool_calls 时，content 应为 null 而非空字符串
+    // 空字符串可能导致某些模型行为异常（如 mimo-v2.5 持续返回 tool_calls）
+    let content = msg.content ?? null;
+    if (content === '') content = null;
+
     const clean: any = {
       role: msg.role,
-      content: msg.content ?? null,
+      content,
     };
 
     // assistant 消息：保留 tool_calls

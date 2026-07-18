@@ -111,7 +111,7 @@ export interface AgentEngineDeps {
   };
   /** 连续 tool-only 迭代检测配置（模型只调工具不生成文本） */
   toolOnlyRetry?: {
-    /** 触发 steer 的连续 tool-only 迭代次数（默认 3） */
+    /** 触发 steer 的连续 tool-only 迭代次数（默认 5） */
     threshold?: number;
     /** 自定义 steer 指令生成函数，接收连续迭代次数 */
     steerInstruction?: (consecutiveIterations: number) => string;
@@ -814,7 +814,7 @@ export class AgentEngine {
 
             // ── 连续 tool-only 检测：模型只调工具不生成文本 ──
             this.consecutiveToolOnlyIterations++;
-            const toolOnlyThreshold = this.deps.toolOnlyRetry?.threshold ?? 3;
+            const toolOnlyThreshold = this.deps.toolOnlyRetry?.threshold ?? 5;
             if (this.consecutiveToolOnlyIterations >= toolOnlyThreshold && !this.toolOnlySteerInjected) {
               this.toolOnlySteerInjected = true;
               const toolOnlySteer = this.deps.toolOnlyRetry?.steerInstruction ?
