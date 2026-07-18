@@ -197,12 +197,13 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
   }
 
   broadcastEvent(sessionKey: string, event: AgentEvent): void {
-    // 广播给所有已连接的 WS 客户端
-    // Gateway 的 sessionKey 和 WS session 的 agentId 可能不一致（agent 解析导致）
-    // 但每个 WS session 代表一个独立用户，广播给全部已连接用户是安全的
+    // sessionKey 格式：agentId:rest（由 Gateway 构建）
+    const agentId = sessionKey.split(':')[0];
     const data = JSON.stringify({ type: 'event', event });
     for (const session of this.wsSessions) {
-      if (session.ws.readyState === WebSocket.OPEN) {
+      // 匹配：WS session 的 agentId 或 sessionId 与 sessionKey 的 agentId 前缀一致
+      const sessionAgentId = (session.agentId ?? session.sessionId ?? '').split(':')[0];
+      if (sessionAgentId === agentId && session.ws.readyState === WebSocket.OPEN) {
         this.enqueueSend(session, data);
       }
     }
@@ -322,7 +323,7 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
         content: msg.content ?? '',
         conversationId: msg.sessionId ?? 'default',
         timestamp: Date.now(),
-        metadata: { wsSession: true, ...msg.metadata },
+        metadata: { wsSession: true, agentId: msg.agentId, ...msg.metadata },
       };
 
       try {

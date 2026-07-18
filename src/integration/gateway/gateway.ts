@@ -457,13 +457,16 @@ export class Gateway {
   }
 
   private buildSessionKey(agent: AgentDefinition, msg: ChannelMessage): string {
+    // 使用消息中的原始 agentId（而非 Gateway 解析后的 agent.id）
+    // 这样 sessionKey 和 WS session 的 agentId 一致，broadcastEvent 能正确匹配
+    const agentId = (msg.metadata?.agentId as string) ?? agent.id;
     switch (this.dmScope) {
       case 'per-peer':
-        return `${agent.id}:${msg.senderId}`;
+        return `${agentId}:${msg.senderId}`;
       case 'per-channel-peer':
-        return `${agent.id}:${msg.channel}:${msg.senderId}`;
+        return `${agentId}:${msg.channel}:${msg.senderId}`;
       default:
-        return `${agent.id}:main`;
+        return `${agentId}:main`;
     }
   }
 
