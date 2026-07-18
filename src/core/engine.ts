@@ -109,6 +109,13 @@ export interface AgentEngineDeps {
     /** 重试时附加的 steer 指令 */
     steerInstruction?: string;
   };
+  /** 连续 tool-only 迭代检测配置（模型只调工具不生成文本） */
+  toolOnlyRetry?: {
+    /** 触发 steer 的连续 tool-only 迭代次数（默认 3） */
+    threshold?: number;
+    /** 自定义 steer 指令生成函数，接收连续迭代次数 */
+    steerInstruction?: (consecutiveIterations: number) => string;
+  };
   /**
    * 模型调用空闲超时（毫秒，默认 120000）
    *
@@ -202,6 +209,10 @@ export class AgentEngine {
   private emptyResponseRetryAttempts = 0;
   private emptyResponseSteerInjected = false;
 
+  // ── 连续 tool-only 迭代检测（模型只调工具不说话） ──
+  private consecutiveToolOnlyIterations = 0;
+  private toolOnlySteerInjected = false;
+
   // ── No-op 检测状态（防止 tool-loop 死循环） ──
   private consecutiveNoops = 0;
   private static readonly MAX_CONSECUTIVE_NOOPS = 2;
@@ -276,6 +287,8 @@ export class AgentEngine {
     this.planningOnlySteerInjected = false;
     this.emptyResponseRetryAttempts = 0;
     this.emptyResponseSteerInjected = false;
+    this.consecutiveToolOnlyIterations = 0;
+    this.toolOnlySteerInjected = false;
     this.consecutiveNoops = 0;
 
     // 重置预算计数器，确保每次 run() 都从零开始
@@ -520,6 +533,7 @@ export class AgentEngine {
           // 2h. 如果有 tool_calls → 执行工具
           // 只有 finishReason === 'tool_calls' 时才执行，防止截断/中断的 tool call 被误执行
           if (llmResponse.finishReason === 'tool_calls' && llmResponse.toolCalls && llmResponse.toolCalls.length > 0) {
+
             const toolResults: ToolResult[] = [];
 
             for (const call of llmResponse.toolCalls) {
@@ -798,6 +812,29 @@ export class AgentEngine {
               }
             }
 
+            // ── 连续 tool-only 检测：模型只调工具不生成文本 ──
+            this.consecutiveToolOnlyIterations++;
+            const toolOnlyThreshold = this.deps.toolOnlyRetry?.threshold ?? 3;
+            if (this.consecutiveToolOnlyIterations >= toolOnlyThreshold && !this.toolOnlySteerInjected) {
+              this.toolOnlySteerInjected = true;
+              const toolOnlySteer = this.deps.toolOnlyRetry?.steerInstruction ?
+                this.deps.toolOnlyRetry.steerInstruction(this.consecutiveToolOnlyIterations) :
+                `You have been calling tools for ${this.consecutiveToolOnlyIterations} rounds without responding to the user. ` +
+                'Stop calling tools. Use the information you have gathered so far to provide a comprehensive answer to the user now.';
+
+              messages.push({
+                role: 'user',
+                content: `[System: ${toolOnlySteer}]`,
+                timestamp: Date.now(),
+              });
+
+              yield {
+                type: 'tool_only_steer',
+                timestamp: Date.now(),
+                data: { consecutiveIterations: this.consecutiveToolOnlyIterations, threshold: toolOnlyThreshold },
+              };
+            }
+
             // 继续循环（让 LLM 看到工具结果）
             continue;
           }
@@ -858,6 +895,10 @@ export class AgentEngine {
               continue;
             }
           }
+
+          // 到达这里说明模型生成了文本回复（或空内容），重置 tool-only 计数
+          this.consecutiveToolOnlyIterations = 0;
+          this.toolOnlySteerInjected = false;
 
           // 2j. 空响应检测与重试
           //    当模型返回空内容（没有 tool_calls）时，注入 steer 指令重试

@@ -652,6 +652,20 @@ export class TuiApp {
             break;
           }
 
+          case 'empty_response_retry': {
+            const data = event.data as any;
+            this.chatLog.addSystem(`🔄 Empty response, retrying (${data?.attempt}/${data?.maxAttempts})...`);
+            this.tui.requestRender();
+            break;
+          }
+
+          case 'tool_only_steer': {
+            const data = event.data as any;
+            this.chatLog.addSystem(`🔄 ${data?.consecutiveIterations} rounds of tool calls without response, asking model to reply...`);
+            this.tui.requestRender();
+            break;
+          }
+
           case 'checkpoint': {
             const data = event.data as any;
             if (data?.verdict?.action === 'recover') {

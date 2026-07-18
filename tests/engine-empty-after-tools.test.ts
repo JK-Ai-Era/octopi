@@ -64,6 +64,13 @@ const shellTool: RegisteredTool = {
   handler: async (args) => `output of: ${args.command}`,
 };
 
+const mockExecutor = {
+  async execute(call: any, _ctx: any) {
+    const handler = shellTool.handler;
+    return handler(call.arguments);
+  },
+};
+
 async function collectEvents(engine: AgentEngine, messages: Message[], config: RunConfig): Promise<AgentEvent[]> {
   const events: AgentEvent[] = [];
   for await (const e of engine.run(messages, config)) events.push(e);
@@ -83,7 +90,7 @@ describe('Engine: empty response after tool execution', () => {
     tools.set('shell', shellTool);
     const bus = new DefaultEventBus();
     const engine = new AgentEngine({
-      model: provider, tools, executor: null as any, contextEngine: new DefaultContextEngine(),
+      model: provider, tools, executor: mockExecutor, contextEngine: new DefaultContextEngine(),
       events: bus, security: new DefaultSecurityGuard(), budget: new IterationBudget(bus), errorStrategy,
     });
 
@@ -115,7 +122,7 @@ describe('Engine: empty response after tool execution', () => {
 
     const bus = new DefaultEventBus();
     const engine = new AgentEngine({
-      model: provider, tools: new Map(), executor: null as any, contextEngine: new DefaultContextEngine(),
+      model: provider, tools: new Map(), executor: mockExecutor, contextEngine: new DefaultContextEngine(),
       events: bus, security: new DefaultSecurityGuard(), budget: new IterationBudget(bus), errorStrategy,
       emptyResponseRetry: { maxAttempts: 2 },
     });
@@ -143,7 +150,7 @@ describe('Engine: empty response after tool execution', () => {
 
     const bus = new DefaultEventBus();
     const engine = new AgentEngine({
-      model: provider, tools: new Map(), executor: null as any, contextEngine: new DefaultContextEngine(),
+      model: provider, tools: new Map(), executor: mockExecutor, contextEngine: new DefaultContextEngine(),
       events: bus, security: new DefaultSecurityGuard(), budget: new IterationBudget(bus), errorStrategy,
       emptyResponseRetry: { maxAttempts: 2 },
     });
@@ -174,7 +181,7 @@ describe('Engine: empty response after tool execution', () => {
     tools.set('shell', shellTool);
     const bus = new DefaultEventBus();
     const engine = new AgentEngine({
-      model: provider, tools, executor: null as any, contextEngine: new DefaultContextEngine(),
+      model: provider, tools, executor: mockExecutor, contextEngine: new DefaultContextEngine(),
       events: bus, security: new DefaultSecurityGuard(), budget: new IterationBudget(bus), errorStrategy,
       emptyResponseRetry: { maxAttempts: 2 },
     });
@@ -226,7 +233,7 @@ describe('Engine: empty response after tool execution', () => {
     tools.set('shell', shellTool);
     const bus = new DefaultEventBus();
     const engine = new AgentEngine({
-      model: provider, tools, executor: null as any, contextEngine: new DefaultContextEngine(),
+      model: provider, tools, executor: mockExecutor, contextEngine: new DefaultContextEngine(),
       events: bus, security: new DefaultSecurityGuard(), budget: new IterationBudget(bus), errorStrategy,
     });
 
@@ -247,5 +254,73 @@ describe('Engine: empty response after tool execution', () => {
     // 第二次调用的消息应该包含 assistant 消息（带 tool_calls）
     const assistantWithTools = secondCallMessages.filter(m => m.role === 'assistant' && m.tool_calls?.length);
     expect(assistantWithTools.length).toBeGreaterThan(0);
+  });
+});
+
+describe('Engine: tool-only steer (model keeps calling tools without responding)', () => {
+  it('should inject steer after consecutive tool-only iterations', async () => {
+    const provider = createSequentialProvider([
+      // 3 轮纯 tool_calls
+      { content: '', toolCalls: [{ id: 'c1', name: 'shell', arguments: { command: 'ls' } }], usage: { promptTokens: 100, completionTokens: 5, totalTokens: 105 }, model: 'test', finishReason: 'tool_calls' },
+      { content: '', toolCalls: [{ id: 'c2', name: 'shell', arguments: { command: 'pwd' } }], usage: { promptTokens: 100, completionTokens: 5, totalTokens: 105 }, model: 'test', finishReason: 'tool_calls' },
+      { content: '', toolCalls: [{ id: 'c3', name: 'shell', arguments: { command: 'whoami' } }], usage: { promptTokens: 100, completionTokens: 5, totalTokens: 105 }, model: 'test', finishReason: 'tool_calls' },
+      // steer 后模型终于回复文本
+      { content: 'Here is my analysis.', toolCalls: undefined, usage: { promptTokens: 200, completionTokens: 20, totalTokens: 220 }, model: 'test', finishReason: 'stop' },
+    ]);
+
+    const tools = new Map<string, RegisteredTool>();
+    tools.set('shell', shellTool);
+    const bus = new DefaultEventBus();
+    const engine = new AgentEngine({
+      model: provider, tools, executor: mockExecutor, contextEngine: new DefaultContextEngine(),
+      events: bus, security: new DefaultSecurityGuard(), budget: new IterationBudget(bus), errorStrategy,
+      toolOnlyRetry: { threshold: 3 },
+    });
+
+    const events = await collectEvents(engine, [{ role: 'user', content: 'test', timestamp: Date.now() }], { agentId: 't', sessionId: 's', model: 'test', systemPrompt: 'sys' });
+
+    const types = events.map(e => e.type);
+
+    // 应该触发 tool_only_steer
+    expect(types).toContain('tool_only_steer');
+
+    // 应该有 3 次工具执行
+    const toolStarts = events.filter(e => e.type === 'tool.exec.start');
+    expect(toolStarts.length).toBe(3);
+
+    // 最终应该有正常文本回复
+    expect(types).toContain('turn.end');
+    const turnEnd = events.find(e => e.type === 'turn.end');
+    expect(turnEnd?.data?.content).toBe('Here is my analysis.');
+  });
+
+  it('should not inject steer if model responds before threshold', async () => {
+    const provider = createSequentialProvider([
+      // 2 轮 tool_calls（低于默认阈值 3）
+      { content: '', toolCalls: [{ id: 'c1', name: 'shell', arguments: { command: 'ls' } }], usage: { promptTokens: 100, completionTokens: 5, totalTokens: 105 }, model: 'test', finishReason: 'tool_calls' },
+      { content: '', toolCalls: [{ id: 'c2', name: 'shell', arguments: { command: 'pwd' } }], usage: { promptTokens: 100, completionTokens: 5, totalTokens: 105 }, model: 'test', finishReason: 'tool_calls' },
+      // 第 3 轮模型主动回复
+      { content: 'Done.', toolCalls: undefined, usage: { promptTokens: 200, completionTokens: 5, totalTokens: 205 }, model: 'test', finishReason: 'stop' },
+    ]);
+
+    const tools = new Map<string, RegisteredTool>();
+    tools.set('shell', shellTool);
+    const bus = new DefaultEventBus();
+    const engine = new AgentEngine({
+      model: provider, tools, executor: mockExecutor, contextEngine: new DefaultContextEngine(),
+      events: bus, security: new DefaultSecurityGuard(), budget: new IterationBudget(bus), errorStrategy,
+    });
+
+    const events = await collectEvents(engine, [{ role: 'user', content: 'test', timestamp: Date.now() }], { agentId: 't', sessionId: 's', model: 'test', systemPrompt: 'sys' });
+
+    const types = events.map(e => e.type);
+
+    // 不应该触发 tool_only_steer（模型在阈值前主动回复）
+    expect(types).not.toContain('tool_only_steer');
+
+    // 最终应该有正常文本回复
+    expect(types).toContain('turn.end');
+    const turnEnd = events.find(e => e.type === 'turn.end');
+    expect(turnEnd?.data?.content).toBe('Done.');
   });
 });
