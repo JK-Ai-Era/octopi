@@ -183,7 +183,11 @@ export class TuiApp {
     this.updateHeader();
     this.updateFooter();
 
-    this.chatLog.addSystem(`🐙 Octopi Chat — ${this.currentModelRef.current}`);
+    if (this.useGateway) {
+      this.chatLog.addSystem('🐙 Octopi Chat — connecting to gateway...');
+    } else {
+      this.chatLog.addSystem(`🐙 Octopi Chat — ${this.currentModelRef.current}`);
+    }
     const mode = this.useGateway ? 'gateway' : 'local';
     this.chatLog.addSystem(`Mode: ${mode} | Type /help for commands, Ctrl+C to exit.`);
     this.tui.requestRender();
@@ -220,6 +224,8 @@ export class TuiApp {
           if (agent?.model?.model) {
             this.currentModelRef.current = agent.model.model;
             this.updateHeader();
+            this.updateFooter();
+            this.chatLog.addSystem(`🐙 Octopi Chat — ${this.currentModelRef.current}`);
             this.tui.requestRender();
           }
         }
