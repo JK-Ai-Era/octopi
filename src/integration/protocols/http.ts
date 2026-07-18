@@ -196,15 +196,13 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
     });
   }
 
-  broadcastEvent(sessionId: string, event: AgentEvent): void {
-    // 从 sessionId 提取 agentId（格式：agentId:rest）
-    const agentId = sessionId.split(':')[0];
+  broadcastEvent(sessionKey: string, event: AgentEvent): void {
+    // 广播给所有已连接的 WS 客户端
+    // Gateway 的 sessionKey 和 WS session 的 agentId 可能不一致（agent 解析导致）
+    // 但每个 WS session 代表一个独立用户，广播给全部已连接用户是安全的
     const data = JSON.stringify({ type: 'event', event });
     for (const session of this.wsSessions) {
-      // 匹配 agentId（Gateway sessionKey 的前缀）或精确 sessionId
-      const sessionAgentId = (session.sessionId ?? session.agentId ?? '').split(':')[0];
-      if ((sessionAgentId === agentId || session.sessionId === sessionId)
-        && session.ws.readyState === WebSocket.OPEN) {
+      if (session.ws.readyState === WebSocket.OPEN) {
         this.enqueueSend(session, data);
       }
     }
@@ -329,9 +327,10 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
 
       try {
         // Gateway 处理消息后会广播事件，广播用的是 Gateway 自己的 sessionKey
-        // 需要从 Gateway 获取实际的 sessionKey，或让 Gateway 广播时匹配 agentId
-        // 这里先保存 conversationId 作为 fallback
+        // 但 WS session 的 sessionId 是 TUI 传来的，两者可能不一致
+        // 所以先用 TUI 的 sessionId 作为 fallback
         session.sessionId = msg.sessionId;
+        session.agentId = msg.agentId;
         await this.handler!(channelMsg);
         session.ws.send(JSON.stringify({ type: 'accepted', messageId: channelMsg.id }));
       } catch (error) {

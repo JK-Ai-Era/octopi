@@ -294,6 +294,9 @@ export class Gateway {
 
     try {
       for await (const event of runner.handle(sessionKey, userMessage, runConfig, abortController.signal)) {
+        // Debug: 记录所有事件
+        console.log(`[Gateway] Event: ${event.type}${event.data?.content ? ` (content: ${String(event.data.content).substring(0, 80)}...)` : ''}`);
+
         // 转发事件给监听器
         this.emitEvent(event as any);
 
