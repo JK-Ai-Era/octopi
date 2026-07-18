@@ -90,8 +90,6 @@ function createProvider(cfg: ProviderConfig): ModelProvider | null {
       baseUrl: cfg.baseUrl,
       models: cfg.models,
       defaultModel: cfg.defaultModel,
-      timeoutMs: cfg.timeoutMs,
-      requestTimeoutMs: cfg.requestTimeoutMs,
     });
   }
 
@@ -102,7 +100,6 @@ function createProvider(cfg: ProviderConfig): ModelProvider | null {
     models: cfg.models,
     defaultModel: cfg.defaultModel,
     timeoutMs: cfg.timeoutMs,
-    requestTimeoutMs: cfg.requestTimeoutMs,
   });
 }
 

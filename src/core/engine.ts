@@ -102,6 +102,18 @@ export interface AgentEngineDeps {
     /** 重试时附加的 steer 指令 */
     steerInstruction?: string;
   };
+  /**
+   * 模型调用空闲超时（毫秒，默认 120000）
+   *
+   * 引擎层 watchdog：provider 没有产出数据的最大等待时间。
+   * 不同于 provider 的 HTTP 层 idle timeout（数据到达重置）。
+   * 这里保证引擎不会无限阻塞在 provider 的 reader.read()。
+   *
+   * 职责分离：
+   * - Provider idle timeout: HTTP 连接健康（数据到达重置）
+   * - Engine idle timeout: 引擎响应性保障（不随数据重置，每个 chunk 读取独立计时）
+   */
+  modelCallIdleTimeoutMs?: number;
 }
 
 /** 运行配置 */
@@ -907,7 +919,16 @@ export class AgentEngine {
   // ── 内部方法 ──
 
   /**
-   * 调用模型（流式优先，回退到同步）
+   * 调用模型（watchdog 模式）
+   *
+   * 引擎控制节奏，provider 只负责 HTTP：
+   * - 引擎设置 watchdog：空闲超时 + abort signal
+   * - provider 专注 HTTP 通信（connect timeout + idle timeout）
+   * - 引擎保证响应性：每个 chunk 都能被消费者看到
+   *
+   * 职责分离：
+   * - Provider: HTTP 连接健康（connect timeout + idle timeout）
+   * - Engine: 响应性保障（watchdog: idle timeout + abort）
    */
   private async *callModel(request: LLMRequest, signal?: AbortSignal): AsyncGenerator<AgentEvent, LLMResponse> {
     const { model } = this.deps;
@@ -917,43 +938,87 @@ export class AgentEngine {
     const toolCallBuffers = new Map<number, { id: string; name: string; argsBuffer: string }>();
     let usage: TokenUsage | undefined;
 
+    // ── Watchdog: 引擎层的响应性保障 ──
+    // 空闲超时：provider 没有产出数据的最大等待时间
+    // 不同于 provider 的 idle timeout（HTTP 层，数据到达重置）
+    // 这里的 idle timeout 是引擎层的，保证引擎不会无限阻塞在 reader.read()
+    const idleTimeoutMs = this.deps.modelCallIdleTimeoutMs ?? 120_000;
+
     try {
-      for await (const chunk of model.stream(request)) {
-        if (signal?.aborted) throw new Error('Aborted');
+      const providerStream = model.stream(request);
+      let idleTimer: ReturnType<typeof setTimeout> | null = null;
 
-        if (chunk.type === 'content' && chunk.content) {
-          content += chunk.content;
-          yield { type: 'llm_stream_delta', timestamp: Date.now(), data: { delta: chunk.content } };
-        }
+      // Watchdog: 包装 provider 的 generator，添加引擎层超时和 abort 检查
+      const watchdogRead = (): Promise<IteratorResult<LLMStreamChunk>> => {
+        return new Promise((resolve, reject) => {
+          // 设置空闲超时
+          idleTimer = setTimeout(() => {
+            reject(new Error('Model call idle timeout: no data received from provider within timeout window'));
+          }, idleTimeoutMs);
 
-        if (chunk.type === 'tool_call' && chunk.toolCall) {
-          const tc = chunk.toolCall;
-          const idx = tc.index ?? 0;
-          const existing = toolCallBuffers.get(idx);
-          if (existing) {
-            if (tc.id) existing.id = tc.id;
-            if (tc.name) existing.name = tc.name;
-            if (tc.arguments) existing.argsBuffer += tc.arguments;
-          } else {
-            toolCallBuffers.set(idx, {
-              id: tc.id ?? `call_${idx}`,
-              name: tc.name ?? '',
-              argsBuffer: tc.arguments ?? '',
-            });
+          // 监听 abort signal
+          const onAbort = () => {
+            reject(new Error('Aborted'));
+          };
+          signal?.addEventListener('abort', onAbort, { once: true });
+
+          providerStream.next().then(
+            (result) => {
+              if (idleTimer) clearTimeout(idleTimer);
+              signal?.removeEventListener('abort', onAbort);
+              resolve(result);
+            },
+            (err) => {
+              if (idleTimer) clearTimeout(idleTimer);
+              signal?.removeEventListener('abort', onAbort);
+              reject(err);
+            },
+          );
+        });
+      };
+
+      try {
+        while (true) {
+          // Watchdog: 保证每个 chunk 读取都不会无限阻塞
+          const { done, value: chunk } = await watchdogRead();
+          if (done) break;
+
+          if (chunk.type === 'content' && chunk.content) {
+            content += chunk.content;
+            yield { type: 'llm_stream_delta', timestamp: Date.now(), data: { delta: chunk.content } };
+          }
+
+          if (chunk.type === 'tool_call' && chunk.toolCall) {
+            const tc = chunk.toolCall;
+            const idx = tc.index ?? 0;
+            const existing = toolCallBuffers.get(idx);
+            if (existing) {
+              if (tc.id) existing.id = tc.id;
+              if (tc.name) existing.name = tc.name;
+              if (tc.arguments) existing.argsBuffer += tc.arguments;
+            } else {
+              toolCallBuffers.set(idx, {
+                id: tc.id ?? `call_${idx}`,
+                name: tc.name ?? '',
+                argsBuffer: tc.arguments ?? '',
+              });
+            }
+          }
+
+          if (chunk.type === 'done') {
+            if (chunk.usage) usage = chunk.usage;
+          }
+
+          if (chunk.type === 'error') {
+            throw new Error(chunk.error ?? 'Stream error');
           }
         }
-
-        if (chunk.type === 'done') {
-          if (chunk.usage) usage = chunk.usage;
-        }
-
-        if (chunk.type === 'error') {
-          throw new Error(chunk.error ?? 'Stream error');
-        }
+      } finally {
+        if (idleTimer) clearTimeout(idleTimer);
       }
     } catch (err) {
       // 流式失败，回退到同步
-      if (err instanceof Error && (err.message.includes('stream') || err.message.includes('Aborted'))) {
+      if (err instanceof Error && (err.message.includes('stream') || err.message.includes('Aborted') || err.message.includes('idle timeout'))) {
         yield { type: 'stream.fallback_to_sync', timestamp: Date.now(), data: { reason: 'stream_error', error: err.message } };
         const response = await model.chat(request);
         if (response.content) {
@@ -965,7 +1030,6 @@ export class AgentEngine {
     }
 
     // 流式正常结束但内容为空且无工具调用 → fallback 到同步调用
-    // 某些 provider 的流式响应可能不完整（缺少 content chunk 或 done chunk）
     if (!content && toolCallBuffers.size === 0) {
       yield { type: 'stream.fallback_to_sync', timestamp: Date.now(), data: { reason: 'empty_stream' } };
       try {

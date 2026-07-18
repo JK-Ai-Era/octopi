@@ -32,10 +32,8 @@ export interface AnthropicProviderConfig {
   apiKey: string;
   baseUrl?: string;
   version?: string;
-  /** 请求超时（毫秒）— 空闲超时，数据到达时重置 */
+  /** 请求超时（毫秒） */
   timeoutMs?: number;
-  /** 请求总超时（毫秒）— 硬超时，不随数据重置，默认 5 分钟 */
-  requestTimeoutMs?: number;
   /**
    * 支持的模型列表
    *
@@ -61,7 +59,6 @@ export class AnthropicProvider implements ModelProvider {
   private baseUrl: string;
   private version: string;
   private timeoutMs: number;
-  private requestTimeoutMs: number;
   readonly defaultModel: string;
 
   constructor(config: AnthropicProviderConfig) {
@@ -70,7 +67,6 @@ export class AnthropicProvider implements ModelProvider {
     this.baseUrl = (config.baseUrl ?? 'https://api.anthropic.com').replace(/\/$/, '');
     this.version = config.version ?? '2023-06-01';
     this.timeoutMs = config.timeoutMs ?? 120_000;
-    this.requestTimeoutMs = config.requestTimeoutMs ?? 300_000;
 
     // 解析 models 配置：提取名称列表 + ModelInfo 映射
     // 合并内置默认值（用户配置优先）
@@ -166,9 +162,6 @@ export class AnthropicProvider implements ModelProvider {
       request.signal.addEventListener('abort', () => controller.abort(), { once: true });
     }
 
-    // 硬超时：整个请求的最大时长（不随数据重置）
-    const requestTimer = setTimeout(() => controller.abort(), this.requestTimeoutMs);
-
     // 连接超时
     const connectTimer = setTimeout(() => controller.abort(), this.timeoutMs);
 
@@ -186,7 +179,6 @@ export class AnthropicProvider implements ModelProvider {
       });
     } catch (err) {
       clearTimeout(connectTimer);
-      clearTimeout(requestTimer);
       throw err;
     }
     // 连接已建立，清除连接超时
@@ -277,7 +269,6 @@ export class AnthropicProvider implements ModelProvider {
       }
     } finally {
       if (idleTimer) clearTimeout(idleTimer);
-      clearTimeout(requestTimer);
       reader.releaseLock();
     }
   }

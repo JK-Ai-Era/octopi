@@ -419,6 +419,7 @@ export class Gateway {
       },
       observer,
       systemPrompt: typeof agent.persona === 'object' ? agent.persona?.systemPrompt ?? '' : '',
+      modelCallIdleTimeoutMs: this.config.modelCallIdleTimeoutMs ?? 120_000,
     });
 
     // 创建 SessionAwareRunner

@@ -545,6 +545,13 @@ export interface GatewayConfig {
     /** 是否捕获工具结果（默认 true） */
     captureToolResults?: boolean;
   };
+  /**
+   * 模型调用空闲超时（毫秒，默认 120000）
+   *
+   * 引擎层 watchdog：provider 没有产出数据的最大等待时间。
+   * 保证引擎不会无限阻塞在 provider 的 reader.read()。
+   */
+  modelCallIdleTimeoutMs?: number;
 }
 
 export type AgentEventListener = (event: AgentEventDetail) => void | Promise<void>;
