@@ -294,9 +294,6 @@ export class Gateway {
 
     try {
       for await (const event of runner.handle(sessionKey, userMessage, runConfig, abortController.signal)) {
-        // Debug: 记录所有事件
-        console.log(`[Gateway] Event: ${event.type}${event.data?.content ? ` (content: ${String(event.data.content).substring(0, 80)}...)` : ''}`);
-
         // 转发事件给监听器
         this.emitEvent(event as any);
 
@@ -421,9 +418,13 @@ export class Gateway {
       budget,
       errorStrategy: {
         onModelError: (error, attempt) => {
-          if (error.reason === 'rate_limit' && attempt < 3) {
-            return { action: 'retry', delayMs: (attempt + 1) * 1000 };
+          // 可重试的瞬态错误
+          const retryable = ['rate_limit', 'timeout', 'network', 'server'];
+          if (retryable.includes(error.reason) && attempt < 3) {
+            const delayMs = (attempt + 1) * (error.reason === 'rate_limit' ? 1000 : 2000);
+            return { action: 'retry', delayMs };
           }
+          // 不可重试的错误（auth、context_length 等）
           return { action: 'abort', reason: error.message };
         },
         onToolError: () => ({ action: 'skip', reason: 'Tool failed' }),
