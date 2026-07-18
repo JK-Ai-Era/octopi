@@ -211,16 +211,18 @@ export class TuiApp {
       onEvent: (event) => this.handleAgentEvent(event),
       onConnected: () => {
         this.chatLog.addSystem('✅ Connected to Gateway');
-        // 从 Gateway 获取实际配置
-        const gwInfo = this.gatewayClient?.gatewayInfo;
-        if (gwInfo?.agents?.length) {
-          const agent = gwInfo.agents.find(a => a.id === this.config.agentId) ?? gwInfo.agents[0];
+        this.tui.requestRender();
+      },
+      onGatewayInfo: (info) => {
+        // 从 Gateway 获取实际配置，覆盖本地配置的模型显示
+        if (info.agents?.length) {
+          const agent = info.agents.find(a => a.id === this.config.agentId) ?? info.agents[0];
           if (agent?.model?.model) {
             this.currentModelRef.current = agent.model.model;
             this.updateHeader();
+            this.tui.requestRender();
           }
         }
-        this.tui.requestRender();
       },
       onDisconnected: (reason) => {
         this.chatLog.addSystem(`❌ Disconnected from Gateway: ${reason ?? 'unknown'}`);

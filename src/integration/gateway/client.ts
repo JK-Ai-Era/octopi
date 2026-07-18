@@ -18,6 +18,8 @@ export interface GatewayClientCallbacks {
   onEvent?: (event: AgentEvent) => void;
   /** 连接成功 */
   onConnected?: () => void;
+  /** 收到 Gateway 欢迎消息（包含 Gateway 配置信息） */
+  onGatewayInfo?: (info: GatewayInfo) => void;
   /** 连接断开 */
   onDisconnected?: (reason?: string) => void;
   /** 错误 */
@@ -168,6 +170,7 @@ export class GatewayChatClient {
         // Welcome message from server — 提取 Gateway 信息
         if (msg.agents) {
           this._gatewayInfo = { agents: msg.agents };
+          this.callbacks.onGatewayInfo?.(this._gatewayInfo);
         }
         break;
 
