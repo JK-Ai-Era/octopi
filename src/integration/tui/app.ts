@@ -659,9 +659,17 @@ export class TuiApp {
             break;
           }
 
+          case 'loop_detected': {
+            const data = event.data as any;
+            const icon = data?.level === 'critical' ? '🛑' : '🔄';
+            this.chatLog.addSystem(`${icon} Loop detected: ${data?.message}`);
+            this.tui.requestRender();
+            break;
+          }
+
           case 'tool_only_steer': {
             const data = event.data as any;
-            this.chatLog.addSystem(`🔄 ${data?.consecutiveIterations} rounds of tool calls without response, asking model to reply...`);
+            this.chatLog.addSystem(`🔄 ${data?.consecutiveToolOnly} rounds of tool calls without response, asking model to reply...`);
             this.tui.requestRender();
             break;
           }

@@ -64,6 +64,7 @@ import { AgentEvents } from './event-bus.js';
 import type { SecurityGuard, SecurityCheckResult, BehaviorContext } from './security-guard.js';
 import { isValidSecurityGuard, severityToAction } from './security-guard.js';
 import type { SecurityAction } from './interfaces/error-strategy.js';
+import { detectNoProgressLoop, recordToolCall, type ToolLoopDetectionConfig } from './tool-loop-detection.js';
 import { IterationBudget } from './budget.js';
 import type { IterationBudgetConfig } from './budget.js';
 
@@ -109,12 +110,25 @@ export interface AgentEngineDeps {
     /** 重试时附加的 steer 指令 */
     steerInstruction?: string;
   };
-  /** 连续 tool-only 迭代检测配置（模型只调工具不生成文本） */
+  /** 无进展循环检测配置（参考 OpenClaw tool-loop-detection） */
+  loopDetection?: {
+    /** 是否启用（默认 true） */
+    enabled?: boolean;
+    /** 滑动窗口大小（默认 30） */
+    historySize?: number;
+    /** 警告阈值 — 同调用+同结果次数（默认 10） */
+    warningThreshold?: number;
+    /** 严重阈值（默认 20） */
+    criticalThreshold?: number;
+    /** 全局熔断阈值（默认 30） */
+    globalCircuitBreakerThreshold?: number;
+  };
+  /** tool-only 重试配置：模型连续返回 tool_calls 但不生成文本时注入 steer */
   toolOnlyRetry?: {
-    /** 触发 steer 的连续 tool-only 迭代次数（默认 5） */
+    /** 连续 tool-only 迭代次数阈值（默认 3） */
     threshold?: number;
-    /** 自定义 steer 指令生成函数，接收连续迭代次数 */
-    steerInstruction?: (consecutiveIterations: number) => string;
+    /** 重试时附加的 steer 指令 */
+    steerInstruction?: string;
   };
   /**
    * 模型调用空闲超时（毫秒，默认 120000）
@@ -209,13 +223,16 @@ export class AgentEngine {
   private emptyResponseRetryAttempts = 0;
   private emptyResponseSteerInjected = false;
 
-  // ── 连续 tool-only 迭代检测（模型只调工具不说话） ──
-  private consecutiveToolOnlyIterations = 0;
-  private toolOnlySteerInjected = false;
+  // ── 无进展循环检测状态 ──
+  private toolCallHistory: import('./tool-loop-detection.js').ToolCallRecord[] = [];
 
   // ── No-op 检测状态（防止 tool-loop 死循环） ──
   private consecutiveNoops = 0;
   private static readonly MAX_CONSECUTIVE_NOOPS = 2;
+
+  // ── Tool-only 检测状态（模型连续返回 tool_calls 但不生成文本） ──
+  private consecutiveToolOnly = 0;
+  private toolOnlySteerInjected = false;
 
   constructor(deps: AgentEngineDeps) {
     // 安全守卫有效性验证：防止调用方传入 noop 实现绕过安全检查
@@ -287,9 +304,10 @@ export class AgentEngine {
     this.planningOnlySteerInjected = false;
     this.emptyResponseRetryAttempts = 0;
     this.emptyResponseSteerInjected = false;
-    this.consecutiveToolOnlyIterations = 0;
-    this.toolOnlySteerInjected = false;
+    this.toolCallHistory = [];
     this.consecutiveNoops = 0;
+    this.consecutiveToolOnly = 0;
+    this.toolOnlySteerInjected = false;
 
     // 重置预算计数器，确保每次 run() 都从零开始
     budget.reset?.();
@@ -812,26 +830,76 @@ export class AgentEngine {
               }
             }
 
-            // ── 连续 tool-only 检测：模型只调工具不生成文本 ──
-            this.consecutiveToolOnlyIterations++;
-            const toolOnlyThreshold = this.deps.toolOnlyRetry?.threshold ?? 5;
-            if (this.consecutiveToolOnlyIterations >= toolOnlyThreshold && !this.toolOnlySteerInjected) {
-              this.toolOnlySteerInjected = true;
-              const toolOnlySteer = this.deps.toolOnlyRetry?.steerInstruction ?
-                this.deps.toolOnlyRetry.steerInstruction(this.consecutiveToolOnlyIterations) :
-                `You have been calling tools for ${this.consecutiveToolOnlyIterations} rounds without responding to the user. ` +
-                'Stop calling tools. Use the information you have gathered so far to provide a comprehensive answer to the user now.';
+            // ── 无进展循环检测 ──
+            // 记录每次工具调用的结果，检测重复无进展模式
+            const loopConfig = this.deps.loopDetection;
+            if (loopConfig?.enabled !== false) {
+              for (const call of llmResponse.toolCalls) {
+                const result = toolResults.find(r => r.toolCallId === call.id);
+                this.toolCallHistory = recordToolCall(
+                  this.toolCallHistory,
+                  call.name,
+                  call.arguments,
+                  result?.result,
+                  result?.error,
+                  { enabled: true, ...loopConfig },
+                );
+              }
 
+              // 检测无进展循环（使用第一个 tool call 的参数）
+              const firstCall = llmResponse.toolCalls[0];
+              const loopResult = detectNoProgressLoop(
+                this.toolCallHistory,
+                firstCall.name,
+                firstCall.arguments,
+                { enabled: true, ...loopConfig },
+              );
+
+              if (loopResult.stuck) {
+                yield {
+                  type: 'loop_detected',
+                  timestamp: Date.now(),
+                  data: { level: loopResult.level, detector: loopResult.detector, count: loopResult.count, message: loopResult.message },
+                };
+
+                if (loopResult.level === 'critical') {
+                  // 严重循环：注入强制总结指令
+                  messages.push({
+                    role: 'user',
+                    content: `[System: ${loopResult.message} Stop calling tools and provide your final response based on the information gathered so far.]`,
+                    timestamp: Date.now(),
+                  });
+                } else if (loopResult.level === 'warning') {
+                  // 警告：注入提示（不强制）
+                  messages.push({
+                    role: 'user',
+                    content: `[System: ${loopResult.message}]`,
+                    timestamp: Date.now(),
+                  });
+                }
+              }
+            }
+
+            // ── Tool-only 检测：模型连续返回 tool_calls 但不生成文本 ──
+            this.consecutiveToolOnly++;
+            const toolOnlyConfig = this.deps.toolOnlyRetry;
+            const toolOnlyThreshold = toolOnlyConfig?.threshold ?? 3;
+            if (this.consecutiveToolOnly >= toolOnlyThreshold && !this.toolOnlySteerInjected) {
+              const steerInstruction = toolOnlyConfig?.steerInstruction ??
+                'You have been calling tools without providing a response. Please stop calling tools and summarize your findings for the user.';
               messages.push({
                 role: 'user',
-                content: `[System: ${toolOnlySteer}]`,
+                content: `[System: ${steerInstruction}]`,
                 timestamp: Date.now(),
               });
-
+              this.toolOnlySteerInjected = true;
               yield {
                 type: 'tool_only_steer',
                 timestamp: Date.now(),
-                data: { consecutiveIterations: this.consecutiveToolOnlyIterations, threshold: toolOnlyThreshold },
+                data: {
+                  consecutiveToolOnly: this.consecutiveToolOnly,
+                  threshold: toolOnlyThreshold,
+                },
               };
             }
 
@@ -896,9 +964,9 @@ export class AgentEngine {
             }
           }
 
-          // 到达这里说明模型生成了文本回复（或空内容），重置 tool-only 计数
-          this.consecutiveToolOnlyIterations = 0;
-          this.toolOnlySteerInjected = false;
+          // 到达这里说明模型生成了文本回复（或空内容），重置循环检测历史
+          this.toolCallHistory = [];
+          this.consecutiveToolOnly = 0;
 
           // 2j. 空响应检测与重试
           //    当模型返回空内容（没有 tool_calls）时，注入 steer 指令重试
