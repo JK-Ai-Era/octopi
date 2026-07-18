@@ -667,13 +667,6 @@ export class TuiApp {
             break;
           }
 
-          case 'tool_only_steer': {
-            const data = event.data as any;
-            this.chatLog.addSystem(`🔄 ${data?.consecutiveToolOnly} rounds of tool calls without response, asking model to reply...`);
-            this.tui.requestRender();
-            break;
-          }
-
           case 'checkpoint': {
             const data = event.data as any;
             if (data?.verdict?.action === 'recover') {

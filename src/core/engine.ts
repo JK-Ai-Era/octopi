@@ -123,13 +123,6 @@ export interface AgentEngineDeps {
     /** 全局熔断阈值（默认 30） */
     globalCircuitBreakerThreshold?: number;
   };
-  /** tool-only 重试配置：模型连续返回 tool_calls 但不生成文本时注入 steer */
-  toolOnlyRetry?: {
-    /** 连续 tool-only 迭代次数阈值（默认 3） */
-    threshold?: number;
-    /** 重试时附加的 steer 指令 */
-    steerInstruction?: string;
-  };
   /**
    * 模型调用空闲超时（毫秒，默认 120000）
    *
@@ -230,9 +223,7 @@ export class AgentEngine {
   private consecutiveNoops = 0;
   private static readonly MAX_CONSECUTIVE_NOOPS = 2;
 
-  // ── Tool-only 检测状态（模型连续返回 tool_calls 但不生成文本） ──
-  private consecutiveToolOnly = 0;
-  private toolOnlySteerInjected = false;
+
 
   constructor(deps: AgentEngineDeps) {
     // 安全守卫有效性验证：防止调用方传入 noop 实现绕过安全检查
@@ -306,8 +297,7 @@ export class AgentEngine {
     this.emptyResponseSteerInjected = false;
     this.toolCallHistory = [];
     this.consecutiveNoops = 0;
-    this.consecutiveToolOnly = 0;
-    this.toolOnlySteerInjected = false;
+
 
     // 重置预算计数器，确保每次 run() 都从零开始
     budget.reset?.();
@@ -880,29 +870,6 @@ export class AgentEngine {
               }
             }
 
-            // ── Tool-only 检测：模型连续返回 tool_calls 但不生成文本 ──
-            this.consecutiveToolOnly++;
-            const toolOnlyConfig = this.deps.toolOnlyRetry;
-            const toolOnlyThreshold = toolOnlyConfig?.threshold ?? 3;
-            if (this.consecutiveToolOnly >= toolOnlyThreshold && !this.toolOnlySteerInjected) {
-              const steerInstruction = toolOnlyConfig?.steerInstruction ??
-                'You have been calling tools without providing a response. Please stop calling tools and summarize your findings for the user.';
-              messages.push({
-                role: 'user',
-                content: `[System: ${steerInstruction}]`,
-                timestamp: Date.now(),
-              });
-              this.toolOnlySteerInjected = true;
-              yield {
-                type: 'tool_only_steer',
-                timestamp: Date.now(),
-                data: {
-                  consecutiveToolOnly: this.consecutiveToolOnly,
-                  threshold: toolOnlyThreshold,
-                },
-              };
-            }
-
             // 继续循环（让 LLM 看到工具结果）
             continue;
           }
@@ -966,7 +933,7 @@ export class AgentEngine {
 
           // 到达这里说明模型生成了文本回复（或空内容），重置循环检测历史
           this.toolCallHistory = [];
-          this.consecutiveToolOnly = 0;
+
 
           // 2j. 空响应检测与重试
           //    当模型返回空内容（没有 tool_calls）时，注入 steer 指令重试
