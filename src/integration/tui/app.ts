@@ -211,6 +211,15 @@ export class TuiApp {
       onEvent: (event) => this.handleAgentEvent(event),
       onConnected: () => {
         this.chatLog.addSystem('✅ Connected to Gateway');
+        // 从 Gateway 获取实际配置
+        const gwInfo = this.gatewayClient?.gatewayInfo;
+        if (gwInfo?.agents?.length) {
+          const agent = gwInfo.agents.find(a => a.id === this.config.agentId) ?? gwInfo.agents[0];
+          if (agent?.model?.model) {
+            this.currentModelRef.current = agent.model.model;
+            this.updateHeader();
+          }
+        }
         this.tui.requestRender();
       },
       onDisconnected: (reason) => {
@@ -480,6 +489,9 @@ export class TuiApp {
         if (this.isProcessing) {
           if (this.streamedContent) {
             this.chatLog.finalizeAssistant(this.streamedContent, 'run');
+          } else {
+            // 引擎退出但没有任何内容 → 给用户提示
+            this.chatLog.addSystem('⚠️ Agent ended without a response.');
           }
           this.isProcessing = false;
           this.setStatus('');

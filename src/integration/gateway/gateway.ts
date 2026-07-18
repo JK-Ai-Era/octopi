@@ -180,6 +180,16 @@ export class Gateway {
     if ('onAbort' in adapter) {
       (adapter as any).onAbort = (sessionId: string) => this.abortSession(sessionId);
     }
+    // 注册欢迎消息扩展（提供 Gateway agent 信息）
+    if ('onWelcome' in adapter) {
+      (adapter as any).onWelcome = () => {
+        const agents = Array.from(this.agents.entries()).map(([id, agent]) => ({
+          id,
+          model: agent.model,
+        }));
+        return { agents };
+      };
+    }
     console.log(`[Gateway] Registered channel: ${adapter.name}`);
   }
 

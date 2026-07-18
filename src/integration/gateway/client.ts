@@ -24,6 +24,11 @@ export interface GatewayClientCallbacks {
   onError?: (error: Error) => void;
 }
 
+/** Gateway 连接信息（从欢迎消息解析） */
+export interface GatewayInfo {
+  agents?: Array<{ id: string; model: { provider: string; model: string } }>;
+}
+
 /**
  * Gateway Chat Client
  *
@@ -36,6 +41,8 @@ export class GatewayChatClient {
   private _connected = false;
   private sessionId: string = '';
   private agentId: string = '';
+  /** Gateway 连接信息（从欢迎消息解析） */
+  private _gatewayInfo: GatewayInfo | null = null;
 
   constructor(options: GatewayClientOptions) {
     // 去掉末尾斜杠
@@ -44,6 +51,11 @@ export class GatewayChatClient {
 
   get connected(): boolean {
     return this._connected;
+  }
+
+  /** Gateway 连接信息 */
+  get gatewayInfo(): GatewayInfo | null {
+    return this._gatewayInfo;
   }
 
   /** 设置回调 */
@@ -153,7 +165,10 @@ export class GatewayChatClient {
   private handleMessage(msg: any): void {
     switch (msg.type) {
       case 'connected':
-        // Welcome message from server
+        // Welcome message from server — 提取 Gateway 信息
+        if (msg.agents) {
+          this._gatewayInfo = { agents: msg.agents };
+        }
         break;
 
       case 'event':

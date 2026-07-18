@@ -75,6 +75,8 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
   private wsSessions = new Set<WsSession>();
   /** 中止回调（由 Gateway 注册） */
   onAbort?: (sessionId: string) => void;
+  /** 欢迎消息扩展（由 Gateway 注册，返回额外数据合并到欢迎消息） */
+  onWelcome?: () => Record<string, unknown>;
 
   constructor(options: HttpAdapterOptions) {
     this.port = options.port;
@@ -298,11 +300,16 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
     });
 
     // Send welcome
-    ws.send(JSON.stringify({
+    const welcome: Record<string, unknown> = {
       type: 'connected',
       message: 'Octopi Gateway WebSocket connected',
       timestamp: Date.now(),
-    }));
+    };
+    // 合并 Gateway 提供的额外信息
+    if (this.onWelcome) {
+      try { Object.assign(welcome, this.onWelcome()); } catch { /* ignore */ }
+    }
+    ws.send(JSON.stringify(welcome));
   }
 
   private async handleWsMessage(session: WsSession, msg: any): Promise<void> {
