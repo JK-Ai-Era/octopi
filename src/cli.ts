@@ -485,15 +485,13 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
 
-  // 如果是守护进程模式，也写 PID 文件（方便 serve stop 发现）
-  if (process.env.OCTOPI_DAEMON === '1') {
-    writePidFile({
-      pid: process.pid,
-      config: configPath ?? join(process.cwd(), 'octopi.json'),
-      port: args.port,
-      startedAt: new Date().toISOString(),
-    });
-  }
+  // 写 PID 文件（方便 serve stop/restart 发现）
+  writePidFile({
+    pid: process.pid,
+    config: configPath ?? join(process.cwd(), 'octopi.json'),
+    port: args.port,
+    startedAt: new Date().toISOString(),
+  });
 
   await gateway.start();
 }
