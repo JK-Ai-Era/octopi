@@ -102,6 +102,13 @@ export interface AgentEngineDeps {
     /** 重试时附加的 steer 指令 */
     steerInstruction?: string;
   };
+  /** 空响应重试配置 */
+  emptyResponseRetry?: {
+    /** 最大重试次数（默认 2） */
+    maxAttempts?: number;
+    /** 重试时附加的 steer 指令 */
+    steerInstruction?: string;
+  };
   /**
    * 模型调用空闲超时（毫秒，默认 120000）
    *
@@ -191,6 +198,10 @@ export class AgentEngine {
   private planningOnlyRetryAttempts = 0;
   private planningOnlySteerInjected = false;
 
+  // ── 空响应重试状态 ──
+  private emptyResponseRetryAttempts = 0;
+  private emptyResponseSteerInjected = false;
+
   // ── No-op 检测状态（防止 tool-loop 死循环） ──
   private consecutiveNoops = 0;
   private static readonly MAX_CONSECUTIVE_NOOPS = 2;
@@ -263,6 +274,8 @@ export class AgentEngine {
     this.uniqueTools = new Set();
     this.planningOnlyRetryAttempts = 0;
     this.planningOnlySteerInjected = false;
+    this.emptyResponseRetryAttempts = 0;
+    this.emptyResponseSteerInjected = false;
     this.consecutiveNoops = 0;
 
     // 重置预算计数器，确保每次 run() 都从零开始
@@ -846,7 +859,48 @@ export class AgentEngine {
             }
           }
 
-          // 2j. 纯文本回复 → 完成
+          // 2j. 空响应检测与重试
+          //    当模型返回空内容（没有 tool_calls）时，注入 steer 指令重试
+          if (!llmResponse.content || llmResponse.content.trim().length === 0) {
+            const emptyMaxAttempts = this.deps.emptyResponseRetry?.maxAttempts ?? 2;
+            if (this.emptyResponseRetryAttempts < emptyMaxAttempts) {
+              this.emptyResponseRetryAttempts++;
+
+              const emptySteerInstruction = this.deps.emptyResponseRetry?.steerInstruction ??
+                'You have not provided a response. Please summarize your findings and respond to the user.';
+
+              if (!this.emptyResponseSteerInjected) {
+                messages.push({
+                  role: 'user',
+                  content: `[System: ${emptySteerInstruction}]`,
+                  timestamp: Date.now(),
+                });
+                this.emptyResponseSteerInjected = true;
+              }
+
+              events.emit({
+                type: 'empty_response_retry',
+                timestamp: Date.now(),
+                data: {
+                  attempt: this.emptyResponseRetryAttempts,
+                  maxAttempts: emptyMaxAttempts,
+                },
+              });
+              yield {
+                type: 'empty_response_retry',
+                timestamp: Date.now(),
+                data: {
+                  attempt: this.emptyResponseRetryAttempts,
+                  maxAttempts: emptyMaxAttempts,
+                },
+              };
+
+              // 继续循环，重试
+              continue;
+            }
+          }
+
+          // 2k. 纯文本回复 → 完成
           const turn: Turn = {
             id: randomUUID(),
             input: messages.slice(0, -1),

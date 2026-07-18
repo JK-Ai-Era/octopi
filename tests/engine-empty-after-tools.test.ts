@@ -20,16 +20,26 @@ import { DefaultSecurityGuard } from '../src/core/security-guard.js';
 import { IterationBudget } from '../src/core/budget.js';
 import { DefaultContextEngine } from '../src/harness/context/default-context-engine.js';
 
+/**
+ * 创建顺序 Provider。
+ *
+ * 注意：引擎在 stream 返回空内容且无 tool_calls 时会 fallback 到 chat()，
+ * 因此 chat() 返回最近一次 stream 的响应（不额外推进计数器）。
+ */
 function createSequentialProvider(responses: LLMResponse[]): ModelProvider {
   let callIndex = 0;
+  let lastStreamResponse: LLMResponse | null = null;
   return {
     name: 'test', models: ['test'], defaultModel: 'test',
     getModelInfo: () => null, getModelInfos: () => [],
-    async chat(request: LLMRequest): Promise<LLMResponse> {
+    async chat(_request: LLMRequest): Promise<LLMResponse> {
+      // stream fallback 到 chat 时，返回最近一次 stream 的响应
+      if (lastStreamResponse) return lastStreamResponse;
       return responses[Math.min(callIndex++, responses.length - 1)];
     },
-    async *stream(request: LLMRequest): AsyncGenerator<LLMStreamChunk> {
+    async *stream(_request: LLMRequest): AsyncGenerator<LLMStreamChunk> {
       const r = responses[Math.min(callIndex++, responses.length - 1)];
+      lastStreamResponse = r;
       if (r.toolCalls?.length) {
         for (let i = 0; i < r.toolCalls.length; i++) {
           yield { type: 'tool_call', toolCall: { id: r.toolCalls[i].id, name: r.toolCalls[i].name, arguments: JSON.stringify(r.toolCalls[i].arguments), index: i } };
@@ -65,7 +75,7 @@ describe('Engine: empty response after tool execution', () => {
     const provider = createSequentialProvider([
       // 模型返回 tool_call（无文本）
       { content: '', toolCalls: [{ id: 'c1', name: 'shell', arguments: { command: 'ls' } }], usage: { promptTokens: 100, completionTokens: 5, totalTokens: 105 }, model: 'test', finishReason: 'tool_calls' },
-      // 工具执行后，模型返回空内容
+      // 工具执行后，模型返回空内容（stream 空 + fallback chat 空 → 触发空响应重试 → 但 maxAttempts=0 所以不重试）
       { content: '', toolCalls: undefined, usage: { promptTokens: 200, completionTokens: 0, totalTokens: 200 }, model: 'test', finishReason: 'stop' },
     ]);
 
@@ -93,6 +103,96 @@ describe('Engine: empty response after tool execution', () => {
 
     // 不应该有 engine.error
     expect(types).not.toContain('engine.error');
+  });
+
+  it('should retry when model returns empty content (no tool_calls)', async () => {
+    const provider = createSequentialProvider([
+      // 第一次：空内容，无 tool_calls（stream 空 → fallback chat 也返回空）
+      { content: '', toolCalls: undefined, usage: { promptTokens: 100, completionTokens: 0, totalTokens: 100 }, model: 'test', finishReason: 'stop' },
+      // 重试后：正常回复
+      { content: 'Here is the summary.', toolCalls: undefined, usage: { promptTokens: 100, completionTokens: 10, totalTokens: 110 }, model: 'test', finishReason: 'stop' },
+    ]);
+
+    const bus = new DefaultEventBus();
+    const engine = new AgentEngine({
+      model: provider, tools: new Map(), executor: null as any, contextEngine: new DefaultContextEngine(),
+      events: bus, security: new DefaultSecurityGuard(), budget: new IterationBudget(bus), errorStrategy,
+      emptyResponseRetry: { maxAttempts: 2 },
+    });
+
+    const events = await collectEvents(engine, [{ role: 'user', content: 'test', timestamp: Date.now() }], { agentId: 't', sessionId: 's', model: 'test', systemPrompt: 'sys' });
+
+    const types = events.map(e => e.type);
+
+    // 应该触发空响应重试
+    expect(types).toContain('empty_response_retry');
+
+    // 最终应该有正常回复
+    expect(types).toContain('turn.end');
+    const turnEnd = events.find(e => e.type === 'turn.end');
+    expect(turnEnd?.data?.content).toBe('Here is the summary.');
+  });
+
+  it('should stop retrying after maxAttempts for empty response', async () => {
+    const provider = createSequentialProvider([
+      // 三次空内容（stream + fallback chat 共享同一个响应，所以 3 个响应对象足够）
+      { content: '', toolCalls: undefined, usage: { promptTokens: 100, completionTokens: 0, totalTokens: 100 }, model: 'test', finishReason: 'stop' },
+      { content: '', toolCalls: undefined, usage: { promptTokens: 100, completionTokens: 0, totalTokens: 100 }, model: 'test', finishReason: 'stop' },
+      { content: '', toolCalls: undefined, usage: { promptTokens: 100, completionTokens: 0, totalTokens: 100 }, model: 'test', finishReason: 'stop' },
+    ]);
+
+    const bus = new DefaultEventBus();
+    const engine = new AgentEngine({
+      model: provider, tools: new Map(), executor: null as any, contextEngine: new DefaultContextEngine(),
+      events: bus, security: new DefaultSecurityGuard(), budget: new IterationBudget(bus), errorStrategy,
+      emptyResponseRetry: { maxAttempts: 2 },
+    });
+
+    const events = await collectEvents(engine, [{ role: 'user', content: 'test', timestamp: Date.now() }], { agentId: 't', sessionId: 's', model: 'test', systemPrompt: 'sys' });
+
+    const retryEvents = events.filter(e => e.type === 'empty_response_retry');
+
+    // 最多重试 2 次
+    expect(retryEvents.length).toBeLessThanOrEqual(2);
+
+    // 最终仍然有 turn.end（即使内容为空）
+    const types = events.map(e => e.type);
+    expect(types).toContain('turn.end');
+  });
+
+  it('should retry empty response after tool calls', async () => {
+    const provider = createSequentialProvider([
+      // 模型返回 tool_call
+      { content: '', toolCalls: [{ id: 'c1', name: 'shell', arguments: { command: 'ls' } }], usage: { promptTokens: 100, completionTokens: 5, totalTokens: 105 }, model: 'test', finishReason: 'tool_calls' },
+      // 工具执行后模型返回空内容（stream 空 → fallback chat 返回同一空响应）
+      { content: '', toolCalls: undefined, usage: { promptTokens: 200, completionTokens: 0, totalTokens: 200 }, model: 'test', finishReason: 'stop' },
+      // 重试后正常回复
+      { content: 'Analysis complete.', toolCalls: undefined, usage: { promptTokens: 200, completionTokens: 10, totalTokens: 210 }, model: 'test', finishReason: 'stop' },
+    ]);
+
+    const tools = new Map<string, RegisteredTool>();
+    tools.set('shell', shellTool);
+    const bus = new DefaultEventBus();
+    const engine = new AgentEngine({
+      model: provider, tools, executor: null as any, contextEngine: new DefaultContextEngine(),
+      events: bus, security: new DefaultSecurityGuard(), budget: new IterationBudget(bus), errorStrategy,
+      emptyResponseRetry: { maxAttempts: 2 },
+    });
+
+    const events = await collectEvents(engine, [{ role: 'user', content: 'test', timestamp: Date.now() }], { agentId: 't', sessionId: 's', model: 'test', systemPrompt: 'sys' });
+
+    const types = events.map(e => e.type);
+
+    // 工具应该被执行
+    expect(types).toContain('tool.exec.end');
+
+    // 应该触发空响应重试
+    expect(types).toContain('empty_response_retry');
+
+    // 最终应该有正常回复
+    expect(types).toContain('turn.end');
+    const turnEnd = events.find(e => e.type === 'turn.end');
+    expect(turnEnd?.data?.content).toBe('Analysis complete.');
   });
 
   it('should correctly pass tool results to second model call', async () => {
