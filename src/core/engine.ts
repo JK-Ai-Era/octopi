@@ -889,7 +889,13 @@ export class AgentEngine {
         data: { error: error instanceof Error ? error.message : String(error) },
       };
     } finally {
-      // 保证 ENGINE_END 在所有退出路径上都被发射（TUI 依赖此事件重置 isProcessing）
+      // 保证 engine.end 在所有退出路径上都被 yield（TUI 依赖此事件重置 isProcessing）
+      // 同时 emit 到 EventBus 供其他监听器使用
+      yield {
+        type: 'engine.end',
+        timestamp: Date.now(),
+        data: { reason: 'finally' },
+      };
       events.emit({
         type: AgentEvents.ENGINE_END,
         timestamp: Date.now(),

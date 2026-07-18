@@ -46,8 +46,10 @@ export interface OpenAIProviderConfig {
   models?: (string | ModelInfo)[];
   /** 默认使用的模型 */
   defaultModel?: string;
-  /** 请求超时（毫秒） */
+  /** 请求超时（毫秒）— 空闲超时，数据到达时重置 */
   timeoutMs?: number;
+  /** 请求总超时（毫秒）— 硬超时，不随数据重置，默认 5 分钟 */
+  requestTimeoutMs?: number;
 }
 
 /**
@@ -63,12 +65,14 @@ export class OpenAIProvider implements ModelProvider {
   private baseUrl: string;
   readonly defaultModel: string;
   private timeoutMs: number;
+  private requestTimeoutMs: number;
 
   constructor(config: OpenAIProviderConfig) {
     this.name = config.name ?? 'openai';
     this.apiKey = config.apiKey;
     this.baseUrl = (config.baseUrl ?? 'https://api.openai.com/v1').replace(/\/$/, '');
     this.timeoutMs = config.timeoutMs ?? 60_000;
+    this.requestTimeoutMs = config.requestTimeoutMs ?? 300_000;
 
     // 解析 models 配置：提取名称列表 + ModelInfo 映射
     // 合并内置默认值（用户配置优先）
@@ -159,6 +163,9 @@ export class OpenAIProvider implements ModelProvider {
       request.signal.addEventListener('abort', () => controller.abort(), { once: true });
     }
 
+    // 硬超时：整个请求的最大时长（不随数据重置）
+    const requestTimer = setTimeout(() => controller.abort(), this.requestTimeoutMs);
+
     // 连接超时：fetch 建立连接的最大等待时间
     const connectTimer = setTimeout(() => controller.abort(), this.timeoutMs);
 
@@ -175,6 +182,7 @@ export class OpenAIProvider implements ModelProvider {
       });
     } catch (err) {
       clearTimeout(connectTimer);
+      clearTimeout(requestTimer);
       throw err;
     }
     // 连接已建立，清除连接超时
@@ -279,6 +287,7 @@ export class OpenAIProvider implements ModelProvider {
     }
     } finally {
       if (idleTimer) clearTimeout(idleTimer);
+      clearTimeout(requestTimer);
     }
   }
 

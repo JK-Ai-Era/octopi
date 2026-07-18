@@ -107,6 +107,8 @@ export class Gateway {
   private streamingAdapters: StreamingChannelAdapter[] = [];
   /** 每个 provider 的熔断器 */
   private circuitBreakers = new Map<string, CircuitBreaker>();
+  /** 每个 session 的中止控制器 */
+  private abortControllers = new Map<string, AbortController>();
 
   constructor(config: GatewayConfig) {
     this.config = config;
@@ -174,6 +176,10 @@ export class Gateway {
     if ('broadcastEvent' in adapter && typeof adapter.broadcastEvent === 'function') {
       this.streamingAdapters.push(adapter as StreamingChannelAdapter);
     }
+    // 注册中止回调
+    if ('onAbort' in adapter) {
+      (adapter as any).onAbort = (sessionId: string) => this.abortSession(sessionId);
+    }
     console.log(`[Gateway] Registered channel: ${adapter.name}`);
   }
 
@@ -192,6 +198,17 @@ export class Gateway {
 
   getPluginManager(): PluginManager {
     return this.pluginManager;
+  }
+
+  /**
+   * 中止指定 session 的正在运行的 agent
+   */
+  abortSession(sessionId: string): void {
+    const controller = this.abortControllers.get(sessionId);
+    if (controller) {
+      controller.abort();
+      this.abortControllers.delete(sessionId);
+    }
   }
 
   // ================================================================
@@ -261,8 +278,12 @@ export class Gateway {
 
     let finalContent = '';
 
+    // 创建中止控制器
+    const abortController = new AbortController();
+    this.abortControllers.set(sessionKey, abortController);
+
     try {
-      for await (const event of runner.handle(sessionKey, userMessage, runConfig)) {
+      for await (const event of runner.handle(sessionKey, userMessage, runConfig, abortController.signal)) {
         // 转发事件给监听器
         this.emitEvent(event as any);
 
@@ -279,6 +300,8 @@ export class Gateway {
     } catch (error) {
       console.error(`[Gateway] Error processing message:`, error);
       finalContent = `[Gateway Error] ${error instanceof Error ? error.message : String(error)}`;
+    } finally {
+      this.abortControllers.delete(sessionKey);
     }
 
     // 6. Plugin: message_sending

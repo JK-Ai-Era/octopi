@@ -69,6 +69,8 @@ export interface ProviderConfig {
   defaultModel?: string;
   /** 请求超时（毫秒，默认 60000） */
   timeoutMs?: number;
+  /** 请求总超时（毫秒，硬超时，不随数据重置，默认 300000） */
+  requestTimeoutMs?: number;
 }
 
 // ── Agent 配置 ──
@@ -372,6 +374,8 @@ export async function createProviderFromConfig(pc: ProviderConfig): Promise<Mode
       baseUrl: pc.baseUrl,
       models: pc.models,
       defaultModel: pc.defaultModel,
+      timeoutMs: pc.timeoutMs,
+      requestTimeoutMs: pc.requestTimeoutMs,
     });
   }
 
@@ -383,6 +387,8 @@ export async function createProviderFromConfig(pc: ProviderConfig): Promise<Mode
       baseUrl: pc.baseUrl,
       models: pc.models,
       defaultModel: pc.defaultModel,
+      timeoutMs: pc.timeoutMs,
+      requestTimeoutMs: pc.requestTimeoutMs,
     });
   }
 

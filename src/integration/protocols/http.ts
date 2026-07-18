@@ -73,6 +73,8 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
   private server?: Server;
   private wss?: WebSocketServer;
   private wsSessions = new Set<WsSession>();
+  /** 中止回调（由 Gateway 注册） */
+  onAbort?: (sessionId: string) => void;
 
   constructor(options: HttpAdapterOptions) {
     this.port = options.port;
@@ -333,6 +335,7 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
       }
     } else if (msg.type === 'abort') {
       console.log(`[WS] Abort requested for session ${msg.sessionId}`);
+      this.onAbort?.(msg.sessionId);
     }
   }
 

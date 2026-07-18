@@ -136,6 +136,49 @@ describe('AgentEngine', () => {
     expect(emittedEvents.some(e => e.type === AgentEvents.ENGINE_END)).toBe(true);
   });
 
+  it('应该在所有退出路径上 yield engine.end 事件', async () => {
+    // 正常退出（turn.end 后）
+    const deps1 = createTestDeps();
+    const engine1 = new AgentEngine(deps1);
+    const events1: string[] = [];
+    for await (const event of engine1.run([createTestMessage('你好')], { systemPrompt: 'test' })) {
+      events1.push(event.type);
+    }
+    expect(events1).toContain('engine.end');
+    // engine.end 应该是最后一个事件
+    expect(events1[events1.length - 1]).toBe('engine.end');
+
+    // 预算超限退出
+    const events2 = new DefaultEventBus();
+    const budget = new IterationBudget(events2, { maxIterations: 0, maxToolCalls: 10, maxTokens: 100000, maxWallClockMs: 300000 });
+    const deps2 = createTestDeps({ budget, events: events2 });
+    const engine2 = new AgentEngine(deps2);
+    const emitted2: string[] = [];
+    for await (const event of engine2.run([createTestMessage('你好')], { systemPrompt: 'test' })) {
+      emitted2.push(event.type);
+    }
+    expect(emitted2).toContain('engine.end');
+    expect(emitted2[emitted2.length - 1]).toBe('engine.end');
+
+    // 安全阻断退出
+    const security = {
+      checkUserInput: vi.fn().mockReturnValue({ isClean: false, violations: [{ severity: 'critical', description: 'blocked' }] }),
+      checkModelOutput: vi.fn().mockReturnValue({ isClean: true, violations: [] }),
+      checkToolCall: vi.fn().mockReturnValue({ isClean: true, violations: [] }),
+      checkToolOutput: vi.fn().mockReturnValue({ isClean: true, violations: [] }),
+      checkBehavior: vi.fn().mockReturnValue({ isClean: true, violations: [] }),
+    } as unknown as SecurityGuard;
+    const deps3 = createTestDeps({ security });
+    const engine3 = new AgentEngine(deps3);
+    const emitted3: string[] = [];
+    for await (const event of engine3.run([createTestMessage('hack')], { systemPrompt: 'test' })) {
+      emitted3.push(event.type);
+    }
+    expect(emitted3).toContain('security.blocked');
+    expect(emitted3).toContain('engine.end');
+    expect(emitted3[emitted3.length - 1]).toBe('engine.end');
+  });
+
   it('应该在预算超限时停止', async () => {
     const events = new DefaultEventBus();
     const budget = new IterationBudget(events, { maxIterations: 0, maxToolCalls: 10, maxTokens: 100000, maxWallClockMs: 300000 });
