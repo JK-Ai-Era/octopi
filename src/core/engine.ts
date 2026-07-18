@@ -9,7 +9,6 @@
  * - 纯循环：只负责推理和工具执行，不关心 Session/Protocol
  * - 事件驱动：所有关键节点通过 EventBus 发射事件
  * - 安全内置：SecurityGuard 不可禁用（构造时验证有效性）
- * - 预算强制：IterationBudget 不可绕过
  *
  * 扩展点（回调槽）：
  * - onMessage: 消息到达时（可拦截/修改）
@@ -85,7 +84,8 @@ export interface AgentEngineDeps {
   /** 安全守卫 */
   security: SecurityGuard;
   /** 迭代预算 */
-  budget: IterationBudget;
+  /** 迭代预算（可选，已不作为硬限制使用） */
+  budget?: IterationBudget;
   /** 错误策略 */
   errorStrategy: ErrorStrategy;
   /** 观测器（可选） */
@@ -135,6 +135,14 @@ export interface AgentEngineDeps {
    * - Engine idle timeout: 引擎响应性保障（不随数据重置，每个 chunk 读取独立计时）
    */
   modelCallIdleTimeoutMs?: number;
+  /**
+   * 模型调用绝对超时（毫秒，默认 300000 = 5 分钟）
+   *
+   * 从请求发出开始计时，不随 chunk 到达重置。
+   * 防止 stream 无限发送 chunk 永不结束的场景。
+   * 与 idle timeout 互补：取先触发的。
+   */
+  modelCallAbsoluteTimeoutMs?: number;
 }
 
 /** 运行配置 */
@@ -218,6 +226,7 @@ export class AgentEngine {
 
   // ── 无进展循环检测状态 ──
   private toolCallHistory: import('./tool-loop-detection.js').ToolCallRecord[] = [];
+  private loopCriticalTriggered = false;
 
   // ── No-op 检测状态（防止 tool-loop 死循环） ──
   private consecutiveNoops = 0;
@@ -249,10 +258,10 @@ export class AgentEngine {
    */
   private emitAbortedMessage(
     messages: Message[],
-    signal: AbortSignal,
+    signal: AbortSignal | undefined,
     events: EventBus,
   ): void {
-    const reason = signal.reason instanceof Error
+    const reason = signal?.reason instanceof Error
       ? signal.reason.message
       : 'Agent run aborted';
     const abortedMessage: Message = {
@@ -296,11 +305,12 @@ export class AgentEngine {
     this.emptyResponseRetryAttempts = 0;
     this.emptyResponseSteerInjected = false;
     this.toolCallHistory = [];
+    this.loopCriticalTriggered = false;
     this.consecutiveNoops = 0;
 
 
-    // 重置预算计数器，确保每次 run() 都从零开始
-    budget.reset?.();
+    // 重置预算计数器（如果存在）
+    budget?.reset?.();
 
     // 设置系统提示到 SecurityGuard（用于泄露检测）
     if (security.setSystemPrompt) {
@@ -348,14 +358,14 @@ export class AgentEngine {
           return;
         }
 
-        // 预算检查
-        if (!budget.checkAndEmit()) {
+        // 预算检查（可选）
+        if (budget && !budget.checkAndEmit()) {
           yield { type: AgentEvents.BUDGET_EXCEEDED, timestamp: Date.now(), data: budget.report() as unknown as Record<string, unknown> };
           return;
         }
 
         iteration++;
-        budget.recordIteration();
+        budget?.recordIteration();
         events.emit({ type: AgentEvents.ITERATION_START, timestamp: Date.now(), data: { iteration } });
         yield { type: 'iteration.start', timestamp: Date.now(), data: { iteration } };
 
@@ -501,7 +511,7 @@ export class AgentEngine {
 
           // Observer: token 使用
           if (llmResponse.usage) {
-            budget.consumeTokens(llmResponse.usage.totalTokens);
+            budget?.consumeTokens(llmResponse.usage.totalTokens);
             observer?.recordMetric('agent.model.tokens.input', llmResponse.usage.promptTokens);
             observer?.recordMetric('agent.model.tokens.output', llmResponse.usage.completionTokens);
           }
@@ -552,13 +562,13 @@ export class AgentEngine {
                 return;
               }
 
-              // 预算检查
-              if (!budget.checkAndEmit()) {
+              // 预算检查（可选）
+              if (budget && !budget.checkAndEmit()) {
                 yield { type: AgentEvents.BUDGET_EXCEEDED, timestamp: Date.now(), data: budget.report() as unknown as Record<string, unknown> };
                 return;
               }
 
-              budget.recordToolCall();
+              budget?.recordToolCall();
 
               // beforeToolExec 回调
               let processedCall = call;
@@ -853,7 +863,18 @@ export class AgentEngine {
                 };
 
                 if (loopResult.level === 'critical') {
-                  // 严重循环：注入强制总结指令
+                  if (this.loopCriticalTriggered) {
+                    // 二次 critical：模型无视了第一次指令，强制退出
+                    yield {
+                      type: 'aborted',
+                      timestamp: Date.now(),
+                      data: { reason: 'loop_detected_critical_twice', message: loopResult.message },
+                    };
+                    this.emitAbortedMessage(messages, undefined, events);
+                    return;
+                  }
+                  // 首次 critical：注入强制总结指令
+                  this.loopCriticalTriggered = true;
                   messages.push({
                     role: 'user',
                     content: `[System: ${loopResult.message} Stop calling tools and provide your final response based on the information gathered so far.]`,
@@ -1073,18 +1094,33 @@ export class AgentEngine {
     // 不同于 provider 的 idle timeout（HTTP 层，数据到达重置）
     // 这里的 idle timeout 是引擎层的，保证引擎不会无限阻塞在 reader.read()
     const idleTimeoutMs = this.deps.modelCallIdleTimeoutMs ?? 120_000;
+    const absoluteTimeoutMs = this.deps.modelCallAbsoluteTimeoutMs ?? 300_000;
+    const requestStartTime = Date.now();
 
     try {
       const providerStream = model.stream(request);
       let idleTimer: ReturnType<typeof setTimeout> | null = null;
 
+      // 计算绝对超时的剩余时间
+      const remainingAbsoluteMs = () => absoluteTimeoutMs - (Date.now() - requestStartTime);
+
       // Watchdog: 包装 provider 的 generator，添加引擎层超时和 abort 检查
+      // 竞争三个信号：idle timeout / absolute timeout / abort signal
       const watchdogRead = (): Promise<IteratorResult<LLMStreamChunk>> => {
         return new Promise((resolve, reject) => {
+          // 计算本次读取的有效超时 = min(idle, absolute剩余)
+          const absRemaining = remainingAbsoluteMs();
+          const effectiveTimeout = Math.max(0, Math.min(idleTimeoutMs, absRemaining));
+
+          if (effectiveTimeout === 0) {
+            reject(new Error('Model call absolute timeout: total request time exceeded limit'));
+            return;
+          }
+
           // 设置空闲超时
           idleTimer = setTimeout(() => {
             reject(new Error('Model call idle timeout: no data received from provider within timeout window'));
-          }, idleTimeoutMs);
+          }, effectiveTimeout);
 
           // 监听 abort signal
           const onAbort = () => {
@@ -1473,10 +1509,10 @@ export class AgentEngine {
    */
   private buildCheckpointContext(config: RunConfig): CheckpointContext {
     const budget = this.deps.budget;
-    const report = budget.report();
+    const report = budget?.report() ?? { iterations: 0, toolCalls: 0, totalTokens: 0, elapsedMs: 0, status: 'ok' as const, remaining: { iterations: 0, toolCalls: 0, tokens: 0, wallClockMs: 0 } };
 
     // 计算 token 增长率
-    const currentTokens = report.totalTokens;
+    const currentTokens = report.totalTokens ?? 0;
     const tokenGrowthRate = this.tokensAtCheckpoint > 0
       ? (currentTokens - this.tokensAtCheckpoint) / this.tokensAtCheckpoint
       : 0;
