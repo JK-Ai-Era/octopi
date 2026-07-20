@@ -520,20 +520,8 @@ function resolveGatewayUrl(config: any): string {
 }
 
 async function chatCommand(args: CliArgs): Promise<void> {
-  // 检测 Gateway 是否在运行
-  // 如果在运行，使用 Gateway 的配置文件（保持一致）
-  const pidFile = readPidFile();
-  const gatewayRunning = pidFile && isProcessAlive(pidFile.pid);
-
-  let configPath: string | undefined;
-  if (gatewayRunning && !args.config) {
-    // Gateway 在运行 → 用 Gateway 的配置
-    configPath = pidFile!.config;
-    console.log(`[TUI] Gateway detected (PID: ${pidFile!.pid}), using its config: ${configPath}`);
-  } else {
-    configPath = await ensureInitialized(args);
-  }
-
+  // 1. 确保配置已初始化
+  const configPath = await ensureInitialized(args);
   const config = loadConfig(configPath);
   const agent = config.agents[0];
   if (!agent) {
@@ -541,70 +529,66 @@ async function chatCommand(args: CliArgs): Promise<void> {
     process.exit(1);
   }
 
-  // 从实际使用的配置文件路径推导 configDir
-  const configDir = configPath ? resolve(dirname(configPath)) : process.cwd();
-  if (agent.workspace && !agent.workspace.startsWith('/')) {
-    agent.workspace = resolve(configDir, agent.workspace);
-  }
-  if (!agent.workspace) {
-    agent.workspace = configDir;
-  }
+  // 2. 确保 Gateway 在运行（没运行则自动启动）
+  let pidFile = readPidFile();
+  let gatewayRunning = pidFile && isProcessAlive(pidFile.pid);
 
-  const providerCfg = config.providers?.find((p) => p.name === agent.model.provider);
-  if (!providerCfg) {
-    console.error(`[Error] Provider "${agent.model.provider}" not found`);
-    process.exit(1);
-  }
-
-  const provider = createProvider(providerCfg);
-  if (!provider) {
-    console.error(`[Error] Provider "${providerCfg.name}" requires apiKey`);
-    process.exit(1);
-  }
-
-  const { JsonlSessionStore } = await import('./integration/storage/jsonl.js');
-  const { TuiApp } = await import('./integration/tui/app.js');
-
-  // 使用配置中的 dataDir，否则默认 .octopi/sessions
-  const storeDir = config.store?.dataDir
-    ? (config.store.dataDir.startsWith('/') ? config.store.dataDir : resolve(configDir, config.store.dataDir))
-    : resolve(configDir, '.octopi/sessions');
-
-  // 构建 systemPrompt
-  let systemPrompt: string | undefined;
-  if (typeof agent.persona === 'object' && agent.persona?.systemPrompt) {
-    systemPrompt = agent.persona.systemPrompt;
-  }
-
-  // persona 路径
-  let personaPath: string | undefined;
-  if (typeof agent.persona === 'string') {
-    personaPath = agent.persona.startsWith('/') ? agent.persona : resolve(configDir, agent.persona);
-  }
-
-  // TaskSupervisor 配置
-  let supervisorCfg: any = undefined;
-  if (config.supervisor?.enabled !== false) {
-    supervisorCfg = { ...config.supervisor };
-    if (supervisorCfg.llmModel?.includes('/')) {
-      supervisorCfg.llmModel = supervisorCfg.llmModel.split('/')[1];
+  if (!gatewayRunning) {
+    console.log('[TUI] Gateway not running, starting...');
+    // 清理残留 PID 文件
+    removePidFile();
+    // 启动 Gateway（与 serveStartCommand 相同逻辑）
+    const childArgs = ['serve', 'fg'];
+    if (configPath) childArgs.push('--config', configPath);
+    const child = fork(process.argv[1], childArgs, {
+      detached: true,
+      stdio: 'ignore',
+      execArgv: [],
+      env: { ...process.env, OCTOPI_DAEMON: '1' },
+    });
+    if (!child.pid) {
+      console.error('❌ Failed to start Gateway');
+      process.exit(1);
     }
+    // 写 PID 文件
+    const httpChannel = config.channels?.find((c: any) => c.type === 'http');
+    const port = httpChannel?.port ?? 3000;
+    writePidFile({
+      pid: child.pid,
+      config: configPath ?? join(process.cwd(), 'octopi.json'),
+      port,
+      startedAt: new Date().toISOString(),
+    });
+    // 等待 Gateway 启动
+    console.log('[TUI] Waiting for Gateway to start...');
+    const gatewayUrl = `http://localhost:${port}`;
+    let ready = false;
+    for (let i = 0; i < 30; i++) {
+      await new Promise(r => setTimeout(r, 500));
+      try {
+        const res = await fetch(`${gatewayUrl}/health`, { signal: AbortSignal.timeout(1000) });
+        if (res.ok) { ready = true; break; }
+      } catch { /* not ready yet */ }
+    }
+    if (!ready) {
+      console.error('❌ Gateway failed to start within 15 seconds');
+      process.exit(1);
+    }
+    console.log(`[TUI] Gateway started (PID: ${child.pid})`);
+    pidFile = readPidFile();
+  } else {
+    console.log(`[TUI] Gateway detected (PID: ${pidFile!.pid})`);
   }
 
+  // 3. 解析 Gateway URL
+  const gatewayUrl = resolveGatewayUrl(config);
+
+  // 4. 启动 TUI
+  const { TuiApp } = await import('./integration/tui/app.js');
   const app = new TuiApp({
     agentId: agent.id,
-    model: agent.model.model,
-    provider,
-    store: new JsonlSessionStore(storeDir),
-    systemPrompt,
-    personaPath,
-    tools: [],
-    budget: config.budget,
-    supervisor: supervisorCfg,
-    workspace: agent.workspace,
-    gatewayUrl: resolveGatewayUrl(config),
+    gatewayUrl,
   });
-
   await app.start();
 }
 

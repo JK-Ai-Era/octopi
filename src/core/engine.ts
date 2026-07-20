@@ -516,6 +516,9 @@ export class AgentEngine {
             observer?.recordMetric('agent.model.tokens.output', llmResponse.usage.completionTokens);
           }
 
+          // DIAGNOSTIC: log model response summary
+          console.error(`[Engine] callModel returned: content=${JSON.stringify((llmResponse.content ?? '').slice(0, 100))}, toolCalls=${llmResponse.toolCalls?.length ?? 0}, finishReason=${llmResponse.finishReason}, usage=${JSON.stringify(llmResponse.usage)}`);
+
           // 2f. 触发 afterModelCall 回调
           if (this.afterModelCall) {
             llmResponse = this.afterModelCall(llmResponse);
@@ -525,6 +528,7 @@ export class AgentEngine {
           const outputCheck = security.checkModelOutput(llmResponse.content);
           const outputResult = this.handleSecurityViolation(outputCheck, 'model_output');
           if (outputResult.blocked) {
+            console.error(`[Engine] EXIT: security.blocked on model output: ${outputResult.reason}`);
             yield { type: 'security.blocked', timestamp: Date.now(), data: { reason: outputResult.reason } };
             return;
           }
@@ -550,6 +554,7 @@ export class AgentEngine {
 
           // 2h. 如果有 tool_calls → 执行工具
           // 只有 finishReason === 'tool_calls' 时才执行，防止截断/中断的 tool call 被误执行
+          console.error(`[Engine] Checking tool_calls: finishReason=${llmResponse.finishReason}, toolCalls.length=${llmResponse.toolCalls?.length ?? 0}`);
           if (llmResponse.finishReason === 'tool_calls' && llmResponse.toolCalls && llmResponse.toolCalls.length > 0) {
 
             const toolResults: ToolResult[] = [];
@@ -784,6 +789,7 @@ export class AgentEngine {
             const behaviorCheck = security.checkBehavior(behaviorCtx);
             const behaviorResult = this.handleSecurityViolation(behaviorCheck, 'behavior');
             if (behaviorResult.blocked) {
+              console.error(`[Engine] EXIT: security.behavior_blocked: ${behaviorResult.reason}`);
               yield {
                 type: 'security.behavior_blocked',
                 timestamp: Date.now(),
@@ -814,6 +820,7 @@ export class AgentEngine {
                 data: { verdict: checkpointVerdict, iteration } as unknown as Record<string, unknown>,
               };
               if (checkpointVerdict.action === 'stop') {
+                console.error(`[Engine] EXIT: checkpoint.stop: ${checkpointVerdict.reason}`);
                 yield {
                   type: 'checkpoint.stop',
                   timestamp: Date.now(),
@@ -865,6 +872,7 @@ export class AgentEngine {
                 if (loopResult.level === 'critical') {
                   if (this.loopCriticalTriggered) {
                     // 二次 critical：模型无视了第一次指令，强制退出
+                    console.error(`[Engine] EXIT: loop_detected critical twice`);
                     yield {
                       type: 'aborted',
                       timestamp: Date.now(),
@@ -958,10 +966,12 @@ export class AgentEngine {
 
           // 2j. 空响应检测与重试
           //    当模型返回空内容（没有 tool_calls）时，注入 steer 指令重试
+          console.error(`[Engine] Empty check: content=${JSON.stringify((llmResponse.content ?? '').slice(0, 50))}, empty=${!llmResponse.content || llmResponse.content.trim().length === 0}, attempts=${this.emptyResponseRetryAttempts}`);
           if (!llmResponse.content || llmResponse.content.trim().length === 0) {
             const emptyMaxAttempts = this.deps.emptyResponseRetry?.maxAttempts ?? 2;
             if (this.emptyResponseRetryAttempts < emptyMaxAttempts) {
               this.emptyResponseRetryAttempts++;
+              console.error(`[Engine] Empty response retry ${this.emptyResponseRetryAttempts}/${emptyMaxAttempts}`);
 
               const emptySteerInstruction = this.deps.emptyResponseRetry?.steerInstruction ??
                 'You have not provided a response. Please summarize your findings and respond to the user.';
@@ -997,6 +1007,7 @@ export class AgentEngine {
             }
           }
 
+          console.error(`[Engine] Reached turn.end path, content length=${(llmResponse.content ?? '').length}`);
           // 2k. 纯文本回复 → 完成
           const turn: Turn = {
             id: randomUUID(),
@@ -1046,6 +1057,7 @@ export class AgentEngine {
       engineSpan?.setStatus('error');
       engineSpan?.end();
 
+      console.error(`[Engine] CAUGHT ERROR: ${error instanceof Error ? error.message : String(error)}`);
       yield {
         type: 'engine.error',
         timestamp: Date.now(),

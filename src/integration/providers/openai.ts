@@ -279,6 +279,56 @@ export class OpenAIProvider implements ModelProvider {
     }
     } finally {
       if (idleTimer) clearTimeout(idleTimer);
+
+      // Process remaining buffer data after stream ends
+      if (buffer.trim()) {
+        const remainingLines = buffer.split('\n');
+        for (const line of remainingLines) {
+          const trimmed = line.trim();
+          if (!trimmed || !trimmed.startsWith('data: ')) continue;
+          const data = trimmed.slice(6);
+          if (data === '[DONE]') {
+            if (toolCallBuffers.size > 0) {
+              for (const [idx, buf] of toolCallBuffers) {
+                yield {
+                  type: 'tool_call',
+                  toolCall: {
+                    id: buf.id,
+                    name: buf.name,
+                    arguments: buf.argsBuffer,
+                    index: idx,
+                  },
+                };
+              }
+            }
+            yield { type: 'done' };
+            return;
+          }
+          try {
+            const parsed = JSON.parse(data);
+            const delta = parsed.choices?.[0]?.delta;
+            if (delta?.content) yield { type: 'content', content: delta.content };
+            if (delta?.reasoning) yield { type: 'content', content: delta.reasoning };
+            if (delta?.tool_calls) {
+              for (const tc of delta.tool_calls) {
+                const idx = tc.index ?? 0;
+                const existing = toolCallBuffers.get(idx);
+                if (existing) {
+                  if (tc.id) existing.id = tc.id;
+                  if (tc.function?.name) existing.name = tc.function.name;
+                  if (tc.function?.arguments) existing.argsBuffer += tc.function.arguments;
+                } else {
+                  toolCallBuffers.set(idx, {
+                    id: tc.id ?? `call_${idx}`,
+                    name: tc.function?.name ?? '',
+                    argsBuffer: tc.function?.arguments ?? '',
+                  });
+                }
+              }
+            }
+          } catch { /* ignore parse errors */ }
+        }
+      }
     }
   }
 
