@@ -107,9 +107,6 @@ const READ_ONLY_COMMANDS = new Set([
   'echo', 'printf', 'date', 'whoami', 'id',
   'pwd', 'which', 'whereis', 'type',
   'env', 'printenv',
-  'git log', 'git show', 'git diff', 'git status',
-  'git branch', 'git tag',
-  'node --version', 'npm --version',
   'uname', 'hostname',
 ]);
 
@@ -139,10 +136,8 @@ const PACKAGE_COMMANDS = new Set([
   'gem', 'cargo', 'go install',
 ]);
 
-/** 提权命令 */
-const PRIVILEGE_COMMANDS = new Set([
-  'sudo', 'su',
-]);
+/** 提权命令 — 通过 seg.isSudo 判断，此 Set 保留备用 */
+// const PRIVILEGE_COMMANDS = new Set(['sudo', 'su']);
 
 // ── 风险评估 ──
 
@@ -417,7 +412,7 @@ function evaluateDeleteRisk(pathRisk: PathRisk, recursive: boolean): RiskLevel {
   switch (pathRisk) {
     case 'protected': return 'critical';
     case 'sensitive': return 'high';
-    case 'safe': return recursive ? 'low' : 'low';
+    case 'safe': return 'low';
     case 'normal': return recursive ? 'medium' : 'low';
     default: return 'medium';
   }

@@ -93,8 +93,6 @@ export function parseShellCommand(raw: string): ParsedCommand & { parsed: boolea
 
 // ── 第一层：按连接符拆分 ──
 
-const CONNECTOR_CHARS = new Set(['|', '&', ';']);
-
 /**
  * 按连接符拆分命令
  *

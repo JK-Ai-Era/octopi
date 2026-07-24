@@ -66,6 +66,9 @@ function checkCurlPipeSh(parsed: ParsedCommand): SafeAlternative | null {
 
 /**
  * 安全删除：rm → trash
+ *
+ * 只对非 safe 路径建议 trash（/tmp/ 等临时目录不需要降级）。
+ * 系统路径和凭证目录不应该到这里（会被硬边界和规则引擎拦截）。
  */
 function checkSafeDelete(parsed: ParsedCommand): SafeAlternative | null {
   for (const seg of parsed.segments) {
@@ -74,11 +77,18 @@ function checkSafeDelete(parsed: ParsedCommand): SafeAlternative | null {
     const targets = seg.args.filter(a => !a.startsWith('-'));
     if (targets.length === 0) continue;
 
-    // 只对项目目录和临时目录建议 trash
-    // 系统路径不应该到这里（会被硬边界拦截）
+    // 只对非 safe 路径建议 trash
+    // 临时目录（/tmp/）已经是 safe，不需要降级
+    const nonSafeTargets = targets.filter(t => {
+      const normalized = t.replace(/^~\//, process.env.HOME + '/');
+      return !normalized.startsWith('/tmp/') && !normalized.startsWith('/var/tmp/');
+    });
+
+    if (nonSafeTargets.length === 0) continue;
+
     return {
       description: '使用 trash 替代 rm（可恢复）',
-      command: `trash ${targets.join(' ')}`,
+      command: `trash ${nonSafeTargets.join(' ')}`,
     };
   }
 
