@@ -82,12 +82,14 @@ describe('安全层端到端集成', () => {
 
       // SecurityGuard 返回 clean（让引擎继续走到 beforeToolExecution 钩子）
       expect(result.isClean).toBe(true);
+      // 设置了 riskUnknown 标记
+      expect(result.riskUnknown).toBe(true);
       // 但发射了事件
       expect(emitted).toBe(true);
       expect(emittedData).toBeDefined();
     });
 
-    it('low/medium/high 风险不发射 risk_unknown 事件', () => {
+    it('low/medium/high 风险不发射 risk_unknown 事件，不设置 riskUnknown', () => {
       const events = new DefaultEventBus();
       const guard = new DefaultSecurityGuard(events);
       const policy = new DefaultToolCallRiskPolicy({ cwd: '/Users/dev/project' });
@@ -99,11 +101,12 @@ describe('安全层端到端集成', () => {
       });
 
       // 低风险命令
-      guard.checkToolCall({
+      const result = guard.checkToolCall({
         name: 'shell',
         arguments: { command: 'ls -la' },
       });
       expect(unknownEmitted).toBe(false);
+      expect(result.riskUnknown).toBeFalsy();
     });
   });
 
