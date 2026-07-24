@@ -256,7 +256,7 @@ export interface HarnessConfig {
     safetyGuard?: {
       /** 启用安全守卫（默认 false） */
       enabled: boolean;
-      /** 安全智能体使用的模型（不填用主 Agent 模型） */
+      /** 安全智能体使用的模型（不填用主 Agent 模型，格式：provider/model） */
       model?: string;
       /** 最大执行时长（毫秒，默认 15000） */
       maxDurationMs?: number;

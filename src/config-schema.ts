@@ -155,7 +155,7 @@ export const SecurityConfigSchema = z.object({
 export const DistributedIntelligenceConfigSchema = z.object({
   safetyGuard: z.object({
     enabled: z.boolean(),
-    model: z.string().optional(),
+    model: z.string().describe('provider/model 格式，如 xiaomi-coding/mimo-v2.5-pro').optional(),
     maxDurationMs: z.number().positive().optional(),
   }).optional(),
 }).optional();
