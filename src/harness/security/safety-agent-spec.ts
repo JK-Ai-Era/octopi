@@ -91,14 +91,10 @@ export function buildSafetyGuardSpec(model?: string): DistributedAgentSpec {
     description: '处理规则引擎无法判断的灰色地带，利用 LLM 的语义理解能力做风险判断',
 
     // ── 触发规则 ──
-    triggers: [
-      {
-        type: 'event',
-        event: {
-          type: 'tool_call.risk_unknown',
-        },
-      },
-    ],
+    // intercept 模式的智能体不使用触发器。
+    // 触发由 Engine 的 riskUnknown 标记控制，不在 TriggerEngine 中评估。
+    // 这里保留空数组作为占位，满足 DistributedAgentSpec 的类型要求。
+    triggers: [],
 
     // ── 输入策略 ──
     inputPolicy: {

@@ -363,7 +363,9 @@ export class DefaultSecurityGuard {
         };
 
         if (decision.level === 'unknown') {
-          // unknown → 放行，发射事件交给分布式安全智能体
+          // unknown → 放行，通知 Engine 调用安全智能体
+          // 事件发射是通知性（审计/日志），不是触发性。
+          // 触发由 riskUnknown 标记 + Engine 的 beforeToolExecution 控制。
           this.eventBus.emit({
             type: 'tool_call.risk_unknown',
             timestamp: Date.now(),
@@ -391,6 +393,7 @@ export class DefaultSecurityGuard {
         return { isClean: violations.length === 0, violations };
       } catch (err) {
         // 策略失效 → 安全默认：放行，交给分布式智能体兜底
+        // 事件发射是通知性（审计/日志），不是触发性。
         this.eventBus.emit({
           type: 'tool_call.risk_unknown',
           timestamp: Date.now(),

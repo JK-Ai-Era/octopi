@@ -47,11 +47,9 @@ function createSharedDeps(): SharedDeps {
 
 describe('安全守卫架构接线', () => {
   describe('安全守卫 Spec 结构', () => {
-    it('触发器是 EventTrigger，匹配 tool_call.risk_unknown', () => {
+    it('触发器为空数组（intercept 由 Engine 控制）', () => {
       const spec = buildSafetyGuardSpec();
-      expect(spec.triggers).toHaveLength(1);
-      expect(spec.triggers[0].type).toBe('event');
-      expect((spec.triggers[0] as { event: { type: string } }).event.type).toBe('tool_call.risk_unknown');
+      expect(spec.triggers).toHaveLength(0);
     });
 
     it('输出策略是 intercept 模式', () => {
@@ -98,8 +96,13 @@ describe('安全守卫架构接线', () => {
     });
   });
 
-  describe('TriggerEngine 匹配', () => {
-    it('EventTrigger 匹配有 eventData 的上下文', () => {
+  describe('intercept 智能体不使用触发器', () => {
+    it('安全守卫 Spec 触发器为空数组', () => {
+      const spec = buildSafetyGuardSpec();
+      expect(spec.triggers).toHaveLength(0);
+    });
+
+    it('空触发器在 TriggerEngine 评估中不匹配', () => {
       const events = new DefaultEventBus();
       const engine = new TriggerEngine({ events });
       const spec = buildSafetyGuardSpec();
@@ -107,16 +110,6 @@ describe('安全守卫架构接线', () => {
       const matched = engine.evaluateRules(spec.triggers, {
         eventData: { toolCall: { name: 'shell', arguments: { command: 'test' } } },
       });
-
-      expect(matched).toHaveLength(1);
-    });
-
-    it('EventTrigger 不匹配无 eventData 的上下文', () => {
-      const events = new DefaultEventBus();
-      const engine = new TriggerEngine({ events });
-      const spec = buildSafetyGuardSpec();
-
-      const matched = engine.evaluateRules(spec.triggers, {});
 
       expect(matched).toHaveLength(0);
     });

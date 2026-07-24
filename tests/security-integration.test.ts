@@ -114,11 +114,7 @@ describe('安全层端到端集成', () => {
     it('默认 Spec 结构正确', () => {
       const spec = buildSafetyGuardSpec();
       expect(spec.id).toBe('safety-guard');
-      expect(spec.triggers).toHaveLength(1);
-      expect(spec.triggers[0]).toEqual({
-        type: 'event',
-        event: { type: 'tool_call.risk_unknown' },
-      });
+      expect(spec.triggers).toHaveLength(0);
       expect(spec.outputPolicy.mode).toBe('intercept');
       expect(spec.inputPolicy.snapshot).toBe('structured');
     });

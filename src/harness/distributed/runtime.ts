@@ -198,7 +198,11 @@ export class AgentRuntime {
    * 工具执行前的同步拦截（intercept 模式）
    *
    * 由 Engine 的 beforeToolExecution 钩子调用。
-   * 遍历所有 intercept 模式的智能体，同步等待判断结果。
+   * Engine 只在 SecurityGuard 返回 riskUnknown 时才调用此方法，
+   * 所以 intercept 智能体不需要触发器评估——直接执行。
+   *
+   * 触发器机制只用于异步智能体（replace_context / inject_context / notify），
+   * intercept 智能体的触发由 Engine 的 riskUnknown 标记控制。
    */
   async beforeToolExecution(call: import('../../core/types.js').ToolCall): Promise<{ proceed: boolean; result?: unknown } | undefined> {
     for (const [id, agent] of this.interceptAgents) {
@@ -207,9 +211,8 @@ export class AgentRuntime {
         metrics: this.triggerEngine.getMetrics(),
       };
 
-      // 检查触发规则
-      const matched = this.triggerEngine.evaluateRules(agent.spec.triggers, ctx);
-      if (matched.length === 0) continue;
+      // intercept 模式跳过触发器评估
+      // 触发由 Engine 的 riskUnknown 标记控制，不在这里判断
 
       // 检查并发限制
       if (agent.spec.limits?.maxConcurrent &&
