@@ -186,6 +186,7 @@ export class AgentBuilder {
   private _events?: EventBus;
   private _security?: SecurityGuard;
   private _riskPolicy?: import('../../core/security-guard.js').ToolCallRiskPolicy;
+  private _safetyGuardConfig?: { cwd?: string; model?: string };
   private _budget?: IterationBudget;
   private _errorStrategy?: ErrorStrategy;
   private _observer?: Observer;
@@ -326,6 +327,22 @@ export class AgentBuilder {
     return this;
   }
 
+  /**
+   * 一行启用完整安全层
+   *
+   * 自动注入：
+   * 1. DefaultToolCallRiskPolicy（规则引擎）→ Core SecurityGuard
+   * 2. SafetyGuard DistributedAgentSpec（LLM 安全智能体）→ AgentRuntime
+   *
+   * @param config.cwd - 工作目录（用于路径风险分类）
+   * @param config.model - 安全智能体的模型覆盖（默认用主 Agent 模型）
+   */
+  withSafetyGuard(config?: { cwd?: string; model?: string }): this {
+    // 动态导入，避免循环依赖
+    this._safetyGuardConfig = config ?? {};
+    return this;
+  }
+
   /** 设置迭代预算 */
   budget(config: Partial<IterationBudgetConfig>): this {
     this._budget = new IterationBudget(this._events ?? new NoopEventBus(), config);
@@ -438,6 +455,23 @@ export class AgentBuilder {
 
     // 创建 McpManager
     const mcpManager = await this.buildMcpManager();
+
+    // 如果启用了安全守卫，自动注入风险策略 + 注册安全守卫 Spec
+    if (this._safetyGuardConfig) {
+      const { DefaultToolCallRiskPolicy } = await import('./security/default-risk-policy.js');
+      const { buildSafetyGuardSpec } = await import('./security/safety-agent-spec.js');
+
+      // 注入风险策略到 Core SecurityGuard
+      if (!this._riskPolicy) {
+        this._riskPolicy = new DefaultToolCallRiskPolicy({ cwd: this._safetyGuardConfig.cwd });
+      }
+
+      // 注册安全守卫 Spec（如果还没手动注册过）
+      const alreadyRegistered = this._distributedAgentSpecs.some(s => s.id === 'safety-guard');
+      if (!alreadyRegistered) {
+        this._distributedAgentSpecs.push(buildSafetyGuardSpec(this._safetyGuardConfig.model));
+      }
+    }
 
     // 创建 AgentRuntime（如果有分布式智能体）
     let runtime: import('./distributed/runtime.js').AgentRuntime | undefined;
