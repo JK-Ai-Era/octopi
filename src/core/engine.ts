@@ -92,6 +92,17 @@ export interface AgentEngineDeps {
   observer?: Observer;
   /** 默认系统提示词（RunConfig.systemPrompt 优先） */
   systemPrompt?: string;
+  /**
+   * 跳过 SecurityGuard 有效性验证
+   *
+   * 用于分布式智能体的 Engine 实例。
+   * 分布式智能体（如安全守卫）本身不需要被安全守卫保护，
+   * 但 Engine 构造函数默认强制验证 SecurityGuard。
+   * 设置此选项可跳过验证，允许使用 NoopSecurityGuard 等空实现。
+   *
+   * ⚠️ 仅在确定不需要安全检查时使用（如分布式智能体内部 Engine）。
+   */
+  skipSecurityValidation?: boolean;
   /** 任务监督器（可选，替代硬预算限制） */
   taskSupervisor?: TaskSupervisor;
   /** 检查点间隔（迭代数，默认 15） */
@@ -196,6 +207,16 @@ export class AgentEngine {
   beforeModelCall?: (req: LLMRequest) => LLMRequest | null;
   afterModelCall?: (resp: LLMResponse) => LLMResponse;
   beforeToolExec?: (call: ToolCall) => ToolCall | null;
+  /**
+   * 工具执行前的异步钩子（可 await，用于安全守卫等 intercept 场景）
+   *
+   * 与 beforeToolExec 的区别：
+   * - beforeToolExec: 同步，只能拦截或修改工具调用
+   * - beforeToolExecution: 异步，可以等待外部判断（如 LLM 安全守卫）
+   *
+   * 返回 undefined 表示放行，返回 { proceed: false, result } 表示拦截。
+   */
+  beforeToolExecution?: (call: ToolCall) => Promise<{ proceed: boolean; result?: unknown } | undefined>;
   afterToolExec?: (result: ToolResult) => ToolResult;
   afterTurn?: (turn: Turn) => void;
 
@@ -236,7 +257,8 @@ export class AgentEngine {
 
   constructor(deps: AgentEngineDeps) {
     // 安全守卫有效性验证：防止调用方传入 noop 实现绕过安全检查
-    if (!isValidSecurityGuard(deps.security)) {
+    // 分布式智能体可通过 skipSecurityValidation 跳过此验证
+    if (!deps.skipSecurityValidation && !isValidSecurityGuard(deps.security)) {
       throw new Error(
         'SecurityGuard validation failed: the provided implementation appears to be a no-op. ' +
         'SecurityGuard cannot be bypassed. Use DefaultSecurityGuard or provide a real implementation.',
@@ -516,9 +538,6 @@ export class AgentEngine {
             observer?.recordMetric('agent.model.tokens.output', llmResponse.usage.completionTokens);
           }
 
-          // DIAGNOSTIC: log model response summary
-          console.error(`[Engine] callModel returned: content=${JSON.stringify((llmResponse.content ?? '').slice(0, 100))}, toolCalls=${llmResponse.toolCalls?.length ?? 0}, finishReason=${llmResponse.finishReason}, usage=${JSON.stringify(llmResponse.usage)}`);
-
           // 2f. 触发 afterModelCall 回调
           if (this.afterModelCall) {
             llmResponse = this.afterModelCall(llmResponse);
@@ -528,7 +547,6 @@ export class AgentEngine {
           const outputCheck = security.checkModelOutput(llmResponse.content);
           const outputResult = this.handleSecurityViolation(outputCheck, 'model_output');
           if (outputResult.blocked) {
-            console.error(`[Engine] EXIT: security.blocked on model output: ${outputResult.reason}`);
             yield { type: 'security.blocked', timestamp: Date.now(), data: { reason: outputResult.reason } };
             return;
           }
@@ -554,7 +572,6 @@ export class AgentEngine {
 
           // 2h. 如果有 tool_calls → 执行工具
           // 只有 finishReason === 'tool_calls' 时才执行，防止截断/中断的 tool call 被误执行
-          console.error(`[Engine] Checking tool_calls: finishReason=${llmResponse.finishReason}, toolCalls.length=${llmResponse.toolCalls?.length ?? 0}`);
           if (llmResponse.finishReason === 'tool_calls' && llmResponse.toolCalls && llmResponse.toolCalls.length > 0) {
 
             const toolResults: ToolResult[] = [];
@@ -574,6 +591,19 @@ export class AgentEngine {
               }
 
               budget?.recordToolCall();
+
+              // beforeToolExecution 异步钩子（安全守卫等 intercept 场景）
+              if (this.beforeToolExecution) {
+                const decision = await this.beforeToolExecution(call);
+                if (decision && !decision.proceed) {
+                  toolResults.push({
+                    toolCallId: call.id,
+                    name: call.name,
+                    result: decision.result,
+                  });
+                  continue;
+                }
+              }
 
               // beforeToolExec 回调
               let processedCall = call;
@@ -789,7 +819,6 @@ export class AgentEngine {
             const behaviorCheck = security.checkBehavior(behaviorCtx);
             const behaviorResult = this.handleSecurityViolation(behaviorCheck, 'behavior');
             if (behaviorResult.blocked) {
-              console.error(`[Engine] EXIT: security.behavior_blocked: ${behaviorResult.reason}`);
               yield {
                 type: 'security.behavior_blocked',
                 timestamp: Date.now(),
@@ -820,7 +849,6 @@ export class AgentEngine {
                 data: { verdict: checkpointVerdict, iteration } as unknown as Record<string, unknown>,
               };
               if (checkpointVerdict.action === 'stop') {
-                console.error(`[Engine] EXIT: checkpoint.stop: ${checkpointVerdict.reason}`);
                 yield {
                   type: 'checkpoint.stop',
                   timestamp: Date.now(),
@@ -872,7 +900,6 @@ export class AgentEngine {
                 if (loopResult.level === 'critical') {
                   if (this.loopCriticalTriggered) {
                     // 二次 critical：模型无视了第一次指令，强制退出
-                    console.error(`[Engine] EXIT: loop_detected critical twice`);
                     yield {
                       type: 'aborted',
                       timestamp: Date.now(),
@@ -966,12 +993,10 @@ export class AgentEngine {
 
           // 2j. 空响应检测与重试
           //    当模型返回空内容（没有 tool_calls）时，注入 steer 指令重试
-          console.error(`[Engine] Empty check: content=${JSON.stringify((llmResponse.content ?? '').slice(0, 50))}, empty=${!llmResponse.content || llmResponse.content.trim().length === 0}, attempts=${this.emptyResponseRetryAttempts}`);
           if (!llmResponse.content || llmResponse.content.trim().length === 0) {
             const emptyMaxAttempts = this.deps.emptyResponseRetry?.maxAttempts ?? 2;
             if (this.emptyResponseRetryAttempts < emptyMaxAttempts) {
               this.emptyResponseRetryAttempts++;
-              console.error(`[Engine] Empty response retry ${this.emptyResponseRetryAttempts}/${emptyMaxAttempts}`);
 
               const emptySteerInstruction = this.deps.emptyResponseRetry?.steerInstruction ??
                 'You have not provided a response. Please summarize your findings and respond to the user.';
@@ -1007,7 +1032,6 @@ export class AgentEngine {
             }
           }
 
-          console.error(`[Engine] Reached turn.end path, content length=${(llmResponse.content ?? '').length}`);
           // 2k. 纯文本回复 → 完成
           const turn: Turn = {
             id: randomUUID(),
@@ -1057,7 +1081,6 @@ export class AgentEngine {
       engineSpan?.setStatus('error');
       engineSpan?.end();
 
-      console.error(`[Engine] CAUGHT ERROR: ${error instanceof Error ? error.message : String(error)}`);
       yield {
         type: 'engine.error',
         timestamp: Date.now(),

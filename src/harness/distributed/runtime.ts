@@ -10,17 +10,16 @@ import type { RegisteredTool, Message } from '../../core/types.js';
 import type { ModelProvider } from '../../core/interfaces/model-provider.js';
 import type { ErrorStrategy } from '../../core/interfaces/error-strategy.js';
 import type { Observer } from '../../core/interfaces/observer.js';
-import type { AgentEngine } from '../../core/engine.js';
+import type { AgentEngineDeps } from '../../core/engine.js';
+import { AgentEngine } from '../../core/engine.js';
 import type { DistributedAgentSpec } from './spec.js';
-import type { AgentInput, AgentOutput, TriggerContext, AgentContext, ContextOutput } from './types.js';
+import type { AgentInput, AgentOutput, InterceptOutput, ContextOutput, NotifyOutput, TriggerContext, AgentContext } from './types.js';
 import type { ResultInjectionMode } from './output-policy.js';
 import type { LLMExecution, HybridExecution } from './execution.js';
 import { TriggerEngine, getPriority } from './trigger.js';
 import { buildAgentInput } from './input-policy.js';
 import {
   handleIntercept,
-  handleReplaceContext,
-  handleInjectContext,
   handleNotify,
   InjectionQueue,
 } from './output-policy.js';
@@ -90,6 +89,15 @@ export class AgentRuntime {
   private auditTrail?: AuditTrail;
   private globalDisposables: Array<{ dispose(): void }> = [];
 
+  // ── 智能体分流 ──
+  /** intercept 模式的智能体（需要同步阻塞，在工具执行前判断） */
+  private interceptAgents = new Map<string, RegisteredAgent>();
+  /** 异步模式的智能体（replace_context / inject_context / notify，fire-and-forget） */
+  private asyncAgents = new Map<string, RegisteredAgent>();
+
+  /** 主 Agent 的上下文引用（由外部注入） */
+  private mainAgentContext?: AgentContext;
+
   constructor(config: AgentRuntimeConfig) {
     this.deps = config.deps;
     this.triggerEngine = new TriggerEngine({ events: config.deps.events });
@@ -104,6 +112,16 @@ export class AgentRuntime {
 
     // 监听所有事件，评估触发规则
     this.setupEventListeners();
+  }
+
+  /**
+   * 设置主 Agent 的上下文引用
+   *
+   * 由外部（Runner 或 Engine 循环）在每轮开始时调用，
+   * 让分布式智能体能访问主 Agent 的消息和配置。
+   */
+  setMainAgentContext(ctx: AgentContext): void {
+    this.mainAgentContext = ctx;
   }
 
   /**
@@ -123,25 +141,31 @@ export class AgentRuntime {
     };
 
     if (spec.execution.kind === 'code') {
-      // Code 模式：不需要 Engine，直接存储 handler
       agent.handler = spec.execution.handler;
     } else if (spec.execution.kind === 'llm' || spec.execution.kind === 'hybrid') {
-      // LLM / Hybrid 模式：自动创建独立 Engine
       agent.engine = this.createEngine(spec);
     }
 
     this.agents.set(spec.id, agent);
 
-    // 注册 ConditionTrigger 的轮询评估
-    for (const trigger of spec.triggers) {
-      if (trigger.type === 'condition' && typeof trigger.condition.evaluateOn === 'number') {
-        this.triggerEngine.registerConditionPolling(trigger, (ctx) => {
-          this.onTrigger(spec.id, ctx);
-        });
+    // 按 OutputPolicy.mode 分流
+    if (spec.outputPolicy.mode === 'intercept') {
+      this.interceptAgents.set(spec.id, agent);
+    } else {
+      this.asyncAgents.set(spec.id, agent);
+    }
+
+    // 注册 ConditionTrigger 的轮询评估（仅异步模式）
+    if (spec.outputPolicy.mode !== 'intercept') {
+      for (const trigger of spec.triggers) {
+        if (trigger.type === 'condition' && typeof trigger.condition.evaluateOn === 'number') {
+          this.triggerEngine.registerConditionPolling(trigger, (ctx) => {
+            this.onTrigger(spec.id, ctx);
+          });
+        }
       }
     }
 
-    // 发射注册事件
     this.deps.events.emit({
       type: 'distributed_agent.registered',
       timestamp: Date.now(),
@@ -168,6 +192,38 @@ export class AgentRuntime {
    */
   get injections(): InjectionQueue {
     return this.injectionQueue;
+  }
+
+  /**
+   * 工具执行前的同步拦截（intercept 模式）
+   *
+   * 由 Engine 的 beforeToolExecution 钩子调用。
+   * 遍历所有 intercept 模式的智能体，同步等待判断结果。
+   */
+  async beforeToolExecution(call: import('../../core/types.js').ToolCall): Promise<{ proceed: boolean; result?: unknown } | undefined> {
+    for (const [id, agent] of this.interceptAgents) {
+      const ctx: TriggerContext = {
+        eventData: { toolCall: call },
+        metrics: this.triggerEngine.getMetrics(),
+      };
+
+      // 检查触发规则
+      const matched = this.triggerEngine.evaluateRules(agent.spec.triggers, ctx);
+      if (matched.length === 0) continue;
+
+      // 检查并发限制
+      if (agent.spec.limits?.maxConcurrent &&
+          agent.concurrency >= agent.spec.limits.maxConcurrent) {
+        continue;
+      }
+
+      // 同步等待智能体执行
+      const result = await this.onTrigger(id, ctx);
+      if (result && !result.proceed) {
+        return result;  // block 或 degrade
+      }
+    }
+    return undefined;  // allow
   }
 
   /**
@@ -242,26 +298,50 @@ export class AgentRuntime {
 
     const tools = this.resolveTools(llm.tools);
 
-    // 动态导入 AgentEngine 避免循环依赖
-    // AgentEngine 的构造需要完整的 deps
-    // 这里返回一个占位，实际使用时需要 Builder 配合
-    const deps = {
+    const deps: AgentEngineDeps = {
       model: this.deps.model,
       tools,
+      executor: {
+        // 当前设计：分布式智能体的 executor 是空壳，不支持工具执行。
+        // 安全守卫等纯判断型智能体不需要工具。
+        // 未来如果需要工具支持的分布式智能体，这里需要从 Builder 注入真实的 executor。
+        execute: async () => ({ error: 'Distributed agent has no tool execution capability' }),
+      },
+      contextEngine: {
+        info: { id: 'distributed-agent-context', name: 'distributed-agent-context', ownsCompaction: false },
+        assemble: async (params) => {
+          // 分布式智能体的 contextEngine：只做 Message → LLMMessage 转换，不做压缩/裁剪
+          const messages = (params.messages ?? []).map((msg) => ({
+            role: msg.role,
+            content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content),
+            ...(msg.toolCalls ? {
+              tool_calls: msg.toolCalls.map(tc => ({
+                id: tc.id,
+                type: 'function' as const,
+                function: { name: tc.name, arguments: JSON.stringify(tc.arguments) },
+              })),
+            } : {}),
+            ...(msg.toolResults ? {
+              tool_call_id: msg.toolResults[0]?.toolCallId,
+              content: JSON.stringify(msg.toolResults.map(tr => tr.result)),
+            } : {}),
+          }));
+          return {
+            messages,
+            estimatedTokens: 0,
+            systemPrompt: params.systemPrompt ?? '',
+          };
+        },
+      },
       events: this.deps.events,
+      security: new NoopSecurityGuard(),
+      skipSecurityValidation: true,
       errorStrategy: this.deps.errorStrategy,
       observer: this.deps.observer,
-      security: new NoopSecurityGuard(),
       systemPrompt: llm.systemPrompt,
     };
 
-    // 由于 AgentEngine 需要 executor 和 contextEngine，
-    // 实际创建需要通过 Builder 或工厂方法
-    // 这里抛出提示，由集成层（Builder）完成实际创建
-    throw new Error(
-      `AgentRuntime.createEngine() for "${spec.id}" requires Builder integration. ` +
-      `Use AgentBuilder.withDistributedAgent() instead.`
-    );
+    return new AgentEngine(deps);
   }
 
   /**
@@ -294,7 +374,9 @@ export class AgentRuntime {
    * 评估所有已注册智能体的触发规则
    */
   private evaluateAllAgents(event: AgentEvent): void {
-    for (const [agentId, agent] of this.agents) {
+    // 只评估异步模式的智能体（replace_context / inject_context / notify）
+    // intercept 模式通过 beforeToolExecution 钩子同步调用
+    for (const [agentId, agent] of this.asyncAgents) {
       const ctx: TriggerContext = {
         eventData: event.data,
         metrics: this.triggerEngine.getMetrics(),
@@ -309,7 +391,7 @@ export class AgentRuntime {
         // 检查并发限制
         if (agent.spec.limits?.maxConcurrent &&
             agent.concurrency >= agent.spec.limits.maxConcurrent) {
-          // 达到并发上限，跳过（可扩展为排队）
+          // 达到并发上限，跳过
           continue;
         }
 
@@ -320,8 +402,10 @@ export class AgentRuntime {
 
   /**
    * 触发智能体执行
+   *
+   * @returns InterceptResult（仅 intercept 模式），其他模式返回 undefined
    */
-  private async onTrigger(agentId: string, ctx: TriggerContext): Promise<void> {
+  private async onTrigger(agentId: string, ctx: TriggerContext): Promise<import('./output-policy.js').InterceptResult | undefined> {
     const agent = this.agents.get(agentId);
     if (!agent) return;
 
@@ -336,8 +420,12 @@ export class AgentRuntime {
 
     try {
       // 构建 AgentInput
-      const agentCtx = this.buildAgentContext();
-      const input = buildAgentInput(agent.spec.inputPolicy, agentCtx);
+      const agentCtx = this.mainAgentContext ?? this.buildFallbackAgentContext();
+      const input = buildAgentInput(agent.spec.inputPolicy, agentCtx, {
+        recentToolCalls: agentCtx.recentToolCalls,
+        tokenCount: agentCtx.tokenCount,
+        agentEvents: agentCtx.agentEvents,
+      });
 
       // 发射开始事件
       this.deps.events.emit({
@@ -367,7 +455,7 @@ export class AgentRuntime {
       const durationMs = Date.now() - startTime;
 
       // 处理输出
-      this.processOutput(agent, output, agentCtx);
+      const interceptResult = this.processOutput(agent, output, agentCtx);
 
       // 发射完成事件
       this.deps.events.emit({
@@ -380,6 +468,7 @@ export class AgentRuntime {
       // 生命周期钩子：onComplete
       agent.spec.lifecycle?.onComplete?.(output);
 
+      return interceptResult;
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
 
@@ -400,12 +489,38 @@ export class AgentRuntime {
 
   /**
    * 执行 LLM 模式
+   *
+   * 调用 engine.run() 收集输出。
    */
   private async executeLLM(agent: RegisteredAgent, input: AgentInput): Promise<AgentOutput> {
-    // LLM 模式通过 Engine 执行
-    // 实际实现需要调用 engine.run() 并收集输出
-    // 这里提供框架，具体实现由 Builder 集成时完成
-    throw new Error('LLM execution requires Engine integration via Builder');
+    if (!agent.engine) {
+      throw new Error('LLM execution requires Engine');
+    }
+
+    // 将 AgentInput 转换为 messages 数组传给 Engine
+    const messages: Message[] = [];
+
+    // 构建一条 user 消息，包含 AgentInput 的结构化数据
+    const inputContent = JSON.stringify(input, null, 2);
+    messages.push({
+      role: 'user',
+      content: inputContent,
+      timestamp: Date.now(),
+    });
+
+    // 调用 Engine 的 run 方法
+    let lastContent = '';
+    for await (const event of agent.engine.run(messages, {
+      systemPrompt: (agent.spec.execution as LLMExecution).systemPrompt,
+      agentId: agent.spec.id,
+    })) {
+      if (event.type === 'turn.end' && event.data) {
+        lastContent = (event.data.content as string) ?? '';
+      }
+    }
+
+    // 解析 LLM 输出为 AgentOutput
+    return this.parseAgentOutput(lastContent, agent.spec.outputPolicy.mode);
   }
 
   /**
@@ -421,12 +536,7 @@ export class AgentRuntime {
     }
 
     // LLM 执行
-    let output: AgentOutput;
-    if (agent.engine) {
-      output = await this.executeLLM(agent, processedInput);
-    } else {
-      throw new Error('Hybrid execution requires Engine');
-    }
+    let output = await this.executeLLM(agent, processedInput);
 
     // postProcess
     if (hybrid.postProcess) {
@@ -437,25 +547,143 @@ export class AgentRuntime {
   }
 
   /**
+   * 解析 LLM 输出为 AgentOutput
+   *
+   * 尝试从 LLM 的文本输出中提取 JSON 格式的 AgentOutput。
+   * 如果解析失败，根据 mode 返回默认值。
+   */
+  private parseAgentOutput(content: string, mode: ResultInjectionMode): AgentOutput {
+    const jsonStr = this.extractFirstJsonObject(content);
+    if (jsonStr) {
+      try {
+        const parsed = JSON.parse(jsonStr) as Record<string, unknown>;
+        const validated = this.validateAgentOutput(parsed, mode);
+        if (validated) return validated;
+      } catch {
+        // JSON 解析失败，走兜底
+      }
+    }
+
+    // 兜底：根据 mode 返回安全默认值
+    // 解析失败默认放行，保证系统运行优先
+    switch (mode) {
+      case 'intercept':
+        return {
+          kind: 'intercept',
+          decision: 'allow',
+          reason: 'LLM output could not be parsed, defaulting to allow',
+          confidence: 0.0,
+        };
+      case 'replace_context':
+      case 'inject_context':
+        return {
+          kind: 'context',
+          messages: [{ role: 'system', content }],
+          compressed: false,
+        };
+      case 'notify':
+        return {
+          kind: 'notify',
+          content,
+          level: 'info',
+        };
+    }
+  }
+
+  /**
+   * 验证解析结果是否为有效的 AgentOutput
+   * 通过类型守卫确保结构正确，不做盲目断言
+   */
+  private validateAgentOutput(parsed: Record<string, unknown>, mode: ResultInjectionMode): AgentOutput | null {
+    if (parsed.kind !== 'intercept' && parsed.kind !== 'context' && parsed.kind !== 'notify') {
+      return null;
+    }
+
+    // 验证 kind 和 mode 匹配
+    if (mode === 'intercept' && parsed.kind === 'intercept') {
+      if (parsed.decision !== 'allow' && parsed.decision !== 'degrade' && parsed.decision !== 'block') return null;
+      if (typeof parsed.reason !== 'string') return null;
+      if (typeof parsed.confidence !== 'number') return null;
+      return parsed as unknown as InterceptOutput;
+    }
+
+    if ((mode === 'replace_context' || mode === 'inject_context') && parsed.kind === 'context') {
+      if (!Array.isArray(parsed.messages)) return null;
+      return parsed as unknown as ContextOutput;
+    }
+
+    if (mode === 'notify' && parsed.kind === 'notify') {
+      if (typeof parsed.content !== 'string') return null;
+      if (parsed.level !== 'info' && parsed.level !== 'warning' && parsed.level !== 'error') return null;
+      return parsed as unknown as NotifyOutput;
+    }
+
+    return null;
+  }
+
+  /**
+   * 从文本中提取第一个完整的 JSON 对象
+   * 用括号计数而非贪婪匹配，避免捕获错误内容
+   */
+  private extractFirstJsonObject(text: string): string | null {
+    const start = text.indexOf('{');
+    if (start === -1) return null;
+
+    let depth = 0;
+    let inString = false;
+    let escape = false;
+
+    for (let i = start; i < text.length; i++) {
+      const ch = text[i];
+
+      if (escape) {
+        escape = false;
+        continue;
+      }
+
+      if (ch === '\\') {
+        escape = true;
+        continue;
+      }
+
+      if (ch === '"') {
+        inString = !inString;
+        continue;
+      }
+
+      if (inString) continue;
+
+      if (ch === '{') depth++;
+      else if (ch === '}') {
+        depth--;
+        if (depth === 0) {
+          return text.slice(start, i + 1);
+        }
+      }
+    }
+
+    return null;
+  }
+
+  /**
    * 处理智能体输出
    */
   private processOutput(
     agent: RegisteredAgent,
     output: AgentOutput,
     ctx: AgentContext,
-  ): void {
+  ): import('./output-policy.js').InterceptResult | undefined {
     const mode = agent.spec.outputPolicy.mode;
 
     switch (mode) {
       case 'intercept':
         if (output.kind === 'intercept') {
-          handleIntercept(output, ctx);
+          return handleIntercept(output, ctx);
         }
-        break;
+        return undefined;
 
       case 'replace_context':
         if (output.kind === 'context') {
-          // 入队，等 ContextEngine 在 assemble 前应用
           this.injectionQueue.enqueue({
             agentId: agent.spec.id,
             output: output as ContextOutput,
@@ -466,7 +694,6 @@ export class AgentRuntime {
 
       case 'inject_context':
         if (output.kind === 'context') {
-          // 入队，等 ContextEngine 在 assemble 前应用
           this.injectionQueue.enqueue({
             agentId: agent.spec.id,
             output: output as ContextOutput,
@@ -479,14 +706,15 @@ export class AgentRuntime {
         if (output.kind === 'notify') {
           handleNotify(output, ctx);
         }
-        break;
+        return undefined;
     }
+    return undefined;
   }
 
   /**
-   * 构建 AgentContext（占位，实际由主 Agent 的上下文提供）
+   * 构建兜底的 AgentContext（当主 Agent 上下文未注入时）
    */
-  private buildAgentContext(): AgentContext {
+  private buildFallbackAgentContext(): AgentContext {
     return {
       messages: [],
       runConfig: {

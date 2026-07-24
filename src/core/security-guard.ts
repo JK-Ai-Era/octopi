@@ -71,6 +71,36 @@ export interface BehaviorContext {
   uniqueTools: number;
 }
 
+/**
+ * ToolCallRiskPolicy — 工具调用风险策略接口
+ *
+ * Core 层定义的接口，由 Harness 层实现，通过 Builder 注入。
+ * Core 不知道 Harness 的存在，只依赖这个接口。
+ *
+ * 当注入了此策略时，checkToolCall 会用策略替代旧的正则匹配。
+ * 当策略返回 'unknown' 时，checkToolCall 返回 clean 并发射事件，
+ * 交给分布式安全智能体处理。
+ */
+export interface ToolCallRiskPolicy {
+  /**
+   * 评估工具调用的风险
+   *
+   * @returns RiskDecision: { level, factors, alternative?, reason }
+   */
+  assess(
+    call: ToolCall,
+    context?: {
+      cwd?: string;
+      recentToolCalls?: Array<{ name: string; arguments: Record<string, unknown> }>;
+    },
+  ): {
+    level: 'low' | 'medium' | 'high' | 'critical' | 'unknown';
+    factors: Array<{ source: string; description: string; level: string }>;
+    alternative?: { description: string; command?: string; steps?: string[] };
+    reason: string;
+  };
+}
+
 /** 安全策略配置 */
 export interface SecurityGuardConfig {
   /** 注入检测灵敏度 */
@@ -182,6 +212,7 @@ export class DefaultSecurityGuard {
   private config: Required<SecurityGuardConfig>;
   private eventBus: EventBus;
   private registeredTools: Set<string>;
+  private riskPolicy?: ToolCallRiskPolicy;
 
   constructor(
     eventBus: EventBus,
@@ -209,6 +240,23 @@ export class DefaultSecurityGuard {
    */
   setRegisteredTools(tools: Set<string>): void {
     this.registeredTools = tools;
+  }
+
+  /**
+   * 设置工具调用风险策略（由 Harness 层通过 Builder 注入）
+   *
+   * 注入后，checkToolCall 会用策略替代旧的正则匹配。
+   * 未注入时，保持向后兼容的默认行为。
+   */
+  setToolCallRiskPolicy(policy: ToolCallRiskPolicy): void {
+    this.riskPolicy = policy;
+  }
+
+  /**
+   * 获取当前注入的风险策略（用于测试和调试）
+   */
+  getToolCallRiskPolicy(): ToolCallRiskPolicy | undefined {
+    return this.riskPolicy;
   }
 
   /**
@@ -290,7 +338,7 @@ export class DefaultSecurityGuard {
   checkToolCall(call: ToolCall): SecurityCheckResult {
     const violations: SecurityViolation[] = [];
 
-    // 1. 工具白名单校验
+    // 1. 工具白名单校验（硬边界，不可绕过）
     if (this.registeredTools.size > 0 && !this.registeredTools.has(call.name)) {
       violations.push({
         type: 'unauthorized_tool',
@@ -299,9 +347,71 @@ export class DefaultSecurityGuard {
       });
     }
 
+    // 2. 如果注入了风险策略，用策略替代旧的正则匹配
+    if (this.riskPolicy) {
+      try {
+        const decision = this.riskPolicy.assess(call);
+
+        // 映射风险等级到违规严重性
+        const severityMap: Record<string, SecurityViolation['severity']> = {
+          low: 'low',
+          medium: 'medium',
+          high: 'high',
+          critical: 'critical',
+        };
+
+        if (decision.level === 'unknown') {
+          // unknown → 放行，发射事件交给分布式安全智能体
+          this.eventBus.emit({
+            type: 'tool_call.risk_unknown',
+            timestamp: Date.now(),
+            data: { toolCall: call, decision },
+          });
+          // 返回 clean，让引擎继续走到 beforeToolExecution 钩子
+          return { isClean: true, violations };
+        }
+
+        if (decision.level !== 'low') {
+          const severity = severityMap[decision.level] ?? 'medium';
+          violations.push({
+            type: 'policy_violation',
+            severity,
+            description: decision.reason,
+          });
+
+          this.eventBus.emit({
+            type: AgentEvents.INJECTION_DETECTED,
+            timestamp: Date.now(),
+            data: { source: 'risk_policy', toolName: call.name, decision },
+          });
+        }
+
+        return { isClean: violations.length === 0, violations };
+      } catch (err) {
+        // 策略失效 → 安全默认：放行，交给分布式智能体兜底
+        this.eventBus.emit({
+          type: 'tool_call.risk_unknown',
+          timestamp: Date.now(),
+          data: { toolCall: call, error: err instanceof Error ? err.message : String(err) },
+        });
+        return { isClean: true, violations };
+      }
+    }
+
+    // 3. 未注入策略 → 保持向后兼容的默认行为（旧正则匹配）
+    return this.checkToolCallLegacy(call, violations);
+  }
+
+  /**
+   * 旧的 checkToolCall 逻辑（向后兼容）
+   *
+   * 当未注入 ToolCallRiskPolicy 时使用。
+   * 基于正则模式匹配，覆盖命令注入、路径遍历、网络外传。
+   */
+  private checkToolCallLegacy(call: ToolCall, violations: SecurityViolation[]): SecurityCheckResult {
     const args = JSON.stringify(call.arguments ?? {});
 
-    // 2. Shell 命令注入检测
+    // Shell 命令注入检测
     if (this.isShellTool(call.name) && !this.config.allowShellMeta) {
       for (const { pattern, desc } of SHELL_INJECTION_PATTERNS) {
         if (pattern.test(args)) {
@@ -310,16 +420,15 @@ export class DefaultSecurityGuard {
             severity: 'critical',
             description: `工具 "${call.name}" 参数包含危险模式: ${desc}`,
           });
-          break; // 只报第一个
+          break;
         }
       }
     }
 
-    // 3. 路径遍历检测
+    // 路径遍历检测
     if (this.isFileTool(call.name)) {
       const pathValue = call.arguments?.path ?? call.arguments?.file ?? call.arguments?.filename ?? '';
       if (typeof pathValue === 'string' && pathValue) {
-        // 相对路径遍历
         if (pathValue.includes('../') || pathValue.includes('..\\')) {
           violations.push({
             type: 'path_traversal',
@@ -327,7 +436,6 @@ export class DefaultSecurityGuard {
             description: `工具 "${call.name}" 参数包含目录遍历: "${pathValue}"`,
           });
         }
-        // 绝对路径检查
         if (pathValue.startsWith('/') && this.config.allowedPaths.length > 0) {
           const allowed = this.config.allowedPaths.some(p => pathValue.startsWith(p));
           if (!allowed) {
@@ -341,7 +449,7 @@ export class DefaultSecurityGuard {
       }
     }
 
-    // 4. 网络外传检测
+    // 网络外传检测
     if (this.isHttpTool(call.name)) {
       const method = (typeof call.arguments?.method === 'string' ? call.arguments.method : 'GET').toUpperCase();
       if (method === 'POST' || method === 'PUT') {

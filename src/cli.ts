@@ -546,6 +546,7 @@ async function chatCommand(args: CliArgs): Promise<void> {
       execArgv: [],
       env: { ...process.env, OCTOPI_DAEMON: '1' },
     });
+    child.unref();
     if (!child.pid) {
       console.error('❌ Failed to start Gateway');
       process.exit(1);

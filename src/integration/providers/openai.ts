@@ -217,63 +217,13 @@ export class OpenAIProvider implements ModelProvider {
       buffer = lines.pop() ?? '';
 
       for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed || !trimmed.startsWith('data: ')) continue;
-        const data = trimmed.slice(6);
-        if (data === '[DONE]') {
-          // 流结束：输出 tool_calls（如果有）
-          if (toolCallBuffers.size > 0) {
-            for (const [idx, buf] of toolCallBuffers) {
-              yield {
-                type: 'tool_call',
-                toolCall: {
-                  id: buf.id,
-                  name: buf.name,
-                  arguments: buf.argsBuffer,
-                  index: idx,
-                },
-              };
-            }
+        const chunks = this.parseSSELine(line, toolCallBuffers);
+        for (const chunk of chunks) {
+          if (chunk.type === 'done') {
+            yield chunk;
+            return;
           }
-          yield { type: 'done' };
-          return;
-        }
-
-        try {
-          const parsed = JSON.parse(data);
-          const delta = parsed.choices?.[0]?.delta;
-          if (!delta) continue;
-
-          // 文本内容：增量输出
-          if (delta.content) {
-            yield { type: 'content', content: delta.content };
-          }
-
-          // reasoning 输出（Ollama 特有）
-          if (delta.reasoning) {
-            yield { type: 'content', content: delta.reasoning };
-          }
-
-          // tool_calls：增量拼接到 buffer
-          if (delta.tool_calls) {
-            for (const tc of delta.tool_calls) {
-              const idx = tc.index ?? 0;
-              const existing = toolCallBuffers.get(idx);
-              if (existing) {
-                if (tc.id) existing.id = tc.id;
-                if (tc.function?.name) existing.name = tc.function.name;
-                if (tc.function?.arguments) existing.argsBuffer += tc.function.arguments;
-              } else {
-                toolCallBuffers.set(idx, {
-                  id: tc.id ?? `call_${idx}`,
-                  name: tc.function?.name ?? '',
-                  argsBuffer: tc.function?.arguments ?? '',
-                });
-              }
-            }
-          }
-        } catch {
-          // 忽略解析错误
+          yield chunk;
         }
       }
     }
@@ -282,51 +232,15 @@ export class OpenAIProvider implements ModelProvider {
 
       // Process remaining buffer data after stream ends
       if (buffer.trim()) {
-        const remainingLines = buffer.split('\n');
-        for (const line of remainingLines) {
-          const trimmed = line.trim();
-          if (!trimmed || !trimmed.startsWith('data: ')) continue;
-          const data = trimmed.slice(6);
-          if (data === '[DONE]') {
-            if (toolCallBuffers.size > 0) {
-              for (const [idx, buf] of toolCallBuffers) {
-                yield {
-                  type: 'tool_call',
-                  toolCall: {
-                    id: buf.id,
-                    name: buf.name,
-                    arguments: buf.argsBuffer,
-                    index: idx,
-                  },
-                };
-              }
+        for (const line of buffer.split('\n')) {
+          const chunks = this.parseSSELine(line, toolCallBuffers);
+          for (const chunk of chunks) {
+            if (chunk.type === 'done') {
+              yield chunk;
+              return;
             }
-            yield { type: 'done' };
-            return;
+            yield chunk;
           }
-          try {
-            const parsed = JSON.parse(data);
-            const delta = parsed.choices?.[0]?.delta;
-            if (delta?.content) yield { type: 'content', content: delta.content };
-            if (delta?.reasoning) yield { type: 'content', content: delta.reasoning };
-            if (delta?.tool_calls) {
-              for (const tc of delta.tool_calls) {
-                const idx = tc.index ?? 0;
-                const existing = toolCallBuffers.get(idx);
-                if (existing) {
-                  if (tc.id) existing.id = tc.id;
-                  if (tc.function?.name) existing.name = tc.function.name;
-                  if (tc.function?.arguments) existing.argsBuffer += tc.function.arguments;
-                } else {
-                  toolCallBuffers.set(idx, {
-                    id: tc.id ?? `call_${idx}`,
-                    name: tc.function?.name ?? '',
-                    argsBuffer: tc.function?.arguments ?? '',
-                  });
-                }
-              }
-            }
-          } catch { /* ignore parse errors */ }
         }
       }
     }
@@ -480,6 +394,66 @@ export class OpenAIProvider implements ModelProvider {
           : (fn.arguments ?? {}),
       };
     });
+  }
+
+  /**
+   * 解析单行 SSE 数据
+   *
+   * 返回 LLMStreamChunk 数组（可能为空）。
+   * 遇到 [DONE] 时附加 { type: 'done' }。
+   * 同时更新 toolCallBuffers。
+   */
+  private parseSSELine(
+    line: string,
+    toolCallBuffers: Map<number, { id: string; name: string; argsBuffer: string }>,
+  ): LLMStreamChunk[] {
+    const trimmed = line.trim();
+    if (!trimmed || !trimmed.startsWith('data: ')) return [];
+    const data = trimmed.slice(6);
+
+    if (data === '[DONE]') {
+      const chunks: LLMStreamChunk[] = [];
+      for (const [idx, buf] of toolCallBuffers) {
+        chunks.push({
+          type: 'tool_call',
+          toolCall: { id: buf.id, name: buf.name, arguments: buf.argsBuffer, index: idx },
+        });
+      }
+      chunks.push({ type: 'done' });
+      return chunks;
+    }
+
+    try {
+      const parsed = JSON.parse(data);
+      const delta = parsed.choices?.[0]?.delta;
+      if (!delta) return [];
+
+      const chunks: LLMStreamChunk[] = [];
+      if (delta.content) chunks.push({ type: 'content', content: delta.content });
+      if (delta.reasoning) chunks.push({ type: 'content', content: delta.reasoning });
+
+      if (delta.tool_calls) {
+        for (const tc of delta.tool_calls) {
+          const idx = tc.index ?? 0;
+          const existing = toolCallBuffers.get(idx);
+          if (existing) {
+            if (tc.id) existing.id = tc.id;
+            if (tc.function?.name) existing.name = tc.function.name;
+            if (tc.function?.arguments) existing.argsBuffer += tc.function.arguments;
+          } else {
+            toolCallBuffers.set(idx, {
+              id: tc.id ?? `call_${idx}`,
+              name: tc.function?.name ?? '',
+              argsBuffer: tc.function?.arguments ?? '',
+            });
+          }
+        }
+      }
+
+      return chunks;
+    } catch {
+      return [];
+    }
   }
 
   /**

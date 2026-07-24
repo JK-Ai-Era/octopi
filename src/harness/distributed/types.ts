@@ -145,4 +145,10 @@ export interface AgentContext {
   pendingToolCall?: { name: string; arguments: Record<string, unknown> };
   /** EventBus（用于 notify 模式发送事件） */
   events: EventBus;
+  /** 最近的工具调用记录（可选） */
+  recentToolCalls?: Array<{ name: string; arguments: Record<string, unknown>; result?: unknown }>;
+  /** Token 使用量（可选） */
+  tokenCount?: { used: number; limit: number };
+  /** Agent 事件（可选） */
+  agentEvents?: AgentEvent[];
 }

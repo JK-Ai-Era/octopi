@@ -111,6 +111,7 @@ export class TuiApp {
   private exitRequested = false;
   private isProcessing = false;
   private streamedContent = '';
+  private exitResolve?: () => void;
 
   constructor(config: TuiAppConfig) {
     this.config = config;
@@ -138,6 +139,11 @@ export class TuiApp {
   async start(): Promise<void> {
     await this.connectGateway();
 
+    // 连接失败，直接退出
+    if (this.exitRequested) {
+      return;
+    }
+
     this.setupEditor();
     this.setupInputHandler();
     this.updateHeader();
@@ -149,12 +155,9 @@ export class TuiApp {
 
     this.tui.start();
 
+    // 等待退出信号（由 requestExit/forceExit 触发）
     await new Promise<void>((resolve) => {
-      const check = () => {
-        if (this.exitRequested) resolve();
-        else setTimeout(check, 100);
-      };
-      check();
+      this.exitResolve = resolve;
     });
 
     this.tui.stop();
@@ -193,6 +196,12 @@ export class TuiApp {
           this.setStatus('disconnected');
         }
         this.tui.requestRender();
+        // 断连后自动退出，用户重新运行 octopi chat
+        if (!this.exitRequested) {
+          this.chatLog.addSystem('Connection lost. Exiting...');
+          this.tui.requestRender();
+          setTimeout(() => this.requestExit(), 1500);
+        }
       },
       onError: (err) => {
         this.chatLog.addSystem(`⚠️ Gateway error: ${err.message}`);
@@ -432,17 +441,19 @@ export class TuiApp {
       return;
     }
 
-    // Slash commands (only /help and /status, session management via gateway)
+    // Slash commands
     if (trimmed === '/help') {
       this.chatLog.addSystem([
         'Commands:',
         '  /help     Show this help',
+        '  /new      Start a new session',
         '  /clear    Clear screen',
         '  exit      Exit TUI',
         '',
         'Keys:',
         '  Ctrl+C    Abort / clear / exit',
         '  Ctrl+D    Exit',
+        '  Ctrl+L    Clear screen',
         '  Ctrl+O    Toggle tool details',
         '  Esc       Abort current run',
       ].join('\n'));
@@ -452,6 +463,15 @@ export class TuiApp {
 
     if (trimmed === '/clear') {
       this.chatLog.clear();
+      this.tui.requestRender();
+      return;
+    }
+
+    if (trimmed === '/new') {
+      this.sessionIdRef.current = `${this.config.agentId}:cli:${Date.now()}`;
+      this.streamedContent = '';
+      this.chatLog.clear();
+      this.chatLog.addSystem('🐙 New session started.');
       this.tui.requestRender();
       return;
     }
@@ -501,6 +521,7 @@ export class TuiApp {
   private requestExit(): void {
     this.exitRequested = true;
     this.gatewayClient?.disconnect();
+    this.exitResolve?.();
   }
 
   private forceExit(): void {
@@ -514,6 +535,7 @@ export class TuiApp {
   private setupEditor(): void {
     const slashCommands: SlashCommand[] = [
       { name: 'help', description: 'Show help' },
+      { name: 'new', description: 'Start a new session' },
       { name: 'clear', description: 'Clear screen' },
       { name: 'exit', description: 'Exit TUI' },
       { name: 'quit', description: 'Exit TUI' },
@@ -533,6 +555,10 @@ export class TuiApp {
       this.toolsExpanded = !this.toolsExpanded;
       this.chatLog.setToolsExpanded(this.toolsExpanded);
       this.setStatus(this.toolsExpanded ? 'tools expanded' : 'tools collapsed');
+      this.tui.requestRender();
+    };
+    this.editor.onCtrlL = () => {
+      this.chatLog.clear();
       this.tui.requestRender();
     };
   }

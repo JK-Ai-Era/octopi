@@ -61,7 +61,7 @@ export type {
 // ── Spec ──
 export type { DistributedAgentSpec } from './spec.js';
 
-// ── NoopSecurityGuard ──
+// ── Security ──
 export { NoopSecurityGuard } from './noop-security-guard.js';
 
 // ── AuditTrail ──

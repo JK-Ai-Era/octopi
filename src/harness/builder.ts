@@ -185,6 +185,7 @@ export class AgentBuilder {
   private _summarize?: SummarizeFunction;
   private _events?: EventBus;
   private _security?: SecurityGuard;
+  private _riskPolicy?: import('../../core/security-guard.js').ToolCallRiskPolicy;
   private _budget?: IterationBudget;
   private _errorStrategy?: ErrorStrategy;
   private _observer?: Observer;
@@ -208,6 +209,10 @@ export class AgentBuilder {
 
   // MCP 配置
   private _mcpConfigs: import('../core/interfaces/mcp-client.js').McpServerConfig[] = [];
+
+  // 分布式智能体配置
+  private _distributedAgentSpecs: import('./distributed/spec.js').DistributedAgentSpec[] = [];
+  private _distributedAuditDir?: string;
 
   // ── Core 组件 ──
 
@@ -267,6 +272,18 @@ export class AgentBuilder {
     return this;
   }
 
+  /** 注册分布式智能体 */
+  withDistributedAgent(spec: import('./distributed/spec.js').DistributedAgentSpec): this {
+    this._distributedAgentSpecs.push(spec);
+    return this;
+  }
+
+  /** 设置分布式智能体审计日志目录 */
+  withDistributedAuditDir(dir: string): this {
+    this._distributedAuditDir = dir;
+    return this;
+  }
+
   /** 设置工具执行器 */
   executor(executor: ToolExecutor): this {
     this._executor = executor;
@@ -300,6 +317,12 @@ export class AgentBuilder {
   /** 设置安全策略配置 */
   securityPolicy(config: SecurityGuardConfig): this {
     this._securityConfig = config;
+    return this;
+  }
+
+  /** 注入工具调用风险策略（由 Harness 层实现，注入到 Core 的 SecurityGuard） */
+  withRiskPolicy(policy: import('../../core/security-guard.js').ToolCallRiskPolicy): this {
+    this._riskPolicy = policy;
     return this;
   }
 
@@ -404,15 +427,41 @@ export class AgentBuilder {
   /**
    * 构建 AgentEngine + SessionAwareRunner
    */
-  async build(): Promise<{ engine: AgentEngine; runner: SessionAwareRunner; mcpManager: McpManager }> {
+  async build(): Promise<{ engine: AgentEngine; runner: SessionAwareRunner; mcpManager: McpManager; runtime?: import('./distributed/runtime.js').AgentRuntime }> {
+    // 统一创建 events 实例，确保 engine、runner、runtime 共享同一个 EventBus
+    const events = this._events ?? new DefaultEventBus();
+    this._events = events;  // 注入到 builder，让 buildEngine() 也使用同一个
+
     const engine = await this.buildEngine();
     const store = this._store ?? new InMemorySessionStore();
-    const runner = new SessionAwareRunner(engine, store, this._runnerConfig);
+    const runner = new SessionAwareRunner(engine, store, { ...this._runnerConfig, events });
 
     // 创建 McpManager
     const mcpManager = await this.buildMcpManager();
 
-    return { engine, runner, mcpManager };
+    // 创建 AgentRuntime（如果有分布式智能体）
+    let runtime: import('./distributed/runtime.js').AgentRuntime | undefined;
+    if (this._distributedAgentSpecs.length > 0) {
+      const { AgentRuntime } = await import('./distributed/runtime.js');
+      runtime = new AgentRuntime({
+        deps: {
+          model: this._model!,
+          events,
+          errorStrategy: this._errorStrategy ?? new DefaultErrorStrategy(),
+          observer: this._observer,
+          mainTools: this._tools,
+        },
+        auditDir: this._distributedAuditDir,
+      });
+      for (const spec of this._distributedAgentSpecs) {
+        runtime.register(spec);
+      }
+      // 将 runtime 的 intercept 拦截钩子连到 engine
+      engine.beforeToolExecution = (call) => runtime!.beforeToolExecution(call);
+      runner.setDistributedRuntime(runtime);
+    }
+
+    return { engine, runner, mcpManager, runtime };
   }
 
   /**
@@ -447,6 +496,11 @@ export class AgentBuilder {
     // 创建默认组件
     const events = this._events ?? new DefaultEventBus();
     const security = this._security ?? new DefaultSecurityGuard(events, this._securityConfig);
+
+    // 注入风险策略（如果有）
+    if (this._riskPolicy) {
+      security.setToolCallRiskPolicy(this._riskPolicy);
+    }
     const errorStrategy = this._errorStrategy ?? new DefaultErrorStrategy();
     const executor = this._executor ?? new DefaultToolExecutor(this._tools);
 

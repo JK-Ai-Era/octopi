@@ -81,11 +81,21 @@ export class SessionAwareRunner {
   private config: SessionAwareRunnerConfig;
   /** Session 状态机缓存 */
   private stateMachines = new Map<string, StateMachine<SessionStatus>>();
+  /** 分布式智能体运行时（可选） */
+  private _distributedRuntime?: import('./distributed/runtime.js').AgentRuntime;
+  /** EventBus 引用（用于分布式智能体上下文） */
+  private _events?: import('../core/event-bus.js').EventBus;
 
-  constructor(engine: AgentEngine, store: SessionStore, config?: SessionAwareRunnerConfig) {
+  constructor(engine: AgentEngine, store: SessionStore, config?: SessionAwareRunnerConfig & { events?: import('../core/event-bus.js').EventBus }) {
     this.engine = engine;
     this.store = store;
     this.config = { ...DEFAULT_CONFIG, ...config };
+    this._events = config?.events;
+  }
+
+  /** 设置分布式智能体运行时 */
+  setDistributedRuntime(runtime: import('./distributed/runtime.js').AgentRuntime): void {
+    this._distributedRuntime = runtime;
   }
 
   /**
@@ -147,7 +157,19 @@ export class SessionAwareRunner {
         }
       }
 
-      // 6. 运行 AgentEngine
+      // 6. 应用分布式智能体的待处理注入
+      if (this._distributedRuntime) {
+        if (this._events) {
+          this._distributedRuntime.setMainAgentContext({
+            messages: session.messages,
+            runConfig: effectiveRunConfig,
+            events: this._events,
+          });
+        }
+        this._distributedRuntime.applyPendingInjections(session.messages);
+      }
+
+      // 7. 运行 AgentEngine
       let hasTurnEnd = false;
       let streamedContent = '';
       let lastUsage: any = undefined;

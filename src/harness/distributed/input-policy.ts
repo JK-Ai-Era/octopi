@@ -171,6 +171,7 @@ function applySnapshot<T>(
   snapshot: 'full' | 'summary' | 'structured',
   data: T,
   summarize: (data: T) => T,
+  filter?: (data: T) => T,
 ): T {
   switch (snapshot) {
     case 'full':
@@ -178,7 +179,8 @@ function applySnapshot<T>(
     case 'summary':
       return summarize(data);
     case 'structured':
-      // structured 模式下，自由文本字段不返回
-      return data;
+      // structured 模式：如果提供了 filter 则过滤，否则返回空数据
+      // 只保留结构化字段，不包含自由文本
+      return filter ? filter(data) : data;
   }
 }
