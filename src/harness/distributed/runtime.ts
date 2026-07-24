@@ -500,10 +500,13 @@ export class AgentRuntime {
       throw new Error('LLM execution requires Engine');
     }
 
+    const llm = agent.spec.execution as LLMExecution;
+
+    // 解析 model 覆盖：provider/model 格式 → 提取 model 名
+    const modelOverride = llm.model ? parseModelName(llm.model) : undefined;
+
     // 将 AgentInput 转换为 messages 数组传给 Engine
     const messages: Message[] = [];
-
-    // 构建一条 user 消息，包含 AgentInput 的结构化数据
     const inputContent = JSON.stringify(input, null, 2);
     messages.push({
       role: 'user',
@@ -514,15 +517,15 @@ export class AgentRuntime {
     // 调用 Engine 的 run 方法
     let lastContent = '';
     for await (const event of agent.engine.run(messages, {
-      systemPrompt: (agent.spec.execution as LLMExecution).systemPrompt,
+      systemPrompt: llm.systemPrompt,
       agentId: agent.spec.id,
+      model: modelOverride,
     })) {
       if (event.type === 'turn.end' && event.data) {
         lastContent = (event.data.content as string) ?? '';
       }
     }
 
-    // 解析 LLM 输出为 AgentOutput
     return this.parseAgentOutput(lastContent, agent.spec.outputPolicy.mode);
   }
 
@@ -739,4 +742,15 @@ export function sortByPriority(
   agents: Array<{ id: string; mode: ResultInjectionMode }>,
 ): Array<{ id: string; mode: ResultInjectionMode }> {
   return [...agents].sort((a, b) => getPriority(a.mode) - getPriority(b.mode));
+}
+
+/**
+ * 解析 provider/model 格式，提取 model 名
+ *
+ * - 'xiaomi-coding/mimo-v2.5-pro' → 'mimo-v2.5-pro'
+ * - 'gpt-5.5' → 'gpt-5.5'（无 provider 前缀，原样返回）
+ */
+export function parseModelName(model: string): string {
+  const slashIdx = model.lastIndexOf('/');
+  return slashIdx >= 0 ? model.slice(slashIdx + 1) : model;
 }
