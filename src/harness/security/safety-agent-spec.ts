@@ -84,7 +84,7 @@ const SAFETY_GUARD_SYSTEM_PROMPT = `你是一个安全守卫智能体。你的�
  * @param model - 模型覆盖（可选，默认用主 Agent 的模型）
  * @returns 安全守卫的完整规格定义
  */
-export function buildSafetyGuardSpec(model?: string): DistributedAgentSpec {
+export function buildSafetyGuardSpec(model?: string, maxDurationMs?: number): DistributedAgentSpec {
   return {
     id: 'safety-guard',
     name: 'Safety Guard',
@@ -118,7 +118,7 @@ export function buildSafetyGuardSpec(model?: string): DistributedAgentSpec {
 
     // ── 资源限制 ──
     limits: {
-      maxDurationMs: 5000,  // 5 秒超时
+      maxDurationMs: maxDurationMs ?? 15000,  // 默认 15 秒
       maxConcurrent: 1,     // 同时只运行一个实例
     },
 
@@ -135,4 +135,4 @@ export function buildSafetyGuardSpec(model?: string): DistributedAgentSpec {
 /**
  * 安全守卫的默认规格（使用主 Agent 的模型）
  */
-export const SAFETY_GUARD_SPEC = buildSafetyGuardSpec();
+export const SAFETY_GUARD_SPEC = buildSafetyGuardSpec(undefined, 15000);

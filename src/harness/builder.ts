@@ -186,7 +186,7 @@ export class AgentBuilder {
   private _events?: EventBus;
   private _security?: SecurityGuard;
   private _riskPolicy?: import('../../core/security-guard.js').ToolCallRiskPolicy;
-  private _safetyGuardConfig?: { cwd?: string; model?: string };
+  private _safetyGuardConfig?: { cwd?: string; model?: string; maxDurationMs?: number };
   private _budget?: IterationBudget;
   private _errorStrategy?: ErrorStrategy;
   private _observer?: Observer;
@@ -337,7 +337,7 @@ export class AgentBuilder {
    * @param config.cwd - 工作目录（用于路径风险分类）
    * @param config.model - 安全智能体的模型覆盖（默认用主 Agent 模型）
    */
-  withSafetyGuard(config?: { cwd?: string; model?: string }): this {
+  withSafetyGuard(config?: { cwd?: string; model?: string; maxDurationMs?: number }): this {
     // 动态导入，避免循环依赖
     this._safetyGuardConfig = config ?? {};
     return this;
@@ -469,7 +469,7 @@ export class AgentBuilder {
       // 注册安全守卫 Spec（如果还没手动注册过）
       const alreadyRegistered = this._distributedAgentSpecs.some(s => s.id === 'safety-guard');
       if (!alreadyRegistered) {
-        this._distributedAgentSpecs.push(buildSafetyGuardSpec(this._safetyGuardConfig.model));
+        this._distributedAgentSpecs.push(buildSafetyGuardSpec(this._safetyGuardConfig.model, this._safetyGuardConfig.maxDurationMs));
       }
     }
 

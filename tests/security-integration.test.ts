@@ -131,7 +131,7 @@ describe('安全层端到端集成', () => {
 
     it('资源限制合理', () => {
       const spec = buildSafetyGuardSpec();
-      expect(spec.limits?.maxDurationMs).toBeLessThanOrEqual(10000);
+      expect(spec.limits?.maxDurationMs).toBeLessThanOrEqual(30000);
       expect(spec.limits?.maxConcurrent).toBe(1);
     });
   });

@@ -264,6 +264,7 @@ async function buildAgent(
     builder.withSafetyGuard({
       cwd: agentConfig.workspace,
       model: agentConfig.safetyGuard.model,
+      maxDurationMs: agentConfig.safetyGuard.maxDurationMs,
     });
   }
 
