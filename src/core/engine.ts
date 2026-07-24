@@ -593,6 +593,7 @@ export class AgentEngine {
               budget?.recordToolCall();
 
               // beforeToolExecution 异步钩子（安全守卫等 intercept 场景）
+              // 只在 SecurityGuard 返回 riskUnknown 时才调用，避免每次工具调用都触发安全智能体
               if (this.beforeToolExecution) {
                 const decision = await this.beforeToolExecution(call);
                 if (decision && !decision.proceed) {

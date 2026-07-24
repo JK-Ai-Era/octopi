@@ -53,6 +53,8 @@ export interface SecurityCheckResult {
   isClean: boolean;
   violations: SecurityViolation[];
   sanitized?: string;
+  /** 风险策略返回 unknown，需要安全智能体进一步判断 */
+  riskUnknown?: boolean;
 }
 
 /** 安全动作 */
@@ -368,7 +370,7 @@ export class DefaultSecurityGuard {
             data: { toolCall: call, decision },
           });
           // 返回 clean，让引擎继续走到 beforeToolExecution 钩子
-          return { isClean: true, violations };
+          return { isClean: true, violations, riskUnknown: true };
         }
 
         if (decision.level !== 'low') {
@@ -394,7 +396,7 @@ export class DefaultSecurityGuard {
           timestamp: Date.now(),
           data: { toolCall: call, error: err instanceof Error ? err.message : String(err) },
         });
-        return { isClean: true, violations };
+        return { isClean: true, violations, riskUnknown: true };
       }
     }
 
