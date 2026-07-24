@@ -150,12 +150,15 @@ export const ContextEngineConfigSchema = z.object({
 export const SecurityConfigSchema = z.object({
   preset: z.enum(['development', 'testing', 'production', 'maximum']).optional(),
   injectionSensitivity: z.enum(['low', 'medium', 'high']).optional(),
+});
+
+export const DistributedIntelligenceConfigSchema = z.object({
   safetyGuard: z.object({
     enabled: z.boolean(),
     model: z.string().optional(),
     maxDurationMs: z.number().positive().optional(),
   }).optional(),
-});
+}).optional();
 
 // ── 可观测性配置 Schema ──
 
@@ -188,6 +191,7 @@ export const HarnessConfigSchema = z.object({
   supervisor: SupervisorConfigSchema.optional(),
   contextEngine: ContextEngineConfigSchema.optional(),
   security: SecurityConfigSchema.optional(),
+  distributedIntelligence: DistributedIntelligenceConfigSchema,
   store: StoreConfigSchema.optional(),
   channels: z.array(ChannelConfigSchema).optional(),
   session: SessionConfigSchema.optional(),

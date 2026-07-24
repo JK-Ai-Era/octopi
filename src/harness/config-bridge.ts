@@ -181,6 +181,7 @@ export async function buildFromConfig(config: HarnessConfig): Promise<Map<string
   const providers = await resolveProviders(config);
   const store = await resolveStore(config);
   const securityConfig = resolveSecurityConfig(config);
+  const distributedConfig = config.distributedIntelligence;
   const budgetConfig = config.budget;
   const supervisorConfig = config.supervisor;
   const contextEngineConfig = config.contextEngine;
@@ -194,6 +195,7 @@ export async function buildFromConfig(config: HarnessConfig): Promise<Map<string
         providers,
         store,
         securityConfig,
+        distributedConfig,
         budgetConfig,
         supervisorConfig,
         contextEngineConfig,
@@ -217,6 +219,7 @@ async function buildAgent(
     providers: Map<string, ModelProvider>;
     store?: SessionStore;
     securityConfig?: SecurityGuardConfig;
+    distributedConfig?: import('../../src/config.js').HarnessConfig['distributedIntelligence'];
     budgetConfig?: Partial<IterationBudgetConfig>;
     supervisorConfig?: SupervisorConfig;
     contextEngineConfig?: ContextEngineConfig;
@@ -260,11 +263,11 @@ async function buildAgent(
   }
 
   // ── Safety Guard ──
-  if (shared.securityConfig && agentConfig.safetyGuard?.enabled) {
+  if (shared.securityConfig && shared.distributedConfig?.safetyGuard?.enabled) {
     builder.withSafetyGuard({
       cwd: agentConfig.workspace,
-      model: agentConfig.safetyGuard.model,
-      maxDurationMs: agentConfig.safetyGuard.maxDurationMs,
+      model: shared.distributedConfig.safetyGuard.model,
+      maxDurationMs: shared.distributedConfig.safetyGuard.maxDurationMs,
     });
   }
 
