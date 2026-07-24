@@ -259,6 +259,14 @@ async function buildAgent(
     builder.securityPolicy(shared.securityConfig);
   }
 
+  // ── Safety Guard ──
+  if (shared.securityConfig && agentConfig.safetyGuard?.enabled) {
+    builder.withSafetyGuard({
+      cwd: agentConfig.workspace,
+      model: agentConfig.safetyGuard.model,
+    });
+  }
+
   // ── Budget ──
   if (shared.budgetConfig) {
     builder.budget(shared.budgetConfig);

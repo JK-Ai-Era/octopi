@@ -249,6 +249,15 @@ export interface HarnessConfig {
     preset?: 'development' | 'testing' | 'production' | 'maximum';
     /** 注入检测灵敏度 */
     injectionSensitivity?: 'low' | 'medium' | 'high';
+    /** 安全守卫（分布式智能体） */
+    safetyGuard?: {
+      /** 启用安全守卫（默认 false） */
+      enabled: boolean;
+      /** 安全智能体使用的模型（不填用主 Agent 模型） */
+      model?: string;
+      /** 最大执行时长（毫秒，默认 5000） */
+      maxDurationMs?: number;
+    };
   };
   /** Session 存储 */
   store?: StoreConfig;

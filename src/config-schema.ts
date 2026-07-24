@@ -150,6 +150,11 @@ export const ContextEngineConfigSchema = z.object({
 export const SecurityConfigSchema = z.object({
   preset: z.enum(['development', 'testing', 'production', 'maximum']).optional(),
   injectionSensitivity: z.enum(['low', 'medium', 'high']).optional(),
+  safetyGuard: z.object({
+    enabled: z.boolean(),
+    model: z.string().optional(),
+    maxDurationMs: z.number().positive().optional(),
+  }).optional(),
 });
 
 // ── 可观测性配置 Schema ──
