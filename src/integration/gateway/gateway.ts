@@ -365,6 +365,11 @@ export class Gateway {
     // 创建 Core 组件
     const events = new DefaultEventBus();
     const security = new DefaultSecurityGuard(events);
+
+    // 注入确定性风险策略（规则引擎），替代旧的正则匹配
+    const { DefaultToolCallRiskPolicy } = await import('../../harness/security/default-risk-policy.js');
+    const riskPolicy = new DefaultToolCallRiskPolicy();
+    security.setToolCallRiskPolicy(riskPolicy);
     const budgetConfig = this.config.budget ?? {};
     const budget = new IterationBudget(events, {
       maxIterations: budgetConfig.maxIterations ?? 10,
