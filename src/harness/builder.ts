@@ -456,17 +456,16 @@ export class AgentBuilder {
     // 创建 McpManager
     const mcpManager = await this.buildMcpManager();
 
-    // 如果启用了安全守卫，自动注入风险策略 + 注册安全守卫 Spec
-    if (this._safetyGuardConfig) {
+    // 风险策略（确定性规则引擎）独立于安全守卫（LLM），始终注入
+    if (!this._riskPolicy) {
       const { DefaultToolCallRiskPolicy } = await import('./security/default-risk-policy.js');
+      const cwd = this._safetyGuardConfig?.cwd;
+      this._riskPolicy = new DefaultToolCallRiskPolicy({ cwd });
+    }
+
+    // 如果启用了安全守卫，注册安全守卫 Spec（LLM 语义判断层）
+    if (this._safetyGuardConfig) {
       const { buildSafetyGuardSpec } = await import('./security/safety-agent-spec.js');
-
-      // 注入风险策略到 Core SecurityGuard
-      if (!this._riskPolicy) {
-        this._riskPolicy = new DefaultToolCallRiskPolicy({ cwd: this._safetyGuardConfig.cwd });
-      }
-
-      // 注册安全守卫 Spec（如果还没手动注册过）
       const alreadyRegistered = this._distributedAgentSpecs.some(s => s.id === 'safety-guard');
       if (!alreadyRegistered) {
         this._distributedAgentSpecs.push(buildSafetyGuardSpec(this._safetyGuardConfig.model, this._safetyGuardConfig.maxDurationMs));
