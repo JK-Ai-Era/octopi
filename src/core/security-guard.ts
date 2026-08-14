@@ -135,6 +135,9 @@ const INJECTION_PATTERNS = {
     /ignore\s+(all\s+)?previous\s+instructions/i,
     /you\s+are\s+now\s+(a|an)\s+/i,
     /system\s*:\s*you\s+are/i,
+    // 中文
+    /忽略(之前|上面|全部)(的)?(指令|提示|命令|指示)/i,
+    /你现在是/i,
   ],
   medium: [
     /ignore\s+(all\s+)?previous\s+instructions/i,
@@ -146,6 +149,14 @@ const INJECTION_PATTERNS = {
     /disregard\s+(your|the|all)\s+(previous|prior|above)/i,
     /act\s+as\s+if\s+you\s+(are|were)/i,
     /pretend\s+you\s+(are|were|have\s+no)/i,
+    // 中文
+    /忽略(之前|上面|全部|所有)(的)?(指令|提示|命令|指示|规则)/i,
+    /你现在是/i,
+    /忘掉(一切|所有|之前)(的)?/i,
+    /新(的)?指令[：:]/i,
+    /不要(管|理会|遵守)(之前|上面|原来)(的)?/i,
+    /假装(你|你是|自己是)/i,
+    /无视(之前|上面|所有)(的)?(指令|规则|限制)/i,
   ],
   high: [
     /ignore\s+(all\s+)?previous\s+instructions/i,
@@ -161,13 +172,23 @@ const INJECTION_PATTERNS = {
     /\[\/INST\]/i,
     /<\|im_start\|>/i,
     /<\|im_end\|>/i,
-    /Human:\s*/i,
-    /Assistant:\s*/i,
+    /^Human:\s*/im,
+    /^Assistant:\s*/im,
     /<\|system\|>/i,
     /<\|user\|>/i,
     /<\|assistant\|>/i,
     /BEGIN\s+CHAT/i,
     /END\s+CHAT/i,
+    // 中文
+    /忽略(之前|上面|全部|所有)(的)?(指令|提示|命令|指示|规则)/i,
+    /你现在是/i,
+    /忘掉(一切|所有|之前)(的)?/i,
+    /新(的)?指令[：:]/i,
+    /不要(管|理会|遵守)(之前|上面|原来)(的)?/i,
+    /假装(你|你是|自己是)/i,
+    /无视(之前|上面|所有)(的)?(指令|规则|限制)/i,
+    /系统[：:]\s*你是/i,
+    /BEGIN\s+CHAT/i,
   ],
 } as const;
 
@@ -191,10 +212,31 @@ const DEFAULT_SENSITIVE_PATTERNS = [
  * 只拦截确定性危险模式。&&、||、;、重定向等操作符
  * 本身不是危险，由 Harness 层 DefaultToolCallRiskPolicy 结构化分析。
  */
-const SHELL_INJECTION_PATTERNS = [
+/**
+ * Shell 元字符模式
+ *
+ * 用于检测非 shell 工具参数中的 shell 注入。
+ * shell 工具的参数本身就是 shell 命令，不应拦截这些模式。
+ * 非 shell 工具（web_fetch、file_read 等）参数中出现这些模式才是注入信号。
+ */
+const SHELL_META_PATTERNS = [
   { pattern: /\$\(/, desc: 'subshell execution \$(...)' },
   { pattern: /`[^`]+`/, desc: 'backtick subshell `...`' },
-  { pattern: /\|\s*(bash|sh|zsh|exec)/i, desc: 'pipe to shell' },
+  { pattern: /\|\s*(bash|sh|zsh)/i, desc: 'pipe to shell interpreter' },
+  { pattern: /;\s*(bash|sh|zsh|exec|rm|curl|wget)/i, desc: 'chained shell command' },
+  { pattern: /&&\s*(bash|sh|zsh|exec|rm|curl|wget)/i, desc: 'conditional shell execution' },
+  { pattern: /\$\{[^}]+\}/, desc: 'shell variable expansion ${...}' },
+];
+
+/**
+ * Shell 工具真正的危险模式（极少数）
+ *
+ * 即使是 shell 工具，也应拦截的确定性危险操作。
+ * 只包含"无论上下文都危险"的模式。
+ */
+const SHELL_TOOL_DANGEROUS_PATTERNS = [
+  { pattern: /curl\s+[^|]*\|\s*(bash|sh|zsh)/i, desc: 'curl pipe to shell (remote code execution)' },
+  { pattern: /wget\s+[^|]*\|\s*(bash|sh|zsh)/i, desc: 'wget pipe to shell (remote code execution)' },
 ];
 
 /** 工具名称分类 */
@@ -416,14 +458,28 @@ export class DefaultSecurityGuard {
   private checkToolCallLegacy(call: ToolCall, violations: SecurityViolation[]): SecurityCheckResult {
     const args = JSON.stringify(call.arguments ?? {});
 
-    // Shell 命令注入检测
+    // Shell 工具：只拦截真正危险的操作（curl|bash 等远程代码执行）
     if (this.isShellTool(call.name) && !this.config.allowShellMeta) {
-      for (const { pattern, desc } of SHELL_INJECTION_PATTERNS) {
+      for (const { pattern, desc } of SHELL_TOOL_DANGEROUS_PATTERNS) {
         if (pattern.test(args)) {
           violations.push({
             type: 'command_injection',
             severity: 'critical',
             description: `工具 "${call.name}" 参数包含危险模式: ${desc}`,
+          });
+          break;
+        }
+      }
+    }
+
+    // 非 Shell 工具：参数中出现 shell 元字符 = 注入尝试
+    if (!this.isShellTool(call.name) && !this.isHttpTool(call.name)) {
+      for (const { pattern, desc } of SHELL_META_PATTERNS) {
+        if (pattern.test(args)) {
+          violations.push({
+            type: 'command_injection',
+            severity: 'high',
+            description: `工具 "${call.name}" 参数包含 shell 元字符（疑似注入）: ${desc}`,
           });
           break;
         }
