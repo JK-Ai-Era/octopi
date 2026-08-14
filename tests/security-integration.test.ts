@@ -22,12 +22,12 @@ describe('安全层端到端集成', () => {
       const events = new DefaultEventBus();
       const guard = new DefaultSecurityGuard(events);
 
-      // 旧逻辑：shell 元字符会被拦截
+      // 旧逻辑：subshell 注入会被拦截
       const result = guard.checkToolCall({
         name: 'shell',
-        arguments: { command: 'echo hello > /tmp/test.txt' },
+        arguments: { command: 'echo $(cat /etc/passwd)' },
       });
-      // 旧逻辑会拦截 > 模式
+      // 旧逻辑会拦截 $(...) 模式
       expect(result.isClean).toBe(false);
     });
 

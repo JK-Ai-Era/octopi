@@ -166,7 +166,8 @@ describe('ToolGuard', () => {
     const tools = new Set(['shell']);
     const guard = new DefaultSecurityGuard(bus, {}, tools);
 
-    const result = guard.checkToolCall({ id: '1', name: 'shell', arguments: { command: 'ls; rm -rf /' } });
+    // $(...) subshell 执行被 Core 层硬拦截
+    const result = guard.checkToolCall({ id: '1', name: 'shell', arguments: { command: 'ls $(cat /etc/passwd)' } });
     expect(result.isClean).toBe(false);
     expect(result.violations[0].type).toBe('command_injection');
   });

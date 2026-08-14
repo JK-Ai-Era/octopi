@@ -185,15 +185,15 @@ const DEFAULT_SENSITIVE_PATTERNS = [
   /https?:\/\/[^:]+:[^@]+@/gi,
 ];
 
-/** Shell 命令注入模式 */
+/**
+ * Shell 命令注入模式（Core 层硬边界）
+ *
+ * 只拦截确定性危险模式。&&、||、;、重定向等操作符
+ * 本身不是危险，由 Harness 层 DefaultToolCallRiskPolicy 结构化分析。
+ */
 const SHELL_INJECTION_PATTERNS = [
-  { pattern: /\$\(/, desc: 'subshell execution $(...)' },
+  { pattern: /\$\(/, desc: 'subshell execution \$(...)' },
   { pattern: /`[^`]+`/, desc: 'backtick subshell `...`' },
-  { pattern: /;\s*\w+/, desc: 'command chaining (;)' },
-  { pattern: /&&\s*\w+/, desc: 'command chaining (&&)' },
-  { pattern: /\|\|\s*\w+/, desc: 'command chaining (||)' },
-  { pattern: />\s*\/[a-z]/, desc: 'file redirect (>)' },
-  { pattern: />>\s*\/[a-z]/, desc: 'file append (>>)' },
   { pattern: /\|\s*(bash|sh|zsh|exec)/i, desc: 'pipe to shell' },
 ];
 
