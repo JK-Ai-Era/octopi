@@ -185,7 +185,7 @@ export class AgentBuilder {
   private _summarize?: SummarizeFunction;
   private _events?: EventBus;
   private _security?: SecurityGuard;
-  private _riskPolicy?: import('../../core/security-guard.js').ToolCallRiskPolicy;
+  private _riskPolicy?: import('../core/security-guard.js').ToolCallRiskPolicy;
   private _safetyGuardConfig?: { cwd?: string; model?: string; maxDurationMs?: number };
   private _budget?: IterationBudget;
   private _errorStrategy?: ErrorStrategy;
@@ -322,7 +322,7 @@ export class AgentBuilder {
   }
 
   /** 注入工具调用风险策略（由 Harness 层实现，注入到 Core 的 SecurityGuard） */
-  withRiskPolicy(policy: import('../../core/security-guard.js').ToolCallRiskPolicy): this {
+  withRiskPolicy(policy: import('../core/security-guard.js').ToolCallRiskPolicy): this {
     this._riskPolicy = policy;
     return this;
   }
@@ -532,7 +532,7 @@ export class AgentBuilder {
     const security = this._security ?? new DefaultSecurityGuard(events, this._securityConfig);
 
     // 注入风险策略（如果有）
-    if (this._riskPolicy) {
+    if (this._riskPolicy && security.setToolCallRiskPolicy) {
       security.setToolCallRiskPolicy(this._riskPolicy);
     }
     const errorStrategy = this._errorStrategy ?? new DefaultErrorStrategy();

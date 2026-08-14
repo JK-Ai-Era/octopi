@@ -653,6 +653,8 @@ export interface SecurityGuard {
   setRegisteredTools?(tools: Set<string>): void;
   /** 设置系统提示（用于泄露检测） */
   setSystemPrompt?(prompt: string): void;
+  /** 注入工具调用风险策略（由 Harness 层实现，注入到 Core） */
+  setToolCallRiskPolicy?(policy: ToolCallRiskPolicy): void;
 }
 
 /**

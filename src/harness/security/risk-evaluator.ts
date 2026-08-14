@@ -107,7 +107,8 @@ const READ_ONLY_COMMANDS = new Set([
   'echo', 'printf', 'date', 'whoami', 'id',
   'pwd', 'which', 'whereis', 'type',
   'env', 'printenv',
-  'uname', 'hostname',
+  'uname', 'hostname', 'uptime', 'ps', 'top',
+  'man', 'info', 'help',
 ]);
 
 /** 删除命令 */
@@ -119,21 +120,34 @@ const DELETE_COMMANDS = new Set([
 const WRITE_COMMANDS = new Set([
   'touch', 'mkdir', 'cp', 'mv', 'ln',
   'install', 'chmod', 'chown', 'chgrp',
-  'tee',
+  'tee', 'truncate',
 ]);
 
 /** 网络命令 */
 const NETWORK_COMMANDS = new Set([
   'curl', 'wget', 'http', 'https',
   'nc', 'ncat', 'netcat',
-  'ssh', 'scp', 'rsync',
+  'ssh', 'scp', 'rsync', 'sftp',
 ]);
 
 /** 包管理命令 */
 const PACKAGE_COMMANDS = new Set([
   'npm', 'yarn', 'pnpm', 'pip', 'pip3',
   'brew', 'apt', 'apt-get', 'yum', 'dnf',
-  'gem', 'cargo', 'go install',
+  'gem', 'cargo', 'go',
+]);
+
+/** 构建/执行命令（需要关注参数） */
+const BUILD_COMMANDS = new Set([
+  'make', 'cmake', 'gradle', 'mvn', 'ant',
+  'docker', 'podman',
+]);
+
+/** 解释器命令（内联代码执行） */
+const INTERPRETER_COMMANDS = new Set([
+  'python', 'python3', 'ruby', 'perl', 'node', 'php',
+  'lua', 'tclsh', 'Rscript', 'scala', 'groovy',
+  'bash', 'sh', 'zsh',
 ]);
 
 /** 提权命令 — 通过 seg.isSudo 判断，此 Set 保留备用 */
@@ -186,11 +200,19 @@ export function evaluateShellCommand(
     };
   }
 
-  // 1. 检测特殊模式（管道到 shell、子 shell）
+  // 1. 检测特殊模式（管道到解释器、内联代码、子 shell）
   if (parsed.hasShellPipe) {
     factors.push({
       source: 'method',
-      description: '管道到 shell（执行外部代码）',
+      description: '管道到解释器（执行外部代码）',
+      level: 'high',
+    });
+  }
+
+  if (parsed.hasInlineCode) {
+    factors.push({
+      source: 'method',
+      description: '内联代码执行（-c/-e 参数）',
       level: 'high',
     });
   }
@@ -394,6 +416,34 @@ function evaluateSegment(seg: ParsedSegment, cwd?: string): RiskFactor[] {
         level: 'low',
       });
     }
+    return factors;
+  }
+
+  // 构建/容器命令（需要关注参数）
+  if (BUILD_COMMANDS.has(cmd)) {
+    if (cmd === 'docker' && seg.args[0] === 'run') {
+      factors.push({
+        source: 'operation',
+        description: 'Docker run（容器执行）',
+        level: 'medium',
+      });
+    } else {
+      factors.push({
+        source: 'operation',
+        description: `构建/容器操作: ${cmd}`,
+        level: 'low',
+      });
+    }
+    return factors;
+  }
+
+  // 解释器命令（无 -c/-e 时视为低风险，有内联代码时由 hasInlineCode 处理）
+  if (INTERPRETER_COMMANDS.has(cmd)) {
+    factors.push({
+      source: 'operation',
+      description: `解释器执行: ${cmd}`,
+      level: 'low',
+    });
     return factors;
   }
 

@@ -22,18 +22,32 @@ import type {
 // ── Wrapper 命令 ──
 
 /**
- * 已知的 wrapper 命令
+ * 已知的解释器名称（管道到解释器 = 执行外部代码）
  *
- * wrapper 不是实际执行的命令，而是"包装器"。
- * 例如 sudo npm install → 实际命令是 npm install。
+ * 不止 shell，python/ruby/perl/node 等也是解释器。
+ * curl ... | python3 和 curl ... | sh 本质相同。
  */
-const WRAPPER_COMMANDS = new Set([
-  'sudo', 'su',
-  'env', 'export',
-  'exec', 'nohup',
-  'nice', 'time',
-  'strace', 'ltrace',
+const INTERPRETER_NAMES = new Set([
+  'sh', 'bash', 'zsh', 'dash', 'ksh', 'fish',
+  'python', 'python3', 'ruby', 'perl', 'node', 'php',
+  'lua', 'tclsh', 'Rscript', 'scala', 'groovy',
 ]);
+
+/**
+ * 已知的内联代码执行参数
+ *
+ * python -c "...", node -e "...", ruby -e "...", perl -e "..."
+ */
+const INLINE_CODE_FLAGS: Record<string, string[]> = {
+  'python': ['-c'], 'python3': ['-c'],
+  'node': ['-e', '--eval'],
+  'ruby': ['-e'],
+  'perl': ['-e'],
+  'php': ['-r'],
+  'bash': ['-c'], 'sh': ['-c'], 'zsh': ['-c'],
+};
+
+const WRAPPER_COMMANDS = new Set(['sudo', 'env', 'exec', 'nohup', 'strace', 'time']);
 
 // ── 解析入口 ──
 
@@ -53,6 +67,7 @@ export function parseShellCommand(raw: string): ParsedCommand & { parsed: boolea
       segments: [],
       connectors: [],
       hasShellPipe: false,
+      hasInlineCode: false,
       hasSubshell: false,
       hasBackground: false,
     };
@@ -77,8 +92,9 @@ export function parseShellCommand(raw: string): ParsedCommand & { parsed: boolea
     segments.push(seg);
   }
 
-  // 第四层：检测管道到 shell
-  const hasShellPipe = detectShellPipe(segments, connectors);
+  // 第四层：检测特殊模式
+  const hasShellPipe = detectPipeToInterpreter(segments, connectors);
+  const hasInlineCode = detectInlineCode(segments);
 
   return {
     parsed,
@@ -86,6 +102,7 @@ export function parseShellCommand(raw: string): ParsedCommand & { parsed: boolea
     segments,
     connectors,
     hasShellPipe,
+    hasInlineCode,
     hasSubshell,
     hasBackground,
   };
@@ -403,22 +420,35 @@ function detectBackground(cmd: string): boolean {
 }
 
 /**
- * 检测管道到 shell
+ * 检测管道到解释器
  *
- * | sh, | bash, | zsh, | dash, | ksh
+ * 不止 sh/bash，python/ruby/perl/node 等也是解释器。
+ * curl ... | python3 和 curl ... | sh 本质相同（执行外部代码）。
  */
-function detectShellPipe(segments: ParsedSegment[], connectors: Connector[]): boolean {
-  const SHELL_NAMES = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh', 'fish']);
-
+function detectPipeToInterpreter(segments: ParsedSegment[], connectors: Connector[]): boolean {
   for (let i = 0; i < connectors.length; i++) {
     if (connectors[i] === '|') {
       const nextSeg = segments[i + 1];
-      if (nextSeg && SHELL_NAMES.has(nextSeg.command) && nextSeg.args.length === 0) {
+      if (nextSeg && INTERPRETER_NAMES.has(nextSeg.command) && nextSeg.args.length === 0) {
         return true;
       }
     }
   }
+  return false;
+}
 
+/**
+ * 检测内联代码执行
+ *
+ * python -c "...", node -e "...", bash -c "..." 等。
+ */
+function detectInlineCode(segments: ParsedSegment[]): boolean {
+  for (const seg of segments) {
+    const flags = INLINE_CODE_FLAGS[seg.command];
+    if (flags && seg.args.some(a => flags.includes(a))) {
+      return true;
+    }
+  }
   return false;
 }
 

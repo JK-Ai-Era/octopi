@@ -23,8 +23,18 @@ import {
   handleNotify,
   InjectionQueue,
 } from './output-policy.js';
+import { parseShellCommand } from '../security/shell-parser.js';
 import { AuditTrail } from './audit-trail.js';
 import { NoopSecurityGuard } from './noop-security-guard.js';
+
+// ── Shell Tool Helper ──
+
+/** 已知的 Shell 工具名称 */
+const SHELL_TOOL_NAMES = new Set(['bash', 'shell', 'terminal', 'exec', 'execute', 'run_command', 'process']);
+
+function isShellTool(name: string): boolean {
+  return SHELL_TOOL_NAMES.has(name);
+}
 
 // ── SharedDeps ──
 
@@ -526,7 +536,7 @@ export class AgentRuntime {
       }
     }
 
-    return this.parseAgentOutput(lastContent, agent.spec.outputPolicy.mode);
+    return this.parseAgentOutput(lastContent, agent.spec.outputPolicy.mode, input.pendingToolCall);
   }
 
   /**
@@ -558,7 +568,7 @@ export class AgentRuntime {
    * 尝试从 LLM 的文本输出中提取 JSON 格式的 AgentOutput。
    * 如果解析失败，根据 mode 返回默认值。
    */
-  private parseAgentOutput(content: string, mode: ResultInjectionMode): AgentOutput {
+  private parseAgentOutput(content: string, mode: ResultInjectionMode, pendingToolCall?: { name: string; arguments: Record<string, unknown> }): AgentOutput {
     const jsonStr = this.extractFirstJsonObject(content);
     if (jsonStr) {
       try {
@@ -571,15 +581,25 @@ export class AgentRuntime {
     }
 
     // 兜底：根据 mode 返回安全默认值
-    // 解析失败默认放行，保证系统运行优先
     switch (mode) {
-      case 'intercept':
+      case 'intercept': {
+        // 结构安全兜底：检查已知的危险结构模式
+        const structuralBlock = this.structuralSafetyCheck(pendingToolCall);
+        if (structuralBlock) {
+          return {
+            kind: 'intercept',
+            decision: 'block',
+            reason: structuralBlock,
+            confidence: 0.0,
+          };
+        }
         return {
           kind: 'intercept',
           decision: 'allow',
-          reason: 'LLM output could not be parsed, defaulting to allow',
+          reason: 'LLM output could not be parsed, no dangerous structural patterns detected',
           confidence: 0.0,
         };
+      }
       case 'replace_context':
       case 'inject_context':
         return {
@@ -594,6 +614,49 @@ export class AgentRuntime {
           level: 'info',
         };
     }
+  }
+
+  /**
+   * 结构安全兜底检查
+   *
+   * 当 LLM 无法判断时，基于已知的危险结构模式做确定性判断。
+   * 不理解命令做什么，只检查结构特征。
+   */
+  private structuralSafetyCheck(pendingToolCall?: { name: string; arguments: Record<string, unknown> }): string | null {
+    if (!pendingToolCall) return null;
+    if (!isShellTool(pendingToolCall.name)) return null;
+
+    const command = typeof pendingToolCall.arguments?.command === 'string'
+      ? pendingToolCall.arguments.command
+      : typeof pendingToolCall.arguments?.cmd === 'string'
+        ? pendingToolCall.arguments.cmd
+        : null;
+
+    if (!command) return null;
+
+    const parsed = parseShellCommand(command);
+    if (!parsed.parsed) return null; // 无法解析，不拦截
+
+    // 已知的危险结构模式
+    if (parsed.hasShellPipe) return '结构安全兜底：管道到解释器（执行外部代码）';
+    if (parsed.hasInlineCode) return '结构安全兜底：内联代码执行（-c/-e 参数）';
+    if (parsed.hasSubshell) return '结构安全兜底：子 shell 执行';
+
+    // 检查是否 sudo
+    if (parsed.segments.some(s => s.isSudo)) return '结构安全兜底：提权执行（sudo）';
+
+    // 检查重定向到保护路径
+    for (const seg of parsed.segments) {
+      for (const r of seg.redirects) {
+        if (r.target.startsWith('/System/') || r.target.startsWith('/usr/') ||
+            r.target.startsWith('/etc/') || r.target.startsWith('/dev/') ||
+            r.target.startsWith('/bin/') || r.target.startsWith('/sbin/')) {
+          return `结构安全兜底：重定向到保护路径 ${r.target}`;
+        }
+      }
+    }
+
+    return null; // 没有危险结构，放行
   }
 
   /**

@@ -40,8 +40,10 @@ export interface ParsedCommand {
   segments: ParsedSegment[];
   /** 连接方式 */
   connectors: Connector[];
-  /** 是否包含管道到 shell（| sh, | bash, | zsh） */
+  /** 是否包含管道到解释器（| sh, | bash, | python3, | node 等） */
   hasShellPipe: boolean;
+  /** 是否包含内联代码执行（python -c, node -e, bash -c 等） */
+  hasInlineCode: boolean;
   /** 是否包含子 shell（$(...) 或反引号） */
   hasSubshell: boolean;
   /** 是否包含后台执行（&） */
