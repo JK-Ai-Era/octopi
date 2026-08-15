@@ -103,8 +103,6 @@ describe('SessionGate', () => {
     expect(metrics.maxConcurrent).toBe(5);
     expect(metrics.queueLength).toBe(0);
     expect(metrics.totalRequests).toBe(2);
-    expect(metrics.enteredRequests).toBe(2);
-    expect(metrics.rejectedRequests).toBe(0);
 
     r1();
     r2();

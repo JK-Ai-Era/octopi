@@ -160,6 +160,42 @@ export const DistributedIntelligenceConfigSchema = z.object({
   }).optional(),
 }).optional();
 
+// ── 并发控制配置 Schema ──
+
+const RateLimitSlotSchema = z.object({
+  requestsPerMinute: z.number().positive(),
+  burstCapacity: z.number().positive().optional(),
+  maxWaitMs: z.number().positive().optional(),
+});
+
+const PoolSlotSchema = z.object({
+  provider: z.string().min(1),
+  weight: z.number().positive().optional(),
+  rateLimit: RateLimitSlotSchema.optional(),
+});
+
+const RoutingSchema = z.object({
+  strategy: z.enum(['sticky', 'round-robin', 'least-loaded']).optional(),
+  stickyTtlMs: z.number().positive().optional(),
+  failover: z.enum(['auto', 'manual']).optional(),
+});
+
+const ProviderPoolConfigSchema = z.object({
+  slots: z.array(PoolSlotSchema).min(1, 'ProviderPool requires at least one slot'),
+  routing: RoutingSchema.optional(),
+  rateLimit: RateLimitSlotSchema.optional(),
+});
+
+const SessionGateConfigSchema = z.object({
+  maxConcurrent: z.number().positive().optional(),
+  waitTimeoutMs: z.number().positive().optional(),
+});
+
+const ConcurrencyConfigSchema = z.object({
+  providerPool: ProviderPoolConfigSchema.optional(),
+  sessionGate: SessionGateConfigSchema.optional(),
+});
+
 // ── 可观测性配置 Schema ──
 
 export const ObservabilityConfigSchema = z.object({
@@ -196,6 +232,7 @@ export const HarnessConfigSchema = z.object({
   channels: z.array(ChannelConfigSchema).optional(),
   session: SessionConfigSchema.optional(),
   observability: ObservabilityConfigSchema.optional(),
+  concurrency: ConcurrencyConfigSchema.optional(),
 });
 
 // ── 校验结果类型 ──
