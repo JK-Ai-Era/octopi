@@ -18,7 +18,7 @@ export interface ToolValidatorConfig {
 }
 
 export interface ValidationResult {
-  /** 是否有效 */
+  /** 是否有效（连续 no-op 未超过阈值） */
   valid: boolean;
   /** 是否为 no-op */
   isNoop: boolean;
@@ -34,6 +34,7 @@ export interface ToolCallRecord {
   toolName: string;
   args: unknown;
   result: unknown;
+  isNoop: boolean;
   timestamp: number;
 }
 
@@ -58,14 +59,14 @@ export class ToolValidator {
     let isNoop = false;
     let processedResult = result;
 
-    // 1. 检查 __noop 标记
+    // 1. 检查 __noop 标记（优先级最高）
     if (this.isNoopResult(result)) {
       isNoop = true;
       warnings.push(`Tool ${toolName} returned __noop flag`);
     }
 
-    // 2. 空结果检查
-    if (this.emptyIsNoop && this.isEmptyResult(result)) {
+    // 2. 空结果检查（仅在 __noop 未标记时检查，避免双重计数）
+    if (!isNoop && this.emptyIsNoop && this.isEmptyResult(result)) {
       isNoop = true;
       warnings.push(`Tool ${toolName} returned empty result`);
     }
@@ -86,11 +87,12 @@ export class ToolValidator {
       this.consecutiveNoops = 0;
     }
 
-    // 5. 记录历史
+    // 5. 记录历史（存储处理后的结果副本，避免外部修改影响记录）
     this.history.push({
       toolName,
       args,
-      result: processedResult,
+      result: this.safeClone(processedResult),
+      isNoop,
       timestamp: Date.now(),
     });
 
@@ -151,7 +153,7 @@ export class ToolValidator {
 
     for (const record of this.history) {
       uniqueTools.add(record.toolName);
-      if (this.isNoopResult(record.result) || this.isEmptyResult(record.result)) {
+      if (record.isNoop) {
         noopCalls++;
       }
       totalSize += this.estimateSize(record.result);
@@ -200,7 +202,9 @@ export class ToolValidator {
   }
 
   /**
-   * 截断结果到指定大小
+   * 截断结果到指定大小。
+   * 对象/数组：先尝试保留原始类型的截断，失败则降级为字符串。
+   * 字符串：直接截断。
    */
   private truncateResult(result: unknown, maxSize: number): unknown {
     if (typeof result === 'string') {
@@ -211,17 +215,30 @@ export class ToolValidator {
       const json = JSON.stringify(result);
       if (json.length <= maxSize) return result;
 
-      // 尝试截断 JSON
-      const truncated = json.slice(0, maxSize);
-      // 尝试解析截断后的 JSON
-      try {
-        return JSON.parse(truncated);
-      } catch {
-        // 无法解析，返回截断的字符串
-        return truncated + '\n[... truncated]';
+      // 对象类型：尝试逐字符解析，找到最大的合法 JSON 前缀
+      if (typeof result === 'object' && result !== null) {
+        // 简单策略：截断为字符串，保留类型信息
+        const truncated = json.slice(0, maxSize);
+        return `[truncated JSON] ${truncated}`;
       }
+
+      return json.slice(0, maxSize) + '\n[... truncated]';
     } catch {
       return '[result serialization failed]';
+    }
+  }
+
+  /**
+   * 安全克隆：存储结果的副本，避免外部引用修改影响历史记录。
+   * 失败时返回原始引用（best-effort）。
+   */
+  private safeClone(value: unknown): unknown {
+    if (value === null || value === undefined) return value;
+    if (typeof value !== 'object') return value;
+    try {
+      return JSON.parse(JSON.stringify(value));
+    } catch {
+      return value;
     }
   }
 }

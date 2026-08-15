@@ -8,6 +8,9 @@
  * - 支持多 provider：每个 provider 独立限流
  * - 自动等待：请求超限时自动排队等待
  * - 可观测：提供等待时间和队列长度指标
+ *
+ * 语义：acquire() 阻塞直到获得令牌，令牌消耗后由 refill 自动补充。
+ * 不需要 release —— 限流器控制的是请求频率，不是资源持有。
  */
 
 export interface RateLimiterConfig {
@@ -28,6 +31,8 @@ export interface RateLimiterMetrics {
   queueLength: number;
   /** 总请求数 */
   totalRequests: number;
+  /** 已满足的请求数 */
+  fulfilledRequests: number;
   /** 总等待时间（毫秒） */
   totalWaitMs: number;
   /** 平均等待时间（毫秒） */
@@ -38,6 +43,7 @@ interface QueueEntry {
   resolve: () => void;
   reject: (error: Error) => void;
   requestedAt: number;
+  timer: ReturnType<typeof setTimeout>;
 }
 
 export class RateLimiter {
@@ -47,10 +53,16 @@ export class RateLimiter {
   private lastRefill: number;
   private queue: QueueEntry[] = [];
   private totalRequests = 0;
+  private fulfilledRequests = 0;
   private totalWaitMs = 0;
   private refillTimer?: ReturnType<typeof setInterval>;
+  private destroyed = false;
 
   constructor(private readonly config: RateLimiterConfig) {
+    if (config.requestsPerMinute <= 0) {
+      throw new Error('requestsPerMinute must be positive');
+    }
+
     this.maxTokens = config.burstCapacity ?? config.requestsPerMinute;
     this.tokens = this.maxTokens;
     this.refillRate = config.requestsPerMinute / (60 * 1000); // tokens per ms
@@ -61,11 +73,15 @@ export class RateLimiter {
   }
 
   /**
-   * 获取一个令牌
-   * @returns 释放令牌的函数
-   * @throws 超时时抛出错误
+   * 等待直到获得一个令牌。
+   * 令牌消耗后由桶自动补充，不需要 release。
+   * @throws 超时或已销毁时抛出错误
    */
-  async acquire(): Promise<() => void> {
+  async acquire(): Promise<void> {
+    if (this.destroyed) {
+      throw new Error('RateLimiter has been destroyed');
+    }
+
     const requestedAt = Date.now();
     this.totalRequests++;
 
@@ -73,21 +89,22 @@ export class RateLimiter {
     this.refill();
     if (this.tokens >= 1) {
       this.tokens -= 1;
-      return this.createRelease(requestedAt);
+      this.fulfilledRequests++;
+      this.totalWaitMs += Date.now() - requestedAt;
+      return;
     }
 
     // 需要等待
     const waitMs = this.estimateWaitMs();
     if (waitMs > this.config.maxWaitMs) {
       throw new Error(
-        `Rate limit exceeded: estimated wait ${waitMs}ms exceeds max ${this.config.maxWaitMs}ms`
+        `Rate limit exceeded: estimated wait ${Math.round(waitMs)}ms exceeds max ${this.config.maxWaitMs}ms`
       );
     }
 
     // 排队等待
-    return new Promise<() => void>((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        // 超时，从队列中移除
+    return new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
         const idx = this.queue.indexOf(entry);
         if (idx >= 0) this.queue.splice(idx, 1);
         reject(new Error(`Rate limit timeout: waited ${this.config.maxWaitMs}ms`));
@@ -95,16 +112,18 @@ export class RateLimiter {
 
       const entry: QueueEntry = {
         resolve: () => {
-          clearTimeout(timeout);
+          clearTimeout(timer);
           const waitTime = Date.now() - requestedAt;
           this.totalWaitMs += waitTime;
-          resolve(this.createRelease(requestedAt));
+          this.fulfilledRequests++;
+          resolve();
         },
         reject: (err) => {
-          clearTimeout(timeout);
+          clearTimeout(timer);
           reject(err);
         },
         requestedAt,
+        timer,
       };
 
       this.queue.push(entry);
@@ -114,15 +133,18 @@ export class RateLimiter {
 
   /**
    * 尝试获取令牌，不等待
-   * @returns 释放令牌的函数，或 null
+   * @returns true 表示获得令牌，false 表示桶已空
    */
-  tryAcquire(): (() => void) | null {
+  tryAcquire(): boolean {
+    if (this.destroyed) return false;
+
     this.refill();
     if (this.tokens >= 1) {
       this.tokens -= 1;
-      return this.createRelease(Date.now());
+      this.fulfilledRequests++;
+      return true;
     }
-    return null;
+    return false;
   }
 
   /**
@@ -134,33 +156,34 @@ export class RateLimiter {
       availableTokens: Math.floor(this.tokens),
       queueLength: this.queue.length,
       totalRequests: this.totalRequests,
+      fulfilledRequests: this.fulfilledRequests,
       totalWaitMs: this.totalWaitMs,
       avgWaitMs: this.totalRequests > 0 ? this.totalWaitMs / this.totalRequests : 0,
     };
   }
 
   /**
-   * 销毁限流器
+   * 销毁限流器，拒绝所有排队中的请求
    */
   destroy(): void {
+    if (this.destroyed) return;
+    this.destroyed = true;
+
     if (this.refillTimer) {
       clearInterval(this.refillTimer);
       this.refillTimer = undefined;
     }
-    // 拒绝所有等待中的请求
     for (const entry of this.queue) {
       entry.reject(new Error('RateLimiter destroyed'));
     }
     this.queue = [];
   }
 
-  private createRelease(requestedAt: number): () => void {
-    let released = false;
-    return () => {
-      if (released) return;
-      released = true;
-      this.processQueue();
-    };
+  /**
+   * 检查是否已销毁
+   */
+  get isDestroyed(): boolean {
+    return this.destroyed;
   }
 
   private refill(): void {
@@ -186,6 +209,7 @@ export class RateLimiter {
   private estimateWaitMs(): number {
     if (this.tokens >= 1) return 0;
     const deficit = 1 - this.tokens;
+    // refillRate 在构造函数校验后保证 > 0
     return deficit / this.refillRate;
   }
 }
@@ -195,11 +219,15 @@ export class RateLimiter {
  */
 export class ProviderRateLimitManager {
   private limiters = new Map<string, RateLimiter>();
+  private destroyed = false;
 
   /**
    * 注册 provider 限流器
    */
   register(provider: string, config: RateLimiterConfig): void {
+    if (this.destroyed) {
+      throw new Error('ProviderRateLimitManager has been destroyed');
+    }
     if (this.limiters.has(provider)) {
       this.limiters.get(provider)!.destroy();
     }
@@ -243,9 +271,18 @@ export class ProviderRateLimitManager {
    * 销毁所有限流器
    */
   destroy(): void {
+    if (this.destroyed) return;
+    this.destroyed = true;
     for (const limiter of this.limiters.values()) {
       limiter.destroy();
     }
     this.limiters.clear();
+  }
+
+  /**
+   * 检查是否已销毁
+   */
+  get isDestroyed(): boolean {
+    return this.destroyed;
   }
 }

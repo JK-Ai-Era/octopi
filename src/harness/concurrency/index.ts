@@ -1,7 +1,11 @@
 /**
  * concurrency — 并发控制模块
  *
- * 提供 Session 并发控制和 Provider 限流能力。
+ * 提供限流、并发控制和工具结果验证能力。
+ *
+ * - RateLimiter: 令牌桶限流，控制 LLM API 调用频率
+ * - SessionGate: 信号量并发控制，限制同时运行的 session 数量
+ * - ToolValidator: 工具执行结果验证，noop 检测和大小限制
  */
 
 export { RateLimiter, ProviderRateLimitManager } from './rate-limiter.js';
