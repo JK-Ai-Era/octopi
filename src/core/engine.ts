@@ -1098,10 +1098,18 @@ export class AgentEngine {
             });
           }
 
+          // 保存 context 信息供 turn.end 事件使用
+          const contextWindow = assembleParams.contextWindow ?? 128000;
+
           yield {
             type: 'turn.end',
             timestamp: Date.now(),
-            data: { content: llmResponse.content, usage: llmResponse.usage },
+            data: {
+              content: llmResponse.content,
+              usage: llmResponse.usage,
+              estimatedTokens,
+              contextWindow,
+            },
           };
 
           // 循环正常结束

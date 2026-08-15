@@ -113,6 +113,10 @@ export class TuiApp {
   private streamedContent = '';
   private exitResolve?: () => void;
 
+  // Context 信息
+  private contextTokens = 0;
+  private contextWindow = 0;
+
   constructor(config: TuiAppConfig) {
     this.config = config;
     this.sessionIdRef.current = `${config.agentId}:cli:${Date.now()}`;
@@ -273,6 +277,16 @@ export class TuiApp {
         }
         this.streamedContent = '';
         this.isProcessing = false;
+
+        // 更新 context 信息
+        const estimatedTokens = event.data?.estimatedTokens as number | undefined;
+        const contextWindow = event.data?.contextWindow as number | undefined;
+        if (estimatedTokens !== undefined && contextWindow !== undefined) {
+          this.contextTokens = estimatedTokens;
+          this.contextWindow = contextWindow;
+          this.updateFooter();
+        }
+
         this.setStatus('');
         this.tui.requestRender();
         break;
@@ -599,10 +613,19 @@ export class TuiApp {
     const parts = [
       `agent ${this.config.agentId}`,
       this.currentModel ? `model ${this.currentModel}` : '',
+      this.contextWindow > 0
+        ? `ctx ${this.formatTokens(this.contextTokens)} / ${this.formatTokens(this.contextWindow)}`
+        : '',
       `gateway ${this.config.gatewayUrl}`,
       'Ctrl+C exit | Ctrl+O tools | /help',
     ].filter(Boolean);
     this.footer.setText(theme.footer(parts.join(' | ')));
+  }
+
+  private formatTokens(n: number): string {
+    if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}m`;
+    if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+    return String(n);
   }
 
   private setStatus(text: string): void {

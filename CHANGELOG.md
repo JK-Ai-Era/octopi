@@ -1,4 +1,20 @@
-## v0.6.7 (2026-08-16)
+## v0.6.8 (2026-08-16)
+
+### feat(tui): Footer 显示当前会话上下文大小 / 上下文窗口上限
+
+TUI footer 区域新增 `ctx 12.3k / 128.0k` 显示，格式为 `ctx {当前估算} / {窗口上限}`。
+
+**实现：**
+- `turn.end` 事件扩展：新增 `estimatedTokens` 和 `contextWindow` 字段
+- TUI 捕获 `turn.end` 中的 context 信息，更新 footer
+- `formatTokens()` 辅助函数：`k`/`m` 紧凑格式
+
+**文件变更：**
+- 更新 `src/core/engine.ts` — turn.end 事件携带 context 信息
+- 更新 `src/integration/tui/app.ts` — footer 显示 ctx 状态
+
+**测试：** 1052 passed，全量通过
+
 
 ### feat(token): 真实 Usage 集成 — LLM 返回值校准 token 估算
 
