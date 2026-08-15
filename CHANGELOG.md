@@ -1,4 +1,33 @@
-## v0.6.8 (2026-08-16)
+## v0.6.9 (2026-08-16)
+
+### feat(config): 支持 agent 级别 contextWindow 配置
+
+配置文件现在支持在 agent 的 `model` 中直接配置 `contextWindow`，覆盖 provider 的 getModelInfo 默认值。
+
+**优先级链：** agent 配置 > provider getModelInfo > 内置默认值 > 128000
+
+**配置示例：**
+```json
+{
+  "agents": [{
+    "id": "assistant",
+    "model": {
+      "provider": "openai",
+      "model": "gpt-4o",
+      "contextWindow": 256000
+    }
+  }]
+}
+```
+
+**文件变更：**
+- 更新 `src/core/types.ts` — ModelConfig 新增 contextWindow 字段
+- 更新 `src/config-schema.ts` — ModelConfigSchema 新增 contextWindow 校验
+- 更新 `src/core/engine.ts` — RunConfig 新增 contextWindow + 优先级链
+- 更新 `src/integration/gateway/gateway.ts` — 传递 agent.contextWindow 到 RunConfig
+
+**测试：** 1052 passed，全量通过
+
 
 ### feat(tui): Footer 显示当前会话上下文大小 / 上下文窗口上限
 

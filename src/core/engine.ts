@@ -181,6 +181,8 @@ export interface RunConfig {
   temperature?: number;
   /** 工作目录（工具用于解析相对路径） */
   cwd?: string;
+  /** 模型上下文窗口大小（agent 配置覆盖，优先级高于 provider getModelInfo） */
+  contextWindow?: number;
   /**
    * 外部注入的上下文
    *
@@ -411,6 +413,9 @@ export class AgentEngine {
           const modelName = config.model || this.deps.model.defaultModel;
           const modelInfo = modelName ? this.deps.model.getModelInfo(modelName) : null;
 
+          // contextWindow 优先级：agent 配置 > provider getModelInfo > 默认 128000
+          const effectiveContextWindow = config.contextWindow ?? modelInfo?.contextWindow ?? 128000;
+
           const basePrompt = config.systemPrompt || this.deps.systemPrompt || '';
           // 将 injectedContext 追加到 systemPrompt（Core 层不关心内容，只透传）
           const systemPrompt = config.injectedContext != null
@@ -425,8 +430,8 @@ export class AgentEngine {
             messages,
             systemPrompt,
             tools: toolDefs,
-            tokenBudget: modelInfo?.contextWindow ?? 128000,
-            contextWindow: modelInfo?.contextWindow,
+            tokenBudget: effectiveContextWindow,
+            contextWindow: effectiveContextWindow,
             signal,
           };
 
@@ -435,7 +440,7 @@ export class AgentEngine {
               systemPrompt,
               tools: toolDefs,
               signal,
-              contextWindow: modelInfo?.contextWindow,
+              contextWindow: effectiveContextWindow,
             });
             if (modified) {
               assembleParams.systemPrompt = modified.systemPrompt;

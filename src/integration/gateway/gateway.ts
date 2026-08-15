@@ -283,6 +283,7 @@ export class Gateway {
       agentId: agent.id,
       sessionId: sessionKey,
       model: agent.model.model,
+      contextWindow: agent.model.contextWindow,
       systemPrompt: typeof agent.persona === 'object' ? agent.persona?.systemPrompt ?? '' : '',
     };
 

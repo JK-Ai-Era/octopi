@@ -231,6 +231,8 @@ export interface ModelConfig {
   temperature?: number;
   /** 请求的最大输出 token 数（请求参数，不是模型能力） */
   maxTokens?: number;
+  /** 模型上下文窗口大小（能力声明，覆盖 provider 的 getModelInfo） */
+  contextWindow?: number;
   fallbackModels?: string[];
 }
 

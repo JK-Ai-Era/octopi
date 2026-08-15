@@ -54,6 +54,7 @@ const ModelConfigSchema = z.object({
   model: z.string({ error: 'Agent must specify a model' }).min(1),
   temperature: z.number().min(0).max(2).optional(),
   maxTokens: z.number().positive().optional(),
+  contextWindow: z.number().positive('contextWindow must be a positive number').optional(),
   fallbackModels: z.array(z.string()).optional(),
 });
 
