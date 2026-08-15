@@ -37,6 +37,12 @@ const CREDENTIAL_DIRS = [
   '.openclaw', '.octopi/config',
 ];
 
+/** 安全伪设备（/dev/ 下的安全目标） */
+const SAFE_PSEUDO_DEVICES = new Set([
+  '/dev/null', '/dev/zero', '/dev/random', '/dev/urandom',
+  '/dev/stdin', '/dev/stdout', '/dev/stderr', '/dev/tty',
+]);
+
 /** 临时目录前缀 */
 const TEMP_PREFIXES = ['/tmp/', '/var/tmp/', '/private/var/tmp/'];
 
@@ -50,6 +56,11 @@ function classifyPath(path: string, cwd?: string): PathRisk {
   // 根路径特殊处理（精确匹配，不是 startsWith）
   if (normalized === '/') {
     return 'protected';
+  }
+
+  // 安全伪设备白名单（/dev/null 等）
+  if (SAFE_PSEUDO_DEVICES.has(normalized)) {
+    return 'safe';
   }
 
   // 系统保护路径

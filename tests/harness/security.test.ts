@@ -388,6 +388,28 @@ describe('Regression: 防止已知误判', () => {
     const result = evaluateShellCommand('grep -r "TODO" . > /tmp/todos.txt', cwd);
     expect(result.level).toBe('low');
   });
+
+  it('echo test > /dev/null 不应被拦截（伪设备白名单）', () => {
+    const result = evaluateShellCommand('echo test > /dev/null', cwd);
+    expect(result.level).not.toBe('critical');
+    expect(result.level).not.toBe('high');
+  });
+
+  it('cat file > /dev/null 不应被拦截', () => {
+    const result = evaluateShellCommand('cat file.txt > /dev/null', cwd);
+    expect(result.level).not.toBe('critical');
+  });
+
+  it('grep pattern file > /dev/null 不应被拦截', () => {
+    const result = evaluateShellCommand('grep pattern file.txt > /dev/null', cwd);
+    expect(result.level).not.toBe('critical');
+  });
+
+  it('/dev/sda 不在白名单中（非伪设备）', () => {
+    const result = evaluateShellCommand('dd if=/dev/zero of=/dev/sda', cwd);
+    // dd 未在已知命令列表中，返回 unknown；关键是不被误判为 safe
+    expect(result.level).not.toBe('low');
+  });
 });
 
 // ═══════════════════════════════════════════════════
