@@ -1,61 +1,40 @@
 /**
  * HeuristicTokenEstimator — 启发式 Token 估算器
  *
- * 三层策略：
+ * 三层策略（参考 OpenClaw）：
  * 1. 优先使用 LLM 返回的实际 token 数（usage.promptTokens）- 外部回写
  * 2. 次选：专用 tokenizer（如 tiktoken）- 未来扩展
- * 3. 兜底：启发式估算
- *    - 英文：字符数 / 4
- *    - 中文：1 汉字 ≈ 1.5 token
- *    - 多模态：图片按固定 token 计
+ * 3. 兜底：启发式估算，按内容类型使用不同比率
  *
- * 基于 tiktoken cl100k_base 经验值。
+ * 关键改进（v0.6.5+）：
+ * - 完整 CJK 范围（扩展A/B + 平假名 + 片假名 + 韩文 + 全角符号）
+ * - 按内容类型区分比率（文本4/工具结果2/JSON3）
+ * - 消息结构开销 12 token（参考 OpenClaw）
+ * - 图片估算 1200 token（参考 OpenClaw 的 4800 chars）
+ * - 安全余量 1.2x（参考 OpenClaw 的 SAFETY_MARGIN）
  */
 
 import type { Message } from '../../core/types.js';
 import { getTextContent } from '../../core/types.js';
 import type { TokenEstimator } from '../../core/interfaces/context-engine.js';
 import type { LLMMessage, ToolDefinition } from '../../core/interfaces/model-provider.js';
+import {
+  estimateTextTokens,
+  estimateAdjustedChars,
+} from '../../core/token-estimator.js';
+import {
+  CHARS_PER_TOKEN,
+  TOOL_RESULT_CHARS_PER_TOKEN,
+  JSON_CHARS_PER_TOKEN,
+  MESSAGE_OVERHEAD_TOKENS,
+  IMAGE_TOKEN_ESTIMATE,
+  AUDIO_TOKEN_ESTIMATE,
+  VIDEO_TOKEN_ESTIMATE,
+  SAFETY_MARGIN,
+} from '../../core/token-constants.js';
 
-/**
- * 估算单段文本的 token 数
- *
- * 使用采样策略：超长文本采样前 2000 字符估算，避免 O(n) 扫描。
- */
-export function estimateTextTokens(text: string): number {
-  if (text.length === 0) return 0;
-
-  // 超长文本采样
-  const sample = text.length > 2000 ? text.slice(0, 2000) : text;
-  const sampleRatio = text.length / sample.length;
-
-  // 分类统计
-  let chineseChars = 0;
-  let asciiChars = 0;
-  let otherChars = 0;
-
-  for (let i = 0; i < sample.length; i++) {
-    const code = sample.charCodeAt(i);
-    if (code >= 0x4e00 && code <= 0x9fff) {
-      // CJK 统一汉字
-      chineseChars++;
-    } else if (code < 0x80) {
-      // ASCII
-      asciiChars++;
-    } else {
-      otherChars++;
-    }
-  }
-
-  // 估算：
-  // - 中文：~1.5 token/字
-  // - 英文：~0.25 token/char（即 4 chars/token）
-  // - 其他：~0.5 token/char
-  const tokens = chineseChars * 1.5 + asciiChars * 0.25 + otherChars * 0.5;
-
-  // 加上采样比例
-  return Math.ceil(tokens * sampleRatio);
-}
+// Re-export for backward compatibility
+export { estimateTextTokens } from '../../core/token-estimator.js';
 
 /**
  * 启发式 Token 估算器实现
@@ -68,10 +47,7 @@ export class HeuristicTokenEstimator implements TokenEstimator {
    * 包含消息结构开销（role、分隔符等）。
    */
   estimateMessage(message: Message): number {
-    let tokens = 0;
-
-    // 消息结构开销（role + 分隔符）
-    tokens += 4;
+    let tokens = MESSAGE_OVERHEAD_TOKENS;
 
     // 内容
     if (typeof message.content === 'string') {
@@ -81,35 +57,31 @@ export class HeuristicTokenEstimator implements TokenEstimator {
         if (block.type === 'text') {
           tokens += estimateTextTokens(block.text);
         } else if (block.type === 'image') {
-          // 图片 token 估算（参考 OpenAI vision 定价）
-          // 典型图片：85-170 token per tile，假设 1-2 tiles
-          tokens += 170;
+          tokens += IMAGE_TOKEN_ESTIMATE;
         } else if (block.type === 'audio') {
-          // 音频：~1 token/秒，假设 30 秒
-          tokens += 30;
+          tokens += AUDIO_TOKEN_ESTIMATE;
         } else if (block.type === 'video') {
-          // 视频：抽帧处理，假设 10 帧
-          tokens += 850;
+          tokens += VIDEO_TOKEN_ESTIMATE;
         } else {
           tokens += 10;
         }
       }
     }
 
-    // 工具调用
+    // 工具调用（用 JSON 比率）
     if (message.toolCalls) {
       for (const tc of message.toolCalls) {
-        tokens += 1; // 函数名
+        tokens += estimateTextTokens(tc.name ?? '');
         const argsStr = JSON.stringify(tc.arguments ?? {});
-        tokens += Math.ceil(argsStr.length / 3); // JSON 结构符号密集
+        tokens += Math.ceil(argsStr.length / JSON_CHARS_PER_TOKEN);
       }
     }
 
-    // 工具结果
+    // 工具结果（用更密集的比率 chars/2）
     if (message.toolResults) {
       for (const tr of message.toolResults) {
         const resultStr = typeof tr.result === 'string' ? tr.result : JSON.stringify(tr.result);
-        tokens += estimateTextTokens(resultStr);
+        tokens += Math.ceil(estimateAdjustedChars(resultStr) / TOOL_RESULT_CHARS_PER_TOKEN);
       }
     }
 
@@ -143,12 +115,11 @@ export class HeuristicTokenEstimator implements TokenEstimator {
   estimateTools(tools: ToolDefinition[]): number {
     let total = 0;
     for (const tool of tools) {
-      // ToolDefinition 格式: { type: 'function', function: { name, description, parameters } }
       const fn = tool.function;
       total += estimateTextTokens(fn.name);
       total += estimateTextTokens(fn.description);
       const paramsStr = JSON.stringify(fn.parameters ?? {});
-      total += Math.ceil(paramsStr.length / 3);
+      total += Math.ceil(paramsStr.length / JSON_CHARS_PER_TOKEN);
     }
     return total;
   }
@@ -156,16 +127,12 @@ export class HeuristicTokenEstimator implements TokenEstimator {
 
 /**
  * 估算 LLM 消息列表的 token 数（兼容函数）
- *
- * 用于向后兼容旧的 estimateTokens 函数。
  */
 export function estimateLLMMessages(messages: LLMMessage[]): number {
   let total = 0;
   for (const msg of messages) {
-    // 消息结构开销
-    total += 4;
+    total += MESSAGE_OVERHEAD_TOKENS;
 
-    // 内容
     if (typeof msg.content === 'string') {
       total += estimateTextTokens(msg.content);
     } else if (Array.isArray(msg.content)) {
@@ -173,9 +140,9 @@ export function estimateLLMMessages(messages: LLMMessage[]): number {
         if (block.type === 'text' && typeof block.text === 'string') {
           total += estimateTextTokens(block.text);
         } else if (block.type === 'image') {
-          total += 170;
+          total += IMAGE_TOKEN_ESTIMATE;
         } else if (block.type === 'input_audio') {
-          total += 30;
+          total += AUDIO_TOKEN_ESTIMATE;
         } else {
           total += 10;
         }
@@ -185,8 +152,8 @@ export function estimateLLMMessages(messages: LLMMessage[]): number {
     // 工具调用
     if (msg.tool_calls) {
       for (const tc of msg.tool_calls) {
-        total += 1;
-        total += Math.ceil((tc.function?.arguments ?? '').length / 3);
+        total += estimateTextTokens(tc.function?.name ?? '');
+        total += Math.ceil((tc.function?.arguments ?? '').length / JSON_CHARS_PER_TOKEN);
       }
     }
   }

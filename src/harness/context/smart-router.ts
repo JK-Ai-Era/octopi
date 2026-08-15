@@ -10,14 +10,15 @@
  * 4. compact_then_truncate — 先 LLM 摘要，再截断
  *
  * 路由决策基于：
- * - 溢出 token 数
- * - 工具结果可压缩空间
+ * - 溢出 token 数（含 1.2x 安全余量）
+ * - 工具结果可压缩空间（用 TOOL_RESULT_CHARS_PER_TOKEN=2 估算）
  * - 摘要函数是否可用
  */
 
 import type { Message } from '../../core/types.js';
 import type { TokenEstimator } from '../../core/interfaces/context-engine.js';
 import { HeuristicTokenEstimator } from './token-estimator.js';
+import { SAFETY_MARGIN, TOOL_RESULT_CHARS_PER_TOKEN } from '../../core/token-constants.js';
 
 // ── 路由类型 ──
 
@@ -93,8 +94,9 @@ export class SmartRouter {
     messagesBudget: number,
     hasSummarize: boolean,
   ): RoutingDecision {
-    // 估算当前 token 数
-    const estimatedTokens = this.estimator.estimateMessages(messages);
+    // 估算当前 token 数（含安全余量）
+    const rawEstimatedTokens = this.estimator.estimateMessages(messages);
+    const estimatedTokens = Math.ceil(rawEstimatedTokens * SAFETY_MARGIN);
 
     // 计算溢出
     const overflowTokens = Math.max(0, estimatedTokens - messagesBudget);
@@ -112,7 +114,7 @@ export class SmartRouter {
       };
     }
 
-    // 计算工具结果可压缩空间
+    // 计算工具结果可压缩空间（用正确的 TOOL_RESULT_CHARS_PER_TOKEN 比率）
     const toolResultReducibleChars = this.calculateToolResultReducibleChars(messages);
 
     // 决定路由
@@ -154,6 +156,7 @@ export class SmartRouter {
    * 计算工具结果可压缩字符数
    *
    * 扫描所有工具结果消息，计算超过阈值的字符数。
+   * 注意：这里用原始字符数（非 CJK 加权），因为截断操作是按字符进行的。
    */
   private calculateToolResultReducibleChars(messages: Message[]): number {
     let reducibleChars = 0;

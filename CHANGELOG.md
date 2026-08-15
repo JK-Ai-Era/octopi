@@ -1,4 +1,26 @@
-# Changelog
+## v0.6.6 (2026-08-16)
+
+### feat(token): Token 估算器优化 — 参考 OpenClaw 分层比率策略
+
+研究了 OpenClaw 的 token 计算和上下文管理机制，对齐核心估算逻辑：
+
+**改进点：**
+- **完整 CJK 范围检测**：从只检测 U+4E00-U+9FFF 扩展到完整 CJK + 扩展A/B + 平假名 + 片假名 + 韩文 + 全角符号
+- **按内容类型区分比率**：通用文本 chars/4、工具结果 chars/2、JSON chars/3（之前全局统一）
+- **消息结构开销**：从 4 token 提升到 12 token（参考 OpenClaw 的 MESSAGE_BOUNDARY_OVERHEAD_TOKENS）
+- **图片估算**：从 85 token 提升到 1200 token（参考 OpenClaw 的 4800 chars）
+- **安全余量**：SmartRouter 估算值乘以 1.2x SAFETY_MARGIN（参考 OpenClaw）
+- **统一常量文件**：新增 `src/core/token-constants.ts`，避免 Core 和 Harness 层重复定义
+
+**文件变更：**
+- 新增 `src/core/token-constants.ts` — 共享常量
+- 重写 `src/core/token-estimator.ts` — CJK 感知 + 分层比率
+- 重写 `src/harness/context/token-estimator.ts` — 同步核心估算器 + tool result 特殊处理
+- 更新 `src/harness/context/smart-router.ts` — SAFETY_MARGIN + 正确比率
+- 更新测试期望值（3 处，因估算值变化）
+
+**测试：** 1050 passed，全量通过
+
 
 
 ## v0.6.5 (2026-08-16)

@@ -107,10 +107,10 @@ describe('HeuristicTokenEstimator', () => {
     });
 
     it('should estimate Chinese text', () => {
-      // 1 Chinese char ≈ 1.5 tokens
+      // CJK 感知估算：4 CJK chars → adjustedChars=16 → 16/4=4 tokens
       const text = '你好世界'; // 4 chars
       const tokens = estimator.estimateText(text);
-      expect(tokens).toBeGreaterThan(4);
+      expect(tokens).toBeGreaterThanOrEqual(4);
       expect(tokens).toBeLessThan(10);
     });
 
@@ -251,7 +251,7 @@ describe('DefaultMessageSelector', () => {
       );
 
       const result = selector.select(messages, {
-        maxTokens: 100, // Very small budget
+        maxTokens: 500, // Budget enough for tail protection
         protectFirstN: 3,
         protectLastN: 5,
       }, estimator);
@@ -846,11 +846,13 @@ describe('SmartRouter', () => {
         createMessage('assistant', 'Hi'),
       ];
 
-      const estimatedTokens = estimator.estimateMessages(messages);
-      const decision = router.evaluate(messages, estimatedTokens - 10, true);
+      const rawEstimatedTokens = estimator.estimateMessages(messages);
+      // SmartRouter applies SAFETY_MARGIN (1.2x), so estimatedTokens is ceil(raw * 1.2)
+      const expectedEstimatedTokens = Math.ceil(rawEstimatedTokens * 1.2);
+      const decision = router.evaluate(messages, expectedEstimatedTokens - 10, true);
 
       expect(decision.overflowTokens).toBeGreaterThan(0);
-      expect(decision.estimatedTokens).toBe(estimatedTokens);
+      expect(decision.estimatedTokens).toBe(expectedEstimatedTokens);
     });
   });
 });
