@@ -615,6 +615,17 @@ export class AgentBuilder {
       });
     }
 
+    // 创建 ToolValidator（如果有并发配置则使用，否则引擎用内置 noop 检测）
+    let toolValidator: import('../harness/concurrency/tool-validator.js').ToolValidator | undefined;
+    if (this._concurrencyConfig) {
+      const { ToolValidator } = await import('./concurrency/tool-validator.js');
+      toolValidator = new ToolValidator({
+        maxResultSize: 100_000,
+        noopThreshold: 3,
+        emptyIsNoop: true,
+      });
+    }
+
     // 注入 systemPrompt 到引擎的运行时配置
     // AgentEngine 本身不存储 systemPrompt，由调用方在 run() 时传入
     const deps: AgentEngineDeps = {
@@ -630,6 +641,7 @@ export class AgentBuilder {
       systemPrompt,
       taskSupervisor,
       checkpointInterval: this._checkpointInterval,
+      toolValidator,
     };
 
     return new AgentEngine(deps);

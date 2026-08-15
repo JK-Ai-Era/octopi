@@ -135,6 +135,17 @@ export interface AgentEngineDeps {
     globalCircuitBreakerThreshold?: number;
   };
   /**
+   * 工具结果验证器（可选）
+   *
+   * 替换引擎内联的 noop 检测逻辑，提供：
+   * - 可配置的 noop 阈值（默认 3）
+   * - 结果大小限制和截断（默认 100K 字符）
+   * - 工具调用历史追踪
+   *
+   * 不传则使用引擎内置的简单 noop 检测（向后兼容）。
+   */
+  toolValidator?: import('../harness/concurrency/tool-validator.js').ToolValidator;
+  /**
    * 模型调用空闲超时（毫秒，默认 120000）
    *
    * 引擎层 watchdog：provider 没有产出数据的最大等待时间。
@@ -665,9 +676,30 @@ export class AgentEngine {
 
               try {
                 const rawResult = await executor.execute(processedCall, this.buildExecContext(signal));
-                // No-op 检测：工具返回 { __noop: true, result: ... } 表示未产生实际变化
-                const isNoop = rawResult != null && typeof rawResult === 'object' && '__noop' in rawResult && (rawResult as any).__noop === true;
-                const result = isNoop ? (rawResult as any).result : rawResult;
+
+                // ── 工具结果验证 ──
+                const validator = this.deps.toolValidator;
+                let isNoop: boolean;
+                let result: unknown;
+
+                if (validator) {
+                  // 使用 ToolValidator：统一 noop 检测 + 结果截断 + 历史追踪
+                  const validation = validator.validate(processedCall.name, processedCall.arguments, rawResult);
+                  isNoop = validation.isNoop;
+                  result = validation.processedResult;
+                  if (validation.warnings.length > 0) {
+                    observer?.log('debug', 'tool.validation', {
+                      toolName: processedCall.name,
+                      warnings: validation.warnings,
+                      consecutiveNoops: validation.consecutiveNoops,
+                    });
+                  }
+                } else {
+                  // 向后兼容：内联 noop 检测
+                  isNoop = rawResult != null && typeof rawResult === 'object' && '__noop' in rawResult && (rawResult as any).__noop === true;
+                  result = isNoop ? (rawResult as any).result : rawResult;
+                }
+
                 toolResult = {
                   toolCallId: processedCall.id,
                   name: processedCall.name,
@@ -730,7 +762,12 @@ export class AgentEngine {
               // No-op 检测：防止 tool-loop 死循环
               if (toolResult.noop) {
                 this.consecutiveNoops++;
-                if (this.consecutiveNoops >= AgentEngine.MAX_CONSECUTIVE_NOOPS) {
+                const validator = this.deps.toolValidator;
+                const noopLimitReached = validator
+                  ? validator.isNoopLoop()               // ToolValidator：可配置阈值
+                  : this.consecutiveNoops >= AgentEngine.MAX_CONSECUTIVE_NOOPS; // 内置：硬编码 2
+
+                if (noopLimitReached) {
                   const noopMsg: Message = {
                     role: 'assistant',
                     content: '[System] Tool loop detected: consecutive no-op executions. The tool is producing no changes. Stopping.',

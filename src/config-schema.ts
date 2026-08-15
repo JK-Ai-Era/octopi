@@ -281,7 +281,23 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
 export function validateConfigOrThrow(raw: unknown): z.infer<typeof HarnessConfigSchema> {
   const result = validateConfig(raw);
   if (result.success) {
-    return result.data!;
+    const config = result.data!;
+
+    // ── 交叉校验：slot 引用的 provider 必须存在 ──
+    if (config.concurrency?.providerPool && config.providers) {
+      const providerNames = new Set(config.providers.map(p => p.name));
+      for (const slot of config.concurrency.providerPool.slots) {
+        if (!providerNames.has(slot.provider)) {
+          throw new Error(
+            `Config validation failed:\n  concurrency.providerPool.slots: ` +
+            `provider "${slot.provider}" not found in providers list. ` +
+            `Available: ${[...providerNames].join(', ')}`
+          );
+        }
+      }
+    }
+
+    return config;
   }
 
   const lines = result.errors!.map((e) => `  ${e.path || '(root)'}: ${e.message}`);
