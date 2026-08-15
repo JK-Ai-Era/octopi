@@ -215,6 +215,12 @@ export class AgentBuilder {
   private _distributedAgentSpecs: import('./distributed/spec.js').DistributedAgentSpec[] = [];
   private _distributedAuditDir?: string;
 
+  // 注册的 named providers（用于 ProviderPool）
+  private _namedProviders = new Map<string, ModelProvider>();
+
+  // 并发控制配置
+  private _concurrencyConfig?: import('../config.js').HarnessConfig['concurrency'];
+
   // ── Core 组件 ──
 
   /** 设置模型提供者 */
@@ -355,6 +361,28 @@ export class AgentBuilder {
     return this;
   }
 
+  // ── 并发控制 ──
+
+  /** 注册 named provider（用于 ProviderPool 多 key 路由） */
+  provider(name: string, instance: ModelProvider): this {
+    this._namedProviders.set(name, instance);
+    return this;
+  }
+
+  /** 批量注册 named providers */
+  providers(map: Map<string, ModelProvider>): this {
+    for (const [name, instance] of map) {
+      this._namedProviders.set(name, instance);
+    }
+    return this;
+  }
+
+  /** 设置并发控制配置（ProviderPool + SessionGate） */
+  concurrency(config: import('../config.js').HarnessConfig['concurrency']): this {
+    this._concurrencyConfig = config;
+    return this;
+  }
+
   /** 设置观测器 */
   observer(observer: Observer): this {
     this._observer = observer;
@@ -473,12 +501,13 @@ export class AgentBuilder {
     }
 
     // 创建 AgentRuntime（如果有分布式智能体）
+    // 注意：使用 engine.deps.model（可能是 ProviderPool），而不是 this._model
     let runtime: import('./distributed/runtime.js').AgentRuntime | undefined;
     if (this._distributedAgentSpecs.length > 0) {
       const { AgentRuntime } = await import('./distributed/runtime.js');
       runtime = new AgentRuntime({
         deps: {
-          model: this._model!,
+          model: engine.deps.model,
           events,
           errorStrategy: this._errorStrategy ?? new DefaultErrorStrategy(),
           observer: this._observer,
@@ -524,6 +553,20 @@ export class AgentBuilder {
     // 如果有工具但没有 systemPrompt，自动生成工具说明
     if (!systemPrompt && this._tools.size > 0) {
       systemPrompt = this.buildDefaultSystemPrompt();
+    }
+
+    // ── 并发控制：ProviderPool 多 key 路由 ──
+    let model = this._model;
+    if (this._concurrencyConfig?.providerPool && this._namedProviders.size > 0) {
+      const { ProviderPool } = await import('./concurrency/provider-pool.js');
+      const poolConfig = this._concurrencyConfig.providerPool;
+
+      // 如果没有显式注册 providers，用 .model() 传入的作为默认
+      if (this._namedProviders.size === 0) {
+        throw new Error('ProviderPool requires registered providers. Use .provider() or .providers() to register them.');
+      }
+
+      model = new ProviderPool(poolConfig, this._namedProviders);
     }
 
     // 创建默认组件
@@ -575,7 +618,7 @@ export class AgentBuilder {
     // 注入 systemPrompt 到引擎的运行时配置
     // AgentEngine 本身不存储 systemPrompt，由调用方在 run() 时传入
     const deps: AgentEngineDeps = {
-      model: this._model,
+      model,
       tools: this._tools,
       executor,
       contextEngine,
