@@ -96,9 +96,10 @@ export class RateLimiter {
 
     // 需要等待
     const waitMs = this.estimateWaitMs();
-    if (waitMs > this.config.maxWaitMs) {
+    const maxWait = this.config.maxWaitMs ?? 60_000;
+    if (waitMs > maxWait) {
       throw new Error(
-        `Rate limit exceeded: estimated wait ${Math.round(waitMs)}ms exceeds max ${this.config.maxWaitMs}ms`
+        `Rate limit exceeded: estimated wait ${Math.round(waitMs)}ms exceeds max ${maxWait}ms`
       );
     }
 

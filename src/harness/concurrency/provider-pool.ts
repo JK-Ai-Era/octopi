@@ -18,9 +18,8 @@ import type {
   LLMRequest,
   LLMResponse,
   LLMStreamChunk,
-  ToolDefinition,
-  ModelInfo,
 } from '../../core/interfaces/model-provider.js';
+import type { ModelInfo } from '../../core/types.js';
 import { RateLimiter } from './rate-limiter.js';
 
 // ── 配置类型 ──
@@ -193,6 +192,26 @@ export class ProviderPool implements ModelProvider {
     }
     // fallback: 任意 slot
     return this.slots[0]?.provider.getModelInfo(model) ?? null;
+  }
+
+  getModelInfos(): ModelInfo[] {
+    // 合并所有 slot 的 provider 的 model infos（去重）
+    const seen = new Set<string>();
+    const result: ModelInfo[] = [];
+    for (const slot of this.slots) {
+      for (const info of slot.provider.getModelInfos()) {
+        if (!seen.has(info.name)) {
+          seen.add(info.name);
+          result.push(info);
+        }
+      }
+    }
+    return result;
+  }
+
+  async isAvailable(): Promise<boolean> {
+    // 至少一个 slot 健康即可
+    return this.slots.some(s => s.healthy);
   }
 
   // ── 生命周期 ──
