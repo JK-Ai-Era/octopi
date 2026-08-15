@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.6.4 (2026-08-16)
+
+### fix(tui): 会话结束后 "streaming..." 状态残留
+
+终态事件未重置 streamedContent，导致状态栏持续显示 "streaming..."。
+所有终态事件（turn.end/engine.end/aborted 等）统一重置 streamedContent + isProcessing + status。
+engine.end 改为无条件清除（不再受 isProcessing 条件限制）。
+
 ## v0.6.3 (2026-08-16)
 
 ### fix(security): /dev/null 伪设备不再被误判为 protected

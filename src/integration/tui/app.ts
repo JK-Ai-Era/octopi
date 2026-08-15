@@ -271,6 +271,7 @@ export class TuiApp {
           this.chatLog.dropAssistant('run');
           this.chatLog.addSystem('⚠️ Empty response.');
         }
+        this.streamedContent = '';
         this.isProcessing = false;
         this.setStatus('');
         this.tui.requestRender();
@@ -302,6 +303,7 @@ export class TuiApp {
         this.chatLog.clearTransientSystem();
         this.chatLog.dropAssistant('run');
         this.chatLog.addSystem(`❌ Engine error: ${errorData?.error ?? 'unknown'}`);
+        this.streamedContent = '';
         this.isProcessing = false;
         this.setStatus('');
         this.tui.requestRender();
@@ -313,6 +315,7 @@ export class TuiApp {
         this.chatLog.clearTransientSystem();
         if (this.streamedContent) this.chatLog.finalizeAssistant(this.streamedContent, 'run');
         this.chatLog.addSystem(`🛑 Aborted: ${reason ?? 'unknown'}`);
+        this.streamedContent = '';
         this.isProcessing = false;
         this.setStatus('');
         this.tui.requestRender();
@@ -324,6 +327,7 @@ export class TuiApp {
         this.chatLog.clearTransientSystem();
         if (this.streamedContent) this.chatLog.finalizeAssistant(this.streamedContent, 'run');
         this.chatLog.addSystem(`⛔ Budget exceeded: ${report?.status ?? 'unknown'}`);
+        this.streamedContent = '';
         this.isProcessing = false;
         this.setStatus('');
         this.tui.requestRender();
@@ -336,6 +340,7 @@ export class TuiApp {
         this.chatLog.clearTransientSystem();
         if (this.streamedContent) this.chatLog.finalizeAssistant(this.streamedContent, 'run');
         this.chatLog.addSystem(`🛡️ Blocked: ${reason}`);
+        this.streamedContent = '';
         this.isProcessing = false;
         this.setStatus('');
         this.tui.requestRender();
@@ -347,6 +352,7 @@ export class TuiApp {
         this.chatLog.clearTransientSystem();
         if (this.streamedContent) this.chatLog.finalizeAssistant(this.streamedContent, 'run');
         this.chatLog.addSystem(`🛑 Supervisor stopped: ${data?.reason ?? 'checkpoint'}`);
+        this.streamedContent = '';
         this.isProcessing = false;
         this.setStatus('');
         this.tui.requestRender();
@@ -357,6 +363,7 @@ export class TuiApp {
         this.chatLog.clearTransientSystem();
         if (this.streamedContent) this.chatLog.finalizeAssistant(this.streamedContent, 'run');
         this.chatLog.addSystem('🛑 Interrupted.');
+        this.streamedContent = '';
         this.isProcessing = false;
         this.setStatus('');
         this.tui.requestRender();
@@ -364,7 +371,7 @@ export class TuiApp {
       }
 
       case 'engine.end': {
-        // 安全网：确保 isProcessing 被重置，即使 turn.end 未被收到
+        // 安全网：无条件清除状态，即使 turn.end 已处理
         this.chatLog.clearTransientSystem();
         if (this.isProcessing) {
           if (this.streamedContent) {
@@ -372,10 +379,11 @@ export class TuiApp {
           } else {
             this.chatLog.addSystem('⚠️ Agent ended without a response.');
           }
-          this.isProcessing = false;
-          this.setStatus('');
-          this.tui.requestRender();
         }
+        this.streamedContent = '';
+        this.isProcessing = false;
+        this.setStatus('');
+        this.tui.requestRender();
         break;
       }
 
