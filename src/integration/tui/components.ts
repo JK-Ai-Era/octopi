@@ -163,11 +163,13 @@ export class SystemMessageComponent extends Container {
   private textNode: Text;
   private baseText: string;
   private count: number;
+  readonly transient: boolean;
 
-  constructor(text: string) {
+  constructor(text: string, transient = false) {
     super();
     this.baseText = text;
     this.count = 1;
+    this.transient = transient;
     this.textNode = new Text(theme.system(text), 1, 0);
     this.addChild(new Spacer(1));
     this.addChild(this.textNode);
@@ -246,7 +248,7 @@ export class ChatLog extends Container {
 
   // ── System Messages ──
 
-  addSystem(text: string, opts?: { coalesceConsecutive?: boolean }): void {
+  addSystem(text: string, opts?: { coalesceConsecutive?: boolean; transient?: boolean }): void {
     if (
       opts?.coalesceConsecutive &&
       this.lastSystemMessage &&
@@ -255,9 +257,19 @@ export class ChatLog extends Container {
       this.lastSystemMessage.increment();
       return;
     }
-    const msg = new SystemMessageComponent(text);
+    const msg = new SystemMessageComponent(text, opts?.transient);
     this.append(msg);
     this.lastSystemMessage = opts?.coalesceConsecutive ? msg : null;
+  }
+
+  /** 清除所有 transient 系统消息（turn 结束时调用） */
+  clearTransientSystem(): void {
+    for (let i = this.children.length - 1; i >= 0; i--) {
+      const child = this.children[i];
+      if (child instanceof SystemMessageComponent && child.transient) {
+        this.removeChild(child);
+      }
+    }
   }
 
   // ── User Messages ──

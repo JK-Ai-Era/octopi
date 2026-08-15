@@ -264,6 +264,7 @@ export class TuiApp {
       // ── 回合结束 ──
       case 'turn.end': {
         const content = (event.data?.content as string) ?? '';
+        this.chatLog.clearTransientSystem();
         if (this.streamedContent || content) {
           this.chatLog.finalizeAssistant(this.streamedContent || content, 'run');
         } else {
@@ -298,6 +299,7 @@ export class TuiApp {
 
       case 'engine.error': {
         const errorData = event.data as any;
+        this.chatLog.clearTransientSystem();
         this.chatLog.dropAssistant('run');
         this.chatLog.addSystem(`❌ Engine error: ${errorData?.error ?? 'unknown'}`);
         this.isProcessing = false;
@@ -308,6 +310,7 @@ export class TuiApp {
 
       case 'aborted': {
         const reason = event.data?.reason as string;
+        this.chatLog.clearTransientSystem();
         if (this.streamedContent) this.chatLog.finalizeAssistant(this.streamedContent, 'run');
         this.chatLog.addSystem(`🛑 Aborted: ${reason ?? 'unknown'}`);
         this.isProcessing = false;
@@ -318,6 +321,7 @@ export class TuiApp {
 
       case 'budget.exceeded': {
         const report = event.data as any;
+        this.chatLog.clearTransientSystem();
         if (this.streamedContent) this.chatLog.finalizeAssistant(this.streamedContent, 'run');
         this.chatLog.addSystem(`⛔ Budget exceeded: ${report?.status ?? 'unknown'}`);
         this.isProcessing = false;
@@ -329,6 +333,7 @@ export class TuiApp {
       case 'security.blocked':
       case 'security.behavior_blocked': {
         const reason = (event.data as any)?.reason ?? 'security violation';
+        this.chatLog.clearTransientSystem();
         if (this.streamedContent) this.chatLog.finalizeAssistant(this.streamedContent, 'run');
         this.chatLog.addSystem(`🛡️ Blocked: ${reason}`);
         this.isProcessing = false;
@@ -339,6 +344,7 @@ export class TuiApp {
 
       case 'checkpoint.stop': {
         const data = event.data as any;
+        this.chatLog.clearTransientSystem();
         if (this.streamedContent) this.chatLog.finalizeAssistant(this.streamedContent, 'run');
         this.chatLog.addSystem(`🛑 Supervisor stopped: ${data?.reason ?? 'checkpoint'}`);
         this.isProcessing = false;
@@ -348,6 +354,7 @@ export class TuiApp {
       }
 
       case 'interrupted': {
+        this.chatLog.clearTransientSystem();
         if (this.streamedContent) this.chatLog.finalizeAssistant(this.streamedContent, 'run');
         this.chatLog.addSystem('🛑 Interrupted.');
         this.isProcessing = false;
@@ -358,6 +365,7 @@ export class TuiApp {
 
       case 'engine.end': {
         // 安全网：确保 isProcessing 被重置，即使 turn.end 未被收到
+        this.chatLog.clearTransientSystem();
         if (this.isProcessing) {
           if (this.streamedContent) {
             this.chatLog.finalizeAssistant(this.streamedContent, 'run');
@@ -377,7 +385,7 @@ export class TuiApp {
       case 'planning_only_retry': {
         const data = event.data as any;
         const label = event.type === 'empty_response_retry' ? 'Empty response' : 'Planning-only';
-        this.chatLog.addSystem(`🔄 ${label}, retrying (${data?.attempt}/${data?.maxAttempts})...`);
+        this.chatLog.addSystem(`🔄 ${label}, retrying (${data?.attempt}/${data?.maxAttempts})...`, { transient: true });
         this.tui.requestRender();
         break;
       }
