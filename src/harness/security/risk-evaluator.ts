@@ -63,6 +63,13 @@ function classifyPath(path: string, cwd?: string): PathRisk {
     return 'safe';
   }
 
+  // macOS APFS: /Users 是 firmlink → /System/Volumes/Data/Users
+  // 必须在 PROTECTED_PATHS('/System/') 检查之前豁免
+  if (normalized.startsWith('/System/Volumes/Data/Users/') ||
+      normalized.startsWith('/System/Volumes/Data/home/')) {
+    return 'normal';
+  }
+
   // 系统保护路径
   if (PROTECTED_PATHS.some(p => normalized.startsWith(p))) {
     return 'protected';
@@ -498,7 +505,7 @@ function evaluatePathRisk(path: string, pathRisk: PathRisk): RiskFactor | null {
 
 // ── 非 Shell 工具评估 ──
 
-function evaluateNonShellTool(call: ToolCall): RiskDecision {
+export function evaluateNonShellTool(call: ToolCall): RiskDecision {
   // 文件工具
   if (isFileTool(call.name)) {
     const path = (call.arguments?.path ?? call.arguments?.file ?? call.arguments?.filename ?? '') as string;

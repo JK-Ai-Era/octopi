@@ -1,5 +1,15 @@
 # Changelog
 
+
+## v0.6.5 (2026-08-16)
+
+### fix(security): macOS APFS firmlink 路径不再被误判为 protected
+
+macOS APFS 上 /Users 是 firmlink，真实路径为 /System/Volumes/Data/Users。PROTECTED_PATHS 包含 /System/，
+导致用户目录下的文件访问被误拦截。
+在 classifyPath 中新增 macOS Data volume 用户目录豁免，在 PROTECTED_PATHS 检查前排除。
+新增 3 个回归测试用例。
+
 ## v0.6.4 (2026-08-16)
 
 ### fix(tui): 会话结束后 "streaming..." 状态残留

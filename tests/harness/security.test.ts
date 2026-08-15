@@ -7,7 +7,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { parseShellCommand, getCommandNames, hasCommand } from '../../src/harness/security/shell-parser.js';
-import { evaluateRisk, evaluateShellCommand } from '../../src/harness/security/risk-evaluator.js';
+import { evaluateRisk, evaluateShellCommand, evaluateNonShellTool } from '../../src/harness/security/risk-evaluator.js';
 import { suggestDegradation } from '../../src/harness/security/degradation.js';
 
 // ═══════════════════════════════════════════════════
@@ -409,6 +409,29 @@ describe('Regression: 防止已知误判', () => {
     const result = evaluateShellCommand('dd if=/dev/zero of=/dev/sda', cwd);
     // dd 未在已知命令列表中，返回 unknown；关键是不被误判为 safe
     expect(result.level).not.toBe('low');
+  });
+
+  it('macOS APFS: /System/Volumes/Data/Users/ 文件读取不被拦截', () => {
+    // macOS 上 /Users 是 firmlink → /System/Volumes/Data/Users
+    // 真实路径以 /System/ 开头，但本质是用户目录
+    const result = evaluateNonShellTool({
+      name: 'file_read',
+      arguments: { path: '/System/Volumes/Data/Users/jk/Projects/octopi/CHANGELOG.md' },
+    });
+    expect(result.level).not.toBe('critical');
+  });
+
+  it('macOS APFS: /System/Volumes/Data/Users/ 文件写入不被拦截', () => {
+    const result = evaluateNonShellTool({
+      name: 'file_write',
+      arguments: { path: '/System/Volumes/Data/Users/jk/test.txt', content: 'hello' },
+    });
+    expect(result.level).not.toBe('critical');
+  });
+
+  it('macOS APFS: /System/Volumes/Data/Users/ shell 读取不被拦截', () => {
+    const result = evaluateShellCommand('cat /System/Volumes/Data/Users/jk/notes.md', cwd);
+    expect(result.level).not.toBe('critical');
   });
 });
 
