@@ -569,6 +569,18 @@ export class AgentBuilder {
       model = new ProviderPool(poolConfig, this._namedProviders);
     }
 
+    // ── 并发控制：SessionGate ──
+    if (this._concurrencyConfig?.sessionGate) {
+      const { SessionGate } = await import('./concurrency/session-gate.js');
+      const gateConfig = this._concurrencyConfig.sessionGate;
+      const gate = new SessionGate({
+        maxConcurrent: gateConfig.maxConcurrent,
+        waitTimeoutMs: gateConfig.waitTimeoutMs,
+      });
+      // 传给 runnerConfig
+      this._runnerConfig = { ...this._runnerConfig, sessionGate: gate };
+    }
+
     // 创建默认组件
     const events = this._events ?? new DefaultEventBus();
     const security = this._security ?? new DefaultSecurityGuard(events, this._securityConfig);
