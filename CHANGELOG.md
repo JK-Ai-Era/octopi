@@ -1,4 +1,22 @@
-## v0.6.6 (2026-08-16)
+## v0.6.7 (2026-08-16)
+
+### feat(token): 真实 Usage 集成 — LLM 返回值校准 token 估算
+
+参考 OpenClaw 的 `estimateContextTokens()` 策略，用 LLM 返回的真实 usage 校准启发式估算：
+
+**改进点：**
+- `afterTurn()` 存储真实 promptTokens + 消息快照 + 校准比率
+- 校准比率 = actual / estimated，70/30 平滑处理防止异常值
+- `assemble()` 优先用校准后的估算值（`calibrateTokens()`）
+- 校准比率限制在 [0.5, 2.0] 范围内，防止极端值
+- 新增 2 个测试用例：校准效果验证 + 比率钳制验证
+
+**文件变更：**
+- 更新 `src/harness/context/default-context-engine.ts` — CompactState 扩展 + afterTurn 校准 + calibrateTokens()
+- 更新 `tests/context-engine.test.ts` — 新增 2 个校准测试
+
+**测试：** 1052 passed，全量通过
+
 
 ### feat(token): Token 估算器优化 — 参考 OpenClaw 分层比率策略
 

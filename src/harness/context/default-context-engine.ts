@@ -66,10 +66,14 @@ export interface DefaultContextEngineConfig {
 interface CompactState {
   /** 上次摘要 */
   previousSummary?: string;
-  /** 上次实际 token 数 */
+  /** 上次实际 token 数（来自 LLM usage） */
   lastActualTokens?: number;
   /** 上次估算 token 数 */
   lastEstimatedTokens?: number;
+  /** 上次 usage 对应的消息数量快照（用于增量估算） */
+  lastUsageMessageCount?: number;
+  /** 估算校准比率 = actual / estimated（用于修正后续估算） */
+  calibrationRatio?: number;
 }
 
 // ── 引擎实现 ──
@@ -154,9 +158,13 @@ export class DefaultContextEngine implements ContextEngine {
     // 3. 如果没有溢出，不需要压缩
     if (selection.overflow.length === 0) {
       const llmMessages = this.buildLlmMessages(selection.kept, systemPrompt, tools);
-      const estimatedTokens = estimateLLMMessages(llmMessages);
+      const rawEstimatedTokens = estimateLLMMessages(llmMessages);
+      const estimatedTokens = this.calibrateTokens(sessionId, rawEstimatedTokens);
 
-      this.states.set(sessionId, { lastEstimatedTokens: estimatedTokens });
+      this.states.set(sessionId, {
+        ...this.states.get(sessionId),
+        lastEstimatedTokens: rawEstimatedTokens,
+      });
 
       return {
         messages: llmMessages,
@@ -239,7 +247,8 @@ export class DefaultContextEngine implements ContextEngine {
 
     // 8. 构建 LLM 消息
     const llmMessages = this.buildLlmMessages(reassembled, systemPrompt, tools);
-    const estimatedTokens = estimateLLMMessages(llmMessages);
+    const rawEstimatedTokens = estimateLLMMessages(llmMessages);
+    const estimatedTokens = this.calibrateTokens(sessionId, rawEstimatedTokens);
 
     return {
       messages: llmMessages,
@@ -296,17 +305,31 @@ export class DefaultContextEngine implements ContextEngine {
   /**
    * 每轮结束后更新状态
    *
-   * 用于更新内部统计、校准 token 估算。
+   * 使用 LLM 返回的真实 usage 校准 token 估算：
+   * 1. 存储真实 promptTokens
+   * 2. 记录当前消息数量快照（用于增量估算）
+   * 3. 计算校准比率 = actual / estimated
    */
   async afterTurn(params: AfterTurnParams): Promise<void> {
-    const { sessionId, usage } = params;
+    const { sessionId, usage, turn } = params;
 
-    // 获取状态
+    if (!usage) return;
+
     const state = this.states.get(sessionId) ?? {};
 
-    // 使用实际 token 数校准估算
-    if (usage) {
-      state.lastActualTokens = usage.promptTokens;
+    // 存储真实 token 数
+    state.lastActualTokens = usage.promptTokens;
+
+    // 记录消息数量快照（turn 包含本轮消息，估算时用 messages.length - turn.length 得到之前的消息数）
+    state.lastUsageMessageCount = turn?.length ?? 0;
+
+    // 计算校准比率：如果上次有估算值，用 actual/estimated 修正后续估算
+    if (state.lastEstimatedTokens && state.lastEstimatedTokens > 0 && usage.promptTokens > 0) {
+      const ratio = usage.promptTokens / state.lastEstimatedTokens;
+      // 平滑处理：与历史比率加权平均（70% 新值 + 30% 旧值），避免单次异常值过度影响
+      state.calibrationRatio = state.calibrationRatio
+        ? ratio * 0.7 + state.calibrationRatio * 0.3
+        : ratio;
     }
 
     this.states.set(sessionId, state);
@@ -327,6 +350,23 @@ export class DefaultContextEngine implements ContextEngine {
    *
    * 将内部 Message 格式转换为 LLM Message 格式。
    */
+  /**
+   * 使用校准比率修正 token 估算
+   *
+   * 当有真实 usage 数据时，用 calibrationRatio 修正启发式估算值。
+   * 参考 OpenClaw 的 estimateContextTokens() 策略：
+   * 优先用真实值，估算只做兜底，校准比率平滑修正偏差。
+   */
+  private calibrateTokens(sessionId: string, rawEstimated: number): number {
+    const state = this.states.get(sessionId);
+    if (!state?.calibrationRatio) {
+      return rawEstimated;
+    }
+    // 应用校准比率，限制在 [0.5, 2.0] 范围内防止异常值
+    const clampedRatio = Math.max(0.5, Math.min(2.0, state.calibrationRatio));
+    return Math.ceil(rawEstimated * clampedRatio);
+  }
+
   private buildLlmMessages(
     messages: Message[],
     systemPrompt: string,

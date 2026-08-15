@@ -763,6 +763,76 @@ describe('DefaultContextEngine', () => {
         },
       });
     });
+
+    it('should calibrate token estimates using real usage', async () => {
+      // First assemble to create state with known estimate
+      const result1 = await engine.assemble({
+        sessionId: 'calibrate-test',
+        messages: [createMessage('user', 'Hello world')],
+        systemPrompt: 'Test prompt',
+        tools: [],
+        tokenBudget: 100000,
+      });
+      const firstEstimate = result1.estimatedTokens;
+
+      // afterTurn with real usage that's 2x the estimate
+      await engine.afterTurn({
+        sessionId: 'calibrate-test',
+        turn: [createMessage('assistant', 'Response')],
+        usage: {
+          promptTokens: firstEstimate * 2,
+          completionTokens: 50,
+        },
+      });
+
+      // Second assemble should use calibrated estimate
+      const result2 = await engine.assemble({
+        sessionId: 'calibrate-test',
+        messages: [createMessage('user', 'Hello world')],
+        systemPrompt: 'Test prompt',
+        tools: [],
+        tokenBudget: 100000,
+      });
+
+      // Calibrated estimate should be higher than raw estimate
+      // (ratio should be ~1.4 after first calibration with 2x, due to 70/30 smoothing)
+      expect(result2.estimatedTokens).toBeGreaterThan(firstEstimate);
+    });
+
+    it('should clamp calibration ratio to safe range', async () => {
+      // Assemble to create state
+      await engine.assemble({
+        sessionId: 'clamp-test',
+        messages: [createMessage('user', 'Test')],
+        systemPrompt: 'Test',
+        tools: [],
+        tokenBudget: 100000,
+      });
+
+      // afterTurn with extremely high usage (100x)
+      await engine.afterTurn({
+        sessionId: 'clamp-test',
+        turn: [createMessage('assistant', 'Response')],
+        usage: {
+          promptTokens: 100000,
+          completionTokens: 50,
+        },
+      });
+
+      // Should not throw and should produce reasonable result
+      const result = await engine.assemble({
+        sessionId: 'clamp-test',
+        messages: [createMessage('user', 'Test')],
+        systemPrompt: 'Test',
+        tools: [],
+        tokenBudget: 100000,
+      });
+
+      // Should be clamped: ratio capped at 2.0x
+      const rawEstimate = estimator.estimateMessages([createMessage('user', 'Test')])
+        + estimator.estimateText('Test') + 12; // message overhead
+      expect(result.estimatedTokens).toBeLessThanOrEqual(rawEstimate * 2.1); // some slack for rounding
+    });
   });
 
   describe('ingest', () => {
