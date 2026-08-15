@@ -1,5 +1,58 @@
 # Changelog
 
+## v0.6.0 (2026-08-16)
+
+### 并发控制模块 — 多 Key 负载均衡与资源保护
+
+### 并发控制模块 — 多 Key 负载均衡与资源保护
+
+新增 `concurrency` 模块，解决多用户并发场景下的 API 限流、资源耗尽和工具死循环问题。
+
+**核心组件：**
+
+- **ProviderPool** — 多 Key LLM Provider 负载均衡
+  - 同一模型多个 API key 分散 rate limit 压力
+  - 粘滞路由：同一 session 路由到同一 key，命中 prompt cache（节省 20-40% token）
+  - 三种路由策略：sticky / round-robin / least-loaded
+  - per-key 独立限流（RateLimiter）
+  - 自动故障转移：连续 5 次错误 → 标记不健康 → 跳过；成功 → 自动恢复
+  - 实现 ModelProvider 接口，对 Engine 完全透明
+
+- **SessionGate** — 信号量并发控制
+  - 限制同时运行的 Agent Loop 数量，防止服务器 OOM
+  - FIFO 公平队列 + 超时保护
+  - 集成到 Runner.handle() 入口
+
+- **RateLimiter** — 令牌桶限流
+  - 平滑限流，允许突发流量
+  - 支持多 provider 独立限流
+  - 集成到 ProviderPool 每个 slot
+
+- **ToolValidator** — 工具结果验证
+  - No-op 检测：连续空结果自动终止循环（可配置阈值）
+  - 结果大小限制和截断（防止上下文膨胀）
+  - 工具调用历史追踪
+  - 替换 Engine 内联 noop 检测（向后兼容）
+
+**配置驱动（octopi.json）：**
+```json
+{
+  "concurrency": {
+    "providerPool": {
+      "slots": [
+        { "provider": "openai-1", "weight": 2 },
+        { "provider": "openai-2" }
+      ],
+      "routing": { "strategy": "sticky" },
+      "rateLimit": { "requestsPerMinute": 60 }
+    },
+    "sessionGate": { "maxConcurrent": 50 }
+  }
+}
+```
+
+**测试：** 75 个新测试（总计 1048），零破坏性变更。
+
 ## v0.5.0 (2026-07-17)
 
 ### MCP Client — 连接外部工具生态

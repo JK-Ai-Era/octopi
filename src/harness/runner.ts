@@ -51,6 +51,13 @@ export interface SessionAwareRunnerConfig {
   /** 是否启用 daily reset */
   enableDailyReset?: boolean;
   /**
+   * 并发 session 门控（可选）
+   *
+   * 限制同时运行的 Agent Loop 数量，防止服务器资源耗尽。
+   * 不传则不限制并发。
+   */
+  sessionGate?: import('./concurrency/session-gate.js').SessionGate;
+  /**
    * 任务决策提供者（可选）
    *
    * 在用户消息到达时调用 LLM 判断任务状态，
@@ -113,7 +120,14 @@ export class SessionAwareRunner {
     runConfig: RunConfig,
     signal?: AbortSignal,
   ): AsyncGenerator<AgentEvent> {
-    // 1. 获取锁
+    // 1. 并发门控（如果配置了 SessionGate）
+    const gate = this.config.sessionGate;
+    let gateRelease: (() => void) | undefined;
+    if (gate) {
+      gateRelease = await gate.enter();
+    }
+
+    // 2. 获取锁
     const release = await this.acquireLock(sessionId);
 
     try {
@@ -260,6 +274,7 @@ export class SessionAwareRunner {
       throw err;
     } finally {
       release();
+      gateRelease?.();  // 释放 SessionGate 通行证
     }
   }
 

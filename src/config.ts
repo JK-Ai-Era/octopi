@@ -268,6 +268,47 @@ export interface HarnessConfig {
   channels?: ChannelConfig[];
   /** Session 配置 */
   session?: GatewayConfig['session'];
+  /** 并发控制配置 */
+  concurrency?: {
+    /** 多 Key Provider 负载均衡池 */
+    providerPool?: {
+      /** 池中的 slot 列表 */
+      slots: Array<{
+        /** 引用 providers[].name */
+        provider: string;
+        /** 权重（默认 1） */
+        weight?: number;
+        /** slot 级限流配置（覆盖全局默认） */
+        rateLimit?: {
+          requestsPerMinute: number;
+          burstCapacity?: number;
+          maxWaitMs?: number;
+        };
+      }>;
+      /** 路由配置 */
+      routing?: {
+        /** 路由策略（默认 sticky） */
+        strategy?: 'sticky' | 'round-robin' | 'least-loaded';
+        /** 粘滞超时（毫秒，默认 1800000） */
+        stickyTtlMs?: number;
+        /** 故障转移模式（默认 auto） */
+        failover?: 'auto' | 'manual';
+      };
+      /** 全局默认限流配置 */
+      rateLimit?: {
+        requestsPerMinute: number;
+        burstCapacity?: number;
+        maxWaitMs?: number;
+      };
+    };
+    /** Session 并发控制 */
+    sessionGate?: {
+      /** 最大并发 session 数（默认 50） */
+      maxConcurrent?: number;
+      /** 排队超时（毫秒，默认 30000） */
+      waitTimeoutMs?: number;
+    };
+  };
   /** 可观测性配置 */
   observability?: {
     /** 日志级别: 0=FATAL, 1=ERROR, 2=WARN, 3=INFO, 4=DEBUG, 5=TRACE */
