@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.6.3 (2026-08-16)
+
+### fix(security): /dev/null 伪设备不再被误判为 protected
+
+`PROTECTED_PATHS` 包含 `/dev/`，导致 `/dev/null`、`/dev/zero` 等安全伪设备被误判为 critical 并 block。
+新增 `SAFE_PSEUDO_DEVICES` 白名单，在检查 PROTECTED_PATHS 前先排除安全伪设备。
+新增 4 个回归测试用例。
+
+### fix(tui): 会话结束后清除 planning-only/empty-response retry 持久消息
+
+`planning_only_retry` 和 `empty_response_retry` 事件通过 `addSystem()` 写入聊天记录后，
+turn 结束时未被清除，一直残留在 TUI 界面上。
+
+修复：SystemMessageComponent 新增 `transient` 属性，ChatLog 新增 `clearTransientSystem()` 方法，
+所有终态事件调用清除。
+
+## v0.6.1 (2026-08-16)
+
+### fix(security): /dev/null 伪设备白名单（同 v0.6.3 内容，首次修复）
+
 ## v0.6.0 (2026-08-16)
 
 ### 并发控制模块 — 多 Key 负载均衡与资源保护
