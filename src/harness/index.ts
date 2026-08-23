@@ -86,3 +86,23 @@ export type { SwarmTopology, SwarmConfig, SwarmAgent, SwarmTask, OrchestrationSt
 // ── MCP Client ──
 export { DefaultMcpManager, mcpToolToOctopiDefinition, extractMcpToolResult, splitNamespacedToolName, MCP_NAMESPACE_SEP, loadMcpServersFromDir, DEFAULT_MCP_SERVERS_DIR } from './mcp/index.js';
 export type { McpClientFactory, McpManagerCallbacks } from './mcp/index.js';
+
+// ── 新 Core Loop（Phase 1/2） ──
+export { agentLoop, Agent, callModel, classifyError } from '../core/loop/index.js';
+export type { AgentOptions, AgentContext, AgentTool, LoopToolResult, AgentLoopConfig, AgentLoopEvent, LoopObserver, ClassifiedError as LoopClassifiedError } from '../core/loop/index.js';
+
+// ── 可靠性包装（Phase 2a） ──
+export { runAgentWithReliability, DEFAULT_RELIABILITY_CONFIG } from './reliability/index.js';
+export type { ReliabilityConfig, ReliabilityHarness } from './reliability/index.js';
+
+// ── 事件适配（Phase 2b） ──
+export { adaptEvent, adaptEventStream } from '../core/loop/event-adapter.js';
+
+// ── Core 模块 harness 规范路径（Phase 3 re-export） ──
+export * from './security/index.js';
+export * from './concurrency/tool-loop-detection.js';
+export * from './concurrency/state-machine.js';
+export * from './concurrency/async-task.js';
+export * from './budget/index.js';
+export * from './process/index.js';
+// multi-agent: 已有显式导出（line 83），不重复 re-export
