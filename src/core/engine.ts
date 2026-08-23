@@ -69,7 +69,10 @@ import type { IterationBudgetConfig } from './budget.js';
 
 // ── 配置 ──
 
-/** AgentEngine 依赖注入 */
+/**
+ * @deprecated Use AgentOptions from './loop/agent.js' instead.
+ * AgentEngineDeps will be removed after 6 months deprecation period.
+ */
 export interface AgentEngineDeps {
   /** 模型提供者 */
   model: ModelProvider;
@@ -200,6 +203,12 @@ export type EngineEvent = AgentEvent;
 
 /**
  * AgentEngine — 循环引擎（不持有持久状态）
+ */
+/**
+ * @deprecated Use Agent from './loop/agent.js' + runAgentWithReliability() instead.
+ * AgentEngine will be removed after 6 months deprecation period.
+ *
+ * Migration: Use AgentBuilder.buildAgent() which returns the new Agent class.
  */
 export class AgentEngine {
   // ── 扩展回调槽 ──
