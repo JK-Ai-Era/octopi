@@ -41,3 +41,6 @@ export type {
   OnErrorFn,
   TurnUpdate,
 } from './types.js';
+
+// ── 事件适配（过渡期） ──
+export { adaptEvent, adaptEventStream } from './event-adapter.js';
