@@ -23,6 +23,13 @@ import type {
   ModelProvider,
 } from '../core/interfaces/model-provider.js';
 import type {
+  AgentTool as LoopAgentTool,
+} from '../core/loop/types.js';
+import { Agent } from '../core/loop/agent.js';
+import type { AgentOptions } from '../core/loop/agent.js';
+import { runAgentWithReliability, DEFAULT_RELIABILITY_CONFIG } from './reliability/run-agent.js';
+import type { ReliabilityConfig, ReliabilityHarness } from './reliability/run-agent.js';
+import type {
   ToolExecutor,
   ExecutionContext,
 } from '../core/interfaces/tool-executor.js';
@@ -146,6 +153,48 @@ class DefaultToolExecutor implements ToolExecutor {
   }
 }
 
+/**
+ * 将 RegisteredTool 转换为 AgentTool（新循环格式）
+ */
+function convertToAgentTool(tool: RegisteredTool): LoopAgentTool {
+  return {
+    name: tool.definition.name,
+    description: tool.definition.description,
+    parameters: {
+      type: 'object',
+      properties: Object.fromEntries(
+        Object.entries(tool.definition.parameters).map(([key, param]) => [
+          key,
+          { type: param.type, description: param.description, ...(param.enum && { enum: param.enum }) },
+        ]),
+      ),
+      required: Object.entries(tool.definition.parameters)
+        .filter(([, param]) => param.required)
+        .map(([key]) => key),
+    },
+    execute: async (toolCallId: string, args: unknown, signal?: AbortSignal) => {
+      const startTime = Date.now();
+      try {
+        const result = await tool.handler(args as Record<string, unknown>, { timeoutMs: 30_000, signal } as any);
+        return {
+          toolCallId,
+          name: tool.definition.name,
+          content: result,
+          durationMs: Date.now() - startTime,
+        };
+      } catch (error) {
+        return {
+          toolCallId,
+          name: tool.definition.name,
+          content: `Error: ${error instanceof Error ? error.message : String(error)}`,
+          isError: true,
+          durationMs: Date.now() - startTime,
+        };
+      }
+    },
+  };
+}
+
 /** 内存 Session 存储（默认） */
 class InMemorySessionStore implements SessionStore {
   private sessions = new Map<string, any>();
@@ -193,6 +242,7 @@ export class AgentBuilder {
   private _taskSupervisor?: TaskSupervisor;
   private _taskSupervisorConfig?: TaskSupervisorConfig;
   private _checkpointInterval?: number;
+  private _reliabilityConfig?: ReliabilityConfig;
 
   // Harness 组件
   private _personaWorkspaces: string[] = [];
@@ -386,6 +436,12 @@ export class AgentBuilder {
   /** 设置观测器 */
   observer(observer: Observer): this {
     this._observer = observer;
+    return this;
+  }
+
+  /** 设置可靠性配置（用于 buildAgent()） */
+  reliability(config: Partial<ReliabilityConfig>): this {
+    this._reliabilityConfig = { ...DEFAULT_RELIABILITY_CONFIG, ...config };
     return this;
   }
 
@@ -657,6 +713,78 @@ export class AgentBuilder {
     };
 
     return new AgentEngine(deps);
+  }
+
+  /**
+   * 构建新 Agent 类（使用 agentLoop 纯函数 + runAgentWithReliability）
+   *
+   * 返回 Agent 实例 + 可靠性配置，集成方可以用新的 API 运行：
+   * ```ts
+   * const { agent, harness } = await builder.buildAgent();
+   * for await (const event of runAgentWithReliability(agent.context, agent.config, harness)) {
+   *   // 处理事件
+   * }
+   * ```
+   *
+   * 或使用 Agent 类的 run/continue_ 方法（不含可靠性包装）：
+   * ```ts
+   * for await (const event of agent.run('你好')) { ... }
+   * ```
+   */
+  async buildAgent(): Promise<{ agent: Agent; harness: ReliabilityHarness; mcpManager: McpManager }> {
+    if (!this._model) {
+      throw new Error('ModelProvider is required. Call .model() before .buildAgent()');
+    }
+
+    // 加载 systemPrompt
+    let systemPrompt = this._systemPrompt ?? '';
+    if (!systemPrompt && this._personaWorkspaces.length > 0) {
+      if (this._personaWorkspaces.length === 1) {
+        systemPrompt = await loadPersona(this._personaWorkspaces[0]);
+      } else {
+        systemPrompt = await composePersonas(...this._personaWorkspaces);
+      }
+    }
+    if (!systemPrompt && this._tools.size > 0) {
+      systemPrompt = this.buildDefaultSystemPrompt();
+    }
+
+    // 构建 McpManager
+    const mcpManager = await this.buildMcpManager();
+
+    // 转换 RegisteredTool → AgentTool
+    const agentTools: LoopAgentTool[] = Array.from(this._tools.values()).map(t => convertToAgentTool(t));
+
+    // 创建 Agent
+    const agentOptions: AgentOptions = {
+      model: this._model,
+      systemPrompt,
+      tools: agentTools,
+      observer: this._observer ? {
+        onLLMStart: (p) => this._observer?.log('info', 'llm.start', p as unknown as Record<string, unknown>),
+        onLLMEnd: (p) => this._observer?.log('info', 'llm.end', p as unknown as Record<string, unknown>),
+        onToolStart: (p) => this._observer?.log('info', 'tool.start', p as unknown as Record<string, unknown>),
+        onToolEnd: (p) => this._observer?.log('info', 'tool.end', p as unknown as Record<string, unknown>),
+      } : undefined,
+    };
+    const agent = new Agent(agentOptions);
+
+    // 构建可靠性 harness
+    const events = this._events ?? new DefaultEventBus();
+    const security = this._security ?? new DefaultSecurityGuard(events, this._securityConfig);
+    if (this._riskPolicy && security.setToolCallRiskPolicy) {
+      security.setToolCallRiskPolicy(this._riskPolicy);
+    }
+    const errorStrategy = this._errorStrategy ?? new DefaultErrorStrategy();
+
+    const harness: ReliabilityHarness = {
+      config: this._reliabilityConfig ?? DEFAULT_RELIABILITY_CONFIG,
+      security,
+      errorStrategy,
+      taskSupervisor: this._taskSupervisor,
+    };
+
+    return { agent, harness, mcpManager };
   }
 
   /**
