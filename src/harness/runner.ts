@@ -114,7 +114,7 @@ function adaptLoopEvent(
       state.assistantContent = typeof event.message.content === 'string' ? event.message.content : '';
       return null;
     case 'turn_end':
-      return { type: 'turn.end', timestamp: Date.now(), data: { content: state.assistantContent } };
+      return { type: 'turn.end', timestamp: Date.now(), data: { content: state.assistantContent, hasToolCalls: event.hasToolCalls } };
     case 'llm_stream_delta':
       return { type: 'llm_stream_delta', timestamp: event.timestamp, data: event.data };
     case 'tool_start':

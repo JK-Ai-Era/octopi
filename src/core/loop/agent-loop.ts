@@ -543,31 +543,22 @@ async function prepareToolCall(
  */
 function normalizeMessagesForLlm(messages: import('../types.js').Message[]): LLMMessage[] {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return messages
-    .filter((m: any) => {
-      // 过滤掉空 assistant 消息（无 content 且无 tool_calls）
-      // 空消息发给 API 会导致 400 错误或模型持续返回空响应
-      if (m.role !== 'assistant') return true;
-      const hasContent = typeof m.content === 'string' && m.content.length > 0;
-      const hasToolCalls = m.toolCalls && m.toolCalls.length > 0;
-      return hasContent || hasToolCalls;
-    })
-    .map((m: any) => {
-      if (m.role !== 'assistant') return m;
-      const hasToolCalls = m.toolCalls && m.toolCalls.length > 0;
-      const hasContent = typeof m.content === 'string' && m.content.length > 0;
-      if (hasToolCalls) {
-        // 有 tool_calls: content 必须为 null（OpenAI API 要求）
-        return { role: 'assistant', content: hasContent ? m.content : null,
-          tool_calls: m.toolCalls.map((tc: any) => ({
-            id: tc.id, type: 'function',
-            function: { name: tc.name, arguments: typeof tc.arguments === 'string' ? tc.arguments : JSON.stringify(tc.arguments) },
-          })),
-        };
-      }
-      // 有 content: 保持不变
-      return m;
-    });
+  return messages.map((m: any) => {
+    if (m.role !== 'assistant') return m;
+    const hasToolCalls = m.toolCalls && m.toolCalls.length > 0;
+    const hasContent = typeof m.content === 'string' && m.content.length > 0;
+    if (hasToolCalls) {
+      // 有 tool_calls: content 必须为 null（OpenAI API 要求）
+      return { role: 'assistant', content: hasContent ? m.content : null,
+        tool_calls: m.toolCalls.map((tc: any) => ({
+          id: tc.id, type: 'function',
+          function: { name: tc.name, arguments: typeof tc.arguments === 'string' ? tc.arguments : JSON.stringify(tc.arguments) },
+        })),
+      };
+    }
+    // 无 tool_calls: 保持原样（content 为空字符串也保留，不删除消息）
+    return m;
+  });
 }
 
 /**
