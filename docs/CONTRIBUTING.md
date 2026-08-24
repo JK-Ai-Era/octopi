@@ -8,7 +8,7 @@
 ## 环境要求
 
 - Node.js >= 20
-- TypeScript >= 6.0
+- TypeScript >= 5.0
 
 ## 开发命令
 
@@ -27,13 +27,15 @@ npm run dev            # tsc --watch
 
 ## 架构分层
 
-项目采用三层洋葱架构：
+项目采用三层洋葱架构 + DDD 领域组织：
 
 | 层 | 目录 | 职责 | 依赖 |
 |---|---|---|---|
-| Core | `src/core/` | 纯引擎 + 接口契约 | 无外部依赖 |
-| Harness | `src/harness/` | 装具层 | 依赖 Core 接口 |
+| Core | `src/core/` | 纯引擎 + 接口契约 + 核心循环 | 无外部依赖 |
+| Harness | `src/harness/` | 装具层（9 个领域） | 依赖 Core 接口 |
 | Integration | `src/integration/` | 集成层 | 依赖 Core + Harness |
+
+详细架构见 [arch/overview.md](../arch/overview.md)
 
 **依赖方向：外 → 内。修改内层时必须确认不影响外层。**
 
@@ -52,24 +54,25 @@ npx vitest run --grep "SecurityGuard"
 
 **测试文件命名：** `tests/<module>.test.ts`
 
-**当前测试分布：**
+**当前测试分布：** 31 个测试文件，1050+ 测试用例
 
-| 测试文件 | 覆盖范围 |
+| 测试领域 | 覆盖范围 |
 |---|---|
-| `core-engine.test.ts` | AgentEngine 核心循环 |
-| `harness.test.ts` | AgentBuilder + SessionAwareRunner |
-| `security.test.ts` | SecurityGuard + CapabilityEnforcer |
-| `context-engine.test.ts` | ContextEngine 组件测试 |
-| `task-system.test.ts` | TaskTracker + TaskManager |
-| `task-integration.test.ts` | Task 系统端到端 |
-| `agent-loop.test.ts` | 旧 AgentLoop（deprecated） |
-| `loop.test.ts` | 旧循环（deprecated） |
-| `openclaw-compat.test.ts` | OpenClaw 兼容性 |
-| `output-quality.test.ts` | 输出质量检测 |
-| `output-quality-effect.test.ts` | 输出质量效果 |
-| `skill-manager.test.ts` | Skill 管理器 |
-| `legacy-runner.test.ts` | v0.1.x 兼容层 |
-| `anthropic-provider.test.ts` | Anthropic Provider |
+| Core 循环 | AgentLoop 纯函数、Agent 类、callModel、错误分类 |
+| Harness 组装 | AgentBuilder、SessionAwareRunner、可靠性包装 |
+| 安全 | SecurityGuard、RiskEvaluator、DefaultRiskPolicy、ShellParser |
+| 上下文管理 | ContextEngine、SmartRouter、MessageSelector、Compressor |
+| 任务系统 | TaskTracker、TaskManager、TaskDecisionProvider |
+| Plugin 系统 | PluginManager、HookRegistry、CapabilityRegistry |
+| Skill 管理 | SkillManager 两阶段加载 |
+| 工具系统 | ToolRegistry、工具版本管理 |
+| 分布式智能体 | AgentRuntime、TriggerEngine、OutputPolicy |
+| 多智能体 | AgentSwarm、OrchestrationStrategy |
+| 并发控制 | ProviderPool、SessionGate、RateLimiter |
+| 输出质量 | OutputQualityGate |
+| 可观测性 | TraceCollector、MetricsAggregator、ObserverBridge |
+| 集成 | OpenAI/Anthropic Provider、MCP Client |
+| 录制回放 | RecordingProvider、ReplayProvider、ChaosProvider |
 
 ## 代码规范
 
@@ -85,18 +88,20 @@ npx vitest run --grep "SecurityGuard"
 
 | 变更类型 | 需要更新的文档 |
 |----------|---------------|
-| 新增/修改核心类型 | `ARCHITECTURE.md` 对应章节 |
-| 新增 Plugin hook | `ARCHITECTURE.md` + `plugin-system.md` |
-| 新增内置工具 | `ARCHITECTURE.md` Tool System 章节 |
-| 新增 LLM Provider | `ARCHITECTURE.md` Provider System 章节 |
-| 修改 Agent Loop 流程 | `ARCHITECTURE.md` Agent Loop 章节 |
+| 新增/修改核心接口 | `arch/overview.md` + `arch/dependency-map.md` |
+| 新增 Plugin hook | `docs/plugin-system.md` + `arch/overview.md` |
+| 新增模块 | `arch/overview.md` 对应领域章节 + `arch/dependency-map.md` |
+| 修改层间依赖 | `arch/dependency-map.md` + `arch/layer-rules.md` |
+| 修改架构不变量 | `arch/invariants.md` |
 | 测试数量变化 | `README.md` + `CHANGELOG.md` |
 
 ### 文档更新检查清单
 
 提交前确认：
 
-- [ ] `ARCHITECTURE.md` 的模块实现状态是否准确
+- [ ] 运行 `bash ~/.openclaw/workspace-octopi/arch/check-sync.sh`
+- [ ] `arch/overview.md` 中对应领域章节是否更新
+- [ ] `arch/dependency-map.md` 中依赖关系是否更新
 - [ ] 新增的接口/类型是否有文档说明
 - [ ] 测试数量是否更新
 - [ ] `CHANGELOG.md` 是否记录变更
