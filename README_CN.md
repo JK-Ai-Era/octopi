@@ -31,7 +31,9 @@
 **Octopi 不是又一个框架，而是一个引擎。** 把它想象成 AI Agent 的"引擎"——就像汽车需要引擎才能跑起来，你的产品需要 Agent 引擎才能拥有 AI 能力。
 
 - **嵌入式设计** —— 不是独立应用，而是你产品的组件
-- **AgentEngine** —— 无状态消息循环（输入 → 上下文组装 → 模型推理 → 工具执行 → 输出）
+- **纯函数 Agent 循环** —— `agentLoop()` 是纯 async generator：输入消息 → LLM 调用 → 工具执行 → 输出事件。零状态、零副作用
+- **可靠性层** —— `runAgentWithReliability()` 包装循环，提供 planning-only 重试、空响应重试、noop 检测、循环检测、TaskSupervisor 检查点
+- **Agent 类** —— 轻量级状态持有者：模型、工具、上下文、系统提示词。通过 `AgentBuilder` 构建，通过 `runAgentWithReliability()` 运行
 - **Session 管理** —— 生命周期、持久化、并发控制，全部可插拔
 - **多 Provider LLM** —— OpenAI、Anthropic，或任何实现 `ModelProvider` 接口的提供者
 - **Plugin 系统** —— 完整的生命周期 hook，支持拦截语义和观察语义
@@ -50,15 +52,15 @@
 
 ### 内核与装具分离
 
-框架分为两层：**内核（Core）** 提供机制——消息循环、事件总线、安全守卫、资源约束；**装具（Harness）** 提供策略——人格、插件、技能、任务规划。内核永远不知道装具的存在，装具通过接口挂载到内核上。这意味着你可以只用内核写一个极简 Agent，也可以用全套装具构建一个复杂的自治系统。
+框架分为两层：**内核（Core）** 提供机制——Agent 循环、事件总线、安全守卫、资源约束；**装具（Harness）** 提供策略——人格、插件、技能、任务规划、可靠性包装。内核永远不知道装具的存在，装具通过接口挂载到内核上。这意味着你可以只用内核写一个极简 Agent，也可以用全套装具构建一个复杂的自治系统。
 
 ### Session 是一等公民
 
-所有状态归 Session，不归 Agent。Agent 引擎本身是无状态的——它接收消息，返回结果。状态的生命周期、持久化方式、并发控制，全部由 Session 层决定。这让同一个引擎可以服务无状态的 API 调用，也可以支撑长期运行的对话式 Agent。
+所有状态归 Session，不归 Agent。Agent 循环本身是无状态的——它接收消息，以 async generator 形式返回事件流。状态的生命周期、持久化方式、并发控制，全部由 Session 层决定。这让同一个引擎可以服务无状态的 API 调用，也可以支撑长期运行的对话式 Agent。
 
 ### 接口的价值 > 默认实现
 
-框架的价值不在于提供了多少默认实现，而在于定义了多少清晰的接口。`ModelProvider` 让你换 LLM 厂商只需实现一个接口；`SessionStore` 让你换存储后端不影响任何上层逻辑；`ContextPipeline` 让你自由组装上下文的每一个阶段。好的接口是框架最珍贵的资产。
+框架的价值不在于提供了多少默认实现，而在于定义了多少清晰的接口。`ModelProvider` 让你换 LLM 厂商只需实现一个接口；`SessionStore` 让你换存储后端不影响任何上层逻辑；`ContextEngine` 让你自由管理上下文的每一个阶段。好的接口是框架最珍贵的资产。
 
 ### 安全不可选
 
@@ -83,8 +85,8 @@ Persona、技能、操作指令——全部以 Markdown 文件定义。没有 sc
 Octopi 支持 [MCP (Model Context Protocol)](https://modelcontextprotocol.io/)，连接 AI 应用与外部工具的开放标准。任何 MCP Server——文件系统、GitHub、数据库、Sentry 等——一行代码即可接入：
 
 ```ts
-const { engine, runner, mcpManager } = await new AgentBuilder()
-  .model('gpt-5.5')
+const { agent, runner, mcpManager } = await new AgentBuilder()
+  .model('gpt-4o')
   .mcp({
     id: 'filesystem',
     transport: 'stdio',
@@ -110,11 +112,12 @@ MCP 工具自动命名空间管理（`{serverId}__{toolName}`），支持运行�
 │  │  Layer 2: Harness（装具层）                               │ │
 │  │  Persona · Plugin · Skill · Task · Planner               │ │
 │  │  Strategy · Resources · Security Policy · Builder        │ │
+│  │  Reliability · Distributed Intelligence                  │ │
 │  │                                                          │ │
 │  │  ┌─────────────────────────────────────────────────────┐ │ │
 │  │  │  Layer 1: Core（引擎层）                              │ │ │
-│  │  │  AgentEngine · EventBus · SecurityGuard · Budget     │ │ │
-│  │  │  AsyncTask · ProcessModel · Interfaces               │ │ │
+│  │  │  agentLoop · Agent · EventBus · SecurityGuard        │ │ │
+│  │  │  Budget · AsyncTask · ProcessModel · Interfaces      │ │ │
 │  │  └─────────────────────────────────────────────────────┘ │ │
 │  └─────────────────────────────────────────────────────────┘ │
 └─────────────────────────────────────────────────────────────┘
@@ -128,15 +131,17 @@ MCP 工具自动命名空间管理（`{serverId}__{toolName}`），支持运行�
 
 | 组件 | 职责 |
 |---|---|
-| `AgentEngine` | 无状态循环引擎 —— 引擎的心脏 |
+| `agentLoop()` | 纯 async generator —— 引擎的心脏。输入消息 → LLM 调用 → 工具执行 → 输出事件。零状态、零副作用 |
+| `Agent` 类 | 轻量级状态持有者：模型、工具、上下文、系统提示词。由 `AgentBuilder` 创建 |
+| `callModel()` | Watchdog 模式流式 LLM 调用，支持空闲超时、绝对超时、中止信号 |
+| `classifyError()` | 错误分类：rate_limit、timeout、auth、server、network、unknown |
 | `EventBus` | 全链路可观测的事件总线 |
 | `SecurityGuard` | 注入检测 + 敏感信息过滤（不可禁用） |
 | `IterationBudget` | 资源约束：迭代次数、工具调用、token、时间 |
 | `AsyncTask` | 异步原语：取消、超时、重试、持久化 |
 | `ProcessModel` | Agent 进程模型：生命周期、spawn、IPC |
-| `ModelProvider` | LLM 调用接口 |
-| `ToolExecutor` | 工具执行接口 |
-| `ContextPipeline` | 上下文组装管道接口 |
+| `ModelProvider` | LLM 调用接口（OpenAI、Anthropic、或自定义） |
+| `ContextEngine` | 上下文管理接口（替换 ContextPipeline） |
 | `ErrorStrategy` | 错误分类与恢复接口 |
 
 ### Harness 层（`src/harness/`）—— 装具层
@@ -146,20 +151,18 @@ Agent 获得人格、工具和智能的地方。
 | 组件 | 职责 |
 |---|---|
 | `AgentBuilder` | Fluent API —— 一行代码启动 Agent |
+| `runAgentWithReliability()` | 可靠性包装：planning-only 重试、空响应重试、noop 检测、循环检测、TaskSupervisor 检查点、SecurityGuard 注入 |
 | `SessionAwareRunner` | Session 生命周期管理：锁、持久化、重置 |
 | `PersonaLoader` | 文件式人格系统（AGENTS.md、SOUL.md 等） |
-| `DefaultContextPipeline` | 可插拔管道：Persona → Skill → Task → History → Knowledge → Filter |
+| `DefaultContextEngine` | 智能上下文路由：fits / truncate / compact / compact_then_truncate |
 | `AgentSupervisor` | 持续运行的 Agent 核心：感知 → 思考 → 执行 → 反思 |
 | `TaskTracker` / `TaskManager` | LLM 驱动的任务追踪与恢复 |
 | `RulePlanner` / `LLMPlanner` / `HybridPlanner` | 规划器：规则驱动 / LLM 驱动 / 混合 |
 | `TaskScheduler` | 任务调度：once / interval / cron / at |
 | `MemoryKnowledgeStore` | 知识 CRUD、关键词检索、置信度过滤 |
 | `LLMReflector` | 质量评估、模式识别、经验存储 |
-| `RuleTaskClassifier` | 7 种任务类型 × 3 级复杂度 |
-| `DefaultStrategyRouter` | 6 种推理策略：direct / chain-of-thought / plan-and-execute / tool-use / reflect / multi-agent |
-| `ResourceManager` | Token 预算、成本追踪、速率限制 |
-| `CapabilityEnforcer` | Plugin 信任分级运行时强制 |
 | `SecurityPresets` | 安全策略预设：development / testing / production / maximum |
+| `AgentRuntime` | 分布式智能基础设施 |
 
 ### Integration 层（`src/integration/`）—— 集成层
 
@@ -169,17 +172,13 @@ Agent 获得人格、工具和智能的地方。
 |---|---|
 | `JsonlSessionStore` | JSONL 文件存储（默认） |
 | `InMemorySessionStore` | 内存存储（测试用） |
-| `NoopObserver` | 零开销空观测器 |
-| `LogObserver` | 日志观测器（开发调试） |
-| `TraceLogger` | 分级结构化事件日志 |
 | `TraceCollector` | 自动收集引擎事件到 trace |
-| `ConsoleExporter` / `JsonlFileExporter` / `WebhookExporter` | Trace 导出后端（Exporter SPI） |
 | `MetricsAggregator` | LLM/token/延迟/成本指标聚合 |
 | `RecordingProvider` | 录制真实 LLM 交互用于回放 |
 | `ReplayProvider` | 回放录制的交互（确定性测试） |
 | `ChaosProvider` | 故障注入：空回复、超时、限流、畸形响应 |
 | `ScenarioRunner` | E2E 场景测试 + 内置断言库 |
-| `ScenarioComposer` | 场景组合、扩展、参数化运行 |
+| `SdkMcpClient` | MCP 客户端（连接外部 MCP Server，支持 stdio/HTTP） |
 
 ---
 
@@ -189,7 +188,7 @@ Agent 获得人格、工具和智能的地方。
 import { AgentBuilder } from 'octopi';
 import { OpenAIProvider } from 'octopi';
 
-const { engine, runner } = await new AgentBuilder()
+const { agent, runner } = await new AgentBuilder()
   .model(new OpenAIProvider({ apiKey: process.env.OPENAI_API_KEY! }))
   .persona('./my-agent')
   .build();
@@ -205,10 +204,34 @@ for await (const event of runner.handle('session-1', userMessage)) {
 ```typescript
 import { AgentBuilder } from 'octopi';
 
-const { engine, runner } = await new AgentBuilder()
-  .model('gpt-5.5')
+const { agent, runner } = await new AgentBuilder()
+  .model('gpt-4o')
   .store(new RedisSessionStore({ host: 'localhost' }))
   .build();
+```
+
+### 直接使用 Agent 循环（不经过 Harness）
+
+```typescript
+import { Agent } from 'octopi/core';
+import { runAgentWithReliability } from 'octopi/harness/reliability';
+
+const agent = new Agent({
+  model: provider,
+  systemPrompt: 'You are a helpful assistant.',
+  tools: [myTool],
+});
+
+// 注入初始消息
+agent.context.messages.push({ role: 'user', content: 'Hello', timestamp: Date.now() });
+
+// 使用可靠性包装运行
+const harness = { config: { planningRetry: { maxAttempts: 2, steerInstruction: '...' }, emptyResponseRetry: { maxAttempts: 2, steerInstruction: '...' }, noopThreshold: 3, loopDetection: { enabled: true } } };
+for await (const event of runAgentWithReliability(agent.context, { model: agent.model }, harness)) {
+  if (event.type === 'assistant_message') {
+    console.log(event.message.content);
+  }
+}
 ```
 
 ### 事件订阅
@@ -216,12 +239,8 @@ const { engine, runner } = await new AgentBuilder()
 ```typescript
 import { AgentEvents } from 'octopi';
 
-engine.deps.events.on(AgentEvents.MODEL_CALL_END, (event) => {
-  console.log(`模型调用: ${event.data.durationMs}ms`);
-});
-
-engine.deps.events.on(AgentEvents.INJECTION_DETECTED, (event) => {
-  console.warn(`检测到注入: ${event.data}`);
+agent.events.on(AgentEvents.ENGINE_START, (event) => {
+  console.log(`Agent started at ${event.timestamp}`);
 });
 ```
 
@@ -230,8 +249,8 @@ engine.deps.events.on(AgentEvents.INJECTION_DETECTED, (event) => {
 ```typescript
 import { AgentBuilder, SecurityPresets } from 'octopi';
 
-const { engine } = await new AgentBuilder()
-  .model('gpt-5.5')
+const { agent } = await new AgentBuilder()
+  .model('gpt-4o')
   .securityPolicy(SecurityPresets.production)
   .build();
 ```
@@ -240,13 +259,13 @@ const { engine } = await new AgentBuilder()
 
 ## 核心设计
 
-### AgentEngine 是无状态的
+### agentLoop 是纯函数
 
-引擎不持有 Session 状态。消息历史由调用方传入，结果以 async generator 返回。这意味着：
+核心循环不持有 Session 状态。它是一个 async generator，yield 事件：`agent_start`、`turn_start`、`assistant_message`、`turn_end`、`agent_end`。消息历史通过 context 传入，结果以事件流的形式产出。这意味着：
 
 - **可测试** —— 不需要 mock SessionStore
-- **可复用** —— 同一个引擎可以有 Session 或无 Session
-- **关注点分离** —— "怎么循环"和"怎么存储"是两个独立问题
+- **可复用** —— 同一个循环可以有 Session 或无 Session
+- **可组合** —— 用可靠性包装、安全包装或自定义逻辑包装
 
 ### Persona 是文件式的
 
@@ -264,7 +283,7 @@ my-agent/
 
 - **SecurityGuard** 不可禁用 —— 注入检测 + 敏感信息过滤
 - **IterationBudget** 不可绕过 —— 资源消耗硬约束
-- **CapabilityEnforcer** —— Plugin 信任分级运行时强制
+- **RiskPolicy** —— 工具调用的确定性风险评估（Core 通过接口注入，Harness 实现）
 
 ### Plugin 系统：双语义
 
@@ -294,7 +313,7 @@ LLM 驱动的任务追踪。用户中途聊别的，回来后 Agent 自动恢复
 ```typescript
 import { TaskTracker, TaskManager } from 'octopi/harness';
 
-// 通过 ContextPipeline 的 TaskStage 自动集成
+// 通过 ContextEngine 的 TaskStage 自动集成
 // Agent 在 system prompt 中看到任务上下文，自然地决定行为
 ```
 
@@ -315,7 +334,7 @@ Octopi 最初是从探索 OpenClaw 的架构开始的。OpenClaw 是一个功能
 |---|---|---|
 | **定位** | 完整的 AI 助手平台 | 可嵌入的 Agent 引擎 |
 | **架构** | 集成系统 | 三层分离（Core / Harness / Integration） |
-| **Agent 模型** | 有状态的 class | 无状态引擎 + 可插拔 Session |
+| **Agent 模型** | 有状态的 class | 无状态循环 + 可插拔 Session |
 | **耦合度** | 平台绑定（频道、记忆、调度） | Core 层零平台依赖 |
 | **目标用户** | 终端用户构建助手 | 开发者在产品中嵌入 Agent |
 | **扩展性** | Plugin 系统 | Plugin 系统 + 每层接口均可替换 |
@@ -328,7 +347,7 @@ OpenClaw 是一个优秀的项目。Octopi 是当你问"如果只提取引擎，
 
 ```bash
 npm test
-# 428 tests passed
+# 1050+ 测试通过
 ```
 
 ### 测试金字塔
@@ -374,9 +393,7 @@ Trace 级别：`FATAL(0)` → `ERROR(1)` → `WARN(2)` → `INFO(3)` → `DEBUG(
 | [架构设计](docs/ARCHITECTURE.md) | 设计哲学、三层架构详解、设计决策记录 |
 | [Plugin 系统](docs/plugin-system.md) | Hook 语义、Capability Ownership、完整示例 |
 | [Task 系统](docs/task-system.md) | 任务管理设计、LLM 决策器、状态机 |
-| [重构方案](docs/REFACTORING-PLAN.md) | 三层洋葱架构重构方案和迁移路径 |
-| [迁移审计](docs/MIGRATION-AUDIT.md) | 代码迁移状态、优先级、进度追踪 |
-| [开发指南](docs/development-guide.md) | 开发环境搭建、文档同步规范、测试规范 |
+| [开发指南](docs/CONTRIBUTING.md) | 开发环境搭建、文档同步规范、测试规范 |
 
 ---
 

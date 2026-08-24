@@ -10,8 +10,10 @@ import type { RegisteredTool, Message } from '../../core/types.js';
 import type { ModelProvider } from '../../core/interfaces/model-provider.js';
 import type { ErrorStrategy } from '../../core/interfaces/error-strategy.js';
 import type { Observer } from '../../core/interfaces/observer.js';
-import type { AgentEngineDeps } from '../../core/engine.js';
-import { AgentEngine } from '../../core/engine.js';
+import { Agent } from '../../core/loop/agent.js';
+import type { AgentTool } from '../../core/loop/types.js';
+import { runAgentWithReliability } from '../reliability/run-agent.js';
+import type { ReliabilityHarness } from '../reliability/run-agent.js';
 import type { DistributedAgentSpec } from './spec.js';
 import type { AgentInput, AgentOutput, InterceptOutput, ContextOutput, NotifyOutput, TriggerContext, AgentContext } from './types.js';
 import type { ResultInjectionMode } from './output-policy.js';
@@ -62,8 +64,10 @@ export interface SharedDeps {
 interface RegisteredAgent {
   /** 规格定义 */
   spec: DistributedAgentSpec;
-  /** LLM/Hybrid 模式的 Engine 实例 */
-  engine?: AgentEngine;
+  /** LLM/Hybrid 模式的 Agent 实例 */
+  agent?: Agent;
+  /** 可靠性 Harness（LLM/Hybrid 模式共用） */
+  harness?: ReliabilityHarness;
   /** Code 模式的执行函数 */
   handler?: (input: AgentInput) => Promise<AgentOutput>;
   /** 当前并发数 */
@@ -153,7 +157,9 @@ export class AgentRuntime {
     if (spec.execution.kind === 'code') {
       agent.handler = spec.execution.handler;
     } else if (spec.execution.kind === 'llm' || spec.execution.kind === 'hybrid') {
-      agent.engine = this.createEngine(spec);
+      const { agent: agentInstance, harness } = this.createAgentInstance(spec);
+      agent.agent = agentInstance;
+      agent.harness = harness;
     }
 
     this.agents.set(spec.id, agent);
@@ -304,57 +310,60 @@ export class AgentRuntime {
    * 共享 model、events、errorStrategy、observer，
    * 独立的 tools、security、systemPrompt。
    */
-  createEngine(spec: DistributedAgentSpec): AgentEngine {
+  /**
+   * 创建独立 Agent 实例
+   *
+   * 每个 LLM/Hybrid 模式的智能体有独立的 Agent，
+   * 共享 model，独立的 tools、systemPrompt。
+   */
+  createAgentInstance(spec: DistributedAgentSpec): { agent: Agent; harness: ReliabilityHarness } {
     const llm: LLMExecution = spec.execution.kind === 'llm'
       ? spec.execution
       : (spec.execution as HybridExecution).llm;
 
     const tools = this.resolveTools(llm.tools);
 
-    const deps: AgentEngineDeps = {
+    // 转换 RegisteredTool → AgentTool
+    const agentTools: AgentTool[] = Array.from(tools.values()).map(t => ({
+      name: t.definition.name,
+      description: t.definition.description,
+      parameters: {
+        type: 'object' as const,
+        properties: Object.fromEntries(
+          Object.entries(t.definition.parameters).map(([key, param]) => [
+            key,
+            { type: param.type, description: param.description, ...(param.enum && { enum: param.enum }) },
+          ]),
+        ),
+        required: Object.entries(t.definition.parameters)
+          .filter(([, param]) => param.required)
+          .map(([key]) => key),
+      },
+      execute: async (toolCallId: string, args: unknown) => ({
+        toolCallId,
+        name: t.definition.name,
+        content: 'Distributed agent has no tool execution capability',
+        isError: true,
+      }),
+    }));
+
+    const agent = new Agent({
       model: this.deps.model,
-      tools,
-      executor: {
-        // 当前设计：分布式智能体的 executor 是空壳，不支持工具执行。
-        // 安全守卫等纯判断型智能体不需要工具。
-        // 未来如果需要工具支持的分布式智能体，这里需要从 Builder 注入真实的 executor。
-        execute: async () => ({ error: 'Distributed agent has no tool execution capability' }),
+      systemPrompt: llm.systemPrompt ?? '',
+      tools: agentTools,
+    });
+
+    const harness: ReliabilityHarness = {
+      config: {
+        planningRetry: { maxAttempts: 0, steerInstruction: '' },
+        emptyResponseRetry: { maxAttempts: 0, steerInstruction: '' },
+        noopThreshold: 3,
+        loopDetection: { enabled: false },
       },
-      contextEngine: {
-        info: { id: 'distributed-agent-context', name: 'distributed-agent-context', ownsCompaction: false },
-        assemble: async (params) => {
-          // 分布式智能体的 contextEngine：只做 Message → LLMMessage 转换，不做压缩/裁剪
-          const messages = (params.messages ?? []).map((msg) => ({
-            role: msg.role,
-            content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content),
-            ...(msg.toolCalls ? {
-              tool_calls: msg.toolCalls.map(tc => ({
-                id: tc.id,
-                type: 'function' as const,
-                function: { name: tc.name, arguments: JSON.stringify(tc.arguments) },
-              })),
-            } : {}),
-            ...(msg.toolResults ? {
-              tool_call_id: msg.toolResults[0]?.toolCallId,
-              content: JSON.stringify(msg.toolResults.map(tr => tr.result)),
-            } : {}),
-          }));
-          return {
-            messages,
-            estimatedTokens: 0,
-            systemPrompt: params.systemPrompt ?? '',
-          };
-        },
-      },
-      events: this.deps.events,
-      security: new NoopSecurityGuard(),
-      skipSecurityValidation: true,
       errorStrategy: this.deps.errorStrategy,
-      observer: this.deps.observer,
-      systemPrompt: llm.systemPrompt,
     };
 
-    return new AgentEngine(deps);
+    return { agent, harness };
   }
 
   /**
@@ -457,9 +466,9 @@ export class AgentRuntime {
       let output: AgentOutput;
       if (agent.spec.execution.kind === 'code' && agent.handler) {
         output = await agent.handler(input);
-      } else if (agent.spec.execution.kind === 'llm' && agent.engine) {
+      } else if (agent.spec.execution.kind === 'llm' && agent.agent) {
         output = await this.executeLLM(agent, input);
-      } else if (agent.spec.execution.kind === 'hybrid' && agent.engine) {
+      } else if (agent.spec.execution.kind === 'hybrid' && agent.agent) {
         output = await this.executeHybrid(agent, input);
       } else {
         throw new Error(`Agent "${agentId}" has no valid execution handler`);
@@ -503,38 +512,37 @@ export class AgentRuntime {
   /**
    * 执行 LLM 模式
    *
-   * 调用 engine.run() 收集输出。
+   * 使用 runAgentWithReliability() 收集输出。
    */
   private async executeLLM(agent: RegisteredAgent, input: AgentInput): Promise<AgentOutput> {
-    if (!agent.engine) {
-      throw new Error('LLM execution requires Engine');
+    if (!agent.agent) {
+      throw new Error('LLM execution requires Agent');
     }
 
     const llm = agent.spec.execution as LLMExecution;
 
-    // 解析 model 覆盖：provider/model 格式 → 提取 model 名
-    const modelOverride = llm.model ? parseModelName(llm.model) : undefined;
-
-    // 将 AgentInput 转换为 messages 数组传给 Engine
-    const messages: Message[] = [];
+    // 将 AgentInput 转换为消息
     const inputContent = JSON.stringify(input, null, 2);
-    messages.push({
+    agent.agent.context.messages.push({
       role: 'user',
       content: inputContent,
       timestamp: Date.now(),
     });
 
-    // 调用 Engine 的 run 方法
+    // 调用 runAgentWithReliability
     let lastContent = '';
-    for await (const event of agent.engine.run(messages, {
-      systemPrompt: llm.systemPrompt,
-      agentId: agent.spec.id,
-      model: modelOverride,
-    })) {
-      if (event.type === 'turn.end' && event.data) {
-        lastContent = (event.data.content as string) ?? '';
+    for await (const event of runAgentWithReliability(
+      agent.agent.context,
+      { model: agent.agent.model },
+      agent.harness!,
+    )) {
+      if (event.type === 'assistant_message') {
+        lastContent = typeof event.message.content === 'string' ? event.message.content : '';
       }
     }
+
+    // 重置消息历史（分布式智能体每次调用独立）
+    agent.agent.context.messages = [];
 
     return this.parseAgentOutput(lastContent, agent.spec.outputPolicy.mode, input.pendingToolCall);
   }

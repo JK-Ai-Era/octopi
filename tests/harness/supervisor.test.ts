@@ -8,7 +8,8 @@ import {
   ProcessModel,
 } from '../../src/core/index.js';
 import type { EventBus, EventBusAgentEvent as AgentEvent } from '../../src/core/index.js';
-import type { AgentEngine, RunConfig } from '../../src/core/engine.js';
+import { Agent } from '../../src/core/loop/agent.js';
+import type { Agent as AgentType } from '../../src/core/loop/agent.js';
 import type { Message } from '../../src/core/types.js';
 import {
   AgentSupervisor as Supervisor,
@@ -245,16 +246,24 @@ describe('AgentSupervisor', () => {
         timestamp: Date.now(),
       });
 
-      // mock engine
-      const mockEngine = { run: vi.fn() } as unknown as AgentEngine;
+      // mock agent
+      const mockModel = {
+        name: 'mock',
+        chat: vi.fn(),
+        stream: async function* () { yield { type: 'done' as const }; },
+        isAvailable: async () => true,
+        getModelInfo: () => null,
+      };
+      const mockAgent = new Agent({ model: mockModel, systemPrompt: '' });
+      const mockHarness = { config: { planningRetry: { maxAttempts: 0, steerInstruction: '' }, emptyResponseRetry: { maxAttempts: 0, steerInstruction: '' }, noopThreshold: 3, loopDetection: { enabled: false } } };
 
       // 启动 supervisor，等待一个循环
-      const startPromise = supervisor.start(mockEngine);
+      const startPromise = supervisor.start(mockAgent, mockHarness);
       await new Promise(r => setTimeout(r, 100));
       await supervisor.stop();
 
-      // 不应该调用 engine
-      expect(mockEngine.run).not.toHaveBeenCalled();
+      // 不应该调用 model
+      expect(mockModel.chat).not.toHaveBeenCalled();
     });
   });
 

@@ -5,7 +5,7 @@
  * 职责：组装 Agent + 挂载协议适配器 + 管理生命周期。
  *
  * 架构：
- *   外部消息 → Channel Adapter → Gateway → SessionAwareRunner → AgentEngine → LLM
+ *   外部消息 → Channel Adapter → Gateway → SessionAwareRunner → Agent → LLM
  *
  * 使用方式：
  * ```ts
@@ -35,13 +35,12 @@ import type { StreamingChannelAdapter } from '../protocols/http.js';
 import { CircuitBreaker } from '../../core/circuit-breaker.js';
 import { wrapProviderWithCircuitBreaker } from '../../core/provider-wrapper.js';
 import { PluginManager } from '../../harness/plugins/manager.js';
-import { AgentEngine } from '../../core/engine.js';
-import type { RunConfig } from '../../core/engine.js';
+
 import { DefaultEventBus } from '../../core/event-bus.js';
 import { DefaultSecurityGuard } from '../../core/security-guard.js';
 import { IterationBudget } from '../../core/budget.js';
 import { DefaultContextEngine } from '../../harness/context/default-context-engine.js';
-import { SessionAwareRunner } from '../../harness/runner.js';
+import { SessionAwareRunner, type RunConfig } from '../../harness/runner.js';
 
 // ================================================================
 // 内存 Session 存储
@@ -78,7 +77,7 @@ class InMemorySessionStore implements SessionStore {
 /**
  * Gateway 实现
  *
- * 使用 AgentEngine + SessionAwareRunner 架构。
+ * 使用 Agent + SessionAwareRunner 架构。
  */
 export class Gateway {
   /** 已注册的 Agent */
@@ -102,7 +101,7 @@ export class Gateway {
   /** 工具 */
   private tools: RegisteredTool[] = [];
   /** Agent 缓存（避免每条消息重建） */
-  private agentCache = new Map<string, { engine: AgentEngine; runner: SessionAwareRunner; budget: IterationBudget }>();
+  private agentCache = new Map<string, { agent: import('../../core/loop/agent.js').Agent; runner: SessionAwareRunner }>();
   /** 流式 adapter 引用（用于广播事件） */
   private streamingAdapters: StreamingChannelAdapter[] = [];
   /** 每个 provider 的熔断器 */
@@ -255,14 +254,13 @@ export class Gateway {
       { sessionId: sessionKey, agentId: agent.id, message: msg },
     );
 
-    // 3. 获取或构建 AgentEngine + SessionAwareRunner
+    // 3. 获取或构建 Agent + SessionAwareRunner
     let cached = this.agentCache.get(agent.id);
     if (!cached) {
       cached = await this.buildAgent(agent);
       this.agentCache.set(agent.id, cached);
     }
-    const { runner, budget } = cached;
-    budget.reset();
+    const { runner } = cached;
 
     // 4. 构建用户消息
     const userMessage = {
@@ -278,7 +276,7 @@ export class Gateway {
       timestamp: msg.timestamp,
     };
 
-    // 5. 运行 AgentEngine
+    // 5. 运行 Agent
     const runConfig: RunConfig = {
       agentId: agent.id,
       sessionId: sessionKey,
@@ -344,12 +342,11 @@ export class Gateway {
   }
 
   /**
-   * 为 Agent 构建 AgentEngine + SessionAwareRunner
+   * 为 Agent 构建 Agent + SessionAwareRunner（新架构）
    */
   private async buildAgent(agent: AgentDefinition): Promise<{
-    engine: AgentEngine;
+    agent: import('../../core/loop/agent.js').Agent;
     runner: SessionAwareRunner;
-    budget: IterationBudget;
   }> {
     // 获取 provider
     const modelProvider = this.providers.get(agent.model.provider);
@@ -359,93 +356,42 @@ export class Gateway {
 
     // 获取熔断器
     const cb = this.getCircuitBreaker(agent.model.provider);
-
-    // 包装 provider，在调用前检查熔断器
     const wrappedProvider = wrapProviderWithCircuitBreaker(modelProvider, cb);
 
-    // 创建 Core 组件
-    const events = new DefaultEventBus();
-    const security = new DefaultSecurityGuard(events);
+    // 使用 AgentBuilder 构建
+    const builder = new (await import('../../harness/builder.js')).AgentBuilder()
+      .model(wrappedProvider)
+      .store(this.store);
 
-    // 注入确定性风险策略（规则引擎），替代旧的正则匹配
-    const { DefaultToolCallRiskPolicy } = await import('../../harness/security/default-risk-policy.js');
-    const riskPolicy = new DefaultToolCallRiskPolicy();
-    security.setToolCallRiskPolicy(riskPolicy);
-    const budgetConfig = this.config.budget ?? {};
-    const budget = new IterationBudget(events, {
-      maxIterations: budgetConfig.maxIterations ?? 10,
-      maxToolCalls: budgetConfig.maxToolCalls ?? 30,
-      maxTokens: budgetConfig.maxTokens ?? 200_000,
-      maxWallClockMs: budgetConfig.maxWallClockMs ?? 600_000,
-    });
-
-    // 创建 ObserverBridge（如果配置了 trace）
-    let observer: Observer | undefined;
-    if (this.config.trace) {
-      const { ObserverBridge } = await import('../observability/observer-bridge.js');
-      const traceConfig = this.config.trace;
-      const os = await import('node:os');
-      const path = await import('node:path');
-      const defaultOutputDir = path.join(os.homedir(), '.octopi', 'traces');
-      observer = new ObserverBridge({
-        logger: {
-          level: this.parseTraceLevel(traceConfig.level ?? 'INFO'),
-          outputDir: traceConfig.outputDir ?? defaultOutputDir,
-        },
-      });
-      console.log(`[Gateway] Tracing enabled → ${traceConfig.outputDir ?? defaultOutputDir}`);
-    }
-
-    // 创建工具映射
-    const tools = new Map<string, RegisteredTool>();
+    // 注册工具
     for (const tool of this.tools) {
-      tools.set(tool.definition.name, tool);
+      builder.tool(tool);
     }
 
-    // 创建 AgentEngine
-    const engine = new AgentEngine({
-      model: wrappedProvider,
-      tools,
-      executor: {
-        execute: async (call, ctx) => {
-          const tool = tools.get(call.name);
-          if (!tool) throw new Error(`Tool "${call.name}" not found`);
-          return tool.handler(call.arguments as Record<string, unknown>, {
-            cwd: agent.workspace ?? process.cwd(),
-            sessionId: ctx.callerId ?? 'unknown',
-            agentId: agent.id,
-            messages: [],
-          });
-        },
+    // 设置 systemPrompt
+    const systemPrompt = typeof agent.persona === 'object' ? agent.persona?.systemPrompt ?? '' : '';
+    if (systemPrompt) {
+      builder.systemPrompt(systemPrompt);
+    }
+
+    // 错误策略
+    builder.errorStrategy({
+      onModelError: (error, attempt) => {
+        const retryable = ['rate_limit', 'timeout', 'network', 'server'];
+        if (retryable.includes(error.reason) && attempt < 3) {
+          const delayMs = (attempt + 1) * (error.reason === 'rate_limit' ? 1000 : 2000);
+          return { action: 'retry', delayMs };
+        }
+        return { action: 'abort', reason: error.message };
       },
-      contextEngine: new DefaultContextEngine(),
-      events,
-      security,
-      budget,
-      errorStrategy: {
-        onModelError: (error, attempt) => {
-          // 可重试的瞬态错误
-          const retryable = ['rate_limit', 'timeout', 'network', 'server'];
-          if (retryable.includes(error.reason) && attempt < 3) {
-            const delayMs = (attempt + 1) * (error.reason === 'rate_limit' ? 1000 : 2000);
-            return { action: 'retry', delayMs };
-          }
-          // 不可重试的错误（auth、context_length 等）
-          return { action: 'abort', reason: error.message };
-        },
-        onToolError: () => ({ action: 'skip', reason: 'Tool failed' }),
-        onContextOverflow: () => ({ action: 'compact' }),
-        onSecurityViolation: (v) => ({ action: 'block', reason: v.description }),
-      },
-      observer,
-      systemPrompt: typeof agent.persona === 'object' ? agent.persona?.systemPrompt ?? '' : '',
-      modelCallIdleTimeoutMs: this.config.modelCallIdleTimeoutMs ?? 120_000,
+      onToolError: () => ({ action: 'skip', reason: 'Tool failed' }),
+      onContextOverflow: () => ({ action: 'compact' }),
+      onSecurityViolation: (v) => ({ action: 'block', reason: v.description }),
     });
 
-    // 创建 SessionAwareRunner
-    const runner = new SessionAwareRunner(engine, this.store);
-
-    return { engine, runner, budget };
+    // 构建
+    const built = await builder.build();
+    return { agent: built.agent, runner: built.runner };
   }
 
   private resolveAgent(msg: ChannelMessage): AgentDefinition | undefined {

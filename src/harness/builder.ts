@@ -23,6 +23,13 @@ import type {
   ModelProvider,
 } from '../core/interfaces/model-provider.js';
 import type {
+  AgentTool as LoopAgentTool,
+} from '../core/loop/types.js';
+import { Agent } from '../core/loop/agent.js';
+import type { AgentOptions } from '../core/loop/agent.js';
+import { runAgentWithReliability, DEFAULT_RELIABILITY_CONFIG } from './reliability/run-agent.js';
+import type { ReliabilityConfig, ReliabilityHarness } from './reliability/run-agent.js';
+import type {
   ToolExecutor,
   ExecutionContext,
 } from '../core/interfaces/tool-executor.js';
@@ -52,10 +59,7 @@ import type { TraceLoggerConfig } from '../integration/observability/trace-logge
 import type {
   SessionStore,
 } from '../core/interfaces/session-store.js';
-import {
-  AgentEngine,
-} from '../core/engine.js';
-import type { AgentEngineDeps, RunConfig } from '../core/engine.js';
+
 import {
   DefaultEventBus,
   NoopEventBus,
@@ -146,6 +150,48 @@ class DefaultToolExecutor implements ToolExecutor {
   }
 }
 
+/**
+ * 将 RegisteredTool 转换为 AgentTool（新循环格式）
+ */
+function convertToAgentTool(tool: RegisteredTool): LoopAgentTool {
+  return {
+    name: tool.definition.name,
+    description: tool.definition.description,
+    parameters: {
+      type: 'object',
+      properties: Object.fromEntries(
+        Object.entries(tool.definition.parameters).map(([key, param]) => [
+          key,
+          { type: param.type, description: param.description, ...(param.enum && { enum: param.enum }) },
+        ]),
+      ),
+      required: Object.entries(tool.definition.parameters)
+        .filter(([, param]) => param.required)
+        .map(([key]) => key),
+    },
+    execute: async (toolCallId: string, args: unknown, signal?: AbortSignal) => {
+      const startTime = Date.now();
+      try {
+        const result = await tool.handler(args as Record<string, unknown>, { timeoutMs: 30_000, signal } as any);
+        return {
+          toolCallId,
+          name: tool.definition.name,
+          content: result,
+          durationMs: Date.now() - startTime,
+        };
+      } catch (error) {
+        return {
+          toolCallId,
+          name: tool.definition.name,
+          content: `Error: ${error instanceof Error ? error.message : String(error)}`,
+          isError: true,
+          durationMs: Date.now() - startTime,
+        };
+      }
+    },
+  };
+}
+
 /** 内存 Session 存储（默认） */
 class InMemorySessionStore implements SessionStore {
   private sessions = new Map<string, any>();
@@ -193,6 +239,7 @@ export class AgentBuilder {
   private _taskSupervisor?: TaskSupervisor;
   private _taskSupervisorConfig?: TaskSupervisorConfig;
   private _checkpointInterval?: number;
+  private _reliabilityConfig?: ReliabilityConfig;
 
   // Harness 组件
   private _personaWorkspaces: string[] = [];
@@ -389,6 +436,12 @@ export class AgentBuilder {
     return this;
   }
 
+  /** 设置可靠性配置（用于 buildAgent()） */
+  reliability(config: Partial<ReliabilityConfig>): this {
+    this._reliabilityConfig = { ...DEFAULT_RELIABILITY_CONFIG, ...config };
+    return this;
+  }
+
   /**
    * 启用完整可观测性
    *
@@ -424,10 +477,10 @@ export class AgentBuilder {
   taskSupervisor(supervisor: TaskSupervisor, checkpointInterval?: number): this;
   taskSupervisor(supervisorOrConfig?: TaskSupervisor | TaskSupervisorConfig, checkpointInterval?: number): this {
     if (!supervisorOrConfig) {
-      // 无参调用：使用默认配置自动创建，延迟到 buildEngine 时注入 model
+      // 无参调用：使用默认配置自动创建，延迟到 buildAgent 时注入 model
       this._taskSupervisorConfig = {};
     } else if ('checkpointInterval' in supervisorOrConfig || 'enableLLMReview' in supervisorOrConfig || 'hardLimit' in supervisorOrConfig) {
-      // TaskSupervisorConfig 对象：延迟到 buildEngine 时注入 model
+      // TaskSupervisorConfig 对象：延迟到 buildAgent 时注入 model
       this._taskSupervisorConfig = supervisorOrConfig as TaskSupervisorConfig;
     } else {
       // TaskSupervisor 实例：直接使用
@@ -470,44 +523,43 @@ export class AgentBuilder {
   // ── 构建 ──
 
   /**
-   * 构建 AgentEngine + SessionAwareRunner
+   * 构建 Agent + SessionAwareRunner
+   *
+   * 使用新架构：Agent 类 + runAgentWithReliability 可靠性包装。
    */
-  async build(): Promise<{ engine: AgentEngine; runner: SessionAwareRunner; mcpManager: McpManager; runtime?: import('./distributed/runtime.js').AgentRuntime }> {
-    // 统一创建 events 实例，确保 engine、runner、runtime 共享同一个 EventBus
+  async build(): Promise<{ agent: Agent; harness: ReliabilityHarness; runner: SessionAwareRunner; mcpManager: McpManager; runtime?: import('./distributed/runtime.js').AgentRuntime; events: EventBus }> {
     const events = this._events ?? new DefaultEventBus();
-    this._events = events;  // 注入到 builder，让 buildEngine() 也使用同一个
+    this._events = events;
 
-    const engine = await this.buildEngine();
-    const store = this._store ?? new InMemorySessionStore();
-    const runner = new SessionAwareRunner(engine, store, { ...this._runnerConfig, events });
-
-    // 创建 McpManager
-    const mcpManager = await this.buildMcpManager();
-
-    // 风险策略（确定性规则引擎）独立于安全守卫（LLM），始终注入
-    if (!this._riskPolicy) {
-      const { DefaultToolCallRiskPolicy } = await import('./security/default-risk-policy.js');
-      const cwd = this._safetyGuardConfig?.cwd;
-      this._riskPolicy = new DefaultToolCallRiskPolicy({ cwd });
+    // 并发控制：ProviderPool
+    if (this._concurrencyConfig?.providerPool && this._namedProviders.size > 0) {
+      const { ProviderPool } = await import('./concurrency/provider-pool.js');
+      this._model = new ProviderPool(this._concurrencyConfig.providerPool, this._namedProviders);
     }
 
-    // 如果启用了安全守卫，注册安全守卫 Spec（LLM 语义判断层）
-    if (this._safetyGuardConfig) {
-      const { buildSafetyGuardSpec } = await import('./security/safety-agent-spec.js');
-      const alreadyRegistered = this._distributedAgentSpecs.some(s => s.id === 'safety-guard');
-      if (!alreadyRegistered) {
-        this._distributedAgentSpecs.push(buildSafetyGuardSpec(this._safetyGuardConfig.model, this._safetyGuardConfig.maxDurationMs));
-      }
+    // 并发控制：SessionGate
+    if (this._concurrencyConfig?.sessionGate) {
+      const { SessionGate } = await import('./concurrency/session-gate.js');
+      const gateConfig = this._concurrencyConfig.sessionGate;
+      this._runnerConfig = {
+        ...this._runnerConfig,
+        sessionGate: new SessionGate({
+          maxConcurrent: gateConfig.maxConcurrent,
+          waitTimeoutMs: gateConfig.waitTimeoutMs,
+        }),
+      };
     }
+
+    // 使用 buildAgent() 构建核心组件
+    const { agent, harness, mcpManager } = await this.buildAgent();
 
     // 创建 AgentRuntime（如果有分布式智能体）
-    // 注意：使用 engine.deps.model（可能是 ProviderPool），而不是 this._model
     let runtime: import('./distributed/runtime.js').AgentRuntime | undefined;
     if (this._distributedAgentSpecs.length > 0) {
       const { AgentRuntime } = await import('./distributed/runtime.js');
       runtime = new AgentRuntime({
         deps: {
-          model: engine.deps.model,
+          model: agent.model,
           events,
           errorStrategy: this._errorStrategy ?? new DefaultErrorStrategy(),
           observer: this._observer,
@@ -518,29 +570,41 @@ export class AgentBuilder {
       for (const spec of this._distributedAgentSpecs) {
         runtime.register(spec);
       }
-      // 将 runtime 的 intercept 拦截钩子连到 engine
-      engine.beforeToolExecution = (call) => runtime!.beforeToolExecution(call);
-      runner.setDistributedRuntime(runtime);
+      // Agent 新架构：beforeToolCall 已在 buildAgent() 中设置
+      // 分布式运行时的 intercept 通过 harness 的 beforeToolCall 链处理
+      harness.agentId = this._runnerConfig?.taskDecisionProvider ? undefined : 'default';
     }
 
-    return { engine, runner, mcpManager, runtime };
+    // 创建 SessionStore + Runner
+    const store = this._store ?? new InMemorySessionStore();
+    const runner = new SessionAwareRunner(agent, harness, store, { ...this._runnerConfig, events });
+    if (runtime) runner.setDistributedRuntime(runtime);
+
+    return { agent, harness, runner, mcpManager, runtime, events };
   }
 
   /**
-   * 只构建 AgentEngine（无 Session 管理）
+   * 构建 Agent 类（使用 agentLoop 纯函数 + runAgentWithReliability）
    *
-   * 适用于：
-   * - 单次调用（不需要 Session）
-   * - 批处理
-   * - 测试
+   * 返回 Agent 实例 + 可靠性配置，集成方可以用新的 API 运行：
+   * ```ts
+   * const { agent, harness } = await builder.buildAgent();
+   * for await (const event of runAgentWithReliability(agent.context, agent.config, harness)) {
+   *   // 处理事件
+   * }
+   * ```
+   *
+   * 或使用 Agent 类的 run/continue_ 方法（不含可靠性包装）：
+   * ```ts
+   * for await (const event of agent.run('你好')) { ... }
+   * ```
    */
-  async buildEngine(): Promise<AgentEngine> {
-    // 验证必需组件
+  async buildAgent(): Promise<{ agent: Agent; harness: ReliabilityHarness; mcpManager: McpManager }> {
     if (!this._model) {
-      throw new Error('ModelProvider is required. Call .model() before .build()');
+      throw new Error('ModelProvider is required. Call .model() before .buildAgent()');
     }
 
-    // 加载 systemPrompt：直接设置优先于 persona 目录
+    // 加载 systemPrompt
     let systemPrompt = this._systemPrompt ?? '';
     if (!systemPrompt && this._personaWorkspaces.length > 0) {
       if (this._personaWorkspaces.length === 1) {
@@ -549,51 +613,37 @@ export class AgentBuilder {
         systemPrompt = await composePersonas(...this._personaWorkspaces);
       }
     }
-
-    // 如果有工具但没有 systemPrompt，自动生成工具说明
     if (!systemPrompt && this._tools.size > 0) {
       systemPrompt = this.buildDefaultSystemPrompt();
     }
 
-    // ── 并发控制：ProviderPool 多 key 路由 ──
-    let model = this._model;
-    if (this._concurrencyConfig?.providerPool && this._namedProviders.size > 0) {
-      const { ProviderPool } = await import('./concurrency/provider-pool.js');
-      const poolConfig = this._concurrencyConfig.providerPool;
+    // 构建 McpManager
+    const mcpManager = await this.buildMcpManager();
 
-      // 如果没有显式注册 providers，用 .model() 传入的作为默认
-      if (this._namedProviders.size === 0) {
-        throw new Error('ProviderPool requires registered providers. Use .provider() or .providers() to register them.');
-      }
+    // 转换 RegisteredTool → AgentTool
+    const agentTools: LoopAgentTool[] = Array.from(this._tools.values()).map(t => convertToAgentTool(t));
 
-      model = new ProviderPool(poolConfig, this._namedProviders);
-    }
+    // 创建 Agent
+    const agentOptions: AgentOptions = {
+      model: this._model,
+      systemPrompt,
+      tools: agentTools,
+      observer: this._observer ? {
+        onLLMStart: (p) => this._observer?.log('info', 'llm.start', p as unknown as Record<string, unknown>),
+        onLLMEnd: (p) => this._observer?.log('info', 'llm.end', p as unknown as Record<string, unknown>),
+        onToolStart: (p) => this._observer?.log('info', 'tool.start', p as unknown as Record<string, unknown>),
+        onToolEnd: (p) => this._observer?.log('info', 'tool.end', p as unknown as Record<string, unknown>),
+      } : undefined,
+    };
+    const agent = new Agent(agentOptions);
 
-    // ── 并发控制：SessionGate ──
-    if (this._concurrencyConfig?.sessionGate) {
-      const { SessionGate } = await import('./concurrency/session-gate.js');
-      const gateConfig = this._concurrencyConfig.sessionGate;
-      const gate = new SessionGate({
-        maxConcurrent: gateConfig.maxConcurrent,
-        waitTimeoutMs: gateConfig.waitTimeoutMs,
-      });
-      // 传给 runnerConfig
-      this._runnerConfig = { ...this._runnerConfig, sessionGate: gate };
-    }
-
-    // 创建默认组件
+    // 构建可靠性 harness
     const events = this._events ?? new DefaultEventBus();
     const security = this._security ?? new DefaultSecurityGuard(events, this._securityConfig);
-
-    // 注入风险策略（如果有）
     if (this._riskPolicy && security.setToolCallRiskPolicy) {
       security.setToolCallRiskPolicy(this._riskPolicy);
     }
     const errorStrategy = this._errorStrategy ?? new DefaultErrorStrategy();
-    const executor = this._executor ?? new DefaultToolExecutor(this._tools);
-
-    // 创建上下文引擎
-    const contextEngine = this._contextEngine ?? new DefaultContextEngine();
 
     // 自动创建 TaskSupervisor（如果通过 config 配置但未手动传入实例）
     const taskSupervisor = this._taskSupervisor
@@ -601,62 +651,14 @@ export class AgentBuilder {
         ? new DefaultTaskSupervisor(this._taskSupervisorConfig, this._model)
         : undefined);
 
-    // 当有 TaskSupervisor 时，放宽 IterationBudget 的 wall-clock 限制
-    // 让 TaskSupervisor 成为主要的智能控制，IterationBudget 只做安全兜底
-    let budget = this._budget;
-    if (!budget && taskSupervisor) {
-      // 如果没有手动设置 budget 但有 TaskSupervisor，创建一个宽松的默认 budget
-      budget = new IterationBudget(events, {
-        maxWallClockMs: 3_600_000, // 1 小时（TaskSupervisor 会在此之前介入）
-      });
-    } else if (!budget) {
-      budget = new IterationBudget(events);
-    }
-
-    // 自动创建 ObserverBridge（如果配置了 trace 但未手动设置 observer）
-    let observer = this._observer;
-    if (!observer && this._traceConfig) {
-      const { ObserverBridge } = await import('../integration/observability/observer-bridge.js');
-      observer = new ObserverBridge({
-        logger: {
-          level: 4, // TraceLevel.DEBUG
-          outputDir: this._traceConfig.outputDir,
-          ...this._loggerConfig,
-        },
-        metrics: this._metricsConfig,
-      });
-    }
-
-    // 创建 ToolValidator（如果有并发配置则使用，否则引擎用内置 noop 检测）
-    let toolValidator: import('../harness/concurrency/tool-validator.js').ToolValidator | undefined;
-    if (this._concurrencyConfig) {
-      const { ToolValidator } = await import('./concurrency/tool-validator.js');
-      toolValidator = new ToolValidator({
-        maxResultSize: 100_000,
-        noopThreshold: 3,
-        emptyIsNoop: true,
-      });
-    }
-
-    // 注入 systemPrompt 到引擎的运行时配置
-    // AgentEngine 本身不存储 systemPrompt，由调用方在 run() 时传入
-    const deps: AgentEngineDeps = {
-      model,
-      tools: this._tools,
-      executor,
-      contextEngine,
-      events,
+    const harness: ReliabilityHarness = {
+      config: this._reliabilityConfig ?? DEFAULT_RELIABILITY_CONFIG,
       security,
-      budget,
       errorStrategy,
-      observer,
-      systemPrompt,
       taskSupervisor,
-      checkpointInterval: this._checkpointInterval,
-      toolValidator,
     };
 
-    return new AgentEngine(deps);
+    return { agent, harness, mcpManager };
   }
 
   /**
@@ -730,7 +732,7 @@ export async function createAgent(config: {
   store?: SessionStore;
   budget?: Partial<IterationBudgetConfig>;
   mcp?: McpServerConfig[];
-}): Promise<{ engine: AgentEngine; runner: SessionAwareRunner; mcpManager: McpManager }> {
+}): Promise<{ agent: Agent; harness: ReliabilityHarness; runner: SessionAwareRunner; mcpManager: McpManager }> {
   const builder = new AgentBuilder()
     .model(config.model);
 

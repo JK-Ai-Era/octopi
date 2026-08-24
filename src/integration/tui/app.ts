@@ -268,9 +268,13 @@ export class TuiApp {
       // ── 回合结束 ──
       case 'turn.end': {
         const content = (event.data?.content as string) ?? '';
+        const hasToolCalls = event.data?.hasToolCalls as boolean | undefined;
         this.chatLog.clearTransientSystem();
         if (this.streamedContent || content) {
           this.chatLog.finalizeAssistant(this.streamedContent || content, 'run');
+        } else if (hasToolCalls) {
+          // 工具执行回合：无文本内容是正常的，不显示警告
+          this.chatLog.dropAssistant('run');
         } else {
           this.chatLog.dropAssistant('run');
           this.chatLog.addSystem('⚠️ Empty response.');

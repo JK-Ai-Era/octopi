@@ -1,3 +1,29 @@
+## v0.7.0 (2026-08-24)
+
+### refactor(core): Phase 6 — 删除旧引擎，彻底迁移到新架构
+
+**Breaking:** 删除 `src/core/engine.ts`（1759行）和 `AgentEngine` 类。
+所有上层模块已迁移到 `Agent` + `runAgentWithReliability()` 新架构。
+
+**迁移的源码模块（12个）：**
+- `runner.ts` — AgentEngine → Agent + runAgentWithReliability
+- `builder.ts` — 删除 buildEngine()，buildAgent() 为唯一构建路径
+- `gateway.ts` — AgentBuilder.buildAgent() 构建
+- `distributed/runtime.ts` — createAgentInstance()
+- `multi-agent/process.ts`, `swarm.ts` — Agent 引用
+- `supervisor.ts` — Agent 引用
+- `config-bridge.ts` — BuiltAgent.agent
+- `scenario-runner.ts` — Agent 引用
+
+**修复的真实BUG（测试发现）：**
+1. 空响应重试失效：onTurnComplete 注入 steer 后 agentLoop 直接退出
+2. noop 无限循环：noop 检测注入 hint 后没有停止循环
+
+**重写的测试文件（4个）：**
+- planning-retry, engine-advanced, engine-empty-after-tools, core-engine
+
+**统计：** -2568 行，39 文件变更，1035 测试全通过
+
 ## v0.6.9 (2026-08-16)
 
 ### feat(config): 支持 agent 级别 contextWindow 配置

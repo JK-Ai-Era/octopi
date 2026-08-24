@@ -5,7 +5,7 @@
  * 实现方：文件系统、Redis、SQLite、内存等。
  *
  * 设计要点：
- * - Core 层不使用此接口（AgentEngine 无状态）
+ * - Core 层不使用此接口（Agent 无状态）
  * - Harness 层的 SessionAwareRunner 使用此接口
  * - 放在 Core 层是为了让所有层都能引用此类型
  */

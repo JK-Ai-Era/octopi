@@ -104,7 +104,7 @@ export interface CheckpointVerdict {
 /**
  * TaskSupervisor 接口
  *
- * Core 层在 AgentEngine 的检查点调用此接口。
+ * Core 层在 Agent 的检查点调用此接口。
  * Harness 层实现具体策略（规则检测 + LLM 审查）。
  */
 export interface TaskSupervisor {

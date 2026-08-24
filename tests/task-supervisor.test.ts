@@ -320,13 +320,13 @@ describe('DefaultTaskSupervisor', () => {
       getModelInfo: () => null,
       };
 
-      const engine = await new AgentBuilder()
+      const { agent, harness } = await new AgentBuilder()
         .model(mockModel)
         .taskSupervisor()
-        .buildEngine();
+        .buildAgent();
 
-      // engine 应该有 taskSupervisor
-      expect(engine.deps.taskSupervisor).toBeDefined();
+      // harness 应该有 taskSupervisor
+      expect(harness.taskSupervisor).toBeDefined();
     });
 
     it('config 形式 taskSupervisor({}) 应该自动接入 model', async () => {
@@ -342,12 +342,12 @@ describe('DefaultTaskSupervisor', () => {
       getModelInfo: () => null,
       };
 
-      const engine = await new AgentBuilder()
+      const { agent, harness } = await new AgentBuilder()
         .model(mockModel)
         .taskSupervisor({ enableLLMReview: false })
-        .buildEngine();
+        .buildAgent();
 
-      expect(engine.deps.taskSupervisor).toBeDefined();
+      expect(harness.taskSupervisor).toBeDefined();
     });
   });
 });

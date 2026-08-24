@@ -133,7 +133,7 @@ describe('AgentRuntime', () => {
     expect(handlerCalled).toBe(false);
   });
 
-  it('createEngine creates independent Engine for LLM spec', () => {
+  it('createAgentInstance creates independent Agent for LLM spec', () => {
     const runtime = new AgentRuntime({ deps: createMockSharedDeps() });
     const spec = createCodeSpec({
       execution: {
@@ -142,8 +142,9 @@ describe('AgentRuntime', () => {
         tools: [],
       },
     });
-    const engine = runtime.createEngine(spec);
-    expect(engine).toBeDefined();
+    const result = runtime.createAgentInstance(spec);
+    expect(result.agent).toBeDefined();
+    expect(result.harness).toBeDefined();
   });
 
   it('dispose cleans up resources', () => {

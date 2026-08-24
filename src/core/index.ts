@@ -14,10 +14,6 @@ export type { AgentMessage, AgentMessageType, AgentMessageMetadata, AgentCommuni
 export { AgentMessageEvents } from './interfaces/agent-message.js';
 
 // ── 内置组件 ──
-export { AgentEngine } from './engine.js';
-export type { AgentEngineDeps, RunConfig } from './engine.js';
-/** @deprecated Use AgentEvent from event-bus instead */
-export type { AgentEvent as EngineEvent } from './event-bus.js';
 
 export { DefaultEventBus, NoopEventBus, ThrottledEventBus, AgentEvents } from './event-bus.js';
 export type { EventBus, AgentEvent, AgentEvent as EventBusAgentEvent, EventHandler, Disposable, DefaultEventBusOptions, ThrottleConfig } from './event-bus.js';

@@ -4,3 +4,4 @@ dist/
 .octopi/
 octopi.json
 data/
+arch/

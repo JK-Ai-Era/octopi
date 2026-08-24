@@ -6,12 +6,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { AgentSwarm, RoundRobinStrategy, CapabilityStrategy, PipelineStrategy } from '../../src/harness/multi-agent/swarm.js';
 import { DefaultAgentRegistry } from '../../src/harness/multi-agent/registry.js';
 import { DefaultEventBus } from '../../src/core/event-bus.js';
-import { DefaultSecurityGuard } from '../../src/core/security-guard.js';
-import { AgentEngine } from '../../src/core/engine.js';
+import { Agent } from '../../src/core/loop/agent.js';
+import type { ReliabilityHarness } from '../../src/harness/reliability/run-agent.js';
 import { SwarmEvents } from '../../src/harness/multi-agent/types.js';
 import type { SwarmAgent, SwarmTask } from '../../src/harness/multi-agent/types.js';
 import type { ModelProvider, LLMRequest, LLMResponse, LLMStreamChunk } from '../../src/core/interfaces/model-provider.js';
 import type { AgentInfo } from '../../src/core/interfaces/agent-registry.js';
+import type { Message } from '../../src/core/types.js';
 
 // ── Mock 工厂 ──
 
@@ -30,26 +31,23 @@ function createMockModelProvider(response?: string): ModelProvider {
     },
     isAvailable: async () => true,
     getModelInfo: () => null,
-    getModelInfo: () => null,
   };
 }
 
-function createMockEngine(response?: string): AgentEngine {
-  return new AgentEngine({
+function createMockAgent(response?: string): { agent: Agent; harness: ReliabilityHarness } {
+  const agent = new Agent({
     model: createMockModelProvider(response),
-    tools: new Map(),
-    executor: { execute: async () => null },
-    contextEngine: { info: { id: 'mock', name: 'Mock', ownsCompaction: false }, assemble: async (params) => ({ messages: params.messages.map(m => ({ role: m.role, content: m.content })), estimatedTokens: 100, systemPrompt: params.systemPrompt }) },
-    events: new DefaultEventBus(),
-    security: new DefaultSecurityGuard(new DefaultEventBus()),
-    budget: { checkAndEmit: () => true, recordIteration: () => {}, recordToolCall: () => {}, consumeTokens: () => {}, report: () => ({}) },
-    errorStrategy: {
-      onModelError: () => ({ action: 'abort' }),
-      onToolError: () => ({ action: 'skip' }),
-      onContextOverflow: () => ({ action: 'compact' }),
-      onSecurityViolation: () => ({ action: 'block' }),
-    },
+    systemPrompt: '',
   });
+  const harness: ReliabilityHarness = {
+    config: {
+      planningRetry: { maxAttempts: 0, steerInstruction: '' },
+      emptyResponseRetry: { maxAttempts: 0, steerInstruction: '' },
+      noopThreshold: 3,
+      loopDetection: { enabled: false },
+    },
+  };
+  return { agent, harness };
 }
 
 function createSwarmAgent(id: string, name: string, capabilities: string[] = []): SwarmAgent {
@@ -62,7 +60,7 @@ function createSwarmAgent(id: string, name: string, capabilities: string[] = [])
       registeredAt: Date.now(),
       lastActiveAt: Date.now(),
     },
-    engine: createMockEngine(`Response from ${name}`),
+    ...createMockAgent(`Response from ${name}`),
   };
 }
 

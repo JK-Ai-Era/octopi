@@ -322,7 +322,7 @@ export class WorkflowEngine {
  * 简单步骤执行器
  *
  * 用于测试和简单场景。
- * 实际使用时应替换为集成 AgentEngine 的执行器。
+ * 实际使用时应替换为集成 Agent 的执行器。
  */
 export class SimpleStepExecutor implements StepExecutor {
   async execute(step: WorkflowStep, context: WorkflowContext): Promise<unknown> {

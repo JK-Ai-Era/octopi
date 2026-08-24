@@ -31,7 +31,9 @@ Most agent frameworks give you a monolith: a fixed agent loop, a fixed session m
 **Octopi is not another framework. It's an engine.** Think of it as the "engine" for your AI agent — just like a car needs an engine to run, your product needs an agent engine to have AI capabilities.
 
 - **Embeddable by design** — Not a standalone app, but a component for your product
-- **AgentEngine** — a stateless message loop (input → context assembly → model inference → tool execution → output)
+- **Pure function agent loop** — `agentLoop()` is a pure async generator: input messages → LLM call → tool execution → output events. Zero state, zero side effects
+- **Reliability layer** — `runAgentWithReliability()` wraps the loop with planning-only retry, empty response retry, noop detection, loop detection, and TaskSupervisor checkpoints
+- **Agent class** — Lightweight state holder: model, tools, context, system prompt. Constructed via `AgentBuilder`, run via `runAgentWithReliability()`
 - **Session management** — lifecycle, persistence, concurrency control, all pluggable
 - **Multi-provider LLM** — OpenAI, Anthropic, or any provider implementing the `ModelProvider` interface
 - **Plugin system** — full lifecycle hooks with interceptor and observer semantics
@@ -50,15 +52,15 @@ An agent is not an object you can `new` up. It's a complete runtime scope: works
 
 ### Kernel and Harness separation
 
-The framework is split into two layers: the **Core** provides mechanisms — message loop, event bus, security guard, resource constraints; the **Harness** provides policies — persona, plugins, skills, task planning. The core never knows about the harness; the harness mounts onto the core through interfaces. This means you can write a minimal agent using just the core, or build a complex autonomous system with the full harness.
+The framework is split into two layers: the **Core** provides mechanisms — agent loop, event bus, security guard, resource constraints; the **Harness** provides policies — persona, plugins, skills, task planning, reliability wrappers. The core never knows about the harness; the harness mounts onto the core through interfaces. This means you can write a minimal agent using just the core, or build a complex autonomous system with the full harness.
 
 ### Session is a first-class citizen
 
-All state belongs to the session, not the agent. The agent engine itself is stateless — it takes messages and returns results. The lifecycle, persistence method, and concurrency control of state are all determined by the session layer. This allows the same engine to serve stateless API calls or power long-running conversational agents.
+All state belongs to the session, not the agent. The agent loop itself is stateless — it takes messages and returns results as an async generator of events. The lifecycle, persistence method, and concurrency control of state are all determined by the session layer. This allows the same engine to serve stateless API calls or power long-running conversational agents.
 
 ### Interfaces > default implementations
 
-A framework's value lies not in how many defaults it ships, but in how many clean interfaces it defines. `ModelProvider` lets you swap LLM vendors by implementing one interface; `SessionStore` lets you change storage backends without touching any upper-layer logic; `ContextPipeline` lets you freely compose every stage of context assembly. Good interfaces are a framework's most precious asset.
+A framework's value lies not in how many defaults it ships, but in how many clean interfaces it defines. `ModelProvider` lets you swap LLM vendors by implementing one interface; `SessionStore` lets you change storage backends without touching any upper-layer logic; `ContextEngine` lets you freely compose every stage of context management. Good interfaces are a framework's most precious asset.
 
 ### Security is not optional
 
@@ -83,8 +85,8 @@ Just as an octopus's intelligence is not concentrated solely in its brain but di
 Octopi supports [Model Context Protocol (MCP)](https://modelcontextprotocol.io/), the open standard for connecting AI applications to external tools and data. Any MCP Server — filesystem, GitHub, databases, Sentry, and hundreds more — can be connected to Octopi with a single line of code:
 
 ```ts
-const { engine, runner, mcpManager } = await new AgentBuilder()
-  .model('gpt-5.5')
+const { agent, runner, mcpManager } = await new AgentBuilder()
+  .model('gpt-4o')
   .mcp({
     id: 'filesystem',
     transport: 'stdio',
@@ -110,11 +112,12 @@ MCP tools are automatically namespaced (`{serverId}__{toolName}`), support runti
 │  │  Layer 2: Harness                                        │ │
 │  │  Persona · Plugin · Skill · Task · Planner               │ │
 │  │  Strategy · Resources · Security Policy · Builder        │ │
+│  │  Reliability · Distributed Intelligence                  │ │
 │  │                                                          │ │
 │  │  ┌─────────────────────────────────────────────────────┐ │ │
 │  │  │  Layer 1: Core                                       │ │ │
-│  │  │  AgentEngine · EventBus · SecurityGuard · Budget     │ │ │
-│  │  │  AsyncTask · ProcessModel · Interfaces               │ │ │
+│  │  │  agentLoop · Agent · EventBus · SecurityGuard        │ │ │
+│  │  │  Budget · AsyncTask · ProcessModel · Interfaces      │ │ │
 │  │  └─────────────────────────────────────────────────────┘ │ │
 │  └─────────────────────────────────────────────────────────┘ │
 └─────────────────────────────────────────────────────────────┘
@@ -128,15 +131,17 @@ Zero implementation dependencies. Just interfaces and the minimal agent loop.
 
 | Component | Responsibility |
 |---|---|
-| `AgentEngine` | Stateless loop engine — the heart of the engine |
+| `agentLoop()` | Pure async generator — the heart of the engine. Input messages → LLM call → tool execution → output events. Zero state, zero side effects |
+| `Agent` class | Lightweight state holder: model, tools, context, system prompt. Created by `AgentBuilder` |
+| `callModel()` | Watchdog-mode streaming LLM call with idle timeout, absolute timeout, and abort signal support |
+| `classifyError()` | Error classification: rate_limit, timeout, auth, server, network, unknown |
 | `EventBus` | Full-chain observability via typed events |
 | `SecurityGuard` | Injection detection + sensitive data filtering (non-disableable) |
 | `IterationBudget` | Resource constraints: iterations, tool calls, tokens, time |
 | `AsyncTask` | Async primitive: cancel, timeout, retry, persistence |
 | `ProcessModel` | Agent process model: lifecycle, spawn, IPC |
-| `ModelProvider` | LLM call interface |
-| `ToolExecutor` | Tool execution interface |
-| `ContextPipeline` | Context assembly pipeline interface |
+| `ModelProvider` | LLM call interface (OpenAI, Anthropic, or custom) |
+| `ContextEngine` | Context management interface (replaces ContextPipeline) |
 | `ErrorStrategy` | Error classification and recovery interface |
 
 ### Harness (Layer 2) — Assembly Layer
@@ -146,20 +151,18 @@ Where the agent gets its personality, tools, and intelligence.
 | Component | Responsibility |
 |---|---|
 | `AgentBuilder` | Fluent API — one line to launch an agent |
+| `runAgentWithReliability()` | Reliability wrapper: planning-only retry, empty response retry, noop detection, loop detection, TaskSupervisor checkpoints, SecurityGuard injection |
 | `SessionAwareRunner` | Session lifecycle: locks, persistence, reset |
 | `PersonaLoader` | File-based persona system (AGENTS.md, SOUL.md, etc.) |
-| `DefaultContextPipeline` | Pluggable pipeline: Persona → Skill → Task → History → Knowledge → Filter |
+| `DefaultContextEngine` | Smart context routing: fits / truncate / compact / compact_then_truncate |
 | `AgentSupervisor` | Persistent agent core: Perceive → Think → Act → Reflect |
 | `TaskTracker` / `TaskManager` | LLM-driven task tracking and recovery |
 | `RulePlanner` / `LLMPlanner` / `HybridPlanner` | Planning: rule-driven, LLM-driven, or hybrid |
 | `TaskScheduler` | Scheduling: once, interval, cron, at |
 | `MemoryKnowledgeStore` | Knowledge CRUD, keyword search, confidence filtering |
 | `LLMReflector` | Quality assessment, pattern recognition, experience storage |
-| `RuleTaskClassifier` | 7 task types × 3 complexity levels |
-| `DefaultStrategyRouter` | 6 reasoning strategies: direct, chain-of-thought, plan-and-execute, tool-use, reflect, multi-agent |
-| `ResourceManager` | Token budget, cost tracking, rate limiting |
-| `CapabilityEnforcer` | Plugin trust-level runtime enforcement |
 | `SecurityPresets` | Preset policies: development / testing / production / maximum |
+| `AgentRuntime` | Distributed intelligence infrastructure |
 
 ### Integration (Layer 3) — Connectors
 
@@ -169,17 +172,12 @@ Protocol adapters, storage backends, observability.
 |---|---|
 | `JsonlSessionStore` | JSONL file storage (default) |
 | `InMemorySessionStore` | In-memory storage (testing) |
-| `NoopObserver` | Zero-overhead no-op observer |
-| `LogObserver` | Logging observer for development |
-| `TraceLogger` | Structured event logging with level filtering |
 | `TraceCollector` | Auto-collect engine events into trace |
-| `ConsoleExporter` / `JsonlFileExporter` / `WebhookExporter` | Trace export backends (Exporter SPI) |
 | `MetricsAggregator` | LLM/token/latency/cost metrics from event stream |
 | `RecordingProvider` | Record real LLM interactions for replay |
 | `ReplayProvider` | Replay recorded interactions (deterministic testing) |
 | `ChaosProvider` | Fault injection: empty response, timeout, rate-limit, malformed |
 | `ScenarioRunner` | E2E scenario testing with built-in assertions |
-| `ScenarioComposer` | Compose, extend, parameterize test scenarios |
 | `SdkMcpClient` | MCP Client (connect to external MCP Servers via stdio/HTTP) |
 
 ---
@@ -190,7 +188,7 @@ Protocol adapters, storage backends, observability.
 import { AgentBuilder } from 'octopi';
 import { OpenAIProvider } from 'octopi';
 
-const { engine, runner } = await new AgentBuilder()
+const { agent, runner } = await new AgentBuilder()
   .model(new OpenAIProvider({ apiKey: process.env.OPENAI_API_KEY! }))
   .persona('./my-agent')
   .build();
@@ -206,10 +204,34 @@ for await (const event of runner.handle('session-1', userMessage)) {
 ```typescript
 import { AgentBuilder } from 'octopi';
 
-const { engine, runner } = await new AgentBuilder()
-  .model('gpt-5.5')
+const { agent, runner } = await new AgentBuilder()
+  .model('gpt-4o')
   .store(new RedisSessionStore({ host: 'localhost' }))
   .build();
+```
+
+### Direct agent loop (without harness)
+
+```typescript
+import { Agent } from 'octopi/core';
+import { runAgentWithReliability } from 'octopi/harness/reliability';
+
+const agent = new Agent({
+  model: provider,
+  systemPrompt: 'You are a helpful assistant.',
+  tools: [myTool],
+});
+
+// Inject initial message
+agent.context.messages.push({ role: 'user', content: 'Hello', timestamp: Date.now() });
+
+// Run with reliability wrapper
+const harness = { config: { planningRetry: { maxAttempts: 2, steerInstruction: '...' }, emptyResponseRetry: { maxAttempts: 2, steerInstruction: '...' }, noopThreshold: 3, loopDetection: { enabled: true } } };
+for await (const event of runAgentWithReliability(agent.context, { model: agent.model }, harness)) {
+  if (event.type === 'assistant_message') {
+    console.log(event.message.content);
+  }
+}
 ```
 
 ### Event subscription
@@ -217,12 +239,8 @@ const { engine, runner } = await new AgentBuilder()
 ```typescript
 import { AgentEvents } from 'octopi';
 
-engine.deps.events.on(AgentEvents.MODEL_CALL_END, (event) => {
-  console.log(`Model call: ${event.data.durationMs}ms`);
-});
-
-engine.deps.events.on(AgentEvents.INJECTION_DETECTED, (event) => {
-  console.warn(`Injection detected: ${event.data}`);
+agent.events.on(AgentEvents.ENGINE_START, (event) => {
+  console.log(`Agent started at ${event.timestamp}`);
 });
 ```
 
@@ -231,8 +249,8 @@ engine.deps.events.on(AgentEvents.INJECTION_DETECTED, (event) => {
 ```typescript
 import { AgentBuilder, SecurityPresets } from 'octopi';
 
-const { engine } = await new AgentBuilder()
-  .model('gpt-5.5')
+const { agent } = await new AgentBuilder()
+  .model('gpt-4o')
   .securityPolicy(SecurityPresets.production)
   .build();
 ```
@@ -241,13 +259,13 @@ const { engine } = await new AgentBuilder()
 
 ## Design Principles
 
-### AgentEngine is stateless
+### agentLoop is a pure function
 
-The engine doesn't hold session state. Message history is passed in by the caller, results are returned as an async generator. This means:
+The core loop doesn't hold session state. It's an async generator that yields events: `agent_start`, `turn_start`, `assistant_message`, `turn_end`, `agent_end`. Message history is passed in via the context, results come out as events. This means:
 
 - **Testable** — no need to mock a session store
-- **Reusable** — the same engine works with or without sessions
-- **Separation of concerns** — "how to loop" and "how to store" are independent problems
+- **Reusable** — the same loop works with or without sessions
+- **Composable** — wrap with reliability, security, or custom logic
 
 ### Persona is file-based
 
@@ -265,7 +283,7 @@ No schema, no config format. Just markdown files. Extension = add a file. Compos
 
 - **SecurityGuard** cannot be disabled — injection detection + sensitive data filtering
 - **IterationBudget** cannot be bypassed — hard resource constraints
-- **CapabilityEnforcer** — runtime trust-level enforcement for plugins
+- **RiskPolicy** — deterministic risk evaluation for tool calls (Core injects via interface, Harness implements)
 
 ### Plugin system with dual semantics
 
@@ -295,7 +313,7 @@ LLM-driven task tracking. When a user drifts to a different topic and comes back
 ```typescript
 import { TaskTracker, TaskManager } from 'octopi/harness';
 
-// Integrated via ContextPipeline's TaskStage
+// Integrated via ContextEngine's TaskStage
 // The agent sees task context in the system prompt and naturally decides how to proceed
 ```
 
@@ -316,7 +334,7 @@ Where we diverged:
 |---|---|---|
 | **Scope** | Full AI assistant platform | Embeddable agent engine |
 | **Architecture** | Integrated system | Three-layer separation (Core / Harness / Integration) |
-| **Agent model** | Class-based with state | Stateless engine + pluggable session |
+| **Agent model** | Class-based with state | Stateless loop + pluggable session |
 | **Coupling** | Platform-bound (channels, memory, scheduling) | Zero platform dependencies in Core |
 | **Target user** | End users building assistants | Developers embedding agents in products |
 | **Extensibility** | Plugin system | Plugin system + pluggable interfaces at every layer |
@@ -329,7 +347,7 @@ OpenClaw is a great project. Octopi is what happens when you ask: "What if we ex
 
 ```bash
 npm test
-# 428 tests passed
+# 1050+ tests passed
 ```
 
 ### Test Pyramid

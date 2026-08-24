@@ -3,7 +3,7 @@
  *
  * Harness 层组件。运行时强制执行 Plugin 信任分级和工具访问控制。
  *
- * 通过 AgentEngine 的 beforeToolExec 回调槽注入。
+ * 通过 Agent 的 beforeToolCall 回调槽注入。
  */
 
 import type { ToolCall } from '../../core/types.js';
