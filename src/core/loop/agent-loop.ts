@@ -83,7 +83,7 @@ export async function* agentLoop(
     const toolDefs = buildToolDefinitions(currentContext.tools);
     const llmMessages: LLMMessage[] = convertToLlm
       ? await convertToLlm(currentContext.messages)
-      : currentContext.messages as unknown as LLMMessage[];
+      : normalizeMessagesForLlm(currentContext.messages);
 
     // ── 3. 调用 LLM（带超时保护 + 流式输出） ──
     observer?.onLLMStart?.({ model: currentModel.name });
@@ -532,6 +532,34 @@ async function prepareToolCall(
 }
 
 // ── 工具函数 ──
+
+/**
+ * 规范化消息为 LLM 格式
+ *
+ * 处理内部 Message → LLMMessage 转换中的关键差异：
+ * - 内部 Message.content 允许空字符串，但 LLM API 要求 assistant 消息
+ *   必须有 content、reasoning_content 或 tool_calls 之一
+ * - 有 tool_calls 时 content 必须是 null（非空字符串）
+ */
+function normalizeMessagesForLlm(messages: import('../types.js').Message[]): LLMMessage[] {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return messages.map((m: any) => {
+    if (m.role !== 'assistant') return m;
+    const hasToolCalls = m.toolCalls && m.toolCalls.length > 0;
+    const hasContent = typeof m.content === 'string' && m.content.length > 0;
+    if (hasToolCalls) {
+      // 有 tool_calls: content 必须为 null（OpenAI API 要求）
+      return { role: 'assistant', content: hasContent ? m.content : null,
+        tool_calls: m.toolCalls.map((tc: any) => ({
+          id: tc.id, type: 'function',
+          function: { name: tc.name, arguments: typeof tc.arguments === 'string' ? tc.arguments : JSON.stringify(tc.arguments) },
+        })),
+      };
+    }
+    // 无 tool_calls: 空 content 设为 null，非空保持
+    return { role: 'assistant', content: hasContent ? m.content : null };
+  });
+}
 
 /**
  * 构建工具定义（ModelProvider 格式）
