@@ -8,6 +8,61 @@
 import type { Message, RegisteredTool } from '../../core/types.js';
 import type { EventBus, AgentEvent } from '../../core/event-bus.js';
 
+// ── AgentMessage（从旧 agent-communicator 吸收的通信概念） ──
+
+/** Agent 消息类型 */
+export type AgentMessageType =
+  | 'request'      // 请求（任务分配）
+  | 'response'     // 响应（任务结果）
+  | 'query'        // 查询（请求信息）
+  | 'reply'        // 回复（提供信息）
+  | 'broadcast'    // 广播（通知所有）
+  | 'delegate'     // 委托（转交任务）
+  | 'escalate';    // 上报（交给上级）
+
+/** Agent 消息元数据 */
+export interface AgentMessageMetadata {
+  /** 优先级 */
+  priority?: 'low' | 'normal' | 'high' | 'urgent';
+  /** 消息过期时间（毫秒） */
+  ttl?: number;
+  /** 需要的能力标签 */
+  capabilities?: string[];
+  /** 标签 */
+  tags?: string[];
+  /** 扩展数据 */
+  extra?: Record<string, unknown>;
+}
+
+/**
+ * Agent 间通信消息
+ *
+ * 用于分布式智能体之间的结构化通信。
+ * 从旧 agent-communicator.ts 吸收，保留消息格式和对话关联能力。
+ */
+export interface AgentMessage {
+  /** 消息 ID */
+  id: string;
+  /** 消息类型 */
+  type: AgentMessageType;
+  /** 发送者 Agent ID */
+  from: string;
+  /** 接收者（支持多播，'*' 表示广播） */
+  to: string | string[];
+  /** 会话 ID（用于关联相关消息） */
+  conversationId?: string;
+  /** 回复的消息 ID */
+  replyTo?: string;
+  /** 时间戳 */
+  timestamp: number;
+  /** 消息内容 */
+  content: string;
+  /** 结构化数据（可选） */
+  structured?: unknown;
+  /** 元数据 */
+  metadata?: AgentMessageMetadata;
+}
+
 /**
  * 分布式智能体的运行配置
  *

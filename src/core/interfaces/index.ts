@@ -84,14 +84,6 @@ export type {
 } from './message-channel.js';
 
 export type {
-  AgentMessage,
-  AgentMessageType,
-  AgentMessageMetadata,
-  AgentCommunicator,
-} from './agent-message.js';
-export { AgentMessageEvents } from './agent-message.js';
-
-export type {
   AgentRegistry,
   AgentInfo,
   AgentQuery,

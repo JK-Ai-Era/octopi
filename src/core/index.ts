@@ -8,11 +8,6 @@
 // ── 接口 ──
 export * from './interfaces/index.js';
 
-// ── Agent 通信 ──
-export { DefaultAgentCommunicator, createAgentMessage } from './agent-communicator.js';
-export type { AgentMessage, AgentMessageType, AgentMessageMetadata, AgentCommunicator } from './interfaces/agent-message.js';
-export { AgentMessageEvents } from './interfaces/agent-message.js';
-
 // ── 内置组件 ──
 
 export { DefaultEventBus, NoopEventBus, ThrottledEventBus, AgentEvents } from './event-bus.js';

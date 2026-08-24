@@ -56,11 +56,6 @@ export type {
   BudgetAllocateResult,
 } from './core/interfaces/context-engine.js';
 
-// Agent 通信
-export { DefaultAgentCommunicator, createAgentMessage } from './core/agent-communicator.js';
-export type { AgentMessage, AgentMessageType, AgentMessageMetadata, AgentCommunicator } from './core/interfaces/agent-message.js';
-export { AgentMessageEvents } from './core/interfaces/agent-message.js';
-
 // ============================================================
 // Harness 层
 // ============================================================
