@@ -8,8 +8,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { OpenAIProvider } from '../src/integration/providers/openai.js';
 import { AnthropicProvider } from '../src/integration/providers/anthropic.js';
 import { loadConfig } from '../src/config.js';
-import { AgentEngine } from '../src/core/engine.js';
-import type { AgentEngineDeps, RunConfig } from '../src/core/engine.js';
+import { Agent } from '../src/core/loop/agent.js';
 import type { ModelProvider, LLMResponse } from '../src/core/interfaces/model-provider.js';
 import type { RegisteredTool } from '../src/core/types.js';
 import { DefaultEventBus } from '../src/core/event-bus.js';
@@ -230,9 +229,9 @@ describe('Provider maxOutputTokens enforcement', () => {
   });
 });
 
-// ── Engine defaultModel fallback Tests ──
+// ── Agent model provider Tests ──
 
-describe('Engine defaultModel fallback', () => {
+describe('Agent model provider', () => {
   function createMockProvider(defaultModel?: string): ModelProvider {
     return {
       name: 'mock',
@@ -250,85 +249,31 @@ describe('Engine defaultModel fallback', () => {
     };
   }
 
-  it('uses config.model when set', async () => {
+  it('Agent stores the model provider directly', () => {
     const provider = createMockProvider('default-model');
-    const deps: AgentEngineDeps = {
-      model: provider,
-      tools: new Map(),
-      executor: { execute: vi.fn() },
-      contextEngine: new DefaultContextEngine(),
-      events: new DefaultEventBus(),
-      security: new DefaultSecurityGuard(new DefaultEventBus()),
-      budget: new IterationBudget(new DefaultEventBus(), { maxIterations: 5 }),
-      errorStrategy: {
-        onModelError: () => ({ action: 'abort' as const, reason: 'test' }),
-        onToolError: () => ({ action: 'skip' as const, reason: 'test' }),
-        onContextOverflow: () => ({ action: 'compact' as const }),
-        onSecurityViolation: () => ({ action: 'block' as const, reason: 'test' }),
-      },
-    };
-    const engine = new AgentEngine(deps);
-    const messages = [{ role: 'user' as const, content: 'hi', timestamp: Date.now() }];
+    const agent = new Agent({ model: provider, systemPrompt: 'test' });
 
-    for await (const _ of engine.run(messages, { systemPrompt: 'test', model: 'custom-model' })) {
-      // consume events
-    }
-
-    expect(provider.getModelInfo).toHaveBeenCalledWith('custom-model');
+    expect(agent.model).toBe(provider);
+    expect(agent.model.name).toBe('mock');
+    expect(agent.model.defaultModel).toBe('default-model');
   });
 
-  it('falls back to provider.defaultModel when config.model not set', async () => {
-    const provider = createMockProvider('default-model');
-    const deps: AgentEngineDeps = {
-      model: provider,
-      tools: new Map(),
-      executor: { execute: vi.fn() },
-      contextEngine: new DefaultContextEngine(),
-      events: new DefaultEventBus(),
-      security: new DefaultSecurityGuard(new DefaultEventBus()),
-      budget: new IterationBudget(new DefaultEventBus(), { maxIterations: 5 }),
-      errorStrategy: {
-        onModelError: () => ({ action: 'abort' as const, reason: 'test' }),
-        onToolError: () => ({ action: 'skip' as const, reason: 'test' }),
-        onContextOverflow: () => ({ action: 'compact' as const }),
-        onSecurityViolation: () => ({ action: 'block' as const, reason: 'test' }),
-      },
-    };
-    const engine = new AgentEngine(deps);
-    const messages = [{ role: 'user' as const, content: 'hi', timestamp: Date.now() }];
+  it('Agent model can be changed via setModel', () => {
+    const provider1 = createMockProvider('model-1');
+    const provider2 = createMockProvider('model-2');
+    const agent = new Agent({ model: provider1, systemPrompt: 'test' });
 
-    for await (const _ of engine.run(messages, { systemPrompt: 'test' })) {
-      // consume events
-    }
-
-    expect(provider.getModelInfo).toHaveBeenCalledWith('default-model');
+    expect(agent.model.defaultModel).toBe('model-1');
+    agent.setModel(provider2);
+    expect(agent.model.defaultModel).toBe('model-2');
   });
 
-  it('does not query getModelInfo when neither config.model nor defaultModel', async () => {
-    const provider = createMockProvider(); // no defaultModel
-    const deps: AgentEngineDeps = {
-      model: provider,
-      tools: new Map(),
-      executor: { execute: vi.fn() },
-      contextEngine: new DefaultContextEngine(),
-      events: new DefaultEventBus(),
-      security: new DefaultSecurityGuard(new DefaultEventBus()),
-      budget: new IterationBudget(new DefaultEventBus(), { maxIterations: 5 }),
-      errorStrategy: {
-        onModelError: () => ({ action: 'abort' as const, reason: 'test' }),
-        onToolError: () => ({ action: 'skip' as const, reason: 'test' }),
-        onContextOverflow: () => ({ action: 'compact' as const }),
-        onSecurityViolation: () => ({ action: 'block' as const, reason: 'test' }),
-      },
-    };
-    const engine = new AgentEngine(deps);
-    const messages = [{ role: 'user' as const, content: 'hi', timestamp: Date.now() }];
+  it('getModelInfo is accessible through agent.model', () => {
+    const provider = createMockProvider('test-model');
+    const agent = new Agent({ model: provider, systemPrompt: 'test' });
 
-    for await (const _ of engine.run(messages, { systemPrompt: 'test' })) {
-      // consume events
-    }
-
-    // getModelInfo should NOT be called (modelName is undefined, so we skip the call)
-    expect(provider.getModelInfo).not.toHaveBeenCalled();
+    const info = agent.model.getModelInfo('test-model');
+    expect(info).toBeDefined();
+    expect(provider.getModelInfo).toHaveBeenCalledWith('test-model');
   });
 });

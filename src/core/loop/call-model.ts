@@ -128,6 +128,9 @@ export async function* callModel(
     };
     try {
       const response = await model.chat({ messages, tools, signal });
+      if (!response) {
+        throw new Error('model.chat() returned undefined — provider may be misconfigured');
+      }
       if (response.content) {
         yield { type: 'llm_stream_delta', timestamp: Date.now(), data: { delta: response.content } };
       }
@@ -151,6 +154,9 @@ export async function* callModel(
     };
     try {
       const response = await model.chat({ messages, tools, signal });
+      if (!response) {
+        throw new Error('model.chat() returned undefined — provider may be misconfigured');
+      }
       if (response.content) {
         yield { type: 'llm_stream_delta', timestamp: Date.now(), data: { delta: response.content } };
       }

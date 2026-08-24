@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { NoopSecurityGuard } from '../../src/harness/distributed/noop-security-guard.js';
+import { Agent } from '../../src/core/loop/agent.js';
 
 describe('NoopSecurityGuard', () => {
   const guard = new NoopSecurityGuard();
@@ -16,38 +17,13 @@ describe('NoopSecurityGuard', () => {
   });
 });
 
-describe('Engine skipSecurityValidation', () => {
-  it('Engine accepts NoopSecurityGuard when skipSecurityValidation is true', async () => {
-    const { AgentEngine } = await import('../../src/core/engine.js');
-    const engine = new AgentEngine({
-      model: { defaultModel: 'test', getModelInfo: () => null, stream: vi.fn() } as any,
-      tools: new Map(),
-      executor: { execute: async () => ({}) } as any,
-      contextEngine: {
-        info: { name: 'test', version: '1.0.0' },
-        assemble: async (p: any) => ({ messages: p.messages ?? [] }),
-      } as any,
-      events: { emit: vi.fn(), on: vi.fn(), onAll: vi.fn() } as any,
-      security: new NoopSecurityGuard(),
-      errorStrategy: { classify: () => ({ action: 'retry', delayMs: 100 }) } as any,
-      skipSecurityValidation: true,
+describe('Agent accepts any model provider', () => {
+  it('Agent accepts a mock model provider without validation', () => {
+    const agent = new Agent({
+      model: { name: 'test', getModelInfo: () => null } as any,
+      systemPrompt: 'test',
     });
-    expect(engine).toBeDefined();
-  });
-
-  it('Engine rejects NoopSecurityGuard when skipSecurityValidation is false/absent', async () => {
-    const { AgentEngine } = await import('../../src/core/engine.js');
-    expect(() => new AgentEngine({
-      model: { defaultModel: 'test', getModelInfo: () => null, stream: vi.fn() } as any,
-      tools: new Map(),
-      executor: { execute: async () => ({}) } as any,
-      contextEngine: {
-        info: { name: 'test', version: '1.0.0' },
-        assemble: async (p: any) => ({ messages: p.messages ?? [] }),
-      } as any,
-      events: { emit: vi.fn(), on: vi.fn(), onAll: vi.fn() } as any,
-      security: new NoopSecurityGuard(),
-      errorStrategy: { classify: () => ({ action: 'retry', delayMs: 100 }) } as any,
-    })).toThrow('SecurityGuard validation failed');
+    expect(agent).toBeDefined();
+    expect(agent.model.name).toBe('test');
   });
 });

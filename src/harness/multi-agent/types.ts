@@ -4,7 +4,8 @@
  * Harness 层的多 Agent 编排类型。
  */
 
-import type { AgentEngine } from '../../core/index.js';
+import type { Agent } from '../../core/loop/agent.js';
+import type { ReliabilityHarness } from '../reliability/run-agent.js';
 import type { AgentInfo, AgentRelation } from '../../core/interfaces/agent-registry.js';
 import type { SessionAwareRunner } from '../runner.js';
 
@@ -35,8 +36,10 @@ export interface SwarmConfig {
 export interface SwarmAgent {
   /** Agent 注册信息 */
   info: AgentInfo;
-  /** Agent 引擎实例 */
-  engine: AgentEngine;
+  /** Agent 实例 */
+  agent: Agent;
+  /** 可靠性 Harness */
+  harness: ReliabilityHarness;
   /** Session 运行器（可选） */
   runner?: SessionAwareRunner;
 }

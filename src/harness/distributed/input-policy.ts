@@ -7,7 +7,7 @@
 
 import type { Message } from '../../core/types.js';
 import type { AgentEvent } from '../../core/event-bus.js';
-import type { RunConfig } from '../../core/engine.js';
+import type { AgentRunConfig } from './types.js';
 import type { AgentInput, AgentContext, TaskSummary } from './types.js';
 
 // ── ContextField ──

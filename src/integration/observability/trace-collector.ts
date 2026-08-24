@@ -1,5 +1,5 @@
 /**
- * TraceCollector — 从 AgentEngine 事件流自动收集 trace
+ * TraceCollector — 从 Agent 事件流自动收集 trace
  *
  * 包装 engine.run() 的 AsyncGenerator，旁路记录所有事件。
  * 不改变原始事件流的行为。

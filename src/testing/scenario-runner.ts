@@ -24,7 +24,7 @@ import type { SessionStore } from '../core/interfaces/session-store.js';
 import type { RegisteredTool, AgentEventDetail } from '../core/types.js';
 import { AgentBuilder } from '../harness/builder.js';
 import { SessionAwareRunner } from '../harness/runner.js';
-import type { RunConfig, AgentEngine } from '../core/engine.js';
+
 import { TraceCollector, type TraceCollectorConfig } from '../integration/observability/trace-collector.js';
 
 // ── 场景定义 ──
@@ -142,7 +142,7 @@ export interface ScenarioRunnerConfig {
 export class ScenarioRunner {
   private config: ScenarioRunnerConfig;
   private runner!: SessionAwareRunner;
-  private engine!: AgentEngine;
+  private agent!: import('../core/loop/agent.js').Agent;
   private traceCollector?: TraceCollector;
 
   constructor(config: ScenarioRunnerConfig) {
@@ -166,7 +166,7 @@ export class ScenarioRunner {
     }
 
     const built = await builder.build();
-    this.engine = built.engine;
+    this.agent = built.agent;
     this.runner = built.runner;
 
     if (this.config.trace) {
@@ -260,7 +260,7 @@ export class ScenarioRunner {
       timestamp: Date.now(),
     };
 
-    const runConfig: RunConfig = {
+    const runConfig: { systemPrompt: string; agentId?: string; sessionId?: string; model?: string; cwd?: string } = {
       agentId: 'scenario',
       sessionId,
       model: this.config.provider.name,

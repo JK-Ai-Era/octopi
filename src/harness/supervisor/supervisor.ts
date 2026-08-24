@@ -11,7 +11,7 @@
  * - 事件驱动：所有输入都是事件
  * - Planner 可替换：不同场景用不同的规划策略
  * - Reflector 可选：没有反思器也能运行
- * - 与 AgentEngine 共存：单次推理仍由 AgentEngine 完成
+ * - 与 Agent 共存：单次推理仍由 Agent 完成
  */
 
 import { randomUUID } from 'node:crypto';
@@ -22,7 +22,9 @@ import {
   DefaultEventBus,
 } from '../../core/index.js';
 import type { EventBus, EventBusAgentEvent as AgentEvent } from '../../core/index.js';
-import type { AgentEngine, RunConfig } from '../../core/engine.js';
+import type { Agent } from '../../core/loop/agent.js';
+import type { ReliabilityHarness } from '../reliability/run-agent.js';
+import { runAgentWithReliability } from '../reliability/run-agent.js';
 import type { Message } from '../../core/types.js';
 import type {
   Planner,
@@ -57,7 +59,7 @@ export const SupervisorEvents = {
 /**
  * AgentSupervisor — Agent 的"大脑"
  *
- * 持续运行，接收事件，通过 Planner 决策，通过 AgentEngine 执行。
+ * 持续运行，接收事件，通过 Planner 决策，通过 Agent 执行。
  */
 export class AgentSupervisor {
   readonly id: string;
@@ -69,7 +71,8 @@ export class AgentSupervisor {
   private _state: AgentState;
   private _planner: Planner;
   private _reflector?: Reflector;
-  private _engine?: AgentEngine;
+  private _agent?: Agent;
+  private _harness?: ReliabilityHarness;
   private _events: EventBus;
   private _idleTimeoutMs: number;
   private _maxExecutionHistory: number;
@@ -128,14 +131,15 @@ export class AgentSupervisor {
    *
    * 开始持续运行的认知循环。
    *
-   * @param engine - AgentEngine 实例（用于单次推理）
+   * @param agent - Agent 实例（用于单次推理）
    */
-  async start(engine: AgentEngine): Promise<void> {
+  async start(agent: Agent, harness: ReliabilityHarness): Promise<void> {
     if (this._running) {
       throw new Error(`Supervisor ${this.id} is already running`);
     }
 
-    this._engine = engine;
+    this._agent = agent;
+    this._harness = harness;
     this._running = true;
     this._state.stats.startTime = Date.now();
 
@@ -257,18 +261,21 @@ export class AgentSupervisor {
     try {
       switch (step.type) {
         case 'llm_call': {
-          if (!this._engine) {
-            return { success: false, error: 'No AgentEngine configured', durationMs: Date.now() - start };
+          if (!this._agent || !this._harness) {
+            return { success: false, error: 'No Agent configured', durationMs: Date.now() - start };
           }
-          // 用 AgentEngine 执行一次推理
+          // 用 Agent 执行一次推理
           const messages = this._buildMessages(step, triggerEvents);
-          const config: RunConfig = {
-            systemPrompt: step.params.systemPrompt as string ?? '',
-          };
+          this._agent.context.systemPrompt = step.params.systemPrompt as string ?? '';
+          this._agent.context.messages = messages;
           let response = '';
-          for await (const event of this._engine.run(messages, config)) {
-            if (event.type === 'llm_response' && event.data?.content) {
-              response = event.data.content as string;
+          for await (const event of runAgentWithReliability(
+            this._agent.context,
+            { model: this._agent.model },
+            this._harness,
+          )) {
+            if (event.type === 'assistant_message') {
+              response = typeof event.message.content === 'string' ? event.message.content : '';
             }
           }
           return {
@@ -279,7 +286,7 @@ export class AgentSupervisor {
         }
 
         case 'tool_call': {
-          // 工具调用由 AgentEngine 在推理中处理
+          // 工具调用由 Agent 在推理中处理
           // 这里是直接调用的场景（不经过 LLM）
           return {
             success: true,
@@ -401,10 +408,11 @@ export class AgentSupervisor {
  */
 export async function startSupervisor(
   config: SupervisorConfig,
-  engine: AgentEngine,
+  agent: Agent,
+  harness: ReliabilityHarness,
   events?: EventBus,
 ): Promise<AgentSupervisor> {
   const supervisor = new AgentSupervisor(config, events);
-  supervisor.start(engine).catch(() => {});
+  supervisor.start(agent, harness).catch(() => {});
   return supervisor;
 }

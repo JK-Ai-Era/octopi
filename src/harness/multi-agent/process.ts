@@ -1,7 +1,7 @@
 /**
  * AgentProcess — Agent 进程运行时
  *
- * 将 AgentEngine 的一次运行包装为可追踪的进程。
+ * 将 Agent 的一次运行包装为可追踪的进程。
  * 支持父子关系、完成通知（announce）、上下文分叉（fork）。
  *
  * 设计原则：
@@ -14,7 +14,9 @@
 import { randomUUID } from 'node:crypto';
 import type { EventBus } from '../../core/event-bus.js';
 import type { Message } from '../../core/types.js';
-import type { AgentEngine, RunConfig } from '../../core/engine.js';
+import type { Agent } from '../../core/loop/agent.js';
+import type { ReliabilityHarness } from '../reliability/run-agent.js';
+import { runAgentWithReliability } from '../reliability/run-agent.js';
 import type { AgentEvent } from '../../core/event-bus.js';
 import type { AgentInfo } from '../../core/interfaces/agent-registry.js';
 
@@ -78,8 +80,10 @@ export interface AgentProcessConfig {
   parentId?: string;
   /** Agent 信息 */
   agentInfo: AgentInfo;
-  /** Agent 引擎 */
-  engine: AgentEngine;
+  /** Agent 实例 */
+  agent: Agent;
+  /** 可靠性 Harness */
+  harness: ReliabilityHarness;
   /** EventBus（用于 announce） */
   events: EventBus;
   /** 系统提示词 */
@@ -121,7 +125,8 @@ export class AgentProcess {
   readonly parentId?: string;
   readonly agentInfo: AgentInfo;
 
-  private _engine: AgentEngine;
+  private _agent: Agent;
+  private _harness: ReliabilityHarness;
   private _events: EventBus;
   private _systemPrompt: string;
   private _timeoutMs: number;
@@ -139,7 +144,8 @@ export class AgentProcess {
     this.id = config.id ?? `proc-${randomUUID().slice(0, 8)}`;
     this.parentId = config.parentId;
     this.agentInfo = config.agentInfo;
-    this._engine = config.engine;
+    this._agent = config.agent;
+    this._harness = config.harness;
     this._events = config.events;
     this._systemPrompt = config.systemPrompt;
     this._timeoutMs = config.timeoutMs ?? 0;
@@ -236,24 +242,14 @@ export class AgentProcess {
 
   private async _runAsync(messages: Message[]): Promise<void> {
     try {
-      const runConfig: RunConfig = {
-        systemPrompt: this._systemPrompt,
-        agentId: this.agentInfo.id,
-        sessionId: this.id,
-      };
-
-      let content = '';
-      const allMessages: Message[] = [...messages];
-
       // 带超时的运行
-      const runPromise = this._collectRun(messages, runConfig);
+      const runPromise = this._collectRun(messages);
       const result = this._timeoutMs > 0
         ? await this._withTimeout(runPromise, this._timeoutMs)
         : await runPromise;
 
-      content = result.content;
       this._result = {
-        content,
+        content: result.content,
         messages: result.messages,
         usage: result.usage,
         durationMs: this.durationMs ?? 0,
@@ -282,19 +278,34 @@ export class AgentProcess {
 
   private async _collectRun(
     messages: Message[],
-    runConfig: RunConfig,
   ): Promise<{ content: string; messages: Message[]; usage?: AgentProcessResult['usage'] }> {
     let content = '';
     let usage: AgentProcessResult['usage'];
+    let errorReason: string | undefined;
 
-    for await (const event of this._engine.run(messages, runConfig, this._abortController?.signal)) {
-      if (event.type === 'turn.end' && event.data) {
-        content = (event.data.content as string) ?? '';
-        usage = event.data.usage as AgentProcessResult['usage'];
+    // 同步消息到 Agent 上下文
+    this._agent.context.messages = messages;
+
+    for await (const event of runAgentWithReliability(
+      this._agent.context,
+      { model: this._agent.model },
+      this._harness,
+      this._abortController?.signal,
+    )) {
+      if (event.type === 'assistant_message') {
+        content = typeof event.message.content === 'string' ? event.message.content : '';
+      }
+      // 检测错误退出
+      if (event.type === 'agent_end' && event.reason === 'error') {
+        errorReason = event.error instanceof Error ? event.error.message : String(event.error ?? 'Unknown error');
       }
     }
 
-    return { content, messages, usage };
+    if (errorReason) {
+      throw new Error(errorReason);
+    }
+
+    return { content, messages: this._agent.context.messages, usage };
   }
 
   private _buildAnnounce(): AgentProcessAnnounce {

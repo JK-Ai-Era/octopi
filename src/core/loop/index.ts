@@ -2,7 +2,7 @@
  * Agent Loop v3 — 统一导出
  *
  * 这是 Octopi-engine 的新核心层。
- * 从旧的 AgentEngine (1833行) 提取为纯函数 + Agent 类。
+ * 从旧引擎提取为纯函数 + Agent 类。
  */
 
 // ── 核心循环 ──

@@ -17,9 +17,8 @@ import { OpenAIProvider } from '../../src/integration/providers/openai.js';
 import { JsonlSessionStore } from '../../src/integration/storage/jsonl.js';
 import { getBuiltinTools } from '../../src/harness/tools/builtin.js';
 import { initOctopi } from '../../src/init.js';
-import type { RunConfig } from '../../src/core/engine.js';
+import type { RunConfig } from '../../src/harness/runner.js';
 import type { SessionAwareRunner } from '../../src/harness/runner.js';
-import type { AgentEngine } from '../../src/core/engine.js';
 
 // 跳过条件：没有 API key 时跳过
 const API_KEY = process.env.TEST_API_KEY;
@@ -29,7 +28,7 @@ const skipIfNoKey = API_KEY ? describe : describe.skip;
 
 skipIfNoKey('Chat Simulation', () => {
   let tempDir: string;
-  let engine: AgentEngine;
+  let agent: import('../../src/core/loop/agent.js').Agent;
   let runner: SessionAwareRunner;
   let workspaceDir: string;
   const sessionId = `test:sim:${Date.now()}`;
@@ -64,7 +63,7 @@ skipIfNoKey('Chat Simulation', () => {
     }
 
     const built = await builder.build();
-    engine = built.engine;
+    agent = built.agent;
     runner = built.runner;
   });
 

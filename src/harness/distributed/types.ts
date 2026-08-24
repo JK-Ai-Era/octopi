@@ -7,7 +7,19 @@
 
 import type { Message, RegisteredTool } from '../../core/types.js';
 import type { EventBus, AgentEvent } from '../../core/event-bus.js';
-import type { RunConfig } from '../../core/engine.js';
+
+/**
+ * 分布式智能体的运行配置
+ *
+ * 从主 Agent 透传的关键配置，不依赖 engine.ts 的 RunConfig。
+ */
+export interface AgentRunConfig {
+  systemPrompt?: string;
+  agentId?: string;
+  sessionId?: string;
+  model?: string;
+  cwd?: string;
+}
 
 // ── TaskSummary ──
 
@@ -139,8 +151,8 @@ export interface TriggerContext {
 export interface AgentContext {
   /** 主 Agent 的消息数组引用 */
   messages: Message[];
-  /** 主 Agent 的 RunConfig */
-  runConfig: RunConfig;
+  /** 主 Agent 的运行配置 */
+  runConfig: AgentRunConfig;
   /** 当前待执行的工具调用（intercept 模式使用） */
   pendingToolCall?: { name: string; arguments: Record<string, unknown> };
   /** EventBus（用于 notify 模式发送事件） */

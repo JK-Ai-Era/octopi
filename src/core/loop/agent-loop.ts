@@ -12,7 +12,7 @@
 
 import { randomUUID } from 'node:crypto';
 import type { Message, ToolCall, TokenUsage } from '../types.js';
-import type { LLMMessage, ToolDefinition as ModelToolDef } from '../interfaces/model-provider.js';
+import type { LLMMessage, LLMResponse, ToolDefinition as ModelToolDef } from '../interfaces/model-provider.js';
 import type {
   AgentContext,
   AgentLoopConfig,
@@ -88,21 +88,42 @@ export async function* agentLoop(
     // ── 3. 调用 LLM（带超时保护 + 流式输出） ──
     observer?.onLLMStart?.({ model: currentModel.name });
 
-    const callResult = callModel(
-      currentModel,
-      llmMessages,
-      toolDefs,
-      signal,
-      { idleTimeoutMs, absoluteTimeoutMs },
-    );
+    let response: LLMResponse;
+    try {
+      const callResult = callModel(
+        currentModel,
+        llmMessages,
+        toolDefs,
+        signal,
+        { idleTimeoutMs, absoluteTimeoutMs },
+      );
 
-    // 透传流式事件
-    let result = await callResult.next();
-    while (!result.done) {
-      yield result.value; // llm_stream_delta / stream.fallback_to_sync 等
-      result = await callResult.next();
+      // 透传流式事件
+      let result = await callResult.next();
+      while (!result.done) {
+        yield result.value; // llm_stream_delta / stream.fallback_to_sync 等
+        result = await callResult.next();
+      }
+      response = result.value; // 最终的 LLMResponse
+    } catch (llmError) {
+      // LLM 调用失败（stream + chat 都失败）：通知 onError，让 Harness 决定重试/中止
+      const classified = classifyError(llmError);
+      if (onError) {
+        const action = await onError(classified);
+        if (action === 'retry') {
+          yield { type: 'turn_end', hasToolCalls: false, error: true };
+          continue; // 重试当前迭代
+        }
+        if (action === 'abort') {
+          yield { type: 'agent_end', reason: 'error', timestamp: Date.now(), error: llmError };
+          return;
+        }
+        // action === 'throw'：继续抛出
+      }
+      // 没有 onError 或 onError 返回 'throw'：yield 错误事件后退出
+      yield { type: 'agent_end', reason: 'error', timestamp: Date.now(), error: llmError };
+      return;
     }
-    const response = result.value; // 最终的 LLMResponse
 
     observer?.onLLMEnd?.({ model: currentModel.name, usage: response.usage });
 

@@ -19,7 +19,9 @@
 import { randomUUID } from 'node:crypto';
 import type { EventBus } from '../../core/event-bus.js';
 import type { Message } from '../../core/types.js';
-import type { AgentEngine, RunConfig } from '../../core/engine.js';
+import type { Agent } from '../../core/loop/agent.js';
+import type { ReliabilityHarness } from '../reliability/run-agent.js';
+import { runAgentWithReliability } from '../reliability/run-agent.js';
 import type { AgentRegistry, AgentInfo } from '../../core/interfaces/agent-registry.js';
 import type { SwarmConfig, SwarmAgent, SwarmTask } from './types.js';
 import { SwarmEvents } from './types.js';
@@ -306,15 +308,20 @@ export class AgentSwarm {
         timestamp: Date.now(),
       }];
 
-      const runConfig: RunConfig = {
-        systemPrompt: `You are agent "${agent.info.name}" in a multi-agent swarm. Your capabilities: ${agent.info.capabilities.join(', ')}. Execute the following task:\n\n${task.description}`,
-        agentId: agent.info.id,
-      };
+      const systemPrompt = `You are agent "${agent.info.name}" in a multi-agent swarm. Your capabilities: ${agent.info.capabilities.join(', ')}. Execute the following task:\n\n${task.description}`;
+
+      // 同步 systemPrompt 到 Agent 上下文
+      agent.agent.context.systemPrompt = systemPrompt;
+      agent.agent.context.messages = messages;
 
       let result = '';
-      for await (const event of agent.engine.run(messages, runConfig)) {
-        if (event.type === 'turn.end' && event.data?.content) {
-          result = event.data.content as string;
+      for await (const event of runAgentWithReliability(
+        agent.agent.context,
+        { model: agent.agent.model },
+        agent.harness,
+      )) {
+        if (event.type === 'assistant_message') {
+          result = typeof event.message.content === 'string' ? event.message.content : '';
         }
       }
 

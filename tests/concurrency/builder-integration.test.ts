@@ -16,22 +16,17 @@ function createMockProvider(name: string, defaultModel = 'mock-model'): ModelPro
 }
 
 describe('Builder ProviderPool integration', () => {
-  it('should build engine with single provider (no pool)', async () => {
+  it('should build agent with single provider (no pool)', async () => {
     const provider = createMockProvider('single');
     const builder = new AgentBuilder()
       .model(provider)
       .systemPrompt('test');
 
-    const { engine } = await builder.build();
-    expect(engine.deps.model.name).toBe('single');
-
-    // cleanup
-    if ('destroy' in engine.deps.model) {
-      (engine.deps.model as any).destroy();
-    }
+    const { agent } = await builder.build();
+    expect(agent.model.name).toBe('single');
   });
 
-  it('should build engine with ProviderPool when concurrency configured', async () => {
+  it('should build agent with ProviderPool when concurrency configured', async () => {
     const p1 = createMockProvider('key-1');
     const p2 = createMockProvider('key-2');
 
@@ -50,17 +45,12 @@ describe('Builder ProviderPool integration', () => {
         },
       });
 
-    const { engine } = await builder.build();
+    const { agent } = await builder.build();
 
     // model 应该是 ProviderPool
-    expect(engine.deps.model.name).toBe('provider-pool');
-    expect((engine.deps.model as any).getSlotMetrics).toBeDefined();
-    expect((engine.deps.model as any).getSlotMetrics()).toHaveLength(2);
-
-    // cleanup
-    if ('destroy' in engine.deps.model) {
-      (engine.deps.model as any).destroy();
-    }
+    expect(agent.model.name).toBe('provider-pool');
+    expect((agent.model as any).getSlotMetrics).toBeDefined();
+    expect((agent.model as any).getSlotMetrics()).toHaveLength(2);
   });
 
   it('should use single provider when concurrency not configured', async () => {
@@ -73,10 +63,10 @@ describe('Builder ProviderPool integration', () => {
       .provider('key-2', p2)
       .systemPrompt('test');
 
-    const { engine } = await builder.build();
+    const { agent } = await builder.build();
 
     // 没配 concurrency → 用原始 provider
-    expect(engine.deps.model.name).toBe('key-1');
+    expect(agent.model.name).toBe('key-1');
   });
 
   it('should support providers() bulk registration', async () => {
@@ -97,12 +87,8 @@ describe('Builder ProviderPool integration', () => {
         },
       });
 
-    const { engine } = await builder.build();
-    expect(engine.deps.model.name).toBe('provider-pool');
-
-    if ('destroy' in engine.deps.model) {
-      (engine.deps.model as any).destroy();
-    }
+    const { agent } = await builder.build();
+    expect(agent.model.name).toBe('provider-pool');
   });
 
   it('should pass global rateLimit config to ProviderPool', async () => {
@@ -119,11 +105,9 @@ describe('Builder ProviderPool integration', () => {
         },
       });
 
-    const { engine } = await builder.build();
-    const pool = engine.deps.model as any;
+    const { agent } = await builder.build();
+    const pool = agent.model as any;
     const metrics = pool.getSlotMetrics();
     expect(metrics[0].rateLimiter.availableTokens).toBe(10); // burstCapacity
-
-    pool.destroy();
   });
 });

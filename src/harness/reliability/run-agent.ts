@@ -211,10 +211,26 @@ export async function* runAgentWithReliability(
   const state = createInitialState();
   const relConfig = { ...DEFAULT_RELIABILITY_CONFIG, ...harness.config };
 
+  // ── 用于空响应/planning-only 重试的消息缓冲 ──
+  // onTurnComplete 将 steer 消息推入此数组，getFollowUpMessages 返回给 agentLoop
+  // 使循环在无 tool_calls 时也能继续执行重试
+  const pendingFollowUps: Message[] = [];
+
   // ── 注入安全检查到 beforeToolCall ──
   const originalBeforeToolCall = config.beforeToolCall;
   const wrappedConfig: AgentLoopConfig = {
     ...config,
+
+    // getFollowUpMessages：返回 reliability 层注入的 steer 消息
+    getFollowUpMessages: async () => {
+      const msgs = [...pendingFollowUps];
+      pendingFollowUps.length = 0;
+      if (config.getFollowUpMessages) {
+        const callerMsgs = await config.getFollowUpMessages();
+        msgs.push(...callerMsgs);
+      }
+      return msgs;
+    },
 
     // beforeToolCall：SecurityGuard 检查 + 原始回调
     beforeToolCall: async (ctx, signal) => {
@@ -279,7 +295,7 @@ export async function* runAgentWithReliability(
         if (state.planningOnlyAttempts < relConfig.planningRetry.maxAttempts) {
           state.planningOnlyAttempts++;
           if (!state.planningOnlySteerInjected) {
-            ctx.context.messages.push({
+            pendingFollowUps.push({
               role: 'user',
               content: `[System: ${relConfig.planningRetry.steerInstruction}]`,
               timestamp: Date.now(),
@@ -297,7 +313,7 @@ export async function* runAgentWithReliability(
         if (state.emptyResponseAttempts < relConfig.emptyResponseRetry.maxAttempts) {
           state.emptyResponseAttempts++;
           if (!state.emptyResponseSteerInjected) {
-            ctx.context.messages.push({
+            pendingFollowUps.push({
               role: 'user',
               content: `[System: ${relConfig.emptyResponseRetry.steerInstruction}]`,
               timestamp: Date.now(),
@@ -315,11 +331,17 @@ export async function* runAgentWithReliability(
       if (noopCount > 0) {
         state.consecutiveNoops += noopCount;
         if (state.consecutiveNoops >= relConfig.noopThreshold) {
-          ctx.context.messages.push({
-            role: 'user',
-            content: '[System: Multiple tool calls produced no result. Please try a different approach.]',
-            timestamp: Date.now(),
-          });
+          // 第一次达到阈值：注入 hint
+          if (state.consecutiveNoops === relConfig.noopThreshold) {
+            ctx.context.messages.push({
+              role: 'user',
+              content: '[System: Multiple tool calls produced no result. Please try a different approach.]',
+              timestamp: Date.now(),
+            });
+          } else {
+            // 超过阈值：标记停止
+            (state as any)._noopLoopStop = true;
+          }
         }
       } else {
         state.consecutiveNoops = 0;
@@ -420,7 +442,11 @@ export async function* runAgentWithReliability(
       if ((state as any)._taskSupervisorStop) {
         return true;
       }
-      // 3. 用户的停止条件
+      // 3. No-op 循环超限 → 停止
+      if ((state as any)._noopLoopStop) {
+        return true;
+      }
+      // 4. 用户的停止条件
       if (config.shouldStopAfterTurn) {
         return config.shouldStopAfterTurn(ctx);
       }

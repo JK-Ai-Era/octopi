@@ -1,19 +1,21 @@
 /**
  * SessionAwareRunner — Session 感知的运行器
  *
- * Harness 层组件。在 AgentEngine 之上管理 Session 生命周期：
+ * Harness 层组件。在 Agent + runAgentWithReliability 之上管理 Session 生命周期：
  * - 消息持久化
  * - Session 锁（同一 session 同时只有一个运行）
  * - Daily reset / Idle reset
  * - 并发控制
  *
- * AgentEngine 是无状态的循环引擎，Session 管理在这里。
+ * Agent 是状态管理器，runAgentWithReliability 提供可靠性包装。
  */
 
 import type { Message, Turn, SessionStatus } from '../core/types.js';
 import type { SessionStore, SessionData } from '../core/interfaces/session-store.js';
-import type { AgentEngine, RunConfig } from '../core/engine.js';
-import type { AgentEvent } from '../core/event-bus.js';
+import type { Agent } from '../core/loop/agent.js';
+import type { AgentLoopEvent } from '../core/loop/types.js';
+import type { ReliabilityHarness } from './reliability/run-agent.js';
+import { runAgentWithReliability } from './reliability/run-agent.js';
 import { createSessionStateMachine, type StateMachine } from '../core/state-machine.js';
 
 /**
@@ -75,11 +77,64 @@ const DEFAULT_CONFIG: SessionAwareRunnerConfig = {
   enableDailyReset: true,
 };
 
+export interface RunConfig {
+  systemPrompt: string;
+  agentId?: string;
+  sessionId?: string;
+  model?: string;
+  temperature?: number;
+  cwd?: string;
+  contextWindow?: number;
+  injectedContext?: string;
+}
+
+/**
+ * 适配 AgentLoopEvent → AgentEvent（向后兼容）
+ *
+ * 新架构产出 AgentLoopEvent，旧消费者（Gateway/TUI）期望 AgentEvent。
+ * 此函数桥接两者，避免一次性更新所有下游。
+ */
+function adaptLoopEvent(
+  event: AgentLoopEvent,
+  meta: { agentId: string; sessionId: string },
+  state: { assistantContent: string },
+): import('../core/event-bus.js').AgentEvent | null {
+  switch (event.type) {
+    case 'agent_start':
+      return { type: 'engine.start', timestamp: event.timestamp, agentId: meta.agentId, sessionId: meta.sessionId, data: {} };
+    case 'agent_end':
+      // reason='error' 时映射为 engine.error（向后兼容旧引擎行为）
+      if (event.reason === 'error') {
+        return { type: 'engine.error', timestamp: event.timestamp, agentId: meta.agentId, sessionId: meta.sessionId, data: { error: event.error instanceof Error ? event.error.message : String(event.error ?? 'Unknown error') } };
+      }
+      return { type: 'engine.end', timestamp: event.timestamp, agentId: meta.agentId, sessionId: meta.sessionId, data: { reason: event.reason } };
+    case 'turn_start':
+      return { type: 'iteration.start', timestamp: event.timestamp, data: {} };
+    case 'assistant_message':
+      state.assistantContent = typeof event.message.content === 'string' ? event.message.content : '';
+      return null;
+    case 'turn_end':
+      return { type: 'turn.end', timestamp: Date.now(), data: { content: state.assistantContent } };
+    case 'llm_stream_delta':
+      return { type: 'llm_stream_delta', timestamp: event.timestamp, data: event.data };
+    case 'tool_start':
+      return { type: 'tool.exec.start', timestamp: event.timestamp, data: { toolCallId: event.toolCall.id, toolName: event.toolCall.name } };
+    case 'tool_end':
+      return { type: 'tool.exec.end', timestamp: event.timestamp, data: { toolCallId: event.toolCall.id, toolName: event.toolCall.name, hasError: !!event.result.isError } };
+    case 'stream.fallback_to_sync':
+    case 'stream.fallback_failed':
+      return { type: event.type, timestamp: event.timestamp, data: event.data };
+    default:
+      return null;
+  }
+}
+
 /**
  * SessionAwareRunner
  */
 export class SessionAwareRunner {
-  private engine: AgentEngine;
+  private agent: Agent;
+  private harness: ReliabilityHarness;
   private store: SessionStore;
   /** 锁状态：true = 已锁定，false = 空闲 */
   private locked = new Map<string, boolean>();
@@ -93,8 +148,9 @@ export class SessionAwareRunner {
   /** EventBus 引用（用于分布式智能体上下文） */
   private _events?: import('../core/event-bus.js').EventBus;
 
-  constructor(engine: AgentEngine, store: SessionStore, config?: SessionAwareRunnerConfig & { events?: import('../core/event-bus.js').EventBus }) {
-    this.engine = engine;
+  constructor(agent: Agent, harness: ReliabilityHarness, store: SessionStore, config?: SessionAwareRunnerConfig & { events?: import('../core/event-bus.js').EventBus }) {
+    this.agent = agent;
+    this.harness = harness;
     this.store = store;
     this.config = { ...DEFAULT_CONFIG, ...config };
     this._events = config?.events;
@@ -112,14 +168,14 @@ export class SessionAwareRunner {
    * @param input - 用户输入消息
    * @param runConfig - Agent 运行配置
    * @param signal - 中止信号
-   * @yields AgentEvent 事件流
+   * @yields AgentEvent 事件流（向后兼容格式）
    */
   async *handle(
     sessionId: string,
     input: Message,
     runConfig: RunConfig,
     signal?: AbortSignal,
-  ): AsyncGenerator<AgentEvent> {
+  ): AsyncGenerator<import('../core/event-bus.js').AgentEvent> {
     // 1. 并发门控（如果配置了 SessionGate）
     const gate = this.config.sessionGate;
     let gateRelease: (() => void) | undefined;
@@ -131,16 +187,16 @@ export class SessionAwareRunner {
     const release = await this.acquireLock(sessionId);
 
     try {
-      // 2. 加载或创建 session
+      // 3. 加载或创建 session
       let session = await this.store.load(sessionId);
       if (!session) {
         session = this.createSession(sessionId, runConfig.agentId ?? 'default');
       }
 
-      // 3. 检查 session 是否需要重置
+      // 4. 检查 session 是否需要重置
       this.checkSessionReset(session);
 
-      // 4. 追加用户消息
+      // 5. 追加用户消息
       session.messages.push(input);
       session.meta.lastInteractionAt = Date.now();
       session.meta.updatedAt = Date.now();
@@ -150,8 +206,7 @@ export class SessionAwareRunner {
       sm.transition('processing');
       session.meta.status = sm.state;
 
-      // 5. 任务决策（如果配置了 TaskDecisionProvider）
-      //    在用户消息到达时调用一次，不在工具调用循环中重复调用
+      // 6. 任务决策（如果配置了 TaskDecisionProvider）
       let effectiveRunConfig = runConfig;
       if (this.config.taskDecisionProvider && input.role === 'user') {
         try {
@@ -166,12 +221,11 @@ export class SessionAwareRunner {
             };
           }
         } catch (err) {
-          // 任务决策失败不阻塞主流程
           console.warn('[SessionAwareRunner] TaskDecisionProvider failed:', err);
         }
       }
 
-      // 6. 应用分布式智能体的待处理注入
+      // 7. 应用分布式智能体的待处理注入
       if (this._distributedRuntime) {
         if (this._events) {
           this._distributedRuntime.setMainAgentContext({
@@ -183,54 +237,73 @@ export class SessionAwareRunner {
         this._distributedRuntime.applyPendingInjections(session.messages);
       }
 
-      // 7. 运行 AgentEngine
+      // 8. 同步 session 消息到 Agent 上下文
+      this.agent.context.messages = session.messages;
+      const basePrompt = effectiveRunConfig.systemPrompt || this.agent.context.systemPrompt || '';
+      if (effectiveRunConfig.injectedContext) {
+        this.agent.context.systemPrompt = basePrompt + '\n\n' + effectiveRunConfig.injectedContext;
+      } else if (effectiveRunConfig.systemPrompt) {
+        this.agent.context.systemPrompt = effectiveRunConfig.systemPrompt;
+      }
+
+      // 更新 harness 的 sessionId/agentId（用于检查点）
+      this.harness.sessionId = sessionId;
+      this.harness.agentId = effectiveRunConfig.agentId ?? 'default';
+
+      // 9. 运行 Agent（runAgentWithReliability 包装）
       let hasTurnEnd = false;
       let streamedContent = '';
       let lastUsage: any = undefined;
+      const meta = { agentId: effectiveRunConfig.agentId ?? 'default', sessionId };
+      const adaptState = { assistantContent: '' };
 
-      for await (const event of this.engine.run(session.messages, effectiveRunConfig, signal)) {
-        yield event;
+      for await (const loopEvent of runAgentWithReliability(
+        this.agent.context,
+        { model: this.agent.model },
+        this.harness,
+        signal,
+      )) {
+        // 适配事件格式（向后兼容）
+        const adapted = adaptLoopEvent(loopEvent, meta, adaptState);
+        if (adapted) yield adapted;
 
-        // 收集流式内容（用于引擎异常退出时的 fallback）
-        if (event.type === 'llm_stream_delta' && event.data?.delta) {
-          streamedContent += event.data.delta as string;
+        // 收集流式内容
+        if (loopEvent.type === 'llm_stream_delta' && loopEvent.data?.delta) {
+          streamedContent += loopEvent.data.delta;
         }
 
-        // 如果是 turn.end，记录 turn
-        if (event.type === 'turn.end' && event.data) {
-          hasTurnEnd = true;
-          lastUsage = event.data.usage;
-          const turn: Turn = {
-            id: `turn_${Date.now()}`,
-            input: session.messages.slice(0, -1),
-            output: {
-              role: 'assistant',
-              content: event.data.content as string,
-              timestamp: Date.now(),
-            },
-            usage: event.data.usage as any,
-            durationMs: 0,
-            model: runConfig.model ?? 'unknown',
-            timestamp: Date.now(),
-          };
-          session.turns.push(turn);
+        // 捕获 assistant 消息内容
+        if (loopEvent.type === 'assistant_message') {
+          adaptState.assistantContent = typeof loopEvent.message.content === 'string' ? loopEvent.message.content : '';
+        }
 
-          // 追加 assistant 消息到 session
-          session.messages.push({
-            role: 'assistant',
-            content: event.data.content as string,
-            timestamp: Date.now(),
-          });
+        // turn.end → 记录 turn
+        if (loopEvent.type === 'turn_end') {
+          hasTurnEnd = true;
+          const content = adaptState.assistantContent || streamedContent;
+          if (content) {
+            session.turns.push({
+              id: `turn_${Date.now()}`,
+              input: session.messages.slice(0, -1),
+              output: { role: 'assistant', content, timestamp: Date.now() },
+              usage: lastUsage,
+              durationMs: 0,
+              model: effectiveRunConfig.model ?? 'unknown',
+              timestamp: Date.now(),
+            });
+          }
         }
       }
 
-      // 6. 引擎异常退出时的 session 一致性修复
-      //    如果引擎以 budget.exceeded 或 engine.error 退出，没有 yield turn.end，
-      //    需要将已流式输出的内容保存到 session，避免下次加载时上下文断裂。
+      // 10. 同步 Agent 上下文回 session
+      //     runAgentWithReliability 修改了 agent.context.messages（原地）
+      //     将新增的消息同步回 session
+      session.messages = this.agent.context.messages;
+
+      // 11. 引擎异常退出时的 session 一致性修复
       if (!hasTurnEnd) {
         const fallbackContent = streamedContent || '';
         if (fallbackContent) {
-          // 有流式内容但没有 turn.end → 保存为 assistant 消息
           session.messages.push({
             role: 'assistant',
             content: fallbackContent,
@@ -239,21 +312,16 @@ export class SessionAwareRunner {
           session.turns.push({
             id: `turn_${Date.now()}`,
             input: session.messages.slice(0, -1),
-            output: {
-              role: 'assistant',
-              content: fallbackContent,
-              timestamp: Date.now(),
-            },
+            output: { role: 'assistant', content: fallbackContent, timestamp: Date.now() },
             usage: lastUsage,
             durationMs: 0,
-            model: runConfig.model ?? 'unknown',
+            model: effectiveRunConfig.model ?? 'unknown',
             timestamp: Date.now(),
           });
         }
-        // 即使没有内容，也标记 session 状态，不让它卡在 'processing'
       }
 
-      // 7. 持久化
+      // 12. 持久化
       sm.transition('idle');
       session.meta.status = sm.state;
       session.meta.updatedAt = Date.now();
@@ -274,7 +342,7 @@ export class SessionAwareRunner {
       throw err;
     } finally {
       release();
-      gateRelease?.();  // 释放 SessionGate 通行证
+      gateRelease?.();
     }
   }
 

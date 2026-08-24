@@ -20,7 +20,6 @@ import type { ModelProvider } from '../core/interfaces/model-provider.js';
 import type { SessionStore } from '../core/interfaces/session-store.js';
 import type { IterationBudgetConfig } from '../core/budget.js';
 import { AgentBuilder } from './builder.js';
-import type { AgentEngine } from '../core/engine.js';
 import type { SessionAwareRunner } from './runner.js';
 import { SecurityPresets } from './security/policy.js';
 import type { SecurityGuardConfig } from '../core/security-guard.js';
@@ -33,8 +32,10 @@ import { DefaultBudgetAllocator } from './context/budget-allocator.js';
 
 // ── 结果类型 ──
 
+import type { Agent } from '../core/loop/agent.js';
+
 export interface BuiltAgent {
-  engine: AgentEngine;
+  agent: Agent;
   runner: SessionAwareRunner;
   agentConfig: AgentConfig;
 }
@@ -289,9 +290,11 @@ async function buildAgent(
   }
 
   // ── Build ──
-  const { engine, runner } = await builder.build();
+  const built = await builder.build();
+  const agent = built.agent;
+  const runner = built.runner;
 
-  return { engine, runner, agentConfig };
+  return { agent, runner, agentConfig };
 }
 
 /**
