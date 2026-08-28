@@ -4,11 +4,18 @@
  * Agent 循环中的所有关键节点都会发射事件。
  * Harness 层和 Integration 层通过订阅事件实现审计、监控、调试。
  *
- * 设计要点：
- * - 同步发射，不阻塞 Agent 循环
- * - 支持通配符订阅（'*' 匹配所有事件）
- * - Disposable 模式，方便取消订阅
- * - NoopEventBus 的开销为零
+ * 架构说明：
+ * - EventBus 接口：可替换的契约
+ * - DefaultEventBus / ThrottledEventBus / NoopEventBus：内置默认实现，
+ *   供 Core 内部组件（SecurityGuard、IterationBudget、AsyncTask、ProcessModel）使用，
+ *   Harness 层可通过 Builder 注入替换为自定义实现
+ *
+ * 两套事件系统共存说明：
+ * - yield-based (AgentLoopEvent): 点对点，循环 → 调用方，同步拉取
+ * - emit-based (EventBus): 一对多广播，基础设施/策略事件
+ * - 桥接点：SessionAwareRunner.handle() 将循环事件广播到 EventBus（跳过 llm_stream_delta）
+ * - EventBus 被 Core 内部 4 个模块依赖（SecurityGuard、Budget、AsyncTask、ProcessModel）
+ * - 远期：EventBus 实现迁移到 Harness 层，Core 只保留接口
  */
 
 // ── 事件类型 ──

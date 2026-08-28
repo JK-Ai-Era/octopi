@@ -15,7 +15,7 @@ import type { AgentLoopEvent } from '../src/core/loop/types.js';
 import type { ModelProvider, LLMRequest, LLMResponse, LLMStreamChunk } from '../src/core/interfaces/model-provider.js';
 import type { Message, RegisteredTool } from '../src/core/types.js';
 import { DefaultEventBus, NoopEventBus } from '../src/core/event-bus.js';
-import { DefaultSecurityGuard } from '../src/core/security-guard.js';
+import { DefaultSecurityGuard } from '../src/harness/security/default-security-guard.js';
 import { IterationBudget } from '../src/core/budget.js';
 
 // ── Helper ──

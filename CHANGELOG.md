@@ -1,3 +1,82 @@
+## v0.7.1 (2026-08-29)
+
+### refactor(core): Core 层架构整理 — 分层边界收敛 + 事件桥接
+
+基于系统性评估，对 Core 层进行 5 阶段结构调整，修正分层边界、消除类型混乱、建立事件桥接。
+所有变更保持向后兼容（re-export），公共 API 零破坏。
+
+#### Phase 1: types.ts 拆分
+
+576 行的类型大杂烩拆为 12 个按职责命名的子模块，`types.ts` 变为 36 行 barrel re-export。
+
+- `types/messages.ts` — 消息系统（Message, ContentBlock, ToolCall, ToolResult）
+- `types/agent-definition.ts` — Agent 定义（AgentPersona, ModelConfig, AgentDefinition）
+- `types/session.ts` — Session（SessionStatus, SessionMeta）
+- `types/turn.ts` — Turn（TokenUsage, Turn）
+- `types/tools.ts` — 工具系统（ToolDefinition, RegisteredTool, ToolHandler）
+- `types/skills.ts` — Skill 系统（SkillDefinition, SkillManager）
+- `types/channels.ts` — Channel Adapter（re-export 自 integration 层）
+- `types/hooks.ts` — Plugin Hooks（re-export 自 harness 层）
+- `types/events.ts` — Agent Event（re-export 自 harness 层）
+- `types/gateway-config.ts` — Gateway 配置（re-export 自 integration 层）
+- `types/queue-mode.ts` — QueueMode（re-export 自 harness 层）
+- `types/thinking-level.ts` — ThinkingLevel（re-export 自 harness 层）
+
+#### Phase 2: 非 Core 类型外迁
+
+将不属于 Core 层的类型迁移到正确层，Core 的 types/ 子文件变为 re-export：
+
+| 类型 | 原位置 | 新位置 |
+|------|--------|--------|
+| QueueMode | core/types | harness/types/queue-mode.ts |
+| ThinkingLevel | core/types | harness/types/thinking-level.ts |
+| HookContext | core/types | harness/types/hook-context.ts |
+| ChannelAdapter/Message/Reply | core/types | integration/types/channels.ts |
+| GatewayConfig | core/types | integration/types/gateway-config.ts |
+
+#### Phase 3: 类型去重
+
+`ErrorReason` / `ClassifiedError` 的规范定义从 `core/loop/types.ts` 移到 `core/interfaces/error-strategy.ts`，
+消除了"接口文件依赖实现文件"的倒置关系。`loop/types.ts` 变为 re-export。
+
+#### Phase 4: SecurityGuard 实现下沉
+
+`DefaultSecurityGuard` 类（~440 行策略实现）从 `core/security-guard.ts` 迁移到 `harness/security/default-security-guard.ts`。
+Core 的 `security-guard.ts` 从 630 行精简到 58 行，只保留接口 re-export + `severityToAction` + `isValidSecurityGuard`。
+
+**修复的安全 BUG：** `isValidSecurityGuard()` 异常时返回 `true`（应为 `false`）。
+原逻辑在 SecurityGuard 实现抛异常时会错误地认为 guard 有效，可能导致安全守卫被绕过。
+
+#### Phase 5: 事件桥接
+
+`SessionAwareRunner.handle()` 新增 EventBus 广播：循环事件适配后同时 emit 到 EventBus（跳过高频 `llm_stream_delta`）。
+EventBus 订阅者（AuditTrail、TriggerEngine、EventCollector）现在可以看到循环事件。
+
+删除 `core/loop/event-adapter.ts`（134 行），桥接逻辑统一内置到 runner.ts。
+
+`core/index.ts` 重写，标注 EventBus / IterationBudget 的废弃方向和迁移计划。
+
+**文件变更：**
+- 新增 `src/core/types/` — 12 个子模块
+- 新增 `src/harness/types/` — 4 个文件（queue-mode, thinking-level, hook-context, index）
+- 新增 `src/integration/types/` — 3 个文件（channels, gateway-config, index）
+- 新增 `src/harness/security/default-security-guard.ts` — 从 core 迁入
+- 修改 `src/core/types.ts` — 576 行 → 36 行 barrel
+- 修改 `src/core/security-guard.ts` — 630 行 → 58 行
+- 修改 `src/core/index.ts` — 重写，标注废弃方向
+- 修改 `src/core/interfaces/error-strategy.ts` — ErrorReason/ClassifiedError 规范定义
+- 修改 `src/core/loop/types.ts` — ErrorReason/ClassifiedError 变为 re-export
+- 修改 `src/core/event-bus.ts` — 更新两套事件系统共存说明
+- 修改 `src/harness/runner.ts` — 新增 EventBus 事件桥
+- 删除 `src/core/loop/event-adapter.ts` — 桥接逻辑内置到 runner.ts
+- 修改 `src/harness/builder.ts` — DefaultSecurityGuard import 路径更新
+- 修改 `src/harness/security/index.ts` — 从新位置导出
+- 修改 `src/integration/gateway/gateway.ts` — DefaultSecurityGuard import 路径更新
+- 修改 `src/index.ts` — DefaultSecurityGuard import 路径更新
+- 修改测试文件 4 个 — import 路径更新
+
+**测试：** 64 文件 1022 测试全通过
+
 ## v0.7.0 (2026-08-24)
 
 ### refactor(core): Phase 6 — 删除旧引擎，彻底迁移到新架构

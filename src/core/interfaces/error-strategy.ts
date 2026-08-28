@@ -2,17 +2,25 @@
  * ErrorStrategy — 错误处理策略接口
  *
  * 职责：决定 Agent 循环中遇到错误时的行为。
- * Core 层在错误发生时调用此接口，由 Harness 层实现具体策略。
+ * Harness 层实现具体策略，通过 Builder 注入。
  *
- * 设计要点：
- * - 每种错误类型有独立的处理方法
- * - 返回值是 discriminated union，Core 据此执行动作
- * - Harness 层可以实现复杂的重试/fallback/降级逻辑
+ * 与 Core 循环层的关系（两层包装）：
+ * - Core 循环 (agentLoop) 使用 OnErrorFn 回调（loop/types.ts）
+ *   OnErrorFn 签名：(error: ClassifiedError) => Promise<'retry' | 'abort' | 'throw'>
+ * - Harness 层的 ErrorStrategy 被包装为 OnErrorFn 注入到循环中
+ *   包装逻辑在 harness/reliability/run-agent.ts：
+ *     onModelError() → retry/abort/fallback/skip 映射为 OnErrorFn 的 retry/abort/throw
+ * - ErrorStrategy 提供更丰富的决策（retry/fallback/skip/abort），
+ *   OnErrorFn 简化为 retry/abort/throw
+ *
+ * 实现方：
+ * - DefaultErrorStrategy（harness/builder.ts 内置，简单规则匹配）
+ * - 用户自定义（通过 AgentBuilder.errorStrategy() 注入）
  */
 
 import type { ToolCall } from '../types.js';
 
-// ── 错误分类 ──
+// ── 错误分类（规范定义在此处，loop/types.ts re-export） ──
 
 /** 错误原因 */
 export type ErrorReason =
@@ -28,13 +36,14 @@ export type ErrorReason =
 /** 分类后的错误 */
 export interface ClassifiedError {
   reason: ErrorReason;
-  provider?: string;
-  model?: string;
-  statusCode?: number;
-  retryAfterMs?: number;
   message: string;
   originalError: unknown;
+  retryAfterMs?: number;
 }
+
+// ── 安全动作（规范定义在 security-guard.ts） ──
+
+import type { SecurityAction, SecurityViolation } from './security-guard.js';
 
 // ── 动作类型 ──
 
@@ -50,13 +59,6 @@ export type OverflowAction =
   | { action: 'compact' }
   | { action: 'truncate'; keepRecent: number }
   | { action: 'abort' };
-
-/** 安全违规动作 */
-export type SecurityAction =
-  | { action: 'block'; reason: string }
-  | { action: 'reject'; reason: string }
-  | { action: 'warn'; reason: string }
-  | { action: 'sanitize'; replacement: string };
 
 // ── 接口定义 ──
 
@@ -90,16 +92,4 @@ export interface ErrorStrategy {
    * @param violation - 违规详情
    */
   onSecurityViolation(violation: SecurityViolation): SecurityAction;
-}
-
-/** 安全违规详情 */
-export interface SecurityViolation {
-  type: 'injection' | 'sensitive_data' | 'policy_violation'
-      | 'command_injection' | 'path_traversal' | 'unauthorized_tool'
-      | 'behavior_anomaly' | 'prompt_leak';
-  severity: 'low' | 'medium' | 'high' | 'critical';
-  description: string;
-  source: 'user_input' | 'tool_output' | 'model_output'
-       | 'tool_call' | 'behavior';
-  range?: { start: number; end: number };
 }

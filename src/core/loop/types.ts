@@ -91,24 +91,9 @@ export interface LoopToolResult {
 // 3. 错误分类
 // ============================================================
 
-/** 错误原因 */
-export type ErrorReason =
-  | 'rate_limit'
-  | 'context_length'
-  | 'auth'
-  | 'billing'
-  | 'network'
-  | 'timeout'
-  | 'server'
-  | 'unknown';
-
-/** 分类后的错误 */
-export interface ClassifiedError {
-  reason: ErrorReason;
-  message: string;
-  originalError: unknown;
-  retryAfterMs?: number;
-}
+// ── 错误分类（规范定义在 interfaces/error-strategy.ts） ──
+import type { ErrorReason, ClassifiedError } from '../interfaces/error-strategy.js';
+export type { ErrorReason, ClassifiedError } from '../interfaces/error-strategy.js';
 
 // ============================================================
 // 4. 回调类型
@@ -193,16 +178,42 @@ export interface LoopObserver {
 }
 
 // ============================================================
-// 6. AgentLoopConfig
+// 6. AgentLoopConfig（按关注点拆分为子接口）
 // ============================================================
+
+/** 工具执行钩子配置 */
+export interface ToolHooksConfig {
+  /** 工具执行前：安全检查/拦截/参数修改。返回 { block: true } 阻止执行。 */
+  beforeToolCall?: BeforeToolCallFn;
+  /** 工具执行后：结果修改/日志/验证。 */
+  afterToolCall?: AfterToolCallFn;
+  /** 工具执行模式：parallel（默认）或 sequential */
+  toolExecution?: 'parallel' | 'sequential';
+}
+
+/** 轮次控制钩子配置 */
+export interface TurnHooksConfig {
+  /** 用户层停止条件（始终被调用，返回 true 停止） */
+  shouldStopAfterTurn?: ShouldStopAfterTurnFn;
+  /** 轮次完成通知（Harness 内部，做副作用，不控制停止） */
+  onTurnComplete?: OnTurnCompleteFn;
+  /** 动态切换 model/context/thinkingLevel */
+  prepareNextTurn?: PrepareNextTurnFn;
+  /** 错误处理（接收已分类的错误） */
+  onError?: OnErrorFn;
+}
 
 /**
  * Agent Loop 配置
  *
  * 核心循环的所有可配置行为都在这里。
  * 不包含可靠性机制（planningRetry、loopDetection 等），这些在 Harness 层。
+ *
+ * 按关注点拆分为子接口：
+ * - ToolHooksConfig: 工具执行钩子
+ * - TurnHooksConfig: 轮次控制钩子
  */
-export interface AgentLoopConfig {
+export interface AgentLoopConfig extends ToolHooksConfig, TurnHooksConfig {
   // ── 核心（唯一必需） ──
   model: ModelProvider;
 
@@ -213,24 +224,6 @@ export interface AgentLoopConfig {
   // ── 上下文变换 ──
   /** LLM 调用前：压缩/注入/修改消息。在 convertToLlm 之前执行。 */
   transformContext?: (messages: Message[], signal?: AbortSignal) => Promise<Message[]>;
-
-  // ── 工具执行回调（3 个扩展点） ──
-  /** 工具执行前：安全检查/拦截/参数修改。返回 { block: true } 阻止执行。 */
-  beforeToolCall?: BeforeToolCallFn;
-  /** 工具执行后：结果修改/日志/验证。 */
-  afterToolCall?: AfterToolCallFn;
-  /** 工具执行模式：parallel（默认）或 sequential */
-  toolExecution?: 'parallel' | 'sequential';
-
-  // ── 轮次控制回调（4 个扩展点） ──
-  /** 用户层停止条件（始终被调用，返回 true 停止） */
-  shouldStopAfterTurn?: ShouldStopAfterTurnFn;
-  /** 轮次完成通知（Harness 内部，做副作用，不控制停止） */
-  onTurnComplete?: OnTurnCompleteFn;
-  /** 动态切换 model/context/thinkingLevel */
-  prepareNextTurn?: PrepareNextTurnFn;
-  /** 错误处理（接收已分类的错误） */
-  onError?: OnErrorFn;
 
   // ── 消息队列（由 Agent 类提供） ──
   /** 获取 steering 消息（当前 turn 结束后注入） */

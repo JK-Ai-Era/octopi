@@ -12,7 +12,7 @@
  * @module
  */
 
-import type { ModelProvider } from './interfaces/model-provider.js';
+import type { ModelProvider } from '../../core/interfaces/model-provider.js';
 import type { CircuitBreaker } from './circuit-breaker.js';
 
 /**
@@ -65,22 +65,4 @@ export function wrapProviderWithCircuitBreaker(
   });
 }
 
-/**
- * 运行时检查对象是否实现了 ModelProvider 接口的关键方法
- *
- * 用于在构造 provider 后验证完整性，作为编译时检查的补充。
- * 在测试和初始化路径中使用。
- */
-export function assertModelProvider(obj: unknown, label = 'provider'): asserts obj is ModelProvider {
-  if (!obj || typeof obj !== 'object') {
-    throw new Error(`[${label}] Expected an object, got ${typeof obj}`);
-  }
-  const p = obj as Record<string, unknown>;
-  if (typeof p.getModelInfo !== 'function') {
-    throw new Error(`[${label}] Missing required method: getModelInfo`);
-  }
-  if (typeof p.getModelInfos !== 'function') {
-    throw new Error(`[${label}] Missing required method: getModelInfos`);
-  }
-  // chat 和 stream 是可选的（provider 可能只支持其中一种）
-}
+

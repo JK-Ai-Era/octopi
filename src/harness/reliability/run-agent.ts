@@ -24,7 +24,6 @@ import type {
   AgentLoopEvent,
   LoopToolResult,
   TurnContext,
-  ClassifiedError,
 } from '../../core/loop/types.js';
 import { classifyError } from '../../core/loop/error-classifier.js';
 import { agentLoop } from '../../core/loop/agent-loop.js';
@@ -182,17 +181,6 @@ function hasStructuredPlanningOnlyFormat(text: string): boolean {
 
   return (PLANNING_ONLY_HEADING_RE.test(lines[0] ?? '') && hasPlanningCueLine) ||
          (bulletLineCount >= 2 && hasPlanningCueLine);
-}
-
-// ── 错误分类适配 ──
-
-function toCoreClassifiedError(error: ClassifiedError): CoreClassifiedError {
-  return {
-    reason: error.reason as CoreClassifiedError['reason'],
-    message: error.message,
-    originalError: error.originalError,
-    retryAfterMs: error.retryAfterMs,
-  };
 }
 
 // ── 核心包装函数 ──
@@ -459,7 +447,7 @@ export async function* runAgentWithReliability(
 
       // ErrorStrategy 决策
       if (harness.errorStrategy) {
-        const action = harness.errorStrategy.onModelError(toCoreClassifiedError(classified), 0);
+        const action = harness.errorStrategy.onModelError(classified, 0);
         if (action.action === 'retry') return 'retry';
         if (action.action === 'abort') return 'abort';
         return 'throw';

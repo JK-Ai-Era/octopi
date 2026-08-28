@@ -4,11 +4,10 @@
  * 职责：强制限制 Agent 循环的资源消耗。
  * 不可绕过，Core 层在每个关键节点检查预算状态。
  *
- * 受限资源：
- * - 迭代次数（每次模型调用算一次迭代）
- * - 工具调用次数
- * - Token 消耗
- * - Wall-clock 时间
+ * 架构说明：
+ * - 内置默认实现，保留在 core 层（依赖 EventBus 发射 BUDGET_EXCEEDED 事件）
+ * - Harness 层可替换为 TaskSupervisor 等更智能的监督机制
+ * - 不移出 core 的原因：budget → event-bus 依赖链，移出会导致循环依赖
  */
 
 import type { EventBus } from './event-bus.js';

@@ -30,21 +30,16 @@ import type { AgentOptions } from '../core/loop/agent.js';
 import { runAgentWithReliability, DEFAULT_RELIABILITY_CONFIG } from './reliability/run-agent.js';
 import type { ReliabilityConfig, ReliabilityHarness } from './reliability/run-agent.js';
 import type {
-  ToolExecutor,
-  ExecutionContext,
-} from '../core/interfaces/tool-executor.js';
-import type {
   ContextEngine,
   SummarizeFunction,
 } from '../core/interfaces/context-engine.js';
 import type {
   ErrorStrategy,
   ClassifiedError,
-  SecurityViolation,
   ErrorAction,
   OverflowAction,
-  SecurityAction,
 } from '../core/interfaces/error-strategy.js';
+import type { SecurityViolation, SecurityAction } from '../core/security-guard.js';
 import type {
   TaskSupervisor,
 } from '../core/interfaces/task-supervisor.js';
@@ -67,7 +62,7 @@ import {
 import type { EventBus } from '../core/event-bus.js';
 import {
   DefaultSecurityGuard,
-} from '../core/security-guard.js';
+} from './security/default-security-guard.js';
 import type { SecurityGuard, SecurityGuardConfig } from '../core/security-guard.js';
 import {
   IterationBudget,
@@ -130,23 +125,6 @@ class DefaultErrorStrategy implements ErrorStrategy {
       return { action: 'block', reason: violation.description };
     }
     return { action: 'warn', reason: violation.description };
-  }
-}
-
-/** 默认工具执行器（直接调用 handler） */
-class DefaultToolExecutor implements ToolExecutor {
-  private tools: Map<string, RegisteredTool>;
-
-  constructor(tools: Map<string, RegisteredTool>) {
-    this.tools = tools;
-  }
-
-  async execute(call: ToolCall, ctx: ExecutionContext): Promise<unknown> {
-    const tool = this.tools.get(call.name);
-    if (!tool) {
-      throw new Error(`Tool "${call.name}" not found`);
-    }
-    return tool.handler(call.arguments, ctx as any);
   }
 }
 
@@ -226,7 +204,6 @@ export class AgentBuilder {
   // Core 组件
   private _model?: ModelProvider;
   private _tools = new Map<string, RegisteredTool>();
-  private _executor?: ToolExecutor;
   private _contextEngine?: ContextEngine;
   private _summarize?: SummarizeFunction;
   private _events?: EventBus;
@@ -335,12 +312,6 @@ export class AgentBuilder {
   /** 设置分布式智能体审计日志目录 */
   withDistributedAuditDir(dir: string): this {
     this._distributedAuditDir = dir;
-    return this;
-  }
-
-  /** 设置工具执行器 */
-  executor(executor: ToolExecutor): this {
-    this._executor = executor;
     return this;
   }
 

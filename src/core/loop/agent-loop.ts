@@ -143,13 +143,15 @@ export async function* agentLoop(
         // 输出被截断，所有 tool call 可能不完整
         const errorResults: LoopToolResult[] = [];
         for (const tc of response.toolCalls) {
-          const errorResult: LoopToolResult = {
+          errorResults.push({
             toolCallId: tc.id,
             name: tc.name,
             content: `Error: Response was truncated, tool call "${tc.name}" may be incomplete. Re-issue with complete arguments.`,
             isError: true,
-          };
-          errorResults.push(errorResult);
+          });
+        }
+
+        // 一次 push 所有截断的工具错误结果
         const coreResults: CoreToolResult[] = errorResults.map(r => ({
           toolCallId: r.toolCallId,
           name: r.name,
@@ -163,7 +165,6 @@ export async function* agentLoop(
           toolResults: coreResults,
           timestamp: Date.now(),
         });
-        }
 
         // 通知 onTurnComplete（副作用）
         if (onTurnComplete) {

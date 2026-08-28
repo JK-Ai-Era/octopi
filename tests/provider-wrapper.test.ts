@@ -5,8 +5,8 @@
  */
 
 import { describe, test, expect, beforeEach } from 'vitest';
-import { wrapProviderWithCircuitBreaker, assertModelProvider } from '../src/core/provider-wrapper.js';
-import { CircuitBreaker } from '../src/core/circuit-breaker.js';
+import { wrapProviderWithCircuitBreaker } from '../src/harness/reliability/provider-wrapper.js';
+import { CircuitBreaker } from '../src/harness/reliability/circuit-breaker.js';
 import type { ModelProvider, LLMRequest, LLMResponse } from '../src/core/interfaces/model-provider.js';
 import type { ModelInfo } from '../src/core/types.js';
 
@@ -108,19 +108,4 @@ describe('wrapProviderWithCircuitBreaker', () => {
   });
 });
 
-describe('assertModelProvider', () => {
-  test('通过完整 provider', () => {
-    const provider = createMockProvider();
-    expect(() => assertModelProvider(provider, 'test')).not.toThrow();
-  });
 
-  test('拒绝缺少 getModelInfo 的对象', () => {
-    const incomplete = { name: 'test', getModelInfos: () => [] };
-    expect(() => assertModelProvider(incomplete, 'test')).toThrow('Missing required method: getModelInfo');
-  });
-
-  test('拒绝非对象', () => {
-    expect(() => assertModelProvider(null, 'test')).toThrow('Expected an object');
-    expect(() => assertModelProvider('string', 'test')).toThrow('Expected an object');
-  });
-});

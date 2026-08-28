@@ -265,7 +265,14 @@ export class SessionAwareRunner {
       )) {
         // 适配事件格式（向后兼容）
         const adapted = adaptLoopEvent(loopEvent, meta, adaptState);
-        if (adapted) yield adapted;
+        if (adapted) {
+          yield adapted;
+          // 事件桥：循环事件同时广播到 EventBus
+          // 跳过高频流式 delta（每 token 一次），避免 EventBus 拥塞
+          if (adapted.type !== 'llm_stream_delta') {
+            this._events?.emit(adapted);
+          }
+        }
 
         // 收集流式内容
         if (loopEvent.type === 'llm_stream_delta' && loopEvent.data?.delta) {

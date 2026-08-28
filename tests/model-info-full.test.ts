@@ -12,7 +12,7 @@ import { Agent } from '../src/core/loop/agent.js';
 import type { ModelProvider, LLMResponse } from '../src/core/interfaces/model-provider.js';
 import type { RegisteredTool } from '../src/core/types.js';
 import { DefaultEventBus } from '../src/core/event-bus.js';
-import { DefaultSecurityGuard } from '../src/core/security-guard.js';
+import { DefaultSecurityGuard } from '../src/harness/security/default-security-guard.js';
 import { IterationBudget } from '../src/core/budget.js';
 import { DefaultContextEngine } from '../src/harness/context/default-context-engine.js';
 import { writeFileSync, mkdirSync, rmSync } from 'node:fs';

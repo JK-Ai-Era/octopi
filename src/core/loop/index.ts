@@ -24,6 +24,8 @@ export type {
   AgentTool,
   LoopToolResult,
   AgentLoopConfig,
+  ToolHooksConfig,
+  TurnHooksConfig,
   AgentLoopEvent,
   LoopObserver,
   ClassifiedError,
@@ -42,5 +44,3 @@ export type {
   TurnUpdate,
 } from './types.js';
 
-// ── 事件适配（过渡期） ──
-export { adaptEvent, adaptEventStream } from './event-adapter.js';

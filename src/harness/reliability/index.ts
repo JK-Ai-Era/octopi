@@ -3,3 +3,8 @@
  */
 export { runAgentWithReliability, DEFAULT_RELIABILITY_CONFIG } from './run-agent.js';
 export type { ReliabilityConfig, ReliabilityHarness } from './run-agent.js';
+
+export { CircuitBreaker } from './circuit-breaker.js';
+export type { CircuitBreakerOptions } from './circuit-breaker.js';
+
+export { wrapProviderWithCircuitBreaker } from './provider-wrapper.js';

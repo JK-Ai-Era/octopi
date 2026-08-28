@@ -20,7 +20,7 @@ import { buildSafetyGuardSpec } from '../../src/harness/security/safety-agent-sp
 import type { SharedDeps } from '../../src/harness/distributed/runtime.js';
 import type { ModelProvider } from '../../src/core/interfaces/model-provider.js';
 import type { InterceptOutput, AgentContext } from '../../src/harness/distributed/types.js';
-import { DefaultSecurityGuard } from '../../src/core/security-guard.js';
+import { DefaultSecurityGuard } from '../../src/harness/security/default-security-guard.js';
 import { DefaultToolCallRiskPolicy } from '../../src/harness/security/default-risk-policy.js';
 
 function createMinimalModelProvider(): ModelProvider {

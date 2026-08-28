@@ -95,8 +95,10 @@ export type { AgentOptions, AgentContext, AgentTool, LoopToolResult, AgentLoopCo
 export { runAgentWithReliability, DEFAULT_RELIABILITY_CONFIG } from './reliability/index.js';
 export type { ReliabilityConfig, ReliabilityHarness } from './reliability/index.js';
 
-// ── 事件适配（Phase 2b） ──
-export { adaptEvent, adaptEventStream } from '../core/loop/event-adapter.js';
+// ── 事件桥 ──
+// 事件适配逻辑已内置到 SessionAwareRunner.handle()，
+// 循环事件自动广播到 EventBus（跳过高频 llm_stream_delta）。
+// event-adapter.ts 已移除。
 
 // ── Core 模块 harness 规范路径（Phase 3 re-export） ──
 export * from './security/index.js';
@@ -106,3 +108,6 @@ export * from './concurrency/async-task.js';
 export * from './budget/index.js';
 export * from './process/index.js';
 // multi-agent: 已有显式导出（line 83），不重复 re-export
+
+// ── Harness 层类型（canonical） ──
+export * from './types/index.js';

@@ -23,13 +23,13 @@
 
 export { DefaultEventBus, NoopEventBus, AgentEvents } from './core/event-bus.js';
 export type { AgentEvent, EventHandler, Disposable } from './core/event-bus.js';
-export { DefaultSecurityGuard } from './core/security-guard.js';
+export { DefaultSecurityGuard } from './harness/security/default-security-guard.js';
 export { IterationBudget } from './core/budget.js';
 
 // Core 接口
 export type { ModelProvider, LLMRequest, LLMResponse, LLMStreamChunk, ToolDefinition } from './core/interfaces/model-provider.js';
-export type { ToolExecutor, ExecutionContext } from './core/interfaces/tool-executor.js';
-export type { ErrorStrategy, ErrorAction, OverflowAction, SecurityAction } from './core/interfaces/error-strategy.js';
+export type { ErrorStrategy, ErrorAction, OverflowAction } from './core/interfaces/error-strategy.js';
+export type { SecurityAction } from './core/security-guard.js';
 export type { Observer, Span, LogLevel } from './core/interfaces/observer.js';
 export type { SessionStore, SessionData } from './core/interfaces/session-store.js';
 

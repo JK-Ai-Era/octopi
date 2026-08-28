@@ -32,12 +32,12 @@ import type { ModelProvider } from '../../core/interfaces/model-provider.js';
 import type { Observer } from '../../core/interfaces/observer.js';
 import type { SessionStore, SessionData } from '../../core/interfaces/session-store.js';
 import type { StreamingChannelAdapter } from '../protocols/http.js';
-import { CircuitBreaker } from '../../core/circuit-breaker.js';
-import { wrapProviderWithCircuitBreaker } from '../../core/provider-wrapper.js';
+import { CircuitBreaker } from '../../harness/reliability/circuit-breaker.js';
+import { wrapProviderWithCircuitBreaker } from '../../harness/reliability/provider-wrapper.js';
 import { PluginManager } from '../../harness/plugins/manager.js';
 
 import { DefaultEventBus } from '../../core/event-bus.js';
-import { DefaultSecurityGuard } from '../../core/security-guard.js';
+import { DefaultSecurityGuard } from '../../harness/security/default-security-guard.js';
 import { IterationBudget } from '../../core/budget.js';
 import { DefaultContextEngine } from '../../harness/context/default-context-engine.js';
 import { SessionAwareRunner, type RunConfig } from '../../harness/runner.js';

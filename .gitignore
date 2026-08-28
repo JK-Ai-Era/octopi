@@ -5,3 +5,5 @@ dist/
 octopi.json
 data/
 arch/
+.DS_Store
+.mimocode/

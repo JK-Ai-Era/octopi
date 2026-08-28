@@ -15,3 +15,6 @@ export { LogObserver } from './observability/log-observer.js';
 
 // ── MCP ──
 export { SdkMcpClient, createSdkMcpClient } from './mcp/index.js';
+
+// ── Integration 层类型（canonical） ──
+export * from './types/index.js';

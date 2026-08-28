@@ -17,11 +17,6 @@ export type {
 } from './model-provider.js';
 
 export type {
-  ToolExecutor,
-  ExecutionContext,
-} from './tool-executor.js';
-
-export type {
   ContextEngine,
   ContextEngineInfo,
   AssembleParams,
@@ -47,7 +42,6 @@ export type {
   ErrorStrategy,
   ErrorAction,
   OverflowAction,
-  SecurityAction,
 } from './error-strategy.js';
 
 export type {
@@ -113,3 +107,14 @@ export type {
   McpClient,
   McpManager,
 } from './mcp-client.js';
+
+export type {
+  SecurityGuard,
+  SecurityCheckResult,
+  SecurityViolation,
+  SecurityViolationType,
+  SecurityAction,
+  BehaviorContext,
+  ToolCallRiskPolicy,
+  SecurityGuardConfig,
+} from './security-guard.js';
