@@ -7,7 +7,7 @@ import { ObserverBridge } from '../src/integration/observability/observer-bridge
 import { TraceCollector } from '../src/integration/observability/trace-collector.js';
 import { MetricsAggregator } from '../src/integration/observability/metrics.js';
 import { TraceLevel } from '../src/integration/observability/trace-events.js';
-import type { AgentEvent } from '../src/core/event-bus.js';
+import type { AgentEvent } from '../src/core/primitives/event-bus.js';
 
 // ── ObserverBridge 测试 ──
 

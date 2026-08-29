@@ -8,15 +8,15 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { Agent } from '../src/core/loop/agent.js';
+import { Agent } from '../src/loop/agent.js';
 import { runAgentWithReliability } from '../src/harness/reliability/run-agent.js';
 import type { ReliabilityHarness } from '../src/harness/reliability/run-agent.js';
-import type { AgentLoopEvent } from '../src/core/loop/types.js';
+import type { AgentLoopEvent } from '../src/loop/types.js';
 import type { ModelProvider, LLMRequest, LLMResponse, LLMStreamChunk } from '../src/core/interfaces/model-provider.js';
 import type { Message, RegisteredTool } from '../src/core/types.js';
-import { DefaultEventBus, NoopEventBus } from '../src/core/event-bus.js';
+import { DefaultEventBus, NoopEventBus } from '../src/core/primitives/event-bus.js';
 import { DefaultSecurityGuard } from '../src/harness/security/default-security-guard.js';
-import { IterationBudget } from '../src/core/budget.js';
+import { IterationBudget } from '../src/harness/budget/budget.js';
 
 // ── Helper ──
 

@@ -8,15 +8,15 @@ import {
   ProcessModel,
 } from '../../src/core/index.js';
 import type { EventBus, EventBusAgentEvent as AgentEvent } from '../../src/core/index.js';
-import { Agent } from '../../src/core/loop/agent.js';
-import type { Agent as AgentType } from '../../src/core/loop/agent.js';
+import { Agent } from '../../src/loop/agent.js';
+import type { Agent as AgentType } from '../../src/loop/agent.js';
 import type { Message } from '../../src/core/types.js';
 import {
   AgentSupervisor as Supervisor,
   EventCollector,
   SupervisorEvents,
   startSupervisor,
-} from '../../src/harness/supervisor/index.js';
+} from '../../src/harness/task-system/supervisor/index.js';
 import type {
   Planner,
   Plan,
@@ -25,7 +25,7 @@ import type {
   Reflector,
   ExecutionRecord,
   Pattern,
-} from '../../src/harness/supervisor/index.js';
+} from '../../src/harness/task-system/supervisor/index.js';
 
 // ── 辅助 ──
 

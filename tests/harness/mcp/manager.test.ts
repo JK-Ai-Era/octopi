@@ -3,11 +3,11 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import { DefaultMcpManager } from '../../../src/harness/mcp/manager.js';
-import type { McpClientFactory, McpManagerCallbacks } from '../../../src/harness/mcp/manager.js';
+import { DefaultMcpManager } from '../../../src/harness/plugin-ecosystem/mcp/manager.js';
+import type { McpClientFactory, McpManagerCallbacks } from '../../../src/harness/plugin-ecosystem/mcp/manager.js';
 import type { McpClient, McpServerCapabilities, McpToolDefinition, McpToolResult } from '../../../src/core/interfaces/mcp-client.js';
 import type { McpServerConfig } from '../../../src/core/interfaces/mcp-client.js';
-import { ToolRegistry } from '../../../src/harness/tools/registry.js';
+import { ToolRegistry } from '../../../src/harness/plugin-ecosystem/tools/registry.js';
 
 // ── Mock McpClient ──
 

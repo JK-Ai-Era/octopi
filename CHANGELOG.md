@@ -1,3 +1,65 @@
+## v0.8.0 (2026-08-29)
+
+### refactor(arch): 4 层架构重构 + 11 领域重组 + 3 个新领域
+
+全面重构 Octopi 架构，从 3 层升级为 4 层，Harness 层按领域自包含组织，新增 3 个核心领域。
+
+#### 4 层架构
+
+| 层 | 目录 | 职责 |
+|---|---|---|
+| Layer 0: Loop | `src/loop/` | 纯执行循环，零外部依赖 |
+| Layer 1: Core | `src/core/` | 机制原语 + 接口契约 + 核心类型 |
+| Layer 2: Harness | `src/harness/` | 11 个自包含领域 |
+| Layer 3: Integration | `src/integration/` | 外部系统适配 |
+
+#### Harness 11 个领域
+
+| 领域 | 目录 | 状态 |
+|---|---|---|
+| Agent Building | `agent-building/` | 重组 |
+| Context Management | `context/` | 已有 |
+| Security | `security/` | 已有 |
+| Reliability | `reliability/` | 已有 |
+| Plugin Ecosystem | `plugin-ecosystem/` | 重组 |
+| Distributed Agents | `distributed-agents/` | 重组 |
+| Task System | `task-system/` | 重组 |
+| Concurrency | `concurrency/` | 已有 |
+| Execution Environment | `execution-environment/` | **新增** |
+| Human-in-the-Loop | `human-in-the-loop/` | **新增** |
+| Memory | `memory/` | **新增** |
+
+#### 3 个新领域
+
+- **Execution Environment**：进程级沙箱、工作区管理、文件操作（search/glob/diff）、git 集成
+- **Human-in-the-Loop**：审批管理器、审批策略（auto/confirm-all/confirm-high-risk）、决策缓存
+- **Memory**：记忆存储/检索、认知图谱（概念+关系网络）、智慧生成、项目记忆、七层智能组装（ContextIntelligence）
+
+#### Context Intelligence — 七层智能模型
+
+信息分馏系统：Information → Memory → Cognition → Wisdom，加上 Persona、Knowledge、Skill。
+
+组装顺序：Wisdom（最前）→ Persona → Skill → Knowledge → Cognition → Memory → Information
+
+#### Core 层重组
+
+- 提取 `primitives/`（EventBus、StateMachine、AsyncTask、ProcessModel）
+- 纯化 `types/`（移除对 Harness/Integration 的反向 re-export）
+- 迁出策略实现（Budget、TokenEstimator、ToolLoopDetection）到 Harness
+- 新增接口：`reliability.ts`、`task-decision.ts`、`execution-environment.ts`、`human-in-the-loop.ts`、`memory.ts`
+
+#### 依赖方向
+
+Core 零外层依赖（check-sync.sh 全部通过）。所有 re-export barrel 已清理。
+
+#### 技术细节
+
+- 提取 Loop 层：`src/core/loop/` → `src/loop/`
+- SecurityGuard 实现：Core 只保留接口 + 纯函数，实现在 `harness/security/`
+- EventBus：确认为活跃架构组件（33 个文件使用），移除错误的 @deprecated 标记
+- QueueMode/ThinkingLevel：规范定义迁移到 `core/types/`
+- 测试：64 文件 1022 测试全部通过
+
 ## v0.7.1 (2026-08-29)
 
 ### refactor(core): Core 层架构整理 — 分层边界收敛 + 事件桥接

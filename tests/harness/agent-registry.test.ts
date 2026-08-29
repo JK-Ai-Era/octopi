@@ -3,8 +3,8 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { DefaultAgentRegistry } from '../../src/harness/multi-agent/registry.js';
-import { DefaultEventBus } from '../../src/core/event-bus.js';
+import { DefaultAgentRegistry } from '../../src/harness/distributed-agents/multi-agent/registry.js';
+import { DefaultEventBus } from '../../src/core/primitives/event-bus.js';
 import { AgentRegistryEvents } from '../../src/core/interfaces/agent-registry.js';
 import type { AgentInfo, AgentQuery, AgentRelation } from '../../src/core/interfaces/agent-registry.js';
 

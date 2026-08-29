@@ -17,9 +17,9 @@ import {
 } from '../src/integration/storage/memory.js';
 import {
   DefaultEventBus,
-  DefaultSecurityGuard,
-  IterationBudget,
 } from '../src/core/index.js';
+import { IterationBudget } from '../src/harness/budget/budget.js';
+import { DefaultSecurityGuard } from '../src/harness/security/default-security-guard.js';
 import type {
   ModelProvider,
   LLMStreamChunk,
@@ -381,7 +381,7 @@ describe('DefaultContextEngine', () => {
 
 describe('Config Bridge — Supervisor 解析', () => {
   it('应该从配置创建 DefaultTaskSupervisor', async () => {
-    const { resolveSupervisor } = await import('../src/harness/config-bridge.js');
+    const { resolveSupervisor } = await import('../src/harness/agent-building/config-bridge.js');
     const providers = new Map<string, ModelProvider>();
     providers.set('mock', createMockModelProvider());
 
@@ -396,7 +396,7 @@ describe('Config Bridge — Supervisor 解析', () => {
   });
 
   it('enabled=false 应该返回 undefined', async () => {
-    const { resolveSupervisor } = await import('../src/harness/config-bridge.js');
+    const { resolveSupervisor } = await import('../src/harness/agent-building/config-bridge.js');
     const providers = new Map<string, ModelProvider>();
 
     const supervisor = resolveSupervisor({ enabled: false }, providers);
@@ -405,7 +405,7 @@ describe('Config Bridge — Supervisor 解析', () => {
   });
 
   it('无配置应该返回 undefined', async () => {
-    const { resolveSupervisor } = await import('../src/harness/config-bridge.js');
+    const { resolveSupervisor } = await import('../src/harness/agent-building/config-bridge.js');
     const providers = new Map<string, ModelProvider>();
 
     const supervisor = resolveSupervisor(undefined, providers);

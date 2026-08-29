@@ -3,13 +3,13 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { AgentSwarm, RoundRobinStrategy, CapabilityStrategy, PipelineStrategy } from '../../src/harness/multi-agent/swarm.js';
-import { DefaultAgentRegistry } from '../../src/harness/multi-agent/registry.js';
-import { DefaultEventBus } from '../../src/core/event-bus.js';
-import { Agent } from '../../src/core/loop/agent.js';
+import { AgentSwarm, RoundRobinStrategy, CapabilityStrategy, PipelineStrategy } from '../../src/harness/distributed-agents/multi-agent/swarm.js';
+import { DefaultAgentRegistry } from '../../src/harness/distributed-agents/multi-agent/registry.js';
+import { DefaultEventBus } from '../../src/core/primitives/event-bus.js';
+import { Agent } from '../../src/loop/agent.js';
 import type { ReliabilityHarness } from '../../src/harness/reliability/run-agent.js';
-import { SwarmEvents } from '../../src/harness/multi-agent/types.js';
-import type { SwarmAgent, SwarmTask } from '../../src/harness/multi-agent/types.js';
+import { SwarmEvents } from '../../src/harness/distributed-agents/multi-agent/types.js';
+import type { SwarmAgent, SwarmTask } from '../../src/harness/distributed-agents/multi-agent/types.js';
 import type { ModelProvider, LLMRequest, LLMResponse, LLMStreamChunk } from '../../src/core/interfaces/model-provider.js';
 import type { AgentInfo } from '../../src/core/interfaces/agent-registry.js';
 import type { Message } from '../../src/core/types.js';

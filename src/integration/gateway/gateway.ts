@@ -19,26 +19,24 @@
 
 import type {
   AgentDefinition,
-  ChannelAdapter,
-  ChannelMessage,
-  ChannelReply,
-  GatewayConfig,
   RegisteredTool,
   SessionMeta,
-  HookContext,
 } from '../../core/types.js';
-import type { AgentEvent } from '../../core/event-bus.js';
+import type { ChannelAdapter, ChannelMessage, ChannelReply } from '../types/channels.js';
+import type { GatewayConfig } from '../types/gateway-config.js';
+import type { HookContext } from '../../harness/types/hook-context.js';
+import type { AgentEvent } from '../../core/primitives/event-bus.js';
 import type { ModelProvider } from '../../core/interfaces/model-provider.js';
 import type { Observer } from '../../core/interfaces/observer.js';
 import type { SessionStore, SessionData } from '../../core/interfaces/session-store.js';
 import type { StreamingChannelAdapter } from '../protocols/http.js';
 import { CircuitBreaker } from '../../harness/reliability/circuit-breaker.js';
 import { wrapProviderWithCircuitBreaker } from '../../harness/reliability/provider-wrapper.js';
-import { PluginManager } from '../../harness/plugins/manager.js';
+import { PluginManager } from '../../harness/plugin-ecosystem/plugins/manager.js';
 
-import { DefaultEventBus } from '../../core/event-bus.js';
+import { DefaultEventBus } from '../../core/primitives/event-bus.js';
 import { DefaultSecurityGuard } from '../../harness/security/default-security-guard.js';
-import { IterationBudget } from '../../core/budget.js';
+import { IterationBudget } from '../../harness/budget/budget.js';
 import { DefaultContextEngine } from '../../harness/context/default-context-engine.js';
 import { SessionAwareRunner, type RunConfig } from '../../harness/runner.js';
 
@@ -101,7 +99,7 @@ export class Gateway {
   /** 工具 */
   private tools: RegisteredTool[] = [];
   /** Agent 缓存（避免每条消息重建） */
-  private agentCache = new Map<string, { agent: import('../../core/loop/agent.js').Agent; runner: SessionAwareRunner }>();
+  private agentCache = new Map<string, { agent: import('../../loop/agent.js').Agent; runner: SessionAwareRunner }>();
   /** 流式 adapter 引用（用于广播事件） */
   private streamingAdapters: StreamingChannelAdapter[] = [];
   /** 每个 provider 的熔断器 */
@@ -345,7 +343,7 @@ export class Gateway {
    * 为 Agent 构建 Agent + SessionAwareRunner（新架构）
    */
   private async buildAgent(agent: AgentDefinition): Promise<{
-    agent: import('../../core/loop/agent.js').Agent;
+    agent: import('../../loop/agent.js').Agent;
     runner: SessionAwareRunner;
   }> {
     // 获取 provider
@@ -359,7 +357,7 @@ export class Gateway {
     const wrappedProvider = wrapProviderWithCircuitBreaker(modelProvider, cb);
 
     // 使用 AgentBuilder 构建
-    const builder = new (await import('../../harness/builder.js')).AgentBuilder()
+    const builder = new (await import('../../harness/agent-building/builder.js')).AgentBuilder()
       .model(wrappedProvider)
       .store(this.store);
 

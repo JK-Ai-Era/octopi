@@ -3,8 +3,8 @@
  */
 
 import { describe, test, expect, vi } from 'vitest';
-import { createProgressReporter } from '../src/harness/tools/streaming.js';
-import type { ToolProgressEvent } from '../src/harness/tools/streaming.js';
+import { createProgressReporter } from '../src/harness/plugin-ecosystem/tools/streaming.js';
+import type { ToolProgressEvent } from '../src/harness/plugin-ecosystem/tools/streaming.js';
 
 describe('流式工具执行', () => {
   describe('createProgressReporter', () => {

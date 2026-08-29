@@ -10,13 +10,13 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { Agent } from '../src/core/loop/agent.js';
+import { Agent } from '../src/loop/agent.js';
 import { runAgentWithReliability } from '../src/harness/reliability/run-agent.js';
 import type { ReliabilityHarness } from '../src/harness/reliability/run-agent.js';
-import type { AgentLoopEvent } from '../src/core/loop/types.js';
+import type { AgentLoopEvent } from '../src/loop/types.js';
 import type { ModelProvider, LLMRequest, LLMResponse, LLMStreamChunk } from '../src/core/interfaces/model-provider.js';
 import type { Message } from '../src/core/types.js';
-import { estimateTokens, estimateTextTokens } from '../src/core/token-estimator.js';
+import { estimateTokens, estimateTextTokens } from '../src/harness/context/core-token-estimator.js';
 
 // ── Helper ──
 

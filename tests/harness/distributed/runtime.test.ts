@@ -3,10 +3,10 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { AgentRuntime, sortByPriority } from '../../../src/harness/distributed/runtime.js';
-import type { SharedDeps } from '../../../src/harness/distributed/runtime.js';
-import type { DistributedAgentSpec } from '../../../src/harness/distributed/spec.js';
-import type { EventBus } from '../../../src/harness/distributed/../../core/event-bus.js';
+import { AgentRuntime, sortByPriority } from '../../../src/harness/distributed-agents/distributed/runtime.js';
+import type { SharedDeps } from '../../../src/harness/distributed-agents/distributed/runtime.js';
+import type { DistributedAgentSpec } from '../../../src/harness/distributed-agents/distributed/spec.js';
+import type { EventBus } from '../../../src/harness/distributed/../../core/primitives/event-bus.js';
 import type { RegisteredTool } from '../../../src/harness/distributed/../../core/types.js';
 
 function createMockEventBus(): EventBus & { emit: ReturnType<typeof vi.fn> } {

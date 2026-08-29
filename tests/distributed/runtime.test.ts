@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
-import { AgentRuntime, sortByPriority } from '../../src/harness/distributed/runtime.js';
-import type { SharedDeps } from '../../src/harness/distributed/runtime.js';
-import type { DistributedAgentSpec } from '../../src/harness/distributed/spec.js';
+import { AgentRuntime, sortByPriority } from '../../src/harness/distributed-agents/distributed/runtime.js';
+import type { SharedDeps } from '../../src/harness/distributed-agents/distributed/runtime.js';
+import type { DistributedAgentSpec } from '../../src/harness/distributed-agents/distributed/spec.js';
 
 function createMockSharedDeps(): SharedDeps {
   return {

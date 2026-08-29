@@ -3,16 +3,16 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { TriggerEngine, getPriority } from '../../../src/harness/distributed/trigger.js';
+import { TriggerEngine, getPriority } from '../../../src/harness/distributed-agents/distributed/trigger.js';
 import type {
   EventTrigger,
   ConditionTrigger,
   ThresholdTrigger,
   MessageTrigger,
   TriggerRule,
-} from '../../../src/harness/distributed/trigger.js';
-import type { TriggerContext } from '../../../src/harness/distributed/types.js';
-import type { EventBus } from '../../../src/harness/distributed/../../core/event-bus.js';
+} from '../../../src/harness/distributed-agents/distributed/trigger.js';
+import type { TriggerContext } from '../../../src/harness/distributed-agents/distributed/types.js';
+import type { EventBus } from '../../../src/harness/distributed/../../core/primitives/event-bus.js';
 
 function createMockEventBus(): EventBus {
   return {

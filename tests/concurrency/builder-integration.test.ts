@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { AgentBuilder } from '../../src/harness/builder.js';
+import { AgentBuilder } from '../../src/harness/agent-building/builder.js';
 import type { ModelProvider, LLMRequest, LLMResponse, ModelInfo } from '../../src/core/interfaces/model-provider.js';
 
 function createMockProvider(name: string, defaultModel = 'mock-model'): ModelProvider {

@@ -9,7 +9,7 @@ import {
   LLMReflector,
 } from '../../src/harness/index.js';
 import type { KnowledgeEntry } from '../../src/harness/index.js';
-import type { ExecutionRecord, Pattern } from '../../src/harness/supervisor/types.js';
+import type { ExecutionRecord, Pattern } from '../../src/harness/task-system/supervisor/types.js';
 import type { ModelProvider } from '../../src/core/interfaces/model-provider.js';
 
 // ── 辅助 ──

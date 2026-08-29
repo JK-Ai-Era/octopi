@@ -32,12 +32,13 @@
  * ```
  */
 
-import type { AgentDefinition, GatewayConfig, ToolPolicy, ModelInfo } from './core/types.js';
+import type { AgentDefinition, ToolPolicy, ModelInfo } from './core/types.js';
+import type { GatewayConfig } from './integration/types/gateway-config.js';
 import type { ModelProvider } from './core/interfaces/model-provider.js';
 import type { SessionStore } from './core/interfaces/session-store.js';
-import type { IterationBudgetConfig } from './core/budget.js';
+import type { IterationBudgetConfig } from './harness/budget/budget.js';
 import type { SecurityGuardConfig } from './core/security-guard.js';
-import type { TaskSupervisorConfig } from './harness/supervisor/task-supervisor.js';
+import type { TaskSupervisorConfig } from './harness/task-system/supervisor/task-supervisor.js';
 import { validateConfigOrThrow } from './config-schema.js';
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';

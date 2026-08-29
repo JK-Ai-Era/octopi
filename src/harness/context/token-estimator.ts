@@ -21,7 +21,7 @@ import type { LLMMessage, ToolDefinition } from '../../core/interfaces/model-pro
 import {
   estimateTextTokens,
   estimateAdjustedChars,
-} from '../../core/token-estimator.js';
+} from './core-token-estimator.js';
 import {
   CHARS_PER_TOKEN,
   TOOL_RESULT_CHARS_PER_TOKEN,
@@ -31,10 +31,10 @@ import {
   AUDIO_TOKEN_ESTIMATE,
   VIDEO_TOKEN_ESTIMATE,
   SAFETY_MARGIN,
-} from '../../core/token-constants.js';
+} from './token-constants.js';
 
 // Re-export for backward compatibility
-export { estimateTextTokens } from '../../core/token-estimator.js';
+export { estimateTextTokens } from './core-token-estimator.js';
 
 /**
  * 启发式 Token 估算器实现

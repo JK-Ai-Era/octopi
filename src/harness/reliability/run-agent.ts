@@ -24,22 +24,23 @@ import type {
   AgentLoopEvent,
   LoopToolResult,
   TurnContext,
-} from '../../core/loop/types.js';
-import { classifyError } from '../../core/loop/error-classifier.js';
-import { agentLoop } from '../../core/loop/agent-loop.js';
+} from '../../loop/types.js';
+import { classifyError } from '../../loop/error-classifier.js';
+import { agentLoop } from '../../loop/agent-loop.js';
 import type {
   ToolCallRecord,
   ToolLoopDetectionConfig,
-} from '../../core/tool-loop-detection.js';
+} from '../concurrency/tool-loop-detection.js';
 import {
   recordToolCall,
   detectNoProgressLoop,
   hashToolCall,
-} from '../../core/tool-loop-detection.js';
+} from '../concurrency/tool-loop-detection.js';
 import type { SecurityGuard } from '../../core/security-guard.js';
 import { severityToAction } from '../../core/security-guard.js';
 import type { ErrorStrategy, ClassifiedError as CoreClassifiedError } from '../../core/interfaces/error-strategy.js';
 import type { TaskSupervisor, CheckpointContext, CheckpointVerdict, TurnSummary } from '../../core/interfaces/task-supervisor.js';
+import type { ReliabilityHarness as CoreReliabilityHarness } from '../../core/interfaces/reliability.js';
 
 // ── 可靠性配置 ──
 
@@ -81,15 +82,15 @@ export const DEFAULT_RELIABILITY_CONFIG: ReliabilityConfig = {
 
 // ── Harness 资源 ──
 
-export interface ReliabilityHarness {
+// Re-export core interface for backward compatibility
+export type { CoreReliabilityHarness as ReliabilityHarness };
+
+/**
+ * 具体的可靠性装备（带类型化的 config）
+ * 由 builder 构造，传给 runAgentWithReliability()
+ */
+export interface ConcreteReliabilityHarness extends CoreReliabilityHarness {
   config: ReliabilityConfig;
-  security?: SecurityGuard;
-  errorStrategy?: ErrorStrategy;
-  taskSupervisor?: TaskSupervisor;
-  /** 当前 agentId（用于检查点） */
-  agentId?: string;
-  /** 当前 sessionId（用于检查点） */
-  sessionId?: string;
 }
 
 // ── 运行时状态 ──
@@ -193,11 +194,11 @@ function hasStructuredPlanningOnlyFormat(text: string): boolean {
 export async function* runAgentWithReliability(
   context: AgentContext,
   config: AgentLoopConfig,
-  harness: ReliabilityHarness,
+  harness: CoreReliabilityHarness,
   signal?: AbortSignal,
 ): AsyncGenerator<AgentLoopEvent> {
   const state = createInitialState();
-  const relConfig = { ...DEFAULT_RELIABILITY_CONFIG, ...harness.config };
+  const relConfig = { ...DEFAULT_RELIABILITY_CONFIG, ...(harness.config as ReliabilityConfig | undefined) };
 
   // ── 用于空响应/planning-only 重试的消息缓冲 ──
   // onTurnComplete 将 steer 消息推入此数组，getFollowUpMessages 返回给 agentLoop
@@ -491,7 +492,7 @@ function trackToolResults(toolResults: LoopToolResult[], state: ReliabilityState
   }
 }
 
-function buildCheckpointContext(state: ReliabilityState, harness: ReliabilityHarness): CheckpointContext {
+function buildCheckpointContext(state: ReliabilityState, harness: CoreReliabilityHarness): CheckpointContext {
   const recentFailures = state.recentToolCalls.filter(t => !t.success).length;
   const toolFailureRate = state.recentToolCalls.length > 0
     ? recentFailures / state.recentToolCalls.length

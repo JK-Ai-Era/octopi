@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { buildTaskSummary, buildAgentInput } from '../../src/harness/distributed/input-policy.js';
-import type { AgentContext } from '../../src/harness/distributed/types.js';
-import type { InputPolicy } from '../../src/harness/distributed/input-policy.js';
+import { buildTaskSummary, buildAgentInput } from '../../src/harness/distributed-agents/distributed/input-policy.js';
+import type { AgentContext } from '../../src/harness/distributed-agents/distributed/types.js';
+import type { InputPolicy } from '../../src/harness/distributed-agents/distributed/input-policy.js';
 
 function createMockAgentContext(): AgentContext {
   return {

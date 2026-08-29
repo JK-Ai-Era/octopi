@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import { TriggerEngine, getPriority } from '../../src/harness/distributed/trigger.js';
-import type { EventTrigger, ConditionTrigger, ThresholdTrigger, TriggerContext, TriggerRule } from '../../src/harness/distributed/trigger.js';
+import { TriggerEngine, getPriority } from '../../src/harness/distributed-agents/distributed/trigger.js';
+import type { EventTrigger, ConditionTrigger, ThresholdTrigger, TriggerContext, TriggerRule } from '../../src/harness/distributed-agents/distributed/trigger.js';
 
 function createMockEvents() {
   const handlers = new Map<string, Function[]>();

@@ -3,8 +3,8 @@
  */
 
 import { describe, test, expect, beforeEach, vi } from 'vitest';
-import { VersionedToolRegistry } from '../src/harness/tools/versioning.js';
-import type { VersionedTool } from '../src/harness/tools/versioning.js';
+import { VersionedToolRegistry } from '../src/harness/plugin-ecosystem/tools/versioning.js';
+import type { VersionedTool } from '../src/harness/plugin-ecosystem/tools/versioning.js';
 
 function createTool(overrides?: Partial<VersionedTool>): VersionedTool {
   return {

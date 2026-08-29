@@ -3,8 +3,8 @@
  */
 
 import { describe, test, expect } from 'vitest';
-import { WorkflowEngine, SimpleStepExecutor } from '../src/harness/workflow/engine.js';
-import type { WorkflowDefinition, StepExecutor, WorkflowContext, WorkflowStep, WorkflowEvent } from '../src/harness/workflow/types.js';
+import { WorkflowEngine, SimpleStepExecutor } from '../src/harness/task-system/workflow/engine.js';
+import type { WorkflowDefinition, StepExecutor, WorkflowContext, WorkflowStep, WorkflowEvent } from '../src/harness/task-system/workflow/types.js';
 
 describe('Workflow 端到端测试', () => {
   test('简单三步流程', async () => {

@@ -9,9 +9,9 @@ import {
   handleInjectContext,
   handleNotify,
   InjectionQueue,
-} from '../../../src/harness/distributed/output-policy.js';
-import type { InterceptOutput, ContextOutput, NotifyOutput, AgentContext } from '../../../src/harness/distributed/types.js';
-import type { EventBus } from '../../../src/harness/distributed/../../core/event-bus.js';
+} from '../../../src/harness/distributed-agents/distributed/output-policy.js';
+import type { InterceptOutput, ContextOutput, NotifyOutput, AgentContext } from '../../../src/harness/distributed-agents/distributed/types.js';
+import type { EventBus } from '../../../src/harness/distributed/../../core/primitives/event-bus.js';
 
 function createMockContext(): AgentContext {
   return {

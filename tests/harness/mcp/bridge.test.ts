@@ -8,7 +8,7 @@ import {
   extractMcpToolResult,
   splitNamespacedToolName,
   MCP_NAMESPACE_SEP,
-} from '../../../src/harness/mcp/bridge.js';
+} from '../../../src/harness/plugin-ecosystem/mcp/bridge.js';
 import type { McpToolDefinition, McpToolResult } from '../../../src/core/interfaces/mcp-client.js';
 
 describe('MCP Bridge', () => {

@@ -1,8 +1,4 @@
 /**
- * ThinkingLevel — 思考级别
- *
- * Harness 层类型。控制 LLM 的推理深度。
+ * 向后兼容 re-export — 规范定义已迁移到 core/types/thinking-level.ts
  */
-
-/** 思考级别 */
-export type ThinkingLevel = 'off' | 'low' | 'medium' | 'high';
+export type { ThinkingLevel } from '../../core/types/thinking-level.js';

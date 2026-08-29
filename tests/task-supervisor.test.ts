@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { DefaultTaskSupervisor, createTaskSupervisor } from '../src/harness/supervisor/task-supervisor.js';
+import { DefaultTaskSupervisor, createTaskSupervisor } from '../src/harness/task-system/supervisor/task-supervisor.js';
 import type { CheckpointContext, CheckpointMetrics } from '../src/core/interfaces/task-supervisor.js';
 import type { ModelProvider } from '../src/core/interfaces/model-provider.js';
 
@@ -308,7 +308,7 @@ describe('DefaultTaskSupervisor', () => {
 
   describe('Builder 自动接入', () => {
     it('无参 taskSupervisor() 应该自动创建 DefaultTaskSupervisor', async () => {
-      const { AgentBuilder } = await import('../src/harness/builder.js');
+      const { AgentBuilder } = await import('../src/harness/agent-building/builder.js');
       const mockModel: ModelProvider = {
         name: 'mock',
         chat: vi.fn().mockResolvedValue({ content: 'Hello!', model: 'mock', usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 } }),
@@ -330,7 +330,7 @@ describe('DefaultTaskSupervisor', () => {
     });
 
     it('config 形式 taskSupervisor({}) 应该自动接入 model', async () => {
-      const { AgentBuilder } = await import('../src/harness/builder.js');
+      const { AgentBuilder } = await import('../src/harness/agent-building/builder.js');
       const mockModel: ModelProvider = {
         name: 'mock',
         chat: vi.fn().mockResolvedValue({ content: 'OK', model: 'mock', usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 } }),

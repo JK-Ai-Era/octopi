@@ -4,10 +4,10 @@
 
 import { describe, it, expect } from 'vitest';
 import {
-  DefaultSecurityGuard,
   DefaultEventBus,
   severityToAction,
 } from '../src/core/index.js';
+import { DefaultSecurityGuard } from '../src/harness/security/default-security-guard.js';
 import {
   CapabilityEnforcer,
   PluginTrustLevel,

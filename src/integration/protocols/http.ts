@@ -16,8 +16,8 @@
  *     { type: "error", message: "..." }
  */
 
-import type { ChannelAdapter, ChannelMessage, ChannelReply } from '../../core/types.js';
-import type { AgentEvent } from '../../core/event-bus.js';
+import type { ChannelAdapter, ChannelMessage, ChannelReply } from '../types/channels.js';
+import type { AgentEvent } from '../../core/primitives/event-bus.js';
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'node:http';
 import { WebSocketServer, WebSocket, type WebSocket as WS } from 'ws';
 

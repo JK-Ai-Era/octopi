@@ -5,7 +5,7 @@
  * 边界：空目录、无效 frontmatter、缺失字段、disableModelInvocation、热重载
  */
 import { describe, test, expect, beforeEach } from 'vitest';
-import { DefaultSkillManager } from '../src/harness/skills/manager.js';
+import { DefaultSkillManager } from '../src/harness/plugin-ecosystem/skills/manager.js';
 import { resolve } from 'path';
 import { writeFileSync, mkdirSync, rmSync, existsSync } from 'fs';
 

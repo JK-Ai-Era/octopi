@@ -14,7 +14,7 @@
  * - maxIterations: 1，单次判断，不做多轮推理
  */
 
-import type { DistributedAgentSpec } from '../distributed/spec.js';
+import type { DistributedAgentSpec } from '../distributed-agents/distributed/spec.js';
 
 /**
  * 安全守卫系统提示词

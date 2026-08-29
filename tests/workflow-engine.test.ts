@@ -6,13 +6,13 @@ import { describe, test, expect, beforeEach, vi } from 'vitest';
 import {
   WorkflowEngine,
   SimpleStepExecutor,
-} from '../src/harness/workflow/engine.js';
+} from '../src/harness/task-system/workflow/engine.js';
 import type {
   WorkflowDefinition,
   WorkflowStep,
   StepExecutor,
   WorkflowContext,
-} from '../src/harness/workflow/types.js';
+} from '../src/harness/task-system/workflow/types.js';
 
 function createSimpleWorkflow(): WorkflowDefinition {
   return {

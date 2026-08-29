@@ -7,8 +7,8 @@
  */
 
 import type { ToolCall } from '../../core/types.js';
-import type { EventBus } from '../../core/event-bus.js';
-import { AgentEvents } from '../../core/event-bus.js';
+import type { EventBus } from '../../core/primitives/event-bus.js';
+import { AgentEvents } from '../../core/primitives/event-bus.js';
 
 // ── 信任级别 ──
 

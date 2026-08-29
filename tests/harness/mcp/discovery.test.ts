@@ -6,7 +6,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, writeFile, rm, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { loadMcpServersFromDir } from '../../../src/harness/mcp/discovery.js';
+import { loadMcpServersFromDir } from '../../../src/harness/plugin-ecosystem/mcp/discovery.js';
 
 describe('loadMcpServersFromDir', () => {
   let tempDir: string;

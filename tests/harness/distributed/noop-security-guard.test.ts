@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { NoopSecurityGuard } from '../../../src/harness/distributed/noop-security-guard.js';
+import { NoopSecurityGuard } from '../../../src/harness/distributed-agents/distributed/noop-security-guard.js';
 
 describe('NoopSecurityGuard', () => {
   const guard = new NoopSecurityGuard();

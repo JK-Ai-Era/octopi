@@ -118,3 +118,44 @@ export type {
   ToolCallRiskPolicy,
   SecurityGuardConfig,
 } from './security-guard.js';
+
+export type { ReliabilityHarness } from './reliability.js';
+
+export type { TaskDecisionProvider, TaskDecisionResult } from './task-decision.js';
+
+export type {
+  IsolationLevel,
+  SandboxConfig,
+  ResourceLimits,
+  ResourceUsage,
+  SandboxResult,
+  SandboxProvider,
+  WorkspaceConfig,
+  WorkspaceSnapshot,
+  Workspace,
+  SearchOptions,
+  FileMatch,
+} from './execution-environment.js';
+
+export type {
+  ApprovalLevel,
+  ApprovalRequest,
+  ApprovalDecision,
+  ApprovalProvider,
+  ApprovalPolicy,
+} from './human-in-the-loop.js';
+
+export type {
+  MemoryType,
+  MemoryEntry,
+  WisdomEntry,
+  ConceptNode,
+  ConceptEdge,
+  ConceptGraph,
+  MemoryQuery,
+  MemoryStore,
+  MemoryStats,
+  WisdomStore,
+  ConceptGraphStore,
+  ProjectMemory,
+} from './memory.js';

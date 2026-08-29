@@ -12,7 +12,7 @@ import type {
   TriggerContext,
   AgentContext,
   TaskSummary,
-} from '../../../src/harness/distributed/types.js';
+} from '../../../src/harness/distributed-agents/distributed/types.js';
 
 describe('Distributed Types', () => {
   describe('TaskSummary', () => {

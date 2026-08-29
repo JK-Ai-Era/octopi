@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import { NoopSecurityGuard } from '../../src/harness/distributed/noop-security-guard.js';
-import { Agent } from '../../src/core/loop/agent.js';
+import { NoopSecurityGuard } from '../../src/harness/distributed-agents/distributed/noop-security-guard.js';
+import { Agent } from '../../src/loop/agent.js';
 
 describe('NoopSecurityGuard', () => {
   const guard = new NoopSecurityGuard();

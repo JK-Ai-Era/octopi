@@ -21,10 +21,10 @@
 // Core 层
 // ============================================================
 
-export { DefaultEventBus, NoopEventBus, AgentEvents } from './core/event-bus.js';
-export type { AgentEvent, EventHandler, Disposable } from './core/event-bus.js';
+export { DefaultEventBus, NoopEventBus, AgentEvents } from './core/primitives/event-bus.js';
+export type { AgentEvent, EventHandler, Disposable } from './core/primitives/event-bus.js';
 export { DefaultSecurityGuard } from './harness/security/default-security-guard.js';
-export { IterationBudget } from './core/budget.js';
+export { IterationBudget } from './harness/budget/budget.js';
 
 // Core 接口
 export type { ModelProvider, LLMRequest, LLMResponse, LLMStreamChunk, ToolDefinition } from './core/interfaces/model-provider.js';
@@ -60,9 +60,9 @@ export type {
 // Harness 层
 // ============================================================
 
-export { AgentBuilder, createAgent } from './harness/builder.js';
+export { AgentBuilder, createAgent } from './harness/agent-building/builder.js';
 export { SessionAwareRunner } from './harness/runner.js';
-export { loadPersona, composePersonas } from './harness/persona/loader.js';
+export { loadPersona, composePersonas } from './harness/agent-building/persona.js';
 
 // Context Engine
 export { DefaultContextEngine } from './harness/context/default-context-engine.js';
@@ -81,31 +81,31 @@ export { CapabilityEnforcer, PluginTrustLevel } from './harness/security/capabil
 export { SecurityPresets, getSecurityPolicy } from './harness/security/policy.js';
 
 // Harness Plugin 系统
-export { PluginManager } from './harness/plugins/manager.js';
-export { definePluginEntry, defineChannelPluginEntry } from './harness/plugins/entry.js';
-export type { OctopiPluginDefinition, OctopiChannelPluginDefinition } from './harness/plugins/entry.js';
-export { PluginApi } from './harness/plugins/api.js';
-export { PluginLoader } from './harness/plugins/loader.js';
-export type { LoadedPlugin, PluginLoaderConfig, PluginEntryConfig } from './harness/plugins/loader.js';
-export { CapabilityRegistry } from './harness/plugins/capability.js';
-export { validateManifest, parseManifest } from './harness/plugins/manifest.js';
-export type { PluginManifest, PluginContracts, ActivationConfig } from './harness/plugins/manifest.js';
+export { PluginManager } from './harness/plugin-ecosystem/plugins/manager.js';
+export { definePluginEntry, defineChannelPluginEntry } from './harness/plugin-ecosystem/plugins/entry.js';
+export type { OctopiPluginDefinition, OctopiChannelPluginDefinition } from './harness/plugin-ecosystem/plugins/entry.js';
+export { PluginApi } from './harness/plugin-ecosystem/plugins/api.js';
+export { PluginLoader } from './harness/plugin-ecosystem/plugins/loader.js';
+export type { LoadedPlugin, PluginLoaderConfig, PluginEntryConfig } from './harness/plugin-ecosystem/plugins/loader.js';
+export { CapabilityRegistry } from './harness/plugin-ecosystem/plugins/capability.js';
+export { validateManifest, parseManifest } from './harness/plugin-ecosystem/plugins/manifest.js';
+export type { PluginManifest, PluginContracts, ActivationConfig } from './harness/plugin-ecosystem/plugins/manifest.js';
 
 // Harness Skill 系统
-export { DefaultSkillManager, FileSystemSkillSource } from './harness/skills/manager.js';
-export type { SkillSource, DiscoveredSkill } from './harness/skills/manager.js';
+export { DefaultSkillManager, FileSystemSkillSource } from './harness/plugin-ecosystem/skills/manager.js';
+export type { SkillSource, DiscoveredSkill } from './harness/plugin-ecosystem/skills/manager.js';
 
 // Harness Tool 系统
-export { ToolRegistry } from './harness/tools/registry.js';
-export { getBuiltinTools, createShellTool, createFileReadTool, createFileWriteTool, createFileListTool } from './harness/tools/builtin.js';
+export { ToolRegistry } from './harness/plugin-ecosystem/tools/registry.js';
+export { getBuiltinTools, createShellTool, createFileReadTool, createFileWriteTool, createFileListTool } from './harness/plugin-ecosystem/tools/builtin.js';
 
 // Config Bridge（配置文件 → 新架构）
-export { buildFromConfig, buildFromConfigFile } from './harness/config-bridge.js';
-export type { BuiltAgent } from './harness/config-bridge.js';
+export { buildFromConfig, buildFromConfigFile } from './harness/agent-building/config-bridge.js';
+export type { BuiltAgent } from './harness/agent-building/config-bridge.js';
 
 // Multi-Agent 系统
-export { DefaultAgentRegistry, AgentSwarm, RoundRobinStrategy, CapabilityStrategy, PipelineStrategy, SwarmEvents, AgentProcess, spawnAgentProcess, forkAgentProcess, AgentProcessEvents } from './harness/multi-agent/index.js';
-export type { SwarmTopology, SwarmConfig, SwarmAgent, SwarmTask, OrchestrationStrategy, AgentProcessState, AgentProcessResult, AgentProcessAnnounce, AgentProcessConfig } from './harness/multi-agent/index.js';
+export { DefaultAgentRegistry, AgentSwarm, RoundRobinStrategy, CapabilityStrategy, PipelineStrategy, SwarmEvents, AgentProcess, spawnAgentProcess, forkAgentProcess, AgentProcessEvents } from './harness/distributed-agents/multi-agent/index.js';
+export type { SwarmTopology, SwarmConfig, SwarmAgent, SwarmTask, OrchestrationStrategy, AgentProcessState, AgentProcessResult, AgentProcessAnnounce, AgentProcessConfig } from './harness/distributed-agents/multi-agent/index.js';
 export type { AgentRegistry, AgentInfo, AgentQuery, AgentRelation, AgentRelationType } from './core/interfaces/agent-registry.js';
 export { AgentRegistryEvents } from './core/interfaces/agent-registry.js';
 

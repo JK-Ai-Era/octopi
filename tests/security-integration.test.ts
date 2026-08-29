@@ -12,7 +12,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { DefaultSecurityGuard } from '../src/harness/security/default-security-guard.js';
-import { DefaultEventBus } from '../src/core/event-bus.js';
+import { DefaultEventBus } from '../src/core/primitives/event-bus.js';
 import { DefaultToolCallRiskPolicy } from '../src/harness/security/default-risk-policy.js';
 import { buildSafetyGuardSpec } from '../src/harness/security/safety-agent-spec.js';
 

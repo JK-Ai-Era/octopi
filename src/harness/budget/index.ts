@@ -1,6 +1,8 @@
 /**
- * @canonical 从 src/core/budget.ts 重新导出
- * @deprecated 原始文件仍在 core/，此模块建立 harness 规范路径
+ * Budget 模块 — IterationBudget 资源约束
+ *
+ * 从 core/budget.ts 迁移到 harness/budget/（v0.8.0）。
+ * IterationBudget 是策略实现，不是核心机制。
  */
-export { IterationBudget, DEFAULT_BUDGET } from '../../core/budget.js';
-export type { IterationBudgetConfig, BudgetStatus, BudgetReport } from '../../core/budget.js';
+export { IterationBudget, DEFAULT_BUDGET } from './budget.js';
+export type { IterationBudgetConfig, BudgetStatus, BudgetReport } from './budget.js';

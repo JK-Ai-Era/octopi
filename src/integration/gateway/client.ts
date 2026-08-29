@@ -5,7 +5,7 @@
  * 通过 WebSocket 接收流式事件，通过 HTTP POST 发送消息。
  */
 
-import type { AgentEvent } from '../../core/event-bus.js';
+import type { AgentEvent } from '../../core/primitives/event-bus.js';
 import WebSocket from 'ws';
 
 export interface GatewayClientOptions {

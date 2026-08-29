@@ -8,8 +8,8 @@
  * 基于模式匹配，不需要外部依赖。
  */
 
-import type { EventBus } from '../../core/event-bus.js';
-import { AgentEvents } from '../../core/event-bus.js';
+import type { EventBus } from '../../core/primitives/event-bus.js';
+import { AgentEvents } from '../../core/primitives/event-bus.js';
 import type { ToolCall } from '../../core/types/messages.js';
 import type {
   SecurityViolation,

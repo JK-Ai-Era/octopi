@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { AgentInput, AgentOutput, InterceptOutput, ContextOutput, NotifyOutput, TriggerContext, AgentContext, TaskSummary } from '../../src/harness/distributed/types.js';
+import type { AgentInput, AgentOutput, InterceptOutput, ContextOutput, NotifyOutput, TriggerContext, AgentContext, TaskSummary } from '../../src/harness/distributed-agents/distributed/types.js';
 
 describe('Distributed Intelligence — Core Types', () => {
   describe('AgentOutput variants', () => {

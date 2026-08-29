@@ -48,10 +48,8 @@ export type {
 export type { SkillDefinition, SkillManager } from './skills.js';
 
 // ── Channel Adapter ──
-export type { ChannelMessage, ChannelReply, ChannelAdapter } from './channels.js';
 
 // ── Plugin Hooks ──
-export type { HookContext } from './hooks.js';
 
 // ── Agent Event ──
 export type {
@@ -63,7 +61,6 @@ export type {
 export type { ErrorReason, ClassifiedError } from './events.js';
 
 // ── Gateway 配置 ──
-export type { GatewayConfig } from './gateway-config.js';
 
 // ── 队列模式 ──
 export type { QueueMode } from './queue-mode.js';

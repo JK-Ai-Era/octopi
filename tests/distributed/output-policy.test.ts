@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import { handleIntercept, handleReplaceContext, handleInjectContext, handleNotify, InjectionQueue } from '../../src/harness/distributed/output-policy.js';
-import type { InterceptOutput, ContextOutput, NotifyOutput, AgentContext } from '../../src/harness/distributed/types.js';
+import { handleIntercept, handleReplaceContext, handleInjectContext, handleNotify, InjectionQueue } from '../../src/harness/distributed-agents/distributed/output-policy.js';
+import type { InterceptOutput, ContextOutput, NotifyOutput, AgentContext } from '../../src/harness/distributed-agents/distributed/types.js';
 
 function createMockContext(): AgentContext {
   return {

@@ -12,32 +12,18 @@
 
 import type { Message, Turn, SessionStatus } from '../core/types.js';
 import type { SessionStore, SessionData } from '../core/interfaces/session-store.js';
-import type { Agent } from '../core/loop/agent.js';
-import type { AgentLoopEvent } from '../core/loop/types.js';
+import type { Agent } from '../loop/agent.js';
+import type { AgentLoopEvent } from '../loop/types.js';
 import type { ReliabilityHarness } from './reliability/run-agent.js';
 import { runAgentWithReliability } from './reliability/run-agent.js';
-import { createSessionStateMachine, type StateMachine } from '../core/state-machine.js';
+import { createSessionStateMachine, type StateMachine } from '../core/primitives/state-machine.js';
 
 /**
- * 任务决策提供者接口
- *
- * Harness 层组件，在用户消息到达时调用 LLM 判断任务状态。
- * SessionAwareRunner 在调用 engine.run() 之前调用一次。
+ * 任务决策提供者 — 接口已迁移到 core/interfaces/task-decision.ts
+ * @deprecated 请从 core/interfaces/ 导入
  */
-export interface TaskDecisionProvider {
-  decide(params: {
-    sessionId: string;
-    messages: Message[];
-  }): Promise<TaskDecisionResult>;
-}
-
-/** 任务决策结果 */
-export interface TaskDecisionResult {
-  /** 注入到 systemPrompt 的任务上下文 */
-  taskContext?: string;
-  /** 决策理由（用于日志/可观测性） */
-  reason?: string;
-}
+export type { TaskDecisionProvider, TaskDecisionResult } from '../core/interfaces/task-decision.js';
+import type { TaskDecisionProvider, TaskDecisionResult } from '../core/interfaces/task-decision.js';
 
 /** Session 锁队列项 */
 interface QueueEntry {
@@ -98,7 +84,7 @@ function adaptLoopEvent(
   event: AgentLoopEvent,
   meta: { agentId: string; sessionId: string },
   state: { assistantContent: string },
-): import('../core/event-bus.js').AgentEvent | null {
+): import('../core/primitives/event-bus.js').AgentEvent | null {
   switch (event.type) {
     case 'agent_start':
       return { type: 'engine.start', timestamp: event.timestamp, agentId: meta.agentId, sessionId: meta.sessionId, data: {} };
@@ -144,11 +130,11 @@ export class SessionAwareRunner {
   /** Session 状态机缓存 */
   private stateMachines = new Map<string, StateMachine<SessionStatus>>();
   /** 分布式智能体运行时（可选） */
-  private _distributedRuntime?: import('./distributed/runtime.js').AgentRuntime;
+  private _distributedRuntime?: import('./distributed-agents/distributed/runtime.js').AgentRuntime;
   /** EventBus 引用（用于分布式智能体上下文） */
-  private _events?: import('../core/event-bus.js').EventBus;
+  private _events?: import('../core/primitives/event-bus.js').EventBus;
 
-  constructor(agent: Agent, harness: ReliabilityHarness, store: SessionStore, config?: SessionAwareRunnerConfig & { events?: import('../core/event-bus.js').EventBus }) {
+  constructor(agent: Agent, harness: ReliabilityHarness, store: SessionStore, config?: SessionAwareRunnerConfig & { events?: import('../core/primitives/event-bus.js').EventBus }) {
     this.agent = agent;
     this.harness = harness;
     this.store = store;
@@ -157,7 +143,7 @@ export class SessionAwareRunner {
   }
 
   /** 设置分布式智能体运行时 */
-  setDistributedRuntime(runtime: import('./distributed/runtime.js').AgentRuntime): void {
+  setDistributedRuntime(runtime: import('./distributed-agents/distributed/runtime.js').AgentRuntime): void {
     this._distributedRuntime = runtime;
   }
 
@@ -175,7 +161,7 @@ export class SessionAwareRunner {
     input: Message,
     runConfig: RunConfig,
     signal?: AbortSignal,
-  ): AsyncGenerator<import('../core/event-bus.js').AgentEvent> {
+  ): AsyncGenerator<import('../core/primitives/event-bus.js').AgentEvent> {
     // 1. 并发门控（如果配置了 SessionGate）
     const gate = this.config.sessionGate;
     let gateRelease: (() => void) | undefined;

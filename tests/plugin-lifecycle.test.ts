@@ -3,7 +3,7 @@
  */
 
 import { describe, test, expect, beforeEach } from 'vitest';
-import { PluginLifecycleManager } from '../src/harness/plugins/lifecycle.js';
+import { PluginLifecycleManager } from '../src/harness/plugin-ecosystem/plugins/lifecycle.js';
 
 describe('Plugin 生命周期管理', () => {
   let manager: PluginLifecycleManager;

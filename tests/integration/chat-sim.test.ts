@@ -12,10 +12,10 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { AgentBuilder } from '../../src/harness/builder.js';
+import { AgentBuilder } from '../../src/harness/agent-building/builder.js';
 import { OpenAIProvider } from '../../src/integration/providers/openai.js';
 import { JsonlSessionStore } from '../../src/integration/storage/jsonl.js';
-import { getBuiltinTools } from '../../src/harness/tools/builtin.js';
+import { getBuiltinTools } from '../../src/harness/plugin-ecosystem/tools/builtin.js';
 import { initOctopi } from '../../src/init.js';
 import type { RunConfig } from '../../src/harness/runner.js';
 import type { SessionAwareRunner } from '../../src/harness/runner.js';
@@ -28,7 +28,7 @@ const skipIfNoKey = API_KEY ? describe : describe.skip;
 
 skipIfNoKey('Chat Simulation', () => {
   let tempDir: string;
-  let agent: import('../../src/core/loop/agent.js').Agent;
+  let agent: import('../../src/loop/agent.js').Agent;
   let runner: SessionAwareRunner;
   let workspaceDir: string;
   const sessionId = `test:sim:${Date.now()}`;

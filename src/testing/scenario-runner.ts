@@ -22,7 +22,7 @@
 import type { ModelProvider } from '../core/interfaces/model-provider.js';
 import type { SessionStore } from '../core/interfaces/session-store.js';
 import type { RegisteredTool, AgentEventDetail } from '../core/types.js';
-import { AgentBuilder } from '../harness/builder.js';
+import { AgentBuilder } from '../harness/agent-building/builder.js';
 import { SessionAwareRunner } from '../harness/runner.js';
 
 import { TraceCollector, type TraceCollectorConfig } from '../integration/observability/trace-collector.js';
@@ -142,7 +142,7 @@ export interface ScenarioRunnerConfig {
 export class ScenarioRunner {
   private config: ScenarioRunnerConfig;
   private runner!: SessionAwareRunner;
-  private agent!: import('../core/loop/agent.js').Agent;
+  private agent!: import('../loop/agent.js').Agent;
   private traceCollector?: TraceCollector;
 
   constructor(config: ScenarioRunnerConfig) {

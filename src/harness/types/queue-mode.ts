@@ -1,8 +1,4 @@
 /**
- * QueueMode — 消息队列模式
- *
- * Harness 层类型。定义 Agent 消息队列的处理策略。
+ * 向后兼容 re-export — 规范定义已迁移到 core/types/queue-mode.ts
  */
-
-/** 队列模式 */
-export type QueueMode = 'steer' | 'followup' | 'collect' | 'interrupt';
+export type { QueueMode } from '../../core/types/queue-mode.js';

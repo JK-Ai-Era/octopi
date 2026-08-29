@@ -12,14 +12,14 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { DefaultEventBus } from '../../src/core/event-bus.js';
-import { AgentRuntime } from '../../src/harness/distributed/runtime.js';
-import { TriggerEngine } from '../../src/harness/distributed/trigger.js';
-import { handleIntercept } from '../../src/harness/distributed/output-policy.js';
+import { DefaultEventBus } from '../../src/core/primitives/event-bus.js';
+import { AgentRuntime } from '../../src/harness/distributed-agents/distributed/runtime.js';
+import { TriggerEngine } from '../../src/harness/distributed-agents/distributed/trigger.js';
+import { handleIntercept } from '../../src/harness/distributed-agents/distributed/output-policy.js';
 import { buildSafetyGuardSpec } from '../../src/harness/security/safety-agent-spec.js';
-import type { SharedDeps } from '../../src/harness/distributed/runtime.js';
+import type { SharedDeps } from '../../src/harness/distributed-agents/distributed/runtime.js';
 import type { ModelProvider } from '../../src/core/interfaces/model-provider.js';
-import type { InterceptOutput, AgentContext } from '../../src/harness/distributed/types.js';
+import type { InterceptOutput, AgentContext } from '../../src/harness/distributed-agents/distributed/types.js';
 import { DefaultSecurityGuard } from '../../src/harness/security/default-security-guard.js';
 import { DefaultToolCallRiskPolicy } from '../../src/harness/security/default-risk-policy.js';
 

@@ -22,7 +22,7 @@ import { resolve, dirname, join } from 'node:path';
 import { Gateway } from './integration/gateway/gateway.js';
 import { OpenAIProvider } from './integration/providers/openai.js';
 import { AnthropicProvider } from './integration/providers/anthropic.js';
-import { getBuiltinTools } from './harness/tools/builtin.js';
+import { getBuiltinTools } from './harness/plugin-ecosystem/tools/builtin.js';
 import { fork, execSync } from 'node:child_process';
 import { readFileSync, writeFileSync, unlinkSync, existsSync, mkdirSync } from 'node:fs';
 import type { ModelProvider } from './core/interfaces/model-provider.js';

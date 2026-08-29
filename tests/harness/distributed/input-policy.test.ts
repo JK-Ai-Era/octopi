@@ -3,10 +3,10 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { buildTaskSummary, buildAgentInput } from '../../../src/harness/distributed/input-policy.js';
-import type { InputPolicy, ContextField } from '../../../src/harness/distributed/input-policy.js';
-import type { AgentContext } from '../../../src/harness/distributed/types.js';
-import type { EventBus } from '../../../src/harness/distributed/../../core/event-bus.js';
+import { buildTaskSummary, buildAgentInput } from '../../../src/harness/distributed-agents/distributed/input-policy.js';
+import type { InputPolicy, ContextField } from '../../../src/harness/distributed-agents/distributed/input-policy.js';
+import type { AgentContext } from '../../../src/harness/distributed-agents/distributed/types.js';
+import type { EventBus } from '../../../src/harness/distributed/../../core/primitives/event-bus.js';
 
 function createMockEvents(): EventBus {
   return {

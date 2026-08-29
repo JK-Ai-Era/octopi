@@ -18,7 +18,7 @@
 import type { Message } from '../../core/types.js';
 import type { TokenEstimator } from '../../core/interfaces/context-engine.js';
 import { HeuristicTokenEstimator } from './token-estimator.js';
-import { SAFETY_MARGIN, TOOL_RESULT_CHARS_PER_TOKEN } from '../../core/token-constants.js';
+import { SAFETY_MARGIN, TOOL_RESULT_CHARS_PER_TOKEN } from './token-constants.js';
 
 // ── 路由类型 ──
 
