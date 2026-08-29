@@ -27,13 +27,14 @@ npm run dev            # tsc --watch
 
 ## 架构分层
 
-项目采用三层洋葱架构 + DDD 领域组织：
+项目采用四层洋葱架构 + DDD 领域组织：
 
 | 层 | 目录 | 职责 | 依赖 |
 |---|---|---|---|
-| Core | `src/core/` | 纯引擎 + 接口契约 + 核心循环 | 无外部依赖 |
-| Harness | `src/harness/` | 装具层（9 个领域） | 依赖 Core 接口 |
-| Integration | `src/integration/` | 集成层 | 依赖 Core + Harness |
+| Loop | `src/loop/` | 纯执行循环 | 仅依赖 Core 类型 |
+| Core | `src/core/` | 机制原语 + 接口契约 + 核心类型 | 无外部依赖 |
+| Harness | `src/harness/` | 11 个自包含领域 | 依赖 Core + Loop |
+| Integration | `src/integration/` | 外部系统适配 | 依赖 Core + Loop + Harness |
 
 详细架构见 [arch/overview.md](../arch/overview.md)
 
@@ -54,7 +55,7 @@ npx vitest run --grep "SecurityGuard"
 
 **测试文件命名：** `tests/<module>.test.ts`
 
-**当前测试分布：** 31 个测试文件，1050+ 测试用例
+**当前测试分布：** 64 个测试文件，1022 个测试用例
 
 | 测试领域 | 覆盖范围 |
 |---|---|
