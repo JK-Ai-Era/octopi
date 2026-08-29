@@ -1,91 +1,126 @@
 # Octopi 🐙
 
-**可嵌入的 Agent 引擎**
+**可嵌入的 Agent 底座引擎**
 
-> Agent 不是一个 class —— 它是一个完整的运行时。
-> Session 不是聊天记录 —— 它是一个完整的交互生命周期。
+> Agent 不是一个 class，是一个完整的运行时。
 > 框架的价值不在于提供了多少默认实现，而在于定义了多少清晰的接口。
 
-[English](./README.md)
+[English](./README.md) | [架构设计](./docs/ARCHITECTURE.md) | [开发规范](./docs/CONTRIBUTING.md)
 
 ---
 
-## 未来的软件
+## 什么是 Octopi？
 
-未来会是什么样？未来的软件会是什么样？
+Octopi 是一个可嵌入的 Agent 底座引擎，用于构建 AI 驱动的应用。它提供你的产品所需要的 Agent 运行时基础设施——就像汽车需要引擎一样，你的产品需要一个 Agent 引擎来拥有 AI 能力。
 
-与用户的交互方式可能会完全不同，系统运行的逻辑可能不同，大量的工作逻辑可能不再是代码驱动，而是 LLM 驱动。但 LLM 本质上是无状态的内容生成模型——它可能知道全世界所有的知识，却不知道你工作的具体内容，也无法直接读写你电脑上的数据。要让 LLM 真正为你干活，它还需要**感官**——去感知你的环境和上下文；需要**手脚**——去操作文件、调用接口、执行命令；需要**记忆**——去记住你是谁、做过什么、偏好什么。
-
-那么软件会如何演进？从丰富的图形界面，直接变成一个聊天窗口？
-
-我们认为不会。图形界面在信息密度、交互效率、操作便捷性等方面依然有着不可替代的优势。一个精心设计的仪表盘、一张结构化的数据表格、一套流畅的拖拽操作——这些都不是聊天框能简单替代的。
-
-**未来的软件，不应该是把所有界面都替换成聊天窗口，等着 LLM 逐字生成答案。** 而是把 AI 的能力作为系统的一部分，无缝集成进来。AI 可以做运维监控、可以做数据分析、可以做内容审核、可以做流程编排、可以做智能决策——但这一切的前提是：你的系统需要一个足够强大、稳定、安全、可扩展的 Agent 底座。
-
----
-
-## 为什么做 Octopi？
-
-大多数 Agent 框架给你一个整体：固定的 Agent Loop、固定的 Session 模型、固定的集成方式。你可以直接用，但一旦需要不同的东西 —— 自定义上下文管道、不同的存储后端、在自己的产品里嵌入一个 Agent —— 你就在和框架打架。
-
-**Octopi 不是又一个框架，而是一个引擎。** 把它想象成 AI Agent 的"引擎"——就像汽车需要引擎才能跑起来，你的产品需要 Agent 引擎才能拥有 AI 能力。
-
-- **嵌入式设计** —— 不是独立应用，而是你产品的组件
-- **纯函数 Agent 循环** —— `agentLoop()` 是纯 async generator：输入消息 → LLM 调用 → 工具执行 → 输出事件。零状态、零副作用
-- **可靠性层** —— `runAgentWithReliability()` 包装循环，提供 planning-only 重试、空响应重试、noop 检测、循环检测、TaskSupervisor 检查点
-- **Agent 类** —— 轻量级状态持有者：模型、工具、上下文、系统提示词。通过 `AgentBuilder` 构建，通过 `runAgentWithReliability()` 运行
-- **Session 管理** —— 生命周期、持久化、并发控制，全部可插拔
-- **多 Provider LLM** —— OpenAI、Anthropic，或任何实现 `ModelProvider` 接口的提供者
-- **Plugin 系统** —— 完整的生命周期 hook，支持拦截语义和观察语义
-- **Task 系统** —— LLM 驱动的任务追踪、上下文恢复、自主规划
-- **安全内置** —— 注入检测、敏感信息过滤、信任分级 —— 不可选、不可移除
-
-你可以用它做一个 CLI bot、一个 Web 应用的 AI 后端、一个嵌入式助手，或者一个你还没想到的东西。
+- **可嵌入** — 不是独立应用，而是产品的组件
+- **4 层架构** — Loop → Core → Harness → Integration，边界清晰，层次独立
+- **11 个自包含领域** — 每个领域可独立理解、独立测试、独立替换
+- **7 层上下文智能** — 智慧、人格、技能、知识、认知、记忆、信息
+- **安全内置** — 注入检测、风险评估、审批流程——不可选、不可绕过
+- **原生多智能体** — 从架构底层支持分布式智能
 
 ---
 
-## 核心理念
+## 架构
 
-### Agent 是运行时，不是一个 class
+```
+┌──────────────────────────────────────────────────────────────┐
+│  Layer 3: Integration — 外部适配                              │
+│  LLM Provider · 存储 · 可观测性 · Gateway · TUI               │
+│                                                              │
+│  ┌──────────────────────────────────────────────────────────┐│
+│  │  Layer 2: Harness — 11 个自包含领域                       ││
+│  │  agent-building · context · security · reliability        ││
+│  │  plugin-ecosystem · distributed-agents · task-system      ││
+│  │  concurrency · execution-env · human-in-the-loop · memory ││
+│  │                                                          ││
+│  │  ┌──────────────────────────────────────────────────────┐││
+│  │  │  Layer 1: Core — 机制原语 + 接口契约 + 核心类型       │││
+│  │  │  EventBus · StateMachine · AsyncTask · 接口定义       │││
+│  │  │                                                      │││
+│  │  │  ┌──────────────────────────────────────────────────┐│││
+│  │  │  │  Layer 0: Loop — 纯执行循环                      ││││
+│  │  │  │  agentLoop · Agent · callModel · classifyError   ││││
+│  │  │  └──────────────────────────────────────────────────┘│││
+│  │  └──────────────────────────────────────────────────────┘││
+│  └──────────────────────────────────────────────────────────┘│
+└──────────────────────────────────────────────────────────────┘
+```
 
-一个 Agent 不是一个可以 `new` 出来的对象。它是一个完整的运行时作用域：工作空间、Session 存储、工具集、模型配置、人格定义——这些共同构成一个 Agent。框架提供引擎和机制，集成方提供策略和业务逻辑。
+**依赖方向：外 → 内。Core 零外层依赖。**
 
-### 内核与装具分离
+### Layer 0: Loop — 纯执行循环
 
-框架分为两层：**内核（Core）** 提供机制——Agent 循环、事件总线、安全守卫、资源约束；**装具（Harness）** 提供策略——人格、插件、技能、任务规划、可靠性包装。内核永远不知道装具的存在，装具通过接口挂载到内核上。这意味着你可以只用内核写一个极简 Agent，也可以用全套装具构建一个复杂的自治系统。
+引擎的核心。`agentLoop()` 是一个纯 async generator：输入消息 → 调用 LLM → 执行工具 → 输出事件。零状态，零外部依赖。
 
-### Session 是一等公民
+### Layer 1: Core — 机制原语 + 接口契约
 
-所有状态归 Session，不归 Agent。Agent 循环本身是无状态的——它接收消息，以 async generator 形式返回事件流。状态的生命周期、持久化方式、并发控制，全部由 Session 层决定。这让同一个引擎可以服务无状态的 API 调用，也可以支撑长期运行的对话式 Agent。
+基础设施原语（EventBus、StateMachine、AsyncTask、ProcessModel）和全部接口契约（ModelProvider、ContextEngine、SecurityGuard、SessionStore 等）。不包含策略实现。
 
-### 接口的价值 > 默认实现
+### Layer 2: Harness — 11 个领域
 
-框架的价值不在于提供了多少默认实现，而在于定义了多少清晰的接口。`ModelProvider` 让你换 LLM 厂商只需实现一个接口；`SessionStore` 让你换存储后端不影响任何上层逻辑；`ContextEngine` 让你自由管理上下文的每一个阶段。好的接口是框架最珍贵的资产。
+| 领域 | 职责 |
+|------|------|
+| **Agent Building** | Builder、人格加载、配置桥接 |
+| **Context Management** | 消息选择、压缩、Token 估算、七层智能组装 |
+| **Security** | 风险评估、Shell 解析、降级策略、安全智能体 |
+| **Reliability** | `runAgentWithReliability()`、断路器、重试、监督 |
+| **Plugin Ecosystem** | Plugin、Tool、Skill、MCP、斜杠命令 |
+| **Distributed Agents** | 多 Agent 编排、分布式运行时、触发引擎 |
+| **Task System** | 任务管理、规划、调度、工作流、质量检测 |
+| **Concurrency** | 多 Key LLM 负载均衡、限流、Session 门控 |
+| **Execution Environment** | 沙箱、工作区管理、文件操作 |
+| **Human-in-the-Loop** | 审批流程、决策缓存、基于风险的策略 |
+| **Memory** | 记忆存储/检索、认知图谱、智慧、项目记忆 |
 
-### 安全不可选
+### Layer 3: Integration — 外部适配
 
-注入检测、敏感信息过滤、资源消耗约束——这些不是可以打开或关闭的配置项，而是框架的内建约束。Agent 越强大，安全机制就越不能依赖开发者自觉。
+LLM Provider（OpenAI、Anthropic）、存储后端（JSONL、SQLite、Memory）、可观测性（Trace、Metrics、Exporters）、协议（HTTP）、Gateway、TUI。
 
-### 文件即配置
+---
 
-Persona、技能、操作指令——全部以 Markdown 文件定义。没有 schema，没有配置格式。扩展 = 加文件。组合 = 目录叠加。这是从 OpenClaw 学到的最优雅的设计之一：用最简单的形式表达最灵活的配置。
+## Context Intelligence — 七层智能模型
 
-### 天然多 Agent
+Octopi 独特的上下文智能组装方法，让 agent 通过更有效的 context 变得更聪明：
 
-八爪鱼有八条触手，每条都能独立感知和行动，但共享同一个身体。Octopi 的设计也是如此——从底层就支持多 Agent 协作：每个 Agent 拥有独立的运行时作用域（Session、工具集、人格），彼此隔离互不干扰；同时内建了 Agent 间的通信和协调机制，让多个 Agent 可以像触手一样协同工作。这不是事后附加的功能，而是架构的原生能力。
+```
+智慧（思维范式）        ← 最高优先级，放在 system prompt 最前面
+人格（身份、特质）
+技能（工作流指导）      ← 条件加载
+知识（外部参考资料）    ← 按需检索
+认知（概念关系网络）    ← 概念之间的关系
+记忆（提取的洞察）      ← 从过去的交互中提取
+信息（原始消息）        ← 窗口管理 + 压缩
+```
 
-### 分布式智能
+这是一个**信息分馏系统**：原始信息通过逐层提炼，产出越来越高层级的理解。
 
-大多数 Agent 框架的会话任务，本质上都在一条 LLM 调用链中运行——这意味着系统只能在主链上思考，很难做到自己规划自己。Octopi 采用了不同的方式：我们在工作流的关键节点嵌入了独立的 LLM 逻辑来规划和管理主链。比如任务系统中的 LLMPlanner，它不是主链的一部分，而是一个独立的决策者，负责审视任务进展、调整执行策略、决定下一步行动。
+---
 
-就像八爪鱼的智能不只集中在大脑，而是分布在全身各条触手上——每条触手都有自己的神经节，能独立做出反应。Octopi 的架构中，智能不是单点的，而是分布式的。未来我们还计划在更多逻辑节点嵌入小型自治智能体，让整个架构更灵活、更强大。
+## 快速开始
 
-### MCP — 接入工具生态
+```typescript
+import { AgentBuilder, OpenAIProvider } from 'octopi';
 
-Octopi 支持 [MCP (Model Context Protocol)](https://modelcontextprotocol.io/)，连接 AI 应用与外部工具的开放标准。任何 MCP Server——文件系统、GitHub、数据库、Sentry 等——一行代码即可接入：
+const { agent, runner } = await new AgentBuilder()
+  .model(new OpenAIProvider({ apiKey: process.env.OPENAI_API_KEY! }))
+  .persona('./my-agent')
+  .build();
 
-```ts
-const { agent, runner, mcpManager } = await new AgentBuilder()
+for await (const event of runner.handle('session-1', userMessage)) {
+  if (event.type === 'llm_stream_delta') {
+    process.stdout.write(event.data.delta);
+  }
+}
+```
+
+### MCP 集成
+
+一行代码连接任何 MCP Server：
+
+```typescript
+const { agent, runner } = await new AgentBuilder()
   .model('gpt-4o')
   .mcp({
     id: 'filesystem',
@@ -94,252 +129,21 @@ const { agent, runner, mcpManager } = await new AgentBuilder()
     args: ['-y', '@modelcontextprotocol/server-filesystem', '/data'],
   })
   .build();
-// Agent 现在可以使用 filesystem__read_file、filesystem__write_file 等工具
-```
-
-MCP 工具自动命名空间管理（`{serverId}__{toolName}`），支持运行时动态管理，支持从 `~/.octopi/mcp-servers/` 目录自动发现。
-
----
-
-## 架构：三层洋葱
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│  Layer 3: Integration（集成层）                               │
-│  协议适配 · 存储后端 · 可观测性                                │
-│                                                              │
-│  ┌─────────────────────────────────────────────────────────┐ │
-│  │  Layer 2: Harness（装具层）                               │ │
-│  │  Persona · Plugin · Skill · Task · Planner               │ │
-│  │  Strategy · Resources · Security Policy · Builder        │ │
-│  │  Reliability · Distributed Intelligence                  │ │
-│  │                                                          │ │
-│  │  ┌─────────────────────────────────────────────────────┐ │ │
-│  │  │  Layer 1: Core（引擎层）                              │ │ │
-│  │  │  agentLoop · Agent · EventBus · SecurityGuard        │ │ │
-│  │  │  Budget · AsyncTask · ProcessModel · Interfaces      │ │ │
-│  │  └─────────────────────────────────────────────────────┘ │ │
-│  └─────────────────────────────────────────────────────────┘ │
-└─────────────────────────────────────────────────────────────┘
-```
-
-**依赖方向：外 → 内。内层不知道外层的存在。**
-
-### Core 层（`src/core/`）—— 引擎核心
-
-零实现依赖。只有接口和最小的 Agent 循环。
-
-| 组件 | 职责 |
-|---|---|
-| `agentLoop()` | 纯 async generator —— 引擎的心脏。输入消息 → LLM 调用 → 工具执行 → 输出事件。零状态、零副作用 |
-| `Agent` 类 | 轻量级状态持有者：模型、工具、上下文、系统提示词。由 `AgentBuilder` 创建 |
-| `callModel()` | Watchdog 模式流式 LLM 调用，支持空闲超时、绝对超时、中止信号 |
-| `classifyError()` | 错误分类：rate_limit、timeout、auth、server、network、unknown |
-| `EventBus` | 全链路可观测的事件总线 |
-| `SecurityGuard` | 注入检测 + 敏感信息过滤（不可禁用） |
-| `IterationBudget` | 资源约束：迭代次数、工具调用、token、时间 |
-| `AsyncTask` | 异步原语：取消、超时、重试、持久化 |
-| `ProcessModel` | Agent 进程模型：生命周期、spawn、IPC |
-| `ModelProvider` | LLM 调用接口（OpenAI、Anthropic、或自定义） |
-| `ContextEngine` | 上下文管理接口（替换 ContextPipeline） |
-| `ErrorStrategy` | 错误分类与恢复接口 |
-
-### Harness 层（`src/harness/`）—— 装具层
-
-Agent 获得人格、工具和智能的地方。
-
-| 组件 | 职责 |
-|---|---|
-| `AgentBuilder` | Fluent API —— 一行代码启动 Agent |
-| `runAgentWithReliability()` | 可靠性包装：planning-only 重试、空响应重试、noop 检测、循环检测、TaskSupervisor 检查点、SecurityGuard 注入 |
-| `SessionAwareRunner` | Session 生命周期管理：锁、持久化、重置 |
-| `PersonaLoader` | 文件式人格系统（AGENTS.md、SOUL.md 等） |
-| `DefaultContextEngine` | 智能上下文路由：fits / truncate / compact / compact_then_truncate |
-| `AgentSupervisor` | 持续运行的 Agent 核心：感知 → 思考 → 执行 → 反思 |
-| `TaskTracker` / `TaskManager` | LLM 驱动的任务追踪与恢复 |
-| `RulePlanner` / `LLMPlanner` / `HybridPlanner` | 规划器：规则驱动 / LLM 驱动 / 混合 |
-| `TaskScheduler` | 任务调度：once / interval / cron / at |
-| `MemoryKnowledgeStore` | 知识 CRUD、关键词检索、置信度过滤 |
-| `LLMReflector` | 质量评估、模式识别、经验存储 |
-| `SecurityPresets` | 安全策略预设：development / testing / production / maximum |
-| `AgentRuntime` | 分布式智能基础设施 |
-
-### Integration 层（`src/integration/`）—— 集成层
-
-协议适配、存储后端、可观测性。
-
-| 组件 | 职责 |
-|---|---|
-| `JsonlSessionStore` | JSONL 文件存储（默认） |
-| `InMemorySessionStore` | 内存存储（测试用） |
-| `TraceCollector` | 自动收集引擎事件到 trace |
-| `MetricsAggregator` | LLM/token/延迟/成本指标聚合 |
-| `RecordingProvider` | 录制真实 LLM 交互用于回放 |
-| `ReplayProvider` | 回放录制的交互（确定性测试） |
-| `ChaosProvider` | 故障注入：空回复、超时、限流、畸形响应 |
-| `ScenarioRunner` | E2E 场景测试 + 内置断言库 |
-| `SdkMcpClient` | MCP 客户端（连接外部 MCP Server，支持 stdio/HTTP） |
-
----
-
-## 快速开始
-
-```typescript
-import { AgentBuilder } from 'octopi';
-import { OpenAIProvider } from 'octopi';
-
-const { agent, runner } = await new AgentBuilder()
-  .model(new OpenAIProvider({ apiKey: process.env.OPENAI_API_KEY! }))
-  .persona('./my-agent')
-  .build();
-
-// 处理消息
-for await (const event of runner.handle('session-1', userMessage)) {
-  console.log(event);
-}
-```
-
-### 自定义存储
-
-```typescript
-import { AgentBuilder } from 'octopi';
-
-const { agent, runner } = await new AgentBuilder()
-  .model('gpt-4o')
-  .store(new RedisSessionStore({ host: 'localhost' }))
-  .build();
-```
-
-### 直接使用 Agent 循环（不经过 Harness）
-
-```typescript
-import { Agent } from 'octopi/core';
-import { runAgentWithReliability } from 'octopi/harness/reliability';
-
-const agent = new Agent({
-  model: provider,
-  systemPrompt: 'You are a helpful assistant.',
-  tools: [myTool],
-});
-
-// 注入初始消息
-agent.context.messages.push({ role: 'user', content: 'Hello', timestamp: Date.now() });
-
-// 使用可靠性包装运行
-const harness = { config: { planningRetry: { maxAttempts: 2, steerInstruction: '...' }, emptyResponseRetry: { maxAttempts: 2, steerInstruction: '...' }, noopThreshold: 3, loopDetection: { enabled: true } } };
-for await (const event of runAgentWithReliability(agent.context, { model: agent.model }, harness)) {
-  if (event.type === 'assistant_message') {
-    console.log(event.message.content);
-  }
-}
-```
-
-### 事件订阅
-
-```typescript
-import { AgentEvents } from 'octopi';
-
-agent.events.on(AgentEvents.ENGINE_START, (event) => {
-  console.log(`Agent started at ${event.timestamp}`);
-});
-```
-
-### 安全策略
-
-```typescript
-import { AgentBuilder, SecurityPresets } from 'octopi';
-
-const { agent } = await new AgentBuilder()
-  .model('gpt-4o')
-  .securityPolicy(SecurityPresets.production)
-  .build();
 ```
 
 ---
 
-## 核心设计
+## 核心设计原则
 
-### agentLoop 是纯函数
+**Agent 是运行时，不是类。** Agent 是一个完整的运行时作用域：工作区、Session 存储、工具集、模型配置、人格定义。框架提供机制，集成方提供策略。
 
-核心循环不持有 Session 状态。它是一个 async generator，yield 事件：`agent_start`、`turn_start`、`assistant_message`、`turn_end`、`agent_end`。消息历史通过 context 传入，结果以事件流的形式产出。这意味着：
+**接口 > 实现。** 框架的价值在于接口。`ModelProvider` 让你替换 LLM 厂商；`SessionStore` 让你更换存储；`ContextEngine` 让你自由组合上下文管理。
 
-- **可测试** —— 不需要 mock SessionStore
-- **可复用** —— 同一个循环可以有 Session 或无 Session
-- **可组合** —— 用可靠性包装、安全包装或自定义逻辑包装
+**安全是内置的。** 注入检测、风险评估、审批流程——不是配置开关，而是内置约束。Agent 越强大，安全越不能依赖开发者自觉。
 
-### Persona 是文件式的
+**文件即配置。** 人格、技能、智慧、操作指令——全部用 Markdown 文件定义。扩展 = 加文件。组合 = 叠加目录。
 
-```
-my-agent/
-├── AGENTS.md    ← 操作指令
-├── SOUL.md      ← 人格特质
-├── IDENTITY.md  ← 身份定义
-└── USER.md      ← 用户上下文
-```
-
-没有 schema，没有配置格式。就是 markdown 文件。扩展 = 加文件。组合 = 目录叠加。
-
-### 安全是内置的，不是附加的
-
-- **SecurityGuard** 不可禁用 —— 注入检测 + 敏感信息过滤
-- **IterationBudget** 不可绕过 —— 资源消耗硬约束
-- **RiskPolicy** —— 工具调用的确定性风险评估（Core 通过接口注入，Harness 实现）
-
-### Plugin 系统：双语义
-
-Plugin 支持**拦截语义**（返回值中断链路）和**观察语义**（全部执行）。Hook 按优先级排序，支持 per-handler 超时。
-
-```typescript
-import { definePluginEntry } from 'octopi/plugin-sdk/plugin-entry';
-
-export default definePluginEntry({
-  id: 'my-plugin',
-  name: 'My Plugin',
-  register(api) {
-    api.on('before_tool_call', async (event) => {
-      if (event.toolName === 'shell') {
-        return { requireApproval: { title: '执行 shell', severity: 'warning' } };
-      }
-      return null; // 放行
-    }, { priority: 50 });
-  },
-});
-```
-
-### Task 系统 —— Agent 的工作记忆
-
-LLM 驱动的任务追踪。用户中途聊别的，回来后 Agent 自动恢复上下文：
-
-```typescript
-import { TaskTracker, TaskManager } from 'octopi/harness';
-
-// 通过 ContextEngine 的 TaskStage 自动集成
-// Agent 在 system prompt 中看到任务上下文，自然地决定行为
-```
-
----
-
-## 从 OpenClaw 学到了什么
-
-Octopi 最初是从探索 OpenClaw 的架构开始的。OpenClaw 是一个功能完整的 AI 助手平台 —— 它处理频道、记忆、心跳、插件等。我们从它的设计中学到了很多：
-
-- **Plugin hook 语义** —— OpenClaw 的拦截/观察双语义模式优雅且实用，我们采用了相同的模型。
-- **Persona 作为文件** —— AGENTS.md / SOUL.md 模式被证明是定义 Agent 行为的强大方式，不需要写代码。
-- **上下文管道思维** —— 通过分阶段管道组装上下文（而不是一个巨大的 prompt builder），这个思路我们从 OpenClaw 的方法中提炼而来。
-- **Session 是一等公民** —— OpenClaw 认真对待 Session，不是事后补丁。我们更进一步，让 Session 管理完全可插拔。
-
-我们的分歧：
-
-| 方面 | OpenClaw | Octopi |
-|---|---|---|
-| **定位** | 完整的 AI 助手平台 | 可嵌入的 Agent 引擎 |
-| **架构** | 集成系统 | 三层分离（Core / Harness / Integration） |
-| **Agent 模型** | 有状态的 class | 无状态循环 + 可插拔 Session |
-| **耦合度** | 平台绑定（频道、记忆、调度） | Core 层零平台依赖 |
-| **目标用户** | 终端用户构建助手 | 开发者在产品中嵌入 Agent |
-| **扩展性** | Plugin 系统 | Plugin 系统 + 每层接口均可替换 |
-
-OpenClaw 是一个优秀的项目。Octopi 是当你问"如果只提取引擎，让它可组合呢？"时会发生的事。
+**每个领域可独立理解。** 在 vibe coding 环境中，上下文有限，你可以聚焦于单个领域而不需要理解整个系统。
 
 ---
 
@@ -347,56 +151,53 @@ OpenClaw 是一个优秀的项目。Octopi 是当你问"如果只提取引擎，
 
 ```bash
 npm test
-# 1050+ 测试通过
 ```
 
-### 测试金字塔
+64 个测试文件，1022 个测试。三层策略：单元测试（Mock）、录制回放、E2E 真实 API。ChaosProvider 故障注入。
 
-| 层级 | 工具 | 说明 |
-|---|---|---|
-| L1: 单元测试 | Mock + Vitest | 快速、确定性、每次保存跑 |
-| L2: 录制回放 | RecordingProvider + ReplayProvider | 录制真实交互，回放做回归测试 |
-| L3: E2E | ScenarioRunner + ChaosProvider | 真实 API、故障注入、完整场景 |
+---
 
-### 可观测性
+## 项目结构
 
-```json
-{
-  "observability": {
-    "level": 3,
-    "consoleLevel": 2,
-    "traceDir": "~/.octopi/traces",
-    "exporters": [
-      { "type": "jsonl-file", "dir": "~/.octopi/traces" },
-      { "type": "webhook", "url": "https://monitoring.example.com/ingest" }
-    ]
-  }
-}
+```
+src/
+├── loop/                    Layer 0  纯执行循环
+├── core/                    Layer 1  原语 + 接口 + 类型
+│   ├── primitives/               EventBus、StateMachine、AsyncTask、ProcessModel
+│   ├── interfaces/               18 个接口契约
+│   └── types/                    核心类型定义
+├── harness/                 Layer 2  11 个自包含领域
+│   ├── agent-building/           Builder、人格、配置桥接
+│   ├── context/                  上下文引擎、压缩、智能组装
+│   ├── security/                 风险评估、Shell 解析
+│   ├── reliability/              可靠性包装、断路器
+│   ├── plugin-ecosystem/         Plugin、Tool、Skill、MCP
+│   ├── distributed-agents/       多 Agent、分布式运行时
+│   ├── task-system/              任务、规划、调度、工作流
+│   ├── concurrency/              负载均衡、限流
+│   ├── execution-environment/    沙箱、工作区
+│   ├── human-in-the-loop/        审批流程
+│   ├── memory/                   记忆、认知、智慧
+│   └── runner.ts                 SessionAwareRunner（编排器）
+├── integration/             Layer 3  外部适配
+└── testing/                 测试工具
 ```
 
-Trace 级别：`FATAL(0)` → `ERROR(1)` → `WARN(2)` → `INFO(3)` → `DEBUG(4)` → `TRACE(5)`
+---
+
+## 相关文档
+
+- [架构设计](./docs/ARCHITECTURE.md) — 完整架构设计文档
+- [架构全景](./arch/overview.md) — DDD 领域组织
+- [分层规则](./arch/layer-rules.md) — 依赖方向规则
+- [架构不变量](./arch/invariants.md) — 架构约束
+- [Plugin 系统](./docs/plugin-system.md) — Plugin 系统详细文档
+- [Task 系统](./docs/task-system.md) — Task 系统详细文档
+- [开发规范](./docs/CONTRIBUTING.md) — 开发指南
+- [更新日志](./CHANGELOG.md) — 版本历史
 
 ---
 
-## 技术栈
-
-- **语言:** TypeScript (ESM, Node.js >=20)
-- **构建:** tsc
-- **测试:** Vitest (node --experimental-vm-modules)
-
----
-
-## 文档
-
-| 文档 | 内容 |
-|---|---|
-| [架构设计](docs/ARCHITECTURE.md) | 设计哲学、三层架构详解、设计决策记录 |
-| [Plugin 系统](docs/plugin-system.md) | Hook 语义、Capability Ownership、完整示例 |
-| [Task 系统](docs/task-system.md) | 任务管理设计、LLM 决策器、状态机 |
-| [开发指南](docs/CONTRIBUTING.md) | 开发环境搭建、文档同步规范、测试规范 |
-
----
-
-## License
+## 许可证
 
 MIT
