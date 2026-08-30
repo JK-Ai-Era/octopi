@@ -1,3 +1,55 @@
+## v0.9.0 (2026-08-31)
+
+### feat(web): Conversation View Model — 会话显示模型全面升级
+
+将 WebUI 的会话显示从"事件驱动的临时文本"升级为"可回放、可切换、可解释的对话模型"。
+
+#### 三层消息模型
+
+| 层 | 文件 | 职责 |
+|---|---|---|
+| ConversationItem 类型 | `web/conversation/types.ts` | user/assistant/tool/system 四种角色 + ViewMode + SessionViewState |
+| ConversationAdapter | `web/conversation/adapter.ts` | runtime events → items, session messages → items |
+| ConversationViewStore | `web/conversation/view-store.ts` | UI 消费的状态容器，管理 view mode 切换 |
+
+#### RuntimeStore 集成
+
+- `openSession()` 构建 history view，`createSession()` 直接进入 runtime
+- `applyEvent()` 自动切 viewMode（history → hybrid）
+- `sendMessage()` 根据当前 viewMode 决定目标模式
+- session conversation 本地缓存，切走再切回不丢失
+- 新增 `'conversation'` 和 `'viewMode'` 事件
+
+#### agent-loop 修复
+
+- yield `tool_start` / `tool_end` 事件（之前缺失，导致 WS 客户端收不到工具事件）
+- 截断场景也补上 tool 事件
+
+#### runner 事件增强
+
+- `tool.exec.start` 携带 `args`
+- `tool.exec.end` 携带 `result`（工具执行的实际输出内容）
+
+#### Gateway 修复
+
+- `buildSessionKey` 优先使用客户端传来的 sessionId，消除 `default:main` 幽灵 session
+- WS chat 消息 metadata 透传 sessionId
+
+#### WebUI ChatWorkspace
+
+- 中栏按 role 渲染 ConversationItem（user 气泡、assistant 面板、tool 可展开卡片、system 横幅）
+- 右栏 Tools / Inspector 面板从 conversation items 派生，不再依赖独立 state
+- 对话区域独立滚动，输入框固定底部
+- 每条对话记录和 session 列表显示时间戳
+- 历史消息 tool 元数据从 `msg.toolResults` / `msg.toolCalls` 直接提取
+
+#### 测试
+
+- `conversation-adapter.test.ts`：34 个测试覆盖 buildHistoryItems、runtime 事件、tool 生命周期、system notices、完整对话流
+- `web-runtime.test.ts`：18 个测试覆盖 viewMode 切换、hybrid 模式路径、conversation cache
+
+---
+
 ## v0.8.0 (2026-08-29)
 
 ### refactor(arch): 4 层架构重构 + 11 领域重组 + 3 个新领域
