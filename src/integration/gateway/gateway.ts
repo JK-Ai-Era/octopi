@@ -30,6 +30,8 @@ import type { ModelProvider } from '../../core/interfaces/model-provider.js';
 import type { Observer } from '../../core/interfaces/observer.js';
 import type { SessionStore, SessionData } from '../../core/interfaces/session-store.js';
 import type { StreamingChannelAdapter } from '../protocols/http.js';
+import type { Message, ModelConfig } from '../../core/types.js';
+import { randomUUID } from 'node:crypto';
 import { CircuitBreaker } from '../../harness/reliability/circuit-breaker.js';
 import { wrapProviderWithCircuitBreaker } from '../../harness/reliability/provider-wrapper.js';
 import { PluginManager } from '../../harness/plugin-ecosystem/plugins/manager.js';
@@ -66,6 +68,33 @@ class InMemorySessionStore implements SessionStore {
   async exists(sessionId: string): Promise<boolean> {
     return this.sessions.has(sessionId);
   }
+}
+
+// ================================================================
+// Web REST 骨架所需的 Gateway 扩展类型
+// ================================================================
+
+/** Pending approval 请求载荷 */
+export interface PendingApprovalRequest {
+  id: string;
+  toolName: string;
+  arguments: Record<string, unknown>;
+  riskLevel: 'low' | 'medium' | 'high' | 'critical' | 'unknown';
+  riskDescription: string;
+  actionDescription: string;
+}
+
+/** Pending approval 视图 */
+export interface PendingApprovalView {
+  id: string;
+  sessionId: string;
+  agentId: string;
+  request: PendingApprovalRequest;
+  status: 'pending' | 'approved' | 'rejected';
+  createdAt: number;
+  updatedAt?: number;
+  decidedAt?: number;
+  decisionReason?: string;
 }
 
 // ================================================================
@@ -106,6 +135,8 @@ export class Gateway {
   private circuitBreakers = new Map<string, CircuitBreaker>();
   /** 每个 session 的中止控制器 */
   private abortControllers = new Map<string, AbortController>();
+  /** Web Runtime pending approvals */
+  private pendingApprovals = new Map<string, PendingApprovalView>();
 
   constructor(config: GatewayConfig) {
     this.config = config;
@@ -216,6 +247,118 @@ export class Gateway {
       controller.abort();
       this.abortControllers.delete(sessionId);
     }
+  }
+
+  // ================================================================
+  // Web Runtime: read/write surface for REST skeleton
+  // ================================================================
+
+  getRegisteredAgents(): Array<{ id: string; model: ModelConfig }> {
+    return Array.from(this.agents.entries()).map(([id, agent]) => ({ id, model: agent.model }));
+  }
+
+  getProviderSummaries(): Array<{ name: string; circuitBreaker: { state: string; failureCount: number } }> {
+    const result: Array<{ name: string; circuitBreaker: { state: string; failureCount: number } }> = [];
+    for (const [name] of this.providers) {
+      const cb = this.circuitBreakers.get(name);
+      result.push({ name, circuitBreaker: cb ? cb.snapshot() : { state: 'closed', failureCount: 0 } });
+    }
+    return result;
+  }
+
+  async listSessions(agentId?: string): Promise<SessionMeta[]> {
+    const agentIds = agentId ? [agentId] : Array.from(this.agents.keys());
+    const results = await Promise.all(agentIds.map((id) => this.store.list(id)));
+    return (results as SessionMeta[][]).flat();
+  }
+
+  async createSession(options: { agentId: string; sessionId?: string; metadata?: Record<string, unknown> }): Promise<SessionMeta> {
+    const agent = this.agents.get(options.agentId);
+    if (!agent) {
+      throw new Error(`Agent "${options.agentId}" not found`);
+    }
+
+    const sessionId = options.sessionId ?? `${options.agentId}:web:${Date.now()}`;
+    const session: SessionData = {
+      id: sessionId,
+      agentId: options.agentId,
+      meta: {
+        id: sessionId,
+        agentId: options.agentId,
+        channelId: 'web',
+        peerId: 'web-ui',
+        status: 'idle',
+        createdAt: Date.now(),
+        sessionStartedAt: Date.now(),
+        lastInteractionAt: Date.now(),
+        updatedAt: Date.now(),
+      },
+      messages: [],
+      turns: [],
+      metadata: options.metadata ?? {},
+    };
+
+    await this.store.save(sessionId, session);
+    return session.meta;
+  }
+
+  async getSessionView(sessionId: string): Promise<{ meta: SessionMeta; messageCount: number; turnCount: number } | null> {
+    const session = await this.store.load(sessionId);
+    if (!session) return null;
+    return { meta: session.meta, messageCount: session.messages.length, turnCount: session.turns.length };
+  }
+
+  async getSessionMessages(sessionId: string, options: { limit: number; cursor?: string }): Promise<{ messages: Message[]; nextCursor?: string }> {
+    const session = await this.store.load(sessionId);
+    if (!session) {
+      throw new Error(`Session "${sessionId}" not found`);
+    }
+
+    const offset = options.cursor ? Number(Buffer.from(options.cursor, 'base64').toString('utf-8')) : 0;
+    const slice = session.messages.slice(offset, offset + options.limit);
+    const nextOffset = offset + slice.length;
+    const nextCursor = nextOffset < session.messages.length ? Buffer.from(String(nextOffset)).toString('base64') : undefined;
+
+    return { messages: slice, nextCursor };
+  }
+
+  async getMemoryStats(): Promise<Record<string, unknown> | null> {
+    // 预留：当前 Gateway 未持有 MemoryStore，返回 null 表示未配置。
+    return null;
+  }
+
+  async queryMemory(_options: { q: string; limit: number }): Promise<Record<string, unknown> | null> {
+    return null;
+  }
+
+  listPendingApprovals(): PendingApprovalView[] {
+    return Array.from(this.pendingApprovals.values());
+  }
+
+  createPendingApproval(input: { sessionId: string; agentId: string; request: PendingApprovalRequest }): PendingApprovalView {
+    const view: PendingApprovalView = {
+      id: randomUUID().slice(0, 8),
+      sessionId: input.sessionId,
+      agentId: input.agentId,
+      request: input.request,
+      status: 'pending',
+      createdAt: Date.now(),
+    };
+    this.pendingApprovals.set(view.id, view);
+    return view;
+  }
+
+  resolvePendingApproval(approvalId: string, input: { action: 'approve' | 'reject'; reason?: string }): PendingApprovalView | null {
+    const approval = this.pendingApprovals.get(approvalId);
+    if (!approval) return null;
+
+    const now = Date.now();
+    approval.status = input.action === 'approve' ? 'approved' : 'rejected';
+    approval.decisionReason = input.reason;
+    approval.decidedAt = now;
+    approval.updatedAt = now;
+
+    return approval;
   }
 
   // ================================================================
@@ -410,6 +553,13 @@ export class Gateway {
     // 使用消息中的原始 agentId（而非 Gateway 解析后的 agent.id）
     // 这样 sessionKey 和 WS session 的 agentId 一致，broadcastEvent 能正确匹配
     const agentId = (msg.metadata?.agentId as string) ?? agent.id;
+
+    // 优先使用客户端传来的 sessionId（WebUI 通过 REST API 创建的 session）
+    const clientSessionId = msg.metadata?.sessionId as string | undefined;
+    if (clientSessionId) {
+      return clientSessionId;
+    }
+
     switch (this.dmScope) {
       case 'per-peer':
         return `${agentId}:${msg.senderId}`;

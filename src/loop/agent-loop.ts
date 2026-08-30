@@ -143,12 +143,16 @@ export async function* agentLoop(
         // 输出被截断，所有 tool call 可能不完整
         const errorResults: LoopToolResult[] = [];
         for (const tc of response.toolCalls) {
+          yield { type: 'tool_start', toolCall: tc, timestamp: Date.now() };
           errorResults.push({
             toolCallId: tc.id,
             name: tc.name,
             content: `Error: Response was truncated, tool call "${tc.name}" may be incomplete. Re-issue with complete arguments.`,
             isError: true,
           });
+        }
+        for (const er of errorResults) {
+          yield { type: 'tool_end', toolCall: { id: er.toolCallId, name: er.name, arguments: {} }, result: er, timestamp: Date.now() };
         }
 
         // 一次 push 所有截断的工具错误结果
@@ -223,6 +227,11 @@ export async function* agentLoop(
     // ── 7. 执行工具 ──
     yield { type: 'turn_end', hasToolCalls: true };
 
+    // 7a. 为每个工具调用发出 tool_start 事件
+    for (const tc of toolCalls) {
+      yield { type: 'tool_start', toolCall: tc, timestamp: Date.now() };
+    }
+
     const toolResults = await executeToolCalls(
       toolCalls,
       currentContext,
@@ -232,6 +241,11 @@ export async function* agentLoop(
       observer,
       signal,
     );
+
+    // 7b. 为每个工具结果发出 tool_end 事件
+    for (const result of toolResults) {
+      yield { type: 'tool_end', toolCall: { id: result.toolCallId, name: result.name, arguments: {} }, result, timestamp: Date.now() };
+    }
 
     // 将工具结果加入消息历史（一次 push，使用 toolResults 数组）
     const coreResults: CoreToolResult[] = toolResults.map(r => ({

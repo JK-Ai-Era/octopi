@@ -12,6 +12,7 @@
 | `gateway/` | 网关 |
 | `protocols/` | 协议适配（HTTP） |
 | `tui/` | 终端 UI |
+| `web/` | Web Runtime / WebUI 骨架（含 Conversation View Model） |
 | `mcp/` | MCP SDK Client |
 | `types/` | Integration 层类型 |
 

@@ -27,7 +27,7 @@ Octopi 是一个可嵌入的 Agent 底座引擎，用于构建 AI 驱动的应�
 ```
 ┌──────────────────────────────────────────────────────────────┐
 │  Layer 3: Integration — 外部适配                              │
-│  LLM Provider · 存储 · 可观测性 · Gateway · TUI               │
+│  LLM Provider · 存储 · 可观测性 · Gateway · TUI · Web Runtime   │
 │                                                              │
 │  ┌──────────────────────────────────────────────────────────┐│
 │  │  Layer 2: Harness — 11 个自包含领域                       ││
@@ -76,7 +76,7 @@ Octopi 是一个可嵌入的 Agent 底座引擎，用于构建 AI 驱动的应�
 
 ### Layer 3: Integration — 外部适配
 
-LLM Provider（OpenAI、Anthropic）、存储后端（JSONL、SQLite、Memory）、可观测性（Trace、Metrics、Exporters）、协议（HTTP）、Gateway、TUI。
+LLM Provider（OpenAI、Anthropic）、存储后端（JSONL、SQLite、Memory）、可观测性（Trace、Metrics、Exporters）、协议（HTTP）、Gateway、TUI、Web Runtime。
 
 ---
 
@@ -195,6 +195,8 @@ src/
 - [Task 系统](./docs/task-system.md) — Task 系统详细文档
 - [开发规范](./docs/CONTRIBUTING.md) — 开发指南
 - [更新日志](./CHANGELOG.md) — 版本历史
+- [Web Runtime 技术设计](./docs/web-runtime-design.md) — Web Protocol SDK / Runtime Store / WebUI 设计
+- [WebUI 会话显示模型设计](./docs/web-conversation-model-design.md) — Session 展示模型设计
 
 ---
 

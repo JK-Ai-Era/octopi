@@ -40,12 +40,17 @@ export interface HttpAdapterOptions {
    * 生产环境应设置为具体的域名列表。
    */
   corsOrigins?: string[];
+  onRequest?: HttpCustomRequestHandler;
 }
+
+export type HttpCustomRequestHandler = (req: IncomingMessage, res: ServerResponse) => Promise<boolean> | boolean;
 
 interface WsSession {
   ws: WS;
   sessionId?: string;
   agentId?: string;
+  /** 精确订阅的 session 列表 */
+  subscribedSessions?: Set<string>;
   /** 发送队列（背压处理） */
   sendQueue: string[];
   /** 队列是否正在消费 */
@@ -69,6 +74,7 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
   private enableWebSocket: boolean;
   private apiKey?: string;
   private corsOrigins: string;
+  private onRequest?: HttpCustomRequestHandler;
   private handler?: (msg: ChannelMessage) => Promise<void>;
   private server?: Server;
   private wss?: WebSocketServer;
@@ -84,6 +90,7 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
     this.enableWebSocket = options.enableWebSocket ?? true;
     this.apiKey = options.apiKey;
     this.corsOrigins = options.corsOrigins?.join(', ') ?? '*';
+    this.onRequest = options.onRequest;
   }
 
   async start(handler: (msg: ChannelMessage) => Promise<void>): Promise<void> {
@@ -111,6 +118,11 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
           auth: !!this.apiKey,
         }));
         return;
+      }
+
+      if (this.onRequest) {
+        const handled = await this.onRequest(req, res);
+        if (handled) return;
       }
 
       if (req.method === 'GET' && req.url === '/metrics') {
@@ -199,13 +211,45 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
   broadcastEvent(sessionKey: string, event: AgentEvent): void {
     // sessionKey 格式：agentId:rest（由 Gateway 构建）
     const agentId = sessionKey.split(':')[0];
-    const data = JSON.stringify({ type: 'event', event });
+    const payload = { type: 'event', sessionId: sessionKey, event };
+    const data = JSON.stringify(payload);
+    const statePayload = this.deriveSessionState(sessionKey, event);
+    const stateData = statePayload ? JSON.stringify(statePayload) : undefined;
+
     for (const session of this.wsSessions) {
-      // 匹配：WS session 的 agentId 或 sessionId 与 sessionKey 的 agentId 前缀一致
+      if (session.ws.readyState !== WebSocket.OPEN) continue;
+
+      const matchesExact = session.subscribedSessions?.has(sessionKey) ?? false;
       const sessionAgentId = (session.agentId ?? session.sessionId ?? '').split(':')[0];
-      if (sessionAgentId === agentId && session.ws.readyState === WebSocket.OPEN) {
+      const matchesAgent = sessionAgentId === agentId;
+
+      if (matchesExact || matchesAgent) {
         this.enqueueSend(session, data);
+        if (stateData) {
+          this.enqueueSend(session, stateData);
+        }
       }
+    }
+  }
+
+  private deriveSessionState(sessionKey: string, event: AgentEvent): { type: 'state'; sessionId: string; state: string } | null {
+    switch (event.type) {
+      case 'llm_stream_delta':
+      case 'tool.exec.start':
+      case 'tool.exec.end':
+      case 'model.call.start':
+        return { type: 'state', sessionId: sessionKey, state: 'running' };
+      case 'turn.end':
+        return { type: 'state', sessionId: sessionKey, state: 'idle' };
+      case 'aborted':
+        return { type: 'state', sessionId: sessionKey, state: 'aborted' };
+      case 'engine.error':
+      case 'model.call.error':
+        return { type: 'state', sessionId: sessionKey, state: 'error' };
+      case 'engine.end':
+        return { type: 'state', sessionId: sessionKey, state: 'idle' };
+      default:
+        return null;
     }
   }
 
@@ -323,7 +367,7 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
         content: msg.content ?? '',
         conversationId: msg.sessionId ?? 'default',
         timestamp: Date.now(),
-        metadata: { wsSession: true, agentId: msg.agentId, ...msg.metadata },
+        metadata: { wsSession: true, agentId: msg.agentId, sessionId: msg.sessionId, ...msg.metadata },
       };
 
       try {
@@ -332,8 +376,15 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
         // 所以先用 TUI 的 sessionId 作为 fallback
         session.sessionId = msg.sessionId;
         session.agentId = msg.agentId;
+        if (msg.sessionId) {
+          session.subscribedSessions ??= new Set<string>();
+          session.subscribedSessions.add(String(msg.sessionId));
+        }
         await this.handler!(channelMsg);
-        session.ws.send(JSON.stringify({ type: 'accepted', messageId: channelMsg.id }));
+        session.ws.send(JSON.stringify({ type: 'accepted', sessionId: String(msg.sessionId ?? channelMsg.conversationId), messageId: channelMsg.id }));
+        if (msg.sessionId) {
+          session.ws.send(JSON.stringify({ type: 'state', sessionId: String(msg.sessionId), state: 'running' }));
+        }
       } catch (error) {
         session.ws.send(JSON.stringify({
           type: 'error',
@@ -343,6 +394,14 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
     } else if (msg.type === 'abort') {
       console.log(`[WS] Abort requested for session ${msg.sessionId}`);
       this.onAbort?.(msg.sessionId);
+    } else if (msg.type === 'subscribe' && msg.sessionId) {
+      session.subscribedSessions ??= new Set<string>();
+      session.subscribedSessions.add(String(msg.sessionId));
+      session.sessionId = String(msg.sessionId);
+      if (msg.agentId) session.agentId = String(msg.agentId);
+      session.ws.send(JSON.stringify({ type: 'state', sessionId: String(msg.sessionId), state: 'idle' }));
+    } else if (msg.type === 'unsubscribe' && msg.sessionId) {
+      session.subscribedSessions?.delete(String(msg.sessionId));
     }
   }
 

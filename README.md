@@ -27,7 +27,7 @@ Octopi is an embeddable agent engine for building AI-powered applications. It pr
 ```
 ┌──────────────────────────────────────────────────────────────┐
 │  Layer 3: Integration — External adapters                     │
-│  LLM Providers · Storage · Observability · Gateway · TUI      │
+│  LLM Providers · Storage · Observability · Gateway · TUI · Web Runtime │
 │                                                              │
 │  ┌──────────────────────────────────────────────────────────┐│
 │  │  Layer 2: Harness — 11 self-contained domains             ││
@@ -76,7 +76,7 @@ Infrastructure primitives (EventBus, StateMachine, AsyncTask, ProcessModel) and 
 
 ### Layer 3: Integration — External Adapters
 
-LLM providers (OpenAI, Anthropic), storage backends (JSONL, SQLite, Memory), observability (trace, metrics, exporters), protocols (HTTP), Gateway, TUI.
+LLM providers (OpenAI, Anthropic), storage backends (JSONL, SQLite, Memory), observability (trace, metrics, exporters), protocols (HTTP), Gateway, TUI, and Web Runtime.
 
 ---
 
@@ -195,6 +195,8 @@ src/
 - [Task System](./docs/task-system.md) — Task system details
 - [Contributing](./docs/CONTRIBUTING.md) — Development guidelines
 - [Changelog](./CHANGELOG.md) — Version history
+- [Web Runtime Design](./docs/web-runtime-design.md) — Web Protocol SDK / Runtime Store / WebUI design
+- [Web Conversation Model Design](./docs/web-conversation-model-design.md) — Session display model design
 
 ---
 

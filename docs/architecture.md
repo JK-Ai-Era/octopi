@@ -54,7 +54,7 @@ AI 在早期阶段，应用构建思路在不断发展。架构设计的核心�
 ```
 ┌──────────────────────────────────────────────────────────────────┐
 │  Layer 3: Integration — 外部适配                                  │
-│  LLM Provider · 存储 · 可观测性 · 协议 · Gateway · TUI            │
+│  LLM Provider · 存储 · 可观测性 · 协议 · Gateway · TUI · Web Runtime │
 │                                                                  │
 │  ┌──────────────────────────────────────────────────────────────┐│
 │  │  Layer 2: Harness — 11 个自包含领域                           ││
@@ -147,6 +147,7 @@ src/integration/
 ├── gateway/              # 网关
 ├── protocols/            # 协议适配（HTTP）
 ├── tui/                  # 终端 UI
+├── web/                  # Web Runtime / WebUI 骨架
 └── index.ts
 ```
 
@@ -488,3 +489,5 @@ const { agent, harness, runner } = await new AgentBuilder()
 - `docs/plugin-system.md` — Plugin 系统详细文档
 - `docs/task-system.md` — Task 系统详细文档
 - `docs/CONTRIBUTING.md` — 开发规范
+- `docs/web-runtime-design.md` — Web Runtime 技术设计
+- `docs/web-conversation-model-design.md` — WebUI 会话显示模型设计

@@ -1,0 +1,144 @@
+:root {
+  color-scheme: light dark;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: #f6f7f9;
+  color: #111;
+}
+
+button, input, textarea {
+  font: inherit;
+}
+
+button {
+  border: 1px solid #d0d5dd;
+  background: #ffffff;
+  color: #111827;
+  border-radius: 6px;
+  padding: 6px 10px;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease, box-shadow 0.12s ease;
+}
+
+button:hover {
+  background: #f9fafb;
+}
+
+button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px #93c5fd;
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.btn-primary {
+  background: #111827;
+  color: #ffffff;
+  border-color: #111827;
+}
+
+.btn-primary:hover {
+  background: #1f2937;
+  border-color: #1f2937;
+}
+
+.btn-primary:disabled {
+  background: #9ca3af;
+  border-color: #9ca3af;
+  color: #ffffff;
+}
+
+.btn-secondary {
+  background: #ffffff;
+  color: #111827;
+  border-color: #d1d5db;
+}
+
+.btn-secondary:hover {
+  background: #f3f4f6;
+}
+
+.btn-ghost {
+  background: transparent;
+  color: #111827;
+  border-color: transparent;
+}
+
+.btn-ghost:hover {
+  background: #f3f4f6;
+}
+
+.btn-tab {
+  background: #ffffff;
+  color: #111827;
+  border-color: #e5e7eb;
+  border-radius: 8px;
+  padding: 7px 10px;
+}
+
+.btn-tab:hover {
+  background: #f8fafc;
+}
+
+.btn-tab-active {
+  background: #eef2ff;
+  color: #111827;
+  border-color: #c7d2fe;
+}
+
+input, textarea {
+  border: 1px solid #d0d5dd;
+  border-radius: 6px;
+  padding: 8px 10px;
+  color: #111827;
+  background: #ffffff;
+}
+
+textarea {
+  resize: vertical;
+}
+
+pre {
+  font-family: 'SF Mono', 'Fira Code', 'Fira Mono', Menlo, Consolas, monospace;
+  font-size: 13px;
+}
+
+.panel {
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+}
+
+.muted {
+  color: #6b7280;
+}
+
+.small {
+  font-size: 12px;
+}
+
+.status-ok {
+  color: #0f766e;
+}
+
+.status-warn {
+  color: #b45309;
+}
+
+.status-error {
+  color: #b91c1c;
+}
+
+.status-neutral {
+  color: #6b7280;
+}

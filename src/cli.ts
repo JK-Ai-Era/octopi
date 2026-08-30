@@ -466,11 +466,14 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
   const httpConfig = config.channels?.find((c) => c.type === 'http');
   if (httpConfig) {
     const { HttpChannelAdapter } = await import('./integration/protocols/http.js');
+    const { WebApiRouter } = await import('./integration/web/api/router.js');
+    const webApiRouter = new WebApiRouter({ gateway, basePath: '/api/v1' });
     gateway.registerChannel(new HttpChannelAdapter({
       port: httpConfig.port ?? args.port ?? 3000,
       path: httpConfig.path ?? '/messages',
       apiKey: httpConfig.apiKey,
       corsOrigins: httpConfig.corsOrigins,
+      onRequest: (req, res) => webApiRouter.handle(req, res),
     }));
   }
 

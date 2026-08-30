@@ -104,9 +104,9 @@ function adaptLoopEvent(
     case 'llm_stream_delta':
       return { type: 'llm_stream_delta', timestamp: event.timestamp, data: event.data };
     case 'tool_start':
-      return { type: 'tool.exec.start', timestamp: event.timestamp, data: { toolCallId: event.toolCall.id, toolName: event.toolCall.name } };
+      return { type: 'tool.exec.start', timestamp: event.timestamp, data: { toolCallId: event.toolCall.id, toolName: event.toolCall.name, args: event.toolCall.arguments } };
     case 'tool_end':
-      return { type: 'tool.exec.end', timestamp: event.timestamp, data: { toolCallId: event.toolCall.id, toolName: event.toolCall.name, hasError: !!event.result.isError } };
+      return { type: 'tool.exec.end', timestamp: event.timestamp, data: { toolCallId: event.toolCall.id, toolName: event.toolCall.name, hasError: !!event.result.isError, result: event.result.content, durationMs: event.result.durationMs } };
     case 'stream.fallback_to_sync':
     case 'stream.fallback_failed':
       return { type: event.type, timestamp: event.timestamp, data: event.data };
