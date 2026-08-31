@@ -157,13 +157,13 @@ function normalizeBaseUrl(baseUrl: string): string {
   return baseUrl.replace(/\/+$/, '');
 }
 
-async function parseJsonResponse(response: Response): Promise<any> {
+async function parseJsonResponse<T = unknown>(response: Response): Promise<T> {
   if (!response.ok) {
     const text = await response.text().catch(() => '');
     throw new Error(`HTTP ${response.status}: ${text || response.statusText}`);
   }
 
-  return response.json();
+  return response.json() as Promise<T>;
 }
 
 // ──────────────────────────────────────
@@ -171,9 +171,9 @@ async function parseJsonResponse(response: Response): Promise<any> {
 // ──────────────────────────────────────
 
 export class OctopiClient {
-  private readonly options: Required<Pick<OctopiClientOptions, 'wsPath' | 'restPath' | 'autoReconnect' | 'reconnectBaseDelayMs' | 'reconnectMaxDelayMs' | 'now'>> & OctopiClientOptions;
-  private readonly baseUrl: string;
-  private readonly restBase: string;
+  private options: Required<Pick<OctopiClientOptions, 'wsPath' | 'restPath' | 'autoReconnect' | 'reconnectBaseDelayMs' | 'reconnectMaxDelayMs' | 'now'>> & OctopiClientOptions;
+  private baseUrl: string;
+  private restBase: string;
 
   private ws: WebSocket | null = null;
   private connectionState: ConnectionState = 'idle';
@@ -308,6 +308,18 @@ export class OctopiClient {
     this.setConnectionState('disconnected');
   }
 
+  /** Update connection options without recreating the client */
+  updateOptions(partial: { baseUrl?: string; apiKey?: string }): void {
+    if (partial.baseUrl) {
+      this.baseUrl = normalizeBaseUrl(partial.baseUrl);
+      this.options.baseUrl = this.baseUrl;
+      this.restBase = `${this.baseUrl}${this.options.restPath}`;
+    }
+    if (partial.apiKey !== undefined) {
+      this.options.apiKey = partial.apiKey || undefined;
+    }
+  }
+
   sendChat(sessionId: string, agentId: string, content: string): void {
     this.send({
       type: 'chat',
@@ -356,11 +368,15 @@ export class OctopiClient {
 
   private openSocket(): void {
     const wsUrl = this.baseUrl.replace(/^http/, 'ws') + this.options.wsPath;
-    const socket = new WebSocket(this.buildWsUrl(wsUrl));
+    const socket = new WebSocket(wsUrl);
     this.ws = socket;
 
     socket.addEventListener('open', () => {
       this.reconnectAttempt = 0;
+      // Send auth via message instead of URL query parameter to avoid leaking credentials
+      if (this.options.apiKey) {
+        this.send({ type: 'auth', token: this.options.apiKey });
+      }
       this.setConnectionState('connected');
     });
 
@@ -394,13 +410,6 @@ export class OctopiClient {
     });
   }
 
-  private buildWsUrl(baseUrl: string): string {
-    const url = new URL(baseUrl);
-    if (this.options.apiKey) {
-      url.searchParams.set('token', this.options.apiKey);
-    }
-    return url.toString();
-  }
 
   private scheduleReconnect(): void {
     this.clearReconnect();
@@ -465,14 +474,14 @@ export class OctopiClient {
     this.ws.send(JSON.stringify(payload));
   }
 
-  private async getJson(path: string): Promise<any> {
+  private async getJson<T = any>(path: string): Promise<T> {
     const response = await fetch(`${this.restBase}${path}`, {
       headers: this.buildHeaders(),
     });
     return parseJsonResponse(response);
   }
 
-  private async postJson(path: string, body: unknown): Promise<any> {
+  private async postJson<T = any>(path: string, body: unknown): Promise<T> {
     const response = await fetch(`${this.restBase}${path}`, {
       method: 'POST',
       headers: {

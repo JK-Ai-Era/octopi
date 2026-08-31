@@ -127,6 +127,24 @@ describe('OctopiRuntimeStore', () => {
     expect(store.getState().chat.inspector.truncatedFrom).toBe(20);
   });
 
+  it('updates inspector on tool exec error', () => {
+    const client = createMockClient();
+    const store = new OctopiRuntimeStore(client as any);
+
+    client.emitEvent(undefined, {
+      type: 'tool.exec.start',
+      data: { toolCallId: 't1', toolName: 'search' },
+    });
+    client.emitEvent(undefined, {
+      type: 'tool.exec.end',
+      data: { toolCallId: 't1', isError: true, result: 'timeout' },
+    });
+
+    expect(store.getState().chat.tools[0].status).toBe('error');
+    expect(store.getState().chat.inspector.lastToolError).toBe('timeout');
+    expect(store.getState().chat.inspector.lastToolName).toBe('search');
+  });
+
   it('subscribes on openSession and maps accepted/state updates', async () => {
     const client = createMockClient();
     const store = new OctopiRuntimeStore(client as any);

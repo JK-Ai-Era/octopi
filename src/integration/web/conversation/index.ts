@@ -3,7 +3,6 @@
  */
 
 export { ConversationAdapter } from './adapter.js';
-export { ConversationViewStore } from './view-store.js';
 export type {
   ConversationItem,
   ConversationRole,
@@ -16,10 +15,3 @@ export type {
   StreamingState,
   SessionViewState,
 } from './types.js';
-export type {
-  ConversationEventMap,
-  ConversationItemsEvent,
-  ConversationStreamingEvent,
-  ConversationModeEvent,
-  ConversationResetEvent,
-} from './view-store.js';

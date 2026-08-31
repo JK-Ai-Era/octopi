@@ -22,7 +22,7 @@ import type {
 } from '../../web/sdk/client.js';
 
 import { ConversationAdapter } from '../conversation/adapter.js';
-import type { ConversationItem, ViewMode } from '../conversation/types.js';
+import type { ConversationItem, ToolConversationItem, UserConversationItem, AssistantConversationItem, ViewMode } from '../conversation/types.js';
 
 // ──────────────────────────────────────
 // Events
@@ -84,6 +84,8 @@ export interface InspectorState {
   truncatedFrom?: number;
   truncatedTo?: number;
   lastError?: string;
+  lastToolError?: string;
+  lastToolName?: string;
   lastBlockedReason?: string;
   lastBudgetStatus?: string;
   lastRetryLabel?: string;
@@ -113,6 +115,7 @@ export interface ChatState {
 export class OctopiRuntimeStore extends EventTarget {
   private readonly client: OctopiClient;
   private readonly conversationAdapter = new ConversationAdapter();
+  private static readonly MAX_CACHE_SIZE = 20;
   /** 本地缓存：切走 session 时保存 conversation items + legacy messages，切回时恢复 */
   private readonly conversationCache = new Map<string, { items: ConversationItem[]; messages: MessageRecord[]; viewMode: ViewMode }>();
 
@@ -167,6 +170,13 @@ export class OctopiRuntimeStore extends EventTarget {
     this.client.disconnect();
   }
 
+  /** Reconnect with new options without destroying store state */
+  reconnect(baseUrl?: string, apiKey?: string): void {
+    this.client.updateOptions({ baseUrl, apiKey });
+    this.client.disconnect();
+    this.client.connect();
+  }
+
   async refreshAgents(): Promise<AgentSummary[]> {
     this.agents = await this.client.getAgents();
     this.dispatch('connection', new ConnectionEvent('connection', { state: this.connectionState, agents: this.agents }));
@@ -182,6 +192,11 @@ export class OctopiRuntimeStore extends EventTarget {
   async openSession(sessionId: string): Promise<SessionView> {
     // Phase 4: 切走前缓存当前 session 的 conversation items + messages
     if (this.chat.sessionId && this.chat.conversation.length > 0) {
+      // LRU eviction: remove oldest entry when cache is full
+      if (this.conversationCache.size >= OctopiRuntimeStore.MAX_CACHE_SIZE) {
+        const oldest = this.conversationCache.keys().next().value;
+        if (oldest) this.conversationCache.delete(oldest);
+      }
       this.conversationCache.set(this.chat.sessionId, {
         items: this.chat.conversation,
         messages: this.chat.messages,
@@ -279,10 +294,9 @@ export class OctopiRuntimeStore extends EventTarget {
       throw new Error('No active session');
     }
 
-    // Legacy field
-    this.chat.messages = [...this.chat.messages, { role: 'user', content, timestamp: Date.now() }];
-    // Phase 1: conversation item
+    // Derive legacy messages from conversation items
     this.chat.conversation = this.conversationAdapter.injectUserMessage(content, this.chat.sessionId, this.chat.conversation);
+    this.chat.messages = this.deriveMessages(this.chat.conversation);
 
     // Phase 4: 用户发送消息时，根据当前 viewMode 决定目标模式
     // history → hybrid（历史会话叠加新交互）
@@ -345,7 +359,6 @@ export class OctopiRuntimeStore extends EventTarget {
 
   private applyEvent(event: AgentEventEnvelope): void {
     const sessionId = this.chat.sessionId ?? '';
-    console.debug('[RuntimeStore] applyEvent', event.type, 'session=', sessionId, 'viewMode=', this.chat.viewMode, 'data=', event.data);
 
     // ── Phase 4: 收到 runtime 事件时，若仍在 history 模式则切到 hybrid ──
     if (this.chat.viewMode === 'history' && this.chat.sessionId) {
@@ -354,111 +367,82 @@ export class OctopiRuntimeStore extends EventTarget {
 
     // ── Phase 1: route through ConversationAdapter ──
     const convResult = this.conversationAdapter.applyEvent(event, sessionId, this.chat.conversation);
-    console.debug('[RuntimeStore] adapter result:', { changed: convResult.changed, itemCount: convResult.items.length, toolIndex: Object.keys(convResult.toolIndex) });
+    // ── Derive all state from adapter result (single source of truth) ──
     if (convResult.changed) {
       this.chat.conversation = convResult.items;
-      console.debug('[RuntimeStore] dispatching conversation event, items:', convResult.items.map(i => ({ role: i.role, id: i.id, ...(i.role === 'tool' ? { toolName: (i as any).toolName, status: (i as any).status } : {}) })));
+      this.chat.streamingContent = convResult.streaming.content;
+      this.chat.tools = this.deriveTools(convResult.items);
+      this.chat.messages = this.deriveMessages(convResult.items);
+
+      // Derive runStatus from streaming and tool state
+      if (convResult.streaming.active) {
+        this.chat.runStatus = 'streaming';
+      } else if (event.type === 'aborted') {
+        this.chat.runStatus = 'aborted';
+      } else if (event.type === 'model.call.error' || event.type === 'engine.error') {
+        this.chat.runStatus = 'error';
+      } else if (event.type === 'turn.end' || event.type === 'engine.end' || event.type === 'interrupted') {
+        this.chat.runStatus = 'idle';
+      }
+
+      // Dispatch derived events
       this.dispatch('conversation', new ConversationEvent('conversation', { items: this.chat.conversation }));
+      this.dispatch('stream', new StreamEvent('stream', { streaming: convResult.streaming.active, content: convResult.streaming.content }));
+      this.dispatch('tool', new ToolEvent('tool', { tools: this.chat.tools }));
+      this.dispatch('chat', new ChatEvent('chat', { messages: this.chat.messages }));
     }
 
-    // ── Legacy event handling (保留向后兼容) ──
+    // ── Inspector metadata (not derivable from conversation items) ──
+    let inspectorChanged = false;
     switch (event.type) {
-      case 'llm_stream_delta': {
-        const delta = String(event.data?.delta ?? '');
-        if (!delta) break;
-        this.chat.streamingContent += delta;
-        this.chat.runStatus = 'streaming';
-        this.dispatch('stream', new StreamEvent('stream', { streaming: true, content: this.chat.streamingContent }));
-        break;
-      }
-      case 'tool.exec.start': {
-        const toolCallId = String(event.data?.toolCallId ?? `tool_${Date.now()}`);
-        this.chat.tools = [
-          ...this.chat.tools,
-          {
-            toolCallId,
-            toolName: String(event.data?.toolName ?? 'unknown'),
-            args: event.data?.args,
-            status: 'running',
-            startedAt: Date.now(),
-          },
-        ];
-        this.dispatch('tool', new ToolEvent('tool', { tools: this.chat.tools }));
-        break;
-      }
       case 'tool.exec.end': {
-        const toolCallId = String(event.data?.toolCallId ?? '');
         const isError = Boolean(event.data?.isError ?? event.data?.hasError);
-        this.chat.tools = this.chat.tools.map((run) =>
-          run.toolCallId === toolCallId
-            ? { ...run, status: isError ? 'error' : 'success', endedAt: Date.now(), error: isError ? String(event.data?.result ?? 'Tool failed') : undefined }
-            : run,
-        );
-        this.dispatch('tool', new ToolEvent('tool', { tools: this.chat.tools }));
-        break;
-      }
-      case 'turn.end': {
-        const content = String(event.data?.content ?? this.chat.streamingContent ?? '');
-        if (content) {
-          this.chat.messages = [...this.chat.messages, { role: 'assistant', content, timestamp: Date.now() }];
+        if (isError) {
+          const toolCallId = String(event.data?.toolCallId ?? '');
+          const failedTool = this.chat.tools.find((r) => r.toolCallId === toolCallId);
+          this.chat.inspector = { ...this.chat.inspector, lastToolError: String(event.data?.result ?? 'Tool failed'), lastToolName: failedTool?.toolName ?? 'unknown' };
+          inspectorChanged = true;
         }
-        this.chat.streamingContent = '';
-        this.chat.runStatus = 'idle';
-        this.dispatch('chat', new ChatEvent('chat', { messages: this.chat.messages }));
-        this.dispatch('stream', new StreamEvent('stream', { streaming: false, content: '' }));
-        break;
-      }
-      case 'engine.end':
-      case 'interrupted':
-      case 'aborted': {
-        this.chat.streamingContent = '';
-        this.chat.runStatus = event.type === 'aborted' ? 'aborted' : 'idle';
-        this.dispatch('stream', new StreamEvent('stream', { streaming: false, content: '' }));
         break;
       }
       case 'model.call.error':
       case 'engine.error': {
-        const error = String(event.data?.error ?? 'Unknown error');
-        this.chat.runStatus = 'error';
-        this.chat.inspector = { ...this.chat.inspector, lastError: error };
-        this.dispatch('inspector', new InspectorEvent('inspector', { inspector: this.chat.inspector }));
-        this.emitRuntimeError(error);
+        this.chat.inspector = { ...this.chat.inspector, lastError: String(event.data?.error ?? 'Unknown error') };
+        inspectorChanged = true;
+        this.emitRuntimeError(String(event.data?.error ?? 'Unknown error'));
         break;
       }
       case 'budget.exceeded': {
         this.chat.inspector = { ...this.chat.inspector, lastBudgetStatus: String(event.data?.status ?? 'exceeded') };
-        this.dispatch('inspector', new InspectorEvent('inspector', { inspector: this.chat.inspector }));
+        inspectorChanged = true;
         break;
       }
       case 'security.blocked':
       case 'security.behavior_blocked': {
         this.chat.inspector = { ...this.chat.inspector, lastBlockedReason: String(event.data?.reason ?? 'blocked') };
-        this.dispatch('inspector', new InspectorEvent('inspector', { inspector: this.chat.inspector }));
+        inspectorChanged = true;
         break;
       }
       case 'context.truncated': {
-        this.chat.inspector = {
-          ...this.chat.inspector,
-          truncatedFrom: Number(event.data?.from ?? undefined),
-          truncatedTo: Number(event.data?.to ?? undefined),
-        };
-        this.dispatch('inspector', new InspectorEvent('inspector', { inspector: this.chat.inspector }));
+        this.chat.inspector = { ...this.chat.inspector, truncatedFrom: Number(event.data?.from ?? undefined), truncatedTo: Number(event.data?.to ?? undefined) };
+        inspectorChanged = true;
         break;
       }
       case 'empty_response_retry':
       case 'planning_only_retry': {
-        const label = event.type === 'empty_response_retry' ? 'Empty response' : 'Planning-only';
-        this.chat.inspector = { ...this.chat.inspector, lastRetryLabel: label };
-        this.dispatch('inspector', new InspectorEvent('inspector', { inspector: this.chat.inspector }));
+        this.chat.inspector = { ...this.chat.inspector, lastRetryLabel: event.type === 'empty_response_retry' ? 'Empty response' : 'Planning-only' };
+        inspectorChanged = true;
         break;
       }
       case 'loop_detected': {
         this.chat.inspector = { ...this.chat.inspector, lastLoopMessage: String(event.data?.message ?? 'loop detected') };
-        this.dispatch('inspector', new InspectorEvent('inspector', { inspector: this.chat.inspector }));
+        inspectorChanged = true;
         break;
       }
-      default:
-        break;
+      default: break;
+    }
+    if (inspectorChanged) {
+      this.dispatch('inspector', new InspectorEvent('inspector', { inspector: this.chat.inspector }));
     }
   }
 
@@ -490,5 +474,19 @@ export class OctopiRuntimeStore extends EventTarget {
       approvals: [],
       inspector: {},
     };
+  }
+
+  /** Derive ToolRun[] from conversation items (single source of truth) */
+  private deriveTools(items: ConversationItem[]): ToolRun[] {
+    return items
+      .filter((i): i is ToolConversationItem => i.role === 'tool')
+      .map((t) => ({ toolCallId: t.toolCallId, toolName: t.toolName, args: t.args, status: t.status, startedAt: t.createdAt, endedAt: t.status !== 'running' ? t.createdAt : undefined, error: t.error }));
+  }
+
+  /** Derive legacy MessageRecord[] from conversation items */
+  private deriveMessages(items: ConversationItem[]): MessageRecord[] {
+    return items
+      .filter((i): i is UserConversationItem | AssistantConversationItem => i.role === 'user' || i.role === 'assistant')
+      .map((i) => ({ role: i.role, content: i.content, timestamp: i.createdAt }));
   }
 }

@@ -30,7 +30,7 @@ export interface HttpAdapterOptions {
    * API Key 认证
    *
    * 设置后，所有请求必须携带 Authorization: Bearer <apiKey> 头。
-   * WebSocket 连接需要在 URL 查询参数中传递 token：ws://host/ws?token=<apiKey>
+   * WebSocket 连接需要在连接后发送 auth 消息：{ type: "auth", token: "<apiKey>" }
    * health 端点不需要认证。
    */
   apiKey?: string;
@@ -40,6 +40,8 @@ export interface HttpAdapterOptions {
    * 生产环境应设置为具体的域名列表。
    */
   corsOrigins?: string[];
+  /** JSON 请求体大小上限（字节），默认 1MB。文件上传应使用独立端点。 */
+  maxBodyBytes?: number;
   onRequest?: HttpCustomRequestHandler;
 }
 
@@ -47,6 +49,8 @@ export type HttpCustomRequestHandler = (req: IncomingMessage, res: ServerRespons
 
 interface WsSession {
   ws: WS;
+  /** 是否已通过消息认证 */
+  authenticated: boolean;
   sessionId?: string;
   agentId?: string;
   /** 精确订阅的 session 列表 */
@@ -74,6 +78,7 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
   private enableWebSocket: boolean;
   private apiKey?: string;
   private corsOrigins: string;
+  private maxBodyBytes: number;
   private onRequest?: HttpCustomRequestHandler;
   private handler?: (msg: ChannelMessage) => Promise<void>;
   private server?: Server;
@@ -90,6 +95,7 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
     this.enableWebSocket = options.enableWebSocket ?? true;
     this.apiKey = options.apiKey;
     this.corsOrigins = options.corsOrigins?.join(', ') ?? '*';
+    this.maxBodyBytes = options.maxBodyBytes ?? 1_048_576;
     this.onRequest = options.onRequest;
   }
 
@@ -173,16 +179,6 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
     if (this.enableWebSocket) {
       this.wss = new WebSocketServer({ server: this.server, path: '/ws' });
       this.wss.on('connection', (ws, req) => {
-        // WebSocket 认证：从 URL 查询参数提取 token
-        if (this.apiKey) {
-          const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
-          const token = url.searchParams.get('token');
-          if (token !== this.apiKey) {
-            ws.send(JSON.stringify({ type: 'error', message: 'Unauthorized: invalid or missing token' }));
-            ws.close(4001, 'Unauthorized');
-            return;
-          }
-        }
         this.handleWsConnection(ws);
       });
     }
@@ -322,7 +318,7 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
   // ── WebSocket handling ──
 
   private handleWsConnection(ws: WS): void {
-    const session: WsSession = { ws, sendQueue: [], draining: false };
+    const session: WsSession = { ws, authenticated: !this.apiKey, sendQueue: [], draining: false };
     this.wsSessions.add(session);
 
     ws.on('message', (data) => {
@@ -356,6 +352,24 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
   }
 
   private async handleWsMessage(session: WsSession, msg: any): Promise<void> {
+    // Auth message: authenticate the session
+    if (msg.type === 'auth') {
+      if (this.apiKey && msg.token === this.apiKey) {
+        session.authenticated = true;
+        session.ws.send(JSON.stringify({ type: 'auth_ok' }));
+      } else if (this.apiKey) {
+        session.ws.send(JSON.stringify({ type: 'error', message: 'Unauthorized: invalid token' }));
+        session.ws.close(4001, 'Unauthorized');
+      }
+      return;
+    }
+
+    // Reject unauthenticated messages
+    if (!session.authenticated) {
+      session.ws.send(JSON.stringify({ type: 'error', message: 'Unauthorized: send auth message first' }));
+      return;
+    }
+
     if (msg.type === 'chat') {
       // 绑定 agentId（sessionId 在 Gateway 处理后更新）
       session.agentId = msg.agentId;
@@ -433,9 +447,19 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
   }
 
   private readBody(req: any): Promise<any> {
+    const maxBytes = this.maxBodyBytes;
     return new Promise((resolve, reject) => {
       let data = '';
-      req.on('data', (chunk: string) => { data += chunk; });
+      let totalBytes = 0;
+      req.on('data', (chunk: string) => {
+        totalBytes += Buffer.byteLength(chunk);
+        if (totalBytes > maxBytes) {
+          reject(new Error('Request body too large (limit: ' + Math.round(maxBytes / 1024) + 'KB)'));
+          req.destroy();
+          return;
+        }
+        data += chunk;
+      });
       req.on('end', () => {
         try {
           resolve(JSON.parse(data));

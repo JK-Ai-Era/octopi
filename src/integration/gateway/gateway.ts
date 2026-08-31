@@ -546,7 +546,10 @@ export class Gateway {
         }
       }
     }
-    return this.agents.values().next().value;
+    // Fallback: use first registered agent
+    const fallback = this.agents.values().next().value;
+    if (fallback) console.warn(`[Gateway] No channel binding match for ${msg.channel}:${msg.senderId}, falling back to agent "${fallback.id}"`);
+    return fallback;
   }
 
   private buildSessionKey(agent: AgentDefinition, msg: ChannelMessage): string {

@@ -11,15 +11,19 @@ import type { Gateway } from '../../gateway/gateway.js';
 export interface WebApiRouterOptions {
   gateway: Gateway;
   basePath?: string;
+  /** JSON 请求体大小上限（字节），默认 1MB。文件上传应使用独立端点。 */
+  maxBodyBytes?: number;
 }
 
 export class WebApiRouter {
   private gateway: Gateway;
   private basePath: string;
+  private maxBodyBytes: number;
 
   constructor(options: WebApiRouterOptions) {
     this.gateway = options.gateway;
     this.basePath = options.basePath ?? '/api/v1';
+    this.maxBodyBytes = options.maxBodyBytes ?? 1_048_576;
   }
 
   async handle(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
@@ -163,8 +167,14 @@ export class WebApiRouter {
   }
 
   private async readBody(req: IncomingMessage): Promise<any> {
+    const maxBytes = this.maxBodyBytes;
     const chunks: Buffer[] = [];
+    let totalBytes = 0;
     for await (const chunk of req) {
+      totalBytes += Buffer.byteLength(chunk);
+      if (totalBytes > maxBytes) {
+        throw new Error(`Request body too large (limit: ${Math.round(maxBytes / 1024)}KB)`);
+      }
       chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
     }
 

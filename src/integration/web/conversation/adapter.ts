@@ -27,11 +27,6 @@ import type {
 // Helpers
 // ──────────────────────────────────────
 
-let _idCounter = 0;
-
-function makeId(prefix: string): string {
-  return `${prefix}_${Date.now()}_${++_idCounter}`;
-}
 
 /** 从 MessageRecord.content 中提取纯文本 */
 function extractText(content: unknown): string {
@@ -51,6 +46,12 @@ function extractText(content: unknown): string {
 // ──────────────────────────────────────
 
 export class ConversationAdapter {
+  private static _idCounter = 0;
+
+  private static makeId(prefix: string): string {
+    return `${prefix}_${Date.now()}_${++ConversationAdapter._idCounter}`;
+  }
+
   // ──── 内部追踪状态 ────
   private currentAssistantId: string | undefined;
   private toolIndex: Record<string, string> = {}; // toolCallId → conversationItemId
@@ -84,7 +85,7 @@ export class ConversationAdapter {
         if (!this.currentAssistantId) {
           // 创建一条新的 streaming assistant item
           const item: AssistantConversationItem = {
-            id: makeId('ast'),
+            id: ConversationAdapter.makeId('ast'),
             role: 'assistant',
             createdAt: Date.now(),
             sessionId,
@@ -111,7 +112,7 @@ export class ConversationAdapter {
       case 'tool.exec.start': {
         const toolCallId = String(event.data?.toolCallId ?? `tc_${Date.now()}`);
         const toolItem: ToolConversationItem = {
-          id: makeId('tool'),
+          id: ConversationAdapter.makeId('tool'),
           role: 'tool',
           createdAt: Date.now(),
           sessionId,
@@ -171,7 +172,7 @@ export class ConversationAdapter {
         } else if (content) {
           // 没有 streaming item 但有 content（例如非流式场景）
           const item: AssistantConversationItem = {
-            id: makeId('ast'),
+            id: ConversationAdapter.makeId('ast'),
             role: 'assistant',
             createdAt: Date.now(),
             sessionId,
@@ -203,7 +204,7 @@ export class ConversationAdapter {
 
         if (event.type === 'aborted') {
           const notice: SystemConversationItem = {
-            id: makeId('sys'),
+            id: ConversationAdapter.makeId('sys'),
             role: 'system',
             createdAt: Date.now(),
             sessionId,
@@ -231,7 +232,7 @@ export class ConversationAdapter {
           );
         }
         const notice: SystemConversationItem = {
-          id: makeId('sys'),
+          id: ConversationAdapter.makeId('sys'),
           role: 'system',
           createdAt: Date.now(),
           sessionId,
@@ -251,7 +252,7 @@ export class ConversationAdapter {
       case 'security.behavior_blocked': {
         const reason = String(event.data?.reason ?? 'blocked');
         const notice: SystemConversationItem = {
-          id: makeId('sys'),
+          id: ConversationAdapter.makeId('sys'),
           role: 'system',
           createdAt: Date.now(),
           sessionId,
@@ -269,7 +270,7 @@ export class ConversationAdapter {
         const from = Number(event.data?.from ?? 0);
         const to = Number(event.data?.to ?? 0);
         const notice: SystemConversationItem = {
-          id: makeId('sys'),
+          id: ConversationAdapter.makeId('sys'),
           role: 'system',
           createdAt: Date.now(),
           sessionId,
@@ -287,7 +288,7 @@ export class ConversationAdapter {
       case 'planning_only_retry': {
         const label = event.type === 'empty_response_retry' ? 'Empty response, retrying' : 'Planning-only response, retrying';
         const notice: SystemConversationItem = {
-          id: makeId('sys'),
+          id: ConversationAdapter.makeId('sys'),
           role: 'system',
           createdAt: Date.now(),
           sessionId,
@@ -304,7 +305,7 @@ export class ConversationAdapter {
       case 'loop_detected': {
         const msg = String(event.data?.message ?? 'Loop detected');
         const notice: SystemConversationItem = {
-          id: makeId('sys'),
+          id: ConversationAdapter.makeId('sys'),
           role: 'system',
           createdAt: Date.now(),
           sessionId,
@@ -321,7 +322,7 @@ export class ConversationAdapter {
       case 'budget.exceeded': {
         const status = String(event.data?.status ?? 'exceeded');
         const notice: SystemConversationItem = {
-          id: makeId('sys'),
+          id: ConversationAdapter.makeId('sys'),
           role: 'system',
           createdAt: Date.now(),
           sessionId,
@@ -363,7 +364,7 @@ export class ConversationAdapter {
     items: ConversationItem[],
   ): ConversationItem[] {
     const item: UserConversationItem = {
-      id: makeId('usr'),
+      id: ConversationAdapter.makeId('usr'),
       role: 'user',
       createdAt: Date.now(),
       sessionId,
@@ -395,7 +396,7 @@ export class ConversationAdapter {
       switch (msg.role) {
         case 'user': {
           const item: UserConversationItem = {
-            id: makeId('usr'),
+            id: ConversationAdapter.makeId('usr'),
             role: 'user',
             createdAt: ts,
             sessionId,
@@ -407,7 +408,7 @@ export class ConversationAdapter {
         }
         case 'assistant': {
           const item: AssistantConversationItem = {
-            id: makeId('ast'),
+            id: ConversationAdapter.makeId('ast'),
             role: 'assistant',
             createdAt: ts,
             sessionId,
@@ -426,7 +427,7 @@ export class ConversationAdapter {
           if (toolResults.length > 0) {
             for (const tr of toolResults) {
               items.push({
-                id: makeId('tool'),
+                id: ConversationAdapter.makeId('tool'),
                 role: 'tool',
                 createdAt: ts,
                 sessionId,
@@ -442,7 +443,7 @@ export class ConversationAdapter {
           } else {
             // fallback: 从 metadata/source 提取
             items.push({
-              id: makeId('tool'),
+              id: ConversationAdapter.makeId('tool'),
               role: 'tool',
               createdAt: ts,
               sessionId,
@@ -458,7 +459,7 @@ export class ConversationAdapter {
         }
         case 'system': {
           const item: SystemConversationItem = {
-            id: makeId('sys'),
+            id: ConversationAdapter.makeId('sys'),
             role: 'system',
             createdAt: ts,
             sessionId,
@@ -472,7 +473,7 @@ export class ConversationAdapter {
         default: {
           // 未知 role → 降级为 system info
           const item: SystemConversationItem = {
-            id: makeId('sys'),
+            id: ConversationAdapter.makeId('sys'),
             role: 'system',
             createdAt: ts,
             sessionId,
@@ -539,7 +540,9 @@ function extractToolResults(msg: MessageRecord): Array<{ toolCallId: string; nam
 function extractToolName(msg: MessageRecord): string {
   const meta = msg.metadata as Record<string, unknown> | undefined;
   const source = msg.source as Record<string, unknown> | undefined;
-  return String(meta?.toolName ?? source?.toolName ?? 'unknown');
+  const name = String(meta?.toolName ?? source?.toolName ?? '');
+  if (!name) console.warn('[ConversationAdapter] toolName not found in metadata/source, falling back to "unknown"');
+  return name || 'unknown';
 }
 
 function extractToolCallId(msg: MessageRecord): string {

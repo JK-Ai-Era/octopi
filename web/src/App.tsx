@@ -2,17 +2,15 @@ import ChatWorkspace from './components/ChatWorkspace';
 
 export default function App() {
   return (
-    <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', background: '#f6f7f9' }}>
-      <header style={{ padding: '10px 16px', borderBottom: '1px solid #e5e7eb', background: 'white', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+    <div className="app-shell">
+      <header className="app-header">
+        <div className="app-header-title">
           <strong>Octopi Web</strong>
-          <span className="small muted">第一版交互骨架</span>
+          <span className="small muted">交互工作台</span>
         </div>
         <div className="small muted">Chat-first workspace</div>
       </header>
-      <main style={{ flex: 1, minHeight: 0 }}>
-        <ChatWorkspace />
-      </main>
+      <ChatWorkspace />
     </div>
   );
 }
