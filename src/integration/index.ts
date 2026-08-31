@@ -8,6 +8,10 @@
 // ── Storage ──
 export { JsonlSessionStore } from './storage/jsonl.js';
 export { InMemorySessionStore } from './storage/memory.js';
+export { SqliteSessionStore } from './storage/sqlite.js';
+export { SessionArchiveManager } from './storage/archive-manager.js';
+export type { ArchiveManagerOptions } from './storage/archive-manager.js';
+export type { SqliteSessionStoreOptions } from './storage/sqlite.js';
 
 // ── Observability ──
 export { NoopObserver } from './observability/noop-observer.js';

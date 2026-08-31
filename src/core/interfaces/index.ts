@@ -52,10 +52,7 @@ export type {
 } from './observer.js';
 export { Metrics } from './observer.js';
 
-export type {
-  SessionStore,
-  SessionData,
-} from './session-store.js';
+export type { SessionStore } from './session-store.js';
 
 export type {
   EventSource,

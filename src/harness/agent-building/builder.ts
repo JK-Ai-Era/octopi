@@ -51,9 +51,8 @@ import type {
 import type { TraceCollectorConfig } from '../../integration/observability/trace-collector.js';
 import type { MetricsAggregatorConfig } from '../../integration/observability/metrics.js';
 import type { TraceLoggerConfig } from '../../integration/observability/trace-logger.js';
-import type {
-  SessionStore,
-} from '../../core/interfaces/session-store.js';
+import type { SessionStore } from '../../core/interfaces/session-store.js';
+import type { SessionData } from '../session-types.js';
 
 import {
   DefaultEventBus,
@@ -171,7 +170,7 @@ function convertToAgentTool(tool: RegisteredTool): LoopAgentTool {
 }
 
 /** 内存 Session 存储（默认） */
-class InMemorySessionStore implements SessionStore {
+class InMemorySessionStore implements SessionStore<SessionData> {
   private sessions = new Map<string, any>();
 
   async load(sessionId: string): Promise<any> {
@@ -229,7 +228,7 @@ export class AgentBuilder {
   private _metricsConfig?: MetricsAggregatorConfig;
 
   // Runner 配置
-  private _store?: SessionStore;
+  private _store?: SessionStore<SessionData>;
   private _runnerConfig?: SessionAwareRunnerConfig;
 
   // MCP 配置
@@ -480,7 +479,7 @@ export class AgentBuilder {
   // ── Runner 配置 ──
 
   /** 设置 Session 存储 */
-  store(store: SessionStore): this {
+  store(store: SessionStore<SessionData>): this {
     this._store = store;
     return this;
   }
@@ -700,7 +699,7 @@ export async function createAgent(config: {
   model: ModelProvider;
   persona?: string;
   tools?: RegisteredTool[];
-  store?: SessionStore;
+  store?: SessionStore<SessionData>;
   budget?: Partial<IterationBudgetConfig>;
   mcp?: McpServerConfig[];
 }): Promise<{ agent: Agent; harness: ReliabilityHarness; runner: SessionAwareRunner; mcpManager: McpManager }> {

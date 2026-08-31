@@ -12,7 +12,7 @@ import type {
   MemoryQuery,
   MemoryStats,
   MemoryType,
-} from '../../core/interfaces/memory.js';
+} from './types.js';
 
 export class InMemoryMemoryStore implements MemoryStore {
   readonly name = 'memory';

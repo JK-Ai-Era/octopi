@@ -21,6 +21,7 @@
 
 import type { ModelProvider } from '../core/interfaces/model-provider.js';
 import type { SessionStore } from '../core/interfaces/session-store.js';
+import type { SessionData } from '../harness/session-types.js';
 import type { RegisteredTool, AgentEventDetail } from '../core/types.js';
 import { AgentBuilder } from '../harness/agent-building/builder.js';
 import { SessionAwareRunner } from '../harness/runner.js';
@@ -129,7 +130,7 @@ export interface ScenarioRunnerConfig {
   /** 工作目录 */
   workspaceDir: string;
   /** Session 存储 */
-  store?: SessionStore;
+  store?: SessionStore<SessionData>;
   /** 工具列表 */
   tools?: RegisteredTool[];
   /** Trace 配置 */

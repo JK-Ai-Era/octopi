@@ -79,6 +79,18 @@ export type { Planner, Reflector, AgentState, AgentStats, Plan, PlanStep, StepRe
 export { ResourceManager } from './resources/index.js';
 export type { TokenBudgetConfig, ModelPricing, RateLimitConfig, TokenCheckResult, RateLimitCheckResult, ResourceStats } from './resources/index.js';
 
+// ── Memory ──
+export { InMemoryMemoryStore, FileWisdomStore, FileProjectMemory, InMemoryConceptGraph, ContextIntelligence, AgentDatabase, SqliteMemoryStore, SqliteWisdomStore, SqliteConceptGraph, KnowledgeRegistry, createEmbeddingProvider } from './memory/index.js';
+export type { ContextIntelligenceConfig, AssembledContext, AgentDatabaseOptions, SqliteMemoryStoreOptions, SqliteConceptGraphOptions, EmbeddingProvider, EmbeddingConfig, KnowledgeSourceEntry } from './memory/index.js';
+
+// ── Memory 领域类型 ──
+export type { MemoryType, MemoryEntry, MemoryQuery, MemoryStats, MemoryStore } from './memory/types.js';
+export type { WisdomEntry, WisdomStore } from './memory/wisdom-types.js';
+export type { ConceptNode, ConceptEdge, ConceptGraph, ConceptGraphStore, ProjectMemory } from './memory/cognition-types.js';
+
+// ── Session 类型 ──
+export type { SessionData, SessionLifecycleMeta, SessionLifecycleStatus, MemoryExtractionStatus } from './session-types.js';
+
 // ── Runner ──
 export { SessionAwareRunner } from './runner.js';
 export type { SessionAwareRunnerConfig } from './runner.js';

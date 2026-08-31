@@ -18,6 +18,7 @@ import type { HarnessConfig, ProviderConfig, AgentConfig, ContextEngineConfig } 
 import { createProviderFromConfig, createStoreFromConfig } from '../../config.js';
 import type { ModelProvider } from '../../core/interfaces/model-provider.js';
 import type { SessionStore } from '../../core/interfaces/session-store.js';
+import type { SessionData } from '../session-types.js';
 import type { IterationBudgetConfig } from '../budget/budget.js';
 import { AgentBuilder } from './builder.js';
 import type { SessionAwareRunner } from '../runner.js';
@@ -69,7 +70,7 @@ export async function resolveProviders(config: HarnessConfig): Promise<Map<strin
 /**
  * 从配置中创建 SessionStore 实例
  */
-export async function resolveStore(config: HarnessConfig): Promise<SessionStore | undefined> {
+export async function resolveStore(config: HarnessConfig): Promise<SessionStore<SessionData> | undefined> {
   if (!config.store) return undefined;
   return createStoreFromConfig(config.store);
 }
@@ -218,7 +219,7 @@ async function buildAgent(
   agentConfig: AgentConfig,
   shared: {
     providers: Map<string, ModelProvider>;
-    store?: SessionStore;
+    store?: SessionStore<SessionData>;
     securityConfig?: SecurityGuardConfig;
     distributedConfig?: import('../../config.js').HarnessConfig['distributedIntelligence'];
     budgetConfig?: Partial<IterationBudgetConfig>;

@@ -4,10 +4,11 @@
  * 用于测试和临时场景。数据不持久化。
  */
 
-import type { SessionStore, SessionData } from '../../core/interfaces/session-store.js';
+import type { SessionStore } from '../../core/interfaces/session-store.js';
+import type { SessionData } from '../../harness/session-types.js';
 import type { SessionMeta } from '../../core/types.js';
 
-export class InMemorySessionStore implements SessionStore {
+export class InMemorySessionStore implements SessionStore<SessionData> {
   private sessions = new Map<string, SessionData>();
 
   async load(sessionId: string): Promise<SessionData | null> {

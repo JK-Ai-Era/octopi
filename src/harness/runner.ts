@@ -11,7 +11,10 @@
  */
 
 import type { Message, Turn, SessionStatus } from '../core/types.js';
-import type { SessionStore, SessionData } from '../core/interfaces/session-store.js';
+import type { SessionStore } from '../core/interfaces/session-store.js';
+import type { SessionData } from './session-types.js';
+
+type TypedSessionStore = SessionStore<SessionData>;
 import type { Agent } from '../loop/agent.js';
 import type { AgentLoopEvent } from '../loop/types.js';
 import type { ReliabilityHarness } from './reliability/run-agent.js';
@@ -121,7 +124,7 @@ function adaptLoopEvent(
 export class SessionAwareRunner {
   private agent: Agent;
   private harness: ReliabilityHarness;
-  private store: SessionStore;
+  private store: TypedSessionStore;
   /** 锁状态：true = 已锁定，false = 空闲 */
   private locked = new Map<string, boolean>();
   /** 等待队列：每个 session 一个 FIFO 队列 */
@@ -134,7 +137,7 @@ export class SessionAwareRunner {
   /** EventBus 引用（用于分布式智能体上下文） */
   private _events?: import('../core/primitives/event-bus.js').EventBus;
 
-  constructor(agent: Agent, harness: ReliabilityHarness, store: SessionStore, config?: SessionAwareRunnerConfig & { events?: import('../core/primitives/event-bus.js').EventBus }) {
+  constructor(agent: Agent, harness: ReliabilityHarness, store: TypedSessionStore, config?: SessionAwareRunnerConfig & { events?: import('../core/primitives/event-bus.js').EventBus }) {
     this.agent = agent;
     this.harness = harness;
     this.store = store;

@@ -12,7 +12,9 @@
  * 6. Memory — 相关记忆召回
  */
 
-import type { WisdomEntry, MemoryEntry, ConceptGraph } from '../../core/interfaces/memory.js';
+import type { MemoryEntry } from './types.js';
+import type { WisdomEntry } from './wisdom-types.js';
+import type { ConceptGraph } from './cognition-types.js';
 import type { Message } from '../../core/types/messages.js';
 import { getTextContent } from '../../core/types/messages.js';
 

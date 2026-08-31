@@ -12,9 +12,14 @@
  * - Core: interfaces/memory, types/messages
  */
 
+// ── 内存实现（保留向后兼容） ──
 export { InMemoryMemoryStore } from './store.js';
 export { FileWisdomStore } from './wisdom.js';
 export { FileProjectMemory } from './project-memory.js';
 export { InMemoryConceptGraph } from './cognition.js';
 export { ContextIntelligence } from './context-intelligence.js';
 export type { ContextIntelligenceConfig, AssembledContext } from './context-intelligence.js';
+
+// ── SQLite 实现 ──
+export { AgentDatabase, SqliteMemoryStore, SqliteWisdomStore, SqliteConceptGraph, KnowledgeRegistry, createEmbeddingProvider } from './sqlite/index.js';
+export type { AgentDatabaseOptions, SqliteMemoryStoreOptions, SqliteConceptGraphOptions, EmbeddingProvider, EmbeddingConfig, KnowledgeSourceEntry } from './sqlite/index.js';

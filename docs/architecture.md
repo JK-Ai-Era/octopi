@@ -1,6 +1,6 @@
 # Octopi 架构设计文档
 
-> 版本：v0.8.0-dev | 日期：2026-08-29
+> 版本：v0.9.0-dev | 日期：2026-09-01
 >
 > 本文档是 Octopi 框架的完整架构设计。
 > 详细领域文档位于 `arch/` 目录。
@@ -418,7 +418,7 @@ AgentLoopEvent 流输出
 | `SecurityGuard` | `core/interfaces/security-guard.ts` | DefaultSecurityGuard |
 | `ToolCallRiskPolicy` | `core/interfaces/security-guard.ts` | DefaultToolCallRiskPolicy |
 | `Observer` | `core/interfaces/observer.ts` | NoopObserver, LogObserver, ObserverBridge |
-| `SessionStore` | `core/interfaces/session-store.ts` | JsonlSessionStore, InMemorySessionStore, SqliteSessionStore |
+| `SessionStore<T>` | `core/interfaces/session-store.ts` | JsonlSessionStore, InMemorySessionStore, SqliteSessionStore |
 | `TaskStore` | `core/interfaces/task-store.ts` | （内嵌在 TaskManager 中） |
 | `TaskSupervisor` | `core/interfaces/task-supervisor.ts` | DefaultTaskSupervisor |
 | `AgentRegistry` | `core/interfaces/agent-registry.ts` | DefaultAgentRegistry |

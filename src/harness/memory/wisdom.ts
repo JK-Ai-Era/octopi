@@ -11,7 +11,7 @@ import { randomUUID } from 'node:crypto';
 import type {
   WisdomStore,
   WisdomEntry,
-} from '../../core/interfaces/memory.js';
+} from './wisdom-types.js';
 
 export class FileWisdomStore implements WisdomStore {
   private entries: WisdomEntry[] = [];

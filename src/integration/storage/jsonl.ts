@@ -10,10 +10,11 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import type { SessionStore, SessionData } from '../../core/interfaces/session-store.js';
+import type { SessionStore } from '../../core/interfaces/session-store.js';
+import type { SessionData } from '../../harness/session-types.js';
 import type { SessionMeta } from '../../core/types.js';
 
-export class JsonlSessionStore implements SessionStore {
+export class JsonlSessionStore implements SessionStore<SessionData> {
   private dataDir: string;
 
   constructor(dataDir?: string) {

@@ -6,7 +6,7 @@
 
 import { readFile, writeFile, mkdir, access } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { ProjectMemory } from '../../core/interfaces/memory.js';
+import type { ProjectMemory } from './cognition-types.js';
 
 export class FileProjectMemory implements ProjectMemory {
   readonly root: string;

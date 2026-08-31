@@ -28,7 +28,8 @@ import type { HookContext } from '../../harness/types/hook-context.js';
 import type { AgentEvent } from '../../core/primitives/event-bus.js';
 import type { ModelProvider } from '../../core/interfaces/model-provider.js';
 import type { Observer } from '../../core/interfaces/observer.js';
-import type { SessionStore, SessionData } from '../../core/interfaces/session-store.js';
+import type { SessionStore } from '../../core/interfaces/session-store.js';
+import type { SessionData } from '../../harness/session-types.js';
 import type { StreamingChannelAdapter } from '../protocols/http.js';
 import type { Message, ModelConfig } from '../../core/types.js';
 import { randomUUID } from 'node:crypto';
@@ -46,7 +47,7 @@ import { SessionAwareRunner, type RunConfig } from '../../harness/runner.js';
 // 内存 Session 存储
 // ================================================================
 
-class InMemorySessionStore implements SessionStore {
+class InMemorySessionStore implements SessionStore<SessionData> {
   private sessions = new Map<string, SessionData>();
 
   async load(sessionId: string): Promise<SessionData | null> {
@@ -114,7 +115,7 @@ export class Gateway {
   /** Plugin Manager */
   private pluginManager: PluginManager;
   /** Session Store */
-  private store: SessionStore;
+  private store: SessionStore<SessionData>;
   /** Gateway 配置 */
   private config: GatewayConfig;
   /** DM 作用域 */

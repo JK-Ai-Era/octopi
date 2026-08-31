@@ -11,7 +11,7 @@ import type {
   ConceptNode,
   ConceptEdge,
   ConceptGraph,
-} from '../../core/interfaces/memory.js';
+} from './cognition-types.js';
 
 export class InMemoryConceptGraph implements ConceptGraphStore {
   private nodes = new Map<string, ConceptNode>();

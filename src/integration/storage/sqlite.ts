@@ -12,7 +12,8 @@
  * @module
  */
 
-import type { SessionStore, SessionData } from '../../core/interfaces/session-store.js';
+import type { SessionStore } from '../../core/interfaces/session-store.js';
+import type { SessionData, SessionLifecycleMeta, SessionLifecycleStatus, MemoryExtractionStatus } from '../../harness/session-types.js';
 import type { SessionMeta } from '../../core/types.js';
 
 export interface SqliteSessionStoreOptions {
@@ -32,14 +33,17 @@ export interface SqliteSessionStoreOptions {
  * const session = await store.load('sess-1');
  * ```
  */
-export class SqliteSessionStore implements SessionStore {
+export class SqliteSessionStore implements SessionStore<SessionData> {
+
   private db: any;
   private stmts: {
     get: any;
     upsert: any;
     delete: any;
     list: any;
+    listByLifecycle: any;
     exists: any;
+    updateLifecycle: any;
   };
 
   /**
@@ -77,33 +81,50 @@ export class SqliteSessionStore implements SessionStore {
         agent_id TEXT NOT NULL,
         data TEXT NOT NULL,
         created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL
+        updated_at INTEGER NOT NULL,
+        lifecycle TEXT NOT NULL DEFAULT 'active',
+        memory_extraction TEXT NOT NULL DEFAULT 'pending',
+        ended_at INTEGER,
+        archived_at INTEGER
       );
       CREATE INDEX IF NOT EXISTS idx_sessions_agent ON sessions(agent_id);
       CREATE INDEX IF NOT EXISTS idx_sessions_updated ON sessions(updated_at);
+      CREATE INDEX IF NOT EXISTS idx_sessions_lifecycle ON sessions(lifecycle);
     `);
 
     // 预编译语句
     this.stmts = {
-      get: this.db.prepare('SELECT data FROM sessions WHERE id = ?'),
+      get: this.db.prepare('SELECT data, lifecycle, memory_extraction, ended_at, archived_at FROM sessions WHERE id = ?'),
       upsert: this.db.prepare(`
-        INSERT INTO sessions (id, agent_id, data, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO sessions (id, agent_id, data, created_at, updated_at, lifecycle, memory_extraction)
+        VALUES (?, ?, ?, ?, ?, 'active', 'pending')
         ON CONFLICT(id) DO UPDATE SET
           data = excluded.data,
           updated_at = excluded.updated_at
       `),
       delete: this.db.prepare('DELETE FROM sessions WHERE id = ?'),
       list: this.db.prepare('SELECT data FROM sessions WHERE agent_id = ?'),
+      listByLifecycle: this.db.prepare('SELECT data, lifecycle, memory_extraction, ended_at, archived_at FROM sessions WHERE agent_id = ? AND lifecycle = ?'),
       exists: this.db.prepare('SELECT 1 FROM sessions WHERE id = ?'),
+      updateLifecycle: this.db.prepare(`
+        UPDATE sessions SET lifecycle = ?, memory_extraction = ?, ended_at = ?, archived_at = ?
+        WHERE id = ?
+      `),
     };
   }
 
   async load(sessionId: string): Promise<SessionData | null> {
-    const row = this.stmts.get.get(sessionId) as { data: string } | undefined;
+    const row = this.stmts.get.get(sessionId) as { data: string; lifecycle: string; memory_extraction: string; ended_at: number | null; archived_at: number | null } | undefined;
     if (!row) return null;
     try {
-      return JSON.parse(row.data) as SessionData;
+      const data = JSON.parse(row.data) as SessionData;
+      data.lifecycle = {
+        lifecycle: row.lifecycle as SessionLifecycleStatus,
+        memoryExtraction: row.memory_extraction as MemoryExtractionStatus,
+        endedAt: row.ended_at ?? undefined,
+        archivedAt: row.archived_at ?? undefined,
+      };
+      return data;
     } catch {
       return null;
     }
@@ -136,6 +157,63 @@ export class SqliteSessionStore implements SessionStore {
 
   async exists(sessionId: string): Promise<boolean> {
     return !!this.stmts.exists.get(sessionId);
+  }
+
+  /**
+   * 更新 session 生命周期状态
+   */
+  async updateLifecycle(sessionId: string, lifecycle: Partial<SessionLifecycleMeta>): Promise<void> {
+    const row = this.stmts.get.get(sessionId) as { lifecycle: string; memory_extraction: string; ended_at: number | null; archived_at: number | null } | undefined;
+    if (!row) return;
+
+    this.stmts.updateLifecycle.run(
+      lifecycle.lifecycle ?? row.lifecycle,
+      lifecycle.memoryExtraction ?? row.memory_extraction,
+      lifecycle.endedAt ?? row.ended_at,
+      lifecycle.archivedAt ?? row.archived_at,
+      sessionId,
+    );
+  }
+
+  /**
+   * 按生命周期状态列出 session
+   */
+  async listByLifecycle(agentId: string, lifecycle: SessionLifecycleStatus): Promise<SessionData[]> {
+    const rows = this.stmts.listByLifecycle.all(agentId, lifecycle) as Array<{ data: string; lifecycle: string; memory_extraction: string; ended_at: number | null; archived_at: number | null }>;
+    return rows
+      .map(r => {
+        try {
+          const data = JSON.parse(r.data) as SessionData;
+          data.lifecycle = {
+            lifecycle: r.lifecycle as SessionLifecycleStatus,
+            memoryExtraction: r.memory_extraction as MemoryExtractionStatus,
+            endedAt: r.ended_at ?? undefined,
+            archivedAt: r.archived_at ?? undefined,
+          };
+          return data;
+        } catch { return null; }
+      })
+      .filter((d): d is SessionData => d !== null);
+  }
+
+  /**
+   * 标记 session 结束
+   */
+  async markEnded(sessionId: string): Promise<void> {
+    await this.updateLifecycle(sessionId, {
+      lifecycle: 'recent',
+      endedAt: Date.now(),
+    });
+  }
+
+  /**
+   * 获取所有 agent ID
+   */
+  getAgentIds(): string[] {
+    const rows = this.db.prepare(
+      'SELECT DISTINCT agent_id FROM sessions'
+    ).all() as Array<{ agent_id: string }>;
+    return rows.map(r => r.agent_id);
   }
 
   /**

@@ -36,6 +36,7 @@ import type { AgentDefinition, ToolPolicy, ModelInfo } from './core/types.js';
 import type { GatewayConfig } from './integration/types/gateway-config.js';
 import type { ModelProvider } from './core/interfaces/model-provider.js';
 import type { SessionStore } from './core/interfaces/session-store.js';
+import type { SessionData } from './harness/session-types.js';
 import type { IterationBudgetConfig } from './harness/budget/budget.js';
 import type { SecurityGuardConfig } from './core/security-guard.js';
 import type { TaskSupervisorConfig } from './harness/task-system/supervisor/task-supervisor.js';
@@ -449,7 +450,7 @@ export async function createProviderFromConfig(pc: ProviderConfig): Promise<Mode
  * 从 StoreConfig 创建 SessionStore 实例
  * 使用动态 import 以支持 ESM。
  */
-export async function createStoreFromConfig(sc: StoreConfig): Promise<SessionStore> {
+export async function createStoreFromConfig(sc: StoreConfig): Promise<SessionStore<SessionData>> {
   if (sc.type === 'memory') {
     const { InMemorySessionStore } = await import('./integration/storage/memory.js');
     return new InMemorySessionStore();

@@ -1,8 +1,8 @@
 /**
- * SessionStore — Session 持久化接口
+ * SessionStore — Session 持久化接口（泛型）
  *
- * 职责：Session 数据的持久化和检索。
- * 实现方：文件系统、Redis、SQLite、内存等。
+ * @layer core — 定义最抽象的 session 存取契约。
+ * 具体的 SessionData 结构由 harness 层定义。
  *
  * 设计要点：
  * - Core 层不使用此接口（Agent 无状态）
@@ -10,39 +10,19 @@
  * - 放在 Core 层是为了让所有层都能引用此类型
  */
 
-import type { Message, Turn, SessionMeta } from '../types.js';
-
-// ── Session 数据 ──
-
-/** Session 完整数据 */
-export interface SessionData {
-  /** Session 唯一 ID */
-  id: string;
-  /** 所属 Agent ID */
-  agentId: string;
-  /** Session 元数据 */
-  meta: SessionMeta;
-  /** 消息历史 */
-  messages: Message[];
-  /** Turn 记录 */
-  turns: Turn[];
-  /** 扩展元数据 */
-  metadata: Record<string, unknown>;
-}
-
-// ── 接口定义 ──
+import type { SessionMeta } from '../types.js';
 
 /**
  * SessionStore 接口
  *
- * Harness 层的 SessionAwareRunner 使用。
+ * @typeParam T - Session 数据类型，由 harness 层具体化（如 SessionData）
  */
-export interface SessionStore {
+export interface SessionStore<T = unknown> {
   /** 加载 session 数据（不存在返回 null） */
-  load(sessionId: string): Promise<SessionData | null>;
+  load(sessionId: string): Promise<T | null>;
 
   /** 保存 session 数据（覆盖写入） */
-  save(sessionId: string, data: SessionData): Promise<void>;
+  save(sessionId: string, data: T): Promise<void>;
 
   /** 列出 agent 下的所有 session 元数据 */
   list(agentId: string): Promise<SessionMeta[]>;
