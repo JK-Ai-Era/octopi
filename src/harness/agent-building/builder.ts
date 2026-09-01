@@ -556,17 +556,12 @@ export class AgentBuilder {
   /**
    * 构建 Agent 类（使用 agentLoop 纯函数 + runAgentWithReliability）
    *
-   * 返回 Agent 实例 + 可靠性配置，集成方可以用新的 API 运行：
+   * 返回 Agent 实例 + 可靠性配置，集成方应使用 runAgentWithReliability() 运行：
    * ```ts
    * const { agent, harness } = await builder.buildAgent();
-   * for await (const event of runAgentWithReliability(agent.context, agent.config, harness)) {
+   * for await (const event of runAgentWithReliability(agent.context, { model: agent.model }, harness)) {
    *   // 处理事件
    * }
-   * ```
-   *
-   * 或使用 Agent 类的 run/continue_ 方法（不含可靠性包装）：
-   * ```ts
-   * for await (const event of agent.run('你好')) { ... }
    * ```
    */
   async buildAgent(): Promise<{ agent: Agent; harness: ReliabilityHarness; mcpManager: McpManager }> {

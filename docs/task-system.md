@@ -45,10 +45,10 @@ runConfig.injectedContext = taskContext
           │
           ▼
 ┌─────────────────────────────────────────────┐
-│  AgentEngine.run()                           │
+│  SessionAwareRunner.handle()                 │
 │                                              │
-│  systemPrompt += injectedContext             │
-│  (Core 层只做字符串透传，不知道"任务"概念)    │
+│  agent.context.systemPrompt += taskContext   │
+│  → runAgentWithReliability()                 │
 │                                              │
 │  主 LLM 看到 taskContext,自然地决定:          │
 │  - 继续之前的工作                              │
@@ -291,7 +291,7 @@ v0.1.1 起 `loadSession` 和 `appendEvent` 均改为异步，避免阻塞事件�
 
 ### Q: TaskDecisionProvider 的调用时机是什么?
 
-在用户消息到达时调用一次，不在工具调用循环中重复。具体位置是 `SessionAwareRunner.handle()` 中，追加用户消息后、调用 `engine.run()` 前。
+在用户消息到达时调用一次，不在工具调用循环中重复。具体位置是 `SessionAwareRunner.handle()` 中，追加用户消息后、调用 `runAgentWithReliability()` 前。
 
 ### Q: 旧的 TaskStage 和 TaskManagerPlugin 还能用吗?
 

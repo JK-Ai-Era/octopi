@@ -9,7 +9,7 @@ Agent 的核心执行循环。纯函数 + 回调扩展，零外部依赖。
 ## 职责
 
 - agentLoop() 纯函数：核心循环
-- Agent 类：状态管理 + 生命周期（run/continue_）
+- Agent 类：状态容器 + 上下文持有者（context, tools, model）
 - callModel()：LLM 调用（流式 + 超时保护）
 - classifyError()：错误分类（HTTP 状态码优先）
 
