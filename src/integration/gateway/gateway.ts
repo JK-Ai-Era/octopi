@@ -24,6 +24,18 @@ import type {
 } from '../../core/types.js';
 import type { ChannelAdapter, ChannelMessage, ChannelReply } from '../types/channels.js';
 import type { GatewayConfig } from '../types/gateway-config.js';
+
+/** persona 缓存：路径 → 内容，避免每次消息都读磁盘 */
+const personaCache = new Map<string, string>();
+
+async function loadPersonaCached(personaPath: string): Promise<string> {
+  const cached = personaCache.get(personaPath);
+  if (cached !== undefined) return cached;
+  const { loadPersona } = await import('../../harness/agent-building/persona.js');
+  const content = await loadPersona(personaPath);
+  personaCache.set(personaPath, content);
+  return content;
+}
 import type { HookContext } from '../../harness/types/hook-context.js';
 import type { AgentEvent } from '../../core/primitives/event-bus.js';
 import type { ModelProvider } from '../../core/interfaces/model-provider.js';
@@ -421,8 +433,7 @@ export class Gateway {
     // 5. 运行 Agent
     let runSystemPrompt = typeof agent.persona === 'object' ? agent.persona?.systemPrompt ?? '' : '';
     if (!runSystemPrompt && typeof agent.persona === 'string' && agent.persona) {
-      const { loadPersona } = await import('../../harness/agent-building/persona.js');
-      runSystemPrompt = await loadPersona(agent.persona);
+      runSystemPrompt = await loadPersonaCached(agent.persona);
     }
     const runConfig: RunConfig = {
       agentId: agent.id,
@@ -519,8 +530,7 @@ export class Gateway {
     let systemPrompt = typeof agent.persona === 'object' ? agent.persona?.systemPrompt ?? '' : '';
     if (!systemPrompt && typeof agent.persona === 'string' && agent.persona) {
       // persona 是目录路径，从文件加载
-      const { loadPersona } = await import('../../harness/agent-building/persona.js');
-      systemPrompt = await loadPersona(agent.persona);
+      systemPrompt = await loadPersonaCached(agent.persona);
     }
     if (systemPrompt) {
       builder.systemPrompt(systemPrompt);
