@@ -309,6 +309,15 @@ async function ensureDaemonConfig(args: CliArgs): Promise<string | undefined> {
  * 在前台运行 Gateway（阻塞模式，用于调试）
  */
 async function serveFgCommand(args: CliArgs): Promise<void> {
+  // 检查端口是否被占用
+  const port = args.port ?? 3000;
+  const portPid = findPidOnPort(port);
+  if (portPid && portPid !== process.pid) {
+    console.log(`⚠️  Port ${port} is occupied by PID ${portPid}. Killing...`);
+    killProcessOnPort(port);
+    await new Promise((r) => setTimeout(r, 500));
+  }
+
   const configPath = await ensureDaemonConfig(args);
   await startGatewayBlocking(configPath, args);
 }
