@@ -83,11 +83,17 @@ function isProcessAlive(pid: number): boolean {
  */
 function findPidOnPort(port: number): number | null {
   try {
-    // lsof -sTCP:LISTEN 只返回 LISTEN 状态的连接
-    const result = execSync(`lsof -ti -sTCP:LISTEN :${port}`, { encoding: 'utf-8', timeout: 5000 }).trim();
+    // -P 禁止端口名转换，-sTCP:LISTEN 只返回 LISTEN 状态
+    const result = execSync(`lsof -nP -sTCP:LISTEN -iTCP:${port}`, { encoding: 'utf-8', timeout: 5000 }).trim();
     if (!result) return null;
-    const pids = result.split('\n').map(Number).filter(n => n > 0);
-    return pids[0] ?? null;
+    // 解析 lsof 输出，提取 PID（第二列）
+    const lines = result.split('\n').slice(1); // 跳过标题行
+    for (const line of lines) {
+      const parts = line.split(/\s+/);
+      const pid = parseInt(parts[1], 10);
+      if (pid > 0 && pid !== process.pid) return pid;
+    }
+    return null;
   } catch {
     return null;
   }
