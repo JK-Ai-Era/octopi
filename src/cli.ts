@@ -77,14 +77,15 @@ function isProcessAlive(pid: number): boolean {
 }
 
 /**
- * 查找占用指定端口的进程 PID
+ * 查找在指定端口上 LISTEN 的进程 PID
+ * 只返回监听者，不返回客户端连接
  * 返回 null 表示端口未被占用
  */
 function findPidOnPort(port: number): number | null {
   try {
-    const result = execSync(`lsof -ti :${port}`, { encoding: 'utf-8', timeout: 5000 }).trim();
+    // lsof -sTCP:LISTEN 只返回 LISTEN 状态的连接
+    const result = execSync(`lsof -ti -sTCP:LISTEN :${port}`, { encoding: 'utf-8', timeout: 5000 }).trim();
     if (!result) return null;
-    // lsof 可能返回多个 PID（多行），取第一个 node 进程
     const pids = result.split('\n').map(Number).filter(n => n > 0);
     return pids[0] ?? null;
   } catch {
