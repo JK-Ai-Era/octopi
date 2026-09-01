@@ -511,7 +511,12 @@ export class Gateway {
     }
 
     // 设置 systemPrompt
-    const systemPrompt = typeof agent.persona === 'object' ? agent.persona?.systemPrompt ?? '' : '';
+    let systemPrompt = typeof agent.persona === 'object' ? agent.persona?.systemPrompt ?? '' : '';
+    if (!systemPrompt && typeof agent.persona === 'string' && agent.persona) {
+      // persona 是目录路径，从文件加载
+      const { loadPersona } = await import('../../harness/agent-building/persona.js');
+      systemPrompt = await loadPersona(agent.persona);
+    }
     if (systemPrompt) {
       builder.systemPrompt(systemPrompt);
     }
