@@ -76,6 +76,45 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
+/**
+ * 查找占用指定端口的进程 PID
+ * 返回 null 表示端口未被占用
+ */
+function findPidOnPort(port: number): number | null {
+  try {
+    const result = execSync(`lsof -ti :${port}`, { encoding: 'utf-8', timeout: 5000 }).trim();
+    if (!result) return null;
+    // lsof 可能返回多个 PID（多行），取第一个 node 进程
+    const pids = result.split('\n').map(Number).filter(n => n > 0);
+    return pids[0] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 杀掉占用指定端口的进程（排除自身）
+ */
+function killProcessOnPort(port: number): boolean {
+  const pid = findPidOnPort(port);
+  if (!pid || pid === process.pid) return false;
+
+  try {
+    process.kill(pid, 'SIGTERM');
+    // 等待进程退出
+    const deadline = Date.now() + 3000;
+    while (Date.now() < deadline) {
+      if (!isProcessAlive(pid)) return true;
+      execSync('sleep 0.2');
+    }
+    // 强制 kill
+    process.kill(pid, 'SIGKILL');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // ================================================================
 // Provider 工厂
 // ================================================================
@@ -284,6 +323,15 @@ async function serveStartCommand(args: CliArgs): Promise<void> {
   // 清理残留 PID 文件
   removePidFile();
 
+  // 检查端口是否被占用
+  const port = args.port ?? 3000;
+  const portPid = findPidOnPort(port);
+  if (portPid && portPid !== process.pid) {
+    console.log(`⚠️  Port ${port} is occupied by PID ${portPid}. Killing...`);
+    killProcessOnPort(port);
+    await new Promise((r) => setTimeout(r, 500));
+  }
+
   // 确保已初始化，获取配置路径
   const configPath = await ensureDaemonConfig(args);
 
@@ -332,47 +380,68 @@ async function serveStartCommand(args: CliArgs): Promise<void> {
  */
 async function serveStopCommand(): Promise<void> {
   const pidFile = readPidFile();
-  if (!pidFile) {
-    console.log('ℹ️  No Gateway instance found (no PID file).');
-    return;
-  }
+  let stopped = false;
 
-  if (!isProcessAlive(pidFile.pid)) {
-    console.log(`ℹ️  Gateway process (PID: ${pidFile.pid}) is not running.`);
-    console.log('   Cleaning up stale PID file.');
-    removePidFile();
-    return;
-  }
-
-  console.log(`🛑 Stopping Gateway (PID: ${pidFile.pid})...`);
-
-  try {
-    process.kill(pidFile.pid, 'SIGTERM');
-
-    // 等待进程退出（最多 10 秒）
-    const deadline = Date.now() + 10_000;
-    while (Date.now() < deadline) {
-      if (!isProcessAlive(pidFile.pid)) {
-        console.log('✅ Gateway stopped.');
-        removePidFile();
-        return;
+  // 1. 尝试通过 PID 文件停止
+  if (pidFile) {
+    if (isProcessAlive(pidFile.pid)) {
+      console.log(`🛑 Stopping Gateway (PID: ${pidFile.pid})...`);
+      try {
+        process.kill(pidFile.pid, 'SIGTERM');
+        const deadline = Date.now() + 10_000;
+        while (Date.now() < deadline) {
+          if (!isProcessAlive(pidFile.pid)) {
+            stopped = true;
+            break;
+          }
+          await new Promise((r) => setTimeout(r, 200));
+        }
+        if (!stopped) {
+          console.log('⚠️  Graceful shutdown timed out. Sending SIGKILL...');
+          process.kill(pidFile.pid, 'SIGKILL');
+          await new Promise((r) => setTimeout(r, 500));
+          stopped = true;
+        }
+      } catch (error: any) {
+        if (error.code === 'ESRCH') {
+          stopped = true;
+        } else {
+          console.error(`❌ Failed to stop PID ${pidFile.pid}: ${error.message}`);
+        }
       }
-      await new Promise((r) => setTimeout(r, 200));
     }
+    removePidFile();
+  }
 
-    // 超时，强制 kill
-    console.log('⚠️  Graceful shutdown timed out. Sending SIGKILL...');
-    process.kill(pidFile.pid, 'SIGKILL');
-    await new Promise((r) => setTimeout(r, 500));
-    console.log('✅ Gateway force-killed.');
-    removePidFile();
-  } catch (error: any) {
-    if (error.code === 'ESRCH') {
-      console.log('ℹ️  Gateway process already exited.');
-    } else {
-      console.error(`❌ Failed to stop Gateway: ${error.message}`);
+  // 2. 检查端口是否仍被占用（可能是旧进程或 PID 文件丢失的情况）
+  const port = pidFile?.port ?? 3000;
+  const portPid = findPidOnPort(port);
+  if (portPid && portPid !== process.pid) {
+    if (!stopped) console.log(`ℹ️  Found stale process on port ${port} (PID: ${portPid})`);
+    else console.log(`⚠️  Port ${port} still occupied by PID ${portPid}`);
+    console.log(`🛑 Killing process ${portPid}...`);
+    try {
+      process.kill(portPid, 'SIGTERM');
+      await new Promise((r) => setTimeout(r, 1000));
+      if (isProcessAlive(portPid)) {
+        process.kill(portPid, 'SIGKILL');
+        await new Promise((r) => setTimeout(r, 500));
+      }
+      stopped = true;
+      console.log(`✅ Process ${portPid} killed.`);
+    } catch (error: any) {
+      if (error.code === 'ESRCH') {
+        console.log(`✅ Process ${portPid} already exited.`);
+      } else {
+        console.error(`❌ Failed to kill PID ${portPid}: ${error.message}`);
+      }
     }
-    removePidFile();
+  }
+
+  if (stopped) {
+    console.log('✅ Gateway stopped.');
+  } else if (!pidFile && !portPid) {
+    console.log('ℹ️  No Gateway instance found.');
   }
 }
 
@@ -381,8 +450,13 @@ async function serveStopCommand(): Promise<void> {
  */
 async function serveRestartCommand(args: CliArgs): Promise<void> {
   await serveStopCommand();
-  // 短暂等待端口释放
-  await new Promise((r) => setTimeout(r, 500));
+  // 等待端口完全释放
+  const port = args.port ?? 3000;
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    if (!findPidOnPort(port)) break;
+    await new Promise((r) => setTimeout(r, 300));
+  }
   await serveStartCommand(args);
 }
 
