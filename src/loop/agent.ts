@@ -230,18 +230,6 @@ export class Agent {
    * 内部循环运行器（run 和 continue_ 共享）
    */
   private async *_runLoop(signal?: AbortSignal): AsyncGenerator<AgentLoopEvent> {
-    // 将 systemPrompt 注入为 system 消息（如果尚未存在）
-    if (this._context.systemPrompt) {
-      const hasSystemMessage = this._context.messages.some(m => m.role === 'system');
-      if (!hasSystemMessage) {
-        this._context.messages.unshift({
-          role: 'system',
-          content: this._context.systemPrompt,
-          timestamp: Date.now(),
-        });
-      }
-    }
-
     const abortController = new AbortController();
     this._abortController = abortController;
     const effectiveSignal = signal

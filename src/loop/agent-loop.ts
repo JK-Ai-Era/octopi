@@ -59,6 +59,15 @@ export async function* agentLoop(
   const idleTimeoutMs = config.modelCallIdleTimeoutMs ?? 120_000;
   const absoluteTimeoutMs = config.modelCallAbsoluteTimeoutMs ?? 300_000;
 
+  // 将 systemPrompt 注入为 system 消息（如果尚未存在）
+  if (context.systemPrompt && !context.messages.some(m => m.role === 'system')) {
+    context.messages.unshift({
+      role: 'system',
+      content: context.systemPrompt,
+      timestamp: Date.now(),
+    });
+  }
+
   // 当前上下文（循环内直接修改 messages 引用）
   let currentContext = context;
   let currentModel = model;
