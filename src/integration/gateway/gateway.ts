@@ -419,12 +419,17 @@ export class Gateway {
     };
 
     // 5. 运行 Agent
+    let runSystemPrompt = typeof agent.persona === 'object' ? agent.persona?.systemPrompt ?? '' : '';
+    if (!runSystemPrompt && typeof agent.persona === 'string' && agent.persona) {
+      const { loadPersona } = await import('../../harness/agent-building/persona.js');
+      runSystemPrompt = await loadPersona(agent.persona);
+    }
     const runConfig: RunConfig = {
       agentId: agent.id,
       sessionId: sessionKey,
       model: agent.model.model,
       contextWindow: agent.model.contextWindow,
-      systemPrompt: typeof agent.persona === 'object' ? agent.persona?.systemPrompt ?? '' : '',
+      systemPrompt: runSystemPrompt,
     };
 
     let finalContent = '';
