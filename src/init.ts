@@ -6,15 +6,16 @@
  * 目录结构：
  *   ~/.octopi/                         ← 系统根目录（OCTOPI_HOME）
  *     octopi.json                      ← 主配置文件
- *     workspace/
- *       default/                       ← 默认 agent 工作目录
+ *     agents/
+ *       default/                       ← 默认 agent home 目录
+ *         AGENTS.md                    ← 操作指令
  *         SOUL.md                      ← 人格定义
  *         IDENTITY.md                  ← 身份定义
  *         USER.md                      ← 用户上下文
- *         AGENTS.md                    ← 操作指令
  *         TOOLS.md                     ← 工具说明
- *     data/
- *       sessions/                      ← session 存储
+ *         sessions/                    ← session 存储
+ *     workspace/
+ *       default/                       ← 默认 agent 沙箱目录
  *     plugins/                         ← plugin 目录
  *
  * 使用方式：
@@ -173,7 +174,7 @@ function generateDefaultConfig(homeDir: string, agentId: string = 'default'): ob
       dmScope: 'per-peer',
       store: {
         type: 'jsonl',
-        dataDir: join(homeDir, 'data/sessions'),
+        dataDir: join(homeDir, 'agents'),
       },
     },
   };

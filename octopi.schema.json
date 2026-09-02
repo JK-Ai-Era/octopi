@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Octopi Configuration",
-  "description": "Octopi Agent Framework 配置文件 (v0.2.0)",
+  "description": "Octopi Agent Framework 配置文件 (v0.3.0)",
   "type": "object",
   "required": ["agents"],
   "properties": {
@@ -17,16 +17,20 @@
             "type": "string",
             "description": "Agent 唯一标识"
           },
+          "home": {
+            "type": "string",
+            "description": "Agent home 目录：persona、memory、wisdom、skills、sessions 的根目录"
+          },
           "workspace": {
             "type": "string",
-            "description": "工作目录路径"
+            "description": "沙箱工作目录：agent 工具操作的 cwd"
           },
           "persona": {
-            "description": "Persona 配置：目录路径（string）或内联定义（object）",
+            "description": "Persona 配置（向后兼容：string 形式等价于 home）",
             "oneOf": [
               {
                 "type": "string",
-                "description": "Persona 目录路径（包含 AGENTS.md、SOUL.md 等文件）"
+                "description": "Persona 目录路径（已废弃，请使用 home）"
               },
               {
                 "type": "object",
@@ -98,37 +102,46 @@
         }
       }
     },
-    "providers": {
-      "type": "array",
-      "description": "LLM Provider 列表",
-      "items": {
-        "type": "object",
-        "required": ["type", "name"],
-        "properties": {
-          "type": {
-            "type": "string",
-            "enum": ["openai", "anthropic"],
-            "description": "协议类型"
-          },
-          "name": {
-            "type": "string",
-            "description": "Provider 名称（agent.model.provider 引用此名称）"
-          },
-          "apiKey": {
-            "type": "string",
-            "description": "API Key（支持 ${ENV_VAR} 语法）"
-          },
-          "baseUrl": {
-            "type": "string",
-            "format": "uri",
-            "description": "API Base URL"
-          },
-          "models": {
-            "type": "array",
-            "items": { "type": "string" }
-          },
-          "defaultModel": {
-            "type": "string"
+    "models": {
+      "type": "object",
+      "description": "集中模型配置",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["merge", "replace"],
+          "description": "合并模式：merge=与 builtin 合并，replace=完全替代"
+        },
+        "providers": {
+          "type": "object",
+          "description": "Provider 映射（key = provider 名称）",
+          "additionalProperties": {
+            "type": "object",
+            "required": ["baseUrl", "apiKey", "api", "models"],
+            "properties": {
+              "baseUrl": { "type": "string", "description": "API Base URL" },
+              "apiKey": { "type": "string", "description": "API Key（支持 ${ENV_VAR} 语法）" },
+              "api": {
+                "type": "string",
+                "enum": ["openai-completions", "anthropic-messages"],
+                "description": "API 协议类型"
+              },
+              "models": {
+                "type": "array",
+                "description": "模型列表",
+                "items": {
+                  "type": "object",
+                  "required": ["id"],
+                  "properties": {
+                    "id": { "type": "string", "description": "模型 ID" },
+                    "name": { "type": "string", "description": "模型名称（默认等于 id）" },
+                    "contextWindow": { "type": "integer", "description": "上下文窗口大小" },
+                    "maxTokens": { "type": "integer", "description": "最大输出 token 数" },
+                    "reasoning": { "type": "boolean", "description": "是否支持推理模式" }
+                  }
+                }
+              },
+              "timeoutSeconds": { "type": "number", "description": "请求超时（秒）" }
+            }
           }
         }
       }
@@ -249,22 +262,6 @@
         }
       }
     },
-    "store": {
-      "type": "object",
-      "description": "Session 存储配置",
-      "required": ["type"],
-      "properties": {
-        "type": {
-          "type": "string",
-          "enum": ["memory", "jsonl"],
-          "description": "存储类型"
-        },
-        "dataDir": {
-          "type": "string",
-          "description": "数据目录（jsonl 类型必填）"
-        }
-      }
-    },
     "channels": {
       "type": "array",
       "description": "Channel 适配器列表",
@@ -283,18 +280,42 @@
           },
           "path": {
             "type": "string"
+          },
+          "apiKey": {
+            "type": "string",
+            "description": "API Key（HTTP channel 认证）"
           }
         }
       }
     },
     "session": {
       "type": "object",
-      "description": "Session 配置",
+      "description": "Session 配置（路由策略 + 存储引擎）",
       "properties": {
         "dmScope": {
           "type": "string",
-          "enum": ["main", "per-peer", "per-channel"],
+          "enum": ["main", "per-peer", "per-channel-peer"],
           "description": "DM 作用域"
+        },
+        "store": {
+          "type": "object",
+          "description": "Session 存储配置",
+          "required": ["type"],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["memory", "jsonl", "sqlite"],
+              "description": "存储类型"
+            },
+            "dataDir": {
+              "type": "string",
+              "description": "数据目录（jsonl 类型使用）"
+            },
+            "dbPath": {
+              "type": "string",
+              "description": "数据库文件路径（sqlite 类型使用）"
+            }
+          }
         }
       }
     }

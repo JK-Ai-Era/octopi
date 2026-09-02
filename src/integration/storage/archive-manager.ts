@@ -109,7 +109,7 @@ export class SessionArchiveManager {
     await this.appendToArchive(archiveFile, entry);
 
     // 更新生命周期状态
-    await this.store.updateLifecycle!(session.id, {
+    await this.store.updateLifecycle!(session.agentId, session.id, {
       lifecycle: 'archived',
       archivedAt: now,
     });

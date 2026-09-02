@@ -1,3 +1,31 @@
+## v0.10.1 (2026-09-03)
+
+### fix: 多处数据正确性与一致性修复
+
+代码审查后的修复批次，涵盖数据隔离、异步 I/O、SQL 安全、熔断器覆盖、类型安全等方面。
+
+#### 修复
+
+- **fix(storage): InMemorySessionStore agentId 隔离** — 使用 `${agentId}:${sessionId}` 复合 key，修复多 agent 场景下 session 数据串扰（memory.ts + gateway.ts）
+- **fix(init): 默认配置 dataDir 路径修正** — 从 `data/sessions` 改为 `agents`，与实际 `~/.octopi/agents/{id}/sessions/` 目录结构一致
+- **fix(storage): JsonlSessionStore 同步 I/O 改异步** — 全部替换为 `node:fs/promises`，save() 中 JSONL 写入从循环 appendFile 优化为单次 writeFile
+- **fix(storage): SqliteSessionStore.updateLifecycle / markEnded 补充 agentId 过滤** — WHERE 子句加 `AND agent_id = ?`，方法签名对齐 SessionStore 接口；archive-manager.ts 调用方同步修复
+- **fix(gateway): FallbackProvider 回退 provider 也用 circuit breaker 包装** — 构建 wrappedProviders map 传入 FallbackProvider，确保熔断器行为一致
+- **fix(config): 向后兼容迁移去掉 as any** — 改用显式类型断言
+- **fix(config): resolveFallbackModels 加 MAX_FALLBACK_DEPTH=5 深度限制** — 防止嵌套 fallback 无限递归
+
+#### 改进
+
+- **feat(gateway): 导出 clearPersonaCache()** — Gateway.stop() 时自动清空 persona 缓存
+- **fix(schema): session.store 补充 required: ["type"] 约束**
+- **docs: config.ts / init.ts 文件头注释与代码同步**
+
+#### 测试
+
+- 新增 `tests/config-resolve.test.ts` — 22 个测试用例，覆盖 flattenModels、resolveModelConfig 三种解析路径、fallback 深度限制、createStoreFromConfig 四种存储类型、向后兼容迁移、InMemorySessionStore agentId 隔离
+- 更新 `tests/information-layer.test.ts` — updateLifecycle / markEnded 调用同步 agentId 参数
+- 更新 `tests/init.test.ts` — dataDir 断言匹配新路径
+
 ## v0.10.0 (2026-09-03)
 
 ### refactor(config): 模型配置集中化 + SessionStore 接口统一 + 模型回退

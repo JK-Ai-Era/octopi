@@ -13,6 +13,7 @@ This file governs AI coding agent behavior in the `octopi` repository. **Read th
 - **Core stack**: TypeScript / Node.js / Vitest
 - **Package manager**: `npm`
 - **Minimum runtime**: Node.js >= 20
+- **Runtime Directory**: `~/.octopi/`
 - **Core Philosophy**: An Agent is not a class, but a complete **Runtime Scope** (workspace, session, tools, persona). The framework provides mechanisms; the integrator provides policies.
 
 ---

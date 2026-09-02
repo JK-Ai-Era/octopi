@@ -27,19 +27,14 @@
 
   "agents": [{
     "id": "assistant",
-    "workspace": "./workspace",
-    "persona": "./personas/assistant",
+    "home": "./agents/assistant",
+    "workspace": "./workspace/assistant",
     "model": "openai/gpt-5.5",
     "tools": { "allow": ["*"] }
   }],
 
   "security": {
     "preset": "production"
-  },
-
-  "store": {
-    "type": "jsonl",
-    "dataDir": "./data/sessions"
   },
 
   "channels": [{
@@ -49,6 +44,10 @@
   }],
 
   "session": {
-    "dmScope": "per-peer"
+    "dmScope": "per-peer",
+    "store": {
+      "type": "jsonl",
+      "dataDir": "./data/sessions"
+    }
   }
 }

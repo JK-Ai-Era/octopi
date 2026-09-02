@@ -9,14 +9,19 @@ import type { SessionData } from '../../harness/session-types.js';
 import type { SessionMeta } from '../../core/types.js';
 
 export class InMemorySessionStore implements SessionStore<SessionData> {
+  /** 复合 key：agentId:sessionId，确保多 agent 场景不串数据 */
+  private static key(agentId: string, sessionId: string): string {
+    return `${agentId}:${sessionId}`;
+  }
+
   private sessions = new Map<string, SessionData>();
 
   async load(agentId: string, sessionId: string): Promise<SessionData | null> {
-    return this.sessions.get(sessionId) ?? null;
+    return this.sessions.get(InMemorySessionStore.key(agentId, sessionId)) ?? null;
   }
 
   async save(agentId: string, sessionId: string, data: SessionData): Promise<void> {
-    this.sessions.set(sessionId, { ...data });
+    this.sessions.set(InMemorySessionStore.key(agentId, sessionId), { ...data });
   }
 
   async list(agentId: string): Promise<SessionMeta[]> {
@@ -26,11 +31,11 @@ export class InMemorySessionStore implements SessionStore<SessionData> {
   }
 
   async delete(agentId: string, sessionId: string): Promise<void> {
-    this.sessions.delete(sessionId);
+    this.sessions.delete(InMemorySessionStore.key(agentId, sessionId));
   }
 
   async exists(agentId: string, sessionId: string): Promise<boolean> {
-    return this.sessions.has(sessionId);
+    return this.sessions.has(InMemorySessionStore.key(agentId, sessionId));
   }
 
   /** 清空所有数据（测试用） */

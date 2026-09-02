@@ -36,6 +36,11 @@ async function loadPersonaCached(personaPath: string): Promise<string> {
   personaCache.set(personaPath, content);
   return content;
 }
+
+/** 清除 persona 缓存（文件变更后调用） */
+export function clearPersonaCache(): void {
+  personaCache.clear();
+}
 import type { HookContext } from '../../harness/types/hook-context.js';
 import type { AgentEvent } from '../../core/primitives/event-bus.js';
 import type { ModelProvider } from '../../core/interfaces/model-provider.js';
@@ -60,14 +65,15 @@ import { SessionAwareRunner, type RunConfig } from '../../harness/runner.js';
 // ================================================================
 
 class InMemorySessionStore implements SessionStore<SessionData> {
+    private static key(agentId: string, sessionId: string): string { return `${agentId}:${sessionId}`; }
   private sessions = new Map<string, SessionData>();
 
   async load(_agentId: string, sessionId: string): Promise<SessionData | null> {
-    return this.sessions.get(sessionId) ?? null;
+    return this.sessions.get(InMemorySessionStore.key(_agentId, sessionId)) ?? null;
   }
 
   async save(_agentId: string, sessionId: string, data: SessionData): Promise<void> {
-    this.sessions.set(sessionId, data);
+    this.sessions.set(InMemorySessionStore.key(_agentId, sessionId), data);
   }
 
   async list(agentId: string): Promise<any[]> {
@@ -75,11 +81,11 @@ class InMemorySessionStore implements SessionStore<SessionData> {
   }
 
   async delete(_agentId: string, sessionId: string): Promise<void> {
-    this.sessions.delete(sessionId);
+    this.sessions.delete(InMemorySessionStore.key(_agentId, sessionId));
   }
 
   async exists(_agentId: string, sessionId: string): Promise<boolean> {
-    return this.sessions.has(sessionId);
+    return this.sessions.has(InMemorySessionStore.key(_agentId, sessionId));
   }
 }
 
@@ -198,6 +204,7 @@ export class Gateway {
     }
 
     await this.pluginManager.onGatewayStop();
+    personaCache.clear();
     this.started = false;
     console.log('[Gateway] Stopped.');
   }
@@ -537,15 +544,19 @@ export class Gateway {
     const cb = this.getCircuitBreaker(agent.model.provider);
     const wrappedProvider = wrapProviderWithCircuitBreaker(modelProvider, cb);
 
-    // 如果配置了 fallbackModels，构建 FallbackProvider
+    // 如果配置了 fallbackModels，构建 FallbackProvider（回退 provider 也包装 circuit breaker）
     let finalProvider: import('../../core/interfaces/model-provider.js').ModelProvider = wrappedProvider;
     if (agent.model.fallbackModels && agent.model.fallbackModels.length > 0) {
       const { FallbackProvider } = await import('../../harness/reliability/fallback-provider.js');
+      const wrappedProviders = new Map<string, import('../../core/interfaces/model-provider.js').ModelProvider>();
+      for (const [name, p] of this.providers) {
+        wrappedProviders.set(name, wrapProviderWithCircuitBreaker(p, this.getCircuitBreaker(name)));
+      }
       finalProvider = new FallbackProvider(
         wrappedProvider,
         agent.model.model,
         agent.model.fallbackModels,
-        this.providers,
+        wrappedProviders,
       );
       console.log(`[Gateway] Agent "${agent.id}" fallback chain: ${[agent.model.model, ...agent.model.fallbackModels.map(f => f.model)].join(' → ')}`);
     }

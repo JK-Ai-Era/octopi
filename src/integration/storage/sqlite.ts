@@ -108,7 +108,7 @@ export class SqliteSessionStore implements SessionStore<SessionData> {
       exists: this.db.prepare('SELECT 1 FROM sessions WHERE id = ? AND agent_id = ?'),
       updateLifecycle: this.db.prepare(`
         UPDATE sessions SET lifecycle = ?, memory_extraction = ?, ended_at = ?, archived_at = ?
-        WHERE id = ?
+        WHERE id = ? AND agent_id = ?
       `),
     };
   }
@@ -161,10 +161,10 @@ export class SqliteSessionStore implements SessionStore<SessionData> {
   /**
    * 更新 session 生命周期状态
    */
-  async updateLifecycle(sessionId: string, lifecycle: Partial<SessionLifecycleMeta>): Promise<void> {
+  async updateLifecycle(agentId: string, sessionId: string, lifecycle: Partial<SessionLifecycleMeta>): Promise<void> {
     const row = this.db.prepare(
-      'SELECT lifecycle, memory_extraction, ended_at, archived_at FROM sessions WHERE id = ?'
-    ).get(sessionId) as { lifecycle: string; memory_extraction: string; ended_at: number | null; archived_at: number | null } | undefined;
+      'SELECT lifecycle, memory_extraction, ended_at, archived_at FROM sessions WHERE id = ? AND agent_id = ?'
+    ).get(sessionId, agentId) as { lifecycle: string; memory_extraction: string; ended_at: number | null; archived_at: number | null } | undefined;
     if (!row) return;
 
     this.stmts.updateLifecycle.run(
@@ -173,6 +173,7 @@ export class SqliteSessionStore implements SessionStore<SessionData> {
       lifecycle.endedAt ?? row.ended_at,
       lifecycle.archivedAt ?? row.archived_at,
       sessionId,
+      agentId,
     );
   }
 
@@ -200,8 +201,8 @@ export class SqliteSessionStore implements SessionStore<SessionData> {
   /**
    * 标记 session 结束
    */
-  async markEnded(sessionId: string): Promise<void> {
-    await this.updateLifecycle(sessionId, {
+  async markEnded(agentId: string, sessionId: string): Promise<void> {
+    await this.updateLifecycle(agentId, sessionId, {
       lifecycle: 'recent',
       endedAt: Date.now(),
     });

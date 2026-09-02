@@ -12,8 +12,8 @@
  * {
  *   "agents": [{
  *     "id": "assistant",
- *     "workspace": "./workspace",
- *     "persona": "./personas/assistant",
+ *     "home": "./agents/assistant",
+ *     "workspace": "./workspace/assistant",
  *     "model": { "provider": "openai", "model": "gpt-5.5" },
  *     "tools": { "allow": ["*"] }
  *   }],
@@ -25,9 +25,12 @@
  *   }],
  *   "plugins": { "loadPaths": ["./plugins"] },
  *   "security": { "preset": "production" },
- *   "store": { "type": "jsonl", "dataDir": "./data/sessions" },
+
  *   "channels": [{ "type": "http", "port": 3000 }],
- *   "session": { "dmScope": "per-peer" }
+ *   "session": {
+ *     "dmScope": "per-peer",
+ *     "store": { "type": "jsonl", "dataDir": "./data/sessions" }
+ *   }
  * }
  * ```
  */
@@ -467,7 +470,7 @@ export function resolveModelConfig(
   // 内联对象（向后兼容）
   if (typeof modelRef === 'object') {
     const resolved = { ...modelRef, contextWindow: modelRef.contextWindow ?? defaultContextWindow };
-    resolved.fallbackModels = resolveFallbackModels(resolved.fallbackModels as any, models, defaults);
+    resolved.fallbackModels = resolveFallbackModels(resolved.fallbackModels as any, models, defaults, 1);
     return resolved;
   }
 
@@ -508,11 +511,18 @@ export function resolveModelConfig(
  * 将 (string | ModelConfig)[] 统一解析为 ModelConfig[]。
  * string 引用按 resolveModelConfig 同样的逻辑查找。
  */
+const MAX_FALLBACK_DEPTH = 5;
+
 function resolveFallbackModels(
   fallbacks: Array<string | _ModelConfig> | undefined,
   models: NormalizedModelInfo[],
   defaults?: Defaults,
+  depth: number = 0,
 ): _ModelConfig[] | undefined {
+  if (depth >= MAX_FALLBACK_DEPTH) {
+    console.warn('[config] Fallback model nesting exceeds maximum depth, truncating');
+    return undefined;
+  }
   if (!fallbacks || fallbacks.length === 0) return undefined;
   return fallbacks.map(fb => {
     if (typeof fb === 'string') {
@@ -544,7 +554,7 @@ function resolveFallbackModels(
       temperature: m.temperature,
       maxTokens: m.maxTokens,
       contextWindow: m.contextWindow ?? defaults?.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
-      fallbackModels: m.fallbackModels,
+      fallbackModels: resolveFallbackModels(m.fallbackModels, models, defaults, depth + 1),
     };
   });
 }
@@ -596,6 +606,14 @@ export function loadConfig(configPath?: string): NormalizedHarnessConfig {
 
   // Zod schema 校验（结构化错误信息）
   const config = validateConfigOrThrow(raw) as unknown as NormalizedHarnessConfig;
+
+  // ── 向后兼容：迁移旧的顶层 store 到 session.store ──
+  if (raw.store && !config.session?.store) {
+    console.warn('[config] "store" 顶层配置已废弃，请迁移到 "session.store"。自动迁移中...');
+    const mutable = config as NormalizedHarnessConfig & { session?: { store?: StoreConfig } };
+    if (!mutable.session) mutable.session = {};
+    mutable.session.store = raw.store as StoreConfig;
+  }
 
   config.flatModels = flattenModels(config.models as ModelsConfig);
   return config;

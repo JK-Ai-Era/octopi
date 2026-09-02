@@ -62,7 +62,7 @@ describe('SqliteSessionStore lifecycle', () => {
 
   it('should mark session ended', async () => {
     await store.save('agent-1', 's1', createTestSession('s1'));
-    await store.markEnded('s1');
+    await store.markEnded('agent-1', 's1');
 
     const loaded = await store.load('agent-1', 's1');
     expect(loaded!.lifecycle!.lifecycle).toBe('recent');
@@ -71,7 +71,7 @@ describe('SqliteSessionStore lifecycle', () => {
 
   it('should update lifecycle', async () => {
     await store.save('agent-1', 's1', createTestSession('s1'));
-    await store.updateLifecycle!('s1', {
+    await store.updateLifecycle!('agent-1', 's1', {
       lifecycle: 'extracted',
       memoryExtraction: 'completed',
     });
@@ -84,7 +84,7 @@ describe('SqliteSessionStore lifecycle', () => {
   it('should list by lifecycle status', async () => {
     await store.save('agent-1', 's1', createTestSession('s1'));
     await store.save('agent-1', 's2', createTestSession('s2'));
-    await store.markEnded('s1');
+    await store.markEnded('agent-1', 's1');
 
     const active = await store.listByLifecycle!('agent-1', 'active');
     const recent = await store.listByLifecycle!('agent-1', 'recent');
@@ -123,10 +123,10 @@ describe('SessionArchiveManager', () => {
     await store.save('agent-1', 's1', createTestSession('s1'));
 
     // 标记结束
-    await store.markEnded('s1');
+    await store.markEnded('agent-1', 's1');
 
     // 标记 memory 提取完成
-    await store.updateLifecycle!('s1', {
+    await store.updateLifecycle!('agent-1', 's1', {
       memoryExtraction: 'completed',
     });
 
@@ -148,7 +148,7 @@ describe('SessionArchiveManager', () => {
     await store.save('agent-1', 's1', createTestSession('s1'));
 
     // 标记结束，但 memory 提取未完成
-    await store.markEnded('s1');
+    await store.markEnded('agent-1', 's1');
 
     // 手动设置 endedAt 为 100 天前（超过 forceArchiveDays）
     const hundredDaysAgo = Date.now() - 100 * 24 * 60 * 60 * 1000;
@@ -173,8 +173,8 @@ describe('SessionArchiveManager', () => {
     });
 
     await store.save('agent-1', 's1', createTestSession('s1'));
-    await store.markEnded('s1');
-    await store.updateLifecycle!('s1', { memoryExtraction: 'completed' });
+    await store.markEnded('agent-1', 's1');
+    await store.updateLifecycle!('agent-1', 's1', { memoryExtraction: 'completed' });
 
     // 刚结束的 session 不应该被归档
     const archived = await manager2.runArchive();
@@ -185,10 +185,10 @@ describe('SessionArchiveManager', () => {
     await store.save('agent-1', 's1', createTestSession('s1', 'agent-1'));
     await store.save('agent-1', 's2', createTestSession('s2', 'agent-2'));
 
-    await store.markEnded('s1');
-    await store.markEnded('s2');
-    await store.updateLifecycle!('s1', { memoryExtraction: 'completed' });
-    await store.updateLifecycle!('s2', { memoryExtraction: 'completed' });
+    await store.markEnded('agent-1', 's1');
+    await store.markEnded('agent-1', 's2');
+    await store.updateLifecycle!('agent-1', 's1', { memoryExtraction: 'completed' });
+    await store.updateLifecycle!('agent-1', 's2', { memoryExtraction: 'completed' });
 
     await archiveManager.runArchive();
 

@@ -10,11 +10,15 @@
  * 所有操作都通过 agentId 定位到具体目录，不做全量扫描。
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync } from 'node:fs';
+import { access, mkdir, readFile, writeFile, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { SessionStore } from '../../core/interfaces/session-store.js';
 import type { SessionData } from '../../harness/session-types.js';
 import type { SessionMeta } from '../../core/types.js';
+
+async function fileExists(path: string): Promise<boolean> {
+  try { await access(path); return true; } catch { return false; }
+}
 
 export class JsonlSessionStore implements SessionStore<SessionData> {
   private agentHomeResolver: (agentId: string) => string;
@@ -27,7 +31,6 @@ export class JsonlSessionStore implements SessionStore<SessionData> {
     agentHomeResolver: (agentId: string) => string,
     legacyDataDir?: string,
   ) {
-    // 如果传了 legacyDataDir，用旧的目录结构：dataDir/{agentId}/
     if (legacyDataDir) {
       this.agentHomeResolver = (agentId: string) => join(legacyDataDir, agentId);
     } else {
@@ -49,20 +52,19 @@ export class JsonlSessionStore implements SessionStore<SessionData> {
 
   async load(agentId: string, sessionId: string): Promise<SessionData | null> {
     const file = this.sessionFile(agentId, sessionId);
-    if (!existsSync(file)) return null;
+    if (!await fileExists(file)) return null;
 
-    const content = readFileSync(file, 'utf-8');
+    const content = await readFile(file, 'utf-8');
     const messages = content.split('\n')
       .filter(line => line.trim())
       .map(line => { try { return JSON.parse(line); } catch { return null; } })
       .filter(Boolean);
 
-    // 读取元数据
     let meta: SessionMeta | null = null;
-    const metaFile = this.metaFile(agentId);
-    if (existsSync(metaFile)) {
+    const metaPath = this.metaFile(agentId);
+    if (await fileExists(metaPath)) {
       try {
-        const allMeta = JSON.parse(readFileSync(metaFile, 'utf-8'));
+        const allMeta = JSON.parse(await readFile(metaPath, 'utf-8'));
         meta = allMeta[sessionId] ?? null;
       } catch { /* corrupt meta, use fallback */ }
     }
@@ -89,33 +91,29 @@ export class JsonlSessionStore implements SessionStore<SessionData> {
 
   async save(agentId: string, sessionId: string, data: SessionData): Promise<void> {
     const dir = this.sessionsDir(agentId);
-    if (!existsSync(dir)) {
-      mkdirSync(dir, { recursive: true });
-    }
+    await mkdir(dir, { recursive: true });
 
     // 保存元数据索引
-    const metaFile = this.metaFile(agentId);
+    const metaPath = this.metaFile(agentId);
     let allMeta: Record<string, SessionMeta> = {};
-    if (existsSync(metaFile)) {
-      try { allMeta = JSON.parse(readFileSync(metaFile, 'utf-8')); } catch {}
+    if (await fileExists(metaPath)) {
+      try { allMeta = JSON.parse(await readFile(metaPath, 'utf-8')); } catch {}
     }
     allMeta[sessionId] = data.meta;
-    writeFileSync(metaFile, JSON.stringify(allMeta, null, 2));
+    await writeFile(metaPath, JSON.stringify(allMeta, null, 2));
 
-    // 保存消息（JSONL 格式，全量覆写）
-    const sessionFile = this.sessionFile(agentId, sessionId);
-    writeFileSync(sessionFile, '');
-    for (const msg of data.messages) {
-      appendFileSync(sessionFile, JSON.stringify(msg) + '\n');
-    }
+    // 保存消息（JSONL 格式，单次写入替代 append 循环）
+    const sessionPath = this.sessionFile(agentId, sessionId);
+    const jsonl = data.messages.map(msg => JSON.stringify(msg)).join('\n') + '\n';
+    await writeFile(sessionPath, jsonl);
   }
 
   async list(agentId: string): Promise<SessionMeta[]> {
-    const metaFile = this.metaFile(agentId);
-    if (!existsSync(metaFile)) return [];
+    const metaPath = this.metaFile(agentId);
+    if (!await fileExists(metaPath)) return [];
 
     try {
-      const allMeta = JSON.parse(readFileSync(metaFile, 'utf-8'));
+      const allMeta = JSON.parse(await readFile(metaPath, 'utf-8'));
       return Object.values(allMeta);
     } catch {
       return [];
@@ -124,23 +122,22 @@ export class JsonlSessionStore implements SessionStore<SessionData> {
 
   async delete(agentId: string, sessionId: string): Promise<void> {
     const file = this.sessionFile(agentId, sessionId);
-    if (existsSync(file)) {
-      const { unlinkSync } = await import('node:fs');
-      unlinkSync(file);
+    if (await fileExists(file)) {
+      await unlink(file);
     }
 
     // 更新元数据索引
-    const metaFile = this.metaFile(agentId);
-    if (existsSync(metaFile)) {
+    const metaPath = this.metaFile(agentId);
+    if (await fileExists(metaPath)) {
       try {
-        const allMeta = JSON.parse(readFileSync(metaFile, 'utf-8'));
+        const allMeta = JSON.parse(await readFile(metaPath, 'utf-8'));
         delete allMeta[sessionId];
-        writeFileSync(metaFile, JSON.stringify(allMeta, null, 2));
+        await writeFile(metaPath, JSON.stringify(allMeta, null, 2));
       } catch { /* ignore */ }
     }
   }
 
   async exists(agentId: string, sessionId: string): Promise<boolean> {
-    return existsSync(this.sessionFile(agentId, sessionId));
+    return fileExists(this.sessionFile(agentId, sessionId));
   }
 }
