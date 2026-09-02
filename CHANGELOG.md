@@ -1,3 +1,72 @@
+## v0.10.0 (2026-09-03)
+
+### refactor(config): 模型配置集中化 + SessionStore 接口统一 + 模型回退
+
+架构级重构：模型配置从分散式 `providers[]` 迁移到集中式 `models.providers`，`SessionStore` 接口统一为 `agentId + sessionId` 双键定位，新增 `FallbackProvider` 支持跨 provider 模型回退。
+
+#### Breaking: SessionStore 接口变更
+
+所有方法新增 `agentId` 参数，消除全量扫描：
+
+| 方法 | 旧签名 | 新签名 |
+|------|--------|--------|
+| `load` | `load(sessionId)` | `load(agentId, sessionId)` |
+| `save` | `save(sessionId, data)` | `save(agentId, sessionId, data)` |
+| `delete` | `delete(sessionId)` | `delete(agentId, sessionId)` |
+| `exists` | `exists(sessionId)` | `exists(agentId, sessionId)` |
+
+所有存储实现（JsonlSessionStore、InMemorySessionStore、SqliteSessionStore、Gateway 内置）已同步更新。
+
+#### Breaking: 模型配置迁移到 models.providers
+
+旧格式 `providers[]` 已移除，迁移到 `models.providers`：
+
+```json
+{
+  "models": {
+    "providers": {
+      "openai": {
+        "baseUrl": "https://api.openai.com/v1",
+        "apiKey": "${OPENAI_API_KEY}",
+        "api": "openai-completions",
+        "models": [{ "id": "gpt-5.5", "contextWindow": 256000, "maxTokens": 32768 }]
+      }
+    }
+  }
+}
+```
+
+Agent 引用模型的方式：`"model": "openai/gpt-5.5"`（string 格式），或内联对象（向后兼容）。
+
+#### Breaking: AgentDefinition 接口变更
+
+- 新增 `home` 字段（agent 持久状态根目录：persona、memory、skills、sessions）
+- `workspace` 改为可选（沙箱工作目录，默认为 home 下的 workspace 子目录）
+- `fallbackModels` 从 `string[]` 改为 `ModelConfig[]`（支持内联回退配置）
+
+#### 新增: FallbackProvider
+
+跨 provider 模型回退：主 provider 失败时自动切换到备选。支持 chat 和 stream 两种模式。流式场景下首个 chunk 产出后的中途错误直接向上传播（不静默回退）。
+
+#### 新增: turn.end 事件 usage 透传
+
+`agentLoop` 的 `turn.end` 事件现在携带 LLM 返回的 `usage` 数据，runner 层在事件中附加 `contextTokens` 和 `contextWindow`，TUI 和 WebUI 可直接显示上下文大小。
+
+#### 新增: WebUI 上下文指示器
+
+ChatWorkspace 头部显示 `上下文: 12.3k / 256.0k`，优先使用 LLM 返回的真实 usage，回退到客户端启发式估算。
+
+#### 已移除
+
+- `FileWisdomStore` / `FileProjectMemory` 实现删除
+- `ProjectMemory` 接口从 `cognition-types.ts` 移除
+- 旧 `ProviderConfig` 类型和 `providers[]` 配置格式
+
+#### 测试
+
+- 新增 `tests/fallback-provider.test.ts` — 7 个测试覆盖 chat/stream 主链路成功、回退、全失败、流式中途错误传播
+- 所有已有测试同步更新
+
 ## v0.9.0 (2026-08-31)
 
 ### feat(web): Conversation View Model — 会话显示模型全面升级

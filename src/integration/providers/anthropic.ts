@@ -200,6 +200,7 @@ export class AnthropicProvider implements ModelProvider {
     let currentToolName = '';
     let toolArgsBuffer = '';
     let toolCallIndex = 0;
+    let streamUsage: { promptTokens: number; completionTokens: number; totalTokens: number } | undefined;
 
     // 空闲超时
     const streamIdleTimeout = this.timeoutMs;
@@ -258,8 +259,18 @@ export class AnthropicProvider implements ModelProvider {
                 currentToolName = '';
                 toolArgsBuffer = '';
               }
+            } else if (data.type === 'message_delta') {
+              // Anthropic sends final usage in message_delta
+              const usage = data.usage as Record<string, number> | undefined;
+              if (usage) {
+                streamUsage = {
+                  promptTokens: usage.input_tokens ?? 0,
+                  completionTokens: usage.output_tokens ?? 0,
+                  totalTokens: (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0),
+                };
+              }
             } else if (data.type === 'message_stop') {
-              yield { type: 'done' };
+              yield { type: 'done', usage: streamUsage };
               return;
             }
           } catch {

@@ -23,7 +23,7 @@ import type {
   LLMResponse,
   LLMStreamChunk,
 } from '../../core/interfaces/model-provider.js';
-import type { ToolCall, ModelInfo } from '../../core/types.js';
+import type { ToolCall, ModelInfo, TokenUsage } from '../../core/types.js';
 import { mergeWithBuiltinInfo } from '../../builtin-model-info.js';
 
 /**
@@ -149,7 +149,7 @@ export class OpenAIProvider implements ModelProvider {
    * 返回 AsyncGenerator<LLMStreamChunk>，逐步产出内容。
    */
   async *stream(request: LLMRequest): AsyncGenerator<LLMStreamChunk> {
-    const body = { ...this.buildRequestBody(request), stream: true };
+    const body = { ...this.buildRequestBody(request), stream: true, stream_options: { include_usage: true } };
 
     const controller = new AbortController();
 
@@ -192,6 +192,7 @@ export class OpenAIProvider implements ModelProvider {
 
     const decoder = new TextDecoder();
     let buffer = '';
+    const lastUsage: { current: TokenUsage | undefined } = { current: undefined };
 
     // 空闲超时：如果服务端在 timeoutMs 内没有发送数据，中断读取
     const streamIdleTimeout = this.timeoutMs;
@@ -217,7 +218,7 @@ export class OpenAIProvider implements ModelProvider {
       buffer = lines.pop() ?? '';
 
       for (const line of lines) {
-        const chunks = this.parseSSELine(line, toolCallBuffers);
+        const chunks = this.parseSSELine(line, toolCallBuffers, lastUsage);
         for (const chunk of chunks) {
           if (chunk.type === 'done') {
             yield chunk;
@@ -233,7 +234,7 @@ export class OpenAIProvider implements ModelProvider {
       // Process remaining buffer data after stream ends
       if (buffer.trim()) {
         for (const line of buffer.split('\n')) {
-          const chunks = this.parseSSELine(line, toolCallBuffers);
+          const chunks = this.parseSSELine(line, toolCallBuffers, lastUsage);
           for (const chunk of chunks) {
             if (chunk.type === 'done') {
               yield chunk;
@@ -406,6 +407,7 @@ export class OpenAIProvider implements ModelProvider {
   private parseSSELine(
     line: string,
     toolCallBuffers: Map<number, { id: string; name: string; argsBuffer: string }>,
+    lastUsage: { current: TokenUsage | undefined },
   ): LLMStreamChunk[] {
     const trimmed = line.trim();
     if (!trimmed || !trimmed.startsWith('data: ')) return [];
@@ -419,12 +421,22 @@ export class OpenAIProvider implements ModelProvider {
           toolCall: { id: buf.id, name: buf.name, arguments: buf.argsBuffer, index: idx },
         });
       }
-      chunks.push({ type: 'done' });
+      chunks.push({ type: 'done', usage: lastUsage.current });
       return chunks;
     }
 
     try {
       const parsed = JSON.parse(data);
+
+      // OpenAI streaming: usage appears in a dedicated chunk (often the last one before [DONE])
+      if (parsed.usage) {
+        lastUsage.current = {
+          promptTokens: parsed.usage.prompt_tokens ?? 0,
+          completionTokens: parsed.usage.completion_tokens ?? 0,
+          totalTokens: parsed.usage.total_tokens ?? 0,
+        };
+      }
+
       const delta = parsed.choices?.[0]?.delta;
       if (!delta) return [];
 

@@ -36,13 +36,24 @@ function writeConfig(config: any, dir?: string): string {
   return configPath;
 }
 
+const SAMPLE_MODELS = {
+  providers: {
+    openai: {
+      baseUrl: 'https://api.openai.com/v1',
+      apiKey: 'test-key',
+      api: 'openai-completions',
+      models: [{ id: 'gpt-4', name: 'gpt-4', contextWindow: 128000, maxTokens: 4096 }],
+    },
+  },
+};
+
 // ── 测试 ──
 
 describe('Config Loading', () => {
   test('loads valid config', () => {
     const path = writeConfig({
-      agents: [{ id: 'test', model: { provider: 'openai', model: 'gpt-4' } }],
-      providers: [{ type: 'openai', name: 'openai', apiKey: 'test-key' }],
+      agents: [{ id: 'test', model: 'openai/gpt-4' }],
+      models: SAMPLE_MODELS,
     });
     const config = loadConfig(path);
     expect(config.agents).toHaveLength(1);
@@ -72,7 +83,8 @@ describe('Config Loading', () => {
 describe('Config Schema Validation', () => {
   test('validates correct config', () => {
     const result = validateConfig({
-      agents: [{ id: 'test', model: { provider: 'openai', model: 'gpt-4' } }],
+      agents: [{ id: 'test', model: 'openai/gpt-4' }],
+      models: SAMPLE_MODELS,
     });
     expect(result.success).toBe(true);
   });
@@ -107,7 +119,8 @@ describe('Config Schema Validation', () => {
 
   test('accepts sqlite store type', () => {
     const result = validateConfig({
-      agents: [{ id: 'test', model: { provider: 'openai', model: 'gpt-4' } }],
+      agents: [{ id: 'test', model: 'openai/gpt-4' }],
+      models: SAMPLE_MODELS,
       store: { type: 'sqlite' },
     });
     expect(result.success).toBe(true);
@@ -118,8 +131,8 @@ describe('Store Factory', () => {
   test('creates memory store', async () => {
     const store = await createStoreFromConfig({ type: 'memory' });
     expect(store).toBeDefined();
-    await store.save('test', { id: 'test', agentId: 'a', meta: {} as any, messages: [], turns: [], metadata: {} });
-    const loaded = await store.load('test');
+    await store.save('a', 'test', { id: 'test', agentId: 'a', meta: {} as any, messages: [], turns: [], metadata: {} });
+    const loaded = await store.load('a', 'test');
     expect(loaded).toBeDefined();
   });
 

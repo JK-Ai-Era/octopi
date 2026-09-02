@@ -45,34 +45,6 @@ import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { homedir } from 'node:os';
 
-// ── Provider 配置 ──
-
-/**
- * Provider 配置
- */
-export interface ProviderConfig {
-  /** 协议类型：openai=OpenAI Chat Completions, anthropic=Anthropic Messages */
-  type: 'openai' | 'anthropic';
-  /** 名称（agent.model.provider 引用此名称） */
-  name: string;
-  /** API Key（支持 ${ENV_VAR} 语法） */
-  apiKey?: string;
-  /** Base URL */
-  baseUrl?: string;
-  /**
-   * 支持的模型
-   *
-   * 两种形式：
-   * - string: 只有模型名称
-   * - ModelInfo: 名称 + 能力声明（contextWindow, maxOutputTokens）
-   */
-  models?: (string | ModelInfo)[];
-  /** 默认模型 */
-  defaultModel?: string;
-  /** 请求超时（毫秒，默认 60000） */
-  timeoutMs?: number;
-}
-
 // ── Agent 配置 ──
 
 /**
@@ -85,31 +57,28 @@ export interface ProviderConfig {
 export interface AgentConfig {
   /** Agent 唯一标识 */
   id: string;
-  /** 工作目录 */
+  /** Agent home 目录：persona、memory、wisdom、skills、sessions 的根目录 */
+  home?: string;
+  /** 沙箱工作目录：agent 工具操作的 cwd，默认为 home 下的 workspace 子目录 */
   workspace?: string;
   /**
-   * Persona 配置
-   * - string: persona 目录路径（如 "./personas/assistant"）
-   * - object: 内联定义（向后兼容）
+   * Persona 配置（向后兼容：string 形式等价于 home）
+   * - string: persona 目录路径（已废弃，请使用 home）
+   * - object: 内联 persona 定义
    */
   persona?: string | {
     name?: string;
     description?: string;
     systemPrompt: string;
   };
-  /** 模型配置 */
-  model: {
-    /** Provider 名称（引用 providers[].name） */
-    provider: string;
-    /** 模型名称 */
-    model: string;
-    /** 温度 */
-    temperature?: number;
-    /** 最大 token 数 */
-    maxTokens?: number;
-    /** 失败时的备选模型 */
-    fallbackModels?: string[];
-  };
+  /**
+   * 模型配置
+   *
+   * 两种形式：
+   * - string: 引用 models[] 中的 id，或 "provider/model" 格式
+   * - object: 内联模型配置（向后兼容）
+   */
+  model: string | _ModelConfig;
   /** 工具策略 */
   tools?: ToolPolicy;
   /** Skill 目录 */
@@ -118,6 +87,16 @@ export interface AgentConfig {
   skills?: string[];
   /** Channel 绑定 */
   channelBindings?: Record<string, string>;
+}
+
+/**
+ * Session 配置（合并了旧的 store + session 节点）
+ */
+export interface SessionConfig {
+  /** DM 作用域: main / per-peer / per-channel-peer */
+  dmScope?: 'main' | 'per-peer' | 'per-channel-peer';
+  /** Session 存储配置 */
+  store?: StoreConfig;
 }
 
 // ── Plugin 配置 ──
@@ -132,6 +111,8 @@ export interface PluginConfig {
   configs?: Record<string, Record<string, unknown>>;
 }
 
+
+
 // ── Store 配置 ──
 
 /**
@@ -145,6 +126,8 @@ export interface StoreConfig {
   /** 数据库文件路径（sqlite 类型可选，默认 :memory:） */
   dbPath?: string;
 }
+
+
 
 // ── Channel 配置 ──
 
@@ -163,6 +146,8 @@ export interface ChannelConfig {
   /** 允许的 CORS 源 */
   corsOrigins?: string[];
 }
+
+
 
 // ── Supervisor 配置 ──
 
@@ -199,6 +184,8 @@ export interface SupervisorConfig {
   hardWallClockMs?: number;
 }
 
+
+
 // ── 上下文引擎配置 ──
 
 /**
@@ -227,16 +214,108 @@ export interface ContextEngineConfig {
   summaryModel?: string;
 }
 
+
+
+// ── 集中模型配置 ──
+
+/**
+ * 集中模型定义
+ *
+ * 在 models[] 中集中定义，agent 通过 id 或 "provider/model" 引用。
+ * 避免多 agent 使用同一模型时重复配置。
+ */
+export interface ModelDefinition {
+  /** 模型唯一标识（可选，默认为 "provider/model"） */
+  id?: string;
+  /** Provider 名称（引用 providers[].name） */
+  provider: string;
+  /** 模型名称 */
+  model: string;
+  /** 温度 */
+  temperature?: number;
+  /** 最大 token 数 */
+  maxTokens?: number;
+  /** 上下文窗口大小 */
+  contextWindow?: number;
+  /** 失败时的备选模型（支持 string 引用或内联配置） */
+  fallbackModels?: (string | ModelDefinition)[];
+}
+
+
+
+/**
+ * 全局默认值
+ */
+export interface Defaults {
+  /** 默认上下文窗口大小（当模型和 provider 都未指定时使用，默认 200000） */
+  contextWindow?: number;
+}
+
+
+
+
+
+// ── 模型能力声明 ──
+
+/** 模型输入类型 */
+export type ModelInputType = 'text' | 'image' | 'audio' | 'video';
+
+/** 单个模型能力定义（models.providers[].models[] 中的元素） */
+export interface ModelCapability {
+  /** 模型 ID（provider 内唯一，如 "mimo-v2.5-pro"） */
+  id: string;
+  /** 模型名称（实际发送给 API 的名称，默认等于 id） */
+  name?: string;
+  /** 是否支持推理/思考模式 */
+  reasoning?: boolean;
+  /** 支持的输入类型 */
+  input?: ModelInputType[];
+  /** 上下文窗口大小 */
+  contextWindow?: number;
+  /** 最大输出 token 数 */
+  maxTokens?: number;
+}
+
+
+
+/** Provider 定义（新格式，嵌入在 models.providers 中） */
+export interface ModelProviderConfig {
+  /** API 基础 URL */
+  baseUrl: string;
+  /** API Key（支持 ${ENV_VAR} 语法） */
+  apiKey: string;
+  /** API 协议类型 */
+  api: 'openai-completions' | 'anthropic-messages';
+  /** 此 provider 下的模型列表 */
+  models: ModelCapability[];
+  /** 请求超时（秒） */
+  timeoutSeconds?: number;
+}
+
+
+
+/** 新格式的 models 配置 */
+export interface ModelsConfig {
+  /** 合并模式：merge=与 builtin 合并，replace=完全替代 */
+  mode?: 'merge' | 'replace';
+  /** Provider 映射（key = provider 名称） */
+  providers: Record<string, ModelProviderConfig>;
+}
+
+
+
 // ── 完整配置 ──
 
 /**
- * 完整配置文件结构（v0.2.0）
+ * 完整配置文件结构（v0.3.0）
  */
 export interface HarnessConfig {
   /** Agent 列表 */
   agents: AgentConfig[];
-  /** LLM Provider 列表 */
-  providers?: ProviderConfig[];
+  /** 模型配置（集中定义 provider + model） */
+  models: ModelsConfig;
+  /** 全局默认值 */
+  defaults?: Defaults;
   /** Plugin 配置 */
   plugins?: PluginConfig;
   /** 迭代预算（安全兜底，由 TaskSupervisor 接管主要控制） */
@@ -264,12 +343,10 @@ export interface HarnessConfig {
       maxDurationMs?: number;
     };
   };
-  /** Session 存储 */
-  store?: StoreConfig;
   /** Channel 列表 */
   channels?: ChannelConfig[];
   /** Session 配置 */
-  session?: GatewayConfig['session'];
+  session?: SessionConfig;
   /** 并发控制配置 */
   concurrency?: {
     /** 多 Key Provider 负载均衡池 */
@@ -326,6 +403,8 @@ export interface HarnessConfig {
   };
 }
 
+
+
 // ── 加载函数 ──
 
 /**
@@ -334,7 +413,145 @@ export interface HarnessConfig {
  * @param configPath - 配置文件路径（默认 ./octopi.json）
  * @returns 解析后的配置
  */
-export function loadConfig(configPath?: string): HarnessConfig {
+
+import type { ModelConfig as _ModelConfig } from './core/types/agent-definition.js';
+
+const DEFAULT_CONTEXT_WINDOW = 200_000;
+
+/**
+ * 解析 Agent 的模型配置
+ *
+ * 支持三种方式（按优先级）：
+ * 1. 内联对象：{ provider, model, ... }（向后兼容）
+ * 2. 引用 models[] 中的 id
+ * 3. "provider/model" 格式字符串
+ *
+ * @param modelRef - agent.model 字段（string 或内联对象）
+ * @param models - 集中定义的模型列表（可选）
+ * @param defaults - 全局默认值（可选）
+ * @returns 解析后的 ModelConfig
+ */
+
+/**
+ * 判断 models 字段是否为新格式（ModelsConfig 对象）
+ */
+
+/**
+ * 从 ModelsConfig 提取所有模型的扁平列表（供 resolveModelConfig 查找）
+ */
+export function flattenModels(config: ModelsConfig): NormalizedModelInfo[] {
+  const result: NormalizedModelInfo[] = [];
+  for (const [providerName, pc] of Object.entries(config.providers)) {
+    for (const mc of pc.models) {
+      result.push({
+        id: `${providerName}/${mc.id}`,
+        provider: providerName,
+        model: mc.name ?? mc.id,
+        contextWindow: mc.contextWindow,
+        maxTokens: mc.maxTokens,
+      });
+    }
+  }
+  return result;
+}
+
+
+
+export function resolveModelConfig(
+  modelRef: string | _ModelConfig,
+  models: NormalizedModelInfo[],
+  defaults?: Defaults,
+): _ModelConfig {
+  const defaultContextWindow = defaults?.contextWindow ?? DEFAULT_CONTEXT_WINDOW;
+
+  // 内联对象（向后兼容）
+  if (typeof modelRef === 'object') {
+    const resolved = { ...modelRef, contextWindow: modelRef.contextWindow ?? defaultContextWindow };
+    resolved.fallbackModels = resolveFallbackModels(resolved.fallbackModels as any, models, defaults);
+    return resolved;
+  }
+
+  // string 引用：按 id 查找（格式为 "provider/modelId"）
+  const ref = modelRef;
+  const found = models.find(m => m.id === ref);
+
+  if (found) {
+    return {
+      provider: found.provider,
+      model: found.model,
+      contextWindow: found.contextWindow ?? defaultContextWindow,
+      fallbackModels: resolveFallbackModels(undefined, models, defaults),
+    };
+  }
+
+  // 兜底：尝试解析 "provider/model" 格式
+  const slashIdx = ref.indexOf('/');
+  if (slashIdx > 0) {
+    return {
+      provider: ref.slice(0, slashIdx),
+      model: ref.slice(slashIdx + 1),
+      contextWindow: defaultContextWindow,
+    };
+  }
+
+  throw new Error(
+    `Cannot resolve model "${ref}". ` +
+    `Available models: ${(models ?? []).map(m => m.id ?? `${m.provider}/${m.model}`).join(', ') || '(none)'}`
+  );
+}
+
+
+
+/**
+ * 解析回退模型列表
+ *
+ * 将 (string | ModelConfig)[] 统一解析为 ModelConfig[]。
+ * string 引用按 resolveModelConfig 同样的逻辑查找。
+ */
+function resolveFallbackModels(
+  fallbacks: Array<string | _ModelConfig> | undefined,
+  models: NormalizedModelInfo[],
+  defaults?: Defaults,
+): _ModelConfig[] | undefined {
+  if (!fallbacks || fallbacks.length === 0) return undefined;
+  return fallbacks.map(fb => {
+    if (typeof fb === 'string') {
+      // 查找 models[] 中的定义
+      const found = models.find(m => m.id === fb);
+      if (found) {
+        return {
+          provider: found.provider,
+          model: found.model,
+          contextWindow: found.contextWindow ?? defaults?.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
+        };
+      }
+      // 解析 "provider/model" 格式
+      const slashIdx = fb.indexOf('/');
+      if (slashIdx > 0) {
+        return {
+          provider: fb.slice(0, slashIdx),
+          model: fb.slice(slashIdx + 1),
+          contextWindow: defaults?.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
+        };
+      }
+      throw new Error(`Cannot resolve fallback model "${fb}"`);
+    }
+    // 内联 ModelConfig 或 ModelDefinition（只取 ModelConfig 字段）
+    const m = fb as _ModelConfig;
+    return {
+      provider: m.provider,
+      model: m.model,
+      temperature: m.temperature,
+      maxTokens: m.maxTokens,
+      contextWindow: m.contextWindow ?? defaults?.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
+      fallbackModels: m.fallbackModels,
+    };
+  });
+}
+
+
+
+export function loadConfig(configPath?: string): NormalizedHarnessConfig {
   // 配置文件查找优先级：
   // 1. 明确指定的路径
   // 2. 当前目录 ./octopi.json
@@ -378,18 +595,55 @@ export function loadConfig(configPath?: string): HarnessConfig {
   const raw = JSON.parse(expanded);
 
   // Zod schema 校验（结构化错误信息）
-  const config = validateConfigOrThrow(raw) as HarnessConfig;
+  const config = validateConfigOrThrow(raw) as unknown as NormalizedHarnessConfig;
 
+  config.flatModels = flattenModels(config.models as ModelsConfig);
   return config;
 }
+
+
 
 /**
  * 将 HarnessConfig 转换为旧版 GatewayConfig（向后兼容）
  */
-export function toGatewayConfig(config: HarnessConfig): GatewayConfig {
+/** 内部使用的规范化配置（loadConfig 输出） */
+export interface NormalizedHarnessConfig extends HarnessConfig {
+  /** 从 models.providers 提取的扁平模型列表 */
+  flatModels: NormalizedModelInfo[];
+}
+
+
+
+/** 扁平化的模型信息（供 resolveModelConfig 查找） */
+export interface NormalizedModelInfo {
+  id: string;
+  provider: string;
+  model: string;
+  contextWindow?: number;
+  maxTokens?: number;
+}
+
+
+
+export function toGatewayConfig(config: NormalizedHarnessConfig): GatewayConfig {
+  // 解析 agent model 配置：string 引用 → ModelConfig 对象
+  const resolvedAgents: import('./core/types/agent-definition.js').AgentDefinition[] = config.agents.map(ac => ({
+    id: ac.id,
+    home: ac.home ?? (typeof ac.persona === 'string' ? ac.persona : ''),
+    workspace: ac.workspace,
+    persona: typeof ac.persona === 'object'
+      ? { name: ac.persona.name ?? ac.id, description: ac.persona.description ?? '', systemPrompt: ac.persona.systemPrompt }
+      : { name: ac.id, description: '', systemPrompt: '' },
+    tools: ac.tools ? { allow: ac.tools.allow ?? [], deny: ac.tools.deny ?? [] } : { allow: [], deny: [] },
+    model: resolveModelConfig(ac.model, config.flatModels, config.defaults),
+    skillDirectory: ac.skillDirectory,
+    skills: ac.skills,
+    channelBindings: ac.channelBindings,
+  }));
+
   const gatewayConfig: GatewayConfig = {
-    agents: config.agents as unknown as AgentDefinition[],
-    session: config.session,
+    agents: resolvedAgents,
+    session: config.session ? { dmScope: config.session.dmScope } : undefined,
     budget: config.budget,
   };
 
@@ -405,46 +659,31 @@ export function toGatewayConfig(config: HarnessConfig): GatewayConfig {
   return gatewayConfig;
 }
 
+
+
 // ── Provider 工厂 ──
 
 /**
- * 从 ProviderConfig 创建 ModelProvider 实例
+ * 从 ModelProviderConfig 创建 ModelProvider 实例
  *
  * 根据 type 字段自动选择 OpenAI 或 Anthropic provider。
  * 使用动态 import 以支持 ESM。
  */
-export async function createProviderFromConfig(pc: ProviderConfig): Promise<ModelProvider> {
-  const apiKey = pc.apiKey;
-  if (!apiKey) {
-    throw new Error(`Provider "${pc.name}" must have an apiKey`);
-  }
+export async function createProviderFromConfig(name: string, pc: ModelProviderConfig): Promise<ModelProvider> {
+  const apiType = pc.api === 'anthropic-messages' ? 'anthropic' : 'openai';
+  const models = pc.models.map(m => ({ name: m.name ?? m.id, contextWindow: m.contextWindow, maxOutputTokens: m.maxTokens }));
+  const defaultModel = pc.models[0]?.name ?? pc.models[0]?.id;
 
-  if (pc.type === 'openai') {
-    const { OpenAIProvider } = await import('./integration/providers/openai.js');
-    return new OpenAIProvider({
-      name: pc.name,
-      apiKey,
-      baseUrl: pc.baseUrl,
-      models: pc.models,
-      defaultModel: pc.defaultModel,
-      timeoutMs: pc.timeoutMs,
-    });
-  }
-
-  if (pc.type === 'anthropic') {
+  if (apiType === 'anthropic') {
     const { AnthropicProvider } = await import('./integration/providers/anthropic.js');
-    return new AnthropicProvider({
-      name: pc.name,
-      apiKey,
-      baseUrl: pc.baseUrl,
-      models: pc.models,
-      defaultModel: pc.defaultModel,
-      timeoutMs: pc.timeoutMs,
-    });
+    return new AnthropicProvider({ name, apiKey: pc.apiKey, baseUrl: pc.baseUrl, models, defaultModel, timeoutMs: pc.timeoutSeconds ? pc.timeoutSeconds * 1000 : undefined });
   }
 
-  throw new Error(`Unknown provider type: "${pc.type}"`);
+  const { OpenAIProvider } = await import('./integration/providers/openai.js');
+  return new OpenAIProvider({ name, apiKey: pc.apiKey, baseUrl: pc.baseUrl, models, defaultModel, timeoutMs: pc.timeoutSeconds ? pc.timeoutSeconds * 1000 : undefined });
 }
+
+
 
 /**
  * 从 StoreConfig 创建 SessionStore 实例
@@ -461,7 +700,8 @@ export async function createStoreFromConfig(sc: StoreConfig): Promise<SessionSto
       throw new Error('Store type "jsonl" requires dataDir');
     }
     const { JsonlSessionStore } = await import('./integration/storage/jsonl.js');
-    return new JsonlSessionStore(sc.dataDir);
+    // 传入 legacyDataDir 以兼容旧的 dataDir/{agentId}/ 目录结构
+    return new JsonlSessionStore(() => '', sc.dataDir);
   }
 
   if (sc.type === 'sqlite') {

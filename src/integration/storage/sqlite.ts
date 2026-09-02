@@ -29,8 +29,8 @@ export interface SqliteSessionStoreOptions {
  * @example
  * ```ts
  * const store = await SqliteSessionStore.create({ dbPath: './data/sessions.db' });
- * await store.save('sess-1', sessionData);
- * const session = await store.load('sess-1');
+ * await store.save('agent-1', 'sess-1', sessionData);
+ * const session = await store.load('agent-1', 'sess-1');
  * ```
  */
 export class SqliteSessionStore implements SessionStore<SessionData> {
@@ -94,7 +94,7 @@ export class SqliteSessionStore implements SessionStore<SessionData> {
 
     // 预编译语句
     this.stmts = {
-      get: this.db.prepare('SELECT data, lifecycle, memory_extraction, ended_at, archived_at FROM sessions WHERE id = ?'),
+      get: this.db.prepare('SELECT data, lifecycle, memory_extraction, ended_at, archived_at FROM sessions WHERE id = ? AND agent_id = ?'),
       upsert: this.db.prepare(`
         INSERT INTO sessions (id, agent_id, data, created_at, updated_at, lifecycle, memory_extraction)
         VALUES (?, ?, ?, ?, ?, 'active', 'pending')
@@ -102,10 +102,10 @@ export class SqliteSessionStore implements SessionStore<SessionData> {
           data = excluded.data,
           updated_at = excluded.updated_at
       `),
-      delete: this.db.prepare('DELETE FROM sessions WHERE id = ?'),
+      delete: this.db.prepare('DELETE FROM sessions WHERE id = ? AND agent_id = ?'),
       list: this.db.prepare('SELECT data FROM sessions WHERE agent_id = ?'),
       listByLifecycle: this.db.prepare('SELECT data, lifecycle, memory_extraction, ended_at, archived_at FROM sessions WHERE agent_id = ? AND lifecycle = ?'),
-      exists: this.db.prepare('SELECT 1 FROM sessions WHERE id = ?'),
+      exists: this.db.prepare('SELECT 1 FROM sessions WHERE id = ? AND agent_id = ?'),
       updateLifecycle: this.db.prepare(`
         UPDATE sessions SET lifecycle = ?, memory_extraction = ?, ended_at = ?, archived_at = ?
         WHERE id = ?
@@ -113,8 +113,8 @@ export class SqliteSessionStore implements SessionStore<SessionData> {
     };
   }
 
-  async load(sessionId: string): Promise<SessionData | null> {
-    const row = this.stmts.get.get(sessionId) as { data: string; lifecycle: string; memory_extraction: string; ended_at: number | null; archived_at: number | null } | undefined;
+  async load(agentId: string, sessionId: string): Promise<SessionData | null> {
+    const row = this.stmts.get.get(sessionId, agentId) as { data: string; lifecycle: string; memory_extraction: string; ended_at: number | null; archived_at: number | null } | undefined;
     if (!row) return null;
     try {
       const data = JSON.parse(row.data) as SessionData;
@@ -130,10 +130,9 @@ export class SqliteSessionStore implements SessionStore<SessionData> {
     }
   }
 
-  async save(sessionId: string, data: SessionData): Promise<void> {
+  async save(agentId: string, sessionId: string, data: SessionData): Promise<void> {
     const now = Date.now();
     const json = JSON.stringify(data);
-    const agentId = data.agentId ?? 'default';
     const createdAt = data.meta?.createdAt ?? now;
 
     this.stmts.upsert.run(sessionId, agentId, json, createdAt, now);
@@ -151,19 +150,21 @@ export class SqliteSessionStore implements SessionStore<SessionData> {
       .filter((m): m is SessionMeta => m !== null);
   }
 
-  async delete(sessionId: string): Promise<void> {
-    this.stmts.delete.run(sessionId);
+  async delete(agentId: string, sessionId: string): Promise<void> {
+    this.stmts.delete.run(sessionId, agentId);
   }
 
-  async exists(sessionId: string): Promise<boolean> {
-    return !!this.stmts.exists.get(sessionId);
+  async exists(agentId: string, sessionId: string): Promise<boolean> {
+    return !!this.stmts.exists.get(sessionId, agentId);
   }
 
   /**
    * 更新 session 生命周期状态
    */
   async updateLifecycle(sessionId: string, lifecycle: Partial<SessionLifecycleMeta>): Promise<void> {
-    const row = this.stmts.get.get(sessionId) as { lifecycle: string; memory_extraction: string; ended_at: number | null; archived_at: number | null } | undefined;
+    const row = this.db.prepare(
+      'SELECT lifecycle, memory_extraction, ended_at, archived_at FROM sessions WHERE id = ?'
+    ).get(sessionId) as { lifecycle: string; memory_extraction: string; ended_at: number | null; archived_at: number | null } | undefined;
     if (!row) return;
 
     this.stmts.updateLifecycle.run(

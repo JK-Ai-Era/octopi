@@ -173,23 +173,23 @@ function convertToAgentTool(tool: RegisteredTool): LoopAgentTool {
 class InMemorySessionStore implements SessionStore<SessionData> {
   private sessions = new Map<string, any>();
 
-  async load(sessionId: string): Promise<any> {
+  async load(_agentId: string, sessionId: string): Promise<any> {
     return this.sessions.get(sessionId) ?? null;
   }
 
-  async save(sessionId: string, data: any): Promise<void> {
+  async save(_agentId: string, sessionId: string, data: any): Promise<void> {
     this.sessions.set(sessionId, data);
   }
 
-  async list(_agentId: string): Promise<any[]> {
-    return Array.from(this.sessions.values());
+  async list(agentId: string): Promise<any[]> {
+    return Array.from(this.sessions.values()).filter(s => s.agentId === agentId);
   }
 
-  async delete(sessionId: string): Promise<void> {
+  async delete(_agentId: string, sessionId: string): Promise<void> {
     this.sessions.delete(sessionId);
   }
 
-  async exists(sessionId: string): Promise<boolean> {
+  async exists(_agentId: string, sessionId: string): Promise<boolean> {
     return this.sessions.has(sessionId);
   }
 }

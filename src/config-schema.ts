@@ -9,33 +9,6 @@
 
 import { z } from 'zod';
 
-// ── Provider 配置 Schema ──
-
-const ModelInfoSchema = z.object({
-  name: z.string({ error: 'model entry must have a name' }).min(1, 'model entry must have a name'),
-  contextWindow: z.number().positive('contextWindow must be a positive number').optional(),
-  maxOutputTokens: z.number().positive('maxOutputTokens must be a positive number').optional(),
-}).superRefine((data, ctx) => {
-  if (data.contextWindow !== undefined && data.maxOutputTokens !== undefined) {
-    if (data.maxOutputTokens > data.contextWindow) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: `maxOutputTokens (${data.maxOutputTokens}) exceeds contextWindow (${data.contextWindow})`,
-      });
-    }
-  }
-});
-
-export const ProviderConfigSchema = z.object({
-  type: z.enum(['openai', 'anthropic'], { error: 'Provider type must be "openai" or "anthropic"' }),
-  name: z.string({ error: 'Provider must have a name' }).min(1, 'Provider name cannot be empty'),
-  apiKey: z.string().optional(),
-  baseUrl: z.string().url('baseUrl must be a valid URL').optional(),
-  models: z.array(z.union([z.string(), ModelInfoSchema])).optional(),
-  defaultModel: z.string().optional(),
-  timeoutMs: z.number().positive('timeoutMs must be a positive number').optional(),
-});
-
 // ── Agent 配置 Schema ──
 
 const InlinePersonaSchema = z.object({
@@ -49,20 +22,29 @@ const ToolPolicySchema = z.object({
   deny: z.array(z.string()).optional(),
 });
 
+const InlineModelConfigSchema = z.object({
+  provider: z.string().min(1),
+  model: z.string().min(1),
+  temperature: z.number().min(0).max(2).optional(),
+  maxTokens: z.number().positive().optional(),
+  contextWindow: z.number().positive().optional(),
+});
+
 const ModelConfigSchema = z.object({
   provider: z.string({ error: 'Agent must specify a model provider' }).min(1),
   model: z.string({ error: 'Agent must specify a model' }).min(1),
   temperature: z.number().min(0).max(2).optional(),
   maxTokens: z.number().positive().optional(),
   contextWindow: z.number().positive('contextWindow must be a positive number').optional(),
-  fallbackModels: z.array(z.string()).optional(),
+  fallbackModels: z.array(z.union([z.string().min(1), InlineModelConfigSchema])).optional(),
 });
 
 export const AgentConfigSchema = z.object({
   id: z.string({ error: 'Agent must have an id' }).min(1, 'Agent id cannot be empty'),
+  home: z.string().optional(),
   workspace: z.string().optional(),
   persona: z.union([z.string(), InlinePersonaSchema]).optional(),
-  model: ModelConfigSchema,
+  model: z.union([z.string().min(1), ModelConfigSchema]),
   tools: ToolPolicySchema.optional(),
   skillDirectory: z.string().optional(),
   skills: z.array(z.string()).optional(),
@@ -211,13 +193,59 @@ export const ObservabilityConfigSchema = z.object({
 
 export const SessionConfigSchema = z.object({
   dmScope: z.enum(['main', 'per-peer', 'per-channel-peer']).optional(),
+  store: StoreConfigSchema.optional(),
 }).passthrough();
 
 // ── 完整配置 Schema ──
 
+// ── 集中模型定义 Schema ──
+
+// ── 模型能力 Schema ──
+
+const ModelInputTypeSchema = z.enum(['text', 'image', 'audio', 'video']);
+
+const ModelCapabilitySchema = z.object({
+  id: z.string().min(1),
+  name: z.string().optional(),
+  reasoning: z.boolean().optional(),
+  input: z.array(ModelInputTypeSchema).optional(),
+  contextWindow: z.number().positive().optional(),
+  maxTokens: z.number().positive().optional(),
+});
+
+const ModelProviderConfigSchema = z.object({
+  baseUrl: z.string().min(1),
+  apiKey: z.string().min(1),
+  api: z.enum(['openai-completions', 'anthropic-messages']),
+  models: z.array(ModelCapabilitySchema).min(1),
+  timeoutSeconds: z.number().positive().optional(),
+});
+
+const ModelsConfigSchema = z.object({
+  mode: z.enum(['merge', 'replace']).optional(),
+  providers: z.record(z.string(), ModelProviderConfigSchema),
+});
+
+const ModelDefinitionSchema = z.object({
+  id: z.string().optional(),
+  provider: z.string().min(1),
+  model: z.string().min(1),
+  temperature: z.number().min(0).max(2).optional(),
+  maxTokens: z.number().positive().optional(),
+  contextWindow: z.number().positive().optional(),
+  fallbackModels: z.array(z.union([z.string().min(1), InlineModelConfigSchema])).optional(),
+});
+
+const DefaultsSchema = z.object({
+  contextWindow: z.number().positive().optional(),
+});
+
 export const HarnessConfigSchema = z.object({
   agents: z.array(AgentConfigSchema).min(1, 'Config must define at least one agent'),
-  providers: z.array(ProviderConfigSchema).optional(),
+  models: ModelsConfigSchema,
+  defaults: z.object({
+    contextWindow: z.number().positive().optional(),
+  }).optional(),
   plugins: PluginConfigSchema.optional(),
   budget: z.object({
     maxIterations: z.number().positive().optional(),
@@ -229,7 +257,6 @@ export const HarnessConfigSchema = z.object({
   contextEngine: ContextEngineConfigSchema.optional(),
   security: SecurityConfigSchema.optional(),
   distributedIntelligence: DistributedIntelligenceConfigSchema,
-  store: StoreConfigSchema.optional(),
   channels: z.array(ChannelConfigSchema).optional(),
   session: SessionConfigSchema.optional(),
   observability: ObservabilityConfigSchema.optional(),
@@ -285,13 +312,13 @@ export function validateConfigOrThrow(raw: unknown): z.infer<typeof HarnessConfi
     const config = result.data!;
 
     // ── 交叉校验：slot 引用的 provider 必须存在 ──
-    if (config.concurrency?.providerPool && config.providers) {
-      const providerNames = new Set(config.providers.map(p => p.name));
+    if (config.concurrency?.providerPool && config.models?.providers) {
+      const providerNames = new Set(Object.keys(config.models.providers));
       for (const slot of config.concurrency.providerPool.slots) {
         if (!providerNames.has(slot.provider)) {
           throw new Error(
             `Config validation failed:\n  concurrency.providerPool.slots: ` +
-            `provider "${slot.provider}" not found in providers list. ` +
+            `provider "${slot.provider}" not found in models.providers. ` +
             `Available: ${[...providerNames].join(', ')}`
           );
         }

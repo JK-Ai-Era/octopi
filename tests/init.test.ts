@@ -33,18 +33,18 @@ describe('init', () => {
       expect(existsSync(tempDir)).toBe(true);
 
       // 子目录
-      expect(existsSync(join(tempDir, 'data/sessions'))).toBe(true);
+      // data/sessions 已移至 agent home 下
       expect(existsSync(join(tempDir, 'plugins'))).toBe(true);
 
       // Agent workspace 目录
       expect(existsSync(join(tempDir, 'workspace/default'))).toBe(true);
 
       // Persona 文件（在 workspace 下）
-      expect(existsSync(join(tempDir, 'workspace/default/SOUL.md'))).toBe(true);
-      expect(existsSync(join(tempDir, 'workspace/default/IDENTITY.md'))).toBe(true);
-      expect(existsSync(join(tempDir, 'workspace/default/USER.md'))).toBe(true);
-      expect(existsSync(join(tempDir, 'workspace/default/AGENTS.md'))).toBe(true);
-      expect(existsSync(join(tempDir, 'workspace/default/TOOLS.md'))).toBe(true);
+      expect(existsSync(join(tempDir, 'agents/default/SOUL.md'))).toBe(true);
+      expect(existsSync(join(tempDir, 'agents/default/IDENTITY.md'))).toBe(true);
+      expect(existsSync(join(tempDir, 'agents/default/USER.md'))).toBe(true);
+      expect(existsSync(join(tempDir, 'agents/default/AGENTS.md'))).toBe(true);
+      expect(existsSync(join(tempDir, 'agents/default/TOOLS.md'))).toBe(true);
 
       // 配置文件
       expect(existsSync(join(tempDir, 'octopi.json'))).toBe(true);
@@ -58,7 +58,7 @@ describe('init', () => {
       await initOctopi(tempDir);
 
       // 修改 SOUL.md
-      const soulPath = join(tempDir, 'workspace/default/SOUL.md');
+      const soulPath = join(tempDir, 'agents/default/SOUL.md');
       const customContent = '# My Custom Soul\n\nCustom content.';
       const { writeFileSync } = await import('node:fs');
       writeFileSync(soulPath, customContent, 'utf-8');
@@ -82,17 +82,18 @@ describe('init', () => {
 
       expect(config.agents).toHaveLength(1);
       expect(config.agents[0].id).toBe('default');
-      expect(config.agents[0].persona).toContain('workspace/default');
+      expect(config.agents[0].home).toContain('agents/default');
       expect(config.agents[0].workspace).toContain('workspace/default');
-      expect(config.providers).toBeDefined();
-      expect(config.store.type).toBe('jsonl');
-      expect(config.store.dataDir).toContain('data/sessions');
+      expect(config.models).toBeDefined();
+      expect(config.models.providers).toBeDefined();
+      expect(config.session.store.type).toBe('jsonl');
+      expect(config.session.store.dataDir).toContain('data/sessions');
     });
 
     it('should support custom agent ID', async () => {
       const result = await initOctopi(tempDir, { defaultAgentId: 'my-agent' });
 
-      expect(existsSync(join(tempDir, 'workspace/my-agent/SOUL.md'))).toBe(true);
+      expect(existsSync(join(tempDir, 'agents/my-agent/SOUL.md'))).toBe(true);
       expect(existsSync(join(tempDir, 'workspace/my-agent'))).toBe(true);
 
       const config = JSON.parse(readFileSync(join(tempDir, 'octopi.json'), 'utf-8'));
@@ -103,7 +104,7 @@ describe('init', () => {
       await initOctopi(tempDir, { generateConfig: false });
 
       expect(existsSync(join(tempDir, 'octopi.json'))).toBe(false);
-      expect(existsSync(join(tempDir, 'workspace/default/SOUL.md'))).toBe(true);
+      expect(existsSync(join(tempDir, 'agents/default/SOUL.md'))).toBe(true);
     });
   });
 
@@ -130,8 +131,8 @@ describe('init', () => {
       // 添加新 agent
       const result = await ensureAgentDirs('new-agent', tempDir);
 
-      expect(existsSync(join(tempDir, 'workspace/new-agent/SOUL.md'))).toBe(true);
-      expect(existsSync(join(tempDir, 'workspace/new-agent/IDENTITY.md'))).toBe(true);
+      expect(existsSync(join(tempDir, 'agents/new-agent/SOUL.md'))).toBe(true);
+      expect(existsSync(join(tempDir, 'agents/new-agent/IDENTITY.md'))).toBe(true);
       expect(existsSync(join(tempDir, 'workspace/new-agent'))).toBe(true);
       expect(result.created.length).toBeGreaterThan(0);
     });
@@ -140,7 +141,7 @@ describe('init', () => {
       await initOctopi(tempDir);
 
       const { writeFileSync } = await import('node:fs');
-      const soulPath = join(tempDir, 'workspace/default/SOUL.md');
+      const soulPath = join(tempDir, 'agents/default/SOUL.md');
       const custom = '# Custom';
       writeFileSync(soulPath, custom, 'utf-8');
 

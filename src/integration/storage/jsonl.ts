@@ -2,83 +2,99 @@
  * JsonlSessionStore — JSONL 文件存储
  *
  * 默认的 Session 存储后端。数据存储在文件系统中：
- *   .octopi/sessions/
- *     <agentId>/
- *       sessions.json          ← 所有 session 的元数据
+ *   <agentHome>/
+ *     sessions/
+ *       sessions.json          ← 所有 session 的元数据索引
  *       <sessionId>.jsonl      ← 每个 session 的对话记录（JSONL 格式）
+ *
+ * 所有操作都通过 agentId 定位到具体目录，不做全量扫描。
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync, readdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { SessionStore } from '../../core/interfaces/session-store.js';
 import type { SessionData } from '../../harness/session-types.js';
 import type { SessionMeta } from '../../core/types.js';
 
 export class JsonlSessionStore implements SessionStore<SessionData> {
-  private dataDir: string;
+  private agentHomeResolver: (agentId: string) => string;
 
-  constructor(dataDir?: string) {
-    this.dataDir = dataDir ?? '.octopi/sessions';
+  /**
+   * @param agentHomeResolver - 根据 agentId 返回该 agent 的 home 目录路径
+   * @param legacyDataDir - 向后兼容：旧的全局 dataDir 路径（已废弃）
+   */
+  constructor(
+    agentHomeResolver: (agentId: string) => string,
+    legacyDataDir?: string,
+  ) {
+    // 如果传了 legacyDataDir，用旧的目录结构：dataDir/{agentId}/
+    if (legacyDataDir) {
+      this.agentHomeResolver = (agentId: string) => join(legacyDataDir, agentId);
+    } else {
+      this.agentHomeResolver = agentHomeResolver;
+    }
   }
 
-  async load(sessionId: string): Promise<SessionData | null> {
-    // 扫描所有 agent 目录
-    if (!existsSync(this.dataDir)) return null;
-
-    const agentDirs = readdirSync(this.dataDir, { withFileTypes: true })
-      .filter((d: any) => d.isDirectory());
-
-    for (const dir of agentDirs) {
-      const sessionFile = join(this.dataDir, dir.name, `${sessionId}.jsonl`);
-      const metaFile = join(this.dataDir, dir.name, 'sessions.json');
-
-      if (existsSync(sessionFile)) {
-        // 读取消息
-        const content = readFileSync(sessionFile, 'utf-8');
-        const messages = content.split('\n')
-          .filter(line => line.trim())
-          .map(line => { try { return JSON.parse(line); } catch { return null; } })
-          .filter(Boolean);
-
-        // 读取元数据
-        let meta: SessionMeta | null = null;
-        if (existsSync(metaFile)) {
-          const allMeta = JSON.parse(readFileSync(metaFile, 'utf-8'));
-          meta = allMeta[sessionId] ?? null;
-        }
-
-        return {
-          id: sessionId,
-          agentId: dir.name,
-          meta: meta ?? {
-            id: sessionId,
-            agentId: dir.name,
-            channelId: 'unknown',
-            peerId: 'unknown',
-            status: 'idle',
-            createdAt: Date.now(),
-            sessionStartedAt: Date.now(),
-            lastInteractionAt: Date.now(),
-            updatedAt: Date.now(),
-          },
-          messages,
-          turns: [],
-          metadata: {},
-        };
-      }
-    }
-
-    return null;
+  private sessionsDir(agentId: string): string {
+    return join(this.agentHomeResolver(agentId), 'sessions');
   }
 
-  async save(sessionId: string, data: SessionData): Promise<void> {
-    const agentDir = join(this.dataDir, data.agentId);
-    if (!existsSync(agentDir)) {
-      mkdirSync(agentDir, { recursive: true });
+  private metaFile(agentId: string): string {
+    return join(this.sessionsDir(agentId), 'sessions.json');
+  }
+
+  private sessionFile(agentId: string, sessionId: string): string {
+    return join(this.sessionsDir(agentId), `${sessionId}.jsonl`);
+  }
+
+  async load(agentId: string, sessionId: string): Promise<SessionData | null> {
+    const file = this.sessionFile(agentId, sessionId);
+    if (!existsSync(file)) return null;
+
+    const content = readFileSync(file, 'utf-8');
+    const messages = content.split('\n')
+      .filter(line => line.trim())
+      .map(line => { try { return JSON.parse(line); } catch { return null; } })
+      .filter(Boolean);
+
+    // 读取元数据
+    let meta: SessionMeta | null = null;
+    const metaFile = this.metaFile(agentId);
+    if (existsSync(metaFile)) {
+      try {
+        const allMeta = JSON.parse(readFileSync(metaFile, 'utf-8'));
+        meta = allMeta[sessionId] ?? null;
+      } catch { /* corrupt meta, use fallback */ }
     }
 
-    // 保存元数据
-    const metaFile = join(agentDir, 'sessions.json');
+    return {
+      id: sessionId,
+      agentId,
+      meta: meta ?? {
+        id: sessionId,
+        agentId,
+        channelId: 'unknown',
+        peerId: 'unknown',
+        status: 'idle',
+        createdAt: Date.now(),
+        sessionStartedAt: Date.now(),
+        lastInteractionAt: Date.now(),
+        updatedAt: Date.now(),
+      },
+      messages,
+      turns: [],
+      metadata: {},
+    };
+  }
+
+  async save(agentId: string, sessionId: string, data: SessionData): Promise<void> {
+    const dir = this.sessionsDir(agentId);
+    if (!existsSync(dir)) {
+      mkdirSync(dir, { recursive: true });
+    }
+
+    // 保存元数据索引
+    const metaFile = this.metaFile(agentId);
     let allMeta: Record<string, SessionMeta> = {};
     if (existsSync(metaFile)) {
       try { allMeta = JSON.parse(readFileSync(metaFile, 'utf-8')); } catch {}
@@ -86,9 +102,8 @@ export class JsonlSessionStore implements SessionStore<SessionData> {
     allMeta[sessionId] = data.meta;
     writeFileSync(metaFile, JSON.stringify(allMeta, null, 2));
 
-    // 保存消息（JSONL 格式，追加写入）
-    const sessionFile = join(agentDir, `${sessionId}.jsonl`);
-    // 先清空文件，再写入所有消息
+    // 保存消息（JSONL 格式，全量覆写）
+    const sessionFile = this.sessionFile(agentId, sessionId);
     writeFileSync(sessionFile, '');
     for (const msg of data.messages) {
       appendFileSync(sessionFile, JSON.stringify(msg) + '\n');
@@ -96,7 +111,7 @@ export class JsonlSessionStore implements SessionStore<SessionData> {
   }
 
   async list(agentId: string): Promise<SessionMeta[]> {
-    const metaFile = join(this.dataDir, agentId, 'sessions.json');
+    const metaFile = this.metaFile(agentId);
     if (!existsSync(metaFile)) return [];
 
     try {
@@ -107,41 +122,25 @@ export class JsonlSessionStore implements SessionStore<SessionData> {
     }
   }
 
-  async delete(sessionId: string): Promise<void> {
-    // 扫描所有 agent 目录
-    if (!existsSync(this.dataDir)) return;
+  async delete(agentId: string, sessionId: string): Promise<void> {
+    const file = this.sessionFile(agentId, sessionId);
+    if (existsSync(file)) {
+      const { unlinkSync } = await import('node:fs');
+      unlinkSync(file);
+    }
 
-    const agentDirs = readdirSync(this.dataDir, { withFileTypes: true })
-      .filter((d: any) => d.isDirectory());
-
-    for (const dir of agentDirs) {
-      const sessionFile = join(this.dataDir, dir.name, `${sessionId}.jsonl`);
-      if (existsSync(sessionFile)) {
-        const { unlinkSync } = await import('node:fs');
-        unlinkSync(sessionFile);
-
-        // 更新元数据
-        const metaFile = join(this.dataDir, dir.name, 'sessions.json');
-        if (existsSync(metaFile)) {
-          const allMeta = JSON.parse(readFileSync(metaFile, 'utf-8'));
-          delete allMeta[sessionId];
-          writeFileSync(metaFile, JSON.stringify(allMeta, null, 2));
-        }
-      }
+    // 更新元数据索引
+    const metaFile = this.metaFile(agentId);
+    if (existsSync(metaFile)) {
+      try {
+        const allMeta = JSON.parse(readFileSync(metaFile, 'utf-8'));
+        delete allMeta[sessionId];
+        writeFileSync(metaFile, JSON.stringify(allMeta, null, 2));
+      } catch { /* ignore */ }
     }
   }
 
-  async exists(sessionId: string): Promise<boolean> {
-    if (!existsSync(this.dataDir)) return false;
-
-    const agentDirs = readdirSync(this.dataDir, { withFileTypes: true })
-      .filter((d: any) => d.isDirectory());
-
-    for (const dir of agentDirs) {
-      const sessionFile = join(this.dataDir, dir.name, `${sessionId}.jsonl`);
-      if (existsSync(sessionFile)) return true;
-    }
-
-    return false;
+  async exists(agentId: string, sessionId: string): Promise<boolean> {
+    return existsSync(this.sessionFile(agentId, sessionId));
   }
 }

@@ -115,7 +115,7 @@ export class SessionArchiveManager {
     });
 
     // 从 sessions.db 删除（归档后不再需要在数据库中）
-    await this.store.delete(session.id);
+    await this.store.delete(session.agentId, session.id);
   }
 
   /**

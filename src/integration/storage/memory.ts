@@ -11,11 +11,11 @@ import type { SessionMeta } from '../../core/types.js';
 export class InMemorySessionStore implements SessionStore<SessionData> {
   private sessions = new Map<string, SessionData>();
 
-  async load(sessionId: string): Promise<SessionData | null> {
+  async load(agentId: string, sessionId: string): Promise<SessionData | null> {
     return this.sessions.get(sessionId) ?? null;
   }
 
-  async save(sessionId: string, data: SessionData): Promise<void> {
+  async save(agentId: string, sessionId: string, data: SessionData): Promise<void> {
     this.sessions.set(sessionId, { ...data });
   }
 
@@ -25,11 +25,11 @@ export class InMemorySessionStore implements SessionStore<SessionData> {
       .map(s => s.meta);
   }
 
-  async delete(sessionId: string): Promise<void> {
+  async delete(agentId: string, sessionId: string): Promise<void> {
     this.sessions.delete(sessionId);
   }
 
-  async exists(sessionId: string): Promise<boolean> {
+  async exists(agentId: string, sessionId: string): Promise<boolean> {
     return this.sessions.has(sessionId);
   }
 

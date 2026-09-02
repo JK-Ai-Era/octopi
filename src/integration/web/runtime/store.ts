@@ -439,6 +439,19 @@ export class OctopiRuntimeStore extends EventTarget {
         inspectorChanged = true;
         break;
       }
+      case 'turn.end': {
+        const contextTokens = typeof event.data?.contextTokens === 'number' ? event.data.contextTokens : undefined;
+        const contextWindow = typeof event.data?.contextWindow === 'number' ? event.data.contextWindow : undefined;
+        if (contextTokens !== undefined || contextWindow !== undefined) {
+          this.chat.inspector = {
+            ...this.chat.inspector,
+            ...(contextTokens !== undefined ? { contextTokens } : {}),
+            ...(contextWindow !== undefined ? { contextWindow } : {}),
+          };
+          inspectorChanged = true;
+        }
+        break;
+      }
       default: break;
     }
     if (inspectorChanged) {

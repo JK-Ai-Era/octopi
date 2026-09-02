@@ -134,7 +134,7 @@ describe('SessionAwareRunner', () => {
     }
 
     // session 应该被保存
-    const session = await store.load('test-session');
+    const session = await store.load('default', 'test-session');
     expect(session).not.toBeNull();
     expect(session!.messages.length).toBeGreaterThan(0);
   });
@@ -167,7 +167,7 @@ describe('SessionAwareRunner', () => {
       events2.push(event);
     }
 
-    const session = await store.load('lock-test');
+    const session = await store.load('default', 'lock-test');
     expect(session!.messages.length).toBeGreaterThan(0);
   });
 });
@@ -227,7 +227,7 @@ describe('SessionAwareRunner — 异常退出 session 一致性', () => {
     }
 
     // session 应该被保存
-    const session = await store.load('consistency-test');
+    const session = await store.load('default', 'consistency-test');
     expect(session).not.toBeNull();
     // session 状态应该是 idle（不是 processing）
     expect(session!.meta.status).toBe('idle');
@@ -271,7 +271,7 @@ describe('SessionAwareRunner — 异常退出 session 一致性', () => {
     }
 
     // session 应该被保存
-    const session = await store.load('error-test');
+    const session = await store.load('default', 'error-test');
     expect(session).not.toBeNull();
     // session 状态应该是 idle
     expect(session!.meta.status).toBe('idle');
@@ -315,7 +315,7 @@ describe('SessionAwareRunner — 异常退出 session 一致性', () => {
       { systemPrompt: 'test' },
     )) {}
 
-    const session = await store.load('partial-test');
+    const session = await store.load('default', 'partial-test');
     expect(session).not.toBeNull();
     // session 应该有消息
     expect(session!.messages.length).toBeGreaterThan(0);

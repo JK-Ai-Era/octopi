@@ -71,6 +71,9 @@ export async function* agentLoop(
   // 当前上下文（循环内直接修改 messages 引用）
   let currentContext = context;
   let currentModel = model;
+  // 最近一次 LLM 调用的 usage。每次调用发送完整上下文，所以最新值即为当前上下文大小。
+  // 注意：不应累加 promptTokens（那会变成输入 token 总消耗，而非上下文大小）。
+  let lastResponseUsage: TokenUsage | undefined;
 
   yield { type: 'agent_start', timestamp: Date.now() };
 
@@ -120,7 +123,7 @@ export async function* agentLoop(
       if (onError) {
         const action = await onError(classified);
         if (action === 'retry') {
-          yield { type: 'turn_end', hasToolCalls: false, error: true };
+          yield { type: 'turn_end', hasToolCalls: false, error: true, usage: lastResponseUsage };
           continue; // 重试当前迭代
         }
         if (action === 'abort') {
@@ -135,6 +138,7 @@ export async function* agentLoop(
     }
 
     observer?.onLLMEnd?.({ model: currentModel.name, usage: response.usage });
+    lastResponseUsage = response.usage;
 
     // ── 4. 构建 assistant 消息并加入历史 ──
     const assistantMessage: Message = {
@@ -188,13 +192,13 @@ export async function* agentLoop(
         if (shouldStopAfterTurn) {
           const stop = await shouldStopAfterTurn({ message: assistantMessage, toolResults: errorResults, context: currentContext });
           if (stop) {
-            yield { type: 'turn_end', hasToolCalls: true, truncated: true };
+            yield { type: 'turn_end', hasToolCalls: true, truncated: true, usage: lastResponseUsage };
             yield { type: 'agent_end', reason: 'should_stop', timestamp: Date.now() };
             return;
           }
         }
 
-        yield { type: 'turn_end', hasToolCalls: true, truncated: true };
+        yield { type: 'turn_end', hasToolCalls: true, truncated: true, usage: lastResponseUsage };
         continue;
       }
     }
@@ -213,7 +217,7 @@ export async function* agentLoop(
       if (shouldStopAfterTurn) {
         const stop = await shouldStopAfterTurn({ message: assistantMessage, toolResults: [], context: currentContext });
         if (stop) {
-          yield { type: 'turn_end', hasToolCalls: false };
+          yield { type: 'turn_end', hasToolCalls: false, usage: lastResponseUsage };
           yield { type: 'agent_end', reason: 'should_stop', timestamp: Date.now() };
           return;
         }
@@ -223,18 +227,18 @@ export async function* agentLoop(
       const followUps = getFollowUpMessages ? await getFollowUpMessages() : [];
       if (followUps.length > 0) {
         currentContext.messages.push(...followUps);
-        yield { type: 'turn_end', hasToolCalls: false };
+        yield { type: 'turn_end', hasToolCalls: false, usage: lastResponseUsage };
         continue;
       }
 
       // 无工具调用 + 无 followUp → 自然结束
-      yield { type: 'turn_end', hasToolCalls: false };
+      yield { type: 'turn_end', hasToolCalls: false, usage: lastResponseUsage };
       yield { type: 'agent_end', reason: 'completed', timestamp: Date.now() };
       return;
     }
 
     // ── 7. 执行工具 ──
-    yield { type: 'turn_end', hasToolCalls: true };
+    yield { type: 'turn_end', hasToolCalls: true, usage: lastResponseUsage };
 
     // 7a. 为每个工具调用发出 tool_start 事件
     for (const tc of toolCalls) {

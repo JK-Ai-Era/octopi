@@ -62,23 +62,23 @@ import { SessionAwareRunner, type RunConfig } from '../../harness/runner.js';
 class InMemorySessionStore implements SessionStore<SessionData> {
   private sessions = new Map<string, SessionData>();
 
-  async load(sessionId: string): Promise<SessionData | null> {
+  async load(_agentId: string, sessionId: string): Promise<SessionData | null> {
     return this.sessions.get(sessionId) ?? null;
   }
 
-  async save(sessionId: string, data: SessionData): Promise<void> {
+  async save(_agentId: string, sessionId: string, data: SessionData): Promise<void> {
     this.sessions.set(sessionId, data);
   }
 
-  async list(_agentId: string): Promise<any[]> {
-    return Array.from(this.sessions.values());
+  async list(agentId: string): Promise<any[]> {
+    return Array.from(this.sessions.values()).filter(s => s.agentId === agentId);
   }
 
-  async delete(sessionId: string): Promise<void> {
+  async delete(_agentId: string, sessionId: string): Promise<void> {
     this.sessions.delete(sessionId);
   }
 
-  async exists(sessionId: string): Promise<boolean> {
+  async exists(_agentId: string, sessionId: string): Promise<boolean> {
     return this.sessions.has(sessionId);
   }
 }
@@ -151,11 +151,11 @@ export class Gateway {
   /** Web Runtime pending approvals */
   private pendingApprovals = new Map<string, PendingApprovalView>();
 
-  constructor(config: GatewayConfig) {
+  constructor(config: GatewayConfig, store?: SessionStore<SessionData>) {
     this.config = config;
     this.dmScope = config.session?.dmScope ?? 'main';
     this.pluginManager = new PluginManager();
-    this.store = new InMemorySessionStore();
+    this.store = store ?? new InMemorySessionStore();
 
     // 注册配置中定义的 agents
     for (const agent of config.agents) {
@@ -311,18 +311,31 @@ export class Gateway {
       metadata: options.metadata ?? {},
     };
 
-    await this.store.save(sessionId, session);
+    await this.store.save(options.agentId, sessionId, session);
     return session.meta;
   }
 
-  async getSessionView(sessionId: string): Promise<{ meta: SessionMeta; messageCount: number; turnCount: number } | null> {
-    const session = await this.store.load(sessionId);
+
+  /**
+   * 查找 session（遍历所有已知 agent）
+   * 用于 API 层面不知道 agentId 的场景
+   */
+  private async findSession(sessionId: string): Promise<SessionData | null> {
+    for (const agentId of this.agents.keys()) {
+      const session = await this.store.load(agentId, sessionId);
+      if (session) return session;
+    }
+    return null;
+  }
+
+  async getSessionView(sessionId: string, agentId?: string): Promise<{ meta: SessionMeta; messageCount: number; turnCount: number } | null> {
+    const session = agentId ? await this.store.load(agentId, sessionId) : await this.findSession(sessionId);
     if (!session) return null;
     return { meta: session.meta, messageCount: session.messages.length, turnCount: session.turns.length };
   }
 
-  async getSessionMessages(sessionId: string, options: { limit: number; cursor?: string }): Promise<{ messages: Message[]; nextCursor?: string }> {
-    const session = await this.store.load(sessionId);
+  async getSessionMessages(sessionId: string, options: { limit: number; cursor?: string; agentId?: string }): Promise<{ messages: Message[]; nextCursor?: string }> {
+    const session = options.agentId ? await this.store.load(options.agentId, sessionId) : await this.findSession(sessionId);
     if (!session) {
       throw new Error(`Session "${sessionId}" not found`);
     }
@@ -432,14 +445,22 @@ export class Gateway {
 
     // 5. 运行 Agent
     let runSystemPrompt = typeof agent.persona === 'object' ? agent.persona?.systemPrompt ?? '' : '';
-    if (!runSystemPrompt && typeof agent.persona === 'string' && agent.persona) {
-      runSystemPrompt = await loadPersonaCached(agent.persona);
+    if (!runSystemPrompt && agent.home) {
+      runSystemPrompt = await loadPersonaCached(agent.home);
     }
+    // 解析 contextWindow：优先用 agent 配置，否则从 provider model info 获取
+    let contextWindow = agent.model.contextWindow;
+    if (!contextWindow) {
+      const provider = this.providers.get(agent.model.provider);
+      const modelInfo = provider?.getModelInfo(agent.model.model);
+      contextWindow = modelInfo?.contextWindow;
+    }
+
     const runConfig: RunConfig = {
       agentId: agent.id,
       sessionId: sessionKey,
       model: agent.model.model,
-      contextWindow: agent.model.contextWindow,
+      contextWindow,
       systemPrompt: runSystemPrompt,
     };
 
@@ -506,7 +527,7 @@ export class Gateway {
     agent: import('../../loop/agent.js').Agent;
     runner: SessionAwareRunner;
   }> {
-    // 获取 provider
+    // 获取主 provider
     const modelProvider = this.providers.get(agent.model.provider);
     if (!modelProvider) {
       throw new Error(`LLM provider "${agent.model.provider}" not found.`);
@@ -516,9 +537,22 @@ export class Gateway {
     const cb = this.getCircuitBreaker(agent.model.provider);
     const wrappedProvider = wrapProviderWithCircuitBreaker(modelProvider, cb);
 
+    // 如果配置了 fallbackModels，构建 FallbackProvider
+    let finalProvider: import('../../core/interfaces/model-provider.js').ModelProvider = wrappedProvider;
+    if (agent.model.fallbackModels && agent.model.fallbackModels.length > 0) {
+      const { FallbackProvider } = await import('../../harness/reliability/fallback-provider.js');
+      finalProvider = new FallbackProvider(
+        wrappedProvider,
+        agent.model.model,
+        agent.model.fallbackModels,
+        this.providers,
+      );
+      console.log(`[Gateway] Agent "${agent.id}" fallback chain: ${[agent.model.model, ...agent.model.fallbackModels.map(f => f.model)].join(' → ')}`);
+    }
+
     // 使用 AgentBuilder 构建
     const builder = new (await import('../../harness/agent-building/builder.js')).AgentBuilder()
-      .model(wrappedProvider)
+      .model(finalProvider)
       .store(this.store);
 
     // 注册工具
@@ -528,9 +562,9 @@ export class Gateway {
 
     // 设置 systemPrompt
     let systemPrompt = typeof agent.persona === 'object' ? agent.persona?.systemPrompt ?? '' : '';
-    if (!systemPrompt && typeof agent.persona === 'string' && agent.persona) {
-      // persona 是目录路径，从文件加载
-      systemPrompt = await loadPersonaCached(agent.persona);
+    if (!systemPrompt && agent.home) {
+      // 从 home 目录加载 persona 文件
+      systemPrompt = await loadPersonaCached(agent.home);
     }
     if (systemPrompt) {
       builder.systemPrompt(systemPrompt);

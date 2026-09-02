@@ -1,33 +1,37 @@
 {
   "$schema": "./octopi.schema.json",
 
+  "models": {
+    "mode": "merge",
+    "providers": {
+      "openai": {
+        "baseUrl": "https://api.openai.com/v1",
+        "apiKey": "${OPENAI_API_KEY}",
+        "api": "openai-completions",
+        "models": [
+          { "id": "gpt-5.5", "name": "gpt-5.5", "contextWindow": 256000, "maxTokens": 32768 },
+          { "id": "gpt-5-mini", "name": "gpt-5-mini", "contextWindow": 128000, "maxTokens": 16384 }
+        ]
+      },
+      "anthropic": {
+        "baseUrl": "https://api.anthropic.com",
+        "apiKey": "${ANTHROPIC_API_KEY}",
+        "api": "anthropic-messages",
+        "models": [
+          { "id": "claude-sonnet-4-6", "name": "claude-sonnet-4-6", "contextWindow": 200000, "maxTokens": 16000 },
+          { "id": "claude-opus-4-6", "name": "claude-opus-4-6", "contextWindow": 200000, "maxTokens": 32000 }
+        ]
+      }
+    }
+  },
+
   "agents": [{
     "id": "assistant",
     "workspace": "./workspace",
     "persona": "./personas/assistant",
-    "model": {
-      "provider": "openai",
-      "model": "gpt-5.5"
-    },
+    "model": "openai/gpt-5.5",
     "tools": { "allow": ["*"] }
   }],
-
-  "providers": [
-    {
-      "type": "openai",
-      "name": "openai",
-      "apiKey": "***",
-      "baseUrl": "https://api.openai.com/v1",
-      "models": ["gpt-5.5", "gpt-5-mini"]
-    },
-    {
-      "type": "anthropic",
-      "name": "anthropic",
-      "apiKey": "${ANTH…KEY}",
-      "baseUrl": "https://api.anthropic.com",
-      "models": ["claude-sonnet-4-6", "claude-opus-4-6", "claude-haiku-4-5"]
-    }
-  ],
 
   "security": {
     "preset": "production"

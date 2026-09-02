@@ -38,13 +38,3 @@ export interface ConceptGraphStore {
   extractFromText(text: string, memoryId: string): Promise<void>;
   getFullGraph(): Promise<ConceptGraph>;
 }
-
-/**
- * ProjectMemory — 项目记忆接口
- */
-export interface ProjectMemory {
-  readonly root: string;
-  load(): Promise<string>;
-  append(content: string): Promise<void>;
-  update(content: string): Promise<void>;
-}

@@ -25,7 +25,6 @@
 - MemoryStore — 记忆存储接口
 - WisdomStore — 智慧存储接口
 - ConceptGraphStore — 认知图谱接口
-- ProjectMemory — 项目记忆接口
 
 ## 不做什么
 

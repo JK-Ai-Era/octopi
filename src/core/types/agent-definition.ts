@@ -26,7 +26,8 @@ export interface ModelConfig {
   temperature?: number;
   maxTokens?: number;
   contextWindow?: number;
-  fallbackModels?: string[];
+  /** 回退模型列表（按优先级排序，由 resolveModelConfig 解析后的完整配置） */
+  fallbackModels?: ModelConfig[];
 }
 
 /** 工具策略 */
@@ -39,7 +40,10 @@ export interface ToolPolicy {
 /** Agent 定义 */
 export interface AgentDefinition {
   id: string;
-  workspace: string;
+  /** Agent home 目录：persona、memory、wisdom、skills、sessions 的根目录 */
+  home: string;
+  /** 沙箱工作目录：agent 工具操作的 cwd */
+  workspace?: string;
   persona: AgentPersona;
   tools: ToolPolicy;
   model: ModelConfig;

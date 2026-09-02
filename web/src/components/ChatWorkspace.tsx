@@ -10,8 +10,44 @@ import type {
   ViewMode,
 } from '../../../src/integration/web/conversation/types';
 import type { RunStatus } from '../../../src/integration/web/runtime/store';
+import { estimateTextTokens } from '../../../src/harness/context/core-token-estimator';
+import { JSON_CHARS_PER_TOKEN } from '../../../src/harness/context/token-constants';
 
 const DEFAULT_BASE = 'http://localhost:3000';
+
+function formatTokens(n: number | undefined | null): string {
+  const value = typeof n === 'number' && Number.isFinite(n) ? n : 0;
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}m`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}k`;
+  return String(value);
+}
+
+function estimateConversationTokens(items: ConversationItem[]): number {
+  let total = 0;
+  for (const item of items) {
+    switch (item.role) {
+      case 'user':
+        total += estimateTextTokens((item as UserConversationItem).content ?? '');
+        break;
+      case 'assistant':
+        total += estimateTextTokens((item as AssistantConversationItem).content ?? '');
+        break;
+      case 'tool': {
+        const t = item as ToolConversationItem;
+        total += estimateTextTokens(t.toolName ?? '');
+        total += estimateTextTokens(t.summary ?? '');
+        const argsStr = typeof t.args === 'string' ? t.args : t.args != null ? JSON.stringify(t.args) : '';
+        total += Math.ceil(argsStr.length / JSON_CHARS_PER_TOKEN);
+        const resultStr = typeof t.result === 'string' ? t.result : t.result != null ? JSON.stringify(t.result) : '';
+        total += Math.ceil(resultStr.length / JSON_CHARS_PER_TOKEN);
+        break;
+      }
+      default:
+        break;
+    }
+  }
+  return total;
+}
 
 function formatTime(ts: number | undefined | null): string {
   if (!ts || typeof ts !== 'number' || isNaN(ts)) return '';
@@ -180,7 +216,7 @@ export default function ChatWorkspace() {
   const [apiKey, setApiKey] = useState('');
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [connection, setConnection] = useState('idle');
-  const [agents, setAgents] = useState<Array<{ id: string; model: { provider: string; model: string } }>>([]);
+  const [agents, setAgents] = useState<Array<{ id: string; model: { provider: string; model: string; contextWindow?: number } }>>([]);
   const [agentId, setAgentId] = useState('');
   const [sessions, setSessions] = useState<Array<{ id: string; agentId: string; lastInteractionAt: number }>>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
@@ -333,6 +369,10 @@ export default function ChatWorkspace() {
   const agentSessions = sessions.filter(s => agentId ? s.agentId === agentId : true);
 
   const isReconnecting = connection === 'reconnecting';
+  const contextTokens = typeof inspector.contextTokens === 'number'
+    ? inspector.contextTokens
+    : conversationItems.length > 0 ? estimateConversationTokens(conversationItems) : undefined;
+  const contextWindow = typeof inspector.contextWindow === 'number' ? inspector.contextWindow : agents.find((a) => a.id === agentId)?.model?.contextWindow;
 
   return (
     <>
@@ -441,6 +481,9 @@ export default function ChatWorkspace() {
               <div>
                 <div style={{ fontWeight: 600 }}>{activeSessionId ?? '未选择会话'}</div>
                 <div className="small muted">{agentId ? `Agent: ${agentId}` : '请先选择 Agent'}</div>
+                <div className="small muted" style={{ marginTop: 2 }}>
+                  {`上下文: ${contextTokens !== undefined ? formatTokens(contextTokens) : '~'}${typeof contextWindow === 'number' ? ` / ${formatTokens(contextWindow)}` : ''}`}
+                </div>
               </div>
               <div className="small" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                 <span className="small muted" style={{ marginRight: 8 }}>[{viewMode}]</span>

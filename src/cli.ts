@@ -17,16 +17,17 @@
  * ```
  */
 
-import { loadConfig, toGatewayConfig } from './config.js';
+import { loadConfig, toGatewayConfig, createProviderFromConfig, createStoreFromConfig } from './config.js';
+import type { ModelProviderConfig } from './config.js';
 import { resolve, dirname, join } from 'node:path';
 import { Gateway } from './integration/gateway/gateway.js';
 import { OpenAIProvider } from './integration/providers/openai.js';
 import { AnthropicProvider } from './integration/providers/anthropic.js';
 import { getBuiltinTools } from './harness/plugin-ecosystem/tools/builtin.js';
-import { fork, execSync } from 'node:child_process';
+import { fork, execSync, spawn } from 'node:child_process';
 import { readFileSync, writeFileSync, unlinkSync, existsSync, mkdirSync } from 'node:fs';
 import type { ModelProvider } from './core/interfaces/model-provider.js';
-import type { ProviderConfig } from './config.js';
+
 import { initOctopi, getOctopiHome, isInitialized, formatInitReport, ensureAgentDirs } from './init.js';
 
 // ================================================================
@@ -38,6 +39,85 @@ interface DaemonPidFile {
   config: string;
   port?: number;
   startedAt: string;
+}
+
+// ── Web UI 管理 ──
+
+/**
+ * 查找 web UI 目录（相对于配置文件所在目录）
+ */
+function findWebDir(configPath?: string): string | null {
+  // 按优先级查找 web 目录
+  const candidates: string[] = [];
+
+  // 1. 环境变量指定
+  if (process.env.OCTOPI_WEB_DIR) {
+    candidates.push(resolve(process.env.OCTOPI_WEB_DIR));
+  }
+
+  // 2. 配置文件所在目录
+  if (configPath) {
+    candidates.push(resolve(dirname(resolve(configPath)), 'web'));
+  }
+
+  // 3. 当前工作目录
+  candidates.push(resolve(process.cwd(), 'web'));
+
+  // 4. 从当前目录向上搜索项目根目录（含 web/package.json）
+  let dir = process.cwd();
+  let prev = '';
+  while (dir !== prev) {
+    const candidate = join(dir, 'web');
+    if (existsSync(join(candidate, 'package.json'))) {
+      candidates.push(candidate);
+      break;
+    }
+    prev = dir;
+    dir = dirname(dir);
+  }
+
+  for (const dir of candidates) {
+    if (existsSync(join(dir, 'package.json'))) return dir;
+  }
+  return null;
+}
+
+/**
+ * 启动 Web UI 开发服务器（后台子进程）
+ * 返回子进程 PID，失败返回 null
+ */
+function startWebUi(webDir: string): number | null {
+  try {
+    const viteBin = join(webDir, 'node_modules', '.bin', 'vite');
+    const child = spawn(viteBin, [], {
+      cwd: webDir,
+      detached: true,
+      stdio: 'ignore',
+    });
+    if (child.pid) {
+      child.unref();
+      return child.pid;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 停止 Web UI 进程
+ */
+async function stopWebUi(pid: number): Promise<void> {
+  if (!isProcessAlive(pid)) return;
+  try {
+    process.kill(pid, 'SIGTERM');
+    const deadline = Date.now() + 3000;
+    while (Date.now() < deadline) {
+      if (!isProcessAlive(pid)) return;
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    process.kill(pid, 'SIGKILL');
+  } catch { /* already exited */ }
 }
 
 function getPidPath(): string {
@@ -126,27 +206,13 @@ function killProcessOnPort(port: number): boolean {
 // Provider 工厂
 // ================================================================
 
-function createProvider(cfg: ProviderConfig): ModelProvider | null {
-  if (!cfg.apiKey) return null;
-
-  if (cfg.type === 'anthropic') {
-    return new AnthropicProvider({
-      name: cfg.name,
-      apiKey: cfg.apiKey,
-      baseUrl: cfg.baseUrl,
-      models: cfg.models,
-      defaultModel: cfg.defaultModel,
-    });
+function createProvider(name: string, cfg: ModelProviderConfig): ModelProvider | null {
+  const apiType = cfg.api === 'anthropic-messages' ? 'anthropic' : 'openai'
+  const models = cfg.models.map(m => ({ name: m.name ?? m.id, contextWindow: m.contextWindow, maxOutputTokens: m.maxTokens }));
+  if (apiType === 'anthropic') {
+    return new AnthropicProvider({ name, apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, models, timeoutMs: cfg.timeoutSeconds ? cfg.timeoutSeconds * 1000 : undefined });
   }
-
-  return new OpenAIProvider({
-    name: cfg.name,
-    apiKey: cfg.apiKey,
-    baseUrl: cfg.baseUrl,
-    models: cfg.models,
-    defaultModel: cfg.defaultModel,
-    timeoutMs: cfg.timeoutMs,
-  });
+  return new OpenAIProvider({ name, apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, models, timeoutMs: cfg.timeoutSeconds ? cfg.timeoutSeconds * 1000 : undefined });
 }
 
 // ================================================================
@@ -226,6 +292,10 @@ Commands:
   serve fg          Start the Gateway server in foreground (for debugging)
   chat  (or tui)        Interactive TUI chat with an agent
   health            Check the health of configured providers
+  webui start       Start the Web UI server
+  webui stop        Stop the Web UI server
+  webui restart     Restart the Web UI server
+  webui status      Show Web UI server status
   plugin init       Scaffold a new plugin project
   help              Show this help message
 
@@ -387,6 +457,9 @@ async function serveStartCommand(args: CliArgs): Promise<void> {
   console.log(`   Config: ${configPath ?? './octopi.json'}`);
   console.log(`\nUse 'octopi serve stop' to stop, 'octopi serve status' to check.`);
 
+  // 同步启动 Web UI（失败不影响 Gateway）
+  await webuiStartCommand(configPath);
+
   // 强制父进程退出，防止 fork IPC 或其他异步句柄阻塞
   process.exit(0);
 }
@@ -459,6 +532,9 @@ async function serveStopCommand(): Promise<void> {
   } else if (!pidFile && !portPid) {
     console.log('ℹ️  No Gateway instance found.');
   }
+
+  // 同步停止 Web UI
+  await webuiStopCommand();
 }
 
 /**
@@ -541,13 +617,15 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
     console.log('[CLI] Verbose mode: tracing enabled');
   }
 
-  const gateway = new Gateway(gatewayConfig);
+  // 创建 session store（从 session.store 配置）
+  const store = config.session?.store ? await createStoreFromConfig(config.session.store) : undefined;
+  const gateway = new Gateway(gatewayConfig, store);
 
-  for (const providerCfg of config.providers ?? []) {
-    const provider = createProvider(providerCfg);
+  for (const [providerName, providerCfg] of Object.entries(config.models?.providers ?? {})) {
+    const provider = createProvider(providerName, providerCfg);
     if (provider) {
       gateway.registerProvider(provider);
-      console.log(`[CLI] Registered provider: ${providerCfg.name} (${providerCfg.type})`);
+      console.log(`[CLI] Registered provider: ${providerName} (${providerCfg.api})`);
     }
   }
 
@@ -691,20 +769,164 @@ async function healthCommand(args: CliArgs): Promise<void> {
   const config = loadConfig(configPath);
 
   console.log('\n🏥 Health Check\n');
-  for (const providerCfg of config.providers ?? []) {
-    const provider = createProvider(providerCfg);
+  for (const [providerName, providerCfg] of Object.entries(config.models?.providers ?? {})) {
+    const provider = createProvider(providerName, providerCfg);
     if (provider) {
       try {
-        // 通过 isAvailable 检查
         const available = await provider.isAvailable();
-        console.log(`  ${providerCfg.name}: ${available ? '✅ OK' : '❌ FAIL'}`);
+        console.log(`  ${providerName}: ${available ? '✅ OK' : '❌ FAIL'}`);
       } catch {
-        console.log(`  ${providerCfg.name}: ❌ FAIL`);
+        console.log(`  ${providerName}: ❌ FAIL`);
       }
     }
   }
   console.log();
 }
+
+
+// ================================================================
+// Web UI 命令
+// ================================================================
+
+/**
+ * 获取 Web UI PID 文件路径
+ */
+function getWebUiPidPath(): string {
+  return join(getOctopiHome(), 'webui.pid');
+}
+
+function readWebUiPidFile(): number | null {
+  const pidPath = getWebUiPidPath();
+  if (!existsSync(pidPath)) return null;
+  try {
+    return parseInt(readFileSync(pidPath, 'utf-8').trim(), 10);
+  } catch {
+    return null;
+  }
+}
+
+function writeWebUiPidFile(pid: number): void {
+  writeFileSync(getWebUiPidPath(), String(pid));
+}
+
+function removeWebUiPidFile(): void {
+  const pidPath = getWebUiPidPath();
+  if (existsSync(pidPath)) {
+    try { unlinkSync(pidPath); } catch { /* ignore */ }
+  }
+}
+
+/**
+ * 启动 Web UI 服务
+ */
+async function webuiStartCommand(configPath?: string): Promise<void> {
+  // 检查是否已有运行中的实例
+  const existingPid = readWebUiPidFile();
+  if (existingPid && isProcessAlive(existingPid)) {
+    console.log(`⚠️  Web UI is already running (PID: ${existingPid})`);
+    console.log(`\nUse 'octopi webui restart' to restart.`);
+    return;
+  }
+
+  // 清理残留 PID 文件
+  removeWebUiPidFile();
+
+  // 查找 web 目录
+  const webDir = findWebDir(configPath);
+  if (!webDir) {
+    console.error('❌ Web UI directory not found. Searched:');
+    console.error('   - $OCTOPI_WEB_DIR (if set)');
+    console.error('   - Config file directory + /web');
+    console.error('   - ./web/package.json (current directory)');
+    process.exit(1);
+  }
+
+  // 启动 vite 开发服务器
+  const pid = startWebUi(webDir);
+  if (!pid) {
+    console.error('❌ Failed to start Web UI');
+    process.exit(1);
+  }
+
+  writeWebUiPidFile(pid);
+  console.log(`✅ Web UI started (PID: ${pid})`);
+  console.log(`   Directory: ${webDir}`);
+  console.log(`\nUse 'octopi webui stop' to stop, 'octopi webui status' to check.`);
+}
+
+/**
+ * 停止 Web UI 服务
+ */
+async function webuiStopCommand(): Promise<void> {
+  const pid = readWebUiPidFile();
+  if (!pid) {
+    console.log('ℹ️  No Web UI instance found.');
+    return;
+  }
+
+  if (!isProcessAlive(pid)) {
+    console.log('ℹ️  Web UI process is not running. Cleaning up PID file.');
+    removeWebUiPidFile();
+    return;
+  }
+
+  console.log(`🛑 Stopping Web UI (PID: ${pid})...`);
+  await stopWebUi(pid);
+  removeWebUiPidFile();
+  console.log('✅ Web UI stopped.');
+}
+
+/**
+ * 重启 Web UI 服务
+ */
+async function webuiRestartCommand(configPath?: string): Promise<void> {
+  await webuiStopCommand();
+  await new Promise(r => setTimeout(r, 500));
+  await webuiStartCommand(configPath);
+}
+
+/**
+ * 查看 Web UI 状态
+ */
+async function webuiStatusCommand(): Promise<void> {
+  const pid = readWebUiPidFile();
+  if (!pid) {
+    console.log('ℹ️  No Web UI instance found.');
+    return;
+  }
+
+  const alive = isProcessAlive(pid);
+  console.log(`\n🌐 Web UI Status\n`);
+  console.log(`  PID:       ${pid}`);
+  console.log(`  Status:    ${alive ? '🟢 Running' : '🔴 Stopped'}`);
+  console.log();
+
+  if (!alive) {
+    console.log('  ⚠️  Process is not running. PID file is stale.');
+    console.log(`     Run 'octopi webui start' to start a new instance.\n`);
+  }
+}
+
+/**
+ * webui 命令路由
+ */
+async function webuiCommand(args: CliArgs): Promise<void> {
+  const configPath = await ensureDaemonConfig(args);
+  switch (args.subcommand) {
+    case 'start':   return webuiStartCommand(configPath);
+    case 'stop':    return webuiStopCommand();
+    case 'restart': return webuiRestartCommand(configPath);
+    case 'status':  return webuiStatusCommand();
+    case undefined:
+      console.log('💡 Tip: Use "octopi webui start" to start Web UI.\n');
+      return webuiStartCommand(configPath);
+    default:
+      console.error(`Unknown webui subcommand: ${args.subcommand}`);
+      console.error('Valid subcommands: start, stop, restart, status');
+      process.exit(1);
+  }
+}
+
 
 async function main(): Promise<void> {
   const args = parseArgs();
@@ -729,6 +951,7 @@ async function main(): Promise<void> {
     case 'chat':
     case 'tui': await chatCommand(args); break;
     case 'health': await healthCommand(args); break;
+    case 'webui':  await webuiCommand(args); break;
     case 'plugin': await pluginCommand(args); break;
     default:
       console.error(`Unknown command: ${args.command}`);

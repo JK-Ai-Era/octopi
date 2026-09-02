@@ -254,7 +254,7 @@ export type AgentLoopEvent =
   | { type: 'agent_start'; timestamp: number }
   | { type: 'agent_end'; reason: 'completed' | 'aborted' | 'error' | 'should_stop' | 'loop_detected'; timestamp: number; error?: unknown }
   | { type: 'turn_start'; timestamp: number }
-  | { type: 'turn_end'; hasToolCalls: boolean; truncated?: boolean; stopped?: boolean; error?: boolean }
+  | { type: 'turn_end'; hasToolCalls: boolean; truncated?: boolean; stopped?: boolean; error?: boolean; usage?: TokenUsage }
   | { type: 'assistant_message'; message: Message; timestamp: number }
   | { type: 'llm_stream_delta'; timestamp: number; data: { delta: string } }
   | { type: 'tool_start'; toolCall: ToolCall; timestamp: number }

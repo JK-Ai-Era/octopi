@@ -132,25 +132,27 @@ _This file is for quick reference. Keep it updated as you discover useful comman
 function generateDefaultConfig(homeDir: string, agentId: string = 'default'): object {
   return {
     $schema: './node_modules/octopi/octopi.schema.json',
+    models: {
+      mode: 'merge',
+      providers: {
+        openai: {
+          baseUrl: 'https://api.openai.com/v1',
+          apiKey: '${OPENAI_API_KEY}',
+          api: 'openai-completions',
+          models: [
+            { id: 'gpt-5.5', name: 'gpt-5.5', contextWindow: 256000, maxTokens: 32768 },
+            { id: 'gpt-5-mini', name: 'gpt-5-mini', contextWindow: 128000, maxTokens: 16384 },
+          ],
+        },
+      },
+    },
     agents: [
       {
         id: agentId,
+        home: join(homeDir, 'agents', agentId),
         workspace: join(homeDir, 'workspace', agentId),
-        persona: join(homeDir, 'workspace', agentId),
-        model: {
-          provider: 'openai',
-          model: 'gpt-5.5',
-        },
+        model: 'openai/gpt-5.5',
         tools: { allow: ['*'] },
-      },
-    ],
-    providers: [
-      {
-        type: 'openai',
-        name: 'openai',
-        apiKey: '${OPENAI_API_KEY}',
-        baseUrl: 'https://api.openai.com/v1',
-        models: ['gpt-5.5', 'gpt-5-mini'],
       },
     ],
     plugins: {
@@ -159,10 +161,6 @@ function generateDefaultConfig(homeDir: string, agentId: string = 'default'): ob
     // budget 使用默认值（1000 迭代/5000 工具调用/1M tokens/10h），无需显式配置
     security: {
       preset: 'production',
-    },
-    store: {
-      type: 'jsonl',
-      dataDir: join(homeDir, 'data/sessions'),
     },
     channels: [
       {
@@ -173,6 +171,10 @@ function generateDefaultConfig(homeDir: string, agentId: string = 'default'): ob
     ],
     session: {
       dmScope: 'per-peer',
+      store: {
+        type: 'jsonl',
+        dataDir: join(homeDir, 'data/sessions'),
+      },
     },
   };
 }
@@ -226,7 +228,16 @@ export async function ensureAgentDirs(
   const created: string[] = [];
   const existed: string[] = [];
 
-  // Workspace 目录（persona 文件也放在这里）
+  // Home 目录（persona、memory、skills、sessions 的根目录）
+  const homeDir2 = join(homeDir, 'agents', agentId);
+  if (!existsSync(homeDir2)) {
+    ensureDir(homeDir2);
+    created.push(homeDir2);
+  } else {
+    existed.push(homeDir2);
+  }
+
+  // Workspace 目录（沙箱，agent 工具操作的 cwd）
   const workspaceDir = join(homeDir, 'workspace', agentId);
   if (!existsSync(workspaceDir)) {
     ensureDir(workspaceDir);
@@ -235,9 +246,16 @@ export async function ensureAgentDirs(
     existed.push(workspaceDir);
   }
 
-  // Persona 文件（直接放在 workspace 下）
+  // Sessions 目录（在 home 下）
+  const sessionsDir = join(homeDir2, 'sessions');
+  if (!existsSync(sessionsDir)) {
+    ensureDir(sessionsDir);
+    created.push(sessionsDir);
+  }
+
+  // Persona 文件（直接放在 home 下）
   for (const [filename, content] of Object.entries(PERSONA_TEMPLATES)) {
-    const filePath = join(workspaceDir, filename);
+    const filePath = join(homeDir2, filename);
     if (writeIfAbsent(filePath, content)) {
       created.push(filePath);
     } else {
@@ -291,7 +309,6 @@ export async function initOctopi(
 
   // 2. 子目录
   const subDirs = [
-    'data/sessions',
     'plugins',
   ];
   for (const dir of subDirs) {

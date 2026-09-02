@@ -20,6 +20,7 @@ import type { AgentLoopEvent } from '../loop/types.js';
 import type { ReliabilityHarness } from './reliability/run-agent.js';
 import { runAgentWithReliability } from './reliability/run-agent.js';
 import { createSessionStateMachine, type StateMachine } from '../core/primitives/state-machine.js';
+import { HeuristicTokenEstimator } from './context/token-estimator.js';
 
 /**
  * 任务决策提供者 — 接口已迁移到 core/interfaces/task-decision.ts
@@ -103,7 +104,7 @@ function adaptLoopEvent(
       state.assistantContent = typeof event.message.content === 'string' ? event.message.content : '';
       return null;
     case 'turn_end':
-      return { type: 'turn.end', timestamp: Date.now(), data: { content: state.assistantContent, hasToolCalls: event.hasToolCalls } };
+      return { type: 'turn.end', timestamp: Date.now(), data: { content: state.assistantContent, hasToolCalls: event.hasToolCalls, usage: event.usage } };
     case 'llm_stream_delta':
       return { type: 'llm_stream_delta', timestamp: event.timestamp, data: event.data };
     case 'tool_start':
@@ -175,9 +176,11 @@ export class SessionAwareRunner {
     // 2. 获取锁
     const release = await this.acquireLock(sessionId);
 
+    const _agentId = runConfig.agentId ?? 'default';
+
     try {
       // 3. 加载或创建 session
-      let session = await this.store.load(sessionId);
+      let session = await this.store.load(_agentId, sessionId);
       if (!session) {
         session = this.createSession(sessionId, runConfig.agentId ?? 'default');
       }
@@ -239,6 +242,9 @@ export class SessionAwareRunner {
       this.harness.sessionId = sessionId;
       this.harness.agentId = effectiveRunConfig.agentId ?? 'default';
 
+      // Token 估算器（当 LLM 不返回 usage 时用于回退估算）
+      const estimator = new HeuristicTokenEstimator();
+
       // 9. 运行 Agent（runAgentWithReliability 包装）
       let hasTurnEnd = false;
       let streamedContent = '';
@@ -255,6 +261,16 @@ export class SessionAwareRunner {
         // 适配事件格式（向后兼容）
         const adapted = adaptLoopEvent(loopEvent, meta, adaptState);
         if (adapted) {
+          // 捕获 usage 数据，并在 turn.end 事件中附加上下文信息（必须在 yield 之前，
+          // 否则 gateway 收到事件后立即广播，data 里还没有 context 字段）
+          if (adapted.type === 'turn.end') {
+            if (adapted.data?.usage) {
+              lastUsage = adapted.data.usage;
+            }
+            (adapted.data as Record<string, unknown>).contextTokens = lastUsage?.promptTokens ?? estimator.estimateMessages(session.messages);
+            (adapted.data as Record<string, unknown>).contextWindow = effectiveRunConfig.contextWindow;
+          }
+
           yield adapted;
           // 事件桥：循环事件同时广播到 EventBus
           // 跳过高频流式 delta（每 token 一次），避免 EventBus 拥塞
@@ -321,18 +337,18 @@ export class SessionAwareRunner {
       sm.transition('idle');
       session.meta.status = sm.state;
       session.meta.updatedAt = Date.now();
-      await this.store.save(sessionId, session);
+      await this.store.save(_agentId, sessionId, session);
 
     } catch (err) {
       // 引擎出错：状态机转到 error，持久化
       const sm = this.stateMachines.get(sessionId);
       if (sm?.canTransition('error')) {
         sm.transition('error');
-        const session = await this.store.load(sessionId);
+        const session = await this.store.load(_agentId, sessionId);
         if (session) {
           session.meta.status = sm.state;
           session.meta.updatedAt = Date.now();
-          await this.store.save(sessionId, session);
+          await this.store.save(_agentId, sessionId, session);
         }
       }
       throw err;

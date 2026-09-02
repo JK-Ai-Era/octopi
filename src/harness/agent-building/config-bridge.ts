@@ -14,8 +14,8 @@
  * ```
  */
 
-import type { HarnessConfig, ProviderConfig, AgentConfig, ContextEngineConfig } from '../../config.js';
-import { createProviderFromConfig, createStoreFromConfig } from '../../config.js';
+import type { HarnessConfig, AgentConfig, ContextEngineConfig, NormalizedModelInfo, ModelProviderConfig, NormalizedHarnessConfig } from '../../config.js';
+import { createProviderFromConfig, createStoreFromConfig, resolveModelConfig } from '../../config.js';
 import type { ModelProvider } from '../../core/interfaces/model-provider.js';
 import type { SessionStore } from '../../core/interfaces/session-store.js';
 import type { SessionData } from '../session-types.js';
@@ -48,17 +48,15 @@ export interface BuiltAgent {
  *
  * 返回 provider name → ModelProvider 的映射。
  */
-export async function resolveProviders(config: HarnessConfig): Promise<Map<string, ModelProvider>> {
+export async function resolveProviders(config: NormalizedHarnessConfig): Promise<Map<string, ModelProvider>> {
   const providers = new Map<string, ModelProvider>();
 
-  if (!config.providers) return providers;
-
-  for (const pc of config.providers) {
+  for (const [name, pc] of Object.entries(config.models?.providers ?? {})) {
     try {
-      const provider = await createProviderFromConfig(pc);
-      providers.set(pc.name, provider);
+      const provider = await createProviderFromConfig(name, pc as ModelProviderConfig);
+      providers.set(name, provider);
     } catch (err) {
-      console.warn(`[ConfigBridge] Failed to create provider "${pc.name}":`, err);
+      console.warn(`[ConfigBridge] Failed to create provider "${name}":`, err);
     }
   }
 
@@ -71,8 +69,9 @@ export async function resolveProviders(config: HarnessConfig): Promise<Map<strin
  * 从配置中创建 SessionStore 实例
  */
 export async function resolveStore(config: HarnessConfig): Promise<SessionStore<SessionData> | undefined> {
-  if (!config.store) return undefined;
-  return createStoreFromConfig(config.store);
+  const storeConfig = config.session?.store;
+  if (!storeConfig) return undefined;
+  return createStoreFromConfig(storeConfig);
 }
 
 // ── 安全配置解析 ──
@@ -178,7 +177,8 @@ export function resolveSupervisor(
  * @param config - 完整配置
  * @returns agent id → BuiltAgent 的映射
  */
-export async function buildFromConfig(config: HarnessConfig): Promise<Map<string, BuiltAgent>> {
+export async function buildFromConfig(config: NormalizedHarnessConfig): Promise<Map<string, BuiltAgent>> {
+  const flatModels: NormalizedModelInfo[] = config.flatModels ?? [];
   // 1. 解析共享资源
   const providers = await resolveProviders(config);
   const store = await resolveStore(config);
@@ -201,6 +201,7 @@ export async function buildFromConfig(config: HarnessConfig): Promise<Map<string
         budgetConfig,
         supervisorConfig,
         contextEngineConfig,
+        flatModels,
       });
       agents.set(agentConfig.id, built);
     } catch (err) {
@@ -221,37 +222,38 @@ async function buildAgent(
     providers: Map<string, ModelProvider>;
     store?: SessionStore<SessionData>;
     securityConfig?: SecurityGuardConfig;
-    distributedConfig?: import('../../config.js').HarnessConfig['distributedIntelligence'];
+    distributedConfig?: HarnessConfig['distributedIntelligence'];
     budgetConfig?: Partial<IterationBudgetConfig>;
     supervisorConfig?: SupervisorConfig;
     contextEngineConfig?: ContextEngineConfig;
+    flatModels: NormalizedModelInfo[];
   },
 ): Promise<BuiltAgent> {
   const builder = new AgentBuilder();
 
   // ── Model ──
-  const provider = shared.providers.get(agentConfig.model.provider);
+  const resolvedModel = resolveModelConfig(agentConfig.model, shared.flatModels);
+  const provider = shared.providers.get(resolvedModel.provider);
   if (!provider) {
     throw new Error(
-      `Agent "${agentConfig.id}" references unknown provider "${agentConfig.model.provider}". ` +
+      `Agent "${agentConfig.id}" references unknown provider "${resolvedModel.provider}". ` +
       `Available: ${Array.from(shared.providers.keys()).join(', ') || '(none)'}`
     );
   }
   builder.model(provider);
 
-  // ── Persona ──
+  // ── Home / Persona ──
+  // home 是 agent 的持久状态目录，persona 是其中的人格配置
+  const agentHome = agentConfig.home ?? (typeof agentConfig.persona === 'string' ? agentConfig.persona : undefined);
   if (agentConfig.persona) {
     if (typeof agentConfig.persona === 'string') {
-      // 文件式 persona：目录路径
+      // 文件式 persona：目录路径（已废弃，等价于 home）
       builder.persona(agentConfig.persona);
     }
     // 内联 persona 不需要 builder 处理——systemPrompt 会在 run() 时传入
-  }
-
-  // ── Workspace（作为 persona 目录的后备） ──
-  if (agentConfig.workspace && !agentConfig.persona) {
-    // 如果没有显式 persona，尝试从 workspace 加载
-    builder.persona(agentConfig.workspace);
+  } else if (agentHome) {
+    // 没有显式 persona，从 home 目录加载
+    builder.persona(agentHome);
   }
 
   // ── Store ──

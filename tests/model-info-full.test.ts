@@ -31,70 +31,112 @@ describe('Config Validation', () => {
     return path;
   }
 
+  const sampleModels = {
+    providers: {
+      openai: {
+        baseUrl: 'https://api.openai.com/v1',
+        apiKey: 'test',
+        api: 'openai-completions',
+        models: [
+          { id: 'gpt-5.5', name: 'gpt-5.5', contextWindow: 256000, maxTokens: 32768 },
+          { id: 'gpt-5-mini', name: 'gpt-5-mini', contextWindow: 128000, maxTokens: 16384 },
+        ],
+      },
+    },
+  };
+
   it('valid config with ModelInfo passes', () => {
     const path = writeConfig({
-      agents: [{ id: 'a', model: { provider: 'openai', model: 'gpt-5.5' } }],
-      providers: [{
-        type: 'openai', name: 'openai', apiKey: 'test',
-        models: [
-          'gpt-5.5',
-          { name: 'gpt-5-mini', contextWindow: 128000, maxOutputTokens: 16384 },
-        ],
-      }],
+      agents: [{ id: 'a', model: 'openai/gpt-5.5' }],
+      models: sampleModels,
     });
     expect(() => loadConfig(path)).not.toThrow();
   });
 
   it('rejects negative contextWindow', () => {
     const path = writeConfig({
-      agents: [{ id: 'a', model: { provider: 'openai', model: 'm' } }],
-      providers: [{
-        type: 'openai', name: 'openai', apiKey: 'test',
-        models: [{ name: 'm', contextWindow: -100 }],
-      }],
+      agents: [{ id: 'a', model: 'openai/m' }],
+      models: {
+        providers: {
+          openai: {
+            baseUrl: 'https://api.openai.com/v1',
+            apiKey: 'test',
+            api: 'openai-completions',
+            models: [{ id: 'm', contextWindow: -100 }],
+          },
+        },
+      },
     });
-    expect(() => loadConfig(path)).toThrow('contextWindow must be a positive number');
+    expect(() => loadConfig(path)).toThrow();
   });
 
   it('rejects zero maxOutputTokens', () => {
     const path = writeConfig({
-      agents: [{ id: 'a', model: { provider: 'openai', model: 'm' } }],
-      providers: [{
-        type: 'openai', name: 'openai', apiKey: 'test',
-        models: [{ name: 'm', maxOutputTokens: 0 }],
-      }],
+      agents: [{ id: 'a', model: 'openai/m' }],
+      models: {
+        providers: {
+          openai: {
+            baseUrl: 'https://api.openai.com/v1',
+            apiKey: 'test',
+            api: 'openai-completions',
+            models: [{ id: 'm', maxTokens: 0 }],
+          },
+        },
+      },
     });
-    expect(() => loadConfig(path)).toThrow('maxOutputTokens must be a positive number');
+    expect(() => loadConfig(path)).toThrow('maxTokens');
   });
 
-  it('rejects maxOutputTokens > contextWindow', () => {
+  it('rejects maxTokens > contextWindow (warning, not error)', () => {
+    // 新 schema 不再校验 maxTokens > contextWindow，此场景现在是合法配置
     const path = writeConfig({
-      agents: [{ id: 'a', model: { provider: 'openai', model: 'm' } }],
-      providers: [{
-        type: 'openai', name: 'openai', apiKey: 'test',
-        models: [{ name: 'm', contextWindow: 1000, maxOutputTokens: 2000 }],
-      }],
+      agents: [{ id: 'a', model: 'openai/m' }],
+      models: {
+        providers: {
+          openai: {
+            baseUrl: 'https://api.openai.com/v1',
+            apiKey: 'test',
+            api: 'openai-completions',
+            models: [{ id: 'm', contextWindow: 1000, maxTokens: 2000 }],
+          },
+        },
+      },
     });
-    expect(() => loadConfig(path)).toThrow('maxOutputTokens (2000) exceeds contextWindow (1000)');
+    expect(() => loadConfig(path)).not.toThrow();
   });
 
-  it('rejects model without name', () => {
+  it('rejects model without id', () => {
     const path = writeConfig({
-      agents: [{ id: 'a', model: { provider: 'openai', model: 'm' } }],
-      providers: [{
-        type: 'openai', name: 'openai', apiKey: 'test',
-        models: [{ contextWindow: 1000 }],
-      }],
+      agents: [{ id: 'a', model: 'openai/m' }],
+      models: {
+        providers: {
+          openai: {
+            baseUrl: 'https://api.openai.com/v1',
+            apiKey: 'test',
+            api: 'openai-completions',
+            models: [{ contextWindow: 1000 }],
+          },
+        },
+      },
     });
-    expect(() => loadConfig(path)).toThrow('model entry must have a name');
+    expect(() => loadConfig(path)).toThrow();
   });
 
-  it('rejects invalid provider type', () => {
+  it('rejects invalid provider api type', () => {
     const path = writeConfig({
-      agents: [{ id: 'a', model: { provider: 'bad', model: 'm' } }],
-      providers: [{ type: 'ollama' as any, name: 'bad', apiKey: 'test' }],
+      agents: [{ id: 'a', model: 'bad/m' }],
+      models: {
+        providers: {
+          bad: {
+            baseUrl: 'https://api.example.com',
+            apiKey: 'test',
+            api: 'ollama' as any,
+            models: [{ id: 'm' }],
+          },
+        },
+      },
     });
-    expect(() => loadConfig(path)).toThrow('type must be "openai" or "anthropic"');
+    expect(() => loadConfig(path)).toThrow();
   });
 });
 

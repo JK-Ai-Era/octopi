@@ -282,12 +282,16 @@ export class TuiApp {
         this.streamedContent = '';
         this.isProcessing = false;
 
-        // 更新 context 信息
-        const estimatedTokens = event.data?.estimatedTokens as number | undefined;
+        // 更新 context 信息（来自 runner 在 turn.end 事件中附带的 LLM usage）
+        const contextTokens = event.data?.contextTokens as number | undefined;
         const contextWindow = event.data?.contextWindow as number | undefined;
-        if (estimatedTokens !== undefined && contextWindow !== undefined) {
-          this.contextTokens = estimatedTokens;
+        if (contextTokens !== undefined) {
+          this.contextTokens = contextTokens;
+        }
+        if (contextWindow !== undefined) {
           this.contextWindow = contextWindow;
+        }
+        if (contextTokens !== undefined || contextWindow !== undefined) {
           this.updateFooter();
         }
 

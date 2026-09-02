@@ -14,8 +14,6 @@
 
 // ── 内存实现（保留向后兼容） ──
 export { InMemoryMemoryStore } from './store.js';
-export { FileWisdomStore } from './wisdom.js';
-export { FileProjectMemory } from './project-memory.js';
 export { InMemoryConceptGraph } from './cognition.js';
 export { ContextIntelligence } from './context-intelligence.js';
 export type { ContextIntelligenceConfig, AssembledContext } from './context-intelligence.js';

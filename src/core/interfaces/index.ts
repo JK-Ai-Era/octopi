@@ -154,5 +154,4 @@ export type {
   MemoryStats,
   WisdomStore,
   ConceptGraphStore,
-  ProjectMemory,
 } from './memory.js';

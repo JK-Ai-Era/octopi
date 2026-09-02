@@ -142,11 +142,19 @@ export { HttpChannelAdapter } from './integration/protocols/http.js';
 // Config
 // ============================================================
 
-export { loadConfig, toGatewayConfig, createProviderFromConfig, createStoreFromConfig } from './config.js';
+export {
+  loadConfig, toGatewayConfig, createProviderFromConfig, createStoreFromConfig,
+  resolveModelConfig, flattenModels,
+} from './config.js';
+export type {
+  ModelsConfig, ModelProviderConfig, ModelCapability, ModelInputType,
+  NormalizedHarnessConfig, NormalizedModelInfo, HarnessConfig, AgentConfig,
+  ChannelConfig, PluginConfig, StoreConfig, Defaults,
+} from './config.js';
 export { validateConfig, validateConfigOrThrow, HarnessConfigSchema } from './config-schema.js';
 export type { ConfigValidationResult, ConfigValidationError } from './config-schema.js';
 export { getBuiltinModelInfo, mergeWithBuiltinInfo } from './builtin-model-info.js';
-export type { HarnessConfig, AgentConfig, ProviderConfig, ChannelConfig, PluginConfig, StoreConfig } from './config.js';
+
 
 // ============================================================
 // Init

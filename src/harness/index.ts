@@ -33,6 +33,7 @@ export type { ReliabilityConfig, ConcreteReliabilityHarness } from './reliabilit
 export type { ReliabilityHarness } from '../core/interfaces/reliability.js';
 export { CircuitBreaker } from './reliability/circuit-breaker.js';
 export { wrapProviderWithCircuitBreaker } from './reliability/provider-wrapper.js';
+export { FallbackProvider } from './reliability/fallback-provider.js';
 
 // ── Plugin Ecosystem ──
 export { PluginManager } from './plugin-ecosystem/plugins/manager.js';
@@ -80,13 +81,13 @@ export { ResourceManager } from './resources/index.js';
 export type { TokenBudgetConfig, ModelPricing, RateLimitConfig, TokenCheckResult, RateLimitCheckResult, ResourceStats } from './resources/index.js';
 
 // ── Memory ──
-export { InMemoryMemoryStore, FileWisdomStore, FileProjectMemory, InMemoryConceptGraph, ContextIntelligence, AgentDatabase, SqliteMemoryStore, SqliteWisdomStore, SqliteConceptGraph, KnowledgeRegistry, createEmbeddingProvider } from './memory/index.js';
+export { InMemoryMemoryStore, InMemoryConceptGraph, ContextIntelligence, AgentDatabase, SqliteMemoryStore, SqliteWisdomStore, SqliteConceptGraph, KnowledgeRegistry, createEmbeddingProvider } from './memory/index.js';
 export type { ContextIntelligenceConfig, AssembledContext, AgentDatabaseOptions, SqliteMemoryStoreOptions, SqliteConceptGraphOptions, EmbeddingProvider, EmbeddingConfig, KnowledgeSourceEntry } from './memory/index.js';
 
 // ── Memory 领域类型 ──
 export type { MemoryType, MemoryEntry, MemoryQuery, MemoryStats, MemoryStore } from './memory/types.js';
 export type { WisdomEntry, WisdomStore } from './memory/wisdom-types.js';
-export type { ConceptNode, ConceptEdge, ConceptGraph, ConceptGraphStore, ProjectMemory } from './memory/cognition-types.js';
+export type { ConceptNode, ConceptEdge, ConceptGraph, ConceptGraphStore } from './memory/cognition-types.js';
 
 // ── Session 类型 ──
 export type { SessionData, SessionLifecycleMeta, SessionLifecycleStatus, MemoryExtractionStatus } from './session-types.js';

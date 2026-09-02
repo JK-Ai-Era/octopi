@@ -51,9 +51,9 @@ describe('SqliteSessionStore lifecycle', () => {
 
   it('should save session with default lifecycle', async () => {
     const data = createTestSession('s1');
-    await store.save('s1', data);
+    await store.save('agent-1', 's1', data);
 
-    const loaded = await store.load('s1');
+    const loaded = await store.load('agent-1', 's1');
     expect(loaded).toBeTruthy();
     expect(loaded!.lifecycle).toBeTruthy();
     expect(loaded!.lifecycle!.lifecycle).toBe('active');
@@ -61,29 +61,29 @@ describe('SqliteSessionStore lifecycle', () => {
   });
 
   it('should mark session ended', async () => {
-    await store.save('s1', createTestSession('s1'));
+    await store.save('agent-1', 's1', createTestSession('s1'));
     await store.markEnded('s1');
 
-    const loaded = await store.load('s1');
+    const loaded = await store.load('agent-1', 's1');
     expect(loaded!.lifecycle!.lifecycle).toBe('recent');
     expect(loaded!.lifecycle!.endedAt).toBeTruthy();
   });
 
   it('should update lifecycle', async () => {
-    await store.save('s1', createTestSession('s1'));
+    await store.save('agent-1', 's1', createTestSession('s1'));
     await store.updateLifecycle!('s1', {
       lifecycle: 'extracted',
       memoryExtraction: 'completed',
     });
 
-    const loaded = await store.load('s1');
+    const loaded = await store.load('agent-1', 's1');
     expect(loaded!.lifecycle!.lifecycle).toBe('extracted');
     expect(loaded!.lifecycle!.memoryExtraction).toBe('completed');
   });
 
   it('should list by lifecycle status', async () => {
-    await store.save('s1', createTestSession('s1'));
-    await store.save('s2', createTestSession('s2'));
+    await store.save('agent-1', 's1', createTestSession('s1'));
+    await store.save('agent-1', 's2', createTestSession('s2'));
     await store.markEnded('s1');
 
     const active = await store.listByLifecycle!('agent-1', 'active');
@@ -120,7 +120,7 @@ describe('SessionArchiveManager', () => {
   });
 
   it('should archive completed sessions', async () => {
-    await store.save('s1', createTestSession('s1'));
+    await store.save('agent-1', 's1', createTestSession('s1'));
 
     // 标记结束
     await store.markEnded('s1');
@@ -135,7 +135,7 @@ describe('SessionArchiveManager', () => {
     expect(archived).toBe(1);
 
     // session 应该从 sessions.db 中删除
-    const loaded = await store.load('s1');
+    const loaded = await store.load('agent-1', 's1');
     expect(loaded).toBeNull();
 
     // 应该可以从归档中查询到
@@ -145,7 +145,7 @@ describe('SessionArchiveManager', () => {
   });
 
   it('should force archive expired sessions', async () => {
-    await store.save('s1', createTestSession('s1'));
+    await store.save('agent-1', 's1', createTestSession('s1'));
 
     // 标记结束，但 memory 提取未完成
     await store.markEnded('s1');
@@ -172,7 +172,7 @@ describe('SessionArchiveManager', () => {
       recentRetentionDays: 30,
     });
 
-    await store.save('s1', createTestSession('s1'));
+    await store.save('agent-1', 's1', createTestSession('s1'));
     await store.markEnded('s1');
     await store.updateLifecycle!('s1', { memoryExtraction: 'completed' });
 
@@ -182,8 +182,8 @@ describe('SessionArchiveManager', () => {
   });
 
   it('should list archived sessions', async () => {
-    await store.save('s1', createTestSession('s1', 'agent-1'));
-    await store.save('s2', createTestSession('s2', 'agent-2'));
+    await store.save('agent-1', 's1', createTestSession('s1', 'agent-1'));
+    await store.save('agent-1', 's2', createTestSession('s2', 'agent-2'));
 
     await store.markEnded('s1');
     await store.markEnded('s2');

@@ -20,8 +20,6 @@ import { getTextContent } from '../../core/types/messages.js';
 
 /** ContextIntelligence 配置 */
 export interface ContextIntelligenceConfig {
-  /** Wisdom 文件路径 */
-  wisdomPath?: string;
   /** 是否启用认知图谱 */
   enableCognition?: boolean;
   /** 记忆注入的最大条数 */

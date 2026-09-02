@@ -28,5 +28,4 @@ export type {
   ConceptEdge,
   ConceptGraph,
   ConceptGraphStore,
-  ProjectMemory,
 } from '../../harness/memory/cognition-types.js';
