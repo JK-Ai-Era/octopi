@@ -49,11 +49,19 @@ function estimateConversationTokens(items: ConversationItem[]): number {
   return total;
 }
 
-function formatTime(ts: number | undefined | null): string {
+function formatTimestamp(ts: number | undefined | null): string {
   if (!ts || typeof ts !== 'number' || isNaN(ts)) return '';
   const d = new Date(ts);
   if (isNaN(d.getTime())) return '';
-  return d.toLocaleTimeString();
+  const now = new Date();
+  const isToday = d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
+  const time = d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  if (isToday) return time;
+  const isSameYear = d.getFullYear() === now.getFullYear();
+  const dateStr = isSameYear
+    ? d.toLocaleDateString(undefined, { month: '2-digit', day: '2-digit' })
+    : d.toLocaleDateString(undefined, { year: 'numeric', month: '2-digit', day: '2-digit' });
+  return `${dateStr} ${time}`;
 }
 
 // ── Tool Card (shared between conversation and timeline) ──
@@ -176,7 +184,7 @@ function ConversationItemCard({ item }: { item: ConversationItem }) {
             <span>助手</span>
             {a.status === 'streaming' && <span className="status-ok">· 流式输出中</span>}
             {a.status === 'error' && <span className="status-error">· 错误</span>}
-            {formatTime(a.createdAt) && <span className="muted">{formatTime(a.createdAt)}</span>}
+            {formatTimestamp(a.createdAt) && <span className="muted">{formatTimestamp(a.createdAt)}</span>}
           </div>
           <div className="panel msg-assistant-body" style={{ borderColor }}>
             <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{a.content || '(空)'}</pre>
@@ -199,7 +207,7 @@ function ConversationItemCard({ item }: { item: ConversationItem }) {
           <div className={`msg-system-inner ${variant}`}>
             <strong>{s.kind}</strong>
             <span className="muted">{s.message}</span>
-            {formatTime(s.createdAt) && <span className="muted" style={{ marginLeft: 6 }}>{formatTime(s.createdAt)}</span>}
+            {formatTimestamp(s.createdAt) && <span className="muted" style={{ marginLeft: 6 }}>{formatTimestamp(s.createdAt)}</span>}
           </div>
         </div>
       );
@@ -466,7 +474,7 @@ export default function ChatWorkspace() {
                   onClick={() => openSession(s.id)}
                 >
                   <div style={{ fontWeight: 600 }}>{s.id}</div>
-                  <div className="small muted">{s.agentId} · {formatTime(s.lastInteractionAt)}</div>
+                  <div className="small muted">{s.agentId} · {formatTimestamp(s.lastInteractionAt)}</div>
                 </button>
               ))}
               {!agentSessions.length && <div className="small muted">暂无历史会话</div>}
