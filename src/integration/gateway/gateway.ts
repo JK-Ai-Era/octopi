@@ -564,7 +564,8 @@ export class Gateway {
     // 使用 AgentBuilder 构建
     const builder = new (await import('../../harness/agent-building/builder.js')).AgentBuilder()
       .model(finalProvider)
-      .store(this.store);
+      .store(this.store)
+      .workspace(agent.workspace ?? '');
 
     // 注册工具
     for (const tool of this.tools) {

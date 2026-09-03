@@ -1,3 +1,21 @@
+## v0.10.2 (2026-09-03)
+
+### fix: serve 命令工具 cwd 不应依赖进程工作目录
+
+修复 `octopi serve start/restart` 时内置工具（shell、file_read、file_write、file_list）的 cwd 回退到 `process.cwd()`（即执行 CLI 命令的目录），而非 agent 配置中声明的 workspace。
+
+#### 修复
+
+- **fix(builder): convertToAgentTool 注入 agent workspace 作为 cwd** — AgentBuilder 新增 `workspace(dir)` 方法，工具转换时将 workspace 透传到 ToolExecutionContext.cwd，消除对 process.cwd() 的隐式依赖
+- **fix(gateway): buildAgent 调用 builder.workspace(agent.workspace)** — Gateway 构建 Agent 时显式注入配置中的 workspace 路径
+- **fix(config-bridge): buildAgent 调用 builder.workspace(agentConfig.workspace)** — ConfigBridge 路径同步修复，确保 config 驱动的初始化也注入 workspace
+
+#### 影响范围
+
+- 内置工具（shell / file_read / file_write / file_list）：相对路径解析从 agent workspace 而非 CLI 执行目录
+- ProcessSandbox：cwd 回退路径不变（sandbox 本身不修改）
+- 分布式智能体安全守卫：cwd 已独立设置，不受影响
+
 ## v0.10.1 (2026-09-03)
 
 ### fix: 多处数据正确性与一致性修复

@@ -242,6 +242,11 @@ async function buildAgent(
   }
   builder.model(provider);
 
+  // ── Workspace ──
+  if (agentConfig.workspace) {
+    builder.workspace(agentConfig.workspace);
+  }
+
   // ── Home / Persona ──
   // home 是 agent 的持久状态目录，persona 是其中的人格配置
   const agentHome = agentConfig.home ?? (typeof agentConfig.persona === 'string' ? agentConfig.persona : undefined);

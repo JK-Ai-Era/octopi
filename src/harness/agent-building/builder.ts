@@ -130,7 +130,7 @@ class DefaultErrorStrategy implements ErrorStrategy {
 /**
  * 将 RegisteredTool 转换为 AgentTool（新循环格式）
  */
-function convertToAgentTool(tool: RegisteredTool): LoopAgentTool {
+function convertToAgentTool(tool: RegisteredTool, cwd?: string): LoopAgentTool {
   return {
     name: tool.definition.name,
     description: tool.definition.description,
@@ -149,7 +149,7 @@ function convertToAgentTool(tool: RegisteredTool): LoopAgentTool {
     execute: async (toolCallId: string, args: unknown, signal?: AbortSignal) => {
       const startTime = Date.now();
       try {
-        const result = await tool.handler(args as Record<string, unknown>, { timeoutMs: 30_000, signal } as any);
+        const result = await tool.handler(args as Record<string, unknown>, { timeoutMs: 30_000, signal, cwd } as any);
         return {
           toolCallId,
           name: tool.definition.name,
@@ -243,6 +243,8 @@ export class AgentBuilder {
 
   // 并发控制配置
   private _concurrencyConfig?: import('../../config.js').HarnessConfig['concurrency'];
+  /** Agent 沙箱工作目录（工具 cwd 注入） */
+  private _workspace?: string;
 
   // ── Core 组件 ──
 
@@ -470,6 +472,12 @@ export class AgentBuilder {
     return this;
   }
 
+  /** 设置 Agent 沙箱工作目录（注入到内置工具的 cwd） */
+  workspace(dir: string): this {
+    this._workspace = dir;
+    return this;
+  }
+
   /** 直接设置 systemPrompt（优先于 persona 目录） */
   systemPrompt(prompt: string): this {
     this._systemPrompt = prompt;
@@ -586,7 +594,7 @@ export class AgentBuilder {
     const mcpManager = await this.buildMcpManager();
 
     // 转换 RegisteredTool → AgentTool
-    const agentTools: LoopAgentTool[] = Array.from(this._tools.values()).map(t => convertToAgentTool(t));
+    const agentTools: LoopAgentTool[] = Array.from(this._tools.values()).map(t => convertToAgentTool(t, this._workspace));
 
     // 创建 Agent
     const agentOptions: AgentOptions = {
