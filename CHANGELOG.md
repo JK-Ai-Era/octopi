@@ -1,3 +1,15 @@
+## v0.10.4 (2026-09-04)
+
+### refactor: 自主子系统类型与接口层
+
+新增 `autonomous-subsystem` 模块的类型定义和校验层，为从"分布式智能体"到"自主子系统"的架构重构奠定基础。
+
+#### 新增
+
+- **feat(harness): SubsystemSpec 五维模型类型定义** — Sense / Think / Act / Signal / Boundary 的完整 TypeScript 类型，包含 SignalAction 严格枚举、SenseConfig、ThinkConfig、ActConfig、SignalConfig、BoundaryConfig、ToolConfig、SessionConfig、LifecycleConfig、SubsystemInput/Output、SubsystemRun 审计结构、ModelLevelMap
+- **feat(harness): BoundaryValidator 规格校验器** — 校验 act.mode 与 boundary.authority 一致性、condition/conditionRef 互斥、think.implementation 与必填字段关系、tools 配置完整性
+- **test: BoundaryValidator 单元测试** — 15 个测试覆盖所有校验规则
+
 ## v0.10.3 (2026-09-04)
 
 ### fix: Web UI 时间显示补充日期
