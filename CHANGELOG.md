@@ -1,3 +1,16 @@
+## v0.10.5 (2026-09-04)
+
+### refactor: Sense 引擎实现
+
+实现自主子系统的感知引擎，替代旧的 TriggerEngine。支持 condition 表达式评估、冷却期机制、三层循环防护。
+
+#### 新增
+
+- **feat(harness): MetricsStore** — 指标存储，供 condition 表达式引用。支持 update / increment / snapshot / reset
+- **feat(harness): SenseEngine** — 感知引擎，替代旧 TriggerEngine。支持事件驱动触发、condition 声明式表达式编译与评估（如 `turn.count % 10 === 0`）、冷却期机制（EventBus 触发不可穿透，API 触发可穿透）、三层循环防护（静态分析 + 深度限制 + 冷却期）
+- **test: MetricsStore 单元测试** — 8 个测试
+- **test: SenseEngine 单元测试** — 14 个测试覆盖事件触发、condition 评估、冷却期、深度限制、多子系统
+
 ## v0.10.4 (2026-09-04)
 
 ### refactor: 自主子系统类型与接口层

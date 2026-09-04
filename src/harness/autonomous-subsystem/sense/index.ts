@@ -1,1 +1,3 @@
-// TODO: SenseEngine — 阶段 2 实现
+export { SenseEngine } from './engine.js';
+export type { SenseEngineConfig } from './engine.js';
+export { MetricsStore } from './metrics.js';
