@@ -275,24 +275,51 @@ harness/plugin-ecosystem/
 └── index.ts
 ```
 
-### 3.9 Distributed Agents — 分布式智能体
+### 3.9 Autonomous Subsystem — 自主子系统
 
-**职责**：多 Agent 协作、分布式运行时、Agent 注册与发现。
+**职责**：独立于主 Agent 循环之外，为解决特定问题而自主运行的子系统框架。
+五维模型：Sense + Think + Act + Signal + Boundary。
 
 ```
-harness/distributed-agents/
-├── runtime.ts            # AgentRuntime — 分布式核心运行时
-├── spec.ts               # DistributedAgentSpec
-├── trigger.ts            # TriggerEngine
-├── input-policy.ts       # 输入策略
-├── output-policy.ts      # 输出策略
-├── execution.ts          # 三种执行模式
-├── audit-trail.ts        # 审计追踪
-├── registry.ts           # DefaultAgentRegistry
-├── swarm.ts              # AgentSwarm — 多 Agent 编排
-├── process.ts            # AgentProcess
-├── types.ts
+harness/autonomous-subsystem/
+├── types.ts              # 五维模型完整类型定义
+├── loader.ts             # 子系统目录加载器
+├── runtime.ts            # SubsystemRuntime — 核心运行时
+├── sense/
+│   ├── engine.ts         # SenseEngine（condition 表达式、冷却期、深度限制）
+│   ├── metrics.ts        # MetricsStore
+│   └── input-builder.ts  # 输入构建器
+├── think/
+│   ├── executor.ts       # ThinkExecutor（code/llm/hybrid）
+│   └── model-resolver.ts # ModelResolver（models.level + fallback）
+├── signal/
+│   └── bus.ts            # SignalBus（四通道投递）
+├── session/
+│   └── manager.ts        # SubsystemSessionManager
+├── audit/
+│   ├── writer.ts         # AuditWriter
+│   └── reader.ts         # AuditReader
+├── boundary/
+│   └── validator.ts      # BoundaryValidator
 └── index.ts
+```
+
+子系统定义目录（可来自框架内置、用户自定义、npm 包）：
+```
+subsystems/
+├── safety-guard/
+│   ├── SUBSYSTEM.md
+│   └── config.yaml
+└── ...
+```
+
+**Multi-Agent 编排**（Worker/编排，独立于自主子系统）：
+```
+harness/distributed-agents/multi-agent/
+├── registry.ts           # DefaultAgentRegistry
+├── swarm.ts              # AgentSwarm
+├── process.ts            # AgentProcess
+└── types.ts
 ```
 
 ### 3.10 Task System — 任务与编排
@@ -459,8 +486,9 @@ const { agent, harness, runner } = await new AgentBuilder()
   // 可观测性
   .trace({ captureToolArgs: true })
 
-  // 分布式智能体
-  .withDistributedAgent(myAgentSpec)
+  // 自主子系统
+  .withSubsystem(mySubsystemSpec)
+  .withSubsystemDir('subsystems/')
 
   // Session
   .store(mySessionStore)

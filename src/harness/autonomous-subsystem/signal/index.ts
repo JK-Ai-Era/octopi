@@ -1,1 +1,2 @@
-// TODO: SignalBus + Channels — 阶段 4 实现
+export { SignalBus } from './bus.js';
+export type { SignalBusConfig, SignalEntry, ContextInjection } from './bus.js';

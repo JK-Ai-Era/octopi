@@ -1,3 +1,37 @@
+## v0.11.0 (2026-09-05)
+
+### refactor: 自主子系统架构重构
+
+将"分布式智能体"体系重构为"自主子系统"框架。五维模型：Sense + Think + Act + Signal + Boundary。
+
+#### 新增
+
+- **feat(harness): autonomous-subsystem 模块** — 完整的自主子系统框架，包含 20 个源文件
+  - types.ts — 五维模型完整类型定义（SignalAction 枚举、Sense/Think/Act/Signal/Boundary 配置、SubsystemSpec、SubsystemRun 审计结构）
+  - sense/ — SenseEngine（condition 表达式编译、冷却期、深度限制）+ MetricsStore + InputBuilder
+  - think/ — ThinkExecutor（code/llm/hybrid 三种执行模式，工具执行真正可用）+ ModelResolver（models.level 解析 + primary/fallback 降级链）
+  - signal/ — SignalBus（context/steering/event/escalate 四通道投递，信号优先级排序）
+  - session/ — SubsystemSessionManager（ephemeral/persistent × global/agent/session 三级隔离）
+  - audit/ — AuditWriter（JSONL 持久化）+ AuditReader（过滤查询）
+  - boundary/ — BoundaryValidator（act.mode 与 authority 交叉校验、condition/conditionRef 互斥）
+  - loader.ts — 子系统目录加载器（三级搜索路径、config.yaml + SUBSYSTEM.md 解析、handler.ts 动态 import）
+  - runtime.ts — SubsystemRuntime 核心运行时
+- **feat: subsystems/safety-guard/** — 安全守卫子系统目录定义（SUBSYSTEM.md + config.yaml），从代码定义迁移为声明式配置
+- **test: 12 个新测试文件** — 覆盖 MetricsStore、SenseEngine、ModelResolver、SignalBus、SessionManager、AuditWriter/Reader、BoundaryValidator、SubsystemLoader、SubsystemRuntime、安全守卫加载
+
+#### 变更
+
+- **refactor(builder): withDistributedAgent → withSubsystem** — Builder 使用 SubsystemRuntime 替代 AgentRuntime，支持 withSubsystem()、withSubsystemDir()、withSubsystemAuditDir()
+- **refactor(runner): setDistributedRuntime → setSubsystemRuntime** — Runner 使用 SubsystemRuntime，自动注入 turn.count 指标
+- **refactor(harness/index): 更新导出** — 添加 autonomous-subsystem 模块导出
+
+#### 移除
+
+- **删除 distributed-agents/distributed/** — 旧的 10 个分布式智能体源文件（AgentRuntime、DistributedAgentSpec、TriggerEngine、InputPolicy、OutputPolicy 等）
+- **删除 safety-agent-spec.ts** — 旧的安全守卫代码定义
+- **删除 14 个旧测试文件** — tests/distributed/（6 个）、tests/harness/distributed/（6 个）、安全集成测试（2 个）
+- **保留 distributed-agents/multi-agent/** — Worker/编排模块不属于本次重构范畴
+
 ## v0.10.5 (2026-09-04)
 
 ### refactor: Sense 引擎实现

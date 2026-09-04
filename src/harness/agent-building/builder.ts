@@ -234,9 +234,11 @@ export class AgentBuilder {
   // MCP 配置
   private _mcpConfigs: import('../../core/interfaces/mcp-client.js').McpServerConfig[] = [];
 
-  // 分布式智能体配置
-  private _distributedAgentSpecs: import('../distributed-agents/distributed/spec.js').DistributedAgentSpec[] = [];
-  private _distributedAuditDir?: string;
+  // 分布式智能体配置（旧，待移除）
+  // 自主子系统配置
+  private _subsystemSpecs: import('../autonomous-subsystem/types.js').SubsystemSpec[] = [];
+  private _subsystemAuditDir?: string;
+  private _subsystemDir?: string;
 
   // 注册的 named providers（用于 ProviderPool）
   private _namedProviders = new Map<string, ModelProvider>();
@@ -304,15 +306,21 @@ export class AgentBuilder {
     return this;
   }
 
-  /** 注册分布式智能体 */
-  withDistributedAgent(spec: import('../distributed-agents/distributed/spec.js').DistributedAgentSpec): this {
-    this._distributedAgentSpecs.push(spec);
+  /** 注册自主子系统 */
+  withSubsystem(spec: import('../autonomous-subsystem/types.js').SubsystemSpec): this {
+    this._subsystemSpecs.push(spec);
     return this;
   }
 
-  /** 设置分布式智能体审计日志目录 */
-  withDistributedAuditDir(dir: string): this {
-    this._distributedAuditDir = dir;
+  /** 设置子系统目录（用于自动加载） */
+  withSubsystemDir(dir: string): this {
+    this._subsystemDir = dir;
+    return this;
+  }
+
+  /** 设置子系统审计日志目录 */
+  withSubsystemAuditDir(dir: string): this {
+    this._subsystemAuditDir = dir;
     return this;
   }
 
@@ -357,7 +365,7 @@ export class AgentBuilder {
    *
    * 自动注入：
    * 1. DefaultToolCallRiskPolicy（规则引擎）→ Core SecurityGuard
-   * 2. SafetyGuard DistributedAgentSpec（LLM 安全智能体）→ AgentRuntime
+   * 2. SafetyGuard 子系统 → SubsystemRuntime
    *
    * @param config.cwd - 工作目录（用于路径风险分类）
    * @param config.model - 安全智能体的模型覆盖（默认用主 Agent 模型）
@@ -505,7 +513,7 @@ export class AgentBuilder {
    *
    * 使用新架构：Agent 类 + runAgentWithReliability 可靠性包装。
    */
-  async build(): Promise<{ agent: Agent; harness: ReliabilityHarness; runner: SessionAwareRunner; mcpManager: McpManager; runtime?: import('../distributed-agents/distributed/runtime.js').AgentRuntime; events: EventBus }> {
+  async build(): Promise<{ agent: Agent; harness: ReliabilityHarness; runner: SessionAwareRunner; mcpManager: McpManager; runtime?: import('../autonomous-subsystem/runtime.js').SubsystemRuntime;  events: EventBus }> {
     const events = this._events ?? new DefaultEventBus();
     this._events = events;
 
@@ -531,34 +539,41 @@ export class AgentBuilder {
     // 使用 buildAgent() 构建核心组件
     const { agent, harness, mcpManager } = await this.buildAgent();
 
-    // 创建 AgentRuntime（如果有分布式智能体）
-    let runtime: import('../distributed-agents/distributed/runtime.js').AgentRuntime | undefined;
-    if (this._distributedAgentSpecs.length > 0) {
-      const { AgentRuntime } = await import('../distributed-agents/distributed/runtime.js');
-      runtime = new AgentRuntime({
-        deps: {
-          model: agent.model,
-          events,
-          errorStrategy: this._errorStrategy ?? new DefaultErrorStrategy(),
-          observer: this._observer,
-          mainTools: this._tools,
-        },
-        auditDir: this._distributedAuditDir,
-      });
-      for (const spec of this._distributedAgentSpecs) {
-        runtime.register(spec);
-      }
-      // Agent 新架构：beforeToolCall 已在 buildAgent() 中设置
-      // 分布式运行时的 intercept 通过 harness 的 beforeToolCall 链处理
-      harness.agentId = this._runnerConfig?.taskDecisionProvider ? undefined : 'default';
-    }
 
     // 创建 SessionStore + Runner
     const store = this._store ?? new InMemorySessionStore();
     const runner = new SessionAwareRunner(agent, harness, store, { ...this._runnerConfig, events });
-    if (runtime) runner.setDistributedRuntime(runtime);
 
-    return { agent, harness, runner, mcpManager, runtime, events };
+    // 创建 SubsystemRuntime（如果有自主子系统）
+    let subsystemRuntime: import('../autonomous-subsystem/runtime.js').SubsystemRuntime | undefined;
+    if (this._subsystemSpecs.length > 0 || this._subsystemDir) {
+      const { SubsystemRuntime } = await import('../autonomous-subsystem/runtime.js');
+      subsystemRuntime = new SubsystemRuntime({
+        deps: {
+          model: agent.model,
+          events,
+          errorStrategy: this._errorStrategy ?? new DefaultErrorStrategy(),
+          mainTools: this._tools,
+        },
+        auditDir: this._subsystemAuditDir,
+      });
+      // 注册代码中定义的子系统
+      for (const spec of this._subsystemSpecs) {
+        subsystemRuntime.register(spec);
+      }
+      // 从目录加载子系统
+      if (this._subsystemDir) {
+        const { SubsystemLoader } = await import('../autonomous-subsystem/loader.js');
+        const loader = new SubsystemLoader({ builtinDir: this._subsystemDir });
+        const loadResult = await loader.loadAll();
+        for (const spec of loadResult.specs) {
+          subsystemRuntime.register(spec);
+        }
+      }
+      runner.setSubsystemRuntime(subsystemRuntime);
+    }
+
+    return { agent, harness, runner, mcpManager, runtime: subsystemRuntime, events };
   }
 
   /**

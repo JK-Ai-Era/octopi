@@ -1,1 +1,2 @@
-// TODO: SubsystemSessionManager — 阶段 5 实现
+export { SubsystemSessionManager, parseTTL } from './manager.js';
+export type { SubsystemSession } from './manager.js';

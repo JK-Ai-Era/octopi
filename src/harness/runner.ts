@@ -133,8 +133,9 @@ export class SessionAwareRunner {
   private config: SessionAwareRunnerConfig;
   /** Session 状态机缓存 */
   private stateMachines = new Map<string, StateMachine<SessionStatus>>();
-  /** 分布式智能体运行时（可选） */
-  private _distributedRuntime?: import('./distributed-agents/distributed/runtime.js').AgentRuntime;
+  /** 分布式智能体运行时（旧，待移除） */
+  /** 自主子系统运行时 */
+  private _subsystemRuntime?: import('./autonomous-subsystem/runtime.js').SubsystemRuntime;
   /** EventBus 引用（用于分布式智能体上下文） */
   private _events?: import('../core/primitives/event-bus.js').EventBus;
 
@@ -146,9 +147,9 @@ export class SessionAwareRunner {
     this._events = config?.events;
   }
 
-  /** 设置分布式智能体运行时 */
-  setDistributedRuntime(runtime: import('./distributed-agents/distributed/runtime.js').AgentRuntime): void {
-    this._distributedRuntime = runtime;
+  /** 设置自主子系统运行时 */
+  setSubsystemRuntime(runtime: import('./autonomous-subsystem/runtime.js').SubsystemRuntime): void {
+    this._subsystemRuntime = runtime;
   }
 
   /**
@@ -217,16 +218,18 @@ export class SessionAwareRunner {
         }
       }
 
-      // 7. 应用分布式智能体的待处理注入
-      if (this._distributedRuntime) {
+      // 7. 应用自主子系统的待处理注入
+      if (this._subsystemRuntime) {
         if (this._events) {
-          this._distributedRuntime.setMainAgentContext({
+          this._subsystemRuntime.setMainAgentContext({
             messages: session.messages,
             runConfig: effectiveRunConfig,
             events: this._events,
           });
+          // 注入指标
+          this._subsystemRuntime.metrics.update('turn.count', session.messages.filter(m => m.role === 'assistant').length);
         }
-        this._distributedRuntime.applyPendingInjections(session.messages);
+        this._subsystemRuntime.applyPendingInjections(session.messages);
       }
 
       // 8. 同步 session 消息到 Agent 上下文

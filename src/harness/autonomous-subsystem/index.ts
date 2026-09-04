@@ -79,3 +79,27 @@ export { SIGNAL_PRIORITY } from './types.js';
 // ── Boundary ──
 export { validateSubsystemSpec } from './boundary/index.js';
 export type { ValidationError } from './boundary/index.js';
+
+// ── Runtime ──
+export { SubsystemRuntime } from './runtime.js';
+export type { SharedDeps, SubsystemRuntimeConfig } from './runtime.js';
+
+// ── Sense ──
+export { SenseEngine, MetricsStore } from './sense/index.js';
+export { buildAgentInput } from './sense/input-builder.js';
+
+// ── Think ──
+export { ThinkExecutor, ModelResolver } from './think/index.js';
+
+// ── Signal ──
+export { SignalBus } from './signal/index.js';
+
+// ── Session ──
+export { SubsystemSessionManager, parseTTL } from './session/index.js';
+
+// ── Audit ──
+export { AuditWriter, AuditReader } from './audit/index.js';
+
+// ── Loader ──
+export { SubsystemLoader } from './loader.js';
+export type { SubsystemLoaderConfig, LoadResult } from './loader.js';

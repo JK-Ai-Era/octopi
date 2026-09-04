@@ -1,7 +1,7 @@
 /**
- * Distributed Agents 领域 — 分布式智能体
+ * Distributed Agents — Multi-Agent 编排
  *
- * 职责：多 Agent 协作、分布式运行时、Agent 注册与发现。
+ * Worker/编排模块，不属于自主子系统范畴。
+ * AgentSwarm、AgentProcess、DefaultAgentRegistry 等。
  */
-export * from './distributed/index.js';
 export * from './multi-agent/index.js';

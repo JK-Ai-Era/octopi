@@ -1,0 +1,40 @@
+id: safety-guard
+name: Safety Guard
+description: 处理规则引擎无法判断的灰色地带，利用 LLM 的语义理解能力做风险判断
+
+sense:
+  source: eventBus
+  filter:
+    events: ['tool_call.risk_unknown']
+  isolation: structured
+
+think:
+  implementation: llm
+  strategy: heuristic
+  model: mini
+  maxIterations: 1
+
+act:
+  mode: block
+
+signal:
+  severity: advisory
+  channel: [event]
+
+boundary:
+  visibility: structured
+  authority: act
+  security: sandboxed
+
+tools:
+  mode: none
+
+session:
+  mode: ephemeral
+  scope: session
+
+lifecycle:
+  maxDurationMs: 15000
+  maxConcurrent: 1
+  degradeOn: timeout
+  onError: warn

@@ -56,6 +56,18 @@ export type { McpClientFactory, McpManagerCallbacks } from './plugin-ecosystem/m
 export { DefaultAgentRegistry, AgentSwarm, RoundRobinStrategy, CapabilityStrategy, PipelineStrategy, SwarmEvents, AgentProcess, spawnAgentProcess, forkAgentProcess, AgentProcessEvents } from './distributed-agents/index.js';
 export type { SwarmTopology, SwarmConfig, SwarmAgent, SwarmTask, OrchestrationStrategy, AgentProcessState, AgentProcessResult, AgentProcessAnnounce, AgentProcessConfig } from './distributed-agents/index.js';
 
+// ── Autonomous Subsystem ──
+export { SubsystemRuntime } from './autonomous-subsystem/runtime.js';
+export type { SharedDeps, SubsystemRuntimeConfig } from './autonomous-subsystem/runtime.js';
+export { SubsystemLoader } from './autonomous-subsystem/loader.js';
+export type { SubsystemLoaderConfig, LoadResult } from './autonomous-subsystem/loader.js';
+export { SenseEngine, MetricsStore } from './autonomous-subsystem/sense/index.js';
+export { ThinkExecutor, ModelResolver } from './autonomous-subsystem/think/index.js';
+export { SignalBus } from './autonomous-subsystem/signal/index.js';
+export { SubsystemSessionManager, parseTTL } from './autonomous-subsystem/session/index.js';
+export { AuditWriter, AuditReader } from './autonomous-subsystem/audit/index.js';
+export { validateSubsystemSpec } from './autonomous-subsystem/boundary/index.js';
+
 // ── Task System ──
 export { TaskTracker, TaskManager, applyDecision, DefaultTaskDecisionProvider } from './task-system/tasks/index.js';
 export type { Task, TaskDecision, TaskDecisionInput, DefaultTaskDecisionProviderConfig } from './task-system/tasks/index.js';

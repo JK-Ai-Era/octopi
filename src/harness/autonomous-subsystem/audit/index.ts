@@ -1,1 +1,4 @@
-// TODO: AuditWriter + AuditReader — 阶段 5 实现
+export { AuditWriter } from './writer.js';
+export type { AuditWriterConfig } from './writer.js';
+export { AuditReader } from './reader.js';
+export type { AuditQuery, AuditReaderConfig } from './reader.js';
