@@ -36,6 +36,10 @@ export class MemoryExtractorBridge {
   private subsystemId: string;
   private options?: MemoryExtractorBridgeOptions;
 
+  private emit(type: string, data: Record<string, unknown>): void {
+    this.events.emit({ type, timestamp: Date.now(), data });
+  }
+
   constructor(events: EventBus, runtime: SubsystemRuntime, options?: MemoryExtractorBridgeOptions) {
     this.events = events;
     this.runtime = runtime;
@@ -87,23 +91,28 @@ export class MemoryExtractorBridge {
       return;
     }
 
+    this.emit('memory.bridge.lifecycle.matched', { sessionId, agentId: event.agentId });
     let bundle = this.collector.buildBundle(sessionId);
 
     // 从持久化 store 加载（兜底：重启恢复）
     if (!bundle) {
+      this.emit('memory.bridge.bundle.miss', { sessionId, agentId: event.agentId });
       this.loadBundleFromStore(event.agentId ?? 'unknown', sessionId).then((loaded) => {
         if (!loaded) return;
+        this.emit('memory.bridge.bundle.loaded', { sessionId, agentId: loaded.agentId, eventCount: loaded.events.length });
         this.emitBundleAndTrigger(loaded);
       }).catch(() => {});
       return;
     }
 
+    this.emit('memory.bridge.bundle.hit', { sessionId, agentId: bundle.agentId, eventCount: bundle.events.length });
     this.emitBundleAndTrigger(bundle);
   }
 
   private emitBundleAndTrigger(bundle: SessionExtractBundle): void {
     const sessionId = bundle.sessionId;
 
+    this.emit('memory.bridge.trigger.start', { sessionId, agentId: bundle.agentId });
     // 将 bundle 注入 runtime 的主上下文，供 input-builder 透传到 SubsystemInput.payload.sessionLifecycle 等字段
     this.runtime.setMainAgentContext({
       messages: [],
@@ -124,8 +133,10 @@ export class MemoryExtractorBridge {
     });
 
     // 触发子系统执行
-    this.runtime.trigger(this.subsystemId).catch(() => {
-      // 触发失败不阻塞主流程
+    this.runtime.trigger(this.subsystemId).then(() => {
+      this.emit('memory.bridge.trigger.complete', { sessionId, agentId: bundle.agentId });
+    }).catch(() => {
+      this.emit('memory.bridge.trigger.error', { sessionId, agentId: bundle.agentId });
     });
   }
 }

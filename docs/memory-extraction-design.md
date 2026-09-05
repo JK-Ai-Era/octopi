@@ -609,3 +609,29 @@ score = w1*explicitness
 - `pending.extractor.scan.complete`
 
 可用于接入监控、日志、告警。
+
+
+---
+
+## 22. Agent Profile 阈值策略（已落地）
+
+`createProfileThresholdPolicy(config)` 支持：
+- 不同 `agentProfile` 使用不同基线（`baseConfidence / baseImportance`）
+- 仍保留动态阈值修正（failure/event 修正）
+
+`createMemoryExtractorSubsystem` 新增 `agentProfile` 选项，传入给阈值策略。
+
+---
+
+## 23. Bridge 可观测事件（已落地）
+
+`MemoryExtractorBridge` 新增事件：
+- `memory.bridge.lifecycle.matched`
+- `memory.bridge.bundle.hit`
+- `memory.bridge.bundle.miss`
+- `memory.bridge.bundle.loaded`
+- `memory.bridge.trigger.start`
+- `memory.bridge.trigger.complete`
+- `memory.bridge.trigger.error`
+
+用于实时链路监控与问题定位。

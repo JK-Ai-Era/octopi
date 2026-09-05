@@ -18,6 +18,7 @@ import type { MemoryStore } from '../types.js';
 import { SessionExtractor, type SessionExtractBundle } from './session-extractor.js';
 import { MemoryDeduplicator, type MemoryDeduplicatorOptions } from './memory-deduplicator.js';
 import { defaultThresholdPolicy, type ThresholdPolicy } from './threshold-policy.js';
+import type { ThresholdPolicyInput } from './threshold-policy.js';
 
 // ── Options ──
 
@@ -34,6 +35,8 @@ export interface MemoryExtractorSubsystemOptions {
   minImportance?: number;
   /** 动态阈值策略（可选，默认按 failureRate/majorErrors/eventCount 调整） */
   thresholdPolicy?: ThresholdPolicy;
+  /** Agent profile 名称（可传入给阈值策略做多场景复用） */
+  agentProfile?: string;
   /** 是否启用（默认 true） */
   enabled?: boolean;
 }
@@ -83,7 +86,8 @@ export function createMemoryExtractorSubsystem(options: MemoryExtractorSubsystem
 
         const candidates = extractor.extract(bundle);
         const deduped = await deduper.filterAndUpgrade(candidates);
-        const dynamic = (options.thresholdPolicy ?? defaultThresholdPolicy)({ runSummary: bundle.runSummary, eventCount: bundle.events.length });
+        const policyInput: ThresholdPolicyInput & { agentProfile?: string } = { runSummary: bundle.runSummary, eventCount: bundle.events.length, agentProfile: options.agentProfile };
+        const dynamic = (options.thresholdPolicy ?? defaultThresholdPolicy)(policyInput);
         const minConf = dynamic.minConfidence ?? options.minConfidence ?? 0.6;
         const minImp = dynamic.minImportance ?? options.minImportance ?? 0.6;
         const accepted = deduped.filter((c) => c.confidence >= minConf && c.importance >= minImp);

@@ -39,3 +39,6 @@ export { PendingExtractor } from './extraction/pending-extractor.js';
 
 export { defaultThresholdPolicy } from './extraction/threshold-policy.js';
 export type { ThresholdPolicy, ThresholdPolicyInput, ThresholdPolicyResult } from './extraction/threshold-policy.js';
+
+export { createProfileThresholdPolicy } from './extraction/profile-threshold-policy.js';
+export type { ProfileThresholdConfig } from './extraction/profile-threshold-policy.js';

@@ -1,3 +1,23 @@
+## v0.11.9 (2026-09-06)
+
+### feat: bridge 可观测事件与 agent profile 阈值策略
+
+补齐实时链路观测能力，并支持按 agent profile 复用阈值策略。
+
+#### 新增
+
+- **feat(memory/extraction): ProfileThresholdPolicy** — `createProfileThresholdPolicy` 支持不同 profile 使用不同基线阈值，并叠加动态修正
+- **feat(memory/extraction): bridge 可观测事件** — 新增 `memory.bridge.lifecycle.matched / bundle.hit / bundle.miss / bundle.loaded / trigger.start / trigger.complete / trigger.error`
+- **test: profile-threshold-policy.test.ts** — 验证 profile 阈值策略
+- **test: memory-extractor-bridge-events.test.ts** — 验证 bridge 观测事件
+
+#### 变更
+
+- **refactor(memory/extraction/memory-extractor-subsystem): 增加 agentProfile 传入**，阈值策略可基于 profile 计算
+- **refactor(memory/extraction/memory-extractor-bridge): 增加事件发射点**
+- **refactor(memory/index): 导出 profile-threshold-policy**
+- **docs: memory-extraction-design** — 补充 profile 策略与 bridge 观测事件说明
+
 ## v0.11.8 (2026-09-06)
 
 ### feat: 动态阈值策略与 pending extractor 可观测事件
