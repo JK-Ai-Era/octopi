@@ -1,3 +1,33 @@
+## v0.11.2 (2026-09-06)
+
+### refactor: 自主子系统架构前置改造（支持 session→memory 提取）
+
+为让自治子系统可直接承载“session→memory 提取”，先对自主子系统进行通用能力补齐：生命周期感知、结构化 payload 扩展、动作目标语义。
+
+#### 新增
+
+- **feat(autonomous-subsystem/types): 生命周期与抽取状态态** — `SenseContext` 增加 `sessionLifecycle / lastInteractionAt / idleMs / extractionStatus`；新增 `SessionLifecycleStatus / ProcessExtractionStatus`
+- **feat(autonomous-subsystem/types): 结构化任务上下文扩展点** — `SubsystemInput` 增加 `payload?: Record<string, unknown>`；`sessionMetadata` 支持扩展字段
+- **feat(autonomous-subsystem/types): Act 动作目标语义** — `ActResult` 增加 `target?: string`（如 `context / memory-store / knowledge`）
+- **feat(autonomous-subsystem/sense): SessionLifecycleBridge** — 将主会话生命周期状态转为子系统可感知事件/指标（支持 `session.lifecycle.updated` 与 idle 计算）
+- **feat(memory/extraction): SessionExtractor 骨架** — rule-first、语言无关的提取器骨架（preference/decision/lesson/discovery）
+- **feat(memory/extraction): memory-extractor 子系统规格** — `createMemoryExtractorSubsystem()`（Sense → Think(code) → Act(inject memory-store) → Signal）
+
+#### 变更
+
+- **refactor(autonomous-subsystem/index): 导出新类型与桥接模块** — 导出 `SessionLifecycleStatus / ProcessExtractionStatus / SessionLifecycleBridge`
+- **refactor(sense/input-builder): 注入生命周期上下文** — 将 lifecycle/idle/extractionStatus 注入 `sessionMetadata` 与 `payload.sessionLifecycle`
+- **refactor(runner): 发射通用 session 生命周期事件** — 在消息到达、处理完成、异常路径发射 `session.lifecycle.updated`
+
+#### 测试
+
+- 新增 `tests/autonomous-subsystem/session-lifecycle-bridge.test.ts`（2 tests）
+- 新增 `tests/memory/extraction/session-extractor.test.ts`（3 tests）
+
+#### 文档
+
+- 新增 `docs/memory-extraction-design.md`：完整“session→memory 提取方案”与“前置架构改造”说明
+
 ## v0.11.1 (2026-09-06)
 
 ### fix: 文档一致性更新

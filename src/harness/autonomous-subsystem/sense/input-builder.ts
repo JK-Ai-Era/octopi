@@ -27,6 +27,10 @@ export function buildAgentInput(spec: SubsystemSpec, ctx: AgentContext): Subsyst
       agentId: ctx.runConfig.agentId ?? 'unknown',
       sessionId: ctx.runConfig.sessionId ?? 'unknown',
       turnCount: ctx.messages.filter((m) => m.role === 'assistant').length,
+      sessionLifecycle: ctx.sessionLifecycle,
+      lastInteractionAt: ctx.lastInteractionAt,
+      idleMs: ctx.idleMs,
+      extractionStatus: ctx.extractionStatus,
     };
     if (ctx.pendingToolCall) {
       input.pendingToolCall = ctx.pendingToolCall;
@@ -66,6 +70,19 @@ export function buildAgentInput(spec: SubsystemSpec, ctx: AgentContext): Subsyst
       case 'agent_events':
         if (ctx.agentEvents) input.agentEvents = ctx.agentEvents.slice(-10);
         break;
+      case 'session_lifecycle':
+        input.sessionMetadata = {
+          ...(input.sessionMetadata ?? {
+            agentId: ctx.runConfig.agentId ?? 'unknown',
+            sessionId: ctx.runConfig.sessionId ?? 'unknown',
+            turnCount: ctx.messages.filter((m) => m.role === 'assistant').length,
+          }),
+          sessionLifecycle: ctx.sessionLifecycle,
+          lastInteractionAt: ctx.lastInteractionAt,
+          idleMs: ctx.idleMs,
+          extractionStatus: ctx.extractionStatus,
+        };
+        break;
     }
   }
 
@@ -84,6 +101,15 @@ export function buildAgentInput(spec: SubsystemSpec, ctx: AgentContext): Subsyst
     };
     if (ctx.pendingToolCall) input.pendingToolCall = ctx.pendingToolCall;
   }
+
+  // 注入通用 session 生命周期感知到 payload（不特指 memory）
+  if (!input.payload) input.payload = {};
+  (input.payload as Record<string, unknown>).sessionLifecycle = {
+    lifecycle: ctx.sessionLifecycle,
+    lastInteractionAt: ctx.lastInteractionAt,
+    idleMs: ctx.idleMs,
+    extractionStatus: ctx.extractionStatus,
+  };
 
   return input;
 }

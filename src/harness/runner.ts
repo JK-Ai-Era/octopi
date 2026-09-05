@@ -194,6 +194,18 @@ export class SessionAwareRunner {
       session.meta.lastInteractionAt = Date.now();
       session.meta.updatedAt = Date.now();
 
+      // 通知子系统：主会话生命周期态（通用）
+      this._events?.emit({
+        type: 'session.lifecycle.updated',
+        timestamp: Date.now(),
+        agentId: _agentId,
+        sessionId,
+        data: {
+          lifecycle: 'active',
+          lastInteractionAt: session.meta.lastInteractionAt,
+        },
+      });
+
       // 状态机：idle → processing
       const sm = this.getOrCreateStateMachine(sessionId, session.meta.status);
       sm.transition('processing');
@@ -225,6 +237,10 @@ export class SessionAwareRunner {
             messages: session.messages,
             runConfig: effectiveRunConfig,
             events: this._events,
+            sessionLifecycle: session.lifecycle?.lifecycle ?? 'active',
+            lastInteractionAt: session.meta.lastInteractionAt,
+            idleMs: Date.now() - (session.meta.lastInteractionAt ?? Date.now()),
+            extractionStatus: session.lifecycle?.memoryExtraction ?? 'pending',
           });
           // 注入指标
           this._subsystemRuntime.metrics.update('turn.count', session.messages.filter(m => m.role === 'assistant').length);
@@ -342,6 +358,19 @@ export class SessionAwareRunner {
       session.meta.updatedAt = Date.now();
       await this.store.save(_agentId, sessionId, session);
 
+      // 通知子系统：本轮处理完成（保持 active，但刷新 lastInteractionAt）
+      this._events?.emit({
+        type: 'session.lifecycle.updated',
+        timestamp: Date.now(),
+        agentId: _agentId,
+        sessionId,
+        data: {
+          lifecycle: session.lifecycle?.lifecycle ?? 'active',
+          extractionStatus: session.lifecycle?.memoryExtraction ?? 'pending',
+          lastInteractionAt: session.meta.lastInteractionAt,
+        },
+      });
+
     } catch (err) {
       // 引擎出错：状态机转到 error，持久化
       const sm = this.stateMachines.get(sessionId);
@@ -352,6 +381,19 @@ export class SessionAwareRunner {
           session.meta.status = sm.state;
           session.meta.updatedAt = Date.now();
           await this.store.save(_agentId, sessionId, session);
+
+          // 通知子系统：异常路径下保持生命周期可感知
+          this._events?.emit({
+            type: 'session.lifecycle.updated',
+            timestamp: Date.now(),
+            agentId: _agentId,
+            sessionId,
+            data: {
+              lifecycle: 'recent',
+              extractionStatus: 'pending',
+              lastInteractionAt: session.meta.lastInteractionAt,
+            },
+          });
         }
       }
       throw err;

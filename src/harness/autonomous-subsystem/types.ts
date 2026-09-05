@@ -109,7 +109,8 @@ export type ContextField =
   | 'session_metadata'
   | 'token_count'
   | 'conversation_history'
-  | 'pending_tool_call';
+  | 'pending_tool_call'
+  | 'session_lifecycle';
 
 /**
  * Sense 过滤配置
@@ -332,6 +333,14 @@ export interface SenseContext {
   agentId?: string;
   /** 来源 Session ID */
   sessionId?: string;
+  /** 主会话生命周期状态（通用） */
+  sessionLifecycle?: SessionLifecycleStatus;
+  /** 主会话最近交互时间（通用） */
+  lastInteractionAt?: number;
+  /** 主会话空闲时间（毫秒，通用） */
+  idleMs?: number;
+  /** 主会话抽取/处理状态（通用） */
+  extractionStatus?: ProcessExtractionStatus;
 }
 
 // ── SubsystemInput（子系统输入） ──
@@ -351,13 +360,15 @@ export interface SubsystemInput {
   /** 工作目录 */
   workingDirectory?: string;
   /** 会话元数据 */
-  sessionMetadata?: { agentId: string; sessionId: string; turnCount: number };
+  sessionMetadata?: { agentId: string; sessionId: string; turnCount: number } & Record<string, unknown>;
   /** Token 使用量 */
   tokenCount?: { used: number; limit: number };
   /** 对话历史（仅 visibility 高于 structured 时） */
   conversationHistory?: Message[];
   /** Agent 事件 */
   agentEvents?: AgentEvent[];
+  /** 结构化任务上下文（通用扩展点） */
+  payload?: Record<string, unknown>;
 }
 
 /**
@@ -401,6 +412,8 @@ export interface ActResult {
   result?: unknown;
   /** modify / inject 模式：要注入的消息 */
   messages?: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>;
+  /** 动作目标（通用语义，如 context / memory-store / knowledge） */
+  target?: string;
 }
 
 // ── SubsystemRun（审计记录） ──
@@ -495,6 +508,11 @@ export interface ModelLevelConfig {
  */
 export type ModelLevelMap = Record<string, ModelLevelConfig>;
 
+// 主会话生命周期态（子系统通用感知）
+export type SessionLifecycleStatus = 'active' | 'recent' | 'extracted' | 'archived';
+// 通用抽取/处理状态（不特指 memory）
+export type ProcessExtractionStatus = 'pending' | 'soft' | 'completed' | 'skipped' | 'error';
+
 // ── AgentContext（主 Agent 上下文，供子系统引用） ──
 
 /**
@@ -516,4 +534,10 @@ export interface AgentContext {
   recentToolCalls?: Array<{ name: string; arguments: Record<string, unknown>; result?: unknown }>;
   tokenCount?: { used: number; limit: number };
   agentEvents?: AgentEvent[];
+
+  // 主会话生命周期态（通用，由 Runner/SessionLifecycleBridge 注入）
+  sessionLifecycle?: SessionLifecycleStatus;
+  lastInteractionAt?: number;
+  idleMs?: number;
+  extractionStatus?: ProcessExtractionStatus;
 }

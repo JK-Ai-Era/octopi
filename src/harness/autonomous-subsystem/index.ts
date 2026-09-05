@@ -70,6 +70,10 @@ export type {
   ModelLevelConfig,
   ModelLevelMap,
 
+  // Lifecycle State（子系统通用感知）
+  SessionLifecycleStatus,
+  ProcessExtractionStatus,
+
   // Agent Context
   AgentContext,
 } from './types.js';
@@ -85,7 +89,7 @@ export { SubsystemRuntime } from './runtime.js';
 export type { SharedDeps, SubsystemRuntimeConfig } from './runtime.js';
 
 // ── Sense ──
-export { SenseEngine, MetricsStore } from './sense/index.js';
+export { SenseEngine, MetricsStore, SessionLifecycleBridge } from './sense/index.js';
 export { buildAgentInput } from './sense/input-builder.js';
 
 // ── Think ──
