@@ -493,3 +493,33 @@ score = w1*explicitness
 ### 14.4 Runtime 通用透传
 `SubsystemRuntime.onTrigger()` 已支持将 `SenseContext.eventData.bundle` 透传到 `SubsystemInput.payload.sessionExtractBundle`。
 这意味着子系统可以基于“事件携带的结构化输入”运行，而不必只依赖主上下文。
+
+
+---
+
+## 15. 提取素材落盘与恢复（已落地）
+
+### 15.1 ExtractorStore 接口
+新增通用接口：
+- `appendEvents(agentId, sessionId, events)`
+- `loadEvents(agentId, sessionId)`
+- `saveBundle(agentId, sessionId, bundle, meta)`
+- `loadBundle(agentId, sessionId)`
+- `updateMeta(agentId, sessionId, meta)`
+- `listPending(agentId)`
+
+### 15.2 实现
+- `InMemoryExtractorStore`：测试/开发用
+- `JsonlExtractorStore`：生产可用的 JSONL 落盘方案
+  - `<agentHome>/extract/events/<sessionId>.jsonl`
+  - `<agentHome>/extract/bundles/<sessionId>.json`
+  - `<agentHome>/extract/meta/<sessionId>.json`
+
+### 15.3 采集器与桥接层联动
+- `SessionExtractCollector` 在每次事件写入时 append store
+- `SessionExtractCollector.buildBundle()` 时 saveBundle 快照
+- `MemoryExtractorBridge` 在内存无 bundle 时，可从 store 兜底加载并触发子系统
+
+### 15.4 恢复策略
+- 进程重启后，`listPending(agentId)` 可发现待处理 session
+- 再次触发 `recent+pending` 生命周期事件即可恢复提取流程

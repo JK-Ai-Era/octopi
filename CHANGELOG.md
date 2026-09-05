@@ -1,3 +1,21 @@
+## v0.11.4 (2026-09-06)
+
+### feat: 提取素材可回放落盘（JSONL）与恢复链路
+
+为避免重启丢失采集态，新增 ExtractorStore 接口与 JSONL 持久化实现，并将采集器、桥接层接入 store。
+
+#### 新增
+
+- **feat(memory/extraction): ExtractorStore 接口 + InMemoryExtractorStore** — `appendEvents / loadEvents / saveBundle / loadBundle / updateMeta / listPending`
+- **feat(memory/extraction): JsonlExtractorStore** — 按 `agentHome/extract/{events,bundles,meta}` 落盘，支持 append 与覆盖快照
+- **test: extractor-store.test.ts** — 覆盖内存与 JSONL 两种 store 的核心链路
+
+#### 变更
+
+- **refactor(memory/extraction/collector): 接入 store** — 每次 pushEvent 异步 append；每次 buildBundle 异步 saveBundle 快照
+- **refactor(memory/extraction/bridge): 支持 store 兜底恢复** — 当内存采集器无 bundle 时，尝试从 store 加载历史 bundle 并触发
+- **refactor(memory/index): 导出 store 相关模块**
+
 ## v0.11.3 (2026-09-06)
 
 ### feat: 接入真实素材采集链路（session→memory 提取可运行）

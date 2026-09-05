@@ -16,6 +16,7 @@
 import type { EventBus, Disposable, AgentEvent } from '../../../core/primitives/event-bus.js';
 import type { SubsystemRuntime } from '../../autonomous-subsystem/runtime.js';
 import { SessionExtractCollector } from './session-extract-collector.js';
+import type { ExtractorStore } from './extractor-store.js';
 import type { SessionExtractBundle } from './session-extractor.js';
 
 export interface MemoryExtractorBridgeOptions {
@@ -23,6 +24,8 @@ export interface MemoryExtractorBridgeOptions {
   autoAttach?: boolean;
   /** 目标子系统 ID（默认 memory.extractor） */
   subsystemId?: string;
+  /** 可选：素材持久化 store（JSONL/内存） */
+  store?: ExtractorStore;
 }
 
 export class MemoryExtractorBridge {
@@ -31,11 +34,13 @@ export class MemoryExtractorBridge {
   private collector: SessionExtractCollector;
   private disposables: Disposable[] = [];
   private subsystemId: string;
+  private options?: MemoryExtractorBridgeOptions;
 
   constructor(events: EventBus, runtime: SubsystemRuntime, options?: MemoryExtractorBridgeOptions) {
     this.events = events;
     this.runtime = runtime;
-    this.collector = new SessionExtractCollector();
+    this.options = options;
+    this.collector = new SessionExtractCollector({ store: options?.store });
     this.subsystemId = options?.subsystemId ?? 'memory.extractor';
 
     if (options?.autoAttach ?? true) {
@@ -60,6 +65,15 @@ export class MemoryExtractorBridge {
     this.collector.dispose();
   }
 
+  private async loadBundleFromStore(agentId: string, sessionId: string): Promise<SessionExtractBundle | null> {
+    if (!this.options?.store) return null;
+    try {
+      return await this.options.store.loadBundle(agentId, sessionId);
+    } catch {
+      return null;
+    }
+  }
+
   private onLifecycleUpdated(event: AgentEvent): void {
     const sessionId = event.sessionId as string | undefined;
     if (!sessionId) return;
@@ -73,11 +87,22 @@ export class MemoryExtractorBridge {
       return;
     }
 
-    const bundle = this.collector.buildBundle(sessionId);
+    let bundle = this.collector.buildBundle(sessionId);
+
+    // 从持久化 store 加载（兜底：重启恢复）
     if (!bundle) {
-      // 没有采集到素材，跳过触发
+      this.loadBundleFromStore(event.agentId ?? 'unknown', sessionId).then((loaded) => {
+        if (!loaded) return;
+        this.emitBundleAndTrigger(loaded);
+      }).catch(() => {});
       return;
     }
+
+    this.emitBundleAndTrigger(bundle);
+  }
+
+  private emitBundleAndTrigger(bundle: SessionExtractBundle): void {
+    const sessionId = bundle.sessionId;
 
     // 将 bundle 注入 runtime 的主上下文，供 input-builder 透传到 SubsystemInput.payload.sessionLifecycle 等字段
     this.runtime.setMainAgentContext({

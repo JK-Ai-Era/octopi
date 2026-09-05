@@ -20,6 +20,7 @@ import type {
   RunSummary,
 } from './session-extractor.js';
 import { detectSemanticSignals } from './semantic-signals.js';
+import type { ExtractorStore } from './extractor-store.js';
 
 interface CollectedSessionState {
   sessionId: string;
@@ -35,10 +36,19 @@ interface CollectedSessionState {
   lastAssistantTextByTurn?: string;
 }
 
+export interface SessionExtractCollectorOptions {
+  store?: ExtractorStore;
+}
+
 export class SessionExtractCollector {
   private disposables: Disposable[] = [];
   private sessions = new Map<string, CollectedSessionState>();
   private attached = false;
+  private store?: ExtractorStore;
+
+  constructor(options?: SessionExtractCollectorOptions) {
+    this.store = options?.store;
+  }
 
   /** 是否已 attach */
   get isAttached(): boolean {
@@ -95,7 +105,7 @@ export class SessionExtractCollector {
       resolvedErrors: [...s.resolvedErrors],
     };
 
-    return {
+    const bundle: SessionExtractBundle = {
       sessionId: s.sessionId,
       agentId: s.agentId ?? 'unknown',
       startAt: s.startAt,
@@ -111,6 +121,18 @@ export class SessionExtractCollector {
           sourceEventIds: e.sourceMessageIds,
         })),
     };
+
+    // 快照落盘（忽略失败）
+    if (this.store) {
+      this.store.saveBundle(s.agentId ?? 'unknown', s.sessionId, bundle, {
+        sessionId: s.sessionId,
+        agentId: s.agentId,
+        lifecycle: 'recent',
+        extractionStatus: 'pending',
+      }).catch(() => {});
+    }
+
+    return bundle;
   }
 
   private ensureSession(sessionId: string, agentId?: string): CollectedSessionState {
@@ -220,13 +242,19 @@ export class SessionExtractCollector {
   }
 
   private pushEvent(s: CollectedSessionState, type: SessionExtractEventType, payload?: Record<string, unknown>): void {
-    s.events.push({
+    const evt: SessionExtractEvent = {
       ts: Date.now(),
       type,
       sessionId: s.sessionId,
       agentId: s.agentId,
       payload,
-    });
+    };
+    s.events.push(evt);
+
+    // 异步持久化（忽略失败，不影响主流程）
+    if (this.store) {
+      this.store.appendEvents(s.agentId ?? 'unknown', s.sessionId, [evt]).catch(() => {});
+    }
   }
 }
 

@@ -29,3 +29,7 @@ export type { SessionExtractBundle, SessionExtractEvent, MemoryCandidate } from 
 export { SessionExtractCollector } from './extraction/session-extract-collector.js';
 export { MemoryExtractorBridge } from './extraction/memory-extractor-bridge.js';
 export { createMemoryExtractorSubsystem } from './extraction/memory-extractor-subsystem.js';
+
+export { InMemoryExtractorStore } from './extraction/extractor-store.js';
+export type { ExtractorMeta, ExtractorStore } from './extraction/extractor-store.js';
+export { JsonlExtractorStore } from './extraction/jsonl-extractor-store.js';
