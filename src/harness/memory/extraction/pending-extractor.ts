@@ -16,9 +16,12 @@
 import type { SubsystemRuntime } from '../../autonomous-subsystem/runtime.js';
 import type { EventBus } from '../../../core/primitives/event-bus.js';
 import type { ExtractorStore } from './extractor-store.js';
+import { BackpressureController, type BackpressureOptions } from './backpressure.js';
 import type { SessionExtractBundle } from './session-extractor.js';
 
 export interface PendingExtractorOptions {
+  /** 回压配置（可选） */
+  backpressure?: BackpressureOptions;
   /** 默认 agentId（当未配置 agentConfigs 时使用） */
   agentId?: string;
   /** 多 agent 扫描配置（可选，配置后忽略 agentId） */
@@ -59,6 +62,7 @@ export class PendingExtractor {
   private subsystemId: string;
   private retry = new Map<string, RetryState>();
   private agentTimers = new Map<string, ReturnType<typeof setInterval>>();
+  private backpressure?: BackpressureController;
 
   private emit(type: string, data: Record<string, unknown>): void {
     this.events.emit({ type, timestamp: Date.now(), agentId: this.agentId, data });
@@ -76,6 +80,9 @@ export class PendingExtractor {
     this.store = store;
     this.options = options ?? {};
     this.agentId = options?.agentId ?? 'default';
+    if (options?.backpressure) {
+      this.backpressure = new BackpressureController(options.backpressure);
+    }
     this.subsystemId = options?.subsystemId ?? 'memory.extractor';
 
     if (options?.autoStart ?? true) {
@@ -209,6 +216,10 @@ export class PendingExtractor {
         events: this.events,
       });
 
+      // 并发回压
+      if (this.backpressure) {
+        await this.backpressure.acquire();
+      }
       try {
         await this.runtime.trigger(this.subsystemId);
 
@@ -239,6 +250,8 @@ export class PendingExtractor {
           this.emit('memory.extractor.pending.scan.session.error', { agentId: this.agentId, sessionId, failures: state.failures });
           this.retry.delete(sessionId);
         }
+      } finally {
+        this.backpressure?.release();
       }
     }
 

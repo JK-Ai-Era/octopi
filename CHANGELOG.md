@@ -1,3 +1,23 @@
+## v0.13.0 (2026-09-06)
+
+### feat: 指标接入、SLO 告警、pending 回压限流
+
+补齐生产运行三件套：Metrics 接入、告警规则、回压控制。
+
+#### 新增
+
+- **feat(memory/extraction): ExtractionMetricsBridge** — 将 `memory.extractor.*` 观测事件聚合到 MetricsStore（trigger.success/error、bundle.eventCount、pending.count、accepted.count）
+- **feat(memory/extraction): AlertEvaluator** — 最小可用 SLO 告警：`memory.extractor.alert.high_error_rate` / `memory.extractor.alert.high_pending`
+- **feat(memory/extraction): BackpressureController** — pending 回压控制（阈值降速 + 并发触发上限）
+- **refactor(memory/extraction/pending-extractor): 接入 backpressure** — 按 `maxConcurrentTriggers` 限制并发触发
+- **test: extraction-metrics-bridge.test.ts** — 指标聚合与告警触发
+- **test: backpressure.test.ts** — 回压并发控制与间隔策略
+
+#### 变更
+
+- **refactor(memory/index): 导出新增模块**
+- **docs: memory-extraction-design** — 补充指标、告警、回压设计说明
+
 ## v0.12.0 (2026-09-06)
 
 ### refactor: 记忆提取系统收敛（一致性、观测统一、兜底恢复、回归测试）

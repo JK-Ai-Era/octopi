@@ -658,3 +658,33 @@ bridge 在 `trigger.complete` 与 `trigger.error` 后 reset session 采集态，
 
 ### 24.5 端到端回归
 新增回归测试：同一 bundle 重复触发不会导致记忆条目翻倍。
+
+
+---
+
+## 25. 指标接入与 SLO 告警（已落地）
+
+### 25.1 ExtractionMetricsBridge
+将以下事件聚合到 MetricsStore：
+- `memory.extractor.trigger.success`
+- `memory.extractor.trigger.error`
+- `memory.extractor.bundle.eventCount`
+- `memory.extractor.pending.count`
+- `memory.extractor.accepted.count`
+
+### 25.2 AlertEvaluator
+新增最小可用告警：
+- `memory.extractor.alert.high_error_rate`
+- `memory.extractor.alert.high_pending`
+
+可通过 threshold 配置 SLO 触发条件。
+
+---
+
+## 26. PendingExtractor 回压限流（已落地）
+
+新增 `BackpressureController`：
+- pending 超阈值时降速（`backoffIntervalMs`）
+- 并发触发上限 `maxConcurrentTriggers`
+
+PendingExtractor 支持 `options.backpressure` 配置，避免一次性触发过多任务打爆模型/IO。

@@ -42,3 +42,8 @@ export type { ThresholdPolicy, ThresholdPolicyInput, ThresholdPolicyResult } fro
 
 export { createProfileThresholdPolicy } from './extraction/profile-threshold-policy.js';
 export type { ProfileThresholdConfig } from './extraction/profile-threshold-policy.js';
+
+export { ExtractionMetricsBridge } from './extraction/extraction-metrics-bridge.js';
+export { AlertEvaluator } from './extraction/alert-evaluator.js';
+export { BackpressureController } from './extraction/backpressure.js';
+export type { BackpressureOptions } from './extraction/backpressure.js';
