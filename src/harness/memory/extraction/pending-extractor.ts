@@ -27,6 +27,17 @@ export interface PendingExtractorOptions {
   autoStart?: boolean;
   /** 目标子系统 ID（默认 memory.extractor） */
   subsystemId?: string;
+  /** 失败重试基础间隔（毫秒，默认 60_000） */
+  baseRetryMs?: number;
+  /** 最大重试间隔（毫秒，默认 10*60_000） */
+  maxRetryMs?: number;
+  /** 最大重试次数（超过后标记 error，默认 5） */
+  maxRetries?: number;
+}
+
+interface RetryState {
+  failures: number;
+  nextRetryAt: number;
 }
 
 export class PendingExtractor {
@@ -37,6 +48,7 @@ export class PendingExtractor {
   private timer?: ReturnType<typeof setInterval>;
   private agentId: string;
   private subsystemId: string;
+  private retry = new Map<string, RetryState>();
 
   constructor(
     events: EventBus,
@@ -89,6 +101,10 @@ export class PendingExtractor {
       const sessionId = meta.sessionId;
       if (!sessionId) continue;
 
+      // 退避期内跳过
+      const r = this.retry.get(sessionId);
+      if (r && Date.now() < r.nextRetryAt) continue;
+
       // 加载 bundle（优先）或 events（兜底构建空 bundle）
       let bundle: SessionExtractBundle | null = await this.store.loadBundle(this.agentId, sessionId);
       if (!bundle) {
@@ -118,15 +134,35 @@ export class PendingExtractor {
         events: this.events,
       });
 
-      await this.runtime.trigger(this.subsystemId).catch(() => {});
+      try {
+        await this.runtime.trigger(this.subsystemId);
 
-      // 标记 completed（简化：不等子系统回调）
-      await this.store.updateMeta(this.agentId, sessionId, {
-        ...meta,
-        extractionStatus: 'completed',
-      });
+        // 成功：清除重试状态并标记 completed
+        this.retry.delete(sessionId);
+        await this.store.updateMeta(this.agentId, sessionId, {
+          ...meta,
+          extractionStatus: 'completed',
+        });
 
-      triggered += 1;
+        triggered += 1;
+      } catch {
+        // 失败：退避重试
+        const state = this.retry.get(sessionId) ?? { failures: 0, nextRetryAt: 0 };
+        state.failures += 1;
+        const base = this.options.baseRetryMs ?? 60_000;
+        const max = this.options.maxRetryMs ?? 10 * 60_000;
+        const delay = Math.min(max, base * Math.pow(2, state.failures - 1));
+        state.nextRetryAt = Date.now() + delay;
+        this.retry.set(sessionId, state);
+
+        if (state.failures >= (this.options.maxRetries ?? 5)) {
+          await this.store.updateMeta(this.agentId, sessionId, {
+            ...meta,
+            extractionStatus: 'error',
+          });
+          this.retry.delete(sessionId);
+        }
+      }
     }
 
     return triggered;

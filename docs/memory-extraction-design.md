@@ -542,3 +542,20 @@ score = w1*explicitness
 ### 16.3 效果
 - 避免重复记忆膨胀
 - 进程重启后可自动恢复未完成提取
+
+
+---
+
+## 17. 去重集成与退避重试（已落地）
+
+### 17.1 去重集成
+`createMemoryExtractorSubsystem(options)` 新增 `deduplicator?: MemoryDeduplicatorOptions`。  
+子系统 handler 在入库前执行 `filterAndUpgrade()`，仅入库 accepted candidates，重复或升级场景走 update 路径。
+
+### 17.2 PendingExtractor 退避重试
+新增配置：
+- `baseRetryMs`（默认 60_000）
+- `maxRetryMs`（默认 10*60_000）
+- `maxRetries`（默认 5）
+
+失败时按指数退避推迟下次扫描；超过 maxRetries 后将 extractionStatus 标记为 `error`，避免无限重试。

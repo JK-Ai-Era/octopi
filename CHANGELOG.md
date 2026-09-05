@@ -1,3 +1,25 @@
+## v0.11.6 (2026-09-06)
+
+### feat: 去重集成与 pending extractor 退避重试
+
+将去重/升级策略接入 memory-extractor 子系统入库流程，并为 pending extractor 增加失败退避与最大重试限制。
+
+#### 新增
+
+- **feat(memory/extraction): 去重集成到子系统** — `createMemoryExtractorSubsystem` 新增 `deduplicator` 配置，入库前先执行 `filterAndUpgrade`
+- **feat(memory/extraction): PendingExtractor 退避重试** — 支持 `baseRetryMs / maxRetryMs / maxRetries`，超过阈值标记 `extractionStatus=error`
+- **test: pending-extractor-backoff.test.ts** — 验证退避与 error 标记
+- **test: memory-extractor-subsystem.test.ts** — 验证去重后重复 bundle 不会重复入库
+
+#### 变更
+
+- **refactor(memory/extraction/pending-extractor): 退避逻辑与失败处理**
+- **refactor(memory/extraction/memory-extractor-subsystem): 入库链路改为 accepted candidates**
+
+#### 文档
+
+- 更新 `docs/memory-extraction-design.md`：补充去重集成与退避重试说明
+
 ## v0.11.5 (2026-09-06)
 
 ### feat: 记忆去重/升级 + 断点续提（pending scan）

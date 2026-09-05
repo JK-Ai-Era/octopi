@@ -16,6 +16,7 @@
 import type { SubsystemSpec } from '../../autonomous-subsystem/types.js';
 import type { MemoryStore } from '../types.js';
 import { SessionExtractor, type SessionExtractBundle } from './session-extractor.js';
+import { MemoryDeduplicator, type MemoryDeduplicatorOptions } from './memory-deduplicator.js';
 
 // ── Options ──
 
@@ -24,6 +25,8 @@ export interface MemoryExtractorSubsystemOptions {
   id?: string;
   /** 记忆存储实现 */
   memoryStore: MemoryStore;
+  /** 去重与升级配置（可选） */
+  deduplicator?: MemoryDeduplicatorOptions;
   /** 是否启用（默认 true） */
   enabled?: boolean;
 }
@@ -37,6 +40,7 @@ export interface MemoryExtractorSubsystemOptions {
 export function createMemoryExtractorSubsystem(options: MemoryExtractorSubsystemOptions) {
   const id = options.id ?? 'memory.extractor';
   const extractor = new SessionExtractor();
+  const deduper = new MemoryDeduplicator(options.memoryStore, options.deduplicator);
 
   const spec: SubsystemSpec = {
     id,
@@ -71,9 +75,10 @@ export function createMemoryExtractorSubsystem(options: MemoryExtractorSubsystem
         }) as SessionExtractBundle;
 
         const candidates = extractor.extract(bundle);
+        const accepted = await deduper.filterAndUpgrade(candidates);
 
         // 入库（Act 语义：inject to memory-store）
-        for (const c of candidates) {
+        for (const c of accepted) {
           await options.memoryStore.store({
             type: c.type,
             content: c.content,
@@ -93,17 +98,18 @@ export function createMemoryExtractorSubsystem(options: MemoryExtractorSubsystem
             messages: [
               {
                 role: 'system',
-                content: `memory.extracted count=${candidates.length}`,
+                content: `memory.extracted accepted=${accepted.length} candidates=${candidates.length}`,
               },
             ],
           },
           signals: [
             {
               action: 'suggest',
-              reason: `Memory extraction completed (${candidates.length} candidates)`,
+              reason: `Memory extraction completed (accepted=${accepted.length}, candidates=${candidates.length})`,
               confidence: 0.9,
               data: {
-                extractedCount: candidates.length,
+                extractedCount: accepted.length,
+                rawCandidateCount: candidates.length,
                 bundleSessionId: bundle.sessionId,
               },
             },
