@@ -1,3 +1,13 @@
+## v0.11.1 (2026-09-06)
+
+### fix: 文档一致性更新
+
+#### 修复
+
+- **docs: CONTRIBUTING.md** — 分布式智能体描述更新为自主子系统
+- **docs: arch/overview.md** — safety-agent-spec.ts 引用更新为 safety-guard 子系统目录
+- **docs: arch/invariants.md** — 第 13 节从"分布式智能体设计原则"重写为"自主子系统设计原则"，反映五维模型
+
 ## v0.11.1 (2026-09-05)
 
 ### fix: 自主子系统代码审计修复

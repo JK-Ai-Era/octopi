@@ -67,7 +67,7 @@ npx vitest run --grep "SecurityGuard"
 | Plugin 系统 | PluginManager、HookRegistry、CapabilityRegistry |
 | Skill 管理 | SkillManager 两阶段加载 |
 | 工具系统 | ToolRegistry、工具版本管理 |
-| 分布式智能体 | AgentRuntime、TriggerEngine、OutputPolicy |
+| 自主子系统 | SubsystemRuntime、SenseEngine、ThinkExecutor、SignalBus |
 | 多智能体 | AgentSwarm、OrchestrationStrategy |
 | 并发控制 | ProviderPool、SessionGate、RateLimiter |
 | 输出质量 | OutputQualityGate |
