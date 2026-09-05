@@ -19,8 +19,17 @@ import type { ExtractorStore } from './extractor-store.js';
 import type { SessionExtractBundle } from './session-extractor.js';
 
 export interface PendingExtractorOptions {
-  /** agentId（默认 'default'） */
+  /** 默认 agentId（当未配置 agentConfigs 时使用） */
   agentId?: string;
+  /** 多 agent 扫描配置（可选，配置后忽略 agentId） */
+  agentConfigs?: Array<{
+    agentId: string;
+    scanIntervalMs?: number;
+    baseRetryMs?: number;
+    maxRetryMs?: number;
+    maxRetries?: number;
+    subsystemId?: string;
+  }>;
   /** 扫描间隔（毫秒，默认 30_000） */
   scanIntervalMs?: number;
   /** 是否自动启动（默认 true） */
@@ -49,6 +58,7 @@ export class PendingExtractor {
   private agentId: string;
   private subsystemId: string;
   private retry = new Map<string, RetryState>();
+  private agentTimers = new Map<string, ReturnType<typeof setInterval>>();
 
   constructor(
     events: EventBus,
@@ -92,7 +102,60 @@ export class PendingExtractor {
     this.stop();
   }
 
-  /** 执行一次扫描 */
+  /** 执行一次单 agent 扫描（多 agent 模式） */
+  async scanAgent(cfg: NonNullable<PendingExtractorOptions['agentConfigs']>[number]): Promise<number> {
+    const agentId = cfg.agentId;
+    const subsystemId = cfg.subsystemId ?? this.options.subsystemId ?? 'memory.extractor';
+    const pendings = await this.store.listPending(agentId);
+    let triggered = 0;
+
+    for (const meta of pendings) {
+      const sessionId = meta.sessionId;
+      if (!sessionId) continue;
+      const key = `${agentId}:${sessionId}`;
+      const r = this.retry.get(key);
+      if (r && Date.now() < r.nextRetryAt) continue;
+
+      let bundle: SessionExtractBundle | null = await this.store.loadBundle(agentId, sessionId);
+      if (!bundle) {
+        const events = await this.store.loadEvents(agentId, sessionId);
+        bundle = {
+          sessionId,
+          agentId,
+          startAt: Date.now(),
+          events,
+          condensedTurns: [],
+          runSummary: { totalTurns: 0, totalToolCalls: 0, failureRate: 0, majorErrors: [], resolvedErrors: [] },
+        };
+      }
+
+      this.events.emit({ type: 'memory.extractor.bundle.ready', timestamp: Date.now(), agentId, sessionId, data: { bundle } });
+      this.runtime.setMainAgentContext({ messages: [], runConfig: { agentId, sessionId }, events: this.events });
+
+      try {
+        await this.runtime.trigger(subsystemId);
+        this.retry.delete(key);
+        await this.store.updateMeta(agentId, sessionId, { ...meta, extractionStatus: 'completed' });
+        triggered += 1;
+      } catch {
+        const state = this.retry.get(key) ?? { failures: 0, nextRetryAt: 0 };
+        state.failures += 1;
+        const base = cfg.baseRetryMs ?? this.options.baseRetryMs ?? 60_000;
+        const max = cfg.maxRetryMs ?? this.options.maxRetryMs ?? 10 * 60_000;
+        const delay = Math.min(max, base * Math.pow(2, state.failures - 1));
+        state.nextRetryAt = Date.now() + delay;
+        this.retry.set(key, state);
+        if (state.failures >= (cfg.maxRetries ?? this.options.maxRetries ?? 5)) {
+          await this.store.updateMeta(agentId, sessionId, { ...meta, extractionStatus: 'error' });
+          this.retry.delete(key);
+        }
+      }
+    }
+
+    return triggered;
+  }
+
+  /** 执行一次扫描（默认 agentId 模式） */
   async scan(): Promise<number> {
     const pendings = await this.store.listPending(this.agentId);
     let triggered = 0;

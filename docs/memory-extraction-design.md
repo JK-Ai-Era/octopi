@@ -559,3 +559,29 @@ score = w1*explicitness
 - `maxRetries`（默认 5）
 
 失败时按指数退避推迟下次扫描；超过 maxRetries 后将 extractionStatus 标记为 `error`，避免无限重试。
+
+
+---
+
+## 18. 置信度门控（已落地）
+
+`createMemoryExtractorSubsystem(options)` 新增：
+- `minConfidence`（默认 0.6）
+- `minImportance`（默认 0.6）
+
+在 `filterAndUpgrade` 之后，再执行一次阈值过滤：低于阈值的候选不入库，仅保留事件证据。  
+这样可以进一步降低噪声，避免低质量记忆进入召回。
+
+---
+
+## 19. 多租户 pending 扫描策略（已落地）
+
+`PendingExtractor` 新增 `agentConfigs`，支持为不同 agent 配置：
+- `scanIntervalMs`
+- `baseRetryMs / maxRetryMs / maxRetries`
+- `subsystemId`
+
+效果：
+- 高优先级 agent 可以更高频扫描
+- 不稳定 agent 可以更保守重试
+- 不同 agent 可绑定不同子系统实例

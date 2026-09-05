@@ -27,6 +27,10 @@ export interface MemoryExtractorSubsystemOptions {
   memoryStore: MemoryStore;
   /** 去重与升级配置（可选） */
   deduplicator?: MemoryDeduplicatorOptions;
+  /** 最低置信度阈值（低于则不入库，默认 0.6） */
+  minConfidence?: number;
+  /** 最低重要性阈值（低于则不入库，默认 0.6） */
+  minImportance?: number;
   /** 是否启用（默认 true） */
   enabled?: boolean;
 }
@@ -75,7 +79,11 @@ export function createMemoryExtractorSubsystem(options: MemoryExtractorSubsystem
         }) as SessionExtractBundle;
 
         const candidates = extractor.extract(bundle);
-        const accepted = await deduper.filterAndUpgrade(candidates);
+        const deduped = await deduper.filterAndUpgrade(candidates);
+        const minConf = options.minConfidence ?? 0.6;
+        const minImp = options.minImportance ?? 0.6;
+        const accepted = deduped.filter((c) => c.confidence >= minConf && c.importance >= minImp);
+        const gated = deduped.length - accepted.length;
 
         // 入库（Act 语义：inject to memory-store）
         for (const c of accepted) {
@@ -110,6 +118,8 @@ export function createMemoryExtractorSubsystem(options: MemoryExtractorSubsystem
               data: {
                 extractedCount: accepted.length,
                 rawCandidateCount: candidates.length,
+                dedupedCount: deduped.length,
+                gatedCount: gated,
                 bundleSessionId: bundle.sessionId,
               },
             },

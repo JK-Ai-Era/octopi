@@ -1,3 +1,22 @@
+## v0.11.7 (2026-09-06)
+
+### feat: 置信度门控与多租户 pending 扫描策略
+
+为记忆提取增加质量门控，并支持按 agent 维度配置独立的扫描与重试策略。
+
+#### 新增
+
+- **feat(memory/extraction): 置信度/重要性门控** — `createMemoryExtractorSubsystem` 新增 `minConfidence / minImportance`，低于阈值不入库
+- **feat(memory/extraction): PendingExtractor 多租户配置** — 新增 `agentConfigs`，支持为不同 agent 设置独立 `scanIntervalMs / baseRetryMs / maxRetryMs / maxRetries / subsystemId`
+- **test: memory-extractor-gate.test.ts** — 验置信度门控
+- **test: pending-extractor-multiagent.test.ts** — 验证多 agent 扫描
+
+#### 变更
+
+- **refactor(memory/extraction/pending-extractor): start/stop 支持 agentConfigs**，并暴露 `scanAgent()` 便于测试
+- **refactor(memory/extraction/memory-extractor-subsystem): 入库前执行阈值过滤**
+- **docs: memory-extraction-design** — 补充门控与多租户扫描策略
+
 ## v0.11.6 (2026-09-06)
 
 ### feat: 去重集成与 pending extractor 退避重试
