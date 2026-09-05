@@ -33,3 +33,6 @@ export { createMemoryExtractorSubsystem } from './extraction/memory-extractor-su
 export { InMemoryExtractorStore } from './extraction/extractor-store.js';
 export type { ExtractorMeta, ExtractorStore } from './extraction/extractor-store.js';
 export { JsonlExtractorStore } from './extraction/jsonl-extractor-store.js';
+
+export { MemoryDeduplicator } from './extraction/memory-deduplicator.js';
+export { PendingExtractor } from './extraction/pending-extractor.js';

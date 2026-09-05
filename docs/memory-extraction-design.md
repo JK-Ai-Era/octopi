@@ -523,3 +523,22 @@ score = w1*explicitness
 ### 15.4 恢复策略
 - 进程重启后，`listPending(agentId)` 可发现待处理 session
 - 再次触发 `recent+pending` 生命周期事件即可恢复提取流程
+
+
+---
+
+## 16. 去重/升级与断点续提（已落地）
+
+### 16.1 MemoryDeduplicator
+- 同源去重：相同 `source` 标签不重复入库
+- 容量控制：同 `type + tags` 超阈值时跳过或升级最弱条目
+- 升级策略：当新候选的 `confidence/importance` 更高时，update 旧条目
+
+### 16.2 PendingExtractor
+- 定时扫描 `ExtractorStore.listPending(agentId)`
+- 对每个 pending session 构建 `SessionExtractBundle` 并触发 `memory.extractor`
+- 触发后将 meta 标记为 `completed`
+
+### 16.3 效果
+- 避免重复记忆膨胀
+- 进程重启后可自动恢复未完成提取

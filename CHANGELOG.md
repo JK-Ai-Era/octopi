@@ -1,3 +1,23 @@
+## v0.11.5 (2026-09-06)
+
+### feat: 记忆去重/升级 + 断点续提（pending scan）
+
+补齐记忆提取的两个关键能力：
+- 去重与升级策略（避免重复记忆膨胀）
+- pending session 定时扫描与恢复触发（断点续提）
+
+#### 新增
+
+- **feat(memory/extraction): MemoryDeduplicator** — 同源去重（source tag）+ 类型/标签容量控制 + 升级策略（confidence/importance 提升时 update）
+- **feat(memory/extraction): PendingExtractor** — 定时扫描 `ExtractorStore.listPending()`，构建 bundle 并触发 memory extractor 子系统
+- **test: memory-deduplicator.test.ts** — 验证去重与升级
+- **test: pending-extractor.test.ts** — 验证 pending 扫描触发链路
+
+#### 变更
+
+- **refactor(memory/index): 导出 deduplicator/pending extractor**
+- **docs: memory-extraction-design** — 补充去重与断点续提设计说明
+
 ## v0.11.4 (2026-09-06)
 
 ### feat: 提取素材可回放落盘（JSONL）与恢复链路
