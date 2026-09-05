@@ -1,3 +1,34 @@
+## v0.12.0 (2026-09-06)
+
+### refactor: 记忆提取系统收敛（一致性、观测统一、兜底恢复、回归测试）
+
+一次性完成记忆提取链路的系统性收敛，解决“打点式修补”带来的不一致与边界缺失。
+
+#### 新增
+
+- **test: e2e-memory-extraction.test.ts** — 端到端回归：同一 bundle 重复触发不翻倍
+- **test: bridge-miss-fallback.test.ts** — bridge miss 时写入 pending 记录，恢复链路兜底
+
+#### 变更（Breaking-ish 内部事件名统一）
+
+- **统一观测事件命名**：全部收敛到 `memory.extractor.*`
+  - bridge: `memory.extractor.bridge.*`
+  - pending: `memory.extractor.pending.*`
+- **runner: turn.end 增加 userText**，collector 优先基于用户文本做 confirm/reject 语义检测
+- **bridge: bundle miss → 自动写入 pending meta**，保证 pending extractor 可恢复
+- **bridge: trigger complete/error → reset 对应 session 采集态**，避免内存累积
+- **subsystem: 删除 `__senseEventBundle` 占位**，走正式 eventData→payload 透传
+- **bridge.attach() 支持 attachCollector 选项**，便于按需挂载采集器
+
+#### 测试
+
+- 更新 pending/bridge 事件测试，适配 `memory.extractor.*` 命名
+- 新增 e2e 与 bridge-miss 回归测试
+
+#### 文档
+
+- 更新 `docs/memory-extraction-design.md`：补充运行约束、统一事件名、兜底恢复说明
+
 ## v0.11.9 (2026-09-06)
 
 ### feat: bridge 可观测事件与 agent profile 阈值策略

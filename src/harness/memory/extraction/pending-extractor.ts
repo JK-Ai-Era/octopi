@@ -111,10 +111,10 @@ export class PendingExtractor {
   async scanAgent(cfg: NonNullable<PendingExtractorOptions['agentConfigs']>[number]): Promise<number> {
     const agentId = cfg.agentId;
     const subsystemId = cfg.subsystemId ?? this.options.subsystemId ?? 'memory.extractor';
-    this.emit('pending.extractor.scan.start', { agentId, pendingCount: 0 });
+    this.emit('memory.extractor.pending.scan.start', { agentId, pendingCount: 0 });
     const pendings = await this.store.listPending(agentId);
     let triggered = 0;
-    this.emit('pending.extractor.scan.start', { agentId, pendingCount: pendings.length });
+    this.emit('memory.extractor.pending.scan.start', { agentId, pendingCount: pendings.length });
 
     for (const meta of pendings) {
       const sessionId = meta.sessionId;
@@ -143,7 +143,7 @@ export class PendingExtractor {
         await this.runtime.trigger(subsystemId);
         this.retry.delete(key);
         await this.store.updateMeta(agentId, sessionId, { ...meta, extractionStatus: 'completed' });
-        this.emit('pending.extractor.scan.session.triggered', { agentId, sessionId });
+        this.emit('memory.extractor.pending.scan.session.triggered', { agentId, sessionId });
         triggered += 1;
       } catch {
         const state = this.retry.get(key) ?? { failures: 0, nextRetryAt: 0 };
@@ -155,22 +155,22 @@ export class PendingExtractor {
         this.retry.set(key, state);
         if (state.failures >= (cfg.maxRetries ?? this.options.maxRetries ?? 5)) {
           await this.store.updateMeta(agentId, sessionId, { ...meta, extractionStatus: 'error' });
-          this.emit('pending.extractor.scan.session.error', { agentId, sessionId, failures: state.failures });
+          this.emit('memory.extractor.pending.scan.session.error', { agentId, sessionId, failures: state.failures });
           this.retry.delete(key);
         }
       }
     }
 
-    this.emit('pending.extractor.scan.complete', { agentId, triggered });
+    this.emit('memory.extractor.pending.scan.complete', { agentId, triggered });
     return triggered;
   }
 
   /** 执行一次扫描（默认 agentId 模式） */
   async scan(): Promise<number> {
-    this.emit('pending.extractor.scan.start', { agentId: this.agentId, pendingCount: 0 });
+    this.emit('memory.extractor.pending.scan.start', { agentId: this.agentId, pendingCount: 0 });
     const pendings = await this.store.listPending(this.agentId);
     let triggered = 0;
-    this.emit('pending.extractor.scan.start', { agentId: this.agentId, pendingCount: pendings.length });
+    this.emit('memory.extractor.pending.scan.start', { agentId: this.agentId, pendingCount: pendings.length });
 
     for (const meta of pendings) {
       const sessionId = meta.sessionId;
@@ -219,7 +219,7 @@ export class PendingExtractor {
           extractionStatus: 'completed',
         });
 
-        this.emit('pending.extractor.scan.session.triggered', { agentId: this.agentId, sessionId });
+        this.emit('memory.extractor.pending.scan.session.triggered', { agentId: this.agentId, sessionId });
         triggered += 1;
       } catch {
         // 失败：退避重试
@@ -236,13 +236,13 @@ export class PendingExtractor {
             ...meta,
             extractionStatus: 'error',
           });
-          this.emit('pending.extractor.scan.session.error', { agentId: this.agentId, sessionId, failures: state.failures });
+          this.emit('memory.extractor.pending.scan.session.error', { agentId: this.agentId, sessionId, failures: state.failures });
           this.retry.delete(sessionId);
         }
       }
     }
 
-    this.emit('pending.extractor.scan.complete', { agentId: this.agentId, triggered });
+    this.emit('memory.extractor.pending.scan.complete', { agentId: this.agentId, triggered });
     return triggered;
   }
 }

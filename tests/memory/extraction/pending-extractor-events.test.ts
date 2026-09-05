@@ -37,15 +37,15 @@ describe('PendingExtractor observability events', () => {
 
     const emitted: string[] = [];
     const d = events.onAll((e) => {
-      if (e.type.startsWith('pending.extractor.')) emitted.push(e.type);
+      if (e.type.startsWith('memory.extractor.pending.')) emitted.push(e.type);
     });
 
     const pending = new PendingExtractor(events, runtime, store, { agentId: 'a1', autoStart: false });
     await pending.scan();
 
-    expect(emitted).toContain('pending.extractor.scan.start');
-    expect(emitted).toContain('pending.extractor.scan.session.triggered');
-    expect(emitted).toContain('pending.extractor.scan.complete');
+    expect(emitted).toContain('memory.extractor.pending.scan.start');
+    expect(emitted).toContain('memory.extractor.pending.scan.session.triggered');
+    expect(emitted).toContain('memory.extractor.pending.scan.complete');
 
     d.dispose();
     pending.dispose();

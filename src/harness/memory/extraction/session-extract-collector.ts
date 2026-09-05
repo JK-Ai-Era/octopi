@@ -181,16 +181,18 @@ export class SessionExtractCollector {
 
     const data = (event.data ?? {}) as Record<string, unknown>;
     const content = (data.content as string) ?? '';
+    const userText = (data.userText as string) ?? '';
+    const assistantText = content;
+
     s.lastAssistantTextByTurn = content;
 
     // 简单结构化信号：助手总结（长度阈值 + 包含总结关键词）
-    if (isSummaryLikeText(content)) {
-      this.pushEvent(s, 'assistant_summary', { length: content.length });
+    if (isSummaryLikeText(assistantText)) {
+      this.pushEvent(s, 'assistant_summary', { length: assistantText.length });
     }
 
-    // 从用户最后一条文本（本 collector 未直接拿 messages）只能用 content 信号启发；
-    // 更可靠的是上游 recorder 传入 userText，这里先以 content 做极性检测作为占位
-    const sem = detectSemanticSignals({ text: content, lastAssistantText: content });
+    // 优先从用户文本做极性检测（降低误判）
+    const sem = detectSemanticSignals({ text: userText || assistantText, lastAssistantText: assistantText });
     if (sem.confirmLikely) {
       this.pushEvent(s, 'user_confirm', { confidence: sem.confidence });
     } else if (sem.rejectLikely) {

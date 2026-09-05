@@ -87,7 +87,7 @@ export interface RunConfig {
 function adaptLoopEvent(
   event: AgentLoopEvent,
   meta: { agentId: string; sessionId: string },
-  state: { assistantContent: string },
+  state: { assistantContent: string; lastUserContent?: string },
 ): import('../core/primitives/event-bus.js').AgentEvent | null {
   switch (event.type) {
     case 'agent_start':
@@ -104,7 +104,7 @@ function adaptLoopEvent(
       state.assistantContent = typeof event.message.content === 'string' ? event.message.content : '';
       return null;
     case 'turn_end':
-      return { type: 'turn.end', timestamp: Date.now(), data: { content: state.assistantContent, hasToolCalls: event.hasToolCalls, usage: event.usage } };
+      return { type: 'turn.end', timestamp: Date.now(), data: { content: state.assistantContent, userText: state.lastUserContent ?? '', hasToolCalls: event.hasToolCalls, usage: event.usage } };
     case 'llm_stream_delta':
       return { type: 'llm_stream_delta', timestamp: event.timestamp, data: event.data };
     case 'tool_start':
@@ -269,7 +269,7 @@ export class SessionAwareRunner {
       let streamedContent = '';
       let lastUsage: any = undefined;
       const meta = { agentId: effectiveRunConfig.agentId ?? 'default', sessionId };
-      const adaptState = { assistantContent: '' };
+      const adaptState = { assistantContent: '', lastUserContent: '' };
 
       for await (const loopEvent of runAgentWithReliability(
         this.agent.context,

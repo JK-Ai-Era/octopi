@@ -74,8 +74,7 @@ export function createMemoryExtractorSubsystem(options: MemoryExtractorSubsystem
         // 从 payload 中获取结构化 bundle（由上游采集器提供）
         // 兼容两条注入路径：SubsystemInput.payload 或 SenseContext.eventData（bridge 会发射 bundle.ready）
         const payloadBundle = (input.payload?.sessionExtractBundle ?? undefined) as SessionExtractBundle | undefined;
-        const eventBundle = (input.payload?.__senseEventBundle ?? undefined) as SessionExtractBundle | undefined;
-        const bundle = (payloadBundle ?? eventBundle ?? {
+        const bundle = (payloadBundle ?? {
           sessionId: input.sessionMetadata?.sessionId ?? 'unknown',
           agentId: input.sessionMetadata?.agentId ?? 'unknown',
           startAt: Date.now(),

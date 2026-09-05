@@ -635,3 +635,26 @@ score = w1*explicitness
 - `memory.bridge.trigger.error`
 
 用于实时链路监控与问题定位。
+
+
+---
+
+## 24. 记忆提取系统收敛（v0.12.0）
+
+### 24.1 观测事件统一
+所有观测事件统一为 `memory.extractor.*` 前缀：
+- bridge: `memory.extractor.bridge.*`
+- pending: `memory.extractor.pending.*`
+
+### 24.2 用户信号来源修正
+runner 的 `turn.end` 事件新增 `userText`。  
+collector 优先使用 `userText` 做 confirm/reject 语义检测，避免把助手语气误判为用户决定。
+
+### 24.3 兜底恢复
+bridge 在 `bundle.miss` 时会写入 pending meta，确保 pending extractor 可接管恢复。
+
+### 24.4 采集态清理
+bridge 在 `trigger.complete` 与 `trigger.error` 后 reset session 采集态，避免长时间运行内存累积。
+
+### 24.5 端到端回归
+新增回归测试：同一 bundle 重复触发不会导致记忆条目翻倍。

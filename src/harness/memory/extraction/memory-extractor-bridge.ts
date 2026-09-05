@@ -53,8 +53,10 @@ export class MemoryExtractorBridge {
   }
 
   /** 开始监听并采集（幂等） */
-  attach(): void {
-    this.collector.attach(this.events);
+  attach(options?: { attachCollector?: boolean }): void {
+    if (options?.attachCollector ?? true) {
+      this.collector.attach(this.events);
+    }
 
     this.disposables.push(
       this.events.on('session.lifecycle.updated', (e) => this.onLifecycleUpdated(e)),
@@ -91,28 +93,36 @@ export class MemoryExtractorBridge {
       return;
     }
 
-    this.emit('memory.bridge.lifecycle.matched', { sessionId, agentId: event.agentId });
+    this.emit('memory.extractor.bridge.lifecycle.matched', { sessionId, agentId: event.agentId });
     let bundle = this.collector.buildBundle(sessionId);
 
     // 从持久化 store 加载（兜底：重启恢复）
     if (!bundle) {
-      this.emit('memory.bridge.bundle.miss', { sessionId, agentId: event.agentId });
+      this.emit('memory.extractor.bridge.bundle.miss', { sessionId, agentId: event.agentId });
+      // 兜底：写入一个最小 pending 记录，确保 pending extractor 可恢复
+      if (this.options?.store) {
+        this.options.store.updateMeta(event.agentId ?? 'unknown', sessionId, {
+          sessionId,
+          agentId: event.agentId,
+          extractionStatus: 'pending',
+        }).catch(() => {});
+      }
       this.loadBundleFromStore(event.agentId ?? 'unknown', sessionId).then((loaded) => {
         if (!loaded) return;
-        this.emit('memory.bridge.bundle.loaded', { sessionId, agentId: loaded.agentId, eventCount: loaded.events.length });
+        this.emit('memory.extractor.bridge.bundle.loaded', { sessionId, agentId: loaded.agentId, eventCount: loaded.events.length });
         this.emitBundleAndTrigger(loaded);
       }).catch(() => {});
       return;
     }
 
-    this.emit('memory.bridge.bundle.hit', { sessionId, agentId: bundle.agentId, eventCount: bundle.events.length });
+    this.emit('memory.extractor.bridge.bundle.hit', { sessionId, agentId: bundle.agentId, eventCount: bundle.events.length });
     this.emitBundleAndTrigger(bundle);
   }
 
   private emitBundleAndTrigger(bundle: SessionExtractBundle): void {
     const sessionId = bundle.sessionId;
 
-    this.emit('memory.bridge.trigger.start', { sessionId, agentId: bundle.agentId });
+    this.emit('memory.extractor.bridge.trigger.start', { sessionId, agentId: bundle.agentId });
     // 将 bundle 注入 runtime 的主上下文，供 input-builder 透传到 SubsystemInput.payload.sessionLifecycle 等字段
     this.runtime.setMainAgentContext({
       messages: [],
@@ -134,9 +144,11 @@ export class MemoryExtractorBridge {
 
     // 触发子系统执行
     this.runtime.trigger(this.subsystemId).then(() => {
-      this.emit('memory.bridge.trigger.complete', { sessionId, agentId: bundle.agentId });
+      this.emit('memory.extractor.bridge.trigger.complete', { sessionId, agentId: bundle.agentId });
+      this.collector.reset(sessionId);
     }).catch(() => {
-      this.emit('memory.bridge.trigger.error', { sessionId, agentId: bundle.agentId });
+      this.emit('memory.extractor.bridge.trigger.error', { sessionId, agentId: bundle.agentId });
+      this.collector.reset(sessionId);
     });
   }
 }
