@@ -21,3 +21,11 @@ export type { ContextIntelligenceConfig, AssembledContext } from './context-inte
 // ── SQLite 实现 ──
 export { AgentDatabase, SqliteMemoryStore, SqliteWisdomStore, SqliteConceptGraph, KnowledgeRegistry, createEmbeddingProvider } from './sqlite/index.js';
 export type { AgentDatabaseOptions, SqliteMemoryStoreOptions, SqliteConceptGraphOptions, EmbeddingProvider, EmbeddingConfig, KnowledgeSourceEntry } from './sqlite/index.js';
+
+
+// ── 提取/采集（Memory Extraction） ──
+export { SessionExtractor } from './extraction/session-extractor.js';
+export type { SessionExtractBundle, SessionExtractEvent, MemoryCandidate } from './extraction/session-extractor.js';
+export { SessionExtractCollector } from './extraction/session-extract-collector.js';
+export { MemoryExtractorBridge } from './extraction/memory-extractor-bridge.js';
+export { createMemoryExtractorSubsystem } from './extraction/memory-extractor-subsystem.js';

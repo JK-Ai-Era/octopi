@@ -229,6 +229,16 @@ export class SubsystemRuntime {
     const agentCtx = this.mainAgentContext ?? this.buildFallbackAgentContext();
     const input = buildAgentInput(entry.spec, agentCtx);
 
+    // 通用：当 SenseContext.eventData 携带结构化 bundle 时，透传到 SubsystemInput.payload
+    if (ctx.eventData && typeof ctx.eventData === 'object') {
+      const eventDataObj = ctx.eventData as Record<string, unknown>;
+      const bundle = eventDataObj.bundle;
+      if (bundle && typeof bundle === 'object') {
+        if (!input.payload) input.payload = {};
+        (input.payload as Record<string, unknown>).sessionExtractBundle = bundle;
+      }
+    }
+
     // 获取会话
     const session = this.sessionManager.getOrCreate(
       subsystemId,

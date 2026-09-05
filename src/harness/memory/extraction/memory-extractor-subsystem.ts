@@ -46,10 +46,10 @@ export function createMemoryExtractorSubsystem(options: MemoryExtractorSubsystem
       // 通用感知源：事件驱动
       source: 'eventBus',
       filter: {
-        // 监听通用 session 生命周期事件（由 runner 发出）
-        events: ['session.lifecycle.updated'],
-        // 语言无关的声明式条件：仅处理 recent + pending（通过 SenseContext 字段）
-        condition: "sessionLifecycle === 'recent' && extractionStatus === 'pending'",
+        // 监听通用事件：包含 session 生命周期与 extractor bundle ready
+        events: ['session.lifecycle.updated', 'memory.extractor.bundle.ready'],
+        // 语言无关的声明式条件：优先匹配 recent + pending；当 bundle 事件到达时也允许触发
+        condition: "(sessionLifecycle === 'recent' && extractionStatus === 'pending') || (eventData?.bundle != null)",
       },
       isolation: 'structured',
     },
@@ -58,7 +58,10 @@ export function createMemoryExtractorSubsystem(options: MemoryExtractorSubsystem
       implementation: 'code',
       handler: async (input) => {
         // 从 payload 中获取结构化 bundle（由上游采集器提供）
-        const bundle = (input.payload?.sessionExtractBundle ?? {
+        // 兼容两条注入路径：SubsystemInput.payload 或 SenseContext.eventData（bridge 会发射 bundle.ready）
+        const payloadBundle = (input.payload?.sessionExtractBundle ?? undefined) as SessionExtractBundle | undefined;
+        const eventBundle = (input.payload?.__senseEventBundle ?? undefined) as SessionExtractBundle | undefined;
+        const bundle = (payloadBundle ?? eventBundle ?? {
           sessionId: input.sessionMetadata?.sessionId ?? 'unknown',
           agentId: input.sessionMetadata?.agentId ?? 'unknown',
           startAt: Date.now(),
@@ -117,7 +120,7 @@ export function createMemoryExtractorSubsystem(options: MemoryExtractorSubsystem
     },
     boundary: {
       visibility: 'structured',
-      authority: 'suggest',
+      authority: 'act',
       security: 'trusted',
     },
     tools: { mode: 'none' },

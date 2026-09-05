@@ -461,3 +461,35 @@ score = w1*explicitness
 
 ### 13.5 结论
 这些改造不是 memory 专属，而是让所有“session 级子系统”都能基于生命周期触发与输入上下文运行。
+
+
+---
+
+## 14. 真实采集链路（已落地）
+
+### 14.1 语义信号（语言无关）
+新增 `SemanticSignals`，用于在事件信号之外补充 confirm/reject 弱信号：
+- 不依赖特定语言关键词
+- 基于长度、否定前缀、标点极性等结构特征
+- 可后续替换为 embedding/polarity 模型
+
+### 14.2 SessionExtractCollector
+监听通用 EventBus 事件并聚合为 `SessionExtractBundle`：
+- `turn.end`
+- `tool.exec.start` / `tool.exec.end`
+- `session.lifecycle.updated`
+- `engine.end`
+
+产出包括：
+- SessionExtractEvent[]（可回放）
+- RunSummary（工具调用数、失败率、主要错误）
+
+### 14.3 MemoryExtractorBridge
+在主会话生命周期更新为 `recent + pending` 时：
+1. 从 `SessionExtractCollector` 生成 `SessionExtractBundle`
+2. 发射 `memory.extractor.bundle.ready`
+3. 调用 `runtime.trigger('memory.extractor')`
+
+### 14.4 Runtime 通用透传
+`SubsystemRuntime.onTrigger()` 已支持将 `SenseContext.eventData.bundle` 透传到 `SubsystemInput.payload.sessionExtractBundle`。
+这意味着子系统可以基于“事件携带的结构化输入”运行，而不必只依赖主上下文。

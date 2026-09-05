@@ -1,3 +1,27 @@
+## v0.11.3 (2026-09-06)
+
+### feat: 接入真实素材采集链路（session→memory 提取可运行）
+
+在前置架构改造基础上，接入真实的事件采集、语义信号、子系统触发链路，使“session→memory 提取”从骨架进入可运行状态。
+
+#### 新增
+
+- **feat(memory/extraction): SemanticSignals（语言无关）** — 基于结构化文本特征（长度/否定前缀/标点极性）给出 confirm/reject 弱信号
+- **feat(memory/extraction): SessionExtractCollector** — 监听 EventBus 的 turn.end / tool.exec.start|end / session.lifecycle.updated / engine.end，聚合为 `SessionExtractBundle`
+- **feat(memory/extraction): MemoryExtractorBridge** — 在 lifecycle 更新为 `recent + pending` 时自动生成 bundle 并触发 `memory.extractor` 子系统
+- **feat(autonomous-subsystem/runtime): SenseContext.eventData → SubsystemInput.payload.sessionExtractBundle** — 通用透传机制，子系统可直接读取结构化 bundle
+- **test: memory-extractor-bridge.test.ts** — 验证 bundle.ready 事件发射与子系统触发链路
+
+#### 变更
+
+- **refactor(memory/extraction/memory-extractor-subsystem): 注册事件扩展** — 监听 `memory.extractor.bundle.ready`，并允许 `eventData?.bundle` 作为触发条件
+- **fix(memory/extraction): boundary.authority 修正** — 从 `suggest` 改为 `act`，匹配 `act.mode=inject`
+- **refactor(memory/index): 导出提取/采集模块**
+
+#### 文档
+
+- 更新 `docs/memory-extraction-design.md`：补充采集链路与触发说明
+
 ## v0.11.2 (2026-09-06)
 
 ### refactor: 自主子系统架构前置改造（支持 session→memory 提取）
