@@ -17,6 +17,7 @@ import type { SubsystemSpec } from '../../autonomous-subsystem/types.js';
 import type { MemoryStore } from '../types.js';
 import { SessionExtractor, type SessionExtractBundle } from './session-extractor.js';
 import { MemoryDeduplicator, type MemoryDeduplicatorOptions } from './memory-deduplicator.js';
+import { defaultThresholdPolicy, type ThresholdPolicy } from './threshold-policy.js';
 
 // ── Options ──
 
@@ -27,10 +28,12 @@ export interface MemoryExtractorSubsystemOptions {
   memoryStore: MemoryStore;
   /** 去重与升级配置（可选） */
   deduplicator?: MemoryDeduplicatorOptions;
-  /** 最低置信度阈值（低于则不入库，默认 0.6） */
+  /** 最低置信度阈值（静态兜底，默认 0.6） */
   minConfidence?: number;
-  /** 最低重要性阈值（低于则不入库，默认 0.6） */
+  /** 最低重要性阈值（静态兜底，默认 0.6） */
   minImportance?: number;
+  /** 动态阈值策略（可选，默认按 failureRate/majorErrors/eventCount 调整） */
+  thresholdPolicy?: ThresholdPolicy;
   /** 是否启用（默认 true） */
   enabled?: boolean;
 }
@@ -80,8 +83,9 @@ export function createMemoryExtractorSubsystem(options: MemoryExtractorSubsystem
 
         const candidates = extractor.extract(bundle);
         const deduped = await deduper.filterAndUpgrade(candidates);
-        const minConf = options.minConfidence ?? 0.6;
-        const minImp = options.minImportance ?? 0.6;
+        const dynamic = (options.thresholdPolicy ?? defaultThresholdPolicy)({ runSummary: bundle.runSummary, eventCount: bundle.events.length });
+        const minConf = dynamic.minConfidence ?? options.minConfidence ?? 0.6;
+        const minImp = dynamic.minImportance ?? options.minImportance ?? 0.6;
         const accepted = deduped.filter((c) => c.confidence >= minConf && c.importance >= minImp);
         const gated = deduped.length - accepted.length;
 

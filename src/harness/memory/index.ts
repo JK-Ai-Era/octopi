@@ -36,3 +36,6 @@ export { JsonlExtractorStore } from './extraction/jsonl-extractor-store.js';
 
 export { MemoryDeduplicator } from './extraction/memory-deduplicator.js';
 export { PendingExtractor } from './extraction/pending-extractor.js';
+
+export { defaultThresholdPolicy } from './extraction/threshold-policy.js';
+export type { ThresholdPolicy, ThresholdPolicyInput, ThresholdPolicyResult } from './extraction/threshold-policy.js';

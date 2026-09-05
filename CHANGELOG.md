@@ -1,3 +1,23 @@
+## v0.11.8 (2026-09-06)
+
+### feat: 动态阈值策略与 pending extractor 可观测事件
+
+进一步提升记忆提取的质量控制与运行可观测性。
+
+#### 新增
+
+- **feat(memory/extraction): ThresholdPolicy（动态阈值策略）** — 根据 `failureRate / majorErrors / eventCount` 自适应调整 `minConfidence / minImportance`
+- **feat(memory/extraction): PendingExtractor 可观测事件** — 新增 `pending.extractor.scan.start / session.triggered / session.error / complete` 事件
+- **test: threshold-policy.test.ts** — 验证动态阈值调整
+- **test: pending-extractor-events.test.ts** — 验证可观测事件发射
+
+#### 变更
+
+- **refactor(memory/extraction/memory-extractor-subsystem): 使用 ThresholdPolicy** — 入库前通过策略计算阈值（支持自定义覆盖）
+- **refactor(memory/extraction/pending-extractor): scan/scanAgent 发射观测事件**
+- **refactor(memory/index): 导出 threshold-policy**
+- **docs: memory-extraction-design** — 补充动态阈值与观测事件说明
+
 ## v0.11.7 (2026-09-06)
 
 ### feat: 置信度门控与多租户 pending 扫描策略

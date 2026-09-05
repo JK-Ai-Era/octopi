@@ -585,3 +585,27 @@ score = w1*explicitness
 - 高优先级 agent 可以更高频扫描
 - 不稳定 agent 可以更保守重试
 - 不同 agent 可绑定不同子系统实例
+
+
+---
+
+## 20. 动态阈值策略（已落地）
+
+新增 `ThresholdPolicy`，根据 session 运行质量自适应调整：
+- `failureRate` 越高 → 阈值越高（更保守）
+- `majorErrors` 越多 → 阈值越高
+- `eventCount` 越少 → 阈值越高（样本少时更保守）
+
+`createMemoryExtractorSubsystem` 会使用 `defaultThresholdPolicy` 计算 `minConfidence/minImportance`。
+
+---
+
+## 21. PendingExtractor 可观测事件（已落地）
+
+在 `scan()` / `scanAgent()` 中新增通用观测事件：
+- `pending.extractor.scan.start`
+- `pending.extractor.scan.session.triggered`
+- `pending.extractor.scan.session.error`
+- `pending.extractor.scan.complete`
+
+可用于接入监控、日志、告警。
