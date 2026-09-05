@@ -198,7 +198,7 @@ harness/security/
 ├── risk-evaluator.ts           # 操作+目标组合风险评估
 ├── shell-parser.ts             # Shell 命令解析器（4 层）
 ├── degradation.ts              # 6 种降级策略
-├── safety-agent-spec.ts        # 安全智能体规格
+├── safety-guard/               # 安全守卫子系统（subsystems/safety-guard/）
 ├── capability-enforcer.ts      # 信任分级
 ├── policy.ts                   # 安全策略
 └── index.ts

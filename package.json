@@ -1,6 +1,6 @@
 {
   "name": "octopi",
-  "version": "0.11.0",
+  "version": "0.11.1",
   "description": "\u53ef\u5d4c\u5165\u7684 Agent \u5f15\u64ce",
   "type": "module",
   "main": "dist/index.js",

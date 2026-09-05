@@ -1,7 +1,8 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type {
-  SubsystemSpec, ThinkImplementation, SenseSource, ActMode,
+  SubsystemSpec, ThinkConfig, ThinkImplementation, SenseSource, ActMode,
+  IsolationLevel, ContextField,
   SignalSeverity, SignalChannel, VisibilityLevel, AuthorityLevel,
   SecurityLevel, ToolMode, SessionMode, SessionScope,
 } from './types.js';
@@ -110,7 +111,7 @@ async function buildSpec(
 
   const thinkRaw = (config.think ?? {}) as Record<string, unknown>;
   const impl = (thinkRaw.implementation ?? (systemPrompt ? 'llm' : 'code')) as ThinkImplementation;
-  const strategy = (thinkRaw.strategy ?? (impl === 'code' ? 'deterministic' : 'heuristic')) as any;
+  const strategy = (thinkRaw.strategy ?? (impl === 'code' ? 'deterministic' : 'heuristic')) as ThinkConfig['strategy'];
 
   const senseRaw = (config.sense ?? {}) as Record<string, unknown>;
   const filterRaw = senseRaw.filter as Record<string, unknown> | undefined;
@@ -152,8 +153,8 @@ async function buildSpec(
         conditionRef: filterRaw.conditionRef as string | undefined,
       } : undefined,
       interval: senseRaw.interval as number | undefined,
-      isolation: (senseRaw.isolation ?? 'structured') as any,
-      fields: senseRaw.fields as any[] | undefined,
+      isolation: (senseRaw.isolation ?? 'structured') as IsolationLevel,
+      fields: senseRaw.fields as ContextField[] | undefined,
     },
     think: {
       strategy,

@@ -234,7 +234,11 @@ export class ThinkExecutor {
       execute: t.handler
         ? async (toolCallId: string, args: unknown) => {
             try {
-              const result = await t.handler!(args as Record<string, unknown>, { toolCallId } as any);
+              const result = await t.handler!(args as Record<string, unknown>, {
+                sessionId: 'subsystem',
+                agentId: 'subsystem',
+                messages: [],
+              });
               return {
                 toolCallId,
                 name: t.definition.name,
@@ -358,19 +362,24 @@ export class ThinkExecutor {
   /**
    * 兜底输出（LLM 输出无法解析时）
    */
+  /**
+   * 兜底输出（LLM 输出无法解析时）
+   *
+   * 策略：
+   * - block 模式：escalate（交给主系统决定，不擅自放行也不擅自阻断）
+   * - 其他模式：将原始内容作为 suggest 信号
+   */
   private buildFallbackOutput(actMode: ActMode, content: string): SubsystemOutput {
     if (actMode === 'block') {
-      // block 模式下，无法解析 → allow（安全默认：系统运行优先）
       return {
         signals: [{
-          action: 'allow',
-          reason: 'LLM output could not be parsed, defaulting to allow',
+          action: 'escalate',
+          reason: `Safety guard LLM output could not be parsed, escalating to main system. Raw: ${content.slice(0, 200)}`,
           confidence: 0,
         }],
       };
     }
 
-    // 其他模式，将原始内容作为 suggest 信号
     return {
       signals: [{
         action: 'suggest',

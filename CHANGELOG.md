@@ -1,3 +1,21 @@
+## v0.11.1 (2026-09-05)
+
+### fix: 自主子系统代码审计修复
+
+修复代码审计发现的 5 个问题。
+
+#### 修复
+
+- **fix(session): TTL 语义修复** — cleanupExpired() 从硬编码 30 分钟改为按每个 persistent session 的配置 TTL 判断，避免长 TTL 会话被错误回收
+- **fix(signal): applyPendingContext 排序生效** — 排序后的 sorted 数组替代原 contextQueue 遍历，replace 类型（compressed 标记）优先于 inject
+- **fix(think): block 解析失败改为 escalate** — 安全守卫 LLM 输出不可解析时从默认 allow 改为 escalate（交给主系统决定），更安全
+- **fix(loader/think): 移除 as any** — loader 的 strategy/isolation/fields 和 executor 的 tool handler 上下文均改为正确类型
+- **fix(docs): architecture.md 安全目录描述** — safety-agent-spec.ts 引用更新为 safety-guard 子系统目录
+
+#### 已知限制
+
+- YAML/Frontmatter 解析仍为手写正则，仅支持浅层 key:value 结构。复杂嵌套 YAML 需引入轻量解析库（待后续迭代）
+
 ## v0.11.0 (2026-09-05)
 
 ### refactor: 自主子系统架构重构

@@ -124,14 +124,14 @@ export class SignalBus {
    * @param messages - 主 Agent 的消息数组引用
    */
   applyPendingContext(messages: Message[]): void {
-    // 按信号优先级排序
+    // replace 类型优先于 inject（compressed 标记表示 replace）
     const sorted = [...this.contextQueue].sort((a, b) => {
-      // replace 类型优先于 inject
-      const aIsReplace = a.messages.some(() => true); // 简化判断
-      return 0;
+      const aPriority = a.compressed ? 0 : 1;
+      const bPriority = b.compressed ? 0 : 1;
+      return aPriority - bPriority;
     });
 
-    for (const injection of this.contextQueue) {
+    for (const injection of sorted) {
       for (const msg of injection.messages) {
         messages.push({
           ...msg,
