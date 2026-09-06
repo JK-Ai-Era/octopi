@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { MarkdownMessage } from './MarkdownMessage';
 import { OctopiClient } from '../../../src/integration/web/sdk/client';
 import { OctopiRuntimeStore } from '../../../src/integration/web/runtime/store';
 import type {
@@ -170,7 +171,7 @@ function ConversationItemCard({ item }: { item: ConversationItem }) {
         <div className="msg-user">
           <div className="msg-user-bubble">
             <div className="msg-user-label">用户</div>
-            <pre style={{ margin: 0, whiteSpace: 'pre-wrap', fontFamily: 'inherit' }}>{u.content}</pre>
+            <div className="msg-user-content">{u.content}</div>
           </div>
         </div>
       );
@@ -187,7 +188,9 @@ function ConversationItemCard({ item }: { item: ConversationItem }) {
             {formatTimestamp(a.createdAt) && <span className="muted">{formatTimestamp(a.createdAt)}</span>}
           </div>
           <div className="panel msg-assistant-body" style={{ borderColor }}>
-            <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{a.content || '(空)'}</pre>
+            <div className="msg-assistant-content">
+              {a.content ? <MarkdownMessage content={a.content} /> : '(空)' }
+            </div>
             {a.error && <div className="small status-error" style={{ marginTop: 6 }}>{a.error}</div>}
             {a.toolCalls && a.toolCalls.length > 0 && (
               <div className="small muted" style={{ marginTop: 6 }}>工具: {a.toolCalls.join(', ')}</div>
@@ -524,7 +527,9 @@ export default function ChatWorkspace() {
                   <span className="status-ok">· 流式输出中</span>
                 </div>
                 <div className="panel msg-assistant-body" style={{ borderColor: '#93c5fd' }}>
-                  <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{stream}</pre>
+                  <div className="msg-assistant-content">
+                    <MarkdownMessage content={stream} />
+                  </div>
                 </div>
               </div>
             )}
