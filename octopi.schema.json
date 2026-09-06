@@ -3,7 +3,9 @@
   "title": "Octopi Configuration",
   "description": "Octopi Agent Framework 配置文件 (v0.3.0)",
   "type": "object",
-  "required": ["agents"],
+  "required": [
+    "agents"
+  ],
   "properties": {
     "agents": {
       "type": "array",
@@ -11,7 +13,10 @@
       "minItems": 1,
       "items": {
         "type": "object",
-        "required": ["id", "model"],
+        "required": [
+          "id",
+          "model"
+        ],
         "properties": {
           "id": {
             "type": "string",
@@ -34,18 +39,29 @@
               },
               {
                 "type": "object",
-                "required": ["systemPrompt"],
+                "required": [
+                  "systemPrompt"
+                ],
                 "properties": {
-                  "name": { "type": "string" },
-                  "description": { "type": "string" },
-                  "systemPrompt": { "type": "string" }
+                  "name": {
+                    "type": "string"
+                  },
+                  "description": {
+                    "type": "string"
+                  },
+                  "systemPrompt": {
+                    "type": "string"
+                  }
                 }
               }
             ]
           },
           "model": {
             "type": "object",
-            "required": ["provider", "model"],
+            "required": [
+              "provider",
+              "model"
+            ],
             "properties": {
               "provider": {
                 "type": "string",
@@ -66,7 +82,9 @@
               },
               "fallbackModels": {
                 "type": "array",
-                "items": { "type": "string" }
+                "items": {
+                  "type": "string"
+                }
               }
             }
           },
@@ -75,15 +93,21 @@
             "properties": {
               "allow": {
                 "type": "array",
-                "items": { "type": "string" }
+                "items": {
+                  "type": "string"
+                }
               },
               "deny": {
                 "type": "array",
-                "items": { "type": "string" }
+                "items": {
+                  "type": "string"
+                }
               },
               "requireConfirmation": {
                 "type": "array",
-                "items": { "type": "string" }
+                "items": {
+                  "type": "string"
+                }
               }
             }
           },
@@ -93,11 +117,15 @@
           },
           "skills": {
             "type": "array",
-            "items": { "type": "string" }
+            "items": {
+              "type": "string"
+            }
           },
           "channelBindings": {
             "type": "object",
-            "additionalProperties": { "type": "string" }
+            "additionalProperties": {
+              "type": "string"
+            }
           }
         }
       }
@@ -108,7 +136,10 @@
       "properties": {
         "mode": {
           "type": "string",
-          "enum": ["merge", "replace"],
+          "enum": [
+            "merge",
+            "replace"
+          ],
           "description": "合并模式：merge=与 builtin 合并，replace=完全替代"
         },
         "providers": {
@@ -116,13 +147,27 @@
           "description": "Provider 映射（key = provider 名称）",
           "additionalProperties": {
             "type": "object",
-            "required": ["baseUrl", "apiKey", "api", "models"],
+            "required": [
+              "baseUrl",
+              "apiKey",
+              "api",
+              "models"
+            ],
             "properties": {
-              "baseUrl": { "type": "string", "description": "API Base URL" },
-              "apiKey": { "type": "string", "description": "API Key（支持 ${ENV_VAR} 语法）" },
+              "baseUrl": {
+                "type": "string",
+                "description": "API Base URL"
+              },
+              "apiKey": {
+                "type": "string",
+                "description": "API Key（支持 ${ENV_VAR} 语法）"
+              },
               "api": {
                 "type": "string",
-                "enum": ["openai-completions", "anthropic-messages"],
+                "enum": [
+                  "openai-completions",
+                  "anthropic-messages"
+                ],
                 "description": "API 协议类型"
               },
               "models": {
@@ -130,17 +175,60 @@
                 "description": "模型列表",
                 "items": {
                   "type": "object",
-                  "required": ["id"],
+                  "required": [
+                    "id"
+                  ],
                   "properties": {
-                    "id": { "type": "string", "description": "模型 ID" },
-                    "name": { "type": "string", "description": "模型名称（默认等于 id）" },
-                    "contextWindow": { "type": "integer", "description": "上下文窗口大小" },
-                    "maxTokens": { "type": "integer", "description": "最大输出 token 数" },
-                    "reasoning": { "type": "boolean", "description": "是否支持推理模式" }
+                    "id": {
+                      "type": "string",
+                      "description": "模型 ID"
+                    },
+                    "name": {
+                      "type": "string",
+                      "description": "模型名称（默认等于 id）"
+                    },
+                    "contextWindow": {
+                      "type": "integer",
+                      "description": "上下文窗口大小"
+                    },
+                    "maxTokens": {
+                      "type": "integer",
+                      "description": "最大输出 token 数"
+                    },
+                    "reasoning": {
+                      "type": "boolean",
+                      "description": "是否支持推理模式"
+                    }
                   }
                 }
               },
-              "timeoutSeconds": { "type": "number", "description": "请求超时（秒）" }
+              "timeoutSeconds": {
+                "type": "number",
+                "description": "请求超时（秒）"
+              }
+            }
+          }
+        },
+        "level": {
+          "type": "object",
+          "description": "模型级别映射（子系统通过级别名引用具体模型）",
+          "additionalProperties": {
+            "type": "object",
+            "required": [
+              "primary"
+            ],
+            "properties": {
+              "primary": {
+                "type": "string",
+                "description": "主模型，格式: provider/model"
+              },
+              "fallback": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "降级模型列表（按优先级排列，格式: provider/model）"
+              }
             }
           }
         }
@@ -152,7 +240,9 @@
       "properties": {
         "loadPaths": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "description": "Plugin 目录扫描路径"
         },
         "configs": {
@@ -252,12 +342,21 @@
       "properties": {
         "preset": {
           "type": "string",
-          "enum": ["development", "testing", "production", "maximum"],
+          "enum": [
+            "development",
+            "testing",
+            "production",
+            "maximum"
+          ],
           "description": "安全预设"
         },
         "injectionSensitivity": {
           "type": "string",
-          "enum": ["low", "medium", "high"],
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ],
           "description": "注入检测灵敏度"
         }
       }
@@ -267,7 +366,9 @@
       "description": "Channel 适配器列表",
       "items": {
         "type": "object",
-        "required": ["type"],
+        "required": [
+          "type"
+        ],
         "properties": {
           "type": {
             "type": "string",
@@ -294,17 +395,27 @@
       "properties": {
         "dmScope": {
           "type": "string",
-          "enum": ["main", "per-peer", "per-channel-peer"],
+          "enum": [
+            "main",
+            "per-peer",
+            "per-channel-peer"
+          ],
           "description": "DM 作用域"
         },
         "store": {
           "type": "object",
           "description": "Session 存储配置",
-          "required": ["type"],
+          "required": [
+            "type"
+          ],
           "properties": {
             "type": {
               "type": "string",
-              "enum": ["memory", "jsonl", "sqlite"],
+              "enum": [
+                "memory",
+                "jsonl",
+                "sqlite"
+              ],
               "description": "存储类型"
             },
             "dataDir": {
@@ -316,6 +427,16 @@
               "description": "数据库文件路径（sqlite 类型使用）"
             }
           }
+        }
+      }
+    },
+    "subsystems": {
+      "type": "object",
+      "description": "自主子系统配置",
+      "properties": {
+        "auditDir": {
+          "type": "string",
+          "description": "审计日志目录（默认 ~/.octopi/audit）"
         }
       }
     }

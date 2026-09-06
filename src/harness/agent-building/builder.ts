@@ -238,6 +238,7 @@ export class AgentBuilder {
   // 自主子系统配置
   private _subsystemSpecs: import('../autonomous-subsystem/types.js').SubsystemSpec[] = [];
   private _subsystemAuditDir?: string;
+  private _modelLevels?: import('../autonomous-subsystem/types.js').ModelLevelMap;
   private _subsystemDir?: string;
 
   // 注册的 named providers（用于 ProviderPool）
@@ -321,6 +322,16 @@ export class AgentBuilder {
   /** 设置子系统审计日志目录 */
   withSubsystemAuditDir(dir: string): this {
     this._subsystemAuditDir = dir;
+    return this;
+  }
+
+  /**
+   * 设置模型级别映射（来自 config.models.level）
+   *
+   * 子系统通过 think.model: 'mini' 引用，运行时自动解析到具体 provider/model。
+   */
+  withModelLevels(levels: import('../autonomous-subsystem/types.js').ModelLevelMap): this {
+    this._modelLevels = levels;
     return this;
   }
 
@@ -554,6 +565,7 @@ export class AgentBuilder {
           events,
           errorStrategy: this._errorStrategy ?? new DefaultErrorStrategy(),
           mainTools: this._tools,
+          modelLevels: this._modelLevels,
         },
         auditDir: this._subsystemAuditDir,
       });

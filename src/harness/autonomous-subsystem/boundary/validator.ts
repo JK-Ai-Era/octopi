@@ -104,5 +104,49 @@ export function validateSubsystemSpec(spec: SubsystemSpec): ValidationError[] {
     });
   }
 
+  // ── runtimeInject 校验 ──
+  if (spec.runtimeInject) {
+    if (!Array.isArray(spec.runtimeInject.requires) || spec.runtimeInject.requires.length === 0) {
+      errors.push({
+        field: 'runtimeInject.requires',
+        message: 'runtimeInject.requires must be a non-empty array of dependency names',
+      });
+    }
+  }
+
+  // ── resume 校验 ──
+  if (spec.resume) {
+    if (spec.resume.enabled) {
+      if (spec.think.implementation !== 'code') {
+        errors.push({
+          field: 'resume',
+          message: 'resume.enabled is only supported for code-based subsystems (think.implementation=code)',
+        });
+      }
+    }
+    if (spec.resume.scanIntervalMs !== undefined && spec.resume.scanIntervalMs < 1000) {
+      errors.push({
+        field: 'resume.scanIntervalMs',
+        message: 'resume.scanIntervalMs must be at least 1000ms',
+      });
+    }
+    if (spec.resume.maxRetries !== undefined && spec.resume.maxRetries < 1) {
+      errors.push({
+        field: 'resume.maxRetries',
+        message: 'resume.maxRetries must be at least 1',
+      });
+    }
+  }
+
+  // ── observability 校验 ──
+  if (spec.observability) {
+    if (!spec.observability.eventPrefix || spec.observability.eventPrefix.length === 0) {
+      errors.push({
+        field: 'observability.eventPrefix',
+        message: 'observability.eventPrefix must be a non-empty string',
+      });
+    }
+  }
+
   return errors;
 }

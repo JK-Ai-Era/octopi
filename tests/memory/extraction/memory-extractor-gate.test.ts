@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { InMemoryMemoryStore } from '../../../src/harness/memory/store.js';
-import { createMemoryExtractorSubsystem } from '../../../src/harness/memory/extraction/memory-extractor-subsystem.js';
+import { callHandler } from '../../../src/subsystems/memory-extractor/handler.js';
 import type { SessionExtractBundle } from '../../../src/harness/memory/extraction/session-extractor.js';
 
 function baseBundle(overrides?: Partial<SessionExtractBundle>): SessionExtractBundle {
@@ -19,13 +19,6 @@ function baseBundle(overrides?: Partial<SessionExtractBundle>): SessionExtractBu
 describe('memory-extractor subsystem confidence gate', () => {
   it('should reject candidates below thresholds', async () => {
     const memoryStore = new InMemoryMemoryStore();
-    const { spec } = createMemoryExtractorSubsystem({
-      memoryStore,
-      minConfidence: 0.9,
-      minImportance: 0.9,
-    });
-
-    const handler = spec.think.handler!;
     const bundle = baseBundle({
       events: [
         { ts: Date.now(), type: 'assistant_summary', sessionId: 's1', turnId: 't1', payload: { length: 120 } },
@@ -33,7 +26,7 @@ describe('memory-extractor subsystem confidence gate', () => {
     });
 
     const input = { payload: { sessionExtractBundle: bundle }, sessionMetadata: { agentId: 'a1', sessionId: 's1', turnCount: 1 } } as any;
-    const out = await handler(input);
+    const out = await callHandler(input, memoryStore);
 
     expect(out.act?.status).toBe('success');
     const stats = await memoryStore.stats();

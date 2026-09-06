@@ -297,22 +297,44 @@ export interface ModelProviderConfig {
 
 
 
+/** 模型级别定义（primary + fallback 降级链） */
+export interface LevelConfig {
+  /** 主模型，格式: provider/model */
+  primary: string;
+  /** 降级模型列表（按优先级排列，格式: provider/model） */
+  fallback?: string[];
+}
+
+/** 模型级别映射表（级别名 → 级别定义） */
+export type LevelMap = Record<string, LevelConfig>;
+
 /** 新格式的 models 配置 */
 export interface ModelsConfig {
   /** 合并模式：merge=与 builtin 合并，replace=完全替代 */
   mode?: 'merge' | 'replace';
   /** Provider 映射（key = provider 名称） */
   providers: Record<string, ModelProviderConfig>;
+  /** 模型级别映射（子系统通过级别名引用具体模型） */
+  level?: LevelMap;
 }
 
 
 
 // ── 完整配置 ──
 
+/** 自主子系统配置 */
+export interface SubsystemsConfig {
+  /** 审计日志目录（默认 ~/.octopi/audit） */
+  auditDir?: string;
+}
+
 /**
  * 完整配置文件结构（v0.3.0）
  */
 export interface HarnessConfig {
+  /** 自主子系统配置 */
+  subsystems?: SubsystemsConfig;
+
   /** Agent 列表 */
   agents: AgentConfig[];
   /** 模型配置（集中定义 provider + model） */
@@ -616,6 +638,13 @@ export function loadConfig(configPath?: string): NormalizedHarnessConfig {
   }
 
   config.flatModels = flattenModels(config.models as ModelsConfig);
+
+  // 提取 models.level 到顶层 levelMap（方便下游直接使用）
+  const modelsConfig = config.models as ModelsConfig;
+  if (modelsConfig.level) {
+    config.levelMap = modelsConfig.level;
+  }
+
   return config;
 }
 
@@ -628,6 +657,8 @@ export function loadConfig(configPath?: string): NormalizedHarnessConfig {
 export interface NormalizedHarnessConfig extends HarnessConfig {
   /** 从 models.providers 提取的扁平模型列表 */
   flatModels: NormalizedModelInfo[];
+  /** 从 models.level 解析的级别映射（已规范化） */
+  levelMap?: LevelMap;
 }
 
 

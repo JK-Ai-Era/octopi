@@ -173,8 +173,8 @@ export interface ThinkConfig {
   preProcess?: (input: SubsystemInput) => Promise<SubsystemInput>;
   /** hybrid 模式的后处理函数 */
   postProcess?: (output: SubsystemOutput) => Promise<SubsystemOutput>;
-  /** code 模式的执行函数 */
-  handler?: (input: SubsystemInput) => Promise<SubsystemOutput>;
+  /** code 模式的执行函数（可选 deps 参数用于依赖注入） */
+  handler?: (input: SubsystemInput, deps?: InjectedDependencies) => Promise<SubsystemOutput>;
 }
 
 // ── Act（直接行动） ──
@@ -459,6 +459,82 @@ export interface SubsystemRun {
   sessionKey: string;
 }
 
+
+// ── Handler 契约（定义文件驱动子系统的标准导出接口） ──
+
+/**
+ * 子系统 Handler 契约
+ *
+ * 定义文件驱动的子系统通过 handler.ts 导出符合此契约的对象。
+ * handler 是必选的核心执行函数；contract 和 dependencies 是可选的声明。
+ */
+export interface SubsystemHandler {
+  /** 核心执行函数（必选） */
+  handler: (input: SubsystemInput, deps?: InjectedDependencies) => Promise<SubsystemOutput>;
+  /** 输入输出契约声明（可选，用于文档和校验） */
+  contract?: SubsystemContract;
+  /** 依赖声明（可选，与 runtimeInject 配合） */
+  dependencies?: string[];
+}
+
+/**
+ * 子系统输入输出契约（可选声明）
+ *
+ * 用于类型校验和文档，不强制运行时检查。
+ */
+export interface SubsystemContract {
+  /** 输入契约名称（如 'SessionExtractBundle'） */
+  input?: string;
+  /** 输出契约名称（如 'ExtractionResult'） */
+  output?: string;
+}
+
+/**
+ * 依赖注入配置
+ *
+ * 声明子系统 handler 运行时需要的依赖名称。
+ * SubsystemRuntime 在执行时从 injectRegistry 中查找并注入。
+ */
+export interface RuntimeInjectConfig {
+  /** 依赖名称列表 */
+  requires: string[];
+}
+
+/**
+ * 生命周期恢复配置
+ *
+ * 用于断点续提等恢复场景。
+ */
+export interface LifecycleResumeConfig {
+  /** 是否启用恢复扫描 */
+  enabled: boolean;
+  /** 扫描间隔（毫秒，默认 30000） */
+  scanIntervalMs?: number;
+  /** 最大重试次数（默认 5） */
+  maxRetries?: number;
+  /** 重试退避基础间隔（毫秒，默认 60000） */
+  baseRetryMs?: number;
+  /** 最大重试间隔（毫秒，默认 600000） */
+  maxRetryMs?: number;
+}
+
+/**
+ * 观测性配置
+ *
+ * 用于统一子系统的事件前缀和指标命名。
+ */
+export interface ObservabilityConfig {
+  /** 事件前缀（如 'memory.extractor'） */
+  eventPrefix: string;
+}
+
+/**
+ * 运行时注入依赖映射
+ *
+ * 由 SubsystemRuntime 管理，handler 执行时通过 deps 参数传入。
+ */
+export type InjectedDependencies = Record<string, unknown>;
+
 // ── SubsystemSpec（完整规格） ──
 
 /**
@@ -484,7 +560,18 @@ export interface SubsystemSpec {
   session: SessionConfig;
   lifecycle?: LifecycleConfig;
 
+  // ── 运行时扩展 ──
+  /** 依赖注入配置（可选） */
+  runtimeInject?: RuntimeInjectConfig;
+  /** 生命周期恢复配置（可选） */
+  resume?: LifecycleResumeConfig;
+  /** 观测性配置（可选） */
+  observability?: ObservabilityConfig;
+
   // ── 元数据 ──
+  /** 子系统特定配置（从 config.yaml 的 metadata 字段读取，由 handler 通过 __subsystem_config__ 注入依赖消费） */
+  metadata?: Record<string, unknown>;
+
   /** 版本号 */
   version?: string;
   /** 来源（内置 / 用户 / 项目 / npm） */

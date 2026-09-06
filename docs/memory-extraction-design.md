@@ -688,3 +688,191 @@ bridge 在 `trigger.complete` 与 `trigger.error` 后 reset session 采集态，
 - 并发触发上限 `maxConcurrentTriggers`
 
 PendingExtractor 支持 `options.backpressure` 配置，避免一次性触发过多任务打爆模型/IO。
+
+---
+
+## 27. 定义文件驱动迁移（v0.14.0）
+
+### 27.1 从工厂模式到定义文件驱动
+
+memory-extractor 从 `createMemoryExtractorSubsystem()` 工厂函数迁移为定义文件驱动子系统。
+
+**目录结构**：
+```
+src/subsystems/memory-extractor/
+├── config.yaml           ← 定义文件（Sense/Think/Act/Inject/Resume/Observability/Metadata）
+├── SUBSYSTEM.md          ← 文档
+├── handler.ts            ← 核心处理器（标准契约导出）
+├── types.ts              ← 注入依赖常量和配置接口
+├── contracts/
+│   └── bundle.ts         ← 输入输出契约类型
+└── policies/
+    ├── threshold.ts      ← 动态阈值策略（含修复奖励）
+    ├── profile-threshold.ts
+    └── dedup.ts          ← 去重与升级策略
+```
+
+**handler.ts 标准契约导出**：
+```typescript
+export default {
+  handler,           // 核心执行函数
+  contract: { input: 'SessionExtractBundle', output: 'ExtractionResult' },
+  dependencies: ['memoryStore', 'modelProvider'],
+}
+```
+
+**配置通过注入传递**：无模块级状态。handler 从 `deps.__subsystem_config__` 读取配置，支持多实例隔离。
+
+### 27.2 子系统定义标准扩展
+
+为支持定义文件驱动，扩展了子系统定义标准：
+
+| 新增类型 | 作用 |
+|---------|------|
+| `SubsystemHandler` | 标准导出契约（handler + contract + dependencies） |
+| `SubsystemContract` | 输入/输出类型声明 |
+| `RuntimeInjectConfig` | 依赖注入声明（`requires: string[]`） |
+| `LifecycleResumeConfig` | 断点续提恢复配置 |
+| `ObservabilityConfig` | 观测性事件前缀 |
+| `SubsystemSpec.metadata` | 子系统特定配置扩展点 |
+
+**运行时自动注入**：
+- `SubsystemRuntime` 从 `spec.metadata.config` 自动注入 `__subsystem_config__`
+- 从 `ModelResolver` 解析 `spec.think.model` 后注入 `__resolved_model__`
+
+### 27.3 Harness 层兼容
+
+旧的 harness 文件改为 deprecated re-export：
+- `session-extractor.ts` → re-export `contracts/bundle.ts` + `handler.extractCandidates`
+- `threshold-policy.ts` → re-export `policies/threshold.ts`
+- `memory-deduplicator.ts` → re-export `policies/dedup.ts`
+
+基础设施文件不变（采集层、胶水层、恢复层、观测层）。
+
+---
+
+## 28. Hybrid 模式（规则+LLM）（v0.14.0）
+
+### 28.1 链路设计
+
+```
+SessionExtractBundle
+  → [code] 规则提取（extractCandidates）→ ruleCandidates
+  → [code] 事件压缩（condenseEvents）→ 人类可读文本
+  → [llm]  语义提取（enrichWithLLM）→ llmCandidates
+  → [code] 合并 → 去重 → 阈值 → 入库
+```
+
+### 28.2 LLM 增强的价值
+
+- 理解隐式偏好（"我觉得这样更好"但无 constraint_set 事件）
+- 识别隐式决策（讨论后达成共识但无 decision_made 事件）
+- 跨语言理解（中英混合场景）
+- 提取更丰富、具体的记忆内容（而非"有 N 条约束"的统计性描述）
+
+### 28.3 容错设计
+
+- **LLM 失败不阻断**：`catch → return []`，规则提取结果仍然入库
+- **无 modelProvider 自动降级**：未注入则跳过 LLM 步骤，等价于 code 模式
+- **信号数据标记 mode**：`signals[0].data.mode = 'code' | 'hybrid'`
+
+### 28.4 使用方式
+
+通过 `config.yaml` 的 `metadata.config` 配置：
+```yaml
+metadata:
+  config:
+    llmEnrichment:
+      model: mini
+      temperature: 0.3
+      maxTokens: 2048
+```
+
+---
+
+## 29. 阈值策略改进（v0.14.0）
+
+### 29.1 修复奖励机制
+
+原来的策略悖论：**最有价值的 session（出了问题又修好了）反而最容易被保守阈值过滤掉**。
+
+改进：当 session 有修复记录（`resolvedErrors > 0`），阈值惩罚被部分对冲：
+```
+resolvedRelief = failureDelta × resolvedRatio × 0.8
+```
+其中 `resolvedRatio = resolvedErrors.length / (majorErrors.length + resolvedErrors.length)`。
+
+最多抵消 80% 的失败惩罚。对于无修复记录的 session，行为和原来完全一致。
+
+### 29.2 未修复错误独立惩罚
+
+`majorDelta` 只针对未修复的错误：
+```
+unresolvedMajor = max(0, majorErrors.length - resolvedErrors.length)
+```
+
+---
+
+## 30. models.level 配置（v0.14.0）
+
+### 30.1 配置格式
+
+`octopi.json` 的 `models` 节点新增 `level` 段：
+```json
+{
+  "models": {
+    "level": {
+      "mini": { "primary": "bailian/glm-5", "fallback": ["ollama/qwen3.5:2b"] },
+      "standard": { "primary": "bailian/kimi-k2.5", "fallback": ["bailian/glm-5"] },
+      "pro": { "primary": "bailian/kimi-k2.5", "fallback": ["bailian/glm-5"] }
+    }
+  }
+}
+```
+
+### 30.2 链路
+
+```
+octopi.json → config.ts (LevelMap) → config-bridge.ts (builder.withModelLevels)
+  → SubsystemRuntime (SharedDeps.modelLevels) → ModelResolver (resolve("mini"))
+    → primary: bailian/glm-5, fallback: [ollama/qwen3.5:2b]
+```
+
+子系统 config.yaml 写 `think.model: mini`，运行时自动解析到具体 provider/model，primary 失败时按 fallback 顺序降级。
+
+---
+
+## 31. 子系统启动链路接通（v0.14.0）
+
+### 31.1 断点修复
+
+之前子系统架构的代码完整，但从配置到运行的整条启动链路从未接通。v0.14.0 修复了以下断点：
+
+| 环节 | 修复 |
+|------|------|
+| config-bridge → SubsystemLoader | 新增 `resolveSubsystemSpecs()` 三级搜索路径加载 |
+| config-bridge → builder | 调用 `withSubsystemDir()` / `withSubsystemAuditDir()` / `withModelLevels()` |
+| config-bridge → runtime | 自动注入 modelProvider 到 injectRegistry |
+| octopi.json → subsystems | 新增 `subsystems.auditDir` 配置 |
+| config-schema | 新增 models.level + subsystems 的 Zod 校验 |
+
+### 31.2 三级搜索路径（架构文档 4.9）
+
+```
+[1] <project>/.octopi/subsystems/    项目级（进 git）
+[2] ~/.octopi/subsystems/            用户级（不进 git）
+[3] <octopi-bundle>/subsystems/      框架级（随 npm 包）
+```
+
+同名覆盖：项目级 > 用户级 > 框架级。异名共存。
+
+### 31.3 配置
+
+`octopi.json` 只需声明审计目录，子系统目录路径由架构决定：
+```json
+{
+  "subsystems": {
+    "auditDir": "./data/audit"
+  }
+}
+```

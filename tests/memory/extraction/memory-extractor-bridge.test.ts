@@ -2,7 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { DefaultEventBus } from '../../../src/core/primitives/event-bus.js';
 import { SubsystemRuntime } from '../../../src/harness/autonomous-subsystem/runtime.js';
 import { MemoryExtractorBridge } from '../../../src/harness/memory/extraction/memory-extractor-bridge.js';
-import { createMemoryExtractorSubsystem } from '../../../src/harness/memory/extraction/memory-extractor-subsystem.js';
+import { callHandler } from '../../../src/subsystems/memory-extractor/handler.js';
+import type { SubsystemSpec } from '../../../src/harness/autonomous-subsystem/types.js';
 import { InMemoryMemoryStore } from '../../../src/harness/memory/store.js';
 
 function createRuntime() {
@@ -26,7 +27,19 @@ describe('MemoryExtractorBridge', () => {
     const { events, runtime } = createRuntime();
 
     const memoryStore = new InMemoryMemoryStore();
-    const { spec } = createMemoryExtractorSubsystem({ memoryStore });
+    const spec: SubsystemSpec = {
+      id: 'memory.extractor',
+      name: 'Memory Extractor',
+      description: 'test',
+      sense: { source: 'eventBus', filter: { events: ['session.lifecycle.updated', 'memory.extractor.bundle.ready'], condition: "(sessionLifecycle === 'recent' && extractionStatus === 'pending') || (eventData?.bundle != null)" }, isolation: 'structured' },
+      think: { strategy: 'deterministic', implementation: 'code', handler: (input: any) => callHandler(input, memoryStore) },
+      act: { mode: 'inject' },
+      signal: { severity: 'info', channel: ['context', 'event'] },
+      boundary: { visibility: 'structured', authority: 'act', security: 'trusted' },
+      tools: { mode: 'none' },
+      session: { mode: 'ephemeral', scope: 'session' },
+      lifecycle: { maxConcurrent: 1 },
+    };
     const regErrors = runtime.register(spec);
     expect(regErrors).toEqual([]);
 

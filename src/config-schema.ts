@@ -221,9 +221,15 @@ const ModelProviderConfigSchema = z.object({
   timeoutSeconds: z.number().positive().optional(),
 });
 
+const LevelConfigSchema = z.object({
+  primary: z.string().min(1),
+  fallback: z.array(z.string().min(1)).optional(),
+});
+
 const ModelsConfigSchema = z.object({
   mode: z.enum(['merge', 'replace']).optional(),
   providers: z.record(z.string(), ModelProviderConfigSchema),
+  level: z.record(z.string(), LevelConfigSchema).optional(),
 });
 
 const ModelDefinitionSchema = z.object({
@@ -240,7 +246,12 @@ const DefaultsSchema = z.object({
   contextWindow: z.number().positive().optional(),
 });
 
+const SubsystemsConfigSchema = z.object({
+  auditDir: z.string().optional(),
+});
+
 export const HarnessConfigSchema = z.object({
+  subsystems: SubsystemsConfigSchema.optional(),
   agents: z.array(AgentConfigSchema).min(1, 'Config must define at least one agent'),
   models: ModelsConfigSchema,
   defaults: z.object({

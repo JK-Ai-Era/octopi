@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { InMemoryMemoryStore } from '../../../src/harness/memory/store.js';
-import { createMemoryExtractorSubsystem } from '../../../src/harness/memory/extraction/memory-extractor-subsystem.js';
+import { callHandler } from '../../../src/subsystems/memory-extractor/handler.js';
 import type { SessionExtractBundle } from '../../../src/harness/memory/extraction/session-extractor.js';
 
 function baseBundle(overrides?: Partial<SessionExtractBundle>): SessionExtractBundle {
@@ -19,9 +19,6 @@ function baseBundle(overrides?: Partial<SessionExtractBundle>): SessionExtractBu
 describe('memory extraction e2e regression', () => {
   it('should not duplicate memory entries when same bundle is processed twice', async () => {
     const memoryStore = new InMemoryMemoryStore();
-    const { spec } = createMemoryExtractorSubsystem({ memoryStore });
-    const handler = spec.think.handler!;
-
     const bundle = baseBundle({
       events: [
         { ts: Date.now(), type: 'constraint_set', sessionId: 's1', turnId: 't1', payload: { text: 'Use ESM' } },
@@ -38,12 +35,12 @@ describe('memory extraction e2e regression', () => {
       sessionMetadata: { agentId: 'a1', sessionId: 's1', turnCount: 3 },
     } as any;
 
-    const out1 = await handler(input);
+    const out1 = await callHandler(input, memoryStore);
     expect(out1.act?.status).toBe('success');
     const stats1 = await memoryStore.stats();
     expect(stats1.totalEntries).toBeGreaterThan(0);
 
-    const out2 = await handler(input);
+    const out2 = await callHandler(input, memoryStore);
     expect(out2.act?.status).toBe('success');
     const stats2 = await memoryStore.stats();
 

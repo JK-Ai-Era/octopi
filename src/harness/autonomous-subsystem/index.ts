@@ -65,6 +65,12 @@ export type {
 
   // Spec
   SubsystemSpec,
+  SubsystemHandler,
+  SubsystemContract,
+  RuntimeInjectConfig,
+  LifecycleResumeConfig,
+  ObservabilityConfig,
+  InjectedDependencies,
 
   // Model Level
   ModelLevelConfig,

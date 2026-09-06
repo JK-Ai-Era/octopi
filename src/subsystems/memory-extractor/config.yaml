@@ -1,0 +1,62 @@
+id: memory.extractor
+name: Memory Extractor
+description: 从主会话生命周期事件中提取结构化记忆候选（规则+LLM混合模式）
+
+sense:
+  source: eventBus
+  filter:
+    events: ['session.lifecycle.updated', 'memory.extractor.bundle.ready']
+    condition: "(sessionLifecycle === 'recent' && extractionStatus === 'pending') || (eventData?.bundle != null)"
+  isolation: structured
+
+think:
+  implementation: hybrid
+  strategy: heuristic
+  model: mini
+  maxIterations: 1
+
+act:
+  mode: inject
+
+signal:
+  severity: info
+  channel: [context, event]
+
+boundary:
+  visibility: structured
+  authority: act
+  security: trusted
+
+tools:
+  mode: none
+
+session:
+  mode: ephemeral
+  scope: session
+
+lifecycle:
+  maxConcurrent: 1
+
+runtimeInject:
+  requires:
+    - memoryStore
+    - modelProvider
+
+observability:
+  eventPrefix: memory.extractor
+
+resume:
+  enabled: true
+  scanIntervalMs: 30000
+  maxRetries: 5
+  baseRetryMs: 60000
+  maxRetryMs: 600000
+
+metadata:
+  config:
+    minConfidence: 0.6
+    minImportance: 0.6
+    llmEnrichment:
+      model: mini
+      temperature: 0.3
+      maxTokens: 2048

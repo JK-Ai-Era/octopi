@@ -21,6 +21,7 @@ import type {
   SubsystemOutput,
   Signal,
   ActMode,
+  InjectedDependencies,
 } from '../types.js';
 import type { ModelResolver, ResolvedModelWithFallback } from './model-resolver.js';
 
@@ -70,10 +71,11 @@ export class ThinkExecutor {
     input: SubsystemInput,
     actMode: ActMode,
     resolvedTools?: Map<string, RegisteredTool>,
+    injectDeps?: InjectedDependencies,
   ): Promise<{ output: SubsystemOutput; tokenUsage?: { prompt: number; completion: number; total: number } }> {
     switch (think.implementation) {
       case 'code':
-        return this.executeCode(think, input);
+        return this.executeCode(think, input, injectDeps);
       case 'llm':
         return this.executeLLM(think, input, actMode, resolvedTools);
       case 'hybrid':
@@ -88,11 +90,12 @@ export class ThinkExecutor {
   private async executeCode(
     think: ThinkConfig,
     input: SubsystemInput,
+    injectDeps?: InjectedDependencies,
   ): Promise<{ output: SubsystemOutput; tokenUsage?: undefined }> {
     if (!think.handler) {
       throw new Error('think.implementation "code" requires a handler');
     }
-    const output = await think.handler(input);
+    const output = await think.handler(input, injectDeps);
     return { output };
   }
 

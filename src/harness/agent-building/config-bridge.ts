@@ -16,6 +16,10 @@
 
 import type { HarnessConfig, AgentConfig, ContextEngineConfig, NormalizedModelInfo, ModelProviderConfig, NormalizedHarnessConfig } from '../../config.js';
 import { createProviderFromConfig, createStoreFromConfig, resolveModelConfig } from '../../config.js';
+import { SubsystemLoader } from '../autonomous-subsystem/loader.js';
+import type { SubsystemSpec } from '../autonomous-subsystem/types.js';
+import { homedir } from 'node:os';
+import { resolve, join } from 'node:path';
 import type { ModelProvider } from '../../core/interfaces/model-provider.js';
 import type { SessionStore } from '../../core/interfaces/session-store.js';
 import type { SessionData } from '../session-types.js';
@@ -39,6 +43,7 @@ export interface BuiltAgent {
   agent: Agent;
   runner: SessionAwareRunner;
   agentConfig: AgentConfig;
+  runtime?: import('../autonomous-subsystem/runtime.js').SubsystemRuntime;
 }
 
 // ── Provider 解析 ──
@@ -166,6 +171,49 @@ export function resolveSupervisor(
   return new DefaultTaskSupervisor(supervisorConfig, reviewModel);
 }
 
+// ── 子系统加载 ──
+
+/**
+ * 按架构文档 4.9 的三级搜索路径加载子系统
+ *
+ * 搜索顺序（同名覆盖：后加载的覆盖先加载的）：
+ * 1. 框架内置: <octopi-bundle>/subsystems/
+ * 2. 用户级:   ~/.octopi/subsystems/
+ * 3. 项目级:   <project>/.octopi/subsystems/
+ */
+export async function resolveSubsystemSpecs(projectRoot?: string): Promise<SubsystemSpec[]> {
+  const cwd = projectRoot ?? process.cwd();
+  const home = homedir();
+
+  // 框架内置：从当前包的 src/subsystems/ 目录加载
+  // 在开发环境中是项目根下的 src/subsystems/，发布后是 dist/subsystems/
+  const builtinCandidates = [
+    resolve(cwd, 'src', 'subsystems'),
+    resolve(cwd, 'dist', 'subsystems'),
+  ];
+  let builtinDir: string | undefined;
+  for (const candidate of builtinCandidates) {
+    try {
+      const { existsSync } = await import('node:fs');
+      if (existsSync(candidate)) { builtinDir = candidate; break; }
+    } catch { /* ignore */ }
+  }
+
+  const userDir = resolve(home, '.octopi', 'subsystems');
+  const projectDir = resolve(cwd, '.octopi', 'subsystems');
+
+  const loader = new SubsystemLoader({ builtinDir, userDir, projectDir });
+  const result = await loader.loadAll();
+
+  if (result.errors.length > 0) {
+    for (const err of result.errors) {
+      console.warn(`[ConfigBridge] Subsystem load error at ${err.path}: ${err.error}`);
+    }
+  }
+
+  return result.specs;
+}
+
 // ── 核心桥接函数 ──
 
 /**
@@ -188,7 +236,10 @@ export async function buildFromConfig(config: NormalizedHarnessConfig): Promise<
   const supervisorConfig = config.supervisor;
   const contextEngineConfig = config.contextEngine;
 
-  // 2. 为每个 agent 构建
+  // 2. 加载子系统（三级搜索路径）
+  const subsystemSpecs = await resolveSubsystemSpecs();
+
+  // 3. 为每个 agent 构建
   const agents = new Map<string, BuiltAgent>();
 
   for (const agentConfig of config.agents) {
@@ -202,6 +253,9 @@ export async function buildFromConfig(config: NormalizedHarnessConfig): Promise<
         supervisorConfig,
         contextEngineConfig,
         flatModels,
+        levelMap: config.levelMap,
+        subsystemSpecs,
+        subsystemAuditDir: config.subsystems?.auditDir,
       });
       agents.set(agentConfig.id, built);
     } catch (err) {
@@ -227,6 +281,9 @@ async function buildAgent(
     supervisorConfig?: SupervisorConfig;
     contextEngineConfig?: ContextEngineConfig;
     flatModels: NormalizedModelInfo[];
+    levelMap?: import('../../config.js').LevelMap;
+    subsystemSpecs?: SubsystemSpec[];
+    subsystemAuditDir?: string;
   },
 ): Promise<BuiltAgent> {
   const builder = new AgentBuilder();
@@ -241,6 +298,11 @@ async function buildAgent(
     );
   }
   builder.model(provider);
+
+  // ── Model Levels ──
+  if (shared.levelMap) {
+    builder.withModelLevels(shared.levelMap);
+  }
 
   // ── Workspace ──
   if (agentConfig.workspace) {
@@ -297,12 +359,31 @@ async function buildAgent(
     }
   }
 
+  // ── Subsystems ──
+  if (shared.subsystemSpecs && shared.subsystemSpecs.length > 0) {
+    for (const spec of shared.subsystemSpecs) {
+      builder.withSubsystem(spec);
+    }
+  }
+  if (shared.subsystemAuditDir) {
+    builder.withSubsystemAuditDir(shared.subsystemAuditDir);
+  }
+
   // ── Build ──
   const built = await builder.build();
+
+  // ── 注入子系统运行时依赖 ──
+  if (built.runtime) {
+    // 注入 modelProvider（取第一个可用的 provider）
+    const firstProvider = shared.providers.values().next().value;
+    if (firstProvider) {
+      built.runtime.registerDependency('modelProvider', firstProvider);
+    }
+  }
   const agent = built.agent;
   const runner = built.runner;
 
-  return { agent, runner, agentConfig };
+  return { agent, runner, agentConfig, runtime: built.runtime };
 }
 
 /**

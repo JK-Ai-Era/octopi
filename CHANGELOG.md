@@ -1,3 +1,73 @@
+## v0.14.0 (2026-09-07)
+
+### feat: 子系统定义标准扩展 + memory-extractor 迁移 + hybrid 模式 + models.level 配置
+
+一次性完成四件事：扩展自主子系统定义标准、将 memory-extractor 迁移为定义文件驱动子系统、实现 hybrid（规则+LLM）提取模式、接通 models.level 配置到运行时。
+
+#### 子系统定义标准扩展
+
+- **feat(types): SubsystemHandler / SubsystemContract** — 定义文件驱动子系统的标准导出契约（handler + contract + dependencies）
+- **feat(types): RuntimeInjectConfig** — 依赖注入声明，handler 运行时通过 `deps` 参数接收
+- **feat(types): LifecycleResumeConfig** — 断点续提恢复配置（扫描间隔、退避策略）
+- **feat(types): ObservabilityConfig** — 观测性事件前缀
+- **feat(types): SubsystemSpec.metadata** — 子系统特定配置扩展点
+- **feat(loader): 标准契约模式** — handler.ts 支持 `export default {handler, contract, dependencies}` 导出
+- **feat(loader): metadata 解析** — config.yaml 的 metadata 字段解析到 SubsystemSpec
+- **feat(runtime): 自动注入** — 从 spec.metadata.config 注入子系统配置、从 ModelResolver 注入已解析模型名
+- **feat(runtime): registerDependency** — 运行时依赖注册表 API
+- **feat(validator): 新字段校验** — runtimeInject / resume / observability 一致性校验
+
+#### memory-extractor 定义文件驱动迁移
+
+- **feat(subsystems): subsystems/memory-extractor/** — 完整子系统目录结构
+  - `config.yaml` — 定义文件（Sense/Think/Act/Inject/Resume/Observability/Metadata）
+  - `handler.ts` — 核心处理器（规则提取 + LLM 增强 + 去重 + 阈值 + 入库），无模块级状态
+  - `contracts/bundle.ts` — 输入输出契约类型（SessionExtractBundle / MemoryCandidate / ExtractionResult）
+  - `policies/threshold.ts` — 动态阈值策略（含修复奖励机制）
+  - `policies/dedup.ts` — 记忆去重与升级策略
+  - `policies/profile-threshold.ts` — Agent Profile 阈值策略
+  - `llm-enrichment.ts` — LLM 语义增强（事件压缩 → prompt → LLM → 解析）
+  - `types.ts` — 注入依赖常量和配置接口
+- **feat(handler): callHandler** — 便捷调用入口（绕过 SubsystemRuntime，供测试和嵌入式使用）
+- **refactor: 移除工厂模式** — 删除 `createMemoryExtractorSubsystem()`，统一为定义文件驱动
+- **refactor: harness re-export** — session-extractor / threshold-policy / memory-deduplicator 改为 deprecated re-export
+- **fix(P1): 移除模块级 _config** — handler 配置通过 `deps.__subsystem_config__` 注入，多实例隔离
+- **fix(P4): 移除 DEP_EXTRACTOR_STORE** — 未使用的依赖常量
+
+#### Hybrid 模式（规则+LLM）
+
+- **feat(llm-enrichment): 事件压缩** — `condenseEvents()` 将 bundle 事件压缩为人类可读文本
+- **feat(llm-enrichment): 语义提取** — `enrichWithLLM()` 调 LLM 提取隐式偏好/决策/经验
+- **feat(llm-enrichment): 容错设计** — JSON 解析失败返回空数组，LLM 调用失败不阻断流程
+- **feat(handler): 自动降级** — 无 modelProvider 时自动降级为 code 模式
+- **fix(P3): 模型名解析** — LLM model 字段通过 `__resolved_model__` 注入已解析的实际模型名
+
+#### 阈值策略改进
+
+- **feat(threshold): 修复奖励机制** — 当 session 有修复记录（resolvedErrors），部分对冲失败惩罚
+- **refactor(threshold): 未修复错误惩罚** — majorError 惩罚只针对未修复的错误
+
+#### models.level 配置
+
+- **feat(schema): models.level** — octopi.schema.json 新增 level 节点定义
+- **feat(config): LevelConfig / LevelMap** — config.ts 新增类型，ModelsConfig 加 level 字段
+- **feat(config-bridge): levelMap 传递** — config → builder → runtime → ModelResolver 完整链路
+
+#### 子系统启动链路接通
+
+- **feat(config): SubsystemsConfig** — octopi.json 新增 `subsystems.auditDir`
+- **feat(config-schema): Zod 校验** — models.level + subsystems 的 schema 校验
+- **feat(config-bridge): resolveSubsystemSpecs** — 按架构文档4.9三级搜索路径加载子系统（项目级 → 用户级 → 框架级，同名覆盖）
+- **feat(config-bridge): 自动注入** — modelLevels + modelProvider 自动注册到 SubsystemRuntime
+- **fix(P2): 定义文件 hybrid 模式** — SubsystemRuntime 自动从 spec.metadata.config 注入子系统配置
+
+#### 测试
+
+- **test: hybrid-mode.test.ts** — 3 个测试（成功路径 + LLM 失败降级 + 无 provider 降级）
+- **test: model-levels-config.test.ts** — 5 个测试（级别解析 + fallback 链 + 运行时更新）
+- **test: 迁移适配** — 11 个测试文件从工厂模式迁移到 callHandler / 内联 SubsystemSpec
+- **fix: memory-extractor-subsystem.test.ts** — 修复阈值策略变化导致的测试数据不匹配
+
 ## v0.13.0 (2026-09-06)
 
 ### feat: 指标接入、SLO 告警、pending 回压限流

@@ -4,7 +4,7 @@ import { join } from 'node:path';
 
 it('loads safety-guard from subsystems/ directory', async () => {
   const loader = new SubsystemLoader({
-    builtinDir: join(process.cwd(), 'subsystems'),
+    builtinDir: join(process.cwd(), 'src', 'subsystems'),
   });
   const result = await loader.loadAll();
 

@@ -28,7 +28,6 @@ export { SessionExtractor } from './extraction/session-extractor.js';
 export type { SessionExtractBundle, SessionExtractEvent, MemoryCandidate } from './extraction/session-extractor.js';
 export { SessionExtractCollector } from './extraction/session-extract-collector.js';
 export { MemoryExtractorBridge } from './extraction/memory-extractor-bridge.js';
-export { createMemoryExtractorSubsystem } from './extraction/memory-extractor-subsystem.js';
 
 export { InMemoryExtractorStore } from './extraction/extractor-store.js';
 export type { ExtractorMeta, ExtractorStore } from './extraction/extractor-store.js';
@@ -47,3 +46,22 @@ export { ExtractionMetricsBridge } from './extraction/extraction-metrics-bridge.
 export { AlertEvaluator } from './extraction/alert-evaluator.js';
 export { BackpressureController } from './extraction/backpressure.js';
 export type { BackpressureOptions } from './extraction/backpressure.js';
+
+// ── Memory Extractor Subsystem（定义文件驱动） ──
+export { extractCandidates } from '../../subsystems/memory-extractor/handler.js';
+export { callHandler as callMemoryExtractorHandler } from '../../subsystems/memory-extractor/handler.js';
+export type { MemoryExtractorDeps, MemoryExtractorConfig } from '../../subsystems/memory-extractor/types.js';
+export type {
+  SessionExtractEventType as SessionExtractEventTypeV2,
+  SessionExtractEvent as SessionExtractEventV2,
+  SessionExtractBundle as SessionExtractBundleV2,
+  MemoryCandidate as MemoryCandidateV2,
+  ExtractionResult,
+  CondensedTurn as CondensedTurnV2,
+  RunSummary as RunSummaryV2,
+} from '../../subsystems/memory-extractor/contracts/bundle.js';
+export { defaultThresholdPolicy as subsystemThresholdPolicy } from '../../subsystems/memory-extractor/policies/threshold.js';
+export { MemoryDeduplicator as SubsystemMemoryDeduplicator } from '../../subsystems/memory-extractor/policies/dedup.js';
+export { enrichWithLLM, condenseEvents } from '../../subsystems/memory-extractor/llm-enrichment.js';
+export type { LLMEnrichmentConfig } from '../../subsystems/memory-extractor/llm-enrichment.js';
+export { DEP_MODEL_PROVIDER } from '../../subsystems/memory-extractor/types.js';

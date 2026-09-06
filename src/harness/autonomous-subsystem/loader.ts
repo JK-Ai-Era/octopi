@@ -5,6 +5,7 @@ import type {
   IsolationLevel, ContextField,
   SignalSeverity, SignalChannel, VisibilityLevel, AuthorityLevel,
   SecurityLevel, ToolMode, SessionMode, SessionScope,
+  SubsystemHandler, RuntimeInjectConfig, LifecycleResumeConfig, ObservabilityConfig,
 } from './types.js';
 import { validateSubsystemSpec } from './boundary/validator.js';
 
@@ -124,9 +125,13 @@ async function buildSpec(
   const lifecycleRaw = config.lifecycle as Record<string, unknown> | undefined;
 
   // 尝试加载 handler.ts（code/hybrid 模式）
-  let handler: ((input: any) => Promise<any>) | undefined;
+  // 支持两种导出模式：
+  //   1. 传统模式：export handler / preProcess / postProcess（函数直接导出）
+  //   2. 标准契约模式：export default SubsystemHandler（对象包含 handler + contract + dependencies）
+  let handler: ((input: any, deps?: any) => Promise<any>) | undefined;
   let preProcess: ((input: any) => Promise<any>) | undefined;
   let postProcess: ((output: any) => Promise<any>) | undefined;
+  let handlerDependencies: string[] | undefined;
 
   const handlerPath = join(dirPath, 'handler.ts');
   const handlerJsPath = join(dirPath, 'handler.js');
@@ -135,13 +140,27 @@ async function buildSpec(
   if (handlerFile) {
     try {
       const mod = await import(handlerFile);
-      handler = mod.handler ?? mod.default;
-      preProcess = mod.preProcess;
-      postProcess = mod.postProcess;
+      // 优先检查标准契约模式（export default 具有 handler 属性的对象）
+      const exported = mod.default ?? mod;
+      if (exported && typeof exported === 'object' && typeof exported.handler === 'function' && ('contract' in exported || 'dependencies' in exported)) {
+        // 标准契约模式
+        handler = exported.handler;
+        handlerDependencies = exported.dependencies as string[] | undefined;
+      } else {
+        // 传统模式
+        handler = mod.handler ?? (typeof mod.default === 'function' ? mod.default : undefined);
+        preProcess = mod.preProcess;
+        postProcess = mod.postProcess;
+      }
     } catch {
       // handler 加载失败，不影响 spec 构建
     }
   }
+
+  // 解析运行时扩展字段
+  const runtimeInjectRaw = config.runtimeInject as Record<string, unknown> | undefined;
+  const resumeRaw = config.resume as Record<string, unknown> | undefined;
+  const observabilityRaw = config.observability as Record<string, unknown> | undefined;
 
   return {
     id, name, description,
@@ -191,6 +210,20 @@ async function buildSpec(
       maxTokens: lifecycleRaw.maxTokens as number | undefined,
       degradeOn: lifecycleRaw.degradeOn as 'timeout' | 'error' | 'both' | undefined,
     } : undefined,
+    runtimeInject: runtimeInjectRaw ? {
+      requires: (runtimeInjectRaw.requires as string[]) ?? [],
+    } as RuntimeInjectConfig : undefined,
+    resume: resumeRaw ? {
+      enabled: (resumeRaw.enabled as boolean) ?? false,
+      scanIntervalMs: resumeRaw.scanIntervalMs as number | undefined,
+      maxRetries: resumeRaw.maxRetries as number | undefined,
+      baseRetryMs: resumeRaw.baseRetryMs as number | undefined,
+      maxRetryMs: resumeRaw.maxRetryMs as number | undefined,
+    } as LifecycleResumeConfig : undefined,
+    observability: observabilityRaw ? {
+      eventPrefix: (observabilityRaw.eventPrefix as string) ?? '',
+    } as ObservabilityConfig : undefined,
+    metadata: config.metadata as Record<string, unknown> | undefined,
     version: config.version as string | undefined,
     source,
     sourcePath: dirPath,

@@ -22,6 +22,8 @@ import type {
   Signal,
   ActResult,
   ActMode,
+  InjectedDependencies,
+  SubsystemHandler,
 } from './types.js';
 import { SenseEngine } from './sense/engine.js';
 import { MetricsStore } from './sense/metrics.js';
@@ -44,6 +46,8 @@ export interface SharedDeps {
   mainTools: Map<string, RegisteredTool>;
   modelLevels?: ModelLevelMap;
   defaultModelProvider?: string;
+  /** 依赖注入注册表：名称 → 实现实例，供 runtimeInject.requires 解析 */
+  injectRegistry?: Map<string, unknown>;
 }
 
 // ── RegisteredSubsystem ──
@@ -155,6 +159,26 @@ export class SubsystemRuntime {
     });
 
     return [];
+  }
+
+  /**
+   * 注册依赖到注入注册表
+   *
+   * @param name - 依赖名称
+   * @param impl - 依赖实现实例
+   */
+  registerDependency(name: string, impl: unknown): void {
+    if (!this.deps.injectRegistry) {
+      this.deps.injectRegistry = new Map();
+    }
+    this.deps.injectRegistry.set(name, impl);
+  }
+
+  /**
+   * 从注入注册表移除依赖
+   */
+  unregisterDependency(name: string): void {
+    this.deps.injectRegistry?.delete(name);
   }
 
   /**
@@ -273,12 +297,38 @@ export class SubsystemRuntime {
       // 解析工具
       const tools = this.resolveTools(entry.spec);
 
-      // 执行 Think
+      // 解析注入依赖（如有 runtimeInject 配置）
+      let injectDeps: InjectedDependencies | undefined;
+      if (entry.spec.runtimeInject) {
+        const registry = this.deps.injectRegistry;
+        injectDeps = {};
+        // 从 registry 查找声明的依赖
+        if (registry) {
+          for (const depName of entry.spec.runtimeInject.requires) {
+            const impl = registry.get(depName);
+            if (impl !== undefined) {
+              injectDeps[depName] = impl;
+            }
+          }
+        }
+        // 自动注入子系统配置（从 spec.metadata.config 读取）
+        if (entry.spec.metadata?.config && typeof entry.spec.metadata.config === 'object') {
+          injectDeps['__subsystem_config__'] = entry.spec.metadata.config;
+        }
+        // 注入已解析的模型名称（供 handler 内部 LLM 调用使用）
+        if (entry.spec.think.model) {
+          const resolved = this.modelResolver.resolve(entry.spec.think.model);
+          injectDeps['__resolved_model__'] = resolved.primary.model;
+        }
+      }
+
+      // 执行 Think（注入依赖通过 think handler 的 deps 参数传入）
       const result = await this.thinkExecutor.execute(
         entry.spec.think,
         input,
         entry.spec.act.mode,
         tools,
+        injectDeps,
       );
 
       run.output = result.output;
