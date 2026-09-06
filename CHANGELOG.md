@@ -1,3 +1,12 @@
+## v0.14.1 (2026-09-07)
+
+### fix: WebUI 对话区 Markdown 渲染优化
+
+- feat(web): MarkdownMessage — 引入 react-markdown + remark-gfm + rehype-highlight，替换原有纯文本渲染，支持标题、列表、表格、引用、行内代码、代码块与链接等 Markdown 内容。
+- refactor(web): 对话气泡 — 将助手消息区与流式输出改为结构化 Markdown 渲染容器，用户消息保持原始文本展示但优化换行与断词表现。
+- style(web): Markdown 样式 — 增加段落、列表、表格、引用、行内代码、代码块、语言标签、复制按钮与高亮色板样式，提升中栏可读性。
+- build(web): 前端依赖 — octopi-web 新增 react-markdown、remark-gfm、rehype-highlight 依赖；前端生产构建通过。
+
 ## v0.14.0 (2026-09-07)
 
 ### feat: 子系统定义标准扩展 + memory-extractor 迁移 + hybrid 模式 + models.level 配置

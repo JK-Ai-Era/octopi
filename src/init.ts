@@ -146,6 +146,11 @@ function generateDefaultConfig(homeDir: string, agentId: string = 'default'): ob
           ],
         },
       },
+      level: {
+        mini: { primary: 'openai/gpt-5-mini' },
+        standard: { primary: 'openai/gpt-5.5' },
+        pro: { primary: 'openai/gpt-5.5' },
+      },
     },
     agents: [
       {
@@ -176,6 +181,9 @@ function generateDefaultConfig(homeDir: string, agentId: string = 'default'): ob
         type: 'jsonl',
         dataDir: join(homeDir, 'agents'),
       },
+    },
+    subsystems: {
+      auditDir: join(homeDir, 'audit'),
     },
   };
 }
