@@ -9,6 +9,9 @@
 
 import type { EventBus, AgentEvent } from '../../core/primitives/event-bus.js';
 import type { RegisteredTool, Message } from '../../core/types.js';
+import { setTimeout as delay } from 'node:timers/promises';
+import { SubsystemTimeoutError } from './errors.js';
+import { TokenBudgetExceededError } from './think/executor.js';
 import type { ModelProvider } from '../../core/interfaces/model-provider.js';
 import type { ErrorStrategy } from '../../core/interfaces/error-strategy.js';
 import { randomUUID } from 'node:crypto';
@@ -77,6 +80,9 @@ export class SubsystemRuntime {
   private modelResolver: ModelResolver;
   private subsystems = new Map<string, RegisteredSubsystem>();
   private mainAgentContext?: AgentContext;
+  private runPromises = new Map<string, { resolve: () => void; reject: (err: unknown) => void; promise: Promise<void> }>();
+  private abortTimers: ReturnType<typeof setTimeout>[] = [];
+  private activeTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
 
   constructor(config: SubsystemRuntimeConfig) {
     this.deps = config.deps;
@@ -102,6 +108,14 @@ export class SubsystemRuntime {
 
     this.signalBus = new SignalBus({ events: config.deps.events });
     this.sessionManager = new SubsystemSessionManager();
+    config.deps.events.on('session.ended', (event) => {
+      const data = (event.data ?? {}) as Record<string, unknown>;
+      const agentId = (event.agentId as string) ?? (data.agentId as string);
+      const sessionId = (event.sessionId as string) ?? (data.sessionId as string);
+      if (agentId && sessionId) {
+        this.sessionManager.deleteBySessionId(agentId, sessionId);
+      }
+    });
 
     if (config.auditDir) {
       this.auditWriter = new AuditWriter({
@@ -109,6 +123,64 @@ export class SubsystemRuntime {
         agentId: config.agentId,
       });
     }
+  }
+
+  private cancelPendingAbortTimers(): void {
+    for (const timer of this.abortTimers) {
+      clearTimeout(timer);
+    }
+    this.abortTimers.length = 0;
+  }
+
+  private createRunTracker(subsystemId: string): { resolve: () => void; reject: (err: unknown) => void; promise: Promise<void> } {
+    let resolve!: () => void;
+    let reject!: (err: unknown) => void;
+    const promise = new Promise<void>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    const tracker = { resolve, reject, promise };
+    this.runPromises.set(subsystemId, tracker);
+    return tracker;
+  }
+
+  private completeRunTracker(subsystemId: string, tracker: { resolve: () => void; reject: (err: unknown) => void }): void {
+    this.runPromises.delete(subsystemId);
+    tracker.resolve();
+  }
+
+  private isTimeoutError(err: Error): boolean {
+    return err instanceof SubsystemTimeoutError || err.name === 'SubsystemTimeoutError';
+  }
+
+  private isTokenBudgetError(err: Error): boolean {
+    return err instanceof TokenBudgetExceededError || err.name === 'TokenBudgetExceededError';
+  }
+
+  private buildInterruptedOutput(status: 'timeout' | 'degraded' | 'success', degradeOn: 'timeout' | 'error' | 'both'): SubsystemOutput {
+    const shouldDeliverSignal = status === 'timeout'
+      ? degradeOn === 'error' || degradeOn === 'both'
+      : true;
+
+    const action = status === 'timeout' ? 'alert' : 'suggest';
+    const reason = status === 'timeout'
+      ? 'Subsystem execution timed out before completion.'
+      : 'Subsystem execution interrupted due to token budget constraints.';
+
+    if (!shouldDeliverSignal) {
+      return { signals: [] };
+    }
+
+    return {
+      signals: [
+        {
+          action,
+          reason,
+          confidence: 0,
+          data: { status },
+        },
+      ],
+    } satisfies SubsystemOutput;
   }
 
   // ── Public API ──
@@ -193,15 +265,26 @@ export class SubsystemRuntime {
    * 手动触发子系统（API 调用，穿透冷却期）
    */
   async trigger(subsystemId: string): Promise<void> {
+    let runPromise: Promise<void> | undefined;
     const ctx: SenseContext = {
       metrics: this.metrics.snapshot(),
       agentId: this.mainAgentContext?.runConfig.agentId,
       sessionId: this.mainAgentContext?.runConfig.sessionId,
     };
 
-    this.senseEngine.trigger(subsystemId, ctx, (senseCtx) => {
+    const triggered = this.senseEngine.trigger(subsystemId, ctx, (senseCtx) => {
       this.onTrigger(subsystemId, senseCtx);
+      const tracked = this.runPromises.get(subsystemId);
+      if (tracked) {
+        runPromise = tracked.promise;
+      }
     });
+
+    if (!triggered || !runPromise) {
+      return;
+    }
+
+    await runPromise;
   }
 
   /**
@@ -220,6 +303,7 @@ export class SubsystemRuntime {
    * 清理所有资源
    */
   dispose(): void {
+    this.cancelPendingAbortTimers();
     this.senseEngine.dispose();
     this.sessionManager.dispose();
     this.signalBus.clear();
@@ -280,6 +364,26 @@ export class SubsystemRuntime {
 
     entry.spec.lifecycle?.onStart?.();
 
+    const lifecycle = entry.spec.lifecycle;
+    const maxDurationMs = lifecycle?.maxDurationMs;
+    const existingTimer = this.activeTimeouts.get(subsystemId);
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+      this.activeTimeouts.delete(subsystemId);
+    }
+    const maxTokens = lifecycle?.maxTokens;
+    const degradeOn = lifecycle?.degradeOn ?? 'both';
+    const abortController = new AbortController();
+    const runTracker = this.createRunTracker(subsystemId);
+
+    if (maxDurationMs && maxDurationMs > 0) {
+      const timer = setTimeout(() => {
+        abortController.abort(new SubsystemTimeoutError(`Subsystem ${subsystemId} timed out after ${maxDurationMs}ms`));
+      }, maxDurationMs);
+      this.abortTimers.push(timer);
+      this.activeTimeouts.set(subsystemId, timer);
+    }
+
     const run: SubsystemRun = {
       id: runId,
       subsystemId,
@@ -294,15 +398,12 @@ export class SubsystemRuntime {
     };
 
     try {
-      // 解析工具
       const tools = this.resolveTools(entry.spec);
 
-      // 解析注入依赖（如有 runtimeInject 配置）
       let injectDeps: InjectedDependencies | undefined;
       if (entry.spec.runtimeInject) {
         const registry = this.deps.injectRegistry;
         injectDeps = {};
-        // 从 registry 查找声明的依赖
         if (registry) {
           for (const depName of entry.spec.runtimeInject.requires) {
             const impl = registry.get(depName);
@@ -311,43 +412,36 @@ export class SubsystemRuntime {
             }
           }
         }
-        // 自动注入子系统配置（从 spec.metadata.config 读取）
         if (entry.spec.metadata?.config && typeof entry.spec.metadata.config === 'object') {
           injectDeps['__subsystem_config__'] = entry.spec.metadata.config;
         }
-        // 注入已解析的模型名称（供 handler 内部 LLM 调用使用）
         if (entry.spec.think.model) {
           const resolved = this.modelResolver.resolve(entry.spec.think.model);
           injectDeps['__resolved_model__'] = resolved.primary.model;
         }
       }
 
-      // 执行 Think（注入依赖通过 think handler 的 deps 参数传入）
       const result = await this.thinkExecutor.execute(
         entry.spec.think,
         input,
         entry.spec.act.mode,
         tools,
         injectDeps,
+        { abortSignal: abortController.signal, tokenBudget: maxTokens },
       );
 
       run.output = result.output;
-      run.tokenUsage = result.tokenUsage;
+      run.tokenUsage = result.tokenUsage ?? this.inferTokenUsage(run.tokenUsage, input, result.output);
       run.durationMs = Date.now() - startTime;
 
-      // 处理 Act
-      if (entry.spec.act.mode !== 'none') {
-        const actResult = this.processAct(entry.spec.act.mode, result.output, agentCtx);
-        if (actResult) {
-          run.acts.push(actResult);
-        }
+      const actResult = this.processAct(entry.spec.act.mode, result.output);
+      if (actResult) {
+        run.acts.push(actResult);
       }
 
-      // 处理 Signal
       run.signals = result.output.signals;
-      this.signalBus.deliver(subsystemId, result.output);
+      this.signalBus.deliver(subsystemId, result.output, entry.spec.signal);
 
-      // 更新会话
       session.messages.push({
         role: 'user',
         content: JSON.stringify(input),
@@ -360,30 +454,55 @@ export class SubsystemRuntime {
       });
       session.lastAccessAt = Date.now();
 
-      // lifecycle.onComplete
       entry.spec.lifecycle?.onComplete?.(result.output);
 
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
-      run.status = 'failed';
-      run.error = error.message;
-      run.durationMs = Date.now() - startTime;
 
-      this.deps.events.emit({
-        type: 'subsystem.error',
-        timestamp: Date.now(),
-        data: { subsystemId, runId, error: error.message },
-      });
+      if (this.isTimeoutError(error)) {
+        run.status = 'timeout';
+        run.error = error.message;
+        run.durationMs = Date.now() - startTime;
+        run.output = this.buildInterruptedOutput('timeout', degradeOn);
+        run.signals = run.output.signals;
+
+        this.signalBus.deliver(subsystemId, run.output, entry.spec.signal);
+      } else if (this.isTokenBudgetError(error)) {
+        run.status = degradeOn === 'error' || degradeOn === 'both' ? 'degraded' : 'success';
+        run.error = error.message;
+        run.durationMs = Date.now() - startTime;
+        run.output = this.buildInterruptedOutput(run.status, degradeOn);
+        run.signals = run.output.signals;
+
+        if (run.status === 'degraded') {
+          this.signalBus.deliver(subsystemId, run.output, entry.spec.signal);
+        }
+      } else {
+        run.status = 'failed';
+        run.error = error.message;
+        run.durationMs = Date.now() - startTime;
+
+        this.deps.events.emit({
+          type: 'subsystem.error',
+          timestamp: Date.now(),
+          data: { subsystemId, runId, error: error.message },
+        });
+      }
 
       entry.spec.lifecycle?.onError?.(error);
 
     } finally {
       entry.concurrency--;
+      this.cancelPendingAbortTimers();
+      const active = this.activeTimeouts.get(subsystemId);
+      if (active) {
+        clearTimeout(active);
+        this.activeTimeouts.delete(subsystemId);
+      }
+      this.completeRunTracker(subsystemId, runTracker);
 
-      // 审计写入（始终写入，无论成功失败）
       this.auditWriter?.write(run);
 
-      // 发射完成事件
       this.deps.events.emit({
         type: 'subsystem.complete',
         timestamp: Date.now(),
@@ -395,30 +514,52 @@ export class SubsystemRuntime {
   /**
    * 处理 Act
    */
-  private processAct(actMode: ActMode, output: SubsystemOutput, ctx: AgentContext): ActResult | undefined {
-    // 从信号中提取 act 相关信息
-    const blockSignal = output.signals.find((s) => s.action === 'block');
-    const degradeSignal = output.signals.find((s) => s.action === 'degrade');
+  private inferTokenUsage(existing: SubsystemRun['tokenUsage'], input: SubsystemInput, output: SubsystemOutput): SubsystemRun['tokenUsage'] {
+    if (existing) return existing;
 
-    if (actMode === 'block' && blockSignal) {
+    const promptChars = JSON.stringify(input).length;
+    const completionChars = JSON.stringify(output).length;
+    if (promptChars + completionChars === 0) return undefined;
+
+    return {
+      prompt: promptChars,
+      completion: completionChars,
+      total: promptChars + completionChars,
+    } satisfies { prompt: number; completion: number; total: number };
+  }
+
+  private processAct(actMode: ActMode, output: SubsystemOutput): ActResult | undefined {
+    if (actMode === 'none') {
+      return undefined;
+    }
+
+    const blockSignal = output.signals.find((s) => s.action === 'block');
+    const replaceSignal = output.signals.find((s) => s.action === 'replace');
+    const injectSignals = output.signals.filter((s) => s.action === 'suggest' || s.action === 'alert');
+
+    if (actMode === 'block') {
       return {
         mode: 'block',
-        status: 'success',
-        proceed: false,
-        result: { blocked: true, reason: blockSignal.reason },
+        status: blockSignal ? 'success' : 'failed',
+        proceed: blockSignal ? false : true,
+        result: blockSignal ? { blocked: true, reason: blockSignal.reason } : undefined,
       };
     }
 
     if (actMode === 'modify') {
-      // replace 信号 → 修改上下文
-      const replaceSignal = output.signals.find((s) => s.action === 'replace');
-      if (replaceSignal) {
-        return {
-          mode: 'modify',
-          status: 'success',
-          messages: [{ role: 'system', content: replaceSignal.reason }],
-        };
-      }
+      return {
+        mode: 'modify',
+        status: replaceSignal ? 'success' : 'failed',
+        messages: replaceSignal ? [{ role: 'system', content: replaceSignal.reason }] : undefined,
+      };
+    }
+
+    if (actMode === 'inject') {
+      return {
+        mode: 'inject',
+        status: injectSignals.length > 0 ? 'success' : 'failed',
+        messages: injectSignals.map((s) => ({ role: 'system' as const, content: `[${s.action}] ${s.reason}` })),
+      };
     }
 
     return undefined;

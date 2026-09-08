@@ -313,6 +313,8 @@ subsystems/
 └── ...
 ```
 
+**支持来源**：框架内置、用户自定义、npm 包（`@octopi/subsystem-*` / `octopi-subsystem-*`）
+
 **Multi-Agent 编排**（Worker/编排，独立于自主子系统）：
 ```
 harness/distributed-agents/multi-agent/

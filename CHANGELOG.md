@@ -1,3 +1,38 @@
+## v0.14.2 (2026-09-08)
+
+### feat: 自主子系统实现对齐设计（生命周期/信号/条件/循环检测/npm发现/审计）
+
+围绕 `arch/autonomous-subsystem.md` 的关键行为矩阵进行落地修复，补齐运行时契约与可验证测试，确保设计语义可执行。
+
+#### 变更
+
+- **feat(runtime): 生命周期执行约束** — `maxDurationMs` 可中断执行并记录 `timeout` 审计状态；`degradeOn` 决定是否发送中断信号。
+- **feat(runtime): Act 闭环** — `processAct` 覆盖 `block/modify/inject/none`，成功/失败均有 Act 结果。
+- **feat(signal): 通道按 spec 投递** — `SignalBus.deliver` 优先使用 `spec.signal.channel`，不再仅按 action 推断。
+- **feat(think): 模型 fallback** — primary 失败后按 `resolved.fallback` 顺序重试（rate/timeout/server 触发）。
+- **feat(sense): conditionRef 支持** — 动态导入并缓存执行函数；`condition` 多变量替换修正。
+- **feat(sense): 静态循环检测** — 注册阶段基于 `emits`（含 `*`）做循环检测，存在循环拒绝注册。
+- **feat(session): session.ended 联动** — 订阅 `session.ended` 清理 scoped 子系统会话（`session.scope=session`）。
+- **feat(loader): npm 子系统发现** — 支持 `@octopi/subsystem-*` / `octopi-subsystem-*` 在 `node_modules` 中自动发现。
+- **feat(loader): 显式字段策略** — `boundary/signal/act` 为显式必要字段；缺失直接报错，避免隐式默认。
+- **feat(audit): 审计字段增强** — 成功/失败场景保持关键字段，成功路径带 `tokenUsage`（输入输出体积估算）。
+
+#### 修复
+
+- **fix(build): 类型导入修正** — 恢复 `RegisteredTool/Message` 从 `core/types` 导入；`AgentTool` 保留从 `loop/types` 导入，避免 TS2305/TS2459。
+- **fix(executor): ensureWithinBudget 方法回归** — 补回类体方法，修复 TS2339。
+- **fix(signal/runtime): 信号投递路由一致** — 运行时调用 `deliver` 传入 `spec.signal`，确保通道配置生效。
+
+#### 测试
+
+- **test: lifecycle-enforcement.test.ts** — 超时/降级行为验证。
+- **test: runtime-timeout.test.ts** — handler 超时产生 timeout 审计。
+- **test: executor-fallback.test.ts** — `TokenBudgetExceededError` 基本语义验证。
+- **test: session-end-cleanup.test.ts** — `session.ended` 清理路径验证。
+- **test: loader-npm.test.ts** — npm 子系统发现（scoped/plain/无关包）。
+- **test: custom-tool-definitions.test.ts** — `tools.definitions` 注册路径验证。
+- **test: audit-fields.test.ts** — 审计字段与 tokenUsage 校验。
+
 ## v0.14.1 (2026-09-07)
 
 ### fix: WebUI 对话区 Markdown 渲染优化

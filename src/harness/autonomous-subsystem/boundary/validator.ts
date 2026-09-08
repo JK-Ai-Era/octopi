@@ -37,6 +37,11 @@ export interface ValidationError {
 export function validateSubsystemSpec(spec: SubsystemSpec): ValidationError[] {
   const errors: ValidationError[] = [];
 
+  if (!spec.boundary) errors.push({ field: 'boundary', message: 'boundary is required' });
+  if (!spec.signal) errors.push({ field: 'signal', message: 'signal is required' });
+  if (!spec.act) errors.push({ field: 'act', message: 'act is required' });
+  if (!spec.boundary || !spec.signal || !spec.act) return errors;
+
   // ── act.mode 与 boundary.authority 交叉校验 ──
   const allowedModes = AUTHORITY_ACT_MAP[spec.boundary.authority];
   if (!allowedModes.has(spec.act.mode)) {

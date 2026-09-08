@@ -20,6 +20,7 @@ import { SubsystemLoader } from '../autonomous-subsystem/loader.js';
 import type { SubsystemSpec } from '../autonomous-subsystem/types.js';
 import { homedir } from 'node:os';
 import { resolve, join } from 'node:path';
+import { existsSync } from 'node:fs';
 import type { ModelProvider } from '../../core/interfaces/model-provider.js';
 import type { SessionStore } from '../../core/interfaces/session-store.js';
 import type { SessionData } from '../session-types.js';
@@ -202,7 +203,7 @@ export async function resolveSubsystemSpecs(projectRoot?: string): Promise<Subsy
   const userDir = resolve(home, '.octopi', 'subsystems');
   const projectDir = resolve(cwd, '.octopi', 'subsystems');
 
-  const loader = new SubsystemLoader({ builtinDir, userDir, projectDir });
+  const loader = new SubsystemLoader({ builtinDir, userDir, projectDir, npmDir: join(cwd, 'node_modules') });
   const result = await loader.loadAll();
 
   if (result.errors.length > 0) {

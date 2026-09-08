@@ -36,7 +36,7 @@ interface RegisteredSubsystem {
   /** 冷却期配置 */
   cooldown: CooldownEntry;
   /** 评估函数（编译后的 condition 或 conditionRef） */
-  evaluator?: (ctx: SenseContext) => boolean;
+  evaluator?: (ctx: SenseContext) => boolean | Promise<boolean>;
 }
 
 // ── SenseEngine 配置 ──
@@ -175,7 +175,13 @@ export class SenseEngine {
     const eventListen = new Map<string, Set<string>>();
 
     for (const spec of specs) {
-      // 监听的事件
+      const emits = spec.emits ?? spec.sense.filter?.emits ?? [];
+      const normalizedEmits = emits.includes('*') ? ['*'] : emits;
+      for (const evt of normalizedEmits) {
+        if (!eventEmit.has(evt)) eventEmit.set(evt, new Set());
+        eventEmit.get(evt)!.add(spec.id);
+      }
+
       if (spec.sense.source === 'eventBus' && spec.sense.filter?.events) {
         for (const evt of spec.sense.filter.events) {
           if (!eventListen.has(evt)) eventListen.set(evt, new Set());
@@ -184,11 +190,48 @@ export class SenseEngine {
       }
     }
 
-    // 简化检测：如果两个子系统监听同一个事件类型，且该事件类型可能由子系统产生，
-    // 则标记为潜在循环（通配符保守处理）
+    const adjacency = new Map<string, Set<string>>();
+    for (const [evt, listeners] of eventListen) {
+      for (const listener of listeners) {
+        if (!adjacency.has(listener)) adjacency.set(listener, new Set());
+        const emitters = eventEmit.get(evt);
+        if (!emitters) continue;
+        for (const emitter of emitters) {
+          if (emitter === listener) continue;
+          adjacency.get(listener)!.add(emitter);
+        }
+      }
+    }
+
+    const visited = new Set<string>();
+    const inStack = new Set<string>();
     const cycles: string[][] = [];
-    // 实际的循环检测需要在运行时通过深度限制来防护
-    // 静态分析只能检测显式的事件产生声明（当前未实现 emits 字段）
+
+    const dfs = (node: string, path: string[]): void => {
+      visited.add(node);
+      inStack.add(node);
+      path.push(node);
+
+      for (const neighbor of adjacency.get(node) ?? []) {
+        if (!visited.has(neighbor)) {
+          dfs(neighbor, path);
+        } else if (inStack.has(neighbor)) {
+          const start = path.indexOf(neighbor);
+          if (start >= 0) {
+            cycles.push(path.slice(start).concat(neighbor));
+          }
+        }
+      }
+
+      path.pop();
+      inStack.delete(node);
+    };
+
+    for (const node of adjacency.keys()) {
+      if (!visited.has(node)) {
+        dfs(node, []);
+      }
+    }
 
     return cycles;
   }
@@ -213,11 +256,11 @@ export class SenseEngine {
   /**
    * EventBus 事件到达时的处理
    */
-  private onEvent(
+  private async onEvent(
     subsystemId: string,
     event: AgentEvent,
     onTrigger: (ctx: SenseContext) => void,
-  ): void {
+  ): Promise<void> {
     const entry = this.subsystems.get(subsystemId);
     if (!entry) return;
 
@@ -240,8 +283,11 @@ export class SenseEngine {
       sessionId: event.sessionId,
     };
 
-    if (entry.evaluator && !entry.evaluator(ctx)) {
-      return; // 条件不满足
+    if (entry.evaluator) {
+      const ok = await entry.evaluator(ctx);
+      if (!ok) {
+        return; // 条件不满足
+      }
     }
 
     // ── 检查并发限制 ──
@@ -263,12 +309,17 @@ export class SenseEngine {
   /**
    * 编译 condition 表达式 / conditionRef 为评估函数
    */
-  private compileEvaluator(sense: SenseConfig): ((ctx: SenseContext) => boolean) | undefined {
+  private compileEvaluator(sense: SenseConfig): ((ctx: SenseContext) => boolean | Promise<boolean>) | undefined {
     const condition = sense.filter?.condition;
-    const conditionRef = sense.filter?.conditionRef;
+    const conditionRefSpec = sense.filter?.conditionRef;
 
-    if (!condition && !conditionRef) {
+    if (!condition && !conditionRefSpec) {
       return undefined; // 无条件，总是匹配
+    }
+
+    if (condition && conditionRefSpec) {
+      // 互斥已在 validator 校验；防御性直接返回不触发
+      return () => false;
     }
 
     if (condition) {
@@ -276,9 +327,41 @@ export class SenseEngine {
       return this.compileConditionExpression(condition);
     }
 
-    // conditionRef 需要动态 import，延迟到运行时
-    // 此处返回 undefined，由 SubsystemRuntime 在首次触发时加载
-    return undefined;
+    return this.buildConditionRefEvaluator(conditionRefSpec);
+  }
+
+  private buildConditionRefEvaluator(conditionRef?: string): ((ctx: SenseContext) => boolean | Promise<boolean>) | undefined {
+    if (!conditionRef) {
+      return undefined;
+    }
+
+    const sep = conditionRef.lastIndexOf(':');
+    if (sep <= 0) {
+      return () => false;
+    }
+
+    const modulePath = conditionRef.slice(0, sep);
+    const exportName = conditionRef.slice(sep + 1);
+    let cached: ((ctx: SenseContext) => boolean | Promise<boolean>) | undefined;
+
+    return async (ctx: SenseContext) => {
+      if (cached) {
+        return cached(ctx);
+      }
+
+      try {
+        const mod = await import(modulePath);
+        const fn = mod[exportName];
+        if (typeof fn !== 'function') {
+          return false;
+        }
+
+        cached = fn as (ctx: SenseContext) => boolean | Promise<boolean>;
+        return cached(ctx);
+      } catch {
+        return false;
+      }
+    };
   }
 
   /**

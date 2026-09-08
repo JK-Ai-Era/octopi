@@ -122,6 +122,8 @@ export interface SenseFilter {
   condition?: string;
   /** 代码引用（如 "./handler.ts:shouldExtract"），与 condition 互斥 */
   conditionRef?: string;
+  /** 该子系统可能产生的事件类型（用于静态循环检测，LLM 子系统建议声明 ['*']） */
+  emits?: string[];
 }
 
 /**
@@ -559,6 +561,8 @@ export interface SubsystemSpec {
   tools: ToolConfig;
   session: SessionConfig;
   lifecycle?: LifecycleConfig;
+  /** 该子系统可能产生的事件类型（静态循环检测使用；未设置时从 sense.filter.emits 兜底） */
+  emits?: string[];
 
   // ── 运行时扩展 ──
   /** 依赖注入配置（可选） */

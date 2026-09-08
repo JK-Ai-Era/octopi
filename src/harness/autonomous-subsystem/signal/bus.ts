@@ -77,7 +77,7 @@ export class SignalBus {
    * @param subsystemId - 来源子系统 ID
    * @param output - 子系统输出（包含 signals 列表）
    */
-  deliver(subsystemId: string, output: SubsystemOutput): void {
+  deliver(subsystemId: string, output: SubsystemOutput, signalConfig?: { channel?: SignalChannel[] }): void {
     const now = Date.now();
 
     // 按优先级排序信号
@@ -86,9 +86,9 @@ export class SignalBus {
     );
 
     for (const signal of sorted) {
-      // 从 signal.data 中提取 channel 配置（如果有）
-      // 否则根据 action 推断默认通道
-      const channels = this.inferChannels(signal);
+      const channels = signalConfig?.channel && signalConfig.channel.length > 0
+        ? signalConfig.channel
+        : this.inferChannels(signal);
 
       for (const channel of channels) {
         const entry: SignalEntry = {

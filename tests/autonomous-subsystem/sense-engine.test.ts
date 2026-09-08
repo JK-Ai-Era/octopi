@@ -19,6 +19,8 @@ function makeSpec(overrides?: Partial<SubsystemSpec>): SubsystemSpec {
   };
 }
 
+const flush = () => new Promise(r => setTimeout(r, 0));
+
 describe('SenseEngine', () => {
   let events: DefaultEventBus;
   let engine: SenseEngine;
@@ -65,7 +67,7 @@ describe('SenseEngine', () => {
   });
 
   describe('condition expression evaluation', () => {
-    it('triggers when condition is met', () => {
+    it('triggers when condition is met', async () => {
       const onTrigger = vi.fn();
       engine.register(makeSpec({
         sense: { source: 'eventBus', filter: { events: ['test.event'], condition: 'turn.count >= 5' }, isolation: 'structured' },
@@ -73,11 +75,12 @@ describe('SenseEngine', () => {
 
       engine.metricsStore.update('turn.count', 10);
       events.emit({ type: 'test.event', timestamp: Date.now() });
+      await flush();
 
       expect(onTrigger).toHaveBeenCalledTimes(1);
     });
 
-    it('does not trigger when condition is not met', () => {
+    it('does not trigger when condition is not met', async () => {
       const onTrigger = vi.fn();
       engine.register(makeSpec({
         sense: { source: 'eventBus', filter: { events: ['test.event'], condition: 'turn.count >= 10' }, isolation: 'structured' },
@@ -85,6 +88,7 @@ describe('SenseEngine', () => {
 
       engine.metricsStore.update('turn.count', 5);
       events.emit({ type: 'test.event', timestamp: Date.now() });
+      await flush();
 
       expect(onTrigger).not.toHaveBeenCalled();
     });
@@ -97,20 +101,24 @@ describe('SenseEngine', () => {
 
       engine.metricsStore.update('turn.count', 9);
       events.emit({ type: 'test.event', timestamp: Date.now() });
+      await flush();
       expect(onTrigger).toHaveBeenCalledTimes(0);
 
       engine.metricsStore.update('turn.count', 10);
       events.emit({ type: 'test.event', timestamp: Date.now() });
+      await flush();
       expect(onTrigger).toHaveBeenCalledTimes(1);
 
       engine.metricsStore.update('turn.count', 19);
       events.emit({ type: 'test.event', timestamp: Date.now() });
+      await flush();
       expect(onTrigger).toHaveBeenCalledTimes(1);
 
       await new Promise((r) => setTimeout(r, 150));
 
       engine.metricsStore.update('turn.count', 20);
       events.emit({ type: 'test.event', timestamp: Date.now() });
+      await flush();
       expect(onTrigger).toHaveBeenCalledTimes(2);
     });
 

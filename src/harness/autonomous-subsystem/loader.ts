@@ -13,6 +13,8 @@ export interface SubsystemLoaderConfig {
   builtinDir?: string;
   userDir?: string;
   projectDir?: string;
+  /** node_modules 目录（用于 npm 子系统发现） */
+  npmDir?: string;
 }
 
 interface Frontmatter { [key: string]: unknown; }
@@ -27,11 +29,13 @@ export class SubsystemLoader {
   private builtinDir?: string;
   private userDir?: string;
   private projectDir?: string;
+  private npmDir?: string;
 
   constructor(config: SubsystemLoaderConfig) {
     this.builtinDir = config.builtinDir;
     this.userDir = config.userDir;
     this.projectDir = config.projectDir;
+    this.npmDir = config.npmDir;
   }
 
   async loadAll(): Promise<LoadResult> {
@@ -42,14 +46,18 @@ export class SubsystemLoader {
       { dir: this.builtinDir, source: 'builtin' },
       { dir: this.userDir, source: 'user' },
       { dir: this.projectDir, source: 'project' },
+      { dir: this.npmDir, source: 'npm' },
     ];
 
     for (const { dir, source } of dirs) {
       if (!dir || !existsSync(dir)) continue;
       const entries = readdirSync(dir, { withFileTypes: true });
-      for (const entry of entries) {
-        if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
-        const subsystemDir = join(dir, entry.name);
+
+      const packageDirs = source === 'npm'
+        ? this.collectNpmPackageDirs(dir, entries)
+        : entries.filter((e) => e.isDirectory() && !e.name.startsWith('.')).map((e) => join(dir, e.name));
+
+      for (const subsystemDir of packageDirs) {
         const result = await this.loadOne(subsystemDir, source);
         if (result.spec) specs.set(result.spec.id, result.spec);
         if (result.error) errors.push({ path: subsystemDir, error: result.error });
@@ -57,6 +65,62 @@ export class SubsystemLoader {
     }
 
     return { specs: Array.from(specs.values()), errors };
+  }
+
+  private collectNpmPackageDirs(nodeModulesDir: string, entries: import('node:fs').Dirent[]): string[] {
+    const dirs: string[] = [];
+
+    for (const entry of entries) {
+      if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
+
+      if (entry.name.startsWith('@')) {
+        const scopeDir = join(nodeModulesDir, entry.name);
+        try {
+          const scopedEntries = readdirSync(scopeDir, { withFileTypes: true });
+          for (const scopedEntry of scopedEntries) {
+            if (!scopedEntry.isDirectory()) continue;
+            const packageDir = join(scopeDir, scopedEntry.name);
+            if (this.isSubsystemPackageDir(packageDir)) {
+              dirs.push(packageDir);
+            }
+          }
+        } catch {
+          // ignore unreadable scope
+        }
+        continue;
+      }
+
+      const packageDir = join(nodeModulesDir, entry.name);
+      if (this.isSubsystemPackageDir(packageDir)) {
+        dirs.push(packageDir);
+      }
+    }
+
+    return dirs;
+  }
+
+  private isSubsystemPackageDir(packageDir: string): boolean {
+    try {
+      const manifestPath = join(packageDir, 'package.json');
+      if (!existsSync(manifestPath)) {
+        return false;
+      }
+
+      const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8')) as Record<string, unknown>;
+      const name = String(manifest.name ?? '');
+      return this.isSubsystemPackage(name);
+    } catch {
+      return false;
+    }
+  }
+
+  private isSubsystemPackage(name: string): boolean {
+    if (name.startsWith('@octopi/subsystem-')) {
+      return true;
+    }
+
+    const plain = name.startsWith('@') ? name.split('/').pop() ?? name : name;
+    return plain.startsWith('octopi-subsystem-');
   }
 
   async loadOne(dirPath: string, source: SubsystemSpec['source'] = 'project'): Promise<{ spec?: SubsystemSpec; error?: string }> {
@@ -84,6 +148,14 @@ export class SubsystemLoader {
       const merged = { ...frontmatter, ...config };
       const spec = await buildSpec(merged, systemPrompt, source, dirPath);
       if (!spec) return { error: `Failed to build spec from ${dirPath}` };
+
+      const missingExplicitFields = [] as string[];
+      if (!config.boundary) missingExplicitFields.push('boundary');
+      if (!config.signal) missingExplicitFields.push('signal');
+      if (!config.act) missingExplicitFields.push('act');
+      if (missingExplicitFields.length > 0) {
+        return { error: `Missing required explicit fields: ${missingExplicitFields.join(', ')}` };
+      }
 
       const errors = validateSubsystemSpec(spec);
       if (errors.length > 0) {
@@ -170,6 +242,7 @@ async function buildSpec(
         events: filterRaw.events as string[] | undefined,
         condition: filterRaw.condition as string | undefined,
         conditionRef: filterRaw.conditionRef as string | undefined,
+        emits: filterRaw.emits as string[] | undefined,
       } : undefined,
       interval: senseRaw.interval as number | undefined,
       isolation: (senseRaw.isolation ?? 'structured') as IsolationLevel,
@@ -198,6 +271,21 @@ async function buildSpec(
     tools: {
       mode: (toolsRaw.mode ?? 'none') as ToolMode,
       names: toolsRaw.names as string[] | undefined,
+      definitions: Array.isArray(toolsRaw.definitions)
+        ? (toolsRaw.definitions as Array<Record<string, unknown>>).map((d) => {
+            const rawDef = (d.definition ?? d) as Record<string, unknown>;
+            const name = String(rawDef.name ?? '');
+            const description = String(rawDef.description ?? '');
+            const parameters = (rawDef.parameters ?? {}) as Record<string, import('../../core/types.js').ToolParameter>;
+
+            return {
+              definition: { name, description, parameters },
+              handler: async () => {
+                throw new Error(`Tool ${name} does not have a runtime handler`);
+              },
+            } satisfies import('../../core/types.js').RegisteredTool;
+          })
+        : undefined,
     },
     session: {
       mode: ((sessionRaw.mode as string) === 'persistent' ? 'persistent' : 'ephemeral') as SessionMode,
@@ -227,6 +315,7 @@ async function buildSpec(
     version: config.version as string | undefined,
     source,
     sourcePath: dirPath,
+    emits: (config.emits as string[] | undefined) ?? (filterRaw?.emits as string[] | undefined),
   };
 }
 

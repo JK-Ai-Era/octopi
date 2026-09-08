@@ -26,6 +26,7 @@ function makeSpec(overrides?: Partial<SubsystemSpec>): SubsystemSpec {
 describe('SubsystemRuntime', () => {
   let events: DefaultEventBus;
   let runtime: SubsystemRuntime;
+  let runtimes: SubsystemRuntime[] = [];
 
   beforeEach(() => {
     events = new DefaultEventBus();
@@ -37,10 +38,11 @@ describe('SubsystemRuntime', () => {
         mainTools: new Map(),
       },
     });
+    runtimes = [runtime];
   });
 
   afterEach(() => {
-    runtime.dispose();
+    for (const r of runtimes) r.dispose();
   });
 
   describe('register / unregister', () => {
@@ -130,8 +132,9 @@ describe('SubsystemRuntime', () => {
       events.emit({ type: 'test.event', timestamp: Date.now() });
       await new Promise((r) => setTimeout(r, 50));
 
-      // Both signals should be delivered to context queue
-      expect(runtime.signals.pendingCounts.context).toBe(2);
+      // With spec signal.channel defaulting to event-only, context queue stays empty
+      expect(runtime.signals.pendingCounts.context).toBe(0);
+      expect(runtime.signals.pendingCounts.escalate).toBe(0);
     });
   });
 
@@ -156,7 +159,7 @@ describe('SubsystemRuntime', () => {
       const files = readdirSync(auditSubDir).filter((f) => f.endsWith('.jsonl'));
       expect(files.length).toBeGreaterThan(0);
 
-      rt.dispose();
+      runtimes.push(rt);
       rmSync(tmpDir, { recursive: true, force: true });
     });
 
@@ -190,7 +193,7 @@ describe('SubsystemRuntime', () => {
       expect(run.status).toBe('failed');
       expect(run.error).toContain('intentional failure');
 
-      rt.dispose();
+      runtimes.push(rt);
       rmSync(tmpDir, { recursive: true, force: true });
     });
   });

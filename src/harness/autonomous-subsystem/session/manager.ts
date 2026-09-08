@@ -66,6 +66,14 @@ export class SubsystemSessionManager {
     this.sessions.delete(key);
   }
 
+  deleteBySessionId(agentId: string, sessionId: string): void {
+    for (const key of Array.from(this.sessions.keys())) {
+      if (key.endsWith(`:${agentId}:${sessionId}`)) {
+        this.sessions.delete(key);
+      }
+    }
+  }
+
   get activeSessionCount(): number {
     return this.sessions.size;
   }

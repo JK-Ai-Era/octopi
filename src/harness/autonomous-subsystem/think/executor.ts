@@ -8,10 +8,10 @@
  */
 
 import { Agent } from '../../../loop/agent.js';
-import type { AgentTool } from '../../../loop/types.js';
 import type { ModelProvider } from '../../../core/interfaces/model-provider.js';
 import type { ErrorStrategy } from '../../../core/interfaces/error-strategy.js';
 import type { RegisteredTool } from '../../../core/types.js';
+import type { AgentTool } from '../../../loop/types.js';
 import { runAgentWithReliability } from '../../reliability/index.js';
 import type { ReliabilityHarness } from '../../reliability/index.js';
 import type {
@@ -24,6 +24,14 @@ import type {
   InjectedDependencies,
 } from '../types.js';
 import type { ModelResolver, ResolvedModelWithFallback } from './model-resolver.js';
+
+export class TokenBudgetExceededError extends Error {
+  constructor(message = 'Subsystem token budget exceeded') {
+    super(message);
+    this.name = 'TokenBudgetExceededError';
+  }
+}
+
 
 // ── ThinkExecutor 配置 ──
 
@@ -72,14 +80,15 @@ export class ThinkExecutor {
     actMode: ActMode,
     resolvedTools?: Map<string, RegisteredTool>,
     injectDeps?: InjectedDependencies,
+    options?: { abortSignal?: AbortSignal; tokenBudget?: number },
   ): Promise<{ output: SubsystemOutput; tokenUsage?: { prompt: number; completion: number; total: number } }> {
     switch (think.implementation) {
       case 'code':
-        return this.executeCode(think, input, injectDeps);
+        return this.executeCode(think, input, injectDeps, options);
       case 'llm':
-        return this.executeLLM(think, input, actMode, resolvedTools);
+        return this.executeLLM(think, input, actMode, resolvedTools, options);
       case 'hybrid':
-        return this.executeHybrid(think, input, actMode, resolvedTools);
+        return this.executeHybrid(think, input, actMode, resolvedTools, options);
       default:
         throw new Error(`Unknown think.implementation: ${think.implementation}`);
     }
@@ -91,11 +100,19 @@ export class ThinkExecutor {
     think: ThinkConfig,
     input: SubsystemInput,
     injectDeps?: InjectedDependencies,
+    options?: { abortSignal?: AbortSignal; tokenBudget?: number },
   ): Promise<{ output: SubsystemOutput; tokenUsage?: undefined }> {
     if (!think.handler) {
       throw new Error('think.implementation "code" requires a handler');
     }
-    const output = await think.handler(input, injectDeps);
+
+    const outputPromise = think.handler(input, injectDeps);
+
+    if (options?.abortSignal?.aborted) {
+      throw this.toAbortError(options.abortSignal);
+    }
+
+    const output = await this.raceWithAbort(outputPromise, options?.abortSignal);
     return { output };
   }
 
@@ -106,26 +123,22 @@ export class ThinkExecutor {
     input: SubsystemInput,
     actMode: ActMode,
     resolvedTools?: Map<string, RegisteredTool>,
+    options?: { abortSignal?: AbortSignal; tokenBudget?: number },
   ): Promise<{ output: SubsystemOutput; tokenUsage?: { prompt: number; completion: number; total: number } }> {
     if (!think.systemPrompt) {
       throw new Error('think.implementation "llm" requires a systemPrompt');
     }
 
-    // 解析模型
     const modelRef = think.model ?? 'standard';
     const resolved = this.modelResolver.resolve(modelRef);
 
-    // 构建 Agent 工具集
     const agentTools = this.buildAgentTools(resolvedTools);
-
-    // 创建 Agent 实例
     const agent = new Agent({
       model: this.modelProvider,
       systemPrompt: think.systemPrompt,
       tools: agentTools,
     });
 
-    // 注入输入为用户消息
     const inputContent = JSON.stringify(input, null, 2);
     agent.context.messages.push({
       role: 'user',
@@ -133,7 +146,6 @@ export class ThinkExecutor {
       timestamp: Date.now(),
     });
 
-    // 构建可靠性配置（子系统级别的简化配置）
     const harness: ReliabilityHarness = {
       config: {
         planningRetry: { maxAttempts: 0, steerInstruction: '' },
@@ -144,33 +156,54 @@ export class ThinkExecutor {
       errorStrategy: this.errorStrategy,
     };
 
-    // 执行 LLM 调用（带 fallback）
+    const modelsToTry = [resolved.primary, ...resolved.fallback];
     let lastContent = '';
     let tokenUsage: { prompt: number; completion: number; total: number } | undefined;
+    let lastErr: unknown;
 
-    try {
-      for await (const event of runAgentWithReliability(
-        agent.context,
-        { model: agent.model },
-        harness,
-      )) {
-        if (event.type === 'assistant_message') {
-          lastContent = typeof event.message.content === 'string' ? event.message.content : '';
+    for (let i = 0; i < modelsToTry.length; i++) {
+      try {
+        lastContent = '';
+        tokenUsage = undefined;
+
+        for await (const event of runAgentWithReliability(
+          agent.context,
+          { model: agent.model },
+          harness,
+          options?.abortSignal,
+        )) {
+          if (event.type === 'assistant_message') {
+            lastContent = typeof event.message.content === 'string' ? event.message.content : '';
+          }
+          if (event.type === 'turn_end' && event.usage) {
+            tokenUsage = {
+              prompt: event.usage.promptTokens ?? 0,
+              completion: event.usage.completionTokens ?? 0,
+              total: event.usage.totalTokens ?? 0,
+            };
+          }
         }
-      }
-    } catch (err) {
-      // primary 失败，尝试 fallback
-      if (resolved.fallback.length > 0 && this.shouldFallback(err)) {
-        // fallback 的实现在后续迭代中完善
-        // 当前先抛出错误
+
+        this.ensureWithinBudget(tokenUsage, options?.tokenBudget);
+
+        const output = this.parseLLMOutput(lastContent, actMode, input.pendingToolCall);
+        return { output, tokenUsage };
+      } catch (err) {
+        lastErr = err;
+
+        if (options?.abortSignal?.aborted) {
+          throw err;
+        }
+
+        if (i < modelsToTry.length - 1 && this.shouldFallback(err)) {
+          continue;
+        }
+
         throw err;
       }
-      throw err;
     }
 
-    // 解析 LLM 输出
-    const output = this.parseLLMOutput(lastContent, actMode, input.pendingToolCall);
-    return { output, tokenUsage };
+    throw lastErr instanceof Error ? lastErr : new Error('LLM execution failed');
   }
 
   // ── Hybrid 模式 ──
@@ -180,6 +213,7 @@ export class ThinkExecutor {
     input: SubsystemInput,
     actMode: ActMode,
     resolvedTools?: Map<string, RegisteredTool>,
+    options?: { abortSignal?: AbortSignal; tokenBudget?: number },
   ): Promise<{ output: SubsystemOutput; tokenUsage?: { prompt: number; completion: number; total: number } }> {
     // preProcess
     let processedInput = input;
@@ -188,7 +222,7 @@ export class ThinkExecutor {
     }
 
     // LLM 执行
-    const result = await this.executeLLM(think, processedInput, actMode, resolvedTools);
+    const result = await this.executeLLM(think, processedInput, actMode, resolvedTools, options);
 
     // postProcess
     if (think.postProcess) {
@@ -208,6 +242,17 @@ export class ThinkExecutor {
     } catch {
       // postProcess 失败，返回原始输出
       return output;
+    }
+  }
+
+  private ensureWithinBudget(tokenUsage?: { prompt: number; completion: number; total: number }, tokenBudget?: number): void {
+    if (!tokenBudget) {
+      return;
+    }
+
+    const total = tokenUsage?.total ?? 0;
+    if (total > tokenBudget) {
+      throw new TokenBudgetExceededError(`Token usage ${total} exceeds budget ${tokenBudget}`);
     }
   }
 
@@ -390,6 +435,40 @@ export class ThinkExecutor {
         confidence: 0,
       }],
     };
+  }
+
+  private raceWithAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+    if (!signal) {
+      return promise;
+    }
+
+    return new Promise<T>((resolve, reject) => {
+      const onAbort = () => reject(this.toAbortError(signal));
+
+      if (signal.aborted) {
+        reject(this.toAbortError(signal));
+        return;
+      }
+
+      signal.addEventListener('abort', onAbort, { once: true });
+      promise.then(
+        (value) => {
+          signal.removeEventListener('abort', onAbort);
+          resolve(value);
+        },
+        (err) => {
+          signal.removeEventListener('abort', onAbort);
+          reject(err);
+        },
+      );
+    });
+  }
+
+  private toAbortError(signal?: AbortSignal): Error {
+    if (signal?.reason instanceof Error) {
+      return signal.reason;
+    }
+    return new Error('Subsystem execution aborted');
   }
 
   // ── Fallback 判断 ──
