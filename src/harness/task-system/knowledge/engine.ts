@@ -74,14 +74,14 @@ export class KnowledgeContextEngine implements ContextEngine {
   }
 
   async compact(params: CompactParams): Promise<CompactResult> {
-    return this.delegate.compact(params);
+    return this.delegate.compact?.(params) ?? { ok: true, compacted: false, reason: "unsupported", tokensBefore: 0 };
   }
 
   async afterTurn(params: AfterTurnParams): Promise<void> {
-    await this.delegate.afterTurn(params);
+    await this.delegate.afterTurn?.(params);
   }
 
   async ingest(params: IngestParams): Promise<void> {
-    await this.delegate.ingest(params);
+    await this.delegate.ingest?.(params);
   }
 }

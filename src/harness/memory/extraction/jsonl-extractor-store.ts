@@ -19,7 +19,7 @@
 
 import { access, mkdir, readFile, writeFile, appendFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { SessionExtractBundle, SessionExtractEvent } from '../../subsystems/memory-extractor/contracts/bundle.js';
+import type { SessionExtractBundle, SessionExtractEvent } from '../../../subsystems/memory-extractor/contracts/bundle.js';
 import type { ExtractorMeta, ExtractorStore } from './extractor-store.js';
 
 async function exists(p: string): Promise<boolean> {

@@ -17,7 +17,7 @@ import type { EventBus, Disposable, AgentEvent } from '../../../core/primitives/
 import type { SubsystemRuntime } from '../../autonomous-subsystem/runtime.js';
 import { SessionExtractCollector } from './session-extract-collector.js';
 import type { ExtractorStore } from './extractor-store.js';
-import type { SessionExtractBundle } from '../../subsystems/memory-extractor/contracts/bundle.js';
+import type { SessionExtractBundle } from '../../../subsystems/memory-extractor/contracts/bundle.js';
 
 export interface MemoryExtractorBridgeOptions {
   /** 是否自动 attach EventBus（默认 true） */

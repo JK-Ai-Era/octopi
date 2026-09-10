@@ -103,9 +103,9 @@ export async function chatCommand(args: CliArgs): Promise<void> {
       console.error('❌ Failed to start Gateway');
       process.exit(1);
     }
-    const channels = (config.channels ?? []) as Array<Record<string, unknown>>;
-    const httpChannel = channels.find((c) => c.type === 'http') as Record<string, unknown> | undefined;
-    const port = (httpChannel?.port as number) ?? 3000;
+    const channels = config.channels ?? [];
+    const httpChannel = channels.find((c) => c.type === "http");
+    const port = httpChannel?.port ?? 3000;
     writePidFile({
       pid: child.pid,
       config: configPath ?? join(process.cwd(), 'octopi.json'),

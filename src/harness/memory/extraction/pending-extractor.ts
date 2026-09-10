@@ -17,7 +17,7 @@ import type { SubsystemRuntime } from '../../autonomous-subsystem/runtime.js';
 import type { EventBus } from '../../../core/primitives/event-bus.js';
 import type { ExtractorStore } from './extractor-store.js';
 import { BackpressureController, type BackpressureOptions } from './backpressure.js';
-import type { SessionExtractBundle } from '../../subsystems/memory-extractor/contracts/bundle.js';
+import type { SessionExtractBundle } from '../../../subsystems/memory-extractor/contracts/bundle.js';
 
 export interface PendingExtractorOptions {
   /** 回压配置（可选） */
