@@ -13,3 +13,5 @@ web/dist/
 web/tsconfig.tsbuildinfo
 src/**/*.js
 web/src/**/*.js
+
+coverage/

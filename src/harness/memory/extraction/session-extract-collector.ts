@@ -18,7 +18,7 @@ import type {
   SessionExtractEvent,
   SessionExtractEventType,
   RunSummary,
-} from './session-extractor.js';
+} from '../../subsystems/memory-extractor/contracts/bundle.js';
 import { detectSemanticSignals } from './semantic-signals.js';
 import type { ExtractorStore } from './extractor-store.js';
 

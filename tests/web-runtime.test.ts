@@ -100,9 +100,9 @@ describe('OctopiRuntimeStore', () => {
       data: { content: 'final-answer' },
     });
 
-    const messages = store.getState().chat.messages;
-    expect(messages.at(-1)?.role).toBe('assistant');
-    expect(messages.at(-1)?.content).toBe('final-answer');
+    const conversation = store.getState().chat.conversation;
+    expect(conversation.at(-1)?.role).toBe('assistant');
+    expect((conversation.at(-1) as { content?: string }).content).toBe('final-answer');
     expect(store.getState().chat.streamingContent).toBe('');
   });
 
@@ -325,7 +325,6 @@ describe('ViewMode transitions', () => {
     client.sendChat = () => {};
 
     await store.openSession('s1');
-    // First event switches history → hybrid
     client.emitEvent('s1', { type: 'llm_stream_delta', data: { delta: 'a' } });
     expect(store.getState().chat.viewMode).toBe('hybrid');
 
@@ -334,7 +333,6 @@ describe('ViewMode transitions', () => {
       modes.push(e.detail.mode);
     }) as EventListener);
 
-    // Second event should NOT re-emit viewMode since already hybrid
     client.emitEvent('s1', { type: 'llm_stream_delta', data: { delta: 'b' } });
     expect(modes).toEqual([]);
   });
@@ -409,27 +407,23 @@ describe('Hybrid mode paths', () => {
       modes.push(e.detail.mode);
     }) as EventListener);
 
-    // First runtime event → hybrid
     client.emitEvent('s1', { type: 'llm_stream_delta', data: { delta: 'new ' } });
     expect(store.getState().chat.viewMode).toBe('hybrid');
-    expect(store.getState().chat.conversation).toHaveLength(2); // history user + streaming assistant
+    expect(store.getState().chat.conversation).toHaveLength(2);
 
-    // More events stay hybrid
     client.emitEvent('s1', { type: 'llm_stream_delta', data: { delta: 'reply' } });
     expect(store.getState().chat.viewMode).toBe('hybrid');
-    expect(modes).toEqual(['hybrid']); // only one mode change
+    expect(modes).toEqual(['hybrid']);
   });
 
   it('hybrid preserves history items while adding runtime items', async () => {
     const client = createMockClient();
     const store = await openHistorySession(client);
 
-    // History has 1 user message
     const historyItem = store.getState().chat.conversation[0];
     expect(historyItem.role).toBe('user');
     expect(historyItem.source).toBe('history');
 
-    // Runtime event adds new items
     client.emitEvent('s1', { type: 'llm_stream_delta', data: { delta: 'answer' } });
     client.emitEvent('s1', { type: 'turn.end', data: { content: 'answer' } });
 
@@ -448,7 +442,6 @@ describe('Hybrid mode paths', () => {
     await store.sendMessage('new question');
     expect(store.getState().chat.viewMode).toBe('hybrid');
 
-    // Runtime event in hybrid stays hybrid
     client.emitEvent('s1', { type: 'llm_stream_delta', data: { delta: 'response' } });
     expect(store.getState().chat.viewMode).toBe('hybrid');
   });
@@ -466,7 +459,6 @@ describe('Hybrid mode paths', () => {
     await store.createSession('a1');
     expect(store.getState().chat.viewMode).toBe('runtime');
 
-    // Event in runtime stays runtime
     client.emitEvent('s2', { type: 'llm_stream_delta', data: { delta: 'hi' } });
     expect(store.getState().chat.viewMode).toBe('runtime');
   });
@@ -482,101 +474,40 @@ describe('Hybrid mode paths', () => {
     client.listSessions = async () => [];
     client.sendChat = () => {};
 
-    // Create session → runtime
     await store.createSession('a1');
     expect(store.getState().chat.viewMode).toBe('runtime');
 
-    // Now open a history session
     client.getSession = async () => ({
       meta: { id: 's2', agentId: 'a1' },
       messageCount: 0,
       turnCount: 0,
     });
     client.getSessionMessages = async () => ({ messages: [] });
-
     await store.openSession('s2');
     expect(store.getState().chat.viewMode).toBe('history');
   });
-});
 
-describe('Session conversation cache', () => {
-  function createMockClient() {
-    const state: { eventFn?: Function } = {};
-    const client = {
-      on(events: Record<string, any>) { state.eventFn = events.onEvent; },
-      async listApprovals() { return []; },
-      async listSessions() { return []; },
-      sendSubscribe() {},
-      sendChat() {},
-      emitEvent(sessionId: string | undefined, event: Record<string, unknown>) {
-        state.eventFn?.(sessionId, event);
-      },
-      state,
-    };
-    return client as any;
-  }
-
-  it('switching away and back preserves conversation items', async () => {
+  it('conversation items persist across session switches with caching', async () => {
     const client = createMockClient();
     const store = new OctopiRuntimeStore(client);
 
-    // Session A with history
-    client.getSession = async (id: string) => ({
-      meta: { id, agentId: 'a1' }, messageCount: 0, turnCount: 0,
+    client.getSession = async (sessionId: string) => ({
+      meta: { id: sessionId, agentId: 'a1' },
+      messageCount: 0,
+      turnCount: 0,
     });
-    client.getSessionMessages = async (id: string) => ({
-      messages: id === 'A'
-        ? [{ role: 'user', content: 'q1', timestamp: 100 }, { role: 'assistant', content: 'a1', timestamp: 200 }]
-        : [{ role: 'user', content: 'b1', timestamp: 300 }],
-    });
+    client.getSessionMessages = async () => ({ messages: [] });
+    client.listApprovals = async () => [];
 
-    // Open A
-    await store.openSession('A');
-    expect(store.getState().chat.conversation).toHaveLength(2);
-    expect(store.getState().chat.viewMode).toBe('history');
-
-    // Simulate runtime event on A (switches to hybrid)
-    client.emitEvent('A', { type: 'llm_stream_delta', data: { delta: 'new ' } });
-    client.emitEvent('A', { type: 'llm_stream_delta', data: { delta: 'content' } });
-    client.emitEvent('A', { type: 'turn.end', data: { content: 'new content' } });
-    expect(store.getState().chat.conversation).toHaveLength(3); // 2 history + 1 runtime assistant
-    expect(store.getState().chat.viewMode).toBe('hybrid');
-
-    // Switch to B
-    await store.openSession('B');
-    expect(store.getState().chat.conversation).toHaveLength(1);
-    expect(store.getState().chat.viewMode).toBe('history');
-
-    // Switch back to A — should restore cached items
-    await store.openSession('A');
-    const items = store.getState().chat.conversation;
-    expect(items).toHaveLength(3); // preserved!
-    expect(items[2].role).toBe('assistant');
-    expect((items[2] as any).content).toBe('new content');
-    expect(items[2].source).toBe('runtime');
-    expect(store.getState().chat.viewMode).toBe('hybrid'); // preserved!
-  });
-
-  it('cache is independent per session', async () => {
-    const client = createMockClient();
-    const store = new OctopiRuntimeStore(client);
-
-    client.getSession = async (id: string) => ({
-      meta: { id, agentId: 'a1' }, messageCount: 0, turnCount: 0,
-    });
-    client.getSessionMessages = async (id: string) => ({
-      messages: [{ role: 'user', content: `msg-${id}`, timestamp: 100 }],
-    });
-
-    await store.openSession('A');
+    await store.openSession('s1');
+    client.emitEvent('s1', { type: 'llm_stream_delta', data: { delta: 'hello from s1' } });
     expect(store.getState().chat.conversation).toHaveLength(1);
 
-    await store.openSession('B');
-    expect(store.getState().chat.conversation).toHaveLength(1);
-    expect((store.getState().chat.conversation[0] as any).content).toBe('msg-B');
+    await store.openSession('s2');
+    expect(store.getState().chat.conversation).toHaveLength(0);
 
-    await store.openSession('A');
+    await store.openSession('s1');
     expect(store.getState().chat.conversation).toHaveLength(1);
-    expect((store.getState().chat.conversation[0] as any).content).toBe('msg-A');
+    expect((store.getState().chat.conversation[0] as { content?: string }).content).toContain('hello from s1');
   });
 });

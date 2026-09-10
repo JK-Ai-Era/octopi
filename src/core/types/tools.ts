@@ -2,6 +2,8 @@
  * 工具系统类型
  *
  * 工具定义、执行上下文、处理函数、注册记录。
+ *
+ * `ToolParameter` 保留字段用于参数校验：类型、必填、枚举、范围、长度、正则，以及嵌套对象与数组。
  */
 
 /** 工具参数定义 */
@@ -9,10 +11,24 @@ export interface ToolParameter {
   type: 'string' | 'number' | 'boolean' | 'object' | 'array';
   description: string;
   required?: boolean;
-  enum?: string[];
+  enum?: Array<string | number>;
   properties?: Record<string, ToolParameter>;
   items?: ToolParameter;
   default?: unknown;
+  /** 数值参数最小值（inclusive） */
+  minimum?: number;
+  /** 数值参数最大值（inclusive） */
+  maximum?: number;
+  /** 字符串最小长度 */
+  minLength?: number;
+  /** 字符串最大长度 */
+  maxLength?: number;
+  /** 字符串正则表达式（无首尾斜杠） */
+  pattern?: string;
+  /** 数组最少元素数 */
+  minItems?: number;
+  /** 数组最多元素数 */
+  maxItems?: number;
 }
 
 /** 工具定义 */

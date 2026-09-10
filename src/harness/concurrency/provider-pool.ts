@@ -6,6 +6,7 @@
  * - 粘滞路由：同一 session 尽量路由到同一 key（prompt cache 命中）
  * - 自动故障转移：key 限流/故障时自动切换
  * - per-key 限流：每个 key 独立的令牌桶限流器
+ * - 主动探活：定期检查不健康 slot，恢复后立即回到路由池
  *
  * 设计原则：
  * - 实现 ModelProvider 接口，对 Engine 透明
@@ -46,6 +47,13 @@ export interface RoutingConfig {
   failover?: 'auto' | 'manual';
 }
 
+export interface HealthCheckConfig {
+  /** 探活间隔（毫秒），默认 30_000 */
+  intervalMs?: number;
+  /** 单次探活超时（毫秒），默认 5_000 */
+  timeoutMs?: number;
+}
+
 export interface ProviderPoolConfig {
   /** 池中的 slot 列表 */
   slots: PoolSlotConfig[];
@@ -57,6 +65,8 @@ export interface ProviderPoolConfig {
     burstCapacity?: number;
     maxWaitMs?: number;
   };
+  /** 主动探活配置 */
+  healthCheck?: HealthCheckConfig;
 }
 
 // ── 内部类型 ──
@@ -94,6 +104,11 @@ export class ProviderPool implements ModelProvider {
   private readonly strategy: 'sticky' | 'round-robin' | 'least-loaded';
   private readonly stickyTtlMs: number;
   private cleanupTimer?: ReturnType<typeof setInterval>;
+  private healthTimer?: ReturnType<typeof setInterval>;
+  private readonly healthIntervalMs: number;
+  private readonly healthTimeoutMs: number;
+  private lastProbeAt = 0;
+  private lastRecoverAt = 0;
 
   constructor(
     poolConfig: ProviderPoolConfig,
@@ -101,8 +116,9 @@ export class ProviderPool implements ModelProvider {
   ) {
     this.strategy = poolConfig.routing?.strategy ?? 'sticky';
     this.stickyTtlMs = poolConfig.routing?.stickyTtlMs ?? 30 * 60 * 1000;
+    this.healthIntervalMs = poolConfig.healthCheck?.intervalMs ?? 30_000;
+    this.healthTimeoutMs = poolConfig.healthCheck?.timeoutMs ?? 5_000;
 
-    // 构建 slot
     for (const slotConfig of poolConfig.slots) {
       const provider = providerMap.get(slotConfig.provider);
       if (!provider) {
@@ -112,7 +128,6 @@ export class ProviderPool implements ModelProvider {
         );
       }
 
-      // 合并限流配置：slot 级 > 全局级 > 默认值
       const rpm = slotConfig.rateLimit?.requestsPerMinute
         ?? poolConfig.rateLimit?.requestsPerMinute
         ?? 60;
@@ -141,11 +156,9 @@ export class ProviderPool implements ModelProvider {
       throw new Error('ProviderPool: at least one slot is required');
     }
 
-    // 默认模型：第一个 slot 的 defaultModel
     this.defaultModel = this.slots[0].provider.defaultModel;
-
-    // 定期清理过期粘滞映射
     this.cleanupTimer = setInterval(() => this.cleanupSticky(), 60_000);
+    this.healthTimer = setInterval(() => this.runHealthCheck(), this.healthIntervalMs);
   }
 
   // ── ModelProvider 接口 ──
@@ -183,19 +196,16 @@ export class ProviderPool implements ModelProvider {
   }
 
   getModelInfo(model: string): ModelInfo | null {
-    // 从第一个健康的 slot 获取
     for (const slot of this.slots) {
       if (slot.healthy) {
         const info = slot.provider.getModelInfo(model);
         if (info) return info;
       }
     }
-    // fallback: 任意 slot
     return this.slots[0]?.provider.getModelInfo(model) ?? null;
   }
 
   getModelInfos(): ModelInfo[] {
-    // 合并所有 slot 的 provider 的 model infos（去重）
     const seen = new Set<string>();
     const result: ModelInfo[] = [];
     for (const slot of this.slots) {
@@ -210,7 +220,6 @@ export class ProviderPool implements ModelProvider {
   }
 
   async isAvailable(): Promise<boolean> {
-    // 至少一个 slot 健康即可
     return this.slots.some(s => s.healthy);
   }
 
@@ -221,6 +230,10 @@ export class ProviderPool implements ModelProvider {
       clearInterval(this.cleanupTimer);
       this.cleanupTimer = undefined;
     }
+    if (this.healthTimer) {
+      clearInterval(this.healthTimer);
+      this.healthTimer = undefined;
+    }
     for (const slot of this.slots) {
       slot.rateLimiter.destroy();
     }
@@ -229,9 +242,6 @@ export class ProviderPool implements ModelProvider {
 
   // ── 监控 ──
 
-  /**
-   * 获取所有 slot 的指标
-   */
   getSlotMetrics(): SlotMetrics[] {
     return this.slots.map((slot, i) => ({
       index: i,
@@ -245,9 +255,6 @@ export class ProviderPool implements ModelProvider {
     }));
   }
 
-  /**
-   * 获取粘滞映射统计
-   */
   getStickyStats(): { activeSessions: number; ttlMs: number; strategy: string } {
     return {
       activeSessions: this.stickyMap.size,
@@ -256,13 +263,25 @@ export class ProviderPool implements ModelProvider {
     };
   }
 
-  // ── 路由逻辑 ──
+  getHealthStats(): { lastProbeAt: number; lastRecoverAt: number; intervalMs: number; timeoutMs: number } {
+    return {
+      lastProbeAt: this.lastProbeAt,
+      lastRecoverAt: this.lastRecoverAt,
+      intervalMs: this.healthIntervalMs,
+      timeoutMs: this.healthTimeoutMs,
+    };
+  }
 
   /**
-   * 选择 slot（带粘滞路由 + 故障转移）
+   * 手动触发一次探活，便于编排或测试。
    */
+  async runHealthCheck(): Promise<void> {
+    await this.probeUnhealthySlots();
+  }
+
+  // ── 路由逻辑 ──
+
   private async selectSlot(sessionId?: string): Promise<{ slot: ProviderSlot; index: number }> {
-    // 1. 粘滞路由：同一 session 尽量用同一个 slot
     if (sessionId && this.strategy === 'sticky') {
       const sticky = this.stickyMap.get(sessionId);
       if (sticky !== undefined) {
@@ -271,16 +290,13 @@ export class ProviderPool implements ModelProvider {
           sticky.lastUsed = Date.now();
           return { slot, index: sticky.slotIndex };
         }
-        // slot 不健康，走故障转移
         this.stickyMap.delete(sessionId);
       }
     }
 
-    // 2. 选择新 slot
     const index = this.pickSlot(sessionId);
     const slot = this.slots[index];
 
-    // 3. 记录粘滞映射
     if (sessionId) {
       this.stickyMap.set(sessionId, { slotIndex: index, lastUsed: Date.now() });
     }
@@ -288,16 +304,12 @@ export class ProviderPool implements ModelProvider {
     return { slot, index };
   }
 
-  /**
-   * 根据策略选择 slot
-   */
   private pickSlot(sessionId?: string): number {
     const healthy = this.slots
       .map((s, i) => ({ slot: s, index: i }))
       .filter(s => s.slot.healthy);
 
     if (healthy.length === 0) {
-      // 全部不健康，强制选一个（让调用方决定是否重试）
       return 0;
     }
 
@@ -312,9 +324,6 @@ export class ProviderPool implements ModelProvider {
     }
   }
 
-  /**
-   * 加权随机选择
-   */
   private pickWeightedRandom(indices: number[]): number {
     const totalWeight = indices.reduce((sum, i) => sum + (this.slots[i].config.weight ?? 1), 0);
     let rand = Math.random() * totalWeight;
@@ -325,11 +334,7 @@ export class ProviderPool implements ModelProvider {
     return indices[indices.length - 1];
   }
 
-  /**
-   * 加权轮询
-   */
   private pickRoundRobin(indices: number[]): number {
-    // 按权重展开
     const expanded: number[] = [];
     for (const i of indices) {
       const w = this.slots[i].config.weight ?? 1;
@@ -340,15 +345,11 @@ export class ProviderPool implements ModelProvider {
     return expanded[idx];
   }
 
-  /**
-   * 最少负载选择
-   */
   private pickLeastLoaded(indices: number[]): number {
     let best = indices[0];
     let bestLoad = Infinity;
     for (const i of indices) {
       const metrics = this.slots[i].rateLimiter.metrics();
-      // 负载 = 队列长度 + (总请求 - 已完成) / 权重
       const pending = metrics.totalRequests - metrics.fulfilledRequests;
       const load = (metrics.queueLength + pending) / (this.slots[i].config.weight ?? 1);
       if (load < bestLoad) {
@@ -374,12 +375,59 @@ export class ProviderPool implements ModelProvider {
     slot.consecutiveErrors++;
     slot.totalErrors++;
 
-    // 连续 5 次错误 → 标记不健康
     if (slot.consecutiveErrors >= 5) {
       slot.healthy = false;
     }
 
-    // TODO: 定期探活不健康的 slot
+    // 失败后立即触发一次探活，缩短恢复窗口
+    void this.runHealthCheck().catch(() => {});
+  }
+
+  private async probeUnhealthySlots(): Promise<void> {
+    const now = Date.now();
+    this.lastProbeAt = now;
+
+    for (const slot of this.slots) {
+      if (slot.healthy) {
+        continue;
+      }
+
+      const healthy = await this.checkSlotHealth(slot);
+      if (healthy) {
+        slot.healthy = true;
+        slot.consecutiveErrors = 0;
+        this.lastRecoverAt = now;
+      }
+    }
+  }
+
+  private async checkSlotHealth(slot: ProviderSlot): Promise<boolean> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.healthTimeoutMs);
+
+    try {
+      const result = await Promise.race([
+        slot.provider.isAvailable(),
+        this.waitForAbort(controller.signal),
+      ]);
+      return result === true;
+    } catch {
+      return false;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  private waitForAbort(signal: AbortSignal): Promise<boolean> {
+    return new Promise<boolean>((resolve) => {
+      if (signal.aborted) {
+        resolve(false);
+        return;
+      }
+
+      const onAbort = () => resolve(false);
+      signal.addEventListener('abort', onAbort, { once: true });
+    });
   }
 
   // ── 粘滞映射管理 ──
@@ -393,14 +441,7 @@ export class ProviderPool implements ModelProvider {
     }
   }
 
-  /**
-   * 从请求中提取 sessionId（用于粘滞路由）
-   *
-   * 约定：LLMRequest.signal 上挂载 __sessionId 元数据。
-   * 如果没有 signal 或没有 sessionId，退化为轮询/随机路由。
-   */
   private extractSessionId(request: LLMRequest): string | undefined {
-    // signal 上可能挂了 sessionId（由 Harness 层设置）
     const signal = request.signal as (AbortSignal & { __sessionId?: string }) | undefined;
     return signal?.__sessionId;
   }

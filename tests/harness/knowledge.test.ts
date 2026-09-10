@@ -5,12 +5,13 @@
 import { describe, it, expect } from 'vitest';
 import {
   MemoryKnowledgeStore,
-  KnowledgeStage,
+  KnowledgeContextEngine,
   LLMReflector,
 } from '../../src/harness/index.js';
 import type { KnowledgeEntry } from '../../src/harness/index.js';
 import type { ExecutionRecord, Pattern } from '../../src/harness/task-system/supervisor/types.js';
 import type { ModelProvider } from '../../src/core/interfaces/model-provider.js';
+import type { ContextEngine, AssembleParams, AssembleResult, CompactParams, CompactResult, AfterTurnParams, IngestParams } from '../../src/core/interfaces/context-engine.js';
 
 // ── 辅助 ──
 
@@ -22,7 +23,8 @@ function mockModel(response: string): ModelProvider {
     },
     async *stream() {},
     async isAvailable() { return true; },
-      getModelInfo() { return null; },
+    getModelInfo() { return null; },
+    getModelInfos() { return []; },
   };
 }
 
@@ -33,6 +35,30 @@ function execution(overrides?: Partial<ExecutionRecord>): ExecutionRecord {
     timestamp: Date.now(),
     ...overrides,
   };
+}
+
+function createStubEngine(): ContextEngine & { lastParams?: AssembleParams } {
+  const stub: ContextEngine & { lastParams?: AssembleParams } = {
+    info: { id: 'stub', name: 'stub', ownsCompaction: false },
+    async assemble(params: AssembleParams): Promise<AssembleResult> {
+      stub.lastParams = params;
+      return {
+        messages: [
+          { role: 'system', content: params.systemPrompt },
+          ...params.messages.map((m) => ({ role: m.role, content: m.content })),
+        ],
+        estimatedTokens: 0,
+        systemPrompt: params.systemPrompt,
+      };
+    },
+    async compact(params: CompactParams): Promise<CompactResult> {
+      return { ok: true, compacted: false, reason: 'noop', tokensBefore: 0 };
+    },
+    async afterTurn(_params: AfterTurnParams): Promise<void> {},
+    async ingest(_params: IngestParams): Promise<void> {},
+  };
+
+  return stub;
 }
 
 // ── MemoryKnowledgeStore 测试 ──
@@ -160,43 +186,58 @@ describe('MemoryKnowledgeStore', () => {
   });
 });
 
-// ── KnowledgeStage 测试 ──
+// ── KnowledgeContextEngine 测试 ──
 
-describe('KnowledgeStage', () => {
-  it('无消息时不注入', async () => {
+describe('KnowledgeContextEngine', () => {
+  it('无用户消息时不注入知识', async () => {
     const store = new MemoryKnowledgeStore();
-    const stage = new KnowledgeStage({ store });
-    const ctx = { messages: [], systemPrompt: 'base', tools: [], systemPromptAddition: '' };
-    const result = await stage.process(ctx);
+    const delegate = createStubEngine();
+    const engine = new KnowledgeContextEngine({ store, delegate });
+
+    const result = await engine.assemble({
+      sessionId: 's1',
+      messages: [{ role: 'assistant', content: 'hi', timestamp: Date.now() }],
+      systemPrompt: 'base',
+      tools: [],
+    });
+
     expect(result.systemPrompt).toBe('base');
+    expect(delegate.lastParams?.systemPrompt).toBe('base');
   });
 
-  it('有相关知识时注入', async () => {
+  it('有相关知识时注入到 system prompt', async () => {
     const store = new MemoryKnowledgeStore();
     await store.store({ type: 'fact', content: 'TypeScript uses .ts files', source: 'test', confidence: 0.9, tags: ['ts'] });
 
-    const stage = new KnowledgeStage({ store });
-    const ctx = {
-      messages: [{ role: 'user' as const, content: 'How do I use TypeScript?', timestamp: Date.now() }],
+    const delegate = createStubEngine();
+    const engine = new KnowledgeContextEngine({ store, delegate });
+
+    const result = await engine.assemble({
+      sessionId: 's1',
+      messages: [{ role: 'user', content: 'How do I use TypeScript?', timestamp: Date.now() }],
       systemPrompt: 'base',
       tools: [],
-    };
-    const result = await stage.process(ctx);
+    });
+
+    expect(delegate.lastParams?.systemPrompt).toContain('TypeScript');
+    expect(delegate.lastParams?.systemPrompt).toContain('相关知识');
     expect(result.systemPrompt).toContain('TypeScript');
-    expect(result.systemPrompt).toContain('相关知识');
   });
 
   it('无相关知识时不注入', async () => {
     const store = new MemoryKnowledgeStore();
     await store.store({ type: 'fact', content: 'Go is a compiled language', source: 'test', confidence: 0.9, tags: ['go'] });
 
-    const stage = new KnowledgeStage({ store });
-    const ctx = {
-      messages: [{ role: 'user' as const, content: 'Rust ownership model', timestamp: Date.now() }],
+    const delegate = createStubEngine();
+    const engine = new KnowledgeContextEngine({ store, delegate });
+
+    const result = await engine.assemble({
+      sessionId: 's1',
+      messages: [{ role: 'user', content: 'Rust ownership model', timestamp: Date.now() }],
       systemPrompt: 'base',
       tools: [],
-    };
-    const result = await stage.process(ctx);
+    });
+
     expect(result.systemPrompt).toBe('base');
   });
 });

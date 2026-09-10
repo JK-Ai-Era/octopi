@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { JsonlExtractorStore } from '../../../src/harness/memory/extraction/jsonl-extractor-store.js';
 import { InMemoryExtractorStore } from '../../../src/harness/memory/extraction/extractor-store.js';
-import type { SessionExtractEvent, SessionExtractBundle } from '../../../src/harness/memory/extraction/session-extractor.js';
+import type { SessionExtractEvent, SessionExtractBundle } from '../../../src/subsystems/memory-extractor/contracts/bundle.js';
 import { mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -59,7 +59,6 @@ describe('ExtractorStore', () => {
     const pending = await store.listPending('a1');
     expect(pending.some((p) => p.sessionId === 's1')).toBe(true);
 
-    // 文件落盘校验
     const eventsFile = path.join(dir, 'a1', 'extract', 'events', 's1.jsonl');
     const content = await readFile(eventsFile, 'utf-8');
     expect(content.split('\n').filter(Boolean).length).toBe(2);

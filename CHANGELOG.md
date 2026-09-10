@@ -1,3 +1,26 @@
+## v0.14.4 (2026-09-10)
+
+### refactor: 技术债务修复（TECH_DEBT_REPAIR_PLAN）
+
+针对内部研发阶段的技术债进行系统清理，移除遗留兼容层并补齐质量工程基座。
+
+#### 变更
+
+- **refactor(registry): 工具参数校验补齐** — `ToolRegistry.execute()` 增加类型、必填、枚举、范围、长度、正则、嵌套对象校验；补齐 `ToolParameter` 字段。
+- **feat(concurrency): ProviderPool 主动探活** — 新增 `healthCheck` 配置、自动探活机制与 `runHealthCheck()`；不健康 slot 可自动恢复。
+- **refactor(context): KnowledgeStage 对齐 ContextEngine** — 删除旧 `ContextStage/StageContext` 体系，新增 `KnowledgeContextEngine`，知识注入通过 `ContextEngine.assemble()` 完成。
+- **refactor(cli): CLI 拆分** — `src/cli.ts` 拆分为 `src/cli/*` 多模块，CLI 入口改为 `dist/cli/index.js`。
+- **refactor(web/store): 移除 legacy messages** — Web Runtime Store 删除遗留 `messages` 双模型，统一 `conversation` 为唯一 source of truth。
+- **refactor(memory): deprecated/re-export 清理** — 删除旧 extraction 封装模块、concurrency/process deprecated re-export；导入路径改为规范定义模块。
+- **build(quality): 测试覆盖体系** — 引入 `@vitest/coverage-v8`，新增 `npm run test:coverage`，配置覆盖率报告输出。
+- **build(quality): Lint 配置补齐** — 新增 `eslint.config.js` 与 ESLint 相关依赖，`npm run lint` 可稳定运行。
+
+#### 测试
+
+- **test: tool-registry-args** — 补充参数校验正负向测试。
+- **test: provider-pool-healthcheck** — 补充探活恢复测试。
+- **test: harness/knowledge** — 补充 `KnowledgeContextEngine` 知识注入测试。
+- **test: web-runtime** — 补充统一 `conversation` 状态测试。
 ## v0.14.3 (2026-09-09)
 
 ### docs: 自主子系统开发者指南

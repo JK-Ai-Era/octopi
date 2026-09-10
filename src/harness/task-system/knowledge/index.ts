@@ -3,8 +3,8 @@
  */
 
 export { MemoryKnowledgeStore } from './memory-store.js';
-export { KnowledgeStage } from './stage.js';
-export type { KnowledgeStageConfig } from './stage.js';
+export { KnowledgeContextEngine } from './engine.js';
+export type { KnowledgeContextEngineConfig } from './engine.js';
 export type {
   KnowledgeStore,
   KnowledgeEntry,

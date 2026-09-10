@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { defaultThresholdPolicy } from '../../../src/harness/memory/extraction/threshold-policy.js';
+import { defaultThresholdPolicy } from '../../../src/subsystems/memory-extractor/policies/threshold.js';
 
 function runSummary(overrides?: Record<string, unknown>) {
   return {

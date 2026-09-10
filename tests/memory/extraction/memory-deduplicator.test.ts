@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { InMemoryMemoryStore } from '../../../src/harness/memory/store.js';
-import { MemoryDeduplicator } from '../../../src/harness/memory/extraction/memory-deduplicator.js';
-import type { MemoryCandidate } from '../../../src/harness/memory/extraction/session-extractor.js';
+import { MemoryDeduplicator } from '../../../src/subsystems/memory-extractor/policies/dedup.js';
+import type { MemoryCandidate } from '../../../src/subsystems/memory-extractor/contracts/bundle.js';
 
 function candidate(overrides?: Partial<MemoryCandidate>): MemoryCandidate {
   return {

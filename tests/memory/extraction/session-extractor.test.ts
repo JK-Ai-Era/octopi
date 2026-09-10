@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { SessionExtractor } from '../../../src/harness/memory/extraction/session-extractor.js';
-import type { SessionExtractBundle } from '../../../src/harness/memory/extraction/session-extractor.js';
+import { extractCandidates } from '../../../src/subsystems/memory-extractor/handler.js';
+import type { SessionExtractBundle } from '../../../src/subsystems/memory-extractor/contracts/bundle.js';
 
 function baseBundle(overrides?: Partial<SessionExtractBundle>): SessionExtractBundle {
   return {
@@ -21,9 +21,8 @@ function baseBundle(overrides?: Partial<SessionExtractBundle>): SessionExtractBu
   };
 }
 
-describe('SessionExtractor', () => {
+describe('extractCandidates', () => {
   it('should extract preference when constraint_set exists', () => {
-    const extractor = new SessionExtractor();
     const bundle = baseBundle({
       events: [
         { ts: Date.now(), type: 'constraint_set', sessionId: 's1', turnId: 't1', payload: { text: 'Use ESM only' } },
@@ -31,7 +30,7 @@ describe('SessionExtractor', () => {
       ],
     });
 
-    const candidates = extractor.extract(bundle);
+    const candidates = extractCandidates(bundle);
     const preference = candidates.find((c) => c.type === 'preference');
     expect(preference).toBeTruthy();
     expect(preference!.confidence).toBeGreaterThan(0.6);
@@ -39,7 +38,6 @@ describe('SessionExtractor', () => {
   });
 
   it('should extract lesson when repeated failures then fix', () => {
-    const extractor = new SessionExtractor();
     const bundle = baseBundle({
       events: [
         { ts: 1, type: 'tool_failure', sessionId: 's1', turnId: 't1' },
@@ -48,19 +46,18 @@ describe('SessionExtractor', () => {
       ],
     });
 
-    const candidates = extractor.extract(bundle);
+    const candidates = extractCandidates(bundle);
     expect(candidates.some((c) => c.type === 'lesson')).toBe(true);
   });
 
   it('should extract decision when decision_made exists', () => {
-    const extractor = new SessionExtractor();
     const bundle = baseBundle({
       events: [
         { ts: 1, type: 'decision_made', sessionId: 's1', turnId: 't2', payload: { text: 'Use SQLite store' } },
       ],
     });
 
-    const candidates = extractor.extract(bundle);
+    const candidates = extractCandidates(bundle);
     expect(candidates.some((c) => c.type === 'decision')).toBe(true);
   });
 });

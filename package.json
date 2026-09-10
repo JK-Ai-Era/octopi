@@ -6,7 +6,7 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
-    "octopi": "./dist/cli.js"
+    "octopi": "./dist/cli/index.js"
   },
   "exports": {
     ".": {
@@ -54,7 +54,8 @@
     "build": "tsc",
     "dev": "tsc --watch",
     "test": "node --experimental-vm-modules node_modules/.bin/vitest run",
-    "lint": "eslint src/"
+    "lint": "eslint .",
+    "test:coverage": "node --experimental-vm-modules node_modules/.bin/vitest run --coverage"
   },
   "engines": {
     "node": ">=20"
@@ -63,7 +64,10 @@
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^25.9.1",
+    "@vitest/coverage-v8": "^4.1.7",
+    "eslint": "^9.22.0",
     "typescript": "^6.0.3",
+    "typescript-eslint": "^8.34.1",
     "vitest": "^4.1.7"
   },
   "dependencies": {

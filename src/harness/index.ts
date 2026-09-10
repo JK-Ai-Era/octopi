@@ -80,8 +80,8 @@ export { RuleTaskClassifier, DefaultStrategyRouter } from './task-system/strateg
 export type { TaskClassifier, TaskClassification, TaskCategory, TaskComplexity, StrategyRouter, Strategy, StrategyKind } from './task-system/strategy/index.js';
 export { LLMReflector } from './task-system/reflector/index.js';
 export type { LLMReflectorConfig } from './task-system/reflector/index.js';
-export { MemoryKnowledgeStore, KnowledgeStage } from './task-system/knowledge/index.js';
-export type { KnowledgeStore, KnowledgeEntry, KnowledgeType, KnowledgeStats, RetrieveOptions, KnowledgeStageConfig } from './task-system/knowledge/index.js';
+export { MemoryKnowledgeStore, KnowledgeContextEngine } from './task-system/knowledge/index.js';
+export type { KnowledgeStore, KnowledgeEntry, KnowledgeType, KnowledgeStats, RetrieveOptions, KnowledgeContextEngineConfig } from './task-system/knowledge/index.js';
 export { AgentSupervisor, startSupervisor, SupervisorEvents, EventCollector, DefaultTaskSupervisor, createTaskSupervisor } from './task-system/supervisor/index.js';
 export type { Planner, Reflector, AgentState, AgentStats, Plan, PlanStep, StepResult, ExecutionRecord, Assessment, Pattern, SupervisorConfig, TaskSupervisorConfig } from './task-system/supervisor/index.js';
 
@@ -120,7 +120,10 @@ export * from './types/index.js';
 
 // ── Concurrency re-exports ──
 export * from './concurrency/tool-loop-detection.js';
-export * from './concurrency/state-machine.js';
-export * from './concurrency/async-task.js';
+export { StateMachine, createSessionStateMachine } from '../core/primitives/state-machine.js';
+export type { StateTransition, StateMachineConfig } from '../core/primitives/state-machine.js';
+export { AsyncTask, TaskTimeoutError, TaskCancelledError, spawnTask, TaskEvents } from '../core/primitives/async-task.js';
+export type { TaskOptions, TaskExecutor } from '../core/primitives/async-task.js';
 export * from './budget/index.js';
-export * from './process/index.js';
+export { ProcessModel, ProcessEvents, spawnProcess } from '../core/primitives/process-model.js';
+export type { ProcessState, ExitReason, ExitInfo, ProcessOptions, ProcessBody, ProcessContext } from '../core/primitives/process-model.js';

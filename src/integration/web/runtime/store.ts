@@ -8,6 +8,10 @@
  * - 不依赖具体 UI 框架
  * - 通过 EventTarget 暴露状态变化
  * - 只做状态建模，不做渲染
+ *
+ * 说明：
+ * - 本版本移除遗留的 `messages` 双写状态，统一以 `conversation` 为唯一 source of truth。
+ * - `MessageRecord` 仅保留用于历史数据导入（`ConversationAdapter.buildHistoryItems`）。
  */
 
 import type {
@@ -22,7 +26,7 @@ import type {
 } from '../../web/sdk/client.js';
 
 import { ConversationAdapter } from '../conversation/adapter.js';
-import type { ConversationItem, ToolConversationItem, UserConversationItem, AssistantConversationItem, ViewMode } from '../conversation/types.js';
+import type { ConversationItem, ToolConversationItem, ViewMode } from '../conversation/types.js';
 
 // ──────────────────────────────────────
 // Events
@@ -53,7 +57,7 @@ export class RuntimeEvent<T = unknown> extends Event {
 export class ConnectionEvent extends RuntimeEvent<{ state: ConnectionState; agents: AgentSummary[] }> {}
 export class SessionsEvent extends RuntimeEvent<{ sessions: SessionSummary[] }> {}
 export class SessionEvent extends RuntimeEvent<{ session: SessionView | null }> {}
-export class ChatEvent extends RuntimeEvent<{ messages: MessageRecord[] }> {}
+export class ChatEvent extends RuntimeEvent<{ conversation: ConversationItem[] }> {}
 export class ConversationEvent extends RuntimeEvent<{ items: ConversationItem[] }> {}
 export class ViewModeEvent extends RuntimeEvent<{ mode: ViewMode }> {}
 export class StreamEvent extends RuntimeEvent<{ streaming: boolean; content: string }> {}
@@ -95,11 +99,7 @@ export interface InspectorState {
 export interface ChatState {
   sessionId?: string;
   agentId?: string;
-  /** Phase 2: 当前视图模式 */
   viewMode: ViewMode;
-  /** @legacy 向后兼容，后续由 conversation 替代 */
-  messages: MessageRecord[];
-  /** Phase 1 新增：统一的会话视图模型 */
   conversation: ConversationItem[];
   streamingContent: string;
   runStatus: RunStatus;
@@ -116,8 +116,7 @@ export class OctopiRuntimeStore extends EventTarget {
   private readonly client: OctopiClient;
   private readonly conversationAdapter = new ConversationAdapter();
   private static readonly MAX_CACHE_SIZE = 20;
-  /** 本地缓存：切走 session 时保存 conversation items + legacy messages，切回时恢复 */
-  private readonly conversationCache = new Map<string, { items: ConversationItem[]; messages: MessageRecord[]; viewMode: ViewMode }>();
+  private readonly conversationCache = new Map<string, { items: ConversationItem[]; viewMode: ViewMode }>();
 
   private connectionState: ConnectionState = 'idle';
   private agents: AgentSummary[] = [];
@@ -170,7 +169,6 @@ export class OctopiRuntimeStore extends EventTarget {
     this.client.disconnect();
   }
 
-  /** Reconnect with new options without destroying store state */
   reconnect(baseUrl?: string, apiKey?: string): void {
     this.client.updateOptions({ baseUrl, apiKey });
     this.client.disconnect();
@@ -190,16 +188,13 @@ export class OctopiRuntimeStore extends EventTarget {
   }
 
   async openSession(sessionId: string): Promise<SessionView> {
-    // Phase 4: 切走前缓存当前 session 的 conversation items + messages
     if (this.chat.sessionId && this.chat.conversation.length > 0) {
-      // LRU eviction: remove oldest entry when cache is full
       if (this.conversationCache.size >= OctopiRuntimeStore.MAX_CACHE_SIZE) {
         const oldest = this.conversationCache.keys().next().value;
         if (oldest) this.conversationCache.delete(oldest);
       }
       this.conversationCache.set(this.chat.sessionId, {
         items: this.chat.conversation,
-        messages: this.chat.messages,
         viewMode: this.chat.viewMode,
       });
     }
@@ -209,19 +204,16 @@ export class OctopiRuntimeStore extends EventTarget {
     this.conversationAdapter.reset();
     this.currentSession = view;
 
-    // Phase 4: 优先使用本地缓存，避免切回时丢失运行时 items
     const cached = this.conversationCache.get(sessionId);
     let conversationItems: ConversationItem[];
-    let messages: MessageRecord[];
     let viewMode: ViewMode;
 
     if (cached) {
       conversationItems = cached.items;
-      messages = cached.messages;
       viewMode = cached.viewMode;
     } else {
       const page = await this.client.getSessionMessages(sessionId, { limit: 50 });
-      messages = page.messages;
+      const messages: MessageRecord[] = page.messages;
       conversationItems = ConversationAdapter.buildHistoryItems(messages, sessionId);
       viewMode = 'history';
     }
@@ -230,7 +222,6 @@ export class OctopiRuntimeStore extends EventTarget {
       sessionId,
       agentId: view.meta.agentId,
       viewMode,
-      messages,
       conversation: conversationItems,
       streamingContent: '',
       runStatus: 'idle',
@@ -242,7 +233,7 @@ export class OctopiRuntimeStore extends EventTarget {
     this.client.sendSubscribe(sessionId, view.meta.agentId);
 
     this.dispatch('session', new SessionEvent('session', { session: this.currentSession }));
-    this.dispatch('chat', new ChatEvent('chat', { messages: this.chat.messages }));
+    this.dispatch('chat', new ChatEvent('chat', { conversation: this.chat.conversation }));
     this.dispatch('conversation', new ConversationEvent('conversation', { items: this.chat.conversation }));
     this.dispatch('viewMode', new ViewModeEvent('viewMode', { mode: this.chat.viewMode }));
     this.dispatch('tool', new ToolEvent('tool', { tools: this.chat.tools }));
@@ -255,7 +246,6 @@ export class OctopiRuntimeStore extends EventTarget {
   async createSession(agentId: string, options?: { sessionId?: string; metadata?: Record<string, unknown> }): Promise<SessionSummary> {
     const session = await this.client.createSession({ agentId, ...options });
 
-    // 创建后直接初始化聊天视图，避免立刻调用 getSession/getSessionMessages 导致新 session 查询失败。
     this.conversationAdapter.reset();
     this.currentSession = {
       meta: session,
@@ -266,7 +256,6 @@ export class OctopiRuntimeStore extends EventTarget {
       sessionId: session.id,
       agentId: session.agentId,
       viewMode: 'runtime',
-      messages: [],
       conversation: [],
       streamingContent: '',
       runStatus: 'idle',
@@ -279,7 +268,7 @@ export class OctopiRuntimeStore extends EventTarget {
     await this.refreshSessions();
 
     this.dispatch('session', new SessionEvent('session', { session: this.currentSession }));
-    this.dispatch('chat', new ChatEvent('chat', { messages: this.chat.messages }));
+    this.dispatch('chat', new ChatEvent('chat', { conversation: this.chat.conversation }));
     this.dispatch('conversation', new ConversationEvent('conversation', { items: this.chat.conversation }));
     this.dispatch('viewMode', new ViewModeEvent('viewMode', { mode: this.chat.viewMode }));
     this.dispatch('tool', new ToolEvent('tool', { tools: this.chat.tools }));
@@ -294,19 +283,14 @@ export class OctopiRuntimeStore extends EventTarget {
       throw new Error('No active session');
     }
 
-    // Derive legacy messages from conversation items
     this.chat.conversation = this.conversationAdapter.injectUserMessage(content, this.chat.sessionId, this.chat.conversation);
-    this.chat.messages = this.deriveMessages(this.chat.conversation);
 
-    // Phase 4: 用户发送消息时，根据当前 viewMode 决定目标模式
-    // history → hybrid（历史会话叠加新交互）
-    // runtime / hybrid → runtime（保持或回到 runtime）
     this.setViewMode(this.chat.viewMode === 'history' ? 'hybrid' : 'runtime');
 
     this.chat.runStatus = 'sending';
     this.chat.streamingContent = '';
 
-    this.dispatch('chat', new ChatEvent('chat', { messages: this.chat.messages }));
+    this.dispatch('chat', new ChatEvent('chat', { conversation: this.chat.conversation }));
     this.dispatch('conversation', new ConversationEvent('conversation', { items: this.chat.conversation }));
     this.dispatch('stream', new StreamEvent('stream', { streaming: false, content: '' }));
 
@@ -360,21 +344,16 @@ export class OctopiRuntimeStore extends EventTarget {
   private applyEvent(event: AgentEventEnvelope): void {
     const sessionId = this.chat.sessionId ?? '';
 
-    // ── Phase 4: 收到 runtime 事件时，若仍在 history 模式则切到 hybrid ──
     if (this.chat.viewMode === 'history' && this.chat.sessionId) {
       this.setViewMode('hybrid');
     }
 
-    // ── Phase 1: route through ConversationAdapter ──
     const convResult = this.conversationAdapter.applyEvent(event, sessionId, this.chat.conversation);
-    // ── Derive all state from adapter result (single source of truth) ──
     if (convResult.changed) {
       this.chat.conversation = convResult.items;
       this.chat.streamingContent = convResult.streaming.content;
       this.chat.tools = this.deriveTools(convResult.items);
-      this.chat.messages = this.deriveMessages(convResult.items);
 
-      // Derive runStatus from streaming and tool state
       if (convResult.streaming.active) {
         this.chat.runStatus = 'streaming';
       } else if (event.type === 'aborted') {
@@ -385,14 +364,12 @@ export class OctopiRuntimeStore extends EventTarget {
         this.chat.runStatus = 'idle';
       }
 
-      // Dispatch derived events
       this.dispatch('conversation', new ConversationEvent('conversation', { items: this.chat.conversation }));
       this.dispatch('stream', new StreamEvent('stream', { streaming: convResult.streaming.active, content: convResult.streaming.content }));
       this.dispatch('tool', new ToolEvent('tool', { tools: this.chat.tools }));
-      this.dispatch('chat', new ChatEvent('chat', { messages: this.chat.messages }));
+      this.dispatch('chat', new ChatEvent('chat', { conversation: this.chat.conversation }));
     }
 
-    // ── Inspector metadata (not derivable from conversation items) ──
     let inspectorChanged = false;
     switch (event.type) {
       case 'tool.exec.end': {
@@ -467,9 +444,6 @@ export class OctopiRuntimeStore extends EventTarget {
     this.dispatchEvent(event);
   }
 
-  /**
-   * Phase 2: 切换 viewMode 并广播事件。
-   */
   private setViewMode(mode: ViewMode): void {
     if (this.chat.viewMode === mode) return;
     this.chat.viewMode = mode;
@@ -479,7 +453,6 @@ export class OctopiRuntimeStore extends EventTarget {
   private createEmptyChat(): ChatState {
     return {
       viewMode: 'history',
-      messages: [],
       conversation: [],
       streamingContent: '',
       runStatus: 'idle',
@@ -489,17 +462,9 @@ export class OctopiRuntimeStore extends EventTarget {
     };
   }
 
-  /** Derive ToolRun[] from conversation items (single source of truth) */
   private deriveTools(items: ConversationItem[]): ToolRun[] {
     return items
       .filter((i): i is ToolConversationItem => i.role === 'tool')
       .map((t) => ({ toolCallId: t.toolCallId, toolName: t.toolName, args: t.args, status: t.status, startedAt: t.createdAt, endedAt: t.status !== 'running' ? t.createdAt : undefined, error: t.error }));
-  }
-
-  /** Derive legacy MessageRecord[] from conversation items */
-  private deriveMessages(items: ConversationItem[]): MessageRecord[] {
-    return items
-      .filter((i): i is UserConversationItem | AssistantConversationItem => i.role === 'user' || i.role === 'assistant')
-      .map((i) => ({ role: i.role, content: i.content, timestamp: i.createdAt }));
   }
 }

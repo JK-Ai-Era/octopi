@@ -12,7 +12,7 @@
  * @module harness/memory/extraction/extractor-store
  */
 
-import type { SessionExtractBundle, SessionExtractEvent } from './session-extractor.js';
+import type { SessionExtractBundle, SessionExtractEvent } from '../../subsystems/memory-extractor/contracts/bundle.js';
 
 export interface ExtractorMeta {
   sessionId: string;

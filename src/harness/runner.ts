@@ -22,10 +22,6 @@ import { runAgentWithReliability } from './reliability/run-agent.js';
 import { createSessionStateMachine, type StateMachine } from '../core/primitives/state-machine.js';
 import { HeuristicTokenEstimator } from './context/token-estimator.js';
 
-/**
- * 任务决策提供者 — 接口已迁移到 core/interfaces/task-decision.ts
- * @deprecated 请从 core/interfaces/ 导入
- */
 export type { TaskDecisionProvider, TaskDecisionResult } from '../core/interfaces/task-decision.js';
 import type { TaskDecisionProvider, TaskDecisionResult } from '../core/interfaces/task-decision.js';
 

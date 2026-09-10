@@ -19,15 +19,10 @@
  * - types/thinking-level.ts — ThinkingLevel（@layer harness）
  */
 
-// ── 全量 re-export（向后兼容） ──
 export * from './types/index.js';
 
-// ── 从 interfaces re-export 的类型（保持原路径兼容） ──
-
-/** @deprecated 从 ./interfaces/error-strategy.js 导入 */
 export type { ErrorReason, ClassifiedError } from './interfaces/error-strategy.js';
 
-// ContextEngine 类型已移至 core/interfaces/context-engine.ts
 export type {
   ContextEngine,
   ContextEngineInfo,
