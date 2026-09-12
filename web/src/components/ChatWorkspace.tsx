@@ -242,6 +242,7 @@ export default function ChatWorkspace() {
   const [actionError, setActionError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [mobileTab, setMobileTab] = useState<'chat' | 'left' | 'right'>('chat');
+  const [showAllSessions, setShowAllSessions] = useState(false);
 
   const clientRef = useRef<OctopiClient | null>(null);
   const storeRef = useRef<OctopiRuntimeStore | null>(null);
@@ -377,7 +378,12 @@ export default function ChatWorkspace() {
   const connectionLabel = connection === 'connected' ? 'status-ok'
     : connection === 'connecting' || connection === 'reconnecting' ? 'status-warn' : 'status-neutral';
 
-  const agentSessions = sessions.filter(s => agentId ? s.agentId === agentId : true);
+  const agentSessions = sessions.filter(s => agentId ? s.agentId === agentId : true)
+    .sort((a, b) => (b.lastInteractionAt ?? 0) - (a.lastInteractionAt ?? 0));
+
+  const VISIBLE_SESSION_COUNT = 5;
+  const displayedSessions = showAllSessions ? agentSessions : agentSessions.slice(0, VISIBLE_SESSION_COUNT);
+  const hiddenSessionCount = agentSessions.length - displayedSessions.length;
 
   const isReconnecting = connection === 'reconnecting';
   const contextTokens = typeof inspector.contextTokens === 'number'
@@ -470,7 +476,7 @@ export default function ChatWorkspace() {
 
             <div className="sidebar-title">历史会话</div>
             <div style={{ display: 'grid', gap: 6 }}>
-              {agentSessions.map(s => (
+              {displayedSessions.map(s => (
                 <button
                   key={s.id}
                   className={`btn-secondary session-btn ${activeSessionId === s.id ? 'session-btn-active' : ''}`}
@@ -481,6 +487,24 @@ export default function ChatWorkspace() {
                 </button>
               ))}
               {!agentSessions.length && <div className="small muted">暂无历史会话</div>}
+              {hiddenSessionCount > 0 && !showAllSessions && (
+                <button
+                  className="btn-ghost small"
+                  style={{ marginTop: 2, textAlign: 'center', width: '100%', color: 'var(--color-muted)' }}
+                  onClick={() => setShowAllSessions(true)}
+                >
+                  展开更多会话 ({hiddenSessionCount})
+                </button>
+              )}
+              {showAllSessions && agentSessions.length > VISIBLE_SESSION_COUNT && (
+                <button
+                  className="btn-ghost small"
+                  style={{ marginTop: 2, textAlign: 'center', width: '100%', color: 'var(--color-muted)' }}
+                  onClick={() => setShowAllSessions(false)}
+                >
+                  收起会话列表
+                </button>
+              )}
             </div>
           </section>
         </aside>
