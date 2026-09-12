@@ -131,6 +131,27 @@ const { agent, runner } = await new AgentBuilder()
   .build();
 ```
 
+### Web Search（多 Provider）
+
+在 `octopi.json` / `~/.octopi/octopi.json` 配置后自动注册 `web_search` 工具：
+
+```json
+{
+  "webSearch": {
+    "provider": "mimo",
+    "fallbacks": ["duckduckgo"],
+    "defaultLimit": 5,
+    "timeoutMs": 90000,
+    "providers": {
+      "mimo": { "api": "mimo", "apiKey": "${MIMO_API_KEY}", "model": "mimo-v2.5-pro" },
+      "duckduckgo": { "api": "duckduckgo" }
+    }
+  }
+}
+```
+
+内置 provider：`duckduckgo`（免 key）、`tavily`、`brave`、`serper`、`mimo`。主 provider 失败或空结果时按 `fallbacks` 降级。
+
 ---
 
 ## 核心设计原则

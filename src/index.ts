@@ -101,6 +101,8 @@ export { DefaultToolBus } from './harness/plugin-ecosystem/tools/tool-bus.js';
 export { getBuiltinTools, createShellTool, createFileReadTool, createFileWriteTool, createFileListTool } from './harness/plugin-ecosystem/tools/builtin.js';
 export { createToolSet } from './harness/plugin-ecosystem/tools/tool-set.js';
 export type { ToolSet, ToolSetConfig } from './harness/plugin-ecosystem/tools/tool-set.js';
+export { createWebSearchTool } from './harness/plugin-ecosystem/tools/web-search.js';
+export type { WebSearchToolOptions } from './harness/plugin-ecosystem/tools/web-search.js';
 
 // Config Bridge（配置文件 → 新架构）
 export { buildFromConfig, buildFromConfigFile } from './harness/agent-building/config-bridge.js';
@@ -134,6 +136,27 @@ export type { OpenAIProviderConfig } from './integration/providers/openai.js';
 export { AnthropicProvider } from './integration/providers/anthropic.js';
 export type { AnthropicProviderConfig } from './integration/providers/anthropic.js';
 
+// Web Search Providers
+export {
+  createDuckDuckGoProvider,
+  createTavilyProvider,
+  createBraveProvider,
+  createSerperProvider,
+  createMimoProvider,
+  createWebSearchProviderFromSlot,
+  resolveWebSearchProviders,
+  createWebSearchWithFallback,
+} from './integration/web-search/index.js';
+export type {
+  WebSearchProvider,
+  WebSearchOptions,
+  WebSearchResponse,
+  WebSearchResultItem,
+  WebSearchConfig,
+  WebSearchProviderSlotConfig,
+  ResolvedWebSearchProviders,
+} from './integration/web-search/index.js';
+
 // Gateway
 export { Gateway } from './integration/gateway/gateway.js';
 
@@ -152,6 +175,7 @@ export type {
   ModelsConfig, ModelProviderConfig, ModelCapability, ModelInputType,
   NormalizedHarnessConfig, NormalizedModelInfo, HarnessConfig, AgentConfig,
   ChannelConfig, PluginConfig, Defaults,
+  WebSearchToolConfig, WebSearchProviderSlot,
 } from './config.js';
 export { validateConfig, validateConfigOrThrow, HarnessConfigSchema } from './config-schema.js';
 export type { ConfigValidationResult, ConfigValidationError } from './config-schema.js';

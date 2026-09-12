@@ -28,6 +28,29 @@ data/          Data/Session storage
 
 ---
 
+## Configuration Files
+
+| File | Tracked? | Purpose |
+|------|----------|---------|
+| `octopi.schema.json` | yes | JSON Schema for editor autocomplete / validation |
+| `octopi.example.json` | yes | Canonical template — keep in sync with Zod schema |
+| `octopi.json` | **no** (gitignored) | Local runtime instance only |
+
+**Do not commit or recreate a repo-root `octopi.json` for day-to-day work.** It shadows the workspace config when `loadConfig` resolves `./octopi.json` first.
+
+Canonical runtime config lives at **`~/.octopi/octopi.json`** (`OCTOPI_HOME`).
+
+```sh
+# preferred
+octopi serve start -c ~/.octopi/octopi.json
+# or
+cd ~/.octopi && octopi serve start
+```
+
+CLI helpers (`ensureInitialized` / `ensureDaemonConfig`) prefer `OCTOPI_HOME` over cwd. When changing config shape, update **both** `src/config-schema.ts` and `octopi.schema.json` / `octopi.example.json`.
+
+---
+
 ## Architecture & Invariants
 
 **Dependency Direction**: Outer -> Inner. `Core` has zero outer dependencies. **Never introduce a dependency from `Core` to `Harness`.**

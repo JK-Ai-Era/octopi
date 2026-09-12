@@ -54,7 +54,7 @@ AI 在早期阶段，应用构建思路在不断发展。架构设计的核心�
 ```
 ┌──────────────────────────────────────────────────────────────────┐
 │  Layer 3: Integration — 外部适配                                  │
-│  LLM Provider · 存储 · 可观测性 · 协议 · Gateway · TUI · Web Runtime │
+│  LLM Provider · Web Search · 存储 · 可观测性 · 协议 · Gateway · TUI · Web Runtime │
 │                                                                  │
 │  ┌──────────────────────────────────────────────────────────────┐│
 │  │  Layer 2: Harness — 11 个自包含领域                           ││
@@ -142,6 +142,7 @@ src/core/
 ```
 src/integration/
 ├── providers/            # LLM Provider（OpenAI, Anthropic）
+├── web-search/           # Web Search Provider（DuckDuckGo, Tavily, Brave, Serper, MiMo）
 ├── storage/              # 存储后端（JSONL, SQLite, Memory）
 ├── observability/        # 可观测性（Trace, Metrics, Exporters）
 ├── gateway/              # 网关
@@ -268,7 +269,7 @@ harness/reliability/
 ```
 harness/plugin-ecosystem/
 ├── plugins/              # PluginManager, HookRegistry, Loader
-├── tools/                # ToolRegistry, BuiltinTools, Streaming
+├── tools/                # ToolBus, BuiltinTools, web_search（多 provider）
 ├── skills/               # SkillManager（两阶段加载）
 ├── mcp/                  # McpManager, Bridge, Discovery
 ├── commands/             # 斜杠命令系统

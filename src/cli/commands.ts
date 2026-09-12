@@ -34,7 +34,7 @@ Commands:
   help              Show this help message
 
 Options:
-  --config, -c <path>   Config file path (default: ./octopi.json)
+  --config, -c <path>   Config file path (default: ~/.octopi/octopi.json)
   --port, -p <port>     Port override
   --verbose, -v         Enable verbose mode (trace all engine events to file)
   --help, -h            Show this help message
@@ -60,12 +60,13 @@ export async function initCommand(args: CliArgs): Promise<void> {
 export async function ensureInitialized(args: CliArgs): Promise<string | undefined> {
   if (args.config) return args.config;
 
-  if (isInitialized(process.cwd())) return undefined;
-
+  // Prefer OCTOPI_HOME over cwd so a stray ./octopi.json cannot shadow workspace config
   const home = getOctopiHome();
   if (isInitialized(home)) {
     return resolve(home, 'octopi.json');
   }
+
+  if (isInitialized(process.cwd())) return undefined;
 
   console.log('🐙 First run detected. Initializing Octopi...\n');
   const result = await initOctopi();
@@ -108,7 +109,7 @@ export async function chatCommand(args: CliArgs): Promise<void> {
     const port = httpChannel?.port ?? 3000;
     writePidFile({
       pid: child.pid,
-      config: configPath ?? join(process.cwd(), 'octopi.json'),
+      config: configPath ?? join(getOctopiHome(), 'octopi.json'),
       port,
       startedAt: new Date().toISOString(),
     });

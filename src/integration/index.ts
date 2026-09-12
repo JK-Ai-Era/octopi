@@ -20,5 +20,22 @@ export { LogObserver } from './observability/log-observer.js';
 // ── MCP ──
 export { SdkMcpClient, createSdkMcpClient } from './mcp/index.js';
 
+// ── Web Search ──
+export {
+  createDuckDuckGoProvider,
+  createTavilyProvider,
+  createBraveProvider,
+  createSerperProvider,
+  createMimoProvider,
+  createWebSearchProviderFromSlot,
+  resolveWebSearchProviders,
+  createWebSearchWithFallback,
+} from './web-search/index.js';
+export type {
+  WebSearchConfig,
+  WebSearchProviderSlotConfig,
+  ResolvedWebSearchProviders,
+} from './web-search/index.js';
+
 // ── Integration 层类型（canonical） ──
 export * from './types/index.js';

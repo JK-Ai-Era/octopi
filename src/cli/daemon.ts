@@ -173,13 +173,13 @@ export async function serveStartCommand(args: CliArgs): Promise<void> {
 
   writePidFile({
     pid: child.pid,
-    config: configPath ?? join(process.cwd(), 'octopi.json'),
+    config: configPath ?? join(getOctopiHome(), 'octopi.json'),
     port,
     startedAt: new Date().toISOString(),
   });
 
   console.log(`✅ Gateway started (PID: ${child.pid})`);
-  console.log(`   Config: ${configPath ?? './octopi.json'}`);
+  console.log(`   Config: ${configPath ?? join(getOctopiHome(), 'octopi.json')}`);
   console.log(`   Port:   ${port}`);
 
   // 启动 Web UI
@@ -313,7 +313,25 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
 
   const memoryStore = new (await import('../harness/memory/store.js')).InMemoryMemoryStore();
   const taskTracker = new (await import('../harness/task-system/tasks/tracker.js')).TaskTracker();
-  const { all } = createToolSet({ memoryStore, taskTracker });
+
+  let webSearchToolCfg: { provider: import('../core/interfaces/web-search.js').WebSearchProvider; defaultLimit?: number; timeoutMs?: number } | undefined;
+  if (config.webSearch?.providers && Object.keys(config.webSearch.providers).length > 0) {
+    const { resolveWebSearchProviders, createWebSearchWithFallback } = await import('../integration/web-search/factory.js');
+    const resolved = resolveWebSearchProviders(config.webSearch);
+    if (resolved.primary) {
+      webSearchToolCfg = {
+        provider: createWebSearchWithFallback(resolved.primary, resolved.fallbacks),
+        defaultLimit: resolved.defaultLimit,
+        timeoutMs: resolved.timeoutMs,
+      };
+      console.log(
+        `[CLI] Web search enabled: primary=${resolved.primary.id} (api=${resolved.primaryApi}), ` +
+        `fallbacks=[${resolved.fallbacks.map((f) => f.id).join(', ')}]`,
+      );
+    }
+  }
+
+  const { all } = createToolSet({ memoryStore, taskTracker, webSearch: webSearchToolCfg });
   for (const tool of all) gateway.registerTool(tool);
   console.log(`[CLI] Registered ${all.length} tools: ${all.map(t => t.definition.name).join(', ')}`);
 
@@ -343,7 +361,7 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
 
   writePidFile({
     pid: process.pid,
-    config: configPath ?? join(process.cwd(), 'octopi.json'),
+    config: configPath ?? join(getOctopiHome(), 'octopi.json'),
     port: args.port,
     startedAt: new Date().toISOString(),
   });

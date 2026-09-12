@@ -439,6 +439,86 @@
           "description": "审计日志目录（默认 ~/.octopi/audit）"
         }
       }
+    },
+    "webSearch": {
+      "type": "object",
+      "description": "web_search 工具多 provider 配置",
+      "properties": {
+        "provider": {
+          "type": "string",
+          "minLength": 1,
+          "description": "主 provider key（对应 providers 的 key）；未指定时取 providers 第一个"
+        },
+        "fallbacks": {
+          "type": "array",
+          "description": "失败降级链（provider key 列表）",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "defaultLimit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 20,
+          "default": 5,
+          "description": "默认返回条数"
+        },
+        "timeoutMs": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 15000,
+          "description": "全局超时（毫秒）"
+        },
+        "providers": {
+          "type": "object",
+          "description": "provider 映射",
+          "additionalProperties": {
+            "type": "object",
+            "required": ["api"],
+            "properties": {
+              "api": {
+                "type": "string",
+                "enum": ["duckduckgo", "tavily", "brave", "serper", "mimo"],
+                "description": "实现类型"
+              },
+              "apiKey": {
+                "type": "string",
+                "description": "API Key（支持 ${ENV_VAR}；duckduckgo 可省略）"
+              },
+              "baseUrl": {
+                "type": "string",
+                "description": "覆盖默认 baseUrl"
+              },
+              "timeoutMs": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "覆盖默认超时（毫秒）"
+              },
+              "model": {
+                "type": "string",
+                "description": "MiMo 专用：模型 ID（默认 mimo-v2.5-pro）"
+              },
+              "maxKeyword": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 10,
+                "description": "MiMo 专用：搜索关键词数上限（max_keyword，默认 3）"
+              },
+              "forceSearch": {
+                "type": "boolean",
+                "description": "MiMo 专用：是否强制搜索（force_search，默认 true）"
+              },
+              "userLocation": {
+                "type": "object",
+                "description": "MiMo 专用：用户位置（approximate）",
+                "properties": {
+                  "country": { "type": "string" },
+                  "region": { "type": "string" },
+                  "city": { "type": "string" }
+                }
+              }
+            }
+          }
+        }
+      }
     }
   }
 }

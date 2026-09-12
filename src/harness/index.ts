@@ -7,6 +7,8 @@
 // ── Tool 系统 ──
 export { createToolSet } from './plugin-ecosystem/tools/tool-set.js';
 export type { ToolSet, ToolSetConfig } from './plugin-ecosystem/tools/tool-set.js';
+export { createWebSearchTool } from './plugin-ecosystem/tools/web-search.js';
+export type { WebSearchToolOptions } from './plugin-ecosystem/tools/web-search.js';
 
 // ── Agent Building ──
 export { AgentBuilder, createAgent } from './agent-building/builder.js';

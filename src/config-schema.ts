@@ -173,6 +173,46 @@ export const ObservabilityConfigSchema = z.object({
   captureModelRequest: z.boolean().optional(),
 });
 
+// ── Web Search 配置 Schema ──
+
+const WebSearchProviderSlotSchema = z.object({
+  api: z.enum(['duckduckgo', 'tavily', 'brave', 'serper', 'mimo']),
+  apiKey: z.string().optional(),
+  baseUrl: z.string().optional(),
+  timeoutMs: z.number().positive().optional(),
+  model: z.string().min(1).optional(),
+  maxKeyword: z.number().int().min(1).max(10).optional(),
+  forceSearch: z.boolean().optional(),
+  userLocation: z.object({
+    country: z.string().optional(),
+    region: z.string().optional(),
+    city: z.string().optional(),
+  }).optional(),
+});
+
+const WebSearchConfigSchema = z.object({
+  provider: z.string().min(1).optional(),
+  fallbacks: z.array(z.string().min(1)).optional(),
+  defaultLimit: z.number().int().min(1).max(20).optional(),
+  timeoutMs: z.number().positive().optional(),
+  providers: z.record(z.string().min(1), WebSearchProviderSlotSchema).optional(),
+}).refine(
+  (data) => {
+    if (!data.provider || !data.providers) return true;
+    if (!data.providers[data.provider]) {
+      return false;
+    }
+    return true;
+  },
+  { message: 'webSearch.provider must reference a key in webSearch.providers' },
+).refine(
+  (data) => {
+    if (!data.fallbacks || !data.providers) return true;
+    return data.fallbacks.every((k) => data.providers![k] !== undefined);
+  },
+  { message: 'webSearch.fallbacks entries must reference keys in webSearch.providers' },
+);
+
 // ── Session 配置 Schema ──
 
 export const SessionConfigSchema = z.object({
@@ -255,6 +295,7 @@ export const HarnessConfigSchema = z.object({
   session: SessionConfigSchema.optional(),
   observability: ObservabilityConfigSchema.optional(),
   concurrency: ConcurrencyConfigSchema.optional(),
+  webSearch: WebSearchConfigSchema.optional(),
 });
 
 // ── 校验结果类型 ──

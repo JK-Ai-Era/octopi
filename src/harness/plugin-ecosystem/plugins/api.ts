@@ -9,6 +9,7 @@
 
 import type { PluginManifest } from './manifest.js';
 import type { ModelProvider } from '../../../core/interfaces/model-provider.js';
+import type { WebSearchProvider } from '../../../core/interfaces/web-search.js';
 import type {
   RegisteredTool,
   ToolDefinition,
@@ -300,7 +301,7 @@ export class PluginApi {
   // ================================================================
 
   /** 已注册的 web search providers */
-  readonly _webSearchProviders: Array<{ id: string; provider: unknown }> = [];
+  readonly _webSearchProviders: Array<{ id: string; provider: WebSearchProvider }> = [];
 
   /** 已注册的 media understanding providers */
   readonly _mediaUnderstandingProviders: Array<{ id: string; provider: unknown }> = [];
@@ -325,9 +326,11 @@ export class PluginApi {
 
   /**
    * 注册 Web Search Provider
+   *
+   * @param provider - 实现 Core WebSearchProvider 契约的实例
    */
-  registerWebSearchProvider(provider: unknown): void {
-    const id = this.getProviderId(provider);
+  registerWebSearchProvider(provider: WebSearchProvider): void {
+    const id = provider.id || this.getProviderId(provider);
     this._webSearchProviders.push({ id, provider });
     this.logger.info(`Registered web search provider: ${id}`);
   }

@@ -1,3 +1,60 @@
+## v0.18.0 (2026-09-12)
+
+### feat(tools): web_search 多 provider 网络搜索工具
+
+#### 架构
+
+按依赖倒置落地，与 LLM `models.providers` 同构：
+
+- **Core**：`WebSearchProvider` 契约（`core/interfaces/web-search.ts`）
+- **Harness**：`createWebSearchTool` 只依赖 Core 接口，通过 DI 接收实现
+- **Integration**：DuckDuckGo / Tavily / Brave / Serper / MiMo 适配器 + factory + fallback 链
+- **Config**：顶层 `webSearch` 段（Zod 校验 + `${ENV}` 展开）
+
+#### 配置示例
+
+```json
+{
+  "webSearch": {
+    "provider": "tavily",
+    "fallbacks": ["duckduckgo"],
+    "defaultLimit": 5,
+    "timeoutMs": 15000,
+    "providers": {
+      "tavily":     { "api": "tavily",     "apiKey": "${TAVILY_API_KEY}" },
+      "brave":      { "api": "brave",      "apiKey": "${BRAVE_API_KEY}" },
+      "serper":     { "api": "serper",     "apiKey": "${SERPER_API_KEY}" },
+      "mimo":       { "api": "mimo",       "apiKey": "${MIMO_API_KEY}", "model": "mimo-v2.5-pro", "maxKeyword": 3, "forceSearch": true },
+      "duckduckgo": { "api": "duckduckgo" }
+    }
+  }
+}
+```
+
+未配置 `fallbacks` 且主 provider 非 DuckDuckGo 时，自动追加免费 DuckDuckGo 兜底。
+
+#### 行为
+
+- Agent 工具参数：`query` / `limit` / `region` / `safe_search` / `time_range`
+- 主 provider 失败后依次尝试 fallbacks，全部失败抛出聚合错误
+- 未配置 `webSearch.providers` 时不注册 `web_search`（避免无 key 暴露工具）
+- `PluginApi.registerWebSearchProvider` 类型从 `unknown` 收紧为 `WebSearchProvider`
+- MiMo provider 走 Chat Completions 内置 `web_search` tool（官方字段：`max_keyword` / `force_search` / `limit` / `user_location`），解析 `url_citation` annotations 为结果，可选返回 `answer` 正文
+- fallback 链：空结果与抛错同样触发降级（修复主 provider 失败后被 DDG 空响应挡住的问题）
+- DuckDuckGo 解析 0 条时显式抛错，便于切换到 mimo 等主 provider
+- `loadConfig` 回退路径改为 `getOctopiHome()`（`~/.octopi`，原先误写为 `~/octopi`），并打印实际加载的配置文件路径
+- 移除仓库根 `octopi.json` 本地实例；CLI 优先使用 `~/.octopi/octopi.json`，避免 cwd 配置遮蔽工作空间配置；`AGENTS.md` 补充配置文件约定
+- MiMo 默认超时提升至 90s，并对可重试错误（timeout/network）自动重试 1 次；主 provider 为 mimo 时工具级 timeout 不低于 90s
+
+#### 变更文件
+
+- Core：`core/interfaces/web-search.ts`（新）
+- Harness：`tools/web-search.ts`（新）、`tools/tool-set.ts`
+- Integration：`web-search/{http,duckduckgo,tavily,brave,serper,mimo,factory,index}.ts`（新）
+- Config：`config.ts`、`config-schema.ts`
+- CLI：`daemon.ts` 装配
+- 测试：`tests/harness/web-search.test.ts`（新）
+
 ## v0.17.0 (2026-09-12)
 
 ### refactor: 工具体系架构重构 — 引入 ToolBus 统一工具管理

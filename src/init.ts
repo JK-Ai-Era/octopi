@@ -181,6 +181,15 @@ function generateDefaultConfig(homeDir: string, agentId: string = 'default'): ob
     subsystems: {
       auditDir: join(homeDir, 'audit'),
     },
+    // 默认启用免费 DuckDuckGo；可改为 tavily/brave/serper 并配置 apiKey
+    webSearch: {
+      provider: 'duckduckgo',
+      defaultLimit: 5,
+      timeoutMs: 15000,
+      providers: {
+        duckduckgo: { api: 'duckduckgo' },
+      },
+    },
   };
 }
 

@@ -131,6 +131,27 @@ const { agent, runner } = await new AgentBuilder()
   .build();
 ```
 
+### Web Search (multi-provider)
+
+Configure in `octopi.json` / `~/.octopi/octopi.json` to register the `web_search` tool:
+
+```json
+{
+  "webSearch": {
+    "provider": "mimo",
+    "fallbacks": ["duckduckgo"],
+    "defaultLimit": 5,
+    "timeoutMs": 90000,
+    "providers": {
+      "mimo": { "api": "mimo", "apiKey": "${MIMO_API_KEY}", "model": "mimo-v2.5-pro" },
+      "duckduckgo": { "api": "duckduckgo" }
+    }
+  }
+}
+```
+
+Built-in providers: `duckduckgo` (no key), `tavily`, `brave`, `serper`, `mimo`. Failures and empty results fall through `fallbacks`.
+
 ---
 
 ## Core Design Principles
@@ -180,6 +201,7 @@ src/
 │   ├── memory/                   Memory, cognition, wisdom
 │   └── runner.ts                 SessionAwareRunner (orchestrator)
 ├── integration/             Layer 3  External adapters
+│   └── web-search/               DuckDuckGo, Tavily, Brave, Serper, MiMo
 └── testing/                 Test utilities
 ```
 

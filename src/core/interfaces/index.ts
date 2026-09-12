@@ -159,3 +159,10 @@ export type {
 export type {
   ToolBus,
 } from './tool-bus.js';
+
+export type {
+  WebSearchProvider,
+  WebSearchOptions,
+  WebSearchResponse,
+  WebSearchResultItem,
+} from './web-search.js';

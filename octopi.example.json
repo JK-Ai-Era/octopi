@@ -49,5 +49,27 @@
       "type": "jsonl",
       "dataDir": "./data/sessions"
     }
+  },
+
+  "webSearch": {
+    "provider": "duckduckgo",
+    "fallbacks": [],
+    "defaultLimit": 5,
+    "timeoutMs": 15000,
+    "providers": {
+      "duckduckgo": { "api": "duckduckgo" },
+      "tavily": { "api": "tavily", "apiKey": "${TAVILY_API_KEY}" },
+      "brave": { "api": "brave", "apiKey": "${BRAVE_API_KEY}" },
+      "serper": { "api": "serper", "apiKey": "${SERPER_API_KEY}" },
+      "mimo": {
+        "api": "mimo",
+        "apiKey": "${MIMO_API_KEY}",
+        "model": "mimo-v2.5-pro",
+        "maxKeyword": 3,
+        "forceSearch": true,
+        "timeoutMs": 90000,
+        "userLocation": { "country": "China" }
+      }
+    }
   }
 }

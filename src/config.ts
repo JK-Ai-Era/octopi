@@ -2,7 +2,8 @@
  * 配置系统
  *
  * 支持从 JSON 配置文件加载 Gateway 配置。
- * 配置文件默认路径：./octopi.json
+ * 配置文件查找：-c 指定路径 → ./octopi.json → ~/.octopi/octopi.json
+ * 仓库内不要维护 octopi.json 实例（已 gitignore）；本地统一用 ~/.octopi/octopi.json。
  *
  * v0.2.0: 扩展配置结构以支持新架构（AgentBuilder + SessionAwareRunner）。
  * 保持向后兼容——旧字段仍然有效，新字段可选。
@@ -44,6 +45,7 @@ import type { IterationBudgetConfig } from './harness/budget/budget.js';
 import type { SecurityGuardConfig } from './core/security-guard.js';
 import type { TaskSupervisorConfig } from './harness/task-system/supervisor/task-supervisor.js';
 import { validateConfigOrThrow } from './config-schema.js';
+import { getOctopiHome } from './init.js';
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { homedir } from 'node:os';
@@ -90,6 +92,42 @@ export interface AgentConfig {
   skills?: string[];
   /** Channel 绑定 */
   channelBindings?: Record<string, string>;
+}
+
+// ── Web Search 配置 ──
+
+/** 单个 web search provider slot */
+export interface WebSearchProviderSlot {
+  /** 实现类型 */
+  api: 'duckduckgo' | 'tavily' | 'brave' | 'serper' | 'mimo';
+  /** API Key（支持 ${ENV_VAR}；duckduckgo 可省略） */
+  apiKey?: string;
+  /** 覆盖默认 baseUrl */
+  baseUrl?: string;
+  /** 覆盖默认超时（毫秒） */
+  timeoutMs?: number;
+  /** MiMo 专用：模型 ID（默认 mimo-v2.5-pro） */
+  model?: string;
+  /** MiMo 专用：搜索关键词数上限（max_keyword，默认 3） */
+  maxKeyword?: number;
+  /** MiMo 专用：是否强制搜索（force_search，默认 true） */
+  forceSearch?: boolean;
+  /** MiMo 专用：用户位置（approximate） */
+  userLocation?: { country?: string; region?: string; city?: string };
+}
+
+/** web_search 工具顶层配置 */
+export interface WebSearchToolConfig {
+  /** 主 provider（providers 的 key）；未指定时取 providers 第一个 */
+  provider?: string;
+  /** 失败降级链（provider key 列表） */
+  fallbacks?: string[];
+  /** 默认返回条数（默认 5） */
+  defaultLimit?: number;
+  /** 全局超时（毫秒，默认 15000） */
+  timeoutMs?: number;
+  /** provider 映射 */
+  providers?: Record<string, WebSearchProviderSlot>;
 }
 
 /**
@@ -400,6 +438,8 @@ export interface HarnessConfig {
       waitTimeoutMs?: number;
     };
   };
+  /** 网络搜索配置（web_search 工具） */
+  webSearch?: WebSearchToolConfig;
   /** 可观测性配置 */
   observability?: {
     /** 日志级别: 0=FATAL, 1=ERROR, 2=WARN, 3=INFO, 4=DEBUG, 5=TRACE */
@@ -422,7 +462,7 @@ export interface HarnessConfig {
 /**
  * 从配置文件加载配置
  *
- * @param configPath - 配置文件路径（默认 ./octopi.json）
+ * @param configPath - 配置文件路径；未指定时按 cwd → OCTOPI_HOME 查找
  * @returns 解析后的配置
  */
 
@@ -574,22 +614,20 @@ export function loadConfig(configPath?: string): NormalizedHarnessConfig {
   // 配置文件查找优先级：
   // 1. 明确指定的路径
   // 2. 当前目录 ./octopi.json
-  // 3. OCTOPI_HOME/octopi.json（默认 ~/octopi/octopi.json）
+  // 3. OCTOPI_HOME/octopi.json（默认 ~/.octopi/octopi.json，与 getOctopiHome 一致）
   let filePath: string;
   if (configPath) {
     filePath = resolve(configPath);
   } else if (existsSync(resolve('./octopi.json'))) {
     filePath = resolve('./octopi.json');
   } else {
-    // 尝试 OCTOPI_HOME
-    const homeDir = process.env.OCTOPI_HOME ?? resolve(homedir(), 'octopi');
-    const homeConfig = resolve(homeDir, 'octopi.json');
+    const homeConfig = resolve(getOctopiHome(), 'octopi.json');
     if (existsSync(homeConfig)) {
       filePath = homeConfig;
     } else {
       throw new Error(
         `Config file not found. Searched:\n` +
-        `  1. ${resolve(configPath ?? './octopi.json')}\n` +
+        `  1. ${resolve('./octopi.json')}\n` +
         `  2. ${homeConfig}\n\n` +
         `Run 'octopi init' to create a new configuration.`
       );
@@ -599,6 +637,8 @@ export function loadConfig(configPath?: string): NormalizedHarnessConfig {
   if (!existsSync(filePath)) {
     throw new Error(`Config file not found: ${filePath}`);
   }
+
+  console.log(`[config] Loading config from ${filePath}`);
 
   const fileContent = readFileSync(filePath, 'utf-8');
 

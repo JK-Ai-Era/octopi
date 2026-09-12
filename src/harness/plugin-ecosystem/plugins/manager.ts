@@ -750,8 +750,8 @@ export class PluginManager {
   /**
    * 获取所有已注册的 web search providers
    */
-  getWebSearchProviders(): Array<{ pluginId: string; provider: unknown }> {
-    const result: Array<{ pluginId: string; provider: unknown }> = [];
+  getWebSearchProviders(): Array<{ pluginId: string; provider: import('../../../core/interfaces/web-search.js').WebSearchProvider }> {
+    const result: Array<{ pluginId: string; provider: import('../../../core/interfaces/web-search.js').WebSearchProvider }> = [];
     for (const plugin of this.loader.getAllPlugins()) {
       if (!plugin.registered) continue;
       for (const reg of plugin.api._webSearchProviders) {
