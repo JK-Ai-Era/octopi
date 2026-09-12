@@ -1,3 +1,9 @@
+## v0.18.1 (2026-09-13)
+
+### chore(docs): 删除过期 TECH_DEBT_REPAIR_PLAN.md
+
+根目录技术债修复计划已过时，相关问题清单保留在 `docs/TECH_DEBT_REPAIR_ISSUES.md`。
+
 ## v0.18.0 (2026-09-12)
 
 ### feat(tools): web_search 多 provider 网络搜索工具
