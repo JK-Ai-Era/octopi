@@ -1,3 +1,19 @@
+## v0.16.2 (2026-09-12)
+
+### fix: Gateway 重启后 session 丢失（统一 session 持久化机制）
+
+之前存在两套 session 持久化路径：per-agent 目录和 config-based dataDir，且 Gateway 在未显式配置 `session.store` 时直接 fallback 到 `InMemorySessionStore`，导致重启后 session 丢失。
+
+#### 修复
+- Gateway 未传入 store 时，自动从 `agent.home` 目录推断创建 `JsonlSessionStore`（持久化），而非 fallback 到内存存储
+- 删除 Gateway 和 Builder 中重复的 `InMemorySessionStore` 实现，统一使用 `integration/storage/memory.ts` 的导出
+- `JsonlSessionStore` 构造函数移除已废弃的 `legacyDataDir` 参数，只保留 `agentHomeResolver`
+
+#### 影响范围
+- `session.store` 配置不再是持久化的必要条件（Gateway 自动推断）
+- `JsonlSessionStore` API 变更（移除第二个参数），外部集成方需更新调用方式
+
+
 ## v0.16.0 (2026-09-12)
 
 ### refactor: 工具模块架构重构（breaking change）
@@ -1514,19 +1530,3 @@ for (const c of configs) await mcpManager.connectServer(c);
 - Skill 系统（Tool 之上的结构化经验层）
 - Task 系统（任务追踪与管理）
 - 内置工具（shell、file_read、file_write、file_list）
-## v0.16.1 (2026-09-12)
-
-### fix: Gateway 重启后 session 丢失（统一 session 持久化机制）
-
-之前存在两套 session 持久化路径：per-agent 目录和 config-based dataDir，且 Gateway 在未显式配置 `session.store` 时直接 fallback 到 `InMemorySessionStore`，导致重启后 session 丢失。
-
-#### 修复
-- Gateway 未传入 store 时，自动从 `agent.home` 目录推断创建 `JsonlSessionStore`（持久化），而非 fallback 到内存存储
-- 删除 Gateway 和 Builder 中重复的 `InMemorySessionStore` 实现，统一使用 `integration/storage/memory.ts` 的导出
-- `JsonlSessionStore` 构造函数移除已废弃的 `legacyDataDir` 参数，只保留 `agentHomeResolver`
-
-#### 影响范围
-- `session.store` 配置不再是持久化的必要条件（Gateway 自动推断）
-- `JsonlSessionStore` API 变更（移除第二个参数），外部集成方需更新调用方式
-
-## v0.16.0 (2026-09-12)
