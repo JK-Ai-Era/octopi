@@ -177,10 +177,6 @@ function generateDefaultConfig(homeDir: string, agentId: string = 'default'): ob
     ],
     session: {
       dmScope: 'per-peer',
-      store: {
-        type: 'jsonl',
-        dataDir: join(homeDir, 'agents'),
-      },
     },
     subsystems: {
       auditDir: join(homeDir, 'audit'),

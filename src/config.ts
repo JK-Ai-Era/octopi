@@ -98,8 +98,6 @@ export interface AgentConfig {
 export interface SessionConfig {
   /** DM 作用域: main / per-peer / per-channel-peer */
   dmScope?: 'main' | 'per-peer' | 'per-channel-peer';
-  /** Session 存储配置 */
-  store?: StoreConfig;
 }
 
 // ── Plugin 配置 ──
@@ -118,17 +116,6 @@ export interface PluginConfig {
 
 // ── Store 配置 ──
 
-/**
- * Session 存储配置
- */
-export interface StoreConfig {
-  /** 存储类型 */
-  type: 'memory' | 'jsonl' | 'sqlite';
-  /** 数据目录（jsonl 类型必填） */
-  dataDir?: string;
-  /** 数据库文件路径（sqlite 类型可选，默认 :memory:） */
-  dbPath?: string;
-}
 
 
 
@@ -629,13 +616,6 @@ export function loadConfig(configPath?: string): NormalizedHarnessConfig {
   // Zod schema 校验（结构化错误信息）
   const config = validateConfigOrThrow(raw) as unknown as NormalizedHarnessConfig;
 
-  // ── 向后兼容：迁移旧的顶层 store 到 session.store ──
-  if (raw.store && !config.session?.store) {
-    console.warn('[config] "store" 顶层配置已废弃，请迁移到 "session.store"。自动迁移中...');
-    const mutable = config as NormalizedHarnessConfig & { session?: { store?: StoreConfig } };
-    if (!mutable.session) mutable.session = {};
-    mutable.session.store = raw.store as StoreConfig;
-  }
 
   config.flatModels = flattenModels(config.models as ModelsConfig);
 
@@ -734,28 +714,4 @@ export async function createProviderFromConfig(name: string, pc: ModelProviderCo
 
 
 
-/**
- * 从 StoreConfig 创建 SessionStore 实例
- * 使用动态 import 以支持 ESM。
- */
-export async function createStoreFromConfig(sc: StoreConfig): Promise<SessionStore<SessionData>> {
-  if (sc.type === 'memory') {
-    const { InMemorySessionStore } = await import('./integration/storage/memory.js');
-    return new InMemorySessionStore();
-  }
 
-  if (sc.type === 'jsonl') {
-    if (!sc.dataDir) {
-      throw new Error('Store type "jsonl" requires dataDir');
-    }
-    const { JsonlSessionStore } = await import('./integration/storage/jsonl.js');
-    return new JsonlSessionStore((agentId) => join(sc.dataDir!, agentId));
-  }
-
-  if (sc.type === 'sqlite') {
-    const { SqliteSessionStore } = await import('./integration/storage/sqlite.js');
-    return SqliteSessionStore.create({ dbPath: sc.dbPath });
-  }
-
-  throw new Error(`Unknown store type: "${sc.type}"`);
-}

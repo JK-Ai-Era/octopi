@@ -15,15 +15,13 @@
  */
 
 import type { HarnessConfig, AgentConfig, ContextEngineConfig, NormalizedModelInfo, ModelProviderConfig, NormalizedHarnessConfig } from '../../config.js';
-import { createProviderFromConfig, createStoreFromConfig, resolveModelConfig } from '../../config.js';
+import { createProviderFromConfig, resolveModelConfig } from '../../config.js';
 import { SubsystemLoader } from '../autonomous-subsystem/loader.js';
 import type { SubsystemSpec } from '../autonomous-subsystem/types.js';
 import { homedir } from 'node:os';
 import { resolve, join } from 'node:path';
 import { existsSync } from 'node:fs';
 import type { ModelProvider } from '../../core/interfaces/model-provider.js';
-import type { SessionStore } from '../../core/interfaces/session-store.js';
-import type { SessionData } from '../session-types.js';
 import type { IterationBudgetConfig } from '../budget/budget.js';
 import { AgentBuilder } from './builder.js';
 import type { SessionAwareRunner } from '../runner.js';
@@ -69,16 +67,6 @@ export async function resolveProviders(config: NormalizedHarnessConfig): Promise
   return providers;
 }
 
-// ── Store 解析 ──
-
-/**
- * 从配置中创建 SessionStore 实例
- */
-export async function resolveStore(config: HarnessConfig): Promise<SessionStore<SessionData> | undefined> {
-  const storeConfig = config.session?.store;
-  if (!storeConfig) return undefined;
-  return createStoreFromConfig(storeConfig);
-}
 
 // ── 安全配置解析 ──
 
@@ -230,7 +218,6 @@ export async function buildFromConfig(config: NormalizedHarnessConfig): Promise<
   const flatModels: NormalizedModelInfo[] = config.flatModels ?? [];
   // 1. 解析共享资源
   const providers = await resolveProviders(config);
-  const store = await resolveStore(config);
   const securityConfig = resolveSecurityConfig(config);
   const distributedConfig = config.distributedIntelligence;
   const budgetConfig = config.budget;
@@ -247,7 +234,6 @@ export async function buildFromConfig(config: NormalizedHarnessConfig): Promise<
     try {
       const built = await buildAgent(agentConfig, {
         providers,
-        store,
         securityConfig,
         distributedConfig,
         budgetConfig,
@@ -275,7 +261,6 @@ async function buildAgent(
   agentConfig: AgentConfig,
   shared: {
     providers: Map<string, ModelProvider>;
-    store?: SessionStore<SessionData>;
     securityConfig?: SecurityGuardConfig;
     distributedConfig?: HarnessConfig['distributedIntelligence'];
     budgetConfig?: Partial<IterationBudgetConfig>;
@@ -322,11 +307,6 @@ async function buildAgent(
   } else if (agentHome) {
     // 没有显式 persona，从 home 目录加载
     builder.persona(agentHome);
-  }
-
-  // ── Store ──
-  if (shared.store) {
-    builder.store(shared.store);
   }
 
   // ── Security ──

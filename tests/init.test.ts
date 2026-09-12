@@ -86,8 +86,7 @@ describe('init', () => {
       expect(config.agents[0].workspace).toContain('workspace/default');
       expect(config.models).toBeDefined();
       expect(config.models.providers).toBeDefined();
-      expect(config.session.store.type).toBe('jsonl');
-      expect(config.session.store.dataDir).toContain('agents');
+      expect(config.session.dmScope).toBe('per-peer');
     });
 
     it('should support custom agent ID', async () => {

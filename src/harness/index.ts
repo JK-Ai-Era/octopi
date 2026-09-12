@@ -11,7 +11,7 @@ export type { ToolSet, ToolSetConfig } from './plugin-ecosystem/tools/tool-set.j
 // ── Agent Building ──
 export { AgentBuilder, createAgent } from './agent-building/builder.js';
 export { loadPersona, composePersonas } from './agent-building/persona.js';
-export { buildFromConfig, buildFromConfigFile, resolveProviders, resolveStore, resolveSecurityConfig, resolveContextEngine, resolveSupervisor } from './agent-building/config-bridge.js';
+export { buildFromConfig, buildFromConfigFile, resolveProviders, resolveSecurityConfig, resolveContextEngine, resolveSupervisor } from './agent-building/config-bridge.js';
 export type { BuiltAgent } from './agent-building/config-bridge.js';
 
 // ── Context Management ──

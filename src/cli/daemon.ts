@@ -7,7 +7,7 @@ import { fork, execSync, spawn } from 'node:child_process';
 import { readFileSync, writeFileSync, unlinkSync, existsSync, mkdirSync } from 'node:fs';
 import type { CliArgs } from './args.js';
 import { getOctopiHome, isInitialized, initOctopi, formatInitReport } from '../init.js';
-import { loadConfig, toGatewayConfig, createStoreFromConfig } from '../config.js';
+import { loadConfig, toGatewayConfig } from '../config.js';
 import { createToolSet } from '../harness/plugin-ecosystem/tools/tool-set.js';
 import type { ModelProviderConfig } from '../config.js';
 import type { ModelProvider } from '../core/interfaces/model-provider.js';
@@ -301,8 +301,7 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
     console.log('[CLI] Verbose mode: tracing enabled');
   }
 
-  const store = config.session?.store ? await createStoreFromConfig(config.session.store) : undefined;
-  const gateway = new Gateway(gatewayConfig, store);
+  const gateway = new Gateway(gatewayConfig);
 
   for (const [providerName, providerCfg] of Object.entries(config.models?.providers ?? {})) {
     const provider = createProvider(providerName, providerCfg);

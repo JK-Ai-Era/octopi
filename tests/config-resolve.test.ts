@@ -1,19 +1,13 @@
 /**
  * Config 解析测试
  *
- * 覆盖 resolveModelConfig、flattenModels、resolveFallbackModels 深度限制、
- * createStoreFromConfig sqlite 路径、向后兼容 store 迁移。
+ * 覆盖 resolveModelConfig、flattenModels、resolveFallbackModels 深度限制。
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
-import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { describe, it, expect } from 'vitest';
 import {
   resolveModelConfig,
   flattenModels,
-  createStoreFromConfig,
-  loadConfig,
 } from '../src/config.js';
 import type { ModelsConfig, NormalizedModelInfo } from '../src/config.js';
 import type { ModelConfig } from '../src/core/types/agent-definition.js';
@@ -57,7 +51,7 @@ describe('flattenModels', () => {
     expect(flat[1]).toEqual({
       id: 'openai/gpt-5-mini',
       provider: 'openai',
-      model: 'gpt-5-mini-custom',  // name 优先于 id
+      model: 'gpt-5-mini-custom',
       contextWindow: 128000,
       maxTokens: undefined,
     });
@@ -122,7 +116,7 @@ describe('resolveModelConfig', () => {
 
     expect(result.provider).toBe('custom');
     expect(result.model).toBe('my-model');
-    expect(result.contextWindow).toBe(200000); // default
+    expect(result.contextWindow).toBe(200000);
   });
 
   it('should throw for unresolvable string reference', () => {
@@ -176,20 +170,17 @@ describe('resolveFallbackModels depth limit', () => {
   });
 
   it('should truncate nested fallbackModels beyond depth 5', () => {
-    // 构建 6 层嵌套
     const deep: any = { provider: 'p', model: 'm6' };
     for (let i = 5; i >= 1; i--) {
       deep.fallbackModels = [{ provider: 'p', model: `m${i}`, fallbackModels: deep.fallbackModels ? [deep] : undefined }];
     }
 
-    // 第一层 inline ModelConfig
     const inline: ModelConfig = {
       provider: 'openai',
       model: 'gpt-5.5',
       fallbackModels: deep.fallbackModels,
     };
 
-    // 不应抛错，但深层 fallback 被截断
     const result = resolveModelConfig(inline, flatModels);
     expect(result.fallbackModels).toBeDefined();
   });
@@ -203,149 +194,6 @@ describe('resolveFallbackModels depth limit', () => {
 
     expect(() => resolveModelConfig(inline, flatModels))
       .toThrow('Cannot resolve fallback model "nonexistent"');
-  });
-});
-
-// ── createStoreFromConfig ──
-
-describe('createStoreFromConfig', () => {
-  let tempDir: string;
-
-  beforeEach(() => {
-    tempDir = mkdtempSync(join(tmpdir(), 'octopi-store-test-'));
-  });
-
-  afterEach(() => {
-    rmSync(tempDir, { recursive: true, force: true });
-  });
-
-  it('should create memory store', async () => {
-    const store = await createStoreFromConfig({ type: 'memory' });
-    expect(store).toBeDefined();
-
-    await store.save('agent-1', 'sess-1', {
-      id: 'sess-1', agentId: 'agent-1',
-      meta: { id: 'sess-1', agentId: 'agent-1', channelId: 'test', peerId: 'test', status: 'idle', createdAt: 0, sessionStartedAt: 0, lastInteractionAt: 0, updatedAt: 0 },
-      messages: [], turns: [], metadata: {},
-    });
-
-    const loaded = await store.load('agent-1', 'sess-1');
-    expect(loaded).toBeDefined();
-    expect(loaded!.id).toBe('sess-1');
-  });
-
-  it('should create jsonl store with dataDir', async () => {
-    const dataDir = join(tempDir, 'sessions');
-    mkdirSync(dataDir, { recursive: true });
-    const store = await createStoreFromConfig({ type: 'jsonl', dataDir });
-    expect(store).toBeDefined();
-  });
-
-  it('should reject jsonl store without dataDir', async () => {
-    await expect(createStoreFromConfig({ type: 'jsonl' }))
-      .rejects.toThrow('requires dataDir');
-  });
-
-  it('should create sqlite store with in-memory db', async () => {
-    const store = await createStoreFromConfig({ type: 'sqlite' });
-    expect(store).toBeDefined();
-
-    await store.save('agent-1', 'sess-1', {
-      id: 'sess-1', agentId: 'agent-1',
-      meta: { id: 'sess-1', agentId: 'agent-1', channelId: 'test', peerId: 'test', status: 'idle', createdAt: 0, sessionStartedAt: 0, lastInteractionAt: 0, updatedAt: 0 },
-      messages: [], turns: [], metadata: {},
-    });
-
-    const loaded = await store.load('agent-1', 'sess-1');
-    expect(loaded).toBeDefined();
-    expect(loaded!.id).toBe('sess-1');
-  });
-
-  it('should create sqlite store with file db', async () => {
-    const dbPath = join(tempDir, 'test.db');
-    const store = await createStoreFromConfig({ type: 'sqlite', dbPath });
-    expect(store).toBeDefined();
-
-    const exists = await store.exists('agent-1', 'nonexistent');
-    expect(exists).toBe(false);
-  });
-
-  it('should reject unknown store type', async () => {
-    await expect(createStoreFromConfig({ type: 'unknown' as any }))
-      .rejects.toThrow('Unknown store type');
-  });
-});
-
-// ── 向后兼容：顶层 store → session.store 迁移 ──
-
-describe('backward compatibility: store migration', () => {
-  let tempDir: string;
-
-  beforeEach(() => {
-    tempDir = mkdtempSync(join(tmpdir(), 'octopi-migration-test-'));
-  });
-
-  afterEach(() => {
-    rmSync(tempDir, { recursive: true, force: true });
-  });
-
-  function writeConfig(obj: unknown): string {
-    const path = join(tempDir, 'octopi.json');
-    writeFileSync(path, JSON.stringify(obj));
-    return path;
-  }
-
-  it('should auto-migrate top-level store to session.store', () => {
-    const configPath = writeConfig({
-      agents: [{
-        id: 'test',
-        model: 'openai/gpt-5.5',
-      }],
-      models: {
-        providers: {
-          openai: {
-            baseUrl: 'https://api.openai.com/v1',
-            apiKey: 'test',
-            api: 'openai-completions',
-            models: [{ id: 'gpt-5.5' }],
-          },
-        },
-      },
-      store: { type: 'memory' },
-    });
-
-    const config = loadConfig(configPath);
-
-    expect(config.session?.store).toBeDefined();
-    expect(config.session?.store?.type).toBe('memory');
-  });
-
-  it('should not migrate when session.store already exists', () => {
-    const configPath = writeConfig({
-      agents: [{
-        id: 'test',
-        model: 'openai/gpt-5.5',
-      }],
-      models: {
-        providers: {
-          openai: {
-            baseUrl: 'https://api.openai.com/v1',
-            apiKey: 'test',
-            api: 'openai-completions',
-            models: [{ id: 'gpt-5.5' }],
-          },
-        },
-      },
-      store: { type: 'jsonl', dataDir: '/old/path' },
-      session: {
-        store: { type: 'memory' },
-      },
-    });
-
-    const config = loadConfig(configPath);
-
-    // session.store 已存在，不应被覆盖
-    expect(config.session?.store?.type).toBe('memory');
   });
 });
 

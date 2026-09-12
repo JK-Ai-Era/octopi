@@ -8,7 +8,7 @@ import { describe, test, expect, beforeEach, afterEach } from 'vitest';
 import { writeFileSync, mkdirSync, rmSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { loadConfig, createStoreFromConfig } from '../src/config.js';
+import { loadConfig } from '../src/config.js';
 import { validateConfig } from '../src/config-schema.js';
 import { initOctopi, isInitialized } from '../src/init.js';
 
@@ -124,27 +124,6 @@ describe('Config Schema Validation', () => {
       store: { type: 'sqlite' },
     });
     expect(result.success).toBe(true);
-  });
-});
-
-describe('Store Factory', () => {
-  test('creates memory store', async () => {
-    const store = await createStoreFromConfig({ type: 'memory' });
-    expect(store).toBeDefined();
-    await store.save('a', 'test', { id: 'test', agentId: 'a', meta: {} as any, messages: [], turns: [], metadata: {} });
-    const loaded = await store.load('a', 'test');
-    expect(loaded).toBeDefined();
-  });
-
-  test('creates jsonl store', async () => {
-    const dataDir = join(tempDir, 'sessions');
-    mkdirSync(dataDir, { recursive: true });
-    const store = await createStoreFromConfig({ type: 'jsonl', dataDir });
-    expect(store).toBeDefined();
-  });
-
-  test('rejects jsonl without dataDir', async () => {
-    await expect(createStoreFromConfig({ type: 'jsonl' })).rejects.toThrow('requires dataDir');
   });
 });
 

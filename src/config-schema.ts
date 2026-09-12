@@ -58,22 +58,6 @@ export const PluginConfigSchema = z.object({
   configs: z.record(z.string(), z.record(z.string(), z.unknown())).optional(),
 });
 
-// ── Store 配置 Schema ──
-
-export const StoreConfigSchema = z.object({
-  type: z.enum(['memory', 'jsonl', 'sqlite'], { error: 'Store type must be "memory", "jsonl", or "sqlite"' }),
-  dataDir: z.string().optional(),
-  dbPath: z.string().optional(),
-}).refine(
-  (data) => {
-    if (data.type === 'jsonl' && !data.dataDir) {
-      return false;
-    }
-    return true;
-  },
-  { message: 'Store type "jsonl" requires dataDir', path: ['dataDir'] },
-);
-
 // ── Channel 配置 Schema ──
 
 export const ChannelConfigSchema = z.object({
@@ -193,7 +177,6 @@ export const ObservabilityConfigSchema = z.object({
 
 export const SessionConfigSchema = z.object({
   dmScope: z.enum(['main', 'per-peer', 'per-channel-peer']).optional(),
-  store: StoreConfigSchema.optional(),
 }).passthrough();
 
 // ── 完整配置 Schema ──

@@ -10,5 +10,5 @@
 
 export { AgentBuilder, createAgent } from './builder.js';
 export { loadPersona, composePersonas } from './persona.js';
-export { buildFromConfig, buildFromConfigFile, resolveProviders, resolveStore, resolveSecurityConfig } from './config-bridge.js';
+export { buildFromConfig, buildFromConfigFile, resolveProviders, resolveSecurityConfig } from './config-bridge.js';
 export type { BuiltAgent } from './config-bridge.js';
