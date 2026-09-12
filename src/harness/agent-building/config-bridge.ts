@@ -219,7 +219,6 @@ export async function buildFromConfig(config: NormalizedHarnessConfig): Promise<
   // 1. 解析共享资源
   const providers = await resolveProviders(config);
   const securityConfig = resolveSecurityConfig(config);
-  const distributedConfig = config.distributedIntelligence;
   const budgetConfig = config.budget;
   const runGuardConfig = config.runGuard;
   const contextEngineConfig = config.contextEngine;
@@ -235,7 +234,6 @@ export async function buildFromConfig(config: NormalizedHarnessConfig): Promise<
       const built = await buildAgent(agentConfig, {
         providers,
         securityConfig,
-        distributedConfig,
         budgetConfig,
         runGuardConfig,
         contextEngineConfig,
@@ -262,7 +260,6 @@ async function buildAgent(
   shared: {
     providers: Map<string, ModelProvider>;
     securityConfig?: SecurityGuardConfig;
-    distributedConfig?: HarnessConfig['distributedIntelligence'];
     budgetConfig?: Partial<IterationBudgetConfig>;
     runGuardConfig?: RunGuardJsonConfig;
     contextEngineConfig?: ContextEngineConfig;
@@ -312,15 +309,10 @@ async function buildAgent(
   // ── Security ──
   if (shared.securityConfig) {
     builder.securityPolicy(shared.securityConfig);
-  }
-
-  // ── Safety Guard ──
-  if (shared.securityConfig && shared.distributedConfig?.safetyGuard?.enabled) {
-    builder.withSafetyGuard({
-      cwd: agentConfig.workspace,
-      model: shared.distributedConfig.safetyGuard.model,
-      maxDurationMs: shared.distributedConfig.safetyGuard.maxDurationMs,
-    });
+    // 规则引擎：产生 tool_call.risk_unknown 后，由子系统目录加载的 safety-guard 兜底。
+    // 子系统自身参数（model/maxDurationMs 等）只写在其 config.yaml，不在本文件配置。
+    const { DefaultToolCallRiskPolicy } = await import('../security/default-risk-policy.js');
+    builder.withRiskPolicy(new DefaultToolCallRiskPolicy({ cwd: agentConfig.workspace }));
   }
 
   // ── Budget ──

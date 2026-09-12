@@ -5,7 +5,7 @@
  * 实现在 harness/reliability/，由 builder 组装注入。
  *
  * 提取到 Core 层（v0.8.0）：这是跨域契约，不是实现细节。
- * 多个领域（run-guard、multi-agent、distributed）依赖此接口。
+ * 多个领域（run-guard、multi-agent）依赖此接口。
  */
 
 import type { SecurityGuard } from './security-guard.js';

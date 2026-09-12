@@ -4,10 +4,10 @@
  * Harness 层的多 Agent 编排类型。
  */
 
-import type { Agent } from '../../../loop/agent.js';
-import type { ReliabilityHarness } from '../../reliability/index.js';
-import type { AgentInfo, AgentRelation } from '../../../core/interfaces/agent-registry.js';
-import type { SessionAwareRunner } from '../../runner.js';
+import type { Agent } from '../../loop/agent.js';
+import type { ReliabilityHarness } from '../reliability/index.js';
+import type { AgentInfo, AgentRelation } from '../../core/interfaces/agent-registry.js';
+import type { SessionAwareRunner } from '../runner.js';
 
 // ── Swarm 拓扑 ──
 

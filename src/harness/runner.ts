@@ -126,10 +126,9 @@ export class SessionAwareRunner {
   private config: SessionAwareRunnerConfig;
   /** Session 状态机缓存 */
   private stateMachines = new Map<string, StateMachine<SessionStatus>>();
-  /** 分布式智能体运行时（旧，待移除） */
   /** 自主子系统运行时 */
   private _subsystemRuntime?: import('./autonomous-subsystem/runtime.js').SubsystemRuntime;
-  /** EventBus 引用（用于分布式智能体上下文） */
+  /** EventBus 引用（用于子系统/多 Agent 上下文） */
   private _events?: import('../core/primitives/event-bus.js').EventBus;
   /** 工具运行时上下文提供者 */
   private toolContextProvider?: ToolContextProvider;

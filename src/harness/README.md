@@ -1,6 +1,6 @@
 # Harness — Layer 2: 领域实现
 
-13 个自包含领域，每个领域有自己的类型、实现、入口文件。
+14 个自包含领域，每个领域有自己的类型、实现、入口文件。
 
 ## 领域列表
 
@@ -11,7 +11,8 @@
 | Security | `security/` | 风险评估、Shell 解析、降级策略 |
 | Reliability | `reliability/` | 可靠性包装、断路器、重试 |
 | Plugin Ecosystem | `plugin-ecosystem/` | Plugin、Tool、Skill、MCP、命令 |
-| Distributed Agents | `distributed-agents/` | 多 Agent、分布式运行时 |
+| Multi-Agent | `multi-agent/` | Agent 注册发现、Swarm 编排、AgentProcess |
+| Autonomous Subsystem | `autonomous-subsystem/` | Sense/Think/Act/Signal/Boundary 五维子系统框架 |
 | Session Tasks | `session-tasks/` | 会话任务 SessionTask（goal/step，默认路径） |
 | Run Guard | `run-guard/` | 过程监督（continue/recover/stop） |
 | Orchestration | `orchestration/` | experimental 编排（workflow/scheduler/planner） |

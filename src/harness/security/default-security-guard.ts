@@ -327,7 +327,7 @@ export class DefaultSecurityGuard {
 
         return { isClean: violations.length === 0, violations };
       } catch (err) {
-        // 策略失效 → 安全默认：放行，交给分布式智能体兜底
+        // 策略失效 → 安全默认：放行，交给下游安全策略/子系统兜底
         // 事件发射是通知性（审计/日志），不是触发性。
         this.eventBus.emit({
           type: 'tool_call.risk_unknown',

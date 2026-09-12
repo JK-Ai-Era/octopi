@@ -216,7 +216,6 @@ export class AgentBuilder {
   private _events?: EventBus;
   private _security?: SecurityGuard;
   private _riskPolicy?: import('../../core/security-guard.js').ToolCallRiskPolicy;
-  private _safetyGuardConfig?: { cwd?: string; model?: string; maxDurationMs?: number };
   private _budget?: IterationBudget;
   private _errorStrategy?: ErrorStrategy;
   private _observer?: Observer;
@@ -242,7 +241,6 @@ export class AgentBuilder {
   // MCP 配置
   private _mcpConfigs: import('../../core/interfaces/mcp-client.js').McpServerConfig[] = [];
 
-  // 分布式智能体配置（旧，待移除）
   // 自主子系统配置
   private _subsystemSpecs: import('../autonomous-subsystem/types.js').SubsystemSpec[] = [];
   private _subsystemAuditDir?: string;
@@ -384,22 +382,6 @@ export class AgentBuilder {
   /** 注入工具调用风险策略（由 Harness 层实现，注入到 Core 的 SecurityGuard） */
   withRiskPolicy(policy: import('../../core/security-guard.js').ToolCallRiskPolicy): this {
     this._riskPolicy = policy;
-    return this;
-  }
-
-  /**
-   * 一行启用完整安全层
-   *
-   * 自动注入：
-   * 1. DefaultToolCallRiskPolicy（规则引擎）→ Core SecurityGuard
-   * 2. SafetyGuard 子系统 → SubsystemRuntime
-   *
-   * @param config.cwd - 工作目录（用于路径风险分类）
-   * @param config.model - 安全智能体的模型覆盖（默认用主 Agent 模型）
-   */
-  withSafetyGuard(config?: { cwd?: string; model?: string; maxDurationMs?: number }): this {
-    // 动态导入，避免循环依赖
-    this._safetyGuardConfig = config ?? {};
     return this;
   }
 

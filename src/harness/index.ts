@@ -1,7 +1,7 @@
 /**
  * Harness 层统一导出（Layer 2）
  *
- * 13 个自包含领域，每个领域通过 index.ts 导出。
+ * 14 个自包含领域，每个领域通过 index.ts 导出。
  */
 
 // ── Tool 系统 ──
@@ -58,9 +58,9 @@ export type { SkillSource, DiscoveredSkill } from './plugin-ecosystem/skills/man
 export { DefaultMcpManager, mcpToolToOctopiDefinition, extractMcpToolResult, splitNamespacedToolName, MCP_NAMESPACE_SEP, loadMcpServersFromDir, DEFAULT_MCP_SERVERS_DIR } from './plugin-ecosystem/mcp/index.js';
 export type { McpClientFactory, McpManagerCallbacks } from './plugin-ecosystem/mcp/index.js';
 
-// ── Distributed Agents ──
-export { DefaultAgentRegistry, AgentSwarm, RoundRobinStrategy, CapabilityStrategy, PipelineStrategy, SwarmEvents, AgentProcess, spawnAgentProcess, forkAgentProcess, AgentProcessEvents } from './distributed-agents/index.js';
-export type { SwarmTopology, SwarmConfig, SwarmAgent, SwarmTask, OrchestrationStrategy, AgentProcessState, AgentProcessResult, AgentProcessAnnounce, AgentProcessConfig } from './distributed-agents/index.js';
+// ── Multi-Agent ──
+export { DefaultAgentRegistry, AgentSwarm, RoundRobinStrategy, CapabilityStrategy, PipelineStrategy, SwarmEvents, AgentProcess, spawnAgentProcess, forkAgentProcess, AgentProcessEvents } from './multi-agent/index.js';
+export type { SwarmTopology, SwarmConfig, SwarmAgent, SwarmTask, OrchestrationStrategy, AgentProcessState, AgentProcessResult, AgentProcessAnnounce, AgentProcessConfig } from './multi-agent/index.js';
 
 // ── Autonomous Subsystem ──
 export { SubsystemRuntime } from './autonomous-subsystem/runtime.js';

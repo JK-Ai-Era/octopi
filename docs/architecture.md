@@ -57,7 +57,7 @@ AI 在早期阶段，应用构建思路在不断发展。架构设计的核心�
 │  LLM Provider · Web Search · 存储 · 可观测性 · 协议 · Gateway · TUI · Web Runtime │
 │                                                                  │
 │  ┌──────────────────────────────────────────────────────────────┐│
-│  │  Layer 2: Harness — 13 个自包含领域                           ││
+│  │  Layer 2: Harness — 14 个自包含领域                           ││
 │  │                                                              ││
 │  │  ┌──────────────────────────────────────────────────────────┐││
 │  │  │  Layer 1: Core — 机制原语 + 接口契约 + 核心类型           │││
@@ -125,7 +125,7 @@ src/core/
 └── index.ts
 ```
 
-### Layer 2: Harness — 13 个自包含领域
+### Layer 2: Harness — 14 个自包含领域
 
 **职责**：实现 Core 接口的具体策略，提供框架的全部高级功能。
 
@@ -199,11 +199,12 @@ harness/security/
 ├── risk-evaluator.ts           # 操作+目标组合风险评估
 ├── shell-parser.ts             # Shell 命令解析器（4 层）
 ├── degradation.ts              # 6 种降级策略
-├── safety-guard/               # 安全守卫子系统（subsystems/safety-guard/）
 ├── capability-enforcer.ts      # 信任分级
 ├── policy.ts                   # 安全策略
 └── index.ts
 ```
+
+安全守卫子系统定义在 `subsystems/safety-guard/`（config.yaml + SUBSYSTEM.md），由 Autonomous Subsystem 领域加载；不在本目录。
 
 ### 3.4 Human-in-the-Loop — 人机交互 [新增]
 
@@ -316,16 +317,24 @@ subsystems/
 
 **支持来源**：框架内置、用户自定义、npm 包（`@octopi/subsystem-*` / `octopi-subsystem-*`）
 
-**Multi-Agent 编排**（Worker/编排，独立于自主子系统）：
+### 3.10 Multi-Agent — 多 Agent 编排
+
+**职责**：Agent 注册与发现、多 Agent 协作编排、可追踪的 Agent 进程。
+
 ```
-harness/distributed-agents/multi-agent/
+harness/multi-agent/
 ├── registry.ts           # DefaultAgentRegistry
-├── swarm.ts              # AgentSwarm
-├── process.ts            # AgentProcess
-└── types.ts
+├── swarm.ts              # AgentSwarm + 编排策略
+├── process.ts            # AgentProcess / spawn / fork
+├── types.ts
+└── index.ts
 ```
 
-### 3.10 Session Tasks — 会话任务
+Core 接口：`core/interfaces/agent-registry.ts`（`AgentRegistry`）。
+
+与 Autonomous Subsystem 正交：Multi-Agent 管「多个 Agent 实例如何协作」；Autonomous Subsystem 管「子系统如何感知并回写主系统」。
+
+### 3.11 Session Tasks — 会话任务
 
 **职责**：未闭合工作项列表（goal/step 两级），挂 Session 聚合。
 
@@ -340,7 +349,7 @@ harness/session-tasks/
 
 设计基准：[docs/task-system.md](./task-system.md)。
 
-### 3.11 Run Guard — 过程监督
+### 3.12 Run Guard — 过程监督
 
 **职责**：判断单次 run 是否跑飞（continue / recover / stop）。
 
@@ -355,7 +364,7 @@ harness/run-guard/
 
 Core 接口：`core/interfaces/run-guard.ts`（`RunGuard`）。
 
-### 3.12 Orchestration — 编排（experimental）
+### 3.13 Orchestration — 编排（experimental）
 
 **职责**：确定性多步骤作业。默认不进主路径；子路径 `octopi/harness/orchestration`。
 
@@ -372,7 +381,7 @@ harness/orchestration/
 
 领域切分见 [docs/domain-split.md](./domain-split.md)。
 
-### 3.13 Concurrency — 并发控制
+### 3.14 Concurrency — 并发控制
 
 **职责**：多 key 分发、会话粘滞、限流。
 
@@ -506,9 +515,8 @@ const { agent, harness, runner } = await new AgentBuilder()
   .contextEngine(myContextEngine)
   .summarize(mySummarizeFn)
 
-  // 安全
+  // 安全（规则引擎；safety-guard 子系统由 subsystems/ 目录自动加载）
   .withRiskPolicy(myRiskPolicy)
-  .withSafetyGuard({ cwd: '/data' })
 
   // 可靠性
   .runGuard()

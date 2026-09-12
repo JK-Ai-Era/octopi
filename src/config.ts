@@ -349,7 +349,7 @@ export interface ModelsConfig {
 
 // ── 完整配置 ──
 
-/** 自主子系统配置 */
+/** 自主子系统配置（框架级：搜索路径与审计；子系统自身参数写在各自 config.yaml） */
 export interface SubsystemsConfig {
   /** 审计日志目录（默认 ~/.octopi/audit） */
   auditDir?: string;
@@ -382,18 +382,6 @@ export interface HarnessConfig {
     preset?: 'development' | 'testing' | 'production' | 'maximum';
     /** 注入检测灵敏度 */
     injectionSensitivity?: 'low' | 'medium' | 'high';
-  };
-  /** 分布式智能体 */
-  distributedIntelligence?: {
-    /** 安全守卫 */
-    safetyGuard?: {
-      /** 启用安全守卫（默认 false） */
-      enabled: boolean;
-      /** 安全智能体使用的模型（不填用主 Agent 模型，格式：provider/model） */
-      model?: string;
-      /** 最大执行时长（毫秒，默认 15000） */
-      maxDurationMs?: number;
-    };
   };
   /** Channel 列表 */
   channels?: ChannelConfig[];
@@ -660,6 +648,13 @@ export function loadConfig(configPath?: string): NormalizedHarnessConfig {
     console.warn(
       '[config] "supervisor" is no longer supported and will be ignored. ' +
       'Rename it to "runGuard" (same fields) to keep process supervision enabled.',
+    );
+  }
+  if (raw && typeof raw === 'object' && 'distributedIntelligence' in raw) {
+    console.warn(
+      '[config] "distributedIntelligence" is no longer supported and will be ignored. ' +
+      'Safety-guard parameters belong in subsystems/safety-guard/config.yaml; ' +
+      'system-level subsystems config only holds framework fields (e.g. auditDir).',
     );
   }
 

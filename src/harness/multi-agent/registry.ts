@@ -16,9 +16,9 @@ import type {
   AgentQuery,
   AgentRelation,
   AgentRelationType,
-} from '../../../core/interfaces/agent-registry.js';
-import { AgentRegistryEvents } from '../../../core/interfaces/agent-registry.js';
-import type { EventBus } from '../../../core/primitives/event-bus.js';
+} from '../../core/interfaces/agent-registry.js';
+import { AgentRegistryEvents } from '../../core/interfaces/agent-registry.js';
+import type { EventBus } from '../../core/primitives/event-bus.js';
 
 /**
  * DefaultAgentRegistry

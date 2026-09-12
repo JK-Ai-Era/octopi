@@ -432,7 +432,7 @@
     },
     "subsystems": {
       "type": "object",
-      "description": "自主子系统配置",
+      "description": "自主子系统框架级配置（子系统自身参数写在各自 config.yaml）",
       "properties": {
         "auditDir": {
           "type": "string",

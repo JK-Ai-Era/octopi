@@ -15,7 +15,7 @@ Octopi 是一个可嵌入的 Agent 底座引擎，用于构建 AI 驱动的应�
 
 - **可嵌入** — 不是独立应用，而是产品的组件
 - **4 层架构** — Loop → Core → Harness → Integration，边界清晰，层次独立
-- **13 个自包含领域** — 每个领域可独立理解、独立测试、独立替换
+- **14 个自包含领域** — 每个领域可独立理解、独立测试、独立替换
 - **7 层上下文智能** — 智慧、人格、技能、知识、认知、记忆、信息
 - **安全内置** — 注入检测、风险评估、审批流程——不可选、不可绕过
 - **原生多智能体** — 从架构底层支持分布式智能
@@ -30,10 +30,11 @@ Octopi 是一个可嵌入的 Agent 底座引擎，用于构建 AI 驱动的应�
 │  LLM Provider · 存储 · 可观测性 · Gateway · TUI · Web Runtime   │
 │                                                              │
 │  ┌──────────────────────────────────────────────────────────┐│
-│  │  Layer 2: Harness — 13 个自包含领域                       ││
+│  │  Layer 2: Harness — 14 个自包含领域                       ││
 │  │  agent-building · context · security · reliability        ││
-│  │  plugin-ecosystem · distributed-agents · session-tasks    ││
-│  │  run-guard · concurrency · execution-env · hitl · memory  ││
+│  │  plugin-ecosystem · multi-agent · autonomous-subsystem    ││
+│  │  session-tasks · run-guard · orchestration · concurrency  ││
+│  │  execution-env · hitl · memory                            ││
 │  │                                                          ││
 │  │  ┌──────────────────────────────────────────────────────┐││
 │  │  │  Layer 1: Core — 机制原语 + 接口契约 + 核心类型       │││
@@ -58,7 +59,7 @@ Octopi 是一个可嵌入的 Agent 底座引擎，用于构建 AI 驱动的应�
 
 基础设施原语（EventBus、StateMachine、AsyncTask、ProcessModel）和全部接口契约（ModelProvider、ContextEngine、SecurityGuard、SessionStore 等）。不包含策略实现。
 
-### Layer 2: Harness — 13 个领域
+### Layer 2: Harness — 14 个领域
 
 | 领域 | 职责 |
 |------|------|
@@ -67,7 +68,8 @@ Octopi 是一个可嵌入的 Agent 底座引擎，用于构建 AI 驱动的应�
 | **Security** | 风险评估、Shell 解析、降级策略、安全智能体 |
 | **Reliability** | `runAgentWithReliability()`、断路器、重试、监督 |
 | **Plugin Ecosystem** | Plugin、Tool、Skill、MCP、斜杠命令 |
-| **Distributed Agents** | 多 Agent 编排、分布式运行时、触发引擎 |
+| **Multi-Agent** | Agent 注册发现、Swarm 编排、AgentProcess |
+| **Autonomous Subsystem** | Sense/Think/Act/Signal/Boundary 五维子系统框架 |
 | **Session Tasks** | 会话任务（goal/step）、注入、只读 UI；见 [task-system](./docs/task-system.md) |
 | **Run Guard** | 单次 run 过程监督（continue/recover/stop） |
 | **Orchestration** | experimental 编排（子路径 `octopi/harness/orchestration`） |
@@ -189,13 +191,14 @@ src/
 │   ├── primitives/               EventBus、StateMachine、AsyncTask、ProcessModel
 │   ├── interfaces/               18 个接口契约
 │   └── types/                    核心类型定义
-├── harness/                 Layer 2  13 个自包含领域
+├── harness/                 Layer 2  14 个自包含领域
 │   ├── agent-building/           Builder、人格、配置桥接
 │   ├── context/                  上下文引擎、压缩、智能组装
 │   ├── security/                 风险评估、Shell 解析
 │   ├── reliability/              可靠性包装、断路器
 │   ├── plugin-ecosystem/         Plugin、Tool、Skill、MCP
-│   ├── distributed-agents/       多 Agent、分布式运行时
+│   ├── multi-agent/              Agent 注册发现、Swarm、AgentProcess
+│   ├── autonomous-subsystem/     Sense/Think/Act/Signal/Boundary 子系统框架
 │   ├── session-tasks/            会话任务 SessionTask（默认）
 │   ├── run-guard/                过程监督（DefaultRunGuard）
 │   ├── orchestration/            experimental 编排（workflow/scheduler/planner）

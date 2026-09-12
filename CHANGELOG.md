@@ -1,3 +1,27 @@
+## v0.21.0 (2026-09-13)
+
+### refactor(harness): Multi-Agent 独立领域 + Autonomous Subsystem 入域
+
+完成 v0.11.0「分布式智能体 → 自主子系统」重构后的领域收尾：拆除空壳 `distributed-agents`，领域口径从 13 统一为 14。
+
+#### 变更
+
+- **目录**：`src/harness/distributed-agents/multi-agent/` → `src/harness/multi-agent/`（提升为独立领域；删除空壳 `distributed-agents/`）
+- **领域口径**：13 → **14**（Multi-Agent 独立 + Autonomous Subsystem 正式入域）
+- **导出**：`harness/index.ts` / `src/index.ts` 改为从 `multi-agent/` 导出
+- **文档**：README / README_CN / harness README / ARCHITECTURE / CONTRIBUTING / AGENTS.md 同步；新增 `multi-agent/README.md`、`autonomous-subsystem/README.md`
+- **注释清理**：去掉 builder/runner/reliability/security/config 中「分布式智能体」过时表述
+- **配置体系收口**：删除顶层 `distributedIntelligence` 与系统级 `subsystems.safetyGuard`；子系统自身参数只写在各自 `config.yaml`，系统级 `subsystems` 仅保留框架项（`auditDir`）
+- **删除死代码** `AgentBuilder.withSafetyGuard()`（只存配置、从未生效）
+- **配置桥接**：在 `security` 启用时自动注入 `DefaultToolCallRiskPolicy`，与目录加载的 safety-guard 子系统形成「规则引擎 → risk_unknown → LLM 兜底」单链路
+- **配置告警**：`loadConfig` 检测到旧字段 `distributedIntelligence` 时打印 warning（与 `supervisor` 同策略）
+- **文档**：ARCHITECTURE 安全章节修正 safety-guard 路径（`subsystems/safety-guard/`，不再误列在 `harness/security/`）
+
+#### 不变
+
+- Multi-Agent 与 Autonomous Subsystem 正交：前者管多 Agent 协作，后者管主 Loop 外 Sense/Think/Act 闭环
+- 公开 API 符号名不变（`AgentSwarm` / `AgentProcess` / `DefaultAgentRegistry` 等）
+
 ## v0.20.0 (2026-06-12)
 
 ### refactor(domain-split): 拆分 task-system，落地 run-guard / orchestration / AsyncTask

@@ -12,13 +12,13 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import type { EventBus } from '../../../core/primitives/event-bus.js';
-import type { Message } from '../../../core/types.js';
-import type { Agent } from '../../../loop/agent.js';
-import type { ReliabilityHarness } from '../../reliability/index.js';
-import { runAgentWithReliability } from '../../reliability/index.js';
-import type { AgentEvent } from '../../../core/primitives/event-bus.js';
-import type { AgentInfo } from '../../../core/interfaces/agent-registry.js';
+import type { EventBus } from '../../core/primitives/event-bus.js';
+import type { Message } from '../../core/types.js';
+import type { Agent } from '../../loop/agent.js';
+import type { ReliabilityHarness } from '../reliability/index.js';
+import { runAgentWithReliability } from '../reliability/index.js';
+import type { AgentEvent } from '../../core/primitives/event-bus.js';
+import type { AgentInfo } from '../../core/interfaces/agent-registry.js';
 
 // ── 进程状态 ──
 

@@ -119,14 +119,6 @@ export const SecurityConfigSchema = z.object({
   injectionSensitivity: z.enum(['low', 'medium', 'high']).optional(),
 });
 
-export const DistributedIntelligenceConfigSchema = z.object({
-  safetyGuard: z.object({
-    enabled: z.boolean(),
-    model: z.string().describe('provider/model 格式，如 xiaomi-coding/mimo-v2.5-pro').optional(),
-    maxDurationMs: z.number().positive().optional(),
-  }).optional(),
-}).optional();
-
 // ── 并发控制配置 Schema ──
 
 const RateLimitSlotSchema = z.object({
@@ -290,7 +282,6 @@ export const HarnessConfigSchema = z.object({
   runGuard: RunGuardJsonConfigSchema.optional(),
   contextEngine: ContextEngineConfigSchema.optional(),
   security: SecurityConfigSchema.optional(),
-  distributedIntelligence: DistributedIntelligenceConfigSchema,
   channels: z.array(ChannelConfigSchema).optional(),
   session: SessionConfigSchema.optional(),
   observability: ObservabilityConfigSchema.optional(),

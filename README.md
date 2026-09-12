@@ -15,7 +15,7 @@ Octopi is an embeddable agent engine for building AI-powered applications. It pr
 
 - **Embeddable** — Not a standalone app, but a component for your product
 - **4-layer architecture** — Loop → Core → Harness → Integration, clean boundaries, independent layers
-- **13 self-contained domains** — Each domain is independently understandable, testable, and replaceable
+- **14 self-contained domains** — Each domain is independently understandable, testable, and replaceable
 - **7-layer context intelligence** — Wisdom, Persona, Skill, Knowledge, Cognition, Memory, Information
 - **Security built-in** — Injection detection, risk evaluation, approval workflows — not optional, not removable
 - **Natively multi-agent** — Distributed intelligence from the ground up
@@ -30,10 +30,11 @@ Octopi is an embeddable agent engine for building AI-powered applications. It pr
 │  LLM Providers · Storage · Observability · Gateway · TUI · Web Runtime │
 │                                                              │
 │  ┌──────────────────────────────────────────────────────────┐│
-│  │  Layer 2: Harness — 13 self-contained domains             ││
+│  │  Layer 2: Harness — 14 self-contained domains             ││
 │  │  agent-building · context · security · reliability         ││
-│  │  plugin-ecosystem · distributed-agents · session-tasks     ││
-│  │  run-guard · concurrency · execution-env · hitl · memory   ││
+│  │  plugin-ecosystem · multi-agent · autonomous-subsystem     ││
+│  │  session-tasks · run-guard · orchestration · concurrency   ││
+│  │  execution-env · hitl · memory                             ││
 │  │                                                          ││
 │  │  ┌──────────────────────────────────────────────────────┐││
 │  │  │  Layer 1: Core — Primitives + Interfaces + Types      │││
@@ -58,7 +59,7 @@ The heart of the engine. `agentLoop()` is a pure async generator: input messages
 
 Infrastructure primitives (EventBus, StateMachine, AsyncTask, ProcessModel) and all interface contracts (ModelProvider, ContextEngine, SecurityGuard, SessionStore, etc.). No strategy implementations.
 
-### Layer 2: Harness — 13 Domains
+### Layer 2: Harness — 14 Domains
 
 | Domain | Responsibility |
 |--------|---------------|
@@ -67,7 +68,8 @@ Infrastructure primitives (EventBus, StateMachine, AsyncTask, ProcessModel) and 
 | **Security** | Risk evaluation, shell parsing, degradation strategies, safety agent |
 | **Reliability** | `runAgentWithReliability()`, circuit breaker, retry, supervision |
 | **Plugin Ecosystem** | Plugins, tools, skills, MCP, slash commands |
-| **Distributed Agents** | Multi-agent orchestration, distributed runtime, triggers |
+| **Multi-Agent** | Agent registry/discovery, Swarm orchestration, AgentProcess |
+| **Autonomous Subsystem** | Sense/Think/Act/Signal/Boundary subsystem framework |
 | **Session Tasks** | Session-level tasks (goal/step), injection, read-only UI; see [task-system](./docs/task-system.md) |
 | **Run Guard** | Checkpoint supervision for a single run (`continue`/`recover`/`stop`) |
 | **Orchestration** | Experimental workflow/scheduler (subpath `octopi/harness/orchestration`) |
@@ -189,13 +191,14 @@ src/
 │   ├── primitives/               EventBus, StateMachine, AsyncTask, ProcessModel
 │   ├── interfaces/               18 interface contracts
 │   └── types/                    Core type definitions
-├── harness/                 Layer 2  13 self-contained domains
+├── harness/                 Layer 2  14 self-contained domains
 │   ├── agent-building/           Builder, persona, config bridge
 │   ├── context/                  Context engine, compression, intelligence
 │   ├── security/                 Risk evaluation, shell parsing
 │   ├── reliability/              Reliability wrapper, circuit breaker
 │   ├── plugin-ecosystem/         Plugins, tools, skills, MCP
-│   ├── distributed-agents/       Multi-agent, distributed runtime
+│   ├── multi-agent/              Agent registry, Swarm, AgentProcess
+│   ├── autonomous-subsystem/     Sense/Think/Act/Signal/Boundary framework
 │   ├── session-tasks/            SessionTask (goal/step) — default path
 │   ├── run-guard/                Checkpoint supervision (DefaultRunGuard)
 │   ├── orchestration/            Experimental workflow/scheduler/planner
