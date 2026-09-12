@@ -49,8 +49,7 @@ skipIfNoKey('Chat Simulation', () => {
     });
 
     // 创建 store
-    const storeDir = join(tempDir, 'data/sessions');
-    const store = new JsonlSessionStore(storeDir);
+    const store = new JsonlSessionStore((agentId) => join(tempDir, 'agents', agentId));
 
     // 创建 agent
     const builder = new AgentBuilder()

@@ -45,7 +45,7 @@ import type { SecurityGuardConfig } from './core/security-guard.js';
 import type { TaskSupervisorConfig } from './harness/task-system/supervisor/task-supervisor.js';
 import { validateConfigOrThrow } from './config-schema.js';
 import { readFileSync, existsSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { resolve, join } from 'node:path';
 import { homedir } from 'node:os';
 
 // ── Agent 配置 ──
@@ -749,8 +749,7 @@ export async function createStoreFromConfig(sc: StoreConfig): Promise<SessionSto
       throw new Error('Store type "jsonl" requires dataDir');
     }
     const { JsonlSessionStore } = await import('./integration/storage/jsonl.js');
-    // 传入 legacyDataDir 以兼容旧的 dataDir/{agentId}/ 目录结构
-    return new JsonlSessionStore(() => '', sc.dataDir);
+    return new JsonlSessionStore((agentId) => join(sc.dataDir!, agentId));
   }
 
   if (sc.type === 'sqlite') {

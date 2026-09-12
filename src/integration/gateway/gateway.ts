@@ -60,36 +60,6 @@ import { IterationBudget } from '../../harness/budget/budget.js';
 import { DefaultContextEngine } from '../../harness/context/default-context-engine.js';
 import { SessionAwareRunner, type RunConfig } from '../../harness/runner.js';
 
-// ================================================================
-// 内存 Session 存储
-// ================================================================
-
-class InMemorySessionStore implements SessionStore<SessionData> {
-    private static key(agentId: string, sessionId: string): string { return `${agentId}:${sessionId}`; }
-  private sessions = new Map<string, SessionData>();
-
-  async load(_agentId: string, sessionId: string): Promise<SessionData | null> {
-    return this.sessions.get(InMemorySessionStore.key(_agentId, sessionId)) ?? null;
-  }
-
-  async save(_agentId: string, sessionId: string, data: SessionData): Promise<void> {
-    this.sessions.set(InMemorySessionStore.key(_agentId, sessionId), data);
-  }
-
-  async list(agentId: string): Promise<any[]> {
-    return Array.from(this.sessions.values()).filter(s => s.agentId === agentId);
-  }
-
-  async delete(_agentId: string, sessionId: string): Promise<void> {
-    this.sessions.delete(InMemorySessionStore.key(_agentId, sessionId));
-  }
-
-  async exists(_agentId: string, sessionId: string): Promise<boolean> {
-    return this.sessions.has(InMemorySessionStore.key(_agentId, sessionId));
-  }
-}
-
-// ================================================================
 // Web REST 骨架所需的 Gateway 扩展类型
 // ================================================================
 
@@ -117,14 +87,27 @@ export interface PendingApprovalView {
 }
 
 // ================================================================
-// Gateway
+// 默认 Session Store（自动从 agent.home 推断）
 // ================================================================
 
 /**
- * Gateway 实现
- *
- * 使用 Agent + SessionAwareRunner 架构。
+ * 无显式 store 时，自动从 agent.home 目录推断创建持久化 JSONL store。
+ * 如果 agent.home 无法解析，fallback 到内存存储（仅用于开发/测试）。
  */
+async function createDefaultStore(agents: AgentDefinition[]): Promise<SessionStore<SessionData>> {
+  const homes = agents.map(a => a.home).filter((h): h is string => !!h);
+  if (homes.length === 0) {
+    console.warn('[Gateway] No agent home directories found, using in-memory session store');
+    const { InMemorySessionStore } = await import('../storage/memory.js');
+    return new InMemorySessionStore();
+  }
+  const { JsonlSessionStore } = await import('../storage/jsonl.js');
+  return new JsonlSessionStore((agentId: string) => {
+    const match = agents.find(a => a.id === agentId);
+    return match?.home ?? homes[0];
+  });
+}
+
 export class Gateway {
   /** 已注册的 Agent */
   private agents = new Map<string, AgentDefinition>();
@@ -133,7 +116,7 @@ export class Gateway {
   /** Plugin Manager */
   private pluginManager: PluginManager;
   /** Session Store */
-  private store: SessionStore<SessionData>;
+  private store!: SessionStore<SessionData>;
   /** Gateway 配置 */
   private config: GatewayConfig;
   /** DM 作用域 */
@@ -154,6 +137,8 @@ export class Gateway {
   private circuitBreakers = new Map<string, CircuitBreaker>();
   /** 每个 session 的中止控制器 */
   private abortControllers = new Map<string, AbortController>();
+  /** 默认 store 的异步初始化 Promise（未传入 store 时） */
+  private _defaultStorePromise?: Promise<SessionStore<SessionData>>;
   /** Web Runtime pending approvals */
   private pendingApprovals = new Map<string, PendingApprovalView>();
 
@@ -161,7 +146,12 @@ export class Gateway {
     this.config = config;
     this.dmScope = config.session?.dmScope ?? 'main';
     this.pluginManager = new PluginManager();
-    this.store = store ?? new InMemorySessionStore();
+    if (store) {
+      this.store = store;
+    } else {
+      // 延迟初始化：启动时解析默认持久化 store
+      this._defaultStorePromise = createDefaultStore(config.agents);
+    }
 
     // 注册配置中定义的 agents
     for (const agent of config.agents) {
@@ -173,7 +163,20 @@ export class Gateway {
   // 生命周期
   // ================================================================
 
+
+  /**
+   * 确保 store 已就绪（解析默认 store 的异步初始化）
+   */
+  private async ensureStore(): Promise<void> {
+    if (this._defaultStorePromise) {
+      this.store = await this._defaultStorePromise;
+      this._defaultStorePromise = undefined;
+    }
+  }
+
   async start(): Promise<void> {
+    await this.ensureStore();
+
     if (this.started) {
       console.warn('[Gateway] Already started');
       return;

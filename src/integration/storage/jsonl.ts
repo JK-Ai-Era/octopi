@@ -21,21 +21,13 @@ async function fileExists(path: string): Promise<boolean> {
 }
 
 export class JsonlSessionStore implements SessionStore<SessionData> {
-  private agentHomeResolver: (agentId: string) => string;
+ private agentHomeResolver: (agentId: string) => string;
 
   /**
    * @param agentHomeResolver - 根据 agentId 返回该 agent 的 home 目录路径
-   * @param legacyDataDir - 向后兼容：旧的全局 dataDir 路径（已废弃）
    */
-  constructor(
-    agentHomeResolver: (agentId: string) => string,
-    legacyDataDir?: string,
-  ) {
-    if (legacyDataDir) {
-      this.agentHomeResolver = (agentId: string) => join(legacyDataDir, agentId);
-    } else {
-      this.agentHomeResolver = agentHomeResolver;
-    }
+  constructor(agentHomeResolver: (agentId: string) => string) {
+    this.agentHomeResolver = agentHomeResolver;
   }
 
   private sessionsDir(agentId: string): string {

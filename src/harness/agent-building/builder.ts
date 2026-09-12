@@ -53,6 +53,7 @@ import type { MetricsAggregatorConfig } from '../../integration/observability/me
 import type { TraceLoggerConfig } from '../../integration/observability/trace-logger.js';
 import type { SessionStore } from '../../core/interfaces/session-store.js';
 import type { SessionData } from '../session-types.js';
+import { InMemorySessionStore } from '../../integration/storage/memory.js';
 
 import {
   DefaultEventBus,
@@ -196,31 +197,6 @@ function convertToAgentTool(tool: RegisteredTool, contextProvider: ToolContextPr
       }
     },
   };
-}
-
-/** 内存 Session 存储（默认） */
-class InMemorySessionStore implements SessionStore<SessionData> {
-  private sessions = new Map<string, any>();
-
-  async load(_agentId: string, sessionId: string): Promise<any> {
-    return this.sessions.get(sessionId) ?? null;
-  }
-
-  async save(_agentId: string, sessionId: string, data: any): Promise<void> {
-    this.sessions.set(sessionId, data);
-  }
-
-  async list(agentId: string): Promise<any[]> {
-    return Array.from(this.sessions.values()).filter(s => s.agentId === agentId);
-  }
-
-  async delete(_agentId: string, sessionId: string): Promise<void> {
-    this.sessions.delete(sessionId);
-  }
-
-  async exists(_agentId: string, sessionId: string): Promise<boolean> {
-    return this.sessions.has(sessionId);
-  }
 }
 
 // ── Builder ──
