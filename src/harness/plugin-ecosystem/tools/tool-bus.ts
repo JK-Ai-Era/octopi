@@ -1,64 +1,64 @@
 /**
- * 工具注册中心
+ * DefaultToolBus — ToolBus 接口的 Harness 层实现
  *
- * 管理所有已注册的工具，支持：
- * - 全局工具和 Agent 级工具（Agent 级覆盖同名全局工具）
- * - 工具策略（白名单/黑名单/确认机制）
- * - LLM function calling 格式转换
- * - 参数校验（类型、必填、枚举、范围、长度、正则）
+ * 统一的工具注册、发现、策略过滤、格式转换入口。
+ * 替代原先散落在 ToolRegistry / ToolSet / Builder 中的工具管理逻辑。
  *
- * 工具的优先级：
- *   Agent 级工具 > 全局工具
+ * 职责：
+ * - 管理全局和 agent 级工具注册
+ * - 按 ToolPolicy（allow/deny）过滤
+ * - RegisteredTool → LLM function calling 格式转换
+ * - 工具参数校验
  *
- * 使用方式：
- * ```ts
- * const registry = new ToolRegistry();
+ * 不负责：
+ * - 工具执行（由 agentLoop + beforeToolCall 回调链负责）
+ * - 安全检查（由 SecurityGuard + beforeToolCall 负责）
  *
- * // 注册全局工具
- * registry.register({ definition: { ... }, handler: async () => ... });
- *
- * // 注册 Agent 级工具（覆盖同名全局工具）
- * registry.register({ definition: { ... }, handler: async () => ... }, 'agent-1');
- *
- * // 执行工具
- * const result = await registry.execute('tool_name', { arg: 'value' }, context);
- * ```
+ * @module harness/plugin-ecosystem/tools/tool-bus
  */
 
-import type { RegisteredTool, ToolDefinition, ToolExecutionContext, ToolParameter } from '../../../core/types.js';
+import type {
+  RegisteredTool,
+  ToolDefinition,
+  ToolParameter,
+  ToolPolicy,
+} from '../../../core/types.js';
+import type { ToolBus } from '../../../core/interfaces/tool-bus.js';
 
-export class ToolRegistry {
-  /** 全局工具 */
+/**
+ * DefaultToolBus — 工具总线实现
+ *
+ * 内部按两层管理工具：
+ * - globalTools: 全局工具（所有 agent 共享）
+ * - agentTools: Agent 级工具（按 agentId 隔离，覆盖同名全局工具）
+ */
+export class DefaultToolBus implements ToolBus {
   private globalTools = new Map<string, RegisteredTool>();
-  /** Agent 级工具（agentId → 工具映射） */
   private agentTools = new Map<string, Map<string, RegisteredTool>>();
 
-  /**
-   * 注册工具
-   *
-   * @param tool - 工具定义和处理函数
-   * @param agentId - Agent ID（不传则为全局工具）
-   * @throws 重复注册同名全局工具时抛出错误
-   */
-  register(tool: RegisteredTool, agentId?: string): void {
-    const { name } = tool.definition;
+  // ── 注册 ──
 
-    if (agentId) {
-      if (!this.agentTools.has(agentId)) {
-        this.agentTools.set(agentId, new Map());
-      }
-      this.agentTools.get(agentId)!.set(name, tool);
-    } else {
-      if (this.globalTools.has(name)) {
-        throw new Error(`Global tool "${name}" already registered`);
-      }
-      this.globalTools.set(name, tool);
+  register(tool: RegisteredTool): void {
+    const { name } = tool.definition;
+    if (this.globalTools.has(name)) {
+      throw new Error(`Global tool "${name}" already registered`);
+    }
+    this.globalTools.set(name, tool);
+  }
+
+  registerAll(tools: RegisteredTool[]): void {
+    for (const tool of tools) {
+      this.register(tool);
     }
   }
 
-  /**
-   * 注销工具
-   */
+  registerForAgent(agentId: string, tool: RegisteredTool): void {
+    if (!this.agentTools.has(agentId)) {
+      this.agentTools.set(agentId, new Map());
+    }
+    this.agentTools.get(agentId)!.set(tool.definition.name, tool);
+  }
+
   unregister(name: string, agentId?: string): boolean {
     if (agentId) {
       return this.agentTools.get(agentId)?.delete(name) ?? false;
@@ -66,22 +66,16 @@ export class ToolRegistry {
     return this.globalTools.delete(name);
   }
 
-  /**
-   * 获取工具（优先返回 Agent 级工具）
-   */
-  get(name: string, agentId?: string): RegisteredTool | undefined {
+  // ── 查询 ──
+
+  getTool(name: string, agentId?: string): RegisteredTool | undefined {
     if (agentId) {
       return this.agentTools.get(agentId)?.get(name) ?? this.globalTools.get(name);
     }
     return this.globalTools.get(name);
   }
 
-  /**
-   * 列出 Agent 可用的所有工具
-   *
-   * 合并全局工具和 Agent 级工具，Agent 级优先。
-   */
-  listForAgent(agentId: string): ToolDefinition[] {
+  listForAgent(agentId: string): RegisteredTool[] {
     const tools = new Map<string, RegisteredTool>();
 
     // 先加全局
@@ -97,38 +91,38 @@ export class ToolRegistry {
       }
     }
 
-    return Array.from(tools.values()).map((t) => t.definition);
+    return Array.from(tools.values());
   }
 
-  /**
-   * 获取 LLM 可理解的 tool 定义（OpenAI function calling 格式）
-   *
-   * 转换为：
-   * ```json
-   * {
-   *   "type": "function",
-   *   "function": {
-   *     "name": "tool_name",
-   *     "description": "Tool description",
-   *     "parameters": {
-   *       "type": "object",
-   *       "properties": { ... },
-   *       "required": [...]
-   *     }
-   *   }
-   * }
-   * ```
-   */
-  getDefinitionsForLLM(agentId: string): unknown[] {
-    return this.listForAgent(agentId).map((definition) => ({
+  // ── 解析 ──
+
+  resolve(agentId: string, policy?: ToolPolicy): RegisteredTool[] {
+    let tools = this.listForAgent(agentId);
+
+    if (policy) {
+      if (policy.allow && policy.allow.length > 0) {
+        const allowSet = new Set(policy.allow);
+        tools = tools.filter(t => allowSet.has(t.definition.name));
+      }
+      if (policy.deny && policy.deny.length > 0) {
+        const denySet = new Set(policy.deny);
+        tools = tools.filter(t => !denySet.has(t.definition.name));
+      }
+    }
+
+    return tools;
+  }
+
+  toLLMDefinitions(agentId: string, policy?: ToolPolicy): unknown[] {
+    return this.resolve(agentId, policy).map(definition => ({
       type: 'function',
       function: {
-        name: definition.name,
-        description: definition.description,
+        name: definition.definition.name,
+        description: definition.definition.description,
         parameters: {
           type: 'object',
           properties: Object.fromEntries(
-            Object.entries(definition.parameters).map(([key, param]) => [
+            Object.entries(definition.definition.parameters).map(([key, param]) => [
               key,
               {
                 type: param.type,
@@ -137,7 +131,7 @@ export class ToolRegistry {
               },
             ]),
           ),
-          required: Object.entries(definition.parameters)
+          required: Object.entries(definition.definition.parameters)
             .filter(([, param]) => param.required)
             .map(([key]) => key),
         },
@@ -146,36 +140,12 @@ export class ToolRegistry {
   }
 
   /**
-   * 执行工具
+   * 校验工具参数
    *
-   * @param name - 工具名称
-   * @param args - 工具参数
-   * @param context - 执行上下文
-   * @returns 工具执行结果
-   * @throws 工具不存在或参数校验失败时抛出错误
+   * 包括必填、类型、枚举、范围、长度、正则、嵌套对象和数组。
+   * 校验失败时抛出异常。
    */
-  async execute(
-    name: string,
-    args: Record<string, unknown>,
-    context: ToolExecutionContext,
-  ): Promise<unknown> {
-    const tool = this.get(name, context.agentId);
-    if (!tool) {
-      throw new Error(`Tool "${name}" not found`);
-    }
-
-    // 参数校验
-    this.validateArgs(name, args, tool.definition);
-
-    return tool.handler(args, context);
-  }
-
-  /**
-   * 校验工具参数，包括必填、类型、枚举、范围、长度和正则。
-   *
-   * 当参数命中明确错误时抛出异常，避免把非法输入下发到 handler。
-   */
-  private validateArgs(name: string, args: Record<string, unknown>, definition: ToolDefinition): void {
+  validateArgs(name: string, args: Record<string, unknown>, definition: ToolDefinition): void {
     for (const [key, param] of Object.entries(definition.parameters)) {
       if (!(key in args)) {
         if (param.required) {
@@ -194,6 +164,34 @@ export class ToolRegistry {
       this.validateObject(name, key, value, param);
     }
   }
+
+
+  /**
+   * 执行工具（便捷方法）
+   *
+   * 查找工具 → 参数校验 → 调用 handler。
+   * 适用于在 agentLoop 外部直接调用工具的场景。
+   */
+  async execute(
+    name: string,
+    args: Record<string, unknown>,
+    context: import('../../../core/types.js').ToolExecutionContext,
+  ): Promise<unknown> {
+    const tool = this.getTool(name, context.agentId);
+    if (!tool) {
+      throw new Error(`Tool "${name}" not found`);
+    }
+    this.validateArgs(name, args, tool.definition);
+    return tool.handler(args, context);
+  }
+  /**
+   * 获取全局注册的工具名集合（用于 SecurityGuard 的 registeredTools 校验）
+   */
+  getGlobalToolNames(): Set<string> {
+    return new Set(this.globalTools.keys());
+  }
+
+  // ── 参数校验（内部） ──
 
   private validateType(name: string, key: string, value: unknown, param: ToolParameter): void {
     if (value === null || value === undefined) {
@@ -217,22 +215,16 @@ export class ToolRegistry {
   }
 
   private validateEnum(name: string, key: string, value: unknown, param: ToolParameter): void {
-    if (!param.enum || param.enum.length === 0) {
-      return;
-    }
-
+    if (!param.enum || param.enum.length === 0) return;
     const normalize = (v: unknown) => (typeof v === 'string' ? v.trim() : v);
-    const allowed = new Set(param.enum.map((v) => normalize(v)));
+    const allowed = new Set(param.enum.map(v => normalize(v)));
     if (!allowed.has(normalize(value))) {
       throw new Error(`Tool "${name}": parameter "${key}" must be one of ${JSON.stringify(param.enum)}, received ${JSON.stringify(value)}`);
     }
   }
 
   private validateRange(name: string, key: string, value: unknown, param: ToolParameter): void {
-    if (param.type !== 'number' || typeof value !== 'number') {
-      return;
-    }
-
+    if (param.type !== 'number' || typeof value !== 'number') return;
     if (param.minimum !== undefined && value < param.minimum) {
       throw new Error(`Tool "${name}": parameter "${key}" must be >= ${param.minimum}, received ${value}`);
     }
@@ -242,10 +234,7 @@ export class ToolRegistry {
   }
 
   private validateLength(name: string, key: string, value: unknown, param: ToolParameter): void {
-    if (param.type !== 'string' || typeof value !== 'string') {
-      return;
-    }
-
+    if (param.type !== 'string' || typeof value !== 'string') return;
     if (param.minLength !== undefined && value.length < param.minLength) {
       throw new Error(`Tool "${name}": parameter "${key}" length must be >= ${param.minLength}, received ${value.length}`);
     }
@@ -255,10 +244,7 @@ export class ToolRegistry {
   }
 
   private validatePattern(name: string, key: string, value: unknown, param: ToolParameter): void {
-    if (!param.pattern || typeof value !== 'string') {
-      return;
-    }
-
+    if (!param.pattern || typeof value !== 'string') return;
     const regex = new RegExp(param.pattern);
     if (!regex.test(value)) {
       throw new Error(`Tool "${name}": parameter "${key}" must match pattern ${param.pattern}`);
@@ -266,10 +252,7 @@ export class ToolRegistry {
   }
 
   private validateArray(name: string, key: string, value: unknown, param: ToolParameter): void {
-    if (param.type !== 'array' || !Array.isArray(value)) {
-      return;
-    }
-
+    if (param.type !== 'array' || !Array.isArray(value)) return;
     if (param.items) {
       for (const item of value) {
         this.validateType(name, `${key}[]`, item, param.items);
@@ -281,7 +264,6 @@ export class ToolRegistry {
         this.validateObject(name, `${key}[]`, item, param.items);
       }
     }
-
     if (param.minItems !== undefined && value.length < param.minItems) {
       throw new Error(`Tool "${name}": parameter "${key}" must have >= ${param.minItems} items, received ${value.length}`);
     }
@@ -291,10 +273,7 @@ export class ToolRegistry {
   }
 
   private validateObject(name: string, key: string, value: unknown, param: ToolParameter): void {
-    if (param.type !== 'object' || typeof value !== 'object' || Array.isArray(value) || value === null) {
-      return;
-    }
-
+    if (param.type !== 'object' || typeof value !== 'object' || Array.isArray(value) || value === null) return;
     if (param.properties) {
       const record = value as Record<string, unknown>;
       for (const [nestedKey, nestedParam] of Object.entries(param.properties)) {

@@ -19,6 +19,7 @@ import type {
   Message,
   ToolCall,
 } from '../../core/types.js';
+import { DefaultToolBus } from '../plugin-ecosystem/tools/tool-bus.js';
 import type {
   ModelProvider,
 } from '../../core/interfaces/model-provider.js';
@@ -207,7 +208,7 @@ function convertToAgentTool(tool: RegisteredTool, contextProvider: ToolContextPr
 export class AgentBuilder {
   // Core 组件
   private _model?: ModelProvider;
-  private _tools = new Map<string, RegisteredTool>();
+  private _toolBus = new DefaultToolBus();
   private _contextEngine?: ContextEngine;
   private _summarize?: SummarizeFunction;
   private _events?: EventBus;
@@ -279,7 +280,7 @@ export class AgentBuilder {
 
   /** 注册工具 */
   tool(tool: RegisteredTool): this {
-    this._tools.set(tool.definition.name, tool);
+    this._toolBus.register(tool);
     return this;
   }
 
@@ -299,7 +300,7 @@ export class AgentBuilder {
   /**
    * 配置 MCP Server 连接
    *
-   * 构建时自动连接，工具注册到 ToolRegistry。
+   * 构建时自动连接，工具注册到 ToolBus。
    * 支持多次调用，连接多个 MCP Server。
    *
    * @example
@@ -578,7 +579,7 @@ export class AgentBuilder {
           model: agent.model,
           events,
           errorStrategy: this._errorStrategy ?? new DefaultErrorStrategy(),
-          mainTools: this._tools,
+          mainTools: this._toolBus,
           modelLevels: this._modelLevels,
         },
         auditDir: this._subsystemAuditDir,
@@ -627,7 +628,7 @@ export class AgentBuilder {
         systemPrompt = await composePersonas(...this._personaWorkspaces);
       }
     }
-    if (!systemPrompt && this._tools.size > 0) {
+    if (!systemPrompt && this._toolBus.listForAgent('default').length > 0) {
       systemPrompt = this.buildDefaultSystemPrompt();
     }
 
@@ -636,7 +637,7 @@ export class AgentBuilder {
 
     // 转换 RegisteredTool → AgentTool
     this._contextProvider = new RuntimeToolContextProvider({ cwd: this._workspace });
-    const agentTools: LoopAgentTool[] = Array.from(this._tools.values()).map(t => convertToAgentTool(t, this._contextProvider));
+    const agentTools: LoopAgentTool[] = this._toolBus.listForAgent('default').map(t => convertToAgentTool(t, this._contextProvider));
 
     // 创建 Agent
     const agentOptions: AgentOptions = {
@@ -682,13 +683,13 @@ export class AgentBuilder {
   private async buildMcpManager(): Promise<McpManager> {
     const { createSdkMcpClient } = await import('../../integration/mcp/sdk-client.js');
 
-    // 创建回调，桥接到 this._tools
+    // 创建回调，桥接到 this._toolBus
+    // MCP 工具全局注册（外部 server 发现的工具天然跨 agent 共享）
+    // Agent 级过滤通过 ToolPolicy.deny 实现
     const callbacks: McpManagerCallbacks = {
-      registerTool: (tool) => {
-        this._tools.set(tool.definition.name, tool);
-      },
-      unregisterTool: (name) => this._tools.delete(name),
-      getTool: (name) => this._tools.get(name),
+      registerTool: (tool) => this._toolBus.register(tool),
+      unregisterTool: (name) => this._toolBus.unregister(name),
+      getTool: (name) => this._toolBus.getTool(name),
     };
 
     const clientFactory: McpClientFactory = (config: McpServerConfig) => createSdkMcpClient(config);
@@ -711,7 +712,7 @@ export class AgentBuilder {
    * 生成默认 systemPrompt，包含可用工具说明
    */
   private buildDefaultSystemPrompt(): string {
-    const toolList = Array.from(this._tools.values())
+    const toolList = this._toolBus.listForAgent('default')
       .map(t => `- ${t.definition.name}: ${t.definition.description}`)
       .join('\n');
 

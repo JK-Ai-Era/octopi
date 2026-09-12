@@ -1,4 +1,39 @@
-## v0.16.2 (2026-09-12)
+## v0.17.0 (2026-09-12)
+
+### refactor: 工具体系架构重构 — 引入 ToolBus 统一工具管理
+
+#### 问题
+
+工具系统的注册、发现、策略过滤、格式转换逻辑散落在 ToolRegistry / ToolSet / AgentBuilder / agentLoop 四处，形成双轨制。版本管理和流式执行是死代码。ToolPolicy 的 allow/deny 配置从未在运行时强制执行。
+
+#### 架构变更
+
+**Core 层（Layer 1）**
+- 新增 `ToolBus` 接口（`core/interfaces/tool-bus.ts`）：统一的工具注册、发现、策略过滤、格式转换契约
+- 新增 `ToolSource` 类型：工具来源标准化（builtin / plugin / mcp / subsystem / custom）+ 信任级别
+- 扩展 `ToolDefinition`：新增 `version`、`deprecated`、`deprecatedMessage` 字段
+- 扩展 `RegisteredTool`：新增 `source?: ToolSource` 字段
+
+**Harness 层（Layer 2）**
+- 新增 `DefaultToolBus` 实现（`harness/plugin-ecosystem/tools/tool-bus.ts`）：整合 ToolRegistry + 参数校验 + ToolPolicy 过滤 + LLM 格式转换
+- `AgentBuilder` 改用 `DefaultToolBus` 替代原有的 `Map<string, RegisteredTool>`
+- `SubsystemRuntime.SharedDeps.mainTools` 类型从 `Map<string, RegisteredTool>` 改为 `ToolBus`
+- MCP Manager 回调桥接到 ToolBus
+
+#### 删除
+
+- `ToolRegistry`（被 DefaultToolBus 替代）
+- `VersionedToolRegistry`（版本信息已内建到 ToolDefinition）
+- `createProgressReporter`（流式回调已内建到 AgentTool.execute 的 onUpdate 参数）
+- 相关测试文件：`tool-versioning.test.ts`、`streaming-tools.test.ts`
+
+#### 影响范围
+
+- `ToolRegistry` 的所有消费方需迁移到 `DefaultToolBus`
+- `SubsystemRuntime` 的 `mainTools` 字段类型从 `Map<string, RegisteredTool>` 改为 `ToolBus`
+- `ToolBus.listForAgent()` 返回 `RegisteredTool[]`（旧 `ToolRegistry.listForAgent()` 返回 `ToolDefinition[]`），消费方需从 `t.name` 改为 `t.definition.name`
+- `AgentBuilder` 内部实现变更，外部 API 不变
+
 ## v0.16.3 (2026-09-12)
 
 ### feat(web): 历史会话列表按时间倒序排列，默认显示 5 条并支持展开

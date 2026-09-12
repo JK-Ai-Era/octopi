@@ -2,7 +2,7 @@
  * MCP ↔ Octopi 格式转换桥
  *
  * 职责：
- * - MCP Tool → Octopi ToolDefinition（用于注册到 ToolRegistry）
+ * - MCP Tool → Octopi ToolDefinition（用于注册到 ToolBus）
  * - MCP Tool Result → Octopi 工具结果（用于返回给 Agent Loop）
  *
  * 设计原则：
@@ -19,7 +19,7 @@ import type { ToolDefinition, ToolParameter } from '../../../core/types.js';
 
 /**
  * 命名空间分隔符
- * MCP 工具注册到 Octopi ToolRegistry 时使用 `{serverId}__{toolName}` 格式
+ * MCP 工具注册到 Octopi ToolBus 时使用 `{serverId}__{toolName}` 格式
  */
 export const MCP_NAMESPACE_SEP = '__';
 

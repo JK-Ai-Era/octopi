@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { ToolRegistry } from '../../src/harness/plugin-ecosystem/tools/registry.js';
+import { DefaultToolBus } from '../../src/harness/plugin-ecosystem/tools/tool-bus.js';
 
 function createRegistry() {
-  const registry = new ToolRegistry();
+  const registry = new DefaultToolBus();
   registry.register({
     definition: {
       name: 'format_text',
@@ -27,7 +27,7 @@ function createRegistry() {
   return registry;
 }
 
-describe('ToolRegistry 参数校验', () => {
+describe('DefaultToolBus 参数校验', () => {
   it('缺少必填参数时抛出错误', async () => {
     const registry = createRegistry();
     await expect(

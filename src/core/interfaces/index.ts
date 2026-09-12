@@ -155,3 +155,7 @@ export type {
   WisdomStore,
   ConceptGraphStore,
 } from './memory.js';
+
+export type {
+  ToolBus,
+} from './tool-bus.js';

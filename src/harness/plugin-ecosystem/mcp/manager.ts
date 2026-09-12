@@ -3,7 +3,7 @@
  *
  * 职责：
  * - 连接/断开 MCP Server
- * - 自动发现 MCP 工具并注册到 ToolRegistry
+ * - 自动发现 MCP 工具并注册到 ToolBus
  * - 断开时自动注销工具
  * - 提供工具名称命名空间管理
  *
@@ -11,7 +11,7 @@
  * - 每个 MCP Server 的工具以 `{serverId}__{toolName}` 格式注册
  * - 避免不同 Server 的同名工具冲突
  * - 连接失败不影响已有的其他连接
- * - 通过回调注入 ToolRegistry 操作，遵循依赖倒置
+ * - 通过回调注入 ToolBus 操作，遵循依赖倒置
  */
 
 import type {
@@ -26,15 +26,15 @@ import { mcpToolToOctopiDefinition, extractMcpToolResult, splitNamespacedToolNam
 /**
  * MCP Manager 依赖注入接口
  *
- * McpManager 不直接依赖 ToolRegistry，通过回调注册/注销工具。
+ * McpManager 不直接依赖 ToolBus，通过回调注册/注销工具。
  * 遵循 Harness 层规则：子模块不直接 import 兄弟模块。
  */
 export interface McpManagerCallbacks {
-  /** 注册工具到 ToolRegistry */
+  /** 注册工具到 ToolBus */
   registerTool: (tool: RegisteredTool) => void;
-  /** 从 ToolRegistry 注销工具 */
+  /** 从 ToolBus 注销工具 */
   unregisterTool: (name: string) => boolean;
-  /** 从 ToolRegistry 获取工具 */
+  /** 从 ToolBus 获取工具 */
   getTool: (name: string) => RegisteredTool | undefined;
 }
 
@@ -65,7 +65,7 @@ interface ConnectedServer {
  *   command: 'npx',
  *   args: ['-y', '@modelcontextprotocol/server-filesystem', '/path'],
  * });
- * // 现在 ToolRegistry 中有 filesystem__read_file 等工具
+ * // 现在 ToolBus 中有 filesystem__read_file 等工具
  * ```
  */
 export class DefaultMcpManager {

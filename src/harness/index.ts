@@ -49,7 +49,7 @@ export type { LoadedPlugin, PluginLoaderConfig, PluginEntryConfig } from './plug
 export { CapabilityRegistry } from './plugin-ecosystem/plugins/capability.js';
 export { validateManifest, parseManifest } from './plugin-ecosystem/plugins/manifest.js';
 export type { PluginManifest, PluginContracts, ActivationConfig } from './plugin-ecosystem/plugins/manifest.js';
-export { ToolRegistry } from './plugin-ecosystem/tools/registry.js';
+export { DefaultToolBus } from './plugin-ecosystem/tools/tool-bus.js';
 export { getBuiltinTools, createShellTool, createFileReadTool, createFileWriteTool, createFileListTool } from './plugin-ecosystem/tools/builtin.js';
 export { DefaultSkillManager, FileSystemSkillSource } from './plugin-ecosystem/skills/manager.js';
 export type { SkillSource, DiscoveredSkill } from './plugin-ecosystem/skills/manager.js';

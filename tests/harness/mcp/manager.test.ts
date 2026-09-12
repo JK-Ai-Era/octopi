@@ -7,7 +7,7 @@ import { DefaultMcpManager } from '../../../src/harness/plugin-ecosystem/mcp/man
 import type { McpClientFactory, McpManagerCallbacks } from '../../../src/harness/plugin-ecosystem/mcp/manager.js';
 import type { McpClient, McpServerCapabilities, McpToolDefinition, McpToolResult } from '../../../src/core/interfaces/mcp-client.js';
 import type { McpServerConfig } from '../../../src/core/interfaces/mcp-client.js';
-import { ToolRegistry } from '../../../src/harness/plugin-ecosystem/tools/registry.js';
+import { DefaultToolBus } from '../../../src/harness/plugin-ecosystem/tools/tool-bus.js';
 
 // ── Mock McpClient ──
 
@@ -39,18 +39,18 @@ function createMockMcpClient(
 
 // ── Helpers ──
 
-function createCallbacks(registry: ToolRegistry): McpManagerCallbacks {
+function createCallbacks(toolBus: DefaultToolBus): McpManagerCallbacks {
   return {
-    registerTool: (t) => registry.register(t),
-    unregisterTool: (n) => registry.unregister(n),
-    getTool: (n) => registry.get(n),
+    registerTool: (t) => toolBus.register(t),
+    unregisterTool: (n) => toolBus.unregister(n),
+    getTool: (n) => toolBus.getTool(n),
   };
 }
 
 // ── Tests ──
 
 describe('DefaultMcpManager', () => {
-  let toolRegistry: ToolRegistry;
+  let toolBus: DefaultToolBus;
   let mockClient: McpClient;
   let factory: McpClientFactory;
   let manager: DefaultMcpManager;
@@ -63,8 +63,8 @@ describe('DefaultMcpManager', () => {
   };
 
   beforeEach(() => {
-    toolRegistry = new ToolRegistry();
-    callbacks = createCallbacks(toolRegistry);
+    toolBus = new DefaultToolBus();
+    callbacks = createCallbacks(toolBus);
     mockClient = createMockMcpClient([
       {
         name: 'read_file',
@@ -94,8 +94,8 @@ describe('DefaultMcpManager', () => {
 
       expect(manager.listServers()).toEqual(['test-server']);
 
-      const tools = toolRegistry.listForAgent('agent-1');
-      const names = tools.map((t) => t.name);
+      const tools = toolBus.listForAgent('agent-1');
+      const names = tools.map((t) => t.definition.name);
       expect(names).toContain('test-server__read_file');
       expect(names).toContain('test-server__list_dir');
     });
@@ -123,7 +123,7 @@ describe('DefaultMcpManager', () => {
       await noToolManager.connectServer(defaultConfig);
 
       expect(noToolManager.listServers()).toEqual(['test-server']);
-      const tools = toolRegistry.listForAgent('agent-1');
+      const tools = toolBus.listForAgent('agent-1');
       expect(tools).toHaveLength(0);
     });
   });
@@ -131,12 +131,12 @@ describe('DefaultMcpManager', () => {
   describe('disconnectServer', () => {
     it('should disconnect and unregister tools', async () => {
       await manager.connectServer(defaultConfig);
-      expect(toolRegistry.listForAgent('agent-1')).toHaveLength(2);
+      expect(toolBus.listForAgent('agent-1')).toHaveLength(2);
 
       await manager.disconnectServer('test-server');
 
       expect(manager.listServers()).toHaveLength(0);
-      expect(toolRegistry.listForAgent('agent-1')).toHaveLength(0);
+      expect(toolBus.listForAgent('agent-1')).toHaveLength(0);
     });
 
     it('should handle disconnect of non-existent server', async () => {
@@ -144,11 +144,11 @@ describe('DefaultMcpManager', () => {
     });
   });
 
-  describe('callTool through registry', () => {
-    it('should call MCP tool through ToolRegistry', async () => {
+  describe('callTool through toolBus', () => {
+    it('should call MCP tool through DefaultToolBus', async () => {
       await manager.connectServer(defaultConfig);
 
-      const result = await toolRegistry.execute(
+      const result = await toolBus.execute(
         'test-server__read_file',
         { path: '/test.txt' },
         { sessionId: 's1', agentId: 'a1', messages: [] },
@@ -176,7 +176,7 @@ describe('DefaultMcpManager', () => {
       await errorManager.connectServer({ ...defaultConfig, id: 'error-server' });
 
       await expect(
-        toolRegistry.execute(
+        toolBus.execute(
           'error-server__fail_tool',
           {},
           { sessionId: 's1', agentId: 'a1', messages: [] },
@@ -216,12 +216,12 @@ describe('DefaultMcpManager', () => {
       await multiManager.connectServer({ id: 'srv2', transport: 'stdio', command: 'echo' });
 
       expect(multiManager.listServers()).toHaveLength(2);
-      expect(toolRegistry.listForAgent('a1')).toHaveLength(2);
+      expect(toolBus.listForAgent('a1')).toHaveLength(2);
 
       await multiManager.disconnectAll();
 
       expect(multiManager.listServers()).toHaveLength(0);
-      expect(toolRegistry.listForAgent('a1')).toHaveLength(0);
+      expect(toolBus.listForAgent('a1')).toHaveLength(0);
     });
   });
 
@@ -272,7 +272,7 @@ describe('DefaultMcpManager', () => {
       });
 
       await expect(
-        toolRegistry.execute(
+        toolBus.execute(
           'slow__slow_tool',
           {},
           { sessionId: 's1', agentId: 'a1', messages: [] },
@@ -299,7 +299,7 @@ describe('DefaultMcpManager', () => {
       await errManager.connectServer({ id: 'err', transport: 'stdio', command: 'echo' });
 
       await expect(
-        toolRegistry.execute('err__err_tool', {}, { sessionId: 's1', agentId: 'a1', messages: [] }),
+        toolBus.execute('err__err_tool', {}, { sessionId: 's1', agentId: 'a1', messages: [] }),
       ).rejects.toThrow('Permission denied\nFile not found');
     });
   });
@@ -333,8 +333,8 @@ describe('DefaultMcpManager', () => {
       await mgr.connectServer({ id: 'server-a', transport: 'stdio', command: 'echo' });
       await mgr.connectServer({ id: 'server-b', transport: 'stdio', command: 'echo' });
 
-      const allTools = toolRegistry.listForAgent('a1');
-      const names = allTools.map((t) => t.name);
+      const allTools = toolBus.listForAgent('a1');
+      const names = allTools.map((t) => t.definition.name);
       expect(names).toContain('server-a__search');
       expect(names).toContain('server-b__search');
     });

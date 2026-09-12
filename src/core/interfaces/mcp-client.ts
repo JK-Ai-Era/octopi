@@ -6,7 +6,7 @@
  *
  * 设计原则：
  * - Core 层只定义接口，不依赖 MCP SDK
- * - Harness 层实现桥接逻辑（MCP 工具 → Octopi ToolRegistry）
+ * - Harness 层实现桥接逻辑（MCP 工具 → Octopi ToolBus）
  * - Integration 层实现传输层（stdio、HTTP）
  */
 
@@ -136,7 +136,7 @@ export interface McpClient {
 /**
  * MCP Manager 接口
  *
- * 管理多个 MCP Server 连接，自动将 MCP 工具注册到 ToolRegistry。
+ * 管理多个 MCP Server 连接，自动将 MCP 工具注册到 ToolBus。
  */
 export interface McpManager {
   /** 连接 MCP Server 并注册其工具 */

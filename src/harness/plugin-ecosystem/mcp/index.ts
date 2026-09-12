@@ -1,7 +1,7 @@
 /**
  * Harness MCP 模块
  *
- * MCP Client 集成：连接外部 MCP Server，自动注册工具到 ToolRegistry。
+ * MCP Client 集成：连接外部 MCP Server，自动注册工具到 ToolBus。
  */
 
 export { DefaultMcpManager } from './manager.js';

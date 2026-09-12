@@ -43,6 +43,7 @@ export type {
   ToolHandler,
   RegisteredTool,
 } from './tools.js';
+export type { ToolSource } from './tools.js';
 
 // ── Skill 系统 ──
 export type { SkillDefinition, SkillManager } from './skills.js';

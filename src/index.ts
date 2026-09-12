@@ -97,7 +97,7 @@ export { DefaultSkillManager, FileSystemSkillSource } from './harness/plugin-eco
 export type { SkillSource, DiscoveredSkill } from './harness/plugin-ecosystem/skills/manager.js';
 
 // Harness Tool 系统
-export { ToolRegistry } from './harness/plugin-ecosystem/tools/registry.js';
+export { DefaultToolBus } from './harness/plugin-ecosystem/tools/tool-bus.js';
 export { getBuiltinTools, createShellTool, createFileReadTool, createFileWriteTool, createFileListTool } from './harness/plugin-ecosystem/tools/builtin.js';
 export { createToolSet } from './harness/plugin-ecosystem/tools/tool-set.js';
 export type { ToolSet, ToolSetConfig } from './harness/plugin-ecosystem/tools/tool-set.js';

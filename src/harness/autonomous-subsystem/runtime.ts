@@ -46,7 +46,7 @@ export interface SharedDeps {
   model: ModelProvider;
   events: EventBus;
   errorStrategy: ErrorStrategy;
-  mainTools: Map<string, RegisteredTool>;
+  mainTools: import('../../core/interfaces/tool-bus.js').ToolBus;
   modelLevels?: ModelLevelMap;
   defaultModelProvider?: string;
   /** 依赖注入注册表：名称 → 实现实例，供 runtimeInject.requires 解析 */
@@ -573,11 +573,11 @@ export class SubsystemRuntime {
       case 'none':
         return undefined;
       case 'full':
-        return new Map(this.deps.mainTools);
+        return new Map(this.deps.mainTools.listForAgent('default').map(t => [t.definition.name, t]));
       case 'subset': {
         const result = new Map<string, RegisteredTool>();
         for (const name of spec.tools.names ?? []) {
-          const tool = this.deps.mainTools.get(name);
+          const tool = this.deps.mainTools.getTool(name);
           if (tool) result.set(name, tool);
         }
         return result;
