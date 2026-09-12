@@ -1,5 +1,8 @@
 /**
- * KnowledgeStore 类型定义
+ * KnowledgeStore — 知识存储契约
+ *
+ * Context Intelligence 第 4 层（Knowledge）的存储协议。
+ * 实现在 harness/context/knowledge。
  */
 
 // ── 知识条目 ──

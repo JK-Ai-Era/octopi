@@ -6,8 +6,8 @@ import { describe, it, expect } from 'vitest';
 import {
   RuleTaskClassifier,
   DefaultStrategyRouter,
-  ResourceManager,
-} from '../../src/harness/index.js';
+} from '../../src/harness/orchestration/strategy/index.js';
+import { ResourceManager } from '../../src/harness/resources/index.js';
 
 // ── RuleTaskClassifier 测试 ──
 

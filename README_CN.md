@@ -15,7 +15,7 @@ Octopi 是一个可嵌入的 Agent 底座引擎，用于构建 AI 驱动的应�
 
 - **可嵌入** — 不是独立应用，而是产品的组件
 - **4 层架构** — Loop → Core → Harness → Integration，边界清晰，层次独立
-- **11 个自包含领域** — 每个领域可独立理解、独立测试、独立替换
+- **13 个自包含领域** — 每个领域可独立理解、独立测试、独立替换
 - **7 层上下文智能** — 智慧、人格、技能、知识、认知、记忆、信息
 - **安全内置** — 注入检测、风险评估、审批流程——不可选、不可绕过
 - **原生多智能体** — 从架构底层支持分布式智能
@@ -30,10 +30,10 @@ Octopi 是一个可嵌入的 Agent 底座引擎，用于构建 AI 驱动的应�
 │  LLM Provider · 存储 · 可观测性 · Gateway · TUI · Web Runtime   │
 │                                                              │
 │  ┌──────────────────────────────────────────────────────────┐│
-│  │  Layer 2: Harness — 11 个自包含领域                       ││
+│  │  Layer 2: Harness — 13 个自包含领域                       ││
 │  │  agent-building · context · security · reliability        ││
-│  │  plugin-ecosystem · distributed-agents · task-system      ││
-│  │  concurrency · execution-env · human-in-the-loop · memory ││
+│  │  plugin-ecosystem · distributed-agents · session-tasks    ││
+│  │  run-guard · concurrency · execution-env · hitl · memory  ││
 │  │                                                          ││
 │  │  ┌──────────────────────────────────────────────────────┐││
 │  │  │  Layer 1: Core — 机制原语 + 接口契约 + 核心类型       │││
@@ -58,7 +58,7 @@ Octopi 是一个可嵌入的 Agent 底座引擎，用于构建 AI 驱动的应�
 
 基础设施原语（EventBus、StateMachine、AsyncTask、ProcessModel）和全部接口契约（ModelProvider、ContextEngine、SecurityGuard、SessionStore 等）。不包含策略实现。
 
-### Layer 2: Harness — 11 个领域
+### Layer 2: Harness — 13 个领域
 
 | 领域 | 职责 |
 |------|------|
@@ -69,7 +69,8 @@ Octopi 是一个可嵌入的 Agent 底座引擎，用于构建 AI 驱动的应�
 | **Plugin Ecosystem** | Plugin、Tool、Skill、MCP、斜杠命令 |
 | **Distributed Agents** | 多 Agent 编排、分布式运行时、触发引擎 |
 | **Session Tasks** | 会话任务（goal/step）、注入、只读 UI；见 [task-system](./docs/task-system.md) |
-| **Task System (legacy)** | 规划/调度/工作流等 experimental；领域切分见 [domain-split](./docs/domain-split.md) |
+| **Run Guard** | 单次 run 过程监督（continue/recover/stop） |
+| **Orchestration** | experimental 编排（子路径 `octopi/harness/orchestration`） |
 | **Concurrency** | 多 Key LLM 负载均衡、限流、Session 门控 |
 | **Execution Environment** | 沙箱、工作区管理、文件操作 |
 | **Human-in-the-Loop** | 审批流程、决策缓存、基于风险的策略 |
@@ -188,7 +189,7 @@ src/
 │   ├── primitives/               EventBus、StateMachine、AsyncTask、ProcessModel
 │   ├── interfaces/               18 个接口契约
 │   └── types/                    核心类型定义
-├── harness/                 Layer 2  11 个自包含领域
+├── harness/                 Layer 2  13 个自包含领域
 │   ├── agent-building/           Builder、人格、配置桥接
 │   ├── context/                  上下文引擎、压缩、智能组装
 │   ├── security/                 风险评估、Shell 解析
@@ -196,7 +197,8 @@ src/
 │   ├── plugin-ecosystem/         Plugin、Tool、Skill、MCP
 │   ├── distributed-agents/       多 Agent、分布式运行时
 │   ├── session-tasks/            会话任务 SessionTask（默认）
-│   ├── task-system/              legacy：监督/规划/调度/工作流（待迁）
+│   ├── run-guard/                过程监督（DefaultRunGuard）
+│   ├── orchestration/            experimental 编排（workflow/scheduler/planner）
 │   ├── concurrency/              负载均衡、限流
 │   ├── execution-environment/    沙箱、工作区
 │   ├── human-in-the-loop/        审批流程

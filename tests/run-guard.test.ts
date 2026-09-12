@@ -1,10 +1,10 @@
 /**
- * DefaultTaskSupervisor 测试
+ * DefaultRunGuard 测试
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { DefaultTaskSupervisor, createTaskSupervisor } from '../src/harness/task-system/supervisor/task-supervisor.js';
-import type { CheckpointContext, CheckpointMetrics } from '../src/core/interfaces/task-supervisor.js';
+import { DefaultRunGuard, createRunGuard } from '../src/harness/run-guard/default-run-guard.js';
+import type { CheckpointContext, CheckpointMetrics } from '../src/core/interfaces/run-guard.js';
 import type { ModelProvider } from '../src/core/interfaces/model-provider.js';
 
 // ── 工具函数 ──
@@ -40,13 +40,13 @@ function createContext(overrides?: Partial<CheckpointContext>): CheckpointContex
 
 // ── 测试 ──
 
-describe('DefaultTaskSupervisor', () => {
+describe('DefaultRunGuard', () => {
   describe('硬上限检查', () => {
     it('应该在迭代数达到硬上限时停止', async () => {
-      const supervisor = new DefaultTaskSupervisor({ hardLimit: 100 });
+      const runGuard = new DefaultRunGuard({ hardLimit: 100 });
       const ctx = createContext({ iteration: 100 });
 
-      const verdict = await supervisor.checkpoint(ctx);
+      const verdict = await runGuard.checkpoint(ctx);
 
       expect(verdict.action).toBe('stop');
       expect(verdict.reason).toContain('硬上限');
@@ -54,10 +54,10 @@ describe('DefaultTaskSupervisor', () => {
     });
 
     it('应该在时间达到上限时停止', async () => {
-      const supervisor = new DefaultTaskSupervisor({ hardWallClockMs: 60000 });
+      const runGuard = new DefaultRunGuard({ hardWallClockMs: 60000 });
       const ctx = createContext({ elapsedMs: 60000 });
 
-      const verdict = await supervisor.checkpoint(ctx);
+      const verdict = await runGuard.checkpoint(ctx);
 
       expect(verdict.action).toBe('stop');
       expect(verdict.reason).toContain('时间上限');
@@ -66,12 +66,12 @@ describe('DefaultTaskSupervisor', () => {
 
   describe('Layer 1: 规则检测', () => {
     it('应该检测重复工具循环（高严重度）', async () => {
-      const supervisor = new DefaultTaskSupervisor({ enableLLMReview: false });
+      const runGuard = new DefaultRunGuard({ enableLLMReview: false });
       const ctx = createContext({
         metrics: createMetrics({ consecutiveSameTool: 5 }),
       });
 
-      const verdict = await supervisor.checkpoint(ctx);
+      const verdict = await runGuard.checkpoint(ctx);
 
       expect(verdict.action).toBe('recover');
       expect(verdict.reason).toContain('连续 5 次');
@@ -80,31 +80,31 @@ describe('DefaultTaskSupervisor', () => {
     });
 
     it('应该检测重复工具循环（中严重度）', async () => {
-      const supervisor = new DefaultTaskSupervisor({ enableLLMReview: false });
+      const runGuard = new DefaultRunGuard({ enableLLMReview: false });
       const ctx = createContext({
         metrics: createMetrics({ consecutiveSameTool: 3 }),
       });
 
-      const verdict = await supervisor.checkpoint(ctx);
+      const verdict = await runGuard.checkpoint(ctx);
 
       expect(verdict.action).toBe('recover');
       expect(verdict.reason).toContain('连续 3 次');
     });
 
     it('应该检测错误循环', async () => {
-      const supervisor = new DefaultTaskSupervisor({ enableLLMReview: false });
+      const runGuard = new DefaultRunGuard({ enableLLMReview: false });
       const ctx = createContext({
         metrics: createMetrics({ consecutiveErrors: 3 }),
       });
 
-      const verdict = await supervisor.checkpoint(ctx);
+      const verdict = await runGuard.checkpoint(ctx);
 
       expect(verdict.action).toBe('recover');
       expect(verdict.reason).toContain('错误');
     });
 
     it('应该检测工具失败率高', async () => {
-      const supervisor = new DefaultTaskSupervisor({ enableLLMReview: false });
+      const runGuard = new DefaultRunGuard({ enableLLMReview: false });
       const ctx = createContext({
         metrics: createMetrics({ toolFailureRate: 0.6 }),
         recentSummaries: [
@@ -114,19 +114,19 @@ describe('DefaultTaskSupervisor', () => {
         ],
       });
 
-      const verdict = await supervisor.checkpoint(ctx);
+      const verdict = await runGuard.checkpoint(ctx);
 
       expect(verdict.action).toBe('recover');
       expect(verdict.reason).toContain('失败率');
     });
 
     it('应该检测 token 暴涨', async () => {
-      const supervisor = new DefaultTaskSupervisor({ enableLLMReview: false });
+      const runGuard = new DefaultRunGuard({ enableLLMReview: false });
       const ctx = createContext({
         metrics: createMetrics({ tokenGrowthRate: 0.6 }),
       });
 
-      const verdict = await supervisor.checkpoint(ctx);
+      const verdict = await runGuard.checkpoint(ctx);
 
       expect(verdict.action).toBe('recover');
       expect(verdict.reason).toContain('Token');
@@ -135,10 +135,10 @@ describe('DefaultTaskSupervisor', () => {
     });
 
     it('正常运行时应该返回 continue', async () => {
-      const supervisor = new DefaultTaskSupervisor({ enableLLMReview: false });
+      const runGuard = new DefaultRunGuard({ enableLLMReview: false });
       const ctx = createContext();
 
-      const verdict = await supervisor.checkpoint(ctx);
+      const verdict = await runGuard.checkpoint(ctx);
 
       expect(verdict.action).toBe('continue');
       expect(verdict.reason).toContain('正常');
@@ -155,13 +155,13 @@ describe('DefaultTaskSupervisor', () => {
       getModelInfo: () => null,
       };
 
-      const supervisor = new DefaultTaskSupervisor(
+      const runGuard = new DefaultRunGuard(
         { enableLLMReview: true, llmReviewInterval: 1 },
         mockModel,
       );
       const ctx = createContext();
 
-      const verdict = await supervisor.checkpoint(ctx);
+      const verdict = await runGuard.checkpoint(ctx);
 
       expect(verdict.action).toBe('continue');
       expect(mockModel.chat).toHaveBeenCalled();
@@ -176,13 +176,13 @@ describe('DefaultTaskSupervisor', () => {
       getModelInfo: () => null,
       };
 
-      const supervisor = new DefaultTaskSupervisor(
+      const runGuard = new DefaultRunGuard(
         { enableLLMReview: true, llmReviewInterval: 1 },
         mockModel,
       );
       const ctx = createContext();
 
-      const verdict = await supervisor.checkpoint(ctx);
+      const verdict = await runGuard.checkpoint(ctx);
 
       expect(verdict.action).toBe('stop');
       expect(verdict.userMessage).toContain('stuck');
@@ -197,13 +197,13 @@ describe('DefaultTaskSupervisor', () => {
       getModelInfo: () => null,
       };
 
-      const supervisor = new DefaultTaskSupervisor(
+      const runGuard = new DefaultRunGuard(
         { enableLLMReview: true, llmReviewInterval: 1 },
         mockModel,
       );
       const ctx = createContext();
 
-      const verdict = await supervisor.checkpoint(ctx);
+      const verdict = await runGuard.checkpoint(ctx);
 
       expect(verdict.action).toBe('recover');
       expect(verdict.recoveryActions).toBeDefined();
@@ -218,13 +218,13 @@ describe('DefaultTaskSupervisor', () => {
       getModelInfo: () => null,
       };
 
-      const supervisor = new DefaultTaskSupervisor(
+      const runGuard = new DefaultRunGuard(
         { enableLLMReview: true, llmReviewInterval: 1 },
         mockModel,
       );
       const ctx = createContext();
 
-      const verdict = await supervisor.checkpoint(ctx);
+      const verdict = await runGuard.checkpoint(ctx);
 
       // 应该返回 continue（规则层正常，LLM 失败被忽略）
       expect(verdict.action).toBe('continue');
@@ -233,23 +233,23 @@ describe('DefaultTaskSupervisor', () => {
 
   describe('自适应间隔', () => {
     it('正常运行时应该建议放宽间隔', async () => {
-      const supervisor = new DefaultTaskSupervisor({ enableLLMReview: false });
+      const runGuard = new DefaultRunGuard({ enableLLMReview: false });
       const ctx = createContext({ iteration: 15 });
 
-      const verdict = await supervisor.checkpoint(ctx);
+      const verdict = await runGuard.checkpoint(ctx);
 
       expect(verdict.action).toBe('continue');
       expect(verdict.nextCheckpointIn).toBeGreaterThan(15);
     });
 
     it('异常恢复时应该建议收紧间隔', async () => {
-      const supervisor = new DefaultTaskSupervisor({ enableLLMReview: false, minCheckpointInterval: 5 });
+      const runGuard = new DefaultRunGuard({ enableLLMReview: false, minCheckpointInterval: 5 });
       const ctx = createContext({
         iteration: 30,
         metrics: createMetrics({ consecutiveSameTool: 5 }),
       });
 
-      const verdict = await supervisor.checkpoint(ctx);
+      const verdict = await runGuard.checkpoint(ctx);
 
       expect(verdict.action).toBe('recover');
       expect(verdict.nextCheckpointIn).toBeDefined();
@@ -258,9 +258,9 @@ describe('DefaultTaskSupervisor', () => {
   });
 
   describe('工厂函数', () => {
-    it('createTaskSupervisor 应该创建实例', () => {
-      const supervisor = createTaskSupervisor();
-      expect(supervisor).toBeInstanceOf(DefaultTaskSupervisor);
+    it('createRunGuard 应该创建实例', () => {
+      const runGuard = createRunGuard();
+      expect(runGuard).toBeInstanceOf(DefaultRunGuard);
     });
 
     it('应该接受配置和模型', () => {
@@ -272,21 +272,21 @@ describe('DefaultTaskSupervisor', () => {
       getModelInfo: () => null,
       };
 
-      const supervisor = createTaskSupervisor({ checkpointInterval: 10 }, mockModel);
-      expect(supervisor).toBeInstanceOf(DefaultTaskSupervisor);
+      const runGuard = createRunGuard({ checkpointInterval: 10 }, mockModel);
+      expect(runGuard).toBeInstanceOf(DefaultRunGuard);
     });
   });
 
   describe('onCheckpoint 回调', () => {
     it('应该在每次检查点调用回调', async () => {
       const callback = vi.fn();
-      const supervisor = new DefaultTaskSupervisor({
+      const runGuard = new DefaultRunGuard({
         enableLLMReview: false,
         onCheckpoint: callback,
       });
       const ctx = createContext();
 
-      await supervisor.checkpoint(ctx);
+      await runGuard.checkpoint(ctx);
 
       expect(callback).toHaveBeenCalledTimes(1);
       expect(callback).toHaveBeenCalledWith(ctx, expect.objectContaining({ action: 'continue' }));
@@ -294,20 +294,20 @@ describe('DefaultTaskSupervisor', () => {
 
     it('回调异常不应影响主循环', async () => {
       const callback = vi.fn().mockImplementation(() => { throw new Error('callback error'); });
-      const supervisor = new DefaultTaskSupervisor({
+      const runGuard = new DefaultRunGuard({
         enableLLMReview: false,
         onCheckpoint: callback,
       });
       const ctx = createContext();
 
-      const verdict = await supervisor.checkpoint(ctx);
+      const verdict = await runGuard.checkpoint(ctx);
 
       expect(verdict.action).toBe('continue');
     });
   });
 
   describe('Builder 自动接入', () => {
-    it('无参 taskSupervisor() 应该自动创建 DefaultTaskSupervisor', async () => {
+    it('无参 runGuard() 应该自动创建 DefaultRunGuard', async () => {
       const { AgentBuilder } = await import('../src/harness/agent-building/builder.js');
       const mockModel: ModelProvider = {
         name: 'mock',
@@ -322,14 +322,14 @@ describe('DefaultTaskSupervisor', () => {
 
       const { agent, harness } = await new AgentBuilder()
         .model(mockModel)
-        .taskSupervisor()
+        .runGuard()
         .buildAgent();
 
-      // harness 应该有 taskSupervisor
-      expect(harness.taskSupervisor).toBeDefined();
+      // harness 应该有 runGuard
+      expect(harness.runGuard).toBeDefined();
     });
 
-    it('config 形式 taskSupervisor({}) 应该自动接入 model', async () => {
+    it('config 形式 runGuard({}) 应该自动接入 model', async () => {
       const { AgentBuilder } = await import('../src/harness/agent-building/builder.js');
       const mockModel: ModelProvider = {
         name: 'mock',
@@ -344,10 +344,10 @@ describe('DefaultTaskSupervisor', () => {
 
       const { agent, harness } = await new AgentBuilder()
         .model(mockModel)
-        .taskSupervisor({ enableLLMReview: false })
+        .runGuard({ enableLLMReview: false })
         .buildAgent();
 
-      expect(harness.taskSupervisor).toBeDefined();
+      expect(harness.runGuard).toBeDefined();
     });
   });
 });

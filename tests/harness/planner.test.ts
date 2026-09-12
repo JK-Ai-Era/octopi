@@ -10,9 +10,10 @@ import {
   SECURITY_EVENT_RULE,
   LLMPlanner,
   HybridPlanner,
-  TaskScheduler,
-} from '../../src/harness/index.js';
-import type { Rule, AgentState } from '../../src/harness/index.js';
+} from '../../src/harness/orchestration/planner/index.js';
+import { TaskScheduler } from '../../src/harness/orchestration/scheduler/index.js';
+import type { Rule } from '../../src/harness/orchestration/planner/index.js';
+import type { AgentState } from '../../src/core/interfaces/cognitive-loop.js';
 import type { EventBusAgentEvent as AgentEvent } from '../../src/core/index.js';
 import { DefaultEventBus } from '../../src/core/index.js';
 

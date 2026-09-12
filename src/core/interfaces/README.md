@@ -14,11 +14,13 @@
 - SessionStore — Session 持久化接口
 - Observer — 可观测性接口
 - ErrorStrategy — 错误处理接口
-- TaskSupervisor — 任务监督接口
+- RunGuard — 过程监督接口
+- AsyncTaskStore — 运行时异步任务持久化
+- cognitive-loop — Plan / Planner / Reflector 契约
+- knowledge-store — KnowledgeStore 契约
 - AgentRegistry — Agent 注册接口
 - McpClient — MCP 客户端接口
 - ReliabilityHarness — 可靠性装备接口
-- TaskDecisionProvider — 任务决策接口
 - SandboxProvider — 沙箱接口
 - Workspace — 工作区接口
 - ApprovalProvider — 审批接口

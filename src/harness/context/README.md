@@ -36,4 +36,5 @@
 - budget-allocator.ts — Token 预算分配
 - token-estimator.ts — Token 估算
 - core-token-estimator.ts — 底层估算工具
+- knowledge/ — KnowledgeStore + KnowledgeContextEngine（第 4 层 Knowledge）
 - index.ts — 统一导出

@@ -21,7 +21,7 @@ Agent 循环的可靠性包装 — 重试、检测、监督、断路。
 ## 依赖
 
 - Core: loop/、interfaces/、primitives/
-- Harness: task-system/supervisor
+- Harness: run-guard（可选注入）
 
 ## 文件说明
 

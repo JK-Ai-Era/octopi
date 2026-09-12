@@ -19,7 +19,7 @@ import type {
   Plan,
   PlanStep,
   AgentState,
-} from '../supervisor/types.js';
+} from '../../../core/interfaces/cognitive-loop.js';
 import type { EventBusAgentEvent as AgentEvent } from '../../../core/index.js';
 
 // ── 规则定义 ──

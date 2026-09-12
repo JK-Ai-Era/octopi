@@ -10,7 +10,7 @@ import {
   composePersonas,
   DefaultContextEngine,
   SessionAwareRunner,
-  DefaultTaskSupervisor,
+  DefaultRunGuard,
 } from '../src/harness/index.js';
 import {
   InMemorySessionStore,
@@ -379,37 +379,37 @@ describe('DefaultContextEngine', () => {
   });
 });
 
-describe('Config Bridge — Supervisor 解析', () => {
-  it('应该从配置创建 DefaultTaskSupervisor', async () => {
-    const { resolveSupervisor } = await import('../src/harness/agent-building/config-bridge.js');
+describe('Config Bridge — RunGuard 解析', () => {
+  it('应该从配置创建 DefaultRunGuard', async () => {
+    const { resolveRunGuard } = await import('../src/harness/agent-building/config-bridge.js');
     const providers = new Map<string, ModelProvider>();
     providers.set('mock', createMockModelProvider());
 
-    const supervisor = resolveSupervisor({
+    const runGuard = resolveRunGuard({
       enabled: true,
       checkpointInterval: 10,
       enableLLMReview: false,
     }, providers);
 
-    expect(supervisor).toBeDefined();
-    expect(supervisor).toBeInstanceOf(DefaultTaskSupervisor);
+    expect(runGuard).toBeDefined();
+    expect(runGuard).toBeInstanceOf(DefaultRunGuard);
   });
 
   it('enabled=false 应该返回 undefined', async () => {
-    const { resolveSupervisor } = await import('../src/harness/agent-building/config-bridge.js');
+    const { resolveRunGuard } = await import('../src/harness/agent-building/config-bridge.js');
     const providers = new Map<string, ModelProvider>();
 
-    const supervisor = resolveSupervisor({ enabled: false }, providers);
+    const runGuard = resolveRunGuard({ enabled: false }, providers);
 
-    expect(supervisor).toBeUndefined();
+    expect(runGuard).toBeUndefined();
   });
 
   it('无配置应该返回 undefined', async () => {
-    const { resolveSupervisor } = await import('../src/harness/agent-building/config-bridge.js');
+    const { resolveRunGuard } = await import('../src/harness/agent-building/config-bridge.js');
     const providers = new Map<string, ModelProvider>();
 
-    const supervisor = resolveSupervisor(undefined, providers);
+    const runGuard = resolveRunGuard(undefined, providers);
 
-    expect(supervisor).toBeUndefined();
+    expect(runGuard).toBeUndefined();
   });
 });

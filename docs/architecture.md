@@ -57,7 +57,7 @@ AI 在早期阶段，应用构建思路在不断发展。架构设计的核心�
 │  LLM Provider · Web Search · 存储 · 可观测性 · 协议 · Gateway · TUI · Web Runtime │
 │                                                                  │
 │  ┌──────────────────────────────────────────────────────────────┐│
-│  │  Layer 2: Harness — 11 个自包含领域                           ││
+│  │  Layer 2: Harness — 13 个自包含领域                           ││
 │  │                                                              ││
 │  │  ┌──────────────────────────────────────────────────────────┐││
 │  │  │  Layer 1: Core — 机制原语 + 接口契约 + 核心类型           │││
@@ -102,8 +102,8 @@ src/core/
 │   ├── session-store.ts
 │   ├── observer.ts
 │   ├── error-strategy.ts
-│   ├── task-supervisor.ts
-│   ├── task-store.ts
+│   ├── run-guard.ts
+│   ├── async-task-store.ts
 │   ├── agent-registry.ts
 │   ├── mcp-client.ts
 │   └── index.ts
@@ -125,7 +125,7 @@ src/core/
 └── index.ts
 ```
 
-### Layer 2: Harness — 11 个自包含领域
+### Layer 2: Harness — 13 个自包含领域
 
 **职责**：实现 Core 接口的具体策略，提供框架的全部高级功能。
 
@@ -325,26 +325,54 @@ harness/distributed-agents/multi-agent/
 └── types.ts
 ```
 
-### 3.10 Task System — 任务与编排
+### 3.10 Session Tasks — 会话任务
 
-**职责**：任务管理、规划、调度、工作流、策略路由、输出质量。
+**职责**：未闭合工作项列表（goal/step 两级），挂 Session 聚合。
 
 ```
-harness/task-system/
-├── tasks/                # TaskManager, TaskTracker, TaskDecisionProvider
-├── planner/              # RulePlanner, LLMPlanner, HybridPlanner
-├── scheduler/            # TaskScheduler
-├── workflow/             # WorkflowEngine — DAG 编排
-├── strategy/             # 任务分类 + 策略路由
-├── quality/              # OutputQualityGate
-├── reflector/            # LLMReflector
-├── knowledge/            # KnowledgeStore, KnowledgeStage
-├── supervisor/           # AgentSupervisor, TaskSupervisor
-├── tool-loop-detection.ts
+harness/session-tasks/
+├── service.ts            # SessionTaskService — 唯一写入口
+├── render.ts             # <session_tasks> 注入（goal + step rollup）
+├── tools.ts              # task_* 工具
+├── types.ts
 └── index.ts
 ```
 
-### 3.11 Concurrency — 并发控制
+设计基准：[docs/task-system.md](./task-system.md)。
+
+### 3.11 Run Guard — 过程监督
+
+**职责**：判断单次 run 是否跑飞（continue / recover / stop）。
+
+```
+harness/run-guard/
+├── default-run-guard.ts  # DefaultRunGuard — 规则检测 + 可选 LLM 审查
+├── agent-supervisor.ts   # AgentSupervisor — 持续运行认知循环
+├── event-collector.ts
+├── types.ts
+└── index.ts
+```
+
+Core 接口：`core/interfaces/run-guard.ts`（`RunGuard`）。
+
+### 3.12 Orchestration — 编排（experimental）
+
+**职责**：确定性多步骤作业。默认不进主路径；子路径 `octopi/harness/orchestration`。
+
+```
+harness/orchestration/
+├── workflow/             # WorkflowEngine — DAG 编排
+├── scheduler/            # TaskScheduler
+├── planner/              # Rule/LLM/Hybrid planner
+├── strategy/             # 任务分类 + 策略路由
+├── quality/              # OutputQualityGate
+├── reflector/            # LLMReflector
+└── index.ts
+```
+
+领域切分见 [docs/domain-split.md](./domain-split.md)。
+
+### 3.13 Concurrency — 并发控制
 
 **职责**：多 key 分发、会话粘滞、限流。
 
@@ -381,7 +409,7 @@ Skill（技能）= 工作流定义
 | **Wisdom** | 思维范式（第一性原理、反思、系统思维） | `memory` 领域生成 | system prompt 最前 |
 | **Persona** | agent 的 DNA（身份、人格、操作指令） | `agent-building` 领域加载 | system prompt |
 | **Skill** | 工作流定义（触发条件 → 执行指导） | `plugin-ecosystem` 领域管理 | 条件加载 |
-| **Knowledge** | 外部参考资料（项目文档、API 文档） | `task-system/knowledge` | 按需检索 |
+| **Knowledge** | 外部参考资料（项目文档、API 文档） | `harness/context/knowledge` | 按需检索 |
 | **Cognition** | 概念关系网络 | `memory` 领域构建 | 按话题遍历 |
 | **Memory** | 从交互中提取的有价值内容 | `memory` 领域管理 | 按相关性召回 |
 | **Information** | 原始交互记录 | `integration/storage` 持久化 | context window 管理 |
@@ -415,9 +443,9 @@ Memory → Wisdom           升华：思维模式
   ↓
 SessionAwareRunner.handle()           ← Session 生命周期管理
   ↓
-TaskDecisionProvider.decide()         ← 可选，判断任务状态
+SessionTask 注入（goal + step rollup）  ← <session_tasks>
   ↓
-runAgentWithReliability()             ← 可靠性包装
+runAgentWithReliability()             ← 可靠性包装 + RunGuard 检查点
   ↓
 Context Intelligence 组装              ← 七层智能组装 system prompt
   ↓
@@ -449,8 +477,8 @@ AgentLoopEvent 流输出
 | `ToolCallRiskPolicy` | `core/interfaces/security-guard.ts` | DefaultToolCallRiskPolicy |
 | `Observer` | `core/interfaces/observer.ts` | NoopObserver, LogObserver, ObserverBridge |
 | `SessionStore<T>` | `core/interfaces/session-store.ts` | JsonlSessionStore, InMemorySessionStore, SqliteSessionStore |
-| `TaskStore` | `core/interfaces/task-store.ts` | （内嵌在 TaskManager 中） |
-| `TaskSupervisor` | `core/interfaces/task-supervisor.ts` | DefaultTaskSupervisor |
+| `AsyncTaskStore` | `core/interfaces/async-task-store.ts` | （默认内存；可选 integration/storage） |
+| `RunGuard` | `core/interfaces/run-guard.ts` | DefaultRunGuard |
 | `AgentRegistry` | `core/interfaces/agent-registry.ts` | DefaultAgentRegistry |
 | `McpClient` | `core/interfaces/mcp-client.ts` | SdkMcpClient |
 | `EventSource` | `core/interfaces/event-source.ts` | — |
@@ -483,7 +511,7 @@ const { agent, harness, runner } = await new AgentBuilder()
   .withSafetyGuard({ cwd: '/data' })
 
   // 可靠性
-  .taskSupervisor()
+  .runGuard()
   .reliability({ planningRetry: { maxAttempts: 3 } })
 
   // 可观测性
@@ -518,7 +546,8 @@ const { agent, harness, runner } = await new AgentBuilder()
 - `arch/layer-rules.md` — 分层规则
 - `arch/invariants.md` — 架构不变量
 - `docs/plugin-system.md` — Plugin 系统详细文档
-- `docs/task-system.md` — Task 系统详细文档
+- `docs/task-system.md` — SessionTask 设计基准
+- `docs/domain-split.md` — run-guard / orchestration / AsyncTask 领域切分
 - `docs/CONTRIBUTING.md` — 开发规范
 - `docs/web-runtime-design.md` — Web Runtime 技术设计
 - `docs/web-conversation-model-design.md` — WebUI 会话显示模型设计

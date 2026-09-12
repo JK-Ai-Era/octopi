@@ -1,7 +1,7 @@
 /**
  * Harness 层统一导出（Layer 2）
  *
- * 11 个自包含领域，每个领域通过 index.ts 导出。
+ * 13 个自包含领域，每个领域通过 index.ts 导出。
  */
 
 // ── Tool 系统 ──
@@ -13,7 +13,7 @@ export type { WebSearchToolOptions } from './plugin-ecosystem/tools/web-search.j
 // ── Agent Building ──
 export { AgentBuilder, createAgent } from './agent-building/builder.js';
 export { loadPersona, composePersonas } from './agent-building/persona.js';
-export { buildFromConfig, buildFromConfigFile, resolveProviders, resolveSecurityConfig, resolveContextEngine, resolveSupervisor } from './agent-building/config-bridge.js';
+export { buildFromConfig, buildFromConfigFile, resolveProviders, resolveSecurityConfig, resolveContextEngine, resolveRunGuard } from './agent-building/config-bridge.js';
 export type { BuiltAgent } from './agent-building/config-bridge.js';
 
 // ── Context Management ──
@@ -78,24 +78,15 @@ export { validateSubsystemSpec } from './autonomous-subsystem/boundary/index.js'
 export { SessionTaskService, renderSessionTasksInjection, createSessionTaskTools } from './session-tasks/index.js';
 export type { SessionTask, SessionTaskStatus, SessionTaskListFilter } from './session-tasks/index.js';
 
-// ── Task System（legacy 伞目录；新代码请用 session-tasks / run-guard / orchestration）──
-/** @deprecated 使用 SessionTaskService */
-export { TaskTracker, TaskManager, applyDecision, DefaultTaskDecisionProvider } from './task-system/tasks/index.js';
-/** @deprecated 使用 SessionTask */
-export type { Task, TaskDecision, TaskDecisionInput, DefaultTaskDecisionProviderConfig } from './task-system/tasks/index.js';
-export { RulePlanner, LLMPlanner, HybridPlanner, USER_MESSAGE_RULE, SECURITY_EVENT_RULE, IDLE_RULE, getDefaultRules } from './task-system/planner/index.js';
-export type { Rule, RuleCondition, RuleAction, LLMPlannerConfig, HybridPlannerConfig } from './task-system/planner/index.js';
-export { TaskScheduler, SchedulerEvents } from './task-system/scheduler/index.js';
-export type { ScheduledTask, ScheduleKind, TaskSchedulerConfig } from './task-system/scheduler/index.js';
-export { OutputQualityGate, createOutputQualityGate, OutputErrorClassifier, createOutputErrorClassifier } from './task-system/quality/index.js';
-export { RuleTaskClassifier, DefaultStrategyRouter } from './task-system/strategy/index.js';
-export type { TaskClassifier, TaskClassification, TaskCategory, TaskComplexity, StrategyRouter, Strategy, StrategyKind } from './task-system/strategy/index.js';
-export { LLMReflector } from './task-system/reflector/index.js';
-export type { LLMReflectorConfig } from './task-system/reflector/index.js';
-export { MemoryKnowledgeStore, KnowledgeContextEngine } from './task-system/knowledge/index.js';
-export type { KnowledgeStore, KnowledgeEntry, KnowledgeType, KnowledgeStats, RetrieveOptions, KnowledgeContextEngineConfig } from './task-system/knowledge/index.js';
-export { AgentSupervisor, startSupervisor, SupervisorEvents, EventCollector, DefaultTaskSupervisor, createTaskSupervisor } from './task-system/supervisor/index.js';
-export type { Planner, Reflector, AgentState, AgentStats, Plan, PlanStep, StepResult, ExecutionRecord, Assessment, Pattern, SupervisorConfig, TaskSupervisorConfig } from './task-system/supervisor/index.js';
+// ── Run Guard（过程监督）──
+export { AgentSupervisor, startSupervisor, SupervisorEvents, EventCollector, DefaultRunGuard, createRunGuard } from './run-guard/index.js';
+export type { RunGuardConfig, Planner, Reflector, AgentState, AgentStats, Plan, PlanStep, StepResult, ExecutionRecord, Assessment, Pattern, SupervisorConfig } from './run-guard/index.js';
+
+// ── Knowledge（Context Intelligence 第 4 层）──
+export { MemoryKnowledgeStore, KnowledgeContextEngine } from './context/knowledge/index.js';
+export type { KnowledgeStore, KnowledgeEntry, KnowledgeType, KnowledgeStats, RetrieveOptions, KnowledgeContextEngineConfig } from './context/knowledge/index.js';
+
+// ── Orchestration（experimental，默认不进主路径；见 octopi/harness/orchestration）──
 
 // ── Concurrency ──
 // (exported from concurrency/index.ts)

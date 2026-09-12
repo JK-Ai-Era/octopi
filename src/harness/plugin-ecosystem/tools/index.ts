@@ -7,7 +7,5 @@ export { createToolSet } from './tool-set.js';
 export type { ToolSet, ToolSetConfig } from './tool-set.js';
 export { createAskUserTool, type AskUserCallback } from './ask-user.js';
 export { createMemoryTools, createMemoryStoreTool, createMemorySearchTool } from './memory.js';
-/** @deprecated 使用 createSessionTaskTools from harness/session-tasks */
-export { createTaskTools } from './task-tools.js';
 export { createWebSearchTool, type WebSearchToolOptions } from './web-search.js';
 export { DefaultToolBus } from './tool-bus.js';

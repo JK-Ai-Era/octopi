@@ -1,18 +1,20 @@
 # Harness — Layer 2: 领域实现
 
-11 个自包含领域，每个领域有自己的类型、实现、入口文件。
+13 个自包含领域，每个领域有自己的类型、实现、入口文件。
 
 ## 领域列表
 
 | 领域 | 目录 | 职责 |
 |------|------|------|
 | Agent Building | `agent-building/` | Builder、人格加载、配置桥接 |
-| Context Management | `context/` | 消息选择、压缩、Token 估算、智能组装 |
+| Context Management | `context/` | 消息选择、压缩、Token 估算、智能组装、Knowledge |
 | Security | `security/` | 风险评估、Shell 解析、降级策略 |
 | Reliability | `reliability/` | 可靠性包装、断路器、重试 |
 | Plugin Ecosystem | `plugin-ecosystem/` | Plugin、Tool、Skill、MCP、命令 |
 | Distributed Agents | `distributed-agents/` | 多 Agent、分布式运行时 |
-| Task System | `task-system/` | 任务、规划、调度、工作流、监督 |
+| Session Tasks | `session-tasks/` | 会话任务 SessionTask（goal/step，默认路径） |
+| Run Guard | `run-guard/` | 过程监督（continue/recover/stop） |
+| Orchestration | `orchestration/` | experimental 编排（workflow/scheduler/planner） |
 | Concurrency | `concurrency/` | 多 Key 负载均衡、限流 |
 | Execution Environment | `execution-environment/` | 沙箱、工作区 |
 | Human-in-the-Loop | `human-in-the-loop/` | 审批流程 |

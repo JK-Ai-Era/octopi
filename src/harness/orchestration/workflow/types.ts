@@ -1,8 +1,8 @@
 /**
  * Workflow 引擎 — 类型定义
  *
- * 基于 TaskTracker 的任务编排系统。
- * Workflow 是 Task 的上层抽象，定义执行顺序和条件分支。
+ * 确定性多步骤编排（experimental）。
+ * Workflow 定义执行顺序和条件分支；与 SessionTask 状态机无关。
  */
 
 /** Workflow 步骤类型 */

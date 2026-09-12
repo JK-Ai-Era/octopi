@@ -20,12 +20,12 @@ import {
   ProcessEvents,
   AsyncTask,
   DefaultEventBus,
-} from '../../../core/index.js';
-import type { EventBus, EventBusAgentEvent as AgentEvent } from '../../../core/index.js';
-import type { Agent } from '../../../loop/agent.js';
-import type { ReliabilityHarness } from '../../reliability/index.js';
-import { runAgentWithReliability } from '../../reliability/index.js';
-import type { Message } from '../../../core/types.js';
+} from '../../core/index.js';
+import type { EventBus, EventBusAgentEvent as AgentEvent } from '../../core/index.js';
+import type { Agent } from '../../loop/agent.js';
+import type { ReliabilityHarness } from '../reliability/index.js';
+import { runAgentWithReliability } from '../reliability/index.js';
+import type { Message } from '../../core/types.js';
 import type {
   Planner,
   Reflector,
@@ -188,7 +188,7 @@ export class AgentSupervisor {
   /**
    * 单次认知循环：感知 → 思考 → 执行 → 反思
    */
-  private async _cognitiveCycle(ctx: import('../../../core/index.js').ProcessContext): Promise<void> {
+  private async _cognitiveCycle(ctx: import('../../core/index.js').ProcessContext): Promise<void> {
     // 1. 感知：收集事件
     const events = await this._collector.collect(this._idleTimeoutMs);
 

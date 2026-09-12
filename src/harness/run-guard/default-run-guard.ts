@@ -1,5 +1,5 @@
 /**
- * DefaultTaskSupervisor — 两层智能监督实现
+ * DefaultRunGuard — 两层智能过程监督实现
  *
  * Layer 1: 规则检测（零 LLM 成本）
  *   - 检测重复模式、错误循环、token 暴涨、工具失败率
@@ -14,19 +14,19 @@
  */
 
 import type {
-  TaskSupervisor,
+  RunGuard,
   CheckpointContext,
   CheckpointVerdict,
   CheckpointMetrics,
   TurnSummary,
   RecoveryAction,
-} from '../../../core/interfaces/task-supervisor.js';
-import type { ModelProvider } from '../../../core/interfaces/model-provider.js';
+} from '../../core/interfaces/run-guard.js';
+import type { ModelProvider } from '../../core/interfaces/model-provider.js';
 
 // ── 配置 ──
 
-/** TaskSupervisor 配置 */
-export interface TaskSupervisorConfig {
+/** RunGuard 配置 */
+export interface RunGuardConfig {
   /** 是否启用（默认 true） */
   enabled?: boolean;
   /** 基础检查间隔（迭代数，默认 15） */
@@ -74,16 +74,16 @@ interface RuleCheckResult {
 // ── 实现 ──
 
 /**
- * DefaultTaskSupervisor
+ * DefaultRunGuard
  *
  * 两层智能监督：规则检测 + LLM 审查
  */
-export class DefaultTaskSupervisor implements TaskSupervisor {
-  private config: TaskSupervisorConfig & { enabled: boolean; checkpointInterval: number; minCheckpointInterval: number; maxCheckpointInterval: number; enableLLMReview: boolean; llmReviewInterval: number; llmModel: string; hardLimit: number; hardWallClockMs: number };
+export class DefaultRunGuard implements RunGuard {
+  private config: RunGuardConfig & { enabled: boolean; checkpointInterval: number; minCheckpointInterval: number; maxCheckpointInterval: number; enableLLMReview: boolean; llmReviewInterval: number; llmModel: string; hardLimit: number; hardWallClockMs: number };
   private model?: ModelProvider;
   private checkpointCount = 0;
 
-  constructor(config?: TaskSupervisorConfig, model?: ModelProvider) {
+  constructor(config?: RunGuardConfig, model?: ModelProvider) {
     this.config = { ...DEFAULT_CONFIG, ...config };
     this.model = model;
   }
@@ -331,11 +331,11 @@ ${summaryText}${taskLine}
 // ── 工厂函数 ──
 
 /**
- * 创建 DefaultTaskSupervisor
+ * 创建 DefaultRunGuard
  */
-export function createTaskSupervisor(
-  config?: TaskSupervisorConfig,
+export function createRunGuard(
+  config?: RunGuardConfig,
   model?: ModelProvider,
-): DefaultTaskSupervisor {
-  return new DefaultTaskSupervisor(config, model);
+): DefaultRunGuard {
+  return new DefaultRunGuard(config, model);
 }

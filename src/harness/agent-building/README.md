@@ -20,7 +20,7 @@
 ## 依赖
 
 - Core: types/、interfaces/、loop/
-- Harness: reliability、context、security、concurrency、plugin-ecosystem、distributed-agents、task-system
+- Harness: reliability、context、security、concurrency、plugin-ecosystem、distributed-agents、session-tasks、run-guard
 
 ## 文件说明
 

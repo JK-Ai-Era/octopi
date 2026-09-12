@@ -1,3 +1,54 @@
+## v0.20.0 (2026-06-12)
+
+### refactor(domain-split): 拆分 task-system，落地 run-guard / orchestration / AsyncTask
+
+按 `docs/domain-split.md` 完成领域切分。内部研发阶段，**不保留向后兼容**。
+
+#### Core
+
+- `TaskSupervisor` → **`RunGuard`**（`core/interfaces/run-guard.ts`）
+- `TaskStore` / `TaskRecord` / `TaskStatus` / `TaskPriority` / `TaskFilter` → **`AsyncTaskStore` / `AsyncTaskRecord` / `AsyncTaskStatus` / `AsyncTaskPriority` / `AsyncTaskFilter`**
+- 删除 `task-decision.ts`（TaskDecisionProvider）
+- `ReliabilityHarness.taskSupervisor` → `runGuard`
+- 上收跨域契约：`core/interfaces/cognitive-loop.ts`（Plan/Planner/Reflector）、`core/interfaces/knowledge-store.ts`（KnowledgeStore）
+
+#### Harness 目录
+
+| 旧 | 新 |
+|----|----|
+| `task-system/supervisor/*` | `run-guard/` |
+| `task-system/workflow\|scheduler\|planner\|strategy\|quality\|reflector` | `orchestration/`（experimental，子路径 `octopi/harness/orchestration`） |
+| `task-system/knowledge/*` | `context/knowledge/` |
+| `task-system/tasks/*` | 已由 `session-tasks/` 取代后删除 |
+| `task-system/` | **删除** |
+
+#### 命名
+
+- `DefaultTaskSupervisor` → `DefaultRunGuard`；`createTaskSupervisor` → `createRunGuard`
+- `TaskSupervisorConfig` → `RunGuardConfig`
+- Builder `.taskSupervisor()` → `.runGuard()`
+- `resolveSupervisor` → `resolveRunGuard`
+- 配置字段 `supervisor` → `runGuard`（JSON schema / Zod 同步）
+- 删除 `createTaskTools` 兼容壳
+
+#### 导出面
+
+- 主路径导出：`SessionTask*`、`RunGuard*`、`AsyncTask` / `spawnTask`
+- orchestration 不再占用 `harness/index.ts` 默认导出面
+
+#### 文档
+
+- README / README_CN / ARCHITECTURE / domain-split / CONTRIBUTING / 各领域 README 同步
+- 领域数量口径统一为 **13**（session-tasks / run-guard / orchestration 进，task-system 出）
+
+#### 审查修复（同版本）
+
+- 补齐 untracked 关键文件（cognitive-loop、orchestration 入口、run-guard 测试等）
+- 配置类型改名：`config.RunGuardConfig` → **`RunGuardJsonConfig`**，避免与实现配置撞名
+- `loadConfig` 检测旧字段 `supervisor` 时打印 warning（不再静默失去监督）
+- Builder `.runGuard()` 用 `typeof checkpoint === 'function'` 判别实例 vs 配置
+- 清除文档中 TaskDecisionProvider / TaskTracker / task-system 残留指向
+
 ## v0.19.0 (2026-06-12)
 
 ### feat(session-tasks): 会话任务 SessionTask（goal/step 两级）

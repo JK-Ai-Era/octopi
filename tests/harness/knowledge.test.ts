@@ -6,10 +6,10 @@ import { describe, it, expect } from 'vitest';
 import {
   MemoryKnowledgeStore,
   KnowledgeContextEngine,
-  LLMReflector,
 } from '../../src/harness/index.js';
+import { LLMReflector } from '../../src/harness/orchestration/reflector/index.js';
 import type { KnowledgeEntry } from '../../src/harness/index.js';
-import type { ExecutionRecord, Pattern } from '../../src/harness/task-system/supervisor/types.js';
+import type { ExecutionRecord, Pattern } from '../../src/harness/run-guard/types.js';
 import type { ModelProvider } from '../../src/core/interfaces/model-provider.js';
 import type { ContextEngine, AssembleParams, AssembleResult, CompactParams, CompactResult, AfterTurnParams, IngestParams } from '../../src/core/interfaces/context-engine.js';
 

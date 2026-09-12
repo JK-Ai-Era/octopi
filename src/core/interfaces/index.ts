@@ -61,12 +61,12 @@ export type {
 } from './event-source.js';
 
 export type {
-  TaskStore,
-  TaskRecord,
-  TaskStatus,
-  TaskPriority,
-  TaskFilter,
-} from './task-store.js';
+  AsyncTaskStore,
+  AsyncTaskRecord,
+  AsyncTaskStatus,
+  AsyncTaskPriority,
+  AsyncTaskFilter,
+} from './async-task-store.js';
 
 export type {
   MessageChannel,
@@ -84,14 +84,14 @@ export type {
 export { AgentRegistryEvents } from './agent-registry.js';
 
 export type {
-  TaskSupervisor,
+  RunGuard,
   CheckpointContext,
   CheckpointVerdict,
   CheckpointAction,
   CheckpointMetrics,
   TurnSummary,
   RecoveryAction,
-} from './task-supervisor.js';
+} from './run-guard.js';
 
 export type {
   McpServerConfig,
@@ -118,7 +118,26 @@ export type {
 
 export type { ReliabilityHarness } from './reliability.js';
 
-export type { TaskDecisionProvider, TaskDecisionResult } from './task-decision.js';
+export type {
+  Planner,
+  Reflector,
+  AgentState,
+  AgentStats,
+  Plan,
+  PlanStep,
+  StepResult,
+  ExecutionRecord,
+  Assessment,
+  Pattern,
+} from './cognitive-loop.js';
+
+export type {
+  KnowledgeStore,
+  KnowledgeEntry,
+  KnowledgeType,
+  KnowledgeStats,
+  RetrieveOptions,
+} from './knowledge-store.js';
 
 export type {
   IsolationLevel,

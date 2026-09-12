@@ -1,8 +1,9 @@
 /**
  * WorkflowEngine — Workflow 执行引擎
  *
- * 基于 TaskTracker 的任务编排系统。
+ * 确定性多步骤编排（experimental）。
  * 支持顺序执行、条件分支、循环、并行、错误处理。
+ * 与 SessionTask 状态机无关；长流水线如需用户可见任务，经 SessionTaskService 单向登记。
  */
 
 import { randomUUID } from 'node:crypto';

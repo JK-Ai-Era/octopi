@@ -6,13 +6,13 @@
  * - 空响应重试
  * - 工具循环检测
  * - No-op 检测
- * - TaskSupervisor 检查点
+ * - RunGuard 检查点
  * - SecurityGuard 安全检查（通过 beforeToolCall 注入）
  * - ErrorStrategy 重试策略（通过 onError 注入）
  *
  * 设计原则：
  * - 使用 onTurnComplete 做副作用（注入 steer 指令），不直接控制停止
- * - 使用 shouldStopAfterTurn 做停止决策（critical 循环、TaskSupervisor）
+ * - 使用 shouldStopAfterTurn 做停止决策（critical 循环、RunGuard）
  * - 两层分离，不互相覆盖
  */
 
@@ -39,7 +39,7 @@ import {
 import type { SecurityGuard } from '../../core/security-guard.js';
 import { severityToAction } from '../../core/security-guard.js';
 import type { ErrorStrategy, ClassifiedError as CoreClassifiedError } from '../../core/interfaces/error-strategy.js';
-import type { TaskSupervisor, CheckpointContext, CheckpointVerdict, TurnSummary } from '../../core/interfaces/task-supervisor.js';
+import type { RunGuard, CheckpointContext, CheckpointVerdict, TurnSummary } from '../../core/interfaces/run-guard.js';
 import type { ReliabilityHarness as CoreReliabilityHarness } from '../../core/interfaces/reliability.js';
 
 // ── 可靠性配置 ──
@@ -391,18 +391,18 @@ export async function* runAgentWithReliability(
         trackToolResults(ctx.toolResults, state);
       }
 
-      // 5. TaskSupervisor 检查点
-      if (harness.taskSupervisor) {
+      // 5. RunGuard 检查点
+      if (harness.runGuard) {
         state.checkpointIterationCount++;
         if (state.checkpointIterationCount >= state.currentCheckpointInterval) {
           state.checkpointIterationCount = 0;
           try {
-            const verdict = await harness.taskSupervisor.checkpoint(
+            const verdict = await harness.runGuard.checkpoint(
               buildCheckpointContext(state, harness),
             );
             if (verdict.action === 'stop') {
-              (state as any)._taskSupervisorStop = true;
-              (state as any)._taskSupervisorReason = verdict.reason;
+              (state as any)._runGuardStop = true;
+              (state as any)._runGuardReason = verdict.reason;
             } else if (verdict.action === 'recover' && verdict.recoveryActions) {
               executeRecoveryActions(verdict.recoveryActions, ctx.context.messages);
             }
@@ -427,8 +427,8 @@ export async function* runAgentWithReliability(
       if ((state as any)._loopCriticalTwice) {
         return true;
       }
-      // 2. TaskSupervisor 要求停止
-      if ((state as any)._taskSupervisorStop) {
+      // 2. RunGuard 要求停止
+      if ((state as any)._runGuardStop) {
         return true;
       }
       // 3. No-op 循环超限 → 停止

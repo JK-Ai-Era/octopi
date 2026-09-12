@@ -27,9 +27,9 @@ import { AgentBuilder } from './builder.js';
 import type { SessionAwareRunner } from '../runner.js';
 import { SecurityPresets } from '../security/policy.js';
 import type { SecurityGuardConfig } from '../../core/security-guard.js';
-import type { SupervisorConfig } from '../../config.js';
-import { DefaultTaskSupervisor } from '../task-system/supervisor/task-supervisor.js';
-import type { TaskSupervisorConfig } from '../task-system/supervisor/task-supervisor.js';
+import type { RunGuardJsonConfig } from '../../config.js';
+import { DefaultRunGuard } from '../run-guard/default-run-guard.js';
+import type { RunGuardConfig } from '../run-guard/default-run-guard.js';
 import type { ContextEngine } from '../../core/interfaces/context-engine.js';
 import { DefaultContextEngine } from '../context/default-context-engine.js';
 import { DefaultBudgetAllocator } from '../context/budget-allocator.js';
@@ -113,19 +113,19 @@ export function resolveContextEngine(config: ContextEngineConfig | undefined): C
   throw new Error(`Unknown context engine type: ${config.type}`);
 }
 
-// ── Supervisor 解析 ──
+// ── RunGuard 解析 ──
 
 /**
- * 从配置中解析 TaskSupervisor
+ * 从配置中解析 RunGuard
  *
  * 解析 llmModel 字段：
  * - "model" → 使用主 provider
  * - "provider/model" → 使用指定 provider
  */
-export function resolveSupervisor(
-  config: SupervisorConfig | undefined,
+export function resolveRunGuard(
+  config: RunGuardJsonConfig | undefined,
   providers: Map<string, ModelProvider>,
-): DefaultTaskSupervisor | undefined {
+): DefaultRunGuard | undefined {
   if (!config || config.enabled === false) return undefined;
 
   // 解析审查用模型
@@ -144,8 +144,8 @@ export function resolveSupervisor(
     }
   }
 
-  // 构建 TaskSupervisorConfig
-  const supervisorConfig: TaskSupervisorConfig = {
+  // 构建 RunGuardConfig
+  const runGuardConfig: RunGuardConfig = {
     enabled: true,
     checkpointInterval: config.checkpointInterval,
     minCheckpointInterval: config.minCheckpointInterval,
@@ -157,7 +157,7 @@ export function resolveSupervisor(
     hardWallClockMs: config.hardWallClockMs,
   };
 
-  return new DefaultTaskSupervisor(supervisorConfig, reviewModel);
+  return new DefaultRunGuard(runGuardConfig, reviewModel);
 }
 
 // ── 子系统加载 ──
@@ -221,7 +221,7 @@ export async function buildFromConfig(config: NormalizedHarnessConfig): Promise<
   const securityConfig = resolveSecurityConfig(config);
   const distributedConfig = config.distributedIntelligence;
   const budgetConfig = config.budget;
-  const supervisorConfig = config.supervisor;
+  const runGuardConfig = config.runGuard;
   const contextEngineConfig = config.contextEngine;
 
   // 2. 加载子系统（三级搜索路径）
@@ -237,7 +237,7 @@ export async function buildFromConfig(config: NormalizedHarnessConfig): Promise<
         securityConfig,
         distributedConfig,
         budgetConfig,
-        supervisorConfig,
+        runGuardConfig,
         contextEngineConfig,
         flatModels,
         levelMap: config.levelMap,
@@ -264,7 +264,7 @@ async function buildAgent(
     securityConfig?: SecurityGuardConfig;
     distributedConfig?: HarnessConfig['distributedIntelligence'];
     budgetConfig?: Partial<IterationBudgetConfig>;
-    supervisorConfig?: SupervisorConfig;
+    runGuardConfig?: RunGuardJsonConfig;
     contextEngineConfig?: ContextEngineConfig;
     flatModels: NormalizedModelInfo[];
     levelMap?: import('../../config.js').LevelMap;
@@ -332,11 +332,11 @@ async function buildAgent(
   const contextEngine = resolveContextEngine(shared.contextEngineConfig);
   builder.contextEngine(contextEngine);
 
-  // ── Supervisor ──
-  if (shared.supervisorConfig?.enabled !== false) {
-    const supervisor = resolveSupervisor(shared.supervisorConfig, shared.providers);
-    if (supervisor) {
-      builder.taskSupervisor(supervisor);
+  // ── RunGuard ──
+  if (shared.runGuardConfig?.enabled !== false) {
+    const guard = resolveRunGuard(shared.runGuardConfig, shared.providers);
+    if (guard) {
+      builder.runGuard(guard);
     }
   }
 

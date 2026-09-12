@@ -68,9 +68,9 @@ export const ChannelConfigSchema = z.object({
   corsOrigins: z.array(z.string()).optional(),
 });
 
-// ── Supervisor 配置 Schema ──
+// ── RunGuard 配置 Schema ──
 
-export const SupervisorConfigSchema = z.object({
+export const RunGuardJsonConfigSchema = z.object({
   enabled: z.boolean().optional(),
   checkpointInterval: z.number().positive().optional(),
   minCheckpointInterval: z.number().positive().optional(),
@@ -287,7 +287,7 @@ export const HarnessConfigSchema = z.object({
     maxTokens: z.number().positive().optional(),
     maxTimeMs: z.number().positive().optional(),
   }).partial().optional(),
-  supervisor: SupervisorConfigSchema.optional(),
+  runGuard: RunGuardJsonConfigSchema.optional(),
   contextEngine: ContextEngineConfigSchema.optional(),
   security: SecurityConfigSchema.optional(),
   distributedIntelligence: DistributedIntelligenceConfigSchema,

@@ -254,14 +254,14 @@
         }
       }
     },
-    "supervisor": {
+    "runGuard": {
       "type": "object",
-      "description": "任务监督器配置（智能监督，替代硬预算限制）",
+      "description": "过程监督配置（智能监督，替代硬预算限制）",
       "properties": {
         "enabled": {
           "type": "boolean",
           "default": true,
-          "description": "是否启用智能监督"
+          "description": "是否启用过程监督"
         },
         "checkpointInterval": {
           "type": "integer",
@@ -312,7 +312,7 @@
     },
     "budget": {
       "type": "object",
-      "description": "迭代预算（安全兜底，由 supervisor 接管主要控制）",
+      "description": "迭代预算（安全兜底，由 runGuard 接管主要控制）",
       "properties": {
         "maxIterations": {
           "type": "integer",

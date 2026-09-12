@@ -1,6 +1,6 @@
 {
   "name": "octopi",
-  "version": "0.19.0",
+  "version": "0.20.0",
   "description": "可嵌入的 Agent 引擎",
   "type": "module",
   "main": "dist/index.js",
@@ -44,6 +44,10 @@
     "./harness": {
       "types": "./dist/harness/index.d.ts",
       "import": "./dist/harness/index.js"
+    },
+    "./harness/orchestration": {
+      "types": "./dist/harness/orchestration/index.d.ts",
+      "import": "./dist/harness/orchestration/index.js"
     },
     "./integration": {
       "types": "./dist/integration/index.d.ts",

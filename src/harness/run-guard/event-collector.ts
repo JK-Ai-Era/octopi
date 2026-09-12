@@ -12,8 +12,8 @@
  * - 优先级：安全事件优先于普通事件
  */
 
-import type { EventBus, EventBusAgentEvent as AgentEvent, Disposable } from '../../../core/index.js';
-import type { EventSource, ExternalEvent } from '../../../core/interfaces/event-source.js';
+import type { EventBus, EventBusAgentEvent as AgentEvent, Disposable } from '../../core/index.js';
+import type { EventSource, ExternalEvent } from '../../core/interfaces/event-source.js';
 
 // ── 等待者条目 ──
 

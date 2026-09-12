@@ -1,10 +1,11 @@
 /**
- * AgentSupervisor 类型定义
+ * Cognitive loop contracts — Plan / Planner / Reflector
  *
- * 定义 Supervisor 运行时所需的所有类型。
+ * AgentSupervisor（run-guard）与 planner/reflector 实现（orchestration）共享的契约。
+ * 放在 Core，避免 run-guard ↔ orchestration 互相 import。
  */
 
-import type { EventBusAgentEvent as AgentEvent } from '../../../core/index.js';
+import type { AgentEvent } from '../primitives/event-bus.js';
 
 // ── Agent 状态 ──
 
@@ -173,24 +174,4 @@ export interface Pattern {
   confidence: number;
   /** 相关的执行记录 IDs */
   relatedExecutionIds: string[];
-}
-
-// ── Supervisor 配置 ──
-
-/** AgentSupervisor 配置 */
-export interface SupervisorConfig {
-  /** Agent 名称 */
-  name?: string;
-  /** Agent ID */
-  agentId: string;
-  /** 规划器 */
-  planner: Planner;
-  /** 反思器（可选） */
-  reflector?: Reflector;
-  /** 无事件时的休眠时间（毫秒） */
-  idleTimeoutMs?: number;
-  /** 最大并发任务数 */
-  maxConcurrentTasks?: number;
-  /** 最大执行记录数 */
-  maxExecutionHistory?: number;
 }

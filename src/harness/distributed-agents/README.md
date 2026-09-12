@@ -17,7 +17,7 @@
 ## 不做什么
 
 - 不做工具执行（那是 plugin-ecosystem 的事）
-- 不做任务管理（那是 task-system 的事）
+- 不做任务管理（那是 session-tasks / orchestration 的事）
 
 ## 依赖
 

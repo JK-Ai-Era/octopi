@@ -16,7 +16,7 @@ import {
   EventCollector,
   SupervisorEvents,
   startSupervisor,
-} from '../../src/harness/task-system/supervisor/index.js';
+} from '../../src/harness/run-guard/index.js';
 import type {
   Planner,
   Plan,
@@ -25,7 +25,7 @@ import type {
   Reflector,
   ExecutionRecord,
   Pattern,
-} from '../../src/harness/task-system/supervisor/index.js';
+} from '../../src/harness/run-guard/index.js';
 
 // ── 辅助 ──
 

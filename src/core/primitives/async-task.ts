@@ -13,12 +13,12 @@
  * - 纯机制：不关心任务内容，只管理生命周期
  * - 可组合：支持父子任务关系
  * - 可观测：所有状态变更通过 EventBus 发射事件
- * - 可持久化：通过 TaskStore 接口持久化（可选）
+ * - 可持久化：通过 AsyncTaskStore 接口持久化（可选）
  */
 
 import { randomUUID } from 'node:crypto';
 import type { EventBus, AgentEvent } from './event-bus.js';
-import type { TaskStore, TaskRecord, TaskStatus, TaskPriority } from '../interfaces/task-store.js';
+import type { AsyncTaskStore, AsyncTaskRecord, AsyncTaskStatus, AsyncTaskPriority } from '../interfaces/async-task-store.js';
 
 // ── 任务状态机 ──
 
@@ -42,7 +42,7 @@ export interface TaskOptions {
   /** 任务输入 */
   input?: unknown;
   /** 优先级 */
-  priority?: TaskPriority;
+  priority?: AsyncTaskPriority;
   /** 超时时间（毫秒） */
   timeoutMs?: number;
   /** 最大重试次数 */
@@ -73,13 +73,13 @@ export type TaskExecutor<T = unknown> = (
 export class AsyncTask<T = unknown> {
   readonly id: string;
   readonly type: string;
-  readonly priority: TaskPriority;
+  readonly priority: AsyncTaskPriority;
   readonly parentId?: string;
   readonly agentId?: string;
   readonly sessionId?: string;
   readonly createdAt: number;
 
-  private _status: TaskStatus = 'pending';
+  private _status: AsyncTaskStatus = 'pending';
   private _output?: T;
   private _error?: string;
   private _startedAt?: number;
@@ -98,11 +98,11 @@ export class AsyncTask<T = unknown> {
 
   // 外部依赖
   private readonly _events?: EventBus;
-  private readonly _store?: TaskStore;
+  private readonly _store?: AsyncTaskStore;
 
   private _settled = false;
 
-  constructor(options: TaskOptions, events?: EventBus, store?: TaskStore) {
+  constructor(options: TaskOptions, events?: EventBus, store?: AsyncTaskStore) {
     this.id = randomUUID();
     this.type = options.type;
     this.priority = options.priority ?? 'normal';
@@ -133,7 +133,7 @@ export class AsyncTask<T = unknown> {
   // ── 状态访问器 ──
 
   /** 当前状态 */
-  get status(): TaskStatus { return this._status; }
+  get status(): AsyncTaskStatus { return this._status; }
 
   /** 任务输出（完成后有值） */
   get output(): T | undefined { return this._output; }
@@ -304,7 +304,7 @@ export class AsyncTask<T = unknown> {
   }
 
   private async _persistAndEmit(eventType: string): Promise<void> {
-    const record: TaskRecord = {
+    const record: AsyncTaskRecord = {
       id: this.id,
       agentId: this.agentId ?? 'unknown',
       sessionId: this.sessionId,
@@ -352,8 +352,8 @@ export class AsyncTask<T = unknown> {
 
   // ── 序列化 ──
 
-  /** 转换为 TaskRecord（用于快照/调试） */
-  toRecord(): TaskRecord {
+  /** 转换为 AsyncTaskRecord（用于快照/调试） */
+  toRecord(): AsyncTaskRecord {
     return {
       id: this.id,
       agentId: this.agentId ?? 'unknown',
@@ -412,7 +412,7 @@ export function spawnTask<T = unknown>(
   options: TaskOptions,
   executor: TaskExecutor<T>,
   events?: EventBus,
-  store?: TaskStore,
+  store?: AsyncTaskStore,
 ): AsyncTask<T> {
   const task = new AsyncTask<T>(options, events, store);
   // fire-and-forget：错误在 task 内部处理（状态更新 + 事件发射）

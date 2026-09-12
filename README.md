@@ -15,7 +15,7 @@ Octopi is an embeddable agent engine for building AI-powered applications. It pr
 
 - **Embeddable** — Not a standalone app, but a component for your product
 - **4-layer architecture** — Loop → Core → Harness → Integration, clean boundaries, independent layers
-- **11 self-contained domains** — Each domain is independently understandable, testable, and replaceable
+- **13 self-contained domains** — Each domain is independently understandable, testable, and replaceable
 - **7-layer context intelligence** — Wisdom, Persona, Skill, Knowledge, Cognition, Memory, Information
 - **Security built-in** — Injection detection, risk evaluation, approval workflows — not optional, not removable
 - **Natively multi-agent** — Distributed intelligence from the ground up
@@ -30,10 +30,10 @@ Octopi is an embeddable agent engine for building AI-powered applications. It pr
 │  LLM Providers · Storage · Observability · Gateway · TUI · Web Runtime │
 │                                                              │
 │  ┌──────────────────────────────────────────────────────────┐│
-│  │  Layer 2: Harness — 11 self-contained domains             ││
+│  │  Layer 2: Harness — 13 self-contained domains             ││
 │  │  agent-building · context · security · reliability         ││
-│  │  plugin-ecosystem · distributed-agents · task-system       ││
-│  │  concurrency · execution-env · human-in-the-loop · memory  ││
+│  │  plugin-ecosystem · distributed-agents · session-tasks     ││
+│  │  run-guard · concurrency · execution-env · hitl · memory   ││
 │  │                                                          ││
 │  │  ┌──────────────────────────────────────────────────────┐││
 │  │  │  Layer 1: Core — Primitives + Interfaces + Types      │││
@@ -58,7 +58,7 @@ The heart of the engine. `agentLoop()` is a pure async generator: input messages
 
 Infrastructure primitives (EventBus, StateMachine, AsyncTask, ProcessModel) and all interface contracts (ModelProvider, ContextEngine, SecurityGuard, SessionStore, etc.). No strategy implementations.
 
-### Layer 2: Harness — 11 Domains
+### Layer 2: Harness — 13 Domains
 
 | Domain | Responsibility |
 |--------|---------------|
@@ -69,7 +69,8 @@ Infrastructure primitives (EventBus, StateMachine, AsyncTask, ProcessModel) and 
 | **Plugin Ecosystem** | Plugins, tools, skills, MCP, slash commands |
 | **Distributed Agents** | Multi-agent orchestration, distributed runtime, triggers |
 | **Session Tasks** | Session-level tasks (goal/step), injection, read-only UI; see [task-system](./docs/task-system.md) |
-| **Task System (legacy)** | Planner/scheduler/workflow (experimental); see [domain-split](./docs/domain-split.md) |
+| **Run Guard** | Checkpoint supervision for a single run (`continue`/`recover`/`stop`) |
+| **Orchestration** | Experimental workflow/scheduler (subpath `octopi/harness/orchestration`) |
 | **Concurrency** | Multi-key LLM load balancing, rate limiting, session gating |
 | **Execution Environment** | Sandboxing, workspace management, file operations |
 | **Human-in-the-Loop** | Approval workflows, decision caching, risk-based policies |
@@ -188,7 +189,7 @@ src/
 │   ├── primitives/               EventBus, StateMachine, AsyncTask, ProcessModel
 │   ├── interfaces/               18 interface contracts
 │   └── types/                    Core type definitions
-├── harness/                 Layer 2  11 self-contained domains
+├── harness/                 Layer 2  13 self-contained domains
 │   ├── agent-building/           Builder, persona, config bridge
 │   ├── context/                  Context engine, compression, intelligence
 │   ├── security/                 Risk evaluation, shell parsing
@@ -196,7 +197,8 @@ src/
 │   ├── plugin-ecosystem/         Plugins, tools, skills, MCP
 │   ├── distributed-agents/       Multi-agent, distributed runtime
 │   ├── session-tasks/            SessionTask (goal/step) — default path
-│   ├── task-system/              Legacy: supervisor/planner/scheduler/workflow
+│   ├── run-guard/                Checkpoint supervision (DefaultRunGuard)
+│   ├── orchestration/            Experimental workflow/scheduler/planner
 │   ├── concurrency/              Load balancing, rate limiting
 │   ├── execution-environment/    Sandboxing, workspace
 │   ├── human-in-the-loop/        Approval workflows

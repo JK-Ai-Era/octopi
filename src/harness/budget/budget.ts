@@ -6,7 +6,7 @@
  *
  * 架构说明：
  * - 内置默认实现，保留在 core 层（依赖 EventBus 发射 BUDGET_EXCEEDED 事件）
- * - Harness 层可替换为 TaskSupervisor 等更智能的监督机制
+ * - Harness 层可替换为 RunGuard 等更智能的监督机制
  * - 不移出 core 的原因：budget → event-bus 依赖链，移出会导致循环依赖
  */
 
@@ -52,7 +52,7 @@ export const DEFAULT_BUDGET: IterationBudgetConfig = {
   maxIterations: 1000,
   maxToolCalls: 5000,
   maxTokens: 1_000_000,
-  maxWallClockMs: 36_000_000, // 10 小时（安全兜底，实际由 TaskSupervisor 控制）
+  maxWallClockMs: 36_000_000, // 10 小时（安全兜底，实际由 RunGuard 控制）
 };
 
 // ── 实现 ──

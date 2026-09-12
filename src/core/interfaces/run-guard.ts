@@ -1,8 +1,7 @@
 /**
- * TaskSupervisor — 智能监督接口
+ * RunGuard — 过程监督接口
  *
- * 替代 IterationBudget 的硬限制，通过检查点机制实现智能监督。
- * 引擎每 N 轮迭代调用一次 checkpoint()，监督节点根据上下文判断：
+ * 替代 IterationBudget 的硬限制，通过检查点机制判断单次 run 是否跑飞：
  * - continue: 正常，继续执行
  * - recover:  异常但可恢复，执行恢复动作后继续
  * - stop:     无法恢复，终止并通知用户
@@ -11,6 +10,7 @@
  * - 单方法接口，Core 层极简风格
  * - 异步，支持 LLM 审查
  * - 返回值是 discriminated union，引擎据以执行动作
+ * - 不读写 Session.tasks，不编排 Workflow
  */
 
 // ── 检查点上下文 ──
@@ -99,15 +99,15 @@ export interface CheckpointVerdict {
   nextCheckpointIn?: number;
 }
 
-// ── TaskSupervisor 接口 ──
+// ── RunGuard 接口 ──
 
 /**
- * TaskSupervisor 接口
+ * RunGuard 接口
  *
  * Core 层在 Agent 的检查点调用此接口。
  * Harness 层实现具体策略（规则检测 + LLM 审查）。
  */
-export interface TaskSupervisor {
+export interface RunGuard {
   /**
    * 检查点审查
    *

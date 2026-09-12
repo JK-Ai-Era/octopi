@@ -42,10 +42,10 @@ import type {
 } from '../../core/interfaces/error-strategy.js';
 import type { SecurityViolation, SecurityAction } from '../../core/security-guard.js';
 import type {
-  TaskSupervisor,
-} from '../../core/interfaces/task-supervisor.js';
-import type { TaskSupervisorConfig } from '../task-system/supervisor/task-supervisor.js';
-import { DefaultTaskSupervisor } from '../task-system/supervisor/task-supervisor.js';
+  RunGuard,
+} from '../../core/interfaces/run-guard.js';
+import type { RunGuardConfig } from '../run-guard/default-run-guard.js';
+import { DefaultRunGuard } from '../run-guard/default-run-guard.js';
 import type {
   Observer,
 } from '../../core/interfaces/observer.js';
@@ -220,8 +220,8 @@ export class AgentBuilder {
   private _budget?: IterationBudget;
   private _errorStrategy?: ErrorStrategy;
   private _observer?: Observer;
-  private _taskSupervisor?: TaskSupervisor;
-  private _taskSupervisorConfig?: TaskSupervisorConfig;
+  private _runGuard?: RunGuard;
+  private _runGuardConfig?: RunGuardConfig;
   private _checkpointInterval?: number;
   private _reliabilityConfig?: ReliabilityConfig;
 
@@ -478,20 +478,20 @@ export class AgentBuilder {
     return this;
   }
 
-  /** 设置任务监督器（自动创建，使用主模型做 LLM 审查） */
-  taskSupervisor(config?: TaskSupervisorConfig): this;
-  /** 设置任务监督器（手动传入实例） */
-  taskSupervisor(supervisor: TaskSupervisor, checkpointInterval?: number): this;
-  taskSupervisor(supervisorOrConfig?: TaskSupervisor | TaskSupervisorConfig, checkpointInterval?: number): this {
-    if (!supervisorOrConfig) {
+  /** 设置过程监督（自动创建，使用主模型做 LLM 审查） */
+  runGuard(config?: RunGuardConfig): this;
+  /** 设置过程监督（手动传入实例） */
+  runGuard(guard: RunGuard, checkpointInterval?: number): this;
+  runGuard(guardOrConfig?: RunGuard | RunGuardConfig, checkpointInterval?: number): this {
+    if (!guardOrConfig) {
       // 无参调用：使用默认配置自动创建，延迟到 buildAgent 时注入 model
-      this._taskSupervisorConfig = {};
-    } else if ('checkpointInterval' in supervisorOrConfig || 'enableLLMReview' in supervisorOrConfig || 'hardLimit' in supervisorOrConfig) {
-      // TaskSupervisorConfig 对象：延迟到 buildAgent 时注入 model
-      this._taskSupervisorConfig = supervisorOrConfig as TaskSupervisorConfig;
+      this._runGuardConfig = {};
+    } else if (typeof (guardOrConfig as RunGuard).checkpoint === 'function') {
+      // RunGuard 实例（含自定义实现）
+      this._runGuard = guardOrConfig as RunGuard;
     } else {
-      // TaskSupervisor 实例：直接使用
-      this._taskSupervisor = supervisorOrConfig as TaskSupervisor;
+      // RunGuardConfig 对象：延迟到 buildAgent 时注入 model
+      this._runGuardConfig = guardOrConfig as RunGuardConfig;
     }
     if (checkpointInterval !== undefined) this._checkpointInterval = checkpointInterval;
     return this;
@@ -682,17 +682,17 @@ export class AgentBuilder {
     }
     const errorStrategy = this._errorStrategy ?? new DefaultErrorStrategy();
 
-    // 自动创建 TaskSupervisor（如果通过 config 配置但未手动传入实例）
-    const taskSupervisor = this._taskSupervisor
-      ?? (this._taskSupervisorConfig !== undefined
-        ? new DefaultTaskSupervisor(this._taskSupervisorConfig, this._model)
+    // 自动创建 RunGuard（如果通过 config 配置但未手动传入实例）
+    const runGuard = this._runGuard
+      ?? (this._runGuardConfig !== undefined
+        ? new DefaultRunGuard(this._runGuardConfig, this._model)
         : undefined);
 
     const harness: ReliabilityHarness = {
       config: this._reliabilityConfig ?? DEFAULT_RELIABILITY_CONFIG,
       security,
       errorStrategy,
-      taskSupervisor,
+      runGuard,
     };
 
     return { agent, harness, mcpManager };

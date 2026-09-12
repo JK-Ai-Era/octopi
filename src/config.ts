@@ -43,7 +43,6 @@ import type { SessionStore } from './core/interfaces/session-store.js';
 import type { SessionData } from './harness/session-types.js';
 import type { IterationBudgetConfig } from './harness/budget/budget.js';
 import type { SecurityGuardConfig } from './core/security-guard.js';
-import type { TaskSupervisorConfig } from './harness/task-system/supervisor/task-supervisor.js';
 import { validateConfigOrThrow } from './config-schema.js';
 import { getOctopiHome } from './init.js';
 import { readFileSync, existsSync } from 'node:fs';
@@ -177,15 +176,18 @@ export interface ChannelConfig {
 
 
 
-// ── Supervisor 配置 ──
+// ── RunGuard 配置（octopi.json 形状）──
 
 /**
- * TaskSupervisor 配置
+ * RunGuardJsonConfig — octopi.json 中的 runGuard 字段形状
  *
- * 智能监督系统，替代 IterationBudget 的硬限制。
+ * 过程监督，替代 IterationBudget 的硬限制。
  * 通过检查点机制实现：每 N 轮迭代审查一次，决定继续/恢复/终止。
+ *
+ * 注意：与 harness/run-guard 的 `RunGuardConfig`（实现配置）同结构但不同名，
+ * 避免调用方 import 错模块。
  */
-export interface SupervisorConfig {
+export interface RunGuardJsonConfig {
   /** 是否启用（默认 true） */
   enabled?: boolean;
   /** 基础检查间隔（迭代数，默认 15） */
@@ -368,10 +370,10 @@ export interface HarnessConfig {
   defaults?: Defaults;
   /** Plugin 配置 */
   plugins?: PluginConfig;
-  /** 迭代预算（安全兜底，由 TaskSupervisor 接管主要控制） */
+  /** 迭代预算（安全兜底，由 RunGuard 接管主要控制） */
   budget?: Partial<IterationBudgetConfig>;
-  /** 任务监督器配置（智能监督，替代硬限制） */
-  supervisor?: SupervisorConfig;
+  /** 过程监督配置（智能监督，替代硬限制） */
+  runGuard?: RunGuardJsonConfig;
   /** 上下文引擎配置 */
   contextEngine?: ContextEngineConfig;
   /** 安全策略 */
@@ -652,6 +654,14 @@ export function loadConfig(configPath?: string): NormalizedHarnessConfig {
   });
 
   const raw = JSON.parse(expanded);
+
+  // 旧字段静默失效会很难排查：显式告警（内部阶段不做兼容迁移）
+  if (raw && typeof raw === 'object' && 'supervisor' in raw) {
+    console.warn(
+      '[config] "supervisor" is no longer supported and will be ignored. ' +
+      'Rename it to "runGuard" (same fields) to keep process supervision enabled.',
+    );
+  }
 
   // Zod schema 校验（结构化错误信息）
   const config = validateConfigOrThrow(raw) as unknown as NormalizedHarnessConfig;

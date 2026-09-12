@@ -1,27 +1,28 @@
 /**
- * TaskStore — 任务持久化协议
+ * AsyncTaskStore — 运行时异步任务持久化协议
  *
- * 职责：异步任务的状态持久化和检索。
+ * 职责：AsyncTask 的状态持久化和检索（无用户语义）。
  * 实现方：内存（开发）、文件、Redis、数据库等。
  *
  * 设计要点：
  * - Core 层的 AsyncTask 使用此接口持久化状态
  * - 支持任务查询和过滤（用于 dashboard/监控）
  * - 任务状态机：pending → running → completed | failed | cancelled
+ * - 禁止依赖 Session.tasks
  */
 
 // ── 任务状态 ──
 
-/** 任务状态 */
-export type TaskStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+/** AsyncTask 状态 */
+export type AsyncTaskStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
 
-/** 任务优先级 */
-export type TaskPriority = 'low' | 'normal' | 'high' | 'critical';
+/** AsyncTask 优先级 */
+export type AsyncTaskPriority = 'low' | 'normal' | 'high' | 'critical';
 
 // ── 任务数据 ──
 
-/** 任务记录 */
-export interface TaskRecord {
+/** AsyncTask 记录 */
+export interface AsyncTaskRecord {
   /** 任务唯一 ID */
   id: string;
   /** 所属 Agent ID */
@@ -31,9 +32,9 @@ export interface TaskRecord {
   /** 任务类型 */
   type: string;
   /** 任务状态 */
-  status: TaskStatus;
+  status: AsyncTaskStatus;
   /** 任务优先级 */
-  priority: TaskPriority;
+  priority: AsyncTaskPriority;
   /** 任务输入 */
   input: unknown;
   /** 任务输出（完成后有值） */
@@ -60,14 +61,14 @@ export interface TaskRecord {
 
 // ── 查询选项 ──
 
-/** 任务查询过滤器 */
-export interface TaskFilter {
+/** AsyncTask 查询过滤器 */
+export interface AsyncTaskFilter {
   /** 按 Agent ID 过滤 */
   agentId?: string;
   /** 按 Session ID 过滤 */
   sessionId?: string;
   /** 按状态过滤 */
-  status?: TaskStatus | TaskStatus[];
+  status?: AsyncTaskStatus | AsyncTaskStatus[];
   /** 按类型过滤 */
   type?: string;
   /** 按父任务 ID 过滤 */
@@ -84,32 +85,33 @@ export interface TaskFilter {
 // ── 接口定义 ──
 
 /**
- * TaskStore 接口
+ * AsyncTaskStore 接口
  *
  * Core 层的 AsyncTask 使用此接口持久化任务状态。
+ * 默认实现为内存；持久化实现可放在 integration/storage。
  */
-export interface TaskStore {
+export interface AsyncTaskStore {
   /**
    * 创建任务记录
    * @param task - 完整的任务记录（包含 id）
    * @returns 创建的任务 ID
    */
-  create(task: TaskRecord): Promise<string>;
+  create(task: AsyncTaskRecord): Promise<string>;
 
   /**
    * 更新任务记录（部分更新）
    */
-  update(taskId: string, patch: Partial<TaskRecord>): Promise<void>;
+  update(taskId: string, patch: Partial<AsyncTaskRecord>): Promise<void>;
 
   /**
    * 获取任务记录
    */
-  get(taskId: string): Promise<TaskRecord | null>;
+  get(taskId: string): Promise<AsyncTaskRecord | null>;
 
   /**
    * 查询任务
    */
-  query(filter: TaskFilter): Promise<TaskRecord[]>;
+  query(filter: AsyncTaskFilter): Promise<AsyncTaskRecord[]>;
 
   /**
    * 删除任务记录

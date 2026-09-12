@@ -12,7 +12,7 @@ import {
   DefaultEventBus,
 } from '../../src/core/index.js';
 import type { EventBus, AgentEvent } from '../../src/core/index.js';
-import type { TaskStore, TaskRecord } from '../../src/core/index.js';
+import type { AsyncTaskStore, AsyncTaskRecord } from '../../src/core/index.js';
 
 // ── 辅助 ──
 
@@ -23,8 +23,8 @@ function createEvents(): { bus: EventBus; events: AgentEvent[] } {
   return { bus, events };
 }
 
-function createMockStore(): TaskStore & { records: Map<string, TaskRecord> } {
-  const records = new Map<string, TaskRecord>();
+function createMockStore(): AsyncTaskStore & { records: Map<string, AsyncTaskRecord> } {
+  const records = new Map<string, AsyncTaskRecord>();
   return {
     records,
     async create(task) {

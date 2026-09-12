@@ -25,9 +25,6 @@ import { HeuristicTokenEstimator } from './context/token-estimator.js';
 import type { SessionTaskService } from './session-tasks/service.js';
 import { renderSessionTasksInjection } from './session-tasks/render.js';
 
-export type { TaskDecisionProvider, TaskDecisionResult } from '../core/interfaces/task-decision.js';
-import type { TaskDecisionProvider, TaskDecisionResult } from '../core/interfaces/task-decision.js';
-
 /** Session 锁队列项 */
 interface QueueEntry {
   resolve: () => void;
@@ -49,17 +46,12 @@ export interface SessionAwareRunnerConfig {
    */
   sessionGate?: import('./concurrency/session-gate.js').SessionGate;
   /**
-   * 会话任务服务（推荐）
+   * 会话任务服务
    *
    * handle() 在 load session 后 attach，每轮注入未闭合 goal（step 仅 rollup）。
    * 与 task_* 工具共用同一实例。
    */
   sessionTaskService?: SessionTaskService;
-  /**
-   * @deprecated 使用 sessionTaskService；若同时配置，sessionTaskService 优先用于注入。
-   * 旧侧车决策路径，新项目勿用。
-   */
-  taskDecisionProvider?: TaskDecisionProvider;
 }
 
 const DEFAULT_CONFIG: SessionAwareRunnerConfig = {
@@ -223,7 +215,7 @@ export class SessionAwareRunner {
       sm.transition('processing');
       session.meta.status = sm.state;
 
-      // 6. 会话任务注入（推荐路径）；无 Service 时回退旧 TaskDecisionProvider
+      // 6. 会话任务注入
       let effectiveRunConfig = runConfig;
       if (this.config.sessionTaskService) {
         const taskInjection = renderSessionTasksInjection(session.tasks ?? []);
@@ -233,21 +225,6 @@ export class SessionAwareRunner {
             ...runConfig,
             injectedContext: baseInjected ? `${baseInjected}\n\n${taskInjection}` : taskInjection,
           };
-        }
-      } else if (this.config.taskDecisionProvider && input.role === 'user') {
-        try {
-          const decision = await this.config.taskDecisionProvider.decide({
-            sessionId,
-            messages: session.messages,
-          });
-          if (decision.taskContext) {
-            effectiveRunConfig = {
-              ...runConfig,
-              injectedContext: decision.taskContext,
-            };
-          }
-        } catch (err) {
-          console.warn('[SessionAwareRunner] TaskDecisionProvider failed:', err);
         }
       }
 

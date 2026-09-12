@@ -33,7 +33,7 @@ npm run dev            # tsc --watch
 |---|---|---|---|
 | Loop | `src/loop/` | 纯执行循环 | 仅依赖 Core 类型 |
 | Core | `src/core/` | 机制原语 + 接口契约 + 核心类型 | 无外部依赖 |
-| Harness | `src/harness/` | 11 个自包含领域 | 依赖 Core + Loop |
+| Harness | `src/harness/` | 13 个自包含领域 | 依赖 Core + Loop |
 | Integration | `src/integration/` | 外部系统适配 | 依赖 Core + Loop + Harness |
 
 详细架构见 [arch/overview.md](../arch/overview.md)
@@ -63,7 +63,7 @@ npx vitest run --grep "SecurityGuard"
 | Harness 组装 | AgentBuilder、SessionAwareRunner、可靠性包装 |
 | 安全 | SecurityGuard、RiskEvaluator、DefaultRiskPolicy、ShellParser |
 | 上下文管理 | ContextEngine、SmartRouter、MessageSelector、Compressor |
-| 任务系统 | TaskTracker、TaskManager、TaskDecisionProvider |
+| 会话任务 / 过程监督 | SessionTaskService、task_* 工具、DefaultRunGuard |
 | Plugin 系统 | PluginManager、HookRegistry、CapabilityRegistry |
 | Skill 管理 | SkillManager 两阶段加载 |
 | 工具系统 | ToolRegistry、工具版本管理 |

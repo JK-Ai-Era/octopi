@@ -58,7 +58,7 @@ CLI helpers (`ensureInitialized` / `ensureDaemonConfig`) prefer `OCTOPI_HOME` ov
 ### The 4-Layer Architecture
 1.  **Layer 0: Loop** — Pure execution loop (`agentLoop`). Zero state, zero external dependencies.
 2.  **Layer 1: Core** — Mechanism primitives (EventBus, StateMachine) and Interface contracts. No strategy implementations here.
-3.  **Layer 2: Harness** — 11 self-contained domains (Agent Building, Context, Security, Reliability, etc.). Strategies and workflows live here.
+3.  **Layer 2: Harness** — 13 self-contained domains (Agent Building, Context, Security, Reliability, Session Tasks, Run Guard, Orchestration, etc.). Strategies and workflows live here.
 4.  **Layer 3: Integration** — External adapters (LLM Providers, Storage, Observability).
 
 ### Context Intelligence (The 7-Layer Model)

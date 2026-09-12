@@ -2,6 +2,7 @@
 
 > **地位**：与 [docs/task-system.md](./task-system.md) 配套。  
 > 会话任务（SessionTask）的设计以 task-system.md 为准；本文规定其余模块归哪一域、叫什么、能否依赖谁。  
+> **状态**：迁移已完成（2026-06-12）；`harness/task-system/` 已删除。  
 > 最后更新：2026-06-12
 
 ---
@@ -118,7 +119,7 @@ orchestration/
 └── reflector/    # 默认不导出或 archive
 ```
 
-**与 Session.tasks 的唯一合法耦合（单向，可选）**：
+**与 Session.tasks 的唯一合法耦合（单向，可选；规范先行，仓库内暂无内置适配）**：
 
 长流水线启动时经 `SessionTaskService.create` 登记一条对用户可见的任务；结束时 `complete`/`drop`。  
 禁止 working-memory/session-tasks 反向 import orchestration；禁止 Workflow 状态机充当 SessionTask 状态机。
@@ -189,7 +190,7 @@ src/
 │   ├── session-tasks/              # Service、渲染、task_* 工具
 │   ├── run-guard/                  # 由 task-system/supervisor 迁出
 │   ├── orchestration/              # experimental 子树
-│   └── task-system/                # 迁移完成后删除
+│   └── context/knowledge/          # Knowledge 实现（契约在 Core）
 │
 └── integration/
     └── web/                        # 只读任务 API / 事件到 UI
@@ -209,8 +210,10 @@ async-task     → core/* only
   core → harness
   session-tasks → orchestration / run-guard / async-task
   run-guard → session-tasks / orchestration
-  orchestration → run-guard
+  orchestration → run-guard / session-tasks
 ```
+
+Plan/Planner/Reflector 与 KnowledgeStore 契约位于 Core，以避免 run-guard ↔ orchestration 互相依赖。
 
 ---
 
@@ -238,7 +241,9 @@ async-task     → core/* only
 | `core/interfaces/task-supervisor.ts` | `run-guard.ts` |
 | `task-system/supervisor/*` | `harness/run-guard/` |
 | `task-system/workflow/*` 等 | `harness/orchestration/` |
+| `task-system/knowledge/*` | `harness/context/knowledge/`（契约上收 `core/interfaces/knowledge-store.ts`） |
 | `core/interfaces/task-store.ts` | `async-task-store.ts` |
+| Plan/Planner/Reflector 类型 | `core/interfaces/cognitive-loop.ts`（run-guard 与 orchestration 共享契约） |
 | `daemon.ts` TaskTracker | 删除；任务随 Session |
 | `docs/task-system.md` | 已替换为 SessionTask 基准 |
 | `arch/overview.md` 领域七 | 按本文改写 |
