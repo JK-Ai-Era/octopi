@@ -1,22 +1,29 @@
 /**
  * 内置工具集
  *
- * 提供框架默认的工具实现，包括：
+ * 提供框架默认的纯工具实现（零外部依赖，所有环境可用）：
  * - shell: 执行 shell 命令
- * - file_read: 读取文件内容
- * - file_write: 写入文件内容
- * - file_list: 列出目录内容
+ * - file_read / file_write / file_list: 文件读写列目录
+ * - file_edit: 结构化文件编辑（局部替换）
+ * - file_search: 跨文件内容搜索
+ * - http_request: HTTP 请求
+ * - env_info: 运行环境信息
  *
- * 这些工具参考 OpenClaw 的工具设计，提供了 Agent 与外部世界交互的基础能力。
- * 使用时需要通过工具策略（ToolPolicy）控制 Agent 可以访问哪些工具。
+ * 所有有状态工具（memory、task、ask_user）通过 extension-tools 按需注入。
  *
  * 安全注意事项：
  * - shell 工具可以执行任意命令，生产环境应限制命令白名单
- * - file_read/file_write 应限制可访问的目录范围
+ * - file_read/file_write/file_edit 应限制可访问的目录范围
+ * - http_request 应限制可访问的域名
  * - 建议在 ToolPolicy 的 deny 列表中禁用不需要的工具
  */
 
-import type { RegisteredTool, ToolExecutionContext } from '../../../core/types.js';
+import type { RegisteredTool } from '../../../core/types.js';
+
+import { createFileEditTool } from './file-edit.js';
+import { createFileSearchTool } from './file-search.js';
+import { createHttpRequestTool } from './http.js';
+import { createEnvInfoTool } from './env-info.js';
 
 /**
  * Shell 工具 — 执行 shell 命令
@@ -312,14 +319,17 @@ export function createFileListTool(): RegisteredTool {
   };
 }
 
-/**
- * 获取所有内置工具
- */
+
+/** 获取内置工具（零依赖，所有环境可用） */
 export function getBuiltinTools(): RegisteredTool[] {
   return [
     createShellTool(),
     createFileReadTool(),
     createFileWriteTool(),
     createFileListTool(),
+    createFileEditTool(),
+    createFileSearchTool(),
+    createHttpRequestTool(),
+    createEnvInfoTool(),
   ];
 }

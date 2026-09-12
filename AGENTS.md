@@ -2,8 +2,6 @@
 
 This file governs AI coding agent behavior in the `octopi` repository. **Read this file before making any code changes.**
 
-**Final replies must be in Chinese.** All user-facing answers, summaries, and explanations are written in Chinese; code, commands, and variable names remain in English.
-
 ---
 
 ## Project Overview
@@ -12,9 +10,7 @@ This file governs AI coding agent behavior in the `octopi` repository. **Read th
 - **One-line summary**: An embeddable agent engine for building AI-powered applications.
 - **Core stack**: TypeScript / Node.js / Vitest
 - **Package manager**: `npm`
-- **Minimum runtime**: Node.js >= 20
 - **Runtime Directory**: `~/.octopi/`
-- **Core Philosophy**: An Agent is not a class, but a complete **Runtime Scope** (workspace, session, tools, persona). The framework provides mechanisms; the integrator provides policies.
 
 ---
 
@@ -52,9 +48,6 @@ When modifying context-related code, understand the information distillation ord
 6.  **Memory** (Extracted insights)
 7.  **Information** (Raw messages)
 
-### Security First
-Security is built-in, not a toggle. Injection detection and risk evaluation are core constraints.
-
 ---
 
 ## Common Commands
@@ -75,13 +68,6 @@ npm test
 # Lint / format check
 npm run lint
 ```
-
-### Check-running Principles
-
-- **Only run checks relevant to this change**; do not default to the full test suite.
-- CI owns exhaustive coverage and cross-platform matrices; run everything locally only when explicitly requested, diagnosing CI, or making an irreducibly repository-wide change.
-- Run relevant checks before pushing and **report only the commands actually executed**.
-
 ---
 
 ## Coding Conventions
@@ -133,7 +119,6 @@ npm run lint
 - Types: `feat` / `fix` / `refactor` / `docs` / `test` / `chore` / `perf` / `ci`
 - Each commit has a single responsibility.
 - **Every commit must update `CHANGELOG.md`**, recording changes under the corresponding version entry.
-- **Every commit must update the version number**, following the versioning rules below.
 
 ### Version Numbering Rules
 
@@ -145,17 +130,4 @@ Version format is `X.Y.Z` (semantic versioning), updated as follows:
 | **Y** (minor) | Major feature addition or architecture change | `1.2.3` → `1.3.0` |
 | **Z** (patch) | Updated on every commit | `1.2.3` → `1.2.4` |
 
-**Rules:**
-- Every commit increments at least `Z`.
-- When `Y` increments, `Z` resets to zero.
-- When `X` increments, both `Y` and `Z` reset to zero.
-- Version number is recorded in `package.json` and `CHANGELOG.md`.
-
 ---
-
-## Git Workflow
-
-- **Default branch**: `main`
-- **Branch naming**: `<type>/<short-description>`, e.g. `feat/add-auth`, `fix/timeout-race`
-- **Rebase preferred**: local branches use `git rebase` for linear history; use `--force-with-lease` when pushing.
-- **Merge strategy**: squash merge for small features, merge commit for large feature branches.

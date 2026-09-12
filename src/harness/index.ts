@@ -4,6 +4,10 @@
  * 11 个自包含领域，每个领域通过 index.ts 导出。
  */
 
+// ── Tool 系统 ──
+export { createToolSet } from './plugin-ecosystem/tools/tool-set.js';
+export type { ToolSet, ToolSetConfig } from './plugin-ecosystem/tools/tool-set.js';
+
 // ── Agent Building ──
 export { AgentBuilder, createAgent } from './agent-building/builder.js';
 export { loadPersona, composePersonas } from './agent-building/persona.js';

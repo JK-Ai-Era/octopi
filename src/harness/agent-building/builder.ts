@@ -127,10 +127,38 @@ class DefaultErrorStrategy implements ErrorStrategy {
   }
 }
 
+
+/** 工具运行时上下文提供者 */
+export interface ToolContextProvider {
+  get(): { sessionId: string; agentId: string; messages: import('../../core/types.js').Message[]; cwd?: string };
+  setRuntime(sessionId: string, agentId: string, messages: import('../../core/types.js').Message[]): void;
+}
+
+class RuntimeToolContextProvider implements ToolContextProvider {
+  private sessionId = '';
+  private agentId = '';
+  private messages: import('../../core/types.js').Message[] = [];
+  private cwd?: string;
+
+  constructor(defaults?: { cwd?: string }) {
+    this.cwd = defaults?.cwd;
+  }
+
+  setRuntime(sessionId: string, agentId: string, messages: import('../../core/types.js').Message[]): void {
+    this.sessionId = sessionId;
+    this.agentId = agentId;
+    this.messages = messages;
+  }
+
+  get() {
+    return { sessionId: this.sessionId, agentId: this.agentId, messages: this.messages, cwd: this.cwd };
+  }
+}
+
 /**
  * 将 RegisteredTool 转换为 AgentTool（新循环格式）
  */
-function convertToAgentTool(tool: RegisteredTool, cwd?: string): LoopAgentTool {
+function convertToAgentTool(tool: RegisteredTool, contextProvider: ToolContextProvider): LoopAgentTool {
   return {
     name: tool.definition.name,
     description: tool.definition.description,
@@ -149,7 +177,8 @@ function convertToAgentTool(tool: RegisteredTool, cwd?: string): LoopAgentTool {
     execute: async (toolCallId: string, args: unknown, signal?: AbortSignal) => {
       const startTime = Date.now();
       try {
-        const result = await tool.handler(args as Record<string, unknown>, { timeoutMs: 30_000, signal, cwd } as any);
+        const context = contextProvider.get();
+        const result = await tool.handler(args as Record<string, unknown>, { ...context, abortSignal: signal });
         return {
           toolCallId,
           name: tool.definition.name,
@@ -249,6 +278,7 @@ export class AgentBuilder {
   /** Agent 沙箱工作目录（工具 cwd 注入） */
   private _workspace?: string;
 
+
   // ── Core 组件 ──
 
   /** 设置模型提供者 */
@@ -281,6 +311,13 @@ export class AgentBuilder {
   tools(...tools: RegisteredTool[]): this {
     for (const t of tools) this.tool(t);
     return this;
+  }
+
+  private _contextProvider = new RuntimeToolContextProvider();
+
+  /** 获取运行时上下文提供者 */
+  getContextProvider(): ToolContextProvider {
+    return this._contextProvider;
   }
 
   /**
@@ -554,6 +591,7 @@ export class AgentBuilder {
     // 创建 SessionStore + Runner
     const store = this._store ?? new InMemorySessionStore();
     const runner = new SessionAwareRunner(agent, harness, store, { ...this._runnerConfig, events });
+    runner.setToolContextProvider(this._contextProvider);
 
     // 创建 SubsystemRuntime（如果有自主子系统）
     let subsystemRuntime: import('../autonomous-subsystem/runtime.js').SubsystemRuntime | undefined;
@@ -621,7 +659,8 @@ export class AgentBuilder {
     const mcpManager = await this.buildMcpManager();
 
     // 转换 RegisteredTool → AgentTool
-    const agentTools: LoopAgentTool[] = Array.from(this._tools.values()).map(t => convertToAgentTool(t, this._workspace));
+    this._contextProvider = new RuntimeToolContextProvider({ cwd: this._workspace });
+    const agentTools: LoopAgentTool[] = Array.from(this._tools.values()).map(t => convertToAgentTool(t, this._contextProvider));
 
     // 创建 Agent
     const agentOptions: AgentOptions = {

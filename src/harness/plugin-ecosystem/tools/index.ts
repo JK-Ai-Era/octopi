@@ -1,1 +1,11 @@
 export { ToolRegistry } from './registry.js';
+export { getBuiltinTools } from './builtin.js';
+export { createFileEditTool } from './file-edit.js';
+export { createFileSearchTool } from './file-search.js';
+export { createHttpRequestTool } from './http.js';
+export { createEnvInfoTool } from './env-info.js';
+export { createToolSet } from './tool-set.js';
+export type { ToolSet, ToolSetConfig } from './tool-set.js';
+export { createAskUserTool, type AskUserCallback } from './ask-user.js';
+export { createMemoryTools, createMemoryStoreTool, createMemorySearchTool } from './memory.js';
+export { createTaskTools, createTaskCreateTool, createTaskListTool, createTaskUpdateTool } from './task-tools.js';

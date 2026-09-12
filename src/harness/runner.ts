@@ -11,6 +11,7 @@
  */
 
 import type { Message, Turn, SessionStatus } from '../core/types.js';
+import type { ToolContextProvider } from './agent-building/builder.js';
 import type { SessionStore } from '../core/interfaces/session-store.js';
 import type { SessionData } from './session-types.js';
 
@@ -134,6 +135,8 @@ export class SessionAwareRunner {
   private _subsystemRuntime?: import('./autonomous-subsystem/runtime.js').SubsystemRuntime;
   /** EventBus 引用（用于分布式智能体上下文） */
   private _events?: import('../core/primitives/event-bus.js').EventBus;
+  /** 工具运行时上下文提供者 */
+  private toolContextProvider?: ToolContextProvider;
 
   constructor(agent: Agent, harness: ReliabilityHarness, store: TypedSessionStore, config?: SessionAwareRunnerConfig & { events?: import('../core/primitives/event-bus.js').EventBus }) {
     this.agent = agent;
@@ -146,6 +149,11 @@ export class SessionAwareRunner {
   /** 设置自主子系统运行时 */
   setSubsystemRuntime(runtime: import('./autonomous-subsystem/runtime.js').SubsystemRuntime): void {
     this._subsystemRuntime = runtime;
+  }
+
+  /** 设置工具运行时上下文提供者 */
+  setToolContextProvider(provider: ToolContextProvider): void {
+    this.toolContextProvider = provider;
   }
 
   /**
@@ -244,7 +252,12 @@ export class SessionAwareRunner {
         this._subsystemRuntime.applyPendingInjections(session.messages);
       }
 
-      // 8. 同步 session 消息到 Agent 上下文
+      // 8. 同步运行时上下文到工具上下文提供者
+      if (this.toolContextProvider) {
+        this.toolContextProvider.setRuntime(sessionId, _agentId, session.messages);
+      }
+
+      // 9. 同步 session 消息到 Agent 上下文
       this.agent.context.messages = session.messages;
       const basePrompt = effectiveRunConfig.systemPrompt || this.agent.context.systemPrompt || '';
       if (effectiveRunConfig.injectedContext) {
@@ -260,7 +273,7 @@ export class SessionAwareRunner {
       // Token 估算器（当 LLM 不返回 usage 时用于回退估算）
       const estimator = new HeuristicTokenEstimator();
 
-      // 9. 运行 Agent（runAgentWithReliability 包装）
+      // 10. 运行 Agent（runAgentWithReliability 包装）
       let hasTurnEnd = false;
       let streamedContent = '';
       let lastUsage: any = undefined;

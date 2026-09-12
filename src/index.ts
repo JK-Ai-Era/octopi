@@ -99,6 +99,8 @@ export type { SkillSource, DiscoveredSkill } from './harness/plugin-ecosystem/sk
 // Harness Tool 系统
 export { ToolRegistry } from './harness/plugin-ecosystem/tools/registry.js';
 export { getBuiltinTools, createShellTool, createFileReadTool, createFileWriteTool, createFileListTool } from './harness/plugin-ecosystem/tools/builtin.js';
+export { createToolSet } from './harness/plugin-ecosystem/tools/tool-set.js';
+export type { ToolSet, ToolSetConfig } from './harness/plugin-ecosystem/tools/tool-set.js';
 
 // Config Bridge（配置文件 → 新架构）
 export { buildFromConfig, buildFromConfigFile } from './harness/agent-building/config-bridge.js';

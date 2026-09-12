@@ -15,7 +15,7 @@ import { tmpdir } from 'node:os';
 import { AgentBuilder } from '../../src/harness/agent-building/builder.js';
 import { OpenAIProvider } from '../../src/integration/providers/openai.js';
 import { JsonlSessionStore } from '../../src/integration/storage/jsonl.js';
-import { getBuiltinTools } from '../../src/harness/plugin-ecosystem/tools/builtin.js';
+import { createToolSet } from '../../src/harness/plugin-ecosystem/tools/tool-set.js';
 import { initOctopi } from '../../src/init.js';
 import type { RunConfig } from '../../src/harness/runner.js';
 import type { SessionAwareRunner } from '../../src/harness/runner.js';
@@ -58,7 +58,8 @@ skipIfNoKey('Chat Simulation', () => {
       .persona(workspaceDir)  // persona = workspace（自包含）
       .store(store);
 
-    for (const tool of getBuiltinTools()) {
+    const { builtin } = createToolSet();
+    for (const tool of builtin) {
       builder.tool(tool);
     }
 

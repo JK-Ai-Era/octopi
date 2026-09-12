@@ -8,12 +8,13 @@ import { readFileSync, writeFileSync, unlinkSync, existsSync, mkdirSync } from '
 import type { CliArgs } from './args.js';
 import { getOctopiHome, isInitialized, initOctopi, formatInitReport } from '../init.js';
 import { loadConfig, toGatewayConfig, createStoreFromConfig } from '../config.js';
-import { getBuiltinTools } from '../harness/plugin-ecosystem/tools/builtin.js';
+import { createToolSet } from '../harness/plugin-ecosystem/tools/tool-set.js';
 import type { ModelProviderConfig } from '../config.js';
 import type { ModelProvider } from '../core/interfaces/model-provider.js';
 import { OpenAIProvider } from '../integration/providers/openai.js';
 import { AnthropicProvider } from '../integration/providers/anthropic.js';
 import { Gateway } from '../integration/gateway/gateway.js';
+import { webuiStartCommand, webuiStopCommand } from './webui.js';
 
 interface DaemonPidFile {
   pid: number;
@@ -180,7 +181,12 @@ export async function serveStartCommand(args: CliArgs): Promise<void> {
   console.log(`✅ Gateway started (PID: ${child.pid})`);
   console.log(`   Config: ${configPath ?? './octopi.json'}`);
   console.log(`   Port:   ${port}`);
+
+  // 启动 Web UI
+  await webuiStartCommand(configPath);
+
   console.log(`\nUse 'octopi serve stop' to stop, 'octopi serve status' to check.`);
+  process.exit(0);
 }
 
 export async function serveStopCommand(): Promise<void> {
@@ -211,6 +217,9 @@ export async function serveStopCommand(): Promise<void> {
 
   removePidFile();
   console.log('✅ Gateway stopped.');
+
+  // 停止 Web UI
+  await webuiStopCommand();
 }
 
 export async function serveRestartCommand(args: CliArgs): Promise<void> {
@@ -303,7 +312,11 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
     }
   }
 
-  for (const tool of getBuiltinTools()) gateway.registerTool(tool);
+  const memoryStore = new (await import('../harness/memory/store.js')).InMemoryMemoryStore();
+  const taskTracker = new (await import('../harness/task-system/tasks/tracker.js')).TaskTracker();
+  const { all } = createToolSet({ memoryStore, taskTracker });
+  for (const tool of all) gateway.registerTool(tool);
+  console.log(`[CLI] Registered ${all.length} tools: ${all.map(t => t.definition.name).join(', ')}`);
 
   const httpConfig = config.channels?.find((c: any) => c.type === 'http');
   if (httpConfig) {

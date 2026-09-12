@@ -568,6 +568,7 @@ export class Gateway {
       .workspace(agent.workspace ?? '');
 
     // 注册工具
+    console.log(`[Gateway] Building agent "${agent.id}" with ${this.tools.length} tools: ${this.tools.map(t => t.definition.name).join(', ')}`);
     for (const tool of this.tools) {
       builder.tool(tool);
     }

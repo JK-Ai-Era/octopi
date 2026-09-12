@@ -1,3 +1,122 @@
+## v0.16.0 (2026-09-12)
+
+### refactor: 工具模块架构重构（breaking change）
+
+彻底理清工具模块的分层架构，消除 `services` 类型黑洞，建立可靠的工具扩展机制。
+
+#### 架构变更
+
+- **builtin/extension 分离** — `getBuiltinTools()` 只返回 8 个零依赖纯工具，有状态工具（memory/task/ask_user）全部移入 extension。
+- **闭包注入取代 services** — memory/task/ask_user 工具通过工厂函数接收依赖参数，消除 `ToolExecutionContext.services` 类型黑洞。
+- **RuntimeToolContextProvider** — 工具 handler 通过 provider 在运行时获取真实 sessionId/agentId/messages，不再收到空值。
+- **createToolSet()** — 一站式注册 builtin + extension 工具，集成方一次调用完成全部注册。
+
+#### Breaking Changes
+
+- `getBuiltinTools()` 返回值从 14 个变为 8 个（移除 memory/task/ask_user）
+- `ToolExecutionContext.services` 字段已移除
+- `AgentBuilder.services()` 方法已移除
+- `Gateway.registerServices()` 方法已移除
+- `createMemoryStoreTool(store)` 现在需要传入 store 参数
+- `createTaskCreateTool(tracker)` 现在需要传入 tracker 参数
+- `createAskUserTool(callback)` 现在需要传入 callback 参数
+
+#### 新增
+
+- `createToolSet(config?)` — 一站式工具注册
+- `createMemoryTools(store)` — 创建记忆工具集
+- `createTaskTools(tracker)` — 创建任务工具集
+- `ToolContextProvider` — 工具运行时上下文提供者接口
+
+#### 迁移指南
+
+```ts
+// 改前
+for (const tool of getBuiltinTools()) gateway.registerTool(tool);
+gateway.registerServices({ memoryStore, taskTracker });
+
+// 改后
+const { all } = createToolSet({ memoryStore, taskTracker });
+for (const tool of all) gateway.registerTool(tool);
+```
+
+---
+
+## v0.15.3 (2026-09-12)
+
+### refactor: 工具自给自足，消除外部依赖注入
+
+memory/task 工具改为模块级默认实例 + context.services 可选覆盖模式，
+不再需要 Gateway/Builder/Daemon 层面的特殊注入。
+
+#### 变更
+
+- **refactor(memory): 默认 InMemoryMemoryStore** — memory.ts 内部创建模块级默认 store 实例，运行时优先从 context.services.memoryStore 取，取不到自动用默认实例。
+- **refactor(task): 默认 TaskTracker** — task-tools.ts 内部创建模块级默认 tracker 实例，策略同上。
+- **refactor(daemon): 清理** — 移除 InMemoryMemoryStore/TaskTracker import 和 registerServices 调用，daemon.ts 只需 getBuiltinTools() + registerTool() 即可。
+- **refactor(gateway): registerServices 保留** — Gateway.registerServices() 保留供需要覆盖默认实例的场景使用，但不再必须调用。
+
+
+## v0.15.2 (2026-09-12)
+
+### refactor: 工具注册统一化
+
+消除 memory/task 工具的特殊注册路径，全部 14 个工具统一通过 getBuiltinTools() 获取。
+
+#### 变更
+
+- **refactor(builtin): getBuiltinTools 统一** — getBuiltinTools() 现在返回全部 14 个工具（含 memory_store/memory_search/task_create/task_list/task_update），移除 getExtendedBuiltinTools()。memory/task 工具的依赖通过 ToolExecutionContext.services 在运行时获取，注册时无需特殊处理。
+- **refactor(daemon): 简化注册逻辑** — daemon.ts 移除 getExtendedBuiltinTools 调用，改为 getBuiltinTools() + registerServices() 两步。
+- **refactor(exports): 清理** — src/index.ts、src/harness/index.ts、tools/index.ts 移除 getExtendedBuiltinTools 导出。
+- **test: 更新测试** — 移除 getExtendedBuiltinTools 相关用例，getBuiltinTools 测试验证全部 14 个工具。
+
+
+## v0.15.1 (2026-09-12)
+
+### fix: 扩展工具注册与服务注入链路打通
+
+修复 memory/task 工具未被注册到运行时的问题。
+
+#### 变更
+
+- **fix(daemon): 扩展工具注册** — daemon.ts 创建 InMemoryMemoryStore 和 TaskTracker 实例，调用 getExtendedBuiltinTools() 注册 memory_store/memory_search/task_create/task_list/task_update 五个工具，并通过 gateway.registerServices() 注入依赖。
+- **feat(gateway): registerServices()** — Gateway 新增 registerServices() 方法，将工具服务传递给 AgentBuilder.services()，工具可通过 context.services 访问。
+- **feat(builder): services() API** — AgentBuilder 新增 .services() fluent 方法，接受 Record<string, unknown> 注入到所有工具的执行上下文中。
+- **fix(builder): convertToAgentTool 上下文补全** — 工具执行上下文现在包含 sessionId/agentId/messages/services 字段，memory/task 工具可正常读取注入的服务。
+- **feat(exports): getExtendedBuiltinTools 导出** — src/index.ts 和 src/harness/index.ts 新增 getExtendedBuiltinTools 导出。
+
+
+## v0.15.0 (2026-09-12)
+
+### feat: 内置工具集扩展（9 个新工具）
+
+将 Agent 基础工具从 4 个扩展到 13 个，覆盖文件编辑、搜索、HTTP、记忆、任务管理、用户交互、环境感知七大能力域。
+
+#### 新增工具
+
+- **file_edit** — 结构化文件编辑：old_text/new_text 局部替换，支持 occurrence 选择（first/last/all/N）和 dry-run 预览
+- **file_search** — 跨文件内容搜索：文本/正则模式，glob 过滤，上下文行，二进制文件自动跳过
+- **http_request** — HTTP 请求：支持 GET/POST/PUT/PATCH/DELETE，响应体大小限制，超时保护
+- **env_info** — 运行环境信息：操作系统、Node 版本、工作目录、可用包管理器检测
+- **ask_user** — 请求用户输入：通过 services.askUser 回调与 UI 层解耦
+- **memory_store** — 存储记忆：将偏好/决策/经验/发现持久化到 MemoryStore
+- **memory_search** — 搜索记忆：按文本/类型/重要性检索历史记忆
+- **task_create** — 创建任务：追踪多步骤工作进度
+- **task_list** — 列出任务：按状态过滤，查看活跃任务数
+- **task_update** — 更新任务状态：complete/cancel/interrupt/resume/start
+
+#### 架构设计
+
+- **ToolExecutionContext.services** — Core 层新增通用服务注入点，Record<string, unknown> 类型避免 Core→Harness 耦合
+- **getBuiltinTools()** — 返回 9 个零依赖基础工具
+- **getExtendedBuiltinTools({memoryStore?, taskTracker?})** — 按需注入依赖的扩展工具，未注入则自动跳过
+- 所有新工具遵循 RegisteredTool 工厂函数模式，与既有 shell/file_read/file_write/file_list 风格一致
+
+#### 测试
+
+- **test: harness/builtin-tools.test.ts** — 20 个新测试覆盖 file_edit（替换/occurrence/dry-run/错误）、file_search（搜索/glob/正则/上下文/截断）、env_info、ask_user、工具注册
+
+
 ## v0.14.4 (2026-09-10)
 
 ### refactor: 技术债务修复（TECH_DEBT_REPAIR_PLAN）
