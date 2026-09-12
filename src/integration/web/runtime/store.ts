@@ -22,6 +22,7 @@ import type {
   OctopiClient,
   PendingApproval,
   SessionSummary,
+  SessionTaskView,
   SessionView,
 } from '../../web/sdk/client.js';
 
@@ -43,6 +44,7 @@ export interface RuntimeEventMap {
   'tool': ToolEvent;
   'approval': ApprovalEvent;
   'inspector': InspectorEvent;
+  'tasks': TasksEvent;
   'error': RuntimeErrorEvent;
 }
 
@@ -64,6 +66,7 @@ export class StreamEvent extends RuntimeEvent<{ streaming: boolean; content: str
 export class ToolEvent extends RuntimeEvent<{ tools: ToolRun[] }> {}
 export class ApprovalEvent extends RuntimeEvent<{ approvals: PendingApproval[] }> {}
 export class InspectorEvent extends RuntimeEvent<{ inspector: InspectorState }> {}
+export class TasksEvent extends RuntimeEvent<{ tasks: SessionTaskView[] }> {}
 export class RuntimeErrorEvent extends RuntimeEvent<{ error: string }> {}
 
 // ──────────────────────────────────────
@@ -106,6 +109,8 @@ export interface ChatState {
   tools: ToolRun[];
   approvals: PendingApproval[];
   inspector: InspectorState;
+  /** 会话任务（goal/step），UI 只读 */
+  tasks: SessionTaskView[];
 }
 
 // ──────────────────────────────────────
@@ -157,6 +162,11 @@ export class OctopiRuntimeStore extends EventTarget {
     };
   }
 
+  /** 当前会话任务列表 */
+  getTasks(): SessionTaskView[] {
+    return this.chat.tasks;
+  }
+
   // ──────────────────────────────────
   // Actions
   // ──────────────────────────────────
@@ -188,6 +198,7 @@ export class OctopiRuntimeStore extends EventTarget {
   }
 
   async openSession(sessionId: string): Promise<SessionView> {
+    // 离开当前会话时缓存运行时对话（含进行中的流式内容）
     if (this.chat.sessionId && this.chat.conversation.length > 0) {
       if (this.conversationCache.size >= OctopiRuntimeStore.MAX_CACHE_SIZE) {
         const oldest = this.conversationCache.keys().next().value;
@@ -205,17 +216,37 @@ export class OctopiRuntimeStore extends EventTarget {
     this.currentSession = view;
 
     const cached = this.conversationCache.get(sessionId);
-    let conversationItems: ConversationItem[];
-    let viewMode: ViewMode;
 
-    if (cached) {
-      conversationItems = cached.items;
-      viewMode = cached.viewMode;
-    } else {
-      const page = await this.client.getSessionMessages(sessionId, { limit: 50 });
+    // 服务端消息是已落盘的权威历史；缓存仅用于补全尚未持久化的运行时条目
+    let conversationItems: ConversationItem[] = [];
+    let viewMode: ViewMode = 'history';
+    try {
+      const page = await this.client.getSessionMessages(sessionId, { limit: 100 });
       const messages: MessageRecord[] = page.messages;
       conversationItems = ConversationAdapter.buildHistoryItems(messages, sessionId);
-      viewMode = 'history';
+    } catch {
+      conversationItems = [];
+    }
+
+    if (cached) {
+      if (cached.items.length > conversationItems.length) {
+        // 缓存更长：包含未落盘的流式/工具中间态
+        conversationItems = cached.items;
+        viewMode = cached.viewMode === 'history' ? 'hybrid' : cached.viewMode;
+      } else if (cached.viewMode !== 'history') {
+        viewMode = cached.viewMode;
+      }
+    }
+
+    let tasks: SessionTaskView[] = [];
+    try {
+      tasks = await this.client.getSessionTasks(sessionId);
+    } catch {
+      try {
+        tasks = await this.client.getSessionTasks(sessionId, { agentId: view.meta.agentId });
+      } catch {
+        tasks = [];
+      }
     }
 
     this.chat = {
@@ -225,9 +256,10 @@ export class OctopiRuntimeStore extends EventTarget {
       conversation: conversationItems,
       streamingContent: '',
       runStatus: 'idle',
-      tools: [],
+      tools: this.deriveTools(conversationItems),
       approvals: await this.client.listApprovals(),
       inspector: {},
+      tasks,
     };
 
     this.client.sendSubscribe(sessionId, view.meta.agentId);
@@ -239,6 +271,7 @@ export class OctopiRuntimeStore extends EventTarget {
     this.dispatch('tool', new ToolEvent('tool', { tools: this.chat.tools }));
     this.dispatch('approval', new ApprovalEvent('approval', { approvals: this.chat.approvals }));
     this.dispatch('inspector', new InspectorEvent('inspector', { inspector: this.chat.inspector }));
+    this.dispatch('tasks', new TasksEvent('tasks', { tasks: this.chat.tasks }));
 
     return view;
   }
@@ -262,6 +295,7 @@ export class OctopiRuntimeStore extends EventTarget {
       tools: [],
       approvals: await this.client.listApprovals(),
       inspector: {},
+      tasks: [],
     };
 
     this.client.sendSubscribe(session.id, session.agentId);
@@ -274,6 +308,7 @@ export class OctopiRuntimeStore extends EventTarget {
     this.dispatch('tool', new ToolEvent('tool', { tools: this.chat.tools }));
     this.dispatch('approval', new ApprovalEvent('approval', { approvals: this.chat.approvals }));
     this.dispatch('inspector', new InspectorEvent('inspector', { inspector: this.chat.inspector }));
+    this.dispatch('tasks', new TasksEvent('tasks', { tasks: this.chat.tasks }));
 
     return session;
   }
@@ -346,6 +381,11 @@ export class OctopiRuntimeStore extends EventTarget {
 
     if (this.chat.viewMode === 'history' && this.chat.sessionId) {
       this.setViewMode('hybrid');
+    }
+
+    // 会话任务事件（只读面板）
+    if (event.type === 'session.task.created' || event.type === 'session.task.updated' || event.type === 'session.task.snapshot') {
+      this.applyTaskEvent(event);
     }
 
     const convResult = this.conversationAdapter.applyEvent(event, sessionId, this.chat.conversation);
@@ -440,6 +480,30 @@ export class OctopiRuntimeStore extends EventTarget {
     this.dispatch('error', new RuntimeErrorEvent('error', { error: message }));
   }
 
+  private applyTaskEvent(event: AgentEventEnvelope): void {
+    if (event.type === 'session.task.snapshot') {
+      const raw = event.data?.tasks;
+      if (Array.isArray(raw)) {
+        this.chat.tasks = raw as SessionTaskView[];
+        this.dispatch('tasks', new TasksEvent('tasks', { tasks: this.chat.tasks }));
+      }
+      return;
+    }
+
+    const rawTask = event.data?.task as SessionTaskView | undefined;
+    if (!rawTask?.id) return;
+
+    const idx = this.chat.tasks.findIndex((t) => t.id === rawTask.id);
+    const next = [...this.chat.tasks];
+    if (idx >= 0) {
+      next[idx] = rawTask;
+    } else {
+      next.push(rawTask);
+    }
+    this.chat.tasks = next;
+    this.dispatch('tasks', new TasksEvent('tasks', { tasks: this.chat.tasks }));
+  }
+
   private dispatch(_type: string, event: Event): void {
     this.dispatchEvent(event);
   }
@@ -459,6 +523,7 @@ export class OctopiRuntimeStore extends EventTarget {
       tools: [],
       approvals: [],
       inspector: {},
+      tasks: [],
     };
   }
 

@@ -1,3 +1,47 @@
+## v0.19.0 (2026-06-12)
+
+### feat(session-tasks): 会话任务 SessionTask（goal/step 两级）
+
+按 `docs/task-system.md` 落地会话任务，取代旧 TaskTracker / 每条消息侧车 TaskManager 主路径。
+
+#### 架构
+
+- **Session 聚合**：`SessionData.tasks?: SessionTask[]`，随 SessionStore 持久化
+- **两级结构**：goal（`parentId` 空）+ step（depth=1）；状态 `open|paused|done|dropped`
+- **唯一写入口** `SessionTaskService`：状态机、goal 级联 drop、`session.task.*` 事件
+- **写入方**：仅主 LLM `task_*` 工具；UI 只读（本版未暴露 HTTP PATCH）
+- **注入**：Runner 每轮渲染 goal + step rollup（`<session_tasks>`），不罗列全部 step
+- **接线**：`AgentBuilder.build()` 自动创建 Service、注册 `task_*`、注入 Runner；daemon 不再单独建 TaskTracker
+
+#### UI 只读穿透
+
+- `GET /api/v1/sessions/:id/tasks` — 任务列表 snapshot
+- `SessionView.taskCount`；SDK `getSessionTasks()` / `SessionTaskView`
+- Gateway 将 `session.task.*`（EventBus）转发至 WebSocket `broadcastEvent`
+- **Runtime Store**：`chat.tasks` + `TasksEvent`；打开会话拉取，WS 增量合并
+- **WebUI**：右栏「任务」页签（goal 树 + 步骤 rollup，只读）
+
+#### 修复
+
+- **task_* 工具未进入 Agent**：此前在 `buildAgent()` 之后才 `toolBus.register`，Agent 工具快照不含 task 工具。现改为在 `buildAgent()` 前注册（回归测试 `builder-session-task-tools`）
+- **切换会话丢失任务**：`JsonlSessionStore` 原先只写 messages JSONL，不保存 `tasks`。现增加 `<sessionId>.state.json` 持久化 tasks/turns/metadata
+- **切换会话丢失最后回复**：`openSession` 改为优先拉取服务端 messages（权威历史），仅当缓存更长时用缓存补全未落盘流式内容；打开后同步 React 对话状态
+
+#### 工具
+
+`task_list` / `task_create` / `task_plan` / `task_complete` / `task_pause` / `task_resume` / `task_drop` / `task_note`
+
+#### 兼容
+
+- 旧 `TaskTracker` / `TaskManager` / `DefaultTaskDecisionProvider` 保留导出并标 `@deprecated`
+- `task_update` 工具已由上述拆分工具取代
+
+#### 文档
+
+- `docs/task-system.md` — SessionTask 唯一设计基准
+- `docs/domain-split.md` — run-guard / orchestration / AsyncTask 领域切分
+- `README.md` / `README_CN.md` / `arch/overview.md` — 领域说明同步
+
 ## v0.18.2 (2026-09-13)
 
 ### chore(docs): 删除已完成的技术债文档

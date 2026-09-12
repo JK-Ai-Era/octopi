@@ -42,15 +42,26 @@ export class JsonlSessionStore implements SessionStore<SessionData> {
     return join(this.sessionsDir(agentId), `${sessionId}.jsonl`);
   }
 
+  /** 会话附带状态（tasks / turns / metadata），与消息 JSONL 分离，兼容旧文件 */
+  private sessionStateFile(agentId: string, sessionId: string): string {
+    return join(this.sessionsDir(agentId), `${sessionId}.state.json`);
+  }
+
   async load(agentId: string, sessionId: string): Promise<SessionData | null> {
     const file = this.sessionFile(agentId, sessionId);
-    if (!await fileExists(file)) return null;
+    const statePath = this.sessionStateFile(agentId, sessionId);
+    const hasMessages = await fileExists(file);
+    const hasState = await fileExists(statePath);
+    if (!hasMessages && !hasState) return null;
 
-    const content = await readFile(file, 'utf-8');
-    const messages = content.split('\n')
-      .filter(line => line.trim())
-      .map(line => { try { return JSON.parse(line); } catch { return null; } })
-      .filter(Boolean);
+    let messages: SessionData['messages'] = [];
+    if (hasMessages) {
+      const content = await readFile(file, 'utf-8');
+      messages = content.split('\n')
+        .filter(line => line.trim())
+        .map(line => { try { return JSON.parse(line); } catch { return null; } })
+        .filter(Boolean);
+    }
 
     let meta: SessionMeta | null = null;
     const metaPath = this.metaFile(agentId);
@@ -59,6 +70,13 @@ export class JsonlSessionStore implements SessionStore<SessionData> {
         const allMeta = JSON.parse(await readFile(metaPath, 'utf-8'));
         meta = allMeta[sessionId] ?? null;
       } catch { /* corrupt meta, use fallback */ }
+    }
+
+    let state: { tasks?: SessionData['tasks']; turns?: SessionData['turns']; metadata?: SessionData['metadata'] } = {};
+    if (hasState) {
+      try {
+        state = JSON.parse(await readFile(statePath, 'utf-8'));
+      } catch { /* corrupt state, ignore */ }
     }
 
     return {
@@ -76,8 +94,9 @@ export class JsonlSessionStore implements SessionStore<SessionData> {
         updatedAt: Date.now(),
       },
       messages,
-      turns: [],
-      metadata: {},
+      turns: state.turns ?? [],
+      metadata: state.metadata ?? {},
+      tasks: state.tasks ?? [],
     };
   }
 
@@ -98,6 +117,14 @@ export class JsonlSessionStore implements SessionStore<SessionData> {
     const sessionPath = this.sessionFile(agentId, sessionId);
     const jsonl = data.messages.map(msg => JSON.stringify(msg)).join('\n') + '\n';
     await writeFile(sessionPath, jsonl);
+
+    // 保存会话附带状态（任务列表等）
+    const statePath = this.sessionStateFile(agentId, sessionId);
+    await writeFile(statePath, JSON.stringify({
+      tasks: data.tasks ?? [],
+      turns: data.turns ?? [],
+      metadata: data.metadata ?? {},
+    }, null, 2));
   }
 
   async list(agentId: string): Promise<SessionMeta[]> {
@@ -116,6 +143,10 @@ export class JsonlSessionStore implements SessionStore<SessionData> {
     const file = this.sessionFile(agentId, sessionId);
     if (await fileExists(file)) {
       await unlink(file);
+    }
+    const statePath = this.sessionStateFile(agentId, sessionId);
+    if (await fileExists(statePath)) {
+      await unlink(statePath);
     }
 
     // 更新元数据索引

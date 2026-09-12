@@ -61,6 +61,19 @@ export interface SessionView {
   meta: SessionSummary;
   messageCount: number;
   turnCount: number;
+  taskCount?: number;
+}
+
+/** 会话任务（UI 只读） */
+export interface SessionTaskView {
+  id: string;
+  parentId?: string;
+  description: string;
+  status: 'open' | 'paused' | 'done' | 'dropped';
+  progressNote?: string;
+  order?: number;
+  createdAt: number;
+  updatedAt: number;
 }
 
 export interface MessageRecord {
@@ -250,6 +263,19 @@ export class OctopiClient {
     const qs = params.toString();
     const data = await this.getJson(`/sessions/${encodeURIComponent(sessionId)}/messages${qs ? `?${qs}` : ''}`);
     return (data?.data as MessagePage) ?? { messages: [] };
+  }
+
+  /**
+   * 会话任务列表（只读）
+   */
+  async getSessionTasks(sessionId: string, options?: { agentId?: string }): Promise<SessionTaskView[]> {
+    const params = new URLSearchParams();
+    if (options?.agentId) params.set('agentId', options.agentId);
+    const qs = params.toString();
+    const data = await this.getJson(
+      `/sessions/${encodeURIComponent(sessionId)}/tasks${qs ? `?${qs}` : ''}`,
+    );
+    return (data?.data as SessionTaskView[]) ?? [];
   }
 
   async abortSession(sessionId: string): Promise<void> {

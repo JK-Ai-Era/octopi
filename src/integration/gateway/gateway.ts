@@ -319,6 +319,7 @@ export class Gateway {
       messages: [],
       turns: [],
       metadata: options.metadata ?? {},
+      tasks: [],
     };
 
     await this.store.save(options.agentId, sessionId, session);
@@ -338,10 +339,26 @@ export class Gateway {
     return null;
   }
 
-  async getSessionView(sessionId: string, agentId?: string): Promise<{ meta: SessionMeta; messageCount: number; turnCount: number } | null> {
+  async getSessionView(sessionId: string, agentId?: string): Promise<{ meta: SessionMeta; messageCount: number; turnCount: number; taskCount?: number } | null> {
     const session = agentId ? await this.store.load(agentId, sessionId) : await this.findSession(sessionId);
     if (!session) return null;
-    return { meta: session.meta, messageCount: session.messages.length, turnCount: session.turns.length };
+    return {
+      meta: session.meta,
+      messageCount: session.messages.length,
+      turnCount: session.turns.length,
+      taskCount: session.tasks?.length ?? 0,
+    };
+  }
+
+  /**
+   * 会话任务列表（只读，供 UI）
+   */
+  async getSessionTasks(sessionId: string, agentId?: string): Promise<SessionData['tasks']> {
+    const session = agentId ? await this.store.load(agentId, sessionId) : await this.findSession(sessionId);
+    if (!session) {
+      throw new Error(`Session "${sessionId}" not found`);
+    }
+    return (session.tasks ?? []).map((t) => ({ ...t }));
   }
 
   async getSessionMessages(sessionId: string, options: { limit: number; cursor?: string; agentId?: string }): Promise<{ messages: Message[]; nextCursor?: string }> {
@@ -603,6 +620,18 @@ export class Gateway {
 
     // 构建
     const built = await builder.build();
+
+    // 会话任务事件 → WebSocket（UI 只读实时面板）
+    const forwardTaskEvent = (event: { sessionId?: string; type: string; data?: unknown }) => {
+      if (!event.sessionId) return;
+      for (const adapter of this.streamingAdapters) {
+        adapter.broadcastEvent(event.sessionId, event as any);
+      }
+    };
+    for (const type of ['session.task.created', 'session.task.updated', 'session.task.snapshot']) {
+      built.events.on(type, forwardTaskEvent);
+    }
+
     return { agent: built.agent, runner: built.runner };
   }
 

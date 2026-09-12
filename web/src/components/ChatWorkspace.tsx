@@ -11,6 +11,7 @@ import type {
   ViewMode,
 } from '../../../src/integration/web/conversation/types';
 import type { RunStatus } from '../../../src/integration/web/runtime/store';
+import type { SessionTaskView } from '../../../src/integration/web/sdk/client';
 import { estimateTextTokens } from '../../../src/harness/context/core-token-estimator';
 import { JSON_CHARS_PER_TOKEN } from '../../../src/harness/context/token-constants';
 
@@ -220,6 +221,102 @@ function ConversationItemCard({ item }: { item: ConversationItem }) {
   }
 }
 
+// ── Session Tasks panel (read-only) ──
+
+function statusLabel(status: SessionTaskView['status']): string {
+  switch (status) {
+    case 'open': return '进行中';
+    case 'paused': return '已暂停';
+    case 'done': return '已完成';
+    case 'dropped': return '已放弃';
+    default: return status;
+  }
+}
+
+const TASK_STATUS_ORDER: Record<SessionTaskView['status'], number> = {
+  open: 0,
+  paused: 1,
+  done: 2,
+  dropped: 3,
+};
+
+function TaskPanel({ tasks }: { tasks: SessionTaskView[] }) {
+  const goals = tasks
+    .filter((t) => !t.parentId)
+    .slice()
+    .sort((a, b) => {
+      const s = TASK_STATUS_ORDER[a.status] - TASK_STATUS_ORDER[b.status];
+      if (s !== 0) return s;
+      return a.createdAt - b.createdAt;
+    });
+
+  if (!goals.length) {
+    return (
+      <div className="tasks-empty">
+        <span className="tasks-empty-icon" aria-hidden>◎</span>
+        暂无会话任务
+        <div style={{ marginTop: 6 }}>
+          对 Agent 说「帮我建一个任务…」即可开始跟踪
+        </div>
+      </div>
+    );
+  }
+
+  const stepsOf = (goalId: string) =>
+    tasks
+      .filter((t) => t.parentId === goalId)
+      .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+
+  return (
+    <div className="task-list">
+      {goals.map((goal) => {
+        const steps = stepsOf(goal.id);
+        const settled = steps.filter((s) => s.status === 'done' || s.status === 'dropped').length;
+        const pct = steps.length ? Math.round((settled / steps.length) * 100) : 0;
+        const cardClass = `task-card task-card-${goal.status}`;
+
+        return (
+          <article key={goal.id} className={cardClass}>
+            <div className="task-card-top">
+              <div className="task-card-title">{goal.description}</div>
+              <span className={`task-badge task-badge-${goal.status}`}>
+                {statusLabel(goal.status)}
+              </span>
+            </div>
+
+            {steps.length > 0 && (
+              <div className="task-meta-row">
+                <span>步骤 {settled}/{steps.length}</span>
+                <div className="task-progress-track" title={`${pct}%`}>
+                  <div className="task-progress-fill" style={{ width: `${pct}%` }} />
+                </div>
+                <span>{pct}%</span>
+              </div>
+            )}
+
+            {goal.progressNote && (
+              <div className="task-note">{goal.progressNote}</div>
+            )}
+
+            {steps.length > 0 && (
+              <ul className="task-steps">
+                {steps.map((step) => (
+                  <li key={step.id} className={`task-step task-step-${step.status}`}>
+                    <span className="task-step-mark" aria-hidden>
+                      {step.status === 'done' ? '✓' : step.status === 'paused' ? '‖' : ''}
+                    </span>
+                    <span>{step.description}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </article>
+        );
+      })}
+    </div>
+  );
+}
+
 // ── Main Component ──
 
 export default function ChatWorkspace() {
@@ -236,8 +333,9 @@ export default function ChatWorkspace() {
   const [stream, setStream] = useState('');
   const [runStatus, setRunStatus] = useState<RunStatus>('idle');
   const [inspector, setInspector] = useState<Record<string, unknown>>({});
+  const [tasks, setTasks] = useState<SessionTaskView[]>([]);
   const [input, setInput] = useState('');
-  const [rightTab, setRightTab] = useState<'inspector' | 'tools' | 'help'>('inspector');
+  const [rightTab, setRightTab] = useState<'inspector' | 'tasks' | 'tools' | 'help'>('tasks');
   const [connectError, setConnectError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
@@ -274,6 +372,9 @@ export default function ChatWorkspace() {
     }) as EventListener);
     store.addEventListener('inspector', ((e: CustomEvent) => {
       setInspector(e.detail.inspector);
+    }) as EventListener);
+    store.addEventListener('tasks', ((e: CustomEvent) => {
+      setTasks(e.detail.tasks ?? []);
     }) as EventListener);
     store.addEventListener('error', ((e: CustomEvent) => {
       setConnectError(String(e.detail.error ?? ''));
@@ -325,9 +426,13 @@ export default function ChatWorkspace() {
     const store = storeRef.current;
     if (!store) return;
     await store.openSession(sessionId);
+    const state = store.getState();
     setActiveSessionId(sessionId);
     setRunStatus('idle');
     setStream('');
+    setTasks(state.chat.tasks ?? []);
+    setConversationItems(state.chat.conversation ?? []);
+    setViewMode(state.chat.viewMode);
   };
 
   const createSession = async () => {
@@ -342,6 +447,7 @@ export default function ChatWorkspace() {
       setActiveSessionId(created.id);
       setRunStatus('idle');
       setStream('');
+      setTasks(store.getTasks());
     } catch (error) {
       setActionError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -582,10 +688,35 @@ export default function ChatWorkspace() {
         {/* ── 右栏：检查器 ── */}
         <aside className="right-panel">
           <div className="right-tabs">
+            <button
+              className={rightTab === 'tasks' ? 'btn-tab btn-tab-active' : 'btn-tab'}
+              onClick={() => setRightTab('tasks')}
+            >
+              任务
+              {(() => {
+                const n = tasks.filter((t) => !t.parentId && (t.status === 'open' || t.status === 'paused')).length;
+                return n > 0 ? <span className="tab-count">{n}</span> : null;
+              })()}
+            </button>
             <button className={rightTab === 'inspector' ? 'btn-tab btn-tab-active' : 'btn-tab'} onClick={() => setRightTab('inspector')}>检查</button>
             <button className={rightTab === 'tools' ? 'btn-tab btn-tab-active' : 'btn-tab'} onClick={() => setRightTab('tools')}>工具</button>
             <button className={rightTab === 'help' ? 'btn-tab btn-tab-active' : 'btn-tab'} onClick={() => setRightTab('help')}>帮助</button>
           </div>
+
+          {rightTab === 'tasks' && (
+            <div>
+              <div className="tasks-panel-header">
+                <div className="sidebar-title" style={{ marginBottom: 0 }}>会话任务</div>
+                <span className="small muted">
+                  {tasks.filter((t) => !t.parentId && (t.status === 'open' || t.status === 'paused')).length} 进行中
+                </span>
+              </div>
+              <div className="tasks-panel-hint">
+                只读列表，由 Agent 维护。对 Agent 说「把 xx 标为完成」即可更新。
+              </div>
+              <TaskPanel tasks={tasks} />
+            </div>
+          )}
 
           {rightTab === 'inspector' && (
             <div style={{ display: 'grid', gap: 12 }}>
@@ -645,7 +776,8 @@ export default function ChatWorkspace() {
               <ul style={{ margin: 0, paddingLeft: 18, fontSize: 'var(--text-sm)' }}>
                 <li>左栏负责连接、Agent、会话创建</li>
                 <li>中栏负责主聊天链路</li>
-                <li>右栏负责运行时检查</li>
+                <li>右栏「任务」实时展示会话任务树</li>
+                <li>右栏「检查」查看运行时状态</li>
                 <li>连接成功后自动刷新 Agent 和会话</li>
                 <li>Enter 发送，Shift+Enter 换行</li>
                 <li>输入法组合选词阶段不会误触发送</li>

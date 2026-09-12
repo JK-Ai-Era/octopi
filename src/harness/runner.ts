@@ -22,6 +22,8 @@ import type { ReliabilityHarness } from './reliability/run-agent.js';
 import { runAgentWithReliability } from './reliability/run-agent.js';
 import { createSessionStateMachine, type StateMachine } from '../core/primitives/state-machine.js';
 import { HeuristicTokenEstimator } from './context/token-estimator.js';
+import type { SessionTaskService } from './session-tasks/service.js';
+import { renderSessionTasksInjection } from './session-tasks/render.js';
 
 export type { TaskDecisionProvider, TaskDecisionResult } from '../core/interfaces/task-decision.js';
 import type { TaskDecisionProvider, TaskDecisionResult } from '../core/interfaces/task-decision.js';
@@ -47,13 +49,15 @@ export interface SessionAwareRunnerConfig {
    */
   sessionGate?: import('./concurrency/session-gate.js').SessionGate;
   /**
-   * 任务决策提供者（可选）
+   * 会话任务服务（推荐）
    *
-   * 在用户消息到达时调用 LLM 判断任务状态，
-   * 将结果注入到 runConfig.injectedContext，由 ContextEngine 透传到 systemPrompt。
-   *
-   * 调用时机：handle() 中追加用户消息后、engine.run() 前，只调用一次。
-   * 工具调用循环中不会重复调用。
+   * handle() 在 load session 后 attach，每轮注入未闭合 goal（step 仅 rollup）。
+   * 与 task_* 工具共用同一实例。
+   */
+  sessionTaskService?: SessionTaskService;
+  /**
+   * @deprecated 使用 sessionTaskService；若同时配置，sessionTaskService 优先用于注入。
+   * 旧侧车决策路径，新项目勿用。
    */
   taskDecisionProvider?: TaskDecisionProvider;
 }
@@ -189,9 +193,13 @@ export class SessionAwareRunner {
       if (!session) {
         session = this.createSession(sessionId, runConfig.agentId ?? 'default');
       }
+      if (!session.tasks) session.tasks = [];
 
       // 4. 检查 session 是否需要重置
       this.checkSessionReset(session);
+
+      // 4b. 绑定会话任务服务（工具与注入共用同一内存对象）
+      this.config.sessionTaskService?.attachSession(session);
 
       // 5. 追加用户消息
       session.messages.push(input);
@@ -215,9 +223,18 @@ export class SessionAwareRunner {
       sm.transition('processing');
       session.meta.status = sm.state;
 
-      // 6. 任务决策（如果配置了 TaskDecisionProvider）
+      // 6. 会话任务注入（推荐路径）；无 Service 时回退旧 TaskDecisionProvider
       let effectiveRunConfig = runConfig;
-      if (this.config.taskDecisionProvider && input.role === 'user') {
+      if (this.config.sessionTaskService) {
+        const taskInjection = renderSessionTasksInjection(session.tasks ?? []);
+        if (taskInjection) {
+          const baseInjected = runConfig.injectedContext;
+          effectiveRunConfig = {
+            ...runConfig,
+            injectedContext: baseInjected ? `${baseInjected}\n\n${taskInjection}` : taskInjection,
+          };
+        }
+      } else if (this.config.taskDecisionProvider && input.role === 'user') {
         try {
           const decision = await this.config.taskDecisionProvider.decide({
             sessionId,
@@ -473,6 +490,7 @@ export class SessionAwareRunner {
       messages: [],
       turns: [],
       metadata: {},
+      tasks: [],
     };
   }
 

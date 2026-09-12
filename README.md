@@ -68,7 +68,8 @@ Infrastructure primitives (EventBus, StateMachine, AsyncTask, ProcessModel) and 
 | **Reliability** | `runAgentWithReliability()`, circuit breaker, retry, supervision |
 | **Plugin Ecosystem** | Plugins, tools, skills, MCP, slash commands |
 | **Distributed Agents** | Multi-agent orchestration, distributed runtime, triggers |
-| **Task System** | Task management, planning, scheduling, workflow, quality gates |
+| **Session Tasks** | Session-level tasks (goal/step), injection, read-only UI; see [task-system](./docs/task-system.md) |
+| **Task System (legacy)** | Planner/scheduler/workflow (experimental); see [domain-split](./docs/domain-split.md) |
 | **Concurrency** | Multi-key LLM load balancing, rate limiting, session gating |
 | **Execution Environment** | Sandboxing, workspace management, file operations |
 | **Human-in-the-Loop** | Approval workflows, decision caching, risk-based policies |
@@ -194,7 +195,8 @@ src/
 │   ├── reliability/              Reliability wrapper, circuit breaker
 │   ├── plugin-ecosystem/         Plugins, tools, skills, MCP
 │   ├── distributed-agents/       Multi-agent, distributed runtime
-│   ├── task-system/              Tasks, planner, scheduler, workflow
+│   ├── session-tasks/            SessionTask (goal/step) — default path
+│   ├── task-system/              Legacy: supervisor/planner/scheduler/workflow
 │   ├── concurrency/              Load balancing, rate limiting
 │   ├── execution-environment/    Sandboxing, workspace
 │   ├── human-in-the-loop/        Approval workflows
@@ -214,7 +216,8 @@ src/
 - [Layer Rules](./arch/layer-rules.md) — Dependency rules
 - [Invariants](./arch/invariants.md) — Architecture invariants
 - [Plugin System](./docs/plugin-system.md) — Plugin system details
-- [Task System](./docs/task-system.md) — Task system details
+- [Session Tasks](./docs/task-system.md) — SessionTask design baseline
+- [Domain Split](./docs/domain-split.md) — run-guard / orchestration / AsyncTask boundaries
 - [Contributing](./docs/CONTRIBUTING.md) — Development guidelines
 - [Changelog](./CHANGELOG.md) — Version history
 - [Web Runtime Design](./docs/web-runtime-design.md) — Web Protocol SDK / Runtime Store / WebUI design

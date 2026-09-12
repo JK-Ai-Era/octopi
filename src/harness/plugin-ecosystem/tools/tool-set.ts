@@ -1,18 +1,23 @@
 import type { RegisteredTool } from '../../../core/types.js';
 import type { MemoryStore } from '../../memory/types.js';
-import type { TaskTracker as ITaskTracker } from '../../task-system/tasks/types.js';
+import type { SessionTaskService } from '../../session-tasks/service.js';
 import type { WebSearchProvider } from '../../../core/interfaces/web-search.js';
 import type { AskUserCallback } from './ask-user.js';
 
 import { getBuiltinTools } from './builtin.js';
 import { createMemoryTools } from './memory.js';
-import { createTaskTools } from './task-tools.js';
+import { createSessionTaskTools } from '../../session-tasks/tools.js';
 import { createAskUserTool } from './ask-user.js';
 import { createWebSearchTool } from './web-search.js';
 
 export interface ToolSetConfig {
   memoryStore?: MemoryStore;
-  taskTracker?: ITaskTracker;
+  /** SessionTaskService — 会话任务唯一写入口 */
+  sessionTaskService?: SessionTaskService;
+  /**
+   * @deprecated 使用 sessionTaskService
+   */
+  taskTracker?: SessionTaskService;
   askUser?: AskUserCallback;
   /** 已解析的 web search 实现；未提供时不注册 web_search */
   webSearch?: {
@@ -29,10 +34,11 @@ export interface ToolSet {
 }
 
 export function createToolSet(config?: ToolSetConfig): ToolSet {
+  const taskService = config?.sessionTaskService ?? config?.taskTracker;
   const builtin = getBuiltinTools();
   const extensions: RegisteredTool[] = [
     ...(config?.memoryStore ? createMemoryTools(config.memoryStore) : []),
-    ...(config?.taskTracker ? createTaskTools(config.taskTracker) : []),
+    ...(taskService ? createSessionTaskTools(taskService) : []),
     ...(config?.askUser ? [createAskUserTool(config.askUser)] : []),
     ...(config?.webSearch
       ? [

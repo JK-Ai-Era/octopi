@@ -101,6 +101,21 @@ export class WebApiRouter {
         return this.json(res, 200, { ok: true, data: page });
       }
 
+      const tasksMatch = relativePath.match(/^\/sessions\/([^/]+)\/tasks$/);
+      if (tasksMatch && method === 'GET') {
+        const agentId = url.searchParams.get('agentId') ?? undefined;
+        try {
+          const tasks = await this.gateway.getSessionTasks(tasksMatch[1], agentId ?? undefined);
+          return this.json(res, 200, { ok: true, data: tasks ?? [] });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          if (/not found/i.test(message)) {
+            return this.json(res, 404, { ok: false, error: message });
+          }
+          throw err;
+        }
+      }
+
       const abortMatch = relativePath.match(/^\/sessions\/([^/]+)\/abort$/);
       if (abortMatch && method === 'POST') {
         this.gateway.abortSession(abortMatch[1]);

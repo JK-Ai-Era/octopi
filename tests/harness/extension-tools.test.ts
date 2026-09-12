@@ -2,18 +2,43 @@ import { describe, it, expect } from 'vitest';
 
 import { createToolSet } from '../../src/harness/plugin-ecosystem/tools/tool-set.js';
 import { createMemoryTools } from '../../src/harness/plugin-ecosystem/tools/memory.js';
-import { createTaskTools } from '../../src/harness/plugin-ecosystem/tools/task-tools.js';
+import { createSessionTaskTools } from '../../src/harness/session-tasks/tools.js';
 import { createAskUserTool } from '../../src/harness/plugin-ecosystem/tools/ask-user.js';
 import { InMemoryMemoryStore } from '../../src/harness/memory/store.js';
-import { TaskTracker } from '../../src/harness/task-system/tasks/tracker.js';
+import { InMemorySessionStore } from '../../src/integration/storage/memory.js';
+import { SessionTaskService } from '../../src/harness/session-tasks/service.js';
+import type { SessionData } from '../../src/harness/session-types.js';
+
+function createSession(id = 's1', agentId = 'a1'): SessionData {
+  return {
+    id,
+    agentId,
+    meta: {
+      id,
+      agentId,
+      channelId: 'test',
+      peerId: 'test',
+      status: 'idle',
+      createdAt: Date.now(),
+      sessionStartedAt: Date.now(),
+      lastInteractionAt: Date.now(),
+      updatedAt: Date.now(),
+    },
+    messages: [],
+    turns: [],
+    metadata: {},
+    tasks: [],
+  };
+}
 
 describe('extension tools', () => {
   it('createToolSet should separate builtin and extension tools', () => {
     const store = new InMemoryMemoryStore();
-    const tracker = new TaskTracker();
+    const sessionStore = new InMemorySessionStore();
+    const taskService = new SessionTaskService(sessionStore);
     const { builtin, extensions, all } = createToolSet({
       memoryStore: store,
-      taskTracker: tracker,
+      sessionTaskService: taskService,
       askUser: async () => 'ok',
     });
 
@@ -23,7 +48,8 @@ describe('extension tools', () => {
       'memory_search',
       'task_create',
       'task_list',
-      'task_update',
+      'task_plan',
+      'task_complete',
       'ask_user',
     ]));
     expect(all.length).toBe(builtin.length + extensions.length);
@@ -54,31 +80,34 @@ describe('extension tools', () => {
     expect(result.results[0].content).toBe('hello');
   });
 
-  it('task tools should work with injected tracker', async () => {
-    const tracker = new TaskTracker();
-    const [create, list, update] = createTaskTools(tracker);
+  it('task tools should work with injected SessionTaskService', async () => {
+    const sessionStore = new InMemorySessionStore();
+    const session = createSession();
+    await sessionStore.save('a1', 's1', session);
+    const service = new SessionTaskService(sessionStore);
+    service.attachSession(session);
+    const tools = createSessionTaskTools(service);
+    const byName = Object.fromEntries(tools.map((t) => [t.definition.name, t]));
+    const ctx = { sessionId: 's1', agentId: 'a1', messages: [] };
 
-    const created = (await create.handler(
+    const created = (await byName.task_create.handler(
       { description: 'write docs' },
-      { sessionId: 's1', agentId: 'a1', messages: [] },
+      ctx,
     )) as { id: string; description: string; status: string };
 
     expect(created.description).toBe('write docs');
+    expect(created.status).toBe('open');
 
-    const listResult = (await list.handler(
-      {},
-      { sessionId: 's1', agentId: 'a1', messages: [] },
-    )) as { tasks: Array<{ id: string; description: string }>; total: number };
+    const listResult = (await byName.task_list.handler({}, ctx)) as {
+      tasks: Array<{ id: string; description: string }>;
+      total: number;
+    };
 
     expect(listResult.total).toBe(1);
 
-    const updateResult = (await update.handler(
-      { task_id: created.id, action: 'complete' },
-      { sessionId: 's1', agentId: 'a1', messages: [] },
-    )) as { id: string; action: string };
-
-    expect(updateResult.id).toBe(created.id);
-    expect(updateResult.action).toBe('complete');
+    await byName.task_complete.handler({ task_id: created.id }, ctx);
+    const after = (await byName.task_list.handler({ active_only: true }, ctx)) as { total: number };
+    expect(after.total).toBe(0);
   });
 
   it('ask_user should invoke injected callback', async () => {

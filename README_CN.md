@@ -68,7 +68,8 @@ Octopi 是一个可嵌入的 Agent 底座引擎，用于构建 AI 驱动的应�
 | **Reliability** | `runAgentWithReliability()`、断路器、重试、监督 |
 | **Plugin Ecosystem** | Plugin、Tool、Skill、MCP、斜杠命令 |
 | **Distributed Agents** | 多 Agent 编排、分布式运行时、触发引擎 |
-| **Task System** | 任务管理、规划、调度、工作流、质量检测 |
+| **Session Tasks** | 会话任务（goal/step）、注入、只读 UI；见 [task-system](./docs/task-system.md) |
+| **Task System (legacy)** | 规划/调度/工作流等 experimental；领域切分见 [domain-split](./docs/domain-split.md) |
 | **Concurrency** | 多 Key LLM 负载均衡、限流、Session 门控 |
 | **Execution Environment** | 沙箱、工作区管理、文件操作 |
 | **Human-in-the-Loop** | 审批流程、决策缓存、基于风险的策略 |
@@ -194,7 +195,8 @@ src/
 │   ├── reliability/              可靠性包装、断路器
 │   ├── plugin-ecosystem/         Plugin、Tool、Skill、MCP
 │   ├── distributed-agents/       多 Agent、分布式运行时
-│   ├── task-system/              任务、规划、调度、工作流
+│   ├── session-tasks/            会话任务 SessionTask（默认）
+│   ├── task-system/              legacy：监督/规划/调度/工作流（待迁）
 │   ├── concurrency/              负载均衡、限流
 │   ├── execution-environment/    沙箱、工作区
 │   ├── human-in-the-loop/        审批流程
@@ -213,7 +215,8 @@ src/
 - [分层规则](./arch/layer-rules.md) — 依赖方向规则
 - [架构不变量](./arch/invariants.md) — 架构约束
 - [Plugin 系统](./docs/plugin-system.md) — Plugin 系统详细文档
-- [Task 系统](./docs/task-system.md) — Task 系统详细文档
+- [会话任务 SessionTask](./docs/task-system.md) — 设计基准
+- [领域切分](./docs/domain-split.md) — run-guard / orchestration / AsyncTask
 - [开发规范](./docs/CONTRIBUTING.md) — 开发指南
 - [更新日志](./CHANGELOG.md) — 版本历史
 - [Web Runtime 技术设计](./docs/web-runtime-design.md) — Web Protocol SDK / Runtime Store / WebUI 设计

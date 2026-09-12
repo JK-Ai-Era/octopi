@@ -53,6 +53,8 @@ import type { TraceCollectorConfig } from '../../integration/observability/trace
 import type { MetricsAggregatorConfig } from '../../integration/observability/metrics.js';
 import type { TraceLoggerConfig } from '../../integration/observability/trace-logger.js';
 import type { SessionStore } from '../../core/interfaces/session-store.js';
+import { SessionTaskService } from '../session-tasks/service.js';
+import { createSessionTaskTools } from '../session-tasks/tools.js';
 import type { SessionData } from '../session-types.js';
 import { InMemorySessionStore } from '../../integration/storage/memory.js';
 
@@ -561,13 +563,32 @@ export class AgentBuilder {
       };
     }
 
-    // 使用 buildAgent() 构建核心组件
+    // 创建 SessionStore（须在 buildAgent 之前，以便 task_* 工具进入 Agent 的工具快照）
+    const store = this._store ?? new InMemorySessionStore();
+    this._store = store;
+
+    // 会话任务：默认创建 Service；注册 task_* 工具后再 buildAgent
+    const sessionTaskService =
+      this._runnerConfig?.sessionTaskService ?? new SessionTaskService(store, events);
+    this._runnerConfig = {
+      ...this._runnerConfig,
+      sessionTaskService,
+    };
+
+    if (!this._toolBus.getTool('task_list')) {
+      for (const t of createSessionTaskTools(sessionTaskService)) {
+        this._toolBus.register(t);
+      }
+    }
+
+    // 使用 buildAgent() 构建核心组件（此时 toolBus 已含 task_*）
     const { agent, harness, mcpManager } = await this.buildAgent();
 
-
-    // 创建 SessionStore + Runner
-    const store = this._store ?? new InMemorySessionStore();
-    const runner = new SessionAwareRunner(agent, harness, store, { ...this._runnerConfig, events });
+    const runner = new SessionAwareRunner(agent, harness, store, {
+      ...this._runnerConfig,
+      sessionTaskService,
+      events,
+    });
     runner.setToolContextProvider(this._contextProvider);
 
     // 创建 SubsystemRuntime（如果有自主子系统）

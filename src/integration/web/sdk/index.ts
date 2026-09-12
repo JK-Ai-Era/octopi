@@ -10,6 +10,7 @@ export type {
   ProviderSummary,
   SessionSummary,
   SessionView,
+  SessionTaskView,
   MessageRecord,
   MessagePage,
   PendingApproval,

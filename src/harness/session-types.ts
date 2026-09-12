@@ -6,6 +6,7 @@
  */
 
 import type { Message, Turn, SessionMeta } from '../core/types.js';
+import type { SessionTask } from './session-tasks/types.js';
 
 /** Session 生命周期状态 */
 export type SessionLifecycleStatus = 'active' | 'recent' | 'extracted' | 'archived';
@@ -30,4 +31,9 @@ export interface SessionData {
   turns: Turn[];
   metadata: Record<string, unknown>;
   lifecycle?: SessionLifecycleMeta;
+  /**
+   * 会话任务（goal/step 两级）。见 docs/task-system.md。
+   * 历史数据可能缺省；Service/Runner 会视作 []。
+   */
+  tasks?: SessionTask[];
 }

@@ -74,8 +74,14 @@ export { SubsystemSessionManager, parseTTL } from './autonomous-subsystem/sessio
 export { AuditWriter, AuditReader } from './autonomous-subsystem/audit/index.js';
 export { validateSubsystemSpec } from './autonomous-subsystem/boundary/index.js';
 
-// ── Task System ──
+// ── Session Tasks（会话任务，Session 聚合）──
+export { SessionTaskService, renderSessionTasksInjection, createSessionTaskTools } from './session-tasks/index.js';
+export type { SessionTask, SessionTaskStatus, SessionTaskListFilter } from './session-tasks/index.js';
+
+// ── Task System（legacy 伞目录；新代码请用 session-tasks / run-guard / orchestration）──
+/** @deprecated 使用 SessionTaskService */
 export { TaskTracker, TaskManager, applyDecision, DefaultTaskDecisionProvider } from './task-system/tasks/index.js';
+/** @deprecated 使用 SessionTask */
 export type { Task, TaskDecision, TaskDecisionInput, DefaultTaskDecisionProviderConfig } from './task-system/tasks/index.js';
 export { RulePlanner, LLMPlanner, HybridPlanner, USER_MESSAGE_RULE, SECURITY_EVENT_RULE, IDLE_RULE, getDefaultRules } from './task-system/planner/index.js';
 export type { Rule, RuleCondition, RuleAction, LLMPlannerConfig, HybridPlannerConfig } from './task-system/planner/index.js';
