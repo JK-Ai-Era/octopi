@@ -1,3 +1,9 @@
+## v0.18.2 (2026-09-13)
+
+### chore(docs): 删除已完成的技术债文档
+
+`docs/TECH_DEBT_REPAIR_ISSUES.md` 中 8 项技术债均已修复并验证，文档不再需要。
+
 ## v0.18.1 (2026-09-13)
 
 ### chore(docs): 删除过期 TECH_DEBT_REPAIR_PLAN.md
