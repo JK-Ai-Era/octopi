@@ -57,7 +57,9 @@ import { PluginManager } from '../../harness/plugin-ecosystem/plugins/manager.js
 import { DefaultEventBus } from '../../core/primitives/event-bus.js';
 import { DefaultSecurityGuard } from '../../harness/security/default-security-guard.js';
 import { DefaultContextEngine } from '../../harness/context/default-context-engine.js';
-import { SessionAwareRunner, type RunConfig } from '../../harness/runner.js';
+import { SessionAwareRunner } from '../../harness/runner.js';
+import { AgentRuntime, SessionRunnerDispatcher, ExplicitRouter } from '../../harness/agent-runtime/index.js';
+import { dispatchChannelMessage } from '../agent-runtime/channel-message-source.js';
 
 // Web REST 骨架所需的 Gateway 扩展类型
 // ================================================================
@@ -134,17 +136,37 @@ export class Gateway {
   private streamingAdapters: StreamingChannelAdapter[] = [];
   /** 每个 provider 的熔断器 */
   private circuitBreakers = new Map<string, CircuitBreaker>();
-  /** 每个 session 的中止控制器 */
-  private abortControllers = new Map<string, AbortController>();
   /** 默认 store 的异步初始化 Promise（未传入 store 时） */
   private _defaultStorePromise?: Promise<SessionStore<SessionData>>;
   /** Web Runtime pending approvals */
   private pendingApprovals = new Map<string, PendingApprovalView>();
+  /** 激活宿主（arch/agent-runtime.md）；消息路径经 dispatch */
+  private runtime: AgentRuntime;
+  private gatewayBus: DefaultEventBus;
 
   constructor(config: GatewayConfig, store?: SessionStore<SessionData>) {
     this.config = config;
     this.dmScope = config.session?.dmScope ?? 'main';
     this.pluginManager = new PluginManager();
+    // Gateway EventBus：RuntimeEvents 进可观测总线，并转发到 Gateway listeners（不变量 #6）
+    this.gatewayBus = new DefaultEventBus();
+    this.runtime = new AgentRuntime({
+      router: new ExplicitRouter(),
+      events: this.gatewayBus,
+      defaultCoalesceMs: config.agentRuntime?.coalesceWindowMs,
+      coalesceBufferLimit: config.agentRuntime?.coalesceBufferLimit,
+      admission: {
+        expectedMaxConcurrentRuns: config.agentRuntime?.expectedMaxConcurrentRuns,
+      },
+    });
+    this.gatewayBus.onAll((event) => {
+      this.emitEvent(event);
+      for (const adapter of this.streamingAdapters) {
+        if (event.sessionId) {
+          adapter.broadcastEvent(event.sessionId, event as never);
+        }
+      }
+    });
     if (store) {
       this.store = store;
     } else {
@@ -155,6 +177,71 @@ export class Gateway {
     // 注册配置中定义的 agents
     for (const agent of config.agents) {
       this.agents.set(agent.id, agent);
+    }
+  }
+
+  /** 激活宿主（Schedule/Escalate 等 Source 挂载用） */
+  getAgentRuntime(): AgentRuntime {
+    return this.runtime;
+  }
+
+  /**
+   * 按配置挂载 Runtime Sources（Schedule / Escalate）。
+   * 应在 start() 之前调用；与 gatewayBus 同源。
+   */
+  async configureAgentRuntime(cfg: {
+    schedule?: Array<{
+      agentId: string;
+      sessionId?: string;
+      intervalMs?: number;
+      cron?: string;
+      content: string;
+      coalesceKey?: string;
+      runOnStart?: boolean;
+    }>;
+    escalate?: { defaultAgentId?: string; eventType?: string | string[] };
+    /** 挂载 AgentSignalSource（多 Agent 通知） */
+    agentSignal?: boolean;
+  }): Promise<void> {
+    if (cfg.schedule && cfg.schedule.length > 0) {
+      const { ScheduleSource } = await import('../../harness/agent-runtime/sources/schedule.js');
+      this.runtime.addSource(
+        new ScheduleSource({
+          jobs: cfg.schedule.map((job) => ({
+            agentId: job.agentId,
+            sessionId: job.sessionId,
+            intervalMs: job.intervalMs,
+            cron: job.cron,
+            coalesceKey: job.coalesceKey,
+            runOnStart: job.runOnStart,
+            payload: { kind: 'system_note', content: job.content },
+            metadata: { source: 'config.schedule' },
+          })),
+        }),
+      );
+      console.log(`[Gateway] AgentRuntime ScheduleSource: ${cfg.schedule.length} job(s)`);
+    }
+    if (cfg.escalate) {
+      const { EscalateBridge } = await import(
+        '../../harness/agent-runtime/sources/escalate-bridge.js'
+      );
+      this.runtime.addSource(
+        new EscalateBridge({
+          events: this.gatewayBus,
+          defaultAgentId: cfg.escalate.defaultAgentId,
+          eventType: cfg.escalate.eventType,
+        }),
+      );
+      console.log(
+        `[Gateway] AgentRuntime EscalateBridge (defaultAgentId=${cfg.escalate.defaultAgentId ?? 'n/a'})`,
+      );
+    }
+    if (cfg.agentSignal) {
+      const { AgentSignalSource } = await import(
+        '../../harness/agent-runtime/sources/agent-signal.js'
+      );
+      this.runtime.addSource(new AgentSignalSource({ events: this.gatewayBus }));
+      console.log('[Gateway] AgentRuntime AgentSignalSource');
     }
   }
 
@@ -192,6 +279,7 @@ export class Gateway {
       });
     }
 
+    await this.runtime.start();
     this.started = true;
     console.log(`[Gateway] Ready. ${this.agents.size} agent(s), ${this.channels.size} channel(s)`);
   }
@@ -205,6 +293,7 @@ export class Gateway {
       await adapter.stop();
     }
 
+    await this.runtime.stop();
     await this.pluginManager.onGatewayStop();
     personaCache.clear();
     this.started = false;
@@ -262,12 +351,11 @@ export class Gateway {
 
   /**
    * 中止指定 session 的正在运行的 agent
+   * 归属：Runtime 持有 AbortController；Gateway 转调（arch/agent-runtime.md §8.1）
    */
   abortSession(sessionId: string): void {
-    const controller = this.abortControllers.get(sessionId);
-    if (controller) {
-      controller.abort();
-      this.abortControllers.delete(sessionId);
+    for (const agentId of this.agents.keys()) {
+      this.runtime.abort(agentId, sessionId);
     }
   }
 
@@ -447,7 +535,7 @@ export class Gateway {
       { sessionId: sessionKey, agentId: agent.id, message: msg },
     );
 
-    // 3. 获取或构建 Agent + SessionAwareRunner
+    // 3. 获取或构建 Agent + SessionAwareRunner，并注册进 Runtime
     let cached = this.agentCache.get(agent.id);
     if (!cached) {
       cached = await this.buildAgent(agent);
@@ -455,67 +543,40 @@ export class Gateway {
     }
     const { runner } = cached;
 
-    // 4. 构建用户消息
-    const userMessage = {
-      role: 'user' as const,
-      content: msg.content,
-      source: {
-        channel: msg.channel,
-        senderId: msg.senderId,
-        senderName: msg.senderName,
-        messageId: msg.id,
-        conversationId: msg.conversationId,
-      },
-      timestamp: msg.timestamp,
-    };
-
-    // 5. 运行 Agent
-    let runSystemPrompt = typeof agent.persona === 'object' ? agent.persona?.systemPrompt ?? '' : '';
-    if (!runSystemPrompt && agent.home) {
-      runSystemPrompt = await loadPersonaCached(agent.home);
-    }
-    // 解析 contextWindow：优先用 agent 配置，否则从 provider model info 获取
-    let contextWindow = agent.model.contextWindow;
-    if (!contextWindow) {
-      const provider = this.providers.get(agent.model.provider);
-      const modelInfo = provider?.getModelInfo(agent.model.model);
-      contextWindow = modelInfo?.contextWindow;
+    // 确保 Runtime 已注册该 agent 的 dispatcher
+    if (!this.runtime.listAgents().some((a) => a.agentId === agent.id)) {
+      await this.registerRuntimeAgent(agent, runner);
     }
 
-    const runConfig: RunConfig = {
-      agentId: agent.id,
-      sessionId: sessionKey,
-      model: agent.model.model,
-      contextWindow,
-      systemPrompt: runSystemPrompt,
-    };
-
+    // 4–5. 经激活宿主执行（模型 A）；onEvent 做流式广播（不变量 #6）
     let finalContent = '';
-
-    // 创建中止控制器
-    const abortController = new AbortController();
-    this.abortControllers.set(sessionKey, abortController);
-
-    try {
-      for await (const event of runner.handle(sessionKey, userMessage, runConfig, abortController.signal)) {
-        // 转发事件给监听器
-        this.emitEvent(event as any);
-
-        // 广播给 WebSocket 客户端
+    const dispatchResult = await dispatchChannelMessage({
+      runtime: this.runtime,
+      msg,
+      resolveAgentId: () => agent.id,
+      resolveSessionId: () => sessionKey,
+      onEvent: (event) => {
+        this.emitEvent(event as unknown as AgentEvent);
         for (const adapter of this.streamingAdapters) {
-          adapter.broadcastEvent(sessionKey, event as any);
+          adapter.broadcastEvent(sessionKey, event as unknown as AgentEvent);
         }
-
-        // 捕获最终回复
         if (event.type === 'turn.end' && event.data?.content) {
           finalContent = event.data.content as string;
         }
-      }
-    } catch (error) {
-      console.error(`[Gateway] Error processing message:`, error);
-      finalContent = `[Gateway Error] ${error instanceof Error ? error.message : String(error)}`;
-    } finally {
-      this.abortControllers.delete(sessionKey);
+      },
+    });
+
+    if (dispatchResult.status === 'failed') {
+      const err =
+        'error' in dispatchResult
+          ? dispatchResult.error
+          : dispatchResult.results
+              .map((r) => `${r.agentId}:${r.result.status}`)
+              .join(',');
+      console.error(`[Gateway] Error processing message:`, err);
+      finalContent = `[Gateway Error] ${err}`;
+    } else if (dispatchResult.status === 'skipped') {
+      console.warn(`[Gateway] Dispatch skipped: ${dispatchResult.reason}`);
     }
 
     // 6. Plugin: message_sending
@@ -544,6 +605,36 @@ export class Gateway {
       await adapter.send(channelReply);
       await this.pluginManager.runAllHooks('message_sent', { ...hookCtx, reply: channelReply });
     }
+  }
+
+  private async registerRuntimeAgent(
+    agent: AgentDefinition,
+    runner: SessionAwareRunner,
+  ): Promise<void> {
+    let runSystemPrompt =
+      typeof agent.persona === 'object' ? agent.persona?.systemPrompt ?? '' : '';
+    if (!runSystemPrompt && agent.home) {
+      runSystemPrompt = await loadPersonaCached(agent.home);
+    }
+    let contextWindow = agent.model.contextWindow;
+    if (!contextWindow) {
+      const provider = this.providers.get(agent.model.provider);
+      contextWindow = provider?.getModelInfo(agent.model.model)?.contextWindow;
+    }
+
+    this.runtime.registerAgent({
+      agentId: agent.id,
+      dispatcher: new SessionRunnerDispatcher({
+        runner,
+        runConfigDefaults: {
+          agentId: agent.id,
+          model: agent.model.model,
+          contextWindow,
+          systemPrompt: runSystemPrompt,
+        },
+      }),
+      resolveSession: (trigger) => trigger.sessionId ?? `${agent.id}:main`,
+    });
   }
 
   /**
@@ -580,11 +671,12 @@ export class Gateway {
       console.log(`[Gateway] Agent "${agent.id}" fallback chain: ${[agent.model.model, ...agent.model.fallbackModels.map(f => f.model)].join(' → ')}`);
     }
 
-    // 使用 AgentBuilder 构建
+    // 使用 AgentBuilder 构建；与 Runtime 同源 EventBus，Escalate/子系统事件才可达
     const builder = new (await import('../../harness/agent-building/builder.js')).AgentBuilder()
       .model(finalProvider)
       .store(this.store)
-      .workspace(agent.workspace ?? '');
+      .workspace(agent.workspace ?? '')
+      .events(this.gatewayBus);
 
     // 注册工具
     console.log(`[Gateway] Building agent "${agent.id}" with ${this.tools.length} tools: ${this.tools.map(t => t.definition.name).join(', ')}`);

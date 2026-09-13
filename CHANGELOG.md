@@ -1,4 +1,52 @@
-## v0.21.2 (2026-09-13)
+## v0.22.0 (2026-09-14)
+
+### feat(agent-runtime): 激活宿主落地 + Gateway 接线 + Supervisor 归档
+
+按 `arch/agent-runtime.md` 落地 long-lived 激活层：非用户刺激 → 受监督 Run。内部研发，无向后兼容 shim。
+
+#### Harness `agent-runtime`（新领域）
+
+- `AgentRuntime`：注册 RuntimeAgent/TriggerSource，`dispatch`（模型 A：await 至 Run 结束）
+- `ExplicitRouter` / `Compiler` / `CoalesceBuffer` / `SessionRunnerDispatcher`
+- Sources：`ScheduleSource`（自有 timer，不依赖 orchestration）、`EscalateBridge`（仅 EventBus）、`AgentSignalSource`
+- 同 session 串行归 `SessionAwareRunner` 锁；不建第二执行队列；emit 契约非阻塞
+- 主导出：`harness/index.ts`
+
+#### Integration
+
+- `channel-message-source.ts`：ChannelMessage → Trigger
+- `WebhookSource` / `FileWatchSource`
+- Gateway：消息路径经 `runtime.dispatch` + `onEvent` 流式广播；`abortSession` 转调 `runtime.abort`
+
+#### run-guard 纯度
+
+- **删除** `AgentSupervisor` / `EventCollector`（归档决策见 arch §10；内部阶段不留 shim）
+- `cognitive-loop` 头注释改为 orchestration 契约说明
+
+#### 文档
+
+- `arch/agent-runtime.md`、`arch/open-problems.md` OP-AR-1/2
+- ARCHITECTURE §3.12b、run-guard README
+
+#### 审查修复（同版本）
+
+- AbortController 按 `requestId` 登记；`abort(agentId, sessionId)` 杀掉该 session 下全部活跃 Run
+- **Runner**：`acquireLock` 成功后若 `signal.aborted` 立即释放并 return，不 push 幽灵消息
+- 合批路径回传真实 `DispatchResult`；窗口内 `onEvent` 以最后一次 push 为准
+- fan-out 返回 `FanoutDispatchResult`（含 aborted 明细；部分失败不静默）
+- `SessionRunnerDispatcher`：defaults 在前、request 字段最后写入
+- 通道消息透传 `msg.timestamp`；`type=message` 不打 `metadata.source=runtime`
+- 删除空 `run-guard/types.ts`；knowledge 测试改从 cognitive-loop 导入
+- Gateway 注入 EventBus；`configureAgentRuntime` 按 `agentRuntime` 配置挂 Schedule/Escalate
+- Webhook body 上限；FileWatch 防抖；非法 cron 不静默 60s
+- `dispatchMany`；`on(listener)` / `on(type, listener)`；`RUN_SCHEDULED` / `AGENT_SIGNAL_EMITTED`
+- `package.json` → 0.22.0；schema/example 增加 `agentRuntime`；README 导入路径改 `octopi/harness`
+- `coalesceWindowMs` / `expectedMaxConcurrentRuns` 经 GatewayConfig 注入构造；**移除 `agentRuntime.enabled`**（Source 靠配置块存在与否挂载）
+- Escalate 默认订 `subsystem.signal.escalate` + `subsystem.escalate`；`builder.events(gatewayBus)` 同源
+- SessionGate.enter 支持 AbortSignal；**gate 排队 abort → 空 generator → skipped(aborted)**（非 failed）
+- `coalesceBufferLimit` 全链路接线（TS/zod/json schema/daemon/toGatewayConfig）
+- `agentSignal` 仅显式 true 或 escalate.defaultAgentId 时挂载
+- Webhook 测试用 port=0；删除 CHANGELOG 重复 v0.21.2 标题
 
 ### fix(config,test): budget.maxTimeMs 迁移告警 + Guard 生命周期真 e2e
 

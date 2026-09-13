@@ -191,15 +191,30 @@ export class SessionAwareRunner {
     runConfig: RunConfig,
     signal?: AbortSignal,
   ): AsyncGenerator<import('../core/primitives/event-bus.js').AgentEvent> {
-    // 1. 并发门控（如果配置了 SessionGate）
+    // 1. 并发门控（如果配置了 SessionGate）；排队期间响应 abort
     const gate = this.config.sessionGate;
     let gateRelease: (() => void) | undefined;
     if (gate) {
-      gateRelease = await gate.enter();
+      try {
+        gateRelease = await gate.enter(signal);
+      } catch (err) {
+        // 用户中止：空 generator，Runtime 按 signal.aborted 判 skipped(aborted)，勿成 failed
+        if (signal?.aborted) {
+          return;
+        }
+        throw err;
+      }
     }
 
-    // 2. 获取锁
+    // 2. 获取锁（等锁期间可能被 abort）
     const release = await this.acquireLock(sessionId);
+
+    // 拿锁后若已中止：不 load / 不 push，避免幽灵用户消息（arch/agent-runtime.md 审查项）
+    if (signal?.aborted) {
+      release();
+      gateRelease?.();
+      return;
+    }
 
     const _agentId = runConfig.agentId ?? 'default';
 

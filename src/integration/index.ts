@@ -37,5 +37,18 @@ export type {
   ResolvedWebSearchProviders,
 } from './web-search/index.js';
 
+// ── Agent Runtime sources（Integration 适配）──
+export {
+  channelMessageToTrigger,
+  dispatchChannelMessage,
+  WebhookSource,
+  FileWatchSource,
+} from './agent-runtime/index.js';
+export type {
+  ChannelMessageSourceOptions,
+  WebhookSourceConfig,
+  FileWatchSourceConfig,
+} from './agent-runtime/index.js';
+
 // ── Integration 层类型（canonical） ──
 export * from './types/index.js';

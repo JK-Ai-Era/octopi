@@ -1,6 +1,6 @@
 # Harness — Layer 2: 领域实现
 
-14 个自包含领域，每个领域有自己的类型、实现、入口文件。
+15 个自包含领域，每个领域有自己的类型、实现、入口文件。
 
 ## 领域列表
 
@@ -15,6 +15,7 @@
 | Autonomous Subsystem | `autonomous-subsystem/` | Sense/Think/Act/Signal/Boundary 五维子系统框架 |
 | Session Tasks | `session-tasks/` | 会话任务 SessionTask（goal/step，默认路径） |
 | Run Guard | `run-guard/` | 过程监督（continue/recover/stop） |
+| Agent Runtime | `agent-runtime/` | 激活宿主：Trigger → 受监督 Run（arch/agent-runtime.md） |
 | Orchestration | `orchestration/` | experimental 编排（workflow/scheduler/planner） |
 | Concurrency | `concurrency/` | 多 Key 负载均衡、限流 |
 | Execution Environment | `execution-environment/` | 沙箱、工作区 |

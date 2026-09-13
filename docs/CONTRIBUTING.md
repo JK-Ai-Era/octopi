@@ -33,7 +33,7 @@ npm run dev            # tsc --watch
 |---|---|---|---|
 | Loop | `src/loop/` | 纯执行循环 | 仅依赖 Core 类型 |
 | Core | `src/core/` | 机制原语 + 接口契约 + 核心类型 | 无外部依赖 |
-| Harness | `src/harness/` | 14 个自包含领域 | 依赖 Core + Loop |
+| Harness | `src/harness/` | 15 个自包含领域 | 依赖 Core + Loop |
 | Integration | `src/integration/` | 外部系统适配 | 依赖 Core + Loop + Harness |
 
 详细架构见 [arch/overview.md](../arch/overview.md)

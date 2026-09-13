@@ -49,6 +49,10 @@
     "checkpointInterval": 15
   },
 
+  "agentRuntime": {
+    "coalesceWindowMs": 400
+  },
+
   "channels": [{
     "type": "http",
     "port": 3000,

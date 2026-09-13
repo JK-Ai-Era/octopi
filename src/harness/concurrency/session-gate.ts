@@ -65,13 +65,18 @@ export class SessionGate {
   }
 
   /**
-   * 进入 session（获取通行证）
-   * @returns 释放函数，调用后允许其他 session 运行
-   * @throws 超时或已销毁时抛出错误
+   * 进入门控（信号量）
+   *
+   * @param signal - 可选中止信号；排队期间 abort 会 reject
+   * @returns 释放函数
    */
-  async enter(): Promise<() => void> {
+  async enter(signal?: AbortSignal): Promise<() => void> {
     if (this.destroyed) {
       throw new Error('SessionGate has been destroyed');
+    }
+    if (signal?.aborted) {
+      this.rejectedRequests++;
+      throw new Error('Session gate aborted before enter');
     }
 
     this.totalRequests++;
@@ -93,9 +98,19 @@ export class SessionGate {
         reject(new Error(`Session gate timeout: waited ${this.waitTimeoutMs}ms for a slot`));
       }, this.waitTimeoutMs);
 
+      const onAbort = (): void => {
+        const idx = this.queue.indexOf(waiter);
+        if (idx >= 0) this.queue.splice(idx, 1);
+        clearTimeout(timer);
+        this.rejectedRequests++;
+        reject(new Error('Session gate aborted while waiting'));
+      };
+      signal?.addEventListener('abort', onAbort, { once: true });
+
       const waiter: Waiter = {
         resolve: (release: () => void) => {
           clearTimeout(timer);
+          signal?.removeEventListener('abort', onAbort);
           const waitTime = Date.now() - enqueuedAt;
           this.totalWaitMs += waitTime;
           this.enteredRequests++;
@@ -103,6 +118,7 @@ export class SessionGate {
         },
         reject: (err: Error) => {
           clearTimeout(timer);
+          signal?.removeEventListener('abort', onAbort);
           reject(err);
         },
         enqueuedAt,

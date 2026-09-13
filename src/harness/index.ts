@@ -1,7 +1,7 @@
 /**
  * Harness 层统一导出（Layer 2）
  *
- * 14 个自包含领域，每个领域通过 index.ts 导出。
+ * 15 个自包含领域，每个领域通过 index.ts 导出。
  */
 
 // ── Tool 系统 ──
@@ -80,9 +80,37 @@ export { SessionTaskService, renderSessionTasksInjection, createSessionTaskTools
 export type { SessionTask, SessionTaskStatus, SessionTaskListFilter } from './session-tasks/index.js';
 
 // ── Run Guard（过程监督）──
-// AgentSupervisor 不进主导出（experimental；见 run-guard/index.ts 或 arch/run-guard-refactor.md §9.5）
+// AgentSupervisor 已归档（arch/agent-runtime.md §10）
 export { DefaultRunGuard, createRunGuard } from './run-guard/index.js';
 export type { RunGuardConfig } from './run-guard/index.js';
+
+// ── Agent Runtime（激活宿主；arch/agent-runtime.md）──
+export {
+  AgentRuntime,
+  ExplicitRouter,
+  SessionRunnerDispatcher,
+  ScheduleSource,
+  EscalateBridge,
+  AgentSignalSource,
+  emitEscalate,
+  emitAgentSignal,
+  RuntimeEvents as AgentRuntimeEvents,
+} from './agent-runtime/index.js';
+export type {
+  AgentRuntimeConfig,
+  Trigger,
+  TriggerType,
+  TriggerPayload,
+  TriggerSource,
+  RunRequest,
+  RunDispatcher,
+  RuntimeAgent,
+  DispatchResult,
+  RuntimeEvent,
+  ScheduleJob,
+  EscalateBridgeConfig,
+  AgentSignal,
+} from './agent-runtime/index.js';
 
 // ── Knowledge（Context Intelligence 第 4 层）──
 export { MemoryKnowledgeStore, KnowledgeContextEngine } from './context/knowledge/index.js';

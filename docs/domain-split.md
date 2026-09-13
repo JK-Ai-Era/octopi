@@ -263,6 +263,19 @@ Plan/Planner/Reflector 与 KnowledgeStore 契约位于 Core，以避免 run-guar
 
 ---
 
+## 12b. agent-runtime（激活宿主）
+
+| 项 | 内容 |
+|----|------|
+| 设计 | [arch/agent-runtime.md](../arch/agent-runtime.md) |
+| 目录 | `src/harness/agent-runtime/`；协议 Source 在 `src/integration/agent-runtime/` |
+| 职责 | Trigger → 0..N 次受监督 Run；显式多 Agent 路由 |
+| 不做 | 第二执行队列、tasks 扫描唤醒、orchestration 依赖、协议实现 |
+
+与 run-guard 正交：Guard 管「这次跑得健不健康」，Runtime 管「要不要开始跑」。
+
+---
+
 ## 13. 相关文档
 
 | 文档 | 关系 |

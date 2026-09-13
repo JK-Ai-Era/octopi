@@ -288,6 +288,15 @@ export async function serveCommand(args: CliArgs): Promise<void> {
 async function startGatewayBlocking(configPath: string | undefined, args: CliArgs): Promise<void> {
   const config = loadConfig(configPath);
   const gatewayConfig = toGatewayConfig(config);
+  // AgentRuntime 构造参数在 toGatewayConfig 已带上；此处仅防御显式覆盖
+  if (config.agentRuntime) {
+    gatewayConfig.agentRuntime = {
+      ...gatewayConfig.agentRuntime,
+      coalesceWindowMs: config.agentRuntime.coalesceWindowMs,
+      coalesceBufferLimit: config.agentRuntime.coalesceBufferLimit,
+      expectedMaxConcurrentRuns: config.agentRuntime.expectedMaxConcurrentRuns,
+    };
+  }
 
   if (args.port) gatewayConfig.port = args.port;
 
@@ -334,6 +343,17 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
   const { all } = createToolSet({ memoryStore, webSearch: webSearchToolCfg });
   for (const tool of all) gateway.registerTool(tool);
   console.log(`[CLI] Registered ${all.length} tools: ${all.map(t => t.definition.name).join(', ')}`);
+
+  // ── Agent Runtime：按配置块挂载 Source（无 enabled 总开关；不写 schedule/escalate 即不挂）──
+  const arCfg = config.agentRuntime;
+  // agentSignal：显式 true，或 escalate 已配置可用 defaultAgentId 时默认挂
+  const mountAgentSignal =
+    arCfg?.agentSignal === true || !!arCfg?.escalate?.defaultAgentId;
+  await gateway.configureAgentRuntime({
+    schedule: arCfg?.schedule,
+    escalate: arCfg?.escalate,
+    agentSignal: mountAgentSignal,
+  });
 
   const httpConfig = config.channels?.find((c: any) => c.type === 'http');
   if (httpConfig) {

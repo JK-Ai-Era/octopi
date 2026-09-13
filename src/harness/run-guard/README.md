@@ -6,37 +6,31 @@
 
 **核心理念**：并列消费 Runner 的检查点；不读写 `Session.tasks`，不编排 Workflow。
 
-## 两条路径
+**AgentSupervisor 已归档**（arch/agent-runtime.md §10）：长驻激活归 `harness/agent-runtime/`。
+
+## 路径
 
 | 组件 | 形态 | 用途 |
 |------|------|------|
 | **DefaultRunGuard** | 检查点审查（默认路径） | 规则检测 + 可选 LLM 审查；Builder `.runGuard()` / config `runGuard` |
-| **AgentSupervisor** | 持续认知循环（ProcessModel） | experimental；**不在 harness 主导出**；从 `run-guard/index.ts` 具名导入 |
-
-二者都属于「过程监督」：关注单次 run / 进程是否跑飞，不承担多步业务编排（那是 orchestration）。
 
 ## 职责
 
 - DefaultRunGuard — 规则检测 + 可选 LLM 审查
-- AgentSupervisor — 持续运行认知循环
-- EventCollector — 事件收集
 - Checkpoint* / RecoveryAction — Core 契约见 `core/interfaces/run-guard.ts`
-- Plan / Planner / Reflector — 跨域契约见 `core/interfaces/cognitive-loop.ts`（实现可在 orchestration）
 
 ## 不做什么
 
 - 不读写 Session.tasks
 - 不编排 Workflow / Cron
+- 不做长驻激活（agent-runtime）
 
 ## 依赖
 
-- Core: interfaces/run-guard、interfaces/cognitive-loop、types、primitives
-- 可选: ModelProvider（LLM 审查）、reliability（AgentSupervisor）
+- Core: interfaces/run-guard、types
+- 可选: ModelProvider（LLM 审查）
 
 ## 文件说明
 
 - default-run-guard.ts — DefaultRunGuard + createRunGuard
-- agent-supervisor.ts — AgentSupervisor + startSupervisor
-- event-collector.ts — EventCollector
-- types.ts — SupervisorConfig + re-export cognitive-loop
 - index.ts — 统一导出

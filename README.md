@@ -15,7 +15,7 @@ Octopi is an embeddable agent engine for building AI-powered applications. It pr
 
 - **Embeddable** — Not a standalone app, but a component for your product
 - **4-layer architecture** — Loop → Core → Harness → Integration, clean boundaries, independent layers
-- **14 self-contained domains** — Each domain is independently understandable, testable, and replaceable
+- **15 self-contained domains** — Each domain is independently understandable, testable, and replaceable
 - **7-layer context intelligence** — Wisdom, Persona, Skill, Knowledge, Cognition, Memory, Information
 - **Security built-in** — Injection detection, risk evaluation, approval workflows — not optional, not removable
 - **Natively multi-agent** — Distributed intelligence from the ground up
@@ -30,7 +30,7 @@ Octopi is an embeddable agent engine for building AI-powered applications. It pr
 │  LLM Providers · Storage · Observability · Gateway · TUI · Web Runtime │
 │                                                              │
 │  ┌──────────────────────────────────────────────────────────┐│
-│  │  Layer 2: Harness — 14 self-contained domains             ││
+│  │  Layer 2: Harness — 15 self-contained domains             ││
 │  │  agent-building · context · security · reliability         ││
 │  │  plugin-ecosystem · multi-agent · autonomous-subsystem     ││
 │  │  session-tasks · run-guard · orchestration · concurrency   ││
@@ -59,7 +59,7 @@ The heart of the engine. `agentLoop()` is a pure async generator: input messages
 
 Infrastructure primitives (EventBus, StateMachine, AsyncTask, ProcessModel) and all interface contracts (ModelProvider, ContextEngine, SecurityGuard, SessionStore, etc.). No strategy implementations.
 
-### Layer 2: Harness — 14 Domains
+### Layer 2: Harness — 15 Domains
 
 | Domain | Responsibility |
 |--------|---------------|
@@ -72,6 +72,7 @@ Infrastructure primitives (EventBus, StateMachine, AsyncTask, ProcessModel) and 
 | **Autonomous Subsystem** | Sense/Think/Act/Signal/Boundary subsystem framework |
 | **Session Tasks** | Session-level tasks (goal/step), injection, read-only UI; see [task-system](./docs/task-system.md) |
 | **Run Guard** | Checkpoint supervision for a single run (`continue`/`recover`/`stop`) |
+| **Agent Runtime** | Activation host: Trigger → supervised Run (see [arch/agent-runtime.md](./arch/agent-runtime.md)) |
 | **Orchestration** | Experimental workflow/scheduler (subpath `octopi/harness/orchestration`) |
 | **Concurrency** | Multi-key LLM load balancing, rate limiting, session gating |
 | **Execution Environment** | Sandboxing, workspace management, file operations |
@@ -191,7 +192,7 @@ src/
 │   ├── primitives/               EventBus, StateMachine, AsyncTask, ProcessModel
 │   ├── interfaces/               18 interface contracts
 │   └── types/                    Core type definitions
-├── harness/                 Layer 2  14 self-contained domains
+├── harness/                 Layer 2  15 self-contained domains
 │   ├── agent-building/           Builder, persona, config bridge
 │   ├── context/                  Context engine, compression, intelligence
 │   ├── security/                 Risk evaluation, shell parsing

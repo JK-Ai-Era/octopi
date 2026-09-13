@@ -310,6 +310,67 @@
         }
       }
     },
+    "agentRuntime": {
+      "type": "object",
+      "description": "激活宿主（long-lived）。消息路径始终经 Runtime；Schedule/Escalate 按配置块挂载（不写则不挂，无 enabled 总开关）。设计见 arch/agent-runtime.md",
+      "properties": {
+        "coalesceWindowMs": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 400,
+          "description": "合批窗口（毫秒）"
+        },
+        "coalesceBufferLimit": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 256,
+          "description": "合批缓冲条目上限"
+        },
+        "expectedMaxConcurrentRuns": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "期望最大并发 Run（仅观测；硬闸归 SessionGate）"
+        },
+        "schedule": {
+          "type": "array",
+          "description": "定时触发任务（每条绑定 agentId）",
+          "items": {
+            "type": "object",
+            "required": ["agentId", "content"],
+            "properties": {
+              "agentId": { "type": "string" },
+              "sessionId": { "type": "string" },
+              "intervalMs": { "type": "integer", "minimum": 1 },
+              "cron": {
+                "type": "string",
+                "description": "简化 cron（分 时 日 月 周）；与 intervalMs 二选一"
+              },
+              "content": { "type": "string", "description": "注入内容（system note）" },
+              "coalesceKey": { "type": "string" },
+              "runOnStart": { "type": "boolean", "default": false }
+            }
+          }
+        },
+        "escalate": {
+          "type": "object",
+          "description": "子系统 escalate → 唤醒主 Agent。需与 Subsystem 同一 EventBus（Gateway 已接 gatewayBus）",
+          "properties": {
+            "defaultAgentId": { "type": "string" },
+            "eventType": {
+              "oneOf": [
+                { "type": "string" },
+                { "type": "array", "items": { "type": "string" } }
+              ],
+              "description": "默认同时订阅 subsystem.signal.escalate 与 subsystem.escalate"
+            }
+          }
+        },
+        "agentSignal": {
+          "type": "boolean",
+          "description": "订阅 runtime.agent_signal；默认在 escalate.defaultAgentId 存在时挂载，或显式 true"
+        }
+      }
+    },
     "budget": {
       "type": "object",
       "description": "资源 soft/hard 总闸（与 runGuard 组合：budget 管资源，runGuard 管行为）。主轴 token + wall-clock；maxIterations 仅显式配置时硬停。",

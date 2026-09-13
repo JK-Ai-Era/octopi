@@ -34,4 +34,13 @@ export interface GatewayConfig {
     captureToolResults?: boolean;
   };
   modelCallIdleTimeoutMs?: number;
+  /**
+   * 激活宿主构造参数（coalesce 窗口在 new AgentRuntime 时固定）。
+   * Schedule/Escalate 由 daemon 经 configureAgentRuntime 挂载。
+   */
+  agentRuntime?: {
+    coalesceWindowMs?: number;
+    expectedMaxConcurrentRuns?: number;
+    coalesceBufferLimit?: number;
+  };
 }

@@ -57,7 +57,7 @@ AI 在早期阶段，应用构建思路在不断发展。架构设计的核心�
 │  LLM Provider · Web Search · 存储 · 可观测性 · 协议 · Gateway · TUI · Web Runtime │
 │                                                                  │
 │  ┌──────────────────────────────────────────────────────────────┐│
-│  │  Layer 2: Harness — 14 个自包含领域                           ││
+│  │  Layer 2: Harness — 15 个自包含领域                           ││
 │  │                                                              ││
 │  │  ┌──────────────────────────────────────────────────────────┐││
 │  │  │  Layer 1: Core — 机制原语 + 接口契约 + 核心类型           │││
@@ -125,7 +125,7 @@ src/core/
 └── index.ts
 ```
 
-### Layer 2: Harness — 14 个自包含领域
+### Layer 2: Harness — 15 个自包含领域
 
 **职责**：实现 Core 接口的具体策略，提供框架的全部高级功能。
 
@@ -356,13 +356,29 @@ harness/session-tasks/
 ```
 harness/run-guard/
 ├── default-run-guard.ts  # DefaultRunGuard — 规则检测 + 可选 LLM 审查
-├── agent-supervisor.ts   # AgentSupervisor — 持续运行认知循环
-├── event-collector.ts
 ├── types.ts
 └── index.ts
 ```
 
 Core 接口：`core/interfaces/run-guard.ts`（`RunGuard`）。
+
+### 3.12b Agent Runtime — 激活宿主
+
+**职责**：把非用户刺激（Trigger）编译成 0..N 次受监督的 Run；多 Agent 显式路由。设计见 [arch/agent-runtime.md](../arch/agent-runtime.md)。
+
+```
+harness/agent-runtime/
+├── runtime.ts            # AgentRuntime
+├── router.ts / compiler.ts / coalesce.ts / dispatcher.ts
+└── sources/              # Schedule / Escalate / AgentSignal
+
+integration/agent-runtime/
+├── channel-message-source.ts
+├── webhook-source.ts
+└── file-watch-source.ts
+```
+
+Gateway 消息路径经 `runtime.dispatch`；SessionGate 为唯一并发硬闸；模型 A（无第二 session 队列）。
 
 ### 3.13 Orchestration — 编排（experimental）
 

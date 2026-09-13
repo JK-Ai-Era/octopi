@@ -121,6 +121,35 @@ export const RunGuardJsonConfigSchema = z.object({
   { message: 'minCheckpointInterval must be <= maxCheckpointInterval' },
 );
 
+// ── Agent Runtime 配置 Schema ──
+// 消息路径始终经 Runtime；Source 按配置块挂载（无 enabled 总开关）
+
+export const AgentRuntimeJsonConfigSchema = z.object({
+  coalesceWindowMs: z.number().min(0).optional(),
+  expectedMaxConcurrentRuns: z.number().positive().optional(),
+  coalesceBufferLimit: z.number().positive().optional(),
+  schedule: z
+    .array(
+      z.object({
+        agentId: z.string().min(1),
+        sessionId: z.string().optional(),
+        intervalMs: z.number().positive().optional(),
+        cron: z.string().optional(),
+        content: z.string().min(1),
+        coalesceKey: z.string().optional(),
+        runOnStart: z.boolean().optional(),
+      }),
+    )
+    .optional(),
+  escalate: z
+    .object({
+      defaultAgentId: z.string().optional(),
+      eventType: z.union([z.string(), z.array(z.string())]).optional(),
+    })
+    .optional(),
+  agentSignal: z.boolean().optional(),
+});
+
 // ── 上下文引擎配置 Schema ──
 
 export const ContextEngineConfigSchema = z.object({
@@ -306,6 +335,7 @@ export const HarnessConfigSchema = z.object({
   plugins: PluginConfigSchema.optional(),
   budget: BudgetJsonConfigSchema.optional(),
   runGuard: RunGuardJsonConfigSchema.optional(),
+  agentRuntime: AgentRuntimeJsonConfigSchema.optional(),
   contextEngine: ContextEngineConfigSchema.optional(),
   security: SecurityConfigSchema.optional(),
   channels: z.array(ChannelConfigSchema).optional(),

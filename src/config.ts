@@ -248,6 +248,48 @@ export interface RunGuardJsonConfig {
   hardWallClockMs?: number;
 }
 
+// ── Agent Runtime 配置（octopi.json 形状）──
+
+/**
+ * AgentRuntimeJsonConfig — long-lived 激活宿主（arch/agent-runtime.md）
+ *
+ * 消息路径始终经 Runtime dispatch。
+ * Schedule/Escalate 等 Source：**配置块存在才挂载**；不要则不写该块（无 enabled 总开关）。
+ */
+export interface AgentRuntimeJsonConfig {
+  /** 默认合批窗口 ms（建议 300–500） */
+  coalesceWindowMs?: number;
+  /** 合批缓冲条目上限（防事件风暴） */
+  coalesceBufferLimit?: number;
+  /** 期望最大并发 Run（仅观测/告警；硬闸归 SessionGate） */
+  expectedMaxConcurrentRuns?: number;
+  /** 定时触发；每条 job 绑定 agentId */
+  schedule?: Array<{
+    agentId: string;
+    sessionId?: string;
+    /** 与 cron 二选一 */
+    intervalMs?: number;
+    /** 简化 cron：分 时 日 月 周；非法表达式跳过 */
+    cron?: string;
+    /** 注入内容（system note） */
+    content: string;
+    coalesceKey?: string;
+    runOnStart?: boolean;
+  }>;
+  /**
+   * 子系统 escalate → 唤醒主 Agent。
+   * 需与 Subsystem 使用同一 EventBus（Gateway 已接 gatewayBus）。
+   */
+  escalate?: {
+    /** 事件缺 agentId 时的默认目标 */
+    defaultAgentId?: string;
+    /** 默认同时订 subsystem.signal.escalate 与 subsystem.escalate */
+    eventType?: string | string[];
+  };
+  /** 订阅 runtime.agent_signal（多 Agent 通知）；默认随 escalate 一起挂 */
+  agentSignal?: boolean;
+}
+
 
 
 // ── 上下文引擎配置 ──
@@ -408,6 +450,8 @@ export interface HarnessConfig {
   budget?: BudgetJsonConfig;
   /** 过程监督配置（行为监督；与 budget 组合） */
   runGuard?: RunGuardJsonConfig;
+  /** 激活宿主（long-lived；Schedule/Escalate 等） */
+  agentRuntime?: AgentRuntimeJsonConfig;
   /** 上下文引擎配置 */
   contextEngine?: ContextEngineConfig;
   /** 安全策略 */
@@ -768,6 +812,14 @@ export function toGatewayConfig(config: NormalizedHarnessConfig): GatewayConfig 
     session: config.session ? { dmScope: config.session.dmScope } : undefined,
     budget: config.budget,
   };
+
+  if (config.agentRuntime) {
+    gatewayConfig.agentRuntime = {
+      coalesceWindowMs: config.agentRuntime.coalesceWindowMs,
+      coalesceBufferLimit: config.agentRuntime.coalesceBufferLimit,
+      expectedMaxConcurrentRuns: config.agentRuntime.expectedMaxConcurrentRuns,
+    };
+  }
 
   // 传递可观测性配置
   if (config.observability?.traceDir !== null && config.observability?.traceDir !== undefined) {

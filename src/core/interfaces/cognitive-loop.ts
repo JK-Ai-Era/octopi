@@ -1,7 +1,7 @@
 /**
  * Cognitive loop contracts — Plan / Planner / Reflector
  *
- * AgentSupervisor（run-guard）与 planner/reflector 实现（orchestration）共享的契约。
+ * Planner/Reflector 共享契约（orchestration 实现；长驻激活见 harness/agent-runtime，不消费本契约）。
  * 放在 Core，避免 run-guard ↔ orchestration 互相 import。
  */
 
