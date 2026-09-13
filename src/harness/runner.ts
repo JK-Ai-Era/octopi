@@ -107,6 +107,31 @@ function adaptLoopEvent(
     case 'stream.fallback_to_sync':
     case 'stream.fallback_failed':
       return { type: event.type, timestamp: event.timestamp, data: event.data };
+    case 'budget_exceeded':
+      // 对齐 EventBus BUDGET_EXCEEDED；用户可见停止原因
+      return {
+        type: 'budget.exceeded',
+        timestamp: event.timestamp,
+        agentId: meta.agentId,
+        sessionId: meta.sessionId,
+        data: { ...event.data },
+      };
+    case 'run_guard_stopped':
+      return {
+        type: 'run_guard.stopped',
+        timestamp: event.timestamp,
+        agentId: meta.agentId,
+        sessionId: meta.sessionId,
+        data: { ...event.data },
+      };
+    case 'run_guard_recovered':
+      return {
+        type: 'run_guard.recovered',
+        timestamp: event.timestamp,
+        agentId: meta.agentId,
+        sessionId: meta.sessionId,
+        data: { ...event.data },
+      };
     default:
       return null;
   }

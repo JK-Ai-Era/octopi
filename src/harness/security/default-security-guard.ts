@@ -432,39 +432,25 @@ export class DefaultSecurityGuard {
   // ── BehaviorGuard ──
 
   /**
-   * 检查行为异常（死循环 + 攻击模式 + 发散）
+   * 检查行为异常
+   *
+   * 边界（arch/run-guard-refactor.md P1.3）：
+   * - 「跑飞」（连续同工具 / 连续错误）归 **RunGuard**，本方法不再重复裁决；
+   *   保留的 loop/error 规则仅作 API 兼容，默认视为 deprecated，主路径不调用。
+   * - Security 只保留**恶意/协同攻击**形态（高危工具组合等）。
+   *
+   * 主路径当前不调用 checkBehavior；run 飞检测走 reliability + RunGuard 检查点。
    */
   checkBehavior(ctx: BehaviorContext): SecurityCheckResult {
     const violations: SecurityViolation[] = [];
 
-    // 1. 死循环检测
-    if (ctx.consecutiveSameTool >= this.config.maxConsecutiveSameTool) {
-      violations.push({
-        type: 'behavior_anomaly',
-        severity: ctx.consecutiveSameTool >= 10 ? 'critical' : 'high',
-        description: `工具 "${ctx.lastToolName}" 连续调用 ${ctx.consecutiveSameTool} 次 — 疑似死循环`,
-      });
-    }
+    // 1-2. 死循环 / 连续失败 — **已上收 RunGuard**（failureKind loop/blowup）
+    // 保留字段兼容，不在此产生 security 裁决，避免与 Guard 双闸。
+    // 若外部仍依赖 checkBehavior 发现 loop，应改为消费 RunGuard verdict / loop 事件。
 
-    // 2. 连续失败检测
-    if (ctx.consecutiveErrors >= this.config.maxConsecutiveErrors) {
-      violations.push({
-        type: 'behavior_anomaly',
-        severity: 'high',
-        description: `连续 ${ctx.consecutiveErrors} 次工具调用失败 — Agent 可能卡住`,
-      });
-    }
+    // 3. 工具发散 — 归 RunGuard thrash；此处不再报 security violation
 
-    // 3. 工具发散检测
-    if (ctx.uniqueTools > 8 && ctx.recentToolCalls.length >= 10) {
-      violations.push({
-        type: 'behavior_anomaly',
-        severity: 'medium',
-        description: `最近 ${ctx.recentToolCalls.length} 次调用使用了 ${ctx.uniqueTools} 种不同工具 — 可能偏离任务`,
-      });
-    }
-
-    // 4. 攻击模式检测
+    // 4. 攻击模式检测（Security 保留）
     const dangerousTools = ctx.recentToolCalls
       .filter(c => ['shell', 'exec', 'http_post', 'file_write', 'eval', 'curl'].includes(c.name))
       .map(c => c.name);

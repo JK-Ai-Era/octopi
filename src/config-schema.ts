@@ -68,6 +68,37 @@ export const ChannelConfigSchema = z.object({
   corsOrigins: z.array(z.string()).optional(),
 });
 
+// ── Budget 配置 Schema ──
+
+export const BudgetJsonConfigSchema = z.object({
+  maxTokens: z.number().positive().optional(),
+  maxWallClockMs: z.number().positive().optional(),
+  softTokens: z.number().positive().optional(),
+  softWallClockMs: z.number().positive().optional(),
+  maxIterations: z.number().positive().optional(),
+  maxToolCalls: z.number().positive().optional(),
+  autoRenewOnProgress: z.boolean().optional(),
+  maxRenews: z.number().int().positive().optional(),
+  renewGrantTokens: z.number().positive().optional(),
+  renewGrantMs: z.number().positive().optional(),
+}).refine(
+  (data) => {
+    if (data.softTokens !== undefined && data.maxTokens !== undefined) {
+      return data.softTokens <= data.maxTokens;
+    }
+    return true;
+  },
+  { message: 'softTokens must be <= maxTokens' },
+).refine(
+  (data) => {
+    if (data.softWallClockMs !== undefined && data.maxWallClockMs !== undefined) {
+      return data.softWallClockMs <= data.maxWallClockMs;
+    }
+    return true;
+  },
+  { message: 'softWallClockMs must be <= maxWallClockMs' },
+);
+
 // ── RunGuard 配置 Schema ──
 
 export const RunGuardJsonConfigSchema = z.object({
@@ -273,12 +304,7 @@ export const HarnessConfigSchema = z.object({
     contextWindow: z.number().positive().optional(),
   }).optional(),
   plugins: PluginConfigSchema.optional(),
-  budget: z.object({
-    maxIterations: z.number().positive().optional(),
-    maxToolCalls: z.number().positive().optional(),
-    maxTokens: z.number().positive().optional(),
-    maxTimeMs: z.number().positive().optional(),
-  }).partial().optional(),
+  budget: BudgetJsonConfigSchema.optional(),
   runGuard: RunGuardJsonConfigSchema.optional(),
   contextEngine: ContextEngineConfigSchema.optional(),
   security: SecurityConfigSchema.optional(),

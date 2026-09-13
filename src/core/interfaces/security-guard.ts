@@ -89,12 +89,22 @@ export interface SecurityGuardConfig {
 
 // ── 接口定义 ──
 
-/** SecurityGuard 接口（供 Core 层使用） */
+/**
+ * SecurityGuard 接口（供 Core 层使用）
+ *
+ * 边界：恶意 / 敏感 / 策略违规。
+ * 「跑飞」（连续同工具、错误循环、无进展）归 RunGuard，不在 Security 重复裁决。
+ */
 export interface SecurityGuard {
   checkUserInput(input: string): SecurityCheckResult;
   checkToolOutput(output: string): SecurityCheckResult;
   checkModelOutput(output: string): SecurityCheckResult;
   checkToolCall(call: ToolCall): SecurityCheckResult;
+  /**
+   * 行为异常检查。
+   * 主路径不调用；仅保留高危工具组合等攻击形态。
+   * loop/error 类规则已上收 RunGuard。
+   */
   checkBehavior(ctx: BehaviorContext): SecurityCheckResult;
   setRegisteredTools?(tools: Set<string>): void;
   setSystemPrompt?(prompt: string): void;

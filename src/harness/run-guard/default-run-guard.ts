@@ -1,6 +1,8 @@
 /**
  * DefaultRunGuard — 两层智能过程监督实现
  *
+ * 与 ResourceBudget 组合（非替代）：Budget 管资源 hard，本类管行为跑飞。
+ *
  * Layer 1: 规则检测（零 LLM 成本）
  *   - 检测重复模式、错误循环、token 暴涨、工具失败率
  *
@@ -11,6 +13,7 @@
  * - 快速路径优先：80% 的检查点在 Layer 1 就能判定
  * - 最小化 LLM 调用：只在规则层不确定或定期审查时才调用
  * - 摘要输入：LLM 审查只看摘要，不看全文，控制成本
+ * - hardLimit/hardWallClockMs 保留为可选兜底；资源总闸优先归 Budget
  */
 
 import type {
@@ -20,6 +23,7 @@ import type {
   CheckpointMetrics,
   TurnSummary,
   RecoveryAction,
+  RunFailureKind,
 } from '../../core/interfaces/run-guard.js';
 import type { ModelProvider } from '../../core/interfaces/model-provider.js';
 
@@ -41,9 +45,15 @@ export interface RunGuardConfig {
   llmReviewInterval?: number;
   /** 审查用的模型名（可选，默认用主模型） */
   llmModel?: string;
-  /** 硬上限：最大迭代数（默认 1000） */
+  /**
+   * 硬上限：最大迭代数。
+   * 默认关闭（资源总闸归 ResourceBudget）；仅显式配置时兜底。
+   */
   hardLimit?: number;
-  /** 硬上限：最大 wall-clock 时间（毫秒，默认 10 小时） */
+  /**
+   * 硬上限：最大 wall-clock（毫秒）。
+   * 默认关闭；资源总闸归 ResourceBudget。
+   */
   hardWallClockMs?: number;
   /** 每次检查点的回调（可用于日志、监控、用户通知） */
   onCheckpoint?: (ctx: CheckpointContext, verdict: CheckpointVerdict) => void;
@@ -57,9 +67,7 @@ const DEFAULT_CONFIG = {
   enableLLMReview: true,
   llmReviewInterval: 3,
   llmModel: '',
-  hardLimit: 1000,
-  hardWallClockMs: 36_000_000, // 10 小时
-};
+} as const;
 
 // ── 规则检测结果 ──
 
@@ -68,6 +76,7 @@ interface RuleCheckResult {
   severity: 'low' | 'medium' | 'high';
   rule: string;
   description: string;
+  failureKind: RunFailureKind;
   suggestedRecovery?: RecoveryAction[];
 }
 
@@ -79,7 +88,15 @@ interface RuleCheckResult {
  * 两层智能监督：规则检测 + LLM 审查
  */
 export class DefaultRunGuard implements RunGuard {
-  private config: RunGuardConfig & { enabled: boolean; checkpointInterval: number; minCheckpointInterval: number; maxCheckpointInterval: number; enableLLMReview: boolean; llmReviewInterval: number; llmModel: string; hardLimit: number; hardWallClockMs: number };
+  private config: RunGuardConfig & {
+    enabled: boolean;
+    checkpointInterval: number;
+    minCheckpointInterval: number;
+    maxCheckpointInterval: number;
+    enableLLMReview: boolean;
+    llmReviewInterval: number;
+    llmModel: string;
+  };
   private model?: ModelProvider;
   private checkpointCount = 0;
 
@@ -93,16 +110,21 @@ export class DefaultRunGuard implements RunGuard {
 
     let verdict: CheckpointVerdict;
 
-    // ── 硬上限检查（始终执行） ──
-    if (context.iteration >= this.config.hardLimit) {
+    // ── 可选资源兜底（默认关闭；总闸归 ResourceBudget） ──
+    if (this.config.hardLimit !== undefined && context.iteration >= this.config.hardLimit) {
       verdict = {
         action: 'stop',
+        failureKind: 'burn',
         reason: `硬上限触发：已运行 ${context.iteration} 轮（上限 ${this.config.hardLimit}）`,
         userMessage: `任务已运行 ${context.iteration} 轮，达到安全上限。如需继续，请优化任务后重新开始。`,
       };
-    } else if (context.elapsedMs >= this.config.hardWallClockMs) {
+    } else if (
+      this.config.hardWallClockMs !== undefined &&
+      context.elapsedMs >= this.config.hardWallClockMs
+    ) {
       verdict = {
         action: 'stop',
+        failureKind: 'burn',
         reason: `时间上限触发：已运行 ${Math.round(context.elapsedMs / 60000)} 分钟`,
         userMessage: `任务已运行 ${Math.round(context.elapsedMs / 60000)} 分钟，达到时间上限。`,
       };
@@ -112,25 +134,46 @@ export class DefaultRunGuard implements RunGuard {
       const highSeverity = ruleResults.filter(r => r.triggered && r.severity === 'high');
       const mediumSeverity = ruleResults.filter(r => r.triggered && r.severity === 'medium');
 
-      if (highSeverity.length > 0) {
-        const recoveryActions = highSeverity.flatMap(r => r.suggestedRecovery ?? []);
-        verdict = {
-          action: 'recover',
-          reason: highSeverity.map(r => `[${r.rule}] ${r.description}`).join('; '),
-          recoveryActions: recoveryActions.length > 0 ? recoveryActions : undefined,
-          nextCheckpointIn: this.config.minCheckpointInterval,
-        };
-      } else if (mediumSeverity.length > 0) {
-        const recoveryActions = mediumSeverity.flatMap(r => r.suggestedRecovery ?? []);
-        verdict = {
-          action: 'recover',
-          reason: mediumSeverity.map(r => `[${r.rule}] ${r.description}`).join('; '),
-          recoveryActions: recoveryActions.length > 0 ? recoveryActions : undefined,
-          nextCheckpointIn: Math.max(
-            this.config.minCheckpointInterval,
-            Math.floor(context.iteration * 0.5),
-          ),
-        };
+      if (highSeverity.length > 0 || mediumSeverity.length > 0) {
+        const picked = highSeverity.length > 0 ? highSeverity : mediumSeverity;
+        const recoveryActions = picked.flatMap(r => r.suggestedRecovery ?? []);
+        const failureKind = picked[0].failureKind;
+        const reason = picked.map(r => `[${r.rule}] ${r.description}`).join('; ');
+
+        // 升级阶梯：同一 failureKind 连续 recover 达阈值 → stop
+        const escalate = this.shouldEscalateToStop(context, failureKind);
+        if (escalate) {
+          verdict = {
+            action: 'stop',
+            failureKind,
+            reason: `${reason}；已连续 recover ${escalate.count} 次仍无改善`,
+            userMessage: `监督器已多次尝试恢复（${failureKind}），仍无法回到正轨，任务已停止。原因：${reason}`,
+          };
+        } else {
+          // recover 升级：第 3 次起建议 truncate/clear
+          const actions =
+            this.countRecentSameKind(context, failureKind) >= 2
+              ? [
+                  { type: 'clear_recent_turns' as const, count: 2 },
+                  ...recoveryActions.slice(0, 1),
+                ]
+              : recoveryActions.length > 0
+                ? recoveryActions
+                : undefined;
+          verdict = {
+            action: 'recover',
+            failureKind,
+            reason,
+            recoveryActions: actions,
+            nextCheckpointIn:
+              highSeverity.length > 0
+                ? this.config.minCheckpointInterval
+                : Math.max(
+                    this.config.minCheckpointInterval,
+                    Math.floor(context.iteration * 0.5) || this.config.minCheckpointInterval,
+                  ),
+          };
+        }
       } else {
         // ── Layer 2: LLM 审查（可选） ──
         if (this.config.enableLLMReview && this.shouldLLMReview()) {
@@ -163,14 +206,39 @@ export class DefaultRunGuard implements RunGuard {
   }
 
   private normalVerdict(context: CheckpointContext): CheckpointVerdict {
+    const next = Math.min(
+      this.config.maxCheckpointInterval,
+      Math.max(this.config.minCheckpointInterval, Math.floor(context.iteration * 1.2) || this.config.checkpointInterval),
+    );
     return {
       action: 'continue',
       reason: '正常运行',
-      nextCheckpointIn: Math.min(
-        this.config.maxCheckpointInterval,
-        Math.floor(context.iteration * 1.2),
-      ),
+      nextCheckpointIn: next,
     };
+  }
+
+  /** 同一 failureKind 最近 recover 次数（从末尾连续计数） */
+  private countRecentSameKind(ctx: CheckpointContext, kind: RunFailureKind): number {
+    const hist = ctx.recoveryHistory ?? [];
+    let count = 0;
+    for (let i = hist.length - 1; i >= 0; i--) {
+      if (hist[i].failureKind === kind) count++;
+      else break;
+    }
+    return count;
+  }
+
+  /**
+   * 是否应升级为 stop
+   * 同一 failureKind 连续 recover ≥3 次 → stop
+   */
+  private shouldEscalateToStop(
+    ctx: CheckpointContext,
+    kind: RunFailureKind,
+  ): { count: number } | false {
+    const count = this.countRecentSameKind(ctx, kind);
+    if (count >= 3) return { count };
+    return false;
   }
 
   // ── Layer 1: 规则检测 ──
@@ -179,6 +247,42 @@ export class DefaultRunGuard implements RunGuard {
     const m = ctx.metrics;
     const results: RuleCheckResult[] = [];
 
+    // 外部高危信号（tool-loop critical 等）→ 立即按 loop 处理
+    const criticalSignals = (ctx.externalSignals ?? []).filter(s => s.level === 'critical');
+    if (criticalSignals.length > 0) {
+      results.push({
+        triggered: true,
+        severity: 'high',
+        rule: 'external_critical',
+        description: criticalSignals.map(s => `[${s.source}] ${s.detail}`).join('; '),
+        failureKind: 'loop',
+        suggestedRecovery: [
+          {
+            type: 'inject_hint',
+            hint: '检测到严重循环/卡死信号。请停止重复调用，换一种方法或向用户报告。',
+          },
+        ],
+      });
+    }
+
+    // 预算 soft 压力（budget_soft）：无进展续租失败时 reliability 会 forceCheckpoint
+    const softBudgetSignals = (ctx.externalSignals ?? []).filter(s => s.source === 'budget_soft');
+    if (softBudgetSignals.length > 0) {
+      results.push({
+        triggered: true,
+        severity: 'medium',
+        rule: 'budget_soft',
+        description: softBudgetSignals.map(s => s.detail).join('; '),
+        failureKind: 'burn',
+        suggestedRecovery: [
+          {
+            type: 'inject_hint',
+            hint: '资源预算接近 soft 上限且进展不足。请收敛任务、总结已有成果，或切换更轻量的方法，避免烧到硬顶。',
+          },
+        ],
+      });
+    }
+
     // 规则 1: 重复工具循环
     if (m.consecutiveSameTool >= 5) {
       results.push({
@@ -186,6 +290,7 @@ export class DefaultRunGuard implements RunGuard {
         severity: 'high',
         rule: 'repeated_tool',
         description: `连续 ${m.consecutiveSameTool} 次调用同一工具，疑似陷入循环`,
+        failureKind: 'loop',
         suggestedRecovery: [{ type: 'inject_hint', hint: '你似乎在同一工具上反复调用。请分析当前状态，尝试不同的方法或向用户报告遇到的问题。' }],
       });
     } else if (m.consecutiveSameTool >= 3) {
@@ -194,6 +299,7 @@ export class DefaultRunGuard implements RunGuard {
         severity: 'medium',
         rule: 'repeated_tool',
         description: `连续 ${m.consecutiveSameTool} 次调用同一工具`,
+        failureKind: 'loop',
       });
     }
 
@@ -204,6 +310,7 @@ export class DefaultRunGuard implements RunGuard {
         severity: 'high',
         rule: 'error_loop',
         description: `连续 ${m.consecutiveErrors} 次错误，可能遇到了无法解决的问题`,
+        failureKind: 'blowup',
         suggestedRecovery: [{ type: 'inject_hint', hint: '你已连续遇到多次错误。请停下来分析错误原因，考虑换一种方法，或向用户报告当前遇到的困难。' }],
       });
     } else if (m.consecutiveErrors >= 2) {
@@ -212,6 +319,7 @@ export class DefaultRunGuard implements RunGuard {
         severity: 'medium',
         rule: 'error_loop',
         description: `连续 ${m.consecutiveErrors} 次错误`,
+        failureKind: 'blowup',
       });
     }
 
@@ -222,6 +330,7 @@ export class DefaultRunGuard implements RunGuard {
         severity: 'medium',
         rule: 'high_failure_rate',
         description: `工具失败率 ${(m.toolFailureRate * 100).toFixed(0)}%，执行质量下降`,
+        failureKind: 'thrash',
         suggestedRecovery: [{ type: 'inject_hint', hint: '最近工具调用失败率较高。请检查工具使用方式是否正确，或考虑是否需要换一种方法。' }],
       });
     }
@@ -233,17 +342,19 @@ export class DefaultRunGuard implements RunGuard {
         severity: 'medium',
         rule: 'token_growth',
         description: `Token 增长率 ${(m.tokenGrowthRate * 100).toFixed(0)}%，上下文可能膨胀`,
+        failureKind: 'burn',
         suggestedRecovery: [{ type: 'truncate_context', keepRecent: 6 }],
       });
     }
 
     // 规则 5: 无进展
-    if (!m.hasProgress && ctx.recentSummaries.length >= 3) {
+    if (!m.hasProgress && (ctx.recentSummaries.length >= 3 || (m.noopStreak ?? 0) >= 3)) {
       results.push({
         triggered: true,
-        severity: 'low',
+        severity: (m.noopStreak ?? 0) >= 3 ? 'medium' : 'low',
         rule: 'no_progress',
         description: '最近几轮没有实质进展',
+        failureKind: 'stall',
       });
     }
 
@@ -273,10 +384,28 @@ export class DefaultRunGuard implements RunGuard {
 
     const taskLine = ctx.taskDescription ? `\n当前任务: ${ctx.taskDescription}` : '';
 
+    const recoveryLine =
+      ctx.recoveryHistory && ctx.recoveryHistory.length > 0
+        ? `\n最近恢复尝试:\n${ctx.recoveryHistory
+            .slice(-5)
+            .map(
+              (h, i) =>
+                `  ${i + 1}. [iter ${h.iteration}] ${h.actionType}${h.failureKind ? ` (${h.failureKind})` : ''}: ${h.reason}`,
+            )
+            .join('\n')}`
+        : '';
+
+    const signalsLine =
+      ctx.externalSignals && ctx.externalSignals.length > 0
+        ? `\n外部信号:\n${ctx.externalSignals
+            .map(s => `  - [${s.level}] ${s.source}: ${s.detail}`)
+            .join('\n')}`
+        : '';
+
     const prompt = `你是一个 Agent 运行监督器。你的职责是判断一个 AI Agent 是否在正常工作。
 
 以下是 Agent 最近几轮的运行摘要：
-${summaryText}${taskLine}
+${summaryText}${taskLine}${recoveryLine}${signalsLine}
 
 当前指标：
 - 迭代次数: ${ctx.iteration}
@@ -306,8 +435,9 @@ ${summaryText}${taskLine}
         const reason = response.content.trim().replace(/^STOP:?\s*/i, '');
         return {
           action: 'stop',
+          failureKind: 'drift',
           reason: `LLM 审查: ${reason}`,
-          userMessage: `任务监督器判断任务可能异常，建议终止。原因: ${reason}`,
+          userMessage: `任务监督器判断任务可能异常，建议终止。原因：${reason}`,
         };
       }
 
@@ -315,6 +445,7 @@ ${summaryText}${taskLine}
         const reason = response.content.trim().replace(/^CONCERN:?\s*/i, '');
         return {
           action: 'recover',
+          failureKind: 'drift',
           reason: `LLM 审查: ${reason}`,
           recoveryActions: [{ type: 'inject_hint', hint: `监督器提醒: ${reason}。请调整策略。` }],
         };

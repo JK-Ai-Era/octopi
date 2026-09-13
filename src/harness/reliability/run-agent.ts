@@ -41,6 +41,9 @@ import { severityToAction } from '../../core/security-guard.js';
 import type { ErrorStrategy, ClassifiedError as CoreClassifiedError } from '../../core/interfaces/error-strategy.js';
 import type { RunGuard, CheckpointContext, CheckpointVerdict, TurnSummary } from '../../core/interfaces/run-guard.js';
 import type { ReliabilityHarness as CoreReliabilityHarness } from '../../core/interfaces/reliability.js';
+import { RunMetricsCollector } from './run-metrics-collector.js';
+import { IterationBudget } from '../budget/budget.js';
+import { NoopEventBus } from '../../core/primitives/event-bus.js';
 
 // ── 可靠性配置 ──
 
@@ -59,6 +62,8 @@ export interface ReliabilityConfig {
   noopThreshold: number;
   /** 工具循环检测 */
   loopDetection: ToolLoopDetectionConfig;
+  /** RunGuard 检查点初始间隔（默认 15；可被 verdict.nextCheckpointIn 覆盖） */
+  checkpointInterval?: number;
 }
 
 export const DEFAULT_RELIABILITY_CONFIG: ReliabilityConfig = {
@@ -103,18 +108,23 @@ interface ReliabilityState {
   consecutiveNoops: number;
   toolCallHistory: ToolCallRecord[];
   loopCriticalTriggered: boolean;
-  turnSummaries: TurnSummary[];
-  consecutiveErrors: number;
-  consecutiveSameTool: number;
-  lastToolName: string;
-  uniqueTools: Set<string>;
-  recentToolCalls: Array<{ name: string; success: boolean }>;
+  collector: RunMetricsCollector;
   checkpointIterationCount: number;
   currentCheckpointInterval: number;
-  tokensAtCheckpoint: number;
+  lastCheckpointIteration: number;
+  budgetStop: false | { reason: string; report?: unknown };
+  runGuardStop: false | { reason: string; userMessage?: string };
+  runGuardRecovered: false | { reason: string; actions: string[] };
+  hasProgress: boolean;
+  forceCheckpoint: boolean;
+  /** hard 在 onTurnComplete 补判：generator 下一事件后 yield */
+  pendingBudgetHardYield: false | {
+    reason: 'tokens' | 'wall_clock' | 'iteration' | 'tool_calls';
+    report?: unknown;
+  };
 }
 
-function createInitialState(): ReliabilityState {
+function createInitialState(checkpointInterval = 15): ReliabilityState {
   return {
     planningOnlyAttempts: 0,
     planningOnlySteerInjected: false,
@@ -123,15 +133,16 @@ function createInitialState(): ReliabilityState {
     consecutiveNoops: 0,
     toolCallHistory: [],
     loopCriticalTriggered: false,
-    turnSummaries: [],
-    consecutiveErrors: 0,
-    consecutiveSameTool: 0,
-    lastToolName: '',
-    uniqueTools: new Set(),
-    recentToolCalls: [],
+    collector: new RunMetricsCollector(),
     checkpointIterationCount: 0,
-    currentCheckpointInterval: 15,
-    tokensAtCheckpoint: 0,
+    currentCheckpointInterval: checkpointInterval,
+    lastCheckpointIteration: 0,
+    budgetStop: false,
+    runGuardStop: false,
+    runGuardRecovered: false,
+    hasProgress: true,
+    forceCheckpoint: false,
+    pendingBudgetHardYield: false,
   };
 }
 
@@ -197,8 +208,19 @@ export async function* runAgentWithReliability(
   harness: CoreReliabilityHarness,
   signal?: AbortSignal,
 ): AsyncGenerator<AgentLoopEvent> {
-  const state = createInitialState();
+  const state = createInitialState(
+    (harness.config as ReliabilityConfig | undefined)?.checkpointInterval ?? 15,
+  );
   const relConfig = { ...DEFAULT_RELIABILITY_CONFIG, ...(harness.config as ReliabilityConfig | undefined) };
+
+  // per-run Budget：从 harness 模板克隆，避免长驻进程 / 并发 session 共享计数
+  let budget = harness.budget;
+  if (budget) {
+    budget = new IterationBudget(
+      new NoopEventBus(),
+      budget.getConfig() as import('../budget/budget.js').IterationBudgetConfig,
+    );
+  }
 
   // ── 用于空响应/planning-only 重试的消息缓冲 ──
   // onTurnComplete 将 steer 消息推入此数组，getFollowUpMessages 返回给 agentLoop
@@ -221,8 +243,33 @@ export async function* runAgentWithReliability(
       return msgs;
     },
 
-    // beforeToolCall：SecurityGuard 检查 + 原始回调
+    // beforeToolCall：Budget hard 闸 + SecurityGuard 检查 + 原始回调
     beforeToolCall: async (ctx, signal) => {
+      // Budget hard：阻止本批工具继续执行（turn_end 在工具之前 yield）
+      if (budget && !state.budgetStop) {
+        const hard = budget.checkHardOnly();
+        if (hard.status === 'hard') {
+          state.budgetStop = {
+            reason: hard.reason ?? 'tokens',
+            report: hard.report,
+          };
+          state.pendingBudgetHardYield = {
+            reason: (hard.reason ?? 'tokens') as
+              | 'tokens'
+              | 'wall_clock'
+              | 'iteration'
+              | 'tool_calls',
+            report: hard.report,
+          };
+        }
+      }
+      if (state.budgetStop) {
+        return {
+          block: true,
+          reason: `Budget exceeded (${typeof state.budgetStop === 'object' ? state.budgetStop.reason : 'resource'})`,
+          terminate: true,
+        };
+      }
       // SecurityGuard 检查
       if (harness.security) {
         const toolCheck = harness.security.checkToolCall(ctx.toolCall);
@@ -279,6 +326,61 @@ export async function* runAgentWithReliability(
       const hasContent = contentText.trim().length > 0;
       const hasToolCallInMessage = ctx.message.toolCalls && ctx.message.toolCalls.length > 0;
 
+      // 0. 记录本轮摘要（token 在 generator 层从 turn_end.usage 累加）
+      const summary: TurnSummary = {
+        role: 'assistant',
+        contentPreview: contentText.slice(0, 200),
+        toolCalls: ctx.message.toolCalls?.map(t => t.name),
+        toolErrors: ctx.toolResults.filter(r => r.isError).map(r => r.name),
+        tokenDelta: 0,
+        timestamp: Date.now(),
+      };
+      state.collector.recordTurn(summary);
+      state.hasProgress = state.collector.hasProgress();
+
+      // 0b. Budget soft（工具路径：token 已在 turn_end 入账，此处用本轮新鲜 hasProgress）
+      //     文本路径首轮 soft 由 turn_end 分支处理（onTurnComplete 时尚未入账）
+      if (budget && !state.budgetStop) {
+        const softEval = budget.evaluate(state.hasProgress);
+        if (softEval.status === 'soft') {
+          if (harness.runGuard) {
+            state.collector.noteExternalSignal({
+              source: 'budget_soft',
+              level: 'warning',
+              detail: `预算 soft 触达（${softEval.reason ?? 'tokens'}），且无实质进展`,
+              timestamp: Date.now(),
+            });
+            state.forceCheckpoint = true;
+          } else {
+            state.budgetStop = {
+              reason: softEval.reason ?? 'tokens',
+              report: softEval.report,
+            };
+            state.pendingBudgetHardYield = {
+              reason: (softEval.reason ?? 'tokens') as
+                | 'tokens'
+                | 'wall_clock'
+                | 'iteration'
+                | 'tool_calls',
+              report: softEval.report,
+            };
+          }
+        } else if (softEval.status === 'hard') {
+          state.budgetStop = {
+            reason: softEval.reason ?? 'tokens',
+            report: softEval.report,
+          };
+          state.pendingBudgetHardYield = {
+            reason: (softEval.reason ?? 'tokens') as
+              | 'tokens'
+              | 'wall_clock'
+              | 'iteration'
+              | 'tool_calls',
+            report: softEval.report,
+          };
+        }
+      }
+
       // 1. Planning-only 检测
       if (!hasToolCalls && isPlanningOnlyResponse(contentText, !!hasToolCallInMessage)) {
         if (state.planningOnlyAttempts < relConfig.planningRetry.maxAttempts) {
@@ -328,8 +430,15 @@ export async function* runAgentWithReliability(
               timestamp: Date.now(),
             });
           } else {
-            // 超过阈值：标记停止
+            // 超过阈值：标记停止 + 立即检查点
             (state as any)._noopLoopStop = true;
+            state.forceCheckpoint = true;
+            state.collector.noteExternalSignal({
+              source: 'noop',
+              level: 'critical',
+              detail: `连续 ${state.consecutiveNoops} 次 noop`,
+              timestamp: Date.now(),
+            });
           }
         }
       } else {
@@ -364,10 +473,17 @@ export async function* runAgentWithReliability(
           );
 
           if (loopResult.stuck) {
+            state.collector.noteExternalSignal({
+              source: 'tool_loop',
+              level: loopResult.level,
+              detail: loopResult.message,
+              timestamp: Date.now(),
+            });
             if (loopResult.level === 'critical') {
+              // 高危信号：立即触发检查点（不等固定 interval）
+              state.forceCheckpoint = true;
               if (state.loopCriticalTriggered) {
                 // 二次 critical：通过 shouldStopAfterTurn 停止
-                // 标记，让下面的 shouldStopAfterTurn 检查
                 (state as any)._loopCriticalTwice = true;
               } else {
                 state.loopCriticalTriggered = true;
@@ -388,31 +504,62 @@ export async function* runAgentWithReliability(
         }
 
         // 更新追踪指标
-        trackToolResults(ctx.toolResults, state);
+        for (const result of ctx.toolResults) {
+          state.collector.recordToolResult(result.name, !result.isError, !!result.noop);
+        }
       }
 
-      // 5. RunGuard 检查点
+      // 5. RunGuard 检查点（周期 + 高危即时）
       if (harness.runGuard) {
         state.checkpointIterationCount++;
-        if (state.checkpointIterationCount >= state.currentCheckpointInterval) {
+        const due =
+          state.forceCheckpoint ||
+          state.checkpointIterationCount >= state.currentCheckpointInterval;
+        if (due) {
           state.checkpointIterationCount = 0;
+          state.forceCheckpoint = false;
           try {
-            const verdict = await harness.runGuard.checkpoint(
-              buildCheckpointContext(state, harness),
-            );
+            const ctxForGuard = state.collector.buildContext({
+              sessionId: harness.sessionId,
+              agentId: harness.agentId,
+            });
+            const verdict = await harness.runGuard.checkpoint(ctxForGuard);
             if (verdict.action === 'stop') {
-              (state as any)._runGuardStop = true;
-              (state as any)._runGuardReason = verdict.reason;
-            } else if (verdict.action === 'recover' && verdict.recoveryActions) {
-              executeRecoveryActions(verdict.recoveryActions, ctx.context.messages);
+              state.runGuardStop = {
+                reason: verdict.reason,
+                userMessage: verdict.userMessage,
+              };
+            } else if (verdict.action === 'recover') {
+              // 一次 checkpoint 只记 1 条 recovery（避免多 action 放大升级计数）
+              const primary =
+                verdict.recoveryActions?.[0]?.type ?? 'inject_hint';
+              if (verdict.recoveryActions?.length) {
+                executeRecoveryActions(verdict.recoveryActions, ctx.context.messages);
+              }
+              state.collector.recordRecovery({
+                iteration: ctxForGuard.iteration,
+                actionType: primary,
+                reason: verdict.reason,
+                failureKind: verdict.failureKind,
+                timestamp: Date.now(),
+              });
+              state.runGuardRecovered = {
+                reason: verdict.reason,
+                actions: (verdict.recoveryActions ?? []).map(a => a.type),
+              };
             }
-            if (verdict.nextCheckpointIn) {
+            if (verdict.nextCheckpointIn && verdict.nextCheckpointIn > 0) {
               state.currentCheckpointInterval = verdict.nextCheckpointIn;
             }
+            state.lastCheckpointIteration = ctxForGuard.iteration;
+            // 检查点后清空已消费的 external signals
+            state.collector.drainExternalSignals();
           } catch {
             // 监督节点出错不影响主循环
           }
         }
+      } else {
+        state.checkpointIterationCount++;
       }
 
       // 调用用户的 onTurnComplete（如果有）
@@ -423,12 +570,16 @@ export async function* runAgentWithReliability(
 
     // shouldStopAfterTurn：停止决策
     shouldStopAfterTurn: async (ctx) => {
+      // 0. Budget hard
+      if (state.budgetStop) {
+        return true;
+      }
       // 1. 二次循环 critical → 停止
       if ((state as any)._loopCriticalTwice) {
         return true;
       }
       // 2. RunGuard 要求停止
-      if ((state as any)._runGuardStop) {
+      if (state.runGuardStop) {
         return true;
       }
       // 3. No-op 循环超限 → 停止
@@ -466,58 +617,132 @@ export async function* runAgentWithReliability(
     },
   };
 
-  // 运行核心循环
-  yield* agentLoop(context, wrappedConfig, signal);
+  // 运行核心循环：拦截事件以计量 token / 注入 budget & run_guard 用户可见事件（不变量 #6）
+  for await (const event of agentLoop(context, wrappedConfig, signal)) {
+    if (event.type === 'tool_end') {
+      // maxToolCalls 计量（显式配置时才硬停）
+      budget?.recordToolCall(1);
+    }
+
+    if (event.type === 'turn_end') {
+      // 错误重试 turn_end 带的是上一次成功的 usage，禁止双计
+      if (event.usage?.totalTokens && !event.error) {
+        const delta = event.usage.totalTokens;
+        state.collector.recordTokens(delta);
+        budget?.consumeTokens(delta);
+      }
+      budget?.recordIteration();
+
+      // turn_end：token 已入账后立刻判 hard
+      // soft：
+      // - 文本路径（!hasToolCalls）：onTurnComplete 已更新 hasProgress，此处补判
+      // - 工具路径：hasProgress 尚未更新，soft 留给 onTurnComplete
+      if (budget && !state.budgetStop) {
+        const hardResult = budget.checkHardOnly();
+        if (hardResult.status === 'hard') {
+          state.budgetStop = {
+            reason: hardResult.reason ?? 'tokens',
+            report: hardResult.report,
+          };
+          yield {
+            type: 'budget_exceeded',
+            timestamp: Date.now(),
+            data: {
+              reason: (hardResult.reason ?? 'tokens') as
+                | 'tokens'
+                | 'wall_clock'
+                | 'iteration'
+                | 'tool_calls',
+              report: hardResult.report,
+            },
+          };
+        } else if (!event.hasToolCalls) {
+          const softEval = budget.evaluate(state.hasProgress);
+          if (softEval.status === 'soft') {
+            if (harness.runGuard) {
+              state.collector.noteExternalSignal({
+                source: 'budget_soft',
+                level: 'warning',
+                detail: `预算 soft 触达（${softEval.reason ?? 'tokens'}），且无实质进展`,
+                timestamp: Date.now(),
+              });
+              state.forceCheckpoint = true;
+            } else {
+              state.budgetStop = {
+                reason: softEval.reason ?? 'tokens',
+                report: softEval.report,
+              };
+              state.pendingBudgetHardYield = {
+                reason: (softEval.reason ?? 'tokens') as
+                  | 'tokens'
+                  | 'wall_clock'
+                  | 'iteration'
+                  | 'tool_calls',
+                report: softEval.report,
+              };
+            }
+          } else if (softEval.status === 'hard') {
+            state.budgetStop = {
+              reason: softEval.reason ?? 'tokens',
+              report: softEval.report,
+            };
+            yield {
+              type: 'budget_exceeded',
+              timestamp: Date.now(),
+              data: {
+                reason: (softEval.reason ?? 'tokens') as
+                  | 'tokens'
+                  | 'wall_clock'
+                  | 'iteration'
+                  | 'tool_calls',
+                report: softEval.report,
+              },
+            };
+          }
+        }
+      }
+    }
+
+    // onTurnComplete 补判的 hard
+    if (state.pendingBudgetHardYield) {
+      const hard = state.pendingBudgetHardYield;
+      state.pendingBudgetHardYield = false;
+      yield {
+        type: 'budget_exceeded',
+        timestamp: Date.now(),
+        data: { reason: hard.reason, report: hard.report },
+      };
+    }
+
+    // RunGuard 裁决的用户可见事件
+    if (state.runGuardStop) {
+      const stop = state.runGuardStop;
+      state.runGuardStop = false;
+      yield {
+        type: 'run_guard_stopped',
+        timestamp: Date.now(),
+        data: { reason: stop.reason, userMessage: stop.userMessage },
+      };
+    } else if (state.runGuardRecovered) {
+      const rec = state.runGuardRecovered;
+      state.runGuardRecovered = false;
+      yield {
+        type: 'run_guard_recovered',
+        timestamp: Date.now(),
+        data: { reason: rec.reason, actions: rec.actions },
+      };
+    }
+
+    yield event;
+  }
 }
 
 // ── 辅助函数 ──
 
-function trackToolResults(toolResults: LoopToolResult[], state: ReliabilityState): void {
-  for (const result of toolResults) {
-    const success = !result.isError;
-    if (result.name === state.lastToolName) {
-      state.consecutiveSameTool++;
-    } else {
-      state.consecutiveSameTool = 1;
-      state.lastToolName = result.name;
-    }
-    state.uniqueTools.add(result.name);
-    state.recentToolCalls.push({ name: result.name, success });
-    if (state.recentToolCalls.length > 10) state.recentToolCalls.shift();
-    if (success) {
-      state.consecutiveErrors = 0;
-    } else {
-      state.consecutiveErrors++;
-    }
-  }
-}
-
-function buildCheckpointContext(state: ReliabilityState, harness: CoreReliabilityHarness): CheckpointContext {
-  const recentFailures = state.recentToolCalls.filter(t => !t.success).length;
-  const toolFailureRate = state.recentToolCalls.length > 0
-    ? recentFailures / state.recentToolCalls.length
-    : 0;
-
-  return {
-    sessionId: harness.sessionId ?? 'inline',
-    agentId: harness.agentId ?? 'default',
-    iteration: state.checkpointIterationCount,
-    totalToolCalls: state.recentToolCalls.length,
-    totalTokens: 0,
-    elapsedMs: 0,
-    recentSummaries: state.turnSummaries.slice(-5),
-    metrics: {
-      consecutiveErrors: state.consecutiveErrors,
-      consecutiveSameTool: state.consecutiveSameTool,
-      tokenGrowthRate: 0,
-      toolFailureRate,
-      uniqueToolsUsed: state.uniqueTools.size,
-      hasProgress: true,
-    },
-  };
-}
-
-function executeRecoveryActions(actions: Array<{ type: string; [key: string]: unknown }>, messages: Message[]): void {
+function executeRecoveryActions(
+  actions: Array<{ type: string; [key: string]: unknown }>,
+  messages: Message[],
+): void {
   for (const action of actions) {
     switch (action.type) {
       case 'truncate_context': {
@@ -530,6 +755,25 @@ function executeRecoveryActions(actions: Array<{ type: string; [key: string]: un
           messages.splice(systemEnd, removeCount, {
             role: 'user',
             content: `[System: ${removeCount} earlier messages omitted to fit context window.]`,
+            timestamp: Date.now(),
+          });
+        }
+        break;
+      }
+      case 'clear_recent_turns': {
+        const count = (action.count as number) ?? 2;
+        // 从末尾回删 count 条非 system 消息（每条可能是一轮 assistant 或 tool）
+        let removed = 0;
+        while (removed < count && messages.length > 0) {
+          const last = messages[messages.length - 1];
+          if (last.role === 'system') break;
+          messages.pop();
+          removed++;
+        }
+        if (removed > 0) {
+          messages.push({
+            role: 'user',
+            content: `[System: ${removed} recent messages cleared to recover from a stuck loop.]`,
             timestamp: Date.now(),
           });
         }

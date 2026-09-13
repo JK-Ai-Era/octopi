@@ -37,6 +37,18 @@
     "preset": "production"
   },
 
+  "budget": {
+    "maxTokens": 2000000,
+    "maxWallClockMs": 21600000,
+    "softTokens": 400000,
+    "softWallClockMs": 2400000
+  },
+
+  "runGuard": {
+    "enabled": true,
+    "checkpointInterval": 15
+  },
+
   "channels": [{
     "type": "http",
     "port": 3000,

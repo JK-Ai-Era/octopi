@@ -1,16 +1,16 @@
 /**
  * RunGuard — 过程监督接口
  *
- * 替代 IterationBudget 的硬限制，通过检查点机制判断单次 run 是否跑飞：
- * - continue: 正常，继续执行
- * - recover:  异常但可恢复，执行恢复动作后继续
- * - stop:     无法恢复，终止并通知用户
+ * 与 ResourceBudget 组合（非替代）：
+ * - Budget：每轮资源 soft/hard（token / wall-clock）
+ * - RunGuard：周期性行为监督（continue / recover / stop）
  *
  * 设计原则：
  * - 单方法接口，Core 层极简风格
  * - 异步，支持 LLM 审查
  * - 返回值是 discriminated union，引擎据以执行动作
  * - 不读写 Session.tasks，不编排 Workflow
+ * - 不拥有资源 hardLimit（资源总闸归 Budget）
  */
 
 // ── 检查点上下文 ──
@@ -45,6 +45,17 @@ export interface CheckpointMetrics {
   uniqueToolsUsed: number;
   /** 最近几轮是否有实质进展（新内容或新工具调用） */
   hasProgress: boolean;
+  /** 连续 noop 次数（可选） */
+  noopStreak?: number;
+}
+
+/** 恢复尝试记录（供升级阶梯） */
+export interface RecoveryAttemptRecord {
+  iteration: number;
+  actionType: RecoveryAction['type'];
+  reason: string;
+  failureKind?: RunFailureKind;
+  timestamp: number;
 }
 
 /** 检查点上下文 — 引擎传递给监督节点的信息 */
@@ -53,7 +64,7 @@ export interface CheckpointContext {
   sessionId: string;
   /** Agent ID */
   agentId: string;
-  /** 当前迭代次数 */
+  /** 当前迭代次数（run 内全局，永不因检查点清零） */
   iteration: number;
   /** 总工具调用数 */
   totalToolCalls: number;
@@ -67,6 +78,10 @@ export interface CheckpointContext {
   metrics: CheckpointMetrics;
   /** 当前任务描述（如果有） */
   taskDescription?: string;
+  /** 恢复历史（防止重复 hint；支撑升级） */
+  recoveryHistory?: RecoveryAttemptRecord[];
+  /** 外部高危信号（tool-loop / noop 等） */
+  externalSignals?: Array<{ source: string; level: 'warning' | 'critical'; detail: string }>;
 }
 
 // ── 恢复动作 ──
@@ -82,6 +97,15 @@ export type RecoveryAction =
 
 // ── 检查点裁决 ──
 
+/** 失败形态 taxonomy（与 tool-loop / Security 对齐的共享词汇） */
+export type RunFailureKind =
+  | 'loop'
+  | 'thrash'
+  | 'drift'
+  | 'stall'
+  | 'blowup'
+  | 'burn';
+
 /** 检查点动作 */
 export type CheckpointAction = 'continue' | 'recover' | 'stop';
 
@@ -91,6 +115,8 @@ export interface CheckpointVerdict {
   action: CheckpointAction;
   /** 人类可读的原因 */
   reason: string;
+  /** 失败形态（可选，便于策略与观测对齐） */
+  failureKind?: RunFailureKind;
   /** recover 时的恢复动作列表 */
   recoveryActions?: RecoveryAction[];
   /** stop 时发送给用户的消息 */

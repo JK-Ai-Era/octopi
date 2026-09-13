@@ -312,27 +312,50 @@
     },
     "budget": {
       "type": "object",
-      "description": "迭代预算（安全兜底，由 runGuard 接管主要控制）",
+      "description": "资源 soft/hard 总闸（与 runGuard 组合：budget 管资源，runGuard 管行为）。主轴 token + wall-clock；maxIterations 仅显式配置时硬停。",
       "properties": {
-        "maxIterations": {
-          "type": "integer",
-          "minimum": 1,
-          "description": "最大迭代次数（建议设为宽松值，如 1000）"
-        },
-        "maxToolCalls": {
-          "type": "integer",
-          "minimum": 1,
-          "description": "最大工具调用次数"
-        },
         "maxTokens": {
           "type": "integer",
           "minimum": 1,
-          "description": "最大 token 数"
+          "default": 2000000,
+          "description": "硬顶：最大 token 数"
         },
         "maxWallClockMs": {
           "type": "integer",
           "minimum": 1000,
-          "description": "最大运行时间（毫秒）"
+          "default": 21600000,
+          "description": "硬顶：最大运行时间（毫秒，默认 6 小时）"
+        },
+        "softTokens": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "soft：token 触达（默认约 hard 的 20%）；有进展可静默续租"
+        },
+        "softWallClockMs": {
+          "type": "integer",
+          "minimum": 1000,
+          "description": "soft：时间触达（默认约 hard 的 35%）"
+        },
+        "maxIterations": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "最大迭代次数。仅显式设置时硬停；默认不设（长任务不靠 iteration 卡死）"
+        },
+        "maxToolCalls": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "最大工具调用次数。仅显式设置时硬停"
+        },
+        "autoRenewOnProgress": {
+          "type": "boolean",
+          "default": true,
+          "description": "soft 触达且有进展时自动续租"
+        },
+        "maxRenews": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 20,
+          "description": "最大续租次数"
         }
       }
     },

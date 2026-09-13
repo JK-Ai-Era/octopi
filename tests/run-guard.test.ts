@@ -42,6 +42,15 @@ function createContext(overrides?: Partial<CheckpointContext>): CheckpointContex
 
 describe('DefaultRunGuard', () => {
   describe('硬上限检查', () => {
+    it('默认不启用 Guard hardLimit（资源归 Budget）', async () => {
+      const runGuard = new DefaultRunGuard({ enableLLMReview: false });
+      const ctx = createContext({ iteration: 5000, elapsedMs: 99_000_000 });
+
+      const verdict = await runGuard.checkpoint(ctx);
+
+      expect(verdict.action).toBe('continue');
+    });
+
     it('应该在迭代数达到硬上限时停止', async () => {
       const runGuard = new DefaultRunGuard({ hardLimit: 100 });
       const ctx = createContext({ iteration: 100 });
@@ -254,6 +263,77 @@ describe('DefaultRunGuard', () => {
       expect(verdict.action).toBe('recover');
       expect(verdict.nextCheckpointIn).toBeDefined();
       expect(verdict.nextCheckpointIn!).toBeLessThanOrEqual(30);
+    });
+  });
+
+  describe('恢复升级阶梯', () => {
+    it('同一 failureKind 连续 recover 3 次后应 stop', async () => {
+      const runGuard = new DefaultRunGuard({ enableLLMReview: false });
+      const recoveryHistory = Array.from({ length: 3 }, (_, i) => ({
+        iteration: i + 1,
+        actionType: 'inject_hint' as const,
+        reason: 'loop',
+        failureKind: 'loop' as const,
+        timestamp: Date.now(),
+      }));
+      const ctx = createContext({
+        metrics: createMetrics({ consecutiveSameTool: 5 }),
+        recoveryHistory,
+      });
+
+      const verdict = await runGuard.checkpoint(ctx);
+
+      expect(verdict.action).toBe('stop');
+      expect(verdict.failureKind).toBe('loop');
+      expect(verdict.userMessage).toBeDefined();
+    });
+
+    it('第 3 次 recover 前建议 clear_recent_turns', async () => {
+      const runGuard = new DefaultRunGuard({ enableLLMReview: false });
+      const recoveryHistory = Array.from({ length: 2 }, (_, i) => ({
+        iteration: i + 1,
+        actionType: 'inject_hint' as const,
+        reason: 'loop',
+        failureKind: 'loop' as const,
+        timestamp: Date.now(),
+      }));
+      const ctx = createContext({
+        metrics: createMetrics({ consecutiveSameTool: 5 }),
+        recoveryHistory,
+      });
+
+      const verdict = await runGuard.checkpoint(ctx);
+
+      expect(verdict.action).toBe('recover');
+      expect(verdict.recoveryActions?.[0].type).toBe('clear_recent_turns');
+    });
+
+    it('budget_soft 信号触发 burn 恢复', async () => {
+      const runGuard = new DefaultRunGuard({ enableLLMReview: false });
+      const ctx = createContext({
+        externalSignals: [
+          { source: 'budget_soft', level: 'warning', detail: '预算 soft 触达（tokens）' },
+        ],
+      });
+
+      const verdict = await runGuard.checkpoint(ctx);
+
+      expect(verdict.action).toBe('recover');
+      expect(verdict.failureKind).toBe('burn');
+    });
+
+    it('external critical 信号触发 loop 恢复', async () => {
+      const runGuard = new DefaultRunGuard({ enableLLMReview: false });
+      const ctx = createContext({
+        externalSignals: [
+          { source: 'tool_loop', level: 'critical', detail: 'no progress x20' },
+        ],
+      });
+
+      const verdict = await runGuard.checkpoint(ctx);
+
+      expect(verdict.action).toBe('recover');
+      expect(verdict.failureKind).toBe('loop');
     });
   });
 

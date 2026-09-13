@@ -1,3 +1,63 @@
+## v0.21.1 (2026-09-13)
+
+### feat(run-guard,budget): ResourceBudget soft/hard 接线 + Checkpoint 真实指标 + P1 监督升级
+
+按 `arch/run-guard-refactor.md` 落地 P0/P1：Budget ⊥ Guard 组合，资源主轴 token/time，用户可见事件走 AgentLoopEvent。
+
+#### Budget（harness 非领域模块）
+
+- `IterationBudget` 演进 soft/hard：主轴 `maxTokens` + `maxWallClockMs`；`maxIterations`/`maxToolCalls` 仅显式配置时硬停
+- soft 触达：`hasProgress` → 静默续租（`budget.renewed`）；否则 `soft` 状态交 Guard
+- **soft 无 Guard 时升为 hard 停止**（禁止静默空转）
+- Builder `.budget()` 注入 `ReliabilityHarness.budget`
+- 配置：`BudgetJsonConfig` + Zod + `octopi.schema.json`；默认 2M tokens / 6h，无模式 profile
+
+#### RunGuard / Reliability
+
+- 新增 `RunMetricsCollector`（reliability）：真实 iteration / tokens / summaries / hasProgress
+- `runAgentWithReliability` 拦截 turn_end：token 计量 + 每轮 Budget 评估 + yield `budget_exceeded` / `run_guard_stopped` / `run_guard_recovered`
+- **即时检查点**：tool-loop critical / noop 超限 → `forceCheckpoint`（不等固定 interval）
+- **恢复升级阶梯**：`recoveryHistory` + 同 `failureKind` 连续 3 次 recover → stop；第 3 次前建议 `clear_recent_turns`
+- `CheckpointVerdict.failureKind`（loop/thrash/drift/stall/blowup/burn）
+- DefaultRunGuard **默认不再启用 hardLimit/hardWallClockMs**（资源总闸归 Budget）
+- `checkpointInterval` 从 `runGuard` JSON → reliability 初始间隔
+- 实现 `clear_recent_turns`；stop 时携带 `userMessage`
+- Core：`ReliabilityHarness.budget?: ResourceBudgetLike`；`CheckpointContext.recoveryHistory` / `metrics.noopStreak` / `externalSignals`
+
+#### 导出面
+
+- `harness/index.ts` **不再导出** `AgentSupervisor` / `startSupervisor` / `SupervisorEvents` / `EventCollector`（仍从 `run-guard/index.ts` 具名导入）
+- 注释纠错：删除「RunGuard 替代 IterationBudget」表述
+
+#### Security 边界
+
+- `checkBehavior` 主路径本就未调用；**去掉** loop/error/发散 与 Guard 重复的 security 裁决，只保留高危工具组合等攻击形态
+- 接口/README 写明：跑飞归 RunGuard
+
+#### 测试
+
+- `tests/resource-budget.test.ts`：soft 续租、hard 停止、collector、e2e budget_exceeded
+- `tests/run-guard.test.ts`：升级阶梯、external critical、默认无 hardLimit
+- `tests/run-guard-escalation.e2e.test.ts`：recover×3 → stop；LLM prompt 含 recoveryHistory
+
+#### 审查修复（同版本）
+
+- soft + Guard：`forceCheckpoint` + `budget_soft` external signal；无 Guard 才升 hard
+- Builder **始终**挂默认 `IterationBudget`（可覆盖），主路径硬停默认生效
+- **per-run 克隆 Budget**：`runAgentWithReliability` 从 harness 模板 `getConfig()` 新建实例，避免长驻/并发共享计数
+- **beforeToolCall hard 闸**：budgetStop / `checkHardOnly` 时 `block+terminate`，hard 后不执行本批工具
+- Guard 规则消费 `budget_soft`（failureKind=burn）
+- `tool_end` 计量 `recordToolCall`；`checkHardOnly` 避免 soft 误续租
+- soft 评估挪到 `onTurnComplete`（hasProgress 已更新）；hard 在 `turn_end` 用 `checkHardOnly`
+- 错误 `turn_end` 跳过 token 计量（防重试双计）
+- 一次 checkpoint 只记 1 条 recovery（防多 action 放大升级）
+- `adaptLoopEvent` 映射 `budget.exceeded` / `run_guard.stopped` / `run_guard.recovered`
+- Builder `_checkpointInterval` 接入 reliability config；Gateway 去掉死 import；example.json 补 budget/runGuard
+- Schema 补 `renewGrantTokens` / `renewGrantMs`；删除死状态 `pendingBudgetSoft`
+
+- soft 无 Guard：`pendingBudgetHardYield` → `budget_exceeded`；文本路径 soft 在 turn_end 入账后判定
+- per-run Budget 克隆 + beforeToolCall hard 闸回归测试
+
 ## v0.21.0 (2026-09-13)
 
 ### refactor(harness): Multi-Agent 独立领域 + Autonomous Subsystem 入域

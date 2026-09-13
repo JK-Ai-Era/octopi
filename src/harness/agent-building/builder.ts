@@ -670,11 +670,24 @@ export class AgentBuilder {
         ? new DefaultRunGuard(this._runGuardConfig, this._model)
         : undefined);
 
+    // ResourceBudget：始终挂默认实例（可被 .budget() 覆盖），保证主路径硬停生效
+    const budget =
+      this._budget ?? new IterationBudget(this._events ?? new DefaultEventBus(), {});
+
+    // checkpointInterval：builder.runGuard(guard, n) 或默认
+    if (this._checkpointInterval !== undefined) {
+      this._reliabilityConfig = {
+        ...(this._reliabilityConfig ?? DEFAULT_RELIABILITY_CONFIG),
+        checkpointInterval: this._checkpointInterval,
+      };
+    }
+
     const harness: ReliabilityHarness = {
       config: this._reliabilityConfig ?? DEFAULT_RELIABILITY_CONFIG,
       security,
       errorStrategy,
       runGuard,
+      budget,
     };
 
     return { agent, harness, mcpManager };

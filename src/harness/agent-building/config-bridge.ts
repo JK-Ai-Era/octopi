@@ -332,6 +332,13 @@ async function buildAgent(
     }
   }
 
+  // checkpointInterval：从 runGuard JSON 配置打通到 reliability 初始间隔
+  if (shared.runGuardConfig?.checkpointInterval !== undefined) {
+    builder.reliability({
+      checkpointInterval: shared.runGuardConfig.checkpointInterval,
+    });
+  }
+
   // ── Subsystems ──
   if (shared.subsystemSpecs && shared.subsystemSpecs.length > 0) {
     for (const spec of shared.subsystemSpecs) {

@@ -260,4 +260,22 @@ export type AgentLoopEvent =
   | { type: 'tool_start'; toolCall: ToolCall; timestamp: number }
   | { type: 'tool_end'; toolCall: ToolCall; result: LoopToolResult; timestamp: number }
   | { type: 'stream.fallback_to_sync'; timestamp: number; data: { reason: string } }
-  | { type: 'stream.fallback_failed'; timestamp: number; data: { error: string } };
+  | { type: 'stream.fallback_failed'; timestamp: number; data: { error: string } }
+  /** 资源 hard 总闸触发（用户可见；由 reliability yield，非 EventBus） */
+  | {
+      type: 'budget_exceeded';
+      timestamp: number;
+      data: { reason: 'tokens' | 'wall_clock' | 'iteration' | 'tool_calls'; report?: unknown };
+    }
+  /** RunGuard 判定 recover（用户可见） */
+  | {
+      type: 'run_guard_recovered';
+      timestamp: number;
+      data: { reason: string; actions: string[] };
+    }
+  /** RunGuard 判定 stop（用户可见；携带 userMessage） */
+  | {
+      type: 'run_guard_stopped';
+      timestamp: number;
+      data: { reason: string; userMessage?: string };
+    };

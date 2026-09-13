@@ -256,7 +256,7 @@ describe('ToolGuard', () => {
 });
 
 describe('BehaviorGuard', () => {
-  it('连续同一工具调用应该被检测', () => {
+  it('连续同工具不再由 Security 裁决（已上收 RunGuard）', () => {
     const bus = new DefaultEventBus();
     const guard = new DefaultSecurityGuard(bus);
 
@@ -267,12 +267,10 @@ describe('BehaviorGuard', () => {
       recentToolCalls: [],
       uniqueTools: 1,
     });
-    expect(result.isClean).toBe(false);
-    expect(result.violations[0].type).toBe('behavior_anomaly');
-    expect(result.violations[0].description).toContain('死循环');
+    expect(result.isClean).toBe(true);
   });
 
-  it('连续失败应该被检测', () => {
+  it('连续失败不再由 Security 裁决（已上收 RunGuard）', () => {
     const bus = new DefaultEventBus();
     const guard = new DefaultSecurityGuard(bus);
 
@@ -282,8 +280,7 @@ describe('BehaviorGuard', () => {
       recentToolCalls: [],
       uniqueTools: 3,
     });
-    expect(result.isClean).toBe(false);
-    expect(result.violations.some(v => v.description.includes('连续 4 次'))).toBe(true);
+    expect(result.isClean).toBe(true);
   });
 
   it('多种高危工具组合应该被检测', () => {

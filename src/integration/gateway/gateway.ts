@@ -56,7 +56,6 @@ import { PluginManager } from '../../harness/plugin-ecosystem/plugins/manager.js
 
 import { DefaultEventBus } from '../../core/primitives/event-bus.js';
 import { DefaultSecurityGuard } from '../../harness/security/default-security-guard.js';
-import { IterationBudget } from '../../harness/budget/budget.js';
 import { DefaultContextEngine } from '../../harness/context/default-context-engine.js';
 import { SessionAwareRunner, type RunConfig } from '../../harness/runner.js';
 

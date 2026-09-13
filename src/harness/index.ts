@@ -36,7 +36,8 @@ export type { Environment } from './security/policy.js';
 // ── Reliability ──
 export { runAgentWithReliability, DEFAULT_RELIABILITY_CONFIG } from './reliability/index.js';
 export type { ReliabilityConfig, ConcreteReliabilityHarness } from './reliability/index.js';
-export type { ReliabilityHarness } from '../core/interfaces/reliability.js';
+export type { ReliabilityHarness, ResourceBudgetLike } from '../core/interfaces/reliability.js';
+export { RunMetricsCollector } from './reliability/run-metrics-collector.js';
 export { CircuitBreaker } from './reliability/circuit-breaker.js';
 export { wrapProviderWithCircuitBreaker } from './reliability/provider-wrapper.js';
 export { FallbackProvider } from './reliability/fallback-provider.js';
@@ -79,8 +80,9 @@ export { SessionTaskService, renderSessionTasksInjection, createSessionTaskTools
 export type { SessionTask, SessionTaskStatus, SessionTaskListFilter } from './session-tasks/index.js';
 
 // ── Run Guard（过程监督）──
-export { AgentSupervisor, startSupervisor, SupervisorEvents, EventCollector, DefaultRunGuard, createRunGuard } from './run-guard/index.js';
-export type { RunGuardConfig, Planner, Reflector, AgentState, AgentStats, Plan, PlanStep, StepResult, ExecutionRecord, Assessment, Pattern, SupervisorConfig } from './run-guard/index.js';
+// AgentSupervisor 不进主导出（experimental；见 run-guard/index.ts 或 arch/run-guard-refactor.md §9.5）
+export { DefaultRunGuard, createRunGuard } from './run-guard/index.js';
+export type { RunGuardConfig } from './run-guard/index.js';
 
 // ── Knowledge（Context Intelligence 第 4 层）──
 export { MemoryKnowledgeStore, KnowledgeContextEngine } from './context/knowledge/index.js';

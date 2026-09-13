@@ -91,6 +91,8 @@ export type {
   CheckpointMetrics,
   TurnSummary,
   RecoveryAction,
+  RecoveryAttemptRecord,
+  RunFailureKind,
 } from './run-guard.js';
 
 export type {
@@ -116,7 +118,7 @@ export type {
   SecurityGuardConfig,
 } from './security-guard.js';
 
-export type { ReliabilityHarness } from './reliability.js';
+export type { ReliabilityHarness, ResourceBudgetLike } from './reliability.js';
 
 export type {
   Planner,

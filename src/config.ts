@@ -41,7 +41,6 @@ import type { GatewayConfig } from './integration/types/gateway-config.js';
 import type { ModelProvider } from './core/interfaces/model-provider.js';
 import type { SessionStore } from './core/interfaces/session-store.js';
 import type { SessionData } from './harness/session-types.js';
-import type { IterationBudgetConfig } from './harness/budget/budget.js';
 import type { SecurityGuardConfig } from './core/security-guard.js';
 import { validateConfigOrThrow } from './config-schema.js';
 import { getOctopiHome } from './init.js';
@@ -176,12 +175,47 @@ export interface ChannelConfig {
 
 
 
+// ── Budget 配置（octopi.json 形状）──
+
+/**
+ * BudgetJsonConfig — octopi.json 中的 budget 字段形状
+ *
+ * 资源 soft/hard 总闸。与 runGuard 组合（非替代）：
+ * - budget：token / wall-clock 硬顶；可选 soft + 进展续租
+ * - runGuard：行为监督（continue/recover/stop）
+ *
+ * 注意：与 harness/budget 的 `IterationBudgetConfig`（实现配置）同结构但不同名。
+ * 主轴是 token + wall-clock；maxIterations 仅显式配置时硬停（默认不设）。
+ */
+export interface BudgetJsonConfig {
+  /** 硬顶：最大 token 数（默认 2_000_000） */
+  maxTokens?: number;
+  /** 硬顶：最大运行时间毫秒（默认 6h） */
+  maxWallClockMs?: number;
+  /** soft：token 触达（默认约 hard 的 20%） */
+  softTokens?: number;
+  /** soft：时间触达（默认约 hard 的 35%） */
+  softWallClockMs?: number;
+  /** 最大迭代次数。仅显式设置时硬停；默认不设（长任务不靠 iteration 卡死） */
+  maxIterations?: number;
+  /** 最大工具调用次数。仅显式设置时硬停 */
+  maxToolCalls?: number;
+  /** soft 触达且有进展时自动续租（默认 true） */
+  autoRenewOnProgress?: boolean;
+  /** 最大续租次数（默认 20） */
+  maxRenews?: number;
+  /** 续租 token 增量 */
+  renewGrantTokens?: number;
+  /** 续租时间增量（毫秒） */
+  renewGrantMs?: number;
+}
+
 // ── RunGuard 配置（octopi.json 形状）──
 
 /**
  * RunGuardJsonConfig — octopi.json 中的 runGuard 字段形状
  *
- * 过程监督，替代 IterationBudget 的硬限制。
+ * 过程监督，与 budget 组合：Budget 管资源，RunGuard 管行为是否跑飞。
  * 通过检查点机制实现：每 N 轮迭代审查一次，决定继续/恢复/终止。
  *
  * 注意：与 harness/run-guard 的 `RunGuardConfig`（实现配置）同结构但不同名，
@@ -370,9 +404,9 @@ export interface HarnessConfig {
   defaults?: Defaults;
   /** Plugin 配置 */
   plugins?: PluginConfig;
-  /** 迭代预算（安全兜底，由 RunGuard 接管主要控制） */
-  budget?: Partial<IterationBudgetConfig>;
-  /** 过程监督配置（智能监督，替代硬限制） */
+  /** 资源预算（token/time soft-hard；与 runGuard 组合，非替代） */
+  budget?: BudgetJsonConfig;
+  /** 过程监督配置（行为监督；与 budget 组合） */
   runGuard?: RunGuardJsonConfig;
   /** 上下文引擎配置 */
   contextEngine?: ContextEngineConfig;
