@@ -691,6 +691,20 @@ export function loadConfig(configPath?: string): NormalizedHarnessConfig {
       'system-level subsystems config only holds framework fields (e.g. auditDir).',
     );
   }
+  if (raw && typeof raw === 'object' && raw.budget && typeof raw.budget === 'object') {
+    const budget = raw.budget as Record<string, unknown>;
+    if ('maxTimeMs' in budget) {
+      console.warn(
+        '[config] budget.maxTimeMs is deprecated and will be ignored by Zod. ' +
+        'Rename it to budget.maxWallClockMs.',
+      );
+      // 尽力迁移：未显式写新字段时沿用旧值
+      if (budget.maxWallClockMs === undefined && typeof budget.maxTimeMs === 'number') {
+        budget.maxWallClockMs = budget.maxTimeMs;
+      }
+      delete budget.maxTimeMs;
+    }
+  }
 
   // Zod schema 校验（结构化错误信息）
   const config = validateConfigOrThrow(raw) as unknown as NormalizedHarnessConfig;

@@ -1,3 +1,11 @@
+## v0.21.2 (2026-09-13)
+
+### fix(config,test): budget.maxTimeMs 迁移告警 + Guard 生命周期真 e2e
+
+- `loadConfig`：`budget.maxTimeMs` 告警并迁移到 `maxWallClockMs`（与 supervisor→runGuard 同策略）
+- 新增 `tests/run-guard-lifecycle.e2e.test.ts`：连续失败工具 → recover → `run_guard_stopped` 全链路
+- 工具路径 turn_end 仅 `checkHardOnly`，soft 留给 onTurnComplete（避免陈旧 hasProgress 续租）
+
 ## v0.21.1 (2026-09-13)
 
 ### feat(run-guard,budget): ResourceBudget soft/hard 接线 + Checkpoint 真实指标 + P1 监督升级

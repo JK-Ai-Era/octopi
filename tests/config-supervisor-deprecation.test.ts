@@ -66,4 +66,19 @@ describe('loadConfig supervisor deprecation', () => {
     expect((config as Record<string, unknown>).distributedIntelligence).toBeUndefined();
     expect(warn.mock.calls.some(([msg]) => String(msg).includes('distributedIntelligence'))).toBe(true);
   });
+
+  it('budget.maxTimeMs 告警并迁移到 maxWallClockMs', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const file = writeConfig({
+      ...baseModels,
+      budget: { maxTokens: 1000, maxTimeMs: 60_000 },
+    });
+
+    const config = loadConfig(file);
+    expect(
+      warn.mock.calls.some(([msg]) => String(msg).includes('maxTimeMs') && String(msg).includes('maxWallClockMs')),
+    ).toBe(true);
+    expect((config.budget as { maxWallClockMs?: number }).maxWallClockMs).toBe(60_000);
+    expect((config.budget as { maxTimeMs?: number }).maxTimeMs).toBeUndefined();
+  });
 });
