@@ -12,7 +12,8 @@ function writeSubsystem(dir: string, id: string, overrides: Record<string, unkno
 }
 `);
   writeFileSync(join(dir, 'config.yaml'), [
-    `id: ${id}`,
+    // @ / # 等字符在 YAML 中需加引号
+    `id: "${id}"`,
     'sense:',
     '  source: eventBus',
     '  filter:',

@@ -59,6 +59,17 @@ export function validateSubsystemSpec(spec: SubsystemSpec): ValidationError[] {
     });
   }
 
+  // ── schedule 来源必须有合法 interval ──
+  if (spec.sense.source === 'schedule') {
+    const interval = spec.sense.interval;
+    if (interval === undefined || interval < 1000) {
+      errors.push({
+        field: 'sense.interval',
+        message: 'sense.source "schedule" requires interval >= 1000ms',
+      });
+    }
+  }
+
   // ── act.mode 非 none 时，信号通道不能只有 escalate ──
   // （如果 act 已经直接行动了，escalate 应该配合其他通道一起用）
   // 这是一个软警告，不阻止注册

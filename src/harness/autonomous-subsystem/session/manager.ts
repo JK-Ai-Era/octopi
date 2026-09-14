@@ -67,8 +67,8 @@ export class SubsystemSessionManager {
   }
 
   deleteBySessionId(agentId: string, sessionId: string): void {
-    for (const key of Array.from(this.sessions.keys())) {
-      if (key.endsWith(`:${agentId}:${sessionId}`)) {
+    for (const [key, session] of Array.from(this.sessions.entries())) {
+      if (session.agentId === agentId && session.sessionId === sessionId) {
         this.sessions.delete(key);
       }
     }

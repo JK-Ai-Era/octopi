@@ -589,15 +589,24 @@ export class AgentBuilder {
       });
       // 注册代码中定义的子系统
       for (const spec of this._subsystemSpecs) {
-        subsystemRuntime.register(spec);
+        const regErrors = subsystemRuntime.register(spec);
+        if (regErrors.length > 0) {
+          console.warn(`[octopi] subsystem "${spec.id}" rejected: ${regErrors.join('; ')}`);
+        }
       }
       // 从目录加载子系统
       if (this._subsystemDir) {
         const { SubsystemLoader } = await import('../autonomous-subsystem/loader.js');
         const loader = new SubsystemLoader({ builtinDir: this._subsystemDir });
         const loadResult = await loader.loadAll();
+        for (const err of loadResult.errors) {
+          console.warn(`[octopi] subsystem load failed ${err.path}: ${err.error}`);
+        }
         for (const spec of loadResult.specs) {
-          subsystemRuntime.register(spec);
+          const regErrors = subsystemRuntime.register(spec);
+          if (regErrors.length > 0) {
+            console.warn(`[octopi] subsystem "${spec.id}" rejected: ${regErrors.join('; ')}`);
+          }
         }
       }
       runner.setSubsystemRuntime(subsystemRuntime);

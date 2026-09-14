@@ -283,6 +283,16 @@ export class SessionAwareRunner {
           this._subsystemRuntime.metrics.update('turn.count', session.messages.filter(m => m.role === 'assistant').length);
         }
         this._subsystemRuntime.applyPendingInjections(session.messages);
+
+        // steering / escalate：当前轮次立即生效（escalate 优先，写入 injectedContext）
+        const guidance = this._subsystemRuntime.consumePendingGuidance();
+        if (guidance) {
+          const base = effectiveRunConfig.injectedContext;
+          effectiveRunConfig = {
+            ...effectiveRunConfig,
+            injectedContext: base ? `${base}\n\n${guidance}` : guidance,
+          };
+        }
       }
 
       // 8. 同步运行时上下文到工具上下文提供者

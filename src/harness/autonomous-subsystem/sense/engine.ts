@@ -37,6 +37,12 @@ interface RegisteredSubsystem {
   cooldown: CooldownEntry;
   /** 评估函数（编译后的 condition 或 conditionRef） */
   evaluator?: (ctx: SenseContext) => boolean | Promise<boolean>;
+  /** 该子系统持有的 EventBus 监听器（unregister 时拆除） */
+  disposables: Disposable[];
+  /** schedule 模式的轮询定时器 */
+  scheduleTimer?: ReturnType<typeof setInterval>;
+  /** 同一 entry 是否正在评估/触发（防止 await 期间并发穿透冷却） */
+  inFlight?: boolean;
 }
 
 // ── SenseEngine 配置 ──
@@ -50,6 +56,8 @@ export interface SenseEngineConfig {
   maxDepth?: number;
   /** 深度重置间隔（毫秒），默认 60000 */
   depthResetIntervalMs?: number;
+  /** condition/conditionRef 评估超时（毫秒），默认 30000；超时视为不触发并释放 inFlight */
+  evaluatorTimeoutMs?: number;
 }
 
 /**
@@ -67,11 +75,10 @@ export class SenseEngine {
   private defaultCooldownMs: number;
   private maxDepth: number;
   private depthResetIntervalMs: number;
+  private evaluatorTimeoutMs: number;
 
   /** 已注册的子系统 */
   private subsystems = new Map<string, RegisteredSubsystem>();
-  /** EventBus 监听器 */
-  private disposables: Disposable[] = [];
   /** 全局传播深度追踪 */
   private depthTracker: DepthTracker = { depth: 0, chainStartTime: Date.now() };
   /** 深度重置定时器 */
@@ -83,6 +90,7 @@ export class SenseEngine {
     this.defaultCooldownMs = config.defaultCooldownMs ?? 5000;
     this.maxDepth = config.maxDepth ?? 5;
     this.depthResetIntervalMs = config.depthResetIntervalMs ?? 60000;
+    this.evaluatorTimeoutMs = config.evaluatorTimeoutMs ?? 30_000;
 
     // 定期重置深度计数器（防止长期运行后深度累积）
     this.depthResetTimer = setInterval(() => {
@@ -104,29 +112,57 @@ export class SenseEngine {
    * @param onTrigger - 触发回调
    */
   register(spec: SubsystemSpec, onTrigger: (ctx: SenseContext) => void): void {
+    // 同 id 覆盖注册时先拆旧监听/timer
+    this.unregister(spec.id);
+
     const evaluator = this.compileEvaluator(spec.sense);
     const entry: RegisteredSubsystem = {
       spec,
       cooldown: { until: 0 },
       evaluator,
+      disposables: [],
     };
     this.subsystems.set(spec.id, entry);
 
-    // 为 eventBus 来源的子系统注册事件监听
+    // eventBus：按事件类型挂监听，unregister 时按 entry 拆除
     if (spec.sense.source === 'eventBus' && spec.sense.filter?.events) {
       for (const eventType of spec.sense.filter.events) {
         const disposable = this.events.on(eventType, (event) => {
           this.onEvent(spec.id, event, onTrigger);
         });
-        this.disposables.push(disposable);
+        entry.disposables.push(disposable);
+      }
+    }
+
+    // schedule：interval 轮询；复用冷却/深度/condition/onTrigger
+    if (spec.sense.source === 'schedule') {
+      const intervalMs = spec.sense.interval;
+      if (intervalMs && intervalMs > 0) {
+        entry.scheduleTimer = setInterval(() => {
+          void this.onScheduleTick(spec.id, onTrigger);
+        }, intervalMs);
+        if (typeof entry.scheduleTimer === 'object' && entry.scheduleTimer !== null && 'unref' in entry.scheduleTimer) {
+          (entry.scheduleTimer as NodeJS.Timeout).unref?.();
+        }
       }
     }
   }
 
   /**
-   * 注销子系统
+   * 注销子系统：拆除其 EventBus 监听与 schedule 定时器
    */
   unregister(subsystemId: string): void {
+    const entry = this.subsystems.get(subsystemId);
+    if (!entry) return;
+
+    for (const d of entry.disposables) {
+      d.dispose();
+    }
+    entry.disposables = [];
+    if (entry.scheduleTimer) {
+      clearInterval(entry.scheduleTimer);
+      entry.scheduleTimer = undefined;
+    }
     this.subsystems.delete(subsystemId);
   }
 
@@ -164,38 +200,66 @@ export class SenseEngine {
   /**
    * 静态分析：检查子系统之间是否存在循环触发
    *
+   * 依赖图边：listener → emitter（监听方会被产生方触发）。
+   * `emits: ['*']` 按保守策略视为可能产生任意已监听事件。
+   * 同一子系统同时 listen + emit 同一事件时记为自环。
+   *
    * @param specs - 所有已注册的子系统规格
-   * @returns 检测到的循环路径，空数组表示无循环
+   * @returns 检测到的循环路径，空数组表示无循环；自环为 `[id, id]`
    */
   detectCycles(specs: SubsystemSpec[]): string[][] {
-    // 构建事件产生 → 事件监听的依赖图
-    // eventEmit[eventType] = Set<subsystemId>（产生该事件的子系统）
-    // eventListen[eventType] = Set<subsystemId>（监听该事件的子系统）
     const eventEmit = new Map<string, Set<string>>();
     const eventListen = new Map<string, Set<string>>();
+    const wildcardEmitters = new Set<string>();
 
     for (const spec of specs) {
       const emits = spec.emits ?? spec.sense.filter?.emits ?? [];
-      const normalizedEmits = emits.includes('*') ? ['*'] : emits;
-      for (const evt of normalizedEmits) {
+      const listens = spec.sense.source === 'eventBus' ? (spec.sense.filter?.events ?? []) : [];
+
+      if (emits.includes('*')) {
+        wildcardEmitters.add(spec.id);
+      }
+      for (const evt of emits) {
+        if (evt === '*') continue;
         if (!eventEmit.has(evt)) eventEmit.set(evt, new Set());
         eventEmit.get(evt)!.add(spec.id);
       }
 
-      if (spec.sense.source === 'eventBus' && spec.sense.filter?.events) {
-        for (const evt of spec.sense.filter.events) {
-          if (!eventListen.has(evt)) eventListen.set(evt, new Set());
-          eventListen.get(evt)!.add(spec.id);
-        }
+      for (const evt of listens) {
+        if (!eventListen.has(evt)) eventListen.set(evt, new Set());
+        eventListen.get(evt)!.add(spec.id);
       }
     }
 
+    // 通配符发射方：对所有已监听事件视为可能 emitter（保守）
+    for (const listened of eventListen.keys()) {
+      for (const id of wildcardEmitters) {
+        if (!eventEmit.has(listened)) eventEmit.set(listened, new Set());
+        eventEmit.get(listened)!.add(id);
+      }
+    }
+
+    const cycles: string[][] = [];
+
+    // 自环：listen ∩ 具体 emit 事件。
+    // 注意：`emits: ['*']` 只参与多节点环的保守边，**不单独构成自环**（否则 LLM 监听型子系统无法注册）。
+    for (const spec of specs) {
+      const emits = spec.emits ?? spec.sense.filter?.emits ?? [];
+      const listens = spec.sense.source === 'eventBus' ? (spec.sense.filter?.events ?? []) : [];
+      if (listens.length === 0) continue;
+      const selfLoop = listens.some((evt) => emits.includes(evt));
+      if (selfLoop) {
+        cycles.push([spec.id, spec.id]);
+      }
+    }
+
+    // 多节点环：listener → emitter
     const adjacency = new Map<string, Set<string>>();
     for (const [evt, listeners] of eventListen) {
+      const emitters = eventEmit.get(evt);
+      if (!emitters) continue;
       for (const listener of listeners) {
         if (!adjacency.has(listener)) adjacency.set(listener, new Set());
-        const emitters = eventEmit.get(evt);
-        if (!emitters) continue;
         for (const emitter of emitters) {
           if (emitter === listener) continue;
           adjacency.get(listener)!.add(emitter);
@@ -205,7 +269,6 @@ export class SenseEngine {
 
     const visited = new Set<string>();
     const inStack = new Set<string>();
-    const cycles: string[][] = [];
 
     const dfs = (node: string, path: string[]): void => {
       visited.add(node);
@@ -240,10 +303,16 @@ export class SenseEngine {
    * 清理所有资源
    */
   dispose(): void {
-    for (const d of this.disposables) {
-      d.dispose();
+    for (const entry of this.subsystems.values()) {
+      for (const d of entry.disposables) {
+        d.dispose();
+      }
+      entry.disposables = [];
+      if (entry.scheduleTimer) {
+        clearInterval(entry.scheduleTimer);
+        entry.scheduleTimer = undefined;
+      }
     }
-    this.disposables = [];
     if (this.depthResetTimer) {
       clearInterval(this.depthResetTimer);
       this.depthResetTimer = undefined;
@@ -252,6 +321,27 @@ export class SenseEngine {
   }
 
   // ── 内部方法 ──
+
+  /**
+   * 条件评估（带超时）：仅在存在 evaluator 时调用
+   * 挂起或超时返回 false，避免 inFlight 永久占用
+   */
+  private async evaluateCondition(
+    entry: RegisteredSubsystem,
+    ctx: SenseContext,
+  ): Promise<boolean> {
+    if (!entry.evaluator) return true;
+
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<boolean>((resolve) => {
+      timer = setTimeout(() => resolve(false), this.evaluatorTimeoutMs);
+    });
+    try {
+      return await Promise.race([Promise.resolve(entry.evaluator(ctx)), timeout]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
 
   /**
    * EventBus 事件到达时的处理
@@ -264,18 +354,15 @@ export class SenseEngine {
     const entry = this.subsystems.get(subsystemId);
     if (!entry) return;
 
-    // ── 第三层防护：冷却期 ──
     const now = Date.now();
-    if (now < entry.cooldown.until) {
-      return; // 冷却期内，不触发（EventBus 触发不可穿透）
+    if (now < entry.cooldown.until || entry.inFlight) {
+      return;
     }
 
-    // ── 第二层防护：传播深度 ──
     if (this.depthTracker.depth >= this.maxDepth) {
-      return; // 超过最大深度，丢弃
+      return;
     }
 
-    // ── 条件评估 ──
     const ctx: SenseContext = {
       eventData: event.data,
       metrics: this.metrics.snapshot(),
@@ -283,26 +370,71 @@ export class SenseEngine {
       sessionId: event.sessionId,
     };
 
-    if (entry.evaluator) {
-      const ok = await entry.evaluator(ctx);
-      if (!ok) {
-        return; // 条件不满足
-      }
-    }
-
-    // ── 检查并发限制 ──
-    if (entry.spec.lifecycle?.maxConcurrent) {
-      // 并发计数由 SubsystemRuntime 管理，这里只做触发
-    }
-
-    // ── 触发 ──
-    this.depthTracker.depth++;
-    entry.cooldown.until = now + this.defaultCooldownMs;
-
+    entry.inFlight = true;
     try {
-      onTrigger(ctx);
+      // 无 condition 时保持同步触发；有 evaluator 才 await（含超时）
+      if (entry.evaluator) {
+        const ok = await this.evaluateCondition(entry, ctx);
+        if (!ok) {
+          return;
+        }
+      }
+
+      this.depthTracker.depth++;
+      entry.cooldown.until = Date.now() + this.defaultCooldownMs;
+
+      try {
+        onTrigger(ctx);
+      } finally {
+        this.depthTracker.depth--;
+      }
     } finally {
-      this.depthTracker.depth--;
+      entry.inFlight = false;
+    }
+  }
+
+  /**
+   * schedule 模式到点：复用冷却期 / 深度 / condition，无 eventData
+   */
+  private async onScheduleTick(
+    subsystemId: string,
+    onTrigger: (ctx: SenseContext) => void,
+  ): Promise<void> {
+    const entry = this.subsystems.get(subsystemId);
+    if (!entry) return;
+
+    const now = Date.now();
+    if (now < entry.cooldown.until || entry.inFlight) {
+      return;
+    }
+
+    if (this.depthTracker.depth >= this.maxDepth) {
+      return;
+    }
+
+    const ctx: SenseContext = {
+      metrics: this.metrics.snapshot(),
+    };
+
+    entry.inFlight = true;
+    try {
+      if (entry.evaluator) {
+        const ok = await this.evaluateCondition(entry, ctx);
+        if (!ok) {
+          return;
+        }
+      }
+
+      this.depthTracker.depth++;
+      entry.cooldown.until = Date.now() + this.defaultCooldownMs;
+
+      try {
+        onTrigger(ctx);
+      } finally {
+        this.depthTracker.depth--;
+      }
+    } finally {
+      entry.inFlight = false;
     }
   }
 
@@ -384,22 +516,8 @@ export class SenseEngine {
       }
     }
 
-    // 构建函数体：将变量名替换为 ctx.metrics['变量名']
+    // 变量名按长度降序替换，避免短名误伤长名前缀
     let body = expr;
-    for (const varName of variables) {
-      // 按长度降序排列，避免短变量名误替换长变量名的前缀
-      const sortedVars = Array.from(variables).sort((a, b) => b.length - a.length);
-      for (const v of sortedVars) {
-        body = body.replace(
-          new RegExp(`\\b${v.replace(/\./g, '\\.')}\\b`, 'g'),
-          `ctx.metrics['${v}']`,
-        );
-      }
-      break; // 外层循环只用于排序，内层循环完成替换
-    }
-
-    // 实际替换所有变量（上面的循环结构需要修正）
-    body = expr;
     const sortedVars = Array.from(variables).sort((a, b) => b.length - a.length);
     for (const v of sortedVars) {
       body = body.replace(

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { SubsystemRuntime } from '../../src/harness/autonomous-subsystem/runtime.js';
 import { DefaultEventBus } from '../../src/core/primitives/event-bus.js';
 import type { SubsystemSpec } from '../../src/harness/autonomous-subsystem/types.js';
@@ -96,26 +96,29 @@ describe('SubsystemRuntime lifecycle enforcement', () => {
     runtime.dispose();
   });
 
-  it('keeps signal delivery when token budget exceeded and degradeOn=both', async () => {
+  it('degrades when estimated input tokens exceed maxTokens (degradeOn=both)', async () => {
     const runtime = new SubsystemRuntime({
       deps: { model: {} as any, events, errorStrategy: {} as any, mainTools: new Map() },
     });
     runtimes.push(runtime);
+
+    const handler = vi.fn(async () => ({
+      signals: [{ action: 'suggest' as const, reason: 'ok' }],
+    }));
 
     runtime.register(makeSpec({
       lifecycle: { maxTokens: 1, degradeOn: 'both' },
       think: {
         strategy: 'deterministic',
         implementation: 'code',
-        handler: async () => ({
-          signals: [{ action: 'suggest', reason: 'ok' }],
-        }),
+        handler,
       },
     }));
 
     await runtime.trigger('test-sub');
 
-    // token budget 未触发（code handler无token usage）→ 信号正常投递
+    // 输入启发式 token 估算必 > 1 → 执行前失败，handler 不跑
+    expect(handler).not.toHaveBeenCalled();
     expect(runtime.signals.pendingCounts.context).toBe(0);
     expect(runtime.signals.pendingCounts.escalate).toBe(0);
 

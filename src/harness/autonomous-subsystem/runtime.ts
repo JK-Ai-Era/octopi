@@ -33,6 +33,14 @@ import { MetricsStore } from './sense/metrics.js';
 import { ThinkExecutor } from './think/executor.js';
 import type { ThinkExecutorConfig } from './think/executor.js';
 import { ModelResolver } from './think/model-resolver.js';
+import {
+  createSubsystemLLMPort,
+  DEP_LLM_PORT,
+  DEP_RESOLVED_MODEL,
+  DEP_RESOLVED_MODELS,
+  DEP_SUBSYSTEM_PROMPT,
+} from './think/llm-port.js';
+import { estimateTextTokens } from '../context/token-estimator.js';
 import type { ModelLevelMap } from './types.js';
 import { SignalBus } from './signal/bus.js';
 import { SubsystemSessionManager } from './session/manager.js';
@@ -216,6 +224,16 @@ export class SubsystemRuntime {
       return [`Subsystem "${spec.id}" already registered`];
     }
 
+    // 静态循环检测：与既有注册集合并后，若新子系统落在环上则拒绝
+    const existingSpecs = Array.from(this.subsystems.values()).map((e) => e.spec);
+    const cycles = this.senseEngine.detectCycles([...existingSpecs, spec]);
+    const cyclesInvolvingNew = cycles.filter((path) => path.includes(spec.id));
+    if (cyclesInvolvingNew.length > 0) {
+      return cyclesInvolvingNew.map(
+        (path) => `cycle detected: ${path.join(' → ')} (declare emits accurately or break the loop)`,
+      );
+    }
+
     const entry: RegisteredSubsystem = { spec, concurrency: 0 };
     this.subsystems.set(spec.id, entry);
 
@@ -292,6 +310,37 @@ export class SubsystemRuntime {
    */
   applyPendingInjections(messages: Message[]): void {
     this.signalBus.applyPendingContext(messages);
+  }
+
+  /**
+   * 消费 steering + escalate 队列，生成当前轮次引导文本
+   *
+   * escalate 优先于 steering。返回 undefined 表示本轮无引导。
+   * 消费后队列清空（fire-once）。
+   */
+  consumePendingGuidance(): string | undefined {
+    const escalates = this.signalBus.consumeEscalate();
+    const steering = this.signalBus.consumeSteering();
+    if (escalates.length === 0 && steering.length === 0) {
+      return undefined;
+    }
+
+    const format = (entries: typeof escalates): string =>
+      entries
+        .map((e) => {
+          const conf = e.signal.confidence !== undefined ? ` (confidence=${e.signal.confidence})` : '';
+          return `- [${e.subsystemId}] ${e.signal.action}${conf}: ${e.signal.reason}`;
+        })
+        .join('\n');
+
+    const parts: string[] = [];
+    if (escalates.length > 0) {
+      parts.push(`## Subsystem escalation (priority)\n${format(escalates)}`);
+    }
+    if (steering.length > 0) {
+      parts.push(`## Subsystem steering\n${format(steering)}`);
+    }
+    return parts.join('\n\n');
   }
 
   /** 已注册的子系统数量 */
@@ -400,26 +449,33 @@ export class SubsystemRuntime {
     try {
       const tools = this.resolveTools(entry.spec);
 
-      let injectDeps: InjectedDependencies | undefined;
-      if (entry.spec.runtimeInject) {
-        const registry = this.deps.injectRegistry;
-        injectDeps = {};
-        if (registry) {
-          for (const depName of entry.spec.runtimeInject.requires) {
-            const impl = registry.get(depName);
-            if (impl !== undefined) {
-              injectDeps[depName] = impl;
-            }
+      // 统一注入：认知 prompt + llmPort + 模型解析 + runtimeInject 声明的依赖
+      const injectDeps: InjectedDependencies = {};
+      const registry = this.deps.injectRegistry;
+      if (entry.spec.runtimeInject && registry) {
+        for (const depName of entry.spec.runtimeInject.requires) {
+          const impl = registry.get(depName);
+          if (impl !== undefined) {
+            injectDeps[depName] = impl;
           }
         }
-        if (entry.spec.metadata?.config && typeof entry.spec.metadata.config === 'object') {
-          injectDeps['__subsystem_config__'] = entry.spec.metadata.config;
-        }
-        if (entry.spec.think.model) {
-          const resolved = this.modelResolver.resolve(entry.spec.think.model);
-          injectDeps['__resolved_model__'] = resolved.primary.model;
-        }
       }
+      if (entry.spec.metadata?.config && typeof entry.spec.metadata.config === 'object') {
+        injectDeps['__subsystem_config__'] = entry.spec.metadata.config;
+      }
+      if (entry.spec.think.systemPrompt) {
+        injectDeps[DEP_SUBSYSTEM_PROMPT] = entry.spec.think.systemPrompt;
+      }
+
+      const resolved = this.modelResolver.resolve(entry.spec.think.model ?? 'standard');
+      injectDeps[DEP_RESOLVED_MODEL] = resolved.primary.model;
+      injectDeps[DEP_RESOLVED_MODELS] = resolved;
+      injectDeps[DEP_LLM_PORT] = createSubsystemLLMPort({
+        provider: this.deps.model,
+        modelResolver: this.modelResolver,
+        modelRef: entry.spec.think.model ?? 'standard',
+        cognitivePrompt: entry.spec.think.systemPrompt,
+      });
 
       const result = await this.thinkExecutor.execute(
         entry.spec.think,
@@ -512,19 +568,19 @@ export class SubsystemRuntime {
   }
 
   /**
-   * 处理 Act
+   * 无真实 usage 时按启发式 token 估算（与 HeuristicTokenEstimator 同口径）
    */
   private inferTokenUsage(existing: SubsystemRun['tokenUsage'], input: SubsystemInput, output: SubsystemOutput): SubsystemRun['tokenUsage'] {
     if (existing) return existing;
 
-    const promptChars = JSON.stringify(input).length;
-    const completionChars = JSON.stringify(output).length;
-    if (promptChars + completionChars === 0) return undefined;
+    const promptTokens = estimateTextTokens(JSON.stringify(input));
+    const completionTokens = estimateTextTokens(JSON.stringify(output));
+    if (promptTokens + completionTokens === 0) return undefined;
 
     return {
-      prompt: promptChars,
-      completion: completionChars,
-      total: promptChars + completionChars,
+      prompt: promptTokens,
+      completion: completionTokens,
+      total: promptTokens + completionTokens,
     } satisfies { prompt: number; completion: number; total: number };
   }
 

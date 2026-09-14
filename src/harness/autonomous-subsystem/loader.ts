@@ -1,5 +1,6 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { createRequire } from 'node:module';
 import type {
   SubsystemSpec, ThinkConfig, ThinkImplementation, SenseSource, ActMode,
   IsolationLevel, ContextField,
@@ -8,6 +9,18 @@ import type {
   SubsystemHandler, RuntimeInjectConfig, LifecycleResumeConfig, ObservabilityConfig,
 } from './types.js';
 import { validateSubsystemSpec } from './boundary/validator.js';
+
+// js-yaml 自身未附带 d.ts；仅使用 load，避免为类型强装 @types（与当前 TS 版本 peer 冲突）
+// 惰性 require：包缺失时只在真正解析 YAML 时失败，不阻断模块 import
+let loadYamlFn: ((text: string) => unknown) | undefined;
+
+function loadYaml(text: string): unknown {
+  if (!loadYamlFn) {
+    const require = createRequire(import.meta.url);
+    loadYamlFn = (require('js-yaml') as { load: (t: string) => unknown }).load;
+  }
+  return loadYamlFn(text);
+}
 
 export interface SubsystemLoaderConfig {
   builtinDir?: string;
@@ -322,68 +335,33 @@ async function buildSpec(
 // ── parseMarkdown ──
 
 function parseMarkdown(content: string): ParsedMarkdown {
-  const frontmatter: Frontmatter = {};
-  let body = content;
   const fmMatch = content.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*)$/);
-  if (fmMatch) {
-    body = fmMatch[2].trim();
-    for (const line of fmMatch[1].split('\n')) {
-      const match = line.match(/^(\w+)\s*:\s*(.+)$/);
-      if (match) {
-        const key = match[1].trim();
-        let value: unknown = match[2].trim();
-        if (value === 'true') value = true;
-        else if (value === 'false') value = false;
-        else if (/^\d+$/.test(value as string)) value = parseInt(value as string, 10);
-        frontmatter[key] = value;
-      }
-    }
+  if (!fmMatch) {
+    return { frontmatter: {}, body: content.trim() };
   }
-  return { frontmatter, body };
+
+  let frontmatter: Frontmatter = {};
+  try {
+    const parsed = loadYaml(fmMatch[1]);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      frontmatter = parsed as Frontmatter;
+    }
+  } catch {
+    // frontmatter 非法时按无 frontmatter 处理，正文仍可用
+  }
+
+  return { frontmatter, body: fmMatch[2].trim() };
 }
 
 // ── parseYaml ──
 
 function parseYaml(content: string): Record<string, unknown> {
-  const root: Record<string, unknown> = {};
-  const stack: Array<[number, Record<string, unknown>]> = [[-1, root]];
-
-  for (const rawLine of content.split('\n')) {
-    if (!rawLine.trim() || rawLine.trim().startsWith('#')) continue;
-    const indent = rawLine.search(/\S/);
-    const line = rawLine.trim();
-    const match = line.match(/^(\w+)\s*:\s*(.*)$/);
-    if (!match) continue;
-    const key = match[1];
-    const value = match[2].trim();
-
-    while (stack.length > 1 && stack[stack.length - 1][0] >= indent) {
-      stack.pop();
-    }
-    const parent = stack[stack.length - 1][1];
-
-    if (value) {
-      parent[key] = parseYamlValue(value);
-    } else {
-      const obj: Record<string, unknown> = {};
-      parent[key] = obj;
-      stack.push([indent, obj]);
-    }
+  const parsed = loadYaml(content);
+  if (parsed === null || parsed === undefined) {
+    return {};
   }
-  return root;
-}
-
-function parseYamlValue(value: string): unknown {
-  if (value === 'true') return true;
-  if (value === 'false') return false;
-  if (value === 'null' || value === '~') return null;
-  if (/^-?\d+$/.test(value)) return parseInt(value, 10);
-  if (/^-?\d+\.\d+$/.test(value)) return parseFloat(value);
-  if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-    return value.slice(1, -1);
+  if (typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('config.yaml root must be a mapping');
   }
-  if (value.startsWith('[') && value.endsWith(']')) {
-    return value.slice(1, -1).split(',').map((v) => parseYamlValue(v.trim()));
-  }
-  return value;
+  return parsed as Record<string, unknown>;
 }

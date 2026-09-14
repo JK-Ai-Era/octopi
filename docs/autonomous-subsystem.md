@@ -9,11 +9,20 @@
 ```
 subsystems/my-subsystem/
 ├── config.yaml           # 运行时配置（必需）
-├── SUBSYSTEM.md          # LLM 认知指令（llm/hybrid 模式必需）
+├── SUBSYSTEM.md          # LLM 认知指令（system prompt；llm 必需，code 会注入 handler）
 ├── handler.ts            # 代码逻辑（code/hybrid 模式必需）
-├── references/           # 参考知识（可选）
+├── references/           # 参考知识（可选；loader 暂不扫描）
 └── scripts/              # 辅助脚本（可选）
 ```
+
+**SUBSYSTEM.md 的角色**：与主 Agent 的 SKILL.md 同类——Markdown 认知指令。
+
+| implementation | 正文如何生效 |
+|----------------|--------------|
+| `llm` / `hybrid` | → `think.systemPrompt` → 框架 Agent 的 system prompt |
+| `code` | 注入 handler 的 `deps.__subsystem_prompt__`，并作为 `llmPort.chat()` 默认 system |
+
+作者文档（依赖表、观测、恢复策略等）请写 `README.md`，不要写进 `SUBSYSTEM.md`。
 
 子系统可从以下位置加载（按优先级，同名覆盖）：
 
@@ -48,6 +57,8 @@ boundary:
 
 框架不会为这三个字段提供默认值。这是设计约束——子系统的能力边界必须显式声明。
 
+> **`boundary.security` 现状**：目前是作者声明与文档契约，运行时**尚未**按级别做差异化 I/O 检查或沙箱。硬约束由 `authority`（限制 act.mode）与 `visibility`（裁剪输入）承担。
+
 ---
 
 ## 3. 信号通道（signal.channel）
@@ -56,10 +67,10 @@ boundary:
 
 | 通道 | 语义 | 时序 |
 |------|------|------|
-| `context` | 注入为上下文信息 | 下一次 LLM 调用前生效 |
-| `steering` | 注入为引导消息 | 当前轮次立即生效 |
+| `context` | 注入为上下文信息 | 下一次 LLM 调用前生效（`applyPendingInjections`） |
+| `steering` | 注入为引导消息 | 当前轮次立即生效（Runner `consumePendingGuidance`） |
 | `event` | 通过 EventBus 广播 | 异步，其他子系统可监听 |
-| `escalate` | 请求主系统介入 | 当前轮次优先处理 |
+| `escalate` | 请求主系统介入 | 当前轮次优先处理（同 steering，escalate 段落排前） |
 
 示例：
 
@@ -83,7 +94,7 @@ lifecycle:
 
 - `maxDurationMs`：code handler 也会被 AbortSignal 打断，不仅限于 LLM 模式。
 - `degradeOn`：决定中断时是否发送信号。`timeout` 时不发送（子系统未完成，无有效信号）；`error`/`both` 时发送中断信号。
-- `maxTokens`：运行时基于输入/输出 JSON 体积估算 token 消耗，超出预算时按 `degradeOn` 策略处理。
+- `maxTokens`：按 `HeuristicTokenEstimator` 口径估算。执行前若输入估算已超预算会直接失败；LLM 路径在返回后仍会按真实 usage 再校验。超出时按 `degradeOn` 策略处理。
 
 ---
 
@@ -118,6 +129,22 @@ sense:
 - 框架会动态 import 并缓存首次加载结果。
 - 与 `condition` **互斥**。
 
+### 5.3 schedule 定时感知
+
+```yaml
+sense:
+  source: schedule
+  interval: 60000          # 毫秒，必须 >= 1000
+  isolation: structured
+  filter:
+    condition: "turn.count > 0"   # 可选
+```
+
+- `interval` 必填且 ≥ 1000ms，否则注册失败。
+- 到点后复用与 eventBus 相同的冷却期、传播深度、condition / conditionRef 与 `onTrigger`。
+- `unregister` / `dispose` 会拆除对应定时器。
+- cron 语法见 `arch/schedule.md`（独立议题，尚未接入）。
+
 ---
 
 ## 6. 循环防护（emits 声明）
@@ -146,16 +173,21 @@ sense:
 
 ### 6.3 通配符
 
-LLM 驱动的子系统无法静态确定产出事件，使用通配符：
+LLM 驱动的子系统无法静态确定产出事件时，可声明通配符：
 
 ```yaml
-emits: ["*"]   # 框架假设可能产生任何事件（保守处理）
+emits: ["*"]   # 可能产生任意已监听事件（保守参与多节点环检测）
 ```
+
+- `*` **不会**因「自环」被拒（eventBus 监听 + `emits: ['*']` 可正常注册）。
+- `*` **仍会**因与其它子系统构成多节点环而被拒。
+- 能精确写出事件类型时，优先写具体 `emits`。
 
 ### 6.4 检测行为
 
 - 注册时构建 emits → listen 依赖图。
-- 发现循环则拒绝注册并返回错误路径。
+- 自环：`listen ∩ emit` 具体事件重叠即拒绝。
+- 多节点环：按依赖图 DFS，发现则拒绝并返回路径。
 - 三层叠加防护：静态检测（启动时）+ 深度限制（运行时，默认 5）+ 冷却期（单个子系统，默认 5 秒）。
 
 ---
@@ -226,6 +258,38 @@ tools:
 ```
 
 > **注意**：YAML 声明的 definitions 不含运行时 handler。如果 LLM 调用了该工具，会抛出 "does not have a runtime handler" 错误。完整的 custom tool 需要通过代码注册，或在 `scripts/` 中提供可执行脚本。
+
+### 7.4 code handler 的 LLM 能力（llmPort）
+
+框架**始终**向 `handler(input, deps)` 注入统一 LLM 端口与认知 prompt，无需在 `runtimeInject` 中声明：
+
+| deps 键 | 常量 | 含义 |
+|---------|------|------|
+| `llmPort` | `DEP_LLM_PORT` | 统一 LLM 端口：`chat()` + 完整 fallback 链 |
+| `__subsystem_prompt__` | `DEP_SUBSYSTEM_PROMPT` | `SUBSYSTEM.md` 正文 |
+| `__resolved_model__` | `DEP_RESOLVED_MODEL` | 解析后的主模型名 |
+| `__resolved_models__` | `DEP_RESOLVED_MODELS` | `{ primary, fallback, fromLevel }` |
+
+```typescript
+import type { SubsystemLLMPort } from 'octopi/harness';
+
+export async function handler(input, deps) {
+  const port = deps.llmPort as SubsystemLLMPort;
+  // 默认 system = SUBSYSTEM.md；可按调用覆盖
+  const res = await port.chat({
+    messages: [{ role: 'user', content: '从这段对话提取记忆…' }],
+    // systemPrompt: '临时覆盖',
+    // model: 'mini',
+    temperature: 0.3,
+    maxTokens: 2048,
+  });
+  // res.content / res.usage
+}
+```
+
+`runtimeInject.requires` 仍用于业务依赖（如 `memoryStore`）。`modelProvider` 可继续使用；新代码优先 `llmPort`。
+
+**implementation 语义**：`code` = handler 自己编排（可调 `llmPort`）；`llm`/`hybrid` = 框架用同一套模型解析跑 Agent loop。
 
 ---
 

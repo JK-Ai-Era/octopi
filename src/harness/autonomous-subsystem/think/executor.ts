@@ -23,7 +23,9 @@ import type {
   ActMode,
   InjectedDependencies,
 } from '../types.js';
-import type { ModelResolver, ResolvedModelWithFallback } from './model-resolver.js';
+import type { ModelResolver } from './model-resolver.js';
+import { shouldFallbackModel } from './llm-port.js';
+import { estimateTextTokens } from '../../context/token-estimator.js';
 
 export class TokenBudgetExceededError extends Error {
   constructor(message = 'Subsystem token budget exceeded') {
@@ -106,6 +108,8 @@ export class ThinkExecutor {
       throw new Error('think.implementation "code" requires a handler');
     }
 
+    this.ensureInputWithinBudget(input, options?.tokenBudget);
+
     const outputPromise = think.handler(input, injectDeps);
 
     if (options?.abortSignal?.aborted) {
@@ -128,6 +132,8 @@ export class ThinkExecutor {
     if (!think.systemPrompt) {
       throw new Error('think.implementation "llm" requires a systemPrompt');
     }
+
+    this.ensureInputWithinBudget(input, options?.tokenBudget);
 
     const modelRef = think.model ?? 'standard';
     const resolved = this.modelResolver.resolve(modelRef);
@@ -253,6 +259,23 @@ export class ThinkExecutor {
     const total = tokenUsage?.total ?? 0;
     if (total > tokenBudget) {
       throw new TokenBudgetExceededError(`Token usage ${total} exceeds budget ${tokenBudget}`);
+    }
+  }
+
+  /**
+   * 执行前粗检：按启发式 token 估算，输入已超预算则直接失败
+   *
+   * 与 HeuristicTokenEstimator 同口径（CJK/JSON 比率），不是字符数。
+   */
+  private ensureInputWithinBudget(input: SubsystemInput, tokenBudget?: number): void {
+    if (!tokenBudget) {
+      return;
+    }
+    const inputTokens = estimateTextTokens(JSON.stringify(input));
+    if (inputTokens > tokenBudget) {
+      throw new TokenBudgetExceededError(
+        `Input size ${inputTokens} tokens already exceeds budget ${tokenBudget}`,
+      );
     }
   }
 
@@ -477,14 +500,6 @@ export class ThinkExecutor {
    * 判断错误是否应该触发 fallback
    */
   private shouldFallback(err: unknown): boolean {
-    if (err instanceof Error) {
-      const msg = err.message.toLowerCase();
-      // rate_limit / timeout / server_error → fallback
-      if (msg.includes('rate') || msg.includes('limit') || msg.includes('429')) return true;
-      if (msg.includes('timeout') || msg.includes('timed out')) return true;
-      if (msg.includes('500') || msg.includes('502') || msg.includes('503') || msg.includes('server')) return true;
-    }
-    // auth_error / 参数错误 → 不 fallback
-    return false;
+    return shouldFallbackModel(err);
   }
 }

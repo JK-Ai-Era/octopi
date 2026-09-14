@@ -231,6 +231,11 @@ export type AuthorityLevel = 'observe' | 'suggest' | 'act' | 'override';
  * - sandboxed: 不信任，输入输出都检查
  * - trusted: 信任输入，检查输出
  * - privileged: 完全信任（系统内部子系统）
+ *
+ * **当前实现状态**：该字段为子系统作者的声明与文档契约，
+ * 运行时尚未按级别做差异化 I/O 检查或沙箱隔离。
+ * 能力硬约束目前由 `boundary.authority`（约束 act.mode）与
+ * `boundary.visibility`（输入裁剪）承担。完整沙箱属独立安全议题。
  */
 export type SecurityLevel = 'sandboxed' | 'trusted' | 'privileged';
 

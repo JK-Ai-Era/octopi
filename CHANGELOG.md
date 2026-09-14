@@ -1,3 +1,51 @@
+## v0.23.0 (2026-09-14)
+
+### feat(autonomous-subsystem): 收口 + 统一 LLM 端口 + 审查修复
+
+补齐领域正确性与完整度，统一 code/llm 路径的模型解析与认知指令注入。内部阶段不做向后兼容 shim。
+
+#### Sense / 注册
+
+- `detectCycles` 接入 `register`：新子系统落在环上则拒绝；Builder warn 拒绝原因
+- 自环 = `listen ∩` 具体 emit；`emits: ['*']` 只参与多节点环，**不再**因自环拒注册
+- `sense.source=schedule`：interval≥1000ms；timer 随 unregister/dispose 拆除
+- 修 eventBus 监听泄漏（按 entry 持有 disposables）
+- condition 评估 `inFlight` 互斥 + 默认 30s 超时，防 await 永久占用；无 condition 保持同步触发
+
+#### Signal / Runner
+
+- `SubsystemRuntime.consumePendingGuidance()`：消费 steering/escalate（escalate 优先）
+- Runner 在当前轮写入 `injectedContext`
+
+#### Think / llmPort
+
+- 新增 `SubsystemLLMPort`：`chat()` + primary/fallback 链 + 认知 prompt
+- **始终注入** `llmPort`、`__subsystem_prompt__`、`__resolved_model__`、`__resolved_models__`
+- `request.model` 经 `ModelResolver.resolve`，禁止钉死级别名导致 fallback 失效
+- `finishReason=error` 与 catch 同走 `shouldFallbackModel`；匹配收紧（429/rate limit/timeout/5xx/网络瞬断）
+- `maxTokens` 预检与 `inferTokenUsage` 改用 `estimateTextTokens`（非字符数）
+
+#### Boundary / 安全
+
+- `boundary.security` 文档与类型标明为**声明契约**，运行时未做沙箱；硬约束仍是 authority + visibility
+
+#### Loader
+
+- `js-yaml` 解析 config.yaml / frontmatter（惰性 require；非法 YAML 进 LoadResult.errors）
+- 依赖写入 `package.json` / `package-lock.json`
+
+### refactor(memory-extractor)!: 对齐 llmPort，拆认知指令与作者文档
+
+- `SUBSYSTEM.md` 仅保留 LLM 认知指令；流程/依赖/观测迁至 `README.md`
+- `implementation: code`；handler 经 `llmPort.chat` 做语义增强，不再硬编码 SYSTEM_PROMPT
+- **删除** `DEP_MODEL_PROVIDER`、`MemoryExtractorDeps`；`enrichWithLLM` 签名改为 `EnrichmentChat`
+- `callHandler` 去掉 `modelProvider` 选项；`runtimeInject` 仅 `memoryStore`
+- `llmEnrichment` 不再声明 `model`（由 `think.model` → llmPort 解析）
+
+### docs
+
+- `docs/autonomous-subsystem.md`：schedule 感知、四通道时序、llmPort §7.4、SUBSYSTEM.md 角色、§6.3 通配符语义
+
 ## v0.22.0 (2026-09-14)
 
 ### feat(agent-runtime): 激活宿主落地 + Gateway 接线 + Supervisor 归档

@@ -1,6 +1,6 @@
 {
   "name": "octopi",
-  "version": "0.22.0",
+  "version": "0.23.0",
   "description": "可嵌入的 Agent 引擎",
   "type": "module",
   "main": "dist/index.js",
@@ -80,6 +80,7 @@
     "@types/ws": "^8.18.1",
     "better-sqlite3": "^12.11.1",
     "chalk": "^5.6.2",
+    "js-yaml": "^4.3.2",
     "ws": "^8.21.0",
     "zod": "^4.4.3"
   }

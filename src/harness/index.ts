@@ -70,6 +70,17 @@ export { SubsystemLoader } from './autonomous-subsystem/loader.js';
 export type { SubsystemLoaderConfig, LoadResult } from './autonomous-subsystem/loader.js';
 export { SenseEngine, MetricsStore } from './autonomous-subsystem/sense/index.js';
 export { ThinkExecutor, ModelResolver } from './autonomous-subsystem/think/index.js';
+export {
+  createSubsystemLLMPort,
+  DEP_LLM_PORT,
+  DEP_SUBSYSTEM_PROMPT,
+  DEP_RESOLVED_MODEL,
+  DEP_RESOLVED_MODELS,
+} from './autonomous-subsystem/think/index.js';
+export type {
+  SubsystemLLMPort,
+  SubsystemLLMPortChatRequest,
+} from './autonomous-subsystem/think/index.js';
 export { SignalBus } from './autonomous-subsystem/signal/index.js';
 export { SubsystemSessionManager, parseTTL } from './autonomous-subsystem/session/index.js';
 export { AuditWriter, AuditReader } from './autonomous-subsystem/audit/index.js';

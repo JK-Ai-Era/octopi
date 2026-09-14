@@ -121,5 +121,69 @@ describe('SubsystemLoader', () => {
       expect(result.specs).toHaveLength(0);
       expect(result.errors).toHaveLength(0);
     });
+
+    it('parses nested lists and quoted scalars via real YAML', async () => {
+      const config = [
+        'id: rich-sub',
+        'name: "Rich: with colon"',
+        'description: |',
+        '  line one',
+        '  line two',
+        'sense:',
+        '  source: eventBus',
+        '  filter:',
+        '    events:',
+        '      - alpha.event',
+        '      - beta.event',
+        '    emits: ["memory.extracted"]',
+        '  isolation: structured',
+        'think:',
+        '  implementation: code',
+        '  strategy: deterministic',
+        'act:',
+        '  mode: none',
+        'signal:',
+        '  severity: info',
+        '  channel:',
+        '    - context',
+        '    - event',
+        'boundary:',
+        '  visibility: structured',
+        '  authority: observe',
+        '  security: sandboxed',
+        'tools:',
+        '  mode: none',
+        'session:',
+        '  mode: ephemeral',
+        '  scope: session',
+        'metadata:',
+        '  minConfidence: 0.75',
+        '  tags: [a, b]',
+      ].join('\n');
+
+      writeSub('rich-sub', {
+        'config.yaml': config,
+        'handler.ts': 'export async function handler() { return { signals: [] }; }',
+      });
+      const result = await new SubsystemLoader({ projectDir: tmpDir }).loadAll();
+      expect(result.errors).toEqual([]);
+      expect(result.specs).toHaveLength(1);
+      const spec = result.specs[0];
+      expect(spec.name).toBe('Rich: with colon');
+      expect(spec.description).toContain('line one');
+      expect(spec.sense.filter?.events).toEqual(['alpha.event', 'beta.event']);
+      expect(spec.signal.channel).toEqual(['context', 'event']);
+      expect((spec.metadata as Record<string, unknown>).minConfidence).toBe(0.75);
+    });
+
+    it('reports error for invalid YAML', async () => {
+      writeSub('bad-yaml', {
+        'config.yaml': 'id: broken\n  sense: [\n',
+      });
+      const result = await new SubsystemLoader({ projectDir: tmpDir }).loadAll();
+      expect(result.specs).toHaveLength(0);
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0].error).toContain('Failed to load');
+    });
   });
 });

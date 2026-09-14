@@ -100,6 +100,19 @@ export { buildAgentInput } from './sense/input-builder.js';
 
 // ── Think ──
 export { ThinkExecutor, ModelResolver } from './think/index.js';
+export {
+  createSubsystemLLMPort,
+  shouldFallbackModel,
+  DEP_LLM_PORT,
+  DEP_SUBSYSTEM_PROMPT,
+  DEP_RESOLVED_MODEL,
+  DEP_RESOLVED_MODELS,
+} from './think/index.js';
+export type {
+  SubsystemLLMPort,
+  SubsystemLLMPortChatRequest,
+  CreateSubsystemLLMPortOptions,
+} from './think/index.js';
 
 // ── Signal ──
 export { SignalBus } from './signal/index.js';

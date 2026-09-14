@@ -23,7 +23,7 @@
 
 - 不做多 Agent 编排（那是 multi-agent 的事）
 - 不做主 Loop 执行（那是 Loop 层的事）
-- 不做安全策略实现（那是 security 领域的事；子系统只声明 boundary）
+- 不做安全策略实现（那是 security 领域的事；子系统只声明 boundary，其中 `security` 字段当前为声明契约，运行时未做沙箱隔离）
 
 ## 依赖
 
