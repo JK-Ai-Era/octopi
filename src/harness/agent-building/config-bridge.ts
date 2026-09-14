@@ -293,7 +293,8 @@ async function buildAgent(
   }
 
   // ── Home / Persona ──
-  // home 是 agent 的持久状态目录，persona 是其中的人格配置
+  // home 是 agent 文件态持久目录（persona/sessions/skills/extract）；
+  // memory/wisdom 走 AgentDatabase SQLite，不在此目录树下。
   const agentHome = agentConfig.home ?? (typeof agentConfig.persona === 'string' ? agentConfig.persona : undefined);
   if (agentConfig.persona) {
     if (typeof agentConfig.persona === 'string') {

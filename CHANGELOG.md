@@ -1,3 +1,19 @@
+## v0.24.5 (2026-09-15)
+
+### fix(init): 目录骨架对齐 loadPersona / AgentDatabase 约定
+
+PersonaLoader（v0.9 起）只加载根目录 `AGENTS.md` + `persona/*.md`，但 init 仍按旧约定把 SOUL/IDENTITY/USER/TOOLS 平铺在 agent home 根目录，导致这些文件从未进入 system prompt。
+
+Memory / Wisdom 已改为 per-agent SQLite（`AgentDatabase` / `agent.db`），`FileWisdomStore` 等文件目录实现已删除——init 不再预建空的 `memory/`、`wisdom/` 目录。
+
+- Agent home 生成：`AGENTS.md` + `persona/{10-soul,20-identity,30-user,40-tools}.md` + `sessions/` `skills/` `extract/{events,bundles,meta}/`
+- 系统级补充 `audit/`（与默认配置 `subsystems.auditDir` 对齐）
+- 默认配置新增 `skillDirectory` 指向 `agents/{id}/skills`
+- 旧布局自动迁移：根目录 SOUL/IDENTITY/USER/TOOLS 在目标不存在时 rename 进 `persona/`
+- 类型注释 / schema：`AgentDefinition.home` 去掉 memory、wisdom 目录表述
+- 文档清理：`architecture.md`（agent-building / memory 领域树）、`agent-building` README、`config-bridge`、`agent-db` 路径约定、v0.10.0 CHANGELOG 加注，避免 home 含 memory/wisdom 目录的误读
+- 测试：新骨架断言 + 旧文件迁移 + Windows 路径分隔符兼容
+
 ## v0.24.4 (2026-09-15)
 
 ### fix(storage,cli): Windows 保留文件名 + kill 优雅退出
@@ -1240,6 +1256,7 @@ Agent 引用模型的方式：`"model": "openai/gpt-5.5"`（string 格式），�
 #### Breaking: AgentDefinition 接口变更
 
 - 新增 `home` 字段（agent 持久状态根目录：persona、memory、skills、sessions）
+  > 注：这是 v0.10.0 当时的表述。随后 memory/wisdom 并入 `AgentDatabase`（SQLite `agent.db`），不再按 home 下目录落盘；现行约定见 `agent-definition.ts` 注释与 v0.24.5。
 - `workspace` 改为可选（沙箱工作目录，默认为 home 下的 workspace 子目录）
 - `fallbackModels` 从 `string[]` 改为 `ModelConfig[]`（支持内联回退配置）
 
@@ -1998,6 +2015,7 @@ for (const c of configs) await mcpManager.connectServer(c);
 - `AgentBuilder` — Fluent API 组装器，一行代码启动 Agent
 - `SessionAwareRunner` — Session 生命周期管理（锁、持久化、并发控制）
 - `PersonaLoader` — 文件式人格系统（AGENTS.md、SOUL.md 等）
+  > 注：早期为根目录平铺加载。现行约定为根目录 `AGENTS.md` + `persona/*.md`（见 `persona.ts` 与 v0.24.5 init 迁移）。
 - `DefaultContextPipeline` — 可插拔上下文管道（Persona → Skill → Task → History → Filter）
 - `TaskStage` — Task 系统集成到 ContextPipeline
 - `OutputQualityGate` — 输出质量检测迁移到 Harness 层

@@ -163,10 +163,23 @@ src/integration/
 ```
 harness/agent-building/
 ├── builder.ts            # AgentBuilder — Fluent API
-├── persona.ts            # 人格加载（AGENTS.md, SOUL.md, IDENTITY.md）
+├── persona.ts            # 人格加载（根目录 AGENTS.md + persona/*.md）
 ├── config-bridge.ts      # 配置文件 → 新架构桥接
 └── index.ts
 ```
+
+Agent home 目录约定（由 `initOctopi` / `ensureAgentDirs` 脚手架）：
+
+```
+<agentHome>/
+  AGENTS.md              # 主 persona，最先加载
+  persona/               # 补充 persona（字母序；数字前缀控制顺序）
+  sessions/              # JsonlSessionStore
+  skills/                # 技能（可由 skillDirectory 指向）
+  extract/               # JsonlExtractorStore（events/bundles/meta）
+```
+
+Memory / Cognition / Wisdom / Knowledge **不按目录落盘**，统一由 per-agent SQLite `AgentDatabase`（`agent.db`）承载。
 
 ### 3.2 Context Management — 上下文管理
 
@@ -237,19 +250,26 @@ harness/execution-environment/
 
 ### 3.6 Memory — 记忆系统 [新增]
 
-**职责**：记忆存储/检索、认知图谱、智慧生成。
+**职责**：记忆存储/检索、认知图谱、智慧生成。持久化统一走 per-agent SQLite 单库。
 
 ```
 harness/memory/
-├── store.ts              # 记忆存储
-├── retriever.ts          # 记忆检索
-├── lifecycle.ts          # 记忆生命周期（衰减、遗忘）
-├── project-memory.ts     # 项目记忆（CLAUDE.md）
-├── wisdom.ts             # [P1] 智慧生成
-├── cognition.ts          # [P1] 认知图谱
-├── types.ts
+├── store.ts              # InMemoryMemoryStore（默认内存实现）
+├── cognition.ts          # InMemoryConceptGraph
+├── context-intelligence.ts  # 七层智能组装
+├── types.ts / wisdom-types.ts / cognition-types.ts
+├── sqlite/
+│   ├── agent-db.ts       # AgentDatabase — per-agent agent.db
+│   ├── memory-store.ts   # SqliteMemoryStore
+│   ├── wisdom-store.ts   # SqliteWisdomStore
+│   ├── cognition-store.ts
+│   ├── knowledge-registry.ts
+│   └── embedding.ts
+├── extraction/           # session → memory 提取链路
 └── index.ts
 ```
+
+`FileWisdomStore` / `FileProjectMemory` 已删除；不要再预设 `memory/`、`wisdom/` 文件目录。
 
 ### 3.7 Reliability — 可靠性
 

@@ -11,12 +11,13 @@
 - InMemoryMemoryStore — 记忆存储（关键词匹配，可替换为向量后端）
 - InMemoryConceptGraph — 认知图谱（概念+关系网络）
 - ContextIntelligence — 七层智能组装
-- SqliteMemoryStore / SqliteWisdomStore / SqliteConceptGraph — 持久化实现
+- SqliteMemoryStore / SqliteWisdomStore / SqliteConceptGraph / KnowledgeRegistry — 持久化实现，统一挂在 per-agent `AgentDatabase`（`agent.db`）
 
 ## 已移除
 
 - `FileWisdomStore` / `FileProjectMemory` 已删除，相关文件不再存在。
 - `ProjectMemory` 接口已从 `cognition-types.ts` 移除，不再由 Core 导出。
+- 文件目录形式的 `memory/`、`wisdom/` 落盘约定已废弃；持久化走 SQLite 单库。
 
 ## 不做什么
 

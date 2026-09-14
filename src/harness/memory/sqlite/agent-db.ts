@@ -4,6 +4,11 @@
  * 每个 agent 拥有独立的 SQLite 数据库文件（agent.db），
  * 存储 Memory、Cognition、Wisdom、Knowledge 注册表数据。
  *
+ * 路径约定：由宿主通过 `dbPath` 传入。推荐放在 agent home 下
+ * （例如 `<agentHome>/agent.db`）；init **不会**预建 `memory/`、`wisdom/`
+ * 目录——那两层已不是文件目录，而是本库中的表。
+ * 未传 `dbPath` 时默认 `:memory:`（仅开发/测试）。
+ *
  * @module
  */
 

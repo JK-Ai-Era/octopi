@@ -49,6 +49,26 @@ cd ~/.octopi && octopi serve start
 
 CLI helpers (`ensureInitialized` / `ensureDaemonConfig`) prefer `OCTOPI_HOME` over cwd. When changing config shape, update **both** `src/config-schema.ts` and `octopi.schema.json` / `octopi.example.json`.
 
+### Runtime home layout (`OCTOPI_HOME`, default `~/.octopi`)
+
+Scaffolded by `src/init.ts` (`initOctopi` / `ensureAgentDirs`). Keep init, types, schema, and docs aligned with this tree:
+
+```
+~/.octopi/
+  octopi.json
+  audit/
+  plugins/
+  agents/<id>/          # agent home
+    AGENTS.md           # main persona (loaded first by loadPersona)
+    persona/            # supplemental persona (*.md, numeric prefix for order)
+    sessions/           # JsonlSessionStore
+    skills/             # skillDirectory target
+    extract/            # JsonlExtractorStore (events/bundles/meta)
+  workspace/<id>/       # tool sandbox cwd
+```
+
+**Do not create `agents/<id>/memory/` or `agents/<id>/wisdom/` directories.** Memory / Cognition / Wisdom / Knowledge persist in a per-agent SQLite file via `AgentDatabase` (`src/harness/memory/sqlite/agent-db.ts`), not as sibling folders under home.
+
 ---
 
 ## Architecture & Invariants

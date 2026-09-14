@@ -24,7 +24,7 @@
           },
           "home": {
             "type": "string",
-            "description": "Agent home 目录：persona、memory、wisdom、skills、sessions 的根目录"
+            "description": "Agent home 目录：persona、skills、sessions、extract 的根目录（memory/wisdom 走 AgentDatabase SQLite）"
           },
           "workspace": {
             "type": "string",

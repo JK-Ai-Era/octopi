@@ -6,17 +6,28 @@
  * 目录结构：
  *   ~/.octopi/                         ← 系统根目录（OCTOPI_HOME）
  *     octopi.json                      ← 主配置文件
- *     agents/
- *       default/                       ← 默认 agent home 目录
- *         AGENTS.md                    ← 操作指令
- *         SOUL.md                      ← 人格定义
- *         IDENTITY.md                  ← 身份定义
- *         USER.md                      ← 用户上下文
- *         TOOLS.md                     ← 工具说明
- *         sessions/                    ← session 存储
- *     workspace/
- *       default/                       ← 默认 agent 沙箱目录
+ *     audit/                           ← 子系统审计日志
  *     plugins/                         ← plugin 目录
+ *     agents/
+ *       default/                       ← agent home（persona / skills / sessions / extract）
+ *         AGENTS.md                    ← 主 persona（loadPersona 最先加载）
+ *         persona/                     ← 补充 persona（字母序；数字前缀控制顺序）
+ *           10-soul.md                 ← 人格定义
+ *           20-identity.md             ← 身份定义
+ *           30-user.md                 ← 用户上下文
+ *           40-tools.md                ← 工具说明
+ *         sessions/                    ← session 存储（JsonlSessionStore）
+ *         skills/                      ← 技能目录
+ *         extract/                     ← 记忆提取落盘（JsonlExtractorStore）
+ *           events/
+ *           bundles/
+ *           meta/
+ *
+ * 说明：Memory / Cognition / Wisdom / Knowledge 不再按文件目录落盘，
+ * 统一由 AgentDatabase（per-agent SQLite agent.db）承载；init 不预建 memory/、wisdom/。
+ *
+ *     workspace/
+ *       default/                       ← agent 沙箱目录（工具操作 cwd）
  *
  * 使用方式：
  * ```ts
@@ -30,8 +41,8 @@
  * ```
  */
 
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { existsSync, mkdirSync, writeFileSync, renameSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 
 // ── 常量 ──
@@ -43,9 +54,12 @@ export const DEFAULT_OCTOPI_HOME = join(homedir(), '.octopi');
 export const OCTOPI_HOME_ENV = 'OCTOPI_HOME';
 
 // ── Persona 模板 ──
-
+//
+// loadPersona 约定（见 harness/agent-building/persona.ts）：
+// - 根目录 AGENTS.md 最先加载
+// - persona/*.md 按文件名字母序加载；数字前缀控制顺序
 const PERSONA_TEMPLATES: Record<string, string> = {
-  'SOUL.md': `# SOUL.md - Agent Persona
+  'persona/10-soul.md': `# Soul - Agent Persona
 
 _这是你的 Agent 人格定义。修改此文件来定制 Agent 的行为风格。_
 
@@ -70,7 +84,7 @@ _这是你的 Agent 人格定义。修改此文件来定制 Agent 的行为风�
 _Customize this file to shape your agent's personality._
 `,
 
-  'IDENTITY.md': `# IDENTITY.md - Who Am I?
+  'persona/20-identity.md': `# Identity - Who Am I?
 
 - **Name:** Assistant
 - **Creature:** AI Assistant
@@ -82,7 +96,7 @@ _Customize this file to shape your agent's personality._
 An AI assistant powered by Octopi framework.
 `,
 
-  'USER.md': `# USER.md - About Your Human
+  'persona/30-user.md': `# User - About Your Human
 
 - **Name:** (your name)
 - **What to call them:** (preferred name)
@@ -93,26 +107,7 @@ An AI assistant powered by Octopi framework.
 _Fill in your info so the agent knows who it's talking to._
 `,
 
-  'AGENTS.md': `# AGENTS.md - Operating Instructions
-
-## Session Startup
-
-每次新 session：
-1. 读 SOUL.md — 我是谁
-2. 读 USER.md — 我在帮谁
-
-## 核心规则
-
-- 不确定时问用户，不要猜
-- 完成任务后主动报告结果
-- 保持回复简洁有用
-
----
-
-_Customize this file to define your agent's operating procedures._
-`,
-
-  'TOOLS.md': `# TOOLS.md - Tool Reference
+  'persona/40-tools.md': `# Tools - Tool Reference
 
 _记下常用工具和命令，方便快速查阅。_
 
@@ -126,11 +121,42 @@ _记下常用工具和命令，方便快速查阅。_
 
 _This file is for quick reference. Keep it updated as you discover useful commands._
 `,
+
+  'AGENTS.md': `# AGENTS.md - Operating Instructions
+
+## Session Startup
+
+每次新 session：
+1. 读 persona/10-soul.md — 我是谁
+2. 读 persona/30-user.md — 我在帮谁
+
+## 核心规则
+
+- 不确定时问用户，不要猜
+- 完成任务后主动报告结果
+- 保持回复简洁有用
+
+---
+
+_Customize this file to define your agent's operating procedures._
+`,
 };
+
+/**
+ * 旧版布局下平铺在 agent home 根目录的 persona 文件，
+ * 现应迁移到 persona/ 下（数字前缀保证加载顺序）。
+ */
+const LEGACY_PERSONA_MOVES: Array<{ from: string; to: string }> = [
+  { from: 'SOUL.md', to: 'persona/10-soul.md' },
+  { from: 'IDENTITY.md', to: 'persona/20-identity.md' },
+  { from: 'USER.md', to: 'persona/30-user.md' },
+  { from: 'TOOLS.md', to: 'persona/40-tools.md' },
+];
 
 // ── 默认配置模板 ──
 
 function generateDefaultConfig(homeDir: string, agentId: string = 'default'): object {
+  const agentHome = join(homeDir, 'agents', agentId);
   return {
     $schema: './node_modules/octopi/octopi.schema.json',
     models: {
@@ -155,9 +181,10 @@ function generateDefaultConfig(homeDir: string, agentId: string = 'default'): ob
     agents: [
       {
         id: agentId,
-        home: join(homeDir, 'agents', agentId),
+        home: agentHome,
         workspace: join(homeDir, 'workspace', agentId),
         model: 'openai/gpt-5.5',
+        skillDirectory: join(agentHome, 'skills'),
         tools: { allow: ['*'] },
       },
     ],
@@ -200,7 +227,7 @@ function generateDefaultConfig(homeDir: string, agentId: string = 'default'): ob
  *
  * 优先级：
  * 1. 环境变量 OCTOPI_HOME
- * 2. 默认值 ~/octopi
+ * 2. 默认值 ~/.octopi
  */
 export function getOctopiHome(): string {
   return resolve(process.env[OCTOPI_HOME_ENV] ?? DEFAULT_OCTOPI_HOME);
@@ -216,6 +243,22 @@ function ensureDir(path: string): void {
 }
 
 /**
+ * 确保目录存在，并区分 created / existed
+ */
+function ensureDirTracked(
+  path: string,
+  created: string[],
+  existed: string[],
+): void {
+  if (!existsSync(path)) {
+    ensureDir(path);
+    created.push(path);
+  } else {
+    existed.push(path);
+  }
+}
+
+/**
  * 写入文件（仅在文件不存在时）
  *
  * @returns true 如果文件是新创建的，false 如果已存在
@@ -224,8 +267,28 @@ function writeIfAbsent(filePath: string, content: string): boolean {
   if (existsSync(filePath)) {
     return false;
   }
+  ensureDir(dirname(filePath));
   writeFileSync(filePath, content, 'utf-8');
   return true;
+}
+
+/**
+ * 将旧版平铺在 home 根目录的 persona 文件迁移到 persona/ 下
+ *
+ * 仅当目标不存在时移动，避免覆盖用户已编辑的新文件。
+ */
+function migrateLegacyPersonaFiles(agentHome: string): string[] {
+  const migrated: string[] = [];
+  for (const { from, to } of LEGACY_PERSONA_MOVES) {
+    const fromPath = join(agentHome, from);
+    const toPath = join(agentHome, to);
+    if (existsSync(fromPath) && !existsSync(toPath)) {
+      ensureDir(dirname(toPath));
+      renameSync(fromPath, toPath);
+      migrated.push(toPath);
+    }
+  }
+  return migrated;
 }
 
 /**
@@ -238,38 +301,37 @@ function writeIfAbsent(filePath: string, content: string): boolean {
 export async function ensureAgentDirs(
   agentId: string,
   homeDir: string = getOctopiHome(),
-): Promise<{ created: string[]; existed: string[] }> {
+): Promise<{ created: string[]; existed: string[]; migrated: string[] }> {
   const created: string[] = [];
   const existed: string[] = [];
 
-  // Home 目录（persona、memory、skills、sessions 的根目录）
-  const homeDir2 = join(homeDir, 'agents', agentId);
-  if (!existsSync(homeDir2)) {
-    ensureDir(homeDir2);
-    created.push(homeDir2);
-  } else {
-    existed.push(homeDir2);
-  }
+  // Home 目录（persona / skills / sessions / extract 的根目录）
+  const agentHome = join(homeDir, 'agents', agentId);
+  ensureDirTracked(agentHome, created, existed);
 
   // Workspace 目录（沙箱，agent 工具操作的 cwd）
-  const workspaceDir = join(homeDir, 'workspace', agentId);
-  if (!existsSync(workspaceDir)) {
-    ensureDir(workspaceDir);
-    created.push(workspaceDir);
-  } else {
-    existed.push(workspaceDir);
+  ensureDirTracked(join(homeDir, 'workspace', agentId), created, existed);
+
+  // Home 下的文件系统子目录。
+  // memory/wisdom 不在此列：由 AgentDatabase（SQLite agent.db）承载。
+  const homeSubDirs = [
+    'sessions',
+    'skills',
+    join('extract', 'events'),
+    join('extract', 'bundles'),
+    join('extract', 'meta'),
+  ];
+  for (const dir of homeSubDirs) {
+    ensureDirTracked(join(agentHome, dir), created, existed);
   }
 
-  // Sessions 目录（在 home 下）
-  const sessionsDir = join(homeDir2, 'sessions');
-  if (!existsSync(sessionsDir)) {
-    ensureDir(sessionsDir);
-    created.push(sessionsDir);
-  }
+  // 先迁移旧布局，再补模板——避免用模板覆盖用户已有的 SOUL.md 等
+  const migrated = migrateLegacyPersonaFiles(agentHome);
+  created.push(...migrated);
 
-  // Persona 文件（直接放在 home 下）
-  for (const [filename, content] of Object.entries(PERSONA_TEMPLATES)) {
-    const filePath = join(homeDir2, filename);
+  // Persona 文件：根目录 AGENTS.md + persona/ 下的补充人格
+  for (const [relativePath, content] of Object.entries(PERSONA_TEMPLATES)) {
+    const filePath = join(agentHome, relativePath);
     if (writeIfAbsent(filePath, content)) {
       created.push(filePath);
     } else {
@@ -277,7 +339,7 @@ export async function ensureAgentDirs(
     }
   }
 
-  return { created, existed };
+  return { created, existed, migrated };
 }
 
 /**
@@ -286,7 +348,7 @@ export async function ensureAgentDirs(
  * 创建完整的目录结构和默认配置文件。
  * 已存在的文件不会被覆盖。
  *
- * @param homeDir - 自定义系统根目录（默认 ~/octopi）
+ * @param homeDir - 自定义系统根目录（默认 ~/.octopi）
  * @param options - 初始化选项
  * @returns 初始化报告
  */
@@ -314,25 +376,15 @@ export async function initOctopi(
   const isFresh = !existsSync(join(home, 'octopi.json'));
 
   // 1. 系统根目录
-  ensureDir(home);
-  if (isFresh) {
-    created.push(home);
-  } else {
-    existed.push(home);
-  }
+  ensureDirTracked(home, created, existed);
 
-  // 2. 子目录
+  // 2. 系统级子目录
   const subDirs = [
     'plugins',
+    'audit',
   ];
   for (const dir of subDirs) {
-    const fullPath = join(home, dir);
-    if (!existsSync(fullPath)) {
-      ensureDir(fullPath);
-      created.push(fullPath);
-    } else {
-      existed.push(fullPath);
-    }
+    ensureDirTracked(join(home, dir), created, existed);
   }
 
   // 3. 默认 Agent 目录

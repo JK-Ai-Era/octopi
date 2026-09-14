@@ -9,7 +9,7 @@
 ## 职责
 
 - AgentBuilder — Fluent API，一行启动 Agent
-- PersonaLoader — 文件式人格加载（AGENTS.md、SOUL.md、IDENTITY.md）
+- PersonaLoader — 文件式人格加载（根目录 AGENTS.md + persona/ 下补充人格）
 - ConfigBridge — 配置文件 → 新架构桥接
 
 ## 不做什么
@@ -25,6 +25,6 @@
 ## 文件说明
 
 - builder.ts — AgentBuilder（~700 行，组装所有组件）
-- persona.ts — 人格加载（AGENTS.md、SOUL.md 等）
+- persona.ts — 人格加载（AGENTS.md + persona/*.md）
 - config-bridge.ts — JSON 配置 → Agent 组件
 - index.ts — 统一导出

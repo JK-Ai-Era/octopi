@@ -60,7 +60,7 @@ import { homedir } from 'node:os';
 export interface AgentConfig {
   /** Agent 唯一标识 */
   id: string;
-  /** Agent home 目录：persona、memory、wisdom、skills、sessions 的根目录 */
+  /** Agent home 目录：persona、skills、sessions、extract 的根目录（memory/wisdom 走 AgentDatabase SQLite） */
   home?: string;
   /** 沙箱工作目录：agent 工具操作的 cwd，默认为 home 下的 workspace 子目录 */
   workspace?: string;
