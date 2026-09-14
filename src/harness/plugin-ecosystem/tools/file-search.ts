@@ -13,6 +13,7 @@
  */
 
 import type { RegisteredTool } from '../../../core/types.js';
+import { resolveToolPath } from './platform.js';
 
 /** 单条匹配结果 */
 interface SearchMatch {
@@ -80,14 +81,13 @@ export function createFileSearchTool(): RegisteredTool {
       timeoutMs: 30_000,
     },
     handler: async (args, context) => {
-      const { readdir, stat, readFile } = await import('node:fs/promises');
+      const { readdir, readFile } = await import('node:fs/promises');
       const { join, relative, extname } = await import('node:path');
 
-      const rootPath = (args.path as string | undefined)
-        ? (args.path as string).startsWith('/')
-          ? (args.path as string)
-          : join(context.cwd ?? process.cwd(), args.path as string)
-        : context.cwd ?? process.cwd();
+      const rawRoot = args.path as string | undefined;
+      const rootPath = rawRoot
+        ? resolveToolPath(rawRoot, context.cwd ?? process.cwd())
+        : (context.cwd ?? process.cwd());
 
       const pattern = args.pattern as string;
       const isRegex = (args.regex as boolean) ?? false;

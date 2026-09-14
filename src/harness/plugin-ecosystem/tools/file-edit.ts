@@ -12,6 +12,7 @@
  */
 
 import type { RegisteredTool } from '../../../core/types.js';
+import { resolveToolPath } from './platform.js';
 
 export function createFileEditTool(): RegisteredTool {
   return {
@@ -46,11 +47,10 @@ export function createFileEditTool(): RegisteredTool {
     },
     handler: async (args, context) => {
       const { readFile, writeFile } = await import('node:fs/promises');
-      const { resolve } = await import('node:path');
 
       const rawPath = args.path as string;
       const cwd = context.cwd ?? process.cwd();
-      const path = rawPath.startsWith('/') ? rawPath : resolve(cwd, rawPath);
+      const path = resolveToolPath(rawPath, cwd);
       const oldText = args.old_text as string;
       const newText = args.new_text as string;
       const occurrence = (args.occurrence as string) ?? 'first';

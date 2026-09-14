@@ -226,6 +226,8 @@ describe('env_info', () => {
     expect(result.cwd).toBeDefined();
     expect(result.packageManagers).toBeDefined();
     expect(typeof result.packageManagers.npm).toBe('boolean');
+    expect(result.platformShell).toBeDefined();
+    expect(result.platformShell.kind).toBeTruthy();
   });
 });
 

@@ -8,6 +8,8 @@
  * 基于模式匹配，不需要外部依赖。
  */
 
+import { isAbsolute } from 'node:path';
+
 import type { EventBus } from '../../core/primitives/event-bus.js';
 import { AgentEvents } from '../../core/primitives/event-bus.js';
 import type { ToolCall } from '../../core/types/messages.js';
@@ -19,6 +21,21 @@ import type {
   ToolCallRiskPolicy,
   BehaviorContext,
 } from '../../core/interfaces/security-guard.js';
+
+/**
+ * 路径是否位于 base 之下（段边界，拒绝 project 绕过 project-evil）
+ */
+function isPathUnderBase(pathValue: string, base: string): boolean {
+  const isWin = pathValue.includes('\\') || base.includes('\\') || /^[A-Za-z]:/.test(pathValue) || /^[A-Za-z]:/.test(base);
+  if (isWin) {
+    const p = pathValue.replace(/\//g, '\\').toLowerCase().replace(/\\+$/, '');
+    const b = base.replace(/\//g, '\\').toLowerCase().replace(/\\+$/, '');
+    return p === b || p.startsWith(b + '\\');
+  }
+  const p = pathValue.replace(/\/+$/, '');
+  const b = base.replace(/\/+$/, '');
+  return p === b || p.startsWith(b + '/');
+}
 
 // ── 注入检测模式 ──
 
@@ -134,7 +151,17 @@ const SHELL_TOOL_DANGEROUS_PATTERNS = [
 
 /** 工具名称分类 */
 const SHELL_TOOLS = new Set(['shell', 'exec', 'bash', 'terminal', 'run_command', 'execute']);
-const FILE_TOOLS = new Set(['file_read', 'file_write', 'file_delete', 'read_file', 'write_file', 'read', 'write', 'edit']);
+/** 写类文件工具（路径遍历/保护路径检查） */
+const FILE_WRITE_TOOLS = new Set([
+  'file_write', 'file_edit', 'file_delete',
+  'write_file', 'write', 'edit',
+]);
+/** 读类文件工具 */
+const FILE_READ_TOOLS = new Set([
+  'file_read', 'file_list', 'file_search',
+  'read_file', 'read',
+]);
+const FILE_TOOLS = new Set([...FILE_WRITE_TOOLS, ...FILE_READ_TOOLS]);
 const HTTP_TOOLS = new Set(['http_get', 'http_post', 'http_put', 'http_delete', 'fetch', 'web_fetch', 'curl']);
 
 // ── 实现 ──
@@ -390,8 +417,8 @@ export class DefaultSecurityGuard {
             description: `工具 "${call.name}" 参数包含目录遍历: "${pathValue}"`,
           });
         }
-        if (pathValue.startsWith('/') && this.config.allowedPaths.length > 0) {
-          const allowed = this.config.allowedPaths.some(p => pathValue.startsWith(p));
+        if (isAbsolute(pathValue) && this.config.allowedPaths.length > 0) {
+          const allowed = this.config.allowedPaths.some(p => isPathUnderBase(pathValue, p));
           if (!allowed) {
             violations.push({
               type: 'path_traversal',

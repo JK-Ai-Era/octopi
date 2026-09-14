@@ -179,7 +179,10 @@ function checkSafeRedirect(parsed: ParsedCommand): SafeAlternative | null {
   const targets = getRedirectTargets(parsed);
   for (const target of targets) {
     // 检查是否覆盖已有文件（这里无法确定文件是否存在，只对常见路径提供建议）
-    if (target.startsWith('/') && !target.startsWith('/tmp/')) {
+    if (
+      (target.startsWith('/') && !target.startsWith('/tmp/')) ||
+      /^[A-Za-z]:[\\/]/.test(target) && !/^[A-Za-z]:[\\/]Windows[\\/]Temp[\\/]/i.test(target)
+    ) {
       return {
         description: `重定向到 ${target}，建议先备份`,
         steps: [

@@ -11,6 +11,9 @@
  * 4. 路径分类：系统路径 > 用户数据 > 项目目录 > 临时目录
  */
 
+import { homedir } from 'node:os';
+import { resolve } from 'node:path';
+
 import type { ToolCall } from '../../core/types.js';
 import type {
   ParsedCommand,
@@ -24,12 +27,40 @@ import { parseShellCommand, getRedirectTargets } from './shell-parser.js';
 
 // ── 路径分类 ──
 
-/** 硬保护路径（不可逆损坏） */
-const PROTECTED_PATHS = [
-  '/System/', '/usr/', '/bin/', '/sbin/', '/Library/',
-  '/etc/',
-  '/dev/',
-];
+let cachedProtectedPaths: string[] | null = null;
+let cachedTempPrefixes: string[] | null = null;
+
+/** 仅测试用：环境变量变更后清空路径缓存 */
+export function resetSecurityPathCache(): void {
+  cachedProtectedPaths = null;
+  cachedTempPrefixes = null;
+}
+
+function ensureTrailingSep(p: string): string {
+  let n = p.replace(/\//g, '\\');
+  if (!n.endsWith('\\')) n += '\\';
+  return n;
+}
+
+/** 硬保护路径（不可逆损坏）—— 含动态 SystemRoot */
+function getProtectedPaths(): string[] {
+  if (cachedProtectedPaths) return cachedProtectedPaths;
+  const paths = [
+    '/System/', '/usr/', '/bin/', '/sbin/', '/Library/',
+    '/etc/',
+    '/dev/',
+    'C:\\Windows\\', 'C:\\Program Files\\', 'C:\\Program Files (x86)\\',
+  ];
+  const systemRoot = process.env.SystemRoot ?? process.env.windir;
+  if (systemRoot) {
+    const root = ensureTrailingSep(systemRoot);
+    if (!paths.some((p) => p.toLowerCase() === root.toLowerCase())) {
+      paths.push(root);
+    }
+  }
+  cachedProtectedPaths = paths;
+  return paths;
+}
 
 /** 凭证目录 */
 const CREDENTIAL_DIRS = [
@@ -43,8 +74,102 @@ const SAFE_PSEUDO_DEVICES = new Set([
   '/dev/stdin', '/dev/stdout', '/dev/stderr', '/dev/tty',
 ]);
 
-/** 临时目录前缀 */
-const TEMP_PREFIXES = ['/tmp/', '/var/tmp/', '/private/var/tmp/'];
+/**
+ * 临时目录前缀
+ *
+ * 必须在 PROTECTED 之前匹配：`C:\Windows\Temp` 虽在 `C:\Windows\` 下，
+ * 但是可清空的临时区，应归 safe 而非 protected。
+ */
+function getTempPrefixes(): string[] {
+  if (cachedTempPrefixes) return cachedTempPrefixes;
+  const prefixes = ['/tmp/', '/var/tmp/', '/private/var/tmp/'];
+  const userTemp = process.env.TEMP ?? process.env.TMP ?? process.env.Tmp;
+  if (userTemp) {
+    prefixes.push(ensureTrailingSep(userTemp));
+  }
+  prefixes.push('C:\\Windows\\Temp\\');
+  const systemRoot = process.env.SystemRoot ?? process.env.windir;
+  if (systemRoot) {
+    prefixes.push(ensureTrailingSep(systemRoot) + 'Temp\\');
+  }
+  // 用户 AppData Temp 回退（无 TEMP 环境变量时的静态路径）
+  const userProfile = process.env.USERPROFILE ?? process.env.HOME;
+  const home = userProfile ? userProfile.replace(/\//g, '\\') : homedir().replace(/\//g, '\\');
+  if (home) {
+    const base = home.endsWith('\\') ? home : home + '\\';
+    prefixes.push(base + 'AppData\\Local\\Temp\\');
+    prefixes.push(base + 'AppData\\Local\\Microsoft\\Windows\\Temp\\');
+  }
+  cachedTempPrefixes = prefixes;
+  return prefixes;
+}
+
+/** Windows 风格路径：盘符或 UNC */
+function isWindowsStylePath(p: string): boolean {
+  return /^[A-Za-z]:[\\/]/.test(p) || /^[A-Za-z]:$/.test(p) || p.includes('\\') || p.startsWith('\\\\');
+}
+
+/** 盘符根：`C:` / `C:\` / `D:/` */
+function isDriveRoot(p: string): boolean {
+  return /^[A-Za-z]:[\\/]?$/i.test(p);
+}
+
+/** 绝对路径（POSIX + Windows 盘符/UNC），跨平台评估时用 */
+function isAbsolutePath(p: string): boolean {
+  return (
+    p.startsWith('/') ||
+    /^[A-Za-z]:[\\/]/.test(p) ||
+    /^[A-Za-z]:$/.test(p) ||
+    p.startsWith('\\\\')
+  );
+}
+
+/** 去掉末尾分隔符（保留根 `/` 或 `C:\`） */
+function stripTrailingSep(p: string): string {
+  if (p.length > 1 && (p.endsWith('/') || p.endsWith('\\'))) {
+    // `C:\` 保留
+    if (/^[A-Za-z]:[\\/]$/.test(p)) return p;
+    return p.slice(0, -1);
+  }
+  return p;
+}
+
+/**
+ * 路径前缀匹配（路径段边界，拒绝 project 前缀绕过 project-evil）
+ *
+ * 要求 path === base 或 path 以 base + 分隔符 开头。
+ * Windows 风格路径大小写不敏感、分隔符归一为 `\`。
+ */
+function startsWithPathPrefix(path: string, prefix: string): boolean {
+  const isWin = isWindowsStylePath(path) || isWindowsStylePath(prefix);
+  if (isWin) {
+    const p = stripTrailingSep(path.replace(/\//g, '\\')).toLowerCase();
+    const b = stripTrailingSep(prefix.replace(/\//g, '\\')).toLowerCase();
+    if (p === b) return true;
+    return p.startsWith(b + '\\');
+  }
+  const p = stripTrailingSep(path);
+  const b = stripTrailingSep(prefix);
+  if (p === b) return true;
+  return p.startsWith(b + '/');
+}
+
+/**
+ * 路径段包含匹配：同时识别 `/` 与 `\`，要求段边界
+ *
+ * `.ssh` 匹配 `/home/x/.ssh` 与 `/home/x/.ssh/id_rsa`，
+ * 不匹配 `/home/x/.sshrc`。
+ * 支持多段模式如 `.config/gcloud`。
+ */
+function pathContainsSegment(path: string, segment: string): boolean {
+  const unified = path.replace(/\\/g, '/');
+  const seg = segment.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+  if (!seg) return false;
+  if (unified === seg) return true;
+  if (unified.endsWith(`/${seg}`)) return true;
+  if (unified.includes(`/${seg}/`)) return true;
+  return false;
+}
 
 /**
  * 分类目标路径的风险
@@ -53,8 +178,8 @@ function classifyPath(path: string, cwd?: string): PathRisk {
   // 规范化路径
   const normalized = normalizePath(path, cwd);
 
-  // 根路径特殊处理（精确匹配，不是 startsWith）
-  if (normalized === '/') {
+  // 根路径 / 盘符根（不可逆损坏）
+  if (normalized === '/' || isDriveRoot(normalized)) {
     return 'protected';
   }
 
@@ -70,28 +195,33 @@ function classifyPath(path: string, cwd?: string): PathRisk {
     return 'normal';
   }
 
+  // 临时目录 —— 必须在 PROTECTED 之前：
+  // C:\Windows\Temp 落在 C:\Windows\ 前缀内，若先判 protected 则 TEMP 白名单成死代码
+  if (getTempPrefixes().some(p => startsWithPathPrefix(normalized, p))) {
+    return 'safe';
+  }
+
   // 系统保护路径
-  if (PROTECTED_PATHS.some(p => normalized.startsWith(p))) {
+  if (getProtectedPaths().some(p => startsWithPathPrefix(normalized, p))) {
     return 'protected';
   }
 
   // 凭证目录
-  if (CREDENTIAL_DIRS.some(p => normalized.includes('/' + p + '/') || normalized.includes('/' + p))) {
+  if (CREDENTIAL_DIRS.some(p => pathContainsSegment(normalized, p))) {
     return 'sensitive';
   }
 
-  // 临时目录
-  if (TEMP_PREFIXES.some(p => normalized.startsWith(p))) {
+  // 项目目录（相对路径，或在 cwd 内）—— 段边界比较
+  if (!isAbsolutePath(normalized) || (cwd && startsWithPathPrefix(normalized, cwd))) {
     return 'safe';
   }
 
-  // 项目目录（相对路径，或在 cwd 内）
-  if (!normalized.startsWith('/') || (cwd && normalized.startsWith(cwd))) {
-    return 'safe';
-  }
-
-  // 用户 home 目录
-  if (normalized.startsWith('/Users/') || normalized.startsWith('/home/')) {
+  // 用户 home 目录（POSIX + Windows）
+  if (
+    normalized.startsWith('/Users/') ||
+    normalized.startsWith('/home/') ||
+    /^[A-Za-z]:[\\/]Users[\\/]/i.test(normalized)
+  ) {
     return 'normal';
   }
 
@@ -103,18 +233,24 @@ function classifyPath(path: string, cwd?: string): PathRisk {
  * 规范化路径（处理相对路径）
  */
 function normalizePath(path: string, cwd?: string): string {
-  // ~ 展开
-  if (path === '~' || path.startsWith('~/')) {
-    const home = process.env.HOME ?? '/Users/unknown';
-    return path === '~' ? home : home + path.slice(1);
+  // ~ 展开（POSIX ~/ 与 Windows ~\）
+  if (path === '~' || path.startsWith('~/') || path.startsWith('~\\')) {
+    const home = process.env.HOME ?? process.env.USERPROFILE ?? homedir() ?? '/Users/unknown';
+    if (path === '~') return home;
+    return resolve(home, path.slice(2));
   }
-  if (path.startsWith('/') || !cwd) {
+  if (isAbsolutePath(path) || !cwd) {
     return path;
   }
-  return cwd.endsWith('/') ? cwd + path : cwd + '/' + path;
+  return resolve(cwd, path);
 }
 
 // ── 操作风险分类 ──
+
+/** 命令名统一小写比较（Windows 命令大小写不敏感） */
+function cmdKey(cmd: string): string {
+  return cmd.toLowerCase();
+}
 
 /** 只读命令 */
 const READ_ONLY_COMMANDS = new Set([
@@ -127,11 +263,15 @@ const READ_ONLY_COMMANDS = new Set([
   'env', 'printenv',
   'uname', 'hostname', 'uptime', 'ps', 'top',
   'man', 'info', 'help',
+  // Windows
+  'where', 'fc', 'comp',
 ]);
 
 /** 删除命令 */
 const DELETE_COMMANDS = new Set([
   'rm', 'rmdir', 'unlink', 'shred',
+  // Windows / PowerShell
+  'del', 'erase', 'rd', 'remove-item', 'ri',
 ]);
 
 /** 写入命令 */
@@ -139,6 +279,10 @@ const WRITE_COMMANDS = new Set([
   'touch', 'mkdir', 'cp', 'mv', 'ln',
   'install', 'chmod', 'chown', 'chgrp',
   'tee', 'truncate',
+  // Windows / PowerShell
+  'copy', 'move', 'xcopy', 'robocopy', 'ren', 'rename',
+  'new-item', 'ni', 'set-content', 'add-content', 'out-file',
+  'echo.', 'md',
 ]);
 
 /** 网络命令 */
@@ -164,8 +308,11 @@ const BUILD_COMMANDS = new Set([
 /** 解释器命令（内联代码执行） */
 const INTERPRETER_COMMANDS = new Set([
   'python', 'python3', 'ruby', 'perl', 'node', 'php',
-  'lua', 'tclsh', 'Rscript', 'scala', 'groovy',
+  'lua', 'tclsh', 'rscript', 'scala', 'groovy',
   'bash', 'sh', 'zsh',
+  // Windows
+  'powershell', 'powershell.exe', 'pwsh', 'pwsh.exe',
+  'cmd', 'cmd.exe',
 ]);
 
 /** 提权命令 — 通过 seg.isSudo 判断，此 Set 保留备用 */
@@ -262,7 +409,8 @@ export function evaluateShellCommand(
   // 4. 评估组合风险（多个高风险命令串联）
   if (parsed.segments.length > 1) {
     const highRiskSegments = parsed.segments.filter(s => {
-      return DELETE_COMMANDS.has(s.command) || s.command === 'chmod' || s.command === 'chown';
+      const k = cmdKey(s.command);
+      return DELETE_COMMANDS.has(k) || k === 'chmod' || k === 'chown';
     });
     if (highRiskSegments.length > 1) {
       factors.push({
@@ -285,9 +433,27 @@ export function evaluateShellCommand(
 
 // ── 段评估 ──
 
+/** 递归/子树删除标记：rm -r/-rf/-R、PowerShell -Recurse、cmd del /s */
+function hasRecursiveFlag(args: string[]): boolean {
+  return args.some((a) => {
+    const lower = a.toLowerCase();
+    return (
+      a === '-r' || a === '-rf' || a === '-R' || a === '-fr' ||
+      lower === '-recurse' || lower === '/s' || lower === '-s'
+    );
+  });
+}
+
+/** 是否为 chmod/chown 类权限变更 */
+function isPermChange(cmd: string): boolean {
+  const k = cmdKey(cmd);
+  return k === 'chmod' || k === 'chown';
+}
+
 function evaluateSegment(seg: ParsedSegment, cwd?: string): RiskFactor[] {
   const factors: RiskFactor[] = [];
   const cmd = seg.command;
+  const key = cmdKey(cmd);
 
   // 提权
   if (seg.isSudo) {
@@ -299,7 +465,7 @@ function evaluateSegment(seg: ParsedSegment, cwd?: string): RiskFactor[] {
   }
 
   // 只读命令 → 低风险
-  if (READ_ONLY_COMMANDS.has(cmd)) {
+  if (READ_ONLY_COMMANDS.has(key)) {
     factors.push({
       source: 'operation',
       description: `只读操作: ${cmd}`,
@@ -309,51 +475,46 @@ function evaluateSegment(seg: ParsedSegment, cwd?: string): RiskFactor[] {
   }
 
   // 删除命令
-  if (DELETE_COMMANDS.has(cmd)) {
-    const hasRecursive = seg.args.includes('-r') || seg.args.includes('-rf') || seg.args.includes('-R');
-    const targets = seg.args.filter(a => !a.startsWith('-'));
+  if (DELETE_COMMANDS.has(key)) {
+    const recursive = hasRecursiveFlag(seg.args);
+    // 过滤选项；Windows 选项以 / 开头但路径也可能是 /（POSIX），保留绝对路径
+    const targets = seg.args.filter((a) => {
+      if (a.startsWith('-')) return false;
+      // cmd/PowerShell 选项：/s /q /f 等（单字母或短选项），排除看起来像路径的
+      if (/^\/[a-zA-Z?]$/.test(a) || /^\/(recurse|force|quiet)$/i.test(a)) return false;
+      return true;
+    });
 
     for (const target of targets) {
       const pathRisk = classifyPath(target, cwd);
       factors.push({
         source: 'target',
-        description: `删除 ${hasRecursive ? '(递归) ' : ''}目标: ${target} (${pathRisk})`,
-        level: evaluateDeleteRisk(pathRisk, hasRecursive),
+        description: `删除 ${recursive ? '(递归) ' : ''}目标: ${target} (${pathRisk})`,
+        level: evaluateDeleteRisk(pathRisk, recursive),
       });
     }
 
     return factors;
   }
 
-  // 写入命令
-  if (WRITE_COMMANDS.has(cmd)) {
-    if (cmd === 'chmod' || cmd === 'chown') {
-      const hasRecursive = seg.args.includes('-R') || seg.args.includes('-r');
-      if (hasRecursive) {
-        const targets = seg.args.filter(a => !a.startsWith('-'));
-        for (const target of targets) {
-          const pathRisk = classifyPath(target, cwd);
-          if (pathRisk === 'protected') {
-            factors.push({
-              source: 'target',
-              description: `递归权限变更: ${target}`,
-              level: 'critical',
-            });
-          } else if (pathRisk === 'sensitive') {
-            factors.push({
-              source: 'target',
-              description: `递归权限变更: ${target}`,
-              level: 'high',
-            });
-          } else {
-            factors.push({
-              source: 'operation',
-              description: `递归权限变更: ${target}`,
-              level: 'medium',
-            });
-          }
-        }
-      }
+  // 写入命令 — 与删除同构：评估目标路径（protected→critical, sensitive→high）
+  if (WRITE_COMMANDS.has(key)) {
+    const recursive = hasRecursiveFlag(seg.args);
+    const targets = seg.args.filter((a) => {
+      if (a.startsWith('-')) return false;
+      if (/^\/[a-zA-Z?]$/.test(a) || /^\/(recurse|force|quiet|y)$/i.test(a)) return false;
+      // chmod 模式数字不是路径
+      if (/^\d{3,4}$/.test(a)) return false;
+      return true;
+    });
+
+    for (const target of targets) {
+      const pathRisk = classifyPath(target, cwd);
+      factors.push({
+        source: 'target',
+        description: `写入 ${recursive ? '(递归) ' : ''}目标: ${target} (${pathRisk})`,
+        level: evaluateDeleteRisk(pathRisk, recursive),
+      });
     }
 
     factors.push({
@@ -365,8 +526,8 @@ function evaluateSegment(seg: ParsedSegment, cwd?: string): RiskFactor[] {
   }
 
   // 网络命令
-  if (NETWORK_COMMANDS.has(cmd)) {
-    if (cmd === 'curl' || cmd === 'wget') {
+  if (NETWORK_COMMANDS.has(key)) {
+    if (key === 'curl' || key === 'wget') {
       // 检查是否有 POST 数据
       const hasPost = seg.args.some(a =>
         a === '-X' || a === '--request' || a === '-d' || a === '--data' || a === '--data-binary',
@@ -395,7 +556,7 @@ function evaluateSegment(seg: ParsedSegment, cwd?: string): RiskFactor[] {
   }
 
   // 包管理命令
-  if (PACKAGE_COMMANDS.has(cmd)) {
+  if (PACKAGE_COMMANDS.has(key)) {
     if (seg.isSudo) {
       factors.push({
         source: 'operation',
@@ -413,7 +574,7 @@ function evaluateSegment(seg: ParsedSegment, cwd?: string): RiskFactor[] {
   }
 
   // Git 命令
-  if (cmd === 'git') {
+  if (key === 'git') {
     const subcmd = seg.args[0];
     if (subcmd === 'push' && seg.args.includes('--force')) {
       factors.push({
@@ -438,8 +599,8 @@ function evaluateSegment(seg: ParsedSegment, cwd?: string): RiskFactor[] {
   }
 
   // 构建/容器命令（需要关注参数）
-  if (BUILD_COMMANDS.has(cmd)) {
-    if (cmd === 'docker' && seg.args[0] === 'run') {
+  if (BUILD_COMMANDS.has(key)) {
+    if (key === 'docker' && seg.args[0] === 'run') {
       factors.push({
         source: 'operation',
         description: 'Docker run（容器执行）',
@@ -456,7 +617,7 @@ function evaluateSegment(seg: ParsedSegment, cwd?: string): RiskFactor[] {
   }
 
   // 解释器命令（无 -c/-e 时视为低风险，有内联代码时由 hasInlineCode 处理）
-  if (INTERPRETER_COMMANDS.has(cmd)) {
+  if (INTERPRETER_COMMANDS.has(key)) {
     factors.push({
       source: 'operation',
       description: `解释器执行: ${cmd}`,
@@ -506,22 +667,34 @@ function evaluatePathRisk(path: string, pathRisk: PathRisk): RiskFactor | null {
 // ── 非 Shell 工具评估 ──
 
 export function evaluateNonShellTool(call: ToolCall): RiskDecision {
-  // 文件工具
+  // 文件工具（读写分档：写保护路径 critical，读保护路径 high）
   if (isFileTool(call.name)) {
     const path = (call.arguments?.path ?? call.arguments?.file ?? call.arguments?.filename ?? '') as string;
     if (path) {
       const pathRisk = classifyPath(path);
+      const isWrite = isFileWriteTool(call.name);
+
       if (pathRisk === 'protected') {
+        // 写系统路径 = 不可逆损坏；读/列目录 = 高风险但非破坏
+        const level: RiskLevel = isWrite ? 'critical' : 'high';
         return {
-          level: 'critical',
-          factors: [{ source: 'target', description: `访问保护路径: ${path}`, level: 'critical' }],
-          reason: `访问保护路径 ${path}，可能造成不可逆损坏`,
+          level,
+          factors: [{
+            source: 'target',
+            description: `${isWrite ? '写入' : '读取'}保护路径: ${path}`,
+            level,
+          }],
+          reason: `${isWrite ? '写入' : '读取'}保护路径 ${path}`,
         };
       }
       if (pathRisk === 'sensitive') {
         return {
           level: 'high',
-          factors: [{ source: 'target', description: `访问凭证目录: ${path}`, level: 'high' }],
+          factors: [{
+            source: 'target',
+            description: `${isWrite ? '写入' : '读取'}凭证目录: ${path}`,
+            level: 'high',
+          }],
           reason: `访问凭证目录 ${path}，可能泄露敏感信息`,
         };
       }
@@ -591,7 +764,17 @@ function buildReason(level: RiskLevel, factors: RiskFactor[]): string {
 // ── 工具分类 ──
 
 const SHELL_TOOLS = new Set(['shell', 'exec', 'bash', 'terminal', 'run_command', 'execute']);
-const FILE_TOOLS = new Set(['file_read', 'file_write', 'file_delete', 'read_file', 'write_file', 'read', 'write', 'edit']);
+/** 写类文件工具 — 保护路径 → critical */
+const FILE_WRITE_TOOLS = new Set([
+  'file_write', 'file_edit', 'file_delete',
+  'write_file', 'write', 'edit',
+]);
+/** 读类文件工具 — 保护路径 → high（只读，非不可逆） */
+const FILE_READ_TOOLS = new Set([
+  'file_read', 'file_list', 'file_search',
+  'read_file', 'read',
+]);
+const FILE_TOOLS = new Set([...FILE_WRITE_TOOLS, ...FILE_READ_TOOLS]);
 const HTTP_TOOLS = new Set(['http_get', 'http_post', 'http_put', 'http_delete', 'fetch', 'web_fetch', 'curl']);
 
 function isShellTool(name: string): boolean {
@@ -600,6 +783,10 @@ function isShellTool(name: string): boolean {
 
 function isFileTool(name: string): boolean {
   return FILE_TOOLS.has(name);
+}
+
+function isFileWriteTool(name: string): boolean {
+  return FILE_WRITE_TOOLS.has(name);
 }
 
 function isHttpTool(name: string): boolean {

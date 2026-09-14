@@ -1,3 +1,74 @@
+## v0.24.0 (2026-09-15)
+
+### fix(security): 二轮审查 — TEMP 顺序 / 文件工具覆盖 / 写入目标评估
+
+#### P1
+
+- **TEMP 优先于 PROTECTED**：`C:\Windows\Temp\` 原先被 `C:\Windows\` 吞掉判 critical；现 TEMP 先匹配 → safe
+- **AppData Temp 回退**：无 `TEMP`/`TMP` 时用 `USERPROFILE\AppData\Local\Temp` 等
+- **FILE_TOOLS 补全**：`file_edit` / `file_list` / `file_search` 纳入评估；读写分档（写保护路径 critical，读 high）
+- **写入命令评目标**：`set-content` / `mkdir` / `touch` / `copy` 等对 protected→critical、sensitive→high（与删除同构）
+
+#### P2
+
+- **空格路径合并**：`del C:\Program Files\App\x.exe` 不再切成 `C:\Program` + `Files\...`
+- `getProtectedPaths` / `getTempPrefixes` 进程内缓存；导出 `resetSecurityPathCache`
+- 去掉 READ_ONLY 中重复的 `type`
+
+### fix(security): Windows 路径/命令安全判定闭环（审查 P0/P1）
+
+审查发现工具层已跨平台，但安全层对 Windows 路径会「解析坏掉 → 掉进 safe」。本条补齐确定性防护。
+
+#### P0
+
+- **tokenizer**：`\` 仅在 bash 元字符前作转义；`C:\Windows`、`\\server\share` 原样保留
+- **路径段边界**：`startsWithPathPrefix` / `allowedPaths` / `pathContainsSegment` 拒绝 `project` 绕过 `project-evil`；`.sshrc` 不再误报 `.ssh`
+- **盘符根**：`C:\`、`D:\` 判 `protected`
+- **绝对路径**：跨平台识别 POSIX + 盘符 + UNC，避免 Windows 路径被 resolve 进 cwd 变成 safe
+
+#### P1
+
+- **cmd/start** 不再进 WRAPPER（避免 `/c`、`/b` 被当成命令名）
+- **INLINE_CODE_FLAGS**：`powershell/pwsh -Command|-c|-EncodedCommand`，`cmd /c|/k`
+- **删除/写入命令**：`del`/`erase`/`rd`/`Remove-Item` 及 PS 写入别名；命令名大小写不敏感；`-Recurse`/`/s` 计入递归
+- **TEMP**：动态读取 `TEMP`/`TMP` 与 `SystemRoot\Temp`
+- **SystemRoot**：动态加入保护前缀（非 C 盘 Windows）
+
+#### 其他
+
+- `default-security-guard` allowedPaths 段边界
+- `degradation` 覆盖 Windows 重定向目标
+- 新增 `tests/harness/windows-security.test.ts`（24 项，真实单反斜杠路径）
+
+### feat(tools): 文件 / Shell 工具完整跨平台支持（自动识别 OS）
+
+内置文件与 shell 工具此前实质按 Unix 设计：路径用 `startsWith('/')` 判断绝对路径，shell 硬编码 bash，`env_info` 用 `which`。纯 Windows 或无 Git Bash 环境不可靠。
+
+#### 新增 `platform.ts`
+
+- `resolveToolPath` — 基于 `path.isAbsolute`，覆盖 POSIX `/`、Windows 盘符与 UNC
+- `resolvePlatformShell` — 自动选择 shell 并缓存：
+  - 非 Windows：`/bin/bash` → PATH `bash` → `/bin/sh` → PATH `sh`
+  - Windows：PATH `bash`（Git Bash）→ `pwsh` → `powershell` → `cmd.exe`
+- `findExecutable` / `commandExists` — 按 PATH（Windows 含 `PATHEXT`）探测可执行文件
+- `defaultPathEnv` — 平台安全的 PATH 回退
+
+#### 工具行为
+
+- **shell**：按探测结果 spawn；description 标明 Detected shell 与语法提示；返回值增加 `shell.{kind,executable}`；`windowsHide: true`
+- **file_read / file_write / file_list / file_edit / file_search**：路径统一走 `resolveToolPath`
+- **env_info**：包管理器探测改用 `findExecutable`；新增 `platformShell`
+
+#### 安全层
+
+- `default-security-guard` allowedPaths 判断改 `path.isAbsolute`
+- `shell-parser` 解释器/wrapper 识别加入 `powershell`/`pwsh`/`cmd`/`start`
+- `risk-evaluator` 路径分类支持 Windows 保护路径、Temp、Users home；Windows 路径前缀大小写不敏感
+
+### test(tools)
+
+- 新增 `platform-tools.test.ts`（路径解析、shell 探测、findExecutable、shell 执行、env_info.platformShell）
+
 ## v0.23.1 (2026-09-15)
 
 ### refactor(context): Token 估算器去 core 误名 + 收敛重复实现

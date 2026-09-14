@@ -31,6 +31,7 @@ const INTERPRETER_NAMES = new Set([
   'sh', 'bash', 'zsh', 'dash', 'ksh', 'fish',
   'python', 'python3', 'ruby', 'perl', 'node', 'php',
   'lua', 'tclsh', 'Rscript', 'scala', 'groovy',
+  'powershell', 'powershell.exe', 'pwsh', 'pwsh.exe', 'cmd', 'cmd.exe',
 ]);
 
 /**
@@ -45,9 +46,24 @@ const INLINE_CODE_FLAGS: Record<string, string[]> = {
   'perl': ['-e'],
   'php': ['-r'],
   'bash': ['-c'], 'sh': ['-c'], 'zsh': ['-c'],
+  // Windows shells
+  'powershell': ['-Command', '-command', '-c', '-EncodedCommand', '-encodedcommand'],
+  'powershell.exe': ['-Command', '-command', '-c', '-EncodedCommand', '-encodedcommand'],
+  'pwsh': ['-Command', '-command', '-c', '-EncodedCommand', '-encodedcommand'],
+  'pwsh.exe': ['-Command', '-command', '-c', '-EncodedCommand', '-encodedcommand'],
+  'cmd': ['/c', '/C', '/k', '/K'],
+  'cmd.exe': ['/c', '/C', '/k', '/K'],
 };
 
-const WRAPPER_COMMANDS = new Set(['sudo', 'env', 'exec', 'nohup', 'strace', 'time']);
+/**
+ * 仅对真正的 wrapper 剥壳。
+ *
+ * 不要把 cmd/start 放进来：它们的选项（/c、/b）会被误当成命令名，
+ * 且 cmd /c 本身就是内联执行，应保留原命令以便 INLINE_CODE_FLAGS 识别。
+ */
+const WRAPPER_COMMANDS = new Set([
+  'sudo', 'env', 'exec', 'nohup', 'strace', 'time',
+]);
 
 // ── 解析入口 ──
 
@@ -240,7 +256,7 @@ function pushPart(parts: string[], current: string): void {
  * 遇到无法解析的结构返回 null。
  */
 function parseSegment(raw: string): ParsedSegment | null {
-  const tokens = tokenize(raw);
+  const tokens = mergeSplitWindowsPaths(tokenize(raw));
   if (tokens.length === 0) return null;
 
   // 提取重定向
@@ -320,28 +336,76 @@ function parseSegment(raw: string): ParsedSegment | null {
 }
 
 /**
+ * 合并被空格切开的 Windows 绝对路径
+ *
+ * `del C:\Program Files\App\x.exe` → `C:\Program` + `Files\App\x.exe`
+ * → `C:\Program Files\App\x.exe`
+ *
+ * 规则：当前 token 是盘符/UNC 绝对路径，下一段含路径分隔符，
+ * 且当前最后一段无文件扩展名时合并。
+ * 已知局限：`cp C:\data backup\old` 也可能被误合并。
+ */
+function mergeSplitWindowsPaths(tokens: string[]): string[] {
+  const out: string[] = [];
+  let i = 0;
+  while (i < tokens.length) {
+    let cur = tokens[i];
+    while (i + 1 < tokens.length) {
+      if (!/^[A-Za-z]:[\\/]/.test(cur) && !cur.startsWith('\\\\')) break;
+      const next = tokens[i + 1];
+      if (!next || next.startsWith('-') || next.startsWith('/')) break;
+      if (/^[A-Za-z]:[\\/]/.test(next) || next.startsWith('\\\\')) break;
+      if (!next.includes('\\') && !next.includes('/')) break;
+      const lastSeg = cur.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? '';
+      if (lastSeg.includes('.')) break;
+      cur = `${cur} ${next}`;
+      i++;
+    }
+    out.push(cur);
+    i++;
+  }
+  return out;
+}
+
+/**
+ * bash 需要被 `\` 转义的元字符。
+ * 其余字符前的 `\` 视为 Windows 路径分隔符并原样保留。
+ */
+const BASH_ESCAPE_TARGETS = new Set([
+  '"', "'", '$', '`', ' ', '\t', '\n',
+  '|', '&', ';', '(', ')', '<', '>',
+]);
+
+/**
  * 简单的 tokenizer
  *
  * 处理引号和转义字符。
+ * Windows 路径（`C:\Windows`、`\\server\share`）中的 `\` 不会被吃掉——
+ * 否则保护路径判定会拿到被拆坏的字符串。
  */
 function tokenize(raw: string): string[] {
   const tokens: string[] = [];
   let current = '';
   let inSingleQuote = false;
   let inDoubleQuote = false;
-  let escape = false;
 
   for (let i = 0; i < raw.length; i++) {
     const ch = raw[i];
 
-    if (escape) {
-      current += ch;
-      escape = false;
-      continue;
-    }
-
     if (ch === '\\' && !inSingleQuote) {
-      escape = true;
+      const next = raw[i + 1];
+      if (next === undefined) {
+        current += ch;
+        break;
+      }
+      // 经典 bash 转义：吃掉 `\`，保留下一字符字面量
+      if (BASH_ESCAPE_TARGETS.has(next)) {
+        current += next;
+        i++;
+        continue;
+      }
+      // Windows 路径分隔符 / UNC：保留 `\`
+      current += ch;
       continue;
     }
 
@@ -440,12 +504,18 @@ function detectPipeToInterpreter(segments: ParsedSegment[], connectors: Connecto
 /**
  * 检测内联代码执行
  *
- * python -c "...", node -e "...", bash -c "..." 等。
+ * python -c "...", node -e "...", bash -c "...",
+ * powershell -Command "...", cmd /c "..." 等。
+ * 命令名大小写不敏感（Windows shell）。
  */
 function detectInlineCode(segments: ParsedSegment[]): boolean {
   for (const seg of segments) {
-    const flags = INLINE_CODE_FLAGS[seg.command];
-    if (flags && seg.args.some(a => flags.includes(a))) {
+    const flags =
+      INLINE_CODE_FLAGS[seg.command] ??
+      INLINE_CODE_FLAGS[seg.command.toLowerCase()];
+    if (!flags) continue;
+    const argSet = new Set(seg.args.map((a) => a.toLowerCase()));
+    if (flags.some((f) => argSet.has(f.toLowerCase()))) {
       return true;
     }
   }
