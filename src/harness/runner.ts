@@ -157,6 +157,10 @@ export class SessionAwareRunner {
   private _events?: import('../core/primitives/event-bus.js').EventBus;
   /** 工具运行时上下文提供者 */
   private toolContextProvider?: ToolContextProvider;
+  /** 文件式 persona 的 run 时解析器；每次 handle 前解析，实现热更新 */
+  private systemPromptResolver?: () => Promise<string>;
+  /** 最后一次成功解析的纯 persona（不含 injectedContext），用于 resolver 失败时的干净回退 */
+  private lastCleanPersonaPrompt?: string;
 
   constructor(agent: Agent, harness: ReliabilityHarness, store: TypedSessionStore, config?: SessionAwareRunnerConfig & { events?: import('../core/primitives/event-bus.js').EventBus }) {
     this.agent = agent;
@@ -174,6 +178,24 @@ export class SessionAwareRunner {
   /** 设置工具运行时上下文提供者 */
   setToolContextProvider(provider: ToolContextProvider): void {
     this.toolContextProvider = provider;
+  }
+
+  /**
+   * 设置 persona 解析器
+   *
+   * 每次 handle 且 RunConfig.systemPrompt 为空时调用；
+   * 文件变更后下一轮自动生效，无需重启。
+   *
+   * @param resolver - 从磁盘解析纯 persona
+   * @param initialCleanPersona - build 时读到的磁盘 persona（可能为 ''）；
+   *   用于区分「从未有人格文件」（保留默认 tools prompt）与「有过后被删空」（热删除清空）
+   */
+  setSystemPromptResolver(resolver: () => Promise<string>, initialCleanPersona = ''): void {
+    this.systemPromptResolver = resolver;
+    // 仅首次挂 resolver 时播种；替换 resolver 不得用可能被 injectedContext 污染的 context 覆盖
+    if (this.lastCleanPersonaPrompt === undefined) {
+      this.lastCleanPersonaPrompt = initialCleanPersona;
+    }
   }
 
   /**
@@ -302,11 +324,56 @@ export class SessionAwareRunner {
 
       // 9. 同步 session 消息到 Agent 上下文
       this.agent.context.messages = session.messages;
-      const basePrompt = effectiveRunConfig.systemPrompt || this.agent.context.systemPrompt || '';
+      let basePrompt = effectiveRunConfig.systemPrompt;
+      let personaFromResolver = false;
+      if (!basePrompt && this.systemPromptResolver) {
+        try {
+          const resolved = await this.systemPromptResolver();
+          const previouslyHadPersona = (this.lastCleanPersonaPrompt ?? '') !== '';
+          this.lastCleanPersonaPrompt = resolved;
+          if (resolved) {
+            // 有 persona：同步到 Agent / SecurityGuard
+            this.agent.setSystemPrompt(resolved);
+            this.harness.security?.setSystemPrompt?.(resolved);
+            basePrompt = resolved;
+            personaFromResolver = true;
+          } else if (previouslyHadPersona) {
+            // 热删除：曾有内容、现被删空 → 显式清空
+            this.agent.setSystemPrompt('');
+            this.harness.security?.setSystemPrompt?.('');
+            basePrompt = '';
+            personaFromResolver = true;
+          } else {
+            // 从未有 persona 文件：保留 build 时的 fallback（如默认 tools prompt），不视为失败
+            basePrompt = '';
+            personaFromResolver = false;
+          }
+        } catch (err) {
+          // 仅磁盘读失败：回退到上次成功的纯 persona，避免吃到 injectedContext 拼接结果
+          const errMsg = err instanceof Error ? err.message : String(err);
+          console.warn(
+            `[octopi] persona resolve failed (agent=${_agentId} session=${sessionId}): ${errMsg}; falling back to last clean persona`,
+          );
+          this._events?.emit({
+            type: 'persona.resolve.failed',
+            timestamp: Date.now(),
+            agentId: _agentId,
+            sessionId,
+            data: { error: errMsg },
+          });
+          basePrompt = this.lastCleanPersonaPrompt ?? (this.agent.context.systemPrompt || '');
+        }
+      }
+      if (!basePrompt && !personaFromResolver) {
+        basePrompt = this.agent.context.systemPrompt || '';
+      }
       if (effectiveRunConfig.injectedContext) {
-        this.agent.context.systemPrompt = basePrompt + '\n\n' + effectiveRunConfig.injectedContext;
-      } else if (effectiveRunConfig.systemPrompt) {
-        this.agent.context.systemPrompt = effectiveRunConfig.systemPrompt;
+        this.agent.context.systemPrompt = basePrompt
+          ? `${basePrompt}\n\n${effectiveRunConfig.injectedContext}`
+          : effectiveRunConfig.injectedContext;
+      } else if (personaFromResolver || basePrompt) {
+        // resolver 成功（含清空）或有明确 basePrompt：以 basePrompt 为准
+        this.agent.context.systemPrompt = basePrompt;
       }
 
       // 更新 harness 的 sessionId/agentId（用于检查点）

@@ -1,3 +1,32 @@
+## v0.24.6 (2026-09-15)
+
+### feat(persona): 文件式 persona 热更新，改盘后下一轮 run 生效
+
+原先 persona 在 `AgentBuilder.buildAgent()` / Gateway 首次消息时读盘并烤死进 `Agent.systemPrompt`，Gateway 还有一层永不失效的 `personaCache`——改 `AGENTS.md` / `persona/*.md` 必须重启服务。
+
+将文件式 persona 从 **build 产物** 改为 **run 时解析资源**：
+
+- 新增 `PersonaSource`（`src/harness/agent-building/persona.ts`）：按目录指纹（`path:mtimeMs:size`）缓存；指纹不变复用，变则重读。`loadPersona` 保持无缓存语义。
+- `AgentBuilder`：文件式 persona 生成 resolver 挂到 `SessionAwareRunner`；每次 `handle` 且 `RunConfig.systemPrompt` 为空时解析，并同步到 `Agent` 与 `SecurityGuard`（泄露检测基线）。
+- resolver **成功返回空串**（文件删空）会清空 systemPrompt 与 security 基线；仅磁盘读失败时回退到「最后一次成功的纯 persona」（`lastCleanPersonaPrompt`），避免吃到上一轮 `injectedContext` 拼接结果。失败时 `console.warn` 并 emit `persona.resolve.failed`（含 agentId/sessionId/error）。
+- `Gateway`：删除模块级 `personaCache`；文件式 persona 走 `builder.persona(home)`，不再烤死；`runConfigDefaults.systemPrompt` 仅保留内联 persona。
+- `agent-loop`：引擎托管的 system 消息**至多一条且固定在 index 0**；`systemPrompt` 变化时刷新，空则摘除；历史脏数据中的多余 managed 会被清掉。仅管理 `metadata.source === 'systemPrompt'` 或无 metadata 的历史注入；外部手工 system **必须带 `metadata.source ≠ 'systemPrompt'`**，否则会被当作旧版引擎注入覆盖。
+- 导出 `PersonaSource`。
+
+内联 persona（`persona.systemPrompt`）仍为固定内容，行为不变。
+
+**空 persona vs 热删除**：build 时磁盘无 `AGENTS.md` / `persona/*.md`（且有工具）→ 使用默认 tools prompt，resolver 仍挂着；首轮及后续 run 只要磁盘仍为空，保留该默认 prompt。曾有 persona 文件后被删空 → 视为热删除，清空 systemPrompt 与 security 基线。
+
+**行为说明**：改盘后，该 agent **所有仍活跃的 session** 在下一轮都会使用当前磁盘 persona（不再保留会话创建时的版本）。session 落盘的 system 消息会随之更新。
+
+### BREAKING
+
+- 删除 `clearPersonaCache()`（曾从 `src/integration/gateway/gateway.ts` 导出；主入口未 re-export）。指纹缓存自动失效，不再需要手动清空；deep import 该符号的代码需去掉调用。
+
+### test
+
+- `tests/persona-hot-reload.test.ts`：指纹缓存（同 mtime/size 改写不重读）、改盘/增文件/删空热更新、空目录保留默认 tools prompt、写盘后切换、security 基线同步、resolver 失败回退且不叠 injectedContext、多轮仅一条 system、外部首位 system 不挡 persona、compose 多目录、显式 systemPrompt 不挂 resolver、`loadPersona` 无缓存。
+
 ## v0.24.5 (2026-09-15)
 
 ### fix(init): 目录骨架对齐 loadPersona / AgentDatabase 约定

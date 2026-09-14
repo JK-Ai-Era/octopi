@@ -63,7 +63,7 @@ export type {
 
 export { AgentBuilder, createAgent } from './harness/agent-building/builder.js';
 export { SessionAwareRunner } from './harness/runner.js';
-export { loadPersona, composePersonas } from './harness/agent-building/persona.js';
+export { loadPersona, composePersonas, PersonaSource } from './harness/agent-building/persona.js';
 
 // Context Engine
 export { DefaultContextEngine } from './harness/context/default-context-engine.js';

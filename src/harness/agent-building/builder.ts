@@ -72,7 +72,7 @@ import {
 } from '../budget/budget.js';
 import type { IterationBudgetConfig } from '../budget/budget.js';
 
-import { loadPersona, composePersonas } from './persona.js';
+import { PersonaSource } from './persona.js';
 import { DefaultContextEngine } from '../context/default-context-engine.js';
 import { SessionAwareRunner } from '../runner.js';
 import type { SessionAwareRunnerConfig } from '../runner.js';
@@ -227,6 +227,10 @@ export class AgentBuilder {
   // Harness 组件
   private _personaWorkspaces: string[] = [];
   private _systemPrompt?: string;
+  /** 文件式 persona 的 run 时解析器（指纹缓存，改文件下一轮生效） */
+  private _personaResolver?: () => Promise<string>;
+  /** build 时从磁盘读到的纯 persona（可能为空；不含默认 tools prompt） */
+  private _initialPersonaContent?: string;
   private _securityConfig?: SecurityGuardConfig;
 
   // Observability 配置
@@ -572,6 +576,10 @@ export class AgentBuilder {
       events,
     });
     runner.setToolContextProvider(this._contextProvider);
+    if (this._personaResolver) {
+      // 传入磁盘 persona 真实内容（可能为 ''），供 runner 区分「从未有人格」与「热删除」
+      runner.setSystemPromptResolver(this._personaResolver, this._initialPersonaContent ?? '');
+    }
 
     // 创建 SubsystemRuntime（如果有自主子系统）
     let subsystemRuntime: import('../autonomous-subsystem/runtime.js').SubsystemRuntime | undefined;
@@ -631,14 +639,16 @@ export class AgentBuilder {
       throw new Error('ModelProvider is required. Call .model() before .buildAgent()');
     }
 
-    // 加载 systemPrompt
+    // 加载 systemPrompt：文件式 persona 走 PersonaSource（run 时热更新）
     let systemPrompt = this._systemPrompt ?? '';
+    this._personaResolver = undefined;
+    this._initialPersonaContent = undefined;
     if (!systemPrompt && this._personaWorkspaces.length > 0) {
-      if (this._personaWorkspaces.length === 1) {
-        systemPrompt = await loadPersona(this._personaWorkspaces[0]);
-      } else {
-        systemPrompt = await composePersonas(...this._personaWorkspaces);
-      }
+      const source = new PersonaSource();
+      const dirs = [...this._personaWorkspaces];
+      this._personaResolver = () => source.load(...dirs);
+      this._initialPersonaContent = await this._personaResolver();
+      systemPrompt = this._initialPersonaContent;
     }
     if (!systemPrompt && this._toolBus.listForAgent('default').length > 0) {
       systemPrompt = this.buildDefaultSystemPrompt();
@@ -665,9 +675,12 @@ export class AgentBuilder {
     };
     const agent = new Agent(agentOptions);
 
-    // 构建可靠性 harness
+    // 构建可靠性 harness（systemPrompt 用于泄露检测；文件式 persona 每轮由 runner 同步）
     const events = this._events ?? new DefaultEventBus();
-    const security = this._security ?? new DefaultSecurityGuard(events, this._securityConfig);
+    const security = this._security ?? new DefaultSecurityGuard(events, {
+      ...this._securityConfig,
+      systemPrompt: this._securityConfig?.systemPrompt ?? systemPrompt,
+    });
     if (this._riskPolicy && security.setToolCallRiskPolicy) {
       security.setToolCallRiskPolicy(this._riskPolicy);
     }

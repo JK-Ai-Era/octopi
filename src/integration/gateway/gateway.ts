@@ -25,22 +25,6 @@ import type {
 import type { ChannelAdapter, ChannelMessage, ChannelReply } from '../types/channels.js';
 import type { GatewayConfig } from '../types/gateway-config.js';
 
-/** persona 缓存：路径 → 内容，避免每次消息都读磁盘 */
-const personaCache = new Map<string, string>();
-
-async function loadPersonaCached(personaPath: string): Promise<string> {
-  const cached = personaCache.get(personaPath);
-  if (cached !== undefined) return cached;
-  const { loadPersona } = await import('../../harness/agent-building/persona.js');
-  const content = await loadPersona(personaPath);
-  personaCache.set(personaPath, content);
-  return content;
-}
-
-/** 清除 persona 缓存（文件变更后调用） */
-export function clearPersonaCache(): void {
-  personaCache.clear();
-}
 import type { HookContext } from '../../harness/types/hook-context.js';
 import type { AgentEvent } from '../../core/primitives/event-bus.js';
 import type { ModelProvider } from '../../core/interfaces/model-provider.js';
@@ -295,7 +279,6 @@ export class Gateway {
 
     await this.runtime.stop();
     await this.pluginManager.onGatewayStop();
-    personaCache.clear();
     this.started = false;
     console.log('[Gateway] Stopped.');
   }
@@ -612,11 +595,9 @@ export class Gateway {
     agent: AgentDefinition,
     runner: SessionAwareRunner,
   ): Promise<void> {
-    let runSystemPrompt =
+    // 仅内联 persona 写入 defaults；文件式 persona 由 runner 的 resolver 每轮解析
+    const runSystemPrompt =
       typeof agent.persona === 'object' ? agent.persona?.systemPrompt ?? '' : '';
-    if (!runSystemPrompt && agent.home) {
-      runSystemPrompt = await loadPersonaCached(agent.home);
-    }
     let contextWindow = agent.model.contextWindow;
     if (!contextWindow) {
       const provider = this.providers.get(agent.model.provider);
@@ -685,14 +666,11 @@ export class Gateway {
       builder.tool(tool);
     }
 
-    // 设置 systemPrompt
-    let systemPrompt = typeof agent.persona === 'object' ? agent.persona?.systemPrompt ?? '' : '';
-    if (!systemPrompt && agent.home) {
-      // 从 home 目录加载 persona 文件
-      systemPrompt = await loadPersonaCached(agent.home);
-    }
-    if (systemPrompt) {
-      builder.systemPrompt(systemPrompt);
+    // 设置 systemPrompt：内联 persona 固定烤入；文件式 persona 走 builder.persona（run 时热更新）
+    if (typeof agent.persona === 'object' && agent.persona?.systemPrompt) {
+      builder.systemPrompt(agent.persona.systemPrompt);
+    } else if (agent.home) {
+      builder.persona(agent.home);
     }
 
     // 错误策略

@@ -12,7 +12,7 @@ export type { WebSearchToolOptions } from './plugin-ecosystem/tools/web-search.j
 
 // ── Agent Building ──
 export { AgentBuilder, createAgent } from './agent-building/builder.js';
-export { loadPersona, composePersonas } from './agent-building/persona.js';
+export { loadPersona, composePersonas, PersonaSource } from './agent-building/persona.js';
 export { buildFromConfig, buildFromConfigFile, resolveProviders, resolveSecurityConfig, resolveContextEngine, resolveRunGuard } from './agent-building/config-bridge.js';
 export type { BuiltAgent } from './agent-building/config-bridge.js';
 

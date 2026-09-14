@@ -59,13 +59,51 @@ export async function* agentLoop(
   const idleTimeoutMs = config.modelCallIdleTimeoutMs ?? 120_000;
   const absoluteTimeoutMs = config.modelCallAbsoluteTimeoutMs ?? 300_000;
 
-  // 将 systemPrompt 注入为 system 消息（如果尚未存在）
-  if (context.systemPrompt && !context.messages.some(m => m.role === 'system')) {
-    context.messages.unshift({
-      role: 'system',
-      content: context.systemPrompt,
-      timestamp: Date.now(),
-    });
+  // systemPrompt 是引擎托管 system 消息的权威来源。
+  // 不变量：托管 system 至多一条，且在 index 0；外部 system（metadata.source ≠ 'systemPrompt'）保留。
+  // 无 metadata 的历史 system 一律视为旧版引擎注入（迁移策略）；外部手工 system 必须带 source。
+  {
+    const isManaged = (m: { role: string; metadata?: Record<string, unknown> }): boolean =>
+      m.role === 'system' &&
+      (m.metadata?.source === 'systemPrompt' || m.metadata?.source === undefined);
+
+    const managedIndices: number[] = [];
+    for (let i = 0; i < context.messages.length; i++) {
+      if (isManaged(context.messages[i])) managedIndices.push(i);
+    }
+
+    if (context.systemPrompt) {
+      const managedMsg = {
+        role: 'system' as const,
+        content: context.systemPrompt,
+        timestamp: Date.now(),
+        metadata: { source: 'systemPrompt' as const },
+      };
+      if (managedIndices.length === 0) {
+        context.messages.unshift(managedMsg);
+      } else {
+        // 只保留首条 managed：内容未变则原地不动（避免 timestamp 抖动）
+        const firstIdx = managedIndices[0];
+        const existing = context.messages[firstIdx];
+        if (existing.content !== context.systemPrompt || existing.metadata?.source !== 'systemPrompt') {
+          context.messages[firstIdx] = { ...managedMsg };
+        }
+        // 删除其余 managed（历史脏数据 / 重复注入）
+        for (let n = managedIndices.length - 1; n >= 1; n--) {
+          context.messages.splice(managedIndices[n], 1);
+        }
+        // 托管 system 固定在 index 0
+        if (firstIdx !== 0) {
+          const [msg] = context.messages.splice(firstIdx, 1);
+          context.messages.unshift(msg);
+        }
+      }
+    } else {
+      // 热删除 / 清空 persona：摘除全部托管 system
+      for (let n = managedIndices.length - 1; n >= 0; n--) {
+        context.messages.splice(managedIndices[n], 1);
+      }
+    }
   }
 
   // 当前上下文（循环内直接修改 messages 引用）
