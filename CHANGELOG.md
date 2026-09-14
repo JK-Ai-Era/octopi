@@ -1,3 +1,35 @@
+## v0.24.1 (2026-09-15)
+
+### feat(cli): Gateway + WebUI 自托管跨平台（Windows / macOS / Linux）
+
+研发期自托管此前偏 macOS：`lsof`、`sleep`、直接 spawn 无扩展名 `vite` shim，在 Windows 上会失败；且 `serve start` 会因 WebUI 失败而整体退出。
+
+#### 新增 `src/cli/process-utils.ts`
+
+- `delay()` — 替代 Unix `sleep` 命令
+- `findPidOnPort()` — win32 用 `netstat -ano`，unix 保留 `lsof`
+- `killProcess()` — Windows 用 `taskkill /T /F` 杀进程树
+- `spawnDetached()` — 统一 `detached` + `windowsHide`
+- `resolveViteLaunch()` — 优先 `node .../vite/bin/vite.js`，避开 Windows `.cmd` shim
+
+#### serve 生命周期
+
+- `start`：WebUI 改为 soft 启动，失败只警告，Gateway 照常后台运行
+- `stop` / `restart`：跨平台杀进程；restart 后 PID/port 一致
+- `fg`：端口占用清理改为真正 `await killProcessOnPort`
+- 子进程写 PID 时携带配置中的真实 HTTP port（原先只认 `--port`，会被覆盖丢失）
+
+#### 其它
+
+- `npm test` / `test:coverage` 改为直接执行 `node_modules/vitest/vitest.mjs`（Windows 上 `.bin/vitest` 是 bash 脚本会语法错误）
+- 根目录脚本：`install:all`、`build:web`、`serve`、`web`
+- Web 前端支持 `VITE_OCTOPI_BASE` 覆盖 Gateway 地址
+- 新增 `tests/cli-process-utils.test.ts`
+
+### fix(deps): typescript-eslint 升至 ^8.70.0 以兼容 TypeScript 6
+
+`typescript-eslint@8.34.1` peer 上限为 `<5.9.0`，与 `typescript@^6.0.3` 冲突导致 `npm install` ERESOLVE 失败。8.70.0 peer 扩展至 `<6.1.0`。
+
 ## v0.24.0 (2026-09-15)
 
 ### fix(security): 二轮审查 — TEMP 顺序 / 文件工具覆盖 / 写入目标评估

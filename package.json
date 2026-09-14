@@ -1,6 +1,6 @@
 {
   "name": "octopi",
-  "version": "0.24.0",
+  "version": "0.24.1",
   "description": "可嵌入的 Agent 引擎",
   "type": "module",
   "main": "dist/index.js",
@@ -57,9 +57,13 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
-    "test": "node --experimental-vm-modules node_modules/.bin/vitest run",
+    "test": "node --experimental-vm-modules node_modules/vitest/vitest.mjs run",
     "lint": "eslint .",
-    "test:coverage": "node --experimental-vm-modules node_modules/.bin/vitest run --coverage"
+    "test:coverage": "node --experimental-vm-modules node_modules/vitest/vitest.mjs run --coverage",
+    "install:all": "npm install && npm --prefix web install",
+    "build:web": "npm --prefix web run build",
+    "serve": "node dist/cli/index.js serve fg",
+    "web": "npm --prefix web run dev"
   },
   "engines": {
     "node": ">=20"
@@ -71,7 +75,7 @@
     "@vitest/coverage-v8": "^4.1.7",
     "eslint": "^9.22.0",
     "typescript": "^6.0.3",
-    "typescript-eslint": "^8.34.1",
+    "typescript-eslint": "^8.70.0",
     "vitest": "^4.1.7"
   },
   "dependencies": {

@@ -3,10 +3,15 @@
  */
 
 import { resolve, dirname, join } from 'node:path';
-import { spawn } from 'node:child_process';
 import { readFileSync, writeFileSync, unlinkSync, existsSync } from 'node:fs';
 import { getOctopiHome } from '../init.js';
-import { readPidFile, isProcessAlive } from './daemon.js';
+import { readPidFile } from './daemon.js';
+import {
+  isProcessAlive,
+  killProcess,
+  resolveViteLaunch,
+  spawnDetached,
+} from './process-utils.js';
 
 export function findWebDir(configPath?: string): string | null {
   const candidates: string[] = [];
@@ -40,34 +45,13 @@ export function findWebDir(configPath?: string): string | null {
 }
 
 export function startWebUi(webDir: string): number | null {
-  try {
-    const viteBin = join(webDir, 'node_modules', '.bin', 'vite');
-    const child = spawn(viteBin, [], {
-      cwd: webDir,
-      detached: true,
-      stdio: 'ignore',
-    });
-    if (child.pid) {
-      child.unref();
-      return child.pid;
-    }
-    return null;
-  } catch {
-    return null;
-  }
+  const launch = resolveViteLaunch(webDir);
+  if (!launch) return null;
+  return spawnDetached(launch.command, launch.args, { cwd: webDir });
 }
 
 export async function stopWebUi(pid: number): Promise<void> {
-  if (!isProcessAlive(pid)) return;
-  try {
-    process.kill(pid, 'SIGTERM');
-    const deadline = Date.now() + 3000;
-    while (Date.now() < deadline) {
-      if (!isProcessAlive(pid)) return;
-      await new Promise((r) => setTimeout(r, 200));
-    }
-    process.kill(pid, 'SIGKILL');
-  } catch { /* already exited */ }
+  await killProcess(pid, { timeoutMs: 3000 });
 }
 
 export function getWebUiPidPath(): string {

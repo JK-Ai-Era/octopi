@@ -14,7 +14,16 @@ import {
 } from './helpers.js';
 import { isProcessAlive } from './daemon.js';
 
-export async function webuiStartCommand(configPath?: string): Promise<void> {
+export interface WebUiStartOptions {
+  /** soft: 失败只警告，不 process.exit（供 serve start 使用） */
+  soft?: boolean;
+}
+
+export async function webuiStartCommand(
+  configPath?: string,
+  options?: WebUiStartOptions,
+): Promise<void> {
+  const soft = options?.soft === true;
   const existingPid = readWebUiPidFile();
   if (existingPid && isProcessAlive(existingPid)) {
     console.log(`⚠️  Web UI is already running (PID: ${existingPid})`);
@@ -26,6 +35,10 @@ export async function webuiStartCommand(configPath?: string): Promise<void> {
 
   const webDir = findWebDir(configPath);
   if (!webDir) {
+    if (soft) {
+      console.warn('⚠️  Web UI directory not found, skipping Web UI');
+      return;
+    }
     console.error('❌ Web UI directory not found. Searched:');
     console.error('   - $OCTOPI_WEB_DIR (if set)');
     console.error('   - Config file directory + /web');
@@ -35,7 +48,13 @@ export async function webuiStartCommand(configPath?: string): Promise<void> {
 
   const pid = startWebUi(webDir);
   if (!pid) {
+    if (soft) {
+      console.warn('⚠️  Failed to start Web UI (is web/ installed?). Gateway continues without it.');
+      console.warn('   Run: npm --prefix web install');
+      return;
+    }
     console.error('❌ Failed to start Web UI');
+    console.error('   Ensure dependencies are installed: npm --prefix web install');
     process.exit(1);
   }
 

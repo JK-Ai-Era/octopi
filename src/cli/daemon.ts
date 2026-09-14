@@ -3,7 +3,7 @@
  */
 
 import { resolve, dirname, join } from 'node:path';
-import { fork, execSync, spawn } from 'node:child_process';
+import { fork } from 'node:child_process';
 import { readFileSync, writeFileSync, unlinkSync, existsSync, mkdirSync } from 'node:fs';
 import type { CliArgs } from './args.js';
 import { getOctopiHome, isInitialized, initOctopi, formatInitReport } from '../init.js';
@@ -15,6 +15,16 @@ import { OpenAIProvider } from '../integration/providers/openai.js';
 import { AnthropicProvider } from '../integration/providers/anthropic.js';
 import { Gateway } from '../integration/gateway/gateway.js';
 import { webuiStartCommand, webuiStopCommand } from './webui.js';
+import {
+  delay,
+  findPidOnPort,
+  isProcessAlive,
+  killProcess,
+  killProcessOnPort,
+} from './process-utils.js';
+
+// Re-export for existing importers (commands.ts / helpers.ts)
+export { findPidOnPort, isProcessAlive, killProcessOnPort };
 
 interface DaemonPidFile {
   pid: number;
@@ -47,49 +57,6 @@ export function removePidFile(): void {
   const pidPath = getPidPath();
   if (existsSync(pidPath)) {
     try { unlinkSync(pidPath); } catch { /* ignore */ }
-  }
-}
-
-export function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-export function findPidOnPort(port: number): number | null {
-  try {
-    const result = execSync(`lsof -nP -sTCP:LISTEN -iTCP:${port}`, { encoding: 'utf-8', timeout: 5000 }).trim();
-    if (!result) return null;
-    const lines = result.split('\n').slice(1);
-    for (const line of lines) {
-      const parts = line.split(/\s+/);
-      const pid = parseInt(parts[1], 10);
-      if (pid > 0 && pid !== process.pid) return pid;
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-export function killProcessOnPort(port: number): boolean {
-  const pid = findPidOnPort(port);
-  if (!pid || pid === process.pid) return false;
-
-  try {
-    process.kill(pid, 'SIGTERM');
-    const deadline = Date.now() + 3000;
-    while (Date.now() < deadline) {
-      if (!isProcessAlive(pid)) return true;
-      execSync('sleep 0.2');
-    }
-    process.kill(pid, 'SIGKILL');
-    return true;
-  } catch {
-    return false;
   }
 }
 
@@ -182,8 +149,8 @@ export async function serveStartCommand(args: CliArgs): Promise<void> {
   console.log(`   Config: ${configPath ?? join(getOctopiHome(), 'octopi.json')}`);
   console.log(`   Port:   ${port}`);
 
-  // 启动 Web UI
-  await webuiStartCommand(configPath);
+  // Web UI 为可选：失败不拖垮 Gateway（跨平台/无 web 依赖时仍可 serve）
+  await webuiStartCommand(configPath, { soft: true });
 
   console.log(`\nUse 'octopi serve stop' to stop, 'octopi serve status' to check.`);
   process.exit(0);
@@ -203,17 +170,10 @@ export async function serveStopCommand(): Promise<void> {
   }
 
   console.log(`🛑 Stopping Gateway (PID: ${pidFile.pid})...`);
-  try {
-    process.kill(pidFile.pid, 'SIGTERM');
-    const deadline = Date.now() + 5000;
-    while (Date.now() < deadline) {
-      if (!isProcessAlive(pidFile.pid)) break;
-      await new Promise((r) => setTimeout(r, 200));
-    }
-    if (isProcessAlive(pidFile.pid)) {
-      process.kill(pidFile.pid, 'SIGKILL');
-    }
-  } catch { /* already exited */ }
+  const stopped = await killProcess(pidFile.pid, { timeoutMs: 5000 });
+  if (!stopped) {
+    console.warn(`⚠️  Gateway PID ${pidFile.pid} may still be running`);
+  }
 
   removePidFile();
   console.log('✅ Gateway stopped.');
@@ -224,7 +184,7 @@ export async function serveStopCommand(): Promise<void> {
 
 export async function serveRestartCommand(args: CliArgs): Promise<void> {
   await serveStopCommand();
-  await new Promise((r) => setTimeout(r, 500));
+  await delay(500);
   await serveStartCommand(args);
 }
 
@@ -255,8 +215,8 @@ export async function serveFgCommand(args: CliArgs): Promise<void> {
   const portPid = findPidOnPort(port);
   if (portPid && portPid !== process.pid) {
     console.log(`⚠️  Port ${port} is occupied by PID ${portPid}. Killing...`);
-    killProcessOnPort(port);
-    await new Promise((r) => setTimeout(r, 500));
+    await killProcessOnPort(port);
+    await delay(500);
   }
 
   const configPath = await ensureDaemonConfig(args);
@@ -356,15 +316,16 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
   });
 
   const httpConfig = config.channels?.find((c: any) => c.type === 'http');
-  if (httpConfig) {
+  const listenPort = args.port ?? httpConfig?.port ?? 3000;
+  if (httpConfig || args.port) {
     const { HttpChannelAdapter } = await import('../integration/protocols/http.js');
     const { WebApiRouter } = await import('../integration/web/api/router.js');
     const webApiRouter = new WebApiRouter({ gateway, basePath: '/api/v1' });
     gateway.registerChannel(new HttpChannelAdapter({
-      port: httpConfig.port ?? args.port ?? 3000,
-      path: httpConfig.path ?? '/messages',
-      apiKey: httpConfig.apiKey,
-      corsOrigins: httpConfig.corsOrigins,
+      port: listenPort,
+      path: httpConfig?.path ?? '/messages',
+      apiKey: httpConfig?.apiKey,
+      corsOrigins: httpConfig?.corsOrigins,
       onRequest: (req, res) => webApiRouter.handle(req, res),
     }));
   }
@@ -382,7 +343,7 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
   writePidFile({
     pid: process.pid,
     config: configPath ?? join(getOctopiHome(), 'octopi.json'),
-    port: args.port,
+    port: httpConfig || args.port ? listenPort : undefined,
     startedAt: new Date().toISOString(),
   });
 
