@@ -1,19 +1,17 @@
 /**
  * Memory Extractor Subsystem — Handler
  *
- * 定义文件驱动的子系统 handler。支持两种模式：
- * - code（纯规则）：规则提取 → 去重 → 阈值 → 入库
- * - hybrid（规则+LLM）：规则提取 → LLM 语义增强 → 合并 → 去重 → 阈值 → 入库
+ * implementation: code。流水线：
+ * 规则提取 → 可选 llmPort.chat 语义增强 → 合并 → 去重 → 阈值 → 入库。
  *
- * 配置通过注入依赖 `__subsystem_config__` 传入（由 SubsystemRuntime 从 spec.metadata.config 自动注入）。
- * 无模块级状态，支持多实例隔离。
+ * 认知指令（system prompt）来自 SUBSYSTEM.md，由框架绑定进 llmPort。
+ * 业务配置经 `__subsystem_config__` 注入。
  *
  * @module subsystems/memory-extractor/handler
  */
 
 import type { SubsystemInput, SubsystemOutput, InjectedDependencies } from '../../harness/autonomous-subsystem/types.js';
-import type { MemoryStore, MemoryType } from '../../harness/memory/types.js';
-import type { ModelProvider } from '../../core/interfaces/model-provider.js';
+import type { MemoryStore } from '../../harness/memory/types.js';
 import type {
   SessionExtractBundle,
   SessionExtractEvent,
@@ -24,7 +22,8 @@ import { MemoryDeduplicator } from './policies/dedup.js';
 import { defaultThresholdPolicy, type ThresholdPolicyInput } from './policies/threshold.js';
 import { enrichWithLLM } from './llm-enrichment.js';
 import type { MemoryExtractorConfig } from './types.js';
-import { DEP_MEMORY_STORE, DEP_MODEL_PROVIDER, DEP_CONFIG, DEFAULT_CONFIG } from './types.js';
+import { DEP_MEMORY_STORE, DEP_CONFIG, DEFAULT_CONFIG } from './types.js';
+import { DEP_LLM_PORT, type SubsystemLLMPort } from '../../harness/autonomous-subsystem/index.js';
 
 // ── 规则信号函数（语言无关） ──
 
@@ -116,7 +115,7 @@ function resolveConfig(deps?: InjectedDependencies): MemoryExtractorConfig {
  * memory-extractor 子系统的核心执行函数
  *
  * @param input - 子系统输入（payload 中携带 SessionExtractBundle）
- * @param deps - 注入依赖（memoryStore、可选 modelProvider、可选 __subsystem_config__）
+ * @param deps - memoryStore（runtimeInject）+ llmPort（框架自动注入）+ __subsystem_config__
  */
 async function handler(input: SubsystemInput, deps?: InjectedDependencies): Promise<SubsystemOutput> {
   const config = resolveConfig(deps);
@@ -145,13 +144,18 @@ async function handler(input: SubsystemInput, deps?: InjectedDependencies): Prom
   // ── Step 1: 规则提取 ──
   const ruleCandidates = extractCandidates(bundle);
 
-  // ── Step 2: LLM 语义增强（hybrid 模式，可选） ──
+  // ── Step 2: LLM 语义增强（可选；system 已由 llmPort 绑定 SUBSYSTEM.md） ──
+  const llmPort = deps?.[DEP_LLM_PORT] as SubsystemLLMPort | undefined;
+  const useLLM = Boolean(llmPort && config.llmEnrichment);
+  const mode = useLLM ? 'hybrid' : 'code';
   let llmCandidates: MemoryCandidate[] = [];
-  const modelProvider = (deps?.[DEP_MODEL_PROVIDER] ?? undefined) as ModelProvider | undefined;
-  if (modelProvider && config.llmEnrichment) {
-    // 优先使用运行时解析的实际模型名（来自 ModelResolver），降级到配置中的级别名
-    const resolvedModel = (deps?.['__resolved_model__'] as string | undefined) ?? config.llmEnrichment.model;
-    llmCandidates = await enrichWithLLM(modelProvider, bundle, ruleCandidates, { ...config.llmEnrichment, model: resolvedModel });
+  if (useLLM && llmPort && config.llmEnrichment) {
+    llmCandidates = await enrichWithLLM(
+      (req) => llmPort.chat(req),
+      bundle,
+      ruleCandidates,
+      config.llmEnrichment,
+    );
   }
 
   // ── Step 3: 合并候选 ──
@@ -186,7 +190,6 @@ async function handler(input: SubsystemInput, deps?: InjectedDependencies): Prom
   }
 
   // ── Step 7: 返回信号 ──
-  const mode = modelProvider && config.llmEnrichment ? 'hybrid' : 'code';
   return {
     act: {
       mode: 'inject',
@@ -222,26 +225,26 @@ async function handler(input: SubsystemInput, deps?: InjectedDependencies): Prom
 // ── 便捷调用入口（供测试和直接使用） ──
 
 /**
- * 直接调用 handler 的便捷函数
- *
- * 绕过 SubsystemRuntime，手动组装 deps。
- * 适用于测试和嵌入式场景。
+ * 直接调用 handler 的便捷函数（测试 / 嵌入式）
  *
  * @param input - 子系统输入
  * @param memoryStore - 记忆存储
- * @param options - 可选配置（config、modelProvider）
+ * @param options - config 与可选 llmPort（生产路径由 SubsystemRuntime 注入）
  */
 export async function callHandler(
   input: SubsystemInput,
   memoryStore: MemoryStore,
-  options?: { config?: Partial<MemoryExtractorConfig>; modelProvider?: ModelProvider },
+  options?: {
+    config?: Partial<MemoryExtractorConfig>;
+    llmPort?: SubsystemLLMPort;
+  },
 ): Promise<SubsystemOutput> {
   const deps: InjectedDependencies = {
     [DEP_MEMORY_STORE]: memoryStore,
     [DEP_CONFIG]: { ...DEFAULT_CONFIG, ...options?.config },
   };
-  if (options?.modelProvider) {
-    deps[DEP_MODEL_PROVIDER] = options.modelProvider;
+  if (options?.llmPort) {
+    deps[DEP_LLM_PORT] = options.llmPort;
   }
   return handler(input, deps);
 }
@@ -254,7 +257,7 @@ export default {
     input: 'SessionExtractBundle',
     output: 'ExtractionResult',
   },
-  dependencies: [DEP_MEMORY_STORE, DEP_MODEL_PROVIDER],
+  dependencies: [DEP_MEMORY_STORE],
 };
 
 // 传统导出（向后兼容）

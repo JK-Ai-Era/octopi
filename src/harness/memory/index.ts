@@ -36,7 +36,7 @@ export type { BackpressureOptions } from './extraction/backpressure.js';
 
 // ── Memory Extractor Subsystem ──
 export { extractCandidates, callHandler as callMemoryExtractorHandler } from '../../subsystems/memory-extractor/handler.js';
-export type { MemoryExtractorDeps, MemoryExtractorConfig } from '../../subsystems/memory-extractor/types.js';
+export type { MemoryExtractorConfig } from '../../subsystems/memory-extractor/types.js';
 export type {
   SessionExtractEventType,
   SessionExtractEvent,
@@ -53,5 +53,4 @@ export type { MemoryDeduplicatorOptions } from '../../subsystems/memory-extracto
 export { createProfileThresholdPolicy } from '../../subsystems/memory-extractor/policies/profile-threshold.js';
 export type { ProfileThresholdConfig } from '../../subsystems/memory-extractor/policies/profile-threshold.js';
 export { enrichWithLLM, condenseEvents } from '../../subsystems/memory-extractor/llm-enrichment.js';
-export type { LLMEnrichmentConfig } from '../../subsystems/memory-extractor/llm-enrichment.js';
-export { DEP_MODEL_PROVIDER } from '../../subsystems/memory-extractor/types.js';
+export type { LLMEnrichmentConfig, EnrichmentChat } from '../../subsystems/memory-extractor/llm-enrichment.js';

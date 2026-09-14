@@ -1,21 +1,13 @@
 /**
  * Memory Extractor Subsystem — LLM 语义增强
  *
- * 在规则提取之后，用 LLM 从 bundle 中提取规则引擎无法识别的隐式记忆：
- * - 隐式偏好（"我觉得这样更好"但没有明确 constraint_set）
- * - 隐式决策（讨论后达成共识但无 decision_made 事件）
- * - 跨语言理解（中英混合、多语言场景）
- * - 上下文感知的经验教训（不是简单的 failure→fix，而是语义层面的"为什么"）
- *
- * 设计：
- * - 纯函数，接收 bundle + rule candidates，返回 LLM 候选
- * - 不做去重/阈值（由 handler 统一处理）
- * - 输出格式严格 JSON，解析失败返回空数组（不阻断流程）
+ * 在规则提取之后，用 LLM 从 bundle 中提取规则引擎无法识别的隐式记忆。
+ * **不内置 system prompt**：认知指令来自 SUBSYSTEM.md，经 llmPort 注入。
  *
  * @module subsystems/memory-extractor/llm-enrichment
  */
 
-import type { ModelProvider, LLMMessage } from '../../core/interfaces/model-provider.js';
+import type { LLMMessage, LLMResponse } from '../../core/interfaces/model-provider.js';
 import type {
   SessionExtractBundle,
   SessionExtractEvent,
@@ -25,13 +17,19 @@ import type {
 // ── 配置 ──
 
 export interface LLMEnrichmentConfig {
-  /** 使用的模型（如 'mini'、'standard'，传给 ModelProvider.chat 的 model 字段） */
-  model?: string;
   /** 最大输出 token */
   maxTokens?: number;
   /** 温度（默认 0.3，低温度保证输出稳定） */
   temperature?: number;
 }
+
+/** 增强用的单次 LLM 调用（通常为 llmPort.chat） */
+export type EnrichmentChat = (request: {
+  messages: LLMMessage[];
+  model?: string;
+  temperature?: number;
+  maxTokens?: number;
+}) => Promise<LLMResponse>;
 
 // ── 事件压缩 ──
 
@@ -97,46 +95,7 @@ export function condenseEvents(events: SessionExtractEvent[]): string {
   return lines.join('\n');
 }
 
-// ── Prompt 构建 ──
-
-const SYSTEM_PROMPT = `你是一个记忆提取专家。你的任务是从一段会话事件记录中提取值得长期记住的信息。
-
-## 提取类型
-
-1. **preference** — 用户的偏好、习惯、风格要求。可能是明确的约束，也可能是隐含的态度（"我觉得这样更好"、"别用这种写法"）
-2. **decision** — 会话中做出的技术决策、方案选择。可能是明确的，也可能是讨论后达成的共识
-3. **lesson** — 从失败中学到的经验。重点关注"为什么会失败"和"怎样修好的"，而不只是"失败了"
-4. **discovery** — 重要发现、关键洞察、总结性结论
-
-## 提取原则
-
-- 提取具体内容，不要泛化。"用户偏好 ESM" 比 "用户有偏好" 有价值得多
-- 保留原始语言（中文就输出中文，英文就输出英文，混合就混合）
-- 置信度反映证据强度：有明确事件支撑的高，仅有暗示的低
-- 重要性反映长期价值：反复出现的偏好高，一次性的临时决定低
-- 如果规则提取已经覆盖了某个记忆，你仍然可以提取——但要提供更丰富的内容或更准确的分类
-- 如果会话没有值得记住的内容，返回空数组
-
-## 输出格式
-
-严格输出 JSON 数组，不要输出其他内容：
-
-\`\`\`json
-[
-  {
-    "type": "preference",
-    "content": "具体的记忆内容",
-    "confidence": 0.85,
-    "importance": 0.7,
-    "evidence": ["支撑证据1", "支撑证据2"]
-  }
-]
-\`\`\`
-
-如果没有任何值得提取的记忆：
-\`\`\`json
-[]
-\`\`\``;
+// ── Prompt 构建（仅 user 消息；system 由 llmPort 绑定 SUBSYSTEM.md） ──
 
 /**
  * 构建用户消息
@@ -252,14 +211,14 @@ function parseLLMOutput(output: unknown[]): MemoryCandidate[] {
 /**
  * LLM 语义增强：从 bundle 中提取规则引擎无法识别的隐式记忆
  *
- * @param modelProvider - LLM 调用接口
+ * @param chat - 单次 LLM 调用（llmPort.chat；system prompt 已由 port 绑定）
  * @param bundle - 会话素材包
  * @param ruleCandidates - 规则引擎已提取的候选（供 LLM 参考）
- * @param config - LLM 配置
+ * @param config - LLM 配置（模型名 / 温度 / maxTokens）
  * @returns LLM 提取的候选列表；调用失败时返回空数组（不阻断流程）
  */
 export async function enrichWithLLM(
-  modelProvider: ModelProvider,
+  chat: EnrichmentChat,
   bundle: SessionExtractBundle,
   ruleCandidates: MemoryCandidate[],
   config?: LLMEnrichmentConfig,
@@ -270,15 +229,10 @@ export async function enrichWithLLM(
   const condensed = condenseEvents(bundle.events);
   const userMessage = buildUserMessage(bundle, condensed, ruleCandidates);
 
-  const messages: LLMMessage[] = [
-    { role: 'system', content: SYSTEM_PROMPT },
-    { role: 'user', content: userMessage },
-  ];
-
   try {
-    const response = await modelProvider.chat({
-      messages,
-      model: config?.model ?? 'mini',
+    // 不传 model：使用 llmPort 按 think.model 解析后的默认链（含 fallback）
+    const response = await chat({
+      messages: [{ role: 'user', content: userMessage }],
       maxTokens: config?.maxTokens ?? 2048,
       temperature: config?.temperature ?? 0.3,
     });

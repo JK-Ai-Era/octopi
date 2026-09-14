@@ -3,6 +3,11 @@ import { InMemoryMemoryStore } from '../../../src/harness/memory/store.js';
 import { callHandler } from '../../../src/subsystems/memory-extractor/handler.js';
 import type { SessionExtractBundle } from '../../../src/harness/memory/extraction/session-extractor.js';
 import type { ModelProvider, LLMResponse } from '../../../src/core/interfaces/model-provider.js';
+import {
+  createSubsystemLLMPort,
+  ModelResolver,
+  type SubsystemLLMPort,
+} from '../../../src/harness/autonomous-subsystem/index.js';
 
 function mockModelProvider(llmResponse: string): ModelProvider {
   return {
@@ -22,6 +27,15 @@ function mockModelProvider(llmResponse: string): ModelProvider {
   };
 }
 
+function makePort(provider: ModelProvider, cognitivePrompt?: string): SubsystemLLMPort {
+  return createSubsystemLLMPort({
+    provider,
+    modelResolver: new ModelResolver({ levels: {}, defaultProvider: provider.name }),
+    modelRef: 'mini',
+    cognitivePrompt,
+  });
+}
+
 function baseBundle(overrides?: Partial<SessionExtractBundle>): SessionExtractBundle {
   return {
     sessionId: 's-hybrid-1',
@@ -36,7 +50,7 @@ function baseBundle(overrides?: Partial<SessionExtractBundle>): SessionExtractBu
 }
 
 describe('memory-extractor hybrid mode (LLM enrichment)', () => {
-  it('should combine rule and LLM candidates in hybrid mode', async () => {
+  it('should combine rule and LLM candidates when llmPort is injected', async () => {
     const memoryStore = new InMemoryMemoryStore();
     const llmOutput = JSON.stringify([
       {
@@ -63,7 +77,7 @@ describe('memory-extractor hybrid mode (LLM enrichment)', () => {
     } as any;
 
     const result = await callHandler(input, memoryStore, {
-      modelProvider: mockModelProvider(llmOutput),
+      llmPort: makePort(mockModelProvider(llmOutput), '你是一个记忆提取专家。'),
       config: { llmEnrichment: { model: 'mini' } },
     });
 
@@ -80,7 +94,7 @@ describe('memory-extractor hybrid mode (LLM enrichment)', () => {
     expect(llmEntry!.content).toContain('简洁');
   });
 
-  it('should fallback to code mode when LLM fails', async () => {
+  it('should fall back to rule-only results when LLM fails', async () => {
     const memoryStore = new InMemoryMemoryStore();
     const failingProvider: ModelProvider = {
       name: 'mock-fail',
@@ -106,7 +120,7 @@ describe('memory-extractor hybrid mode (LLM enrichment)', () => {
     } as any;
 
     const result = await callHandler(input, memoryStore, {
-      modelProvider: failingProvider,
+      llmPort: makePort(failingProvider),
       config: { llmEnrichment: { model: 'mini' } },
     });
 
@@ -116,7 +130,7 @@ describe('memory-extractor hybrid mode (LLM enrichment)', () => {
     expect(result.signals[0].data?.ruleCandidateCount).toBeGreaterThanOrEqual(1);
   });
 
-  it('should use code mode when no modelProvider is injected', async () => {
+  it('should use code mode when no llmPort is injected', async () => {
     const memoryStore = new InMemoryMemoryStore();
     const bundle = baseBundle({
       events: [
@@ -130,7 +144,9 @@ describe('memory-extractor hybrid mode (LLM enrichment)', () => {
       sessionMetadata: { agentId: 'a1', sessionId: 's-code-1', turnCount: 1 },
     } as any;
 
-    const result = await callHandler(input, memoryStore);
+    const result = await callHandler(input, memoryStore, {
+      config: { llmEnrichment: { model: 'mini' } },
+    });
     expect(result.signals[0].data?.mode).toBe('code');
     expect(result.signals[0].data?.llmCandidateCount).toBe(0);
   });
