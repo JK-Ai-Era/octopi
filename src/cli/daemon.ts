@@ -60,6 +60,66 @@ export function removePidFile(): void {
   }
 }
 
+/** 从配置解析 Gateway 监听端口 */
+export function resolveListenPort(
+  args: Pick<CliArgs, 'port' | 'config'>,
+  configPath?: string,
+): number {
+  if (args.port) return args.port;
+  const path = configPath ?? args.config;
+  try {
+    const config = loadConfig(path);
+    const httpChannel = config.channels?.find((c: { type: string }) => c.type === 'http');
+    if (httpChannel?.port) return httpChannel.port;
+  } catch { /* fall through */ }
+  return 3000;
+}
+
+/**
+ * 解析当前 Gateway 的真实 PID
+ *
+ * 优先端口占用者（最可靠）；其次 pid 文件且进程存活。
+ * Windows 上 fork 返回的 pid 与子进程 process.pid 可能不一致，
+ * 不能只信 serve start 写下的 pid。
+ */
+export function resolveGatewayPid(args: Pick<CliArgs, 'port' | 'config'>, configPath?: string): {
+  pid: number | null;
+  port: number;
+  source: 'port' | 'pidfile' | 'none';
+} {
+  const port = resolveListenPort(args, configPath);
+  const portPid = findPidOnPort(port);
+  if (portPid && portPid !== process.pid) {
+    return { pid: portPid, port, source: 'port' };
+  }
+  const pidFile = readPidFile();
+  if (pidFile && isProcessAlive(pidFile.pid) && pidFile.pid !== process.pid) {
+    return { pid: pidFile.pid, port: pidFile.port ?? port, source: 'pidfile' };
+  }
+  return { pid: null, port, source: 'none' };
+}
+
+async function waitGatewayReady(port: number, timeoutMs = 20_000): Promise<number | null> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const portPid = findPidOnPort(port);
+    if (portPid && portPid !== process.pid) {
+      return portPid;
+    }
+    // health 探测兜底（端口表可能稍慢）
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/health`, {
+        signal: AbortSignal.timeout(800),
+      });
+      if (res.ok) {
+        return findPidOnPort(port);
+      }
+    } catch { /* not ready */ }
+    await delay(300);
+  }
+  return null;
+}
+
 export function createProvider(name: string, cfg: ModelProviderConfig): ModelProvider | null {
   const apiType = cfg.api === 'anthropic-messages' ? 'anthropic' : 'openai';
   const models = cfg.models.map((m) => ({
@@ -103,18 +163,17 @@ export async function ensureDaemonConfig(args: CliArgs): Promise<string | undefi
 }
 
 export async function serveStartCommand(args: CliArgs): Promise<void> {
-  const existingPidFile = readPidFile();
-  if (existingPidFile && isProcessAlive(existingPidFile.pid)) {
-    console.log(`⚠️  Gateway is already running (PID: ${existingPidFile.pid})`);
+  const configPath = await ensureDaemonConfig(args);
+  const existing = resolveGatewayPid(args, configPath);
+  if (existing.pid) {
+    console.log(`⚠️  Gateway is already running (PID: ${existing.pid}, port ${existing.port})`);
     console.log(`\nUse 'octopi serve restart' to restart, or 'octopi serve stop' to stop.`);
     return;
   }
 
   removePidFile();
 
-  const configPath = await ensureDaemonConfig(args);
   const cliPath = resolve(process.argv[1]);
-
   const childArgs = ['serve', 'fg'];
   if (configPath) childArgs.push('--config', configPath);
   if (args.port) childArgs.push('--port', String(args.port));
@@ -134,18 +193,27 @@ export async function serveStartCommand(args: CliArgs): Promise<void> {
     process.exit(1);
   }
 
-  const config = loadConfig(configPath);
-  const httpChannel = config.channels?.find((c: any) => c.type === 'http');
-  const port = args.port ?? httpChannel?.port ?? 3000;
+  const port = resolveListenPort(args, configPath);
+  console.log(`⏳ Waiting for Gateway on port ${port}...`);
+  const realPid = await waitGatewayReady(port);
 
+  if (!realPid) {
+    console.error('❌ Gateway did not become ready within 20s');
+    console.error(`   Check logs / try: octopi serve fg -c ${configPath ?? '<config>'}`);
+    // 尽量回收 fork 出的子进程树
+    await killProcess(child.pid, { timeoutMs: 2000 }).catch(() => undefined);
+    process.exit(1);
+  }
+
+  // 以端口探测到的真实 PID 覆盖，避免 Windows fork pid 不一致
   writePidFile({
-    pid: child.pid,
+    pid: realPid,
     config: configPath ?? join(getOctopiHome(), 'octopi.json'),
     port,
     startedAt: new Date().toISOString(),
   });
 
-  console.log(`✅ Gateway started (PID: ${child.pid})`);
+  console.log(`✅ Gateway started (PID: ${realPid})`);
   console.log(`   Config: ${configPath ?? join(getOctopiHome(), 'octopi.json')}`);
   console.log(`   Port:   ${port}`);
 
@@ -156,70 +224,89 @@ export async function serveStartCommand(args: CliArgs): Promise<void> {
   process.exit(0);
 }
 
-export async function serveStopCommand(): Promise<void> {
+export async function serveStopCommand(args: Pick<CliArgs, 'port'> = {}): Promise<void> {
+  const resolved = resolveGatewayPid(args);
   const pidFile = readPidFile();
-  if (!pidFile) {
-    console.log('ℹ️  No Gateway instance found.');
+
+  const targets = new Set<number>();
+  if (resolved.pid) targets.add(resolved.pid);
+  if (pidFile && isProcessAlive(pidFile.pid)) targets.add(pidFile.pid);
+
+  if (targets.size === 0) {
+    if (pidFile || resolved.source === 'none') {
+      removePidFile();
+      console.log('ℹ️  No running Gateway found (cleaned PID file if any).');
+    }
+    await webuiStopCommand();
     return;
   }
 
-  if (!isProcessAlive(pidFile.pid)) {
-    console.log('ℹ️  Gateway process is not running. Cleaning up PID file.');
-    removePidFile();
-    return;
+  for (const pid of targets) {
+    console.log(`🛑 Stopping Gateway (PID: ${pid})...`);
+    const stopped = await killProcess(pid, { timeoutMs: 5000 });
+    if (!stopped) {
+      console.warn(`⚠️  Gateway PID ${pid} may still be running`);
+    }
   }
 
-  console.log(`🛑 Stopping Gateway (PID: ${pidFile.pid})...`);
-  const stopped = await killProcess(pidFile.pid, { timeoutMs: 5000 });
-  if (!stopped) {
-    console.warn(`⚠️  Gateway PID ${pidFile.pid} may still be running`);
+  // 端口清理兜底
+  const portPid = findPidOnPort(resolved.port);
+  if (portPid && portPid !== process.pid) {
+    console.log(`🛑 Freeing port ${resolved.port} (PID: ${portPid})...`);
+    await killProcess(portPid, { timeoutMs: 3000 });
   }
 
   removePidFile();
   console.log('✅ Gateway stopped.');
 
-  // 停止 Web UI
   await webuiStopCommand();
 }
 
 export async function serveRestartCommand(args: CliArgs): Promise<void> {
-  await serveStopCommand();
+  await serveStopCommand(args);
   await delay(500);
   await serveStartCommand(args);
 }
 
-export async function serveStatusCommand(): Promise<void> {
+export async function serveStatusCommand(args: Pick<CliArgs, 'port' | 'config'> = {}): Promise<void> {
   const pidFile = readPidFile();
-  if (!pidFile) {
+  const resolved = resolveGatewayPid(args, args.config);
+
+  if (!pidFile && !resolved.pid) {
     console.log('ℹ️  No Gateway instance found.');
     return;
   }
 
-  const alive = isProcessAlive(pidFile.pid);
+  const alive = resolved.pid !== null;
   console.log(`\n🐙 Gateway Status\n`);
-  console.log(`  PID:       ${pidFile.pid}`);
+  console.log(`  PID:       ${resolved.pid ?? pidFile?.pid ?? '—'}`);
   console.log(`  Status:    ${alive ? '🟢 Running' : '🔴 Stopped'}`);
-  console.log(`  Config:    ${pidFile.config}`);
-  console.log(`  Started:   ${pidFile.startedAt}`);
-  if (pidFile.port) console.log(`  Port:      ${pidFile.port}`);
+  console.log(`  Source:    ${resolved.source}`);
+  if (pidFile?.config) console.log(`  Config:    ${pidFile.config}`);
+  if (pidFile?.startedAt) console.log(`  Started:   ${pidFile.startedAt}`);
+  console.log(`  Port:      ${resolved.port}`);
   console.log();
 
-  if (!alive) {
-    console.log('  ⚠️  Process is not running. PID file is stale.');
+  if (!alive && pidFile) {
+    console.log('  ⚠️  PID file is stale (no listener on port / process dead).');
     console.log(`     Run 'octopi serve start' to start a new instance.\n`);
+  }
+  if (alive && pidFile && pidFile.pid !== resolved.pid) {
+    console.log(`  ℹ️  PID file (${pidFile.pid}) differs from live process (${resolved.pid}).`);
+    console.log(`     Status/stop use the live process.\n`);
   }
 }
 
 export async function serveFgCommand(args: CliArgs): Promise<void> {
-  const port = args.port ?? 3000;
+  const configPath = await ensureDaemonConfig(args);
+  const port = resolveListenPort(args, configPath);
   const portPid = findPidOnPort(port);
   if (portPid && portPid !== process.pid) {
     console.log(`⚠️  Port ${port} is occupied by PID ${portPid}. Killing...`);
-    await killProcessOnPort(port);
+    await killProcess(portPid, { timeoutMs: 3000 });
     await delay(500);
   }
 
-  const configPath = await ensureDaemonConfig(args);
   await startGatewayBlocking(configPath, args);
 }
 
@@ -228,11 +315,11 @@ export async function serveCommand(args: CliArgs): Promise<void> {
     case 'start':
       return serveStartCommand(args);
     case 'stop':
-      return serveStopCommand();
+      return serveStopCommand(args);
     case 'restart':
       return serveRestartCommand(args);
     case 'status':
-      return serveStatusCommand();
+      return serveStatusCommand(args);
     case 'fg':
       return serveFgCommand(args);
     case undefined:

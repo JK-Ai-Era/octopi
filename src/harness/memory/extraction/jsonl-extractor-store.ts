@@ -17,13 +17,28 @@
  * @module harness/memory/extraction/jsonl-extractor-store
  */
 
-import { access, mkdir, readFile, writeFile, appendFile, readdir } from 'node:fs/promises';
+import { access, mkdir, readFile, writeFile, appendFile, readdir, rename } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { SessionExtractBundle, SessionExtractEvent } from '../../../subsystems/memory-extractor/contracts/bundle.js';
 import type { ExtractorMeta, ExtractorStore } from './extractor-store.js';
+import { toSessionFileName, legacySessionFileName } from '../../../integration/storage/session-filename.js';
 
 async function exists(p: string): Promise<boolean> {
   try { await access(p); return true; } catch { return false; }
+}
+
+/** 优先安全名；回退旧版原始 sessionId 文件名，并就地迁移 */
+async function resolvePath(preferred: string, legacy: string | null): Promise<string | null> {
+  if (await exists(preferred)) return preferred;
+  if (legacy && await exists(legacy)) {
+    try {
+      await rename(legacy, preferred);
+      return preferred;
+    } catch {
+      return legacy;
+    }
+  }
+  return null;
 }
 
 export class JsonlExtractorStore implements ExtractorStore {
@@ -38,15 +53,30 @@ export class JsonlExtractorStore implements ExtractorStore {
   }
 
   private eventsFile(agentId: string, sessionId: string): string {
-    return join(this.base(agentId), 'events', `${sessionId}.jsonl`);
+    return join(this.base(agentId), 'events', `${toSessionFileName(sessionId)}.jsonl`);
+  }
+
+  private legacyEventsFile(agentId: string, sessionId: string): string | null {
+    const legacy = legacySessionFileName(sessionId);
+    return legacy === null ? null : join(this.base(agentId), 'events', `${legacy}.jsonl`);
   }
 
   private bundleFile(agentId: string, sessionId: string): string {
-    return join(this.base(agentId), 'bundles', `${sessionId}.json`);
+    return join(this.base(agentId), 'bundles', `${toSessionFileName(sessionId)}.json`);
+  }
+
+  private legacyBundleFile(agentId: string, sessionId: string): string | null {
+    const legacy = legacySessionFileName(sessionId);
+    return legacy === null ? null : join(this.base(agentId), 'bundles', `${legacy}.json`);
   }
 
   private metaFile(agentId: string, sessionId: string): string {
-    return join(this.base(agentId), 'meta', `${sessionId}.json`);
+    return join(this.base(agentId), 'meta', `${toSessionFileName(sessionId)}.json`);
+  }
+
+  private legacyMetaFile(agentId: string, sessionId: string): string | null {
+    const legacy = legacySessionFileName(sessionId);
+    return legacy === null ? null : join(this.base(agentId), 'meta', `${legacy}.json`);
   }
 
   private metaDir(agentId: string): string {
@@ -70,8 +100,11 @@ export class JsonlExtractorStore implements ExtractorStore {
   }
 
   async loadEvents(agentId: string, sessionId: string): Promise<SessionExtractEvent[]> {
-    const file = this.eventsFile(agentId, sessionId);
-    if (!await exists(file)) return [];
+    const file = await resolvePath(
+      this.eventsFile(agentId, sessionId),
+      this.legacyEventsFile(agentId, sessionId),
+    );
+    if (!file) return [];
 
     const content = await readFile(file, 'utf-8');
     return content
@@ -97,8 +130,11 @@ export class JsonlExtractorStore implements ExtractorStore {
   }
 
   async loadBundle(agentId: string, sessionId: string): Promise<SessionExtractBundle | null> {
-    const file = this.bundleFile(agentId, sessionId);
-    if (!await exists(file)) return null;
+    const file = await resolvePath(
+      this.bundleFile(agentId, sessionId),
+      this.legacyBundleFile(agentId, sessionId),
+    );
+    if (!file) return null;
 
     const content = await readFile(file, 'utf-8');
     try {
@@ -138,8 +174,11 @@ export class JsonlExtractorStore implements ExtractorStore {
   }
 
   private async loadMeta(agentId: string, sessionId: string): Promise<ExtractorMeta | null> {
-    const file = this.metaFile(agentId, sessionId);
-    if (!await exists(file)) return null;
+    const file = await resolvePath(
+      this.metaFile(agentId, sessionId),
+      this.legacyMetaFile(agentId, sessionId),
+    );
+    if (!file) return null;
     try {
       return JSON.parse(await readFile(file, 'utf-8')) as ExtractorMeta;
     } catch {

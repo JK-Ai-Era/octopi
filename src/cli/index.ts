@@ -31,7 +31,7 @@ async function main(): Promise<void> {
       await serveCommand(args);
       break;
     case 'stop':
-      await serveStopCommand();
+      await serveStopCommand(args);
       break;
     case 'chat':
     case 'tui':

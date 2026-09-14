@@ -1,3 +1,25 @@
+## v0.24.3 (2026-09-15)
+
+### fix(storage): Session 文件名跨平台 + macOS 旧数据兼容
+
+Windows 新建会话报 `ENOENT ... default:web:<ts>.jsonl`：逻辑 session id 含 `:`，不能直接当文件名。
+
+- 新增 `toSessionFileName()` / `legacySessionFileName()`（`src/integration/storage/session-filename.ts`）
+- `JsonlSessionStore` 与 memory extractor store：读写统一走安全文件名
+- **兼容 macOS 旧数据**：load/exists/delete 回退原始 id 文件名，命中后 rename 迁移
+- Gateway 默认 session id 改为 `default-web-<ts>`（不含冒号）
+- 新增 `tests/session-filename.test.ts`、`tests/jsonl-session-legacy.test.ts`
+
+### fix(cli): serve 系列以端口探测真实 Gateway PID
+
+Windows 上 `fork()` 的 pid 与子进程 `process.pid` 可能不一致，pid 文件双写导致 status/stop 认错进程、旧 Gateway 变孤儿。
+
+- 新增 `resolveGatewayPid()`：优先端口 LISTENING PID，其次存活 pid 文件
+- `serve start`：等待 `/health`/端口就绪后写入真实 PID
+- `serve status`：展示 `Source: port|pidfile`，不一致时提示
+- `serve stop`：清理解析 PID + pid 文件 PID + 端口占用者
+- `serve fg`：先解析配置端口再清占用
+
 ## v0.24.2 (2026-09-15)
 
 ### fix(web): WebUI 白屏 — 去掉 harness barrel 浏览器导入 + Vite host

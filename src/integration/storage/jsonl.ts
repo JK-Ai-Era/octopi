@@ -10,14 +10,32 @@
  * 所有操作都通过 agentId 定位到具体目录，不做全量扫描。
  */
 
-import { access, mkdir, readFile, writeFile, unlink } from 'node:fs/promises';
+import { access, mkdir, readFile, writeFile, unlink, rename } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { SessionStore } from '../../core/interfaces/session-store.js';
 import type { SessionData } from '../../harness/session-types.js';
 import type { SessionMeta } from '../../core/types.js';
+import { toSessionFileName, legacySessionFileName } from './session-filename.js';
 
 async function fileExists(path: string): Promise<boolean> {
   try { await access(path); return true; } catch { return false; }
+}
+
+/**
+ * 优先安全文件名；若不存在则回退旧版原始 sessionId 文件名（macOS 历史数据），
+ * 并就地 rename 迁移到安全名，避免跨平台同步后读不到。
+ */
+async function resolveSessionPath(preferred: string, legacy: string | null): Promise<string | null> {
+  if (await fileExists(preferred)) return preferred;
+  if (legacy && await fileExists(legacy)) {
+    try {
+      await rename(legacy, preferred);
+      return preferred;
+    } catch {
+      return legacy;
+    }
+  }
+  return null;
 }
 
 export class JsonlSessionStore implements SessionStore<SessionData> {
@@ -39,23 +57,39 @@ export class JsonlSessionStore implements SessionStore<SessionData> {
   }
 
   private sessionFile(agentId: string, sessionId: string): string {
-    return join(this.sessionsDir(agentId), `${sessionId}.jsonl`);
+    return join(this.sessionsDir(agentId), `${toSessionFileName(sessionId)}.jsonl`);
+  }
+
+  private legacySessionFile(agentId: string, sessionId: string): string | null {
+    const legacy = legacySessionFileName(sessionId);
+    return legacy === null ? null : join(this.sessionsDir(agentId), `${legacy}.jsonl`);
   }
 
   /** 会话附带状态（tasks / turns / metadata），与消息 JSONL 分离，兼容旧文件 */
   private sessionStateFile(agentId: string, sessionId: string): string {
-    return join(this.sessionsDir(agentId), `${sessionId}.state.json`);
+    return join(this.sessionsDir(agentId), `${toSessionFileName(sessionId)}.state.json`);
+  }
+
+  private legacySessionStateFile(agentId: string, sessionId: string): string | null {
+    const legacy = legacySessionFileName(sessionId);
+    return legacy === null ? null : join(this.sessionsDir(agentId), `${legacy}.state.json`);
   }
 
   async load(agentId: string, sessionId: string): Promise<SessionData | null> {
-    const file = this.sessionFile(agentId, sessionId);
-    const statePath = this.sessionStateFile(agentId, sessionId);
-    const hasMessages = await fileExists(file);
-    const hasState = await fileExists(statePath);
+    const file = await resolveSessionPath(
+      this.sessionFile(agentId, sessionId),
+      this.legacySessionFile(agentId, sessionId),
+    );
+    const statePath = await resolveSessionPath(
+      this.sessionStateFile(agentId, sessionId),
+      this.legacySessionStateFile(agentId, sessionId),
+    );
+    const hasMessages = file !== null;
+    const hasState = statePath !== null;
     if (!hasMessages && !hasState) return null;
 
     let messages: SessionData['messages'] = [];
-    if (hasMessages) {
+    if (hasMessages && file) {
       const content = await readFile(file, 'utf-8');
       messages = content.split('\n')
         .filter(line => line.trim())
@@ -73,7 +107,7 @@ export class JsonlSessionStore implements SessionStore<SessionData> {
     }
 
     let state: { tasks?: SessionData['tasks']; turns?: SessionData['turns']; metadata?: SessionData['metadata'] } = {};
-    if (hasState) {
+    if (hasState && statePath) {
       try {
         state = JSON.parse(await readFile(statePath, 'utf-8'));
       } catch { /* corrupt state, ignore */ }
@@ -140,13 +174,16 @@ export class JsonlSessionStore implements SessionStore<SessionData> {
   }
 
   async delete(agentId: string, sessionId: string): Promise<void> {
-    const file = this.sessionFile(agentId, sessionId);
-    if (await fileExists(file)) {
-      await unlink(file);
-    }
-    const statePath = this.sessionStateFile(agentId, sessionId);
-    if (await fileExists(statePath)) {
-      await unlink(statePath);
+    const paths = [
+      this.sessionFile(agentId, sessionId),
+      this.legacySessionFile(agentId, sessionId),
+      this.sessionStateFile(agentId, sessionId),
+      this.legacySessionStateFile(agentId, sessionId),
+    ];
+    for (const p of paths) {
+      if (p && await fileExists(p)) {
+        await unlink(p);
+      }
     }
 
     // 更新元数据索引
@@ -161,6 +198,10 @@ export class JsonlSessionStore implements SessionStore<SessionData> {
   }
 
   async exists(agentId: string, sessionId: string): Promise<boolean> {
-    return fileExists(this.sessionFile(agentId, sessionId));
+    const resolved = await resolveSessionPath(
+      this.sessionFile(agentId, sessionId),
+      this.legacySessionFile(agentId, sessionId),
+    );
+    return resolved !== null;
   }
 }

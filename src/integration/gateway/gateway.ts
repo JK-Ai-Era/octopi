@@ -388,7 +388,8 @@ export class Gateway {
       throw new Error(`Agent "${options.agentId}" not found`);
     }
 
-    const sessionId = options.sessionId ?? `${options.agentId}:web:${Date.now()}`;
+    // 文件系统安全：避免 `:` 等字符（Windows 文件名非法）
+    const sessionId = options.sessionId ?? `${options.agentId}-web-${Date.now()}`;
     const session: SessionData = {
       id: sessionId,
       agentId: options.agentId,
