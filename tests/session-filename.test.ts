@@ -21,6 +21,22 @@ describe('toSessionFileName', () => {
       'a_b_c_d_e_f_g_h_i_j',
     );
   });
+
+  test('prefixes Windows reserved device names', () => {
+    expect(toSessionFileName('CON')).toBe('_CON');
+    expect(toSessionFileName('nul')).toBe('_nul');
+    expect(toSessionFileName('COM1')).toBe('_COM1');
+    expect(toSessionFileName('LPT9.session')).toBe('_LPT9.session');
+  });
+
+  test('strips trailing dots and spaces', () => {
+    expect(toSessionFileName('session-1...')).toBe('session-1');
+    expect(toSessionFileName('session-1  ')).toBe('session-1');
+  });
+
+  test('falls back to underscore when empty after sanitize', () => {
+    expect(toSessionFileName('...')).toBe('_');
+  });
 });
 
 describe('legacySessionFileName', () => {
@@ -30,5 +46,9 @@ describe('legacySessionFileName', () => {
 
   test('returns null when already safe', () => {
     expect(legacySessionFileName('default-web-1')).toBeNull();
+  });
+
+  test('returns raw reserved name so legacy macOS file can be found', () => {
+    expect(legacySessionFileName('CON')).toBe('CON');
   });
 });

@@ -91,6 +91,24 @@ export async function killProcess(
   if (!isProcessAlive(pid)) return true;
 
   if (process.platform === 'win32') {
+    // 1) 软关：taskkill 不带 /F（发 WM_CLOSE）；无窗口控制台进程常失败，属预期
+    try {
+      execFileSync('taskkill', ['/PID', String(pid), '/T'], {
+        encoding: 'utf-8',
+        timeout: 5000,
+        stdio: 'pipe',
+      });
+    } catch {
+      // already exiting / no window
+    }
+
+    const softDeadline = Date.now() + Math.min(timeoutMs, 3000);
+    while (Date.now() < softDeadline) {
+      if (!isProcessAlive(pid)) return true;
+      await delay(100);
+    }
+
+    // 2) 强杀进程树
     try {
       execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], {
         encoding: 'utf-8',

@@ -1,3 +1,14 @@
+## v0.24.4 (2026-09-15)
+
+### fix(storage,cli): Windows 保留文件名 + kill 优雅退出
+
+- `toSessionFileName`：前缀 `_` 处理 `CON`/`PRN`/`AUX`/`NUL`/`COM1–9`/`LPT1–9`（含带扩展名形式）；去掉尾部 `.`/` `；空名回退 `_`
+- `killProcess`（win32）：先 `taskkill /T`（WM_CLOSE）等待软退，超时再 `/F` 强杀进程树
+
+### test
+
+- `session-filename.test.ts` 覆盖保留名、尾部点空格、空名回退
+
 ## v0.24.3 (2026-09-15)
 
 ### fix(storage): Session 文件名跨平台 + macOS 旧数据兼容
