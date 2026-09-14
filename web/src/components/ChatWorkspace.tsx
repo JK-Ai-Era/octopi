@@ -12,7 +12,9 @@ import type {
 } from '../../../src/integration/web/conversation/types';
 import type { RunStatus } from '../../../src/integration/web/runtime/store';
 import type { SessionTaskView } from '../../../src/integration/web/sdk/client';
-import { estimateTextTokens, JSON_CHARS_PER_TOKEN } from '../../../src/harness/index';
+// 直接引用 token 模块，避免 harness barrel 把 Node 专用依赖拉进浏览器
+import { estimateTextTokens } from '../../../src/harness/context/token-estimator';
+import { JSON_CHARS_PER_TOKEN } from '../../../src/harness/context/token-constants';
 
 const DEFAULT_BASE =
   (import.meta.env.VITE_OCTOPI_BASE as string | undefined)?.replace(/\/$/, '') ||

@@ -1,3 +1,11 @@
+## v0.24.2 (2026-09-15)
+
+### fix(web): WebUI 白屏 — 去掉 harness barrel 浏览器导入 + Vite host
+
+- `ChatWorkspace` 此前从 `src/harness/index` 导入 `estimateTextTokens`，barrel 会把 `node:fs` / `node:child_process` 等 Node 专用模块拖进浏览器模块图，页面空白
+- 改为直接引用 `context/token-estimator` 与 `context/token-constants`
+- `vite.config.ts` 设置 `server.host: 'localhost'`，避免 Windows 上默认只绑 IPv6 `[::1]` 导致 `127.0.0.1` 连不上
+
 ## v0.24.1 (2026-09-15)
 
 ### feat(cli): Gateway + WebUI 自托管跨平台（Windows / macOS / Linux）
