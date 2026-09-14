@@ -2,6 +2,7 @@ node_modules/
 dist/
 .agent-harness/
 .octopi/
+/agents/
 octopi.json
 data/
 arch/
