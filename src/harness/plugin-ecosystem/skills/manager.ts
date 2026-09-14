@@ -85,7 +85,8 @@ function parseFrontmatter(filePath: string): {
   content: string;
 } | null {
   try {
-    const raw = readFileSync(filePath, 'utf-8');
+    // 统一换行，避免 Windows CRLF 让 frontmatter 行解析失败
+    const raw = readFileSync(filePath, 'utf-8').replace(/\r\n/g, '\n');
     const fmMatch = raw.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
     if (!fmMatch) return null;
 
@@ -156,7 +157,7 @@ export class FileSystemSkillSource implements SkillSource {
 
   async load(_skillId: string, filePath: string): Promise<string | null> {
     try {
-      const raw = readFileSync(filePath, 'utf-8');
+      const raw = readFileSync(filePath, 'utf-8').replace(/\r\n/g, '\n');
       const fmMatch = raw.match(/^---\n[\s\S]*?\n---\n?([\s\S]*)$/);
       return fmMatch ? fmMatch[1].trim() : raw.trim();
     } catch {

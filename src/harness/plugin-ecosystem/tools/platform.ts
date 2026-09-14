@@ -125,9 +125,39 @@ function unixShell(): PlatformShell {
   };
 }
 
+/**
+ * 在 Windows 上定位可用的 bash
+ *
+ * 优先 Git Bash / MSYS2：启动快，且与 Unix 命令兼容性好。
+ * 刻意跳过 `%SystemRoot%\System32\bash.exe`（WSL），其冷启动可达数秒，
+ * 作为默认交互 shell 会拖垮工具超时与测试。
+ */
+function findWindowsBash(): string | null {
+  const candidates = [
+    `${process.env.ProgramFiles ?? 'C:\\Program Files'}\\Git\\bin\\bash.exe`,
+    `${process.env.ProgramFiles ?? 'C:\\Program Files'}\\Git\\usr\\bin\\bash.exe`,
+    `${process.env['ProgramFiles(x86)'] ?? 'C:\\Program Files (x86)'}\\Git\\bin\\bash.exe`,
+    `${process.env.LOCALAPPDATA ?? ''}\\Programs\\Git\\bin\\bash.exe`,
+  ];
+  for (const candidate of candidates) {
+    if (candidate && isExecutableFile(candidate)) return candidate;
+  }
+
+  const systemRoot = (process.env.SystemRoot ?? 'C:\\Windows').toLowerCase();
+  const pathEnv = process.env.PATH ?? process.env.Path ?? '';
+  for (const dir of pathEnv.split(delimiter).filter(Boolean)) {
+    const full = join(dir, 'bash.exe');
+    if (!isExecutableFile(full)) continue;
+    // 跳过 WSL bash（System32）
+    if (full.toLowerCase().startsWith(`${systemRoot}\\system32\\`)) continue;
+    return full;
+  }
+  return null;
+}
+
 function windowsShell(): PlatformShell {
   // Git Bash / MSYS2：与 agent 常见 Unix 命令（ls/cat/grep）兼容性最好
-  const bash = findExecutable('bash');
+  const bash = findWindowsBash();
   if (bash) {
     return { kind: 'bash', executable: bash, args: ['-c'], label: `bash (${bash})` };
   }
@@ -146,6 +176,12 @@ function windowsShell(): PlatformShell {
       args: psArgs,
       label: `powershell (${powershell})`,
     };
+  }
+
+  // 最后才考虑 WSL bash（慢，但比 cmd 更接近 POSIX）
+  const wslBash = findExecutable('bash');
+  if (wslBash) {
+    return { kind: 'bash', executable: wslBash, args: ['-c'], label: `bash (${wslBash})` };
   }
 
   const cmd = findExecutable('cmd') ?? 'cmd.exe';

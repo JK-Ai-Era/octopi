@@ -59,8 +59,9 @@ describe('PendingExtractor backoff', () => {
     const pending = new PendingExtractor(events, runtime, store, {
       agentId: 'a1',
       autoStart: false,
-      baseRetryMs: 1,
-      maxRetryMs: 2,
+      // Windows Date.now()/调度粒度约 15ms，退避窗口需明显大于该粒度
+      baseRetryMs: 50,
+      maxRetryMs: 80,
       maxRetries: 3,
     });
 
@@ -75,15 +76,15 @@ describe('PendingExtractor backoff', () => {
     await pending.scan();
     expect(calls).toBe(1);
 
-    // wait a tiny bit for backoff window to pass
-    await new Promise((r) => setTimeout(r, 5));
+    // wait for backoff window to pass
+    await new Promise((r) => setTimeout(r, 80));
 
     // scan 3 -> fail again (backoff window passed)
     await pending.scan();
     expect(calls).toBe(2);
 
     // wait for next backoff window
-    await new Promise((r) => setTimeout(r, 5));
+    await new Promise((r) => setTimeout(r, 120));
 
     // scan 4 -> fail again -> should mark error after maxRetries reached
     await pending.scan();

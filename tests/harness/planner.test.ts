@@ -304,12 +304,13 @@ describe('TaskScheduler', () => {
 
   describe('scheduleInterval', () => {
     it('按间隔重复执行', async () => {
-      const scheduler = new TaskScheduler({ checkIntervalMs: 10 });
+      // Windows 定时器粒度约 15ms，间隔/等待需留足余量避免 flaky
+      const scheduler = new TaskScheduler({ checkIntervalMs: 20 });
       let count = 0;
-      scheduler.scheduleInterval('interval-task', 20, () => { count++; });
+      scheduler.scheduleInterval('interval-task', 40, () => { count++; });
       scheduler.start();
 
-      await new Promise(r => setTimeout(r, 80));
+      await new Promise(r => setTimeout(r, 250));
       scheduler.stop();
 
       expect(count).toBeGreaterThanOrEqual(3);

@@ -1,3 +1,25 @@
+## v0.24.7 (2026-09-15)
+
+### fix(skills): SKILL.md frontmatter 兼容 Windows CRLF
+
+Windows 下 `core.autocrlf=true` 检出的 SKILL.md 带 `\r\n`，原先 frontmatter 正则与逐行 `key: value` 解析都只认 `\n`，导致 `discover()` 发现 0 个 skill，`get`/`load`/`formatForPrompt` 级联为空。
+
+- `parseFrontmatter` / `FileSystemSkillSource.load`：读盘后统一 `replace(/\r\n/g, '\n')`，再按原 LF 语义解析
+
+### fix(platform): Windows 默认 shell 优先 Git Bash，跳过 WSL bash
+
+`findExecutable('bash')` 会先命中 `%SystemRoot%\System32\bash.exe`（WSL），冷启动可达数秒，撞穿工具默认超时与 vitest 5s 上限。
+
+- 新增 `findWindowsBash()`：优先 `Program Files\Git` 等常见 Git Bash 路径，PATH 扫描跳过 `System32`
+- 选择顺序：Git Bash → `pwsh` → `powershell` → WSL bash（仅作兜底）→ `cmd`
+
+### test: 放宽 Windows 下过紧的定时用例
+
+- `planner` `scheduleInterval`：间隔 20→40ms、等待 80→250ms，适配 ~15ms 定时器粒度
+- `pending-extractor-backoff`：`baseRetryMs` 1→50ms，等待同步拉长，避免退避窗口小于 `Date.now()` 粒度导致「该跳过却重试」
+
+全量 `npm test`：1383 passed / 0 failed。
+
 ## v0.24.6 (2026-09-15)
 
 ### feat(persona): 文件式 persona 热更新，改盘后下一轮 run 生效
