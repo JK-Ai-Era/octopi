@@ -12,8 +12,7 @@ import type {
 } from '../../../src/integration/web/conversation/types';
 import type { RunStatus } from '../../../src/integration/web/runtime/store';
 import type { SessionTaskView } from '../../../src/integration/web/sdk/client';
-import { estimateTextTokens } from '../../../src/harness/context/core-token-estimator';
-import { JSON_CHARS_PER_TOKEN } from '../../../src/harness/context/token-constants';
+import { estimateTextTokens, JSON_CHARS_PER_TOKEN } from '../../../src/harness/index';
 
 const DEFAULT_BASE = 'http://localhost:3000';
 

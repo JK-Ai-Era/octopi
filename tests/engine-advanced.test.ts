@@ -16,7 +16,7 @@ import type { ReliabilityHarness } from '../src/harness/reliability/run-agent.js
 import type { AgentLoopEvent } from '../src/loop/types.js';
 import type { ModelProvider, LLMRequest, LLMResponse, LLMStreamChunk } from '../src/core/interfaces/model-provider.js';
 import type { Message } from '../src/core/types.js';
-import { estimateTokens, estimateTextTokens } from '../src/harness/context/core-token-estimator.js';
+import { estimateTokens, estimateTextTokens } from '../src/harness/context/token-estimate-fns.js';
 
 // ── Helper ──
 

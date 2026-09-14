@@ -34,7 +34,9 @@
 - llm-summarizer.ts — LLM 摘要
 - truncate-compressor.ts — 截断兜底
 - budget-allocator.ts — Token 预算分配
-- token-estimator.ts — Token 估算
-- core-token-estimator.ts — 底层估算工具
+- token-estimator.ts — TokenEstimator 实现（HeuristicTokenEstimator）
+- token-estimate-fns.ts — 底层估算纯函数
+- token-constants.ts — 估算常量
 - knowledge/ — KnowledgeStore + KnowledgeContextEngine（第 4 层 Knowledge）
-- index.ts — 统一导出
+
+> 领域统一导出在 `src/harness/index.ts`（本目录无独立 `index.ts`）。`ContextIntelligence`（七层组装）在 `harness/memory/`。

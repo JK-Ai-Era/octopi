@@ -1,18 +1,13 @@
 /**
- * Token 估算器
+ * Token 估算纯函数（Harness 内部原语）
  *
- * 提供统一的 token 数量估算，供 Core 和 Harness 层使用。
+ * 不依赖 Message / LLMMessage 等领域类型，只做「内容 → token 数」。
+ * 由 `token-estimator.ts` 组装为 `TokenEstimator` 实现，也可被同层模块直接复用。
  *
  * 三层策略（参考 OpenClaw）：
  * 1. 优先使用 LLM 返回的实际 token 数（外部回写）
  * 2. 次选：专用 tokenizer（如 tiktoken）- 未来扩展
  * 3. 兜底：启发式估算，按内容类型使用不同比率
- *
- * 关键改进（v0.6.5+）：
- * - 完整 CJK 范围检测（扩展A/B + 平假名 + 片假名 + 韩文 + 全角）
- * - 按内容类型区分比率（文本4/工具结果2/JSON3）
- * - 消息结构开销 12 token
- * - 图片估算 1200 token
  */
 
 import {
@@ -40,6 +35,9 @@ const CJK_SURROGATE_HIGH_RE = /[\uD840-\uD87E][\uDC00-\uDFFF]/g;
  * 这样 `adjustedChars / CHARS_PER_TOKEN` 能得到准确的 token 估算。
  *
  * 参考 OpenClaw 的 estimateStringChars()。
+ *
+ * @param text 原始文本
+ * @returns CJK 加权后的等效字符数
  */
 export function estimateAdjustedChars(text: string): number {
   if (text.length === 0) return 0;
@@ -57,6 +55,9 @@ export function estimateAdjustedChars(text: string): number {
  * 估算单段文本的 token 数
  *
  * 使用 CJK 感知的等效字符数 + 采样策略。
+ *
+ * @param text 原始文本
+ * @returns 估算 token 数
  */
 export function estimateTextTokens(text: string): number {
   if (text.length === 0) return 0;
@@ -70,52 +71,63 @@ export function estimateTextTokens(text: string): number {
 }
 
 /**
- * 估算 LLM 消息列表的 token 数
+ * 估算单个 content block 的 token 数
  *
- * 支持 string 和 ContentBlock[] 两种 content 格式。
- * 包含消息结构开销。
+ * 统一处理 text / image / audio（含 OpenAI 的 input_audio）/ video。
+ *
+ * @param block ContentBlock（至少含 type，text 块需含 text）
+ * @returns 估算 token 数
  */
-export function estimateTokens(messages: Array<{ content?: string | unknown[] | null; role?: string }>): number {
-  let total = 0;
-  for (const msg of messages) {
-    // 消息结构开销
-    total += MESSAGE_OVERHEAD_TOKENS;
-
-    if (typeof msg.content === 'string' && msg.content.length > 0) {
-      total += estimateTextTokens(msg.content);
-    } else if (Array.isArray(msg.content)) {
-      for (const block of msg.content) {
-        const b = block as Record<string, unknown>;
-        if (b.type === 'text' && typeof b.text === 'string') {
-          total += estimateTextTokens(b.text);
-        } else if (b.type === 'image') {
-          total += IMAGE_TOKEN_ESTIMATE;
-        } else if (b.type === 'audio') {
-          total += AUDIO_TOKEN_ESTIMATE;
-        } else if (b.type === 'video') {
-          total += VIDEO_TOKEN_ESTIMATE;
-        } else {
-          total += 10; // 其他块类型
-        }
-      }
-    }
+export function estimateContentBlock(block: { type?: string; text?: string }): number {
+  if (block.type === 'text' && typeof block.text === 'string') {
+    return estimateTextTokens(block.text);
   }
-  return total;
+  if (block.type === 'image') return IMAGE_TOKEN_ESTIMATE;
+  if (block.type === 'audio' || block.type === 'input_audio') return AUDIO_TOKEN_ESTIMATE;
+  if (block.type === 'video') return VIDEO_TOKEN_ESTIMATE;
+  return 10; // 其他块类型
 }
 
 /**
  * 估算工具调用 JSON 的 token 数
  *
  * 工具调用的 JSON 结构符号多，token 密度更高。
+ * `arguments` 已是字符串时直接用长度，避免二次 JSON.stringify。
+ *
+ * @param toolCalls `{ name?, arguments? }` 形态的工具调用列表
+ * @returns 估算 token 数
  */
 export function estimateToolCallTokens(toolCalls: Array<{ name?: string; arguments?: unknown }>): number {
   let total = 0;
   for (const tc of toolCalls) {
-    // 函数名
     total += estimateTextTokens(tc.name ?? '');
-    // 参数 JSON：用 JSON_CHARS_PER_TOKEN
     const argsStr = typeof tc.arguments === 'string' ? tc.arguments : JSON.stringify(tc.arguments ?? {});
     total += Math.ceil(argsStr.length / JSON_CHARS_PER_TOKEN);
+  }
+  return total;
+}
+
+/**
+ * 估算松散结构消息列表的 token 数
+ *
+ * 支持 string 和 ContentBlock[] 两种 content 格式，含消息结构开销。
+ * 适用于无强类型 Message / LLMMessage 的调用方。
+ *
+ * @param messages `{ content?, role? }` 形态的消息列表
+ * @returns 估算 token 数
+ */
+export function estimateTokens(messages: Array<{ content?: string | unknown[] | null; role?: string }>): number {
+  let total = 0;
+  for (const msg of messages) {
+    total += MESSAGE_OVERHEAD_TOKENS;
+
+    if (typeof msg.content === 'string' && msg.content.length > 0) {
+      total += estimateTextTokens(msg.content);
+    } else if (Array.isArray(msg.content)) {
+      for (const block of msg.content) {
+        total += estimateContentBlock(block as { type?: string; text?: string });
+      }
+    }
   }
   return total;
 }

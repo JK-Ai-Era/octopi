@@ -1,3 +1,20 @@
+## v0.23.1 (2026-09-15)
+
+### refactor(context): Token 估算器去 core 误名 + 收敛重复实现
+
+清理 v0.8.0 架构迁移遗留：`core-token-estimator` 实际在 Harness 层，注释却写「供 Core 和 Harness 层使用」；三套消息列表估算逻辑并行，存在漂移与死导出。
+
+- 重命名 `core-token-estimator.ts` → `token-estimate-fns.ts`，修正文件头定位（Harness 内部纯函数原语）
+- 抽出共用 `estimateContentBlock` / 接回 `estimateToolCallTokens`；`HeuristicTokenEstimator` 与 `estimateLLMMessages` 不再手写三份 block 循环
+- `estimateMessage` 对 string 型 `toolCalls.arguments` 不再二次 `JSON.stringify`；`estimateLLMMessages` 的 audio/video 与 domain 口径对齐（不再落入 10）
+- `harness/index` 导出估算常量；web `ChatWorkspace` 改走领域门面，不再深路径引用内部文件
+- 文档：`context/README`、`ARCHITECTURE` 目录树对齐（`ContextIntelligence` 在 `memory/`，无 `context/index.ts`）
+- 补 `estimateContentBlock` / `estimateToolCallTokens` / `estimateLLMMessages` 单测
+
+### test(context)
+
+- `context-engine.test.ts` +13：content block 分类型、tool call 字符串参数、tool-result 密比率、LLM audio/video
+
 ## v0.23.0 (2026-09-14)
 
 ### feat(autonomous-subsystem): 收口 + 统一 LLM 端口 + 审查修复

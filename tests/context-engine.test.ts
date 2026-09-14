@@ -18,7 +18,20 @@ import type {
   TokenEstimator,
   SummarizeFunction,
 } from '../src/core/interfaces/context-engine.js';
-import { HeuristicTokenEstimator, estimateTextTokens } from '../src/harness/context/token-estimator.js';
+import { HeuristicTokenEstimator, estimateTextTokens, estimateLLMMessages } from '../src/harness/context/token-estimator.js';
+import {
+  estimateContentBlock,
+  estimateToolCallTokens,
+  estimateTokens,
+} from '../src/harness/context/token-estimate-fns.js';
+import {
+  IMAGE_TOKEN_ESTIMATE,
+  AUDIO_TOKEN_ESTIMATE,
+  VIDEO_TOKEN_ESTIMATE,
+  MESSAGE_OVERHEAD_TOKENS,
+  JSON_CHARS_PER_TOKEN,
+  TOOL_RESULT_CHARS_PER_TOKEN,
+} from '../src/harness/context/token-constants.js';
 import { DefaultMessageSelector } from '../src/harness/context/message-selector.js';
 import { TruncateCompressor } from '../src/harness/context/truncate-compressor.js';
 import { LLMSummaryCompressor } from '../src/harness/context/llm-summarizer.js';
@@ -184,6 +197,141 @@ describe('estimateTextTokens', () => {
     const longText = 'a'.repeat(5000);
     const tokens = estimateTextTokens(longText);
     expect(tokens).toBeGreaterThan(0);
+  });
+});
+
+// ── estimateContentBlock / estimateToolCallTokens ──
+
+describe('estimateContentBlock', () => {
+  it('should estimate text block via CJK-aware path', () => {
+    expect(estimateContentBlock({ type: 'text', text: '你好' })).toBe(estimateTextTokens('你好'));
+  });
+
+  it('should estimate image / audio / input_audio / video blocks', () => {
+    expect(estimateContentBlock({ type: 'image' })).toBe(IMAGE_TOKEN_ESTIMATE);
+    expect(estimateContentBlock({ type: 'audio' })).toBe(AUDIO_TOKEN_ESTIMATE);
+    expect(estimateContentBlock({ type: 'input_audio' })).toBe(AUDIO_TOKEN_ESTIMATE);
+    expect(estimateContentBlock({ type: 'video' })).toBe(VIDEO_TOKEN_ESTIMATE);
+  });
+
+  it('should fall back to 10 for unknown or file blocks', () => {
+    expect(estimateContentBlock({ type: 'file' })).toBe(10);
+    expect(estimateContentBlock({ type: 'unknown_xyz' })).toBe(10);
+    expect(estimateContentBlock({})).toBe(10);
+  });
+
+  it('should treat text block without text as unknown', () => {
+    expect(estimateContentBlock({ type: 'text' })).toBe(10);
+  });
+});
+
+describe('estimateToolCallTokens', () => {
+  it('should count name tokens plus JSON args at JSON ratio', () => {
+    const name = 'read_file';
+    const args = { path: '/tmp/a.txt' };
+    const argsStr = JSON.stringify(args);
+    const expected =
+      estimateTextTokens(name) + Math.ceil(argsStr.length / JSON_CHARS_PER_TOKEN);
+    expect(estimateToolCallTokens([{ name, arguments: args }])).toBe(expected);
+  });
+
+  it('should not double-stringify string arguments', () => {
+    const argsStr = '{"path":"/tmp/a.txt"}';
+    const viaString = estimateToolCallTokens([{ name: 'read_file', arguments: argsStr }]);
+    const viaObject = estimateToolCallTokens([
+      { name: 'read_file', arguments: JSON.parse(argsStr) },
+    ]);
+    // 对象路径走 JSON.stringify，结果应与直接传同构 JSON 字符串一致
+    expect(viaString).toBe(viaObject);
+    // 且不应把字符串再包一层引号
+    expect(viaString).toBe(
+      estimateTextTokens('read_file') + Math.ceil(argsStr.length / JSON_CHARS_PER_TOKEN),
+    );
+  });
+
+  it('should treat missing arguments as empty object', () => {
+    const expected = estimateTextTokens('noop') + Math.ceil(JSON.stringify({}).length / JSON_CHARS_PER_TOKEN);
+    expect(estimateToolCallTokens([{ name: 'noop' }])).toBe(expected);
+  });
+
+  it('should return 0 for empty list', () => {
+    expect(estimateToolCallTokens([])).toBe(0);
+  });
+});
+
+describe('HeuristicTokenEstimator.estimateMessage with tool calls', () => {
+  it('should match estimateToolCallTokens for domain Message.toolCalls', () => {
+    const estimator = new HeuristicTokenEstimator();
+    const msg: Message = {
+      role: 'assistant',
+      content: '',
+      toolCalls: [{ id: 'c1', name: 'shell', arguments: { command: 'ls -la' } }],
+      timestamp: Date.now(),
+    };
+    expect(estimator.estimateMessage(msg)).toBe(
+      MESSAGE_OVERHEAD_TOKENS +
+        estimateToolCallTokens([{ name: 'shell', arguments: { command: 'ls -la' } }]),
+    );
+  });
+
+  it('should use denser ratio for tool results than for text', () => {
+    const estimator = new HeuristicTokenEstimator();
+    const resultText = 'x'.repeat(40);
+    const msg: Message = {
+      role: 'tool',
+      content: '',
+      toolResults: [{ toolCallId: 'c1', name: 'shell', result: resultText }],
+      timestamp: Date.now(),
+    };
+    const expected =
+      MESSAGE_OVERHEAD_TOKENS +
+      Math.ceil(resultText.length / TOOL_RESULT_CHARS_PER_TOKEN);
+    expect(estimator.estimateMessage(msg)).toBe(expected);
+  });
+});
+
+describe('estimateLLMMessages shared block logic', () => {
+  it('should apply audio/video estimates (not unknown-block fallback)', () => {
+    const messages = [
+      {
+        role: 'user' as const,
+        content: [
+          { type: 'audio' },
+          { type: 'video' },
+          { type: 'input_audio' },
+        ],
+      },
+    ];
+    expect(estimateLLMMessages(messages)).toBe(
+      MESSAGE_OVERHEAD_TOKENS + AUDIO_TOKEN_ESTIMATE + VIDEO_TOKEN_ESTIMATE + AUDIO_TOKEN_ESTIMATE,
+    );
+  });
+
+  it('should estimate tool_calls via estimateToolCallTokens', () => {
+    const messages = [
+      {
+        role: 'assistant' as const,
+        content: '',
+        tool_calls: [
+          { id: '1', type: 'function', function: { name: 'search', arguments: '{"q":"hi"}' } },
+        ],
+      },
+    ];
+    expect(estimateLLMMessages(messages)).toBe(
+      MESSAGE_OVERHEAD_TOKENS +
+        estimateToolCallTokens([{ name: 'search', arguments: '{"q":"hi"}' }]),
+    );
+  });
+});
+
+describe('estimateTokens loose messages', () => {
+  it('should count overhead and string content', () => {
+    const tokens = estimateTokens([{ content: 'Hello world' }, { content: '你好世界' }, { content: null }]);
+    expect(tokens).toBe(
+      MESSAGE_OVERHEAD_TOKENS * 3 +
+        estimateTextTokens('Hello world') +
+        estimateTextTokens('你好世界'),
+    );
   });
 });
 

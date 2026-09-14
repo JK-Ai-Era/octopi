@@ -181,12 +181,13 @@ harness/context/
 ├── llm-summarizer.ts           # LLM 摘要压缩
 ├── truncate-compressor.ts      # 截断兜底
 ├── budget-allocator.ts         # Token 预算分配
-├── token-estimator.ts          # 启发式 Token 估算
-├── context-intelligence.ts     # [新增] 七层智能组装
-└── index.ts
+├── token-estimator.ts          # HeuristicTokenEstimator（实现 Core TokenEstimator）
+├── token-estimate-fns.ts       # 估算纯函数原语
+├── token-constants.ts          # 估算常量
+└── knowledge/                  # KnowledgeStore + KnowledgeContextEngine
 ```
 
-**七层智能组装**（详见第 4 节）
+领域导出见 `harness/index.ts`。七层智能组装 `ContextIntelligence` 位于 `harness/memory/`（详见第 4 节）。
 
 ### 3.3 Security — 安全
 

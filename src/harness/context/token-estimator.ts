@@ -1,40 +1,31 @@
 /**
  * HeuristicTokenEstimator — 启发式 Token 估算器
  *
+ * 实现 Core 的 `TokenEstimator` 接口；估算原语在 `token-estimate-fns.ts`。
+ *
  * 三层策略（参考 OpenClaw）：
  * 1. 优先使用 LLM 返回的实际 token 数（usage.promptTokens）- 外部回写
  * 2. 次选：专用 tokenizer（如 tiktoken）- 未来扩展
  * 3. 兜底：启发式估算，按内容类型使用不同比率
- *
- * 关键改进（v0.6.5+）：
- * - 完整 CJK 范围（扩展A/B + 平假名 + 片假名 + 韩文 + 全角符号）
- * - 按内容类型区分比率（文本4/工具结果2/JSON3）
- * - 消息结构开销 12 token（参考 OpenClaw）
- * - 图片估算 1200 token（参考 OpenClaw 的 4800 chars）
- * - 安全余量 1.2x（参考 OpenClaw 的 SAFETY_MARGIN）
  */
 
 import type { Message } from '../../core/types.js';
-import { getTextContent } from '../../core/types.js';
 import type { TokenEstimator } from '../../core/interfaces/context-engine.js';
 import type { LLMMessage, ToolDefinition } from '../../core/interfaces/model-provider.js';
 import {
   estimateTextTokens,
   estimateAdjustedChars,
-} from './core-token-estimator.js';
+  estimateContentBlock,
+  estimateToolCallTokens,
+} from './token-estimate-fns.js';
 import {
-  CHARS_PER_TOKEN,
   TOOL_RESULT_CHARS_PER_TOKEN,
   JSON_CHARS_PER_TOKEN,
   MESSAGE_OVERHEAD_TOKENS,
-  IMAGE_TOKEN_ESTIMATE,
-  AUDIO_TOKEN_ESTIMATE,
-  VIDEO_TOKEN_ESTIMATE,
-  SAFETY_MARGIN,
 } from './token-constants.js';
 
-// Re-export for backward compatibility
-export { estimateTextTokens } from './core-token-estimator.js';
+// Re-export for callers that only need text estimation
+export { estimateTextTokens } from './token-estimate-fns.js';
 
 /**
  * 启发式 Token 估算器实现
@@ -45,39 +36,26 @@ export class HeuristicTokenEstimator implements TokenEstimator {
    *
    * 支持 string 和 ContentBlock[] 两种 content 格式。
    * 包含消息结构开销（role、分隔符等）。
+   *
+   * @param message 领域消息
+   * @returns 估算 token 数
    */
   estimateMessage(message: Message): number {
     let tokens = MESSAGE_OVERHEAD_TOKENS;
 
-    // 内容
     if (typeof message.content === 'string') {
       tokens += estimateTextTokens(message.content);
     } else if (Array.isArray(message.content)) {
       for (const block of message.content) {
-        if (block.type === 'text') {
-          tokens += estimateTextTokens(block.text);
-        } else if (block.type === 'image') {
-          tokens += IMAGE_TOKEN_ESTIMATE;
-        } else if (block.type === 'audio') {
-          tokens += AUDIO_TOKEN_ESTIMATE;
-        } else if (block.type === 'video') {
-          tokens += VIDEO_TOKEN_ESTIMATE;
-        } else {
-          tokens += 10;
-        }
+        tokens += estimateContentBlock(block);
       }
     }
 
-    // 工具调用（用 JSON 比率）
     if (message.toolCalls) {
-      for (const tc of message.toolCalls) {
-        tokens += estimateTextTokens(tc.name ?? '');
-        const argsStr = JSON.stringify(tc.arguments ?? {});
-        tokens += Math.ceil(argsStr.length / JSON_CHARS_PER_TOKEN);
-      }
+      tokens += estimateToolCallTokens(message.toolCalls);
     }
 
-    // 工具结果（用更密集的比率 chars/2）
+    // 工具结果用更密集的比率（chars/2）
     if (message.toolResults) {
       for (const tr of message.toolResults) {
         const resultStr = typeof tr.result === 'string' ? tr.result : JSON.stringify(tr.result);
@@ -90,6 +68,9 @@ export class HeuristicTokenEstimator implements TokenEstimator {
 
   /**
    * 估算多条消息的总 token 数
+   *
+   * @param messages 领域消息列表
+   * @returns 估算 token 数
    */
   estimateMessages(messages: Message[]): number {
     let total = 0;
@@ -101,6 +82,9 @@ export class HeuristicTokenEstimator implements TokenEstimator {
 
   /**
    * 估算文本的 token 数
+   *
+   * @param text 原始文本
+   * @returns 估算 token 数
    */
   estimateText(text: string): number {
     return estimateTextTokens(text);
@@ -111,6 +95,9 @@ export class HeuristicTokenEstimator implements TokenEstimator {
    *
    * 工具定义包含：名称、描述、参数 schema。
    * JSON schema 结构符号多，token 密度高。
+   *
+   * @param tools 工具定义列表
+   * @returns 估算 token 数
    */
   estimateTools(tools: ToolDefinition[]): number {
     let total = 0;
@@ -126,7 +113,12 @@ export class HeuristicTokenEstimator implements TokenEstimator {
 }
 
 /**
- * 估算 LLM 消息列表的 token 数（兼容函数）
+ * 估算 LLM 消息列表的 token 数
+ *
+ * 适配 provider 侧 `LLMMessage`（OpenAI 风格 `tool_calls` / `input_audio`）。
+ *
+ * @param messages LLM 消息列表
+ * @returns 估算 token 数
  */
 export function estimateLLMMessages(messages: LLMMessage[]): number {
   let total = 0;
@@ -137,24 +129,17 @@ export function estimateLLMMessages(messages: LLMMessage[]): number {
       total += estimateTextTokens(msg.content);
     } else if (Array.isArray(msg.content)) {
       for (const block of msg.content as Array<Record<string, unknown>>) {
-        if (block.type === 'text' && typeof block.text === 'string') {
-          total += estimateTextTokens(block.text);
-        } else if (block.type === 'image') {
-          total += IMAGE_TOKEN_ESTIMATE;
-        } else if (block.type === 'input_audio') {
-          total += AUDIO_TOKEN_ESTIMATE;
-        } else {
-          total += 10;
-        }
+        total += estimateContentBlock(block as { type?: string; text?: string });
       }
     }
 
-    // 工具调用
     if (msg.tool_calls) {
-      for (const tc of msg.tool_calls) {
-        total += estimateTextTokens(tc.function?.name ?? '');
-        total += Math.ceil((tc.function?.arguments ?? '').length / JSON_CHARS_PER_TOKEN);
-      }
+      total += estimateToolCallTokens(
+        msg.tool_calls.map((tc) => ({
+          name: tc.function?.name,
+          arguments: tc.function?.arguments ?? '',
+        })),
+      );
     }
   }
   return total;
