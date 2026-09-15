@@ -17,7 +17,7 @@ import type {
   McpToolResult,
   McpResourceDefinition,
   McpPromptDefinition,
-} from '../../core/interfaces/mcp-client.js';
+} from '../../harness/plugin-ecosystem/mcp/types.js';
 
 /**
  * 基于 MCP SDK 的 McpClient 实现

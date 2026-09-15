@@ -11,7 +11,7 @@
 import { isAbsolute } from 'node:path';
 
 import type { EventBus } from '../../core/primitives/event-bus.js';
-import { AgentEvents } from '../../core/primitives/event-bus.js';
+import { AgentEvents } from '../events/agent-event-map.js';
 import type { ToolCall } from '../../core/types/messages.js';
 import type {
   SecurityViolation,

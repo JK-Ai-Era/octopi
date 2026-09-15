@@ -1,18 +1,19 @@
 /**
  * Core 基础设施原语
  *
- * 机制性组件：EventBus、StateMachine、AsyncTask、ProcessModel。
- * 这些是框架的基础设施，不是策略实现。
+ * 机制性组件：EventBus（开放信封）、StateMachine（泛型）。
+ * 产品事件词表在 harness/events；Session 状态策略在 harness/session-state-machine.ts。
  */
 
-export { DefaultEventBus, NoopEventBus, ThrottledEventBus, AgentEvents } from './event-bus.js';
-export type { EventBus, AgentEvent, EventHandler, Disposable, DefaultEventBusOptions, ThrottleConfig } from './event-bus.js';
+export { DefaultEventBus, NoopEventBus, ThrottledEventBus } from './event-bus.js';
+export type {
+  EventBus,
+  AgentEvent,
+  EventHandler,
+  Disposable,
+  DefaultEventBusOptions,
+  ThrottleConfig,
+} from './event-bus.js';
 
-export { StateMachine, createSessionStateMachine } from './state-machine.js';
+export { StateMachine } from './state-machine.js';
 export type { StateTransition, StateMachineConfig } from './state-machine.js';
-
-export { AsyncTask, TaskTimeoutError, TaskCancelledError, spawnTask, TaskEvents } from './async-task.js';
-export type { TaskOptions, TaskExecutor } from './async-task.js';
-
-export { ProcessModel, ProcessEvents, spawnProcess } from './process-model.js';
-export type { ProcessState, ExitReason, ExitInfo, ProcessOptions, ProcessBody, ProcessContext } from './process-model.js';

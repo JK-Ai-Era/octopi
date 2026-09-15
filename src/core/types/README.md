@@ -9,14 +9,16 @@
 ## 职责
 
 - messages.ts — Message、ContentBlock、ToolCall、ToolResult
-- agent-definition.ts — AgentPersona、ModelConfig、AgentDefinition
+- agent-definition.ts — ModelInfo、ToolPolicy（Kernel；AgentDefinition/Persona/ModelConfig 在 harness/types）
 - session.ts — SessionStatus、SessionMeta
 - turn.ts — TokenUsage、Turn
 - tools.ts — ToolDefinition、RegisteredTool、ToolHandler
-- skills.ts — SkillDefinition、SkillManager
-- events.ts — 测试编排用 AgentEventDetail / LoopEndReason（**非** Loop 协议事件；协议见 `loop/types.ts`）
-- queue-mode.ts — QueueMode（规范定义）
-- thinking-level.ts — ThinkingLevel（规范定义）
+- queue-mode.ts — QueueMode
+- thinking-level.ts — ThinkingLevel
+
+测试编排词表（AgentEventDetail）与产品事件 Map 已迁 `harness/events/`。
+
+Skill 类型与 SkillManager 已迁至 harness/plugin-ecosystem/skills（非 Kernel）。
 
 ## 不做什么
 

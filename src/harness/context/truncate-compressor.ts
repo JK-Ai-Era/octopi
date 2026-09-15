@@ -14,7 +14,7 @@ import type {
   CompressParams,
   CompressResult,
   TokenEstimator,
-} from '../../core/interfaces/context-engine.js';
+} from './types.js';
 import { HeuristicTokenEstimator } from './token-estimator.js';
 
 export class TruncateCompressor implements Compressor {

@@ -57,12 +57,22 @@ export { DefaultToolBus } from './plugin-ecosystem/tools/tool-bus.js';
 export { getBuiltinTools, createShellTool, createFileReadTool, createFileWriteTool, createFileListTool } from './plugin-ecosystem/tools/builtin.js';
 export { DefaultSkillManager, FileSystemSkillSource } from './plugin-ecosystem/skills/manager.js';
 export type { SkillSource, DiscoveredSkill } from './plugin-ecosystem/skills/manager.js';
+export type { SkillDefinition, SkillManager } from './plugin-ecosystem/skills/types.js';
+export type { AgentPersona, ModelConfig, AgentDefinition } from './types/agent-definition.js';
 export { DefaultMcpManager, mcpToolToOctopiDefinition, extractMcpToolResult, splitNamespacedToolName, MCP_NAMESPACE_SEP, loadMcpServersFromDir, DEFAULT_MCP_SERVERS_DIR } from './plugin-ecosystem/mcp/index.js';
-export type { McpClientFactory, McpManagerCallbacks } from './plugin-ecosystem/mcp/index.js';
+export type { McpClientFactory, McpManagerCallbacks, McpClient, McpManager, McpServerConfig } from './plugin-ecosystem/mcp/index.js';
+export type { WebSearchProvider, WebSearchOptions, WebSearchResponse } from './plugin-ecosystem/tools/web-search-types.js';
 
 // ── Multi-Agent ──
 export { DefaultAgentRegistry, AgentSwarm, RoundRobinStrategy, CapabilityStrategy, PipelineStrategy, SwarmEvents, AgentProcess, spawnAgentProcess, forkAgentProcess, AgentProcessEvents } from './multi-agent/index.js';
-export type { SwarmTopology, SwarmConfig, SwarmAgent, SwarmTask, OrchestrationStrategy, AgentProcessState, AgentProcessResult, AgentProcessAnnounce, AgentProcessConfig } from './multi-agent/index.js';
+export type { SwarmTopology, SwarmConfig, SwarmAgent, SwarmTask, OrchestrationStrategy, AgentProcessState, AgentProcessResult, AgentProcessAnnounce, AgentProcessConfig, AgentRegistry, AgentInfo, AgentQuery, AgentRelation } from './multi-agent/index.js';
+export { AgentRegistryEvents } from './multi-agent/agent-registry-types.js';
+
+// ── HITL / Execution Environment ──
+export type { ApprovalLevel, ApprovalProvider, ApprovalPolicy, ApprovalRequest, ApprovalDecision } from './human-in-the-loop/types.js';
+export type { MessageChannel, ProcessMessage, MessageHandler } from './multi-agent/message-channel-types.js';
+export type { SandboxProvider, Workspace, SandboxResult, IsolationLevel } from './execution-environment/types.js';
+export type { EventSource, EventSourceDescriptor, ExternalEvent } from './agent-runtime/event-source-types.js';
 
 // ── Autonomous Subsystem ──
 export { SubsystemRuntime } from './autonomous-subsystem/runtime.js';
@@ -143,8 +153,12 @@ export type { ContextIntelligenceConfig, AssembledContext, AgentDatabaseOptions,
 
 // ── Memory 领域类型 ──
 export type { MemoryType, MemoryEntry, MemoryQuery, MemoryStats, MemoryStore } from './memory/types.js';
-export type { WisdomEntry, WisdomStore } from './memory/wisdom-types.js';
-export type { ConceptNode, ConceptEdge, ConceptGraph, ConceptGraphStore } from './memory/cognition-types.js';
+export type { WisdomEntry, WisdomStore } from './memory/types.js';
+export type { ConceptNode, ConceptEdge, ConceptGraph, ConceptGraphStore } from './memory/types.js';
+export type {
+  Planner, Reflector, AgentState, AgentStats, Plan, PlanStep,
+  StepResult, ExecutionRecord, Assessment, Pattern,
+} from './orchestration/cognitive-loop.js';
 
 // ── Session 类型 ──
 export type { SessionData, SessionLifecycleMeta, SessionLifecycleStatus, MemoryExtractionStatus } from './session-types.js';
@@ -178,10 +192,13 @@ export * from './types/index.js';
 
 // ── Concurrency re-exports ──
 export * from './concurrency/tool-loop-detection.js';
-export { StateMachine, createSessionStateMachine } from '../core/primitives/state-machine.js';
+export { StateMachine } from '../core/primitives/state-machine.js';
 export type { StateTransition, StateMachineConfig } from '../core/primitives/state-machine.js';
-export { AsyncTask, TaskTimeoutError, TaskCancelledError, spawnTask, TaskEvents } from '../core/primitives/async-task.js';
-export type { TaskOptions, TaskExecutor } from '../core/primitives/async-task.js';
+export { createSessionStateMachine } from './session-state-machine.js';
+export { AgentEvents } from './events/agent-event-map.js';
+export type { AgentEventMap, KnownAgentEventType, TypedAgentEvent } from './events/agent-event-map.js';
+export type { LoopEndReason, AgentEventDetail, AgentEventListener } from './events/scenario-events.js';
+export { AsyncTask, TaskTimeoutError, TaskCancelledError, spawnTask, TaskEvents } from './orchestration/async-task.js';
+export type { TaskOptions, TaskExecutor } from './orchestration/async-task.js';
+export type { AsyncTaskStore, AsyncTaskRecord, AsyncTaskStatus, AsyncTaskPriority, AsyncTaskFilter } from './orchestration/async-task-store.js';
 export * from './budget/index.js';
-export { ProcessModel, ProcessEvents, spawnProcess } from '../core/primitives/process-model.js';
-export type { ProcessState, ExitReason, ExitInfo, ProcessOptions, ProcessBody, ProcessContext } from '../core/primitives/process-model.js';

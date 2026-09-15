@@ -9,13 +9,13 @@
 
 import type { PluginManifest } from './manifest.js';
 import type { ModelProvider } from '../../../core/interfaces/model-provider.js';
-import type { WebSearchProvider } from '../../../core/interfaces/web-search.js';
+import type { WebSearchProvider } from '../tools/web-search-types.js';
 import type {
   RegisteredTool,
   ToolDefinition,
   ToolHandler,
-  ContextEngine,
 } from '../../../core/types.js';
+import type { ContextEngine } from '../../context/types.js';
 import type { ChannelAdapter, ChannelMessage, ChannelReply } from '../../../integration/types/channels.js';
 
 /**
@@ -327,7 +327,7 @@ export class PluginApi {
   /**
    * 注册 Web Search Provider
    *
-   * @param provider - 实现 Core WebSearchProvider 契约的实例
+   * @param provider - 实现 WebSearchProvider 契约的实例
    */
   registerWebSearchProvider(provider: WebSearchProvider): void {
     const id = provider.id || this.getProviderId(provider);

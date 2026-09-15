@@ -11,13 +11,13 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Message } from '../src/core/types.js';
-import type { LLMMessage, ToolDefinition } from '../src/core/interfaces/model-provider.js';
+import type { LLMMessage, LLMToolDefinition } from '../src/core/interfaces/model-provider.js';
 import type {
   ContextEngine,
   AssembleParams,
   TokenEstimator,
   SummarizeFunction,
-} from '../src/core/interfaces/context-engine.js';
+} from '../src/harness/context/types.js';
 import { HeuristicTokenEstimator, estimateTextTokens, estimateLLMMessages } from '../src/harness/context/token-estimator.js';
 import {
   estimateContentBlock,
@@ -77,7 +77,7 @@ function createToolResultMessage(toolCallId: string, name: string, result: strin
   };
 }
 
-function createToolDefinition(name: string, description: string): ToolDefinition {
+function createToolDefinition(name: string, description: string): LLMToolDefinition {
   return {
     type: 'function',
     function: {

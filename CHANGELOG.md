@@ -1,3 +1,58 @@
+## v0.26.0 (2026-09-16)
+
+### refactor(core): Kernel 收敛 + Domain 契约归域 + ContextEngine 接线
+
+Core 定位收口为 **Agent Runtime Kernel Contract**：词汇表 + 少数 Kernel ports + EventBus/StateMachine 机制。产品契约与策略迁入 Harness 各领域。
+
+#### 分层与入口
+
+- `octopi/core` **仅 Kernel**；删除 `octopi/core/domain`
+- Kernel ports：ModelProvider、ErrorStrategy、SecurityGuard、RunGuard、ReliabilityHarness
+- Product ports（类型可留 Core）：ToolBus、SessionStore、Observer
+- 增加架构边界执法：eslint `no-restricted-imports` + `tests/architecture/boundaries.test.ts`
+
+#### Domain 契约迁出 Core
+
+| 原 Core | 现位置 |
+|---------|--------|
+| memory / knowledge / cognitive-loop | harness memory / context/knowledge / orchestration |
+| AsyncTask + Store | harness/orchestration |
+| AgentRegistry / MessageChannel | harness/multi-agent |
+| MCP / WebSearch / HITL / Sandbox / EventSource | harness 各域 |
+| SkillManager / AgentDefinition / Persona | harness plugin / types |
+| ContextEngine | harness/context/types.ts |
+| AgentEventMap / AgentEvents / scenario events | harness/events |
+| createSessionStateMachine | harness/session-state-machine.ts |
+
+#### 删除
+
+- `ProcessModel`（Erlang 式进程壳；multi-agent 走消息语义）
+- Core 死目录事件常量与 `budget.checkAndEmit`
+
+#### ContextEngine 接线（修复死接线）
+
+- Builder `convertToLlm` → `assemble`；未配置时默认 `DefaultContextEngine`
+- `sessionId` 经 `Agent.contextSessionId`，Runner 每 handle 注入（多 Session 不串味）
+- `droppedSummary` 并入 system；`afterTurn` 传本轮增量 + usage 校准
+- 统一 security/budget 共用同一 EventBus 实例
+
+#### 事件
+
+- Core `EventBus` 仅开放信封；产品词表在 `harness/events`
+- `llm_stream_delta` 有意不进 bus（防拥塞）；`persona.resolve.failed` 入 Map
+- `ThrottledEventBus` 改为 trailing-edge 合并
+
+#### 工具类型
+
+- Provider 侧 `ToolDefinition` → `LLMToolDefinition`；包入口 `ToolDefinition` = 领域富模型
+- `ToolBus.toLLMDefinitions` 返回类型收紧
+
+#### 其它
+
+- `session.ended` 由 SessionArchiveManager 归档时 emit
+- 文档：core/README、interfaces README、architecture、domain-split（历史附录+现行对照）、根 README 分层对齐
+- 测试：StateMachine / EventBus / 桥接映射 / Memory 契约 / ContextEngine wiring / AgentEvents↔Map 同步
+
 ## v0.25.6 (2026-09-15)
 
 ### fix: 审查加固项

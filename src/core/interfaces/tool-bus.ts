@@ -17,6 +17,7 @@ import type {
   ToolDefinition,
   ToolPolicy,
 } from '../types.js';
+import type { LLMToolDefinition } from './model-provider.js';
 
 /**
  * ToolBus 接口
@@ -74,5 +75,5 @@ export interface ToolBus {
    *
    * 等价于 resolve() 后转为 OpenAI function calling schema。
    */
-  toLLMDefinitions(agentId: string, policy?: ToolPolicy): unknown[];
+  toLLMDefinitions(agentId: string, policy?: ToolPolicy): LLMToolDefinition[];
 }

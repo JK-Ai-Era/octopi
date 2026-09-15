@@ -1,13 +1,12 @@
 /**
- * AsyncTaskStore — 运行时异步任务持久化协议
+ * AsyncTaskStore — 异步任务持久化协议
  *
- * 职责：AsyncTask 的状态持久化和检索（无用户语义）。
+ * @layer harness/orchestration — AsyncTask 的状态持久化和检索。
  * 实现方：内存（开发）、文件、Redis、数据库等。
  *
  * 设计要点：
- * - Core 层的 AsyncTask 使用此接口持久化状态
- * - 支持任务查询和过滤（用于 dashboard/监控）
- * - 任务状态机：pending → running → completed | failed | cancelled
+ * - 支持任务查询和过滤（dashboard/监控）
+ * - 状态机：pending → running → completed | failed | cancelled
  * - 禁止依赖 Session.tasks
  */
 
@@ -87,7 +86,7 @@ export interface AsyncTaskFilter {
 /**
  * AsyncTaskStore 接口
  *
- * Core 层的 AsyncTask 使用此接口持久化任务状态。
+ * orchestration 域内 AsyncTask 的持久化契约（非 Core）。
  * 默认实现为内存；持久化实现可放在 integration/storage。
  */
 export interface AsyncTaskStore {

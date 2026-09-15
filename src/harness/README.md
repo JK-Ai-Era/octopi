@@ -34,7 +34,7 @@
 
 ## 依赖规则
 
-- 只依赖 Core 和 Loop
+- 只依赖 Core（Kernel）和 Loop
 - 不依赖 Integration
-- 领域间通过 Core 接口通信，不共享内部状态
+- 领域间通过对方 **types** 通信，不共享内部状态；Domain 契约定义在本层领域内
 - **推荐运行入口是 `harness/agent` 的 `Agent.run()`**，不要在业务路径手拼 `runAgentWithReliability`

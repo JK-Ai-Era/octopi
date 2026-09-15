@@ -1,7 +1,7 @@
 /**
  * Execution Environment 接口定义
  *
- * @layer core — 定义执行环境的契约，由 harness/execution-environment/ 实现。
+ * @layer harness/execution-environment — 执行环境契约。
  */
 
 // ── 沙箱配置 ──

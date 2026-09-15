@@ -35,8 +35,16 @@ export interface LLMMessage {
   name?: string;
 }
 
-/** 工具定义（OpenAI function calling 格式） */
-export interface ToolDefinition {
+/**
+ * LLM 工具定义（OpenAI function calling 传输格式）
+ *
+ * 与 Core 领域模型 `types/tools.ts` 的 `ToolDefinition` 刻意区分：
+ * - `LLMToolDefinition`：ModelProvider 边界，扁平 JSON schema
+ * - `ToolDefinition`：注册/权限/参数校验用的富模型
+ *
+ * 转换路径：`RegisteredTool` →（builder）→ `AgentTool` →（loop）→ `LLMToolDefinition`
+ */
+export interface LLMToolDefinition {
   type: 'function';
   function: {
     name: string;
@@ -48,7 +56,7 @@ export interface ToolDefinition {
 /** LLM 请求 */
 export interface LLMRequest {
   messages: LLMMessage[];
-  tools?: ToolDefinition[];
+  tools?: LLMToolDefinition[];
   temperature?: number;
   maxTokens?: number;
   model?: string;

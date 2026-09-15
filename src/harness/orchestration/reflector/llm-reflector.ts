@@ -10,9 +10,9 @@ import type {
   Assessment,
   Pattern,
   ExecutionRecord,
-} from '../../../core/interfaces/cognitive-loop.js';
+} from '../cognitive-loop.js';
 import type { ModelProvider, LLMRequest } from '../../../core/interfaces/model-provider.js';
-import type { KnowledgeStore, KnowledgeEntry } from '../../../core/interfaces/knowledge-store.js';
+import type { KnowledgeStore, KnowledgeEntry } from '../../context/knowledge/types.js';
 
 // ── 配置 ──
 

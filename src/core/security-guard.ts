@@ -1,13 +1,13 @@
 /**
- * SecurityGuard — 安全守卫（Core 层）
+ * SecurityGuard — 安全守卫纯函数（Core）
  *
- * Core 层只保留：
- * - 接口定义（从 interfaces/security-guard.ts re-export）
+ * Core 只保留：
+ * - 接口 re-export（interfaces/security-guard.ts）
  * - severityToAction 纯函数
  * - isValidSecurityGuard 验证函数
  *
- * DefaultSecurityGuard 实现已迁移到 harness/security/default-security-guard.ts
- * 通过 core/index.ts 的 barrel re-export 保持向后兼容。
+ * DefaultSecurityGuard 实现在 harness/security/default-security-guard.ts，
+ * **不由** core/index.ts re-export（Kernel 入口不含 Harness 实现）。
  */
 
 // ── 接口 re-export（向后兼容） ──

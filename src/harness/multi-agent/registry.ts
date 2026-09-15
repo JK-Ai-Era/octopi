@@ -1,11 +1,11 @@
 /**
  * DefaultAgentRegistry — Agent 注册与发现的默认实现
  *
- * Harness 层组件。实现 Core 层的 AgentRegistry 接口。
+ * Harness 层组件。实现本域 `agent-registry-types.ts` 的 AgentRegistry。
  * 基于内存存储，支持按能力发现、状态管理、关系管理。
  *
  * 设计原则：
- * - 实现 Core 接口，不依赖外部存储
+ * - 不依赖外部存储
  * - 事件驱动：所有变更通过 EventBus 通知
  * - 线程安全：操作是同步的，适合单进程场景
  */
@@ -16,8 +16,8 @@ import type {
   AgentQuery,
   AgentRelation,
   AgentRelationType,
-} from '../../core/interfaces/agent-registry.js';
-import { AgentRegistryEvents } from '../../core/interfaces/agent-registry.js';
+} from './agent-registry-types.js';
+import { AgentRegistryEvents } from './agent-registry-types.js';
 import type { EventBus } from '../../core/primitives/event-bus.js';
 
 /**

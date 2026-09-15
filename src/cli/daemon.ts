@@ -370,7 +370,7 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
   const memoryStore = new (await import('../harness/memory/store.js')).InMemoryMemoryStore();
   // SessionTaskService 随 AgentBuilder/Gateway 的 SessionStore 自动接线；不再单独建 TaskTracker。
 
-  let webSearchToolCfg: { provider: import('../core/interfaces/web-search.js').WebSearchProvider; defaultLimit?: number; timeoutMs?: number } | undefined;
+  let webSearchToolCfg: { provider: import('../harness/plugin-ecosystem/tools/web-search-types.js').WebSearchProvider; defaultLimit?: number; timeoutMs?: number } | undefined;
   if (config.webSearch?.providers && Object.keys(config.webSearch.providers).length > 0) {
     const { resolveWebSearchProviders, createWebSearchWithFallback } = await import('../integration/web-search/factory.js');
     const resolved = resolveWebSearchProviders(config.webSearch);

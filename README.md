@@ -37,8 +37,8 @@ Octopi is an embeddable agent engine for building AI-powered applications. It pr
 │  │  execution-env · hitl · memory                             ││
 │  │                                                          ││
 │  │  ┌──────────────────────────────────────────────────────┐││
-│  │  │  Layer 1: Core — Primitives + Interfaces + Types      │││
-│  │  │  EventBus · StateMachine · AsyncTask · Contracts      │││
+│  │  │  Layer 1: Core — Kernel Contract                       │││
+│  │  │  EventBus · StateMachine · Kernel ports                │││
 │  │  │                                                      │││
 │  │  │  ┌──────────────────────────────────────────────────┐│││
 │  │  │  │  Layer 0: Loop — Pure execution loop             ││││
@@ -55,9 +55,9 @@ Octopi is an embeddable agent engine for building AI-powered applications. It pr
 
 The heart of the engine. `agentLoop()` is a pure async generator: input messages → LLM call → tool execution → protocol events. Zero state, zero external dependencies. Runnable facade is Harness `Agent.run()`.
 
-### Layer 1: Core — Primitives + Contracts
+### Layer 1: Core — Kernel Contract
 
-Infrastructure primitives (EventBus, StateMachine, AsyncTask, ProcessModel) and all interface contracts (ModelProvider, ContextEngine, SecurityGuard, SessionStore, etc.). No strategy implementations. **Does not re-export Loop.**
+Infrastructure primitives (EventBus, StateMachine) and **Kernel ports** (ModelProvider, ErrorStrategy, SecurityGuard, RunGuard, ReliabilityHarness) plus shared vocabulary types. **Product ports** (ToolBus, SessionStore, Observer) and domain contracts (ContextEngine, Memory, MCP, …) live in Harness. No strategy implementations. **Does not re-export Loop.**
 
 ### Layer 2: Harness — Domains
 
@@ -190,7 +190,7 @@ npm test
 src/
 ├── loop/                    Layer 0  Pure execution loop
 ├── core/                    Layer 1  Primitives + interfaces + types
-│   ├── primitives/               EventBus, StateMachine, AsyncTask, ProcessModel
+│   ├── primitives/               EventBus, StateMachine
 │   ├── interfaces/               18 interface contracts
 │   └── types/                    Core type definitions
 ├── harness/                 Layer 2  15 self-contained domains

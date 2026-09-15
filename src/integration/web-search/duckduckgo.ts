@@ -5,7 +5,7 @@
  * 适合默认兜底；生产环境建议配置 Tavily/Brave/Serper 等。
  */
 
-import type { WebSearchProvider, WebSearchOptions, WebSearchResponse, WebSearchResultItem } from '../../core/interfaces/web-search.js';
+import type { WebSearchProvider, WebSearchOptions, WebSearchResponse, WebSearchResultItem } from '../../harness/plugin-ecosystem/tools/web-search-types.js';
 import { fetchText } from './http.js';
 
 export interface DuckDuckGoProviderConfig {

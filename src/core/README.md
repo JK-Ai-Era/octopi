@@ -1,33 +1,61 @@
-# Core — 机制原语 + 接口契约
+# Core — Kernel 契约 + 机制原语
 
 > Layer: Layer 1
 
-框架的基础设施层。定义所有接口契约，提供机制原语（EventBus 等），定义核心类型。
+**产品定位**：Agent Runtime Kernel Contract — 一次 agent run 的稳定合同。
 
-**核心理念**：Core 只包含机制，不包含策略。所有策略实现在 Harness 层。
+## 入口
+
+| 包路径 | 内容 |
+|--------|------|
+| `octopi/core` | **仅 Kernel** + 可选 Product port 类型（见下） |
+
+Domain / 产品契约主体在 **harness 领域**。
+
+## Kernel ports（thin run 必需）
+
+剥掉 Harness 后，薄 runner（`Agent.run` → reliability → `agentLoop`）仍需要：
+
+- **ModelProvider** — 调模型
+- **ErrorStrategy** — 错误决策
+- **SecurityGuard** — 安全检查
+- **RunGuard** — 过程监督
+- **ReliabilityHarness** — reliability 装配
+
+机制：EventBus、StateMachine；词汇表：Message / ToolCall / ModelInfo / ToolPolicy…
+
+## Product ports（可留 Core 类型，但不是 thin-run 判据）
+
+| 端口 | 真实角色 | 现位置 |
+|------|----------|--------|
+| **ToolBus** | 装配/注册期（Builder、MCP） | `core/interfaces/tool-bus.ts` |
+| **SessionStore** | Session 聚合（Runner / Gateway） | `core/interfaces/session-store.ts` |
+| **Observer** | 可选 Integration 遥测（专题再议） | `core/interfaces/observer.ts` |
+| **ContextEngine** | 窗口装配；经 `convertToLlm` 接入 | **harness/context/types.ts** |
+
+## 可嵌入门禁（I/O 准则）
+
+**合同可谈 I/O，内核不做 I/O，更不内置生产 I/O。**
+
+| 允许 | 禁止 |
+|------|------|
+| 定义 ModelProvider / SessionStore 等端口 | 直接 fs / net / http / child_process |
+| 纯内存默认实现 | 默认生产 Provider / 默认落盘 Store |
 
 ## 职责
 
-- 定义接口契约（interfaces/）
-- 提供基础设施原语（primitives/）
-- 定义核心类型（types/）
-- 提供安全守卫纯函数（security-guard.ts）
+- Kernel ports + 词汇表 + EventBus/StateMachine **机制**
+- 安全纯函数（severityToAction / isValidSecurityGuard）
+- **不包含**产品事件词表（AgentEventMap 在 harness/events）
 
 ## 不做什么
 
-- 不实现任何接口的具体策略
-- 不 import 任何外层模块（Harness、Integration）
-- 不持有持久状态
-
-## 依赖
-
-- 无外层依赖。**不 re-export Loop**（`agentLoop` / `AgentLoopEvent` 从 `loop/` 导入；Agent 门面从 `harness/agent/` 导入）。
+- 不实现策略；不 import Harness / Integration / Loop
+- 不持有 Domain 产品契约（Memory、MCP、ContextEngine 实现…）
 
 ## 文件说明
 
-- interfaces/ — 接口契约（ModelProvider、ReliabilityHarness、ErrorStrategy 等）
-- primitives/ — EventBus、StateMachine、AsyncTask、ProcessModel
-- types/ — 核心类型定义（Message、ToolCall、Session 等；`events.ts` 为测试编排词表）
-- security-guard.ts — severityToAction() + isValidSecurityGuard()
-- index.ts — 统一导出
-- types.ts — barrel re-export
+- interfaces/ — Kernel + Product port 类型
+- primitives/ — EventBus、StateMachine
+- types/ — Kernel 词汇表
+- index.ts — `octopi/core`

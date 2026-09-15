@@ -1,10 +1,10 @@
 /**
  * Human-in-the-Loop 接口定义
  *
- * @layer core — 定义人机交互的契约，由 harness/human-in-the-loop/ 实现。
+ * @layer harness/human-in-the-loop — 审批契约。
  */
 
-import type { ToolCall } from '../types/messages.js';
+import type { ToolCall } from '../../core/types/messages.js';
 
 // ── 审批请求 ──
 

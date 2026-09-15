@@ -8,10 +8,11 @@
 
 ## 职责
 
-- EventBus — 一对多事件广播（33 个文件使用）
+- EventBus — 一对多事件广播；规范词表见 `AgentEventMap`
 - StateMachine — 状态机（状态转换管理）
-- AsyncTask — 异步原语（取消、超时、重试）
-- ProcessModel — 进程模型（生命周期、spawn、IPC）
+
+> AsyncTask 已迁至 `harness/orchestration/`（调度产品件，非 Kernel）。
+> ProcessModel 已删除。
 
 ## 不做什么
 

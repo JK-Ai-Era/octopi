@@ -2,42 +2,30 @@
 
 > Layer: Layer 1
 
-框架的所有接口定义。这是 Core 层和 Harness 层之间的契约。
+## Kernel ports（thin run 必需）
 
-**核心理念**：接口是框架最有价值的资产。好的接口让外层可以自由替换实现。
+- ModelProvider — LLM 调用
+- ErrorStrategy — 错误处理
+- SecurityGuard — 安全检查
+- RunGuard — 过程监督
+- ReliabilityHarness — reliability 装配
 
-## 职责
+## Product ports（类型可暂留 Core）
 
-- ModelProvider — LLM 调用接口
-- ContextEngine — 上下文管理接口
-- SecurityGuard — 安全守卫接口
-- SessionStore — Session 持久化接口
-- Observer — 可观测性接口
-- ErrorStrategy — 错误处理接口
-- RunGuard — 过程监督接口
-- AsyncTaskStore — 运行时异步任务持久化
-- cognitive-loop — Plan / Planner / Reflector 契约
-- knowledge-store — KnowledgeStore 契约
-- AgentRegistry — Agent 注册接口
-- McpClient — MCP 客户端接口
-- ReliabilityHarness — 可靠性装备接口
-- SandboxProvider — 沙箱接口
-- Workspace — 工作区接口
-- ApprovalProvider — 审批接口
-- MemoryStore — 记忆存储接口
-- WisdomStore — 智慧存储接口
-- ConceptGraphStore — 认知图谱接口
+| 端口 | 角色 | 备注 |
+|------|------|------|
+| ToolBus | 装配/注册 | 非 thin-run |
+| SessionStore | Session 聚合 | Runner/Gateway |
+| Observer | 可选遥测 | 专题再议；Loop 用 LoopObserver |
 
-## 不做什么
+## 已迁 Harness 的契约
 
-- 不包含任何实现
-- 不 import 实现文件
-- 只 import 其他 interface 文件或 types.ts
-
-## 依赖
-
-- Core: types/（类型定义）
-
-## 文件说明
-
-每个 interface 文件定义一个接口。所有接口从 index.ts 统一导出。
+| 契约 | 位置 |
+|------|------|
+| ContextEngine 及组件 | `harness/context/types.ts` |
+| Memory / Wisdom / Cognition | `harness/memory/types.ts` |
+| KnowledgeStore | `harness/context/knowledge/types.ts` |
+| Planner / Reflector | `harness/orchestration/cognitive-loop.ts` |
+| AsyncTask + Store | `harness/orchestration/async-task*.ts` |
+| Skill / AgentDefinition | harness plugin / types |
+| Registry / MCP / HITL / WebSearch / Sandbox / EventSource / MessageChannel | harness 各域 |

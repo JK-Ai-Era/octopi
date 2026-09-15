@@ -1,13 +1,13 @@
 /**
  * MCP Client 接口
  *
- * 职责：连接外部 MCP Server，发现并调用其提供的工具/资源。
- * 实现方：基于 @modelcontextprotocol/sdk 的具体实现。
+ * @layer harness/plugin-ecosystem/mcp — MCP 产品契约，非 Core Kernel。
+ * 实现方：基于 @modelcontextprotocol/sdk 的 SdkMcpClient（integration/mcp）。
  *
  * 设计原则：
- * - Core 层只定义接口，不依赖 MCP SDK
- * - Harness 层实现桥接逻辑（MCP 工具 → Octopi ToolBus）
- * - Integration 层实现传输层（stdio、HTTP）
+ * - 本文件只定义契约，不依赖 MCP SDK
+ * - Harness 实现桥接逻辑（MCP 工具 → Octopi ToolBus）
+ * - Integration 实现传输层（stdio、HTTP）
  */
 
 // ── MCP Server 配置 ──

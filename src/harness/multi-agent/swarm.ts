@@ -22,7 +22,7 @@ import type { Message } from '../../core/types.js';
 import type { Agent } from '../agent/index.js';
 import type { ReliabilityHarness } from '../reliability/index.js';
 
-import type { AgentRegistry, AgentInfo } from '../../core/interfaces/agent-registry.js';
+import type { AgentRegistry, AgentInfo } from './agent-registry-types.js';
 import type { SwarmConfig, SwarmAgent, SwarmTask } from './types.js';
 import { SwarmEvents } from './types.js';
 

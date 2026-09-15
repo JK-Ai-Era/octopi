@@ -21,13 +21,17 @@
 // Core 层
 // ============================================================
 
-export { DefaultEventBus, NoopEventBus, AgentEvents } from './core/primitives/event-bus.js';
+export { DefaultEventBus, NoopEventBus } from './core/primitives/event-bus.js';
+export { AgentEvents } from './harness/events/agent-event-map.js';
+export type { AgentEventMap, KnownAgentEventType, TypedAgentEvent } from './harness/events/agent-event-map.js';
 export type { AgentEvent, EventHandler, Disposable } from './core/primitives/event-bus.js';
 export { DefaultSecurityGuard } from './harness/security/default-security-guard.js';
 export { IterationBudget } from './harness/budget/budget.js';
 
 // Core 接口
-export type { ModelProvider, LLMRequest, LLMResponse, LLMStreamChunk, ToolDefinition } from './core/interfaces/model-provider.js';
+export type { ModelProvider, LLMRequest, LLMResponse, LLMStreamChunk, LLMToolDefinition } from './core/interfaces/model-provider.js';
+/** 领域富模型（注册/权限/参数校验）；LLM 传输格式见 LLMToolDefinition */
+export type { ToolDefinition, RegisteredTool, ToolHandler, ToolParameter, ToolSource, ToolExecutionContext } from './core/types/tools.js';
 export type { ErrorStrategy, ErrorAction, OverflowAction } from './core/interfaces/error-strategy.js';
 export type { SecurityAction } from './core/security-guard.js';
 export type { Observer, Span, LogLevel } from './core/interfaces/observer.js';
@@ -55,7 +59,7 @@ export type {
   BudgetAllocator,
   BudgetAllocateParams,
   BudgetAllocateResult,
-} from './core/interfaces/context-engine.js';
+} from './harness/context/types.js';
 
 // ============================================================
 // Harness 层
@@ -98,6 +102,9 @@ export type { PluginManifest, PluginContracts, ActivationConfig } from './harnes
 // Harness Skill 系统
 export { DefaultSkillManager, FileSystemSkillSource } from './harness/plugin-ecosystem/skills/manager.js';
 export type { SkillSource, DiscoveredSkill } from './harness/plugin-ecosystem/skills/manager.js';
+export type { SkillDefinition, SkillManager } from './harness/plugin-ecosystem/skills/types.js';
+/** 产品装配 DTO（非 Kernel）；ModelInfo/ToolPolicy 仍从 core/types 导出 */
+export type { AgentPersona, ModelConfig, AgentDefinition } from './harness/types/agent-definition.js';
 
 // Harness Tool 系统
 export { DefaultToolBus } from './harness/plugin-ecosystem/tools/tool-bus.js';
@@ -114,8 +121,8 @@ export type { BuiltAgent } from './harness/agent-building/config-bridge.js';
 // Multi-Agent 系统
 export { DefaultAgentRegistry, AgentSwarm, RoundRobinStrategy, CapabilityStrategy, PipelineStrategy, SwarmEvents, AgentProcess, spawnAgentProcess, forkAgentProcess, AgentProcessEvents } from './harness/multi-agent/index.js';
 export type { SwarmTopology, SwarmConfig, SwarmAgent, SwarmTask, OrchestrationStrategy, AgentProcessState, AgentProcessResult, AgentProcessAnnounce, AgentProcessConfig } from './harness/multi-agent/index.js';
-export type { AgentRegistry, AgentInfo, AgentQuery, AgentRelation, AgentRelationType } from './core/interfaces/agent-registry.js';
-export { AgentRegistryEvents } from './core/interfaces/agent-registry.js';
+export type { AgentRegistry, AgentInfo, AgentQuery, AgentRelation, AgentRelationType } from './harness/multi-agent/agent-registry-types.js';
+export { AgentRegistryEvents } from './harness/multi-agent/agent-registry-types.js';
 
 // ============================================================
 // Integration 层
@@ -199,8 +206,33 @@ export { RecordingProvider, ReplayProvider, createReplayProvider, ScenarioRunner
 export type { RecordingEntry, RecordingConfig, ReplayConfig, Scenario, ScenarioAssertion, ScenarioResult, TurnResult, ScenarioRunnerConfig, ChaosProviderConfig, ChaosRule, ScenarioFragment, ParameterizedResult } from './testing/index.js';
 
 // ============================================================
-// Core types（全部导出）
+// Core types（Kernel 词汇表）
 // ============================================================
 
 export * from './core/types.js';
 export { getTextContent, hasMediaContent } from './core/types.js';
+
+// Domain 契约（已迁 harness 领域，主包仍导出常用类型）
+export type { AsyncTaskStore, AsyncTaskRecord } from './harness/orchestration/async-task-store.js';
+export type {
+  MemoryStore, MemoryEntry, MemoryType, MemoryQuery, MemoryStats,
+  WisdomStore, WisdomEntry,
+  ConceptGraphStore, ConceptNode, ConceptEdge, ConceptGraph,
+  KnowledgeStore, KnowledgeEntry,
+  Planner, Reflector, AgentState,
+} from './harness/index.js';
+export type {
+  McpClient, McpManager, McpServerConfig, McpToolDefinition, McpToolResult,
+} from './harness/plugin-ecosystem/mcp/types.js';
+export type {
+  MessageChannel, ProcessMessage,
+} from './harness/multi-agent/message-channel-types.js';
+export type {
+  ApprovalProvider, ApprovalPolicy, ApprovalRequest, ApprovalDecision,
+} from './harness/human-in-the-loop/types.js';
+export type {
+  SandboxProvider, Workspace, IsolationLevel, SandboxConfig, SandboxResult,
+} from './harness/execution-environment/types.js';
+export type {
+  EventSource, EventSourceDescriptor, ExternalEvent,
+} from './harness/agent-runtime/event-source-types.js';

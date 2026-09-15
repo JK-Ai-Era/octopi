@@ -1,22 +1,16 @@
 /**
- * ContextEngine — 上下文管理引擎接口
+ * ContextEngine — 上下文装配契约
  *
- * 职责：在有限的上下文窗口内，为模型提供最有价值的信息。
+ * @layer harness/context — 产品端口（非 Core Kernel）。
+ * 在有限上下文窗口内为模型选择/压缩最有价值的信息。
  *
- * 核心方法：
- * - assemble(): 组装上下文（必须实现）
- *
- * 可选方法：
- * - ingest(): 存储消息
- * - compact(): 压缩存储
- * - afterTurn(): 更新状态
- *
- * Core 层定义接口，不包含任何策略逻辑。
- * Harness 层提供默认实现，Integration 层可完全替换。
+ * 接入：Builder 经 convertToLlm 调用 assemble；Loop 不依赖本类型。
  */
 
-import type { Message, ToolCall } from '../types.js';
-import type { LLMMessage, ToolDefinition } from './model-provider.js';
+import type { Message, ToolCall } from '../../core/types.js';
+import type { LLMMessage, LLMToolDefinition } from '../../core/interfaces/model-provider.js';
+
+export type { LLMMessage, LLMToolDefinition };
 
 // ── 引擎信息 ──
 
@@ -43,7 +37,7 @@ export interface ContextEngineInfo {
  *    - 中文：1 汉字 ≈ 1 token
  *    - 多模态：图片按固定 token 计（参考 OpenAI vision 定价）
  *
- * Core 层定义接口，Harness 层实现具体策略。
+ * 本域契约；Harness 实现启发式/tokenizer 策略。
  */
 export interface TokenEstimator {
   /** 估算单条消息的 token 数 */
@@ -53,7 +47,7 @@ export interface TokenEstimator {
   /** 估算文本的 token 数 */
   estimateText(text: string): number;
   /** 估算工具定义的 token 数 */
-  estimateTools(tools: ToolDefinition[]): number;
+  estimateTools(tools: LLMToolDefinition[]): number;
 }
 
 // ── 组装参数 ──
@@ -66,7 +60,7 @@ export interface AssembleParams {
   /** 系统提示词 */
   systemPrompt: string;
   /** 可用工具定义 */
-  tools: ToolDefinition[];
+  tools: LLMToolDefinition[];
   /** Token 预算（可用空间） */
   tokenBudget: number;
   /** 模型上下文窗口大小（来自 ModelInfo） */
@@ -169,10 +163,9 @@ export interface AfterTurnParams {
  * 可选方法：
  * - ingest(): 存储消息
  * - compact(): 压缩存储
- * - afterTurn(): 更新状态
+ * - afterTurn(): 更新状态（turn 为**本轮增量**消息）
  *
- * Core 层定义接口，不包含任何策略逻辑。
- * Harness 层提供默认实现，Integration 层可完全替换。
+ * 本域契约（@layer harness/context）；Harness 提供 DefaultContextEngine。
  */
 export interface ContextEngine {
   readonly info: ContextEngineInfo;

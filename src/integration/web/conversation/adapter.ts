@@ -249,6 +249,10 @@ export class ConversationAdapter {
         break;
       }
 
+      // ── 历史/合成事件（当前 src 生产路径不 emit；回放、测试与插件可注入） ──
+      // security.blocked / context.truncated / *_retry 等仍由 adapter 消化，
+      // 避免未知事件打断会话渲染。新生产事件请优先挂到 AgentEventMap。
+
       // ── Security blocked ──
       case 'security.blocked':
       case 'security.behavior_blocked': {

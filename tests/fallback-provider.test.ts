@@ -12,7 +12,8 @@ import type {
   LLMResponse,
   LLMStreamChunk,
 } from '../src/core/interfaces/model-provider.js';
-import type { ModelConfig, ModelInfo } from '../src/core/types/agent-definition.js';
+import type { ModelInfo } from '../src/core/types/agent-definition.js';
+import type { ModelConfig } from '../src/harness/types/agent-definition.js';
 
 function makeRequest(model?: string): LLMRequest {
   return {

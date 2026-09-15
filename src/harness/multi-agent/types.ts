@@ -6,7 +6,7 @@
 
 import type { Agent } from '../agent/index.js';
 import type { ReliabilityHarness } from '../reliability/index.js';
-import type { AgentInfo, AgentRelation } from '../../core/interfaces/agent-registry.js';
+import type { AgentInfo, AgentRelation } from './agent-registry-types.js';
 import type { SessionAwareRunner } from '../runner.js';
 
 // ── Swarm 拓扑 ──

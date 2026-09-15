@@ -13,7 +13,7 @@ import type {
   ApprovalProvider,
   ApprovalPolicy,
   ApprovalLevel,
-} from '../../core/interfaces/human-in-the-loop.js';
+} from './types.js';
 
 /** ApprovalManager 配置 */
 export interface ApprovalManagerConfig {

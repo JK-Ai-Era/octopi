@@ -16,7 +16,7 @@ import type {
   SelectResult,
   SelectOptions,
   TokenEstimator,
-} from '../../core/interfaces/context-engine.js';
+} from './types.js';
 import { HeuristicTokenEstimator } from './token-estimator.js';
 
 export class DefaultMessageSelector implements MessageSelector {

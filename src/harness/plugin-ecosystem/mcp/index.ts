@@ -6,6 +6,10 @@
 
 export { DefaultMcpManager } from './manager.js';
 export type { McpClientFactory, McpManagerCallbacks } from './manager.js';
+export type {
+  McpClient, McpManager, McpServerConfig, McpToolDefinition, McpToolResult,
+  McpContentBlock, McpResourceDefinition, McpPromptDefinition, McpServerCapabilities,
+} from './types.js';
 export {
   mcpToolToOctopiDefinition,
   extractMcpToolResult,

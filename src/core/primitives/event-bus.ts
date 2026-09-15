@@ -1,26 +1,18 @@
 /**
- * EventBus — 事件总线（Core 内置）
+ * EventBus — 事件总线（Core 机制）
  *
- * Agent 循环中的所有关键节点都会发射事件。
- * Harness 层和 Integration 层通过订阅事件实现审计、监控、调试。
+ * Core 只保留**开放信封 + 广播机制**。
+ * 规范产品词表（AgentEventMap / AgentEvents）在 harness/events/，
+ * 由 Harness / Integration 消费；Core 不钉产品目录。
  *
- * 架构说明：
- * - EventBus 接口：可替换的契约
- * - DefaultEventBus / ThrottledEventBus / NoopEventBus：内置默认实现，
- *   供 Core 内部组件（SecurityGuard、IterationBudget、AsyncTask、ProcessModel）使用，
- *   Harness 层可通过 Builder 注入替换为自定义实现
- *
- * 两套事件系统共存说明：
- * - yield-based (AgentLoopEvent / HarnessLoopEvent): 点对点，循环 → 调用方
- * - emit-based (EventBus): 一对多广播，基础设施/策略事件
- * - 桥接点：SessionAwareRunner.handle() 将循环事件广播到 EventBus（跳过 llm_stream_delta）
- * - EventBus 被 Core 内部 4 个模块依赖（SecurityGuard、Budget、AsyncTask、ProcessModel）
- * - 远期：EventBus 实现迁移到 Harness 层，Core 只保留接口
+ * 两套事件系统：
+ * 1) yield：Loop 协议（agentLoop → 调用方），不进本总线（除 Runner 显式桥接）
+ * 2) emit：EventBus 一对多广播（基础设施 / 策略 / 桥接产物）
  */
 
-// ── 事件类型 ──
+// ── 事件信封 ──
 
-/** Agent 事件 */
+/** 开放事件信封 */
 export interface AgentEvent {
   type: string;
   timestamp: number;
@@ -37,48 +29,12 @@ export interface Disposable {
   dispose(): void;
 }
 
-// ── 内置事件类型 ──
+// ── 接口 ──
 
-/** 标准事件类型常量 */
-export const AgentEvents = {
-  // 生命周期
-  ENGINE_START: 'engine.start',
-  ENGINE_END: 'engine.end',
-  ITERATION_START: 'iteration.start',
-  ITERATION_END: 'iteration.end',
-
-  // 模型
-  MODEL_CALL_START: 'model.call.start',
-  MODEL_CALL_END: 'model.call.end',
-  MODEL_CALL_ERROR: 'model.call.error',
-
-  // 工具
-  TOOL_EXEC_START: 'tool.exec.start',
-  TOOL_EXEC_END: 'tool.exec.end',
-  TOOL_EXEC_ERROR: 'tool.exec.error',
-
-  // 安全
-  INJECTION_DETECTED: 'injection.detected',
-  POLICY_VIOLATED: 'policy.violated',
-  SENSITIVE_DATA_DETECTED: 'sensitive_data.detected',
-
-  // 资源
-  BUDGET_EXCEEDED: 'budget.exceeded',
-  CONTEXT_OVERFLOW: 'context.overflow',
-
-  // 质量
-  QUALITY_ANOMALY: 'quality.anomaly',
-} as const;
-
-// ── 接口定义 ──
-
-/** EventBus 接口 */
+/** EventBus 接口（开放 type；强类型词表见 harness/events） */
 export interface EventBus {
-  /** 发射事件 */
   emit(event: AgentEvent): void;
-  /** 订阅特定类型的事件 */
   on(eventType: string, handler: EventHandler): Disposable;
-  /** 订阅所有事件 */
   onAll(handler: EventHandler): Disposable;
 }
 
@@ -91,10 +47,9 @@ export interface DefaultEventBusOptions {
 }
 
 /**
- * 默认 EventBus 实现
+ * 默认 EventBus 实现（进程内、零环境 I/O）
  *
- * 基于 Map 的事件订阅，支持同步和异步处理器。
- * debug 模式下，处理器异常会输出警告（不中断 Agent 循环）。
+ * emit 为同步分发；异步 handler 的 rejection 不会进入 try/catch。
  */
 export class DefaultEventBus implements EventBus {
   private handlers = new Map<string, Set<EventHandler>>();
@@ -108,7 +63,6 @@ export class DefaultEventBus implements EventBus {
   emit(event: AgentEvent): void {
     const timestamped = { ...event, timestamp: event.timestamp ?? Date.now() };
 
-    // 特定类型的处理器
     const typeHandlers = this.handlers.get(event.type);
     if (typeHandlers) {
       for (const handler of typeHandlers) {
@@ -122,7 +76,6 @@ export class DefaultEventBus implements EventBus {
       }
     }
 
-    // 通配符处理器
     for (const handler of this.allHandlers) {
       try {
         handler(timestamped);
@@ -160,8 +113,7 @@ export class DefaultEventBus implements EventBus {
 /**
  * No-op EventBus
  *
- * 不发射任何事件。用于不需要可观测性的场景。
- * 零开销。
+ * 不发射任何事件。用于不需要可观测性的场景。零开销。
  */
 export class NoopEventBus implements EventBus {
   emit(_event: AgentEvent): void {}
@@ -179,25 +131,22 @@ export class NoopEventBus implements EventBus {
 export interface ThrottleConfig {
   /** 事件类型的节流间隔（毫秒）。未列出的类型不节流。 */
   intervals?: Record<string, number>;
-  /** 默认节流间隔（毫秒），应用于所有未在 intervals 中指定的类型 */
+  /** 默认节流间隔（毫秒） */
   defaultIntervalMs?: number;
 }
 
 /**
- * ThrottledEventBus — 节流事件总线
+ * ThrottledEventBus — trailing-edge 合并
  *
- * 包装一个 EventBus，对高频事件（如 llm_stream_delta）按类型进行节流。
- * 非节流类型的事件直接透传，零额外开销。
- *
- * 适用场景：
- * - 流式输出的 delta 事件（每 token 一次 → 每 50ms 一次）
- * - 高频迭代事件
+ * 窗口内只保留最后一次，窗口结束时补发。
  */
 export class ThrottledEventBus implements EventBus {
   private inner: EventBus;
   private intervals: Map<string, number>;
   private defaultIntervalMs: number;
   private lastEmit = new Map<string, number>();
+  private pending = new Map<string, AgentEvent>();
+  private timers = new Map<string, ReturnType<typeof setTimeout>>();
 
   constructor(inner: EventBus, config?: ThrottleConfig) {
     this.inner = inner;
@@ -208,7 +157,6 @@ export class ThrottledEventBus implements EventBus {
   emit(event: AgentEvent): void {
     const interval = this.intervals.get(event.type) ?? this.defaultIntervalMs;
     if (interval <= 0) {
-      // 不节流，直接透传
       this.inner.emit(event);
       return;
     }
@@ -217,9 +165,25 @@ export class ThrottledEventBus implements EventBus {
     const last = this.lastEmit.get(event.type) ?? 0;
     if (now - last >= interval) {
       this.lastEmit.set(event.type, now);
+      this.pending.delete(event.type);
       this.inner.emit(event);
+      return;
     }
-    // 否则丢弃此事件
+
+    this.pending.set(event.type, event);
+    if (!this.timers.has(event.type)) {
+      const wait = Math.max(0, interval - (now - last));
+      const timer = setTimeout(() => {
+        this.timers.delete(event.type);
+        const p = this.pending.get(event.type);
+        if (p) {
+          this.pending.delete(event.type);
+          this.lastEmit.set(event.type, Date.now());
+          this.inner.emit(p);
+        }
+      }, wait);
+      this.timers.set(event.type, timer);
+    }
   }
 
   on(eventType: string, handler: EventHandler): Disposable {
@@ -228,5 +192,14 @@ export class ThrottledEventBus implements EventBus {
 
   onAll(handler: EventHandler): Disposable {
     return this.inner.onAll(handler);
+  }
+
+  /** 清理未触发的 trailing timer */
+  dispose(): void {
+    for (const timer of this.timers.values()) {
+      clearTimeout(timer);
+    }
+    this.timers.clear();
+    this.pending.clear();
   }
 }

@@ -14,7 +14,7 @@ import type {
   WorkspaceSnapshot,
   SearchOptions,
   FileMatch,
-} from '../../core/interfaces/execution-environment.js';
+} from './types.js';
 
 export interface FileWorkspaceConfig {
   root: string;

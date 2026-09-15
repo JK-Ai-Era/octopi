@@ -5,7 +5,7 @@
  * 与 LLM 的 createProviderFromConfig 对等，作为组合根的一部分。
  */
 
-import type { WebSearchProvider, WebSearchResponse } from '../../core/interfaces/web-search.js';
+import type { WebSearchProvider, WebSearchResponse } from '../../harness/plugin-ecosystem/tools/web-search-types.js';
 
 import { createDuckDuckGoProvider } from './duckduckgo.js';
 import { createTavilyProvider } from './tavily.js';

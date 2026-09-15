@@ -19,7 +19,8 @@ type TypedSessionStore = SessionStore<SessionData>;
 import type { Agent } from './agent/index.js';
 import type { HarnessLoopEvent } from './reliability/harness-events.js';
 import type { ReliabilityHarness } from './reliability/run-agent.js';
-import { createSessionStateMachine, type StateMachine } from '../core/primitives/state-machine.js';
+import { createSessionStateMachine } from './session-state-machine.js';
+import type { StateMachine } from '../core/primitives/state-machine.js';
 import { HeuristicTokenEstimator } from './context/token-estimator.js';
 import type { SessionTaskService } from './session-tasks/service.js';
 import { renderSessionTasksInjection } from './session-tasks/render.js';
@@ -77,7 +78,17 @@ export interface RunConfig {
  * 旧消费者（Gateway/TUI）期望 AgentEvent。
  * 此函数桥接两者，避免一次性更新所有下游。
  */
-function adaptLoopEvent(
+/**
+ * 将 Loop yield 事件适配为 EventBus 信封（向后兼容词表）
+ *
+ * @param event - HarnessLoopEvent
+ * @param meta - agentId / sessionId
+ * @param state - 桥接过程中的可变状态（assistant 文本等）
+ * @returns AgentEvent；不广播时返回 null
+ *
+ * 导出供桥接映射测试使用；生产调用方仍为 SessionAwareRunner.handle。
+ */
+export function adaptLoopEvent(
   event: HarnessLoopEvent,
   meta: { agentId: string; sessionId: string },
   state: { assistantContent: string; lastUserContent?: string },
@@ -401,6 +412,8 @@ export class SessionAwareRunner {
       // 更新 harness 的 sessionId/agentId（用于检查点）
       this.harness.sessionId = sessionId;
       this.harness.agentId = effectiveRunConfig.agentId ?? 'default';
+      // ContextEngine CompactState 按 session 隔离
+      this.agent.setContextSessionId(sessionId);
 
       // Token 估算器（当 LLM 不返回 usage 时用于回退估算）
       const estimator = new HeuristicTokenEstimator();
@@ -411,6 +424,8 @@ export class SessionAwareRunner {
       let lastUsage: any = undefined;
       const meta = { agentId: effectiveRunConfig.agentId ?? 'default', sessionId };
       const adaptState = { assistantContent: '', lastUserContent: '' };
+      /** 本轮起始消息下标（afterTurn 只传增量） */
+      let turnStartIndex = this.agent.context.messages.length;
 
       for await (const loopEvent of this.agent.run(signal)) {
         // 适配事件格式（向后兼容）
@@ -444,9 +459,20 @@ export class SessionAwareRunner {
           adaptState.assistantContent = typeof loopEvent.message.content === 'string' ? loopEvent.message.content : '';
         }
 
+        // turn_start：重置本轮增量游标（afterTurn 只传本轮消息）
+        if (loopEvent.type === 'turn_start') {
+          turnStartIndex = this.agent.context.messages.length;
+        }
+
         // turn.end → 记录 turn
         if (loopEvent.type === 'turn_end') {
           hasTurnEnd = true;
+          if (loopEvent.usage) {
+            lastUsage = loopEvent.usage;
+          }
+          const turnMessages = this.agent.context.messages.slice(turnStartIndex);
+          await this.agent.notifyAfterTurn(lastUsage, turnMessages);
+          turnStartIndex = this.agent.context.messages.length;
           const content = adaptState.assistantContent || streamedContent;
           if (content) {
             session.turns.push({

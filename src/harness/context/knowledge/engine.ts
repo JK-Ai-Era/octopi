@@ -13,7 +13,7 @@ import type {
   CompactResult,
   AfterTurnParams,
   IngestParams,
-} from '../../../core/interfaces/context-engine.js';
+} from '../types.js';
 import type { KnowledgeStore } from './types.js';
 import { getTextContent } from '../../../core/types.js';
 

@@ -109,7 +109,7 @@ Memory 系统已有清晰接口：
 - `stats`
 
 参考：
-- [src/core/interfaces/memory.ts:134](/Users/jk/Projects/octopi/src/core/interfaces/memory.ts:134)
+- `src/harness/memory/types.ts`
 
 这意味着 Web Runtime 的 Inspector 层已经有接口基础，缺的是对外查询入口。
 
@@ -124,7 +124,7 @@ Human-in-the-loop 已有核心契约：
 - `ApprovalProvider`
 
 参考：
-- [src/core/interfaces/human-in-the-loop.ts:15](/Users/jk/Projects/octopi/src/core/interfaces/human-in-the-loop.ts:15)
+- `src/harness/human-in-the-loop/types.ts`
 
 因此 Approval Queue 可以直接复用现有语义，不必重新定义审批模型。
 

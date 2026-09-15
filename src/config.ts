@@ -36,7 +36,8 @@
  * ```
  */
 
-import type { AgentDefinition, ToolPolicy, ModelInfo } from './core/types.js';
+import type { ToolPolicy, ModelInfo } from './core/types.js';
+import type { AgentDefinition, ModelConfig as _ModelConfig } from './harness/types/agent-definition.js';
 import type { GatewayConfig } from './integration/types/gateway-config.js';
 import type { ModelProvider } from './core/interfaces/model-provider.js';
 import type { SessionStore } from './core/interfaces/session-store.js';
@@ -534,7 +535,7 @@ export interface HarnessConfig {
  * @returns 解析后的配置
  */
 
-import type { ModelConfig as _ModelConfig } from './core/types/agent-definition.js';
+// ModelConfig 定义见 harness/types/agent-definition.ts（已在此文件顶部 import）
 
 const DEFAULT_CONTEXT_WINDOW = 200_000;
 
@@ -793,7 +794,7 @@ export interface NormalizedModelInfo {
 
 export function toGatewayConfig(config: NormalizedHarnessConfig): GatewayConfig {
   // 解析 agent model 配置：string 引用 → ModelConfig 对象
-  const resolvedAgents: import('./core/types/agent-definition.js').AgentDefinition[] = config.agents.map(ac => ({
+  const resolvedAgents: AgentDefinition[] = config.agents.map(ac => ({
     id: ac.id,
     home: ac.home ?? (typeof ac.persona === 'string' ? ac.persona : ''),
     workspace: ac.workspace,

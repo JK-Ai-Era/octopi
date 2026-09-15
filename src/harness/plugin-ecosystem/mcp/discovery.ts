@@ -28,7 +28,7 @@
 import { readdir, readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
-import type { McpServerConfig } from '../../../core/interfaces/mcp-client.js';
+import type { McpServerConfig } from './types.js';
 
 /** 默认 MCP Server 配置目录 */
 export const DEFAULT_MCP_SERVERS_DIR = resolve(homedir(), '.octopi', 'mcp-servers');

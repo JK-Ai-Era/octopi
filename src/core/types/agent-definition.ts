@@ -1,16 +1,9 @@
 /**
- * Agent 定义类型
+ * 模型能力与工具策略（Kernel 词汇）
  *
- * 描述 Agent 的人设、模型配置、工具策略等静态定义。
+ * @layer core — ModelProvider / ToolBus 消费；
+ * 产品装配 DTO（AgentDefinition / Persona / ModelConfig）见 harness/types/agent-definition.ts。
  */
-
-/** Agent 人设 */
-export interface AgentPersona {
-  name: string;
-  description: string;
-  systemPrompt: string;
-  tags?: string[];
-}
 
 /** 模型能力声明 */
 export interface ModelInfo {
@@ -19,36 +12,9 @@ export interface ModelInfo {
   maxOutputTokens?: number;
 }
 
-/** 模型配置 */
-export interface ModelConfig {
-  provider: string;
-  model: string;
-  temperature?: number;
-  maxTokens?: number;
-  contextWindow?: number;
-  /** 回退模型列表（按优先级排序，由 resolveModelConfig 解析后的完整配置） */
-  fallbackModels?: ModelConfig[];
-}
-
 /** 工具策略 */
 export interface ToolPolicy {
   allow: string[];
   deny?: string[];
   requireConfirmation?: string[];
-}
-
-/** Agent 定义 */
-export interface AgentDefinition {
-  id: string;
-  /** Agent home 目录：persona、skills、sessions、extract 的根目录（memory/wisdom 走 AgentDatabase SQLite） */
-  home: string;
-  /** 沙箱工作目录：agent 工具操作的 cwd */
-  workspace?: string;
-  persona: AgentPersona;
-  tools: ToolPolicy;
-  model: ModelConfig;
-  skillDirectory?: string;
-  skills?: string[];
-  contextEngine?: string;
-  channelBindings?: Record<string, string>;
 }

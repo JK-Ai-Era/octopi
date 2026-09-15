@@ -30,7 +30,7 @@ import type { SecurityGuardConfig } from '../../core/security-guard.js';
 import type { RunGuardJsonConfig } from '../../config.js';
 import { DefaultRunGuard } from '../run-guard/default-run-guard.js';
 import type { RunGuardConfig } from '../run-guard/default-run-guard.js';
-import type { ContextEngine } from '../../core/interfaces/context-engine.js';
+import type { ContextEngine } from '../context/types.js';
 import { DefaultContextEngine } from '../context/default-context-engine.js';
 import { DefaultBudgetAllocator } from '../context/budget-allocator.js';
 

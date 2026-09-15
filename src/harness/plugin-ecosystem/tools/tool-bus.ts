@@ -24,6 +24,7 @@ import type {
   ToolPolicy,
 } from '../../../core/types.js';
 import type { ToolBus } from '../../../core/interfaces/tool-bus.js';
+import type { LLMToolDefinition } from '../../../core/interfaces/model-provider.js';
 
 /**
  * DefaultToolBus — 工具总线实现
@@ -113,7 +114,7 @@ export class DefaultToolBus implements ToolBus {
     return tools;
   }
 
-  toLLMDefinitions(agentId: string, policy?: ToolPolicy): unknown[] {
+  toLLMDefinitions(agentId: string, policy?: ToolPolicy): LLMToolDefinition[] {
     return this.resolve(agentId, policy).map(definition => ({
       type: 'function',
       function: {

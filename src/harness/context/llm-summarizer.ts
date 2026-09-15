@@ -19,7 +19,7 @@ import type {
   CompressResult,
   TokenEstimator,
   SummarizeFunction,
-} from '../../core/interfaces/context-engine.js';
+} from './types.js';
 import { HeuristicTokenEstimator } from './token-estimator.js';
 
 /**

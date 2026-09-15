@@ -5,7 +5,7 @@
  * https://docs.tavily.com/
  */
 
-import type { WebSearchProvider, WebSearchOptions, WebSearchResponse, WebSearchResultItem } from '../../core/interfaces/web-search.js';
+import type { WebSearchProvider, WebSearchOptions, WebSearchResponse, WebSearchResultItem } from '../../harness/plugin-ecosystem/tools/web-search-types.js';
 import { fetchJson } from './http.js';
 
 export interface TavilyProviderConfig {

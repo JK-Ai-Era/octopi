@@ -10,7 +10,7 @@ import {
   flattenModels,
 } from '../src/config.js';
 import type { ModelsConfig, NormalizedModelInfo } from '../src/config.js';
-import type { ModelConfig } from '../src/core/types/agent-definition.js';
+import type { ModelConfig } from '../src/harness/types/agent-definition.js';
 
 // ── flattenModels ──
 

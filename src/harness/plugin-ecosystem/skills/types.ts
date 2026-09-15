@@ -1,5 +1,8 @@
 /**
  * Skill 系统类型
+ *
+ * @layer harness/plugin-ecosystem — Skill 是 Harness 产品能力，
+ * 不是 Kernel；discover/load 的 fs 实现在 manager.ts。
  */
 
 /** Skill 定义 */

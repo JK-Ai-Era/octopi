@@ -1,19 +1,15 @@
 /**
- * 场景 / 测试侧事件载荷（非 Loop 协议）
+ * 场景 / 测试侧事件载荷
  *
- * 注意：这里的 `AgentEventDetail` **不是** `loop/types.ts` 的 `AgentLoopEvent`。
- * - Loop 协议事件见 `loop/types.ts`（含 `turn_end.phase`）
- * - Harness 扩展事件见 `harness/reliability/harness-events.ts`
- * - 本文件保留给 scenario-runner 等测试编排使用的松散事件词表
- *
- * LLM 流式 chunk 的规范定义在 `interfaces/model-provider.ts`（此处不再重复定义）。
+ * @layer harness/events — 测试编排词表，非 Loop 协议、非 Core Kernel。
+ * Loop 协议见 loop/types.ts；产品 bus 词表见 agent-event-map.ts。
  */
 
-import type { ToolCall } from './messages.js';
-import type { TokenUsage } from './turn.js';
-import type { ClassifiedError, ErrorReason } from '../interfaces/error-strategy.js';
+import type { ToolCall } from '../../core/types.js';
+import type { TokenUsage } from '../../core/types.js';
+import type { ClassifiedError, ErrorReason } from '../../core/interfaces/error-strategy.js';
 
-export type { ErrorReason, ClassifiedError } from '../interfaces/error-strategy.js';
+export type { ErrorReason, ClassifiedError };
 
 export type LoopEndReason =
   | 'completed'
@@ -23,13 +19,6 @@ export type LoopEndReason =
   | 'interrupted'
   | 'error';
 
-/**
- * 测试编排用事件详情
- *
- * `turn_end.phase` 与 Loop 协议对齐：
- * - `pre_tools`：工具即将执行，run 未结束
- * - `final`：本轮无工具路径结束
- */
 export type AgentEventDetail =
   | { type: 'loop_start'; sessionId: string }
   | { type: 'loop_end'; reason: LoopEndReason; response?: string }
@@ -38,7 +27,6 @@ export type AgentEventDetail =
       type: 'turn_end';
       turnId: string;
       shouldContinue: boolean;
-      /** 与 AgentLoopEvent.turn_end.phase 同构 */
       phase?: 'pre_tools' | 'final';
     }
   | { type: 'messages_injected'; count: number; source: string }

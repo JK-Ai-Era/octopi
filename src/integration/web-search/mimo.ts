@@ -30,7 +30,7 @@ import type {
   WebSearchOptions,
   WebSearchResponse,
   WebSearchResultItem,
-} from '../../core/interfaces/web-search.js';
+} from '../../harness/plugin-ecosystem/tools/web-search-types.js';
 import { fetchJson } from './http.js';
 
 /** 用户位置（approximate） */

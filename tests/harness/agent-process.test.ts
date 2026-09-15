@@ -7,7 +7,7 @@ import { AgentProcess, spawnAgentProcess, forkAgentProcess, AgentProcessEvents }
 import { DefaultEventBus } from '../../src/core/primitives/event-bus.js';
 import { Agent } from '../../src/harness/agent/agent.js';
 import type { ReliabilityHarness } from '../../src/harness/reliability/run-agent.js';
-import type { AgentInfo } from '../../src/core/interfaces/agent-registry.js';
+import type { AgentInfo } from '../../harness/multi-agent/agent-registry-types.js';
 import type { ModelProvider, LLMRequest, LLMResponse, LLMStreamChunk } from '../../src/core/interfaces/model-provider.js';
 import type { Message } from '../../src/core/types.js';
 

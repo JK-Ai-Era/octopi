@@ -23,6 +23,7 @@ import type {
 } from '../../../core/types.js';
 import type { ChannelAdapter, ChannelMessage, ChannelReply } from '../../../integration/types/channels.js';
 import type { HookContext } from '../../../harness/types/hook-context.js';
+import type { ContextEngine } from '../../context/types.js';
 import type { PluginApi } from './api.js';
 import type { LoadedPlugin, PluginLoaderConfig, PluginEntryConfig } from './loader.js';
 import { PluginLoader } from './loader.js';
@@ -686,8 +687,8 @@ export class PluginManager {
   /**
    * 获取所有已注册的 context engines
    */
-  getContextEngines(): Array<{ id: string; engine: import('../../../core/types.js').ContextEngine }> {
-    const result: Array<{ id: string; engine: import('../../../core/types.js').ContextEngine }> = [];
+  getContextEngines(): Array<{ id: string; engine: ContextEngine }> {
+    const result: Array<{ id: string; engine: ContextEngine }> = [];
     for (const plugin of this.loader.getAllPlugins()) {
       if (!plugin.registered) continue;
       for (const reg of plugin.api._contextEngines) {
@@ -750,8 +751,8 @@ export class PluginManager {
   /**
    * 获取所有已注册的 web search providers
    */
-  getWebSearchProviders(): Array<{ pluginId: string; provider: import('../../../core/interfaces/web-search.js').WebSearchProvider }> {
-    const result: Array<{ pluginId: string; provider: import('../../../core/interfaces/web-search.js').WebSearchProvider }> = [];
+  getWebSearchProviders(): Array<{ pluginId: string; provider: import('../tools/web-search-types.js').WebSearchProvider }> {
+    const result: Array<{ pluginId: string; provider: import('../tools/web-search-types.js').WebSearchProvider }> = [];
     for (const plugin of this.loader.getAllPlugins()) {
       if (!plugin.registered) continue;
       for (const reg of plugin.api._webSearchProviders) {

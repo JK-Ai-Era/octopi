@@ -9,7 +9,8 @@
  * - Memory → Wisdom（升华：思维模式）
  *
  * 依赖：
- * - Core: interfaces/memory, types/messages
+ * - 契约：本域 types.ts（MemoryStore / WisdomStore / ConceptGraphStore）
+ * - Core: types/messages
  */
 
 // ── 内存实现 ──

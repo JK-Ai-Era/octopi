@@ -1,7 +1,5 @@
 /**
- * Core 类型子模块 barrel
- *
- * 按职责拆分的类型定义。types.ts 从此处 re-export 以保持向后兼容。
+ * Core 类型子模块 barrel — Kernel 词汇表
  */
 
 // ── 消息系统 ──
@@ -20,13 +18,10 @@ export type {
 } from './messages.js';
 export { getTextContent, hasMediaContent } from './messages.js';
 
-// ── Agent 定义 ──
+// ── 模型能力 / 工具策略 ──
 export type {
-  AgentPersona,
   ModelInfo,
-  ModelConfig,
   ToolPolicy,
-  AgentDefinition,
 } from './agent-definition.js';
 
 // ── Session ──
@@ -42,28 +37,11 @@ export type {
   ToolExecutionContext,
   ToolHandler,
   RegisteredTool,
+  ToolSource,
 } from './tools.js';
-export type { ToolSource } from './tools.js';
 
-// ── Skill 系统 ──
-export type { SkillDefinition, SkillManager } from './skills.js';
-
-// ── Channel Adapter ──
-
-// ── Plugin Hooks ──
-
-// ── 测试编排事件（非 Loop 协议；LLMStreamChunk 见 interfaces/model-provider） ──
-export type {
-  LoopEndReason,
-  AgentEventDetail,
-  AgentEventListener,
-} from './events.js';
-export type { ErrorReason, ClassifiedError } from './events.js';
-
-// ── Gateway 配置 ──
-
-// ── 队列模式 ──
+// ── 队列 / 思考级别 ──
 export type { QueueMode } from './queue-mode.js';
-
-// ── 思考级别 ──
 export type { ThinkingLevel } from './thinking-level.js';
+
+// 测试编排词表见 harness/events/scenario-events.ts

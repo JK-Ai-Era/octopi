@@ -10,7 +10,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-import type { WebSearchProvider, WebSearchResponse } from '../../src/core/interfaces/web-search.js';
+import type { WebSearchProvider, WebSearchResponse } from '../../harness/plugin-ecosystem/tools/web-search-types.js';
 import { createWebSearchTool } from '../../src/harness/plugin-ecosystem/tools/web-search.js';
 import {
   createWebSearchProviderFromSlot,

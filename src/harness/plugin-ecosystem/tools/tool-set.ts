@@ -1,7 +1,7 @@
 import type { RegisteredTool } from '../../../core/types.js';
 import type { MemoryStore } from '../../memory/types.js';
 import type { SessionTaskService } from '../../session-tasks/service.js';
-import type { WebSearchProvider } from '../../../core/interfaces/web-search.js';
+import type { WebSearchProvider } from './web-search-types.js';
 import type { AskUserCallback } from './ask-user.js';
 
 import { getBuiltinTools } from './builtin.js';

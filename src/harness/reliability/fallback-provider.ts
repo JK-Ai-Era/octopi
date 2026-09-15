@@ -16,7 +16,8 @@ import type {
   LLMResponse,
   LLMStreamChunk,
 } from '../../core/interfaces/model-provider.js';
-import type { ModelConfig, ModelInfo } from '../../core/types/agent-definition.js';
+import type { ModelInfo } from '../../core/types/agent-definition.js';
+import type { ModelConfig } from '../types/agent-definition.js';
 
 /** FallbackProvider 配置项 */
 interface FallbackEntry {

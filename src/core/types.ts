@@ -6,26 +6,16 @@
  *
  * 子模块结构：
  * - types/messages.ts    — 消息系统（Message, ContentBlock, ToolCall, ToolResult）
- * - types/agent-definition.ts — Agent 定义（AgentPersona, ModelConfig, AgentDefinition）
+ * - types/agent-definition.ts — ModelInfo / ToolPolicy（Kernel；AgentDefinition 在 harness）
  * - types/session.ts     — Session（SessionStatus, SessionMeta）
  * - types/turn.ts        — Turn（TokenUsage, Turn）
  * - types/tools.ts       — 工具系统（ToolDefinition, RegisteredTool, ToolHandler）
- * - types/skills.ts      — Skill 系统（SkillDefinition, SkillManager）
- * - types/channels.ts    — Channel Adapter（@layer integration）
- * - types/hooks.ts       — Plugin Hooks（@layer harness）
- * - types/events.ts      — 测试编排事件 AgentEventDetail（非 Loop 协议）
- * - types/gateway-config.ts — Gateway 配置（@layer integration）
- * - types/queue-mode.ts  — QueueMode（@layer harness）
- * - types/thinking-level.ts — ThinkingLevel（@layer harness）
+ * - types/queue-mode.ts  — QueueMode
+ * - types/thinking-level.ts — ThinkingLevel
  */
 
 export * from './types/index.js';
 
 export type { ErrorReason, ClassifiedError } from './interfaces/error-strategy.js';
 
-export type {
-  ContextEngine,
-  ContextEngineInfo,
-  AssembleResult,
-  CompactResult,
-} from './interfaces/context-engine.js';
+// ContextEngine 契约已迁 harness/context/types.ts（产品端口，非 Kernel）

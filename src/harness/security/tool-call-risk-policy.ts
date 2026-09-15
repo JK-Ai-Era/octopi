@@ -1,8 +1,7 @@
 /**
- * ToolCallRiskPolicy — 注入到 Core SecurityGuard 的风险策略接口
+ * ToolCallRiskPolicy — Kernel 契约的 Harness 便利 re-export
  *
- * 接口定义在 Core 层（src/core/security-guard.ts）。
- * 此文件重新导出，方便 Harness 层使用。
+ * 规范定义：core/interfaces/security-guard.ts（Kernel port）。
  */
 
 export type { ToolCallRiskPolicy } from '../../core/security-guard.js';

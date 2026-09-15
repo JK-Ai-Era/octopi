@@ -4,7 +4,7 @@
  * Integration 层类型。Gateway 是 Integration 层组件。
  */
 
-import type { AgentDefinition } from '../../core/types/agent-definition.js';
+import type { AgentDefinition } from '../../harness/types/agent-definition.js';
 
 export interface GatewayConfig {
   port?: number;

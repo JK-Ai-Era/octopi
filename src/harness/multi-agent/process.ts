@@ -5,10 +5,10 @@
  * 支持父子关系、完成通知（announce）、上下文分叉（fork）。
  *
  * 设计原则：
- * - 基于 ProcessModel 的生命周期，但不继承（组合优于继承）
+ * - 独立状态机（pending/running/completed/failed/aborted），不继承任何进程壳
  * - 结果通过 EventBus 推送给父进程（announce 模式）
  * - 支持 context fork：子进程继承父进程的消息历史
- * - 进程完成后不可重用（dead 终态）
+ * - 进程完成后不可重用（completed/failed/aborted 终态）
  */
 
 import { randomUUID } from 'node:crypto';
@@ -18,7 +18,7 @@ import type { Agent } from '../agent/index.js';
 import type { ReliabilityHarness } from '../reliability/index.js';
 
 import type { AgentEvent } from '../../core/primitives/event-bus.js';
-import type { AgentInfo } from '../../core/interfaces/agent-registry.js';
+import type { AgentInfo } from './agent-registry-types.js';
 
 // ── 进程状态 ──
 

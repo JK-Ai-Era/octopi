@@ -14,7 +14,7 @@
  */
 
 import type { Message, ToolCall, TokenUsage } from '../core/types.js';
-import type { LLMMessage, LLMResponse, ToolDefinition as ModelToolDef } from '../core/interfaces/model-provider.js';
+import type { LLMMessage, LLMResponse, LLMToolDefinition } from '../core/interfaces/model-provider.js';
 import type {
   AgentContext,
   AgentLoopConfig,
@@ -722,7 +722,7 @@ function normalizeMessagesForLlm(messages: import('../core/types.js').Message[])
 /**
  * 构建工具定义（ModelProvider 格式）
  */
-function buildToolDefinitions(tools?: AgentTool[]): ModelToolDef[] {
+function buildToolDefinitions(tools?: AgentTool[]): LLMToolDefinition[] {
   if (!tools) return [];
   return tools.map((tool) => ({
     type: 'function' as const,

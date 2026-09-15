@@ -5,8 +5,8 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { DefaultMcpManager } from '../../../src/harness/plugin-ecosystem/mcp/manager.js';
 import type { McpClientFactory, McpManagerCallbacks } from '../../../src/harness/plugin-ecosystem/mcp/manager.js';
-import type { McpClient, McpServerCapabilities, McpToolDefinition, McpToolResult } from '../../../src/core/interfaces/mcp-client.js';
-import type { McpServerConfig } from '../../../src/core/interfaces/mcp-client.js';
+import type { McpClient, McpServerCapabilities, McpToolDefinition, McpToolResult } from '../../../harness/plugin-ecosystem/mcp/types.js';
+import type { McpServerConfig } from '../../../harness/plugin-ecosystem/mcp/types.js';
 import { DefaultToolBus } from '../../../src/harness/plugin-ecosystem/tools/tool-bus.js';
 
 // ── Mock McpClient ──

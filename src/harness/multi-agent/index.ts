@@ -12,6 +12,13 @@ export type {
   SwarmTask,
 } from './types.js';
 export { SwarmEvents } from './types.js';
+export type {
+  AgentRegistry, AgentInfo, AgentQuery, AgentRelation, AgentRelationType,
+} from './agent-registry-types.js';
+export { AgentRegistryEvents } from './agent-registry-types.js';
+export type {
+  MessageChannel, ProcessMessage, MessageHandler,
+} from './message-channel-types.js';
 
 // ── 注册表 ──
 export { DefaultAgentRegistry } from './registry.js';

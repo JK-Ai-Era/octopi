@@ -1,11 +1,11 @@
 /**
- * AgentRegistry — Agent 注册与发现接口
+ * AgentRegistry — Agent 注册与发现契约
  *
- * 职责：让 Agent 之间能互相发现和通信。
- * 实现方：内存注册表、分布式注册表等。
+ * @layer harness/multi-agent — 多 Agent 产品契约，非 Core Kernel。
+ * 实现：DefaultAgentRegistry（registry.ts）。
  *
  * 设计原则：
- * - 接口定义在 Core，实现在 Harness
+ * - 契约与实现同域；跨域只 import 本文件 types
  * - 支持按能力（capability）发现 Agent
  * - 支持 Agent 上下线通知
  * - 支持多 Agent 拓扑描述

@@ -1,13 +1,11 @@
 /**
- * 轻量状态机
+ * 轻量状态机（纯机制）
  *
  * 定义合法状态转换路径，非法转换自动拦截。
- * 用于 Agent 生命周期、Session 生命周期等场景。
+ * Session 等领域策略见 harness/session-state-machine.ts。
  *
  * @module
  */
-
-import type { SessionStatus } from '../types.js';
 
 /**
  * 状态转换定义
@@ -128,32 +126,4 @@ export class StateMachine<S extends string> {
     this._previousState = this._state;
     this._state = state;
   }
-}
-
-/**
- * Session 状态机
- *
- * 合法转换：
- * - idle → processing（开始处理消息）
- * - processing → idle（处理完成）
- * - processing → waiting_human（需要人工介入）
- * - processing → error（处理出错）
- * - waiting_human → processing（人工回复后继续）
- * - waiting_human → idle（人工取消）
- * - error → idle（恢复/重试）
- */
-export function createSessionStateMachine(onTransition?: (from: SessionStatus, to: SessionStatus) => void): StateMachine<SessionStatus> {
-  return new StateMachine({
-    initial: 'idle',
-    transitions: [
-      { from: 'idle', to: 'processing', description: '开始处理消息' },
-      { from: 'processing', to: 'idle', description: '处理完成' },
-      { from: 'processing', to: 'waiting_human', description: '需要人工介入' },
-      { from: 'processing', to: 'error', description: '处理出错' },
-      { from: 'waiting_human', to: 'processing', description: '人工回复后继续' },
-      { from: 'waiting_human', to: 'idle', description: '人工取消' },
-      { from: 'error', to: 'idle', description: '恢复/重试' },
-    ],
-    onTransition,
-  });
 }

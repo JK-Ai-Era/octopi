@@ -14,3 +14,10 @@ export * from './planner/index.js';
 export * from './strategy/index.js';
 export * from './quality/index.js';
 export * from './reflector/index.js';
+export { AsyncTask, TaskTimeoutError, TaskCancelledError, spawnTask, TaskEvents } from './async-task.js';
+export type { TaskOptions, TaskExecutor } from './async-task.js';
+export type { AsyncTaskStore, AsyncTaskRecord, AsyncTaskStatus, AsyncTaskPriority, AsyncTaskFilter } from './async-task-store.js';
+export type {
+  Planner, Reflector, AgentState, AgentStats, Plan, PlanStep,
+  StepResult, ExecutionRecord, Assessment, Pattern,
+} from './cognitive-loop.js';

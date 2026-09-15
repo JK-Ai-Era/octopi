@@ -14,7 +14,7 @@ import type {
   LLMMessage,
   LLMResponse,
   LLMStreamChunk,
-  ToolDefinition as ModelToolDef,
+  LLMToolDefinition,
 } from '../core/interfaces/model-provider.js';
 
 // ============================================================
@@ -51,7 +51,7 @@ export interface AgentTool {
   description: string;
   /** UI 显示名（可选，默认用 name） */
   label?: string;
-  parameters?: ModelToolDef['function']['parameters'];
+  parameters?: LLMToolDefinition['function']['parameters'];
 
   // ── 参数处理 ──
   /** 参数预处理（在 beforeToolCall 之前执行） */

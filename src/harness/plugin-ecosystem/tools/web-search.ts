@@ -1,12 +1,12 @@
 /**
  * web_search 工具 — 网络搜索
  *
- * 通过依赖注入接收 WebSearchProvider（Core 契约），
+ * 通过依赖注入接收 WebSearchProvider（本域 web-search-types 契约），
  * 不 import 具体 provider 实现（保持依赖方向：Harness → Core）。
  */
 
 import type { RegisteredTool } from '../../../core/types.js';
-import type { WebSearchProvider, WebSearchOptions } from '../../../core/interfaces/web-search.js';
+import type { WebSearchProvider, WebSearchOptions } from './web-search-types.js';
 
 export interface WebSearchToolOptions {
   /** 默认返回条数 */

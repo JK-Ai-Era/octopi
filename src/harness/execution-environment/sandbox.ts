@@ -12,7 +12,7 @@ import type {
   SandboxResult,
   IsolationLevel,
   ResourceUsage,
-} from '../../core/interfaces/execution-environment.js';
+} from './types.js';
 
 export class ProcessSandbox implements SandboxProvider {
   readonly level: IsolationLevel = 'process';

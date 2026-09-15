@@ -17,7 +17,7 @@
 
 import type { Message } from '../../core/types.js';
 import { getTextContent } from '../../core/types.js';
-import type { LLMMessage, ToolDefinition } from '../../core/interfaces/model-provider.js';
+import type { LLMMessage, LLMToolDefinition } from '../../core/interfaces/model-provider.js';
 import type {
   ContextEngine,
   ContextEngineInfo,
@@ -32,7 +32,7 @@ import type {
   MessageSelector,
   Compressor,
   BudgetAllocator,
-} from '../../core/interfaces/context-engine.js';
+} from './types.js';
 import { HeuristicTokenEstimator, estimateLLMMessages } from './token-estimator.js';
 import { DefaultMessageSelector } from './message-selector.js';
 import { HybridCompressor } from './hybrid-compressor.js';
@@ -370,7 +370,7 @@ export class DefaultContextEngine implements ContextEngine {
   private buildLlmMessages(
     messages: Message[],
     systemPrompt: string,
-    tools: ToolDefinition[],
+    tools: LLMToolDefinition[],
   ): LLMMessage[] {
     const result: LLMMessage[] = [];
 

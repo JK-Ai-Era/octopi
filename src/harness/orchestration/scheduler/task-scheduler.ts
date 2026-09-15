@@ -2,7 +2,7 @@
  * TaskScheduler — 任务调度器
  *
  * 支持定时任务、延迟任务、循环任务。
- * 基于 Core AsyncTask 实现，通过 EventBus 发射事件。
+ * 基于 AsyncTask 实现，通过 EventBus 发射事件。
  *
  * 设计要点：
  * - 不依赖外部 cron 库，纯 JS 实现
@@ -11,7 +11,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { AsyncTask } from '../../../core/index.js';
+import { AsyncTask } from '../async-task.js';
 import type { EventBus, EventBusAgentEvent as AgentEvent } from '../../../core/index.js';
 
 // ── 任务类型 ──

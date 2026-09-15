@@ -19,9 +19,11 @@
 
 ## 依赖
 
-- Core: interfaces/human-in-the-loop、types/messages
+- 契约：本域 `types.ts`
+- Core: types/messages（ToolCall）
 
 ## 文件说明
 
+- types.ts — ApprovalProvider / Policy 契约
 - approval-manager.ts — ApprovalManager + createApprovalPolicy()
 - index.ts — 统一导出

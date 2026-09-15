@@ -26,7 +26,8 @@
 
 ## 依赖
 
-- Core: interfaces/memory、types/messages
+- Core: types/messages（Kernel 词汇表）
+- 契约（MemoryStore 等）定义在本目录 `types.ts`
 
 ## 文件说明
 

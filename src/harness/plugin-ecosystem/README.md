@@ -21,7 +21,9 @@ Plugin 系统、Skill 管理、工具注册、MCP 集成、斜杠命令。
 
 ## 依赖
 
-- Core: types/、interfaces/
+- Core: types/（Kernel 词汇表）
+- Product port: ToolBus（装配期，非 thin-run Kernel）
+- 本域契约：skills/types.ts、mcp/types.ts、tools/web-search-types.ts
 
 ## 文件说明
 

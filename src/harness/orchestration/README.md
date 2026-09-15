@@ -20,8 +20,11 @@
 - strategy/ — 任务分类 + 策略路由
 - quality/ — OutputQualityGate
 - reflector/ — LLMReflector
+- async-task.ts / async-task-store.ts — 异步工作单元（非 Kernel）
+- cognitive-loop.ts — Plan / Planner / Reflector 契约
 
 ## 依赖
 
-- Core only（含 cognitive-loop / knowledge-store 契约）
+- Core（Kernel：EventBus 等）
+- 契约定义在本域（cognitive-loop、async-task-store）
 - → SessionTaskService 仅单向可选适配（未内置）

@@ -9,7 +9,6 @@
  */
 
 import type { EventBus } from '../../core/primitives/event-bus.js';
-import { AgentEvents } from '../../core/primitives/event-bus.js';
 
 // ── 配置 ──
 
@@ -225,24 +224,8 @@ export class IterationBudget {
     return this.evaluate(hasProgress).legacyStatus;
   }
 
-  /**
-   * 检查并在 hard 时发射 EventBus 事件（内部订阅者）。
-   * 用户可见停止必须由 reliability yield AgentLoopEvent。
-   *
-   * @returns true 表示可继续
-   */
-  checkAndEmit(hasProgress = true): boolean {
-    const result = this.evaluate(hasProgress);
-    if (result.status === 'hard') {
-      this.eventBus.emit({
-        type: AgentEvents.BUDGET_EXCEEDED,
-        timestamp: Date.now(),
-        data: { status: result.legacyStatus, report: result.report },
-      });
-      return false;
-    }
-    return true;
-  }
+  // 注：原 checkAndEmit() 已删除。用户可见停止走 reliability yield
+  // `budget_exceeded` → SessionAwareRunner 桥接为 EventBus `budget.exceeded`。
 
   recordIteration(): void {
     this.iterations++;

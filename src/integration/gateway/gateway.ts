@@ -17,11 +17,8 @@
  * ```
  */
 
-import type {
-  AgentDefinition,
-  RegisteredTool,
-  SessionMeta,
-} from '../../core/types.js';
+import type { RegisteredTool, SessionMeta } from '../../core/types.js';
+import type { AgentDefinition, ModelConfig } from '../../harness/types/agent-definition.js';
 import type { ChannelAdapter, ChannelMessage, ChannelReply } from '../types/channels.js';
 import type { GatewayConfig } from '../types/gateway-config.js';
 
@@ -32,7 +29,7 @@ import type { Observer } from '../../core/interfaces/observer.js';
 import type { SessionStore } from '../../core/interfaces/session-store.js';
 import type { SessionData } from '../../harness/session-types.js';
 import type { StreamingChannelAdapter } from '../protocols/http.js';
-import type { Message, ModelConfig } from '../../core/types.js';
+import type { Message } from '../../core/types.js';
 import { randomUUID } from 'node:crypto';
 import { CircuitBreaker } from '../../harness/reliability/circuit-breaker.js';
 import { wrapProviderWithCircuitBreaker } from '../../harness/reliability/provider-wrapper.js';
@@ -40,7 +37,6 @@ import { PluginManager } from '../../harness/plugin-ecosystem/plugins/manager.js
 
 import { DefaultEventBus } from '../../core/primitives/event-bus.js';
 import { DefaultSecurityGuard } from '../../harness/security/default-security-guard.js';
-import { DefaultContextEngine } from '../../harness/context/default-context-engine.js';
 import { SessionAwareRunner } from '../../harness/runner.js';
 import { AgentRuntime, SessionRunnerDispatcher, ExplicitRouter } from '../../harness/agent-runtime/index.js';
 import { dispatchChannelMessage } from '../agent-runtime/channel-message-source.js';

@@ -14,7 +14,7 @@ import type {
   McpToolDefinition,
   McpToolResult,
   McpContentBlock,
-} from '../../../core/interfaces/mcp-client.js';
+} from './types.js';
 import type { ToolDefinition, ToolParameter } from '../../../core/types.js';
 
 /**

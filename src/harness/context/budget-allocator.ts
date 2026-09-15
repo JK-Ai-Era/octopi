@@ -17,7 +17,7 @@ import type {
   BudgetAllocator,
   BudgetAllocateParams,
   BudgetAllocateResult,
-} from '../../core/interfaces/context-engine.js';
+} from './types.js';
 
 /**
  * 默认输出预留比例

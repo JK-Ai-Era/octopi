@@ -17,7 +17,7 @@ import type {
   LLMMessage,
   LLMResponse,
   LLMStreamChunk,
-  ToolDefinition as ModelToolDef,
+  LLMToolDefinition,
 } from '../core/interfaces/model-provider.js';
 import type { AgentLoopEvent } from './types.js';
 
@@ -31,7 +31,7 @@ import type { AgentLoopEvent } from './types.js';
 export async function* callModel(
   model: ModelProvider,
   messages: LLMMessage[],
-  tools: ModelToolDef[],
+  tools: LLMToolDefinition[],
   signal: AbortSignal | undefined,
   timeouts: { idleTimeoutMs: number; absoluteTimeoutMs: number },
 ): AsyncGenerator<AgentLoopEvent, LLMResponse> {

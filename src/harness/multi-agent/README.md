@@ -8,7 +8,7 @@ Agent 注册与发现、多 Agent 协作编排、可追踪的 Agent 进程。
 
 ## 职责
 
-- DefaultAgentRegistry — Agent 注册与发现（实现 Core 的 `AgentRegistry`）
+- DefaultAgentRegistry — Agent 注册与发现（实现本域 `agent-registry-types.ts` 的 `AgentRegistry`）
 - AgentSwarm — 多 Agent 编排（hierarchical / pipeline / broadcast / peer-to-peer）
 - OrchestrationStrategy — RoundRobin / Capability / Pipeline 三种可替换编排策略
 - AgentProcess — Agent 进程运行时（父子关系、announce、context fork）

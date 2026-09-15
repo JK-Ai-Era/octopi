@@ -7,5 +7,6 @@ export * from './plugins/index.js';
 export * from './tools/index.js';
 export { DefaultSkillManager, FileSystemSkillSource } from './skills/manager.js';
 export type { SkillSource, DiscoveredSkill } from './skills/manager.js';
+export type { SkillDefinition, SkillManager } from './skills/types.js';
 export * from './mcp/index.js';
 export * from './commands/index.js';

@@ -9,10 +9,10 @@ import {
   TaskCancelledError,
   spawnTask,
   TaskEvents,
-  DefaultEventBus,
-} from '../../src/core/index.js';
+} from '../../src/harness/orchestration/async-task.js';
+import { DefaultEventBus } from '../../src/core/index.js';
 import type { EventBus, AgentEvent } from '../../src/core/index.js';
-import type { AsyncTaskStore, AsyncTaskRecord } from '../../src/core/index.js';
+import type { AsyncTaskStore, AsyncTaskRecord } from '../../src/harness/orchestration/async-task-store.js';
 
 // ── 辅助 ──
 
@@ -228,10 +228,11 @@ describe('AsyncTask', () => {
   });
 
   describe('持久化', () => {
-    it('创建时调用 store.create', () => {
+    it('创建时调用 store.create', async () => {
       const { bus } = createEvents();
       const store = createMockStore();
-      new AsyncTask({ type: 'test' }, bus, store);
+      const task = new AsyncTask({ type: 'test' }, bus, store);
+      await task.flushPersist();
 
       expect(store.records.size).toBe(1);
     });
@@ -241,6 +242,7 @@ describe('AsyncTask', () => {
       const store = createMockStore();
       const task = new AsyncTask<string>({ type: 'test' }, bus, store);
       await task.run(async () => 'done');
+      await task.flushPersist();
 
       const record = Array.from(store.records.values())[0];
       expect(record.status).toBe('completed');
@@ -253,9 +255,22 @@ describe('AsyncTask', () => {
       const task = new AsyncTask({ type: 'test' }, bus, store);
       task.promise.catch(() => {}); // 观察内部 promise
       try { await task.run(async () => { throw new Error('fail'); }); } catch { /* expected */ }
+      await task.flushPersist();
 
       const record = Array.from(store.records.values())[0];
       expect(record.status).toBe('failed');
+    });
+
+    it('wait(timeout) 及时返回时不留悬挂 timer（可重复 wait）', async () => {
+      const task = new AsyncTask<string>({ type: 'test' });
+      task.run(async () => {
+        await new Promise(r => setTimeout(r, 20));
+        return 'ok';
+      }).catch(() => {});
+
+      // 短超时先失败，长等待后成功——timer 都必须被清理
+      await expect(task.wait(5)).rejects.toThrow(TaskTimeoutError);
+      await expect(task.wait(200)).resolves.toBe('ok');
     });
   });
 

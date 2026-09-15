@@ -1,13 +1,13 @@
 /**
- * EventSource — 外部事件源协议
+ * EventSource — 外部事件源契约
  *
- * 职责：定义外部事件如何进入 Agent 系统。
+ * @layer harness/agent-runtime — 可选 Domain 契约，非 Core Kernel。
  * 实现方：Webhook、FileWatcher、Timer、Signal、消息队列等。
  *
  * 设计要点：
- * - Core 层定义事件如何流动，不关心事件从哪来
- * - Harness 层实现具体的 EventSource
- * - EventSource 通过 EventBus 发射事件，与现有事件系统统一
+ * - 本文件只定义事件如何进入系统，不关心事件从哪来
+ * - Harness / Integration 实现具体 EventSource
+ * - 通过 EventBus 发射，与现有事件系统统一
  * - 支持生命周期管理（start/stop）
  */
 

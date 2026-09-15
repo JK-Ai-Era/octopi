@@ -33,7 +33,7 @@ import type { ReliabilityConfig, ReliabilityHarness } from '../reliability/run-a
 import type {
   ContextEngine,
   SummarizeFunction,
-} from '../../core/interfaces/context-engine.js';
+} from '../context/types.js';
 import type {
   ErrorStrategy,
   ClassifiedError,
@@ -78,7 +78,7 @@ import { SessionAwareRunner } from '../runner.js';
 import type { SessionAwareRunnerConfig } from '../runner.js';
 import { DefaultMcpManager } from '../plugin-ecosystem/mcp/manager.js';
 import type { McpManagerCallbacks, McpClientFactory } from '../plugin-ecosystem/mcp/manager.js';
-import type { McpServerConfig, McpManager } from '../../core/interfaces/mcp-client.js';
+import type { McpServerConfig, McpManager } from '../plugin-ecosystem/mcp/types.js';
 
 // ── 默认实现 ──
 
@@ -204,6 +204,9 @@ function convertToAgentTool(tool: RegisteredTool, contextProvider: ToolContextPr
 
 // ── Builder ──
 
+/** ModelProvider 未声明 contextWindow 时的默认窗口（可被 provider 覆盖） */
+export const DEFAULT_CONTEXT_WINDOW = 128_000;
+
 /**
  * AgentBuilder — Fluent API
  */
@@ -243,7 +246,7 @@ export class AgentBuilder {
   private _runnerConfig?: SessionAwareRunnerConfig;
 
   // MCP 配置
-  private _mcpConfigs: import('../../core/interfaces/mcp-client.js').McpServerConfig[] = [];
+  private _mcpConfigs: import('../plugin-ecosystem/mcp/types.js').McpServerConfig[] = [];
 
   // 自主子系统配置
   private _subsystemSpecs: import('../autonomous-subsystem/types.js').SubsystemSpec[] = [];
@@ -320,7 +323,7 @@ export class AgentBuilder {
    *   .build();
    * ```
    */
-  mcp(config: import('../../core/interfaces/mcp-client.js').McpServerConfig): this {
+  mcp(config: import('../plugin-ecosystem/mcp/types.js').McpServerConfig): this {
     this._mcpConfigs.push(config);
     return this;
   }
@@ -675,8 +678,68 @@ export class AgentBuilder {
     };
     const agent = new Agent(agentOptions);
 
+    // ContextEngine 接线：经 convertToLlm 调用 assemble（Loop 不依赖引擎类型）
+    // sessionId 从 agent.contextSessionId 读取（Runner 每 handle 注入）
+    const contextEngine = this._contextEngine ?? new DefaultContextEngine();
+    const summarizeFn = this._summarize;
+    const provider = this._model;
+    agent.setConvertToLlm(async (messages) => {
+      const systemPrompt = agent.context.systemPrompt;
+      const tools: import('../../core/interfaces/model-provider.js').LLMToolDefinition[] = (agent.context.tools ?? []).map((t) => ({
+        type: 'function' as const,
+        function: {
+          name: t.name,
+          description: t.description,
+          parameters: t.parameters ?? { type: 'object', properties: {} },
+        },
+      }));
+      const infos = provider?.getModelInfos?.() ?? [];
+      const info =
+        (provider?.defaultModel ? provider.getModelInfo(provider.defaultModel) : null)
+        ?? infos[0]
+        ?? null;
+      const contextWindow = info?.contextWindow ?? DEFAULT_CONTEXT_WINDOW;
+      const result = await contextEngine.assemble({
+        sessionId: agent.contextSessionId,
+        messages,
+        systemPrompt,
+        tools,
+        tokenBudget: contextWindow,
+        contextWindow,
+        summarize: summarizeFn,
+      });
+      // droppedSummary：并入已有 system，避免连续两条 system（严格网关）
+      const llmMessages = [...result.messages];
+      if (result.droppedSummary) {
+        const note = `[Context compacted] ${result.droppedSummary}`;
+        const sysIdx = llmMessages.findIndex((m) => m.role === 'system');
+        if (sysIdx >= 0) {
+          const sys = llmMessages[sysIdx]!;
+          const prev = typeof sys.content === 'string' ? sys.content : '';
+          llmMessages[sysIdx] = {
+            ...sys,
+            content: prev ? `${prev}\n\n${note}` : note,
+          };
+        } else {
+          llmMessages.unshift({ role: 'system', content: note });
+        }
+      }
+      return llmMessages;
+    });
+    agent.setOnAfterTurn(async (usage, turn) => {
+      await contextEngine.afterTurn?.({
+        sessionId: agent.contextSessionId,
+        turn: turn ?? [],
+        usage: usage
+          ? { promptTokens: usage.promptTokens, completionTokens: usage.completionTokens }
+          : undefined,
+      });
+    });
+
     // 构建可靠性 harness（systemPrompt 用于泄露检测；文件式 persona 每轮由 runner 同步）
+    // 统一 EventBus 实例（security / budget 共用）
     const events = this._events ?? new DefaultEventBus();
+    this._events = events;
     const security = this._security ?? new DefaultSecurityGuard(events, {
       ...this._securityConfig,
       systemPrompt: this._securityConfig?.systemPrompt ?? systemPrompt,
@@ -694,7 +757,7 @@ export class AgentBuilder {
 
     // ResourceBudget：始终挂默认实例（可被 .budget() 覆盖），保证主路径硬停生效
     const budget =
-      this._budget ?? new IterationBudget(this._events ?? new DefaultEventBus(), {});
+      this._budget ?? new IterationBudget(events, {});
 
     // checkpointInterval：builder.runGuard(guard, n) 或默认
     if (this._checkpointInterval !== undefined) {

@@ -1,11 +1,11 @@
 /**
- * WebSearchProvider — 网络搜索接口
+ * WebSearchProvider — 网络搜索契约
  *
- * 职责：执行网页搜索并返回归一化结果。
- * 实现方：DuckDuckGo、Tavily、Brave、Serper 等外部搜索 API。
+ * @layer harness/plugin-ecosystem/tools — 产品契约，非 Core Kernel。
+ * 实现方：Integration web-search adapters（DuckDuckGo、Tavily、Brave…）。
  *
  * 设计要点：
- * - Core 只定义契约，不关心 HTTP / 鉴权细节
+ * - 本文件只定义契约，不关心 HTTP / 鉴权细节
  * - Harness 的 web_search 工具通过依赖注入接收实现
  * - Integration 层提供具体 adapter
  */

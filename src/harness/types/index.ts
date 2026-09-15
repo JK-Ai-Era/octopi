@@ -5,3 +5,4 @@
 export type { QueueMode } from './queue-mode.js';
 export type { ThinkingLevel } from './thinking-level.js';
 export type { HookContext } from './hook-context.js';
+export type { AgentPersona, ModelConfig, AgentDefinition } from './agent-definition.js';

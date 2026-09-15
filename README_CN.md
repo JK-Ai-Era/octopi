@@ -38,7 +38,7 @@ Octopi 是一个可嵌入的 Agent 底座引擎，用于构建 AI 驱动的应�
 │  │                                                          ││
 │  │  ┌──────────────────────────────────────────────────────┐││
 │  │  │  Layer 1: Core — 机制原语 + 接口契约 + 核心类型       │││
-│  │  │  EventBus · StateMachine · AsyncTask · 接口定义       │││
+│  │  │  EventBus · StateMachine · Kernel ports                │││
 │  │  │                                                      │││
 │  │  │  ┌──────────────────────────────────────────────────┐│││
 │  │  │  │  Layer 0: Loop — 纯执行循环                      ││││
@@ -55,9 +55,9 @@ Octopi 是一个可嵌入的 Agent 底座引擎，用于构建 AI 驱动的应�
 
 引擎的核心。`agentLoop()` 是一个纯 async generator：输入消息 → 调用 LLM → 执行工具 → 输出协议事件。零状态，零外部依赖。可运行门面见 Harness 的 `Agent.run()`。
 
-### Layer 1: Core — 机制原语 + 接口契约
+### Layer 1: Core — Kernel 契约
 
-基础设施原语（EventBus、StateMachine、AsyncTask、ProcessModel）和全部接口契约（ModelProvider、ContextEngine、SecurityGuard、SessionStore 等）。不包含策略实现。**不 re-export Loop。**
+基础设施原语（EventBus、StateMachine）和 **Kernel ports**（ModelProvider、ErrorStrategy、SecurityGuard、RunGuard、ReliabilityHarness）+ 共享词汇表。**Product ports**（ToolBus、SessionStore、Observer）与 Domain 契约（ContextEngine、Memory、MCP…）在 Harness。不包含策略实现。**不 re-export Loop。**
 
 ### Layer 2: Harness — 领域
 
@@ -190,7 +190,7 @@ npm test
 src/
 ├── loop/                    Layer 0  纯执行循环
 ├── core/                    Layer 1  原语 + 接口 + 类型
-│   ├── primitives/               EventBus、StateMachine、AsyncTask、ProcessModel
+│   ├── primitives/               EventBus、StateMachine
 │   ├── interfaces/               18 个接口契约
 │   └── types/                    核心类型定义
 ├── harness/                 Layer 2  15 个自包含领域

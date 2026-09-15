@@ -14,7 +14,7 @@ import type {
   Planner,
   Plan,
   AgentState,
-} from '../../../core/interfaces/cognitive-loop.js';
+} from '../cognitive-loop.js';
 import type { EventBusAgentEvent as AgentEvent } from '../../../core/index.js';
 import { RulePlanner } from './rule-planner.js';
 import { LLMPlanner } from './llm-planner.js';

@@ -19,7 +19,7 @@ import type {
   McpToolDefinition,
   McpClient,
   McpServerCapabilities,
-} from '../../../core/interfaces/mcp-client.js';
+} from './types.js';
 import type { RegisteredTool, ToolExecutionContext } from '../../../core/types.js';
 import { mcpToolToOctopiDefinition, extractMcpToolResult, splitNamespacedToolName } from './bridge.js';
 

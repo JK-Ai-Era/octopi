@@ -17,6 +17,7 @@ import { promisify } from 'node:util';
 import { join } from 'node:path';
 import type { SqliteSessionStore } from '../storage/sqlite.js';
 import type { SessionData } from '../../harness/session-types.js';
+import type { EventBus } from '../../core/primitives/event-bus.js';
 
 export interface ArchiveManagerOptions {
   /** 归档目录路径 */
@@ -27,6 +28,8 @@ export interface ArchiveManagerOptions {
   archiveRetentionDays?: number;
   /** 强制归档兜底天数（memory 提取超期，默认 90） */
   forceArchiveDays?: number;
+  /** 可选 EventBus：归档成功后 emit session.ended */
+  events?: EventBus;
 }
 
 interface ArchiveEntry {
@@ -41,6 +44,7 @@ export class SessionArchiveManager {
   private recentRetentionMs: number;
   private archiveRetentionMs: number;
   private forceArchiveMs: number;
+  private events?: EventBus;
 
   constructor(store: SqliteSessionStore, options: ArchiveManagerOptions) {
     this.store = store;
@@ -48,6 +52,7 @@ export class SessionArchiveManager {
     this.recentRetentionMs = (options.recentRetentionDays ?? 30) * 24 * 60 * 60 * 1000;
     this.archiveRetentionMs = (options.archiveRetentionDays ?? 180) * 24 * 60 * 60 * 1000;
     this.forceArchiveMs = (options.forceArchiveDays ?? 90) * 24 * 60 * 60 * 1000;
+    this.events = options.events;
   }
 
   /**
@@ -116,6 +121,15 @@ export class SessionArchiveManager {
 
     // 从 sessions.db 删除（归档后不再需要在数据库中）
     await this.store.delete(session.agentId, session.id);
+
+    // 通知订阅方：session 生命周期结束（scoped 子系统清理等）
+    this.events?.emit({
+      type: 'session.ended',
+      timestamp: Date.now(),
+      agentId: session.agentId,
+      sessionId: session.id,
+      data: { reason: 'archived' },
+    });
   }
 
   /**

@@ -7,7 +7,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { DefaultContextEngine } from '../../src/harness/context/default-context-engine.js';
 import type { Message } from '../../src/core/types.js';
-import type { LLMMessage, ToolDefinition } from '../../src/core/interfaces/model-provider.js';
 import type {
   MessageSelector,
   SelectResult,
@@ -17,7 +16,7 @@ import type {
   CompressParams,
   CompressResult,
   AssembleParams,
-} from '../../src/core/interfaces/context-engine.js';
+} from '../../src/harness/context/types.js';
 import { HeuristicTokenEstimator } from '../../src/harness/context/token-estimator.js';
 
 // ── 辅助函数 ──

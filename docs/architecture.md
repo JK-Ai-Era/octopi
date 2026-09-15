@@ -117,41 +117,43 @@ src/loop/
 
 ```
 src/core/
-├── interfaces/           # 全部接口契约
+├── interfaces/           # Kernel + Product port 类型
+│   ├── kernel.ts
 │   ├── model-provider.ts
-│   ├── context-engine.ts
 │   ├── security-guard.ts
 │   ├── session-store.ts
 │   ├── observer.ts
 │   ├── error-strategy.ts
 │   ├── run-guard.ts
-│   ├── async-task-store.ts
-│   ├── agent-registry.ts
-│   ├── mcp-client.ts
+│   ├── reliability.ts
+│   ├── tool-bus.ts
 │   └── index.ts
-├── types/                # 核心类型（纯定义，不 re-export 外层）
-│   ├── messages.ts       # Message, ContentBlock, ToolCall, ToolResult
-│   ├── agent-definition.ts
+├── types/                # Kernel 词汇表
+│   ├── messages.ts
+│   ├── agent-definition.ts  # ModelInfo / ToolPolicy
 │   ├── session.ts
 │   ├── turn.ts
 │   ├── tools.ts
-│   ├── skills.ts
+│   ├── queue-mode.ts
+│   ├── thinking-level.ts
 │   └── index.ts
-├── primitives/           # 基础设施原语
-│   ├── event-bus.ts      # EventBus — 一对多广播
-│   ├── state-machine.ts  # StateMachine — 状态管理
-│   ├── async-task.ts     # AsyncTask — 异步原语
-│   ├── process-model.ts  # ProcessModel — 进程模型
+├── primitives/           # EventBus、StateMachine（纯机制）
+│   ├── event-bus.ts
+│   ├── state-machine.ts
 │   └── index.ts
-├── security-guard.ts     # severityToAction() + isValidSecurityGuard()
-└── index.ts
+├── security-guard.ts
+└── index.ts              # octopi/core — Kernel
 ```
+
+产品事件词表在 `harness/events/`（AgentEventMap / AgentEvents / scenario-events）。
+
+Domain 契约在 **harness 领域内**（memory、mcp、multi-agent、orchestration…），不在 Core。
 
 ### Layer 2: Harness — 15 个自包含领域
 
-**职责**：实现 Core 接口的具体策略，提供框架的全部高级功能。
+**职责**：实现 Core Kernel ports 的具体策略，提供框架的全部高级功能；持有 Domain 产品契约与实现。
 
-**特性**：每个领域有自己的类型、实现、入口文件。领域间通过 Core 接口通信。
+**特性**：每个领域有自己的类型、实现、入口文件。领域间通过对方 **types** 通信，不共享内部状态。
 
 （详见第 3 节）
 
@@ -388,7 +390,7 @@ harness/multi-agent/
 └── index.ts
 ```
 
-Core 接口：`core/interfaces/agent-registry.ts`（`AgentRegistry`）。
+Core 接口：无（契约在 `harness/multi-agent/agent-registry-types.ts`）。
 
 与 Autonomous Subsystem 正交：Multi-Agent 管「多个 Agent 实例如何协作」；Autonomous Subsystem 管「子系统如何感知并回写主系统」。
 
@@ -556,18 +558,21 @@ HarnessLoopEvent 流输出（Loop 协议 + budget/run_guard）
 | 接口 | 文件 | 当前实现 |
 |------|------|---------|
 | `ModelProvider` | `core/interfaces/model-provider.ts` | OpenAI, Anthropic, ProviderPool |
-| `ContextEngine` | `core/interfaces/context-engine.ts` | DefaultContextEngine |
+| `ContextEngine` | `harness/context/types.ts` | DefaultContextEngine |
 | `ErrorStrategy` | `core/interfaces/error-strategy.ts` | DefaultErrorStrategy |
 | `SecurityGuard` | `core/interfaces/security-guard.ts` | DefaultSecurityGuard |
 | `ToolCallRiskPolicy` | `core/interfaces/security-guard.ts` | DefaultToolCallRiskPolicy |
 | `Observer` | `core/interfaces/observer.ts` | NoopObserver, LogObserver, ObserverBridge |
 | `SessionStore<T>` | `core/interfaces/session-store.ts` | JsonlSessionStore, InMemorySessionStore, SqliteSessionStore |
-| `AsyncTaskStore` | `core/interfaces/async-task-store.ts` | （默认内存；可选 integration/storage） |
+| `AsyncTaskStore` | `harness/orchestration/async-task-store.ts` | orchestration |
 | `RunGuard` | `core/interfaces/run-guard.ts` | DefaultRunGuard |
-| `AgentRegistry` | `core/interfaces/agent-registry.ts` | DefaultAgentRegistry |
-| `McpClient` | `core/interfaces/mcp-client.ts` | SdkMcpClient |
-| `EventSource` | `core/interfaces/event-source.ts` | — |
-| `MessageChannel` | `core/interfaces/message-channel.ts` | — |
+| `AgentRegistry` | `harness/multi-agent/agent-registry-types.ts` | DefaultAgentRegistry |
+| `McpClient` | `harness/plugin-ecosystem/mcp/types.ts` | SdkMcpClient |
+| `EventSource` | `harness/agent-runtime/event-source-types.ts` | — |
+| `MessageChannel` | `harness/multi-agent/message-channel-types.ts` | — |
+| `MemoryStore` 等 | `harness/memory/types.ts` | InMemory / Sqlite |
+| `KnowledgeStore` | `harness/context/knowledge/types.ts` | MemoryKnowledgeStore |
+| `Planner` / `Reflector` | `harness/orchestration/cognitive-loop.ts` | Rule/LLM/Hybrid |
 
 ---
 

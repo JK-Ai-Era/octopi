@@ -18,7 +18,8 @@
 
 ## 依赖
 
-- Core: interfaces/execution-environment
+- 契约：本域 `types.ts`（SandboxProvider / Workspace）
+- Core: types/messages（如需要）
 
 ## 文件说明
 

@@ -73,6 +73,15 @@ export class Agent {
   private _context: AgentContext;
   private _config: AgentLoopConfig;
   private _harness: ReliabilityHarness | undefined;
+  /**
+   * ContextEngine 按 session 维护 CompactState。
+   * SessionAwareRunner 在 handle() 开始时注入真实 sessionId，避免多会话串味。
+   */
+  private _contextSessionId = 'default';
+  private _onAfterTurn?: (usage?: {
+    promptTokens: number;
+    completionTokens: number;
+  }, turn?: Message[]) => Promise<void>;
 
   constructor(options: AgentOptions) {
     this._context = {
@@ -137,6 +146,44 @@ export class Agent {
 
   setHarness(harness: ReliabilityHarness): void {
     this._harness = harness;
+  }
+
+  /** 当前 ContextEngine 会话键（多 Session 时由 Runner 注入） */
+  get contextSessionId(): string {
+    return this._contextSessionId;
+  }
+
+  /** 设置 ContextEngine 会话键 */
+  setContextSessionId(sessionId: string): void {
+    this._contextSessionId = sessionId;
+  }
+
+  /** 每轮结束后通知 ContextEngine（afterTurn 校准等）；turn 为本轮增量消息 */
+  setOnAfterTurn(fn?: (usage?: {
+    promptTokens: number;
+    completionTokens: number;
+  }, turn?: Message[]) => Promise<void>): void {
+    this._onAfterTurn = fn;
+  }
+
+  /** 由 Runner 在 turn 结束后调用 */
+  async notifyAfterTurn(usage?: {
+    promptTokens: number;
+    completionTokens: number;
+  }, turn?: Message[]): Promise<void> {
+    if (this._onAfterTurn) {
+      await this._onAfterTurn(usage, turn);
+    }
+  }
+
+  /** 动态替换 convertToLlm（ContextEngine 接线等） */
+  setConvertToLlm(fn?: AgentLoopConfig['convertToLlm']): void {
+    this._config = { ...this._config, convertToLlm: fn };
+  }
+
+  /** 动态替换 transformContext */
+  setTransformContext(fn?: AgentLoopConfig['transformContext']): void {
+    this._config = { ...this._config, transformContext: fn };
   }
 
   /**

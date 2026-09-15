@@ -22,7 +22,8 @@
 import type { ModelProvider } from '../core/interfaces/model-provider.js';
 import type { SessionStore } from '../core/interfaces/session-store.js';
 import type { SessionData } from '../harness/session-types.js';
-import type { RegisteredTool, AgentEventDetail } from '../core/types.js';
+import type { RegisteredTool } from '../core/types.js';
+import type { AgentEventDetail } from '../harness/events/scenario-events.js';
 import { AgentBuilder } from '../harness/agent-building/builder.js';
 import { SessionAwareRunner } from '../harness/runner.js';
 

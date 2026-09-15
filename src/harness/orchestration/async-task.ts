@@ -1,24 +1,18 @@
 /**
- * AsyncTask — 异步任务原语
+ * AsyncTask — 异步任务单元（Harness / orchestration）
  *
- * 这是 Agent 异步能力的最小单元。
- * 不是任务调度系统，是 Promise 的内核级扩展：
- * - 提交异步执行单元
- * - 等待结果（带超时）
- * - 取消
- * - 完成回调
- * - 状态查询
+ * 调度与后台工作单元：超时、取消、重试、可选持久化。
+ * **不是 Kernel**：Loop 与裸 Agent.run 不依赖；主消费方 TaskScheduler。
  *
- * 设计原则：
- * - 纯机制：不关心任务内容，只管理生命周期
- * - 可组合：支持父子任务关系
- * - 可观测：所有状态变更通过 EventBus 发射事件
- * - 可持久化：通过 AsyncTaskStore 接口持久化（可选）
+ * 边界说明：
+ * - `priority` 仅元数据；调度策略在 TaskScheduler
+ * - 重试无退避（退避是策略）
+ * - 持久化失败不阻塞执行，但会串行化
  */
 
 import { randomUUID } from 'node:crypto';
-import type { EventBus, AgentEvent } from './event-bus.js';
-import type { AsyncTaskStore, AsyncTaskRecord, AsyncTaskStatus, AsyncTaskPriority } from '../interfaces/async-task-store.js';
+import type { EventBus, AgentEvent } from '../../core/primitives/event-bus.js';
+import type { AsyncTaskStore, AsyncTaskRecord, AsyncTaskStatus, AsyncTaskPriority } from './async-task-store.js';
 
 // ── 任务状态机 ──
 
@@ -30,6 +24,7 @@ export const TaskEvents = {
   FAILED: 'task.failed',
   CANCELLED: 'task.cancelled',
   TIMEOUT: 'task.timeout',
+  RETRYING: 'task.retrying',
   CHILD_SPAWNED: 'task.child.spawned',
 } as const;
 
@@ -41,7 +36,11 @@ export interface TaskOptions {
   type: string;
   /** 任务输入 */
   input?: unknown;
-  /** 优先级 */
+  /**
+   * 优先级（仅元数据，Core 不调度）
+   *
+   * 持久化到 AsyncTaskStore，供上层调度器/过滤使用。
+   */
   priority?: AsyncTaskPriority;
   /** 超时时间（毫秒） */
   timeoutMs?: number;
@@ -101,6 +100,8 @@ export class AsyncTask<T = unknown> {
   private readonly _store?: AsyncTaskStore;
 
   private _settled = false;
+  /** 串行化持久化，避免 create/update 乱序 */
+  private _persistChain: Promise<void> = Promise.resolve();
 
   constructor(options: TaskOptions, events?: EventBus, store?: AsyncTaskStore) {
     this.id = randomUUID();
@@ -122,11 +123,10 @@ export class AsyncTask<T = unknown> {
       this._resolvePromise = resolve;
       this._rejectPromise = reject;
     });
-    // 不再静默吞掉 unhandled rejection。
+    // 不静默吞掉 unhandled rejection。
     // 调用方应通过 task.promise.catch()、task.wait() 或 spawnTask() 处理错误。
-    // 如果 promise 被 reject 且无人 observe，触发 unhandledRejection 事件通知。
 
-    // 持久化创建事件
+    // 持久化创建事件（fire-and-forget，经 _persistChain 串行）
     this._persistAndEmit(TaskEvents.CREATED);
   }
 
@@ -166,67 +166,69 @@ export class AsyncTask<T = unknown> {
    * @returns 任务结果
    *
    * 内部方法，由 TaskRunner 或直接调用方触发。
+   * 重试为迭代实现，避免深递归；无退避（策略在外层）。
    */
   async run(executor: TaskExecutor<T>): Promise<T> {
     if (this._status !== 'pending') {
       throw new Error(`Task ${this.id} is not pending (status: ${this._status})`);
     }
 
-    this._status = 'running';
-    this._startedAt = Date.now();
-    this._persistAndEmit(TaskEvents.STARTED);
+    // 迭代重试：首次 + maxRetries
+    while (true) {
+      this._status = 'running';
+      this._startedAt = Date.now();
+      this._persistAndEmit(TaskEvents.STARTED);
 
-    // 设置超时
-    if (this._timeoutMs && this._timeoutMs > 0) {
-      this._timeoutHandle = setTimeout(() => {
-        if (this._status === 'running') {
-          this._handleTimeout();
-        }
-      }, this._timeoutMs);
-    }
-
-    try {
-      const result = await executor(this._input, this._abortController.signal);
-
-      // 已经被 timeout/cancel 处理过了，抛出原错误让调用方感知
-      if (this._settled) {
-        const settledStatus = this._status as string;
-        if (settledStatus === 'failed' && this._error?.includes('timed out')) {
-          throw new TaskTimeoutError(this.id, this._timeoutMs!);
-        }
-        if (settledStatus === 'cancelled') {
-          throw new TaskCancelledError(this.id, this._error);
-        }
-        throw new Error(this._error ?? 'Task was settled externally');
+      if (this._timeoutMs && this._timeoutMs > 0) {
+        this._timeoutHandle = setTimeout(() => {
+          if (this._status === 'running') {
+            this._handleTimeout();
+          }
+        }, this._timeoutMs);
       }
 
-      this._complete(result);
-      return result;
-    } catch (err) {
-      // 已经被 timeout/cancel 处理过了，直接抛出原错误
-      if (this._settled) throw err;
+      try {
+        const result = await executor(this._input, this._abortController.signal);
 
-      const error = err instanceof Error ? err : new Error(String(err));
+        // 已经被 timeout/cancel 处理过了，抛出原错误让调用方感知
+        if (this._settled) {
+          throw this._settledError();
+        }
 
-      // cancel() 会 abort signal，此时不重试
-      if (this._abortController.signal.aborted) {
+        this._complete(result);
+        return result;
+      } catch (err) {
+        // 已经被 timeout/cancel 处理过了，直接抛出原错误
+        if (this._settled) throw err;
+
+        const error = err instanceof Error ? err : new Error(String(err));
+
+        // cancel() 会 abort signal，此时不重试
+        if (this._abortController.signal.aborted) {
+          this._fail(error.message);
+          throw error;
+        }
+
+        // 重试
+        if (this._retryCount < this._maxRetries) {
+          this._retryCount++;
+          this._abortController = new AbortController();
+          this._status = 'pending';
+          this._persistAndEmit(TaskEvents.RETRYING, {
+            retryCount: this._retryCount,
+            maxRetries: this._maxRetries,
+            lastError: error.message,
+          });
+          continue;
+        }
+
         this._fail(error.message);
         throw error;
-      }
-
-      // 重试逻辑
-      if (this._retryCount < this._maxRetries) {
-        this._retryCount++;
-        this._abortController = new AbortController();
-        this._status = 'pending'; // 重置状态以允许重新 run
-        return this.run(executor);
-      }
-
-      this._fail(error.message);
-      throw error;
-    } finally {
-      if (this._timeoutHandle) {
-        clearTimeout(this._timeoutHandle);
+      } finally {
+        if (this._timeoutHandle) {
+          clearTimeout(this._timeoutHandle);
+          this._timeoutHandle = undefined;
+        }
       }
     }
   }
@@ -254,6 +256,8 @@ export class AsyncTask<T = unknown> {
    * @param timeoutMs - 超时时间（毫秒），不传则无限等待
    * @returns 任务结果
    * @throws TaskTimeoutError | TaskCancelledError | Error
+   *
+   * 调用方超时不会改变任务本身状态；任务超时用 TaskOptions.timeoutMs。
    */
   async wait(timeoutMs?: number): Promise<T> {
     if (this.isDone) {
@@ -264,17 +268,40 @@ export class AsyncTask<T = unknown> {
 
     if (timeoutMs === undefined) return this._promise;
 
-    return Promise.race([
-      this._promise,
-      new Promise<never>((_, reject) => {
-        setTimeout(() => {
-          reject(new TaskTimeoutError(this.id, timeoutMs));
-        }, timeoutMs);
-      }),
-    ]);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        this._promise,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => {
+            reject(new TaskTimeoutError(this.id, timeoutMs));
+          }, timeoutMs);
+        }),
+      ]);
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
+  }
+
+  /**
+   * 等待所有已排队的持久化完成（测试/优雅退出用）
+   */
+  async flushPersist(): Promise<void> {
+    await this._persistChain;
   }
 
   // ── 内部方法 ──
+
+  private _settledError(): Error {
+    const settledStatus = this._status as string;
+    if (settledStatus === 'failed' && this._error?.includes('timed out')) {
+      return new TaskTimeoutError(this.id, this._timeoutMs!);
+    }
+    if (settledStatus === 'cancelled') {
+      return new TaskCancelledError(this.id, this._error);
+    }
+    return new Error(this._error ?? 'Task was settled externally');
+  }
 
   private _complete(output: T): void {
     this._status = 'completed';
@@ -303,29 +330,28 @@ export class AsyncTask<T = unknown> {
     this._rejectPromise(new TaskTimeoutError(this.id, this._timeoutMs!));
   }
 
-  private async _persistAndEmit(eventType: string): Promise<void> {
-    const record: AsyncTaskRecord = {
-      id: this.id,
-      agentId: this.agentId ?? 'unknown',
-      sessionId: this.sessionId,
-      type: this.type,
-      status: this._status,
-      priority: this.priority,
-      input: this._input,
-      output: this._output,
-      error: this._error,
-      createdAt: this.createdAt,
-      startedAt: this._startedAt,
-      completedAt: this._completedAt,
-      retryCount: this._retryCount,
-      maxRetries: this._maxRetries,
-      timeoutMs: this._timeoutMs,
-      parentId: this.parentId,
-      metadata: this._metadata,
-    };
+  private _persistAndEmit(eventType: string, extraData?: Record<string, unknown>): void {
+    // 事件同步发射：订阅方在状态变更同帧收到，保持原语可观测时序
+    if (this._events) {
+      const event: AgentEvent = {
+        type: eventType,
+        timestamp: Date.now(),
+        agentId: this.agentId,
+        sessionId: this.sessionId,
+        data: {
+          taskId: this.id,
+          taskType: this.type,
+          status: this._status,
+          ...extraData,
+        },
+      };
+      this._events.emit(event);
+    }
 
-    // 持久化（可选）
-    if (this._store) {
+    // 持久化串行化：后一次等前一次结束，保证 store 终态正确
+    const record = this.toRecord();
+    this._persistChain = this._persistChain.then(async () => {
+      if (!this._store) return;
       try {
         if (eventType === TaskEvents.CREATED) {
           await this._store.create(record);
@@ -335,24 +361,12 @@ export class AsyncTask<T = unknown> {
       } catch {
         // 持久化失败不应阻塞任务执行
       }
-    }
-
-    // 发射事件
-    if (this._events) {
-      const event: AgentEvent = {
-        type: eventType,
-        timestamp: Date.now(),
-        agentId: this.agentId,
-        sessionId: this.sessionId,
-        data: { taskId: this.id, taskType: this.type, status: this._status },
-      };
-      this._events.emit(event);
-    }
+    });
   }
 
   // ── 序列化 ──
 
-  /** 转换为 AsyncTaskRecord（用于快照/调试） */
+  /** 转换为 AsyncTaskRecord（用于快照/调试/持久化） */
   toRecord(): AsyncTaskRecord {
     return {
       id: this.id,

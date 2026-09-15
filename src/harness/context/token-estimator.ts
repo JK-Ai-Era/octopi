@@ -10,8 +10,8 @@
  */
 
 import type { Message } from '../../core/types.js';
-import type { TokenEstimator } from '../../core/interfaces/context-engine.js';
-import type { LLMMessage, ToolDefinition } from '../../core/interfaces/model-provider.js';
+import type { TokenEstimator } from './types.js';
+import type { LLMMessage, LLMToolDefinition } from '../../core/interfaces/model-provider.js';
 import {
   estimateTextTokens,
   estimateAdjustedChars,
@@ -99,7 +99,7 @@ export class HeuristicTokenEstimator implements TokenEstimator {
    * @param tools 工具定义列表
    * @returns 估算 token 数
    */
-  estimateTools(tools: ToolDefinition[]): number {
+  estimateTools(tools: LLMToolDefinition[]): number {
     let total = 0;
     for (const tool of tools) {
       const fn = tool.function;
