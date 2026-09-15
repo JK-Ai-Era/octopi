@@ -36,7 +36,7 @@ import { DefaultBudgetAllocator } from '../context/budget-allocator.js';
 
 // ── 结果类型 ──
 
-import type { Agent } from '../../loop/agent.js';
+import type { Agent } from '../agent/index.js';
 
 export interface BuiltAgent {
   agent: Agent;

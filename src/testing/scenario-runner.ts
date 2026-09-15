@@ -143,7 +143,7 @@ export interface ScenarioRunnerConfig {
 export class ScenarioRunner {
   private config: ScenarioRunnerConfig;
   private runner!: SessionAwareRunner;
-  private agent!: import('../loop/agent.js').Agent;
+  private agent!: import('../harness/agent/index.js').Agent;
   private traceCollector?: TraceCollector;
 
   constructor(config: ScenarioRunnerConfig) {

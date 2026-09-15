@@ -201,6 +201,7 @@ export class AnthropicProvider implements ModelProvider {
     let toolArgsBuffer = '';
     let toolCallIndex = 0;
     let streamUsage: { promptTokens: number; completionTokens: number; totalTokens: number } | undefined;
+    let finishReason: LLMResponse['finishReason'] | undefined;
 
     // 空闲超时
     const streamIdleTimeout = this.timeoutMs;
@@ -269,8 +270,16 @@ export class AnthropicProvider implements ModelProvider {
                   totalTokens: (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0),
                 };
               }
+              const stopDelta = data.delta as Record<string, unknown> | undefined;
+              if (stopDelta?.stop_reason) {
+                const sr = stopDelta.stop_reason as string;
+                if (sr === 'tool_use') finishReason = 'tool_calls';
+                else if (sr === 'max_tokens') finishReason = 'length';
+                else if (sr === 'refusal') finishReason = 'error';
+                else finishReason = 'stop';
+              }
             } else if (data.type === 'message_stop') {
-              yield { type: 'done', usage: streamUsage };
+              yield { type: 'done', usage: streamUsage, finishReason };
               return;
             }
           } catch {

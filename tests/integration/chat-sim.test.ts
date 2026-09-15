@@ -28,7 +28,7 @@ const skipIfNoKey = API_KEY ? describe : describe.skip;
 
 skipIfNoKey('Chat Simulation', () => {
   let tempDir: string;
-  let agent: import('../../src/loop/agent.js').Agent;
+  let agent: import('../../src/harness/agent/index.js').Agent;
   let runner: SessionAwareRunner;
   let workspaceDir: string;
   const sessionId = `test:sim:${Date.now()}`;

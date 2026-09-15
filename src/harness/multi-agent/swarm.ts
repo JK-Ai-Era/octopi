@@ -19,9 +19,9 @@
 import { randomUUID } from 'node:crypto';
 import type { EventBus } from '../../core/primitives/event-bus.js';
 import type { Message } from '../../core/types.js';
-import type { Agent } from '../../loop/agent.js';
+import type { Agent } from '../agent/index.js';
 import type { ReliabilityHarness } from '../reliability/index.js';
-import { runAgentWithReliability } from '../reliability/index.js';
+
 import type { AgentRegistry, AgentInfo } from '../../core/interfaces/agent-registry.js';
 import type { SwarmConfig, SwarmAgent, SwarmTask } from './types.js';
 import { SwarmEvents } from './types.js';
@@ -315,11 +315,7 @@ export class AgentSwarm {
       agent.agent.context.messages = messages;
 
       let result = '';
-      for await (const event of runAgentWithReliability(
-        agent.agent.context,
-        { model: agent.agent.model },
-        agent.harness,
-      )) {
+      for await (const event of agent.agent.run(undefined, agent.harness)) {
         if (event.type === 'assistant_message') {
           result = typeof event.message.content === 'string' ? event.message.content : '';
         }

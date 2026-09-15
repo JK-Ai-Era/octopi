@@ -42,7 +42,7 @@ Octopi 是一个可嵌入的 Agent 底座引擎，用于构建 AI 驱动的应�
 │  │  │                                                      │││
 │  │  │  ┌──────────────────────────────────────────────────┐│││
 │  │  │  │  Layer 0: Loop — 纯执行循环                      ││││
-│  │  │  │  agentLoop · Agent · callModel · classifyError   ││││
+│  │  │  │  agentLoop · callModel · classifyError           ││││
 │  │  │  └──────────────────────────────────────────────────┘│││
 │  │  └──────────────────────────────────────────────────────┘││
 │  └──────────────────────────────────────────────────────────┘│
@@ -53,20 +53,21 @@ Octopi 是一个可嵌入的 Agent 底座引擎，用于构建 AI 驱动的应�
 
 ### Layer 0: Loop — 纯执行循环
 
-引擎的核心。`agentLoop()` 是一个纯 async generator：输入消息 → 调用 LLM → 执行工具 → 输出事件。零状态，零外部依赖。
+引擎的核心。`agentLoop()` 是一个纯 async generator：输入消息 → 调用 LLM → 执行工具 → 输出协议事件。零状态，零外部依赖。可运行门面见 Harness 的 `Agent.run()`。
 
 ### Layer 1: Core — 机制原语 + 接口契约
 
-基础设施原语（EventBus、StateMachine、AsyncTask、ProcessModel）和全部接口契约（ModelProvider、ContextEngine、SecurityGuard、SessionStore 等）。不包含策略实现。
+基础设施原语（EventBus、StateMachine、AsyncTask、ProcessModel）和全部接口契约（ModelProvider、ContextEngine、SecurityGuard、SessionStore 等）。不包含策略实现。**不 re-export Loop。**
 
-### Layer 2: Harness — 15 个领域
+### Layer 2: Harness — 领域
 
 | 领域 | 职责 |
 |------|------|
+| **Agent** | **可运行门面**：`Agent.run()` = reliability 包装 |
 | **Agent Building** | Builder、人格加载、配置桥接 |
 | **Context Management** | 消息选择、压缩、Token 估算、七层智能组装 |
 | **Security** | 风险评估、Shell 解析、降级策略、安全智能体 |
-| **Reliability** | `runAgentWithReliability()`、断路器、重试、监督 |
+| **Reliability** | 可靠性包装、HarnessLoopEvent、断路器、重试、监督 |
 | **Plugin Ecosystem** | Plugin、Tool、Skill、MCP、斜杠命令 |
 | **Multi-Agent** | Agent 注册发现、Swarm 编排、AgentProcess |
 | **Autonomous Subsystem** | Sense/Think/Act/Signal/Boundary 五维子系统框架 |

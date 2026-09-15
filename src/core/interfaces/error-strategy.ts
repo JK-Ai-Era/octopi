@@ -4,14 +4,16 @@
  * 职责：决定 Agent 循环中遇到错误时的行为。
  * Harness 层实现具体策略，通过 Builder 注入。
  *
- * 与 Core 循环层的关系（两层包装）：
- * - Core 循环 (agentLoop) 使用 OnErrorFn 回调（loop/types.ts）
- *   OnErrorFn 签名：(error: ClassifiedError) => Promise<'retry' | 'abort' | 'throw'>
+ * 与 Loop 层的关系（两层包装）：
+ * - Loop 层 (agentLoop) 使用 OnErrorFn 回调（loop/types.ts）
+ *   OnErrorFn 签名：(error: ClassifiedError) => Promise<'retry' | 'abort'>
  * - Harness 层的 ErrorStrategy 被包装为 OnErrorFn 注入到循环中
  *   包装逻辑在 harness/reliability/run-agent.ts：
- *     onModelError() → retry/abort/fallback/skip 映射为 OnErrorFn 的 retry/abort/throw
- * - ErrorStrategy 提供更丰富的决策（retry/fallback/skip/abort），
- *   OnErrorFn 简化为 retry/abort/throw
+ *     onModelError() → retry 保持 retry；abort/skip 映射为 abort
+ * - ErrorStrategy 提供更丰富的决策（retry/skip/abort），
+ *   OnErrorFn 简化为 retry/abort；Loop 对业务错误永不 throw，
+ *   终止时一律 yield agent_end(reason='error')
+ * - **模型/Provider 灾备不走本接口**：使用 FallbackProvider / ProviderPool
  *
  * 实现方：
  * - DefaultErrorStrategy（harness/builder.ts 内置，简单规则匹配）
@@ -50,7 +52,6 @@ import type { SecurityAction, SecurityViolation } from './security-guard.js';
 /** 错误处理动作 */
 export type ErrorAction =
   | { action: 'retry'; delayMs: number }
-  | { action: 'fallback'; provider: string; model: string }
   | { action: 'skip'; reason: string }
   | { action: 'abort'; reason: string };
 

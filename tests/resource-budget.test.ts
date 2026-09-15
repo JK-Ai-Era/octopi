@@ -7,7 +7,7 @@ import { IterationBudget, DEFAULT_BUDGET } from '../src/harness/budget/budget.js
 import { DefaultEventBus } from '../src/core/primitives/event-bus.js';
 import { RunMetricsCollector } from '../src/harness/reliability/run-metrics-collector.js';
 import { runAgentWithReliability } from '../src/harness/reliability/run-agent.js';
-import { Agent } from '../src/loop/agent.js';
+import { Agent } from '../src/harness/agent/agent.js';
 import type { ModelProvider } from '../src/core/interfaces/model-provider.js';
 import type { ReliabilityHarness } from '../src/core/interfaces/reliability.js';
 

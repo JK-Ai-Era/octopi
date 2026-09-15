@@ -5,7 +5,7 @@
  * 具体的 SessionData 结构由 harness 层定义。
  *
  * 设计要点：
- * - Core 层不使用此接口（Agent 无状态）
+ * - Core 层不使用此接口（可运行状态在 Harness 的 Agent / Session）
  * - Harness 层的 SessionAwareRunner 使用此接口
  * - 放在 Core 层是为了让所有层都能引用此类型
  * - 所有方法都要求 agentId，确保 O(1) 定位，不做全量扫描

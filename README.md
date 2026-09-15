@@ -42,7 +42,7 @@ Octopi is an embeddable agent engine for building AI-powered applications. It pr
 │  │  │                                                      │││
 │  │  │  ┌──────────────────────────────────────────────────┐│││
 │  │  │  │  Layer 0: Loop — Pure execution loop             ││││
-│  │  │  │  agentLoop · Agent · callModel · classifyError   ││││
+│  │  │  │  agentLoop · callModel · classifyError           ││││
 │  │  │  └──────────────────────────────────────────────────┘│││
 │  │  └──────────────────────────────────────────────────────┘││
 │  └──────────────────────────────────────────────────────────┘│
@@ -53,20 +53,21 @@ Octopi is an embeddable agent engine for building AI-powered applications. It pr
 
 ### Layer 0: Loop — Pure Execution
 
-The heart of the engine. `agentLoop()` is a pure async generator: input messages → LLM call → tool execution → output events. Zero state, zero external dependencies.
+The heart of the engine. `agentLoop()` is a pure async generator: input messages → LLM call → tool execution → protocol events. Zero state, zero external dependencies. Runnable facade is Harness `Agent.run()`.
 
 ### Layer 1: Core — Primitives + Contracts
 
-Infrastructure primitives (EventBus, StateMachine, AsyncTask, ProcessModel) and all interface contracts (ModelProvider, ContextEngine, SecurityGuard, SessionStore, etc.). No strategy implementations.
+Infrastructure primitives (EventBus, StateMachine, AsyncTask, ProcessModel) and all interface contracts (ModelProvider, ContextEngine, SecurityGuard, SessionStore, etc.). No strategy implementations. **Does not re-export Loop.**
 
-### Layer 2: Harness — 15 Domains
+### Layer 2: Harness — Domains
 
 | Domain | Responsibility |
 |--------|---------------|
+| **Agent** | **Runnable facade**: `Agent.run()` = reliability-wrapped loop |
 | **Agent Building** | Builder, persona loading, config bridge |
 | **Context Management** | Message selection, compression, token estimation, 7-layer intelligence |
 | **Security** | Risk evaluation, shell parsing, degradation strategies, safety agent |
-| **Reliability** | `runAgentWithReliability()`, circuit breaker, retry, supervision |
+| **Reliability** | Reliability wrapper, HarnessLoopEvent, circuit breaker, retry, supervision |
 | **Plugin Ecosystem** | Plugins, tools, skills, MCP, slash commands |
 | **Multi-Agent** | Agent registry/discovery, Swarm orchestration, AgentProcess |
 | **Autonomous Subsystem** | Sense/Think/Act/Signal/Boundary subsystem framework |

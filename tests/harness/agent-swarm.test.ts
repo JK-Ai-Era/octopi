@@ -6,7 +6,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { AgentSwarm, RoundRobinStrategy, CapabilityStrategy, PipelineStrategy } from '../../src/harness/multi-agent/swarm.js';
 import { DefaultAgentRegistry } from '../../src/harness/multi-agent/registry.js';
 import { DefaultEventBus } from '../../src/core/primitives/event-bus.js';
-import { Agent } from '../../src/loop/agent.js';
+import { Agent } from '../../src/harness/agent/agent.js';
 import type { ReliabilityHarness } from '../../src/harness/reliability/run-agent.js';
 import { SwarmEvents } from '../../src/harness/multi-agent/types.js';
 import type { SwarmAgent, SwarmTask } from '../../src/harness/multi-agent/types.js';

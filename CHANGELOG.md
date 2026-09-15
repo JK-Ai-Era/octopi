@@ -1,3 +1,144 @@
+## v0.25.6 (2026-09-15)
+
+### fix: 审查加固项
+
+- `Agent.config` 返回浅拷贝快照（注释不再夸大为 deep freeze）
+- `callModel` 在 `LLMRequest` 显式带 `model: defaultModel`
+- SecurityGuard 输出扫描覆盖结构化 content（JSON 序列化后扫，100k 截断）
+- e2e mock 补齐 `getModelInfos`
+
+## v0.25.5 (2026-09-15)
+
+### fix: 代码审查修复（P0/P1 + P2）
+
+- **SecurityGuard 输出拦截**：`content: null` → 可读 `Blocked by SecurityGuard: …`（避免 `String(null)==="null"`）
+- **tool.exec.end**：补上 `args`（与 v0.24.9 CHANGELOG 对齐；encoding 修复时曾丢失）
+- **ThinkExecutor fallback**：每次尝试重置 `messages` 为干净 user 输入；`bindModelName` 真正切换 model 名（原先只是对同一模型重试）
+- **三份测试乱码**：从 HEAD 恢复 UTF-8 正文，仅保留 harness Agent import
+- **package-lock**：版本同步至 0.25.5
+- **architecture.md** 分层图去掉 Layer 0 中的 `Agent`
+- **callModel**：`return?.(…)?.catch` 自洽 optional 链
+- **Agent.config**：`Readonly<AgentLoopConfig>` 快照
+- 文档：`web-runtime-design` 去掉 `loop_detected`；`AgentLoopConfig` 消息队列注释对齐
+- **test**：新增 `agent-run-e2e.test.ts`（Agent.run 全配置路径）
+
+## v0.25.4 (2026-09-15)
+
+### fix(loop/harness): 消息边界规范化 + 契约小补丁
+
+#### #1 LLM 消息边界
+
+- `normalizeMessagesForLlm` 完整规范化：`toolResults[N]` → N 条 `role:tool`；assistant tool_calls 字符串化
+- `LLMMessage` 写明 Provider 入参契约；Provider flatten 仅作防御兼容
+
+#### #5 ErrorStrategy
+
+- 删除 `ErrorAction.fallback`（模型灾备用 `FallbackProvider` / `ProviderPool`，不走 ErrorStrategy）
+
+#### 其它契约
+
+- **system 托管**：仅管理 `metadata.source === 'systemPrompt'`；无 metadata 的 system **不再**当作旧注入静默删除
+- **prepareNextTurn**：禁止替换 context 引用，新对象只合并字段回写（保护 `Agent` 持有）
+- **已 aborted**：不 yield `agent_start`，直接 `agent_end(aborted)`
+- **非法 tool arguments**：`ToolCall.argumentsParseError` + Loop 拒绝执行（不再静默空参）
+- UI 删除永不产出的 `loop_detected` 适配分支
+
+### observer / yield 双通道
+
+已记为独立 OP（`arch/open-problems.md` **OP-LOOP-1**），本轮不改：yield=协议，observer=测量。
+
+## v0.25.3 (2026-09-15)
+
+### docs: 同步 Loop/Harness 结构调整后的文档与注释
+
+避免后续开发按旧叙事改代码：
+
+- 分层图与数据流：Loop 无 `Agent`；入口为 `Agent.run()`；事件为 `HarnessLoopEvent`
+- 各层 README（loop / core / harness / reliability / agent / agent-building）对齐
+- `AgentContext` 去掉「不可变快照」误导；`agentLoop` JSDoc 去掉错误的 `@returns`
+- `AGENTS.md` / `CONTRIBUTING.md` / `architecture.md` / 根 README 更新
+
+## v0.25.2 (2026-09-15)
+
+### refactor(core): 对齐 Loop/Harness 结构调整
+
+- `types/events.ts`：删除与 `model-provider` 冲突的 `LLMStreamChunk`；标明 `AgentEventDetail` 为测试编排词表（非 Loop 协议）；`turn_end` 增加可选 `phase`
+- `core/index` 不再 re-export `agentLoop` / Loop 类型（公共入口：`loop/` 与 `harness/agent/`）
+- `ReliabilityHarness` / `SessionStore` / `ErrorStrategy` / EventBus 注释对齐 `Agent.run()` 门面叙事
+
+## v0.25.1 (2026-09-15)
+
+### refactor(harness): 收口 agent.run + UI 消费 turn_end.phase
+
+- multi-agent `process` / `swarm`、think `executor` 改为 `agent.run(signal, harness?)`，不再手拼 `runAgentWithReliability`
+- Web `RunStatus` 新增 `'tools'`：`turn.end` 在 `phase=pre_tools` 时保持进行中，`final` 才置 idle
+- TUI：`pre_tools` 不清 `isProcessing`，状态显示 running tools；`final` 才收尾
+- `docs/architecture.md` 补充 `turn_end.phase` UI 消费约定
+
+## v0.25.0 (2026-09-15)
+
+### refactor(loop/harness): 事件分型 + turn_end 显式时序 + Agent 门面上移
+
+Loop 层「纯协议」与 Harness「策略语义」的边界收紧；可运行门面落在 Harness。
+
+#### 事件分型
+
+- `AgentLoopEvent` **移除** `budget_exceeded` / `run_guard_recovered` / `run_guard_stopped` / 从未产出的 `loop_detected`
+- 新增 `harness/reliability/harness-events.ts`：`HarnessLoopEvent = AgentLoopEvent | HarnessLoopExtension`
+- `runAgentWithReliability` / `Agent.run` 产出 `HarnessLoopEvent`；Runner 同步
+
+#### turn_end 显式时序
+
+- `turn_end` 增加 `phase: 'pre_tools' | 'final'`
+- 工具路径：`pre_tools`（LLM 结束、工具即将执行）；文本/截断/错误重试：`final`
+- 不变量：工具路径下不会在工具执行后再补 final turn_end
+
+#### Agent 上移 Harness
+
+- 删除 `src/loop/agent.ts`；新增 `src/harness/agent/`（`Agent` + `run()`)
+- `Agent.run()` = `runAgentWithReliability`：**唯一推荐入口**，构造或 `setHarness` 绑定 reliability
+- Builder 构建后 `agent.setHarness(harness)`；Runner 改为 `this.agent.run(signal)`
+- Loop 只导出 `agentLoop` / `callModel` / `classifyError` 与协议类型
+- 依赖方向保持外→内：Harness → Loop
+
+### BREAKING
+
+- `import { Agent } from '.../loop/agent'` → `from '.../harness/agent'`
+- 消费 `turn_end` 时需处理 `phase`
+- 消费 reliability 事件流请使用 `HarnessLoopEvent` 而非 `AgentLoopEvent`
+
+## v0.24.9 (2026-09-15)
+
+### fix(loop): P0 契约闭环 — terminate / finishReason / 中止占位 / tool_end 参数
+
+审查发现的几条「只写了一半」的 Loop 契约现已实现，并补纯 `agentLoop` 单测（`tests/loop-p0-contracts.test.ts`）。
+
+- **terminate**：工具批次内**所有**结果 `terminate=true` 时，`agentLoop` 以 `agent_end(reason='should_stop')` 干净结束（覆盖 `beforeToolCall.block+terminate` 与工具自身 terminate）
+- **finishReason**：`LLMStreamChunk.done` 增加可选 `finishReason`；OpenAI 解析 `choices[0].finish_reason`、Anthropic 解析 `message_delta.stop_reason`，`callModel` 优先透传而非按 tool_calls 合成。流式截断（`length`）路径因此可真正触发
+- **串行中止**：`executeSequential` 为未执行调用补 `isError` 占位，保证 `tool_results` 与 `tool_calls` 一一对应（避免 OpenAI 协议 400）
+- **tool_end**：携带原始 `toolCall`（含 `arguments`）；Runner `tool.exec.end` 同步附带 `args`
+- **ErrorStrategy attempt**：Reliability 传入真实递增 attempt（从 0 起），成功一轮后重置；默认策略也走同一计数并尊重 `delayMs`
+- **callModel**：watchdog 结束时 `providerStream.return()`，降低超时后连接悬挂
+
+### docs
+
+- `LoopToolResult.terminate` / `OnErrorFn` / stream done chunk 契约注释对齐实现
+
+## v0.24.8 (2026-09-15)
+
+### fix(loop): onError 去掉悬空的 `throw`，业务错误永不向消费方抛出
+
+`OnErrorFn` 曾声明可返回 `'throw'`，但 `agentLoop` 实际并不抛——只是 yield `agent_end`。注释与实现不一致，且若将来真抛，会在无终端事件时打断 `for await`，UI 静默断流。
+
+- `OnErrorFn` 收窄为 `'retry' | 'abort'`；`agentLoop` 文档化不变量：LLM 业务失败终止前必 yield `agent_end(reason='error')`
+- `runAgentWithReliability`：ErrorStrategy 的 `fallback`/`skip`/`abort` 统一映射为 `abort`（Loop 层无对应动作）
+- 默认 onError 路径增加连续重试上限（3 次），避免持续 5xx / rate_limit 无界 retry；成功一轮后在 `onTurnComplete` 重置计数
+- 需要异常控制流的 embedder 应根据 `agent_end` 在包装层自行 throw
+
+### test
+
+- `engine-advanced`：abort 干净结束、无 onError 不抛、默认策略重试有界
+
 ## v0.24.7 (2026-09-15)
 
 ### fix(skills): SKILL.md frontmatter 兼容 Windows CRLF

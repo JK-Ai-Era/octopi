@@ -7,10 +7,12 @@
  * 不包含：重试逻辑、消息注入、循环检测、no-op 检测。
  * 这些机制由 Harness 层通过回调和外部循环实现。
  *
+ * 错误契约：LLM 业务失败经 onError 决策为 retry/abort，永不 throw；
+ * 终止时一律 yield agent_end，保证事件消费方总能看到终态。
+ *
  * 流式输出：通过 callModel() 的 async generator 逐 chunk yield llm_stream_delta。
  */
 
-import { randomUUID } from 'node:crypto';
 import type { Message, ToolCall, TokenUsage } from '../core/types.js';
 import type { LLMMessage, LLMResponse, ToolDefinition as ModelToolDef } from '../core/interfaces/model-provider.js';
 import type {
@@ -29,11 +31,11 @@ import { classifyError } from './error-classifier.js';
 /**
  * Agent 核心循环
  *
- * @param context - 初始上下文（消息历史 + 工具列表）
+ * @param context - 上下文工作区（循环内**原地**修改 messages）
  * @param config - 循环配置（模型 + 回调 + 超时）
  * @param signal - 中止信号
- * @yields AgentLoopEvent 事件流
- * @returns 最终的上下文（包含完整消息历史）
+ * @yields AgentLoopEvent 事件流（协议事件；不含 budget/run_guard）
+ * @returns void — 终止原因通过 `agent_end` 事件表达；完整历史读 `context.messages`
  */
 export async function* agentLoop(
   context: AgentContext,
@@ -60,12 +62,12 @@ export async function* agentLoop(
   const absoluteTimeoutMs = config.modelCallAbsoluteTimeoutMs ?? 300_000;
 
   // systemPrompt 是引擎托管 system 消息的权威来源。
-  // 不变量：托管 system 至多一条，且在 index 0；外部 system（metadata.source ≠ 'systemPrompt'）保留。
-  // 无 metadata 的历史 system 一律视为旧版引擎注入（迁移策略）；外部手工 system 必须带 source。
+  // 不变量：托管 system 至多一条，且在 index 0。
+  // 仅管理 metadata.source === 'systemPrompt' 的消息；无 metadata / 外部 system
+  // 一律保留，避免静默删掉用户或历史导入的 system。
   {
     const isManaged = (m: { role: string; metadata?: Record<string, unknown> }): boolean =>
-      m.role === 'system' &&
-      (m.metadata?.source === 'systemPrompt' || m.metadata?.source === undefined);
+      m.role === 'system' && m.metadata?.source === 'systemPrompt';
 
     const managedIndices: number[] = [];
     for (let i = 0; i < context.messages.length; i++) {
@@ -113,6 +115,12 @@ export async function* agentLoop(
   // 注意：不应累加 promptTokens（那会变成输入 token 总消耗，而非上下文大小）。
   let lastResponseUsage: TokenUsage | undefined;
 
+  // 已中止：不发 agent_start，直接终态
+  if (signal?.aborted) {
+    yield { type: 'agent_end', reason: 'aborted', timestamp: Date.now() };
+    return;
+  }
+
   yield { type: 'agent_start', timestamp: Date.now() };
 
   while (true) {
@@ -157,20 +165,17 @@ export async function* agentLoop(
       response = result.value; // 最终的 LLMResponse
     } catch (llmError) {
       // LLM 调用失败（stream + chat 都失败）：通知 onError，让 Harness 决定重试/中止
+      // 不变量：业务错误永不 throw，始终以 agent_end 终态事件结束，保证用户可见
       const classified = classifyError(llmError);
       if (onError) {
         const action = await onError(classified);
         if (action === 'retry') {
-          yield { type: 'turn_end', hasToolCalls: false, error: true, usage: lastResponseUsage };
+          yield { type: 'turn_end', hasToolCalls: false, phase: 'final', error: true, usage: lastResponseUsage };
           continue; // 重试当前迭代
         }
-        if (action === 'abort') {
-          yield { type: 'agent_end', reason: 'error', timestamp: Date.now(), error: llmError };
-          return;
-        }
-        // action === 'throw'：继续抛出
+        // action === 'abort'
       }
-      // 没有 onError 或 onError 返回 'throw'：yield 错误事件后退出
+      // abort / 无 onError：yield 终态事件后干净退出（不抛）
       yield { type: 'agent_end', reason: 'error', timestamp: Date.now(), error: llmError };
       return;
     }
@@ -203,7 +208,9 @@ export async function* agentLoop(
           });
         }
         for (const er of errorResults) {
-          yield { type: 'tool_end', toolCall: { id: er.toolCallId, name: er.name, arguments: {} }, result: er, timestamp: Date.now() };
+          const tc = response.toolCalls.find(t => t.id === er.toolCallId)
+            ?? { id: er.toolCallId, name: er.name, arguments: {} };
+          yield { type: 'tool_end', toolCall: tc, result: er, timestamp: Date.now() };
         }
 
         // 一次 push 所有截断的工具错误结果
@@ -230,13 +237,13 @@ export async function* agentLoop(
         if (shouldStopAfterTurn) {
           const stop = await shouldStopAfterTurn({ message: assistantMessage, toolResults: errorResults, context: currentContext });
           if (stop) {
-            yield { type: 'turn_end', hasToolCalls: true, truncated: true, usage: lastResponseUsage };
+            yield { type: 'turn_end', hasToolCalls: true, phase: 'final', truncated: true, usage: lastResponseUsage };
             yield { type: 'agent_end', reason: 'should_stop', timestamp: Date.now() };
             return;
           }
         }
 
-        yield { type: 'turn_end', hasToolCalls: true, truncated: true, usage: lastResponseUsage };
+        yield { type: 'turn_end', hasToolCalls: true, phase: 'final', truncated: true, usage: lastResponseUsage };
         continue;
       }
     }
@@ -255,7 +262,7 @@ export async function* agentLoop(
       if (shouldStopAfterTurn) {
         const stop = await shouldStopAfterTurn({ message: assistantMessage, toolResults: [], context: currentContext });
         if (stop) {
-          yield { type: 'turn_end', hasToolCalls: false, usage: lastResponseUsage };
+          yield { type: 'turn_end', hasToolCalls: false, phase: 'final', usage: lastResponseUsage };
           yield { type: 'agent_end', reason: 'should_stop', timestamp: Date.now() };
           return;
         }
@@ -265,18 +272,20 @@ export async function* agentLoop(
       const followUps = getFollowUpMessages ? await getFollowUpMessages() : [];
       if (followUps.length > 0) {
         currentContext.messages.push(...followUps);
-        yield { type: 'turn_end', hasToolCalls: false, usage: lastResponseUsage };
+        yield { type: 'turn_end', hasToolCalls: false, phase: 'final', usage: lastResponseUsage };
         continue;
       }
 
       // 无工具调用 + 无 followUp → 自然结束
-      yield { type: 'turn_end', hasToolCalls: false, usage: lastResponseUsage };
+      yield { type: 'turn_end', hasToolCalls: false, phase: 'final', usage: lastResponseUsage };
       yield { type: 'agent_end', reason: 'completed', timestamp: Date.now() };
       return;
     }
 
     // ── 7. 执行工具 ──
-    yield { type: 'turn_end', hasToolCalls: true, usage: lastResponseUsage };
+    // pre_tools：本轮 LLM 结束且 tool_calls 已入历史；工具即将执行。
+    // 消费方勿把 pre_tools 当成「turn 已完整结束」。
+    yield { type: 'turn_end', hasToolCalls: true, phase: 'pre_tools', usage: lastResponseUsage };
 
     // 7a. 为每个工具调用发出 tool_start 事件
     for (const tc of toolCalls) {
@@ -293,12 +302,16 @@ export async function* agentLoop(
       signal,
     );
 
-    // 7b. 为每个工具结果发出 tool_end 事件
+    // 7b. 为每个工具结果发出 tool_end 事件（携带原始 toolCall，含 arguments）
+    const toolCallById = new Map(toolCalls.map(tc => [tc.id, tc]));
     for (const result of toolResults) {
-      yield { type: 'tool_end', toolCall: { id: result.toolCallId, name: result.name, arguments: {} }, result, timestamp: Date.now() };
+      const tc = toolCallById.get(result.toolCallId)
+        ?? { id: result.toolCallId, name: result.name, arguments: {} };
+      yield { type: 'tool_end', toolCall: tc, result, timestamp: Date.now() };
     }
 
     // 将工具结果加入消息历史（一次 push，使用 toolResults 数组）
+    // 不变量：toolResults 与 toolCalls 一一对应（含中止占位）
     const coreResults: CoreToolResult[] = toolResults.map(r => ({
       toolCallId: r.toolCallId,
       name: r.name,
@@ -321,6 +334,13 @@ export async function* agentLoop(
       await onTurnComplete({ message: assistantMessage, toolResults, context: currentContext });
     }
 
+    // terminate：批次内所有结果要求停止 → 干净结束
+    // （预算 hard / HITL 等通过 beforeToolCall.block + terminate 注入）
+    if (toolResults.length > 0 && toolResults.every(r => r.terminate)) {
+      yield { type: 'agent_end', reason: 'should_stop', timestamp: Date.now() };
+      return;
+    }
+
     // shouldStopAfterTurn（用户停止条件）
     if (shouldStopAfterTurn) {
       const stop = await shouldStopAfterTurn({ message: assistantMessage, toolResults, context: currentContext });
@@ -331,11 +351,16 @@ export async function* agentLoop(
     }
 
     // prepareNextTurn（动态配置切换）
+    // 不变量：不得替换 Agent 持有的 context 对象引用；只允许改字段 / 换 model。
     if (prepareNextTurn) {
       const update = await prepareNextTurn({ message: assistantMessage, toolResults, context: currentContext });
       if (update) {
-        if (update.context) currentContext = update.context;
         if (update.model) currentModel = update.model;
+        if (update.context && update.context !== currentContext) {
+          currentContext.systemPrompt = update.context.systemPrompt;
+          currentContext.messages = update.context.messages;
+          currentContext.tools = update.context.tools;
+        }
       }
     }
 
@@ -375,6 +400,9 @@ async function executeToolCalls(
 
 /**
  * 串行执行工具调用
+ *
+ * 不变量：返回结果与 toolCalls 一一对应。中止时为未执行的调用补
+ * isError 占位，避免历史中 tool_calls 数 > tool_results 数。
  */
 async function executeSequential(
   toolCalls: ToolCall[],
@@ -386,7 +414,16 @@ async function executeSequential(
 ): Promise<LoopToolResult[]> {
   const results: LoopToolResult[] = [];
   for (const tc of toolCalls) {
-    if (signal?.aborted) break;
+    if (signal?.aborted) {
+      results.push({
+        toolCallId: tc.id,
+        name: tc.name,
+        content: 'Error: Agent aborted before tool execution',
+        isError: true,
+        durationMs: 0,
+      });
+      continue;
+    }
     const result = await executeOneTool(tc, context, beforeToolCall, afterToolCall, observer, signal);
     results.push(result);
   }
@@ -553,6 +590,19 @@ async function prepareToolCall(
     };
   }
 
+  // LLM 返回的 arguments 不是合法 JSON：拒绝执行，避免空参数误伤
+  if (toolCall.argumentsParseError) {
+    return {
+      kind: 'immediate',
+      result: {
+        toolCallId: toolCall.id,
+        name: toolCall.name,
+        content: `Error: ${toolCall.argumentsParseError}`,
+        isError: true,
+      },
+    };
+  }
+
   // 参数预处理
   const args = tool.prepareArguments
     ? tool.prepareArguments(toolCall.arguments)
@@ -600,31 +650,73 @@ async function prepareToolCall(
 // ── 工具函数 ──
 
 /**
- * 规范化消息为 LLM 格式
+ * 规范化消息为 LLM 格式（ModelProvider 边界）
  *
- * 处理内部 Message → LLMMessage 转换中的关键差异：
- * - 内部 Message.content 允许空字符串，但 LLM API 要求 assistant 消息
- *   必须有 content、reasoning_content 或 tool_calls 之一
- * - 有 tool_calls 时 content 必须是 null（非空字符串）
+ * 不变量：进入 chat/stream 的 messages 必须是干净的 LLMMessage[]：
+ * - assistant + tool_calls → OpenAI 形状（arguments 字符串化；无 content 则为 null）
+ * - tool + toolResults[N] → **N 条**独立 tool 消息（tool_call_id / content）
+ * - system / user / multimodal content 原样透传
+ *
+ * Provider 侧 flatten 仅作防御兼容，主路径不再依赖。
  */
 function normalizeMessagesForLlm(messages: import('../core/types.js').Message[]): LLMMessage[] {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return messages.map((m: any) => {
-    if (m.role !== 'assistant') return m;
-    const hasToolCalls = m.toolCalls && m.toolCalls.length > 0;
-    const hasContent = typeof m.content === 'string' && m.content.length > 0;
-    if (hasToolCalls) {
-      // 有 tool_calls: content 必须为 null（OpenAI API 要求）
-      return { role: 'assistant', content: hasContent ? m.content : null,
-        tool_calls: m.toolCalls.map((tc: any) => ({
-          id: tc.id, type: 'function',
-          function: { name: tc.name, arguments: typeof tc.arguments === 'string' ? tc.arguments : JSON.stringify(tc.arguments) },
-        })),
-      };
+  const out: LLMMessage[] = [];
+
+  for (const m of messages) {
+    if (m.role === 'tool' && Array.isArray(m.toolResults) && m.toolResults.length > 0) {
+      for (const tr of m.toolResults) {
+        const content =
+          tr.error !== undefined
+            ? JSON.stringify({ error: tr.error })
+            : typeof tr.result === 'string'
+              ? tr.result
+              : JSON.stringify(tr.result ?? null);
+        out.push({
+          role: 'tool',
+          tool_call_id: tr.toolCallId,
+          name: tr.name,
+          content,
+        });
+      }
+      continue;
     }
-    // 无 tool_calls: 保持原样（content 为空字符串也保留，不删除消息）
-    return m;
-  });
+
+    if (m.role === 'assistant') {
+      const hasToolCalls = Boolean(m.toolCalls && m.toolCalls.length > 0);
+      const hasContent = typeof m.content === 'string' && m.content.length > 0;
+      if (hasToolCalls) {
+        out.push({
+          role: 'assistant',
+          content: hasContent && typeof m.content === 'string' ? m.content : null,
+          tool_calls: m.toolCalls!.map((tc) => ({
+            id: tc.id,
+            type: 'function' as const,
+            function: {
+              name: tc.name,
+              arguments:
+                typeof tc.arguments === 'string'
+                  ? tc.arguments
+                  : JSON.stringify(tc.arguments ?? {}),
+            },
+          })),
+        });
+        continue;
+      }
+      out.push({
+        role: 'assistant',
+        content: m.content as LLMMessage['content'],
+      });
+      continue;
+    }
+
+    // system / user（含多模态 content blocks）
+    out.push({
+      role: m.role,
+      content: m.content as LLMMessage['content'],
+    });
+  }
+
+  return out;
 }
 
 /**

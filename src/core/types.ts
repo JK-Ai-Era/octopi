@@ -13,7 +13,7 @@
  * - types/skills.ts      — Skill 系统（SkillDefinition, SkillManager）
  * - types/channels.ts    — Channel Adapter（@layer integration）
  * - types/hooks.ts       — Plugin Hooks（@layer harness）
- * - types/events.ts      — Agent Event（@layer harness）
+ * - types/events.ts      — 测试编排事件 AgentEventDetail（非 Loop 协议）
  * - types/gateway-config.ts — Gateway 配置（@layer integration）
  * - types/queue-mode.ts  — QueueMode（@layer harness）
  * - types/thinking-level.ts — ThinkingLevel（@layer harness）

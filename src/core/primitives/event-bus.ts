@@ -11,7 +11,7 @@
  *   Harness 层可通过 Builder 注入替换为自定义实现
  *
  * 两套事件系统共存说明：
- * - yield-based (AgentLoopEvent): 点对点，循环 → 调用方，同步拉取
+ * - yield-based (AgentLoopEvent / HarnessLoopEvent): 点对点，循环 → 调用方
  * - emit-based (EventBus): 一对多广播，基础设施/策略事件
  * - 桥接点：SessionAwareRunner.handle() 将循环事件广播到 EventBus（跳过 llm_stream_delta）
  * - EventBus 被 Core 内部 4 个模块依赖（SecurityGuard、Budget、AsyncTask、ProcessModel）

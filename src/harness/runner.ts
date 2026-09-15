@@ -1,13 +1,13 @@
 /**
  * SessionAwareRunner — Session 感知的运行器
  *
- * Harness 层组件。在 Agent + runAgentWithReliability 之上管理 Session 生命周期：
+ * Harness 层组件。在 Agent.run()（自带 reliability）之上管理 Session 生命周期：
  * - 消息持久化
  * - Session 锁（同一 session 同时只有一个运行）
  * - Daily reset / Idle reset
  * - 并发控制
  *
- * Agent 是状态管理器，runAgentWithReliability 提供可靠性包装。
+ * Agent 是 Harness 运行时门面；不要再手拼 runAgentWithReliability。
  */
 
 import type { Message, Turn, SessionStatus } from '../core/types.js';
@@ -16,10 +16,9 @@ import type { SessionStore } from '../core/interfaces/session-store.js';
 import type { SessionData } from './session-types.js';
 
 type TypedSessionStore = SessionStore<SessionData>;
-import type { Agent } from '../loop/agent.js';
-import type { AgentLoopEvent } from '../loop/types.js';
+import type { Agent } from './agent/index.js';
+import type { HarnessLoopEvent } from './reliability/harness-events.js';
 import type { ReliabilityHarness } from './reliability/run-agent.js';
-import { runAgentWithReliability } from './reliability/run-agent.js';
 import { createSessionStateMachine, type StateMachine } from '../core/primitives/state-machine.js';
 import { HeuristicTokenEstimator } from './context/token-estimator.js';
 import type { SessionTaskService } from './session-tasks/service.js';
@@ -72,13 +71,14 @@ export interface RunConfig {
 }
 
 /**
- * 适配 AgentLoopEvent → AgentEvent（向后兼容）
+ * 适配 HarnessLoopEvent → AgentEvent（向后兼容）
  *
- * 新架构产出 AgentLoopEvent，旧消费者（Gateway/TUI）期望 AgentEvent。
+ * HarnessLoopEvent = Loop 协议事件 + budget/run_guard 扩展。
+ * 旧消费者（Gateway/TUI）期望 AgentEvent。
  * 此函数桥接两者，避免一次性更新所有下游。
  */
 function adaptLoopEvent(
-  event: AgentLoopEvent,
+  event: HarnessLoopEvent,
   meta: { agentId: string; sessionId: string },
   state: { assistantContent: string; lastUserContent?: string },
 ): import('../core/primitives/event-bus.js').AgentEvent | null {
@@ -97,13 +97,35 @@ function adaptLoopEvent(
       state.assistantContent = typeof event.message.content === 'string' ? event.message.content : '';
       return null;
     case 'turn_end':
-      return { type: 'turn.end', timestamp: Date.now(), data: { content: state.assistantContent, userText: state.lastUserContent ?? '', hasToolCalls: event.hasToolCalls, usage: event.usage } };
+      // phase 透传给 UI：pre_tools ≠ 本轮 run 结束（见 architecture.md）
+      return {
+        type: 'turn.end',
+        timestamp: Date.now(),
+        data: {
+          content: state.assistantContent,
+          userText: state.lastUserContent ?? '',
+          hasToolCalls: event.hasToolCalls,
+          phase: event.phase,
+          usage: event.usage,
+        },
+      };
     case 'llm_stream_delta':
       return { type: 'llm_stream_delta', timestamp: event.timestamp, data: event.data };
     case 'tool_start':
       return { type: 'tool.exec.start', timestamp: event.timestamp, data: { toolCallId: event.toolCall.id, toolName: event.toolCall.name, args: event.toolCall.arguments } };
     case 'tool_end':
-      return { type: 'tool.exec.end', timestamp: event.timestamp, data: { toolCallId: event.toolCall.id, toolName: event.toolCall.name, hasError: !!event.result.isError, result: event.result.content, durationMs: event.result.durationMs } };
+      return {
+        type: 'tool.exec.end',
+        timestamp: event.timestamp,
+        data: {
+          toolCallId: event.toolCall.id,
+          toolName: event.toolCall.name,
+          args: event.toolCall.arguments,
+          hasError: !!event.result.isError,
+          result: event.result.content,
+          durationMs: event.result.durationMs,
+        },
+      };
     case 'stream.fallback_to_sync':
     case 'stream.fallback_failed':
       return { type: event.type, timestamp: event.timestamp, data: event.data };
@@ -383,19 +405,14 @@ export class SessionAwareRunner {
       // Token 估算器（当 LLM 不返回 usage 时用于回退估算）
       const estimator = new HeuristicTokenEstimator();
 
-      // 10. 运行 Agent（runAgentWithReliability 包装）
+      // 10. 运行 Agent（Agent.run = reliability 包装）
       let hasTurnEnd = false;
       let streamedContent = '';
       let lastUsage: any = undefined;
       const meta = { agentId: effectiveRunConfig.agentId ?? 'default', sessionId };
       const adaptState = { assistantContent: '', lastUserContent: '' };
 
-      for await (const loopEvent of runAgentWithReliability(
-        this.agent.context,
-        { model: this.agent.model },
-        this.harness,
-        signal,
-      )) {
+      for await (const loopEvent of this.agent.run(signal)) {
         // 适配事件格式（向后兼容）
         const adapted = adaptLoopEvent(loopEvent, meta, adaptState);
         if (adapted) {
@@ -446,7 +463,7 @@ export class SessionAwareRunner {
       }
 
       // 10. 同步 Agent 上下文回 session
-      //     runAgentWithReliability 修改了 agent.context.messages（原地）
+      //     Agent.run() 修改了 agent.context.messages（原地）
       //     将新增的消息同步回 session
       session.messages = this.agent.context.messages;
 

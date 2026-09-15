@@ -10,7 +10,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { Agent } from '../src/loop/agent.js';
+import { Agent } from '../src/harness/agent/agent.js';
 import { runAgentWithReliability } from '../src/harness/reliability/run-agent.js';
 import type { ReliabilityHarness } from '../src/harness/reliability/run-agent.js';
 import type { AgentLoopEvent } from '../src/loop/types.js';
@@ -209,6 +209,82 @@ describe('错误分类和重试', () => {
     const agentEnd = events.find(e => e.type === 'agent_end');
     expect(agentEnd).toBeDefined();
     expect((agentEnd as any).reason).toBe('error');
+  });
+
+  it('onError 返回 abort 时应干净结束（不 throw），并带 agent_end(error)', async () => {
+    const provider = createErrorProvider(new Error('boom'));
+
+    const agent = new Agent({ model: provider, systemPrompt: 'test' });
+    agent.context.messages = [createTestMessage('test')];
+
+    const events: AgentLoopEvent[] = [];
+    for await (const e of runAgentWithReliability(
+      agent.context,
+      { model: agent.model, onError: async () => 'abort' },
+      createHarness(),
+    )) {
+      events.push(e);
+    }
+
+    const agentEnd = events.find(e => e.type === 'agent_end');
+    expect(agentEnd).toBeDefined();
+    expect((agentEnd as any).reason).toBe('error');
+    expect((agentEnd as any).error).toBeDefined();
+  });
+
+  it('ErrorStrategy 收到递增 attempt（0,1,2…）', async () => {
+    const attempts: number[] = [];
+    const recoverResponse: LLMResponse = {
+      content: 'Recovered!',
+      usage: { promptTokens: 5, completionTokens: 2, totalTokens: 7 },
+      model: 'test',
+      finishReason: 'stop',
+    };
+
+    let round = 0;
+    const provider: ModelProvider = {
+      name: 'test',
+      defaultModel: 'test',
+      getModelInfo: () => null,
+      async chat() {
+        if (round <= 2) throw new Error('Timeout');
+        return recoverResponse;
+      },
+      async *stream() {
+        round++;
+        if (round <= 2) throw new Error('Timeout');
+        yield { type: 'content', content: recoverResponse.content };
+        yield { type: 'done', usage: recoverResponse.usage, finishReason: 'stop' };
+      },
+      async isAvailable() { return true; },
+    };
+
+    const agent = new Agent({ model: provider, systemPrompt: 'test' });
+    agent.context.messages = [createTestMessage('test')];
+
+    const harness: ReliabilityHarness = {
+      config: {
+        planningRetry: { maxAttempts: 0, steerInstruction: '' },
+        emptyResponseRetry: { maxAttempts: 0, steerInstruction: '' },
+        noopThreshold: 3,
+        loopDetection: { enabled: false },
+      },
+      errorStrategy: {
+        onModelError: (_e, attempt) => {
+          attempts.push(attempt);
+          return { action: 'retry', delayMs: 0 };
+        },
+        onToolError: () => ({ action: 'skip', reason: 'x' }),
+        onContextOverflow: () => ({ action: 'abort' }),
+        onSecurityViolation: () => ({ action: 'block', reason: 'x' }),
+      },
+    };
+
+    for await (const _e of runAgentWithReliability(agent.context, { model: agent.model }, harness)) {
+      // drain
+    }
+
+    expect(attempts).toEqual([0, 1]);
   });
 
   it('应该在重试后成功', async () => {

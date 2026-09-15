@@ -25,6 +25,7 @@ import type {
   LoopToolResult,
   TurnContext,
 } from '../../loop/types.js';
+import type { HarnessLoopEvent } from './harness-events.js';
 import { classifyError } from '../../loop/error-classifier.js';
 import { agentLoop } from '../../loop/agent-loop.js';
 import type {
@@ -92,7 +93,8 @@ export type { CoreReliabilityHarness as ReliabilityHarness };
 
 /**
  * 具体的可靠性装备（带类型化的 config）
- * 由 builder 构造，传给 runAgentWithReliability()
+ * 由 builder 构造，绑定到 harness Agent（`agent.setHarness`）；
+ * 业务路径请用 `Agent.run()`，本函数是底层包装。
  */
 export interface ConcreteReliabilityHarness extends CoreReliabilityHarness {
   config: ReliabilityConfig;
@@ -117,6 +119,8 @@ interface ReliabilityState {
   runGuardRecovered: false | { reason: string; actions: string[] };
   hasProgress: boolean;
   forceCheckpoint: boolean;
+  /** 连续模型错误的 attempt 序号（从 0 起）；成功一轮后重置 */
+  modelErrorAttempt: number;
   /** hard 在 onTurnComplete 补判：generator 下一事件后 yield */
   pendingBudgetHardYield: false | {
     reason: 'tokens' | 'wall_clock' | 'iteration' | 'tool_calls';
@@ -142,6 +146,7 @@ function createInitialState(checkpointInterval = 15): ReliabilityState {
     runGuardRecovered: false,
     hasProgress: true,
     forceCheckpoint: false,
+    modelErrorAttempt: 0,
     pendingBudgetHardYield: false,
   };
 }
@@ -207,7 +212,7 @@ export async function* runAgentWithReliability(
   config: AgentLoopConfig,
   harness: CoreReliabilityHarness,
   signal?: AbortSignal,
-): AsyncGenerator<AgentLoopEvent> {
+): AsyncGenerator<HarnessLoopEvent> {
   const state = createInitialState(
     (harness.config as ReliabilityConfig | undefined)?.checkpointInterval ?? 15,
   );
@@ -297,9 +302,23 @@ export async function* runAgentWithReliability(
 
     // afterToolCall：SecurityGuard 输出检查 + no-op 检测 + 原始回调
     afterToolCall: async (ctx, signal) => {
-      // SecurityGuard 检查工具输出
-      if (harness.security && ctx.result.content && typeof ctx.result.content === 'string') {
-        const outputCheck = harness.security.checkToolOutput(ctx.result.content);
+      // SecurityGuard 检查工具输出（字符串直扫；结构化结果序列化后扫，防 MCP/对象结果绕过）
+      if (harness.security && ctx.result.content != null) {
+        const raw = ctx.result.content;
+        const scanText =
+          typeof raw === 'string'
+            ? raw
+            : (() => {
+                try {
+                  return JSON.stringify(raw);
+                } catch {
+                  return String(raw);
+                }
+              })();
+        // 超大 payload 截断扫描，避免序列化字符串拖垮 checkToolOutput
+        const outputCheck = harness.security.checkToolOutput(
+          scanText.length > 100_000 ? scanText.slice(0, 100_000) : scanText,
+        );
         if (!outputCheck.isClean) {
           const action = severityToAction(
             outputCheck.violations.reduce((worst, v) => {
@@ -308,7 +327,16 @@ export async function* runAgentWithReliability(
             }, outputCheck.violations[0]).severity,
           );
           if (action === 'block' || action === 'reject') {
-            return { content: null, isError: true };
+            const reason = outputCheck.violations
+              .map((v) => v.description)
+              .filter(Boolean)
+              .join('; ');
+            return {
+              content: reason
+                ? `Blocked by SecurityGuard: ${reason}`
+                : 'Blocked by SecurityGuard: policy violation',
+              isError: true,
+            };
           }
         }
       }
@@ -321,6 +349,9 @@ export async function* runAgentWithReliability(
 
     // onTurnComplete：可靠性副作用（注入 steer 指令，不控制停止）
     onTurnComplete: async (ctx) => {
+      // 一轮成功走到这里：重置模型错误 attempt
+      state.modelErrorAttempt = 0;
+
       const hasToolCalls = ctx.toolResults.length > 0;
       const contentText = getTextContent(ctx.message.content);
       const hasContent = contentText.trim().length > 0;
@@ -594,26 +625,37 @@ export async function* runAgentWithReliability(
     },
 
     // onError：错误分类 + ErrorStrategy
+    // Loop 契约：只允许 'retry' | 'abort'；业务错误永不 throw
     onError: async (error) => {
       const classified = classifyError(error);
+      const attempt = state.modelErrorAttempt;
+      state.modelErrorAttempt++;
 
-      // ErrorStrategy 决策
+      // ErrorStrategy 决策（attempt 从 0 起，与 DefaultErrorStrategy 的 attempt < N 对齐）
+      // skip 在 Loop 层无对应动作，映射为 abort；模型灾备用 FallbackProvider，不在此切换
       if (harness.errorStrategy) {
-        const action = harness.errorStrategy.onModelError(classified, 0);
-        if (action.action === 'retry') return 'retry';
-        if (action.action === 'abort') return 'abort';
-        return 'throw';
+        const action = harness.errorStrategy.onModelError(classified, attempt);
+        if (action.action === 'retry') {
+          if (action.delayMs > 0) {
+            await new Promise(resolve => setTimeout(resolve, action.delayMs));
+          }
+          return 'retry';
+        }
+        return 'abort';
       }
 
-      // 默认：重试 rate_limit 和 timeout
+      // 默认：重试 rate_limit / timeout / server（最多 3 次，避免无界重试）
       if (classified.reason === 'rate_limit' || classified.reason === 'timeout' || classified.reason === 'server') {
-        if (classified.retryAfterMs) {
-          await new Promise(resolve => setTimeout(resolve, classified.retryAfterMs));
+        if (attempt < 3) {
+          const delayMs = classified.retryAfterMs ?? (attempt + 1) * 1000;
+          if (delayMs > 0) {
+            await new Promise(resolve => setTimeout(resolve, delayMs));
+          }
+          return 'retry';
         }
-        return 'retry';
+        return 'abort';
       }
-      if (classified.reason === 'auth') return 'abort';
-      return 'throw';
+      return 'abort';
     },
   };
 

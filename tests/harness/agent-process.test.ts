@@ -5,7 +5,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { AgentProcess, spawnAgentProcess, forkAgentProcess, AgentProcessEvents } from '../../src/harness/multi-agent/process.js';
 import { DefaultEventBus } from '../../src/core/primitives/event-bus.js';
-import { Agent } from '../../src/loop/agent.js';
+import { Agent } from '../../src/harness/agent/agent.js';
 import type { ReliabilityHarness } from '../../src/harness/reliability/run-agent.js';
 import type { AgentInfo } from '../../src/core/interfaces/agent-registry.js';
 import type { ModelProvider, LLMRequest, LLMResponse, LLMStreamChunk } from '../../src/core/interfaces/model-provider.js';

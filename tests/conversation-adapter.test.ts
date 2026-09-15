@@ -367,17 +367,6 @@ describe('ConversationAdapter', () => {
       expect(sys.kind).toBe('retry');
     });
 
-    it('creates warning on loop_detected', () => {
-      const r = adapter.applyEvent(
-        { type: 'loop_detected', data: { message: 'repeating' } },
-        sid,
-        items,
-      );
-      const sys = r.items.find((i) => i.role === 'system') as SystemConversationItem;
-      expect(sys.kind).toBe('warning');
-      expect(sys.message).toBe('repeating');
-    });
-
     it('creates warning on budget.exceeded', () => {
       const r = adapter.applyEvent(
         { type: 'budget.exceeded', data: { status: 'exceeded' } },

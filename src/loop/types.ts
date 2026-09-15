@@ -18,19 +18,20 @@ import type {
 } from '../core/interfaces/model-provider.js';
 
 // ============================================================
-// 1. Agent 上下文（运行时状态快照）
+// 1. Agent 上下文（循环工作区）
 // ============================================================
 
 /**
- * Agent 上下文 — 核心循环的输入状态
+ * Agent 上下文 — agentLoop 的输入状态
  *
- * 不可变快照概念：每次循环迭代使用当时的 context。
- * Agent 类负责在迭代间更新 context。
+ * 注意：这是**可变工作区**，不是不可变快照。
+ * agentLoop 会原地修改 `messages`（system 托管、assistant/tool 追加、transformContext 赋值）。
+ * Harness `Agent` 持有同一引用；Runner 在 run 结束后把 `context.messages` 同步回 Session。
  */
 export interface AgentContext {
-  /** 系统提示词 */
+  /** 系统提示词（引擎托管 system 的权威来源） */
   systemPrompt: string;
-  /** 消息历史（由 Agent 类管理，循环内直接修改引用） */
+  /** 消息历史（循环内原地修改） */
   messages: Message[];
   /** 可用工具列表 */
   tools?: AgentTool[];
@@ -83,7 +84,11 @@ export interface LoopToolResult {
   durationMs?: number;
   /** 标记为 no-op（未产生实际变化），Harness 层用于循环检测 */
   noop?: boolean;
-  /** 提示 agent 应在当前工具批次后停止。所有工具都设 terminate=true 时生效。 */
+  /**
+   * 提示 agent 应在当前工具批次后停止。
+   * 不变量：批次内**所有**结果 terminate=true 时，agentLoop 以
+   * `agent_end(reason='should_stop')` 干净结束。
+   */
   terminate?: boolean;
 }
 
@@ -156,6 +161,10 @@ export type OnTurnCompleteFn = (ctx: TurnContext) => Promise<void>;
 
 /** 轮次配置更新 */
 export interface TurnUpdate {
+  /**
+   * 下一轮上下文。若传入**新对象**，Loop 只会把字段合并回原 context 引用
+   * （Agent 持有同一对象），不会替换引用。
+   */
   context?: AgentContext;
   model?: ModelProvider;
 }
@@ -163,8 +172,18 @@ export interface TurnUpdate {
 /** prepareNextTurn 回调 */
 export type PrepareNextTurnFn = (ctx: TurnContext) => Promise<TurnUpdate | undefined>;
 
-/** onError 回调（接收已分类的错误） */
-export type OnErrorFn = (error: ClassifiedError) => Promise<'retry' | 'abort' | 'throw'>;
+/**
+ * onError 回调（接收已分类的错误）
+ *
+ * 不变量：agentLoop 对 LLM 业务失败**永不 throw**。任何终止路径都先
+ * yield `agent_end`（reason: 'error'），generator 正常结束，保证 UI/事件
+ * 消费方总能看到终态。需要异常控制流的调用方应在自己的包装层根据
+ * `agent_end` 自行 throw。
+ *
+ * - `retry`  — 重试当前迭代（yield 一条 error turn_end 后 continue）
+ * - `abort` — 干净结束（yield agent_end reason='error' 后 return）
+ */
+export type OnErrorFn = (error: ClassifiedError) => Promise<'retry' | 'abort'>;
 
 // ============================================================
 // 5. Observer 接口（简化版）
@@ -225,7 +244,7 @@ export interface AgentLoopConfig extends ToolHooksConfig, TurnHooksConfig {
   /** LLM 调用前：压缩/注入/修改消息。在 convertToLlm 之前执行。 */
   transformContext?: (messages: Message[], signal?: AbortSignal) => Promise<Message[]>;
 
-  // ── 消息队列（由 Agent 类提供） ──
+  // ── 消息队列（由 Harness / 调用方注入 get*Messages） ──
   /** 获取 steering 消息（当前 turn 结束后注入） */
   getSteeringMessages?: () => Promise<Message[]>;
   /** 获取 followUp 消息（agent 即将停止时注入） */
@@ -246,36 +265,38 @@ export interface AgentLoopConfig extends ToolHooksConfig, TurnHooksConfig {
 // ============================================================
 
 /**
- * 核心循环事件
+ * 核心循环事件（Layer 0 协议词表）
  *
- * 与旧的 AgentEvent 保持兼容，但简化为纯数据结构。
+ * 仅包含 agentLoop / callModel 会产出的事件。
+ * Harness 层扩展事件（budget_exceeded / run_guard_*）见
+ * `harness/reliability/harness-events.ts` 的 `HarnessLoopEvent`。
  */
 export type AgentLoopEvent =
   | { type: 'agent_start'; timestamp: number }
-  | { type: 'agent_end'; reason: 'completed' | 'aborted' | 'error' | 'should_stop' | 'loop_detected'; timestamp: number; error?: unknown }
+  | { type: 'agent_end'; reason: 'completed' | 'aborted' | 'error' | 'should_stop'; timestamp: number; error?: unknown }
   | { type: 'turn_start'; timestamp: number }
-  | { type: 'turn_end'; hasToolCalls: boolean; truncated?: boolean; stopped?: boolean; error?: boolean; usage?: TokenUsage }
+  /**
+   * 一轮 LLM 结束。
+   *
+   * `phase` 显式标记时序，避免上层踩坑：
+   * - `pre_tools`：本轮返回了 tool_calls，工具**即将**执行（token/usage 已入账）
+   * - `final`：本轮无工具路径结束（纯文本 / followUp / 截断回灌 / 错误重试）
+   *
+   * 不变量：工具路径下 `turn_end(phase=pre_tools)` 之后**不会**再补一条 final
+   * turn_end；终止（terminate / should_stop）直接 `agent_end`。
+   */
+  | {
+      type: 'turn_end';
+      hasToolCalls: boolean;
+      phase: 'pre_tools' | 'final';
+      truncated?: boolean;
+      stopped?: boolean;
+      error?: boolean;
+      usage?: TokenUsage;
+    }
   | { type: 'assistant_message'; message: Message; timestamp: number }
   | { type: 'llm_stream_delta'; timestamp: number; data: { delta: string } }
   | { type: 'tool_start'; toolCall: ToolCall; timestamp: number }
   | { type: 'tool_end'; toolCall: ToolCall; result: LoopToolResult; timestamp: number }
   | { type: 'stream.fallback_to_sync'; timestamp: number; data: { reason: string } }
-  | { type: 'stream.fallback_failed'; timestamp: number; data: { error: string } }
-  /** 资源 hard 总闸触发（用户可见；由 reliability yield，非 EventBus） */
-  | {
-      type: 'budget_exceeded';
-      timestamp: number;
-      data: { reason: 'tokens' | 'wall_clock' | 'iteration' | 'tool_calls'; report?: unknown };
-    }
-  /** RunGuard 判定 recover（用户可见） */
-  | {
-      type: 'run_guard_recovered';
-      timestamp: number;
-      data: { reason: string; actions: string[] };
-    }
-  /** RunGuard 判定 stop（用户可见；携带 userMessage） */
-  | {
-      type: 'run_guard_stopped';
-      timestamp: number;
-      data: { reason: string; userMessage?: string };
-    };
+  | { type: 'stream.fallback_failed'; timestamp: number; data: { error: string } };

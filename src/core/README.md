@@ -21,13 +21,13 @@
 
 ## 依赖
 
-- Loop: types/ 和 interfaces/（Core 不依赖 Loop）
+- 无外层依赖。**不 re-export Loop**（`agentLoop` / `AgentLoopEvent` 从 `loop/` 导入；Agent 门面从 `harness/agent/` 导入）。
 
 ## 文件说明
 
-- interfaces/ — 18 个接口契约
+- interfaces/ — 接口契约（ModelProvider、ReliabilityHarness、ErrorStrategy 等）
 - primitives/ — EventBus、StateMachine、AsyncTask、ProcessModel
-- types/ — 核心类型定义（Message、ToolCall、Session 等）
+- types/ — 核心类型定义（Message、ToolCall、Session 等；`events.ts` 为测试编排词表）
 - security-guard.ts — severityToAction() + isValidSecurityGuard()
 - index.ts — 统一导出
 - types.ts — barrel re-export

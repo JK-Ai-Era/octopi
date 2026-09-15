@@ -156,9 +156,22 @@ export type { SessionAwareRunnerConfig } from './runner.js';
 // ── Config Bridge ──
 // (exported from agent-building above)
 
-// ── Loop re-export ──
-export { agentLoop, Agent, callModel, classifyError } from '../loop/index.js';
-export type { AgentOptions, AgentContext, AgentTool, LoopToolResult, AgentLoopConfig, AgentLoopEvent, LoopObserver, ClassifiedError as LoopClassifiedError } from '../loop/index.js';
+// ── Loop re-export（纯函数与协议类型；Agent 门面在 harness/agent） ──
+export { agentLoop, callModel, classifyError } from '../loop/index.js';
+export type { AgentContext, AgentTool, LoopToolResult, AgentLoopConfig, AgentLoopEvent, LoopObserver, ClassifiedError as LoopClassifiedError } from '../loop/index.js';
+
+// ── Agent 门面（Harness） ──
+export { Agent } from './agent/index.js';
+export type { AgentOptions } from './agent/index.js';
+
+// ── Harness 循环事件 ──
+export type {
+  HarnessLoopEvent,
+  HarnessLoopExtension,
+  BudgetExceededEvent,
+  RunGuardRecoveredEvent,
+  RunGuardStoppedEvent,
+} from './reliability/harness-events.js';
 
 // ── Harness 层类型 ──
 export * from './types/index.js';

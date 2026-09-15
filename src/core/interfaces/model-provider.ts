@@ -18,6 +18,10 @@ import type { TokenUsage, ToolCall, ModelInfo } from '../types.js';
  * LLM 消息格式（provider 边界格式）
  *
  * 支持多模态：content 可以是字符串或内容块数组（OpenAI vision/audio 格式）。
+ *
+ * **输入契约**：`chat`/`stream` 应收到 Loop 规范化后的消息——
+ * assistant.tool_calls 已字符串化，tool 结果已展开为独立 tool 消息。
+ * Provider 内部 flatten 仅作防御兼容。
  */
 export interface LLMMessage {
   role: string;
@@ -72,6 +76,8 @@ export interface LLMStreamChunk {
     index?: number;
   };
   usage?: TokenUsage;
+  /** 仅 done chunk 携带；流结束原因（与 LLMResponse.finishReason 同构） */
+  finishReason?: LLMResponse['finishReason'];
   error?: string;
 }
 

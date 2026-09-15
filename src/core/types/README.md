@@ -14,7 +14,7 @@
 - turn.ts — TokenUsage、Turn
 - tools.ts — ToolDefinition、RegisteredTool、ToolHandler
 - skills.ts — SkillDefinition、SkillManager
-- events.ts — AgentEventDetail、LoopEndReason
+- events.ts — 测试编排用 AgentEventDetail / LoopEndReason（**非** Loop 协议事件；协议见 `loop/types.ts`）
 - queue-mode.ts — QueueMode（规范定义）
 - thinking-level.ts — ThinkingLevel（规范定义）
 
@@ -22,6 +22,7 @@
 
 - 不 re-export 外层类型（已清理）
 - 不包含实现逻辑
+- 不定义 LLMStreamChunk（规范在 `interfaces/model-provider.ts`）
 
 ## 依赖
 

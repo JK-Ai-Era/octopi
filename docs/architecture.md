@@ -64,7 +64,7 @@ AI 在早期阶段，应用构建思路在不断发展。架构设计的核心�
 │  │  │                                                          │││
 │  │  │  ┌──────────────────────────────────────────────────────┐│││
 │  │  │  │  Layer 0: Loop — 纯执行循环                          ││││
-│  │  │  │  agentLoop · Agent · callModel · classifyError       ││││
+│  │  │  │  agentLoop · callModel · classifyError           ││││
 │  │  │  └──────────────────────────────────────────────────────┘│││
 │  │  └──────────────────────────────────────────────────────────┘││
 │  └──────────────────────────────────────────────────────────────┘│
@@ -77,21 +77,43 @@ AI 在早期阶段，应用构建思路在不断发展。架构设计的核心�
 
 **特性**：零外部依赖。不依赖 EventBus、SecurityGuard、Budget。所有扩展通过 AgentLoopConfig 回调注入。
 
+**关键不变量**：
+- LLM 业务失败永不 throw（`onError` 仅 `retry`/`abort`；终止必 yield `agent_end`）
+- 工具批次内全部 `terminate=true` → `agent_end(should_stop)`
+- `tool_results` 与 `tool_calls` 一一对应（含中止占位）
+- 流式优先使用 provider 透传的 `finishReason`（`done` chunk）
+- `turn_end.phase`：`pre_tools`（工具即将执行）/ `final`（本轮无工具路径结束）
+- 事件词表仅 Loop 协议；budget/run_guard 事件在 `HarnessLoopEvent`
+- 进入 `ModelProvider` 的 messages 已规范化（toolResults 展开、tool_calls 字符串化）
+- 引擎只托管 `metadata.source === 'systemPrompt'` 的 system；无 metadata 一律保留
+
+#### `turn_end.phase` — UI / 上层消费约定
+
+| phase | 含义 | UI 应做什么 |
+|-------|------|-------------|
+| `pre_tools` | 本轮 LLM 返回 tool_calls，消息已入历史，**工具尚未/正在执行** | 保持「进行中」；可展示工具列表；**不要**把 run 置为 idle |
+| `final` | 本轮无工具路径结束（纯文本 / followUp / 截断回灌 / 错误重试） | 可 finalize 助手消息；可置 idle |
+
+**不要**把每一次 `turn_end` 都当成「本轮 run 结束」。工具路径下 `pre_tools` 之后还有 `tool_*` 事件；终止时可能直接 `agent_end`，**不会再补** final turn_end。
+
+Runner 映射到 EventBus 的 `turn.end` 时会带上 `data.phase`。Web `runStatus`：`pre_tools → 'tools'`，`final → 'idle'`。TUI 在 `pre_tools` 时保持 processing。
+
 ```
 src/loop/
 ├── agent-loop.ts         # agentLoop() — 纯函数
-├── agent.ts              # Agent — 状态管理 + 生命周期
-├── call-model.ts         # callModel() — LLM 调用
+├── call-model.ts         # callModel() — LLM 调用（watchdog + finishReason）
 ├── error-classifier.ts   # classifyError() — 错误分类
 ├── types.ts              # AgentLoopConfig, AgentLoopEvent 等
 └── index.ts
 ```
 
+可运行 Agent 门面在 `src/harness/agent/`（`run()` = reliability 包装）。
+
 ### Layer 1: Core — 机制原语 + 接口契约
 
 **职责**：定义框架的所有契约（接口），提供基础设施原语（EventBus 等），定义核心类型。
 
-**特性**：不依赖任何外层。不包含策略实现。
+**特性**：不依赖任何外层。不包含策略实现。**不 re-export Loop**（`agentLoop` / `AgentLoopEvent` 从 `loop/` 导入；Agent 门面从 `harness/agent/` 导入）。
 
 ```
 src/core/
@@ -158,7 +180,7 @@ src/integration/
 
 ### 3.1 Agent Building — Agent 构建
 
-**职责**：组装 Agent 运行时，加载人格配置，桥接配置文件。
+**职责**：组装 Agent 运行时，加载人格配置，桥接配置文件。产出已 `setHarness` 的 `harness/agent` Agent。
 
 ```
 harness/agent-building/
@@ -273,16 +295,31 @@ harness/memory/
 
 ### 3.7 Reliability — 可靠性
 
-**职责**：Agent 循环的可靠性包装 — 重试、检测、监督、断路。
+**职责**：Agent 循环的可靠性包装 — 重试、检测、监督、断路。产出 `HarnessLoopEvent`。
 
 ```
 harness/reliability/
-├── run-agent.ts          # runAgentWithReliability()
+├── run-agent.ts          # runAgentWithReliability()（底层；业务入口用 Agent.run）
+├── harness-events.ts     # HarnessLoopEvent = AgentLoopEvent | budget/run_guard 扩展
 ├── circuit-breaker.ts    # CircuitBreaker — 断路器
 ├── provider-wrapper.ts   # wrapProviderWithCircuitBreaker()
 ├── budget.ts             # IterationBudget
 └── index.ts
 ```
+
+可运行门面在 `harness/agent/`（见 3.0）。
+
+### 3.0 Agent — 运行时门面
+
+**职责**：持有 context/config/harness，提供 **`Agent.run()`** 唯一推荐运行入口（= reliability 包装）。
+
+```
+harness/agent/
+├── agent.ts              # Agent 类
+└── index.ts
+```
+
+Loop 层只有 `agentLoop` 纯函数；不要在业务路径手拼 `runAgentWithReliability`。
 
 ### 3.8 Plugin Ecosystem — 插件生态
 
@@ -491,6 +528,8 @@ SessionAwareRunner.handle()           ← Session 生命周期管理
   ↓
 SessionTask 注入（goal + step rollup）  ← <session_tasks>
   ↓
+Agent.run()                           ← Harness 门面（setHarness 绑定）
+  ↓
 runAgentWithReliability()             ← 可靠性包装 + RunGuard 检查点
   ↓
 Context Intelligence 组装              ← 七层智能组装 system prompt
@@ -505,7 +544,7 @@ ModelProvider.call()                  ← LLM 推理
   ↓
 [回到 ModelProvider.call()]
   ↓
-AgentLoopEvent 流输出
+HarnessLoopEvent 流输出（Loop 协议 + budget/run_guard）
   ↓
 [任务结束后] → Memory 提取（信息→记忆→认知→智慧）
 ```

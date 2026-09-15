@@ -115,7 +115,7 @@ export class Gateway {
   /** 工具 */
   private tools: RegisteredTool[] = [];
   /** Agent 缓存（避免每条消息重建） */
-  private agentCache = new Map<string, { agent: import('../../loop/agent.js').Agent; runner: SessionAwareRunner }>();
+  private agentCache = new Map<string, { agent: import('../../harness/agent/index.js').Agent; runner: SessionAwareRunner }>();
   /** 流式 adapter 引用（用于广播事件） */
   private streamingAdapters: StreamingChannelAdapter[] = [];
   /** 每个 provider 的熔断器 */
@@ -623,7 +623,7 @@ export class Gateway {
    * 为 Agent 构建 Agent + SessionAwareRunner（新架构）
    */
   private async buildAgent(agent: AgentDefinition): Promise<{
-    agent: import('../../loop/agent.js').Agent;
+    agent: import('../../harness/agent/index.js').Agent;
     runner: SessionAwareRunner;
   }> {
     // 获取主 provider

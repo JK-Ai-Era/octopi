@@ -371,7 +371,7 @@ describe('AgentBuilder + SessionAwareRunner 热更新', () => {
     expect(String(systemMsgs[0]?.content ?? '')).toContain('# Soul v2');
   });
 
-  it('历史脏数据：多条无 metadata 的 managed system 只保留一条', async () => {
+  it('无 metadata 的历史 system 保留；仅 source=systemPrompt 受托管', async () => {
     writeAgentHome(home, '# Main', '# Soul v1');
     const captured: LLMRequest[] = [];
     const provider = createMockProvider((req) => captured.push(req));
@@ -399,10 +399,10 @@ describe('AgentBuilder + SessionAwareRunner 热更新', () => {
         updatedAt: now,
       },
       messages: [
-        // 历史无 metadata → 视为 managed
-        { role: 'system', content: 'STALE-MANAGED-A', timestamp: now },
+        // 无 metadata：不再视为引擎托管，必须保留
+        { role: 'system', content: 'STALE-UNMARKED-A', timestamp: now },
         { role: 'user', content: 'prev', timestamp: now },
-        { role: 'system', content: 'STALE-MANAGED-B', timestamp: now },
+        { role: 'system', content: 'STALE-UNMARKED-B', timestamp: now },
         {
           role: 'system',
           content: 'EXTERNAL-KEEP',
@@ -421,14 +421,13 @@ describe('AgentBuilder + SessionAwareRunner 热更新', () => {
 
     const after = await store.load('a', 's1');
     const systems = (after?.messages ?? []).filter((m) => m.role === 'system');
-    const managed = systems.filter(
-      (m) => m.metadata?.source === 'systemPrompt' || m.metadata?.source === undefined,
-    );
+    const managed = systems.filter((m) => m.metadata?.source === 'systemPrompt');
+    const unmarked = systems.filter((m) => m.metadata?.source === undefined);
     const external = systems.filter((m) => m.metadata?.source === 'external');
 
     expect(managed).toHaveLength(1);
     expect(String(managed[0]?.content ?? '')).toContain('# Soul v1');
-    expect(managed[0]?.content).not.toContain('STALE-MANAGED');
+    expect(unmarked.map((m) => m.content)).toEqual(['STALE-UNMARKED-A', 'STALE-UNMARKED-B']);
     expect(external).toHaveLength(1);
     expect(String(external[0]?.content ?? '')).toBe('EXTERNAL-KEEP');
   });

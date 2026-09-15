@@ -73,7 +73,7 @@ export class RuntimeErrorEvent extends RuntimeEvent<{ error: string }> {}
 // State types
 // ──────────────────────────────────────
 
-export type RunStatus = 'idle' | 'sending' | 'waiting' | 'streaming' | 'aborted' | 'error';
+export type RunStatus = 'idle' | 'sending' | 'waiting' | 'streaming' | 'tools' | 'aborted' | 'error';
 
 export interface ToolRun {
   toolCallId: string;
@@ -96,7 +96,6 @@ export interface InspectorState {
   lastBlockedReason?: string;
   lastBudgetStatus?: string;
   lastRetryLabel?: string;
-  lastLoopMessage?: string;
 }
 
 export interface ChatState {
@@ -400,7 +399,11 @@ export class OctopiRuntimeStore extends EventTarget {
         this.chat.runStatus = 'aborted';
       } else if (event.type === 'model.call.error' || event.type === 'engine.error') {
         this.chat.runStatus = 'error';
-      } else if (event.type === 'turn.end' || event.type === 'engine.end' || event.type === 'interrupted') {
+      } else if (event.type === 'turn.end') {
+        // phase=pre_tools：工具即将执行，不能当作 idle
+        const phase = (event.data as { phase?: string } | undefined)?.phase;
+        this.chat.runStatus = phase === 'pre_tools' ? 'tools' : 'idle';
+      } else if (event.type === 'engine.end' || event.type === 'interrupted') {
         this.chat.runStatus = 'idle';
       }
 
@@ -448,11 +451,6 @@ export class OctopiRuntimeStore extends EventTarget {
       case 'empty_response_retry':
       case 'planning_only_retry': {
         this.chat.inspector = { ...this.chat.inspector, lastRetryLabel: event.type === 'empty_response_retry' ? 'Empty response' : 'Planning-only' };
-        inspectorChanged = true;
-        break;
-      }
-      case 'loop_detected': {
-        this.chat.inspector = { ...this.chat.inspector, lastLoopMessage: String(event.data?.message ?? 'loop detected') };
         inspectorChanged = true;
         break;
       }

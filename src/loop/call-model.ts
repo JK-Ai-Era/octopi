@@ -41,9 +41,16 @@ export async function* callModel(
   let content = '';
   const toolCallBuffers = new Map<number, { id: string; name: string; argsBuffer: string }>();
   let usage: TokenUsage | undefined;
+  let finishReason: LLMResponse['finishReason'] | undefined;
 
   try {
-    const providerStream = model.stream({ messages, tools, signal });
+    // 显式带上 defaultModel，避免 provider 只依赖自身字段而忽略包装层注入
+    const providerStream = model.stream({
+      messages,
+      tools,
+      signal,
+      model: model.defaultModel,
+    });
     let idleTimer: ReturnType<typeof setTimeout> | null = null;
 
     const remainingAbsoluteMs = () => absoluteTimeoutMs - (Date.now() - requestStartTime);
@@ -108,8 +115,9 @@ export async function* callModel(
           }
         }
 
-        if (chunk.type === 'done' && chunk.usage) {
+        if (chunk.type === 'done') {
           usage = chunk.usage;
+          if (chunk.finishReason) finishReason = chunk.finishReason;
         }
 
         if (chunk.type === 'error') {
@@ -118,6 +126,8 @@ export async function* callModel(
       }
     } finally {
       if (idleTimer) clearTimeout(idleTimer);
+      // 尽力释放底层 generator，避免超时/中止后连接悬挂
+      void providerStream.return?.(undefined as never)?.catch(() => undefined);
     }
   } catch (err) {
     // 流失败 → fallback 到同步调用
@@ -127,7 +137,12 @@ export async function* callModel(
       data: { reason: err instanceof Error ? err.message : 'stream_error' },
     };
     try {
-      const response = await model.chat({ messages, tools, signal });
+      const response = await model.chat({
+        messages,
+        tools,
+        signal,
+        model: model.defaultModel,
+      });
       if (!response) {
         throw new Error('model.chat() returned undefined — provider may be misconfigured');
       }
@@ -153,7 +168,12 @@ export async function* callModel(
       data: { reason: 'empty_stream' },
     };
     try {
-      const response = await model.chat({ messages, tools, signal });
+      const response = await model.chat({
+        messages,
+        tools,
+        signal,
+        model: model.defaultModel,
+      });
       if (!response) {
         throw new Error('model.chat() returned undefined — provider may be misconfigured');
       }
@@ -174,18 +194,38 @@ export async function* callModel(
   // 组装最终 LLMResponse
   const toolCalls: ToolCall[] = [];
   for (const [, buf] of toolCallBuffers) {
+    let args: Record<string, unknown> = {};
+    let parseError: string | undefined;
+    const raw = buf.argsBuffer ?? '';
+    if (raw.trim().length > 0) {
+      try {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          args = parsed as Record<string, unknown>;
+        } else {
+          parseError = `Tool arguments must be a JSON object, got: ${raw.slice(0, 200)}`;
+        }
+      } catch {
+        parseError = `Invalid JSON in tool arguments: ${raw.slice(0, 200)}`;
+      }
+    }
     toolCalls.push({
       id: buf.id,
       name: buf.name,
-      arguments: (() => { try { return JSON.parse(buf.argsBuffer); } catch { return {}; } })(),
+      arguments: args,
+      ...(parseError ? { argumentsParseError: parseError } : {}),
     });
   }
+
+  // 优先使用 provider 透传的 finishReason；缺失时按是否有 tool_calls 合成
+  const resolvedFinishReason: LLMResponse['finishReason'] =
+    finishReason ?? (toolCalls.length > 0 ? 'tool_calls' : 'stop');
 
   return {
     content,
     toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
     usage,
     model: typeof model.defaultModel === 'string' ? model.defaultModel : 'unknown',
-    finishReason: toolCalls.length > 0 ? 'tool_calls' : 'stop',
+    finishReason: resolvedFinishReason,
   };
 }

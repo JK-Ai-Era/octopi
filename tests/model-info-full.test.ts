@@ -8,7 +8,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { OpenAIProvider } from '../src/integration/providers/openai.js';
 import { AnthropicProvider } from '../src/integration/providers/anthropic.js';
 import { loadConfig } from '../src/config.js';
-import { Agent } from '../src/loop/agent.js';
+import { Agent } from '../src/harness/agent/agent.js';
 import type { ModelProvider, LLMResponse } from '../src/core/interfaces/model-provider.js';
 import type { RegisteredTool } from '../src/core/types.js';
 import { DefaultEventBus } from '../src/core/primitives/event-bus.js';

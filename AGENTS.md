@@ -76,10 +76,12 @@ Scaffolded by `src/init.ts` (`initOctopi` / `ensureAgentDirs`). Keep init, types
 **Dependency Direction**: Outer -> Inner. `Core` has zero outer dependencies. **Never introduce a dependency from `Core` to `Harness`.**
 
 ### The 4-Layer Architecture
-1.  **Layer 0: Loop** — Pure execution loop (`agentLoop`). Zero state, zero external dependencies.
-2.  **Layer 1: Core** — Mechanism primitives (EventBus, StateMachine) and Interface contracts. No strategy implementations here.
-3.  **Layer 2: Harness** — 14 self-contained domains (Agent Building, Context, Security, Reliability, Multi-Agent, Autonomous Subsystem, Session Tasks, Run Guard, Orchestration, etc.). Strategies and workflows live here.
+1.  **Layer 0: Loop** — Pure execution loop (`agentLoop`). Zero state, zero external dependencies. Protocol events only (`AgentLoopEvent`).
+2.  **Layer 1: Core** — Mechanism primitives (EventBus, StateMachine) and Interface contracts. No strategy implementations. Does **not** re-export Loop.
+3.  **Layer 2: Harness** — Self-contained domains. **Runnable Agent facade** lives at `harness/agent` (`Agent.run()` = reliability). Strategies and workflows live here.
 4.  **Layer 3: Integration** — External adapters (LLM Providers, Storage, Observability).
+
+**Runtime entry**: prefer `Agent.run()` over hand-wiring `runAgentWithReliability`. Harness-level events (`budget_exceeded`, `run_guard_*`) are `HarnessLoopEvent`, not `AgentLoopEvent`.
 
 ### Context Intelligence (The 7-Layer Model)
 When modifying context-related code, understand the information distillation order:

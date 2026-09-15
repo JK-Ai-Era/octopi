@@ -1,8 +1,9 @@
 /**
  * Core 层统一导出（Layer 1）
  *
- * 机制原语 + 接口契约 + 核心类型
+ * 机制原语 + 接口契约 + 核心类型。
  * 不包含任何策略实现。
+ * Loop 协议与 Agent 门面不在 Core：见 `loop/`、`harness/agent/`。
  */
 
 // ── 接口契约 ──
@@ -19,9 +20,3 @@ export type { SecurityGuard, SecurityCheckResult, SecurityViolation, SecurityVio
 // ── 核心类型 ──
 export * from './types/index.js';
 export { getTextContent, hasMediaContent } from './types/messages.js';
-
-// ── Loop 层 re-export（公共 API） ──
-export { agentLoop, Agent, callModel, classifyError } from '../loop/index.js';
-export type { AgentOptions, AgentContext, AgentTool, LoopToolResult, AgentLoopConfig, AgentLoopEvent, LoopObserver, ClassifiedError as LoopClassifiedError } from '../loop/index.js';
-
-// ── Harness 策略 re-export（公共 API） ──

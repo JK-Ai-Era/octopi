@@ -62,6 +62,9 @@ export type {
 // ============================================================
 
 export { AgentBuilder, createAgent } from './harness/agent-building/builder.js';
+export { Agent } from './harness/agent/index.js';
+export type { AgentOptions } from './harness/agent/index.js';
+export type { HarnessLoopEvent } from './harness/reliability/harness-events.js';
 export { SessionAwareRunner } from './harness/runner.js';
 export { loadPersona, composePersonas, PersonaSource } from './harness/agent-building/persona.js';
 

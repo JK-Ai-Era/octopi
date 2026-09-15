@@ -269,6 +269,7 @@ export class TuiApp {
       case 'turn.end': {
         const content = (event.data?.content as string) ?? '';
         const hasToolCalls = event.data?.hasToolCalls as boolean | undefined;
+        const phase = (event.data?.phase as string | undefined) ?? 'final';
         this.chatLog.clearTransientSystem();
         if (this.streamedContent || content) {
           this.chatLog.finalizeAssistant(this.streamedContent || content, 'run');
@@ -280,7 +281,14 @@ export class TuiApp {
           this.chatLog.addSystem('⚠️ Empty response.');
         }
         this.streamedContent = '';
-        this.isProcessing = false;
+
+        // pre_tools：工具即将执行，保持 processing，直到 final turn_end 或 agent_end
+        if (phase === 'final') {
+          this.isProcessing = false;
+          this.setStatus('');
+        } else {
+          this.setStatus('running tools…');
+        }
 
         // 更新 context 信息（来自 runner 在 turn.end 事件中附带的 LLM usage）
         const contextTokens = event.data?.contextTokens as number | undefined;
@@ -295,7 +303,6 @@ export class TuiApp {
           this.updateFooter();
         }
 
-        this.setStatus('');
         this.tui.requestRender();
         break;
       }
@@ -416,14 +423,6 @@ export class TuiApp {
         const data = event.data as any;
         const label = event.type === 'empty_response_retry' ? 'Empty response' : 'Planning-only';
         this.chatLog.addSystem(`🔄 ${label}, retrying (${data?.attempt}/${data?.maxAttempts})...`, { transient: true });
-        this.tui.requestRender();
-        break;
-      }
-
-      case 'loop_detected': {
-        const data = event.data as any;
-        const icon = data?.level === 'critical' ? '🛑' : '🔄';
-        this.chatLog.addSystem(`${icon} Loop detected: ${data?.message}`);
         this.tui.requestRender();
         break;
       }

@@ -52,10 +52,9 @@ export type { SkillDefinition, SkillManager } from './skills.js';
 
 // ── Plugin Hooks ──
 
-// ── Agent Event ──
+// ── 测试编排事件（非 Loop 协议；LLMStreamChunk 见 interfaces/model-provider） ──
 export type {
   LoopEndReason,
-  LLMStreamChunk,
   AgentEventDetail,
   AgentEventListener,
 } from './events.js';

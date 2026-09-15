@@ -79,6 +79,11 @@ export interface ToolCall {
   id: string;
   name: string;
   arguments: Record<string, unknown>;
+  /**
+   * arguments 原文不是合法 JSON 时的说明。
+   * 存在时 Loop 会直接以 isError 结果拒绝执行，不把空参数交给工具。
+   */
+  argumentsParseError?: string;
 }
 
 /** 工具执行结果 */

@@ -7,7 +7,7 @@ import { DefaultRunGuard } from '../src/harness/run-guard/default-run-guard.js';
 import { runAgentWithReliability } from '../src/harness/reliability/run-agent.js';
 import { IterationBudget } from '../src/harness/budget/budget.js';
 import { DefaultEventBus } from '../src/core/primitives/event-bus.js';
-import { Agent } from '../src/loop/agent.js';
+import { Agent } from '../src/harness/agent/agent.js';
 import type { ModelProvider } from '../src/core/interfaces/model-provider.js';
 import type { ReliabilityHarness } from '../src/core/interfaces/reliability.js';
 

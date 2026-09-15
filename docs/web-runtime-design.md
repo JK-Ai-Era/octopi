@@ -473,7 +473,6 @@ Web Runtime 不建议直接透传 `AgentEvent` 给 UI，建议统一映射。
 - `security.blocked`
 - `security.behavior_blocked`
 - `context.truncated`
-- `loop_detected`
 - `empty_response_retry`
 - `planning_only_retry`
 
@@ -495,7 +494,6 @@ Web Runtime 不建议直接透传 `AgentEvent` 给 UI，建议统一映射。
 | `budget.exceeded` | inspector event | Inspector |
 | `security.blocked` | blocked notice | Notice + Inspector |
 | `context.truncated` | inspector event | Inspector |
-| `loop_detected` | inspector event | Inspector |
 | `approval required` | pending approval | ApprovalQueue |
 
 ---

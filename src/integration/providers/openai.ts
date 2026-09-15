@@ -193,6 +193,7 @@ export class OpenAIProvider implements ModelProvider {
     const decoder = new TextDecoder();
     let buffer = '';
     const lastUsage: { current: TokenUsage | undefined } = { current: undefined };
+    const lastFinishReason: { current: LLMResponse['finishReason'] | undefined } = { current: undefined };
 
     // 空闲超时：如果服务端在 timeoutMs 内没有发送数据，中断读取
     const streamIdleTimeout = this.timeoutMs;
@@ -218,7 +219,7 @@ export class OpenAIProvider implements ModelProvider {
       buffer = lines.pop() ?? '';
 
       for (const line of lines) {
-        const chunks = this.parseSSELine(line, toolCallBuffers, lastUsage);
+        const chunks = this.parseSSELine(line, toolCallBuffers, lastUsage, lastFinishReason);
         for (const chunk of chunks) {
           if (chunk.type === 'done') {
             yield chunk;
@@ -234,7 +235,7 @@ export class OpenAIProvider implements ModelProvider {
       // Process remaining buffer data after stream ends
       if (buffer.trim()) {
         for (const line of buffer.split('\n')) {
-          const chunks = this.parseSSELine(line, toolCallBuffers, lastUsage);
+          const chunks = this.parseSSELine(line, toolCallBuffers, lastUsage, lastFinishReason);
           for (const chunk of chunks) {
             if (chunk.type === 'done') {
               yield chunk;
@@ -408,6 +409,7 @@ export class OpenAIProvider implements ModelProvider {
     line: string,
     toolCallBuffers: Map<number, { id: string; name: string; argsBuffer: string }>,
     lastUsage: { current: TokenUsage | undefined },
+    lastFinishReason: { current: LLMResponse['finishReason'] | undefined },
   ): LLMStreamChunk[] {
     const trimmed = line.trim();
     if (!trimmed || !trimmed.startsWith('data: ')) return [];
@@ -421,7 +423,11 @@ export class OpenAIProvider implements ModelProvider {
           toolCall: { id: buf.id, name: buf.name, arguments: buf.argsBuffer, index: idx },
         });
       }
-      chunks.push({ type: 'done', usage: lastUsage.current });
+      chunks.push({
+        type: 'done',
+        usage: lastUsage.current,
+        finishReason: lastFinishReason.current,
+      });
       return chunks;
     }
 
@@ -437,7 +443,12 @@ export class OpenAIProvider implements ModelProvider {
         };
       }
 
-      const delta = parsed.choices?.[0]?.delta;
+      const choice = parsed.choices?.[0];
+      if (choice?.finish_reason) {
+        lastFinishReason.current = this.mapFinishReason(choice.finish_reason);
+      }
+
+      const delta = choice?.delta;
       if (!delta) return [];
 
       const chunks: LLMStreamChunk[] = [];

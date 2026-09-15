@@ -1,18 +1,15 @@
 /**
  * Loop Layer — 纯执行循环（Layer 0）
  *
- * 这是 Octopi 的最内层：纯函数 + Agent 类。
+ * 这是 Octopi 的最内层：agentLoop 纯函数 + 协议类型。
  * 零外部依赖，所有扩展通过 AgentLoopConfig 回调注入。
  *
- * 从 core/loop/ 提取为独立层（v0.8.0）。
+ * 可运行的 Agent 门面在 `harness/agent/`（run() = reliability 包装）。
+ * 直接调用 agentLoop 仅用于单测或自定义包装层。
  */
 
 // ── 核心循环 ──
 export { agentLoop } from './agent-loop.js';
-
-// ── Agent 类 ──
-export { Agent } from './agent.js';
-export type { AgentOptions } from './agent.js';
 
 // ── 模型调用 ──
 export { callModel } from './call-model.js';

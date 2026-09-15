@@ -26,9 +26,9 @@ import type {
 import type {
   AgentTool as LoopAgentTool,
 } from '../../loop/types.js';
-import { Agent } from '../../loop/agent.js';
-import type { AgentOptions } from '../../loop/agent.js';
-import { runAgentWithReliability, DEFAULT_RELIABILITY_CONFIG } from '../reliability/run-agent.js';
+import { Agent } from '../agent/index.js';
+import type { AgentOptions } from '../agent/index.js';
+import { DEFAULT_RELIABILITY_CONFIG } from '../reliability/run-agent.js';
 import type { ReliabilityConfig, ReliabilityHarness } from '../reliability/run-agent.js';
 import type {
   ContextEngine,
@@ -524,7 +524,7 @@ export class AgentBuilder {
   /**
    * 构建 Agent + SessionAwareRunner
    *
-   * 使用新架构：Agent 类 + runAgentWithReliability 可靠性包装。
+   * 使用新架构：Harness Agent 门面（agent.run = reliability）。
    */
   async build(): Promise<{ agent: Agent; harness: ReliabilityHarness; runner: SessionAwareRunner; mcpManager: McpManager; runtime?: import('../autonomous-subsystem/runtime.js').SubsystemRuntime;  events: EventBus }> {
     const events = this._events ?? new DefaultEventBus();
@@ -624,12 +624,12 @@ export class AgentBuilder {
   }
 
   /**
-   * 构建 Agent 类（使用 agentLoop 纯函数 + runAgentWithReliability）
+   * 构建 Agent 类（Harness 门面 + reliability）
    *
-   * 返回 Agent 实例 + 可靠性配置，集成方应使用 runAgentWithReliability() 运行：
+   * 返回已绑定 harness 的 Agent；集成方应使用 `agent.run()`：
    * ```ts
    * const { agent, harness } = await builder.buildAgent();
-   * for await (const event of runAgentWithReliability(agent.context, { model: agent.model }, harness)) {
+   * for await (const event of agent.run()) {
    *   // 处理事件
    * }
    * ```
@@ -711,6 +711,9 @@ export class AgentBuilder {
       runGuard,
       budget,
     };
+
+    // Agent.run() 需要 harness；Builder 组装期绑定
+    agent.setHarness(harness);
 
     return { agent, harness, mcpManager };
   }

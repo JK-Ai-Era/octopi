@@ -1,7 +1,8 @@
 /**
  * ReliabilityHarness — 可靠性装备接口
  *
- * 定义 runAgentWithReliability() 所需的外部依赖。
+ * 定义可靠性包装所需的外部依赖。
+ * 消费方：`harness/agent` 的 `Agent.run()`（底层实现 `runAgentWithReliability`）。
  * 实现在 harness/reliability/，由 builder 组装注入。
  *
  * 提取到 Core 层（v0.8.0）：这是跨域契约，不是实现细节。
@@ -47,7 +48,7 @@ export interface ResourceBudgetLike {
   getConfig(): object;
 }
 
-/** 可靠性装备 — runAgentWithReliability() 的外部依赖 */
+/** 可靠性装备 — Agent.run() / runAgentWithReliability() 的外部依赖 */
 export interface ReliabilityHarness {
   /** 可靠性配置（类型由实现方定义，这里用 unknown 保持接口独立） */
   config: unknown;

@@ -99,7 +99,7 @@ export class ReplayProvider implements ModelProvider {
         }
       }
 
-      yield { type: 'done', usage: entry.response.usage };
+      yield { type: 'done', usage: entry.response.usage, finishReason: entry.response.finishReason };
     }
   }
 

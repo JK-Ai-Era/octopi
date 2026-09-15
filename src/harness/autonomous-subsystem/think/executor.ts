@@ -7,12 +7,11 @@
  * @module autonomous-subsystem/think/executor
  */
 
-import { Agent } from '../../../loop/agent.js';
+import { Agent } from '../../agent/index.js';
 import type { ModelProvider } from '../../../core/interfaces/model-provider.js';
 import type { ErrorStrategy } from '../../../core/interfaces/error-strategy.js';
 import type { RegisteredTool } from '../../../core/types.js';
 import type { AgentTool } from '../../../loop/types.js';
-import { runAgentWithReliability } from '../../reliability/index.js';
 import type { ReliabilityHarness } from '../../reliability/index.js';
 import type {
   ThinkConfig,
@@ -34,6 +33,22 @@ export class TokenBudgetExceededError extends Error {
   }
 }
 
+/**
+ * 将 model 名绑定到 LLMRequest（不修改原 provider）。
+ * 多级 fallback 时必须换 model 名，否则循环只是对同一模型重试。
+ */
+function bindModelName(provider: ModelProvider, model: string): ModelProvider {
+  return {
+    name: provider.name,
+    defaultModel: model,
+    getModelInfo: (modelName: string) => provider.getModelInfo(modelName),
+    getModelInfos: () => provider.getModelInfos(),
+    isAvailable: () => provider.isAvailable(),
+    chat: (request) => provider.chat({ ...request, model: request.model ?? model }),
+    stream: (request) => provider.stream({ ...request, model: request.model ?? model }),
+  };
+}
+
 
 // ── ThinkExecutor 配置 ──
 
@@ -51,7 +66,7 @@ export interface ThinkExecutorConfig {
  *
  * 职责：
  * 1. code 模式：直接调用 handler 函数
- * 2. llm 模式：构建 Agent + runAgentWithReliability，支持工具执行
+ * 2. llm 模式：构建 Agent + agent.run()，支持工具执行
  * 3. hybrid 模式：preProcess → llm → postProcess
  * 4. 模型分级解析 + fallback 降级
  * 5. LLM 输出解析（JSON 提取 + 结构校验）
@@ -146,11 +161,12 @@ export class ThinkExecutor {
     });
 
     const inputContent = JSON.stringify(input, null, 2);
-    agent.context.messages.push({
+    const freshMessages = (): import('../../../core/types.js').Message[] => [{
       role: 'user',
       content: inputContent,
       timestamp: Date.now(),
-    });
+    }];
+    agent.context.messages = freshMessages();
 
     const harness: ReliabilityHarness = {
       config: {
@@ -161,6 +177,7 @@ export class ThinkExecutor {
       },
       errorStrategy: this.errorStrategy,
     };
+    agent.setHarness(harness);
 
     const modelsToTry = [resolved.primary, ...resolved.fallback];
     let lastContent = '';
@@ -168,16 +185,15 @@ export class ThinkExecutor {
     let lastErr: unknown;
 
     for (let i = 0; i < modelsToTry.length; i++) {
+      const target = modelsToTry[i];
       try {
         lastContent = '';
         tokenUsage = undefined;
+        // 每次 fallback 重置消息与模型，避免上一次 agentLoop 原地改写污染
+        agent.context.messages = freshMessages();
+        agent.setModel(bindModelName(this.modelProvider, target.model));
 
-        for await (const event of runAgentWithReliability(
-          agent.context,
-          { model: agent.model },
-          harness,
-          options?.abortSignal,
-        )) {
+        for await (const event of agent.run(options?.abortSignal)) {
           if (event.type === 'assistant_message') {
             lastContent = typeof event.message.content === 'string' ? event.message.content : '';
           }

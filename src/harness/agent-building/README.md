@@ -19,12 +19,13 @@
 
 ## 依赖
 
-- Core: types/、interfaces/、loop/
-- Harness: reliability、context、security、concurrency、plugin-ecosystem、multi-agent、autonomous-subsystem、session-tasks、run-guard
+- Core: types/、interfaces/
+- Loop: AgentTool 等协议类型
+- Harness: **agent/**（门面）、reliability、context、security、concurrency、plugin-ecosystem、multi-agent、autonomous-subsystem、session-tasks、run-guard
 
 ## 文件说明
 
-- builder.ts — AgentBuilder（~700 行，组装所有组件）
+- builder.ts — AgentBuilder（组装组件；build 后 `agent.setHarness(harness)`）
 - persona.ts — 人格加载（AGENTS.md + persona/*.md）
 - config-bridge.ts — JSON 配置 → Agent 组件
 - index.ts — 统一导出

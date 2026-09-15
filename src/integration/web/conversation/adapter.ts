@@ -161,6 +161,8 @@ export class ConversationAdapter {
       }
 
       // ── Turn end ──
+      // phase=pre_tools：assistant 消息已定稿但工具未跑完；仍 finalize 文本，
+      // 但由 store 用 phase 区分 runStatus（tools vs idle），避免 UI 误判空闲。
       case 'turn.end': {
         const content = String(event.data?.content ?? this.streamingContent ?? '');
         if (this.currentAssistantId) {
@@ -295,23 +297,6 @@ export class ConversationAdapter {
           source: 'runtime',
           kind: 'retry',
           message: label,
-        };
-        items = [...items, notice];
-        changed = true;
-        break;
-      }
-
-      // ── Loop detected ──
-      case 'loop_detected': {
-        const msg = String(event.data?.message ?? 'Loop detected');
-        const notice: SystemConversationItem = {
-          id: ConversationAdapter.makeId('sys'),
-          role: 'system',
-          createdAt: Date.now(),
-          sessionId,
-          source: 'runtime',
-          kind: 'warning',
-          message: msg,
         };
         items = [...items, notice];
         changed = true;

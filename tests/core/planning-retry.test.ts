@@ -10,7 +10,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { Agent } from '../../src/loop/agent.js';
+import { Agent } from '../../src/harness/agent/agent.js';
 import { runAgentWithReliability } from '../../src/harness/reliability/run-agent.js';
 import type { ReliabilityHarness } from '../../src/harness/reliability/run-agent.js';
 import type { AgentLoopEvent } from '../../src/loop/types.js';

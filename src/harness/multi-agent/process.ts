@@ -14,9 +14,9 @@
 import { randomUUID } from 'node:crypto';
 import type { EventBus } from '../../core/primitives/event-bus.js';
 import type { Message } from '../../core/types.js';
-import type { Agent } from '../../loop/agent.js';
+import type { Agent } from '../agent/index.js';
 import type { ReliabilityHarness } from '../reliability/index.js';
-import { runAgentWithReliability } from '../reliability/index.js';
+
 import type { AgentEvent } from '../../core/primitives/event-bus.js';
 import type { AgentInfo } from '../../core/interfaces/agent-registry.js';
 
@@ -286,12 +286,7 @@ export class AgentProcess {
     // 同步消息到 Agent 上下文
     this._agent.context.messages = messages;
 
-    for await (const event of runAgentWithReliability(
-      this._agent.context,
-      { model: this._agent.model },
-      this._harness,
-      this._abortController?.signal,
-    )) {
+    for await (const event of this._agent.run(this._abortController?.signal, this._harness)) {
       if (event.type === 'assistant_message') {
         content = typeof event.message.content === 'string' ? event.message.content : '';
       }
