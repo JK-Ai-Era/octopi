@@ -309,6 +309,16 @@ export interface ContextEngineConfig {
   protectLastN?: number;
   /** 触发压缩的阈值比例（默认 0.5） */
   compactThreshold?: number;
+  /**
+   * 主动摘要阈值：消息 token / messagesBudget 超过该比例时，
+   * 在硬溢出前先 LLM 摘要（默认 0.6；0 = 关闭）
+   */
+  proactiveCompactRatio?: number;
+  /**
+   * 主动 LLM 摘要冷却 ms（默认 30000；0 = 不冷却）。
+   * 冷却期内优先缓存重建，降低单 turn 双摘要。
+   */
+  proactiveCooldownMs?: number;
   /** 输出预留比例（默认 0.20） */
   outputRatio?: number;
   /** 输出预留最小值（默认 2000） */

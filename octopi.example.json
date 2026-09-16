@@ -45,6 +45,12 @@
     "softWallClockMs": 2400000
   },
 
+  "contextEngine": {
+    "proactiveCompactRatio": 0.6,
+    "proactiveCooldownMs": 30000,
+    "protectLastN": 20
+  },
+
   "runGuard": {
     "enabled": true,
     "checkpointInterval": 15

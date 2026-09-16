@@ -194,6 +194,18 @@ export class SessionAwareRunner {
   private systemPromptResolver?: () => Promise<string>;
   /** 最后一次成功解析的纯 persona（不含 injectedContext），用于 resolver 失败时的干净回退 */
   private lastCleanPersonaPrompt?: string;
+  /** 按层契约组装 system prompt（persona + runtime）；未设置时退回字符串拼接 */
+  private systemPromptAssembler?: (input: {
+    sessionId: string;
+    agentId?: string;
+    messages: Message[];
+    persona: string;
+    injectedContext?: string;
+    contextWindow?: number;
+    signal?: AbortSignal;
+  }) => Promise<{ systemPrompt: string }>;
+  /** 会话重置时清理 Assembler 层缓存 */
+  private systemPromptAssemblerClear?: (sessionId: string) => void;
 
   constructor(agent: Agent, harness: ReliabilityHarness, store: TypedSessionStore, config?: SessionAwareRunnerConfig & { events?: import('../core/primitives/event-bus.js').EventBus }) {
     this.agent = agent;
@@ -229,6 +241,28 @@ export class SessionAwareRunner {
     if (this.lastCleanPersonaPrompt === undefined) {
       this.lastCleanPersonaPrompt = initialCleanPersona;
     }
+  }
+
+  /**
+   * 设置 system prompt 层装配器
+   *
+   * 每轮在 persona resolve 与 injectedContext 计算完成后调用，
+   * 替代原先的字符串拼接。未设置时保持旧路径（兼容）。
+   */
+  setSystemPromptAssembler(
+    assembler: (input: {
+      sessionId: string;
+      agentId?: string;
+      messages: Message[];
+      persona: string;
+      injectedContext?: string;
+      contextWindow?: number;
+      signal?: AbortSignal;
+    }) => Promise<{ systemPrompt: string }>,
+    clearSession?: (sessionId: string) => void,
+  ): void {
+    this.systemPromptAssembler = assembler;
+    this.systemPromptAssemblerClear = clearSession;
   }
 
   /**
@@ -357,6 +391,8 @@ export class SessionAwareRunner {
 
       // 9. 同步 session 消息到 Agent 上下文
       this.agent.context.messages = session.messages;
+      // 播种压缩状态（摘要 + lastProactiveMessageCount），供重启后缓存重建
+      this.agent.setSessionCompactState(sessionId, session.contextCompact);
       let basePrompt = effectiveRunConfig.systemPrompt;
       let personaFromResolver = false;
       if (!basePrompt && this.systemPromptResolver) {
@@ -400,13 +436,30 @@ export class SessionAwareRunner {
       if (!basePrompt && !personaFromResolver) {
         basePrompt = this.agent.context.systemPrompt || '';
       }
-      if (effectiveRunConfig.injectedContext) {
-        this.agent.context.systemPrompt = basePrompt
-          ? `${basePrompt}\n\n${effectiveRunConfig.injectedContext}`
-          : effectiveRunConfig.injectedContext;
-      } else if (personaFromResolver || basePrompt) {
-        // resolver 成功（含清空）或有明确 basePrompt：以 basePrompt 为准
-        this.agent.context.systemPrompt = basePrompt;
+
+      // system prompt 终装：Assembler（层契约）优先，否则退回字符串拼接
+      if (this.systemPromptAssembler) {
+        try {
+          const assembled = await this.systemPromptAssembler({
+            sessionId,
+            agentId: _agentId,
+            messages: session.messages,
+            persona: basePrompt,
+            injectedContext: effectiveRunConfig.injectedContext,
+            contextWindow: effectiveRunConfig.contextWindow,
+            signal,
+          });
+          this.agent.context.systemPrompt = assembled.systemPrompt;
+        } catch (err) {
+          // 装配失败：回退拼接，保证本轮可跑
+          const errMsg = err instanceof Error ? err.message : String(err);
+          console.warn(
+            `[octopi] system prompt assemble failed (session=${sessionId}): ${errMsg}; falling back to concat`,
+          );
+          this.applyConcatSystemPrompt(basePrompt, effectiveRunConfig.injectedContext, personaFromResolver);
+        }
+      } else {
+        this.applyConcatSystemPrompt(basePrompt, effectiveRunConfig.injectedContext, personaFromResolver);
       }
 
       // 更新 harness 的 sessionId/agentId（用于检查点）
@@ -518,6 +571,13 @@ export class SessionAwareRunner {
       sm.transition('idle');
       session.meta.status = sm.state;
       session.meta.updatedAt = Date.now();
+      // 压缩状态写回 Session（供重启快速装配 LLM 视图）
+      const compactSnap = this.agent.getSessionCompactState(sessionId);
+      if (compactSnap) {
+        session.contextCompact = compactSnap;
+      } else {
+        delete session.contextCompact;
+      }
       await this.store.save(_agentId, sessionId, session);
 
       // 通知子系统：本轮处理完成（保持 active，但刷新 lastInteractionAt）
@@ -630,6 +690,21 @@ export class SessionAwareRunner {
     };
   }
 
+  /** 旧路径：persona + injectedContext 字符串拼接 */
+  private applyConcatSystemPrompt(
+    basePrompt: string,
+    injectedContext: string | undefined,
+    personaFromResolver: boolean,
+  ): void {
+    if (injectedContext) {
+      this.agent.context.systemPrompt = basePrompt
+        ? `${basePrompt}\n\n${injectedContext}`
+        : injectedContext;
+    } else if (personaFromResolver || basePrompt) {
+      this.agent.context.systemPrompt = basePrompt;
+    }
+  }
+
   /**
    * 获取或创建 Session 状态机
    *
@@ -653,6 +728,7 @@ export class SessionAwareRunner {
    */
   private checkSessionReset(session: SessionData): void {
     const now = Date.now();
+    let didReset = false;
 
     // Daily reset
     if (this.config.enableDailyReset) {
@@ -662,6 +738,7 @@ export class SessionAwareRunner {
         session.messages = [];
         session.turns = [];
         session.meta.sessionStartedAt = now;
+        didReset = true;
       }
     }
 
@@ -672,7 +749,15 @@ export class SessionAwareRunner {
         session.messages = [];
         session.turns = [];
         session.meta.sessionStartedAt = now;
+        didReset = true;
       }
+    }
+
+    if (didReset) {
+      // 历史清空后，层指纹与压缩快照一并失效
+      this.systemPromptAssemblerClear?.(session.id);
+      delete session.contextCompact;
+      this.agent.setSessionCompactState(session.id, undefined);
     }
   }
 }

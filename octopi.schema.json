@@ -254,6 +254,75 @@
         }
       }
     },
+    "contextEngine": {
+      "type": "object",
+      "description": "上下文引擎配置（消息窗口压缩 + 主动摘要）",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["default", "custom"],
+          "default": "default"
+        },
+        "protectFirstN": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 3,
+          "description": "头部保护消息数"
+        },
+        "protectLastN": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 20,
+          "description": "尾部保护消息数"
+        },
+        "compactThreshold": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "default": 0.5,
+          "description": "触发存储压缩的阈值比例"
+        },
+        "proactiveCompactRatio": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "default": 0.6,
+          "description": "主动摘要阈值：消息 token / messagesBudget 超过该比例时，在硬溢出前 LLM 摘要（0=关闭）"
+        },
+        "proactiveCooldownMs": {
+          "type": "number",
+          "minimum": 0,
+          "default": 30000,
+          "description": "主动 LLM 摘要冷却毫秒；冷却期内优先缓存重建（0=不冷却）"
+        },
+        "outputRatio": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "default": 0.2,
+          "description": "输出预留比例"
+        },
+        "minOutputReserve": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 2000
+        },
+        "maxOutputReserve": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 8000
+        },
+        "enableLLMSummary": {
+          "type": "boolean",
+          "default": true
+        },
+        "summaryModel": {
+          "type": "string",
+          "description": "摘要模型（可选）"
+        }
+      },
+      "additionalProperties": false
+    },
     "runGuard": {
       "type": "object",
       "description": "过程监督配置（智能监督，替代硬预算限制）",

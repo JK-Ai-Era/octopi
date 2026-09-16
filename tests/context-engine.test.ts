@@ -499,8 +499,8 @@ describe('TruncateCompressor', () => {
       tokenEstimator: estimator,
     });
 
-    // First message should be system summary
-    expect(result.result[0].role).toBe('system');
+    // First message should be user-role summary (avoid mid-conversation system)
+    expect(result.result[0].role).toBe('user');
     expect(result.result[0].content).toContain('compressed');
   });
 });

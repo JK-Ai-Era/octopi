@@ -289,6 +289,56 @@ export class ConversationAdapter {
         break;
       }
 
+      // ── Context compact（缓存重建不入会话流，避免刷屏；进行中靠状态栏） ──
+      case 'context.compact.end': {
+        const d = event.data as {
+          tokensBefore?: number;
+          tokensAfter?: number;
+          cached?: boolean;
+          reason?: string;
+          durationMs?: number;
+        } | undefined;
+        if (d?.cached) break;
+        const before = typeof d?.tokensBefore === 'number' ? d.tokensBefore : undefined;
+        const after = typeof d?.tokensAfter === 'number' ? d.tokensAfter : undefined;
+        const parts: string[] = [];
+        if (before !== undefined && after !== undefined) {
+          parts.push(`${before} → ${after} tokens`);
+        }
+        if (typeof d?.durationMs === 'number' && d.durationMs > 0) {
+          parts.push(`${d.durationMs}ms`);
+        }
+        const notice: SystemConversationItem = {
+          id: ConversationAdapter.makeId('sys'),
+          role: 'system',
+          createdAt: Date.now(),
+          sessionId,
+          source: 'runtime',
+          kind: 'truncated',
+          message: parts.length
+            ? `Context compacted (${parts.join(', ')})`
+            : 'Context compacted',
+        };
+        items = [...items, notice];
+        changed = true;
+        break;
+      }
+      case 'context.compact.error': {
+        const error = String(event.data?.error ?? 'Context compact failed');
+        const notice: SystemConversationItem = {
+          id: ConversationAdapter.makeId('sys'),
+          role: 'system',
+          createdAt: Date.now(),
+          sessionId,
+          source: 'runtime',
+          kind: 'warning',
+          message: `Context compact failed, fell back to truncation: ${error}`,
+        };
+        items = [...items, notice];
+        changed = true;
+        break;
+      }
+
       // ── Retry ──
       case 'empty_response_retry':
       case 'planning_only_retry': {

@@ -152,11 +152,12 @@ export class LLMSummaryCompressor implements Compressor {
         maxTokens: summaryTokens,
       });
 
-      // 创建摘要消息
+      // 摘要用 user 角色：中段 system 会被部分网关拒绝
       const summaryMessage: Message = {
-        role: 'system',
+        role: 'user',
         content: `[Conversation Summary]\n\n${summary}`,
         timestamp: Date.now(),
+        metadata: { source: 'contextSummary' as const },
       };
 
       // 估算摘要 token 数
@@ -228,11 +229,12 @@ export class LLMSummaryCompressor implements Compressor {
     const kept = messages.slice(-keepCount);
     const keptTokens = estimator.estimateMessages(kept);
 
-    // 插入截断说明
+    // 插入截断说明（user 角色，避免中段 system）
     const summaryMessage: Message = {
-      role: 'system',
+      role: 'user',
       content: `[Context truncated: ${messages.length - keepCount} earlier messages removed to fit context window]`,
       timestamp: Date.now(),
+      metadata: { source: 'contextSummary' as const },
     };
 
     const result = [summaryMessage, ...kept];

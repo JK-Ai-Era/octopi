@@ -32,6 +32,7 @@ Domain / 产品契约主体在 **harness 领域**。
 | **SessionStore** | Session 聚合（Runner / Gateway） | `core/interfaces/session-store.ts` |
 | **Observer** | 可选 Integration 遥测（专题再议） | `core/interfaces/observer.ts` |
 | **ContextEngine** | 窗口装配；经 `convertToLlm` 接入 | **harness/context/types.ts** |
+| **ContextLayer / ContextAssembler** | system prompt 七层内容装配 | **harness/context/layer-types.ts** |
 
 ## 可嵌入门禁（I/O 准则）
 

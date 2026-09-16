@@ -28,6 +28,45 @@ export { HybridCompressor } from './context/hybrid-compressor.js';
 export { DefaultBudgetAllocator } from './context/budget-allocator.js';
 export { SmartRouter } from './context/smart-router.js';
 export type { SmartRouterConfig, Route, RoutingDecision } from './context/smart-router.js';
+export {
+  LAYER_ORDER,
+  LAYER_PRIORITY,
+  LAYER_DEFAULT_SHARE,
+  extractLayerQuery,
+  hasLayerText,
+  DefaultContextAssembler,
+  PersonaLayer,
+  SkillLayer,
+  RuntimeLayer,
+  KnowledgeLayer,
+  MemoryLayer,
+  CognitionLayer,
+  WisdomLayer,
+  createDefaultLayers,
+  createProviderSummarize,
+  pickSummarizeProvider,
+  createDefaultSystemPromptAssembler,
+} from './context/index.js';
+export type {
+  ContextLayerId,
+  LayerAssembleContext,
+  LayerContent,
+  ContextLayer,
+  LayerManifestEntry,
+  AssembleManifest,
+  SystemAssembleResult,
+  ContextAssembler,
+  ContextAssembleParams,
+  DefaultContextAssemblerConfig,
+  CreateDefaultLayersOptions,
+  CreateProviderSummarizeOptions,
+  SystemPromptAssembleInput,
+  SystemPromptAssembleOutput,
+  ContextCompactReason,
+  ContextCompactEvent,
+  ContextEmitFn,
+  ContextCompactSnapshot,
+} from './context/index.js';
 
 // ── Security ──
 export { CapabilityEnforcer, PluginTrustLevel } from './security/capability-enforcer.js';
@@ -148,8 +187,8 @@ export { ResourceManager } from './resources/index.js';
 export type { TokenBudgetConfig, ModelPricing, RateLimitConfig, TokenCheckResult, RateLimitCheckResult, ResourceStats } from './resources/index.js';
 
 // ── Memory ──
-export { InMemoryMemoryStore, InMemoryConceptGraph, ContextIntelligence, AgentDatabase, SqliteMemoryStore, SqliteWisdomStore, SqliteConceptGraph, KnowledgeRegistry, createEmbeddingProvider } from './memory/index.js';
-export type { ContextIntelligenceConfig, AssembledContext, AgentDatabaseOptions, SqliteMemoryStoreOptions, SqliteConceptGraphOptions, EmbeddingProvider, EmbeddingConfig, KnowledgeSourceEntry } from './memory/index.js';
+export { InMemoryMemoryStore, InMemoryConceptGraph, AgentDatabase, SqliteMemoryStore, SqliteWisdomStore, SqliteConceptGraph, KnowledgeRegistry, createEmbeddingProvider } from './memory/index.js';
+export type { AgentDatabaseOptions, SqliteMemoryStoreOptions, SqliteConceptGraphOptions, EmbeddingProvider, EmbeddingConfig, KnowledgeSourceEntry } from './memory/index.js';
 
 // ── Memory 领域类型 ──
 export type { MemoryType, MemoryEntry, MemoryQuery, MemoryStats, MemoryStore } from './memory/types.js';

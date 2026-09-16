@@ -336,6 +336,17 @@ export default function ChatWorkspace() {
   const [stream, setStream] = useState('');
   const [runStatus, setRunStatus] = useState<RunStatus>('idle');
   const [inspector, setInspector] = useState<Record<string, unknown>>({});
+  const compactStatus = inspector.compact as
+    | {
+        active?: boolean;
+        reason?: string;
+        cached?: boolean;
+        tokensBefore?: number;
+        tokensAfter?: number;
+        durationMs?: number;
+        error?: string;
+      }
+    | undefined;
   const [tasks, setTasks] = useState<SessionTaskView[]>([]);
   const [input, setInput] = useState('');
   const [rightTab, setRightTab] = useState<'inspector' | 'tasks' | 'tools' | 'help'>('tasks');
@@ -631,6 +642,14 @@ export default function ChatWorkspace() {
               </div>
               <div className="small" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                 <span className="small muted" style={{ marginRight: 8 }}>[{viewMode}]</span>
+                {compactStatus?.active && (
+                  <span
+                    className="status-warn"
+                    title={compactStatus.reason === 'proactive' ? '主动摘要压缩中' : '窗口溢出压缩中'}
+                  >
+                    压缩上下文…
+                  </span>
+                )}
                 <span className={runStatus === 'error' ? 'status-error' : runStatus === 'streaming' ? 'status-ok' : 'status-neutral'}>{runStatus}</span>
                 <button className="btn-secondary" onClick={abort} disabled={runStatus !== 'streaming' && runStatus !== 'waiting'}>中止</button>
               </div>
@@ -727,6 +746,18 @@ export default function ChatWorkspace() {
                 <div className="sidebar-title">会话状态</div>
                 <div className="inspector-kv">视图模式: {viewMode}</div>
                 <div className="inspector-kv">运行状态: {runStatus}</div>
+                <div className="inspector-kv">
+                  上下文压缩:{' '}
+                  {compactStatus?.active
+                    ? `进行中（${compactStatus.reason === 'proactive' ? '主动摘要' : '溢出'}）`
+                    : compactStatus?.error
+                      ? `失败：${compactStatus.error}`
+                      : compactStatus && !compactStatus.active && (compactStatus.tokensAfter !== undefined || compactStatus.cached)
+                        ? compactStatus.cached
+                          ? '缓存重建'
+                          : `完成${compactStatus.tokensBefore !== undefined && compactStatus.tokensAfter !== undefined ? `（${compactStatus.tokensBefore}→${compactStatus.tokensAfter}）` : ''}`
+                        : '无'}
+                </div>
                 <div className="inspector-kv">会话: {activeSessionId ?? '无'}</div>
                 <div className="inspector-kv">Agent: {agentId || '无'}</div>
                 <div className="inspector-kv">连接: {connection}</div>

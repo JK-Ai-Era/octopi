@@ -33,6 +33,7 @@ import type { RunGuardConfig } from '../run-guard/default-run-guard.js';
 import type { ContextEngine } from '../context/types.js';
 import { DefaultContextEngine } from '../context/default-context-engine.js';
 import { DefaultBudgetAllocator } from '../context/budget-allocator.js';
+import { createProviderSummarize, pickSummarizeProvider } from '../context/summarize.js';
 
 // ── 结果类型 ──
 
@@ -101,6 +102,8 @@ export function resolveContextEngine(config: ContextEngineConfig | undefined): C
       protectFirstN: config?.protectFirstN ?? 3,
       protectLastN: config?.protectLastN ?? 20,
       compactThreshold: config?.compactThreshold ?? 0.5,
+      proactiveCompactRatio: config?.proactiveCompactRatio ?? 0.6,
+      proactiveCooldownMs: config?.proactiveCooldownMs ?? 30_000,
       budgetAllocator: new DefaultBudgetAllocator({
         outputRatio: config?.outputRatio ?? 0.20,
         minOutputReserve: config?.minOutputReserve ?? 2000,
@@ -307,6 +310,32 @@ async function buildAgent(
     builder.persona(agentHome);
   }
 
+  // ── Skills ──
+  const skillDir =
+    agentConfig.skillDirectory ??
+    (agentHome ? join(agentHome, 'skills') : undefined);
+  if (skillDir && existsSync(skillDir)) {
+    builder.skillDirectory(skillDir);
+  }
+
+  // ── Memory / Knowledge（system prompt 召回层） ──
+  // 优先挂 agent home 下的 AgentDatabase（SqliteMemoryStore）；失败则跳过（不阻断 build）
+  if (agentHome) {
+    try {
+      const { AgentDatabase } = await import('../memory/sqlite/agent-db.js');
+      const { SqliteMemoryStore } = await import('../memory/sqlite/memory-store.js');
+      const { MemoryKnowledgeStore } = await import('../context/knowledge/memory-store.js');
+      const db = await AgentDatabase.create({ dbPath: join(agentHome, 'agent.db') });
+      builder.memoryStore(new SqliteMemoryStore(db));
+      // Knowledge 暂无 SQLite 实现，用进程内 store；后续可替换
+      builder.knowledgeStore(new MemoryKnowledgeStore());
+    } catch (err) {
+      console.warn(
+        `[ConfigBridge] memory/knowledge stores unavailable for agent home ${agentHome}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
   // ── Security ──
   if (shared.securityConfig) {
     builder.securityPolicy(shared.securityConfig);
@@ -324,6 +353,16 @@ async function buildAgent(
   // ── Context Engine ──
   const contextEngine = resolveContextEngine(shared.contextEngineConfig);
   builder.contextEngine(contextEngine);
+
+  // ── 默认 summarize：优先 mini，否则主模型（保证 LLM 摘要路径可走） ──
+  if (provider) {
+    const { provider: summarizeProvider, model: summarizeModel } = pickSummarizeProvider(
+      shared.providers,
+      shared.levelMap,
+      provider,
+    );
+    builder.summarize(createProviderSummarize(summarizeProvider, { model: summarizeModel }));
+  }
 
   // ── RunGuard ──
   if (shared.runGuardConfig?.enabled !== false) {

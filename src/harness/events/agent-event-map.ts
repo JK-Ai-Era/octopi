@@ -92,6 +92,26 @@ export interface AgentEventMap {
   'persona.resolve.failed': {
     error: string;
   };
+  /** 上下文压缩开始（主动摘要 / 硬溢出；UI 可显示进行中） */
+  'context.compact.start': {
+    reason: 'proactive' | 'overflow';
+    tokensBefore?: number;
+    threshold?: number;
+  };
+  /** 上下文压缩结束 */
+  'context.compact.end': {
+    reason: 'proactive' | 'overflow';
+    tokensBefore?: number;
+    tokensAfter?: number;
+    durationMs?: number;
+    cached?: boolean;
+  };
+  /** 上下文压缩失败（引擎已回退截断，本轮继续） */
+  'context.compact.error': {
+    reason?: 'proactive' | 'overflow';
+    error: string;
+    durationMs?: number;
+  };
   'task.created': { taskId: string; taskType: string; status: string };
   'task.started': { taskId: string; taskType: string; status: string };
   'task.completed': { taskId: string; taskType: string; status: string };
@@ -146,6 +166,9 @@ export const AgentEvents = {
   SESSION_LIFECYCLE_UPDATED: 'session.lifecycle.updated',
   SESSION_ENDED: 'session.ended',
   PERSONA_RESOLVE_FAILED: 'persona.resolve.failed',
+  CONTEXT_COMPACT_START: 'context.compact.start',
+  CONTEXT_COMPACT_END: 'context.compact.end',
+  CONTEXT_COMPACT_ERROR: 'context.compact.error',
 
   TASK_CREATED: 'task.created',
   TASK_STARTED: 'task.started',

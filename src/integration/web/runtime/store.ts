@@ -85,6 +85,17 @@ export interface ToolRun {
   error?: string;
 }
 
+export interface CompactStatus {
+  active: boolean;
+  reason?: 'proactive' | 'overflow';
+  cached?: boolean;
+  tokensBefore?: number;
+  tokensAfter?: number;
+  threshold?: number;
+  durationMs?: number;
+  error?: string;
+}
+
 export interface InspectorState {
   contextTokens?: number;
   contextWindow?: number;
@@ -96,6 +107,8 @@ export interface InspectorState {
   lastBlockedReason?: string;
   lastBudgetStatus?: string;
   lastRetryLabel?: string;
+  /** 上下文压缩状态（context.compact.*） */
+  compact?: CompactStatus;
 }
 
 export interface ChatState {
@@ -445,6 +458,61 @@ export class OctopiRuntimeStore extends EventTarget {
       }
       case 'context.truncated': {
         this.chat.inspector = { ...this.chat.inspector, truncatedFrom: Number(event.data?.from ?? undefined), truncatedTo: Number(event.data?.to ?? undefined) };
+        inspectorChanged = true;
+        break;
+      }
+      case 'context.compact.start': {
+        const d = event.data as {
+          reason?: 'proactive' | 'overflow';
+          tokensBefore?: number;
+          threshold?: number;
+        } | undefined;
+        this.chat.inspector = {
+          ...this.chat.inspector,
+          compact: {
+            active: true,
+            reason: d?.reason,
+            tokensBefore: typeof d?.tokensBefore === 'number' ? d.tokensBefore : undefined,
+            threshold: typeof d?.threshold === 'number' ? d.threshold : undefined,
+          },
+        };
+        inspectorChanged = true;
+        break;
+      }
+      case 'context.compact.end': {
+        const d = event.data as {
+          reason?: 'proactive' | 'overflow';
+          tokensBefore?: number;
+          tokensAfter?: number;
+          durationMs?: number;
+          cached?: boolean;
+        } | undefined;
+        const tokensAfter = typeof d?.tokensAfter === 'number' ? d.tokensAfter : undefined;
+        this.chat.inspector = {
+          ...this.chat.inspector,
+          ...(tokensAfter !== undefined ? { contextTokens: tokensAfter } : {}),
+          compact: {
+            active: false,
+            reason: d?.reason,
+            cached: Boolean(d?.cached),
+            tokensBefore: typeof d?.tokensBefore === 'number' ? d.tokensBefore : undefined,
+            tokensAfter,
+            durationMs: typeof d?.durationMs === 'number' ? d.durationMs : undefined,
+          },
+        };
+        inspectorChanged = true;
+        break;
+      }
+      case 'context.compact.error': {
+        const d = event.data as { error?: string; durationMs?: number } | undefined;
+        this.chat.inspector = {
+          ...this.chat.inspector,
+          compact: {
+            active: false,
+            error: String(d?.error ?? 'compact failed'),
+            durationMs: typeof d?.durationMs === 'number' ? d.durationMs : undefined,
+          },
+        };
         inspectorChanged = true;
         break;
       }

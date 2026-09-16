@@ -65,7 +65,7 @@ Octopi 是一个可嵌入的 Agent 底座引擎，用于构建 AI 驱动的应�
 |------|------|
 | **Agent** | **可运行门面**：`Agent.run()` = reliability 包装 |
 | **Agent Building** | Builder、人格加载、配置桥接 |
-| **Context Management** | 消息选择、压缩、Token 估算、七层智能组装 |
+| **Context Management** | 消息选择、压缩、Token 估算；七层 ContextLayer 装配（见 [context-layer-contracts](./docs/context-layer-contracts.md)） |
 | **Security** | 风险评估、Shell 解析、降级策略、安全智能体 |
 | **Reliability** | 可靠性包装、HarnessLoopEvent、断路器、重试、监督 |
 | **Plugin Ecosystem** | Plugin、Tool、Skill、MCP、斜杠命令 |
@@ -78,7 +78,7 @@ Octopi 是一个可嵌入的 Agent 底座引擎，用于构建 AI 驱动的应�
 | **Concurrency** | 多 Key LLM 负载均衡、限流、Session 门控 |
 | **Execution Environment** | 沙箱、工作区管理、文件操作 |
 | **Human-in-the-Loop** | 审批流程、决策缓存、基于风险的策略 |
-| **Memory** | 记忆存储/检索、认知图谱、智慧、项目记忆 |
+| **Memory** | 记忆存储/检索、认知图谱、智慧、会话提取 |
 
 ### Layer 3: Integration — 外部适配
 
@@ -101,6 +101,10 @@ Octopi 独特的上下文智能组装方法，让 agent 通过更有效的 conte
 ```
 
 这是一个**信息分馏系统**：原始信息通过逐层提炼，产出越来越高层级的理解。
+
+**实现**：`harness/context/` 的 `ContextLayer` 契约 + `DefaultContextAssembler`。  
+默认路径已接 Persona / Skill / Knowledge / Memory / Runtime；Wisdom / Cognition 待打磨。  
+详见 [docs/context-layer-contracts.md](./docs/context-layer-contracts.md)。
 
 ---
 
@@ -195,7 +199,7 @@ src/
 │   └── types/                    核心类型定义
 ├── harness/                 Layer 2  15 个自包含领域
 │   ├── agent-building/           Builder、人格、配置桥接
-│   ├── context/                  上下文引擎、压缩、智能组装
+│   ├── context/                  ContextLayer 装配、窗口压缩、主动摘要
 │   ├── security/                 风险评估、Shell 解析
 │   ├── reliability/              可靠性包装、断路器
 │   ├── plugin-ecosystem/         Plugin、Tool、Skill、MCP

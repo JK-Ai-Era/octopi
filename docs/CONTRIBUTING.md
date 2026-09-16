@@ -62,7 +62,7 @@ npx vitest run --grep "SecurityGuard"
 | Loop 协议 | agentLoop 纯函数、callModel、错误分类、terminate/finishReason/phase 契约 |
 | Harness 门面 | Agent.run、AgentBuilder、SessionAwareRunner、可靠性包装 |
 | 安全 | SecurityGuard、RiskEvaluator、DefaultRiskPolicy、ShellParser |
-| 上下文管理 | ContextEngine、SmartRouter、MessageSelector、Compressor |
+| 上下文管理 | ContextEngine、SmartRouter、MessageSelector、Compressor、ContextLayer/Assembler、主动摘要 |
 | 会话任务 / 过程监督 | SessionTaskService、task_* 工具、DefaultRunGuard |
 | Plugin 系统 | PluginManager、HookRegistry、CapabilityRegistry |
 | Skill 管理 | SkillManager 两阶段加载 |

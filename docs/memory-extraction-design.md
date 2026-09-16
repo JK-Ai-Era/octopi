@@ -22,6 +22,7 @@
 与七层模型对齐：
 - 这个子系统负责 `Information → Memory`
 - 后续 `Memory → Cognition / Wisdom` 由独立子系统负责（解耦）
+- system prompt 侧的 Memory 召回由 `harness/context` 的 `MemoryLayer` 完成（见 context-layer-contracts.md）
 
 ---
 

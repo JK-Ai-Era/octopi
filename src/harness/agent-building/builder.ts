@@ -74,6 +74,8 @@ import type { IterationBudgetConfig } from '../budget/budget.js';
 
 import { PersonaSource } from './persona.js';
 import { DefaultContextEngine } from '../context/default-context-engine.js';
+import { createProviderSummarize } from '../context/summarize.js';
+import { createDefaultSystemPromptAssembler } from '../context/system-prompt-assembler.js';
 import { SessionAwareRunner } from '../runner.js';
 import type { SessionAwareRunnerConfig } from '../runner.js';
 import { DefaultMcpManager } from '../plugin-ecosystem/mcp/manager.js';
@@ -216,6 +218,8 @@ export class AgentBuilder {
   private _toolBus = new DefaultToolBus();
   private _contextEngine?: ContextEngine;
   private _summarize?: SummarizeFunction;
+  /** 为 true 时禁止自动挂默认 summarize（测试/特殊场景） */
+  private _disableAutoSummarize = false;
   private _events?: EventBus;
   private _security?: SecurityGuard;
   private _riskPolicy?: import('../../core/security-guard.js').ToolCallRiskPolicy;
@@ -230,6 +234,13 @@ export class AgentBuilder {
   // Harness 组件
   private _personaWorkspaces: string[] = [];
   private _systemPrompt?: string;
+  /** Skill 目录（SKILL.md）；build 时 discover 并注入 system prompt 索引 */
+  private _skillDirectory?: string;
+  private _skillManager?: import('../plugin-ecosystem/skills/types.js').SkillManager;
+  /** 记忆检索（注入 system prompt MemoryLayer） */
+  private _memoryStore?: import('../memory/types.js').MemoryStore;
+  /** 知识检索（注入 system prompt KnowledgeLayer） */
+  private _knowledgeStore?: import('../context/knowledge/types.js').KnowledgeStore;
   /** 文件式 persona 的 run 时解析器（指纹缓存，改文件下一轮生效） */
   private _personaResolver?: () => Promise<string>;
   /** build 时从磁盘读到的纯 persona（可能为空；不含默认 tools prompt） */
@@ -362,9 +373,47 @@ export class AgentBuilder {
     return this;
   }
 
+  /**
+   * 设置 Skill 目录（子目录内含 SKILL.md）
+   *
+   * build 时 discover，每轮以索引形式注入 system prompt（formatForPrompt）。
+   */
+  skillDirectory(dir: string): this {
+    this._skillDirectory = dir;
+    return this;
+  }
+
+  /** 直接注入 SkillManager（跳过目录 discover） */
+  skills(manager: import('../plugin-ecosystem/skills/types.js').SkillManager): this {
+    this._skillManager = manager;
+    return this;
+  }
+
+  /** 注入 MemoryStore（每轮按 query 召回进 system prompt） */
+  memoryStore(store: import('../memory/types.js').MemoryStore): this {
+    this._memoryStore = store;
+    return this;
+  }
+
+  /** 注入 KnowledgeStore（每轮按 query 召回进 system prompt） */
+  knowledgeStore(store: import('../context/knowledge/types.js').KnowledgeStore): this {
+    this._knowledgeStore = store;
+    return this;
+  }
+
   /** 设置摘要函数（用于 LLM 摘要压缩） */
   summarize(fn: SummarizeFunction): this {
     this._summarize = fn;
+    return this;
+  }
+
+  /**
+   * 关闭「未显式 summarize 时用主模型自动挂接」
+   *
+   * 默认开启自动挂接，保证长会话能走 LLM 摘要而非纯截断。
+   */
+  disableAutoSummarize(disabled = true): this {
+    this._disableAutoSummarize = disabled;
     return this;
   }
 
@@ -583,6 +632,21 @@ export class AgentBuilder {
       // 传入磁盘 persona 真实内容（可能为 ''），供 runner 区分「从未有人格」与「热删除」
       runner.setSystemPromptResolver(this._personaResolver, this._initialPersonaContent ?? '');
     }
+    // 层契约装配：persona + skill 索引 + memory/knowledge 召回 + runtime
+    const skillManager = this._skillManager;
+    const memoryStore = this._memoryStore;
+    const knowledgeStore = this._knowledgeStore;
+    const systemPromptAssembler = createDefaultSystemPromptAssembler({
+      getSkillPromptText: skillManager
+        ? () => skillManager.formatForPrompt()
+        : undefined,
+      memoryStore,
+      knowledgeStore,
+    });
+    runner.setSystemPromptAssembler(
+      (input) => systemPromptAssembler.assemble(input),
+      (sid) => systemPromptAssembler.clearSession(sid),
+    );
 
     // 创建 SubsystemRuntime（如果有自主子系统）
     let subsystemRuntime: import('../autonomous-subsystem/runtime.js').SubsystemRuntime | undefined;
@@ -642,6 +706,11 @@ export class AgentBuilder {
       throw new Error('ModelProvider is required. Call .model() before .buildAgent()');
     }
 
+    // 单独 buildAgent() 时也保证有 bus，压缩事件不会静默丢失
+    if (!this._events) {
+      this._events = new DefaultEventBus();
+    }
+
     // 加载 systemPrompt：文件式 persona 走 PersonaSource（run 时热更新）
     let systemPrompt = this._systemPrompt ?? '';
     this._personaResolver = undefined;
@@ -655,6 +724,20 @@ export class AgentBuilder {
     }
     if (!systemPrompt && this._toolBus.listForAgent('default').length > 0) {
       systemPrompt = this.buildDefaultSystemPrompt();
+    }
+
+    // Skill：目录 discover（或外部注入的 manager）
+    if (!this._skillManager && this._skillDirectory) {
+      const { DefaultSkillManager } = await import('../plugin-ecosystem/skills/manager.js');
+      const mgr = new DefaultSkillManager(this._skillDirectory);
+      try {
+        await mgr.discover(this._skillDirectory);
+        this._skillManager = mgr;
+      } catch (err) {
+        console.warn(
+          `[octopi] skill discover failed (${this._skillDirectory}): ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
     }
 
     // 构建 McpManager
@@ -681,7 +764,12 @@ export class AgentBuilder {
     // ContextEngine 接线：经 convertToLlm 调用 assemble（Loop 不依赖引擎类型）
     // sessionId 从 agent.contextSessionId 读取（Runner 每 handle 注入）
     const contextEngine = this._contextEngine ?? new DefaultContextEngine();
-    const summarizeFn = this._summarize;
+    // 未显式 summarize 时用主模型自动挂接，避免默认路径永远只截断
+    const summarizeFn =
+      this._summarize ??
+      (!this._disableAutoSummarize && this._model
+        ? createProviderSummarize(this._model)
+        : undefined);
     const provider = this._model;
     agent.setConvertToLlm(async (messages) => {
       const systemPrompt = agent.context.systemPrompt;
@@ -707,7 +795,24 @@ export class AgentBuilder {
         tokenBudget: contextWindow,
         contextWindow,
         summarize: summarizeFn,
+        loadCompactState: (sid) => agent.getSessionCompactState(sid),
+        // 惰性读 bus：覆盖 buildAgent 之后才 setEvents 的场景
+        emit: (e) => {
+          const bus = this._events;
+          if (!bus) return;
+          const { type, sessionId, ...data } = e;
+          bus.emit({
+            type,
+            timestamp: Date.now(),
+            sessionId,
+            data,
+          });
+        },
       });
+      // 压缩状态回写 Agent 内存桥；Runner 在 session save 前写入 SessionData.contextCompact
+      if (result.compactState) {
+        agent.setSessionCompactState(agent.contextSessionId, result.compactState);
+      }
       // droppedSummary：并入已有 system，避免连续两条 system（严格网关）
       const llmMessages = [...result.messages];
       if (result.droppedSummary) {

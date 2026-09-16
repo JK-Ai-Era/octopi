@@ -1,5 +1,5 @@
 /**
- * SQLite 存储层 — 七层上下文模型的 SQLite 存储实现
+ * SQLite 存储层 — Memory / Wisdom / Cognition / Knowledge 注册的 SQLite 实现
  *
  * @module
  */

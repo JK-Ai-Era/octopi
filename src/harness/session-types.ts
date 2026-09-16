@@ -36,4 +36,13 @@ export interface SessionData {
    * 历史数据可能缺省；Service/Runner 会视作 []。
    */
   tasks?: SessionTask[];
+  /**
+   * 上下文压缩状态快照。
+   * 全量 messages 仍完整保存；本字段用于重启后快速重建 LLM 视图。
+   */
+  contextCompact?: {
+    summary?: string;
+    lastProactiveMessageCount?: number;
+    lastProactiveTokens?: number;
+  };
 }

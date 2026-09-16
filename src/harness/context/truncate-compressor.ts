@@ -86,13 +86,14 @@ export class TruncateCompressor implements Compressor {
       removedTokens = estimator.estimateMessage(removed);
     }
 
-    // 生成摘要消息
+    // 生成摘要消息（user 角色，避免中段 system）
     const summaryMessage: Message = {
-      role: 'system',
+      role: 'user',
       content: `[Context compressed: ${removedCount} earlier messages removed to fit context window. ` +
         `Approximately ${removedTokens} tokens saved. ` +
         `The conversation continues from here.]`,
       timestamp: Date.now(),
+      metadata: { source: 'contextSummary' as const },
     };
 
     // 组装结果

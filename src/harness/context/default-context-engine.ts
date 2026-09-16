@@ -32,6 +32,8 @@ import type {
   MessageSelector,
   Compressor,
   BudgetAllocator,
+  ContextEmitFn,
+  ContextCompactSnapshot,
 } from './types.js';
 import { HeuristicTokenEstimator, estimateLLMMessages } from './token-estimator.js';
 import { DefaultMessageSelector } from './message-selector.js';
@@ -59,12 +61,23 @@ export interface DefaultContextEngineConfig {
   protectLastN?: number;
   /** 触发压缩的阈值比例（默认 0.5） */
   compactThreshold?: number;
+  /**
+   * 主动摘要阈值：消息 token / messagesBudget 超过该比例时，
+   * 在窗口硬溢出之前先做 LLM 摘要（缓解长会话失忆）。
+   * 默认 0.6；设为 0 关闭主动摘要。
+   */
+  proactiveCompactRatio?: number;
+  /**
+   * 主动 LLM 摘要冷却（ms）。冷却期内优先缓存重建，避免单 turn 双摘要。
+   * 默认 30_000；0 表示不冷却。
+   */
+  proactiveCooldownMs?: number;
 }
 
 // ── 内部状态 ──
 
 interface CompactState {
-  /** 上次摘要 */
+  /** 上次摘要正文（用于迭代更新，不是 dropped 描述） */
   previousSummary?: string;
   /** 上次实际 token 数（来自 LLM usage） */
   lastActualTokens?: number;
@@ -74,9 +87,25 @@ interface CompactState {
   lastUsageMessageCount?: number;
   /** 估算校准比率 = actual / estimated（用于修正后续估算） */
   calibrationRatio?: number;
+  /** 上次主动摘要时的全量消息条数（用于判断是否需要再摘要） */
+  lastProactiveMessageCount?: number;
+  /** 上次主动摘要后的视图 token 估算 */
+  lastProactiveTokens?: number;
+  /** 上次主动 LLM 摘要时间戳（冷却） */
+  lastProactiveLlmAt?: number;
 }
 
 // ── 引擎实现 ──
+
+/** 摘要正文包装：确保带 [Conversation Summary] 标记，便于 extract / 调试 */
+function wrapContextSummary(text: string): string {
+  const trimmed = text.trim();
+  if (trimmed.includes('[Conversation Summary]')) return trimmed;
+  return `[Conversation Summary]\n\n${trimmed}`;
+}
+
+/** 供调用方/测试引用 */
+export { wrapContextSummary };
 
 export class DefaultContextEngine implements ContextEngine {
   readonly info: ContextEngineInfo = {
@@ -101,6 +130,8 @@ export class DefaultContextEngine implements ContextEngine {
       protectFirstN: config?.protectFirstN ?? 3,
       protectLastN: config?.protectLastN ?? 20,
       compactThreshold: config?.compactThreshold ?? 0.5,
+      proactiveCompactRatio: config?.proactiveCompactRatio ?? 0.6,
+      proactiveCooldownMs: config?.proactiveCooldownMs ?? 30_000,
     };
 
     this.router = new SmartRouter({
@@ -131,9 +162,28 @@ export class DefaultContextEngine implements ContextEngine {
       signal,
       tokenEstimator,
       summarize,
+      emit,
+      loadCompactState,
     } = params;
 
     const estimator = tokenEstimator ?? this.config.tokenEstimator;
+
+    // 0. 进程重启后从持久层恢复压缩状态（仅当内存态尚无摘要时）
+    if (loadCompactState) {
+      const existing = this.states.get(sessionId);
+      if (!existing?.previousSummary) {
+        const restored = await loadCompactState(sessionId);
+        if (restored?.summary || restored?.lastProactiveMessageCount != null) {
+          this.states.set(sessionId, {
+            ...existing,
+            previousSummary: restored.summary ?? existing?.previousSummary,
+            lastProactiveMessageCount:
+              restored.lastProactiveMessageCount ?? existing?.lastProactiveMessageCount,
+            lastProactiveTokens: restored.lastProactiveTokens ?? existing?.lastProactiveTokens,
+          });
+        }
+      }
+    }
 
     // 1. 计算可用预算
     const budget = this.config.budgetAllocator.allocate({
@@ -143,10 +193,22 @@ export class DefaultContextEngine implements ContextEngine {
       toolTokens: estimator.estimateTools(tools),
     });
 
+    // 1b. 主动摘要：在硬溢出之前，按阈值先压一轮（缓解长会话失忆）
+    const proactive = await this.applyProactiveCompact({
+      sessionId,
+      messages,
+      messagesBudget: budget.messagesBudget,
+      summarize,
+      estimator,
+      emit,
+    });
+    const workingMessages = proactive.messages;
+    const proactiveDroppedSummary = proactive.droppedSummary;
+
     // 2. 四区域消息选择（MessageSelector）
     //    head（头部保护）+ overflow（可压缩）+ tail（尾部保护）
     const selection = this.config.messageSelector.select(
-      messages,
+      workingMessages,
       {
         maxTokens: budget.messagesBudget,
         protectFirstN: this.config.protectFirstN,
@@ -170,6 +232,9 @@ export class DefaultContextEngine implements ContextEngine {
         messages: llmMessages,
         estimatedTokens,
         systemPrompt,
+        droppedSummary: proactiveDroppedSummary,
+        summary: this.states.get(sessionId)?.previousSummary,
+        compactState: this.buildCompactSnapshot(sessionId),
       };
     }
 
@@ -195,39 +260,60 @@ export class DefaultContextEngine implements ContextEngine {
     // 压缩后 overflow 应使总 token 在预算内
     const keptTokens = selection.estimatedTokens;
     const overflowTargetTokens = Math.max(500, budget.messagesBudget - keptTokens);
+    const overflowStart = Date.now();
+    const overflowTokensBefore = overflowTokens;
+    emit?.({
+      type: 'context.compact.start',
+      sessionId,
+      reason: 'overflow',
+      tokensBefore: overflowTokensBefore,
+    });
 
-    switch (routing.route) {
-      case 'truncate_tool_results_only': {
-        const compressed = await this.config.compressor.compress({
-          messages: selection.overflow,
-          targetTokens: overflowTargetTokens,
-          previousSummary,
-          tokenEstimator: estimator,
-        });
-        compressedOverflow = compressed.result;
-        droppedSummary = compressed.droppedSummary;
-        break;
-      }
+    try {
+      switch (routing.route) {
+        case 'truncate_tool_results_only': {
+          const compressed = await this.config.compressor.compress({
+            messages: selection.overflow,
+            targetTokens: overflowTargetTokens,
+            previousSummary,
+            tokenEstimator: estimator,
+          });
+          compressedOverflow = compressed.result;
+          droppedSummary = compressed.droppedSummary;
+          break;
+        }
 
-      case 'compact_only':
-      case 'compact_then_truncate': {
-        const compressed = await this.config.compressor.compress({
-          messages: selection.overflow,
-          targetTokens: overflowTargetTokens,
-          previousSummary,
-          summarize,
-          tokenEstimator: estimator,
-        });
-        compressedOverflow = compressed.result;
-        droppedSummary = compressed.droppedSummary;
-        break;
-      }
+        case 'compact_only':
+        case 'compact_then_truncate': {
+          const compressed = await this.config.compressor.compress({
+            messages: selection.overflow,
+            targetTokens: overflowTargetTokens,
+            previousSummary,
+            summarize,
+            tokenEstimator: estimator,
+          });
+          compressedOverflow = compressed.result;
+          droppedSummary = compressed.droppedSummary;
+          break;
+        }
 
-      default: {
-        // 兜底：直接截断
-        compressedOverflow = selection.overflow.slice(-4);
-        break;
+        default: {
+          // 兜底：直接截断
+          compressedOverflow = selection.overflow.slice(-4);
+          break;
+        }
       }
+    } catch (err) {
+      emit?.({
+        type: 'context.compact.error',
+        sessionId,
+        reason: 'overflow',
+        error: err instanceof Error ? err.message : String(err),
+        durationMs: Date.now() - overflowStart,
+      });
+      // 压缩失败：截断兜底，不中断本轮
+      compressedOverflow = selection.overflow.slice(-4);
+      droppedSummary = 'Context compact failed; fell back to truncation';
     }
 
     // 6. 重组：head + compressed overflow + tail
@@ -240,8 +326,20 @@ export class DefaultContextEngine implements ContextEngine {
 
     // 7. 更新状态
     const compressedTokens = estimator.estimateMessages(reassembled);
+    emit?.({
+      type: 'context.compact.end',
+      sessionId,
+      reason: 'overflow',
+      tokensBefore: overflowTokensBefore,
+      tokensAfter: compressedTokens,
+      durationMs: Date.now() - overflowStart,
+      cached: false,
+    });
+    const overflowState = this.states.get(sessionId);
     this.states.set(sessionId, {
-      previousSummary: droppedSummary,
+      ...overflowState,
+      // 存摘要正文（而非 dropped 描述），供下次迭代更新
+      previousSummary: this.extractSummaryText(compressedOverflow) ?? overflowState?.previousSummary,
       lastEstimatedTokens: compressedTokens,
     });
 
@@ -254,8 +352,201 @@ export class DefaultContextEngine implements ContextEngine {
       messages: llmMessages,
       estimatedTokens,
       systemPrompt,
-      droppedSummary,
+      droppedSummary: droppedSummary ?? proactiveDroppedSummary,
+      summary: this.states.get(sessionId)?.previousSummary,
+      compactState: this.buildCompactSnapshot(sessionId),
     };
+  }
+
+  /** 从引擎内存态导出可持久化快照 */
+  private buildCompactSnapshot(sessionId: string): ContextCompactSnapshot | undefined {
+    const state = this.states.get(sessionId);
+    if (!state?.previousSummary && state?.lastProactiveMessageCount == null) {
+      return undefined;
+    }
+    return {
+      summary: state?.previousSummary,
+      lastProactiveMessageCount: state?.lastProactiveMessageCount,
+      lastProactiveTokens: state?.lastProactiveTokens,
+    };
+  }
+
+  /**
+   * 主动摘要：消息 token 超过 messagesBudget × ratio 时，在硬溢出前压缩
+   *
+   * 策略：
+   * - 未超阈值：原样返回
+   * - 超阈值且需要新摘要（无 previousSummary / 新增消息够多）：LLM 压缩中间段
+   * - 超阈值但增量很小：用 previousSummary + head/tail 重建视图（零 LLM）
+   */
+  private async applyProactiveCompact(params: {
+    sessionId: string;
+    messages: Message[];
+    messagesBudget: number;
+    summarize?: SummarizeFunction;
+    estimator: TokenEstimator;
+    emit?: ContextEmitFn;
+  }): Promise<{ messages: Message[]; droppedSummary?: string }> {
+    const { sessionId, messages, messagesBudget, summarize, estimator, emit } = params;
+    const ratio = this.config.proactiveCompactRatio;
+
+    if (!summarize || ratio <= 0 || messages.length === 0) {
+      return { messages };
+    }
+
+    const currentTokens = estimator.estimateMessages(messages);
+    const threshold = Math.floor(messagesBudget * ratio);
+    if (currentTokens <= threshold) {
+      return { messages };
+    }
+
+    const protectFirstN = this.config.protectFirstN;
+    const protectLastN = this.config.protectLastN;
+    if (messages.length <= protectFirstN + protectLastN) {
+      return { messages };
+    }
+
+    const state = this.states.get(sessionId);
+    const head = messages.slice(0, protectFirstN);
+    const tail = messages.slice(-protectLastN);
+
+    // 增量很小：直接用上次摘要重建视图，避免每轮打 LLM
+    // 注意：只比「自上次摘要以来新增条数」，不要拿全量 token 和压缩后视图比
+    const lastCount = state?.lastProactiveMessageCount;
+    const newSinceLast = lastCount === undefined ? messages.length : messages.length - lastCount;
+    const minNewForResummarize = Math.max(3, Math.floor(protectLastN * 0.25));
+    const needNewSummary = !state?.previousSummary || newSinceLast >= minNewForResummarize;
+
+    // 冷却：刚做过 LLM 摘要则优先缓存重建，降低单 turn 双摘要概率
+    const cooldownMs = this.config.proactiveCooldownMs;
+    const inCooldown =
+      cooldownMs > 0 &&
+      state?.lastProactiveLlmAt != null &&
+      Date.now() - state.lastProactiveLlmAt < cooldownMs;
+
+    if (state?.previousSummary && (!needNewSummary || inCooldown)) {
+      // 摘要用 user 角色承载，避免中段 system 被严格网关拒绝
+      const summaryMsg: Message = {
+        role: 'user',
+        content: wrapContextSummary(state.previousSummary),
+        timestamp: Date.now(),
+        metadata: { source: 'contextSummary' as const },
+      };
+      const reduced = [...head, summaryMsg, ...tail];
+      const reducedTokens = estimator.estimateMessages(reduced);
+      // 只更新视图 token，**不要**改 lastProactiveMessageCount：
+      // 该字段表示「摘要覆盖到的全量条数」，只能在真正 LLM 摘要时推进。
+      // 若缓存重建也改成 messages.length，每轮 +1 会永远凑不满再摘要阈值。
+      this.states.set(sessionId, {
+        ...state,
+        lastProactiveTokens: reducedTokens,
+        lastEstimatedTokens: reducedTokens,
+      });
+      // 缓存重建极快，仍发 start/end 以便 UI 状态机一致（cached=true）
+      emit?.({
+        type: 'context.compact.start',
+        sessionId,
+        reason: 'proactive',
+        tokensBefore: currentTokens,
+        threshold,
+      });
+      emit?.({
+        type: 'context.compact.end',
+        sessionId,
+        reason: 'proactive',
+        tokensBefore: currentTokens,
+        tokensAfter: reducedTokens,
+        durationMs: 0,
+        cached: true,
+      });
+      return { messages: reduced };
+    }
+
+    // 需要新摘要：压缩 head/tail 之间的中间段
+    const middle = messages.slice(protectFirstN, messages.length - protectLastN);
+    if (middle.length === 0) {
+      return { messages };
+    }
+
+    const headTailTokens = estimator.estimateMessages(head) + estimator.estimateMessages(tail);
+    const targetMiddleTokens = Math.max(
+      200,
+      Math.floor(threshold * 0.55) - headTailTokens,
+    );
+
+    const proactiveStart = Date.now();
+    emit?.({
+      type: 'context.compact.start',
+      sessionId,
+      reason: 'proactive',
+      tokensBefore: currentTokens,
+      threshold,
+    });
+
+    let compressed: Awaited<ReturnType<Compressor['compress']>>;
+    try {
+      compressed = await this.config.compressor.compress({
+        messages: middle,
+        targetTokens: targetMiddleTokens,
+        previousSummary: state?.previousSummary,
+        summarize,
+        tokenEstimator: estimator,
+      });
+    } catch (err) {
+      emit?.({
+        type: 'context.compact.error',
+        sessionId,
+        reason: 'proactive',
+        error: err instanceof Error ? err.message : String(err),
+        durationMs: Date.now() - proactiveStart,
+      });
+      // 主动摘要失败：不改视图，交给后续硬溢出路径处理
+      return { messages };
+    }
+
+    const reduced = [...head, ...compressed.result, ...tail];
+    const reducedTokens = estimator.estimateMessages(reduced);
+    const actualSummary =
+      this.extractSummaryText(compressed.result) ?? state?.previousSummary;
+
+    this.states.set(sessionId, {
+      ...state,
+      previousSummary: actualSummary,
+      lastEstimatedTokens: reducedTokens,
+      lastProactiveMessageCount: messages.length,
+      lastProactiveTokens: reducedTokens,
+      lastProactiveLlmAt: Date.now(),
+    });
+
+    emit?.({
+      type: 'context.compact.end',
+      sessionId,
+      reason: 'proactive',
+      tokensBefore: currentTokens,
+      tokensAfter: reducedTokens,
+      durationMs: Date.now() - proactiveStart,
+      cached: false,
+    });
+
+    return {
+      messages: reduced,
+      droppedSummary: compressed.droppedSummary ?? 'Older turns proactively summarized',
+    };
+  }
+
+  /** 从压缩结果中提取摘要正文（contextSummary 标记或 [Conversation Summary] 前缀） */
+  private extractSummaryText(compressed: Message[]): string | undefined {
+    for (const m of compressed) {
+      if (m.metadata?.source === 'contextSummary' && typeof m.content === 'string' && m.content.trim()) {
+        return m.content;
+      }
+    }
+    for (const m of compressed) {
+      if (typeof m.content === 'string' && m.content.includes('[Conversation Summary]')) {
+        return m.content;
+      }
+    }
+    return undefined;
   }
 
   /**
@@ -374,13 +665,17 @@ export class DefaultContextEngine implements ContextEngine {
   ): LLMMessage[] {
     const result: LLMMessage[] = [];
 
-    // 系统提示词
+    // 系统提示词（唯一权威来源）。
+    // Loop 会把同一内容以 metadata.source==='systemPrompt' unshift 进 messages，
+    // 这里必须跳过托管 system，否则 Anthropic/OpenAI 会收到两条重复 system。
     if (systemPrompt) {
       result.push({ role: 'system', content: systemPrompt });
     }
 
-    // 消息
     for (const msg of messages) {
+      if (msg.role === 'system' && msg.metadata?.source === 'systemPrompt') {
+        continue;
+      }
       result.push(...this.convertMessage(msg));
     }
 

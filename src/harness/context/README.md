@@ -2,18 +2,29 @@
 
 > Layer: Layer 2
 
-消息选择、压缩、Token 估算、七层智能组装。
+消息选择、压缩、Token 估算，以及七层 **system prompt 内容契约与装配**。
 
-**核心理念**：Agent 的智能水平取决于 system prompt 的质量。Context Intelligence 负责七层组装。
+**核心理念**：
+- **内容层**（ContextLayer / Assembler）决定 system prompt 里有什么
+- **窗口层**（ContextEngine）决定历史消息怎么压
 
 ## 职责
 
-- DefaultContextEngine — 统一入口（assemble → 预算分配 → 选择 → 路由 → 压缩）
+### 内容契约（七层）
+- `layer-types.ts` — ContextLayer / AssembleManifest 契约
+- `assembler.ts` — DefaultContextAssembler（份额归一化 + priority 纳入）
+- `layers.ts` — 薄适配层（persona/skill/knowledge/memory/cognition/wisdom/runtime）
+- `system-prompt-assembler.ts` — Runner 每轮 system 装配（persona + runtime，已接线）
+- `summarize.ts` — 默认 LLM 摘要（Builder/config 自动挂接）
+
+### 窗口管理
+- DefaultContextEngine — 消息窗口入口（预算 → 选择 → 路由 → 压缩）
 - SmartRouter — 路由决策（fits / truncate / compact）
 - DefaultMessageSelector — 四区域消息选择
 - HybridCompressor — 混合压缩（工具截断 + LLM 摘要 + 截断兜底）
 - HeuristicTokenEstimator — 启发式 Token 估算
-- ContextIntelligence — 七层智能组装（memory/ 模块提供）
+
+设计说明见 [docs/context-layer-contracts.md](../../../docs/context-layer-contracts.md)。
 
 ## 不做什么
 
@@ -23,20 +34,21 @@
 
 ## 依赖
 
-- Core: interfaces/context-engine、types/messages
+- Core: types/messages
+- Memory 契约：KnowledgeStore / MemoryStore / ConceptGraphStore（薄适配）
 
 ## 文件说明
 
-- default-context-engine.ts — 统一入口
+- layer-types.ts — 七层契约（优先于各层实现）
+- assembler.ts — system prompt 装配器
+- layers.ts — 薄层适配 + createDefaultLayers
+- default-context-engine.ts — 消息窗口引擎
 - smart-router.ts — 智能路由
 - message-selector.ts — 四区域选择
-- hybrid-compressor.ts — 混合压缩
-- llm-summarizer.ts — LLM 摘要
-- truncate-compressor.ts — 截断兜底
-- budget-allocator.ts — Token 预算分配
-- token-estimator.ts — TokenEstimator 实现（HeuristicTokenEstimator）
-- token-estimate-fns.ts — 底层估算纯函数
-- token-constants.ts — 估算常量
-- knowledge/ — KnowledgeStore + KnowledgeContextEngine（第 4 层 Knowledge）
+- hybrid-compressor.ts / llm-summarizer.ts / truncate-compressor.ts — 压缩
+- budget-allocator.ts — 消息侧 Token 预算分配
+- token-estimator.ts / token-estimate-fns.ts / token-constants.ts — 估算
+- knowledge/ — KnowledgeStore + KnowledgeContextEngine
 
-> 领域统一导出在 `src/harness/index.ts`（本目录无独立 `index.ts`）。`ContextIntelligence`（七层组装）在 `harness/memory/`。
+> 导出：`src/harness/context/index.ts` 与 `src/harness/index.ts`。
+> 七层内容组装以本目录 `ContextLayer` 契约为准；旧 `ContextIntelligence` 已删除。

@@ -52,6 +52,35 @@ export interface TokenEstimator {
 
 // ── 组装参数 ──
 
+/** 压缩原因：主动摘要 vs 硬溢出 */
+export type ContextCompactReason = 'proactive' | 'overflow';
+
+/**
+ * 上下文压缩可观测事件
+ *
+ * 由 ContextEngine 在同步压缩前后发出，供 UI 显示「正在压缩上下文…」，
+ * 避免 LLM 摘要耗时被误判为会话卡死。失败不中断本轮（引擎回退截断）。
+ */
+export interface ContextCompactEvent {
+  type: 'context.compact.start' | 'context.compact.end' | 'context.compact.error';
+  sessionId: string;
+  reason?: ContextCompactReason;
+  /** 压缩前估算 token */
+  tokensBefore?: number;
+  /** 压缩后估算 token（end） */
+  tokensAfter?: number;
+  /** 触发阈值（proactive） */
+  threshold?: number;
+  /** 耗时 ms（end/error） */
+  durationMs?: number;
+  /** 走缓存摘要重建，未调 LLM */
+  cached?: boolean;
+  error?: string;
+}
+
+/** 事件回调（Builder 注入 → EventBus） */
+export type ContextEmitFn = (event: ContextCompactEvent) => void;
+
 export interface AssembleParams {
   /** Session ID */
   sessionId: string;
@@ -71,6 +100,30 @@ export interface AssembleParams {
   tokenEstimator?: TokenEstimator;
   /** LLM 摘要调用函数（可选，用于压缩阶段） */
   summarize?: SummarizeFunction;
+  /** 压缩进度回调（可选；UI / 可观测） */
+  emit?: ContextEmitFn;
+  /**
+   * 从持久层加载压缩状态快照（进程重启恢复）。
+   * 引擎内存态为空时调用一次。
+   */
+  loadCompactState?: (
+    sessionId: string,
+  ) => Promise<ContextCompactSnapshot | undefined> | ContextCompactSnapshot | undefined;
+}
+
+/**
+ * 可持久化的压缩状态快照
+ *
+ * 与全量 messages 并存：Session 只追加完整日志；
+ * 本快照用于重启后快速重建「应给 LLM 的视图」，避免立刻再打一次摘要。
+ */
+export interface ContextCompactSnapshot {
+  /** 摘要正文（previousSummary） */
+  summary?: string;
+  /** 上次主动摘要时的全量消息条数 */
+  lastProactiveMessageCount?: number;
+  /** 上次主动摘要后的视图 token 估算 */
+  lastProactiveTokens?: number;
 }
 
 /**
@@ -106,6 +159,13 @@ export interface AssembleResult {
   systemPrompt: string;
   /** 被丢弃/压缩的信息摘要（告诉模型"你失去了什么"） */
   droppedSummary?: string;
+  /**
+   * 当前会话压缩摘要正文（previousSummary）。
+   * 供调用方写回 Session 持久化；无摘要时为 undefined。
+   */
+  summary?: string;
+  /** 可持久化压缩状态快照（含 lastProactiveMessageCount 等） */
+  compactState?: ContextCompactSnapshot;
   /** 不可信内容范围 */
   untrustedRanges?: Array<{ start: number; end: number; source: string }>;
 }

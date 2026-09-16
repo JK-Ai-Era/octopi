@@ -207,24 +207,29 @@ Memory / Cognition / Wisdom / Knowledge **不按目录落盘**，统一由 per-a
 
 ### 3.2 Context Management — 上下文管理
 
-**职责**：消息选择、压缩、Token 估算、智能路由。以及七层智能组装。
+**职责**：消息选择、压缩、Token 估算、智能路由；以及七层 system prompt 内容层契约与装配。
 
 ```
 harness/context/
-├── default-context-engine.ts   # 统一入口
+├── layer-types.ts          # ContextLayer 契约（七层）
+├── assembler.ts            # DefaultContextAssembler
+├── layers.ts               # 薄适配层 + createDefaultLayers
+├── system-prompt-assembler.ts
+├── summarize.ts
+├── default-context-engine.ts   # 消息窗口入口
 ├── smart-router.ts             # 智能路由决策
 ├── message-selector.ts         # 四区域消息选择
 ├── hybrid-compressor.ts        # 混合压缩器
 ├── llm-summarizer.ts           # LLM 摘要压缩
 ├── truncate-compressor.ts      # 截断兜底
 ├── budget-allocator.ts         # Token 预算分配
-├── token-estimator.ts          # HeuristicTokenEstimator（实现 Core TokenEstimator）
-├── token-estimate-fns.ts       # 估算纯函数原语
-├── token-constants.ts          # 估算常量
+├── token-estimator.ts          # HeuristicTokenEstimator
+├── token-estimate-fns.ts
+├── token-constants.ts
 └── knowledge/                  # KnowledgeStore + KnowledgeContextEngine
 ```
 
-领域导出见 `harness/index.ts`。七层智能组装 `ContextIntelligence` 位于 `harness/memory/`（详见第 4 节）。
+领域导出见 `harness/index.ts`。设计说明见 [docs/context-layer-contracts.md](./context-layer-contracts.md)。
 
 ### 3.3 Security — 安全
 
@@ -280,7 +285,6 @@ harness/execution-environment/
 harness/memory/
 ├── store.ts              # InMemoryMemoryStore（默认内存实现）
 ├── cognition.ts          # InMemoryConceptGraph
-├── context-intelligence.ts  # 七层智能组装
 ├── types.ts / wisdom-types.ts / cognition-types.ts
 ├── sqlite/
 │   ├── agent-db.ts       # AgentDatabase — per-agent agent.db
@@ -293,7 +297,7 @@ harness/memory/
 └── index.ts
 ```
 
-`FileWisdomStore` / `FileProjectMemory` 已删除；不要再预设 `memory/`、`wisdom/` 文件目录。
+`FileWisdomStore` / `FileProjectMemory` / `ContextIntelligence` 已删除；不要再预设 `memory/`、`wisdom/` 文件目录。system prompt 七层组装见 `harness/context/`。
 
 ### 3.7 Reliability — 可靠性
 
@@ -479,6 +483,9 @@ harness/concurrency/
 要让 agent 变得聪明，核心在于给会话提供更有效的 context。
 七层模型是一个**信息分馏系统**：从原始信息中逐层提炼，产出越来越高层级的理解。
 
+**实现落点**：`harness/context/`（`ContextLayer` 契约 + `DefaultContextAssembler` + 薄适配层）。  
+设计细节见 [docs/context-layer-contracts.md](./context-layer-contracts.md)。
+
 ```
 Information（原始信息）→ Memory（记忆）→ Cognition（认知）→ Wisdom（智慧）
 
@@ -489,26 +496,27 @@ Skill（技能）= 工作流定义
 
 ### 七层定义
 
-| 层 | 本质 | 构建归属 | 组装位置 |
+| 层 | 本质 | 构建归属 | 默认路径状态 |
 |---|---|---|---|
-| **Wisdom** | 思维范式（第一性原理、反思、系统思维） | `memory` 领域生成 | system prompt 最前 |
-| **Persona** | agent 的 DNA（身份、人格、操作指令） | `agent-building` 领域加载 | system prompt |
-| **Skill** | 工作流定义（触发条件 → 执行指导） | `plugin-ecosystem` 领域管理 | 条件加载 |
-| **Knowledge** | 外部参考资料（项目文档、API 文档） | `harness/context/knowledge` | 按需检索 |
-| **Cognition** | 概念关系网络 | `memory` 领域构建 | 按话题遍历 |
-| **Memory** | 从交互中提取的有价值内容 | `memory` 领域管理 | 按相关性召回 |
-| **Information** | 原始交互记录 | `integration/storage` 持久化 | context window 管理 |
+| **Wisdom** | 思维范式 | `memory` 领域生成 | 契约有层，默认未注册 |
+| **Persona** | agent 的 DNA | `agent-building` 加载 | **已接线** |
+| **Skill** | 工作流定义 | `plugin-ecosystem` | **已接线**（`formatForPrompt` 索引） |
+| **Knowledge** | 外部参考资料 | `harness/context/knowledge` | **已接线**（进程内 store） |
+| **Cognition** | 概念关系网络 | `memory` 领域构建 | 契约有层，默认未注册 |
+| **Memory** | 交互中提取的洞察 | `memory` 领域 | **已接线**（`SqliteMemoryStore`） |
+| **Information** | 原始交互记录 | SessionStore | **已接线**（`DefaultContextEngine` 窗口） |
 
-### 组装流程
+### 组装顺序（order 默认值）
 
 ```
-1. Wisdom     ← 最靠前，权重最高
-2. Persona    ← 身份定义、人格特质
-3. Skill      ← 当前任务匹配的技能（条件加载）
-4. Knowledge  ← 当前话题检索到的外部知识
-5. Cognition  ← 当前话题相关的概念网络
-6. Memory     ← 相关记忆召回
-7. Information ← 历史消息（窗口管理 + 压缩）
+1. Wisdom     ← order 10（未注册）
+2. Persona    ← order 20
+3. Skill      ← order 30
+4. Knowledge  ← order 40
+5. Cognition  ← order 50（未注册）
+6. Memory     ← order 60
+7. Runtime    ← order 70（session tasks / guidance；靠近对话）
+Information   ← 不进 ContextLayer，由 ContextEngine 管窗口
 ```
 
 ### memory/ 领域的三层抽象
@@ -526,27 +534,25 @@ Memory → Wisdom           升华：思维模式
 ```
 用户消息
   ↓
-SessionAwareRunner.handle()           ← Session 生命周期管理
+SessionAwareRunner.handle()           ← Session 生命周期；播种 contextCompact
   ↓
-SessionTask 注入（goal + step rollup）  ← <session_tasks>
+SessionTask / guidance → injectedContext
   ↓
-Agent.run()                           ← Harness 门面（setHarness 绑定）
+ContextAssembler（层契约）              ← Persona + Skill + Knowledge + Memory + Runtime
   ↓
-runAgentWithReliability()             ← 可靠性包装 + RunGuard 检查点
+Agent.run() / runAgentWithReliability()
   ↓
-Context Intelligence 组装              ← 七层智能组装 system prompt
+agentLoop() → convertToLlm
   ↓
-agentLoop()                           ← 纯执行循环
+DefaultContextEngine.assemble()        ← 主动摘要 + 窗口选择/压缩
   ↓
-ContextEngine.assemble()              ← 消息窗口管理 + 压缩
-  ↓
-ModelProvider.call()                  ← LLM 推理
+ModelProvider.call()
   ↓
 [tool_calls] → SecurityGuard → [HITL?] → ExecutionEnv → Tool
   ↓
-[回到 ModelProvider.call()]
+HarnessLoopEvent + context.compact.* 事件
   ↓
-HarnessLoopEvent 流输出（Loop 协议 + budget/run_guard）
+Session save：全量 messages + contextCompact 快照
   ↓
 [任务结束后] → Memory 提取（信息→记忆→认知→智慧）
 ```
@@ -572,6 +578,7 @@ HarnessLoopEvent 流输出（Loop 协议 + budget/run_guard）
 | `MessageChannel` | `harness/multi-agent/message-channel-types.ts` | — |
 | `MemoryStore` 等 | `harness/memory/types.ts` | InMemory / Sqlite |
 | `KnowledgeStore` | `harness/context/knowledge/types.ts` | MemoryKnowledgeStore |
+| `ContextLayer` / `ContextAssembler` | `harness/context/layer-types.ts` | DefaultContextAssembler + layers |
 | `Planner` / `Reflector` | `harness/orchestration/cognitive-loop.ts` | Rule/LLM/Hybrid |
 
 ---
@@ -585,8 +592,11 @@ const { agent, harness, runner } = await new AgentBuilder()
   .provider('backup', backupProvider)
   .concurrency({ providerPool: { ... } })
 
-  // 人格
+  // 人格 / 技能 / 记忆
   .persona('./my-agent')
+  .skillDirectory('./my-agent/skills')
+  .memoryStore(myMemoryStore)
+  .knowledgeStore(myKnowledgeStore)
 
   // 工具
   .tool(myTool)
@@ -594,7 +604,8 @@ const { agent, harness, runner } = await new AgentBuilder()
 
   // 上下文
   .contextEngine(myContextEngine)
-  .summarize(mySummarizeFn)
+  .summarize(mySummarizeFn)          // 可省略；默认自动挂主模型/mini
+  .disableAutoSummarize()            // 可选：关掉自动 summarize
 
   // 安全（规则引擎；safety-guard 子系统由 subsystems/ 目录自动加载）
   .withRiskPolicy(myRiskPolicy)

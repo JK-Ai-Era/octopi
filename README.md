@@ -65,7 +65,7 @@ Infrastructure primitives (EventBus, StateMachine) and **Kernel ports** (ModelPr
 |--------|---------------|
 | **Agent** | **Runnable facade**: `Agent.run()` = reliability-wrapped loop |
 | **Agent Building** | Builder, persona loading, config bridge |
-| **Context Management** | Message selection, compression, token estimation, 7-layer intelligence |
+| **Context Management** | Message selection, compression, token estimation; 7-layer `ContextLayer` assembly (see [context-layer-contracts](./docs/context-layer-contracts.md)) |
 | **Security** | Risk evaluation, shell parsing, degradation strategies, safety agent |
 | **Reliability** | Reliability wrapper, HarnessLoopEvent, circuit breaker, retry, supervision |
 | **Plugin Ecosystem** | Plugins, tools, skills, MCP, slash commands |
@@ -78,7 +78,7 @@ Infrastructure primitives (EventBus, StateMachine) and **Kernel ports** (ModelPr
 | **Concurrency** | Multi-key LLM load balancing, rate limiting, session gating |
 | **Execution Environment** | Sandboxing, workspace management, file operations |
 | **Human-in-the-Loop** | Approval workflows, decision caching, risk-based policies |
-| **Memory** | Memory storage/retrieval, cognition graph, wisdom, project memory |
+| **Memory** | Memory storage/retrieval, cognition graph, wisdom, session extraction |
 
 ### Layer 3: Integration — External Adapters
 
@@ -101,6 +101,10 @@ Information (raw messages)     ← Window managed + compressed
 ```
 
 This is an **information distillation system**: raw information is refined through layers of increasing abstraction, producing progressively higher-level understanding.
+
+**Implementation**: `ContextLayer` contracts + `DefaultContextAssembler` in `harness/context/`.  
+Default path wires Persona / Skill / Knowledge / Memory / Runtime; Wisdom / Cognition remain optional.  
+See [docs/context-layer-contracts.md](./docs/context-layer-contracts.md).
 
 ---
 
@@ -195,7 +199,7 @@ src/
 │   └── types/                    Core type definitions
 ├── harness/                 Layer 2  15 self-contained domains
 │   ├── agent-building/           Builder, persona, config bridge
-│   ├── context/                  Context engine, compression, intelligence
+│   ├── context/                  ContextLayer assembly, window compression, proactive compact
 │   ├── security/                 Risk evaluation, shell parsing
 │   ├── reliability/              Reliability wrapper, circuit breaker
 │   ├── plugin-ecosystem/         Plugins, tools, skills, MCP

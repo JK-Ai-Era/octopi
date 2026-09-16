@@ -78,6 +78,12 @@ export class Agent {
    * SessionAwareRunner 在 handle() 开始时注入真实 sessionId，避免多会话串味。
    */
   private _contextSessionId = 'default';
+  /** sessionId → 压缩状态快照；Runner 从 Session 播种，assemble 后回写 Session */
+  private _sessionCompactStates = new Map<string, {
+    summary?: string;
+    lastProactiveMessageCount?: number;
+    lastProactiveTokens?: number;
+  }>();
   private _onAfterTurn?: (usage?: {
     promptTokens: number;
     completionTokens: number;
@@ -156,6 +162,25 @@ export class Agent {
   /** 设置 ContextEngine 会话键 */
   setContextSessionId(sessionId: string): void {
     this._contextSessionId = sessionId;
+  }
+
+  /** 播种/更新会话压缩状态快照（Runner 从 SessionData 注入） */
+  setSessionCompactState(
+    sessionId: string,
+    state: { summary?: string; lastProactiveMessageCount?: number; lastProactiveTokens?: number } | undefined,
+  ): void {
+    if (state && (state.summary || state.lastProactiveMessageCount != null)) {
+      this._sessionCompactStates.set(sessionId, { ...state });
+    } else {
+      this._sessionCompactStates.delete(sessionId);
+    }
+  }
+
+  /** 读取会话压缩状态快照 */
+  getSessionCompactState(sessionId: string):
+    | { summary?: string; lastProactiveMessageCount?: number; lastProactiveTokens?: number }
+    | undefined {
+    return this._sessionCompactStates.get(sessionId);
   }
 
   /** 每轮结束后通知 ContextEngine（afterTurn 校准等）；turn 为本轮增量消息 */

@@ -1,7 +1,8 @@
 /**
  * Memory 领域 — 记忆系统
  *
- * 职责：记忆存储/检索、认知图谱、智慧生成、项目记忆、七层智能组装。
+ * 职责：记忆存储/检索、认知图谱、智慧生成、会话提取。
+ * system prompt 七层组装契约在 `harness/context/`（ContextLayer）。
  *
  * 三层抽象：
  * - Information → Memory（提炼：什么值得记住）
@@ -13,11 +14,24 @@
  * - Core: types/messages
  */
 
+// ── 契约类型 ──
+export type {
+  MemoryType,
+  MemoryEntry,
+  MemoryQuery,
+  MemoryStats,
+  MemoryStore,
+  WisdomEntry,
+  WisdomStore,
+  ConceptNode,
+  ConceptEdge,
+  ConceptGraph,
+  ConceptGraphStore,
+} from './types.js';
+
 // ── 内存实现 ──
 export { InMemoryMemoryStore } from './store.js';
 export { InMemoryConceptGraph } from './cognition.js';
-export { ContextIntelligence } from './context-intelligence.js';
-export type { ContextIntelligenceConfig, AssembledContext } from './context-intelligence.js';
 
 // ── SQLite 实现 ──
 export { AgentDatabase, SqliteMemoryStore, SqliteWisdomStore, SqliteConceptGraph, KnowledgeRegistry, createEmbeddingProvider } from './sqlite/index.js';

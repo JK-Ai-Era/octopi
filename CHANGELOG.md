@@ -1,3 +1,51 @@
+## v0.27.0 (2026-09-17)
+
+### feat(context): 七层 ContextLayer 契约、默认装配接线、主动摘要与可观测
+
+将「system prompt 里有什么」与「消息窗口怎么压」正式拆开：内容层契约 + Assembler 管 system；`DefaultContextEngine` 管 Information 窗口。删除未接线的 `ContextIntelligence`。
+
+#### 契约与装配
+
+- 新增 `ContextLayer` / `LayerContent` / `AssembleManifest`（`harness/context/layer-types.ts`）
+- `DefaultContextAssembler`：份额归一化、并行 assemble、priority 纳入、统一 estimator 截断
+- `createDefaultSystemPromptAssembler`：persona + skill 索引 + knowledge/memory 召回 + runtime
+- Builder/Runner 每轮走 Assembler；失败回退旧字符串拼接
+- 删除 `harness/memory/context-intelligence.ts`（七层组装唯一实现落点为 `harness/context/`）
+
+#### 默认路径能力
+
+- **Skill**：`skillDirectory` / `skills()`；config-bridge 从 `home/skills` discover，注入 `<available_skills>`
+- **Memory/Knowledge**：`memoryStore` / `knowledgeStore`；config-bridge 挂 `home/agent.db` → `SqliteMemoryStore`（SQLite 可用时）
+- **summarize**：未显式设置时 Builder 自动挂主模型；config-bridge 优先 `models.level.mini`
+- **主动摘要**：`proactiveCompactRatio`（默认 0.6）；`proactiveCooldownMs`（默认 30s，冷却内优先缓存重建）
+- **压缩状态落盘**：`SessionData.contextCompact`（summary + lastProactiveMessageCount + tokens）；daily/idle 重置时清理
+
+#### 可观测与 WebUI
+
+- `context.compact.start/end/error` 事件；Builder 桥到 EventBus
+- WebUI 状态栏「压缩上下文…」、检查器摘要、会话系统条
+
+#### 修复（代码审查）
+
+- P0：`layers.ts` 导入路径、`ctx.query` 可空、`layers` 数组类型（`tsc` 通过）
+- P1：`buildLlmMessages` 跳过托管 system，避免双注入；压缩摘要改为 `role: 'user'` + `contextSummary`
+- P2：`buildAgent` 确保 bus、emit 惰性读；Assembler 统一截断；fingerprint 上限 + `clearSession` 接线
+- 层间分隔由 `\n\n` 变为 `\n\n---\n\n`（多层 system prompt 拼接）
+
+#### 配置
+
+```json
+{
+  "contextEngine": {
+    "proactiveCompactRatio": 0.6,
+    "proactiveCooldownMs": 30000,
+    "protectLastN": 20
+  }
+}
+```
+
+设计说明：`docs/context-layer-contracts.md`。
+
 ## v0.26.0 (2026-09-16)
 
 ### refactor(core): Kernel 收敛 + Domain 契约归域 + ContextEngine 接线

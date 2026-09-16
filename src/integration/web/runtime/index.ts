@@ -6,6 +6,7 @@ export { OctopiRuntimeStore } from './store.js';
 export type {
   ChatState,
   InspectorState,
+  CompactStatus,
   RunStatus,
   ToolRun,
   RuntimeEvent,

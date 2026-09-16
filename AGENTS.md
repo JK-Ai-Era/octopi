@@ -93,6 +93,8 @@ When modifying context-related code, understand the information distillation ord
 6.  **Memory** (Extracted insights)
 7.  **Information** (Raw messages)
 
+**Implementation lives in `harness/context/`** (`ContextLayer` / `DefaultContextAssembler` / `system-prompt-assembler.ts`), not in `harness/memory/`. Layers 1–6 are system-prompt content providers; Information is the message window (`DefaultContextEngine`). See `docs/context-layer-contracts.md`. Old `ContextIntelligence` has been removed.
+
 ---
 
 ## Common Commands

@@ -157,6 +157,8 @@ export const ContextEngineConfigSchema = z.object({
   protectFirstN: z.number().min(0).optional(),
   protectLastN: z.number().min(0).optional(),
   compactThreshold: z.number().min(0).max(1).optional(),
+  proactiveCompactRatio: z.number().min(0).max(1).optional(),
+  proactiveCooldownMs: z.number().min(0).optional(),
   outputRatio: z.number().min(0).max(1).optional(),
   minOutputReserve: z.number().positive().optional(),
   maxOutputReserve: z.number().positive().optional(),

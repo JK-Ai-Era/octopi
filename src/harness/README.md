@@ -8,7 +8,7 @@
 |------|------|------|
 | Agent | `agent/` | **可运行门面**：`Agent.run()` = reliability 包装 |
 | Agent Building | `agent-building/` | Builder、人格加载、配置桥接 |
-| Context Management | `context/` | 消息选择、压缩、Token 估算、智能组装、Knowledge |
+| Context Management | `context/` | 消息窗口压缩、Token 估算、七层 ContextLayer 装配、Knowledge |
 | Security | `security/` | 风险评估、Shell 解析、降级策略 |
 | Reliability | `reliability/` | 可靠性包装、HarnessLoopEvent、断路器、重试 |
 | Plugin Ecosystem | `plugin-ecosystem/` | Plugin、Tool、Skill、MCP、命令 |
@@ -21,7 +21,7 @@
 | Concurrency | `concurrency/` | 多 Key 负载均衡、限流 |
 | Execution Environment | `execution-environment/` | 沙箱、工作区 |
 | Human-in-the-Loop | `human-in-the-loop/` | 审批流程 |
-| Memory | `memory/` | 记忆、认知、智慧、七层智能组装 |
+| Memory | `memory/` | 记忆、认知、智慧、会话提取（七层组装在 `context/`） |
 
 ## 其他文件
 
