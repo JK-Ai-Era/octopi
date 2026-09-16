@@ -45,7 +45,7 @@ Domain / 产品契约主体在 **harness 领域**。
 
 ## 职责
 
-- Kernel ports + 词汇表 + EventBus/StateMachine **机制**
+- Kernel ports + 词汇表 + EventBus/StateMachine/Cron **机制**
 - 安全纯函数（severityToAction / isValidSecurityGuard）
 - **不包含**产品事件词表（AgentEventMap 在 harness/events）
 
@@ -53,10 +53,11 @@ Domain / 产品契约主体在 **harness 领域**。
 
 - 不实现策略；不 import Harness / Integration / Loop
 - 不持有 Domain 产品契约（Memory、MCP、ContextEngine 实现…）
+- 不做中心 Scheduler；点火策略在 Harness 各域
 
 ## 文件说明
 
 - interfaces/ — Kernel + Product port 类型
-- primitives/ — EventBus、StateMachine
+- primitives/ — EventBus、StateMachine、Cron
 - types/ — Kernel 词汇表
 - index.ts — `octopi/core`

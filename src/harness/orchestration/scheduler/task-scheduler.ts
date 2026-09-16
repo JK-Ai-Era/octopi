@@ -5,13 +5,14 @@
  * 基于 AsyncTask 实现，通过 EventBus 发射事件。
  *
  * 设计要点：
- * - 不依赖外部 cron 库，纯 JS 实现
+ * - cron 时间数学走 `core/primitives/cron.ts`（禁止本地再解析）
  * - 进程退出时自动清理所有任务
  * - 所有调度事件通过 EventBus 发射
  */
 
 import { randomUUID } from 'node:crypto';
 import { AsyncTask } from '../async-task.js';
+import { parseCron, nextFireTime } from '../../../core/primitives/cron.js';
 import type { EventBus, EventBusAgentEvent as AgentEvent } from '../../../core/index.js';
 
 // ── 任务类型 ──
@@ -188,9 +189,14 @@ export class TaskScheduler {
    * @param name - 任务名称
    * @param cronExpr - cron 表达式（简化版：分 时 日 月 周）
    * @param handler - 任务处理函数
+   * @throws 表达式非法时抛错（禁止静默延后）
    */
   scheduleCron(name: string, cronExpr: string, handler: () => Promise<void> | void): ScheduledTask {
-    const nextRun = this._parseCronNextRun(cronExpr);
+    const parsed = parseCron(cronExpr);
+    if (!parsed.ok) {
+      throw new Error(`invalid cron "${cronExpr}": ${parsed.error}`);
+    }
+    const nextRun = nextFireTime(parsed.spec, Date.now());
     const task: ScheduledTask = {
       id: randomUUID(),
       name,
@@ -342,59 +348,16 @@ export class TaskScheduler {
     if (task.kind === 'interval' && task.intervalMs) {
       task.nextRunAt = Date.now() + task.intervalMs;
     } else if (task.kind === 'cron' && task.cron) {
-      task.nextRunAt = this._parseCronNextRun(task.cron);
+      const parsed = parseCron(task.cron);
+      if (!parsed.ok) {
+        this.cancel(task.id);
+        return;
+      }
+      task.nextRunAt = nextFireTime(parsed.spec, Date.now());
     } else {
       // once 任务执行完毕，删除
       this._tasks.delete(task.id);
     }
-  }
-
-  /**
-   * 解析 cron 表达式，计算下次执行时间
-   *
-   * 简化版 cron：分 时 日 月 周
-   * 示例：star/5 star star star star = 每5分钟
-   */
-  _parseCronNextRun(expr: string): number {
-    const parts = expr.split(' ');
-    if (parts.length !== 5) {
-      // 格式错误，默认 1 分钟后
-      return Date.now() + 60000;
-    }
-
-    const now = new Date();
-    const [minExpr, hourExpr] = parts;
-
-    let nextMin = this._parseCronField(minExpr, now.getMinutes(), 59);
-    let nextHour = this._parseCronField(hourExpr, now.getHours(), 23);
-
-    // 如果分钟已过，跳到下一小时
-    if (nextMin <= now.getMinutes() && nextHour === now.getHours()) {
-      nextMin = this._parseCronField(minExpr, 0, 59);
-      nextHour = now.getHours() + 1;
-      if (nextHour > 23) nextHour = 0;
-    }
-
-    const next = new Date(now);
-    next.setHours(nextHour, nextMin, 0, 0);
-
-    // 如果计算出的时间已过（同一天），加一天
-    if (next.getTime() <= now.getTime()) {
-      next.setDate(next.getDate() + 1);
-    }
-
-    return next.getTime();
-  }
-
-  private _parseCronField(expr: string, current: number, max: number): number {
-    if (expr === '*') return current;
-    if (expr.startsWith('*/')) {
-      const step = parseInt(expr.slice(2), 10);
-      if (isNaN(step) || step <= 0) return current;
-      return Math.ceil((current + 1) / step) * step;
-    }
-    const val = parseInt(expr, 10);
-    return isNaN(val) ? current : Math.min(val, max);
   }
 
   private _emit(type: string, data?: Record<string, unknown>): void {

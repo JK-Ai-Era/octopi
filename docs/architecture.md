@@ -137,7 +137,7 @@ src/core/
 │   ├── queue-mode.ts
 │   ├── thinking-level.ts
 │   └── index.ts
-├── primitives/           # EventBus、StateMachine（纯机制）
+├── primitives/           # EventBus、StateMachine、Cron（纯机制）
 │   ├── event-bus.ts
 │   ├── state-machine.ts
 │   └── index.ts

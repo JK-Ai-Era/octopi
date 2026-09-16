@@ -1,3 +1,31 @@
+## v0.28.0 (2026-09-17)
+
+### feat(core): Cron 时间数学原语；两域改调统一 nextFire
+
+按 `arch/schedule.md` §3.2 收敛时间数学：Core 只做 parse / nextFire / interval 展示，**不做**中心 Scheduler。点火策略仍分域。
+
+#### Core
+
+- 新增 `core/primitives/cron.ts`：`parseCron` / `nextFireTime` / `intervalNext` / `formatHuman`
+- 语法子集 v1：五字段，`*` `*/N` 单值 `a-b` 逗号列表（及 `a-b/N`）；无秒/时区/L/W/#
+- 非法表达式显式返回错误；`TaskScheduler.scheduleCron` 抛错；`ScheduleSource` warn 后 skip
+- day-of-week：`7`≡周日；dom/dow 双侧受限时按 Vixie OR
+
+#### Harness 接线
+
+- `ScheduleSource`：cron 改为 `nextFireTime` + `setTimeout` 链（原先 `*`/`*/N` 才能用的 setInterval 近似废弃）
+- `TaskScheduler`：删除本地 `_parseCronNextRun`；非法 cron 不再静默「1 分钟后再跑」
+
+#### 文档 / 注释
+
+- `loop/error-classifier.ts`：类型在 Core、实现在 Loop、策略在 Harness
+- `arch/layer-rules.md` / `arch/overview.md` / `src/core/README`：去掉 async-task / process-model / budget / token-estimator 在 Core 的过时描述；补 Cron
+- `arch/schedule.md` 状态勾选
+
+### test(core)
+
+- 新增 `tests/core/cron.test.ts`（解析、下次点火、工作日跨周末、interval、formatHuman）
+
 ## v0.27.1 (2026-09-17)
 
 ### refactor(context): Token 估算跨域门面 + 去 Core 误注

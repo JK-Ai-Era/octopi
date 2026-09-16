@@ -4,7 +4,9 @@
  * 职责：将原始错误分类为结构化的 ClassifiedError。
  * 包含 HTTP 状态码提取、Retry-After 解析、消息文本匹配。
  *
- * 这是协议层知识，留在 Core 层，每个 engine 消费者都需要。
+ * 分层：类型合同（ErrorReason / ClassifiedError）在 Core `error-strategy.ts`；
+ * **分类实现在 Loop**（协议边界）；决策策略在 Harness ErrorStrategy。
+ * Core 不持有 HTTP/provider 模式匹配。
  */
 
 import type { ClassifiedError, ErrorReason } from './types.js';

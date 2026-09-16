@@ -3,16 +3,19 @@
  *
  * 禁止 import orchestration/TaskScheduler（arch/agent-runtime.md §7）。
  * emit 非阻塞：到点只产 Trigger，不 await dispatch。
+ * 时间数学走 `core/primitives/cron.ts`；本文件只负责 arm/unarm 与产 Trigger。
  */
 
 import { randomUUID } from 'node:crypto';
+import { parseCron, nextFireTime } from '../../../core/primitives/cron.js';
+import type { CronSpec } from '../../../core/primitives/cron.js';
 import type { Trigger, TriggerPayload, TriggerSource } from '../types.js';
 
 export interface ScheduleJob {
   id?: string;
   agentId: string;
   sessionId?: string;
-  /** 毫秒间隔；与 cron 二选一（v1 先 interval） */
+  /** 毫秒间隔；与 cron 二选一 */
   intervalMs?: number;
   /** 简化 cron：分 时 日 月 周；与 interval 二选一 */
   cron?: string;
@@ -28,7 +31,7 @@ export interface ScheduleSourceConfig {
   jobs: ScheduleJob[];
 }
 
-type Timer = ReturnType<typeof setInterval>;
+type Timer = ReturnType<typeof setTimeout>;
 
 export class ScheduleSource implements TriggerSource {
   readonly id: string;
@@ -51,7 +54,7 @@ export class ScheduleSource implements TriggerSource {
 
   async stop(): Promise<void> {
     this.running = false;
-    for (const t of this.timers.values()) clearInterval(t);
+    for (const t of this.timers.values()) clearTimeout(t);
     this.timers.clear();
   }
 
@@ -67,18 +70,50 @@ export class ScheduleSource implements TriggerSource {
     };
 
     if (job.runOnStart) {
-      // 非阻塞；遵守 §5.1
       queueMicrotask(fire);
     }
 
-    const intervalMs = job.intervalMs ?? parseCronIntervalMs(job.cron);
-    if (intervalMs <= 0) return;
+    if (job.intervalMs != null) {
+      if (job.intervalMs <= 0) {
+        console.warn(`[ScheduleSource] invalid intervalMs ${job.intervalMs}, job skipped`);
+        return;
+      }
+      const timer = setInterval(fire, job.intervalMs) as unknown as Timer;
+      this.unref(timer);
+      this.timers.set(jobId, timer);
+      return;
+    }
 
-    const timer = setInterval(fire, intervalMs);
+    if (job.cron) {
+      const parsed = parseCron(job.cron);
+      if (!parsed.ok) {
+        console.warn(`[ScheduleSource] invalid cron "${job.cron}": ${parsed.error}, job skipped`);
+        return;
+      }
+      this.armCron(jobId, parsed.spec, fire);
+    }
+  }
+
+  /** cron 链：到点 fire 后按 nextFireTime 再 arm；stop 时 clearTimeout */
+  private armCron(jobId: string, spec: CronSpec, fire: () => void): void {
+    const scheduleNext = (): void => {
+      if (!this.running) return;
+      const next = nextFireTime(spec, Date.now());
+      const delay = Math.max(0, next - Date.now());
+      const timer = setTimeout(() => {
+        fire();
+        scheduleNext();
+      }, delay);
+      this.unref(timer);
+      this.timers.set(jobId, timer);
+    };
+    scheduleNext();
+  }
+
+  private unref(timer: Timer): void {
     if (typeof timer === 'object' && timer !== null && 'unref' in timer) {
       (timer as NodeJS.Timeout).unref?.();
     }
-    this.timers.set(jobId, timer);
   }
 
   private toTrigger(job: ScheduleJob, jobId: string): Trigger {
@@ -96,23 +131,4 @@ export class ScheduleSource implements TriggerSource {
       },
     };
   }
-}
-
-// 简化 cron：支持 star-slash-N（每 N 分钟）与 star（每分钟）；非法表达式返回 0（不调度）
-function parseCronIntervalMs(cron?: string): number {
-  if (!cron) return 0;
-  const parts = cron.trim().split(/\s+/);
-  if (parts.length !== 5) {
-    console.warn(`[ScheduleSource] invalid cron "${cron}", job skipped`);
-    return 0;
-  }
-  const minute = parts[0]!;
-  if (minute === '*') return 60_000;
-  const star = minute.match(/^\*\/(\d+)$/);
-  if (star) {
-    const n = Number(star[1]);
-    if (n > 0) return n * 60_000;
-  }
-  console.warn(`[ScheduleSource] unsupported cron minute field "${minute}", job skipped`);
-  return 0;
 }
