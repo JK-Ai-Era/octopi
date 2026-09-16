@@ -1,7 +1,8 @@
 /**
  * HeuristicTokenEstimator — 启发式 Token 估算器
  *
- * 实现 Core 的 `TokenEstimator` 接口；估算原语在 `token-estimate-fns.ts`。
+ * 实现本域 `TokenEstimator` 契约（`./types.ts`）；估算原语在 `token-estimate-fns.ts`。
+ * Token 估算属 Context 域策略，不是 Core Kernel 能力。
  *
  * 三层策略（参考 OpenClaw）：
  * 1. 优先使用 LLM 返回的实际 token 数（usage.promptTokens）- 外部回写

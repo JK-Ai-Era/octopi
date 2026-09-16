@@ -75,7 +75,7 @@ export { loadPersona, composePersonas, PersonaSource } from './harness/agent-bui
 // Context Engine
 export { DefaultContextEngine } from './harness/context/default-context-engine.js';
 export type { DefaultContextEngineConfig } from './harness/context/default-context-engine.js';
-export { HeuristicTokenEstimator, estimateTextTokens } from './harness/context/token-estimator.js';
+export { HeuristicTokenEstimator, estimateTextTokens } from './harness/context/index.js';
 export { DefaultMessageSelector } from './harness/context/message-selector.js';
 export { TruncateCompressor } from './harness/context/truncate-compressor.js';
 export { LLMSummaryCompressor } from './harness/context/llm-summarizer.js';

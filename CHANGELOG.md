@@ -1,3 +1,19 @@
+## v0.27.1 (2026-09-17)
+
+### refactor(context): Token 估算跨域门面 + 去 Core 误注
+
+Token 估算明确归属 Context 域策略（非 Core Kernel）。跨域调用统一走 `harness/context/index.ts` 门面，避免深路径漂移。
+
+- 修正 `token-estimator.ts` 头注：实现的是本域 `TokenEstimator`，不是 Core 接口
+- `context/index.ts` 导出 `HeuristicTokenEstimator` / `estimateTextTokens` / `estimateLLMMessages` 与估算常量
+- `runner` / `autonomous-subsystem` 改走 domain barrel；`harness/index` 与包入口同步
+- Web `ChatWorkspace` 保持直连 token 模块（浏览器不拉 harness/context barrel）
+- `context/README` 标明：Budget 计量吃真实 usage，不走启发式估算
+
+### test(context)
+
+- 既有估算/引擎测试路径不变（单元测试允许深测内部模块）
+
 ## v0.27.0 (2026-09-17)
 
 ### feat(context): 七层 ContextLayer 契约、默认装配接线、主动摘要与可观测

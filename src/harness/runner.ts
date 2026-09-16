@@ -21,7 +21,7 @@ import type { HarnessLoopEvent } from './reliability/harness-events.js';
 import type { ReliabilityHarness } from './reliability/run-agent.js';
 import { createSessionStateMachine } from './session-state-machine.js';
 import type { StateMachine } from '../core/primitives/state-machine.js';
-import { HeuristicTokenEstimator } from './context/token-estimator.js';
+import { HeuristicTokenEstimator } from './context/index.js';
 import type { SessionTaskService } from './session-tasks/service.js';
 import { renderSessionTasksInjection } from './session-tasks/render.js';
 

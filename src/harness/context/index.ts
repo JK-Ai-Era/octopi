@@ -30,6 +30,20 @@ export type {
 export { DefaultContextEngine } from './default-context-engine.js';
 export type { DefaultContextEngineConfig } from './default-context-engine.js';
 
+// ── Token 估算（跨域门面；浏览器侧可直连 token-estimator / token-constants） ──
+export { HeuristicTokenEstimator, estimateTextTokens, estimateLLMMessages } from './token-estimator.js';
+export {
+  CHARS_PER_TOKEN,
+  TOOL_RESULT_CHARS_PER_TOKEN,
+  JSON_CHARS_PER_TOKEN,
+  MESSAGE_OVERHEAD_TOKENS,
+  SAFETY_MARGIN,
+  IMAGE_TOKEN_ESTIMATE,
+  AUDIO_TOKEN_ESTIMATE,
+  VIDEO_TOKEN_ESTIMATE,
+  SAMPLE_THRESHOLD,
+} from './token-constants.js';
+
 // ── 七层内容契约与装配 ──
 export {
   LAYER_ORDER,

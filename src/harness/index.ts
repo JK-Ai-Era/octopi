@@ -19,8 +19,12 @@ export type { BuiltAgent } from './agent-building/config-bridge.js';
 // ── Context Management ──
 export { DefaultContextEngine } from './context/default-context-engine.js';
 export type { DefaultContextEngineConfig } from './context/default-context-engine.js';
-export { HeuristicTokenEstimator, estimateTextTokens, estimateLLMMessages } from './context/token-estimator.js';
-export { JSON_CHARS_PER_TOKEN, TOOL_RESULT_CHARS_PER_TOKEN, CHARS_PER_TOKEN } from './context/token-constants.js';
+export { HeuristicTokenEstimator, estimateTextTokens, estimateLLMMessages } from './context/index.js';
+export {
+  JSON_CHARS_PER_TOKEN,
+  TOOL_RESULT_CHARS_PER_TOKEN,
+  CHARS_PER_TOKEN,
+} from './context/index.js';
 export { DefaultMessageSelector } from './context/message-selector.js';
 export { TruncateCompressor } from './context/truncate-compressor.js';
 export { LLMSummaryCompressor } from './context/llm-summarizer.js';

@@ -47,8 +47,9 @@
 - message-selector.ts — 四区域选择
 - hybrid-compressor.ts / llm-summarizer.ts / truncate-compressor.ts — 压缩
 - budget-allocator.ts — 消息侧 Token 预算分配
-- token-estimator.ts / token-estimate-fns.ts / token-constants.ts — 估算
+- token-estimator.ts / token-estimate-fns.ts / token-constants.ts — 估算（跨域经 `context/index.ts` 门面；浏览器可直连 token 模块）
 - knowledge/ — KnowledgeStore + KnowledgeContextEngine
 
 > 导出：`src/harness/context/index.ts` 与 `src/harness/index.ts`。
 > 七层内容组装以本目录 `ContextLayer` 契约为准；旧 `ContextIntelligence` 已删除。
+> Token 估算是本域策略，不是 Core Kernel 能力；Budget 计量吃真实 `usage`，不走启发式。

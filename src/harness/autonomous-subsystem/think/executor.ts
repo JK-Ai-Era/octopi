@@ -24,7 +24,7 @@ import type {
 } from '../types.js';
 import type { ModelResolver } from './model-resolver.js';
 import { shouldFallbackModel } from './llm-port.js';
-import { estimateTextTokens } from '../../context/token-estimator.js';
+import { estimateTextTokens } from '../../context/index.js';
 
 export class TokenBudgetExceededError extends Error {
   constructor(message = 'Subsystem token budget exceeded') {

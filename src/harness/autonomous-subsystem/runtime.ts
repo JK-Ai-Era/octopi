@@ -40,7 +40,7 @@ import {
   DEP_RESOLVED_MODELS,
   DEP_SUBSYSTEM_PROMPT,
 } from './think/llm-port.js';
-import { estimateTextTokens } from '../context/token-estimator.js';
+import { estimateTextTokens } from '../context/index.js';
 import type { ModelLevelMap } from './types.js';
 import { SignalBus } from './signal/bus.js';
 import { SubsystemSessionManager } from './session/manager.js';
