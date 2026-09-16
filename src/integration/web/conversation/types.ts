@@ -59,6 +59,8 @@ export interface ToolConversationItem extends BaseConversationItem {
   args?: unknown;
   result?: unknown;
   error?: string;
+  /** 工具完成时刻（tool.exec.end 时打戳） */
+  endedAt?: number;
 }
 
 export interface SystemConversationItem extends BaseConversationItem {

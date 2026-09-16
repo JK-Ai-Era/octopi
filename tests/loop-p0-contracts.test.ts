@@ -572,3 +572,147 @@ describe('prepareNextTurn 不替换 context 引用', () => {
     expect(context.systemPrompt).toBe('updated');
   });
 });
+
+describe('并行 tool_end 增量 yield 契约', () => {
+  it('afterToolCall 改写后的结果才进入 tool_end 事件（安全闸门在 yield 之前）', async () => {
+    const tool: AgentTool = {
+      name: 'leaky',
+      description: 'returns sensitive data',
+      execute: async (id) => ({
+        toolCallId: id,
+        name: 'leaky',
+        content: 'SECRET_TOKEN=abc123',
+      }),
+    };
+
+    const provider = createProvider([
+      {
+        content: '',
+        toolCalls: [{ id: 'c1', name: 'leaky', arguments: {} }],
+        model: 'test',
+        finishReason: 'tool_calls',
+      },
+      { content: 'done', model: 'test', finishReason: 'stop' },
+    ]);
+
+    const context: AgentContext = {
+      systemPrompt: '',
+      messages: [userMsg('go')],
+      tools: [tool],
+    };
+
+    const events = await collect(context, baseConfig(provider, {
+      toolExecution: 'parallel',
+      afterToolCall: async (ctx) => {
+        // 模拟 SecurityGuard 出口检查：拦截敏感输出
+        if (String(ctx.result.content).includes('SECRET')) {
+          return { content: 'Blocked by SecurityGuard: sensitive data', isError: true };
+        }
+        return undefined;
+      },
+    }));
+
+    const toolEnd = events.find(e => e.type === 'tool_end') as any;
+    expect(toolEnd).toBeDefined();
+    // tool_end 事件必须携带脱敏后的结果，而非原始输出
+    expect(toolEnd.result.content).toBe('Blocked by SecurityGuard: sensitive data');
+    expect(toolEnd.result.isError).toBe(true);
+
+    // 写入历史的也必须是脱敏结果
+    const toolMsg = context.messages.find(m => m.role === 'tool') as any;
+    expect(toolMsg.toolResults[0].error).toContain('Blocked by SecurityGuard');
+  });
+
+  it('并行模式下先完成的工具先 yield tool_end', async () => {
+    const order: string[] = [];
+    const slowTool: AgentTool = {
+      name: 'slow',
+      description: 'slow tool',
+      execute: async (id) => {
+        await new Promise(r => setTimeout(r, 80));
+        order.push('slow-done');
+        return { toolCallId: id, name: 'slow', content: 'slow-result' };
+      },
+    };
+    const fastTool: AgentTool = {
+      name: 'fast',
+      description: 'fast tool',
+      execute: async (id) => {
+        order.push('fast-done');
+        return { toolCallId: id, name: 'fast', content: 'fast-result' };
+      },
+    };
+
+    const provider = createProvider([
+      {
+        content: '',
+        toolCalls: [
+          { id: 'c-slow', name: 'slow', arguments: {} },
+          { id: 'c-fast', name: 'fast', arguments: {} },
+        ],
+        model: 'test',
+        finishReason: 'tool_calls',
+      },
+      { content: 'done', model: 'test', finishReason: 'stop' },
+    ]);
+
+    const context: AgentContext = {
+      systemPrompt: '',
+      messages: [userMsg('go')],
+      tools: [slowTool, fastTool],
+    };
+
+    const toolEndOrder: string[] = [];
+    for await (const e of agentLoop(context, baseConfig(provider, { toolExecution: 'parallel' }))) {
+      if (e.type === 'tool_end') {
+        toolEndOrder.push((e as any).result.name);
+      }
+    }
+
+    // fast 先完成，应先 yield；不能等 slow 跑完才一起发
+    expect(toolEndOrder).toEqual(['fast', 'slow']);
+  });
+
+  it('immediate 结果（工具不存在）不触发 observer onToolEnd', async () => {
+    const knownTool: AgentTool = {
+      name: 'known',
+      description: 'known tool',
+      execute: async (id) => ({ toolCallId: id, name: 'known', content: 'ok' }),
+    };
+
+    const provider = createProvider([
+      {
+        content: '',
+        toolCalls: [
+          { id: 'c-ok', name: 'known', arguments: {} },
+          { id: 'c-missing', name: 'nonexistent', arguments: {} },
+        ],
+        model: 'test',
+        finishReason: 'tool_calls',
+      },
+      { content: 'done', model: 'test', finishReason: 'stop' },
+    ]);
+
+    const context: AgentContext = {
+      systemPrompt: '',
+      messages: [userMsg('go')],
+      tools: [knownTool],
+    };
+
+    let startCount = 0;
+    let endCount = 0;
+    for await (const _e of agentLoop(context, baseConfig(provider, {
+      toolExecution: 'parallel',
+      observer: {
+        onToolStart: () => { startCount++; },
+        onToolEnd: () => { endCount++; },
+      },
+    }))) {
+      // drain
+    }
+
+    // known 走了 start+end；nonexistent 是 immediate，两者都不应触发
+    expect(startCount).toBe(1);
+    expect(endCount).toBe(1);
+  });
+});

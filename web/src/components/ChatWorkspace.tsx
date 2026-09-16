@@ -381,8 +381,9 @@ export default function ChatWorkspace() {
     }) as EventListener);
     store.addEventListener('stream', ((e: CustomEvent) => {
       setStream(e.detail.content);
-      // Derive runStatus from store state (fixes stale closure)
-      setRunStatus(store.getState().chat.runStatus);
+    }) as EventListener);
+    store.addEventListener('runStatus', ((e: CustomEvent) => {
+      setRunStatus(e.detail.status);
     }) as EventListener);
     store.addEventListener('inspector', ((e: CustomEvent) => {
       setInspector(e.detail.inspector);
@@ -442,8 +443,9 @@ export default function ChatWorkspace() {
     await store.openSession(sessionId);
     const state = store.getState();
     setActiveSessionId(sessionId);
-    setRunStatus('idle');
-    setStream('');
+    // 从 store 恢复，不硬编码 idle —— 切回时可能仍有 running 工具或流式内容
+    setRunStatus(state.chat.runStatus);
+    setStream(state.chat.streamingContent ?? '');
     setTasks(state.chat.tasks ?? []);
     setConversationItems(state.chat.conversation ?? []);
     setViewMode(state.chat.viewMode);
@@ -651,7 +653,7 @@ export default function ChatWorkspace() {
                   </span>
                 )}
                 <span className={runStatus === 'error' ? 'status-error' : runStatus === 'streaming' ? 'status-ok' : 'status-neutral'}>{runStatus}</span>
-                <button className="btn-secondary" onClick={abort} disabled={runStatus !== 'streaming' && runStatus !== 'waiting'}>中止</button>
+                <button className="btn-secondary" onClick={abort} disabled={!['streaming', 'waiting', 'tools', 'sending'].includes(runStatus)}>中止</button>
               </div>
             </div>
           </div>

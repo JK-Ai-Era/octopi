@@ -27,6 +27,7 @@ import type {
 } from '../../web/sdk/client.js';
 
 import { ConversationAdapter } from '../conversation/adapter.js';
+import type { AdapterSnapshot } from '../conversation/adapter.js';
 import type { ConversationItem, ToolConversationItem, ViewMode } from '../conversation/types.js';
 
 // ──────────────────────────────────────
@@ -46,6 +47,7 @@ export interface RuntimeEventMap {
   'inspector': InspectorEvent;
   'tasks': TasksEvent;
   'error': RuntimeErrorEvent;
+  'runStatus': RunStatusEvent;
 }
 
 export class RuntimeEvent<T = unknown> extends Event {
@@ -68,6 +70,7 @@ export class ApprovalEvent extends RuntimeEvent<{ approvals: PendingApproval[] }
 export class InspectorEvent extends RuntimeEvent<{ inspector: InspectorState }> {}
 export class TasksEvent extends RuntimeEvent<{ tasks: SessionTaskView[] }> {}
 export class RuntimeErrorEvent extends RuntimeEvent<{ error: string }> {}
+export class RunStatusEvent extends RuntimeEvent<{ status: RunStatus }> {}
 
 // ──────────────────────────────────────
 // State types
@@ -129,11 +132,18 @@ export interface ChatState {
 // Store
 // ──────────────────────────────────────
 
+interface SessionCacheEntry {
+  items: ConversationItem[];
+  viewMode: ViewMode;
+  adapterState: AdapterSnapshot;
+  inspector: InspectorState;
+}
+
 export class OctopiRuntimeStore extends EventTarget {
   private readonly client: OctopiClient;
   private readonly conversationAdapter = new ConversationAdapter();
   private static readonly MAX_CACHE_SIZE = 20;
-  private readonly conversationCache = new Map<string, { items: ConversationItem[]; viewMode: ViewMode }>();
+  private readonly conversationCache = new Map<string, SessionCacheEntry>();
 
   private connectionState: ConnectionState = 'idle';
   private agents: AgentSummary[] = [];
@@ -147,9 +157,9 @@ export class OctopiRuntimeStore extends EventTarget {
     this.client.on({
       onConnectionState: (state: ConnectionState) => this.applyConnectionState(state),
       onWelcome: (agents: AgentSummary[]) => this.applyWelcome(agents),
-      onAccepted: (_sessionId: string | undefined, _messageId: string | undefined) => this.applyAccepted(),
-      onEvent: (_sessionId: string | undefined, event: AgentEventEnvelope) => this.applyEvent(event),
-      onState: (_sessionId: string | undefined, state: string) => this.applyExternalState(state),
+      onAccepted: (sessionId: string | undefined, _messageId: string | undefined) => this.applyAccepted(sessionId),
+      onEvent: (sessionId: string | undefined, event: AgentEventEnvelope) => this.applyEvent(sessionId, event),
+      onState: (sessionId: string | undefined, state: string) => this.applyExternalState(sessionId, state),
       onError: (error: Error) => this.emitRuntimeError(error.message),
     });
   }
@@ -209,46 +219,43 @@ export class OctopiRuntimeStore extends EventTarget {
     return this.sessions;
   }
 
-  async openSession(sessionId: string): Promise<SessionView> {
-    // 离开当前会话时缓存运行时对话（含进行中的流式内容）
-    if (this.chat.sessionId && this.chat.conversation.length > 0) {
-      if (this.conversationCache.size >= OctopiRuntimeStore.MAX_CACHE_SIZE) {
-        const oldest = this.conversationCache.keys().next().value;
-        if (oldest) this.conversationCache.delete(oldest);
-      }
-      this.conversationCache.set(this.chat.sessionId, {
-        items: this.chat.conversation,
-        viewMode: this.chat.viewMode,
-      });
+  /** 将当前会话的运行时状态写入缓存（切走时调用） */
+  private cacheCurrentSession(): void {
+    const sid = this.chat.sessionId;
+    if (!sid) return;
+    // 仅在 key 不存在且容量已满时淘汰，避免更新已有条目时误删其他会话
+    if (!this.conversationCache.has(sid) && this.conversationCache.size >= OctopiRuntimeStore.MAX_CACHE_SIZE) {
+      const oldest = this.conversationCache.keys().next().value;
+      if (oldest) this.conversationCache.delete(oldest);
     }
+    this.conversationCache.set(sid, {
+      items: this.chat.conversation,
+      viewMode: this.chat.viewMode,
+      adapterState: this.conversationAdapter.getState(),
+      inspector: { ...this.chat.inspector },
+    });
+  }
+
+  async openSession(sessionId: string): Promise<SessionView> {
+    const isSameSession = this.chat.sessionId === sessionId;
+
+    if (!isSameSession) {
+      // 切走：缓存当前会话
+      this.cacheCurrentSession();
+      // 为目标会话预建空缓存条目，使 await 窗口内的事件能写入而非丢弃
+      if (!this.conversationCache.has(sessionId)) {
+        this.conversationCache.set(sessionId, {
+          items: [],
+          viewMode: 'history',
+          adapterState: { toolIndex: {}, streamingContent: '' },
+          inspector: {},
+        });
+      }
+    }
+    // 同会话重开：live 状态永远不比 cache 旧，不缓存也不 restore/reset
 
     const view = await this.client.getSession(sessionId);
-
-    this.conversationAdapter.reset();
     this.currentSession = view;
-
-    const cached = this.conversationCache.get(sessionId);
-
-    // 服务端消息是已落盘的权威历史；缓存仅用于补全尚未持久化的运行时条目
-    let conversationItems: ConversationItem[] = [];
-    let viewMode: ViewMode = 'history';
-    try {
-      const page = await this.client.getSessionMessages(sessionId, { limit: 100 });
-      const messages: MessageRecord[] = page.messages;
-      conversationItems = ConversationAdapter.buildHistoryItems(messages, sessionId);
-    } catch {
-      conversationItems = [];
-    }
-
-    if (cached) {
-      if (cached.items.length > conversationItems.length) {
-        // 缓存更长：包含未落盘的流式/工具中间态
-        conversationItems = cached.items;
-        viewMode = cached.viewMode === 'history' ? 'hybrid' : cached.viewMode;
-      } else if (cached.viewMode !== 'history') {
-        viewMode = cached.viewMode;
-      }
-    }
 
     let tasks: SessionTaskView[] = [];
     try {
@@ -261,16 +268,74 @@ export class OctopiRuntimeStore extends EventTarget {
       }
     }
 
+    const approvals = await this.client.listApprovals();
+
+    // ── 同会话重开：live 为权威，只刷新 tasks/approvals，不动 conversation/adapter ──
+    if (isSameSession) {
+      this.chat = { ...this.chat, tasks, approvals };
+      this.dispatch('session', new SessionEvent('session', { session: this.currentSession }));
+      this.dispatch('tasks', new TasksEvent('tasks', { tasks }));
+      this.dispatch('approval', new ApprovalEvent('approval', { approvals }));
+      return view;
+    }
+
+    // ── 切换到其他会话：以服务端历史为权威，缓存补全未落盘运行时条目 ──
+
+    // await 窗口内源会话事件仍走 live 路径（chat.sessionId 未变），
+    // 替换 chat 前重新缓存，确保这些更新不被丢弃
+    this.cacheCurrentSession();
+
+    let conversationItems: ConversationItem[] = [];
+    let viewMode: ViewMode = 'history';
+    try {
+      const page = await this.client.getSessionMessages(sessionId, { limit: 100 });
+      conversationItems = ConversationAdapter.buildHistoryItems(page.messages, sessionId);
+    } catch {
+      conversationItems = [];
+    }
+
+    // await 期间缓存可能已被后台事件更新，重新读取
+    const cached = this.conversationCache.get(sessionId);
+    let usedCacheItems = false;
+    if (cached && cached.items.length > 0) {
+      if (cached.items.length > conversationItems.length) {
+        conversationItems = cached.items;
+        viewMode = cached.viewMode === 'history' ? 'hybrid' : cached.viewMode;
+        usedCacheItems = true;
+      } else if (cached.viewMode !== 'history') {
+        viewMode = cached.viewMode;
+      }
+    }
+
+    if (usedCacheItems && cached) {
+      this.conversationAdapter.restoreState(cached.adapterState);
+    } else {
+      this.conversationAdapter.reset();
+      // 预建的空缓存条目（窗口内无事件写入）用完即删，避免占 LRU 槽位
+      if (cached && cached.items.length === 0) {
+        this.conversationCache.delete(sessionId);
+      }
+    }
+
+    const tools = this.deriveTools(conversationItems);
+    const hasRunningTool = tools.some(t => t.status === 'running');
+    const streamingContent = usedCacheItems ? (cached?.adapterState.streamingContent ?? '') : '';
+    const derivedRunStatus: RunStatus = hasRunningTool
+      ? 'tools'
+      : streamingContent
+        ? 'streaming'
+        : 'idle';
+
     this.chat = {
       sessionId,
       agentId: view.meta.agentId,
       viewMode,
       conversation: conversationItems,
-      streamingContent: '',
-      runStatus: 'idle',
-      tools: this.deriveTools(conversationItems),
-      approvals: await this.client.listApprovals(),
-      inspector: {},
+      streamingContent,
+      runStatus: derivedRunStatus,
+      tools,
+      approvals,
+      inspector: cached?.inspector ? { ...cached.inspector } : {},
       tasks,
     };
 
@@ -281,6 +346,8 @@ export class OctopiRuntimeStore extends EventTarget {
     this.dispatch('conversation', new ConversationEvent('conversation', { items: this.chat.conversation }));
     this.dispatch('viewMode', new ViewModeEvent('viewMode', { mode: this.chat.viewMode }));
     this.dispatch('tool', new ToolEvent('tool', { tools: this.chat.tools }));
+    this.dispatch('stream', new StreamEvent('stream', { streaming: derivedRunStatus === 'streaming', content: streamingContent }));
+    this.dispatch('runStatus', new RunStatusEvent('runStatus', { status: derivedRunStatus }));
     this.dispatch('approval', new ApprovalEvent('approval', { approvals: this.chat.approvals }));
     this.dispatch('inspector', new InspectorEvent('inspector', { inspector: this.chat.inspector }));
     this.dispatch('tasks', new TasksEvent('tasks', { tasks: this.chat.tasks }));
@@ -289,6 +356,20 @@ export class OctopiRuntimeStore extends EventTarget {
   }
 
   async createSession(agentId: string, options?: { sessionId?: string; metadata?: Record<string, unknown> }): Promise<SessionSummary> {
+    // 离开当前会话前先缓存，避免丢掉进行中的工具/流式状态
+    this.cacheCurrentSession();
+
+    // 若调用方指定了 sessionId，预建空缓存条目使 await 窗口内事件可写入
+    const knownId = options?.sessionId;
+    if (knownId && !this.conversationCache.has(knownId)) {
+      this.conversationCache.set(knownId, {
+        items: [],
+        viewMode: 'history',
+        adapterState: { toolIndex: {}, streamingContent: '' },
+        inspector: {},
+      });
+    }
+
     const session = await this.client.createSession({ agentId, ...options });
 
     this.conversationAdapter.reset();
@@ -318,6 +399,8 @@ export class OctopiRuntimeStore extends EventTarget {
     this.dispatch('conversation', new ConversationEvent('conversation', { items: this.chat.conversation }));
     this.dispatch('viewMode', new ViewModeEvent('viewMode', { mode: this.chat.viewMode }));
     this.dispatch('tool', new ToolEvent('tool', { tools: this.chat.tools }));
+    this.dispatch('stream', new StreamEvent('stream', { streaming: false, content: '' }));
+    this.dispatch('runStatus', new RunStatusEvent('runStatus', { status: 'idle' }));
     this.dispatch('approval', new ApprovalEvent('approval', { approvals: this.chat.approvals }));
     this.dispatch('inspector', new InspectorEvent('inspector', { inspector: this.chat.inspector }));
     this.dispatch('tasks', new TasksEvent('tasks', { tasks: this.chat.tasks }));
@@ -334,7 +417,7 @@ export class OctopiRuntimeStore extends EventTarget {
 
     this.setViewMode(this.chat.viewMode === 'history' ? 'hybrid' : 'runtime');
 
-    this.chat.runStatus = 'sending';
+    this.setRunStatus('sending');
     this.chat.streamingContent = '';
 
     this.dispatch('chat', new ChatEvent('chat', { conversation: this.chat.conversation }));
@@ -342,7 +425,7 @@ export class OctopiRuntimeStore extends EventTarget {
     this.dispatch('stream', new StreamEvent('stream', { streaming: false, content: '' }));
 
     this.client.sendChat(this.chat.sessionId, this.chat.agentId, content);
-    this.chat.runStatus = 'waiting';
+    this.setRunStatus('waiting');
   }
 
   abort(): void {
@@ -364,32 +447,44 @@ export class OctopiRuntimeStore extends EventTarget {
     this.dispatch('connection', new ConnectionEvent('connection', { state: this.connectionState, agents: this.agents }));
   }
 
-  private applyAccepted(): void {
-    this.chat.runStatus = 'waiting';
+  private applyAccepted(sessionId?: string): void {
+    // 仅当前会话的 accepted 才更新 UI 状态
+    if (sessionId && this.chat.sessionId && sessionId !== this.chat.sessionId) return;
+    this.setRunStatus('waiting');
   }
 
-  private applyExternalState(state: string): void {
+  private applyExternalState(sessionId: string | undefined, state: string): void {
     if (!this.chat) return;
+    // 状态事件仅作用于当前会话；其他会话的状态不影响 UI
+    if (sessionId && this.chat.sessionId && sessionId !== this.chat.sessionId) return;
     switch (state) {
       case 'running':
-        this.chat.runStatus = 'streaming';
+        this.setRunStatus('streaming');
         break;
       case 'idle':
-        if (this.chat.runStatus !== 'error') this.chat.runStatus = 'idle';
+        if (this.chat.runStatus !== 'error') this.setRunStatus('idle');
         break;
       case 'aborted':
-        this.chat.runStatus = 'aborted';
+        this.setRunStatus('aborted');
         break;
       case 'error':
-        this.chat.runStatus = 'error';
+        this.setRunStatus('error');
         break;
       default:
         break;
     }
   }
 
-  private applyEvent(event: AgentEventEnvelope): void {
-    const sessionId = this.chat.sessionId ?? '';
+  private applyEvent(eventSessionId: string | undefined, event: AgentEventEnvelope): void {
+    const currentSessionId = this.chat.sessionId ?? '';
+
+    // 事件明确属于另一个已打开过的会话：更新其缓存，不影响当前 UI
+    if (currentSessionId && eventSessionId && eventSessionId !== currentSessionId) {
+      this.applyEventToCachedSession(eventSessionId, event);
+      return;
+    }
+
+    const sessionId = currentSessionId;
 
     if (this.chat.viewMode === 'history' && this.chat.sessionId) {
       this.setViewMode('hybrid');
@@ -407,17 +502,17 @@ export class OctopiRuntimeStore extends EventTarget {
       this.chat.tools = this.deriveTools(convResult.items);
 
       if (convResult.streaming.active) {
-        this.chat.runStatus = 'streaming';
+        this.setRunStatus('streaming');
       } else if (event.type === 'aborted') {
-        this.chat.runStatus = 'aborted';
+        this.setRunStatus('aborted');
       } else if (event.type === 'model.call.error' || event.type === 'engine.error') {
-        this.chat.runStatus = 'error';
+        this.setRunStatus('error');
       } else if (event.type === 'turn.end') {
         // phase=pre_tools：工具即将执行，不能当作 idle
         const phase = (event.data as { phase?: string } | undefined)?.phase;
-        this.chat.runStatus = phase === 'pre_tools' ? 'tools' : 'idle';
+        this.setRunStatus(phase === 'pre_tools' ? 'tools' : 'idle');
       } else if (event.type === 'engine.end' || event.type === 'interrupted') {
-        this.chat.runStatus = 'idle';
+        this.setRunStatus('idle');
       }
 
       this.dispatch('conversation', new ConversationEvent('conversation', { items: this.chat.conversation }));
@@ -542,6 +637,28 @@ export class OctopiRuntimeStore extends EventTarget {
     }
   }
 
+  /**
+   * 将事件应用到后台会话的缓存条目。
+   * 切走后工具完成、流式继续等场景，切回时才能看到正确终态。
+   */
+  private applyEventToCachedSession(sessionId: string, event: AgentEventEnvelope): void {
+    const cached = this.conversationCache.get(sessionId);
+    if (!cached) return;
+
+    // 用临时 adapter 复原该会话的追踪状态后应用事件
+    const adapter = new ConversationAdapter();
+    adapter.restoreState(cached.adapterState);
+    const result = adapter.applyEvent(event, sessionId, cached.items);
+    if (!result.changed) return;
+
+    this.conversationCache.set(sessionId, {
+      items: result.items,
+      viewMode: cached.viewMode === 'history' ? 'hybrid' : cached.viewMode,
+      adapterState: adapter.getState(),
+      inspector: cached.inspector,
+    });
+  }
+
   private emitRuntimeError(message: string): void {
     this.dispatch('error', new RuntimeErrorEvent('error', { error: message }));
   }
@@ -580,6 +697,12 @@ export class OctopiRuntimeStore extends EventTarget {
     this.dispatch('viewMode', new ViewModeEvent('viewMode', { mode }));
   }
 
+  private setRunStatus(status: RunStatus): void {
+    if (this.chat.runStatus === status) return;
+    this.chat.runStatus = status;
+    this.dispatch('runStatus', new RunStatusEvent('runStatus', { status }));
+  }
+
   private createEmptyChat(): ChatState {
     return {
       viewMode: 'history',
@@ -596,6 +719,14 @@ export class OctopiRuntimeStore extends EventTarget {
   private deriveTools(items: ConversationItem[]): ToolRun[] {
     return items
       .filter((i): i is ToolConversationItem => i.role === 'tool')
-      .map((t) => ({ toolCallId: t.toolCallId, toolName: t.toolName, args: t.args, status: t.status, startedAt: t.createdAt, endedAt: t.status !== 'running' ? t.createdAt : undefined, error: t.error }));
+      .map((t) => ({
+        toolCallId: t.toolCallId,
+        toolName: t.toolName,
+        args: t.args,
+        status: t.status,
+        startedAt: t.createdAt,
+        endedAt: t.endedAt ?? (t.status !== 'running' ? t.createdAt : undefined),
+        error: t.error,
+      }));
   }
 }

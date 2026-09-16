@@ -23,6 +23,13 @@ import type {
   StreamingState,
 } from './types.js';
 
+/** ConversationAdapter 内部追踪状态快照（session 切换时缓存用） */
+export interface AdapterSnapshot {
+  currentAssistantId?: string;
+  toolIndex: Record<string, string>;
+  streamingContent: string;
+}
+
 // ──────────────────────────────────────
 // Helpers
 // ──────────────────────────────────────
@@ -143,7 +150,17 @@ export class ConversationAdapter {
       case 'tool.exec.end': {
         const toolCallId = String(event.data?.toolCallId ?? '');
         const isError = Boolean(event.data?.isError ?? event.data?.hasError);
-        const itemId = this.toolIndex[toolCallId];
+        let itemId = this.toolIndex[toolCallId];
+        // Fallback: toolIndex 可能在 session 切换后丢失，按 toolCallId 反查 items
+        if (!itemId) {
+          const found = items.find(
+            (it) => it.role === 'tool' && (it as ToolConversationItem).toolCallId === toolCallId,
+          );
+          if (found) {
+            itemId = found.id;
+            this.toolIndex[toolCallId] = itemId;
+          }
+        }
         if (itemId) {
           items = items.map((it) =>
             it.id === itemId && it.role === 'tool'
@@ -152,11 +169,12 @@ export class ConversationAdapter {
                   status: isError ? 'error' : 'success',
                   result: event.data?.result,
                   error: isError ? String(event.data?.result ?? 'Tool failed') : undefined,
+                  endedAt: event.timestamp ?? Date.now(),
                 }
               : it,
           );
+          changed = true;
         }
-        changed = true;
         break;
       }
 
@@ -530,8 +548,24 @@ export class ConversationAdapter {
   }
 
   // ──────────────────────────────────
-  // Reset
+  // Session switch state persistence
   // ──────────────────────────────────
+
+  /** 导出内部追踪状态，用于 session 切换时缓存。 */
+  getState(): AdapterSnapshot {
+    return {
+      currentAssistantId: this.currentAssistantId,
+      toolIndex: { ...this.toolIndex },
+      streamingContent: this.streamingContent,
+    };
+  }
+
+  /** 恢复此前导出的内部状态（session 切回时调用）。 */
+  restoreState(state: AdapterSnapshot): void {
+    this.currentAssistantId = state.currentAssistantId;
+    this.toolIndex = { ...state.toolIndex };
+    this.streamingContent = state.streamingContent ?? '';
+  }
 
   /**
    * 当切换 session 时重置内部状态。

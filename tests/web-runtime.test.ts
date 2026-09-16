@@ -511,3 +511,162 @@ describe('Hybrid mode paths', () => {
     expect((store.getState().chat.conversation[0] as { content?: string }).content).toContain('hello from s1');
   });
 });
+
+describe('Session switch preserves tool execution state', () => {
+  function createMockClient() {
+    const state: { eventFn?: Function; stateFn?: Function } = {};
+    const client = {
+      on(events: Record<string, any>) {
+        state.eventFn = events.onEvent;
+        state.stateFn = events.onState;
+      },
+      async listApprovals() { return []; },
+      async listSessions() { return []; },
+      sendSubscribe() {},
+      sendChat() {},
+      emitEvent(sessionId: string | undefined, event: Record<string, unknown>) {
+        state.eventFn?.(sessionId, event);
+      },
+      emitState(sessionId: string | undefined, s: string) {
+        state.stateFn?.(sessionId, s);
+      },
+      state,
+    };
+    return client as any;
+  }
+
+  async function openSession(store: any, client: any, sessionId: string) {
+    client.getSession = async (id: string) => ({
+      meta: { id, agentId: 'a1' },
+      messageCount: 0,
+      turnCount: 0,
+    });
+    client.getSessionMessages = async () => ({ messages: [] });
+    client.listApprovals = async () => [];
+    await store.openSession(sessionId);
+  }
+
+  it('tool status updates after switching away and back', async () => {
+    const client = createMockClient();
+    const store = new OctopiRuntimeStore(client);
+
+    await openSession(store, client, 's1');
+    client.emitEvent('s1', { type: 'tool.exec.start', data: { toolCallId: 'tc1', toolName: 'search' } });
+
+    let tools = store.getState().chat.tools;
+    expect(tools).toHaveLength(1);
+    expect(tools[0].status).toBe('running');
+
+    // 切走再切回
+    await openSession(store, client, 's2');
+    await openSession(store, client, 's1');
+
+    tools = store.getState().chat.tools;
+    expect(tools).toHaveLength(1);
+    expect(tools[0].status).toBe('running');
+
+    // 工具完成事件到达
+    client.emitEvent('s1', { type: 'tool.exec.end', data: { toolCallId: 'tc1', result: 'ok' } });
+    tools = store.getState().chat.tools;
+    expect(tools[0].status).toBe('success');
+  });
+
+  it('tool.exec.end from background session updates cached items', async () => {
+    const client = createMockClient();
+    const store = new OctopiRuntimeStore(client);
+
+    await openSession(store, client, 's1');
+    client.emitEvent('s1', { type: 'tool.exec.start', data: { toolCallId: 'tc1', toolName: 'search' } });
+    expect(store.getState().chat.tools[0].status).toBe('running');
+
+    // 切到 s2
+    await openSession(store, client, 's2');
+    expect(store.getState().chat.tools).toHaveLength(0);
+
+    // s1 的工具在后台完成
+    client.emitEvent('s1', { type: 'tool.exec.end', data: { toolCallId: 'tc1', result: 'done' } });
+
+    // 当前会话 s2 不受影响
+    expect(store.getState().chat.tools).toHaveLength(0);
+
+    // 切回 s1，应看到已完成的工具
+    await openSession(store, client, 's1');
+    const tools = store.getState().chat.tools;
+    expect(tools).toHaveLength(1);
+    expect(tools[0].status).toBe('success');
+  });
+
+  it('events from other session do not pollute current conversation', async () => {
+    const client = createMockClient();
+    const store = new OctopiRuntimeStore(client);
+
+    await openSession(store, client, 's1');
+    await openSession(store, client, 's2');
+
+    // s1 的事件不应进入 s2 的对话
+    client.emitEvent('s1', { type: 'llm_stream_delta', data: { delta: 'should not appear' } });
+    client.emitEvent('s1', { type: 'tool.exec.start', data: { toolCallId: 'x', toolName: 'run' } });
+
+    expect(store.getState().chat.conversation).toHaveLength(0);
+    expect(store.getState().chat.tools).toHaveLength(0);
+  });
+
+  it('streaming assistant continues correctly after switch away and back', async () => {
+    const client = createMockClient();
+    const store = new OctopiRuntimeStore(client);
+
+    await openSession(store, client, 's1');
+    client.emitEvent('s1', { type: 'llm_stream_delta', data: { delta: 'Hello' } });
+    expect(store.getState().chat.streamingContent).toBe('Hello');
+
+    await openSession(store, client, 's2');
+    await openSession(store, client, 's1');
+
+    // 恢复后继续接收 delta，应追加到同一条 assistant
+    client.emitEvent('s1', { type: 'llm_stream_delta', data: { delta: ' world' } });
+    expect(store.getState().chat.streamingContent).toBe('Hello world');
+
+    const items = store.getState().chat.conversation;
+    const assistants = items.filter((i: any) => i.role === 'assistant');
+    expect(assistants).toHaveLength(1);
+    expect((assistants[0] as any).content).toBe('Hello world');
+  });
+
+  it('openSession restores runStatus and streamingContent from cache', async () => {
+    const client = createMockClient();
+    const store = new OctopiRuntimeStore(client);
+
+    await openSession(store, client, 's1');
+    client.emitEvent('s1', { type: 'llm_stream_delta', data: { delta: 'Partial answer' } });
+    client.emitEvent('s1', { type: 'tool.exec.start', data: { toolCallId: 'tc1', toolName: 'search' } });
+
+    expect(store.getState().chat.tools[0].status).toBe('running');
+
+    await openSession(store, client, 's2');
+    await openSession(store, client, 's1');
+
+    // 切回瞬间：runStatus 应为 tools（有 running 工具），streamingContent 应保留
+    const state = store.getState().chat;
+    expect(state.runStatus).toBe('tools');
+    expect(state.tools).toHaveLength(1);
+    expect(state.tools[0].status).toBe('running');
+  });
+
+  it('same-session reopen preserves live state without restore', async () => {
+    const client = createMockClient();
+    const store = new OctopiRuntimeStore(client);
+
+    await openSession(store, client, 's1');
+    client.emitEvent('s1', { type: 'tool.exec.start', data: { toolCallId: 'tc1', toolName: 'search' } });
+    expect(store.getState().chat.tools[0].status).toBe('running');
+
+    // 同会话重开不应破坏 live 状态
+    await openSession(store, client, 's1');
+    expect(store.getState().chat.tools).toHaveLength(1);
+    expect(store.getState().chat.tools[0].status).toBe('running');
+
+    // 工具完成后状态应正常更新
+    client.emitEvent('s1', { type: 'tool.exec.end', data: { toolCallId: 'tc1', result: 'ok' } });
+    expect(store.getState().chat.tools[0].status).toBe('success');
+  });
+});

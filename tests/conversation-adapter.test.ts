@@ -286,6 +286,53 @@ describe('ConversationAdapter', () => {
       expect(tool.error).toBe('timeout');
     });
 
+    it('falls back to searching items by toolCallId when toolIndex is empty', () => {
+      let r = adapter.applyEvent(
+        { type: 'tool.exec.start', data: { toolCallId: 'tc1', toolName: 'search' } },
+        sid,
+        items,
+      );
+      items = r.items;
+
+      // 模拟 session 切换后 toolIndex 被清空，但 items 仍在
+      adapter.reset();
+
+      r = adapter.applyEvent(
+        { type: 'tool.exec.end', data: { toolCallId: 'tc1', result: 'found' } },
+        sid,
+        items,
+      );
+
+      const tool = r.items[0] as ToolConversationItem;
+      expect(tool.status).toBe('success');
+      expect(tool.result).toBe('found');
+    });
+
+    it('getState/restoreState preserves toolIndex across session switch', () => {
+      let r = adapter.applyEvent(
+        { type: 'tool.exec.start', data: { toolCallId: 'tc1', toolName: 'search' } },
+        sid,
+        items,
+      );
+      items = r.items;
+
+      const snapshot = adapter.getState();
+      expect(snapshot.toolIndex['tc1']).toBeDefined();
+
+      adapter.reset();
+      expect(adapter.getState().toolIndex).toEqual({});
+
+      adapter.restoreState(snapshot);
+      r = adapter.applyEvent(
+        { type: 'tool.exec.end', data: { toolCallId: 'tc1', result: 'ok' } },
+        sid,
+        items,
+      );
+
+      const tool = r.items[0] as ToolConversationItem;
+      expect(tool.status).toBe('success');
+    });
+
     it('links tool calls to assistant item', () => {
       // First create a streaming assistant
       let r = adapter.applyEvent({ type: 'llm_stream_delta', data: { delta: '...' } }, sid, items);

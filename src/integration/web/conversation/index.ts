@@ -3,6 +3,7 @@
  */
 
 export { ConversationAdapter } from './adapter.js';
+export type { AdapterSnapshot } from './adapter.js';
 export type {
   ConversationItem,
   ConversationRole,

@@ -1,3 +1,48 @@
+## v0.28.1 (2026-09-17)
+
+### fix(web): 会话切换保留工具/流式状态；工具完成即时 yield tool_end
+
+修复 WebUI 两个核心问题：切换 session 后工具执行状态卡在 running；复杂请求下工具结果批量滞后显示。
+
+#### Loop — 工具执行实时化
+
+- 并行模式改用 `Promise.race` 收割：每个工具完成后立即 yield `tool_end`，不再等全部跑完
+- `afterToolCall`（SecurityGuard 出口检查）在 yield **之前**执行，事件面拿到脱敏后结果，与串行路径契约一致
+- `observer.onToolEnd` 统一挪到 afterToolCall 之后；immediate 结果（工具不存在/参数失败/block）不触发 observer，保持 start/end 配对
+- `afterToolCall` / `observer` 抛异常时降级为错误结果，不中断收割循环（保证 `agent_end` 契约）
+- 删除已内联的 `executeToolCalls` / `executeSequential` / `executeParallel`
+
+#### Web Runtime — 会话状态持久化
+
+- `SessionCacheEntry` 扩展为 `{ items, viewMode, adapterState, inspector }`
+- 切走时缓存 adapter 追踪状态（toolIndex / currentAssistantId / streamingContent）与 inspector
+- 切回时恢复：有 running 工具 → `runStatus='tools'`，有流式 → `streaming`；UI 从 `getState()` 读取而非硬编码 idle
+- 同会话重开：live 为权威，只刷新 tasks/approvals，不 cache/restore/reset
+- 切走 await 窗口内源会话事件写回 cache（替换 chat 前二次 `cacheCurrentSession`）
+- 目标会话预建空 cache 条目，窗口内事件不丢；用完即删
+- 后台会话事件通过 `applyEventToCachedSession` 更新缓存，切回时可见终态
+- 事件按 sessionId 路由：其他会话事件不污染当前对话流
+- `tool.exec.end` 增加 toolCallId 反查兜底；孤儿 end 不再置 `changed=true`
+- `deriveTools` 读取真实 `endedAt`（adapter 在 tool.exec.end 时打戳）
+- `createSession` 补 dispatch `runStatus`/`stream`；指定 sessionId 时预建 cache
+
+#### Runner / Protocol
+
+- `tool.exec.start/end`、`turn.end`、`llm_stream_delta` 事件补 `agentId`/`sessionId`
+- `deriveSessionState`：`turn.end` phase=pre_tools 下发 `running` 而非 `idle`
+- `applyAccepted` 按 sessionId 过滤，避免跨会话误改状态栏
+
+#### UI
+
+- 新增 `runStatus` 事件监听，状态变更实时反映
+- 中止按钮在 `tools`/`sending` 状态下也可用
+
+#### 测试
+
+- 新增并行契约：afterToolCall 脱敏先于 yield、快工具先 yield、immediate 不触发 observer
+- 新增 store：切回恢复 tools/streaming、同会话保活、后台事件更新缓存
+- 新增 adapter：toolIndex 兜底反查、getState/restoreState 持久化
+
 ## v0.28.0 (2026-09-17)
 
 ### feat(core): Cron 时间数学原语；两域改调统一 nextFire

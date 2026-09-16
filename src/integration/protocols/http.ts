@@ -235,8 +235,11 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
       case 'tool.exec.end':
       case 'model.call.start':
         return { type: 'state', sessionId: sessionKey, state: 'running' };
-      case 'turn.end':
-        return { type: 'state', sessionId: sessionKey, state: 'idle' };
+      case 'turn.end': {
+        // phase=pre_tools 表示工具即将执行，不能标 idle
+        const phase = (event.data as { phase?: string } | undefined)?.phase;
+        return { type: 'state', sessionId: sessionKey, state: phase === 'pre_tools' ? 'running' : 'idle' };
+      }
       case 'aborted':
         return { type: 'state', sessionId: sessionKey, state: 'aborted' };
       case 'engine.error':

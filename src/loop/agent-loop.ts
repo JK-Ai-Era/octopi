@@ -292,22 +292,126 @@ export async function* agentLoop(
       yield { type: 'tool_start', toolCall: tc, timestamp: Date.now() };
     }
 
-    const toolResults = await executeToolCalls(
-      toolCalls,
-      currentContext,
-      toolExecution,
-      beforeToolCall,
-      afterToolCall,
-      observer,
-      signal,
+    // 7b. 执行工具，每个完成后立即 yield tool_end（避免全部跑完才更新 UI）
+    const toolCallById = new Map(toolCalls.map(tc => [tc.id, tc]));
+    const toolResults: LoopToolResult[] = [];
+    const hasSequentialTool = toolCalls.some(
+      (tc) => currentContext.tools?.find((t) => t.name === tc.name)?.executionMode === 'sequential',
     );
 
-    // 7b. 为每个工具结果发出 tool_end 事件（携带原始 toolCall，含 arguments）
-    const toolCallById = new Map(toolCalls.map(tc => [tc.id, tc]));
-    for (const result of toolResults) {
-      const tc = toolCallById.get(result.toolCallId)
-        ?? { id: result.toolCallId, name: result.name, arguments: {} };
-      yield { type: 'tool_end', toolCall: tc, result, timestamp: Date.now() };
+    if (toolExecution === 'sequential' || hasSequentialTool) {
+      // 串行：逐个执行，每个完成后立即 yield
+      for (const tc of toolCalls) {
+        let result: LoopToolResult;
+        if (signal?.aborted) {
+          result = {
+            toolCallId: tc.id,
+            name: tc.name,
+            content: 'Error: Agent aborted before tool execution',
+            isError: true,
+            durationMs: 0,
+          };
+        } else {
+          result = await executeOneTool(tc, currentContext, beforeToolCall, afterToolCall, observer, signal);
+        }
+        toolResults.push(result);
+        yield { type: 'tool_end', toolCall: tc, result, timestamp: Date.now() };
+      }
+    } else {
+      // 并行：先串行 prepare，再并行 execute，每个完成立即 yield。
+      // afterToolCall 按完成序执行（非 toolCalls 序）；SecurityGuard 等无序副作用不受影响。
+      // 若 afterToolCall 依赖工具调用顺序写共享状态，请改用 sequential 模式。
+      const prepared: Array<
+        | { kind: 'prepared'; toolCall: ToolCall; tool: AgentTool; args: unknown }
+        | { kind: 'immediate'; toolCall: ToolCall; result: LoopToolResult }
+      > = [];
+      for (const tc of toolCalls) {
+        const prep = await prepareToolCall(tc, currentContext, beforeToolCall, signal);
+        if (prep.kind === 'immediate') {
+          prepared.push({ kind: 'immediate', toolCall: tc, result: prep.result });
+        } else {
+          prepared.push({ kind: 'prepared', toolCall: tc, tool: prep.tool, args: prep.args });
+        }
+      }
+
+      // 启动全部执行，用带 tag 的 Promise.race 逐个收割
+      const pending = new Map<string, Promise<{ id: string; result: LoopToolResult }>>();
+      for (const p of prepared) {
+        if (p.kind === 'immediate') {
+          pending.set(p.toolCall.id, Promise.resolve({ id: p.toolCall.id, result: p.result }));
+          continue;
+        }
+        pending.set(p.toolCall.id, (async () => {
+          const startTime = Date.now();
+          try {
+            // observer 异常不应导致 promise reject（否则 Promise.race 会中断收割循环）
+            try { observer?.onToolStart?.({ toolCall: p.toolCall }); } catch { /* observer 异常不中断工具执行 */ }
+            const result = await p.tool.execute(p.toolCall.id, p.args, signal);
+            return { id: p.toolCall.id, result: { ...result, durationMs: Date.now() - startTime } };
+          } catch (error) {
+            return {
+              id: p.toolCall.id,
+              result: {
+                toolCallId: p.toolCall.id,
+                name: p.toolCall.name,
+                content: `Error: ${error instanceof Error ? error.message : String(error)}`,
+                isError: true,
+                durationMs: Date.now() - startTime,
+              } satisfies LoopToolResult,
+            };
+          }
+        })());
+      }
+
+      const completed = new Map<string, LoopToolResult>();
+      while (pending.size > 0) {
+        const { id, result: rawResult } = await Promise.race(pending.values());
+        pending.delete(id);
+
+        // afterToolCall 必须在 yield 之前：SecurityGuard 出口检查会改写 result，
+        // 事件面（WS/UI/EventBus）必须拿到脱敏后的结果，与串行路径契约一致。
+        // afterToolCall 抛异常时降级为错误结果，不中断收割循环（保证 agent_end 契约）。
+        let result = rawResult;
+        if (afterToolCall && !result.isError) {
+          const prepEntry = prepared.find(p => p.toolCall.id === id);
+          try {
+            const afterResult = await afterToolCall(
+              { toolCall: toolCallById.get(id)!, args: prepEntry?.kind === 'prepared' ? prepEntry.args : undefined, result, context: currentContext },
+              signal,
+            );
+            if (afterResult) {
+              result = {
+                ...result,
+                content: afterResult.content ?? result.content,
+                isError: afterResult.isError ?? result.isError,
+                terminate: afterResult.terminate ?? result.terminate,
+              };
+            }
+          } catch (afterError) {
+            result = {
+              ...result,
+              content: `Error in afterToolCall: ${afterError instanceof Error ? afterError.message : String(afterError)}`,
+              isError: true,
+            };
+          }
+        }
+
+        completed.set(id, result);
+        // observer 在 afterToolCall 之后触发，确保 trace/metrics 拿到脱敏后结果。
+        // immediate（工具不存在 / 参数失败 / beforeToolCall.block）从未 onToolStart，
+        // 也不应 onToolEnd，保持 start/end 配对。
+        const prepEntry = prepared.find(p => p.toolCall.id === id);
+        if (prepEntry?.kind !== 'immediate') {
+          try { observer?.onToolEnd?.({ toolCall: toolCallById.get(id)!, result }); } catch { /* observer 异常不中断 */ }
+        }
+        const tc = toolCallById.get(id) ?? { id, name: result.name, arguments: {} };
+        yield { type: 'tool_end', toolCall: tc, result, timestamp: Date.now() };
+      }
+
+      // 按 toolCalls 原序组装 toolResults（保证与历史 tool_calls 一一对应）
+      for (const tc of toolCalls) {
+        toolResults.push(completed.get(tc.id)!);
+      }
     }
 
     // 将工具结果加入消息历史（一次 push，使用 toolResults 数组）
@@ -377,141 +481,6 @@ export async function* agentLoop(
 // ── 工具执行 ──
 
 /**
- * 执行一批工具调用
- */
-async function executeToolCalls(
-  toolCalls: ToolCall[],
-  context: AgentContext,
-  mode: 'parallel' | 'sequential',
-  beforeToolCall: AgentLoopConfig['beforeToolCall'],
-  afterToolCall: AgentLoopConfig['afterToolCall'],
-  observer: AgentLoopConfig['observer'],
-  signal?: AbortSignal,
-): Promise<LoopToolResult[]> {
-  const hasSequentialTool = toolCalls.some(
-    (tc) => context.tools?.find((t) => t.name === tc.name)?.executionMode === 'sequential',
-  );
-
-  if (mode === 'sequential' || hasSequentialTool) {
-    return executeSequential(toolCalls, context, beforeToolCall, afterToolCall, observer, signal);
-  }
-  return executeParallel(toolCalls, context, beforeToolCall, afterToolCall, observer, signal);
-}
-
-/**
- * 串行执行工具调用
- *
- * 不变量：返回结果与 toolCalls 一一对应。中止时为未执行的调用补
- * isError 占位，避免历史中 tool_calls 数 > tool_results 数。
- */
-async function executeSequential(
-  toolCalls: ToolCall[],
-  context: AgentContext,
-  beforeToolCall: AgentLoopConfig['beforeToolCall'],
-  afterToolCall: AgentLoopConfig['afterToolCall'],
-  observer: AgentLoopConfig['observer'],
-  signal?: AbortSignal,
-): Promise<LoopToolResult[]> {
-  const results: LoopToolResult[] = [];
-  for (const tc of toolCalls) {
-    if (signal?.aborted) {
-      results.push({
-        toolCallId: tc.id,
-        name: tc.name,
-        content: 'Error: Agent aborted before tool execution',
-        isError: true,
-        durationMs: 0,
-      });
-      continue;
-    }
-    const result = await executeOneTool(tc, context, beforeToolCall, afterToolCall, observer, signal);
-    results.push(result);
-  }
-  return results;
-}
-
-/**
- * 并行执行工具调用（prepare 串行，execute 并行）
- */
-async function executeParallel(
-  toolCalls: ToolCall[],
-  context: AgentContext,
-  beforeToolCall: AgentLoopConfig['beforeToolCall'],
-  afterToolCall: AgentLoopConfig['afterToolCall'],
-  observer: AgentLoopConfig['observer'],
-  signal?: AbortSignal,
-): Promise<LoopToolResult[]> {
-  // Prepare 阶段串行（参数校验 + beforeToolCall）
-  const prepared: Array<
-    | { kind: 'prepared'; toolCall: ToolCall; tool: AgentTool; args: unknown }
-    | { kind: 'immediate'; toolCall: ToolCall; result: LoopToolResult }
-  > = [];
-
-  for (const tc of toolCalls) {
-    const prep = await prepareToolCall(tc, context, beforeToolCall, signal);
-    if (prep.kind === 'immediate') {
-      prepared.push({ kind: 'immediate', toolCall: tc, result: prep.result });
-    } else {
-      prepared.push({ kind: 'prepared', toolCall: tc, tool: prep.tool, args: prep.args });
-    }
-  }
-
-  // Execute 阶段并行
-  const executePromises = prepared.map(async (p) => {
-    if (p.kind === 'immediate') return p.result;
-
-    observer?.onToolStart?.({ toolCall: p.toolCall });
-    const startTime = Date.now();
-
-    try {
-      const result = await p.tool.execute(p.toolCall.id, p.args, signal);
-      const toolResult: LoopToolResult = {
-        ...result,
-        durationMs: Date.now() - startTime,
-      };
-      observer?.onToolEnd?.({ toolCall: p.toolCall, result: toolResult });
-      return toolResult;
-    } catch (error) {
-      const errorResult: LoopToolResult = {
-        toolCallId: p.toolCall.id,
-        name: p.toolCall.name,
-        content: `Error: ${error instanceof Error ? error.message : String(error)}`,
-        isError: true,
-        durationMs: Date.now() - startTime,
-      };
-      observer?.onToolEnd?.({ toolCall: p.toolCall, result: errorResult });
-      return errorResult;
-    }
-  });
-
-  const executed = await Promise.all(executePromises);
-
-  // afterToolCall 阶段串行（保持顺序）
-  const results: LoopToolResult[] = [];
-  for (let i = 0; i < executed.length; i++) {
-    let result = executed[i];
-    const prepEntry = prepared[i];
-    if (afterToolCall && !result.isError) {
-      const afterResult = await afterToolCall(
-        { toolCall: toolCalls[i], args: prepEntry.kind === 'prepared' ? prepEntry.args : undefined, result, context },
-        signal,
-      );
-      if (afterResult) {
-        result = {
-          ...result,
-          content: afterResult.content ?? result.content,
-          isError: afterResult.isError ?? result.isError,
-          terminate: afterResult.terminate ?? result.terminate,
-        };
-      }
-    }
-    results.push(result);
-  }
-
-  return results;
-}
-
-/**
  * 执行单个工具（prepare + execute + afterToolCall）
  */
 async function executeOneTool(
@@ -527,7 +496,7 @@ async function executeOneTool(
   if (prepared.kind === 'immediate') return prepared.result;
 
   // Execute
-  observer?.onToolStart?.({ toolCall });
+  try { observer?.onToolStart?.({ toolCall }); } catch { /* observer 异常不中断工具执行 */ }
   const startTime = Date.now();
 
   let result: LoopToolResult;
@@ -544,23 +513,32 @@ async function executeOneTool(
     };
   }
 
-  observer?.onToolEnd?.({ toolCall, result });
-
-  // afterToolCall
+  // afterToolCall 抛异常时降级为错误结果，不中断循环
   if (afterToolCall && !result.isError) {
-    const afterResult = await afterToolCall(
-      { toolCall, args: prepared.args, result, context },
-      signal,
-    );
-    if (afterResult) {
+    try {
+      const afterResult = await afterToolCall(
+        { toolCall, args: prepared.args, result, context },
+        signal,
+      );
+      if (afterResult) {
+        result = {
+          ...result,
+          content: afterResult.content ?? result.content,
+          isError: afterResult.isError ?? result.isError,
+          terminate: afterResult.terminate ?? result.terminate,
+        };
+      }
+    } catch (afterError) {
       result = {
         ...result,
-        content: afterResult.content ?? result.content,
-        isError: afterResult.isError ?? result.isError,
-        terminate: afterResult.terminate ?? result.terminate,
+        content: `Error in afterToolCall: ${afterError instanceof Error ? afterError.message : String(afterError)}`,
+        isError: true,
       };
     }
   }
+
+  // observer 在 afterToolCall 之后触发，确保 trace/metrics 拿到脱敏后结果
+  try { observer?.onToolEnd?.({ toolCall, result }); } catch { /* observer 异常不中断 */ }
 
   return result;
 }

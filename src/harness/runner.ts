@@ -112,6 +112,8 @@ export function adaptLoopEvent(
       return {
         type: 'turn.end',
         timestamp: Date.now(),
+        agentId: meta.agentId,
+        sessionId: meta.sessionId,
         data: {
           content: state.assistantContent,
           userText: state.lastUserContent ?? '',
@@ -121,13 +123,15 @@ export function adaptLoopEvent(
         },
       };
     case 'llm_stream_delta':
-      return { type: 'llm_stream_delta', timestamp: event.timestamp, data: event.data };
+      return { type: 'llm_stream_delta', timestamp: event.timestamp, agentId: meta.agentId, sessionId: meta.sessionId, data: event.data };
     case 'tool_start':
-      return { type: 'tool.exec.start', timestamp: event.timestamp, data: { toolCallId: event.toolCall.id, toolName: event.toolCall.name, args: event.toolCall.arguments } };
+      return { type: 'tool.exec.start', timestamp: event.timestamp, agentId: meta.agentId, sessionId: meta.sessionId, data: { toolCallId: event.toolCall.id, toolName: event.toolCall.name, args: event.toolCall.arguments } };
     case 'tool_end':
       return {
         type: 'tool.exec.end',
         timestamp: event.timestamp,
+        agentId: meta.agentId,
+        sessionId: meta.sessionId,
         data: {
           toolCallId: event.toolCall.id,
           toolName: event.toolCall.name,
