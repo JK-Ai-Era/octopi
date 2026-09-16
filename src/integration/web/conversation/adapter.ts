@@ -118,6 +118,16 @@ export class ConversationAdapter {
       // ── Tool exec start ──
       case 'tool.exec.start': {
         const toolCallId = String(event.data?.toolCallId ?? `tc_${Date.now()}`);
+
+        // 已有同 toolCallId 的条目时不重复创建（历史已含、或事件重放）
+        const existing = items.find(
+          (it) => it.role === 'tool' && (it as ToolConversationItem).toolCallId === toolCallId,
+        );
+        if (existing) {
+          this.toolIndex[toolCallId] = existing.id;
+          break;
+        }
+
         const toolItem: ToolConversationItem = {
           id: ConversationAdapter.makeId('tool'),
           role: 'tool',

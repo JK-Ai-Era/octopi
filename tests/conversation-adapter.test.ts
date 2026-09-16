@@ -250,6 +250,36 @@ describe('ConversationAdapter', () => {
       expect(r.toolIndex['tc1']).toBeDefined();
     });
 
+    it('does not create duplicate tool item for same toolCallId', () => {
+      // 第一次 start
+      let r = adapter.applyEvent(
+        { type: 'tool.exec.start', data: { toolCallId: 'tc1', toolName: 'search' } },
+        sid,
+        items,
+      );
+      items = r.items;
+      expect(items.filter(i => i.role === 'tool')).toHaveLength(1);
+
+      // 同 toolCallId 再次 start（事件重放 / 历史已有条目）
+      r = adapter.applyEvent(
+        { type: 'tool.exec.start', data: { toolCallId: 'tc1', toolName: 'search' } },
+        sid,
+        items,
+      );
+      items = r.items;
+      expect(items.filter(i => i.role === 'tool')).toHaveLength(1);
+
+      // end 应更新同一条目
+      r = adapter.applyEvent(
+        { type: 'tool.exec.end', data: { toolCallId: 'tc1', result: 'ok' } },
+        sid,
+        items,
+      );
+      const tools = r.items.filter(i => i.role === 'tool') as ToolConversationItem[];
+      expect(tools).toHaveLength(1);
+      expect(tools[0].status).toBe('success');
+    });
+
     it('updates tool to success on tool.exec.end', () => {
       let r = adapter.applyEvent(
         { type: 'tool.exec.start', data: { toolCallId: 'tc1', toolName: 'search' } },

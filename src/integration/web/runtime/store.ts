@@ -317,6 +317,16 @@ export class OctopiRuntimeStore extends EventTarget {
       }
     }
 
+    // 兜底去重：同 toolCallId 只保留最后一条（历史与缓存可能各有一条）
+    const seenToolIds = new Set<string>();
+    conversationItems = conversationItems.filter((it) => {
+      if (it.role !== 'tool') return true;
+      const tcId = (it as ToolConversationItem).toolCallId;
+      if (seenToolIds.has(tcId)) return false;
+      seenToolIds.add(tcId);
+      return true;
+    });
+
     const tools = this.deriveTools(conversationItems);
     const hasRunningTool = tools.some(t => t.status === 'running');
     const streamingContent = usedCacheItems ? (cached?.adapterState.streamingContent ?? '') : '';

@@ -1,3 +1,12 @@
+## v0.28.2 (2026-09-17)
+
+### fix(web): 工具执行重复显示两条信息
+
+`tool.exec.start` 无条件创建新条目，同 `toolCallId` 的历史条目或事件重放会导致重复。
+
+- adapter `tool.exec.start` 按 `toolCallId` 去重：已有条目时只更新 toolIndex，不追加新条目
+- `openSession` 缓存/历史合并后按 `toolCallId` 兜底去重
+
 ## v0.28.1 (2026-09-17)
 
 ### fix(web): 会话切换保留工具/流式状态；工具完成即时 yield tool_end
