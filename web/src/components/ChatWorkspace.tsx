@@ -69,6 +69,20 @@ function formatTimestamp(ts: number | undefined | null): string {
   return `${dateStr} ${time}`;
 }
 
+/** 末尾是否已有带内容的已完成 assistant（用于抑制结束后残留的「思考中」占位） */
+function hasCompletedAssistantTail(items: ConversationItem[]): boolean {
+  for (let i = items.length - 1; i >= 0; i--) {
+    const it = items[i];
+    if (it.role === 'system') continue;
+    if (it.role === 'assistant') {
+      const a = it as AssistantConversationItem;
+      return a.status === 'completed' && Boolean(a.content?.trim());
+    }
+    return false;
+  }
+  return false;
+}
+
 // ── Tool Card (shared between conversation and timeline) ──
 
 function ToolCard({ item }: { item: ToolConversationItem }) {
@@ -684,6 +698,24 @@ export default function ChatWorkspace() {
                   <div className="msg-assistant-content">
                     <MarkdownMessage content={stream} />
                   </div>
+                </div>
+              </div>
+            )}
+
+            {/* 等待模型首 token：仅在尚未出现已完成最终回复时显示，避免结束后残留占位 */}
+            {!stream &&
+              (runStatus === 'streaming' || runStatus === 'waiting') &&
+              !conversationItems.some(
+                i => i.role === 'assistant' && (i as AssistantConversationItem).status === 'streaming',
+              ) &&
+              !hasCompletedAssistantTail(conversationItems) && (
+              <div className="msg-assistant">
+                <div className="msg-assistant-header">
+                  <span>助手</span>
+                  <span className="status-ok">· {runStatus === 'waiting' ? '等待响应' : '思考中…'}</span>
+                </div>
+                <div className="panel msg-assistant-body" style={{ borderColor: '#93c5fd' }}>
+                  <div className="msg-assistant-content muted">（模型尚未返回内容）</div>
                 </div>
               </div>
             )}

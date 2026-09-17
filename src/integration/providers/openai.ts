@@ -341,12 +341,14 @@ export class OpenAIProvider implements ModelProvider {
       if (msg.role === 'tool' && Array.isArray(msg.toolResults) && msg.toolResults.length > 0) {
         // 展开每条 tool result 为独立消息
         for (const tr of msg.toolResults) {
+          // 与 Loop / ContextEngine 契约对齐：error 字段存在即视为失败（含空串）
+          const hasError = tr.error !== undefined && tr.error !== null;
           result.push({
             role: 'tool',
             tool_call_id: tr.toolCallId,
             name: tr.name,
-            content: tr.error
-              ? JSON.stringify({ error: tr.error })
+            content: hasError
+              ? JSON.stringify({ error: tr.error ?? '' })
               : (typeof tr.result === 'string' ? tr.result : JSON.stringify(tr.result ?? null)),
           });
         }

@@ -137,6 +137,8 @@ interface SessionCacheEntry {
   viewMode: ViewMode;
   adapterState: AdapterSnapshot;
   inspector: InspectorState;
+  /** 后台会话的 runStatus；切回时恢复，避免只从 items 推导丢掉 waiting */
+  runStatus: RunStatus;
 }
 
 export class OctopiRuntimeStore extends EventTarget {
@@ -150,6 +152,8 @@ export class OctopiRuntimeStore extends EventTarget {
   private sessions: SessionSummary[] = [];
   private currentSession: SessionView | null = null;
   private chat: ChatState = this.createEmptyChat();
+  /** 本轮 run 是否仍活跃；用于忽略终态之后迟到的 state=running */
+  private engineActive = false;
 
   constructor(client: OctopiClient) {
     super();
@@ -233,6 +237,7 @@ export class OctopiRuntimeStore extends EventTarget {
       viewMode: this.chat.viewMode,
       adapterState: this.conversationAdapter.getState(),
       inspector: { ...this.chat.inspector },
+      runStatus: this.chat.runStatus,
     });
   }
 
@@ -249,6 +254,7 @@ export class OctopiRuntimeStore extends EventTarget {
           viewMode: 'history',
           adapterState: { toolIndex: {}, streamingContent: '' },
           inspector: {},
+          runStatus: 'idle',
         });
       }
     }
@@ -298,7 +304,15 @@ export class OctopiRuntimeStore extends EventTarget {
     const cached = this.conversationCache.get(sessionId);
     let usedCacheItems = false;
     if (cached && cached.items.length > 0) {
-      if (cached.items.length > conversationItems.length) {
+      // 运行时活性（running 工具 / 流式）比「条目数」更能代表真相：
+      // 历史可能更长（含旧轮次已落盘消息），但缓存里的 running 工具尚未写入 store。
+      // 若只比长度，会丢掉 running 状态，切回时被推导成 idle。
+      const cacheHasRuntimeActivity =
+        cached.items.some(
+          (it) => it.role === 'tool' && (it as ToolConversationItem).status === 'running',
+        ) || Boolean(cached.adapterState.streamingContent) || Boolean(cached.adapterState.currentAssistantId);
+
+      if (cacheHasRuntimeActivity || cached.items.length > conversationItems.length) {
         conversationItems = cached.items;
         viewMode = cached.viewMode === 'history' ? 'hybrid' : cached.viewMode;
         usedCacheItems = true;
@@ -330,11 +344,21 @@ export class OctopiRuntimeStore extends EventTarget {
     const tools = this.deriveTools(conversationItems);
     const hasRunningTool = tools.some(t => t.status === 'running');
     const streamingContent = usedCacheItems ? (cached?.adapterState.streamingContent ?? '') : '';
+    // 优先用缓存里的 runStatus（含 waiting：工具结束后下一轮 LLM 尚未吐 token）。
+    // 仅从 items 推导会把 waiting 丢成 idle。
+    const cachedStatus = usedCacheItems ? cached?.runStatus : undefined;
+    const isActiveStatus =
+      cachedStatus === 'tools' || cachedStatus === 'streaming' || cachedStatus === 'waiting' || cachedStatus === 'sending';
     const derivedRunStatus: RunStatus = hasRunningTool
       ? 'tools'
       : streamingContent
         ? 'streaming'
-        : 'idle';
+        : isActiveStatus
+          ? cachedStatus!
+          : 'idle';
+    // 切回后必须恢复 engineActive，否则迟到的 running/tools 状态会被忽略
+    this.engineActive =
+      derivedRunStatus === 'tools' || derivedRunStatus === 'streaming' || derivedRunStatus === 'waiting' || derivedRunStatus === 'sending';
 
     this.chat = {
       sessionId,
@@ -377,6 +401,7 @@ export class OctopiRuntimeStore extends EventTarget {
         viewMode: 'history',
         adapterState: { toolIndex: {}, streamingContent: '' },
         inspector: {},
+        runStatus: 'idle',
       });
     }
 
@@ -427,6 +452,7 @@ export class OctopiRuntimeStore extends EventTarget {
 
     this.setViewMode(this.chat.viewMode === 'history' ? 'hybrid' : 'runtime');
 
+    this.engineActive = true;
     this.setRunStatus('sending');
     this.chat.streamingContent = '';
 
@@ -460,6 +486,7 @@ export class OctopiRuntimeStore extends EventTarget {
   private applyAccepted(sessionId?: string): void {
     // 仅当前会话的 accepted 才更新 UI 状态
     if (sessionId && this.chat.sessionId && sessionId !== this.chat.sessionId) return;
+    this.engineActive = true;
     this.setRunStatus('waiting');
   }
 
@@ -469,15 +496,26 @@ export class OctopiRuntimeStore extends EventTarget {
     if (sessionId && this.chat.sessionId && sessionId !== this.chat.sessionId) return;
     switch (state) {
       case 'running':
-        this.setRunStatus('streaming');
+        // 终态后迟到的 running 不得把 idle 打回 streaming
+        if (this.engineActive) this.setRunStatus('streaming');
+        break;
+      case 'tools':
+        if (this.engineActive) this.setRunStatus('tools');
         break;
       case 'idle':
-        if (this.chat.runStatus !== 'error') this.setRunStatus('idle');
+        // 当前会话仍有 running 工具时，忽略 idle（防协议/时序噪声覆盖）
+        if (this.chat.tools.some((t) => t.status === 'running')) break;
+        if (this.chat.runStatus !== 'error') {
+          this.engineActive = false;
+          this.setRunStatus('idle');
+        }
         break;
       case 'aborted':
+        this.engineActive = false;
         this.setRunStatus('aborted');
         break;
       case 'error':
+        this.engineActive = false;
         this.setRunStatus('error');
         break;
       default:
@@ -510,21 +548,46 @@ export class OctopiRuntimeStore extends EventTarget {
       this.chat.conversation = convResult.items;
       this.chat.streamingContent = convResult.streaming.content;
       this.chat.tools = this.deriveTools(convResult.items);
+    }
 
-      if (convResult.streaming.active) {
-        this.setRunStatus('streaming');
-      } else if (event.type === 'aborted') {
-        this.setRunStatus('aborted');
-      } else if (event.type === 'model.call.error' || event.type === 'engine.error') {
-        this.setRunStatus('error');
-      } else if (event.type === 'turn.end') {
-        // phase=pre_tools：工具即将执行，不能当作 idle
-        const phase = (event.data as { phase?: string } | undefined)?.phase;
-        this.setRunStatus(phase === 'pre_tools' ? 'tools' : 'idle');
-      } else if (event.type === 'engine.end' || event.type === 'interrupted') {
-        this.setRunStatus('idle');
-      }
+    // ── runStatus 状态机（与后台缓存共用 nextRunStatus） ──
+    const prevStatus = this.chat.runStatus;
+    const nextStatus = OctopiRuntimeStore.nextRunStatus(event, prevStatus);
+    if (nextStatus !== prevStatus) {
+      this.setRunStatus(nextStatus);
+    }
+    // engineActive：激活/终态与 nextRunStatus 对齐
+    if (
+      event.type === 'engine.start' ||
+      event.type === 'iteration.start' ||
+      event.type === 'llm_stream_delta'
+    ) {
+      this.engineActive = true;
+    } else if (
+      event.type === 'aborted' ||
+      event.type === 'model.call.error' ||
+      event.type === 'engine.error' ||
+      event.type === 'engine.end' ||
+      event.type === 'interrupted' ||
+      (event.type === 'turn.end' &&
+        (event.data as { phase?: string; error?: boolean } | undefined)?.phase !== 'pre_tools' &&
+        !(event.data as { error?: boolean } | undefined)?.error)
+    ) {
+      this.engineActive = false;
+    }
+    // 终态清流式
+    if (
+      event.type === 'engine.end' ||
+      event.type === 'interrupted' ||
+      (event.type === 'turn.end' &&
+        (event.data as { phase?: string; error?: boolean } | undefined)?.phase !== 'pre_tools' &&
+        !(event.data as { error?: boolean } | undefined)?.error)
+    ) {
+      this.chat.streamingContent = '';
+      this.dispatch('stream', new StreamEvent('stream', { streaming: false, content: '' }));
+    }
 
+    if (convResult.changed) {
       this.dispatch('conversation', new ConversationEvent('conversation', { items: this.chat.conversation }));
       this.dispatch('stream', new StreamEvent('stream', { streaming: convResult.streaming.active, content: convResult.streaming.content }));
       this.dispatch('tool', new ToolEvent('tool', { tools: this.chat.tools }));
@@ -659,14 +722,58 @@ export class OctopiRuntimeStore extends EventTarget {
     const adapter = new ConversationAdapter();
     adapter.restoreState(cached.adapterState);
     const result = adapter.applyEvent(event, sessionId, cached.items);
-    if (!result.changed) return;
+
+    // 后台也要跑同一套 runStatus 状态机，否则切回时 waiting 会丢成 idle
+    const nextStatus = OctopiRuntimeStore.nextRunStatus(event, cached.runStatus);
+
+    if (!result.changed && nextStatus === cached.runStatus) return;
 
     this.conversationCache.set(sessionId, {
-      items: result.items,
+      items: result.changed ? result.items : cached.items,
       viewMode: cached.viewMode === 'history' ? 'hybrid' : cached.viewMode,
-      adapterState: adapter.getState(),
+      adapterState: result.changed ? adapter.getState() : cached.adapterState,
       inspector: cached.inspector,
+      runStatus: nextStatus,
     });
+  }
+
+  /**
+   * runStatus 状态机（与 Loop 事件契约对齐）——供 live 与后台缓存共用。
+   *
+   * waiting:   已发出、等待模型（iteration.start / stream fallback）
+   * streaming: 正在收 token
+   * tools:     工具执行中
+   * idle:      本轮 run 真正结束
+   */
+  private static nextRunStatus(event: AgentEventEnvelope, current: RunStatus): RunStatus {
+    if (event.type === 'engine.start' || event.type === 'iteration.start') {
+      return 'waiting';
+    }
+    if (event.type === 'llm_stream_delta') {
+      return 'streaming';
+    }
+    if (event.type === 'stream.fallback_to_sync' || event.type === 'stream.fallback_failed') {
+      return 'waiting';
+    }
+    if (event.type === 'aborted') {
+      return 'aborted';
+    }
+    if (event.type === 'model.call.error' || event.type === 'engine.error') {
+      return 'error';
+    }
+    if (event.type === 'turn.end') {
+      const data = event.data as { phase?: string; error?: boolean } | undefined;
+      if (data?.phase === 'pre_tools') return 'tools';
+      if (data?.error) return 'waiting';
+      return 'idle';
+    }
+    if (event.type === 'engine.end' || event.type === 'interrupted') {
+      return 'idle';
+    }
+    if (event.type === 'tool.exec.start') {
+      return 'tools';
+    }
+    return current;
   }
 
   private emitRuntimeError(message: string): void {

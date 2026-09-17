@@ -141,8 +141,14 @@ export class Gateway {
     });
     this.gatewayBus.onAll((event) => {
       this.emitEvent(event);
-      for (const adapter of this.streamingAdapters) {
-        if (event.sessionId) {
+      // 终态事件（turn.end / engine.*）改由 processMessage.onEvent 用 sessionKey 广播，
+      // 这里跳过，避免双投；其余非流式事件仍走 bus。
+      if (
+        event.sessionId &&
+        event.type !== 'llm_stream_delta' &&
+        !Gateway.isTerminalWsEvent(event.type)
+      ) {
+        for (const adapter of this.streamingAdapters) {
           adapter.broadcastEvent(event.sessionId, event as never);
         }
       }
@@ -536,9 +542,19 @@ export class Gateway {
       resolveAgentId: () => agent.id,
       resolveSessionId: () => sessionKey,
       onEvent: (event) => {
-        this.emitEvent(event as unknown as AgentEvent);
-        for (const adapter of this.streamingAdapters) {
-          adapter.broadcastEvent(sessionKey, event as unknown as AgentEvent);
+        // Runner：llm_stream_delta 只 yield（不进 bus）；其余事件还会 emit 到 gatewayBus。
+        // 流式 delta + 终态必须用闭包 sessionKey 广播：
+        // - delta 不在 bus 上
+        // - 终态若只靠 bus 的 event.sessionId，匹配失败时 UI 会永远停在 streaming
+        if (event.type === 'llm_stream_delta') {
+          this.emitEvent(event as unknown as AgentEvent);
+          for (const adapter of this.streamingAdapters) {
+            adapter.broadcastEvent(sessionKey, event as unknown as AgentEvent);
+          }
+        } else if (Gateway.isTerminalWsEvent(event.type)) {
+          for (const adapter of this.streamingAdapters) {
+            adapter.broadcastEvent(sessionKey, event as unknown as AgentEvent);
+          }
         }
         if (event.type === 'turn.end' && event.data?.content) {
           finalContent = event.data.content as string;
@@ -737,6 +753,16 @@ export class Gateway {
       default:
         return `${agentId}:main`;
     }
+  }
+
+  private static isTerminalWsEvent(type: string): boolean {
+    return (
+      type === 'turn.end' ||
+      type === 'engine.end' ||
+      type === 'engine.error' ||
+      type === 'aborted' ||
+      type === 'interrupted'
+    );
   }
 
   private emitEvent(event: AgentEvent): void {

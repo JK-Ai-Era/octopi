@@ -164,9 +164,15 @@ export class SmartRouter {
     for (const msg of messages) {
       if (msg.role === 'tool' && msg.toolResults) {
         for (const tr of msg.toolResults) {
-          const resultStr = typeof tr.result === 'string' ? tr.result : JSON.stringify(tr.result);
-          if (resultStr.length > this.toolResultMaxLength) {
-            reducibleChars += resultStr.length - this.toolResultMaxLength;
+          // 失败结果载荷在 error 字段，不能只看 result
+          const body =
+            tr.error !== undefined
+              ? JSON.stringify({ error: tr.error })
+              : typeof tr.result === 'string'
+                ? tr.result
+                : JSON.stringify(tr.result ?? null);
+          if (body.length > this.toolResultMaxLength) {
+            reducibleChars += body.length - this.toolResultMaxLength;
           }
         }
       }

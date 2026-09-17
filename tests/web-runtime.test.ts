@@ -127,6 +127,116 @@ describe('OctopiRuntimeStore', () => {
     expect(store.getState().chat.inspector.truncatedFrom).toBe(20);
   });
 
+  it('sets runStatus to tools on turn.end pre_tools even without conversation change', () => {
+    const client = createMockClient();
+    const store = new OctopiRuntimeStore(client as any);
+
+    // 仅 tool_calls、无文本：conversation 可能不变，但状态必须切到 tools
+    client.emitEvent(undefined, {
+      type: 'turn.end',
+      data: { content: '', hasToolCalls: true, phase: 'pre_tools' },
+    });
+    expect(store.getState().chat.runStatus).toBe('tools');
+
+    client.emitEvent(undefined, {
+      type: 'tool.exec.start',
+      data: { toolCallId: 't1', toolName: 'web_search' },
+    });
+    expect(store.getState().chat.runStatus).toBe('tools');
+  });
+
+  it('leaves tools on iteration.start (next LLM call after tools)', () => {
+    const client = createMockClient();
+    const store = new OctopiRuntimeStore(client as any);
+
+    client.emitEvent(undefined, {
+      type: 'turn.end',
+      data: { content: '', hasToolCalls: true, phase: 'pre_tools' },
+    });
+    client.emitEvent(undefined, {
+      type: 'tool.exec.start',
+      data: { toolCallId: 't1', toolName: 'web_search' },
+    });
+    client.emitEvent(undefined, {
+      type: 'tool.exec.end',
+      data: { toolCallId: 't1', hasError: true, result: 'timeout' },
+    });
+    expect(store.getState().chat.runStatus).toBe('tools');
+
+    // 工具结束 → 下一轮 LLM：Loop 发 iteration.start，在首个 token 前可能很久
+    client.emitEvent(undefined, { type: 'iteration.start', data: {} });
+    expect(store.getState().chat.runStatus).toBe('waiting');
+
+    client.emitEvent(undefined, { type: 'llm_stream_delta', data: { delta: 'x' } });
+    expect(store.getState().chat.runStatus).toBe('streaming');
+  });
+
+  it('treats turn.end error:true as retry (waiting), not idle', () => {
+    const client = createMockClient();
+    const store = new OctopiRuntimeStore(client as any);
+
+    client.emitEvent(undefined, { type: 'iteration.start', data: {} });
+    client.emitEvent(undefined, {
+      type: 'turn.end',
+      data: { content: '', hasToolCalls: false, phase: 'final', error: true },
+    });
+    expect(store.getState().chat.runStatus).toBe('waiting');
+
+    // 重试下一轮
+    client.emitEvent(undefined, { type: 'iteration.start', data: {} });
+    client.emitEvent(undefined, { type: 'llm_stream_delta', data: { delta: 'ok' } });
+    expect(store.getState().chat.runStatus).toBe('streaming');
+
+    client.emitEvent(undefined, {
+      type: 'turn.end',
+      data: { content: 'ok', hasToolCalls: false, phase: 'final' },
+    });
+    expect(store.getState().chat.runStatus).toBe('idle');
+  });
+
+  it('sets waiting on stream.fallback_to_sync', () => {
+    const client = createMockClient();
+    const store = new OctopiRuntimeStore(client as any);
+
+    client.emitEvent(undefined, { type: 'llm_stream_delta', data: { delta: 'partial' } });
+    client.emitEvent(undefined, {
+      type: 'stream.fallback_to_sync',
+      data: { reason: 'idle_timeout' },
+    });
+    expect(store.getState().chat.runStatus).toBe('waiting');
+  });
+
+  it('maps external state tools without flipping to streaming', () => {
+    const client = createMockClient();
+    const store = new OctopiRuntimeStore(client as any);
+
+    // 先激活 run（accepted），否则终态保护会忽略外部 running/tools
+    client.emitAccepted(undefined, undefined);
+    client.emitState(undefined, 'tools');
+    expect(store.getState().chat.runStatus).toBe('tools');
+
+    client.emitState(undefined, 'running');
+    expect(store.getState().chat.runStatus).toBe('streaming');
+  });
+
+  it('ignores late running state after turn.end final', () => {
+    const client = createMockClient();
+    const store = new OctopiRuntimeStore(client as any);
+
+    client.emitEvent(undefined, {
+      type: 'llm_stream_delta',
+      data: { delta: 'hello' },
+    });
+    client.emitEvent(undefined, {
+      type: 'turn.end',
+      data: { content: 'hello', hasToolCalls: false, phase: 'final' },
+    });
+    expect(store.getState().chat.runStatus).toBe('idle');
+
+    client.emitState(undefined, 'running');
+    expect(store.getState().chat.runStatus).toBe('idle');
+  });
+
   it('updates inspector on tool exec error', () => {
     const client = createMockClient();
     const store = new OctopiRuntimeStore(client as any);
@@ -668,5 +778,70 @@ describe('Session switch preserves tool execution state', () => {
     // 工具完成后状态应正常更新
     client.emitEvent('s1', { type: 'tool.exec.end', data: { toolCallId: 'tc1', result: 'ok' } });
     expect(store.getState().chat.tools[0].status).toBe('success');
+  });
+
+  it('prefers cache with running tools over longer history (history would look idle)', async () => {
+    const client = createMockClient();
+    const store = new OctopiRuntimeStore(client);
+
+    client.getSession = async (id: string) => ({
+      meta: { id, agentId: 'a1' },
+      messageCount: 0,
+      turnCount: 0,
+    });
+    client.listApprovals = async () => [];
+    // 第一次打开 s1：空历史
+    client.getSessionMessages = async () => ({ messages: [] });
+    await store.openSession('s1');
+
+    client.emitEvent('s1', { type: 'tool.exec.start', data: { toolCallId: 'tc_live', toolName: 'web_search' } });
+    expect(store.getState().chat.runStatus).toBe('tools');
+
+    // 切走
+    await store.openSession('s2');
+
+    // 切回时服务端历史更长（含旧轮次已落盘消息），但没有本轮 running 工具
+    client.getSessionMessages = async () => ({
+      messages: [
+        { role: 'user', content: 'old turn', timestamp: 1 },
+        { role: 'assistant', content: 'old reply', timestamp: 2 },
+        { role: 'user', content: 'new question', timestamp: 3 },
+        { role: 'assistant', content: 'starting tools', timestamp: 4 },
+        { role: 'tool', content: '', timestamp: 5, toolResults: [{ toolCallId: 'tc_old', name: 'http_request', result: 'ok' }] },
+      ],
+    });
+    await store.openSession('s1');
+
+    const state = store.getState().chat;
+    // 必须恢复缓存中的 running 工具，而不是被更长历史覆盖成 idle
+    expect(state.runStatus).toBe('tools');
+    expect(state.tools.some((t: any) => t.toolCallId === 'tc_live' && t.status === 'running')).toBe(true);
+  });
+
+  it('restores waiting after switch-back when next LLM call started in background', async () => {
+    const client = createMockClient();
+    const store = new OctopiRuntimeStore(client);
+
+    client.getSession = async (id: string) => ({
+      meta: { id, agentId: 'a1' },
+      messageCount: 0,
+      turnCount: 0,
+    });
+    client.getSessionMessages = async () => ({ messages: [] });
+    client.listApprovals = async () => [];
+    await store.openSession('s1');
+
+    // 工具完成 → 下一轮 LLM（iteration.start = waiting）
+    client.emitEvent('s1', { type: 'tool.exec.start', data: { toolCallId: 'tc1', toolName: 'search' } });
+    client.emitEvent('s1', { type: 'tool.exec.end', data: { toolCallId: 'tc1', result: 'ok' } });
+    client.emitEvent('s1', { type: 'iteration.start', data: {} });
+    expect(store.getState().chat.runStatus).toBe('waiting');
+
+    // 切走：后台仍 waiting（无 running 工具、无 streaming）
+    await store.openSession('s2');
+
+    // 切回：必须恢复 waiting，而不是 idle
+    await store.openSession('s1');
+    expect(store.getState().chat.runStatus).toBe('waiting');
   });
 });

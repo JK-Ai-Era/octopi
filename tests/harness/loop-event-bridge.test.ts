@@ -35,9 +35,11 @@ describe('adaptLoopEvent bridge map', () => {
     expect(e?.data?.error).toBe('boom');
   });
 
-  it('turn_start → iteration.start', () => {
+  it('turn_start → iteration.start（必须带 sessionId 供 WS 广播）', () => {
     const e = adapt({ type: 'turn_start', timestamp: 1 });
     expect(e?.type).toBe('iteration.start');
+    expect(e?.sessionId).toBe('s1');
+    expect(e?.agentId).toBe('a1');
   });
 
   it('turn_end → turn.end（含 phase / hasToolCalls / userText）', () => {
@@ -122,12 +124,14 @@ describe('adaptLoopEvent bridge map', () => {
     expect(recovered?.type).toBe('run_guard.recovered');
   });
 
-  it('stream.fallback_* 原样透传 type', () => {
+  it('stream.fallback_* 原样透传 type，并带 sessionId 供 WS 广播', () => {
     const e = adapt({
       type: 'stream.fallback_to_sync',
       timestamp: 1,
       data: { reason: 'idle' },
     });
     expect(e?.type).toBe('stream.fallback_to_sync');
+    expect(e?.sessionId).toBe('s1');
+    expect(e?.agentId).toBe('a1');
   });
 });

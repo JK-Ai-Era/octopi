@@ -59,8 +59,13 @@ export class HeuristicTokenEstimator implements TokenEstimator {
     // 工具结果用更密集的比率（chars/2）
     if (message.toolResults) {
       for (const tr of message.toolResults) {
-        const resultStr = typeof tr.result === 'string' ? tr.result : JSON.stringify(tr.result);
-        tokens += Math.ceil(estimateAdjustedChars(resultStr) / TOOL_RESULT_CHARS_PER_TOKEN);
+        const body =
+          tr.error !== undefined
+            ? JSON.stringify({ error: tr.error })
+            : typeof tr.result === 'string'
+              ? tr.result
+              : JSON.stringify(tr.result ?? null);
+        tokens += Math.ceil(estimateAdjustedChars(body) / TOOL_RESULT_CHARS_PER_TOKEN);
       }
     }
 

@@ -227,6 +227,80 @@ describe('ConversationAdapter', () => {
       expect(r.changed).toBe(false);
       expect(r.items).toHaveLength(0);
     });
+
+    it('does not create a second assistant item when turn.end is delivered twice with same content', () => {
+      // 模拟非流式：无 streaming item，两次 turn.end 携带相同 content
+      let r = adapter.applyEvent(
+        { type: 'turn.end', data: { content: 'final answer' } },
+        sid,
+        items,
+      );
+      items = r.items;
+      expect(items.filter(i => i.role === 'assistant')).toHaveLength(1);
+
+      r = adapter.applyEvent(
+        { type: 'turn.end', data: { content: 'final answer' } },
+        sid,
+        items,
+      );
+      items = r.items;
+      expect(items.filter(i => i.role === 'assistant')).toHaveLength(1);
+      expect((items[0] as AssistantConversationItem).content).toBe('final answer');
+    });
+
+    it('still creates a new assistant item when turn.end content differs', () => {
+      let r = adapter.applyEvent(
+        { type: 'turn.end', data: { content: 'first' } },
+        sid,
+        items,
+      );
+      items = r.items;
+      r = adapter.applyEvent(
+        { type: 'turn.end', data: { content: 'second' } },
+        sid,
+        items,
+      );
+      items = r.items;
+      expect(items.filter(i => i.role === 'assistant')).toHaveLength(2);
+    });
+
+    it('engine.start resets turn.end dedup fingerprint so same content across runs is kept', () => {
+      let r = adapter.applyEvent(
+        { type: 'turn.end', data: { content: 'same reply' } },
+        sid,
+        items,
+      );
+      items = r.items;
+      expect(items.filter(i => i.role === 'assistant')).toHaveLength(1);
+
+      r = adapter.applyEvent({ type: 'engine.start', data: {} }, sid, items);
+      items = r.items;
+
+      r = adapter.applyEvent(
+        { type: 'turn.end', data: { content: 'same reply' } },
+        sid,
+        items,
+      );
+      items = r.items;
+      expect(items.filter(i => i.role === 'assistant')).toHaveLength(2);
+    });
+
+    it('does not set changed when turn.end is a pure duplicate with no streaming state', () => {
+      let r = adapter.applyEvent(
+        { type: 'turn.end', data: { content: 'once' } },
+        sid,
+        items,
+      );
+      items = r.items;
+      expect(r.changed).toBe(true);
+
+      r = adapter.applyEvent(
+        { type: 'turn.end', data: { content: 'once' } },
+        sid,
+        items,
+      );
+      expect(r.changed).toBe(false);
+    });
   });
 
   // ──────────────────────────────────

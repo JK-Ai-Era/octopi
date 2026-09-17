@@ -203,9 +203,17 @@ export class LLMSummaryCompressor implements Compressor {
           .join('\n');
         parts.push(`[${role}]\n${content}\nTool Calls:\n${toolCallsStr}`);
       } else if (msg.role === 'tool' && msg.toolResults?.length) {
-        // 工具结果消息
+        // 工具结果消息（含 error，避免摘要丢失失败信息）
         const resultsStr = msg.toolResults
-          .map(tr => `  - ${tr.name}: ${typeof tr.result === 'string' ? tr.result : JSON.stringify(tr.result)}`)
+          .map(tr => {
+            const body =
+              tr.error !== undefined
+                ? JSON.stringify({ error: tr.error })
+                : typeof tr.result === 'string'
+                  ? tr.result
+                  : JSON.stringify(tr.result ?? null);
+            return `  - ${tr.name}: ${body}`;
+          })
           .join('\n');
         parts.push(`[${role}]\nTool Results:\n${resultsStr}`);
       } else if (content) {

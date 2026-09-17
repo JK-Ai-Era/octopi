@@ -1162,4 +1162,61 @@ describe('ContextEngine Integration', () => {
 
     expect(result.messages.length).toBeGreaterThan(0);
   });
+
+  it('tool error results must surface error text to the LLM, not null', async () => {
+    const engine = new DefaultContextEngine();
+    const messages: Message[] = [
+      createMessage('user', 'Run the tool'),
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [{ id: 'call_err', name: 'shell', arguments: { command: 'bad' } }],
+        timestamp: Date.now(),
+      },
+      {
+        role: 'tool',
+        content: '',
+        // Loop 契约：失败时 result=null、error=文案
+        toolResults: [{
+          toolCallId: 'call_err',
+          name: 'shell',
+          result: null,
+          error: 'command not found: bad',
+        }],
+        timestamp: Date.now(),
+      },
+    ];
+
+    const result = await engine.assemble({
+      sessionId: 'tool-error-test',
+      messages,
+      systemPrompt: 'Test',
+      tools: [],
+      tokenBudget: 100000,
+    });
+
+    const toolMsg = result.messages.find(m => m.role === 'tool');
+    expect(toolMsg).toBeDefined();
+    expect(String(toolMsg!.content)).toContain('command not found: bad');
+    expect(String(toolMsg!.content)).not.toBe('null');
+  });
+
+  it('tool success results still pass through raw content', async () => {
+    const engine = new DefaultContextEngine();
+    const messages: Message[] = [
+      createMessage('user', 'Run the tool'),
+      createToolResultMessage('call_ok', 'shell', 'exit 0'),
+    ];
+
+    const result = await engine.assemble({
+      sessionId: 'tool-ok-test',
+      messages,
+      systemPrompt: 'Test',
+      tools: [],
+      tokenBudget: 100000,
+    });
+
+    const toolMsg = result.messages.find(m => m.role === 'tool');
+    expect(toolMsg?.content).toBe('exit 0');
+  });
 });

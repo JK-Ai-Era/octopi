@@ -1,3 +1,119 @@
+## v0.28.13 (2026-09-17)
+
+### fix(web): subscribe 注入假 idle，切回 running 会话被覆盖
+
+设计问题：WS `subscribe` 无条件回 `state: idle`。`openSession` 刚从缓存恢复 tools/streaming，`sendSubscribe` 的响应立刻把 UI 打回 idle——items 里工具仍是 running，状态却是 idle。
+
+- `subscribe` 只登记订阅，改回 `subscribed` 回执，不再改 run 状态
+- Store：当前会话存在 running 工具时忽略外部 `idle`
+
+## v0.28.12 (2026-09-17)
+
+### fix(web): 切走后后台 waiting 状态丢失，切回显示 idle
+
+`applyEventToCachedSession` 只更新 conversation items，不跑 runStatus 状态机。工具结束后的 `iteration.start`（waiting）在后台被丢弃；切回时只从 items 推导（无 running 工具、无 streaming）→ idle。
+
+- `SessionCacheEntry` 增加 `runStatus`
+- 抽出 `nextRunStatus` 状态机，live 与后台缓存共用
+- 后台事件同步更新缓存 `runStatus`；切回时优先恢复缓存中的 active 状态（含 waiting）
+
+## v0.28.11 (2026-09-17)
+
+### fix(web): 切走再切回时 running 会话被显示为 idle
+
+`openSession` 恢复会话时用「缓存条目数 > 历史条目数」决定是否采用缓存。历史可能更长（含旧轮次已落盘消息），缓存里的 running 工具（本轮尚未写入 store）被丢弃，`runStatus` 被推导成 idle。
+
+- 缓存含 running 工具 / 流式 / 未完成 assistant 时，无条件优先于历史
+- 切回时恢复 `engineActive`，保证后续 tools/streaming 状态能继续更新
+
+## v0.28.10 (2026-09-17)
+
+### fix(web): 任务结束后状态卡在 streaming 的真正根因
+
+WS `chat` 处理器在 `await this.handler!(channelMsg)` **之后**才发送 `accepted` + `state:running`。而 handler 会阻塞到整轮 Agent run 结束，因此这两条消息是在 `engine.end` 之后到达的，把已经 idle 的 UI 重新打回 streaming。
+
+- `HttpChannelAdapter`：`accepted` / 初始 `running` 改为在 `await handler` **之前**发送；run 结束后不再注入 running
+
+## v0.28.9 (2026-09-17)
+
+### fix(web): runStatus 状态机对齐 Loop 事件契约
+
+根因：工具结束后 Loop 只发 `iteration.start`（`turn_start`），Store 完全忽略该事件，状态停在 `tools` 直到首个 `llm_stream_delta`——模型慢/同步回退时可卡数分钟。另外 `onError` 重试会 yield `turn.end(final, error:true)` 后 continue，被误判为终态清掉 `engineActive`。
+
+- Store 状态机：
+  - `iteration.start` / `engine.start` → `waiting`（离开 tools）
+  - `llm_stream_delta` → `streaming`
+  - `stream.fallback_*` → `waiting`
+  - `turn.end(pre_tools)` → `tools`
+  - `turn.end(final, error)` → `waiting`（重试，非终态）
+  - `turn.end(final)` / `engine.end` → `idle` + `engineActive=false`
+- Adapter：`stream.fallback_to_sync` 显示系统提示
+
+## v0.28.8 (2026-09-17)
+
+### fix(web): 最终回复后 runStatus 仍卡 streaming
+
+终态 `turn.end` / `engine.end` 原先只靠 `gatewayBus` + `event.sessionId` 广播，匹配失败时 WebUI 收不到回落事件；迟到的 `state=running` 还会把 idle 打回 streaming。
+
+- Gateway：终态事件改由 `processMessage.onEvent` 用闭包 `sessionKey` 广播（与流式 delta 同路径）；`gatewayBus.onAll` 跳过终态，避免双投
+- RuntimeStore：`engineActive` 标记；`turn.end(final)` / `engine.end` 置 inactive；迟到的 `running`/`tools` 状态在 inactive 时忽略
+
+## v0.28.7 (2026-09-17)
+
+### fix(web): 最终回复后状态卡在 streaming
+
+`runStatus` 更新原先把 `streaming.active` 放在最前，`turn.end(final)` / `engine.end` 在异常情况下无法回落 idle；思考占位在末尾已是完整 assistant 时仍会显示。
+
+- RuntimeStore：终态事件（`turn.end` final / `engine.end` / `aborted` / error）优先于 `streaming.active`；final 强制清空 stream 并 dispatch
+- WebUI：末尾已有带内容的 completed assistant 时不再显示「思考中」占位
+
+## v0.28.6 (2026-09-17)
+
+### fix(web): 并行工具阶段状态卡在 streaming、长等待无反馈
+
+并行工具部分失败时，UI 长时间显示 streaming 且对话区无任何中间反馈。
+
+- Gateway WS `deriveSessionState`：`tool.exec.*` / `turn.end(pre_tools)` 改为 `tools`，不再标成 `running`（→ streaming）
+- RuntimeStore `applyExternalState`：识别 `tools` 状态
+- RuntimeStore `applyEvent`：`runStatus` 更新移出 `convResult.changed` 门控——「仅 tool_calls、无文本」时 conversation 可能不变，但状态必须切到 tools
+- `tool.exec.start` 强制进入 tools
+- WebUI：streaming/waiting 且尚无内容时显示「思考中 / 等待响应」占位，避免长等待黑盒
+
+## v0.28.5 (2026-09-17)
+
+### fix(review): 事件 sessionId / 空串 error 契约 / adapter 去重
+
+对 v0.28.3–0.28.4 未提交修复的审查跟进。
+
+- `adaptLoopEvent`：`iteration.start`、`stream.fallback_*` 补上 `agentId`/`sessionId`，恢复 `gatewayBus.onAll` 的 WS 投递
+- `turn.end` 桥接透传 `truncated` / `error`
+- OpenAI / Anthropic flatten：`error != null` 即视为失败（含空串），与 Loop / ContextEngine 契约对齐；Anthropic `is_error` 同步
+- Adapter `turn.end` 去重改为 run 内 content 指纹（`engine.start` / `llm_stream_delta` 重置），避免只比 last item 的假阳性；纯重复投递不再置 `changed`
+- `SmartRouter` 可压缩量计入 error 载荷
+
+## v0.28.4 (2026-09-17)
+
+### fix(web): agent 回复重复显示两条
+
+Runner 的非流式事件既 yield 给 Runtime `onEvent`，又 emit 到 `gatewayBus`；Gateway 两条路径都向 WebSocket 广播，同一 `turn.end` 到达 WebUI 两次。Adapter 在无 streaming item 时会新建 assistant 条目，于是出现两条一模一样的回复。
+
+- Gateway `processMessage.onEvent`：只补广播 `llm_stream_delta`（该事件不进 bus）；其余事件交由 `gatewayBus.onAll` 单次投递
+- Adapter `turn.end` 兜底分支：上一条已是同内容 completed assistant 时不再新建（防事件重放）
+- 补充 adapter 重复 turn.end 回归测试
+
+## v0.28.3 (2026-09-17)
+
+### fix(context): 工具执行错误未回传 LLM
+
+WebUI 主路径经 `AgentBuilder` → `DefaultContextEngine.convertMessage` 转换消息。该转换只读取 `toolResults[].result`，忽略 `error` 字段；而 Loop 写入历史时失败结果为 `result: null` + `error: 文案`，导致 LLM 只收到 `"null"`，看不到失败原因，无法纠错重试。
+
+- `DefaultContextEngine.convertMessage`：tool 结果存在 `error` 时写入 `JSON.stringify({ error })`，与 Loop / OpenAI / Anthropic 防御路径契约对齐
+- `LLMSummaryCompressor`：摘要文本同样包含 error，避免压缩后丢失败信息
+- `HybridCompressor.preprocessToolResults`：截断判定与截断字段改为同时覆盖 error 结果
+- `HeuristicTokenEstimator`：估算 tool 结果时计入 error 文案长度
+- `AnthropicProvider.toAnthropicMessage`：tool_result 设置 `is_error`，便于 Anthropic 侧识别失败
+- 补充 context-engine / anthropic-provider 回归测试
+
 ## v0.28.2 (2026-09-17)
 
 ### fix(web): 工具执行重复显示两条信息

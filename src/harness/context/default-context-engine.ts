@@ -701,10 +701,18 @@ export class DefaultContextEngine implements ContextEngine {
 
     if (msg.role === 'tool') {
       // 工具结果消息
+      // 错误必须进入 content：Loop 写历史时 result=null、error=文案，
+      // 若只读 result 会变成 "null"，LLM 看不到失败原因。
       for (const tr of msg.toolResults ?? []) {
+        const content =
+          tr.error !== undefined
+            ? JSON.stringify({ error: tr.error })
+            : typeof tr.result === 'string'
+              ? tr.result
+              : JSON.stringify(tr.result ?? null);
         result.push({
           role: 'tool',
-          content: typeof tr.result === 'string' ? tr.result : JSON.stringify(tr.result),
+          content,
           tool_call_id: tr.toolCallId,
           name: tr.name,
         });

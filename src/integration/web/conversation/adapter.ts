@@ -28,6 +28,7 @@ export interface AdapterSnapshot {
   currentAssistantId?: string;
   toolIndex: Record<string, string>;
   streamingContent: string;
+  lastTurnEndContent?: string;
 }
 
 // ──────────────────────────────────────
@@ -63,6 +64,8 @@ export class ConversationAdapter {
   private currentAssistantId: string | undefined;
   private toolIndex: Record<string, string> = {}; // toolCallId → conversationItemId
   private streamingContent = '';
+  /** 最近一次 turn.end 写入的 content 指纹；engine.start / 新流式会重置，用于去重重复投递 */
+  private lastTurnEndContent: string | undefined;
 
   // ──────────────────────────────────
   // Runtime events → item mutations
@@ -88,6 +91,8 @@ export class ConversationAdapter {
         if (!delta) break;
 
         this.streamingContent += delta;
+        // 新流式输出开始：清除上一轮 turn.end 指纹，避免跨 turn 误去重
+        this.lastTurnEndContent = undefined;
 
         if (!this.currentAssistantId) {
           // 创建一条新的 streaming assistant item
@@ -112,6 +117,12 @@ export class ConversationAdapter {
           );
         }
         changed = true;
+        break;
+      }
+
+      // ── Engine start：新 run 边界 ──
+      case 'engine.start': {
+        this.lastTurnEndContent = undefined;
         break;
       }
 
@@ -199,21 +210,46 @@ export class ConversationAdapter {
               ? { ...it, status: 'completed' as const, content: content || (it as AssistantConversationItem).content }
               : it,
           );
+          this.lastTurnEndContent = content || undefined;
+          changed = true;
         } else if (content) {
-          // 没有 streaming item 但有 content（例如非流式场景）
-          const item: AssistantConversationItem = {
-            id: ConversationAdapter.makeId('ast'),
-            role: 'assistant',
-            createdAt: Date.now(),
-            sessionId,
-            source: 'runtime',
-            status: 'completed',
-            content,
-          };
-          items = [...items, item];
+          // 非流式 / 无 streaming item：按 run 内 content 指纹去重（事件重放 / 双通道投递）
+          // engine.start / llm_stream_delta 会重置指纹，不会误吞跨 turn 的同文回复
+          if (content !== this.lastTurnEndContent) {
+            const item: AssistantConversationItem = {
+              id: ConversationAdapter.makeId('ast'),
+              role: 'assistant',
+              createdAt: Date.now(),
+              sessionId,
+              source: 'runtime',
+              status: 'completed',
+              content,
+            };
+            items = [...items, item];
+            this.lastTurnEndContent = content;
+            changed = true;
+          }
         }
+        const hadStreaming = this.currentAssistantId !== undefined || this.streamingContent !== '';
         this.currentAssistantId = undefined;
         this.streamingContent = '';
+        if (hadStreaming) changed = true;
+        break;
+      }
+
+      // ── Stream fallback：流失败/空流 → 同步 chat ──
+      case 'stream.fallback_to_sync': {
+        const reason = String((event.data as { reason?: string } | undefined)?.reason ?? 'stream_error');
+        const notice: SystemConversationItem = {
+          id: ConversationAdapter.makeId('sys'),
+          role: 'system',
+          createdAt: Date.now(),
+          sessionId,
+          source: 'runtime',
+          kind: 'warning',
+          message: `Stream fallback to sync (${reason})`,
+        };
+        items = [...items, notice];
         changed = true;
         break;
       }
@@ -567,6 +603,7 @@ export class ConversationAdapter {
       currentAssistantId: this.currentAssistantId,
       toolIndex: { ...this.toolIndex },
       streamingContent: this.streamingContent,
+      lastTurnEndContent: this.lastTurnEndContent,
     };
   }
 
@@ -575,6 +612,7 @@ export class ConversationAdapter {
     this.currentAssistantId = state.currentAssistantId;
     this.toolIndex = { ...state.toolIndex };
     this.streamingContent = state.streamingContent ?? '';
+    this.lastTurnEndContent = state.lastTurnEndContent;
   }
 
   /**
@@ -584,6 +622,7 @@ export class ConversationAdapter {
     this.currentAssistantId = undefined;
     this.toolIndex = {};
     this.streamingContent = '';
+    this.lastTurnEndContent = undefined;
   }
 }
 

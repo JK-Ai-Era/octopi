@@ -231,14 +231,16 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
   private deriveSessionState(sessionKey: string, event: AgentEvent): { type: 'state'; sessionId: string; state: string } | null {
     switch (event.type) {
       case 'llm_stream_delta':
-      case 'tool.exec.start':
-      case 'tool.exec.end':
       case 'model.call.start':
         return { type: 'state', sessionId: sessionKey, state: 'running' };
+      case 'tool.exec.start':
+      case 'tool.exec.end':
+        // 工具执行 ≠ 流式输出；UI 应显示 tools 而非 streaming
+        return { type: 'state', sessionId: sessionKey, state: 'tools' };
       case 'turn.end': {
-        // phase=pre_tools 表示工具即将执行，不能标 idle
+        // phase=pre_tools 表示工具即将执行，不能标 idle / streaming
         const phase = (event.data as { phase?: string } | undefined)?.phase;
-        return { type: 'state', sessionId: sessionKey, state: phase === 'pre_tools' ? 'running' : 'idle' };
+        return { type: 'state', sessionId: sessionKey, state: phase === 'pre_tools' ? 'tools' : 'idle' };
       }
       case 'aborted':
         return { type: 'state', sessionId: sessionKey, state: 'aborted' };
@@ -397,11 +399,18 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
           session.subscribedSessions ??= new Set<string>();
           session.subscribedSessions.add(String(msg.sessionId));
         }
-        await this.handler!(channelMsg);
-        session.ws.send(JSON.stringify({ type: 'accepted', sessionId: String(msg.sessionId ?? channelMsg.conversationId), messageId: channelMsg.id }));
+        // accepted / running 必须在 await handler 之前发送。
+        // handler 会阻塞到整轮 Agent run 结束；若放在之后，
+        // 会在 engine.end 之后再注入 state=running，把已 idle 的 UI 打回 streaming。
+        session.ws.send(JSON.stringify({
+          type: 'accepted',
+          sessionId: String(msg.sessionId ?? channelMsg.conversationId),
+          messageId: channelMsg.id,
+        }));
         if (msg.sessionId) {
           session.ws.send(JSON.stringify({ type: 'state', sessionId: String(msg.sessionId), state: 'running' }));
         }
+        await this.handler!(channelMsg);
       } catch (error) {
         session.ws.send(JSON.stringify({
           type: 'error',
@@ -416,7 +425,10 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
       session.subscribedSessions.add(String(msg.sessionId));
       session.sessionId = String(msg.sessionId);
       if (msg.agentId) session.agentId = String(msg.agentId);
-      session.ws.send(JSON.stringify({ type: 'state', sessionId: String(msg.sessionId), state: 'idle' }));
+      // 不要在 subscribe 时注入 state=idle：
+      // 切回正在跑的会话时，客户端刚从缓存恢复 tools/streaming，
+      // 一条假 idle 会立刻把 UI 打回 idle。订阅只登记，不改 run 状态。
+      session.ws.send(JSON.stringify({ type: 'subscribed', sessionId: String(msg.sessionId) }));
     } else if (msg.type === 'unsubscribe' && msg.sessionId) {
       session.subscribedSessions?.delete(String(msg.sessionId));
     }

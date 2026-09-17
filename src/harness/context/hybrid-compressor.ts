@@ -140,8 +140,20 @@ export class HybridCompressor implements Compressor {
 
         // 旧的工具结果：截断冗长的输出
         const truncatedResults = msg.toolResults.map(tr => {
-          const resultStr = typeof tr.result === 'string' ? tr.result : JSON.stringify(tr.result);
-          if (resultStr.length > TOOL_RESULT_TRUNCATE_THRESHOLD) {
+          const body =
+            tr.error !== undefined
+              ? JSON.stringify({ error: tr.error })
+              : typeof tr.result === 'string'
+                ? tr.result
+                : JSON.stringify(tr.result ?? null);
+          if (body.length > TOOL_RESULT_TRUNCATE_THRESHOLD) {
+            // 错误结果截断 error 字段，成功结果截断 result 字段
+            if (tr.error !== undefined) {
+              return {
+                ...tr,
+                error: TOOL_RESULT_PLACEHOLDER,
+              };
+            }
             return {
               ...tr,
               result: TOOL_RESULT_PLACEHOLDER,

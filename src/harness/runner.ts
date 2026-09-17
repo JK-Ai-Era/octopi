@@ -103,7 +103,8 @@ export function adaptLoopEvent(
       }
       return { type: 'engine.end', timestamp: event.timestamp, agentId: meta.agentId, sessionId: meta.sessionId, data: { reason: event.reason } };
     case 'turn_start':
-      return { type: 'iteration.start', timestamp: event.timestamp, data: {} };
+      // 必须带 session 元数据：gatewayBus.onAll 以 event.sessionId 为 WS 广播前提
+      return { type: 'iteration.start', timestamp: event.timestamp, agentId: meta.agentId, sessionId: meta.sessionId, data: {} };
     case 'assistant_message':
       state.assistantContent = typeof event.message.content === 'string' ? event.message.content : '';
       return null;
@@ -120,6 +121,8 @@ export function adaptLoopEvent(
           hasToolCalls: event.hasToolCalls,
           phase: event.phase,
           usage: event.usage,
+          truncated: event.truncated,
+          error: event.error,
         },
       };
     case 'llm_stream_delta':
@@ -143,7 +146,8 @@ export function adaptLoopEvent(
       };
     case 'stream.fallback_to_sync':
     case 'stream.fallback_failed':
-      return { type: event.type, timestamp: event.timestamp, data: event.data };
+      // 必须带 session 元数据：gatewayBus.onAll 以 event.sessionId 为 WS 广播前提
+      return { type: event.type, timestamp: event.timestamp, agentId: meta.agentId, sessionId: meta.sessionId, data: event.data };
     case 'budget_exceeded':
       // 对齐 EventBus BUDGET_EXCEEDED；用户可见停止原因
       return {

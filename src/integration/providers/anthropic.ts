@@ -386,13 +386,18 @@ export class AnthropicProvider implements ModelProvider {
     if (role === 'tool') {
       // 引擎格式：{ role: 'tool', toolResults: [{ toolCallId, name, result, error }] }
       if (Array.isArray(msg.toolResults) && msg.toolResults.length > 0) {
-        const blocks = msg.toolResults.map((tr: any) => ({
-          type: 'tool_result',
-          tool_use_id: tr.toolCallId,
-          content: tr.error
-            ? JSON.stringify({ error: tr.error })
-            : (typeof tr.result === 'string' ? tr.result : JSON.stringify(tr.result ?? null)),
-        }));
+        const blocks = msg.toolResults.map((tr: any) => {
+          // 与 Loop / ContextEngine 契约对齐：error 字段存在即视为失败（含空串）
+          const hasError = tr.error !== undefined && tr.error !== null;
+          return {
+            type: 'tool_result',
+            tool_use_id: tr.toolCallId,
+            is_error: hasError,
+            content: hasError
+              ? JSON.stringify({ error: tr.error ?? '' })
+              : (typeof tr.result === 'string' ? tr.result : JSON.stringify(tr.result ?? null)),
+          };
+        });
         return { role: 'user', content: blocks };
       }
       // 兼容直接格式

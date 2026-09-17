@@ -44,6 +44,29 @@ describe('AnthropicProvider', () => {
     });
     expect(p['version']).toBe('2024-01-01');
   });
+
+  test('toolResults 错误时设置 is_error 且 content 携带错误文案', () => {
+    const p = new AnthropicProvider({ apiKey: 'key' });
+    const converted = p['toAnthropicMessage']({
+      role: 'tool',
+      toolResults: [
+        { toolCallId: 'c1', name: 'shell', result: null, error: 'command not found' },
+        { toolCallId: 'c2', name: 'shell', result: 'ok' },
+        // 空串 error 仍视为失败，与 Loop / ContextEngine 契约一致
+        { toolCallId: 'c3', name: 'shell', result: null, error: '' },
+      ],
+    }) as { role: string; content: Array<Record<string, unknown>> };
+
+    expect(converted.role).toBe('user');
+    expect(converted.content).toHaveLength(3);
+    expect(converted.content[0].type).toBe('tool_result');
+    expect(converted.content[0].is_error).toBe(true);
+    expect(String(converted.content[0].content)).toContain('command not found');
+    expect(converted.content[1].is_error).toBe(false);
+    expect(converted.content[1].content).toBe('ok');
+    expect(converted.content[2].is_error).toBe(true);
+    expect(String(converted.content[2].content)).toContain('error');
+  });
 });
 
 describe('Provider 协议差异对比', () => {
