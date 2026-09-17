@@ -1,3 +1,47 @@
+## v0.29.0 (2026-09-18)
+
+### feat(builder)!: 单公开 build() + memory extraction 生产接线
+
+Gateway / config-bridge 此前装配分叉：serve 路径从不注册 `memory.extractor`，Sense 条件编译还会把字符串字面量误当成 metrics key，导致提取永不触发。
+
+**MemoryStore 统一**
+- serve 不再在 Gateway 全局挂 `InMemoryMemoryStore` 的 memory 工具
+- `AgentBuilder.build()`：若已注入 `memoryStore`，在 `buildCore` 前用**同一实例**注册 `memory_store` / `memory_search`
+- Gateway `buildAgent` 跳过全局遗留的 memory_* 工具，避免与 agent SQLite store 双轨
+- 七层 MemoryLayer、extractor `runtimeInject`、memory tools 共用 `builder.memoryStore`（serve 路径为 `SqliteMemoryStore(agent.db)`）
+
+**提取接账与 trigger 语义（审查第一档）**
+- `SubsystemRuntime.trigger` 返回 `{ triggered, status }`；仅 `success|degraded` 视为业务成功
+- Bridge 成功后 `updateMeta(extractionStatus: 'completed')`，避免 Pending 重复提取
+- PendingExtractor：`failed|timeout` 走退避，不标 completed；错误 meta 使用 `effectiveAgentId`
+- `memory-extractor` handler：未注入 memoryStore 时抛错（failed），不再静默 success
+- `builder.agentHome` / `agentId`：extract 落盘与 Pending 扫描用 agent home + 逻辑 id（与 persona 解耦）
+- Gateway：`memoryExtractionByAgent`，`stop()` 时 dispose Bridge/Pending 定时器
+- 根包导出 `isSubsystemAllowed` / `discoverSubsystemSpecs` 及 build 相关类型
+
+**AgentBuilder**
+- 公开入口收敛为 `build(options?)`：默认 `mode: 'full'`；`mode: 'core'` 仅产出 Agent 门面
+- `buildAgent()` 标记 `@deprecated`，内部转调 core 构建（兼容旧测试）
+- `build()`：`autoLoadSubsystems`（full 默认 true）控制子系统自动发现；`registerDependency('memoryStore')`；注册成功后按需挂接附属装配
+- 子系统开关：`subsystemAllowlist` / `subsystemDenylist`（fluent 同名方法；deny 优先）
+- `memory.extractor` 注册成功且存在 memoryStore 时挂 `MemoryExtractorBridge` + `PendingExtractor`（返回 `memoryExtraction` 句柄）
+- `subsystemDirs` / `extractionScanIntervalMs` 可覆盖
+- 导出 `isSubsystemAllowed` / `discoverSubsystemSpecs`
+- 启动日志：serve 打印 `subsystems discovered`；Agent `build()` 打印实际 `subsystems registered`（及 memory extraction 是否接线）
+- `build` 链增加 `scripts/copy-subsystem-assets.mjs`：把 `src/subsystems/**` 的 yaml/md 拷入 `dist/subsystems`；发现路径跳过无 `config.yaml`/`SUBSYSTEM.md` 的目录
+
+**Sense / Trigger**
+- `rewriteConditionExpression`：字符串字面量不再替换；`sessionLifecycle` / `eventData.x` 映射到 SenseContext
+- SenseEngine 从 `eventData` 提升 `lifecycle` / `extractionStatus` 到 SenseContext
+- `SubsystemRuntime.trigger(id, senseCtx?)` 可携带 `eventData.bundle`，返回是否真正执行
+- Bridge / PendingExtractor 触发时注入 bundle；trigger 未执行时不再误标 `completed`
+
+**Lifecycle**
+- Runner idle reset 时 `updateLifecycle(recent, pending)` 并 emit `session.lifecycle.updated`
+
+**测试**
+- `sense-condition-rewrite.test.ts` · `builder-memory-extraction.test.ts`
+
 ## v0.28.17 (2026-09-18)
 
 ### fix(web): 历史不回放托管 system prompt；落盘保留审计

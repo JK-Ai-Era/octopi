@@ -142,9 +142,35 @@ export class MemoryExtractorBridge {
       },
     });
 
-    // 触发子系统执行
-    this.runtime.trigger(this.subsystemId).then(() => {
-      this.emit('memory.extractor.bridge.trigger.complete', { sessionId, agentId: bundle.agentId });
+    // 触发子系统执行；携带 eventData.bundle，使 Sense condition 与 handler payload 同源
+    this.runtime.trigger(this.subsystemId, {
+      eventData: { bundle },
+      agentId: bundle.agentId,
+      sessionId,
+    }).then(async (result) => {
+      const success = result.triggered && (result.status === 'success' || result.status === 'degraded');
+      if (success) {
+        this.emit('memory.extractor.bridge.trigger.complete', { sessionId, agentId: bundle.agentId });
+        // Bridge 路径成功后关账，避免 PendingExtractor 对同一 session 重复提取
+        if (this.options?.store) {
+          try {
+            await this.options.store.updateMeta(bundle.agentId, sessionId, {
+              sessionId,
+              agentId: bundle.agentId,
+              extractionStatus: 'completed',
+            });
+          } catch {
+            // meta 落盘失败不回滚已完成的提取；pending 路径可能重试，由 dedup 兜底
+          }
+        }
+      } else {
+        this.emit('memory.extractor.bridge.trigger.error', {
+          sessionId,
+          agentId: bundle.agentId,
+          triggered: result.triggered,
+          status: result.status,
+        });
+      }
       this.collector.reset(sessionId);
     }).catch(() => {
       this.emit('memory.extractor.bridge.trigger.error', { sessionId, agentId: bundle.agentId });

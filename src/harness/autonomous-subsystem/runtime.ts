@@ -48,6 +48,20 @@ import { AuditWriter } from './audit/writer.js';
 import { validateSubsystemSpec } from './boundary/validator.js';
 import { buildAgentInput } from './sense/input-builder.js';
 
+// ── Trigger result ──
+
+/** 子系统运行终态（与 SubsystemRun.status 对齐） */
+export type SubsystemRunStatus = 'success' | 'failed' | 'timeout' | 'degraded';
+
+/**
+ * API trigger 结果
+ * - `triggered: false` — 未进入执行（未注册 / condition 拒绝 / 并发拒绝）
+ * - `triggered: true`  — 已执行；`status` 为 run 终态（failed/timeout 不应视为业务成功）
+ */
+export type SubsystemTriggerResult =
+  | { triggered: false; status?: undefined }
+  | { triggered: true; status: SubsystemRunStatus };
+
 // ── SharedDeps ──
 
 export interface SharedDeps {
@@ -88,7 +102,11 @@ export class SubsystemRuntime {
   private modelResolver: ModelResolver;
   private subsystems = new Map<string, RegisteredSubsystem>();
   private mainAgentContext?: AgentContext;
-  private runPromises = new Map<string, { resolve: () => void; reject: (err: unknown) => void; promise: Promise<void> }>();
+  private runPromises = new Map<string, {
+    resolve: (status: SubsystemRunStatus) => void;
+    reject: (err: unknown) => void;
+    promise: Promise<SubsystemRunStatus>;
+  }>();
   private abortTimers: ReturnType<typeof setTimeout>[] = [];
   private activeTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
 
@@ -140,10 +158,14 @@ export class SubsystemRuntime {
     this.abortTimers.length = 0;
   }
 
-  private createRunTracker(subsystemId: string): { resolve: () => void; reject: (err: unknown) => void; promise: Promise<void> } {
-    let resolve!: () => void;
+  private createRunTracker(subsystemId: string): {
+    resolve: (status: SubsystemRunStatus) => void;
+    reject: (err: unknown) => void;
+    promise: Promise<SubsystemRunStatus>;
+  } {
+    let resolve!: (status: SubsystemRunStatus) => void;
     let reject!: (err: unknown) => void;
-    const promise = new Promise<void>((res, rej) => {
+    const promise = new Promise<SubsystemRunStatus>((res, rej) => {
       resolve = res;
       reject = rej;
     });
@@ -152,9 +174,13 @@ export class SubsystemRuntime {
     return tracker;
   }
 
-  private completeRunTracker(subsystemId: string, tracker: { resolve: () => void; reject: (err: unknown) => void }): void {
+  private completeRunTracker(
+    subsystemId: string,
+    tracker: { resolve: (status: SubsystemRunStatus) => void; reject: (err: unknown) => void },
+    status: SubsystemRunStatus,
+  ): void {
     this.runPromises.delete(subsystemId);
-    tracker.resolve();
+    tracker.resolve(status);
   }
 
   private isTimeoutError(err: Error): boolean {
@@ -281,17 +307,21 @@ export class SubsystemRuntime {
 
   /**
    * 手动触发子系统（API 调用，穿透冷却期）
+   *
+   * @param senseCtx - 可选 Sense 覆盖（如携带 `eventData.bundle`），与 EventBus 触发同构
+   * @returns 是否进入执行 + run 终态；`status: failed|timeout` 不应视为业务成功
    */
-  async trigger(subsystemId: string): Promise<void> {
-    let runPromise: Promise<void> | undefined;
+  async trigger(subsystemId: string, senseCtx?: Partial<SenseContext>): Promise<SubsystemTriggerResult> {
+    let runPromise: Promise<SubsystemRunStatus> | undefined;
     const ctx: SenseContext = {
       metrics: this.metrics.snapshot(),
-      agentId: this.mainAgentContext?.runConfig.agentId,
-      sessionId: this.mainAgentContext?.runConfig.sessionId,
+      agentId: senseCtx?.agentId ?? this.mainAgentContext?.runConfig.agentId,
+      sessionId: senseCtx?.sessionId ?? this.mainAgentContext?.runConfig.sessionId,
+      ...senseCtx,
     };
 
-    const triggered = this.senseEngine.trigger(subsystemId, ctx, (senseCtx) => {
-      this.onTrigger(subsystemId, senseCtx);
+    const triggered = this.senseEngine.trigger(subsystemId, ctx, (senseCtxResolved) => {
+      this.onTrigger(subsystemId, senseCtxResolved);
       const tracked = this.runPromises.get(subsystemId);
       if (tracked) {
         runPromise = tracked.promise;
@@ -299,10 +329,11 @@ export class SubsystemRuntime {
     });
 
     if (!triggered || !runPromise) {
-      return;
+      return { triggered: false };
     }
 
-    await runPromise;
+    const status = await runPromise;
+    return { triggered: true, status };
   }
 
   /**
@@ -555,7 +586,7 @@ export class SubsystemRuntime {
         clearTimeout(active);
         this.activeTimeouts.delete(subsystemId);
       }
-      this.completeRunTracker(subsystemId, runTracker);
+      this.completeRunTracker(subsystemId, runTracker, run.status as SubsystemRunStatus);
 
       this.auditWriter?.write(run);
 

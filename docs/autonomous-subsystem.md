@@ -289,6 +289,8 @@ export async function handler(input, deps) {
 
 `runtimeInject.requires` 仍用于业务依赖（如 `memoryStore`）。`modelProvider` 可继续使用；新代码优先 `llmPort`。
 
+**API trigger**：`SubsystemRuntime.trigger(id, senseCtx?)` → `{ triggered, status }`。可传 `eventData.bundle` 等 Sense 覆盖；`status` 为 run 终态（`failed`/`timeout` ≠ 业务成功）。
+
 **implementation 语义**：`code` = handler 自己编排（可调 `llmPort`）；`llm`/`hybrid` = 框架用同一套模型解析跑 Agent loop。
 
 ---

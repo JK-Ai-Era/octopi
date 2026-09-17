@@ -8,7 +8,13 @@
  * - Harness: reliability, context, security, concurrency, plugins, mcp, distributed
  */
 
-export { AgentBuilder, createAgent } from './builder.js';
+export { AgentBuilder, createAgent, isSubsystemAllowed, discoverSubsystemSpecs } from './builder.js';
+export type {
+  AgentBuildOptions,
+  AgentBuildResult,
+  AgentBuildCoreResult,
+  MemoryExtractionWiring,
+} from './builder.js';
 export { loadPersona, composePersonas, PersonaSource } from './persona.js';
 export { buildFromConfig, buildFromConfigFile, resolveProviders, resolveSecurityConfig } from './config-bridge.js';
 export type { BuiltAgent } from './config-bridge.js';

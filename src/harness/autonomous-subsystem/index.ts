@@ -92,7 +92,7 @@ export type { ValidationError } from './boundary/index.js';
 
 // ── Runtime ──
 export { SubsystemRuntime } from './runtime.js';
-export type { SharedDeps, SubsystemRuntimeConfig } from './runtime.js';
+export type { SharedDeps, SubsystemRuntimeConfig, SubsystemTriggerResult, SubsystemRunStatus } from './runtime.js';
 
 // ── Sense ──
 export { SenseEngine, MetricsStore, SessionLifecycleBridge } from './sense/index.js';

@@ -144,7 +144,8 @@ Runner.handle
 - `config-bridge` 在存在 `models.level.mini` 时改用 mini provider 做摘要  
 - 可用 `.disableAutoSummarize()` 关闭自动摘要  
 - **Skill**：`skillDirectory` 或 `home/skills` 在 build 时 discover，每轮注入 `<available_skills>`  
-- **Memory/Knowledge 召回**：`builder.memoryStore` / `knowledgeStore`；config-bridge 从 `home/agent.db` 建 `SqliteMemoryStore`（better-sqlite3 可用时），Knowledge 暂用进程内 `MemoryKnowledgeStore`  
+- **Memory/Knowledge 召回**：`builder.memoryStore` / `knowledgeStore`；config-bridge 与 Gateway 从 `home/agent.db` 建 `SqliteMemoryStore`，Knowledge 暂用进程内 `MemoryKnowledgeStore`
+- **MemoryStore 单实例**：`AgentBuilder.build()` 在 `buildCore` 前用 `builder.memoryStore` 注册 `memory_store`/`memory_search`；MemoryLayer 召回与 `memory.extractor` 入库同一实例。Gateway **不再**用进程级 `InMemoryMemoryStore` 挂全局 memory 工具
 - **压缩状态落盘**：`SessionData.contextCompact`（`summary` + `lastProactiveMessageCount` + `lastProactiveTokens`）；重启后 `loadCompactState` 恢复，增量小则缓存重建、不再立刻打 LLM  
 
 **主动摘要（防长会话失忆）：**
@@ -176,6 +177,7 @@ Runner.handle
 **已接线（含 P1/P2 层扩展）：**
 
 - Builder 可注入 `wisdomStore` / `cognitionStore`；`config-bridge` 与 **Gateway.buildAgent** 在 agent home 的 `AgentDatabase` 上挂 Memory/Wisdom/Cognition/Knowledge，并 discover `skills/`
+- Gateway 为 agent 设置 `builder.agentHome(home)` + `builder.agentId(id)`，extract 落盘与 Memory SQLite 同属 agent home
 - 默认 `createDefaultSystemPromptAssembler` 在依赖存在时注册 Wisdom / Cognition 层
 - `octopi.json` → `contextAssembler.includeLayerPreview` 可在 manifest 写入层 preview（Web 上下文面板）
 - `GET /api/v1/agents/:id/context/health` 暴露 store 计数（数据面健康）

@@ -143,14 +143,44 @@ export class PendingExtractor {
         };
       }
 
-      this.events.emit({ type: 'memory.extractor.bundle.ready', timestamp: Date.now(), agentId, sessionId, data: { bundle } });
-      this.runtime.setMainAgentContext({ messages: [], runConfig: { agentId, sessionId }, events: this.events });
+      const effectiveAgentId = meta.agentId ?? agentId;
+      this.events.emit({ type: 'memory.extractor.bundle.ready', timestamp: Date.now(), agentId: effectiveAgentId, sessionId, data: { bundle } });
+      this.runtime.setMainAgentContext({ messages: [], runConfig: { agentId: effectiveAgentId, sessionId }, events: this.events });
 
       try {
-        await this.runtime.trigger(subsystemId);
+        const result = await this.runtime.trigger(subsystemId, {
+          eventData: { bundle },
+          agentId: effectiveAgentId,
+          sessionId,
+        });
+        if (!result.triggered) {
+          // condition 拒绝 / 未注册：不得标 completed，留给下一轮
+          continue;
+        }
+        if (result.status !== 'success' && result.status !== 'degraded') {
+          // run 失败/超时：走退避，不标 completed
+          const state = this.retry.get(key) ?? { failures: 0, nextRetryAt: 0 };
+          state.failures += 1;
+          const base = cfg.baseRetryMs ?? this.options.baseRetryMs ?? 60_000;
+          const max = cfg.maxRetryMs ?? this.options.maxRetryMs ?? 10 * 60_000;
+          const delay = Math.min(max, base * Math.pow(2, state.failures - 1));
+          state.nextRetryAt = Date.now() + delay;
+          this.retry.set(key, state);
+          if (state.failures >= (cfg.maxRetries ?? this.options.maxRetries ?? 5)) {
+            await this.store.updateMeta(effectiveAgentId, sessionId, { ...meta, extractionStatus: 'error' });
+            this.emit('memory.extractor.pending.scan.session.error', {
+              agentId: effectiveAgentId,
+              sessionId,
+              failures: state.failures,
+              status: result.status,
+            });
+            this.retry.delete(key);
+          }
+          continue;
+        }
         this.retry.delete(key);
-        await this.store.updateMeta(agentId, sessionId, { ...meta, extractionStatus: 'completed' });
-        this.emit('memory.extractor.pending.scan.session.triggered', { agentId, sessionId });
+        await this.store.updateMeta(effectiveAgentId, sessionId, { ...meta, extractionStatus: 'completed' });
+        this.emit('memory.extractor.pending.scan.session.triggered', { agentId: effectiveAgentId, sessionId });
         triggered += 1;
       } catch {
         const state = this.retry.get(key) ?? { failures: 0, nextRetryAt: 0 };
@@ -210,9 +240,10 @@ export class PendingExtractor {
         data: { bundle },
       });
 
+      const effectiveAgentId = meta.agentId ?? this.agentId;
       this.runtime.setMainAgentContext({
         messages: [],
-        runConfig: { agentId: this.agentId, sessionId },
+        runConfig: { agentId: effectiveAgentId, sessionId },
         events: this.events,
       });
 
@@ -221,16 +252,45 @@ export class PendingExtractor {
         await this.backpressure.acquire();
       }
       try {
-        await this.runtime.trigger(this.subsystemId);
+        const result = await this.runtime.trigger(this.subsystemId, {
+          eventData: { bundle },
+          agentId: effectiveAgentId,
+          sessionId,
+        });
+        if (!result.triggered) {
+          continue;
+        }
+        if (result.status !== 'success' && result.status !== 'degraded') {
+          const state = this.retry.get(sessionId) ?? { failures: 0, nextRetryAt: 0 };
+          state.failures += 1;
+          const base = this.options.baseRetryMs ?? 60_000;
+          const max = this.options.maxRetryMs ?? 10 * 60_000;
+          const delay = Math.min(max, base * Math.pow(2, state.failures - 1));
+          state.nextRetryAt = Date.now() + delay;
+          this.retry.set(sessionId, state);
+          if (state.failures >= (this.options.maxRetries ?? 5)) {
+            await this.store.updateMeta(effectiveAgentId, sessionId, {
+              ...meta,
+              extractionStatus: 'error',
+            });
+            this.emit('memory.extractor.pending.scan.session.error', {
+              agentId: effectiveAgentId,
+              sessionId,
+              failures: state.failures,
+              status: result.status,
+            });
+            this.retry.delete(sessionId);
+          }
+          continue;
+        }
 
-        // 成功：清除重试状态并标记 completed
         this.retry.delete(sessionId);
-        await this.store.updateMeta(this.agentId, sessionId, {
+        await this.store.updateMeta(effectiveAgentId, sessionId, {
           ...meta,
           extractionStatus: 'completed',
         });
 
-        this.emit('memory.extractor.pending.scan.session.triggered', { agentId: this.agentId, sessionId });
+        this.emit('memory.extractor.pending.scan.session.triggered', { agentId: effectiveAgentId, sessionId });
         triggered += 1;
       } catch {
         // 失败：退避重试

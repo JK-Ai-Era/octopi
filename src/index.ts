@@ -65,7 +65,8 @@ export type {
 // Harness 层
 // ============================================================
 
-export { AgentBuilder, createAgent } from './harness/agent-building/builder.js';
+export { AgentBuilder, createAgent, isSubsystemAllowed, discoverSubsystemSpecs } from './harness/agent-building/builder.js';
+export type { AgentBuildOptions, AgentBuildResult, AgentBuildCoreResult, MemoryExtractionWiring } from './harness/agent-building/builder.js';
 export { Agent } from './harness/agent/index.js';
 export type { AgentOptions } from './harness/agent/index.js';
 export type { HarnessLoopEvent } from './harness/reliability/harness-events.js';

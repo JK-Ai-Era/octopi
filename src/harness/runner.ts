@@ -796,10 +796,11 @@ export class SessionAwareRunner {
       }
     }
 
-    // Idle reset
+    // Idle reset：历史清空前把会话标为 recent+pending，供 memory extract 触发
     if (this.config.idleExpiryMs) {
       const idle = now - session.meta.lastInteractionAt;
       if (idle > this.config.idleExpiryMs) {
+        this.markSessionRecentForExtraction(session, now);
         session.messages = [];
         session.turns = [];
         session.meta.sessionStartedAt = now;
@@ -813,5 +814,52 @@ export class SessionAwareRunner {
       delete session.contextCompact;
       this.agent.setSessionCompactState(session.id, undefined);
     }
+  }
+
+  /**
+   * 将 session 生命周期落到 recent + memoryExtraction=pending，并广播事件。
+   * 供 Bridge / Sense 条件消费；store 不支持 updateLifecycle 时仅广播。
+   */
+  private markSessionRecentForExtraction(session: SessionData, now: number): void {
+    const storeWithLifecycle = this.store as {
+      updateLifecycle?: (
+        agentId: string,
+        sessionId: string,
+        lifecycle: {
+          lifecycle: 'recent';
+          memoryExtraction: 'pending';
+          endedAt: number;
+        },
+      ) => Promise<void> | void;
+    };
+    if (typeof storeWithLifecycle.updateLifecycle === 'function') {
+      void Promise.resolve(
+        storeWithLifecycle.updateLifecycle(session.agentId, session.id, {
+          lifecycle: 'recent',
+          memoryExtraction: 'pending',
+          endedAt: now,
+        }),
+      ).catch(() => {
+        // 状态落盘失败不阻断会话重置；提取侧仍可依赖 pending extractor / 事件
+      });
+    }
+
+    session.lifecycle = {
+      lifecycle: 'recent',
+      memoryExtraction: 'pending',
+      endedAt: now,
+    };
+
+    this._events?.emit({
+      type: 'session.lifecycle.updated',
+      timestamp: now,
+      agentId: session.agentId,
+      sessionId: session.id,
+      data: {
+        lifecycle: 'recent',
+        extractionStatus: 'pending',
+        lastInteractionAt: session.meta.lastInteractionAt,
+      },
+    });
   }
 }

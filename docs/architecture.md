@@ -604,17 +604,21 @@ Session save：全量 messages + contextCompact 快照
 
 ## 7. AgentBuilder — Fluent API
 
+公开构建入口为 **`build(options?)`**（默认 `mode: 'full'`）。`buildAgent()` 已废弃，等价 `build({ mode: 'core' })`（仅 Agent 门面）。
+
 ```typescript
-const { agent, harness, runner } = await new AgentBuilder()
+const { agent, harness, runner, runtime, memoryExtraction } = await new AgentBuilder()
   // 模型
   .model(myProvider)
   .provider('backup', backupProvider)
   .concurrency({ providerPool: { ... } })
 
-  // 人格 / 技能 / 记忆
+  // 人格 / 技能 / 记忆（home 与 persona 解耦；extract/agent.db 用 home）
+  .agentHome('~/.octopi/agents/my-agent')
+  .agentId('my-agent')
   .persona('./my-agent')
   .skillDirectory('./my-agent/skills')
-  .memoryStore(myMemoryStore)
+  .memoryStore(myMemoryStore)   // 七层 MemoryLayer、memory_* 工具、extractor 同实例
   .knowledgeStore(myKnowledgeStore)
 
   // 工具
@@ -638,14 +642,31 @@ const { agent, harness, runner } = await new AgentBuilder()
 
   // 自主子系统
   .withSubsystem(mySubsystemSpec)
-  .withSubsystemDir('subsystems/')
+  .subsystemAllowlist('memory.extractor')   // 可选：仅允许列表内 id
+  .subsystemDenylist('safety-guard')        // 可选：禁止（优先于 allow）
 
   // Session
   .store(mySessionStore)
 
-  // 构建
-  .build();
+  // 构建：autoLoadSubsystems 默认 true（full）；与 memoryStore 无关
+  .build({
+    // mode: 'core',
+    // autoLoadSubsystems: false,
+    // subsystemAllowlist: [...],
+    // subsystemDenylist: [...],
+  });
 ```
+
+**build() 缺省行为（full）**
+
+| 项 | 行为 |
+|----|------|
+| 子系统发现 | `autoLoadSubsystems` 默认 `true`；注册范围用 allow/deny（deny 优先，未列出默认允许） |
+| `memoryStore` | `registerDependency('memoryStore')`；并用**同一实例**注册 `memory_store` / `memory_search` |
+| `memory.extractor` | 最终注册成功且存在 memoryStore 时，挂 `MemoryExtractorBridge` + `PendingExtractor`（返回 `memoryExtraction`，需 dispose） |
+| extract 路径 | `agentHome/extract`（Jsonl）；Pending 使用 `agentId` |
+
+Gateway serve 路径经 `builder.build()` 装配；`gateway.stop()` 会 dispose 各 agent 的 `memoryExtraction`。
 
 ---
 

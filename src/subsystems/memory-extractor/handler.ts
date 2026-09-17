@@ -121,13 +121,8 @@ async function handler(input: SubsystemInput, deps?: InjectedDependencies): Prom
   const config = resolveConfig(deps);
   const memoryStore = (deps?.[DEP_MEMORY_STORE] ?? undefined) as MemoryStore | undefined;
   if (!memoryStore) {
-    return {
-      signals: [{
-        action: 'alert',
-        reason: 'memory-extractor: memoryStore not injected, skipping extraction',
-        confidence: 1,
-      }],
-    };
+    // 抛错使 run.status=failed，Pending/Bridge 不得将空跑标为 completed
+    throw new Error('memory-extractor: memoryStore not injected');
   }
 
   // 从 payload 中获取 bundle

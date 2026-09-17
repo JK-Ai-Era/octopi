@@ -363,11 +363,17 @@ export class SenseEngine {
       return;
     }
 
+    const data = (event.data ?? {}) as Record<string, unknown>;
     const ctx: SenseContext = {
       eventData: event.data,
       metrics: this.metrics.snapshot(),
       agentId: event.agentId,
       sessionId: event.sessionId,
+      // 从事件负载映射通用会话生命周期字段，供 declarative condition 直接引用
+      sessionLifecycle: data.lifecycle as SenseContext['sessionLifecycle'],
+      extractionStatus: data.extractionStatus as SenseContext['extractionStatus'],
+      lastInteractionAt: data.lastInteractionAt as number | undefined,
+      idleMs: typeof data.idleMs === 'number' ? data.idleMs : undefined,
     };
 
     entry.inFlight = true;
@@ -499,32 +505,14 @@ export class SenseEngine {
   /**
    * 编译声明式条件表达式
    *
-   * 将 "turn.count % 10 === 0" 编译为 (ctx) => ctx.metrics['turn.count'] % 10 === 0
-   * 变量名中的 "." 映射到 ctx.metrics 中的 key。
+   * 规则：
+   * - 字符串字面量原样保留（不再把 `'recent'` 误识别为变量）
+   * - SenseContext 顶层字段（sessionLifecycle / eventData / …）→ `ctx.<field>`
+   * - `eventData.x` → `ctx.eventData.x`；`metrics.x` → `ctx.metrics['x']`
+   * - 其余标识符 → `ctx.metrics['id']`（兼容 `turn.count` 等指标键）
    */
   private compileConditionExpression(expr: string): (ctx: SenseContext) => boolean {
-    // 提取表达式中的变量名（匹配 word.word 或 word 格式，排除数字和运算符）
-    const variablePattern = /\b([a-zA-Z_][a-zA-Z0-9_.]*)\b/g;
-    const variables = new Set<string>();
-    let match: RegExpExecArray | null;
-
-    while ((match = variablePattern.exec(expr)) !== null) {
-      const name = match[1];
-      // 排除 JS 关键字和内置值
-      if (name !== 'true' && name !== 'false' && name !== 'null' && name !== 'undefined') {
-        variables.add(name);
-      }
-    }
-
-    // 变量名按长度降序替换，避免短名误伤长名前缀
-    let body = expr;
-    const sortedVars = Array.from(variables).sort((a, b) => b.length - a.length);
-    for (const v of sortedVars) {
-      body = body.replace(
-        new RegExp(`\\b${v.replace(/\./g, '\\.')}\\b`, 'g'),
-        `ctx.metrics['${v}']`,
-      );
-    }
+    const body = rewriteConditionExpression(expr);
 
     try {
       // 使用 Function 构造器编译（比 eval 更安全的作用域）
@@ -541,4 +529,120 @@ export class SenseEngine {
       return () => false;
     }
   }
+}
+
+/** SenseContext 上可直接引用的字段（其余标识符按 metrics key 处理） */
+const SENSE_CONTEXT_FIELDS = new Set([
+  'eventData',
+  'metrics',
+  'agentId',
+  'sessionId',
+  'sessionLifecycle',
+  'lastInteractionAt',
+  'idleMs',
+  'extractionStatus',
+]);
+
+/**
+ * 将声明式 condition 表达式重写为可对 SenseContext 求值的 JS 表达式。
+ * 导出供单测覆盖字符串字面量 / eventData 字段映射。
+ */
+export function rewriteConditionExpression(expr: string): string {
+  const keywords = new Set(['true', 'false', 'null', 'undefined']);
+  let body = '';
+  let i = 0;
+
+  while (i < expr.length) {
+    const ch = expr[i]!;
+
+    // 字符串字面量：整段拷贝，内部标识符不替换
+    if (ch === '"' || ch === "'" || ch === '`') {
+      const quote = ch;
+      body += ch;
+      i++;
+      while (i < expr.length) {
+        const c = expr[i]!;
+        body += c;
+        i++;
+        if (c === '\\' && i < expr.length) {
+          body += expr[i];
+          i++;
+          continue;
+        }
+        if (c === quote) break;
+      }
+      continue;
+    }
+
+    // 标识符
+    if (/[a-zA-Z_]/.test(ch)) {
+      let j = i;
+      while (j < expr.length && /[a-zA-Z0-9_]/.test(expr[j]!)) j++;
+      const base = expr.slice(i, j);
+
+      if (keywords.has(base)) {
+        body += base;
+        i = j;
+        continue;
+      }
+
+      // SenseContext 字段：继续消费 .prop / ?.prop 属性链
+      if (SENSE_CONTEXT_FIELDS.has(base)) {
+        let rest = j;
+        let suffix = '';
+        while (rest < expr.length) {
+          if (expr.startsWith('?.', rest)) {
+            let k = rest + 2;
+            let m = k;
+            while (m < expr.length && /[a-zA-Z0-9_]/.test(expr[m]!)) m++;
+            if (m === k) break;
+            suffix += '?.' + expr.slice(k, m);
+            rest = m;
+            continue;
+          }
+          if (expr[rest] === '.' && /[a-zA-Z_]/.test(expr[rest + 1] ?? '')) {
+            let k = rest + 1;
+            let m = k;
+            while (m < expr.length && /[a-zA-Z0-9_]/.test(expr[m]!)) m++;
+            suffix += '.' + expr.slice(k, m);
+            rest = m;
+            continue;
+          }
+          break;
+        }
+
+        if (base === 'metrics') {
+          const key = suffix.replace(/^[?.]+/, '');
+          body += key ? `ctx.metrics[${JSON.stringify(key)}]` : 'ctx.metrics';
+        } else {
+          body += `ctx.${base}${suffix}`;
+        }
+        i = rest;
+        continue;
+      }
+
+      // 其余标识符：整段 dotted name 作为 metrics key（turn.count）
+      let name = base;
+      let rest = j;
+      while (
+        rest < expr.length &&
+        expr[rest] === '.' &&
+        /[a-zA-Z_]/.test(expr[rest + 1] ?? '')
+      ) {
+        let k = rest + 1;
+        let m = k;
+        while (m < expr.length && /[a-zA-Z0-9_]/.test(expr[m]!)) m++;
+        name += '.' + expr.slice(k, m);
+        rest = m;
+      }
+      body += `ctx.metrics[${JSON.stringify(name)}]`;
+      i = rest;
+      continue;
+    }
+
+    body += ch;
+    i++;
+  }
+
+  return body;
 }

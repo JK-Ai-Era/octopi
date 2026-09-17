@@ -32,22 +32,28 @@ memory-extractor/
 
 | 名称 | 类型 | 必选 | 说明 |
 |------|------|------|------|
-| `memoryStore` | `MemoryStore` | 是 | 经 `runtimeInject.requires` 声明 |
+| `memoryStore` | `MemoryStore` | 是 | 经 `runtimeInject.requires` 声明；**未注入时 handler 抛错**（run=failed） |
 | `llmPort` | `SubsystemLLMPort` | 否 | **框架自动注入**；含认知 prompt + fallback |
 | `__subsystem_config__` | `MemoryExtractorConfig` | 否 | 来自 `metadata.config` |
 
 无 `llmPort` 时跳过 LLM，仅规则提取（`mode: code`）。
 
+生产路径：`AgentBuilder.build()` 在本子系统注册成功且存在 memoryStore 时，将**同一 store** 注入 runtime，并挂 Bridge/Pending；`memory_store` 工具与七层 MemoryLayer 亦读写该实例。
+
 ## 契约
 
-- **输入**: `SessionExtractBundle`（`payload.sessionExtractBundle`）
+- **输入**: `SessionExtractBundle`（`payload.sessionExtractBundle`，由 `runtime.trigger(..., { eventData: { bundle } })` 注入）
 - **输出**: `ExtractionResult`（accepted candidates + 统计；`act.target = memory-store`）
+- **trigger**: `SubsystemRuntime.trigger` 返回 `{ triggered, status }`；仅 `success|degraded` 视为业务成功并允许 meta 标 `completed`
 
 ## 观测
 
 事件前缀：`memory.extractor.*`  
-信号 `data.mode`：`code` 或 `hybrid`。
+信号 `data.mode`：`code` 或 `hybrid`。  
+serve/build 日志：`subsystems discovered` / `subsystems registered`。
 
 ## 恢复
 
-`PendingExtractor`（harness）定时扫描 pending session，指数退避重试。
+`PendingExtractor`（harness）定时扫描 pending session；失败指数退避，**不把 failed/timeout 标 completed**。Bridge 成功路径会关账以降低双提。
+
+Sense `condition` 与 handler 均信任子系统目录内容（与加载 `handler.js` 同级信任边界）。

@@ -302,6 +302,14 @@ async function buildAgent(
   // home 是 agent 文件态持久目录（persona/sessions/skills/extract）；
   // memory/wisdom 走 AgentDatabase SQLite，不在此目录树下。
   const agentHome = agentConfig.home ?? (typeof agentConfig.persona === 'string' ? agentConfig.persona : undefined);
+  if (agentConfig.home) {
+    builder.agentHome(agentConfig.home);
+    builder.agentId(agentConfig.id);
+  } else if (agentHome && typeof agentConfig.persona === 'string') {
+    // 兼容旧 persona-as-home：extract 仍落在该目录
+    builder.agentHome(agentConfig.persona);
+    builder.agentId(agentConfig.id);
+  }
   if (agentConfig.persona) {
     if (typeof agentConfig.persona === 'string') {
       // 文件式 persona：目录路径（已废弃，等价于 home）
@@ -392,6 +400,7 @@ async function buildAgent(
   }
 
   // ── Subsystems ──
+  // 注册范围由 allow/deny 列表控制；builder.build 统一装配，此处只透传显式 specs / audit。
   if (shared.subsystemSpecs && shared.subsystemSpecs.length > 0) {
     for (const spec of shared.subsystemSpecs) {
       builder.withSubsystem(spec);
@@ -402,7 +411,10 @@ async function buildAgent(
   }
 
   // ── Build ──
-  const built = await builder.build();
+  // 已有显式 specs 时不再重复自动发现，避免与 resolveSubsystemSpecs 双载
+  const built = await builder.build({
+    autoLoadSubsystems: (shared.subsystemSpecs?.length ?? 0) === 0,
+  });
 
   // ── 注入子系统运行时依赖 ──
   if (built.runtime) {
@@ -411,6 +423,7 @@ async function buildAgent(
     if (firstProvider) {
       built.runtime.registerDependency('modelProvider', firstProvider);
     }
+    // memoryStore 已在 AgentBuilder.build 内注入；此处不重复 register
   }
   const agent = built.agent;
   const runner = built.runner;

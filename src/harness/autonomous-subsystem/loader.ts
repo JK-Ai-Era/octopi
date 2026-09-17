@@ -224,7 +224,8 @@ async function buildSpec(
 
   if (handlerFile) {
     try {
-      const mod = await import(handlerFile);
+      const { pathToFileURL } = await import('node:url');
+      const mod = await import(pathToFileURL(handlerFile).href);
       // 优先检查标准契约模式（export default 具有 handler 属性的对象）
       const exported = mod.default ?? mod;
       if (exported && typeof exported === 'object' && typeof exported.handler === 'function' && ('contract' in exported || 'dependencies' in exported)) {

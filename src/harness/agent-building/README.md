@@ -25,7 +25,15 @@
 
 ## 文件说明
 
-- builder.ts — AgentBuilder（组装组件；build 后 `agent.setHarness(harness)`）
+- builder.ts — AgentBuilder（`build(options?)` 为唯一公开构建入口；`buildAgent()` = `build({ mode: 'core' })` 已废弃）
 - persona.ts — 人格加载（AGENTS.md + persona/*.md）
 - config-bridge.ts — JSON 配置 → Agent 组件
 - index.ts — 统一导出
+
+## build() 装配要点
+
+- `autoLoadSubsystems`（full 默认 true）：是否自动发现子系统；与 memoryStore 无关
+- `subsystemAllowlist` / `subsystemDenylist`：注册过滤（deny 优先）
+- `agentHome` / `agentId`：extract 落盘与 Pending 扫描（与 persona 路径解耦）
+- 注入 `memoryStore` 时：同一实例注册 memory 工具 + `registerDependency` +（若注册了 `memory.extractor`）Bridge/PendingExtractor
+- 返回 `memoryExtraction` 句柄，集成方应 `dispose()`（Gateway.stop 已接）

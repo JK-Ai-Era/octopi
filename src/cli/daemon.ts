@@ -399,7 +399,8 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
     }
   }
 
-  const memoryStore = new (await import('../harness/memory/store.js')).InMemoryMemoryStore();
+  // memory 工具不在 Gateway 全局注册：AgentBuilder.build() 按各 agent 的 MemoryStore
+  //（SqliteMemoryStore(agent.db)）创建 memory_store/search，与七层 MemoryLayer / extractor 同实例。
   // SessionTaskService 随 AgentBuilder/Gateway 的 SessionStore 自动接线；不再单独建 TaskTracker。
 
   let webSearchToolCfg: { provider: import('../harness/plugin-ecosystem/tools/web-search-types.js').WebSearchProvider; defaultLimit?: number; timeoutMs?: number } | undefined;
@@ -419,9 +420,25 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
     }
   }
 
-  const { all } = createToolSet({ memoryStore, webSearch: webSearchToolCfg });
+  const { all } = createToolSet({ webSearch: webSearchToolCfg });
   for (const tool of all) gateway.registerTool(tool);
   console.log(`[CLI] Registered ${all.length} tools: ${all.map(t => t.definition.name).join(', ')}`);
+
+  // ── 子系统发现（启动可见；Agent 首次 build 时按 allow/deny 实际注册） ──
+  try {
+    const { discoverSubsystemSpecs } = await import('../harness/agent-building/builder.js');
+    const { specs, errors } = await discoverSubsystemSpecs();
+    if (specs.length > 0) {
+      console.log(`[CLI] subsystems discovered: ${specs.map((s) => s.id).join(', ')}`);
+    } else {
+      console.log('[CLI] subsystems discovered: (none)');
+    }
+    for (const err of errors) {
+      console.warn(`[CLI] subsystem load error at ${err.path}: ${err.error}`);
+    }
+  } catch (err) {
+    console.warn(`[CLI] subsystem discovery failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
 
   // ── Agent Runtime：按配置块挂载 Source（无 enabled 总开关；不写 schedule/escalate 即不挂）──
   const arCfg = config.agentRuntime;

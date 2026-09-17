@@ -11,7 +11,8 @@ export { createWebSearchTool } from './plugin-ecosystem/tools/web-search.js';
 export type { WebSearchToolOptions } from './plugin-ecosystem/tools/web-search.js';
 
 // ── Agent Building ──
-export { AgentBuilder, createAgent } from './agent-building/builder.js';
+export { AgentBuilder, createAgent, isSubsystemAllowed, discoverSubsystemSpecs } from './agent-building/builder.js';
+export type { AgentBuildOptions, AgentBuildResult, AgentBuildCoreResult, MemoryExtractionWiring } from './agent-building/builder.js';
 export { loadPersona, composePersonas, PersonaSource } from './agent-building/persona.js';
 export { buildFromConfig, buildFromConfigFile, resolveProviders, resolveSecurityConfig, resolveContextEngine, resolveRunGuard } from './agent-building/config-bridge.js';
 export type { BuiltAgent } from './agent-building/config-bridge.js';

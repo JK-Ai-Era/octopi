@@ -486,14 +486,30 @@ score = w1*explicitness
 - RunSummary（工具调用数、失败率、主要错误）
 
 ### 14.3 MemoryExtractorBridge
-在主会话生命周期更新为 `recent + pending` 时：
-1. 从 `SessionExtractCollector` 生成 `SessionExtractBundle`
-2. 发射 `memory.extractor.bundle.ready`
-3. 调用 `runtime.trigger('memory.extractor')`
+在主会话生命周期更新为 `recent + pending`，或 API trigger 携带 `eventData.bundle` 时：
+1. 从 `SessionExtractCollector` / ExtractorStore 生成 `SessionExtractBundle`
+2. 发射 `memory.extractor.bundle.ready`（可观测）
+3. `runtime.trigger('memory.extractor', { eventData: { bundle }, agentId, sessionId })`
+4. **仅当** `trigger` 返回 `status ∈ {success, degraded}` 时：emit `bridge.trigger.complete`，并 `updateMeta(extractionStatus: 'completed')` 关账，避免 Pending 重复提取
 
-### 14.4 Runtime 通用透传
-`SubsystemRuntime.onTrigger()` 已支持将 `SenseContext.eventData.bundle` 透传到 `SubsystemInput.payload.sessionExtractBundle`。
-这意味着子系统可以基于“事件携带的结构化输入”运行，而不必只依赖主上下文。
+### 14.4 Runtime 通用透传与 trigger 语义
+- `SubsystemRuntime.onTrigger()` 将 `SenseContext.eventData.bundle` 透传到 `SubsystemInput.payload.sessionExtractBundle`
+- `runtime.trigger(id, senseCtx?)` 返回 `{ triggered, status }`：
+  - `triggered: false` — 未进入执行（未注册 / condition 拒绝 / 并发拒绝）
+  - `triggered: true` + `status` — run 终态；**`failed`/`timeout` 不得视为业务成功**
+- handler 在 `memoryStore` 未注入时抛错，使 run=`failed`（不静默 success）
+- Sense 条件表达式支持字符串字面量与 `sessionLifecycle` / `eventData.*`（见 `rewriteConditionExpression`）
+
+### 14.5 生产装配（AgentBuilder.build）
+- serve / config-bridge 均经 `AgentBuilder.build()`：
+  - `autoLoadSubsystems`（full 默认 true）控制是否自动发现子系统；**与 memoryStore 无关**
+  - 注册范围：`subsystemAllowlist` / `subsystemDenylist`（deny 优先）
+  - 注入 memoryStore 后，`memory.extractor` 注册成功则挂 Bridge + PendingExtractor
+  - extract 落盘：`builder.agentHome`（默认回退 persona 首路径）+ `JsonlExtractorStore`
+  - Pending 扫描 `agentId`：`builder.agentId`（serve 为配置中的 agent id）
+  - `memory_store` / `memory_search` 与 MemoryLayer、extractor **共用同一 MemoryStore 实例**
+- Gateway `stop()` dispose 各 agent 的 `memoryExtraction` 句柄
+- 构建日志：`[CLI] subsystems discovered: …`；`[AgentBuilder] subsystems registered: …`
 
 
 ---
@@ -537,8 +553,9 @@ score = w1*explicitness
 
 ### 16.2 PendingExtractor
 - 定时扫描 `ExtractorStore.listPending(agentId)`
-- 对每个 pending session 构建 `SessionExtractBundle` 并触发 `memory.extractor`
-- 触发后将 meta 标记为 `completed`
+- 对每个 pending session 构建 `SessionExtractBundle` 并 `trigger`（携带 `eventData.bundle`）
+- **仅** run 终态为 `success`/`degraded` 时将 meta 标为 `completed`；`failed`/`timeout` 走指数退避，超限标 `error`
+- Bridge 路径成功时同样关账，降低与 Pending 的双提
 
 ### 16.3 效果
 - 避免重复记忆膨胀

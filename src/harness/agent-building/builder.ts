@@ -209,6 +209,207 @@ function convertToAgentTool(tool: RegisteredTool, contextProvider: ToolContextPr
 /** ModelProvider 未声明 contextWindow 时的默认窗口（可被 provider 覆盖） */
 export const DEFAULT_CONTEXT_WINDOW = 128_000;
 
+// ── Build options / result ──
+
+/** memory extraction 运行时句柄（由 AgentBuilder.build 装配） */
+export interface MemoryExtractionWiring {
+  bridge: import('../memory/extraction/memory-extractor-bridge.js').MemoryExtractorBridge;
+  pendingExtractor: import('../memory/extraction/pending-extractor.js').PendingExtractor;
+  extractorStore: import('../memory/extraction/extractor-store.js').ExtractorStore;
+  dispose: () => void;
+}
+
+export interface AgentBuildOptions {
+  /**
+   * `full`（默认）：agent + runner + 子系统装配
+   * `core`：仅 Agent + harness + mcpManager
+   */
+  mode?: 'full' | 'core';
+  /**
+   * 是否自动发现并加载子系统目录。full 模式默认 true；core 模式不装配子系统。
+   * 注册范围用 subsystemAllowlist / subsystemDenylist 过滤。
+   */
+  autoLoadSubsystems?: boolean;
+  /**
+   * 允许注册的子系统 id 列表。设置后仅这些 id 可注册（发现与显式 withSubsystem 均受约束）。
+   * 未设置 = 不限制。
+   */
+  subsystemAllowlist?: string[];
+  /**
+   * 禁止注册的子系统 id 列表。与 allowlist 同时出现时 deny 优先。
+   */
+  subsystemDenylist?: string[];
+  /** 子系统搜索目录覆盖 */
+  subsystemDirs?: {
+    builtin?: string;
+    user?: string;
+    project?: string;
+    npm?: string;
+  };
+  /**
+   * PendingExtractor 扫描间隔（毫秒，默认 30_000）。
+   * 在 `memory.extractor` 注册成功且存在 memoryStore 时使用。
+   */
+  extractionScanIntervalMs?: number;
+}
+
+/** 按允许/禁止列表判断子系统是否可注册；deny 优先 */
+export function isSubsystemAllowed(
+  id: string,
+  allowlist?: string[],
+  denylist?: string[],
+): boolean {
+  if (denylist?.includes(id)) return false;
+  if (allowlist && allowlist.length > 0 && !allowlist.includes(id)) return false;
+  return true;
+}
+
+export interface AgentBuildCoreResult {
+  agent: Agent;
+  harness: ReliabilityHarness;
+  mcpManager: McpManager;
+  events: EventBus;
+  contextHealth: (agentId?: string) => Promise<import('../context/layer-health.js').ContextLayerHealth>;
+}
+
+export interface AgentBuildResult {
+  agent: Agent;
+  harness: ReliabilityHarness;
+  runner: SessionAwareRunner;
+  mcpManager: McpManager;
+  runtime?: import('../autonomous-subsystem/runtime.js').SubsystemRuntime;
+  memoryExtraction?: MemoryExtractionWiring;
+  events: EventBus;
+  contextHealth: (agentId?: string) => Promise<import('../context/layer-health.js').ContextLayerHealth>;
+}
+
+/** 缺省子系统搜索：cwd + 包根（兼容 src 开发态与 dist 发布态） */
+async function defaultSubsystemSearchDirs(override?: AgentBuildOptions['subsystemDirs']): Promise<{
+  builtin?: string;
+  user?: string;
+  project?: string;
+  npm?: string;
+}> {
+  const { existsSync } = await import('node:fs');
+  const { join, resolve, dirname } = await import('node:path');
+  const { fileURLToPath } = await import('node:url');
+  const { homedir } = await import('node:os');
+
+  const here = dirname(fileURLToPath(import.meta.url));
+  // builder 在 <root>/src|dist/harness/agent-building/
+  const pkgRoot = resolve(here, '../../..');
+  const cwd = process.cwd();
+  const sep = here.includes('\\') ? '\\' : '/';
+  const runningFromDist = here.includes(`${sep}dist${sep}`) || here.endsWith(`${sep}dist`);
+
+  const { readdirSync } = await import('node:fs');
+  const hasLoadableSubsystem = (dir: string): boolean => {
+    try {
+      if (!existsSync(dir)) return false;
+      return readdirSync(dir, { withFileTypes: true }).some((e) => {
+        if (!e.isDirectory() || e.name.startsWith('.')) return false;
+        const pkg = join(dir, e.name);
+        return existsSync(join(pkg, 'config.yaml')) || existsSync(join(pkg, 'SUBSYSTEM.md'));
+      });
+    } catch {
+      return false;
+    }
+  };
+
+  const builtinCandidates = override?.builtin
+    ? [override.builtin]
+    : runningFromDist
+      ? [
+          resolve(pkgRoot, 'dist', 'subsystems'),
+          join(here, '..', '..', 'subsystems'),
+          resolve(cwd, 'dist', 'subsystems'),
+          resolve(pkgRoot, 'src', 'subsystems'),
+          resolve(cwd, 'src', 'subsystems'),
+        ]
+      : [
+          resolve(cwd, 'src', 'subsystems'),
+          resolve(pkgRoot, 'src', 'subsystems'),
+          join(here, '..', '..', 'subsystems'),
+          resolve(pkgRoot, 'dist', 'subsystems'),
+          resolve(cwd, 'dist', 'subsystems'),
+        ];
+
+  // 选第一个「目录下至少有一个含 config.yaml / SUBSYSTEM.md 的子系统包」的路径
+  let builtin: string | undefined;
+  for (const candidate of builtinCandidates) {
+    if (hasLoadableSubsystem(candidate)) {
+      builtin = candidate;
+      break;
+    }
+  }
+
+  return {
+    builtin,
+    user: override?.user ?? join(homedir(), '.octopi', 'subsystems'),
+    project: override?.project ?? join(cwd, '.octopi', 'subsystems'),
+    npm: override?.npm ?? join(cwd, 'node_modules'),
+  };
+}
+
+/** 缺省子系统搜索并加载 spec（供 build 自动发现与 serve 启动日志共用） */
+export async function discoverSubsystemSpecs(override?: AgentBuildOptions['subsystemDirs']): Promise<{
+  specs: import('../autonomous-subsystem/types.js').SubsystemSpec[];
+  errors: Array<{ path: string; error: string }>;
+}> {
+  const dirs = await defaultSubsystemSearchDirs(override);
+  const { SubsystemLoader } = await import('../autonomous-subsystem/loader.js');
+  const loader = new SubsystemLoader({
+    builtinDir: dirs.builtin,
+    userDir: dirs.user,
+    projectDir: dirs.project,
+    npmDir: dirs.npm,
+  });
+  return loader.loadAll();
+}
+
+async function wireMemoryExtraction(params: {
+  events: EventBus;
+  runtime: import('../autonomous-subsystem/runtime.js').SubsystemRuntime;
+  memoryStore: import('../memory/types.js').MemoryStore;
+  /** agent 文件态 home（extract 落盘根）；缺省时用进程内 store */
+  agentHome?: string;
+  /** PendingExtractor 扫描用 agentId（应与事件 agentId 一致） */
+  agentId?: string;
+  scanIntervalMs?: number;
+}): Promise<MemoryExtractionWiring> {
+  const { MemoryExtractorBridge } = await import('../memory/extraction/memory-extractor-bridge.js');
+  const { PendingExtractor } = await import('../memory/extraction/pending-extractor.js');
+  const { JsonlExtractorStore } = await import('../memory/extraction/jsonl-extractor-store.js');
+  const { InMemoryExtractorStore } = await import('../memory/extraction/extractor-store.js');
+
+  const home = params.agentHome;
+  const extractorStore = home
+    ? new JsonlExtractorStore(() => home)
+    : new InMemoryExtractorStore();
+
+  const bridge = new MemoryExtractorBridge(params.events, params.runtime, {
+    store: extractorStore,
+    subsystemId: 'memory.extractor',
+  });
+
+  const pendingExtractor = new PendingExtractor(params.events, params.runtime, extractorStore, {
+    agentId: params.agentId ?? 'default',
+    subsystemId: 'memory.extractor',
+    scanIntervalMs: params.scanIntervalMs ?? 30_000,
+    autoStart: true,
+  });
+
+  return {
+    bridge,
+    pendingExtractor,
+    extractorStore,
+    dispose: () => {
+      bridge.dispose();
+      pendingExtractor.dispose();
+    },
+  };
+}
+
 /**
  * AgentBuilder — Fluent API
  */
@@ -276,6 +477,8 @@ export class AgentBuilder {
   private _subsystemAuditDir?: string;
   private _modelLevels?: import('../autonomous-subsystem/types.js').ModelLevelMap;
   private _subsystemDir?: string;
+  private _subsystemAllowlist?: string[];
+  private _subsystemDenylist?: string[];
 
   // 注册的 named providers（用于 ProviderPool）
   private _namedProviders = new Map<string, ModelProvider>();
@@ -284,6 +487,10 @@ export class AgentBuilder {
   private _concurrencyConfig?: import('../../config.js').HarnessConfig['concurrency'];
   /** Agent 沙箱工作目录（工具 cwd 注入） */
   private _workspace?: string;
+  /** agent 文件态 home（persona 可不同；extract / agent.db 用此路径） */
+  private _agentHome?: string;
+  /** 逻辑 agentId（PendingExtractor / 观测用） */
+  private _agentId?: string;
 
 
   // ── Core 组件 ──
@@ -351,7 +558,7 @@ export class AgentBuilder {
     return this;
   }
 
-  /** 注册自主子系统 */
+  /** 注册自主子系统（仍受 allow/deny 列表约束） */
   withSubsystem(spec: import('../autonomous-subsystem/types.js').SubsystemSpec): this {
     this._subsystemSpecs.push(spec);
     return this;
@@ -360,6 +567,24 @@ export class AgentBuilder {
   /** 设置子系统目录（用于自动加载） */
   withSubsystemDir(dir: string): this {
     this._subsystemDir = dir;
+    return this;
+  }
+
+  /**
+   * 子系统允许列表：仅这些 id 可注册。
+   * 可多次调用（追加）；build(options.subsystemAllowlist) 时整体覆盖。
+   */
+  subsystemAllowlist(...ids: string[]): this {
+    this._subsystemAllowlist = [...(this._subsystemAllowlist ?? []), ...ids];
+    return this;
+  }
+
+  /**
+   * 子系统禁止列表：这些 id 不注册（优先于允许列表）。
+   * 可多次调用（追加）；build(options.subsystemDenylist) 时整体覆盖。
+   */
+  subsystemDenylist(...ids: string[]): this {
+    this._subsystemDenylist = [...(this._subsystemDenylist ?? []), ...ids];
     return this;
   }
 
@@ -595,6 +820,18 @@ export class AgentBuilder {
     return this;
   }
 
+  /** agent 文件态 home：extract 落盘、与 persona 目录解耦 */
+  agentHome(dir: string): this {
+    this._agentHome = dir;
+    return this;
+  }
+
+  /** 逻辑 agentId（extract pending 扫描 / 观测） */
+  agentId(id: string): this {
+    this._agentId = id;
+    return this;
+  }
+
   /** 直接设置 systemPrompt（优先于 persona 目录） */
   systemPrompt(prompt: string): this {
     this._systemPrompt = prompt;
@@ -618,20 +855,15 @@ export class AgentBuilder {
   // ── 构建 ──
 
   /**
-   * 构建 Agent + SessionAwareRunner
+   * 统一构建入口。
    *
-   * 使用新架构：Harness Agent 门面（agent.run = reliability）。
+   * - 默认 `mode: 'full'`：Agent + Runner + 自主子系统 + memory extraction 接线
+   * - `mode: 'core'`：仅 Agent + harness + mcpManager（嵌入/单测；等价旧 `buildAgent()`）
    */
-  async build(): Promise<{
-    agent: Agent;
-    harness: ReliabilityHarness;
-    runner: SessionAwareRunner;
-    mcpManager: McpManager;
-    runtime?: import('../autonomous-subsystem/runtime.js').SubsystemRuntime;
-    events: EventBus;
-    /** 七层数据面健康探针（store 计数 / 注册状态） */
-    contextHealth: (agentId?: string) => Promise<import('../context/layer-health.js').ContextLayerHealth>;
-  }> {
+  async build(options: AgentBuildOptions & { mode: 'core' }): Promise<AgentBuildCoreResult>;
+  async build(options?: AgentBuildOptions): Promise<AgentBuildResult>;
+  async build(options?: AgentBuildOptions): Promise<AgentBuildResult | AgentBuildCoreResult> {
+    const mode = options?.mode ?? 'full';
     const events = this._events ?? new DefaultEventBus();
     this._events = events;
 
@@ -672,8 +904,42 @@ export class AgentBuilder {
       }
     }
 
-    // 使用 buildAgent() 构建核心组件（此时 toolBus 已含 task_*）
-    const { agent, harness, mcpManager } = await this.buildAgent();
+    // memory 工具必须在 buildCore 之前注册：Agent 构造时从 ToolBus 快照 tools
+    if (this._memoryStore && !this._toolBus.getTool('memory_store')) {
+      const { createMemoryTools } = await import('../plugin-ecosystem/tools/memory.js');
+      for (const tool of createMemoryTools(this._memoryStore)) {
+        this._toolBus.register(tool);
+      }
+    }
+
+    // 核心组件（Agent 门面）；full 模式继续装配 runner / 子系统 / 提取栈
+    const core = await this.buildCore();
+    const { agent, harness, mcpManager } = core;
+
+    if (mode === 'core') {
+      return {
+        agent,
+        harness,
+        mcpManager,
+        events,
+        contextHealth: async (agentId?: string) => {
+          const { probeContextLayerHealth } = await import('../context/layer-health.js');
+          return probeContextLayerHealth({
+            agentId: agentId ?? 'default',
+            skillCount: this._skillManager?.list().length,
+            memoryStore: this._memoryStore,
+            knowledgeStore: this._knowledgeStore,
+            wisdomStore: this._wisdomStore,
+            cognitionStore: this._cognitionStore,
+            personaLoaded: Boolean(
+              (this._systemPrompt ?? '').trim() ||
+                (this._initialPersonaContent ?? '').trim() ||
+                this._personaResolver,
+            ),
+          });
+        },
+      };
+    }
 
     const runner = new SessionAwareRunner(agent, harness, store, {
       ...this._runnerConfig,
@@ -713,9 +979,30 @@ export class AgentBuilder {
       (sid) => systemPromptAssembler.clearSession(sid),
     );
 
-    // 创建 SubsystemRuntime（如果有自主子系统）
+    // 子系统装配：自动发现 + allow/deny 过滤 + 注册
+    const allowlist = options?.subsystemAllowlist ?? this._subsystemAllowlist;
+    const denylist = options?.subsystemDenylist ?? this._subsystemDenylist;
+    const allowed = (id: string) => isSubsystemAllowed(id, allowlist, denylist);
+
+    const autoLoad = options?.autoLoadSubsystems ?? true;
+    if (autoLoad && !this._subsystemDir) {
+      const discovered = await discoverSubsystemSpecs(options?.subsystemDirs);
+      for (const spec of discovered.specs) {
+        if (this._subsystemSpecs.some((s) => s.id === spec.id)) continue;
+        this._subsystemSpecs.push(spec);
+      }
+      for (const err of discovered.errors) {
+        console.warn(`[AgentBuilder] subsystem load error at ${err.path}: ${err.error}`);
+      }
+    }
+
+    // 创建 SubsystemRuntime（过滤后仍有子系统，或指定了目录）
+    const candidateSpecs = this._subsystemSpecs.filter((s) => allowed(s.id));
+    const skipped = this._subsystemSpecs.filter((s) => !allowed(s.id));
+
     let subsystemRuntime: import('../autonomous-subsystem/runtime.js').SubsystemRuntime | undefined;
-    if (this._subsystemSpecs.length > 0 || this._subsystemDir) {
+    let memoryExtraction: MemoryExtractionWiring | undefined;
+    if (candidateSpecs.length > 0 || this._subsystemDir) {
       const { SubsystemRuntime } = await import('../autonomous-subsystem/runtime.js');
       subsystemRuntime = new SubsystemRuntime({
         deps: {
@@ -727,14 +1014,21 @@ export class AgentBuilder {
         },
         auditDir: this._subsystemAuditDir,
       });
-      // 注册代码中定义的子系统
-      for (const spec of this._subsystemSpecs) {
-        const regErrors = subsystemRuntime.register(spec);
+
+      const registeredIds = new Set<string>();
+      const tryRegister = (spec: import('../autonomous-subsystem/types.js').SubsystemSpec): void => {
+        if (!allowed(spec.id)) return;
+        const regErrors = subsystemRuntime!.register(spec);
         if (regErrors.length > 0) {
           console.warn(`[octopi] subsystem "${spec.id}" rejected: ${regErrors.join('; ')}`);
+        } else {
+          registeredIds.add(spec.id);
         }
+      };
+
+      for (const spec of candidateSpecs) {
+        tryRegister(spec);
       }
-      // 从目录加载子系统
       if (this._subsystemDir) {
         const { SubsystemLoader } = await import('../autonomous-subsystem/loader.js');
         const loader = new SubsystemLoader({ builtinDir: this._subsystemDir });
@@ -743,13 +1037,45 @@ export class AgentBuilder {
           console.warn(`[octopi] subsystem load failed ${err.path}: ${err.error}`);
         }
         for (const spec of loadResult.specs) {
-          const regErrors = subsystemRuntime.register(spec);
-          if (regErrors.length > 0) {
-            console.warn(`[octopi] subsystem "${spec.id}" rejected: ${regErrors.join('; ')}`);
-          }
+          tryRegister(spec);
         }
       }
-      runner.setSubsystemRuntime(subsystemRuntime);
+
+      // 依赖注入 + memory 工具：与 MemoryLayer / extractor 共用同一 MemoryStore 实例
+      if (this._memoryStore) {
+        subsystemRuntime.registerDependency('memoryStore', this._memoryStore);
+      }
+
+      // 附属装配：仅当对应子系统最终注册成功时挂接
+      if (this._memoryStore && registeredIds.has('memory.extractor')) {
+        memoryExtraction = await wireMemoryExtraction({
+          events,
+          runtime: subsystemRuntime,
+          memoryStore: this._memoryStore,
+          agentHome: this._agentHome ?? this._personaWorkspaces[0],
+          agentId: this._agentId,
+          scanIntervalMs: options?.extractionScanIntervalMs,
+        });
+      }
+
+      const loadedIds = Array.from(registeredIds);
+      console.log(
+        loadedIds.length > 0
+          ? `[AgentBuilder] subsystems registered: ${loadedIds.join(', ')}`
+          : '[AgentBuilder] subsystems registered: (none)',
+      );
+      if (skipped.length > 0) {
+        console.log(
+          `[AgentBuilder] subsystems skipped by allowlist/denylist: ${skipped.map((s) => s.id).join(', ')}`,
+        );
+      }
+      if (memoryExtraction) {
+        console.log('[AgentBuilder] memory extraction wired (Bridge + PendingExtractor)');
+      }
+
+      if (registeredIds.size > 0 || candidateSpecs.length > 0 || this._subsystemDir) {
+        runner.setSubsystemRuntime(subsystemRuntime);
+      }
     }
 
     const skillManagerForHealth = skillManager;
@@ -769,6 +1095,7 @@ export class AgentBuilder {
       runner,
       mcpManager,
       runtime: subsystemRuntime,
+      memoryExtraction,
       events,
       contextHealth: async (agentId?: string) => {
         const { probeContextLayerHealth } = await import('../context/layer-health.js');
@@ -788,17 +1115,21 @@ export class AgentBuilder {
   /**
    * 构建 Agent 类（Harness 门面 + reliability）
    *
-   * 返回已绑定 harness 的 Agent；集成方应使用 `agent.run()`：
-   * ```ts
-   * const { agent, harness } = await builder.buildAgent();
-   * for await (const event of agent.run()) {
-   *   // 处理事件
-   * }
-   * ```
+   * 返回已绑定 harness 的 Agent；集成方应使用 `agent.run()`。
+   *
+   * @deprecated 请使用 `build({ mode: 'core' })`。本方法仅为兼容保留，不再扩展。
    */
   async buildAgent(): Promise<{ agent: Agent; harness: ReliabilityHarness; mcpManager: McpManager }> {
+    return this.buildCore();
+  }
+
+  /**
+   * 核心构建：仅产出 Agent 门面 + ReliabilityHarness + McpManager。
+   * 不创建 Runner / SubsystemRuntime / memory extraction。
+   */
+  private async buildCore(): Promise<{ agent: Agent; harness: ReliabilityHarness; mcpManager: McpManager }> {
     if (!this._model) {
-      throw new Error('ModelProvider is required. Call .model() before .buildAgent()');
+      throw new Error('ModelProvider is required. Call .model() before build()');
     }
 
     // 单独 buildAgent() 时也保证有 bus，压缩事件不会静默丢失

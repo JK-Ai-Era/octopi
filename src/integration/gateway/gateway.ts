@@ -120,6 +120,8 @@ export class Gateway {
   private tools: RegisteredTool[] = [];
   /** Agent 缓存（避免每条消息重建） */
   private agentCache = new Map<string, { agent: import('../../harness/agent/index.js').Agent; runner: SessionAwareRunner; contextHealth?: (agentId?: string) => Promise<import('../../harness/context/layer-health.js').ContextLayerHealth> }>();
+  /** 每 agent 的 memory extraction 运行时句柄（stop/rebuild 时 dispose） */
+  private memoryExtractionByAgent = new Map<string, import('../../harness/agent-building/builder.js').MemoryExtractionWiring>();
   /** 流式 adapter 引用（用于广播事件） */
   private streamingAdapters: StreamingChannelAdapter[] = [];
   /** 每个 provider 的熔断器 */
@@ -297,6 +299,15 @@ export class Gateway {
       console.log(`[Gateway] Stopping channel: ${name}`);
       await adapter.stop();
     }
+
+    for (const wiring of this.memoryExtractionByAgent.values()) {
+      try {
+        wiring.dispose();
+      } catch {
+        // dispose 失败不阻断 Gateway 停机
+      }
+    }
+    this.memoryExtractionByAgent.clear();
 
     await this.runtime.stop();
     await this.pluginManager.onGatewayStop();
@@ -774,6 +785,8 @@ export class Gateway {
       }
     }
     if (agent.home) {
+      builder.agentHome(agent.home);
+      builder.agentId(agent.id);
       try {
         const { AgentDatabase } = await import('../../harness/memory/sqlite/agent-db.js');
         const { SqliteMemoryStore } = await import('../../harness/memory/sqlite/memory-store.js');
@@ -793,9 +806,11 @@ export class Gateway {
       builder.contextAssembler(this.config.contextAssembler);
     }
 
-    // 注册工具
+    // 注册工具（跳过 memory_*：由 AgentBuilder 按该 agent 的 memoryStore 创建，保证与 MemoryLayer 同实例）
     console.log(`[Gateway] Building agent "${agent.id}" with ${this.tools.length} tools: ${this.tools.map(t => t.definition.name).join(', ')}`);
     for (const tool of this.tools) {
+      const name = tool.definition.name;
+      if (name === 'memory_store' || name === 'memory_search') continue;
       builder.tool(tool);
     }
 
@@ -823,6 +838,10 @@ export class Gateway {
 
     // 构建
     const built = await builder.build();
+    if (built.memoryExtraction) {
+      this.memoryExtractionByAgent.get(agent.id)?.dispose();
+      this.memoryExtractionByAgent.set(agent.id, built.memoryExtraction);
+    }
 
     // 会话任务事件 → WebSocket（UI 只读实时面板）
     const forwardTaskEvent = (event: { sessionId?: string; type: string; data?: unknown }) => {

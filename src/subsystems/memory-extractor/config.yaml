@@ -6,6 +6,8 @@ sense:
   source: eventBus
   filter:
     events: ['session.lifecycle.updated', 'memory.extractor.bundle.ready']
+    # sessionLifecycle/extractionStatus 来自 SenseContext（engine 从 eventData 映射）
+    # eventData.bundle 由 MemoryExtractorBridge / PendingExtractor 在 trigger 时注入
     condition: "(sessionLifecycle === 'recent' && extractionStatus === 'pending') || (eventData?.bundle != null)"
   isolation: structured
 
