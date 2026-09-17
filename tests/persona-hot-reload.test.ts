@@ -254,8 +254,12 @@ describe('AgentBuilder + SessionAwareRunner 热更新', () => {
     }
 
     const secondSystem = captured[1]?.messages.find((m) => m.role === 'system');
-    expect(secondSystem).toBeUndefined();
-    expect(agent.context.systemPrompt).toBe('');
+    const secondSystemText = String(secondSystem?.content ?? '');
+    // persona 删空后不再粘旧人格；runtime datetime 仍每轮注入
+    expect(secondSystemText).not.toContain('# Soul');
+    expect(secondSystemText).toContain('Current datetime:');
+    expect(agent.context.systemPrompt).not.toContain('# Soul');
+    expect(agent.context.systemPrompt).toContain('Current datetime:');
     expect(security.setSystemPromptMock).toHaveBeenLastCalledWith('');
   });
 

@@ -22,6 +22,7 @@ import type { ReliabilityHarness } from './reliability/run-agent.js';
 import { createSessionStateMachine } from './session-state-machine.js';
 import type { StateMachine } from '../core/primitives/state-machine.js';
 import { HeuristicTokenEstimator } from './context/index.js';
+import { withRuntimeDatetimeInjection } from './context/runtime-datetime.js';
 import type { SessionTaskService } from './session-tasks/service.js';
 import { renderSessionTasksInjection } from './session-tasks/render.js';
 
@@ -391,6 +392,12 @@ export class SessionAwareRunner {
           };
         }
       }
+
+      // Runtime datetime：每轮锚定当前时间，供时间敏感任务使用
+      effectiveRunConfig = {
+        ...effectiveRunConfig,
+        injectedContext: withRuntimeDatetimeInjection(effectiveRunConfig.injectedContext),
+      };
 
       // 8. 同步运行时上下文到工具上下文提供者
       if (this.toolContextProvider) {

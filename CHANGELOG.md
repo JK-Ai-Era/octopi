@@ -1,3 +1,13 @@
+## v0.28.14 (2026-09-17)
+
+### feat(context): 每轮 system prompt 注入 runtime datetime
+
+LLM 不感知墙上时钟，时间敏感任务（搜新闻、算截止日）会锚到训练截止日附近的错误年份。
+
+- 新增 `formatRuntimeDatetimeInjection` / `withRuntimeDatetimeInjection`（分钟精度 + IANA 时区）
+- `SessionAwareRunner` 在 tasks/guidance 注入后、Assembler/concat 之前写入 `injectedContext`
+- 精度到分钟，避免秒级抖动；persona 热更新测试同步为「无旧人格 + 仍含 datetime」
+
 ## v0.28.13 (2026-09-17)
 
 ### fix(web): subscribe 注入假 idle，切回 running 会话被覆盖

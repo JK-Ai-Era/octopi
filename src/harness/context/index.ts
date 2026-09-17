@@ -83,3 +83,7 @@ export type {
   SystemPromptAssembleInput,
   SystemPromptAssembleOutput,
 } from './system-prompt-assembler.js';
+export {
+  formatRuntimeDatetimeInjection,
+  withRuntimeDatetimeInjection,
+} from './runtime-datetime.js';
