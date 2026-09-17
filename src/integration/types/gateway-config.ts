@@ -43,4 +43,6 @@ export interface GatewayConfig {
     expectedMaxConcurrentRuns?: number;
     coalesceBufferLimit?: number;
   };
+  /** system prompt 七层装配器调参（preview / content / budget ratio） */
+  contextAssembler?: import('../../config.js').ContextAssemblerConfig;
 }

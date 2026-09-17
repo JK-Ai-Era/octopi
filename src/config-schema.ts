@@ -174,6 +174,19 @@ export const ContextEngineConfigSchema = z.object({
   { message: 'minOutputReserve must be <= maxOutputReserve' },
 );
 
+export const ContextAssemblerConfigSchema = z.object({
+  systemBudgetRatio: z.number().min(0.05).max(0.5).optional(),
+  layerShares: z
+    .record(
+      z.enum(['wisdom', 'persona', 'skill', 'knowledge', 'cognition', 'memory', 'runtime']),
+      z.number().min(0).max(1),
+    )
+    .optional(),
+  includeLayerPreview: z.boolean().optional(),
+  layerPreviewChars: z.number().int().positive().max(4000).optional(),
+  includeLayerContent: z.boolean().optional(),
+});
+
 // ── 安全配置 Schema ──
 
 export const SecurityConfigSchema = z.object({
@@ -344,6 +357,7 @@ export const HarnessConfigSchema = z.object({
   runGuard: RunGuardJsonConfigSchema.optional(),
   agentRuntime: AgentRuntimeJsonConfigSchema.optional(),
   contextEngine: ContextEngineConfigSchema.optional(),
+  contextAssembler: ContextAssemblerConfigSchema.optional(),
   security: SecurityConfigSchema.optional(),
   channels: z.array(ChannelConfigSchema).optional(),
   session: SessionConfigSchema.optional(),

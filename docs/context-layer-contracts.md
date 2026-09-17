@@ -22,6 +22,17 @@ Layer Providers ──► ContextAssembler ──► systemPrompt ──► Cont
 
 **Information（历史消息）不是 ContextLayer**，继续由 `DefaultContextEngine` 管理。
 
+### 概念模型 vs 契约层（纠偏说明）
+
+| 口径 | 七层列表 | 含义 |
+|------|----------|------|
+| **产品概念模型** | Wisdom → Persona → Skill → Knowledge → Cognition → Memory → **Information** | Information = **session 消息**；整条分馏链 |
+| **ContextLayer 契约（system）** | wisdom → persona → skill → knowledge → cognition → memory → **runtime** | 只描述 **system prompt 片段**；**runtime ≠ Information** |
+
+- **Runtime**：契约附加层，收编 `injectedContext`（会话任务 / guidance），仍属 system 侧，不进消息窗口。
+- **Information**：session / 消息历史；**禁止**作为 ContextLayer 塞进 `DefaultContextAssembler`。
+- 装配不变量：Assembler 只产 systemPrompt + manifest；消息窗口永远走 ContextEngine。
+
 ---
 
 ## 2. 七层标识与默认参数
@@ -38,9 +49,9 @@ Layer Providers ──► ContextAssembler ──► systemPrompt ──► Cont
 
 说明：
 
-- **order ≠ priority**：order 决定在 system prompt 中的先后；priority 决定预算不够时谁先留下。
-- **runtime** 是契约层，收编现有 Runner 的 `injectedContext`（会话任务 / 子系统 guidance），靠近对话侧。
-- 默认顺序沿用架构文档的七层模型；注意力位置策略（是否把 wisdom 挪后）可通过改 `order` 调整，不动契约。
+- **order ≠ priority**：order 决定在 system prompt 中的先后；priority 决定总预算不够时谁先留下。
+- **defaultShare**：历史参考值，**不再**驱动 Assembler 配额；需要单层限制时配置 `contextAssembler.layerShares`（硬顶）。
+- **runtime** 是契约附加层（**不是**产品七层里的 Information），收编现有 Runner 的 `injectedContext`（会话任务 / 子系统 guidance），靠近对话侧。
 
 ---
 
@@ -71,19 +82,20 @@ interface ContextLayer {
 
 ## 4. 装配算法（DefaultContextAssembler）
 
-1. 按 `order` 排序启用层  
-2. `defaultShare` 在启用层之间归一化  
-3. `contentBudget = systemBudget - structureReserve`  
-4. 按份额得到每层 `tokenBudget`，**并行** `assemble`  
-5. 按 `priority` 从高到低纳入：  
-   - 空 / 失败 → 跳过  
-   - 超份额且 `droppable` → 丢弃  
-   - 超份额且 `!droppable` → 仍纳入，manifest 记 `over budget but kept`  
-   - 总预算耗尽且 `droppable` → 丢弃  
-6. 按 `order` 用 `\n\n---\n\n` 拼接  
-7. 返回 `{ systemPrompt, manifest }`
+**预算语义：**
 
-`AssembleManifest` 含每层 `included / tokens / reason / dropped / sources`，供调试「agent 为什么变笨」。
+1. **默认只控总预算**：`systemBudget`（扣 `structureReserve` → `contentBudget`）
+2. 各层按实际内容 `assemble`；**不**按 `defaultShare` 做全局配额
+3. 按 **priority 从高到低**占用总预算；装不下则 droppable 截到剩余或丢弃
+4. **可选硬顶**：`layerShares[id]` 配置了才生效 —— `maxTokens = floor(contentBudget × share)`，超出先截到硬顶再竞争总量；未配置层无单层上限
+5. 按 `order` 用 `\n\n---\n\n` 拼接
+6. 返回 `{ systemPrompt, manifest }`
+
+**可观测通道：**
+
+- Assembler 可将层正文写入 `manifest.layers[].content`（本地缓存 / REST 点选用）
+- **WS 广播 `context.layers.assembled` 会剥离 `content`**（preview 保留）；UI 点选层时经 `GET /sessions/:id/context/layers` 拉取全文
+- Gateway `lastContextLayers` FIFO 上限 256 session
 
 ---
 
@@ -114,9 +126,9 @@ Runner.handle
   → session.contextCompact → Agent 播种
   → session tasks / guidance → injectedContext
   → createDefaultSystemPromptAssembler
-       layers: PersonaLayer + SkillLayer + KnowledgeLayer + MemoryLayer + RuntimeLayer
+       system 契约层: Persona + Skill + Knowledge + Memory + Cognition + Wisdom + Runtime
   → agent.context.systemPrompt
-  → convertToLlm → DefaultContextEngine（消息窗口 + 主动摘要）
+  → convertToLlm → DefaultContextEngine（**Information**：消息窗口 + 主动摘要）
   → AssembleResult.compactState → Agent → Session.contextCompact（save 前）
 ```
 
@@ -154,10 +166,13 @@ Runner.handle
 - 压缩摘要 / 截断说明使用 **`role: 'user'`** + `metadata.source === 'contextSummary'`，不产生中段 system
 - 无 metadata 的外部 system 消息仍原样保留
 
-**尚未接线：**
+**已接线（含 P1/P2 层扩展）：**
 
-- Wisdom / Cognition 层（契约与薄适配已有，默认路径未注册）  
-- Knowledge 的 SQLite 持久化（当前进程内 store）  
+- Builder 可注入 `wisdomStore` / `cognitionStore`；`config-bridge` 与 **Gateway.buildAgent** 在 agent home 的 `AgentDatabase` 上挂 Memory/Wisdom/Cognition/Knowledge，并 discover `skills/`
+- 默认 `createDefaultSystemPromptAssembler` 在依赖存在时注册 Wisdom / Cognition 层
+- `octopi.json` → `contextAssembler.includeLayerPreview` 可在 manifest 写入层 preview（Web 上下文面板）
+- `GET /api/v1/agents/:id/context/health` 暴露 store 计数（数据面健康）
+- Knowledge 的 SQLite 持久化仍缺（进程内 `MemoryKnowledgeStore`）
 
 ---
 

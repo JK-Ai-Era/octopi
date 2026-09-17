@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { MarkdownMessage } from './MarkdownMessage';
+import { ContextRuntimePanel } from './ContextRuntimePanel';
 import { OctopiClient } from '../../../src/integration/web/sdk/client';
 import { OctopiRuntimeStore } from '../../../src/integration/web/runtime/store';
 import type {
@@ -10,7 +11,7 @@ import type {
   SystemConversationItem,
   ViewMode,
 } from '../../../src/integration/web/conversation/types';
-import type { RunStatus } from '../../../src/integration/web/runtime/store';
+import type { RunStatus, InspectorState } from '../../../src/integration/web/runtime/store';
 import type { SessionTaskView } from '../../../src/integration/web/sdk/client';
 // 浏览器侧直连 token 模块（不经 harness barrel / context/index，避免拉入 Node 专用依赖）
 import { estimateTextTokens } from '../../../src/harness/context/token-estimator';
@@ -349,26 +350,16 @@ export default function ChatWorkspace() {
   const [viewMode, setViewMode] = useState<ViewMode>('history');
   const [stream, setStream] = useState('');
   const [runStatus, setRunStatus] = useState<RunStatus>('idle');
-  const [inspector, setInspector] = useState<Record<string, unknown>>({});
-  const compactStatus = inspector.compact as
-    | {
-        active?: boolean;
-        reason?: string;
-        cached?: boolean;
-        tokensBefore?: number;
-        tokensAfter?: number;
-        durationMs?: number;
-        error?: string;
-      }
-    | undefined;
+  const [inspector, setInspector] = useState<InspectorState>({});
   const [tasks, setTasks] = useState<SessionTaskView[]>([]);
   const [input, setInput] = useState('');
-  const [rightTab, setRightTab] = useState<'inspector' | 'tasks' | 'tools' | 'help'>('tasks');
+  const [rightTab, setRightTab] = useState<'context' | 'tasks' | 'tools' | 'help'>('context');
   const [connectError, setConnectError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [mobileTab, setMobileTab] = useState<'chat' | 'left' | 'right'>('chat');
   const [showAllSessions, setShowAllSessions] = useState(false);
+  const [contextFocus, setContextFocus] = useState(false);
 
   const clientRef = useRef<OctopiClient | null>(null);
   const storeRef = useRef<OctopiRuntimeStore | null>(null);
@@ -400,7 +391,7 @@ export default function ChatWorkspace() {
       setRunStatus(e.detail.status);
     }) as EventListener);
     store.addEventListener('inspector', ((e: CustomEvent) => {
-      setInspector(e.detail.inspector);
+      setInspector(e.detail.inspector as InspectorState);
     }) as EventListener);
     store.addEventListener('tasks', ((e: CustomEvent) => {
       setTasks(e.detail.tasks ?? []);
@@ -509,7 +500,6 @@ export default function ChatWorkspace() {
 
   // Derive lists from conversation items
   const toolItems = conversationItems.filter((i): i is ToolConversationItem => i.role === 'tool');
-  const systemItems = conversationItems.filter((i): i is SystemConversationItem => i.role === 'system');
 
   const connectionLabel = connection === 'connected' ? 'status-ok'
     : connection === 'connecting' || connection === 'reconnecting' ? 'status-warn' : 'status-neutral';
@@ -543,7 +533,7 @@ export default function ChatWorkspace() {
         <button className={mobileTab === 'right' ? 'mobile-nav-active' : ''} onClick={() => setMobileTab('right')}>检查</button>
       </nav>
 
-      <main className={`app-main ${mobileTab === 'left' ? 'mobile-show-left' : ''} ${mobileTab === 'right' ? 'mobile-show-right' : ''}`}>
+      <main className={`app-main ${contextFocus ? 'app-main-focus' : ''} ${mobileTab === 'left' ? 'mobile-show-left' : ''} ${mobileTab === 'right' ? 'mobile-show-right' : ''}`}>
         {/* ── 左栏：连接、Agent、会话 ── */}
         <aside className="left-sidebar">
           <section className="panel sidebar-section">
@@ -658,14 +648,6 @@ export default function ChatWorkspace() {
               </div>
               <div className="small" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                 <span className="small muted" style={{ marginRight: 8 }}>[{viewMode}]</span>
-                {compactStatus?.active && (
-                  <span
-                    className="status-warn"
-                    title={compactStatus.reason === 'proactive' ? '主动摘要压缩中' : '窗口溢出压缩中'}
-                  >
-                    压缩上下文…
-                  </span>
-                )}
                 <span className={runStatus === 'error' ? 'status-error' : runStatus === 'streaming' ? 'status-ok' : 'status-neutral'}>{runStatus}</span>
                 <button className="btn-secondary" onClick={abort} disabled={!['streaming', 'waiting', 'tools', 'sending'].includes(runStatus)}>中止</button>
               </div>
@@ -745,6 +727,12 @@ export default function ChatWorkspace() {
         <aside className="right-panel">
           <div className="right-tabs">
             <button
+              className={rightTab === 'context' ? 'btn-tab btn-tab-active' : 'btn-tab'}
+              onClick={() => setRightTab('context')}
+            >
+              上下文
+            </button>
+            <button
               className={rightTab === 'tasks' ? 'btn-tab btn-tab-active' : 'btn-tab'}
               onClick={() => setRightTab('tasks')}
             >
@@ -754,10 +742,44 @@ export default function ChatWorkspace() {
                 return n > 0 ? <span className="tab-count">{n}</span> : null;
               })()}
             </button>
-            <button className={rightTab === 'inspector' ? 'btn-tab btn-tab-active' : 'btn-tab'} onClick={() => setRightTab('inspector')}>检查</button>
             <button className={rightTab === 'tools' ? 'btn-tab btn-tab-active' : 'btn-tab'} onClick={() => setRightTab('tools')}>工具</button>
             <button className={rightTab === 'help' ? 'btn-tab btn-tab-active' : 'btn-tab'} onClick={() => setRightTab('help')}>帮助</button>
+            {rightTab === 'context' && (
+              <button
+                type="button"
+                className="btn-ghost small"
+                style={{ marginLeft: 'auto' }}
+                onClick={() => setContextFocus((v) => !v)}
+              >
+                {contextFocus ? '退出 Focus' : 'Focus'}
+              </button>
+            )}
           </div>
+
+          {rightTab === 'context' && (
+            <ContextRuntimePanel
+              inspector={inspector}
+              viewMode={viewMode}
+              runStatus={runStatus}
+              sessionId={activeSessionId}
+              agentId={agentId}
+              connection={connection}
+              messageCount={conversationItems.filter(i => i.role === 'user' || i.role === 'assistant').length}
+              onRefreshLayers={async () => {
+                const store = storeRef.current;
+                const client = clientRef.current;
+                if (!store || !client || !activeSessionId) return;
+                try {
+                  const layers = await client.getSessionContextLayers(activeSessionId);
+                  if (layers) {
+                    store.applyContextLayersSnapshot(layers);
+                  }
+                } catch {
+                  // ignore refresh errors; UI keeps previous snapshot
+                }
+              }}
+            />
+          )}
 
           {rightTab === 'tasks' && (
             <div>
@@ -771,57 +793,6 @@ export default function ChatWorkspace() {
                 只读列表，由 Agent 维护。对 Agent 说「把 xx 标为完成」即可更新。
               </div>
               <TaskPanel tasks={tasks} />
-            </div>
-          )}
-
-          {rightTab === 'inspector' && (
-            <div style={{ display: 'grid', gap: 12 }}>
-              <section className="panel sidebar-section">
-                <div className="sidebar-title">会话状态</div>
-                <div className="inspector-kv">视图模式: {viewMode}</div>
-                <div className="inspector-kv">运行状态: {runStatus}</div>
-                <div className="inspector-kv">
-                  上下文压缩:{' '}
-                  {compactStatus?.active
-                    ? `进行中（${compactStatus.reason === 'proactive' ? '主动摘要' : '溢出'}）`
-                    : compactStatus?.error
-                      ? `失败：${compactStatus.error}`
-                      : compactStatus && !compactStatus.active && (compactStatus.tokensAfter !== undefined || compactStatus.cached)
-                        ? compactStatus.cached
-                          ? '缓存重建'
-                          : `完成${compactStatus.tokensBefore !== undefined && compactStatus.tokensAfter !== undefined ? `（${compactStatus.tokensBefore}→${compactStatus.tokensAfter}）` : ''}`
-                        : '无'}
-                </div>
-                <div className="inspector-kv">会话: {activeSessionId ?? '无'}</div>
-                <div className="inspector-kv">Agent: {agentId || '无'}</div>
-                <div className="inspector-kv">连接: {connection}</div>
-              </section>
-
-              {systemItems.length > 0 && (
-                <section className="panel sidebar-section">
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                    <div className="sidebar-title" style={{ marginBottom: 0 }}>系统通知</div>
-                    <span className="small muted">{systemItems.length}</span>
-                  </div>
-                  <div style={{ display: 'grid', gap: 6 }}>
-                    {systemItems.map(s => {
-                      const variant = (s.kind === 'error' || s.kind === 'blocked') ? 'msg-system-error'
-                        : s.kind === 'warning' ? 'msg-system-warning' : 'msg-system-info';
-                      return (
-                        <div key={s.id} className={`msg-system-inner ${variant}`}>
-                          <strong>{s.kind}</strong>
-                          <span className="muted">{s.message}</span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </section>
-              )}
-
-              <section className="panel sidebar-section">
-                <div className="sidebar-title">运行时检查</div>
-                <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{JSON.stringify(inspector, null, 2)}</pre>
-              </section>
             </div>
           )}
 
@@ -844,8 +815,10 @@ export default function ChatWorkspace() {
               <ul style={{ margin: 0, paddingLeft: 18, fontSize: 'var(--text-sm)' }}>
                 <li>左栏负责连接、Agent、会话创建</li>
                 <li>中栏负责主聊天链路</li>
+                <li>右栏「上下文」：System 契约层 + Information 消息窗口（产品第 7 层）</li>
+                <li>产品七层 ≠ ContextLayer：Information 是 session，Runtime 是契约附加</li>
+                <li>Focus 模式放大右栏，便于 demo / 深度调试</li>
                 <li>右栏「任务」实时展示会话任务树</li>
-                <li>右栏「检查」查看运行时状态</li>
                 <li>连接成功后自动刷新 Agent 和会话</li>
                 <li>Enter 发送，Shift+Enter 换行</li>
                 <li>输入法组合选词阶段不会误触发送</li>

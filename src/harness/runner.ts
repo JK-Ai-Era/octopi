@@ -22,6 +22,7 @@ import type { ReliabilityHarness } from './reliability/run-agent.js';
 import { createSessionStateMachine } from './session-state-machine.js';
 import type { StateMachine } from '../core/primitives/state-machine.js';
 import { HeuristicTokenEstimator } from './context/index.js';
+import { extractLayerQuery } from './context/layer-types.js';
 import { withRuntimeDatetimeInjection } from './context/runtime-datetime.js';
 import type { SessionTaskService } from './session-tasks/service.js';
 import { renderSessionTasksInjection } from './session-tasks/render.js';
@@ -212,7 +213,7 @@ export class SessionAwareRunner {
     injectedContext?: string;
     contextWindow?: number;
     signal?: AbortSignal;
-  }) => Promise<{ systemPrompt: string }>;
+  }) => Promise<{ systemPrompt: string; manifest?: import('./context/layer-types.js').AssembleManifest }>;
   /** 会话重置时清理 Assembler 层缓存 */
   private systemPromptAssemblerClear?: (sessionId: string) => void;
 
@@ -267,7 +268,7 @@ export class SessionAwareRunner {
       injectedContext?: string;
       contextWindow?: number;
       signal?: AbortSignal;
-    }) => Promise<{ systemPrompt: string }>,
+    }) => Promise<{ systemPrompt: string; manifest?: import('./context/layer-types.js').AssembleManifest }>,
     clearSession?: (sessionId: string) => void,
   ): void {
     this.systemPromptAssembler = assembler;
@@ -465,6 +466,23 @@ export class SessionAwareRunner {
             signal,
           });
           this.agent.context.systemPrompt = assembled.systemPrompt;
+          if (assembled.manifest) {
+            const assembledAt = Date.now();
+            this._events?.emit({
+              type: 'context.layers.assembled',
+              timestamp: assembledAt,
+              agentId: _agentId,
+              sessionId,
+              data: {
+                sessionId,
+                agentId: _agentId,
+                manifest: assembled.manifest,
+                enabledLayerIds: assembled.manifest.layers.map((l) => l.id),
+                query: extractLayerQuery(session.messages),
+                assembledAt,
+              },
+            });
+          }
         } catch (err) {
           // 装配失败：回退拼接，保证本轮可跑
           const errMsg = err instanceof Error ? err.message : String(err);
@@ -472,6 +490,26 @@ export class SessionAwareRunner {
             `[octopi] system prompt assemble failed (session=${sessionId}): ${errMsg}; falling back to concat`,
           );
           this.applyConcatSystemPrompt(basePrompt, effectiveRunConfig.injectedContext, personaFromResolver);
+          this._events?.emit({
+            type: 'context.layers.assembled',
+            timestamp: Date.now(),
+            agentId: _agentId,
+            sessionId,
+            data: {
+              sessionId,
+              agentId: _agentId,
+              manifest: {
+                sessionId,
+                systemBudget: 0,
+                usedTokens: 0,
+                shares: {},
+                layers: [],
+              },
+              fallback: true,
+              fallbackError: errMsg,
+              assembledAt: Date.now(),
+            },
+          });
         }
       } else {
         this.applyConcatSystemPrompt(basePrompt, effectiveRunConfig.injectedContext, personaFromResolver);

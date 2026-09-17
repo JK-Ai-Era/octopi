@@ -19,12 +19,13 @@ import type { Message } from '../../core/types.js';
 // ── 层标识 ──
 
 /**
- * System prompt 内容层
+ * System prompt 内容层（契约 id）
  *
- * 排列顺序（order 默认值）沿用七层模型文档：
- * Wisdom → Persona → Skill → Knowledge → Cognition → Memory → Runtime。
+ * 排列顺序：Wisdom → Persona → Skill → Knowledge → Cognition → Memory → Runtime。
  *
- * Information（历史消息）**不是** ContextLayer，由 ContextEngine 窗口管理。
+ * **产品七层概念模型的第 7 层是 Information（session 消息）**，不是本契约里的 runtime。
+ * Information 由 ContextEngine 管消息窗口，**不是** ContextLayer。
+ * runtime 是契约附加层：injectedContext（任务/guidance）等 system 侧动态注入。
  */
 export type ContextLayerId =
   | 'wisdom'
@@ -35,7 +36,14 @@ export type ContextLayerId =
   | 'memory'
   | 'runtime';
 
-/** 默认层顺序（数字越小越靠 system prompt 前部） */
+/**
+ * 默认层顺序（数字越小越靠 system prompt 前部）
+ *
+ * 注意：`defaultShare` **不再**驱动 Assembler 全局配额。
+ * 预算默认只控 system 总量 + priority 竞争；
+ * 仅 `DefaultContextAssemblerConfig.layerShares` / assemble 参数里显式配置的层
+ * 才有硬顶（floor(contentBudget × share)）。
+ */
 export const LAYER_ORDER: Record<ContextLayerId, number> = {
   wisdom: 10,
   persona: 20,
@@ -58,7 +66,11 @@ export const LAYER_PRIORITY: Record<ContextLayerId, number> = {
   cognition: 20,
 };
 
-/** 默认 system 预算份额（装配时在启用层之间归一化） */
+/**
+ * 历史默认 share（文档/UI 参考；Assembler 默认不读此表做配额）
+ *
+ * 需要单层硬顶时，在 contextAssembler.layerShares 配置对应层。
+ */
 export const LAYER_DEFAULT_SHARE: Record<ContextLayerId, number> = {
   persona: 0.35,
   wisdom: 0.12,
@@ -151,21 +163,37 @@ export interface LayerManifestEntry {
   id: ContextLayerId;
   included: boolean;
   tokens: number;
+  /** 本层硬顶 token（仅 layerShares 配置过的层）；无单层上限时缺省 */
+  budgetTokens?: number;
   priority: number;
   order: number;
+  /** 本轮装配时该层的 droppable（以 ContextLayer 实例为准） */
+  droppable?: boolean;
   /** 未纳入或截断的原因 */
   reason?: string;
   dropped?: string;
   sources?: string[];
+  /** 层正文截断预览（仅 includeLayerPreview 时写入；不进入模型输入） */
+  preview?: string;
+  /**
+   * 层正文全文（includeLayerContent 时写入；供 Web 检查器点选查看）
+   * 不进入模型输入。WS 广播会剥离此字段，仅 REST 提供。
+   */
+  content?: string;
 }
 
 export interface AssembleManifest {
   sessionId: string;
   /** system 总预算 */
   systemBudget: number;
+  /** 结构预留（分隔符等） */
+  structureReserve?: number;
   /** 实际使用的 token */
   usedTokens: number;
-  /** 启用层归一化后的份额 */
+  /**
+   * 显式配置的 layerShares 硬顶比例（未配置的层不出现）
+   * 不再表示「启用层归一化后的全局配额」
+   */
   shares: Partial<Record<ContextLayerId, number>>;
   layers: LayerManifestEntry[];
 }
@@ -197,6 +225,11 @@ export interface ContextAssembleParams {
   layers: ContextLayer[];
   /** 检索查询；缺省从 messages 提取 */
   query?: string;
+  /**
+   * 单层硬顶比例（覆盖/合并构造器配置）：id → contentBudget 比例。
+   * 仅配置的层生效；未配置层无单层上限。
+   */
+  layerShares?: Partial<Record<ContextLayerId, number>>;
   tokenEstimator?: {
     estimateText(text: string): number;
   };

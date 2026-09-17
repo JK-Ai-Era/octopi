@@ -18,7 +18,6 @@ import type {
   AgentEventEnvelope,
   AgentSummary,
   ConnectionState,
-  MessageRecord,
   OctopiClient,
   PendingApproval,
   SessionSummary,
@@ -29,6 +28,30 @@ import type {
 import { ConversationAdapter } from '../conversation/adapter.js';
 import type { AdapterSnapshot } from '../conversation/adapter.js';
 import type { ConversationItem, ToolConversationItem, ViewMode } from '../conversation/types.js';
+import {
+  buildContextLayersSnapshot,
+  type ContextLayersSnapshot,
+} from '../../../harness/context/layer-snapshot.js';
+import type {
+  AssembleManifest,
+  ContextLayerId,
+} from '../../../harness/context/layer-types.js';
+import type { ContextLayerHealthDto, ContextLayerTurnSummaryDto } from '../sdk/client.js';
+
+/** 近 N 轮 layer timeline 上限 */
+const CONTEXT_TURN_HISTORY_MAX = 20;
+
+function summaryFromSnapshot(snapshot: ContextLayersSnapshot): ContextLayerTurnSummaryDto {
+  return {
+    assembledAt: snapshot.assembledAt,
+    usedTokens: snapshot.usedTokens,
+    systemBudget: snapshot.systemBudget,
+    included: snapshot.layers.filter((l) => l.included).map((l) => l.id),
+    dropped: snapshot.layers
+      .filter((l) => l.status === 'dropped' || l.status === 'error')
+      .map((l) => l.id),
+  };
+}
 
 // ──────────────────────────────────────
 // Events
@@ -112,6 +135,12 @@ export interface InspectorState {
   lastRetryLabel?: string;
   /** 上下文压缩状态（context.compact.*） */
   compact?: CompactStatus;
+  /** 七层装配快照（context.layers.assembled / REST） */
+  contextLayers?: ContextLayersSnapshot;
+  /** 近 N 轮装配摘要（timeline） */
+  contextLayersTimeline?: ContextLayerTurnSummaryDto[];
+  /** Agent 七层数据面健康（REST） */
+  contextHealth?: ContextLayerHealthDto;
 }
 
 export interface ChatState {
@@ -215,6 +244,34 @@ export class OctopiRuntimeStore extends EventTarget {
     this.agents = await this.client.getAgents();
     this.dispatch('connection', new ConnectionEvent('connection', { state: this.connectionState, agents: this.agents }));
     return this.agents;
+  }
+
+  /**
+   * 将 REST 拉到的层快照写入 inspector（点选层加载 content 时用）
+   *
+   * @param snapshot - ContextLayersSnapshot
+   */
+  applyContextLayersSnapshot(snapshot: ContextLayersSnapshot): void {
+    this.chat.inspector = { ...this.chat.inspector, contextLayers: snapshot };
+    this.dispatch('inspector', new InspectorEvent('inspector', { inspector: this.chat.inspector }));
+    void this.refreshContextHealth();
+  }
+
+  /**
+   * 拉取当前 agent 的数据面健康并写入 inspector
+   */
+  private async refreshContextHealth(): Promise<void> {
+    const agentId = this.chat.agentId || this.currentSession?.meta.agentId;
+    if (!agentId) return;
+    try {
+      const health = await this.client.getAgentContextHealth(agentId);
+      if (health) {
+        this.chat.inspector = { ...this.chat.inspector, contextHealth: health };
+        this.dispatch('inspector', new InspectorEvent('inspector', { inspector: this.chat.inspector }));
+      }
+    } catch {
+      // health 失败不影响会话
+    }
   }
 
   async refreshSessions(agentId?: string): Promise<SessionSummary[]> {
@@ -372,6 +429,43 @@ export class OctopiRuntimeStore extends EventTarget {
       inspector: cached?.inspector ? { ...cached.inspector } : {},
       tasks,
     };
+
+    // 打开会话时拉取最近一次七层快照 + Agent 数据面健康
+    try {
+      const layers = await this.client.getSessionContextLayers(sessionId);
+      const agentIdForHealth = view.meta.agentId;
+      const health = agentIdForHealth
+        ? await this.client.getAgentContextHealth(agentIdForHealth).catch(() => null)
+        : null;
+      const patch: Partial<InspectorState> = {};
+      if (layers) {
+        patch.contextLayers = layers;
+        const turn: ContextLayerTurnSummaryDto = {
+          assembledAt: layers.assembledAt,
+          usedTokens: layers.usedTokens,
+          systemBudget: layers.systemBudget,
+          included: layers.layers.filter((l) => l.included).map((l) => l.id),
+          dropped: layers.layers.filter((l) => l.status === 'dropped' || l.status === 'error').map((l) => l.id),
+        };
+        const prev = cached?.inspector?.contextLayersTimeline ?? this.chat.inspector.contextLayersTimeline ?? [];
+        const last = prev[prev.length - 1];
+        const isDup =
+          last &&
+          layers.assembledAt !== undefined &&
+          last.assembledAt === layers.assembledAt;
+        patch.contextLayersTimeline = isDup
+          ? [...prev]
+          : [...prev, turn].slice(-20);
+      }
+      if (health) {
+        patch.contextHealth = health;
+      }
+      if (Object.keys(patch).length > 0) {
+        this.chat.inspector = { ...this.chat.inspector, ...patch };
+      }
+    } catch {
+      // 快照端点不可用不阻塞会话打开
+    }
 
     this.client.sendSubscribe(sessionId, view.meta.agentId);
 
@@ -684,6 +778,47 @@ export class OctopiRuntimeStore extends EventTarget {
         inspectorChanged = true;
         break;
       }
+      case 'context.layers.assembled': {
+        const d = event.data as
+          | {
+              manifest?: AssembleManifest;
+              enabledLayerIds?: ContextLayerId[];
+              query?: string;
+              assembledAt?: number;
+              fallback?: boolean;
+              fallbackError?: string;
+            }
+          | undefined;
+        if (d?.manifest) {
+          const snapshot = buildContextLayersSnapshot({
+            manifest: d.manifest,
+            enabledLayerIds: d.enabledLayerIds,
+            query: d.query,
+            assembledAt: d.assembledAt ?? event.timestamp,
+            fallback: d.fallback,
+            fallbackError: d.fallbackError,
+          });
+          const turn = summaryFromSnapshot(snapshot);
+          const prevTimeline = this.chat.inspector.contextLayersTimeline ?? [];
+          const last = prevTimeline[prevTimeline.length - 1];
+          const isDup =
+            last &&
+            snapshot.assembledAt !== undefined &&
+            last.assembledAt === snapshot.assembledAt;
+          const nextTimeline = isDup
+            ? prevTimeline
+            : [...prevTimeline, turn].slice(-CONTEXT_TURN_HISTORY_MAX);
+          this.chat.inspector = {
+            ...this.chat.inspector,
+            contextLayers: snapshot,
+            contextLayersTimeline: nextTimeline,
+          };
+          inspectorChanged = true;
+          // 装配后刷新数据面健康（打开会话时 Agent 可能尚未 build）
+          void this.refreshContextHealth();
+        }
+        break;
+      }
       case 'empty_response_retry':
       case 'planning_only_retry': {
         this.chat.inspector = { ...this.chat.inspector, lastRetryLabel: event.type === 'empty_response_retry' ? 'Empty response' : 'Planning-only' };
@@ -718,6 +853,45 @@ export class OctopiRuntimeStore extends EventTarget {
     const cached = this.conversationCache.get(sessionId);
     if (!cached) return;
 
+    // 后台会话也写入七层快照（WS 已无 content，状态/timeline 仍有效）
+    let inspector = cached.inspector;
+    if (event.type === 'context.layers.assembled') {
+      const d = event.data as
+        | {
+            manifest?: AssembleManifest;
+            enabledLayerIds?: ContextLayerId[];
+            query?: string;
+            assembledAt?: number;
+            fallback?: boolean;
+            fallbackError?: string;
+          }
+        | undefined;
+      if (d?.manifest) {
+        const snapshot = buildContextLayersSnapshot({
+          manifest: d.manifest,
+          enabledLayerIds: d.enabledLayerIds,
+          query: d.query,
+          assembledAt: d.assembledAt ?? event.timestamp,
+          fallback: d.fallback,
+          fallbackError: d.fallbackError,
+        });
+        const turn = summaryFromSnapshot(snapshot);
+        const prevTimeline = inspector.contextLayersTimeline ?? [];
+        const last = prevTimeline[prevTimeline.length - 1];
+        const isDup =
+          last &&
+          snapshot.assembledAt !== undefined &&
+          last.assembledAt === snapshot.assembledAt;
+        inspector = {
+          ...inspector,
+          contextLayers: snapshot,
+          contextLayersTimeline: isDup
+            ? prevTimeline
+            : [...prevTimeline, turn].slice(-CONTEXT_TURN_HISTORY_MAX),
+        };
+      }
+    }
+
     // 用临时 adapter 复原该会话的追踪状态后应用事件
     const adapter = new ConversationAdapter();
     adapter.restoreState(cached.adapterState);
@@ -726,13 +900,14 @@ export class OctopiRuntimeStore extends EventTarget {
     // 后台也要跑同一套 runStatus 状态机，否则切回时 waiting 会丢成 idle
     const nextStatus = OctopiRuntimeStore.nextRunStatus(event, cached.runStatus);
 
-    if (!result.changed && nextStatus === cached.runStatus) return;
+    const inspectorChanged = inspector !== cached.inspector;
+    if (!result.changed && nextStatus === cached.runStatus && !inspectorChanged) return;
 
     this.conversationCache.set(sessionId, {
       items: result.changed ? result.items : cached.items,
       viewMode: cached.viewMode === 'history' ? 'hybrid' : cached.viewMode,
       adapterState: result.changed ? adapter.getState() : cached.adapterState,
-      inspector: cached.inspector,
+      inspector,
       runStatus: nextStatus,
     });
   }

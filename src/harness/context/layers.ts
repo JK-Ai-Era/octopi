@@ -233,7 +233,7 @@ export class CognitionLayer extends BaseLayer {
 
   async assemble(ctx: LayerAssembleContext): Promise<LayerContent | null> {
     if (!ctx.query?.trim()) return null;
-    const graph = await this.store.queryRelated(ctx.query, this.depth);
+    const graph = await resolveCognitionGraph(this.store, ctx.query, this.depth);
     if (!graph.nodes.length) return null;
 
     const lines: string[] = [];
@@ -245,6 +245,13 @@ export class CognitionLayer extends BaseLayer {
         lines.push(`- ${source.name} —[${edge.relationType}]→ ${target.name}${desc}`);
       }
     }
+    // 无边时仍列出命中概念，避免「有节点却整层 empty」
+    if (lines.length === 0) {
+      for (const node of graph.nodes) {
+        const desc = node.description ? `: ${node.description}` : '';
+        lines.push(`- ${node.name}${desc}`);
+      }
+    }
     if (lines.length === 0) return null;
 
     const text = `# 相关概念\n\n${lines.join('\n')}`;
@@ -254,6 +261,48 @@ export class CognitionLayer extends BaseLayer {
       sources: graph.nodes.map((n: { id: string }) => n.id),
     });
   }
+}
+
+/**
+ * 解析认知图：先 store.queryRelated，失败则从全图按「概念名 ⊆ query」筛种子再扩边
+ *
+ * @param store - ConceptGraphStore
+ * @param query - 检索文本（通常为最近用户消息）
+ * @param depth - 扩展深度
+ * @returns 命中的子图（可能为空）
+ */
+async function resolveCognitionGraph(
+  store: ConceptGraphStore,
+  query: string,
+  depth: number,
+): Promise<{ nodes: Array<{ id: string; name: string; description?: string }>; edges: Array<{ sourceId: string; targetId: string; relationType: string; description?: string }> }> {
+  const direct = await store.queryRelated(query, depth);
+  if (direct.nodes.length) return direct;
+
+  const full = await store.getFullGraph();
+  const q = query.toLowerCase();
+  const seeds = full.nodes.filter((n) => n.name && q.includes(n.name.toLowerCase()));
+  if (!seeds.length) return { nodes: [], edges: [] };
+
+  const collected = new Map(seeds.map((n) => [n.id, n]));
+  const nodeById = new Map(full.nodes.map((n) => [n.id, n]));
+  const visited = new Set(seeds.map((n) => n.id));
+  const queue = seeds.map((n) => ({ id: n.id, d: 0 }));
+  while (queue.length > 0) {
+    const { id, d } = queue.shift()!;
+    if (d >= depth) continue;
+    for (const e of full.edges) {
+      const neighborId = e.sourceId === id ? e.targetId : e.targetId === id ? e.sourceId : null;
+      if (!neighborId || visited.has(neighborId)) continue;
+      const node = nodeById.get(neighborId);
+      if (!node) continue;
+      visited.add(neighborId);
+      collected.set(neighborId, node);
+      queue.push({ id: neighborId, d: d + 1 });
+    }
+  }
+  const edges = full.edges.filter((e) => collected.has(e.sourceId) && collected.has(e.targetId));
+  return { nodes: [...collected.values()], edges };
 }
 
 // ── Wisdom（静态/半静态） ──

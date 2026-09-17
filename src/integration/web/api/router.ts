@@ -122,6 +122,18 @@ export class WebApiRouter {
         return this.json(res, 200, { ok: true, data: { aborted: true } });
       }
 
+      const contextLayersMatch = relativePath.match(/^\/sessions\/([^/]+)\/context\/layers$/);
+      if (contextLayersMatch && method === 'GET') {
+        const snapshot = this.gateway.getSessionContextLayers(contextLayersMatch[1]);
+        return this.json(res, 200, { ok: true, data: snapshot });
+      }
+
+      const agentHealthMatch = relativePath.match(/^\/agents\/([^/]+)\/context\/health$/);
+      if (agentHealthMatch && method === 'GET') {
+        const health = await this.gateway.getAgentContextHealth(agentHealthMatch[1]);
+        return this.json(res, 200, { ok: true, data: health });
+      }
+
       if (relativePath === '/approvals' && method === 'GET') {
         return this.json(res, 200, {
           ok: true,

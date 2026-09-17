@@ -494,29 +494,48 @@ Knowledge（知识）= 外部参考资料
 Skill（技能）= 工作流定义
 ```
 
-### 七层定义
+### 七层定义（产品概念模型）
 
 | 层 | 本质 | 构建归属 | 默认路径状态 |
 |---|---|---|---|
-| **Wisdom** | 思维范式 | `memory` 领域生成 | 契约有层，默认未注册 |
+| **Wisdom** | 思维范式 | `memory` 领域生成 | **已接线**（Builder/Gateway 可挂 WisdomStore） |
 | **Persona** | agent 的 DNA | `agent-building` 加载 | **已接线** |
 | **Skill** | 工作流定义 | `plugin-ecosystem` | **已接线**（`formatForPrompt` 索引） |
 | **Knowledge** | 外部参考资料 | `harness/context/knowledge` | **已接线**（进程内 store） |
-| **Cognition** | 概念关系网络 | `memory` 领域构建 | 契约有层，默认未注册 |
+| **Cognition** | 概念关系网络 | `memory` 领域构建 | **已接线**（Builder/Gateway 可挂 ConceptGraphStore） |
 | **Memory** | 交互中提取的洞察 | `memory` 领域 | **已接线**（`SqliteMemoryStore`） |
-| **Information** | 原始交互记录 | SessionStore | **已接线**（`DefaultContextEngine` 窗口） |
+| **Information** | 原始交互记录（**session 消息**） | SessionStore + ContextEngine | **已接线**（消息窗口，**不是** ContextLayer） |
 
-### 组装顺序（order 默认值）
+**概念模型 vs 实现契约（必读）：**
+
+- 产品「七层模型」的第 7 层是 **Information = 会话消息**，不是 system prompt 片段。
+- `ContextLayerId`（system 装配契约）是 7 个 **system 侧** id：`wisdom / persona / skill / knowledge / cognition / memory / runtime`。
+- **Runtime** 是契约附加层：收编 Runner 的 `injectedContext`（会话任务 / guidance），**不是** Information，也不是产品第 7 层。
+- **Information 不进 ContextAssembler**；由 `DefaultContextEngine` 做消息选择 / 压缩 / 主动摘要。
+
+### 组装分工
 
 ```
-1. Wisdom     ← order 10（未注册）
+产品七层分馏：
+  Information（session）→ Memory → Cognition → Wisdom
+  Persona / Skill / Knowledge = 另外三个维度
+
+LLM 实际输入：
+  system prompt  = ContextLayer 装配（Persona/Skill/Knowledge/Cognition/Memory/Wisdom/Runtime）
+  messages       = Information 窗口（ContextEngine）
+```
+
+System 契约层 order：
+
+```
+1. Wisdom     ← order 10
 2. Persona    ← order 20
 3. Skill      ← order 30
 4. Knowledge  ← order 40
-5. Cognition  ← order 50（未注册）
+5. Cognition  ← order 50
 6. Memory     ← order 60
-7. Runtime    ← order 70（session tasks / guidance；靠近对话）
-Information   ← 不进 ContextLayer，由 ContextEngine 管窗口
+7. Runtime    ← order 70（契约附加：injectedContext）
+Information   ← 不进 ContextLayer；ContextEngine 管窗口
 ```
 
 ### memory/ 领域的三层抽象
@@ -538,23 +557,23 @@ SessionAwareRunner.handle()           ← Session 生命周期；播种 contextC
   ↓
 SessionTask / guidance → injectedContext
   ↓
-ContextAssembler（层契约）              ← Persona + Skill + Knowledge + Memory + Runtime
+ContextAssembler（system 契约层）       ← Persona + Skill + Knowledge + Memory + Cognition + Wisdom + Runtime
   ↓
 Agent.run() / runAgentWithReliability()
   ↓
 agentLoop() → convertToLlm
   ↓
-DefaultContextEngine.assemble()        ← 主动摘要 + 窗口选择/压缩
+DefaultContextEngine.assemble()        ← Information：主动摘要 + 窗口选择/压缩
   ↓
 ModelProvider.call()
   ↓
 [tool_calls] → SecurityGuard → [HITL?] → ExecutionEnv → Tool
   ↓
-HarnessLoopEvent + context.compact.* 事件
+HarnessLoopEvent + context.compact.* / context.layers.assembled 事件
   ↓
 Session save：全量 messages + contextCompact 快照
   ↓
-[任务结束后] → Memory 提取（信息→记忆→认知→智慧）
+[任务结束后] → Memory 提取（Information→Memory→Cognition→Wisdom）
 ```
 
 ---

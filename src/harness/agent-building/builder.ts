@@ -241,6 +241,18 @@ export class AgentBuilder {
   private _memoryStore?: import('../memory/types.js').MemoryStore;
   /** 知识检索（注入 system prompt KnowledgeLayer） */
   private _knowledgeStore?: import('../context/knowledge/types.js').KnowledgeStore;
+  /** 智慧（注入 system prompt WisdomLayer） */
+  private _wisdomStore?: import('../memory/types.js').WisdomStore;
+  /** 认知图谱（注入 system prompt CognitionLayer） */
+  private _cognitionStore?: import('../memory/types.js').ConceptGraphStore;
+  /** system prompt 装配器调参 */
+  private _contextAssemblerConfig?: {
+    systemBudgetRatio?: number;
+    layerShares?: Partial<Record<import('../context/layer-types.js').ContextLayerId, number>>;
+    includeLayerPreview?: boolean;
+    layerPreviewChars?: number;
+    includeLayerContent?: boolean;
+  };
   /** 文件式 persona 的 run 时解析器（指纹缓存，改文件下一轮生效） */
   private _personaResolver?: () => Promise<string>;
   /** build 时从磁盘读到的纯 persona（可能为空；不含默认 tools prompt） */
@@ -398,6 +410,38 @@ export class AgentBuilder {
   /** 注入 KnowledgeStore（每轮按 query 召回进 system prompt） */
   knowledgeStore(store: import('../context/knowledge/types.js').KnowledgeStore): this {
     this._knowledgeStore = store;
+    return this;
+  }
+
+  /** 注入 WisdomStore（半静态思维范式，进 system prompt WisdomLayer） */
+  wisdomStore(store: import('../memory/types.js').WisdomStore): this {
+    this._wisdomStore = store;
+    return this;
+  }
+
+  /** 注入 ConceptGraphStore（按 query 召回概念边，进 system prompt CognitionLayer） */
+  cognitionStore(store: import('../memory/types.js').ConceptGraphStore): this {
+    this._cognitionStore = store;
+    return this;
+  }
+
+  /**
+   * system prompt 装配器调参
+   *
+   * @param config.systemBudgetRatio - system 预算占 contextWindow 比例
+   * @param config.layerShares - 单层硬顶（仅配置的层生效；默认不配额）
+   * @param config.includeLayerPreview - 是否在 manifest 写入层 preview
+   * @param config.layerPreviewChars - preview 最大字符数
+   * @param config.includeLayerContent - 是否在 manifest 写入层正文全文
+   */
+  contextAssembler(config: {
+    systemBudgetRatio?: number;
+    layerShares?: Partial<Record<import('../context/layer-types.js').ContextLayerId, number>>;
+    includeLayerPreview?: boolean;
+    layerPreviewChars?: number;
+    includeLayerContent?: boolean;
+  }): this {
+    this._contextAssemblerConfig = { ...this._contextAssemblerConfig, ...config };
     return this;
   }
 
@@ -578,7 +622,16 @@ export class AgentBuilder {
    *
    * 使用新架构：Harness Agent 门面（agent.run = reliability）。
    */
-  async build(): Promise<{ agent: Agent; harness: ReliabilityHarness; runner: SessionAwareRunner; mcpManager: McpManager; runtime?: import('../autonomous-subsystem/runtime.js').SubsystemRuntime;  events: EventBus }> {
+  async build(): Promise<{
+    agent: Agent;
+    harness: ReliabilityHarness;
+    runner: SessionAwareRunner;
+    mcpManager: McpManager;
+    runtime?: import('../autonomous-subsystem/runtime.js').SubsystemRuntime;
+    events: EventBus;
+    /** 七层数据面健康探针（store 计数 / 注册状态） */
+    contextHealth: (agentId?: string) => Promise<import('../context/layer-health.js').ContextLayerHealth>;
+  }> {
     const events = this._events ?? new DefaultEventBus();
     this._events = events;
 
@@ -632,16 +685,28 @@ export class AgentBuilder {
       // 传入磁盘 persona 真实内容（可能为 ''），供 runner 区分「从未有人格」与「热删除」
       runner.setSystemPromptResolver(this._personaResolver, this._initialPersonaContent ?? '');
     }
-    // 层契约装配：persona + skill 索引 + memory/knowledge 召回 + runtime
+    // 层契约装配：persona + skill 索引 + wisdom/cognition/memory/knowledge 召回 + runtime
     const skillManager = this._skillManager;
     const memoryStore = this._memoryStore;
     const knowledgeStore = this._knowledgeStore;
+    const wisdomStore = this._wisdomStore;
+    const cognitionStore = this._cognitionStore;
+    const assemblerCfg = this._contextAssemblerConfig;
     const systemPromptAssembler = createDefaultSystemPromptAssembler({
       getSkillPromptText: skillManager
         ? () => skillManager.formatForPrompt()
         : undefined,
       memoryStore,
       knowledgeStore,
+      wisdomStore,
+      cognitionStore,
+      systemBudgetRatio: assemblerCfg?.systemBudgetRatio,
+      assemblerConfig: {
+        layerShares: assemblerCfg?.layerShares,
+        includeLayerPreview: assemblerCfg?.includeLayerPreview,
+        layerPreviewChars: assemblerCfg?.layerPreviewChars,
+        includeLayerContent: assemblerCfg?.includeLayerContent,
+      },
     });
     runner.setSystemPromptAssembler(
       (input) => systemPromptAssembler.assemble(input),
@@ -687,7 +752,37 @@ export class AgentBuilder {
       runner.setSubsystemRuntime(subsystemRuntime);
     }
 
-    return { agent, harness, runner, mcpManager, runtime: subsystemRuntime, events };
+    const skillManagerForHealth = skillManager;
+    const memoryStoreForHealth = memoryStore;
+    const knowledgeStoreForHealth = knowledgeStore;
+    const wisdomStoreForHealth = wisdomStore;
+    const cognitionStoreForHealth = cognitionStore;
+    const personaLoadedForHealth = Boolean(
+      (this._systemPrompt ?? '').trim() ||
+        (this._initialPersonaContent ?? '').trim() ||
+        this._personaResolver,
+    );
+
+    return {
+      agent,
+      harness,
+      runner,
+      mcpManager,
+      runtime: subsystemRuntime,
+      events,
+      contextHealth: async (agentId?: string) => {
+        const { probeContextLayerHealth } = await import('../context/layer-health.js');
+        return probeContextLayerHealth({
+          agentId: agentId ?? 'default',
+          skillCount: skillManagerForHealth?.list().length,
+          memoryStore: memoryStoreForHealth,
+          knowledgeStore: knowledgeStoreForHealth,
+          wisdomStore: wisdomStoreForHealth,
+          cognitionStore: cognitionStoreForHealth,
+          personaLoaded: personaLoadedForHealth,
+        });
+      },
+    };
   }
 
   /**

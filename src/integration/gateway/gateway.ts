@@ -24,6 +24,14 @@ import type { GatewayConfig } from '../types/gateway-config.js';
 
 import type { HookContext } from '../../harness/types/hook-context.js';
 import type { AgentEvent } from '../../core/primitives/event-bus.js';
+import {
+  buildContextLayersSnapshot,
+  type ContextLayersSnapshot,
+} from '../../harness/context/layer-snapshot.js';
+import type {
+  AssembleManifest,
+  ContextLayerId,
+} from '../../harness/context/layer-types.js';
 import type { ModelProvider } from '../../core/interfaces/model-provider.js';
 import type { Observer } from '../../core/interfaces/observer.js';
 import type { SessionStore } from '../../core/interfaces/session-store.js';
@@ -111,7 +119,7 @@ export class Gateway {
   /** 工具 */
   private tools: RegisteredTool[] = [];
   /** Agent 缓存（避免每条消息重建） */
-  private agentCache = new Map<string, { agent: import('../../harness/agent/index.js').Agent; runner: SessionAwareRunner }>();
+  private agentCache = new Map<string, { agent: import('../../harness/agent/index.js').Agent; runner: SessionAwareRunner; contextHealth?: (agentId?: string) => Promise<import('../../harness/context/layer-health.js').ContextLayerHealth> }>();
   /** 流式 adapter 引用（用于广播事件） */
   private streamingAdapters: StreamingChannelAdapter[] = [];
   /** 每个 provider 的熔断器 */
@@ -120,6 +128,9 @@ export class Gateway {
   private _defaultStorePromise?: Promise<SessionStore<SessionData>>;
   /** Web Runtime pending approvals */
   private pendingApprovals = new Map<string, PendingApprovalView>();
+  /** 会话最近一次七层装配快照（含 content，仅 REST）；FIFO 防泄漏 */
+  private lastContextLayers = new Map<string, ContextLayersSnapshot>();
+  private static readonly MAX_CONTEXT_LAYERS_SESSIONS = 256;
   /** 激活宿主（arch/agent-runtime.md）；消息路径经 dispatch */
   private runtime: AgentRuntime;
   private gatewayBus: DefaultEventBus;
@@ -141,6 +152,9 @@ export class Gateway {
     });
     this.gatewayBus.onAll((event) => {
       this.emitEvent(event);
+      if (event.type === 'context.layers.assembled' && event.sessionId) {
+        this.rememberContextLayers(event.sessionId, event);
+      }
       // 终态事件（turn.end / engine.*）改由 processMessage.onEvent 用 sessionKey 广播，
       // 这里跳过，避免双投；其余非流式事件仍走 bus。
       if (
@@ -148,8 +162,13 @@ export class Gateway {
         event.type !== 'llm_stream_delta' &&
         !Gateway.isTerminalWsEvent(event.type)
       ) {
+        // WS 不广播层正文全文（content）；点选层时 UI 经 REST 拉取
+        const out =
+          event.type === 'context.layers.assembled'
+            ? stripLayerContentFromEvent(event)
+            : event;
         for (const adapter of this.streamingAdapters) {
-          adapter.broadcastEvent(event.sessionId, event as never);
+          adapter.broadcastEvent(event.sessionId, out as never);
         }
       }
     });
@@ -453,6 +472,71 @@ export class Gateway {
     return null;
   }
 
+  /**
+   * 读取会话最近一次七层装配快照
+   *
+   * @param sessionId - 会话 id
+   * @returns 快照；尚未装配过则为 null
+   */
+  getSessionContextLayers(sessionId: string): ContextLayersSnapshot | null {
+    return this.lastContextLayers.get(sessionId) ?? null;
+  }
+
+  /**
+   * 读取 Agent 七层数据面健康（store 计数）
+   *
+   * 优先：已 build 的 contextHealth probe
+   * 回退：按 agent.home 直接扫 skills / agent.db（不依赖懒构建）
+   *
+   * @param agentId - Agent id
+   * @returns 健康快照
+   */
+  async getAgentContextHealth(agentId: string): Promise<import('../../harness/context/layer-health.js').ContextLayerHealth> {
+    const cached = this.agentCache.get(agentId);
+    if (cached?.contextHealth) {
+      return cached.contextHealth(agentId);
+    }
+    const def = this.agents.get(agentId);
+    if (def?.home) {
+      const { probeAgentHomeHealth } = await import('../../harness/context/layer-health.js');
+      return probeAgentHomeHealth(agentId, def.home);
+    }
+    const { probeContextLayerHealth } = await import('../../harness/context/layer-health.js');
+    return probeContextLayerHealth({ agentId, personaLoaded: false });
+  }
+
+  private rememberContextLayers(sessionId: string, event: AgentEvent): void {
+    const data = event.data as
+      | {
+          manifest?: AssembleManifest;
+          enabledLayerIds?: ContextLayerId[];
+          query?: string;
+          assembledAt?: number;
+          fallback?: boolean;
+          fallbackError?: string;
+        }
+      | undefined;
+    if (!data?.manifest) return;
+    if (
+      !this.lastContextLayers.has(sessionId) &&
+      this.lastContextLayers.size >= Gateway.MAX_CONTEXT_LAYERS_SESSIONS
+    ) {
+      const oldest = this.lastContextLayers.keys().next().value;
+      if (oldest !== undefined) this.lastContextLayers.delete(oldest);
+    }
+    this.lastContextLayers.set(
+      sessionId,
+      buildContextLayersSnapshot({
+        manifest: data.manifest,
+        enabledLayerIds: data.enabledLayerIds,
+        query: data.query,
+        assembledAt: data.assembledAt ?? event.timestamp,
+        fallback: data.fallback,
+        fallbackError: data.fallbackError,
+      }),
+    );
+  }
+
   async queryMemory(_options: { q: string; limit: number }): Promise<Record<string, unknown> | null> {
     return null;
   }
@@ -637,6 +721,7 @@ export class Gateway {
   private async buildAgent(agent: AgentDefinition): Promise<{
     agent: import('../../harness/agent/index.js').Agent;
     runner: SessionAwareRunner;
+    contextHealth?: (agentId?: string) => Promise<import('../../harness/context/layer-health.js').ContextLayerHealth>;
   }> {
     // 获取主 provider
     const modelProvider = this.providers.get(agent.model.provider);
@@ -671,6 +756,42 @@ export class Gateway {
       .store(this.store)
       .workspace(agent.workspace ?? '')
       .events(this.gatewayBus);
+
+    // ── 七层数据源：skills / memory / wisdom / cognition / knowledge / assembler ──
+    // 与 config-bridge 同构，保证 serve 路径 Web「上下文」能看到真实层数据
+    const { existsSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const skillDir =
+      agent.skillDirectory ?? (agent.home ? join(agent.home, 'skills') : undefined);
+    if (skillDir && existsSync(skillDir)) {
+      try {
+        const { DefaultSkillManager } = await import('../../harness/plugin-ecosystem/skills/manager.js');
+        const skillManager = new DefaultSkillManager();
+        await skillManager.discover(skillDir);
+        builder.skills(skillManager);
+      } catch (err) {
+        console.warn(`[Gateway] skill discover failed for agent "${agent.id}": ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    if (agent.home) {
+      try {
+        const { AgentDatabase } = await import('../../harness/memory/sqlite/agent-db.js');
+        const { SqliteMemoryStore } = await import('../../harness/memory/sqlite/memory-store.js');
+        const { SqliteWisdomStore } = await import('../../harness/memory/sqlite/wisdom-store.js');
+        const { SqliteConceptGraph } = await import('../../harness/memory/sqlite/cognition-store.js');
+        const { MemoryKnowledgeStore } = await import('../../harness/context/knowledge/memory-store.js');
+        const db = await AgentDatabase.create({ dbPath: join(agent.home, 'agent.db') });
+        builder.memoryStore(new SqliteMemoryStore(db));
+        builder.wisdomStore(new SqliteWisdomStore(db));
+        builder.cognitionStore(new SqliteConceptGraph(db));
+        builder.knowledgeStore(new MemoryKnowledgeStore());
+      } catch (err) {
+        console.warn(`[Gateway] context stores unavailable for agent "${agent.id}": ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    if (this.config.contextAssembler) {
+      builder.contextAssembler(this.config.contextAssembler);
+    }
 
     // 注册工具
     console.log(`[Gateway] Building agent "${agent.id}" with ${this.tools.length} tools: ${this.tools.map(t => t.definition.name).join(', ')}`);
@@ -714,7 +835,7 @@ export class Gateway {
       built.events.on(type, forwardTaskEvent);
     }
 
-    return { agent: built.agent, runner: built.runner };
+    return { agent: built.agent, runner: built.runner, contextHealth: built.contextHealth };
   }
 
   private resolveAgent(msg: ChannelMessage): AgentDefinition | undefined {
@@ -811,4 +932,27 @@ export class Gateway {
     };
     return levels[level.toUpperCase()] ?? 3;
   }
+}
+
+/**
+ * WS 广播前剥离 context.layers.assembled 里的层正文 content
+ *
+ * Gateway 缓存/REST 仍保留全文；UI 点选层时经 REST 拉取。
+ * preview 保留在 WS，便于未点选时浏览摘要。
+ */
+function stripLayerContentFromEvent(event: AgentEvent): AgentEvent {
+  const data = event.data as
+    | { manifest?: AssembleManifest; [k: string]: unknown }
+    | undefined;
+  if (!data?.manifest?.layers) return event;
+  return {
+    ...event,
+    data: {
+      ...data,
+      manifest: {
+        ...data.manifest,
+        layers: data.manifest.layers.map(({ content: _content, ...rest }) => rest),
+      },
+    },
+  } as AgentEvent;
 }

@@ -225,6 +225,7 @@ export async function buildFromConfig(config: NormalizedHarnessConfig): Promise<
   const budgetConfig = config.budget;
   const runGuardConfig = config.runGuard;
   const contextEngineConfig = config.contextEngine;
+  const contextAssemblerConfig = config.contextAssembler;
 
   // 2. 加载子系统（三级搜索路径）
   const subsystemSpecs = await resolveSubsystemSpecs();
@@ -240,6 +241,7 @@ export async function buildFromConfig(config: NormalizedHarnessConfig): Promise<
         budgetConfig,
         runGuardConfig,
         contextEngineConfig,
+        contextAssemblerConfig,
         flatModels,
         levelMap: config.levelMap,
         subsystemSpecs,
@@ -266,6 +268,7 @@ async function buildAgent(
     budgetConfig?: Partial<IterationBudgetConfig>;
     runGuardConfig?: RunGuardJsonConfig;
     contextEngineConfig?: ContextEngineConfig;
+    contextAssemblerConfig?: import('../../config.js').ContextAssemblerConfig;
     flatModels: NormalizedModelInfo[];
     levelMap?: import('../../config.js').LevelMap;
     subsystemSpecs?: SubsystemSpec[];
@@ -318,20 +321,24 @@ async function buildAgent(
     builder.skillDirectory(skillDir);
   }
 
-  // ── Memory / Knowledge（system prompt 召回层） ──
-  // 优先挂 agent home 下的 AgentDatabase（SqliteMemoryStore）；失败则跳过（不阻断 build）
+  // ── Memory / Wisdom / Cognition / Knowledge（system prompt 层） ──
+  // 优先挂 agent home 下的 AgentDatabase；失败则跳过（不阻断 build）
   if (agentHome) {
     try {
       const { AgentDatabase } = await import('../memory/sqlite/agent-db.js');
       const { SqliteMemoryStore } = await import('../memory/sqlite/memory-store.js');
+      const { SqliteWisdomStore } = await import('../memory/sqlite/wisdom-store.js');
+      const { SqliteConceptGraph } = await import('../memory/sqlite/cognition-store.js');
       const { MemoryKnowledgeStore } = await import('../context/knowledge/memory-store.js');
       const db = await AgentDatabase.create({ dbPath: join(agentHome, 'agent.db') });
       builder.memoryStore(new SqliteMemoryStore(db));
+      builder.wisdomStore(new SqliteWisdomStore(db));
+      builder.cognitionStore(new SqliteConceptGraph(db));
       // Knowledge 暂无 SQLite 实现，用进程内 store；后续可替换
       builder.knowledgeStore(new MemoryKnowledgeStore());
     } catch (err) {
       console.warn(
-        `[ConfigBridge] memory/knowledge stores unavailable for agent home ${agentHome}: ${err instanceof Error ? err.message : String(err)}`,
+        `[ConfigBridge] memory/wisdom/cognition/knowledge stores unavailable for agent home ${agentHome}: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
   }
@@ -353,6 +360,11 @@ async function buildAgent(
   // ── Context Engine ──
   const contextEngine = resolveContextEngine(shared.contextEngineConfig);
   builder.contextEngine(contextEngine);
+
+  // ── Context Assembler（七层 system 装配） ──
+  if (shared.contextAssemblerConfig) {
+    builder.contextAssembler(shared.contextAssemblerConfig);
+  }
 
   // ── 默认 summarize：优先 mini，否则主模型（保证 LLM 摘要路径可走） ──
   if (provider) {

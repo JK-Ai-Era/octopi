@@ -331,6 +331,37 @@ export interface ContextEngineConfig {
   summaryModel?: string;
 }
 
+/**
+ * system prompt 层装配器配置（七层 ContextAssembler）
+ *
+ * 与 contextEngine 分工：本配置管 **system 总预算与可选单层硬顶**；
+ * contextEngine 管 **消息窗口压缩**。
+ *
+ * 预算语义：默认只控 system 总量 + priority 竞争；
+ * `layerShares` 仅对显式配置的层生效（硬顶 = contentBudget × share）。
+ */
+export interface ContextAssemblerConfig {
+  /** system 预算占 contextWindow 比例（默认 0.22） */
+  systemBudgetRatio?: number;
+  /**
+   * 单层硬顶：层 id → contentBudget 比例 [0,1]。
+   * 默认不配置 = 无单层配额。配置了的层超出会先被截断到硬顶。
+   */
+  layerShares?: Partial<Record<'wisdom' | 'persona' | 'skill' | 'knowledge' | 'cognition' | 'memory' | 'runtime', number>>;
+  /**
+   * 是否在 AssembleManifest.layers[].preview 写入层正文截断（默认 true）
+   * 开启后 Web「上下文」面板可展示层预览；正文不进入模型输入。
+   */
+  includeLayerPreview?: boolean;
+  /** preview 最大字符数（默认 400） */
+  layerPreviewChars?: number;
+  /**
+   * 是否在 AssembleManifest.layers[].content 写入层正文全文（默认 true）
+   * 点选层时 Web 展示具体内容。
+   */
+  includeLayerContent?: boolean;
+}
+
 
 
 // ── 集中模型配置 ──
@@ -465,6 +496,8 @@ export interface HarnessConfig {
   agentRuntime?: AgentRuntimeJsonConfig;
   /** 上下文引擎配置 */
   contextEngine?: ContextEngineConfig;
+  /** system prompt 七层装配器配置 */
+  contextAssembler?: ContextAssemblerConfig;
   /** 安全策略 */
   security?: {
     /** 预设名称 */
@@ -827,6 +860,7 @@ export function toGatewayConfig(config: NormalizedHarnessConfig): GatewayConfig 
     agents: resolvedAgents,
     session: config.session ? { dmScope: config.session.dmScope } : undefined,
     budget: config.budget,
+    contextAssembler: config.contextAssembler,
   };
 
   if (config.agentRuntime) {

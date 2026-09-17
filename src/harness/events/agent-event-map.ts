@@ -112,6 +112,24 @@ export interface AgentEventMap {
     error: string;
     durationMs?: number;
   };
+  /**
+   * system prompt 七层装配完成（AssembleManifest 可观测快照）
+   * UI 用此事件渲染 Context Runtime；不进入模型输入。
+   */
+  'context.layers.assembled': {
+    sessionId: string;
+    agentId?: string;
+    /** Assembler 原始清单 */
+    manifest: import('../context/layer-types.js').AssembleManifest;
+    /** 本轮启用的层 id（区分 unregistered） */
+    enabledLayerIds?: import('../context/layer-types.js').ContextLayerId[];
+    /** 检索查询（memory/knowledge empty 解释用） */
+    query?: string;
+    assembledAt?: number;
+    /** 装配失败回退 concat 时为 true */
+    fallback?: boolean;
+    fallbackError?: string;
+  };
   'task.created': { taskId: string; taskType: string; status: string };
   'task.started': { taskId: string; taskType: string; status: string };
   'task.completed': { taskId: string; taskType: string; status: string };
@@ -169,6 +187,7 @@ export const AgentEvents = {
   CONTEXT_COMPACT_START: 'context.compact.start',
   CONTEXT_COMPACT_END: 'context.compact.end',
   CONTEXT_COMPACT_ERROR: 'context.compact.error',
+  CONTEXT_LAYERS_ASSEMBLED: 'context.layers.assembled',
 
   TASK_CREATED: 'task.created',
   TASK_STARTED: 'task.started',

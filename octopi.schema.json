@@ -323,6 +323,51 @@
       },
       "additionalProperties": false
     },
+    "contextAssembler": {
+      "type": "object",
+      "description": "system prompt 七层装配器配置（层预算与可观测 preview）",
+      "properties": {
+        "systemBudgetRatio": {
+          "type": "number",
+          "minimum": 0.05,
+          "maximum": 0.5,
+          "default": 0.22,
+          "description": "system 预算占 contextWindow 比例"
+        },
+        "layerShares": {
+          "type": "object",
+          "description": "单层硬顶：层 id → contentBudget 比例 [0,1]。默认不配置=无单层配额；仅配置的层超出时先截断到硬顶。",
+          "additionalProperties": false,
+          "properties": {
+            "wisdom": { "type": "number", "minimum": 0, "maximum": 1 },
+            "persona": { "type": "number", "minimum": 0, "maximum": 1 },
+            "skill": { "type": "number", "minimum": 0, "maximum": 1 },
+            "knowledge": { "type": "number", "minimum": 0, "maximum": 1 },
+            "cognition": { "type": "number", "minimum": 0, "maximum": 1 },
+            "memory": { "type": "number", "minimum": 0, "maximum": 1 },
+            "runtime": { "type": "number", "minimum": 0, "maximum": 1 }
+          }
+        },
+        "includeLayerPreview": {
+          "type": "boolean",
+          "default": true,
+          "description": "是否在 AssembleManifest 写入层正文 preview（供 Web 上下文面板）"
+        },
+        "layerPreviewChars": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4000,
+          "default": 400,
+          "description": "层 preview 最大字符数"
+        },
+        "includeLayerContent": {
+          "type": "boolean",
+          "default": true,
+          "description": "是否在 AssembleManifest 写入层正文全文（点选层查看内容）"
+        }
+      },
+      "additionalProperties": false
+    },
     "runGuard": {
       "type": "object",
       "description": "过程监督配置（智能监督，替代硬预算限制）",

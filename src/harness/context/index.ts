@@ -66,6 +66,23 @@ export type {
 export { DefaultContextAssembler, truncateTextToTokens } from './assembler.js';
 export type { DefaultContextAssemblerConfig } from './assembler.js';
 export {
+  ALL_LAYER_IDS,
+  buildContextLayersSnapshot,
+  deriveLayerStatus,
+  emptyContextLayersSnapshot,
+} from './layer-snapshot.js';
+export type {
+  ContextLayersSnapshot,
+  LayerRuntimeView,
+  LayerUiStatus,
+} from './layer-snapshot.js';
+export { probeContextLayerHealth, probeAgentHomeHealth } from './layer-health.js';
+export type {
+  ContextLayerHealth,
+  ContextLayerHealthEntry,
+  ProbeContextHealthDeps,
+} from './layer-health.js';
+export {
   PersonaLayer,
   SkillLayer,
   RuntimeLayer,

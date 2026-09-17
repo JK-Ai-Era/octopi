@@ -118,6 +118,67 @@ export interface MemoryStats {
   avgImportance?: number;
 }
 
+/** 七层装配 UI 快照（与 harness/context/layer-snapshot 对齐） */
+export interface LayerRuntimeViewDto {
+  id: 'wisdom' | 'persona' | 'skill' | 'knowledge' | 'cognition' | 'memory' | 'runtime';
+  status: 'idle' | 'included' | 'empty' | 'dropped' | 'error' | 'unregistered';
+  included: boolean;
+  tokens: number;
+  budgetTokens: number;
+  priority: number;
+  order: number;
+  droppable: boolean;
+  reason?: string;
+  dropped?: string;
+  sources?: string[];
+  preview?: string;
+  /** 层正文全文（includeLayerContent 时） */
+  content?: string;
+}
+
+export interface ContextLayersSnapshotDto {
+  sessionId: string;
+  assembledAt?: number;
+  systemBudget: number;
+  structureReserve?: number;
+  usedTokens: number;
+  shares: Partial<Record<LayerRuntimeViewDto['id'], number>>;
+  query?: string;
+  layers: LayerRuntimeViewDto[];
+  enabledLayerIds: LayerRuntimeViewDto['id'][];
+  fallback?: boolean;
+  fallbackError?: string;
+}
+
+export interface ContextLayerHealthDto {
+  agentId: string;
+  configured: boolean;
+  layers: Array<{
+    id: LayerRuntimeViewDto['id'];
+    registered: boolean;
+    entries?: number;
+    extra?: Record<string, number>;
+  }>;
+  summary: {
+    skills?: number;
+    memory?: number;
+    knowledge?: number;
+    wisdom?: number;
+    cognitionNodes?: number;
+    cognitionEdges?: number;
+    personaLoaded?: boolean;
+  };
+}
+
+/** 近 N 轮装配摘要（timeline 用） */
+export interface ContextLayerTurnSummaryDto {
+  assembledAt?: number;
+  usedTokens: number;
+  systemBudget: number;
+  included: LayerRuntimeViewDto['id'][];
+  dropped: LayerRuntimeViewDto['id'][];
+}
+
 export interface MemoryQueryResult {
   configured: boolean;
   entries?: Array<{
@@ -280,6 +341,28 @@ export class OctopiClient {
 
   async abortSession(sessionId: string): Promise<void> {
     await this.postJson(`/sessions/${encodeURIComponent(sessionId)}/abort`, {});
+  }
+
+  /**
+   * 会话最近一次七层装配快照
+   *
+   * @param sessionId - 会话 id
+   * @returns 快照；无装配记录时为 null
+   */
+  async getSessionContextLayers(sessionId: string): Promise<ContextLayersSnapshotDto | null> {
+    const data = await this.getJson(`/sessions/${encodeURIComponent(sessionId)}/context/layers`);
+    return (data?.data as ContextLayersSnapshotDto | null | undefined) ?? null;
+  }
+
+  /**
+   * Agent 七层数据面健康
+   *
+   * @param agentId - Agent id
+   * @returns 健康快照
+   */
+  async getAgentContextHealth(agentId: string): Promise<ContextLayerHealthDto | null> {
+    const data = await this.getJson(`/agents/${encodeURIComponent(agentId)}/context/health`);
+    return (data?.data as ContextLayerHealthDto | null | undefined) ?? null;
   }
 
   async listApprovals(): Promise<PendingApproval[]> {

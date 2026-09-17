@@ -26,6 +26,7 @@ const MAP_KEYS = [
   'context.compact.start',
   'context.compact.end',
   'context.compact.error',
+  'context.layers.assembled',
   'task.created',
   'task.started',
   'task.completed',

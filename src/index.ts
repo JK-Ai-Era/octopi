@@ -184,6 +184,7 @@ export {
 export type {
   ModelsConfig, ModelProviderConfig, ModelCapability, ModelInputType,
   NormalizedHarnessConfig, NormalizedModelInfo, HarnessConfig, AgentConfig,
+  ContextEngineConfig, ContextAssemblerConfig,
   ChannelConfig, PluginConfig, Defaults,
   WebSearchToolConfig, WebSearchProviderSlot,
 } from './config.js';

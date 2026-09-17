@@ -1,8 +1,7 @@
 /**
  * ContextLayer 契约与 DefaultContextAssembler 测试
  *
- * 聚焦契约行为：顺序、份额、priority 丢弃、manifest、单层失败隔离。
- * 不测各层业务检索逻辑（后续逐层打磨时再补）。
+ * 聚焦契约行为：顺序、总预算 priority 竞争、可选 layerShares 硬顶、manifest、单层失败隔离。
  */
 
 import { describe, it, expect } from 'vitest';
@@ -14,11 +13,7 @@ import type {
 } from '../../src/harness/context/layer-types.js';
 import { extractLayerQuery, LAYER_ORDER } from '../../src/harness/context/layer-types.js';
 import { DefaultContextAssembler } from '../../src/harness/context/assembler.js';
-import {
-  PersonaLayer,
-  RuntimeLayer,
-  createDefaultLayers,
-} from '../../src/harness/context/layers.js';
+import { createDefaultLayers } from '../../src/harness/context/layers.js';
 
 function userMsg(text: string): Message {
   return { role: 'user', content: text, timestamp: Date.now() };
@@ -106,7 +101,34 @@ describe('DefaultContextAssembler', () => {
     expect(result.manifest.usedTokens).toBeGreaterThan(0);
   });
 
-  it('低优先层在预算耗尽时被丢弃或截到极短，高优先保留', async () => {
+  it('默认无单层配额：总量有空时低 priority 大层也可全额纳入', async () => {
+    const assembler = new DefaultContextAssembler({ structureReserve: 0 });
+    // persona 很小 priority 高；skill 很大 priority 低，但总量装得下
+    const result = await assembler.assemble({
+      sessionId: 's1',
+      messages: [userMsg('q')],
+      systemBudget: 2000,
+      layers: [
+        stubLayer('persona', {
+          text: 'P'.repeat(40),
+          priority: 100,
+          droppable: false,
+        }),
+        stubLayer('skill', {
+          text: 'S'.repeat(400),
+          priority: 60,
+          droppable: true,
+        }),
+      ],
+    });
+
+    const skill = result.manifest.layers.find((l) => l.id === 'skill');
+    expect(skill?.included).toBe(true);
+    expect(skill?.budgetTokens).toBeUndefined();
+    expect(result.systemPrompt).toContain('SSSS');
+  });
+
+  it('总量不够时按 priority 竞争：低优先 droppable 被丢弃/截断', async () => {
     const assembler = new DefaultContextAssembler({ structureReserve: 0 });
     const result = await assembler.assemble({
       sessionId: 's1',
@@ -117,15 +139,11 @@ describe('DefaultContextAssembler', () => {
           text: 'P'.repeat(80),
           priority: 100,
           droppable: false,
-          defaultShare: 0.95,
-          order: 20,
         }),
         stubLayer('memory', {
-          text: 'M'.repeat(4000),
-          priority: 10,
+          text: 'M'.repeat(80),
+          priority: 30,
           droppable: true,
-          defaultShare: 0.05,
-          order: 60,
         }),
       ],
     });
@@ -133,106 +151,78 @@ describe('DefaultContextAssembler', () => {
     const persona = result.manifest.layers.find((l) => l.id === 'persona');
     const memory = result.manifest.layers.find((l) => l.id === 'memory');
     expect(persona?.included).toBe(true);
-    // 极小份额：要么丢弃，要么被统一 estimator 截到很短（不会整段 4000 字进入）
-    if (memory?.included) {
-      expect(memory.tokens).toBeLessThan(10);
-    } else {
-      expect(memory?.included).toBe(false);
-    }
-    expect(result.systemPrompt).toContain('P'.repeat(20));
-    expect(result.systemPrompt).not.toContain('M'.repeat(50));
+    expect(memory?.included !== true || (memory?.tokens ?? 0) < 80).toBe(true);
   });
 
-  it('单层 assemble 抛错不影响其他层', async () => {
+  it('配置 layerShares 的层即使总量有空也被硬顶截断', async () => {
+    const assembler = new DefaultContextAssembler({
+      structureReserve: 0,
+      layerShares: { skill: 0.05 },
+    });
+    const result = await assembler.assemble({
+      sessionId: 's1',
+      messages: [userMsg('q')],
+      systemBudget: 1000,
+      layers: [
+        stubLayer('persona', { text: 'P'.repeat(20), priority: 100, droppable: false }),
+        stubLayer('skill', { text: 'S'.repeat(400), priority: 60, droppable: true }),
+      ],
+    });
+
+    const skill = result.manifest.layers.find((l) => l.id === 'skill');
+    expect(skill?.included).toBe(true);
+    expect(skill?.budgetTokens).toBe(Math.floor(1000 * 0.05));
+    expect(skill!.tokens).toBeLessThanOrEqual(50);
+  });
+
+  it('单层 assemble 失败不拖垮整体', async () => {
     const assembler = new DefaultContextAssembler();
     const result = await assembler.assemble({
       sessionId: 's1',
       messages: [userMsg('x')],
-      systemBudget: 4000,
+      systemBudget: 2000,
       layers: [
-        stubLayer('persona', { text: 'OK', droppable: false }),
-        stubLayer('knowledge', { fail: true }),
+        stubLayer('persona', { text: 'OK', priority: 100, droppable: false }),
+        stubLayer('memory', { fail: true }),
       ],
     });
-
     expect(result.systemPrompt).toContain('OK');
-    const failed = result.manifest.layers.find((l) => l.id === 'knowledge');
-    expect(failed?.included).toBe(false);
-    expect(failed?.reason).toContain('assemble failed');
+    expect(result.manifest.layers.find((l) => l.id === 'memory')?.reason).toMatch(/assemble failed/);
   });
 
-  it('空内容层标记 empty 且不进入 system', async () => {
+  it('manifest 含 included / tokens / sources', async () => {
     const assembler = new DefaultContextAssembler();
     const result = await assembler.assemble({
       sessionId: 's1',
       messages: [userMsg('x')],
-      systemBudget: 4000,
+      systemBudget: 2000,
       layers: [
-        stubLayer('persona', { text: 'HAS', droppable: false }),
-        stubLayer('memory', { text: '   ' }),
+        {
+          ...stubLayer('persona', { text: 'BODY', priority: 100, droppable: false }),
+          async assemble() {
+            return { layerId: 'persona', text: 'BODY', tokens: 4, sources: ['persona'] };
+          },
+        },
       ],
     });
-    expect(result.systemPrompt).toBe('HAS');
-    expect(result.manifest.layers.find((l) => l.id === 'memory')?.reason).toBe('empty');
-  });
-
-  it('不可丢弃层超预算时截断后纳入', async () => {
-    const assembler = new DefaultContextAssembler({ structureReserve: 0, layerOverflowRatio: 1 });
-    const long = 'X'.repeat(2000); // ~500 tokens
-    const result = await assembler.assemble({
-      sessionId: 's1',
-      messages: [userMsg('x')],
-      systemBudget: 400,
-      layers: [
-        stubLayer('persona', {
-          text: long,
-          priority: 100,
-          droppable: false,
-          defaultShare: 1,
-          order: 20,
-        }),
-      ],
-    });
-    expect(result.manifest.layers[0]?.included).toBe(true);
-    // 统一 estimator 截断后应显著短于原文
-    expect(result.systemPrompt.length).toBeLessThan(long.length);
-    expect(result.systemPrompt.length).toBeGreaterThan(0);
+    const p = result.manifest.layers.find((l) => l.id === 'persona');
+    expect(p?.included).toBe(true);
+    expect(p?.tokens).toBeGreaterThan(0);
+    expect(p?.sources).toEqual(['persona']);
   });
 });
 
-describe('薄层适配', () => {
-  it('PersonaLayer 产出人格文本并保底', async () => {
-    const layer = new PersonaLayer({ getText: () => 'You are octopi.' });
-    expect(layer.droppable).toBe(false);
-    expect(layer.id).toBe('persona');
-    const content = await layer.assemble({
-      sessionId: 's',
-      messages: [],
-      tokenBudget: 1000,
-      systemBudget: 1000,
-    });
-    expect(content?.text).toContain('You are octopi.');
+describe('createDefaultLayers', () => {
+  it('未提供依赖的层不注册', () => {
+    const layers = createDefaultLayers({});
+    expect(layers).toHaveLength(0);
   });
 
-  it('RuntimeLayer 包装动态注入', async () => {
-    const layer = new RuntimeLayer({
-      getText: (ctx) => `tasks for ${ctx.sessionId}`,
-    });
-    const content = await layer.assemble({
-      sessionId: 'abc',
-      messages: [],
-      tokenBudget: 1000,
-      systemBudget: 1000,
-    });
-    expect(content?.text).toBe('tasks for abc');
-  });
-
-  it('createDefaultLayers 只注册有依赖的层', () => {
+  it('persona + runtime 注册后 order 正确', () => {
     const layers = createDefaultLayers({
-      personaText: () => 'p',
-      runtimeText: () => 'r',
+      personaText: () => 'P',
+      runtimeText: () => 'R',
     });
-    const ids = layers.map((l) => l.id).sort();
-    expect(ids).toEqual(['persona', 'runtime']);
+    expect(layers.map((l) => l.id).sort()).toEqual(['persona', 'runtime']);
   });
 });

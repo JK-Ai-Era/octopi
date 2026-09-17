@@ -1,3 +1,32 @@
+## v0.28.16 (2026-09-17)
+
+### feat(context): 七层可观测 Runtime + 装配预算语义纠偏
+
+Web 右栏「上下文」可实时查看 System 契约层装配与 Information 消息窗口；装配预算改为「总预算 + priority 竞争，layerShares 可选硬顶」。
+
+**装配预算**
+- 默认只控 `systemBudget`（约 `0.22 × contextWindow`），按 priority 竞争纳入/截断/丢弃
+- `contextAssembler.layerShares[id]`：仅配置的层生效，为 contentBudget 比例硬顶；默认不配额
+- `defaultShare` 不再驱动 Assembler；manifest `shares` 只记录显式硬顶
+
+**可观测接线**
+- Runner 捕获 `AssembleManifest`，发出 `context.layers.assembled`
+- Gateway 缓存会话快照（FIFO 256）；REST `GET /sessions/:id/context/layers`
+- **WS 广播剥离层正文 `content`**（preview 保留）；UI 点选层经 REST 拉取全文
+- Gateway serve 路径接线 skills / memory / wisdom / cognition / knowledge（agent.home）
+- REST `GET /agents/:id/context/health`；build probe 优先，回退 `probeAgentHomeHealth(home)`
+- manifest 含 `droppable` / `budgetTokens` / 可选 `content`+`preview`
+
+**Web UI**
+- 右栏页签：`上下文 | 任务 | 工具 | 帮助`（原「检查」并入上下文，JSON 降为折叠）
+- System 装配层栈 + 预算条 + 层详情/正文 + Information 面板 + 数据面健康 + 近轮 timeline
+- Focus 模式；卡片浅色与工作台统一
+- 概念纠偏：产品七层第 7 层 Information=session；契约层第 7 位 Runtime≠Information
+
+**文档**
+- `docs/context-layer-contracts.md` / `architecture.md` 对齐概念模型与预算语义
+- `docs/context-layers-ui-design.md` · `web/DESIGN.md` · 根目录设计原型 `index.html`
+
 ## v0.28.15 (2026-09-17)
 
 ### fix(cli): serve restart / webui start 失败根因（目录探测 + 进程树误杀 + CLI 挂住）

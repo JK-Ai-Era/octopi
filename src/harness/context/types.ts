@@ -7,7 +7,7 @@
  * 接入：Builder 经 convertToLlm 调用 assemble；Loop 不依赖本类型。
  */
 
-import type { Message, ToolCall } from '../../core/types.js';
+import type { Message } from '../../core/types.js';
 import type { LLMMessage, LLMToolDefinition } from '../../core/interfaces/model-provider.js';
 
 export type { LLMMessage, LLMToolDefinition };

@@ -8,9 +8,18 @@
 import type { Message } from '../../core/types.js';
 import type { AssembleManifest } from './layer-types.js';
 import { DefaultContextAssembler } from './assembler.js';
-import { PersonaLayer, RuntimeLayer, SkillLayer, MemoryLayer, KnowledgeLayer } from './layers.js';
+import type { DefaultContextAssemblerConfig } from './assembler.js';
+import {
+  CognitionLayer,
+  KnowledgeLayer,
+  MemoryLayer,
+  PersonaLayer,
+  RuntimeLayer,
+  SkillLayer,
+  WisdomLayer,
+} from './layers.js';
 import type { ContextAssembler, ContextLayer } from './layer-types.js';
-import type { MemoryStore } from '../memory/types.js';
+import type { ConceptGraphStore, MemoryStore, WisdomStore } from '../memory/types.js';
 import type { KnowledgeStore } from './knowledge/types.js';
 
 export interface SystemPromptAssembleInput {
@@ -39,10 +48,12 @@ const DEFAULT_CONTEXT_WINDOW = 128_000;
 /**
  * 创建默认 system prompt 装配器
  *
- * 启用层：persona（保底）+ skill 索引（可选）+ memory/knowledge 召回（可选）+ runtime。
+ * 启用层：persona（保底）+ skill 索引（可选）+ wisdom/cognition/knowledge/memory 召回（可选）+ runtime。
  */
 export function createDefaultSystemPromptAssembler(options?: {
   assembler?: ContextAssembler;
+  /** 未传 assembler 时用于构造 DefaultContextAssembler */
+  assemblerConfig?: DefaultContextAssemblerConfig;
   systemBudgetRatio?: number;
   /** Skill 索引正文（SkillManager.formatForPrompt）；空则不注册 skill 层 */
   getSkillPromptText?: () => Promise<string> | string;
@@ -50,16 +61,24 @@ export function createDefaultSystemPromptAssembler(options?: {
   memoryStore?: MemoryStore;
   /** 知识存储；提供则注册 KnowledgeLayer */
   knowledgeStore?: KnowledgeStore;
+  /** 智慧存储；提供则注册 WisdomLayer */
+  wisdomStore?: WisdomStore;
+  /** 认知图谱；提供则注册 CognitionLayer */
+  cognitionStore?: ConceptGraphStore;
   memoryLimit?: number;
   knowledgeLimit?: number;
+  cognitionDepth?: number;
 }): {
   assemble: (input: SystemPromptAssembleInput) => Promise<SystemPromptAssembleOutput>;
   /** 会话结束/重置时清理层指纹缓存 */
   clearSession: (sessionId: string) => void;
 } {
-  const assembler = options?.assembler ?? new DefaultContextAssembler();
+  const assembler =
+    options?.assembler ?? new DefaultContextAssembler(options?.assemblerConfig);
   const ratio = options?.systemBudgetRatio ?? DEFAULT_SYSTEM_BUDGET_RATIO;
   const getSkillPromptText = options?.getSkillPromptText;
+  const wisdomStore = options?.wisdomStore;
+  const cognitionStore = options?.cognitionStore;
 
   return {
     clearSession(sessionId: string) {
@@ -81,11 +100,26 @@ export function createDefaultSystemPromptAssembler(options?: {
       if (getSkillPromptText) {
         layers.push(new SkillLayer({ getPromptText: getSkillPromptText }));
       }
+      if (wisdomStore) {
+        layers.push(
+          new WisdomLayer({
+            getEntries: () => wisdomStore.getAll(),
+          }),
+        );
+      }
       if (options?.knowledgeStore) {
         layers.push(
           new KnowledgeLayer({
             store: options.knowledgeStore,
             limit: options.knowledgeLimit,
+          }),
+        );
+      }
+      if (cognitionStore) {
+        layers.push(
+          new CognitionLayer({
+            store: cognitionStore,
+            depth: options?.cognitionDepth,
           }),
         );
       }
@@ -109,8 +143,13 @@ export function createDefaultSystemPromptAssembler(options?: {
       if (getSkillPromptText) {
         hasSkill = Boolean((await getSkillPromptText()).trim());
       }
-      // memory/knowledge 每轮按 query 可能非空，不能仅凭「当前无文本」短路
-      const hasRetrieval = Boolean(options?.memoryStore || options?.knowledgeStore);
+      // 检索/半静态层每轮可能非空，不能仅凭「当前无文本」短路
+      const hasRetrieval = Boolean(
+        options?.memoryStore ||
+          options?.knowledgeStore ||
+          wisdomStore ||
+          cognitionStore,
+      );
       if (!hasPersona && !hasInjected && !hasSkill && !hasRetrieval) {
         return { systemPrompt: '' };
       }

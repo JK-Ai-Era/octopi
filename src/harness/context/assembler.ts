@@ -1,13 +1,15 @@
 /**
  * DefaultContextAssembler — 按层契约组装 system prompt
  *
- * 职责边界：
- * - 读入 ContextLayer[]，按 order 排序
- * - 在启用层之间按 defaultShare 归一化分配 token 预算
- * - 并行 assemble，按 priority 从高到低纳入，超预算时丢弃/截断低优先层
- * - 产出 SystemAssembleResult（systemPrompt + AssembleManifest）
+ * 预算语义（与 v0.28 设计对齐）：
+ * - **默认只控总预算** systemBudget（扣 structureReserve 后为 contentBudget）
+ * - 各层按实际内容 assemble，纳入时按 **priority 从高到低** 竞争总预算
+ * - **不**按 defaultShare 做全局配额；defaultShare 不再驱动装配
+ * - 若配置了 `layerShares[id]`，则该层获得 **硬顶**：
+ *   maxTokens = floor(contentBudget × share)，超出先截断到硬顶，再参与总预算竞争
+ * - 未配置 share 的层：无单层上限，只受总预算 + priority 约束
  *
- * 不做的事：
+ * 职责边界：
  * - 不管理消息窗口（ContextEngine / DefaultContextEngine）
  * - 不实现检索/打分（那是各层自己的事）
  */
@@ -69,19 +71,42 @@ export function truncateTextToTokens(
 export interface DefaultContextAssemblerConfig {
   /** 总预算中预留给分隔符/结构的 token，默认 50 */
   structureReserve?: number;
-  /** 单层文本硬上限占其份额的比例（>1 表示允许略超），默认 1.0 */
+  /**
+   * 单层硬顶：层 id → contentBudget 比例 [0,1]。
+   * 仅对已配置的层生效；默认空 = 无单层配额。
+   * 例：`{ skill: 0.2 }` → skill 最多占 contentBudget 的 20%。
+   */
+  layerShares?: Partial<Record<ContextLayerId, number>>;
+  /** 对「已配置 layerShares 的层」硬顶再乘的比例（>1 允许略超），默认 1.0 */
   layerOverflowRatio?: number;
+  /** 是否在 manifest.layers[].preview 写入层正文截断（默认 true） */
+  includeLayerPreview?: boolean;
+  /** preview 最大字符数（默认 400） */
+  layerPreviewChars?: number;
+  /**
+   * 是否在 manifest.layers[].content 写入层正文全文（默认 true）
+   * 供 Web 上下文检查器点选查看；不进入模型输入。
+   */
+  includeLayerContent?: boolean;
 }
 
 export class DefaultContextAssembler implements ContextAssembler {
   private readonly structureReserve: number;
   private readonly layerOverflowRatio: number;
+  private readonly includeLayerPreview: boolean;
+  private readonly layerPreviewChars: number;
+  private readonly includeLayerContent: boolean;
+  private readonly defaultLayerShares: Partial<Record<ContextLayerId, number>>;
   /** sessionId → layerId → fingerprint，用于跳过未变更层的重复 assemble */
   private readonly fingerprints = new Map<string, Map<ContextLayerId, string | null>>();
 
   constructor(config?: DefaultContextAssemblerConfig) {
     this.structureReserve = config?.structureReserve ?? 50;
     this.layerOverflowRatio = config?.layerOverflowRatio ?? 1.0;
+    this.includeLayerPreview = config?.includeLayerPreview ?? true;
+    this.layerPreviewChars = config?.layerPreviewChars ?? 400;
+    this.includeLayerContent = config?.includeLayerContent ?? true;
+    this.defaultLayerShares = config?.layerShares ?? {};
   }
 
   async assemble(params: ContextAssembleParams): Promise<SystemAssembleResult> {
@@ -97,6 +122,10 @@ export class DefaultContextAssembler implements ContextAssembler {
     const estimator = params.tokenEstimator ?? new HeuristicTokenEstimator();
     const query = params.query ?? extractLayerQuery(messages);
     const ordered = [...layers].sort((a, b) => a.order - b.order);
+    const layerShares: Partial<Record<ContextLayerId, number>> = {
+      ...this.defaultLayerShares,
+      ...params.layerShares,
+    };
 
     if (ordered.length === 0 || systemBudget <= 0) {
       return {
@@ -104,21 +133,24 @@ export class DefaultContextAssembler implements ContextAssembler {
         manifest: {
           sessionId,
           systemBudget,
+          structureReserve: this.structureReserve,
           usedTokens: 0,
-          shares: {},
+          shares: pickConfiguredShares(layerShares),
           layers: [],
         },
       };
     }
 
     const contentBudget = Math.max(0, systemBudget - this.structureReserve);
-    const shares = normalizeShares(ordered);
-    const budgets = allocateBudgets(ordered, shares, contentBudget);
+    /** 已配置层的硬顶 token；未配置 = undefined（无单层上限） */
+    const caps = resolveLayerCaps(ordered, layerShares, contentBudget);
 
     // 并行 assemble（层之间无依赖）
     const assembled = await Promise.all(
       ordered.map(async (layer) => {
-        const budget = budgets.get(layer.id) ?? 0;
+        const cap = caps.get(layer.id);
+        // assemble 时的 tokenBudget：有硬顶用硬顶，否则给满 contentBudget 作生成上限提示
+        const budget = cap ?? contentBudget;
         const ctx: LayerAssembleContext = {
           sessionId,
           agentId,
@@ -142,7 +174,7 @@ export class DefaultContextAssembler implements ContextAssembler {
           // 单层失败不拖垮整体装配
           return {
             layer,
-            budget,
+            cap,
             content: null,
             error: err instanceof Error ? err.message : String(err),
           };
@@ -156,11 +188,11 @@ export class DefaultContextAssembler implements ContextAssembler {
           };
         }
 
-        return { layer, budget, content, error: undefined as string | undefined };
+        return { layer, cap, content, error: undefined as string | undefined };
       }),
     );
 
-    // 按 priority 从高到低纳入，直到预算耗尽
+    // 按 priority 从高到低纳入，直到总预算耗尽
     const byPriority = [...assembled].sort(
       (a, b) => b.layer.priority - a.layer.priority || a.layer.order - b.layer.order,
     );
@@ -170,7 +202,7 @@ export class DefaultContextAssembler implements ContextAssembler {
     let used = 0;
 
     for (const item of byPriority) {
-      const { layer, error, budget } = item;
+      const { layer, error, cap } = item;
       let content = item.content;
 
       if (error) {
@@ -182,23 +214,25 @@ export class DefaultContextAssembler implements ContextAssembler {
         continue;
       }
 
-      const maxTokens = Math.floor(budget * this.layerOverflowRatio);
-      if (content.tokens > maxTokens) {
-        // 统一用 estimator 截断到份额内，而不是直接整层丢弃
-        const cut = truncateTextToTokens(content.text, maxTokens, estimator);
-        if (!cut.text.trim()) {
-          rejections.set(layer.id, `over budget (${content.tokens} > ${maxTokens}) and truncated to empty`);
-          continue;
+      // 仅「配置了 layerShares 的层」做硬顶截断
+      if (cap !== undefined) {
+        const maxTokens = Math.max(0, Math.floor(cap * this.layerOverflowRatio));
+        if (content.tokens > maxTokens) {
+          const cut = truncateTextToTokens(content.text, maxTokens, estimator);
+          if (!cut.text.trim()) {
+            rejections.set(layer.id, `over layer cap (${content.tokens} > ${maxTokens}) and truncated to empty`);
+            continue;
+          }
+          content = {
+            ...content,
+            text: cut.text,
+            tokens: estimator.estimateText(cut.text),
+            dropped: content.dropped ?? cut.dropped,
+          };
         }
-        content = {
-          ...content,
-          text: cut.text,
-          tokens: estimator.estimateText(cut.text),
-          dropped: content.dropped ?? cut.dropped,
-        };
       }
 
-      // 总预算：droppable 层装不下则丢；不可丢弃层保留截断后结果（manifest 记告警）
+      // 总预算竞争：droppable 层装不下则截到剩余或丢弃；不可丢弃层保留
       if (used + content.tokens > contentBudget) {
         if (!layer.droppable) {
           accepted.set(layer.id, { content, layer });
@@ -243,24 +277,35 @@ export class DefaultContextAssembler implements ContextAssembler {
       const hit = accepted.get(layer.id);
       const reason = rejections.get(layer.id);
       const item = assembled.find((a) => a.layer.id === layer.id);
+      const previewSource = hit?.content.text ?? item?.content?.text;
+      const cap = caps.get(layer.id);
       return {
         id: layer.id,
         included: !!hit,
         tokens: hit?.content.tokens ?? 0,
+        // 未配置硬顶时不写 budgetTokens（表示无单层配额）
+        budgetTokens: cap,
         priority: layer.priority,
         order: layer.order,
+        droppable: layer.droppable,
         // included=true 时 reason 表示告警（如 over budget but kept）
         reason,
         dropped: hit?.content.dropped ?? item?.content?.dropped,
         sources: hit?.content.sources ?? item?.content?.sources,
+        preview:
+          this.includeLayerPreview && previewSource
+            ? previewSource.slice(0, Math.max(0, this.layerPreviewChars))
+            : undefined,
+        content: this.includeLayerContent && previewSource ? previewSource : undefined,
       };
     });
 
     const manifest: AssembleManifest = {
       sessionId,
       systemBudget,
+      structureReserve: this.structureReserve,
       usedTokens: used,
-      shares,
+      shares: pickConfiguredShares(layerShares),
       layers: manifestLayers,
     };
 
@@ -292,32 +337,32 @@ export class DefaultContextAssembler implements ContextAssembler {
   }
 }
 
-/** 份额归一化：只在非零份额层之间分配 1.0 */
-function normalizeShares(layers: ContextLayer[]): Partial<Record<ContextLayerId, number>> {
-  const total = layers.reduce((s, l) => s + Math.max(0, l.defaultShare), 0);
-  const shares: Partial<Record<ContextLayerId, number>> = {};
-  if (total <= 0) {
-    const even = 1 / Math.max(1, layers.length);
-    for (const l of layers) shares[l.id] = even;
-    return shares;
-  }
-  for (const l of layers) {
-    shares[l.id] = Math.max(0, l.defaultShare) / total;
-  }
-  return shares;
-}
-
-function allocateBudgets(
+/** 解析各层硬顶：仅已配置 share 的层有值 */
+function resolveLayerCaps(
   layers: ContextLayer[],
-  shares: Partial<Record<ContextLayerId, number>>,
+  layerShares: Partial<Record<ContextLayerId, number>>,
   contentBudget: number,
 ): Map<ContextLayerId, number> {
   const map = new Map<ContextLayerId, number>();
   for (const l of layers) {
-    const share = shares[l.id] ?? 0;
+    const share = layerShares[l.id];
+    if (share === undefined || !Number.isFinite(share) || share <= 0) continue;
     map.set(l.id, Math.floor(contentBudget * share));
   }
   return map;
+}
+
+/** manifest.shares：只记录显式配置的硬顶比例 */
+function pickConfiguredShares(
+  layerShares: Partial<Record<ContextLayerId, number>>,
+): Partial<Record<ContextLayerId, number>> {
+  const out: Partial<Record<ContextLayerId, number>> = {};
+  for (const [id, share] of Object.entries(layerShares) as Array<[ContextLayerId, number]>) {
+    if (share !== undefined && Number.isFinite(share) && share > 0) {
+      out[id] = share;
+    }
+  }
+  return out;
 }
 
 /** 默认层顺序常量导出，便于测试断言 */
