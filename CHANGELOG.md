@@ -1,3 +1,25 @@
+## v0.28.15 (2026-09-17)
+
+### fix(cli): serve restart / webui start 失败根因（目录探测 + 进程树误杀 + CLI 挂住）
+
+全局 `octopi serve restart` 报「No Web UI instance」「Web UI directory not found」；在 agent/工具 shell 里执行 start/restart 还会话被杀（ChildProcess.kill）。
+
+**代码根因**
+- `findWebDir` 只搜配置旁 `web/` 与 cwd，搜不到 CLI 包根（npm junction 到仓库）下的 `web/`
+- `isProcessAlive` 把 Windows `EPERM`（进程存在但无权限）当成已退出 → stop 假成功
+- `serve start` 在 Gateway 已占用端口时直接 return，跳过 Web UI
+- `webui start` spawn vite 后父进程不退出：Windows Job/残留句柄拖住 CLI，外层工具超时杀掉整棵 shell
+- `taskkill /T` 无祖先保护，误杀工具 shell 时会话直接消失
+- pid 文件缺失时无法认领已在 5173 上跑的 vite；stop 后仍删 gateway.pid 导致状态混乱
+
+**修复**
+- `findWebDir`：`OCTOPI_WEB_DIR` → `web.dir` → 配置旁 → `~/.octopi/web` → CLI 包根 `web/` → cwd
+- `isProcessAlive`：`EPERM` 视为存活；`killProcess` 拒绝杀 self/ancestor
+- `webui.pid` JSON（pid/dir/startedAt）；端口 5173/5174/4173 探测认领未托管实例
+- `webui` 子命令 / Gateway 已在跑时的 `serve start` 结束后 `process.exit(0)`
+- stop 失败时保留 gateway.pid 并提示提权 `taskkill`
+- Schema：`web.dir`
+
 ## v0.28.14 (2026-09-17)
 
 ### feat(context): 每轮 system prompt 注入 runtime datetime

@@ -593,6 +593,17 @@
         }
       }
     },
+    "web": {
+      "type": "object",
+      "description": "Web UI 运行配置",
+      "properties": {
+        "dir": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Web UI 源码目录（含 package.json 的 Vite 项目）。未设置时 CLI 按 OCTOPI_WEB_DIR → 配置旁 web/ → ~/.octopi/web → CLI 包内 web/ → cwd/web 探测"
+        }
+      }
+    },
     "webSearch": {
       "type": "object",
       "description": "web_search 工具多 provider 配置",

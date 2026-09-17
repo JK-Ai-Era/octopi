@@ -519,6 +519,11 @@ export interface HarnessConfig {
   };
   /** 网络搜索配置（web_search 工具） */
   webSearch?: WebSearchToolConfig;
+  /** Web UI 运行配置 */
+  web?: {
+    /** Web UI 源码目录（含 package.json）；未设置时按 CLI 内置顺序探测 */
+    dir?: string;
+  };
   /** 可观测性配置 */
   observability?: {
     /** 日志级别: 0=FATAL, 1=ERROR, 2=WARN, 3=INFO, 4=DEBUG, 5=TRACE */

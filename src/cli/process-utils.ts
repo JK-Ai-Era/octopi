@@ -20,9 +20,65 @@ export function isProcessAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
-  } catch {
-    return false;
+  } catch (err) {
+    // Windows 上对「存在但无权限」的进程会抛 EPERM：不能当成已退出
+    const code = (err as NodeJS.ErrnoException | undefined)?.code;
+    return code === 'EPERM';
   }
+}
+
+/** 进程祖先链缓存（单次 CLI 调用内足够） */
+let ancestorChainCache: Set<number> | null = null;
+
+function getAncestorPidSet(): Set<number> {
+  if (ancestorChainCache) return ancestorChainCache;
+  const chain = new Set<number>([process.pid]);
+  if (typeof process.ppid === 'number' && process.ppid > 0) chain.add(process.ppid);
+  try {
+    if (process.platform === 'win32') {
+      const script =
+        `$p=${process.pid}; while ($p -gt 0) { Write-Output $p; $c=Get-CimInstance Win32_Process -Filter "ProcessId=$p"; if (-not $c) { break }; $p=$c.ParentProcessId }`;
+      const out = execFileSync(
+        'powershell.exe',
+        ['-NoProfile', '-Command', script],
+        { encoding: 'utf-8', timeout: 4000, stdio: ['ignore', 'pipe', 'ignore'] },
+      );
+      for (const line of out.split(/\r?\n/)) {
+        const n = parseInt(line.trim(), 10);
+        if (Number.isInteger(n) && n > 0) chain.add(n);
+      }
+    } else {
+      let current = process.ppid;
+      const seen = new Set<number>();
+      while (typeof current === 'number' && current > 0 && !seen.has(current)) {
+        chain.add(current);
+        seen.add(current);
+        const parent = execFileSync('ps', ['-o', 'ppid=', '-p', String(current)], {
+          encoding: 'utf-8',
+          timeout: 2000,
+          stdio: ['ignore', 'pipe', 'ignore'],
+        }).trim();
+        const n = parseInt(parent, 10);
+        if (!Number.isInteger(n) || n <= 0 || n === current) break;
+        current = n;
+      }
+    }
+  } catch {
+    // 探测失败时至少保留 self + ppid
+  }
+  ancestorChainCache = chain;
+  return chain;
+}
+
+/**
+ * pid 是否为当前进程或其祖先
+ *
+ * Windows `taskkill /T` 杀的是整棵进程树；若误把 CLI 的父进程（工具 shell）
+ * 当成目标，会话会被连带干掉。杀进程前必须用本函数拦截。
+ */
+export function isSelfOrAncestorPid(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return true;
+  return getAncestorPidSet().has(pid);
 }
 
 function findPidOnPortUnix(port: number): number | null {
@@ -54,6 +110,7 @@ function findPidOnPortWindows(port: number): number | null {
     });
     for (const line of result.split(/\r?\n/)) {
       // TCP    0.0.0.0:3000    0.0.0.0:0    LISTENING    1234
+      // TCP    [::]:3000       [::]:0       LISTENING    1234
       const m = line.match(
         /^\s*TCP\s+\S+:(\d+)\s+\S+\s+LISTENING\s+(\d+)\s*$/i,
       );
@@ -88,6 +145,12 @@ export async function killProcess(
   options?: { timeoutMs?: number },
 ): Promise<boolean> {
   const timeoutMs = options?.timeoutMs ?? 3000;
+  if (!Number.isInteger(pid) || pid <= 0) return true;
+  // 绝不杀自己/祖先：taskkill /T 会把 agent shell 一并带走
+  if (isSelfOrAncestorPid(pid)) {
+    console.warn(`⚠️  Refusing to kill PID ${pid} (self/ancestor of current CLI process)`);
+    return false;
+  }
   if (!isProcessAlive(pid)) return true;
 
   if (process.platform === 'win32') {
@@ -99,7 +162,7 @@ export async function killProcess(
         stdio: 'pipe',
       });
     } catch {
-      // already exiting / no window
+      // already exiting / no window / access denied
     }
 
     const softDeadline = Date.now() + Math.min(timeoutMs, 3000);
@@ -116,7 +179,7 @@ export async function killProcess(
         stdio: 'pipe',
       });
     } catch {
-      // taskkill 对已退出进程会非零退出；以存活探测为准
+      // taskkill 对已退出/无权限进程会非零退出；以存活探测为准
     }
     await delay(100);
     return !isProcessAlive(pid);
@@ -152,6 +215,10 @@ export async function killProcessOnPort(port: number): Promise<boolean> {
 /**
  * 启动后台子进程（detached + windowsHide）
  *
+ * Windows：优先 `powershell Start-Process`。Node `spawn({detached:true})`
+ * 在工具/Job Object 环境下常与父进程绑在同一 Job，父进程退出或外层清理时
+ * 会连带杀掉整棵 shell（表现为 CLI 一 start 会话就消失）。
+ *
  * @returns 子进程 PID；启动失败返回 null
  */
 export function spawnDetached(
@@ -159,6 +226,9 @@ export function spawnDetached(
   args: string[],
   options: SpawnOptions = {},
 ): number | null {
+  if (process.platform === 'win32') {
+    return spawnDetachedWindows(command, args, options);
+  }
   try {
     const child = spawn(command, args, {
       detached: true,
@@ -166,12 +236,65 @@ export function spawnDetached(
       windowsHide: true,
       ...options,
     });
+    child.on('error', () => {
+      /* 子进程启动失败不拖垮 CLI；上层靠 pid 探测 */
+    });
     if (child.pid) {
       child.unref();
       return child.pid;
     }
     return null;
   } catch {
+    return null;
+  }
+}
+
+function psQuote(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
+function spawnDetachedWindows(
+  command: string,
+  args: string[],
+  options: SpawnOptions,
+): number | null {
+  const cwd = typeof options.cwd === 'string' && options.cwd ? options.cwd : undefined;
+  const argArray = args.map(psQuote).join(', ');
+  const workDir = cwd ? ` -WorkingDirectory ${psQuote(cwd)}` : '';
+  const script =
+    `$p = Start-Process -FilePath ${psQuote(command)} -ArgumentList @(${argArray})${workDir} -WindowStyle Hidden -PassThru; ` +
+    `if ($p) { Write-Output $p.Id }`;
+  try {
+    const out = execFileSync(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-Command', script],
+      {
+        encoding: 'utf-8',
+        timeout: 20_000,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        windowsHide: true,
+      },
+    );
+    const lines = out.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    const pid = parseInt(lines[lines.length - 1] ?? '', 10);
+    return Number.isInteger(pid) && pid > 0 ? pid : null;
+  } catch {
+    // PowerShell Start-Process 失败时退回 Node spawn（可能仍受 Job 限制）
+    try {
+      const child = spawn(command, args, {
+        detached: true,
+        stdio: 'ignore',
+        windowsHide: true,
+        ...options,
+      });
+      child.on('error', () => undefined);
+      if (child.pid) {
+        child.unref();
+        return child.pid;
+      }
+    } catch {
+      /* ignore */
+    }
     return null;
   }
 }

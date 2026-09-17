@@ -11,6 +11,7 @@ import {
   delay,
   findPidOnPort,
   isProcessAlive,
+  isSelfOrAncestorPid,
   killProcess,
   resolveViteLaunch,
   spawnDetached,
@@ -27,6 +28,20 @@ describe('process-utils', () => {
     expect(isProcessAlive(process.pid)).toBe(true);
     expect(isProcessAlive(0)).toBe(false);
     expect(isProcessAlive(-1)).toBe(false);
+  });
+
+  test('isSelfOrAncestorPid blocks self and allows unrelated pid', () => {
+    expect(isSelfOrAncestorPid(process.pid)).toBe(true);
+    expect(isSelfOrAncestorPid(0)).toBe(true);
+    expect(isSelfOrAncestorPid(-5)).toBe(true);
+    // 不存在的高位 pid 不应被当成祖先
+    expect(isSelfOrAncestorPid(2147483646)).toBe(false);
+  });
+
+  test('killProcess refuses self', async () => {
+    const ok = await killProcess(process.pid);
+    expect(ok).toBe(false);
+    expect(isProcessAlive(process.pid)).toBe(true);
   });
 
   test('findPidOnPort finds listener and ignores free port', async () => {
@@ -79,11 +94,11 @@ describe('process-utils', () => {
       '-e',
       'setInterval(() => {}, 1000)',
     ]);
-    expect(pid).toBeTypeOf('number');
+    expect(pid).not.toBeNull();
     expect(isProcessAlive(pid!)).toBe(true);
 
-    const stopped = await killProcess(pid!, { timeoutMs: 2000 });
-    expect(stopped).toBe(true);
+    const killed = await killProcess(pid!, { timeoutMs: 3000 });
+    expect(killed).toBe(true);
     expect(isProcessAlive(pid!)).toBe(false);
-  });
+  }, 20_000);
 });

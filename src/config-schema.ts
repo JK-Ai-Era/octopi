@@ -327,6 +327,11 @@ const SubsystemsConfigSchema = z.object({
   auditDir: z.string().optional(),
 });
 
+const WebConfigSchema = z.object({
+  /** Web UI 源码目录（含 package.json 的 Vite 项目） */
+  dir: z.string().optional(),
+});
+
 export const HarnessConfigSchema = z.object({
   subsystems: SubsystemsConfigSchema.optional(),
   agents: z.array(AgentConfigSchema).min(1, 'Config must define at least one agent'),
@@ -345,6 +350,7 @@ export const HarnessConfigSchema = z.object({
   observability: ObservabilityConfigSchema.optional(),
   concurrency: ConcurrencyConfigSchema.optional(),
   webSearch: WebSearchConfigSchema.optional(),
+  web: WebConfigSchema.optional(),
 });
 
 // ── 校验结果类型 ──

@@ -94,5 +94,9 @@
         "userLocation": { "country": "China" }
       }
     }
+  },
+
+  "web": {
+    "dir": "./web"
   }
 }

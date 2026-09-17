@@ -168,7 +168,9 @@ export async function serveStartCommand(args: CliArgs): Promise<void> {
   if (existing.pid) {
     console.log(`⚠️  Gateway is already running (PID: ${existing.pid}, port ${existing.port})`);
     console.log(`\nUse 'octopi serve restart' to restart, or 'octopi serve stop' to stop.`);
-    return;
+    // Gateway 已在跑时仍尝试拉起 Web UI（restart 半失败 / 仅缺 Web UI 的场景）
+    await webuiStartCommand(configPath, { soft: true });
+    process.exit(0);
   }
 
   removePidFile();
@@ -241,23 +243,48 @@ export async function serveStopCommand(args: Pick<CliArgs, 'port'> = {}): Promis
     return;
   }
 
+  let anyStillAlive = false;
   for (const pid of targets) {
     console.log(`🛑 Stopping Gateway (PID: ${pid})...`);
-    const stopped = await killProcess(pid, { timeoutMs: 5000 });
-    if (!stopped) {
-      console.warn(`⚠️  Gateway PID ${pid} may still be running`);
+    const stopped = await killProcess(pid, { timeoutMs: 3000 });
+    if (!stopped || isProcessAlive(pid)) {
+      anyStillAlive = true;
+      console.warn(`⚠️  Gateway PID ${pid} may still be running (permission denied or still exiting)`);
     }
   }
 
-  // 端口清理兜底
+  // 端口清理兜底（killProcess 内部会拒绝杀 self/ancestor）
   const portPid = findPidOnPort(resolved.port);
   if (portPid && portPid !== process.pid) {
     console.log(`🛑 Freeing port ${resolved.port} (PID: ${portPid})...`);
     await killProcess(portPid, { timeoutMs: 3000 });
   }
 
-  removePidFile();
-  console.log('✅ Gateway stopped.');
+  const portStillHeld = findPidOnPort(resolved.port);
+  if (portStillHeld && portStillHeld !== process.pid) {
+    anyStillAlive = true;
+    console.warn(`⚠️  Port ${resolved.port} still held by PID ${portStillHeld}`);
+  }
+
+  if (!anyStillAlive) {
+    removePidFile();
+  } else if (portStillHeld || resolved.pid || pidFile?.pid) {
+    // 保留 pid 文件，避免下次 status/start 误判“没有实例”
+    const keepPid = portStillHeld ?? resolved.pid ?? pidFile?.pid;
+    if (keepPid && keepPid > 0) {
+      writePidFile({
+        pid: keepPid,
+        config: pidFile?.config ?? join(getOctopiHome(), 'octopi.json'),
+        port: resolved.port,
+        startedAt: pidFile?.startedAt ?? new Date().toISOString(),
+      });
+    }
+    console.warn('⚠️  Gateway stop incomplete — process still alive.');
+    console.warn('   If it was started from an elevated shell, stop it from an elevated terminal:');
+    console.warn(`   taskkill /PID ${keepPid} /F`);
+  }
+
+  console.log(anyStillAlive ? '⚠️  Gateway not fully stopped.' : '✅ Gateway stopped.');
 
   await webuiStopCommand();
 }
@@ -303,7 +330,12 @@ export async function serveFgCommand(args: CliArgs): Promise<void> {
   const portPid = findPidOnPort(port);
   if (portPid && portPid !== process.pid) {
     console.log(`⚠️  Port ${port} is occupied by PID ${portPid}. Killing...`);
-    await killProcess(portPid, { timeoutMs: 3000 });
+    const killed = await killProcess(portPid, { timeoutMs: 3000 });
+    if (!killed && findPidOnPort(port) === portPid) {
+      console.error(`❌ Port ${port} still held by PID ${portPid} (likely elevated/foreign process).`);
+      console.error('   Stop that process first, or use a different --port.');
+      process.exit(1);
+    }
     await delay(500);
   }
 
