@@ -1,3 +1,13 @@
+## v0.28.17 (2026-09-18)
+
+### fix(web): 历史不回放托管 system prompt；落盘保留审计
+
+Loop 每轮将 system prompt 以 `metadata.source='systemPrompt'` 注入 messages；切走再切回时 `buildHistoryItems` 把其画成 info 系统气泡。
+
+- **Session 落盘不删**该消息（审计可还原本轮 system）
+- Web 历史映射跳过 `source==='systemPrompt'`，以及无 metadata 的长人格 system（AGENTS.md / Session Startup 等）
+- 短 system 通知仍显示；契约文档写明「落盘保留 · UI 不回放」
+
 ## v0.28.16 (2026-09-17)
 
 ### feat(context): 七层可观测 Runtime + 装配预算语义纠偏

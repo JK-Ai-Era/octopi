@@ -49,6 +49,18 @@ function extractText(content: unknown): string {
   return '';
 }
 
+/**
+ * 托管 system prompt / 明显的人格注入，不应作为聊天记录回放
+ */
+function isHiddenSystemHistory(msg: MessageRecord): boolean {
+  if (msg.role !== 'system') return false;
+  const meta = msg.metadata as { source?: string } | undefined;
+  if (meta?.source === 'systemPrompt') return true;
+  const text = extractText(msg.content);
+  // 无 metadata 的历史人格整段注入
+  return text.length > 200 && /AGENTS\.md|Session Startup|Operating Instructions|Agent Persona/i.test(text);
+}
+
 // ──────────────────────────────────────
 // ConversationAdapter
 // ──────────────────────────────────────
@@ -495,6 +507,11 @@ export class ConversationAdapter {
 
     for (const msg of messages) {
       const ts = msg.timestamp ?? Date.now();
+
+      // Loop 会把 systemPrompt unshift 进 messages；历史回放必须跳过
+      if (isHiddenSystemHistory(msg)) {
+        continue;
+      }
 
       switch (msg.role) {
         case 'user': {

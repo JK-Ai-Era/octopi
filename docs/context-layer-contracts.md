@@ -91,6 +91,13 @@ interface ContextLayer {
 5. 按 `order` 用 `\n\n---\n\n` 拼接
 6. 返回 `{ systemPrompt, manifest }`
 
+**托管 systemPrompt 与会话落盘：**
+
+- Loop 每轮将 `context.systemPrompt` 以 `role=system` + `metadata.source='systemPrompt'` 注入 messages
+- **Session 持久化保留该消息**（审计：可事后还原「本轮 system 是什么」）
+- **Web 聊天历史不回放**：`buildHistoryItems` 跳过 `source==='systemPrompt'` 与特征明显的人格长 system
+- 运行时可观测仍走 `context.layers.assembled` / 上下文面板，不依赖聊天气泡
+
 **可观测通道：**
 
 - Assembler 可将层正文写入 `manifest.layers[].content`（本地缓存 / REST 点选用）

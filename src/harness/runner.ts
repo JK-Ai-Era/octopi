@@ -596,7 +596,8 @@ export class SessionAwareRunner {
 
       // 10. 同步 Agent 上下文回 session
       //     Agent.run() 修改了 agent.context.messages（原地）
-      //     将新增的消息同步回 session
+      //     含 Loop 注入的托管 systemPrompt（metadata.source='systemPrompt'）：
+      //     落盘保留审计价值；聊天 UI 在 history 映射时过滤，不回放进对话
       session.messages = this.agent.context.messages;
 
       // 11. 引擎异常退出时的 session 一致性修复
