@@ -1,3 +1,11 @@
+## v0.29.1 (2026-09-18)
+
+### chore: 移除仓库根目录 Web 设计原型
+
+- 删除根目录 `index.html`（静态设计验证稿，非生产入口）
+- 生产 Web 入口仍为 `web/index.html`
+- `docs/context-layers-ui-design.md` 去掉对该原型的引用
+
 ## v0.29.0 (2026-09-18)
 
 ### feat(builder)!: 单公开 build() + memory extraction 生产接线

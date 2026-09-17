@@ -404,4 +404,3 @@ interface ContextLayersSnapshot {
 | `web/src/components/ContextRuntimePanel.tsx` | 新组件 |
 | `web/src/components/ChatWorkspace.tsx` | 挂载 tab |
 | `web/src/styles.css` | layer tokens + band 样式 |
-| `index.html`（仓库根原型） | 设计验证用静态原型，非生产入口 |
