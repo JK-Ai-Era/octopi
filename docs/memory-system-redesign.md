@@ -601,7 +601,7 @@ interface MemoryQuery {
 
 | 工具 | 行为 |
 |------|------|
-| `memory_store` | 槽位校验 → confidence 暂定 → gates → store；返回 id/status/reject reasons |
+| `memory_store` | 槽位校验 → confidence 暂定 → gates → store；可选 `supersedes_id`（须来自 search）→ 写新条后软删旧条；返回 id/status/reject reasons |
 | `memory_search` | 检索含 shadow、排除 deleted；结果标注 status/channel/confidence |
 | （可选）`memory_forget` | 不进默认主 agent 工具集；治理/管理使用 |
 

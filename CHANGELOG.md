@@ -1,3 +1,13 @@
+## v0.30.1 (2026-09-19)
+
+### feat(memory): memory_store.supersedes_id 最小纠错闭环
+
+- `memory_store` 可选 `supersedes_id`（须来自 `memory_search` 返回的 id）：写入新命题后软删旧条（reason=`superseded`）；id 不存在/已删则拒绝且不写入
+- `memory_search` 描述标明结果含 `id`，供 supersede 使用
+- 产品宪法补充：写结论前 search；冲突结论 search → store+supersedes_id；禁止臆造 id；默认不依赖 MemoryLayer 无 id 注入
+- MemoryLayer 正文仍不暴露 id（减少幻觉引用）；纠错走主动 search 路径
+- 测试：`tests/memory/memory-supersede.test.ts`
+
 ## v0.30.0 (2026-09-19)
 
 ### feat(memory)!: 系统 redesign — fact/method/norm + 宪法 + Steward

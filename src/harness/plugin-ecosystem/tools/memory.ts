@@ -35,7 +35,7 @@ export function createMemoryStoreTool(store: MemoryStore, options?: MemoryToolOp
     definition: {
       name: 'memory_store',
       description:
-        'Store one atomic memory proposition for future sessions. Use only when salience checks pass. Types: fact | method | norm. Do not store activity logs or statistical summaries. Never claim memory was saved without calling this tool.',
+        'Store one atomic memory proposition for future sessions. Use only when salience checks pass. Types: fact | method | norm. If a search hit is obsolete/conflicting, set supersedes_id to that memory id (soft-delete old, write new). Never claim memory was saved without calling this tool.',
       parameters: {
         type: {
           type: 'string',
@@ -68,6 +68,11 @@ export function createMemoryStoreTool(store: MemoryStore, options?: MemoryToolOp
           required: true,
           enum: CHANNELS.filter((c) => c !== 'admin'),
         },
+        supersedes_id: {
+          type: 'string',
+          description:
+            'Existing memory id from memory_search to supersede when this proposition replaces an obsolete/conflicting stored conclusion. Only use ids you actually saw in search results.',
+        },
         importance: { type: 'number', description: '0-1 optional', minimum: 0, maximum: 1 },
         tags: { type: 'array', description: 'optional tags', items: { type: 'string', description: 'tag' } },
       },
@@ -79,6 +84,7 @@ export function createMemoryStoreTool(store: MemoryStore, options?: MemoryToolOp
       const futureUse = args.future_use ? String(args.future_use) : undefined;
       const anchors = Array.isArray(args.anchors) ? (args.anchors as string[]) : [];
       const channel = (args.channel as MemoryChannel) ?? 'model_inference';
+      const supersedesId = args.supersedes_id ? String(args.supersedes_id).trim() : undefined;
 
       const gate = evaluateGates(
         { type, proposition, evidence, futureUse, anchors, channel },
@@ -86,6 +92,20 @@ export function createMemoryStoreTool(store: MemoryStore, options?: MemoryToolOp
       );
       if (!gate.ok) {
         return { stored: false, rejected: true, reason: gate.reason, message: gate.message };
+      }
+
+      // supersede 前置校验：id 必须存在且未软删；失败则不写新条、不动旧条
+      let previous: Awaited<ReturnType<MemoryStore['get']>> | undefined;
+      if (supersedesId) {
+        previous = await store.get(supersedesId);
+        if (!previous || previous.deleted) {
+          return {
+            stored: false,
+            rejected: true,
+            reason: 'supersedes_id_not_found',
+            message: `supersedes_id ${supersedesId} not found or already deleted; store with memory_search first`,
+          };
+        }
       }
 
       const conf = provisionalConfidence({
@@ -97,6 +117,8 @@ export function createMemoryStoreTool(store: MemoryStore, options?: MemoryToolOp
       });
 
       const status = gate.status === 'shadow' ? 'shadow' : conf.status;
+      const tags = [...new Set([...((args.tags as string[]) ?? []), channel, type])];
+      if (supersedesId) tags.push('supersede');
 
       const id = await store.store({
         type,
@@ -104,13 +126,22 @@ export function createMemoryStoreTool(store: MemoryStore, options?: MemoryToolOp
         source: `session:${context.sessionId ?? 'unknown'}`,
         confidence: conf.confidence,
         importance: conf.importance,
-        tags: [...new Set([...((args.tags as string[]) ?? []), channel, type])],
+        tags,
         channel,
         status,
         futureUse,
         anchors,
         evidence,
       });
+
+      // 先写新条再软删旧条，避免写失败导致旧结论丢失
+      if (supersedesId && previous) {
+        await store.softDelete(supersedesId, {
+          by: 'memory_store.supersede',
+          reason: 'superseded',
+          winnerId: id,
+        });
+      }
 
       return {
         id,
@@ -120,6 +151,7 @@ export function createMemoryStoreTool(store: MemoryStore, options?: MemoryToolOp
         confidence: conf.confidence,
         importance: conf.importance,
         content: proposition,
+        supersededId: supersedesId ?? null,
       };
     },
   };
@@ -130,7 +162,7 @@ export function createMemorySearchTool(store: MemoryStore): RegisteredTool {
     definition: {
       name: 'memory_search',
       description:
-        'Search long-term memory propositions by text. Includes shadow entries (hypotheses only). Excludes soft-deleted entries. Use concrete entity names as query terms.',
+        'Search long-term memory propositions by text. Results include memory `id` for follow-up (e.g. memory_store.supersedes_id when replacing an obsolete conclusion). Includes shadow entries (hypotheses only). Excludes soft-deleted entries. Use concrete entity names as query terms.',
       parameters: {
         query: { type: 'string', description: 'Search query (prefer entities)', required: true },
         type: { type: 'string', description: 'Filter by type', enum: [...MEMORY_TYPES] },

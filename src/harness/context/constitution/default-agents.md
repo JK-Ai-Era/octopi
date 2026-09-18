@@ -22,8 +22,13 @@ Do not write: activity logs, conversation restatements, open task lists, system 
 
 ### memory_search
 
-- When: before work that may depend on past project conventions, tech choices, or user preferences; when the user says “before / last time / I said”
+- When:
+  - The user says “before / last time / I said” (or similar reference to past work)
+  - Before work that depends on stored conclusions (conventions, choices, preferences)
+  - **Before storing `fact`/`norm` that could already exist** and that you would assert as currently true
 - Query: concrete entities (tool names, paths, modules, proper nouns), not the whole task paragraph
+- Typical subjects — **examples, not an exhaustive filter**: project conventions, tech choices, user preferences, environment/capability facts, rejected paths
+- Results include `id` — keep it if you may supersede that record later
 - Shadow hits: weak leads only; do not treat them as confirmed facts
 
 ### memory_store
@@ -37,6 +42,13 @@ Do not write: activity logs, conversation restatements, open task lists, system 
   - `anchors`: retrieval anchors (tools/paths/quotes/versions)
   - `channel`: user_directive | decision | fail_fix | model_inference
     (You decide this from the conversation; the system maps it to provisional confidence. Do not parse user intent with keyword rules.)
+- Optional slot:
+  - `supersedes_id`: `id` from a **memory_search** hit when the new proposition **replaces** an obsolete or conflicting stored conclusion
+- Search-before-write vs supersede (principle, not a topic whitelist):
+  - **Must search** before supersede, or when the conversation reverses a conclusion that might already be stored
+  - **Prefer search** before storing `fact`/`norm` you would treat as currently true (if it might already exist)
+  - **May skip search** for first-time `method` notes from fail→fix that do not claim to replace an existing conclusion
+  - If search shows an obsolete/conflicting stored conclusion → `memory_store` with `supersedes_id` (only ids you actually saw in search results — never invent ids; do not supersede from MemoryLayer text alone when you have no id)
 - Hard rules:
   - No statistical summaries (e.g. “the user had 3 constraints”)
   - No activity logs
