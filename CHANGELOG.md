@@ -1,3 +1,11 @@
+## v0.30.2 (2026-09-19)
+
+### fix(context): datetime 注入只保留时间锚点
+
+- `formatRuntimeDatetimeInjection` 去掉第二句用法提示（`Use this as the reference time...`），避免限制 LLM 对时间敏感查询的处理方式
+- system prompt 仅注入 `Current datetime: YYYY-MM-DD HH:mm (timezone)`
+- 测试同步：断言注入文本不再含 `time-sensitive`
+
 ## v0.30.1 (2026-09-19)
 
 ### feat(memory): memory_store.supersedes_id 最小纠错闭环

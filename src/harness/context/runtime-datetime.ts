@@ -12,17 +12,14 @@
  * 时区取进程本地 IANA 名，与 Date 本地字段一致。
  *
  * @param now - 参考时刻，默认当前时间
- * @returns 注入字符串（单块，含用法提示）
+ * @returns 注入字符串（单行时间锚点）
  */
 export function formatRuntimeDatetimeInjection(now: Date = new Date()): string {
   const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
   const pad = (n: number): string => String(n).padStart(2, '0');
   const date = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
   const time = `${pad(now.getHours())}:${pad(now.getMinutes())}`;
-  return (
-    `Current datetime: ${date} ${time} (${timeZone})\n` +
-    `Use this as the reference time for any time-sensitive queries (e.g. "recent news", "today").`
-  );
+  return `Current datetime: ${date} ${time} (${timeZone})`;
 }
 
 /**

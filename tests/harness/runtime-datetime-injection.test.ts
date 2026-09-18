@@ -48,7 +48,7 @@ describe('formatRuntimeDatetimeInjection', () => {
     const expectedTime = `${pad(now.getHours())}:${pad(now.getMinutes())}`;
     const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
     expect(text).toContain(`Current datetime: ${expectedDate} ${expectedTime} (${tz})`);
-    expect(text).toContain('time-sensitive');
+    expect(text).not.toContain('time-sensitive');
     expect(text).not.toContain(`:${pad(45)}`);
   });
 });
