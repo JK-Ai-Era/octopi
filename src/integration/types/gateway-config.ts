@@ -45,4 +45,7 @@ export interface GatewayConfig {
   };
   /** system prompt 七层装配器调参（preview / content / budget ratio） */
   contextAssembler?: import('../../config.js').ContextAssemblerConfig;
+  context?: import('../../config.js').HarnessConfig['context'];
+  constitution?: import('../../config.js').ConstitutionConfig;
+  memory?: import('../../config.js').HarnessConfig['memory'];
 }

@@ -1,11 +1,11 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+﻿import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { SubsystemRuntime } from '../../src/harness/autonomous-subsystem/runtime.js';
 import { DefaultEventBus } from '../../src/core/primitives/event-bus.js';
 import type { SubsystemSpec } from '../../src/harness/autonomous-subsystem/types.js';
 
 function makeSpec(overrides?: Partial<SubsystemSpec>): SubsystemSpec {
   return {
-    id: 'memory.extractor',
+    id: 'test.lifecycle.subsystem',
     name: 'Memory Extractor',
     description: 'test',
     sense: { source: 'eventBus', filter: { events: ['session.lifecycle.updated'] }, isolation: 'structured' },
@@ -37,7 +37,7 @@ describe('SubsystemRuntime session end cleanup', () => {
   it('deletes scoped subsystem session on session.ended', () => {
     runtime.register(makeSpec());
 
-    // 触发一次，以创建 scoped subsystem session
+    // 瑙﹀彂涓€娆★紝浠ュ垱寤?scoped subsystem session
     events.emit({
       type: 'session.lifecycle.updated',
       timestamp: Date.now(),
@@ -53,7 +53,8 @@ describe('SubsystemRuntime session end cleanup', () => {
       sessionId: 'session-1',
     });
 
-    // 这里主要验证不会抛错且 runtime 仍可用（清理路径执行成功）
+    // 杩欓噷涓昏楠岃瘉涓嶄細鎶涢敊涓?runtime 浠嶅彲鐢紙娓呯悊璺緞鎵ц鎴愬姛锛?
     expect(runtime.subsystemCount).toBe(1);
   });
 });
+

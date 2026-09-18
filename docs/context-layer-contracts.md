@@ -10,12 +10,13 @@
 
 | 组件 | 职责 | 不负责 |
 |------|------|--------|
+| **Constitution preamble** | 全局运行宪法（product/custom/off）；固定 system 最前，预算预扣 | 层内容、检索 |
 | **ContextLayer** | 单层内容如何产生（取数 + 格式化 + 层内截断） | 全局预算、拼接顺序 |
-| **DefaultContextAssembler** | 多层预算竞争、纳入/丢弃、拼 system prompt、产出 manifest | 检索打分、消息压缩 |
+| **DefaultContextAssembler** | 宪法 preamble + 多层预算竞争、纳入/丢弃、拼 system prompt、产出 manifest | 检索打分、消息压缩 |
 | **ContextEngine**（现有） | 消息窗口选择 / 路由 / 压缩（Information 层） | system prompt 里有什么 |
 
 ```
-Layer Providers ──► ContextAssembler ──► systemPrompt ──► ContextEngine.assemble ──► LLM
+Constitution + Layer Providers ──► ContextAssembler ──► systemPrompt ──► ContextEngine.assemble ──► LLM
      │                                      │                      │
      └── 检索/格式化                      manifest              消息窗口压缩
 ```
@@ -145,7 +146,7 @@ Runner.handle
 - 可用 `.disableAutoSummarize()` 关闭自动摘要  
 - **Skill**：`skillDirectory` 或 `home/skills` 在 build 时 discover，每轮注入 `<available_skills>`  
 - **Memory/Knowledge 召回**：`builder.memoryStore` / `knowledgeStore`；config-bridge 与 Gateway 从 `home/agent.db` 建 `SqliteMemoryStore`，Knowledge 暂用进程内 `MemoryKnowledgeStore`
-- **MemoryStore 单实例**：`AgentBuilder.build()` 在 `buildCore` 前用 `builder.memoryStore` 注册 `memory_store`/`memory_search`；MemoryLayer 召回与 `memory.extractor` 入库同一实例。Gateway **不再**用进程级 `InMemoryMemoryStore` 挂全局 memory 工具
+- **MemoryStore 单实例**：`AgentBuilder.build()` 在 `buildCore` 前用 `builder.memoryStore` 注册 `memory_store`/`memory_search`；MemoryLayer 召回与 `memory.steward.*` 入库同一实例。Gateway **不再**用进程级 `InMemoryMemoryStore` 挂全局 memory 工具
 - **压缩状态落盘**：`SessionData.contextCompact`（`summary` + `lastProactiveMessageCount` + `lastProactiveTokens`）；重启后 `loadCompactState` 恢复，增量小则缓存重建、不再立刻打 LLM  
 
 **主动摘要（防长会话失忆）：**

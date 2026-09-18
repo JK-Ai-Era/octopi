@@ -368,6 +368,69 @@
       },
       "additionalProperties": false
     },
+    "constitution": {
+      "type": "object",
+      "description": "全局运行宪法（等价 context.constitution）。product=包内资产；custom=集成商全文；off=不装配 preamble",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["product", "custom", "off"],
+          "default": "product"
+        },
+        "path": {
+          "type": ["string", "null"],
+          "description": "mode=custom 时必填的宪法文件路径"
+        }
+      },
+      "required": ["mode"],
+      "additionalProperties": false
+    },
+    "context": {
+      "type": "object",
+      "description": "context 域扩展配置",
+      "properties": {
+        "constitution": {
+          "type": "object",
+          "properties": {
+            "mode": { "type": "string", "enum": ["product", "custom", "off"] },
+            "path": { "type": ["string", "null"] }
+          },
+          "required": ["mode"],
+          "additionalProperties": false
+        },
+        "contextAssembler": { "$ref": "#/properties/contextAssembler" }
+      },
+      "additionalProperties": false
+    },
+    "memory": {
+      "type": "object",
+      "description": "Memory 写入与置信度策略",
+      "properties": {
+        "profile": {
+          "type": "string",
+          "enum": ["personal_assistant", "embedded_interactive", "embedded_headless"]
+        },
+        "confidence": {
+          "type": "object",
+          "properties": {
+            "injectMinScore": { "type": "number", "minimum": 0, "maximum": 1 },
+            "channelPriors": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "user_directive": { "type": "number", "minimum": 0, "maximum": 1 },
+                "decision": { "type": "number", "minimum": 0, "maximum": 1 },
+                "fail_fix": { "type": "number", "minimum": 0, "maximum": 1 },
+                "model_inference": { "type": "number", "minimum": 0, "maximum": 1 },
+                "admin": { "type": "number", "minimum": 0, "maximum": 1 }
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
     "runGuard": {
       "type": "object",
       "description": "过程监督配置（智能监督，替代硬预算限制）",
@@ -635,6 +698,16 @@
         "auditDir": {
           "type": "string",
           "description": "审计日志目录（默认 ~/.octopi/audit）"
+        },
+        "allowlist": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "允许注册：id / packageId / memory.steward.* 前缀"
+        },
+        "denylist": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "禁止注册（优先于 allowlist）"
         }
       }
     },

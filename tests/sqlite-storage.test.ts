@@ -86,36 +86,40 @@ describe('SqliteMemoryStore', () => {
 
   it('should store and retrieve a memory', async () => {
     const id = await store.store({
-      type: 'lesson',
+      type: 'method',
       content: 'Vitest 的 mock 需要先 import 再 mock',
       source: 'session-1',
       confidence: 0.8,
       importance: 0.7,
       tags: ['vitest', 'testing'],
+      status: 'active',
+      channel: 'admin',
+      evidence: 'unit',
+      anchors: ['vitest'],
     });
 
     expect(id).toBeTruthy();
 
     const entry = await store.get(id);
     expect(entry).toBeTruthy();
-    expect(entry!.type).toBe('lesson');
+    expect(entry!.type).toBe('method');
     expect(entry!.content).toBe('Vitest 的 mock 需要先 import 再 mock');
     expect(entry!.tags).toEqual(['vitest', 'testing']);
   });
 
   it('should retrieve by type filter', async () => {
-    await store.store({ type: 'lesson', content: 'lesson 1', source: 's1', confidence: 0.5, importance: 0.5, tags: [] });
-    await store.store({ type: 'preference', content: 'preference 1', source: 's1', confidence: 0.5, importance: 0.5, tags: [] });
-    await store.store({ type: 'lesson', content: 'lesson 2', source: 's1', confidence: 0.5, importance: 0.5, tags: [] });
+    await store.store({ type: 'method', content: 'lesson 1', source: 's1', confidence: 0.5, importance: 0.5, tags: [], status: 'active', channel: 'admin', evidence: 't' });
+    await store.store({ type: 'norm', content: 'preference 1', source: 's1', confidence: 0.5, importance: 0.5, tags: [], status: 'active', channel: 'admin', evidence: 't' });
+    await store.store({ type: 'method', content: 'lesson 2', source: 's1', confidence: 0.5, importance: 0.5, tags: [], status: 'active', channel: 'admin', evidence: 't' });
 
-    const lessons = await store.retrieve({ text: '', type: 'lesson' });
+    const lessons = await store.retrieve({ text: '', type: 'method' });
     expect(lessons.length).toBe(2);
-    expect(lessons.every(e => e.type === 'lesson')).toBe(true);
+    expect(lessons.every(e => e.type === 'method')).toBe(true);
   });
 
   it('should retrieve by keyword match', async () => {
-    await store.store({ type: 'decision', content: '选择了 PostgreSQL 而非 MongoDB', source: 's1', confidence: 0.9, importance: 0.8, tags: ['database'] });
-    await store.store({ type: 'lesson', content: 'Vitest 的 mock 需要先 import', source: 's1', confidence: 0.7, importance: 0.6, tags: ['testing'] });
+    await store.store({ type: 'fact', content: '选择了 PostgreSQL 而非 MongoDB', source: 's1', confidence: 0.9, importance: 0.8, tags: ['database'], status: 'active', channel: 'admin', evidence: 't' });
+    await store.store({ type: 'method', content: 'Vitest 的 mock 需要先 import', source: 's1', confidence: 0.7, importance: 0.6, tags: ['testing'], status: 'active', channel: 'admin', evidence: 't' });
 
     const results = await store.retrieve({ text: 'PostgreSQL database' });
     expect(results.length).toBeGreaterThan(0);
@@ -123,7 +127,7 @@ describe('SqliteMemoryStore', () => {
   });
 
   it('should update access count', async () => {
-    const id = await store.store({ type: 'lesson', content: 'test', source: 's1', confidence: 0.5, importance: 0.5, tags: [] });
+    const id = await store.store({ type: 'method', content: 'test', source: 's1', confidence: 0.5, importance: 0.5, tags: [], status: 'active', channel: 'admin', evidence: 't' });
 
     await store.retrieve({ text: 'test' });
     const entry = await store.get(id);
@@ -135,24 +139,24 @@ describe('SqliteMemoryStore', () => {
   });
 
   it('should delete a memory', async () => {
-    const id = await store.store({ type: 'lesson', content: 'test', source: 's1', confidence: 0.5, importance: 0.5, tags: [] });
+    const id = await store.store({ type: 'method', content: 'test', source: 's1', confidence: 0.5, importance: 0.5, tags: [], status: 'active', channel: 'admin', evidence: 't' });
     await store.delete(id);
     const entry = await store.get(id);
     expect(entry).toBeNull();
   });
 
   it('should return stats', async () => {
-    await store.store({ type: 'lesson', content: 'l1', source: 's1', confidence: 0.8, importance: 0.7, tags: [] });
-    await store.store({ type: 'preference', content: 'p1', source: 's1', confidence: 0.6, importance: 0.5, tags: [] });
+    await store.store({ type: 'method', content: 'l1', source: 's1', confidence: 0.8, importance: 0.7, tags: [], status: 'active', channel: 'admin', evidence: 't' });
+    await store.store({ type: 'norm', content: 'p1', source: 's1', confidence: 0.6, importance: 0.5, tags: [], status: 'active', channel: 'admin', evidence: 't' });
 
     const stats = await store.stats();
     expect(stats.totalEntries).toBe(2);
-    expect(stats.byType.lesson).toBe(1);
-    expect(stats.byType.preference).toBe(1);
+    expect(stats.byType.method).toBe(1);
+    expect(stats.byType.norm).toBe(1);
   });
 
   it('should perform decay', async () => {
-    const id = await store.store({ type: 'context', content: 'old memory', source: 's1', confidence: 0.5, importance: 0.5, tags: [] });
+    const id = await store.store({ type: 'fact', content: 'old memory', source: 's1', confidence: 0.5, importance: 0.5, tags: [], status: 'active', channel: 'admin', evidence: 't' });
 
     // 手动设置 last_accessed_at 为 60 天前
     const sixtyDaysAgo = Date.now() - 60 * 24 * 60 * 60 * 1000;
@@ -184,7 +188,7 @@ describe('SqliteMemoryStore with embedding', () => {
 
   it('should store memory with embedding', async () => {
     const id = await store.store({
-      type: 'decision',
+      type: 'fact',
       content: '选择了 PostgreSQL 作为主数据库',
       source: 's1',
       confidence: 0.9,
@@ -199,9 +203,9 @@ describe('SqliteMemoryStore with embedding', () => {
   });
 
   it('should retrieve by vector similarity', async () => {
-    await store.store({ type: 'decision', content: 'PostgreSQL 是主数据库', source: 's1', confidence: 0.9, importance: 0.8, tags: ['db'] });
-    await store.store({ type: 'lesson', content: 'Vitest mock 的用法', source: 's1', confidence: 0.7, importance: 0.6, tags: ['test'] });
-    await store.store({ type: 'decision', content: 'MongoDB 被放弃了', source: 's1', confidence: 0.8, importance: 0.7, tags: ['db'] });
+    await store.store({ type: 'fact', content: 'PostgreSQL 是主数据库', source: 's1', confidence: 0.9, importance: 0.8, tags: ['db'], status: 'active', channel: 'admin', evidence: 't' });
+    await store.store({ type: 'method', content: 'Vitest mock 的用法', source: 's1', confidence: 0.7, importance: 0.6, tags: ['test'], status: 'active', channel: 'admin', evidence: 't' });
+    await store.store({ type: 'fact', content: 'MongoDB 被放弃了', source: 's1', confidence: 0.8, importance: 0.7, tags: ['db'], status: 'active', channel: 'admin', evidence: 't' });
 
     // 查询数据库相关内容
     const results = await store.retrieve({ text: 'PostgreSQL 数据库选型' });

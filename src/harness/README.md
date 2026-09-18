@@ -21,7 +21,7 @@
 | Concurrency | `concurrency/` | 多 Key 负载均衡、限流 |
 | Execution Environment | `execution-environment/` | 沙箱、工作区 |
 | Human-in-the-Loop | `human-in-the-loop/` | 审批流程 |
-| Memory | `memory/` | 记忆、认知、智慧、会话提取（七层组装在 `context/`） |
+| Memory | `memory/` | 命题记忆（fact/method/norm）、confidence/gates；Steward 在 `subsystems/memory-steward/`；七层组装在 `context/` |
 
 ## 其他文件
 

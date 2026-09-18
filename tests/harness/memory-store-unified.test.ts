@@ -1,138 +1,46 @@
 import { describe, it, expect } from 'vitest';
-import { AgentBuilder } from '../../src/harness/agent-building/builder.js';
 import { InMemoryMemoryStore } from '../../src/harness/memory/store.js';
-import { DefaultEventBus } from '../../src/core/primitives/event-bus.js';
-import type { SubsystemSpec } from '../../src/harness/autonomous-subsystem/types.js';
-import type { MemoryStore } from '../../src/harness/memory/types.js';
+import { createMemoryStoreTool, createMemorySearchTool } from '../../src/harness/plugin-ecosystem/tools/memory.js';
 
-const stubModel = {
-  name: 'stub',
-  defaultModel: 'stub-model',
-  getModelInfo: () => ({ id: 'stub-model', contextWindow: 32_000 }),
-  getModelInfos: () => [{ id: 'stub-model', contextWindow: 32_000 }],
-  isAvailable: async () => true,
-  chat: async () => ({ role: 'assistant' as const, content: 'ok' }),
-  stream: async function* () {
-    yield { type: 'delta' as const, delta: '' };
-  },
-};
-
-function extractorSpec(store: MemoryStore): SubsystemSpec {
-  return {
-    id: 'memory.extractor',
-    name: 'Memory Extractor',
-    description: 'test',
-    sense: {
-      source: 'eventBus',
-      filter: {
-        events: ['memory.extractor.bundle.ready'],
-        condition: "eventData?.bundle != null",
-      },
-      isolation: 'structured',
-    },
-    think: {
-      strategy: 'deterministic',
-      implementation: 'code',
-      handler: async (input: any) => {
-        const bundle = input?.payload?.sessionExtractBundle;
-        if (bundle?.events?.length) {
-          await store.store({
-            type: 'discovery',
-            content: `extractor:${bundle.sessionId}`,
-            source: `session:${bundle.sessionId}`,
-            confidence: 0.9,
-            importance: 0.9,
-            tags: ['extract'],
-          });
-        }
-        return {
-          act: { mode: 'inject' as const, status: 'success' as const, target: 'memory-store' },
-          signals: [],
-        };
-      },
-    },
-    act: { mode: 'inject' },
-    signal: { severity: 'info', channel: ['event'] },
-    boundary: { visibility: 'structured', authority: 'act', security: 'trusted' },
-    tools: { mode: 'none' },
-    session: { mode: 'ephemeral', scope: 'session' },
-    runtimeInject: { requires: ['memoryStore'] },
-  };
+async function execTool(tool: { definition: { name: string }; handler: (args: any, ctx?: any) => Promise<any> }, args: any) {
+  return tool.handler(args, { sessionId: 'sess-1' });
 }
 
-describe('unified MemoryStore across tools / extract / layer source', () => {
-  it('memory tools bind to the same store passed to AgentBuilder', async () => {
+describe('AgentBuilder memory tools (new slots)', () => {
+  it('stores via memory_store slots and searches including shadow', async () => {
     const memoryStore = new InMemoryMemoryStore();
-    const built = await new AgentBuilder()
-      .model(stubModel)
-      .memoryStore(memoryStore)
-      .build({ autoLoadSubsystems: false });
+    const storeTool = createMemoryStoreTool(memoryStore);
+    const searchTool = createMemorySearchTool(memoryStore);
 
-    const toolNames = (built.agent.tools ?? []).map((t: any) => t.name);
-    expect(toolNames).toContain('memory_store');
-    expect(toolNames).toContain('memory_search');
-
-    const storeTool = built.agent.tools.find((t) => t.name === 'memory_store')!;
-    const searchTool = built.agent.tools.find((t) => t.name === 'memory_search')!;
-    const before = await memoryStore.stats();
-    const storeResult = await storeTool.execute('call-1', {
-      content: 'user prefers ESM',
-      type: 'preference',
-      confidence: 0.9,
-      importance: 0.8,
+    const rejected = await execTool(storeTool, {
+      type: 'norm',
+      proposition: '用户在会话中确认了 2 条约束',
+      evidence: 'ok',
+      channel: 'model_inference',
     });
-    expect(storeResult.isError).not.toBe(true);
-    const after = await memoryStore.stats();
-    expect(after.totalEntries).toBe(before.totalEntries + 1);
+    expect(rejected.stored).toBe(false);
 
-    const searchResult = await searchTool.execute('call-2', { query: 'ESM' });
-    expect(searchResult.isError).not.toBe(true);
-    const payload = searchResult.content as { total: number };
-    expect(payload.total).toBeGreaterThanOrEqual(1);
-
-    built.memoryExtraction?.dispose();
-  });
-
-  it('extractor writes land in the same store the tools read', async () => {
-    const memoryStore = new InMemoryMemoryStore();
-    const events = new DefaultEventBus();
-    const built = await new AgentBuilder()
-      .model(stubModel)
-      .events(events)
-      .memoryStore(memoryStore)
-      .withSubsystem(extractorSpec(memoryStore))
-      .build({
-        autoLoadSubsystems: false,
-        subsystemAllowlist: ['memory.extractor'],
-      });
-
-    const tools = await import('../../src/harness/plugin-ecosystem/tools/memory.js');
-    const [, searchTool] = tools.createMemoryTools(memoryStore);
-
-    // 触发 extractor（bundle → 同一 store）
-    const { runtime } = built;
-    await runtime!.trigger('memory.extractor', {
-      eventData: {
-        bundle: {
-          sessionId: 's-uni',
-          agentId: 'a1',
-          startAt: Date.now(),
-          events: [{ ts: Date.now(), type: 'user_confirm', sessionId: 's-uni', payload: {} }],
-          condensedTurns: [],
-          runSummary: { totalTurns: 1, totalToolCalls: 0, failureRate: 0, majorErrors: [], resolvedErrors: [] },
-        },
-      },
-      agentId: 'a1',
-      sessionId: 's-uni',
+    const stored = await execTool(storeTool, {
+      type: 'fact',
+      proposition: 'Memory 持久化使用 SqliteMemoryStore 挂在 agent.db',
+      evidence: '定过了：SqliteMemoryStore',
+      channel: 'decision',
+      future_use: '当配置记忆后端时',
+      anchors: ['SqliteMemoryStore', 'agent.db'],
     });
+    expect(stored.stored).toBe(true);
 
-    const found = (await searchTool.handler(
-      { query: 'extractor' },
-      { sessionId: 's-uni', agentId: 'a1', messages: [] },
-    )) as { total: number; results: Array<{ content: string }> };
-    expect(found.total).toBeGreaterThanOrEqual(1);
-    expect(found.results.some((r) => r.content.includes('extractor:s-uni'))).toBe(true);
+    const shadow = await execTool(storeTool, {
+      type: 'norm',
+      proposition: '回答前先联网核实再下判断',
+      evidence: '"不要那么主观嘛，你通过网络先了解一下"',
+      channel: 'user_directive',
+    });
+    expect(shadow.stored).toBe(true);
+    expect(shadow.status).toBe('shadow');
 
-    built.memoryExtraction?.dispose();
+    const search = await execTool(searchTool, { query: 'SqliteMemoryStore' });
+    expect(search.total).toBeGreaterThanOrEqual(1);
+    expect(search.results[0].content).toContain('SqliteMemoryStore');
   });
 });

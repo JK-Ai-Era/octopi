@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { createRequire } from 'node:module';
 import type {
   SubsystemSpec, ThinkConfig, ThinkImplementation, SenseSource, ActMode,
@@ -68,16 +68,84 @@ export class SubsystemLoader {
 
       const packageDirs = source === 'npm'
         ? this.collectNpmPackageDirs(dir, entries)
-        : entries.filter((e) => e.isDirectory() && !e.name.startsWith('.')).map((e) => join(dir, e.name));
+        : entries
+            .filter((e) => e.isDirectory() && !e.name.startsWith('.'))
+            .map((e) => join(dir, e.name));
 
       for (const subsystemDir of packageDirs) {
-        const result = await this.loadOne(subsystemDir, source);
-        if (result.spec) specs.set(result.spec.id, result.spec);
-        if (result.error) errors.push({ path: subsystemDir, error: result.error });
+        await this.loadPackageDir(subsystemDir, source, specs, errors);
       }
     }
 
     return { specs: Array.from(specs.values()), errors };
+  }
+
+  /**
+   * 加载一级目录：单 spec 包，或多 spec 包（子目录含 config/SUBSYSTEM.md + shared 静默跳过）
+   */
+  private async loadPackageDir(
+    subsystemDir: string,
+    source: SubsystemSpec['source'],
+    specs: Map<string, SubsystemSpec>,
+    errors: Array<{ path: string; error: string }>,
+  ): Promise<void> {
+    const hasRootSpec =
+      existsSync(join(subsystemDir, 'config.yaml')) || existsSync(join(subsystemDir, 'SUBSYSTEM.md'));
+
+    if (hasRootSpec) {
+      const result = await this.loadOne(subsystemDir, source);
+      if (result.spec) {
+        // packageId 统一为目录名（与多 spec 包一致），便于 allowlist/denylist 按包开关
+        specs.set(result.spec.id, {
+          ...result.spec,
+          packageId: basename(subsystemDir),
+          packageRoot: subsystemDir,
+        });
+      }
+      if (result.error) errors.push({ path: subsystemDir, error: result.error });
+      return;
+    }
+
+    let children: string[] = [];
+    try {
+      children = readdirSync(subsystemDir, { withFileTypes: true })
+        .filter((e) => e.isDirectory() && !e.name.startsWith('.') && e.name !== 'shared' && e.name !== 'lib' && e.name !== 'references' && e.name !== 'scripts')
+        .map((e) => join(subsystemDir, e.name));
+    } catch {
+      return;
+    }
+
+    let loadedNested = 0;
+    for (const child of children) {
+      const childHasSpec =
+        existsSync(join(child, 'config.yaml')) || existsSync(join(child, 'SUBSYSTEM.md'));
+      if (!childHasSpec) {
+        // shared/lib 等非 spec 目录静默跳过
+        continue;
+      }
+      const result = await this.loadOne(child, source);
+      if (result.spec) {
+        specs.set(result.spec.id, {
+          ...result.spec,
+          packageId: basename(subsystemDir),
+          packageRoot: subsystemDir,
+        });
+        loadedNested++;
+      }
+      if (result.error) errors.push({ path: child, error: result.error });
+    }
+
+    // 纯资源包（仅 shared 等）静默跳过；有 handler 却无 spec 才报错
+    if (loadedNested === 0) {
+      const hasHandler =
+        existsSync(join(subsystemDir, 'handler.ts')) || existsSync(join(subsystemDir, 'handler.js'));
+      if (hasHandler) {
+        errors.push({
+          path: subsystemDir,
+          error: 'No config.yaml or SUBSYSTEM.md found (handler present)',
+        });
+      }
+    }
   }
 
   private collectNpmPackageDirs(nodeModulesDir: string, entries: import('node:fs').Dirent[]): string[] {

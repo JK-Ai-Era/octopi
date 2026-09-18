@@ -56,6 +56,8 @@ export class AgentDatabase {
     // WAL 模式
     if (options?.wal !== false) {
       db.pragma('journal_mode = WAL');
+      // 多进程 serve + govern 同时写 agent.db 时避免立刻 SQLITE_BUSY
+      db.pragma('busy_timeout = 5000');
     }
 
     const agentDb = new AgentDatabase(db);
@@ -63,8 +65,49 @@ export class AgentDatabase {
     return agentDb;
   }
 
+  /** 旧库升级：补齐 memories 治理列 + 旧类型映射（必须在依赖新列的 INDEX 之前） */
+  private migrateMemoryColumns(): void {
+    const cols = [
+      ["status", "TEXT NOT NULL DEFAULT 'active'"],
+      ['channel', 'TEXT'],
+      ['future_use', 'TEXT'],
+      ["anchors", "TEXT NOT NULL DEFAULT '[]'"],
+      ['evidence', 'TEXT'],
+      ['reinforced_at', 'INTEGER'],
+      ['deleted', 'INTEGER NOT NULL DEFAULT 0'],
+      ['deleted_at', 'INTEGER'],
+      ['deleted_by', 'TEXT'],
+      ['deleted_reason', 'TEXT'],
+      ['deleted_meta', 'TEXT'],
+    ] as const;
+    for (const [name, ddl] of cols) {
+      try {
+        this.db.exec(`ALTER TABLE memories ADD COLUMN ${name} ${ddl}`);
+      } catch {
+        // column already exists
+      }
+    }
+
+    // 旧 MemoryType → fact/method/norm（一次数据迁移，幂等）
+    this.db.exec(`
+      UPDATE memories SET type = CASE type
+        WHEN 'preference' THEN 'norm'
+        WHEN 'decision' THEN 'norm'
+        WHEN 'lesson' THEN 'method'
+        WHEN 'discovery' THEN 'fact'
+        WHEN 'context' THEN 'fact'
+        WHEN 'relationship' THEN 'fact'
+        ELSE type
+      END
+      WHERE type IN ('preference','decision','lesson','discovery','context','relationship')
+    `);
+  }
+
   /**
    * 创建所有表结构
+   *
+   * 顺序：CREATE TABLE IF NOT EXISTS → migrate 旧库列 → CREATE INDEX。
+   * 否则旧 agent.db 上对 `deleted` 建索引会直接 SQLITE_ERROR，导致 memoryStore 无法注入。
    */
   private createTables(): void {
     this.db.exec(`
@@ -81,13 +124,30 @@ export class AgentDatabase {
         created_at      INTEGER NOT NULL,
         decay_factor    REAL NOT NULL DEFAULT 1.0,
         tags            TEXT NOT NULL DEFAULT '[]',
-        embedding       TEXT
+        embedding       TEXT,
+        status          TEXT NOT NULL DEFAULT 'active',
+        channel         TEXT,
+        future_use      TEXT,
+        anchors         TEXT NOT NULL DEFAULT '[]',
+        evidence        TEXT,
+        reinforced_at   INTEGER,
+        deleted         INTEGER NOT NULL DEFAULT 0,
+        deleted_at      INTEGER,
+        deleted_by      TEXT,
+        deleted_reason  TEXT,
+        deleted_meta    TEXT
       );
+    `);
 
+    // 旧库可能仍是无 deleted/status 的 schema —— 先补列再建索引
+    this.migrateMemoryColumns();
+
+    this.db.exec(`
       CREATE INDEX IF NOT EXISTS idx_memories_type ON memories(type);
       CREATE INDEX IF NOT EXISTS idx_memories_confidence ON memories(confidence);
       CREATE INDEX IF NOT EXISTS idx_memories_importance ON memories(importance);
       CREATE INDEX IF NOT EXISTS idx_memories_created ON memories(created_at);
+      CREATE INDEX IF NOT EXISTS idx_memories_deleted ON memories(deleted);
 
       -- ── Concept 表 ──
       CREATE TABLE IF NOT EXISTS concepts (

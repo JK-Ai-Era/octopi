@@ -1,68 +1,172 @@
 /**
- * memory_store / memory_search 工具 — Agent 记忆读写
+ * memory_store / memory_search 工具 — 命题槽位写入 + 可搜 shadow
  *
- * 通过工厂函数接收 MemoryStore 实例（闭包注入），消除 context.services 类型黑洞。
+ * 写入经 confidence + gates；检索含 shadow、排除 deleted。
  */
 
-import type { RegisteredTool, ToolExecutionContext } from '../../../core/types.js';
-import type { MemoryStore, MemoryType } from '../../memory/types.js';
+import type { RegisteredTool } from '../../../core/types.js';
+import type { MemoryChannel, MemoryStore, MemoryType } from '../../memory/types.js';
+import { MEMORY_TYPES } from '../../memory/types.js';
+import { provisionalConfidence, type ConfidenceProfileConfig } from '../../memory/confidence.js';
+import { evaluateGates, type GateConfig } from '../../memory/gates.js';
 
-/** 创建记忆工具集 */
-export function createMemoryTools(store: MemoryStore): RegisteredTool[] {
-  return [createMemoryStoreTool(store), createMemorySearchTool(store)];
+const CHANNELS: MemoryChannel[] = [
+  'user_directive',
+  'decision',
+  'fail_fix',
+  'model_inference',
+  'admin',
+];
+
+export interface MemoryToolOptions {
+  confidence?: ConfidenceProfileConfig;
+  gates?: GateConfig;
+  /** 每次触发默认最大写入条数提示（工具描述用） */
+  maxWritesPerTrigger?: number;
 }
 
-/** memory_store 工具 — 存储记忆 */
-export function createMemoryStoreTool(store: MemoryStore): RegisteredTool {
+/** 创建记忆工具集 */
+export function createMemoryTools(store: MemoryStore, options?: MemoryToolOptions): RegisteredTool[] {
+  return [createMemoryStoreTool(store, options), createMemorySearchTool(store)];
+}
+
+export function createMemoryStoreTool(store: MemoryStore, options?: MemoryToolOptions): RegisteredTool {
   return {
     definition: {
       name: 'memory_store',
-      description: 'Store a memory entry for long-term recall across sessions. Use to remember user preferences, important decisions, lessons learned, and key discoveries.',
+      description:
+        'Store one atomic memory proposition for future sessions. Use only when salience checks pass. Types: fact | method | norm. Do not store activity logs or statistical summaries. Never claim memory was saved without calling this tool.',
       parameters: {
-        content: { type: 'string', description: 'The memory content in natural language', required: true },
-        type: { type: 'string', description: 'Memory type', required: true, enum: ['preference', 'decision', 'lesson', 'discovery', 'context', 'relationship'] },
-        importance: { type: 'number', description: 'Importance score 0-1 (default: 0.5)', minimum: 0, maximum: 1 },
-        confidence: { type: 'number', description: 'Confidence score 0-1 (default: 0.8)', minimum: 0, maximum: 1 },
-        tags: { type: 'array', description: 'Tags for categorization', items: { type: 'string', description: 'A tag' } },
+        type: {
+          type: 'string',
+          description: 'fact | method | norm',
+          required: true,
+          enum: [...MEMORY_TYPES],
+        },
+        proposition: {
+          type: 'string',
+          description: 'Atomic proposition with concrete anchors (tool/path/quote/version)',
+          required: true,
+        },
+        evidence: {
+          type: 'string',
+          description: 'Quoted user text or locatable basis; required for non-admin channels. Prefer actual quotes for model_inference.',
+          required: true,
+        },
+        future_use: {
+          type: 'string',
+          description: 'When to apply: "When X, do/avoid Y"',
+        },
+        anchors: {
+          type: 'array',
+          description: 'Retrieval anchors',
+          items: { type: 'string', description: 'anchor' },
+        },
+        channel: {
+          type: 'string',
+          description: 'How this was recognized (LLM judgment, not keyword rules)',
+          required: true,
+          enum: CHANNELS.filter((c) => c !== 'admin'),
+        },
+        importance: { type: 'number', description: '0-1 optional', minimum: 0, maximum: 1 },
+        tags: { type: 'array', description: 'optional tags', items: { type: 'string', description: 'tag' } },
       },
     },
     handler: async (args, context) => {
-      const id = await store.store({
-        type: args.type as MemoryType,
-        content: args.content as string,
-        source: context.sessionId,
-        confidence: (args.confidence as number) ?? 0.8,
-        importance: (args.importance as number) ?? 0.5,
-        tags: (args.tags as string[]) ?? [],
+      const type = args.type as MemoryType;
+      const proposition = String(args.proposition ?? '').trim();
+      const evidence = String(args.evidence ?? '').trim();
+      const futureUse = args.future_use ? String(args.future_use) : undefined;
+      const anchors = Array.isArray(args.anchors) ? (args.anchors as string[]) : [];
+      const channel = (args.channel as MemoryChannel) ?? 'model_inference';
+
+      const gate = evaluateGates(
+        { type, proposition, evidence, futureUse, anchors, channel },
+        options?.gates,
+      );
+      if (!gate.ok) {
+        return { stored: false, rejected: true, reason: gate.reason, message: gate.message };
+      }
+
+      const conf = provisionalConfidence({
+        channel,
+        evidence,
+        anchors,
+        importance: args.importance as number | undefined,
+        profile: options?.confidence,
       });
-      return { id, stored: true, type: args.type, content: args.content };
+
+      const status = gate.status === 'shadow' ? 'shadow' : conf.status;
+
+      const id = await store.store({
+        type,
+        content: proposition,
+        source: `session:${context.sessionId ?? 'unknown'}`,
+        confidence: conf.confidence,
+        importance: conf.importance,
+        tags: [...new Set([...((args.tags as string[]) ?? []), channel, type])],
+        channel,
+        status,
+        futureUse,
+        anchors,
+        evidence,
+      });
+
+      return {
+        id,
+        stored: true,
+        type,
+        status,
+        confidence: conf.confidence,
+        importance: conf.importance,
+        content: proposition,
+      };
     },
   };
 }
 
-/** memory_search 工具 — 搜索记忆 */
 export function createMemorySearchTool(store: MemoryStore): RegisteredTool {
   return {
     definition: {
       name: 'memory_search',
-      description: 'Search stored memories by text query. Retrieves relevant memories from past sessions. Use to recall user preferences, past decisions, and lessons learned.',
+      description:
+        'Search long-term memory propositions by text. Includes shadow entries (hypotheses only). Excludes soft-deleted entries. Use concrete entity names as query terms.',
       parameters: {
-        query: { type: 'string', description: 'Search query text', required: true },
-        type: { type: 'string', description: 'Filter by memory type (optional)', enum: ['preference', 'decision', 'lesson', 'discovery', 'context', 'relationship'] },
-        min_importance: { type: 'number', description: 'Minimum importance threshold 0-1 (default: 0)', minimum: 0, maximum: 1 },
-        limit: { type: 'number', description: 'Maximum number of results (default: 10, max: 50)', minimum: 1, maximum: 50 },
+        query: { type: 'string', description: 'Search query (prefer entities)', required: true },
+        type: { type: 'string', description: 'Filter by type', enum: [...MEMORY_TYPES] },
+        min_importance: { type: 'number', description: 'Minimum importance 0-1', minimum: 0, maximum: 1 },
+        include_shadow: {
+          type: 'boolean',
+          description: 'Include shadow memories as weak leads (default true for search)',
+        },
+        limit: { type: 'number', description: 'Max results (default 10)', minimum: 1, maximum: 50 },
       },
     },
-    handler: async (args, context) => {
+    handler: async (args) => {
+      const includeShadow = args.include_shadow !== false;
       const results = await store.retrieve({
-        text: args.query as string,
+        text: String(args.query ?? ''),
         type: args.type as MemoryType | undefined,
         minImportance: (args.min_importance as number) ?? 0,
         limit: Math.min((args.limit as number) ?? 10, 50),
         updateAccess: true,
+        includeShadow,
+        includeDeleted: false,
       });
       return {
-        results: results.map((e) => ({ id: e.id, type: e.type, content: e.content, importance: e.importance, confidence: e.confidence, tags: e.tags, createdAt: e.createdAt, accessCount: e.accessCount })),
+        results: results.map((e) => ({
+          id: e.id,
+          type: e.type,
+          content: e.content,
+          status: e.status ?? 'active',
+          channel: e.channel,
+          importance: e.importance,
+          confidence: e.confidence,
+          futureUse: e.futureUse,
+          tags: e.tags,
+          createdAt: e.createdAt,
+          accessCount: e.accessCount,
+        })),
         total: results.length,
       };
     },

@@ -96,6 +96,8 @@ export type { CreateDefaultLayersOptions } from './layers.js';
 export { createProviderSummarize, pickSummarizeProvider } from './summarize.js';
 export type { CreateProviderSummarizeOptions } from './summarize.js';
 export { createDefaultSystemPromptAssembler } from './system-prompt-assembler.js';
+export { loadConstitution, productConstitutionPath } from './constitution/load-constitution.js';
+export type { ConstitutionConfig, ConstitutionMode, LoadedConstitution } from './constitution/load-constitution.js';
 export type {
   SystemPromptAssembleInput,
   SystemPromptAssembleOutput,

@@ -103,7 +103,11 @@ export class DefaultToolBus implements ToolBus {
     if (policy) {
       if (policy.allow && policy.allow.length > 0) {
         const allowSet = new Set(policy.allow);
-        tools = tools.filter(t => allowSet.has(t.definition.name));
+        // "*" 表示放行全部（配置常见写法），不得只匹配字面量 "*"
+        const allowAll = allowSet.has('*');
+        if (!allowAll) {
+          tools = tools.filter(t => allowSet.has(t.definition.name));
+        }
       }
       if (policy.deny && policy.deny.length > 0) {
         const denySet = new Set(policy.deny);

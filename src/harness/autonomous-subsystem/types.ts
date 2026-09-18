@@ -421,6 +421,13 @@ export interface ActResult {
   messages?: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>;
   /** 动作目标（通用语义，如 context / memory-store / knowledge） */
   target?: string;
+  /** 领域管理操作审计（治理类子系统） */
+  ops?: Array<{
+    op: 'soft_delete' | 'supersede' | 'merge' | 'boost' | 'undelete';
+    ids: string[];
+    reason?: string;
+    meta?: Record<string, unknown>;
+  }>;
 }
 
 // ── SubsystemRun（审计记录） ──
@@ -531,7 +538,7 @@ export interface LifecycleResumeConfig {
  * 用于统一子系统的事件前缀和指标命名。
  */
 export interface ObservabilityConfig {
-  /** 事件前缀（如 'memory.extractor'） */
+  /** 事件前缀（如 'memory.steward.govern'） */
   eventPrefix: string;
 }
 
@@ -587,6 +594,10 @@ export interface SubsystemSpec {
   source?: 'builtin' | 'user' | 'project' | 'npm';
   /** 来源路径 */
   sourcePath?: string;
+  /** 多 spec 包名（如 memory-steward） */
+  packageId?: string;
+  /** 多 spec 包根路径 */
+  packageRoot?: string;
 }
 
 // ── Model Level（模型分级） ──

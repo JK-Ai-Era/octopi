@@ -362,6 +362,13 @@ export interface ContextAssemblerConfig {
   includeLayerContent?: boolean;
 }
 
+/** 全局运行宪法配置 */
+export interface ConstitutionConfig {
+  mode: 'product' | 'custom' | 'off';
+  /** custom 模式必填 */
+  path?: string | null;
+}
+
 
 
 // ── 集中模型配置 ──
@@ -471,6 +478,10 @@ export interface ModelsConfig {
 export interface SubsystemsConfig {
   /** 审计日志目录（默认 ~/.octopi/audit） */
   auditDir?: string;
+  /** 允许注册：id / packageId / `memory.steward.*` 前缀 */
+  allowlist?: string[];
+  /** 禁止注册（deny 优先） */
+  denylist?: string[];
 }
 
 /**
@@ -498,6 +509,24 @@ export interface HarnessConfig {
   contextEngine?: ContextEngineConfig;
   /** system prompt 七层装配器配置 */
   contextAssembler?: ContextAssemblerConfig;
+  /** context 域扩展：全局宪法等 */
+  context?: {
+    constitution?: ConstitutionConfig;
+    contextAssembler?: ContextAssemblerConfig;
+  };
+  /** 全局宪法（顶层简写，等价 context.constitution） */
+  constitution?: ConstitutionConfig;
+  /** Memory 写入/置信度策略 */
+  memory?: {
+    profile?: 'personal_assistant' | 'embedded_interactive' | 'embedded_headless';
+    confidence?: {
+      injectMinScore?: number;
+      channelPriors?: Partial<Record<'user_directive' | 'decision' | 'fail_fix' | 'model_inference' | 'admin', number>>;
+    };
+    gates?: {
+      maxLength?: Partial<Record<'fact' | 'method' | 'norm', number>>;
+    };
+  };
   /** 安全策略 */
   security?: {
     /** 预设名称 */
@@ -860,7 +889,10 @@ export function toGatewayConfig(config: NormalizedHarnessConfig): GatewayConfig 
     agents: resolvedAgents,
     session: config.session ? { dmScope: config.session.dmScope } : undefined,
     budget: config.budget,
-    contextAssembler: config.contextAssembler,
+    contextAssembler: config.context?.contextAssembler ?? config.contextAssembler,
+    context: config.context,
+    constitution: config.context?.constitution ?? config.constitution,
+    memory: config.memory,
   };
 
   if (config.agentRuntime) {

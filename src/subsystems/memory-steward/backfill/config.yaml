@@ -1,0 +1,50 @@
+id: memory.steward.backfill
+name: Memory Steward Backfill
+description: 从 session 原文补录 fact/method/norm 命题（旁路，非主会话 ETL）
+
+sense:
+  source: eventBus
+  filter:
+    events: ['memory.steward.backfill.request']
+    emits: ['memory.steward.backfilled', 'memory.steward.backfill.failed']
+  isolation: structured
+
+think:
+  implementation: code
+  strategy: heuristic
+  model: mini
+  maxIterations: 1
+
+act:
+  mode: inject
+
+signal:
+  severity: info
+  channel: [event]
+
+boundary:
+  visibility: structured
+  authority: act
+  security: trusted
+
+tools:
+  mode: none
+
+session:
+  mode: ephemeral
+  scope: agent
+
+lifecycle:
+  maxConcurrent: 1
+  maxDurationMs: 60000
+
+runtimeInject:
+  requires: ['memoryStore', 'sessionStore', 'constitution']
+
+observability:
+  eventPrefix: memory.steward.backfill
+
+metadata:
+  config:
+    maxCandidatesPerSession: 8
+    maxEvidenceChars: 8000

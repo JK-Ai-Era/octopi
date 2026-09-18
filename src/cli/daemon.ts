@@ -400,7 +400,7 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
   }
 
   // memory 工具不在 Gateway 全局注册：AgentBuilder.build() 按各 agent 的 MemoryStore
-  //（SqliteMemoryStore(agent.db)）创建 memory_store/search，与七层 MemoryLayer / extractor 同实例。
+  //（SqliteMemoryStore(agent.db)）创建 memory_store/search，与七层 MemoryLayer / memory.steward.* 同实例。
   // SessionTaskService 随 AgentBuilder/Gateway 的 SessionStore 自动接线；不再单独建 TaskTracker。
 
   let webSearchToolCfg: { provider: import('../harness/plugin-ecosystem/tools/web-search-types.js').WebSearchProvider; defaultLimit?: number; timeoutMs?: number } | undefined;
@@ -420,9 +420,13 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
     }
   }
 
+  // 全局工具：CLI 级 builtin（shell/file/http/web_search 等）。
+  // memory_store/memory_search **不在**全局注册：由 AgentBuilder 在 agent build 时
+  // 按各 agent 的 MemoryStore（SqliteMemoryStore(agent.db)）注入，与 MemoryLayer 同实例。
   const { all } = createToolSet({ webSearch: webSearchToolCfg });
   for (const tool of all) gateway.registerTool(tool);
-  console.log(`[CLI] Registered ${all.length} tools: ${all.map(t => t.definition.name).join(', ')}`);
+  console.log(`[CLI] Registered ${all.length} global tools: ${all.map(t => t.definition.name).join(', ')}`);
+  console.log('[CLI] memory_store/memory_search: agent-scoped (AgentBuilder + memoryStore), not global');
 
   // ── 子系统发现（启动可见；Agent 首次 build 时按 allow/deny 实际注册） ──
   try {

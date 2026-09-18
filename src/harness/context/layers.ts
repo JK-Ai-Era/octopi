@@ -206,15 +206,23 @@ export class MemoryLayer extends BaseLayer {
       text: ctx.query,
       limit: this.limit,
       updateAccess: true,
+      includeShadow: false,
+      includeDeleted: false,
     });
-    if (entries.length === 0) return null;
+    const { injectFilter } = await import('../memory/confidence.js');
+    const injectable = entries.filter((e) => injectFilter(e));
+    if (injectable.length === 0) return null;
 
-    const body = entries.map((m: { type: string; content: string }) => `- [${m.type}] ${m.content}`).join('\n');
+    const body = injectable
+      .map((m: { type: string; content: string; futureUse?: string }) =>
+        m.futureUse ? `- [${m.type}] ${m.content} (when: ${m.futureUse})` : `- [${m.type}] ${m.content}`,
+      )
+      .join('\n');
     const text = `# 相关记忆\n\n${body}`;
     const { text: truncated, dropped } = this.truncateToBudget(text, ctx.tokenBudget);
     return this.content(truncated, {
       dropped,
-      sources: entries.map((e: { id: string }) => e.id),
+      sources: injectable.map((e: { id: string }) => e.id),
     });
   }
 }

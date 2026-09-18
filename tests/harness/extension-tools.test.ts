@@ -66,18 +66,26 @@ describe('extension tools', () => {
     const store = new InMemoryMemoryStore();
     const [storeTool, searchTool] = createMemoryTools(store);
 
-    await storeTool.handler(
-      { content: 'hello', type: 'lesson' },
+    const stored = (await storeTool.handler(
+      {
+        type: 'method',
+        proposition: 'flush persist before asserting store',
+        evidence: 'test lesson',
+        channel: 'admin',
+        future_use: 'when writing store tests',
+        anchors: ['persist', 'store'],
+      },
       { sessionId: 's1', agentId: 'a1', messages: [] },
-    );
+    )) as { stored: boolean };
+    expect(stored.stored).toBe(true);
 
     const result = (await searchTool.handler(
-      { query: 'hello' },
+      { query: 'persist' },
       { sessionId: 's1', agentId: 'a1', messages: [] },
     )) as { results: Array<{ content: string }>; total: number };
 
     expect(result.total).toBe(1);
-    expect(result.results[0].content).toBe('hello');
+    expect(result.results[0].content).toContain('flush persist');
   });
 
   it('task tools should work with injected SessionTaskService', async () => {

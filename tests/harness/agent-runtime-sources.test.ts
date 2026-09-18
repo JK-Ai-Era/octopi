@@ -92,7 +92,7 @@ describe('EscalateBridge', () => {
     bus.emit({
       type: 'subsystem.signal.escalate',
       timestamp: Date.now(),
-      data: { subsystemId: 'memory.extractor', reason: 'need main' },
+      data: { subsystemId: 'test.lifecycle.subsystem', reason: 'need main' },
     });
     await new Promise((r) => setTimeout(r, 20));
     expect(calls).toHaveLength(1);
@@ -117,7 +117,7 @@ describe('EscalateBridge', () => {
     await runtime.start();
 
     emitEscalate(bus, {
-      subsystemId: 'memory.extractor',
+      subsystemId: 'test.lifecycle.subsystem',
       summary: 'need main agent',
     });
 

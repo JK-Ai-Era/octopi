@@ -1,39 +1,25 @@
 # Agent Building — Agent 构建
 
-> Layer: Layer 2
-
-组装 Agent 运行时，加载人格配置，桥接配置文件。
-
-**核心理念**：Builder 是组装点，把所有组件拼装成可运行的 Agent。
+组装 Agent 运行时：persona、tools、七层 ContextAssembler、子系统、配置桥接。
 
 ## 职责
 
-- AgentBuilder — Fluent API，一行启动 Agent
-- PersonaLoader — 文件式人格加载（根目录 AGENTS.md + persona/ 下补充人格）
-- ConfigBridge — 配置文件 → 新架构桥接
+- `AgentBuilder`：fluent 构建；`build({ mode: 'full' | 'core' })`
+- `config-bridge`：从 `octopi.json` 装配 Provider / stores / constitution / subsystems
+- `isSubsystemAllowed` / `discoverSubsystemSpecs`
 
-## 不做什么
+## Memory 接线（redesign 后）
 
-- 不做业务逻辑（那是各领域的事）
-- 不直接执行 Agent（那是 runner 的事）
+- 注入 `memoryStore` 后：`buildCore` 前用**同一实例**注册 `memory_store` / `memory_search`
+- 同实例注入七层 `MemoryLayer` 与 `runtimeInject.memoryStore`
+- **不再**存在 ETL 的 `MemoryExtractionWiring` / Bridge / PendingExtractor 句柄
+- 旁路自动化走 `memory.steward.backfill` / `memory.steward.govern` 子系统（见 `docs/memory-system-redesign.md`）
 
-## 依赖
+## 返回值
 
-- Core: types/、interfaces/
-- Loop: AgentTool 等协议类型
-- Harness: **agent/**（门面）、reliability、context、security、concurrency、plugin-ecosystem、multi-agent、autonomous-subsystem、session-tasks、run-guard
+```ts
+const { agent, harness, runner, runtime, events, contextHealth } = await builder.build();
+```
 
-## 文件说明
-
-- builder.ts — AgentBuilder（`build(options?)` 为唯一公开构建入口；`buildAgent()` = `build({ mode: 'core' })` 已废弃）
-- persona.ts — 人格加载（AGENTS.md + persona/*.md）
-- config-bridge.ts — JSON 配置 → Agent 组件
-- index.ts — 统一导出
-
-## build() 装配要点
-
-- `autoLoadSubsystems`（full 默认 true）：是否自动发现子系统；与 memoryStore 无关
-- `subsystemAllowlist` / `subsystemDenylist`：注册过滤（deny 优先）
-- `agentHome` / `agentId`：extract 落盘与 Pending 扫描（与 persona 路径解耦）
-- 注入 `memoryStore` 时：同一实例注册 memory 工具 + `registerDependency` +（若注册了 `memory.extractor`）Bridge/PendingExtractor
-- 返回 `memoryExtraction` 句柄，集成方应 `dispose()`（Gateway.stop 已接）
+- `runtime`：SubsystemRuntime（若注册了子系统）
+- **无** `memoryExtraction` 字段；历史 ETL API 已删除

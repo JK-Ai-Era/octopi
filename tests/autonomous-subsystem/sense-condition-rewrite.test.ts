@@ -11,13 +11,13 @@ const MEMORY_CONDITION =
 
 function makeSpec(condition: string): SubsystemSpec {
   return {
-    id: 'memory.extractor',
-    name: 'Memory Extractor',
+    id: 'test.lifecycle.subsystem',
+    name: 'Test Lifecycle Subsystem',
     description: 'test',
     sense: {
       source: 'eventBus',
       filter: {
-        events: ['session.lifecycle.updated', 'memory.extractor.bundle.ready'],
+        events: ['session.lifecycle.updated', 'test.lifecycle.subsystem.ready'],
         condition,
       },
       isolation: 'structured',
@@ -49,7 +49,7 @@ describe('rewriteConditionExpression', () => {
   });
 });
 
-describe('SenseEngine memory.extractor condition', () => {
+describe('SenseEngine session lifecycle condition', () => {
   it('triggers on lifecycle recent+pending', async () => {
     const events = new DefaultEventBus();
     const engine = new SenseEngine({ events, defaultCooldownMs: 0 });
@@ -75,7 +75,7 @@ describe('SenseEngine memory.extractor condition', () => {
     engine.register(makeSpec(MEMORY_CONDITION), onTrigger);
 
     events.emit({
-      type: 'memory.extractor.bundle.ready',
+      type: 'test.lifecycle.subsystem.ready',
       timestamp: Date.now(),
       agentId: 'a1',
       sessionId: 's1',
@@ -111,7 +111,7 @@ describe('SenseEngine memory.extractor condition', () => {
     engine.register(makeSpec(MEMORY_CONDITION), onTrigger);
 
     const ok = engine.trigger(
-      'memory.extractor',
+      'test.lifecycle.subsystem',
       { eventData: { bundle: { sessionId: 's1' } }, sessionId: 's1', agentId: 'a1' },
       onTrigger,
     );
@@ -120,3 +120,4 @@ describe('SenseEngine memory.extractor condition', () => {
     engine.dispose();
   });
 });
+

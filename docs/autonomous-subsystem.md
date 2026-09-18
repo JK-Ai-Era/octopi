@@ -7,13 +7,33 @@
 ## 1. 子系统目录结构
 
 ```
+# 单 spec 包
 subsystems/my-subsystem/
 ├── config.yaml           # 运行时配置（必需）
 ├── SUBSYSTEM.md          # LLM 认知指令（system prompt；llm 必需，code 会注入 handler）
 ├── handler.ts            # 代码逻辑（code/hybrid 模式必需）
 ├── references/           # 参考知识（可选；loader 暂不扫描）
 └── scripts/              # 辅助脚本（可选）
+
+# 多 spec 包（同一 package 下多个子系统 + 共享代码）
+subsystems/memory-steward/
+├── shared/               # 共享策略（loader 跳过，handler 相对 import）
+├── backfill/
+│   ├── config.yaml       # id: memory.steward.backfill
+│   ├── SUBSYSTEM.md
+│   └── handler.ts
+└── govern/
+    ├── config.yaml       # id: memory.steward.govern
+    ├── SUBSYSTEM.md
+    └── handler.ts
 ```
+
+**Loader 规则**：
+
+- 搜索根下一级目录若含 `config.yaml`/`SUBSYSTEM.md` → 单 spec 包
+- 否则扫描其子目录；子目录含 spec 则分别 `loadOne`；`shared`/`lib`/`references`/`scripts` 静默跳过
+- `packageId` = 包目录名（如 `memory-steward` 或 `safety-guard`）；`packageRoot` = 包路径
+- allow/deny 支持：完整 id（`memory.steward.govern`）、packageId（`memory-steward`）、前缀（`memory.steward.*`）
 
 **SUBSYSTEM.md 的角色**：与主 Agent 的 SKILL.md 同类——Markdown 认知指令。
 

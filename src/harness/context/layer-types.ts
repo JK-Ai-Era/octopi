@@ -230,6 +230,8 @@ export interface ContextAssembleParams {
    * 仅配置的层生效；未配置层无单层上限。
    */
   layerShares?: Partial<Record<ContextLayerId, number>>;
+  /** 全局宪法 preamble；与层竞争预算无关，拼在 system 最前 */
+  constitutionPreamble?: string;
   tokenEstimator?: {
     estimateText(text: string): number;
   };

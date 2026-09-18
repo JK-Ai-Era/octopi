@@ -1,80 +1,109 @@
 /**
  * InMemoryMemoryStore — 内存记忆存储
  *
- * 基于内存的记忆存储，支持关键词匹配检索。
- * 生产环境可替换为向量数据库后端。
+ * 支持关键词匹配、shadow/软删过滤。生产环境可替换为 SQLite 后端。
  */
 
 import { randomUUID } from 'node:crypto';
 import type {
-  MemoryStore,
+  MemoryChannel,
   MemoryEntry,
   MemoryQuery,
   MemoryStats,
+  MemoryStatus,
+  MemoryStore,
   MemoryType,
+  SoftDeleteReason,
 } from './types.js';
+import { MEMORY_TYPES } from './types.js';
+import { mapLegacyType } from './gates.js';
+
+function emptyTypes(): Record<MemoryType, number> {
+  return { fact: 0, method: 0, norm: 0 };
+}
+
+function normalizeStatus(entry: MemoryEntry): MemoryStatus {
+  return entry.status ?? 'active';
+}
+
+function passesVisibility(entry: MemoryEntry, query: MemoryQuery): boolean {
+  if (entry.deleted && !query.includeDeleted) return false;
+  const status = normalizeStatus(entry);
+  // shadow 与 deleted 独立：未显式 includeShadow 时一律不可见
+  if (status === 'shadow' && !query.includeShadow) return false;
+  if (query.status) {
+    const list = Array.isArray(query.status) ? query.status : [query.status];
+    if (!list.includes(status)) return false;
+  }
+  return true;
+}
 
 export class InMemoryMemoryStore implements MemoryStore {
   readonly name = 'memory';
   private entries = new Map<string, MemoryEntry>();
 
-  async store(entry: Omit<MemoryEntry, 'id' | 'accessCount' | 'lastAccessedAt' | 'createdAt' | 'decayFactor'>): Promise<string> {
+  async store(
+    entry: Omit<MemoryEntry, 'id' | 'accessCount' | 'lastAccessedAt' | 'createdAt' | 'decayFactor'>,
+  ): Promise<string> {
     const id = randomUUID().slice(0, 12);
     const full: MemoryEntry = {
       ...entry,
+      type: mapLegacyType(entry.type),
       id,
       accessCount: 0,
       lastAccessedAt: Date.now(),
       createdAt: Date.now(),
       decayFactor: 1.0,
+      status: entry.status ?? 'active',
+      channel: entry.channel ?? 'model_inference',
+      deleted: entry.deleted ?? false,
     };
     this.entries.set(id, full);
     return id;
   }
 
   async retrieve(query: MemoryQuery): Promise<MemoryEntry[]> {
-    let results = Array.from(this.entries.values());
+    let results = Array.from(this.entries.values()).filter((e) => passesVisibility(e, query));
 
-    // 类型过滤
     if (query.type) {
       const types = Array.isArray(query.type) ? query.type : [query.type];
-      results = results.filter(e => types.includes(e.type));
+      results = results.filter((e) => types.includes(e.type));
     }
 
-    // 标签过滤
     if (query.tags && query.tags.length > 0) {
-      results = results.filter(e => query.tags!.some(t => e.tags.includes(t)));
+      results = results.filter((e) => query.tags!.some((t) => e.tags.includes(t)));
     }
 
-    // 置信度过滤
+    if (query.channel) {
+      const ch = Array.isArray(query.channel) ? query.channel : [query.channel];
+      results = results.filter((e) => (e.channel ? ch.includes(e.channel) : false));
+    }
+
     if (query.minConfidence !== undefined) {
-      results = results.filter(e => e.confidence >= query.minConfidence!);
+      results = results.filter((e) => e.confidence >= query.minConfidence!);
     }
 
-    // 重要性过滤
     if (query.minImportance !== undefined) {
-      results = results.filter(e => e.importance >= query.minImportance!);
+      results = results.filter((e) => e.importance >= query.minImportance!);
     }
 
-    // 关键词匹配（简单实现：检查内容是否包含查询词）
-    const queryLower = query.text.toLowerCase();
-    results = results.filter(e => {
-      const contentLower = e.content.toLowerCase();
-      return queryLower.split(/\s+/).some(word => contentLower.includes(word));
-    });
+    const queryLower = (query.text ?? '').toLowerCase();
+    if (queryLower.trim()) {
+      results = results.filter((e) => {
+        const contentLower = e.content.toLowerCase();
+        return queryLower.split(/\s+/).some((word) => word && contentLower.includes(word));
+      });
+    }
 
-    // 按综合分数排序（重要性 × 置信度 × 衰减因子）
     results.sort((a, b) => {
       const scoreA = a.importance * a.confidence * a.decayFactor;
       const scoreB = b.importance * b.confidence * b.decayFactor;
       return scoreB - scoreA;
     });
 
-    // 限制数量
     const limit = query.limit ?? 10;
     results = results.slice(0, limit);
 
-    // 更新访问计数
     if (query.updateAccess !== false) {
       for (const entry of results) {
         entry.accessCount++;
@@ -100,10 +129,40 @@ export class InMemoryMemoryStore implements MemoryStore {
     this.entries.delete(id);
   }
 
+  async softDelete(
+    id: string,
+    meta: { by: string; reason: SoftDeleteReason | string; winnerId?: string },
+  ): Promise<void> {
+    const entry = this.entries.get(id);
+    if (!entry) return;
+    entry.deleted = true;
+    entry.deletedAt = Date.now();
+    entry.deletedBy = meta.by;
+    entry.deletedReason = meta.reason;
+    entry.deletedMeta = meta.winnerId ? { winnerId: meta.winnerId } : {};
+  }
+
+  async undelete(id: string): Promise<void> {
+    const entry = this.entries.get(id);
+    if (!entry) return;
+    entry.deleted = false;
+    entry.deletedAt = undefined;
+    entry.deletedBy = undefined;
+    entry.deletedReason = undefined;
+    entry.deletedMeta = undefined;
+  }
+
+  async listForGovern(filter?: { includeDeleted?: boolean }): Promise<MemoryEntry[]> {
+    return Array.from(this.entries.values()).filter(
+      (e) => filter?.includeDeleted || !e.deleted,
+    );
+  }
+
   async decay(): Promise<number> {
     const now = Date.now();
     let decayed = 0;
     for (const entry of this.entries.values()) {
+      if (entry.deleted) continue;
       const daysSinceAccess = (now - entry.lastAccessedAt) / (24 * 60 * 60 * 1000);
       if (daysSinceAccess > 30) {
         entry.decayFactor = Math.max(0.1, entry.decayFactor * 0.95);
@@ -114,18 +173,23 @@ export class InMemoryMemoryStore implements MemoryStore {
   }
 
   async stats(): Promise<MemoryStats> {
-    const entries = Array.from(this.entries.values());
-    const byType: Record<MemoryType, number> = {
-      preference: 0, decision: 0, lesson: 0, discovery: 0, context: 0, relationship: 0,
-    };
-    for (const e of entries) {
-      byType[e.type]++;
+    const all = Array.from(this.entries.values());
+    const active = all.filter((e) => !e.deleted);
+    const byType = emptyTypes();
+    for (const e of active) {
+      if (MEMORY_TYPES.includes(e.type)) byType[e.type]++;
     }
     return {
-      totalEntries: entries.length,
+      totalEntries: active.length,
       byType,
-      avgConfidence: entries.length > 0 ? entries.reduce((s, e) => s + e.confidence, 0) / entries.length : 0,
-      avgImportance: entries.length > 0 ? entries.reduce((s, e) => s + e.importance, 0) / entries.length : 0,
+      avgConfidence:
+        active.length > 0 ? active.reduce((s, e) => s + e.confidence, 0) / active.length : 0,
+      avgImportance:
+        active.length > 0 ? active.reduce((s, e) => s + e.importance, 0) / active.length : 0,
+      deletedEntries: all.filter((e) => e.deleted).length,
+      shadowEntries: active.filter((e) => normalizeStatus(e) === 'shadow').length,
     };
   }
 }
+
+export type { MemoryChannel };

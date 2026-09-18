@@ -78,7 +78,7 @@ Infrastructure primitives (EventBus, StateMachine) and **Kernel ports** (ModelPr
 | **Concurrency** | Multi-key LLM load balancing, rate limiting, session gating |
 | **Execution Environment** | Sandboxing, workspace management, file operations |
 | **Human-in-the-Loop** | Approval workflows, decision caching, risk-based policies |
-| **Memory** | Memory storage/retrieval, cognition graph, wisdom, session extraction |
+| **Memory** | Proposition store (fact/method/norm), gates/confidence, cognition/wisdom stores, Memory Steward subsystems |
 
 ### Layer 3: Integration — External Adapters
 
@@ -96,7 +96,7 @@ Persona (identity, personality)
 Skills (workflow guidance)     ← Conditionally loaded
 Knowledge (external references)← Retrieved on demand
 Cognition (concept graph)      ← Concept relationships
-Memory (extracted insights)    ← From past interactions
+Memory (actionable insights)    ← fact / method / norm from past sessions
 Information (raw messages)     ← Window managed + compressed
 ```
 

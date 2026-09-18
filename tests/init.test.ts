@@ -36,13 +36,13 @@ describe('init', () => {
       expect(existsSync(join(tempDir, 'plugins'))).toBe(true);
       expect(existsSync(join(tempDir, 'audit'))).toBe(true);
 
-      // Agent home 子目录（persona / skills / sessions / extract；memory/wisdom 走 SQLite）
+      // Agent home 子目录（persona / skills / sessions；memory 走 SQLite；ETL extract 不再创建）
       const home = join(tempDir, 'agents/default');
       expect(existsSync(join(home, 'sessions'))).toBe(true);
       expect(existsSync(join(home, 'skills'))).toBe(true);
-      expect(existsSync(join(home, 'extract/events'))).toBe(true);
-      expect(existsSync(join(home, 'extract/bundles'))).toBe(true);
-      expect(existsSync(join(home, 'extract/meta'))).toBe(true);
+      expect(existsSync(join(home, 'extract/events'))).toBe(false);
+      expect(existsSync(join(home, 'extract/bundles'))).toBe(false);
+      expect(existsSync(join(home, 'extract/meta'))).toBe(false);
       // memory/wisdom 不再是文件目录
       expect(existsSync(join(home, 'memory'))).toBe(false);
       expect(existsSync(join(home, 'wisdom'))).toBe(false);
@@ -188,7 +188,7 @@ describe('init', () => {
       expect(existsSync(join(home, 'persona/20-identity.md'))).toBe(true);
       expect(existsSync(join(home, 'sessions'))).toBe(true);
       expect(existsSync(join(home, 'skills'))).toBe(true);
-      expect(existsSync(join(home, 'extract/events'))).toBe(true);
+      expect(existsSync(join(home, 'extract/events'))).toBe(false);
       expect(existsSync(join(home, 'memory'))).toBe(false);
       expect(existsSync(join(home, 'wisdom'))).toBe(false);
       expect(existsSync(join(tempDir, 'workspace/new-agent'))).toBe(true);

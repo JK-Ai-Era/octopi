@@ -1,8 +1,7 @@
 /**
  * SystemPromptAssembler — Runner 每轮 system prompt 装配端口
  *
- * 将「persona + 动态注入 + （可选）其他层」收成 ContextLayer 契约装配，
- * 产出最终 systemPrompt。由 Builder 注入 SessionAwareRunner。
+ * 全局宪法 preamble 固定在最前；层契约见 harness/context。
  */
 
 import type { Message } from '../../core/types.js';
@@ -21,17 +20,14 @@ import {
 import type { ContextAssembler, ContextLayer } from './layer-types.js';
 import type { ConceptGraphStore, MemoryStore, WisdomStore } from '../memory/types.js';
 import type { KnowledgeStore } from './knowledge/types.js';
+import { loadConstitution, type ConstitutionConfig } from './constitution/load-constitution.js';
 
 export interface SystemPromptAssembleInput {
   sessionId: string;
   agentId?: string;
-  /** 当前消息（含本轮用户输入） */
   messages: Message[];
-  /** 纯 persona（resolver 结果，不含 injected） */
   persona: string;
-  /** 本轮动态注入（session tasks / guidance 等） */
   injectedContext?: string;
-  /** 上下文窗口，用于推 system 预算 */
   contextWindow?: number;
   signal?: AbortSignal;
 }
@@ -41,44 +37,62 @@ export interface SystemPromptAssembleOutput {
   manifest?: AssembleManifest;
 }
 
-/** system prompt 默认占窗口比例（其余留给消息与输出） */
 const DEFAULT_SYSTEM_BUDGET_RATIO = 0.22;
 const DEFAULT_CONTEXT_WINDOW = 128_000;
 
-/**
- * 创建默认 system prompt 装配器
- *
- * 启用层：persona（保底）+ skill 索引（可选）+ wisdom/cognition/knowledge/memory 召回（可选）+ runtime。
- */
 export function createDefaultSystemPromptAssembler(options?: {
   assembler?: ContextAssembler;
-  /** 未传 assembler 时用于构造 DefaultContextAssembler */
   assemblerConfig?: DefaultContextAssemblerConfig;
   systemBudgetRatio?: number;
-  /** Skill 索引正文（SkillManager.formatForPrompt）；空则不注册 skill 层 */
   getSkillPromptText?: () => Promise<string> | string;
-  /** 记忆存储；提供则注册 MemoryLayer */
   memoryStore?: MemoryStore;
-  /** 知识存储；提供则注册 KnowledgeLayer */
   knowledgeStore?: KnowledgeStore;
-  /** 智慧存储；提供则注册 WisdomLayer */
   wisdomStore?: WisdomStore;
-  /** 认知图谱；提供则注册 CognitionLayer */
   cognitionStore?: ConceptGraphStore;
   memoryLimit?: number;
   knowledgeLimit?: number;
   cognitionDepth?: number;
+  /** 全局宪法；提供则 preamble 固定最前 */
+  constitution?: ConstitutionConfig | string | null;
+  /** 直接注入宪法正文（覆盖 constitution 配置） */
+  constitutionText?: string;
 }): {
   assemble: (input: SystemPromptAssembleInput) => Promise<SystemPromptAssembleOutput>;
-  /** 会话结束/重置时清理层指纹缓存 */
   clearSession: (sessionId: string) => void;
 } {
+  let preamble = options?.constitutionText ?? '';
+  if (!preamble && options?.constitution !== undefined && options?.constitution !== null) {
+    if (typeof options.constitution === 'string') {
+      preamble = options.constitution;
+    } else {
+      preamble = loadConstitution(options.constitution).text;
+    }
+  } else if (!preamble && options?.constitution === undefined && options?.constitutionText === undefined) {
+    // Builder 未显式配置时仍装配产品默认宪法（product）
+    try {
+      preamble = loadConstitution({ mode: 'product' }).text;
+    } catch {
+      preamble = '';
+    }
+  }
+
   const assembler =
-    options?.assembler ?? new DefaultContextAssembler(options?.assemblerConfig);
+    options?.assembler ??
+    new DefaultContextAssembler({
+      ...options?.assemblerConfig,
+      constitutionPreamble: options?.assemblerConfig?.constitutionPreamble ?? preamble,
+    });
+
+  // 若外部传入 assembler 且无 preamble，每轮 params 注入
+  const passPreamblePerAssemble = Boolean(
+    options?.assembler && !(options.assemblerConfig?.constitutionPreamble ?? preamble),
+  );
+
   const ratio = options?.systemBudgetRatio ?? DEFAULT_SYSTEM_BUDGET_RATIO;
   const getSkillPromptText = options?.getSkillPromptText;
   const wisdomStore = options?.wisdomStore;
   const cognitionStore = options?.cognitionStore;
+  const resolvedPreamble = options?.assemblerConfig?.constitutionPreamble ?? preamble;
 
   return {
     clearSession(sessionId: string) {
@@ -101,11 +115,7 @@ export function createDefaultSystemPromptAssembler(options?: {
         layers.push(new SkillLayer({ getPromptText: getSkillPromptText }));
       }
       if (wisdomStore) {
-        layers.push(
-          new WisdomLayer({
-            getEntries: () => wisdomStore.getAll(),
-          }),
-        );
+        layers.push(new WisdomLayer({ getEntries: () => wisdomStore.getAll() }));
       }
       if (options?.knowledgeStore) {
         layers.push(
@@ -143,14 +153,14 @@ export function createDefaultSystemPromptAssembler(options?: {
       if (getSkillPromptText) {
         hasSkill = Boolean((await getSkillPromptText()).trim());
       }
-      // 检索/半静态层每轮可能非空，不能仅凭「当前无文本」短路
       const hasRetrieval = Boolean(
         options?.memoryStore ||
           options?.knowledgeStore ||
           wisdomStore ||
           cognitionStore,
       );
-      if (!hasPersona && !hasInjected && !hasSkill && !hasRetrieval) {
+      const hasPreamble = Boolean(resolvedPreamble.trim());
+      if (!hasPersona && !hasInjected && !hasSkill && !hasRetrieval && !hasPreamble) {
         return { systemPrompt: '' };
       }
 
@@ -161,6 +171,7 @@ export function createDefaultSystemPromptAssembler(options?: {
         systemBudget,
         layers,
         signal: input.signal,
+        constitutionPreamble: passPreamblePerAssemble || resolvedPreamble ? resolvedPreamble : undefined,
       });
 
       return { systemPrompt: result.systemPrompt, manifest: result.manifest };

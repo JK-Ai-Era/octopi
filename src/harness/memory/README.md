@@ -2,37 +2,40 @@
 
 > Layer: Layer 2
 
-记忆存储/检索、认知图谱、会话提取。
+价值模型 **fact / method / norm**（见 `docs/memory-system-redesign.md`）。
 
-**核心理念**：信息分馏系统 — 信息 → 记忆 → 认知 → 智慧，逐层提炼。
-
-system prompt 的七层内容组装契约在 `harness/context/`（`ContextLayer` / `DefaultContextAssembler`），不在本目录。
+**核心命题**：Memory 在 Information 窗口消失后仍改变未来行为；单位是可行动命题，不是摘要或计数。
 
 ## 职责
 
-- InMemoryMemoryStore — 记忆存储（关键词匹配，可替换为向量后端）
-- InMemoryConceptGraph — 认知图谱（概念+关系网络）
-- SqliteMemoryStore / SqliteWisdomStore / SqliteConceptGraph / KnowledgeRegistry — 持久化实现，统一挂在 per-agent `AgentDatabase`（`agent.db`）
-
-## 已移除
-
-- `FileWisdomStore` / `FileProjectMemory` 已删除，相关文件不再存在。
-- `ProjectMemory` 接口已从 `cognition-types.ts` 移除，不再由 Core 导出。
-- 文件目录形式的 `memory/`、`wisdom/` 落盘约定已废弃；持久化走 SQLite 单库。
-- `ContextIntelligence` 已删除；七层组装由 `harness/context` 的层契约取代。
+- 契约与实现：InMemory / Sqlite（`AgentDatabase` → `agent.db`）
+- 写入策略：`confidence.ts`（channel 暂定）+ `gates.ts`（结构门控 reason code）
+- 治理：软删除 `deleted` + Steward 策略（`subsystems/memory-steward/shared`）
+- system prompt 七层组装在 `harness/context/`；全局宪法在 `harness/context/constitution/`
 
 ## 不做什么
 
-- 不做上下文压缩（那是 context 的事）
-- 不做安全检查
+- 不做上下文压缩（context）
+- 不做开放回路/任务状态（session tasks）
+- 不做静态外部资料（Knowledge）
+- **不做** session ETL 提取（`memory-extractor` / Bridge / Pending / `extract/` 目录均已删除）
 
-## 依赖
+## 禁止复活的路径
 
-- Core: types/messages（Kernel 词汇表）
-- 契约（MemoryStore 等）定义在本目录 `types.ts`
+| 废弃 API / 路径 | 替代 |
+|-----------------|------|
+| `memory.extractor` 子系统 | `memory.steward.backfill` / `memory.steward.govern` |
+| `MemoryExtractionWiring` / `build().memoryExtraction` | 无句柄；治理由 Steward schedule/event 驱动 |
+| `JsonlExtractorStore` / `agentHome/extract/` | 补录读 SessionStore |
+| `MemoryType: preference/decision/lesson/discovery` | `fact \| method \| norm` |
+| 统计句 `extractCandidates` | 宪法 + LLM 命题 + gates |
+
+完整规格：`docs/memory-system-redesign.md`。
 
 ## 文件说明
 
-- store.ts — InMemoryMemoryStore
-- cognition.ts — InMemoryConceptGraph（概念图谱）
-- index.ts — 统一导出
+- types.ts — MemoryType/Entry/Query/Store
+- store.ts / sqlite/memory-store.ts — 实现（含 softDelete/undelete/listForGovern）
+- confidence.ts / gates.ts — 写入暂定与准入
+- cognition.ts / sqlite/cognition-store.ts — 概念图谱
+- index.ts — 导出

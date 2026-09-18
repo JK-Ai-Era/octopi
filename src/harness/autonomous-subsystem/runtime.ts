@@ -616,6 +616,14 @@ export class SubsystemRuntime {
   }
 
   private processAct(actMode: ActMode, output: SubsystemOutput): ActResult | undefined {
+    // handler 已提供完整 act（治理类 ops/target）时优先尊重，避免 inject 信号启发式误标 failed
+    if (output.act && (output.act.ops?.length || output.act.target)) {
+      return {
+        ...output.act,
+        mode: actMode,
+        status: output.act.status ?? 'success',
+      };
+    }
     if (actMode === 'none') {
       return undefined;
     }

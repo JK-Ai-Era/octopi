@@ -78,7 +78,7 @@ Octopi 是一个可嵌入的 Agent 底座引擎，用于构建 AI 驱动的应�
 | **Concurrency** | 多 Key LLM 负载均衡、限流、Session 门控 |
 | **Execution Environment** | 沙箱、工作区管理、文件操作 |
 | **Human-in-the-Loop** | 审批流程、决策缓存、基于风险的策略 |
-| **Memory** | 记忆存储/检索、认知图谱、智慧、会话提取 |
+| **Memory** | 命题记忆（fact/method/norm）、门控/置信度、认知/智慧存储、Memory Steward 子系统 |
 
 ### Layer 3: Integration — 外部适配
 
@@ -96,7 +96,7 @@ Octopi 独特的上下文智能组装方法，让 agent 通过更有效的 conte
 技能（工作流指导）      ← 条件加载
 知识（外部参考资料）    ← 按需检索
 认知（概念关系网络）    ← 概念之间的关系
-记忆（提取的洞察）      ← 从过去的交互中提取
+记忆（行动命题）        ← fact / method / norm（跨会话可行动洞察）
 信息（原始消息）        ← 窗口管理 + 压缩
 ```
 

@@ -6,7 +6,7 @@
  * - 空闲时间（idleMs）
  * - 抽取/处理状态（extractionStatus）
  *
- * 设计为通用桥接层，不做 memory 业务语义；memory-extractor 通过 SenseContext 消费这些状态。
+ * 设计为通用桥接层，不做 memory 业务语义；session 级子系统（如 memory.steward.*）通过 SenseContext 消费这些状态。
  *
  * @module autonomous-subsystem/sense/session-lifecycle-bridge
  */

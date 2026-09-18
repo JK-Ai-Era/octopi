@@ -63,11 +63,12 @@ Scaffolded by `src/init.ts` (`initOctopi` / `ensureAgentDirs`). Keep init, types
     persona/            # supplemental persona (*.md, numeric prefix for order)
     sessions/           # JsonlSessionStore
     skills/             # skillDirectory target
-    extract/            # JsonlExtractorStore (events/bundles/meta)
   workspace/<id>/       # tool sandbox cwd
 ```
 
 **Do not create `agents/<id>/memory/` or `agents/<id>/wisdom/` directories.** Memory / Cognition / Wisdom / Knowledge persist in a per-agent SQLite file via `AgentDatabase` (`src/harness/memory/sqlite/agent-db.ts`), not as sibling folders under home.
+
+**Do not use `memory.extractor` ETL or `MemoryExtractionWiring`.** Memory write path is agent `memory_store` + `memory.steward.*` subsystems. See `docs/memory-system-redesign.md`.
 
 ---
 

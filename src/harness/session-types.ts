@@ -11,12 +11,19 @@ import type { SessionTask } from './session-tasks/types.js';
 /** Session 生命周期状态 */
 export type SessionLifecycleStatus = 'active' | 'recent' | 'extracted' | 'archived';
 
-/** Memory 提取状态 */
+/**
+ * Session 上的记忆处理状态（生命周期元数据字段）
+ *
+ * 仅表示「本 session 是否已被记忆旁路处理过」，**不是** 已删除的
+ * ETL API（MemoryExtractorBridge / PendingExtractor / MemoryExtractionWiring）。
+ * 补录/治理见 `memory.steward.*`（docs/memory-system-redesign.md）。
+ */
 export type MemoryExtractionStatus = 'pending' | 'completed' | 'skipped';
 
 /** Session 生命周期元数据 */
 export interface SessionLifecycleMeta {
   lifecycle: SessionLifecycleStatus;
+  /** 见 MemoryExtractionStatus 注释：session 级处理标记，非 ETL 句柄 */
   memoryExtraction: MemoryExtractionStatus;
   endedAt?: number;
   archivedAt?: number;

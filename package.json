@@ -1,6 +1,6 @@
 {
   "name": "octopi",
-  "version": "0.29.1",
+  "version": "0.30.0",
   "description": "可嵌入的 Agent 引擎",
   "type": "module",
   "main": "dist/index.js",
@@ -55,8 +55,8 @@
     }
   },
   "scripts": {
-    "build": "tsc && node scripts/copy-subsystem-assets.mjs",
-    "copy:subsystem-assets": "node scripts/copy-subsystem-assets.mjs",
+    "build": "tsc && node scripts/copy-build-assets.mjs",
+    "copy:build-assets": "node scripts/copy-build-assets.mjs",
     "dev": "tsc --watch",
     "test": "node --experimental-vm-modules node_modules/vitest/vitest.mjs run",
     "lint": "eslint .",

@@ -1,3 +1,24 @@
+## v0.30.0 (2026-09-19)
+
+### feat(memory)!: 系统 redesign — fact/method/norm + 宪法 + Steward
+
+按 `docs/memory-system-redesign.md` 一次落地，取代 session ETL 提取主路径。
+
+- **价值模型**：`MemoryType = fact | method | norm`；开放回路不入库
+- **全局宪法**：产品资产 `src/harness/context/constitution/default-agents.md`（**English 指令正文**，无产品元说明）；`context.constitution.mode = product|custom|off`；装配为 system preamble（最前、不参与层预算竞争）
+- **写入面**：`memory_store` 槽位（proposition/evidence/future_use/anchors/channel）；`confidence.ts` + `gates.ts`（reason code）；禁止统计句
+- **置信度**：channel → 暂定 band（shadow/active）；search 含 shadow；MemoryLayer 不含 shadow
+- **软删除**：`MemoryEntry.deleted*`；retrieve/search 默认排除；stats 分列
+- **Memory Steward**：`src/subsystems/memory-steward/{backfill,govern,shared}` 双 spec + 策略包
+- **Subsystem Loader**：多 spec 包（嵌套目录）+ `shared/` 静默跳过 + `packageId/packageRoot`
+- **拆除**：`memory-extractor` 子系统与 Bridge/Pending ETL 主路径、统计句规则提取
+- **构建资源**：`scripts/copy-build-assets.mjs`（原 `copy-subsystem-assets.mjs`）— 拷贝 subsystem 非 TS 资源 + 宪法 `default-agents.md` 到 dist，并清理已删除的一级包
+- **审查修复**：`model_inference` 无引语证据一律 shadow；统计句门控改为强模板+显式锚点/future_use；`mapLegacyType` 迁移旧库 type；Sqlite tags 过滤对齐 InMemory；`memory.*` 配置接到 tools；backfill 注入 constitution/sessionStore；govern 补 junk_recheck/supersede；allowlist 支持 packageId/`memory.steward.*`；Assembler 无层时仍返回 preamble
+- **P2 收尾**：Sqlite hybrid 检索 SQL 候选上限（默认 500）；loader 单包 `packageId=目录名`；DESIGN 验收测试矩阵补强（constitution/gates/legacy/allowlist/shadow）
+- **第二轮审查修复**：allowlist 预滤带 packageId；hybrid 补 channel 过滤；supersede 改为 trigram 近重复（去掉前缀启发式）；`memory.profile` 映射到 confidence；tool-set 透传 memory options；InMemory shadow 与 deleted 独立；`subsystems.allowlist/denylist` 进 schema/config-bridge；SQLite `busy_timeout`；G4 要求引语证据；META/引号启发式收紧
+- **ETL 残留清理**：删除 `MemoryExtractionWiring` / `AgentBuildResult.memoryExtraction` / `extractionScanIntervalMs` / Gateway extraction dispose 链；公开 barrel 不再导出；init 不再预建 `extract/`；文档改为 Steward 口径
+- **文档/注释同步**：architecture/README/harness README/memory README/AGENTS/arch/* 去掉 ETL 与旧 MemoryType 口径；`memory-extraction-design.md` **收成 tombstone**（对照表 + 指向 redesign；正文移除，见 git history）
+
 ## v0.29.1 (2026-09-18)
 
 ### chore: 移除仓库根目录 Web 设计原型

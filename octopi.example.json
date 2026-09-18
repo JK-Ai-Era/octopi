@@ -58,6 +58,20 @@
     "includeLayerContent": true
   },
 
+  "context": {
+    "constitution": {
+      "mode": "product",
+      "path": null
+    }
+  },
+
+  "memory": {
+    "profile": "embedded_interactive",
+    "confidence": {
+      "injectMinScore": 0.55
+    }
+  },
+
   "runGuard": {
     "enabled": true,
     "checkpointInterval": 15

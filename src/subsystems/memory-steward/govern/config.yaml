@@ -1,0 +1,64 @@
+id: memory.steward.govern
+name: Memory Steward Govern
+description: 记忆库治理：重复合并、软删除、保护名单（不污染主会话）
+
+sense:
+  source: schedule
+  interval: 3600000
+  filter:
+    condition: "true"
+    emits: ['memory.steward.governed']
+  isolation: isolated
+
+think:
+  implementation: code
+  strategy: deterministic
+  maxIterations: 1
+
+act:
+  mode: inject
+
+signal:
+  severity: info
+  channel: [event]
+
+boundary:
+  visibility: isolated
+  authority: act
+  security: trusted
+
+tools:
+  mode: none
+
+session:
+  mode: ephemeral
+  scope: agent
+
+lifecycle:
+  maxConcurrent: 1
+  maxDurationMs: 30000
+
+runtimeInject:
+  requires: ['memoryStore']
+
+observability:
+  eventPrefix: memory.steward.govern
+
+metadata:
+  config:
+    softDelete:
+      dryRun: false
+      protectWindowMs: 86400000
+      shadowTtlMs: 1209600000
+      shadowIdleMs: 1209600000
+      shadowMinAccess: 1
+      decayScoreFloor: 0.25
+      decayIdleMs: 7776000000
+      strengthenedIdleMs: 2592000000
+      userDirectMinConfidence: 0.85
+      normProtectConfidence: 0.8
+      capacity:
+        fact: 200
+        method: 100
+        norm: 150
+      protectTags: ['env', 'security']

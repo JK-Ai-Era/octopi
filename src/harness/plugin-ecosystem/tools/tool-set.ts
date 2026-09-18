@@ -12,6 +12,8 @@ import { createWebSearchTool } from './web-search.js';
 
 export interface ToolSetConfig {
   memoryStore?: MemoryStore;
+  /** memory 工具的 confidence/gates 覆盖（与 octopi.json memory 段对齐） */
+  memory?: import('./memory.js').MemoryToolOptions;
   /** SessionTaskService — 会话任务唯一写入口 */
   sessionTaskService?: SessionTaskService;
   /**
@@ -37,7 +39,7 @@ export function createToolSet(config?: ToolSetConfig): ToolSet {
   const taskService = config?.sessionTaskService ?? config?.taskTracker;
   const builtin = getBuiltinTools();
   const extensions: RegisteredTool[] = [
-    ...(config?.memoryStore ? createMemoryTools(config.memoryStore) : []),
+    ...(config?.memoryStore ? createMemoryTools(config.memoryStore, config?.memory) : []),
     ...(taskService ? createSessionTaskTools(taskService) : []),
     ...(config?.askUser ? [createAskUserTool(config.askUser)] : []),
     ...(config?.webSearch

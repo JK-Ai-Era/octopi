@@ -72,6 +72,11 @@ export interface DefaultContextAssemblerConfig {
   /** 总预算中预留给分隔符/结构的 token，默认 50 */
   structureReserve?: number;
   /**
+   * 全局运行宪法正文（preamble）。
+   * 始终位于 systemPrompt 最前；不参与层竞争，预算从 systemBudget 预先扣除。
+   */
+  constitutionPreamble?: string;
+  /**
    * 单层硬顶：层 id → contentBudget 比例 [0,1]。
    * 仅对已配置的层生效；默认空 = 无单层配额。
    * 例：`{ skill: 0.2 }` → skill 最多占 contentBudget 的 20%。
@@ -97,11 +102,13 @@ export class DefaultContextAssembler implements ContextAssembler {
   private readonly layerPreviewChars: number;
   private readonly includeLayerContent: boolean;
   private readonly defaultLayerShares: Partial<Record<ContextLayerId, number>>;
+  private readonly constitutionPreamble?: string;
   /** sessionId → layerId → fingerprint，用于跳过未变更层的重复 assemble */
   private readonly fingerprints = new Map<string, Map<ContextLayerId, string | null>>();
 
   constructor(config?: DefaultContextAssemblerConfig) {
     this.structureReserve = config?.structureReserve ?? 50;
+    this.constitutionPreamble = config?.constitutionPreamble?.trim() || undefined;
     this.layerOverflowRatio = config?.layerOverflowRatio ?? 1.0;
     this.includeLayerPreview = config?.includeLayerPreview ?? true;
     this.layerPreviewChars = config?.layerPreviewChars ?? 400;
@@ -126,22 +133,26 @@ export class DefaultContextAssembler implements ContextAssembler {
       ...this.defaultLayerShares,
       ...params.layerShares,
     };
+    const preambleText = (this.constitutionPreamble ?? params.constitutionPreamble ?? '').trim();
 
     if (ordered.length === 0 || systemBudget <= 0) {
+      // 宪法 preamble 不可丢：无层时仍返回 preamble
       return {
-        systemPrompt: '',
+        systemPrompt: preambleText,
         manifest: {
           sessionId,
           systemBudget,
           structureReserve: this.structureReserve,
-          usedTokens: 0,
+          usedTokens: preambleText ? estimator.estimateText(preambleText) : 0,
           shares: pickConfiguredShares(layerShares),
           layers: [],
         },
       };
     }
 
-    const contentBudget = Math.max(0, systemBudget - this.structureReserve);
+    const preambleTokens = preambleText ? estimator.estimateText(preambleText) : 0;
+    // 宪法不参与层竞争：先从总预算扣除
+    const contentBudget = Math.max(0, systemBudget - this.structureReserve - preambleTokens);
     /** 已配置层的硬顶 token；未配置 = undefined（无单层上限） */
     const caps = resolveLayerCaps(ordered, layerShares, contentBudget);
 
@@ -263,8 +274,9 @@ export class DefaultContextAssembler implements ContextAssembler {
       used += content.tokens;
     }
 
-    // 按 order 拼接
+    // 按 order 拼接；宪法 preamble 永远在最前且不可丢
     const parts: string[] = [];
+    if (preambleText) parts.push(preambleText);
     for (const layer of ordered) {
       const hit = accepted.get(layer.id);
       if (hit && hasLayerText(hit.content)) {

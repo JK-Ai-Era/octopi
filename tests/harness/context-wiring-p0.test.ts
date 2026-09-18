@@ -76,7 +76,7 @@ describe('pickSummarizeProvider', () => {
 
 describe('createDefaultSystemPromptAssembler', () => {
   it('组装 persona 与 runtime 注入', async () => {
-    const asm = createDefaultSystemPromptAssembler();
+    const asm = createDefaultSystemPromptAssembler({ constitution: { mode: 'off' } });
     const result = await asm.assemble({
       sessionId: 's1',
       messages: [msg('hi')],
@@ -90,8 +90,8 @@ describe('createDefaultSystemPromptAssembler', () => {
     expect(result.manifest?.layers.find((l) => l.id === 'runtime')?.included).toBe(true);
   });
 
-  it('空 persona 且无注入时产出空 system', async () => {
-    const asm = createDefaultSystemPromptAssembler();
+  it('空 persona 且无注入时产出空 system（constitution off）', async () => {
+    const asm = createDefaultSystemPromptAssembler({ constitution: { mode: 'off' } });
     const result = await asm.assemble({
       sessionId: 's1',
       messages: [],

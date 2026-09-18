@@ -187,6 +187,45 @@ export const ContextAssemblerConfigSchema = z.object({
   includeLayerContent: z.boolean().optional(),
 });
 
+/** 全局运行宪法（产品资产 / 集成商替换 / 关闭） */
+export const ConstitutionConfigSchema = z
+  .object({
+    mode: z.enum(['product', 'custom', 'off']),
+    path: z.string().nullable().optional(),
+  })
+  .refine((d) => d.mode !== 'custom' || Boolean(d.path && String(d.path).trim()), {
+    message: 'constitution.mode=custom requires path',
+  });
+
+export const MemoryConfigSchema = z.object({
+  profile: z.enum(['personal_assistant', 'embedded_interactive', 'embedded_headless']).optional(),
+  confidence: z
+    .object({
+      injectMinScore: z.number().min(0).max(1).optional(),
+      channelPriors: z
+        .object({
+          user_directive: z.number().min(0).max(1).optional(),
+          decision: z.number().min(0).max(1).optional(),
+          fail_fix: z.number().min(0).max(1).optional(),
+          model_inference: z.number().min(0).max(1).optional(),
+          admin: z.number().min(0).max(1).optional(),
+        })
+        .optional(),
+    })
+    .optional(),
+  gates: z
+    .object({
+      maxLength: z
+        .object({
+          fact: z.number().int().positive().optional(),
+          method: z.number().int().positive().optional(),
+          norm: z.number().int().positive().optional(),
+        })
+        .optional(),
+    })
+    .optional(),
+});
+
 // ── 安全配置 Schema ──
 
 export const SecurityConfigSchema = z.object({
@@ -338,6 +377,10 @@ const DefaultsSchema = z.object({
 
 const SubsystemsConfigSchema = z.object({
   auditDir: z.string().optional(),
+  /** 允许注册：子系统 id / packageId / `memory.steward.*` 前缀 */
+  allowlist: z.array(z.string().min(1)).optional(),
+  /** 禁止注册（deny 优先） */
+  denylist: z.array(z.string().min(1)).optional(),
 });
 
 const WebConfigSchema = z.object({
@@ -358,6 +401,14 @@ export const HarnessConfigSchema = z.object({
   agentRuntime: AgentRuntimeJsonConfigSchema.optional(),
   contextEngine: ContextEngineConfigSchema.optional(),
   contextAssembler: ContextAssemblerConfigSchema.optional(),
+  context: z
+    .object({
+      constitution: ConstitutionConfigSchema.optional(),
+      contextAssembler: ContextAssemblerConfigSchema.optional(),
+    })
+    .optional(),
+  constitution: ConstitutionConfigSchema.optional(),
+  memory: MemoryConfigSchema.optional(),
   security: SecurityConfigSchema.optional(),
   channels: z.array(ChannelConfigSchema).optional(),
   session: SessionConfigSchema.optional(),

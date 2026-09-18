@@ -225,7 +225,8 @@ export async function buildFromConfig(config: NormalizedHarnessConfig): Promise<
   const budgetConfig = config.budget;
   const runGuardConfig = config.runGuard;
   const contextEngineConfig = config.contextEngine;
-  const contextAssemblerConfig = config.contextAssembler;
+  const contextAssemblerConfig = config.context?.contextAssembler ?? config.contextAssembler;
+  const constitutionConfig = config.context?.constitution ?? config.constitution;
 
   // 2. 加载子系统（三级搜索路径）
   const subsystemSpecs = await resolveSubsystemSpecs();
@@ -242,10 +243,14 @@ export async function buildFromConfig(config: NormalizedHarnessConfig): Promise<
         runGuardConfig,
         contextEngineConfig,
         contextAssemblerConfig,
+        constitutionConfig,
+        memoryConfig: config.memory,
         flatModels,
         levelMap: config.levelMap,
         subsystemSpecs,
         subsystemAuditDir: config.subsystems?.auditDir,
+        subsystemAllowlist: config.subsystems?.allowlist,
+        subsystemDenylist: config.subsystems?.denylist,
       });
       agents.set(agentConfig.id, built);
     } catch (err) {
@@ -269,10 +274,14 @@ async function buildAgent(
     runGuardConfig?: RunGuardJsonConfig;
     contextEngineConfig?: ContextEngineConfig;
     contextAssemblerConfig?: import('../../config.js').ContextAssemblerConfig;
+    constitutionConfig?: import('../../config.js').ConstitutionConfig;
+    memoryConfig?: import('../../config.js').HarnessConfig['memory'];
     flatModels: NormalizedModelInfo[];
     levelMap?: import('../../config.js').LevelMap;
     subsystemSpecs?: SubsystemSpec[];
     subsystemAuditDir?: string;
+    subsystemAllowlist?: string[];
+    subsystemDenylist?: string[];
   },
 ): Promise<BuiltAgent> {
   const builder = new AgentBuilder();
@@ -345,9 +354,15 @@ async function buildAgent(
       // Knowledge 暂无 SQLite 实现，用进程内 store；后续可替换
       builder.knowledgeStore(new MemoryKnowledgeStore());
     } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
       console.warn(
-        `[ConfigBridge] memory/wisdom/cognition/knowledge stores unavailable for agent home ${agentHome}: ${err instanceof Error ? err.message : String(err)}`,
+        `[ConfigBridge] memory/wisdom/cognition/knowledge stores unavailable for agent home ${agentHome}: ${msg}`,
       );
+      if (/NODE_MODULE_VERSION|better-sqlite3|ERR_DLOPEN/i.test(msg)) {
+        console.warn(
+          `[ConfigBridge] hint: rebuild better-sqlite3 for this Node ABI (node=${process.version}, modules=${process.versions.modules})`,
+        );
+      }
     }
   }
 
@@ -372,6 +387,12 @@ async function buildAgent(
   // ── Context Assembler（七层 system 装配） ──
   if (shared.contextAssemblerConfig) {
     builder.contextAssembler(shared.contextAssemblerConfig);
+  }
+  if (shared.constitutionConfig !== undefined) {
+    builder.constitution(shared.constitutionConfig);
+  }
+  if (shared.memoryConfig) {
+    builder.memoryConfig(shared.memoryConfig);
   }
 
   // ── 默认 summarize：优先 mini，否则主模型（保证 LLM 摘要路径可走） ──
@@ -408,6 +429,12 @@ async function buildAgent(
   }
   if (shared.subsystemAuditDir) {
     builder.withSubsystemAuditDir(shared.subsystemAuditDir);
+  }
+  if (shared.subsystemAllowlist?.length) {
+    builder.subsystemAllowlist(...shared.subsystemAllowlist);
+  }
+  if (shared.subsystemDenylist?.length) {
+    builder.subsystemDenylist(...shared.subsystemDenylist);
   }
 
   // ── Build ──

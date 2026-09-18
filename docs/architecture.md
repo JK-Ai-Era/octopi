@@ -200,10 +200,11 @@ Agent home 目录约定（由 `initOctopi` / `ensureAgentDirs` 脚手架）：
   persona/               # 补充 persona（字母序；数字前缀控制顺序）
   sessions/              # JsonlSessionStore
   skills/                # 技能（可由 skillDirectory 指向）
-  extract/               # JsonlExtractorStore（events/bundles/meta）
 ```
 
 Memory / Cognition / Wisdom / Knowledge **不按目录落盘**，统一由 per-agent SQLite `AgentDatabase`（`agent.db`）承载。
+
+> 旧 `extract/`（JsonlExtractorStore）目录已随 memory ETL 提取器移除；补录/治理走 `memory.steward.*` 子系统，素材读 SessionStore。
 
 ### 3.2 Context Management — 上下文管理
 
@@ -284,8 +285,10 @@ harness/execution-environment/
 ```
 harness/memory/
 ├── store.ts              # InMemoryMemoryStore（默认内存实现）
+├── confidence.ts         # 写入暂定置信度 / injectFilter / profile 映射
+├── gates.ts              # 结构门控 + mapLegacyType
 ├── cognition.ts          # InMemoryConceptGraph
-├── types.ts / wisdom-types.ts / cognition-types.ts
+├── types.ts              # MemoryType = fact|method|norm；Store 契约
 ├── sqlite/
 │   ├── agent-db.ts       # AgentDatabase — per-agent agent.db
 │   ├── memory-store.ts   # SqliteMemoryStore
@@ -293,9 +296,11 @@ harness/memory/
 │   ├── cognition-store.ts
 │   ├── knowledge-registry.ts
 │   └── embedding.ts
-├── extraction/           # session → memory 提取链路
 └── index.ts
 ```
+
+> **已移除**：`harness/memory/extraction/`（ETL 采集/桥接/Pending）与 `subsystems/memory-extractor`。  
+> 记忆写入 = agent `memory_store` 工具；旁路 = `memory.steward.backfill` / `memory.steward.govern`（见 `docs/memory-system-redesign.md`）。
 
 `FileWisdomStore` / `FileProjectMemory` / `ContextIntelligence` 已删除；不要再预设 `memory/`、`wisdom/` 文件目录。system prompt 七层组装见 `harness/context/`。
 
@@ -538,13 +543,17 @@ System 契约层 order：
 Information   ← 不进 ContextLayer；ContextEngine 管窗口
 ```
 
-### memory/ 领域的三层抽象
+### memory/ 领域的抽象（redesign 后）
 
 ```
-Information → Memory      提炼：什么值得记住
-Memory → Cognition        结构化：概念之间的关系
-Memory → Wisdom           升华：思维模式
+Information → Memory   提炼：可行动命题（fact / method / norm）
+Memory → Cognition     结构化：概念之间的关系（后续子系统）
+Memory → Wisdom        升华：思维范式（后续子系统）
 ```
+
+写入通道：主 agent `memory_store`（宪法 + 门控 + 置信度）→ MemoryStore；  
+旁路治理：`memory.steward.backfill` / `memory.steward.govern`。  
+**无** session ETL 提取器。
 
 ---
 
@@ -573,7 +582,7 @@ HarnessLoopEvent + context.compact.* / context.layers.assembled 事件
   ↓
 Session save：全量 messages + contextCompact 快照
   ↓
-[任务结束后] → Memory 提取（Information→Memory→Cognition→Wisdom）
+[任务结束后] → 主 agent 显著时 memory_store / memory.steward 补录·治理（Information→Memory；Cognition/Wisdom 另有下游子系统）
 ```
 
 ---
@@ -607,18 +616,18 @@ Session save：全量 messages + contextCompact 快照
 公开构建入口为 **`build(options?)`**（默认 `mode: 'full'`）。`buildAgent()` 已废弃，等价 `build({ mode: 'core' })`（仅 Agent 门面）。
 
 ```typescript
-const { agent, harness, runner, runtime, memoryExtraction } = await new AgentBuilder()
+const { agent, harness, runner, runtime, events, contextHealth } = await new AgentBuilder()
   // 模型
   .model(myProvider)
   .provider('backup', backupProvider)
   .concurrency({ providerPool: { ... } })
 
-  // 人格 / 技能 / 记忆（home 与 persona 解耦；extract/agent.db 用 home）
+  // 人格 / 技能 / 记忆（home 与 persona 解耦；agent.db 用 home）
   .agentHome('~/.octopi/agents/my-agent')
   .agentId('my-agent')
   .persona('./my-agent')
   .skillDirectory('./my-agent/skills')
-  .memoryStore(myMemoryStore)   // 七层 MemoryLayer、memory_* 工具、extractor 同实例
+  .memoryStore(myMemoryStore)   // 七层 MemoryLayer、memory_* 工具、steward 同实例
   .knowledgeStore(myKnowledgeStore)
 
   // 工具
@@ -642,7 +651,7 @@ const { agent, harness, runner, runtime, memoryExtraction } = await new AgentBui
 
   // 自主子系统
   .withSubsystem(mySubsystemSpec)
-  .subsystemAllowlist('memory.extractor')   // 可选：仅允许列表内 id
+  .subsystemAllowlist('memory-steward')     // id / packageId / memory.steward.*
   .subsystemDenylist('safety-guard')        // 可选：禁止（优先于 allow）
 
   // Session
@@ -661,12 +670,11 @@ const { agent, harness, runner, runtime, memoryExtraction } = await new AgentBui
 
 | 项 | 行为 |
 |----|------|
-| 子系统发现 | `autoLoadSubsystems` 默认 `true`；注册范围用 allow/deny（deny 优先，未列出默认允许） |
-| `memoryStore` | `registerDependency('memoryStore')`；并用**同一实例**注册 `memory_store` / `memory_search` |
-| `memory.extractor` | 最终注册成功且存在 memoryStore 时，挂 `MemoryExtractorBridge` + `PendingExtractor`（返回 `memoryExtraction`，需 dispose） |
-| extract 路径 | `agentHome/extract`（Jsonl）；Pending 使用 `agentId` |
+| 子系统发现 | `autoLoadSubsystems` 默认 `true`；allow/deny 支持 id / packageId / `memory.steward.*`（deny 优先） |
+| `memoryStore` | `registerDependency('memoryStore')` + `sessionStore`/`constitution`；并用**同一实例**注册 `memory_store` / `memory_search` |
+| Memory 旁路 | `memory.steward.backfill` / `memory.steward.govern`（**无** ETL `memoryExtraction` 句柄） |
 
-Gateway serve 路径经 `builder.build()` 装配；`gateway.stop()` 会 dispose 各 agent 的 `memoryExtraction`。
+Gateway serve 路径经 `builder.build()` 装配；治理类子系统 signal 仅走 event，不注入主会话。
 
 ---
 

@@ -9,7 +9,7 @@
  *     audit/                           ← 子系统审计日志
  *     plugins/                         ← plugin 目录
  *     agents/
- *       default/                       ← agent home（persona / skills / sessions / extract）
+ *       default/                       ← agent home（persona / skills / sessions）
  *         AGENTS.md                    ← 主 persona（loadPersona 最先加载）
  *         persona/                     ← 补充 persona（字母序；数字前缀控制顺序）
  *           10-soul.md                 ← 人格定义
@@ -18,13 +18,11 @@
  *           40-tools.md                ← 工具说明
  *         sessions/                    ← session 存储（JsonlSessionStore）
  *         skills/                      ← 技能目录
- *         extract/                     ← 记忆提取落盘（JsonlExtractorStore）
- *           events/
- *           bundles/
- *           meta/
  *
- * 说明：Memory / Cognition / Wisdom / Knowledge 不再按文件目录落盘，
- * 统一由 AgentDatabase（per-agent SQLite agent.db）承载；init 不预建 memory/、wisdom/。
+ * 说明：Memory / Cognition / Wisdom / Knowledge 不按文件目录落盘，
+ * 统一由 AgentDatabase（per-agent SQLite agent.db）承载。
+ * 旧 extract/（JsonlExtractorStore）目录已废弃，init 不再预建；
+ * 记忆旁路见 memory.steward.*（docs/memory-system-redesign.md）。
  *
  *     workspace/
  *       default/                       ← agent 沙箱目录（工具操作 cwd）
@@ -305,7 +303,7 @@ export async function ensureAgentDirs(
   const created: string[] = [];
   const existed: string[] = [];
 
-  // Home 目录（persona / skills / sessions / extract 的根目录）
+  // Home 目录（persona / skills / sessions 的根目录）
   const agentHome = join(homeDir, 'agents', agentId);
   ensureDirTracked(agentHome, created, existed);
 
@@ -314,12 +312,10 @@ export async function ensureAgentDirs(
 
   // Home 下的文件系统子目录。
   // memory/wisdom 不在此列：由 AgentDatabase（SQLite agent.db）承载。
+  // 旧 extract/（ETL JsonlExtractorStore）不再预建。
   const homeSubDirs = [
     'sessions',
     'skills',
-    join('extract', 'events'),
-    join('extract', 'bundles'),
-    join('extract', 'meta'),
   ];
   for (const dir of homeSubDirs) {
     ensureDirTracked(join(agentHome, dir), created, existed);

@@ -13,7 +13,6 @@ export type {
   AgentBuildOptions,
   AgentBuildResult,
   AgentBuildCoreResult,
-  MemoryExtractionWiring,
 } from './builder.js';
 export { loadPersona, composePersonas, PersonaSource } from './persona.js';
 export { buildFromConfig, buildFromConfigFile, resolveProviders, resolveSecurityConfig } from './config-bridge.js';

@@ -211,14 +211,6 @@ export const DEFAULT_CONTEXT_WINDOW = 128_000;
 
 // ── Build options / result ──
 
-/** memory extraction 运行时句柄（由 AgentBuilder.build 装配） */
-export interface MemoryExtractionWiring {
-  bridge: import('../memory/extraction/memory-extractor-bridge.js').MemoryExtractorBridge;
-  pendingExtractor: import('../memory/extraction/pending-extractor.js').PendingExtractor;
-  extractorStore: import('../memory/extraction/extractor-store.js').ExtractorStore;
-  dispose: () => void;
-}
-
 export interface AgentBuildOptions {
   /**
    * `full`（默认）：agent + runner + 子系统装配
@@ -231,12 +223,12 @@ export interface AgentBuildOptions {
    */
   autoLoadSubsystems?: boolean;
   /**
-   * 允许注册的子系统 id 列表。设置后仅这些 id 可注册（发现与显式 withSubsystem 均受约束）。
+   * 允许注册的子系统 id / packageId / `memory.steward.*` 前缀列表。
    * 未设置 = 不限制。
    */
   subsystemAllowlist?: string[];
   /**
-   * 禁止注册的子系统 id 列表。与 allowlist 同时出现时 deny 优先。
+   * 禁止注册的子系统 id / packageId / 前缀。与 allowlist 同时出现时 deny 优先。
    */
   subsystemDenylist?: string[];
   /** 子系统搜索目录覆盖 */
@@ -246,21 +238,28 @@ export interface AgentBuildOptions {
     project?: string;
     npm?: string;
   };
-  /**
-   * PendingExtractor 扫描间隔（毫秒，默认 30_000）。
-   * 在 `memory.extractor` 注册成功且存在 memoryStore 时使用。
-   */
-  extractionScanIntervalMs?: number;
 }
 
-/** 按允许/禁止列表判断子系统是否可注册；deny 优先 */
+/** 按允许/禁止列表判断子系统是否可注册；deny 优先；支持 packageId 与 `id`/`id.*` 前缀 */
 export function isSubsystemAllowed(
   id: string,
   allowlist?: string[],
   denylist?: string[],
+  packageId?: string,
 ): boolean {
-  if (denylist?.includes(id)) return false;
-  if (allowlist && allowlist.length > 0 && !allowlist.includes(id)) return false;
+  const match = (list: string[] | undefined, key: string, pkg?: string): boolean => {
+    if (!list || list.length === 0) return false;
+    return list.some((entry) => {
+      if (!entry) return false;
+      if (entry === key) return true;
+      if (pkg && entry === pkg) return true;
+      if (entry.endsWith('.*') && key.startsWith(entry.slice(0, -1))) return true;
+      if (entry.endsWith('*') && !entry.endsWith('.*') && key.startsWith(entry.slice(0, -1))) return true;
+      return false;
+    });
+  };
+  if (match(denylist, id, packageId)) return false;
+  if (allowlist && allowlist.length > 0 && !match(allowlist, id, packageId)) return false;
   return true;
 }
 
@@ -277,8 +276,8 @@ export interface AgentBuildResult {
   harness: ReliabilityHarness;
   runner: SessionAwareRunner;
   mcpManager: McpManager;
+  /** 子系统运行时（memory.steward.* 等）；无子系统时为 undefined */
   runtime?: import('../autonomous-subsystem/runtime.js').SubsystemRuntime;
-  memoryExtraction?: MemoryExtractionWiring;
   events: EventBus;
   contextHealth: (agentId?: string) => Promise<import('../context/layer-health.js').ContextLayerHealth>;
 }
@@ -309,7 +308,21 @@ async function defaultSubsystemSearchDirs(override?: AgentBuildOptions['subsyste
       return readdirSync(dir, { withFileTypes: true }).some((e) => {
         if (!e.isDirectory() || e.name.startsWith('.')) return false;
         const pkg = join(dir, e.name);
-        return existsSync(join(pkg, 'config.yaml')) || existsSync(join(pkg, 'SUBSYSTEM.md'));
+        if (existsSync(join(pkg, 'config.yaml')) || existsSync(join(pkg, 'SUBSYSTEM.md'))) {
+          return true;
+        }
+        // 多 spec 包：子目录含 config/SUBSYSTEM.md
+        try {
+          return readdirSync(pkg, { withFileTypes: true }).some((c) => {
+            if (!c.isDirectory() || c.name.startsWith('.') || c.name === 'shared' || c.name === 'lib') {
+              return false;
+            }
+            const child = join(pkg, c.name);
+            return existsSync(join(child, 'config.yaml')) || existsSync(join(child, 'SUBSYSTEM.md'));
+          });
+        } catch {
+          return false;
+        }
       });
     } catch {
       return false;
@@ -367,48 +380,7 @@ export async function discoverSubsystemSpecs(override?: AgentBuildOptions['subsy
   return loader.loadAll();
 }
 
-async function wireMemoryExtraction(params: {
-  events: EventBus;
-  runtime: import('../autonomous-subsystem/runtime.js').SubsystemRuntime;
-  memoryStore: import('../memory/types.js').MemoryStore;
-  /** agent 文件态 home（extract 落盘根）；缺省时用进程内 store */
-  agentHome?: string;
-  /** PendingExtractor 扫描用 agentId（应与事件 agentId 一致） */
-  agentId?: string;
-  scanIntervalMs?: number;
-}): Promise<MemoryExtractionWiring> {
-  const { MemoryExtractorBridge } = await import('../memory/extraction/memory-extractor-bridge.js');
-  const { PendingExtractor } = await import('../memory/extraction/pending-extractor.js');
-  const { JsonlExtractorStore } = await import('../memory/extraction/jsonl-extractor-store.js');
-  const { InMemoryExtractorStore } = await import('../memory/extraction/extractor-store.js');
-
-  const home = params.agentHome;
-  const extractorStore = home
-    ? new JsonlExtractorStore(() => home)
-    : new InMemoryExtractorStore();
-
-  const bridge = new MemoryExtractorBridge(params.events, params.runtime, {
-    store: extractorStore,
-    subsystemId: 'memory.extractor',
-  });
-
-  const pendingExtractor = new PendingExtractor(params.events, params.runtime, extractorStore, {
-    agentId: params.agentId ?? 'default',
-    subsystemId: 'memory.extractor',
-    scanIntervalMs: params.scanIntervalMs ?? 30_000,
-    autoStart: true,
-  });
-
-  return {
-    bridge,
-    pendingExtractor,
-    extractorStore,
-    dispose: () => {
-      bridge.dispose();
-      pendingExtractor.dispose();
-    },
-  };
-}
+// wireMemoryExtraction 已移除：见 docs/memory-system-redesign.md（Memory Steward 取代 ETL）
 
 /**
  * AgentBuilder — Fluent API
@@ -440,6 +412,8 @@ export class AgentBuilder {
   private _skillManager?: import('../plugin-ecosystem/skills/types.js').SkillManager;
   /** 记忆检索（注入 system prompt MemoryLayer） */
   private _memoryStore?: import('../memory/types.js').MemoryStore;
+  private _constitutionConfig?: import('../../config.js').ConstitutionConfig | null;
+  private _memoryConfig?: import('../../config.js').HarnessConfig['memory'];
   /** 知识检索（注入 system prompt KnowledgeLayer） */
   private _knowledgeStore?: import('../context/knowledge/types.js').KnowledgeStore;
   /** 智慧（注入 system prompt WisdomLayer） */
@@ -489,7 +463,7 @@ export class AgentBuilder {
   private _workspace?: string;
   /** agent 文件态 home（persona 可不同；extract / agent.db 用此路径） */
   private _agentHome?: string;
-  /** 逻辑 agentId（PendingExtractor / 观测用） */
+  /** 逻辑 agentId（观测 / 子系统审计用） */
   private _agentId?: string;
 
 
@@ -629,6 +603,18 @@ export class AgentBuilder {
   /** 注入 MemoryStore（每轮按 query 召回进 system prompt） */
   memoryStore(store: import('../memory/types.js').MemoryStore): this {
     this._memoryStore = store;
+    return this;
+  }
+
+  /** 全局宪法（product | custom | off） */
+  constitution(config: import('../../config.js').ConstitutionConfig | null): this {
+    this._constitutionConfig = config;
+    return this;
+  }
+
+  /** Memory 策略配置（profile / confidence / gates） */
+  memoryConfig(config: import('../../config.js').HarnessConfig['memory']): this {
+    this._memoryConfig = config;
     return this;
   }
 
@@ -907,9 +893,23 @@ export class AgentBuilder {
     // memory 工具必须在 buildCore 之前注册：Agent 构造时从 ToolBus 快照 tools
     if (this._memoryStore && !this._toolBus.getTool('memory_store')) {
       const { createMemoryTools } = await import('../plugin-ecosystem/tools/memory.js');
-      for (const tool of createMemoryTools(this._memoryStore)) {
+      const { profileToConfidenceConfig } = await import('../memory/confidence.js');
+      const memCfg = this._memoryConfig;
+      const confidence = profileToConfidenceConfig(memCfg?.profile, {
+        injectMinScore: memCfg?.confidence?.injectMinScore,
+        channelPriors: memCfg?.confidence?.channelPriors,
+      });
+      for (const tool of createMemoryTools(this._memoryStore, {
+        confidence,
+        gates: memCfg?.gates?.maxLength
+          ? { maxLength: memCfg.gates.maxLength }
+          : undefined,
+      })) {
         this._toolBus.register(tool);
       }
+      console.log('[AgentBuilder] memory tools registered: memory_store, memory_search');
+    } else if (!this._memoryStore) {
+      console.warn('[AgentBuilder] memory tools skipped: no memoryStore injected');
     }
 
     // 核心组件（Agent 门面）；full 模式继续装配 runner / 子系统 / 提取栈
@@ -958,6 +958,7 @@ export class AgentBuilder {
     const wisdomStore = this._wisdomStore;
     const cognitionStore = this._cognitionStore;
     const assemblerCfg = this._contextAssemblerConfig;
+    const constitutionCfg = this._constitutionConfig;
     const systemPromptAssembler = createDefaultSystemPromptAssembler({
       getSkillPromptText: skillManager
         ? () => skillManager.formatForPrompt()
@@ -967,6 +968,7 @@ export class AgentBuilder {
       wisdomStore,
       cognitionStore,
       systemBudgetRatio: assemblerCfg?.systemBudgetRatio,
+      constitution: constitutionCfg,
       assemblerConfig: {
         layerShares: assemblerCfg?.layerShares,
         includeLayerPreview: assemblerCfg?.includeLayerPreview,
@@ -982,7 +984,7 @@ export class AgentBuilder {
     // 子系统装配：自动发现 + allow/deny 过滤 + 注册
     const allowlist = options?.subsystemAllowlist ?? this._subsystemAllowlist;
     const denylist = options?.subsystemDenylist ?? this._subsystemDenylist;
-    const allowed = (id: string) => isSubsystemAllowed(id, allowlist, denylist);
+    const allowed = (id: string, packageId?: string) => isSubsystemAllowed(id, allowlist, denylist, packageId);
 
     const autoLoad = options?.autoLoadSubsystems ?? true;
     if (autoLoad && !this._subsystemDir) {
@@ -997,11 +999,11 @@ export class AgentBuilder {
     }
 
     // 创建 SubsystemRuntime（过滤后仍有子系统，或指定了目录）
-    const candidateSpecs = this._subsystemSpecs.filter((s) => allowed(s.id));
-    const skipped = this._subsystemSpecs.filter((s) => !allowed(s.id));
+    // allowed 必须带 packageId：否则 allowlist: ["memory-steward"] 会在预滤阶段被丢掉
+    const candidateSpecs = this._subsystemSpecs.filter((s) => allowed(s.id, s.packageId));
+    const skipped = this._subsystemSpecs.filter((s) => !allowed(s.id, s.packageId));
 
     let subsystemRuntime: import('../autonomous-subsystem/runtime.js').SubsystemRuntime | undefined;
-    let memoryExtraction: MemoryExtractionWiring | undefined;
     if (candidateSpecs.length > 0 || this._subsystemDir) {
       const { SubsystemRuntime } = await import('../autonomous-subsystem/runtime.js');
       subsystemRuntime = new SubsystemRuntime({
@@ -1017,7 +1019,7 @@ export class AgentBuilder {
 
       const registeredIds = new Set<string>();
       const tryRegister = (spec: import('../autonomous-subsystem/types.js').SubsystemSpec): void => {
-        if (!allowed(spec.id)) return;
+        if (!allowed(spec.id, spec.packageId)) return;
         const regErrors = subsystemRuntime!.register(spec);
         if (regErrors.length > 0) {
           console.warn(`[octopi] subsystem "${spec.id}" rejected: ${regErrors.join('; ')}`);
@@ -1041,21 +1043,19 @@ export class AgentBuilder {
         }
       }
 
-      // 依赖注入 + memory 工具：与 MemoryLayer / extractor 共用同一 MemoryStore 实例
+      // 依赖注入：memoryStore / sessionStore / constitution
       if (this._memoryStore) {
         subsystemRuntime.registerDependency('memoryStore', this._memoryStore);
       }
-
-      // 附属装配：仅当对应子系统最终注册成功时挂接
-      if (this._memoryStore && registeredIds.has('memory.extractor')) {
-        memoryExtraction = await wireMemoryExtraction({
-          events,
-          runtime: subsystemRuntime,
-          memoryStore: this._memoryStore,
-          agentHome: this._agentHome ?? this._personaWorkspaces[0],
-          agentId: this._agentId,
-          scanIntervalMs: options?.extractionScanIntervalMs,
-        });
+      if (this._store) {
+        subsystemRuntime.registerDependency('sessionStore', this._store);
+      }
+      try {
+        const { loadConstitution } = await import('../context/constitution/load-constitution.js');
+        const loaded = loadConstitution(this._constitutionConfig ?? { mode: 'product' });
+        subsystemRuntime.registerDependency('constitution', loaded.text);
+      } catch {
+        // custom path invalid already fails build elsewhere; steward may proceed without prompt text
       }
 
       const loadedIds = Array.from(registeredIds);
@@ -1068,9 +1068,6 @@ export class AgentBuilder {
         console.log(
           `[AgentBuilder] subsystems skipped by allowlist/denylist: ${skipped.map((s) => s.id).join(', ')}`,
         );
-      }
-      if (memoryExtraction) {
-        console.log('[AgentBuilder] memory extraction wired (Bridge + PendingExtractor)');
       }
 
       if (registeredIds.size > 0 || candidateSpecs.length > 0 || this._subsystemDir) {
@@ -1095,7 +1092,6 @@ export class AgentBuilder {
       runner,
       mcpManager,
       runtime: subsystemRuntime,
-      memoryExtraction,
       events,
       contextHealth: async (agentId?: string) => {
         const { probeContextLayerHealth } = await import('../context/layer-health.js');

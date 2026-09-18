@@ -28,7 +28,7 @@
 ## 依赖
 
 - Core: loop/、primitives/、interfaces/
-- Harness: memory/extraction（桥接示例）
+- Harness: memory（Steward 子系统经 runtimeInject 使用 MemoryStore）
 
 ## 文件说明
 

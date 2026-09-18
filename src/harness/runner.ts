@@ -840,7 +840,7 @@ export class SessionAwareRunner {
           endedAt: now,
         }),
       ).catch(() => {
-        // 状态落盘失败不阻断会话重置；提取侧仍可依赖 pending extractor / 事件
+        // 状态落盘失败不阻断会话重置；memory.steward.* / session lifecycle 事件仍可感知
       });
     }
 
