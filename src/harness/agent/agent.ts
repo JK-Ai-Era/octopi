@@ -20,6 +20,8 @@ import type {
 } from '../../loop/types.js';
 import type { ReliabilityHarness } from '../reliability/run-agent.js';
 import { runAgentWithReliability } from '../reliability/run-agent.js';
+import { withResolvedModel } from '../model/run-scope.js';
+import type { ResolvedModel } from '../model/types.js';
 import type { HarnessLoopEvent } from '../reliability/harness-events.js';
 
 // ── Agent 选项 ──
@@ -214,15 +216,25 @@ export class Agent {
   /**
    * 运行 Agent（推荐唯一入口）
    *
-   * 内部 = runAgentWithReliability(context, config, harness)。
-   * 产出 HarnessLoopEvent（Loop 协议事件 + budget/run_guard 扩展）。
+   * `options.resolvedModel` 为 run 级模型快照（方案 B 收口）：
+   * - `config.model` 使用 snapshot.provider
+   * - ALS 注入完整 snapshot，convertToLlm/summarize 只读不再 resolve
    *
    * @param signal - 中止信号
-   * @param harnessOverride - 临时覆盖 harness（测试/多租户）；默认用实例 harness
+   * @param harnessOverride - 临时覆盖 harness
+   * @param options - run 级覆盖（preferred: resolvedModel）
    */
   run(
     signal?: AbortSignal,
     harnessOverride?: ReliabilityHarness,
+    options?: {
+      /** 已解析模型快照（唯一推荐） */
+      resolvedModel?: ResolvedModel;
+      /** @deprecated 旧路径：仅绑定 provider */
+      model?: ModelProvider;
+      /** @deprecated 旧路径：仅窗口 */
+      contextWindow?: number;
+    },
   ): AsyncGenerator<HarnessLoopEvent> {
     const harness = harnessOverride ?? this._harness;
     if (!harness) {
@@ -230,7 +242,28 @@ export class Agent {
         'Agent.run() requires a ReliabilityHarness. Pass it to the constructor or call setHarness() first.',
       );
     }
-    return runAgentWithReliability(this._context, this._config, harness, signal);
+    const resolved = options?.resolvedModel;
+    const loopModel = resolved?.provider ?? options?.model;
+    const config = loopModel ? { ...this._config, model: loopModel } : this._config;
+
+    if (resolved) {
+      return withResolvedModel(resolved, runAgentWithReliability(this._context, config, harness, signal));
+    }
+    // 兼容：无完整 snapshot 时仍进入 ALS
+    if (options?.model) {
+      const fallbackSnapshot: ResolvedModel = {
+        ref: `${options.model.name}/${options.model.defaultModel ?? ''}`,
+        providerName: options.model.name,
+        modelName: options.model.defaultModel ?? '',
+        provider: options.model,
+        contextWindow: options.contextWindow,
+        source: options.contextWindow != null ? 'config' : 'unknown',
+        known: options.contextWindow != null,
+        isOverride: false,
+      };
+      return withResolvedModel(fallbackSnapshot, runAgentWithReliability(this._context, config, harness, signal));
+    }
+    return withResolvedModel(undefined, runAgentWithReliability(this._context, config, harness, signal));
   }
 }
 

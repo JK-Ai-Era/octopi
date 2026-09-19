@@ -70,11 +70,25 @@ export function buildRunRequest(
   triggers: Trigger[],
   sessionId: string,
 ): RunRequest {
+  // 模型覆盖：优先取最后一条带 modelOverride 的 trigger（合批时以最新意图为准）
+  let modelOverride: string | undefined;
+  let modelProvider: string | undefined;
+  for (let i = triggers.length - 1; i >= 0; i--) {
+    const meta = triggers[i]?.metadata;
+    if (meta?.modelOverride) {
+      modelOverride = String(meta.modelOverride);
+      modelProvider = meta.modelProvider ? String(meta.modelProvider) : undefined;
+      break;
+    }
+  }
+
   return {
     requestId: randomUUID(),
     triggers,
     agentId: agent.agentId,
     sessionId,
     messages: compileMessages(triggers),
+    modelOverride,
+    modelProvider,
   };
 }

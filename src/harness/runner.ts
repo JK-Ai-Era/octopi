@@ -54,6 +54,16 @@ export interface SessionAwareRunnerConfig {
    * 与 task_* 工具共用同一实例。
    */
   sessionTaskService?: SessionTaskService;
+  /**
+   * 解析 run 级模型快照（Gateway 注入；每 run 调用一次）
+   *
+   * `modelRef` 为空表示 agent 默认模型。
+   * 返回 null 表示解析失败（provider 缺失），回退 Agent 实例上的默认 provider。
+   */
+  resolveModelOverride?: (input: {
+    modelRef?: string;
+    defaultProvider?: string;
+  }) => import('./model/types.js').ResolvedModel | null;
 }
 
 const DEFAULT_CONFIG: SessionAwareRunnerConfig = {
@@ -66,7 +76,13 @@ export interface RunConfig {
   systemPrompt: string;
   agentId?: string;
   sessionId?: string;
+  /**
+   * 模型名覆盖（裸名或 provider/model）。
+   * 仅作用于本次 run；未设置时使用 Agent 默认模型。
+   */
   model?: string;
+  /** model 为裸名时的 provider 缺省 */
+  modelProvider?: string;
   temperature?: number;
   cwd?: string;
   contextWindow?: number;
@@ -213,9 +229,15 @@ export class SessionAwareRunner {
     injectedContext?: string;
     contextWindow?: number;
     signal?: AbortSignal;
-  }) => Promise<{ systemPrompt: string; manifest?: import('./context/layer-types.js').AssembleManifest }>;
+  }) => Promise<{
+    systemPrompt: string;
+    manifest?: import('./context/layer-types.js').AssembleManifest;
+    skippedBudget?: boolean;
+  }>;
   /** 会话重置时清理 Assembler 层缓存 */
   private systemPromptAssemblerClear?: (sessionId: string) => void;
+  /** 模型快照解析器（Gateway 注入；每 run 只调一次） */
+  private resolveModelOverride?: SessionAwareRunnerConfig['resolveModelOverride'];
 
   constructor(agent: Agent, harness: ReliabilityHarness, store: TypedSessionStore, config?: SessionAwareRunnerConfig & { events?: import('../core/primitives/event-bus.js').EventBus }) {
     this.agent = agent;
@@ -223,6 +245,48 @@ export class SessionAwareRunner {
     this.store = store;
     this.config = { ...DEFAULT_CONFIG, ...config };
     this._events = config?.events;
+    this.resolveModelOverride = config?.resolveModelOverride;
+  }
+
+  /**
+   * 注入模型快照解析器（Gateway 在 buildAgent 后调用）
+   *
+   * @param resolver - modelRef → ResolvedModel
+   */
+  setModelResolver(
+    resolver: SessionAwareRunnerConfig['resolveModelOverride'],
+  ): void {
+    this.resolveModelOverride = resolver;
+  }
+
+  /**
+   * 提取 run 级 modelRef
+   *
+   * 优先级：
+   * 1. 消息级覆盖（RunConfig.model，仅当调用方显式传入）
+   * 2. 会话覆盖（session.metadata.model）
+   * 3. undefined → Resolver 按 agent 默认解析
+   *
+   * **不要**把 agent 默认模型写进 RunConfig.model，否则会吞掉会话覆盖。
+   */
+  private readRunModelRef(
+    session: SessionData,
+    runConfig: RunConfig,
+  ): string | undefined {
+    const fromRun = runConfig.model?.trim() || undefined;
+    const sessionMetaModel = session.metadata?.model;
+    let fromSession: string | undefined;
+    if (typeof sessionMetaModel === 'string') {
+      fromSession = sessionMetaModel.trim() || undefined;
+    } else if (sessionMetaModel && typeof sessionMetaModel === 'object') {
+      const obj = sessionMetaModel as { provider?: unknown; model?: unknown };
+      if (typeof obj.model === 'string' && obj.model) {
+        fromSession = typeof obj.provider === 'string' && obj.provider
+          ? `${obj.provider}/${obj.model}`
+          : obj.model;
+      }
+    }
+    return fromRun || fromSession || undefined;
   }
 
   /** 设置自主子系统运行时 */
@@ -453,6 +517,22 @@ export class SessionAwareRunner {
         basePrompt = this.agent.context.systemPrompt || '';
       }
 
+      // ── Run 级模型快照：每 run 只 resolve 一次（必须在 system assembler 之前）──
+      const modelRef = this.readRunModelRef(session, effectiveRunConfig);
+      const resolvedModel = this.resolveModelOverride
+        ? this.resolveModelOverride({
+            modelRef,
+            defaultProvider: effectiveRunConfig.modelProvider,
+          })
+        : null;
+      if (resolvedModel) {
+        effectiveRunConfig = {
+          ...effectiveRunConfig,
+          contextWindow: resolvedModel.contextWindow,
+          model: resolvedModel.modelName,
+        };
+      }
+
       // system prompt 终装：Assembler（层契约）优先，否则退回字符串拼接
       if (this.systemPromptAssembler) {
         try {
@@ -465,6 +545,7 @@ export class SessionAwareRunner {
             contextWindow: effectiveRunConfig.contextWindow,
             signal,
           });
+          // 未知窗口时 assembler 仍装配层（不做窗口比例硬裁），不丢 systemPrompt
           this.agent.context.systemPrompt = assembled.systemPrompt;
           if (assembled.manifest) {
             const assembledAt = Date.now();
@@ -533,7 +614,12 @@ export class SessionAwareRunner {
       /** 本轮起始消息下标（afterTurn 只传增量） */
       let turnStartIndex = this.agent.context.messages.length;
 
-      for await (const loopEvent of this.agent.run(signal)) {
+      // resolvedModel 已在 system assembler 之前解析；此处只组装 run options
+      const agentRunOptions = resolvedModel
+        ? { resolvedModel }
+        : undefined;
+
+      for await (const loopEvent of this.agent.run(signal, undefined, agentRunOptions)) {
         // 适配事件格式（向后兼容）
         const adapted = adaptLoopEvent(loopEvent, meta, adaptState);
         if (adapted) {

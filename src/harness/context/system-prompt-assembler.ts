@@ -28,6 +28,7 @@ export interface SystemPromptAssembleInput {
   messages: Message[];
   persona: string;
   injectedContext?: string;
+  /** 显式配置的上下文窗口；未知时省略 */
   contextWindow?: number;
   signal?: AbortSignal;
 }
@@ -35,15 +36,21 @@ export interface SystemPromptAssembleInput {
 export interface SystemPromptAssembleOutput {
   systemPrompt: string;
   manifest?: AssembleManifest;
+  /**
+   * true = 未按 contextWindow 比例做层预算（窗口未知）。
+   * 层内容仍会装配（不硬裁）；**不要**据此丢弃 systemPrompt。
+   */
+  skippedBudget?: boolean;
 }
 
 const DEFAULT_SYSTEM_BUDGET_RATIO = 0.22;
-const DEFAULT_CONTEXT_WINDOW = 128_000;
 
 export function createDefaultSystemPromptAssembler(options?: {
   assembler?: ContextAssembler;
   assemblerConfig?: DefaultContextAssemblerConfig;
   systemBudgetRatio?: number;
+  /** 显式 system 预算 token；与 contextWindow 无关（窗口未知时仍可用） */
+  systemBudgetTokens?: number;
   getSkillPromptText?: () => Promise<string> | string;
   memoryStore?: MemoryStore;
   knowledgeStore?: KnowledgeStore;
@@ -102,8 +109,35 @@ export function createDefaultSystemPromptAssembler(options?: {
       }
     },
     async assemble(input) {
-      const window = input.contextWindow ?? DEFAULT_CONTEXT_WINDOW;
-      const systemBudget = Math.max(2000, Math.floor(window * ratio));
+      const hasPersona = Boolean((input.persona ?? '').trim());
+      const hasInjected = Boolean((input.injectedContext ?? '').trim());
+      let hasSkill = false;
+      if (getSkillPromptText) {
+        hasSkill = Boolean((await getSkillPromptText()).trim());
+      }
+      const hasRetrieval = Boolean(
+        options?.memoryStore ||
+          options?.knowledgeStore ||
+          wisdomStore ||
+          cognitionStore,
+      );
+      const hasPreamble = Boolean(resolvedPreamble.trim());
+      if (!hasPersona && !hasInjected && !hasSkill && !hasRetrieval && !hasPreamble) {
+        return { systemPrompt: '' };
+      }
+
+      // contextWindow 未知且未配置 systemBudgetTokens：
+      // **跳过按窗口比例的预算**，但仍装配层（不按 token 硬裁，保留完整层内容）
+      const absoluteBudget = options?.systemBudgetTokens;
+      const window = input.contextWindow;
+      const windowKnown = window != null && window > 0;
+      const skippedBudget = !windowKnown && !(absoluteBudget != null && absoluteBudget > 0);
+      const systemBudget = absoluteBudget != null && absoluteBudget > 0
+        ? absoluteBudget
+        : windowKnown
+          ? Math.max(2000, Math.floor(window! * ratio))
+          : // 无窗口：给足层内容空间，等价于“不做窗口比例压缩”
+            Number.MAX_SAFE_INTEGER;
 
       const layers: ContextLayer[] = [
         new PersonaLayer({
@@ -147,23 +181,6 @@ export function createDefaultSystemPromptAssembler(options?: {
         }),
       );
 
-      const hasPersona = Boolean((input.persona ?? '').trim());
-      const hasInjected = Boolean((input.injectedContext ?? '').trim());
-      let hasSkill = false;
-      if (getSkillPromptText) {
-        hasSkill = Boolean((await getSkillPromptText()).trim());
-      }
-      const hasRetrieval = Boolean(
-        options?.memoryStore ||
-          options?.knowledgeStore ||
-          wisdomStore ||
-          cognitionStore,
-      );
-      const hasPreamble = Boolean(resolvedPreamble.trim());
-      if (!hasPersona && !hasInjected && !hasSkill && !hasRetrieval && !hasPreamble) {
-        return { systemPrompt: '' };
-      }
-
       const result = await assembler.assemble({
         sessionId: input.sessionId,
         agentId: input.agentId,
@@ -174,7 +191,7 @@ export function createDefaultSystemPromptAssembler(options?: {
         constitutionPreamble: passPreamblePerAssemble || resolvedPreamble ? resolvedPreamble : undefined,
       });
 
-      return { systemPrompt: result.systemPrompt, manifest: result.manifest };
+      return { systemPrompt: result.systemPrompt, manifest: result.manifest, skippedBudget };
     },
   };
 }

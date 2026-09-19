@@ -25,7 +25,6 @@ import type {
   LLMStreamChunk,
 } from '../../core/interfaces/model-provider.js';
 import type { ToolCall, ModelInfo } from '../../core/types.js';
-import { mergeWithBuiltinInfo } from '../../builtin-model-info.js';
 
 export interface AnthropicProviderConfig {
   name?: string;
@@ -68,23 +67,21 @@ export class AnthropicProvider implements ModelProvider {
     this.version = config.version ?? '2023-06-01';
     this.timeoutMs = config.timeoutMs ?? 120_000;
 
-    // 解析 models 配置：提取名称列表 + ModelInfo 映射
-    // 合并内置默认值（用户配置优先）
-    const rawModels = config.models ?? [
-      'claude-sonnet-4-6',
-      'claude-opus-4-6',
-      'claude-haiku-4-5',
-    ];
+    // 仅使用用户配置的 ModelInfo；不合并 builtin 猜测 contextWindow
+    const rawModels = config.models ?? [];
     this.models = [];
     for (const entry of rawModels) {
       if (typeof entry === 'string') {
         this.models.push(entry);
-        const builtin = mergeWithBuiltinInfo(entry);
-        if (builtin) this.modelInfoMap.set(entry, builtin);
       } else {
         this.models.push(entry.name);
-        const merged = mergeWithBuiltinInfo(entry.name, entry);
-        if (merged) this.modelInfoMap.set(entry.name, merged);
+        if (entry.contextWindow != null || entry.maxOutputTokens != null) {
+          this.modelInfoMap.set(entry.name, {
+            name: entry.name,
+            contextWindow: entry.contextWindow,
+            maxOutputTokens: entry.maxOutputTokens,
+          });
+        }
       }
     }
 

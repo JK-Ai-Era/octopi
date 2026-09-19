@@ -13,6 +13,7 @@ import type { ErrorStrategy } from '../../../core/interfaces/error-strategy.js';
 import type { RegisteredTool } from '../../../core/types.js';
 import type { AgentTool } from '../../../loop/types.js';
 import type { ReliabilityHarness } from '../../reliability/index.js';
+import { bindModelName } from '../../reliability/model-binding.js';
 import type {
   ThinkConfig,
   ThinkImplementation,
@@ -31,22 +32,6 @@ export class TokenBudgetExceededError extends Error {
     super(message);
     this.name = 'TokenBudgetExceededError';
   }
-}
-
-/**
- * 将 model 名绑定到 LLMRequest（不修改原 provider）。
- * 多级 fallback 时必须换 model 名，否则循环只是对同一模型重试。
- */
-function bindModelName(provider: ModelProvider, model: string): ModelProvider {
-  return {
-    name: provider.name,
-    defaultModel: model,
-    getModelInfo: (modelName: string) => provider.getModelInfo(modelName),
-    getModelInfos: () => provider.getModelInfos(),
-    isAvailable: () => provider.isAvailable(),
-    chat: (request) => provider.chat({ ...request, model: request.model ?? model }),
-    stream: (request) => provider.stream({ ...request, model: request.model ?? model }),
-  };
 }
 
 

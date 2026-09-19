@@ -51,6 +51,10 @@ import { getOctopiHome } from './init.js';
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { homedir } from 'node:os';
+import { DEFAULT_CONTEXT_WINDOW } from './core/types/model-info.js';
+
+/** 产品默认上下文窗口（与 core/types/model-info 一致，未声明能力时按此预算） */
+export { DEFAULT_CONTEXT_WINDOW };
 
 // ── Agent 配置 ──
 
@@ -344,8 +348,12 @@ export interface ContextEngineConfig {
  * `layerShares` 仅对显式配置的层生效（硬顶 = contentBudget × share）。
  */
 export interface ContextAssemblerConfig {
-  /** system 预算占 contextWindow 比例（默认 0.22） */
+  /** system 预算占 contextWindow 比例（默认 0.22）；窗口未知时不生效 */
   systemBudgetRatio?: number;
+  /** 显式 system 预算 token（窗口未知时仍可用，优先于 ratio） */
+  systemBudgetTokens?: number;
+  /** 显式压缩目标 token；窗口未知时用于结构压缩/assemble 预算 */
+  compactTargetTokens?: number;
   /**
    * 单层硬顶：层 id → contentBudget 比例 [0,1]。
    * 默认不配置 = 无单层配额。配置了的层超出会先被截断到硬顶。
@@ -405,7 +413,10 @@ export interface ModelDefinition {
  * 全局默认值
  */
 export interface Defaults {
-  /** 默认上下文窗口大小（当模型和 provider 都未指定时使用，默认 200000） */
+  /**
+   * 默认上下文窗口（仅当用户显式配置时生效）。
+   * 未配置时模型 contextWindow 保持未知，不自动填 200k。
+   */
   contextWindow?: number;
 }
 
@@ -677,8 +688,6 @@ export interface HarnessConfig {
 
 // ModelConfig 定义见 harness/types/agent-definition.ts（已在此文件顶部 import）
 
-const DEFAULT_CONTEXT_WINDOW = 200_000;
-
 /**
  * 解析 Agent 的模型配置
  *
@@ -723,11 +732,15 @@ export function resolveModelConfig(
   models: NormalizedModelInfo[],
   defaults?: Defaults,
 ): _ModelConfig {
-  const defaultContextWindow = defaults?.contextWindow ?? DEFAULT_CONTEXT_WINDOW;
+  // 仅当用户配置了 defaults.contextWindow 时才作为兜底；不自动猜 200k
+  const defaultContextWindow = defaults?.contextWindow;
 
-  // 内联对象（向后兼容）
+  // 内联对象（向后兼容）— 未写的 contextWindow 保持 undefined（未知）
   if (typeof modelRef === 'object') {
-    const resolved = { ...modelRef, contextWindow: modelRef.contextWindow ?? defaultContextWindow };
+    const resolved = { ...modelRef };
+    if (resolved.contextWindow == null && defaultContextWindow != null) {
+      resolved.contextWindow = defaultContextWindow;
+    }
     resolved.fallbackModels = resolveFallbackModels(resolved.fallbackModels as any, models, defaults, 1);
     return resolved;
   }
@@ -784,34 +797,31 @@ function resolveFallbackModels(
   if (!fallbacks || fallbacks.length === 0) return undefined;
   return fallbacks.map(fb => {
     if (typeof fb === 'string') {
-      // 查找 models[] 中的定义
       const found = models.find(m => m.id === fb);
       if (found) {
         return {
           provider: found.provider,
           model: found.model,
-          contextWindow: found.contextWindow ?? defaults?.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
+          contextWindow: found.contextWindow ?? defaults?.contextWindow,
         };
       }
-      // 解析 "provider/model" 格式
       const slashIdx = fb.indexOf('/');
       if (slashIdx > 0) {
         return {
           provider: fb.slice(0, slashIdx),
           model: fb.slice(slashIdx + 1),
-          contextWindow: defaults?.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
+          contextWindow: defaults?.contextWindow,
         };
       }
       throw new Error(`Cannot resolve fallback model "${fb}"`);
     }
-    // 内联 ModelConfig 或 ModelDefinition（只取 ModelConfig 字段）
     const m = fb as _ModelConfig;
     return {
       provider: m.provider,
       model: m.model,
       temperature: m.temperature,
       maxTokens: m.maxTokens,
-      contextWindow: m.contextWindow ?? defaults?.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
+      contextWindow: m.contextWindow ?? defaults?.contextWindow,
       fallbackModels: resolveFallbackModels(m.fallbackModels, models, defaults, depth + 1),
     };
   });
@@ -939,6 +949,7 @@ export function toGatewayConfig(config: NormalizedHarnessConfig): GatewayConfig 
     memory: config.memory,
     embedding: config.models?.embedding,
     modelProviders: config.models?.providers,
+    levels: config.levelMap ?? (config.models as ModelsConfig | undefined)?.level,
   };
 
   if (config.agentRuntime) {

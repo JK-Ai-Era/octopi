@@ -55,6 +55,13 @@ export class WebApiRouter {
         });
       }
 
+      if (relativePath === '/models' && method === 'GET') {
+        return this.json(res, 200, {
+          ok: true,
+          data: this.gateway.getModelCatalog(),
+        });
+      }
+
       if (relativePath === '/providers' && method === 'GET') {
         return this.json(res, 200, {
           ok: true,
@@ -74,11 +81,28 @@ export class WebApiRouter {
           return this.json(res, 400, { ok: false, error: 'agentId is required' });
         }
 
+        const metadata = { ...(body.metadata ?? {}) };
+        if (typeof body.model === 'string' && body.model) {
+          metadata.model = body.model;
+        }
+
         const session = await this.gateway.createSession({
           agentId: body.agentId,
           sessionId: body.sessionId,
-          metadata: body.metadata,
+          metadata,
         });
+
+        // 与 setSessionModel 同源校验/规范化 model 引用
+        if (typeof body.model === 'string' && body.model) {
+          try {
+            await this.gateway.setSessionModel(session.id, body.model, body.agentId);
+          } catch (err) {
+            return this.json(res, 400, {
+              ok: false,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+        }
 
         return this.json(res, 201, { ok: true, data: session });
       }
@@ -120,6 +144,50 @@ export class WebApiRouter {
       if (abortMatch && method === 'POST') {
         this.gateway.abortSession(abortMatch[1]);
         return this.json(res, 200, { ok: true, data: { aborted: true } });
+      }
+
+      const sessionModelMatch = relativePath.match(/^\/sessions\/([^/]+)\/model$/);
+      if (sessionModelMatch && method === 'GET') {
+        const agentId = url.searchParams.get('agentId') ?? undefined;
+        const view = await this.gateway.getSessionModel(sessionModelMatch[1], agentId);
+        if (!view) {
+          return this.json(res, 404, { ok: false, error: 'Session not found' });
+        }
+        return this.json(res, 200, { ok: true, data: view });
+      }
+
+      if (sessionModelMatch && (method === 'POST' || method === 'PUT')) {
+        const body = await this.readBody(req);
+        const agentId = typeof body.agentId === 'string' ? body.agentId : undefined;
+        const modelRef = body.model === null || body.model === undefined
+          ? null
+          : String(body.model);
+        try {
+          const view = await this.gateway.setSessionModel(sessionModelMatch[1], modelRef, agentId);
+          return this.json(res, 200, { ok: true, data: view });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          if (/not found/i.test(message)) {
+            return this.json(res, 404, { ok: false, error: message });
+          }
+          return this.json(res, 400, { ok: false, error: message });
+        }
+      }
+
+      const compactMatch = relativePath.match(/^\/sessions\/([^/]+)\/compact$/);
+      if (compactMatch && method === 'POST') {
+        const body = await this.readBody(req);
+        const agentId = typeof body.agentId === 'string' ? body.agentId : undefined;
+        try {
+          const result = await this.gateway.compactSession(compactMatch[1], agentId);
+          return this.json(res, 200, { ok: true, data: result });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          if (/not found/i.test(message)) {
+            return this.json(res, 404, { ok: false, error: message });
+          }
+          return this.json(res, 400, { ok: false, error: message });
+        }
       }
 
       const contextLayersMatch = relativePath.match(/^\/sessions\/([^/]+)\/context\/layers$/);

@@ -12,7 +12,7 @@ import type {
   ViewMode,
 } from '../../../src/integration/web/conversation/types';
 import type { RunStatus, InspectorState } from '../../../src/integration/web/runtime/store';
-import type { SessionTaskView } from '../../../src/integration/web/sdk/client';
+import type { SessionTaskView, ModelCatalog, SessionModelView } from '../../../src/integration/web/sdk/client';
 // 浏览器侧直连 token 模块（不经 harness barrel / context/index，避免拉入 Node 专用依赖）
 import { estimateTextTokens } from '../../../src/harness/context/token-estimator';
 import { JSON_CHARS_PER_TOKEN } from '../../../src/harness/context/token-constants';
@@ -22,10 +22,10 @@ const DEFAULT_BASE =
   'http://localhost:3000';
 
 function formatTokens(n: number | undefined | null): string {
-  const value = typeof n === 'number' && Number.isFinite(n) ? n : 0;
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}m`;
-  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}k`;
-  return String(value);
+  if (n == null || typeof n !== 'number' || !Number.isFinite(n)) return '未知';
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}m`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+  return String(n);
 }
 
 function estimateConversationTokens(items: ConversationItem[]): number {
@@ -344,6 +344,13 @@ export default function ChatWorkspace() {
   const [connection, setConnection] = useState('idle');
   const [agents, setAgents] = useState<Array<{ id: string; model: { provider: string; model: string; contextWindow?: number } }>>([]);
   const [agentId, setAgentId] = useState('');
+  const [modelCatalog, setModelCatalog] = useState<ModelCatalog>({ models: [], agents: [] });
+  const [sessionModel, setSessionModel] = useState<SessionModelView | null>(null);
+  /** 下拉框选中的模型 id；会话打开时等于 sessionModel，否则为新建会话的预选 */
+  const [selectedModelId, setSelectedModelId] = useState('');
+  const [modelError, setModelError] = useState<string | null>(null);
+  const [compactMsg, setCompactMsg] = useState<string | null>(null);
+  const [compacting, setCompacting] = useState(false);
   const [sessions, setSessions] = useState<Array<{ id: string; agentId: string; lastInteractionAt: number }>>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [conversationItems, setConversationItems] = useState<ConversationItem[]>([]);
@@ -374,6 +381,16 @@ export default function ChatWorkspace() {
       setConnection(e.detail.state);
       setAgents(e.detail.agents ?? []);
       if (e.detail.state === 'connected') setConnectError(null);
+    }) as EventListener);
+    store.addEventListener('models', ((e: CustomEvent) => {
+      setModelCatalog(e.detail.catalog ?? { models: [], agents: [] });
+    }) as EventListener);
+    store.addEventListener('sessionModel', ((e: CustomEvent) => {
+      const sm = e.detail.sessionModel as SessionModelView | null;
+      setSessionModel(sm);
+      if (sm) {
+        setSelectedModelId(sm.modelId ?? sm.defaultModelId);
+      }
     }) as EventListener);
     store.addEventListener('sessions', ((e: CustomEvent) => {
       setSessions(e.detail.sessions);
@@ -420,10 +437,102 @@ export default function ChatWorkspace() {
     if (!agentId && agents.length > 0) setAgentId(agents[0].id);
   }, [agents, agentId]);
 
+  // Agent 切换时：无活动会话则预选该 agent 默认模型
+  useEffect(() => {
+    if (activeSessionId) return;
+    const fromCatalog = modelCatalog.agents.find(a => a.agentId === agentId)?.defaultModelId;
+    const agent = agents.find(a => a.id === agentId);
+    const fromAgents = agent ? `${agent.model.provider}/${agent.model.model}` : '';
+    const agentDefault = fromCatalog || fromAgents;
+    if (agentDefault) setSelectedModelId(agentDefault);
+  }, [agentId, agents, modelCatalog.agents, activeSessionId]);
+
   // Auto-scroll
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
   }, [conversationItems, stream]);
+
+  const agentDefaultModelId =
+    modelCatalog.agents.find(a => a.agentId === agentId)?.defaultModelId
+    ?? (() => {
+      const a = agents.find(x => x.id === agentId);
+      return a ? `${a.model.provider}/${a.model.model}` : '';
+    })();
+
+  const effectiveModelId = activeSessionId
+    ? (sessionModel?.modelId ?? sessionModel?.defaultModelId ?? agentDefaultModelId)
+    : (selectedModelId || agentDefaultModelId);
+
+  const modelOptions = (() => {
+    const items = [...modelCatalog.models];
+    if (agentDefaultModelId && !items.some(m => m.id === agentDefaultModelId)) {
+      const a = agents.find(x => x.id === agentId);
+      if (a) {
+        items.push({
+          id: agentDefaultModelId,
+          provider: a.model.provider,
+          model: a.model.model,
+          contextWindow: a.model.contextWindow ?? null,
+          known: typeof a.model.contextWindow === 'number',
+          source: a.model.contextWindow ? 'config' : 'unknown',
+        });
+      }
+    }
+    if (effectiveModelId && !items.some(m => m.id === effectiveModelId)) {
+      const resolvedHit = sessionModel?.resolved?.id === effectiveModelId ? sessionModel.resolved : undefined;
+      items.push(resolvedHit ?? {
+        id: effectiveModelId,
+        provider: effectiveModelId.split('/')[0] ?? '',
+        model: effectiveModelId.split('/').slice(1).join('/') || effectiveModelId,
+        contextWindow: null,
+        known: false,
+        source: 'unknown',
+      });
+    }
+    const levelItems = Object.entries(modelCatalog.levels ?? {}).map(([name, lv]) => {
+      const hit = modelCatalog.models.find(m => m.id === lv.primary);
+      return {
+        id: lv.primary,
+        provider: lv.primary.split('/')[0] ?? '',
+        model: name,
+        contextWindow: hit?.contextWindow ?? null,
+        known: Boolean(hit?.known),
+        source: (hit?.source ?? 'unknown') as string,
+        isLevel: true,
+        levelName: name,
+      };
+    });
+    return { items, levelItems };
+  })();
+
+  const applyModelChange = async (modelRef: string) => {
+    setSelectedModelId(modelRef);
+    setModelError(null);
+    // 预算展示：只读引擎下发 snapshot；未知时不填假值
+    const catalogHit = modelCatalog.models.find(m => m.id === modelRef)
+      ?? (sessionModel?.resolved?.id === modelRef ? sessionModel.resolved : undefined);
+    if (catalogHit?.contextWindow != null) {
+      setInspector(prev => ({ ...prev, contextWindow: catalogHit.contextWindow! }));
+    } else {
+      setInspector(prev => ({ ...prev, contextWindow: undefined }));
+    }
+    if (!activeSessionId) return;
+    const store = storeRef.current;
+    if (!store) return;
+    try {
+      const next = modelRef === agentDefaultModelId || modelRef === ''
+        ? await store.setSessionModel(null)
+        : await store.setSessionModel(modelRef);
+      setSessionModel(next);
+      if (next?.resolved?.contextWindow != null) {
+        setInspector(prev => ({ ...prev, contextWindow: next.resolved!.contextWindow! }));
+      } else {
+        setInspector(prev => ({ ...prev, contextWindow: undefined }));
+      }
+    } catch (error) {
+      setModelError(error instanceof Error ? error.message : String(error));
+    }
+  };
 
   const refresh = async () => {
     const store = storeRef.current;
@@ -454,6 +563,10 @@ export default function ChatWorkspace() {
     setTasks(state.chat.tasks ?? []);
     setConversationItems(state.chat.conversation ?? []);
     setViewMode(state.chat.viewMode);
+    await store.refreshSessionModel();
+    const sm = store.getSessionModel();
+    setSessionModel(sm);
+    if (sm) setSelectedModelId(sm.modelId ?? sm.defaultModelId);
   };
 
   const createSession = async () => {
@@ -464,11 +577,18 @@ export default function ChatWorkspace() {
     setActionError(null);
     setCreating(true);
     try {
-      const created = await store.createSession(agentId);
+      const modelToApply = selectedModelId && selectedModelId !== agentDefaultModelId
+        ? selectedModelId
+        : undefined;
+      const created = await store.createSession(agentId, modelToApply ? { model: modelToApply } : undefined);
       setActiveSessionId(created.id);
       setRunStatus('idle');
       setStream('');
       setTasks(store.getTasks());
+      await store.refreshSessionModel();
+      const sm = store.getSessionModel();
+      setSessionModel(sm);
+      if (sm) setSelectedModelId(sm.modelId ?? sm.defaultModelId);
     } catch (error) {
       setActionError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -498,6 +618,29 @@ export default function ChatWorkspace() {
     setRunStatus('aborted');
   };
 
+  const runManualCompact = async () => {
+    const store = storeRef.current;
+    if (!store || !activeSessionId) return;
+    setCompacting(true);
+    setCompactMsg(null);
+    try {
+      const r = await store.compactSession();
+      if (!r.ok) {
+        setCompactMsg(r.reason || '压缩不可用');
+      } else if (!r.compacted) {
+        setCompactMsg(r.reason || '未压缩');
+      } else {
+        const before = r.tokensBefore != null ? formatTokens(r.tokensBefore) : '?';
+        const after = r.tokensAfter != null ? formatTokens(r.tokensAfter) : '?';
+        setCompactMsg(`已结构压缩 ${before} → ${after}`);
+      }
+    } catch (e) {
+      setCompactMsg(e instanceof Error ? e.message : String(e));
+    } finally {
+      setCompacting(false);
+    }
+  };
+
   // Derive lists from conversation items
   const toolItems = conversationItems.filter((i): i is ToolConversationItem => i.role === 'tool');
 
@@ -515,7 +658,16 @@ export default function ChatWorkspace() {
   const contextTokens = typeof inspector.contextTokens === 'number'
     ? inspector.contextTokens
     : conversationItems.length > 0 ? estimateConversationTokens(conversationItems) : undefined;
-  const contextWindow = typeof inspector.contextWindow === 'number' ? inspector.contextWindow : agents.find((a) => a.id === agentId)?.model?.contextWindow;
+  // 预算展示：只读引擎下发的 snapshot（catalog / sessionModel.resolved），UI 不做策略
+  const selectedModelMeta =
+    (sessionModel?.resolved?.id === effectiveModelId ? sessionModel.resolved : undefined)
+    ?? modelCatalog.models.find(m => m.id === effectiveModelId);
+  const contextWindow = selectedModelMeta?.contextWindow
+    ?? null;
+  const contextWindowKnown = Boolean(selectedModelMeta?.known) && contextWindow != null;
+  const contextWindowLabel = contextWindowKnown && contextWindow != null
+    ? formatTokens(contextWindow)
+    : '未知';
 
   return (
     <>
@@ -642,16 +794,63 @@ export default function ChatWorkspace() {
               <div>
                 <div style={{ fontWeight: 600 }}>{activeSessionId ?? '未选择会话'}</div>
                 <div className="small muted">{agentId ? `Agent: ${agentId}` : '请先选择 Agent'}</div>
+                <div className="center-model-row">
+                  <label className="small muted" htmlFor="session-model-select">模型</label>
+                  <select
+                    id="session-model-select"
+                    className="model-select"
+                    value={effectiveModelId}
+                    onChange={(e) => void applyModelChange(e.target.value)}
+                    disabled={connection !== 'connected' || !agentId}
+                  >
+                    {!effectiveModelId && <option value="">（默认）</option>}
+                    {agentDefaultModelId && (
+                      <option value={agentDefaultModelId}>
+                        {agentDefaultModelId}（Agent 默认）
+                      </option>
+                    )}
+                    {modelOptions.items
+                      .filter(m => m.id !== agentDefaultModelId)
+                      .map(m => (
+                        <option key={m.id} value={m.id}>
+                          {m.id}
+                          {m.known && m.contextWindow != null
+                            ? ` · ${formatTokens(m.contextWindow)}`
+                            : ' · 窗口未知'}
+                        </option>
+                      ))}
+                    {modelOptions.levelItems.map(lv => (
+                      <option key={`level-${lv.levelName}`} value={lv.id}>
+                        [{lv.levelName}] → {lv.id}
+                      </option>
+                    ))}
+                  </select>
+                  {activeSessionId && sessionModel?.modelId && sessionModel.modelId !== sessionModel.defaultModelId && (
+                    <span className="small status-ok">会话覆盖</span>
+                  )}
+                </div>
+                {modelError && <div className="small status-error">{modelError}</div>}
                 <div className="small muted" style={{ marginTop: 2 }}>
-                  {`上下文: ${contextTokens !== undefined ? formatTokens(contextTokens) : '~'}${typeof contextWindow === 'number' ? ` / ${formatTokens(contextWindow)}` : ''}`}
+                  {`上下文: ${contextTokens !== undefined ? formatTokens(contextTokens) : '~'} / ${contextWindowLabel}`}
                 </div>
               </div>
               <div className="small" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                 <span className="small muted" style={{ marginRight: 8 }}>[{viewMode}]</span>
                 <span className={runStatus === 'error' ? 'status-error' : runStatus === 'streaming' ? 'status-ok' : 'status-neutral'}>{runStatus}</span>
+                <button
+                  className="btn-secondary"
+                  onClick={() => void runManualCompact()}
+                  disabled={!activeSessionId || compacting}
+                  title="结构压缩：头尾保护 + 中间摘要；不依赖 contextWindow"
+                >
+                  {compacting ? '压缩中…' : '压缩'}
+                </button>
                 <button className="btn-secondary" onClick={abort} disabled={!['streaming', 'waiting', 'tools', 'sending'].includes(runStatus)}>中止</button>
               </div>
             </div>
+            {compactMsg && (
+              <div className="small muted" style={{ marginTop: 4 }}>{compactMsg}</div>
+            )}
           </div>
 
           <div ref={scrollRef} className="conversation-scroll">
@@ -815,11 +1014,16 @@ export default function ChatWorkspace() {
               <ul style={{ margin: 0, paddingLeft: 18, fontSize: 'var(--text-sm)' }}>
                 <li>左栏负责连接、Agent、会话创建</li>
                 <li>中栏负责主聊天链路</li>
+                <li>中栏「模型」下拉可切换会话模型；新建会话时作为预选</li>
+                <li>会话级模型覆盖只影响该会话，不改动 Agent 配置默认</li>
+                <li>contextWindow 仅认配置；未配置显示「未知」，自动压缩/按窗口预算已禁用</li>
+                <li>中栏「压缩」= 手动结构压缩（头尾+摘要），不依赖 contextWindow</li>
+                <li>也可 POST /api/v1/sessions/:id/compact</li>
                 <li>右栏「上下文」：System 契约层 + Information 消息窗口（产品第 7 层）</li>
                 <li>产品七层 ≠ ContextLayer：Information 是 session，Runtime 是契约附加</li>
                 <li>Focus 模式放大右栏，便于 demo / 深度调试</li>
                 <li>右栏「任务」实时展示会话任务树</li>
-                <li>连接成功后自动刷新 Agent 和会话</li>
+                <li>连接成功后自动刷新 Agent、模型目录和会话</li>
                 <li>Enter 发送，Shift+Enter 换行</li>
                 <li>输入法组合选词阶段不会误触发送</li>
               </ul>

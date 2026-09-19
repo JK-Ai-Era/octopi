@@ -27,9 +27,11 @@ export class SessionRunnerDispatcher implements RunDispatcher {
     const runConfig: RunConfig = {
       systemPrompt: '',
       ...this.defaults,
-      // request 字段必须最后写入，防止 defaults 覆盖
       agentId: req.agentId,
       sessionId: req.sessionId,
+      // model 仅表示消息级覆盖；勿用 defaults.model 预填 agent 默认（会吞掉 session.metadata.model）
+      model: req.modelOverride,
+      modelProvider: req.modelProvider,
     };
 
     // 合批多条：按序各 handle 一次（同 session，Runner 锁保证串行）

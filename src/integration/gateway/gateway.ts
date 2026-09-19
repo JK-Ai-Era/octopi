@@ -41,6 +41,7 @@ import type { Message } from '../../core/types.js';
 import { randomUUID } from 'node:crypto';
 import { CircuitBreaker } from '../../harness/reliability/circuit-breaker.js';
 import { wrapProviderWithCircuitBreaker } from '../../harness/reliability/provider-wrapper.js';
+import { resolveModel, resolveModelRef, resolveCatalogEntry, parseModelRef } from '../../harness/model/index.js';
 import { PluginManager } from '../../harness/plugin-ecosystem/plugins/manager.js';
 
 import { DefaultEventBus } from '../../core/primitives/event-bus.js';
@@ -73,6 +74,44 @@ export interface PendingApprovalView {
   updatedAt?: number;
   decidedAt?: number;
   decisionReason?: string;
+}
+
+/** WebUI 模型目录条目（与 harness/model ModelCatalogEntry 对齐） */
+export interface ModelCatalogItem {
+  id: string;
+  provider: string;
+  model: string;
+  /** 未配置时为 null（未知，不猜测） */
+  contextWindow: number | null;
+  maxOutputTokens?: number;
+  known: boolean;
+  source: string;
+}
+
+/** Agent 默认模型摘要 */
+export interface AgentModelSummary {
+  agentId: string;
+  /** agent 配置的默认模型 id（`provider/model`） */
+  defaultModelId: string;
+}
+
+/** WebUI 模型目录 */
+export interface ModelCatalog {
+  models: ModelCatalogItem[];
+  agents: AgentModelSummary[];
+  /** models.level 分级名（mini/standard/pro 等） */
+  levels?: Record<string, { primary: string; fallback?: string[] }>;
+}
+
+/** session 模型选择结果 */
+export interface SessionModelView {
+  sessionId: string;
+  agentId: string;
+  /** 当前生效模型 id；null 表示沿用 agent 默认 */
+  modelId: string | null;
+  defaultModelId: string;
+  /** 当前生效模型的能力快照（UI 只读，禁止再猜窗口） */
+  resolved?: ModelCatalogItem;
 }
 
 // ================================================================
@@ -119,7 +158,12 @@ export class Gateway {
   /** 工具 */
   private tools: RegisteredTool[] = [];
   /** Agent 缓存（避免每条消息重建） */
-  private agentCache = new Map<string, { agent: import('../../harness/agent/index.js').Agent; runner: SessionAwareRunner; contextHealth?: (agentId?: string) => Promise<import('../../harness/context/layer-health.js').ContextLayerHealth> }>();
+  private agentCache = new Map<string, {
+    agent: import('../../harness/agent/index.js').Agent;
+    runner: SessionAwareRunner;
+    contextEngine?: import('../../harness/context/types.js').ContextEngine;
+    contextHealth?: (agentId?: string) => Promise<import('../../harness/context/layer-health.js').ContextLayerHealth>;
+  }>();
   /** 流式 adapter 引用（用于广播事件） */
   private streamingAdapters: StreamingChannelAdapter[] = [];
   /** 每个 provider 的熔断器 */
@@ -131,6 +175,8 @@ export class Gateway {
   /** 会话最近一次七层装配快照（含 content，仅 REST）；FIFO 防泄漏 */
   private lastContextLayers = new Map<string, ContextLayersSnapshot>();
   private static readonly MAX_CONTEXT_LAYERS_SESSIONS = 256;
+  /** models.level — 供 WebUI 模型目录展示分级名 */
+  private modelLevels?: Record<string, { primary: string; fallback?: string[] }>;
   /** 激活宿主（arch/agent-runtime.md）；消息路径经 dispatch */
   private runtime: AgentRuntime;
   private gatewayBus: DefaultEventBus;
@@ -183,6 +229,13 @@ export class Gateway {
     for (const agent of config.agents) {
       this.agents.set(agent.id, agent);
     }
+
+    this.modelLevels = config.levels;
+  }
+
+  /** 设置 models.level 映射（daemon 启动时注入） */
+  setModelLevels(levels: Record<string, { primary: string; fallback?: string[] }> | undefined): void {
+    this.modelLevels = levels;
   }
 
   /** 激活宿主（Schedule/Escalate 等 Source 挂载用） */
@@ -369,6 +422,346 @@ export class Gateway {
 
   getRegisteredAgents(): Array<{ id: string; model: ModelConfig }> {
     return Array.from(this.agents.entries()).map(([id, agent]) => ({ id, model: agent.model }));
+  }
+
+  /**
+   * WebUI 模型目录
+   *
+   * @returns 已注册 provider 的全部模型 + agent 默认模型 + level 映射
+   */
+  getModelCatalog(): ModelCatalog {
+    const seen = new Map<string, ModelCatalogItem>();
+    const models: ModelCatalogItem[] = [];
+
+    const push = (entry: ModelCatalogItem, opts?: { preferAgentExplicit?: boolean }) => {
+      const prev = seen.get(entry.id);
+      if (prev) {
+        // agent 默认模型的配置窗口优先（与 session model 视图一致）
+        if (opts?.preferAgentExplicit && entry.known && entry.contextWindow != null) {
+          seen.set(entry.id, entry);
+          const idx = models.findIndex(m => m.id === entry.id);
+          if (idx >= 0) models[idx] = entry;
+        }
+        return;
+      }
+      seen.set(entry.id, entry);
+      models.push(entry);
+    };
+
+    const catalogOf = (
+      providerName: string,
+      modelName: string,
+      explicit?: { contextWindow?: number; maxOutputTokens?: number },
+    ): ModelCatalogItem => {
+      const e = resolveCatalogEntry({
+        providerName,
+        modelName,
+        providers: this.providers,
+        explicit,
+      });
+      return {
+        id: e.id,
+        provider: e.provider,
+        model: e.model,
+        contextWindow: e.contextWindow,
+        maxOutputTokens: e.maxOutputTokens,
+        known: e.known,
+        source: e.source,
+      };
+    };
+
+    for (const [providerName, provider] of this.providers) {
+      // provider.models 含纯字符串模型（无能力字段）；必须入 catalog，窗口可为 null
+      const declaredNames = provider.models ?? [];
+      const names = new Set<string>([
+        ...declaredNames,
+        ...(provider.defaultModel ? [provider.defaultModel] : []),
+      ]);
+      for (const name of names) {
+        push(catalogOf(providerName, name));
+      }
+      for (const info of provider.getModelInfos()) {
+        push(catalogOf(providerName, info.name, {
+          contextWindow: info.contextWindow,
+          maxOutputTokens: info.maxOutputTokens,
+        }));
+      }
+    }
+
+    const agents: AgentModelSummary[] = [];
+    for (const [id, agent] of this.agents) {
+      const defaultModelId = `${agent.model.provider}/${agent.model.model}`;
+      // agent 配置的 explicit 窗口优先于 provider 无能力条目
+      push(catalogOf(agent.model.provider, agent.model.model, {
+        contextWindow: agent.model.contextWindow,
+        maxOutputTokens: agent.model.maxTokens,
+      }), { preferAgentExplicit: true });
+      agents.push({ agentId: id, defaultModelId });
+    }
+
+    models.sort((a, b) => a.id.localeCompare(b.id));
+    return {
+      models,
+      agents,
+      ...(this.modelLevels ? { levels: this.modelLevels } : {}),
+    };
+  }
+
+  /**
+   * 查询 session 当前模型选择
+   *
+   * @param sessionId - 会话 id
+   * @param agentId - 可选 agent 过滤
+   * @returns 模型视图；session 不存在时返回 null
+   */
+  async getSessionModel(sessionId: string, agentId?: string): Promise<SessionModelView | null> {
+    const session = agentId
+      ? await this.store.load(agentId, sessionId)
+      : await this.findSession(sessionId);
+    if (!session) return null;
+    return this.buildSessionModelView(session);
+  }
+
+  private buildSessionModelView(session: SessionData): SessionModelView {
+    const agent = this.agents.get(session.agentId);
+    const defaultModelId = agent
+      ? `${agent.model.provider}/${agent.model.model}`
+      : '';
+    const modelId = this.readSessionModelId(session.metadata);
+    const effectiveId = modelId ?? defaultModelId;
+    const resolved = effectiveId
+      ? this.catalogItemForRef(effectiveId, agent)
+      : undefined;
+    return {
+      sessionId: session.id,
+      agentId: session.agentId,
+      modelId,
+      defaultModelId,
+      resolved,
+    };
+  }
+
+  private catalogItemForRef(
+    modelRef: string,
+    agent: AgentDefinition | undefined,
+  ): ModelCatalogItem | undefined {
+    const parsed = parseModelRef(modelRef, agent?.model.provider);
+    const providerName = parsed.provider ?? agent?.model.provider;
+    if (!providerName) return undefined;
+    const isDefault = agent
+      ? modelRef === `${agent.model.provider}/${agent.model.model}`
+      || parsed.model === agent.model.model
+      : false;
+    const e = resolveCatalogEntry({
+      providerName,
+      modelName: parsed.model,
+      providers: this.providers,
+      explicit: isDefault
+        ? {
+            contextWindow: agent?.model.contextWindow,
+            maxOutputTokens: agent?.model.maxTokens,
+          }
+        : undefined,
+    });
+    return {
+      id: e.id,
+      provider: e.provider,
+      model: e.model,
+      contextWindow: e.contextWindow,
+      maxOutputTokens: e.maxOutputTokens,
+      known: e.known,
+      source: e.source,
+    };
+  }
+
+  /**
+   * 设置 session 级模型选择
+   *
+   * @param sessionId - 会话 id
+   * @param modelRef - `provider/model`、裸模型名或 null（恢复 agent 默认）
+   * @param agentId - 可选 agent
+   * @returns 更新后的模型视图
+   */
+  async setSessionModel(
+    sessionId: string,
+    modelRef: string | null,
+    agentId?: string,
+  ): Promise<SessionModelView> {
+    const session = agentId
+      ? await this.store.load(agentId, sessionId)
+      : await this.findSession(sessionId);
+    if (!session) {
+      throw new Error(`Session "${sessionId}" not found`);
+    }
+
+    const agent = this.agents.get(session.agentId);
+    const defaultProvider = agent?.model.provider;
+    const defaultModelId = agent
+      ? `${agent.model.provider}/${agent.model.model}`
+      : '';
+
+    if (modelRef === null || modelRef === '') {
+      delete session.metadata.model;
+    } else {
+      const parsed = parseModelRef(modelRef, defaultProvider);
+      const providerName = parsed.provider ?? defaultProvider;
+      if (!providerName) {
+        throw new Error(`Cannot resolve provider for model "${modelRef}"`);
+      }
+      const provider = this.providers.get(providerName);
+      if (!provider) {
+        throw new Error(`LLM provider "${providerName}" not found`);
+      }
+      // 规范化存储为 provider/model
+      session.metadata.model = {
+        provider: providerName,
+        model: parsed.model,
+      };
+    }
+
+    session.meta.updatedAt = Date.now();
+    await this.store.save(session.agentId, session.id, session);
+
+    return this.buildSessionModelView(session);
+  }
+
+  private readSessionModelId(metadata: Record<string, unknown> | undefined): string | null {
+    const raw = metadata?.model;
+    if (typeof raw === 'string' && raw.trim()) return raw.trim();
+    if (raw && typeof raw === 'object') {
+      const obj = raw as { provider?: unknown; model?: unknown };
+      if (typeof obj.model === 'string' && obj.model) {
+        return typeof obj.provider === 'string' && obj.provider
+          ? `${obj.provider}/${obj.model}`
+          : obj.model;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * 手动结构压缩（不依赖 contextWindow）
+   *
+   * 加载 session 全量消息 → ContextEngine.compactStructural →
+   * 写入引擎 previousSummary（下一轮 assemble 使用 head+summary+tail 视图）。
+   * 全量 messages 仍保留在 session store。
+   *
+   * @param sessionId - 会话 id
+   * @param agentId - 可选 agent（避免全 agent 扫描）
+   * @returns 压缩结果
+   */
+  async compactSession(
+    sessionId: string,
+    agentId?: string,
+  ): Promise<{
+    ok: boolean;
+    compacted: boolean;
+    reason?: string;
+    tokensBefore: number;
+    tokensAfter?: number;
+    summary?: string;
+  }> {
+    const session = agentId
+      ? await this.store.load(agentId, sessionId)
+      : await this.findSession(sessionId);
+    if (!session) {
+      throw new Error(`Session "${sessionId}" not found`);
+    }
+    // 与进行中 run 交错会互相覆盖 session.messages / contextCompact
+    if (session.meta.status === 'processing') {
+      return {
+        ok: false,
+        compacted: false,
+        reason: 'session busy (run in progress); try again after idle',
+        tokensBefore: 0,
+      };
+    }
+
+    // 确保 agent 已 build（拿 contextEngine + provider 供 summarize）
+    let cached = this.agentCache.get(session.agentId);
+    if (!cached) {
+      const def = this.agents.get(session.agentId);
+      if (!def) {
+        throw new Error(`Agent "${session.agentId}" not found`);
+      }
+      cached = await this.buildAgent(def);
+      this.agentCache.set(session.agentId, cached);
+    }
+
+    const engine = cached.contextEngine;
+    type StructuralEngine = {
+      compactStructural?: (input: {
+        sessionId: string;
+        messages: import('../../core/types.js').Message[];
+        summarize?: (messages: import('../../core/interfaces/model-provider.js').LLMMessage[], opts?: { maxTokens?: number }) => Promise<string>;
+        compactTargetTokens?: number;
+      }) => Promise<{
+        ok: boolean;
+        compacted: boolean;
+        reason?: string;
+        tokensBefore: number;
+        tokensAfter?: number;
+        summary?: string;
+      }>;
+    };
+    const structural = engine as StructuralEngine | undefined;
+
+    if (!structural?.compactStructural) {
+      return {
+        ok: false,
+        compacted: false,
+        reason: 'context engine does not support structural compact',
+        tokensBefore: 0,
+      };
+    }
+
+    const agentDef = this.agents.get(session.agentId);
+    const modelRef = this.readSessionModelId(session.metadata);
+    const { createProviderSummarize } = await import('../../harness/context/summarize.js');
+    const { resolveModelRef } = await import('../../harness/model/index.js');
+    type SummarizeFn = (messages: import('../../core/interfaces/model-provider.js').LLMMessage[], opts?: { maxTokens?: number }) => Promise<string>;
+
+    let summarize: SummarizeFn | undefined;
+    const bound = modelRef
+      ? resolveModelRef(modelRef, {
+          providers: this.providers,
+          defaultProvider: agentDef?.model.provider,
+          isOverride: true,
+        })
+      : agentDef
+        ? resolveModelRef(`${agentDef.model.provider}/${agentDef.model.model}`, {
+            providers: this.providers,
+            isOverride: false,
+          })
+        : null;
+    if (bound) {
+      summarize = createProviderSummarize(bound.provider);
+    }
+
+    const compactTargetTokens =
+      this.config.context?.contextAssembler?.compactTargetTokens;
+
+    const result = await structural.compactStructural({
+      sessionId: session.id,
+      messages: session.messages,
+      summarize,
+      compactTargetTokens,
+    });
+
+    // 持久化压缩快照：重启 / agentCache 重建后 loadCompactState 可恢复
+    if (result.ok && result.summary) {
+      const snap = {
+        summary: result.summary,
+        lastProactiveMessageCount: session.messages.length,
+        lastProactiveTokens: result.tokensAfter,
+      };
+      cached.agent.setSessionCompactState(session.id, snap);
+      session.contextCompact = snap;
+      session.meta.updatedAt = Date.now();
+      await this.store.save(session.agentId, session.id, session);
+    }
+
+    return result;
   }
 
   getProviderSummaries(): Array<{ name: string; circuitBreaker: { state: string; failureCount: number } }> {
@@ -704,9 +1097,10 @@ export class Gateway {
       agentId: agent.id,
       dispatcher: new SessionRunnerDispatcher({
         runner,
+        // 不要把 agent 默认 model 写入 defaults：
+        // RunConfig.model 只表示**消息级**覆盖；会话覆盖在 session.metadata.model
         runConfigDefaults: {
           agentId: agent.id,
-          model: agent.model.model,
           contextWindow,
           systemPrompt: runSystemPrompt,
         },
@@ -721,17 +1115,29 @@ export class Gateway {
   private async buildAgent(agent: AgentDefinition): Promise<{
     agent: import('../../harness/agent/index.js').Agent;
     runner: SessionAwareRunner;
+    contextEngine?: import('../../harness/context/types.js').ContextEngine;
     contextHealth?: (agentId?: string) => Promise<import('../../harness/context/layer-health.js').ContextLayerHealth>;
   }> {
-    // 获取主 provider
-    const modelProvider = this.providers.get(agent.model.provider);
-    if (!modelProvider) {
+    // 获取主 provider，并解析 agent 默认模型快照（含熔断包装）
+    const rawProvider = this.providers.get(agent.model.provider);
+    if (!rawProvider) {
       throw new Error(`LLM provider "${agent.model.provider}" not found.`);
     }
-
-    // 获取熔断器
-    const cb = this.getCircuitBreaker(agent.model.provider);
-    const wrappedProvider = wrapProviderWithCircuitBreaker(modelProvider, cb);
+    const defaultSnapshot = resolveModel({
+      providerName: agent.model.provider,
+      modelName: agent.model.model,
+      providers: this.providers,
+      explicit: {
+        contextWindow: agent.model.contextWindow,
+        maxOutputTokens: agent.model.maxTokens,
+      },
+      isOverride: false,
+      wrapProvider: (p, name) => wrapProviderWithCircuitBreaker(p, this.getCircuitBreaker(name)),
+    });
+    if (!defaultSnapshot) {
+      throw new Error(`LLM provider "${agent.model.provider}" not found.`);
+    }
+    const wrappedProvider: ModelProvider = defaultSnapshot.provider;
 
     // 如果配置了 fallbackModels，构建 FallbackProvider（回退 provider 也包装 circuit breaker）
     let finalProvider: import('../../core/interfaces/model-provider.js').ModelProvider = wrappedProvider;
@@ -872,6 +1278,34 @@ export class Gateway {
         (hasMemoryTools ? ' [memory_store/search OK]' : ' [memory_store/search MISSING]'),
     );
 
+    // ── Run 级模型快照解析（方案 B 唯一入口）──
+    // 每 run 调一次；provider 缺失返回 null，Runner 回退 Agent 实例默认
+    const wrap = (p: ModelProvider, providerName: string) =>
+      wrapProviderWithCircuitBreaker(p, this.getCircuitBreaker(providerName));
+
+    built.runner.setModelResolver(({ modelRef, defaultProvider }) => {
+      const agentDef = this.agents.get(agent.id) ?? agent;
+      if (!modelRef) {
+        return resolveModel({
+          providerName: agentDef.model.provider,
+          modelName: agentDef.model.model,
+          providers: this.providers,
+          explicit: {
+            contextWindow: agentDef.model.contextWindow,
+            maxOutputTokens: agentDef.model.maxTokens,
+          },
+          isOverride: false,
+          wrapProvider: wrap,
+        });
+      }
+      return resolveModelRef(modelRef, {
+        providers: this.providers,
+        defaultProvider: defaultProvider ?? agentDef.model.provider,
+        isOverride: true,
+        wrapProvider: wrap,
+      });
+    });
+
     // 会话任务事件 → WebSocket（UI 只读实时面板）
     const forwardTaskEvent = (event: { sessionId?: string; type: string; data?: unknown }) => {
       if (!event.sessionId) return;
@@ -883,7 +1317,7 @@ export class Gateway {
       built.events.on(type, forwardTaskEvent);
     }
 
-    return { agent: built.agent, runner: built.runner, contextHealth: built.contextHealth };
+    return { agent: built.agent, runner: built.runner, contextEngine: built.contextEngine, contextHealth: built.contextHealth };
   }
 
   private resolveAgent(msg: ChannelMessage): AgentDefinition | undefined {

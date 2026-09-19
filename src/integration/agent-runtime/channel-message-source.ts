@@ -23,6 +23,7 @@ export function channelMessageToTrigger(
   agentId: string,
   sessionId: string,
 ): Trigger {
+  const modelOverride = msg.metadata?.model;
   return {
     id: `trg-${randomUUID().slice(0, 12)}`,
     type: 'message',
@@ -43,6 +44,14 @@ export function channelMessageToTrigger(
     metadata: {
       source: `channel:${msg.channel}`,
       reason: 'channel_message',
+      ...(modelOverride
+        ? {
+            modelOverride: String(modelOverride),
+            ...(msg.metadata?.modelProvider
+              ? { modelProvider: String(msg.metadata.modelProvider) }
+              : {}),
+          }
+        : {}),
     },
   };
 }

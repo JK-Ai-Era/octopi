@@ -52,4 +52,6 @@ export interface GatewayConfig {
   embedding?: import('../../config.js').EmbeddingModelConfig;
   /** models.providers — 供 embedding 继承 baseUrl/apiKey */
   modelProviders?: Record<string, import('../../config.js').ModelProviderConfig>;
+  /** models.level — 模型分级名（WebUI 模型目录） */
+  levels?: Record<string, { primary: string; fallback?: string[] }>;
 }

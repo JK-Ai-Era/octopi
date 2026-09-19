@@ -24,7 +24,8 @@ const STATUS_META: Record<LayerRuntimeViewDto['status'], { label: string; cls: s
 };
 
 function formatTokens(n: number | undefined | null): string {
-  const value = typeof n === 'number' && Number.isFinite(n) ? n : 0;
+  if (n == null || typeof n !== 'number' || !Number.isFinite(n)) return '未知';
+  const value = n;
   if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}m`;
   if (value >= 1_000) return `${(value / 1_000).toFixed(1)}k`;
   return String(value);

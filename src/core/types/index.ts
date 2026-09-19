@@ -23,6 +23,7 @@ export type {
   ModelInfo,
   ToolPolicy,
 } from './agent-definition.js';
+export { DEFAULT_CONTEXT_WINDOW } from './model-info.js';
 
 // ── Session ──
 export type { SessionStatus, SessionMeta } from './session.js';

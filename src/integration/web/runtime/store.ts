@@ -18,8 +18,10 @@ import type {
   AgentEventEnvelope,
   AgentSummary,
   ConnectionState,
+  ModelCatalog,
   OctopiClient,
   PendingApproval,
+  SessionModelView,
   SessionSummary,
   SessionTaskView,
   SessionView,
@@ -71,6 +73,8 @@ export interface RuntimeEventMap {
   'tasks': TasksEvent;
   'error': RuntimeErrorEvent;
   'runStatus': RunStatusEvent;
+  'models': ModelsEvent;
+  'sessionModel': SessionModelEvent;
 }
 
 export class RuntimeEvent<T = unknown> extends Event {
@@ -94,6 +98,8 @@ export class InspectorEvent extends RuntimeEvent<{ inspector: InspectorState }> 
 export class TasksEvent extends RuntimeEvent<{ tasks: SessionTaskView[] }> {}
 export class RuntimeErrorEvent extends RuntimeEvent<{ error: string }> {}
 export class RunStatusEvent extends RuntimeEvent<{ status: RunStatus }> {}
+export class ModelsEvent extends RuntimeEvent<{ catalog: ModelCatalog }> {}
+export class SessionModelEvent extends RuntimeEvent<{ sessionModel: SessionModelView | null }> {}
 
 // ──────────────────────────────────────
 // State types
@@ -181,6 +187,8 @@ export class OctopiRuntimeStore extends EventTarget {
   private sessions: SessionSummary[] = [];
   private currentSession: SessionView | null = null;
   private chat: ChatState = this.createEmptyChat();
+  private modelCatalog: ModelCatalog = { models: [], agents: [] };
+  private sessionModel: SessionModelView | null = null;
   /** 本轮 run 是否仍活跃；用于忽略终态之后迟到的 state=running */
   private engineActive = false;
 
@@ -207,6 +215,8 @@ export class OctopiRuntimeStore extends EventTarget {
     sessions: SessionSummary[];
     currentSession: SessionView | null;
     chat: ChatState;
+    modelCatalog: ModelCatalog;
+    sessionModel: SessionModelView | null;
   } {
     return {
       connection: this.connectionState,
@@ -214,12 +224,24 @@ export class OctopiRuntimeStore extends EventTarget {
       sessions: this.sessions,
       currentSession: this.currentSession,
       chat: this.chat,
+      modelCatalog: this.modelCatalog,
+      sessionModel: this.sessionModel,
     };
   }
 
   /** 当前会话任务列表 */
   getTasks(): SessionTaskView[] {
     return this.chat.tasks;
+  }
+
+  /** 模型目录 */
+  getModelCatalog(): ModelCatalog {
+    return this.modelCatalog;
+  }
+
+  /** 当前会话模型选择 */
+  getSessionModel(): SessionModelView | null {
+    return this.sessionModel;
   }
 
   // ──────────────────────────────────
@@ -243,7 +265,62 @@ export class OctopiRuntimeStore extends EventTarget {
   async refreshAgents(): Promise<AgentSummary[]> {
     this.agents = await this.client.getAgents();
     this.dispatch('connection', new ConnectionEvent('connection', { state: this.connectionState, agents: this.agents }));
+    // 模型目录与 agent 列表同源刷新，UI 一次拿到默认模型映射
+    try {
+      this.modelCatalog = await this.client.getModels();
+      this.dispatch('models', new ModelsEvent('models', { catalog: this.modelCatalog }));
+    } catch {
+      // 目录拉取失败不阻断 agent 刷新；UI 退回 agent.model 静态展示
+    }
     return this.agents;
+  }
+
+  /**
+   * 刷新当前会话的模型选择
+   */
+  async refreshSessionModel(): Promise<SessionModelView | null> {
+    const sessionId = this.chat.sessionId;
+    if (!sessionId) {
+      this.sessionModel = null;
+      this.dispatch('sessionModel', new SessionModelEvent('sessionModel', { sessionModel: null }));
+      return null;
+    }
+    try {
+      this.sessionModel = await this.client.getSessionModel(sessionId, this.chat.agentId);
+    } catch {
+      this.sessionModel = null;
+    }
+    this.dispatch('sessionModel', new SessionModelEvent('sessionModel', { sessionModel: this.sessionModel }));
+    return this.sessionModel;
+  }
+
+  /**
+   * 设置会话模型（null = 恢复 agent 默认）
+   *
+   * @param modelRef - `provider/model` 或 null
+   */
+  async setSessionModel(modelRef: string | null): Promise<SessionModelView | null> {
+    const sessionId = this.chat.sessionId;
+    if (!sessionId) throw new Error('No active session');
+    this.sessionModel = await this.client.setSessionModel(sessionId, modelRef, this.chat.agentId);
+    this.dispatch('sessionModel', new SessionModelEvent('sessionModel', { sessionModel: this.sessionModel }));
+    return this.sessionModel;
+  }
+
+  /**
+   * 手动结构压缩（不依赖 contextWindow）
+   */
+  async compactSession(): Promise<{
+    ok: boolean;
+    compacted: boolean;
+    reason?: string;
+    tokensBefore: number;
+    tokensAfter?: number;
+    summary?: string;
+  }> {
+    const sessionId = this.chat.sessionId;
+    if (!sessionId) throw new Error('No active session');
+    return this.client.compactSession(sessionId, this.chat.agentId);
   }
 
   /**
@@ -479,11 +556,12 @@ export class OctopiRuntimeStore extends EventTarget {
     this.dispatch('approval', new ApprovalEvent('approval', { approvals: this.chat.approvals }));
     this.dispatch('inspector', new InspectorEvent('inspector', { inspector: this.chat.inspector }));
     this.dispatch('tasks', new TasksEvent('tasks', { tasks: this.chat.tasks }));
+    void this.refreshSessionModel();
 
     return view;
   }
 
-  async createSession(agentId: string, options?: { sessionId?: string; metadata?: Record<string, unknown> }): Promise<SessionSummary> {
+  async createSession(agentId: string, options?: { sessionId?: string; metadata?: Record<string, unknown>; model?: string }): Promise<SessionSummary> {
     // 离开当前会话前先缓存，避免丢掉进行中的工具/流式状态
     this.cacheCurrentSession();
 
@@ -522,6 +600,7 @@ export class OctopiRuntimeStore extends EventTarget {
 
     this.client.sendSubscribe(session.id, session.agentId);
     await this.refreshSessions();
+    void this.refreshSessionModel();
 
     this.dispatch('session', new SessionEvent('session', { session: this.currentSession }));
     this.dispatch('chat', new ChatEvent('chat', { conversation: this.chat.conversation }));
@@ -537,7 +616,7 @@ export class OctopiRuntimeStore extends EventTarget {
     return session;
   }
 
-  async sendMessage(content: string): Promise<void> {
+  async sendMessage(content: string, options?: { model?: string }): Promise<void> {
     if (!this.chat.sessionId || !this.chat.agentId) {
       throw new Error('No active session');
     }
@@ -554,7 +633,10 @@ export class OctopiRuntimeStore extends EventTarget {
     this.dispatch('conversation', new ConversationEvent('conversation', { items: this.chat.conversation }));
     this.dispatch('stream', new StreamEvent('stream', { streaming: false, content: '' }));
 
-    this.client.sendChat(this.chat.sessionId, this.chat.agentId, content);
+    // 消息级模型：显式传入 > 会话选择 > 不覆盖（agent 默认）
+    const runModel = options?.model
+      ?? (typeof this.sessionModel?.modelId === 'string' ? this.sessionModel.modelId : undefined);
+    this.client.sendChat(this.chat.sessionId, this.chat.agentId, content, runModel ? { model: runModel } : undefined);
     this.setRunStatus('waiting');
   }
 
@@ -826,13 +908,16 @@ export class OctopiRuntimeStore extends EventTarget {
         break;
       }
       case 'turn.end': {
-        const contextTokens = typeof event.data?.contextTokens === 'number' ? event.data.contextTokens : undefined;
-        const contextWindow = typeof event.data?.contextWindow === 'number' ? event.data.contextWindow : undefined;
-        if (contextTokens !== undefined || contextWindow !== undefined) {
+        const data = (event.data ?? {}) as Record<string, unknown>;
+        const contextTokens = typeof data.contextTokens === 'number' ? data.contextTokens : undefined;
+        const hasWindowKey = 'contextWindow' in data;
+        const contextWindow = typeof data.contextWindow === 'number' ? data.contextWindow : undefined;
+        if (contextTokens !== undefined || hasWindowKey) {
           this.chat.inspector = {
             ...this.chat.inspector,
             ...(contextTokens !== undefined ? { contextTokens } : {}),
-            ...(contextWindow !== undefined ? { contextWindow } : {}),
+            // 未知窗口时清掉上一模型的旧值，避免 UI 显示假预算
+            ...(hasWindowKey ? { contextWindow } : {}),
           };
           inspectorChanged = true;
         }

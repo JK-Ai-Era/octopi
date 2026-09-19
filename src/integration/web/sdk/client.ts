@@ -37,6 +37,37 @@ export interface AgentSummary {
   };
 }
 
+export interface ModelCatalogItem {
+  id: string;
+  provider: string;
+  model: string;
+  /** 未配置时为 null */
+  contextWindow: number | null;
+  maxOutputTokens?: number;
+  known: boolean;
+  source: string;
+}
+
+export interface AgentModelSummary {
+  agentId: string;
+  defaultModelId: string;
+}
+
+export interface ModelCatalog {
+  models: ModelCatalogItem[];
+  agents: AgentModelSummary[];
+  levels?: Record<string, { primary: string; fallback?: string[] }>;
+}
+
+export interface SessionModelView {
+  sessionId: string;
+  agentId: string;
+  modelId: string | null;
+  defaultModelId: string;
+  /** 当前生效模型能力快照（引擎同源） */
+  resolved?: ModelCatalogItem;
+}
+
 export interface ProviderSummary {
   name: string;
   circuitBreaker: {
@@ -291,6 +322,55 @@ export class OctopiClient {
     return (data?.data as AgentSummary[]) ?? [];
   }
 
+  /**
+   * 模型目录（provider 全量模型 + agent 默认 + levels）
+   */
+  async getModels(): Promise<ModelCatalog> {
+    const data = await this.getJson('/models');
+    return (data?.data as ModelCatalog) ?? { models: [], agents: [] };
+  }
+
+  /**
+   * 查询 session 当前模型
+   */
+  async getSessionModel(sessionId: string, agentId?: string): Promise<SessionModelView | null> {
+    const qs = agentId ? `?agentId=${encodeURIComponent(agentId)}` : '';
+    const data = await this.getJson(`/sessions/${encodeURIComponent(sessionId)}/model${qs}`);
+    return (data?.data as SessionModelView | null | undefined) ?? null;
+  }
+
+  /**
+   * 设置 session 模型（null = 恢复 agent 默认）
+   */
+  async setSessionModel(
+    sessionId: string,
+    model: string | null,
+    agentId?: string,
+  ): Promise<SessionModelView> {
+    const data = await this.postJson(`/sessions/${encodeURIComponent(sessionId)}/model`, {
+      model,
+      ...(agentId ? { agentId } : {}),
+    });
+    return data?.data as SessionModelView;
+  }
+
+  /**
+   * 手动结构压缩（不依赖 contextWindow）
+   */
+  async compactSession(sessionId: string, agentId?: string): Promise<{
+    ok: boolean;
+    compacted: boolean;
+    reason?: string;
+    tokensBefore: number;
+    tokensAfter?: number;
+    summary?: string;
+  }> {
+    const data = await this.postJson(`/sessions/${encodeURIComponent(sessionId)}/compact`, {
+      ...(agentId ? { agentId } : {}),
+    });
+    return data?.data;
+  }
+
   async getProviders(): Promise<ProviderSummary[]> {
     const data = await this.getJson('/providers');
     return (data?.data as ProviderSummary[]) ?? [];
@@ -307,7 +387,13 @@ export class OctopiClient {
     }));
   }
 
-  async createSession(options: { agentId: string; sessionId?: string; metadata?: Record<string, unknown> }): Promise<SessionSummary> {
+  async createSession(options: {
+    agentId: string;
+    sessionId?: string;
+    metadata?: Record<string, unknown>;
+    /** 会话级模型（`provider/model` 或裸名）；写入 session.metadata.model */
+    model?: string;
+  }): Promise<SessionSummary> {
     const data = await this.postJson('/sessions', options);
     return data?.data as SessionSummary;
   }
@@ -429,13 +515,19 @@ export class OctopiClient {
     }
   }
 
-  sendChat(sessionId: string, agentId: string, content: string): void {
+  sendChat(
+    sessionId: string,
+    agentId: string,
+    content: string,
+    options?: { model?: string },
+  ): void {
     this.send({
       type: 'chat',
       sessionId,
       agentId,
       content,
       senderId: 'web-ui',
+      ...(options?.model ? { metadata: { model: options.model } } : {}),
     });
   }
 

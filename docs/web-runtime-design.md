@@ -208,10 +208,13 @@ Web Protocol SDK 不带 UI 观点，只负责协议与连接生命周期。
 - `GET /api/v1/health`
 - `GET /api/v1/agents`
 - `GET /api/v1/providers`
+- `GET /api/v1/models`
 - `GET /api/v1/sessions`
 - `POST /api/v1/sessions`
 - `GET /api/v1/sessions/:id`
 - `GET /api/v1/sessions/:id/messages`
+- `GET|POST /api/v1/sessions/:id/model`
+- `POST /api/v1/sessions/:id/compact`
 - `POST /api/v1/sessions/:id/abort`
 - `GET /api/v1/approvals`
 - `POST /api/v1/approvals/:id`
@@ -305,6 +308,8 @@ POST /api/v1/sessions
   agentId: string;
   sessionId?: string;
   metadata?: Record<string, unknown>;
+  /** 可选：会话级模型（provider/model 或裸名）；创建后经 setSessionModel 校验规范化 */
+  model?: string;
 }
 
 GET /api/v1/sessions?agentId=...
@@ -318,6 +323,57 @@ interface SessionView {
   createdAt: number;
   lastInteractionAt: number;
   updatedAt: number;
+}
+```
+
+#### Models / Session model
+
+```ts
+GET /api/v1/models
+
+interface ModelCatalog {
+  models: Array<{
+    id: string;              // provider/model
+    provider: string;
+    model: string;
+    /** 未配置能力时为 null（未知，不猜测） */
+    contextWindow: number | null;
+    maxOutputTokens?: number;
+    known: boolean;
+    source: string;          // 'config' | 'unknown'
+  }>;
+  agents: Array<{ agentId: string; defaultModelId: string }>;
+  levels?: Record<string, { primary: string; fallback?: string[] }>;
+}
+
+GET /api/v1/sessions/:id/model?agentId=...
+
+POST /api/v1/sessions/:id/model
+{ model: string | null, agentId?: string }   // null = 恢复 agent 默认
+
+interface SessionModelView {
+  sessionId: string;
+  agentId: string;
+  modelId: string | null;
+  defaultModelId: string;
+  resolved?: ModelCatalogItem;               // 当前生效能力快照
+}
+```
+
+#### Compact（手动结构压缩）
+
+```ts
+POST /api/v1/sessions/:id/compact
+{ agentId?: string }
+
+// contextWindow 未知时仍可用；session busy（run 中）返回 compacted=false
+interface CompactResult {
+  ok: boolean;
+  compacted: boolean;
+  reason?: string;
+  tokensBefore: number;
+  tokensAfter?: number;
+  summary?: string;
 }
 ```
 

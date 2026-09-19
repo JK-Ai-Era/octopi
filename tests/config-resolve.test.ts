@@ -116,7 +116,8 @@ describe('resolveModelConfig', () => {
 
     expect(result.provider).toBe('custom');
     expect(result.model).toBe('my-model');
-    expect(result.contextWindow).toBe(200000);
+    // 未配置 defaults.contextWindow 时不自动填 200k
+    expect(result.contextWindow).toBeUndefined();
   });
 
   it('should throw for unresolvable string reference', () => {
@@ -124,10 +125,11 @@ describe('resolveModelConfig', () => {
       .toThrow('Cannot resolve model "nonexistent"');
   });
 
-  it('should use default contextWindow of 200000 when not specified', () => {
+  it('未配置 defaults.contextWindow 时 contextWindow 为 undefined（不猜 200k）', () => {
     const result = resolveModelConfig('custom/model', flatModels);
 
-    expect(result.contextWindow).toBe(200000);
+    // 未知窗口：不猜测 200k
+    expect(result.contextWindow).toBeUndefined();
   });
 });
 

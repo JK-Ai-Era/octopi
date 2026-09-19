@@ -66,21 +66,22 @@ export class DefaultBudgetAllocator implements BudgetAllocator {
   allocate(params: BudgetAllocateParams): BudgetAllocateResult {
     const { tokenBudget, contextWindow, systemPromptTokens, toolTokens } = params;
 
-    // 确定有效上限：取 tokenBudget 和 contextWindow 的较小值
+    // 窗口/预算均未知：返回宽松预算（仅用于有 target 时的 assemble 路径；
+    // DefaultContextEngine 在完全未知时不会走 allocate）
+    if (tokenBudget == null && contextWindow == null) {
+      return {
+        messagesBudget: Number.MAX_SAFE_INTEGER,
+        outputReserve: 0,
+      };
+    }
+
     const effectiveLimit = contextWindow
-      ? Math.min(tokenBudget, contextWindow)
-      : tokenBudget;
+      ? Math.min(tokenBudget ?? contextWindow, contextWindow)
+      : (tokenBudget as number);
 
-    // 计算固定开销
     const fixedOverhead = systemPromptTokens + toolTokens + this.systemOverhead;
-
-    // 计算输出预留
     const outputReserve = this.calculateOutputReserve(effectiveLimit);
-
-    // 计算消息可用预算
     const messagesBudget = effectiveLimit - fixedOverhead - outputReserve;
-
-    // 确保消息预算至少为 1000 token
     const safeMessagesBudget = Math.max(1000, messagesBudget);
 
     return {

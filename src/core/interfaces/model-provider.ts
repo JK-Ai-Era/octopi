@@ -112,6 +112,9 @@ export interface ModelProvider {
    */
   readonly defaultModel?: string;
 
+  /** 配置中声明的模型名列表（含无能力字段的纯字符串模型） */
+  readonly models?: readonly string[];
+
   /** 同步调用 */
   chat(request: LLMRequest): Promise<LLMResponse>;
 

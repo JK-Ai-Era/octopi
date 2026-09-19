@@ -609,6 +609,61 @@ Session save：全量 messages + contextCompact 快照
 | `ContextLayer` / `ContextAssembler` | `harness/context/layer-types.ts` | DefaultContextAssembler + layers |
 | `Planner` / `Reflector` | `harness/orchestration/cognitive-loop.ts` | Rule/LLM/Hybrid |
 
+### 模型解析收口（ResolvedModel）
+
+**约定**：每个 run / catalog 条目只解析一次模型能力，下游只读快照。
+
+| 模块 | 职责 |
+|------|------|
+| `harness/model/resolver.ts` | `resolveModel` / `resolveCatalogEntry` — **唯一**绑定 + 能力策略 |
+| `harness/model/run-scope.ts` | ALS 只传 `ResolvedModel` |
+| `harness/model/types.ts` | `ResolvedModel.contextWindow?` / `known` / `source` |
+| `core/types/model-info.ts` | `DEFAULT_CONTEXT_WINDOW`（**仅配置层历史常量**；引擎不作运行时预算回退） |
+
+**contextWindow 语义（未知不猜测）**：
+
+- **仅显式配置**算 known：`models.providers[].models[].contextWindow`、agent.model 写死的值、用户配置的 `defaults.contextWindow`
+- Provider **不**自动合并 builtin 表；resolver **不**用 builtin/200k 作预算
+- 未配置 → `contextWindow: undefined` / REST `null`，UI 显示「未知」
+
+**未知时 vs 已配置**：
+
+| 功能 | 窗口已配置 | 窗口未知 |
+|------|------------|----------|
+| LLM 调用 | ✓ | ✓ |
+| 自动/proactive 压缩 | ✓ | **跳过** |
+| assemble 按 token 截消息 | ✓ | **跳过** |
+| 七层 system 窗口比例预算 | ✓ | 不按窗口硬裁；可选 `contextAssembler.systemBudgetTokens` |
+| 手动/force **结构压缩** | ✓ | ✓（头尾+摘要；`POST /sessions/:id/compact`） |
+| `compactTargetTokens` | 可选 | 显式目标，非猜测 |
+
+**模型引用优先级**：
+
+```text
+消息级 RunConfig.model（仅显式 metadata.model）
+  > session.metadata.model（会话覆盖）
+  > undefined → Resolver 解析 agent 默认（isOverride=false）
+```
+
+**不要**把 agent 默认模型写入 `runConfigDefaults.model`（会吞掉会话覆盖）。
+
+**数据流**：
+
+```text
+config → Gateway.setModelResolver → Runner（每 run 一次，且在 system assembler 之前）
+  → ResolvedModel
+    ├─ Agent.run({ resolvedModel }) → ALS
+    ├─ convertToLlm / summarize：只读 snapshot.contextWindow（可 undefined）
+    ├─ system assembler：resolved 后的 contextWindow
+    └─ REST /models、sessions/:id/model、compact：同源 known/source
+```
+
+WebUI **不做**预算策略，只渲染 `known` / `source` / `contextWindow`。
+
+`harness/reliability/model-binding.ts` 与 `run-model-context.ts` 为兼容 re-export，新代码请 import `harness/model`。
+
+> 并发注意：同 Agent 多 Session 抢占共享 `agent.context.messages` 属独立架构债，见 `arch/open-problems.md` **OP-AR-3**（内部文档；`docs/KNOWN-ISSUES.md` 有摘要）。
+
 ---
 
 ## 7. AgentBuilder — Fluent API

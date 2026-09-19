@@ -97,7 +97,7 @@ describe('DefaultContextEngine emit', () => {
 });
 
 describe('Builder → EventBus 桥接', () => {
-  it('convertToLlm 压缩时 EventBus 收到 context.compact.*', async () => {
+  it('convertToLlm 压缩时 EventBus 收到 context.compact.*（读 ALS snapshot 窗口）', async () => {
     const provider = mockProvider();
     const builder = new AgentBuilder().model(provider).summarize(summarize);
     const { agent, events } = await builder.build();
@@ -110,7 +110,24 @@ describe('Builder → EventBus 桥接', () => {
       msgs.push(userMsg('y'.repeat(500)));
     }
     agent.setContextSessionId('sess-bridge');
-    await agent.config.convertToLlm!(msgs);
+
+    // convertToLlm 只读 run snapshot.contextWindow（禁止二次 getModelInfo）
+    const { withResolvedModel } = await import('../../src/harness/model/run-scope.js');
+    async function* probe() {
+      yield await agent.config.convertToLlm!(msgs);
+    }
+    for await (const _ of withResolvedModel({
+      ref: 'mock/m',
+      providerName: 'mock',
+      modelName: 'm',
+      provider,
+      contextWindow: 4000,
+      source: 'config',
+      known: true,
+      isOverride: false,
+    }, probe())) {
+      // drain
+    }
 
     const compact = busEvents.filter((e) => e.type.startsWith('context.compact.'));
     expect(compact.length).toBeGreaterThan(0);

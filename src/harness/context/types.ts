@@ -90,10 +90,18 @@ export interface AssembleParams {
   systemPrompt: string;
   /** 可用工具定义 */
   tools: LLMToolDefinition[];
-  /** Token 预算（可用空间） */
-  tokenBudget: number;
-  /** 模型上下文窗口大小（来自 ModelInfo） */
+  /**
+   * Token 预算（可用空间）。
+   * 未配置 contextWindow 时应省略：跳过基于窗口的自动压缩与预算截断。
+   */
+  tokenBudget?: number;
+  /** 模型上下文窗口（仅显式配置时传入） */
   contextWindow?: number;
+  /**
+   * 显式压缩目标 token（context.compactTargetTokens）。
+   * 与 contextWindow 无关；未知窗口时仍可作手动/结构压缩的目标。
+   */
+  compactTargetTokens?: number;
   /** 中止信号 */
   signal?: AbortSignal;
   /** Token 估算器（可选，未提供时使用默认实现） */
@@ -181,12 +189,20 @@ export interface IngestParams {
 
 export interface CompactParams {
   sessionId: string;
-  /** Token 预算 */
-  tokenBudget: number;
-  /** 是否强制压缩 */
+  /**
+   * Token 预算；未知 contextWindow 时可省略。
+   * 无预算且未 force 时跳过自动门槛判断；force 走结构压缩。
+   */
+  tokenBudget?: number;
+  /** 显式压缩目标（配置 context.compactTargetTokens） */
+  compactTargetTokens?: number;
+  /** 是否强制压缩（手动 / overflow 兜底）；force 不依赖 contextWindow */
   force?: boolean;
   /** 当前 token 数（可选，避免重复计算） */
   currentTokenCount?: number;
+  /** 结构压缩用的头尾保护条数；未传用引擎配置 */
+  protectFirstN?: number;
+  protectLastN?: number;
 }
 
 // ── 压缩结果 ──
@@ -257,6 +273,17 @@ export interface ContextEngine {
   compact?(params: CompactParams): Promise<CompactResult>;
 
   /**
+   * 结构压缩（手动 / overflow）— 不依赖 contextWindow
+   * 头尾保护 + 中间段摘要
+   */
+  compactStructural?(input: {
+    sessionId: string;
+    messages: Message[];
+    summarize?: SummarizeFunction;
+    compactTargetTokens?: number;
+  }): Promise<CompactResult>;
+
+  /**
    * 每轮结束后更新状态（可选）
    *
    * 用于更新内部统计、触发异步压缩等。
@@ -319,7 +346,8 @@ export interface Compressor {
 // ── 预算分配器 ──
 
 export interface BudgetAllocateParams {
-  tokenBudget: number;
+  /** 可用 token 预算；未知窗口时可省略（见 budget-allocator） */
+  tokenBudget?: number;
   contextWindow?: number;
   systemPromptTokens: number;
   toolTokens: number;

@@ -41,6 +41,10 @@ export interface Trigger {
     reason?: string;
     parentAgentId?: string;
     causalRunId?: string;
+    /** 消息级模型覆盖（`provider/model` 或裸名） */
+    modelOverride?: string;
+    /** modelOverride 为裸名时的 provider */
+    modelProvider?: string;
   };
 }
 
@@ -54,6 +58,13 @@ export interface RunRequest {
   sessionId: string;
   /** Compiler 产出；合批时可能多条 */
   messages: Message[];
+  /**
+   * 消息级模型覆盖（裸名或 provider/model）。
+   * 来自 Trigger.metadata.modelOverride；会话级选择不经过此字段。
+   */
+  modelOverride?: string;
+  /** modelOverride 为裸名时的 provider */
+  modelProvider?: string;
 }
 
 // ── Dispatcher ──

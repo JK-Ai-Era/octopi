@@ -16,8 +16,8 @@ describe('AnthropicProvider', () => {
   test('默认模型列表', () => {
     const p = new AnthropicProvider({ apiKey: 'key' });
     expect(p.name).toBe('anthropic');
-    expect(p.models.length).toBeGreaterThan(0);
-    expect(p.models).toContain('claude-sonnet-4-6');
+    // 不配置 models 时不注入默认猜测列表
+    expect(p.models).toEqual([]);
   });
 
   test('isAvailable 不可达时返回 false', async () => {

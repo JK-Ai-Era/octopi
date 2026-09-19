@@ -131,12 +131,12 @@ export class FallbackProvider implements ModelProvider {
   }
 
   getModelInfo(modelName: string) {
-    // 从 chain 中查找匹配的 provider
+    // 只返回该模型名的声明；未命中返回 null（禁止回退到 chain[0] 窗口）
     for (const entry of this.chain) {
       const info = entry.provider.getModelInfo(modelName);
       if (info) return info;
     }
-    return this.chain[0]?.provider.getModelInfo(this.chain[0].model) ?? null;
+    return null;
   }
 
   getModelInfos(): ModelInfo[] {

@@ -46,22 +46,58 @@ const BUILTIN_MODEL_INFO: Record<string, Omit<ModelInfo, 'name'>> = {
   'deepseek-chat':     { contextWindow: 64000, maxOutputTokens: 8192 },
   'deepseek-reasoner': { contextWindow: 64000, maxOutputTokens: 8192 },
 
-  // ── Qwen ──
+  // ── Qwen（含 Ollama 本地常见族；tag 如 :2b/:7b 会在查询时剥离） ──
   'qwen-max':          { contextWindow: 32000, maxOutputTokens: 8192 },
   'qwen-plus':         { contextWindow: 131072, maxOutputTokens: 8192 },
   'qwen-turbo':        { contextWindow: 131072, maxOutputTokens: 8192 },
+  // 本地/开源 Qwen 默认按较保守窗口，避免 2b 等小模型被按 200k/1m 预算
+  'qwen3':             { contextWindow: 32768, maxOutputTokens: 8192 },
+  'qwen3.5':           { contextWindow: 32768, maxOutputTokens: 8192 },
+  'qwen2.5':           { contextWindow: 32768, maxOutputTokens: 8192 },
+  'qwen2':             { contextWindow: 32768, maxOutputTokens: 8192 },
 };
 
 /**
+ * 规范化模型名以便命中内置表
+ *
+ * - 去掉 Ollama tag：`qwen3.5:2b` → `qwen3.5`
+ * - 小写化便于匹配
+ */
+function normalizeModelKey(modelName: string): string {
+  return modelName.split(':')[0]!.trim().toLowerCase();
+}
+
+/**
  * 查询内置模型信息
+ *
+ * 支持精确名与「去 tag 后」的基础名（如 `qwen3.5:2b` → `qwen3.5`）。
  *
  * @param modelName - 模型名称
  * @returns ModelInfo 或 null（未收录）
  */
 export function getBuiltinModelInfo(modelName: string): ModelInfo | null {
-  const info = BUILTIN_MODEL_INFO[modelName];
-  if (!info) return null;
-  return { name: modelName, ...info };
+  if (!modelName) return null;
+  const exact = BUILTIN_MODEL_INFO[modelName]
+    ?? BUILTIN_MODEL_INFO[modelName.toLowerCase()];
+  if (exact) {
+    return { name: modelName, ...exact };
+  }
+  const base = normalizeModelKey(modelName);
+  const baseInfo = BUILTIN_MODEL_INFO[base];
+  if (baseInfo) {
+    return { name: modelName, ...baseInfo };
+  }
+  // 最长前缀命中：`qwen3.5-instruct` → `qwen3.5`
+  let bestKey: string | null = null;
+  for (const key of Object.keys(BUILTIN_MODEL_INFO)) {
+    if (base === key || base.startsWith(`${key}.`) || base.startsWith(`${key}-`)) {
+      if (!bestKey || key.length > bestKey.length) bestKey = key;
+    }
+  }
+  if (bestKey) {
+    return { name: modelName, ...BUILTIN_MODEL_INFO[bestKey]! };
+  }
+  return null;
 }
 
 /**
@@ -78,10 +114,10 @@ export function mergeWithBuiltinInfo(
   modelName: string,
   userDefined?: ModelInfo,
 ): ModelInfo | null {
-  const builtin = BUILTIN_MODEL_INFO[modelName];
+  const builtin = getBuiltinModelInfo(modelName);
   if (!builtin && !userDefined) return null;
   if (!builtin) return userDefined ?? null;
-  if (!userDefined) return { name: modelName, ...builtin };
+  if (!userDefined) return builtin;
 
   return {
     name: modelName,

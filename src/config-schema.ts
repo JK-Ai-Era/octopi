@@ -176,6 +176,8 @@ export const ContextEngineConfigSchema = z.object({
 
 export const ContextAssemblerConfigSchema = z.object({
   systemBudgetRatio: z.number().min(0.05).max(0.5).optional(),
+  systemBudgetTokens: z.number().positive().optional(),
+  compactTargetTokens: z.number().positive().optional(),
   layerShares: z
     .record(
       z.enum(['wisdom', 'persona', 'skill', 'knowledge', 'cognition', 'memory', 'runtime']),

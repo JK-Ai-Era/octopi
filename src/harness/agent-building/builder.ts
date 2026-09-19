@@ -206,8 +206,12 @@ function convertToAgentTool(tool: RegisteredTool, contextProvider: ToolContextPr
 
 // ── Builder ──
 
-/** ModelProvider 未声明 contextWindow 时的默认窗口（可被 provider 覆盖） */
-export const DEFAULT_CONTEXT_WINDOW = 128_000;
+/** ModelProvider 未声明 contextWindow 时的默认窗口（产品默认 200k） */
+/**
+ * 配置层历史常量。禁止用作引擎运行时 contextWindow 预算（未声明 = 未知）。
+ */
+import { DEFAULT_CONTEXT_WINDOW } from '../../core/types/model-info.js';
+export { DEFAULT_CONTEXT_WINDOW };
 
 // ── Build options / result ──
 
@@ -268,7 +272,8 @@ export interface AgentBuildCoreResult {
   harness: ReliabilityHarness;
   mcpManager: McpManager;
   events: EventBus;
-  contextHealth: (agentId?: string) => Promise<import('../context/layer-health.js').ContextLayerHealth>;
+  contextEngine?: import('../context/types.js').ContextEngine;
+  contextHealth?: (agentId?: string) => Promise<import('../context/layer-health.js').ContextLayerHealth>;
 }
 
 export interface AgentBuildResult {
@@ -279,6 +284,8 @@ export interface AgentBuildResult {
   /** 子系统运行时（memory.steward.* 等）；无子系统时为 undefined */
   runtime?: import('../autonomous-subsystem/runtime.js').SubsystemRuntime;
   events: EventBus;
+  /** ContextEngine 实例（手动压缩入口） */
+  contextEngine?: import('../context/types.js').ContextEngine;
   contextHealth: (agentId?: string) => Promise<import('../context/layer-health.js').ContextLayerHealth>;
 }
 
@@ -423,10 +430,14 @@ export class AgentBuilder {
   /** system prompt 装配器调参 */
   private _contextAssemblerConfig?: {
     systemBudgetRatio?: number;
-    layerShares?: Partial<Record<import('../context/layer-types.js').ContextLayerId, number>>;
+    /** 显式 system 预算 token（窗口未知时仍可用） */
+    systemBudgetTokens?: number;
+    /** 显式压缩目标 token（窗口未知时的手动/结构压缩目标） */
+    compactTargetTokens?: number;
     includeLayerPreview?: boolean;
     layerPreviewChars?: number;
     includeLayerContent?: boolean;
+    layerShares?: Partial<Record<import('../context/layer-types.js').ContextLayerId, number>>;
   };
   /** 文件式 persona 的 run 时解析器（指纹缓存，改文件下一轮生效） */
   private _personaResolver?: () => Promise<string>;
@@ -647,10 +658,12 @@ export class AgentBuilder {
    */
   contextAssembler(config: {
     systemBudgetRatio?: number;
-    layerShares?: Partial<Record<import('../context/layer-types.js').ContextLayerId, number>>;
+    systemBudgetTokens?: number;
+    compactTargetTokens?: number;
     includeLayerPreview?: boolean;
     layerPreviewChars?: number;
     includeLayerContent?: boolean;
+    layerShares?: Partial<Record<import('../context/layer-types.js').ContextLayerId, number>>;
   }): this {
     this._contextAssemblerConfig = { ...this._contextAssemblerConfig, ...config };
     return this;
@@ -914,7 +927,7 @@ export class AgentBuilder {
 
     // 核心组件（Agent 门面）；full 模式继续装配 runner / 子系统 / 提取栈
     const core = await this.buildCore();
-    const { agent, harness, mcpManager } = core;
+    const { agent, harness, mcpManager, contextEngine } = core;
 
     if (mode === 'core') {
       return {
@@ -968,6 +981,7 @@ export class AgentBuilder {
       wisdomStore,
       cognitionStore,
       systemBudgetRatio: assemblerCfg?.systemBudgetRatio,
+      systemBudgetTokens: assemblerCfg?.systemBudgetTokens,
       constitution: constitutionCfg,
       assemblerConfig: {
         layerShares: assemblerCfg?.layerShares,
@@ -1093,6 +1107,7 @@ export class AgentBuilder {
       mcpManager,
       runtime: subsystemRuntime,
       events,
+      contextEngine,
       contextHealth: async (agentId?: string) => {
         const { probeContextLayerHealth } = await import('../context/layer-health.js');
         return probeContextLayerHealth({
@@ -1123,7 +1138,7 @@ export class AgentBuilder {
    * 核心构建：仅产出 Agent 门面 + ReliabilityHarness + McpManager。
    * 不创建 Runner / SubsystemRuntime / memory extraction。
    */
-  private async buildCore(): Promise<{ agent: Agent; harness: ReliabilityHarness; mcpManager: McpManager }> {
+  private async buildCore(): Promise<AgentBuildCoreResult> {
     if (!this._model) {
       throw new Error('ModelProvider is required. Call .model() before build()');
     }
@@ -1183,16 +1198,18 @@ export class AgentBuilder {
     };
     const agent = new Agent(agentOptions);
 
-    // ContextEngine 接线：经 convertToLlm 调用 assemble（Loop 不依赖引擎类型）
-    // sessionId 从 agent.contextSessionId 读取（Runner 每 handle 注入）
+    // ContextEngine 接线：经 convertToLlm 调用 assemble
+    // 模型快照只读 ALS（Runner 每 run resolve 一次）；无 snapshot 时才回退 agent.model
     const contextEngine = this._contextEngine ?? new DefaultContextEngine();
-    // 未显式 summarize 时用主模型自动挂接，避免默认路径永远只截断
+    const { getResolvedModel } = await import('../model/run-scope.js');
     const summarizeFn =
       this._summarize ??
       (!this._disableAutoSummarize && this._model
-        ? createProviderSummarize(this._model)
+        ? async (messages: import('../../core/interfaces/model-provider.js').LLMMessage[], opts?: { maxTokens?: number }) => {
+            const provider = getResolvedModel()?.provider ?? this._model!;
+            return createProviderSummarize(provider)(messages, opts);
+          }
         : undefined);
-    const provider = this._model;
     agent.setConvertToLlm(async (messages) => {
       const systemPrompt = agent.context.systemPrompt;
       const tools: import('../../core/interfaces/model-provider.js').LLMToolDefinition[] = (agent.context.tools ?? []).map((t) => ({
@@ -1203,12 +1220,14 @@ export class AgentBuilder {
           parameters: t.parameters ?? { type: 'object', properties: {} },
         },
       }));
-      const infos = provider?.getModelInfos?.() ?? [];
-      const info =
-        (provider?.defaultModel ? provider.getModelInfo(provider.defaultModel) : null)
-        ?? infos[0]
-        ?? null;
-      const contextWindow = info?.contextWindow ?? DEFAULT_CONTEXT_WINDOW;
+      // 方案 B：只读 snapshot.contextWindow；未知则 undefined（跳过自动压缩）
+      // 禁止再调 getModelInfo —— FallbackProvider 可能返回 chain[0] 的窗口
+      const snapshot = getResolvedModel();
+      const provider = snapshot?.provider ?? agent.model;
+      const contextWindow =
+        snapshot?.contextWindow != null && snapshot.contextWindow > 0
+          ? snapshot.contextWindow
+          : undefined;
       const result = await contextEngine.assemble({
         sessionId: agent.contextSessionId,
         messages,
@@ -1216,6 +1235,7 @@ export class AgentBuilder {
         tools,
         tokenBudget: contextWindow,
         contextWindow,
+        compactTargetTokens: this._contextAssemblerConfig?.compactTargetTokens,
         summarize: summarizeFn,
         loadCompactState: (sid) => agent.getSessionCompactState(sid),
         // 惰性读 bus：覆盖 buildAgent 之后才 setEvents 的场景
@@ -1305,7 +1325,7 @@ export class AgentBuilder {
     // Agent.run() 需要 harness；Builder 组装期绑定
     agent.setHarness(harness);
 
-    return { agent, harness, mcpManager };
+    return { agent, harness, mcpManager, events, contextEngine };
   }
 
   /**

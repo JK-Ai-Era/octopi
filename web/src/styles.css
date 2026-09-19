@@ -76,6 +76,30 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 .btn-tab:hover { background: #f8fafc; }
 .btn-tab-active { background: var(--color-accent); border-color: var(--color-accent-border); }
 
+.center-model-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  flex-wrap: wrap;
+}
+
+.model-select {
+  font: inherit;
+  font-size: var(--text-sm);
+  max-width: 320px;
+  padding: 4px 8px;
+  border: 1px solid #d0d5dd;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
+.model-select:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px #93c5fd;
+}
+
 .btn-selected { background: var(--color-accent); border-color: var(--color-accent-border); }
 
 /* ── Inputs ── */

@@ -1,3 +1,20 @@
+## v0.34.0 (2026-09-20)
+
+### feat(web): 会话级模型切换 + contextWindow 未知不猜测
+
+WebUI 模型切换与「未配置窗口 = 未知」策略；ResolvedModel 每 run 解析一次，下游只读快照。
+
+- **ResolvedModel**：`harness/model/` 唯一解析入口；Runner 在 system assembler **之前** resolve；ALS 只传快照
+- **引用优先级**：消息级 `RunConfig.model` > `session.metadata.model` > agent 默认；`runConfigDefaults` **不**预填 model
+- **contextWindow 仅认显式配置**；未配置 = 未知；**不**用 builtin / 200k 猜测（provider 不 merge builtin）
+- **未知时跳过**：自动/proactive 压缩、assemble 按 token 截消息、七层 system 窗口比例预算
+- **未知时仍可用**：LLM 调用；手动**结构压缩**（`POST /api/v1/sessions/:id/compact` + WebUI「压缩」）；可选 `contextAssembler.systemBudgetTokens` / `compactTargetTokens`
+- **REST**：`GET /models`（含无能力字段模型；agent explicit 可覆盖 catalog）；`GET|POST /sessions/:id/model`；`POST /sessions/:id/compact`
+- **WebUI**：模型下拉 / 窗口「未知」展示 / 压缩按钮；session model 进入发送链路
+- **修复**：agent 配置模型绑定到 provider（原先用列表第一个）；catalog 不丢纯字符串模型；UI 未知≠0
+- **文档**：`docs/architecture.md` 模型解析收口；`docs/web-runtime-design.md` REST（models / session model / compact）；`docs/KNOWN-ISSUES.md` → OP-AR-3（同 Agent 多 session 抢占共享 messages，待专题）
+- **测试**：`tests/model-resolver.test.ts`、`tests/runner-session-model.test.ts`、`tests/context-window-unknown.test.ts` 等
+
 ## v0.33.0 (2026-09-19)
 
 ### refactor(storage): 持久层 SQLite 驱动迁移到内置 node:sqlite

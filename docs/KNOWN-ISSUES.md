@@ -1,6 +1,12 @@
 # 已知问题
 
-> 最后更新：2026-06-12
+> 最后更新：2026-09-20
+
+## 同 Agent 多 Session 抢占共享 Agent 上下文（未解决）
+
+**状态：** 待专题处理 → `arch/open-problems.md` **OP-AR-3**
+
+Gateway 对同一 `agentId` 只保留一个 Agent 实例；`SessionAwareRunner` 的锁按 `sessionId` 而非 `agentId`。同一 Agent 下多个 session 并行 `handle()` 时会互相覆盖 `agent.context.messages`，可能导致会话历史串味、落盘污染。与模型切换/ResolvedModel 无关（ALS 安全）。方案与研究清单见 OP-AR-3。
 
 ## KnowledgeStage（已关闭）
 

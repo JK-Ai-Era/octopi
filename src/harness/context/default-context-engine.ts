@@ -157,14 +157,19 @@ export class DefaultContextEngine implements ContextEngine {
       messages,
       systemPrompt,
       tools,
-      tokenBudget,
       contextWindow,
+      compactTargetTokens,
       signal,
       tokenEstimator,
       summarize,
       emit,
       loadCompactState,
     } = params;
+
+    // 窗口未知且无显式 compactTargetTokens：跳过基于预算的自动压缩/截断
+    const budgetCap = params.tokenBudget ?? contextWindow ?? compactTargetTokens;
+    const windowKnown = contextWindow != null && contextWindow > 0;
+    const targetKnown = compactTargetTokens != null && compactTargetTokens > 0;
 
     const estimator = tokenEstimator ?? this.config.tokenEstimator;
 
@@ -185,15 +190,36 @@ export class DefaultContextEngine implements ContextEngine {
       }
     }
 
-    // 1. 计算可用预算
+    // 未知窗口：无 token 预算 → 不 proactive、不按 budget 截消息
+    // 已有结构压缩摘要时，用 head + summary + tail 视图
+    if (!windowKnown && !targetKnown && budgetCap == null) {
+      const view = this.buildStructuralView(sessionId, messages, emit);
+      const llmMessages = this.buildLlmMessages(view.messages, systemPrompt, tools);
+      const rawEstimatedTokens = estimateLLMMessages(llmMessages);
+      this.states.set(sessionId, {
+        ...this.states.get(sessionId),
+        lastEstimatedTokens: rawEstimatedTokens,
+      });
+      return {
+        messages: llmMessages,
+        estimatedTokens: this.calibrateTokens(sessionId, rawEstimatedTokens),
+        systemPrompt,
+        droppedSummary: view.droppedSummary,
+        summary: this.states.get(sessionId)?.previousSummary,
+        compactState: this.buildCompactSnapshot(sessionId),
+      };
+    }
+
+    // 1. 计算可用预算（有窗口或 compactTargetTokens 时）
+    const tokenBudgetForAlloc = budgetCap;
     const budget = this.config.budgetAllocator.allocate({
-      tokenBudget,
-      contextWindow,
+      tokenBudget: tokenBudgetForAlloc,
+      contextWindow: windowKnown ? contextWindow : undefined,
       systemPromptTokens: estimator.estimateText(systemPrompt),
       toolTokens: estimator.estimateTools(tools),
     });
 
-    // 1b. 主动摘要：在硬溢出之前，按阈值先压一轮（缓解长会话失忆）
+    // 1b. 主动摘要：仅在有预算时启用（基于窗口/显式 target 的自动压缩）
     const proactive = await this.applyProactiveCompact({
       sessionId,
       messages,
@@ -206,7 +232,6 @@ export class DefaultContextEngine implements ContextEngine {
     const proactiveDroppedSummary = proactive.droppedSummary;
 
     // 2. 四区域消息选择（MessageSelector）
-    //    head（头部保护）+ overflow（可压缩）+ tail（尾部保护）
     const selection = this.config.messageSelector.select(
       workingMessages,
       {
@@ -550,14 +575,137 @@ export class DefaultContextEngine implements ContextEngine {
   }
 
   /**
+   * 结构视图：有 previousSummary 时 head + summary + tail；否则原样
+   * 用于 contextWindow 未知时的 assemble / 手动压缩后的回放
+   */
+  private buildStructuralView(
+    sessionId: string,
+    messages: Message[],
+    emit?: ContextEmitFn,
+  ): { messages: Message[]; droppedSummary?: string } {
+    const state = this.states.get(sessionId);
+    const summary = state?.previousSummary;
+    if (!summary || messages.length === 0) {
+      return { messages };
+    }
+    const protectFirstN = this.config.protectFirstN;
+    const protectLastN = this.config.protectLastN;
+    if (messages.length <= protectFirstN + protectLastN) {
+      return { messages };
+    }
+    const head = messages.slice(0, protectFirstN);
+    const tail = messages.slice(-protectLastN);
+    const summaryMsg: Message = {
+      role: 'user',
+      content: wrapContextSummary(summary),
+      timestamp: Date.now(),
+      metadata: { source: 'contextSummary' as const },
+    };
+    emit?.({
+      type: 'context.compact.start',
+      sessionId,
+      reason: 'proactive',
+    });
+    emit?.({
+      type: 'context.compact.end',
+      sessionId,
+      reason: 'proactive',
+      tokensBefore: 0,
+      tokensAfter: 0,
+      cached: true,
+    });
+    return {
+      messages: [...head, summaryMsg, ...tail],
+      droppedSummary: 'Structural compact view (contextWindow unknown)',
+    };
+  }
+
+  /**
+   * 结构压缩：头尾保护 + 中间段摘要（不依赖 contextWindow）
+   */
+  private async structuralCompact(params: {
+    sessionId: string;
+    messages: Message[];
+    summarize?: SummarizeFunction;
+    estimator: TokenEstimator;
+    compactTargetTokens?: number;
+  }): Promise<{ summary: string; tokensBefore: number; tokensAfter: number }> {
+    const { sessionId, messages, summarize, estimator } = params;
+    const protectFirstN = this.config.protectFirstN;
+    const protectLastN = this.config.protectLastN;
+    const tokensBefore = estimator.estimateMessages(messages);
+    const state = this.states.get(sessionId);
+
+    if (messages.length <= protectFirstN + protectLastN) {
+      return {
+        summary: state?.previousSummary ?? '',
+        tokensBefore,
+        tokensAfter: tokensBefore,
+      };
+    }
+
+    const head = messages.slice(0, protectFirstN);
+    const middle = messages.slice(protectFirstN, Math.max(protectFirstN, messages.length - protectLastN));
+    const tail = messages.slice(-protectLastN);
+
+    let summary = state?.previousSummary ?? '';
+    if (summarize && middle.length > 0) {
+      try {
+        const middleLlm = this.buildLlmMessages(middle, '', []);
+        const newSummary = await summarize(middleLlm, {
+          maxTokens: params.compactTargetTokens
+            ? Math.max(200, Math.floor(params.compactTargetTokens * 0.3))
+            : undefined,
+        });
+        summary = newSummary?.trim()
+          ? (summary ? `${summary}\n\n${newSummary}` : newSummary)
+          : summary;
+      } catch {
+        if (!summary) {
+          summary = `[Structural compact] dropped ${middle.length} middle messages (contextWindow unknown)`;
+        }
+      }
+    } else if (!summary) {
+      summary = `[Structural compact] dropped ${middle.length} middle messages (contextWindow unknown)`;
+    }
+
+    const summaryMsg: Message = {
+      role: 'user',
+      content: wrapContextSummary(summary),
+      timestamp: Date.now(),
+      metadata: { source: 'contextSummary' as const },
+    };
+    const view = [...head, summaryMsg, ...tail];
+    const tokensAfter = estimator.estimateMessages(view);
+
+    this.states.set(sessionId, {
+      ...state,
+      previousSummary: summary,
+      lastProactiveMessageCount: messages.length,
+      lastProactiveTokens: tokensAfter,
+      lastEstimatedTokens: tokensAfter,
+      lastProactiveLlmAt: summarize ? Date.now() : state?.lastProactiveLlmAt,
+    });
+
+    return { summary, tokensBefore, tokensAfter };
+  }
+
+  /**
    * 压缩存储
    *
-   * 当存储超限时，压缩旧消息。
+   * - force / 无 tokenBudget：可走结构压缩（compactStructural）
+   * - 有 tokenBudget 且非 force：低于阈值跳过
+   * - 窗口未知且非 force、无 target：跳过自动压缩
    */
   async compact(params: CompactParams): Promise<CompactResult> {
-    const { sessionId, tokenBudget, force, currentTokenCount } = params;
+    const {
+      sessionId,
+      tokenBudget,
+      compactTargetTokens,
+      force,
+      currentTokenCount,
+    } = params;
 
-    // 获取状态
     const state = this.states.get(sessionId);
     if (!state) {
       return {
@@ -568,28 +716,68 @@ export class DefaultContextEngine implements ContextEngine {
       };
     }
 
-    const tokensBefore = currentTokenCount ?? state.lastEstimatedTokens ?? 0;
+    const tokensBefore =
+      currentTokenCount ?? state.lastEstimatedTokens ?? state.lastProactiveTokens ?? 0;
 
-    // 检查是否需要压缩
-    const threshold = Math.floor(tokenBudget * this.config.compactThreshold);
-    if (!force && tokensBefore <= threshold) {
+    if (!force && tokenBudget != null && tokenBudget > 0) {
+      const threshold = Math.floor(tokenBudget * this.config.compactThreshold);
+      if (tokensBefore <= threshold) {
+        return {
+          ok: true,
+          compacted: false,
+          reason: `Tokens (${tokensBefore}) below threshold (${threshold})`,
+          tokensBefore,
+        };
+      }
+    }
+
+    // 窗口未知 + 非 force + 无显式 target：禁用自动压缩
+    if (!force && tokenBudget == null && compactTargetTokens == null) {
       return {
         ok: true,
         compacted: false,
-        reason: `Tokens (${tokensBefore}) below threshold (${threshold})`,
+        reason: 'contextWindow unknown; auto compact disabled (force/structural still available)',
         tokensBefore,
       };
     }
 
-    // 清除状态（下次 assemble 时会重新压缩）
     this.states.delete(sessionId);
 
     return {
       ok: true,
       compacted: true,
-      reason: 'State cleared for recompression',
+      reason: force ? 'forced' : 'threshold',
       tokensBefore,
-      tokensAfter: 0,
+    };
+  }
+
+  /**
+   * 结构压缩入口（手动 / overflow）— 可无 contextWindow
+   *
+   * @param input - sessionId + 全量 messages + 可选 summarize
+   * @returns 压缩结果
+   */
+  async compactStructural(input: {
+    sessionId: string;
+    messages: Message[];
+    summarize?: SummarizeFunction;
+    compactTargetTokens?: number;
+  }): Promise<CompactResult> {
+    const estimator = this.config.tokenEstimator;
+    const result = await this.structuralCompact({
+      sessionId: input.sessionId,
+      messages: input.messages,
+      summarize: input.summarize,
+      estimator,
+      compactTargetTokens: input.compactTargetTokens,
+    });
+    return {
+      ok: true,
+      compacted: Boolean(result.summary),
+      reason: 'structural',
+      tokensBefore: result.tokensBefore,
+      tokensAfter: result.tokensAfter,
+      summary: result.summary || undefined,
     };
   }
 
