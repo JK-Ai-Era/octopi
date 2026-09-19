@@ -7,7 +7,7 @@
 
 ## 环境要求
 
-- Node.js >= 20
+- Node.js >= 24（持久层使用内置 `node:sqlite`，无需原生 SQLite 扩展编译）
 - TypeScript >= 5.0
 
 ## 开发命令

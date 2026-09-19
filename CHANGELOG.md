@@ -1,3 +1,18 @@
+## v0.33.0 (2026-09-19)
+
+### refactor(storage): 持久层 SQLite 驱动迁移到内置 node:sqlite
+
+`better-sqlite3` 原生扩展反复出现 Node ABI 不兼容（`NODE_MODULE_VERSION` / `ERR_DLOPEN`），迁移为 Node 内置 `node:sqlite`，从根上去掉 native rebuild。
+
+- **引擎要求**：`engines.node` 提升为 `>=24`（`node:sqlite` 在本机 v24.15.0 验证可用）
+- **驱动入口**：`AgentDatabase` / `SqliteSessionStore` 改为 `DatabaseSync`；`busy_timeout` 改用构造参数 `timeout`（默认 **5000**，与 journal mode 无关，可用 `busyTimeoutMs` 覆盖）；`journal_mode=WAL` 改为 `db.exec('PRAGMA ...')`
+- **行为对齐**：显式 `enableForeignKeyConstraints: false`，与 better-sqlite3 默认一致，避免 `concept_edges` 旧数据在 FK 打开时失败
+- **sqlite-vec**：不再走 `sqliteVec.load(db)`（better-sqlite3 约定）；统一 `getLoadablePath()` + `db.loadExtension`；仅在 `sqliteVec` 选项打开时构造 `allowExtension: true`（Node 构造后无法补开）；加载失败仍回退 JS 余弦
+- **类型**：`raw` / session store 连接类型为 `DatabaseSync`；依赖移除 `better-sqlite3` / `@types/better-sqlite3`
+- **诊断文案**：gateway / config-bridge / doctor 提示改为检查 Node >= 24 与 `node:sqlite`，不再提示 rebuild native module
+- **文档**：`AGENTS.md` 记录 SQLite 驱动与 Node 版本约束；`docs/architecture.md`、`docs/CONTRIBUTING.md`、`harness/memory/README.md` 同步 Node >= 24 / `node:sqlite`；记忆检索明确暂不引入 FTS5
+- **审查修复**：session store 补 `timeout`（默认 5000）；AgentDatabase busy timeout 不再与 WAL 绑定；sqlite-vec 显式路径在无 `loadExtension` 时返回 false；`sqlite-vec.d.ts` 去掉 better-sqlite3 风格 `load()`
+
 ## v0.32.0 (2026-09-19)
 
 ### feat(cli): octopi doctor — 旧部署配置/布局/数据层诊断与安全修复

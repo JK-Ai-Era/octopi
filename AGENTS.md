@@ -11,6 +11,7 @@ This file governs AI coding agent behavior in the `octopi` repository. **Read th
 - **Core stack**: TypeScript / Node.js / Vitest
 - **Package manager**: `npm`
 - **Runtime Directory**: `~/.octopi/`
+- **SQLite**: built-in `node:sqlite` (`DatabaseSync`); requires **Node.js >= 24**. Do not reintroduce `better-sqlite3`.
 
 ---
 

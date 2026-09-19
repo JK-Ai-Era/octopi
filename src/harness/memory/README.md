@@ -8,9 +8,10 @@
 
 ## 职责
 
-- 契约与实现：InMemory / Sqlite（`AgentDatabase` → `agent.db`）
+- 契约与实现：InMemory / Sqlite（`AgentDatabase` → `agent.db`，驱动为内置 `node:sqlite`，Node >= 24）
 - 写入策略：`confidence.ts`（channel 暂定）+ `gates.ts`（结构门控 reason code）
 - 治理：软删除 `deleted` + Steward 策略（`subsystems/memory-steward/shared`）
+- 检索：embedding + sqlite-vec（可选）→ JS 余弦 hybrid → 关键词 LIKE+CJK 二元组；**暂不引入 FTS5**
 - system prompt 七层组装在 `harness/context/`；全局宪法在 `harness/context/constitution/`
 
 ## 不做什么

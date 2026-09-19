@@ -244,7 +244,7 @@ export class SqliteMemoryStore implements MemoryStore {
     sql += ' ORDER BY last_accessed_at DESC LIMIT ?';
     params.push(cap);
 
-    const rows = this.db.raw.prepare(sql).all(...params) as any[];
+    const rows = this.db.raw.prepare(sql).all(...(params as never[])) as any[];
 
     const candidates = rows
       .map(r => {
@@ -304,7 +304,7 @@ export class SqliteMemoryStore implements MemoryStore {
       params.push(...like.params);
     }
 
-    const rows = this.db.raw.prepare(sql).all(...params) as any[];
+    const rows = this.db.raw.prepare(sql).all(...(params as never[])) as any[];
     const entries = rows.map(r => this.rowToEntry(r));
     const filtered = this.filterByTags(entries, query);
 
@@ -548,7 +548,7 @@ export class SqliteMemoryStore implements MemoryStore {
       WHERE last_accessed_at < ? AND decay_factor > 0.1 AND deleted = 0
     `).run(thirtyDaysAgo);
 
-    return result.changes;
+    return Number(result.changes);
   }
 
   async stats(): Promise<MemoryStats> {

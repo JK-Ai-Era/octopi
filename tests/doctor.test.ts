@@ -328,7 +328,7 @@ describe('octopi doctor', () => {
     const configPath = writeLegacyDeployment();
     const secret = 'sk-doctor-secret-key-001';
 
-    // 本机 better-sqlite3 可能 NODE_MODULE_VERSION 不匹配；config/layout 路径与 data 解耦断言
+    // data 分组依赖 node:sqlite（Node >= 24）；config/layout 路径与 data 解耦断言
     const report = await runDoctor(
       { config: configPath },
       { fix: true, yes: true, selectedGroups: ['config', 'layout'] },

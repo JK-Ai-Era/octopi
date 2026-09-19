@@ -280,7 +280,7 @@ harness/execution-environment/
 
 ### 3.6 Memory — 记忆系统 [新增]
 
-**职责**：记忆存储/检索、认知图谱、智慧生成。持久化统一走 per-agent SQLite 单库。
+**职责**：记忆存储/检索、认知图谱、智慧生成。持久化统一走 per-agent SQLite 单库（内置 `node:sqlite`，需 Node.js >= 24）。
 
 ```
 harness/memory/
@@ -680,7 +680,8 @@ Gateway serve 路径经 `builder.build()` 装配；治理类子系统 signal 仅
 
 ## 8. 技术栈
 
-- **语言：** TypeScript (ESM, Node.js >=20)
+- **语言：** TypeScript (ESM, Node.js >=24)
+- **持久层 SQLite：** Node 内置 `node:sqlite`（`DatabaseSync`）；不要引入 `better-sqlite3`
 - **构建：** tsc
 - **测试：** Vitest (node --experimental-vm-modules)
 

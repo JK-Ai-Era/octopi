@@ -817,9 +817,9 @@ export class Gateway {
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         console.warn(`[Gateway] context stores unavailable for agent "${agent.id}": ${msg}`);
-        if (/NODE_MODULE_VERSION|better-sqlite3|ERR_DLOPEN/i.test(msg)) {
+        if (/node:sqlite|ERR_UNKNOWN_BUILTIN_MODULE|ERR_DLOPEN|NODE_MODULE_VERSION/i.test(msg)) {
           console.warn(
-            `[Gateway] hint: better-sqlite3 ABI mismatch — run "npm rebuild better-sqlite3" with the SAME Node used by octopi serve (process.version=${process.version}, modules=${process.versions.modules}). Memory tools will be skipped until this is fixed.`,
+            `[Gateway] hint: SQLite backend requires Node.js >= 24 with built-in node:sqlite (process.version=${process.version}). Memory tools will be skipped until the runtime is upgraded.`,
           );
         }
       }

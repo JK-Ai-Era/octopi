@@ -1,17 +1,18 @@
 /**
  * SQLite Session Store
  *
- * 基于 better-sqlite3 的 Session 存储后端。
+ * 基于内置 node:sqlite 的 Session 存储后端（Node.js >= 24）。
  * 适用于需要高性能、结构化查询的场景。
  *
  * 表结构：
  * - sessions: session 元数据 + 完整数据（JSON blob）
  *
- * 使用 SqliteSessionStore.create() 工厂方法创建实例（异步加载 better-sqlite3）。
+ * 使用 SqliteSessionStore.create() 工厂方法创建实例。
  *
  * @module
  */
 
+import type { DatabaseSync } from 'node:sqlite';
 import type { SessionStore } from '../../core/interfaces/session-store.js';
 import type { SessionData, SessionLifecycleMeta, SessionLifecycleStatus, MemoryExtractionStatus } from '../../harness/session-types.js';
 import type { SessionMeta } from '../../core/types.js';
@@ -21,6 +22,8 @@ export interface SqliteSessionStoreOptions {
   dbPath?: string;
   /** WAL 模式（默认 true，提升并发读性能） */
   wal?: boolean;
+  /** busy timeout（毫秒，默认 5000；多进程写同一 sessions.db 时避免立刻 SQLITE_BUSY） */
+  busyTimeoutMs?: number;
 }
 
 /**
@@ -35,7 +38,7 @@ export interface SqliteSessionStoreOptions {
  */
 export class SqliteSessionStore implements SessionStore<SessionData> {
 
-  private db: any;
+  private db: DatabaseSync;
   private stmts: {
     get: any;
     upsert: any;
@@ -47,31 +50,30 @@ export class SqliteSessionStore implements SessionStore<SessionData> {
   };
 
   /**
-   * 异步工厂方法
-   *
-   * 使用 dynamic import 加载 better-sqlite3，避免硬依赖。
-   * 未安装 better-sqlite3 时抛出明确错误。
+   * 异步工厂方法（内置 node:sqlite，需 Node.js >= 24）
    */
   static async create(options?: SqliteSessionStoreOptions): Promise<SqliteSessionStore> {
-    let Database: any;
+    let DatabaseSyncCtor: typeof DatabaseSync;
     try {
-      const mod = await import('better-sqlite3');
-      Database = mod.default ?? mod;
+      const mod = await import('node:sqlite');
+      DatabaseSyncCtor = mod.DatabaseSync;
     } catch {
       throw new Error(
-        'SqliteSessionStore requires "better-sqlite3". Install it with: npm install better-sqlite3'
+        `SqliteSessionStore requires Node.js >= 24 built-in "node:sqlite". Current process.version=${process.version}`
       );
     }
-    return new SqliteSessionStore(Database, options);
+    return new SqliteSessionStore(DatabaseSyncCtor, options);
   }
 
-  private constructor(Database: any, options?: SqliteSessionStoreOptions) {
+  private constructor(DatabaseSyncCtor: typeof DatabaseSync, options?: SqliteSessionStoreOptions) {
     const dbPath = options?.dbPath ?? ':memory:';
-    this.db = new Database(dbPath);
+    this.db = new DatabaseSyncCtor(dbPath, {
+      timeout: options?.busyTimeoutMs ?? 5000,
+      enableForeignKeyConstraints: false,
+    });
 
-    // WAL 模式
     if (options?.wal !== false) {
-      this.db.pragma('journal_mode = WAL');
+      this.db.exec('PRAGMA journal_mode = WAL');
     }
 
     // 创建表

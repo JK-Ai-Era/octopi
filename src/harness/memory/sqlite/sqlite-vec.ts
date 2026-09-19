@@ -8,10 +8,19 @@
 /** 记忆向量虚拟表名 */
 export const MEMORY_VEC_TABLE = 'memory_vec';
 
+function enableExtensionLoading(db: any): void {
+  if (typeof db.enableLoadExtension !== 'function') return;
+  try {
+    db.enableLoadExtension(true);
+  } catch {
+    // 打开时未设 allowExtension —— 后续 loadExtension 会失败并走 catch
+  }
+}
+
 /**
- * 尝试加载 sqlite-vec 扩展到 better-sqlite3 连接。
+ * 尝试加载 sqlite-vec 扩展到 node:sqlite 连接。
  *
- * @param db - better-sqlite3 Database
+ * @param db - node:sqlite DatabaseSync
  * @param extensionPath - 可选显式扩展路径；默认使用 npm 包内置二进制
  * @returns 是否加载成功
  */
@@ -19,22 +28,22 @@ export async function tryLoadSqliteVec(db: any, extensionPath?: string): Promise
   if (!db) return false;
   try {
     if (extensionPath) {
-      db.loadExtension?.(extensionPath);
+      if (typeof db.loadExtension !== 'function') return false;
+      enableExtensionLoading(db);
+      db.loadExtension(extensionPath);
       return true;
     }
     const mod: any = await import('sqlite-vec');
     const sqliteVec = mod.default ?? mod;
-    if (typeof sqliteVec?.load === 'function') {
-      sqliteVec.load(db);
-      return true;
-    }
+    // node:sqlite 不兼容 better-sqlite3 风格的 sqliteVec.load(db)
     if (typeof sqliteVec?.getLoadablePath === 'function' && typeof db.loadExtension === 'function') {
+      enableExtensionLoading(db);
       db.loadExtension(sqliteVec.getLoadablePath());
       return true;
     }
     return false;
   } catch {
-    // 扩展未安装或 ABI 不匹配：调用方退回 JS 检索
+    // 扩展未安装或 SQLite ABI 不匹配：调用方退回 JS 检索
     return false;
   }
 }

@@ -15,6 +15,7 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
+import type { DatabaseSync } from 'node:sqlite';
 import { ensureMemoryVecTable, tryLoadSqliteVec } from './sqlite-vec.js';
 
 export interface AgentDatabaseOptions {
@@ -22,6 +23,8 @@ export interface AgentDatabaseOptions {
   dbPath?: string;
   /** WAL 模式（默认 true） */
   wal?: boolean;
+  /** busy timeout（毫秒，默认 5000；与 journal mode 无关） */
+  busyTimeoutMs?: number;
   /** 尝试加载 sqlite-vec 扩展（默认 false） */
   sqliteVec?: boolean | { extensionPath?: string };
   /** 向量维度；配合 sqlite-vec 时用于创建 memory_vec 虚拟表 */
@@ -29,25 +32,25 @@ export interface AgentDatabaseOptions {
 }
 
 export class AgentDatabase {
-  private db: any;
+  private db: DatabaseSync;
   private _sqliteVec = false;
   private _vecDimensions: number | null = null;
 
-  private constructor(db: any) {
+  private constructor(db: DatabaseSync) {
     this.db = db;
   }
 
   /**
-   * 异步工厂方法
+   * 异步工厂方法（内置 node:sqlite，需 Node.js >= 24）
    */
   static async create(options?: AgentDatabaseOptions): Promise<AgentDatabase> {
-    let Database: any;
+    let DatabaseSyncCtor: typeof DatabaseSync;
     try {
-      const mod = await import('better-sqlite3');
-      Database = mod.default ?? mod;
+      const mod = await import('node:sqlite');
+      DatabaseSyncCtor = mod.DatabaseSync;
     } catch {
       throw new Error(
-        'AgentDatabase requires "better-sqlite3". Install it with: npm install better-sqlite3'
+        `AgentDatabase requires Node.js >= 24 built-in "node:sqlite". Current process.version=${process.version}`
       );
     }
 
@@ -58,13 +61,18 @@ export class AgentDatabase {
       await mkdir(dirname(dbPath), { recursive: true });
     }
 
-    const db = new Database(dbPath);
+    const wantVec = Boolean(options?.sqliteVec);
+    // timeout 独立于 WAL：对齐 better-sqlite3 默认 busy_timeout=5000
+    // FK 保持关闭以对齐 better-sqlite3 默认行为（concept_edges 旧数据兼容）
+    // allowExtension 仅在请求 sqlite-vec 时打开（Node 构造后无法补开）
+    const db = new DatabaseSyncCtor(dbPath, {
+      timeout: options?.busyTimeoutMs ?? 5000,
+      allowExtension: wantVec,
+      enableForeignKeyConstraints: false,
+    });
 
-    // WAL 模式
     if (options?.wal !== false) {
-      db.pragma('journal_mode = WAL');
-      // 多进程 serve + govern 同时写 agent.db 时避免立刻 SQLITE_BUSY
-      db.pragma('busy_timeout = 5000');
+      db.exec('PRAGMA journal_mode = WAL');
     }
 
     const agentDb = new AgentDatabase(db);
@@ -239,7 +247,7 @@ export class AgentDatabase {
   /**
    * 获取原始数据库实例（供子模块使用）
    */
-  get raw(): any {
+  get raw(): DatabaseSync {
     return this.db;
   }
 

@@ -1,7 +1,7 @@
 /**
  * doctor 数据层：agent.db 迁移 + 旧 session 文件名
  *
- * 本地确定性；better-sqlite3 不可用时只报告，不拖垮 doctor。
+ * 本地确定性；node:sqlite / agent.db 不可用时只报告，不拖垮 doctor。
  *
  * @module
  */
@@ -303,7 +303,7 @@ export async function applyDataLayerFixes(
         domain: 'data',
         severity: 'error',
         message: `agent "${t.id}": agent.db migrate failed: ${msg}`,
-        hint: 'schema migrate failed; inspect agent.db and rebuild better-sqlite3 if needed (create is not transactional — file may be partial)',
+        hint: 'schema migrate failed; inspect agent.db — requires Node.js >= 24 node:sqlite (create is not transactional — file may be partial)',
         fixable: false,
       });
     }

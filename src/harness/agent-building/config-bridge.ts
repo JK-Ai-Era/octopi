@@ -377,9 +377,9 @@ async function buildAgent(
       console.warn(
         `[ConfigBridge] memory/wisdom/cognition/knowledge stores unavailable for agent home ${agentHome}: ${msg}`,
       );
-      if (/NODE_MODULE_VERSION|better-sqlite3|ERR_DLOPEN/i.test(msg)) {
+      if (/node:sqlite|ERR_UNKNOWN_BUILTIN_MODULE|ERR_DLOPEN|NODE_MODULE_VERSION/i.test(msg)) {
         console.warn(
-          `[ConfigBridge] hint: rebuild better-sqlite3 for this Node ABI (node=${process.version}, modules=${process.versions.modules})`,
+          `[ConfigBridge] hint: SQLite backend requires Node.js >= 24 with built-in node:sqlite (process.version=${process.version})`,
         );
       }
     }
