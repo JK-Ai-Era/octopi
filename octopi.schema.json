@@ -755,7 +755,7 @@
     },
     "session": {
       "type": "object",
-      "description": "Session 配置（路由策略 + 存储引擎）",
+      "description": "Session 路由配置（仅 dmScope；存储固定为 agents/<id>/sessions/，session.store 已废弃）",
       "properties": {
         "dmScope": {
           "type": "string",
@@ -768,7 +768,7 @@
         },
         "store": {
           "type": "object",
-          "description": "Session 存储配置",
+          "description": "[Deprecated] Session 存储配置已废弃：Gateway 固定使用 agents/<id>/sessions/，忽略 store/dataDir。保留仅为兼容旧配置；octopi doctor --fix 会迁入 _legacy.session.store",
           "required": [
             "type"
           ],
@@ -780,15 +780,15 @@
                 "jsonl",
                 "sqlite"
               ],
-              "description": "存储类型"
+              "description": "[Deprecated] 存储类型（runtime 忽略）"
             },
             "dataDir": {
               "type": "string",
-              "description": "数据目录（jsonl 类型使用）"
+              "description": "[Deprecated] 数据目录；runtime 不读，会话在 agents/<id>/sessions/"
             },
             "dbPath": {
               "type": "string",
-              "description": "数据库文件路径（sqlite 类型使用）"
+              "description": "[Deprecated] 数据库文件路径（runtime 忽略）"
             }
           }
         }

@@ -1,3 +1,21 @@
+## v0.32.0 (2026-09-19)
+
+### feat(cli): octopi doctor — 旧部署配置/布局/数据层诊断与安全修复
+
+多轮破坏性配置重构后，旧实例常带着被 Zod 静默剥离的字段、过时目录布局和手改坏掉的 JSON。新增本地确定性 doctor，**不调用 LLM**，报告脱敏。
+
+- **命令**：`octopi doctor` / `--fix` / `--yes` / `--dry-run` / `--json` / `--only` / `--restore [path]` / `--allow-delete-legacy-dirs`
+- **共享迁移** `src/config-migrations.ts`：`loadConfig` 告警与 doctor 写回同一规则表；运行时仍只对 `budget.maxTimeMs` 做内存迁移
+- **配置规则**：`supervisor`→`runGuard`、`distributedIntelligence` 迁 `_legacy`、`budget.maxTimeMs`→`maxWallClockMs`、`persona` 字符串→`home`、顶层 `providers[]`→`models.providers`（apiKey/占位符原样搬迁）、手改标量类型纠正、JSON 注释/尾逗号恢复
+- **布局规则**：home/agent 目录、平铺 persona → `persona/*.md`、废弃 `memory|wisdom|extract/` 报告（删除需显式开关）
+- **数据层（Phase 2）**：打开 `agent.db` 触发既有 schema migrate；旧冒号 session 文件名改安全名；sqlite 原生模块失败时只报告不拖垮 doctor
+- **交互式 fix**：TTY 下 `--fix` 按 config/layout/data 分组勾选；`--yes` 非交互全量；注入 `selectFixGroups` 便于测试
+- **`--restore`**：从最新（或指定）备份恢复 `octopi.json`；恢复前另存当前文件；拒绝非法 JSON 备份
+- **安全**：修复前备份；`${ENV}` 不展开写回；报告脱敏；修复后复检 Zod + apiKey 语义
+- **审查修复**：data 分组可达（DB001/002 带 `group:'data'`）；非 TTY `--fix` 必须 `--yes` 才写盘；CFG009 遮蔽时无 `-c` 拒绝 fix；`stripTrailingCommas` 字符串感知；FS001/FS005 不再误标 fixable；DB003/FIX002 文案；修复后重列 backups
+- **CFG010 session.store**：检测废弃 `session.store`/`dataDir`，对照 legacy 目录与 `agents/<id>/sessions` 落点；`--fix config` 迁入 `_legacy.session.store`（不搬数据）；`octopi.example.json` / schema 去掉误导性 dataDir
+- **测试**：`tests/doctor.test.ts`（密钥保留、占位符、脱敏、分组交互、restore、数据层、非 TTY 拒绝、尾逗号字符串安全、session.store）
+
 ## v0.31.0 (2026-09-19)
 
 ### feat(memory): models.embedding + sqlite-vec + 关键词检索优化

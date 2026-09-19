@@ -29,11 +29,13 @@
 
  *   "channels": [{ "type": "http", "port": 3000 }],
  *   "session": {
- *     "dmScope": "per-peer",
- *     "store": { "type": "jsonl", "dataDir": "./data/sessions" }
+ *     "dmScope": "per-peer"
  *   }
  * }
  * ```
+ *
+ * 注意：`session.store` / `dataDir` 已废弃——Gateway 固定使用 `agents/<id>/sessions/`。
+ * doctor 检测 CFG010；`--fix config` 将 store 迁入 `_legacy.session.store`。
  */
 
 import type { ToolPolicy, ModelInfo } from './core/types.js';
@@ -44,6 +46,7 @@ import type { SessionStore } from './core/interfaces/session-store.js';
 import type { SessionData } from './harness/session-types.js';
 import type { SecurityGuardConfig } from './core/security-guard.js';
 import { validateConfigOrThrow } from './config-schema.js';
+import { applyBudgetMaxTimeMs, detectConfigMigrations } from './config-migrations.js';
 import { getOctopiHome } from './init.js';
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve, join } from 'node:path';
@@ -859,33 +862,14 @@ export function loadConfig(configPath?: string): NormalizedHarnessConfig {
 
   const raw = JSON.parse(expanded);
 
-  // 旧字段静默失效会很难排查：显式告警（内部阶段不做兼容迁移）
-  if (raw && typeof raw === 'object' && 'supervisor' in raw) {
-    console.warn(
-      '[config] "supervisor" is no longer supported and will be ignored. ' +
-      'Rename it to "runGuard" (same fields) to keep process supervision enabled.',
-    );
-  }
-  if (raw && typeof raw === 'object' && 'distributedIntelligence' in raw) {
-    console.warn(
-      '[config] "distributedIntelligence" is no longer supported and will be ignored. ' +
-      'Safety-guard parameters belong in subsystems/safety-guard/config.yaml; ' +
-      'system-level subsystems config only holds framework fields (e.g. auditDir).',
-    );
-  }
-  if (raw && typeof raw === 'object' && raw.budget && typeof raw.budget === 'object') {
-    const budget = raw.budget as Record<string, unknown>;
-    if ('maxTimeMs' in budget) {
-      console.warn(
-        '[config] budget.maxTimeMs is deprecated and will be ignored by Zod. ' +
-        'Rename it to budget.maxWallClockMs.',
-      );
-      // 尽力迁移：未显式写新字段时沿用旧值
-      if (budget.maxWallClockMs === undefined && typeof budget.maxTimeMs === 'number') {
-        budget.maxWallClockMs = budget.maxTimeMs;
-      }
-      delete budget.maxTimeMs;
+  // 旧字段静默失效会很难排查：显式告警（写回落盘见 octopi doctor --fix）
+  if (raw && typeof raw === 'object') {
+    for (const finding of detectConfigMigrations(raw)) {
+      const hint = finding.hint ? ` ${finding.hint}` : '';
+      console.warn(`[config] ${finding.message}.${hint}`);
     }
+    // 运行时仅对 budget 做内存迁移，保持历史行为；supervisor 等不自动改写
+    applyBudgetMaxTimeMs(raw as Record<string, unknown>);
   }
 
   // Zod schema 校验（结构化错误信息）

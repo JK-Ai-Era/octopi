@@ -9,6 +9,7 @@ import { parseArgs } from './args.js';
 import { serveCommand, serveStopCommand } from './daemon.js';
 import { webuiCommand } from './webui.js';
 import { showHelp, initCommand, chatCommand, healthCommand, pluginCommand } from './commands.js';
+import { doctorCommand } from './doctor/index.js';
 
 async function main(): Promise<void> {
   const args: CliArgs = parseArgs();
@@ -26,6 +27,16 @@ async function main(): Promise<void> {
   switch (args.command) {
     case 'init':
       await initCommand(args);
+      break;
+    case 'doctor':
+      await doctorCommand(args, {
+        fix: args.fix,
+        dryRun: args.dryRun,
+        json: args.json,
+        yes: args.yes,
+        only: args.only,
+        allowDeleteLegacyDirs: args.allowDeleteLegacyDirs,
+      });
       break;
     case 'serve':
       await serveCommand(args);

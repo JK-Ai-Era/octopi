@@ -96,11 +96,7 @@
   }],
 
   "session": {
-    "dmScope": "per-peer",
-    "store": {
-      "type": "jsonl",
-      "dataDir": "./data/sessions"
-    }
+    "dmScope": "per-peer"
   },
 
   "webSearch": {

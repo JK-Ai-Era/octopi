@@ -10,6 +10,8 @@
 
 ## 旧配置字段 `supervisor`
 
-**状态：** 有意不兼容 + 已告警
+**状态：** 有意不兼容 + 已告警 + 可 doctor 修复
 
-`octopi.json` 中的 `supervisor` 字段在 v0.20.0 起改名为 `runGuard`。旧字段会被 Zod 静默剥离；`loadConfig()` 检测到旧字段时会打印 warning，避免无声失去过程监督。
+`octopi.json` 中的 `supervisor` 字段在 v0.20.0 起改名为 `runGuard`。旧字段会被 Zod 静默剥离；`loadConfig()` 检测到旧字段时会打印 warning。
+
+**修复：** `octopi doctor --fix` 会将其改写为 `runGuard`（备份原文件）。同类旧字段/布局问题见 `octopi doctor`。

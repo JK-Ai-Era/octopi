@@ -19,6 +19,7 @@ Usage:
 
 Commands:
   init              Initialize Octopi directory structure and config
+  doctor            Diagnose deployment/config issues (local rules, no LLM)
   serve start       Start the Gateway server (background daemon)
   serve stop        Stop the Gateway server
   serve restart     Restart the Gateway server
@@ -37,10 +38,21 @@ Options:
   --config, -c <path>   Config file path (default: ~/.octopi/octopi.json)
   --port, -p <port>     Port override
   --verbose, -v         Enable verbose mode (trace all engine events to file)
+  --fix                 doctor: apply safe migrations (backs up config)
+  --dry-run             doctor: show what --fix would do
+  --json                doctor: machine-readable report (secrets redacted)
+  --yes, -y             doctor: required for non-interactive --fix (apply all fixable groups)
+  --only <list>         doctor: limit to domains/ids (config,layout,data,runtime)
+  --restore [path]      doctor: restore octopi.json from latest (or given) backup
+  --allow-delete-legacy-dirs
+                        doctor: with --fix layout, rename obsolete memory/wisdom/extract dirs
   --help, -h            Show this help message
 
 Examples:
   octopi init
+  octopi doctor
+  octopi doctor --fix --yes
+  octopi doctor --restore
   octopi serve start -c ./my-config.json
   octopi serve stop
   octopi serve restart
