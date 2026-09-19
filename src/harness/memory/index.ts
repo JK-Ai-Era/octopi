@@ -32,6 +32,19 @@ export { InMemoryConceptGraph } from './cognition.js';
 // ── SQLite 实现 ──
 export { AgentDatabase, SqliteMemoryStore, SqliteWisdomStore, SqliteConceptGraph, KnowledgeRegistry, createEmbeddingProvider } from './sqlite/index.js';
 export type { AgentDatabaseOptions, SqliteMemoryStoreOptions, SqliteConceptGraphOptions, EmbeddingProvider, EmbeddingConfig, KnowledgeSourceEntry } from './sqlite/index.js';
+export {
+  createEmbeddingProviderFromModels,
+  resolveEmbeddingRuntime,
+  isEmbeddingEnabled,
+  resolveEmbeddingEndpoint,
+} from './sqlite/index.js';
+export type { ResolvedEmbeddingRuntime } from './sqlite/index.js';
+export {
+  tokenizeKeywordQuery,
+  scoreKeywordFields,
+  buildKeywordLikeSql,
+} from './sqlite/index.js';
+export type { KeywordFields } from './sqlite/index.js';
 
 // ── 置信度与门控 ──
 export {

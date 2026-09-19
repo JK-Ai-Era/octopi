@@ -17,6 +17,10 @@ import type {
 } from './types.js';
 import { MEMORY_TYPES } from './types.js';
 import { mapLegacyType } from './gates.js';
+import {
+  scoreKeywordFields,
+  tokenizeKeywordQuery,
+} from './sqlite/keyword-search.js';
 
 function emptyTypes(): Record<MemoryType, number> {
   return { fact: 0, method: 0, norm: 0 };
@@ -87,22 +91,36 @@ export class InMemoryMemoryStore implements MemoryStore {
       results = results.filter((e) => e.importance >= query.minImportance!);
     }
 
-    const queryLower = (query.text ?? '').toLowerCase();
-    if (queryLower.trim()) {
-      results = results.filter((e) => {
-        const contentLower = e.content.toLowerCase();
-        return queryLower.split(/\s+/).some((word) => word && contentLower.includes(word));
-      });
+    const tokens = tokenizeKeywordQuery(query.text ?? '');
+    let scored: Array<{ e: MemoryEntry; score: number }>;
+    if (tokens.length > 0) {
+      scored = results
+        .map((e) => ({
+          e,
+          score: scoreKeywordFields(
+            {
+              content: e.content,
+              tags: e.tags,
+              futureUse: e.futureUse,
+              anchors: e.anchors,
+              evidence: e.evidence,
+            },
+            tokens,
+          ),
+        }))
+        .filter((s) => s.score > 0);
+    } else {
+      scored = results.map((e) => ({ e, score: 0 }));
     }
 
-    results.sort((a, b) => {
-      const scoreA = a.importance * a.confidence * a.decayFactor;
-      const scoreB = b.importance * b.confidence * b.decayFactor;
-      return scoreB - scoreA;
+    scored.sort((a, b) => {
+      const rankA = a.score * 10 + a.e.importance * a.e.confidence * a.e.decayFactor;
+      const rankB = b.score * 10 + b.e.importance * b.e.confidence * b.e.decayFactor;
+      return rankB - rankA;
     });
 
     const limit = query.limit ?? 10;
-    results = results.slice(0, limit);
+    results = scored.map((s) => s.e).slice(0, limit);
 
     if (query.updateAccess !== false) {
       for (const entry of results) {

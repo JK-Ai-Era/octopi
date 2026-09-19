@@ -231,6 +231,109 @@
               }
             }
           }
+        },
+        "embedding": {
+          "type": "object",
+          "description": "Embedding 模型配置（models 节点下，memory/knowledge/plugin 可共用）",
+          "required": [
+            "model"
+          ],
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "显式关闭向量路径；缺省视为开启"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "openai",
+                "ollama",
+                "http",
+                "custom"
+              ],
+              "description": "嵌入 API 协议；缺省按 provider/baseUrl 推断（openai 兼容）"
+            },
+            "provider": {
+              "type": "string",
+              "description": "引用 models.providers 中的 key；继承 baseUrl，apiKey 仅在未写出时继承"
+            },
+            "model": {
+              "type": "string",
+              "description": "Embedding 模型名（如 text-embedding-3-small / bge-m3）"
+            },
+            "baseUrl": {
+              "type": "string",
+              "description": "Embedding API Base URL（可覆盖 provider 继承值）"
+            },
+            "apiKey": {
+              "type": "string",
+              "description": "API Key（支持 ${ENV_VAR}）。省略或空字符串 = 不发送鉴权头，适合内网/无鉴权远程"
+            },
+            "apiKeyHeader": {
+              "type": "string",
+              "description": "Key 所在 Header，默认 Authorization；空字符串表示不发送"
+            },
+            "apiKeyPrefix": {
+              "type": "string",
+              "description": "Key 前缀；Authorization 默认 \"Bearer \""
+            },
+            "path": {
+              "type": "string",
+              "description": "请求 path；openai 默认 /embeddings，ollama 默认 /api/embeddings"
+            },
+            "headers": {
+              "type": "object",
+              "additionalProperties": { "type": "string" },
+              "description": "额外请求头"
+            },
+            "request": {
+              "type": "object",
+              "description": "通用 HTTP 字段映射（type=http 或覆盖默认协议）",
+              "properties": {
+                "inputField": { "type": "string", "description": "请求体文本字段名" },
+                "modelField": { "type": "string", "description": "请求体模型字段名" },
+                "embeddingsPath": {
+                  "type": "string",
+                  "description": "响应向量路径，如 data / embedding / data.0.embedding"
+                },
+                "itemEmbeddingPath": {
+                  "type": "string",
+                  "description": "批量时每项向量字段，默认 embedding"
+                },
+                "extraBody": {
+                  "type": "object",
+                  "description": "请求体附加静态字段"
+                }
+              }
+            },
+            "supportsBatch": {
+              "type": "boolean",
+              "description": "是否支持批量接口；仅单条时设 false"
+            },
+            "timeoutMs": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "请求超时毫秒"
+            },
+            "dimensions": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "向量维度（openai 默认 1536，ollama 默认 1024）"
+            },
+            "vectorEngine": {
+              "type": "string",
+              "enum": [
+                "auto",
+                "js",
+                "sqlite-vec"
+              ],
+              "description": "向量检索引擎：auto=优先 sqlite-vec，不可用时退回 JS 余弦"
+            },
+            "sqliteVecExtensionPath": {
+              "type": "string",
+              "description": "sqlite-vec 扩展路径（可选；默认用 npm 包内置二进制）"
+            }
+          }
         }
       }
     },

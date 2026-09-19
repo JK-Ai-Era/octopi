@@ -782,11 +782,38 @@ export class Gateway {
         const { SqliteWisdomStore } = await import('../../harness/memory/sqlite/wisdom-store.js');
         const { SqliteConceptGraph } = await import('../../harness/memory/sqlite/cognition-store.js');
         const { MemoryKnowledgeStore } = await import('../../harness/context/knowledge/memory-store.js');
-        const db = await AgentDatabase.create({ dbPath: join(agent.home, 'agent.db') });
-        builder.memoryStore(new SqliteMemoryStore(db));
+        const { resolveEmbeddingRuntime } = await import('../../harness/memory/sqlite/embedding-from-models.js');
+
+        const embRuntime = resolveEmbeddingRuntime({
+          providers: this.config.modelProviders ?? {},
+          embedding: this.config.embedding,
+        });
+        const useVec = embRuntime && embRuntime.vectorEngine !== 'js';
+        const db = await AgentDatabase.create({
+          dbPath: join(agent.home, 'agent.db'),
+          sqliteVec: useVec
+            ? { extensionPath: embRuntime?.sqliteVecExtensionPath }
+            : false,
+          vectorDimensions: useVec ? embRuntime?.dimensions : undefined,
+        });
+        builder.memoryStore(
+          new SqliteMemoryStore(db, {
+            embeddingProvider: embRuntime?.provider ?? null,
+            vectorEngine: embRuntime?.vectorEngine ?? 'auto',
+          }),
+        );
         builder.wisdomStore(new SqliteWisdomStore(db));
-        builder.cognitionStore(new SqliteConceptGraph(db));
+        builder.cognitionStore(new SqliteConceptGraph(db, {
+          embeddingProvider: embRuntime?.provider ?? null,
+        }));
         builder.knowledgeStore(new MemoryKnowledgeStore());
+        if (embRuntime?.provider) {
+          console.log(
+            `[Gateway] memory embedding enabled: model=${embRuntime.model} vectorEngine=${embRuntime.vectorEngine}`,
+          );
+        } else {
+          console.log('[Gateway] memory embedding not configured — keyword retrieval');
+        }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         console.warn(`[Gateway] context stores unavailable for agent "${agent.id}": ${msg}`);

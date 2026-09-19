@@ -1,3 +1,14 @@
+## v0.31.0 (2026-09-19)
+
+### feat(memory): models.embedding + sqlite-vec + 关键词检索优化
+
+- **配置**：`models.embedding`（model/type/provider/baseUrl/apiKey/dimensions/vectorEngine/sqliteVecExtensionPath 等）；schema/example 同步
+- **通用远程 embedding**：`apiKey` 可省略/`""`（不发 Authorization）；`provider` 仅在未写出 apiKey 时继承；`type: openai|ollama|http`；`path`/`headers`/`request`（inputField/embeddingsPath/itemEmbeddingPath/extraBody）/`supportsBatch`/`timeoutMs`
+- **向量路径**：配置 embedding 后写入时生成向量（content+tags+future_use+anchors+evidence）；`sqlite-vec` optionalDependency，成功则 `memory_vec` KNN，否则 JS 余弦 hybrid；历史行 `backfillEmbeddings`
+- **接线**：`toGatewayConfig` / Gateway / ConfigBridge 按 `models.embedding` 注入 store
+- **关键词路径（无 embedding）**：多字段 LIKE（content/tags/future_use/evidence/anchors）+ CJK 二元组 + 字段权重排序
+- **测试**：`tests/memory/keyword-and-embedding.test.ts`
+
 ## v0.30.2 (2026-09-19)
 
 ### fix(context): datetime 注入只保留时间锚点

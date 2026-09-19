@@ -247,6 +247,7 @@ export async function buildFromConfig(config: NormalizedHarnessConfig): Promise<
         memoryConfig: config.memory,
         flatModels,
         levelMap: config.levelMap,
+        modelsConfig: config.models,
         subsystemSpecs,
         subsystemAuditDir: config.subsystems?.auditDir,
         subsystemAllowlist: config.subsystems?.allowlist,
@@ -278,6 +279,7 @@ async function buildAgent(
     memoryConfig?: import('../../config.js').HarnessConfig['memory'];
     flatModels: NormalizedModelInfo[];
     levelMap?: import('../../config.js').LevelMap;
+    modelsConfig?: import('../../config.js').ModelsConfig;
     subsystemSpecs?: SubsystemSpec[];
     subsystemAuditDir?: string;
     subsystemAllowlist?: string[];
@@ -347,10 +349,27 @@ async function buildAgent(
       const { SqliteWisdomStore } = await import('../memory/sqlite/wisdom-store.js');
       const { SqliteConceptGraph } = await import('../memory/sqlite/cognition-store.js');
       const { MemoryKnowledgeStore } = await import('../context/knowledge/memory-store.js');
-      const db = await AgentDatabase.create({ dbPath: join(agentHome, 'agent.db') });
-      builder.memoryStore(new SqliteMemoryStore(db));
+      const { resolveEmbeddingRuntime } = await import('../memory/sqlite/embedding-from-models.js');
+
+      const embRuntime = resolveEmbeddingRuntime(shared.modelsConfig);
+      const useVec = embRuntime && embRuntime.vectorEngine !== 'js';
+      const db = await AgentDatabase.create({
+        dbPath: join(agentHome, 'agent.db'),
+        sqliteVec: useVec
+          ? { extensionPath: embRuntime?.sqliteVecExtensionPath }
+          : false,
+        vectorDimensions: useVec ? embRuntime?.dimensions : undefined,
+      });
+      builder.memoryStore(
+        new SqliteMemoryStore(db, {
+          embeddingProvider: embRuntime?.provider ?? null,
+          vectorEngine: embRuntime?.vectorEngine ?? 'auto',
+        }),
+      );
       builder.wisdomStore(new SqliteWisdomStore(db));
-      builder.cognitionStore(new SqliteConceptGraph(db));
+      builder.cognitionStore(new SqliteConceptGraph(db, {
+        embeddingProvider: embRuntime?.provider ?? null,
+      }));
       // Knowledge 暂无 SQLite 实现，用进程内 store；后续可替换
       builder.knowledgeStore(new MemoryKnowledgeStore());
     } catch (err) {

@@ -460,6 +460,64 @@ export interface LevelConfig {
 /** 模型级别映射表（级别名 → 级别定义） */
 export type LevelMap = Record<string, LevelConfig>;
 
+/** Embedding API 协议 */
+export type EmbeddingApiType = 'openai' | 'ollama' | 'http' | 'custom';
+
+/** 向量检索引擎 */
+export type VectorEngineChoice = 'auto' | 'js' | 'sqlite-vec';
+
+/** HTTP 请求/响应字段映射（通用远程 embedding） */
+export interface EmbeddingHttpMappingConfig {
+  inputField?: string;
+  modelField?: string;
+  embeddingsPath?: string;
+  itemEmbeddingPath?: string;
+  extraBody?: Record<string, unknown>;
+}
+
+/**
+ * Embedding 模型配置（models.embedding）
+ *
+ * 放在 models 节点下：memory / knowledge / plugin 等可共用同一 embedding。
+ * 未配置时检索退化为关键词路径。
+ *
+ * 鉴权：apiKey 可省略或 ""（不发 Authorization），适合内网/无鉴权远程。
+ * provider 仅在 apiKey 未写出时继承其凭据。
+ */
+export interface EmbeddingModelConfig {
+  /** 显式关闭；缺省视为开启（仅当节点存在时才启用向量） */
+  enabled?: boolean;
+  /** 嵌入 API 协议；缺省按 provider/baseUrl 推断（openai 兼容） */
+  type?: EmbeddingApiType;
+  /** 引用 models.providers 的 key，继承 baseUrl；apiKey 仅在未写出时继承 */
+  provider?: string;
+  /** 模型名 */
+  model: string;
+  baseUrl?: string;
+  /** API Key；"" 或省略且未继承 = 不发送鉴权头 */
+  apiKey?: string;
+  /** Key 所在 Header；默认 Authorization。"" = 不发送 */
+  apiKeyHeader?: string;
+  /** Key 前缀；Authorization 默认 "Bearer " */
+  apiKeyPrefix?: string;
+  /** 请求 path；openai 默认 /embeddings，ollama 默认 /api/embeddings */
+  path?: string;
+  /** 额外请求头 */
+  headers?: Record<string, string>;
+  /** 通用 HTTP 字段映射 */
+  request?: EmbeddingHttpMappingConfig;
+  /** 是否支持批量（仅单条接口时设 false） */
+  supportsBatch?: boolean;
+  /** 请求超时 ms */
+  timeoutMs?: number;
+  /** 向量维度 */
+  dimensions?: number;
+  /** 向量检索引擎；auto=优先 sqlite-vec，失败退回 JS */
+  vectorEngine?: VectorEngineChoice;
+  /** sqlite-vec 扩展路径（可选） */
+  sqliteVecExtensionPath?: string;
+}
+
 /** 新格式的 models 配置 */
 export interface ModelsConfig {
   /** 合并模式：merge=与 builtin 合并，replace=完全替代 */
@@ -468,6 +526,8 @@ export interface ModelsConfig {
   providers: Record<string, ModelProviderConfig>;
   /** 模型级别映射（子系统通过级别名引用具体模型） */
   level?: LevelMap;
+  /** Embedding 模型配置（可选；多处可复用） */
+  embedding?: EmbeddingModelConfig;
 }
 
 
@@ -893,6 +953,8 @@ export function toGatewayConfig(config: NormalizedHarnessConfig): GatewayConfig 
     context: config.context,
     constitution: config.context?.constitution ?? config.constitution,
     memory: config.memory,
+    embedding: config.models?.embedding,
+    modelProviders: config.models?.providers,
   };
 
   if (config.agentRuntime) {

@@ -207,6 +207,13 @@ export type { TokenBudgetConfig, ModelPricing, RateLimitConfig, TokenCheckResult
 // ── Memory ──
 export { InMemoryMemoryStore, InMemoryConceptGraph, AgentDatabase, SqliteMemoryStore, SqliteWisdomStore, SqliteConceptGraph, KnowledgeRegistry, createEmbeddingProvider } from './memory/index.js';
 export type { AgentDatabaseOptions, SqliteMemoryStoreOptions, SqliteConceptGraphOptions, EmbeddingProvider, EmbeddingConfig, KnowledgeSourceEntry } from './memory/index.js';
+export {
+  createEmbeddingProviderFromModels,
+  resolveEmbeddingRuntime,
+  isEmbeddingEnabled,
+  tokenizeKeywordQuery,
+  scoreKeywordFields,
+} from './memory/index.js';
 
 // ── Memory 领域类型 ──
 export type { MemoryType, MemoryEntry, MemoryQuery, MemoryStats, MemoryStore } from './memory/types.js';

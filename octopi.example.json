@@ -22,6 +22,14 @@
           { "id": "claude-opus-4-6", "name": "claude-opus-4-6", "contextWindow": 200000, "maxTokens": 32000 }
         ]
       }
+    },
+    "embedding": {
+      "enabled": true,
+      "type": "openai",
+      "provider": "openai",
+      "model": "text-embedding-3-small",
+      "dimensions": 1536,
+      "vectorEngine": "auto"
     }
   },
 

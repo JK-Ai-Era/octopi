@@ -1,7 +1,12 @@
 /**
  * SqliteMemoryStore — SQLite 记忆存储
  *
- * 混合检索 + shadow/软删过滤 + 治理管理面。
+ * 检索路径：
+ * 1. 配置了 embedding + sqlite-vec 可用 → vec0 KNN
+ * 2. 配置了 embedding（无 vec）→ SQL 预筛 + JS 余弦 hybrid
+ * 3. 未配置 embedding → 多字段关键词（content/tags/future_use/anchors/evidence）
+ *
+ * shadow/软删过滤 + 治理管理面不变。
  */
 
 import type {
@@ -19,11 +24,25 @@ import { mapLegacyType } from '../gates.js';
 import { AgentDatabase } from './agent-db.js';
 import type { EmbeddingProvider } from './embedding.js';
 import { searchTopK, parseEmbedding, serializeEmbedding } from './vector-search.js';
+import {
+  buildKeywordLikeSql,
+  scoreKeywordFields,
+  tokenizeKeywordQuery,
+} from './keyword-search.js';
+import {
+  deleteMemoryVector,
+  ensureMemoryVecTable,
+  searchMemoryVectors,
+  upsertMemoryVector,
+} from './sqlite-vec.js';
+import type { VectorEngineChoice } from '../../../config.js';
 
 export interface SqliteMemoryStoreOptions {
   embeddingProvider?: EmbeddingProvider | null;
   /** 向量检索 SQL 候选上限（默认 500） */
   candidateCap?: number;
+  /** 向量引擎；auto=优先 sqlite-vec（需 db 已 load 扩展），否则 JS */
+  vectorEngine?: VectorEngineChoice;
 }
 
 function emptyTypes(): Record<MemoryType, number> {
@@ -36,11 +55,31 @@ export class SqliteMemoryStore implements MemoryStore {
   private db: AgentDatabase;
   private embedding: EmbeddingProvider | null;
   private readonly candidateCap: number;
+  private readonly vectorEngine: VectorEngineChoice;
+  private vecReady = false;
+  private embeddingBackfillScheduled = false;
 
   constructor(db: AgentDatabase, options?: SqliteMemoryStoreOptions) {
     this.db = db;
     this.embedding = options?.embeddingProvider ?? null;
     this.candidateCap = Math.max(20, options?.candidateCap ?? 500);
+    this.vectorEngine = options?.vectorEngine ?? 'auto';
+
+    if (this.embedding && this.vectorEngine !== 'js') {
+      const dims = this.embedding.dimensions;
+      if (dims > 0 && (db.sqliteVecEnabled || this.vectorEngine === 'sqlite-vec' || this.vectorEngine === 'auto')) {
+        // sqlite-vec 已加载时建/验 vec 表；auto 且扩展未加载则保持 false，走 JS hybrid
+        if (db.sqliteVecEnabled || this.vectorEngine === 'sqlite-vec') {
+          this.vecReady = ensureMemoryVecTable(db.raw, dims);
+        }
+      }
+    }
+  }
+
+  /** 是否启用 sqlite-vec 检索 */
+  get vectorEngineActive(): 'sqlite-vec' | 'js' | 'keyword' {
+    if (!this.embedding) return 'keyword';
+    return this.vecReady && this.vectorEngine !== 'js' ? 'sqlite-vec' : 'js';
   }
 
   async store(entry: Omit<MemoryEntry, 'id' | 'accessCount' | 'lastAccessedAt' | 'createdAt' | 'decayFactor'>): Promise<string> {
@@ -49,9 +88,21 @@ export class SqliteMemoryStore implements MemoryStore {
 
     let embeddingStr: string | null = null;
     if (this.embedding) {
-      const text = `[${entry.type}] ${entry.content} tags: ${entry.tags.join(',')}`;
-      const vec = await this.embedding.embed(text);
-      embeddingStr = serializeEmbedding(vec);
+      const text = this.embedText({
+        type: entry.type,
+        content: entry.content,
+        tags: entry.tags ?? [],
+        futureUse: entry.futureUse,
+        anchors: entry.anchors ?? [],
+        evidence: entry.evidence,
+      });
+      try {
+        const vec = await this.embedding.embed(text);
+        embeddingStr = serializeEmbedding(vec);
+      } catch {
+        // embedding 服务不可用：写入仍成功，检索退回关键词
+        embeddingStr = null;
+      }
     }
 
     this.db.raw.prepare(`
@@ -78,11 +129,44 @@ export class SqliteMemoryStore implements MemoryStore {
       entry.evidence ?? null,
     );
 
+    if (embeddingStr && this.vecReady) {
+      try {
+        const vec = parseEmbedding(embeddingStr);
+        if (vec) upsertMemoryVector(this.db.raw, id, vec);
+      } catch {
+        // vec 表异常不影响主写入
+      }
+    }
+
+    this.embeddingBackfillScheduled = true;
     return id;
+  }
+
+  private embedText(parts: {
+    type: string;
+    content: string;
+    tags: string[];
+    futureUse?: string;
+    anchors: string[];
+    evidence?: string;
+  }): string {
+    const segments = [
+      `[${parts.type}] ${parts.content}`,
+      parts.tags.length ? `tags: ${parts.tags.join(',')}` : '',
+      parts.futureUse ? `future_use: ${parts.futureUse}` : '',
+      parts.anchors.length ? `anchors: ${parts.anchors.join(',')}` : '',
+      parts.evidence ? `evidence: ${parts.evidence}` : '',
+    ].filter(Boolean);
+    return segments.join(' | ');
   }
 
   async retrieve(query: MemoryQuery): Promise<MemoryEntry[]> {
     if (this.embedding && query.text.trim()) {
+      await this.maybeBackfillEmbeddings();
+      if (this.vecReady && this.vectorEngine !== 'js') {
+        const viaVec = await this.vecRetrieveAsync(query);
+        if (viaVec.length > 0) return viaVec;
+      }
       return this.hybridRetrieve(query);
     }
     return this.structuredRetrieve(query);
@@ -103,6 +187,34 @@ export class SqliteMemoryStore implements MemoryStore {
       params.push(...list);
     }
     return { sql, params };
+  }
+
+  /** sqlite-vec KNN 检索（需先 embed 查询文本） */
+  private async vecRetrieveAsync(query: MemoryQuery): Promise<MemoryEntry[]> {
+    if (!this.embedding || !this.vecReady) return [];
+    let queryVec: number[];
+    try {
+      queryVec = await this.embedding.embed(query.text);
+    } catch {
+      return [];
+    }
+
+    const vis = this.visibilityWhere(query);
+    const k = Math.max(query.limit ?? 10, 20);
+    const hits = searchMemoryVectors(this.db.raw, queryVec, k * 3, vis.sql, vis.params);
+    if (hits.length === 0) return [];
+
+    const entries: MemoryEntry[] = [];
+    for (const hit of hits) {
+      const row = this.db.raw.prepare('SELECT * FROM memories WHERE id = ?').get(hit.id) as any;
+      if (!row) continue;
+      entries.push(this.rowToEntry(row));
+      if (entries.length >= k) break;
+    }
+
+    const filtered = this.applyFilters(entries, query);
+    if (filtered.length === 0) return [];
+    return this.sortAndLimit(filtered, query);
   }
 
   /**
@@ -185,17 +297,55 @@ export class SqliteMemoryStore implements MemoryStore {
       params.push(query.minImportance);
     }
 
-    if (query.text.trim()) {
-      const words = query.text.toLowerCase().split(/\s+/).filter(Boolean);
-      if (words.length > 0) {
-        const likeClauses = words.map(() => 'LOWER(content) LIKE ?');
-        sql += ` AND (${likeClauses.join(' OR ')})`;
-        params.push(...words.map(w => `%${w}%`));
-      }
+    const tokens = tokenizeKeywordQuery(query.text);
+    const like = buildKeywordLikeSql(tokens);
+    if (like.sql) {
+      sql += like.sql;
+      params.push(...like.params);
     }
 
     const rows = this.db.raw.prepare(sql).all(...params) as any[];
-    return Promise.resolve(this.sortAndLimit(this.filterByTags(rows.map(r => this.rowToEntry(r)), query), query));
+    const entries = rows.map(r => this.rowToEntry(r));
+    const filtered = this.filterByTags(entries, query);
+
+    if (tokens.length > 0) {
+      const scored = filtered
+        .map((e) => ({
+          e,
+          score: scoreKeywordFields(
+            {
+              content: e.content,
+              tags: e.tags,
+              futureUse: e.futureUse,
+              anchors: e.anchors,
+              evidence: e.evidence,
+            },
+            tokens,
+          ),
+        }))
+        .filter((s) => s.score > 0);
+
+      scored.sort((a, b) => {
+        const rankA = a.score * 10 + a.e.importance * a.e.confidence * a.e.decayFactor;
+        const rankB = b.score * 10 + b.e.importance * b.e.confidence * b.e.decayFactor;
+        return rankB - rankA;
+      });
+
+      const limit = query.limit ?? 10;
+      const results = scored.slice(0, limit).map((s) => s.e);
+      if (query.updateAccess !== false) {
+        const now = Date.now();
+        const stmt = this.db.raw.prepare(
+          'UPDATE memories SET access_count = access_count + 1, last_accessed_at = ? WHERE id = ?'
+        );
+        for (const entry of results) {
+          stmt.run(now, entry.id);
+        }
+      }
+      return Promise.resolve(results);
+    }
+
+    return Promise.resolve(this.sortAndLimit(filtered, query));
   }
 
   /** 与 InMemory 对齐：tags 交集过滤 */
@@ -251,6 +401,56 @@ export class SqliteMemoryStore implements MemoryStore {
     return results;
   }
 
+  /**
+   * 回填缺失 embedding（历史数据 / 关键词时代写入）。
+   *
+   * @param limit - 单次最大处理条数（默认 200）
+   * @returns 成功回填条数
+   */
+  async backfillEmbeddings(limit = 200): Promise<number> {
+    if (!this.embedding) return 0;
+
+    const rows = this.db.raw.prepare(`
+      SELECT id, type, content, tags, future_use, anchors, evidence, embedding
+      FROM memories
+      WHERE deleted = 0 AND (embedding IS NULL OR embedding = '')
+      ORDER BY last_accessed_at DESC
+      LIMIT ?
+    `).all(limit) as any[];
+
+    let ok = 0;
+    for (const row of rows) {
+      try {
+        const text = this.embedText({
+          type: row.type,
+          content: row.content,
+          tags: row.tags ? JSON.parse(row.tags) : [],
+          futureUse: row.future_use ?? undefined,
+          anchors: row.anchors ? JSON.parse(row.anchors) : [],
+          evidence: row.evidence ?? undefined,
+        });
+        const vec = await this.embedding.embed(text);
+        const serialized = serializeEmbedding(vec);
+        this.db.raw.prepare('UPDATE memories SET embedding = ? WHERE id = ?').run(serialized, row.id);
+        if (this.vecReady) upsertMemoryVector(this.db.raw, row.id, vec);
+        ok++;
+      } catch {
+        // 单条失败不中断批量
+      }
+    }
+    return ok;
+  }
+
+  private async maybeBackfillEmbeddings(): Promise<void> {
+    if (!this.embedding || !this.embeddingBackfillScheduled) return;
+    this.embeddingBackfillScheduled = false;
+    try {
+      await this.backfillEmbeddings(100);
+    } catch {
+      // 回填失败不影响本次检索
+    }
+  }
+
   async get(id: string): Promise<MemoryEntry | null> {
     const row = this.db.raw.prepare('SELECT * FROM memories WHERE id = ?').get(id) as any;
     return row ? this.rowToEntry(row) : null;
@@ -275,10 +475,34 @@ export class SqliteMemoryStore implements MemoryStore {
 
     params.push(id);
     this.db.raw.prepare(`UPDATE memories SET ${fields.join(', ')} WHERE id = ?`).run(...params);
+
+    if (this.embedding && (patch.content !== undefined || patch.tags !== undefined || patch.futureUse !== undefined)) {
+      this.embeddingBackfillScheduled = true;
+      // 内容变更后强制重算该条
+      try {
+        const row = this.db.raw.prepare('SELECT * FROM memories WHERE id = ?').get(id) as any;
+        if (row) {
+          const text = this.embedText({
+            type: row.type,
+            content: row.content,
+            tags: row.tags ? JSON.parse(row.tags) : [],
+            futureUse: row.future_use ?? undefined,
+            anchors: row.anchors ? JSON.parse(row.anchors) : [],
+            evidence: row.evidence ?? undefined,
+          });
+          const vec = await this.embedding.embed(text);
+          this.db.raw.prepare('UPDATE memories SET embedding = ? WHERE id = ?').run(serializeEmbedding(vec), id);
+          if (this.vecReady) upsertMemoryVector(this.db.raw, id, vec);
+        }
+      } catch {
+        // 重算失败保留旧向量
+      }
+    }
   }
 
   async delete(id: string): Promise<void> {
     this.db.raw.prepare('DELETE FROM memories WHERE id = ?').run(id);
+    deleteMemoryVector(this.db.raw, id);
   }
 
   async softDelete(

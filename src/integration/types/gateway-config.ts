@@ -48,4 +48,8 @@ export interface GatewayConfig {
   context?: import('../../config.js').HarnessConfig['context'];
   constitution?: import('../../config.js').ConstitutionConfig;
   memory?: import('../../config.js').HarnessConfig['memory'];
+  /** models.embedding — 向量检索配置（memory 等共用） */
+  embedding?: import('../../config.js').EmbeddingModelConfig;
+  /** models.providers — 供 embedding 继承 baseUrl/apiKey */
+  modelProviders?: Record<string, import('../../config.js').ModelProviderConfig>;
 }

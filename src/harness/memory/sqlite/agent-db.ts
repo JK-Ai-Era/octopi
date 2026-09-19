@@ -15,16 +15,23 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
+import { ensureMemoryVecTable, tryLoadSqliteVec } from './sqlite-vec.js';
 
 export interface AgentDatabaseOptions {
   /** 数据库文件路径（默认 ':memory:'） */
   dbPath?: string;
   /** WAL 模式（默认 true） */
   wal?: boolean;
+  /** 尝试加载 sqlite-vec 扩展（默认 false） */
+  sqliteVec?: boolean | { extensionPath?: string };
+  /** 向量维度；配合 sqlite-vec 时用于创建 memory_vec 虚拟表 */
+  vectorDimensions?: number;
 }
 
 export class AgentDatabase {
   private db: any;
+  private _sqliteVec = false;
+  private _vecDimensions: number | null = null;
 
   private constructor(db: any) {
     this.db = db;
@@ -62,7 +69,30 @@ export class AgentDatabase {
 
     const agentDb = new AgentDatabase(db);
     agentDb.createTables();
+
+    // 可选：sqlite-vec + memory_vec 虚拟表
+    const vecOpt = options?.sqliteVec;
+    if (vecOpt) {
+      const extensionPath = typeof vecOpt === 'object' ? vecOpt.extensionPath : undefined;
+      const loaded = await tryLoadSqliteVec(db, extensionPath);
+      agentDb._sqliteVec = loaded;
+      if (loaded && options?.vectorDimensions) {
+        const ok = ensureMemoryVecTable(db, options.vectorDimensions);
+        agentDb._vecDimensions = ok ? options.vectorDimensions : null;
+      }
+    }
+
     return agentDb;
+  }
+
+  /** sqlite-vec 扩展是否已加载 */
+  get sqliteVecEnabled(): boolean {
+    return this._sqliteVec;
+  }
+
+  /** 已创建的 vec 表维度；未启用时为 null */
+  get vectorDimensions(): number | null {
+    return this._vecDimensions;
   }
 
   /** 旧库升级：补齐 memories 治理列 + 旧类型映射（必须在依赖新列的 INDEX 之前） */
@@ -211,6 +241,19 @@ export class AgentDatabase {
    */
   get raw(): any {
     return this.db;
+  }
+
+  /**
+   * 确保 memory_vec 虚拟表维度匹配（store 侧在已知 dimensions 后调用）。
+   *
+   * @returns 是否可用
+   */
+  ensureMemoryVec(dimensions: number): boolean {
+    if (!this._sqliteVec) return false;
+    if (this._vecDimensions === dimensions) return true;
+    const ok = ensureMemoryVecTable(this.db, dimensions);
+    this._vecDimensions = ok ? dimensions : null;
+    return ok;
   }
 
   /**
