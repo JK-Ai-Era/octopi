@@ -21,6 +21,7 @@ import type {
 import type { ReliabilityHarness } from '../reliability/run-agent.js';
 import { runAgentWithReliability } from '../reliability/run-agent.js';
 import { withResolvedModel } from '../model/run-scope.js';
+import { withRunScope } from '../run-scope.js';
 import type { ResolvedModel } from '../model/types.js';
 import type { HarnessLoopEvent } from '../reliability/harness-events.js';
 
@@ -220,9 +221,15 @@ export class Agent {
    * - `config.model` 使用 snapshot.provider
    * - ALS 注入完整 snapshot，convertToLlm/summarize 只读不再 resolve
    *
+   * `options.context`（宪法 I1）：本 Run 的 AgentContext 工作区。
+   * 生产路径（SessionAwareRunner）必须传入；省略时退回实例上的 `_context`
+   * （单测 / 旧 multi-agent 路径）。不得将共享实例当作多 session 工作区。
+   *
+   * `options.runScope`：本 Run 身份，经 ALS 供 convertToLlm / 工具 / checkpoint 读取。
+   *
    * @param signal - 中止信号
    * @param harnessOverride - 临时覆盖 harness
-   * @param options - run 级覆盖（preferred: resolvedModel）
+   * @param options - run 级覆盖
    */
   run(
     signal?: AbortSignal,
@@ -230,6 +237,10 @@ export class Agent {
     options?: {
       /** 已解析模型快照（唯一推荐） */
       resolvedModel?: ResolvedModel;
+      /** 本 Run 的上下文工作区（I1）；缺省用实例 _context */
+      context?: AgentContext;
+      /** 本 Run 身份（sessionId/agentId/systemPrompt/toolRuntime） */
+      runScope?: import('../run-scope.js').RunScope;
       /** @deprecated 旧路径：仅绑定 provider */
       model?: ModelProvider;
       /** @deprecated 旧路径：仅窗口 */
@@ -245,11 +256,20 @@ export class Agent {
     const resolved = options?.resolvedModel;
     const loopModel = resolved?.provider ?? options?.model;
     const config = loopModel ? { ...this._config, model: loopModel } : this._config;
+    const context = options?.context ?? this._context;
+    const runScope: import('../run-scope.js').RunScope = {
+      sessionId: options?.runScope?.sessionId ?? this._contextSessionId,
+      agentId: options?.runScope?.agentId ?? harness.agentId ?? 'default',
+      systemPrompt: options?.runScope?.systemPrompt ?? context.systemPrompt,
+      toolRuntime: options?.runScope?.toolRuntime,
+    };
 
+    let gen = runAgentWithReliability(context, config, harness, signal);
+    gen = withRunScope(runScope, gen);
     if (resolved) {
-      return withResolvedModel(resolved, runAgentWithReliability(this._context, config, harness, signal));
+      return withResolvedModel(resolved, gen);
     }
-    // 兼容：无完整 snapshot 时仍进入 ALS
+    // 兼容：无完整 snapshot 时仍进入模型 ALS
     if (options?.model) {
       const fallbackSnapshot: ResolvedModel = {
         ref: `${options.model.name}/${options.model.defaultModel ?? ''}`,
@@ -261,9 +281,9 @@ export class Agent {
         known: options.contextWindow != null,
         isOverride: false,
       };
-      return withResolvedModel(fallbackSnapshot, runAgentWithReliability(this._context, config, harness, signal));
+      return withResolvedModel(fallbackSnapshot, gen);
     }
-    return withResolvedModel(undefined, runAgentWithReliability(this._context, config, harness, signal));
+    return withResolvedModel(undefined, gen);
   }
 }
 

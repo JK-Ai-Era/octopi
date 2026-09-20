@@ -3,7 +3,7 @@
 > 状态：P0–P2 已实现；已纠偏「产品七层 ≠ ContextLayer」  
 > 范围：Web UI 实时呈现；System 装配层可观测 + Information 一等面板  
 > 关联：`docs/context-layer-contracts.md` · `docs/web-runtime-design.md` · `web/DESIGN.md`  
-> **概念约定**：产品七层第 7 层 = Information（session）；ContextLayer 契约第 7 位 = Runtime（附加，非 Information）
+> **概念约定**：产品**八层** = system 侧 ContextLayer 1–7（含 **Runtime** 为第 7 层）+ **Information**（第 8 层，消息窗口 strip）。`ContextLayerId` 仍为 7 个 system id，不为八层增删。详见 `arch/context-model.md`。
 
 ---
 

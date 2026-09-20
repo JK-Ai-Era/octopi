@@ -17,6 +17,7 @@ import type { SessionData } from './session-types.js';
 
 type TypedSessionStore = SessionStore<SessionData>;
 import type { Agent } from './agent/index.js';
+import type { AgentContext } from '../loop/types.js';
 import type { HarnessLoopEvent } from './reliability/harness-events.js';
 import type { ReliabilityHarness } from './reliability/run-agent.js';
 import { createSessionStateMachine } from './session-state-machine.js';
@@ -26,6 +27,7 @@ import { extractLayerQuery } from './context/layer-types.js';
 import { withRuntimeDatetimeInjection } from './context/runtime-datetime.js';
 import type { SessionTaskService } from './session-tasks/service.js';
 import { renderSessionTasksInjection } from './session-tasks/render.js';
+import type { RunScope } from './run-scope.js';
 
 /** Session 锁队列项 */
 interface QueueEntry {
@@ -464,14 +466,18 @@ export class SessionAwareRunner {
         injectedContext: withRuntimeDatetimeInjection(effectiveRunConfig.injectedContext),
       };
 
-      // 8. 同步运行时上下文到工具上下文提供者
+      // 8. 工具运行时：setRuntime 仅作无 ALS 时的回退；权威身份在 RunScope
       if (this.toolContextProvider) {
         this.toolContextProvider.setRuntime(sessionId, _agentId, session.messages);
       }
 
-      // 9. 同步 session 消息到 Agent 上下文
-      this.agent.context.messages = session.messages;
-      // 播种压缩状态（摘要 + lastProactiveMessageCount），供重启后缓存重建
+      // 9. 本 Run 私有 AgentContext（宪法 I1）——禁止写入共享 agent.context.messages
+      const runContext: AgentContext = {
+        systemPrompt: '',
+        messages: session.messages,
+        tools: this.agent.tools,
+      };
+      // 播种压缩状态（Map 键 = sessionId）；供 convertToLlm / 重启重建
       this.agent.setSessionCompactState(sessionId, session.contextCompact);
       let basePrompt = effectiveRunConfig.systemPrompt;
       let personaFromResolver = false;
@@ -481,7 +487,7 @@ export class SessionAwareRunner {
           const previouslyHadPersona = (this.lastCleanPersonaPrompt ?? '') !== '';
           this.lastCleanPersonaPrompt = resolved;
           if (resolved) {
-            // 有 persona：同步到 Agent / SecurityGuard
+            // 有 persona：同步到 Agent / SecurityGuard（模板级，非「当前会话」）
             this.agent.setSystemPrompt(resolved);
             this.harness.security?.setSystemPrompt?.(resolved);
             basePrompt = resolved;
@@ -510,11 +516,11 @@ export class SessionAwareRunner {
             sessionId,
             data: { error: errMsg },
           });
-          basePrompt = this.lastCleanPersonaPrompt ?? (this.agent.context.systemPrompt || '');
+          basePrompt = this.lastCleanPersonaPrompt ?? effectiveRunConfig.systemPrompt ?? '';
         }
       }
       if (!basePrompt && !personaFromResolver) {
-        basePrompt = this.agent.context.systemPrompt || '';
+        basePrompt = effectiveRunConfig.systemPrompt || this.agent.context.systemPrompt || '';
       }
 
       // ── Run 级模型快照：每 run 只 resolve 一次（必须在 system assembler 之前）──
@@ -534,6 +540,7 @@ export class SessionAwareRunner {
       }
 
       // system prompt 终装：Assembler（层契约）优先，否则退回字符串拼接
+      // 结果只写入 runContext / RunScope，不作为「Agent 当前会话状态」
       if (this.systemPromptAssembler) {
         try {
           const assembled = await this.systemPromptAssembler({
@@ -545,8 +552,7 @@ export class SessionAwareRunner {
             contextWindow: effectiveRunConfig.contextWindow,
             signal,
           });
-          // 未知窗口时 assembler 仍装配层（不做窗口比例硬裁），不丢 systemPrompt
-          this.agent.context.systemPrompt = assembled.systemPrompt;
+          runContext.systemPrompt = assembled.systemPrompt;
           if (assembled.manifest) {
             const assembledAt = Date.now();
             this._events?.emit({
@@ -570,7 +576,7 @@ export class SessionAwareRunner {
           console.warn(
             `[octopi] system prompt assemble failed (session=${sessionId}): ${errMsg}; falling back to concat`,
           );
-          this.applyConcatSystemPrompt(basePrompt, effectiveRunConfig.injectedContext, personaFromResolver);
+          runContext.systemPrompt = this.concatSystemPrompt(basePrompt, effectiveRunConfig.injectedContext, personaFromResolver);
           this._events?.emit({
             type: 'context.layers.assembled',
             timestamp: Date.now(),
@@ -593,31 +599,45 @@ export class SessionAwareRunner {
           });
         }
       } else {
-        this.applyConcatSystemPrompt(basePrompt, effectiveRunConfig.injectedContext, personaFromResolver);
+        runContext.systemPrompt = this.concatSystemPrompt(basePrompt, effectiveRunConfig.injectedContext, personaFromResolver);
       }
 
-      // 更新 harness 的 sessionId/agentId（用于检查点）
+      // 更新 harness 的 sessionId/agentId（checkpoint 回退；权威身份在 RunScope ALS）
       this.harness.sessionId = sessionId;
       this.harness.agentId = effectiveRunConfig.agentId ?? 'default';
-      // ContextEngine CompactState 按 session 隔离
+      // 兼容回退：无 ALS 消费方时的 contextSessionId（Map 键场景仍用显式 sessionId）
       this.agent.setContextSessionId(sessionId);
+
+      const runScope: RunScope = {
+        sessionId,
+        agentId: _agentId,
+        systemPrompt: runContext.systemPrompt,
+        toolRuntime: {
+          sessionId,
+          agentId: _agentId,
+          messages: session.messages,
+          cwd: effectiveRunConfig.cwd,
+        },
+      };
 
       // Token 估算器（当 LLM 不返回 usage 时用于回退估算）
       const estimator = new HeuristicTokenEstimator();
 
-      // 10. 运行 Agent（Agent.run = reliability 包装）
+      // 10. 运行 Agent（Agent.run = reliability 包装；context/runScope 为本 Run 私有）
       let hasTurnEnd = false;
       let streamedContent = '';
       let lastUsage: any = undefined;
       const meta = { agentId: effectiveRunConfig.agentId ?? 'default', sessionId };
       const adaptState = { assistantContent: '', lastUserContent: '' };
       /** 本轮起始消息下标（afterTurn 只传增量） */
-      let turnStartIndex = this.agent.context.messages.length;
+      let turnStartIndex = runContext.messages.length;
 
       // resolvedModel 已在 system assembler 之前解析；此处只组装 run options
-      const agentRunOptions = resolvedModel
-        ? { resolvedModel }
-        : undefined;
+      const agentRunOptions = {
+        resolvedModel: resolvedModel ?? undefined,
+        context: runContext,
+        runScope,
+      };
 
       for await (const loopEvent of this.agent.run(signal, undefined, agentRunOptions)) {
         // 适配事件格式（向后兼容）
@@ -653,7 +673,7 @@ export class SessionAwareRunner {
 
         // turn_start：重置本轮增量游标（afterTurn 只传本轮消息）
         if (loopEvent.type === 'turn_start') {
-          turnStartIndex = this.agent.context.messages.length;
+          turnStartIndex = runContext.messages.length;
         }
 
         // turn.end → 记录 turn
@@ -662,9 +682,9 @@ export class SessionAwareRunner {
           if (loopEvent.usage) {
             lastUsage = loopEvent.usage;
           }
-          const turnMessages = this.agent.context.messages.slice(turnStartIndex);
+          const turnMessages = runContext.messages.slice(turnStartIndex);
           await this.agent.notifyAfterTurn(lastUsage, turnMessages);
-          turnStartIndex = this.agent.context.messages.length;
+          turnStartIndex = runContext.messages.length;
           const content = adaptState.assistantContent || streamedContent;
           if (content) {
             session.turns.push({
@@ -680,11 +700,10 @@ export class SessionAwareRunner {
         }
       }
 
-      // 10. 同步 Agent 上下文回 session
-      //     Agent.run() 修改了 agent.context.messages（原地）
+      // 10. 将本 Run 工作区写回 session（Loop 原地修改的是 runContext.messages）
       //     含 Loop 注入的托管 systemPrompt（metadata.source='systemPrompt'）：
       //     落盘保留审计价值；聊天 UI 在 history 映射时过滤，不回放进对话
-      session.messages = this.agent.context.messages;
+      session.messages = runContext.messages;
 
       // 11. 引擎异常退出时的 session 一致性修复
       if (!hasTurnEnd) {
@@ -830,19 +849,21 @@ export class SessionAwareRunner {
     };
   }
 
-  /** 旧路径：persona + injectedContext 字符串拼接 */
-  private applyConcatSystemPrompt(
+  /** 旧路径：persona + injectedContext 字符串拼接；结果返回给 runContext，不写共享 Agent */
+  private concatSystemPrompt(
     basePrompt: string,
     injectedContext: string | undefined,
     personaFromResolver: boolean,
-  ): void {
+  ): string {
     if (injectedContext) {
-      this.agent.context.systemPrompt = basePrompt
+      return basePrompt
         ? `${basePrompt}\n\n${injectedContext}`
         : injectedContext;
-    } else if (personaFromResolver || basePrompt) {
-      this.agent.context.systemPrompt = basePrompt;
     }
+    if (personaFromResolver || basePrompt) {
+      return basePrompt;
+    }
+    return basePrompt;
   }
 
   /**

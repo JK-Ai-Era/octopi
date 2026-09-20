@@ -233,7 +233,7 @@ describe('AgentBuilder + SessionAwareRunner 热更新', () => {
     const provider = createMockProvider((req) => captured.push(req));
     const security = createMockSecurity();
 
-    const { agent, runner } = await new AgentBuilder()
+    const { runner } = await new AgentBuilder()
       .model(provider)
       .persona(home)
       .security(security)
@@ -255,11 +255,9 @@ describe('AgentBuilder + SessionAwareRunner 热更新', () => {
 
     const secondSystem = captured[1]?.messages.find((m) => m.role === 'system');
     const secondSystemText = String(secondSystem?.content ?? '');
-    // persona 删空后不再粘旧人格；runtime datetime 仍每轮注入
+    // persona 删空后不再粘旧人格；runtime datetime 仍每轮注入（I1：以 LLM 所见 system 为准）
     expect(secondSystemText).not.toContain('# Soul');
     expect(secondSystemText).toContain('Current datetime:');
-    expect(agent.context.systemPrompt).not.toContain('# Soul');
-    expect(agent.context.systemPrompt).toContain('Current datetime:');
     expect(security.setSystemPromptMock).toHaveBeenLastCalledWith('');
   });
 
@@ -302,7 +300,7 @@ describe('AgentBuilder + SessionAwareRunner 热更新', () => {
 
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
-    const { agent, runner } = await new AgentBuilder()
+    const { runner } = await new AgentBuilder()
       .model(provider)
       .persona(home)
       .events(bus)
@@ -310,14 +308,14 @@ describe('AgentBuilder + SessionAwareRunner 热更新', () => {
       .build();
 
     const runConfig = { systemPrompt: '', agentId: 'a', sessionId: 's1' };
-    // 第一轮：带注入，制造「persona + INJECT-A」的 context.systemPrompt
+    // 第一轮：带注入；I1 以 LLM 所见 system 为准，而非共享 agent.context
     for await (const _ of runner.handle('s1', userMsg('hi'), {
       ...runConfig,
       injectedContext: 'INJECT-A',
     })) {
       // drain
     }
-    expect(agent.context.systemPrompt).toContain('INJECT-A');
+    expect(String(captured[0]?.messages.find((m) => m.role === 'system')?.content ?? '')).toContain('INJECT-A');
 
     // 模拟磁盘读失败
     runner.setSystemPromptResolver(async () => {

@@ -45,6 +45,7 @@ import type { ReliabilityHarness as CoreReliabilityHarness } from '../../core/in
 import { RunMetricsCollector } from './run-metrics-collector.js';
 import { IterationBudget } from '../budget/budget.js';
 import { NoopEventBus } from '../../core/primitives/event-bus.js';
+import { getRunScope } from '../run-scope.js';
 
 // ── 可靠性配置 ──
 
@@ -550,9 +551,11 @@ export async function* runAgentWithReliability(
           state.checkpointIterationCount = 0;
           state.forceCheckpoint = false;
           try {
+            // I1：checkpoint 身份优先 RunScope ALS（harness.sessionId 仅为回退）
+            const scope = getRunScope();
             const ctxForGuard = state.collector.buildContext({
-              sessionId: harness.sessionId,
-              agentId: harness.agentId,
+              sessionId: scope?.sessionId ?? harness.sessionId,
+              agentId: scope?.agentId ?? harness.agentId,
             });
             const verdict = await harness.runGuard.checkpoint(ctxForGuard);
             if (verdict.action === 'stop') {

@@ -241,6 +241,8 @@ export type { AgentContext, AgentTool, LoopToolResult, AgentLoopConfig, AgentLoo
 // ── Agent 门面（Harness） ──
 export { Agent } from './agent/index.js';
 export type { AgentOptions } from './agent/index.js';
+export { withRunScope, getRunScope, getRunSessionId } from './run-scope.js';
+export type { RunScope, RunToolRuntime } from './run-scope.js';
 
 // ── Harness 循环事件 ──
 export type {

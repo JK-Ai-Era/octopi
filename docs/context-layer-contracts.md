@@ -23,20 +23,22 @@ Constitution + Layer Providers ──► ContextAssembler ──► systemPrompt
 
 **Information（历史消息）不是 ContextLayer**，继续由 `DefaultContextEngine` 管理。
 
-### 概念模型 vs 契约层（纠偏说明）
+### 概念模型 vs 契约层（八层口径）
 
-| 口径 | 七层列表 | 含义 |
-|------|----------|------|
-| **产品概念模型** | Wisdom → Persona → Skill → Knowledge → Cognition → Memory → **Information** | Information = **session 消息**；整条分馏链 |
-| **ContextLayer 契约（system）** | wisdom → persona → skill → knowledge → cognition → memory → **runtime** | 只描述 **system prompt 片段**；**runtime ≠ Information** |
+| 口径 | 列表 | 含义 |
+|------|------|------|
+| **产品八层**（权威） | Wisdom → Persona → Skill → Knowledge → Cognition → Memory → **Runtime** → **Information** | Runtime = 第 7 层（Run 活态，system）；Information = 第 8 层（session 消息） |
+| **ContextLayer 契约（system）** | wisdom → persona → skill → knowledge → cognition → memory → **runtime** | **= 产品第 1–7 层**；只描述 system prompt 片段 |
 
-- **Runtime**：契约附加层，收编 `injectedContext`（会话任务 / guidance），仍属 system 侧，不进消息窗口。
-- **Information**：session / 消息历史；**禁止**作为 ContextLayer 塞进 `DefaultContextAssembler`。
+- **恒等式**：产品八层 = system ContextLayer（7）+ Information（消息窗口，1）。实现 id 不必增删。
+- **Runtime**：产品第 7 层；收编 `injectedContext`（会话任务 / guidance），归属 **Run**，不进消息窗口。
+- **Information**：产品第 8 层；session / 消息历史；**禁止**作为 ContextLayer 塞进 `DefaultContextAssembler`。
 - 装配不变量：Assembler 只产 systemPrompt + manifest；消息窗口永远走 ContextEngine。
+- 所有权与 Session/Agent/Run 对齐见 `arch/context-model.md`。
 
 ---
 
-## 2. 七层标识与默认参数
+## 2. System 层标识与默认参数（产品八层之 1–7）
 
 | id | order（位置） | priority（保序） | share（份额） | droppable | 当前 provider 来源 |
 |----|---------------|------------------|---------------|-----------|-------------------|
@@ -52,7 +54,7 @@ Constitution + Layer Providers ──► ContextAssembler ──► systemPrompt
 
 - **order ≠ priority**：order 决定在 system prompt 中的先后；priority 决定总预算不够时谁先留下。
 - **defaultShare**：历史参考值，**不再**驱动 Assembler 配额；需要单层限制时配置 `contextAssembler.layerShares`（硬顶）。
-- **runtime** 是契约附加层（**不是**产品七层里的 Information），收编现有 Runner 的 `injectedContext`（会话任务 / 子系统 guidance），靠近对话侧。
+- **runtime** 是产品八层第 7 层（system 侧，归属 Run），收编现有 Runner 的 `injectedContext`（会话任务 / 子系统 guidance），靠近对话侧；**不是** Information。
 
 ---
 

@@ -72,7 +72,7 @@ describe('SessionAwareRunner 注入 datetime', () => {
   it('每轮 system prompt 含 Current datetime，且叠加调用方 injectedContext', async () => {
     const captured: LLMRequest[] = [];
     const provider = createMockProvider((req) => captured.push(req));
-    const { agent, runner } = await new AgentBuilder()
+    const { runner } = await new AgentBuilder()
       .model(provider)
       .systemPrompt('You are test-agent.')
       .store(new InMemorySessionStore())
@@ -90,6 +90,7 @@ describe('SessionAwareRunner 注入 datetime', () => {
     expect(system).toContain('You are test-agent.');
     expect(system).toContain('Current datetime:');
     expect(system).toContain('CALLER-INJECT');
-    expect(agent.context.systemPrompt).toContain('Current datetime:');
+    // I1：装配结果在 Run 工作区；共享 agent.context 不再作为「当前会话 system」权威
+    expect(system.indexOf('Current datetime:')).toBeGreaterThan(-1);
   });
 });

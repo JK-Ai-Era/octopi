@@ -1,3 +1,19 @@
+## v0.35.0 (2026-09-26)
+
+### feat(harness): Run 物理 I1 — RunScope 隔离（宪法 north-star I1）
+
+同 Agent 多 Session 并发时，共享 `Agent` 实例不再充当会话工作区。可变运行上下文只活在 **RunScope / per-run `AgentContext`**。
+
+- **新增** `harness/run-scope.ts`：`RunScope` ALS（`sessionId` / `agentId` / `systemPrompt` / `toolRuntime`）；`withRunScope` / `getRunScope`
+- **`Agent.run`**：支持 `options.context`（本 Run 的 `AgentContext`）与 `options.runScope`；缺省仍用实例 `_context`（单测/旧 multi-agent）
+- **`SessionAwareRunner.handle`**：不再 `agent.context.messages = session.messages`；组装 `runContext` + `runScope` 传入 `agent.run`；system 装配结果只写 Run 工作区
+- **`convertToLlm` / `afterTurn`**：身份与 systemPrompt 优先读 RunScope ALS，compact 回写键取 ALS `sessionId`
+- **ToolContextProvider**：`get()` 优先 RunScope 的 `toolRuntime`；`setRuntime` 降级为无 ALS 时的回退
+- **RunGuard checkpoint**：`sessionId`/`agentId` 优先 RunScope ALS
+- **宪法**：`arch/north-star.md`（定稿）；八层×Scope、Session/Agent/Run 公理见 `arch/context-model.md` / `session-agent-run.md`
+- **测试**：`tests/harness/run-scope-isolation.test.ts`（并发 ALS + 双 Session 交错不串味）；persona/skill 测试改为断言 LLM 所见 system（Run 产物），不再断言共享 `agent.context.systemPrompt`
+- **遗留（宪法预留）**：工具效应面 I5、Session Lease、ACL/角色目录、Session 一等存储 — 不阻塞本版 I1
+
 ## v0.34.0 (2026-09-20)
 
 ### feat(web): 会话级模型切换 + contextWindow 未知不猜测

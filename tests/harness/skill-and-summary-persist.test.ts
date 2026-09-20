@@ -15,11 +15,13 @@ import type { Message } from '../../src/core/types.js';
 import type { SessionData } from '../../src/harness/session-types.js';
 import type { SessionStore } from '../../src/core/interfaces/session-store.js';
 
-function mockProvider(): ModelProvider {
+function mockProvider(captureSystem?: (system: string) => void): ModelProvider {
   return {
     name: 'mock',
     defaultModel: 'm',
-    async chat() {
+    async chat(req) {
+      const sys = req?.messages?.find((m) => m.role === 'system');
+      if (captureSystem && sys) captureSystem(String(sys.content ?? ''));
       return { content: '## Summary\nrestored-or-new', model: 'm', finishReason: 'stop' as const };
     },
     async *stream() {
@@ -77,8 +79,11 @@ describe('Skill 索引进 system prompt', () => {
   it('builder.skillDirectory 装配后 system 含 skill 索引', async () => {
     const skillDir = makeSkills();
     try {
-      const provider = mockProvider();
-      const { agent, runner } = await new AgentBuilder()
+      let llmSystem = '';
+      const provider = mockProvider((system) => {
+        llmSystem = system;
+      });
+      const { runner } = await new AgentBuilder()
         .model(provider)
         .skillDirectory(skillDir)
         .build();
@@ -87,8 +92,9 @@ describe('Skill 索引进 system prompt', () => {
         if (event.type === 'engine.end' || event.type === 'engine.error') break;
       }
 
-      expect(agent.context.systemPrompt).toContain('<available_skills>');
-      expect(agent.context.systemPrompt).toContain('demo-skill');
+      // I1：断言 Run 送入 LLM 的 system（装配产物），而非共享 agent.context
+      expect(llmSystem).toContain('<available_skills>');
+      expect(llmSystem).toContain('demo-skill');
     } finally {
       rmSync(skillDir, { recursive: true, force: true });
     }

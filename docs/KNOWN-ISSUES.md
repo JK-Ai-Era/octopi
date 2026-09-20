@@ -1,12 +1,14 @@
 # 已知问题
 
-> 最后更新：2026-09-20
+> 最后更新：2026-09-26
 
-## 同 Agent 多 Session 抢占共享 Agent 上下文（未解决）
+## 同 Agent 多 Session 抢占共享 Agent 上下文（I1 已落地）
 
-**状态：** 待专题处理 → `arch/open-problems.md` **OP-AR-3**
+**状态：** Run 物理 **I1 已实现**（v0.35.0，worktree `feat/run-scope-i1`）→ 宪法 `arch/north-star.md` · 专题 OP-AR-3
 
-Gateway 对同一 `agentId` 只保留一个 Agent 实例；`SessionAwareRunner` 的锁按 `sessionId` 而非 `agentId`。同一 Agent 下多个 session 并行 `handle()` 时会互相覆盖 `agent.context.messages`，可能导致会话历史串味、落盘污染。与模型切换/ResolvedModel 无关（ALS 安全）。方案与研究清单见 OP-AR-3。
+`SessionAwareRunner` 不再把共享 `Agent.context` 当会话工作区；每 Run 使用私有 `AgentContext` + `RunScope` ALS。锁仍按 `sessionId`。同 Agent 多 Session 并发的 **消息串味** 已由回归测试覆盖。
+
+**仍开放（宪法预留，非本 OP 阻塞）：** 工具效应面/同 workspace 并发（I5）、多进程 Session Lease、ACL/角色目录、Session 一等存储演进。见 `arch/north-star.md`。
 
 ## KnowledgeStage（已关闭）
 

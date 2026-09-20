@@ -73,6 +73,7 @@ import {
 import type { IterationBudgetConfig } from '../budget/budget.js';
 
 import { PersonaSource } from './persona.js';
+import { getRunScope } from '../run-scope.js';
 import { DefaultContextEngine } from '../context/default-context-engine.js';
 import { createProviderSummarize } from '../context/summarize.js';
 import { createDefaultSystemPromptAssembler } from '../context/system-prompt-assembler.js';
@@ -157,6 +158,24 @@ class RuntimeToolContextProvider implements ToolContextProvider {
   }
 
   get() {
+    // I1：优先 RunScope ALS（并发 session 下不可依赖单槽 setRuntime）
+    const scope = getRunScope();
+    if (scope?.toolRuntime) {
+      return {
+        sessionId: scope.toolRuntime.sessionId,
+        agentId: scope.toolRuntime.agentId,
+        messages: scope.toolRuntime.messages,
+        cwd: scope.toolRuntime.cwd ?? this.cwd,
+      };
+    }
+    if (scope) {
+      return {
+        sessionId: scope.sessionId,
+        agentId: scope.agentId,
+        messages: this.messages,
+        cwd: this.cwd,
+      };
+    }
     return { sessionId: this.sessionId, agentId: this.agentId, messages: this.messages, cwd: this.cwd };
   }
 }
@@ -1211,7 +1230,10 @@ export class AgentBuilder {
           }
         : undefined);
     agent.setConvertToLlm(async (messages) => {
-      const systemPrompt = agent.context.systemPrompt;
+      // I1：身份与 systemPrompt 优先读 RunScope ALS，避免共享 Agent 单例竞态
+      const scope = getRunScope();
+      const sessionId = scope?.sessionId ?? agent.contextSessionId;
+      const systemPrompt = scope?.systemPrompt ?? agent.context.systemPrompt;
       const tools: import('../../core/interfaces/model-provider.js').LLMToolDefinition[] = (agent.context.tools ?? []).map((t) => ({
         type: 'function' as const,
         function: {
@@ -1229,7 +1251,7 @@ export class AgentBuilder {
           ? snapshot.contextWindow
           : undefined;
       const result = await contextEngine.assemble({
-        sessionId: agent.contextSessionId,
+        sessionId,
         messages,
         systemPrompt,
         tools,
@@ -1251,9 +1273,9 @@ export class AgentBuilder {
           });
         },
       });
-      // 压缩状态回写 Agent 内存桥；Runner 在 session save 前写入 SessionData.contextCompact
+      // 压缩状态回写 Agent 内存桥（Map 键 = sessionId）；Runner 在 session save 前写入 SessionData.contextCompact
       if (result.compactState) {
-        agent.setSessionCompactState(agent.contextSessionId, result.compactState);
+        agent.setSessionCompactState(sessionId, result.compactState);
       }
       // droppedSummary：并入已有 system，避免连续两条 system（严格网关）
       const llmMessages = [...result.messages];
@@ -1274,8 +1296,9 @@ export class AgentBuilder {
       return llmMessages;
     });
     agent.setOnAfterTurn(async (usage, turn) => {
+      const sessionId = getRunScope()?.sessionId ?? agent.contextSessionId;
       await contextEngine.afterTurn?.({
-        sessionId: agent.contextSessionId,
+        sessionId,
         turn: turn ?? [],
         usage: usage
           ? { promptTokens: usage.promptTokens, completionTokens: usage.completionTokens }

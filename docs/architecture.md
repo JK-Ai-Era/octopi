@@ -481,66 +481,75 @@ harness/concurrency/
 
 ---
 
-## 4. Context Intelligence — 七层智能模型
+## 4. Context Intelligence — 八层智能模型
+
+> 所有权与 Session/Agent/Run 对齐见 `arch/context-model.md`（内部）。  
+> **宪法（已定稿）**：`arch/north-star.md`（类型轴 × Scope 轴；不变量 I1–I6）。实现与评审以该文为准。  
+> **产品八层 = system 侧 ContextLayer（1–7，含 Runtime）+ Information（第 8 层，消息窗口）。**
 
 ### 核心理念
 
 要让 agent 变得聪明，核心在于给会话提供更有效的 context。
-七层模型是一个**信息分馏系统**：从原始信息中逐层提炼，产出越来越高层级的理解。
+上下文模型包含两条正交轴：
+
+1. **信息分馏（认识论）**：从原始信息中逐层提炼，沉淀到 Agent 基质。  
+2. **每轮装配（运行时）**：本轮 LLM 看到什么 = Agent 基质 system 层 + Run 活态（Runtime）+ Session 消息窗口（Information）。
 
 **实现落点**：`harness/context/`（`ContextLayer` 契约 + `DefaultContextAssembler` + 薄适配层）。  
 设计细节见 [docs/context-layer-contracts.md](./context-layer-contracts.md)。
 
 ```
-Information（原始信息）→ Memory（记忆）→ Cognition（认知）→ Wisdom（智慧）
+分馏上行（Agent 成长）:
+  Information → Memory → Cognition → Wisdom
 
-Persona（人格）= agent 的 DNA
-Knowledge（知识）= 外部参考资料
-Skill（技能）= 工作流定义
+另三个 Agent 基质维度:
+  Persona = agent 的 DNA
+  Knowledge = 外部参考资料（可多 scope）
+  Skill = 工作流定义
 ```
 
-### 七层定义（产品概念模型）
+### 八层定义（产品概念模型）
 
-| 层 | 本质 | 构建归属 | 默认路径状态 |
-|---|---|---|---|
-| **Wisdom** | 思维范式 | `memory` 领域生成 | **已接线**（Builder/Gateway 可挂 WisdomStore） |
-| **Persona** | agent 的 DNA | `agent-building` 加载 | **已接线** |
-| **Skill** | 工作流定义 | `plugin-ecosystem` | **已接线**（`formatForPrompt` 索引） |
-| **Knowledge** | 外部参考资料 | `harness/context/knowledge` | **已接线**（进程内 store） |
-| **Cognition** | 概念关系网络 | `memory` 领域构建 | **已接线**（Builder/Gateway 可挂 ConceptGraphStore） |
-| **Memory** | 交互中提取的洞察 | `memory` 领域 | **已接线**（`SqliteMemoryStore`） |
-| **Information** | 原始交互记录（**session 消息**） | SessionStore + ContextEngine | **已接线**（消息窗口，**不是** ContextLayer） |
+| # | 层 | 本质 | 归属 | 默认路径状态 |
+|---|---|---|---|---|
+| 1 | **Wisdom** | 思维范式 | Agent 基质 | **已接线**（Builder/Gateway 可挂 WisdomStore） |
+| 2 | **Persona** | agent 的 DNA | Agent 基质 | **已接线** |
+| 3 | **Skill** | 工作流定义 | Agent 基质 | **已接线**（`formatForPrompt` 索引） |
+| 4 | **Knowledge** | 外部参考资料 | Knowledge scope（默认 agent） | **已接线**（进程内 store） |
+| 5 | **Cognition** | 概念关系网络 | Agent 基质 | **已接线**（Builder/Gateway 可挂 ConceptGraphStore） |
+| 6 | **Memory** | 交互中提取的洞察 | 库归 Agent；原料来自 Session | **已接线**（`SqliteMemoryStore`） |
+| 7 | **Runtime** | 本轮/本会话活态注入 | **Run**（Session 感知） | **已接线**（tasks / guidance / `injectedContext`） |
+| 8 | **Information** | 原始交互记录（session 消息） | **Session** | **已接线**（消息窗口，**不是** ContextLayer） |
 
 **概念模型 vs 实现契约（必读）：**
 
-- 产品「七层模型」的第 7 层是 **Information = 会话消息**，不是 system prompt 片段。
-- `ContextLayerId`（system 装配契约）是 7 个 **system 侧** id：`wisdom / persona / skill / knowledge / cognition / memory / runtime`。
-- **Runtime** 是契约附加层：收编 Runner 的 `injectedContext`（会话任务 / guidance），**不是** Information，也不是产品第 7 层。
+- **产品八层**的第 7 层是 **Runtime**（system 侧），第 8 层是 **Information**（消息窗口）。
+- `ContextLayerId`（system 装配契约）= 产品第 **1–7** 层：`wisdom / persona / skill / knowledge / cognition / memory / runtime`。
 - **Information 不进 ContextAssembler**；由 `DefaultContextEngine` 做消息选择 / 压缩 / 主动摘要。
+- 恒等式：**产品八层 = system ContextLayer（7）+ Information（1）**。`ContextLayerId` 无需为八层增删。
 
 ### 组装分工
 
 ```
-产品七层分馏：
+分馏（认识论）:
   Information（session）→ Memory → Cognition → Wisdom
-  Persona / Skill / Knowledge = 另外三个维度
 
-LLM 实际输入：
-  system prompt  = ContextLayer 装配（Persona/Skill/Knowledge/Cognition/Memory/Wisdom/Runtime）
+LLM 实际输入:
+  system prompt  = ContextLayer 装配（Wisdom/Persona/Skill/Knowledge/Cognition/Memory/Runtime）
   messages       = Information 窗口（ContextEngine）
 ```
 
-System 契约层 order：
+System 契约层 order（= 产品八层之 1–7）：
 
 ```
-1. Wisdom     ← order 10
-2. Persona    ← order 20
-3. Skill      ← order 30
-4. Knowledge  ← order 40
-5. Cognition  ← order 50
-6. Memory     ← order 60
-7. Runtime    ← order 70（契约附加：injectedContext）
-Information   ← 不进 ContextLayer；ContextEngine 管窗口
+1. Wisdom     ← order 10   Agent 基质
+2. Persona    ← order 20   Agent 基质
+3. Skill      ← order 30   Agent 基质
+4. Knowledge  ← order 40   Knowledge scope
+5. Cognition  ← order 50   Agent 基质
+6. Memory     ← order 60   Agent 库 + Run 召回
+7. Runtime    ← order 70   Run 活态（tasks/guidance/injectedContext）
+8. Information ← 不进 ContextLayer；ContextEngine 管窗口（产品第 8 层）
 ```
 
 ### memory/ 领域的抽象（redesign 后）
@@ -662,7 +671,7 @@ WebUI **不做**预算策略，只渲染 `known` / `source` / `contextWindow`。
 
 `harness/reliability/model-binding.ts` 与 `run-model-context.ts` 为兼容 re-export，新代码请 import `harness/model`。
 
-> 并发注意：同 Agent 多 Session 抢占共享 `agent.context.messages` 属独立架构债，见 `arch/open-problems.md` **OP-AR-3**（内部文档；`docs/KNOWN-ISSUES.md` 有摘要）。
+> 并发注意：同 Agent 多 Session 抢占共享 `agent.context.messages` 属独立架构债。方向已定为 Run 作用域隔离（Session / Agent / Run / RunScope 定义见 `arch/session-agent-run.md`；实现专题 `arch/open-problems.md` **OP-AR-3**；`docs/KNOWN-ISSUES.md` 有摘要）。代码尚未按该模型改写。
 
 ---
 

@@ -28,12 +28,18 @@ function makeProvider(name: string, model: string, contextWindow?: number): Mode
 }
 
 function makeAgentStub(provider: ModelProvider) {
-  const calls: Array<{ model?: string; resolved?: ResolvedModel }> = [];
+  const calls: Array<{
+    model?: string;
+    resolved?: ResolvedModel;
+    runScopeSessionId?: string;
+    contextMessages?: number;
+  }> = [];
   const agent = {
     context: { systemPrompt: 'sys', messages: [], tools: [] },
     contextSessionId: 'default',
     model: provider,
     config: { model: provider },
+    tools: [] as unknown[],
     setSystemPrompt: () => {},
     setContextSessionId: () => {},
     setSessionCompactState: () => {},
@@ -41,12 +47,25 @@ function makeAgentStub(provider: ModelProvider) {
     setOnAfterTurn: () => {},
     notifyAfterTurn: async () => {},
     harness: {},
-    run: async function* (_s?: AbortSignal, _h?: unknown, opts?: { resolvedModel?: ResolvedModel }) {
-      calls.push({ model: opts?.resolvedModel?.modelName, resolved: opts?.resolvedModel });
+    run: async function* (
+      _s?: AbortSignal,
+      _h?: unknown,
+      opts?: {
+        resolvedModel?: ResolvedModel;
+        context?: { systemPrompt: string; messages: unknown[] };
+        runScope?: { sessionId: string; agentId: string };
+      },
+    ) {
+      calls.push({
+        model: opts?.resolvedModel?.modelName,
+        resolved: opts?.resolvedModel,
+        runScopeSessionId: opts?.runScope?.sessionId,
+        contextMessages: Array.isArray(opts?.context?.messages) ? opts.context.messages.length : -1,
+      });
       yield { type: 'agent_end', reason: 'done', timestamp: Date.now() } as never;
     },
   };
-  return { agent: agent as unknown as Agent, calls };
+  return { agent: agent as unknown as Agent, calls: calls as Array<{ model?: string; resolved?: ResolvedModel; runScopeSessionId?: string; contextMessages?: number }> };
 }
 
 describe('SessionAwareRunner model resolve order', () => {
