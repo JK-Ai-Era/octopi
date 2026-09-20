@@ -1,4 +1,12 @@
-﻿## v0.43.0 (2026-09-26)
+## v0.43.1 (2026-09-26)
+
+### docs: Phase B–H 验收与已知问题对齐
+
+- `docs/KNOWN-ISSUES.md`：I5/模型2/ACL/Lease 状态与开放项；Gateway 默认 ACL 兼容性说明
+- `docs/architecture.md`：并发 / toolIsolation / SessionLease / 模型 2 / ACL
+- `docs/north-star.md`：变更记录注明 B–G 实现状态（不变量未改）
+
+## v0.43.0 (2026-09-26)
 
 ### fix(harness): 二轮评审跟进 — E6 agent 天花板、handoff 降级旧 primary
 

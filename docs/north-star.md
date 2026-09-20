@@ -280,3 +280,4 @@ Scope 轴:
 | 2026-09-26 | **I1 落地**：RunScope ALS + per-run AgentContext；见 CHANGELOG v0.35.0 |
 | 2026-09-26 | 文首定位定为 **「架构宪法」**；正文不展开文档目录体系 |
 | 2026-09-26 | 关联文档仅保留对外 `docs/`；实施规划归内部交接材料 |
+| 2026-09-26 | **Phase B–G 实现状态**（内部验收，见 CHANGELOG v0.36–v0.41）：I5 toolIsolation、模型 2 primary/归因、compact E4、ACL E6、preferred/handoff I3、Lease 接口位 E2/E7、AgentRevision 字段位。不变量本身未改。 |

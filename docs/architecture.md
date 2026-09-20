@@ -670,7 +670,13 @@ WebUI **不做**预算策略，只渲染 `known` / `source` / `contextWindow`。
 
 `harness/reliability/model-binding.ts` 与 `run-model-context.ts` 为兼容 re-export，新代码请 import `harness/model`。
 
-> 并发与 Run 作用域：同 Agent 多 Session 下，可变上下文只存在于 **RunScope**（见 [架构宪法](./north-star.md) I1）。`SessionAwareRunner` 不以共享 `Agent.context` 作为会话工作区。遗留项见 [`docs/KNOWN-ISSUES.md`](./KNOWN-ISSUES.md)。
+> 并发与 Run 作用域：同 Agent 多 Session 下，可变上下文只存在于 **RunScope**（见 [架构宪法](./north-star.md) I1）。`SessionAwareRunner` 不以共享 `Agent.context` 作为会话工作区。
+>
+> 工具效应（I5）：配置 `toolIsolation`（默认 `none`；多 Session 写文件建议 `session-subdir`）。
+> Session 锁（E2/E7）：`SessionLease` 接口，v1 为 `InProcessSessionLock`；分布式必须替换实现。
+> Session 数据（模型 2）：`primaryAgentId` + `preferredAgentId`（≠ primary）；compact 键 `(sessionId, agentId)`；ACL 角色目录见 `sessionAcl` 配置。
+> Gateway 默认：注入 Session ACL + 共享 SessionLease（单 agent primary 路径兼容；无 grant 的多 agent guest 会被拒绝）。
+> 遗留项见 [`docs/KNOWN-ISSUES.md`](./KNOWN-ISSUES.md)。
 
 ---
 
