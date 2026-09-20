@@ -1,3 +1,9 @@
+## v0.43.7 (2026-09-21)
+
+### fix: 修正 package.json description 乱码
+
+- `package.json`：`description` 由错误编码的乱码恢复为 **「可嵌入的 Agent 引擎」**，与 `docs/north-star.md` 产品定位一致
+
 ## v0.43.6 (2026-09-21)
 
 ### docs: 修正文档日期与 architecture 版本头
