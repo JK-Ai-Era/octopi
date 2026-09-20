@@ -1,9 +1,10 @@
 # Octopi 架构设计文档
 
-> 版本：v0.35.3 | 日期：2026-09-26
+> 版本：v0.36.0 | 日期：2026-09-21
 >
 > 本文档是 Octopi 的完整架构设计。
 > 长期不变量见 [架构宪法](./north-star.md)。
+> 与实现对齐：Observer Run Observatory（v0.43.3+）见 [observer-domain.md](./observer-domain.md)。
 
 ---
 

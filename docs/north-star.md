@@ -2,7 +2,7 @@
 
 > **架构宪法**  
 > **地位**：核心理念与长期不变量。高于单次交付节奏；实现可分层迭代，但 **不得违反不变量**。  
-> **状态**：定稿 2026-09-26；**I1 Run 物理已落地**（v0.35.0：RunScope ALS + per-run AgentContext）。修订须显式改本文并走变更记录。  
+> **状态**：定稿 2026-09-21；**I1 Run 物理已落地**（v0.35.0：RunScope ALS + per-run AgentContext）。修订须显式改本文并走变更记录。  
 > **产品定位**：Octopi = **可嵌入的 Agent 引擎**（运行时 + 连续性 + 治理底座），不是聊天包装器。
 
 ---
@@ -275,9 +275,9 @@ Scope 轴:
 
 | 日期 | 内容 |
 |------|------|
-| 2026-09-26 | 初稿：本体、不变量 I1–I6 / E1–E7、控制面分层、八层×Scope、Accountability/Agency、Reserved 设计位、过度设计边界、实现关系 |
-| 2026-09-26 | **定稿**；后续实现与评审以本文不变量为准 |
-| 2026-09-26 | **I1 落地**：RunScope ALS + per-run AgentContext；见 CHANGELOG v0.35.0 |
-| 2026-09-26 | 文首定位定为 **「架构宪法」**；正文不展开文档目录体系 |
-| 2026-09-26 | 关联文档仅保留对外 `docs/`；实施规划归内部交接材料 |
-| 2026-09-26 | **Phase B–G 实现状态**（内部验收，见 CHANGELOG v0.36–v0.41）：I5 toolIsolation、模型 2 primary/归因、compact E4、ACL E6、preferred/handoff I3、Lease 接口位 E2/E7、AgentRevision 字段位。不变量本身未改。 |
+| 2026-09-21 | 初稿：本体、不变量 I1–I6 / E1–E7、控制面分层、八层×Scope、Accountability/Agency、Reserved 设计位、过度设计边界、实现关系 |
+| 2026-09-21 | **定稿**；后续实现与评审以本文不变量为准 |
+| 2026-09-21 | **I1 落地**：RunScope ALS + per-run AgentContext；见 CHANGELOG v0.35.0 |
+| 2026-09-21 | 文首定位定为 **「架构宪法」**；正文不展开文档目录体系 |
+| 2026-09-21 | 关联文档仅保留对外 `docs/`；实施规划归内部交接材料 |
+| 2026-09-21 | **Phase B–G 实现状态**（内部验收，见 CHANGELOG v0.36–v0.41）：I5 toolIsolation、模型 2 primary/归因、compact E4、ACL E6、preferred/handoff I3、Lease 接口位 E2/E7、AgentRevision 字段位。不变量本身未改。 |

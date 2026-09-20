@@ -1,8 +1,17 @@
-## v0.43.5 (2026-09-26)
+## v0.43.6 (2026-09-21)
+
+### docs: 修正文档日期与 architecture 版本头
+
+- 仓库文档与 CHANGELOG 日期已全部统一为 **2026-09-21**（以本机时钟为准）
+- `docs/architecture.md`：版本头 **v0.36.0 | 2026-09-21**（新 Observer 领域按文档 semver 记 minor；并链到 observer-domain）
+- `docs/north-star.md` / `docs/KNOWN-ISSUES.md`：同步日期
+- `CHANGELOG.md`：全文件条目日期与系统时钟一致
+
+## v0.43.5 (2026-09-21)
 
 ### docs: README_CN Layer1 补充 Observer=Telemetry 与 Run Observatory 链接
 
-## v0.43.4 (2026-09-26)
+## v0.43.4 (2026-09-21)
 
 ### docs: 补齐 Observer Domain 外部文档
 
@@ -13,7 +22,7 @@
 - `docs/CONTRIBUTING.md`：测试覆盖行 + Observer 文档同步检查项
 - `docs/domain-split.md` / `README.md` / `README_CN.md`：标明 Core Observer（Telemetry）≠ Run Observatory
 
-## v0.43.3 (2026-09-26)
+## v0.43.3 (2026-09-21)
 
 ### feat(harness): Observer / Run Observatory — 设计决策落地与接线修复
 
@@ -35,7 +44,7 @@
 | **schema** | `octopi.schema.json` / `octopi.example.json` 同步 `observer` |
 | **设计** | `arch/observer-domain.md`：Observer Domain = Telemetry ∪ Run Observatory（不合并类；内部文档，不入库） |
 
-## v0.43.2 (2026-09-26)
+## v0.43.2 (2026-09-21)
 
 ### docs: 同步 B–H 实现后的文档与注释，降低后续踩坑
 
@@ -48,7 +57,7 @@
 - `README.md` / `README_CN.md` / `docs/architecture.md`：模块树与目录布局说明
 - `arch/NEXT-STEPS.md`（内部）：评审修复状态与 Gateway 默认 ACL 兼容性
 
-## v0.43.1 (2026-09-26)
+## v0.43.1 (2026-09-21)
 
 ### docs: Phase B–H 验收与已知问题对齐
 
@@ -56,7 +65,7 @@
 - `docs/architecture.md`：并发 / toolIsolation / SessionLease / 模型 2 / ACL
 - `docs/north-star.md`：变更记录注明 B–G 实现状态（不变量未改）
 
-## v0.43.0 (2026-09-26)
+## v0.43.0 (2026-09-21)
 
 ### fix(harness): 二轮评审跟进 — E6 agent 天花板、handoff 降级旧 primary
 
@@ -67,7 +76,7 @@
 | **测试** | from_grant fail-closed；overlay 向 max 抬升；handoff 降级 + agentId 不变；agentMax 钳制；compact 桶清理 |
 | **文档** | **兼容性**：Gateway 默认注入 `sessionAcl` + 共享 lease（非 opt-in）；多 agent 无 grant 的 guest 会在 handle 收到 `engine.error`；`preferredOnly` 下 handoff 需 `intent=admin_handoff` |
 
-## v0.42.0 (2026-09-26)
+## v0.42.0 (2026-09-21)
 
 ### fix(harness): 评审修复 — Jsonl model-2 持久化、共享 Lease、I5 路径消毒、E6 canHandoff、ACL handle 接线
 
@@ -81,7 +90,7 @@
 | **S7/S6/S10** | rights overlay 可向 max 提升后钳制；非法 boolean grant 拒绝；`from_grant` fail-closed；`preferredOnly` 要求 `intent=admin_handoff` |
 | **B2** | Runner 可注入 `sessionAcl`；Gateway 接线；`handle` 前 `authorizeRun`（primary 自动 owner，否则拒绝） |
 
-## v0.41.0 (2026-09-26)
+## v0.41.0 (2026-09-21)
 
 ### feat(harness) + docs: Phase G 预留位硬化 + Phase H 文档验收
 
@@ -95,7 +104,7 @@
 - **Runner**：私有锁改为注入 `SessionLease`（行为不变，FIFO in-process）
 - **Phase H**：`docs/KNOWN-ISSUES.md` / `docs/architecture.md` / `docs/north-star.md` 对齐
 
-## v0.40.0 (2026-09-26)
+## v0.40.0 (2026-09-21)
 
 ### feat(harness): Phase F preferred / handoff / Principal — I3 + I6 字段位
 
@@ -107,7 +116,7 @@
 | **审计** | `SessionData.switchAudit[]`：mode / from→to / actor / tenant / intent |
 | **Principal 字段位** | `RunRequest.actorId/actorType/tenantId/intent`；`RunAuditRecord`；`appendRunAudit` |
 
-## v0.39.0 (2026-09-26)
+## v0.39.0 (2026-09-21)
 
 ### feat(harness): Phase E Session ACL / 角色目录 — E6 最小集
 
@@ -124,7 +133,7 @@
 - **`SessionData.participants?`**：最小 Participant 绑定
 - **配置**：Zod `sessionAcl` + `octopi.schema.json` + `octopi.example.json`
 
-## v0.38.0 (2026-09-26)
+## v0.38.0 (2026-09-21)
 
 ### feat(harness): Phase D Compact 互斥与键位 — E4 `(sessionId, agentId)`
 
@@ -140,7 +149,7 @@
 - **Agent** `set/getSessionCompactState(sessionId, agentId, …)`（内部 API breaking）
 - **DefaultContextEngine**：assemble / compactStructural / afterTurn 状态键带 agentId
 
-## v0.37.0 (2026-09-26)
+## v0.37.0 (2026-09-21)
 
 ### feat(harness): Phase C Session 一等数据形态 — `primaryAgentId` + 消息归因（模型 2 最小集）
 
@@ -154,7 +163,7 @@
 - **`SessionData.primaryAgentId?`**（Accountability；preferred/guest 不自动改写，对齐 I3）
 - **JsonlSessionStore**：`*.state.json` 持久化 `primaryAgentId`
 
-## v0.36.0 (2026-09-26)
+## v0.36.0 (2026-09-21)
 
 ### feat(harness): I5 工具效应面最小集 — `toolIsolation`（宪法 north-star I5）
 
@@ -175,7 +184,7 @@
 **多 Session 写文件的宿主建议：** 配置 `"toolIsolation": "session-subdir"`。
 
 ---
-## v0.35.6 (2026-09-26)
+## v0.35.6 (2026-09-21)
 
 ### docs: 新 Session 开发入口与八层存储稿
 
@@ -184,7 +193,7 @@
 - **`arch/context-model-storage.md`**：按八层结构调整（Runtime 一等、Information 第 8 层、compact 键、Session 一等演进提示）
 - **`arch/open-problems.md` OP-AR-3**：状态改为 I1 已实现；后续见实施规划 Phase B+
 
-## v0.35.5 (2026-09-26)
+## v0.35.5 (2026-09-21)
 
 ### docs: 实施规划回归内部 arch
 
@@ -192,7 +201,7 @@
 - 对外 `docs/` 仅保留架构宪法、architecture、KNOWN-ISSUES 等；不再要求外部读者依赖内部专题稿
 - 开发交接：读 `arch/IMPLEMENTATION-PLAN.md` + `docs/north-star.md` + 本阶段 `arch/*` 专题
 
-## v0.35.4 (2026-09-26)
+## v0.35.4 (2026-09-21)
 
 ### docs: 对外文档去除 arch/ 引用
 
@@ -201,7 +210,7 @@
 - `CONTRIBUTING` 文档同步规范改为以 `docs/` + `CHANGELOG` 为准
 - `architecture` 并发注意改为指向宪法 I1（I1 已实现）
 
-## v0.35.3 (2026-09-26)
+## v0.35.3 (2026-09-21)
 
 ### docs: 架构宪法文首与正文表述收口
 
@@ -209,7 +218,7 @@
 - 正文去除关于 `docs/` / `arch/` 目录分工与内部指针的说明；关联文档仅列 `docs/` 对外文档
 - `IMPLEMENTATION-PLAN` / `architecture` / `KNOWN-ISSUES` 中的宪法表述同步
 
-## v0.35.2 (2026-09-26)
+## v0.35.2 (2026-09-21)
 
 ### docs: 宪法迁入 docs/north-star.md（对外）
 
@@ -219,7 +228,7 @@
 - **`arch/north-star.md`**：改为指针，指向 `docs/north-star.md`，防止双源
 - **交叉引用**：`docs/IMPLEMENTATION-PLAN.md`、`docs/architecture.md`、`docs/KNOWN-ISSUES.md` 统一指向对外宪法路径
 
-## v0.35.1 (2026-09-26)
+## v0.35.1 (2026-09-21)
 
 ### docs: 实施规划入库（跨 Session 交接）
 
@@ -229,7 +238,7 @@
 - **说明**：宪法与专题设计仍以本机 `arch/north-star.md` 等为准；规划以 `docs/IMPLEMENTATION-PLAN.md` 随仓库分发
 - **Phase A**：I1 已在 v0.35.0 合并 main（`ff75fd0`）
 
-## v0.35.0 (2026-09-26)
+## v0.35.0 (2026-09-21)
 
 ### feat(harness): Run 物理 I1 — RunScope 隔离（宪法 north-star I1）
 
