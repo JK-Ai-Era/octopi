@@ -57,7 +57,7 @@ Octopi 是一个可嵌入的 Agent 底座引擎，用于构建 AI 驱动的应�
 
 ### Layer 1: Core — Kernel 契约
 
-基础设施原语（EventBus、StateMachine）和 **Kernel ports**（ModelProvider、ErrorStrategy、SecurityGuard、RunGuard、ReliabilityHarness）+ 共享词汇表。**Product ports**（ToolBus、SessionStore、Observer）与 Domain 契约（ContextEngine、Memory、MCP…）在 Harness。不包含策略实现。**不 re-export Loop。**
+基础设施原语（EventBus、StateMachine）和 **Kernel ports**（ModelProvider、ErrorStrategy、SecurityGuard、RunGuard、ReliabilityHarness）+ 共享词汇表。**Product ports**（ToolBus、SessionStore、Observer=Telemetry）与 Domain 契约（ContextEngine、Memory、MCP…）在 Harness。Run Observatory 见 [docs/observer-domain.md](./docs/observer-domain.md)。不包含策略实现。**不 re-export Loop。**
 
 ### Layer 2: Harness — 领域
 

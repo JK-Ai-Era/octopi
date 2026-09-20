@@ -1,3 +1,7 @@
+## v0.43.5 (2026-09-26)
+
+### docs: README_CN Layer1 补充 Observer=Telemetry 与 Run Observatory 链接
+
 ## v0.43.4 (2026-09-26)
 
 ### docs: 补齐 Observer Domain 外部文档
