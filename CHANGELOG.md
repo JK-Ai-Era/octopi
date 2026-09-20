@@ -1,3 +1,12 @@
+## v0.35.6 (2026-09-26)
+
+### docs: 新 Session 开发入口与八层存储稿
+
+- **`AGENTS.md`**：增加架构宪法路径 `docs/north-star.md` 与开发约束（I1/E1/E5/E3 等）；上下文模型改为**八层**口径；**不**写具体 Phase 步骤
+- **`arch/NEXT-STEPS.md`**（内部）：新 Session 开工入口（阅读顺序、基线、Phase B/C 领任务话术）
+- **`arch/context-model-storage.md`**：按八层结构调整（Runtime 一等、Information 第 8 层、compact 键、Session 一等演进提示）
+- **`arch/open-problems.md` OP-AR-3**：状态改为 I1 已实现；后续见实施规划 Phase B+
+
 ## v0.35.5 (2026-09-26)
 
 ### docs: 实施规划回归内部 arch

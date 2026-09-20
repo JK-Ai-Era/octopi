@@ -77,6 +77,17 @@ Scaffolded by `src/init.ts` (`initOctopi` / `ensureAgentDirs`). Keep init, types
 
 **Dependency Direction**: Outer -> Inner. `Core` has zero outer dependencies. **Never introduce a dependency from `Core` to `Harness`.**
 
+### Architecture constitution (required reading)
+
+- **Constitution**: [`docs/north-star.md`](docs/north-star.md) — long-term invariants **I1–I6** / **E1–E7**. Implementation and review **must not violate** these.
+- **External docs**: `docs/` (constitution, architecture, contracts). **Internal design**: `arch/` (gitignored; implementation handoffs live here).
+- **Development constraints** (non-exhaustive; full list in the constitution):
+  - **I1**: Mutable run context lives only in **RunScope**; `Agent` is a template + substrate, not a session workspace.
+  - **E1/E5**: Same `sessionId` runs are serialized; Loop stays stateless; production path uses per-run context.
+  - **E3**: Memory/Wisdom/Cognition write **only** that agent’s stores.
+  - Config/schema changes: keep `src/config-schema.ts` in sync with `octopi.schema.json` / `octopi.example.json`.
+- For **current implementation phases**, start from internal `arch/IMPLEMENTATION-PLAN.md` and `arch/NEXT-STEPS.md` (not tracked in git). Do not invent a parallel roadmap.
+
 ### The 4-Layer Architecture
 1.  **Layer 0: Loop** — Pure execution loop (`agentLoop`). Zero state, zero external dependencies. Protocol events only (`AgentLoopEvent`).
 2.  **Layer 1: Core** — Mechanism primitives (EventBus, StateMachine) and Interface contracts. No strategy implementations. Does **not** re-export Loop.
@@ -85,17 +96,18 @@ Scaffolded by `src/init.ts` (`initOctopi` / `ensureAgentDirs`). Keep init, types
 
 **Runtime entry**: prefer `Agent.run()` over hand-wiring `runAgentWithReliability`. Harness-level events (`budget_exceeded`, `run_guard_*`) are `HarnessLoopEvent`, not `AgentLoopEvent`.
 
-### Context Intelligence (The 7-Layer Model)
-When modifying context-related code, understand the information distillation order:
-1.  **Wisdom** (Thinking patterns)
-2.  **Persona** (Identity)
-3.  **Skills** (Workflow guidance)
-4.  **Knowledge** (External references)
-5.  **Cognition** (Concept graph)
-6.  **Memory** (Extracted insights)
-7.  **Information** (Raw messages)
+### Context Intelligence (Eight-Layer Model)
 
-**Implementation lives in `harness/context/`** (`ContextLayer` / `DefaultContextAssembler` / `system-prompt-assembler.ts`), not in `harness/memory/`. Layers 1–6 are system-prompt content providers; Information is the message window (`DefaultContextEngine`). See `docs/context-layer-contracts.md`. Old `ContextIntelligence` has been removed.
+Product context model has **eight layers** (see constitution §1.3 and `docs/architecture.md` §4):
+
+1. Wisdom  2. Persona  3. Skills  4. Knowledge  5. Cognition  6. Memory  7. **Runtime**  8. **Information**
+
+- **System prompt (ContextLayer contract, layers 1–7 including Runtime)**: produced under `harness/context/` (`ContextLayer` / `DefaultContextAssembler` / `system-prompt-assembler.ts`).
+- **Information (layer 8)**: session messages via `DefaultContextEngine` — **not** a ContextLayer.
+- Distillation (knowledge formation): Information → Memory → Cognition → Wisdom.
+- Ownership: Agent substrate vs Run/Runtime vs Session/Information — see constitution; do not hang session state on `Agent.context`.
+
+See `docs/context-layer-contracts.md` and `docs/north-star.md`.
 
 ---
 
