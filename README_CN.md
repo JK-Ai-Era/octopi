@@ -214,10 +214,13 @@ src/
 │   ├── execution-environment/    沙箱、工作区
 │   ├── human-in-the-loop/        审批流程
 │   ├── memory/                   记忆、认知、智慧
-│   └── runner.ts                 SessionAwareRunner（编排器）
+│   └── runner.ts                 SessionAwareRunner（session 锁、tool cwd、ACL）
 ├── integration/             Layer 3  外部适配
 └── testing/                 测试工具
 ```
+
+运行时关键配置（见 `octopi.example.json` 与 `docs/KNOWN-ISSUES.md`）：
+`toolIsolation`、`sessionAcl`、`agents[].workspace` / `maxSessionRights`。
 
 ---
 
