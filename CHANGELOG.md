@@ -1,3 +1,13 @@
+## v0.35.2 (2026-09-26)
+
+### docs: 宪法迁入 docs/north-star.md（对外）
+
+文档定位：**`docs/` 对外，`arch/` 内部**。架构宪法作为对外文档入库，避免仅存在于 gitignore 的 `arch/`。
+
+- **新增** `docs/north-star.md`：宪法权威副本（本体、I1–I6 / E1–E7、Reserved 位）
+- **`arch/north-star.md`**：改为指针，指向 `docs/north-star.md`，防止双源
+- **交叉引用**：`docs/IMPLEMENTATION-PLAN.md`、`docs/architecture.md`、`docs/KNOWN-ISSUES.md` 统一指向对外宪法路径
+
 ## v0.35.1 (2026-09-26)
 
 ### docs: 实施规划入库（跨 Session 交接）
@@ -20,7 +30,7 @@
 - **`convertToLlm` / `afterTurn`**：身份与 systemPrompt 优先读 RunScope ALS，compact 回写键取 ALS `sessionId`
 - **ToolContextProvider**：`get()` 优先 RunScope 的 `toolRuntime`；`setRuntime` 降级为无 ALS 时的回退
 - **RunGuard checkpoint**：`sessionId`/`agentId` 优先 RunScope ALS
-- **宪法**：`arch/north-star.md`（定稿）；八层×Scope、Session/Agent/Run 公理见 `arch/context-model.md` / `session-agent-run.md`
+- **宪法**：对外权威路径 **`docs/north-star.md`**；八层×Scope 等内部专题见 `arch/context-model.md` / `arch/session-agent-run.md`
 - **测试**：`tests/harness/run-scope-isolation.test.ts`（并发 ALS + 双 Session 交错不串味）；persona/skill 测试改为断言 LLM 所见 system（Run 产物），不再断言共享 `agent.context.systemPrompt`
 - **遗留（宪法预留）**：工具效应面 I5、Session Lease、ACL/角色目录、Session 一等存储 — 不阻塞本版 I1
 

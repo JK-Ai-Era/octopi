@@ -4,11 +4,11 @@
 
 ## 同 Agent 多 Session 抢占共享 Agent 上下文（I1 已落地）
 
-**状态：** Run 物理 **I1 已实现**（v0.35.0，worktree `feat/run-scope-i1`）→ 宪法 `arch/north-star.md` · 专题 OP-AR-3
+**状态：** Run 物理 **I1 已实现**（v0.35.0）→ 宪法 **`docs/north-star.md`** · 实施规划 `docs/IMPLEMENTATION-PLAN.md`
 
 `SessionAwareRunner` 不再把共享 `Agent.context` 当会话工作区；每 Run 使用私有 `AgentContext` + `RunScope` ALS。锁仍按 `sessionId`。同 Agent 多 Session 并发的 **消息串味** 已由回归测试覆盖。
 
-**仍开放（宪法预留，非本 OP 阻塞）：** 工具效应面/同 workspace 并发（I5）、多进程 Session Lease、ACL/角色目录、Session 一等存储演进。见 `arch/north-star.md`。
+**仍开放（宪法预留，非本 OP 阻塞）：** 工具效应面/同 workspace 并发（I5）、多进程 Session Lease、ACL/角色目录、Session 一等存储演进。见 **`docs/north-star.md`**。
 
 ## KnowledgeStage（已关闭）
 

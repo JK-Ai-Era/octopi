@@ -1,12 +1,12 @@
 # Octopi 核心架构重构 — 实施规划（跨 Session 交接文档）
 
-> **地位**：**tracked 交接文档**（本文件在 git 中，可随 main 分发）。内部设计稿在 `arch/`（gitignore，不入库）。
-> **读者**：新 Session / 新会话中的实现 Agent。你可能没有此前讨论的上下文——**以本文 + `arch/north-star.md`（若本机有）为准**，不要凭感觉改架构。
+> **地位**：**tracked 交接文档**（本文件在 git 中，可随 main 分发）。内部设计稿在 `arch/`（gitignore，不对外）。  
+> **读者**：新 Session / 新会话中的实现 Agent。你可能没有此前讨论的上下文——**以本文 + `docs/north-star.md`（对外宪法）为准**，不要凭感觉改架构。  
 > **日期**：2026-09-26  
-> **宪法**：`arch/north-star.md`（定稿；本机 arch 目录）。若仅有本 docs 副本：不变量摘要见 §4，完整公理以仓库维护的 arch 磁盘稿或后续 docs 摘录为准。  
-> **代码基线**：I1 已合并 `main` @ `ff75fd0`（v0.35.0）。
+> **宪法**：**`docs/north-star.md`**（对外、tracked、权威）。`arch/north-star.md` 仅为内部指针。  
+> **代码基线**：I1 已合并 `main`（v0.35.0+）。  
 >
-> **arch/ 与 git**：`arch/` 整目录 ignore，**不能**靠 `arch/` 路径合并进 main。协作与新 clone 交接用 **本文**；宪法/ACL/八层等仍在 `arch/`，实现前若本机存在则必读。
+> **文档定位**：`docs/` 对外；`arch/` 内部。专题细节若仅在 `arch/`，实现时以宪法不变量与本文验收为准。
 
 ---
 
@@ -17,7 +17,7 @@
 | 顺序 | 文档 | 作用 |
 |------|------|------|
 | 1 | 仓库根 `AGENTS.md` | 分层、测试、提交、配置约定 |
-| 2 | `arch/north-star.md` | 宪法：本体、不变量 I1–I6 / E1–E7、Reserved 位 |
+| 2 | **`docs/north-star.md`** | 宪法（对外权威）：本体、不变量 I1–I6 / E1–E7、Reserved 位 |
 | 3 | 本文 §1–§5 | 现状、目标、阶段、验收 |
 | 4 | 当前阶段对应的专题章节（§6+） | 本阶段要改什么 |
 
@@ -58,7 +58,11 @@ Octopi 是**可嵌入 Agent 引擎**。原实现把 **Agent 实例当成「当�
 
 | 文档 | 内容 | git |
 |------|------|-----|
-| `arch/north-star.md` | **宪法**：本体、I1–I6、E1–E7、Reserved 位、过度设计边界 | gitignore（磁盘必有；主仓库与 worktree 的 `arch/`） |
+| **`docs/north-star.md`** | **宪法（对外权威）**：本体、I1–I6、E1–E7、Reserved 位、过度设计边界 | **tracked** |
+| `docs/IMPLEMENTATION-PLAN.md` | 跨 session 实施规划 | tracked |
+| `docs/architecture.md` / `docs/KNOWN-ISSUES.md` | 对外架构与已知问题 | tracked |
+| `arch/north-star.md` | 内部指针 → docs 宪法 | gitignore |
+| `arch/session-agent-run.md` 等 | 内部专题稿 | gitignore |
 | `arch/session-agent-run.md` | Session/Agent/Run/RunScope 术语与所有权 | gitignore |
 | `arch/session-acl.md` | 角色目录（owner/specialist/reviewer/operator/steward）、权限、意图 | gitignore |
 | `arch/context-model.md` | 八层 × Scope 叉乘 | gitignore |
@@ -80,7 +84,7 @@ Octopi 是**可嵌入 Agent 引擎**。原实现把 **Agent 实例当成「当�
 
 | 项 | 说明 |
 |----|------|
-| 宪法定稿 | `arch/north-star.md` |
+| 宪法定稿 | **`docs/north-star.md`** |
 | 八层 / ACL / Session 模型 | arch 专题文档 |
 | **I1 Run 物理（代码）** | **已合并 main**：commit `ff75fd0`，**v0.35.0**（原 worktree `feat/run-scope-i1`） |
 
@@ -116,7 +120,7 @@ npm test        # 1634 passed（全量）
 
 ## 4. 宪法不变量（实现与 Code Review 门禁）
 
-摘自 `arch/north-star.md`，**完整版以宪法为准**。
+摘自 **`docs/north-star.md`**，**完整版以该宪法为准**。
 
 ### 宪法级
 
@@ -179,7 +183,7 @@ npm test -- tests/harness/run-scope-isolation.test.ts
 
 ### 5.4 新 Session 开工检查清单
 
-- [ ] 已读 `AGENTS.md` + `arch/north-star.md` + 本文
+- [ ] 已读 `AGENTS.md` + **`docs/north-star.md`** + 本文
 - [ ] `git worktree list` / 当前分支正确
 - [ ] `npm test` 与 §3 基线一致（或已知差异写进任务说明）
 - [ ] 只做一个阶段（§6）的一个子任务；完成即更新任务列表与 CHANGELOG
@@ -377,7 +381,7 @@ B（I5）不依赖 C，可与 C 并行。
 向当前 Agent 这样描述即可：
 
 ```text
-请阅读 C:\Users\James\Projects\octopi\arch\IMPLEMENTATION-PLAN.md 与 arch/north-star.md。
+请阅读 **docs/IMPLEMENTATION-PLAN.md** 与 **docs/north-star.md**。
 在 worktree C:\Users\James\Projects\octopi-run-scope（分支 feat/run-scope-i1 或自该分支新开）
 完成 Phase X 子任务 Xn：…
 验收：…（粘贴该子任务验收行）
@@ -391,7 +395,7 @@ B（I5）不依赖 C，可与 C 并行。
 
 ## 10. 与 memory / 任务面板
 
-- 长期公理以 **`arch/north-star.md`** 为准，不依赖聊天记忆。  
+- 长期公理以 **`docs/north-star.md`** 为准，不依赖聊天记忆。  
 - 实现进度以 **本文 §3 / §6 勾选 + CHANGELOG + git 分支** 为准。  
 - Session memory 可记「当前领取了哪个 Phase」，但 **不要**用 memory 替代本文。
 
@@ -403,3 +407,4 @@ B（I5）不依赖 C，可与 C 并行。
 |------|------|
 | 2026-09-26 | 初版：交接用实施规划；记录 I1 已在 feat/run-scope-i1；Phase A–H |
 | 2026-09-26 | Phase A 完成：I1 `ff75fd0` 已并入 main，v0.35.0 |
+| 2026-09-26 | 宪法权威路径改为 **`docs/north-star.md`**（对外） |

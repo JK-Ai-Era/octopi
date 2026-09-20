@@ -484,7 +484,7 @@ harness/concurrency/
 ## 4. Context Intelligence — 八层智能模型
 
 > 所有权与 Session/Agent/Run 对齐见 `arch/context-model.md`（内部）。  
-> **宪法（已定稿）**：`arch/north-star.md`（类型轴 × Scope 轴；不变量 I1–I6）。实现与评审以该文为准。  
+> **宪法（已定稿，对外）**：[`docs/north-star.md`](./north-star.md)（类型轴 × Scope 轴；不变量 I1–I6）。实现与评审以该文为准。  
 > **产品八层 = system 侧 ContextLayer（1–7，含 Runtime）+ Information（第 8 层，消息窗口）。**
 
 ### 核心理念
