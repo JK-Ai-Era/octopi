@@ -99,6 +99,17 @@
     "dmScope": "per-peer"
   },
 
+  "toolIsolation": "session-subdir",
+
+  "sessionAcl": {
+    "switchDefaults": {
+      "preferredOnly": true,
+      "consultGrantRole": "specialist",
+      "requireExplicitHandoff": true
+    },
+    "allowAgentInitiatedHandoff": false
+  },
+
   "webSearch": {
     "provider": "duckduckgo",
     "fallbacks": [],

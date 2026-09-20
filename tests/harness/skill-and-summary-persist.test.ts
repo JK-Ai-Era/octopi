@@ -293,7 +293,7 @@ describe('压缩摘要 Session 持久化', () => {
     const builder = new AgentBuilder().model(provider).store(store);
     const { agent } = await builder.buildAgent();
     agent.setContextSessionId('s1');
-    agent.setSessionCompactState('s1', {
+    agent.setSessionCompactState('s1', 'default', {
       summary: '## Conversation Summary\nfrom-disk',
       lastProactiveMessageCount: 2,
       lastProactiveTokens: 100,
@@ -301,7 +301,7 @@ describe('压缩摘要 Session 持久化', () => {
 
     const llm = await agent.config.convertToLlm!([userMsg('hi')]);
     expect(llm.length).toBeGreaterThan(0);
-    expect(agent.getSessionCompactState('s1')?.summary).toContain('from-disk');
-    expect(agent.getSessionCompactState('s1')?.lastProactiveMessageCount).toBe(2);
+    expect(agent.getSessionCompactState('s1', 'default')?.summary).toContain('from-disk');
+    expect(agent.getSessionCompactState('s1', 'default')?.lastProactiveMessageCount).toBe(2);
   });
 });

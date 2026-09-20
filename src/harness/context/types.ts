@@ -84,6 +84,8 @@ export type ContextEmitFn = (event: ContextCompactEvent) => void;
 export interface AssembleParams {
   /** Session ID */
   sessionId: string;
+  /** Agent ID（E4 compact 键分量；缺省时引擎状态退化为纯 sessionId） */
+  agentId?: string;
   /** 当前消息历史 */
   messages: Message[];
   /** 系统提示词 */
@@ -189,6 +191,8 @@ export interface IngestParams {
 
 export interface CompactParams {
   sessionId: string;
+  /** E4：compact 键分量 */
+  agentId?: string;
   /**
    * Token 预算；未知 contextWindow 时可省略。
    * 无预算且未 force 时跳过自动门槛判断；force 走结构压缩。
@@ -220,6 +224,8 @@ export interface CompactResult {
 
 export interface AfterTurnParams {
   sessionId: string;
+  /** E4: compact key component; engine state key falls back to sessionId when omitted */
+  agentId?: string;
   /** 本轮消息 */
   turn: Message[];
   /** 本轮 token 使用 */
@@ -278,6 +284,8 @@ export interface ContextEngine {
    */
   compactStructural?(input: {
     sessionId: string;
+    /** E4：compact 键分量；缺省时内部状态键 = sessionId */
+    agentId?: string;
     messages: Message[];
     summarize?: SummarizeFunction;
     compactTargetTokens?: number;

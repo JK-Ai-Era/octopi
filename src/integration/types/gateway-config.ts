@@ -27,6 +27,10 @@ export interface GatewayConfig {
       maxEntries?: number;
     };
   };
+  /** 工具效应隔离策略（宪法 I5）；默认 none */
+  toolIsolation?: 'none' | 'session-subdir' | 'session-lock';
+  /** Session ACL 角色目录（E6）；缺省内置五角色 */
+  sessionAcl?: import('../../harness/session-acl/types.js').SessionAclConfig;
   trace?: {
     outputDir?: string;
     level?: 'ERROR' | 'WARN' | 'INFO' | 'DEBUG' | 'TRACE';

@@ -71,6 +71,29 @@ export { Agent } from './harness/agent/index.js';
 export type { AgentOptions } from './harness/agent/index.js';
 export type { HarnessLoopEvent } from './harness/reliability/harness-events.js';
 export { SessionAwareRunner } from './harness/runner.js';
+export {
+  DEFAULT_TOOL_ISOLATION,
+  resolveToolIsolationCwd,
+} from './harness/tool-effect/isolation.js';
+export type { ToolIsolationMode } from './harness/tool-effect/isolation.js';
+export { InProcessSessionLock } from './harness/concurrency/session-lease.js';
+export type { SessionLease } from './harness/concurrency/session-lease.js';
+export {
+  SessionAclService,
+  BUILTIN_SESSION_ROLES,
+  computeEffectiveRights,
+} from './harness/session-acl/index.js';
+export type {
+  SessionRights,
+  EffectiveSessionRights,
+  SessionParticipant,
+  SessionAclConfig,
+  PrincipalRef,
+  SessionSwitchMode,
+  SwitchSessionResult,
+} from './harness/session-acl/types.js';
+export type { SessionSwitchRecord } from './harness/session-types.js';
+export type { RunAuditRecord } from './harness/agent-runtime/types.js';
 export { loadPersona, composePersonas, PersonaSource } from './harness/agent-building/persona.js';
 
 // Context Engine

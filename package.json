@@ -1,6 +1,6 @@
 ﻿{
   "name": "octopi",
-  "version": "0.41.0",
+  "version": "0.43.0",
   "description": "鍙祵鍏ョ殑 Agent 寮曟搸",
   "type": "module",
   "main": "dist/index.js",
@@ -91,4 +91,5 @@
     "sqlite-vec": "^0.1.9"
   }
 }
+
 

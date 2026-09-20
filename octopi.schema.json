@@ -30,6 +30,20 @@
             "type": "string",
             "description": "沙箱工作目录：agent 工具操作的 cwd"
           },
+          "maxSessionRights": {
+            "type": "object",
+            "description": "Session ACL 天花板（E6 L1）；与角色 max / 绑定取交集",
+            "properties": {
+              "canRun": { "type": "boolean" },
+              "readScope": {
+                "type": "string",
+                "enum": ["full", "from_grant", "summary_tail", "none"]
+              },
+              "writeMemory": { "type": "boolean" },
+              "canManageTasks": { "type": "boolean" },
+              "canHandoff": { "type": "boolean" }
+            }
+          },
           "persona": {
             "description": "Persona 配置（向后兼容：string 形式等价于 home）",
             "oneOf": [
@@ -791,6 +805,83 @@
               "description": "[Deprecated] 数据库文件路径（runtime 忽略）"
             }
           }
+        }
+      }
+    },
+    "toolIsolation": {
+      "type": "string",
+      "enum": [
+        "none",
+        "session-subdir",
+        "session-lock"
+      ],
+      "default": "none",
+      "description": "工具效应面隔离策略（宪法 I5）。none=多 Session 共享 agent.workspace（默认）；session-subdir=cwd 为 <workspace>/<sessionId>/；session-lock=共享路径，同 sessionId 由 Runner 锁串行，不提供跨 Session 路径隔离"
+    },
+    "sessionAcl": {
+      "type": "object",
+      "description": "Session ACL 角色目录（宪法 E6）。缺省使用内置五角色 owner/specialist/reviewer/operator/steward；handoff 默认仅宿主",
+      "properties": {
+        "roles": {
+          "type": "array",
+          "description": "角色覆盖/新增（同 id 覆盖内置种子）",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "defaults"
+            ],
+            "properties": {
+              "id": { "type": "string", "minLength": 1 },
+              "description": { "type": "string" },
+              "defaults": {
+                "type": "object",
+                "required": [
+                  "canRun",
+                  "readScope",
+                  "writeMemory",
+                  "canManageTasks",
+                  "canHandoff"
+                ],
+                "properties": {
+                  "canRun": { "type": "boolean" },
+                  "readScope": {
+                    "type": "string",
+                    "enum": ["full", "from_grant", "summary_tail", "none"]
+                  },
+                  "writeMemory": { "type": "boolean" },
+                  "canManageTasks": { "type": "boolean" },
+                  "canHandoff": { "type": "boolean" }
+                }
+              },
+              "max": {
+                "type": "object",
+                "properties": {
+                  "canRun": { "type": "boolean" },
+                  "readScope": {
+                    "type": "string",
+                    "enum": ["full", "from_grant", "summary_tail", "none"]
+                  },
+                  "writeMemory": { "type": "boolean" },
+                  "canManageTasks": { "type": "boolean" },
+                  "canHandoff": { "type": "boolean" }
+                }
+              }
+            }
+          }
+        },
+        "switchDefaults": {
+          "type": "object",
+          "properties": {
+            "preferredOnly": { "type": "boolean", "default": true },
+            "consultGrantRole": { "type": "string", "default": "specialist" },
+            "requireExplicitHandoff": { "type": "boolean", "default": true }
+          }
+        },
+        "allowAgentInitiatedHandoff": {
+          "type": "boolean",
+          "default": false,
+          "description": "是否允许 agent 发起 handoff（I3；出厂 false）"
         }
       }
     },

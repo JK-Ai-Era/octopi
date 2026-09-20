@@ -98,6 +98,8 @@ export interface AgentConfig {
   skills?: string[];
   /** Channel 绑定 */
   channelBindings?: Record<string, string>;
+  /** Session ACL 天花板（E6 L1） */
+  maxSessionRights?: import('./harness/session-acl/types.js').SessionRights;
 }
 
 // ── Web Search 配置 ──
@@ -612,6 +614,20 @@ export interface HarnessConfig {
   channels?: ChannelConfig[];
   /** Session 配置 */
   session?: SessionConfig;
+  /**
+   * 工具效应隔离策略（宪法 I5）
+   *
+   * - `none`（默认）：多 Session 共享 agent.workspace
+   * - `session-subdir`：cwd → `<workspace>/<sessionId>/`
+   * - `session-lock`：共享路径；同 sessionId 由 Runner 锁串行（不路径隔离）
+   */
+  toolIsolation?: 'none' | 'session-subdir' | 'session-lock';
+  /**
+   * Session ACL 角色目录（E6）
+   *
+   * 缺省使用内置五角色；可覆盖/新增。handoff 默认仅宿主。
+   */
+  sessionAcl?: import('./harness/session-acl/types.js').SessionAclConfig;
   /** 并发控制配置 */
   concurrency?: {
     /** 多 Key Provider 负载均衡池 */
@@ -937,11 +953,14 @@ export function toGatewayConfig(config: NormalizedHarnessConfig): GatewayConfig 
     skillDirectory: ac.skillDirectory,
     skills: ac.skills,
     channelBindings: ac.channelBindings,
+    maxSessionRights: ac.maxSessionRights,
   }));
 
   const gatewayConfig: GatewayConfig = {
     agents: resolvedAgents,
     session: config.session ? { dmScope: config.session.dmScope } : undefined,
+    toolIsolation: config.toolIsolation,
+    sessionAcl: config.sessionAcl,
     budget: config.budget,
     contextAssembler: config.context?.contextAssembler ?? config.contextAssembler,
     context: config.context,

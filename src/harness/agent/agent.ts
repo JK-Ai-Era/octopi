@@ -24,6 +24,7 @@ import { withResolvedModel } from '../model/run-scope.js';
 import { withRunScope } from '../run-scope.js';
 import type { ResolvedModel } from '../model/types.js';
 import type { HarnessLoopEvent } from '../reliability/harness-events.js';
+import { compactStateKey } from '../context/compact-key.js';
 
 // ── Agent 选项 ──
 
@@ -167,23 +168,39 @@ export class Agent {
     this._contextSessionId = sessionId;
   }
 
-  /** 播种/更新会话压缩状态快照（Runner 从 SessionData 注入） */
+  /**
+   * 播种/更新会话压缩状态快照（Runner 从 SessionData 注入）
+   *
+   * E4：键 = `(sessionId, agentId)`，不按纯 sessionId 共享。
+   *
+   * @param sessionId - 会话 id
+   * @param agentId - 产出/消费该 compact 视图的 agent
+   * @param state - 快照；undefined 清除
+   */
   setSessionCompactState(
     sessionId: string,
+    agentId: string,
     state: { summary?: string; lastProactiveMessageCount?: number; lastProactiveTokens?: number } | undefined,
   ): void {
+    const key = compactStateKey(sessionId, agentId);
     if (state && (state.summary || state.lastProactiveMessageCount != null)) {
-      this._sessionCompactStates.set(sessionId, { ...state });
+      this._sessionCompactStates.set(key, { ...state });
     } else {
-      this._sessionCompactStates.delete(sessionId);
+      this._sessionCompactStates.delete(key);
     }
   }
 
-  /** 读取会话压缩状态快照 */
-  getSessionCompactState(sessionId: string):
+  /**
+   * 读取会话压缩状态快照（E4 键）
+   *
+   * @param sessionId - 会话 id
+   * @param agentId - 目标 agent
+   * @returns 快照；无则 undefined
+   */
+  getSessionCompactState(sessionId: string, agentId: string):
     | { summary?: string; lastProactiveMessageCount?: number; lastProactiveTokens?: number }
     | undefined {
-    return this._sessionCompactStates.get(sessionId);
+    return this._sessionCompactStates.get(compactStateKey(sessionId, agentId));
   }
 
   /** 每轮结束后通知 ContextEngine（afterTurn 校准等）；turn 为本轮增量消息 */

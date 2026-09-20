@@ -252,6 +252,7 @@ export async function buildFromConfig(config: NormalizedHarnessConfig): Promise<
         subsystemAuditDir: config.subsystems?.auditDir,
         subsystemAllowlist: config.subsystems?.allowlist,
         subsystemDenylist: config.subsystems?.denylist,
+        toolIsolation: config.toolIsolation,
       });
       agents.set(agentConfig.id, built);
     } catch (err) {
@@ -284,6 +285,7 @@ async function buildAgent(
     subsystemAuditDir?: string;
     subsystemAllowlist?: string[];
     subsystemDenylist?: string[];
+    toolIsolation?: import('../../config.js').HarnessConfig['toolIsolation'];
   },
 ): Promise<BuiltAgent> {
   const builder = new AgentBuilder();
@@ -307,6 +309,11 @@ async function buildAgent(
   // ── Workspace ──
   if (agentConfig.workspace) {
     builder.workspace(agentConfig.workspace);
+  }
+
+  // ── Tool isolation (I5) ──
+  if (shared.toolIsolation) {
+    builder.toolIsolation(shared.toolIsolation);
   }
 
   // ── Home / Persona ──

@@ -49,6 +49,8 @@ import { DefaultSecurityGuard } from '../../harness/security/default-security-gu
 import { SessionAwareRunner } from '../../harness/runner.js';
 import { AgentRuntime, SessionRunnerDispatcher, ExplicitRouter } from '../../harness/agent-runtime/index.js';
 import { dispatchChannelMessage } from '../agent-runtime/channel-message-source.js';
+import { SessionAclService } from '../../harness/session-acl/service.js';
+import { InProcessSessionLock } from '../../harness/concurrency/session-lease.js';
 
 // Web REST 骨架所需的 Gateway 扩展类型
 // ================================================================
@@ -180,11 +182,17 @@ export class Gateway {
   /** 激活宿主（arch/agent-runtime.md）；消息路径经 dispatch */
   private runtime: AgentRuntime;
   private gatewayBus: DefaultEventBus;
+  /** Session ACL（E6）；缺省内置五角色 */
+  private sessionAcl: SessionAclService;
+  /** 进程内共享 Session Lease（E1/E2）：所有 Runner 注入同一实例 */
+  private sessionLease: import('../../harness/concurrency/session-lease.js').InProcessSessionLock;
 
   constructor(config: GatewayConfig, store?: SessionStore<SessionData>) {
     this.config = config;
     this.dmScope = config.session?.dmScope ?? 'main';
     this.pluginManager = new PluginManager();
+    this.sessionAcl = new SessionAclService(config.sessionAcl);
+    this.sessionLease = new InProcessSessionLock();
     // Gateway EventBus：RuntimeEvents 进可观测总线，并转发到 Gateway listeners（不变量 #6）
     this.gatewayBus = new DefaultEventBus();
     this.runtime = new AgentRuntime({
@@ -642,12 +650,12 @@ export class Gateway {
   /**
    * 手动结构压缩（不依赖 contextWindow）
    *
-   * 加载 session 全量消息 → ContextEngine.compactStructural →
-   * 写入引擎 previousSummary（下一轮 assemble 使用 head+summary+tail 视图）。
-   * 全量 messages 仍保留在 session store。
+   * 与 SessionAwareRunner.handle **共用 session 锁**（E1/E4）。
+   * 权威互斥是锁，不是 status==='processing'；同 sessionId 的 run/compact 排队。
+   * Compact 键 = (sessionId, agentId)；全量 messages 仍保留在 session store。
    *
    * @param sessionId - 会话 id
-   * @param agentId - 可选 agent（避免全 agent 扫描）
+   * @param agentId - 可选 agent（避免全 agent 扫描；缺省用 session.agentId）
    * @returns 压缩结果
    */
   async compactSession(
@@ -667,31 +675,24 @@ export class Gateway {
     if (!session) {
       throw new Error(`Session "${sessionId}" not found`);
     }
-    // 与进行中 run 交错会互相覆盖 session.messages / contextCompact
-    if (session.meta.status === 'processing') {
-      return {
-        ok: false,
-        compacted: false,
-        reason: 'session busy (run in progress); try again after idle',
-        tokensBefore: 0,
-      };
-    }
 
-    // 确保 agent 已 build（拿 contextEngine + provider 供 summarize）
-    let cached = this.agentCache.get(session.agentId);
+    // E4：compact 键使用调用方 agentId（缺省 primary）；不静默改键
+    const effectiveAgentId = agentId ?? session.primaryAgentId ?? session.agentId;
+    let cached = this.agentCache.get(effectiveAgentId);
     if (!cached) {
-      const def = this.agents.get(session.agentId);
+      const def = this.agents.get(effectiveAgentId);
       if (!def) {
-        throw new Error(`Agent "${session.agentId}" not found`);
+        throw new Error(`Agent "${effectiveAgentId}" not found`);
       }
       cached = await this.buildAgent(def);
-      this.agentCache.set(session.agentId, cached);
+      this.agentCache.set(effectiveAgentId, cached);
     }
 
     const engine = cached.contextEngine;
     type StructuralEngine = {
       compactStructural?: (input: {
         sessionId: string;
+        agentId?: string;
         messages: import('../../core/types.js').Message[];
         summarize?: (messages: import('../../core/interfaces/model-provider.js').LLMMessage[], opts?: { maxTokens?: number }) => Promise<string>;
         compactTargetTokens?: number;
@@ -715,7 +716,7 @@ export class Gateway {
       };
     }
 
-    const agentDef = this.agents.get(session.agentId);
+    const agentDef = this.agents.get(effectiveAgentId);
     const modelRef = this.readSessionModelId(session.metadata);
     const { createProviderSummarize } = await import('../../harness/context/summarize.js');
     const { resolveModelRef } = await import('../../harness/model/index.js');
@@ -741,27 +742,19 @@ export class Gateway {
     const compactTargetTokens =
       this.config.context?.contextAssembler?.compactTargetTokens;
 
-    const result = await structural.compactStructural({
-      sessionId: session.id,
-      messages: session.messages,
+    // D1：与 handle 共用 Runner session 锁；持久化走 Runner（E4 键）
+    return cached.runner.compactSession(sessionId, effectiveAgentId, {
+      compactStructural: (input) =>
+        structural.compactStructural!({
+          sessionId: input.sessionId,
+          agentId: input.agentId,
+          messages: input.messages,
+          summarize: input.summarize,
+          compactTargetTokens: input.compactTargetTokens,
+        }),
       summarize,
       compactTargetTokens,
     });
-
-    // 持久化压缩快照：重启 / agentCache 重建后 loadCompactState 可恢复
-    if (result.ok && result.summary) {
-      const snap = {
-        summary: result.summary,
-        lastProactiveMessageCount: session.messages.length,
-        lastProactiveTokens: result.tokensAfter,
-      };
-      cached.agent.setSessionCompactState(session.id, snap);
-      session.contextCompact = snap;
-      session.meta.updatedAt = Date.now();
-      await this.store.save(session.agentId, session.id, session);
-    }
-
-    return result;
   }
 
   getProviderSummaries(): Array<{ name: string; circuitBreaker: { state: string; failureCount: number } }> {
@@ -790,6 +783,7 @@ export class Gateway {
     const session: SessionData = {
       id: sessionId,
       agentId: options.agentId,
+      primaryAgentId: options.agentId,
       meta: {
         id: sessionId,
         agentId: options.agentId,
@@ -1162,6 +1156,16 @@ export class Gateway {
       .store(this.store)
       .workspace(agent.workspace ?? '')
       .events(this.gatewayBus);
+
+    if (this.config.toolIsolation) {
+      builder.toolIsolation(this.config.toolIsolation);
+    }
+    // E1/E2：同一进程内所有 Runner 共享一把 session lease；E6：注入 ACL + agent 天花板
+    builder.runnerConfig({
+      sessionLease: this.sessionLease,
+      sessionAcl: this.sessionAcl,
+      agentMaxSessionRights: agent.maxSessionRights,
+    });
 
     // ── 七层数据源：skills / memory / wisdom / cognition / knowledge / assembler ──
     // 与 config-bridge 同构，保证 serve 路径 Web「上下文」能看到真实层数据

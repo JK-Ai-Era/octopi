@@ -65,6 +65,24 @@ export interface RunRequest {
   modelOverride?: string;
   /** modelOverride 为裸名时的 provider */
   modelProvider?: string;
+  /** Principal / Intent 字段位（宪法 I6）；宿主填充，引擎不做权限 NLU */
+  actorId?: string;
+  actorType?: 'host' | 'user' | 'agent' | 'service' | 'timer' | 'subsystem';
+  tenantId?: string;
+  intent?: string;
+}
+
+/** Run audit record (Principal fields reserved — I6) */
+export interface RunAuditRecord {
+  requestId: string;
+  sessionId: string;
+  agentId: string;
+  at: number;
+  actorId?: string;
+  actorType?: 'host' | 'user' | 'agent' | 'service' | 'timer' | 'subsystem';
+  tenantId?: string;
+  intent?: string;
+  agentRevision?: string;
 }
 
 // ── Dispatcher ──

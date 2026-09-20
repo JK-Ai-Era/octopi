@@ -231,6 +231,50 @@ export type { SessionData, SessionLifecycleMeta, SessionLifecycleStatus, MemoryE
 export { SessionAwareRunner } from './runner.js';
 export type { SessionAwareRunnerConfig } from './runner.js';
 
+// ── Tool effect isolation (I5) ──
+export {
+  DEFAULT_TOOL_ISOLATION,
+  resolveToolIsolationCwd,
+} from './tool-effect/isolation.js';
+export type {
+  ToolIsolationMode,
+  ResolveToolIsolationCwdInput,
+  ResolveToolIsolationCwdResult,
+} from './tool-effect/isolation.js';
+
+// ── Session Lease (E2/E7) ──
+export { InProcessSessionLock } from './concurrency/session-lease.js';
+export type { SessionLease, DistributedSessionLease } from './concurrency/session-lease.js';
+
+// ── Session ACL (E6) ──
+export {
+  SessionAclService,
+  SessionRoleCatalog,
+  BUILTIN_SESSION_ROLES,
+  computeEffectiveRights,
+  intersectRights,
+  applyRightsOverlay,
+  exceedsRightsCeiling,
+  L0_SESSION_RIGHTS_FLOOR,
+} from './session-acl/index.js';
+export type {
+  SessionRights,
+  EffectiveSessionRights,
+  SessionRoleDefinition,
+  SessionParticipant,
+  SessionAclConfig,
+  AuthorizeRunResult,
+  GrantResult,
+  ReadScope,
+  PrincipalRef,
+  SessionSwitchMode,
+  SwitchSessionResult,
+} from './session-acl/types.js';
+export type { SessionSwitchRecord } from './session-types.js';
+export type { RunAuditRecord } from './agent-runtime/types.js';
+export { readSessionCompact, writeSessionCompact } from './session-compact.js';
+export { compactStateKey } from './context/compact-key.js';
+
 // ── Config Bridge ──
 // (exported from agent-building above)
 

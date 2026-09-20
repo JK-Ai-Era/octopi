@@ -106,7 +106,18 @@ export class JsonlSessionStore implements SessionStore<SessionData> {
       } catch { /* corrupt meta, use fallback */ }
     }
 
-    let state: { tasks?: SessionData['tasks']; turns?: SessionData['turns']; metadata?: SessionData['metadata'] } = {};
+    let state: {
+      primaryAgentId?: string;
+      preferredAgentId?: string;
+      switchAudit?: SessionData['switchAudit'];
+      participants?: SessionData['participants'];
+      contextCompact?: SessionData['contextCompact'];
+      contextCompacts?: SessionData['contextCompacts'];
+      lifecycle?: SessionData['lifecycle'];
+      tasks?: SessionData['tasks'];
+      turns?: SessionData['turns'];
+      metadata?: SessionData['metadata'];
+    } = {};
     if (hasState && statePath) {
       try {
         state = JSON.parse(await readFile(statePath, 'utf-8'));
@@ -116,6 +127,14 @@ export class JsonlSessionStore implements SessionStore<SessionData> {
     return {
       id: sessionId,
       agentId,
+      // 模型 2：state 优先；历史文件缺省时用双键 agentId 回填（单 agent 兼容）
+      primaryAgentId: state.primaryAgentId ?? agentId,
+      preferredAgentId: state.preferredAgentId,
+      switchAudit: state.switchAudit,
+      participants: state.participants,
+      contextCompact: state.contextCompact,
+      contextCompacts: state.contextCompacts,
+      lifecycle: state.lifecycle,
       meta: meta ?? {
         id: sessionId,
         agentId,
@@ -152,9 +171,16 @@ export class JsonlSessionStore implements SessionStore<SessionData> {
     const jsonl = data.messages.map(msg => JSON.stringify(msg)).join('\n') + '\n';
     await writeFile(sessionPath, jsonl);
 
-    // 保存会话附带状态（任务列表等）
+    // 会话附带状态：模型 2 控制面 + compact + 任务（权威投影的一部分）
     const statePath = this.sessionStateFile(agentId, sessionId);
     await writeFile(statePath, JSON.stringify({
+      primaryAgentId: data.primaryAgentId ?? data.agentId,
+      preferredAgentId: data.preferredAgentId,
+      switchAudit: data.switchAudit ?? [],
+      participants: data.participants ?? [],
+      contextCompact: data.contextCompact,
+      contextCompacts: data.contextCompacts,
+      lifecycle: data.lifecycle,
       tasks: data.tasks ?? [],
       turns: data.turns ?? [],
       metadata: data.metadata ?? {},

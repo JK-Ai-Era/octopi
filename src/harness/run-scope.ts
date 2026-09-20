@@ -11,14 +11,17 @@
 
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { Message } from '../core/types.js';
+import type { ToolIsolationMode } from './tool-effect/isolation.js';
 
 /** 工具执行时可见的 Run 运行时上下文 */
 export interface RunToolRuntime {
   sessionId: string;
   agentId: string;
   messages: Message[];
-  /** 工具 cwd（通常来自 agent.workspace / 宿主注入） */
+  /** 工具 cwd（解析自 RunConfig.cwd / agent.workspace + toolIsolation） */
   cwd?: string;
+  /** 本 Run 生效的工具效应隔离模式（I5） */
+  isolation?: ToolIsolationMode;
 }
 
 /** 一次 Run 的作用域身份（I1） */
@@ -29,6 +32,8 @@ export interface RunScope {
   systemPrompt?: string;
   /** 工具运行时上下文；缺省时由 Provider 回退 */
   toolRuntime?: RunToolRuntime;
+  /** Agent 模板 revision（Reserved：AgentRevision 绑 Run） */
+  agentRevision?: string;
 }
 
 const runScopeStorage = new AsyncLocalStorage<RunScope>();

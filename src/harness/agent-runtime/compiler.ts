@@ -69,6 +69,12 @@ export function buildRunRequest(
   agent: RuntimeAgent,
   triggers: Trigger[],
   sessionId: string,
+  principal?: {
+    actorId?: string;
+    actorType?: 'host' | 'user' | 'agent' | 'service' | 'timer' | 'subsystem';
+    tenantId?: string;
+    intent?: string;
+  },
 ): RunRequest {
   // 模型覆盖：优先取最后一条带 modelOverride 的 trigger（合批时以最新意图为准）
   let modelOverride: string | undefined;
@@ -90,5 +96,9 @@ export function buildRunRequest(
     messages: compileMessages(triggers),
     modelOverride,
     modelProvider,
+    actorId: principal?.actorId,
+    actorType: principal?.actorType,
+    tenantId: principal?.tenantId,
+    intent: principal?.intent,
   };
 }

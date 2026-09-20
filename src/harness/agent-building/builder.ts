@@ -148,7 +148,7 @@ class RuntimeToolContextProvider implements ToolContextProvider {
   private cwd?: string;
 
   constructor(defaults?: { cwd?: string }) {
-    this.cwd = defaults?.cwd;
+    this.cwd = defaults?.cwd?.trim() ? defaults.cwd : undefined;
   }
 
   setRuntime(sessionId: string, agentId: string, messages: import('../../core/types.js').Message[]): void {
@@ -472,6 +472,8 @@ export class AgentBuilder {
   // Runner 配置
   private _store?: SessionStore<SessionData>;
   private _runnerConfig?: SessionAwareRunnerConfig;
+  /** 工具效应隔离（I5）；Runner 解析 toolRuntime.cwd */
+  private _toolIsolation?: import('../tool-effect/isolation.js').ToolIsolationMode;
 
   // MCP 配置
   private _mcpConfigs: import('../plugin-ecosystem/mcp/types.js').McpServerConfig[] = [];
@@ -870,6 +872,16 @@ export class AgentBuilder {
     return this;
   }
 
+  /**
+   * 工具效应隔离策略（I5）
+   *
+   * @param mode - `none` | `session-subdir` | `session-lock`
+   */
+  toolIsolation(mode: import('../tool-effect/isolation.js').ToolIsolationMode): this {
+    this._toolIsolation = mode;
+    return this;
+  }
+
   // ── 构建 ──
 
   /**
@@ -975,6 +987,11 @@ export class AgentBuilder {
 
     const runner = new SessionAwareRunner(agent, harness, store, {
       ...this._runnerConfig,
+      toolIsolation: this._toolIsolation ?? this._runnerConfig?.toolIsolation,
+      agentWorkspace: this._workspace?.trim() ? this._workspace : this._runnerConfig?.agentWorkspace,
+      sessionLease: this._runnerConfig?.sessionLease,
+      sessionAcl: this._runnerConfig?.sessionAcl,
+      agentMaxSessionRights: this._runnerConfig?.agentMaxSessionRights,
       sessionTaskService,
       events,
     });
@@ -1200,7 +1217,9 @@ export class AgentBuilder {
     const mcpManager = await this.buildMcpManager();
 
     // 转换 RegisteredTool → AgentTool
-    this._contextProvider = new RuntimeToolContextProvider({ cwd: this._workspace });
+    this._contextProvider = new RuntimeToolContextProvider({
+      cwd: this._workspace?.trim() ? this._workspace : undefined,
+    });
     const agentTools: LoopAgentTool[] = this._toolBus.listForAgent('default').map(t => convertToAgentTool(t, this._contextProvider));
 
     // 创建 Agent
@@ -1233,6 +1252,7 @@ export class AgentBuilder {
       // I1：身份与 systemPrompt 优先读 RunScope ALS，避免共享 Agent 单例竞态
       const scope = getRunScope();
       const sessionId = scope?.sessionId ?? agent.contextSessionId;
+      const agentId = scope?.agentId ?? 'default';
       const systemPrompt = scope?.systemPrompt ?? agent.context.systemPrompt;
       const tools: import('../../core/interfaces/model-provider.js').LLMToolDefinition[] = (agent.context.tools ?? []).map((t) => ({
         type: 'function' as const,
@@ -1252,6 +1272,7 @@ export class AgentBuilder {
           : undefined;
       const result = await contextEngine.assemble({
         sessionId,
+        agentId,
         messages,
         systemPrompt,
         tools,
@@ -1259,7 +1280,7 @@ export class AgentBuilder {
         contextWindow,
         compactTargetTokens: this._contextAssemblerConfig?.compactTargetTokens,
         summarize: summarizeFn,
-        loadCompactState: (sid) => agent.getSessionCompactState(sid),
+        loadCompactState: () => agent.getSessionCompactState(sessionId, agentId),
         // 惰性读 bus：覆盖 buildAgent 之后才 setEvents 的场景
         emit: (e) => {
           const bus = this._events;
@@ -1273,9 +1294,9 @@ export class AgentBuilder {
           });
         },
       });
-      // 压缩状态回写 Agent 内存桥（Map 键 = sessionId）；Runner 在 session save 前写入 SessionData.contextCompact
+      // 压缩状态回写 Agent 内存桥（E4 键 = sessionId × agentId）
       if (result.compactState) {
-        agent.setSessionCompactState(sessionId, result.compactState);
+        agent.setSessionCompactState(sessionId, agentId, result.compactState);
       }
       // droppedSummary：并入已有 system，避免连续两条 system（严格网关）
       const llmMessages = [...result.messages];
@@ -1296,9 +1317,12 @@ export class AgentBuilder {
       return llmMessages;
     });
     agent.setOnAfterTurn(async (usage, turn) => {
-      const sessionId = getRunScope()?.sessionId ?? agent.contextSessionId;
+      const scope = getRunScope();
+      const sessionId = scope?.sessionId ?? agent.contextSessionId;
+      const agentId = scope?.agentId ?? 'default';
       await contextEngine.afterTurn?.({
         sessionId,
+        agentId,
         turn: turn ?? [],
         usage: usage
           ? { promptTokens: usage.promptTokens, completionTokens: usage.completionTokens }

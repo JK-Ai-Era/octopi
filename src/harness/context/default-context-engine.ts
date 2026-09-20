@@ -41,6 +41,7 @@ import { HybridCompressor } from './hybrid-compressor.js';
 import { DefaultBudgetAllocator } from './budget-allocator.js';
 import { SmartRouter } from './smart-router.js';
 import type { SmartRouterConfig } from './smart-router.js';
+import { compactStateKey } from './compact-key.js';
 
 // ── 配置 ──
 
@@ -154,6 +155,7 @@ export class DefaultContextEngine implements ContextEngine {
   async assemble(params: AssembleParams): Promise<AssembleResult> {
     const {
       sessionId,
+      agentId,
       messages,
       systemPrompt,
       tools,
@@ -165,6 +167,8 @@ export class DefaultContextEngine implements ContextEngine {
       emit,
       loadCompactState,
     } = params;
+    // E4：引擎内部 compact 状态键 = (sessionId, agentId)
+    const stateKey = compactStateKey(sessionId, agentId);
 
     // 窗口未知且无显式 compactTargetTokens：跳过基于预算的自动压缩/截断
     const budgetCap = params.tokenBudget ?? contextWindow ?? compactTargetTokens;
@@ -175,11 +179,11 @@ export class DefaultContextEngine implements ContextEngine {
 
     // 0. 进程重启后从持久层恢复压缩状态（仅当内存态尚无摘要时）
     if (loadCompactState) {
-      const existing = this.states.get(sessionId);
+      const existing = this.states.get(stateKey);
       if (!existing?.previousSummary) {
         const restored = await loadCompactState(sessionId);
         if (restored?.summary || restored?.lastProactiveMessageCount != null) {
-          this.states.set(sessionId, {
+          this.states.set(stateKey, {
             ...existing,
             previousSummary: restored.summary ?? existing?.previousSummary,
             lastProactiveMessageCount:
@@ -193,20 +197,20 @@ export class DefaultContextEngine implements ContextEngine {
     // 未知窗口：无 token 预算 → 不 proactive、不按 budget 截消息
     // 已有结构压缩摘要时，用 head + summary + tail 视图
     if (!windowKnown && !targetKnown && budgetCap == null) {
-      const view = this.buildStructuralView(sessionId, messages, emit);
+      const view = this.buildStructuralView(sessionId, messages, emit, stateKey);
       const llmMessages = this.buildLlmMessages(view.messages, systemPrompt, tools);
       const rawEstimatedTokens = estimateLLMMessages(llmMessages);
-      this.states.set(sessionId, {
-        ...this.states.get(sessionId),
+      this.states.set(stateKey, {
+        ...this.states.get(stateKey),
         lastEstimatedTokens: rawEstimatedTokens,
       });
       return {
         messages: llmMessages,
-        estimatedTokens: this.calibrateTokens(sessionId, rawEstimatedTokens),
+        estimatedTokens: this.calibrateTokens(sessionId, rawEstimatedTokens, stateKey),
         systemPrompt,
         droppedSummary: view.droppedSummary,
-        summary: this.states.get(sessionId)?.previousSummary,
-        compactState: this.buildCompactSnapshot(sessionId),
+        summary: this.states.get(stateKey)?.previousSummary,
+        compactState: this.buildCompactSnapshot(sessionId, stateKey),
       };
     }
 
@@ -222,6 +226,7 @@ export class DefaultContextEngine implements ContextEngine {
     // 1b. 主动摘要：仅在有预算时启用（基于窗口/显式 target 的自动压缩）
     const proactive = await this.applyProactiveCompact({
       sessionId,
+      stateKey,
       messages,
       messagesBudget: budget.messagesBudget,
       summarize,
@@ -246,10 +251,10 @@ export class DefaultContextEngine implements ContextEngine {
     if (selection.overflow.length === 0) {
       const llmMessages = this.buildLlmMessages(selection.kept, systemPrompt, tools);
       const rawEstimatedTokens = estimateLLMMessages(llmMessages);
-      const estimatedTokens = this.calibrateTokens(sessionId, rawEstimatedTokens);
+      const estimatedTokens = this.calibrateTokens(sessionId, rawEstimatedTokens, stateKey);
 
-      this.states.set(sessionId, {
-        ...this.states.get(sessionId),
+      this.states.set(stateKey, {
+        ...this.states.get(stateKey),
         lastEstimatedTokens: rawEstimatedTokens,
       });
 
@@ -258,8 +263,8 @@ export class DefaultContextEngine implements ContextEngine {
         estimatedTokens,
         systemPrompt,
         droppedSummary: proactiveDroppedSummary,
-        summary: this.states.get(sessionId)?.previousSummary,
-        compactState: this.buildCompactSnapshot(sessionId),
+        summary: this.states.get(stateKey)?.previousSummary,
+        compactState: this.buildCompactSnapshot(sessionId, stateKey),
       };
     }
 
@@ -274,7 +279,7 @@ export class DefaultContextEngine implements ContextEngine {
     );
 
     // 5. 压缩溢出消息
-    const state = this.states.get(sessionId);
+    const state = this.states.get(stateKey);
     const previousSummary = state?.previousSummary;
 
     let compressedOverflow: Message[];
@@ -360,8 +365,8 @@ export class DefaultContextEngine implements ContextEngine {
       durationMs: Date.now() - overflowStart,
       cached: false,
     });
-    const overflowState = this.states.get(sessionId);
-    this.states.set(sessionId, {
+    const overflowState = this.states.get(stateKey);
+    this.states.set(stateKey, {
       ...overflowState,
       // 存摘要正文（而非 dropped 描述），供下次迭代更新
       previousSummary: this.extractSummaryText(compressedOverflow) ?? overflowState?.previousSummary,
@@ -371,21 +376,21 @@ export class DefaultContextEngine implements ContextEngine {
     // 8. 构建 LLM 消息
     const llmMessages = this.buildLlmMessages(reassembled, systemPrompt, tools);
     const rawEstimatedTokens = estimateLLMMessages(llmMessages);
-    const estimatedTokens = this.calibrateTokens(sessionId, rawEstimatedTokens);
+    const estimatedTokens = this.calibrateTokens(sessionId, rawEstimatedTokens, stateKey);
 
     return {
       messages: llmMessages,
       estimatedTokens,
       systemPrompt,
       droppedSummary: droppedSummary ?? proactiveDroppedSummary,
-      summary: this.states.get(sessionId)?.previousSummary,
-      compactState: this.buildCompactSnapshot(sessionId),
+      summary: this.states.get(stateKey)?.previousSummary,
+      compactState: this.buildCompactSnapshot(sessionId, stateKey),
     };
   }
 
   /** 从引擎内存态导出可持久化快照 */
-  private buildCompactSnapshot(sessionId: string): ContextCompactSnapshot | undefined {
-    const state = this.states.get(sessionId);
+  private buildCompactSnapshot(sessionId: string, stateKey?: string): ContextCompactSnapshot | undefined {
+    const state = this.states.get(stateKey ?? sessionId);
     if (!state?.previousSummary && state?.lastProactiveMessageCount == null) {
       return undefined;
     }
@@ -406,6 +411,8 @@ export class DefaultContextEngine implements ContextEngine {
    */
   private async applyProactiveCompact(params: {
     sessionId: string;
+    /** E4 engine state key; defaults to sessionId */
+    stateKey?: string;
     messages: Message[];
     messagesBudget: number;
     summarize?: SummarizeFunction;
@@ -413,6 +420,7 @@ export class DefaultContextEngine implements ContextEngine {
     emit?: ContextEmitFn;
   }): Promise<{ messages: Message[]; droppedSummary?: string }> {
     const { sessionId, messages, messagesBudget, summarize, estimator, emit } = params;
+    const stateKey = params.stateKey ?? sessionId;
     const ratio = this.config.proactiveCompactRatio;
 
     if (!summarize || ratio <= 0 || messages.length === 0) {
@@ -431,7 +439,7 @@ export class DefaultContextEngine implements ContextEngine {
       return { messages };
     }
 
-    const state = this.states.get(sessionId);
+    const state = this.states.get(stateKey);
     const head = messages.slice(0, protectFirstN);
     const tail = messages.slice(-protectLastN);
 
@@ -462,7 +470,7 @@ export class DefaultContextEngine implements ContextEngine {
       // 只更新视图 token，**不要**改 lastProactiveMessageCount：
       // 该字段表示「摘要覆盖到的全量条数」，只能在真正 LLM 摘要时推进。
       // 若缓存重建也改成 messages.length，每轮 +1 会永远凑不满再摘要阈值。
-      this.states.set(sessionId, {
+      this.states.set(stateKey, {
         ...state,
         lastProactiveTokens: reducedTokens,
         lastEstimatedTokens: reducedTokens,
@@ -534,7 +542,7 @@ export class DefaultContextEngine implements ContextEngine {
     const actualSummary =
       this.extractSummaryText(compressed.result) ?? state?.previousSummary;
 
-    this.states.set(sessionId, {
+    this.states.set(stateKey, {
       ...state,
       previousSummary: actualSummary,
       lastEstimatedTokens: reducedTokens,
@@ -582,8 +590,9 @@ export class DefaultContextEngine implements ContextEngine {
     sessionId: string,
     messages: Message[],
     emit?: ContextEmitFn,
+    stateKey?: string,
   ): { messages: Message[]; droppedSummary?: string } {
-    const state = this.states.get(sessionId);
+    const state = this.states.get(stateKey ?? sessionId);
     const summary = state?.previousSummary;
     if (!summary || messages.length === 0) {
       return { messages };
@@ -625,16 +634,18 @@ export class DefaultContextEngine implements ContextEngine {
    */
   private async structuralCompact(params: {
     sessionId: string;
+    stateKey?: string;
     messages: Message[];
     summarize?: SummarizeFunction;
     estimator: TokenEstimator;
     compactTargetTokens?: number;
   }): Promise<{ summary: string; tokensBefore: number; tokensAfter: number }> {
     const { sessionId, messages, summarize, estimator } = params;
+    const stateKey = params.stateKey ?? sessionId;
     const protectFirstN = this.config.protectFirstN;
     const protectLastN = this.config.protectLastN;
     const tokensBefore = estimator.estimateMessages(messages);
-    const state = this.states.get(sessionId);
+    const state = this.states.get(stateKey);
 
     if (messages.length <= protectFirstN + protectLastN) {
       return {
@@ -678,7 +689,7 @@ export class DefaultContextEngine implements ContextEngine {
     const view = [...head, summaryMsg, ...tail];
     const tokensAfter = estimator.estimateMessages(view);
 
-    this.states.set(sessionId, {
+    this.states.set(stateKey, {
       ...state,
       previousSummary: summary,
       lastProactiveMessageCount: messages.length,
@@ -700,13 +711,15 @@ export class DefaultContextEngine implements ContextEngine {
   async compact(params: CompactParams): Promise<CompactResult> {
     const {
       sessionId,
+      agentId,
       tokenBudget,
       compactTargetTokens,
       force,
       currentTokenCount,
     } = params;
+    const stateKey = compactStateKey(sessionId, agentId);
 
-    const state = this.states.get(sessionId);
+    const state = this.states.get(stateKey);
     if (!state) {
       return {
         ok: true,
@@ -741,7 +754,7 @@ export class DefaultContextEngine implements ContextEngine {
       };
     }
 
-    this.states.delete(sessionId);
+    this.states.delete(stateKey);
 
     return {
       ok: true,
@@ -759,13 +772,16 @@ export class DefaultContextEngine implements ContextEngine {
    */
   async compactStructural(input: {
     sessionId: string;
+    agentId?: string;
     messages: Message[];
     summarize?: SummarizeFunction;
     compactTargetTokens?: number;
   }): Promise<CompactResult> {
     const estimator = this.config.tokenEstimator;
+    const stateKey = compactStateKey(input.sessionId, input.agentId);
     const result = await this.structuralCompact({
       sessionId: input.sessionId,
+      stateKey,
       messages: input.messages,
       summarize: input.summarize,
       estimator,
@@ -790,11 +806,12 @@ export class DefaultContextEngine implements ContextEngine {
    * 3. 计算校准比率 = actual / estimated
    */
   async afterTurn(params: AfterTurnParams): Promise<void> {
-    const { sessionId, usage, turn } = params;
+    const { sessionId, agentId, usage, turn } = params;
 
     if (!usage) return;
 
-    const state = this.states.get(sessionId) ?? {};
+    const stateKey = compactStateKey(sessionId, agentId);
+    const state = this.states.get(stateKey) ?? {};
 
     // 存储真实 token 数
     state.lastActualTokens = usage.promptTokens;
@@ -811,7 +828,7 @@ export class DefaultContextEngine implements ContextEngine {
         : ratio;
     }
 
-    this.states.set(sessionId, state);
+    this.states.set(stateKey, state);
   }
 
   /**
@@ -836,8 +853,8 @@ export class DefaultContextEngine implements ContextEngine {
    * 参考 OpenClaw 的 estimateContextTokens() 策略：
    * 优先用真实值，估算只做兜底，校准比率平滑修正偏差。
    */
-  private calibrateTokens(sessionId: string, rawEstimated: number): number {
-    const state = this.states.get(sessionId);
+  private calibrateTokens(sessionId: string, rawEstimated: number, stateKey?: string): number {
+    const state = this.states.get(stateKey ?? sessionId);
     if (!state?.calibrationRatio) {
       return rawEstimated;
     }

@@ -84,7 +84,7 @@ describe('session reset → clearSession', () => {
       .build();
 
     // 预置 agent 侧压缩状态
-    agent.setSessionCompactState('s-idle', {
+    agent.setSessionCompactState('s-idle', 'default', {
       summary: '[Conversation Summary]\n\nold',
       lastProactiveMessageCount: 5,
     });
@@ -95,18 +95,20 @@ describe('session reset → clearSession', () => {
       async () => ({ systemPrompt: 'p' }),
       (sid) => {
         clearSpy(sid);
-        agent.setSessionCompactState(sid, undefined);
+        agent.setSessionCompactState(sid, 'default', undefined);
       },
     );
 
     for await (const ev of runner.handle('s-idle', userMsg('hi'), {
       systemPrompt: '',
+      agentId: 'default',
+      sessionId: 's-idle',
       // idleExpiry 默认 2h，预置 lastInteractionAt 为 3h 前 → 会重置
     })) {
       if (ev.type === 'engine.end' || ev.type === 'engine.error') break;
     }
 
     expect(clearSpy).toHaveBeenCalledWith('s-idle');
-    expect(agent.getSessionCompactState('s-idle')).toBeUndefined();
+    expect(agent.getSessionCompactState('s-idle', 'default')).toBeUndefined();
   });
 });

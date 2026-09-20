@@ -28,11 +28,18 @@ import { withRuntimeDatetimeInjection } from './context/runtime-datetime.js';
 import type { SessionTaskService } from './session-tasks/service.js';
 import { renderSessionTasksInjection } from './session-tasks/render.js';
 import type { RunScope } from './run-scope.js';
-
-/** Session 锁队列项 */
-interface QueueEntry {
-  resolve: () => void;
-}
+import {
+  DEFAULT_TOOL_ISOLATION,
+  resolveToolIsolationCwd,
+  type ToolIsolationMode,
+} from './tool-effect/isolation.js';
+import { mkdirSync } from 'node:fs';
+import { readSessionCompact, writeSessionCompact } from './session-compact.js';
+import type { ContextCompactSnapshot } from './context/types.js';
+import {
+  InProcessSessionLock,
+  type SessionLease,
+} from './concurrency/session-lease.js';
 
 /** 运行器配置 */
 export interface SessionAwareRunnerConfig {
@@ -66,6 +73,33 @@ export interface SessionAwareRunnerConfig {
     modelRef?: string;
     defaultProvider?: string;
   }) => import('./model/types.js').ResolvedModel | null;
+  /**
+   * 工具效应隔离策略（宪法 I5）
+   *
+   * 默认 `'none'`（共享 agent.workspace）。多 Session 写文件建议 `'session-subdir'`。
+   */
+  toolIsolation?: ToolIsolationMode;
+  /**
+   * Agent 沙箱工作目录（agent.workspace）——toolIsolation 解析 cwd 的基路径回退。
+   * RunConfig.cwd 优先于本字段。
+   */
+  agentWorkspace?: string;
+  /**
+   * Session lease（E2/E7）。默认 `InProcessSessionLock`。
+   * 分布式部署注入 `DistributedSessionLease` 实现；勿假设内存锁全局有效。
+   * Gateway 应向同一进程内所有 Runner 注入**同一** lease 实例。
+   */
+  sessionLease?: SessionLease;
+  /**
+   * 可选 Session ACL（E6）。注入后 handle 在 run 前 authorizeRun；
+   * primary 无绑定自动 owner；非 primary 无绑定拒绝。
+   */
+  sessionAcl?: import('./session-acl/service.js').SessionAclService;
+  /**
+   * Agent 模板 Session 权利天花板（L1 · E6）。
+   * 来自 AgentDefinition.maxSessionRights；authorizeRun 时取交集。
+   */
+  agentMaxSessionRights?: import('./session-acl/types.js').SessionRights;
 }
 
 const DEFAULT_CONFIG: SessionAwareRunnerConfig = {
@@ -87,6 +121,10 @@ export interface RunConfig {
   modelProvider?: string;
   temperature?: number;
   cwd?: string;
+  /** 本次 Run 的工具隔离覆盖（缺省用 Runner 配置 / DEFAULT_TOOL_ISOLATION） */
+  toolIsolation?: ToolIsolationMode;
+  /** Agent 模板 revision 绑 Run（Reserved：AgentRevision）；写入 RunScope / 审计 */
+  agentRevision?: string;
   contextWindow?: number;
   injectedContext?: string;
 }
@@ -205,10 +243,8 @@ export class SessionAwareRunner {
   private agent: Agent;
   private harness: ReliabilityHarness;
   private store: TypedSessionStore;
-  /** 锁状态：true = 已锁定，false = 空闲 */
-  private locked = new Map<string, boolean>();
-  /** 等待队列：每个 session 一个 FIFO 队列 */
-  private queues = new Map<string, QueueEntry[]>();
+  /** Session lease（E2/E7）：默认 in-process FIFO；可替换 */
+  private sessionLease: SessionLease;
   private config: SessionAwareRunnerConfig;
   /** Session 状态机缓存 */
   private stateMachines = new Map<string, StateMachine<SessionStatus>>();
@@ -246,6 +282,7 @@ export class SessionAwareRunner {
     this.harness = harness;
     this.store = store;
     this.config = { ...DEFAULT_CONFIG, ...config };
+    this.sessionLease = config?.sessionLease ?? new InProcessSessionLock();
     this._events = config?.events;
     this.resolveModelOverride = config?.resolveModelOverride;
   }
@@ -389,7 +426,31 @@ export class SessionAwareRunner {
       if (!session) {
         session = this.createSession(sessionId, runConfig.agentId ?? 'default');
       }
+      // 模型 2：历史数据缺省 primary 时回填（单 agent 行为不变）
+      if (!session.primaryAgentId) {
+        session.primaryAgentId = session.agentId || _agentId;
+      }
       if (!session.tasks) session.tasks = [];
+
+      // E6：可选 ACL（注入时才强制）；primary 自动 owner；带入 agent 天花板
+      const acl = this.config.sessionAcl;
+      if (acl) {
+        const auth = acl.authorizeRun({
+          session,
+          agentId: _agentId,
+          agentMax: this.config.agentMaxSessionRights,
+        });
+        if (!auth.ok) {
+          yield {
+            type: 'engine.error',
+            timestamp: Date.now(),
+            agentId: _agentId,
+            sessionId,
+            data: { error: auth.reason ?? 'session ACL denied run' },
+          } as never;
+          return;
+        }
+      }
 
       // 4. 检查 session 是否需要重置
       this.checkSessionReset(session);
@@ -477,8 +538,12 @@ export class SessionAwareRunner {
         messages: session.messages,
         tools: this.agent.tools,
       };
-      // 播种压缩状态（Map 键 = sessionId）；供 convertToLlm / 重启重建
-      this.agent.setSessionCompactState(sessionId, session.contextCompact);
+      // 播种压缩状态（E4 键 = sessionId × agentId）；供 convertToLlm / 重启重建
+      this.agent.setSessionCompactState(
+        sessionId,
+        _agentId,
+        readSessionCompact(session, _agentId),
+      );
       let basePrompt = effectiveRunConfig.systemPrompt;
       let personaFromResolver = false;
       if (!basePrompt && this.systemPromptResolver) {
@@ -608,15 +673,41 @@ export class SessionAwareRunner {
       // 兼容回退：无 ALS 消费方时的 contextSessionId（Map 键场景仍用显式 sessionId）
       this.agent.setContextSessionId(sessionId);
 
+      // I5：工具效应 cwd —— RunConfig.cwd > agent.workspace；session-subdir 再拼 sessionId
+      const isolationMode: ToolIsolationMode =
+        effectiveRunConfig.toolIsolation
+        ?? this.config.toolIsolation
+        ?? DEFAULT_TOOL_ISOLATION;
+      const baseCwd =
+        (effectiveRunConfig.cwd?.trim() ? effectiveRunConfig.cwd.trim() : undefined)
+        ?? (this.config.agentWorkspace?.trim() ? this.config.agentWorkspace.trim() : undefined);
+      const resolvedToolCwd = resolveToolIsolationCwd({
+        mode: isolationMode,
+        sessionId,
+        baseCwd,
+      });
+      if (isolationMode === 'session-subdir' && resolvedToolCwd.cwd) {
+        try {
+          mkdirSync(resolvedToolCwd.cwd, { recursive: true });
+        } catch (err) {
+          // 目录创建失败不阻断 run：工具侧仍可能自行 mkdir；此处吞掉仅因非致命 IO
+          console.warn(
+            `[octopi] toolIsolation session-subdir mkdir failed (session=${sessionId}, cwd=${resolvedToolCwd.cwd}): ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      }
+
       const runScope: RunScope = {
         sessionId,
         agentId: _agentId,
         systemPrompt: runContext.systemPrompt,
+        agentRevision: effectiveRunConfig.agentRevision,
         toolRuntime: {
           sessionId,
           agentId: _agentId,
           messages: session.messages,
-          cwd: effectiveRunConfig.cwd,
+          cwd: resolvedToolCwd.cwd,
+          isolation: resolvedToolCwd.mode,
         },
       };
 
@@ -690,7 +781,7 @@ export class SessionAwareRunner {
             session.turns.push({
               id: `turn_${Date.now()}`,
               input: session.messages.slice(0, -1),
-              output: { role: 'assistant', content, timestamp: Date.now() },
+              output: { role: 'assistant', content, timestamp: Date.now(), agentId: _agentId },
               usage: lastUsage,
               durationMs: 0,
               model: effectiveRunConfig.model ?? 'unknown',
@@ -703,6 +794,12 @@ export class SessionAwareRunner {
       // 10. 将本 Run 工作区写回 session（Loop 原地修改的是 runContext.messages）
       //     含 Loop 注入的托管 systemPrompt（metadata.source='systemPrompt'）：
       //     落盘保留审计价值；聊天 UI 在 history 映射时过滤，不回放进对话
+      //     模型 2 归因：assistant/tool 消息补齐本 Run 的 agentId（来自 Run 身份）
+      for (const m of runContext.messages) {
+        if ((m.role === 'assistant' || m.role === 'tool') && m.agentId === undefined) {
+          m.agentId = _agentId;
+        }
+      }
       session.messages = runContext.messages;
 
       // 11. 引擎异常退出时的 session 一致性修复
@@ -713,11 +810,12 @@ export class SessionAwareRunner {
             role: 'assistant',
             content: fallbackContent,
             timestamp: Date.now(),
+            agentId: _agentId,
           });
           session.turns.push({
             id: `turn_${Date.now()}`,
             input: session.messages.slice(0, -1),
-            output: { role: 'assistant', content: fallbackContent, timestamp: Date.now() },
+            output: { role: 'assistant', content: fallbackContent, timestamp: Date.now(), agentId: _agentId },
             usage: lastUsage,
             durationMs: 0,
             model: effectiveRunConfig.model ?? 'unknown',
@@ -730,13 +828,9 @@ export class SessionAwareRunner {
       sm.transition('idle');
       session.meta.status = sm.state;
       session.meta.updatedAt = Date.now();
-      // 压缩状态写回 Session（供重启快速装配 LLM 视图）
-      const compactSnap = this.agent.getSessionCompactState(sessionId);
-      if (compactSnap) {
-        session.contextCompact = compactSnap;
-      } else {
-        delete session.contextCompact;
-      }
+      // 压缩状态写回 Session（E4 分桶 + primary 兼容视图）
+      const compactSnap = this.agent.getSessionCompactState(sessionId, _agentId);
+      writeSessionCompact(session, _agentId, compactSnap);
       await this.store.save(_agentId, sessionId, session);
 
       // 通知子系统：本轮处理完成（保持 active，但刷新 lastInteractionAt）
@@ -785,52 +879,112 @@ export class SessionAwareRunner {
   }
 
   /**
-   * 获取 Session 锁
-   * 同一 session 同时只有一个运行
+   * Session compact under the same session lock as handle (E1/E4).
+   *
+   * Authority is the runner session lock, not status==='processing'.
+   * Compact key = (sessionId, agentId). Concurrent handle/compact on the
+   * same sessionId queue FIFO; different sessions stay concurrent.
+   *
+   * @param sessionId - session id
+   * @param agentId - compact view owner (usually session.agentId / primary)
+   * @param options - structural compact engine callback + summarize params
+   * @returns compact result
+   */
+  async compactSession(
+    sessionId: string,
+    agentId: string,
+    options: {
+      compactStructural: (input: {
+        sessionId: string;
+        agentId: string;
+        messages: Message[];
+        summarize?: (
+          messages: import('../core/interfaces/model-provider.js').LLMMessage[],
+          opts?: { maxTokens?: number },
+        ) => Promise<string>;
+        compactTargetTokens?: number;
+      }) => Promise<{
+        ok: boolean;
+        compacted: boolean;
+        reason?: string;
+        tokensBefore: number;
+        tokensAfter?: number;
+        summary?: string;
+      }>;
+      summarize?: (
+        messages: import('../core/interfaces/model-provider.js').LLMMessage[],
+        opts?: { maxTokens?: number },
+      ) => Promise<string>;
+      compactTargetTokens?: number;
+    },
+  ): Promise<{
+    ok: boolean;
+    compacted: boolean;
+    reason?: string;
+    tokensBefore: number;
+    tokensAfter?: number;
+    summary?: string;
+  }> {
+    const release = await this.acquireLock(sessionId);
+    try {
+      const session = await this.store.load(agentId, sessionId);
+      if (!session) {
+        return {
+          ok: false,
+          compacted: false,
+          reason: 'session not found',
+          tokensBefore: 0,
+        };
+      }
+
+      const result = await options.compactStructural({
+        sessionId,
+        agentId,
+        messages: session.messages,
+        summarize: options.summarize,
+        compactTargetTokens: options.compactTargetTokens,
+      });
+
+      if (result.ok && result.summary) {
+        const snap: ContextCompactSnapshot = {
+          summary: result.summary,
+          lastProactiveMessageCount: session.messages.length,
+          lastProactiveTokens: result.tokensAfter,
+        };
+        this.agent.setSessionCompactState(sessionId, agentId, snap);
+        writeSessionCompact(session, agentId, snap);
+        session.meta.updatedAt = Date.now();
+        await this.store.save(agentId, sessionId, session);
+      }
+
+      return result;
+    } finally {
+      release();
+    }
+  }
+
+  /**
+   * 获取 Session 锁（经 SessionLease；E2 键 = sessionId）
    *
    * 使用 Promise 队列实现，避免 polling 开销。
    * 请求按 FIFO 顺序获取锁，无饥饿问题。
+   * 分布式：注入 DistributedSessionLease；勿假设 in-process 锁全局有效（E7）。
    */
   private async acquireLock(sessionId: string): Promise<() => void> {
-    // 如果已锁定，入队等待
-    if (this.locked.get(sessionId)) {
-      await new Promise<void>(resolve => {
-        if (!this.queues.has(sessionId)) {
-          this.queues.set(sessionId, []);
-        }
-        this.queues.get(sessionId)!.push({ resolve });
-      });
-    }
-
-    // 获取锁
-    this.locked.set(sessionId, true);
-
-    let released = false;
-    return () => {
-      if (released) return;
-      released = true;
-
-      // 释放锁：唤醒队列中下一个等待者
-      const queue = this.queues.get(sessionId);
-      if (queue && queue.length > 0) {
-        const next = queue.shift()!;
-        next.resolve();
-      } else {
-        // 队列为空，标记为未锁定
-        this.locked.set(sessionId, false);
-        // 清理空队列
-        this.queues.delete(sessionId);
-      }
-    };
+    return this.sessionLease.acquire(sessionId);
   }
 
   /**
    * 创建新 Session
+   *
+   * 模型 2：`primaryAgentId` = 创建时的 agentId（Accountability）。
+   * 存储键仍为双键 `(agentId, sessionId)`；目录迁移见 arch（先字段后迁路径）。
    */
   private createSession(sessionId: string, agentId: string): SessionData {
     return {
       id: sessionId,
       agentId,
+      primaryAgentId: agentId,
       meta: {
         id: sessionId,
         agentId,
@@ -916,10 +1070,19 @@ export class SessionAwareRunner {
     }
 
     if (didReset) {
-      // 历史清空后，层指纹与压缩快照一并失效
+      // 历史清空后，层指纹与压缩快照一并失效（E4：清全部 agent 桶）
       this.systemPromptAssemblerClear?.(session.id);
+      writeSessionCompact(session, session.primaryAgentId ?? session.agentId, undefined);
+      const resetAgentIds = new Set<string>([
+        session.primaryAgentId ?? session.agentId,
+        session.agentId,
+        ...Object.keys(session.contextCompacts ?? {}),
+      ]);
+      for (const aid of resetAgentIds) {
+        this.agent.setSessionCompactState(session.id, aid, undefined);
+      }
       delete session.contextCompact;
-      this.agent.setSessionCompactState(session.id, undefined);
+      delete session.contextCompacts;
     }
   }
 
