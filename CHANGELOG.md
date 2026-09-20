@@ -1,3 +1,16 @@
+## v0.43.2 (2026-09-26)
+
+### docs: 同步 B–H 实现后的文档与注释，降低后续踩坑
+
+- `docs/context-layer-contracts.md`：compact 播种/写回改为 E4 键 `(sessionId, agentId)` + `contextCompacts`
+- `docs/web-runtime-design.md`：compact API 说明改为与 run **共 SessionLease 排队**（非仅 status 拒绝）
+- `AGENTS.md`：补充 E2/E4/E6/I5 约束与已落地配置旋钮摘要
+- `src/harness/README.md` / `context` / `concurrency` / `agent-building` README：session-acl、tool-effect、SessionLease、runner 注入
+- `docs/CONTRIBUTING.md`：开发注意（toolIsolation / compact 键 / Lease / ACL / 双键 store）
+- `src/core/interfaces/session-store.ts` 与 `src/core/README.md`：标明双键 API 与模型 2 字段位置
+- `README.md` / `README_CN.md` / `docs/architecture.md`：模块树与目录布局说明
+- `arch/NEXT-STEPS.md`（内部）：评审修复状态与 Gateway 默认 ACL 兼容性
+
 ## v0.43.1 (2026-09-26)
 
 ### docs: Phase B–H 验收与已知问题对齐

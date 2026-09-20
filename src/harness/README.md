@@ -6,9 +6,11 @@
 
 | 领域 | 目录 | 职责 |
 |------|------|------|
-| Agent | `agent/` | **可运行门面**：`Agent.run()` = reliability 包装 |
-| Agent Building | `agent-building/` | Builder、人格加载、配置桥接 |
-| Context Management | `context/` | 消息窗口压缩、Token 估算、七层 ContextLayer 装配、Knowledge |
+| Agent | `agent/` | **可运行门面**：`Agent.run()` = reliability 包装；compact 内存桥键 `(sessionId, agentId)` |
+| Agent Building | `agent-building/` | Builder、人格加载、配置桥接；注入 `sessionLease` / `sessionAcl` / `toolIsolation` |
+| Context Management | `context/` | 消息窗口压缩、Token 估算、七层 ContextLayer 装配、Knowledge、`compact-key`（E4） |
+| Session ACL | `session-acl/` | 角色目录（五角色出厂）、grant/revoke、`authorizeRun`、`switch(preferred\|handoff)`（E6/I3） |
+| Tool Effect | `tool-effect/` | `toolIsolation` cwd 解析（I5；默认 `none`） |
 | Security | `security/` | 风险评估、Shell 解析、降级策略 |
 | Reliability | `reliability/` | 可靠性包装、HarnessLoopEvent、断路器、重试 |
 | Plugin Ecosystem | `plugin-ecosystem/` | Plugin、Tool、Skill、MCP、命令 |
@@ -16,16 +18,18 @@
 | Autonomous Subsystem | `autonomous-subsystem/` | Sense/Think/Act/Signal/Boundary 五维子系统框架 |
 | Session Tasks | `session-tasks/` | 会话任务 SessionTask（goal/step，默认路径） |
 | Run Guard | `run-guard/` | 过程监督（continue/recover/stop） |
-| Agent Runtime | `agent-runtime/` | 激活宿主：Trigger → 受监督 Run（arch/agent-runtime.md） |
+| Agent Runtime | `agent-runtime/` | 激活宿主：Trigger → 受监督 Run（arch/agent-runtime.md）；RunRequest 含 Principal 字段位 |
 | Orchestration | `orchestration/` | experimental 编排（workflow/scheduler/planner） |
-| Concurrency | `concurrency/` | 多 Key 负载均衡、限流 |
+| Concurrency | `concurrency/` | 多 Key 负载均衡、限流、**SessionLease**（E2/E7；Gateway 注入共享实例） |
 | Execution Environment | `execution-environment/` | 沙箱、工作区 |
 | Human-in-the-Loop | `human-in-the-loop/` | 审批流程 |
 | Memory | `memory/` | 命题记忆（fact/method/norm）、confidence/gates；Steward 在 `subsystems/memory-steward/`；七层组装在 `context/` |
 
 ## 其他文件
 
-- `runner.ts` — SessionAwareRunner（编排器，不属于任何领域；通过 `agent.run()` 驱动）
+- `runner.ts` — SessionAwareRunner（编排器：session 锁/lease、toolIsolation cwd、compactSession、可选 ACL authorize；经 `agent.run()` 驱动）
+- `session-types.ts` / `session-compact.ts` — SessionData 模型 2 字段 + compact 分桶读写
+- `run-scope.ts` — RunScope ALS（I1；含 toolRuntime / agentRevision）
 - `index.ts` — Harness 层统一导出
 - `types/` — Harness 层共享类型
 - `budget/` — IterationBudget 资源约束

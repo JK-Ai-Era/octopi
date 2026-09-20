@@ -197,9 +197,11 @@ src/
 │   ├── primitives/               EventBus、StateMachine
 │   ├── interfaces/               18 个接口契约
 │   └── types/                    核心类型定义
-├── harness/                 Layer 2  15 个自包含领域
-│   ├── agent-building/           Builder、人格、配置桥接
-│   ├── context/                  ContextLayer 装配、窗口压缩、主动摘要
+├── harness/                 Layer 2  自包含领域
+│   ├── agent-building/           Builder、人格、配置桥、Runner 注入
+│   ├── context/                  ContextLayer 装配、窗口压缩、compact-key（E4）
+│   ├── session-acl/              角色目录、authorizeRun、preferred/handoff（E6/I3）
+│   ├── tool-effect/              toolIsolation 工具 cwd（I5）
 │   ├── security/                 风险评估、Shell 解析
 │   ├── reliability/              可靠性包装、断路器
 │   ├── plugin-ecosystem/         Plugin、Tool、Skill、MCP
@@ -208,7 +210,7 @@ src/
 │   ├── session-tasks/            会话任务 SessionTask（默认）
 │   ├── run-guard/                过程监督（DefaultRunGuard）
 │   ├── orchestration/            experimental 编排（workflow/scheduler/planner）
-│   ├── concurrency/              负载均衡、限流
+│   ├── concurrency/              负载均衡、限流、SessionLease
 │   ├── execution-environment/    沙箱、工作区
 │   ├── human-in-the-loop/        审批流程
 │   ├── memory/                   记忆、认知、智慧

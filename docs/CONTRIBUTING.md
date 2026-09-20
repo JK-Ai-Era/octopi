@@ -37,6 +37,16 @@ npm run dev            # tsc --watch
 | Integration | `src/integration/` | 外部系统适配 | 依赖 Core + Loop + Harness |
 
 详细架构见 [docs/architecture.md](./architecture.md)；长期不变量见 [架构宪法](./north-star.md)。
+实现状态与开放项见 [docs/KNOWN-ISSUES.md](./KNOWN-ISSUES.md) 与 [CHANGELOG](../CHANGELOG.md)。
+
+**开发注意（宪法已落地的运行时语义）：**
+
+- `toolIsolation`（默认 `none`）：多 Session 写文件请配置 `session-subdir`（I5）
+- compact 键 = `(sessionId, agentId)`；勿用纯 sessionId 共享 Agent compact（E4）
+- Session 锁/租约键 = `sessionId`；Gateway 注入**共享** `InProcessSessionLock`；跨进程勿假设内存锁有效（E2/E7）
+- Gateway 默认注入 Session ACL；`preferredAgentId` ≠ `primaryAgentId`；handoff 默认 host-only（I3/E6）
+- SessionStore 仍为双键 `load(agentId, sessionId)`；`loadSession(sessionId)` 尚未实现
+- Config 变更：同步 `src/config-schema.ts`、`octopi.schema.json`、`octopi.example.json`
 
 **依赖方向：外 → 内。修改内层时必须确认不影响外层。**
 

@@ -18,11 +18,12 @@
 - `summarize.ts` — 默认 LLM 摘要（Builder/config 自动挂接）
 
 ### 窗口管理
-- DefaultContextEngine — 消息窗口入口（预算 → 选择 → 路由 → 压缩）
+- DefaultContextEngine — 消息窗口入口（预算 → 选择 → 路由 → 压缩）；内部状态键默认含 **agentId**（E4）
 - SmartRouter — 路由决策（fits / truncate / compact）
 - DefaultMessageSelector — 四区域消息选择
 - HybridCompressor — 混合压缩（工具截断 + LLM 摘要 + 截断兜底）
 - HeuristicTokenEstimator — 启发式 Token 估算
+- **compact-key.ts** — `compactStateKey(sessionId, agentId)`（宪法 E4）
 
 设计说明见 [docs/context-layer-contracts.md](../../../docs/context-layer-contracts.md)。
 
@@ -49,6 +50,7 @@
 - budget-allocator.ts — 消息侧 Token 预算分配
 - token-estimator.ts / token-estimate-fns.ts / token-constants.ts — 估算（跨域经 `context/index.ts` 门面；浏览器可直连 token 模块）
 - knowledge/ — KnowledgeStore + KnowledgeContextEngine
+- compact-key.ts — E4 compact 键 `(sessionId, agentId)`
 
 > 导出：`src/harness/context/index.ts` 与 `src/harness/index.ts`。
 > 七层内容组装以本目录 `ContextLayer` 契约为准；旧 `ContextIntelligence` 已删除。

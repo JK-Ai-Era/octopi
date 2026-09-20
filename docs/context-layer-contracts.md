@@ -133,13 +133,14 @@ interface ContextLayer {
 ```
 Runner.handle
   → persona resolve（PersonaSource 热更新，不变）
-  → session.contextCompact → Agent 播种
+  → session compact 播种（E4 键 = sessionId × agentId）
   → session tasks / guidance → injectedContext
   → createDefaultSystemPromptAssembler
        system 契约层: Persona + Skill + Knowledge + Memory + Cognition + Wisdom + Runtime
-  → agent.context.systemPrompt
+  → runContext.systemPrompt（写入 RunScope，不回写共享 Agent）
   → convertToLlm → DefaultContextEngine（**Information**：消息窗口 + 主动摘要）
-  → AssembleResult.compactState → Agent → Session.contextCompact（save 前）
+  → AssembleResult.compactState → Agent.setSessionCompactState(sessionId, agentId)
+  → Runner save 前 writeSessionCompact → SessionData.contextCompacts[agentId]
 ```
 
 - Builder `build()` 默认挂 Assembler；装配失败回退旧字符串拼接  
@@ -149,7 +150,7 @@ Runner.handle
 - **Skill**：`skillDirectory` 或 `home/skills` 在 build 时 discover，每轮注入 `<available_skills>`  
 - **Memory/Knowledge 召回**：`builder.memoryStore` / `knowledgeStore`；config-bridge 与 Gateway 从 `home/agent.db` 建 `SqliteMemoryStore`，Knowledge 暂用进程内 `MemoryKnowledgeStore`
 - **MemoryStore 单实例**：`AgentBuilder.build()` 在 `buildCore` 前用 `builder.memoryStore` 注册 `memory_store`/`memory_search`；MemoryLayer 召回与 `memory.steward.*` 入库同一实例。Gateway **不再**用进程级 `InMemoryMemoryStore` 挂全局 memory 工具
-- **压缩状态落盘**：`SessionData.contextCompact`（`summary` + `lastProactiveMessageCount` + `lastProactiveTokens`）；重启后 `loadCompactState` 恢复，增量小则缓存重建、不再立刻打 LLM  
+- **压缩状态落盘（E4）**：权威桶 `SessionData.contextCompacts[agentId]`；`contextCompact` 为 primary/单 agent 兼容视图。Jsonl `*.state.json` 持久化。`Agent` 内存桥键 = `(sessionId, agentId)`。**不同 agent 不互相借用 compact**。手动压缩：`SessionAwareRunner.compactSession`（与 handle **共 session 锁**，排队；勿仅依赖 `status==='processing'`）
 
 **主动摘要（防长会话失忆）：**
 

@@ -84,9 +84,14 @@ Scaffolded by `src/init.ts` (`initOctopi` / `ensureAgentDirs`). Keep init, types
 - **Development constraints** (non-exhaustive; full list in the constitution):
   - **I1**: Mutable run context lives only in **RunScope**; `Agent` is a template + substrate, not a session workspace.
   - **E1/E5**: Same `sessionId` runs are serialized; Loop stays stateless; production path uses per-run context.
+  - **E2/E7**: Lock/lease key is `sessionId`; v1 uses in-process `InProcessSessionLock` — **do not assume it is valid across processes**.
   - **E3**: Memory/Wisdom/Cognition write **only** that agent’s stores.
+  - **E4**: Compact key is `(sessionId, agentId)`; do not borrow another agent’s compact as default.
+  - **E6/I3**: Session ACL effective rights = L0 ∩ role.max ∩ agent.max ∩ binding; `preferredAgentId` ≠ `primaryAgentId`; handoff is host-plane by default.
+  - **I5**: Tool cwd policy is `toolIsolation` (default `none`); `session-subdir` for multi-session file writes.
   - Config/schema changes: keep `src/config-schema.ts` in sync with `octopi.schema.json` / `octopi.example.json`.
-- For **current implementation phases**, start from internal `arch/IMPLEMENTATION-PLAN.md` and `arch/NEXT-STEPS.md` (not tracked in git). Do not invent a parallel roadmap.
+- **Shipped runtime knobs** (see `docs/KNOWN-ISSUES.md` + `CHANGELOG`): top-level `toolIsolation`, `sessionAcl`; agents[].`workspace` / `maxSessionRights`; SessionData `primaryAgentId` / `preferredAgentId` / `participants` / `contextCompacts`. Gateway injects ACL + a **shared** session lease into all Runners.
+- For **current implementation phases**, start from internal `arch/IMPLEMENTATION-PLAN.md` and `arch/NEXT-STEPS.md` (not tracked in git). Do not invent a parallel roadmap. Phase A–H minimum sets are closed; open items (distributed Lease, session directory de-coupling, quota) are listed in `docs/KNOWN-ISSUES.md`.
 
 ### The 4-Layer Architecture
 1.  **Layer 0: Loop** — Pure execution loop (`agentLoop`). Zero state, zero external dependencies. Protocol events only (`AgentLoopEvent`).

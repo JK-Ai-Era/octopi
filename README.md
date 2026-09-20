@@ -197,9 +197,11 @@ src/
 │   ├── primitives/               EventBus, StateMachine
 │   ├── interfaces/               18 interface contracts
 │   └── types/                    Core type definitions
-├── harness/                 Layer 2  15 self-contained domains
-│   ├── agent-building/           Builder, persona, config bridge
-│   ├── context/                  ContextLayer assembly, window compression, proactive compact
+├── harness/                 Layer 2  Self-contained domains
+│   ├── agent-building/           Builder, persona, config bridge, runner injection
+│   ├── context/                  ContextLayer assembly, window compression, compact-key (E4)
+│   ├── session-acl/              Role catalog, authorizeRun, preferred/handoff (E6/I3)
+│   ├── tool-effect/              toolIsolation cwd policy (I5)
 │   ├── security/                 Risk evaluation, shell parsing
 │   ├── reliability/              Reliability wrapper, circuit breaker
 │   ├── plugin-ecosystem/         Plugins, tools, skills, MCP
@@ -208,15 +210,17 @@ src/
 │   ├── session-tasks/            SessionTask (goal/step) — default path
 │   ├── run-guard/                Checkpoint supervision (DefaultRunGuard)
 │   ├── orchestration/            Experimental workflow/scheduler/planner
-│   ├── concurrency/              Load balancing, rate limiting
+│   ├── concurrency/              Load balancing, rate limiting, SessionLease
 │   ├── execution-environment/    Sandboxing, workspace
 │   ├── human-in-the-loop/        Approval workflows
 │   ├── memory/                   Memory, cognition, wisdom
-│   └── runner.ts                 SessionAwareRunner (orchestrator)
+│   └── runner.ts                 SessionAwareRunner (session lock, tool cwd, ACL)
 ├── integration/             Layer 3  External adapters
 │   └── web-search/               DuckDuckGo, Tavily, Brave, Serper, MiMo
 └── testing/                 Test utilities
 ```
+
+Runtime config knobs (see `octopi.example.json` + `docs/KNOWN-ISSUES.md`): `toolIsolation`, `sessionAcl`, `agents[].workspace` / `maxSessionRights`.
 
 ---
 

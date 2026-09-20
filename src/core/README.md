@@ -29,7 +29,7 @@ Domain / 产品契约主体在 **harness 领域**。
 | 端口 | 真实角色 | 现位置 |
 |------|----------|--------|
 | **ToolBus** | 装配/注册期（Builder、MCP） | `core/interfaces/tool-bus.ts` |
-| **SessionStore** | Session 聚合（Runner / Gateway） | `core/interfaces/session-store.ts` |
+| **SessionStore** | Session 聚合（Runner / Gateway）双键 `load/save(agentId, sessionId)`；模型 2 字段在 SessionData 内持久化，**无** `loadSession(sessionId)` | `core/interfaces/session-store.ts` |
 | **Observer** | 可选 Integration 遥测（专题再议） | `core/interfaces/observer.ts` |
 | **ContextEngine** | 窗口装配；经 `convertToLlm` 接入 | **harness/context/types.ts** |
 | **ContextLayer / ContextAssembler** | system prompt 七层内容装配 | **harness/context/layer-types.ts** |

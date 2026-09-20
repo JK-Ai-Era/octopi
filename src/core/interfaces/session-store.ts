@@ -17,6 +17,11 @@ import type { SessionMeta } from '../types.js';
  * SessionStore 接口
  *
  * @typeParam T - Session 数据类型，由 harness 层具体化（如 SessionData）
+ *
+ * v1 双键：`load(agentId, sessionId)` / `save(agentId, sessionId, data)`。
+ * 模型 2 字段（primaryAgentId / preferredAgentId / participants / contextCompacts）
+ * 持久化在 **T**（Jsonl 见 `*.state.json`），不改变双键 API。
+ * 跨 agent 共线读史 / `loadSession(sessionId)` **尚未实现**（见 docs/KNOWN-ISSUES.md）。
  */
 export interface SessionStore<T = unknown> {
   /** 加载完整 session 数据（不存在返回 null） */

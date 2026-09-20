@@ -204,6 +204,8 @@ Agent home 目录约定（由 `initOctopi` / `ensureAgentDirs` 脚手架）：
 
 Memory / Cognition / Wisdom / Knowledge **不按目录落盘**，统一由 per-agent SQLite `AgentDatabase`（`agent.db`）承载。
 
+Jsonl 会话目录仍为 **双键** `agents/<id>/sessions/`；`SessionData` 内已含模型 2 字段（`primaryAgentId` / `preferredAgentId` / `participants` / `contextCompacts`），**目录解耦与 `loadSession(sessionId)` 尚未实现**（见 KNOWN-ISSUES）。
+
 > 旧 `extract/`（JsonlExtractorStore）目录已随 memory ETL 提取器移除；补录/治理走 `memory.steward.*` 子系统，素材读 SessionStore。
 
 ### 3.2 Context Management — 上下文管理
@@ -217,7 +219,8 @@ harness/context/
 ├── layers.ts               # 薄适配层 + createDefaultLayers
 ├── system-prompt-assembler.ts
 ├── summarize.ts
-├── default-context-engine.ts   # 消息窗口入口
+├── compact-key.ts          # E4：compact 键 (sessionId, agentId)
+├── default-context-engine.ts   # 消息窗口入口（状态键含 agentId）
 ├── smart-router.ts             # 智能路由决策
 ├── message-selector.ts         # 四区域消息选择
 ├── hybrid-compressor.ts        # 混合压缩器
@@ -228,6 +231,10 @@ harness/context/
 ├── token-estimate-fns.ts
 ├── token-constants.ts
 └── knowledge/                  # KnowledgeStore + KnowledgeContextEngine
+
+harness/session-acl/        # E6：角色目录 + authorizeRun + switch
+harness/tool-effect/        # I5：toolIsolation cwd
+harness/concurrency/session-lease.ts  # E2/E7：SessionLease
 ```
 
 领域导出见 `harness/index.ts`。设计说明见 [docs/context-layer-contracts.md](./context-layer-contracts.md)。

@@ -366,7 +366,9 @@ interface SessionModelView {
 POST /api/v1/sessions/:id/compact
 { agentId?: string }
 
-// contextWindow 未知时仍可用；session busy（run 中）返回 compacted=false
+// contextWindow 未知时仍可用。
+// 互斥：与 run 共用 SessionLease（E2）；同 sessionId 排队，不再仅靠 status==='processing' 拒绝。
+// compact 键 = (sessionId, agentId)；agentId 缺省取 session.primaryAgentId。
 interface CompactResult {
   ok: boolean;
   compacted: boolean;

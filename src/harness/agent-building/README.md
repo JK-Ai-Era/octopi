@@ -5,8 +5,9 @@
 ## 职责
 
 - `AgentBuilder`：fluent 构建；`build({ mode: 'full' | 'core' })`
-- `config-bridge`：从 `octopi.json` 装配 Provider / stores / constitution / subsystems
+- `config-bridge`：从 `octopi.json` 装配 Provider / stores / constitution / subsystems / `toolIsolation` / `sessionAcl`
 - `isSubsystemAllowed` / `discoverSubsystemSpecs`
+- **Runner 注入（E1/E5/E6/I5）**：Gateway/config-bridge 经 `builder.runnerConfig({ sessionLease, sessionAcl, agentMaxSessionRights })` 与 `builder.toolIsolation(mode)` / `builder.workspace(dir)` 注入；Runner 再解析 `toolRuntime.cwd` 与 authorize
 
 ## Memory 接线（redesign 后）
 
