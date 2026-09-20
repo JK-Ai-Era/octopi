@@ -34,7 +34,7 @@ Constitution + Layer Providers ──► ContextAssembler ──► systemPrompt
 - **Runtime**：产品第 7 层；收编 `injectedContext`（会话任务 / guidance），归属 **Run**，不进消息窗口。
 - **Information**：产品第 8 层；session / 消息历史；**禁止**作为 ContextLayer 塞进 `DefaultContextAssembler`。
 - 装配不变量：Assembler 只产 systemPrompt + manifest；消息窗口永远走 ContextEngine。
-- 所有权与 Session/Agent/Run 对齐见 `arch/context-model.md`。
+- 所有权与 Session/Agent/Run 对齐见 [架构宪法](./north-star.md)。
 
 ---
 

@@ -166,7 +166,7 @@ src/harness/orchestration/
 
 ## 9. agent-runtime（激活宿主，仍有效）
 
-见 [arch/agent-runtime.md](../arch/agent-runtime.md)。Guard 管「这次跑得健不健康」，Runtime 管「要不要开始跑」。
+Guard 管「这次跑得健不健康」，Runtime 管「要不要开始跑」。二者正交；调度与激活语义见 [架构宪法](./north-star.md) 控制面/Activation 与 `docs/architecture.md` §3.12b。
 
 ---
 

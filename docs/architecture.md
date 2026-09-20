@@ -1,9 +1,9 @@
 # Octopi 架构设计文档
 
-> 版本：v0.9.0-dev | 日期：2026-09-01
+> 版本：v0.35.3 | 日期：2026-09-26
 >
-> 本文档是 Octopi 框架的完整架构设计。
-> 详细领域文档位于 `arch/` 目录。
+> 本文档是 Octopi 的完整架构设计。
+> 长期不变量见 [架构宪法](./north-star.md)；实施阶段见 [实施规划](./IMPLEMENTATION-PLAN.md)。
 
 ---
 
@@ -433,7 +433,7 @@ Core 接口：`core/interfaces/run-guard.ts`（`RunGuard`）。
 
 ### 3.12b Agent Runtime — 激活宿主
 
-**职责**：把非用户刺激（Trigger）编译成 0..N 次受监督的 Run；多 Agent 显式路由。设计见 [arch/agent-runtime.md](../arch/agent-runtime.md)。
+**职责**：把非用户刺激（Trigger）编译成 0..N 次受监督的 Run；多 Agent 显式路由。串行互斥归 Session 级 Runner 锁（模型 A）；详见 [架构宪法](./north-star.md) 与本文 §5 数据流。
 
 ```
 harness/agent-runtime/
@@ -483,7 +483,6 @@ harness/concurrency/
 
 ## 4. Context Intelligence — 八层智能模型
 
-> 所有权与 Session/Agent/Run 对齐见 `arch/context-model.md`（内部）。  
 > **架构宪法**：[`docs/north-star.md`](./north-star.md)（类型轴 × Scope 轴；不变量 I1–I6）。实现与评审以该文为准。  
 > **产品八层 = system 侧 ContextLayer（1–7，含 Runtime）+ Information（第 8 层，消息窗口）。**
 
@@ -671,7 +670,7 @@ WebUI **不做**预算策略，只渲染 `known` / `source` / `contextWindow`。
 
 `harness/reliability/model-binding.ts` 与 `run-model-context.ts` 为兼容 re-export，新代码请 import `harness/model`。
 
-> 并发注意：同 Agent 多 Session 抢占共享 `agent.context.messages` 属独立架构债。方向已定为 Run 作用域隔离（Session / Agent / Run / RunScope 定义见 `arch/session-agent-run.md`；实现专题 `arch/open-problems.md` **OP-AR-3**；`docs/KNOWN-ISSUES.md` 有摘要）。代码尚未按该模型改写。
+> 并发与 Run 作用域：同 Agent 多 Session 下，可变上下文只存在于 **RunScope**（见 [架构宪法](./north-star.md) I1）。`SessionAwareRunner` 不以共享 `Agent.context` 作为会话工作区。遗留项与实施进度见 [`docs/KNOWN-ISSUES.md`](./KNOWN-ISSUES.md) 与 [`docs/IMPLEMENTATION-PLAN.md`](./IMPLEMENTATION-PLAN.md)。
 
 ---
 
@@ -753,14 +752,13 @@ Gateway serve 路径经 `builder.build()` 装配；治理类子系统 signal 仅
 
 ## 9. 相关文档
 
-- `arch/overview.md` — 架构全景（DDD 领域组织）
-- `arch/refactoring-plan-4layer.md` — 4 层重构方案
-- `arch/dependency-map.md` — 模块依赖图
-- `arch/layer-rules.md` — 分层规则
-- `arch/invariants.md` — 架构不变量
+- [架构宪法](./north-star.md) — 本体与长期不变量
+- [实施规划](./IMPLEMENTATION-PLAN.md) — 分阶段实现与验收
+- [已知问题](./KNOWN-ISSUES.md) — 对外问题摘要
 - `docs/plugin-system.md` — Plugin 系统详细文档
 - `docs/task-system.md` — SessionTask 设计基准
 - `docs/domain-split.md` — run-guard / orchestration / AsyncTask 领域切分
 - `docs/CONTRIBUTING.md` — 开发规范
+- `docs/context-layer-contracts.md` — ContextLayer / Assembler 契约
 - `docs/web-runtime-design.md` — Web Runtime 技术设计
 - `docs/web-conversation-model-design.md` — WebUI 会话显示模型设计

@@ -1,3 +1,12 @@
+## v0.35.4 (2026-09-26)
+
+### docs: 对外文档去除 arch/ 引用
+
+- `docs/` 下不再引用或解释 `arch/`（内部目录不入库、不对外）
+- 架构相关交叉引用统一为 `docs/north-star.md`、`docs/architecture.md`、`docs/IMPLEMENTATION-PLAN.md` 等
+- `CONTRIBUTING` 文档同步规范改为以 `docs/` + `CHANGELOG` 为准
+- `architecture` 并发注意改为指向宪法 I1（I1 已实现）
+
 ## v0.35.3 (2026-09-26)
 
 ### docs: 架构宪法文首与正文表述收口

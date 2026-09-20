@@ -163,7 +163,7 @@ sense:
 - `interval` 必填且 ≥ 1000ms，否则注册失败。
 - 到点后复用与 eventBus 相同的冷却期、传播深度、condition / conditionRef 与 `onTrigger`。
 - `unregister` / `dispose` 会拆除对应定时器。
-- cron 语法见 `arch/schedule.md`（独立议题，尚未接入）。
+- cron 语法为独立议题，尚未接入主路径。
 
 ---
 

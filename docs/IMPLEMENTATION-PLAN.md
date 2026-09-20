@@ -22,12 +22,10 @@
 然后：
 
 ```text
-1. 确认工作区：优先在 feat/run-scope-i1 worktree 上继续，或从该分支开新 worktree
-   - worktree 路径：C:\Users\James\Projects\octopi-run-scope
-   - 若在新机器/新 session：git worktree list 查看；不要直接在 main 上堆未合并的重构
+1. 工作区：通常在仓库根（main 或功能分支）。大改可用 git worktree 隔离，非必须
 2. 确认 node：Windows 上用 Get-Command node；项目要求 Node >= 24（node:sqlite）
-3. npm install（worktree 可能需单独 install）
-4. npm test 基线：应为 1634 passed（I1 落地后，见 §3）
+3. npm install（若使用新 worktree 需单独 install）
+4. npm test 基线：对照 §3（I1 合并后约 1634 passed）
 ```
 
 **依赖工具（MiMo Desktop 环境）**：`$env:MIMO_NODE` / `$env:MIMO_NPM`；PowerShell 下用 `& $env:MIMO_NODE $env:MIMO_NPM test`。
@@ -54,25 +52,17 @@ Octopi 是**可嵌入 Agent 引擎**。原实现把 **Agent 实例当成「当�
 
 ## 2. 权威文档地图（改架构前先读）
 
-| 文档 | 内容 | git |
-|------|------|-----|
-| **`docs/north-star.md`** | **架构宪法**：本体、I1–I6、E1–E7、Reserved 位、过度设计边界 | **tracked** |
-| `docs/IMPLEMENTATION-PLAN.md` | 跨 session 实施规划 | tracked |
-| `docs/architecture.md` / `docs/KNOWN-ISSUES.md` | 对外架构与已知问题 | tracked |
-| `arch/north-star.md` | 内部指针 → docs 宪法 | gitignore |
-| `arch/session-agent-run.md` 等 | 内部专题稿 | gitignore |
-| `arch/session-agent-run.md` | Session/Agent/Run/RunScope 术语与所有权 | gitignore |
-| `arch/session-acl.md` | 角色目录（owner/specialist/reviewer/operator/steward）、权限、意图 | gitignore |
-| `arch/context-model.md` | 八层 × Scope 叉乘 | gitignore |
-| `arch/open-problems.md` OP-AR-3 | Run 物理实现专题与关门条件 | gitignore |
-| **`arch/IMPLEMENTATION-PLAN.md`（本文）** | 跨 session 实施规划 | gitignore |
-| `CHANGELOG.md` | 每 commit 必更；版本 X.Y.Z | tracked |
-| `docs/KNOWN-ISSUES.md` | 对外已知问题摘要 | tracked |
-| `docs/architecture.md` | 产品向架构说明 | tracked |
-| `docs/context-layer-contracts.md` | Assembler / 层契约 | tracked |
+| 文档 | 内容 |
+|------|------|
+| **`docs/north-star.md`** | **架构宪法**：本体、I1–I6、E1–E7、Reserved 位、过度设计边界 |
+| `docs/IMPLEMENTATION-PLAN.md`（本文） | 跨 session 实施规划、阶段验收 |
+| `docs/architecture.md` | 产品向架构说明（八层、分层、数据流） |
+| `docs/context-layer-contracts.md` | Assembler / 层契约 |
+| `docs/KNOWN-ISSUES.md` | 已知问题摘要 |
+| `CHANGELOG.md` | 每 commit 必更；版本 X.Y.Z |
+| `AGENTS.md`（仓库根） | 分层、测试、提交约定 |
 
-> `arch/` 在 `.gitignore` 中（内部设计）。**交接靠磁盘上的 arch 文件 + 本文**；对外叙事在 `docs/`。  
-> 若新 session 在 **主仓库** `C:\Users\James\Projects\octopi` 看不到 I1 代码，说明 worktree 分支尚未合并——见 §3。
+设计细节（八层所有权、Session↔Agent 基数、角色目录语义）以 **`docs/north-star.md`** 为准；本文写「做什么、怎么验收」。
 
 ---
 
@@ -83,12 +73,12 @@ Octopi 是**可嵌入 Agent 引擎**。原实现把 **Agent 实例当成「当�
 | 项 | 说明 |
 |----|------|
 | 宪法定稿 | **`docs/north-star.md`** |
-| 八层 / ACL / Session 模型 | arch 专题文档 |
-| **I1 Run 物理（代码）** | **已合并 main**：commit `ff75fd0`，**v0.35.0**（原 worktree `feat/run-scope-i1`） |
+| 八层 / ACL / Session 模型 | 宪法 §1 本体与 §4 角色；实现按 Phase C–F |
+| **I1 Run 物理（代码）** | **已合并 main**：commit `ff75fd0`，**v0.35.0** |
 
-**Phase A 状态：已完成（2026-09-26）** — worktree 提交 → fast-forward 合并 main → main 上 `npm run build` + `npm test` **1634 passed**。
+**Phase A 状态：已完成（2026-09-26）** — I1 已合并 **main**；`npm run build` + `npm test` **1634 passed**。
 
-**I1 代码落点（worktree）：**
+**I1 代码落点（main）：**
 
 | 文件 | 变更 |
 |------|------|
@@ -110,9 +100,9 @@ npm test        # 1634 passed（全量）
 
 ### 3.2 交接时注意
 
-- **主仓库 `main` 可能还没有 I1 代码**。开工前：`git worktree list`；在 `octopi-run-scope` 上工作，或 `git merge` / 开新分支自 `feat/run-scope-i1`。
-- I1 **尚未 commit** 时，worktree 为脏工作区（见 `git status`）。合并/提交策略见 §5。
-- `arch/` 变更不会进 git；**代码 + CHANGELOG + docs/** 才进提交。
+- I1 已在 **`main`**；开工前 `git log -1` 与 `npm test` 对照 §3 基线。
+- 提交：Conventional Commits + **`CHANGELOG.md`** + 版本号（见 `AGENTS.md`）。
+- 架构争议以 **`docs/north-star.md`** 为准；任务范围以本文 Phase 验收为准。
 
 ---
 
@@ -182,9 +172,9 @@ npm test -- tests/harness/run-scope-isolation.test.ts
 ### 5.4 新 Session 开工检查清单
 
 - [ ] 已读 `AGENTS.md` + **`docs/north-star.md`** + 本文
-- [ ] `git worktree list` / 当前分支正确
+- [ ] 当前分支正确（通常基于 `main`）；`git log -1` 含 I1 或更后
 - [ ] `npm test` 与 §3 基线一致（或已知差异写进任务说明）
-- [ ] 只做一个阶段（§6）的一个子任务；完成即更新任务列表与 CHANGELOG
+- [ ] 只做一个阶段（§6）的一至数个子任务；完成即更新 CHANGELOG
 - [ ] 不在未设计的情况下扩大 ACL/存储范围
 
 ---
@@ -199,9 +189,9 @@ npm test -- tests/harness/run-scope-isolation.test.ts
 ### 阶段总览
 
 ```text
-Phase A  I1 收尾与合并          ← 当前优先（worktree 上已有代码）
-Phase B  I5 工具效应面（最小）
-Phase C  Session 一等数据形态（模型 2 最小集）
+Phase A  I1 收尾与合并          ← 已完成
+Phase B  I5 工具效应面（最小）    ← 下一步候选
+Phase C  Session 一等数据形态（模型 2 最小集）← 下一步候选
 Phase D  Compact 与 run 互斥 + 键位
 Phase E  ACL / 角色目录（配置种子）
 Phase F  preferred / handoff / Principal 审计位
@@ -265,7 +255,7 @@ B（I5）不依赖 C，可与 C 并行。
 | C1 | 盘点 `SessionStore` 实现：`InMemory` / `Jsonl` / `Sqlite` 的 `load(agentId, sessionId)` 形状 |
 | C2 | `SessionData` 增加（可选渐进）：`primaryAgentId?`；assistant 消息 `metadata.agentId` 或等价字段 |
 | C3 | API 演进（内部可 breaking）：优先 `loadSession(sessionId)` / 或保持双键但 **primary 字段必填于 create** |
-| C4 | Jsonl/目录布局：**设计目标**见 `arch/session-agent-run.md`（sessions 与 agents home 解耦）；实施可分两步：先字段与 create API，再迁路径 |
+| C4 | Jsonl/目录布局：sessions 与 agents home 解耦（见宪法 Session 一等）；实施可分两步：先字段与 create API，再迁路径 |
 | C5 | Runner 写回消息时带 `agentId`（来自 RunScope） |
 | C6 | 测试：create 带 primary；存盘后 load 可读；消息归因存在 |
 
@@ -298,7 +288,7 @@ B（I5）不依赖 C，可与 C 并行。
 |--------|------|
 | E1 | 实现角色目录加载：内置种子 + 配置文件覆盖（**v1 不做 DB 表**，见宪法「避免过度」） |
 | E2 | 配置 schema：`sessionAcl.roles` / `switchDefaults`（Zod + schema.json + example.json） |
-| E3 | 出厂角色（**已拍板**，见 `arch/session-acl.md`）：owner / specialist / reviewer / operator / steward；**specialist 与 reviewer 的 readScope 默认 `full`**；specialist `writeMemory=true`、`canManageTasks=true`；**无出厂 canHandoff** |
+| E3 | 出厂角色（宪法 §4）：owner / specialist / reviewer / operator / steward；**specialist 与 reviewer 的 readScope 默认 `full`**；specialist `writeMemory=true`、`canManageTasks=true`；**无出厂 canHandoff** |
 | E4 | `Participant` 最小：sessionId+agentId → roleId + rights 覆盖；grant/revoke API |
 | E5 | `authorizeRun`：effective = L0 ∩ role.max ∩ agent.max ∩ 绑定；未授权 deny |
 | E6 | 测试：非法 grant 拒绝；specialist 可 full 读；operator 最小暴露；handoff 默认非 agent |
@@ -340,8 +330,8 @@ B（I5）不依赖 C，可与 C 并行。
 |--------|------|
 | H1 | `docs/KNOWN-ISSUES.md`：随阶段关闭条目 |
 | H2 | `docs/architecture.md`：并发/RunScope/八层与实现一致 |
-| H3 | OP-AR-3 关门条件对照 `arch/open-problems.md` + north-star §8 |
-| H4 | `arch/*` 实现状态表更新（磁盘文档） |
+| H3 | 关门条件对照 **`docs/north-star.md` §8** + 本文 §7 |
+| H4 | `docs/` 实现状态与 KNOWN-ISSUES 随阶段更新 |
 
 ---
 
@@ -380,11 +370,9 @@ B（I5）不依赖 C，可与 C 并行。
 
 ```text
 请阅读 **docs/IMPLEMENTATION-PLAN.md** 与 **docs/north-star.md**。
-在 worktree C:\Users\James\Projects\octopi-run-scope（分支 feat/run-scope-i1 或自该分支新开）
-完成 Phase X 子任务 Xn：…
+基于仓库 main（或新开功能分支）完成 Phase X 子任务 Xn：…
 验收：…（粘贴该子任务验收行）
-遵守 AGENTS.md：Conventional Commits + CHANGELOG + npm test。
-若 main 已合并 I1，请说明并基于 main 继续。
+遵守 AGENTS.md：Conventional Commits + CHANGELOG + npm test + build。
 ```
 
 一次领取 **一个 Phase 的一至数个子任务**；完成后再领下一个。
@@ -403,6 +391,6 @@ B（I5）不依赖 C，可与 C 并行。
 
 | 日期 | 内容 |
 |------|------|
-| 2026-09-26 | 初版：交接用实施规划；记录 I1 已在 feat/run-scope-i1；Phase A–H |
-| 2026-09-26 | Phase A 完成：I1 `ff75fd0` 已并入 main，v0.35.0 |
-| 2026-09-26 | 架构宪法权威路径：`docs/north-star.md` |
+| 2026-09-26 | 初版：交接用实施规划；Phase A–H |
+| 2026-09-26 | Phase A 完成：I1 已并入 main，v0.35.0 |
+| 2026-09-26 | 架构宪法：`docs/north-star.md`；对外文档不引用内部目录 |

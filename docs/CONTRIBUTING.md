@@ -36,7 +36,7 @@ npm run dev            # tsc --watch
 | Harness | `src/harness/` | 15 个自包含领域 | 依赖 Core + Loop |
 | Integration | `src/integration/` | 外部系统适配 | 依赖 Core + Loop + Harness |
 
-详细架构见 [arch/overview.md](../arch/overview.md)
+详细架构见 [docs/architecture.md](./architecture.md)；长期不变量见 [架构宪法](./north-star.md)。
 
 **依赖方向：外 → 内。修改内层时必须确认不影响外层。**
 
@@ -89,23 +89,22 @@ npx vitest run --grep "SecurityGuard"
 
 | 变更类型 | 需要更新的文档 |
 |----------|---------------|
-| 新增/修改核心接口 | `arch/overview.md` + `arch/dependency-map.md` |
-| 新增 Plugin hook | `docs/plugin-system.md` + `arch/overview.md` |
-| 新增模块 | `arch/overview.md` 对应领域章节 + `arch/dependency-map.md` |
-| 修改层间依赖 | `arch/dependency-map.md` + `arch/layer-rules.md` |
-| 修改架构不变量 | `arch/invariants.md` |
+| 新增/修改核心接口 | `docs/architecture.md` 对应章节 + `CHANGELOG.md` |
+| 新增 Plugin hook | `docs/plugin-system.md` + `docs/architecture.md`（如涉及） |
+| 新增模块 | `docs/architecture.md` + 模块内 `README.md` |
+| 修改层间依赖 / 分层 | `docs/architecture.md`；不得违反 [架构宪法](./north-star.md) 与本文件「依赖方向」 |
+| 修改架构不变量 | **`docs/north-star.md`**（须显式评审）+ `CHANGELOG.md` |
 | 测试数量变化 | `README.md` + `CHANGELOG.md` |
 
 ### 文档更新检查清单
 
 提交前确认：
 
-- [ ] 运行 `bash ~/.openclaw/workspace-octopi/arch/check-sync.sh`
-- [ ] `arch/overview.md` 中对应领域章节是否更新
-- [ ] `arch/dependency-map.md` 中依赖关系是否更新
+- [ ] `docs/architecture.md` 对应章节是否更新（若涉及）
 - [ ] 新增的接口/类型是否有文档说明
 - [ ] 测试数量是否更新
 - [ ] `CHANGELOG.md` 是否记录变更
+- [ ] 未违反 [架构宪法](./north-star.md) 不变量（I1–I6 / E1–E7）
 
 ### 架构文档版本号
 
@@ -123,7 +122,7 @@ npx vitest run --grep "SecurityGuard"
 2. 在对应层的 `index.ts` 中导出
 3. 在 `src/index.ts` 中添加导出（如果是公共 API）
 4. 编写测试文件 `tests/<module>.test.ts`
-5. 更新 `ARCHITECTURE.md` 对应章节
+5. 更新 `docs/architecture.md` 对应章节（若对外可见行为/结构变化）
 6. 更新 `CHANGELOG.md`
 
 ## Plugin 开发
@@ -141,8 +140,7 @@ my-plugin/
 
 ### 1. 架构文档同步
 
-修改涉及架构调整时（接口变更、新增模块、依赖方向变化），同步更新 `arch/` 相关文档。
-完成后运行 `bash arch/check-sync.sh` 验证。
+修改涉及架构调整时（接口变更、新增模块、依赖方向变化），同步更新 `docs/architecture.md`；若触及长期不变量，必须修订 **`docs/north-star.md`** 并走评审。
 
 ### 2. 模块 README 同步
 
@@ -155,4 +153,5 @@ my-plugin/
 
 检查清单：
 - [ ] 我已更新被修改模块的 `README.md`
-- [ ] 我已运行 `bash arch/check-sync.sh`
+- [ ] 我已更新 `docs/architecture.md`（如涉及）
+- [ ] 我已更新 `CHANGELOG.md`
