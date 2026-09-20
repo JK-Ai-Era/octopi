@@ -4,7 +4,7 @@
 
 ## 同 Agent 多 Session 抢占共享 Agent 上下文（I1 已落地）
 
-**状态：** Run 物理 **I1 已实现**（v0.35.0）→ 架构宪法 **`docs/north-star.md`** · 实施规划 `docs/IMPLEMENTATION-PLAN.md`
+**状态：** Run 物理 **I1 已实现**（v0.35.0）→ 架构宪法 **`docs/north-star.md`**
 
 `SessionAwareRunner` 不再把共享 `Agent.context` 当会话工作区；每 Run 使用私有 `AgentContext` + `RunScope` ALS。锁仍按 `sessionId`。同 Agent 多 Session 并发的 **消息串味** 已由回归测试覆盖。
 

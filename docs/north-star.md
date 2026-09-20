@@ -263,9 +263,11 @@ Scope 轴:
 | 文档 | 角色 |
 |------|------|
 | **`docs/north-star.md`（本文）** | **架构宪法** |
-| `docs/IMPLEMENTATION-PLAN.md` | 跨会话实施规划 |
 | `docs/architecture.md` | 产品向架构说明 |
 | `docs/KNOWN-ISSUES.md` | 已知问题摘要 |
+| `docs/context-layer-contracts.md` | ContextLayer / Assembler 契约 |
+
+实施阶段与内部专题见开发仓内交接材料（不对外）。
 
 ---
 
@@ -277,3 +279,4 @@ Scope 轴:
 | 2026-09-26 | **定稿**；后续实现与评审以本文不变量为准 |
 | 2026-09-26 | **I1 落地**：RunScope ALS + per-run AgentContext；见 CHANGELOG v0.35.0 |
 | 2026-09-26 | 文首定位定为 **「架构宪法」**；正文不展开文档目录体系 |
+| 2026-09-26 | 关联文档仅保留对外 `docs/`；实施规划归内部交接材料 |

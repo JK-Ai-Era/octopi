@@ -3,7 +3,7 @@
 > 版本：v0.35.3 | 日期：2026-09-26
 >
 > 本文档是 Octopi 的完整架构设计。
-> 长期不变量见 [架构宪法](./north-star.md)；实施阶段见 [实施规划](./IMPLEMENTATION-PLAN.md)。
+> 长期不变量见 [架构宪法](./north-star.md)。
 
 ---
 
@@ -670,7 +670,7 @@ WebUI **不做**预算策略，只渲染 `known` / `source` / `contextWindow`。
 
 `harness/reliability/model-binding.ts` 与 `run-model-context.ts` 为兼容 re-export，新代码请 import `harness/model`。
 
-> 并发与 Run 作用域：同 Agent 多 Session 下，可变上下文只存在于 **RunScope**（见 [架构宪法](./north-star.md) I1）。`SessionAwareRunner` 不以共享 `Agent.context` 作为会话工作区。遗留项与实施进度见 [`docs/KNOWN-ISSUES.md`](./KNOWN-ISSUES.md) 与 [`docs/IMPLEMENTATION-PLAN.md`](./IMPLEMENTATION-PLAN.md)。
+> 并发与 Run 作用域：同 Agent 多 Session 下，可变上下文只存在于 **RunScope**（见 [架构宪法](./north-star.md) I1）。`SessionAwareRunner` 不以共享 `Agent.context` 作为会话工作区。遗留项见 [`docs/KNOWN-ISSUES.md`](./KNOWN-ISSUES.md)。
 
 ---
 
@@ -753,7 +753,6 @@ Gateway serve 路径经 `builder.build()` 装配；治理类子系统 signal 仅
 ## 9. 相关文档
 
 - [架构宪法](./north-star.md) — 本体与长期不变量
-- [实施规划](./IMPLEMENTATION-PLAN.md) — 分阶段实现与验收
 - [已知问题](./KNOWN-ISSUES.md) — 对外问题摘要
 - `docs/plugin-system.md` — Plugin 系统详细文档
 - `docs/task-system.md` — SessionTask 设计基准

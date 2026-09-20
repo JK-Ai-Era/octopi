@@ -1,3 +1,11 @@
+## v0.35.5 (2026-09-26)
+
+### docs: 实施规划回归内部 arch
+
+- **`docs/IMPLEMENTATION-PLAN.md` 移出仓库**；实施规划回到 **`arch/IMPLEMENTATION-PLAN.md`**（内部、含 arch 专题引用与阶段验收）
+- 对外 `docs/` 仅保留架构宪法、architecture、KNOWN-ISSUES 等；不再要求外部读者依赖内部专题稿
+- 开发交接：读 `arch/IMPLEMENTATION-PLAN.md` + `docs/north-star.md` + 本阶段 `arch/*` 专题
+
 ## v0.35.4 (2026-09-26)
 
 ### docs: 对外文档去除 arch/ 引用
