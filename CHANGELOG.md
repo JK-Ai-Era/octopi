@@ -1,3 +1,11 @@
+## v0.35.3 (2026-09-26)
+
+### docs: 架构宪法文首与正文表述收口
+
+- `docs/north-star.md` 文首定位改为 **「架构宪法」**
+- 正文去除关于 `docs/` / `arch/` 目录分工与内部指针的说明；关联文档仅列 `docs/` 对外文档
+- `IMPLEMENTATION-PLAN` / `architecture` / `KNOWN-ISSUES` 中的宪法表述同步
+
 ## v0.35.2 (2026-09-26)
 
 ### docs: 宪法迁入 docs/north-star.md（对外）

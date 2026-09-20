@@ -1,12 +1,10 @@
 # Octopi 核心架构重构 — 实施规划（跨 Session 交接文档）
 
-> **地位**：**tracked 交接文档**（本文件在 git 中，可随 main 分发）。内部设计稿在 `arch/`（gitignore，不对外）。  
-> **读者**：新 Session / 新会话中的实现 Agent。你可能没有此前讨论的上下文——**以本文 + `docs/north-star.md`（对外宪法）为准**，不要凭感觉改架构。  
+> **地位**：**tracked 交接文档**。  
+> **读者**：新 Session / 新会话中的实现 Agent。你可能没有此前讨论的上下文——**以本文 + `docs/north-star.md`（架构宪法）为准**，不要凭感觉改架构。  
 > **日期**：2026-09-26  
-> **宪法**：**`docs/north-star.md`**（对外、tracked、权威）。`arch/north-star.md` 仅为内部指针。  
-> **代码基线**：I1 已合并 `main`（v0.35.0+）。  
->
-> **文档定位**：`docs/` 对外；`arch/` 内部。专题细节若仅在 `arch/`，实现时以宪法不变量与本文验收为准。
+> **宪法**：**`docs/north-star.md`**。  
+> **代码基线**：I1 已合并 `main`（v0.35.0+）。
 
 ---
 
@@ -17,7 +15,7 @@
 | 顺序 | 文档 | 作用 |
 |------|------|------|
 | 1 | 仓库根 `AGENTS.md` | 分层、测试、提交、配置约定 |
-| 2 | **`docs/north-star.md`** | 宪法（对外权威）：本体、不变量 I1–I6 / E1–E7、Reserved 位 |
+| 2 | **`docs/north-star.md`** | 架构宪法：本体、不变量 I1–I6 / E1–E7、Reserved 位 |
 | 3 | 本文 §1–§5 | 现状、目标、阶段、验收 |
 | 4 | 当前阶段对应的专题章节（§6+） | 本阶段要改什么 |
 
@@ -58,7 +56,7 @@ Octopi 是**可嵌入 Agent 引擎**。原实现把 **Agent 实例当成「当�
 
 | 文档 | 内容 | git |
 |------|------|-----|
-| **`docs/north-star.md`** | **宪法（对外权威）**：本体、I1–I6、E1–E7、Reserved 位、过度设计边界 | **tracked** |
+| **`docs/north-star.md`** | **架构宪法**：本体、I1–I6、E1–E7、Reserved 位、过度设计边界 | **tracked** |
 | `docs/IMPLEMENTATION-PLAN.md` | 跨 session 实施规划 | tracked |
 | `docs/architecture.md` / `docs/KNOWN-ISSUES.md` | 对外架构与已知问题 | tracked |
 | `arch/north-star.md` | 内部指针 → docs 宪法 | gitignore |
@@ -407,4 +405,4 @@ B（I5）不依赖 C，可与 C 并行。
 |------|------|
 | 2026-09-26 | 初版：交接用实施规划；记录 I1 已在 feat/run-scope-i1；Phase A–H |
 | 2026-09-26 | Phase A 完成：I1 `ff75fd0` 已并入 main，v0.35.0 |
-| 2026-09-26 | 宪法权威路径改为 **`docs/north-star.md`**（对外） |
+| 2026-09-26 | 架构宪法权威路径：`docs/north-star.md` |

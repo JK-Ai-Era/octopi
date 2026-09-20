@@ -1,6 +1,6 @@
-# Octopi 架构北极星（宪法级）
+# Octopi 架构宪法
 
-> **文档定位**：**对外架构宪法**（`docs/` = 对外；`arch/` = 内部设计稿，不对外）。  
+> **架构宪法**  
 > **地位**：核心理念与长期不变量。高于单次交付节奏；实现可分层迭代，但 **不得违反不变量**。  
 > **状态**：定稿 2026-09-26；**I1 Run 物理已落地**（v0.35.0：RunScope ALS + per-run AgentContext）。修订须显式改本文并走变更记录。  
 > **产品定位**：Octopi = **可嵌入的 Agent 引擎**（运行时 + 连续性 + 治理底座），不是聊天包装器。
@@ -11,7 +11,7 @@
 
 同 Agent 多 Session 并发、上下文所有权、八层模型、Session↔Agent 基数与角色治理等问题，若只按短期排期评价，容易把 **必要的架构升维** 误判成「过度设计」。
 
-本文件固定 **中长期尺度上的本体、不变量与预留位**，使实现、评审与嵌入方集成有同一部宪法。内部更细的专题讨论稿见 `arch/`（不对外）；**对外以本文为准**。
+本文件固定 **中长期尺度上的本体、不变量与预留位**，使实现、评审与嵌入方集成有同一部宪法。
 
 ---
 
@@ -161,8 +161,7 @@ Scope 轴:
 
 - 角色目录是 **一等配置**（文件为权威缺省；DB/控制台为可选覆盖后端），**不是**封闭代码枚举。  
 - 出厂种子（产品已拍板）：**owner / specialist / reviewer / operator / steward**。  
-- 业务角色（consultant 等）进 **同一目录** 自定义，不进引擎硬编码。  
-- 详见 `arch/session-acl.md`。
+- 业务角色（consultant 等）进 **同一目录** 自定义，不进引擎硬编码。
 
 | 概念 | 长期要求 |
 |------|----------|
@@ -184,7 +183,7 @@ Scope 轴:
 |--------|------|----------|
 | **Principal** | Run/Intent/审计中的驱动者 | `actorId?` / `tenantId?` 字段与审计维度 |
 | **Session Lease** | 分布式下替代内存锁 | 锁接口与 `sessionId` 键；实现可先 in-process |
-| **ToolEffectPolicy** | 工具效应并发/沙箱/幂等 | 文档不变量 I5 + tool context 中 cwd/sandbox 字段位 |
+| **ToolEffectPolicy** | 工具效应并发/沙箱/幂等 | 不变量 I5 + tool context 中 cwd/sandbox 字段位 |
 | **AgentRevision** | 模板版本绑 Run | RunRecord：`agentRevision?` |
 | **Quota / Economy** | token/费用按 Principal/Session/Agent/Role | Budget 已 per-run；挂载点位 |
 | **Replay** | 从 Discourse + 审计复现 | append 权威（I2）；投影可重建 |
@@ -224,8 +223,7 @@ Scope 轴:
 战术层   ← 某季度先并发测试还是先 grant API（不改变宪法）
 ```
 
-**OP-AR-3 的正确读法：** Run 物理是 **不变量 I1/I5/E1 的实现**，不是「内部随便先修个 bug」。  
-实现可以先做 Run 物理再做 ACL 存储，但 **PR/设计审查以不变量为准**，不以「今天能不能不写角色表」为准。
+实现验收以 **不变量** 为准，不以「今天能不能不写角色表」为准。
 
 ---
 
@@ -243,33 +241,31 @@ Scope 轴:
 
 ---
 
-## 8. 实现关系（不变量如何落到现有专题）
+## 8. 实现关系（不变量如何落到代码）
 
 | 不变量 | 主要落点 |
 |--------|----------|
-| I1 / E1 / E5 | OP-AR-3 RunScope：`SessionAwareRunner` / `Agent.run` / convertToLlm / toolContext |
-| I2 | Session 存储：append 权威 + 投影（`arch/session-agent-run.md` 演进） |
-| I3 / E6 | `arch/session-acl.md` 角色与 handoff |
-| I4 | `arch/context-model.md` 八层 × Scope |
-| I5 | Tool 上下文与 workspace 策略（专题，可与 Run 物理同期设计接口） |
+| I1 / E1 / E5 | RunScope：`SessionAwareRunner` / `Agent.run` / convertToLlm / toolContext |
+| I2 | Session 存储：append 权威 + 投影 |
+| I3 / E6 | 角色与 handoff（session ACL） |
+| I4 | 八层 × Scope（上下文所有权） |
+| I5 | Tool 上下文与 workspace 策略 |
 | I6 / Principal | 控制面 API：actor/tenant/Intent 字段位 |
 | E2 / E7 | 锁 → 可替换 Lease |
 | E3 / E4 | Memory 写路径；compact `(sessionId, agentId)` |
 
-**关闭 OP-AR-3（架构验收）：** 不仅「串味测试绿」，且实现不违反 I1/E1/E5，tool 身份来自 RunScope；工具效应面至少有文档级策略与接口位。
+**架构验收：** 不仅「串味测试绿」，且实现不违反 I1/E1/E5，tool 身份来自 RunScope；工具效应面至少有文档级策略与接口位。
 
 ---
 
 ## 9. 关联文档
 
-| 文档 | 角色 | 对外 |
-|------|------|------|
-| **`docs/north-star.md`（本文）** | **宪法权威副本** | ✅ |
-| `docs/IMPLEMENTATION-PLAN.md` | 跨会话实施规划 | ✅ |
-| `docs/architecture.md` | 产品向架构说明 | ✅ |
-| `docs/KNOWN-ISSUES.md` | 已知问题摘要 | ✅ |
-| `arch/north-star.md` | 内部指针 → 本文 | ❌ |
-| `arch/session-agent-run.md` 等 | 内部专题稿 | ❌ |
+| 文档 | 角色 |
+|------|------|
+| **`docs/north-star.md`（本文）** | **架构宪法** |
+| `docs/IMPLEMENTATION-PLAN.md` | 跨会话实施规划 |
+| `docs/architecture.md` | 产品向架构说明 |
+| `docs/KNOWN-ISSUES.md` | 已知问题摘要 |
 
 ---
 
@@ -277,7 +273,7 @@ Scope 轴:
 
 | 日期 | 内容 |
 |------|------|
-| 2026-09-26 | 初稿：本体（含 Principal）、宪法不变量 I1–I6 / E1–E7、控制面分层、八层×Scope、Accountability/Agency、Reserved 设计位、过度设计边界、与 OP-AR-3 的实现关系 |
-| 2026-09-26 | **定稿**：宪法生效；后续实现与评审以本文不变量为准 |
-| 2026-09-26 | **I1 落地**：`RunScope` ALS + Runner/`Agent.run` per-run context；见 CHANGELOG v0.35.0 |
-| 2026-09-26 | **迁入 `docs/`**：对外宪法权威路径为 `docs/north-star.md`；`arch/` 侧改为指针 |
+| 2026-09-26 | 初稿：本体、不变量 I1–I6 / E1–E7、控制面分层、八层×Scope、Accountability/Agency、Reserved 设计位、过度设计边界、实现关系 |
+| 2026-09-26 | **定稿**；后续实现与评审以本文不变量为准 |
+| 2026-09-26 | **I1 落地**：RunScope ALS + per-run AgentContext；见 CHANGELOG v0.35.0 |
+| 2026-09-26 | 文首定位定为 **「架构宪法」**；正文不展开文档目录体系 |
