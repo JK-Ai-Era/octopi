@@ -107,6 +107,11 @@ export interface Message {
   toolCalls?: ToolCall[];
   toolResults?: ToolResult[];
   timestamp: number;
+  /**
+   * 产出本条消息的 agent（模型 2 归因）。
+   * assistant/tool 消息由 Runner 在写回时按 RunScope 身份补齐。
+   */
+  agentId?: string;
   metadata?: Record<string, unknown>;
 }
 

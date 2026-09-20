@@ -7,6 +7,7 @@
  */
 
 import type { ModelInfo, ToolPolicy } from '../../core/types/agent-definition.js';
+import type { SessionRights } from '../session-acl/types.js';
 
 /** Agent 人设 */
 export interface AgentPersona {
@@ -41,6 +42,11 @@ export interface AgentDefinition {
   skills?: string[];
   contextEngine?: string;
   channelBindings?: Record<string, string>;
+  /**
+   * Session ACL 天花板（L1 · E6）。
+   * handle authorize 时与角色 max / 绑定取交集。
+   */
+  maxSessionRights?: SessionRights;
 }
 
 export type { ModelInfo, ToolPolicy };

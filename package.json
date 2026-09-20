@@ -1,7 +1,7 @@
-{
+﻿{
   "name": "octopi",
-  "version": "0.36.0",
-  "description": "可嵌入的 Agent 引擎",
+  "version": "0.41.0",
+  "description": "鍙祵鍏ョ殑 Agent 寮曟搸",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -91,3 +91,4 @@
     "sqlite-vec": "^0.1.9"
   }
 }
+
