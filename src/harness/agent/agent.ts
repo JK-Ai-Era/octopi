@@ -279,6 +279,7 @@ export class Agent {
       agentId: options?.runScope?.agentId ?? harness.agentId ?? 'default',
       systemPrompt: options?.runScope?.systemPrompt ?? context.systemPrompt,
       toolRuntime: options?.runScope?.toolRuntime,
+      agentRevision: options?.runScope?.agentRevision,
     };
 
     let gen = runAgentWithReliability(context, config, harness, signal);

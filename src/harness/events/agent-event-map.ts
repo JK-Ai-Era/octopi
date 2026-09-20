@@ -76,6 +76,19 @@ export interface AgentEventMap {
     description?: string;
     [k: string]: unknown;
   };
+  /** 工具/输出被 SecurityGuard 拦截 */
+  'security.blocked': {
+    reason?: string;
+    toolName?: string;
+    action?: string;
+    severity?: string;
+    violations?: Array<{ type?: string; severity?: string; description?: string }>;
+    [k: string]: unknown;
+  };
+  'security.behavior_blocked': {
+    reason?: string;
+    [k: string]: unknown;
+  };
 
   // ── Session / Task ──
   'session.lifecycle.updated': {
@@ -130,6 +143,35 @@ export interface AgentEventMap {
     fallback?: boolean;
     fallbackError?: string;
   };
+  /**
+   * Run 作用域观测快照（摘要；全文经 REST run/scope/messages）
+   * Observer 通道：开发/调试；不进入模型输入。
+   */
+  'run.scope.ready': {
+    sessionId: string;
+    agentId?: string;
+    runId: string;
+    scope: import('../observer/types.js').RunScopeView;
+    messages?: import('../observer/types.js').RunMessagesSummary;
+  };
+  /** Run messages 快照摘要（entry/final） */
+  'run.scope.messages': {
+    sessionId: string;
+    agentId?: string;
+    runId: string;
+    phase: 'entry' | 'final';
+    summary: import('../observer/types.js').RunMessagesSummary;
+  };
+  /** LLM 实际输入（ContextEngine assemble 出口；Observer 通道） */
+  'run.scope.llm': {
+    sessionId: string;
+    agentId?: string;
+    runId?: string;
+    summary: import('../observer/types.js').RunMessagesSummary;
+    estimatedTokens?: number;
+  };
+  /** RunMetricsCollector 快照（reliability → Observer） */
+  'run.guard.metrics': import('../reliability/harness-events.js').RunGuardMetricsEvent['data'];
   'task.created': { taskId: string; taskType: string; status: string };
   'task.started': { taskId: string; taskType: string; status: string };
   'task.completed': { taskId: string; taskType: string; status: string };
@@ -175,6 +217,8 @@ export const AgentEvents = {
   INJECTION_DETECTED: 'injection.detected',
   POLICY_VIOLATED: 'policy.violated',
   SENSITIVE_DATA_DETECTED: 'sensitive_data.detected',
+  SECURITY_BLOCKED: 'security.blocked',
+  SECURITY_BEHAVIOR_BLOCKED: 'security.behavior_blocked',
 
   BUDGET_EXCEEDED: 'budget.exceeded',
   BUDGET_RENEWED: 'budget.renewed',
@@ -188,6 +232,10 @@ export const AgentEvents = {
   CONTEXT_COMPACT_END: 'context.compact.end',
   CONTEXT_COMPACT_ERROR: 'context.compact.error',
   CONTEXT_LAYERS_ASSEMBLED: 'context.layers.assembled',
+  RUN_SCOPE_READY: 'run.scope.ready',
+  RUN_SCOPE_MESSAGES: 'run.scope.messages',
+  RUN_SCOPE_LLM: 'run.scope.llm',
+  RUN_GUARD_METRICS: 'run.guard.metrics',
 
   TASK_CREATED: 'task.created',
   TASK_STARTED: 'task.started',

@@ -676,6 +676,8 @@ export interface HarnessConfig {
     /** Web UI 源码目录（含 package.json）；未设置时按 CLI 内置顺序探测 */
     dir?: string;
   };
+  /** 产品 Observer 通道（开发/测试 Run 现场；生产可 summary/off） */
+  observer?: import('./harness/observer/types.js').ObserverConfig;
   /** 可观测性配置 */
   observability?: {
     /** 日志级别: 0=FATAL, 1=ERROR, 2=WARN, 3=INFO, 4=DEBUG, 5=TRACE */
@@ -966,6 +968,7 @@ export function toGatewayConfig(config: NormalizedHarnessConfig): GatewayConfig 
     context: config.context,
     constitution: config.context?.constitution ?? config.constitution,
     memory: config.memory,
+    observer: config.observer,
     embedding: config.models?.embedding,
     modelProviders: config.models?.providers,
     levels: config.levelMap ?? (config.models as ModelsConfig | undefined)?.level,

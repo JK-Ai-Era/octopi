@@ -437,6 +437,20 @@ pre { font-family: var(--font-mono); font-size: 13px; }
   transition: border-color 0.12s ease, background 0.12s ease;
 }
 
+/* 可点击条目：button 自身作为双列 grid，禁止再套一层 ctx-band */
+button.ctx-band {
+  width: 100%;
+  font: inherit;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.ctx-band-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
 .ctx-band:hover { background: #f9fafb; border-color: #93c5fd; }
 .ctx-band-selected { border-color: #3b82f6; box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.2); }
 

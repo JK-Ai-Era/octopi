@@ -28,11 +28,49 @@ export type RunGuardStoppedEvent = {
   data: { reason: string; userMessage?: string };
 };
 
+/** Observer：RunMetricsCollector 快照（run 结束时） */
+export type RunGuardMetricsEvent = {
+  type: 'run_guard_metrics';
+  timestamp: number;
+  data: {
+    sessionId?: string;
+    agentId?: string;
+    iteration: number;
+    totalToolCalls: number;
+    totalTokens: number;
+    elapsedMs: number;
+    consecutiveErrors: number;
+    consecutiveSameTool: number;
+    noopStreak: number;
+    hasProgress: boolean;
+    uniqueTools: string[];
+    recentTools: Array<{ name: string; success: boolean }>;
+    recoveryCount: number;
+  };
+};
+
+/** SecurityGuard 拦截工具调用（Observer security 通道） */
+export type SecurityBlockedEvent = {
+  type: 'security_blocked';
+  timestamp: number;
+  data: {
+    sessionId?: string;
+    agentId?: string;
+    reason?: string;
+    toolName?: string;
+    action?: string;
+    severity?: string;
+    violations?: Array<{ type?: string; severity?: string; description?: string }>;
+  };
+};
+
 /** Harness 层扩展事件 */
 export type HarnessLoopExtension =
   | BudgetExceededEvent
   | RunGuardRecoveredEvent
-  | RunGuardStoppedEvent;
+  | RunGuardStoppedEvent
+  | RunGuardMetricsEvent
+  | SecurityBlockedEvent;
 
 /** reliability 包装后的完整事件流 */
 export type HarnessLoopEvent = AgentLoopEvent | HarnessLoopExtension;

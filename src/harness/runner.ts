@@ -27,7 +27,7 @@ import { extractLayerQuery } from './context/layer-types.js';
 import { withRuntimeDatetimeInjection } from './context/runtime-datetime.js';
 import type { SessionTaskService } from './session-tasks/service.js';
 import { renderSessionTasksInjection } from './session-tasks/render.js';
-import type { RunScope } from './run-scope.js';
+import { createRunId, type RunScope } from './run-scope.js';
 import {
   DEFAULT_TOOL_ISOLATION,
   resolveToolIsolationCwd,
@@ -100,6 +100,8 @@ export interface SessionAwareRunnerConfig {
    * 来自 AgentDefinition.maxSessionRights；authorizeRun 时取交集。
    */
   agentMaxSessionRights?: import('./session-acl/types.js').SessionRights;
+  /** 产品 Observer 通道（Run 现场快照；缺省不采集） */
+  observerHub?: import('./observer/hub.js').ObserverHub;
 }
 
 const DEFAULT_CONFIG: SessionAwareRunnerConfig = {
@@ -152,6 +154,22 @@ export function adaptLoopEvent(
   state: { assistantContent: string; lastUserContent?: string },
 ): import('../core/primitives/event-bus.js').AgentEvent | null {
   switch (event.type) {
+    case 'run_guard_metrics':
+      return {
+        type: 'run.guard.metrics',
+        timestamp: event.timestamp,
+        agentId: meta.agentId,
+        sessionId: meta.sessionId,
+        data: { ...(event.data as Record<string, unknown>) },
+      };
+    case 'security_blocked':
+      return {
+        type: 'security.blocked',
+        timestamp: event.timestamp,
+        agentId: meta.agentId,
+        sessionId: meta.sessionId,
+        data: { ...(event.data as Record<string, unknown>) },
+      };
     case 'agent_start':
       return { type: 'engine.start', timestamp: event.timestamp, agentId: meta.agentId, sessionId: meta.sessionId, data: {} };
     case 'agent_end':
@@ -252,6 +270,8 @@ export class SessionAwareRunner {
   private _subsystemRuntime?: import('./autonomous-subsystem/runtime.js').SubsystemRuntime;
   /** EventBus 引用（用于子系统/多 Agent 上下文） */
   private _events?: import('../core/primitives/event-bus.js').EventBus;
+  /** 产品 Observer Hub（Run 现场；可选） */
+  private _observerHub?: import('./observer/hub.js').ObserverHub;
   /** 工具运行时上下文提供者 */
   private toolContextProvider?: ToolContextProvider;
   /** 文件式 persona 的 run 时解析器；每次 handle 前解析，实现热更新 */
@@ -284,7 +304,29 @@ export class SessionAwareRunner {
     this.config = { ...DEFAULT_CONFIG, ...config };
     this.sessionLease = config?.sessionLease ?? new InProcessSessionLock();
     this._events = config?.events;
+    this._observerHub = config?.observerHub;
     this.resolveModelOverride = config?.resolveModelOverride;
+  }
+
+  /**
+   * 注入 Observer Hub（Gateway / 测试用）
+   *
+   * @param hub - ObserverHub 实例
+   */
+  setObserverHub(hub: import('./observer/hub.js').ObserverHub | undefined): void {
+    this._observerHub = hub;
+  }
+
+  /**
+   * 发射事件：先采 Observer Hub，再进 EventBus（协调总线）
+   */
+  private emitObserved(event: import('../core/primitives/event-bus.js').AgentEvent): void {
+    try {
+      this._observerHub?.ingestEvent(event);
+    } catch {
+      // 观测 fail-open：不阻断事件广播
+    }
+    this._events?.emit(event);
   }
 
   /**
@@ -420,6 +462,13 @@ export class SessionAwareRunner {
 
     const _agentId = runConfig.agentId ?? 'default';
 
+    /** Observer 收口状态（finally 统一关闭，含异常路径） */
+    let observerRunId = '';
+    let observerFinalMessages: Message[] | undefined;
+    let observerEndReason: string | undefined;
+    let observerErrorMsg: string | undefined;
+    let hasTurnEnd = false;
+
     try {
       // 3. 加载或创建 session
       let session = await this.store.load(_agentId, sessionId);
@@ -464,7 +513,7 @@ export class SessionAwareRunner {
       session.meta.updatedAt = Date.now();
 
       // 通知子系统：主会话生命周期态（通用）
-      this._events?.emit({
+      this.emitObserved({
         type: 'session.lifecycle.updated',
         timestamp: Date.now(),
         agentId: _agentId,
@@ -574,7 +623,7 @@ export class SessionAwareRunner {
           console.warn(
             `[octopi] persona resolve failed (agent=${_agentId} session=${sessionId}): ${errMsg}; falling back to last clean persona`,
           );
-          this._events?.emit({
+          this.emitObserved({
             type: 'persona.resolve.failed',
             timestamp: Date.now(),
             agentId: _agentId,
@@ -620,7 +669,7 @@ export class SessionAwareRunner {
           runContext.systemPrompt = assembled.systemPrompt;
           if (assembled.manifest) {
             const assembledAt = Date.now();
-            this._events?.emit({
+            this.emitObserved({
               type: 'context.layers.assembled',
               timestamp: assembledAt,
               agentId: _agentId,
@@ -642,7 +691,7 @@ export class SessionAwareRunner {
             `[octopi] system prompt assemble failed (session=${sessionId}): ${errMsg}; falling back to concat`,
           );
           runContext.systemPrompt = this.concatSystemPrompt(basePrompt, effectiveRunConfig.injectedContext, personaFromResolver);
-          this._events?.emit({
+          this.emitObserved({
             type: 'context.layers.assembled',
             timestamp: Date.now(),
             agentId: _agentId,
@@ -697,9 +746,12 @@ export class SessionAwareRunner {
         }
       }
 
+      // Run 身份与 RunScope 对齐（Observer/审计共用，不另造第二套 ID）
+      const runId = createRunId(sessionId, _agentId);
       const runScope: RunScope = {
         sessionId,
         agentId: _agentId,
+        runId,
         systemPrompt: runContext.systemPrompt,
         agentRevision: effectiveRunConfig.agentRevision,
         toolRuntime: {
@@ -711,11 +763,60 @@ export class SessionAwareRunner {
         },
       };
 
+      // Observer 通道：Run 现场快照（摘要进事件；全文由 Hub/REST 提供）
+      if (this._observerHub?.isEnabled()) {
+        observerRunId =
+          this._observerHub.recordRunStart({
+            scope: runScope,
+            runId,
+            resolvedModel: resolvedModel
+              ? {
+                  modelName: resolvedModel.modelName,
+                  providerId: resolvedModel.providerName,
+                  contextWindow: resolvedModel.contextWindow,
+                }
+              : undefined,
+            messages: session.messages,
+          }) || runId;
+        if (observerRunId) {
+          const hubSnapshot = this._observerHub.getRunById(observerRunId);
+          if (hubSnapshot) {
+            this.emitObserved({
+              type: 'run.scope.ready',
+              timestamp: hubSnapshot.scope.capturedAt,
+              agentId: _agentId,
+              sessionId,
+              data: {
+                sessionId,
+                agentId: _agentId,
+                runId: observerRunId,
+                scope: hubSnapshot.scope,
+                messages: hubSnapshot.messagesSummary,
+              },
+            });
+            if (hubSnapshot.messagesSummary) {
+              this.emitObserved({
+                type: 'run.scope.messages',
+                timestamp: Date.now(),
+                agentId: _agentId,
+                sessionId,
+                data: {
+                  sessionId,
+                  agentId: _agentId,
+                  runId: observerRunId,
+                  phase: 'entry',
+                  summary: hubSnapshot.messagesSummary,
+                },
+              });
+            }
+          }
+        }
+      }
+
       // Token 估算器（当 LLM 不返回 usage 时用于回退估算）
       const estimator = new HeuristicTokenEstimator();
 
       // 10. 运行 Agent（Agent.run = reliability 包装；context/runScope 为本 Run 私有）
-      let hasTurnEnd = false;
       let streamedContent = '';
       let lastUsage: any = undefined;
       const meta = { agentId: effectiveRunConfig.agentId ?? 'default', sessionId };
@@ -748,7 +849,7 @@ export class SessionAwareRunner {
           // 事件桥：循环事件同时广播到 EventBus
           // 跳过高频流式 delta（每 token 一次），避免 EventBus 拥塞
           if (adapted.type !== 'llm_stream_delta') {
-            this._events?.emit(adapted);
+            this.emitObserved(adapted);
           }
         }
 
@@ -802,7 +903,7 @@ export class SessionAwareRunner {
       }
       session.messages = runContext.messages;
 
-      // 11. 引擎异常退出时的 session 一致性修复
+      // 11. 引擎异常退出时的 session 一致性修复（须在 Observer final 采样之前）
       if (!hasTurnEnd) {
         const fallbackContent = streamedContent || '';
         if (fallbackContent) {
@@ -824,6 +925,10 @@ export class SessionAwareRunner {
         }
       }
 
+      // Observer：记录最终 messages 与 endReason（真正 close 在 finally，保证异常也闭合）
+      observerFinalMessages = session.messages;
+      observerEndReason = hasTurnEnd ? 'completed' : 'no_turn_end';
+
       // 12. 持久化
       sm.transition('idle');
       session.meta.status = sm.state;
@@ -834,7 +939,7 @@ export class SessionAwareRunner {
       await this.store.save(_agentId, sessionId, session);
 
       // 通知子系统：本轮处理完成（保持 active，但刷新 lastInteractionAt）
-      this._events?.emit({
+      this.emitObserved({
         type: 'session.lifecycle.updated',
         timestamp: Date.now(),
         agentId: _agentId,
@@ -847,6 +952,8 @@ export class SessionAwareRunner {
       });
 
     } catch (err) {
+      observerEndReason = 'error';
+      observerErrorMsg = err instanceof Error ? err.message : String(err);
       // 引擎出错：状态机转到 error，持久化
       const sm = this.stateMachines.get(sessionId);
       if (sm?.canTransition('error')) {
@@ -855,10 +962,19 @@ export class SessionAwareRunner {
         if (session) {
           session.meta.status = sm.state;
           session.meta.updatedAt = Date.now();
+          if (!observerFinalMessages) observerFinalMessages = session.messages;
           await this.store.save(_agentId, sessionId, session);
 
+          this.emitObserved({
+            type: 'engine.error',
+            timestamp: Date.now(),
+            agentId: _agentId,
+            sessionId,
+            data: { error: observerErrorMsg },
+          });
+
           // 通知子系统：异常路径下保持生命周期可感知
-          this._events?.emit({
+          this.emitObserved({
             type: 'session.lifecycle.updated',
             timestamp: Date.now(),
             agentId: _agentId,
@@ -873,6 +989,41 @@ export class SessionAwareRunner {
       }
       throw err;
     } finally {
+      // Observer 统一收口：成功/失败都关闭 run，避免僵尸 active
+      if (observerRunId && this._observerHub?.isEnabled()) {
+        try {
+          this._observerHub.recordRunEnd({
+            runId: observerRunId,
+            sessionId,
+            messages: observerFinalMessages,
+            endReason: observerEndReason ?? 'unknown',
+            error: observerErrorMsg,
+          });
+          // 事件投影用 getRunById（不要求 webPanel）；REST 才受 webPanel 门控
+          const finalSnap = this._observerHub.getRunById(observerRunId);
+          const finalSummary =
+            finalSnap?.messagesSummary ??
+            this._observerHub
+              .getRunMessages(sessionId, { runId: observerRunId, phase: 'final' })?.summary;
+          if (finalSummary) {
+            this.emitObserved({
+              type: 'run.scope.messages',
+              timestamp: Date.now(),
+              agentId: _agentId,
+              sessionId,
+              data: {
+                sessionId,
+                agentId: _agentId,
+                runId: observerRunId,
+                phase: 'final',
+                summary: finalSummary,
+              },
+            });
+          }
+        } catch {
+          // 观测收口失败不阻断锁释放
+        }
+      }
       release();
       gateRelease?.();
     }
@@ -1120,7 +1271,7 @@ export class SessionAwareRunner {
       endedAt: now,
     };
 
-    this._events?.emit({
+    this.emitObserved({
       type: 'session.lifecycle.updated',
       timestamp: now,
       agentId: session.agentId,

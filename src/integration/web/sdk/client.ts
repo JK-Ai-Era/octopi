@@ -210,6 +210,178 @@ export interface ContextLayerTurnSummaryDto {
   dropped: LayerRuntimeViewDto['id'][];
 }
 
+export interface RunScopeViewDto {
+  sessionId: string;
+  agentId: string;
+  runId?: string;
+  agentRevision?: string;
+  systemPromptChars?: number;
+  systemPromptPreview?: string;
+  systemPromptFull?: string;
+  toolRuntime?: {
+    sessionId: string;
+    agentId: string;
+    messagesCount: number;
+    cwd?: string;
+    isolation?: string;
+  };
+  resolvedModel?: {
+    modelName?: string;
+    providerId?: string;
+    contextWindow?: number;
+  };
+  capturedAt: number;
+}
+
+export interface RunMessagesSummaryDto {
+  count: number;
+  byRole: Record<string, number>;
+  systemPromptCount: number;
+  contextSummaryCount: number;
+  hiddenFromChatCount: number;
+  chars: number;
+  agentIds: string[];
+}
+
+export interface RunTimelineEventDto {
+  type: string;
+  timestamp: number;
+  agentId?: string;
+  toolCallId?: string;
+  toolName?: string;
+  hasError?: boolean;
+  durationMs?: number;
+  reason?: string;
+  usage?: { promptTokens?: number; completionTokens?: number; totalTokens?: number };
+}
+
+export interface RunObservatorySnapshotDto {
+  sessionId: string;
+  agentId?: string;
+  runId: string;
+  scope: RunScopeViewDto;
+  messagesSummary?: RunMessagesSummaryDto;
+  llmSummary?: RunMessagesSummaryDto;
+  llmEstimatedTokens?: number;
+  guardMetrics?: {
+    sessionId?: string;
+    agentId?: string;
+    iteration?: number;
+    totalToolCalls?: number;
+    totalTokens?: number;
+    elapsedMs?: number;
+    consecutiveErrors?: number;
+    consecutiveSameTool?: number;
+    noopStreak?: number;
+    hasProgress?: boolean;
+    uniqueTools?: string[];
+    recentTools?: Array<{ name: string; success: boolean }>;
+    recoveryCount?: number;
+    budgetExceededReason?: string;
+    guardStoppedReason?: string;
+    guardRecovered?: { reason: string; actions: string[] };
+  };
+  messagesDiff?: {
+    entryCount: number;
+    finalCount: number;
+    added: Array<{
+      index: number;
+      role: string;
+      contentChars?: number;
+      hiddenFromChat?: boolean;
+      source?: string;
+    }>;
+    removedCount: number;
+    notes: string;
+  };
+  lifecycle?: {
+    startedAt?: number;
+    endedAt?: number;
+    endReason?: string;
+    durationMs?: number;
+    turns?: number;
+    toolCalls?: number;
+    error?: string;
+  };
+  timeline?: RunTimelineEventDto[];
+  securityEvents?: Array<{
+    type: string;
+    timestamp: number;
+    severity?: string;
+    description?: string;
+    source?: string;
+    toolName?: string;
+    action?: string;
+    violationTypes?: string[];
+    count?: number;
+  }>;
+  memoryActivity?: {
+    stores: number;
+    searches: number;
+    storedOk: number;
+    rejected: number;
+    superseded: number;
+    searchHits: number;
+    entries: Array<{
+      kind: 'store' | 'search';
+      timestamp: number;
+      toolName: string;
+      success: boolean;
+      memoryId?: string;
+      memoryType?: string;
+      status?: string;
+      propositionPreview?: string;
+      supersededId?: string | null;
+      rejectReason?: string;
+      query?: string;
+      resultCount?: number;
+    }>;
+  };
+  toolEffect?: {
+    sessionId: string;
+    agentId: string;
+    runId?: string;
+    cwd?: string;
+    isolation?: string;
+    tools: Array<{ name: string; calls: number; errors: number; lastDurationMs?: number }>;
+    notes?: string[];
+  };
+  observer: { enabled: boolean; level: string; webPanel: boolean };
+}
+
+export interface RunMessageViewDto {
+  index: number;
+  role: 'user' | 'assistant' | 'system' | 'tool';
+  agentId?: string;
+  timestamp?: number;
+  content?: unknown;
+  toolCalls?: unknown[];
+  toolResults?: unknown[];
+  metadata?: Record<string, unknown>;
+  hiddenFromChat?: boolean;
+  contentChars?: number;
+  contentPreview?: string;
+}
+
+export interface RunMessagesSnapshotDto {
+  sessionId: string;
+  agentId?: string;
+  runId?: string;
+  runCapturedAt?: number;
+  view: 'workspace' | 'llm';
+  phase: 'entry' | 'final';
+  summary: RunMessagesSummaryDto;
+  messages?: RunMessageViewDto[];
+  notes?: string;
+}
+
+export interface ObserverStatusDto {
+  enabled: boolean;
+  level: string;
+  webPanel: boolean;
+  channels: Record<string, boolean>;
+}
+
 export interface MemoryQueryResult {
   configured: boolean;
   entries?: Array<{
@@ -438,6 +610,39 @@ export class OctopiClient {
   async getSessionContextLayers(sessionId: string): Promise<ContextLayersSnapshotDto | null> {
     const data = await this.getJson(`/sessions/${encodeURIComponent(sessionId)}/context/layers`);
     return (data?.data as ContextLayersSnapshotDto | null | undefined) ?? null;
+  }
+
+  /**
+   * 会话最近一次 Run 观测投影（Observer 调试面 /debug/run）
+   */
+  async getSessionRunObservatory(
+    sessionId: string,
+  ): Promise<{ snapshot: RunObservatorySnapshotDto | null; observer?: ObserverStatusDto }> {
+    const data = await this.getDebugJson(
+      `/debug/run/${encodeURIComponent(sessionId)}/scope`,
+    );
+    return {
+      snapshot: (data?.data as RunObservatorySnapshotDto | null | undefined) ?? null,
+      observer: data?.observer as ObserverStatusDto | undefined,
+    };
+  }
+
+  /**
+   * Run messages 快照（摘要 + 配置允许时全文；调试面 /debug/run）
+   */
+  async getSessionRunMessages(
+    sessionId: string,
+    options?: { phase?: 'entry' | 'final' | 'llm'; runId?: string; view?: 'workspace' | 'llm' },
+  ): Promise<RunMessagesSnapshotDto | null> {
+    const params = new URLSearchParams();
+    if (options?.phase) params.set('phase', options.phase);
+    if (options?.runId) params.set('runId', options.runId);
+    if (options?.view) params.set('view', options.view);
+    const qs = params.toString();
+    const data = await this.getDebugJson(
+      `/debug/run/${encodeURIComponent(sessionId)}/messages${qs ? `?${qs}` : ''}`,
+    );
+    return (data?.data as RunMessagesSnapshotDto | null | undefined) ?? null;
   }
 
   /**
@@ -677,6 +882,14 @@ export class OctopiClient {
 
   private async getJson<T = any>(path: string): Promise<T> {
     const response = await fetch(`${this.restBase}${path}`, {
+      headers: this.buildHeaders(),
+    });
+    return parseJsonResponse(response);
+  }
+
+  /** Debug 面请求：挂在服务器根路径，不经过 restBase=/api/v1 */
+  private async getDebugJson<T = any>(path: string): Promise<T> {
+    const response = await fetch(`${this.baseUrl}${path}`, {
       headers: this.buildHeaders(),
     });
     return parseJsonResponse(response);

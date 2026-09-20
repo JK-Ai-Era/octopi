@@ -1,3 +1,25 @@
+## v0.43.3 (2026-09-26)
+
+### feat(harness): Observer / Run Observatory — 设计决策落地与接线修复
+
+| 项 | 变更 |
+|----|------|
+| **缺省** | `observer.level` 缺省 **`off`**；`webPanel` 跟 level（off 强制关） |
+| **调试 REST** | 迁移 **`GET /debug/run/:sessionId/scope\|messages`**（根路径；SDK `getDebugJson`） |
+| **runId** | `RunScope.runId` + `createRunId`；Hub 优先使用 scope 身份，不另造权威 ID |
+| **收口** | Runner `finally` 统一 `recordRunEnd`（含 error）；no_turn_end 回补后再采 final |
+| **LLM 真源** | `recordLlmMessages` 优先；`run.scope.llm` 事件不再覆盖已有全文快照 |
+| **payload** | `systemPromptPreview` / layer content·preview 受 payload 门控；full 另采 `systemPromptFull` |
+| **事件采样** | Runner `emitObserved`：emit 前直采 Hub（Gateway 不再二次 ingest，避免双计） |
+| **lifecycle** | `recordRunEnd` / 投影从 Guard metrics 回填 turns/tools/duration |
+| **UI** | 修复 `ctx-band` 嵌套导致条目空白；systemPrompt 预览/全文切换；tokensΣ 口径说明 |
+| **review 修复** | Builder compact 事件直采 Hub；store 会话守卫 + final 优先；`lastLlmBySession` 随 run 淘汰；注释对齐 |
+| **三通道** | `security` / `memory` / `tool.effect` 实现：Guard 事件带 Run 身份；reliability `security_blocked`；memory 工具只读投影；I5 cwd/工具统计；summary/full 预设开启；Run 面板分区 |
+| **layers 所有权** | Gateway Map = Context 面板（始终写）；Hub = Observer（开启时 ingest） |
+| **通道预设** | summary/full：已实现通道（含 security/memory/tool.effect/context.compact）默认开；`level=off` 全关 |
+| **schema** | `octopi.schema.json` / `octopi.example.json` 同步 `observer` |
+| **设计** | `arch/observer-domain.md`：Observer Domain = Telemetry ∪ Run Observatory（不合并类；内部文档，不入库） |
+
 ## v0.43.2 (2026-09-26)
 
 ### docs: 同步 B–H 实现后的文档与注释，降低后续踩坑

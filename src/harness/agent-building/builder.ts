@@ -49,6 +49,7 @@ import { DefaultRunGuard } from '../run-guard/default-run-guard.js';
 import type {
   Observer,
 } from '../../core/interfaces/observer.js';
+import { summarizeLlmMessages } from '../observer/types.js';
 import type { TraceCollectorConfig } from '../../integration/observability/trace-collector.js';
 import type { MetricsAggregatorConfig } from '../../integration/observability/metrics.js';
 import type { TraceLoggerConfig } from '../../integration/observability/trace-logger.js';
@@ -472,6 +473,8 @@ export class AgentBuilder {
   // Runner 配置
   private _store?: SessionStore<SessionData>;
   private _runnerConfig?: SessionAwareRunnerConfig;
+  /** 产品 Observer Hub（ContextEngine 出口 → LLM 视图） */
+  private _observerHub?: import('../observer/hub.js').ObserverHub;
   /** 工具效应隔离（I5）；Runner 解析 toolRuntime.cwd */
   private _toolIsolation?: import('../tool-effect/isolation.js').ToolIsolationMode;
 
@@ -869,6 +872,15 @@ export class AgentBuilder {
   /** 设置 Runner 配置 */
   runnerConfig(config: SessionAwareRunnerConfig): this {
     this._runnerConfig = config;
+    if (config.observerHub) {
+      this._observerHub = config.observerHub;
+    }
+    return this;
+  }
+
+  /** 注入产品 Observer Hub（LLM 视图等） */
+  observerHub(hub: import('../observer/hub.js').ObserverHub | undefined): this {
+    this._observerHub = hub;
     return this;
   }
 
@@ -992,6 +1004,7 @@ export class AgentBuilder {
       sessionLease: this._runnerConfig?.sessionLease,
       sessionAcl: this._runnerConfig?.sessionAcl,
       agentMaxSessionRights: this._runnerConfig?.agentMaxSessionRights,
+      observerHub: this._observerHub ?? this._runnerConfig?.observerHub,
       sessionTaskService,
       events,
     });
@@ -1282,21 +1295,55 @@ export class AgentBuilder {
         summarize: summarizeFn,
         loadCompactState: () => agent.getSessionCompactState(sessionId, agentId),
         // 惰性读 bus：覆盖 buildAgent 之后才 setEvents 的场景
+        // Observer：ContextEngine 侧事件（context.compact.* 等）不经过 Runner emitObserved，
+        // 必须在此直采 Hub，否则 timeline 永远看不到 compact。
         emit: (e) => {
-          const bus = this._events;
-          if (!bus) return;
           const { type, sessionId, ...data } = e;
-          bus.emit({
+          const event = {
             type,
             timestamp: Date.now(),
             sessionId,
             data,
-          });
+          };
+          try {
+            this._observerHub?.ingestEvent(event);
+          } catch {
+            // 观测 fail-open
+          }
+          const bus = this._events;
+          if (!bus) return;
+          bus.emit(event);
         },
       });
       // 压缩状态回写 Agent 内存桥（E4 键 = sessionId × agentId）
       if (result.compactState) {
         agent.setSessionCompactState(sessionId, agentId, result.compactState);
+      }
+      // Observer P1：LLM 实际输入视图（ContextEngine 出口）
+      // 真源 = hub.recordLlmMessages；事件只带 summarizeLlmMessages，避免双套统计/覆盖全文
+      if (this._observerHub?.isEnabled() && this._observerHub.getConfig().channels['context.llm']) {
+        const llmInput = result.messages.map((m) => ({
+          role: m.role as string,
+          content: m.content as unknown,
+        }));
+        this._observerHub.recordLlmMessages({
+          sessionId,
+          agentId,
+          messages: llmInput,
+          estimatedTokens: result.estimatedTokens,
+        });
+        this._events?.emit({
+          type: 'run.scope.llm',
+          timestamp: Date.now(),
+          sessionId,
+          agentId,
+          data: {
+            sessionId,
+            agentId,
+            summary: summarizeLlmMessages(llmInput),
+            estimatedTokens: result.estimatedTokens,
+          },
+        });
       }
       // droppedSummary：并入已有 system，避免连续两条 system（严格网关）
       const llmMessages = [...result.messages];

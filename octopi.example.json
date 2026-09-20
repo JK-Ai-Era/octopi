@@ -110,6 +110,12 @@
     "allowAgentInitiatedHandoff": false
   },
 
+  "observer": {
+    "level": "off",
+    "webPanel": false,
+    "failOpen": true
+  },
+
   "webSearch": {
     "provider": "duckduckgo",
     "fallbacks": [],

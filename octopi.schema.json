@@ -885,6 +885,66 @@
         }
       }
     },
+    "observer": {
+      "type": "object",
+      "description": "产品 Observer / Run Observatory（开发调试通道）。缺省 level=off 不采集；webPanel 跟 level（off 强制关）。调试 REST：GET /debug/run/:sessionId/scope|messages。与 Core Observer（metrics/trace）不同：本键只控制 Run 现场快照。",
+      "properties": {
+        "level": {
+          "type": "string",
+          "enum": ["off", "summary", "full"],
+          "default": "off",
+          "description": "总开关：off=关闭；summary=开观测无 message 全文；full=允许全文与 context.llm"
+        },
+        "channels": {
+          "type": "object",
+          "description": "分通道覆盖；未列出的按 level 预设。summary/full 默认开启已实现通道（含 security/memory/tool.effect/context.compact）",
+          "properties": {
+            "run.scope": { "type": "boolean" },
+            "run.messages": { "type": "boolean" },
+            "run.timeline": { "type": "boolean" },
+            "run.guard": { "type": "boolean" },
+            "context.layers": { "type": "boolean" },
+            "context.compact": { "type": "boolean" },
+            "context.llm": { "type": "boolean" },
+            "tool.effect": { "type": "boolean" },
+            "security": { "type": "boolean" },
+            "memory": { "type": "boolean" }
+          },
+          "additionalProperties": false
+        },
+        "payload": {
+          "type": "object",
+          "description": "正文类 payload；message 全文需 messageFullText=true 且 retention.messagesPerRun=full",
+          "properties": {
+            "layerContent": { "type": "boolean" },
+            "layerPreview": { "type": "boolean" },
+            "messageFullText": { "type": "boolean" },
+            "streamDelta": { "type": "boolean" },
+            "modelRequest": { "type": "boolean" }
+          },
+          "additionalProperties": false
+        },
+        "retention": {
+          "type": "object",
+          "properties": {
+            "runsPerSession": { "type": "integer", "minimum": 1, "maximum": 64 },
+            "timelineEvents": { "type": "integer", "minimum": 1, "maximum": 2000 },
+            "messagesPerRun": { "type": "string", "enum": ["full", "summary-only"] }
+          },
+          "additionalProperties": false
+        },
+        "webPanel": {
+          "type": "boolean",
+          "description": "是否暴露 /debug/run/*；level=off 时强制 false"
+        },
+        "failOpen": {
+          "type": "boolean",
+          "default": true,
+          "description": "观测失败只 warn、不打断 run"
+        }
+      },
+      "additionalProperties": false
+    },
     "subsystems": {
       "type": "object",
       "description": "自主子系统框架级配置（子系统自身参数写在各自 config.yaml）",

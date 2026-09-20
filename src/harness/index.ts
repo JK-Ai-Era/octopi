@@ -285,8 +285,26 @@ export type { AgentContext, AgentTool, LoopToolResult, AgentLoopConfig, AgentLoo
 // ── Agent 门面（Harness） ──
 export { Agent } from './agent/index.js';
 export type { AgentOptions } from './agent/index.js';
-export { withRunScope, getRunScope, getRunSessionId } from './run-scope.js';
+export { withRunScope, getRunScope, getRunSessionId, createRunId } from './run-scope.js';
 export type { RunScope, RunToolRuntime } from './run-scope.js';
+export { ObserverHub } from './observer/hub.js';
+export {
+  resolveObserverConfig,
+  DEFAULT_OBSERVER_CONFIG,
+  summarizeMessages,
+} from './observer/index.js';
+export type {
+  ObserverConfig,
+  ObserverLevel,
+  RunObservatorySnapshot,
+  RunMessagesSnapshot,
+  RunScopeView,
+  RunMessageView,
+  ResolvedObserverConfig,
+  RunSecurityEventView,
+  RunMemoryActivityView,
+  RunToolEffectView,
+} from './observer/index.js';
 
 // ── Harness 循环事件 ──
 export type {

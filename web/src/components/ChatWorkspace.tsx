@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { MarkdownMessage } from './MarkdownMessage';
 import { ContextRuntimePanel } from './ContextRuntimePanel';
+import { RunObservatoryPanel } from './RunObservatoryPanel';
 import { OctopiClient } from '../../../src/integration/web/sdk/client';
 import { OctopiRuntimeStore } from '../../../src/integration/web/runtime/store';
 import type {
@@ -360,7 +361,7 @@ export default function ChatWorkspace() {
   const [inspector, setInspector] = useState<InspectorState>({});
   const [tasks, setTasks] = useState<SessionTaskView[]>([]);
   const [input, setInput] = useState('');
-  const [rightTab, setRightTab] = useState<'context' | 'tasks' | 'tools' | 'help'>('context');
+  const [rightTab, setRightTab] = useState<'context' | 'run' | 'tasks' | 'tools' | 'help'>('context');
   const [connectError, setConnectError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
@@ -932,6 +933,12 @@ export default function ChatWorkspace() {
               上下文
             </button>
             <button
+              className={rightTab === 'run' ? 'btn-tab btn-tab-active' : 'btn-tab'}
+              onClick={() => setRightTab('run')}
+            >
+              Run
+            </button>
+            <button
               className={rightTab === 'tasks' ? 'btn-tab btn-tab-active' : 'btn-tab'}
               onClick={() => setRightTab('tasks')}
             >
@@ -943,16 +950,15 @@ export default function ChatWorkspace() {
             </button>
             <button className={rightTab === 'tools' ? 'btn-tab btn-tab-active' : 'btn-tab'} onClick={() => setRightTab('tools')}>工具</button>
             <button className={rightTab === 'help' ? 'btn-tab btn-tab-active' : 'btn-tab'} onClick={() => setRightTab('help')}>帮助</button>
-            {rightTab === 'context' && (
-              <button
-                type="button"
-                className="btn-ghost small"
-                style={{ marginLeft: 'auto' }}
-                onClick={() => setContextFocus((v) => !v)}
-              >
-                {contextFocus ? '退出 Focus' : 'Focus'}
-              </button>
-            )}
+            <button
+              type="button"
+              className="btn-ghost small"
+              style={{ marginLeft: 'auto' }}
+              onClick={() => setContextFocus((v) => !v)}
+              title="扩大右栏检查器（上下文 / Run 等）"
+            >
+              {contextFocus ? '退出 Focus' : 'Focus'}
+            </button>
           </div>
 
           {rightTab === 'context' && (
@@ -975,6 +981,23 @@ export default function ChatWorkspace() {
                   }
                 } catch {
                   // ignore refresh errors; UI keeps previous snapshot
+                }
+              }}
+            />
+          )}
+
+          {rightTab === 'run' && (
+            <RunObservatoryPanel
+              inspector={inspector}
+              runStatus={runStatus}
+              sessionId={activeSessionId}
+              onRefresh={async (options) => {
+                const store = storeRef.current;
+                if (!store) return;
+                try {
+                  await store.refreshRunObservatoryPublic(options);
+                } catch {
+                  // ignore
                 }
               }}
             />
@@ -1020,6 +1043,7 @@ export default function ChatWorkspace() {
                 <li>中栏「压缩」= 手动结构压缩（头尾+摘要），不依赖 contextWindow</li>
                 <li>也可 POST /api/v1/sessions/:id/compact</li>
                 <li>右栏「上下文」：System 契约层 + Information 消息窗口（产品第 7 层）</li>
+                <li>右栏「Run」：Observer 通道 — RunScope / 时间线 / run messages 全文</li>
                 <li>产品七层 ≠ ContextLayer：Information 是 session，Runtime 是契约附加</li>
                 <li>Focus 模式放大右栏，便于 demo / 深度调试</li>
                 <li>右栏「任务」实时展示会话任务树</li>

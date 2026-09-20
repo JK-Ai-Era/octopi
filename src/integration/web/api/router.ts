@@ -30,6 +30,11 @@ export class WebApiRouter {
     const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
     const path = url.pathname;
 
+    // Debug 面（不在 /api/v1 下）：Observer Run Observatory
+    if (path.startsWith('/debug/run/')) {
+      return this.handleDebugRun(req, res, url);
+    }
+
     if (!path.startsWith(this.basePath)) {
       return false;
     }
@@ -196,6 +201,7 @@ export class WebApiRouter {
         return this.json(res, 200, { ok: true, data: snapshot });
       }
 
+      // 旧 run 路径已迁 /debug/run/...（调试面，非稳定产品 API）
       const agentHealthMatch = relativePath.match(/^\/agents\/([^/]+)\/context\/health$/);
       if (agentHealthMatch && method === 'GET') {
         const health = await this.gateway.getAgentContextHealth(agentHealthMatch[1]);
@@ -255,6 +261,61 @@ export class WebApiRouter {
       }
 
       return this.json(res, 404, { ok: false, error: 'Not found' });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return this.json(res, 500, { ok: false, error: message });
+    }
+  }
+
+  /**
+   * Debug 面：Observer Run Observatory
+   *
+   * 路径（根路径，不在 /api/v1 下）：
+   * - GET /debug/run/:sessionId/scope
+   * - GET /debug/run/:sessionId/messages?phase=&runId=&view=
+   *
+   * 非稳定产品 API；受 observer.level / webPanel 门控。
+   */
+  private async handleDebugRun(
+    _req: IncomingMessage,
+    res: ServerResponse,
+    url: URL,
+  ): Promise<boolean> {
+    const method = (_req.method ?? 'GET').toUpperCase();
+    if (method !== 'GET') {
+      return this.json(res, 405, { ok: false, error: 'Method not allowed' });
+    }
+    const match = url.pathname.match(/^\/debug\/run\/([^/]+)\/(scope|messages)$/);
+    if (!match) {
+      return this.json(res, 404, { ok: false, error: 'Not found' });
+    }
+    const sessionId = decodeURIComponent(match[1]!);
+    const kind = match[2];
+    try {
+      const hub = this.gateway.getObserverHub();
+      if (kind === 'scope') {
+        const snapshot = this.gateway.getSessionRunObservatory(sessionId);
+        return this.json(res, 200, {
+          ok: true,
+          data: snapshot,
+          observer: hub.getStatus(),
+        });
+      }
+      const phaseParam = url.searchParams.get('phase');
+      const runId = url.searchParams.get('runId') ?? undefined;
+      const viewParam = url.searchParams.get('view');
+      const view = viewParam === 'llm' ? 'llm' : 'workspace';
+      const phase = view === 'llm' ? 'llm' : phaseParam === 'entry' ? 'entry' : 'final';
+      const snapshot = this.gateway.getSessionRunMessages(sessionId, {
+        phase: phase as 'entry' | 'final' | 'llm',
+        runId,
+        view,
+      });
+      return this.json(res, 200, {
+        ok: true,
+        data: snapshot,
+        observer: hub.getStatus(),
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       return this.json(res, 500, { ok: false, error: message });

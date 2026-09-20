@@ -39,6 +39,11 @@ import type {
   ContextLayerId,
 } from '../../../harness/context/layer-types.js';
 import type { ContextLayerHealthDto, ContextLayerTurnSummaryDto } from '../sdk/client.js';
+import type {
+  ObserverStatusDto,
+  RunMessagesSnapshotDto,
+  RunObservatorySnapshotDto,
+} from '../sdk/client.js';
 
 /** 近 N 轮 layer timeline 上限 */
 const CONTEXT_TURN_HISTORY_MAX = 20;
@@ -147,6 +152,14 @@ export interface InspectorState {
   contextLayersTimeline?: ContextLayerTurnSummaryDto[];
   /** Agent 七层数据面健康（REST） */
   contextHealth?: ContextLayerHealthDto;
+  /** Run 观测投影（Observer 通道） */
+  runObservatory?: RunObservatorySnapshotDto | null;
+  /** Run messages 快照（REST；全文视后端配置） */
+  runMessages?: RunMessagesSnapshotDto | null;
+  /** LLM 实际输入快照 */
+  runMessagesLlm?: RunMessagesSnapshotDto | null;
+  /** Observer 配置诊断 */
+  observerStatus?: ObserverStatusDto | null;
 }
 
 export interface ChatState {
@@ -191,6 +204,12 @@ export class OctopiRuntimeStore extends EventTarget {
   private sessionModel: SessionModelView | null = null;
   /** 本轮 run 是否仍活跃；用于忽略终态之后迟到的 state=running */
   private engineActive = false;
+  /** Observer REST 写回代际：防会话切换串写 + entry/final 乱序覆盖 */
+  private observerWriteSeq = {
+    observatory: 0,
+    workspaceMessages: 0,
+    llmMessages: 0,
+  };
 
   constructor(client: OctopiClient) {
     super();
@@ -351,6 +370,103 @@ export class OctopiRuntimeStore extends EventTarget {
     }
   }
 
+  /**
+   * 拉取 Run 观测投影并写入 inspector
+   */
+  private async refreshRunObservatory(): Promise<void> {
+    const sessionId = this.chat.sessionId;
+    if (!sessionId) return;
+    const seq = this.beginObserverWrite('observatory');
+    try {
+      const { snapshot, observer } = await this.client.getSessionRunObservatory(sessionId);
+      if (!this.commitObserverWrite('observatory', sessionId, seq)) return;
+      this.chat.inspector = {
+        ...this.chat.inspector,
+        runObservatory: snapshot,
+        observerStatus: observer ?? this.chat.inspector.observerStatus ?? null,
+      };
+      this.dispatch('inspector', new InspectorEvent('inspector', { inspector: this.chat.inspector }));
+    } catch {
+      // observer 失败不影响会话
+    }
+  }
+
+  /**
+   * 拉取 Run messages 快照并写入 inspector
+   */
+  private async refreshRunMessages(
+    phase?: 'entry' | 'final' | 'llm',
+    runId?: string,
+    view?: 'workspace' | 'llm',
+  ): Promise<void> {
+    const sessionId = this.chat.sessionId;
+    if (!sessionId) return;
+    try {
+      const snap = await this.client.getSessionRunMessages(sessionId, { phase, runId, view });
+      // 会话已切换：丢弃
+      if (this.chat.sessionId !== sessionId) return;
+      const isLlm = view === 'llm' || phase === 'llm';
+      if (!isLlm && snap) {
+        // 同 run：final 优先，避免 entry 响应后到覆盖 final
+        const existing = this.chat.inspector.runMessages;
+        if (
+          existing &&
+          snap.runId &&
+          existing.runId === snap.runId &&
+          existing.phase === 'final' &&
+          snap.phase === 'entry'
+        ) {
+          return;
+        }
+      }
+      if (isLlm) {
+        this.chat.inspector = {
+          ...this.chat.inspector,
+          runMessagesLlm: snap,
+        };
+      } else {
+        this.chat.inspector = {
+          ...this.chat.inspector,
+          runMessages: snap,
+        };
+      }
+      this.dispatch('inspector', new InspectorEvent('inspector', { inspector: this.chat.inspector }));
+    } catch {
+      // observer 失败不影响会话
+    }
+  }
+
+  private beginObserverWrite(slot: keyof OctopiRuntimeStore['observerWriteSeq']): number {
+    this.observerWriteSeq[slot] += 1;
+    return this.observerWriteSeq[slot];
+  }
+
+  /** await 后写回前校验：会话已切换或已有更新请求则丢弃 */
+  private commitObserverWrite(
+    slot: keyof OctopiRuntimeStore['observerWriteSeq'],
+    sessionId: string,
+    seq: number,
+  ): boolean {
+    return this.chat.sessionId === sessionId && seq === this.observerWriteSeq[slot];
+  }
+
+  /**
+   * UI 手动刷新 Run 观测（Run 页签）
+   */
+  async refreshRunObservatoryPublic(options?: {
+    phase?: 'entry' | 'final' | 'llm';
+  }): Promise<void> {
+    await this.refreshRunObservatory();
+    const runId = this.chat.inspector.runObservatory?.runId;
+    const phase = options?.phase ?? 'final';
+    if (phase === 'llm') {
+      await this.refreshRunMessages('llm', runId, 'llm');
+    } else {
+      await this.refreshRunMessages(phase, runId, 'workspace');
+      await this.refreshRunMessages('llm', runId, 'llm');
+    }
+  }
+
   async refreshSessions(agentId?: string): Promise<SessionSummary[]> {
     this.sessions = await this.client.listSessions(agentId);
     this.dispatch('sessions', new SessionsEvent('sessions', { sessions: this.sessions }));
@@ -508,6 +624,8 @@ export class OctopiRuntimeStore extends EventTarget {
     };
 
     // 打开会话时拉取最近一次七层快照 + Agent 数据面健康
+    // Observer REST 写回前必须确认 chat.sessionId 仍是本次 open 的目标
+    const openWriteSeq = this.beginObserverWrite('observatory');
     try {
       const layers = await this.client.getSessionContextLayers(sessionId);
       const agentIdForHealth = view.meta.agentId;
@@ -537,8 +655,36 @@ export class OctopiRuntimeStore extends EventTarget {
       if (health) {
         patch.contextHealth = health;
       }
-      if (Object.keys(patch).length > 0) {
-        this.chat.inspector = { ...this.chat.inspector, ...patch };
+      // Observer 通道：打开会话时拉最近 Run 现场
+      try {
+        const runObs = await this.client.getSessionRunObservatory(sessionId);
+        patch.runObservatory = runObs.snapshot;
+        patch.observerStatus = runObs.observer ?? null;
+        if (runObs.snapshot?.runId) {
+          const runMsgs = await this.client.getSessionRunMessages(sessionId, {
+            phase: 'final',
+            runId: runObs.snapshot.runId,
+          });
+          patch.runMessages = runMsgs;
+          const llmMsgs = await this.client.getSessionRunMessages(sessionId, {
+            view: 'llm',
+            runId: runObs.snapshot.runId,
+          });
+          patch.runMessagesLlm = llmMsgs;
+        } else {
+          const runMsgs = await this.client.getSessionRunMessages(sessionId, { phase: 'final' });
+          patch.runMessages = runMsgs;
+          const llmMsgs = await this.client.getSessionRunMessages(sessionId, { view: 'llm' });
+          patch.runMessagesLlm = llmMsgs;
+        }
+      } catch {
+        // Observer REST 不可用不阻塞会话打开
+      }
+      // await 期间用户已切会话或已有更新的 open/refresh：丢弃本 patch
+      if (this.chat.sessionId === sessionId && openWriteSeq === this.observerWriteSeq.observatory) {
+        if (Object.keys(patch).length > 0) {
+          this.chat.inspector = { ...this.chat.inspector, ...patch };
+        }
       }
     } catch {
       // 快照端点不可用不阻塞会话打开
@@ -898,6 +1044,105 @@ export class OctopiRuntimeStore extends EventTarget {
           inspectorChanged = true;
           // 装配后刷新数据面健康（打开会话时 Agent 可能尚未 build）
           void this.refreshContextHealth();
+        }
+        break;
+      }
+      case 'run.scope.ready': {
+        const d = event.data as
+          | {
+              sessionId?: string;
+              agentId?: string;
+              runId?: string;
+              scope?: RunObservatorySnapshotDto['scope'];
+              messages?: RunObservatorySnapshotDto['messagesSummary'];
+            }
+          | undefined;
+        if (d?.scope && d.runId) {
+          const prev = this.chat.inspector.runObservatory;
+          this.chat.inspector = {
+            ...this.chat.inspector,
+            runObservatory: {
+              sessionId: d.scope.sessionId ?? event.sessionId ?? '',
+              agentId: d.agentId ?? d.scope.agentId,
+              runId: d.runId,
+              scope: d.scope,
+              messagesSummary: d.messages,
+              lifecycle: prev?.runId === d.runId ? prev?.lifecycle : undefined,
+              timeline: prev?.runId === d.runId ? prev?.timeline : [],
+              observer: prev?.observer ?? { enabled: true, level: 'summary', webPanel: true },
+            },
+          };
+          inspectorChanged = true;
+          // 异步补全 REST 投影（含 timeline / lifecycle）
+          void this.refreshRunObservatory();
+        }
+        break;
+      }
+      case 'run.guard.metrics': {
+        const d = event.data as Record<string, unknown> | undefined;
+        if (d) {
+          const prev = this.chat.inspector.runObservatory;
+          if (prev) {
+            this.chat.inspector = {
+              ...this.chat.inspector,
+              runObservatory: {
+                ...prev,
+                guardMetrics: { ...prev.guardMetrics, ...d } as NonNullable<typeof prev.guardMetrics>,
+              },
+            };
+            inspectorChanged = true;
+          }
+        }
+        break;
+      }
+      case 'run.scope.llm': {
+        const d = event.data as
+          | {
+              summary?: RunMessagesSnapshotDto['summary'];
+              estimatedTokens?: number;
+            }
+          | undefined;
+        if (d?.summary) {
+          const prev = this.chat.inspector.runObservatory;
+          if (prev) {
+            this.chat.inspector = {
+              ...this.chat.inspector,
+              runObservatory: {
+                ...prev,
+                llmSummary: d.summary,
+                llmEstimatedTokens: d.estimatedTokens,
+              },
+            };
+            inspectorChanged = true;
+          }
+          void this.refreshRunMessages('final', prev?.runId, 'llm');
+        }
+        break;
+      }
+      case 'run.scope.messages': {
+        const d = event.data as
+          | {
+              runId?: string;
+              phase?: 'entry' | 'final';
+              summary?: RunMessagesSnapshotDto['summary'];
+            }
+          | undefined;
+        if (d?.summary && d.runId) {
+          const prevRun = this.chat.inspector.runObservatory;
+          this.chat.inspector = {
+            ...this.chat.inspector,
+            runObservatory: prevRun
+              ? {
+                  ...prevRun,
+                  messagesSummary: d.summary,
+                }
+              : prevRun,
+          };
+          inspectorChanged = true;
+          void this.refreshRunMessages(d.phase ?? 'final', d.runId);
+          if (d.phase === 'final' || d.phase === undefined) {
+            void this.refreshRunObservatory();
+          }
         }
         break;
       }

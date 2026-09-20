@@ -51,6 +51,11 @@ import { AgentRuntime, SessionRunnerDispatcher, ExplicitRouter } from '../../har
 import { dispatchChannelMessage } from '../agent-runtime/channel-message-source.js';
 import { SessionAclService } from '../../harness/session-acl/service.js';
 import { InProcessSessionLock } from '../../harness/concurrency/session-lease.js';
+import { ObserverHub } from '../../harness/observer/hub.js';
+import type {
+  RunMessagesSnapshot,
+  RunObservatorySnapshot,
+} from '../../harness/observer/types.js';
 
 // Web REST 骨架所需的 Gateway 扩展类型
 // ================================================================
@@ -177,6 +182,8 @@ export class Gateway {
   /** 会话最近一次七层装配快照（含 content，仅 REST）；FIFO 防泄漏 */
   private lastContextLayers = new Map<string, ContextLayersSnapshot>();
   private static readonly MAX_CONTEXT_LAYERS_SESSIONS = 256;
+  /** 产品 Observer 通道（Run 现场） */
+  private observerHub: ObserverHub;
   /** models.level — 供 WebUI 模型目录展示分级名 */
   private modelLevels?: Record<string, { primary: string; fallback?: string[] }>;
   /** 激活宿主（arch/agent-runtime.md）；消息路径经 dispatch */
@@ -195,6 +202,7 @@ export class Gateway {
     this.sessionLease = new InProcessSessionLock();
     // Gateway EventBus：RuntimeEvents 进可观测总线，并转发到 Gateway listeners（不变量 #6）
     this.gatewayBus = new DefaultEventBus();
+    this.observerHub = new ObserverHub(config.observer);
     this.runtime = new AgentRuntime({
       router: new ExplicitRouter(),
       events: this.gatewayBus,
@@ -209,6 +217,8 @@ export class Gateway {
       if (event.type === 'context.layers.assembled' && event.sessionId) {
         this.rememberContextLayers(event.sessionId, event);
       }
+      // Observer 通道：Runner 在 emit 时直采 Hub（避免与 bus 双计 timeline/lifecycle）
+      // Gateway 只保留产品 Context Map；不再二次 ingestEvent
       // 终态事件（turn.end / engine.*）改由 processMessage.onEvent 用 sessionKey 广播，
       // 这里跳过，避免双投；其余非流式事件仍走 bus。
       if (
@@ -860,13 +870,47 @@ export class Gateway {
   }
 
   /**
-   * 读取会话最近一次七层装配快照
+   * 读取会话最近一次七层装配快照（产品 Context 面板）
+   *
+   * 所有权：Gateway Map = 产品路径（与 observer.level 无关，始终写入）；
+   * ObserverHub 在 observer 开启时另行快照（Run 观测）。
    *
    * @param sessionId - 会话 id
    * @returns 快照；尚未装配过则为 null
    */
   getSessionContextLayers(sessionId: string): ContextLayersSnapshot | null {
     return this.lastContextLayers.get(sessionId) ?? null;
+  }
+
+  /**
+   * 产品 Observer Hub（Run 观测）
+   */
+  getObserverHub(): ObserverHub {
+    return this.observerHub;
+  }
+
+  /**
+   * 会话最近一次 Run 观测投影
+   *
+   * @param sessionId - 会话 id
+   * @returns RunObservatorySnapshot；无记录或面板关闭时 null
+   */
+  getSessionRunObservatory(sessionId: string): RunObservatorySnapshot | null {
+    return this.observerHub.getRunObservatory(sessionId);
+  }
+
+  /**
+   * Run messages 快照（摘要 + 配置允许时的全文）
+   *
+   * @param sessionId - 会话 id
+   * @param options - phase / runId
+   * @returns 快照或 null
+   */
+  getSessionRunMessages(
+    sessionId: string,
+    options?: { phase?: 'entry' | 'final' | 'llm'; runId?: string; view?: 'workspace' | 'llm' },
+  ): RunMessagesSnapshot | null {
+    return this.observerHub.getRunMessages(sessionId, options);
   }
 
   /**
@@ -892,6 +936,12 @@ export class Gateway {
     return probeContextLayerHealth({ agentId, personaLoaded: false });
   }
 
+  /**
+   * 产品 Context 面板路径：始终写入 Map（与 observer.level 无关）。
+   *
+   * Observer Hub 采样归 **Runner.emitObserved**（以及 Builder ContextEngine emit 回调）；
+   * Gateway **不要**再 `hub.ingestEvent`，否则 timeline/lifecycle 会双计。
+   */
   private rememberContextLayers(sessionId: string, event: AgentEvent): void {
     const data = event.data as
       | {
@@ -1165,6 +1215,7 @@ export class Gateway {
       sessionLease: this.sessionLease,
       sessionAcl: this.sessionAcl,
       agentMaxSessionRights: agent.maxSessionRights,
+      observerHub: this.observerHub.isEnabled() ? this.observerHub : undefined,
     });
 
     // ── 七层数据源：skills / memory / wisdom / cognition / knowledge / assembler ──
@@ -1271,8 +1322,10 @@ export class Gateway {
       onSecurityViolation: (v) => ({ action: 'block', reason: v.description }),
     });
 
-    // 构建
+    // 构建（builder.observerHub 已注入；setObserverHub 兼容仅 runnerConfig 传入的路径）
+    builder.observerHub(this.observerHub.isEnabled() ? this.observerHub : undefined);
     const built = await builder.build();
+    built.runner.setObserverHub(this.observerHub.isEnabled() ? this.observerHub : undefined);
     const agentToolNames = built.agent.context.tools
       ?.map((t: any) => t?.definition?.name ?? t?.name)
       .filter(Boolean) ?? [];

@@ -28,12 +28,32 @@ export interface RunToolRuntime {
 export interface RunScope {
   sessionId: string;
   agentId: string;
+  /**
+   * 本 episode 的 Run 标识（与宪法 Run=(sessionId, agentId, …) 对齐）。
+   * 由 Runner 在组装 RunScope 时生成；Observer/审计共用，不另造第二套 ID。
+   */
+  runId?: string;
   /** 本轮 systemPrompt 装配结果；供 convertToLlm / 层装配 */
   systemPrompt?: string;
   /** 工具运行时上下文；缺省时由 Provider 回退 */
   toolRuntime?: RunToolRuntime;
   /** Agent 模板 revision（Reserved：AgentRevision 绑 Run） */
   agentRevision?: string;
+}
+
+let runIdSeq = 0;
+
+/**
+ * 生成与 RunScope 对齐的 runId（含 sessionId/agentId，可读且可排序）
+ *
+ * @param sessionId - 会话 id
+ * @param agentId - Agent id
+ * @param at - 起始时间戳
+ * @returns runId
+ */
+export function createRunId(sessionId: string, agentId: string, at: number = Date.now()): string {
+  runIdSeq += 1;
+  return `run_${at.toString(36)}_${runIdSeq.toString(36)}_${sessionId}_${agentId}`;
 }
 
 const runScopeStorage = new AsyncLocalStorage<RunScope>();

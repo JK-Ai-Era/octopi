@@ -12,6 +12,7 @@ import { isAbsolute } from 'node:path';
 
 import type { EventBus } from '../../core/primitives/event-bus.js';
 import { AgentEvents } from '../events/agent-event-map.js';
+import { getRunScope } from '../run-scope.js';
 import type { ToolCall } from '../../core/types/messages.js';
 import type {
   SecurityViolation,
@@ -224,6 +225,32 @@ export class DefaultSecurityGuard {
   }
 
   /**
+   * 发射安全事件并附带 Run 身份（Observer/security 通道按 session 归属）
+   */
+  private emitRunEvent(event: {
+    type: string;
+    timestamp?: number;
+    agentId?: string;
+    sessionId?: string;
+    data?: Record<string, unknown>;
+  }): void {
+    const scope = getRunScope();
+    const sessionId = event.sessionId ?? scope?.sessionId;
+    const agentId = event.agentId ?? scope?.agentId;
+    this.eventBus.emit({
+      type: event.type,
+      timestamp: event.timestamp ?? Date.now(),
+      agentId,
+      sessionId,
+      data: {
+        ...(event.data ?? {}),
+        ...(sessionId ? { sessionId } : {}),
+        ...(agentId ? { agentId } : {}),
+      },
+    });
+  }
+
+  /**
    * 设置系统提示（用于泄露检测）
    */
   setSystemPrompt(prompt: string): void {
@@ -273,7 +300,7 @@ export class DefaultSecurityGuard {
     }
 
     if (violations.length > 0) {
-      this.eventBus.emit({
+      this.emitRunEvent({
         type: AgentEvents.SENSITIVE_DATA_DETECTED,
         timestamp: Date.now(),
         data: { count: violations.length },
@@ -328,7 +355,7 @@ export class DefaultSecurityGuard {
           // unknown → 放行，通知 Engine 调用安全智能体
           // 事件发射是通知性（审计/日志），不是触发性。
           // 触发由 riskUnknown 标记 + Engine 的 beforeToolExecution 控制。
-          this.eventBus.emit({
+          this.emitRunEvent({
             type: 'tool_call.risk_unknown',
             timestamp: Date.now(),
             data: { toolCall: call, decision },
@@ -345,7 +372,7 @@ export class DefaultSecurityGuard {
             description: decision.reason,
           });
 
-          this.eventBus.emit({
+          this.emitRunEvent({
             type: AgentEvents.INJECTION_DETECTED,
             timestamp: Date.now(),
             data: { source: 'risk_policy', toolName: call.name, decision },
@@ -356,7 +383,7 @@ export class DefaultSecurityGuard {
       } catch (err) {
         // 策略失效 → 安全默认：放行，交给下游安全策略/子系统兜底
         // 事件发射是通知性（审计/日志），不是触发性。
-        this.eventBus.emit({
+        this.emitRunEvent({
           type: 'tool_call.risk_unknown',
           timestamp: Date.now(),
           data: { toolCall: call, error: err instanceof Error ? err.message : String(err) },
@@ -446,7 +473,7 @@ export class DefaultSecurityGuard {
     }
 
     if (violations.length > 0) {
-      this.eventBus.emit({
+      this.emitRunEvent({
         type: AgentEvents.INJECTION_DETECTED,
         timestamp: Date.now(),
         data: { source: 'tool_call', toolName: call.name, violations },
@@ -491,7 +518,7 @@ export class DefaultSecurityGuard {
     }
 
     if (violations.length > 0) {
-      this.eventBus.emit({
+      this.emitRunEvent({
         type: AgentEvents.INJECTION_DETECTED,
         timestamp: Date.now(),
         data: { source: 'behavior', violations },
@@ -583,7 +610,7 @@ export class DefaultSecurityGuard {
     }
 
     if (violations.length > 0) {
-      this.eventBus.emit({
+      this.emitRunEvent({
         type: AgentEvents.INJECTION_DETECTED,
         timestamp: Date.now(),
         data: { source, violations },

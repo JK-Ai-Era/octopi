@@ -127,6 +127,12 @@ interface ReliabilityState {
     reason: 'tokens' | 'wall_clock' | 'iteration' | 'tool_calls';
     report?: unknown;
   };
+  /** SecurityGuard 拦截：在 generator 主循环 yield（beforeToolCall 不能 yield） */
+  pendingSecurityEvents: Array<{
+    type: 'security_blocked';
+    timestamp: number;
+    data: Record<string, unknown>;
+  }>;
 }
 
 function createInitialState(checkpointInterval = 15): ReliabilityState {
@@ -149,6 +155,7 @@ function createInitialState(checkpointInterval = 15): ReliabilityState {
     forceCheckpoint: false,
     modelErrorAttempt: 0,
     pendingBudgetHardYield: false,
+    pendingSecurityEvents: [],
   };
 }
 
@@ -286,11 +293,30 @@ export async function* runAgentWithReliability(
               return order[v.severity] > order[worst.severity] ? v : worst;
             }, toolCheck.violations[0]).severity,
           );
-          if (action === 'block') {
-            return { block: true, reason: toolCheck.violations[0]?.description };
-          }
-          if (action === 'reject') {
-            return { block: true, reason: toolCheck.violations[0]?.description, terminate: false };
+          if (action === 'block' || action === 'reject') {
+            const scope = getRunScope();
+            state.pendingSecurityEvents.push({
+              type: 'security_blocked',
+              timestamp: Date.now(),
+              data: {
+                sessionId: scope?.sessionId,
+                agentId: scope?.agentId,
+                reason: toolCheck.violations[0]?.description,
+                toolName: ctx.toolCall.name,
+                action,
+                severity: toolCheck.violations[0]?.severity,
+                violations: toolCheck.violations.map((v) => ({
+                  type: v.type,
+                  severity: v.severity,
+                  description: v.description,
+                })),
+              },
+            });
+            return {
+              block: true,
+              reason: toolCheck.violations[0]?.description,
+              terminate: action === 'block',
+            };
           }
         }
       }
@@ -664,6 +690,23 @@ export async function* runAgentWithReliability(
 
   // 运行核心循环：拦截事件以计量 token / 注入 budget & run_guard 用户可见事件（不变量 #6）
   for await (const event of agentLoop(context, wrappedConfig, signal)) {
+    // SecurityGuard 拦截（beforeToolCall 推入 pending，此处 yield）
+    while (state.pendingSecurityEvents.length > 0) {
+      const sec = state.pendingSecurityEvents.shift()!;
+      yield sec as never;
+    }
+    // Observer：run 结束前附带 RunMetricsCollector 快照（P1 Guard 面板）
+    if (event.type === 'agent_end') {
+      const scope = getRunScope();
+      yield {
+        type: 'run_guard_metrics',
+        timestamp: Date.now(),
+        data: state.collector.toObserverSnapshot({
+          sessionId: scope?.sessionId,
+          agentId: scope?.agentId,
+        }),
+      };
+    }
     if (event.type === 'tool_end') {
       // maxToolCalls 计量（显式配置时才硬停）
       budget?.recordToolCall(1);

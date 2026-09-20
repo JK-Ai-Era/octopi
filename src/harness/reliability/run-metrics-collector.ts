@@ -193,4 +193,42 @@ export class RunMetricsCollector {
       })),
     };
   }
+
+  /**
+   * Observer 通道用的可序列化快照
+   *
+   * @param ids - session/agent
+   * @returns RunGuardMetrics 投影
+   */
+  toObserverSnapshot(ids: { sessionId?: string; agentId?: string } = {}): {
+    sessionId?: string;
+    agentId?: string;
+    iteration: number;
+    totalToolCalls: number;
+    totalTokens: number;
+    elapsedMs: number;
+    consecutiveErrors: number;
+    consecutiveSameTool: number;
+    noopStreak: number;
+    hasProgress: boolean;
+    uniqueTools: string[];
+    recentTools: Array<{ name: string; success: boolean }>;
+    recoveryCount: number;
+  } {
+    return {
+      sessionId: ids.sessionId,
+      agentId: ids.agentId,
+      iteration: this.globalIteration,
+      totalToolCalls: this.totalToolCalls,
+      totalTokens: this.totalTokens,
+      elapsedMs: Date.now() - this.startTime,
+      consecutiveErrors: this.consecutiveErrors,
+      consecutiveSameTool: this.consecutiveSameTool,
+      noopStreak: this.noopStreak,
+      hasProgress: this.hasProgress(),
+      uniqueTools: [...this.uniqueTools],
+      recentTools: this.recentToolCalls.slice(-10),
+      recoveryCount: this.recoveryHistory.length,
+    };
+  }
 }
