@@ -1,3 +1,13 @@
+## v0.35.1 (2026-09-26)
+
+### docs: 实施规划入库（跨 Session 交接）
+
+`arch/` 为 gitignore 内部设计目录，无法仅靠该路径进入 main。新增 tracked 交接文档，并与 arch 侧同步。
+
+- **新增** `docs/IMPLEMENTATION-PLAN.md`：Phase A–H 实施规划、宪法不变量摘要、worktree/测试约定、验收与非目标
+- **说明**：宪法与专题设计仍以本机 `arch/north-star.md` 等为准；规划以 `docs/IMPLEMENTATION-PLAN.md` 随仓库分发
+- **Phase A**：I1 已在 v0.35.0 合并 main（`ff75fd0`）
+
 ## v0.35.0 (2026-09-26)
 
 ### feat(harness): Run 物理 I1 — RunScope 隔离（宪法 north-star I1）
