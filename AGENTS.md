@@ -90,7 +90,7 @@ Scaffolded by `src/init.ts` (`initOctopi` / `ensureAgentDirs`). Keep init, types
   - **E6/I3**: Session ACL effective rights = L0 ∩ role.max ∩ agent.max ∩ binding; `preferredAgentId` ≠ `primaryAgentId`; handoff is host-plane by default.
   - **I5**: Tool cwd policy is `toolIsolation` (default `none`); `session-subdir` for multi-session file writes.
   - Config/schema changes: keep `src/config-schema.ts` in sync with `octopi.schema.json` / `octopi.example.json`.
-- **Shipped runtime knobs** (see `docs/KNOWN-ISSUES.md` + `CHANGELOG`): top-level `toolIsolation`, `sessionAcl`; agents[].`workspace` / `maxSessionRights`; SessionData `primaryAgentId` / `preferredAgentId` / `participants` / `contextCompacts`. Gateway injects ACL + a **shared** session lease into all Runners.
+- **Shipped runtime knobs** (see `docs/KNOWN-ISSUES.md` + `CHANGELOG` + `docs/observer-domain.md`): top-level `toolIsolation`, `sessionAcl`, **`observer`** (Run Observatory；缺省 `level: off`；调试 REST `GET /debug/run/*`，非 `/api/v1`；与 Telemetry 键 `observability` / Core `Observer` 分离); agents[].`workspace` / `maxSessionRights`; SessionData `primaryAgentId` / `preferredAgentId` / `participants` / `contextCompacts`. Gateway injects ACL + a **shared** session lease into all Runners. Observer 采样归 Runner `emitObserved` / Builder ContextEngine emit；Gateway **不要**二次 `hub.ingestEvent`。
 - For **current implementation phases**, start from internal `arch/IMPLEMENTATION-PLAN.md` and `arch/NEXT-STEPS.md` (not tracked in git). Do not invent a parallel roadmap. Phase A–H minimum sets are closed; open items (distributed Lease, session directory de-coupling, quota) are listed in `docs/KNOWN-ISSUES.md`.
 
 ### The 4-Layer Architecture

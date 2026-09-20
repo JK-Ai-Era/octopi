@@ -30,7 +30,9 @@
 
 **Kernel ports（现行，仍在 Core）**：ModelProvider、ErrorStrategy、SecurityGuard、RunGuard、ReliabilityHarness。
 
-**Product ports（类型可留 Core，非 thin-run）**：ToolBus、SessionStore、Observer。ContextEngine 在 `harness/context/types.ts`。
+**Product ports（类型可留 Core，非 thin-run）**：ToolBus、SessionStore、`Observer`（**Telemetry** metrics/span/log）。ContextEngine 在 `harness/context/types.ts`。
+
+**Run Observatory（勿与 Core Observer 混淆）**：产品调试观测在 `harness/observer/`（`ObserverHub`），配置键 `observer`，缺省 `level=off`。与 Telemetry（`observability` + Core `Observer`）同属 Observer Domain、实现分离。见 [observer-domain.md](./observer-domain.md)。
 
 **依赖规则（现行）**：
 

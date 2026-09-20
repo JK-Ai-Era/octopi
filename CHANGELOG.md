@@ -1,3 +1,14 @@
+## v0.43.4 (2026-09-26)
+
+### docs: 补齐 Observer Domain 外部文档
+
+- **新增** `docs/observer-domain.md`：Telemetry vs Run Observatory 边界、`observer.level` 缺省 off、`/debug/run/*`、采样路径（Runner `emitObserved` / Builder emit；Gateway 不双计）、通道投影与 E3/I5 注意点
+- `docs/architecture.md`：Harness 15→16 领域；§3.15 Observer；接口清单区分 Core `Observer` 与 `ObserverHub`
+- `src/harness/README.md`：Observer 领域行 + runId / emitObserved
+- `AGENTS.md`：Shipped knobs 增加 `observer` 与采样归属
+- `docs/CONTRIBUTING.md`：测试覆盖行 + Observer 文档同步检查项
+- `docs/domain-split.md` / `README.md` / `README_CN.md`：标明 Core Observer（Telemetry）≠ Run Observatory
+
 ## v0.43.3 (2026-09-26)
 
 ### feat(harness): Observer / Run Observatory — 设计决策落地与接线修复

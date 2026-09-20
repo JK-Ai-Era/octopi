@@ -79,10 +79,11 @@ Octopi 是一个可嵌入的 Agent 底座引擎，用于构建 AI 驱动的应�
 | **Execution Environment** | 沙箱、工作区管理、文件操作 |
 | **Human-in-the-Loop** | 审批流程、决策缓存、基于风险的策略 |
 | **Memory** | 命题记忆（fact/method/norm）、门控/置信度、认知/智慧存储、Memory Steward 子系统 |
+| **Observer** | 开发调试用 Run Observatory：`observer.level`（缺省 `off`）、`/debug/run/*`、Web Run 面板 — 见 [docs/observer-domain.md](./docs/observer-domain.md)（与 Telemetry 的 Core `Observer` 分离） |
 
 ### Layer 3: Integration — 外部适配
 
-LLM Provider（OpenAI、Anthropic）、存储后端（JSONL、SQLite、Memory）、可观测性（Trace、Metrics、Exporters）、协议（HTTP）、Gateway、TUI、Web Runtime。
+LLM Provider（OpenAI、Anthropic）、存储后端（JSONL、SQLite、Memory）、Telemetry 可观测性（Trace、Metrics、Exporters；配置键 `observability`）、协议（HTTP）、Gateway、TUI、Web Runtime。
 
 ---
 

@@ -81,7 +81,8 @@ npx vitest run --grep "SecurityGuard"
 | 多智能体 | AgentSwarm、OrchestrationStrategy |
 | 并发控制 | ProviderPool、SessionGate、RateLimiter |
 | 输出质量 | OutputQualityGate |
-| 可观测性 | TraceCollector、MetricsAggregator、ObserverBridge |
+| 可观测性 | TraceCollector、MetricsAggregator、ObserverBridge（Telemetry） |
+| Run Observatory | ObserverHub、resolveObserverConfig、security/memory/tool.effect 投影、store 会话守卫 |
 | 集成 | OpenAI/Anthropic Provider、MCP Client |
 | 录制回放 | RecordingProvider、ReplayProvider、ChaosProvider |
 
@@ -102,6 +103,7 @@ npx vitest run --grep "SecurityGuard"
 | 新增/修改核心接口 | `docs/architecture.md` 对应章节 + `CHANGELOG.md` |
 | 新增 Plugin hook | `docs/plugin-system.md` + `docs/architecture.md`（如涉及） |
 | 新增模块 | `docs/architecture.md` + 模块内 `README.md` |
+| Observer / 配置 `observer` | `docs/observer-domain.md` + `docs/architecture.md` + `octopi.schema.json` / `octopi.example.json` |
 | 修改层间依赖 / 分层 | `docs/architecture.md`；不得违反 [架构宪法](./north-star.md) 与本文件「依赖方向」 |
 | 修改架构不变量 | **`docs/north-star.md`**（须显式评审）+ `CHANGELOG.md` |
 | 测试数量变化 | `README.md` + `CHANGELOG.md` |

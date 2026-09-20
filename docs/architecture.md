@@ -57,7 +57,7 @@ AI 在早期阶段，应用构建思路在不断发展。架构设计的核心�
 │  LLM Provider · Web Search · 存储 · 可观测性 · 协议 · Gateway · TUI · Web Runtime │
 │                                                                  │
 │  ┌──────────────────────────────────────────────────────────────┐│
-│  │  Layer 2: Harness — 15 个自包含领域                           ││
+│  │  Layer 2: Harness — 16 个自包含领域                           ││
 │  │                                                              ││
 │  │  ┌──────────────────────────────────────────────────────────┐││
 │  │  │  Layer 1: Core — 机制原语 + 接口契约 + 核心类型           │││
@@ -149,7 +149,7 @@ src/core/
 
 Domain 契约在 **harness 领域内**（memory、mcp、multi-agent、orchestration…），不在 Core。
 
-### Layer 2: Harness — 15 个自包含领域
+### Layer 2: Harness — 16 个自包含领域
 
 **职责**：实现 Core Kernel ports 的具体策略，提供框架的全部高级功能；持有 Domain 产品契约与实现。
 
@@ -168,13 +168,15 @@ src/integration/
 ├── providers/            # LLM Provider（OpenAI, Anthropic）
 ├── web-search/           # Web Search Provider（DuckDuckGo, Tavily, Brave, Serper, MiMo）
 ├── storage/              # 存储后端（JSONL, SQLite, Memory）
-├── observability/        # 可观测性（Trace, Metrics, Exporters）
+├── observability/        # Telemetry：Trace、Metrics、Exporters（Core Observer 适配）
 ├── gateway/              # 网关
 ├── protocols/            # 协议适配（HTTP）
 ├── tui/                  # 终端 UI
 ├── web/                  # Web Runtime / WebUI 骨架
 └── index.ts
 ```
+
+> **Observer Domain**：Telemetry（上表 `observability/` + Core `Observer`）与 **Run Observatory**（`harness/observer/`，配置键 `observer`）同属观测领域、实现分离。见 [docs/observer-domain.md](./observer-domain.md)。Run Observatory 缺省 `observer.level=off`；调试 REST 为根路径 `/debug/run/*`（非 `/api/v1`）。
 
 ---
 
@@ -234,10 +236,11 @@ harness/context/
 
 harness/session-acl/        # E6：角色目录 + authorizeRun + switch
 harness/tool-effect/        # I5：toolIsolation cwd
+harness/observer/           # Run Observatory：ObserverHub + Run 投影（observer.level）
 harness/concurrency/session-lease.ts  # E2/E7：SessionLease
 ```
 
-领域导出见 `harness/index.ts`。设计说明见 [docs/context-layer-contracts.md](./context-layer-contracts.md)。
+领域导出见 `harness/index.ts`。设计说明见 [docs/context-layer-contracts.md](./context-layer-contracts.md)、[docs/observer-domain.md](./observer-domain.md)。
 
 ### 3.3 Security — 安全
 
@@ -486,6 +489,28 @@ harness/concurrency/
 └── index.ts
 ```
 
+### 3.15 Observer — Run Observatory（开发调试观测）
+
+**职责**：打包 Run 可检视现场（Scope / messages / timeline / guard / security / memory / tool.effect），供 Web Run 面板与 `/debug/run/*`。与 Core `Observer`（Telemetry）分属同一 Observer Domain 的不同子域，**不合并实现**。
+
+```
+harness/observer/
+├── hub.ts            # ObserverHub — 事件摄入 + Run 投影缓存
+├── types.ts          # ObserverConfig / Run* DTO / resolveObserverConfig
+├── run-snapshot.ts   # RunScope → UI 视图
+└── index.ts
+```
+
+| 约定 | 值 |
+|------|-----|
+| 配置键 | `observer`（Telemetry 用 `observability`） |
+| 缺省 | `level: 'off'`；`webPanel` 跟 level |
+| Run 身份 | `RunScope.runId` / `createRunId` |
+| 采样 | Runner `emitObserved`；Builder ContextEngine `emit`；Gateway **不**二次 ingest |
+| 调试 REST | `GET /debug/run/:sessionId/scope\|messages`（根路径） |
+
+详见 [docs/observer-domain.md](./observer-domain.md)。
+
 ---
 
 ## 4. Context Intelligence — 八层智能模型
@@ -611,7 +636,8 @@ Session save：全量 messages + contextCompact 快照
 | `ErrorStrategy` | `core/interfaces/error-strategy.ts` | DefaultErrorStrategy |
 | `SecurityGuard` | `core/interfaces/security-guard.ts` | DefaultSecurityGuard |
 | `ToolCallRiskPolicy` | `core/interfaces/security-guard.ts` | DefaultToolCallRiskPolicy |
-| `Observer` | `core/interfaces/observer.ts` | NoopObserver, LogObserver, ObserverBridge |
+| `Observer` | `core/interfaces/observer.ts` | NoopObserver, LogObserver, ObserverBridge（**Telemetry**） |
+| `ObserverHub` / Run Observatory | `harness/observer/*` | ObserverHub（**开发调试**；见 [observer-domain.md](./observer-domain.md)） |
 | `SessionStore<T>` | `core/interfaces/session-store.ts` | JsonlSessionStore, InMemorySessionStore, SqliteSessionStore |
 | `AsyncTaskStore` | `harness/orchestration/async-task-store.ts` | orchestration |
 | `RunGuard` | `core/interfaces/run-guard.ts` | DefaultRunGuard |

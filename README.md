@@ -57,7 +57,7 @@ The heart of the engine. `agentLoop()` is a pure async generator: input messages
 
 ### Layer 1: Core — Kernel Contract
 
-Infrastructure primitives (EventBus, StateMachine) and **Kernel ports** (ModelProvider, ErrorStrategy, SecurityGuard, RunGuard, ReliabilityHarness) plus shared vocabulary types. **Product ports** (ToolBus, SessionStore, Observer) and domain contracts (ContextEngine, Memory, MCP, …) live in Harness. No strategy implementations. **Does not re-export Loop.**
+Infrastructure primitives (EventBus, StateMachine) and **Kernel ports** (ModelProvider, ErrorStrategy, SecurityGuard, RunGuard, ReliabilityHarness) plus shared vocabulary types. **Product ports** (ToolBus, SessionStore, Observer = Telemetry metrics/span) and domain contracts (ContextEngine, Memory, MCP, …) live in Harness. Run Observatory (`harness/observer`) is a separate debug product surface — see [docs/observer-domain.md](./docs/observer-domain.md). No strategy implementations. **Does not re-export Loop.**
 
 ### Layer 2: Harness — Domains
 
@@ -79,10 +79,11 @@ Infrastructure primitives (EventBus, StateMachine) and **Kernel ports** (ModelPr
 | **Execution Environment** | Sandboxing, workspace management, file operations |
 | **Human-in-the-Loop** | Approval workflows, decision caching, risk-based policies |
 | **Memory** | Proposition store (fact/method/norm), gates/confidence, cognition/wisdom stores, Memory Steward subsystems |
+| **Observer** | Run Observatory for development: `observer.level` (default `off`), `/debug/run/*`, Web Run panel — see [docs/observer-domain.md](./docs/observer-domain.md) (distinct from Telemetry Core `Observer`) |
 
 ### Layer 3: Integration — External Adapters
 
-LLM providers (OpenAI, Anthropic), storage backends (JSONL, SQLite, Memory), observability (trace, metrics, exporters), protocols (HTTP), Gateway, TUI, and Web Runtime.
+LLM providers (OpenAI, Anthropic), storage backends (JSONL, SQLite, Memory), Telemetry observability (trace, metrics, exporters — config key `observability`), protocols (HTTP), Gateway, TUI, and Web Runtime.
 
 ---
 
