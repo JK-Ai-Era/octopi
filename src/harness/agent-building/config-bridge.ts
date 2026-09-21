@@ -22,7 +22,8 @@ import { homedir } from 'node:os';
 import { resolve, join } from 'node:path';
 import { existsSync } from 'node:fs';
 import type { ModelProvider } from '../../core/interfaces/model-provider.js';
-import type { IterationBudgetConfig } from '../budget/budget.js';
+import type { BudgetPolicyConfig } from '../budget/budget.js';
+import type { ReliabilityConfig } from '../reliability/run-agent.js';
 import { AgentBuilder } from './builder.js';
 import type { SessionAwareRunner } from '../runner.js';
 import { SecurityPresets } from '../security/policy.js';
@@ -222,7 +223,7 @@ export async function buildFromConfig(config: NormalizedHarnessConfig): Promise<
   // 1. 解析共享资源
   const providers = await resolveProviders(config);
   const securityConfig = resolveSecurityConfig(config);
-  const budgetConfig = config.budget;
+  const budgetConfig = config.budgetPolicy;
   const runGuardConfig = config.runGuard;
   const contextEngineConfig = config.contextEngine;
   const contextAssemblerConfig = config.context?.contextAssembler ?? config.contextAssembler;
@@ -272,7 +273,7 @@ async function buildAgent(
   shared: {
     providers: Map<string, ModelProvider>;
     securityConfig?: SecurityGuardConfig;
-    budgetConfig?: Partial<IterationBudgetConfig>;
+    budgetConfig?: import('../../config.js').BudgetPolicyJsonConfig;
     runGuardConfig?: RunGuardJsonConfig;
     contextEngineConfig?: ContextEngineConfig;
     contextAssemblerConfig?: import('../../config.js').ContextAssemblerConfig;
@@ -401,9 +402,47 @@ async function buildAgent(
     builder.withRiskPolicy(new DefaultToolCallRiskPolicy({ cwd: agentConfig.workspace }));
   }
 
-  // ── Budget ──
+  // ── Budget + P2/P3 配置接线 ──
   if (shared.budgetConfig) {
-    builder.budget(shared.budgetConfig);
+    // 提取 BudgetPolicyEngine 配置（wall-clock / iteration / tool 上限）
+    const engineConfig: Partial<BudgetPolicyConfig> = {
+      maxWallClockMs: shared.budgetConfig.maxWallClockMs,
+      maxIterations: shared.budgetConfig.maxIterations,
+      maxToolCalls: shared.budgetConfig.maxToolCalls,
+    };
+    builder.budget(engineConfig);
+
+    // P2: wrap-up 配置
+    const wrapUpConfig: Record<string, unknown> = {};
+    if (shared.budgetConfig.wrapUpTurns !== undefined) {
+      wrapUpConfig.turns = shared.budgetConfig.wrapUpTurns;
+    }
+    if (shared.budgetConfig.onPolicyHit !== undefined) {
+      wrapUpConfig.onPolicyHit = shared.budgetConfig.onPolicyHit;
+    }
+    if (shared.budgetConfig.contextWrapUpRatio !== undefined) {
+      wrapUpConfig.contextRatio = shared.budgetConfig.contextWrapUpRatio;
+    }
+
+    // P3: policy 单位配置
+    const policyUnits = shared.budgetConfig.units;
+    const policyPricing = shared.budgetConfig.pricing;
+    const advisory = shared.budgetConfig.advisory;
+
+    // 如果有 P2/P3 配置，注入到 reliability
+    if (Object.keys(wrapUpConfig).length > 0 || policyUnits || policyPricing || advisory) {
+      builder.reliability({
+        wrapUp: Object.keys(wrapUpConfig).length > 0 ? wrapUpConfig as ReliabilityConfig['wrapUp'] : undefined,
+        policyUnits: policyUnits ? {
+          maxCost: policyUnits.maxCost,
+          maxUncachedInputTokens: policyUnits.maxUncachedInputTokens,
+          maxOutputTokens: policyUnits.maxOutputTokens,
+          maxLlmCalls: policyUnits.maxLlmCalls,
+        } : undefined,
+        policyPricing,
+        advisory: advisory as ReliabilityConfig['advisory'],
+      });
+    }
   }
 
   // ── Context Engine ──

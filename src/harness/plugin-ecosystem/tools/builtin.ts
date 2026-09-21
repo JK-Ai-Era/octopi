@@ -229,6 +229,7 @@ export function createFileReadTool(options?: {
           toLine: end,
           rawLength: applied.rawLength,
           summary: applied.summary,
+          summaryUsage: applied.usage,
         };
       } catch (error) {
         throw new Error(`Failed to read file "${path}": ${error instanceof Error ? error.message : String(error)}`);

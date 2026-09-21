@@ -5,6 +5,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { makeTokenUsage, nominalTotalTokens } from '../src/core/types/turn.js';
 import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -420,7 +421,7 @@ describe('Round-trip: Record → Replay', () => {
       content: 'test',
       model: 'm',
       finishReason: 'stop',
-      usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+      usage: makeTokenUsage({ promptTokens: 10, completionTokens: 5 }),
     }]);
     const rec = new RecordingProvider(mock, { outputDir: tempDir, scenarioName: 'usage' });
 
@@ -430,6 +431,6 @@ describe('Round-trip: Record → Replay', () => {
     const resp = await replayer.chat({ messages: [{ role: 'user', content: 'Q' }], model: 'm' });
 
     expect(resp.usage).toBeDefined();
-    expect(resp.usage?.totalTokens).toBe(15);
+    expect(resp.usage ? nominalTotalTokens(resp.usage) : 0).toBe(15);
   });
 });

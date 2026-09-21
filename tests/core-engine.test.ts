@@ -4,10 +4,11 @@
  * 测试不依赖旧引擎的核心组件：
  * - EventBus
  * - SecurityGuard
- * - IterationBudget
+ * - BudgetPolicyEngine
  */
 
 import { describe, it, expect, vi } from 'vitest';
+import { makeTokenUsage } from '../src/core/types/turn.js';
 import { Agent } from '../src/harness/agent/agent.js';
 import { runAgentWithReliability } from '../src/harness/reliability/run-agent.js';
 import type { ReliabilityHarness } from '../src/harness/reliability/run-agent.js';
@@ -16,7 +17,7 @@ import type { ModelProvider, LLMRequest, LLMResponse, LLMStreamChunk } from '../
 import type { Message, RegisteredTool } from '../src/core/types.js';
 import { DefaultEventBus, NoopEventBus } from '../src/core/primitives/event-bus.js';
 import { DefaultSecurityGuard } from '../src/harness/security/default-security-guard.js';
-import { IterationBudget } from '../src/harness/budget/budget.js';
+import { BudgetPolicyEngine } from '../src/harness/budget/budget.js';
 
 // ── Helper ──
 
@@ -154,15 +155,13 @@ describe('SecurityGuard', () => {
   });
 });
 
-// ── IterationBudget ──
+// ── BudgetPolicyEngine ──
 
-describe('IterationBudget', () => {
-  it('应该跟踪资源消耗', () => {
-    const bus = new DefaultEventBus();
-    const budget = new IterationBudget(bus, {
+describe('BudgetPolicyEngine', () => {
+  it('应该跟踪资源消耗（token 不触发 hard）', () => {
+    const budget = new BudgetPolicyEngine( {
       maxIterations: 5,
       maxToolCalls: 10,
-      maxTokens: 1000,
       maxWallClockMs: 60000,
     });
 
@@ -178,8 +177,7 @@ describe('IterationBudget', () => {
   });
 
   it('应该在迭代超限时报告', () => {
-    const bus = new DefaultEventBus();
-    const budget = new IterationBudget(bus, { maxIterations: 2, maxToolCalls: 10, maxTokens: 1000, maxWallClockMs: 60000 });
+    const budget = new BudgetPolicyEngine( { maxIterations: 2, maxToolCalls: 10, maxWallClockMs: 60000 });
 
     budget.recordIteration();
     budget.recordIteration();
@@ -187,8 +185,7 @@ describe('IterationBudget', () => {
   });
 
   it('应该在工具调用超限时报告', () => {
-    const bus = new DefaultEventBus();
-    const budget = new IterationBudget(bus, { maxIterations: 10, maxToolCalls: 2, maxTokens: 1000, maxWallClockMs: 60000 });
+    const budget = new BudgetPolicyEngine( { maxIterations: 10, maxToolCalls: 2, maxWallClockMs: 60000 });
 
     budget.recordToolCall();
     expect(budget.check()).toBe('ok');
@@ -196,19 +193,18 @@ describe('IterationBudget', () => {
     expect(budget.check()).toBe('tool_call_limit');
   });
 
-  it('应该在 token 超限时报告', () => {
-    const bus = new DefaultEventBus();
-    const budget = new IterationBudget(bus, { maxIterations: 10, maxToolCalls: 10, maxTokens: 100, maxWallClockMs: 60000 });
+  it('nominal token 只累计不 hard（P0）', () => {
+    const budget = new BudgetPolicyEngine( { maxIterations: 10, maxToolCalls: 10, maxWallClockMs: 60000 });
 
     budget.consumeTokens(50);
     expect(budget.check()).toBe('ok');
     budget.consumeTokens(60);
-    expect(budget.check()).toBe('token_limit');
+    expect(budget.check()).toBe('ok');
+    expect(budget.report().nominalTokens).toBe(110);
   });
 
   it('应该生成消耗报告', () => {
-    const bus = new DefaultEventBus();
-    const budget = new IterationBudget(bus, { maxIterations: 5, maxToolCalls: 10, maxTokens: 1000, maxWallClockMs: 60000 });
+    const budget = new BudgetPolicyEngine( { maxIterations: 5, maxToolCalls: 10, maxWallClockMs: 60000 });
 
     budget.recordIteration();
     budget.recordToolCall();
@@ -217,10 +213,9 @@ describe('IterationBudget', () => {
     const report = budget.report();
     expect(report.iterations).toBe(1);
     expect(report.toolCalls).toBe(1);
-    expect(report.totalTokens).toBe(100);
+    expect(report.nominalTokens).toBe(100);
     expect(report.remaining.iterations).toBe(4);
     expect(report.remaining.toolCalls).toBe(9);
-    expect(report.remaining.tokens).toBe(900);
   });
 });
 
@@ -230,7 +225,7 @@ describe('Agent 基本验证', () => {
   it('应该完成基本对话循环', async () => {
     const provider = createSequentialProvider([{
       content: 'Hello!',
-      usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+      usage: makeTokenUsage({ promptTokens: 10, completionTokens: 5 }),
       model: 'test',
       finishReason: 'stop',
     }]);
@@ -248,7 +243,7 @@ describe('Agent 基本验证', () => {
   it('中止时应该有 agent_end(reason: aborted)', async () => {
     const provider = createSequentialProvider([{
       content: 'Hello!',
-      usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+      usage: makeTokenUsage({ promptTokens: 10, completionTokens: 5 }),
       model: 'test',
       finishReason: 'stop',
     }]);
@@ -267,10 +262,10 @@ describe('Agent 基本验证', () => {
 
   it('noop 工具应该在阈值后终止循环', async () => {
     const provider = createSequentialProvider([
-      { content: '', toolCalls: [{ id: 'c1', name: 'noop_tool', arguments: {} }], usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 }, model: 'test', finishReason: 'tool_calls' },
-      { content: '', toolCalls: [{ id: 'c2', name: 'noop_tool', arguments: {} }], usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 }, model: 'test', finishReason: 'tool_calls' },
-      { content: '', toolCalls: [{ id: 'c3', name: 'noop_tool', arguments: {} }], usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 }, model: 'test', finishReason: 'tool_calls' },
-      { content: '', toolCalls: [{ id: 'c4', name: 'noop_tool', arguments: {} }], usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 }, model: 'test', finishReason: 'tool_calls' },
+      { content: '', toolCalls: [{ id: 'c1', name: 'noop_tool', arguments: {} }], usage: makeTokenUsage({ promptTokens: 10, completionTokens: 5 }), model: 'test', finishReason: 'tool_calls' },
+      { content: '', toolCalls: [{ id: 'c2', name: 'noop_tool', arguments: {} }], usage: makeTokenUsage({ promptTokens: 10, completionTokens: 5 }), model: 'test', finishReason: 'tool_calls' },
+      { content: '', toolCalls: [{ id: 'c3', name: 'noop_tool', arguments: {} }], usage: makeTokenUsage({ promptTokens: 10, completionTokens: 5 }), model: 'test', finishReason: 'tool_calls' },
+      { content: '', toolCalls: [{ id: 'c4', name: 'noop_tool', arguments: {} }], usage: makeTokenUsage({ promptTokens: 10, completionTokens: 5 }), model: 'test', finishReason: 'tool_calls' },
     ]);
 
     const tools = [{

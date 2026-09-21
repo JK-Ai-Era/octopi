@@ -743,54 +743,118 @@
         }
       }
     },
-    "budget": {
+    "budgetPolicy": {
       "type": "object",
-      "description": "资源 soft/hard 总闸（与 runGuard 组合：budget 管资源，runGuard 管行为）。主轴 token + wall-clock；maxIterations 仅显式配置时硬停。",
+      "description": "Run 安全阀/策略（arch/budget-redesign.md）。默认无 nominal token hard；与 runGuard 组合。",
       "properties": {
-        "maxTokens": {
-          "type": "integer",
-          "minimum": 1,
-          "default": 2000000,
-          "description": "硬顶：最大 token 数"
-        },
         "maxWallClockMs": {
           "type": "integer",
           "minimum": 1000,
           "default": 21600000,
-          "description": "硬顶：最大运行时间（毫秒，默认 6 小时）"
-        },
-        "softTokens": {
-          "type": "integer",
-          "minimum": 1,
-          "description": "soft：token 触达（默认约 hard 的 20%）；有进展可静默续租"
-        },
-        "softWallClockMs": {
-          "type": "integer",
-          "minimum": 1000,
-          "description": "soft：时间触达（默认约 hard 的 35%）"
+          "description": "安全阀：最大运行时间（毫秒，默认 6 小时）"
         },
         "maxIterations": {
           "type": "integer",
           "minimum": 1,
-          "description": "最大迭代次数。仅显式设置时硬停；默认不设（长任务不靠 iteration 卡死）"
+          "description": "最大迭代次数。仅显式设置时硬停"
         },
         "maxToolCalls": {
           "type": "integer",
           "minimum": 1,
           "description": "最大工具调用次数。仅显式设置时硬停"
         },
-        "autoRenewOnProgress": {
-          "type": "boolean",
-          "default": true,
-          "description": "soft 触达且有进展时自动续租"
+        "onPolicyHit": {
+          "type": "string",
+          "enum": ["stop", "wrap_up_then_stop"],
+          "default": "wrap_up_then_stop",
+          "description": "Policy 触达时的行为：stop 立即停止 | wrap_up_then_stop 先总结再停止"
         },
-        "maxRenews": {
+        "wrapUpTurns": {
           "type": "integer",
           "minimum": 1,
-          "default": 20,
-          "description": "最大续租次数"
+          "default": 3,
+          "description": "wrap-up 窗口的轮次数"
+        },
+        "contextWrapUpRatio": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "default": 0.85,
+          "description": "context 轴 wrap-up 触发阈值比例"
+        },
+        "units": {
+          "type": "object",
+          "description": "预算单位配置（仅显式配置才启用 hard）",
+          "properties": {
+            "maxCost": {
+              "type": "number",
+              "minimum": 0,
+              "description": "最大花费（币种由 pricing 决定）"
+            },
+            "maxUncachedInputTokens": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "最大 uncached input tokens"
+            },
+            "maxOutputTokens": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "最大 output tokens"
+            },
+            "maxLlmCalls": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "最大 LLM 调用次数"
+            }
+          },
+          "additionalProperties": false
+        },
+        "pricing": {
+          "type": "object",
+          "description": "模型定价（用于 cost 估算，币种自定义）",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "inputPer1M": {
+                "type": "number",
+                "minimum": 0,
+                "description": "每 1M input tokens 价格"
+              },
+              "cachedInputPer1M": {
+                "type": "number",
+                "minimum": 0,
+                "description": "每 1M cached input tokens 价格"
+              },
+              "outputPer1M": {
+                "type": "number",
+                "minimum": 0,
+                "description": "每 1M output tokens 价格"
+              }
+            },
+            "required": ["inputPer1M", "outputPer1M"],
+            "additionalProperties": false
+          }
+        },
+        "advisory": {
+          "type": "object",
+          "description": "advisory 告警配置",
+          "properties": {
+            "unit": {
+              "type": "string",
+              "enum": ["wall_clock_ms", "cost", "uncached_input_tokens", "output_tokens", "llm_calls"],
+              "description": "告警单位"
+            },
+            "threshold": {
+              "type": "number",
+              "minimum": 0,
+              "description": "告警阈值"
+            }
+          },
+          "required": ["unit", "threshold"],
+          "additionalProperties": false
         }
-      }
+      },
+      "additionalProperties": false
     },
     "security": {
       "type": "object",

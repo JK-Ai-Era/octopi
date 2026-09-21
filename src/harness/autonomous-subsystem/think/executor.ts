@@ -183,10 +183,16 @@ export class ThinkExecutor {
             lastContent = typeof event.message.content === 'string' ? event.message.content : '';
           }
           if (event.type === 'turn_end' && event.usage) {
+            const u = event.usage;
             tokenUsage = {
-              prompt: event.usage.promptTokens ?? 0,
-              completion: event.usage.completionTokens ?? 0,
-              total: event.usage.totalTokens ?? 0,
+              prompt:
+                u.inputReportedTokens ??
+                u.inputUncachedTokens + u.inputCachedTokens + u.inputCacheWriteTokens,
+              completion: u.outputTokens,
+              total:
+                (u.inputReportedTokens ??
+                  u.inputUncachedTokens + u.inputCachedTokens + u.inputCacheWriteTokens) +
+                u.outputTokens,
             };
           }
         }

@@ -46,7 +46,7 @@ import type { SessionStore } from './core/interfaces/session-store.js';
 import type { SessionData } from './harness/session-types.js';
 import type { SecurityGuardConfig } from './core/security-guard.js';
 import { validateConfigOrThrow } from './config-schema.js';
-import { applyBudgetMaxTimeMs, detectConfigMigrations } from './config-migrations.js';
+import { applyLegacyBudget, detectConfigMigrations } from './config-migrations.js';
 import { getOctopiHome } from './init.js';
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve, join } from 'node:path';
@@ -185,39 +185,59 @@ export interface ChannelConfig {
 
 
 
-// ── Budget 配置（octopi.json 形状）──
+// ── Budget Policy 配置（octopi.json 形状）──
 
 /**
- * BudgetJsonConfig — octopi.json 中的 budget 字段形状
+ * BudgetPolicyJsonConfig — octopi.json 中的 budgetPolicy 字段
  *
- * 资源 soft/hard 总闸。与 runGuard 组合（非替代）：
- * - budget：token / wall-clock 硬顶；可选 soft + 进展续租
- * - runGuard：行为监督（continue/recover/stop）
- *
- * 注意：与 harness/budget 的 `IterationBudgetConfig`（实现配置）同结构但不同名。
- * 主轴是 token + wall-clock；maxIterations 仅显式配置时硬停（默认不设）。
+ * 见 arch/budget-redesign.md：
+ * - 默认 **无** nominal token hard（Σ nominalTotalTokens 不作为出厂熔断）
+ * - P0：仅 wall-clock 安全阀 + 可显式 iteration/tool 上限
+ * - P2：控制梯配置（wrap-up 策略）
+ * - P3：扩展 usd / uncached 等 opt-in 单位；键名仅 budgetPolicy（无 budget）
  */
-export interface BudgetJsonConfig {
-  /** 硬顶：最大 token 数（默认 2_000_000） */
-  maxTokens?: number;
-  /** 硬顶：最大运行时间毫秒（默认 6h） */
+export interface BudgetPolicyJsonConfig {
+  /** 安全阀：最大运行时间毫秒（默认 6h） */
   maxWallClockMs?: number;
-  /** soft：token 触达（默认约 hard 的 20%） */
-  softTokens?: number;
-  /** soft：时间触达（默认约 hard 的 35%） */
-  softWallClockMs?: number;
-  /** 最大迭代次数。仅显式设置时硬停；默认不设（长任务不靠 iteration 卡死） */
+  /** 最大迭代次数。仅显式设置时硬停 */
   maxIterations?: number;
   /** 最大工具调用次数。仅显式设置时硬停 */
   maxToolCalls?: number;
-  /** soft 触达且有进展时自动续租（默认 true） */
-  autoRenewOnProgress?: boolean;
-  /** 最大续租次数（默认 20） */
-  maxRenews?: number;
-  /** 续租 token 增量 */
-  renewGrantTokens?: number;
-  /** 续租时间增量（毫秒） */
-  renewGrantMs?: number;
+  // ── P2 控制梯配置 ──
+  /** Policy 触达时的行为：'stop' 立即停止 | 'wrap_up_then_stop' 先总结再停止（默认） */
+  onPolicyHit?: 'stop' | 'wrap_up_then_stop';
+  /** wrap-up 窗口的轮次数（默认 3） */
+  wrapUpTurns?: number;
+  /** context 轴 wrap-up 触发阈值比例（默认 0.85） */
+  contextWrapUpRatio?: number;
+  // ── P3 Policy 单位配置 ──
+  /** 预算单位配置（仅显式配置才启用 hard） */
+  units?: {
+    /** 最大花费（币种由 pricing 决定） */
+    maxCost?: number;
+    /** 最大 uncached input tokens */
+    maxUncachedInputTokens?: number;
+    /** 最大 output tokens */
+    maxOutputTokens?: number;
+    /** 最大 LLM 调用次数 */
+    maxLlmCalls?: number;
+  };
+  /** 模型定价（用于 cost 估算，币种自定义） */
+  pricing?: Record<string, {
+    /** 每 1M input tokens 价格 */
+    inputPer1M: number;
+    /** 每 1M cached input tokens 价格（可选） */
+    cachedInputPer1M?: number;
+    /** 每 1M output tokens 价格 */
+    outputPer1M: number;
+  }>;
+  /** advisory 告警配置 */
+  advisory?: {
+    /** 告警单位 */
+    unit: 'wall_clock_ms' | 'cost' | 'uncached_input_tokens' | 'output_tokens' | 'llm_calls';
+    /** 告警阈值 */
+    threshold: number;
+  };
 }
 
 // ── RunGuard 配置（octopi.json 形状）──
@@ -617,8 +637,8 @@ export interface HarnessConfig {
   defaults?: Defaults;
   /** Plugin 配置 */
   plugins?: PluginConfig;
-  /** 资源预算（token/time soft-hard；与 runGuard 组合，非替代） */
-  budget?: BudgetJsonConfig;
+  /** Run 安全阀 / 策略（budgetPolicy；无默认 token hard） */
+  budgetPolicy?: BudgetPolicyJsonConfig;
   /** 过程监督配置（行为监督；与 budget 组合） */
   runGuard?: RunGuardJsonConfig;
   /** 激活宿主（long-lived；Schedule/Escalate 等） */
@@ -942,8 +962,11 @@ export function loadConfig(configPath?: string): NormalizedHarnessConfig {
       const hint = finding.hint ? ` ${finding.hint}` : '';
       console.warn(`[config] ${finding.message}.${hint}`);
     }
-    // 运行时仅对 budget 做内存迁移，保持历史行为；supervisor 等不自动改写
-    applyBudgetMaxTimeMs(raw as Record<string, unknown>);
+    // 运行时内存迁移：legacy budget → budgetPolicy（丢弃 spend/soft）
+    applyLegacyBudget(raw as Record<string, unknown>);
+    if (raw && typeof raw === 'object' && 'budget' in (raw as object)) {
+      delete (raw as Record<string, unknown>).budget;
+    }
   }
 
   // Zod schema 校验（结构化错误信息）
@@ -1009,7 +1032,7 @@ export function toGatewayConfig(config: NormalizedHarnessConfig): GatewayConfig 
     session: config.session ? { dmScope: config.session.dmScope } : undefined,
     toolIsolation: config.toolIsolation,
     sessionAcl: config.sessionAcl,
-    budget: config.budget,
+    budgetPolicy: config.budgetPolicy,
     contextAssembler: config.context?.contextAssembler ?? config.contextAssembler,
     context: config.context,
     constitution: config.context?.constitution ?? config.constitution,

@@ -1,11 +1,11 @@
 /**
- * Budget 模块 — ResourceBudget 资源 soft/hard 约束
+ * Budget 模块 — BudgetPolicyEngine 安全阀（wall-clock / 显式 iteration·tool 上限）
  *
- * harness 非领域模块。与 RunGuard 组合：Budget 管资源总闸，Guard 管行为跑飞。
+ * 见 arch/budget-redesign.md：默认不做 nominal token hard；Policy 账本另层。
  */
-export { IterationBudget, DEFAULT_BUDGET } from './budget.js';
+export { BudgetPolicyEngine, DEFAULT_BUDGET } from './budget.js';
 export type {
-  IterationBudgetConfig,
+  BudgetPolicyConfig,
   BudgetStatus,
   BudgetReport,
   BudgetEvaluation,

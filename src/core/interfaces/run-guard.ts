@@ -2,7 +2,7 @@
  * RunGuard — 过程监督接口
  *
  * 与 ResourceBudget 组合（非替代）：
- * - Budget：每轮资源 soft/hard（token / wall-clock）
+ * - Budget：每轮资源 hard（wall-clock / iteration / tool_calls）
  * - RunGuard：周期性行为监督（continue / recover / stop）
  *
  * 设计原则：
@@ -68,8 +68,8 @@ export interface CheckpointContext {
   iteration: number;
   /** 总工具调用数 */
   totalToolCalls: number;
-  /** 总 token 消耗 */
-  totalTokens: number;
+  /** 诊断：名义 token 总量（Σ nominal）；禁止作为 hard 单位 */
+  nominalTotalTokens: number;
   /** 已运行时间（毫秒） */
   elapsedMs: number;
   /** 最近几轮的摘要 */

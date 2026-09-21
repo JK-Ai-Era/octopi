@@ -22,7 +22,8 @@ export interface AgentStats {
   totalEvents: number;
   totalExecutions: number;
   totalErrors: number;
-  totalTokensUsed: number;
+  /** 诊断：名义 token 总量（Σ nominal） */
+  nominalTokensUsed: number;
   startTime: number;
   lastActiveTime: number;
 }

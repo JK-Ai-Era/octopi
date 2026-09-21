@@ -90,6 +90,8 @@ export interface LoopToolResult {
    * `agent_end(reason='should_stop')` 干净结束。
    */
   terminate?: boolean;
+  /** Summary LLM 调用的 usage（用于 UsageLedger 归因） */
+  summaryUsage?: import('../core/types/turn.js').TokenUsage;
 }
 
 // ============================================================

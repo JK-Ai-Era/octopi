@@ -1,19 +1,20 @@
 /**
- * ResourceBudget（演进自 IterationBudget）— 资源 soft/hard 约束
+ * BudgetPolicyEngine — Run 级资源安全阀（P5 正式定名）
  *
- * 职责：与 RunGuard 组合（非替代）。
- * - hard：token / wall-clock 绝对总闸（iteration/toolCalls 仅显式配置时硬停）
- * - soft：触达不杀；进展良好可静默续租，否则交由 Guard
+ * 地位：harness 非领域模块。见 arch/budget-redesign.md。
  *
- * 领域口径：harness 非领域模块，经 ReliabilityHarness 注入。
+ * P0 语义（已评审）：
+ * - 出厂 **不** 因 Σ nominalTotalTokens（nominal spend）停止 Run
+ * - soft / 续租 / maxTokens 硬顶已删除
+ * - 默认仅 wall-clock 安全阀（6h，可配）
+ * - maxIterations / maxToolCalls 仅显式配置时硬停
+ * - 成本/配额策略见后续 budgetPolicy（P3）；账本见 UsageLedger（P1）
  */
-
-import type { EventBus } from '../../core/primitives/event-bus.js';
 
 // ── 配置 ──
 
-/** 预算配置（实现侧；JSON 形状见 config.BudgetJsonConfig） */
-export interface IterationBudgetConfig {
+/** Run 安全阀配置（实现侧；JSON 见 config.BudgetPolicyJsonConfig） */
+export interface BudgetPolicyConfig {
   /**
    * 最大迭代次数。仅当显式设置时作为硬停。
    * 默认省略：长任务不靠 iteration 卡死；行为跑飞由 RunGuard 负责。
@@ -21,137 +22,87 @@ export interface IterationBudgetConfig {
   maxIterations?: number;
   /** 最大工具调用次数。仅当显式设置时作为硬停。 */
   maxToolCalls?: number;
-  /** 硬顶：最大 token 数（主轴） */
-  maxTokens: number;
-  /** 硬顶：最大 wall-clock（毫秒，主轴） */
+  /** 硬顶：最大 wall-clock（毫秒）。出厂默认见 DEFAULT_BUDGET。 */
   maxWallClockMs: number;
-
-  /** soft：token 触达（默认约 hard 的 20%） */
-  softTokens?: number;
-  /** soft：时间触达（默认约 hard 的 35%） */
-  softWallClockMs?: number;
-
-  /** soft 触达且 hasProgress 时自动抬升 soft（默认 true） */
-  autoRenewOnProgress?: boolean;
-  /** 续租 token 增量（默认 softTokens 的一半） */
-  renewGrantTokens?: number;
-  /** 续租时间增量（毫秒，默认 softWallClockMs 的一半） */
-  renewGrantMs?: number;
-  /** 最大续租次数（默认 20） */
-  maxRenews?: number;
 }
 
-/** 预算状态（兼容旧字符串语义；soft 为新增） */
-export type BudgetStatus =
-  | 'ok'
-  | 'soft'
-  | 'iteration_limit'
-  | 'tool_call_limit'
-  | 'token_limit'
-  | 'timeout';
+
+
+/** 预算状态（无 soft；tokens 轴已移除） */
+export type BudgetStatus = 'ok' | 'iteration_limit' | 'tool_call_limit' | 'timeout';
 
 /** 评估结果 */
 export interface BudgetEvaluation {
-  status: 'ok' | 'soft' | 'hard';
-  /** hard/soft 原因 */
-  reason?: 'tokens' | 'wall_clock' | 'iteration' | 'tool_calls';
-  /** 兼容旧 BudgetStatus */
+  status: 'ok' | 'hard';
+  reason?: 'wall_clock' | 'iteration' | 'tool_calls';
   legacyStatus: BudgetStatus;
   report: BudgetReport;
 }
 
-/** 预算消耗报告 */
+/** 预算消耗报告（观测用；nominal tokens 不参与 hard） */
 export interface BudgetReport {
   status: BudgetStatus;
   iterations: number;
   toolCalls: number;
-  totalTokens: number;
+  /** 诊断累计（Σ nominalTotalTokens）；**禁止**作为默认 hard 单位 */
+  nominalTokens: number;
   elapsedMs: number;
-  renews: number;
   remaining: {
     iterations: number | null;
     toolCalls: number | null;
-    tokens: number;
-    wallClockMs: number;
-  };
-  soft: {
-    tokens: number;
     wallClockMs: number;
   };
   hard: {
-    tokens: number;
     wallClockMs: number;
+    iterations: number | null;
+    toolCalls: number | null;
   };
 }
 
 // ── 默认配置 ──
 
-export const DEFAULT_BUDGET: IterationBudgetConfig = {
-  // 主轴 hard：偏松，避免误伤长任务；部署可在 octopi.json budget 覆盖
-  maxTokens: 2_000_000,
+export const DEFAULT_BUDGET: BudgetPolicyConfig = {
+  // 安全阀：防挂死；非成本模型
   maxWallClockMs: 6 * 3_600_000, // 6h
-  // iteration/toolCalls 默认不硬停
-  autoRenewOnProgress: true,
-  maxRenews: 20,
 };
 
 // ── 实现 ──
 
 /**
- * ResourceBudget
+ * BudgetPolicyEngine — Run 级资源安全阀
  *
- * 每轮由 runAgentWithReliability 检查；消费 token 须先 consumeTokens。
+ * 每轮由 runAgentWithReliability 检查。
+ * P5 正式定名；旧 IterationBudget / RunBudget 已删除，无别名。
  */
-export class IterationBudget {
-  private config: Required<Pick<IterationBudgetConfig, 'maxTokens' | 'maxWallClockMs'>> &
-    IterationBudgetConfig & {
-      autoRenewOnProgress: boolean;
-      maxRenews: number;
-    };
-  private softTokens: number;
-  private softWallClockMs: number;
-  private eventBus: EventBus;
+export class BudgetPolicyEngine {
+  private config: BudgetPolicyConfig;
   private iterations = 0;
   private toolCalls = 0;
-  private totalTokens = 0;
-  private renews = 0;
+  private nominalTokens = 0;
   private startTime: number;
 
-  constructor(eventBus: EventBus, config?: Partial<IterationBudgetConfig>) {
-    const merged = { ...DEFAULT_BUDGET, ...config };
-    this.config = {
-      ...merged,
-      autoRenewOnProgress: merged.autoRenewOnProgress ?? true,
-      maxRenews: merged.maxRenews ?? 20,
-    };
-    this.eventBus = eventBus;
-    this.softTokens = merged.softTokens ?? Math.floor(merged.maxTokens * 0.2);
-    this.softWallClockMs = merged.softWallClockMs ?? Math.floor(merged.maxWallClockMs * 0.35);
+  constructor(config?: Partial<BudgetPolicyConfig>) {
+    this.config = { ...DEFAULT_BUDGET, ...config };
     this.startTime = Date.now();
   }
 
-  /** 重置计数（Gateway 长驻每请求调用）；保留配置与续租策略 */
+  /** 重置计数（Gateway 长驻每请求调用）；保留配置 */
   reset(): void {
     this.iterations = 0;
     this.toolCalls = 0;
-    this.totalTokens = 0;
-    this.renews = 0;
+    this.nominalTokens = 0;
     this.startTime = Date.now();
-    // soft 恢复为配置初值
-    this.softTokens = this.config.softTokens ?? Math.floor(this.config.maxTokens * 0.2);
-    this.softWallClockMs =
-      this.config.softWallClockMs ?? Math.floor(this.config.maxWallClockMs * 0.35);
   }
 
   /**
-   * 仅检查 hard（不触发 soft 续租）。
-   * 用于 turn_end 在 hasProgress 尚未更新时的资源总闸。
+   * 仅检查 hard（无 soft 路径）。
    */
-  checkHardOnly(): { status: 'ok' | 'hard'; reason?: BudgetEvaluation['reason']; report: BudgetReport } {
+  checkHardOnly(): {
+    status: 'ok' | 'hard';
+    reason?: BudgetEvaluation['reason'];
+    report: BudgetReport;
+  } {
     const elapsedMs = Date.now() - this.startTime;
-    if (this.totalTokens >= this.config.maxTokens) {
-      return { status: 'hard', reason: 'tokens', report: this.buildReport('token_limit') };
-    }
     if (elapsedMs >= this.config.maxWallClockMs) {
       return { status: 'hard', reason: 'wall_clock', report: this.buildReport('timeout') };
     }
@@ -173,59 +124,28 @@ export class IterationBudget {
   }
 
   /**
-   * 评估预算
+   * 评估预算（与 checkHardOnly 同 hard 语义；hasProgress 不再触发续租）
    *
-   * @param hasProgress - 当前是否有实质进展（用于 soft 续租）
+   * @param _hasProgress - 保留参数位；P0 起不参与裁决
    */
-  evaluate(hasProgress = true): BudgetEvaluation {
-    const elapsedMs = Date.now() - this.startTime;
-
-    // hard
-    if (this.totalTokens >= this.config.maxTokens) {
-      return this.finish('hard', 'tokens', 'token_limit');
-    }
-    if (elapsedMs >= this.config.maxWallClockMs) {
-      return this.finish('hard', 'wall_clock', 'timeout');
-    }
-    if (
-      this.config.maxIterations !== undefined &&
-      this.config.maxIterations > 0 &&
-      this.iterations >= this.config.maxIterations
-    ) {
-      return this.finish('hard', 'iteration', 'iteration_limit');
-    }
-    if (
-      this.config.maxToolCalls !== undefined &&
-      this.config.maxToolCalls > 0 &&
-      this.toolCalls >= this.config.maxToolCalls
-    ) {
-      return this.finish('hard', 'tool_calls', 'tool_call_limit');
-    }
-
-    // soft
-    if (this.totalTokens >= this.softTokens || elapsedMs >= this.softWallClockMs) {
-      if (this.config.autoRenewOnProgress && hasProgress && this.renews < this.config.maxRenews) {
-        this.renew(elapsedMs);
-        return this.finish('ok', undefined, 'ok');
-      }
-      const reason: 'tokens' | 'wall_clock' =
-        this.totalTokens >= this.softTokens ? 'tokens' : 'wall_clock';
-      return this.finish('soft', reason, 'soft');
-    }
-
-    return this.finish('ok', undefined, 'ok');
+  evaluate(_hasProgress = true): BudgetEvaluation {
+    const hard = this.checkHardOnly();
+    return {
+      status: hard.status,
+      reason: hard.reason,
+      legacyStatus: hard.report.status,
+      report: hard.report,
+    };
   }
 
   /**
-   * 兼容旧 API：返回字符串状态。
-   * soft 未续租时返回 'soft'；硬限返回旧 reason 字符串。
+   * 兼容 API：返回字符串状态。
    */
-  check(hasProgress = true): BudgetStatus {
-    return this.evaluate(hasProgress).legacyStatus;
+  check(_hasProgress = true): BudgetStatus {
+    return this.checkHardOnly().report.status;
   }
 
-  // 注：原 checkAndEmit() 已删除。用户可见停止走 reliability yield
-  // `budget_exceeded` → SessionAwareRunner 桥接为 EventBus `budget.exceeded`。
+  // 注：用户可见停止走 reliability yield `budget_exceeded` → Runner 桥接。
 
   recordIteration(): void {
     this.iterations++;
@@ -235,48 +155,17 @@ export class IterationBudget {
     this.toolCalls += n;
   }
 
+  /** 仅记账/诊断；**不**触发 hard */
   consumeTokens(tokens: number): void {
-    if (tokens > 0) this.totalTokens += tokens;
+    if (tokens > 0) this.nominalTokens += tokens;
   }
 
   report(): BudgetReport {
-    return this.evaluate(true).report;
+    return this.checkHardOnly().report;
   }
 
-  getConfig(): IterationBudgetConfig {
+  getConfig(): BudgetPolicyConfig {
     return { ...this.config };
-  }
-
-  // ── 内部 ──
-
-  private renew(elapsedMs: number): void {
-    const grantTokens = this.config.renewGrantTokens ?? Math.floor(this.softTokens * 0.5);
-    const grantMs = this.config.renewGrantMs ?? Math.floor(this.softWallClockMs * 0.5);
-    this.softTokens = this.totalTokens + grantTokens;
-    this.softWallClockMs = elapsedMs + grantMs;
-    this.renews++;
-    this.eventBus.emit({
-      type: 'budget.renewed',
-      timestamp: Date.now(),
-      data: {
-        renews: this.renews,
-        softTokens: this.softTokens,
-        softWallClockMs: this.softWallClockMs,
-      },
-    });
-  }
-
-  private finish(
-    status: 'ok' | 'soft' | 'hard',
-    reason: BudgetEvaluation['reason'],
-    legacyStatus: BudgetStatus,
-  ): BudgetEvaluation {
-    return {
-      status,
-      reason,
-      legacyStatus,
-      report: this.buildReport(legacyStatus),
-    };
   }
 
   private buildReport(status: BudgetStatus): BudgetReport {
@@ -285,9 +174,8 @@ export class IterationBudget {
       status,
       iterations: this.iterations,
       toolCalls: this.toolCalls,
-      totalTokens: this.totalTokens,
+      nominalTokens: this.nominalTokens,
       elapsedMs,
-      renews: this.renews,
       remaining: {
         iterations:
           this.config.maxIterations !== undefined
@@ -297,17 +185,14 @@ export class IterationBudget {
           this.config.maxToolCalls !== undefined
             ? Math.max(0, this.config.maxToolCalls - this.toolCalls)
             : null,
-        tokens: Math.max(0, this.config.maxTokens - this.totalTokens),
         wallClockMs: Math.max(0, this.config.maxWallClockMs - elapsedMs),
       },
-      soft: {
-        tokens: this.softTokens,
-        wallClockMs: this.softWallClockMs,
-      },
       hard: {
-        tokens: this.config.maxTokens,
         wallClockMs: this.config.maxWallClockMs,
+        iterations: this.config.maxIterations ?? null,
+        toolCalls: this.config.maxToolCalls ?? null,
       },
     };
   }
 }
+

@@ -43,9 +43,9 @@
 - `run-scope.ts` — RunScope ALS（I1；含 `runId` / toolRuntime / agentRevision）
 - `index.ts` — Harness 层统一导出
 - `types/` — Harness 层共享类型
-- `budget/` — IterationBudget 资源约束
+- `budget/` — BudgetPolicyEngine 安全阀（wall-clock；无默认 token hard，见 arch/budget-redesign.md）
+- `accounting/` — UsageLedger + SessionLedger 账本（P1/P4）
 - `process/` — 进程管理
-- `resources/` — 资源管理器
 
 ## 依赖规则
 

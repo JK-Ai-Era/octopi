@@ -1,5 +1,5 @@
 /**
- * StrategyRouter + ResourceManager 测试
+ * StrategyRouter 测试
  */
 
 import { describe, it, expect } from 'vitest';
@@ -7,7 +7,6 @@ import {
   RuleTaskClassifier,
   DefaultStrategyRouter,
 } from '../../src/harness/orchestration/strategy/index.js';
-import { ResourceManager } from '../../src/harness/resources/index.js';
 
 // ── RuleTaskClassifier 测试 ──
 
@@ -91,91 +90,5 @@ describe('DefaultStrategyRouter', () => {
   it('listStrategies 返回所有策略', () => {
     const strategies = router.listStrategies();
     expect(strategies.length).toBe(6);
-  });
-});
-
-// ── ResourceManager 测试 ──
-
-describe('ResourceManager', () => {
-  describe('Token 预算', () => {
-    it('正常请求允许通过', () => {
-      const rm = new ResourceManager({ tokenBudget: { perCall: 1000 } });
-      expect(rm.checkTokenBudget(500).allowed).toBe(true);
-    });
-
-    it('超过单次限制被拒绝', () => {
-      const rm = new ResourceManager({ tokenBudget: { perCall: 1000 } });
-      const result = rm.checkTokenBudget(2000);
-      expect(result.allowed).toBe(false);
-      expect(result.reason).toContain('per-call');
-    });
-
-    it('超过总预算被拒绝', () => {
-      const rm = new ResourceManager({ tokenBudget: { total: 5000 } });
-      rm.recordTokenUsage(3000, 0, 'gpt-4');
-      const result = rm.checkTokenBudget(3000);
-      expect(result.allowed).toBe(false);
-      expect(result.reason).toContain('total');
-    });
-  });
-
-  describe('速率限制', () => {
-    it('正常请求允许通过', () => {
-      const rm = new ResourceManager({ rateLimit: { requestsPerMinute: 10, maxConcurrent: 3 } });
-      expect(rm.checkRateLimit().allowed).toBe(true);
-    });
-
-    it('并发超限被拒绝', () => {
-      const rm = new ResourceManager({ rateLimit: { maxConcurrent: 2 } });
-      rm.acquireRequest();
-      rm.acquireRequest();
-      const result = rm.checkRateLimit();
-      expect(result.allowed).toBe(false);
-      expect(result.reason).toContain('concurrent');
-    });
-
-    it('release 后可以继续请求', () => {
-      const rm = new ResourceManager({ rateLimit: { maxConcurrent: 1 } });
-      rm.acquireRequest();
-      expect(rm.checkRateLimit().allowed).toBe(false);
-      rm.releaseRequest();
-      expect(rm.checkRateLimit().allowed).toBe(true);
-    });
-  });
-
-  describe('成本追踪', () => {
-    it('记录成本', () => {
-      const rm = new ResourceManager({
-        pricing: { 'gpt-4': { inputPer1M: 30, outputPer1M: 60 } },
-      });
-      rm.recordTokenUsage(1000, 500, 'gpt-4');
-      const stats = rm.stats();
-      expect(stats.cost.total).toBeCloseTo(0.06); // 1000*30/1M + 500*60/1M = 0.03 + 0.03
-    });
-
-    it('按模型统计成本', () => {
-      const rm = new ResourceManager({
-        pricing: {
-          'gpt-4': { inputPer1M: 30, outputPer1M: 60 },
-          'gpt-3.5': { inputPer1M: 1, outputPer1M: 2 },
-        },
-      });
-      rm.recordTokenUsage(1000, 0, 'gpt-4');
-      rm.recordTokenUsage(1000, 0, 'gpt-3.5');
-      const stats = rm.stats();
-      expect(stats.cost.byModel['gpt-4']).toBeCloseTo(0.03);
-      expect(stats.cost.byModel['gpt-3.5']).toBeCloseTo(0.001);
-    });
-  });
-
-  describe('统计', () => {
-    it('stats 返回完整统计', () => {
-      const rm = new ResourceManager();
-      rm.recordTokenUsage(100, 50, 'test');
-      rm.acquireRequest();
-      const stats = rm.stats();
-      expect(stats.token.total).toBe(150);
-      expect(stats.rate.concurrent).toBe(1);
-    });
   });
 });

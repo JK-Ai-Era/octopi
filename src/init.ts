@@ -189,7 +189,8 @@ function generateDefaultConfig(homeDir: string, agentId: string = 'default'): ob
     plugins: {
       loadPaths: [join(homeDir, 'plugins')],
     },
-    // budget 使用默认值（1000 迭代/5000 工具调用/1M tokens/10h），无需显式配置
+    // budgetPolicy：默认仅 wall-clock 安全阀（6h）；无 nominal token hard（arch/budget-redesign.md）
+    // behavior → runGuard；context → capabilities summary/compact；成本策略 P3 budgetPolicy.units
     security: {
       preset: 'production',
     },

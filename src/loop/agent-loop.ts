@@ -112,7 +112,7 @@ export async function* agentLoop(
   let currentContext = context;
   let currentModel = model;
   // 最近一次 LLM 调用的 usage。每次调用发送完整上下文，所以最新值即为当前上下文大小。
-  // 注意：不应累加 promptTokens（那会变成输入 token 总消耗，而非上下文大小）。
+  // 注意：不应累加 reported prompt（那会变成输入 token 总消耗，而非上下文大小）。
   let lastResponseUsage: TokenUsage | undefined;
 
   // 已中止：不发 agent_start，直接终态

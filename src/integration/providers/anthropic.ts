@@ -25,6 +25,7 @@ import type {
   LLMStreamChunk,
 } from '../../core/interfaces/model-provider.js';
 import type { ToolCall, ModelInfo } from '../../core/types.js';
+import { tokenUsageFromAnthropic } from './usage.js';
 
 export interface AnthropicProviderConfig {
   name?: string;
@@ -197,7 +198,7 @@ export class AnthropicProvider implements ModelProvider {
     let currentToolName = '';
     let toolArgsBuffer = '';
     let toolCallIndex = 0;
-    let streamUsage: { promptTokens: number; completionTokens: number; totalTokens: number } | undefined;
+    let streamUsage: import('../../core/types/turn.js').TokenUsage | undefined;
     let finishReason: LLMResponse['finishReason'] | undefined;
 
     // 空闲超时
@@ -261,11 +262,7 @@ export class AnthropicProvider implements ModelProvider {
               // Anthropic sends final usage in message_delta
               const usage = data.usage as Record<string, number> | undefined;
               if (usage) {
-                streamUsage = {
-                  promptTokens: usage.input_tokens ?? 0,
-                  completionTokens: usage.output_tokens ?? 0,
-                  totalTokens: (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0),
-                };
+                streamUsage = tokenUsageFromAnthropic(usage);
               }
               const stopDelta = data.delta as Record<string, unknown> | undefined;
               if (stopDelta?.stop_reason) {
@@ -462,11 +459,7 @@ export class AnthropicProvider implements ModelProvider {
     }
 
     if (usage) {
-      result.usage = {
-        promptTokens: usage.input_tokens ?? 0,
-        completionTokens: usage.output_tokens ?? 0,
-        totalTokens: (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0),
-      };
+      result.usage = tokenUsageFromAnthropic(usage);
     }
 
     return result;

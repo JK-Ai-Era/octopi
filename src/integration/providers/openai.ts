@@ -24,6 +24,7 @@ import type {
   LLMStreamChunk,
 } from '../../core/interfaces/model-provider.js';
 import type { ToolCall, ModelInfo, TokenUsage } from '../../core/types.js';
+import { tokenUsageFromOpenAi } from './usage.js';
 
 /**
  * OpenAI Provider 配置
@@ -375,11 +376,7 @@ export class OpenAIProvider implements ModelProvider {
     return {
       content: message.content ?? '',
       toolCalls,
-      usage: data.usage ? {
-        promptTokens: data.usage.prompt_tokens,
-        completionTokens: data.usage.completion_tokens,
-        totalTokens: data.usage.total_tokens,
-      } : { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+      usage: data.usage ? tokenUsageFromOpenAi(data.usage) : undefined,
       model: data.model ?? 'unknown',
       finishReason: this.mapFinishReason(choice.finish_reason),
     };
@@ -439,11 +436,7 @@ export class OpenAIProvider implements ModelProvider {
 
       // OpenAI streaming: usage appears in a dedicated chunk (often the last one before [DONE])
       if (parsed.usage) {
-        lastUsage.current = {
-          promptTokens: parsed.usage.prompt_tokens ?? 0,
-          completionTokens: parsed.usage.completion_tokens ?? 0,
-          totalTokens: parsed.usage.total_tokens ?? 0,
-        };
+        lastUsage.current = tokenUsageFromOpenAi(parsed.usage);
       }
 
       const choice = parsed.choices?.[0];

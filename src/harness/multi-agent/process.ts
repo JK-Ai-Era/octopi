@@ -32,7 +32,7 @@ export interface AgentProcessResult {
   /** 完整消息历史（含工具调用） */
   messages: Message[];
   /** 使用统计 */
-  usage?: { promptTokens: number; completionTokens: number; totalTokens: number };
+  usage?: import('../../core/types/turn.js').TokenUsage;
   /** 运行时长（毫秒） */
   durationMs: number;
 }

@@ -79,36 +79,34 @@ export const ChannelConfigSchema = z.object({
   corsOrigins: z.array(z.string()).optional(),
 });
 
-// ── Budget 配置 Schema ──
+// ── Budget Policy 配置 Schema ──
+// arch/budget-redesign.md：无 maxTokens/soft；键名仅 budgetPolicy
 
-export const BudgetJsonConfigSchema = z.object({
-  maxTokens: z.number().positive().optional(),
+export const BudgetPolicyJsonConfigSchema = z.object({
   maxWallClockMs: z.number().positive().optional(),
-  softTokens: z.number().positive().optional(),
-  softWallClockMs: z.number().positive().optional(),
   maxIterations: z.number().positive().optional(),
   maxToolCalls: z.number().positive().optional(),
-  autoRenewOnProgress: z.boolean().optional(),
-  maxRenews: z.number().int().positive().optional(),
-  renewGrantTokens: z.number().positive().optional(),
-  renewGrantMs: z.number().positive().optional(),
-}).refine(
-  (data) => {
-    if (data.softTokens !== undefined && data.maxTokens !== undefined) {
-      return data.softTokens <= data.maxTokens;
-    }
-    return true;
-  },
-  { message: 'softTokens must be <= maxTokens' },
-).refine(
-  (data) => {
-    if (data.softWallClockMs !== undefined && data.maxWallClockMs !== undefined) {
-      return data.softWallClockMs <= data.maxWallClockMs;
-    }
-    return true;
-  },
-  { message: 'softWallClockMs must be <= maxWallClockMs' },
-);
+  // P2 控制梯配置
+  onPolicyHit: z.enum(['stop', 'wrap_up_then_stop']).optional(),
+  wrapUpTurns: z.number().positive().optional(),
+  contextWrapUpRatio: z.number().min(0).max(1).optional(),
+  // P3 Policy 单位配置
+  units: z.object({
+    maxCost: z.number().positive().optional(),
+    maxUncachedInputTokens: z.number().positive().optional(),
+    maxOutputTokens: z.number().positive().optional(),
+    maxLlmCalls: z.number().positive().optional(),
+  }).optional(),
+  pricing: z.record(z.string(), z.object({
+    inputPer1M: z.number().positive(),
+    cachedInputPer1M: z.number().positive().optional(),
+    outputPer1M: z.number().positive(),
+  })).optional(),
+  advisory: z.object({
+    unit: z.enum(['wall_clock_ms', 'cost', 'uncached_input_tokens', 'output_tokens', 'llm_calls']),
+    threshold: z.number().positive(),
+  }).optional(),
+});
 
 // ── RunGuard 配置 Schema ──
 
@@ -564,7 +562,7 @@ export const HarnessConfigSchema = z.object({
     contextWindow: z.number().positive().optional(),
   }).optional(),
   plugins: PluginConfigSchema.optional(),
-  budget: BudgetJsonConfigSchema.optional(),
+  budgetPolicy: BudgetPolicyJsonConfigSchema.optional(),
   runGuard: RunGuardJsonConfigSchema.optional(),
   agentRuntime: AgentRuntimeJsonConfigSchema.optional(),
   contextEngine: ContextEngineConfigSchema.optional(),

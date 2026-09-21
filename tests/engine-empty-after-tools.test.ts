@@ -10,6 +10,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
+import { makeTokenUsage } from '../src/core/types/turn.js';
 import { Agent } from '../src/harness/agent/agent.js';
 import { runAgentWithReliability } from '../src/harness/reliability/run-agent.js';
 import type { ReliabilityHarness } from '../src/harness/reliability/run-agent.js';
@@ -95,9 +96,9 @@ describe('Engine: empty response after tool execution', () => {
   it('should yield turn_end when model returns empty after tools', async () => {
     const provider = createSequentialProvider([
       // 模型返回 tool_call（无文本）
-      { content: '', toolCalls: [{ id: 'c1', name: 'shell', arguments: { command: 'ls' } }], usage: { promptTokens: 100, completionTokens: 5, totalTokens: 105 }, model: 'test', finishReason: 'tool_calls' },
+      { content: '', toolCalls: [{ id: 'c1', name: 'shell', arguments: { command: 'ls' } }], usage: makeTokenUsage({ promptTokens: 100, completionTokens: 5 }), model: 'test', finishReason: 'tool_calls' },
       // 工具执行后，模型返回空内容
-      { content: '', toolCalls: undefined, usage: { promptTokens: 200, completionTokens: 0, totalTokens: 200 }, model: 'test', finishReason: 'stop' },
+      { content: '', toolCalls: undefined, usage: makeTokenUsage({ promptTokens: 200, completionTokens: 0 }), model: 'test', finishReason: 'stop' },
     ]);
 
     const agent = new Agent({ model: provider, systemPrompt: 'sys', tools: createAgentTools() });
@@ -124,9 +125,9 @@ describe('Engine: empty response after tool execution', () => {
   it('should retry when model returns empty content (no tool_calls)', async () => {
     const provider = createSequentialProvider([
       // 第一次：空内容
-      { content: '', toolCalls: undefined, usage: { promptTokens: 100, completionTokens: 0, totalTokens: 100 }, model: 'test', finishReason: 'stop' },
+      { content: '', toolCalls: undefined, usage: makeTokenUsage({ promptTokens: 100, completionTokens: 0 }), model: 'test', finishReason: 'stop' },
       // 重试后：正常回复
-      { content: 'Here is the summary.', toolCalls: undefined, usage: { promptTokens: 100, completionTokens: 10, totalTokens: 110 }, model: 'test', finishReason: 'stop' },
+      { content: 'Here is the summary.', toolCalls: undefined, usage: makeTokenUsage({ promptTokens: 100, completionTokens: 10 }), model: 'test', finishReason: 'stop' },
     ]);
 
     const agent = new Agent({ model: provider, systemPrompt: 'sys' });
@@ -146,9 +147,9 @@ describe('Engine: empty response after tool execution', () => {
   it('should stop retrying after maxAttempts for empty response', async () => {
     const provider = createSequentialProvider([
       // 三次空内容
-      { content: '', toolCalls: undefined, usage: { promptTokens: 100, completionTokens: 0, totalTokens: 100 }, model: 'test', finishReason: 'stop' },
-      { content: '', toolCalls: undefined, usage: { promptTokens: 100, completionTokens: 0, totalTokens: 100 }, model: 'test', finishReason: 'stop' },
-      { content: '', toolCalls: undefined, usage: { promptTokens: 100, completionTokens: 0, totalTokens: 100 }, model: 'test', finishReason: 'stop' },
+      { content: '', toolCalls: undefined, usage: makeTokenUsage({ promptTokens: 100, completionTokens: 0 }), model: 'test', finishReason: 'stop' },
+      { content: '', toolCalls: undefined, usage: makeTokenUsage({ promptTokens: 100, completionTokens: 0 }), model: 'test', finishReason: 'stop' },
+      { content: '', toolCalls: undefined, usage: makeTokenUsage({ promptTokens: 100, completionTokens: 0 }), model: 'test', finishReason: 'stop' },
     ]);
 
     const agent = new Agent({ model: provider, systemPrompt: 'sys' });
@@ -165,11 +166,11 @@ describe('Engine: empty response after tool execution', () => {
   it('should retry empty response after tool calls', async () => {
     const provider = createSequentialProvider([
       // 模型返回 tool_call
-      { content: '', toolCalls: [{ id: 'c1', name: 'shell', arguments: { command: 'ls' } }], usage: { promptTokens: 100, completionTokens: 5, totalTokens: 105 }, model: 'test', finishReason: 'tool_calls' },
+      { content: '', toolCalls: [{ id: 'c1', name: 'shell', arguments: { command: 'ls' } }], usage: makeTokenUsage({ promptTokens: 100, completionTokens: 5 }), model: 'test', finishReason: 'tool_calls' },
       // 工具执行后模型返回空内容
-      { content: '', toolCalls: undefined, usage: { promptTokens: 200, completionTokens: 0, totalTokens: 200 }, model: 'test', finishReason: 'stop' },
+      { content: '', toolCalls: undefined, usage: makeTokenUsage({ promptTokens: 200, completionTokens: 0 }), model: 'test', finishReason: 'stop' },
       // 重试后正常回复
-      { content: 'Analysis complete.', toolCalls: undefined, usage: { promptTokens: 200, completionTokens: 10, totalTokens: 210 }, model: 'test', finishReason: 'stop' },
+      { content: 'Analysis complete.', toolCalls: undefined, usage: makeTokenUsage({ promptTokens: 200, completionTokens: 10 }), model: 'test', finishReason: 'stop' },
     ]);
 
     const agent = new Agent({ model: provider, systemPrompt: 'sys', tools: createAgentTools() });
@@ -201,7 +202,7 @@ describe('Engine: empty response after tool execution', () => {
       getModelInfo: () => null,
       async chat(request: LLMRequest): Promise<LLMResponse> {
         capturedRequests.push(request);
-        return { content: 'done', usage: { promptTokens: 100, completionTokens: 5, totalTokens: 105 }, model: 'test', finishReason: 'stop' };
+        return { content: 'done', usage: makeTokenUsage({ promptTokens: 100, completionTokens: 5 }), model: 'test', finishReason: 'stop' };
       },
       async *stream(request: LLMRequest): AsyncGenerator<LLMStreamChunk> {
         capturedRequests.push(request);
@@ -213,7 +214,7 @@ describe('Engine: empty response after tool execution', () => {
           // 第二次调用：返回文本
           yield { type: 'content', content: 'done' };
         }
-        yield { type: 'done', usage: { promptTokens: 100, completionTokens: 5, totalTokens: 105 } };
+        yield { type: 'done', usage: makeTokenUsage({ promptTokens: 100, completionTokens: 5 }) };
       },
       async isAvailable() { return true; },
     };

@@ -5,6 +5,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
+import { makeTokenUsage } from '../src/core/types/turn.js';
 import { OpenAIProvider } from '../src/integration/providers/openai.js';
 import { AnthropicProvider } from '../src/integration/providers/anthropic.js';
 import { loadConfig } from '../src/config.js';
@@ -13,7 +14,6 @@ import type { ModelProvider, LLMResponse } from '../src/core/interfaces/model-pr
 import type { RegisteredTool } from '../src/core/types.js';
 import { DefaultEventBus } from '../src/core/primitives/event-bus.js';
 import { DefaultSecurityGuard } from '../src/harness/security/default-security-guard.js';
-import { IterationBudget } from '../src/harness/budget/budget.js';
 import { DefaultContextEngine } from '../src/harness/context/default-context-engine.js';
 import { writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
@@ -280,11 +280,11 @@ describe('Agent model provider', () => {
       defaultModel,
       chat: vi.fn().mockResolvedValue({
         content: 'Hello', model: defaultModel ?? 'mock', finishReason: 'stop',
-        usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+        usage: makeTokenUsage({ promptTokens: 10, completionTokens: 5 }),
       } as LLMResponse),
       stream: async function* () {
         yield { type: 'content' as const, content: 'Hello' };
-        yield { type: 'done' as const, usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 } };
+        yield { type: 'done' as const, usage: makeTokenUsage({ promptTokens: 10, completionTokens: 5 }) };
       },
       isAvailable: vi.fn().mockResolvedValue(true),
       getModelInfo: vi.fn().mockReturnValue({ name: defaultModel ?? 'mock', contextWindow: 128000 }),

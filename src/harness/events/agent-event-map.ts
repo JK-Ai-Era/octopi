@@ -17,6 +17,9 @@ export interface AgentEventMap {
   'engine.end': { reason: string };
   'engine.error': { error: string; reason?: string };
   'iteration.start': Record<string, never>;
+  'llm.usage': {
+    usage: import('../../core/types/turn.js').TokenUsage;
+  };
   'turn.end': {
     content?: string;
     userText?: string;
@@ -25,11 +28,7 @@ export interface AgentEventMap {
     truncated?: boolean;
     stopped?: boolean;
     error?: boolean;
-    usage?: {
-      promptTokens: number;
-      completionTokens: number;
-      totalTokens: number;
-    };
+    usage?: import('../../core/types/turn.js').TokenUsage;
     contextTokens?: number;
     contextWindow?: number;
   };
@@ -49,13 +48,8 @@ export interface AgentEventMap {
 
   // ── 预算 / 过程监督 ──
   'budget.exceeded': {
-    reason: 'tokens' | 'wall_clock' | 'iteration' | 'tool_calls';
+    reason: 'wall_clock' | 'iteration' | 'tool_calls';
     report?: unknown;
-  };
-  'budget.renewed': {
-    renews: number;
-    softTokens: number;
-    softWallClockMs: number;
   };
   'run_guard.stopped': { reason: string; userMessage?: string };
   'run_guard.recovered': { reason: string; actions: string[] };
@@ -221,7 +215,6 @@ export const AgentEvents = {
   SECURITY_BEHAVIOR_BLOCKED: 'security.behavior_blocked',
 
   BUDGET_EXCEEDED: 'budget.exceeded',
-  BUDGET_RENEWED: 'budget.renewed',
   RUN_GUARD_STOPPED: 'run_guard.stopped',
   RUN_GUARD_RECOVERED: 'run_guard.recovered',
 

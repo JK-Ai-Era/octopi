@@ -3,6 +3,7 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
+import { makeTokenUsage } from '../src/core/types/turn.js';
 import { ObserverBridge } from '../src/integration/observability/observer-bridge.js';
 import { TraceCollector } from '../src/integration/observability/trace-collector.js';
 import { MetricsAggregator } from '../src/integration/observability/metrics.js';
@@ -128,7 +129,7 @@ describe('TraceCollector metrics integration', () => {
     // 模拟引擎事件流
     async function* mockEvents(): AsyncGenerator<AgentEvent> {
       yield { type: 'model.call.start', timestamp: Date.now(), data: { model: 'test' } };
-      yield { type: 'model.call.end', timestamp: Date.now(), data: { usage: { promptTokens: 100, completionTokens: 50 } } };
+      yield { type: 'model.call.end', timestamp: Date.now(), data: { usage: makeTokenUsage({ promptTokens: 100, completionTokens: 50 }) } };
       yield { type: 'tool.exec.start', timestamp: Date.now(), data: { toolName: 'file_read' } };
       yield { type: 'tool.exec.end', timestamp: Date.now(), data: { toolName: 'file_read', hasError: false } };
     }

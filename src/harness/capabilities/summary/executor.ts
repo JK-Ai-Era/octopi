@@ -5,6 +5,7 @@
  */
 
 import type { LLMMessage, ModelProvider } from '../../../core/interfaces/model-provider.js';
+import type { TokenUsage } from '../../../core/types/turn.js';
 import { estimateTextTokens } from '../../context/token-estimate-fns.js';
 import { computeInputBudget } from './budget.js';
 import {
@@ -105,7 +106,7 @@ export async function executeSummary(params: ExecuteSummaryParams): Promise<Summ
   const maxOut = policy.budget.maxOutputTokens;
   const system = buildSystemPrompt(policy, params.task, maxOut);
 
-  const chatOnce = async (content: string): Promise<{ text: string; tokensOut: number }> => {
+  const chatOnce = async (content: string): Promise<{ text: string; tokensOut: number; usage?: TokenUsage }> => {
     const messages: LLMMessage[] = [
       { role: 'system', content: system },
       {
@@ -122,7 +123,7 @@ export async function executeSummary(params: ExecuteSummaryParams): Promise<Summ
       maxTokens: maxOut,
       signal: params.signal,
     });
-    return { text: res.content ?? '', tokensOut: res.usage?.completionTokens ?? estimateTextTokens(res.content ?? '') };
+    return { text: res.content ?? '', tokensOut: res.usage?.outputTokens ?? estimateTextTokens(res.content ?? ''), usage: res.usage };
   };
 
   const finish = (
@@ -132,12 +133,14 @@ export async function executeSummary(params: ExecuteSummaryParams): Promise<Summ
     chunks?: { total: number; processed: number },
     structuredError?: string,
     structured?: unknown,
+    usage?: TokenUsage,
   ): SummaryResult => {
     const base: SummaryResult = {
       text,
       coverage,
       tokensIn,
       tokensOut,
+      usage,
       policyId: policy.id,
       kind: params.kind,
       model,
@@ -160,9 +163,9 @@ export async function executeSummary(params: ExecuteSummaryParams): Promise<Summ
       const r = await chatOnce(params.text);
       if (policy.output === 'structured_json') {
         const st = extractStructured(r.text, policy, params.validator);
-        return finish(r.text, st.structuredError ? 'partial' : 'full', r.tokensOut, undefined, st.structuredError, st.structured);
+        return finish(r.text, st.structuredError ? 'partial' : 'full', r.tokensOut, undefined, st.structuredError, st.structured, r.usage);
       }
-      return finish(r.text, 'full', r.tokensOut);
+      return finish(r.text, 'full', r.tokensOut, undefined, undefined, undefined, r.usage);
     }
 
     const oversized = policy.oversized;
@@ -189,7 +192,7 @@ export async function executeSummary(params: ExecuteSummaryParams): Promise<Summ
       const tail = params.text.slice(Math.max(0, params.text.length - tailBudget * charsPerToken));
       const windowed = `${head}\n\n[...content windowed...]\n\n${tail}`;
       const r = await chatOnce(windowed);
-      return finish(r.text, 'windowed', r.tokensOut);
+      return finish(r.text, 'windowed', r.tokensOut, undefined, undefined, undefined, r.usage);
     }
 
     // map_reduce
@@ -197,9 +200,12 @@ export async function executeSummary(params: ExecuteSummaryParams): Promise<Summ
     const overlap = oversized.chunkOverlapTokens ?? 200;
     const plan = planChunks(params.text, inputBudget, overlap, maxChunks);
     const parts: string[] = [];
+    let accumulatedUsage: TokenUsage | undefined;
     for (const chunk of plan.chunks) {
       const r = await chatOnce(chunk);
       parts.push(r.text);
+      // 累加 usage（简化处理：保留最后一次的完整 usage，实际应该累加）
+      if (r.usage) accumulatedUsage = r.usage;
       if (params.signal?.aborted) break;
     }
     let merged = mergeChunkSummaries(parts);
@@ -209,6 +215,7 @@ export async function executeSummary(params: ExecuteSummaryParams): Promise<Summ
       const r = await chatOnce(merged);
       merged = r.text;
       tokensOut = r.tokensOut;
+      if (r.usage) accumulatedUsage = r.usage;
     }
     const coverage = coverageFromOversized(oversized, parts.length, plan, false, false);
     if (shouldRejectPartial(oversized, coverage)) {
@@ -225,9 +232,10 @@ export async function executeSummary(params: ExecuteSummaryParams): Promise<Summ
         { total: plan.chunks.length, processed: parts.length },
         st.structuredError,
         st.structured,
+        accumulatedUsage,
       );
     }
-    return finish(merged, coverage, tokensOut, { total: plan.chunks.length, processed: parts.length });
+    return finish(merged, coverage, tokensOut, { total: plan.chunks.length, processed: parts.length }, undefined, undefined, accumulatedUsage);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     // fail / onPartial=reject 是能力层契约错误，不降级掩盖

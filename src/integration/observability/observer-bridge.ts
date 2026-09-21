@@ -16,6 +16,7 @@ import { TraceLogger, type TraceLoggerConfig } from './trace-logger.js';
 import { MetricsAggregator, type MetricsAggregatorConfig } from './metrics.js';
 import { TraceLevel, TRACE_EVENTS } from './trace-events.js';
 import type { TraceEvent } from './trace-events.js';
+import { makeTokenUsage } from '../../core/types/turn.js';
 
 // ── Span 实现 ──
 
@@ -192,9 +193,19 @@ export class ObserverBridge implements Observer {
     // 映射已知指标名到 MetricsAggregator 理解的事件类型
     switch (name) {
       case 'agent.model.tokens.input':
-        return { ts: Date.now(), level: TraceLevel.INFO, type: 'model.call.end', data: { usage: { promptTokens: value } } };
+        return {
+          ts: Date.now(),
+          level: TraceLevel.INFO,
+          type: 'model.call.end',
+          data: { usage: makeTokenUsage({ promptTokens: value }) },
+        };
       case 'agent.model.tokens.output':
-        return { ts: Date.now(), level: TraceLevel.INFO, type: 'model.call.end', data: { usage: { completionTokens: value } } };
+        return {
+          ts: Date.now(),
+          level: TraceLevel.INFO,
+          type: 'model.call.end',
+          data: { usage: makeTokenUsage({ completionTokens: value }) },
+        };
       case 'agent.context.tokens':
         // 上下文 token 估算，不映射到 LLM 调用
         return { ts: Date.now(), level: TraceLevel.DEBUG, type: 'context.tokens', data: { value } };

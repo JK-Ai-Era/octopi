@@ -325,7 +325,8 @@ export interface RunGuardMetricsView {
   agentId?: string;
   iteration: number;
   totalToolCalls: number;
-  totalTokens: number;
+  /** 诊断 nominal Σ（非 spend hard） */
+  nominalTotalTokens: number;
   elapsedMs: number;
   consecutiveErrors: number;
   consecutiveSameTool: number;
@@ -334,8 +335,16 @@ export interface RunGuardMetricsView {
   uniqueTools: string[];
   recentTools: Array<{ name: string; success: boolean }>;
   recoveryCount: number;
+  /** P1 cache-aware 账本 */
+  usageLedger?: import('../accounting/usage-ledger.js').UsageLedgerSnapshot;
+  /** P4 session 级账本 */
+  sessionLedger?: import('../accounting/session-ledger.js').SessionLedgerSnapshot;
   /** budget / run_guard 事件补充 */
   budgetExceededReason?: string;
+  /** P2 wrap-up 状态 */
+  wrapUpActive?: boolean;
+  wrapUpReason?: 'context' | 'policy';
+  wrapUpTurnsRemaining?: number;
   guardStoppedReason?: string;
   guardRecovered?: { reason: string; actions: string[] };
 }
@@ -397,7 +406,7 @@ export interface RunTimelineEventView {
   hasError?: boolean;
   durationMs?: number;
   reason?: string;
-  usage?: { promptTokens?: number; completionTokens?: number; totalTokens?: number };
+  usage?: import('../../core/types/turn.js').TokenUsage;
 }
 
 export interface RunLifecycleView {

@@ -93,6 +93,11 @@ export function createSummaryPort(options: CreateSummaryPortOptions): SummaryPor
         signal: opts?.signal,
       });
 
+      // Summary LLM usage 归因到 UsageLedger
+      if (result.usage && options.onUsage) {
+        options.onUsage(result.usage);
+      }
+
       if (options.cacheEnabled && options.cache && !result.structuredError) {
         const key = cacheKey(unit, policy.id, resolved.model, unit.task);
         options.cache.set(key, result, options.cacheTtlMs ?? 600_000);

@@ -330,7 +330,7 @@ harness/reliability/
 ├── harness-events.ts     # HarnessLoopEvent = AgentLoopEvent | budget/run_guard 扩展
 ├── circuit-breaker.ts    # CircuitBreaker — 断路器
 ├── provider-wrapper.ts   # wrapProviderWithCircuitBreaker()
-├── budget.ts             # IterationBudget
+├── budget.ts             # BudgetPolicyEngine（P5 正式定名）
 └── index.ts
 ```
 

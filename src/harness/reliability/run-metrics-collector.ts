@@ -31,7 +31,7 @@ export class RunMetricsCollector {
   private readonly startTime = Date.now();
   private globalIteration = 0;
   private totalToolCalls = 0;
-  private totalTokens = 0;
+  private nominalTotalTokens = 0;
   private lastToolName = '';
   private consecutiveSameTool = 0;
   private consecutiveErrors = 0;
@@ -60,7 +60,7 @@ export class RunMetricsCollector {
   /** 记录本轮 token 消耗（与 Budget 共用 turn_end.usage） */
   recordTokens(delta: number): void {
     if (delta <= 0) return;
-    this.totalTokens += delta;
+    this.nominalTotalTokens += delta;
     this.tokenDeltas.push(delta);
     if (this.tokenDeltas.length > TOKEN_WINDOW) this.tokenDeltas.shift();
     const last = this.turnSummaries[this.turnSummaries.length - 1];
@@ -140,7 +140,7 @@ export class RunMetricsCollector {
   }
 
   get tokens(): number {
-    return this.totalTokens;
+    return this.nominalTotalTokens;
   }
 
   get elapsedMs(): number {
@@ -181,7 +181,7 @@ export class RunMetricsCollector {
       agentId: ids.agentId ?? 'default',
       iteration: this.globalIteration,
       totalToolCalls: this.totalToolCalls,
-      totalTokens: this.totalTokens,
+      nominalTotalTokens: this.nominalTotalTokens,
       elapsedMs: Date.now() - this.startTime,
       recentSummaries: this.turnSummaries.slice(-8),
       metrics,
@@ -205,7 +205,7 @@ export class RunMetricsCollector {
     agentId?: string;
     iteration: number;
     totalToolCalls: number;
-    totalTokens: number;
+    nominalTotalTokens: number;
     elapsedMs: number;
     consecutiveErrors: number;
     consecutiveSameTool: number;
@@ -220,7 +220,7 @@ export class RunMetricsCollector {
       agentId: ids.agentId,
       iteration: this.globalIteration,
       totalToolCalls: this.totalToolCalls,
-      totalTokens: this.totalTokens,
+      nominalTotalTokens: this.nominalTotalTokens,
       elapsedMs: Date.now() - this.startTime,
       consecutiveErrors: this.consecutiveErrors,
       consecutiveSameTool: this.consecutiveSameTool,

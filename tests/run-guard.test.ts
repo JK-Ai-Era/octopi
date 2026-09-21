@@ -3,6 +3,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
+import { makeTokenUsage } from '../src/core/types/turn.js';
 import { DefaultRunGuard, createRunGuard } from '../src/harness/run-guard/default-run-guard.js';
 import type { CheckpointContext, CheckpointMetrics } from '../src/core/interfaces/run-guard.js';
 import type { ModelProvider } from '../src/core/interfaces/model-provider.js';
@@ -27,7 +28,7 @@ function createContext(overrides?: Partial<CheckpointContext>): CheckpointContex
     agentId: 'test-agent',
     iteration: 15,
     totalToolCalls: 10,
-    totalTokens: 5000,
+    nominalTotalTokens: 5000,
     elapsedMs: 30000,
     recentSummaries: [
       { role: 'assistant', contentPreview: 'Read file config.ts', toolCalls: ['file_read'], tokenDelta: 200, timestamp: Date.now() },
@@ -158,7 +159,7 @@ describe('DefaultRunGuard', () => {
     it('应该在规则层正常时调用 LLM 审查', async () => {
       const mockModel: ModelProvider = {
         name: 'mock',
-        chat: vi.fn().mockResolvedValue({ content: 'OK', model: 'mock', usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 } }),
+        chat: vi.fn().mockResolvedValue({ content: 'OK', model: 'mock', usage: makeTokenUsage({ promptTokens: 10, completionTokens: 5 }) }),
         stream: async function* () { yield { type: 'done' }; },
         isAvailable: vi.fn().mockResolvedValue(true),
       getModelInfo: () => null,
@@ -179,7 +180,7 @@ describe('DefaultRunGuard', () => {
     it('LLM 返回 STOP 时应该停止', async () => {
       const mockModel: ModelProvider = {
         name: 'mock',
-        chat: vi.fn().mockResolvedValue({ content: 'STOP: Agent is stuck in a loop', model: 'mock', usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 } }),
+        chat: vi.fn().mockResolvedValue({ content: 'STOP: Agent is stuck in a loop', model: 'mock', usage: makeTokenUsage({ promptTokens: 10, completionTokens: 5 }) }),
         stream: async function* () { yield { type: 'done' }; },
         isAvailable: vi.fn().mockResolvedValue(true),
       getModelInfo: () => null,
@@ -200,7 +201,7 @@ describe('DefaultRunGuard', () => {
     it('LLM 返回 CONCERN 时应该恢复', async () => {
       const mockModel: ModelProvider = {
         name: 'mock',
-        chat: vi.fn().mockResolvedValue({ content: 'CONCERN: Agent seems to be repeating', model: 'mock', usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 } }),
+        chat: vi.fn().mockResolvedValue({ content: 'CONCERN: Agent seems to be repeating', model: 'mock', usage: makeTokenUsage({ promptTokens: 10, completionTokens: 5 }) }),
         stream: async function* () { yield { type: 'done' }; },
         isAvailable: vi.fn().mockResolvedValue(true),
       getModelInfo: () => null,
@@ -308,20 +309,6 @@ describe('DefaultRunGuard', () => {
       expect(verdict.recoveryActions?.[0].type).toBe('clear_recent_turns');
     });
 
-    it('budget_soft 信号触发 burn 恢复', async () => {
-      const runGuard = new DefaultRunGuard({ enableLLMReview: false });
-      const ctx = createContext({
-        externalSignals: [
-          { source: 'budget_soft', level: 'warning', detail: '预算 soft 触达（tokens）' },
-        ],
-      });
-
-      const verdict = await runGuard.checkpoint(ctx);
-
-      expect(verdict.action).toBe('recover');
-      expect(verdict.failureKind).toBe('burn');
-    });
-
     it('external critical 信号触发 loop 恢复', async () => {
       const runGuard = new DefaultRunGuard({ enableLLMReview: false });
       const ctx = createContext({
@@ -391,10 +378,10 @@ describe('DefaultRunGuard', () => {
       const { AgentBuilder } = await import('../src/harness/agent-building/builder.js');
       const mockModel: ModelProvider = {
         name: 'mock',
-        chat: vi.fn().mockResolvedValue({ content: 'Hello!', model: 'mock', usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 } }),
+        chat: vi.fn().mockResolvedValue({ content: 'Hello!', model: 'mock', usage: makeTokenUsage({ promptTokens: 10, completionTokens: 5 }) }),
         stream: async function* () {
           yield { type: 'content', content: 'Hello!' };
-          yield { type: 'done', usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 } };
+          yield { type: 'done', usage: makeTokenUsage({ promptTokens: 10, completionTokens: 5 }) };
         },
         isAvailable: vi.fn().mockResolvedValue(true),
       getModelInfo: () => null,
@@ -413,10 +400,10 @@ describe('DefaultRunGuard', () => {
       const { AgentBuilder } = await import('../src/harness/agent-building/builder.js');
       const mockModel: ModelProvider = {
         name: 'mock',
-        chat: vi.fn().mockResolvedValue({ content: 'OK', model: 'mock', usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 } }),
+        chat: vi.fn().mockResolvedValue({ content: 'OK', model: 'mock', usage: makeTokenUsage({ promptTokens: 10, completionTokens: 5 }) }),
         stream: async function* () {
           yield { type: 'content', content: 'OK' };
-          yield { type: 'done', usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 } };
+          yield { type: 'done', usage: makeTokenUsage({ promptTokens: 10, completionTokens: 5 }) };
         },
         isAvailable: vi.fn().mockResolvedValue(true),
       getModelInfo: () => null,

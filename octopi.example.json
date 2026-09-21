@@ -51,11 +51,8 @@
     "preset": "production"
   },
 
-  "budget": {
-    "maxTokens": 2000000,
-    "maxWallClockMs": 21600000,
-    "softTokens": 400000,
-    "softWallClockMs": 2400000
+  "budgetPolicy": {
+    "maxWallClockMs": 21600000
   },
 
   "contextEngine": {

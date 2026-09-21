@@ -15,6 +15,7 @@ import {
 } from '../../src/harness/observer/index.js';
 import type { Message } from '../../src/core/types.js';
 import type { RunScope } from '../../src/harness/run-scope.js';
+import { makeTokenUsage } from '../../src/core/types/turn.js';
 
 function msg(partial: Partial<Message> & Pick<Message, 'role'>): Message {
   return {
@@ -385,7 +386,7 @@ describe('ObserverHub', () => {
       data: {
         iteration: 2,
         totalToolCalls: 3,
-        totalTokens: 175600,
+        nominalTotalTokens: 175600,
         elapsedMs: 1200,
         consecutiveErrors: 0,
         consecutiveSameTool: 1,
@@ -414,7 +415,7 @@ describe('ObserverHub', () => {
     for (const event of [
       { type: 'engine.start', data: {} },
       { type: 'iteration.start', data: {} },
-      { type: 'turn.end', data: { usage: { totalTokens: 100 } } },
+      { type: 'turn.end', data: { usage: makeTokenUsage({ promptTokens: 100 }) } },
       { type: 'tool.exec.end', data: { toolName: 'web_search', hasError: false } },
       { type: 'engine.end', data: { reason: 'completed' } },
     ] as const) {
@@ -590,7 +591,7 @@ describe('ObserverHub', () => {
       data: {
         iteration: 2,
         totalToolCalls: 3,
-        totalTokens: 100,
+        nominalTotalTokens: 100,
         elapsedMs: 50,
         consecutiveErrors: 0,
         consecutiveSameTool: 1,

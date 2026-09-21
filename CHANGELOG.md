@@ -1,3 +1,66 @@
+## Unreleased
+
+## v0.45.0 (2026-09-22)
+
+### feat(budget-redesign)!: P0-P5 预算体系重设计完成（arch/budget-redesign.md）
+
+**Breaking（内部研发，无 BC）**
+
+#### P0 拆除错误死刑
+
+| 变更 | 说明 |
+|------|------|
+| **默认不再因 Σ tokens 停止 Run** | 删除 `maxTokens` hard 与 soft 续租；出厂仅 wall-clock 安全阀（默认 6h） |
+| **配置键** | 顶层 `budget` → **`budgetPolicy`** |
+| **迁移** | legacy `budget.maxTokens`/`soft*` 在 loadConfig 时丢弃 |
+
+#### P1 真账本
+
+| 变更 | 说明 |
+|------|------|
+| **Core `TokenUsage`** | 重定义为 cache-aware 七字段形状 |
+| **Provider 解析** | OpenAI/Anthropic 正确读取 cache 分项 |
+| **UsageLedger** | run 级分项账本，只记账不 kill |
+| **Summary 归因** | 工具 LLM 调用 usage 通过 `summaryUsage` 传回 ledger |
+
+#### P2 控制梯
+
+| 变更 | 说明 |
+|------|------|
+| **BudgetControlEvent** | 新事件形状：`usage.advisory` / `budget.wrap_up` / `budget.exceeded` |
+| **wrap-up** | context 轴和 wall-clock 轴触发 wrap-up，先总结再 stop |
+| **onPolicyHit** | 配置 `'wrap_up_then_stop'`（默认）或 `'stop'` |
+| **Session 终态** | 区分 `context_stopped` / `policy_stopped` / `behavior_stopped` / `security_stopped` |
+
+#### P3 Policy
+
+| 变更 | 说明 |
+|------|------|
+| **units 配置** | `maxCost` / `maxUncachedInputTokens` / `maxOutputTokens` / `maxLlmCalls` |
+| **pricing 配置** | 模型定价（币种自定义） |
+| **advisory 配置** | 接近阈值告警 |
+| **单位评估** | 仅显式配置才 stop，事件含 unit/used/hard |
+
+#### P4 Session 账本
+
+| 变更 | 说明 |
+|------|------|
+| **SessionLedger** | session 级账本，累计同一 session 多 run 用量 |
+| **Run→Session 合并** | 每次 run 结束时自动合并到 session ledger |
+
+#### P5 叙事收敛
+
+| 变更 | 说明 |
+|------|------|
+| **BudgetPolicyEngine** | `IterationBudget` 重命名，旧名称已删除 |
+| **ResourceManager** | 已删除（无生产代码使用） |
+| **EventBus 死代码** | 已删除（BudgetPolicyEngine 不再持有 EventBus） |
+| **文档同步** | `docs/architecture.md`、`arch/open-problems.md`、`harness/README.md` 已更新 |
+
+行为语义：跑飞 → RunGuard；上下文压力 → capabilities summary/compact；成本策略 → budgetPolicy.units。
+
+测试：`tests/resource-budget.test.ts`、`tests/harness/accounting/` 等已按新语义重写。
+
 ## v0.44.1 (2026-09-21)
 
 ### fix(capabilities): Summary 接线与 oversized 契约 — 按审查根因修复

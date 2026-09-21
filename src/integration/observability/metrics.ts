@@ -177,9 +177,20 @@ export class MetricsAggregator {
       case 'model.call.end':
         this._llmLatency.record((event.data?.durationMs as number) ?? 0);
         if (event.data?.usage) {
-          const usage = event.data.usage as { promptTokens?: number; completionTokens?: number; totalTokens?: number };
-          this._llmTokensInput += usage.promptTokens ?? 0;
-          this._llmTokensOutput += usage.completionTokens ?? 0;
+          const usage = event.data.usage as {
+            outputTokens?: number;
+            inputUncachedTokens?: number;
+            inputCachedTokens?: number;
+            inputCacheWriteTokens?: number;
+            inputReportedTokens?: number;
+          };
+          const input =
+            usage.inputReportedTokens ??
+            (usage.inputUncachedTokens ?? 0) +
+              (usage.inputCachedTokens ?? 0) +
+              (usage.inputCacheWriteTokens ?? 0);
+          this._llmTokensInput += input;
+          this._llmTokensOutput += usage.outputTokens ?? 0;
         }
         break;
 

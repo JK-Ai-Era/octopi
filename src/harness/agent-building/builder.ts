@@ -15,6 +15,7 @@
  */
 
 import type {
+
   RegisteredTool,
   Message,
   ToolCall,
@@ -61,7 +62,6 @@ import { InMemorySessionStore } from '../../integration/storage/memory.js';
 
 import {
   DefaultEventBus,
-  NoopEventBus,
 } from '../../core/primitives/event-bus.js';
 import type { EventBus } from '../../core/primitives/event-bus.js';
 import {
@@ -69,9 +69,9 @@ import {
 } from '../security/default-security-guard.js';
 import type { SecurityGuard, SecurityGuardConfig } from '../../core/security-guard.js';
 import {
-  IterationBudget,
+  BudgetPolicyEngine,
 } from '../budget/budget.js';
-import type { IterationBudgetConfig } from '../budget/budget.js';
+import type { BudgetPolicyConfig } from '../budget/budget.js';
 
 import { PersonaSource } from './persona.js';
 import { getRunScope } from '../run-scope.js';
@@ -418,12 +418,14 @@ export class AgentBuilder {
   private _toolBus = new DefaultToolBus();
   private _contextEngine?: ContextEngine;
   private _summarize?: SummarizeFunction;
+  /** 最新的 context 压力信息（由 convertToLlm 更新） */
+  private _lastContextPressure?: { estimatedTokens: number; contextWindow?: number };
   /** 为 true 时禁止自动挂默认 summarize（测试/特殊场景） */
   private _disableAutoSummarize = false;
   private _events?: EventBus;
   private _security?: SecurityGuard;
   private _riskPolicy?: import('../../core/security-guard.js').ToolCallRiskPolicy;
-  private _budget?: IterationBudget;
+  private _budget?: BudgetPolicyEngine;
   private _errorStrategy?: ErrorStrategy;
   private _observer?: Observer;
   private _runGuard?: RunGuard;
@@ -734,8 +736,8 @@ export class AgentBuilder {
   }
 
   /** 设置迭代预算 */
-  budget(config: Partial<IterationBudgetConfig>): this {
-    this._budget = new IterationBudget(this._events ?? new NoopEventBus(), config);
+  budget(config: Partial<BudgetPolicyConfig>): this {
+    this._budget = new BudgetPolicyEngine(config);
     return this;
   }
 
@@ -1345,6 +1347,12 @@ export class AgentBuilder {
           },
         });
       }
+      // 保存最新的 context 压力信息（供 harness.getContextPressure 使用）
+      this._lastContextPressure = {
+        estimatedTokens: result.estimatedTokens,
+        contextWindow,
+      };
+
       // droppedSummary：并入已有 system，避免连续两条 system（严格网关）
       const llmMessages = [...result.messages];
       if (result.droppedSummary) {
@@ -1371,9 +1379,7 @@ export class AgentBuilder {
         sessionId,
         agentId,
         turn: turn ?? [],
-        usage: usage
-          ? { promptTokens: usage.promptTokens, completionTokens: usage.completionTokens }
-          : undefined,
+        usage: usage,
       });
     });
 
@@ -1398,7 +1404,7 @@ export class AgentBuilder {
 
     // ResourceBudget：始终挂默认实例（可被 .budget() 覆盖），保证主路径硬停生效
     const budget =
-      this._budget ?? new IterationBudget(events, {});
+      this._budget ?? new BudgetPolicyEngine({});
 
     // checkpointInterval：builder.runGuard(guard, n) 或默认
     if (this._checkpointInterval !== undefined) {
@@ -1408,12 +1414,17 @@ export class AgentBuilder {
       };
     }
 
+    // 保存 builder 引用，用于 getContextPressure 回调
+    const builderRef = this;
+
     const harness: ReliabilityHarness = {
       config: this._reliabilityConfig ?? DEFAULT_RELIABILITY_CONFIG,
       security,
       errorStrategy,
       runGuard,
       budget,
+      // P5: Context 压力回调（从 ContextEngine assemble 获取）
+      getContextPressure: () => builderRef._lastContextPressure,
     };
 
     // Agent.run() 需要 harness；Builder 组装期绑定
@@ -1491,7 +1502,7 @@ export async function createAgent(config: {
   persona?: string;
   tools?: RegisteredTool[];
   store?: SessionStore<SessionData>;
-  budget?: Partial<IterationBudgetConfig>;
+  budget?: Partial<BudgetPolicyConfig>;
   mcp?: McpServerConfig[];
 }): Promise<{ agent: Agent; harness: ReliabilityHarness; runner: SessionAwareRunner; mcpManager: McpManager }> {
   const builder = new AgentBuilder()

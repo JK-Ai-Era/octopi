@@ -87,6 +87,8 @@ export interface ApplyToolSummaryOutput {
     tokensOut?: number;
     structuredError?: string;
   };
+  /** Summary LLM 调用的 usage（用于 UsageLedger 归因） */
+  usage?: import('../../../core/types/turn.js').TokenUsage;
 }
 
 /**
@@ -127,12 +129,13 @@ export async function applyToolSummary(input: ApplyToolSummaryInput): Promise<Ap
   const mode = binding?.mode ?? 'auto';
   const arg = input.summarizeArg ?? 'auto';
 
-  const finish = (body: string, truncated: boolean, summary: ApplyToolSummaryOutput['summary']): ApplyToolSummaryOutput => ({
+  const finish = (body: string, truncated: boolean, summary: ApplyToolSummaryOutput['summary'], usage?: import('../../../core/types/turn.js').TokenUsage): ApplyToolSummaryOutput => ({
     body,
     bodyTruncated: truncated,
     rawSizeBytes,
     rawLength,
     summary,
+    usage,
   });
 
   // L2 决策
@@ -173,7 +176,7 @@ export async function applyToolSummary(input: ApplyToolSummaryInput): Promise<Ap
           tokensIn: r.tokensIn,
           tokensOut: r.tokensOut,
           structuredError: r.structuredError,
-        });
+        }, r.usage);
       } catch (err) {
         if (binding.onFail === 'error') throw err;
         const l1 = applyL1Truncate(input.rawBody, maxChars, input.truncateHint);

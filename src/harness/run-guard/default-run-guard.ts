@@ -265,24 +265,6 @@ export class DefaultRunGuard implements RunGuard {
       });
     }
 
-    // 预算 soft 压力（budget_soft）：无进展续租失败时 reliability 会 forceCheckpoint
-    const softBudgetSignals = (ctx.externalSignals ?? []).filter(s => s.source === 'budget_soft');
-    if (softBudgetSignals.length > 0) {
-      results.push({
-        triggered: true,
-        severity: 'medium',
-        rule: 'budget_soft',
-        description: softBudgetSignals.map(s => s.detail).join('; '),
-        failureKind: 'burn',
-        suggestedRecovery: [
-          {
-            type: 'inject_hint',
-            hint: '资源预算接近 soft 上限且进展不足。请收敛任务、总结已有成果，或切换更轻量的方法，避免烧到硬顶。',
-          },
-        ],
-      });
-    }
-
     // 规则 1: 重复工具循环
     if (m.consecutiveSameTool >= 5) {
       results.push({

@@ -279,7 +279,7 @@ export interface AfterIterationEvent {
   /** 本轮工具结果 */
   toolResults: ToolResult[];
   /** Token 用量 */
-  usage?: { promptTokens: number; completionTokens: number; totalTokens: number };
+  usage?: import('../../../core/types/turn.js').TokenUsage;
   /** Session ID */
   sessionId: string;
   /** 上下文 */

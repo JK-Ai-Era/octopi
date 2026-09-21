@@ -10,6 +10,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
+import { makeTokenUsage } from '../src/core/types/turn.js';
 import { Agent } from '../src/harness/agent/agent.js';
 import { runAgentWithReliability } from '../src/harness/reliability/run-agent.js';
 import type { ReliabilityHarness } from '../src/harness/reliability/run-agent.js';
@@ -128,7 +129,7 @@ describe('流式 tool call 多工具并行', () => {
           { id: 'call_1', name: 'tool_a', arguments: { x: 1 } },
           { id: 'call_2', name: 'tool_b', arguments: { y: 2 } },
         ],
-        usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+        usage: makeTokenUsage({ promptTokens: 10, completionTokens: 5 }),
         model: 'test',
         finishReason: 'tool_calls',
       },
@@ -136,7 +137,7 @@ describe('流式 tool call 多工具并行', () => {
       {
         content: 'Both tools executed!',
         toolCalls: undefined,
-        usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+        usage: makeTokenUsage({ promptTokens: 10, completionTokens: 5 }),
         model: 'test',
         finishReason: 'stop',
       },
@@ -167,7 +168,7 @@ describe('流式 tool call 多工具并行', () => {
       defaultModel: 'test',
       getModelInfo: () => null,
       async chat(_request: LLMRequest): Promise<LLMResponse> {
-        return { content: 'done', usage: { promptTokens: 5, completionTokens: 2, totalTokens: 7 }, model: 'test', finishReason: 'stop' };
+        return { content: 'done', usage: makeTokenUsage({ promptTokens: 5, completionTokens: 2 }), model: 'test', finishReason: 'stop' };
       },
       async *stream(_request: LLMRequest): AsyncGenerator<LLMStreamChunk> {
         callCount++;
@@ -175,10 +176,10 @@ describe('流式 tool call 多工具并行', () => {
           // tool call 参数分片
           yield { type: 'tool_call', toolCall: { id: 'c1', name: 'tool_a', arguments: '{"x":', index: 0 } };
           yield { type: 'tool_call', toolCall: { id: 'c1', name: 'tool_a', arguments: '1}', index: 0 } };
-          yield { type: 'done', usage: { promptTokens: 5, completionTokens: 2, totalTokens: 7 } };
+          yield { type: 'done', usage: makeTokenUsage({ promptTokens: 5, completionTokens: 2 }) };
         } else {
           yield { type: 'content', content: 'done' };
-          yield { type: 'done', usage: { promptTokens: 5, completionTokens: 2, totalTokens: 7 } };
+          yield { type: 'done', usage: makeTokenUsage({ promptTokens: 5, completionTokens: 2 }) };
         }
       },
       async isAvailable() { return true; },
@@ -236,7 +237,7 @@ describe('错误分类和重试', () => {
     const attempts: number[] = [];
     const recoverResponse: LLMResponse = {
       content: 'Recovered!',
-      usage: { promptTokens: 5, completionTokens: 2, totalTokens: 7 },
+      usage: makeTokenUsage({ promptTokens: 5, completionTokens: 2 }),
       model: 'test',
       finishReason: 'stop',
     };
@@ -290,7 +291,7 @@ describe('错误分类和重试', () => {
   it('应该在重试后成功', async () => {
     const recoverResponse: LLMResponse = {
       content: 'Recovered!',
-      usage: { promptTokens: 5, completionTokens: 2, totalTokens: 7 },
+      usage: makeTokenUsage({ promptTokens: 5, completionTokens: 2 }),
       model: 'test',
       finishReason: 'stop',
     };
@@ -334,7 +335,7 @@ describe('系统提示词传递', () => {
     const provider = createSequentialProvider([
       {
         content: 'Hello!',
-        usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+        usage: makeTokenUsage({ promptTokens: 10, completionTokens: 5 }),
         model: 'test',
         finishReason: 'stop',
       },
@@ -398,7 +399,7 @@ describe('引擎异常退出事件', () => {
     const provider = createSequentialProvider([
       {
         content: 'Thinking...',
-        usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+        usage: makeTokenUsage({ promptTokens: 10, completionTokens: 5 }),
         model: 'test',
         finishReason: 'stop',
       },

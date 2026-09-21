@@ -804,7 +804,7 @@ export class DefaultContextEngine implements ContextEngine {
    * 每轮结束后更新状态
    *
    * 使用 LLM 返回的真实 usage 校准 token 估算：
-   * 1. 存储真实 promptTokens
+   * 1. 存储真实 reported prompt tokens
    * 2. 记录当前消息数量快照（用于增量估算）
    * 3. 计算校准比率 = actual / estimated
    */
@@ -816,15 +816,18 @@ export class DefaultContextEngine implements ContextEngine {
     const stateKey = compactStateKey(sessionId, agentId);
     const state = this.states.get(stateKey) ?? {};
 
-    // 存储真实 token 数
-    state.lastActualTokens = usage.promptTokens;
+    // 存储真实 token 数（provider 报告 prompt ≈ 当前上下文）
+    const promptActual =
+      usage.inputReportedTokens ??
+      usage.inputUncachedTokens + usage.inputCachedTokens + usage.inputCacheWriteTokens;
+    state.lastActualTokens = promptActual;
 
     // 记录消息数量快照（turn 包含本轮消息，估算时用 messages.length - turn.length 得到之前的消息数）
     state.lastUsageMessageCount = turn?.length ?? 0;
 
     // 计算校准比率：如果上次有估算值，用 actual/estimated 修正后续估算
-    if (state.lastEstimatedTokens && state.lastEstimatedTokens > 0 && usage.promptTokens > 0) {
-      const ratio = usage.promptTokens / state.lastEstimatedTokens;
+    if (state.lastEstimatedTokens && state.lastEstimatedTokens > 0 && promptActual > 0) {
+      const ratio = promptActual / state.lastEstimatedTokens;
       // 平滑处理：与历史比率加权平均（70% 新值 + 30% 旧值），避免单次异常值过度影响
       state.calibrationRatio = state.calibrationRatio
         ? ratio * 0.7 + state.calibrationRatio * 0.3

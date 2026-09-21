@@ -5,7 +5,7 @@
  * Token 估算属 Context 域策略，不是 Core Kernel 能力。
  *
  * 三层策略（参考 OpenClaw）：
- * 1. 优先使用 LLM 返回的实际 token 数（usage.promptTokens）- 外部回写
+ * 1. 优先使用 LLM 返回的实际 token 数（usage reported prompt）- 外部回写
  * 2. 次选：专用 tokenizer（如 tiktoken）- 未来扩展
  * 3. 兜底：启发式估算，按内容类型使用不同比率
  */

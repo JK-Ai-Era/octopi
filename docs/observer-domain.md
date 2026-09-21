@@ -111,7 +111,7 @@ GET /debug/run/:sessionId/messages?phase=entry|final&runId=&view=workspace|llm
 | run.scope | agentId / model / cwd / isolation / systemPrompt 长度与预览（full 另有全文切换） |
 | run.messages | workspace entry/final；full 下含正文；diff |
 | run.timeline | engine / tool / compact / security 等适配后事件 |
-| run.guard | iteration、tokensΣ（各轮 usage 之和，**非**当前上下文长度）、consecErr 等 |
+| run.guard | iteration、tokensΣ nominal（诊断）、usageLedger 分项（uncached/cached/out + cacheAware）、consecErr 等 |
 | context.llm | ContextEngine 出口消息摘要（full 可看正文） |
 | tool.effect (I5) | 本 Run cwd/isolation + 按工具 calls/errors |
 | security | injection / policy / sensitive / blocked 等结构化事件 |

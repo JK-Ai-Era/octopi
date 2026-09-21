@@ -30,6 +30,12 @@ export type { SessionStatus, SessionMeta } from './session.js';
 
 // ── Turn ──
 export type { TokenUsage, Turn } from './turn.js';
+export {
+  emptyTokenUsage,
+  makeTokenUsage,
+  nominalTotalTokens,
+  reportedPromptTokens,
+} from './turn.js';
 
 // ── 工具系统 ──
 export type {

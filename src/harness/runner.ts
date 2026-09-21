@@ -151,7 +151,7 @@ export interface RunConfig {
 export function adaptLoopEvent(
   event: HarnessLoopEvent,
   meta: { agentId: string; sessionId: string },
-  state: { assistantContent: string; lastUserContent?: string },
+  state: { assistantContent: string; lastUserContent?: string; stopReason?: string },
 ): import('../core/primitives/event-bus.js').AgentEvent | null {
   switch (event.type) {
     case 'run_guard_metrics':
@@ -163,6 +163,8 @@ export function adaptLoopEvent(
         data: { ...(event.data as Record<string, unknown>) },
       };
     case 'security_blocked':
+      // 跟踪停止原因：security
+      state.stopReason = 'security_stopped';
       return {
         type: 'security.blocked',
         timestamp: event.timestamp,
@@ -233,7 +235,39 @@ export function adaptLoopEvent(
         sessionId: meta.sessionId,
         data: { ...event.data },
       };
+    // P2 BudgetControlEvent 新形状
+    case 'budget.wrap_up':
+      return {
+        type: 'budget.wrap_up',
+        timestamp: event.timestamp,
+        agentId: meta.agentId,
+        sessionId: meta.sessionId,
+        data: {
+          metric: event.metric,
+          unit: event.unit,
+          used: event.used,
+          hard: event.hard,
+          userMessage: event.userMessage,
+          resumeHint: event.resumeHint,
+        },
+      };
+    case 'budget.exceeded':
+      // 跟踪停止原因：context / policy
+      state.stopReason = event.metric === 'context' ? 'context_stopped' : 'policy_stopped';
+      return {
+        type: 'budget.exceeded',
+        timestamp: event.timestamp,
+        agentId: meta.agentId,
+        sessionId: meta.sessionId,
+        data: {
+          metric: event.metric,
+          userMessage: event.userMessage,
+          resumeHint: event.resumeHint,
+        },
+      };
     case 'run_guard_stopped':
+      // 跟踪停止原因：behavior
+      state.stopReason = 'behavior_stopped';
       return {
         type: 'run_guard.stopped',
         timestamp: event.timestamp,
@@ -248,6 +282,20 @@ export function adaptLoopEvent(
         agentId: meta.agentId,
         sessionId: meta.sessionId,
         data: { ...event.data },
+      };
+    case 'usage.advisory':
+      return {
+        type: 'usage.advisory',
+        timestamp: event.timestamp,
+        agentId: meta.agentId,
+        sessionId: meta.sessionId,
+        data: {
+          metric: event.metric,
+          unit: event.unit,
+          used: event.used,
+          hard: event.hard,
+          userMessage: event.userMessage,
+        },
       };
     default:
       return null;
@@ -818,9 +866,9 @@ export class SessionAwareRunner {
 
       // 10. 运行 Agent（Agent.run = reliability 包装；context/runScope 为本 Run 私有）
       let streamedContent = '';
-      let lastUsage: any = undefined;
+      let lastUsage: import('../core/types/turn.js').TokenUsage | undefined = undefined;
       const meta = { agentId: effectiveRunConfig.agentId ?? 'default', sessionId };
-      const adaptState = { assistantContent: '', lastUserContent: '' };
+      const adaptState: { assistantContent: string; lastUserContent: string; stopReason?: string } = { assistantContent: '', lastUserContent: '' };
       /** 本轮起始消息下标（afterTurn 只传增量） */
       let turnStartIndex = runContext.messages.length;
 
@@ -838,10 +886,18 @@ export class SessionAwareRunner {
           // 捕获 usage 数据，并在 turn.end 事件中附加上下文信息（必须在 yield 之前，
           // 否则 gateway 收到事件后立即广播，data 里还没有 context 字段）
           if (adapted.type === 'turn.end') {
-            if (adapted.data?.usage) {
-              lastUsage = adapted.data.usage;
+            const rawUsage = adapted.data?.usage as
+              | import('../core/types/turn.js').TokenUsage
+              | undefined;
+            if (rawUsage) {
+              lastUsage = rawUsage;
             }
-            (adapted.data as Record<string, unknown>).contextTokens = lastUsage?.promptTokens ?? estimator.estimateMessages(session.messages);
+            (adapted.data as Record<string, unknown>).contextTokens =
+              lastUsage?.inputReportedTokens ??
+              (lastUsage
+                ? lastUsage.inputUncachedTokens + lastUsage.inputCachedTokens + lastUsage.inputCacheWriteTokens
+                : undefined) ??
+              estimator.estimateMessages(session.messages);
             (adapted.data as Record<string, unknown>).contextWindow = effectiveRunConfig.contextWindow;
           }
 
@@ -927,7 +983,8 @@ export class SessionAwareRunner {
 
       // Observer：记录最终 messages 与 endReason（真正 close 在 finally，保证异常也闭合）
       observerFinalMessages = session.messages;
-      observerEndReason = hasTurnEnd ? 'completed' : 'no_turn_end';
+      // P5: 使用 stopReason 区分终态（context_stopped / behavior_stopped / policy_stopped / security_stopped / completed）
+      observerEndReason = adaptState.stopReason ?? (hasTurnEnd ? 'completed' : 'no_turn_end');
 
       // 12. 持久化
       sm.transition('idle');

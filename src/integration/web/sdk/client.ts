@@ -252,7 +252,7 @@ export interface RunTimelineEventDto {
   hasError?: boolean;
   durationMs?: number;
   reason?: string;
-  usage?: { promptTokens?: number; completionTokens?: number; totalTokens?: number };
+  usage?: import('../../../core/types/turn.js').TokenUsage;
 }
 
 export interface RunObservatorySnapshotDto {
@@ -268,7 +268,8 @@ export interface RunObservatorySnapshotDto {
     agentId?: string;
     iteration?: number;
     totalToolCalls?: number;
-    totalTokens?: number;
+    nominalTotalTokens?: number;
+    usageLedger?: import('../../../harness/accounting/usage-ledger.js').UsageLedgerSnapshot;
     elapsedMs?: number;
     consecutiveErrors?: number;
     consecutiveSameTool?: number;

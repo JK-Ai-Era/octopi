@@ -3,6 +3,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { makeTokenUsage } from '../src/core/types/turn.js';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -193,7 +194,7 @@ describe('MetricsAggregator', () => {
     metrics.processEvent({ ts: Date.now(), level: 3, type: 'model.call.start' });
     metrics.processEvent({
       ts: Date.now(), level: 3, type: 'model.call.end',
-      data: { usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 }, durationMs: 500 },
+      data: { usage: makeTokenUsage({ promptTokens: 100, completionTokens: 50 }), durationMs: 500 },
     });
 
     const snap = metrics.snapshot();
@@ -272,7 +273,7 @@ describe('MetricsAggregator', () => {
     metrics.processEvent({ ts: Date.now(), level: 3, type: 'model.call.start' });
     metrics.processEvent({
       ts: Date.now(), level: 3, type: 'model.call.end',
-      data: { usage: { promptTokens: 1_000_000, completionTokens: 500_000 } },
+      data: { usage: makeTokenUsage({ promptTokens: 1_000_000, completionTokens: 500_000 }) },
     });
 
     const snap = metrics.snapshot();
@@ -306,7 +307,7 @@ describe('MetricsAggregator', () => {
   it('should format snapshot', () => {
     const metrics = new MetricsAggregator();
     metrics.processEvent({ ts: Date.now(), level: 3, type: 'model.call.start' });
-    metrics.processEvent({ ts: Date.now(), level: 3, type: 'model.call.end', data: { usage: { promptTokens: 100, completionTokens: 50 } } });
+    metrics.processEvent({ ts: Date.now(), level: 3, type: 'model.call.end', data: { usage: makeTokenUsage({ promptTokens: 100, completionTokens: 50 }) } });
 
     const formatted = formatMetricsSnapshot(metrics.snapshot());
     expect(formatted).toContain('📊 Agent Metrics');

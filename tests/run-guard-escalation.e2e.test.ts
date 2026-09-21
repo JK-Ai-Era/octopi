@@ -3,6 +3,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
+import { makeTokenUsage } from '../src/core/types/turn.js';
 import { DefaultRunGuard } from '../src/harness/run-guard/default-run-guard.js';
 import type { CheckpointContext } from '../src/core/interfaces/run-guard.js';
 import { RunMetricsCollector } from '../src/harness/reliability/run-metrics-collector.js';
@@ -64,7 +65,7 @@ describe('Guard recover → escalate stop（e2e 式）', () => {
     const chat = vi.fn().mockResolvedValue({
       content: 'OK',
       model: 'mock',
-      usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
+      usage: makeTokenUsage({ promptTokens: 1, completionTokens: 1 }),
     });
     const model = {
       name: 'mock',

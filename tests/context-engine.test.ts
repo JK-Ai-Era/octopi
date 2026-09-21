@@ -10,6 +10,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { makeTokenUsage } from '../src/core/types/turn.js';
 import type { Message } from '../src/core/types.js';
 import type { LLMMessage, LLMToolDefinition } from '../src/core/interfaces/model-provider.js';
 import type {
@@ -905,10 +906,7 @@ describe('DefaultContextEngine', () => {
       await engine.afterTurn({
         sessionId: 'test',
         turn: [createMessage('assistant', 'Response')],
-        usage: {
-          promptTokens: 100,
-          completionTokens: 50,
-        },
+        usage: makeTokenUsage({ promptTokens: 100, completionTokens: 50 }),
       });
     });
 
@@ -927,10 +925,7 @@ describe('DefaultContextEngine', () => {
       await engine.afterTurn({
         sessionId: 'calibrate-test',
         turn: [createMessage('assistant', 'Response')],
-        usage: {
-          promptTokens: firstEstimate * 2,
-          completionTokens: 50,
-        },
+        usage: makeTokenUsage({ promptTokens: firstEstimate * 2, completionTokens: 50 }),
       });
 
       // Second assemble should use calibrated estimate
@@ -961,10 +956,7 @@ describe('DefaultContextEngine', () => {
       await engine.afterTurn({
         sessionId: 'clamp-test',
         turn: [createMessage('assistant', 'Response')],
-        usage: {
-          promptTokens: 100000,
-          completionTokens: 50,
-        },
+        usage: makeTokenUsage({ promptTokens: 100000, completionTokens: 50 }),
       });
 
       // Should not throw and should produce reasonable result
@@ -1144,7 +1136,7 @@ describe('ContextEngine Integration', () => {
     await engine.afterTurn({
       sessionId: 'state-test',
       turn: [createMessage('assistant', 'Response')],
-      usage: { promptTokens: 100, completionTokens: 50 },
+      usage: makeTokenUsage({ promptTokens: 100, completionTokens: 50 }),
     });
 
     // Second call

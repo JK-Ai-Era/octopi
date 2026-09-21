@@ -6,6 +6,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
+import { makeTokenUsage } from '../../src/core/types/turn.js';
 import { adaptLoopEvent } from '../../src/harness/runner.js';
 import type { HarnessLoopEvent } from '../../src/harness/reliability/harness-events.js';
 
@@ -48,7 +49,7 @@ describe('adaptLoopEvent bridge map', () => {
       hasToolCalls: true,
       phase: 'pre_tools',
       timestamp: 1,
-      usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+      usage: makeTokenUsage({ promptTokens: 10, completionTokens: 5 }),
     });
     expect(e?.type).toBe('turn.end');
     expect(e?.data).toMatchObject({
@@ -101,10 +102,10 @@ describe('adaptLoopEvent bridge map', () => {
     const e = adapt({
       type: 'budget_exceeded',
       timestamp: 1,
-      data: { reason: 'tokens', report: { totalTokens: 100 } },
+      data: { reason: 'wall_clock', report: { elapsedMs: 100 } },
     });
     expect(e?.type).toBe('budget.exceeded');
-    expect(e?.data).toMatchObject({ reason: 'tokens' });
+    expect(e?.data).toMatchObject({ reason: 'wall_clock' });
     expect(e?.agentId).toBe('a1');
   });
 

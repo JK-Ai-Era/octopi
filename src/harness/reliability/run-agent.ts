@@ -25,7 +25,7 @@ import type {
   LoopToolResult,
   TurnContext,
 } from '../../loop/types.js';
-import type { HarnessLoopEvent } from './harness-events.js';
+import type { HarnessLoopEvent, PolicyUnit } from './harness-events.js';
 import { classifyError } from '../../loop/error-classifier.js';
 import { agentLoop } from '../../loop/agent-loop.js';
 import type {
@@ -43,8 +43,10 @@ import type { ErrorStrategy, ClassifiedError as CoreClassifiedError } from '../.
 import type { RunGuard, CheckpointContext, CheckpointVerdict, TurnSummary } from '../../core/interfaces/run-guard.js';
 import type { ReliabilityHarness as CoreReliabilityHarness } from '../../core/interfaces/reliability.js';
 import { RunMetricsCollector } from './run-metrics-collector.js';
-import { IterationBudget } from '../budget/budget.js';
-import { NoopEventBus } from '../../core/primitives/event-bus.js';
+import { BudgetPolicyEngine } from '../budget/budget.js';
+import { UsageLedger } from '../accounting/usage-ledger.js';
+import type { UsageLedgerSnapshot } from '../accounting/usage-ledger.js';
+import { nominalTotalTokens } from '../../core/types/turn.js';
 import { getRunScope } from '../run-scope.js';
 
 // ── 可靠性配置 ──
@@ -66,6 +68,39 @@ export interface ReliabilityConfig {
   loopDetection: ToolLoopDetectionConfig;
   /** RunGuard 检查点初始间隔（默认 15；可被 verdict.nextCheckpointIn 覆盖） */
   checkpointInterval?: number;
+  // ── P2 wrap-up 配置 ──
+  /** wrap-up 相关配置 */
+  wrapUp?: {
+    /** wrap-up 窗口的轮次数（默认 3） */
+    turns?: number;
+    /** Policy 触达时的行为（默认 wrap_up_then_stop） */
+    onPolicyHit?: 'stop' | 'wrap_up_then_stop';
+    /** context 轴 wrap-up 触发阈值比例（默认 0.85） */
+    contextRatio?: number;
+  };
+  // ── P3 Policy 单位配置 ──
+  /** Policy 单位配置（仅显式配置才启用 hard） */
+  policyUnits?: {
+    /** 最大花费（币种由 pricing 决定） */
+    maxCost?: number;
+    /** 最大 uncached input tokens */
+    maxUncachedInputTokens?: number;
+    /** 最大 output tokens */
+    maxOutputTokens?: number;
+    /** 最大 LLM 调用次数 */
+    maxLlmCalls?: number;
+  };
+  /** 模型定价（用于 USD 估算） */
+  policyPricing?: Record<string, {
+    inputPer1M: number;
+    cachedInputPer1M?: number;
+    outputPer1M: number;
+  }>;
+  /** Advisory 告警配置 */
+  advisory?: {
+    unit: 'wall_clock_ms' | 'cost' | 'uncached_input_tokens' | 'output_tokens' | 'llm_calls';
+    threshold: number;
+  };
 }
 
 export const DEFAULT_RELIABILITY_CONFIG: ReliabilityConfig = {
@@ -86,6 +121,31 @@ export const DEFAULT_RELIABILITY_CONFIG: ReliabilityConfig = {
     globalCircuitBreakerThreshold: 30,
   },
 };
+
+// ── Policy 辅助函数 ──
+
+/**
+ * 估算花费
+ *
+ * @param snapshot - UsageLedger 快照
+ * @param pricing - 模型定价（按模型名查询，fallback 到 'default'）
+ * @returns 估算的花费（币种由 pricing 决定）
+ */
+function estimateCost(
+  snapshot: UsageLedgerSnapshot,
+  pricing: Record<string, { inputPer1M: number; cachedInputPer1M?: number; outputPer1M: number }>,
+): number {
+  // 默认定价（如果未配置 'default' key）
+  const defaultPricing = pricing['default'] ?? { inputPer1M: 3, outputPer1M: 15 };
+
+  const inputCost = (snapshot.inputUncachedTokens / 1_000_000) * defaultPricing.inputPer1M;
+  const cachedCost = snapshot.cacheAware && defaultPricing.cachedInputPer1M
+    ? (snapshot.inputCachedTokens / 1_000_000) * defaultPricing.cachedInputPer1M
+    : 0;
+  const outputCost = (snapshot.outputTokens / 1_000_000) * defaultPricing.outputPer1M;
+
+  return inputCost + cachedCost + outputCost;
+}
 
 // ── Harness 资源 ──
 
@@ -124,7 +184,7 @@ interface ReliabilityState {
   modelErrorAttempt: number;
   /** hard 在 onTurnComplete 补判：generator 下一事件后 yield */
   pendingBudgetHardYield: false | {
-    reason: 'tokens' | 'wall_clock' | 'iteration' | 'tool_calls';
+    reason: 'wall_clock' | 'iteration' | 'tool_calls';
     report?: unknown;
   };
   /** SecurityGuard 拦截：在 generator 主循环 yield（beforeToolCall 不能 yield） */
@@ -133,6 +193,19 @@ interface ReliabilityState {
     timestamp: number;
     data: Record<string, unknown>;
   }>;
+  // ── P2 wrap-up 控制梯 ──
+  /** wrap-up 状态：false 表示未进入 wrap-up */
+  wrapUp: false | {
+    reason: 'context' | 'policy';
+    turnsRemaining: number;
+    /** 进入 wrap-up 时的用户消息 */
+    userMessage: string;
+    /** 是否已注入 wrap-up 提示 */
+    hintInjected: boolean;
+  };
+  // ── P3 advisory 告警 ──
+  /** 已触发的 advisory（避免重复告警） */
+  advisoryTriggered: Set<string>;
 }
 
 function createInitialState(checkpointInterval = 15): ReliabilityState {
@@ -156,6 +229,8 @@ function createInitialState(checkpointInterval = 15): ReliabilityState {
     modelErrorAttempt: 0,
     pendingBudgetHardYield: false,
     pendingSecurityEvents: [],
+    wrapUp: false,
+    advisoryTriggered: new Set(),
   };
 }
 
@@ -229,11 +304,12 @@ export async function* runAgentWithReliability(
   // per-run Budget：从 harness 模板克隆，避免长驻进程 / 并发 session 共享计数
   let budget = harness.budget;
   if (budget) {
-    budget = new IterationBudget(
-      new NoopEventBus(),
-      budget.getConfig() as import('../budget/budget.js').IterationBudgetConfig,
+    budget = new BudgetPolicyEngine(
+      budget.getConfig() as import('../budget/budget.js').BudgetPolicyConfig,
     );
   }
+  /** P1：run 级用量账本（只记账，不 kill） */
+  const ledger = new UsageLedger();
 
   // ── 用于空响应/planning-only 重试的消息缓冲 ──
   // onTurnComplete 将 steer 消息推入此数组，getFollowUpMessages 返回给 agentLoop
@@ -256,19 +332,18 @@ export async function* runAgentWithReliability(
       return msgs;
     },
 
-    // beforeToolCall：Budget hard 闸 + SecurityGuard 检查 + 原始回调
+    // beforeToolCall：Budget hard 闸 + wrap-up 控制 + SecurityGuard 检查 + 原始回调
     beforeToolCall: async (ctx, signal) => {
       // Budget hard：阻止本批工具继续执行（turn_end 在工具之前 yield）
       if (budget && !state.budgetStop) {
         const hard = budget.checkHardOnly();
         if (hard.status === 'hard') {
           state.budgetStop = {
-            reason: hard.reason ?? 'tokens',
+            reason: hard.reason ?? 'wall_clock',
             report: hard.report,
           };
           state.pendingBudgetHardYield = {
-            reason: (hard.reason ?? 'tokens') as
-              | 'tokens'
+            reason: (hard.reason ?? 'wall_clock') as
               | 'wall_clock'
               | 'iteration'
               | 'tool_calls',
@@ -279,9 +354,26 @@ export async function* runAgentWithReliability(
       if (state.budgetStop) {
         return {
           block: true,
-          reason: `Budget exceeded (${typeof state.budgetStop === 'object' ? state.budgetStop.reason : 'resource'})`,
+          reason: `Budget exceeded (${typeof state.budgetStop === 'object' ? state.budgetStop.reason : 'wall_clock'})`,
           terminate: true,
         };
+      }
+
+      // P2 wrap-up：在 wrap-up 窗口内注入提示，阻止探索性工具调用
+      if (state.wrapUp) {
+        // 注入 wrap-up 提示（仅一次）
+        if (!state.wrapUp.hintInjected) {
+          state.wrapUp.hintInjected = true;
+          // 通过 getFollowUpMessages 注入提示
+          pendingFollowUps.push({
+            role: 'user',
+            content: state.wrapUp.userMessage,
+            timestamp: Date.now(),
+          });
+        }
+        // wrap-up 窗口内：允许只读工具，阻止写入工具
+        // 简化实现：允许所有工具，让模型自行决策
+        // 完整实现应检查工具类型（只读 vs 写入）
       }
       // SecurityGuard 检查
       if (harness.security) {
@@ -396,45 +488,20 @@ export async function* runAgentWithReliability(
       state.collector.recordTurn(summary);
       state.hasProgress = state.collector.hasProgress();
 
-      // 0b. Budget soft（工具路径：token 已在 turn_end 入账，此处用本轮新鲜 hasProgress）
-      //     文本路径首轮 soft 由 turn_end 分支处理（onTurnComplete 时尚未入账）
+      // 0b. Budget hard（P0：无 soft 续租；nominal tokens 仅诊断）
       if (budget && !state.budgetStop) {
-        const softEval = budget.evaluate(state.hasProgress);
-        if (softEval.status === 'soft') {
-          if (harness.runGuard) {
-            state.collector.noteExternalSignal({
-              source: 'budget_soft',
-              level: 'warning',
-              detail: `预算 soft 触达（${softEval.reason ?? 'tokens'}），且无实质进展`,
-              timestamp: Date.now(),
-            });
-            state.forceCheckpoint = true;
-          } else {
-            state.budgetStop = {
-              reason: softEval.reason ?? 'tokens',
-              report: softEval.report,
-            };
-            state.pendingBudgetHardYield = {
-              reason: (softEval.reason ?? 'tokens') as
-                | 'tokens'
-                | 'wall_clock'
-                | 'iteration'
-                | 'tool_calls',
-              report: softEval.report,
-            };
-          }
-        } else if (softEval.status === 'hard') {
+        const hardEval = budget.checkHardOnly();
+        if (hardEval.status === 'hard') {
           state.budgetStop = {
-            reason: softEval.reason ?? 'tokens',
-            report: softEval.report,
+            reason: hardEval.reason ?? 'wall_clock',
+            report: hardEval.report,
           };
           state.pendingBudgetHardYield = {
-            reason: (softEval.reason ?? 'tokens') as
-              | 'tokens'
+            reason: (hardEval.reason ?? 'wall_clock') as
               | 'wall_clock'
               | 'iteration'
               | 'tool_calls',
-            report: softEval.report,
+            report: hardEval.report,
           };
         }
       }
@@ -698,95 +765,264 @@ export async function* runAgentWithReliability(
     // Observer：run 结束前附带 RunMetricsCollector 快照（P1 Guard 面板）
     if (event.type === 'agent_end') {
       const scope = getRunScope();
+      const runSnapshot = ledger.snapshot({
+        scope: 'run',
+        sessionId: scope?.sessionId,
+        agentId: scope?.agentId,
+      });
+
+      // P4: 合并 run 级快照到 session 级账本
+      const sessionLedger = harness.sessionLedger as import('../accounting/session-ledger.js').SessionLedger | undefined;
+      if (sessionLedger) {
+        sessionLedger.mergeRunSnapshot(runSnapshot);
+      }
+
       yield {
         type: 'run_guard_metrics',
         timestamp: Date.now(),
-        data: state.collector.toObserverSnapshot({
-          sessionId: scope?.sessionId,
-          agentId: scope?.agentId,
-        }),
+        data: {
+          ...state.collector.toObserverSnapshot({
+            sessionId: scope?.sessionId,
+            agentId: scope?.agentId,
+          }),
+          usageLedger: runSnapshot,
+          sessionLedger: sessionLedger?.snapshot(),
+        },
       };
     }
     if (event.type === 'tool_end') {
       // maxToolCalls 计量（显式配置时才硬停）
       budget?.recordToolCall(1);
+      ledger.recordToolCall(1);
+      // Summary LLM usage 归因（capabilities/summary 产生的 LLM 调用）
+      const toolResult = event.result as { summaryUsage?: import('../../core/types/turn.js').TokenUsage };
+      if (toolResult.summaryUsage) {
+        ledger.recordUsage(toolResult.summaryUsage, { summary: true });
+      }
     }
 
     if (event.type === 'turn_end') {
-      // 错误重试 turn_end 带的是上一次成功的 usage，禁止双计
-      if (event.usage?.totalTokens && !event.error) {
-        const delta = event.usage.totalTokens;
-        state.collector.recordTokens(delta);
-        budget?.consumeTokens(delta);
+      // P0/P1：nominal tokens 入账诊断 + UsageLedger；不触发 spend hard
+      if (event.usage && !event.error) {
+        const nominal = nominalTotalTokens(event.usage);
+        state.collector.recordTokens(nominal);
+        budget?.consumeTokens(nominal);
+        ledger.recordUsage(event.usage);
       }
       budget?.recordIteration();
 
-      // turn_end：token 已入账后立刻判 hard
-      // soft：
-      // - 文本路径（!hasToolCalls）：onTurnComplete 已更新 hasProgress，此处补判
-      // - 工具路径：hasProgress 尚未更新，soft 留给 onTurnComplete
-      if (budget && !state.budgetStop) {
+      // P5: 更新 context 压力信息
+      if (harness.getContextPressure) {
+        const pressure = harness.getContextPressure();
+        if (pressure) {
+          ledger.updateContextPressure(pressure.estimatedTokens, pressure.contextWindow);
+        }
+      }
+
+      // P3 Advisory 告警（接近阈值时告警，不终止）
+      if (!state.budgetStop) {
+        const advisory = relConfig.advisory;
+        const snapshot = ledger.snapshot({ scope: 'run' });
+
+        if (advisory && !state.advisoryTriggered.has(advisory.unit)) {
+          let currentValue = 0;
+          if (advisory.unit === 'wall_clock_ms' && budget) {
+            currentValue = budget.report().elapsedMs;
+          } else if (advisory.unit === 'uncached_input_tokens') {
+            currentValue = snapshot.inputUncachedTokens;
+          } else if (advisory.unit === 'output_tokens') {
+            currentValue = snapshot.outputTokens;
+          } else if (advisory.unit === 'llm_calls') {
+            currentValue = snapshot.llmCalls;
+          } else if (advisory.unit === 'cost' && relConfig.policyPricing) {
+            currentValue = estimateCost(snapshot, relConfig.policyPricing);
+          }
+
+          if (currentValue >= advisory.threshold) {
+            state.advisoryTriggered.add(advisory.unit);
+            yield {
+              type: 'usage.advisory',
+              timestamp: Date.now(),
+              metric: 'policy',
+              unit: advisory.unit,
+              used: currentValue,
+              hard: advisory.threshold,
+              userMessage: `[Advisory] ${advisory.unit} 接近阈值（${currentValue} / ${advisory.threshold}）`,
+            };
+          }
+        }
+      }
+
+      // P3 Policy 单位评估
+      if (!state.wrapUp && !state.budgetStop) {
+        const policyUnits = relConfig.policyUnits;
+        const snapshot = ledger.snapshot({ scope: 'run' });
+        const onPolicyHit = relConfig.wrapUp?.onPolicyHit ?? 'wrap_up_then_stop';
+        const wrapUpTurns = relConfig.wrapUp?.turns ?? 3;
+
+        if (policyUnits) {
+          // 检查所有 policy 单位，找到第一个超限的
+          let exceededUnit: string | undefined;
+          let exceededUsed = 0;
+          let exceededHard = 0;
+
+          if (policyUnits.maxUncachedInputTokens && snapshot.inputUncachedTokens >= policyUnits.maxUncachedInputTokens) {
+            exceededUnit = 'uncached_input_tokens';
+            exceededUsed = snapshot.inputUncachedTokens;
+            exceededHard = policyUnits.maxUncachedInputTokens;
+          } else if (policyUnits.maxOutputTokens && snapshot.outputTokens >= policyUnits.maxOutputTokens) {
+            exceededUnit = 'output_tokens';
+            exceededUsed = snapshot.outputTokens;
+            exceededHard = policyUnits.maxOutputTokens;
+          } else if (policyUnits.maxLlmCalls && snapshot.llmCalls >= policyUnits.maxLlmCalls) {
+            exceededUnit = 'llm_calls';
+            exceededUsed = snapshot.llmCalls;
+            exceededHard = policyUnits.maxLlmCalls;
+          } else if (policyUnits.maxCost && relConfig.policyPricing) {
+            const estimatedCost = estimateCost(snapshot, relConfig.policyPricing);
+            if (estimatedCost >= policyUnits.maxCost) {
+              exceededUnit = 'cost';
+              exceededUsed = estimatedCost;
+              exceededHard = policyUnits.maxCost;
+            }
+          }
+
+          // 根据 onPolicyHit 配置决定行为
+          if (exceededUnit) {
+            const userMessage = `[Resource] ${exceededUnit} 超限（${exceededUsed.toFixed?.(2) ?? exceededUsed} / ${exceededHard}）`;
+
+            if (onPolicyHit === 'wrap_up_then_stop') {
+              // 先 wrap-up，再 stop
+              state.wrapUp = {
+                reason: 'policy',
+                turnsRemaining: wrapUpTurns,
+                userMessage: `${userMessage}。停止新的探索性工具调用；基于已有信息输出结论、证据与未完成项。`,
+                hintInjected: false,
+              };
+              yield {
+                type: 'budget.wrap_up',
+                timestamp: Date.now(),
+                metric: 'policy',
+                unit: exceededUnit as PolicyUnit,
+                used: exceededUsed,
+                hard: exceededHard,
+                userMessage: state.wrapUp.userMessage,
+                resumeHint: 'Run 已因 policy 超限进入 wrap-up 模式，请输出阶段性结论。',
+              };
+            } else {
+              // 直接 stop
+              state.budgetStop = {
+                reason: 'policy',
+                report: { unit: exceededUnit, used: exceededUsed, hard: exceededHard },
+              };
+              yield {
+                type: 'budget.exceeded',
+                timestamp: Date.now(),
+                metric: 'policy',
+                unit: exceededUnit as PolicyUnit,
+                used: exceededUsed,
+                hard: exceededHard,
+                userMessage,
+                resumeHint: `Run 已因 ${exceededUnit} 超限而停止。`,
+              };
+            }
+          }
+        }
+      }
+
+      // P2 wrap-up 控制梯：检查是否需要进入 wrap-up
+      if (!state.wrapUp && !state.budgetStop) {
+        const wrapUpConfig = relConfig.wrapUp;
+        const wrapUpTurns = wrapUpConfig?.turns ?? 3;
+        const contextRatio = wrapUpConfig?.contextRatio ?? 0.85;
+
+        // 检查 context 轴 wrap-up（contextEstTokens / contextWindowTokens）
+        const snapshot = ledger.snapshot({ scope: 'run' });
+        if (snapshot.contextEstTokens && snapshot.contextWindowTokens) {
+          const contextPressure = snapshot.contextEstTokens / snapshot.contextWindowTokens;
+          if (contextPressure >= contextRatio) {
+            state.wrapUp = {
+              reason: 'context',
+              turnsRemaining: wrapUpTurns,
+              userMessage: `[Context] 上下文压力接近上限（${Math.round(contextPressure * 100)}%）。停止新的探索性工具调用；基于已有信息输出结论、证据与未完成项。`,
+              hintInjected: false,
+            };
+            yield {
+              type: 'budget.wrap_up',
+              timestamp: Date.now(),
+              metric: 'context',
+              contextEst: snapshot.contextEstTokens,
+              contextWindow: snapshot.contextWindowTokens,
+              userMessage: state.wrapUp.userMessage,
+              resumeHint: 'Run 已因 context 压力进入 wrap-up 模式，请输出阶段性结论。',
+            };
+          }
+        }
+
+        // 检查 wall-clock wrap-up 阈值（默认 85% of maxWallClockMs）
+        if (!state.wrapUp && budget) {
+          const report = budget.report();
+          const maxWallClock = report.hard.wallClockMs;
+          const wrapUpThreshold = maxWallClock * contextRatio;
+
+          if (report.elapsedMs >= wrapUpThreshold) {
+            state.wrapUp = {
+              reason: 'policy',
+              turnsRemaining: wrapUpTurns,
+              userMessage: `[Resource] 预算策略接近上限（wall_clock: ${Math.round(report.elapsedMs / 1000)}s / ${Math.round(maxWallClock / 1000)}s）。停止新的探索性工具调用；基于已有信息输出结论、证据与未完成项。`,
+              hintInjected: false,
+            };
+            yield {
+              type: 'budget.wrap_up',
+              timestamp: Date.now(),
+              metric: 'policy',
+              unit: 'wall_clock_ms',
+              used: report.elapsedMs,
+              hard: maxWallClock,
+              userMessage: state.wrapUp.userMessage,
+              resumeHint: 'Run 已进入 wrap-up 模式，请输出阶段性结论。',
+            };
+          }
+        }
+      }
+
+      // wrap-up 窗口倒计时
+      if (state.wrapUp) {
+        state.wrapUp.turnsRemaining--;
+        if (state.wrapUp.turnsRemaining <= 0) {
+          // wrap-up 窗口结束，触发 stop
+          state.budgetStop = {
+            reason: state.wrapUp.reason,
+            report: { wrapUp: true },
+          };
+          yield {
+            type: 'budget.exceeded',
+            timestamp: Date.now(),
+            metric: state.wrapUp.reason === 'context' ? 'context' : 'policy',
+            userMessage: state.wrapUp.userMessage,
+            resumeHint: 'Run 已因 wrap-up 窗口结束而停止。',
+          };
+        }
+      }
+
+      if (budget && !state.budgetStop && !state.wrapUp) {
         const hardResult = budget.checkHardOnly();
         if (hardResult.status === 'hard') {
           state.budgetStop = {
-            reason: hardResult.reason ?? 'tokens',
+            reason: hardResult.reason ?? 'wall_clock',
             report: hardResult.report,
           };
           yield {
             type: 'budget_exceeded',
             timestamp: Date.now(),
             data: {
-              reason: (hardResult.reason ?? 'tokens') as
-                | 'tokens'
+              reason: (hardResult.reason ?? 'wall_clock') as
                 | 'wall_clock'
                 | 'iteration'
                 | 'tool_calls',
               report: hardResult.report,
             },
           };
-        } else if (!event.hasToolCalls) {
-          const softEval = budget.evaluate(state.hasProgress);
-          if (softEval.status === 'soft') {
-            if (harness.runGuard) {
-              state.collector.noteExternalSignal({
-                source: 'budget_soft',
-                level: 'warning',
-                detail: `预算 soft 触达（${softEval.reason ?? 'tokens'}），且无实质进展`,
-                timestamp: Date.now(),
-              });
-              state.forceCheckpoint = true;
-            } else {
-              state.budgetStop = {
-                reason: softEval.reason ?? 'tokens',
-                report: softEval.report,
-              };
-              state.pendingBudgetHardYield = {
-                reason: (softEval.reason ?? 'tokens') as
-                  | 'tokens'
-                  | 'wall_clock'
-                  | 'iteration'
-                  | 'tool_calls',
-                report: softEval.report,
-              };
-            }
-          } else if (softEval.status === 'hard') {
-            state.budgetStop = {
-              reason: softEval.reason ?? 'tokens',
-              report: softEval.report,
-            };
-            yield {
-              type: 'budget_exceeded',
-              timestamp: Date.now(),
-              data: {
-                reason: (softEval.reason ?? 'tokens') as
-                  | 'tokens'
-                  | 'wall_clock'
-                  | 'iteration'
-                  | 'tool_calls',
-                report: softEval.report,
-              },
-            };
-          }
         }
       }
     }

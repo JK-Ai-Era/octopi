@@ -158,12 +158,9 @@ export function parseConfigJson(text: string): JsonParseAttempt {
 /** 需要 number 的常见配置路径 */
 const NUMBER_PATHS: Array<{ path: string[]; min?: number }> = [
   { path: ['channels', 'port'] },
-  { path: ['budget', 'maxTokens'] },
-  { path: ['budget', 'maxWallClockMs'] },
-  { path: ['budget', 'softTokens'] },
-  { path: ['budget', 'softWallClockMs'] },
-  { path: ['budget', 'maxIterations'] },
-  { path: ['budget', 'maxToolCalls'] },
+  { path: ['budgetPolicy', 'maxWallClockMs'] },
+  { path: ['budgetPolicy', 'maxIterations'] },
+  { path: ['budgetPolicy', 'maxToolCalls'] },
   { path: ['runGuard', 'checkpointInterval'] },
   { path: ['runGuard', 'hardLimit'] },
   { path: ['runGuard', 'hardWallClockMs'] },
@@ -406,38 +403,57 @@ export function applyDistributedIntelligence(raw: RawObject): boolean {
 }
 
 /**
- * 检测 budget.maxTimeMs
+ * 检测旧顶层 budget / spend hard 字段（arch/budget-redesign.md P0）
  *
  * @param raw - 配置对象
  * @returns finding 或 null
  */
-export function detectBudgetMaxTimeMs(raw: RawObject): MigrationFinding | null {
-  if (!isPlainObject(raw.budget) || !('maxTimeMs' in raw.budget)) return null;
+export function detectLegacyBudget(raw: RawObject): MigrationFinding | null {
+  const old = raw.budget;
+  if (!isPlainObject(old)) return null;
   return {
     id: 'CFG003',
     severity: 'warn',
-    message: 'budget.maxTimeMs is deprecated and ignored by schema',
-    hint: 'rename to budget.maxWallClockMs',
+    message: 'legacy top-level budget (maxTokens/soft/…) is removed; use budgetPolicy',
+    hint: 'keep only maxWallClockMs/maxIterations/maxToolCalls under budgetPolicy',
     autoFixable: true,
   };
 }
 
 /**
- * 迁移 budget.maxTimeMs → maxWallClockMs
+ * 迁移旧 budget → budgetPolicy（丢弃 nominal token hard 与 soft 字段）
  *
  * @param raw - 配置对象
  * @returns 是否变更
  */
-export function applyBudgetMaxTimeMs(raw: RawObject): boolean {
-  if (!isPlainObject(raw.budget) || !('maxTimeMs' in raw.budget)) return false;
-  const budget = raw.budget;
-  const legacy = budget.maxTimeMs;
-  delete budget.maxTimeMs;
-  if (budget.maxWallClockMs === undefined && typeof legacy === 'number') {
-    budget.maxWallClockMs = legacy;
+export function applyLegacyBudget(raw: RawObject): boolean {
+  if (!isPlainObject(raw.budget)) return false;
+  const old = raw.budget;
+  const keep: RawObject = {};
+  if (typeof old.maxWallClockMs === 'number') keep.maxWallClockMs = old.maxWallClockMs;
+  else if (typeof old.maxTimeMs === 'number') keep.maxWallClockMs = old.maxTimeMs;
+  if (typeof old.maxIterations === 'number') keep.maxIterations = old.maxIterations;
+  if (typeof old.maxToolCalls === 'number') keep.maxToolCalls = old.maxToolCalls;
+
+  delete raw.budget;
+  if (!isPlainObject(raw.budgetPolicy)) raw.budgetPolicy = {};
+  const next = raw.budgetPolicy as RawObject;
+  if (keep.maxWallClockMs !== undefined && next.maxWallClockMs === undefined) {
+    next.maxWallClockMs = keep.maxWallClockMs;
+  }
+  if (keep.maxIterations !== undefined && next.maxIterations === undefined) {
+    next.maxIterations = keep.maxIterations;
+  }
+  if (keep.maxToolCalls !== undefined && next.maxToolCalls === undefined) {
+    next.maxToolCalls = keep.maxToolCalls;
   }
   return true;
 }
+
+/** @deprecated use detectLegacyBudget */
+export const detectBudgetMaxTimeMs = detectLegacyBudget;
+/** @deprecated use applyLegacyBudget */
+export const applyBudgetMaxTimeMs = applyLegacyBudget;
 
 /**
  * 检测 agents[].persona 字符串（旧 home）
@@ -625,7 +641,7 @@ export interface ConfigMigrationRule {
 export const CONFIG_MIGRATION_RULES: ConfigMigrationRule[] = [
   { id: 'CFG001', detect: detectSupervisor, apply: applySupervisor },
   { id: 'CFG002', detect: detectDistributedIntelligence, apply: applyDistributedIntelligence },
-  { id: 'CFG003', detect: detectBudgetMaxTimeMs, apply: applyBudgetMaxTimeMs },
+  { id: 'CFG003', detect: detectLegacyBudget, apply: applyLegacyBudget },
   { id: 'CFG004', detect: detectPersonaAsHome, apply: applyPersonaAsHome },
   { id: 'CFG005', detect: detectSchemaRef, apply: applySchemaRef },
   { id: 'CFG006', detect: detectTopLevelProviders, apply: (raw) => migrateTopLevelProviders(raw).changed },

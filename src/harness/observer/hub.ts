@@ -706,12 +706,62 @@ export class ObserverHub {
 
   private mergeGuardFlags(record: RunRecord, event: AgentEvent): void {
     if (!this.config.channels['run.guard']) return;
+    if (event.type === 'run.guard.metrics' || event.type === 'run_guard_metrics') {
+      const d = event.data as {
+        usageLedger?: import('../accounting/usage-ledger.js').UsageLedgerSnapshot;
+        sessionLedger?: import('../accounting/session-ledger.js').SessionLedgerSnapshot;
+      };
+      if (d?.usageLedger && record.guardMetrics) {
+        record.guardMetrics = {
+          ...record.guardMetrics,
+          usageLedger: d.usageLedger,
+          sessionLedger: d.sessionLedger ?? record.guardMetrics.sessionLedger,
+        };
+      } else if (d?.usageLedger) {
+        record.guardMetrics = {
+          iteration: 0,
+          totalToolCalls: 0,
+          nominalTotalTokens: 0,
+          elapsedMs: 0,
+          consecutiveErrors: 0,
+          consecutiveSameTool: 0,
+          noopStreak: 0,
+          hasProgress: true,
+          uniqueTools: [],
+          recentTools: [],
+          recoveryCount: 0,
+          usageLedger: d.usageLedger,
+          sessionLedger: d.sessionLedger,
+        };
+      }
+    }
+    // P2 wrap-up 事件
+    if (event.type === 'budget.wrap_up') {
+      const d = event.data as { reason?: string; turnsRemaining?: number };
+      record.guardMetrics = {
+        iteration: record.guardMetrics?.iteration ?? 0,
+        totalToolCalls: record.guardMetrics?.totalToolCalls ?? 0,
+        nominalTotalTokens: record.guardMetrics?.nominalTotalTokens ?? 0,
+        elapsedMs: record.guardMetrics?.elapsedMs ?? 0,
+        consecutiveErrors: record.guardMetrics?.consecutiveErrors ?? 0,
+        consecutiveSameTool: record.guardMetrics?.consecutiveSameTool ?? 0,
+        noopStreak: record.guardMetrics?.noopStreak ?? 0,
+        hasProgress: record.guardMetrics?.hasProgress ?? true,
+        uniqueTools: record.guardMetrics?.uniqueTools ?? [],
+        recentTools: record.guardMetrics?.recentTools ?? [],
+        recoveryCount: record.guardMetrics?.recoveryCount ?? 0,
+        ...record.guardMetrics,
+        wrapUpActive: true,
+        wrapUpReason: d.reason as 'context' | 'policy' | undefined,
+        wrapUpTurnsRemaining: d.turnsRemaining,
+      };
+    }
     if (event.type === 'budget.exceeded') {
       const reason = (event.data as { reason?: string } | undefined)?.reason;
       record.guardMetrics = {
         iteration: 0,
         totalToolCalls: record.lifecycle.toolCalls ?? 0,
-        totalTokens: 0,
+        nominalTotalTokens: 0,
         elapsedMs: record.lifecycle.durationMs ?? 0,
         consecutiveErrors: record.guardMetrics?.consecutiveErrors ?? 0,
         consecutiveSameTool: record.guardMetrics?.consecutiveSameTool ?? 0,
@@ -728,7 +778,7 @@ export class ObserverHub {
       record.guardMetrics = {
         iteration: record.guardMetrics?.iteration ?? 0,
         totalToolCalls: record.guardMetrics?.totalToolCalls ?? 0,
-        totalTokens: record.guardMetrics?.totalTokens ?? 0,
+        nominalTotalTokens: record.guardMetrics?.nominalTotalTokens ?? 0,
         elapsedMs: record.guardMetrics?.elapsedMs ?? 0,
         consecutiveErrors: record.guardMetrics?.consecutiveErrors ?? 0,
         consecutiveSameTool: record.guardMetrics?.consecutiveSameTool ?? 0,
@@ -745,7 +795,7 @@ export class ObserverHub {
       record.guardMetrics = {
         iteration: record.guardMetrics?.iteration ?? 0,
         totalToolCalls: record.guardMetrics?.totalToolCalls ?? 0,
-        totalTokens: record.guardMetrics?.totalTokens ?? 0,
+        nominalTotalTokens: record.guardMetrics?.nominalTotalTokens ?? 0,
         elapsedMs: record.guardMetrics?.elapsedMs ?? 0,
         consecutiveErrors: record.guardMetrics?.consecutiveErrors ?? 0,
         consecutiveSameTool: record.guardMetrics?.consecutiveSameTool ?? 0,

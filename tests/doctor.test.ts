@@ -47,10 +47,11 @@ describe('config-migrations', () => {
     });
   });
 
-  it('migrates budget.maxTimeMs to maxWallClockMs', () => {
-    const raw = { budget: { maxTokens: 1000, maxTimeMs: 60_000 } };
+  it('migrates legacy budget to budgetPolicy（丢弃 maxTokens/soft）', () => {
+    const raw = { budget: { maxTokens: 1000, maxTimeMs: 60_000, softTokens: 100 } };
     expect(applyBudgetMaxTimeMs(raw)).toBe(true);
-    expect(raw.budget).toEqual({ maxTokens: 1000, maxWallClockMs: 60_000 });
+    expect(raw.budget).toBeUndefined();
+    expect(raw.budgetPolicy).toEqual({ maxWallClockMs: 60_000 });
   });
 
   it('moves persona string to home without touching values', () => {
@@ -234,13 +235,14 @@ describe('loadConfig deprecation warnings (shared migrations)', () => {
     expect(config.runGuard).toBeUndefined();
   });
 
-  it('still migrates budget.maxTimeMs in memory', () => {
+  it('still migrates legacy budget to budgetPolicy in memory', () => {
     const file = writeConfig({
       ...baseModels,
       budget: { maxTokens: 1000, maxTimeMs: 60_000 },
     });
     const config = loadConfig(file);
-    expect((config.budget as { maxWallClockMs?: number }).maxWallClockMs).toBe(60_000);
+    expect((config.budgetPolicy as { maxWallClockMs?: number } | undefined)?.maxWallClockMs).toBe(60_000);
+    expect((config as { budget?: unknown }).budget).toBeUndefined();
   });
 });
 
@@ -346,7 +348,8 @@ describe('octopi doctor', () => {
     expect(parsed.providers).toBeUndefined();
     expect(parsed.models.providers.openai.apiKey).toBe(secret);
     expect(parsed.runGuard).toEqual({ enabled: true, checkpointInterval: 15 });
-    expect(parsed.budget.maxWallClockMs).toBe(12345);
+    expect(parsed.budgetPolicy?.maxWallClockMs).toBe(12345);
+    expect(parsed.budget).toBeUndefined();
     expect(parsed.agents[0].home).toBe(join(home, 'agents', 'default'));
     expect(parsed.agents[0].persona).toBeUndefined();
 

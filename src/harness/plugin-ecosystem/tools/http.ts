@@ -160,6 +160,7 @@ export function createHttpRequestTool(options?: HttpRequestToolOptions): Registe
           bodySizeBytes: applied.rawSizeBytes,
           bodyLength: applied.rawLength,
           summary: applied.summary,
+          summaryUsage: applied.usage,
           url: response.url,
         };
       } catch (error) {

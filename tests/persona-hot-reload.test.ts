@@ -5,6 +5,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { makeTokenUsage } from '../src/core/types/turn.js';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, utimesSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -39,7 +40,7 @@ function createMockProvider(onChat?: (req: LLMRequest) => void): ModelProvider {
         content: 'ok',
         model: 'mock-model',
         finishReason: 'stop' as const,
-        usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
+        usage: makeTokenUsage({ promptTokens: 1, completionTokens: 1 }),
       };
     }),
     stream: async function* () {

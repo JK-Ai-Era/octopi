@@ -30,7 +30,7 @@ export interface ContextEngineInfo {
  *
  * 负责估算内容的 token 数。
  * 策略：
- * 1. 优先使用 LLM 返回的实际 token 数（usage.promptTokens）
+ * 1. 优先使用 LLM 返回的实际 token 数（usage reported prompt）
  * 2. 次选：专用 tokenizer（如 tiktoken）
  * 3. 兜底：启发式估算
  *    - 英文：字符数 / 4
@@ -228,8 +228,8 @@ export interface AfterTurnParams {
   agentId?: string;
   /** 本轮消息 */
   turn: Message[];
-  /** 本轮 token 使用 */
-  usage?: { promptTokens: number; completionTokens: number };
+  /** 本轮 token 使用（cache-aware） */
+  usage?: import('../../core/types/turn.js').TokenUsage;
 }
 
 // ── 引擎接口 ──

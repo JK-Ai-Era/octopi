@@ -7,6 +7,9 @@ export type {
   HarnessLoopEvent,
   HarnessLoopExtension,
   BudgetExceededEvent,
+  BudgetControlEvent,
+  ControlStopMetric,
+  PolicyUnit,
   RunGuardRecoveredEvent,
   RunGuardStoppedEvent,
 } from './harness-events.js';

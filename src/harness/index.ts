@@ -4,6 +4,10 @@
  * 15 个自包含领域，每个领域通过 index.ts 导出。
  */
 
+// ── Accounting（用量账本；arch/budget-redesign.md P1） ──
+export { UsageLedger, SessionLedger } from './accounting/index.js';
+export type { UsageLedgerSnapshot, SessionLedgerSnapshot } from './accounting/index.js';
+
 // ── Tool 系统 ──
 export { createToolSet } from './plugin-ecosystem/tools/tool-set.js';
 export type { ToolSet, ToolSetConfig } from './plugin-ecosystem/tools/tool-set.js';
@@ -224,10 +228,6 @@ export type { KnowledgeStore, KnowledgeEntry, KnowledgeType, KnowledgeStats, Ret
 
 // ── Concurrency ──
 // (exported from concurrency/index.ts)
-
-// ── Resources ──
-export { ResourceManager } from './resources/index.js';
-export type { TokenBudgetConfig, ModelPricing, RateLimitConfig, TokenCheckResult, RateLimitCheckResult, ResourceStats } from './resources/index.js';
 
 // ── Memory ──
 export { InMemoryMemoryStore, InMemoryConceptGraph, AgentDatabase, SqliteMemoryStore, SqliteWisdomStore, SqliteConceptGraph, KnowledgeRegistry, createEmbeddingProvider } from './memory/index.js';

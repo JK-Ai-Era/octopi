@@ -88,10 +88,7 @@ export class Agent {
     lastProactiveMessageCount?: number;
     lastProactiveTokens?: number;
   }>();
-  private _onAfterTurn?: (usage?: {
-    promptTokens: number;
-    completionTokens: number;
-  }, turn?: Message[]) => Promise<void>;
+  private _onAfterTurn?: (usage?: import('../../core/types/turn.js').TokenUsage, turn?: Message[]) => Promise<void>;
 
   constructor(options: AgentOptions) {
     this._context = {
@@ -204,18 +201,12 @@ export class Agent {
   }
 
   /** 每轮结束后通知 ContextEngine（afterTurn 校准等）；turn 为本轮增量消息 */
-  setOnAfterTurn(fn?: (usage?: {
-    promptTokens: number;
-    completionTokens: number;
-  }, turn?: Message[]) => Promise<void>): void {
+  setOnAfterTurn(fn?: (usage?: import('../../core/types/turn.js').TokenUsage, turn?: Message[]) => Promise<void>): void {
     this._onAfterTurn = fn;
   }
 
   /** 由 Runner 在 turn 结束后调用 */
-  async notifyAfterTurn(usage?: {
-    promptTokens: number;
-    completionTokens: number;
-  }, turn?: Message[]): Promise<void> {
+  async notifyAfterTurn(usage?: import('../../core/types/turn.js').TokenUsage, turn?: Message[]): Promise<void> {
     if (this._onAfterTurn) {
       await this._onAfterTurn(usage, turn);
     }

@@ -272,7 +272,7 @@ export function RunObservatoryPanel({
               <>
                 <div className="ctx-section-title">Guard · Metrics · LLM</div>
                 <div className="small muted" style={{ marginBottom: 4 }}>
-                  iter = RunMetricsCollector 轮次（turn_end 次数）。tokensΣ = 各轮 LLM usage.totalTokens 之和（含 prompt+completion，<b>不是</b>当前上下文长度）。context est = LLM 出口估算 tokens。
+                  iter = RunMetricsCollector 轮次（turn_end 次数）。tokensΣ = nominal Σ（诊断，非成本 hard）。usage 分项来自 UsageLedger（uncached/cached/out + cacheAware）。context est = LLM 出口估算 tokens。
                 </div>
                 <div className="ctx-metrics">
                   <div className="ctx-metric">
@@ -280,8 +280,26 @@ export function RunObservatoryPanel({
                     <div className="v">{obs.guardMetrics?.iteration ?? lifecycle?.turns ?? '—'}</div>
                   </div>
                   <div className="ctx-metric">
-                    <div className="k">tokensΣ usage</div>
-                    <div className="v">{formatTokens(obs.guardMetrics?.totalTokens)}</div>
+                    <div className="k">in uncached</div>
+                    <div className="v">{formatTokens(obs.guardMetrics?.usageLedger?.inputUncachedTokens)}</div>
+                  </div>
+                  <div className="ctx-metric">
+                    <div className="k">in cached</div>
+                    <div className="v">{formatTokens(obs.guardMetrics?.usageLedger?.inputCachedTokens)}</div>
+                  </div>
+                  <div className="ctx-metric">
+                    <div className="k">out</div>
+                    <div className="v">{formatTokens(obs.guardMetrics?.usageLedger?.outputTokens)}</div>
+                  </div>
+                </div>
+                <div className="ctx-metrics" style={{ marginTop: 6 }}>
+                  <div className="ctx-metric">
+                    <div className="k">tokensΣ (nominal)</div>
+                    <div className="v">{formatTokens(obs.guardMetrics?.usageLedger?.nominalTotalTokens ?? obs.guardMetrics?.totalTokens)}</div>
+                  </div>
+                  <div className="ctx-metric">
+                    <div className="k">cacheAware</div>
+                    <div className="v">{obs.guardMetrics?.usageLedger?.cacheAware == null ? '—' : String(obs.guardMetrics.usageLedger.cacheAware)}</div>
                   </div>
                   <div className="ctx-metric">
                     <div className="k">context est</div>
@@ -313,8 +331,11 @@ export function RunObservatoryPanel({
                     <span className="k">uniqueTools</span>
                     <span className="v">{obs.guardMetrics.uniqueTools?.join(', ') || '—'}</span>
                     <span className="k">budget</span>
-                    <span className={`v ${obs.guardMetrics.budgetExceededReason ? 'status-warn' : ''}`}>
-                      {obs.guardMetrics.budgetExceededReason || '—'}
+                    <span className={`v ${obs.guardMetrics.budgetExceededReason ? 'status-warn' : obs.guardMetrics.wrapUpActive ? 'status-info' : ''}`}>
+                      {obs.guardMetrics.budgetExceededReason
+                        || (obs.guardMetrics.wrapUpActive
+                          ? `wrap-up (${obs.guardMetrics.wrapUpReason ?? '?'}, ${obs.guardMetrics.wrapUpTurnsRemaining ?? 0} turns left)`
+                          : '—')}
                     </span>
                     <span className="k">guard</span>
                     <span className={`v ${obs.guardMetrics.guardStoppedReason ? 'status-error' : ''}`}>

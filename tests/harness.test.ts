@@ -3,6 +3,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
+import { makeTokenUsage } from '../src/core/types/turn.js';
 import {
   AgentBuilder,
   createAgent,
@@ -18,7 +19,7 @@ import {
 import {
   DefaultEventBus,
 } from '../src/core/index.js';
-import { IterationBudget } from '../src/harness/budget/budget.js';
+import { BudgetPolicyEngine } from '../src/harness/budget/budget.js';
 import { DefaultSecurityGuard } from '../src/harness/security/default-security-guard.js';
 import type {
   ModelProvider,
@@ -35,11 +36,11 @@ function createMockModelProvider(): ModelProvider {
       content: 'Hello!',
       model: 'mock-model',
       finishReason: 'stop',
-      usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+      usage: makeTokenUsage({ promptTokens: 10, completionTokens: 5 }),
     }),
     stream: async function* (): AsyncGenerator<LLMStreamChunk> {
       yield { type: 'content', content: 'Hello!' };
-      yield { type: 'done', usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 } };
+      yield { type: 'done', usage: makeTokenUsage({ promptTokens: 10, completionTokens: 5 }) };
     },
     isAvailable: vi.fn().mockResolvedValue(true),
       getModelInfo: () => null,
@@ -197,7 +198,7 @@ describe('SessionAwareRunner — 异常退出 session 一致性', () => {
         if (callCount === 1) {
           yield { type: 'content', content: 'Let me check...' };
           yield { type: 'tool_call', toolCall: { id: 'c1', name: 'test_tool', arguments: '{}', index: 0 } };
-          yield { type: 'done', usage: { promptTokens: 5, completionTokens: 2, totalTokens: 7 } };
+          yield { type: 'done', usage: makeTokenUsage({ promptTokens: 5, completionTokens: 2 }) };
         }
         // 第二次：直接结束（模拟预算耗尽后的引擎行为）
       },

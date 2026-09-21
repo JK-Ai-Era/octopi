@@ -67,18 +67,18 @@ describe('loadConfig supervisor deprecation', () => {
     expect(warn.mock.calls.some(([msg]) => String(msg).includes('distributedIntelligence'))).toBe(true);
   });
 
-  it('budget.maxTimeMs 告警并迁移到 maxWallClockMs', () => {
+  it('legacy budget 迁移到 budgetPolicy（丢弃 spend hard）', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const file = writeConfig({
       ...baseModels,
-      budget: { maxTokens: 1000, maxTimeMs: 60_000 },
+      budget: { maxTokens: 1000, maxTimeMs: 60_000, softTokens: 10 },
     });
 
     const config = loadConfig(file);
     expect(
-      warn.mock.calls.some(([msg]) => String(msg).includes('maxTimeMs') && String(msg).includes('maxWallClockMs')),
+      warn.mock.calls.some(([msg]) => String(msg).includes('budgetPolicy') || String(msg).includes('budget')),
     ).toBe(true);
-    expect((config.budget as { maxWallClockMs?: number }).maxWallClockMs).toBe(60_000);
-    expect((config.budget as { maxTimeMs?: number }).maxTimeMs).toBeUndefined();
+    expect((config.budgetPolicy as { maxWallClockMs?: number } | undefined)?.maxWallClockMs).toBe(60_000);
+    expect((config as { budget?: unknown }).budget).toBeUndefined();
   });
 });

@@ -3,6 +3,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { makeTokenUsage } from '../../src/core/types/turn.js';
 import { AgentSwarm, RoundRobinStrategy, CapabilityStrategy, PipelineStrategy } from '../../src/harness/multi-agent/swarm.js';
 import { DefaultAgentRegistry } from '../../src/harness/multi-agent/registry.js';
 import { DefaultEventBus } from '../../src/core/primitives/event-bus.js';
@@ -23,7 +24,7 @@ function createMockModelProvider(response?: string): ModelProvider {
       content: response ?? 'Task completed successfully.',
       model: 'mock-model',
       finishReason: 'stop',
-      usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+      usage: makeTokenUsage({ promptTokens: 10, completionTokens: 5 }),
     }),
     stream: async function* (req: LLMRequest): AsyncGenerator<LLMStreamChunk> {
       yield { type: 'content' as const, content: response ?? 'Task completed successfully.' };

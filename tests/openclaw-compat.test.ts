@@ -11,6 +11,7 @@
  * 4. OpenRouter — registerProvider + registerMediaUnderstanding + registerImageGeneration + registerModelCatalog + registerSpeech + registerMusic + registerVideo
  */
 import { describe, test, expect, beforeEach } from 'vitest';
+import { makeTokenUsage, nominalTotalTokens } from '../src/core/types/turn.js';
 import { PluginApi } from '../src/harness/plugin-ecosystem/plugins/api.js';
 import { PluginManager } from '../src/harness/plugin-ecosystem/plugins/manager.js';
 import { definePluginEntry } from '../src/harness/plugin-ecosystem/plugins/entry.js';
@@ -121,7 +122,7 @@ function createMockLMStudioPlugin() {
             return {
               content: `LMStudio completed: ${request.messages?.[request.messages.length - 1]?.content ?? ''}`,
               model: request.model,
-              usage: { promptTokens: 10, completionTokens: 20, totalTokens: 30 },
+              usage: makeTokenUsage({ promptTokens: 10, completionTokens: 20 }),
             };
           },
         },
@@ -172,7 +173,7 @@ function createMockOpenRouterPlugin() {
             return {
               content: `OpenRouter (${request.model}): completed`,
               model: request.model,
-              usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
+              usage: makeTokenUsage({ promptTokens: 100, completionTokens: 50 }),
             };
           },
         },
@@ -394,7 +395,7 @@ describe('OpenClaw Plugin 兼容性', () => {
 
       expect(result.content).toContain('LMStudio completed');
       expect(result.model).toBe('local-model-7b');
-      expect(result.usage.totalTokens).toBe(30);
+      expect(nominalTotalTokens(result.usage!)).toBe(30);
     });
 
     test('memory embedding provider 可以生成向量', async () => {

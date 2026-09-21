@@ -9,10 +9,10 @@ import type { AgentDefinition } from '../../harness/types/agent-definition.js';
 export interface GatewayConfig {
   port?: number;
   agents: AgentDefinition[];
-  budget?: {
+  /** Run 安全阀/策略；见 arch/budget-redesign.md（无 nominal token hard） */
+  budgetPolicy?: {
     maxIterations?: number;
     maxToolCalls?: number;
-    maxTokens?: number;
     maxWallClockMs?: number;
   };
   session?: {

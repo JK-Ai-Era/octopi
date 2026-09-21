@@ -26,7 +26,17 @@ export { AgentEvents } from './harness/events/agent-event-map.js';
 export type { AgentEventMap, KnownAgentEventType, TypedAgentEvent } from './harness/events/agent-event-map.js';
 export type { AgentEvent, EventHandler, Disposable } from './core/primitives/event-bus.js';
 export { DefaultSecurityGuard } from './harness/security/default-security-guard.js';
-export { IterationBudget } from './harness/budget/budget.js';
+export { BudgetPolicyEngine, DEFAULT_BUDGET } from './harness/budget/budget.js';
+export type { BudgetPolicyConfig } from './harness/budget/budget.js';
+export { UsageLedger } from './harness/accounting/usage-ledger.js';
+export type { UsageLedgerSnapshot } from './harness/accounting/usage-ledger.js';
+export {
+  emptyTokenUsage,
+  makeTokenUsage,
+  nominalTotalTokens,
+  reportedPromptTokens,
+} from './core/types/turn.js';
+export type { TokenUsage } from './core/types/turn.js';
 
 // Core 接口
 export type { ModelProvider, LLMRequest, LLMResponse, LLMStreamChunk, LLMToolDefinition } from './core/interfaces/model-provider.js';
@@ -69,7 +79,7 @@ export { AgentBuilder, createAgent, isSubsystemAllowed, discoverSubsystemSpecs }
 export type { AgentBuildOptions, AgentBuildResult, AgentBuildCoreResult } from './harness/agent-building/builder.js';
 export { Agent } from './harness/agent/index.js';
 export type { AgentOptions } from './harness/agent/index.js';
-export type { HarnessLoopEvent } from './harness/reliability/harness-events.js';
+export type { HarnessLoopEvent, BudgetControlEvent, ControlStopMetric, PolicyUnit } from './harness/reliability/harness-events.js';
 export { SessionAwareRunner } from './harness/runner.js';
 export {
   DEFAULT_TOOL_ISOLATION,

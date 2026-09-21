@@ -10,6 +10,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
+import { makeTokenUsage } from '../../src/core/types/turn.js';
 import { Agent } from '../../src/harness/agent/agent.js';
 import { runAgentWithReliability } from '../../src/harness/reliability/run-agent.js';
 import type { ReliabilityHarness } from '../../src/harness/reliability/run-agent.js';
@@ -83,7 +84,7 @@ describe('Planning-only Retry', () => {
       {
         content: 'I will analyze the project structure. Let me first list the files.',
         toolCalls: undefined,
-        usage: { promptTokens: 10, completionTokens: 20, totalTokens: 30 },
+        usage: makeTokenUsage({ promptTokens: 10, completionTokens: 20 }),
         model: 'test',
         finishReason: 'stop',
       },
@@ -91,7 +92,7 @@ describe('Planning-only Retry', () => {
       {
         content: '',
         toolCalls: [{ id: 'call_1', name: 'file_list', arguments: { path: '.' } }],
-        usage: { promptTokens: 10, completionTokens: 20, totalTokens: 30 },
+        usage: makeTokenUsage({ promptTokens: 10, completionTokens: 20 }),
         model: 'test',
         finishReason: 'tool_calls',
       },
@@ -99,7 +100,7 @@ describe('Planning-only Retry', () => {
       {
         content: 'Here is the project structure...',
         toolCalls: undefined,
-        usage: { promptTokens: 10, completionTokens: 20, totalTokens: 30 },
+        usage: makeTokenUsage({ promptTokens: 10, completionTokens: 20 }),
         model: 'test',
         finishReason: 'stop',
       },
@@ -139,14 +140,14 @@ describe('Planning-only Retry', () => {
       {
         content: 'I will analyze the project. Let me check the files.',
         toolCalls: undefined,
-        usage: { promptTokens: 10, completionTokens: 20, totalTokens: 30 },
+        usage: makeTokenUsage({ promptTokens: 10, completionTokens: 20 }),
         model: 'test',
         finishReason: 'stop',
       },
       {
         content: 'I will now look at the code. Let me start by reading the main file.',
         toolCalls: undefined,
-        usage: { promptTokens: 10, completionTokens: 20, totalTokens: 30 },
+        usage: makeTokenUsage({ promptTokens: 10, completionTokens: 20 }),
         model: 'test',
         finishReason: 'stop',
       },
@@ -174,14 +175,14 @@ describe('Planning-only Retry', () => {
       {
         content: '',
         toolCalls: [{ id: 'call_1', name: 'file_list', arguments: { path: '.' } }],
-        usage: { promptTokens: 10, completionTokens: 20, totalTokens: 30 },
+        usage: makeTokenUsage({ promptTokens: 10, completionTokens: 20 }),
         model: 'test',
         finishReason: 'tool_calls',
       },
       {
         content: 'Here is the project structure...',
         toolCalls: undefined,
-        usage: { promptTokens: 10, completionTokens: 20, totalTokens: 30 },
+        usage: makeTokenUsage({ promptTokens: 10, completionTokens: 20 }),
         model: 'test',
         finishReason: 'stop',
       },
@@ -205,7 +206,7 @@ describe('Planning-only Retry', () => {
       {
         content: 'I will analyze the project. Let me check the files.',
         toolCalls: undefined,
-        usage: { promptTokens: 10, completionTokens: 20, totalTokens: 30 },
+        usage: makeTokenUsage({ promptTokens: 10, completionTokens: 20 }),
         model: 'test',
         finishReason: 'stop',
       },
@@ -230,7 +231,7 @@ describe('Planning-only Retry', () => {
       {
         content: 'OK',  // 太短，不是 planning-only
         toolCalls: undefined,
-        usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+        usage: makeTokenUsage({ promptTokens: 10, completionTokens: 5 }),
         model: 'test',
         finishReason: 'stop',
       },
@@ -260,7 +261,7 @@ describe('Planning-only Retry', () => {
       {
         content: 'I will analyze the project. Let me check the files.',
         toolCalls: undefined,
-        usage: { promptTokens: 10, completionTokens: 20, totalTokens: 30 },
+        usage: makeTokenUsage({ promptTokens: 10, completionTokens: 20 }),
         model: 'test',
         finishReason: 'stop',
       },
@@ -268,14 +269,14 @@ describe('Planning-only Retry', () => {
       {
         content: '',
         toolCalls: [{ id: 'call_1', name: 'file_list', arguments: { path: '.' } }],
-        usage: { promptTokens: 10, completionTokens: 20, totalTokens: 30 },
+        usage: makeTokenUsage({ promptTokens: 10, completionTokens: 20 }),
         model: 'test',
         finishReason: 'tool_calls',
       },
       {
         content: 'Here are the files...',
         toolCalls: undefined,
-        usage: { promptTokens: 10, completionTokens: 20, totalTokens: 30 },
+        usage: makeTokenUsage({ promptTokens: 10, completionTokens: 20 }),
         model: 'test',
         finishReason: 'stop',
       },
