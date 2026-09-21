@@ -132,8 +132,18 @@ export function createShellTool(): RegisteredTool {
  * - content: 文件内容
  * - totalLines: 文件总行数
  * - truncated: 是否被截断
+ *
+ * 大文件：kind_sensitive + L1 硬顶；code 默认不 L2 摘要。
  */
-export function createFileReadTool(): RegisteredTool {
+/**
+ * 创建 file_read 工具
+ *
+ * @param options - 可选 SummaryPort / toolBindings 注入（与 octopi.json summary.tools 同源）
+ * @returns RegisteredTool
+ */
+export function createFileReadTool(options?: {
+  summary?: import('../../capabilities/summary/index.js').ToolSummarySupport;
+}): RegisteredTool {
   return {
     definition: {
       name: 'file_read',
@@ -152,10 +162,29 @@ export function createFileReadTool(): RegisteredTool {
           type: 'number',
           description: 'Maximum number of lines to read (default: 2000)',
         },
+        summarize: {
+          type: 'string',
+          description: 'Summary mode: auto (default; code usually raw) | force | off. off still hard-caps size.',
+          enum: ['auto', 'force', 'off'],
+        },
+        summary_task: {
+          type: 'string',
+          description: 'Optional extraction goal when summarizing file content',
+        },
+        summary_kind: {
+          type: 'string',
+          description: 'Optional ContentKind override',
+          enum: ['web_page', 'file_text', 'document', 'code', 'api_json', 'log', 'conversation', 'opaque', 'auto'],
+        },
+        summary_policy: {
+          type: 'string',
+          description: 'Optional SummaryPolicy id override',
+        },
       },
     },
     handler: async (args, context) => {
       const { readFile } = await import('node:fs/promises');
+      const pathModule = await import('node:path');
 
       const rawPath = args.path as string;
       const cwd = context?.cwd ?? process.cwd();
@@ -170,14 +199,36 @@ export function createFileReadTool(): RegisteredTool {
 
         const start = Math.max(0, offset - 1);
         const end = Math.min(totalLines, start + limit);
-        const selectedLines = lines.slice(start, end);
+        const selected = lines.slice(start, end).join('\n');
+
+        const { applyToolSummary, resolveSupportBinding } = await import(
+          '../../capabilities/summary/index.js'
+        );
+        const support = options?.summary;
+        const binding = resolveSupportBinding('file_read', support, 12000);
+
+        const applied = await applyToolSummary({
+          tool: 'file_read',
+          rawBody: selected,
+          support: { ...support, binding },
+          locator: path,
+          extension: pathModule.extname(path),
+          kind: args.summary_kind as never,
+          task: args.summary_task as string | undefined,
+          policyId: args.summary_policy as string | undefined,
+          summarizeArg: args.summarize as 'auto' | 'force' | 'off' | undefined,
+          truncateHint:
+            'Use file_read with offset/limit to continue reading, or summarize=force for an overview.',
+        });
 
         return {
-          content: selectedLines.join('\n'),
+          content: applied.body,
           totalLines,
-          truncated: end < totalLines,
+          truncated: end < totalLines || applied.bodyTruncated,
           fromLine: start + 1,
           toLine: end,
+          rawLength: applied.rawLength,
+          summary: applied.summary,
         };
       } catch (error) {
         throw new Error(`Failed to read file "${path}": ${error instanceof Error ? error.message : String(error)}`);
@@ -334,15 +385,17 @@ export function createFileListTool(): RegisteredTool {
 
 
 /** 获取内置工具（零依赖，所有环境可用） */
-export function getBuiltinTools(): RegisteredTool[] {
+export function getBuiltinTools(options?: {
+  summary?: import('../../capabilities/summary/index.js').ToolSummarySupport;
+}): RegisteredTool[] {
   return [
     createShellTool(),
-    createFileReadTool(),
+    createFileReadTool({ summary: options?.summary }),
     createFileWriteTool(),
     createFileListTool(),
     createFileEditTool(),
     createFileSearchTool(),
-    createHttpRequestTool(),
+    createHttpRequestTool({ summary: options?.summary }),
     createEnvInfoTool(),
   ];
 }

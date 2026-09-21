@@ -341,6 +341,48 @@ export interface ContextEngineConfig {
 }
 
 /**
+ * 公用能力 summary 配置（harness/capabilities）
+ */
+export interface SummaryCapabilityConfig {
+  /** 模型档名；缺省解析链使用 summary */
+  modelLevel?: string;
+  /** 显式 provider/model */
+  model?: string;
+  defaultInputBudgetTokens?: number;
+  safetyMarginTokens?: number;
+  oversizedStrategy?: 'map_reduce' | 'window' | 'truncate_fallback' | 'fail';
+  gate?: {
+    minTokens?: number;
+    minBytes?: number;
+    respectPolicyBudget?: boolean;
+  };
+  /** policy id → 整策略对象（全量替换） */
+  policies?: Record<string, unknown>;
+  tools?: {
+    maxReturnChars?: number;
+    http_request?: Record<string, unknown>;
+    file_read?: Record<string, unknown>;
+  } & Record<string, unknown>;
+  cache?: {
+    enabled?: boolean;
+    backend?: 'memory' | 'file';
+    ttlMs?: number;
+    maxEntries?: number;
+    dir?: string;
+  };
+}
+
+/**
+ * 公用能力 compact 缺省配置
+ */
+export interface CompactCapabilityConfig {
+  defaultProtectHead?: number;
+  defaultProtectTail?: number;
+  defaultTargetTokens?: number;
+  defaultMode?: 'structure_only' | 'summary_only' | 'head_tail_only' | 'auto';
+}
+
+/**
  * system prompt 层装配器配置（七层 ContextAssembler）
  *
  * 与 contextEngine 分工：本配置管 **system 总预算与可选单层硬顶**；
@@ -583,6 +625,10 @@ export interface HarnessConfig {
   agentRuntime?: AgentRuntimeJsonConfig;
   /** 上下文引擎配置 */
   contextEngine?: ContextEngineConfig;
+  /** 公用能力 summary（harness/capabilities） */
+  summary?: SummaryCapabilityConfig;
+  /** 公用能力 compact 缺省 */
+  compact?: CompactCapabilityConfig;
   /** system prompt 七层装配器配置 */
   contextAssembler?: ContextAssemblerConfig;
   /** context 域扩展：全局宪法等 */

@@ -145,12 +145,19 @@ Runner.handle
 
 - Builder `build()` 默认挂 Assembler；装配失败回退旧字符串拼接  
 - 未显式 `.summarize()` 时，Builder 用主模型自动挂 `createProviderSummarize`  
-- `config-bridge` 在存在 `models.level.mini` 时改用 mini provider 做摘要  
+- `config-bridge` / capabilities 解析链：**`models.level.summary`** → `contextEngine.summaryModel` → mini → standard → 主模型  
 - 可用 `.disableAutoSummarize()` 关闭自动摘要  
 - **Skill**：`skillDirectory` 或 `home/skills` 在 build 时 discover，每轮注入 `<available_skills>`  
 - **Memory/Knowledge 召回**：`builder.memoryStore` / `knowledgeStore`；config-bridge 与 Gateway 从 `home/agent.db` 建 `SqliteMemoryStore`，Knowledge 暂用进程内 `MemoryKnowledgeStore`
 - **MemoryStore 单实例**：`AgentBuilder.build()` 在 `buildCore` 前用 `builder.memoryStore` 注册 `memory_store`/`memory_search`；MemoryLayer 召回与 `memory.steward.*` 入库同一实例。Gateway **不再**用进程级 `InMemoryMemoryStore` 挂全局 memory 工具
 - **压缩状态落盘（E4）**：权威桶 `SessionData.contextCompacts[agentId]`；`contextCompact` 为 primary/单 agent 兼容视图。Jsonl `*.state.json` 持久化。`Agent` 内存桥键 = `(sessionId, agentId)`。**不同 agent 不互相借用 compact**。手动压缩：`SessionAwareRunner.compactSession`（与 handle **共 session 锁**，排队；勿仅依赖 `status==='processing'`）
+- **公用能力 Summary / Compact**（`harness/capabilities/`，横切，不计入业务领域计数）：
+  - **SummaryPort**：LLM 摘要 + 信息提取；Policy 数据化；`ContentChannel` ⊥ `ContentKind`（**无** `tool_output` kind）
+  - **工具 L1/L2**：决策在 tools 端；L1 `maxReturnChars` 硬顶始终生效；L2 经 SummaryPort；`summarize=off` 仍 L1；`file_read`+code 默认不 L2
+  - **CompactEngine**：调用方可指定头尾条数 / 目标 token / 模式；`DefaultContextEngine.structuralCompact` **委托**该引擎；**E4 状态仍只在 ContextEngine / Session 路径**
+  - **structured_json**：L0 解析 + L1 `fields`/`fieldTypes` 轻量契约（`structuredError`）；完整 Schema 可选端口
+  - 配置：`summary` / `compact`；示例见 `octopi.example.json`；内部设计 `arch/summary-compact.md`
+  - **P2 子系统包装暂缓**：当前消费方为 tools L1/L2 与会话 compact；出现旁路/事件批处理需求时再挂 `subsystems/content-summary|compact`
 
 **主动摘要（防长会话失忆）：**
 
@@ -192,7 +199,7 @@ Runner.handle
 ## 7. 本阶段不做
 
 - 不实现 embedding 检索 / 相关性重排  
-- 不改 `DefaultContextEngine` 窗口算法本身  
+- 不改 `DefaultContextEngine` **消息窗口选择**算法本身（结构压缩算法已委托 `capabilities/compact`，状态键仍 E4）
 
 ---
 
@@ -204,6 +211,7 @@ Runner.handle
 | `src/harness/context/assembler.ts` | `DefaultContextAssembler` |
 | `src/harness/context/layers.ts` | 薄适配层 + `createDefaultLayers` |
 | `src/harness/context/system-prompt-assembler.ts` | Runner 每轮 system 装配端口 |
-| `src/harness/context/summarize.ts` | 默认 LLM 摘要函数 + mini 挑选 |
+| `src/harness/context/summarize.ts` | 摘要 provider 挑选（summary→mini→standard→primary） |
+| `src/harness/capabilities/**` | SummaryPort / CompactEngine 公用能力 |
 | `tests/harness/context-layer-contracts.test.ts` | 契约行为测试 |
 | `tests/harness/context-wiring-p0.test.ts` | 接线回归 |

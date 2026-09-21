@@ -485,6 +485,84 @@
       },
       "additionalProperties": false
     },
+    "summary": {
+      "type": "object",
+      "description": "公用能力 summary（harness/capabilities）：LLM 摘要与信息提取",
+      "properties": {
+        "modelLevel": {
+          "type": "string",
+          "description": "默认模型档名；解析链优先 models.level[此名]，约定 summary"
+        },
+        "model": {
+          "type": "string",
+          "description": "显式 provider/model，优先于 modelLevel"
+        },
+        "defaultInputBudgetTokens": {
+          "type": "integer",
+          "minimum": 256,
+          "default": 24000,
+          "description": "模型 contextWindow 未知时的输入预算缺省"
+        },
+        "safetyMarginTokens": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 2000
+        },
+        "oversizedStrategy": {
+          "type": "string",
+          "enum": ["map_reduce", "window", "truncate_fallback", "fail"],
+          "default": "map_reduce"
+        },
+        "gate": {
+          "type": "object",
+          "properties": {
+            "minTokens": { "type": "integer", "minimum": 0 },
+            "minBytes": { "type": "integer", "minimum": 0 },
+            "respectPolicyBudget": { "type": "boolean", "default": true }
+          },
+          "additionalProperties": false
+        },
+        "policies": {
+          "type": "object",
+          "description": "按 policy id 整策略替换（全量覆盖，不深合并）"
+        },
+        "tools": {
+          "type": "object",
+          "description": "工具侧 L1/L2 binding 覆盖",
+          "properties": {
+            "maxReturnChars": { "type": "integer", "minimum": 1 }
+          },
+          "additionalProperties": true
+        },
+        "cache": {
+          "type": "object",
+          "description": "摘要结果缓存（可选；无 Redis 硬依赖）",
+          "properties": {
+            "enabled": { "type": "boolean", "default": false },
+            "backend": { "type": "string", "enum": ["memory", "file"], "default": "memory" },
+            "ttlMs": { "type": "integer", "minimum": 1, "default": 600000 },
+            "maxEntries": { "type": "integer", "minimum": 1, "default": 256 },
+            "dir": { "type": "string" }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "compact": {
+      "type": "object",
+      "description": "公用能力 compact 缺省（会话路径仍可用 contextEngine.* 键）",
+      "properties": {
+        "defaultProtectHead": { "type": "integer", "minimum": 0 },
+        "defaultProtectTail": { "type": "integer", "minimum": 0 },
+        "defaultTargetTokens": { "type": "integer", "minimum": 1 },
+        "defaultMode": {
+          "type": "string",
+          "enum": ["structure_only", "summary_only", "head_tail_only", "auto"]
+        }
+      },
+      "additionalProperties": false
+    },
     "constitution": {
       "type": "object",
       "description": "全局运行宪法（等价 context.constitution）。product=包内资产；custom=集成商全文；off=不装配 preamble",

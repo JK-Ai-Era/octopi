@@ -43,6 +43,8 @@ npm run dev            # tsc --watch
 
 - `toolIsolation`（默认 `none`）：多 Session 写文件请配置 `session-subdir`（I5）
 - compact 键 = `(sessionId, agentId)`；勿用纯 sessionId 共享 Agent compact（E4）
+- 公用能力 `harness/capabilities/`：summary/compact **不是** LLM 工具面；tools 只消费 `SummaryPort`；prompt/policy/算法不得写进 `plugin-ecosystem/tools`；E4 会话 compact 状态不在 capabilities
+- 工具结果进主会话前：**L1 硬顶**（`maxReturnChars`）必须生效；禁止「先回原文再由 Agent 调 summary」作为防撑爆主路径
 - Session 锁/租约键 = `sessionId`；Gateway 注入**共享** `InProcessSessionLock`；跨进程勿假设内存锁有效（E2/E7）
 - Gateway 默认注入 Session ACL；`preferredAgentId` ≠ `primaryAgentId`；handoff 默认 host-only（I3/E6）
 - SessionStore 仍为双键 `load(agentId, sessionId)`；`loadSession(sessionId)` 尚未实现
@@ -65,7 +67,7 @@ npx vitest run --grep "SecurityGuard"
 
 **测试文件命名：** `tests/<module>.test.ts`
 
-**当前测试分布：** 64 个测试文件，1022 个测试用例
+**当前测试分布：** 见仓库 `tests/**`（含 `tests/harness/capabilities/` 公用能力）
 
 | 测试领域 | 覆盖范围 |
 |---|---|
@@ -73,6 +75,7 @@ npx vitest run --grep "SecurityGuard"
 | Harness 门面 | Agent.run、AgentBuilder、SessionAwareRunner、可靠性包装 |
 | 安全 | SecurityGuard、RiskEvaluator、DefaultRiskPolicy、ShellParser |
 | 上下文管理 | ContextEngine、SmartRouter、MessageSelector、Compressor、ContextLayer/Assembler、主动摘要 |
+| 公用能力 capabilities | SummaryPort/L1L2/structured/oversized、CompactEngine、tools 接线（`tests/harness/capabilities/`） |
 | 会话任务 / 过程监督 | SessionTaskService、task_* 工具、DefaultRunGuard |
 | Plugin 系统 | PluginManager、HookRegistry、CapabilityRegistry |
 | Skill 管理 | SkillManager 两阶段加载 |
@@ -104,6 +107,7 @@ npx vitest run --grep "SecurityGuard"
 | 新增 Plugin hook | `docs/plugin-system.md` + `docs/architecture.md`（如涉及） |
 | 新增模块 | `docs/architecture.md` + 模块内 `README.md` |
 | Observer / 配置 `observer` | `docs/observer-domain.md` + `docs/architecture.md` + `octopi.schema.json` / `octopi.example.json` |
+| 公用能力 summary/compact | `docs/context-layer-contracts.md` + `docs/architecture.md` + `src/harness/README.md` + `src/harness/context/README.md` + schema/example；内部 `arch/summary-compact.md`（若存在） |
 | 修改层间依赖 / 分层 | `docs/architecture.md`；不得违反 [架构宪法](./north-star.md) 与本文件「依赖方向」 |
 | 修改架构不变量 | **`docs/north-star.md`**（须显式评审）+ `CHANGELOG.md` |
 | 测试数量变化 | `README.md` + `CHANGELOG.md` |

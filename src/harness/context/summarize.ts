@@ -41,7 +41,7 @@ export function createProviderSummarize(
 /**
  * 从 model level 映射中挑摘要用 provider
  *
- * 优先级：mini → standard → 传入的 fallbackProvider（通常是主模型）
+ * 优先级：summary → mini → standard → 传入的 fallbackProvider（通常是主模型）
  *
  * @param providers - 可用 provider 映射
  * @param levelMap - models.level 配置（primary 为 provider/model）
@@ -53,7 +53,7 @@ export function pickSummarizeProvider(
   levelMap: Record<string, { primary: string; fallback?: string[] }> | undefined,
   fallbackProvider: ModelProvider,
 ): { provider: ModelProvider; model?: string } {
-  for (const levelName of ['mini', 'standard'] as const) {
+  for (const levelName of ['summary', 'mini', 'standard'] as const) {
     const primary = levelMap?.[levelName]?.primary;
     if (!primary) continue;
     const slash = primary.indexOf('/');

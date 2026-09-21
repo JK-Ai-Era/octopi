@@ -8,7 +8,7 @@
 |------|------|------|
 | Agent | `agent/` | **可运行门面**：`Agent.run()` = reliability 包装；compact 内存桥键 `(sessionId, agentId)` |
 | Agent Building | `agent-building/` | Builder、人格加载、配置桥接；注入 `sessionLease` / `sessionAcl` / `toolIsolation` |
-| Context Management | `context/` | 消息窗口压缩、Token 估算、七层 ContextLayer 装配、Knowledge、`compact-key`（E4） |
+| Context Management | `context/` | 消息窗口压缩入口、Token 估算、七层 ContextLayer 装配、Knowledge、`compact-key`（E4）；**结构压缩算法**委托 `capabilities/compact`，状态键仍 E4 |
 | Session ACL | `session-acl/` | 角色目录（五角色出厂）、grant/revoke、`authorizeRun`、`switch(preferred\|handoff)`（E6/I3） |
 | Tool Effect | `tool-effect/` | `toolIsolation` cwd 解析（I5；默认 `none`） |
 | Security | `security/` | 风险评估、Shell 解析、降级策略；安全事件经 `emitRunEvent` 附带 Run 身份 |
@@ -27,6 +27,14 @@
 | Memory | `memory/` | 命题记忆（fact/method/norm）、confidence/gates；Steward 在 `subsystems/memory-steward/`；七层组装在 `context/` |
 
 > 表内含 Memory 与 Observer 等；权威分层说明见 [docs/architecture.md](../../docs/architecture.md) 与 [docs/observer-domain.md](../../docs/observer-domain.md)。
+
+## 横切：公用能力（capabilities）
+
+| 模块 | 目录 | 职责 |
+|------|------|------|
+| **Capabilities** | `capabilities/` | **公用能力**（非业务领域计数）：`summary/`（SummaryPort + Policy + L1/L2 工具门控）与 `compact/`（可配置压缩引擎）。tools 只消费 port；E4 会话 compact 状态不在本目录 |
+
+配置：`summary` / `compact` / `models.level.summary`。设计：内部 `arch/summary-compact.md`；对外摘要见 `docs/context-layer-contracts.md`。
 
 ## 其他文件
 

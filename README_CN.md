@@ -201,6 +201,7 @@ src/
 ├── harness/                 Layer 2  自包含领域
 │   ├── agent-building/           Builder、人格、配置桥、Runner 注入
 │   ├── context/                  ContextLayer 装配、窗口压缩、compact-key（E4）
+│   ├── capabilities/             公用能力（横切）：summary 摘要提取 + compact 压缩引擎
 │   ├── session-acl/              角色目录、authorizeRun、preferred/handoff（E6/I3）
 │   ├── tool-effect/              toolIsolation 工具 cwd（I5）
 │   ├── security/                 风险评估、Shell 解析
@@ -221,7 +222,7 @@ src/
 ```
 
 运行时关键配置（见 `octopi.example.json` 与 `docs/KNOWN-ISSUES.md`）：
-`toolIsolation`、`sessionAcl`、`agents[].workspace` / `maxSessionRights`。
+`toolIsolation`、`sessionAcl`、`agents[].workspace` / `maxSessionRights`、`summary` / `compact` / `models.level.summary`（公用能力）。
 
 ---
 

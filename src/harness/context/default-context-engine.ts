@@ -42,6 +42,8 @@ import { DefaultBudgetAllocator } from './budget-allocator.js';
 import { SmartRouter } from './smart-router.js';
 import type { SmartRouterConfig } from './smart-router.js';
 import { compactStateKey } from './compact-key.js';
+import { createCompactEngine } from '../capabilities/compact/index.js';
+import type { CompactEngine } from '../capabilities/compact/index.js';
 
 // ── 配置 ──
 
@@ -73,6 +75,8 @@ export interface DefaultContextEngineConfig {
    * 默认 30_000；0 表示不冷却。
    */
   proactiveCooldownMs?: number;
+  /** 公用能力 CompactEngine（缺省自动创建；算法委托，E4 状态仍在本引擎） */
+  compactEngine?: CompactEngine;
 }
 
 // ── 内部状态 ──
@@ -115,7 +119,9 @@ export class DefaultContextEngine implements ContextEngine {
     ownsCompaction: true,
   };
 
-  private config: Required<DefaultContextEngineConfig>;
+  private config: Required<Omit<DefaultContextEngineConfig, 'compactEngine'>> & {
+    compactEngine: CompactEngine;
+  };
   private router: SmartRouter;
   private states: Map<string, CompactState> = new Map();
 
@@ -133,6 +139,16 @@ export class DefaultContextEngine implements ContextEngine {
       compactThreshold: config?.compactThreshold ?? 0.5,
       proactiveCompactRatio: config?.proactiveCompactRatio ?? 0.6,
       proactiveCooldownMs: config?.proactiveCooldownMs ?? 30_000,
+      compactEngine:
+        config?.compactEngine ??
+        createCompactEngine({
+          defaultProtectHead: config?.protectFirstN ?? 3,
+          defaultProtectTail: config?.protectLastN ?? 20,
+          estimator: {
+            estimateMessages: (m) => tokenEstimator.estimateMessages(m),
+            estimateText: (t) => tokenEstimator.estimateText(t),
+          },
+        }),
     };
 
     this.router = new SmartRouter({
@@ -631,6 +647,7 @@ export class DefaultContextEngine implements ContextEngine {
 
   /**
    * 结构压缩：头尾保护 + 中间段摘要（不依赖 contextWindow）
+   * 算法委托 capabilities/compact；本引擎只维护 E4 状态。
    */
   private async structuralCompact(params: {
     sessionId: string;
@@ -655,39 +672,25 @@ export class DefaultContextEngine implements ContextEngine {
       };
     }
 
-    const head = messages.slice(0, protectFirstN);
-    const middle = messages.slice(protectFirstN, Math.max(protectFirstN, messages.length - protectLastN));
-    const tail = messages.slice(-protectLastN);
+    const outcome = await this.config.compactEngine.compactMessages(messages, {
+      protectHead: protectFirstN,
+      protectTail: protectLastN,
+      targetTokens: params.compactTargetTokens,
+      mode: 'structure_only',
+      previousSummary: state?.previousSummary,
+      summarizeFn: summarize,
+      estimator,
+      maxSummaryTokens: params.compactTargetTokens
+        ? Math.max(200, Math.floor(params.compactTargetTokens * 0.3))
+        : undefined,
+      onSummarizeFail: 'truncate',
+    });
 
-    let summary = state?.previousSummary ?? '';
-    if (summarize && middle.length > 0) {
-      try {
-        const middleLlm = this.buildLlmMessages(middle, '', []);
-        const newSummary = await summarize(middleLlm, {
-          maxTokens: params.compactTargetTokens
-            ? Math.max(200, Math.floor(params.compactTargetTokens * 0.3))
-            : undefined,
-        });
-        summary = newSummary?.trim()
-          ? (summary ? `${summary}\n\n${newSummary}` : newSummary)
-          : summary;
-      } catch {
-        if (!summary) {
-          summary = `[Structural compact] dropped ${middle.length} middle messages (contextWindow unknown)`;
-        }
-      }
-    } else if (!summary) {
-      summary = `[Structural compact] dropped ${middle.length} middle messages (contextWindow unknown)`;
-    }
-
-    const summaryMsg: Message = {
-      role: 'user',
-      content: wrapContextSummary(summary),
-      timestamp: Date.now(),
-      metadata: { source: 'contextSummary' as const },
-    };
-    const view = [...head, summaryMsg, ...tail];
-    const tokensAfter = estimator.estimateMessages(view);
+    const summary =
+      outcome.summary ??
+      state?.previousSummary ??
+      `[Structural compact] dropped messages (contextWindow unknown)`;
+    const tokensAfter = outcome.tokensAfter ?? tokensBefore;
 
     this.states.set(stateKey, {
       ...state,

@@ -10,6 +10,31 @@ export type { ToolSet, ToolSetConfig } from './plugin-ecosystem/tools/tool-set.j
 export { createWebSearchTool } from './plugin-ecosystem/tools/web-search.js';
 export type { WebSearchToolOptions } from './plugin-ecosystem/tools/web-search.js';
 
+// ── Capabilities（公用能力；横切，不计入业务领域口径） ──
+export {
+  createSummaryPort,
+  applyToolSummary,
+  createDefaultSummaryPolicies,
+  resolveSummaryModel,
+  getToolSummaryBinding,
+  createCompactEngine,
+  createMemorySummaryCache,
+} from './capabilities/index.js';
+export type {
+  ContentUnit,
+  ContentKind,
+  ContentChannel,
+  SummaryPort,
+  SummaryPolicy,
+  SummaryResult,
+  ToolSummaryBinding,
+  ToolSummarySupport,
+  CreateSummaryPortOptions,
+  CompactEngine,
+  CompactOptions,
+  CompactOutcome,
+} from './capabilities/index.js';
+
 // ── Agent Building ──
 export { AgentBuilder, createAgent, isSubsystemAllowed, discoverSubsystemSpecs } from './agent-building/builder.js';
 export type { AgentBuildOptions, AgentBuildResult, AgentBuildCoreResult } from './agent-building/builder.js';

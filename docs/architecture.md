@@ -4,7 +4,7 @@
 >
 > 本文档是 Octopi 的完整架构设计。
 > 长期不变量见 [架构宪法](./north-star.md)。
-> 与实现对齐：Observer Run Observatory（v0.43.3+）见 [observer-domain.md](./observer-domain.md)。
+> 与实现对齐：Observer Run Observatory（v0.43.3+）见 [observer-domain.md](./observer-domain.md)；公用能力 Summary/Compact（v0.44.0+）见 [context-layer-contracts.md](./context-layer-contracts.md) 与 `src/harness/capabilities/`。
 
 ---
 
@@ -58,7 +58,7 @@ AI 在早期阶段，应用构建思路在不断发展。架构设计的核心�
 │  LLM Provider · Web Search · 存储 · 可观测性 · 协议 · Gateway · TUI · Web Runtime │
 │                                                                  │
 │  ┌──────────────────────────────────────────────────────────────┐│
-│  │  Layer 2: Harness — 16 个自包含领域                           ││
+│  │  Layer 2: Harness — 16 个自包含领域 + capabilities 横切      ││
 │  │                                                              ││
 │  │  ┌──────────────────────────────────────────────────────────┐││
 │  │  │  Layer 1: Core — 机制原语 + 接口契约 + 核心类型           │││
@@ -150,7 +150,7 @@ src/core/
 
 Domain 契约在 **harness 领域内**（memory、mcp、multi-agent、orchestration…），不在 Core。
 
-### Layer 2: Harness — 16 个自包含领域
+### Layer 2: Harness — 16 个自包含领域 + 横切 capabilities
 
 **职责**：实现 Core Kernel ports 的具体策略，提供框架的全部高级功能；持有 Domain 产品契约与实现。
 
@@ -233,15 +233,20 @@ harness/context/
 ├── token-estimator.ts          # HeuristicTokenEstimator
 ├── token-estimate-fns.ts
 ├── token-constants.ts
-└── knowledge/                  # KnowledgeStore + KnowledgeContextEngine
+├── knowledge/                  # KnowledgeStore + KnowledgeContextEngine
+└── （结构压缩算法已委托 harness/capabilities/compact；E4 状态仍在本引擎）
 
+harness/capabilities/          # 横切公用能力：SummaryPort + CompactEngine
 harness/session-acl/        # E6：角色目录 + authorizeRun + switch
 harness/tool-effect/        # I5：toolIsolation cwd
 harness/observer/           # Run Observatory：ObserverHub + Run 投影（observer.level）
 harness/concurrency/session-lease.ts  # E2/E7：SessionLease
+harness/capabilities/       # 横切公用能力（不计入业务领域计数）：summary + compact
 ```
 
 领域导出见 `harness/index.ts`。设计说明见 [docs/context-layer-contracts.md](./context-layer-contracts.md)、[docs/observer-domain.md](./observer-domain.md)。
+
+**公用能力（capabilities，横切）**：`harness/capabilities/summary|compact` 提供可注入的 LLM 摘要/信息提取与可配置压缩管道。与 `plugin-ecosystem/tools` 边界：tools **只消费** `SummaryPort`，prompt/policy/算法只在 capabilities；会话 compact **E4** 键与 Session 持久化不在 capabilities（仍在 context / session 路径）。配置键：`summary` / `compact` / `models.level.summary`。
 
 ### 3.3 Security — 安全
 

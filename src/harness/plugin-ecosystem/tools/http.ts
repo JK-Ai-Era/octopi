@@ -4,18 +4,37 @@
  * 让 Agent 能够主动发起 HTTP 请求，调用 REST API、获取网页内容。
  * 使用 Node.js 20+ 内置 fetch，零额外依赖。
  *
+ * 超长响应：经 capabilities SummaryPort 做 L2 软净化 + L1 硬顶（见 arch/summary-compact.md §3.6）。
+ *
  * 安全注意事项：
  * - 生产环境应通过 ToolPolicy 限制可访问的域名
  * - 内网访问默认允许，可通过 security guard 拦截
  */
 
 import type { RegisteredTool } from '../../../core/types.js';
+import {
+  applyToolSummary,
+  resolveSupportBinding,
+  type ToolSummarySupport,
+} from '../../capabilities/summary/index.js';
 
-export function createHttpRequestTool(): RegisteredTool {
+export interface HttpRequestToolOptions {
+  /** Summary L1/L2 支持；未提供时仅使用内置 L1 binding */
+  summary?: ToolSummarySupport;
+}
+
+/**
+ * 创建 http_request 工具
+ *
+ * @param options - 可选 SummaryPort / binding 配置注入
+ * @returns RegisteredTool
+ */
+export function createHttpRequestTool(options?: HttpRequestToolOptions): RegisteredTool {
   return {
     definition: {
       name: 'http_request',
-      description: 'Make an HTTP request to a URL. Supports GET, POST, PUT, PATCH, DELETE. Returns status, headers, and body. Useful for API calls, web scraping, and webhook testing.',
+      description:
+        'Make an HTTP request to a URL. Supports GET, POST, PUT, PATCH, DELETE. Returns status, headers, and body (large bodies may be summarized). Useful for API calls, web scraping, and webhook testing.',
       parameters: {
         url: {
           type: 'string',
@@ -48,6 +67,19 @@ export function createHttpRequestTool(): RegisteredTool {
           minimum: 1024,
           maximum: 10_485_760,
         },
+        summarize: {
+          type: 'string',
+          description: 'Summary mode for large bodies: auto (default) | force | off. off still applies hard size cap.',
+          enum: ['auto', 'force', 'off'],
+        },
+        summary_task: {
+          type: 'string',
+          description: 'Optional extraction goal when summarizing the response body',
+        },
+        summary_policy: {
+          type: 'string',
+          description: 'Optional SummaryPolicy id override',
+        },
       },
       timeoutMs: 120_000,
     },
@@ -58,6 +90,7 @@ export function createHttpRequestTool(): RegisteredTool {
       const body = args.body as string | undefined;
       const timeout = Math.min((args.timeout as number) ?? 30_000, 120_000);
       const maxResponseSize = (args.max_response_size as number) ?? 1_048_576;
+      const summarizeArg = args.summarize as 'auto' | 'force' | 'off' | undefined;
 
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeout);
@@ -72,7 +105,6 @@ export function createHttpRequestTool(): RegisteredTool {
 
         clearTimeout(timer);
 
-        // 读取响应体（带大小限制）
         const reader = response.body?.getReader();
         let responseBody = '';
         let truncated = false;
@@ -96,23 +128,41 @@ export function createHttpRequestTool(): RegisteredTool {
           }
         }
 
-        // 提取响应头
         const responseHeaders: Record<string, string> = {};
         response.headers.forEach((value, key) => {
           responseHeaders[key] = value;
+        });
+
+        const contentType = responseHeaders['content-type'] ?? responseHeaders['Content-Type'];
+        const support = options?.summary;
+        // 统一从 support（含配置 toolBindings）解析，避免 tools 再写死默认 binding
+        const binding = resolveSupportBinding('http_request', support, 8000);
+
+        const applied = await applyToolSummary({
+          tool: 'http_request',
+          rawBody: responseBody,
+          support: { ...support, binding },
+          locator: response.url || url,
+          contentType,
+          task: args.summary_task as string | undefined,
+          policyId: args.summary_policy as string | undefined,
+          summarizeArg,
+          truncateHint:
+            'Use http_request with summarize=force or a narrower URL/pagination to read more.',
         });
 
         return {
           status: response.status,
           statusText: response.statusText,
           headers: responseHeaders,
-          body: responseBody,
-          bodyTruncated: truncated,
-          bodySizeBytes: Buffer.byteLength(responseBody, 'utf-8'),
-          url: response.url, // 可能经过重定向
+          body: applied.body,
+          bodyTruncated: truncated || applied.bodyTruncated,
+          bodySizeBytes: applied.rawSizeBytes,
+          bodyLength: applied.rawLength,
+          summary: applied.summary,
+          url: response.url,
         };
       } catch (error) {
-        clearTimeout(timer);
         if (error instanceof Error && error.name === 'AbortError') {
           throw new Error(`Request to "${url}" timed out after ${timeout}ms`);
         }

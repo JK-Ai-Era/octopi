@@ -201,6 +201,7 @@ src/
 ├── harness/                 Layer 2  Self-contained domains
 │   ├── agent-building/           Builder, persona, config bridge, runner injection
 │   ├── context/                  ContextLayer assembly, window compression, compact-key (E4)
+│   ├── capabilities/             Cross-cutting capabilities: summary extract + compact engine
 │   ├── session-acl/              Role catalog, authorizeRun, preferred/handoff (E6/I3)
 │   ├── tool-effect/              toolIsolation cwd policy (I5)
 │   ├── security/                 Risk evaluation, shell parsing
@@ -221,7 +222,7 @@ src/
 └── testing/                 Test utilities
 ```
 
-Runtime config knobs (see `octopi.example.json` + `docs/KNOWN-ISSUES.md`): `toolIsolation`, `sessionAcl`, `agents[].workspace` / `maxSessionRights`.
+Runtime config knobs (see `octopi.example.json` + `docs/KNOWN-ISSUES.md`): `toolIsolation`, `sessionAcl`, `agents[].workspace` / `maxSessionRights`, plus capability keys `summary` / `compact` / `models.level.summary`.
 
 ---
 

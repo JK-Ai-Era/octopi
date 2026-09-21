@@ -420,10 +420,81 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
     }
   }
 
+  // 公用能力 SummaryPort（http_request / file_read L2）；无可用 provider 时仅 L1
+  let summarySupport: import('../harness/capabilities/summary/index.js').ToolSummarySupport | undefined;
+  try {
+    const { createSummaryPort, createToolSummarySupport, createMemorySummaryCache } = await import(
+      '../harness/capabilities/summary/index.js'
+    );
+    const providerMap = new Map<string, import('../core/interfaces/model-provider.js').ModelProvider>();
+    let fallback: import('../core/interfaces/model-provider.js').ModelProvider | undefined;
+    for (const [providerName, providerCfg] of Object.entries(config.models?.providers ?? {})) {
+      const provider = createProvider(providerName, providerCfg);
+      if (provider) {
+        providerMap.set(providerName, provider);
+        fallback = fallback ?? provider;
+      }
+    }
+    if (fallback) {
+      const summaryCfg = config.summary;
+      const toolsCfg = summaryCfg?.tools as
+        | {
+            maxReturnChars?: number;
+            http_request?: Record<string, unknown>;
+            file_read?: Record<string, unknown>;
+          }
+        | undefined;
+
+      let cache:
+        | import('../harness/capabilities/summary/index.js').SummaryCachePort
+        | undefined;
+      let cacheEnabled = false;
+      if (summaryCfg?.cache?.enabled) {
+        cache = createMemorySummaryCache({
+          maxEntries: summaryCfg.cache.maxEntries,
+          defaultTtlMs: summaryCfg.cache.ttlMs,
+        });
+        cacheEnabled = true;
+      }
+
+      const policyOverrides = summaryCfg?.policies as
+        | Record<string, import('../harness/capabilities/summary/index.js').SummaryPolicy>
+        | undefined;
+
+      const portOptions = {
+        providers: providerMap,
+        levelMap: config.models?.level,
+        fallbackProvider: fallback,
+        legacySummaryModel: config.contextEngine?.summaryModel,
+        model: summaryCfg?.model,
+        modelLevel: summaryCfg?.modelLevel,
+        gate: summaryCfg?.gate,
+        defaultInputBudgetTokens: summaryCfg?.defaultInputBudgetTokens,
+        safetyMarginTokens: summaryCfg?.safetyMarginTokens,
+        oversizedStrategy: summaryCfg?.oversizedStrategy,
+        policyOverrides,
+        cache,
+        cacheEnabled,
+        cacheTtlMs: summaryCfg?.cache?.ttlMs,
+        maxReturnCharsDefault: toolsCfg?.maxReturnChars,
+        toolBindings: {
+          http_request: toolsCfg?.http_request as never,
+          file_read: toolsCfg?.file_read as never,
+        },
+      };
+      const port = createSummaryPort(portOptions);
+      // 根因修复：配置与 tools 共用同一 binding 解析表（toolBindings），不再 binding:undefined
+      summarySupport = createToolSummarySupport(port, portOptions);
+      console.log('[CLI] Summary capability: SummaryPort wired into builtin tools');
+    }
+  } catch (err) {
+    console.warn(`[CLI] Summary capability wiring failed (L1-only tools): ${err instanceof Error ? err.message : String(err)}`);
+  }
+
   // 全局工具：CLI 级 builtin（shell/file/http/web_search 等）。
   // memory_store/memory_search **不在**全局注册：由 AgentBuilder 在 agent build 时
   // 按各 agent 的 MemoryStore（SqliteMemoryStore(agent.db)）注入，与 MemoryLayer 同实例。
-  const { all } = createToolSet({ webSearch: webSearchToolCfg });
+  const { all } = createToolSet({ webSearch: webSearchToolCfg, summary: summarySupport });
   for (const tool of all) gateway.registerTool(tool);
   console.log(`[CLI] Registered ${all.length} global tools: ${all.map(t => t.definition.name).join(', ')}`);
   console.log('[CLI] memory_store/memory_search: agent-scoped (AgentBuilder + memoryStore), not global');

@@ -200,6 +200,67 @@ export const ContextAssemblerConfigSchema = z.object({
   includeLayerContent: z.boolean().optional(),
 });
 
+/** 公用能力：summary（harness/capabilities） */
+const ToolSummaryBindingConfigSchema = z.object({
+  mode: z.enum(['auto', 'over_threshold', 'always', 'never', 'kind_sensitive']).optional(),
+  maxReturnChars: z.number().int().positive().optional(),
+  defaultPolicyId: z.string().optional(),
+  kindFromSource: z.boolean().optional(),
+  informationalKinds: z
+    .array(
+      z.enum(['web_page', 'file_text', 'document', 'code', 'api_json', 'log', 'conversation', 'opaque', 'auto']),
+    )
+    .optional(),
+  onFail: z.enum(['truncate_l1', 'error']).optional(),
+  gate: z
+    .object({
+      minTokens: z.number().int().nonnegative().optional(),
+      minBytes: z.number().int().nonnegative().optional(),
+      respectPolicyBudget: z.boolean().optional(),
+    })
+    .optional(),
+});
+
+export const SummaryConfigSchema = z.object({
+  modelLevel: z.string().optional(),
+  model: z.string().optional(),
+  defaultInputBudgetTokens: z.number().int().positive().optional(),
+  safetyMarginTokens: z.number().int().nonnegative().optional(),
+  oversizedStrategy: z.enum(['map_reduce', 'window', 'truncate_fallback', 'fail']).optional(),
+  gate: z
+    .object({
+      minTokens: z.number().int().nonnegative().optional(),
+      minBytes: z.number().int().nonnegative().optional(),
+      respectPolicyBudget: z.boolean().optional(),
+    })
+    .optional(),
+  /** 按 policy id 整策略替换（不深合并） */
+  policies: z.record(z.string(), z.any()).optional(),
+  tools: z
+    .object({
+      maxReturnChars: z.number().int().positive().optional(),
+    })
+    .catchall(ToolSummaryBindingConfigSchema.optional())
+    .optional(),
+  cache: z
+    .object({
+      enabled: z.boolean().optional(),
+      backend: z.enum(['memory', 'file']).optional(),
+      ttlMs: z.number().int().positive().optional(),
+      maxEntries: z.number().int().positive().optional(),
+      dir: z.string().optional(),
+    })
+    .optional(),
+});
+
+/** 公用能力：compact 缺省（会话路径仍可用 contextEngine 键） */
+export const CompactCapabilityConfigSchema = z.object({
+  defaultProtectHead: z.number().int().nonnegative().optional(),
+  defaultProtectTail: z.number().int().nonnegative().optional(),
+  defaultTargetTokens: z.number().int().positive().optional(),
+  defaultMode: z.enum(['structure_only', 'summary_only', 'head_tail_only', 'auto']).optional(),
+});
+
 /** 全局运行宪法（产品资产 / 集成商替换 / 关闭） */
 export const ConstitutionConfigSchema = z
   .object({
@@ -508,6 +569,10 @@ export const HarnessConfigSchema = z.object({
   agentRuntime: AgentRuntimeJsonConfigSchema.optional(),
   contextEngine: ContextEngineConfigSchema.optional(),
   contextAssembler: ContextAssemblerConfigSchema.optional(),
+  /** 公用能力 summary（capabilities） */
+  summary: SummaryConfigSchema.optional(),
+  /** 公用能力 compact 缺省 */
+  compact: CompactCapabilityConfigSchema.optional(),
   context: z
     .object({
       constitution: ConstitutionConfigSchema.optional(),

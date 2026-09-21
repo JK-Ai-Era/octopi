@@ -3,6 +3,11 @@
 
   "models": {
     "mode": "merge",
+    "level": {
+      "summary": { "primary": "openai/gpt-5-mini" },
+      "mini": { "primary": "openai/gpt-5-mini" },
+      "standard": { "primary": "openai/gpt-5.5" }
+    },
     "providers": {
       "openai": {
         "baseUrl": "https://api.openai.com/v1",
@@ -57,6 +62,20 @@
     "proactiveCompactRatio": 0.6,
     "proactiveCooldownMs": 30000,
     "protectLastN": 20
+  },
+
+  "summary": {
+    "modelLevel": "summary",
+    "defaultInputBudgetTokens": 24000,
+    "safetyMarginTokens": 2000,
+    "oversizedStrategy": "map_reduce",
+    "gate": {
+      "minTokens": 2000,
+      "minBytes": 8000
+    },
+    "tools": {
+      "maxReturnChars": 8000
+    }
   },
 
   "contextAssembler": {

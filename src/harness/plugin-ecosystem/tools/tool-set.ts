@@ -27,6 +27,8 @@ export interface ToolSetConfig {
     defaultLimit?: number;
     timeoutMs?: number;
   };
+  /** Summary 公用能力（http_request / file_read L1/L2） */
+  summary?: import('../../capabilities/summary/index.js').ToolSummarySupport;
 }
 
 export interface ToolSet {
@@ -37,7 +39,7 @@ export interface ToolSet {
 
 export function createToolSet(config?: ToolSetConfig): ToolSet {
   const taskService = config?.sessionTaskService ?? config?.taskTracker;
-  const builtin = getBuiltinTools();
+  const builtin = getBuiltinTools({ summary: config?.summary });
   const extensions: RegisteredTool[] = [
     ...(config?.memoryStore ? createMemoryTools(config.memoryStore, config?.memory) : []),
     ...(taskService ? createSessionTaskTools(taskService) : []),

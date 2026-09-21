@@ -421,7 +421,8 @@ async function buildAgent(
     builder.memoryConfig(shared.memoryConfig);
   }
 
-  // ── 默认 summarize：优先 mini，否则主模型（保证 LLM 摘要路径可走） ──
+  // ── 默认 summarize：capabilities 解析链（summary → mini → standard → 主模型）──
+  // 与 harness/capabilities/summary/resolver.ts 口径一致；legacy contextEngine.summaryModel 由 pick 之外路径覆盖时优先
   if (provider) {
     const { provider: summarizeProvider, model: summarizeModel } = pickSummarizeProvider(
       shared.providers,

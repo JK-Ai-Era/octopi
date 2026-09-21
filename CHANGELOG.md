@@ -1,3 +1,45 @@
+## v0.44.1 (2026-09-21)
+
+### fix(capabilities): Summary 接线与 oversized 契约 — 按审查根因修复
+
+| 根因 | 修复 |
+|------|------|
+| **配置与 tools 双入口** | `ToolSummarySupport` 增加 `toolBindings` / `maxReturnCharsDefault`；`resolveSupportBinding` 为唯一 binding 解析入口；daemon 经 `createToolSummarySupport` 注入（不再 `binding: undefined`） |
+| **死配置** | `createSummaryPort` 读取 `oversizedStrategy`（resolve 后套用）；daemon 传入 `policyOverrides` / `cache`（`cache.enabled` 时挂 memory LRU） |
+| **预算未吃 catalog 窗口** | `port.extract` 调用 `provider.getModelInfo(model).contextWindow` → `executeSummary` |
+| **coverage 说谎 / fail 语义** | `planChunks.complete`；`coverageFromOversized` 在未切完或未处理完时 **partial**；`strategy=fail` 与 `onPartial=reject` **抛错**（工具层仍 L1 兜底，不掩盖能力层失败） |
+| **L1 硬顶被 hint 击穿** | `applyL1Truncate` 在 `maxChars` 内预留截断说明与续读提示 |
+| **kind_sensitive + auto** | `auto`/`opaque` **不**走 L2（仅 informationalKinds；force 除外） |
+| **其它** | `SummaryPort.extract` 支持 `previousSummary`；`findBalanced` 失败后扫描后续括号；清理死代码；工具工厂补 JSDoc |
+
+测试：`tests/harness/capabilities/*` 覆盖 binding 配置接线、fail 抛错、L1 总长、contextWindow 优先。
+
+**范围说明**：P2 自主子系统包装**暂缓**（当前仅 tools 净化 + 会话压缩）；`context/README`、CONTRIBUTING 文档同步表已与 capabilities 口径对齐。
+
+## v0.44.0 (2026-09-21)
+
+### feat(capabilities): Summary / Compact 公用能力域（Harness 横切）
+
+新增 Harness 横切模块 **`harness/capabilities/`**（中文「公用能力」；**不计入**业务领域 14/16 口径）。设计规格见内部 `arch/summary-compact.md`；对外契约摘要见 `docs/context-layer-contracts.md`。
+
+| 模块 | 变更 |
+|------|------|
+| **summary** | `ContentUnit`（`channel` ⊥ `kind`，无 `tool_output` kind）、Policy 数据化（include/exclude/preserve/budget）、`createSummaryPort`、解析链（policy → 参数 → kind → MIME/扩展名 → tool 缺省 → `opaque_generic`） |
+| **模型档** | `pickSummarizeProvider` / `resolveSummaryModel` 优先 **`models.level.summary`** → legacy `contextEngine.summaryModel` → mini → standard → primary |
+| **oversized** | 预算先行；`map_reduce` / `window` / `truncate_fallback` / `fail`；结果 `coverage` |
+| **structured_json** | L0 宽松 JSON + **L1 轻量契约**（`fields`/`fieldTypes`，失败写 `structuredError`）；完整 Schema 可选 `StructuredValidator` 端口（核心不绑 ajv） |
+| **tools L1/L2** | **决策在 tools 端**：L1 `maxReturnChars` 硬顶始终生效；L2 SummaryPort 软净化。`summarize=off` 仍 L1。`file_read`+`code` 默认不 L2（保护可编辑原文） |
+| **compact** | `createCompactEngine`：`structure_only` / `summary_only` / `head_tail_only` / `auto`；调用方指定头尾/目标/失败策略；中间段可走 SummaryPort 或 `summarizeFn` |
+| **ContextEngine 委托** | `DefaultContextEngine.structuralCompact` 委托 `capabilities/compact`；**E4 状态与 Session 持久化仍留在原路径** |
+| **缓存** | 可选 `createMemorySummaryCache`（进程内 LRU）；**无 Redis 硬依赖**；默认关闭 |
+| **配置** | `summary` / `compact` 进 Zod + `octopi.schema.json` + `octopi.example.json`；`models.level.summary` 示例 |
+| **工具** | `http_request` / `file_read` 接入 L1/L2；可选 `summarize` / `summary_task` / `summary_policy`（file 另有 `summary_kind`）；daemon `createToolSet({ summary })` 注入 port |
+| **导出** | `harness/index.ts` / `src/index.ts`：`createSummaryPort` / `createCompactEngine` / `applyToolSummary` 等 |
+| **测试** | `tests/harness/capabilities/summary-p0.test.ts`（18）+ `compact-p1.test.ts`（8）；proactive/context-compact/session-lock 回归通过 |
+| **文档** | `docs/architecture.md`、`docs/context-layer-contracts.md`、`src/harness/README.md`、README 树、`AGENTS.md` knobs、`docs/CONTRIBUTING.md` |
+
+**边界（实现约定）**：capabilities ≠ `plugin-ecosystem/tools`（tools 只消费 port，不写 prompt/算法）；自主子系统仅可作异步包装（P2 未做）；Observer **不做** summary.extract 一等采集。
+
 ## v0.43.7 (2026-09-21)
 
 ### fix: 修正 package.json description 乱码
