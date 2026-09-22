@@ -26,7 +26,7 @@
 
 | 阶段 | 版本 | 内容 |
 |------|------|------|
-| C | v0.37.0 | 双键 store + `primaryAgentId` + `Message.agentId` 归因；目录未迁 |
+| C | v0.37.0 | 模型 2 字段（`primaryAgentId` + `Message.agentId` 归因）；目录当时未迁 |
 | D | v0.38.0 | compact 与 run **共 session 锁**；键 `(sessionId, agentId)` |
 | E | v0.39.0 | 五角色 ACL + `authorizeRun`；配置 `sessionAcl`；**无角色 DB** |
 | F | v0.40.0 | `preferredAgentId` ≠ primary；handoff host-only + `admin_handoff`；Principal 字段位 |
@@ -36,11 +36,11 @@
 
 - Gateway **默认**注入 `SessionAclService` + **进程内共享** `SessionLease` 到全部 Runner（**非 opt-in 兼容性变化**）。
 - `handle` 在 run 前 `authorizeRun`：primary 自动 owner；非 primary 无绑定 → `engine.error`；effective 交集含 `agents[].maxSessionRights`（E6 L1）。
-- handoff：`primaryAgentId` 迁移；旧 primary 的 `owner` **降级 specialist**；`session.agentId`（双键）不变。
+- handoff：`primaryAgentId` 迁移；旧 primary 的 `owner` **降级 specialist**。
 - `preferredOnly`（默认 true）：`switch(mode=handoff)` 需要 `intent=admin_handoff`。
-- `filterHistory` / `appendRunAudit` / 业务 grant 仍供宿主调用；**双键存储下 guest 仍可能 load 不到同一 Session 对象**（见下）。
+- `filterHistory` / `appendRunAudit` / 业务 grant 仍供宿主调用；guest/handoff 经 sessionId 一等存储可读同一 Session。
 
-**仍开放：** 分布式 Session Lease 实现；Session 目录从 `agents/<id>/sessions/` 解耦（guest/handoff 跨 agent 读史）；工具 capability 收紧；角色 DB/控制台；Quota 经济层。
+**仍开放：** 分布式 Session Lease 实现；工具 capability 收紧；角色 DB/控制台；Quota 经济层。
 
 ## KnowledgeStage（已关闭）
 

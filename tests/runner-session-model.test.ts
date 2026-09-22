@@ -87,7 +87,7 @@ describe('SessionAwareRunner model resolve order', () => {
       turns: [],
       metadata: { model: { provider: 'ollama', model: 'qwen3.5:2b' } },
     };
-    await store.save('a1', 's1', session);
+    await store.save('s1', session);
 
     const seenRefs: Array<string | undefined> = [];
     const runner = new SessionAwareRunner(agent, {} as never, store);
@@ -136,7 +136,7 @@ describe('SessionAwareRunner model resolve order', () => {
     const defaultProvider = makeProvider('openai', 'gpt-5-mini', 128000);
     const { agent, calls } = makeAgentStub(defaultProvider);
     const store = new InMemorySessionStore();
-    await store.save('a1', 's2', {
+    await store.save('s2', {
       id: 's2',
       agentId: 'a1',
       meta: {

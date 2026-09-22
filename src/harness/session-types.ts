@@ -46,7 +46,10 @@ export interface SessionLifecycleMeta {
 /** Session 完整数据 */
 export interface SessionData {
   id: string;
-  /** 存储双键中的 agentId（兼容路径/索引；单 agent 时 == primaryAgentId） */
+  /**
+   * 创建/归属 agentId（归因字段与 list 过滤投影；单 agent 时 == primaryAgentId）。
+   * **存储主键是 sessionId**，本字段不再决定物理路径。
+   */
   agentId: string;
   /**
    * 主责 Agent（模型 2 · Accountability）。

@@ -131,8 +131,8 @@ describe('SessionAwareRunner concurrent sessions (I1)', () => {
     const store = new InMemorySessionStore();
     const runner = new SessionAwareRunner(agent as unknown as Agent, {} as never, store);
 
-    await store.save('a1', 'sA', emptySession('sA'));
-    await store.save('a1', 'sB', emptySession('sB'));
+    await store.save('sA', emptySession('sA'));
+    await store.save('sB', emptySession('sB'));
 
     const collect = async (sessionId: string, content: string) => {
       for await (const _ of runner.handle(
@@ -146,8 +146,8 @@ describe('SessionAwareRunner concurrent sessions (I1)', () => {
 
     await Promise.all([collect('sA', 'hello-A'), collect('sB', 'hello-B')]);
 
-    const sessA = await store.load('a1', 'sA');
-    const sessB = await store.load('a1', 'sB');
+    const sessA = await store.load('sA');
+    const sessB = await store.load('sB');
     expect(sessA).toBeTruthy();
     expect(sessB).toBeTruthy();
 

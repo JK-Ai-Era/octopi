@@ -64,7 +64,7 @@ describe('Gateway.getSessionTasks', () => {
         updatedAt: 1,
       },
     ]);
-    await store.save('a1', 's1', session);
+    await store.save('s1', session);
   });
 
   it('返回会话任务列表', async () => {

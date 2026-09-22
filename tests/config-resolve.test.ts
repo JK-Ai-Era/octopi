@@ -199,12 +199,12 @@ describe('resolveFallbackModels depth limit', () => {
   });
 });
 
-// ── InMemorySessionStore agentId 隔离 ──
+// ── InMemorySessionStore sessionId 一等 ──
 
 import { InMemorySessionStore } from '../src/integration/storage/memory.js';
 import type { SessionData } from '../src/harness/session-types.js';
 
-describe('InMemorySessionStore agentId isolation', () => {
+describe('InMemorySessionStore sessionId first-class', () => {
   function makeSession(id: string, agentId: string): SessionData {
     return {
       id, agentId,
@@ -213,45 +213,43 @@ describe('InMemorySessionStore agentId isolation', () => {
     };
   }
 
-  it('should isolate sessions across different agents with same sessionId', async () => {
+  it('same sessionId is one session across agents (session-first)', async () => {
     const store = new InMemorySessionStore();
 
-    await store.save('agent-a', 'sess-1', makeSession('sess-1', 'agent-a'));
-    await store.save('agent-b', 'sess-1', makeSession('sess-1', 'agent-b'));
+    await store.save('sess-1', makeSession('sess-1', 'agent-a'));
+    await store.save('sess-1', { ...makeSession('sess-1', 'agent-b'), primaryAgentId: 'agent-a' });
 
-    const loadedA = await store.load('agent-a', 'sess-1');
-    const loadedB = await store.load('agent-b', 'sess-1');
-
-    expect(loadedA).toBeDefined();
-    expect(loadedB).toBeDefined();
-    expect(loadedA!.agentId).toBe('agent-a');
-    expect(loadedB!.agentId).toBe('agent-b');
+    const loaded = await store.load('sess-1');
+    expect(loaded).toBeDefined();
+    expect(loaded!.id).toBe('sess-1');
+    expect(loaded!.agentId).toBe('agent-b');
+    expect(loaded!.primaryAgentId).toBe('agent-a');
   });
 
-  it('should not let one agent delete another agent session', async () => {
+  it('delete by sessionId removes the one session', async () => {
     const store = new InMemorySessionStore();
 
-    await store.save('agent-a', 'sess-1', makeSession('sess-1', 'agent-a'));
-    await store.save('agent-b', 'sess-1', makeSession('sess-1', 'agent-b'));
+    await store.save('sess-1', makeSession('sess-1', 'agent-a'));
+    await store.delete('sess-1');
 
-    await store.delete('agent-a', 'sess-1');
-
-    expect(await store.exists('agent-a', 'sess-1')).toBe(false);
-    expect(await store.exists('agent-b', 'sess-1')).toBe(true);
+    expect(await store.exists('sess-1')).toBe(false);
   });
 
-  it('should list only sessions for the specified agent', async () => {
+  it('list filters by participating agent', async () => {
     const store = new InMemorySessionStore();
 
-    await store.save('agent-a', 's1', makeSession('s1', 'agent-a'));
-    await store.save('agent-a', 's2', makeSession('s2', 'agent-a'));
-    await store.save('agent-b', 's3', makeSession('s3', 'agent-b'));
+    await store.save('s1', makeSession('s1', 'agent-a'));
+    await store.save('s2', makeSession('s2', 'agent-a'));
+    await store.save('s3', makeSession('s3', 'agent-b'));
+    await store.save('s4', {
+      ...makeSession('s4', 'agent-a'),
+      preferredAgentId: 'agent-b',
+    });
 
-    const listA = await store.list('agent-a');
-    const listB = await store.list('agent-b');
+    const listA = await store.list({ agentId: 'agent-a' });
+    const listB = await store.list({ agentId: 'agent-b' });
 
-    expect(listA).toHaveLength(2);
-    expect(listB).toHaveLength(1);
-    expect(listB[0].id).toBe('s3');
+    expect(listA).toHaveLength(3);
+    expect(listB).toHaveLength(2);
   });
 });

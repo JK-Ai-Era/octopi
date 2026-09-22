@@ -2,7 +2,7 @@
  * SQLite Session Store
  *
  * 基于内置 node:sqlite 的 Session 存储后端（Node.js >= 24）。
- * 适用于需要高性能、结构化查询的场景。
+ * 主键 = sessionId（Session 一等）；agent_id 列保留作参与过滤投影。
  *
  * 表结构：
  * - sessions: session 元数据 + 完整数据（JSON blob）
@@ -13,9 +13,10 @@
  */
 
 import type { DatabaseSync } from 'node:sqlite';
-import type { SessionStore } from '../../core/interfaces/session-store.js';
+import type { SessionStore, SessionListFilter } from '../../core/interfaces/session-store.js';
 import type { SessionData, SessionLifecycleMeta, SessionLifecycleStatus, MemoryExtractionStatus } from '../../harness/session-types.js';
 import type { SessionMeta } from '../../core/types.js';
+import { sessionMatchesAgent } from './memory.js';
 
 export interface SqliteSessionStoreOptions {
   /** 数据库文件路径（默认 ':memory:'） */
@@ -26,14 +27,25 @@ export interface SqliteSessionStoreOptions {
   busyTimeoutMs?: number;
 }
 
+function toMeta(s: SessionData): SessionMeta {
+  return {
+    ...s.meta,
+    primaryAgentId: s.primaryAgentId ?? s.meta.primaryAgentId,
+    preferredAgentId: s.preferredAgentId ?? s.meta.preferredAgentId,
+    participantAgentIds:
+      s.meta.participantAgentIds ??
+      (s.participants ?? []).map((p) => p.agentId),
+  };
+}
+
 /**
  * SQLite Session Store
  *
  * @example
  * ```ts
  * const store = await SqliteSessionStore.create({ dbPath: './data/sessions.db' });
- * await store.save('agent-1', 'sess-1', sessionData);
- * const session = await store.load('agent-1', 'sess-1');
+ * await store.save('sess-1', sessionData);
+ * const session = await store.load('sess-1');
  * ```
  */
 export class SqliteSessionStore implements SessionStore<SessionData> {
@@ -76,7 +88,7 @@ export class SqliteSessionStore implements SessionStore<SessionData> {
       this.db.exec('PRAGMA journal_mode = WAL');
     }
 
-    // 创建表
+    // 创建表（id = sessionId 一等主键；agent_id 为创建/归属投影）
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS sessions (
         id TEXT PRIMARY KEY,
@@ -96,27 +108,28 @@ export class SqliteSessionStore implements SessionStore<SessionData> {
 
     // 预编译语句
     this.stmts = {
-      get: this.db.prepare('SELECT data, lifecycle, memory_extraction, ended_at, archived_at FROM sessions WHERE id = ? AND agent_id = ?'),
+      get: this.db.prepare('SELECT data, lifecycle, memory_extraction, ended_at, archived_at FROM sessions WHERE id = ?'),
       upsert: this.db.prepare(`
         INSERT INTO sessions (id, agent_id, data, created_at, updated_at, lifecycle, memory_extraction)
         VALUES (?, ?, ?, ?, ?, 'active', 'pending')
         ON CONFLICT(id) DO UPDATE SET
           data = excluded.data,
+          agent_id = excluded.agent_id,
           updated_at = excluded.updated_at
       `),
-      delete: this.db.prepare('DELETE FROM sessions WHERE id = ? AND agent_id = ?'),
-      list: this.db.prepare('SELECT data FROM sessions WHERE agent_id = ?'),
-      listByLifecycle: this.db.prepare('SELECT data, lifecycle, memory_extraction, ended_at, archived_at FROM sessions WHERE agent_id = ? AND lifecycle = ?'),
-      exists: this.db.prepare('SELECT 1 FROM sessions WHERE id = ? AND agent_id = ?'),
+      delete: this.db.prepare('DELETE FROM sessions WHERE id = ?'),
+      list: this.db.prepare('SELECT data FROM sessions'),
+      listByLifecycle: this.db.prepare('SELECT data, lifecycle, memory_extraction, ended_at, archived_at FROM sessions WHERE lifecycle = ?'),
+      exists: this.db.prepare('SELECT 1 FROM sessions WHERE id = ?'),
       updateLifecycle: this.db.prepare(`
         UPDATE sessions SET lifecycle = ?, memory_extraction = ?, ended_at = ?, archived_at = ?
-        WHERE id = ? AND agent_id = ?
+        WHERE id = ?
       `),
     };
   }
 
-  async load(agentId: string, sessionId: string): Promise<SessionData | null> {
-    const row = this.stmts.get.get(sessionId, agentId) as { data: string; lifecycle: string; memory_extraction: string; ended_at: number | null; archived_at: number | null } | undefined;
+  async load(sessionId: string): Promise<SessionData | null> {
+    const row = this.stmts.get.get(sessionId) as { data: string; lifecycle: string; memory_extraction: string; ended_at: number | null; archived_at: number | null } | undefined;
     if (!row) return null;
     try {
       const data = JSON.parse(row.data) as SessionData;
@@ -132,41 +145,45 @@ export class SqliteSessionStore implements SessionStore<SessionData> {
     }
   }
 
-  async save(agentId: string, sessionId: string, data: SessionData): Promise<void> {
+  async save(sessionId: string, data: SessionData): Promise<void> {
     const now = Date.now();
-    const json = JSON.stringify(data);
+    const json = JSON.stringify({ ...data, id: sessionId });
     const createdAt = data.meta?.createdAt ?? now;
+    const agentId = data.primaryAgentId ?? data.agentId ?? data.meta?.agentId ?? 'default';
 
     this.stmts.upsert.run(sessionId, agentId, json, createdAt, now);
   }
 
-  async list(agentId: string): Promise<SessionMeta[]> {
-    const rows = this.stmts.list.all(agentId) as { data: string }[];
-    return rows
+  async list(filter?: SessionListFilter): Promise<SessionMeta[]> {
+    const rows = this.stmts.list.all() as { data: string }[];
+    const metas = rows
       .map(r => {
         try {
           const s = JSON.parse(r.data) as SessionData;
-          return s.meta;
+          return toMeta(s);
         } catch { return null; }
       })
       .filter((m): m is SessionMeta => m !== null);
+    if (!filter?.agentId) return metas;
+    const agentId = filter.agentId;
+    return metas.filter((m) => sessionMatchesAgent(m, agentId));
   }
 
-  async delete(agentId: string, sessionId: string): Promise<void> {
-    this.stmts.delete.run(sessionId, agentId);
+  async delete(sessionId: string): Promise<void> {
+    this.stmts.delete.run(sessionId);
   }
 
-  async exists(agentId: string, sessionId: string): Promise<boolean> {
-    return !!this.stmts.exists.get(sessionId, agentId);
+  async exists(sessionId: string): Promise<boolean> {
+    return !!this.stmts.exists.get(sessionId);
   }
 
   /**
    * 更新 session 生命周期状态
    */
-  async updateLifecycle(agentId: string, sessionId: string, lifecycle: Partial<SessionLifecycleMeta>): Promise<void> {
+  async updateLifecycle(sessionId: string, lifecycle: Partial<SessionLifecycleMeta>): Promise<void> {
     const row = this.db.prepare(
-      'SELECT lifecycle, memory_extraction, ended_at, archived_at FROM sessions WHERE id = ? AND agent_id = ?'
-    ).get(sessionId, agentId) as { lifecycle: string; memory_extraction: string; ended_at: number | null; archived_at: number | null } | undefined;
+      'SELECT lifecycle, memory_extraction, ended_at, archived_at FROM sessions WHERE id = ?'
+    ).get(sessionId) as { lifecycle: string; memory_extraction: string; ended_at: number | null; archived_at: number | null } | undefined;
     if (!row) return;
 
     this.stmts.updateLifecycle.run(
@@ -175,15 +192,14 @@ export class SqliteSessionStore implements SessionStore<SessionData> {
       lifecycle.endedAt ?? row.ended_at,
       lifecycle.archivedAt ?? row.archived_at,
       sessionId,
-      agentId,
     );
   }
 
   /**
    * 按生命周期状态列出 session
    */
-  async listByLifecycle(agentId: string, lifecycle: SessionLifecycleStatus): Promise<SessionData[]> {
-    const rows = this.stmts.listByLifecycle.all(agentId, lifecycle) as Array<{ data: string; lifecycle: string; memory_extraction: string; ended_at: number | null; archived_at: number | null }>;
+  async listByLifecycle(lifecycle: SessionLifecycleStatus): Promise<SessionData[]> {
+    const rows = this.stmts.listByLifecycle.all(lifecycle) as Array<{ data: string; lifecycle: string; memory_extraction: string; ended_at: number | null; archived_at: number | null }>;
     return rows
       .map(r => {
         try {
@@ -203,15 +219,15 @@ export class SqliteSessionStore implements SessionStore<SessionData> {
   /**
    * 标记 session 结束
    */
-  async markEnded(agentId: string, sessionId: string): Promise<void> {
-    await this.updateLifecycle(agentId, sessionId, {
+  async markEnded(sessionId: string): Promise<void> {
+    await this.updateLifecycle(sessionId, {
       lifecycle: 'recent',
       endedAt: Date.now(),
     });
   }
 
   /**
-   * 获取所有 agent ID
+   * 获取所有 agent ID（参与投影）
    */
   getAgentIds(): string[] {
     const rows = this.db.prepare(

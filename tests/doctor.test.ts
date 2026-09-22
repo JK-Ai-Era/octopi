@@ -25,7 +25,6 @@ import {
   latestConfigBackup,
   restoreConfigFromBackup,
 } from '../src/cli/doctor/restore.js';
-import { renameLegacySessionFiles, listLegacySessionFiles } from '../src/cli/doctor/data.js';
 import { loadConfig } from '../src/config.js';
 
 describe('config-migrations', () => {
@@ -496,9 +495,9 @@ describe('octopi doctor', () => {
     const pre = await runDoctor({ config: configPath }, {});
     const cfg010 = pre.findings.find((f) => f.id === 'CFG010');
     expect(cfg010).toBeTruthy();
-    expect(cfg010!.hint).toContain('agents/<id>/sessions/');
+    expect(cfg010!.hint).toContain('OCTOPI_HOME/sessions/');
     expect(cfg010!.hint).toContain('session-like file');
-    expect(cfg010!.hint).toContain('looks empty');
+    expect(cfg010!.hint).toContain('not read by runtime');
     expect(cfg010!.fixable).toBe(true);
     expect(cfg010!.group).toBe('config');
     expect(cfg010!.severity).toBe('warn');
@@ -547,25 +546,3 @@ describe('octopi doctor', () => {
   });
 });
 
-describe('legacy session filename helper', () => {
-  it('renames colon session files when platform allows', () => {
-    if (process.platform === 'win32') {
-      // Windows 无法创建含冒号文件名；映射逻辑本身仍被 toSessionFileName 覆盖
-      expect(listLegacySessionFiles(join(tmpdir(), 'nope'))).toEqual([]);
-      return;
-    }
-    const dir = mkdtempSync(join(tmpdir(), 'octopi-sess-'));
-    try {
-      writeFileSync(join(dir, 'default:web:1.jsonl'), '{}\n', 'utf-8');
-      writeFileSync(join(dir, 'default:web:1.state.json'), '{}', 'utf-8');
-      expect(listLegacySessionFiles(dir).length).toBe(2);
-      const notes = renameLegacySessionFiles(dir);
-      expect(notes.length).toBe(2);
-      expect(existsSync(join(dir, 'default_web_1.jsonl'))).toBe(true);
-      expect(existsSync(join(dir, 'default_web_1.state.json'))).toBe(true);
-      expect(listLegacySessionFiles(dir).length).toBe(0);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-});

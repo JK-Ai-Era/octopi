@@ -45,7 +45,7 @@ export type { ToolDefinition, RegisteredTool, ToolHandler, ToolParameter, ToolSo
 export type { ErrorStrategy, ErrorAction, OverflowAction } from './core/interfaces/error-strategy.js';
 export type { SecurityAction } from './core/security-guard.js';
 export type { Observer, Span, LogLevel } from './core/interfaces/observer.js';
-export type { SessionStore } from './core/interfaces/session-store.js';
+export type { SessionStore, SessionListFilter } from './core/interfaces/session-store.js';
 export type { SessionData, SessionLifecycleMeta, SessionLifecycleStatus, MemoryExtractionStatus } from './harness/session-types.js';
 
 // Context Engine (new)

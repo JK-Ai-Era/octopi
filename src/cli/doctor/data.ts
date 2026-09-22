@@ -1,14 +1,14 @@
 /**
- * doctor 数据层：agent.db 迁移 + 旧 session 文件名
+ * doctor 数据层：agent.db 迁移检查 + session.store 废弃检测
  *
  * 本地确定性；node:sqlite / agent.db 不可用时只报告，不拖垮 doctor。
  *
  * @module
  */
 
-import { existsSync, mkdirSync, readdirSync, renameSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { toSessionFileName } from '../../integration/storage/session-filename.js';
+import { getOctopiHome } from '../../init.js';
 
 export interface DataFixResult {
   findings: Array<{
@@ -56,62 +56,6 @@ export function resolveAgentDataTargets(
 }
 
 /**
- * 统计 sessions 目录中仍使用旧冒号文件名的条目
- *
- * @param sessionsDir - agent sessions 目录
- * @returns 旧文件名列表
- */
-export function listLegacySessionFiles(sessionsDir: string): string[] {
-  if (!existsSync(sessionsDir)) return [];
-  return readdirSync(sessionsDir)
-    .filter((name) => name.includes(':'))
-    .sort();
-}
-
-/**
- * 将旧 session 文件名改为跨平台安全名（目标已存在则跳过）
- *
- * @param sessionsDir - agent sessions 目录
- * @returns 重命名说明
- */
-export function renameLegacySessionFiles(sessionsDir: string): string[] {
-  const notes: string[] = [];
-  if (!existsSync(sessionsDir)) return notes;
-
-  for (const name of listLegacySessionFiles(sessionsDir)) {
-    let stem: string;
-    let suffix: string;
-    if (name.endsWith('.state.json')) {
-      stem = name.slice(0, -'.state.json'.length);
-      suffix = '.state.json';
-    } else if (name.endsWith('.jsonl')) {
-      stem = name.slice(0, -'.jsonl'.length);
-      suffix = '.jsonl';
-    } else {
-      const dot = name.lastIndexOf('.');
-      stem = dot > 0 ? name.slice(0, dot) : name;
-      suffix = dot > 0 ? name.slice(dot) : '';
-    }
-    const safeName = `${toSessionFileName(stem)}${suffix}`;
-    if (safeName === name) continue;
-    const fromPath = join(sessionsDir, name);
-    const toPath = join(sessionsDir, safeName);
-    if (existsSync(toPath)) {
-      notes.push(`skip legacy session file (target exists): ${name}`);
-      continue;
-    }
-    try {
-      renameSync(fromPath, toPath);
-      notes.push(`session ${name} → ${safeName}`);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      notes.push(`failed to rename ${name}: ${msg}`);
-    }
-  }
-  return notes;
-}
-
-/**
  * 检测废弃 session.store.dataDir 与真实会话落点对照（不迁移数据）
  *
  * @param raw - 未展开配置
@@ -146,30 +90,29 @@ export function checkDeprecatedSessionStore(
   }
 
   let liveFiles = 0;
-  for (const t of targets) {
-    const sessionsDir = join(t.home, 'sessions');
-    if (!existsSync(sessionsDir)) continue;
+  const liveDir = getOctopiHome() + '/sessions';
+  if (existsSync(liveDir)) {
     try {
-      liveFiles += readdirSync(sessionsDir).filter((n) => n.endsWith('.jsonl')).length;
+      liveFiles = readdirSync(liveDir).filter((n) => n.endsWith('.jsonl')).length;
     } catch {
-      /* ignore unreadable live dir */
+      /* ignore unreadable */
     }
   }
 
   const dataDirExists = Boolean(dataDir && existsSync(dataDir));
   const hintParts = [
-    'runtime sessions live under agents/<id>/sessions/; session.store.dataDir is not read by Gateway',
+    'runtime sessions live under OCTOPI_HOME/sessions/; session.store.dataDir is not read by Gateway',
   ];
   if (dataDir) {
     hintParts.push(
       dataDirExists
-        ? `legacy dataDir ${dataDir} exists (${legacyFiles < 0 ? 'unreadable' : `${legacyFiles} session-like file(s)`}) — not auto-migrated`
+        ? `configured dataDir ${dataDir} exists (${legacyFiles < 0 ? 'unreadable' : `${legacyFiles} session-like file(s)`}) — not read by runtime`
         : `configured dataDir ${dataDir} does not exist`,
     );
   }
-  hintParts.push(`live agent sessions/*.jsonl count ≈ ${liveFiles}`);
+  hintParts.push(`live sessions/*.jsonl count ≈ ${liveFiles} in OCTOPI_HOME/sessions/`);
   if (dataDirExists && legacyFiles > 0 && liveFiles === 0) {
-    hintParts.push('legacy files present while live sessions dir looks empty — backup/migration may be pointed at the wrong path');
+    hintParts.push('dataDir has session files but OCTOPI_HOME/sessions/ is empty — data may not be in the active path');
   }
 
   findings.push({
@@ -207,19 +150,6 @@ export function detectDataLayer(targets: AgentDataTarget[]): DataFixResult['find
       });
     }
 
-    const sessionsDir = join(t.home, 'sessions');
-    const legacy = listLegacySessionFiles(sessionsDir);
-    if (legacy.length > 0) {
-      findings.push({
-        id: 'DB002',
-        domain: 'data',
-        severity: 'warn',
-        message: `agent "${t.id}": ${legacy.length} legacy session filename(s) with ":"`,
-        hint: 'rename to Windows-safe names (same mapping as JsonlSessionStore)',
-        fixable: true,
-        group: 'data',
-      });
-    }
   }
   return findings;
 }
@@ -267,10 +197,6 @@ export async function applyDataLayerFixes(
           ? `[dry-run] would open+migrate ${dbPath}`
           : `[dry-run] would create ${dbPath}`,
       );
-      const legacy = listLegacySessionFiles(join(t.home, 'sessions'));
-      for (const name of legacy) {
-        notes.push(`[dry-run] would rename session ${name}`);
-      }
     }
     findings.push({
       id: 'FIX002',
@@ -285,7 +211,6 @@ export async function applyDataLayerFixes(
 
   for (const t of targets) {
     mkdirSafe(t.home);
-    mkdirSafe(join(t.home, 'sessions'));
     try {
       notes.push(await migrateAgentDatabase(t));
       findings.push({
@@ -304,18 +229,6 @@ export async function applyDataLayerFixes(
         severity: 'error',
         message: `agent "${t.id}": agent.db migrate failed: ${msg}`,
         hint: 'schema migrate failed; inspect agent.db — requires Node.js >= 24 node:sqlite (create is not transactional — file may be partial)',
-        fixable: false,
-      });
-    }
-
-    const renamed = renameLegacySessionFiles(join(t.home, 'sessions'));
-    notes.push(...renamed);
-    if (renamed.length > 0) {
-      findings.push({
-        id: 'DB002',
-        domain: 'data',
-        severity: 'ok',
-        message: `agent "${t.id}": session files → ${renamed.join('; ')}`,
         fixable: false,
       });
     }

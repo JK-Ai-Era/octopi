@@ -14,12 +14,19 @@ export default tseslint.config(
   },
   {
     files: ['**/*.ts'],
+    plugins: {
+      '@typescript-eslint': tseslint.plugin,
+    },
     languageOptions: {
       parser: tseslint.parser,
       parserOptions: {
         ecmaVersion: 2022,
         sourceType: 'module',
       },
+    },
+    rules: {
+      // 注册规则以便 eslint-disable 生效；默认不强制（测试/mock 允许 any）
+      '@typescript-eslint/no-explicit-any': 'off',
     },
   },
   {

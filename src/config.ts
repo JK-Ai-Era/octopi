@@ -34,7 +34,7 @@
  * }
  * ```
  *
- * 注意：`session.store` / `dataDir` 已废弃——Gateway 固定使用 `agents/<id>/sessions/`。
+ * 注意：`session.store` / `dataDir` 已废弃——Session 一等存储在 `OCTOPI_HOME/sessions/`。
  * doctor 检测 CFG010；`--fix config` 将 store 迁入 `_legacy.session.store`。
  */
 
@@ -68,7 +68,7 @@ export { DEFAULT_CONTEXT_WINDOW };
 export interface AgentConfig {
   /** Agent 唯一标识 */
   id: string;
-  /** Agent home 目录：persona、skills、sessions、extract 的根目录（memory/wisdom 走 AgentDatabase SQLite） */
+  /** Agent home 目录：persona、skills 的根目录（session 在 OCTOPI_HOME/sessions；memory/wisdom 走 AgentDatabase SQLite） */
   home?: string;
   /** 沙箱工作目录：agent 工具操作的 cwd，默认为 home 下的 workspace 子目录 */
   workspace?: string;

@@ -911,7 +911,7 @@
     },
     "session": {
       "type": "object",
-      "description": "Session 路由配置（仅 dmScope；存储固定为 agents/<id>/sessions/，session.store 已废弃）",
+      "description": "Session 路由配置（仅 dmScope；存储固定为 OCTOPI_HOME/sessions/，session.store 已废弃）",
       "properties": {
         "dmScope": {
           "type": "string",
@@ -924,7 +924,7 @@
         },
         "store": {
           "type": "object",
-          "description": "[Deprecated] Session 存储配置已废弃：Gateway 固定使用 agents/<id>/sessions/，忽略 store/dataDir。保留仅为兼容旧配置；octopi doctor --fix 会迁入 _legacy.session.store",
+          "description": "[Deprecated] Session 存储配置已废弃：runtime 固定使用 OCTOPI_HOME/sessions/，忽略 store/dataDir。保留仅为兼容旧配置；octopi doctor --fix 会迁入 _legacy.session.store",
           "required": [
             "type"
           ],
@@ -940,7 +940,7 @@
             },
             "dataDir": {
               "type": "string",
-              "description": "[Deprecated] 数据目录；runtime 不读，会话在 agents/<id>/sessions/"
+              "description": "[Deprecated] 数据目录；runtime 不读，会话在 OCTOPI_HOME/sessions/"
             },
             "dbPath": {
               "type": "string",

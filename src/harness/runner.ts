@@ -519,7 +519,7 @@ export class SessionAwareRunner {
 
     try {
       // 3. 加载或创建 session
-      let session = await this.store.load(_agentId, sessionId);
+      let session = await this.store.load(sessionId);
       if (!session) {
         session = this.createSession(sessionId, runConfig.agentId ?? 'default');
       }
@@ -993,7 +993,7 @@ export class SessionAwareRunner {
       // 压缩状态写回 Session（E4 分桶 + primary 兼容视图）
       const compactSnap = this.agent.getSessionCompactState(sessionId, _agentId);
       writeSessionCompact(session, _agentId, compactSnap);
-      await this.store.save(_agentId, sessionId, session);
+      await this.store.save(sessionId, session);
 
       // 通知子系统：本轮处理完成（保持 active，但刷新 lastInteractionAt）
       this.emitObserved({
@@ -1015,12 +1015,12 @@ export class SessionAwareRunner {
       const sm = this.stateMachines.get(sessionId);
       if (sm?.canTransition('error')) {
         sm.transition('error');
-        const session = await this.store.load(_agentId, sessionId);
+        const session = await this.store.load(sessionId);
         if (session) {
           session.meta.status = sm.state;
           session.meta.updatedAt = Date.now();
           if (!observerFinalMessages) observerFinalMessages = session.messages;
-          await this.store.save(_agentId, sessionId, session);
+          await this.store.save(sessionId, session);
 
           this.emitObserved({
             type: 'engine.error',
@@ -1046,6 +1046,9 @@ export class SessionAwareRunner {
       }
       throw err;
     } finally {
+      // 清理 task service 的活 session 缓存（避免长时间运行进程内存泄漏）
+      this.config.sessionTaskService?.detachSession(_agentId, sessionId);
+
       // Observer 统一收口：成功/失败都关闭 run，避免僵尸 active
       if (observerRunId && this._observerHub?.isEnabled()) {
         try {
@@ -1135,7 +1138,7 @@ export class SessionAwareRunner {
   }> {
     const release = await this.acquireLock(sessionId);
     try {
-      const session = await this.store.load(agentId, sessionId);
+      const session = await this.store.load(sessionId);
       if (!session) {
         return {
           ok: false,
@@ -1162,7 +1165,7 @@ export class SessionAwareRunner {
         this.agent.setSessionCompactState(sessionId, agentId, snap);
         writeSessionCompact(session, agentId, snap);
         session.meta.updatedAt = Date.now();
-        await this.store.save(agentId, sessionId, session);
+        await this.store.save(sessionId, session);
       }
 
       return result;
@@ -1186,7 +1189,7 @@ export class SessionAwareRunner {
    * 创建新 Session
    *
    * 模型 2：`primaryAgentId` = 创建时的 agentId（Accountability）。
-   * 存储键仍为双键 `(agentId, sessionId)`；目录迁移见 arch（先字段后迁路径）。
+   * 存储主键 = sessionId；agentId 只作归属/参与投影。
    */
   private createSession(sessionId: string, agentId: string): SessionData {
     return {
@@ -1301,7 +1304,6 @@ export class SessionAwareRunner {
   private markSessionRecentForExtraction(session: SessionData, now: number): void {
     const storeWithLifecycle = this.store as {
       updateLifecycle?: (
-        agentId: string,
         sessionId: string,
         lifecycle: {
           lifecycle: 'recent';
@@ -1312,7 +1314,7 @@ export class SessionAwareRunner {
     };
     if (typeof storeWithLifecycle.updateLifecycle === 'function') {
       void Promise.resolve(
-        storeWithLifecycle.updateLifecycle(session.agentId, session.id, {
+        storeWithLifecycle.updateLifecycle(session.id, {
           lifecycle: 'recent',
           memoryExtraction: 'pending',
           endedAt: now,

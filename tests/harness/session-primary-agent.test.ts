@@ -95,7 +95,7 @@ describe('Phase C SessionData.primaryAgentId', () => {
       void _;
     }
 
-    const sess = await store.load('a1', 's-new');
+    const sess = await store.load('s-new');
     expect(sess).toBeTruthy();
     expect(sess!.primaryAgentId).toBe('a1');
     expect(sess!.agentId).toBe('a1');
@@ -109,7 +109,7 @@ describe('Phase C SessionData.primaryAgentId', () => {
     const legacy = emptySession('s-legacy', 'a1');
     // 故意不设 primaryAgentId
     delete (legacy as { primaryAgentId?: string }).primaryAgentId;
-    await store.save('a1', 's-legacy', legacy);
+    await store.save('s-legacy', legacy);
 
     for await (const _ of runner.handle(
       's-legacy',
@@ -119,7 +119,7 @@ describe('Phase C SessionData.primaryAgentId', () => {
       void _;
     }
 
-    const sess = await store.load('a1', 's-legacy');
+    const sess = await store.load('s-legacy');
     expect(sess!.primaryAgentId).toBe('a1');
   });
 
@@ -128,7 +128,7 @@ describe('Phase C SessionData.primaryAgentId', () => {
     const store = new InMemorySessionStore();
     const runner = new SessionAwareRunner(agent, {} as never, store);
 
-    await store.save('a1', 's-attr', emptySession('s-attr', 'a1'));
+    await store.save('s-attr', emptySession('s-attr', 'a1'));
 
     for await (const _ of runner.handle(
       's-attr',
@@ -138,7 +138,7 @@ describe('Phase C SessionData.primaryAgentId', () => {
       void _;
     }
 
-    const sess = await store.load('a1', 's-attr');
+    const sess = await store.load('s-attr');
     expect(sess).toBeTruthy();
     const assistant = (sess!.messages ?? []).filter((m) => m.role === 'assistant');
     expect(assistant.length).toBeGreaterThan(0);
@@ -158,14 +158,14 @@ describe('Phase C SessionData.primaryAgentId', () => {
     const store = new InMemorySessionStore();
     const data = emptySession('s1', 'a1');
     data.primaryAgentId = 'a1';
-    await store.save('a1', 's1', data);
-    const loaded = await store.load('a1', 's1');
+    await store.save('s1', data);
+    const loaded = await store.load('s1');
     expect(loaded?.primaryAgentId).toBe('a1');
   });
 
   it('JsonlSessionStore 持久化 primaryAgentId', async () => {
     const home = mkdtempSync(join(tmpdir(), 'octopi-c-jsonl-'));
-    const store = new JsonlSessionStore((agentId) => join(home, agentId));
+    const store = new JsonlSessionStore({ sessionsDir: join(home, 'sessions') });
 
     const data = emptySession('s-json', 'a1');
     data.primaryAgentId = 'a1';
@@ -173,9 +173,9 @@ describe('Phase C SessionData.primaryAgentId', () => {
       { role: 'user', content: 'hi', timestamp: Date.now() },
       { role: 'assistant', content: 'yo', timestamp: Date.now(), agentId: 'a1' },
     ];
-    await store.save('a1', 's-json', data);
+    await store.save('s-json', data);
 
-    const loaded = await store.load('a1', 's-json');
+    const loaded = await store.load('s-json');
     expect(loaded).toBeTruthy();
     expect(loaded!.primaryAgentId).toBe('a1');
     const assistant = loaded!.messages.find((m) => m.role === 'assistant');
@@ -184,7 +184,7 @@ describe('Phase C SessionData.primaryAgentId', () => {
 
   it('Jsonl 持久化 preferred / participants / contextCompacts', async () => {
     const home = mkdtempSync(join(tmpdir(), 'octopi-c-jsonl-m2-'));
-    const store = new JsonlSessionStore((agentId) => join(home, agentId));
+    const store = new JsonlSessionStore({ sessionsDir: join(home, 'sessions') });
 
     const data = emptySession('s-m2', 'a1');
     data.primaryAgentId = 'a1';
@@ -210,30 +210,30 @@ describe('Phase C SessionData.primaryAgentId', () => {
         intent: 'switch_preferred',
       },
     ];
-    await store.save('a1', 's-m2', data);
+    await store.save('s-m2', data);
 
-    const loaded = await store.load('a1', 's-m2');
+    const loaded = await store.load('s-m2');
     expect(loaded?.preferredAgentId).toBe('spec');
     expect(loaded?.participants?.[0]?.roleId).toBe('specialist');
     expect(loaded?.contextCompacts?.a1?.summary).toBe('sum-a1');
     expect(loaded?.switchAudit?.[0]?.mode).toBe('preferred');
   });
 
-  it('Jsonl 历史 state 缺 primary 时 load 回填双键 agentId', async () => {
+  it('Jsonl 历史 state 缺 primary 时 load 回填 agentId', async () => {
     const home = mkdtempSync(join(tmpdir(), 'octopi-c-jsonl-legacy2-'));
-    const store = new JsonlSessionStore((agentId) => join(home, agentId));
+    const store = new JsonlSessionStore({ sessionsDir: join(home, 'sessions') });
 
     const data = emptySession('s-old', 'a1');
-    await store.save('a1', 's-old', data);
+    await store.save('s-old', data);
 
     // 手写去掉 primaryAgentId 的旧 state
     const { writeFileSync, readFileSync } = await import('node:fs');
-    const statePath = join(home, 'a1', 'sessions', 's-old.state.json');
+    const statePath = join(home, 'sessions', 's-old.state.json');
     const state = JSON.parse(readFileSync(statePath, 'utf-8'));
     delete state.primaryAgentId;
     writeFileSync(statePath, JSON.stringify(state, null, 2));
 
-    const loaded = await store.load('a1', 's-old');
+    const loaded = await store.load('s-old');
     expect(loaded?.primaryAgentId).toBe('a1');
   });
 

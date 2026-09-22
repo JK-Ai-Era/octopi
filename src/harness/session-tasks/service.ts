@@ -39,7 +39,7 @@ function isActive(status: SessionTaskStatus): boolean {
  * SessionTaskService
  */
 export class SessionTaskService {
-  /** Runner 挂载的活 session：key = agentId::sessionId */
+  /** Runner 挂载的活 session：key = sessionId（Session 一等） */
   private live = new Map<string, SessionData>();
 
   constructor(
@@ -49,21 +49,19 @@ export class SessionTaskService {
 
   /**
    * Runner 在 load/create 后调用，绑定同一 SessionData 引用。
+   * 对应的 detach 在 Runner handle finally 中自动调用。
    */
   attachSession(session: SessionData): void {
     if (!session.tasks) session.tasks = [];
-    this.live.set(this.key(session.agentId, session.id), session);
+    this.live.set(session.id, session);
   }
 
   /**
-   * Runner 在异常路径可选调用；正常 handle 结束可不 detach（下轮会重新 attach）。
+   * Runner 在 handle finally 中调用，释放 live 缓存；
+   * 异常路径 detach 后 resolve 会 fallback 到 store.load 并重新缓存。
    */
-  detachSession(agentId: string, sessionId: string): void {
-    this.live.delete(this.key(agentId, sessionId));
-  }
-
-  private key(agentId: string, sessionId: string): string {
-    return `${agentId}::${sessionId}`;
+  detachSession(_agentId: string, sessionId: string): void {
+    this.live.delete(sessionId);
   }
 
   /** 确保 session.tasks 为数组并返回（窄化类型） */
@@ -72,25 +70,24 @@ export class SessionTaskService {
     return session.tasks;
   }
 
-  private async resolve(agentId: string, sessionId: string): Promise<SessionData> {
-    const k = this.key(agentId, sessionId);
-    const live = this.live.get(k);
+  private async resolve(_agentId: string, sessionId: string): Promise<SessionData> {
+    const live = this.live.get(sessionId);
     if (live) {
       this.ensureTasks(live);
       return live;
     }
-    const loaded = await this.store.load(agentId, sessionId);
+    const loaded = await this.store.load(sessionId);
     if (!loaded) {
       throw new Error(`Session not found: ${sessionId}`);
     }
     this.ensureTasks(loaded);
-    this.live.set(k, loaded);
+    this.live.set(sessionId, loaded);
     return loaded;
   }
 
   private async persist(session: SessionData): Promise<void> {
     session.meta.updatedAt = now();
-    await this.store.save(session.agentId, session.id, session);
+    await this.store.save(session.id, session);
   }
 
   private emitTaskEvent(
@@ -136,7 +133,7 @@ export class SessionTaskService {
   // ── 查询 ──
 
   list(agentId: string, sessionId: string, filter?: SessionTaskListFilter): SessionTask[] {
-    const session = this.live.get(this.key(agentId, sessionId));
+    const session = this.live.get(sessionId);
     if (!session) return [];
     return this.filterTasks(this.ensureTasks(session), filter);
   }

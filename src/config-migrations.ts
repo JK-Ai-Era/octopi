@@ -565,10 +565,10 @@ export function detectSessionStore(raw: RawObject): MigrationFinding | null {
   return {
     id: 'CFG010',
     severity: 'warn',
-    message: 'session.store is deprecated; Gateway ignores store/type/dataDir',
+    message: 'session.store is deprecated; Session lives under OCTOPI_HOME/sessions/',
     hint: dataDir
-      ? `runtime reads/writes agents/<id>/sessions/; configured dataDir "${dataDir}" is not used`
-      : 'keep only session.dmScope; sessions live under agents/<id>/sessions/',
+      ? `runtime reads/writes OCTOPI_HOME/sessions/; configured dataDir "${dataDir}" is not used`
+      : 'keep only session.dmScope; sessions live under OCTOPI_HOME/sessions/',
     autoFixable: true,
   };
 }

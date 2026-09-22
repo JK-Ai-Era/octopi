@@ -11,6 +11,7 @@ export type SessionStatus = 'idle' | 'processing' | 'waiting_human' | 'error';
 /** Session 元数据 */
 export interface SessionMeta {
   id: string;
+  /** 创建/归属 agent（兼容与展示；存储主键为 sessionId） */
   agentId: string;
   channelId: string;
   peerId: string;
@@ -19,4 +20,10 @@ export interface SessionMeta {
   sessionStartedAt: number;
   lastInteractionAt: number;
   updatedAt: number;
+  /** Accountability（模型 2）；列表过滤 / 缺省人设 */
+  primaryAgentId?: string;
+  /** Activation preferred；列表过滤 */
+  preferredAgentId?: string;
+  /** 参与者 agentId（列表过滤；完整绑定在 SessionData.participants） */
+  participantAgentIds?: string[];
 }

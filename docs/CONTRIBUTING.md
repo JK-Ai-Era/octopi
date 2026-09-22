@@ -47,7 +47,7 @@ npm run dev            # tsc --watch
 - 工具结果进主会话前：**L1 硬顶**（`maxReturnChars`）必须生效；禁止「先回原文再由 Agent 调 summary」作为防撑爆主路径
 - Session 锁/租约键 = `sessionId`；Gateway 注入**共享** `InProcessSessionLock`；跨进程勿假设内存锁有效（E2/E7）
 - Gateway 默认注入 Session ACL；`preferredAgentId` ≠ `primaryAgentId`；handoff 默认 host-only（I3/E6）
-- SessionStore 仍为双键 `load(agentId, sessionId)`；`loadSession(sessionId)` 尚未实现
+- SessionStore 为 sessionId 一等：`load(sessionId)` / `save(sessionId, data)`；目录 `OCTOPI_HOME/sessions/`
 - Config 变更：同步 `src/config-schema.ts`、`octopi.schema.json`、`octopi.example.json`
 
 **依赖方向：外 → 内。修改内层时必须确认不影响外层。**

@@ -8,15 +8,15 @@
  *     octopi.json                      ← 主配置文件
  *     audit/                           ← 子系统审计日志
  *     plugins/                         ← plugin 目录
+ *     sessions/                        ← Session 一等存储（JsonlSessionStore）
  *     agents/
- *       default/                       ← agent home（persona / skills / sessions）
+ *       default/                       ← agent home（persona / skills）
  *         AGENTS.md                    ← 主 persona（loadPersona 最先加载）
  *         persona/                     ← 补充 persona（字母序；数字前缀控制顺序）
  *           10-soul.md                 ← 人格定义
  *           20-identity.md             ← 身份定义
  *           30-user.md                 ← 用户上下文
  *           40-tools.md                ← 工具说明
- *         sessions/                    ← session 存储（JsonlSessionStore）
  *         skills/                      ← 技能目录
  *
  * 说明：Memory / Cognition / Wisdom / Knowledge 不按文件目录落盘，
@@ -304,7 +304,7 @@ export async function ensureAgentDirs(
   const created: string[] = [];
   const existed: string[] = [];
 
-  // Home 目录（persona / skills / sessions 的根目录）
+  // Home 目录（persona / skills 的根目录）
   const agentHome = join(homeDir, 'agents', agentId);
   ensureDirTracked(agentHome, created, existed);
 
@@ -313,9 +313,9 @@ export async function ensureAgentDirs(
 
   // Home 下的文件系统子目录。
   // memory/wisdom 不在此列：由 AgentDatabase（SQLite agent.db）承载。
+  // sessions 一等存储在 OCTOPI_HOME/sessions/，不再预建 agents/<id>/sessions/。
   // 旧 extract/（ETL JsonlExtractorStore）不再预建。
   const homeSubDirs = [
-    'sessions',
     'skills',
   ];
   for (const dir of homeSubDirs) {
@@ -379,6 +379,7 @@ export async function initOctopi(
   const subDirs = [
     'plugins',
     'audit',
+    'sessions',
   ];
   for (const dir of subDirs) {
     ensureDirTracked(join(home, dir), created, existed);

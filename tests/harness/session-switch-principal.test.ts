@@ -217,7 +217,7 @@ describe('Principal field slots on RunRequest (I6)', () => {
     const agent: RuntimeAgent = {
       agentId: 'a1',
       dispatcher: {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+         
         execute: () => (async function* () {})() as any,
       },
     };

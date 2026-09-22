@@ -318,7 +318,7 @@ async function buildAgent(
   }
 
   // ── Home / Persona ──
-  // home 是 agent 文件态持久目录（persona/sessions/skills/extract）；
+  // home 是 agent 文件态持久目录（persona/skills）；session 在 OCTOPI_HOME/sessions；
   // memory/wisdom 走 AgentDatabase SQLite，不在此目录树下。
   const agentHome = agentConfig.home ?? (typeof agentConfig.persona === 'string' ? agentConfig.persona : undefined);
   if (agentConfig.home) {

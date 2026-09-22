@@ -18,6 +18,7 @@ import { join } from 'node:path';
 import type { SqliteSessionStore } from '../storage/sqlite.js';
 import type { SessionData } from '../../harness/session-types.js';
 import type { EventBus } from '../../core/primitives/event-bus.js';
+import { sessionMatchesAgent } from './memory.js';
 
 export interface ArchiveManagerOptions {
   /** 归档目录路径 */
@@ -67,30 +68,26 @@ export class SessionArchiveManager {
     const cutoff = now - this.recentRetentionMs;
     const forceCutoff = now - this.forceArchiveMs;
 
-    // 获取所有 recent 状态的 session
-    const agentIds = this.getAgentIds();
+    // 获取所有 recent 状态的 session（sessionId 一等，不再按 agent 分扫）
     let archived = 0;
+    const recentSessions = await this.store.listByLifecycle('recent');
 
-    for (const agentId of agentIds) {
-      const recentSessions = await this.store.listByLifecycle(agentId, 'recent');
+    for (const session of recentSessions) {
+      const endedAt = session.lifecycle?.endedAt ?? 0;
+      if (endedAt > cutoff) continue; // 还在保留期内
 
-      for (const session of recentSessions) {
-        const endedAt = session.lifecycle?.endedAt ?? 0;
-        if (endedAt > cutoff) continue; // 还在保留期内
+      const extractionStatus = session.lifecycle?.memoryExtraction ?? 'pending';
 
-        const extractionStatus = session.lifecycle?.memoryExtraction ?? 'pending';
-
-        if (extractionStatus === 'completed') {
-          // 正常归档
-          await this.archiveSession(session);
-          archived++;
-        } else if (endedAt < forceCutoff) {
-          // 兜底策略：超过强制归档天数，即使提取未完成也归档
-          await this.archiveSession(session);
-          archived++;
-        }
-        // 其他情况：跳过，等待提取完成
+      if (extractionStatus === 'completed') {
+        // 正常归档
+        await this.archiveSession(session);
+        archived++;
+      } else if (endedAt < forceCutoff) {
+        // 兜底策略：超过强制归档天数，即使提取未完成也归档
+        await this.archiveSession(session);
+        archived++;
       }
+      // 其他情况：跳过，等待提取完成
     }
 
     return archived;
@@ -114,13 +111,13 @@ export class SessionArchiveManager {
     await this.appendToArchive(archiveFile, entry);
 
     // 更新生命周期状态
-    await this.store.updateLifecycle!(session.agentId, session.id, {
+    await this.store.updateLifecycle(session.id, {
       lifecycle: 'archived',
       archivedAt: now,
     });
 
     // 从 sessions.db 删除（归档后不再需要在数据库中）
-    await this.store.delete(session.agentId, session.id);
+    await this.store.delete(session.id);
 
     // 通知订阅方：session 生命周期结束（scoped 子系统清理等）
     this.events?.emit({
@@ -194,7 +191,7 @@ export class SessionArchiveManager {
 
         for (const line of lines) {
           const entry = JSON.parse(line) as ArchiveEntry;
-          if (!agentId || entry.data.agentId === agentId) {
+          if (!agentId || sessionMatchesAgent(entry.data, agentId)) {
             results.push({
               sessionId: entry.sessionId,
               agentId: entry.data.agentId,
@@ -248,13 +245,6 @@ export class SessionArchiveManager {
     } catch {
       return [];
     }
-  }
-
-  /**
-   * 获取所有 agent ID
-   */
-  private getAgentIds(): string[] {
-    return this.store.getAgentIds();
   }
 
   /**

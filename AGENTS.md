@@ -59,10 +59,10 @@ Scaffolded by `src/init.ts` (`initOctopi` / `ensureAgentDirs`). Keep init, types
   octopi.json
   audit/
   plugins/
+  sessions/             # JsonlSessionStore (sessionId 一等)
   agents/<id>/          # agent home
     AGENTS.md           # main persona (loaded first by loadPersona)
     persona/            # supplemental persona (*.md, numeric prefix for order)
-    sessions/           # JsonlSessionStore
     skills/             # skillDirectory target
   workspace/<id>/       # tool sandbox cwd
 ```

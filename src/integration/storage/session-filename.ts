@@ -5,11 +5,8 @@
  * reserved device names (CON, PRN, AUX, NUL, COM1–9, LPT1–9),
  * and trailing dots/spaces.
  *
- * Logical session ids may still contain colons; storage must map consistently.
- *
- * Legacy macOS/Linux data may still use raw session ids as filenames
- * (e.g. `default:web:123.jsonl`). Readers should fall back to that form
- * when the safe name is missing.
+ * Logical session ids may still contain colons; storage must map consistently
+ * via `toSessionFileName` only (no legacy raw-id fallback).
  */
 
 const ILLEGAL_FILENAME_CHARS = /[<>:"/\\|?*\x00-\x1f]/g;
@@ -38,15 +35,4 @@ export function toSessionFileName(sessionId: string): string {
   }
 
   return name.length > 0 ? name : '_';
-}
-
-/**
- * Legacy filename stem used before the Windows-safe mapping.
- *
- * @param sessionId - logical session id
- * @returns raw id when it differs from the safe form; otherwise null
- */
-export function legacySessionFileName(sessionId: string): string | null {
-  const safe = toSessionFileName(sessionId);
-  return safe === sessionId ? null : sessionId;
 }

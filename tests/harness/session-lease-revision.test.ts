@@ -103,7 +103,7 @@ describe('InProcessSessionLock (E2)', () => {
     const runner = new SessionAwareRunner(agent, {} as never, store, {
       sessionLease: custom,
     });
-    await store.save('a1', 's1', emptySession('s1'));
+    await store.save('s1', emptySession('s1'));
     for await (const _ of runner.handle(
       's1',
       { role: 'user', content: 'hi', timestamp: Date.now() },
@@ -154,7 +154,7 @@ describe('AgentRevision field slot (G2)', () => {
 
     const store = new InMemorySessionStore();
     const runner = new SessionAwareRunner(agent, {} as never, store);
-    await store.save('a1', 's-rev', emptySession('s-rev'));
+    await store.save('s-rev', emptySession('s-rev'));
     for await (const _ of runner.handle(
       's-rev',
       { role: 'user', content: 'hi', timestamp: Date.now() },
@@ -220,8 +220,7 @@ describe('shared SessionLease + ACL on handle (review fixes)', () => {
       sessionLease: lease,
     });
 
-    await store.save('agentA', 'shared-s', emptySession('shared-s', 'agentA'));
-    await store.save('agentB', 'shared-s', emptySession('shared-s', 'agentB'));
+    await store.save('shared-s', emptySession('shared-s', 'agentA'));
 
     const run = async (runner: SessionAwareRunner, agentId: string) => {
       for await (const _ of runner.handle(
@@ -262,11 +261,11 @@ describe('shared SessionLease + ACL on handle (review fixes)', () => {
     } as unknown as Agent;
 
     const runner = new SessionAwareRunner(agent, {} as never, store, { sessionAcl: acl });
-    // 双键：以 stranger 为存储键，但 primary 指向他人 → 无绑定应拒绝
+    // 以 stranger 为归属 agentId，但 primary 指向他人 → 无绑定应拒绝
     const s = emptySession('s-acl', 'primary-agent');
     s.primaryAgentId = 'primary-agent';
     s.agentId = 'primary-agent';
-    await store.save('stranger', 's-acl', s);
+    await store.save('s-acl', s);
 
     const events: Array<{ type: string; data?: { error?: string } }> = [];
     for await (const ev of runner.handle(
@@ -320,7 +319,7 @@ describe('shared SessionLease + ACL on handle (review fixes)', () => {
       agentMaxSessionRights: agentMax,
     });
     const s = emptySession('s-max', 'a1');
-    await store.save('a1', 's-max', s);
+    await store.save('s-max', s);
 
     for await (const _ of runner.handle(
       's-max',

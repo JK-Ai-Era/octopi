@@ -143,7 +143,7 @@ describe('Runner.compactSession lock (D1)', () => {
       opts?: { context?: { messages: Message[] }; runScope?: { sessionId: string } },
     ) {
       order.push('run:start');
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
       for await (const ev of (originalRun as any).call(this, signal, h, opts)) {
         yield ev;
       }
@@ -152,7 +152,7 @@ describe('Runner.compactSession lock (D1)', () => {
 
     const store = new InMemorySessionStore();
     const runner = new SessionAwareRunner(agent, {} as never, store);
-    await store.save('a1', 's-lock', emptySession('s-lock', 'a1'));
+    await store.save('s-lock', emptySession('s-lock', 'a1'));
 
     const handlePromise = (async () => {
       for await (const _ of runner.handle(
@@ -187,7 +187,7 @@ describe('Runner.compactSession lock (D1)', () => {
     expect(runEnd).toBeGreaterThanOrEqual(0);
     expect(compactIdx).toBeGreaterThan(runEnd);
 
-    const sess = await store.load('a1', 's-lock');
+    const sess = await store.load('s-lock');
     expect(sess?.contextCompacts?.a1?.summary).toBe('compacted-sum');
   });
 
@@ -222,7 +222,7 @@ describe('Runner writeback compact key (D2/D4)', () => {
       const sid = opts?.runScope?.sessionId ?? 's';
       const aid = opts?.runScope?.agentId ?? 'a1';
       compactStates.set(compactStateKey(sid, aid), { summary: `sum-${aid}`, lastProactiveMessageCount: 2 });
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
       for await (const ev of (originalRun as any).call(this, signal, h, opts)) {
         yield ev;
       }
@@ -230,7 +230,7 @@ describe('Runner writeback compact key (D2/D4)', () => {
 
     const store = new InMemorySessionStore();
     const runner = new SessionAwareRunner(agent, {} as never, store);
-    await store.save('a1', 's-w', emptySession('s-w', 'a1'));
+    await store.save('s-w', emptySession('s-w', 'a1'));
 
     for await (const _ of runner.handle(
       's-w',
@@ -240,7 +240,7 @@ describe('Runner writeback compact key (D2/D4)', () => {
       void _;
     }
 
-    const sess = await store.load('a1', 's-w');
+    const sess = await store.load('s-w');
     expect(sess?.contextCompacts?.a1?.summary).toBe('sum-a1');
     expect(sess?.contextCompact?.summary).toBe('sum-a1');
   });

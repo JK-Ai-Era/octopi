@@ -33,7 +33,7 @@ export type {
 } from './observer.js';
 export { Metrics } from './observer.js';
 
-export type { SessionStore } from './session-store.js';
+export type { SessionStore, SessionListFilter } from './session-store.js';
 
 export type {
   RunGuard,

@@ -368,7 +368,7 @@ describe('AgentBuilder + SessionAwareRunner 热更新', () => {
       // drain
     }
 
-    const session = await store.load('a', 's1');
+    const session = await store.load('s1');
     const systemMsgs = (session?.messages ?? []).filter((m) => m.role === 'system');
     expect(systemMsgs).toHaveLength(1);
     expect(String(systemMsgs[0]?.content ?? '')).toContain('# Soul v2');
@@ -387,7 +387,7 @@ describe('AgentBuilder + SessionAwareRunner 热更新', () => {
       .build();
 
     const now = Date.now();
-    await store.save('a', 's1', {
+    await store.save('s1', {
       id: 's1',
       agentId: 'a',
       meta: {
@@ -422,7 +422,7 @@ describe('AgentBuilder + SessionAwareRunner 热更新', () => {
       // drain
     }
 
-    const after = await store.load('a', 's1');
+    const after = await store.load('s1');
     const systems = (after?.messages ?? []).filter((m) => m.role === 'system');
     const managed = systems.filter((m) => m.metadata?.source === 'systemPrompt');
     const unmarked = systems.filter((m) => m.metadata?.source === undefined);
@@ -449,7 +449,7 @@ describe('AgentBuilder + SessionAwareRunner 热更新', () => {
 
     // 预置 session：只有外部 system，尚无引擎托管 system
     const now = Date.now();
-    await store.save('a', 's1', {
+    await store.save('s1', {
       id: 's1',
       agentId: 'a',
       meta: {

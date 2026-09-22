@@ -411,7 +411,7 @@ export class SessionAclService {
       session.preferredAgentId = toAgentId;
     } else {
       session.primaryAgentId = toAgentId;
-      // 不改写 session.agentId（双键存储路径/索引）；目录迁移前保持 store key 稳定
+      // 不改写 session.agentId（归属投影）；Accountability 只由 handoff 改 primaryAgentId
       // I3：Accountability 迁走后，旧 primary 不再保留 owner 绑定（降级为 specialist）
       if (fromPrimary && fromPrimary !== toAgentId) {
         const oldPrimary = this.resolveParticipant(session, fromPrimary);

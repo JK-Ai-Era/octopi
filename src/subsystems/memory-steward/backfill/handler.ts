@@ -92,7 +92,7 @@ async function handler(input: SubsystemInput, deps?: InjectedDependencies): Prom
 
   // 未携带 sessionText 时，尝试从 sessionStore 按 sessionIds/sessionId 补读原文
   const sessionStore = deps?.[DEP_SESSION_STORE] as
-    | { get?: (agentId: string, sessionId: string) => Promise<any>; load?: (agentId: string, sessionId: string) => Promise<any> }
+    | { get?: (sessionId: string) => Promise<any>; load?: (sessionId: string) => Promise<any> }
     | undefined;
   if (!sessionText.trim() && sessionStore) {
     const ids = Array.isArray(payload.sessionIds) && payload.sessionIds.length > 0
@@ -102,8 +102,8 @@ async function handler(input: SubsystemInput, deps?: InjectedDependencies): Prom
     for (const sid of ids.slice(0, 20)) {
       try {
         const session =
-          (typeof sessionStore.get === 'function' ? await sessionStore.get(agentId, sid) : undefined) ??
-          (typeof sessionStore.load === 'function' ? await sessionStore.load(agentId, sid) : undefined);
+          (typeof sessionStore.get === 'function' ? await sessionStore.get(sid) : undefined) ??
+          (typeof sessionStore.load === 'function' ? await sessionStore.load(sid) : undefined);
         const text = messagesToText(session);
         if (text) chunks.push(text);
       } catch {

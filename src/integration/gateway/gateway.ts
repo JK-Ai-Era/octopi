@@ -122,24 +122,18 @@ export interface SessionModelView {
 }
 
 // ================================================================
-// 默认 Session Store（自动从 agent.home 推断）
+// 默认 Session Store（OCTOPI_HOME/sessions）
 // ================================================================
 
 /**
- * 无显式 store 时，自动从 agent.home 目录推断创建持久化 JSONL store。
- * 如果 agent.home 无法解析，fallback 到内存存储（仅用于开发/测试）。
+ * 无显式 store 时，在 OCTOPI_HOME/sessions 创建持久化 JSONL store。
  */
-async function createDefaultStore(agents: AgentDefinition[]): Promise<SessionStore<SessionData>> {
-  const homes = agents.map(a => a.home).filter((h): h is string => !!h);
-  if (homes.length === 0) {
-    console.warn('[Gateway] No agent home directories found, using in-memory session store');
-    const { InMemorySessionStore } = await import('../storage/memory.js');
-    return new InMemorySessionStore();
-  }
+async function createDefaultStore(_agents: AgentDefinition[]): Promise<SessionStore<SessionData>> {
+  const { getOctopiHome } = await import('../../init.js');
+  const { join } = await import('node:path');
   const { JsonlSessionStore } = await import('../storage/jsonl.js');
-  return new JsonlSessionStore((agentId: string) => {
-    const match = agents.find(a => a.id === agentId);
-    return match?.home ?? homes[0];
+  return new JsonlSessionStore({
+    sessionsDir: join(getOctopiHome(), 'sessions'),
   });
 }
 
@@ -532,10 +526,8 @@ export class Gateway {
    * @param agentId - 可选 agent 过滤
    * @returns 模型视图；session 不存在时返回 null
    */
-  async getSessionModel(sessionId: string, agentId?: string): Promise<SessionModelView | null> {
-    const session = agentId
-      ? await this.store.load(agentId, sessionId)
-      : await this.findSession(sessionId);
+  async getSessionModel(sessionId: string, _agentId?: string): Promise<SessionModelView | null> {
+    const session = await this.store.load(sessionId);
     if (!session) return null;
     return this.buildSessionModelView(session);
   }
@@ -603,11 +595,9 @@ export class Gateway {
   async setSessionModel(
     sessionId: string,
     modelRef: string | null,
-    agentId?: string,
+    _agentId?: string,
   ): Promise<SessionModelView> {
-    const session = agentId
-      ? await this.store.load(agentId, sessionId)
-      : await this.findSession(sessionId);
+    const session = await this.store.load(sessionId);
     if (!session) {
       throw new Error(`Session "${sessionId}" not found`);
     }
@@ -638,7 +628,7 @@ export class Gateway {
     }
 
     session.meta.updatedAt = Date.now();
-    await this.store.save(session.agentId, session.id, session);
+    await this.store.save(session.id, session);
 
     return this.buildSessionModelView(session);
   }
@@ -679,9 +669,7 @@ export class Gateway {
     tokensAfter?: number;
     summary?: string;
   }> {
-    const session = agentId
-      ? await this.store.load(agentId, sessionId)
-      : await this.findSession(sessionId);
+    const session = await this.store.load(sessionId);
     if (!session) {
       throw new Error(`Session "${sessionId}" not found`);
     }
@@ -777,9 +765,7 @@ export class Gateway {
   }
 
   async listSessions(agentId?: string): Promise<SessionMeta[]> {
-    const agentIds = agentId ? [agentId] : Array.from(this.agents.keys());
-    const results = await Promise.all(agentIds.map((id) => this.store.list(id)));
-    return (results as SessionMeta[][]).flat();
+    return this.store.list(agentId ? { agentId } : undefined);
   }
 
   async createSession(options: { agentId: string; sessionId?: string; metadata?: Record<string, unknown> }): Promise<SessionMeta> {
@@ -811,25 +797,20 @@ export class Gateway {
       tasks: [],
     };
 
-    await this.store.save(options.agentId, sessionId, session);
+    await this.store.save(sessionId, session);
     return session.meta;
   }
 
 
   /**
-   * 查找 session（遍历所有已知 agent）
-   * 用于 API 层面不知道 agentId 的场景
+   * 查找 session（sessionId 一等；无需遍历 agent）
    */
   private async findSession(sessionId: string): Promise<SessionData | null> {
-    for (const agentId of this.agents.keys()) {
-      const session = await this.store.load(agentId, sessionId);
-      if (session) return session;
-    }
-    return null;
+    return this.store.load(sessionId);
   }
 
-  async getSessionView(sessionId: string, agentId?: string): Promise<{ meta: SessionMeta; messageCount: number; turnCount: number; taskCount?: number } | null> {
-    const session = agentId ? await this.store.load(agentId, sessionId) : await this.findSession(sessionId);
+  async getSessionView(sessionId: string, _agentId?: string): Promise<{ meta: SessionMeta; messageCount: number; turnCount: number; taskCount?: number } | null> {
+    const session = await this.store.load(sessionId);
     if (!session) return null;
     return {
       meta: session.meta,
@@ -842,8 +823,8 @@ export class Gateway {
   /**
    * 会话任务列表（只读，供 UI）
    */
-  async getSessionTasks(sessionId: string, agentId?: string): Promise<SessionData['tasks']> {
-    const session = agentId ? await this.store.load(agentId, sessionId) : await this.findSession(sessionId);
+  async getSessionTasks(sessionId: string, _agentId?: string): Promise<SessionData['tasks']> {
+    const session = await this.store.load(sessionId);
     if (!session) {
       throw new Error(`Session "${sessionId}" not found`);
     }
@@ -851,7 +832,7 @@ export class Gateway {
   }
 
   async getSessionMessages(sessionId: string, options: { limit: number; cursor?: string; agentId?: string }): Promise<{ messages: Message[]; nextCursor?: string }> {
-    const session = options.agentId ? await this.store.load(options.agentId, sessionId) : await this.findSession(sessionId);
+    const session = await this.store.load(sessionId);
     if (!session) {
       throw new Error(`Session "${sessionId}" not found`);
     }

@@ -57,7 +57,7 @@ describe('JsonlSessionStore session state', () => {
 
   beforeEach(async () => {
     home = await mkdtemp(join(tmpdir(), 'octopi-jsonl-'));
-    store = new JsonlSessionStore(() => home);
+    store = new JsonlSessionStore({ sessionsDir: join(home, 'sessions') });
   });
 
   afterEach(async () => {
@@ -66,9 +66,9 @@ describe('JsonlSessionStore session state', () => {
 
   it('save/load 保留 messages 与 tasks', async () => {
     const session = makeSession('s1', 'a1');
-    await store.save('a1', 's1', session);
+    await store.save('s1', session);
 
-    const loaded = await store.load('a1', 's1');
+    const loaded = await store.load('s1');
     expect(loaded).not.toBeNull();
     expect(loaded!.messages).toHaveLength(2);
     expect(loaded!.messages[1].content).toBe('你好！');
@@ -79,19 +79,19 @@ describe('JsonlSessionStore session state', () => {
   });
 
   it('delete 同时清理 state 文件', async () => {
-    await store.save('a1', 's1', makeSession('s1', 'a1'));
-    await store.delete('a1', 's1');
-    const loaded = await store.load('a1', 's1');
+    await store.save('s1', makeSession('s1', 'a1'));
+    await store.delete('s1');
+    const loaded = await store.load('s1');
     expect(loaded).toBeNull();
   });
 
   it('兼容无 state 的旧会话（tasks 为空数组）', async () => {
     const session = makeSession('s1', 'a1');
-    await store.save('a1', 's1', session);
+    await store.save('s1', session);
     // 再写一次不带 tasks 的数据路径：模拟旧文件只有 messages
     // 通过 save 带空 tasks
-    await store.save('a1', 's1', { ...session, tasks: [] });
-    const loaded = await store.load('a1', 's1');
+    await store.save('s1', { ...session, tasks: [] });
+    const loaded = await store.load('s1');
     expect(loaded?.tasks).toEqual([]);
     expect(loaded?.messages).toHaveLength(2);
   });

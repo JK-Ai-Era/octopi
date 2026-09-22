@@ -29,7 +29,6 @@ import {
   applyDataLayerFixes,
   checkDeprecatedSessionStore,
   detectDataLayer,
-  renameLegacySessionFiles,
   resolveAgentDataTargets,
 } from './data.js';
 import type { AgentDataTarget } from './data.js';
@@ -211,7 +210,7 @@ function checkLayout(
           ? a.persona
           : join(home, 'agents', id);
 
-    for (const sub of ['sessions', 'skills']) {
+    for (const sub of ['skills']) {
       const dir = join(agentHome, sub);
       if (!existsSync(dir)) {
         findings.push({
@@ -657,6 +656,7 @@ export function applyLayoutFixes(
 
   mkdirSync(join(home, 'plugins'), { recursive: true });
   mkdirSync(join(home, 'audit'), { recursive: true });
+  mkdirSync(join(home, 'sessions'), { recursive: true });
 
   const agents = raw && Array.isArray(raw.agents) ? raw.agents : [{ id: 'default' }];
   for (const agent of agents) {
@@ -670,7 +670,6 @@ export function applyLayoutFixes(
           : join(home, 'agents', id);
 
     mkdirSync(agentHome, { recursive: true });
-    mkdirSync(join(agentHome, 'sessions'), { recursive: true });
     mkdirSync(join(agentHome, 'skills'), { recursive: true });
     const workspace =
       typeof a.workspace === 'string' && a.workspace ? resolve(a.workspace) : join(home, 'workspace', id);
@@ -872,6 +871,5 @@ export {
   detectDataLayer,
   applyDataLayerFixes,
   resolveAgentDataTargets,
-  renameLegacySessionFiles,
   checkDeprecatedSessionStore,
 };

@@ -65,7 +65,7 @@ describe('SessionTaskService', () => {
     events = ev;
     service = new SessionTaskService(store, bus);
     const session = createSession(sessionId, agentId);
-    await store.save(agentId, sessionId, session);
+    await store.save(sessionId, session);
     service.attachSession(session);
   });
 
@@ -74,7 +74,7 @@ describe('SessionTaskService', () => {
     expect(task.status).toBe('open');
     expect(task.parentId).toBeUndefined();
 
-    const loaded = await store.load(agentId, sessionId);
+    const loaded = await store.load(sessionId);
     expect(loaded?.tasks).toHaveLength(1);
     expect(loaded?.tasks?.[0].id).toBe(task.id);
   });
@@ -141,7 +141,7 @@ describe('SessionTaskService', () => {
   });
 
   it('attach 后工具写入与 runner 同一对象，不丢', async () => {
-    const session = (await store.load(agentId, sessionId))!;
+    const session = (await store.load(sessionId))!;
     // 模拟下一轮 runner 重新 load 并 attach 新对象
     const session2 = createSession(sessionId, agentId);
     session2.tasks = session.tasks;
@@ -151,8 +151,8 @@ describe('SessionTaskService', () => {
     expect(session2.tasks).toHaveLength(1);
 
     // runner 保存 session2，store 保留任务
-    await store.save(agentId, sessionId, session2);
-    const reloaded = await store.load(agentId, sessionId);
+    await store.save(sessionId, session2);
+    const reloaded = await store.load(sessionId);
     expect(reloaded?.tasks).toHaveLength(1);
   });
 
@@ -237,7 +237,7 @@ describe('task_* 工具', () => {
     store = new InMemorySessionStore();
     service = new SessionTaskService(store);
     const session = createSession('s1', 'a1');
-    await store.save('a1', 's1', session);
+    await store.save('s1', session);
     service.attachSession(session);
   });
 

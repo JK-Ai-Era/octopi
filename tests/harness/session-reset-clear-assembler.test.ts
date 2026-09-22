@@ -61,19 +61,21 @@ describe('session reset → clearSession', () => {
     });
 
     const store: SessionStore<SessionData> = {
-      async load(_a: string, id: string) {
+      async load(id: string) {
         return sessions.get(id) ?? null;
       },
-      async save(_a: string, id: string, data: SessionData) {
+      async save(id: string, data: SessionData) {
         sessions.set(id, JSON.parse(JSON.stringify(data)) as SessionData);
       },
-      async delete(_a: string, id: string) {
+      async delete(id: string) {
         sessions.delete(id);
       },
-      async list(agentId: string) {
-        return [...sessions.values()].filter((s) => s.agentId === agentId).map((s) => s.meta);
+      async list(filter?: { agentId?: string }) {
+        return [...sessions.values()]
+          .filter((s) => (filter?.agentId ? s.agentId === filter.agentId || s.primaryAgentId === filter.agentId : true))
+          .map((s) => s.meta);
       },
-      async exists(_a: string, id: string) {
+      async exists(id: string) {
         return sessions.has(id);
       },
     };

@@ -174,8 +174,8 @@ describe('SessionAwareRunner toolIsolation (I5)', () => {
       agentWorkspace: base,
     });
 
-    await store.save('a1', 'sA', emptySession('sA'));
-    await store.save('a1', 'sB', emptySession('sB'));
+    await store.save('sA', emptySession('sA'));
+    await store.save('sB', emptySession('sB'));
 
     const collect = async (sessionId: string) => {
       for await (const _ of runner.handle(
@@ -221,8 +221,8 @@ describe('SessionAwareRunner toolIsolation (I5)', () => {
       agentWorkspace: base,
     });
 
-    await store.save('a1', 'sA', emptySession('sA'));
-    await store.save('a1', 'sB', emptySession('sB'));
+    await store.save('sA', emptySession('sA'));
+    await store.save('sB', emptySession('sB'));
 
     const collect = async (sessionId: string) => {
       for await (const _ of runner.handle(
@@ -250,7 +250,7 @@ describe('SessionAwareRunner toolIsolation (I5)', () => {
       agentWorkspace: base,
     });
 
-    await store.save('a1', 'sA', emptySession('sA'));
+    await store.save('sA', emptySession('sA'));
     for await (const _ of runner.handle(
       'sA',
       { role: 'user', content: 'hi', timestamp: Date.now() },
@@ -275,7 +275,7 @@ describe('SessionAwareRunner toolIsolation (I5)', () => {
       agentWorkspace: base,
     });
 
-    await store.save('a1', 'sX', emptySession('sX'));
+    await store.save('sX', emptySession('sX'));
     for await (const _ of runner.handle(
       'sX',
       { role: 'user', content: 'hi', timestamp: Date.now() },

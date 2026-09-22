@@ -1,3 +1,34 @@
+## v0.46.0 (2026-09-23)
+
+### feat(storage)!: Session 目录解耦 — sessionId 一等存储
+
+**Breaking: SessionStore 不再双键**
+
+- 接口改为 `load(sessionId)` / `save(sessionId, data)` / `delete(sessionId)` / `exists(sessionId)` / `list({ agentId? })`
+- 同 `sessionId` 即同一 Session；多 agent 参与在 `SessionData`（`primaryAgentId` / `preferredAgentId` / `participants`）
+- `list({ agentId })` 按 `meta.agentId` / `primary` / `preferred` / `participantAgentIds` 任一命中过滤
+
+**目录**
+
+- 权威落盘：`OCTOPI_HOME/sessions/`（`sessions.json` 索引 + `<id>.jsonl` + `<id>.state.json`）
+- **无** `agents/<id>/sessions/` 回退 / 旧文件名兼容（内部研发阶段，避免踩坑）
+- `init` / `doctor --fix` 预建 `OCTOPI_HOME/sessions/`，不再预建 agent home 下 `sessions/`
+
+**审查修复**
+
+- `JsonlSessionStore.save()` 写入顺序：先写 `.jsonl` + `.state.json`，再更新 `sessions.json` 索引（crash 安全）
+- `archive-manager.ts`：`listArchived` 改用 `sessionMatchesAgent`（支持 primary/preferred/participants 查询）；移除 `updateLifecycle!` 非空断言；清理孤立 JSDoc
+- `Runner.handle()` finally 补 `detachSession` 调用（释放 SessionTaskService live 缓存，避免内存泄漏）
+- `eslint.config.js`：注册 `@typescript-eslint` 插件（规则默认 `off`），修复 disable 注释报错
+- `doctor/data.ts`：`liveFiles` 改为从 `OCTOPI_HOME/sessions/` 计数；移除未用 import
+
+**实现**
+
+- `JsonlSessionStore`：`{ sessionsDir }` 构造
+- `InMemorySessionStore` / `SqliteSessionStore` 主键 `sessionId`
+- Gateway 默认 store → `OCTOPI_HOME/sessions`（无 legacy 回退）
+- Runner / SessionTaskService / ArchiveManager / memory.steward.backfill 同步改签名
+
 ## v0.45.1 (2026-09-22)
 
 ### fix(tools): file_list pattern 支持 glob

@@ -207,7 +207,7 @@ Agent home 目录约定（由 `initOctopi` / `ensureAgentDirs` 脚手架）：
 
 Memory / Cognition / Wisdom / Knowledge **不按目录落盘**，统一由 per-agent SQLite `AgentDatabase`（`agent.db`）承载。
 
-Jsonl 会话目录仍为 **双键** `agents/<id>/sessions/`；`SessionData` 内已含模型 2 字段（`primaryAgentId` / `preferredAgentId` / `participants` / `contextCompacts`），**目录解耦与 `loadSession(sessionId)` 尚未实现**（见 KNOWN-ISSUES）。
+Jsonl 会话目录为 **sessionId 一等** `OCTOPI_HOME/sessions/`；`SessionData` 含模型 2 字段（`primaryAgentId` / `preferredAgentId` / `participants` / `contextCompacts`）。`SessionStore.load(sessionId)` 已实现；**无** `agents/<id>/sessions/` 兼容回退。
 
 > 旧 `extract/`（JsonlExtractorStore）目录已随 memory ETL 提取器移除；补录/治理走 `memory.steward.*` 子系统，素材读 SessionStore。
 

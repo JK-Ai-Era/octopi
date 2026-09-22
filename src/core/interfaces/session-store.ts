@@ -5,37 +5,41 @@
  * 具体的 SessionData 结构由 harness 层定义。
  *
  * 设计要点：
+ * - Session 是连续性一等 ID；**存储主键 = sessionId**（不再按 agent 分目录/分键）
+ * - 多 agent 参与同一 Session：primary / preferred / participants 在数据模型内
  * - Core 层不使用此接口（可运行状态在 Harness 的 Agent / Session）
  * - Harness 层的 SessionAwareRunner 使用此接口
- * - 放在 Core 层是为了让所有层都能引用此类型
- * - 所有方法都要求 agentId，确保 O(1) 定位，不做全量扫描
  */
 
 import type { SessionMeta } from '../types.js';
+
+/** list 过滤条件 */
+export interface SessionListFilter {
+  /**
+   * 只返回该 agent 参与的 session：
+   * `meta.agentId` / `primaryAgentId` / `preferredAgentId` / `participantAgentIds` 任一命中。
+   */
+  agentId?: string;
+}
 
 /**
  * SessionStore 接口
  *
  * @typeParam T - Session 数据类型，由 harness 层具体化（如 SessionData）
- *
- * v1 双键：`load(agentId, sessionId)` / `save(agentId, sessionId, data)`。
- * 模型 2 字段（primaryAgentId / preferredAgentId / participants / contextCompacts）
- * 持久化在 **T**（Jsonl 见 `*.state.json`），不改变双键 API。
- * 跨 agent 共线读史 / `loadSession(sessionId)` **尚未实现**（见 docs/KNOWN-ISSUES.md）。
  */
 export interface SessionStore<T = unknown> {
-  /** 加载完整 session 数据（不存在返回 null） */
-  load(agentId: string, sessionId: string): Promise<T | null>;
+  /** 按 sessionId 加载（一等键；不存在返回 null） */
+  load(sessionId: string): Promise<T | null>;
 
-  /** 保存 session 数据（覆盖写入） */
-  save(agentId: string, sessionId: string, data: T): Promise<void>;
+  /** 按 sessionId 覆盖写入 */
+  save(sessionId: string, data: T): Promise<void>;
 
-  /** 列出 agent 下的所有 session 元数据 */
-  list(agentId: string): Promise<SessionMeta[]>;
+  /** 列出 session 元数据；可选按参与 agent 过滤 */
+  list(filter?: SessionListFilter): Promise<SessionMeta[]>;
 
-  /** 删除 session */
-  delete(agentId: string, sessionId: string): Promise<void>;
+  /** 按 sessionId 删除 */
+  delete(sessionId: string): Promise<void>;
 
-  /** 检查 session 是否存在 */
-  exists(agentId: string, sessionId: string): Promise<boolean>;
+  /** 按 sessionId 检查是否存在 */
+  exists(sessionId: string): Promise<boolean>;
 }

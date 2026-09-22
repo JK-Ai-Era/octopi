@@ -38,7 +38,8 @@ describe('init', () => {
 
       // Agent home 子目录（persona / skills / sessions；memory 走 SQLite；ETL extract 不再创建）
       const home = join(tempDir, 'agents/default');
-      expect(existsSync(join(home, 'sessions'))).toBe(true);
+      expect(existsSync(join(tempDir, 'sessions'))).toBe(true);
+      expect(existsSync(join(home, 'sessions'))).toBe(false);
       expect(existsSync(join(home, 'skills'))).toBe(true);
       expect(existsSync(join(home, 'extract/events'))).toBe(false);
       expect(existsSync(join(home, 'extract/bundles'))).toBe(false);
@@ -186,7 +187,8 @@ describe('init', () => {
       expect(existsSync(join(home, 'AGENTS.md'))).toBe(true);
       expect(existsSync(join(home, 'persona/10-soul.md'))).toBe(true);
       expect(existsSync(join(home, 'persona/20-identity.md'))).toBe(true);
-      expect(existsSync(join(home, 'sessions'))).toBe(true);
+      expect(existsSync(join(tempDir, 'sessions'))).toBe(true);
+      expect(existsSync(join(home, 'sessions'))).toBe(false);
       expect(existsSync(join(home, 'skills'))).toBe(true);
       expect(existsSync(join(home, 'extract/events'))).toBe(false);
       expect(existsSync(join(home, 'memory'))).toBe(false);
