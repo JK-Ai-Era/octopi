@@ -13,6 +13,21 @@ export { createToolSet } from './plugin-ecosystem/tools/tool-set.js';
 export type { ToolSet, ToolSetConfig } from './plugin-ecosystem/tools/tool-set.js';
 export { createWebSearchTool } from './plugin-ecosystem/tools/web-search.js';
 export type { WebSearchToolOptions } from './plugin-ecosystem/tools/web-search.js';
+export {
+  createSessionHistoryPort,
+  resolveHistoryAccess,
+} from './session-history/index.js';
+export {
+  createSessionHistoryTools,
+  createSessionSearchTool,
+  createSessionReadTool,
+} from './plugin-ecosystem/tools/session-history.js';
+export type {
+  SessionHistoryPort,
+  SessionHistoryQuery,
+  SessionHistorySearchResult,
+  SessionHistoryOptions,
+} from './session-history/index.js';
 
 // ── Capabilities（公用能力；横切，不计入业务领域口径） ──
 export {

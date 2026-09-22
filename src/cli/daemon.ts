@@ -389,7 +389,41 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
     console.log('[CLI] Verbose mode: tracing enabled');
   }
 
-  const gateway = new Gateway(gatewayConfig);
+  // 与 Gateway 共享 SessionStore（history 检索与运行时同一真相源）
+  const { getOctopiHome } = await import('../init.js');
+  const { join: joinPath } = await import('node:path');
+  const { JsonlSessionStore } = await import('../integration/storage/jsonl.js');
+  const home = getOctopiHome();
+  let sessionIndex: import('../integration/storage/session-index.js').SessionIndexBackend | undefined;
+  // 先建无 index 的 store 供新鲜度校验；再挂投影
+  const storeForRebuild = new JsonlSessionStore({
+    sessionsDir: joinPath(home, 'sessions'),
+  });
+  try {
+    const { createSqliteSessionIndex, ensureSessionIndexFresh } = await import(
+      '../integration/storage/session-index.js'
+    );
+    sessionIndex = await createSqliteSessionIndex({
+      dbPath: joinPath(home, 'sessions.index.db'),
+    });
+    await sessionIndex.ensureSchema();
+    // 存量/首次启用：投影数与权威 list 对齐，避免空索引误杀 search
+    const fresh = await ensureSessionIndexFresh(sessionIndex, storeForRebuild);
+    if (fresh.rebuilt) {
+      console.log(`[CLI] session index rebuilt from sessions/ (${fresh.sessions} sessions)`);
+    }
+  } catch (err) {
+    sessionIndex = undefined;
+    console.warn(
+      `[CLI] session index unavailable (scan-only search): ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  const gatewayStoreForHistory = new JsonlSessionStore({
+    sessionsDir: joinPath(home, 'sessions'),
+    index: sessionIndex,
+  });
+
+  const gateway = new Gateway(gatewayConfig, gatewayStoreForHistory);
 
   for (const [providerName, providerCfg] of Object.entries(config.models?.providers ?? {})) {
     const provider = createProvider(providerName, providerCfg);
@@ -494,7 +528,30 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
   // 全局工具：CLI 级 builtin（shell/file/http/web_search 等）。
   // memory_store/memory_search **不在**全局注册：由 AgentBuilder 在 agent build 时
   // 按各 agent 的 MemoryStore（SqliteMemoryStore(agent.db)）注入，与 MemoryLayer 同实例。
-  const { all } = createToolSet({ webSearch: webSearchToolCfg, summary: summarySupport });
+  // session_search / session_read：Information 历史检索，绑 Gateway 同一 SessionStore。
+  let sessionHistoryPort: import('../harness/session-history/index.js').SessionHistoryPort | undefined;
+  try {
+    const { createSessionHistoryPort } = await import('../harness/session-history/index.js');
+    const { SessionAclService } = await import('../harness/session-acl/service.js');
+    sessionHistoryPort = createSessionHistoryPort({
+      store: gatewayStoreForHistory,
+      sessionAcl: new SessionAclService(gatewayConfig.sessionAcl),
+      archiveDir: joinPath(home, 'archives'),
+      historyScope: 'participated',
+      index: sessionIndex,
+      // E6 agent.max：与 Runner agentMaxSessionRights 同源（宿主可按 agent 收紧）
+      resolveAgentMax: () => undefined,
+    });
+    console.log('[CLI] session_search/session_read: SessionHistoryPort @ OCTOPI_HOME/sessions');
+  } catch (err) {
+    console.warn(`[CLI] session history tools unavailable: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  const { all } = createToolSet({
+    webSearch: webSearchToolCfg,
+    summary: summarySupport,
+    sessionHistory: sessionHistoryPort,
+  });
   for (const tool of all) gateway.registerTool(tool);
   console.log(`[CLI] Registered ${all.length} global tools: ${all.map(t => t.definition.name).join(', ')}`);
   console.log('[CLI] memory_store/memory_search: agent-scoped (AgentBuilder + memoryStore), not global');

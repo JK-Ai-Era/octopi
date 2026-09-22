@@ -1,6 +1,7 @@
 import type { RegisteredTool } from '../../../core/types.js';
 import type { MemoryStore } from '../../memory/types.js';
 import type { SessionTaskService } from '../../session-tasks/service.js';
+import type { SessionHistoryPort } from '../../session-history/index.js';
 import type { WebSearchProvider } from './web-search-types.js';
 import type { AskUserCallback } from './ask-user.js';
 
@@ -9,6 +10,7 @@ import { createMemoryTools } from './memory.js';
 import { createSessionTaskTools } from '../../session-tasks/tools.js';
 import { createAskUserTool } from './ask-user.js';
 import { createWebSearchTool } from './web-search.js';
+import { createSessionHistoryTools } from './session-history.js';
 
 export interface ToolSetConfig {
   memoryStore?: MemoryStore;
@@ -29,6 +31,8 @@ export interface ToolSetConfig {
   };
   /** Summary 公用能力（http_request / file_read L1/L2） */
   summary?: import('../../capabilities/summary/index.js').ToolSummarySupport;
+  /** Information 历史检索（session_search / session_read） */
+  sessionHistory?: SessionHistoryPort;
 }
 
 export interface ToolSet {
@@ -51,6 +55,12 @@ export function createToolSet(config?: ToolSetConfig): ToolSet {
             timeoutMs: config.webSearch.timeoutMs,
           }),
         ]
+      : []),
+    ...(config?.sessionHistory
+      ? createSessionHistoryTools({
+          history: config.sessionHistory,
+          summary: config?.summary,
+        })
       : []),
   ];
 

@@ -615,8 +615,8 @@ export interface ModelLevelConfig {
  */
 export type ModelLevelMap = Record<string, ModelLevelConfig>;
 
-// 主会话生命周期态（子系统通用感知）
-export type SessionLifecycleStatus = 'active' | 'recent' | 'extracted' | 'archived';
+// 主会话生命周期态（子系统通用感知；extracted 已废除）
+export type SessionLifecycleStatus = 'active' | 'recent' | 'archived';
 // 通用抽取/处理状态（不特指 memory）
 export type ProcessExtractionStatus = 'pending' | 'soft' | 'completed' | 'skipped' | 'error';
 

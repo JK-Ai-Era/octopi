@@ -600,7 +600,7 @@ export class SessionAwareRunner {
             sessionLifecycle: session.lifecycle?.lifecycle ?? 'active',
             lastInteractionAt: session.meta.lastInteractionAt,
             idleMs: Date.now() - (session.meta.lastInteractionAt ?? Date.now()),
-            extractionStatus: session.lifecycle?.memoryExtraction ?? 'pending',
+            extractionStatus: 'pending',
           });
           // 注入指标
           this._subsystemRuntime.metrics.update('turn.count', session.messages.filter(m => m.role === 'assistant').length);
@@ -1003,7 +1003,7 @@ export class SessionAwareRunner {
         sessionId,
         data: {
           lifecycle: session.lifecycle?.lifecycle ?? 'active',
-          extractionStatus: session.lifecycle?.memoryExtraction ?? 'pending',
+          extractionStatus: 'pending',
           lastInteractionAt: session.meta.lastInteractionAt,
         },
       });
@@ -1272,7 +1272,7 @@ export class SessionAwareRunner {
     if (this.config.idleExpiryMs) {
       const idle = now - session.meta.lastInteractionAt;
       if (idle > this.config.idleExpiryMs) {
-        this.markSessionRecentForExtraction(session, now);
+        this.markSessionRecent(session, now);
         session.messages = [];
         session.turns = [];
         session.meta.sessionStartedAt = now;
@@ -1298,35 +1298,13 @@ export class SessionAwareRunner {
   }
 
   /**
-   * 将 session 生命周期落到 recent + memoryExtraction=pending，并广播事件。
-   * 供 Bridge / Sense 条件消费；store 不支持 updateLifecycle 时仅广播。
+   * 将 session 生命周期落到 recent + endedAt，并广播事件。
+   * 状态在 SessionData.lifecycle；由后续 save 持久化（meta 索引投影）。
+   * 不写 memoryExtraction（进度归 memory.steward）；事件仍带 extractionStatus 供 Sense 感知。
    */
-  private markSessionRecentForExtraction(session: SessionData, now: number): void {
-    const storeWithLifecycle = this.store as {
-      updateLifecycle?: (
-        sessionId: string,
-        lifecycle: {
-          lifecycle: 'recent';
-          memoryExtraction: 'pending';
-          endedAt: number;
-        },
-      ) => Promise<void> | void;
-    };
-    if (typeof storeWithLifecycle.updateLifecycle === 'function') {
-      void Promise.resolve(
-        storeWithLifecycle.updateLifecycle(session.id, {
-          lifecycle: 'recent',
-          memoryExtraction: 'pending',
-          endedAt: now,
-        }),
-      ).catch(() => {
-        // 状态落盘失败不阻断会话重置；memory.steward.* / session lifecycle 事件仍可感知
-      });
-    }
-
+  private markSessionRecent(session: SessionData, now: number): void {
     session.lifecycle = {
       lifecycle: 'recent',
-      memoryExtraction: 'pending',
       endedAt: now,
     };
 

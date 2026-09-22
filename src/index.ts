@@ -149,6 +149,20 @@ export type { SummaryPort, SummaryPolicy, ContentUnit, ToolSummarySupport, Compa
 export type { ToolSet, ToolSetConfig } from './harness/plugin-ecosystem/tools/tool-set.js';
 export { createWebSearchTool } from './harness/plugin-ecosystem/tools/web-search.js';
 export type { WebSearchToolOptions } from './harness/plugin-ecosystem/tools/web-search.js';
+export {
+  createSessionHistoryPort,
+  resolveHistoryAccess,
+} from './harness/session-history/index.js';
+export {
+  createSessionHistoryTools,
+  createSessionSearchTool,
+  createSessionReadTool,
+} from './harness/plugin-ecosystem/tools/session-history.js';
+export type {
+  SessionHistoryPort,
+  SessionHistoryQuery,
+  SessionHistorySearchResult,
+} from './harness/session-history/index.js';
 
 // Config Bridge（配置文件 → 新架构）
 export { buildFromConfig, buildFromConfigFile } from './harness/agent-building/config-bridge.js';
@@ -167,8 +181,17 @@ export { AgentRegistryEvents } from './harness/multi-agent/agent-registry-types.
 // 存储
 export { JsonlSessionStore } from './integration/storage/jsonl.js';
 export { InMemorySessionStore } from './integration/storage/memory.js';
-export { SqliteSessionStore } from './integration/storage/sqlite.js';
-export type { SqliteSessionStoreOptions } from './integration/storage/sqlite.js';
+export { SessionArchiveManager } from './integration/storage/archive-manager.js';
+export type { ArchiveManagerOptions } from './integration/storage/archive-manager.js';
+export {
+  createSqliteSessionIndex,
+  rebuildSessionIndexFromStore,
+  ensureSessionIndexFresh,
+} from './integration/storage/session-index.js';
+export type {
+  SessionIndexBackend,
+  SessionIndexSink,
+} from './integration/storage/session-index.js';
 
 // 可观测性
 export { NoopObserver } from './integration/observability/noop-observer.js';

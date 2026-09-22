@@ -8,10 +8,19 @@
 // ── Storage ──
 export { JsonlSessionStore } from './storage/jsonl.js';
 export { InMemorySessionStore } from './storage/memory.js';
-export { SqliteSessionStore } from './storage/sqlite.js';
 export { SessionArchiveManager } from './storage/archive-manager.js';
 export type { ArchiveManagerOptions } from './storage/archive-manager.js';
-export type { SqliteSessionStoreOptions } from './storage/sqlite.js';
+export {
+  createSqliteSessionIndex,
+  rebuildSessionIndexFromStore,
+  ensureSessionIndexFresh,
+} from './storage/session-index.js';
+export type {
+  SessionIndexBackend,
+  SessionIndexSink,
+  SessionIndexPrefilterQuery,
+  SessionIndexCandidate,
+} from './storage/session-index.js';
 
 // ── Observability ──
 export { NoopObserver } from './observability/noop-observer.js';

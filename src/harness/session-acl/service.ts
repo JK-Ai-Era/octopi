@@ -310,10 +310,10 @@ export class SessionAclService {
         return messages;
       case 'from_grant': {
         // 缺 seq/at 时 fail-closed（避免误给全量 Exposure）
-        if (!participant || participant.grantSeq == null) {
+        if (!participant || participant.grantSeq == null || participant.grantedAt == null) {
           return [];
         }
-        const at = participant.grantedAt ?? 0;
+        const at = participant.grantedAt;
         return messages.filter((m) => (m.timestamp ?? 0) >= at);
       }
       case 'summary_tail': {

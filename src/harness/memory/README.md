@@ -11,7 +11,8 @@
 - 契约与实现：InMemory / Sqlite（`AgentDatabase` → `agent.db`，驱动为内置 `node:sqlite`，Node >= 24）
 - 写入策略：`confidence.ts`（channel 暂定）+ `gates.ts`（结构门控 reason code）
 - 治理：软删除 `deleted` + Steward 策略（`subsystems/memory-steward/shared`）
-- 检索：embedding + sqlite-vec（可选）→ JS 余弦 hybrid → 关键词 LIKE+CJK 二元组；**暂不引入 FTS5**
+- 检索：embedding + sqlite-vec（可选）→ JS 余弦 hybrid → 关键词 LIKE+CJK 二元组；**本模块暂不引入 FTS5**
+  - 注意：session 历史索引（`sessions.index.db`）**已用** FTS5 trigram——与 Memory 检索**分轨**，勿互相「对齐」回退
 - system prompt 七层组装在 `harness/context/`；全局宪法在 `harness/context/constitution/`
 
 ## 不做什么

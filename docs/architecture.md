@@ -201,13 +201,13 @@ Agent home 目录约定（由 `initOctopi` / `ensureAgentDirs` 脚手架）：
 <agentHome>/
   AGENTS.md              # 主 persona，最先加载
   persona/               # 补充 persona（字母序；数字前缀控制顺序）
-  sessions/              # JsonlSessionStore
   skills/                # 技能（可由 skillDirectory 指向）
+# 注意：sessions 不在 agent home —— 见 OCTOPI_HOME/sessions/
 ```
 
 Memory / Cognition / Wisdom / Knowledge **不按目录落盘**，统一由 per-agent SQLite `AgentDatabase`（`agent.db`）承载。
 
-Jsonl 会话目录为 **sessionId 一等** `OCTOPI_HOME/sessions/`；`SessionData` 含模型 2 字段（`primaryAgentId` / `preferredAgentId` / `participants` / `contextCompacts`）。`SessionStore.load(sessionId)` 已实现；**无** `agents/<id>/sessions/` 兼容回退。
+Jsonl 会话目录为 **sessionId 一等** `OCTOPI_HOME/sessions/`；`SessionData` 含模型 2 字段（`primaryAgentId` / `preferredAgentId` / `participants` / `contextCompacts`）。`SessionStore.load(sessionId)` 已实现；**无** `agents/<id>/sessions/` 兼容回退。运行时 **唯一** Session 后端是 `JsonlSessionStore`（`SqliteSessionStore` 已删除）。可选投影 `sessions.index.db`（可重建）仅供 `session_search` 预筛，**不是**第二权威（`arch/session-history-search.md`）。
 
 > 旧 `extract/`（JsonlExtractorStore）目录已随 memory ETL 提取器移除；补录/治理走 `memory.steward.*` 子系统，素材读 SessionStore。
 
@@ -644,7 +644,9 @@ Session save：全量 messages + contextCompact 快照
 | `ToolCallRiskPolicy` | `core/interfaces/security-guard.ts` | DefaultToolCallRiskPolicy |
 | `Observer` | `core/interfaces/observer.ts` | NoopObserver, LogObserver, ObserverBridge（**Telemetry**） |
 | `ObserverHub` / Run Observatory | `harness/observer/*` | ObserverHub（**开发调试**；见 [observer-domain.md](./observer-domain.md)） |
-| `SessionStore<T>` | `core/interfaces/session-store.ts` | JsonlSessionStore, InMemorySessionStore, SqliteSessionStore |
+| `SessionStore<T>` | `core/interfaces/session-store.ts` | JsonlSessionStore, InMemorySessionStore |
+| `SessionHistoryPort` | `harness/session-history/` | DefaultSessionHistoryPort（`session_search` / `session_read`） |
+| `SessionIndexBackend` | `integration/storage/session-index.ts` | SqliteSessionIndex（可重建投影，非权威） |
 | `AsyncTaskStore` | `harness/orchestration/async-task-store.ts` | orchestration |
 | `RunGuard` | `core/interfaces/run-guard.ts` | DefaultRunGuard |
 | `AgentRegistry` | `harness/multi-agent/agent-registry-types.ts` | DefaultAgentRegistry |

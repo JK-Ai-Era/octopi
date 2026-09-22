@@ -22,23 +22,24 @@ export interface SessionSwitchRecord extends PrincipalRef {
   reason?: string;
 }
 
-/** Session 生命周期状态 */
-export type SessionLifecycleStatus = 'active' | 'recent' | 'extracted' | 'archived';
+/** Session 生命周期状态（`extracted` 已废除：提炼进度归 memory.steward） */
+export type SessionLifecycleStatus = 'active' | 'recent' | 'archived';
 
 /**
- * Session 上的记忆处理状态（生命周期元数据字段）
+ * Session 上的记忆处理状态（**迁移中 / 将删除**）
  *
- * 仅表示「本 session 是否已被记忆旁路处理过」，**不是** 已删除的
- * ETL API（MemoryExtractorBridge / PendingExtractor / MemoryExtractionWiring）。
- * 补录/治理见 `memory.steward.*`（docs/memory-system-redesign.md）。
+ * 已不再由 Runner/Archive 写入或依赖；补录/治理见 `memory.steward.*`。
+ * 保留类型仅为旧 state.json 可读兼容。
  */
 export type MemoryExtractionStatus = 'pending' | 'completed' | 'skipped';
 
 /** Session 生命周期元数据 */
 export interface SessionLifecycleMeta {
   lifecycle: SessionLifecycleStatus;
-  /** 见 MemoryExtractionStatus 注释：session 级处理标记，非 ETL 句柄 */
-  memoryExtraction: MemoryExtractionStatus;
+  /**
+   * @deprecated 迁移中：Runner/Archive 不再读写；进度归 memory.steward（agent.db）
+   */
+  memoryExtraction?: MemoryExtractionStatus;
   endedAt?: number;
   archivedAt?: number;
 }

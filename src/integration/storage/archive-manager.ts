@@ -1,12 +1,13 @@
 /**
  * SessionArchiveManager — Session 归档管理器
  *
- * 负责 session 的归档生命周期：
- * - 检查可归档的 session（结束超过 recentRetentionDays 且 memory 提取已完成）
- * - 导出到压缩 JSONL 文件
- * - 从 sessions.db 删除已归档的 session
+ * 基于 SessionStore（Jsonl / InMemory / 自定义）的冷备生命周期：
+ * - 将结束超过保留期的 session 导出到压缩 JSONL
+ * - 从热库删除已归档 session（归档文件为冷备权威）
  * - 清理过期归档文件
- * - 强制归档超期未提取的 session（兜底策略）
+ * - 强制归档超期未处理 session（兜底；不再依赖 memoryExtraction）
+ *
+ * Crash 顺序：先追加归档行，再删热库。
  *
  * @module
  */
@@ -15,7 +16,7 @@ import { mkdir, readdir, stat, unlink, readFile, writeFile } from 'node:fs/promi
 import { gzip, gunzip } from 'node:zlib';
 import { promisify } from 'node:util';
 import { join } from 'node:path';
-import type { SqliteSessionStore } from '../storage/sqlite.js';
+import type { SessionStore } from '../../core/interfaces/session-store.js';
 import type { SessionData } from '../../harness/session-types.js';
 import type { EventBus } from '../../core/primitives/event-bus.js';
 import { sessionMatchesAgent } from './memory.js';
@@ -23,11 +24,11 @@ import { sessionMatchesAgent } from './memory.js';
 export interface ArchiveManagerOptions {
   /** 归档目录路径 */
   archiveDir: string;
-  /** Recent session 保留天数（默认 30） */
+  /** Recent session 保留天数（默认 30；从 endedAt 起算） */
   recentRetentionDays?: number;
   /** 归档文件保留天数（默认 180） */
   archiveRetentionDays?: number;
-  /** 强制归档兜底天数（memory 提取超期，默认 90） */
+  /** 强制归档兜底天数（默认 90；不再看 memoryExtraction） */
   forceArchiveDays?: number;
   /** 可选 EventBus：归档成功后 emit session.ended */
   events?: EventBus;
@@ -40,14 +41,18 @@ interface ArchiveEntry {
 }
 
 export class SessionArchiveManager {
-  private store: SqliteSessionStore;
+  private store: SessionStore<SessionData>;
   private archiveDir: string;
   private recentRetentionMs: number;
   private archiveRetentionMs: number;
   private forceArchiveMs: number;
   private events?: EventBus;
 
-  constructor(store: SqliteSessionStore, options: ArchiveManagerOptions) {
+  /**
+   * @param store - SessionStore（契约级；不绑具体后端）
+   * @param options - 归档目录与保留策略
+   */
+  constructor(store: SessionStore<SessionData>, options: ArchiveManagerOptions) {
     this.store = store;
     this.archiveDir = options.archiveDir;
     this.recentRetentionMs = (options.recentRetentionDays ?? 30) * 24 * 60 * 60 * 1000;
@@ -68,33 +73,28 @@ export class SessionArchiveManager {
     const cutoff = now - this.recentRetentionMs;
     const forceCutoff = now - this.forceArchiveMs;
 
-    // 获取所有 recent 状态的 session（sessionId 一等，不再按 agent 分扫）
     let archived = 0;
-    const recentSessions = await this.store.listByLifecycle('recent');
+    for (const meta of await this.store.list()) {
+      const lifecycle = meta.lifecycle ?? 'active';
+      if (lifecycle !== 'recent') continue;
 
-    for (const session of recentSessions) {
-      const endedAt = session.lifecycle?.endedAt ?? 0;
-      if (endedAt > cutoff) continue; // 还在保留期内
+      // 缺 endedAt 无法判断保留期 → 跳过（禁止 ??0 立即归档）
+      const endedAt = meta.endedAt;
+      if (endedAt == null) continue;
+      if (endedAt > cutoff && endedAt > forceCutoff) continue;
 
-      const extractionStatus = session.lifecycle?.memoryExtraction ?? 'pending';
+      const session = await this.store.load(meta.id);
+      if (!session) continue;
 
-      if (extractionStatus === 'completed') {
-        // 正常归档
-        await this.archiveSession(session);
-        archived++;
-      } else if (endedAt < forceCutoff) {
-        // 兜底策略：超过强制归档天数，即使提取未完成也归档
-        await this.archiveSession(session);
-        archived++;
-      }
-      // 其他情况：跳过，等待提取完成
+      await this.archiveSession(session);
+      archived++;
     }
 
     return archived;
   }
 
   /**
-   * 归档单个 session
+   * 归档单个 session：导出 gz → 标记 archived → 删热库
    */
   private async archiveSession(session: SessionData): Promise<void> {
     const now = Date.now();
@@ -103,23 +103,21 @@ export class SessionArchiveManager {
 
     const entry: ArchiveEntry = {
       sessionId: session.id,
-      data: session,
+      data: {
+        ...session,
+        lifecycle: {
+          lifecycle: 'archived',
+          endedAt: session.lifecycle?.endedAt,
+          archivedAt: now,
+        },
+      },
       archivedAt: now,
     };
 
-    // 追加到归档文件
+    // 先追加归档行，再删热库（宁可重复归档行，不可丢正文）
     await this.appendToArchive(archiveFile, entry);
-
-    // 更新生命周期状态
-    await this.store.updateLifecycle(session.id, {
-      lifecycle: 'archived',
-      archivedAt: now,
-    });
-
-    // 从 sessions.db 删除（归档后不再需要在数据库中）
     await this.store.delete(session.id);
 
-    // 通知订阅方：session 生命周期结束（scoped 子系统清理等）
     this.events?.emit({
       type: 'session.ended',
       timestamp: Date.now(),
@@ -130,12 +128,11 @@ export class SessionArchiveManager {
   }
 
   /**
-   * 追加一条记录到压缩归档文件
+   * 追加一条记录到压缩归档文件（temp + rename，避免截断式写坏当月冷备）
    */
   private async appendToArchive(filePath: string, entry: ArchiveEntry): Promise<void> {
     const line = JSON.stringify(entry) + '\n';
 
-    // 读取现有内容（如果有）
     let existing = '';
     try {
       const compressed = await readFile(filePath);
@@ -147,7 +144,10 @@ export class SessionArchiveManager {
 
     const newContent = existing + line;
     const compressed = await this.compress(Buffer.from(newContent, 'utf-8'));
-    await writeFile(filePath, compressed);
+    const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+    await writeFile(tmpPath, compressed);
+    const { rename } = await import('node:fs/promises');
+    await rename(tmpPath, filePath);
   }
 
   /**
@@ -191,7 +191,8 @@ export class SessionArchiveManager {
 
         for (const line of lines) {
           const entry = JSON.parse(line) as ArchiveEntry;
-          if (!agentId || sessionMatchesAgent(entry.data, agentId)) {
+          const pick = toIndexPick(entry.data);
+          if (!agentId || sessionMatchesAgent(pick, agentId)) {
             results.push({
               sessionId: entry.sessionId,
               agentId: entry.data.agentId,
@@ -247,17 +248,22 @@ export class SessionArchiveManager {
     }
   }
 
-  /**
-   * 压缩 buffer
-   */
   private async compress(data: Buffer): Promise<Buffer> {
     return promisify(gzip)(data);
   }
 
-  /**
-   * 解压 buffer
-   */
   private async decompress(data: Buffer): Promise<Buffer> {
     return promisify(gunzip)(data);
   }
+}
+
+function toIndexPick(s: SessionData): Parameters<typeof sessionMatchesAgent>[0] {
+  return {
+    agentId: s.agentId ?? s.meta?.agentId,
+    primaryAgentId: s.primaryAgentId ?? s.meta?.primaryAgentId,
+    preferredAgentId: s.preferredAgentId ?? s.meta?.preferredAgentId,
+    participantAgentIds:
+      s.meta?.participantAgentIds ??
+      (s.participants ?? []).map((p) => p.agentId),
+  };
 }

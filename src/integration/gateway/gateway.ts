@@ -127,6 +127,7 @@ export interface SessionModelView {
 
 /**
  * 无显式 store 时，在 OCTOPI_HOME/sessions 创建持久化 JSONL store。
+ * 禁止改回 SqliteSessionStore（已删除；见 arch/session-history-search.md）。
  */
 async function createDefaultStore(_agents: AgentDefinition[]): Promise<SessionStore<SessionData>> {
   const { getOctopiHome } = await import('../../init.js');

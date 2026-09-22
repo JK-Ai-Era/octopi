@@ -26,4 +26,11 @@ export interface SessionMeta {
   preferredAgentId?: string;
   /** 参与者 agentId（列表过滤；完整绑定在 SessionData.participants） */
   participantAgentIds?: string[];
+  /**
+   * 会话运行状态投影（I2：可从 SessionData 重建；供 list 过滤/归档扫描）。
+   * 与 SessionData.lifecycle 同源，由 SessionStore save 时写入索引。
+   */
+  lifecycle?: 'active' | 'recent' | 'archived';
+  endedAt?: number;
+  archivedAt?: number;
 }

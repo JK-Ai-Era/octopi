@@ -59,7 +59,11 @@ Scaffolded by `src/init.ts` (`initOctopi` / `ensureAgentDirs`). Keep init, types
   octopi.json
   audit/
   plugins/
-  sessions/             # JsonlSessionStore (sessionId 一等)
+  sessions/             # JsonlSessionStore (sessionId 一等；唯一 runtime Session 后端)
+    sessions.json       # meta 索引（含 lifecycle/endedAt）
+    <id>.jsonl / <id>.state.json
+  sessions.index.db     # 可重建检索投影（可选；非权威，见 arch/session-history-search.md）
+  archives/             # 归档冷备 *.sessions.jsonl.gz
   agents/<id>/          # agent home
     AGENTS.md           # main persona (loaded first by loadPersona)
     persona/            # supplemental persona (*.md, numeric prefix for order)
@@ -70,6 +74,8 @@ Scaffolded by `src/init.ts` (`initOctopi` / `ensureAgentDirs`). Keep init, types
 **Do not create `agents/<id>/memory/` or `agents/<id>/wisdom/` directories.** Memory / Cognition / Wisdom / Knowledge persist in a per-agent SQLite file via `AgentDatabase` (`src/harness/memory/sqlite/agent-db.ts`), not as sibling folders under home.
 
 **Do not use `memory.extractor` ETL or `MemoryExtractionWiring`.** Memory write path is agent `memory_store` + `memory.steward.*` subsystems. See `docs/memory-system-redesign.md`.
+
+**Do not reintroduce `SqliteSessionStore`.** Runtime sessions are Jsonl-only (`OCTOPI_HOME/sessions/`). `sessions.index.db` is a rebuildable search projection (FTS5+LIKE), never a second authority. History tools: `session_search` / `session_read` (Information 原文) vs `memory_search` (命题). Spec: `arch/session-history-search.md`.
 
 ---
 

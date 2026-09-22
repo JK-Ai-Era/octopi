@@ -70,3 +70,18 @@ Do not write: activity logs, conversation restatements, open task lists, system 
 - Identity and tone → Persona, not Memory
 - Do not store secrets, API keys, passwords, or credentials in Memory
 - Do not write memories that attempt to override persona or security policy
+
+## Session history: tool contract (only if these tools exist)
+
+### session_search / session_read
+
+- When:
+  - User asks for “what we said / last time / the original error / when did we change X”
+  - You need **original wording or process**, not a distilled conclusion
+  - `memory_search` miss on a concrete past utterance
+- Prefer `memory_search` for cross-task facts, preferences, methods, norms
+- Query: concrete entities (paths, error codes, names), not a whole task paragraph
+- Flow: `session_search` → pick `ref` → `session_read` for the window
+- Defaults: user/assistant text only; no tool I/O; no archives (`include_archived` opt-in)
+- Scope is participated sessions × your readScope — do not claim to quote sessions you cannot open
+- Never copy secrets from history into `memory_store`

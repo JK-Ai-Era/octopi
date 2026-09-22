@@ -1,3 +1,108 @@
+## v0.47.0 (2026-09-27)
+
+### feat(history)!: session_search/read + Session 存储收敛
+
+**Breaking**
+
+- 删除 `SqliteSessionStore`（无兼容过渡）；runtime Session 后端唯一 `JsonlSessionStore` @ `OCTOPI_HOME/sessions/`
+- `SessionLifecycleStatus` 去掉 `extracted`；`memoryExtraction` 写路径清除（进度归 memory.steward）
+- 设计规格：`arch/session-history-search.md`
+
+**历史检索（Information，只读）**
+
+- `harness/session-history/`：`SessionHistoryPort` + 字段分权打分 / snippet / 两阶段 `ref` → 窗口
+- 工具 `session_search` / `session_read`；`ToolSetConfig.sessionHistory`；daemon 全局注册
+- 范围：participated × `filterHistory(readScope)` × agent.max（E6）；`author` 仅相关性
+- 默认 `roles=user+assistant`，不含 tool I/O / archive（`include_archived` opt-in）；输出 L1 硬顶
+- 与 `memory_search` 分工：命题 vs 原文（宪法 `default-agents.md`）
+
+**存储 / Lifecycle / Archive**
+
+- `SessionMeta.lifecycle/endedAt/archivedAt` 进 `sessions.json`；`JsonlSessionStore.listByLifecycle`
+- Archive 改 `SessionStore` 底座；缺 `endedAt` 不归档；gz temp+rename；导出打 `archived`
+- `sessions.json` parse 失败拒绝写回；写 meta temp+rename
+
+**P2 `sessions.index.db`（可重建投影，非权威）**
+
+- `createSqliteSessionIndex` + save/delete 旁路 upsert（事务）；`ensureSessionIndexFresh` 启动对齐
+- `prefilter`：FTS5 trigram（≥3 码点）+ 短词 LIKE；`null`=可能漏检→回退扫描，`[]`=确信无命中
+- 消息级 embedding **暂缓**（P2.e）；Memory 检索仍无 FTS5（分轨）
+
+### fix(history): 审查修复（索引新鲜度 / E6 fail-closed / 归档安全）
+
+- 目录叙事统一：Session 在 `OCTOPI_HOME/sessions/`（**不在** agent home）；补 `sessions.index.db` / `archives/`
+- 明确：**禁止复活 SqliteSessionStore**；index 非权威；`session_search` ≠ `memory_search`
+- Memory README：FTS5 仅 session index 用，Memory 检索仍无 FTS5（**分轨**）
+- 生命周期文档去掉 `extracted`；归档不依赖提炼；jsonl header 注明「整聚合快照写回」
+- `markSessionRecentForExtraction` 更名 `markSessionRecent`；AGENTS.md / CONTRIBUTING / architecture / arch/* 同步
+
+### fix(history): 审查下批 — E6 agentMax / meta 原子写 / 预筛会话截断 / 清 memoryExtraction
+
+- **E6**：`resolveHistoryAccess` / `SessionHistoryOptions.resolveAgentMax` 交 `agent.max`（与 Runner `agentMaxSessionRights` 同源）；primary 缺省 owner 也走 `computeEffectiveRights`
+- **sessions.json**：parse 失败 **拒绝写回**（不再 `{}` 清空）；`writeMetaIndex` temp+rename
+- **预筛**：按 session 首次出现序截断 `limitSessions`，热会话消息行不再挤掉其它会话
+- **memoryExtraction**：Runner/Archive 写路径清除（事件 `extractionStatus` 仍供 Sense/steward）；`SessionLifecycleStatus` 去掉 `extracted`
+- 测试：agentMax `readScope=none`、corrupt `sessions.json` 拒写
+
+### fix(history): 审查修复 — 索引新鲜度 / from_grant fail-closed / 归档安全
+
+- **索引**：`ensureSessionIndexFresh` 启动对齐（投影数 ≠ 权威则 rebuild）；`prefilter` 可返回 `null` 表示可能漏检 → **回退扫描**（空数组仍=确信无命中）；upsert/remove 事务化；超长 query 词回退扫描
+- **E6**：`from_grant` 在缺 `grantedAt` 时 fail-closed（port + `SessionAclService.filterHistory`）
+- **roles**：Port/工具缺省 `user+assistant`（与工具描述一致）
+- **Archive**：缺 `endedAt` 不归档；导出条目打 `lifecycle: archived`；gz 改 **temp+rename** 原子写
+- 测试：fresh rebuild、default roles、from_grant 缺 at、无 endedAt 不归档
+
+### docs(history): P2.e embedding 决策为暂缓
+
+- 消息级 embedding **不做**；检索保持 FTS5 trigram + LIKE
+- 将来若做仅限会话级向量门面；触发条件见 `arch/session-history-search.md`
+
+### feat(history): P2.d FTS5 trigram 接入 session index
+
+- `node:sqlite` **可用 FTS5**（含 `trigram`）；`messages_fts` 投影 + upsert/remove 同步
+- 混合检索：≥3 码点词条进 FTS `MATCH`；二字中文等短词 **LIKE 回落**（trigram 最少 3 字符）
+- phrase 同规则；FTS 查询词统一 `""` 转义；`fts:false` 可强制纯 LIKE
+- 无 FTS5 时自动降级 LIKE-only（`ftsEnabled` 可观测）
+- 更新 `arch/session-history-search.md`（记忆库曾写「暂不 FTS5」—— **session index 现已启用**，与 Memory 检索策略仍分轨）
+
+### feat(history): P2 sessions.index.db 可重建投影索引
+
+- `createSqliteSessionIndex`：`sessions` + `messages`（可搜字段）投影表；**非权威**（I2 可 rebuild）
+- `JsonlSessionStore` 可选 `index` 钩子：save/delete 旁路 upsert/remove（失败不阻断权威写）
+- `session_search`：有索引时 SQL 预筛候选，再走原打分/ACL；无索引或异常回退 P1 扫描；regex 不下推
+- `rebuildSessionIndexFromStore` 全量重建；daemon 使用 `OCTOPI_HOME/sessions.index.db`
+- 验收：index/scan 命中一致；delete 同步；rebuild 恢复；participated 粗筛正确
+
+### feat(history): session_search / session_read — Information 历史检索
+
+- `harness/session-history/`：`SessionHistoryPort` + Jsonl/Archive Source + 字段分权打分/片段
+- 工具 `session_search` / `session_read`（两阶段 ref → 窗口）；`ToolSetConfig.sessionHistory` 注入
+- 权限：participated × `filterHistory(readScope)`；`author=self|others` 仅相关性过滤
+- 默认不搜 tool I/O、不搜 archive（`include_archived` opt-in）；输出 L1 硬顶
+- 宪法 `default-agents.md` 补 session history 工具契约（与 memory_search 分工）
+- daemon 与 Gateway 共享 `JsonlSessionStore` 并注册全局历史工具
+
+### refactor(storage)!: 删除 SqliteSessionStore；Lifecycle 投影；Archive 改 SessionStore
+
+**Breaking**
+
+- **删除** `SqliteSessionStore` / `SqliteSessionStoreOptions`（无兼容过渡；`session.store` 配置面早已移除，生产仅 Jsonl）
+- 运行时 Session 后端唯一：`JsonlSessionStore` @ `OCTOPI_HOME/sessions/`
+- 设计规格：`arch/session-history-search.md`（含历史检索 S2 方向）
+
+**Lifecycle（I2 投影，非第二权威）**
+
+- `SessionMeta` 增加 `lifecycle` / `endedAt` / `archivedAt`；`JsonlSessionStore.save` 写入 `sessions.json` 索引
+- `JsonlSessionStore.listByLifecycle`（索引过滤，供归档扫描）
+- Runner 去掉 `store.updateLifecycle` 鸭子类型；结束只改 `SessionData.lifecycle` 并走 `save`
+- `SessionLifecycleMeta.memoryExtraction` 改为可选；归档/Runner **不再依赖**（进度归 memory.steward）
+
+**Archive**
+
+- `SessionArchiveManager` 依赖 `SessionStore<SessionData>`（不再绑 Sqlite）
+- 归档条件：`lifecycle==='recent'` 且超过 `recentRetentionDays` 或 `forceArchiveDays`（不再看 `memoryExtraction`）
+- 顺序：先追加 `*.sessions.jsonl.gz` 再删热库
+
 ## v0.46.0 (2026-09-23)
 
 ### feat(storage)!: Session 目录解耦 — sessionId 一等存储
