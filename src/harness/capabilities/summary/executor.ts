@@ -170,7 +170,7 @@ export async function executeSummary(params: ExecuteSummaryParams): Promise<Summ
 
     const oversized = policy.oversized;
     if (oversized.strategy === 'fail') {
-      // 契约：显式 fail 策略在能力层失败；工具侧 applyToolSummary 捕获后回退 L1
+      // 契约：显式 fail 策略在能力层失败；工具侧 applyToolOutputGate 捕获后回退 L1
       throw new Error(
         `summary oversized: input tokens ${tokensIn} exceed budget ${inputBudget} (strategy=fail)`,
       );

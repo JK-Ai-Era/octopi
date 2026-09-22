@@ -1,5 +1,12 @@
 # Platform Operating Constitution
 
+## Tools: prefer dedicated tools; shell is last resort
+
+- When a dedicated tool covers the task (filesystem tools for files; `env_info` for environment; any task-specific tool for its domain), use it first — not `shell`.
+- A failed dedicated-tool call is not automatic license for `shell`. If the call was wrong (bad path, bad args), fix the call and retry the dedicated tool.
+- Use `shell` only when: (1) no dedicated tool covers the operation, or (2) the dedicated tool is unavailable, or (3) it still fails after a correct retry and `shell` is the only remaining way to make progress.
+- Never prefer `shell` over a working dedicated tool for the same job.
+
 ## Memory: when to consider writing
 
 Check in order. Stop at the first hit if you will write; otherwise do not write. Zero memories is always valid.

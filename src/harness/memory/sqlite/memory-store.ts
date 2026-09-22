@@ -222,7 +222,13 @@ export class SqliteMemoryStore implements MemoryStore {
    * candidateCap 默认 500，可通过 SqliteMemoryStoreOptions 覆盖。
    */
   private async hybridRetrieve(query: MemoryQuery): Promise<MemoryEntry[]> {
-    const queryVec = await this.embedding!.embed(query.text);
+    let queryVec: number[];
+    try {
+      queryVec = await this.embedding!.embed(query.text);
+    } catch {
+      // embedding 服务不可用：退回关键词（与 vecRetrieve / store 写入路径对称）
+      return this.structuredRetrieve(query);
+    }
     const vis = this.visibilityWhere(query);
     const cap = this.candidateCap;
 

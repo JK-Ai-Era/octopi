@@ -41,7 +41,9 @@ import { defaultPathEnv, resolvePlatformShell, resolveToolPath } from './platfor
  * - durationMs: 执行耗时
  * - shell: 实际使用的 shell（kind/executable）
  */
-export function createShellTool(): RegisteredTool {
+export function createShellTool(options?: {
+  summary?: import('../../capabilities/summary/index.js').ToolSummarySupport;
+}): RegisteredTool {
   const shell = resolvePlatformShell();
   const syntaxHint =
     shell.kind === 'bash'
@@ -53,7 +55,7 @@ export function createShellTool(): RegisteredTool {
   return {
     definition: {
       name: 'shell',
-      description: `Execute a shell command. Detected shell: ${shell.label}. ${syntaxHint} Use sparingly - prefer file_read/file_list/file_write for file operations. Useful for: git commands, npm scripts, system info.`,
+      description: `LAST RESORT shell. Prefer a dedicated tool when one covers the job (file_read/file_list/file_write/file_edit/file_search/env_info and any task-specific tools). Use shell only when: no dedicated tool covers the operation, the dedicated tool is unavailable, or it still fails after a correct retry (wrong path/args → fix and retry the tool first). Never use shell instead of a working dedicated tool. Detected shell: ${shell.label}. ${syntaxHint}`,
       parameters: {
         command: {
           type: 'string',
@@ -99,17 +101,53 @@ export function createShellTool(): RegisteredTool {
           stderr += data.toString();
         });
 
-        child.on('close', (code) => {
-          resolve({
-            stdout: stdout.slice(0, 50_000), // 限制输出大小
-            stderr: stderr.slice(0, 10_000),
-            exitCode: code,
-            durationMs: Date.now() - startTime,
-            shell: {
-              kind: resolvedShell.kind,
-              executable: resolvedShell.executable,
-            },
-          });
+        child.on('close', async (code) => {
+          const durationMs = Date.now() - startTime;
+          try {
+            const { applyToolOutputGate, resolveSupportBinding } = await import(
+              '../../capabilities/summary/index.js'
+            );
+            const support = options?.summary;
+            const binding = resolveSupportBinding('shell', support, 8000);
+            const applied = await applyToolOutputGate({
+              tool: 'shell',
+              rawBody: stdout,
+              support: { ...support, binding },
+              truncateHint: 'Re-run with a narrower command, or redirect large output to a file and file_read it.',
+            });
+            const stderrApplied = await applyToolOutputGate({
+              tool: 'shell',
+              rawBody: stderr,
+              support: { ...support, binding: { ...binding, maxReturnChars: Math.min(binding.maxReturnChars, 4000) } },
+              truncateHint: 'stderr truncated.',
+            });
+            resolve({
+              stdout: applied.body,
+              stderr: stderrApplied.body,
+              exitCode: code,
+              durationMs,
+              truncated: applied.bodyTruncated || stderrApplied.bodyTruncated,
+              rawStdoutLength: applied.rawLength,
+              shell: {
+                kind: resolvedShell.kind,
+                executable: resolvedShell.executable,
+              },
+            });
+          } catch {
+            // summary 模块不可用时的 L1 替代：裸 slice 硬顶，避免超大结果进主会话
+            resolve({
+              stdout: stdout.slice(0, 8000),
+              stderr: stderr.slice(0, 4000),
+              exitCode: code,
+              durationMs,
+              truncated: stdout.length > 8000 || stderr.length > 4000,
+              rawStdoutLength: stdout.length,
+              shell: {
+                kind: resolvedShell.kind,
+                executable: resolvedShell.executable,
+              },
+            });
+          }
         });
 
         child.on('error', (err) => {
@@ -201,13 +239,13 @@ export function createFileReadTool(options?: {
         const end = Math.min(totalLines, start + limit);
         const selected = lines.slice(start, end).join('\n');
 
-        const { applyToolSummary, resolveSupportBinding } = await import(
+        const { applyToolOutputGate, resolveSupportBinding } = await import(
           '../../capabilities/summary/index.js'
         );
         const support = options?.summary;
         const binding = resolveSupportBinding('file_read', support, 12000);
 
-        const applied = await applyToolSummary({
+        const applied = await applyToolOutputGate({
           tool: 'file_read',
           rawBody: selected,
           support: { ...support, binding },
@@ -305,22 +343,77 @@ export function createFileWriteTool(): RegisteredTool {
 }
 
 /**
+ * 编译 file_list.pattern：优先 glob（`*.md`），否则正则。
+ * `new RegExp('*.md')` 会抛 Nothing to repeat，模型常写 glob。
+ */
+function compileNamePattern(raw: string | undefined): RegExp | null {
+  if (!raw?.trim()) return null;
+  const trimmed = raw.trim();
+  const looksLikeGlob =
+    /[*?]/.test(trimmed) &&
+    !trimmed.startsWith('^') &&
+    !trimmed.endsWith('$') &&
+    !/[()[\]\\]/.test(trimmed);
+  if (looksLikeGlob) {
+    const escaped = trimmed
+      .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+      .replace(/\*/g, '.*')
+      .replace(/\?/g, '.');
+    // 整串匹配：`*.md` 不得命中 `file.md.bak`
+    return new RegExp(`^${escaped}$`, 'i');
+  }
+  try {
+    return new RegExp(trimmed, 'i');
+  } catch {
+    throw new Error(`Invalid pattern "${raw}": use glob (*.md) or a valid regular expression`);
+  }
+}
+
+/**
  * File List 工具 — 列出目录内容
  *
  * 参数：
  * - path (string, required): 目录路径
  * - recursive (boolean, optional): 是否递归列出（默认 false）
- * - pattern (string, optional): 文件名过滤正则
+ * - pattern (string, optional): 文件名过滤，glob（`*.md` / `*test*`）或正则
+ * - maxEntries (number, optional): 条目硬顶（默认 500）
+ * - maxDepth (number, optional): 递归深度上限（默认 4，硬顶 8）；仅 recursive 时生效
  *
  * 返回：
- * - entries: 文件和目录列表
- * - count: 总数
+ * - entries: 文件和目录列表（受 maxEntries / L1 约束）
+ * - count: 本页条目数
+ * - totalCount: 扫描到的总条目（可能 > count）
+ * - truncated: 是否被条目上限或 L1 截断
+ *
+ * 递归时默认跳过 node_modules/.git 等噪音目录；结果进主会话前强制 L1 硬顶。
  */
-export function createFileListTool(): RegisteredTool {
+export function createFileListTool(options?: {
+  summary?: import('../../capabilities/summary/index.js').ToolSummarySupport;
+}): RegisteredTool {
+  const SKIP_DIR_NAMES = new Set([
+    'node_modules',
+    '.git',
+    '.hg',
+    '.svn',
+    '.cache',
+    '.next',
+    '.nuxt',
+    '.turbo',
+    '.venv',
+    'venv',
+    '__pycache__',
+    'dist',
+    'build',
+    'coverage',
+    '.idea',
+    '.vscode',
+  ]);
+
   return {
     definition: {
       name: 'file_list',
-      description: 'List files and directories in a path. Supports recursive listing and pattern filtering.',
+      description:
+        'List files and directories in a path. Supports recursive listing and pattern filtering. Recursive mode skips node_modules/.git by default. Output is capped.',
       parameters: {
         path: {
           type: 'string',
@@ -329,11 +422,19 @@ export function createFileListTool(): RegisteredTool {
         },
         recursive: {
           type: 'boolean',
-          description: 'If true, list recursively (default: false)',
+          description: 'If true, list recursively (default: false). Skips node_modules/.git/build caches.',
         },
         pattern: {
           type: 'string',
-          description: 'Regex pattern to filter file names (optional)',
+          description: 'Filter by file name: glob (*.md, *test*) or regex. Matched against the file/dir name, not full path.',
+        },
+        maxEntries: {
+          type: 'number',
+          description: 'Maximum entries to return (default: 500)',
+        },
+        maxDepth: {
+          type: 'number',
+          description: 'Max directory depth when recursive (default: 4, hard cap: 8). Prefer listing a subdirectory path over raising this.',
         },
       },
     },
@@ -345,24 +446,54 @@ export function createFileListTool(): RegisteredTool {
       const cwd = context?.cwd ?? process.cwd();
       const basePath = resolveToolPath(rawPath, cwd);
       const recursive = (args.recursive as boolean) ?? false;
-      const pattern = args.pattern ? new RegExp(args.pattern as string) : null;
+      const pattern = compileNamePattern(args.pattern as string | undefined);
+      const maxEntries = Math.min(Math.max((args.maxEntries as number) ?? 500, 1), 2000);
+      const maxDepth = Math.min(Math.max((args.maxDepth as number) ?? 4, 1), 8);
 
       const entries: Array<{ name: string; path: string; type: 'file' | 'directory'; size?: number }> = [];
+      let totalCount = 0;
+      let entryCapped = false;
+      let depthCapped = false;
 
-      async function walk(dir: string) {
+      async function walk(dir: string, depth: number) {
+        if (entryCapped) return;
+        if (depth > maxDepth) {
+          depthCapped = true;
+          return;
+        }
         const items = await readdir(dir, { withFileTypes: true });
         for (const item of items) {
+          if (entryCapped) return;
           const fullPath = join(dir, item.name);
           const relativePath = relative(basePath, fullPath);
 
-          if (pattern && !pattern.test(item.name)) continue;
+          if (recursive && item.isDirectory() && SKIP_DIR_NAMES.has(item.name)) continue;
+          // pattern 只过滤列出的条目；递归时目录始终下钻（否则 recursive+*.md 进不了子目录）
+          const matched = !pattern || pattern.test(item.name);
 
           if (item.isDirectory()) {
-            entries.push({ name: item.name, path: relativePath, type: 'directory' });
-            if (recursive) {
-              await walk(fullPath);
+            if (matched) {
+              totalCount += 1;
+              if (entries.length >= maxEntries) {
+                entryCapped = true;
+                return;
+              }
+              entries.push({ name: item.name, path: relativePath, type: 'directory' });
             }
-          } else if (item.isFile()) {
+            if (recursive) {
+              // 子目录内容属于 depth+1；超过 maxDepth 不再下钻
+              if (depth + 1 > maxDepth) {
+                depthCapped = true;
+              } else {
+                await walk(fullPath, depth + 1);
+              }
+            }
+          } else if (item.isFile() && matched) {
+            totalCount += 1;
+            if (entries.length >= maxEntries) {
+              entryCapped = true;
+              return;
+            }
             const s = await stat(fullPath).catch(() => null);
             entries.push({
               name: item.name,
@@ -375,8 +506,68 @@ export function createFileListTool(): RegisteredTool {
       }
 
       try {
-        await walk(basePath);
-        return { entries, count: entries.length };
+        await walk(basePath, 1);
+        const rawBody = JSON.stringify({ entries, count: entries.length, totalCount });
+
+        const { applyToolOutputGate, resolveSupportBinding } = await import(
+          '../../capabilities/summary/index.js'
+        );
+        const support = options?.summary;
+        const binding = resolveSupportBinding('file_list', support, 8000);
+        const applied = await applyToolOutputGate({
+          tool: 'file_list',
+          rawBody,
+          support: { ...support, binding },
+          locator: basePath,
+          truncateHint: 'Use path/pattern/maxEntries to narrow the listing, or list a subdirectory.',
+        });
+
+        // L1/L2 出口：截断或摘要后不得把完整 entries 旁路回灌
+        const maxChars = binding.maxReturnChars;
+        const l1Hit = applied.rawLength > maxChars || applied.bodyTruncated;
+        const reasons: string[] = [];
+        if (entryCapped) reasons.push('max_entries');
+        if (depthCapped) reasons.push('max_depth');
+        if (applied.summary?.applied) reasons.push('l2_summary');
+        if (l1Hit) reasons.push('l1_cap');
+
+        if (applied.summary?.applied || l1Hit) {
+          const kept: typeof entries = [];
+          let used = 0;
+          for (const e of entries) {
+            const chunk = JSON.stringify(e).length + 1;
+            if (used + chunk > maxChars) break;
+            kept.push(e);
+            used += chunk;
+          }
+          return {
+            entries: kept,
+            count: kept.length,
+            totalCount,
+            maxDepth,
+            truncated: true,
+            truncatedReason: reasons.join('+') || undefined,
+            depthCapped,
+            raw: applied.body,
+            rawLength: applied.rawLength,
+            summary: applied.summary,
+            summaryUsage: applied.usage,
+          };
+        }
+
+        return {
+          entries,
+          count: entries.length,
+          totalCount,
+          maxDepth,
+          truncated: entryCapped || depthCapped,
+          truncatedReason: reasons.length ? reasons.join('+') : undefined,
+          depthCapped,
+          skippedDirs: recursive ? [...SKIP_DIR_NAMES] : undefined,
+          rawLength: applied.rawLength,
+          summary: applied.summary,
+          summaryUsage: applied.usage,
+        };
       } catch (error) {
         throw new Error(`Failed to list directory "${basePath}": ${error instanceof Error ? error.message : String(error)}`);
       }
@@ -385,18 +576,18 @@ export function createFileListTool(): RegisteredTool {
 }
 
 
-/** 获取内置工具（零依赖，所有环境可用） */
+/** 获取内置工具（零依赖，所有环境可用）。shell 靠后注册，提示模型优先专用工具 */
 export function getBuiltinTools(options?: {
   summary?: import('../../capabilities/summary/index.js').ToolSummarySupport;
 }): RegisteredTool[] {
   return [
-    createShellTool(),
     createFileReadTool({ summary: options?.summary }),
+    createFileListTool({ summary: options?.summary }),
     createFileWriteTool(),
-    createFileListTool(),
     createFileEditTool(),
     createFileSearchTool(),
     createHttpRequestTool({ summary: options?.summary }),
     createEnvInfoTool(),
+    createShellTool({ summary: options?.summary }),
   ];
 }

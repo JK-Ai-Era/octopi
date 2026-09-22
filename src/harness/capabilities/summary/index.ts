@@ -41,6 +41,10 @@ export { computeInputBudget, DEFAULT_INPUT_BUDGET_TOKENS, DEFAULT_SAFETY_MARGIN_
 export { extractStructured, parseLooseJson, validateStructured } from './structured.js';
 export { executeSummary, buildSystemPrompt } from './executor.js';
 export { createSummaryPort, getToolSummaryBinding, createToolSummarySupport } from './port.js';
-export { applyToolSummary, resolveSupportBinding } from './tool-binding.js';
-export type { ApplyToolSummaryInput, ApplyToolSummaryOutput, ToolSummarySupport } from './tool-binding.js';
+export { applyToolOutputGate, resolveSupportBinding } from './tool-binding.js';
+export type {
+  ApplyToolOutputGateInput,
+  ApplyToolOutputGateOutput,
+  ToolSummarySupport,
+} from './tool-binding.js';
 export { createMemorySummaryCache } from './memory-cache.js';

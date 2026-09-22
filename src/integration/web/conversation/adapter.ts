@@ -29,6 +29,7 @@ export interface AdapterSnapshot {
   toolIndex: Record<string, string>;
   streamingContent: string;
   lastTurnEndContent?: string;
+  emptyWarnedSessions?: string[];
 }
 
 // ──────────────────────────────────────
@@ -78,6 +79,8 @@ export class ConversationAdapter {
   private streamingContent = '';
   /** 最近一次 turn.end 写入的 content 指纹；engine.start / 新流式会重置，用于去重重复投递 */
   private lastTurnEndContent: string | undefined;
+  /** 已提示过 empty response 的 session（adapter 跨会话复用，不得互吞） */
+  private emptyWarnedSessions = new Set<string>();
 
   // ──────────────────────────────────
   // Runtime events → item mutations
@@ -105,6 +108,7 @@ export class ConversationAdapter {
         this.streamingContent += delta;
         // 新流式输出开始：清除上一轮 turn.end 指纹，避免跨 turn 误去重
         this.lastTurnEndContent = undefined;
+        this.emptyWarnedSessions.clear();
 
         if (!this.currentAssistantId) {
           // 创建一条新的 streaming assistant item
@@ -135,6 +139,7 @@ export class ConversationAdapter {
       // ── Engine start：新 run 边界 ──
       case 'engine.start': {
         this.lastTurnEndContent = undefined;
+        this.emptyWarnedSessions.clear();
         break;
       }
 
@@ -215,7 +220,11 @@ export class ConversationAdapter {
       // phase=pre_tools：assistant 消息已定稿但工具未跑完；仍 finalize 文本，
       // 但由 store 用 phase 区分 runStatus（tools vs idle），避免 UI 误判空闲。
       case 'turn.end': {
-        const content = String(event.data?.content ?? this.streamingContent ?? '');
+        const raw = event.data?.content;
+        // 空串不能用 ?? 回落：runner 常带 content:''，应吃掉 streaming 缓冲
+        const content = String((raw != null && raw !== '') ? raw : (this.streamingContent ?? ''));
+        const phase = String((event.data as { phase?: string } | undefined)?.phase ?? 'final');
+        const hasToolCalls = Boolean((event.data as { hasToolCalls?: boolean } | undefined)?.hasToolCalls);
         if (this.currentAssistantId) {
           items = items.map((it) =>
             it.id === this.currentAssistantId && it.role === 'assistant'
@@ -241,6 +250,20 @@ export class ConversationAdapter {
             this.lastTurnEndContent = content;
             changed = true;
           }
+        } else if (phase === 'final' && !hasToolCalls && !this.emptyWarnedSessions.has(sessionId)) {
+          // 最终轮无正文且无工具调用：模型空响应，必须对用户可见（与 TUI 对齐）
+          const notice: SystemConversationItem = {
+            id: ConversationAdapter.makeId('sys'),
+            role: 'system',
+            createdAt: Date.now(),
+            sessionId,
+            source: 'runtime',
+            kind: 'warning',
+            message: '模型未返回内容（empty response）',
+          };
+          items = [...items, notice];
+          this.emptyWarnedSessions.add(sessionId);
+          changed = true;
         }
         const hadStreaming = this.currentAssistantId !== undefined || this.streamingContent !== '';
         this.currentAssistantId = undefined;
@@ -621,6 +644,7 @@ export class ConversationAdapter {
       toolIndex: { ...this.toolIndex },
       streamingContent: this.streamingContent,
       lastTurnEndContent: this.lastTurnEndContent,
+      emptyWarnedSessions: [...this.emptyWarnedSessions],
     };
   }
 
@@ -630,6 +654,7 @@ export class ConversationAdapter {
     this.toolIndex = { ...state.toolIndex };
     this.streamingContent = state.streamingContent ?? '';
     this.lastTurnEndContent = state.lastTurnEndContent;
+    this.emptyWarnedSessions = new Set(state.emptyWarnedSessions ?? []);
   }
 
   /**

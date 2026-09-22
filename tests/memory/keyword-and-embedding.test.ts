@@ -209,6 +209,142 @@ describe('HttpEmbeddingProvider generic mapping', () => {
   });
 });
 
+describe('HttpEmbeddingProvider response parsing', () => {
+  const originalFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  function mockJson(payload: unknown): void {
+    globalThis.fetch = (async () => ({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      json: async () => payload,
+      text: async () => JSON.stringify(payload),
+    })) as unknown as typeof fetch;
+  }
+
+  it('parses ollama flat embedding at path "embedding"', async () => {
+    const { createEmbeddingProvider } = await import(
+      '../../src/harness/memory/sqlite/embedding.js'
+    );
+    const provider = createEmbeddingProvider({
+      type: 'ollama',
+      baseUrl: 'http://127.0.0.1:11434',
+      model: 'bge-m3',
+      dimensions: 3,
+    });
+    mockJson({ embedding: [0.1, 0.2, 0.3] });
+    await expect(provider!.embed('hello')).resolves.toEqual([0.1, 0.2, 0.3]);
+  });
+
+  it('parses openai data[0].embedding', async () => {
+    const { createEmbeddingProvider } = await import(
+      '../../src/harness/memory/sqlite/embedding.js'
+    );
+    const provider = createEmbeddingProvider({
+      type: 'openai',
+      endpoint: 'https://api.openai.com/v1',
+      model: 'text-embedding-3-small',
+      dimensions: 3,
+      apiKey: 'sk-test',
+    });
+    mockJson({ data: [{ embedding: [0.4, 0.5, 0.6] }] });
+    await expect(provider!.embed('hello')).resolves.toEqual([0.4, 0.5, 0.6]);
+  });
+
+  it('parses nested embeddings array (ollama /api/embed style)', async () => {
+    const { createEmbeddingProvider } = await import(
+      '../../src/harness/memory/sqlite/embedding.js'
+    );
+    const provider = createEmbeddingProvider({
+      type: 'ollama',
+      baseUrl: 'http://127.0.0.1:11434',
+      path: '/api/embed',
+      model: 'bge-m3',
+      dimensions: 2,
+      request: {
+        inputField: 'input',
+        embeddingsPath: 'embeddings',
+        itemEmbeddingPath: '',
+      },
+    });
+    mockJson({ embeddings: [[0.7, 0.8]] });
+    await expect(provider!.embed('hello')).resolves.toEqual([0.7, 0.8]);
+  });
+
+  it('defaults ollama supportsBatch=false so embedBatch stays serial', async () => {
+    const { createEmbeddingProvider } = await import(
+      '../../src/harness/memory/sqlite/embedding.js'
+    );
+    const provider = createEmbeddingProvider({
+      type: 'ollama',
+      baseUrl: 'http://127.0.0.1:11434',
+      model: 'bge-m3',
+      dimensions: 2,
+    });
+    let calls = 0;
+    globalThis.fetch = (async (_url: unknown, init?: { body?: string }) => {
+      calls += 1;
+      const body = JSON.parse(init?.body ?? '{}');
+      // /api/embeddings 的 prompt 必须是 string
+      expect(typeof body.prompt).toBe('string');
+      return {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        json: async () => ({ embedding: [1, 0] }),
+        text: async () => '',
+      };
+    }) as unknown as typeof fetch;
+
+    const many = await provider!.embedBatch(['a', 'b']);
+    expect(many).toEqual([
+      [1, 0],
+      [1, 0],
+    ]);
+    expect(calls).toBe(2);
+  });
+
+  it('memory retrieve degrades to keyword when embed fails', async () => {
+    const db = await AgentDatabase.create({ dbPath: ':memory:' });
+    const failing: EmbeddingProvider = {
+      name: 'failing',
+      dimensions: 4,
+      embed: async () => {
+        throw new Error('Embedding response missing vector at path "embedding"');
+      },
+      embedBatch: async () => {
+        throw new Error('Embedding response missing vector at path "embedding"');
+      },
+    };
+    const store = new SqliteMemoryStore(db, {
+      embeddingProvider: failing,
+      vectorEngine: 'js',
+    });
+    await store.store({
+      type: 'fact',
+      content: '记忆层装配失败时应退回关键词',
+      source: 's',
+      confidence: 0.9,
+      importance: 0.8,
+      tags: ['记忆'],
+      status: 'active',
+      channel: 'admin',
+      evidence: 'e',
+    });
+    const results = await store.retrieve({
+      text: '记忆层',
+      limit: 5,
+      updateAccess: false,
+    });
+    expect(results.length).toBeGreaterThan(0);
+    db.close();
+  });
+});
+
 describe('SqliteMemoryStore keyword path (no embedding)', () => {
   let db: AgentDatabase;
   let store: SqliteMemoryStore;

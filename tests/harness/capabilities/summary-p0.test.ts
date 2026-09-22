@@ -6,7 +6,7 @@ import { describe, it, expect } from 'vitest';
 import type { ModelProvider, LLMRequest } from '../../../src/core/interfaces/model-provider.js';
 import {
   applyL1Truncate,
-  applyToolSummary,
+  applyToolOutputGate,
   computeInputBudget,
   createDefaultSummaryPolicies,
   createSummaryPort,
@@ -216,7 +216,7 @@ describe('structured L0/L1', () => {
   });
 });
 
-describe('applyToolSummary L1/L2', () => {
+describe('applyToolOutputGate L1/L2', () => {
   const provider = mockProvider('clean-body');
 
   it('code file_read 默认不 L2，但 L1 仍生效', async () => {
@@ -232,7 +232,7 @@ describe('applyToolSummary L1/L2', () => {
       200,
     );
     const big = 'export const x = 1;\n'.repeat(100);
-    const out = await applyToolSummary({
+    const out = await applyToolOutputGate({
       tool: 'file_read',
       rawBody: big,
       support: { port, binding },
@@ -253,7 +253,7 @@ describe('applyToolSummary L1/L2', () => {
     });
     const binding = resolveToolBinding('http_request', createDefaultToolBindings(), undefined, 8000);
     const html = '<html>' + 'ad noise '.repeat(200) + '<main>facts</main></html>';
-    const out = await applyToolSummary({
+    const out = await applyToolOutputGate({
       tool: 'http_request',
       rawBody: html,
       support: { port, binding },
@@ -277,7 +277,7 @@ describe('applyToolSummary L1/L2', () => {
       { http_request: { maxReturnChars: 40 } },
       40,
     );
-    const out = await applyToolSummary({
+    const out = await applyToolOutputGate({
       tool: 'http_request',
       rawBody: 'z'.repeat(200),
       support: { port, binding },
@@ -333,7 +333,7 @@ describe('config toolBindings 接线（根因：配置与 tools 同源）', () =
     expect(binding.maxReturnChars).toBe(42);
   });
 
-  it('applyToolSummary 使用 support.toolBindings 而非写死默认', async () => {
+  it('applyToolOutputGate 使用 support.toolBindings 而非写死默认', async () => {
     const provider = mockProvider('ok');
     const port = createSummaryPort({
       providers: new Map([['mock', provider]]),
@@ -343,7 +343,7 @@ describe('config toolBindings 接线（根因：配置与 tools 同源）', () =
       toolBindings: { http_request: { maxReturnChars: 30 } },
       maxReturnCharsDefault: 8000,
     });
-    const out = await applyToolSummary({
+    const out = await applyToolOutputGate({
       tool: 'http_request',
       rawBody: 'z'.repeat(200),
       support,

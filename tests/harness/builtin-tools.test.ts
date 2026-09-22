@@ -248,4 +248,172 @@ describe('getBuiltinTools', () => {
     expect(names).toContain('env_info');
     expect(tools.length).toBe(8);
   });
+
+  it('registers shell last so models prefer dedicated tools', () => {
+    const tools = getBuiltinTools();
+    const names = tools.map((t) => t.definition.name);
+    expect(names[names.length - 1]).toBe('shell');
+    const shell = tools.find((t) => t.definition.name === 'shell')!;
+    expect(shell.definition.description).toMatch(/LAST RESORT/i);
+  });
+});
+
+// ── file_list caps ──
+
+describe('file_list entry caps and skip dirs', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = join(tmpdir(), `octopi-fs-${randomUUID()}`);
+    await mkdir(join(tmpDir, 'node_modules', 'pkg'), { recursive: true });
+    await mkdir(join(tmpDir, '.git'), { recursive: true });
+    await mkdir(join(tmpDir, 'src'), { recursive: true });
+    await writeFile(join(tmpDir, 'node_modules', 'pkg', 'index.js'), 'x');
+    await writeFile(join(tmpDir, '.git', 'HEAD'), 'ref');
+    await writeFile(join(tmpDir, 'src', 'a.ts'), 'export {};');
+    await writeFile(join(tmpDir, 'README.md'), '# t');
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('recursive skips node_modules/.git and caps entries', async () => {
+    const { createFileListTool } = await import(
+      '../../src/harness/plugin-ecosystem/tools/builtin.js'
+    );
+    const tool = createFileListTool();
+    const result = (await tool.handler(
+      { path: tmpDir, recursive: true },
+      makeContext({ cwd: tmpDir }),
+    )) as { entries: Array<{ path: string }>; count: number; truncated?: boolean };
+
+    const paths = result.entries.map((e) => e.path);
+    expect(paths.some((p) => p.includes('node_modules'))).toBe(false);
+    expect(paths.some((p) => p.includes('.git'))).toBe(false);
+    expect(paths.some((p) => p.includes('src'))).toBe(true);
+  });
+
+  it('caps entries at maxEntries', async () => {
+    const { createFileListTool } = await import(
+      '../../src/harness/plugin-ecosystem/tools/builtin.js'
+    );
+    for (let i = 0; i < 5; i++) {
+      await writeFile(join(tmpDir, 'src', `f${i}.ts`), 'x');
+    }
+    const tool = createFileListTool();
+    const result = (await tool.handler(
+      { path: join(tmpDir, 'src'), maxEntries: 2 },
+      makeContext({ cwd: tmpDir }),
+    )) as { count: number; totalCount: number; truncated?: boolean; truncatedReason?: string };
+
+    expect(result.count).toBeLessThanOrEqual(2);
+    expect(result.truncated).toBe(true);
+    expect(result.truncatedReason).toBe('max_entries');
+    expect(result.totalCount).toBeGreaterThan(2);
+  });
+
+  it('stops recursion at maxDepth and reports depthCapped', async () => {
+    const { createFileListTool } = await import(
+      '../../src/harness/plugin-ecosystem/tools/builtin.js'
+    );
+    // depth 1=src, 2=a, 3=b, 4=c, 5=d（默认 maxDepth=4 时不应出现 d）
+    await mkdir(join(tmpDir, 'src', 'a', 'b', 'c', 'd'), { recursive: true });
+    await writeFile(join(tmpDir, 'src', 'a', 'b', 'c', 'd', 'deep.ts'), 'x');
+    await writeFile(join(tmpDir, 'src', 'a', 'shallow.ts'), 'x');
+
+    const tool = createFileListTool();
+    const result = (await tool.handler(
+      { path: tmpDir, recursive: true, maxDepth: 3 },
+      makeContext({ cwd: tmpDir }),
+    )) as {
+      entries: Array<{ path: string }>;
+      maxDepth: number;
+      depthCapped?: boolean;
+      truncated?: boolean;
+      truncatedReason?: string;
+    };
+
+    const paths = result.entries.map((e) => e.path);
+    expect(result.maxDepth).toBe(3);
+    expect(result.depthCapped).toBe(true);
+    expect(result.truncatedReason).toBe('max_depth');
+    expect(paths.some((p) => p.includes('shallow.ts'))).toBe(true);
+    expect(paths.some((p) => p.includes('deep.ts'))).toBe(false);
+    // 仅目录 b 在 maxDepth=3 时被列出；c/d 在更深一层，不会出现
+    expect(paths.some((p) => p.endsWith('a'))).toBe(true);
+  });
+
+  it('clamps maxDepth to hard cap 8', async () => {
+    const { createFileListTool } = await import(
+      '../../src/harness/plugin-ecosystem/tools/builtin.js'
+    );
+    const tool = createFileListTool();
+    const result = (await tool.handler(
+      { path: tmpDir, recursive: true, maxDepth: 99 },
+      makeContext({ cwd: tmpDir }),
+    )) as { maxDepth: number };
+
+    expect(result.maxDepth).toBe(8);
+  });
+
+  it('accepts glob pattern *.md without regex crash', async () => {
+    const { createFileListTool } = await import(
+      '../../src/harness/plugin-ecosystem/tools/builtin.js'
+    );
+    const tool = createFileListTool();
+    const result = (await tool.handler(
+      { path: tmpDir, pattern: '*.md' },
+      makeContext({ cwd: tmpDir }),
+    )) as { entries: Array<{ name: string }> };
+
+    expect(result.entries.some((e) => e.name === 'README.md')).toBe(true);
+    expect(result.entries.every((e) => e.name.endsWith('.md'))).toBe(true);
+  });
+
+  it('still accepts regex patterns', async () => {
+    const { createFileListTool } = await import(
+      '../../src/harness/plugin-ecosystem/tools/builtin.js'
+    );
+    const tool = createFileListTool();
+    const result = (await tool.handler(
+      { path: join(tmpDir, 'src'), pattern: '\\.ts$' },
+      makeContext({ cwd: tmpDir }),
+    )) as { entries: Array<{ name: string }> };
+
+    expect(result.entries.some((e) => e.name === 'a.ts')).toBe(true);
+  });
+
+  it('recursive + pattern still descends into non-matching dirs', async () => {
+    const { createFileListTool } = await import(
+      '../../src/harness/plugin-ecosystem/tools/builtin.js'
+    );
+    await mkdir(join(tmpDir, 'src', 'docs'), { recursive: true });
+    await writeFile(join(tmpDir, 'src', 'docs', 'guide.md'), '#');
+
+    const tool = createFileListTool();
+    const result = (await tool.handler(
+      { path: tmpDir, recursive: true, pattern: '*.md' },
+      makeContext({ cwd: tmpDir }),
+    )) as { entries: Array<{ name: string; path: string }> };
+
+    expect(result.entries.some((e) => e.name === 'guide.md')).toBe(true);
+    expect(result.entries.some((e) => e.name === 'README.md')).toBe(true);
+  });
+
+  it('glob is anchored: *.md does not match file.md.bak', async () => {
+    const { createFileListTool } = await import(
+      '../../src/harness/plugin-ecosystem/tools/builtin.js'
+    );
+    await writeFile(join(tmpDir, 'src', 'file.md.bak'), 'x');
+
+    const tool = createFileListTool();
+    const result = (await tool.handler(
+      { path: join(tmpDir, 'src'), pattern: '*.md' },
+      makeContext({ cwd: tmpDir }),
+    )) as { entries: Array<{ name: string }> };
+
+    expect(result.entries.some((e) => e.name === 'file.md.bak')).toBe(false);
+    expect(result.entries.every((e) => e.name.endsWith('.md'))).toBe(true);
+  });
 });

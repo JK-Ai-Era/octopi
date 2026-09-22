@@ -1476,13 +1476,18 @@ export class AgentBuilder {
 
 ${toolList}
 
-When the user asks you to do something that requires these tools, use them directly. Do not say you cannot do something if a tool can help. For example:
-- If asked to read a file, use the file_read tool
-- If asked to run a command, use the shell tool
-- If asked to list files, use the file_list tool
-- If asked to write a file, use the file_write tool
+Tool selection (strict):
+1. Prefer a dedicated tool when one covers the job (file_read / file_list / file_write / file_edit / file_search / env_info, and any task-specific tool).
+2. If a dedicated-tool call fails because your arguments were wrong (bad path, bad params), fix the call and retry that tool — do not switch to shell for a call you can fix.
+3. Use shell only when: (a) no dedicated tool covers the operation, or (b) the dedicated tool is unavailable, or (c) it still fails after a correct retry and shell is the only remaining way to make progress.
+4. Do not prefer shell over a working dedicated tool for the same job.
 
-Always try to use tools before saying you cannot help.`;
+Examples:
+- Read a file → file_read first (shell cat only if file_read is unavailable or still fails after a correct retry)
+- List directory → file_list first
+- Write/edit a file → file_write / file_edit first
+- Search file contents → file_search first
+- Operation with no dedicated tool → shell is acceptable`;
   }
 }
 

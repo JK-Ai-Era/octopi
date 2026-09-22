@@ -17,7 +17,7 @@ export type { WebSearchToolOptions } from './plugin-ecosystem/tools/web-search.j
 // ── Capabilities（公用能力；横切，不计入业务领域口径） ──
 export {
   createSummaryPort,
-  applyToolSummary,
+  applyToolOutputGate,
   createDefaultSummaryPolicies,
   resolveSummaryModel,
   getToolSummaryBinding,

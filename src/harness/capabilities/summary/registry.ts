@@ -136,6 +136,23 @@ export function createDefaultToolBindings(): Record<string, ToolSummaryBinding> 
       informationalKinds: ['document', 'log', 'file_text', 'web_page'],
       onFail: 'truncate_l1',
     },
+    // 列表/命令输出：L1 必须生效（CONTRIBUTING）；L2 对 opaque 无益，关掉省调用
+    file_list: {
+      tool: 'file_list',
+      mode: 'never',
+      maxReturnChars: 8000,
+      kindFromSource: false,
+      informationalKinds: [],
+      onFail: 'truncate_l1',
+    },
+    shell: {
+      tool: 'shell',
+      mode: 'never',
+      maxReturnChars: 8000,
+      kindFromSource: false,
+      informationalKinds: [],
+      onFail: 'truncate_l1',
+    },
   };
 }
 

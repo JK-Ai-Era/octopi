@@ -1,4 +1,38 @@
-## Unreleased
+## v0.45.1 (2026-09-22)
+
+### fix(tools): file_list pattern 支持 glob
+
+- 模型常写 `*.md`，原先按正则会抛 `Nothing to repeat`；现含 `*`/`?` 且不像正则时按 glob 编译（**整串锚定**），否则按正则
+- **recursive + pattern**：目录始终下钻（仍跳过噪音目录），pattern 只滤文件/目录名——此前 `*.md` 进不了子目录
+- L1/L2 截断后按预算保留 entries 前缀，不再 `entries: []` 或旁路回灌全量；`truncatedReason` 可组合（`max_entries+max_depth+l1_cap`）
+- description 同步说明 glob 或 regex
+
+### fix(tools): shell 提示层降权 + 注册顺序靠后
+
+- **shell description**：LAST RESORT；兜底条件「无专用工具覆盖 / 专用工具不可用 / 正确重试后仍失败」；不写死 git/npm
+- **getBuiltinTools**：shell 移到注册列表末尾
+- **默认 systemPrompt / 宪法**：参数用错先改调用并重试专用工具；shell 为最后兜底而非禁用
+- 后续若仍滥用，再评估 shell 默认审批 / 命令白名单
+
+### refactor(summary): applyToolSummary → applyToolOutputGate
+
+- 名称纠偏：入口是 **L1 硬顶（永远）+ 可选 L2 摘要**，不是 “summary only”。`mode: 'never'` 只关 L2，L1 仍截断
+- 类型：`ApplyToolSummaryInput/Output` → `ApplyToolOutputGateInput/Output`
+- 公开导出同步：`src/index.ts` / `harness/index.ts` / `capabilities/summary`
+- shell/file_list 的 catch 注释改为「summary 模块不可用时的 L1 替代」
+
+### fix(tools): file_list/shell L1 硬顶 + file_list 递归条目上限
+
+- **file_list**：默认跳过 `node_modules`/`.git`/build 缓存目录；`maxEntries`（默认 500，上限 2000）；`maxDepth`（默认 4，硬顶 8，仅 recursive）；`pattern` 支持 glob（`*.md`）或正则；结果经 `applyToolOutputGate` L1 硬顶（缺省 8000 chars）。此前 recursive 可把整仓（含 node_modules）数 MB 清单灌进主会话，诱发后续模型空响应/流超时
+- **shell**：stdout/stderr 接入 L1（8000/4000），保留 `stdout/stderr/exitCode` 结构
+- **registry**：新增 `file_list` / `shell` 缺省 binding（`mode: never`，只 L1）
+- **web adapter**：`turn.end` final 且无正文无工具时展示「模型未返回内容」系统提示（与 TUI 对齐）；**按 session 去重**（adapter 跨会话复用不互吞）；`content:''` 会回落到 streaming 缓冲
+
+### fix(memory): ollama 单条 embedding 回包解析与 hybrid 降级
+
+- **extractOne/extractMany**：先识别扁平数字数组为单条向量（ollama `/api/embeddings` 的 `{embedding:[...]}`），不再误判为批量列表导致 `missing vector at path "embedding"`
+- **supportsBatch**：`type: ollama` 默认 `false`（`/api/embeddings` 的 `prompt` 仅接受 string）
+- **hybridRetrieve**：embed 失败时退回关键词检索（与 `vecRetrieve` / store 写入路径对称），MemoryLayer 不再因 embedding 服务异常整层 `assemble failed`
 
 ## v0.45.0 (2026-09-22)
 

@@ -301,6 +301,62 @@ describe('ConversationAdapter', () => {
       );
       expect(r.changed).toBe(false);
     });
+
+    it('surfaces empty final turn as system warning (once)', () => {
+      let r = adapter.applyEvent(
+        { type: 'turn.end', data: { content: '', phase: 'final', hasToolCalls: false } },
+        sid,
+        items,
+      );
+      items = r.items;
+      expect(r.changed).toBe(true);
+      const warnings = items.filter(
+        i => i.role === 'system' && String((i as { message?: string }).message).includes('empty response'),
+      );
+      expect(warnings).toHaveLength(1);
+
+      // 重放同一空 turn.end 不得再写一条
+      r = adapter.applyEvent(
+        { type: 'turn.end', data: { content: '', phase: 'final', hasToolCalls: false } },
+        sid,
+        items,
+      );
+      const again = r.items.filter(
+        i => i.role === 'system' && String((i as { message?: string }).message).includes('empty response'),
+      );
+      expect(again).toHaveLength(1);
+    });
+
+    it('does not warn on empty pre_tools turn (tool calls pending)', () => {
+      const r = adapter.applyEvent(
+        { type: 'turn.end', data: { content: '', phase: 'pre_tools', hasToolCalls: true } },
+        sid,
+        items,
+      );
+      const warnings = r.items.filter(
+        i => i.role === 'system' && String((i as { message?: string }).message).includes('empty response'),
+      );
+      expect(warnings).toHaveLength(0);
+    });
+
+    it('empty-response warning is per-session, not adapter-global', () => {
+      const s1 = 'sess-a';
+      const s2 = 'sess-b';
+      adapter.applyEvent(
+        { type: 'turn.end', data: { content: '', phase: 'final', hasToolCalls: false } },
+        s1,
+        [],
+      );
+      const r2 = adapter.applyEvent(
+        { type: 'turn.end', data: { content: '', phase: 'final', hasToolCalls: false } },
+        s2,
+        [],
+      );
+      const warnings = r2.items.filter(
+        i => i.role === 'system' && String((i as { message?: string }).message).includes('empty response'),
+      );
+      expect(warnings).toHaveLength(1);
+    });
   });
 
   // ──────────────────────────────────

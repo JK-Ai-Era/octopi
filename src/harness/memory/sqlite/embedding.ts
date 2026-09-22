@@ -70,7 +70,11 @@ export interface EmbeddingConfig {
   model?: string;
   /** 向量维度 */
   dimensions?: number;
-  /** 是否支持批量接口（http 默认 true；false 时 embedBatch 串行调用 embed） */
+  /**
+   * 是否支持批量接口。
+   * http/openai 默认 true；ollama `/api/embeddings` 仅接受单条 prompt，默认 false。
+   * false 时 embedBatch 串行调用 embed。
+   */
   supportsBatch?: boolean;
   /** 请求超时 ms（默认 30000） */
   timeoutMs?: number;
@@ -139,7 +143,8 @@ export function createEmbeddingProvider(config?: EmbeddingConfig): EmbeddingProv
     apiKeyPrefix: config.apiKeyPrefix,
     headers: config.headers,
     mapping: resolveDefaultMapping(type, config.request),
-    supportsBatch: config.supportsBatch ?? true,
+    // ollama `/api/embeddings` 的 prompt 是 string，批量数组会 400
+    supportsBatch: config.supportsBatch ?? type !== 'ollama',
     timeoutMs: config.timeoutMs ?? 30_000,
   });
 }
@@ -232,25 +237,33 @@ class HttpEmbeddingProvider implements EmbeddingProvider {
 
   private extractOne(payload: unknown): number[] {
     const { mapping } = this.opts;
-    // 批量路径下第一项
     const batch = getByPath(payload, mapping.embeddingsPath);
+    // 扁平数字数组 = 单条向量（ollama `{embedding:[...]}`）；须先于批量分支
+    const direct = asEmbedding(batch);
+    if (direct) return direct;
+    // 批量路径下第一项（`data:[{embedding}]` / `embeddings:[[...]]`）
     if (Array.isArray(batch) && batch.length > 0) {
       const first = batch[0];
       if (Array.isArray(first) && typeof first[0] === 'number') return first as number[];
       const vec = getByPath(first, mapping.itemEmbeddingPath);
       return asEmbedding(vec) ?? [];
     }
-    // 单条路径（如 ollama.embedding / data.0.embedding）
-    const single = asEmbedding(batch);
-    if (single) return single;
+    // 单条嵌套路径（如 data.0.embedding）
     const nested = getByPath(payload, mapping.itemEmbeddingPath);
     return asEmbedding(nested) ?? asEmbedding(getByPath(payload, 'embedding')) ?? [];
   }
 
-  private extractMany(payload: unknown, count: number): number[][] {
+  private extractMany(payload: unknown): number[][] {
     const { mapping } = this.opts;
     const batch = getByPath(payload, mapping.embeddingsPath);
     const out: number[][] = [];
+
+    // 扁平数字数组 = 单条向量回包，不是批量
+    const direct = asEmbedding(batch);
+    if (direct) {
+      out.push(direct);
+      return out;
+    }
 
     if (Array.isArray(batch)) {
       for (const item of batch) {
@@ -267,12 +280,7 @@ class HttpEmbeddingProvider implements EmbeddingProvider {
       const single = this.extractOne(payload);
       if (single.length > 0) out.push(single);
     }
-
-    // 补齐调用方期望的条数（协议异常时以实际返回为准）
-    while (out.length < count && out.length > 0 && out.length < 64) {
-      // 不重复填充
-      break;
-    }
+    // 协议异常时以实际返回条数为准，由调用方决定是否串行重试
     return out;
   }
 
@@ -302,7 +310,12 @@ class HttpEmbeddingProvider implements EmbeddingProvider {
   async embedBatch(texts: string[]): Promise<number[][]> {
     if (texts.length === 0) return [];
     if (!this.opts.supportsBatch) {
-      return Promise.all(texts.map((t) => this.embed(t)));
+      // 串行调用 embed，避免并发压垮单条接口
+      const out: number[][] = [];
+      for (const t of texts) {
+        out.push(await this.embed(t));
+      }
+      return out;
     }
 
     const res = await fetch(this.opts.url, {
@@ -322,7 +335,7 @@ class HttpEmbeddingProvider implements EmbeddingProvider {
       );
     }
     const data = (await res.json()) as unknown;
-    const many = this.extractMany(data, texts.length);
+    const many = this.extractMany(data);
     if (many.length >= 1) {
       if (many.length === texts.length) return many;
       if (texts.length > 1) return Promise.all(texts.map((t) => this.embed(t)));

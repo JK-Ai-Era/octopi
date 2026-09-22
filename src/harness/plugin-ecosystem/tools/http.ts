@@ -13,7 +13,7 @@
 
 import type { RegisteredTool } from '../../../core/types.js';
 import {
-  applyToolSummary,
+  applyToolOutputGate,
   resolveSupportBinding,
   type ToolSummarySupport,
 } from '../../capabilities/summary/index.js';
@@ -138,7 +138,7 @@ export function createHttpRequestTool(options?: HttpRequestToolOptions): Registe
         // 统一从 support（含配置 toolBindings）解析，避免 tools 再写死默认 binding
         const binding = resolveSupportBinding('http_request', support, 8000);
 
-        const applied = await applyToolSummary({
+        const applied = await applyToolOutputGate({
           tool: 'http_request',
           rawBody: responseBody,
           support: { ...support, binding },
