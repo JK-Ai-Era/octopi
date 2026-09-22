@@ -208,8 +208,10 @@ function splitByConnectors(cmd: string): { parts: string[]; connectors: Connecto
         i += 2;
         continue;
       }
-      // 单独的 & 是后台执行标记，不算连接符
-      current += ch;
+      // 单 `&` 既是后台标记也是命令分隔：`true & rm -rf /` 必须拆段
+      pushPart(parts, current);
+      current = '';
+      connectors.push('&');
       i++;
       continue;
     }

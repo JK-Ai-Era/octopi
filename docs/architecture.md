@@ -252,15 +252,16 @@ harness/capabilities/       # 横切公用能力（不计入业务领域计数�
 
 **职责**：工具调用风险评估、Shell 命令解析、安全降级、安全智能体。
 
+**分层（安全不可绕过）**：硬边界（确定有害，不受 `enforce` 影响）→ 始终接线的 `ToolCallRiskPolicy`（争议分档）→ 可配置仅 `enforce` / `allowedPaths` / `injectionSensitivity`。不透明载荷（`file_write.content` 等）不做 shell 元字符扫描。
+
 ```
 harness/security/
-├── default-security-guard.ts   # DefaultSecurityGuard — 五层防护实现
+├── default-security-guard.ts   # 硬边界 + 始终接线 RiskPolicy + Input/Output
 ├── default-risk-policy.ts      # DefaultToolCallRiskPolicy — 规则引擎
-├── risk-evaluator.ts           # 操作+目标组合风险评估
+├── risk-evaluator.ts           # 操作+目标组合风险评估 + 硬边界探测
 ├── shell-parser.ts             # Shell 命令解析器（4 层）
 ├── degradation.ts              # 6 种降级策略
 ├── capability-enforcer.ts      # 信任分级
-├── policy.ts                   # 安全策略
 └── index.ts
 ```
 

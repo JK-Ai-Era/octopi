@@ -301,8 +301,9 @@ export const MemoryConfigSchema = z.object({
 // ── 安全配置 Schema ──
 
 export const SecurityConfigSchema = z.object({
-  preset: z.enum(['development', 'testing', 'production', 'maximum']).optional(),
+  enforce: z.enum(['block', 'audit']).optional(),
   injectionSensitivity: z.enum(['low', 'medium', 'high']).optional(),
+  allowedPaths: z.array(z.string()).optional(),
 });
 
 // ── 并发控制配置 Schema ──

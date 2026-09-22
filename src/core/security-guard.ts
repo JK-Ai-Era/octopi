@@ -10,7 +10,7 @@
  * **不由** core/index.ts re-export（Kernel 入口不含 Harness 实现）。
  */
 
-// ── 接口 re-export（向后兼容） ──
+// ── 接口 re-export ──
 
 import type { SecurityViolation, SecurityAction } from './interfaces/security-guard.js';
 

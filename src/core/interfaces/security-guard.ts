@@ -18,7 +18,9 @@ export type SecurityViolationType =
   | 'path_traversal'
   | 'unauthorized_tool'
   | 'behavior_anomaly'
-  | 'prompt_leak';
+  | 'prompt_leak'
+  /** 确定灾难性破坏（递归删根/系统保护路径等） */
+  | 'destructive_operation';
 
 /** 安全违规 */
 export interface SecurityViolation {
@@ -73,17 +75,26 @@ export interface ToolCallRiskPolicy {
   };
 }
 
-/** 安全策略配置 */
+/**
+ * 安全策略配置
+ *
+ * 边界约定（安全不可绕过）：
+ * - **硬边界**（未注册工具 / 路径遍历 / allowedPaths 越界 / 下载执行·IEX·反弹 shell·清盘 / 递归删根·保护路径·file_delete）永远执行，不受 `enforce` 影响
+ * - **风险评估**（ToolCallRiskPolicy）永远接线；有争议、不确定的操作由策略分档，不在硬边界拦
+ * - 可配置的只有**处置**（`enforce`）、**范围**（`allowedPaths`）与**灵敏度**，没有总开关
+ */
 export interface SecurityGuardConfig {
+  /**
+   * 风险命中后的处置模式（硬边界除外）
+   * - `block`（默认）：按 severity 拦截
+   * - `audit`：只记事件，不拦
+   */
+  enforce?: 'block' | 'audit';
+  /** prompt injection / 敏感信息灵敏度 */
   injectionSensitivity?: 'low' | 'medium' | 'high';
   sensitivePatterns?: RegExp[];
-  checkInput?: boolean;
-  checkOutput?: boolean;
-  checkToolOutput?: boolean;
+  /** 绝对路径额外允许范围；空 = 不额外限制 */
   allowedPaths?: string[];
-  allowShellMeta?: boolean;
-  maxConsecutiveSameTool?: number;
-  maxConsecutiveErrors?: number;
   systemPrompt?: string;
 }
 

@@ -1391,8 +1391,18 @@ export class AgentBuilder {
       ...this._securityConfig,
       systemPrompt: this._securityConfig?.systemPrompt ?? systemPrompt,
     });
-    if (this._riskPolicy && security.setToolCallRiskPolicy) {
-      security.setToolCallRiskPolicy(this._riskPolicy);
+    // 风险策略永远接线（安全不可绕过）：未显式注入时用 workspace cwd 的默认实现
+    if (security.setToolCallRiskPolicy) {
+      const riskPolicy = this._riskPolicy ?? new (await import('../security/default-risk-policy.js')).DefaultToolCallRiskPolicy({
+        cwd: this._workspace?.trim() ? this._workspace : undefined,
+      });
+      security.setToolCallRiskPolicy(riskPolicy);
+    }
+    // 未注册工具硬边界：灌入工具面快照（空集 = 不校验，必须在 build 时接线）
+    if (security.setRegisteredTools) {
+      security.setRegisteredTools(
+        new Set(this._toolBus.listForAgent('default').map((t) => t.definition.name)),
+      );
     }
     const errorStrategy = this._errorStrategy ?? new DefaultErrorStrategy();
 

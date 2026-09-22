@@ -48,7 +48,9 @@
   }],
 
   "security": {
-    "preset": "production"
+    "enforce": "block",
+    "injectionSensitivity": "medium",
+    "allowedPaths": []
   },
 
   "budgetPolicy": {

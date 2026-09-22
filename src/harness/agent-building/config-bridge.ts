@@ -26,7 +26,6 @@ import type { BudgetPolicyConfig } from '../budget/budget.js';
 import type { ReliabilityConfig } from '../reliability/run-agent.js';
 import { AgentBuilder } from './builder.js';
 import type { SessionAwareRunner } from '../runner.js';
-import { SecurityPresets } from '../security/policy.js';
 import type { SecurityGuardConfig } from '../../core/security-guard.js';
 import type { RunGuardJsonConfig } from '../../config.js';
 import { DefaultRunGuard } from '../run-guard/default-run-guard.js';
@@ -73,22 +72,18 @@ export async function resolveProviders(config: NormalizedHarnessConfig): Promise
 // ── 安全配置解析 ──
 
 /**
- * 从配置中解析安全策略
+ * 从配置中解析安全策略（始终返回；无总开关）
+ *
+ * 硬边界与 ToolCallRiskPolicy 由 Guard/Builder 保证接线，
+ * 这里只归一化处置、范围与灵敏度。
  */
-export function resolveSecurityConfig(config: HarnessConfig): SecurityGuardConfig | undefined {
-  if (!config.security) return undefined;
-
-  // 如果指定了 preset，直接使用预设
-  if (config.security.preset) {
-    return SecurityPresets[config.security.preset];
-  }
-
-  // 否则从细粒度配置构建
-  if (config.security.injectionSensitivity) {
-    return { injectionSensitivity: config.security.injectionSensitivity };
-  }
-
-  return undefined;
+export function resolveSecurityConfig(config: HarnessConfig): SecurityGuardConfig {
+  const security = config.security ?? {};
+  return {
+    enforce: security.enforce ?? 'block',
+    injectionSensitivity: security.injectionSensitivity ?? 'medium',
+    allowedPaths: security.allowedPaths ?? [],
+  };
 }
 
 // ── 上下文引擎解析 ──
@@ -393,14 +388,12 @@ async function buildAgent(
     }
   }
 
-  // ── Security ──
-  if (shared.securityConfig) {
-    builder.securityPolicy(shared.securityConfig);
-    // 规则引擎：产生 tool_call.risk_unknown 后，由子系统目录加载的 safety-guard 兜底。
-    // 子系统自身参数（model/maxDurationMs 等）只写在其 config.yaml，不在本文件配置。
-    const { DefaultToolCallRiskPolicy } = await import('../security/default-risk-policy.js');
-    builder.withRiskPolicy(new DefaultToolCallRiskPolicy({ cwd: agentConfig.workspace }));
-  }
+  // ── Security（安全不可绕过：策略与 RiskPolicy 始终接线） ──
+  builder.securityPolicy(shared.securityConfig ?? {});
+  // 规则引擎：产生 tool_call.risk_unknown 后，由子系统目录加载的 safety-guard 兜底。
+  // 子系统自身参数（model/maxDurationMs 等）只写在其 config.yaml，不在本文件配置。
+  const { DefaultToolCallRiskPolicy } = await import('../security/default-risk-policy.js');
+  builder.withRiskPolicy(new DefaultToolCallRiskPolicy({ cwd: agentConfig.workspace }));
 
   // ── Budget + P2/P3 配置接线 ──
   if (shared.budgetConfig) {

@@ -14,7 +14,7 @@ export interface Redirect {
 }
 
 /** 管道/链式命令的连接方式 */
-export type Connector = '|' | '&&' | '||' | ';' | '\n';
+export type Connector = '|' | '&&' | '||' | ';' | '&' | '\n';
 
 /** 解析后的单条命令段 */
 export interface ParsedSegment {

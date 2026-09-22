@@ -132,8 +132,6 @@ export type {
 
 // ── Security ──
 export { CapabilityEnforcer, PluginTrustLevel } from './security/capability-enforcer.js';
-export { SecurityPresets, getSecurityPolicy } from './security/policy.js';
-export type { Environment } from './security/policy.js';
 
 // ── Reliability ──
 export { runAgentWithReliability, DEFAULT_RELIABILITY_CONFIG } from './reliability/index.js';

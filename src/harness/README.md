@@ -11,7 +11,7 @@
 | Context Management | `context/` | 消息窗口压缩入口、Token 估算、七层 ContextLayer 装配、Knowledge、`compact-key`（E4）；**结构压缩算法**委托 `capabilities/compact`，状态键仍 E4 |
 | Session ACL | `session-acl/` | 角色目录（五角色出厂）、grant/revoke、`authorizeRun`、`switch(preferred\|handoff)`（E6/I3） |
 | Tool Effect | `tool-effect/` | `toolIsolation` cwd 解析（I5；默认 `none`） |
-| Security | `security/` | 风险评估、Shell 解析、降级策略；安全事件经 `emitRunEvent` 附带 Run 身份 |
+| Security | `security/` | 硬边界 + RiskPolicy（安全不可绕过）；Shell 解析、降级策略；安全事件经 `emitRunEvent` 附带 Run 身份 |
 | Reliability | `reliability/` | 可靠性包装、HarnessLoopEvent、断路器、重试；`security_blocked` → Observer |
 | Plugin Ecosystem | `plugin-ecosystem/` | Plugin、Tool、Skill、MCP、命令 |
 | Multi-Agent | `multi-agent/` | Agent 注册发现、Swarm 编排、AgentProcess |

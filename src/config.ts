@@ -25,7 +25,7 @@
  *     "models": ["gpt-5.5"]
  *   }],
  *   "plugins": { "loadPaths": ["./plugins"] },
- *   "security": { "preset": "production" },
+ *   "security": { "enforce": "block" },
 
  *   "channels": [{ "type": "http", "port": 3000 }],
  *   "session": {
@@ -44,7 +44,6 @@ import type { GatewayConfig } from './integration/types/gateway-config.js';
 import type { ModelProvider } from './core/interfaces/model-provider.js';
 import type { SessionStore } from './core/interfaces/session-store.js';
 import type { SessionData } from './harness/session-types.js';
-import type { SecurityGuardConfig } from './core/security-guard.js';
 import { validateConfigOrThrow } from './config-schema.js';
 import { applyLegacyBudget, detectConfigMigrations } from './config-migrations.js';
 import { getOctopiHome } from './init.js';
@@ -669,12 +668,22 @@ export interface HarnessConfig {
       maxLength?: Partial<Record<'fact' | 'method' | 'norm', number>>;
     };
   };
-  /** 安全策略 */
+  /**
+   * 安全策略（安全不可绕过：无总开关）
+   *
+   * 硬边界与 ToolCallRiskPolicy 始终执行；此处只调处置/范围/灵敏度。
+   */
   security?: {
-    /** 预设名称 */
-    preset?: 'development' | 'testing' | 'production' | 'maximum';
+    /**
+     * 风险命中后的处置（硬边界不受影响）
+     * - `block`（默认）：按 severity 拦截
+     * - `audit`：只记事件，不拦
+     */
+    enforce?: 'block' | 'audit';
     /** 注入检测灵敏度 */
     injectionSensitivity?: 'low' | 'medium' | 'high';
+    /** 绝对路径额外允许范围 */
+    allowedPaths?: string[];
   };
   /** Channel 列表 */
   channels?: ChannelConfig[];

@@ -20,7 +20,6 @@ import {
   DefaultEventBus,
 } from '../src/core/index.js';
 import { BudgetPolicyEngine } from '../src/harness/budget/budget.js';
-import { DefaultSecurityGuard } from '../src/harness/security/default-security-guard.js';
 import type {
   ModelProvider,
   LLMStreamChunk,

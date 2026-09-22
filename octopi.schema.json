@@ -858,17 +858,15 @@
     },
     "security": {
       "type": "object",
-      "description": "安全策略配置",
+      "description": "安全策略（无总开关：硬边界与 RiskPolicy 始终执行）",
       "properties": {
-        "preset": {
+        "enforce": {
           "type": "string",
           "enum": [
-            "development",
-            "testing",
-            "production",
-            "maximum"
+            "block",
+            "audit"
           ],
-          "description": "安全预设"
+          "description": "风险命中后的处置；硬边界不受影响。block=按 severity 拦截，audit=只记事件不拦"
         },
         "injectionSensitivity": {
           "type": "string",
@@ -878,6 +876,13 @@
             "high"
           ],
           "description": "注入检测灵敏度"
+        },
+        "allowedPaths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "绝对路径额外允许范围"
         }
       }
     },

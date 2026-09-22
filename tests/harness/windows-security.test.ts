@@ -5,6 +5,7 @@ import {
   evaluateShellCommand,
   evaluateNonShellTool,
   resetSecurityPathCache,
+  detectCatastrophicRecursiveDelete,
 } from '../../src/harness/security/risk-evaluator.js';
 import type { ToolCall } from '../../src/core/types.js';
 
@@ -140,6 +141,44 @@ describe('Windows security regression', () => {
     it('rd on drive root → critical', () => {
       const risk = evaluateShellCommand('rd /s /q C:\\', cwd);
       expect(risk.level).toBe('critical');
+    });
+  });
+
+  describe('catastrophic recursive delete hard boundary (Windows)', () => {
+    it('rd /s drive root → hit', () => {
+      expect(detectCatastrophicRecursiveDelete('rd /s /q C:\\')).toContain('C:\\');
+    });
+
+    it('del /s protected → hit', () => {
+      expect(detectCatastrophicRecursiveDelete('del /s /q C:\\Windows\\System32')).not.toBeNull();
+    });
+
+    it('Remove-Item -Recurse protected → hit', () => {
+      expect(detectCatastrophicRecursiveDelete('Remove-Item -Recurse C:\\Windows')).not.toBeNull();
+      expect(detectCatastrophicRecursiveDelete('Remove-Item -Recurse:$true C:\\Windows')).not.toBeNull();
+    });
+
+    it('ri -r drive root → hit', () => {
+      expect(detectCatastrophicRecursiveDelete('ri -r C:\\')).not.toBeNull();
+    });
+
+    it('root globs and // prefix still hit', () => {
+      expect(detectCatastrophicRecursiveDelete('rm -rf /*')).not.toBeNull();
+      expect(detectCatastrophicRecursiveDelete('rm -rf C:\\*')).not.toBeNull();
+      expect(detectCatastrophicRecursiveDelete('rm -rf //usr')).not.toBeNull();
+    });
+
+    it('background & hides rm no longer', () => {
+      expect(detectCatastrophicRecursiveDelete('true & rm -rf /')).not.toBeNull();
+    });
+
+    it('cmd /c rd inline → hit', () => {
+      expect(detectCatastrophicRecursiveDelete('cmd /c rd /s /q C:\\')).not.toBeNull();
+    });
+
+    it('non-recursive del of single protected file is not hard-boundary recursive delete', () => {
+      // 单文件删除仍由 RiskPolicy 分档；硬边界只上收「递归删树」
+      expect(detectCatastrophicRecursiveDelete('del C:\\Windows\\System32\\drivers\\etc\\hosts')).toBeNull();
     });
   });
 

@@ -45,7 +45,6 @@ import { resolveModel, resolveModelRef, resolveCatalogEntry, parseModelRef } fro
 import { PluginManager } from '../../harness/plugin-ecosystem/plugins/manager.js';
 
 import { DefaultEventBus } from '../../core/primitives/event-bus.js';
-import { DefaultSecurityGuard } from '../../harness/security/default-security-guard.js';
 import { SessionAwareRunner } from '../../harness/runner.js';
 import { AgentRuntime, SessionRunnerDispatcher, ExplicitRouter } from '../../harness/agent-runtime/index.js';
 import { dispatchChannelMessage } from '../agent-runtime/channel-message-source.js';

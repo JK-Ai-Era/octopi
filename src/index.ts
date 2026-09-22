@@ -120,7 +120,6 @@ export type { SmartRouterConfig, Route, RoutingDecision } from './harness/contex
 
 // Harness 安全
 export { CapabilityEnforcer, PluginTrustLevel } from './harness/security/capability-enforcer.js';
-export { SecurityPresets, getSecurityPolicy } from './harness/security/policy.js';
 
 // Harness Plugin 系统
 export { PluginManager } from './harness/plugin-ecosystem/plugins/manager.js';

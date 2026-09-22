@@ -4,8 +4,13 @@
  * 从 Core 层迁移到 Harness 层：这是策略实现，不是机制。
  * Core 层只保留 SecurityGuard 接口和验证函数。
  *
- * 五层防护：InputGuard + OutputGuard + ToolGuard + BehaviorGuard
- * 基于模式匹配，不需要外部依赖。
+ * 分层（安全不可绕过）：
+ * 1. **硬边界** — 只拦完全确定有害的操作，永远执行，不受 `enforce` 影响
+ * 2. **ToolCallRiskPolicy** — 永远接线；模糊/有争议操作由风险策略分档
+ * 3. **Input/Output** — prompt injection 与敏感信息检查始终开启
+ *
+ * 不对不透明载荷（file_write.content 等）做 shell 元字符扫描：
+ * `fs.writeFile` 不解释 `` ` `` / `$()` / `${}`，Markdown 代码与文档示例是合法内容。
  */
 
 import { isAbsolute } from 'node:path';
@@ -22,6 +27,13 @@ import type {
   ToolCallRiskPolicy,
   BehaviorContext,
 } from '../../core/interfaces/security-guard.js';
+import { DefaultToolCallRiskPolicy } from './default-risk-policy.js';
+import {
+  detectCatastrophicRecursiveDelete,
+  detectDownloadToInterpreter,
+  detectDiskWipe,
+  isProtectedPath,
+} from './risk-evaluator.js';
 
 /**
  * 路径是否位于 base 之下（段边界，拒绝 project 绕过 project-evil）
@@ -118,44 +130,54 @@ const DEFAULT_SENSITIVE_PATTERNS = [
 ];
 
 /**
- * Shell 命令注入模式（Core 层硬边界）
+ * 硬边界 — 字符串级模式（下载执行 / 反弹 shell / PS 摇篮）
  *
- * 只拦截确定性危险模式。&&、||、;、重定向等操作符
- * 本身不是危险，由 Harness 层 DefaultToolCallRiskPolicy 结构化分析。
- */
-/**
- * Shell 元字符模式
- *
- * 用于检测非 shell 工具参数中的 shell 注入。
- * shell 工具的参数本身就是 shell 命令，不应拦截这些模式。
- * 非 shell 工具（web_fetch、file_read 等）参数中出现这些模式才是注入信号。
- */
-const SHELL_META_PATTERNS = [
-  { pattern: /\$\(/, desc: 'subshell execution \$(...)' },
-  { pattern: /`[^`]+`/, desc: 'backtick subshell `...`' },
-  { pattern: /\|\s*(bash|sh|zsh)/i, desc: 'pipe to shell interpreter' },
-  { pattern: /;\s*(bash|sh|zsh|exec|rm|curl|wget)/i, desc: 'chained shell command' },
-  { pattern: /&&\s*(bash|sh|zsh|exec|rm|curl|wget)/i, desc: 'conditional shell execution' },
-  { pattern: /\$\{[^}]+\}/, desc: 'shell variable expansion ${...}' },
-];
-
-/**
- * Shell 工具真正的危险模式（极少数）
- *
- * 即使是 shell 工具，也应拦截的确定性危险操作。
- * 只包含"无论上下文都危险"的模式。
+ * 下载→解释器、清盘、灾难删由 risk-evaluator 结构化探测（命令位判定）。
+ * 不扫 content 载荷；不把子 shell / 变量展开当硬拦。
  */
 const SHELL_TOOL_DANGEROUS_PATTERNS = [
-  { pattern: /curl\s+[^|]*\|\s*(bash|sh|zsh)/i, desc: 'curl pipe to shell (remote code execution)' },
-  { pattern: /wget\s+[^|]*\|\s*(bash|sh|zsh)/i, desc: 'wget pipe to shell (remote code execution)' },
+  // PowerShell 下载执行摇篮（含 irm / | iex / System.Net.WebClient）
+  {
+    pattern: /\b(?:iex|invoke-expression)\b[\s\S]{0,120}\b(?:iwr|irm|invoke-webrequest|invoke-restmethod|new-object\s+(?:system\.)?net\.webclient|\[net\.webclient\])/i,
+    desc: 'PowerShell IEX download cradle (remote code execution)',
+  },
+  {
+    pattern: /\b(?:iwr|irm|invoke-webrequest|invoke-restmethod)\b[\s\S]{0,80}\|\s*(?:iex|invoke-expression)\b/i,
+    desc: 'PowerShell download | iex cradle (remote code execution)',
+  },
+  {
+    pattern: /(?:system\.)?net\.webclient[\s\S]{0,80}\.downloadstring\s*\(/i,
+    desc: 'PowerShell WebClient.DownloadString cradle (remote code execution)',
+  },
+  {
+    pattern: /\[net\.webclient\]::new\s*\(/i,
+    desc: 'PowerShell [Net.WebClient]::new cradle (remote code execution)',
+  },
+  // 反弹 shell
+  {
+    pattern: /\/dev\/tcp\/(?:\d{1,3}(?:\.\d{1,3}){3}|[a-z0-9][a-z0-9.-]*)\/\d+/i,
+    desc: 'reverse shell via /dev/tcp (remote control)',
+  },
+  {
+    pattern: /\b(?:nc|ncat|netcat)\b[^|;&]*\s(?:-e|-c|--exec)\s+(?:\/bin\/)?(?:ba|z|k|da|a)?sh\b/i,
+    desc: 'reverse shell via nc -e/-c/--exec (remote control)',
+  },
+  {
+    pattern: /\b(?:nc|ncat|netcat)\b[^|;&]*\s(?:-e|-c|--exec)\s+cmd(?:\.exe)?\b/i,
+    desc: 'reverse shell via nc -e cmd (remote control)',
+  },
 ];
 
 /** 工具名称分类 */
 const SHELL_TOOLS = new Set(['shell', 'exec', 'bash', 'terminal', 'run_command', 'execute']);
 /** 写类文件工具（路径遍历/保护路径检查） */
 const FILE_WRITE_TOOLS = new Set([
-  'file_write', 'file_edit', 'file_delete',
+  'file_write', 'file_edit', 'file_delete', 'delete_file',
   'write_file', 'write', 'edit',
+]);
+/** 删类文件工具（保护路径硬边界） */
+const FILE_DELETE_TOOLS = new Set([
+  'file_delete', 'delete_file',
 ]);
 /** 读类文件工具 */
 const FILE_READ_TOOLS = new Set([
@@ -163,21 +185,19 @@ const FILE_READ_TOOLS = new Set([
   'read_file', 'read',
 ]);
 const FILE_TOOLS = new Set([...FILE_WRITE_TOOLS, ...FILE_READ_TOOLS]);
-const HTTP_TOOLS = new Set(['http_get', 'http_post', 'http_put', 'http_delete', 'fetch', 'web_fetch', 'curl']);
 
 // ── 实现 ──
 
 /**
  * DefaultSecurityGuard — 安全守卫实现
  *
- * 五层防护：InputGuard + OutputGuard + ToolGuard + BehaviorGuard
- * 基于模式匹配，不需要外部依赖。
+ * 硬边界 + 始终接线的 ToolCallRiskPolicy；Input/Output 检查不可关闭。
  */
 export class DefaultSecurityGuard {
   private config: Required<SecurityGuardConfig>;
   private eventBus: EventBus;
   private registeredTools: Set<string>;
-  private riskPolicy?: ToolCallRiskPolicy;
+  private riskPolicy: ToolCallRiskPolicy;
 
   constructor(
     eventBus: EventBus,
@@ -187,17 +207,14 @@ export class DefaultSecurityGuard {
     this.eventBus = eventBus;
     this.registeredTools = registeredTools ?? new Set();
     this.config = {
+      enforce: config?.enforce ?? 'block',
       injectionSensitivity: config?.injectionSensitivity ?? 'medium',
       sensitivePatterns: config?.sensitivePatterns ?? DEFAULT_SENSITIVE_PATTERNS,
-      checkInput: config?.checkInput ?? true,
-      checkOutput: config?.checkOutput ?? true,
-      checkToolOutput: config?.checkToolOutput ?? true,
       allowedPaths: config?.allowedPaths ?? [],
-      allowShellMeta: config?.allowShellMeta ?? false,
-      maxConsecutiveSameTool: config?.maxConsecutiveSameTool ?? 5,
-      maxConsecutiveErrors: config?.maxConsecutiveErrors ?? 3,
       systemPrompt: config?.systemPrompt ?? '',
     };
+    // 风险策略永远接线；Builder 可再注入带 cwd 的实例
+    this.riskPolicy = new DefaultToolCallRiskPolicy();
   }
 
   /**
@@ -208,10 +225,7 @@ export class DefaultSecurityGuard {
   }
 
   /**
-   * 设置工具调用风险策略（由 Harness 层通过 Builder 注入）
-   *
-   * 注入后，checkToolCall 会用策略替代旧的正则匹配。
-   * 未注入时，保持向后兼容的默认行为。
+   * 覆盖工具调用风险策略（Builder 注入带 workspace cwd 的实例）
    */
   setToolCallRiskPolicy(policy: ToolCallRiskPolicy): void {
     this.riskPolicy = policy;
@@ -220,7 +234,7 @@ export class DefaultSecurityGuard {
   /**
    * 获取当前注入的风险策略（用于测试和调试）
    */
-  getToolCallRiskPolicy(): ToolCallRiskPolicy | undefined {
+  getToolCallRiskPolicy(): ToolCallRiskPolicy {
     return this.riskPolicy;
   }
 
@@ -260,28 +274,31 @@ export class DefaultSecurityGuard {
   // ── InputGuard ──
 
   /**
-   * 检查用户输入
+   * 检查用户输入（始终开启）
    */
   checkUserInput(input: string): SecurityCheckResult {
-    if (!this.config.checkInput) return { isClean: true, violations: [] };
     return this.checkInjection(input, 'user_input');
   }
 
   // ── OutputGuard ──
 
   /**
-   * 检查模型输出（敏感数据 + 系统提示泄露）
+   * 检查模型输出（敏感数据 + 系统提示泄露，始终开启）
    */
   checkModelOutput(output: string): SecurityCheckResult {
-    if (!this.config.checkOutput) return { isClean: true, violations: [] };
-
     const violations: SecurityViolation[] = [];
 
     // 1. 检查敏感信息泄露
     for (const pattern of this.config.sensitivePatterns) {
-      const regex = new RegExp(pattern.source, pattern.flags);
+      // 强制 g，避免自定义无 g 正则导致 lastIndex 不推进而死循环
+      const flags = pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`;
+      const regex = new RegExp(pattern.source, flags);
       let match;
       while ((match = regex.exec(output)) !== null) {
+        if (match[0] === '') {
+          regex.lastIndex++;
+          continue;
+        }
         violations.push({
           type: 'sensitive_data',
           severity: 'high',
@@ -314,19 +331,31 @@ export class DefaultSecurityGuard {
   }
 
   /**
-   * 检查工具输出（注入检测）
+   * 检查工具输出（注入检测，始终开启）
    */
   checkToolOutput(output: string): SecurityCheckResult {
-    if (!this.config.checkToolOutput) return { isClean: true, violations: [] };
     return this.checkInjection(output, 'tool_output');
   }
 
   // ── ToolGuard ──
 
   /**
-   * 检查工具调用（命令注入 + 路径遍历 + 未授权工具）
+   * 检查工具调用
+   *
+   * 1. 硬边界：未注册工具、路径遍历、allowedPaths 越界、下载执行/摇篮/反弹 shell/清盘、递归删根·保护路径
+   * 2. ToolCallRiskPolicy：其余风险分档（永远接线）
    */
   checkToolCall(call: ToolCall): SecurityCheckResult {
+    const hardViolations = this.checkHardBoundaries(call);
+    return this.assessWithRiskPolicy(call, hardViolations);
+  }
+
+  /**
+   * 硬边界 — 只拦完全确定有害的操作
+   *
+   * 不受 `enforce: audit` 影响；不对 content 等载荷做元字符匹配。
+   */
+  private checkHardBoundaries(call: ToolCall): SecurityViolation[] {
     const violations: SecurityViolation[] = [];
 
     // 1. 工具白名单校验（硬边界，不可绕过）
@@ -338,102 +367,48 @@ export class DefaultSecurityGuard {
       });
     }
 
-    // 2. 如果注入了风险策略，用策略替代旧的正则匹配
-    if (this.riskPolicy) {
-      try {
-        const decision = this.riskPolicy.assess(call);
-
-        // 映射风险等级到违规严重性
-        const severityMap: Record<string, SecurityViolation['severity']> = {
-          low: 'low',
-          medium: 'medium',
-          high: 'high',
-          critical: 'critical',
-        };
-
-        if (decision.level === 'unknown') {
-          // unknown → 放行，通知 Engine 调用安全智能体
-          // 事件发射是通知性（审计/日志），不是触发性。
-          // 触发由 riskUnknown 标记 + Engine 的 beforeToolExecution 控制。
-          this.emitRunEvent({
-            type: 'tool_call.risk_unknown',
-            timestamp: Date.now(),
-            data: { toolCall: call, decision },
-          });
-          // 返回 clean，让引擎继续走到 beforeToolExecution 钩子
-          return { isClean: true, violations, riskUnknown: true };
+    // 2. Shell 工具：远程代码执行 + 递归删根/保护路径 + 清盘
+    if (this.isShellTool(call.name)) {
+      const command = this.getCommandString(call);
+      if (command) {
+        for (const { pattern, desc } of SHELL_TOOL_DANGEROUS_PATTERNS) {
+          if (pattern.test(command)) {
+            violations.push({
+              type: 'command_injection',
+              severity: 'critical',
+              description: `工具 "${call.name}" 参数包含危险模式: ${desc}`,
+            });
+            break;
+          }
         }
-
-        if (decision.level !== 'low') {
-          const severity = severityMap[decision.level] ?? 'medium';
-          violations.push({
-            type: 'policy_violation',
-            severity,
-            description: decision.reason,
-          });
-
-          this.emitRunEvent({
-            type: AgentEvents.INJECTION_DETECTED,
-            timestamp: Date.now(),
-            data: { source: 'risk_policy', toolName: call.name, decision },
-          });
-        }
-
-        return { isClean: violations.length === 0, violations };
-      } catch (err) {
-        // 策略失效 → 安全默认：放行，交给下游安全策略/子系统兜底
-        // 事件发射是通知性（审计/日志），不是触发性。
-        this.emitRunEvent({
-          type: 'tool_call.risk_unknown',
-          timestamp: Date.now(),
-          data: { toolCall: call, error: err instanceof Error ? err.message : String(err) },
-        });
-        return { isClean: true, violations, riskUnknown: true };
-      }
-    }
-
-    // 3. 未注入策略 → 保持向后兼容的默认行为（旧正则匹配）
-    return this.checkToolCallLegacy(call, violations);
-  }
-
-  /**
-   * 旧的 checkToolCall 逻辑（向后兼容）
-   *
-   * 当未注入 ToolCallRiskPolicy 时使用。
-   * 基于正则模式匹配，覆盖命令注入、路径遍历、网络外传。
-   */
-  private checkToolCallLegacy(call: ToolCall, violations: SecurityViolation[]): SecurityCheckResult {
-    const args = JSON.stringify(call.arguments ?? {});
-
-    // Shell 工具：只拦截真正危险的操作（curl|bash 等远程代码执行）
-    if (this.isShellTool(call.name) && !this.config.allowShellMeta) {
-      for (const { pattern, desc } of SHELL_TOOL_DANGEROUS_PATTERNS) {
-        if (pattern.test(args)) {
+        const downloadExec = detectDownloadToInterpreter(command);
+        if (downloadExec) {
           violations.push({
             type: 'command_injection',
             severity: 'critical',
-            description: `工具 "${call.name}" 参数包含危险模式: ${desc}`,
+            description: `工具 "${call.name}" ${downloadExec}`,
           });
-          break;
         }
-      }
-    }
-
-    // 非 Shell 工具：参数中出现 shell 元字符 = 注入尝试
-    if (!this.isShellTool(call.name) && !this.isHttpTool(call.name)) {
-      for (const { pattern, desc } of SHELL_META_PATTERNS) {
-        if (pattern.test(args)) {
+        const wipe = detectDiskWipe(command);
+        if (wipe) {
           violations.push({
-            type: 'command_injection',
-            severity: 'high',
-            description: `工具 "${call.name}" 参数包含 shell 元字符（疑似注入）: ${desc}`,
+            type: 'destructive_operation',
+            severity: 'critical',
+            description: `工具 "${call.name}" ${wipe}`,
           });
-          break;
+        }
+        const catastrophic = detectCatastrophicRecursiveDelete(command);
+        if (catastrophic) {
+          violations.push({
+            type: 'destructive_operation',
+            severity: 'critical',
+            description: `工具 "${call.name}" ${catastrophic}`,
+          });
         }
       }
     }
 
-    // 路径遍历检测
+    // 3. 文件工具路径：遍历 + allowedPaths 越界 + 删保护路径（不扫 content）
     if (this.isFileTool(call.name)) {
       const pathValue = call.arguments?.path ?? call.arguments?.file ?? call.arguments?.filename ?? '';
       if (typeof pathValue === 'string' && pathValue) {
@@ -454,29 +429,94 @@ export class DefaultSecurityGuard {
             });
           }
         }
-      }
-    }
-
-    // 网络外传检测
-    if (this.isHttpTool(call.name)) {
-      const method = (typeof call.arguments?.method === 'string' ? call.arguments.method : 'GET').toUpperCase();
-      if (method === 'POST' || method === 'PUT') {
-        const body = JSON.stringify(call.arguments?.body ?? call.arguments?.data ?? '');
-        if (this.containsSensitivePattern(body)) {
+        // 删除根 / 系统保护路径 = 确定灾难（file_write 到保护路径仍归 RiskPolicy）
+        if (FILE_DELETE_TOOLS.has(call.name) && isProtectedPath(pathValue)) {
           violations.push({
-            type: 'sensitive_data',
+            type: 'destructive_operation',
             severity: 'critical',
-            description: `工具 "${call.name}" 请求体中包含敏感数据模式（可能的数据外传）`,
+            description: `工具 "${call.name}" 删除保护路径: "${pathValue}"`,
           });
         }
       }
     }
 
-    if (violations.length > 0) {
+    return violations;
+  }
+
+  /**
+   * 风险策略评估（永远执行）
+   *
+   * - low → 放行
+   * - unknown → riskUnknown（交给安全智能体）
+   * - medium+ → 记 violation；`enforce: audit` 时降为 medium（只告警不拦），硬边界不受影响
+   */
+  private assessWithRiskPolicy(
+    call: ToolCall,
+    hardViolations: SecurityViolation[],
+  ): SecurityCheckResult {
+    let decision;
+    try {
+      decision = this.riskPolicy.assess(call);
+    } catch (err) {
+      // 策略异常：只读 fail-open（交下游），写类 fail-closed（至少 medium 不直接放行写）
+      this.emitRunEvent({
+        type: 'tool_call.risk_unknown',
+        timestamp: Date.now(),
+        data: { toolCall: call, error: err instanceof Error ? err.message : String(err) },
+      });
+      const isWriteCall = FILE_WRITE_TOOLS.has(call.name) || this.isShellTool(call.name);
+      const violations = [...hardViolations];
+      if (isWriteCall) {
+        violations.push({
+          type: 'policy_violation',
+          severity: 'medium',
+          description: 'RiskPolicy 不可用，写类调用保守告警（enforce=block 时 medium 不拦写，由 unknown 路径升级）',
+        });
+      }
+      return { isClean: violations.length === 0, violations, riskUnknown: true };
+    }
+
+    if (decision.level === 'unknown') {
+      this.emitRunEvent({
+        type: 'tool_call.risk_unknown',
+        timestamp: Date.now(),
+        data: { toolCall: call, decision },
+      });
+      return { isClean: hardViolations.length === 0, violations: hardViolations, riskUnknown: true };
+    }
+
+    const riskViolations: SecurityViolation[] = [];
+    if (decision.level !== 'low') {
+      const severityMap: Record<string, SecurityViolation['severity']> = {
+        low: 'low',
+        medium: 'medium',
+        high: 'high',
+        critical: 'critical',
+      };
+      let severity = severityMap[decision.level] ?? 'medium';
+      // audit：风险发现只告警；硬边界 severity 原样保留
+      if (this.config.enforce === 'audit' && (severity === 'high' || severity === 'critical')) {
+        severity = 'medium';
+      }
+      riskViolations.push({
+        type: 'policy_violation',
+        severity,
+        description: decision.reason,
+      });
+
       this.emitRunEvent({
         type: AgentEvents.INJECTION_DETECTED,
         timestamp: Date.now(),
-        data: { source: 'tool_call', toolName: call.name, violations },
+        data: { source: 'risk_policy', toolName: call.name, decision },
+      });
+    }
+
+    const violations = [...hardViolations, ...riskViolations];
+    if (hardViolations.length > 0) {
+      this.emitRunEvent({
+        type: AgentEvents.INJECTION_DETECTED,
+        timestamp: Date.now(),
+        data: { source: 'hard_boundary', toolName: call.name, violations: hardViolations },
       });
     }
 
@@ -540,18 +580,12 @@ export class DefaultSecurityGuard {
     return FILE_TOOLS.has(name);
   }
 
-  /** 判断是否为 HTTP 工具 */
-  private isHttpTool(name: string): boolean {
-    return HTTP_TOOLS.has(name);
-  }
-
-  /** 检查内容中是否包含敏感模式 */
-  private containsSensitivePattern(content: string): boolean {
-    for (const pattern of this.config.sensitivePatterns) {
-      const regex = new RegExp(pattern.source, pattern.flags);
-      if (regex.test(content)) return true;
-    }
-    return false;
+  /** 提取可能作为命令执行的字段（仅 shell 工具硬边界用） */
+  private getCommandString(call: ToolCall): string | null {
+    if (typeof call.arguments?.command === 'string') return call.arguments.command;
+    if (typeof call.arguments?.cmd === 'string') return call.arguments.cmd;
+    if (typeof call.arguments?.script === 'string') return call.arguments.script;
+    return null;
   }
 
   /** 检查系统提示泄露 */

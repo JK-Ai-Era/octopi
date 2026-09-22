@@ -191,8 +191,11 @@ function generateDefaultConfig(homeDir: string, agentId: string = 'default'): ob
     },
     // budgetPolicy：默认仅 wall-clock 安全阀（6h）；无 nominal token hard（arch/budget-redesign.md）
     // behavior → runGuard；context → capabilities summary/compact；成本策略 P3 budgetPolicy.units
+    // 安全不可绕过：硬边界 + RiskPolicy 始终执行；此处只调处置/范围/灵敏度
     security: {
-      preset: 'production',
+      enforce: 'block',
+      injectionSensitivity: 'medium',
+      allowedPaths: [],
     },
     channels: [
       {

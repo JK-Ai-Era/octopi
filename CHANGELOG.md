@@ -1,3 +1,39 @@
+## v0.48.0 (unreleased)
+
+### refactor(security)!: 安全不可绕过 — 无总开关，硬边界 + 始终接线 RiskPolicy
+
+**Breaking**
+
+- 删除 `SecurityPresets` / `getSecurityPolicy` / `security.preset` / `security/policy.ts`
+- `SecurityGuardConfig` 删除 `checkInput` / `checkOutput` / `checkToolOutput` / `allowShellMeta`（检查始终开启）
+- 删除 `checkToolCallLegacy` 与 `SHELL_META_PATTERNS`（含 Markdown 反引号误杀来源）
+
+**分层**
+
+1. **硬边界**（永远执行，不受 `enforce` 影响）— 只拦确定有害：
+   - 未注册工具、路径遍历、`allowedPaths` 越界
+   - 下载并执行（管道链下载源 × 任意解释器，含 `/bin/bash`、`env bash`、`tee|bash`）
+   - PowerShell IEX/WebClient/`irm`/`| iex` 摇篮
+   - 反弹 shell（`/dev/tcp/`、`nc -e/-c/--exec`）
+   - 格式化/清盘（`mkfs*`、`Format-Volume`、`Clear-Disk`、`diskutil erase*`、`format X:`，命令位判定）
+   - 递归删根/盘符根/系统保护路径（含根通配 `/*`；Windows `rd`/`del`/`Remove-Item` 及 `powershell -Command`/`cmd /c` 内联）；`file_delete` 删保护路径
+2. **ToolCallRiskPolicy**（永远接线）— 模糊/有争议操作分档；Builder 注入 workspace cwd 实例
+3. **可配置只有**：`enforce: block|audit`、`allowedPaths`、`injectionSensitivity`
+
+**误杀修复**
+
+- `file_write`/`file_edit` 的 `content` 等不透明载荷不扫 shell 元字符（Markdown 反引号 / 代码块 / 文档里的 `$(...)` 合法）
+- path 含 `$(...)` 不再当 `command_injection`
+- `enforce: audit` 时 RiskPolicy high/critical 降为 medium 告警；硬边界 severity 原样
+
+**实现要点**
+
+- 新增 `destructive_operation`；`detectCatastrophicRecursiveDelete` / `detectDownloadToInterpreter` / `detectDiskWipe` / `isProtectedPath`
+- 路径折叠重复分隔符（`//etc`）；根级通配归 protected；shell 单 `&` 拆段；`cmdKey` 取 basename
+- Builder 接线 `setRegisteredTools`；`delete_file` 进 FILE_TOOLS；`http_request` 进 HTTP 分类
+- `checkModelOutput` 强制 `g` 正则，避免自定义 sensitivePatterns 死循环
+- schema / example / init 同步为 `enforce` / `allowedPaths` / `injectionSensitivity`
+
 ## v0.47.0 (2026-09-27)
 
 ### feat(history)!: session_search/read + Session 存储收敛

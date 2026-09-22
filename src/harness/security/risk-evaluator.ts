@@ -172,14 +172,24 @@ function pathContainsSegment(path: string, segment: string): boolean {
 }
 
 /**
+ * 根级通配：`/` + `*`、`/` + `*`/`*`、`C:\*` — 与根/盘符根同级的不可逆损坏
+ * （注释避开字面 star-slash，避免提前闭合块注释）
+ */
+function isRootGlob(p: string): boolean {
+  if (/^\/+\*(?:\/\*)*$/.test(p)) return true;
+  if (/^[A-Za-z]:[\\/]\*(?:[\\/]\*)*$/.test(p)) return true;
+  return false;
+}
+
+/**
  * 分类目标路径的风险
  */
 function classifyPath(path: string, cwd?: string): PathRisk {
   // 规范化路径
   const normalized = normalizePath(path, cwd);
 
-  // 根路径 / 盘符根（不可逆损坏）
-  if (normalized === '/' || isDriveRoot(normalized)) {
+  // 根路径 / 盘符根 / 根级通配（不可逆损坏）
+  if (normalized === '/' || isDriveRoot(normalized) || isRootGlob(normalized)) {
     return 'protected';
   }
 
@@ -230,7 +240,7 @@ function classifyPath(path: string, cwd?: string): PathRisk {
 }
 
 /**
- * 规范化路径（处理相对路径）
+ * 规范化路径（处理相对路径；折叠重复分隔符，拒绝 `//etc` 绕过）
  */
 function normalizePath(path: string, cwd?: string): string {
   // ~ 展开（POSIX ~/ 与 Windows ~\）
@@ -239,17 +249,31 @@ function normalizePath(path: string, cwd?: string): string {
     if (path === '~') return home;
     return resolve(home, path.slice(2));
   }
-  if (isAbsolutePath(path) || !cwd) {
-    return path;
+
+  let p = path;
+  if (p.startsWith('\\\\')) {
+    // UNC：只折叠 share 之后的重复分隔符
+    p = '\\\\' + p.slice(2).replace(/[\\/]{2,}/g, (m) => (m.includes('\\') ? '\\' : '/'));
+  } else if (/^[A-Za-z]:/.test(p)) {
+    // 盘符路径：折叠重复 `\` 或 `/`
+    p = p.replace(/\\{2,}/g, '\\').replace(/\/{2,}/g, '/');
+  } else {
+    // POSIX：`//etc` → `/etc`
+    p = p.replace(/\/{2,}/g, '/');
   }
-  return resolve(cwd, path);
+
+  if (isAbsolutePath(p) || !cwd) {
+    return p;
+  }
+  return resolve(cwd, p);
 }
 
 // ── 操作风险分类 ──
 
-/** 命令名统一小写比较（Windows 命令大小写不敏感） */
+/** 命令名统一小写 + basename（`/bin/rm`、`RM.EXE` → `rm`） */
 function cmdKey(cmd: string): string {
-  return cmd.toLowerCase();
+  const base = cmd.split(/[\\/]/).pop() ?? cmd;
+  return base.toLowerCase().replace(/\.exe$/i, '');
 }
 
 /** 只读命令 */
@@ -433,13 +457,15 @@ export function evaluateShellCommand(
 
 // ── 段评估 ──
 
-/** 递归/子树删除标记：rm -r/-rf/-R、PowerShell -Recurse、cmd del /s */
+/** 递归/子树删除标记：rm -r/-rf、PowerShell -Recurse[=…]、cmd del /s */
 function hasRecursiveFlag(args: string[]): boolean {
   return args.some((a) => {
     const lower = a.toLowerCase();
     return (
-      a === '-r' || a === '-rf' || a === '-R' || a === '-fr' ||
-      lower === '-recurse' || lower === '/s' || lower === '-s'
+      lower === '-r' || lower === '-rf' || lower === '-fr' ||
+      lower === '--recursive' || lower === '-recurse' ||
+      lower.startsWith('-recurse:') || lower.startsWith('--recursive:') ||
+      lower === '/s' || lower === '-s'
     );
   });
 }
@@ -664,6 +690,195 @@ function evaluatePathRisk(path: string, pathRisk: PathRisk): RiskFactor | null {
   };
 }
 
+// ── 硬边界探测（DefaultSecurityGuard 调用；不受 enforce 影响） ──
+
+/**
+ * 路径是否落在保护区（根 / 盘符根 / 系统核心目录）
+ *
+ * @param path - 目标路径
+ * @param cwd - 可选工作目录（解析相对路径）
+ * @returns 是否为 protected 路径
+ */
+export function isProtectedPath(path: string, cwd?: string): boolean {
+  return classifyPath(path, cwd) === 'protected';
+}
+
+/** 删除命令目标参数（过滤选项；保留路径） */
+function extractDeleteTargets(args: string[]): string[] {
+  return args.filter((a) => {
+    if (a.startsWith('-')) return false;
+    // cmd/PowerShell 选项：/s /q /f 等（单字母或短选项），排除看起来像路径的
+    if (/^\/[a-zA-Z?]$/.test(a) || /^\/(recurse|force|quiet)$/i.test(a)) return false;
+    return true;
+  });
+}
+
+/**
+ * 解释器内联脚本参数（powershell -Command / cmd /c / bash -c …）
+ *
+ * 这些形态下真实删除命令在参数串里，而不是 seg.command。
+ */
+const INTERPRETER_INLINE_FLAGS: Record<string, string[]> = {
+  'powershell': ['-command', '-c'],
+  'powershell.exe': ['-command', '-c'],
+  'pwsh': ['-command', '-c'],
+  'pwsh.exe': ['-command', '-c'],
+  'cmd': ['/c', '/k'],
+  'cmd.exe': ['/c', '/k'],
+  'bash': ['-c'],
+  'sh': ['-c'],
+  'zsh': ['-c'],
+};
+
+/** 提取解释器内联脚本文本（跳过 -EncodedCommand 等无法确定性解码的形态） */
+function extractInlinePayloads(seg: ParsedSegment): string[] {
+  const flags = INTERPRETER_INLINE_FLAGS[cmdKey(seg.command)];
+  if (!flags) return [];
+  for (let i = 0; i < seg.args.length; i++) {
+    const arg = seg.args[i].toLowerCase();
+    if (!flags.includes(arg)) continue;
+    // 脚本可能是单 token（引号包一串），也可能是 flag 后其余参数：cmd /c rd /s /q C:\
+    const rest = seg.args.slice(i + 1).join(' ').trim();
+    return rest ? [rest] : [];
+  }
+  return [];
+}
+
+function detectCatastrophicRecursiveDeleteInSegments(
+  segments: ParsedSegment[],
+  cwd: string | undefined,
+  depth: number,
+): string | null {
+  for (const seg of segments) {
+    // 解释器内联：powershell -Command "Remove-Item -Recurse C:\Windows"
+    if (depth < 3) {
+      for (const payload of extractInlinePayloads(seg)) {
+        const inner = parseShellCommand(payload);
+        if (inner.parsed) {
+          const hit = detectCatastrophicRecursiveDeleteInSegments(inner.segments, cwd, depth + 1);
+          if (hit) return hit;
+        }
+      }
+    }
+
+    const key = cmdKey(seg.command);
+    if (!DELETE_COMMANDS.has(key)) continue;
+    if (!hasRecursiveFlag(seg.args)) continue;
+
+    for (const target of extractDeleteTargets(seg.args)) {
+      if (isProtectedPath(target, cwd)) {
+        return `递归删除保护路径: ${target}`;
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * 硬边界：递归删除根 / 盘符根 / 系统保护路径
+ *
+ * 确定灾难、不可逆，无论上下文都应拦；不受 `enforce: audit` 影响。
+ * 覆盖 POSIX rm 与 Windows：rd/del/Remove-Item/ri，以及
+ * `powershell -Command` / `cmd /c` 内联形态。
+ * 项目内目录、临时区、非递归删单文件仍归 RiskPolicy 分档。
+ *
+ * @param command - shell 命令串
+ * @param cwd - 可选工作目录
+ * @returns 命中时返回描述，否则 null
+ */
+export function detectCatastrophicRecursiveDelete(command: string, cwd?: string): string | null {
+  const parsed = parseShellCommand(command);
+  if (!parsed.parsed) return null;
+  return detectCatastrophicRecursiveDeleteInSegments(parsed.segments, cwd, 0);
+}
+
+/** 管道/链上的解释器（basename） */
+const INTERPRETER_BASES = new Set([
+  'sh', 'bash', 'zsh', 'dash', 'ksh', 'fish', 'ash',
+  'python', 'python3', 'ruby', 'perl', 'node', 'php',
+  'lua', 'tclsh', 'rscript', 'scala', 'groovy',
+  'powershell', 'pwsh', 'cmd',
+]);
+
+/** 下载源命令 basename */
+const DOWNLOAD_BASES = new Set(['curl', 'wget', 'http', 'https']);
+
+/** 解释器前的合法 wrapper（不改变 RCE 语义） */
+const EXEC_WRAPPER_BASES = new Set(['sudo', 'env', 'nice', 'nohup', 'exec', 'xargs', 'time']);
+
+/**
+ * 硬边界：下载并执行（管道链上同时出现下载源与解释器）
+ *
+ * 覆盖 `curl|bash`、`curl|/bin/bash`、`curl|env bash`、`curl|tee x|bash`。
+ * 仅下载（`curl -o file`）或普通管道（`cat|grep`）不命中。
+ */
+export function detectDownloadToInterpreter(command: string): string | null {
+  const parsed = parseShellCommand(command);
+  if (!parsed.parsed || parsed.segments.length < 2) return null;
+
+  let hasDownload = false;
+  let hasInterpreter = false;
+  for (const seg of parsed.segments) {
+    // 包装链：env / nice / xargs 后的真实命令
+    let key = cmdKey(seg.command);
+    if (EXEC_WRAPPER_BASES.has(key) && seg.args.length > 0) {
+      const next = seg.args.find((a) => !a.startsWith('-') && !a.includes('='));
+      if (next) key = cmdKey(next);
+    }
+    if (DOWNLOAD_BASES.has(key)) hasDownload = true;
+    if (INTERPRETER_BASES.has(key)) hasInterpreter = true;
+  }
+  if (hasDownload && hasInterpreter) {
+    return 'download pipe to interpreter (remote code execution)';
+  }
+  return null;
+}
+
+/** 格式化 / 清盘命令 basename */
+function isDiskWipeCommand(cmd: string, args: string[]): boolean {
+  const key = cmdKey(cmd);
+  if (key.startsWith('mkfs')) return true;
+  if (key === 'format-volume' || key === 'clear-disk') return true;
+  if (key === 'format') {
+    // Windows `format C:` — 盘符目标
+    return args.some((a) => /^[a-z]:/i.test(a));
+  }
+  if (key === 'diskutil') {
+    return args.some((a) => /^erase(disk|volume)$/i.test(a));
+  }
+  return false;
+}
+
+/**
+ * 硬边界：格式化 / 清盘（命令位判定，避免 `echo format C:` 误杀）
+ */
+export function detectDiskWipe(command: string): string | null {
+  const parsed = parseShellCommand(command);
+  if (!parsed.parsed) return null;
+
+  for (const seg of parsed.segments) {
+    if (isDiskWipeCommand(seg.command, seg.args)) {
+      return `disk wipe: ${seg.command}`;
+    }
+    if (detectDiskWipeInInline(seg)) {
+      return `disk wipe in inline script: ${seg.command}`;
+    }
+  }
+  return null;
+}
+
+function detectDiskWipeInInline(seg: ParsedSegment): boolean {
+  const payloads = extractInlinePayloads(seg);
+  for (const payload of payloads) {
+    const inner = parseShellCommand(payload);
+    if (!inner.parsed) continue;
+    for (const s of inner.segments) {
+      if (isDiskWipeCommand(s.command, s.args)) return true;
+    }
+  }
+  return false;
+}
+
 // ── 非 Shell 工具评估 ──
 
 export function evaluateNonShellTool(call: ToolCall): RiskDecision {
@@ -766,7 +981,7 @@ function buildReason(level: RiskLevel, factors: RiskFactor[]): string {
 const SHELL_TOOLS = new Set(['shell', 'exec', 'bash', 'terminal', 'run_command', 'execute']);
 /** 写类文件工具 — 保护路径 → critical */
 const FILE_WRITE_TOOLS = new Set([
-  'file_write', 'file_edit', 'file_delete',
+  'file_write', 'file_edit', 'file_delete', 'delete_file',
   'write_file', 'write', 'edit',
 ]);
 /** 读类文件工具 — 保护路径 → high（只读，非不可逆） */
@@ -775,7 +990,10 @@ const FILE_READ_TOOLS = new Set([
   'read_file', 'read',
 ]);
 const FILE_TOOLS = new Set([...FILE_WRITE_TOOLS, ...FILE_READ_TOOLS]);
-const HTTP_TOOLS = new Set(['http_get', 'http_post', 'http_put', 'http_delete', 'fetch', 'web_fetch', 'curl']);
+const HTTP_TOOLS = new Set([
+  'http_get', 'http_post', 'http_put', 'http_delete',
+  'http_request', 'fetch', 'web_fetch', 'curl',
+]);
 
 function isShellTool(name: string): boolean {
   return SHELL_TOOLS.has(name);
