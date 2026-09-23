@@ -93,6 +93,22 @@
 
   "memory": {
     "profile": "embedded_interactive",
+    "backfill": {
+      "enabled": true,
+      "idleDelayMs": 1200000,
+      "gapScanMs": 21600000,
+      "minUserTurns": 2
+    },
+    "decay": {
+      "typeParams": {
+        "method": { "idleDays": 21, "factor": 0.93, "min": 0.1 }
+      }
+    },
+    "health": {
+      "intervalMs": 3600000,
+      "shadowBacklogLimit": 50,
+      "limits": { "fact": 200, "method": 100, "norm": 150 }
+    },
     "confidence": {
       "injectMinScore": 0.55
     }

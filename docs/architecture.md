@@ -304,11 +304,17 @@ harness/memory/
 ├── store.ts              # InMemoryMemoryStore（默认内存实现）
 ├── confidence.ts         # 写入暂定置信度 / injectFilter / profile 映射
 ├── gates.ts              # 结构门控 + mapLegacyType
+├── similarity.ts         # 归一化 / trigram / findDuplicate（无语义极性）
+├── decay-policy.ts       # 按类型衰减曲线（fact/method/norm）
+├── backfill-coverage.ts  # 补录覆盖表 + 密度预筛
+├── backfill-trigger.ts   # 补录脉搏（硬收敛 / idle / gap）
+├── health-probe.ts       # 库存水位双脉搏（memory.health.*）
 ├── cognition.ts          # InMemoryConceptGraph
 ├── types.ts              # MemoryType = fact|method|norm；Store 契约
 ├── sqlite/
 │   ├── agent-db.ts       # AgentDatabase — per-agent agent.db
 │   ├── memory-store.ts   # SqliteMemoryStore
+│   ├── backfill-coverage.ts
 │   ├── wisdom-store.ts   # SqliteWisdomStore
 │   ├── cognition-store.ts
 │   ├── knowledge-registry.ts
@@ -317,9 +323,9 @@ harness/memory/
 ```
 
 > **已移除**：`harness/memory/extraction/`（ETL 采集/桥接/Pending）与 `subsystems/memory-extractor`。  
-> 记忆写入 = agent `memory_store` 工具；旁路 = `memory.steward.backfill` / `memory.steward.govern`（见 `docs/memory-system-redesign.md`）。
+> 记忆写入 = agent `memory_store` 工具；旁路 = `memory.steward.backfill` / `memory.steward.govern`（对外见 [`docs/memory.md`](./memory.md)）。
 
-`FileWisdomStore` / `FileProjectMemory` / `ContextIntelligence` 已删除；不要再预设 `memory/`、`wisdom/` 文件目录。system prompt 七层组装见 `harness/context/`。
+`FileWisdomStore` / `FileProjectMemory` / `ContextIntelligence` 已删除；不要再预设 `memory/`、`wisdom/` 文件目录。system prompt 层组装见 `harness/context/`。
 
 ### 3.7 Reliability — 可靠性
 

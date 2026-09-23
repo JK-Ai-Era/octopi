@@ -1,8 +1,8 @@
 /**
  * Memory 领域 — 记忆系统
  *
- * 价值模型：fact / method / norm（见 docs/memory-system-redesign.md）。
- * system prompt 七层组装契约在 harness/context/。
+ * 价值模型：fact / method / norm（见 docs/memory.md、arch/memory-system-redesign.md）。
+ * system prompt ContextLayer 契约在 harness/context/。
  */
 
 // ── 契约类型 ──
@@ -30,7 +30,7 @@ export { InMemoryMemoryStore } from './store.js';
 export { InMemoryConceptGraph } from './cognition.js';
 
 // ── SQLite 实现 ──
-export { AgentDatabase, SqliteMemoryStore, SqliteWisdomStore, SqliteConceptGraph, KnowledgeRegistry, createEmbeddingProvider } from './sqlite/index.js';
+export { AgentDatabase, SqliteMemoryStore, SqliteWisdomStore, SqliteConceptGraph, KnowledgeRegistry, createEmbeddingProvider, SqliteBackfillCoverageStore } from './sqlite/index.js';
 export type { AgentDatabaseOptions, SqliteMemoryStoreOptions, SqliteConceptGraphOptions, EmbeddingProvider, EmbeddingConfig, KnowledgeSourceEntry } from './sqlite/index.js';
 export {
   createEmbeddingProviderFromModels,
@@ -45,6 +45,40 @@ export {
   buildKeywordLikeSql,
 } from './sqlite/index.js';
 export type { KeywordFields } from './sqlite/index.js';
+
+// ── 写入去重 ──
+export { findDuplicate, normalizedProposition, charTrigramSimilarity } from './similarity.js';
+export type { FindDuplicateOptions, DuplicateHit } from './similarity.js';
+
+export {
+  DEFAULT_DECAY_TYPE_PARAMS,
+  resolveDecayParams,
+  nextDecayFactor,
+  isDecayDue,
+} from './decay-policy.js';
+export type { DecayTypeParams, DecayParamsConfig } from './decay-policy.js';
+
+export { MemoryHealthProbe } from './health-probe.js';
+export type { MemoryHealthProbeOptions } from './health-probe.js';
+
+// ── 补录覆盖与触发 ──
+export {
+  InMemoryBackfillCoverageStore,
+  measureSessionDensity,
+  passesPrefilter,
+  shouldAttempt,
+  DEFAULT_PREFILTER,
+} from './backfill-coverage.js';
+export type {
+  BackfillCoverageRecord,
+  BackfillCoverageStore,
+  BackfillCoverageStatus,
+  BackfillTriggerKind,
+  SessionDensity,
+  PrefilterConfig,
+} from './backfill-coverage.js';
+export { BackfillTrigger, BACKFILL_REQUEST_EVENT } from './backfill-trigger.js';
+export type { BackfillTriggerOptions } from './backfill-trigger.js';
 
 // ── 置信度与门控 ──
 export {
@@ -64,7 +98,17 @@ export {
   admitCandidates,
   applySoftDeletes,
   planSoftDeletes,
+  applyBoosts,
+  planBoosts,
+  planPromotionCandidates,
   resolvePolicy,
   DEFAULT_SOFT_DELETE_POLICY,
+  MAX_ENTRIES_PER_SOURCE,
 } from '../../subsystems/memory-steward/shared/policy.js';
-export type { SoftDeletePolicyConfig, StewardCandidate, GovernPlanItem } from '../../subsystems/memory-steward/shared/policy.js';
+export type {
+  SoftDeletePolicyConfig,
+  StewardCandidate,
+  GovernPlanItem,
+  BoostPlanItem,
+  AdmitResult,
+} from '../../subsystems/memory-steward/shared/policy.js';

@@ -316,6 +316,8 @@ export class SessionAwareRunner {
   private stateMachines = new Map<string, StateMachine<SessionStatus>>();
   /** 自主子系统运行时 */
   private _subsystemRuntime?: import('./autonomous-subsystem/runtime.js').SubsystemRuntime;
+  private _backfillTrigger?: import('./memory/backfill-trigger.js').BackfillTrigger;
+  private _memoryHealthProbe?: import('./memory/health-probe.js').MemoryHealthProbe;
   /** EventBus 引用（用于子系统/多 Agent 上下文） */
   private _events?: import('../core/primitives/event-bus.js').EventBus;
   /** 产品 Observer Hub（Run 现场；可选） */
@@ -421,6 +423,31 @@ export class SessionAwareRunner {
   /** 设置自主子系统运行时 */
   setSubsystemRuntime(runtime: import('./autonomous-subsystem/runtime.js').SubsystemRuntime): void {
     this._subsystemRuntime = runtime;
+  }
+
+  /** 补录触发协调器（idle 漂移 / 硬收敛快照） */
+  setBackfillTrigger(trigger: import('./memory/backfill-trigger.js').BackfillTrigger | undefined): void {
+    this._backfillTrigger?.dispose();
+    this._backfillTrigger = trigger;
+  }
+
+  /** health 探测（govern 双脉搏） */
+  setMemoryHealthProbe(probe: import('./memory/health-probe.js').MemoryHealthProbe | undefined): void {
+    this._memoryHealthProbe?.stop();
+    this._memoryHealthProbe = probe;
+  }
+
+  /**
+   * 释放 Runner 侧后台定时器/监听（BackfillTrigger / HealthProbe / SubsystemRuntime）。
+   * Gateway 热重建 agent 或进程内多次 build 时必须调用，否则 timer 泄漏、重复 emit。
+   */
+  dispose(): void {
+    this._backfillTrigger?.dispose();
+    this._backfillTrigger = undefined;
+    this._memoryHealthProbe?.stop();
+    this._memoryHealthProbe = undefined;
+    this._subsystemRuntime?.dispose();
+    this._subsystemRuntime = undefined;
   }
 
   /** 设置工具运行时上下文提供者 */
@@ -559,6 +586,7 @@ export class SessionAwareRunner {
       session.messages.push(input);
       session.meta.lastInteractionAt = Date.now();
       session.meta.updatedAt = Date.now();
+      this._backfillTrigger?.noteActivity(sessionId, _agentId, session.meta.lastInteractionAt);
 
       // 通知子系统：主会话生命周期态（通用）
       this.emitObserved({
@@ -996,6 +1024,7 @@ export class SessionAwareRunner {
       await this.store.save(sessionId, session);
 
       // 通知子系统：本轮处理完成（保持 active，但刷新 lastInteractionAt）
+      this._backfillTrigger?.noteActivity(sessionId, _agentId, session.meta.lastInteractionAt);
       this.emitObserved({
         type: 'session.lifecycle.updated',
         timestamp: Date.now(),
@@ -1303,6 +1332,16 @@ export class SessionAwareRunner {
    * 不写 memoryExtraction（进度归 memory.steward）；事件仍带 extractionStatus 供 Sense 感知。
    */
   private markSessionRecent(session: SessionData, now: number): void {
+    // 补录快照：idle reset 会清空 messages，必须在清空前固化 sessionText
+    const sessionText = (session.messages ?? [])
+      .filter((m) => {
+        const kind = m.metadata?.kind;
+        return kind !== 'command' && kind !== 'command_result';
+      })
+      .map((m) => `[${m.role}] ${typeof m.content === 'string' ? m.content : JSON.stringify(m.content ?? '')}`)
+      .join('\n')
+      .slice(0, 8000);
+
     session.lifecycle = {
       lifecycle: 'recent',
       endedAt: now,
@@ -1317,6 +1356,7 @@ export class SessionAwareRunner {
         lifecycle: 'recent',
         extractionStatus: 'pending',
         lastInteractionAt: session.meta.lastInteractionAt,
+        sessionText,
       },
     });
   }

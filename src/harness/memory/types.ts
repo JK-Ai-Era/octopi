@@ -8,7 +8,7 @@
 // ── Memory ──
 
 /**
- * 记忆类型 — 蒸馏产物三类（见 docs/memory-system-redesign.md）
+ * 记忆类型 — 蒸馏产物三类（见 docs/memory.md）
  *
  * - fact：稳定事实与已定结论（含环境、约定、否定结论）
  * - method：可复用做法或因果
@@ -114,7 +114,10 @@ export interface MemoryStore {
   undelete(id: string): Promise<void>;
   /** 治理批量读取 */
   listForGovern(filter?: { includeDeleted?: boolean }): Promise<MemoryEntry[]>;
-  decay(): Promise<number>;
+  /** 按类型曲线衰减 idle 条目；返回本轮改动条数 */
+  decay(options?: {
+    typeParams?: Partial<Record<MemoryType, { idleDays?: number; factor?: number; min?: number }>>;
+  }): Promise<number>;
   stats(): Promise<MemoryStats>;
 }
 

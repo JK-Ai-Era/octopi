@@ -2,7 +2,7 @@
 
 > Layer: Layer 2
 
-价值模型 **fact / method / norm**（见 `docs/memory-system-redesign.md`）。
+价值模型 **fact / method / norm**（对外：`docs/memory.md`；内部规格：`arch/memory-system-redesign.md`）。
 
 **核心命题**：Memory 在 Information 窗口消失后仍改变未来行为；单位是可行动命题，不是摘要或计数。
 
@@ -13,7 +13,7 @@
 - 治理：软删除 `deleted` + Steward 策略（`subsystems/memory-steward/shared`）
 - 检索：embedding + sqlite-vec（可选）→ JS 余弦 hybrid → 关键词 LIKE+CJK 二元组；**本模块暂不引入 FTS5**
   - 注意：session 历史索引（`sessions.index.db`）**已用** FTS5 trigram——与 Memory 检索**分轨**，勿互相「对齐」回退
-- system prompt 七层组装在 `harness/context/`；全局宪法在 `harness/context/constitution/`
+- system prompt 层组装（ContextLayer 1–7）在 `harness/context/`；全局宪法在 `harness/context/constitution/`
 
 ## 不做什么
 
@@ -32,12 +32,16 @@
 | `MemoryType: preference/decision/lesson/discovery` | `fact \| method \| norm` |
 | 统计句 `extractCandidates` | 宪法 + LLM 命题 + gates |
 
-完整规格：`docs/memory-system-redesign.md`。
+完整规格：`arch/memory-system-redesign.md`；对外说明：`docs/memory.md`。
 
 ## 文件说明
 
 - types.ts — MemoryType/Entry/Query/Store
-- store.ts / sqlite/memory-store.ts — 实现（含 softDelete/undelete/listForGovern）
+- store.ts / sqlite/memory-store.ts — 实现（含 softDelete/undelete/listForGovern/decay）
 - confidence.ts / gates.ts — 写入暂定与准入
-- cognition.ts / sqlite/cognition-store.ts — 概念图谱
+- similarity.ts — 归一化 / trigram / findDuplicate（无语义极性）
+- decay-policy.ts — 按类型衰减曲线
+- backfill-coverage.ts / backfill-trigger.ts — 补录覆盖与脉搏
+- health-probe.ts — 库存水位双脉搏
+- cognition.ts / sqlite/cognition-store.ts — 概念图谱（工具面暂缓）
 - index.ts — 导出

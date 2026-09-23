@@ -605,6 +605,126 @@
           "type": "string",
           "enum": ["personal_assistant", "embedded_interactive", "embedded_headless"]
         },
+        "backfill": {
+          "type": "object",
+          "description": "自动补录（Steward LLM 提取）；enabled=false 可省成本，govern 治理不受影响",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": true,
+              "description": "是否启动补录触发脉搏（硬收敛 / idle 漂移 / 覆盖差）"
+            },
+            "idleDelayMs": {
+              "type": "integer",
+              "minimum": 1000,
+              "default": 1200000,
+              "description": "空闲漂移阈值（毫秒），距最后活动超过该时长后软收敛补录"
+            },
+            "gapScanMs": {
+              "type": "integer",
+              "minimum": 1000,
+              "default": 21600000,
+              "description": "覆盖差扫描间隔（毫秒）"
+            },
+            "minUserTurns": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 2,
+              "description": "密度预筛：最少 user 轮次"
+            },
+            "minTotalChars": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 200,
+              "description": "密度预筛：最少实质字符量"
+            }
+          },
+          "additionalProperties": false
+        },
+        "decay": {
+          "type": "object",
+          "description": "按 MemoryType 的衰减曲线（govern 每轮 decay()）",
+          "properties": {
+            "typeParams": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "fact": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "idleDays": { "type": "number", "exclusiveMinimum": 0 },
+                    "factor": { "type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1 },
+                    "min": { "type": "number", "minimum": 0, "maximum": 1 }
+                  }
+                },
+                "method": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "idleDays": { "type": "number", "exclusiveMinimum": 0 },
+                    "factor": { "type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1 },
+                    "min": { "type": "number", "minimum": 0, "maximum": 1 }
+                  }
+                },
+                "norm": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "idleDays": { "type": "number", "exclusiveMinimum": 0 },
+                    "factor": { "type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1 },
+                    "min": { "type": "number", "minimum": 0, "maximum": 1 }
+                  }
+                }
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "health": {
+          "type": "object",
+          "description": "MemoryHealthProbe 双脉搏阈值（补充 govern 1h schedule）",
+          "properties": {
+            "intervalMs": {
+              "type": "integer",
+              "minimum": 1000,
+              "default": 3600000,
+              "description": "探测间隔（毫秒）"
+            },
+            "shadowBacklogLimit": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 50,
+              "description": "shadow 积压阈值"
+            },
+            "limits": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "fact": { "type": "integer", "minimum": 0, "default": 200 },
+                "method": { "type": "integer", "minimum": 0, "default": 100 },
+                "norm": { "type": "integer", "minimum": 0, "default": 150 }
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "gates": {
+          "type": "object",
+          "description": "写入结构门控长度",
+          "properties": {
+            "maxLength": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "fact": { "type": "integer", "minimum": 1 },
+                "method": { "type": "integer", "minimum": 1 },
+                "norm": { "type": "integer", "minimum": 1 }
+              }
+            }
+          },
+          "additionalProperties": false
+        },
         "confidence": {
           "type": "object",
           "properties": {

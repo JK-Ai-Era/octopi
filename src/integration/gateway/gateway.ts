@@ -397,6 +397,16 @@ export class Gateway {
       await adapter.stop();
     }
 
+    // 释放 Runner 后台 timer（BackfillTrigger / HealthProbe / SubsystemRuntime）
+    for (const cached of this.agentCache.values()) {
+      try {
+        cached.runner.dispose();
+      } catch {
+        // stop 路径 fail-open，不阻断关闭
+      }
+    }
+    this.agentCache.clear();
+
     await this.runtime.stop();
     await this.pluginManager.onGatewayStop();
     this.started = false;
@@ -621,6 +631,38 @@ export class Gateway {
             this.abortSession(sessionId);
             break;
           case 'new_session': {
+            // 硬收敛：把当前会话标 recent 并带 sessionText，供补录触发（不阻塞切换）
+            try {
+              const old = await this.store.load(sessionId);
+              if (old) {
+                const sessionText = (old.messages ?? [])
+                  .filter((m) => {
+                    const kind = m.metadata?.kind;
+                    return kind !== 'command' && kind !== 'command_result';
+                  })
+                  .map((m) => `[${m.role}] ${typeof m.content === 'string' ? m.content : JSON.stringify(m.content ?? '')}`)
+                  .join('\n')
+                  .slice(0, 8000);
+                const now = Date.now();
+                old.lifecycle = { lifecycle: 'recent', endedAt: now };
+                old.meta.updatedAt = now;
+                await this.store.save(sessionId, old);
+                this.gatewayBus.emit({
+                  type: 'session.lifecycle.updated',
+                  timestamp: now,
+                  agentId,
+                  sessionId,
+                  data: {
+                    lifecycle: 'recent',
+                    lastInteractionAt: old.meta.lastInteractionAt,
+                    sessionText,
+                    reason: 'new_session',
+                  },
+                });
+              }
+            } catch {
+              // 切换会话不因补录快照失败而中断
+            }
             const meta = await this.createSession({ agentId });
             result.newSessionId = meta.id;
             break;

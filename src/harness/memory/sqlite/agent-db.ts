@@ -241,6 +241,19 @@ export class AgentDatabase {
         metadata    TEXT NOT NULL DEFAULT '{}',
         created_at  INTEGER NOT NULL
       );
+
+      -- ── 补录覆盖表（steward 进度；可重建） ──
+      CREATE TABLE IF NOT EXISTS memory_backfill (
+        session_id    TEXT PRIMARY KEY,
+        agent_id      TEXT,
+        fingerprint   TEXT NOT NULL,
+        status        TEXT NOT NULL,
+        reason        TEXT,
+        accepted      INTEGER,
+        trigger       TEXT,
+        attempted_at  INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_memory_backfill_status ON memory_backfill(status);
     `);
   }
 

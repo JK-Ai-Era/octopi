@@ -176,14 +176,19 @@ export class InMemoryMemoryStore implements MemoryStore {
     );
   }
 
-  async decay(): Promise<number> {
+  async decay(options?: {
+    typeParams?: Partial<Record<import('./types.js').MemoryType, { idleDays?: number; factor?: number; min?: number }>>;
+  }): Promise<number> {
+    const { isDecayDue, nextDecayFactor, resolveDecayParams } = await import('./decay-policy.js');
+    const params = resolveDecayParams(options?.typeParams);
     const now = Date.now();
     let decayed = 0;
     for (const entry of this.entries.values()) {
       if (entry.deleted) continue;
-      const daysSinceAccess = (now - entry.lastAccessedAt) / (24 * 60 * 60 * 1000);
-      if (daysSinceAccess > 30) {
-        entry.decayFactor = Math.max(0.1, entry.decayFactor * 0.95);
+      if (!isDecayDue(entry.lastAccessedAt, entry.type, params, now)) continue;
+      const next = nextDecayFactor(entry.decayFactor, entry.type, params);
+      if (next < entry.decayFactor) {
+        entry.decayFactor = next;
         decayed++;
       }
     }

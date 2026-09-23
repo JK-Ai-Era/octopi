@@ -16,7 +16,7 @@ Octopi 是一个可嵌入的 Agent 底座引擎，用于构建 AI 驱动的应�
 - **可嵌入** — 不是独立应用，而是产品的组件
 - **4 层架构** — Loop → Core → Harness → Integration，边界清晰，层次独立
 - **15 个自包含领域** — 每个领域可独立理解、独立测试、独立替换
-- **7 层上下文智能** — 智慧、人格、技能、知识、认知、记忆、信息
+- **8 层上下文智能** — 智慧、人格、技能、知识、认知、记忆、运行时、信息（记忆见 [docs/memory.md](./docs/memory.md)）
 - **安全内置** — 注入检测、风险评估、审批流程——不可选、不可绕过
 - **原生多智能体** — 从架构底层支持分布式智能
 
@@ -78,7 +78,7 @@ Octopi 是一个可嵌入的 Agent 底座引擎，用于构建 AI 驱动的应�
 | **Concurrency** | 多 Key LLM 负载均衡、限流、Session 门控 |
 | **Execution Environment** | 沙箱、工作区管理、文件操作 |
 | **Human-in-the-Loop** | 审批流程、决策缓存、基于风险的策略 |
-| **Memory** | 命题记忆（fact/method/norm）、门控/置信度、认知/智慧存储、Memory Steward 子系统 |
+| **Memory** | 命题记忆（fact/method/norm）、门控/置信度、认知/智慧存储、Memory Steward — 见 [docs/memory.md](./docs/memory.md) |
 | **Observer** | 开发调试用 Run Observatory：`observer.level`（缺省 `off`）、`/debug/run/*`、Web Run 面板 — 见 [docs/observer-domain.md](./docs/observer-domain.md)（与 Telemetry 的 Core `Observer` 分离） |
 
 ### Layer 3: Integration — 外部适配

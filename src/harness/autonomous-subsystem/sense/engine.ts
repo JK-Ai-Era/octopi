@@ -135,7 +135,16 @@ export class SenseEngine {
     }
 
     // schedule：interval 轮询；复用冷却/深度/condition/onTrigger
+    // 双脉搏：schedule 子系统也可监听 filter.events（如 memory.health.* / 手动 request）
     if (spec.sense.source === 'schedule') {
+      if (spec.sense.filter?.events) {
+        for (const eventType of spec.sense.filter.events) {
+          const disposable = this.events.on(eventType, (event) => {
+            this.onEvent(spec.id, event, onTrigger);
+          });
+          entry.disposables.push(disposable);
+        }
+      }
       const intervalMs = spec.sense.interval;
       if (intervalMs && intervalMs > 0) {
         entry.scheduleTimer = setInterval(() => {

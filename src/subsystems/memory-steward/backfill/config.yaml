@@ -39,7 +39,8 @@ lifecycle:
   maxDurationMs: 60000
 
 runtimeInject:
-  requires: ['memoryStore', 'sessionStore', 'constitution']
+  # backfillCoverage 可选：未注入时 handler 跳过覆盖回写（协调器仍可自记 pending）
+  requires: ['memoryStore', 'sessionStore', 'constitution', 'backfillCoverage']
 
 observability:
   eventPrefix: memory.steward.backfill

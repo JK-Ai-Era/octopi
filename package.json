@@ -1,6 +1,6 @@
 {
   "name": "octopi",
-  "version": "0.48.1",
+  "version": "0.50.5",
   "description": "可嵌入的 Agent 引擎",
   "type": "module",
   "main": "dist/index.js",

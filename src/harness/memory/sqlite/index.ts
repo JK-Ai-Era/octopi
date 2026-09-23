@@ -47,3 +47,5 @@ export type { SqliteConceptGraphOptions } from './cognition-store.js';
 
 export { KnowledgeRegistry } from './knowledge-registry.js';
 export type { KnowledgeSourceEntry } from './knowledge-registry.js';
+
+export { SqliteBackfillCoverageStore } from './backfill-coverage.js';

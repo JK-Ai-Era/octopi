@@ -407,7 +407,7 @@ export async function discoverSubsystemSpecs(override?: AgentBuildOptions['subsy
   return loader.loadAll();
 }
 
-// wireMemoryExtraction 已移除：见 docs/memory-system-redesign.md（Memory Steward 取代 ETL）
+// wireMemoryExtraction 已移除：Memory Steward 取代 ETL（docs/memory.md）
 
 /**
  * AgentBuilder — Fluent API
@@ -441,6 +441,7 @@ export class AgentBuilder {
   private _skillManager?: import('../plugin-ecosystem/skills/types.js').SkillManager;
   /** 记忆检索（注入 system prompt MemoryLayer） */
   private _memoryStore?: import('../memory/types.js').MemoryStore;
+  private _backfillCoverage?: import('../memory/backfill-coverage.js').BackfillCoverageStore;
   private _constitutionConfig?: import('../../config.js').ConstitutionConfig | null;
   private _memoryConfig?: import('../../config.js').HarnessConfig['memory'];
   /** 知识检索（注入 system prompt KnowledgeLayer） */
@@ -643,13 +644,19 @@ export class AgentBuilder {
     return this;
   }
 
+  /** 注入补录覆盖表（默认：SqliteMemoryStore→agent.db，否则内存） */
+  backfillCoverage(store: import('../memory/backfill-coverage.js').BackfillCoverageStore): this {
+    this._backfillCoverage = store;
+    return this;
+  }
+
   /** 全局宪法（product | custom | off） */
   constitution(config: import('../../config.js').ConstitutionConfig | null): this {
     this._constitutionConfig = config;
     return this;
   }
 
-  /** Memory 策略配置（profile / confidence / gates） */
+  /** Memory 策略配置（profile / backfill / decay / health / confidence / gates） */
   memoryConfig(config: import('../../config.js').HarnessConfig['memory']): this {
     this._memoryConfig = config;
     return this;
@@ -1108,9 +1115,27 @@ export class AgentBuilder {
         }
       }
 
-      // 依赖注入：memoryStore / sessionStore / constitution
+      // 依赖注入：memoryStore / sessionStore / constitution / backfillCoverage
       if (this._memoryStore) {
         subsystemRuntime.registerDependency('memoryStore', this._memoryStore);
+      }
+      {
+        const { InMemoryBackfillCoverageStore } = await import('../memory/backfill-coverage.js');
+        let coverage = this._backfillCoverage;
+        if (!coverage) {
+          const mem = this._memoryStore as { database?: import('../memory/sqlite/agent-db.js').AgentDatabase } | undefined;
+          if (mem?.database) {
+            const { SqliteBackfillCoverageStore } = await import('../memory/sqlite/backfill-coverage.js');
+            coverage = new SqliteBackfillCoverageStore(mem.database);
+          } else {
+            coverage = new InMemoryBackfillCoverageStore();
+          }
+          this._backfillCoverage = coverage;
+        }
+        subsystemRuntime.registerDependency('backfillCoverage', coverage);
+        if (this._memoryConfig?.decay?.typeParams) {
+          subsystemRuntime.registerDependency('memoryDecayParams', this._memoryConfig.decay.typeParams);
+        }
       }
       if (this._store) {
         subsystemRuntime.registerDependency('sessionStore', this._store);
@@ -1137,6 +1162,44 @@ export class AgentBuilder {
 
       if (registeredIds.size > 0 || candidateSpecs.length > 0 || this._subsystemDir) {
         runner.setSubsystemRuntime(subsystemRuntime);
+      }
+
+      // 补录脉搏：硬收敛 / idle 漂移 / 覆盖差
+      // `memory.backfill.enabled=false` 时不启动 Trigger（省 LLM）；denylist 不注册子系统时同样不启动
+      const backfillCfg = this._memoryConfig?.backfill;
+      const backfillEnabled = backfillCfg?.enabled !== false;
+      if (backfillEnabled && registeredIds.has('memory.steward.backfill') && this._backfillCoverage) {
+        const { BackfillTrigger } = await import('../memory/backfill-trigger.js');
+        const trigger = new BackfillTrigger({
+          events,
+          coverage: this._backfillCoverage,
+          sessionStore: store,
+          idleDelayMs: backfillCfg?.idleDelayMs,
+          gapScanMs: backfillCfg?.gapScanMs,
+          prefilter: {
+            minUserTurns: backfillCfg?.minUserTurns,
+            minTotalChars: backfillCfg?.minTotalChars,
+          },
+        });
+        trigger.start();
+        runner.setBackfillTrigger(trigger);
+      } else if (!backfillEnabled && registeredIds.has('memory.steward.backfill')) {
+        console.log('[AgentBuilder] memory.backfill.enabled=false — auto backfill trigger off');
+      }
+
+      // health 双脉搏补充：高水位 / shadow 积压 → emit memory.health.*（govern 可监听）
+      if (memoryStore && registeredIds.has('memory.steward.govern')) {
+        const { MemoryHealthProbe } = await import('../memory/health-probe.js');
+        const healthCfg = this._memoryConfig?.health;
+        const probe = new MemoryHealthProbe({
+          events,
+          memoryStore,
+          intervalMs: healthCfg?.intervalMs,
+          shadowBacklogLimit: healthCfg?.shadowBacklogLimit,
+          limits: healthCfg?.limits,
+        });
+        probe.start();
+        runner.setMemoryHealthProbe(probe);
       }
     }
 

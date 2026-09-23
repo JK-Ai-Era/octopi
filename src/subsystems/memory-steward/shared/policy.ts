@@ -3,10 +3,17 @@
  * 补录提取对接、门控/置信度、治理软删策略（一次到位，无分期）。
  */
 
-import type { MemoryChannel, MemoryEntry, MemoryType, SoftDeleteReason } from '../../../harness/memory/types.js';
+import type { MemoryChannel, MemoryEntry, MemoryStatus, MemoryType, SoftDeleteReason } from '../../../harness/memory/types.js';
 import { provisionalConfidence } from '../../../harness/memory/confidence.js';
 import { evaluateGates } from '../../../harness/memory/gates.js';
 import type { MemoryStore } from '../../../harness/memory/types.js';
+import {
+  charTrigramSimilarity,
+  findDuplicate,
+  normalizedProposition,
+} from '../../../harness/memory/similarity.js';
+
+export { charTrigramSimilarity, findDuplicate, normalizedProposition };
 
 export interface StewardCandidate {
   type: string;
@@ -80,35 +87,7 @@ export function isProtected(e: MemoryEntry, policy: ReturnType<typeof resolvePol
   return false;
 }
 
-export function normalizedProposition(text: string): string {
-  return text
-    .toLowerCase()
-    .replace(/\s+/g, ' ')
-    .replace(/[「」“”"'`]/g, '')
-    .replace(/[。！？!?.;；,，]/g, '')
-    .trim();
-}
 
-/** 字符 3-gram Jaccard 相似度（用于近重复 supersede） */
-export function charTrigramSimilarity(a: string, b: string): number {
-  const grams = (s: string): Set<string> => {
-    const t = s.replace(/\s+/g, '');
-    const set = new Set<string>();
-    if (t.length < 3) {
-      if (t) set.add(t);
-      return set;
-    }
-    for (let i = 0; i <= t.length - 3; i++) set.add(t.slice(i, i + 3));
-    return set;
-  };
-  const sa = grams(a);
-  const sb = grams(b);
-  if (sa.size === 0 || sb.size === 0) return 0;
-  let inter = 0;
-  for (const g of sa) if (sb.has(g)) inter++;
-  const union = sa.size + sb.size - inter;
-  return union === 0 ? 0 : inter / union;
-}
 
 export interface GovernPlanItem {
   id: string;
@@ -168,6 +147,7 @@ export function planSoftDeletes(
 
   // T3 supersede：**仅**当同 type + 归一化命题高度近似（≥ duplicateSimilarity 字符级）
   // 且文本不完全相同 —— 不做「前缀主题」启发式，避免误删互补事实
+  // 另：极性相反 + 锚点重叠 → 语义冲突，低分者作 superseded 败者
   const byType = new Map<MemoryType, MemoryEntry[]>();
   for (const e of candidates) {
     if (plan.some((p) => p.id === e.id)) continue;
@@ -187,6 +167,7 @@ export function planSoftDeletes(
         if (na === nb) continue; // 等同 → duplicate 规则处理
         const sim = charTrigramSimilarity(na, nb);
         if (sim < policy.duplicateSimilarity) continue;
+
         const sorted = [a, b].sort((x, y) => scoreOf(y) - scoreOf(x) || y.createdAt - x.createdAt);
         const winner = sorted[0];
         const loser = sorted[1];
@@ -271,14 +252,32 @@ export async function applySoftDeletes(
   return { applied, skipped: 0, plan };
 }
 
-/** 将 LLM/规则候选经门控+置信度写入 store；返回接受与拒绝明细 */
+/** 同一 source（session）跨次补录入库上限 */
+export const MAX_ENTRIES_PER_SOURCE = 32;
+
+export type AdmitRejectReason = string;
+
+export interface AdmitResult {
+  accepted: Array<{ id: string; type: MemoryType; status: string }>;
+  rejected: Array<{ reason: AdmitRejectReason; proposition: string; existingId?: string }>;
+}
+
+/**
+ * 将 LLM/规则候选经门控 + 写路径去重 + 置信度写入 store。
+ *
+ * G5 初判：同 type 归一化全等 / trigram 近重复 → `duplicate`；
+ * 同 source 活跃条数 ≥ MAX_ENTRIES_PER_SOURCE → `session_rate_limit`。
+ */
 export async function admitCandidates(
   store: MemoryStore,
   candidates: StewardCandidate[],
   source: string,
-): Promise<{ accepted: Array<{ id: string; type: MemoryType; status: string }>; rejected: Array<{ reason: string; proposition: string }> }> {
-  const accepted: Array<{ id: string; type: MemoryType; status: string }> = [];
-  const rejected: Array<{ reason: string; proposition: string }> = [];
+): Promise<AdmitResult> {
+  const accepted: AdmitResult['accepted'] = [];
+  const rejected: AdmitResult['rejected'] = [];
+
+  const live = await store.listForGovern({ includeDeleted: false });
+  let sourceCount = live.filter((e) => e.source === source).length;
 
   for (const c of candidates) {
     const gate = evaluateGates({
@@ -293,6 +292,29 @@ export async function admitCandidates(
       rejected.push({ reason: gate.reason, proposition: c.proposition });
       continue;
     }
+
+    const type = c.type as MemoryType;
+    const channel = c.channel ?? 'model_inference';
+    const strongChannel =
+      channel === 'user_directive' || channel === 'decision' || channel === 'fail_fix';
+    const dup = findDuplicate(live, { type, proposition: c.proposition });
+    // 结构规则（非语义）：归一化全等 → 拒 duplicate；近重复 + 强通道 → 视为纠正并 supersede；
+    // 近重复 + 弱通道 → 拒（提示走 memory_store.supersedes_id）。
+    // 真正语义对立且字面不近似 → 不在写路径猜，归 OP-2 LLM。
+    let supersedeTargetId: string | undefined;
+    if (dup) {
+      if (dup.exact || !strongChannel) {
+        rejected.push({ reason: 'duplicate', proposition: c.proposition, existingId: dup.id });
+        continue;
+      }
+      supersedeTargetId = dup.id;
+    }
+
+    if (sourceCount >= MAX_ENTRIES_PER_SOURCE) {
+      rejected.push({ reason: 'session_rate_limit', proposition: c.proposition });
+      continue;
+    }
+
     const conf = provisionalConfidence({
       channel: c.channel ?? 'model_inference',
       evidence: c.evidence,
@@ -300,7 +322,6 @@ export async function admitCandidates(
       importance: c.importance,
     });
     const status = gate.status === 'shadow' ? 'shadow' : conf.status;
-    const type = c.type as MemoryType;
     const id = await store.store({
       type,
       content: c.proposition,
@@ -314,8 +335,124 @@ export async function admitCandidates(
       anchors: c.anchors,
       evidence: c.evidence,
     });
+    // 先写新条再软删被纠正的近重复旧条（与 memory_store.supersedes_id 同序）
+    if (supersedeTargetId) {
+      await store.softDelete(supersedeTargetId, {
+        by: 'admitCandidates.supersede',
+        reason: 'superseded',
+        winnerId: id,
+      });
+      const idx = live.findIndex((e) => e.id === supersedeTargetId);
+      if (idx >= 0) live.splice(idx, 1);
+    }
     accepted.push({ id, type, status });
+    sourceCount += 1;
+    // 同批后续候选可对刚写入条目判重
+    live.push({
+      id,
+      type,
+      content: c.proposition,
+      source,
+      confidence: conf.confidence,
+      importance: conf.importance,
+      accessCount: 0,
+      lastAccessedAt: Date.now(),
+      createdAt: Date.now(),
+      decayFactor: 1,
+      tags: [],
+      status: status as MemoryStatus,
+      channel: c.channel ?? 'model_inference',
+      deleted: false,
+    });
   }
 
   return { accepted, rejected };
+}
+
+export interface BoostPlanItem {
+  id: string;
+  op: 'promote_shadow' | 'reinforce';
+  confidence?: number;
+  status?: MemoryStatus;
+  reason: string;
+}
+
+/**
+ * 挣得机制（govern 侧）：仍被检索的存活条目弱 boost；shadow 被多次检索则晋升 active。
+ * 不删条、不产新命题。
+ */
+export function planBoosts(
+  entries: MemoryEntry[],
+  now = Date.now(),
+  options?: { recentAccessMs?: number; promoteShadowAccess?: number; reinforceAccess?: number },
+): BoostPlanItem[] {
+  const recentAccessMs = options?.recentAccessMs ?? 30 * 86_400_000;
+  const promoteShadowAccess = options?.promoteShadowAccess ?? 2;
+  const reinforceAccess = options?.reinforceAccess ?? 3;
+  const plan: BoostPlanItem[] = [];
+
+  for (const e of entries) {
+    if (e.deleted) continue;
+    const status = e.status ?? 'active';
+    const accessedRecently = now - e.lastAccessedAt <= recentAccessMs;
+    if (!accessedRecently) continue;
+
+    if (status === 'shadow' && e.accessCount >= promoteShadowAccess) {
+      plan.push({
+        id: e.id,
+        op: 'promote_shadow',
+        status: 'active',
+        reason: `shadow retrieved ${e.accessCount}x`,
+      });
+      continue;
+    }
+
+    if (status === 'active' || status === 'strengthened') {
+      if (e.accessCount < reinforceAccess) continue;
+      const nextConf = Math.min(1, e.confidence * 1.05 + 0.01);
+      if (nextConf <= e.confidence + 0.001) continue;
+      const nextStatus: MemoryStatus = status === 'active' && nextConf >= 0.9 ? 'strengthened' : status;
+      plan.push({
+        id: e.id,
+        op: 'reinforce',
+        confidence: nextConf,
+        status: nextStatus,
+        reason: `retrieved ${e.accessCount}x still live`,
+      });
+    }
+  }
+  return plan;
+}
+
+export async function applyBoosts(
+  store: MemoryStore,
+  plan: BoostPlanItem[],
+  dryRun?: boolean,
+): Promise<{ applied: number; skipped: number; plan: BoostPlanItem[] }> {
+  if (dryRun) return { applied: 0, skipped: plan.length, plan };
+  let applied = 0;
+  for (const item of plan) {
+    const patch: Partial<MemoryEntry> = { reinforcedAt: Date.now() };
+    if (item.confidence !== undefined) patch.confidence = item.confidence;
+    if (item.status !== undefined) patch.status = item.status;
+    await store.update(item.id, patch);
+    applied++;
+  }
+  return { applied, skipped: 0, plan };
+}
+
+/**
+ * method/norm 晋升候选（供 Wisdom 子系统 consume；本层不写 Wisdom）。
+ */
+export function planPromotionCandidates(
+  entries: MemoryEntry[],
+  limit = 20,
+): Array<{ id: string; type: MemoryType; content: string; score: number }> {
+  return entries
+    .filter((e) => !e.deleted && (e.type === 'method' || e.type === 'norm'))
+    .filter((e) => (e.status ?? 'active') !== 'shadow')
+    .filter((e) => e.accessCount >= 2 && scoreOf(e) >= 0.5)
+    .map((e) => ({ id: e.id, type: e.type, content: e.content, score: scoreOf(e) }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit);
 }

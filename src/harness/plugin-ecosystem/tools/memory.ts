@@ -9,6 +9,7 @@ import type { MemoryChannel, MemoryStore, MemoryType } from '../../memory/types.
 import { MEMORY_TYPES } from '../../memory/types.js';
 import { provisionalConfidence, type ConfidenceProfileConfig } from '../../memory/confidence.js';
 import { evaluateGates, type GateConfig } from '../../memory/gates.js';
+import { findDuplicate } from '../../memory/similarity.js';
 
 const CHANNELS: MemoryChannel[] = [
   'user_directive',
@@ -106,6 +107,23 @@ export function createMemoryStoreTool(store: MemoryStore, options?: MemoryToolOp
             message: `supersedes_id ${supersedesId} not found or already deleted; store with memory_search first`,
           };
         }
+      }
+
+      // 写路径 G5：全等拒 duplicate；近重复提示 supersedes_id（显式纠正，不靠语义正则）
+      const live = await store.listForGovern({ includeDeleted: false });
+      const dup = findDuplicate(live, { type, proposition }, { excludeId: supersedesId });
+      if (dup) {
+        return {
+          stored: false,
+          rejected: true,
+          reason: 'duplicate',
+          existingId: dup.id,
+          message: dup.exact
+            ? `exact duplicate of ${dup.id}; pass supersedes_id=${dup.id} if replacing`
+            : supersedesId
+              ? `near-duplicate of ${dup.id} (not the superseded id); rewrite or supersede ${dup.id}`
+              : `near-duplicate of ${dup.id}; pass supersedes_id=${dup.id} if replacing it`,
+        };
       }
 
       const conf = provisionalConfidence({

@@ -16,3 +16,4 @@ src/**/*.js
 web/src/**/*.js
 
 coverage/
+/draft/

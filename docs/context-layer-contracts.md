@@ -117,7 +117,7 @@ interface ContextLayer {
 | `SkillLayer` | 包装 `formatForPrompt()` | 按任务匹配加载全文 |
 | `RuntimeLayer` | 包装每轮动态注入 | — |
 | `KnowledgeLayer` | `retrieve(query, top-k)` + 列表格式化 | embedding / 重排 |
-| `MemoryLayer` | `retrieve({text, limit})` | 衰减策略调参 |
+| `MemoryLayer` | `retrieve({text, limit})` | 衰减策略调参（曲线在 `memory/decay-policy.ts`，由 govern 执行） |
 | `CognitionLayer` | `queryRelated` + 边列表格式化 | 深度遍历策略 |
 | `WisdomLayer` | 全量按 priority 排序后截断 | 场景匹配 |
 | `createDefaultLayers` | 只注册有依赖的层 | 自动发现 |
@@ -188,7 +188,7 @@ Runner.handle
 **已接线（含 P1/P2 层扩展）：**
 
 - Builder 可注入 `wisdomStore` / `cognitionStore`；`config-bridge` 与 **Gateway.buildAgent** 在 agent home 的 `AgentDatabase` 上挂 Memory/Wisdom/Cognition/Knowledge，并 discover `skills/`
-- Gateway 为 agent 设置 `builder.agentHome(home)` + `builder.agentId(id)`，extract 落盘与 Memory SQLite 同属 agent home
+- Gateway 为 agent 设置 `builder.agentHome(home)` + `builder.agentId(id)`，Memory SQLite（agent.db）挂在 agent home；**无** extract 落盘目录
 - 默认 `createDefaultSystemPromptAssembler` 在依赖存在时注册 Wisdom / Cognition 层
 - `octopi.json` → `contextAssembler.includeLayerPreview` 可在 manifest 写入层 preview（Web 上下文面板）
 - `GET /api/v1/agents/:id/context/health` 暴露 store 计数（数据面健康）

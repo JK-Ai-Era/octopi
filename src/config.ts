@@ -711,6 +711,30 @@ export interface HarnessConfig {
   /** Memory 写入/置信度策略 */
   memory?: {
     profile?: 'personal_assistant' | 'embedded_interactive' | 'embedded_headless';
+    /** 自动补录开关（默认 true）；false 时不启动 BackfillTrigger */
+    backfill?: {
+      enabled?: boolean;
+      /** 空闲漂移阈值 ms（默认 20min） */
+      idleDelayMs?: number;
+      /** 覆盖差扫描间隔 ms（默认 6h） */
+      gapScanMs?: number;
+      /** 密度预筛最少 user 轮次（默认 2） */
+      minUserTurns?: number;
+      /** 密度预筛最少实质字符量（默认 200） */
+      minTotalChars?: number;
+    };
+    /** 按类型衰减曲线（govern 每轮 decay()） */
+    decay?: {
+      typeParams?: Partial<
+        Record<'fact' | 'method' | 'norm', { idleDays?: number; factor?: number; min?: number }>
+      >;
+    };
+    /** health 双脉搏阈值（MemoryHealthProbe） */
+    health?: {
+      intervalMs?: number;
+      shadowBacklogLimit?: number;
+      limits?: Partial<Record<'fact' | 'method' | 'norm', number>>;
+    };
     confidence?: {
       injectMinScore?: number;
       channelPriors?: Partial<Record<'user_directive' | 'decision' | 'fail_fix' | 'model_inference' | 'admin', number>>;

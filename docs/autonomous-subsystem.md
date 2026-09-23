@@ -179,13 +179,13 @@ sense:
 sense:
   filter:
     events: [session.lifecycle.updated]
-    emits: [memory.extracted]     # 该子系统可能产生的事件类型
+    emits: [memory.steward.backfilled]     # 该子系统可能产生的事件类型
 ```
 
 或在顶层声明（优先级更高）：
 
 ```yaml
-emits: [memory.extracted]
+emits: [memory.steward.backfilled]
 sense:
   filter:
     events: [session.lifecycle.updated]

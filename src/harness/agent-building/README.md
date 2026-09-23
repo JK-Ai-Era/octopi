@@ -14,7 +14,7 @@
 - 注入 `memoryStore` 后：`buildCore` 前用**同一实例**注册 `memory_store` / `memory_search`
 - 同实例注入七层 `MemoryLayer` 与 `runtimeInject.memoryStore`
 - **不再**存在 ETL 的 `MemoryExtractionWiring` / Bridge / PendingExtractor 句柄
-- 旁路自动化走 `memory.steward.backfill` / `memory.steward.govern` 子系统（见 `docs/memory-system-redesign.md`）
+- 旁路自动化走 `memory.steward.backfill` / `memory.steward.govern` 子系统（见 `docs/memory.md`）
 
 ## 返回值
 

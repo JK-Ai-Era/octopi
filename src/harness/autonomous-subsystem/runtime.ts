@@ -417,13 +417,18 @@ export class SubsystemRuntime {
     const agentCtx = this.mainAgentContext ?? this.buildFallbackAgentContext();
     const input = buildAgentInput(entry.spec, agentCtx);
 
-    // 通用：当 SenseContext.eventData 携带结构化 bundle 时，透传到 SubsystemInput.payload
+    // 通用：SenseContext.eventData 透传到 SubsystemInput.payload
+    // （sessionIds/sessionText/reason 等触发负载；bundle 兼容旧键）
     if (ctx.eventData && typeof ctx.eventData === 'object') {
       const eventDataObj = ctx.eventData as Record<string, unknown>;
-      const bundle = eventDataObj.bundle;
-      if (bundle && typeof bundle === 'object') {
-        if (!input.payload) input.payload = {};
-        (input.payload as Record<string, unknown>).sessionExtractBundle = bundle;
+      if (!input.payload) input.payload = {};
+      const payload = input.payload as Record<string, unknown>;
+      for (const [k, v] of Object.entries(eventDataObj)) {
+        if (k === 'bundle') {
+          if (v && typeof v === 'object') payload.sessionExtractBundle = v;
+          continue;
+        }
+        if (payload[k] === undefined) payload[k] = v;
       }
     }
 

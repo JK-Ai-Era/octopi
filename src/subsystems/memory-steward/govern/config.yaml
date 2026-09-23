@@ -1,12 +1,13 @@
 id: memory.steward.govern
 name: Memory Steward Govern
-description: 记忆库治理：重复合并、软删除、保护名单（不污染主会话）
+description: 记忆库治理：连续衰减、重复合并、软删除、保护名单（不污染主会话）
 
 sense:
   source: schedule
   interval: 3600000
   filter:
     condition: "true"
+    events: ['memory.health.high_count', 'memory.health.shadow_backlog', 'memory.steward.govern.request']
     emits: ['memory.steward.governed']
   isolation: isolated
 

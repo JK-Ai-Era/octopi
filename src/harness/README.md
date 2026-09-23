@@ -24,7 +24,7 @@
 | Observer | `observer/` | **Run Observatory**：ObserverHub + Run 投影；配置 `observer.level`（缺省 off）；与 Core Telemetry `Observer` 分离 |
 | Execution Environment | `execution-environment/` | 沙箱、工作区 |
 | Human-in-the-Loop | `human-in-the-loop/` | 审批流程 |
-| Memory | `memory/` | 命题记忆（fact/method/norm）、confidence/gates；Steward 在 `subsystems/memory-steward/`；七层组装在 `context/` |
+| Memory | `memory/` | 命题记忆（fact/method/norm）、confidence/gates、补录脉搏/衰减；Steward 在 `subsystems/memory-steward/`；层组装在 `context/`；对外 `docs/memory.md` |
 
 > 表内含 Memory 与 Observer 等；权威分层说明见 [docs/architecture.md](../../docs/architecture.md) 与 [docs/observer-domain.md](../../docs/observer-domain.md)。
 

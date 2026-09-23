@@ -22,7 +22,7 @@
  * 说明：Memory / Cognition / Wisdom / Knowledge 不按文件目录落盘，
  * 统一由 AgentDatabase（per-agent SQLite agent.db）承载。
  * 旧 extract/（JsonlExtractorStore）目录已废弃，init 不再预建；
- * 记忆旁路见 memory.steward.*（docs/memory-system-redesign.md）。
+ * 记忆旁路见 memory.steward.*（docs/memory.md）。
  *
  *     workspace/
  *       default/                       ← agent 沙箱目录（工具操作 cwd）

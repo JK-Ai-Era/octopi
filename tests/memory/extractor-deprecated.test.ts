@@ -1,6 +1,6 @@
 /**
  * memory-extractor 已移除 — 旧工厂路径的兼容垫片已不存在。
- * 见 docs/memory-system-redesign.md（Memory Steward 取代 ETL 提取主路径）。
+ * 见 docs/memory.md（Memory Steward 取代 ETL 提取主路径）。
  */
 
 describe('memory extractor removal', () => {

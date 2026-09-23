@@ -278,6 +278,67 @@ export const ConstitutionConfigSchema = z
 
 export const MemoryConfigSchema = z.object({
   profile: z.enum(['personal_assistant', 'embedded_interactive', 'embedded_headless']).optional(),
+  /** 自动补录脉搏（硬收敛 / idle / 覆盖差）；false 时省 LLM 成本，govern 仍可跑 */
+  backfill: z
+    .object({
+      enabled: z.boolean().optional(),
+      /** 空闲漂移阈值（默认 20min） */
+      idleDelayMs: z.number().int().positive().optional(),
+      /** 覆盖差扫描间隔（默认 6h） */
+      gapScanMs: z.number().int().positive().optional(),
+      /** 密度预筛：最少 user 轮次（默认 2） */
+      minUserTurns: z.number().int().positive().optional(),
+      /** 密度预筛：最少实质字符量（默认 200） */
+      minTotalChars: z.number().int().positive().optional(),
+    })
+    .optional(),
+  /** 按类型衰减曲线（govern 每轮 decay()） */
+  decay: z
+    .object({
+      typeParams: z
+        .object({
+          fact: z
+            .object({
+              idleDays: z.number().positive().optional(),
+              factor: z.number().gt(0).lt(1).optional(),
+              min: z.number().min(0).max(1).optional(),
+            })
+            .optional(),
+          method: z
+            .object({
+              idleDays: z.number().positive().optional(),
+              factor: z.number().gt(0).lt(1).optional(),
+              min: z.number().min(0).max(1).optional(),
+            })
+            .optional(),
+          norm: z
+            .object({
+              idleDays: z.number().positive().optional(),
+              factor: z.number().gt(0).lt(1).optional(),
+              min: z.number().min(0).max(1).optional(),
+            })
+            .optional(),
+        })
+        .optional(),
+    })
+    .optional(),
+  /** health 双脉搏（MemoryHealthProbe 阈值；govern 仍可 1h schedule） */
+  health: z
+    .object({
+      /** 探测间隔（默认 1h） */
+      intervalMs: z.number().int().positive().optional(),
+      /** shadow 积压阈值（默认 50） */
+      shadowBacklogLimit: z.number().int().nonnegative().optional(),
+      /** 各 type 活跃数上限（默认 fact 200 / method 100 / norm 150） */
+      limits: z
+        .object({
+          fact: z.number().int().nonnegative().optional(),
+          method: z.number().int().nonnegative().optional(),
+          norm: z.number().int().nonnegative().optional(),
+        })
+        .optional(),
+    })
+    .optional(),
   confidence: z
     .object({
       injectMinScore: z.number().min(0).max(1).optional(),

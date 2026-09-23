@@ -4,6 +4,8 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { SubsystemLoader } from '../../src/harness/autonomous-subsystem/loader.js';
 import { planSoftDeletes } from '../../src/subsystems/memory-steward/shared/policy.js';
+import { handler as governHandler } from '../../src/subsystems/memory-steward/govern/handler.js';
+import { InMemoryMemoryStore } from '../../src/harness/memory/store.js';
 import type { MemoryEntry } from '../../src/harness/memory/types.js';
 
 function entry(partial: Partial<MemoryEntry> & { id: string; content: string }): MemoryEntry {
@@ -156,5 +158,58 @@ describe('govern soft-delete plan', () => {
     const loser = plan.find((p) => p.ruleId === 'duplicate_loser');
     expect(loser?.id).toBe('old');
     expect(loser?.winnerId).toBe('new');
+  });
+});
+
+describe('govern wires MemoryStore.decay before soft-delete plan', () => {
+  async function seedIdleFact(store: InMemoryMemoryStore): Promise<string> {
+    const id = await store.store({
+      type: 'fact',
+      content: 'Memory backend uses SqliteMemoryStore on agent.db for this agent',
+      source: 'test',
+      confidence: 0.7,
+      importance: 0.6,
+      tags: ['fact', 'decision'],
+      channel: 'decision',
+      status: 'active',
+      evidence: '"use SqliteMemoryStore on agent.db"',
+      anchors: ['SqliteMemoryStore', 'agent.db'],
+      futureUse: 'When configuring memory backend use SqliteMemoryStore',
+    });
+    // 超过 decay 窗口（30d）未访问
+    await store.update(id, { lastAccessedAt: Date.now() - 40 * 86_400_000 });
+    return id;
+  }
+
+  it('decays idle entries and reports count in signal', async () => {
+    const store = new InMemoryMemoryStore();
+    const id = await seedIdleFact(store);
+
+    const out = await governHandler({}, { memoryStore: store });
+
+    const after = await store.get(id);
+    expect(after?.decayFactor).toBeLessThan(1);
+    expect(after?.decayFactor).toBeCloseTo(0.95, 5);
+
+    const data = out.signals[0]?.data as { decayed?: number } | undefined;
+    expect(data?.decayed).toBe(1);
+    expect(out.act?.messages?.[0]?.content).toContain('decayed=1');
+  });
+
+  it('skips decay on dryRun and leaves decayFactor untouched', async () => {
+    const store = new InMemoryMemoryStore();
+    const id = await seedIdleFact(store);
+
+    const out = await governHandler(
+      {},
+      { memoryStore: store, __subsystem_config__: { softDelete: { dryRun: true } } },
+    );
+
+    const after = await store.get(id);
+    expect(after?.decayFactor).toBe(1);
+    const data = out.signals[0]?.data as { decayed?: number; dryRun?: boolean } | undefined;
+    expect(data?.decayed).toBe(0);
+    expect(data?.dryRun).toBe(true);
+    expect(out.act?.messages?.[0]?.content).toContain('dryRun=true');
   });
 });

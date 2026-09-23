@@ -76,6 +76,11 @@ export class SqliteMemoryStore implements MemoryStore {
     }
   }
 
+  /** 底层 AgentDatabase（覆盖表 / 治理扩展用） */
+  get database(): AgentDatabase {
+    return this.db;
+  }
+
   /** 是否启用 sqlite-vec 检索 */
   get vectorEngineActive(): 'sqlite-vec' | 'js' | 'keyword' {
     if (!this.embedding) return 'keyword';
@@ -465,24 +470,48 @@ export class SqliteMemoryStore implements MemoryStore {
   async update(id: string, patch: Partial<MemoryEntry>): Promise<void> {
     const fields: string[] = [];
     const params: any[] = [];
+    const set = (col: string, value: unknown) => {
+      fields.push(`${col} = ?`);
+      params.push(value);
+    };
 
-    if (patch.type !== undefined) { fields.push('type = ?'); params.push(patch.type); }
-    if (patch.content !== undefined) { fields.push('content = ?'); params.push(patch.content); }
-    if (patch.confidence !== undefined) { fields.push('confidence = ?'); params.push(patch.confidence); }
-    if (patch.importance !== undefined) { fields.push('importance = ?'); params.push(patch.importance); }
-    if (patch.tags !== undefined) { fields.push('tags = ?'); params.push(JSON.stringify(patch.tags)); }
-    if (patch.decayFactor !== undefined) { fields.push('decay_factor = ?'); params.push(patch.decayFactor); }
-    if (patch.status !== undefined) { fields.push('status = ?'); params.push(patch.status); }
-    if (patch.channel !== undefined) { fields.push('channel = ?'); params.push(patch.channel); }
-    if (patch.futureUse !== undefined) { fields.push('future_use = ?'); params.push(patch.futureUse); }
-    if (patch.reinforcedAt !== undefined) { fields.push('reinforced_at = ?'); params.push(patch.reinforcedAt); }
+    if (patch.type !== undefined) set('type', patch.type);
+    if (patch.content !== undefined) set('content', patch.content);
+    if (patch.source !== undefined) set('source', patch.source);
+    if (patch.confidence !== undefined) set('confidence', patch.confidence);
+    if (patch.importance !== undefined) set('importance', patch.importance);
+    if (patch.accessCount !== undefined) set('access_count', patch.accessCount);
+    if (patch.lastAccessedAt !== undefined) set('last_accessed_at', patch.lastAccessedAt);
+    if (patch.createdAt !== undefined) set('created_at', patch.createdAt);
+    if (patch.decayFactor !== undefined) set('decay_factor', patch.decayFactor);
+    if (patch.tags !== undefined) set('tags', JSON.stringify(patch.tags));
+    if (patch.status !== undefined) set('status', patch.status);
+    if (patch.channel !== undefined) set('channel', patch.channel);
+    if (patch.futureUse !== undefined) set('future_use', patch.futureUse);
+    if (patch.anchors !== undefined) set('anchors', JSON.stringify(patch.anchors));
+    if (patch.evidence !== undefined) set('evidence', patch.evidence);
+    if (patch.reinforcedAt !== undefined) set('reinforced_at', patch.reinforcedAt);
+    if (patch.deleted !== undefined) set('deleted', patch.deleted ? 1 : 0);
+    if (patch.deletedAt !== undefined) set('deleted_at', patch.deletedAt);
+    if (patch.deletedBy !== undefined) set('deleted_by', patch.deletedBy);
+    if (patch.deletedReason !== undefined) set('deleted_reason', patch.deletedReason);
+    if (patch.deletedMeta !== undefined) {
+      set('deleted_meta', patch.deletedMeta ? JSON.stringify(patch.deletedMeta) : null);
+    }
 
     if (fields.length === 0) return;
 
     params.push(id);
     this.db.raw.prepare(`UPDATE memories SET ${fields.join(', ')} WHERE id = ?`).run(...params);
 
-    if (this.embedding && (patch.content !== undefined || patch.tags !== undefined || patch.futureUse !== undefined)) {
+    const contentish =
+      patch.content !== undefined ||
+      patch.tags !== undefined ||
+      patch.futureUse !== undefined ||
+      patch.anchors !== undefined ||
+      patch.evidence !== undefined ||
+      patch.type !== undefined;
+    if (this.embedding && contentish) {
       this.embeddingBackfillScheduled = true;
       // 内容变更后强制重算该条
       try {
@@ -544,17 +573,24 @@ export class SqliteMemoryStore implements MemoryStore {
     return rows.map((r) => this.rowToEntry(r));
   }
 
-  async decay(): Promise<number> {
+  async decay(options?: {
+    typeParams?: Partial<Record<MemoryType, { idleDays?: number; factor?: number; min?: number }>>;
+  }): Promise<number> {
+    const { resolveDecayParams } = await import('../decay-policy.js');
+    const params = resolveDecayParams(options?.typeParams);
     const now = Date.now();
-    const thirtyDaysAgo = now - 30 * 24 * 60 * 60 * 1000;
-
-    const result = this.db.raw.prepare(`
-      UPDATE memories
-      SET decay_factor = MAX(0.1, decay_factor * 0.95)
-      WHERE last_accessed_at < ? AND decay_factor > 0.1 AND deleted = 0
-    `).run(thirtyDaysAgo);
-
-    return Number(result.changes);
+    let total = 0;
+    for (const type of ['fact', 'method', 'norm'] as MemoryType[]) {
+      const p = params[type];
+      const cutoff = now - p.idleDays * 86_400_000;
+      const result = this.db.raw.prepare(`
+        UPDATE memories
+        SET decay_factor = MAX(?, decay_factor * ?)
+        WHERE type = ? AND last_accessed_at < ? AND decay_factor > ? AND deleted = 0
+      `).run(p.min, p.factor, type, cutoff, p.min);
+      total += Number(result.changes);
+    }
+    return total;
   }
 
   async stats(): Promise<MemoryStats> {

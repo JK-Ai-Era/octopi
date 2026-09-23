@@ -1,3 +1,135 @@
+## v0.50.5
+
+### docs(memory): 同步残留文档/注释，避免后续踩坑
+
+- `docs/architecture.md` Memory 目录树补齐 decay / backfill 脉搏 / similarity / health-probe
+- `docs/context-layer-contracts.md`：去掉 extract 落盘表述；衰减归 `decay-policy` + govern
+- `docs/autonomous-subsystem.md`：示例 `emits` 改为 `memory.steward.backfilled`（勿再用 `memory.extracted`）
+- `arch/memory-system-redesign.md`：Steward 措辞、无 `memory_get`、shared=`policy.ts`、govern 监听 health 事件、旧 ETL 文档指针
+- `README` / `README_CN`：产品 **8 层**上下文（补 Runtime）；Memory 表链到 `docs/memory.md`
+- harness/memory README、index 注释：ContextLayer 1–7 与产品 8 层区分
+
+## v0.50.4
+
+### docs(memory): 对外 Memory 文档 + redesign 迁入 arch
+
+- 新增 **`docs/memory.md`**：八层中 Memory 层的理念、价值模型、写入/读取/治理、配置与边界（对外）
+- `docs/memory-system-redesign.md` 收成指针；完整规格迁至 **`arch/memory-system-redesign.md`** 并标 as-built（含 v0.48–0.50 增量与有意偏离）
+- 引用路径同步（AGENTS / architecture / harness/memory 等）
+
+## v0.50.3
+
+### fix(memory)!: Sqlite update 全字段对齐；废除关键词极性语义冲突
+
+- **Sqlite `update`**：补齐 `source/accessCount/lastAccessedAt/createdAt/anchors/evidence/deleted*`，与 InMemory `Partial<MemoryEntry>` 语义一致
+- **删除** `claimPolarity` / `findSemanticConflict`（正则猜「是否」违反 redesign「意图不进正则」）
+- 纠正改为**结构规则**：近重复 + 强通道（user_directive/decision/fail_fix）→ supersede；全等/弱通道 → `duplicate`；`memory_store` 仍走显式 `supersedes_id`
+- 字面不近似的语义对立回归 **OP-2**（LLM，不在写路径猜）
+
+## v0.50.2
+
+### fix(memory): 硬收敛 sessionText 指纹/预筛 + 补录 conflict supersede + schema.gates
+
+- **硬收敛**：`sessionText` 快照优先参与密度/指纹（`parseEvidenceLines`）；store.messages 已清空时不再丢快照、不再恒定空指纹导致 `already_covered`
+- **补录纠正**：`admitCandidates` 对 `user_directive|decision|fail_fix` 的语义冲突 **supersede** 旧条（先写新再软删）；`model_inference` 仍拒
+- **`octopi.schema.json`**：补 `memory.gates`（与 Zod 对齐）
+
+## v0.50.1
+
+### refactor(memory): health 阈值可配 + Runner 持有 timer 生命周期；撤回 cognition/knowledge 工具
+
+- `memory.health.{intervalMs,shadowBacklogLimit,limits.*}` → `MemoryHealthProbe`
+- `SessionAwareRunner.dispose()`：释放 BackfillTrigger / HealthProbe / SubsystemRuntime；Gateway `stop()` 调用（防热重建 timer 泄漏、重复 emit）
+- **删除** `cognition_explore` / `knowledge_lookup` 及 tool-set/builder/gateway 注入（Cognition/Knowledge 将大改，避免工具面锁死接口）；存储层保留
+
+## v0.50.0
+
+### feat(memory): 语义冲突 / 类型衰减 / health 双脉搏 / cognition·knowledge 工具
+
+**语义冲突（OP-2 残留收窄）**
+- `claimPolarity` + `anchorJaccard` + `findSemanticConflict`：同 type + 锚点重叠 + 极性相反
+- 写路径（`admitCandidates` / `memory_store`）拒 `semantic_conflict`（提示 `supersedes_id`）；govern 低分者 `superseded`
+
+**类型衰减（OP-6）**
+- `decay-policy.ts`：method 更快、norm 更稳、fact 居中；`MemoryStore.decay({ typeParams })`
+- 配置 `memory.decay.typeParams.{fact,method,norm}` → govern
+
+**补录证据切片 + 契约**
+- 只切实质 user/assistant，丢 tool/命令回显；超长 head+tail
+- contract `ExtractionResult` → `BackfillResult`
+
+**health 双脉搏**
+- `MemoryHealthProbe` emit `memory.health.high_count` / `shadow_backlog`
+- SenseEngine：schedule 子系统可并听 `filter.events`；govern 增补 health / `govern.request`
+
+**OP-12 工具**
+- `cognition_explore`（概念邻域）/ `knowledge_lookup`（知识源 + 文件片段）；Gateway 注入 `KnowledgeRegistry`
+
+**测试**：`tests/memory/backfill-trigger.test.ts` 扩展
+
+## v0.49.2
+
+### feat(memory): 补录脉搏参数可配
+
+- `memory.backfill.idleDelayMs`（默认 20min）/ `gapScanMs`（默认 6h）/ `minUserTurns`（默认 2）/ `minTotalChars`（默认 200）
+- 经 `MemoryConfigSchema` → `AgentBuilder.memoryConfig` → `BackfillTrigger`（prefilter / idle / gap）
+- 同步 `octopi.schema.json` / `octopi.example.json`
+
+## v0.49.1
+
+### feat(memory): `memory.backfill.enabled` 自动补录开关
+
+- 默认 **开启**；`false` 时 **不启动** `BackfillTrigger`（硬收敛 / idle / 覆盖差均不 emit），省 Steward LLM 成本
+- **不影响** `memory.steward.govern`（衰减/软删/boost 无 LLM）与手动 `runtime.trigger`
+- 与 `subsystems.denylist` 分工：本键是产品成本开关；denylist 是子系统装配边界
+- 同步：`config-schema.ts` / `octopi.schema.json` / `octopi.example.json`
+
+## v0.49.0
+
+### feat(memory): 补录触发脉搏 — 硬收敛 + idle 漂移 + 覆盖表
+
+**时机（`BackfillTrigger`）**
+- **硬收敛**：`session.lifecycle.updated` → `recent`（含 idle reset / `/new`）立即评估并 emit `memory.steward.backfill.request`
+- **空闲漂移**：默认 20min 无活动后软收敛（可配 `idleDelayMs`）
+- **覆盖差兜底**：默认 6h 扫描 active/recent 且未成功覆盖的会话
+- emit 不阻塞 run 收尾；`/new` 先固化 `sessionText` 快照再开新会话
+
+**覆盖表（`memory_backfill` @ agent.db）**
+- `fingerprint` + `status(pending|skipped|success|failed)`；同指纹 success 不重跑，pending 防重入，failed 到期重试
+- 结构密度预筛（user turns / 字符量）——**不做意图判断**
+- `SqliteMemoryStore.database` 可取 `AgentDatabase`；builder 自动挂 `SqliteBackfillCoverageStore` / InMemory
+
+**其它**
+- Sense `eventData` 通用透传到 `SubsystemInput.payload`（`sessionIds` / `sessionText` / `reason` / `fingerprint`）
+- Runner：`markSessionRecent` 在清空 messages 前写入 `sessionText`；handle 前后 `noteActivity`
+
+**测试**：`tests/memory/backfill-trigger.test.ts`
+
+## v0.48.3
+
+### fix(memory): Steward 补录失败语义 + 写路径去重 + 治理挣得
+
+**P0**
+- `memory.steward.backfill`：缺 `llmPort` / LLM 错误 / 空响应 / JSON 解析失败 → `act.status=failed` + `alert`（不再洗成 success+accepted=0）；合法 `[]` 仍为 success
+- 写路径 G5：`admitCandidates` 与 `memory_store` 用 `findDuplicate`（归一化全等 / trigram ≥0.92）拒绝 `duplicate`（`memory_store` 提示 `supersedes_id`）；同 source 超 `MAX_ENTRIES_PER_SOURCE` → `session_rate_limit`
+
+**P1**
+- 补录显式绑定 `SUBSYSTEM.md`（`__subsystem_prompt__` → `llmPort.cognitivePrompt` → 同目录文件）+ 宪法进 `systemPrompt`，evidence 只进 user
+- `memory.steward.govern`：幸存条目弱 boost / shadow 检索晋升 active；method/norm 出 `promotionCandidates`（**不写 Wisdom**）；ops 含 `boost`
+- 共享公式下沉 `harness/memory/similarity.ts`（govern supersede 与写路径去重同源）
+
+**测试**：`tests/memory/steward-writepath.test.ts`
+
+## v0.48.2
+
+### fix(memory): govern 每轮接线 `MemoryStore.decay()`
+
+- `memory.steward.govern` 在 softDelete 规划前调用 `memoryStore.decay()`（idle > 30d → `decay_factor *= 0.95`，下限 0.1），使 `score = importance * confidence * decayFactor` 真实参与 `decay_unused` 等规则
+- `dryRun` 时 decay 与 softDelete 均不落库
+- 审计 message / signal 增加 `decayed` 计数
+- 测试：`tests/memory/steward-and-loader.test.ts`（govern decay 接线 + dryRun 不写）
+- 文档：`src/subsystems/memory-steward/govern/SUBSYSTEM.md`、`arch/open-problems.md` OP-6 收束
+
 ## v0.48.1
 
 ### feat(commands): 对话内 `/xxx` 命令调用面 + System Issues 问题通道

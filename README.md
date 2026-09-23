@@ -16,7 +16,7 @@ Octopi is an embeddable agent engine for building AI-powered applications. It pr
 - **Embeddable** — Not a standalone app, but a component for your product
 - **4-layer architecture** — Loop → Core → Harness → Integration, clean boundaries, independent layers
 - **15 self-contained domains** — Each domain is independently understandable, testable, and replaceable
-- **7-layer context intelligence** — Wisdom, Persona, Skill, Knowledge, Cognition, Memory, Information
+- **8-layer context intelligence** — Wisdom, Persona, Skill, Knowledge, Cognition, Memory, Runtime, Information (see [docs/memory.md](./docs/memory.md) for Memory)
 - **Security built-in** — Injection detection, risk evaluation, approval workflows — not optional, not removable
 - **Natively multi-agent** — Distributed intelligence from the ground up
 
@@ -78,7 +78,7 @@ Infrastructure primitives (EventBus, StateMachine) and **Kernel ports** (ModelPr
 | **Concurrency** | Multi-key LLM load balancing, rate limiting, session gating |
 | **Execution Environment** | Sandboxing, workspace management, file operations |
 | **Human-in-the-Loop** | Approval workflows, decision caching, risk-based policies |
-| **Memory** | Proposition store (fact/method/norm), gates/confidence, cognition/wisdom stores, Memory Steward subsystems |
+| **Memory** | Proposition store (fact/method/norm), gates/confidence, cognition/wisdom stores, Memory Steward — see [docs/memory.md](./docs/memory.md) |
 | **Observer** | Run Observatory for development: `observer.level` (default `off`), `/debug/run/*`, Web Run panel — see [docs/observer-domain.md](./docs/observer-domain.md) (distinct from Telemetry Core `Observer`) |
 
 ### Layer 3: Integration — External Adapters
