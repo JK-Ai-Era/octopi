@@ -349,19 +349,29 @@ harness/agent/
 
 Loop 层只有 `agentLoop` 纯函数；不要在业务路径手拼 `runAgentWithReliability`。
 
-### 3.8 Plugin Ecosystem — 插件生态
+### 3.8 Plugin Ecosystem — 插件生态（扩展点 + 调用面）
 
-**职责**：Plugin 系统、Skill 管理、工具注册、MCP 集成、斜杠命令。
+**职责**：Plugin 系统、Skill 管理、工具注册、MCP 集成、**对话斜杠命令（Principal 调用面）**。
+
+与 tools/（Agent function-call 调用面）对偶；Command **不是**顶层能力域，也 **不是** Human-in-the-Loop（HITL 只做 risk approval）。
 
 ```
 harness/plugin-ecosystem/
 ├── plugins/              # PluginManager, HookRegistry, Loader
-├── tools/                # ToolBus, BuiltinTools, web_search（多 provider）
-├── skills/               # SkillManager（两阶段加载）
+├── tools/                # ToolBus, BuiltinTools, web_search（Agent 调用面）
+├── skills/               # SkillManager（两阶段加载；frontmatter.command → /name）
 ├── mcp/                  # McpManager, Bridge, Discovery
-├── commands/             # 斜杠命令系统
+├── commands/             # CommandRouter / builtin / skill·user·plugin 桥接
 └── index.ts
 ```
+
+**命令要点**（实现：`commands/`；问题面：`harness/diagnostics`）：
+
+- 入站 `/xxx` 在 Agent Loop **前**裁决；handler 只回 `sessionOps`，Host 落地  
+- 冲突 fail-closed：保留名硬保护；同名多候选默认 reject-all（粘性，直到候选收敛）  
+- `/stop` 为唯一默认 `preempt` control（多渠道对话中止）  
+- 来源：builtin / plugin `registerCommand` / `agents/<id>/commands/*.md` / SKILL.md `command`  
+- catalog：`GET /api/v1/commands` + WS welcome；UI 输入 `/` 补全
 
 ### 3.9 Autonomous Subsystem — 自主子系统
 

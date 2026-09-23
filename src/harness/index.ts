@@ -157,6 +157,30 @@ export { getBuiltinTools, createShellTool, createFileReadTool, createFileWriteTo
 export { DefaultSkillManager, FileSystemSkillSource } from './plugin-ecosystem/skills/manager.js';
 export type { SkillSource, DiscoveredSkill } from './plugin-ecosystem/skills/manager.js';
 export type { SkillDefinition, SkillManager } from './plugin-ecosystem/skills/types.js';
+export { IssueRegistry } from './diagnostics/index.js';
+export type {
+  IssueDomain,
+  IssueSeverity,
+  IssueStatus,
+  SystemIssue,
+} from './diagnostics/index.js';
+export {
+  CommandRouter,
+  parseCommand,
+  normalizeCommandName,
+  createBuiltinCommands,
+  createClientCatalogCommand,
+  skillCommandsFromManager,
+  loadUserCommandDefs,
+  pluginCommandsFromManager,
+} from './plugin-ecosystem/commands/index.js';
+export type {
+  CommandCatalogItem,
+  CommandConflict,
+  CommandDefinition,
+  CommandResult,
+  SessionOp,
+} from './plugin-ecosystem/commands/index.js';
 export type { AgentPersona, ModelConfig, AgentDefinition } from './types/agent-definition.js';
 export { DefaultMcpManager, mcpToolToOctopiDefinition, extractMcpToolResult, splitNamespacedToolName, MCP_NAMESPACE_SEP, loadMcpServersFromDir, DEFAULT_MCP_SERVERS_DIR } from './plugin-ecosystem/mcp/index.js';
 export type { McpClientFactory, McpManagerCallbacks, McpClient, McpManager, McpServerConfig } from './plugin-ecosystem/mcp/index.js';

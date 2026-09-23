@@ -74,6 +74,27 @@ export class WebApiRouter {
         });
       }
 
+      if (relativePath === '/commands' && method === 'GET') {
+        return this.json(res, 200, {
+          ok: true,
+          data: this.gateway.getCommandCatalog(),
+        });
+      }
+
+      if (relativePath === '/issues' && method === 'GET') {
+        const status = url.searchParams.get('status') as 'open' | 'resolved' | 'dismissed' | null;
+        return this.json(res, 200, {
+          ok: true,
+          data: this.gateway.listSystemIssues(status ?? undefined),
+        });
+      }
+
+      const issueDismissMatch = relativePath.match(/^\/issues\/([^/]+)\/dismiss$/);
+      if (issueDismissMatch && method === 'POST') {
+        this.gateway.getIssueRegistry().dismiss(issueDismissMatch[1]);
+        return this.json(res, 200, { ok: true, data: { id: issueDismissMatch[1], status: 'dismissed' } });
+      }
+
       if (relativePath === '/sessions' && method === 'GET') {
         const agentId = url.searchParams.get('agentId') ?? undefined;
         const sessions = await this.gateway.listSessions(agentId);

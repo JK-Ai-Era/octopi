@@ -104,6 +104,8 @@ export class TuiApp {
 
   private gatewayClient: GatewayChatClient | null = null;
   private currentModel = '';
+  private commandCatalog: SlashCommand[] = [];
+  private openIssues: Array<{ id: string; severity: string; title: string; detail: string }> = [];
 
   private sessionIdRef = { current: '' };
   private toolsExpanded = false;
@@ -179,6 +181,22 @@ export class TuiApp {
         this.tui.requestRender();
       },
       onGatewayInfo: (info) => {
+        if (info.commands?.length) {
+          this.commandCatalog = info.commands.map((c) => ({
+            name: c.name,
+            description: c.description,
+          }));
+          this.setupEditorAutocomplete();
+        }
+        if (info.issues?.length) {
+          this.openIssues = info.issues.map((i) => ({
+            id: i.id,
+            severity: i.severity,
+            title: i.title,
+            detail: i.detail,
+          }));
+          this.chatLog.addSystem(`⚠️ ${this.openIssues.length} open system issue(s) — /issues`);
+        }
         if (info.agents?.length) {
           const agent = info.agents.find(a => a.id === this.config.agentId) ?? info.agents[0];
           if (agent?.model?.model) {
@@ -226,6 +244,40 @@ export class TuiApp {
 
   private handleAgentEvent(event: AgentEvent): void {
     switch (event.type) {
+      // ── 命令结果（engine CommandRouter） ──
+      case 'command.result': {
+        const newSessionId = event.data?.newSessionId as string | undefined;
+        const enterLoop = event.data?.enterLoop as boolean | undefined;
+        // 正文由合成 turn.end 走 assistant 渲染；这里只处理会话切换等元数据
+        if (newSessionId) {
+          this.sessionIdRef.current = newSessionId;
+          this.streamedContent = '';
+          this.chatLog.addSystem(`🐙 Session → ${newSessionId}`);
+        }
+        if (!enterLoop) {
+          this.isProcessing = false;
+          this.setStatus('');
+        }
+        this.tui.requestRender();
+        break;
+      }
+
+      case 'system.issue': {
+        const issue = event.data?.issue as { title?: string; detail?: string; severity?: string } | undefined;
+        if (issue?.title) {
+          this.chatLog.addSystem(`⚠️ [${issue.severity ?? 'warning'}] ${issue.title}`);
+          if (issue.detail) this.chatLog.addSystem(`   ${issue.detail}`);
+          this.tui.requestRender();
+        }
+        break;
+      }
+
+      case 'system.issue.resolved': {
+        const id = event.data?.id as string | undefined;
+        this.openIssues = this.openIssues.filter((i) => i.id !== id);
+        break;
+      }
+
       // ── 流式内容 ──
       case 'llm_stream_delta': {
         const delta = event.data?.delta as string;
@@ -467,8 +519,9 @@ export class TuiApp {
     const trimmed = text.trim();
     if (!trimmed) return;
 
-    if (this.isProcessing) {
-      this.chatLog.addSystem('Agent is busy — press Esc to abort.');
+    // /stop 可抢占：Run 在途仍允许发出
+    if (this.isProcessing && !(trimmed === '/stop' || trimmed.startsWith('/stop '))) {
+      this.chatLog.addSystem('Agent is busy — press Esc to abort or send /stop.');
       this.tui.requestRender();
       return;
     }
@@ -478,37 +531,9 @@ export class TuiApp {
       return;
     }
 
-    // Slash commands
-    if (trimmed === '/help') {
-      this.chatLog.addSystem([
-        'Commands:',
-        '  /help     Show this help',
-        '  /new      Start a new session',
-        '  /clear    Clear screen',
-        '  exit      Exit TUI',
-        '',
-        'Keys:',
-        '  Ctrl+C    Abort / clear / exit',
-        '  Ctrl+D    Exit',
-        '  Ctrl+L    Clear screen',
-        '  Ctrl+O    Toggle tool details',
-        '  Esc       Abort current run',
-      ].join('\n'));
-      this.tui.requestRender();
-      return;
-    }
-
+    // Client-local：仅 /clear；其余命令交给引擎 CommandRouter
     if (trimmed === '/clear') {
       this.chatLog.clear();
-      this.tui.requestRender();
-      return;
-    }
-
-    if (trimmed === '/new') {
-      this.sessionIdRef.current = `${this.config.agentId}:cli:${Date.now()}`;
-      this.streamedContent = '';
-      this.chatLog.clear();
-      this.chatLog.addSystem('🐙 New session started.');
       this.tui.requestRender();
       return;
     }
@@ -569,18 +594,24 @@ export class TuiApp {
 
   // ── Editor ──
 
-  private setupEditor(): void {
-    const slashCommands: SlashCommand[] = [
-      { name: 'help', description: 'Show help' },
-      { name: 'new', description: 'Start a new session' },
-      { name: 'clear', description: 'Clear screen' },
-      { name: 'exit', description: 'Exit TUI' },
-      { name: 'quit', description: 'Exit TUI' },
-    ];
+  private setupEditorAutocomplete(): void {
+    const slashCommands: SlashCommand[] = this.commandCatalog.length
+      ? this.commandCatalog
+      : [
+          { name: 'help', description: 'Show help' },
+          { name: 'stop', description: 'Stop the active run' },
+          { name: 'new', description: 'Start a new session' },
+          { name: 'issues', description: 'List system issues' },
+          { name: 'clear', description: 'Clear screen' },
+        ];
 
     this.editor.setAutocompleteProvider(
       new CombinedAutocompleteProvider(slashCommands, process.cwd()),
     );
+  }
+
+  private setupEditor(): void {
+    this.setupEditorAutocomplete();
 
     this.editor.onSubmit = (text: string) => this.handleSubmit(text);
     this.editor.onEscape = () => {

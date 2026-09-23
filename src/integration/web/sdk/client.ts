@@ -503,6 +503,53 @@ export class OctopiClient {
     return (data?.data as ModelCatalog) ?? { models: [], agents: [] };
   }
 
+  /** 对话斜杠命令目录 */
+  async getCommands(): Promise<Array<{
+    name: string;
+    display: string;
+    description: string;
+    usage?: string;
+    kind: string;
+    source: string;
+  }>> {
+    const data = await this.getJson('/commands');
+    return (data?.data as Array<{
+      name: string;
+      display: string;
+      description: string;
+      usage?: string;
+      kind: string;
+      source: string;
+    }>) ?? [];
+  }
+
+  /** 系统问题面 */
+  async listIssues(status?: 'open' | 'resolved' | 'dismissed'): Promise<Array<{
+    id: string;
+    domain: string;
+    code: string;
+    severity: string;
+    title: string;
+    detail: string;
+    status: string;
+  }>> {
+    const qs = status ? `?status=${encodeURIComponent(status)}` : '';
+    const data = await this.getJson(`/issues${qs}`);
+    return (data?.data as Array<{
+      id: string;
+      domain: string;
+      code: string;
+      severity: string;
+      title: string;
+      detail: string;
+      status: string;
+    }>) ?? [];
+  }
+
+  async dismissIssue(id: string): Promise<void> {
+    await this.postJson(`/issues/${encodeURIComponent(id)}/dismiss`, {});
+  }
+
   /**
    * 查询 session 当前模型
    */

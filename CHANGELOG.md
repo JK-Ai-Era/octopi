@@ -1,4 +1,35 @@
-## v0.48.0 (unreleased)
+## v0.48.1
+
+### feat(commands): 对话内 `/xxx` 命令调用面 + System Issues 问题通道
+
+**命令（plugin-ecosystem/commands）**
+
+- `CommandRouter`：parse / 注册 / 冲突裁决（保留名硬保护 + 同源/跨源默认 **reject-all**）/ execute
+- `sessionOps` 结构化落地（`abort_run` / `new_session` / `set_model` / `compact`）；handler 不直接改 session 引用
+- Builtin：`/help` `/stop` `/new` `/model` `/status` `/issues`；client 目录项 `/clear`
+- **`/stop`**：多渠道对话中止（飞书/微信/Telegram）；唯一默认 `preempt` control，Run 在途立刻 `AgentRuntime.abort`
+- Skill 桥接：SKILL.md frontmatter `command` 注册 `/name`，`$ARGUMENTS` expand 进 Loop
+- `//literal` 转义为普通消息
+
+**System Issues（harness/diagnostics）**
+
+- `IssueRegistry`：幂等 `report` / `resolve` / `dismiss`；WS `system.issue(s)` + `GET /api/v1/issues`
+- 命令冲突/保留名拒绝必进 UI 通道（非仅日志）
+
+**接入**
+
+- Gateway `handleInboundMessage` 先裁决命令再 dispatch；Discourse 留 command 行
+- REST：`GET /api/v1/commands`、`GET /api/v1/issues`、`POST /api/v1/issues/:id/dismiss`
+- WS welcome 附带 `commands` + open `issues`；TUI 补全改数据源，去掉 `/help` `/new` 硬编码
+- Web composer：行首 `/` 弹出命令 + 简介下拉（↑↓ / Tab / Enter）；issue 角标；`/stop` 可抢占
+- 用户命令：`agents/<id>/commands/*.md`（frontmatter `name`/`description`/`kind` + `$ARGUMENTS`）
+- Plugin `registerCommand` 合入 Router（source=plugin）
+- fix(commands): control 命令不进 Loop 时合成 `turn.end` 终态，修复 `/model` 等后 UI 卡 streaming
+- fix(commands): 审查加固 — 合成 turn.end 不带 error（避免 waiting）；applySessionOps 吞错仍出终态；冲突候选粘性 upsert；reject-all 不删 builtin；Run 在途仅 preempt；Issue 复现重开
+- fix(commands): user/skill 命令在 Gateway start 时装载（原先仅 buildAgent，`/help` 进 Loop 前看不到）
+- docs: README / architecture / plugin-ecosystem 同步 Command 调用面归属与用法
+
+## v0.48.0
 
 ### feat(network): WebUI / Gateway 可配置本机或局域网访问
 

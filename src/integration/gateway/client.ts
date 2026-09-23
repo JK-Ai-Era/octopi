@@ -27,8 +27,27 @@ export interface GatewayClientCallbacks {
 }
 
 /** Gateway 连接信息（从欢迎消息解析） */
+export interface GatewayCommandItem {
+  name: string;
+  display: string;
+  description: string;
+  usage?: string;
+  kind: string;
+  source: string;
+}
+
+export interface GatewayIssueItem {
+  id: string;
+  severity: string;
+  title: string;
+  detail: string;
+  status: string;
+}
+
 export interface GatewayInfo {
   agents?: Array<{ id: string; model: { provider: string; model: string } }>;
+  commands?: GatewayCommandItem[];
+  issues?: GatewayIssueItem[];
 }
 
 /**

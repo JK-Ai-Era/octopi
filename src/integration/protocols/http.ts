@@ -216,23 +216,24 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
   }
 
   broadcastEvent(sessionKey: string, event: AgentEvent): void {
-    // sessionKey 格式：agentId:rest（由 Gateway 构建）
-    const agentId = sessionKey.split(':')[0];
+    // sessionKey 格式：agentId:rest（由 Gateway 构建）；'*' = 系统级广播
     const payload = { type: 'event', sessionId: sessionKey, event };
     const data = JSON.stringify(payload);
     const statePayload = this.deriveSessionState(sessionKey, event);
     const stateData = statePayload ? JSON.stringify(statePayload) : undefined;
+    const agentId = sessionKey === '*' ? null : sessionKey.split(':')[0];
 
     for (const session of this.wsSessions) {
       if (session.ws.readyState !== WebSocket.OPEN) continue;
 
+      const matchesAll = sessionKey === '*';
       const matchesExact = session.subscribedSessions?.has(sessionKey) ?? false;
       const sessionAgentId = (session.agentId ?? session.sessionId ?? '').split(':')[0];
-      const matchesAgent = sessionAgentId === agentId;
+      const matchesAgent = agentId !== null && sessionAgentId === agentId;
 
-      if (matchesExact || matchesAgent) {
+      if (matchesAll || matchesExact || matchesAgent) {
         this.enqueueSend(session, data);
-        if (stateData) {
+        if (stateData && !matchesAll) {
           this.enqueueSend(session, stateData);
         }
       }
@@ -260,6 +261,13 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
         return { type: 'state', sessionId: sessionKey, state: 'error' };
       case 'engine.end':
         return { type: 'state', sessionId: sessionKey, state: 'idle' };
+      case 'command.result': {
+        const enterLoop = (event.data as { enterLoop?: boolean } | undefined)?.enterLoop;
+        // prompt 展开仍要进 Loop，不能标 idle
+        return enterLoop
+          ? { type: 'state', sessionId: sessionKey, state: 'running' }
+          : { type: 'state', sessionId: sessionKey, state: 'idle' };
+      }
       default:
         return null;
     }

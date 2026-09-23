@@ -216,6 +216,18 @@ export class ConversationAdapter {
         break;
       }
 
+      // ── 命令结果：只清流式缓冲；正文由合成 turn.end 展示，避免双份气泡 ──
+      case 'command.result': {
+        const data = event.data as { enterLoop?: boolean } | undefined;
+        if (data?.enterLoop) break;
+        if (this.currentAssistantId || this.streamingContent) {
+          this.currentAssistantId = undefined;
+          this.streamingContent = '';
+          changed = true;
+        }
+        break;
+      }
+
       // ── Turn end ──
       // phase=pre_tools：assistant 消息已定稿但工具未跑完；仍 finalize 文本，
       // 但由 store 用 phase 区分 runStatus（tools vs idle），避免 UI 误判空闲。

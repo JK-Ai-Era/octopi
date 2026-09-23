@@ -891,6 +891,8 @@ export class OctopiRuntimeStore extends EventTarget {
       event.type === 'engine.error' ||
       event.type === 'engine.end' ||
       event.type === 'interrupted' ||
+      (event.type === 'command.result' &&
+        !(event.data as { enterLoop?: boolean } | undefined)?.enterLoop) ||
       (event.type === 'turn.end' &&
         (event.data as { phase?: string; error?: boolean } | undefined)?.phase !== 'pre_tools' &&
         !(event.data as { error?: boolean } | undefined)?.error)
@@ -1267,9 +1269,17 @@ export class OctopiRuntimeStore extends EventTarget {
       return 'error';
     }
     if (event.type === 'turn.end') {
-      const data = event.data as { phase?: string; error?: boolean } | undefined;
+      const data = event.data as { phase?: string; error?: boolean; fromCommand?: boolean } | undefined;
+      // 命令合成终态：恒 idle（error 文案已由 command.result / content 承载）
+      if (data?.fromCommand) return 'idle';
       if (data?.phase === 'pre_tools') return 'tools';
       if (data?.error) return 'waiting';
+      return 'idle';
+    }
+    if (event.type === 'command.result') {
+      const data = event.data as { enterLoop?: boolean; status?: string } | undefined;
+      // prompt 展开仍进 Loop；control/client 立刻 idle
+      if (data?.enterLoop) return current === 'sending' ? 'waiting' : current;
       return 'idle';
     }
     if (event.type === 'engine.end' || event.type === 'interrupted') {

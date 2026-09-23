@@ -135,9 +135,51 @@ pre { font-family: var(--font-mono); font-size: 13px; }
 .conversation-scroll { flex: 1; padding: 14px; overflow-y: auto; min-height: 0; }
 
 /* ── Composer ── */
-.composer { border-top: 1px solid var(--color-border); padding: 12px; background: var(--color-surface); flex-shrink: 0; }
+.composer { border-top: 1px solid var(--color-border); padding: 12px; background: var(--color-surface); flex-shrink: 0; position: relative; }
 .composer-footer { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; }
 .composer-actions { display: flex; gap: 8px; }
+
+/* 斜杠命令补全 */
+.cmd-suggest {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: calc(100% - 4px);
+  max-height: 240px;
+  overflow: auto;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+  z-index: 20;
+}
+.cmd-suggest-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 12px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--color-border);
+}
+.cmd-suggest-item:last-child { border-bottom: none; }
+.cmd-suggest-item:hover,
+.cmd-suggest-item.cmd-suggest-active {
+  background: var(--color-accent);
+}
+.cmd-suggest-name {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  font-size: var(--text-sm);
+}
+.cmd-suggest-desc {
+  font-size: var(--text-xs);
+  color: var(--color-muted);
+}
+.cmd-suggest-meta {
+  font-size: var(--text-xs);
+  color: var(--color-muted);
+  opacity: 0.8;
+}
 
 /* ── Conversation Items ── */
 .msg-user { margin-bottom: 12px; display: flex; justify-content: flex-end; }
@@ -149,6 +191,9 @@ pre { font-family: var(--font-mono); font-size: 13px; }
 .msg-assistant-header { font-size: var(--text-sm); color: var(--color-muted); margin-bottom: 4px; display: flex; align-items: center; gap: 6px; }
 .msg-assistant-body { padding: 10px; }
 .msg-assistant-content { margin: 0; word-break: break-word; }
+.msg-assistant-content .md-root { white-space: normal; }
+.msg-assistant-content .md-paragraph { margin: 0 0 0.4em; }
+.msg-assistant-content .md-root > *:last-child { margin-bottom: 0; }
 
 .msg-tool { margin-bottom: 12px; margin-left: 24px; }
 .msg-tool-header { font-size: var(--text-sm); color: var(--color-muted); margin-bottom: 4px; cursor: pointer; display: flex; align-items: center; gap: 6px; }

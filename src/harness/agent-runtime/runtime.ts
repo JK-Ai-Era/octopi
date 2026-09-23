@@ -145,6 +145,14 @@ export class AgentRuntime {
     }
   }
 
+  /** 是否存在该 agent+session 的活跃 Run（/stop 文案与竞态观测） */
+  hasActiveRun(agentId: string, sessionId: string): boolean {
+    for (const run of this.activeRuns.values()) {
+      if (run.agentId === agentId && run.sessionId === sessionId) return true;
+    }
+    return false;
+  }
+
   /**
    * 监听 Runtime 事件。
    * - `on(listener)`：全部事件

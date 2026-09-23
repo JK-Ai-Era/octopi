@@ -14,6 +14,11 @@ export interface SkillDefinition {
   source: 'bundled' | 'workspace' | 'plugin';
   disableModelInvocation?: boolean;
   requiredTools?: string[];
+  /**
+   * 注册斜杠命令（不含 `/`）。缺省不注册。
+   * 校验 `^[a-z][a-z0-9_-]*$`（可写 `/pdf`，规范化后存储）。
+   */
+  command?: string;
 }
 
 /** Skill 管理器接口 */

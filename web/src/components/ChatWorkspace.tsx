@@ -370,6 +370,9 @@ export default function ChatWorkspace() {
   const [inspector, setInspector] = useState<InspectorState>({});
   const [tasks, setTasks] = useState<SessionTaskView[]>([]);
   const [input, setInput] = useState('');
+  const [commands, setCommands] = useState<Array<{ name: string; display: string; description: string; usage?: string; kind: string; source: string }>>([]);
+  const [cmdSuggestIndex, setCmdSuggestIndex] = useState(0);
+  const [openIssues, setOpenIssues] = useState<Array<{ id: string; severity: string; title: string; detail: string }>>([]);
   const [rightTab, setRightTab] = useState<'context' | 'run' | 'tasks' | 'tools' | 'help'>('context');
   const [connectError, setConnectError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -430,6 +433,14 @@ export default function ChatWorkspace() {
     clientRef.current = client;
     storeRef.current = store;
     store.connect();
+
+    // 命令目录 / 系统问题（REST；失败静默，下拉可退回内置列表）
+    void client.getCommands().then((list) => {
+      if (list?.length) setCommands(list);
+    }).catch(() => { /* gateway 未就绪 */ });
+    void client.listIssues('open').then((list) => {
+      setOpenIssues(list.map((i) => ({ id: i.id, severity: i.severity, title: i.title, detail: i.detail })));
+    }).catch(() => { /* ignore */ });
 
     return () => { store.disconnect(); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -609,13 +620,87 @@ export default function ChatWorkspace() {
   const sendMessage = async () => {
     const store = storeRef.current;
     if (!store || !input.trim()) return;
+    const text = input.trim();
+
+    // Client-local：/clear
+    if (text === '/clear') {
+      setInput('');
+      setStream('');
+      return;
+    }
+
+    // /stop 可抢占（busy 也允许）
+    const isStop = text === '/stop' || text.startsWith('/stop ');
+    if (!isStop && (runStatus === 'streaming' || runStatus === 'waiting')) {
+      setActionError('Agent 正在运行——可点中止，或发送 /stop。');
+      return;
+    }
+
+    setActionError(null);
     setRunStatus('waiting');
-    await store.sendMessage(input.trim());
+    await store.sendMessage(text);
     setInput('');
+  };
+
+  // ── 斜杠命令补全 ──
+  const fallbackCommands = [
+    { name: 'help', display: '/help', description: 'Show available commands', kind: 'control', source: 'builtin' },
+    { name: 'stop', display: '/stop', description: 'Stop the active run', kind: 'control', source: 'builtin' },
+    { name: 'new', display: '/new', description: 'Start a new session', kind: 'control', source: 'builtin' },
+    { name: 'model', display: '/model', description: 'Show or switch model', kind: 'control', source: 'builtin' },
+    { name: 'status', display: '/status', description: 'Show session status', kind: 'control', source: 'builtin' },
+    { name: 'issues', display: '/issues', description: 'List system issues', kind: 'control', source: 'builtin' },
+    { name: 'clear', display: '/clear', description: 'Clear screen (client-side)', kind: 'client', source: 'builtin' },
+  ];
+  const catalog = commands.length ? commands : fallbackCommands;
+  const cmdQuery = (() => {
+    const t = input;
+    if (!t.startsWith('/')) return null;
+    if (t.includes('\n')) return null;
+    // 行首命令 token（尚未空格进入参数）才弹出
+    const sp = t.indexOf(' ');
+    if (sp !== -1) return null;
+    return t.slice(1).toLowerCase();
+  })();
+  const cmdMatches = cmdQuery === null
+    ? []
+    : catalog.filter((c) => c.name.toLowerCase().startsWith(cmdQuery)).slice(0, 8);
+  const showCmdSuggest = cmdMatches.length > 0;
+
+  const applyCommand = (name: string) => {
+    const def = catalog.find((c) => c.name === name);
+    const usage = def?.usage?.split(' ')[0] ?? `/${name}`;
+    setInput(`${usage} `);
+    setCmdSuggestIndex(0);
   };
 
   const handleComposerKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     const nativeEvent = e.nativeEvent as unknown as { isComposing?: boolean };
+
+    if (showCmdSuggest) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setCmdSuggestIndex((i) => (i + 1) % cmdMatches.length);
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setCmdSuggestIndex((i) => (i - 1 + cmdMatches.length) % cmdMatches.length);
+        return;
+      }
+      if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey && cmdQuery !== null && !nativeEvent.isComposing)) {
+        e.preventDefault();
+        const pick = cmdMatches[cmdSuggestIndex] ?? cmdMatches[0];
+        if (pick) applyCommand(pick.name);
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setInput('');
+        return;
+      }
+    }
+
     if (e.key === 'Enter' && !e.shiftKey && !e.repeat && !nativeEvent.isComposing) {
       e.preventDefault();
       if (!activeSessionId || !input.trim()) return;
@@ -913,15 +998,41 @@ export default function ChatWorkspace() {
           </div>
 
           <div className="composer">
+            {showCmdSuggest && (
+              <div className="cmd-suggest" role="listbox">
+                {cmdMatches.map((c, idx) => (
+                  <div
+                    key={c.name}
+                    className={`cmd-suggest-item ${idx === cmdSuggestIndex ? 'cmd-suggest-active' : ''}`}
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      applyCommand(c.name);
+                    }}
+                  >
+                    <span className="cmd-suggest-name">{c.display || `/${c.name}`}</span>
+                    <span className="cmd-suggest-desc">{c.description}</span>
+                    {c.usage && <span className="cmd-suggest-meta">{c.usage} · {c.source}</span>}
+                  </div>
+                ))}
+              </div>
+            )}
             <textarea
               value={input}
-              onChange={e => setInput(e.target.value)}
+              onChange={e => {
+                setInput(e.target.value);
+                setCmdSuggestIndex(0);
+              }}
               onKeyDown={handleComposerKeyDown}
               rows={4}
-              placeholder="输入消息，发送到当前会话"
+              placeholder="输入消息，或 / 打开命令列表"
             />
             <div className="composer-footer">
               <div className="small muted">
+                {openIssues.length > 0 && (
+                  <span style={{ color: 'var(--color-warn)', marginRight: 8 }}>
+                    ⚠️ {openIssues.length} issue · /issues
+                  </span>
+                )}
                 {activeSessionId ? `发送到 ${activeSessionId}` : '请先打开一个会话'}。Enter 发送，Shift+Enter 换行。
               </div>
               <div className="composer-actions">

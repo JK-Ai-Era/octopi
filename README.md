@@ -68,7 +68,7 @@ Infrastructure primitives (EventBus, StateMachine) and **Kernel ports** (ModelPr
 | **Context Management** | Message selection, compression, token estimation; 7-layer `ContextLayer` assembly (see [context-layer-contracts](./docs/context-layer-contracts.md)) |
 | **Security** | Risk evaluation, shell parsing, degradation strategies, safety agent |
 | **Reliability** | Reliability wrapper, HarnessLoopEvent, circuit breaker, retry, supervision |
-| **Plugin Ecosystem** | Plugins, tools, skills, MCP, slash commands |
+| **Plugin Ecosystem** | Plugins, tools (Agent 调用面), skills, MCP, **commands**（Principal 对话调用面 `/xxx`）; Diagnostics 见 System Issues |
 | **Multi-Agent** | Agent registry/discovery, Swarm orchestration, AgentProcess |
 | **Autonomous Subsystem** | Sense/Think/Act/Signal/Boundary subsystem framework |
 | **Session Tasks** | Session-level tasks (goal/step), injection, read-only UI; see [task-system](./docs/task-system.md) |

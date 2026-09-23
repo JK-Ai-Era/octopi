@@ -39,10 +39,25 @@ import type { SessionData } from '../../harness/session-types.js';
 import type { StreamingChannelAdapter } from '../protocols/http.js';
 import type { Message } from '../../core/types.js';
 import { randomUUID } from 'node:crypto';
+import { join } from 'node:path';
+import { existsSync } from 'node:fs';
 import { CircuitBreaker } from '../../harness/reliability/circuit-breaker.js';
 import { wrapProviderWithCircuitBreaker } from '../../harness/reliability/provider-wrapper.js';
 import { resolveModel, resolveModelRef, resolveCatalogEntry, parseModelRef } from '../../harness/model/index.js';
 import { PluginManager } from '../../harness/plugin-ecosystem/plugins/manager.js';
+import { CommandRouter } from '../../harness/plugin-ecosystem/commands/router.js';
+import {
+  createBuiltinCommands,
+  createClientCatalogCommand,
+  issuesFromRegistry,
+  skillCommandsFromManager,
+  loadUserCommandDefs,
+  pluginCommandsFromManager,
+  type BuiltinHost,
+} from '../../harness/plugin-ecosystem/commands/index.js';
+import type { CommandCatalogItem, SessionOp, SessionReadView } from '../../harness/plugin-ecosystem/commands/types.js';
+import { IssueRegistry } from '../../harness/diagnostics/registry.js';
+import type { SystemIssue } from '../../harness/diagnostics/types.js';
 
 import { DefaultEventBus } from '../../core/primitives/event-bus.js';
 import { SessionAwareRunner } from '../../harness/runner.js';
@@ -187,6 +202,12 @@ export class Gateway {
   private sessionAcl: SessionAclService;
   /** 进程内共享 Session Lease（E1/E2）：所有 Runner 注入同一实例 */
   private sessionLease: import('../../harness/concurrency/session-lease.js').InProcessSessionLock;
+  /** 产品问题面 */
+  private issueRegistry: IssueRegistry;
+  /** 会话内 /xxx 命令调用面 */
+  private commandRouter: CommandRouter;
+  /** user/skill 命令是否已装载（启动时装载，不依赖 buildAgent） */
+  private commandSourcesReady = false;
 
   constructor(config: GatewayConfig, store?: SessionStore<SessionData>) {
     this.config = config;
@@ -194,6 +215,8 @@ export class Gateway {
     this.pluginManager = new PluginManager();
     this.sessionAcl = new SessionAclService(config.sessionAcl);
     this.sessionLease = new InProcessSessionLock();
+    this.issueRegistry = new IssueRegistry();
+    this.commandRouter = this.createCommandRouter();
     // Gateway EventBus：RuntimeEvents 进可观测总线，并转发到 Gateway listeners（不变量 #6）
     this.gatewayBus = new DefaultEventBus();
     this.observerHub = new ObserverHub(config.observer);
@@ -236,6 +259,9 @@ export class Gateway {
       // 延迟初始化：启动时解析默认持久化 store
       this._defaultStorePromise = createDefaultStore(config.agents);
     }
+
+    // Issue → WS 广播
+    this.issueRegistry.subscribe((ev) => this.broadcastIssue(ev));
 
     // 注册配置中定义的 agents
     for (const agent of config.agents) {
@@ -349,6 +375,14 @@ export class Gateway {
       });
     }
 
+    // Plugin 已注册命令合入 + user/skill 命令装载（必须在收消息前）
+    try {
+      this.registerPluginCommands();
+    } catch (err) {
+      console.warn(`[Gateway] plugin command register failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    await this.ensureCommandSources();
+
     await this.runtime.start();
     this.started = true;
     console.log(`[Gateway] Ready. ${this.agents.size} agent(s), ${this.channels.size} channel(s)`);
@@ -388,14 +422,18 @@ export class Gateway {
     if ('onAbort' in adapter) {
       (adapter as any).onAbort = (sessionId: string) => this.abortSession(sessionId);
     }
-    // 注册欢迎消息扩展（提供 Gateway agent 信息）
+    // 注册欢迎消息扩展（agent 信息 + 命令目录 + open issues）
     if ('onWelcome' in adapter) {
       (adapter as any).onWelcome = () => {
         const agents = Array.from(this.agents.entries()).map(([id, agent]) => ({
           id,
           model: agent.model,
         }));
-        return { agents };
+        return {
+          agents,
+          commands: this.getCommandCatalog(),
+          issues: this.listSystemIssues('open'),
+        };
       };
     }
     console.log(`[Gateway] Registered channel: ${adapter.name}`);
@@ -425,6 +463,281 @@ export class Gateway {
   abortSession(sessionId: string): void {
     for (const agentId of this.agents.keys()) {
       this.runtime.abort(agentId, sessionId);
+    }
+  }
+
+  // ================================================================
+  // Commands / System Issues（arch/slash-commands.md · arch/system-issues.md）
+  // ================================================================
+
+  getIssueRegistry(): IssueRegistry {
+    return this.issueRegistry;
+  }
+
+  getCommandRouter(): CommandRouter {
+    return this.commandRouter;
+  }
+
+  getCommandCatalog(): CommandCatalogItem[] {
+    return this.commandRouter.listCatalog();
+  }
+
+  listSystemIssues(status?: SystemIssue['status']): SystemIssue[] {
+    return this.issueRegistry.list(status ? { status } : undefined);
+  }
+
+  private createCommandRouter(): CommandRouter {
+    const issueRegistry = this.issueRegistry;
+    const host: BuiltinHost = {
+      hasActiveRun: (sessionId, agentId) => this.runtime.hasActiveRun(agentId, sessionId),
+      currentModel: (sessionId, agentId) => {
+        // 同步路径仅能读缓存；完整值走 view（execute 入参）
+        void agentId;
+        void sessionId;
+        return undefined;
+      },
+      listModels: () =>
+        this.getModelCatalog().models.map((m) => ({
+          id: `${m.provider}/${m.model}`,
+          description: m.known ? m.source : undefined,
+        })),
+      listIssues: issuesFromRegistry(issueRegistry),
+      listCatalogNames: () =>
+        this.commandRouter.listDefinitions().map((d) => ({
+          name: d.name,
+          description: d.description,
+          usage: d.usage,
+          source: d.source,
+        })),
+    };
+
+    const router = new CommandRouter({ issueRegistry });
+    for (const def of createBuiltinCommands(host)) {
+      router.register(def, 'builtin');
+    }
+    router.register(createClientCatalogCommand(), 'builtin:client');
+    return router;
+  }
+
+  /** Skill command 桥接（启动 / buildAgent 发现 skill 后调用；冲突进 Issue） */
+  registerSkillCommands(skills: import('../../harness/plugin-ecosystem/skills/types.js').SkillManager): void {
+    const defs = skillCommandsFromManager(skills, (id) => skills.load(id));
+    // ref = skillId：同 skill 重载 upsert；不同 skill 同 command 名可冲突
+    for (const skill of skills.list()) {
+      if (!skill.command) continue;
+      const def = defs.find((d) => d.name === skill.command);
+      if (def) {
+        this.commandRouter.register(def, `skill:${skill.id}`);
+      }
+    }
+  }
+
+  /** 用户 commands/*.md（agent.home/commands） */
+  registerUserCommands(agentId: string, directory: string): void {
+    const loaded = loadUserCommandDefs(directory);
+    for (const { definition, ref } of loaded) {
+      this.commandRouter.register(definition, ref);
+    }
+    if (loaded.length) {
+      console.log(
+        `[Gateway] user commands for ${agentId}: ${loaded.map((x) => '/' + x.definition.name).join(', ')}`,
+      );
+    }
+  }
+
+  /**
+   * 启动时注册各 agent 的 user/skill 命令。
+   * 必须在命令裁决前完成——否则 /help 进 Loop 前看不到自定义命令。
+   */
+  async ensureCommandSources(): Promise<void> {
+    if (this.commandSourcesReady) return;
+    this.commandSourcesReady = true;
+    for (const agent of this.agents.values()) {
+      if (!agent.home) continue;
+      try {
+        this.registerUserCommands(agent.id, join(agent.home, 'commands'));
+      } catch (err) {
+        console.warn(
+          `[Gateway] user command load failed for agent "${agent.id}": ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+      const skillDir =
+        agent.skillDirectory ?? join(agent.home, 'skills');
+      try {
+        if (existsSync(skillDir)) {
+          const { DefaultSkillManager } = await import(
+            '../../harness/plugin-ecosystem/skills/manager.js'
+          );
+          const skillManager = new DefaultSkillManager();
+          await skillManager.discover(skillDir);
+          this.registerSkillCommands(skillManager);
+        }
+      } catch (err) {
+        console.warn(
+          `[Gateway] skill command load failed for agent "${agent.id}": ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+  }
+
+  /** Plugin registerCommand → Router（plugin load 后调用） */
+  registerPluginCommands(): void {
+    for (const def of pluginCommandsFromManager(this.pluginManager)) {
+      const r = this.commandRouter.register(def, `plugin:${def.name}`);
+      if (!r.ok) {
+        this.issueRegistry.report({
+          id: `commands:command.conflict:${def.name}`,
+          domain: 'commands',
+          code: 'command.conflict',
+          severity: 'warning',
+          title: `命令 /${def.name} 未加载`,
+          detail: `plugin 命令注册被拒绝（${r.reason}）。`,
+          refs: [{ label: `plugin: ${def.name}`, pluginId: def.name }],
+        });
+      }
+    }
+  }
+
+  private buildSessionReadView(sessionId: string, agentId: string): SessionReadView {
+    return {
+      sessionId,
+      agentId,
+      hasActiveRun: this.runtime.hasActiveRun(agentId, sessionId),
+    };
+  }
+
+  private async applySessionOps(
+    sessionId: string,
+    agentId: string,
+    ops: SessionOp[] | undefined,
+    result: { newSessionId?: string; display?: { type: 'text' | 'markdown' | 'json'; text: string }; status?: string },
+  ): Promise<{ ok: boolean; error?: string }> {
+    if (!ops?.length) return { ok: true };
+    for (const op of ops) {
+      try {
+        switch (op.op) {
+          case 'abort_run':
+            this.runtime.abort(agentId, sessionId);
+            this.abortSession(sessionId);
+            break;
+          case 'new_session': {
+            const meta = await this.createSession({ agentId });
+            result.newSessionId = meta.id;
+            break;
+          }
+          case 'set_model':
+            await this.setSessionModel(sessionId, op.model, agentId);
+            break;
+          case 'compact':
+            await this.compactSession(sessionId, agentId);
+            break;
+          case 'set_preferred_agent':
+            // reserved；V1 不落地
+            break;
+          default:
+            break;
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        // 单 op 失败：收成 error，仍继续后续 op / 终态广播，避免 UI 卡死
+        result.status = 'error';
+        result.display = {
+          type: 'text',
+          text: `命令已接收，但执行副作用失败：${msg}`,
+        };
+        return { ok: false, error: msg };
+      }
+    }
+    return { ok: true };
+  }
+
+  private async appendCommandDiscourse(
+    sessionId: string,
+    agentId: string,
+    raw: string,
+    displayText: string,
+    extra?: Record<string, unknown>,
+  ): Promise<void> {
+    try {
+      const session = await this.store.load(sessionId);
+      if (!session) return;
+      const now = Date.now();
+      session.messages.push({
+        role: 'user',
+        content: raw,
+        timestamp: now,
+        agentId,
+        metadata: { kind: 'command', ...extra },
+      });
+      session.messages.push({
+        role: 'assistant',
+        content: displayText,
+        timestamp: now + 1,
+        agentId,
+        metadata: { kind: 'command_result', ...extra },
+      });
+      session.meta.updatedAt = now;
+      session.meta.lastInteractionAt = now;
+      await this.store.save(sessionId, session);
+    } catch {
+      // 留痕失败不阻断命令结果回放（Discourse 投影可重建）
+    }
+  }
+
+  private broadcastCommandResult(sessionId: string, payload: Record<string, unknown>): void {
+    const event = {
+      type: 'command.result',
+      sessionId,
+      timestamp: Date.now(),
+      data: payload,
+    } as unknown as AgentEvent;
+    this.emitEvent(event);
+    for (const adapter of this.streamingAdapters) {
+      adapter.broadcastEvent(sessionId, event);
+    }
+  }
+
+  /**
+   * control 命令终态：合成 turn.end，让 Web/TUI 清 streaming 并展示 display 文案。
+   * 命令不进 Loop，不会由 Runner 产出 turn.end。
+   * **不带 error:true**——Loop 的 turn.end+error 表示重试/waiting，会把命令结果打回运行态。
+   * 纯文本（type=text）转 Markdown 硬换行；markdown 原样。
+   */
+  private broadcastCommandTurnEnd(
+    sessionId: string,
+    content: string,
+    displayType: 'text' | 'markdown' | 'json' = 'text',
+  ): void {
+    const raw = content ?? '';
+    const text = displayType === 'text' ? raw.split('\n').join('  \n') : raw;
+    const event = {
+      type: 'turn.end',
+      sessionId,
+      timestamp: Date.now(),
+      data: {
+        content: text,
+        phase: 'final',
+        hasToolCalls: false,
+        fromCommand: true,
+      },
+    } as unknown as AgentEvent;
+    this.emitEvent(event);
+    for (const adapter of this.streamingAdapters) {
+      adapter.broadcastEvent(sessionId, event);
+    }
+  }
+
+  private broadcastIssue(ev: { type: string; issue?: SystemIssue; id?: string; status?: string }): void {
+    const event = {
+      type: ev.type === 'resolved' ? 'system.issue.resolved' : 'system.issue',
+      sessionId: '*',
+      timestamp: Date.now(),
+      data: ev.type === 'resolved' ? { id: ev.id, status: ev.status } : { issue: ev.issue },
+    } as unknown as AgentEvent;
+    this.emitEvent(event);
+    for (const adapter of this.streamingAdapters) {
+      // 系统级问题：广播给全部 WS 会话
+      adapter.broadcastEvent('*', event);
     }
   }
 
@@ -1023,6 +1336,89 @@ export class Gateway {
       { sessionId: sessionKey, agentId: agent.id, message: msg },
     );
 
+    // 2b. 对话内 /xxx 命令（Intent Ingress）：先于 dispatch；/stop 可抢占
+    // 确保 user/skill 命令已装载（热路径兜底；start() 已装载）
+    await this.ensureCommandSources();
+    let inboundContent = msg.content;
+    {
+      const view = this.buildSessionReadView(sessionKey, agent.id);
+      // 尽力补全 model（异步读 store）
+      try {
+        const session = await this.store.load(sessionKey);
+        const modelMeta = session?.metadata?.model as { provider?: string; model?: string } | undefined;
+        if (modelMeta?.model) {
+          view.model = modelMeta.provider
+            ? `${modelMeta.provider}/${modelMeta.model}`
+            : modelMeta.model;
+        }
+      } catch {
+        // view.model 可缺省
+      }
+
+      const outcome = await this.commandRouter.execute({
+        content: msg.content,
+        sessionId: sessionKey,
+        agentId: agent.id,
+        principal: { actorId: msg.senderId, actorType: 'user' },
+        view,
+      });
+
+      if (outcome.kind === 'command') {
+        const result = outcome.result;
+        await this.applySessionOps(sessionKey, agent.id, result.sessionOps, result);
+        if (result.newSessionId) {
+          result.display = {
+            type: 'text',
+            text: `${result.display.text}\nSession: ${result.newSessionId}`,
+          };
+        }
+        await this.appendCommandDiscourse(sessionKey, agent.id, msg.content, result.display.text, {
+          status: result.status,
+          command: outcome.definition?.name,
+          issueId: result.issueId,
+        });
+        this.broadcastCommandResult(sessionKey, {
+          status: result.status,
+          display: result.display,
+          issueId: result.issueId,
+          newSessionId: result.newSessionId,
+          enterLoop: result.enterLoop === true,
+        });
+
+        // prompt 展开：继续进 Loop
+        if (result.enterLoop && result.messages?.length) {
+          const joined = result.messages.map((m) => m.content).join('\n\n');
+          inboundContent = joined;
+        } else {
+          // control / client / 错误：不进 Loop。
+          // 合成 turn.end 作终态；**禁止**带 error:true（Loop 语义会把 UI 打回 waiting）
+          this.broadcastCommandTurnEnd(
+            sessionKey,
+            result.display.text,
+            result.display.type,
+          );
+
+          // IM 短回复（Telegram 等无 WS 事件流的渠道）
+          const adapter = this.channels.get(msg.channel);
+          if (adapter && result.display.text) {
+            try {
+              await adapter.send({
+                channel: msg.channel,
+                conversationId: msg.conversationId,
+                content: result.display.text,
+                replyToId: msg.id,
+              });
+            } catch {
+              // IM 发送失败不影响已广播的 command_result
+            }
+          }
+          return;
+        }
+      } else {
+        inboundContent = outcome.content;
+      }
+    }
+
     // 3. 获取或构建 Agent + SessionAwareRunner，并注册进 Runtime
     let cached = this.agentCache.get(agent.id);
     if (!cached) {
@@ -1040,7 +1436,7 @@ export class Gateway {
     let finalContent = '';
     const dispatchResult = await dispatchChannelMessage({
       runtime: this.runtime,
-      msg,
+      msg: { ...msg, content: inboundContent },
       resolveAgentId: () => agent.id,
       resolveSessionId: () => sessionKey,
       onEvent: (event) => {
@@ -1211,11 +1607,17 @@ export class Gateway {
         const skillManager = new DefaultSkillManager();
         await skillManager.discover(skillDir);
         builder.skills(skillManager);
+        this.registerSkillCommands(skillManager);
       } catch (err) {
         console.warn(`[Gateway] skill discover failed for agent "${agent.id}": ${err instanceof Error ? err.message : String(err)}`);
       }
     }
     if (agent.home) {
+      try {
+        this.registerUserCommands(agent.id, join(agent.home, 'commands'));
+      } catch (err) {
+        console.warn(`[Gateway] user command load failed for agent "${agent.id}": ${err instanceof Error ? err.message : String(err)}`);
+      }
       builder.agentHome(agent.home);
       builder.agentId(agent.id);
       try {
@@ -1402,7 +1804,8 @@ export class Gateway {
       type === 'engine.end' ||
       type === 'engine.error' ||
       type === 'aborted' ||
-      type === 'interrupted'
+      type === 'interrupted' ||
+      type === 'command.result'
     );
   }
 

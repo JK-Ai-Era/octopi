@@ -33,6 +33,8 @@ export interface DiscoveredSkill {
     description: string;
     disableModelInvocation?: boolean;
     requiredTools?: string[];
+    /** frontmatter.command（已规范化；非法则不透出） */
+    command?: string;
   };
 }
 
@@ -74,6 +76,7 @@ interface SkillFrontmatter {
   description?: string;
   'disable-model-invocation'?: string;
   tools?: string;
+  command?: string;
   [key: string]: string | undefined;
 }
 
@@ -137,6 +140,10 @@ export class FileSystemSkillSource implements SkillSource {
       const parsed = parseFrontmatter(skillFile);
       if (!parsed?.meta.name || !parsed.meta.description) continue;
 
+      const rawCommand = parsed.meta.command?.trim().replace(/^\/+/, '').toLowerCase();
+      const command =
+        rawCommand && /^[a-z][a-z0-9_-]*$/.test(rawCommand) ? rawCommand : undefined;
+
       results.push({
         id: entry.name,
         filePath: skillFile,
@@ -148,6 +155,7 @@ export class FileSystemSkillSource implements SkillSource {
           requiredTools: parsed.meta.tools
             ? parsed.meta.tools.split(/[,，]/).map((s) => s.trim())
             : undefined,
+          command,
         },
       });
     }
@@ -213,6 +221,7 @@ export class DefaultSkillManager implements SkillManager {
         source: 'workspace',
         disableModelInvocation: item.meta.disableModelInvocation,
         requiredTools: item.meta.requiredTools,
+        command: item.meta.command,
       };
       this.skills.set(skill.id, skill);
     }
