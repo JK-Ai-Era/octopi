@@ -303,14 +303,17 @@ function spawnDetachedWindows(
  * 解析 Vite 可执行入口（优先直接走 node + vite.js，避开 Windows .cmd shim）
  *
  * @param webDir - web 项目根目录
+ * @param options.hostArg - 传给 Vite 的 `--host` 值（如 `localhost` / `0.0.0.0`）
  * @returns { command, args } 或 null（未安装 vite）
  */
 export function resolveViteLaunch(
   webDir: string,
+  options?: { hostArg?: string },
 ): { command: string; args: string[] } | null {
+  const hostArgs = options?.hostArg ? ['--host', options.hostArg] : [];
   const viteJs = join(webDir, 'node_modules', 'vite', 'bin', 'vite.js');
   if (existsSync(viteJs)) {
-    return { command: process.execPath, args: [viteJs] };
+    return { command: process.execPath, args: [viteJs, ...hostArgs] };
   }
 
   const binName = process.platform === 'win32' ? 'vite.cmd' : 'vite';
@@ -318,9 +321,9 @@ export function resolveViteLaunch(
   if (existsSync(viteBin)) {
     if (process.platform === 'win32') {
       const comSpec = process.env.ComSpec ?? 'cmd.exe';
-      return { command: comSpec, args: ['/d', '/s', '/c', viteBin] };
+      return { command: comSpec, args: ['/d', '/s', '/c', viteBin, ...hostArgs] };
     }
-    return { command: viteBin, args: [] };
+    return { command: viteBin, args: hostArgs };
   }
 
   return null;

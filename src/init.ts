@@ -201,6 +201,8 @@ function generateDefaultConfig(homeDir: string, agentId: string = 'default'): ob
       {
         type: 'http',
         port: 3000,
+        // local=仅本机；lan=局域网访问
+        host: 'local',
         path: '/messages',
       },
     ],
@@ -209,6 +211,10 @@ function generateDefaultConfig(homeDir: string, agentId: string = 'default'): ob
     },
     subsystems: {
       auditDir: join(homeDir, 'audit'),
+    },
+    web: {
+      // local=仅本机；lan=局域网访问（需与 channels[].host 一致）
+      host: 'local',
     },
     // 默认启用免费 DuckDuckGo；可改为 tavily/brave/serper 并配置 apiKey
     webSearch: {

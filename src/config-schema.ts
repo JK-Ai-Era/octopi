@@ -71,9 +71,16 @@ export const PluginConfigSchema = z.object({
 
 // ── Channel 配置 Schema ──
 
+/** 监听 host：local（默认仅本机）| lan（局域网）| 具体 IP/主机名 */
+const NetworkHostSchema = z.union([
+  z.enum(['local', 'lan']),
+  z.string().min(1),
+]);
+
 export const ChannelConfigSchema = z.object({
   type: z.string({ error: 'Channel must have a type' }).min(1),
   port: z.number().positive().optional(),
+  host: NetworkHostSchema.optional(),
   path: z.string().optional(),
   apiKey: z.string().optional(),
   corsOrigins: z.array(z.string()).optional(),
@@ -553,6 +560,8 @@ const SubsystemsConfigSchema = z.object({
 const WebConfigSchema = z.object({
   /** Web UI 源码目录（含 package.json 的 Vite 项目） */
   dir: z.string().optional(),
+  /** 监听 host：local（默认仅本机）| lan（局域网）| 具体 IP/主机名 */
+  host: NetworkHostSchema.optional(),
 });
 
 export const HarnessConfigSchema = z.object({

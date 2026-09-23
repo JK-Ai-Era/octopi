@@ -18,9 +18,18 @@ import type { SessionTaskView, ModelCatalog, SessionModelView } from '../../../s
 import { estimateTextTokens } from '../../../src/harness/context/token-estimator';
 import { JSON_CHARS_PER_TOKEN } from '../../../src/harness/context/token-constants';
 
-const DEFAULT_BASE =
-  (import.meta.env.VITE_OCTOPI_BASE as string | undefined)?.replace(/\/$/, '') ||
-  'http://localhost:3000';
+/** 同主机回源：局域网打开 WebUI 时连宿主机 Gateway，而不是访问者本机 localhost */
+function resolveDefaultBase(): string {
+  const fromEnv = (import.meta.env.VITE_OCTOPI_BASE as string | undefined)?.replace(/\/$/, '');
+  if (fromEnv) return fromEnv;
+  if (typeof window !== 'undefined' && window.location?.hostname) {
+    const { protocol, hostname } = window.location;
+    return `${protocol}//${hostname}:3000`;
+  }
+  return 'http://localhost:3000';
+}
+
+const DEFAULT_BASE = resolveDefaultBase();
 
 function formatTokens(n: number | undefined | null): string {
   if (n == null || typeof n !== 'number' || !Number.isFinite(n)) return '未知';

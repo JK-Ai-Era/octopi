@@ -904,6 +904,11 @@
             "minimum": 1,
             "maximum": 65535
           },
+          "host": {
+            "type": "string",
+            "minLength": 1,
+            "description": "监听 host：local（默认，仅本机 127.0.0.1）| lan（局域网 0.0.0.0）| 具体 IP/主机名"
+          },
           "path": {
             "type": "string"
           },
@@ -1120,6 +1125,11 @@
           "type": "string",
           "minLength": 1,
           "description": "Web UI 源码目录（含 package.json 的 Vite 项目）。未设置时 CLI 按 OCTOPI_WEB_DIR → 配置旁 web/ → ~/.octopi/web → CLI 包内 web/ → cwd/web 探测"
+        },
+        "host": {
+          "type": "string",
+          "minLength": 1,
+          "description": "监听 host：local（默认，仅本机）| lan（局域网）| 具体 IP/主机名。控制 Web UI（Vite）绑定；Gateway HTTP 见 channels[].host（未设置时继承 web.host）"
         }
       }
     },

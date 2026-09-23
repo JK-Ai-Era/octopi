@@ -18,6 +18,8 @@ import {
 export interface WebUiPidRecord {
   pid: number;
   dir?: string;
+  /** 启动时的 web.host（local / lan / IP） */
+  host?: string;
   startedAt?: string;
 }
 
@@ -79,8 +81,13 @@ export function findWebDir(
   return null;
 }
 
-export function startWebUi(webDir: string): number | null {
-  const launch = resolveViteLaunch(webDir);
+export interface StartWebUiOptions {
+  /** Vite `--host` 参数（如 `localhost` / `0.0.0.0`）；省略则用 vite.config 默认 */
+  hostArg?: string;
+}
+
+export function startWebUi(webDir: string, options?: StartWebUiOptions): number | null {
+  const launch = resolveViteLaunch(webDir, { hostArg: options?.hostArg });
   if (!launch) return null;
   return spawnDetached(launch.command, launch.args, { cwd: webDir });
 }
@@ -106,6 +113,7 @@ export function readWebUiPidRecord(): WebUiPidRecord | null {
       return {
         pid,
         dir: typeof parsed.dir === 'string' && parsed.dir ? parsed.dir : undefined,
+        host: typeof parsed.host === 'string' && parsed.host ? parsed.host : undefined,
         startedAt: typeof parsed.startedAt === 'string' && parsed.startedAt ? parsed.startedAt : undefined,
       };
     }
@@ -126,6 +134,7 @@ export function writeWebUiPidFile(pid: number, extra?: Omit<WebUiPidRecord, 'pid
   const record: WebUiPidRecord = {
     pid,
     dir: extra?.dir,
+    host: extra?.host,
     startedAt: extra?.startedAt ?? new Date().toISOString(),
   };
   writeFileSync(getWebUiPidPath(), JSON.stringify(record, null, 2));

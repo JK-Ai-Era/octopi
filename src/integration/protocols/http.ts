@@ -23,6 +23,12 @@ import { WebSocketServer, WebSocket, type WebSocket as WS } from 'ws';
 
 export interface HttpAdapterOptions {
   port: number;
+  /**
+   * 监听 host
+   *
+   * 未指定时绑定 `127.0.0.1`（仅本机）。传 `0.0.0.0` 对局域网开放。
+   */
+  host?: string;
   path?: string;
   /** 启用 WebSocket 支持（默认 true） */
   enableWebSocket?: boolean;
@@ -74,6 +80,7 @@ export interface StreamingChannelAdapter extends ChannelAdapter {
 export class HttpChannelAdapter implements StreamingChannelAdapter {
   name = 'http';
   private port: number;
+  private host: string;
   private path: string;
   private enableWebSocket: boolean;
   private apiKey?: string;
@@ -91,6 +98,7 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
 
   constructor(options: HttpAdapterOptions) {
     this.port = options.port;
+    this.host = options.host ?? '127.0.0.1';
     this.path = options.path ?? '/messages';
     this.enableWebSocket = options.enableWebSocket ?? true;
     this.apiKey = options.apiKey;
@@ -183,10 +191,13 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
       });
     }
 
-    await new Promise<void>((resolve) => {
-      this.server!.listen(this.port, () => {
+    await new Promise<void>((resolve, reject) => {
+      this.server!.once('error', reject);
+      this.server!.listen(this.port, this.host, () => {
+        this.server!.off('error', reject);
         const wsInfo = this.enableWebSocket ? ' + WebSocket /ws' : '';
-        console.log(`[HTTP Adapter] Listening on port ${this.port}${wsInfo}`);
+        const hostInfo = this.host === '0.0.0.0' ? ' (LAN)' : ` (${this.host})`;
+        console.log(`[HTTP Adapter] Listening on ${this.host}:${this.port}${hostInfo}${wsInfo}`);
         resolve();
       });
     });

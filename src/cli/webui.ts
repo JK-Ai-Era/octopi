@@ -4,7 +4,13 @@
 
 import { resolve } from 'node:path';
 import { existsSync, readFileSync } from 'node:fs';
+import { networkInterfaces } from 'node:os';
 import type { CliArgs } from './args.js';
+import {
+  isLanHost,
+  resolveViteHostArg,
+  type NetworkHostConfig,
+} from '../config.js';
 import { ensureDaemonConfig } from './daemon.js';
 import { getOctopiHome } from '../init.js';
 import {
@@ -25,8 +31,8 @@ export interface WebUiStartOptions {
 /** Vite 开发服务器常见端口（用于认领未写入 pid 文件的实例） */
 const VITE_DEV_PORTS = [5173, 5174, 4173] as const;
 
-/** 轻量读取配置中的 web.dir，避免 loadConfig 重复打日志/强校验 */
-function readConfigWebDir(configPath?: string): string | undefined {
+/** 轻量读取配置中的 web.dir / web.host，避免 loadConfig 重复打日志/强校验 */
+function readConfigWebSettings(configPath?: string): { dir?: string; host?: NetworkHostConfig } {
   try {
     let filePath: string;
     if (configPath) {
@@ -36,13 +42,38 @@ function readConfigWebDir(configPath?: string): string | undefined {
     } else {
       filePath = resolve(getOctopiHome(), 'octopi.json');
     }
-    if (!existsSync(filePath)) return undefined;
-    const raw = JSON.parse(readFileSync(filePath, 'utf-8')) as { web?: { dir?: unknown } };
-    const dir = raw.web?.dir;
-    return typeof dir === 'string' && dir.trim() ? dir.trim() : undefined;
+    if (!existsSync(filePath)) return {};
+    const raw = JSON.parse(readFileSync(filePath, 'utf-8')) as {
+      web?: { dir?: unknown; host?: unknown };
+    };
+    const dir = typeof raw.web?.dir === 'string' && raw.web.dir.trim() ? raw.web.dir.trim() : undefined;
+    const host = typeof raw.web?.host === 'string' && raw.web.host.trim()
+      ? (raw.web.host.trim() as NetworkHostConfig)
+      : undefined;
+    return { dir, host };
   } catch {
-    return undefined;
+    return {};
   }
+}
+
+/** 读取配置中的 web.dir */
+function readConfigWebDir(configPath?: string): string | undefined {
+  return readConfigWebSettings(configPath).dir;
+}
+
+/** 探测本机局域网 IPv4（用于启动提示） */
+function firstLanIPv4(): string | null {
+  try {
+    const ifaces = networkInterfaces();
+    for (const entries of Object.values(ifaces)) {
+      for (const entry of entries ?? []) {
+        if (entry.family === 'IPv4' && !entry.internal) return entry.address;
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  return null;
 }
 
 /** 在常见 dev 端口上探测疑似 Vite 进程 */
@@ -79,7 +110,9 @@ export async function webuiStartCommand(
 
   removeWebUiPidFile();
 
-  const configWebDir = readConfigWebDir(configPath);
+  const webSettings = readConfigWebSettings(configPath);
+  const configWebDir = webSettings.dir;
+  const webHost = webSettings.host;
   const webDir = findWebDir(configPath, configWebDir);
   if (!webDir) {
     if (soft) {
@@ -97,7 +130,10 @@ export async function webuiStartCommand(
     process.exit(1);
   }
 
-  const pid = startWebUi(webDir);
+  const hostArg = resolveViteHostArg(webHost);
+  const lanOpen = isLanHost(webHost);
+
+  const pid = startWebUi(webDir, { hostArg });
   if (!pid) {
     if (soft) {
       console.warn('⚠️  Failed to start Web UI (is web/ installed?). Gateway continues without it.');
@@ -111,9 +147,17 @@ export async function webuiStartCommand(
     process.exit(1);
   }
 
-  writeWebUiPidFile(pid, { dir: webDir });
+  writeWebUiPidFile(pid, { dir: webDir, host: webHost });
   console.log(`✅ Web UI started (PID: ${pid})`);
   console.log(`   Directory: ${webDir}`);
+  if (lanOpen) {
+    const lanIp = firstLanIPv4();
+    console.log(`   Access:    LAN (host=${hostArg})`);
+    if (lanIp) console.log(`   URL:       http://${lanIp}:5173`);
+    console.log('   Note:      Gateway 也需 channels[].host/web.host 为 "lan"，局域网客户端才能连上 API');
+  } else {
+    console.log(`   Access:    local only (host=${hostArg})`);
+  }
   console.log(`\nUse 'octopi webui stop' to stop, 'octopi webui status' to check.`);
 
   // spawn 后父进程必须退出：Windows 上残留事件柄/Job 会让 CLI 挂住，
@@ -188,6 +232,10 @@ export async function webuiStatusCommand(): Promise<void> {
   console.log(`  PID:       ${pid}`);
   console.log(`  Status:    ${alive ? '🟢 Running' : '🔴 Stopped'}`);
   if (record.dir) console.log(`  Directory: ${record.dir}`);
+  if (record.host) {
+    const lanOpen = record.host === 'lan' || (record.host !== 'local' && record.host !== 'localhost' && record.host !== '127.0.0.1');
+    console.log(`  Host:      ${record.host} (${lanOpen ? 'LAN' : 'local only'})`);
+  }
   if (record.startedAt) console.log(`  Started:   ${record.startedAt}`);
   if (portHit) console.log(`  Port:      ${portHit.port} (PID ${portHit.pid})`);
   console.log();

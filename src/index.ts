@@ -238,12 +238,14 @@ export { HttpChannelAdapter } from './integration/protocols/http.js';
 export {
   loadConfig, toGatewayConfig, createProviderFromConfig,
   resolveModelConfig, flattenModels,
+  resolveListenHost, resolveViteHostArg, isLanHost,
 } from './config.js';
 export type {
   ModelsConfig, ModelProviderConfig, ModelCapability, ModelInputType,
   NormalizedHarnessConfig, NormalizedModelInfo, HarnessConfig, AgentConfig,
   ContextEngineConfig, ContextAssemblerConfig,
   ChannelConfig, PluginConfig, Defaults,
+  NetworkHostConfig,
   WebSearchToolConfig, WebSearchProviderSlot,
 } from './config.js';
 export { validateConfig, validateConfigOrThrow, HarnessConfigSchema } from './config-schema.js';

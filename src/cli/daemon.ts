@@ -585,12 +585,17 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
 
   const httpConfig = config.channels?.find((c: any) => c.type === 'http');
   const listenPort = args.port ?? httpConfig?.port ?? 3000;
+  // web.host 可作 Gateway HTTP 的缺省（局域网访问两者都要放开）；channels[].host 优先
+  const listenHostConfig = httpConfig?.host ?? config.web?.host;
   if (httpConfig || args.port) {
     const { HttpChannelAdapter } = await import('../integration/protocols/http.js');
     const { WebApiRouter } = await import('../integration/web/api/router.js');
+    const { resolveListenHost } = await import('../config.js');
     const webApiRouter = new WebApiRouter({ gateway, basePath: '/api/v1' });
+    const listenHost = resolveListenHost(listenHostConfig);
     gateway.registerChannel(new HttpChannelAdapter({
       port: listenPort,
+      host: listenHost,
       path: httpConfig?.path ?? '/messages',
       apiKey: httpConfig?.apiKey,
       corsOrigins: httpConfig?.corsOrigins,

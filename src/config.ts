@@ -167,6 +167,51 @@ export interface PluginConfig {
 // ── Channel 配置 ──
 
 /**
+ * 监听 host 配置值
+ *
+ * - `local`（默认）：仅本机访问
+ * - `lan`：局域网访问（绑定全部网卡）
+ * - 具体 IP / 主机名：绑定该地址
+ */
+export type NetworkHostConfig = 'local' | 'lan' | (string & {});
+
+/**
+ * 将 host 配置解析为 HTTP listen 地址
+ *
+ * @param host - 配置值（`local` / `lan` / IP / 主机名）
+ * @returns listen 用的 host 字符串
+ */
+export function resolveListenHost(host?: NetworkHostConfig): string {
+  if (!host || host === 'local') return '127.0.0.1';
+  if (host === 'lan') return '0.0.0.0';
+  return host;
+}
+
+/**
+ * 将 host 配置解析为 Vite `--host` 参数
+ *
+ * @param host - 配置值（`local` / `lan` / IP / 主机名）
+ * @returns 传给 Vite 的 host 参数
+ */
+export function resolveViteHostArg(host?: NetworkHostConfig): string {
+  if (!host || host === 'local') return 'localhost';
+  if (host === 'lan') return '0.0.0.0';
+  return host;
+}
+
+/**
+ * 判断 host 配置是否对局域网开放
+ *
+ * @param host - 配置值
+ * @returns 是否非仅本机
+ */
+export function isLanHost(host?: NetworkHostConfig): boolean {
+  if (!host || host === 'local') return false;
+  if (host === 'lan') return true;
+  return host !== '127.0.0.1' && host !== 'localhost' && host !== '::1';
+}
+
+/**
  * Channel 配置
  */
 export interface ChannelConfig {
@@ -174,6 +219,12 @@ export interface ChannelConfig {
   type: string;
   /** 端口（HTTP channel 用） */
   port?: number;
+  /**
+   * 监听 host（HTTP channel 用）
+   *
+   * `local`（默认，仅本机）| `lan`（局域网）| 具体 IP/主机名
+   */
+  host?: NetworkHostConfig;
   /** 路径（HTTP channel 用） */
   path?: string;
   /** API Key（HTTP channel 认证） */
@@ -750,6 +801,13 @@ export interface HarnessConfig {
   web?: {
     /** Web UI 源码目录（含 package.json）；未设置时按 CLI 内置顺序探测 */
     dir?: string;
+    /**
+     * Web UI / Gateway 监听 host
+     *
+     * `local`（默认，仅本机）| `lan`（局域网）| 具体 IP/主机名。
+     * 与 `channels[].host` 各自生效；局域网访问两者都需放开。
+     */
+    host?: NetworkHostConfig;
   };
   /** 产品 Observer 通道（开发/测试 Run 现场；生产可 summary/off） */
   observer?: import('./harness/observer/types.js').ObserverConfig;

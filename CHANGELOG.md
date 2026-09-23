@@ -1,5 +1,24 @@
 ## v0.48.0 (unreleased)
 
+### feat(network): WebUI / Gateway 可配置本机或局域网访问
+
+**配置**
+
+- `web.host` / `channels[].host`：`local`（默认，仅本机）| `lan`（局域网）| 具体 IP/主机名
+- 未设置 `channels[].host` 时 Gateway HTTP 继承 `web.host`；两者都需放开才能局域网联调
+- `HttpChannelAdapter` 接受 `host`；Vite 经 `--host` 启动（`resolveViteHostArg`）
+
+**行为**
+
+- HTTP channel **默认改为仅本机** `127.0.0.1`（原先未绑 host、等价全网卡）。需要局域网访问时设 `host: "lan"`
+- WebUI 默认 Gateway URL 改为 `window.location.hostname:3000`（局域网打开页面时回源宿主机，而非访问者 localhost）
+- `webui start/status` 展示 Access（local/LAN）与局域网 URL 提示
+
+**辅助**
+
+- `resolveListenHost` / `resolveViteHostArg` / `isLanHost` / `NetworkHostConfig`
+- schema / example / init scaffold 同步 `host`
+
 ### refactor(security)!: 安全不可绕过 — 无总开关，硬边界 + 始终接线 RiskPolicy
 
 **Breaking**

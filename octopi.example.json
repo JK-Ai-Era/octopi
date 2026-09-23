@@ -110,6 +110,7 @@
   "channels": [{
     "type": "http",
     "port": 3000,
+    "host": "local",
     "path": "/messages"
   }],
 
@@ -157,6 +158,7 @@
   },
 
   "web": {
-    "dir": "./web"
+    "dir": "./web",
+    "host": "local"
   }
 }
