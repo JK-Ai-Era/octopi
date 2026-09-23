@@ -1,3 +1,14 @@
+## v0.50.6
+
+### fix(file_search): pattern 自动识别 + 路径感知 glob + 零结果自纠
+
+- **pattern_mode** `auto|literal|regex`（默认 `auto`）：仅强信号编译正则（`^…$`、`\d` 类转义、`.*`、`{n}`、词式 `a|b`）；`arr[0]` / `useState()` / `C++` / `foo.bar` 等代码字面量保持 literal。`regex` 布尔保留为兼容别名
+- **patterns[]**：多词任一命中（OR），替代模型误写的 `a|b` 字面量拼接
+- **glob 路径感知**：匹配 root 相对路径（统一 `/`，兼容 Windows）；`**` 跨目录、`*`/`?` 不跨；无 `/` 模式任意深度；`{a,b}` 多组花括号；`\*` 等转义为字面量
+- **diagnostics + hints**：零结果时返回编译结果与 filesSeen/Matched/Searched/Skipped；auto 正则 0 命中时提示 `pattern_mode=literal`；全 skip 时有专门提示
+- **case_sensitive 默认 false**；逐行流式扫描，`max_file_bytes` 安全阀默认 50MB 可配（不再 1MB 硬跳）；`.svg` 不再当二进制跳过；匹配器去掉多余 `g` flag
+- 工具描述补全 glob/pattern 示例；`tests/harness/builtin-tools.test.ts` 增补回归（含三组真实误匹配用例 + 代码字面量/hints）
+
 ## v0.50.5
 
 ### docs(memory): 同步残留文档/注释，避免后续踩坑
