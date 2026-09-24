@@ -1,3 +1,11 @@
+## v0.50.7
+
+### docs(agents): Phase A–H 已关闭 — 开放项入口对齐
+
+- `AGENTS.md` 不再把 `arch/IMPLEMENTATION-PLAN.md` / `arch/NEXT-STEPS.md` 当作 current implementation phases
+- 指向：`arch/open-problems.md`（研究开放项）、`docs/KNOWN-ISSUES.md`（能力层缺口）、`arch/NEXT-STEPS.md`（短开放项列表）
+- `arch/IMPLEMENTATION-PLAN.md` 仅作归档摘要；勿再按旧 Phase 清单开工
+
 ## v0.50.6
 
 ### fix(file_search): pattern 自动识别 + 路径感知 glob + 零结果自纠
