@@ -91,6 +91,10 @@ export type {
   KnowledgeScopeLevel,
   KnowledgeSourceId,
   KnowledgeChunkId,
+  KnowledgeVisibilityTargetType,
+  KnowledgeVisibilityOp,
+  KnowledgeSessionVisibilityItem,
+  KnowledgeSessionVisibilityInput,
   Branded,
 } from './types.js';
 export { asSourceId, asChunkId } from './types.js';

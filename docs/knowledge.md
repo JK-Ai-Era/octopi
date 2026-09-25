@@ -45,7 +45,7 @@ Session    临时语料  —— 随会话生灭（附件等）
 |------|------|
 | **Global** | 默认可见；可对某 agent `hide` |
 | **Project** | **不挂载则不可见**；挂载后本项目 agent 共享 |
-| **Session** | 仅本会话；可显式升为持久源 |
+| **Session** | 仅本会话；要持久化需管理面改 `scopeRef`（非自动提升） |
 | **无 Agent 级源** | 「某 agent 独享」= 只挂给它的一个 Project；学习结果归 Memory，不靠 scope 硬隔 |
 
 源类型：
@@ -206,17 +206,35 @@ Tier 3  Full        「原文」                knowledge_read
 ## 8. 管理面（Host API 节选）
 
 ```text
-POST   /api/v1/agents/:id/knowledge/sources     # 注册源
-GET    /api/v1/agents/:id/knowledge/sources     # 列表（status / coverage）
+GET    /api/v1/agents/:id/knowledge/sources?scopeLevel=&projectKey=&sessionId=
+POST   /api/v1/agents/:id/knowledge/sources
+GET    /api/v1/agents/:id/knowledge/sources/:sid
 PATCH  /api/v1/agents/:id/knowledge/sources/:sid
 DELETE /api/v1/agents/:id/knowledge/sources/:sid
 POST   /api/v1/agents/:id/knowledge/sources/:sid/reindex
+GET    /api/v1/agents/:id/knowledge/sources/:sid/files
+GET    /api/v1/agents/:id/knowledge/chunks?sourceId=&path=
+GET    /api/v1/agents/:id/knowledge/projects
+POST   /api/v1/agents/:id/knowledge/projects
+DELETE /api/v1/agents/:id/knowledge/projects/:projectKey   # 非空拒绝
+GET    /api/v1/agents/:id/knowledge/search?q=&sessionId=&limit=
+GET    /api/v1/agents/:id/knowledge/visibility
+POST   /api/v1/agents/:id/knowledge/visibility             # assignProject|unassignProject|hide|unhide
+GET    /api/v1/agents/:id/knowledge/session-visibility?sessionId=
+POST   /api/v1/agents/:id/knowledge/session-visibility     # 会话 overlay（仅本场）
+PUT    /api/v1/agents/:id/knowledge/session-visibility     # 全量替换
+DELETE /api/v1/agents/:id/knowledge/session-visibility?sessionId=[&targetType=&targetId=]
 GET    /api/v1/agents/:id/knowledge/stats
+GET    /api/v1/agents/:id/knowledge/promotion-candidates
 ```
 
+- **两级注册**：公共知识库（global）/ 项目（project，先建项目再挂源；删项目须先卸源）。
+- **会话视图**：`session-visibility` overlay 只改本场 effective view，不改源归属；`scopeLevel=session` 必须带 `sessionId`。
+- `sources` 的 `scopeLevel=global|project` 为管理面全量列表（不过滤可见性）。
 - 注册后可 **reindex** 触发解析/索引，并可选启动文件监听。
 - **删除**会清理索引与使用痕迹（合规可抹除）。
 - 自动描述默认可用，可关闭外发；抽样前做敏感形态扫描。
+- 会话临时源（附件）生命周期随 session；**持久化/升级为 Project 源**走管理面 `PATCH scopeRef`（非自动提升）。
 - 外源可带 **`authRef`**（指向 credentials 命名凭证）、**`network`**（`allowPrivateNetwork` / 超时）、**`discover`**（sitemap/crawl 预算）。失败/skip **不删**已入库 chunks。
 - 溯源：命中用稳定逻辑 **`path`**；完整 URL 在文件记录 `external_url`。
 

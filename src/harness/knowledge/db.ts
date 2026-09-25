@@ -80,6 +80,13 @@ export class KnowledgeDatabase {
         ON knowledge_sources(status);
 
       -- Project 显式挂载（默认拒绝）：project_key + agent_id
+      CREATE TABLE IF NOT EXISTS knowledge_projects (
+        project_key  TEXT PRIMARY KEY,
+        display_name TEXT,
+        created_at   INTEGER NOT NULL,
+        updated_at   INTEGER NOT NULL
+      );
+
       CREATE TABLE IF NOT EXISTS knowledge_project_agents (
         project_key  TEXT NOT NULL,
         agent_id     TEXT NOT NULL,
@@ -93,6 +100,16 @@ export class KnowledgeDatabase {
         source_id  TEXT NOT NULL,
         created_at INTEGER NOT NULL,
         PRIMARY KEY (agent_id, source_id)
+      );
+
+      -- 会话可见视图 overlay（资产归属不变；只改本场 effective view）
+      CREATE TABLE IF NOT EXISTS knowledge_session_visibility (
+        session_id   TEXT NOT NULL,
+        target_type  TEXT NOT NULL CHECK (target_type IN ('project', 'source')),
+        target_id    TEXT NOT NULL,
+        op           TEXT NOT NULL CHECK (op IN ('include', 'exclude')),
+        created_at   INTEGER NOT NULL,
+        PRIMARY KEY (session_id, target_type, target_id)
       );
 
       -- ── Index 投影（可重建；P2 Phase A）──
@@ -212,16 +229,25 @@ export class KnowledgeDatabase {
   }
 
   stats(): Record<string, number> {
-    const tables = ['knowledge_sources', 'knowledge_project_agents', 'knowledge_agent_hidden'];
+    const counts: Record<string, string> = {
+      sources: 'SELECT COUNT(*) AS count FROM knowledge_sources',
+      projectAgents: 'SELECT COUNT(*) AS count FROM knowledge_project_agents',
+      agentHidden: 'SELECT COUNT(*) AS count FROM knowledge_agent_hidden',
+      sessionVisibility: 'SELECT COUNT(*) AS count FROM knowledge_session_visibility',
+      files: 'SELECT COUNT(*) AS count FROM knowledge_files',
+      chunks: 'SELECT COUNT(*) AS count FROM knowledge_chunks',
+      embeddings: 'SELECT COUNT(*) AS count FROM knowledge_chunk_embeddings',
+      hits: 'SELECT COUNT(*) AS count FROM knowledge_hits',
+      jobsQueued: "SELECT COUNT(*) AS count FROM knowledge_jobs WHERE status = 'queued'",
+      jobsRunning: "SELECT COUNT(*) AS count FROM knowledge_jobs WHERE status = 'running'",
+    };
     const result: Record<string, number> = {};
-    for (const table of tables) {
+    for (const [key, sql] of Object.entries(counts)) {
       try {
-        const row = this.db.prepare(`SELECT COUNT(*) as count FROM ${table}`).get() as {
-          count: number;
-        };
-        result[table] = row.count;
+        const row = this.db.prepare(sql).get() as { count: number };
+        result[key] = row.count;
       } catch {
-        result[table] = 0;
+        result[key] = 0;
       }
     }
     return result;

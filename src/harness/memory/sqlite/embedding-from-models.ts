@@ -75,7 +75,8 @@ export function resolveEmbeddingRuntime(models?: ModelsConfig | null): ResolvedE
   if (!emb?.model || emb.enabled === false) return null;
 
   const { baseUrl, apiKey, type } = resolveEmbeddingEndpoint(emb, models?.providers);
-  const dimensions = emb.dimensions ?? (type === 'ollama' ? 1024 : 1536);
+  // 本地假定维度（存储/契约）；**仅 emb.dimensions 显式写出**才进请求体
+  const localDimensions = emb.dimensions ?? (type === 'ollama' ? 1024 : 1536);
 
   const config: EmbeddingConfig = {
     type,
@@ -89,15 +90,16 @@ export function resolveEmbeddingRuntime(models?: ModelsConfig | null): ResolvedE
     headers: emb.headers,
     request: emb.request,
     supportsBatch: emb.supportsBatch,
+    maxBatchSize: emb.maxBatchSize,
     timeoutMs: emb.timeoutMs,
-    dimensions,
+    dimensions: emb.dimensions,
   };
 
   return {
     provider: createEmbeddingProvider(config),
     vectorEngine: emb.vectorEngine ?? 'auto',
     sqliteVecExtensionPath: emb.sqliteVecExtensionPath,
-    dimensions,
+    dimensions: localDimensions,
     model: emb.model,
     type,
   };

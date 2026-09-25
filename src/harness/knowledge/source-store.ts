@@ -124,11 +124,12 @@ export class KnowledgeSourceStore {
     const now = Date.now();
     const id = input.id ?? `ks_${randomUUID().slice(0, 12)}`;
     const displayName = input.displayName?.trim() || deriveDisplayName(input.location);
+    const scopeRef = normalizeScope(input.scopeRef);
     const source: KnowledgeSource = {
       id: asSourceId(id),
       kind: input.kind,
       location: input.location,
-      scopeRef: normalizeScope(input.scopeRef),
+      scopeRef,
       sync: { ...DEFAULT_SYNC, ...input.sync },
       status: input.status ?? 'pending',
       displayName,
@@ -142,6 +143,9 @@ export class KnowledgeSourceStore {
       createdAt: now,
       updatedAt: now,
     };
+    if (scopeRef.level === 'project') {
+      this.createProject(scopeRef.key);
+    }
     this.upsertRow(source);
     return source;
   }
@@ -183,7 +187,15 @@ export class KnowledgeSourceStore {
       ...(patch.status !== undefined ? { status: patch.status } : {}),
       ...(patch.coverage !== undefined ? { coverage: patch.coverage } : {}),
       ...(patch.errors !== undefined ? { errors: patch.errors } : {}),
-      ...(patch.scopeRef !== undefined ? { scopeRef: normalizeScope(patch.scopeRef) } : {}),
+      ...(patch.scopeRef !== undefined
+        ? {
+            scopeRef: (() => {
+              const scope = normalizeScope(patch.scopeRef!);
+              if (scope.level === 'project') this.createProject(scope.key);
+              return scope;
+            })(),
+          }
+        : {}),
       ...(patch.authRef !== undefined
         ? { authRef: patch.authRef === null ? undefined : patch.authRef }
         : {}),
@@ -201,11 +213,16 @@ export class KnowledgeSourceStore {
   }
 
   /**
-   * 卸载源（物理删除注册行；Index 由 ingest 侧清理）
+   * 卸载源（物理删除注册行；Index 由 ingest 侧清理；会话 overlay 一并抹掉）
    */
   remove(id: KnowledgeSourceId | string): boolean {
     const res = this.db.raw.prepare('DELETE FROM knowledge_sources WHERE id = ?').run(id);
     this.db.raw.prepare('DELETE FROM knowledge_agent_hidden WHERE source_id = ?').run(id);
+    this.db.raw
+      .prepare(
+        "DELETE FROM knowledge_session_visibility WHERE target_type = 'source' AND target_id = ?",
+      )
+      .run(id);
     return Number(res.changes ?? 0) > 0;
   }
 
@@ -225,6 +242,33 @@ export class KnowledgeSourceStore {
         'SELECT * FROM knowledge_sources WHERE status != ? ORDER BY catalog_priority DESC, display_name',
       )
       .all('removed') as Array<Record<string, unknown>>;
+    return rows.map(rowToSource);
+  }
+
+  /**
+   * 管理面按归属列源（不过滤可见性；二级注册：公共库 / 项目）
+   */
+  listByScope(
+    level: import('./types.js').KnowledgeScopeLevel,
+    key?: string,
+  ): KnowledgeSource[] {
+    const rows = (
+      key
+        ? this.db.raw
+            .prepare(
+              `SELECT * FROM knowledge_sources
+               WHERE status != 'removed' AND scope_level = ? AND scope_key = ?
+               ORDER BY catalog_priority DESC, display_name`,
+            )
+            .all(level, key)
+        : this.db.raw
+            .prepare(
+              `SELECT * FROM knowledge_sources
+               WHERE status != 'removed' AND scope_level = ?
+               ORDER BY catalog_priority DESC, display_name`,
+            )
+            .all(level)
+    ) as Array<Record<string, unknown>>;
     return rows.map(rowToSource);
   }
 
@@ -258,9 +302,15 @@ export class KnowledgeSourceStore {
   }
 
   /**
-   * 屏蔽 Global 源对某 agent 的可见
+   * 屏蔽 Global 源对某 agent 的可见（仅 global 源有意义）
    */
   hideSource(agentId: string, sourceId: KnowledgeSourceId | string): void {
+    const source = this.get(sourceId);
+    if (source && source.scopeRef.level !== 'global') {
+      throw new Error(
+        `hide is only valid for global sources (got scope ${source.scopeRef.level})`,
+      );
+    }
     this.db.raw
       .prepare(
         `INSERT OR IGNORE INTO knowledge_agent_hidden (agent_id, source_id, created_at)
@@ -283,9 +333,164 @@ export class KnowledgeSourceStore {
   }
 
   /**
-   * 源是否对 (agent, session) 可见
+   * 会话 overlay：单条 upsert（资产归属不变，只改本场视图）
+   */
+  setSessionVisibility(
+    sessionId: string,
+    item: import('./types.js').KnowledgeSessionVisibilityInput,
+  ): void {
+    if (!sessionId?.trim()) throw new Error('sessionId is required');
+    if (!item.targetId?.trim()) throw new Error('targetId is required');
+    this.db.raw
+      .prepare(
+        `INSERT INTO knowledge_session_visibility (session_id, target_type, target_id, op, created_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(session_id, target_type, target_id) DO UPDATE SET op = excluded.op`,
+      )
+      .run(sessionId, item.targetType, item.targetId, item.op, Date.now());
+  }
+
+  /**
+   * 会话 overlay：全量替换
+   */
+  replaceSessionVisibility(
+    sessionId: string,
+    items: readonly import('./types.js').KnowledgeSessionVisibilityInput[],
+  ): void {
+    if (!sessionId?.trim()) throw new Error('sessionId is required');
+    this.db.raw
+      .prepare('DELETE FROM knowledge_session_visibility WHERE session_id = ?')
+      .run(sessionId);
+    for (const item of items) this.setSessionVisibility(sessionId, item);
+  }
+
+  clearSessionVisibility(sessionId: string, target?: {
+    targetType: import('./types.js').KnowledgeVisibilityTargetType;
+    targetId: string;
+  }): void {
+    if (target) {
+      this.db.raw
+        .prepare(
+          'DELETE FROM knowledge_session_visibility WHERE session_id = ? AND target_type = ? AND target_id = ?',
+        )
+        .run(sessionId, target.targetType, target.targetId);
+      return;
+    }
+    this.db.raw
+      .prepare('DELETE FROM knowledge_session_visibility WHERE session_id = ?')
+      .run(sessionId);
+  }
+
+  listSessionVisibility(sessionId: string): import('./types.js').KnowledgeSessionVisibilityItem[] {
+    const rows = this.db.raw
+      .prepare(
+        `SELECT session_id, target_type, target_id, op, created_at
+         FROM knowledge_session_visibility WHERE session_id = ?
+         ORDER BY created_at`,
+      )
+      .all(sessionId) as Array<{
+      session_id: string;
+      target_type: string;
+      target_id: string;
+      op: string;
+      created_at: number;
+    }>;
+    return rows.map((r) => ({
+      sessionId: r.session_id,
+      targetType: r.target_type as import('./types.js').KnowledgeVisibilityTargetType,
+      targetId: r.target_id,
+      op: r.op as import('./types.js').KnowledgeVisibilityOp,
+      createdAt: Number(r.created_at),
+    }));
+  }
+
+  /** 项目登记视图（管理面：先建项目再挂源；**不**用孤儿源计数复活已删项目） */
+  listProjects(): Array<{
+    projectKey: string;
+    displayName?: string;
+    sourceCount: number;
+    assignedAgentIds: string[];
+  }> {
+    const registered = this.db.raw
+      .prepare(
+        `SELECT project_key, display_name FROM knowledge_projects ORDER BY project_key`,
+      )
+      .all() as Array<{ project_key: string; display_name: string | null }>;
+    const counts = this.db.raw
+      .prepare(
+        `SELECT scope_key AS project_key, COUNT(*) AS source_count
+         FROM knowledge_sources
+         WHERE scope_level = 'project' AND status != 'removed'
+         GROUP BY scope_key`,
+      )
+      .all() as Array<{ project_key: string; source_count: number }>;
+    const countMap = new Map(counts.map((c) => [c.project_key, c.source_count]));
+    // 只列已登记项目；孤儿源（项目已删）不再“复活”项目行
+    return registered.map((r) => ({
+      projectKey: r.project_key,
+      displayName: r.display_name ?? undefined,
+      sourceCount: countMap.get(r.project_key) ?? 0,
+      assignedAgentIds: this.listProjectAgents(r.project_key),
+    }));
+  }
+
+  /** 登记空项目（先建项目再挂源） */
+  createProject(projectKey: string, displayName?: string): void {
+    const key = projectKey.trim();
+    if (!key) throw new Error('projectKey is required');
+    const now = Date.now();
+    this.db.raw
+      .prepare(
+        `INSERT INTO knowledge_projects (project_key, display_name, created_at, updated_at)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(project_key) DO UPDATE SET
+           display_name = COALESCE(excluded.display_name, knowledge_projects.display_name),
+           updated_at = excluded.updated_at`,
+      )
+      .run(key, displayName ?? null, now, now);
+  }
+
+  /**
+   * 删除项目登记。非空项目拒绝（先卸载/删除项目下源），避免孤儿源与静默收养。
+   */
+  removeProject(projectKey: string): boolean {
+    const sourceCount = (
+      this.db.raw
+        .prepare(
+          `SELECT COUNT(*) AS n FROM knowledge_sources
+           WHERE scope_level = 'project' AND scope_key = ? AND status != 'removed'`,
+        )
+        .get(projectKey) as { n: number }
+    ).n;
+    if (sourceCount > 0) {
+      throw new Error(
+        `project "${projectKey}" still has ${sourceCount} source(s); remove or reassign them first`,
+      );
+    }
+    const res = this.db.raw
+      .prepare('DELETE FROM knowledge_projects WHERE project_key = ?')
+      .run(projectKey);
+    this.db.raw
+      .prepare('DELETE FROM knowledge_project_agents WHERE project_key = ?')
+      .run(projectKey);
+    this.db.raw
+      .prepare(
+        "DELETE FROM knowledge_session_visibility WHERE target_type = 'project' AND target_id = ?",
+      )
+      .run(projectKey);
+    return Number(res.changes ?? 0) > 0;
+  }
+
+  /**
+   * 源是否对 (agent, session) 可见（effective = base ⊕ session overlay）
    */
   isVisible(source: KnowledgeSource, agentId: string, sessionId?: string): boolean {
+    if (source.status === 'removed' || source.status === 'disabled') return false;
+    return this.applySessionOverlay(source, this.isBaseVisible(source, agentId, sessionId), sessionId);
+  }
+
+  /** Agent 级 base 可见（不含会话 overlay；排查用） */
+  isBaseVisible(source: KnowledgeSource, agentId: string, sessionId?: string): boolean {
     if (source.status === 'removed' || source.status === 'disabled') return false;
     const { level, key } = source.scopeRef;
     if (level === 'global') {
@@ -295,6 +500,36 @@ export class KnowledgeSourceStore {
       return this.isProjectAssigned(key, agentId);
     }
     return Boolean(sessionId) && key === sessionId;
+  }
+
+  private applySessionOverlay(
+    source: KnowledgeSource,
+    base: boolean,
+    sessionId?: string,
+  ): boolean {
+    if (!sessionId) return base;
+    const srcOp = this.sessionOp(sessionId, 'source', source.id);
+    if (srcOp === 'exclude') return false;
+    if (srcOp === 'include') return true;
+    if (source.scopeRef.level === 'project') {
+      const projOp = this.sessionOp(sessionId, 'project', source.scopeRef.key);
+      if (projOp === 'exclude') return false;
+      if (projOp === 'include') return true;
+    }
+    return base;
+  }
+
+  private sessionOp(
+    sessionId: string,
+    targetType: import('./types.js').KnowledgeVisibilityTargetType,
+    targetId: string,
+  ): import('./types.js').KnowledgeVisibilityOp | null {
+    const row = this.db.raw
+      .prepare(
+        'SELECT op FROM knowledge_session_visibility WHERE session_id = ? AND target_type = ? AND target_id = ?',
+      )
+      .get(sessionId, targetType, targetId) as { op?: string } | undefined;
+    return (row?.op as import('./types.js').KnowledgeVisibilityOp | undefined) ?? null;
   }
 
   private isHidden(agentId: string, sourceId: string): boolean {
@@ -351,10 +586,15 @@ export class KnowledgeSourceStore {
   }
 
   /**
-   * 可见源原列表（管理面；含 hiddenFromCatalog）
+   * 可见源列表（effective = base ⊕ session overlay；含 hiddenFromCatalog）
    */
   listVisible(agentId: string, sessionId?: string): KnowledgeSource[] {
     return this.list().filter((s) => this.isVisible(s, agentId, sessionId));
+  }
+
+  /** Agent 级 base 可见源（不含会话 overlay） */
+  listBaseVisible(agentId: string, sessionId?: string): KnowledgeSource[] {
+    return this.list().filter((s) => this.isBaseVisible(s, agentId, sessionId));
   }
 
   private upsertRow(source: KnowledgeSource): void {

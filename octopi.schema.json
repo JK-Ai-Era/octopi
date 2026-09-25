@@ -336,6 +336,11 @@
               "type": "boolean",
               "description": "是否支持批量接口；仅单条时设 false"
             },
+            "maxBatchSize": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "单次批量上限（百炼 qwen3.7-text-embedding=20；超出自动切片）"
+            },
             "timeoutMs": {
               "type": "integer",
               "minimum": 1,
@@ -344,7 +349,7 @@
             "dimensions": {
               "type": "integer",
               "minimum": 1,
-              "description": "向量维度（openai 默认 1536，ollama 默认 1024）"
+              "description": "向量维度；**仅显式配置时**作为请求体 dimensions 下发，未配置由服务端决定（百炼 qwen3.7 默认 1024）。本地假定：openai 1536 / ollama 1024"
             },
             "vectorEngine": {
               "type": "string",

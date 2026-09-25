@@ -660,7 +660,10 @@ const EmbeddingModelConfigSchema = z.object({
   headers: z.record(z.string(), z.string()).optional(),
   request: EmbeddingHttpMappingSchema.optional(),
   supportsBatch: z.boolean().optional(),
+  /** 单次批量上限（百炼 qwen3.7-text-embedding=20；超出自动切片） */
+  maxBatchSize: z.number().int().positive().optional(),
   timeoutMs: z.number().int().positive().optional(),
+  /** 显式配置时才写入请求体 dimensions；未配置由服务端决定（勿假定 1536） */
   dimensions: z.number().int().positive().optional(),
   /** 向量检索引擎：auto=优先 sqlite-vec，不可用时退回 JS 余弦 */
   vectorEngine: z.enum(['auto', 'js', 'sqlite-vec']).optional(),

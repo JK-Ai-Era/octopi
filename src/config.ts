@@ -692,9 +692,11 @@ export interface EmbeddingModelConfig {
   request?: EmbeddingHttpMappingConfig;
   /** 是否支持批量（仅单条接口时设 false） */
   supportsBatch?: boolean;
+  /** 单次批量上限（百炼 qwen3.7-text-embedding=20；超出自动切片） */
+  maxBatchSize?: number;
   /** 请求超时 ms */
   timeoutMs?: number;
-  /** 向量维度 */
+  /** 向量维度（会作为请求体 dimensions 下发） */
   dimensions?: number;
   /** 向量检索引擎；auto=优先 sqlite-vec，失败退回 JS */
   vectorEngine?: VectorEngineChoice;

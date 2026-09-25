@@ -1,13 +1,13 @@
 /**
  * Octopi Web Protocol SDK
  *
- * 第一版协议层，面向浏览器前端。
- * 只负责连接、请求、事件分发，不承载 UI 观点。
+ * 第一版协议层，面向浏览器前端�?
+ * 只负责连接、请求、事件分发，不承�?UI 观点�?
  *
- * 设计目标：
- * - REST 走 /api/v1
- * - WS 走 /ws
- * - 连接状态机独立于 UI
+ * 设计目标�?
+ * - REST �?/api/v1
+ * - WS �?/ws
+ * - 连接状态机独立�?UI
  * - 事件映射交给上层 Runtime Store
  */
 
@@ -18,8 +18,8 @@
 export type ConnectionState = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'disconnected' | 'failed';
 
 /**
- * 对话斜杠命令目录项（与 `CommandCatalogItem` 的传输投影对齐）。
- * 权威类型：`harness/plugin-ecosystem/commands/types.ts`。
+ * 对话斜杠命令目录项（�?`CommandCatalogItem` 的传输投影对齐）�?
+ * 权威类型：`harness/plugin-ecosystem/commands/types.ts`�?
  */
 export interface CommandCatalogItemDto {
   name: string;
@@ -54,7 +54,7 @@ export interface ModelCatalogItem {
   id: string;
   provider: string;
   model: string;
-  /** 未配置时为 null */
+  /** 未配置时�?null */
   contextWindow: number | null;
   maxOutputTokens?: number;
   known: boolean;
@@ -108,7 +108,7 @@ export interface SessionView {
   taskCount?: number;
 }
 
-/** 会话任务（UI 只读） */
+/** 会话任务（UI 只读�?*/
 export interface SessionTaskView {
   id: string;
   parentId?: string;
@@ -118,6 +118,44 @@ export interface SessionTaskView {
   order?: number;
   createdAt: number;
   updatedAt: number;
+}
+
+/** Knowledge 源传输投影（管理面） */
+export interface KnowledgeSourceDto {
+  id: string;
+  kind: string;
+  location: string;
+  scopeRef: { level: 'global' | 'project' | 'session'; key: string };
+  sync: { strategy: string; debounceMs?: number; intervalMs?: number; enabled: boolean };
+  status: string;
+  coverage?: number;
+  errors?: Array<{ path?: string; message: string; at: number }>;
+  displayName: string;
+  description?: string;
+  generatedDescription?: string;
+  catalogPriority?: number;
+  hiddenFromCatalog?: boolean;
+  authRef?: string;
+  lastPolledAt?: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface KnowledgeSourceDetailDto extends KnowledgeSourceDto {
+  fileCount: number;
+  chunkCount: number;
+  errorFileCount: number;
+  skippedFileCount: number;
+  assignedAgentIds: string[];
+  hiddenForAgentIds: string[];
+}
+
+export interface KnowledgeSessionVisibilityItemDto {
+  sessionId: string;
+  targetType: 'project' | 'source';
+  targetId: string;
+  op: 'include' | 'exclude';
+  createdAt: number;
 }
 
 export interface MessageRecord {
@@ -162,7 +200,7 @@ export interface MemoryStats {
   avgImportance?: number;
 }
 
-/** System 装配 UI 快照（产品八层之 1–7；与 harness/context/layer-snapshot 对齐） */
+/** System 装配 UI 快照（产品八层之 1�?；与 harness/context/layer-snapshot 对齐�?*/
 export interface LayerRuntimeViewDto {
   id: 'wisdom' | 'persona' | 'skill' | 'knowledge' | 'cognition' | 'memory' | 'runtime';
   status: 'idle' | 'included' | 'empty' | 'dropped' | 'error' | 'unregistered';
@@ -214,7 +252,7 @@ export interface ContextLayerHealthDto {
   };
 }
 
-/** 近 N 轮装配摘要（timeline 用） */
+/** �?N 轮装配摘要（timeline 用） */
 export interface ContextLayerTurnSummaryDto {
   assembledAt?: number;
   usedTokens: number;
@@ -277,9 +315,9 @@ export interface RunObservatorySnapshotDto {
   llmSummary?: RunMessagesSummaryDto;
   llmEstimatedTokens?: number;
   /**
-   * Guard / RunMetrics 投影。
-   * 权威类型是 Observer `RunGuardMetricsView`（含 wrap-up / usageLedger）；
-   * 传输层 WS 增量合并可能只有子集，故用 Partial 防漂移。
+   * Guard / RunMetrics 投影�?
+   * 权威类型�?Observer `RunGuardMetricsView`（含 wrap-up / usageLedger）；
+   * 传输�?WS 增量合并可能只有子集，故�?Partial 防漂移�?
    */
   guardMetrics?: Partial<import('../../../harness/observer/types.js').RunGuardMetricsView>;
   messagesDiff?: {
@@ -496,7 +534,7 @@ export class OctopiClient {
   }
 
   /**
-   * 模型目录（provider 全量模型 + agent 默认 + levels）
+   * 模型目录（provider 全量模型 + agent 默认 + levels�?
    */
   async getModels(): Promise<ModelCatalog> {
     const data = await this.getJson('/models');
@@ -509,7 +547,7 @@ export class OctopiClient {
     return (data?.data as CommandCatalogItemDto[] | undefined) ?? [];
   }
 
-  /** 系统问题面 */
+  /** 系统问题�?*/
   async listIssues(status?: 'open' | 'resolved' | 'dismissed'): Promise<Array<{
     id: string;
     domain: string;
@@ -546,7 +584,7 @@ export class OctopiClient {
   }
 
   /**
-   * 设置 session 模型（null = 恢复 agent 默认）
+   * 设置 session 模型（null = 恢复 agent 默认�?
    */
   async setSessionModel(
     sessionId: string,
@@ -561,7 +599,7 @@ export class OctopiClient {
   }
 
   /**
-   * 手动结构压缩（不依赖 contextWindow）
+   * 手动结构压缩（不依赖 contextWindow�?
    */
   async compactSession(sessionId: string, agentId?: string): Promise<{
     ok: boolean;
@@ -586,7 +624,7 @@ export class OctopiClient {
     const query = agentId ? `?agentId=${encodeURIComponent(agentId)}` : '';
     const data = await this.getJson(`/sessions${query}`);
     const sessions = (data?.data as SessionSummary[]) ?? [];
-    // 兜底：确保 lastInteractionAt 始终为有效时间戳
+    // 兜底：确�?lastInteractionAt 始终为有效时间戳
     return sessions.map((s) => ({
       ...s,
       lastInteractionAt: s.lastInteractionAt ?? s.updatedAt ?? s.createdAt ?? Date.now(),
@@ -597,7 +635,7 @@ export class OctopiClient {
     agentId: string;
     sessionId?: string;
     metadata?: Record<string, unknown>;
-    /** 会话级模型（`provider/model` 或裸名）；写入 session.metadata.model */
+    /** 会话级模型（`provider/model` 或裸名）；写�?session.metadata.model */
     model?: string;
   }): Promise<SessionSummary> {
     const data = await this.postJson('/sessions', options);
@@ -636,7 +674,7 @@ export class OctopiClient {
   }
 
   /**
-   * 会话最近一次 System 装配快照（产品 L1–L7）
+   * 会话最近一�?System 装配快照（产�?L1–L7�?
    *
    * @param sessionId - 会话 id
    * @returns 快照；无装配记录时为 null
@@ -647,7 +685,7 @@ export class OctopiClient {
   }
 
   /**
-   * 会话最近一次 Run 观测投影（Observer 调试面 /debug/run）
+   * 会话最近一�?Run 观测投影（Observer 调试�?/debug/run�?
    */
   async getSessionRunObservatory(
     sessionId: string,
@@ -662,7 +700,7 @@ export class OctopiClient {
   }
 
   /**
-   * Run messages 快照（摘要 + 配置允许时全文；调试面 /debug/run）
+   * Run messages 快照（摘�?+ 配置允许时全文；调试�?/debug/run�?
    */
   async getSessionRunMessages(
     sessionId: string,
@@ -680,7 +718,7 @@ export class OctopiClient {
   }
 
   /**
-   * Agent 数据面健康（产品 L1–L7 store 计数）
+   * Agent 数据面健康（产品 L1–L7 store 计数�?
    *
    * @param agentId - Agent id
    * @returns 健康快照
@@ -710,6 +748,260 @@ export class OctopiClient {
     const data = await this.getJson(`/memory/query?q=${encodeURIComponent(q)}&limit=${limit}`);
     const payload = data?.data as MemoryQueryResult | undefined;
     return payload ?? { configured: false };
+  }
+
+  // ── Knowledge 管理面（arch/knowledge-admin-ui.md）──
+
+  async listKnowledgeProjects(agentId = 'default'): Promise<
+    Array<{
+      projectKey: string;
+      displayName?: string;
+      sourceCount: number;
+      assignedAgentIds: string[];
+    }>
+  > {
+    const data = await this.getJson(`/agents/${agentId}/knowledge/projects`);
+    return (data?.data as Array<{
+      projectKey: string;
+      displayName?: string;
+      sourceCount: number;
+      assignedAgentIds: string[];
+    }>) ?? [];
+  }
+
+  async createKnowledgeProject(
+    agentId: string,
+    projectKey: string,
+    displayName?: string,
+  ): Promise<void> {
+    await this.postJson(`/agents/${agentId}/knowledge/projects`, { projectKey, displayName });
+  }
+
+  async removeKnowledgeProject(agentId: string, projectKey: string): Promise<void> {
+    await this.deleteJson(
+      `/agents/${agentId}/knowledge/projects/${encodeURIComponent(projectKey)}`,
+    );
+  }
+
+  async listKnowledgeSources(
+    agentId: string,
+    opts?: { sessionId?: string; scopeLevel?: 'global' | 'project' | 'session'; projectKey?: string },
+  ): Promise<KnowledgeSourceDto[]> {
+    const params = new URLSearchParams();
+    if (opts?.sessionId) params.set('sessionId', opts.sessionId);
+    if (opts?.scopeLevel) params.set('scopeLevel', opts.scopeLevel);
+    if (opts?.projectKey) params.set('projectKey', opts.projectKey);
+    const qs = params.toString();
+    const data = await this.getJson(
+      `/agents/${agentId}/knowledge/sources${qs ? `?${qs}` : ''}`,
+    );
+    return (data?.data as KnowledgeSourceDto[]) ?? [];
+  }
+
+  async getKnowledgeSourceDetail(agentId: string, sourceId: string): Promise<KnowledgeSourceDetailDto | null> {
+    const data = await this.getJson(`/agents/${agentId}/knowledge/sources/${encodeURIComponent(sourceId)}`);
+    return (data?.data as KnowledgeSourceDetailDto | null) ?? null;
+  }
+
+  async createKnowledgeSource(
+    agentId: string,
+    input: {
+      kind: string;
+      location: string;
+      scopeRef: { level: 'global' | 'project' | 'session'; key: string };
+      displayName?: string;
+      description?: string;
+    },
+  ): Promise<KnowledgeSourceDto> {
+    const data = await this.postJson(`/agents/${agentId}/knowledge/sources`, input);
+    return data?.data as KnowledgeSourceDto;
+  }
+
+  async updateKnowledgeSource(
+    agentId: string,
+    sourceId: string,
+    patch: Record<string, unknown>,
+  ): Promise<KnowledgeSourceDto | null> {
+    const data = await this.patchJson(
+      `/agents/${agentId}/knowledge/sources/${encodeURIComponent(sourceId)}`,
+      patch,
+    );
+    return (data?.data as KnowledgeSourceDto | null) ?? null;
+  }
+
+  async deleteKnowledgeSource(agentId: string, sourceId: string): Promise<void> {
+    await this.deleteJson(`/agents/${agentId}/knowledge/sources/${encodeURIComponent(sourceId)}`);
+  }
+
+  async reindexKnowledgeSource(
+    agentId: string,
+    sourceId: string,
+    opts?: { full?: boolean; watch?: boolean },
+  ): Promise<{ ok: true; sourceId: string; status: string }> {
+    const data = await this.postJson(
+      `/agents/${agentId}/knowledge/sources/${encodeURIComponent(sourceId)}/reindex`,
+      opts ?? {},
+    );
+    return data?.data as { ok: true; sourceId: string; status: string };
+  }
+
+  async listKnowledgeSourceFiles(
+    agentId: string,
+    sourceId: string,
+  ): Promise<Array<{ path: string; status: string; chunkCount: number; error?: string }>> {
+    const data = await this.getJson(
+      `/agents/${agentId}/knowledge/sources/${encodeURIComponent(sourceId)}/files`,
+    );
+    return (data?.data as Array<{ path: string; status: string; chunkCount: number; error?: string }>) ?? [];
+  }
+
+  async listKnowledgeChunks(
+    agentId: string,
+    sourceId: string,
+    path: string,
+  ): Promise<Array<{ id: string; path: string; text: string; startLine: number; endLine: number }>> {
+    const params = new URLSearchParams({ sourceId, path });
+    const data = await this.getJson(`/agents/${agentId}/knowledge/chunks?${params.toString()}`);
+    return (
+      (data?.data as Array<{
+        id: string;
+        path: string;
+        text: string;
+        startLine: number;
+        endLine: number;
+      }>) ?? []
+    );
+  }
+
+  async getKnowledgeStats(agentId = 'default'): Promise<Record<string, number>> {
+    const data = await this.getJson(`/agents/${agentId}/knowledge/stats`);
+    return (data?.data as Record<string, number>) ?? {};
+  }
+
+  async setKnowledgeVisibility(
+    agentId: string,
+    body: {
+      op: 'assignProject' | 'unassignProject' | 'hide' | 'unhide';
+      projectKey?: string;
+      sourceId?: string;
+    },
+  ): Promise<void> {
+    await this.postJson(`/agents/${agentId}/knowledge/visibility`, body);
+  }
+
+  async getKnowledgeVisibility(agentId: string): Promise<{
+    hiddenSourceIds: string[];
+    globalSources: Array<KnowledgeSourceDto & { hiddenForAgent: boolean }>;
+    assignedProjects: Array<{
+      projectKey: string;
+      displayName?: string;
+      sourceCount: number;
+      assignedAgentIds: string[];
+      sources: KnowledgeSourceDto[];
+    }>;
+    unassignedProjects: Array<{
+      projectKey: string;
+      displayName?: string;
+      sourceCount: number;
+      assignedAgentIds: string[];
+    }>;
+  }> {
+    const data = await this.getJson(`/agents/${agentId}/knowledge/visibility`);
+    return (
+      (data?.data as {
+        hiddenSourceIds: string[];
+        globalSources: Array<KnowledgeSourceDto & { hiddenForAgent: boolean }>;
+        assignedProjects: Array<{
+          projectKey: string;
+          displayName?: string;
+          sourceCount: number;
+          assignedAgentIds: string[];
+          sources: KnowledgeSourceDto[];
+        }>;
+        unassignedProjects: Array<{
+          projectKey: string;
+          displayName?: string;
+          sourceCount: number;
+          assignedAgentIds: string[];
+        }>;
+      }) ?? {
+        hiddenSourceIds: [],
+        globalSources: [],
+        assignedProjects: [],
+        unassignedProjects: [],
+      }
+    );
+  }
+
+  async getKnowledgeSessionVisibility(
+    agentId: string,
+    sessionId: string,
+  ): Promise<KnowledgeSessionVisibilityItemDto[]> {
+    const data = await this.getJson(
+      `/agents/${agentId}/knowledge/session-visibility?sessionId=${encodeURIComponent(sessionId)}`,
+    );
+    return (data?.data as KnowledgeSessionVisibilityItemDto[]) ?? [];
+  }
+
+  async setKnowledgeSessionVisibility(
+    agentId: string,
+    item: {
+      sessionId: string;
+      targetType: 'project' | 'source';
+      targetId: string;
+      op: 'include' | 'exclude';
+    },
+  ): Promise<void> {
+    await this.postJson(`/agents/${agentId}/knowledge/session-visibility`, item);
+  }
+
+  async clearKnowledgeSessionVisibility(
+    agentId: string,
+    sessionId: string,
+    target?: { targetType: 'project' | 'source'; targetId: string },
+  ): Promise<void> {
+    const params = new URLSearchParams({ sessionId });
+    if (target) {
+      params.set('targetType', target.targetType);
+      params.set('targetId', target.targetId);
+    }
+    await this.deleteJson(`/agents/${agentId}/knowledge/session-visibility?${params.toString()}`);
+  }
+
+  async searchKnowledge(
+    agentId: string,
+    q: string,
+    opts?: { sessionId?: string; limit?: number },
+  ): Promise<{
+    usedVector: boolean;
+    coverage: number;
+    hits: Array<{
+      sourceId: string;
+      path: string;
+      startLine: number;
+      endLine: number;
+      score: number;
+      snippet: string;
+    }>;
+  }> {
+    const params = new URLSearchParams({ q });
+    if (opts?.sessionId) params.set('sessionId', opts.sessionId);
+    if (opts?.limit) params.set('limit', String(opts.limit));
+    const data = await this.getJson(`/agents/${agentId}/knowledge/search?${params.toString()}`);
+    return (
+      (data?.data as {
+        usedVector: boolean;
+        coverage: number;
+        hits: Array<{
+          sourceId: string;
+          path: string;
+          startLine: number;
+          endLine: number;
+          score: number;
+          snippet: string;
+        }>;
+      }) ?? { usedVector: false, coverage: 0, hits: [] }
+    );
   }
 
   // ──────────────────────────────────
@@ -937,6 +1229,26 @@ export class OctopiClient {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(body ?? {}),
+    });
+    return parseJsonResponse(response);
+  }
+
+  private async patchJson<T = any>(path: string, body: unknown): Promise<T> {
+    const response = await fetch(`${this.restBase}${path}`, {
+      method: 'PATCH',
+      headers: {
+        ...this.buildHeaders(),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body ?? {}),
+    });
+    return parseJsonResponse(response);
+  }
+
+  private async deleteJson<T = any>(path: string): Promise<T> {
+    const response = await fetch(`${this.restBase}${path}`, {
+      method: 'DELETE',
+      headers: this.buildHeaders(),
     });
     return parseJsonResponse(response);
   }

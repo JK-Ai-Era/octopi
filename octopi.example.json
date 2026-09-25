@@ -34,6 +34,7 @@
       "provider": "openai",
       "model": "text-embedding-3-small",
       "dimensions": 1536,
+      "maxBatchSize": 20,
       "vectorEngine": "auto"
     }
   },

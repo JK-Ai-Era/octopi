@@ -1,3 +1,38 @@
+## v0.52.0
+
+### fix(knowledge): 审查 P2 — source overlay UI / 挂到 Agent 清 project 调整 / embedding 测试锁 / docs 对齐
+
+- **Composer「语料」**：展示并可清除 **source 级 overlay**（优先于项目）；chip 显示 `源级 N`
+- **挂到 / 卸载 Agent**：跨会话升级后**清除该项目的本场 project overlay**，toast 说明
+- **测试**：`dimensions` 仅显式配置入请求体；`maxBatchSize` 切片（embedding 25 项）
+- **docs/knowledge.md**：Host API 补全（session-visibility PUT/DELETE、projects DELETE、visibility、chunks、scopeLevel）；Session 持久化改为「管理面改 scopeRef」
+
+### fix(knowledge/embedding): 审查 P1 — dimensions 仅显式下发 / session 列表收口 / 项目删除策略 / hide UI
+
+- **embedding**：`dimensions` 仅用户配置时写入请求体（未配置由服务端决定；百炼默认 1024）；批量失败回退改为**串行**
+- **session 源列表**：`scopeLevel=session` 强制 `sessionId`，禁止跨会话扫临时语料
+- **项目**：`listProjects` 只列已登记项目（孤儿源不复活）；`removeProject` 非空拒绝；`update` 改 project scope 时 `createProject`
+- **hide**：仅 global 源允许 `hideSource`；Web 公共知识库源提供「对 Agent 隐藏」勾选
+- **测试**：session-visibility 补 removeProject/update/hide/disabled 用例（10）
+
+### fix(embedding): 百炼 qwen3.7-text-embedding 对齐 — dimensions 下发 + 批次切片
+
+- **请求体 `dimensions`**：配置了维度时发给服务端（OpenAI 兼容 / 百炼可切换维度；此前只本地记维度，服务端默认 1024 会与假定 1536 不一致）
+- **`maxBatchSize`**：批量自动切片（百炼 qwen3.7-text-embedding 单批 20）；schema / example 同步
+- 运行配置 `~/.octopi/octopi.json`：`dimensions: 1024`、`maxBatchSize: 20`
+
+### feat(knowledge): 会话可见视图 overlay + 管理面 API / Web 两级注册
+
+- **两轴模型**（`arch/knowledge-admin-ui.md`）：资产归属（`scopeRef`）与会话视图分离；**无兼容、直接改**
+- **`knowledge_session_visibility`**：session × (project|source) × include/exclude；`isVisible` = base ⊕ overlay（source 级优先）；卸载源清 overlay
+- **`knowledge_projects`**：空项目可先登记（先建项目再挂源）；`listProjects` 汇总源数/挂载
+- **Host REST**：`projects` CRUD、`sources/:sid` 详情、`files`、`chunks`、`search`、`session-visibility`、`visibility` GET、stats 加厚；sources 支持 `scopeLevel`/`projectKey` 管理面列表
+- **Web**：顶栏 Playground / Knowledge；公共知识库 + 项目两级注册与挂载勾选；composer「语料」会话快挂（默认仅本会话，跨会话显式升级）
+- **源详情诊断**：展开源 → 索引文件 / chunk 预览 / 错误；队列读数（queued/running）；indexing 时轮询刷新
+- **Agent 知识视野**：只读 base（公共可见/隐藏 · 已挂项目源 · 未挂项目）；跳转项目详情改挂载
+- **索引进度 WS**：`knowledge.index.progress` 系统级广播；管理面条幅 + 自动刷新；Runtime store 忽略该事件不污染会话
+- **测试**：`tests/harness/knowledge-session-visibility.test.ts`（10）
+
 ## v0.51.19
 
 ### docs: 同步 Knowledge 外源 / CredentialStore 口径，避免后续踩坑

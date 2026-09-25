@@ -229,11 +229,164 @@ export class WebApiRouter {
         return this.json(res, 200, { ok: true, data: health });
       }
 
-      // ── Knowledge sources（Host 管理面；arch/knowledge-layer.md §6）──
+      // ── Knowledge sources（Host 管理面；arch/knowledge-layer.md §6 / knowledge-admin-ui.md §4）──
       const knowledgeStatsMatch = relativePath.match(/^\/agents\/([^/]+)\/knowledge\/stats$/);
       if (knowledgeStatsMatch && method === 'GET') {
         const stats = await this.gateway.getKnowledgeStats();
         return this.json(res, 200, { ok: true, data: stats });
+      }
+
+      const knowledgeProjectsMatch = relativePath.match(/^\/agents\/([^/]+)\/knowledge\/projects$/);
+      if (knowledgeProjectsMatch && method === 'GET') {
+        const projects = await this.gateway.listKnowledgeProjects();
+        return this.json(res, 200, { ok: true, data: projects });
+      }
+      if (knowledgeProjectsMatch && method === 'POST') {
+        const body = await this.readBody(req);
+        const projectKey = typeof body?.projectKey === 'string' ? body.projectKey.trim() : '';
+        if (!projectKey) {
+          return this.json(res, 400, { ok: false, error: 'projectKey is required' });
+        }
+        await this.gateway.createKnowledgeProject(
+          projectKey,
+          typeof body?.displayName === 'string' ? body.displayName : undefined,
+        );
+        return this.json(res, 201, { ok: true, data: { projectKey } });
+      }
+
+      const knowledgeProjectMatch = relativePath.match(
+        /^\/agents\/([^/]+)\/knowledge\/projects\/([^/]+)$/,
+      );
+      if (knowledgeProjectMatch && method === 'DELETE') {
+        try {
+          const removed = await this.gateway.removeKnowledgeProject(knowledgeProjectMatch[2]);
+          return this.json(res, 200, {
+            ok: true,
+            data: { projectKey: knowledgeProjectMatch[2], removed },
+          });
+        } catch (err) {
+          return this.json(res, 400, {
+            ok: false,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+
+      const knowledgeSearchMatch = relativePath.match(/^\/agents\/([^/]+)\/knowledge\/search$/);
+      if (knowledgeSearchMatch && method === 'GET') {
+        const q = url.searchParams.get('q')?.trim() ?? '';
+        if (!q) return this.json(res, 400, { ok: false, error: 'q is required' });
+        const sessionId = url.searchParams.get('sessionId') ?? undefined;
+        const limitRaw = Number(url.searchParams.get('limit') ?? '');
+        const result = await this.gateway.searchKnowledge(q, {
+          agentId: knowledgeSearchMatch[1],
+          sessionId,
+          limit: Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 20) : 8,
+        });
+        return this.json(res, 200, {
+          ok: true,
+          data: {
+            usedVector: result.usedVector,
+            coverage: result.coverage,
+            keywordHits: result.keywordHits,
+            vectorHits: result.vectorHits,
+            hits: result.hits.map((h) => ({
+              sourceId: h.sourceId,
+              path: h.path,
+              startLine: h.startLine,
+              endLine: h.endLine,
+              score: h.score,
+              snippet: h.text.slice(0, 400),
+            })),
+          },
+        });
+      }
+
+      const knowledgeSessionVisMatch = relativePath.match(
+        /^\/agents\/([^/]+)\/knowledge\/session-visibility$/,
+      );
+      if (knowledgeSessionVisMatch && method === 'GET') {
+        const sessionId = url.searchParams.get('sessionId');
+        if (!sessionId) {
+          return this.json(res, 400, { ok: false, error: 'sessionId is required' });
+        }
+        const items = await this.gateway.getKnowledgeSessionVisibility(sessionId);
+        return this.json(res, 200, { ok: true, data: items });
+      }
+      if (knowledgeSessionVisMatch && method === 'PUT') {
+        const body = await this.readBody(req);
+        const sessionId = String(body?.sessionId ?? '');
+        if (!sessionId) return this.json(res, 400, { ok: false, error: 'sessionId is required' });
+        const rawItems = Array.isArray(body?.items) ? body.items : [];
+        const items: Array<{
+          targetType: 'project' | 'source';
+          targetId: string;
+          op: 'include' | 'exclude';
+        }> = [];
+        for (const raw of rawItems) {
+          const targetType = raw?.targetType as 'project' | 'source' | undefined;
+          const targetId = typeof raw?.targetId === 'string' ? raw.targetId : '';
+          const op = raw?.op as 'include' | 'exclude' | undefined;
+          if (
+            !targetId ||
+            (targetType !== 'project' && targetType !== 'source') ||
+            (op !== 'include' && op !== 'exclude')
+          ) {
+            return this.json(res, 400, {
+              ok: false,
+              error: 'items[].targetType(project|source), targetId, op(include|exclude) required',
+            });
+          }
+          items.push({ targetType, targetId, op });
+        }
+        await this.gateway.replaceKnowledgeSessionVisibility(sessionId, items);
+        return this.json(res, 200, { ok: true, data: { sessionId, count: items.length } });
+      }
+      if (knowledgeSessionVisMatch && method === 'POST') {
+        const body = await this.readBody(req);
+        const sessionId = String(body?.sessionId ?? '');
+        const targetType = body?.targetType as 'project' | 'source' | undefined;
+        const targetId = typeof body?.targetId === 'string' ? body.targetId : '';
+        const op = body?.op as 'include' | 'exclude' | undefined;
+        if (
+          !sessionId ||
+          !targetId ||
+          (targetType !== 'project' && targetType !== 'source') ||
+          (op !== 'include' && op !== 'exclude')
+        ) {
+          return this.json(res, 400, {
+            ok: false,
+            error:
+              'sessionId, targetType(project|source), targetId, op(include|exclude) are required',
+          });
+        }
+        await this.gateway.setKnowledgeSessionVisibility(sessionId, { targetType, targetId, op });
+        return this.json(res, 200, { ok: true, data: { sessionId, targetType, targetId, op } });
+      }
+      if (knowledgeSessionVisMatch && method === 'DELETE') {
+        const sessionId = url.searchParams.get('sessionId');
+        if (!sessionId) {
+          return this.json(res, 400, { ok: false, error: 'sessionId is required' });
+        }
+        const targetType = url.searchParams.get('targetType') as 'project' | 'source' | null;
+        const targetId = url.searchParams.get('targetId');
+        if (targetType && targetId) {
+          await this.gateway.clearKnowledgeSessionVisibility(sessionId, {
+            targetType,
+            targetId,
+          });
+        } else {
+          await this.gateway.clearKnowledgeSessionVisibility(sessionId);
+        }
+        return this.json(res, 200, { ok: true, data: { sessionId } });
+      }
+
+      const knowledgeVisibilitySummaryMatch = relativePath.match(
+        /^\/agents\/([^/]+)\/knowledge\/visibility$/,
+      );
+      if (knowledgeVisibilitySummaryMatch && method === 'GET') {
+        const summary = await this.gateway.getKnowledgeVisibility(knowledgeVisibilitySummaryMatch[1]);
+        return this.json(res, 200, { ok: true, data: summary });
       }
 
       const knowledgePromoMatch = relativePath.match(
@@ -252,10 +405,31 @@ export class WebApiRouter {
       const knowledgeSourcesMatch = relativePath.match(/^\/agents\/([^/]+)\/knowledge\/sources$/);
       if (knowledgeSourcesMatch && method === 'GET') {
         const sessionId = url.searchParams.get('sessionId') ?? undefined;
-        const sources = await this.gateway.listKnowledgeSources(knowledgeSourcesMatch[1], {
-          sessionId,
-        });
-        return this.json(res, 200, { ok: true, data: sources });
+        const scopeLevel = url.searchParams.get('scopeLevel') as
+          | 'global'
+          | 'project'
+          | 'session'
+          | null;
+        const projectKey = url.searchParams.get('projectKey') ?? undefined;
+        if (scopeLevel === 'session' && !sessionId?.trim()) {
+          return this.json(res, 400, {
+            ok: false,
+            error: 'sessionId is required when scopeLevel=session',
+          });
+        }
+        try {
+          const sources = await this.gateway.listKnowledgeSources(knowledgeSourcesMatch[1], {
+            sessionId,
+            scopeLevel: scopeLevel ?? undefined,
+            projectKey,
+          });
+          return this.json(res, 200, { ok: true, data: sources });
+        } catch (err) {
+          return this.json(res, 400, {
+            ok: false,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
       }
       if (knowledgeSourcesMatch && method === 'POST') {
         const body = await this.readBody(req);
@@ -281,9 +455,33 @@ export class WebApiRouter {
         }
       }
 
+      const knowledgeSourceFilesMatch = relativePath.match(
+        /^\/agents\/([^/]+)\/knowledge\/sources\/([^/]+)\/files$/,
+      );
+      if (knowledgeSourceFilesMatch && method === 'GET') {
+        const files = await this.gateway.listKnowledgeSourceFiles(knowledgeSourceFilesMatch[2]);
+        return this.json(res, 200, { ok: true, data: files });
+      }
+
+      const knowledgeChunksMatch = relativePath.match(/^\/agents\/([^/]+)\/knowledge\/chunks$/);
+      if (knowledgeChunksMatch && method === 'GET') {
+        const sourceId = url.searchParams.get('sourceId') ?? '';
+        const path = url.searchParams.get('path') ?? '';
+        if (!sourceId || !path) {
+          return this.json(res, 400, { ok: false, error: 'sourceId and path are required' });
+        }
+        const chunks = await this.gateway.listKnowledgeChunks(sourceId, path);
+        return this.json(res, 200, { ok: true, data: chunks });
+      }
+
       const knowledgeSourceMatch = relativePath.match(
         /^\/agents\/([^/]+)\/knowledge\/sources\/([^/]+)$/,
       );
+      if (knowledgeSourceMatch && method === 'GET') {
+        const detail = await this.gateway.getKnowledgeSourceDetail(knowledgeSourceMatch[2]);
+        if (!detail) return this.json(res, 404, { ok: false, error: 'source not found' });
+        return this.json(res, 200, { ok: true, data: detail });
+      }
       if (knowledgeSourceMatch && method === 'PATCH') {
         const body = await this.readBody(req);
         const updated = await this.gateway.updateKnowledgeSource(knowledgeSourceMatch[2], body ?? {});

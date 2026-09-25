@@ -846,6 +846,11 @@ export class OctopiRuntimeStore extends EventTarget {
   }
 
   private applyEvent(eventSessionId: string | undefined, event: AgentEventEnvelope): void {
+    // 系统级索引进度（sessionKey='*'）：不改会话对话状态
+    if (event.type === 'knowledge.index.progress') {
+      return;
+    }
+
     const currentSessionId = this.chat.sessionId ?? '';
 
     // 事件明确属于另一个已打开过的会话：更新其缓存，不影响当前 UI

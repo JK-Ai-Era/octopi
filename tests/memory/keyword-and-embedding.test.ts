@@ -308,6 +308,73 @@ describe('HttpEmbeddingProvider response parsing', () => {
     expect(calls).toBe(2);
   });
 
+  it('sends dimensions in body only when user configured it', async () => {
+    const { createEmbeddingProvider } = await import(
+      '../../src/harness/memory/sqlite/embedding.js'
+    );
+    const bodies: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (_url: unknown, init?: { body?: string }) => {
+      bodies.push(JSON.parse(init?.body ?? '{}'));
+      return {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        json: async () => ({ data: [{ embedding: [0.1, 0.2] }] }),
+        text: async () => '',
+      };
+    }) as unknown as typeof fetch;
+
+    const withDim = createEmbeddingProvider({
+      type: 'openai',
+      baseUrl: 'https://example.com/v1',
+      model: 'qwen3.7-text-embedding',
+      dimensions: 1024,
+    });
+    await withDim!.embed('hi');
+    expect(bodies[0]?.dimensions).toBe(1024);
+
+    const withoutDim = createEmbeddingProvider({
+      type: 'openai',
+      baseUrl: 'https://example.com/v1',
+      model: 'qwen3.7-text-embedding',
+    });
+    await withoutDim!.embed('hi');
+    expect(bodies[1]).toBeDefined();
+    expect('dimensions' in (bodies[1] ?? {})).toBe(false);
+  });
+
+  it('slices embedBatch by maxBatchSize', async () => {
+    const { createEmbeddingProvider } = await import(
+      '../../src/harness/memory/sqlite/embedding.js'
+    );
+    const batchSizes: number[] = [];
+    globalThis.fetch = (async (_url: unknown, init?: { body?: string }) => {
+      const body = JSON.parse(init?.body ?? '{}') as { input?: string[] };
+      const n = Array.isArray(body.input) ? body.input.length : 1;
+      batchSizes.push(n);
+      return {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        json: async () => ({
+          data: Array.from({ length: n }, () => ({ embedding: [1, 0] })),
+        }),
+        text: async () => '',
+      };
+    }) as unknown as typeof fetch;
+
+    const provider = createEmbeddingProvider({
+      type: 'openai',
+      baseUrl: 'https://example.com/v1',
+      model: 'qwen3.7-text-embedding',
+      maxBatchSize: 2,
+    });
+    const texts = ['a', 'b', 'c', 'd', 'e'];
+    const out = await provider!.embedBatch(texts);
+    expect(out).toHaveLength(5);
+    expect(batchSizes).toEqual([2, 2, 1]);
+  });
+
   it('memory retrieve degrades to keyword when embed fails', async () => {
     const db = await AgentDatabase.create({ dbPath: ':memory:' });
     const failing: EmbeddingProvider = {

@@ -1235,13 +1235,33 @@ export class Gateway {
   }
 
   /**
-   * agent 可见知识源列表（管理面）
+   * 知识源列表
+   * - 默认：agent effective 可见（含 session overlay）
+   * - `scopeLevel` / `projectKey`：管理面按归属列全部源（不过滤可见性）
+   * - `scopeLevel=session` 必须带 `sessionId`（禁止跨会话扫临时语料）
    */
   async listKnowledgeSources(
     agentId: string,
-    opts?: { sessionId?: string },
+    opts?: {
+      sessionId?: string;
+      scopeLevel?: 'global' | 'project' | 'session';
+      projectKey?: string;
+    },
   ): Promise<import('../../harness/knowledge/types.js').KnowledgeSource[]> {
     const store = await this.getKnowledgeSourceStore();
+    if (opts?.scopeLevel === 'global') {
+      return store.listByScope('global');
+    }
+    if (opts?.scopeLevel === 'project') {
+      return store.listByScope('project', opts.projectKey);
+    }
+    if (opts?.scopeLevel === 'session') {
+      const sid = opts.sessionId?.trim();
+      if (!sid) {
+        throw new Error('sessionId is required for scopeLevel=session');
+      }
+      return store.listByScope('session', sid);
+    }
     return store.listVisible(agentId, opts?.sessionId);
   }
 
@@ -1328,6 +1348,227 @@ export class Gateway {
   }
 
   /**
+   * 项目登记视图（先建项目再挂源）
+   */
+  async listKnowledgeProjects(): Promise<
+    Array<{
+      projectKey: string;
+      displayName?: string;
+      sourceCount: number;
+      assignedAgentIds: string[];
+    }>
+  > {
+    const store = await this.getKnowledgeSourceStore();
+    return store.listProjects();
+  }
+
+  async createKnowledgeProject(projectKey: string, displayName?: string): Promise<void> {
+    const store = await this.getKnowledgeSourceStore();
+    store.createProject(projectKey, displayName);
+  }
+
+  async removeKnowledgeProject(projectKey: string): Promise<boolean> {
+    const store = await this.getKnowledgeSourceStore();
+    try {
+      return store.removeProject(projectKey);
+    } catch (err) {
+      // 非空项目拒绝删除：让管理面展示可读错误
+      throw err instanceof Error ? err : new Error(String(err));
+    }
+  }
+
+  /**
+   * 单源详情 + 索引规模
+   */
+  async getKnowledgeSourceDetail(sourceId: string): Promise<
+    | (import('../../harness/knowledge/types.js').KnowledgeSource & {
+        fileCount: number;
+        chunkCount: number;
+        errorFileCount: number;
+        skippedFileCount: number;
+        assignedAgentIds: string[];
+        hiddenForAgentIds: string[];
+      })
+    | null
+  > {
+    const store = await this.getKnowledgeSourceStore();
+    const source = store.get(sourceId);
+    if (!source) return null;
+    const ingest = await this.getKnowledgeIngest();
+    const stats = ingest.indexStore.sourceStats(sourceId);
+    return {
+      ...source,
+      fileCount: stats.files,
+      chunkCount: stats.chunks,
+      errorFileCount: stats.errors,
+      skippedFileCount: stats.skipped,
+      assignedAgentIds:
+        source.scopeRef.level === 'project' ? store.listProjectAgents(source.scopeRef.key) : [],
+      hiddenForAgentIds:
+        source.scopeRef.level === 'global'
+          ? this.listAgentsHidingSource(store, sourceId)
+          : [],
+    };
+  }
+
+  private listAgentsHidingSource(
+    store: import('../../harness/knowledge/source-store.js').KnowledgeSourceStore,
+    sourceId: string,
+  ): string[] {
+    const rows = store.database.raw
+      .prepare(
+        'SELECT agent_id FROM knowledge_agent_hidden WHERE source_id = ? ORDER BY agent_id',
+      )
+      .all(sourceId) as Array<{ agent_id: string }>;
+    return rows.map((r) => r.agent_id);
+  }
+
+  /**
+   * 源下索引文件列表
+   */
+  async listKnowledgeSourceFiles(sourceId: string): Promise<
+    import('../../harness/knowledge/index-store.js').IndexedFileRecord[]
+  > {
+    const ingest = await this.getKnowledgeIngest();
+    return ingest.indexStore.listFiles(sourceId);
+  }
+
+  /**
+   * 按路径列 chunk（管理面预览）
+   */
+  async listKnowledgeChunks(sourceId: string, path: string): Promise<
+    Array<{
+      id: string;
+      path: string;
+      text: string;
+      startLine: number;
+      endLine: number;
+    }>
+  > {
+    const ingest = await this.getKnowledgeIngest();
+    return ingest.indexStore.listChunksByPath(sourceId, path);
+  }
+
+  /**
+   * 宿主直搜（管理面试搜；effective view）
+   */
+  async searchKnowledge(
+    query: string,
+    opts: { agentId: string; sessionId?: string; limit?: number },
+  ): Promise<import('../../harness/knowledge/retriever.js').HybridSearchResult> {
+    const store = await this.getKnowledgeSourceStore();
+    const ingest = await this.getKnowledgeIngest();
+    const { KnowledgeRetriever } = await import('../../harness/knowledge/retriever.js');
+    const kn = this.config.knowledge;
+    const retriever = new KnowledgeRetriever({
+      sourceStore: store,
+      indexStore: ingest.indexStore,
+      recall: 'hybrid',
+      injectMinScore: kn?.autoInject?.minScore,
+      hintMinScore: kn?.hint?.minScore,
+      hybridKeyword: kn?.index?.hybridKeyword,
+      keywordWeight: kn?.keywordWeight,
+    });
+    return retriever.search(query, {
+      agentId: opts.agentId,
+      sessionId: opts.sessionId,
+      limit: opts.limit,
+    });
+  }
+
+  /**
+   * 会话可见视图 overlay（资产归属不变）
+   */
+  async getKnowledgeSessionVisibility(
+    sessionId: string,
+  ): Promise<import('../../harness/knowledge/types.js').KnowledgeSessionVisibilityItem[]> {
+    const store = await this.getKnowledgeSourceStore();
+    return store.listSessionVisibility(sessionId);
+  }
+
+  async setKnowledgeSessionVisibility(
+    sessionId: string,
+    item: import('../../harness/knowledge/types.js').KnowledgeSessionVisibilityInput,
+  ): Promise<void> {
+    const store = await this.getKnowledgeSourceStore();
+    store.setSessionVisibility(sessionId, item);
+  }
+
+  async replaceKnowledgeSessionVisibility(
+    sessionId: string,
+    items: readonly import('../../harness/knowledge/types.js').KnowledgeSessionVisibilityInput[],
+  ): Promise<void> {
+    const store = await this.getKnowledgeSourceStore();
+    store.replaceSessionVisibility(sessionId, items);
+  }
+
+  async clearKnowledgeSessionVisibility(
+    sessionId: string,
+    target?: {
+      targetType: import('../../harness/knowledge/types.js').KnowledgeVisibilityTargetType;
+      targetId: string;
+    },
+  ): Promise<void> {
+    const store = await this.getKnowledgeSourceStore();
+    store.clearSessionVisibility(sessionId, target);
+  }
+
+  /**
+   * Agent 级 base 可见性摘要（排查辅视图；不含会话 overlay）
+   */
+  async getKnowledgeVisibility(agentId: string): Promise<{
+    hiddenSourceIds: string[];
+    globalSources: Array<
+      import('../../harness/knowledge/types.js').KnowledgeSource & { hiddenForAgent: boolean }
+    >;
+    assignedProjects: Array<{
+      projectKey: string;
+      displayName?: string;
+      sourceCount: number;
+      assignedAgentIds: string[];
+      sources: import('../../harness/knowledge/types.js').KnowledgeSource[];
+    }>;
+    unassignedProjects: Array<{
+      projectKey: string;
+      displayName?: string;
+      sourceCount: number;
+      assignedAgentIds: string[];
+    }>;
+  }> {
+    const store = await this.getKnowledgeSourceStore();
+    const hiddenSourceIds = store.listHidden(agentId);
+    const hiddenSet = new Set(hiddenSourceIds);
+    const globalSources = store.listByScope('global').map((s) => ({
+      ...s,
+      hiddenForAgent: hiddenSet.has(s.id),
+    }));
+    const allProjects = store.listProjects();
+    const assignedProjects = allProjects
+      .filter((p) => p.assignedAgentIds.includes(agentId))
+      .map((p) => ({
+        projectKey: p.projectKey,
+        displayName: p.displayName,
+        sourceCount: p.sourceCount,
+        assignedAgentIds: p.assignedAgentIds,
+        sources: store.listByScope('project', p.projectKey),
+      }));
+    const unassignedProjects = allProjects
+      .filter((p) => !p.assignedAgentIds.includes(agentId))
+      .map((p) => ({
+        projectKey: p.projectKey,
+        displayName: p.displayName,
+        sourceCount: p.sourceCount,
+        assignedAgentIds: p.assignedAgentIds,
+      }));
+    return {
+      hiddenSourceIds,
+      globalSources,
+      assignedProjects,
+      unassignedProjects,
+    };
+  }
+
+  /**
    * 提升候选（默认阈值可来自 knowledge.promotion.metrics）
    */
   async getKnowledgePromotionCandidates(): Promise<
@@ -1373,7 +1614,7 @@ export class Gateway {
         } catch {
           embeddingProvider = null;
         }
-        return new KnowledgeIngest({
+        const ingest = new KnowledgeIngest({
           sourceStore: store,
           embeddingProvider,
           parseConcurrency: kn?.load?.parseConcurrency ?? kn?.index?.phaseA?.concurrency,
@@ -1386,6 +1627,32 @@ export class Gateway {
           maxQueueDepth: kn?.index?.queue?.maxDepth,
           diskWatermarkAlert: kn?.load?.diskWatermarkAlert,
         });
+        // 索引进度 → Web WS（系统级 '*'；UI 勿当会话消息）
+        ingest.on('knowledge.index.progress', (evt: unknown) => {
+          const payload = evt as {
+            type?: string;
+            sourceId?: string;
+            path?: string;
+            status?: string;
+            detail?: string;
+          };
+          const event = {
+            type: 'knowledge.index.progress',
+            timestamp: Date.now(),
+            data: {
+              progressType: payload.type ?? 'job',
+              sourceId: payload.sourceId ?? '',
+              path: payload.path,
+              status: payload.status ?? '',
+              detail: payload.detail,
+            },
+          };
+          this.emitEvent(event);
+          for (const adapter of this.streamingAdapters) {
+            adapter.broadcastEvent('*', event);
+          }
+        });
+        return ingest;
       })();
     }
     return this.knowledgeIngestPromise;

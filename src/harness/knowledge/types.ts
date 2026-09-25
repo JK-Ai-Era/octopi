@@ -152,3 +152,21 @@ export type KnowledgeSourcePatch = Partial<
   discover?: KnowledgeSourceDiscover | null;
   lastPolledAt?: number;
 };
+
+/** 会话可见视图 overlay 的目标（资产归属不变） */
+export type KnowledgeVisibilityTargetType = 'project' | 'source';
+export type KnowledgeVisibilityOp = 'include' | 'exclude';
+
+export interface KnowledgeSessionVisibilityItem {
+  sessionId: string;
+  targetType: KnowledgeVisibilityTargetType;
+  targetId: string;
+  op: KnowledgeVisibilityOp;
+  createdAt: number;
+}
+
+export interface KnowledgeSessionVisibilityInput {
+  targetType: KnowledgeVisibilityTargetType;
+  targetId: string;
+  op: KnowledgeVisibilityOp;
+}

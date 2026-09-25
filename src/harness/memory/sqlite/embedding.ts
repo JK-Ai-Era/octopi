@@ -68,8 +68,17 @@ export interface EmbeddingConfig {
   request?: EmbeddingHttpMapping;
   /** 模型名 */
   model?: string;
-  /** 向量维度 */
+  /**
+   * 用户显式指定的向量维度。
+   * **仅当写出时**才会放入请求体 `dimensions`；未写出则由服务端决定
+   * （百炼 qwen3.7-text-embedding 默认 1024，勿假定 1536）。
+   */
   dimensions?: number;
+  /**
+   * 单次 embedBatch 上限（超出自动切片）。
+   * 百炼 qwen3.7-text-embedding 批次为 20；OpenAI 官方可更大。省略 = 不切片（由服务端裁决，失败再串行）。
+   */
+  maxBatchSize?: number;
   /**
    * 是否支持批量接口。
    * http/openai 默认 true；ollama `/api/embeddings` 仅接受单条 prompt，默认 false。
@@ -126,6 +135,7 @@ export function createEmbeddingProvider(config?: EmbeddingConfig): EmbeddingProv
 
   const type = config.type === 'custom' ? 'http' : config.type;
   const model = config.model ?? (type === 'ollama' ? 'bge-m3' : 'text-embedding-3-small');
+  // 本地假定维度仅用于存储/接口契约；未显式配置时 **不** 写入请求体
   const dimensions =
     config.dimensions ?? (type === 'ollama' ? 1024 : 1536);
   const path = defaultPath(type, config.path);
@@ -138,6 +148,7 @@ export function createEmbeddingProvider(config?: EmbeddingConfig): EmbeddingProv
     url: joinUrl(base, path),
     model,
     dimensions,
+    sendDimensions: config.dimensions != null,
     apiKey: config.apiKey ?? '',
     apiKeyHeader: config.apiKeyHeader,
     apiKeyPrefix: config.apiKeyPrefix,
@@ -145,6 +156,7 @@ export function createEmbeddingProvider(config?: EmbeddingConfig): EmbeddingProv
     mapping: resolveDefaultMapping(type, config.request),
     // ollama `/api/embeddings` 的 prompt 是 string，批量数组会 400
     supportsBatch: config.supportsBatch ?? type !== 'ollama',
+    maxBatchSize: config.maxBatchSize,
     timeoutMs: config.timeoutMs ?? 30_000,
   });
 }
@@ -184,12 +196,15 @@ interface HttpEmbeddingOptions {
   url: string;
   model: string;
   dimensions: number;
+  /** 仅用户显式配置时才把 dimensions 写入请求体 */
+  sendDimensions: boolean;
   apiKey: string;
   apiKeyHeader?: string;
   apiKeyPrefix?: string;
   headers?: Record<string, string>;
   mapping: ReturnType<typeof resolveDefaultMapping>;
   supportsBatch: boolean;
+  maxBatchSize?: number;
   timeoutMs: number;
 }
 
@@ -226,12 +241,16 @@ class HttpEmbeddingProvider implements EmbeddingProvider {
   }
 
   private buildBody(input: string | string[]): Record<string, unknown> {
-    const { mapping, model } = this.opts;
+    const { mapping, model, dimensions, sendDimensions } = this.opts;
     const body: Record<string, unknown> = {
       ...(mapping.extraBody ?? {}),
       [mapping.modelField]: model,
       [mapping.inputField]: input,
     };
+    // 仅用户显式配置 dimensions 时下发；否则由服务端决定（如百炼默认 1024）
+    if (sendDimensions && dimensions > 0 && mapping.inputField !== 'prompt') {
+      body.dimensions = dimensions;
+    }
     return body;
   }
 
@@ -318,6 +337,17 @@ class HttpEmbeddingProvider implements EmbeddingProvider {
       return out;
     }
 
+    // 服务端批次上限（如百炼 qwen3.7-text-embedding = 20）；超出切片
+    const max = this.opts.maxBatchSize;
+    if (max && max > 0 && texts.length > max) {
+      const out: number[][] = [];
+      for (let i = 0; i < texts.length; i += max) {
+        const slice = texts.slice(i, i + max);
+        out.push(...(await this.embedBatch(slice)));
+      }
+      return out;
+    }
+
     const res = await fetch(this.opts.url, {
       method: 'POST',
       headers: this.buildHeaders(),
@@ -325,9 +355,9 @@ class HttpEmbeddingProvider implements EmbeddingProvider {
       signal: AbortSignal.timeout(this.opts.timeoutMs),
     });
     if (!res.ok) {
-      // 批量失败时退回串行（部分网关只支持单条）
+      // 批量失败时退回串行（部分网关只支持单条）；串行避免限流风暴
       if (texts.length > 1) {
-        return Promise.all(texts.map((t) => this.embed(t)));
+        return this.embedSerial(texts);
       }
       const detail = await res.text().catch(() => '');
       throw new Error(
@@ -338,9 +368,18 @@ class HttpEmbeddingProvider implements EmbeddingProvider {
     const many = this.extractMany(data);
     if (many.length >= 1) {
       if (many.length === texts.length) return many;
-      if (texts.length > 1) return Promise.all(texts.map((t) => this.embed(t)));
+      if (texts.length > 1) return this.embedSerial(texts);
       return many.slice(0, 1);
     }
-    return Promise.all(texts.map((t) => this.embed(t)));
+    return this.embedSerial(texts);
+  }
+
+  /** 串行单条（批量失败回退；避免并发风暴触发限流） */
+  private async embedSerial(texts: string[]): Promise<number[][]> {
+    const out: number[][] = [];
+    for (const t of texts) {
+      out.push(await this.embed(t));
+    }
+    return out;
   }
 }

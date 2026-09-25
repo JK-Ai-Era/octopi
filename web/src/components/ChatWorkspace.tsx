@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { MarkdownMessage } from './MarkdownMessage';
 import { ContextRuntimePanel } from './ContextRuntimePanel';
 import { RunObservatoryPanel } from './RunObservatoryPanel';
+import { SessionCorpusMenu } from './SessionCorpusMenu';
 import { OctopiClient } from '../../../src/integration/web/sdk/client';
 import { OctopiRuntimeStore } from '../../../src/integration/web/runtime/store';
 import type {
@@ -350,15 +351,18 @@ function TaskPanel({ tasks }: { tasks: SessionTaskView[] }) {
 export interface ChatWorkspaceProps {
   /** 顶栏统一 Focus：扩大右栏检查器 */
   inspectorFocus: boolean;
+  /** 同步当前 Agent 到顶栏（Knowledge 管理面共用） */
+  onAgentIdChange?: (agentId: string) => void;
 }
 
-export default function ChatWorkspace({ inspectorFocus }: ChatWorkspaceProps) {
+export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatWorkspaceProps) {
   const [baseUrl, setBaseUrl] = useState(DEFAULT_BASE);
   const [apiKey, setApiKey] = useState('');
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [connection, setConnection] = useState('idle');
   const [agents, setAgents] = useState<Array<{ id: string; model: { provider: string; model: string; contextWindow?: number } }>>([]);
   const [agentId, setAgentId] = useState('');
+  const [toast, setToast] = useState<string | null>(null);
   const [modelCatalog, setModelCatalog] = useState<ModelCatalog>({ models: [], agents: [] });
   const [sessionModel, setSessionModel] = useState<SessionModelView | null>(null);
   /** 下拉框选中的模型 id；会话打开时等于 sessionModel，否则为新建会话的预选 */
@@ -461,6 +465,16 @@ export default function ChatWorkspace({ inspectorFocus }: ChatWorkspaceProps) {
   useEffect(() => {
     if (!agentId && agents.length > 0) setAgentId(agents[0].id);
   }, [agents, agentId]);
+
+  useEffect(() => {
+    onAgentIdChange?.(agentId || 'default');
+  }, [agentId, onAgentIdChange]);
+
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 3200);
+    return () => clearTimeout(t);
+  }, [toast]);
 
   // Agent 切换时：无活动会话则预选该 agent 默认模型
   useEffect(() => {
@@ -1032,7 +1046,15 @@ export default function ChatWorkspace({ inspectorFocus }: ChatWorkspaceProps) {
               placeholder="输入消息，或 / 打开命令列表"
             />
             <div className="composer-footer">
+              <div className="composer-tools">
+                <SessionCorpusMenu
+                  agentId={agentId || 'default'}
+                  sessionId={activeSessionId}
+                  onToast={setToast}
+                />
+              </div>
               <div className="small muted">
+                {toast && <span className="corpus-toast">{toast}</span>}
                 {openIssues.length > 0 && (
                   <span style={{ color: 'var(--color-warn)', marginRight: 8 }}>
                     ⚠️ {openIssues.length} issue · /issues
