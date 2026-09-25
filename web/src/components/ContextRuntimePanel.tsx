@@ -4,14 +4,18 @@ import type {
 } from '../../../src/integration/web/sdk/client';
 import type { InspectorState } from '../../../src/integration/web/runtime/store';
 
-const LAYER_META: Record<LayerRuntimeViewDto['id'], { label: string; hue: string; note?: string }> = {
-  wisdom: { label: '智慧', hue: '#c9a227' },
-  persona: { label: '人格', hue: '#4f46e5' },
-  skill: { label: '技能', hue: '#0d9488' },
-  knowledge: { label: '知识', hue: '#2563eb' },
-  cognition: { label: '认知', hue: '#7c3aed' },
-  memory: { label: '记忆', hue: '#059669' },
-  runtime: { label: '运行时', hue: '#64748b', note: '契约附加' },
+/**
+ * 产品八层之 1–7（System ContextLayer）。
+ * 第 8 层 Information 不在此栈，单独 strip（消息窗口）。
+ */
+const LAYER_META: Record<LayerRuntimeViewDto['id'], { label: string; hue: string; n: number; note?: string }> = {
+  wisdom: { label: '智慧', hue: '#c9a227', n: 1 },
+  persona: { label: '人格', hue: '#4f46e5', n: 2 },
+  skill: { label: '技能', hue: '#0d9488', n: 3 },
+  knowledge: { label: '知识', hue: '#2563eb', n: 4 },
+  cognition: { label: '认知', hue: '#7c3aed', n: 5 },
+  memory: { label: '记忆', hue: '#059669', n: 6 },
+  runtime: { label: '运行时', hue: '#64748b', n: 7, note: 'Run 活态' },
 };
 
 const STATUS_META: Record<LayerRuntimeViewDto['status'], { label: string; cls: string }> = {
@@ -49,8 +53,9 @@ export interface ContextRuntimePanelProps {
 }
 
 /**
- * 七层上下文 Runtime 面板
+ * 八层上下文 Runtime 面板
  *
+ * 产品八层 = System ContextLayer（1–7，含 Runtime）+ Information（8，消息窗口）。
  * 只渲染 AssembleManifest 快照，不重算层状态。
  */
 export function ContextRuntimePanel({
@@ -158,7 +163,7 @@ export function ContextRuntimePanel({
         <section className="panel sidebar-section">
           <div className="sidebar-title">近轮 Timeline</div>
           <div className="small muted" style={{ marginBottom: 6 }}>
-            每列一轮 · 色块=纳入
+            每列一轮 · 色块=纳入 · L1–L7（System ContextLayer）
           </div>
           <div className="ctx-timeline">
             {(inspector.contextLayersTimeline ?? []).map((turn, idx) => (
@@ -187,8 +192,8 @@ export function ContextRuntimePanel({
       <section className="ctx-panel">
         <div className="ctx-panel-header">
           <div>
-            <div className="sidebar-title" style={{ marginBottom: 0 }}>System 装配层（契约）</div>
-            <div className="small muted">AssembleManifest 为真源 · 只含 system prompt 片段</div>
+            <div className="sidebar-title" style={{ marginBottom: 0 }}>System 装配层（产品 1–7）</div>
+            <div className="small muted">AssembleManifest 为真源 · ContextLayer = 产品八层之 1–7</div>
           </div>
           <div className="small mono muted">
             {snapshot?.query ? `query: ${snapshot.query.slice(0, 36)}` : 'query: —'}
@@ -247,9 +252,9 @@ export function ContextRuntimePanel({
           </div>
         ) : (
           <div className="ctx-empty">
-            装配完成后，这里按 order 显示 System 契约层状态（Wisdom → Runtime）。
+            装配完成后，这里按 order 显示 System 契约层（产品第 1–7 层：Wisdom → Runtime）。
             <br />
-            产品第 7 层 Information 不在本栈，见下方消息窗口面板。
+            产品第 8 层 Information 不在本栈，见下方消息窗口面板。
             <br />
             未注册、空、丢弃是三种不同事实。
           </div>
@@ -281,6 +286,7 @@ export function ContextRuntimePanel({
                   <div className="ctx-band-body">
                     <div className="ctx-band-top">
                       <div className="ctx-band-name">
+                        <span className="ctx-layer-n">L{meta.n}</span>
                         {meta.label} <span className="ctx-band-id">{layer.id}</span>
                         {meta.note && <span className="ctx-layer-note">{meta.note}</span>}
                       </div>
@@ -320,11 +326,11 @@ export function ContextRuntimePanel({
           </div>
         )}
 
-        <div className="ctx-section-title">Information · 消息窗口（产品第 7 层）</div>
+        <div className="ctx-section-title">Information · 消息窗口（产品第 8 层）</div>
         <div className="ctx-info-panel">
           <div className="ctx-info-lead">
-            session 正文与消息历史。由 <strong>DefaultContextEngine</strong> 做选择 / 压缩 / 主动摘要；
-            <strong>不进入</strong> System 装配栈。
+            产品第 8 层。session 正文与消息历史。由 <strong>DefaultContextEngine</strong> 做选择 / 压缩 / 主动摘要；
+            <strong>不进入</strong> System 装配栈（ContextLayer 只到 L7 Runtime）。
           </div>
           <div className="ctx-metrics" style={{ marginTop: 8 }}>
             <div className="ctx-metric">
@@ -358,7 +364,7 @@ export function ContextRuntimePanel({
           </div>
         </div>
 
-        <div className="ctx-section-title">层详情 · System 契约层</div>
+        <div className="ctx-section-title">层详情 · System 契约层（L1–L7）</div>
         <div className="ctx-detail">
           {!selected ? (
             <div className="small muted">选择一层查看 budget / reason / sources / 正文。</div>
@@ -366,6 +372,7 @@ export function ContextRuntimePanel({
             <>
               <div className="ctx-detail-title">
                 <i className="ctx-dot" style={{ background: LAYER_META[selected.id].hue }} />
+                <span className="ctx-layer-n">L{LAYER_META[selected.id].n}</span>
                 {LAYER_META[selected.id].label}
                 {LAYER_META[selected.id].note && (
                   <span className="ctx-layer-note">{LAYER_META[selected.id].note}</span>

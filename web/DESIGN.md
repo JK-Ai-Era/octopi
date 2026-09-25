@@ -4,12 +4,12 @@
 
 任何合格的 Octopi Web 产物，都应让开发者在 **10 秒内看懂「本轮 agent 为什么这样答」**：System 契约层是否参与、占了多少预算、为何被丢弃；以及 Information（session 消息窗口）的压缩状态。质量底线是运行时可解释，而不是仪表盘好看。
 
-**命名纪律：** UI 不得把产品七层模型写成「全是 system prompt」。产品第 7 层是 Information；Runtime 是 system 契约附加层。
+**命名纪律：** UI 不得把产品八层模型写成「全是 system prompt」。产品第 7 层是 **Runtime**（system 侧，Run 活态）；第 8 层是 **Information**（消息窗口）。恒等式：产品八层 = system ContextLayer（1–7）+ Information（8）。
 
 ## 2. Product Context
 
-- **What the product does:** 把 Agent 运行时（会话、工具、七层上下文装配）变成浏览器里可观察、可调试的交互系统。
-- **Who it's for:** 正在打磨七层模型的 Octopi 开发者；以及需要理解「agent 核心价值」的技术受众（demo）。
+- **What the product does:** 把 Agent 运行时（会话、工具、八层上下文装配）变成浏览器里可观察、可调试的交互系统。
+- **Who it's for:** 正在打磨八层模型的 Octopi 开发者；以及需要理解「agent 核心价值」的技术受众（demo）。
 - **Adjacent brands (feel like these):** Linear 的检查器密度、Figma 右侧属性面板的层级感、科学仪器/质谱软件的数据读数感。
 - **Distant brand (do not feel like this):** 通用 SaaS 后台模板（KPI 卡片墙 + 渐变 hero）——它假装产品是指标，而 Octopi 的产品是 **信息如何被分馏进上下文**。
 - **Cultural register:** technical / instrument-grade。冷静、精确、可验证；不营销。
@@ -84,15 +84,15 @@
 - **Token format:** CSS variables（现有 `web/src/styles.css` 扩展 `--layer-*`）。
 - **Component library convention:** bespoke（现有 React + class，不引入重型 UI 库）。
 - **Image treatment rules:** 无摄影/插画；可视化全部由数据编码（色条、进度、栈）。
-- **Grid system:** 工作台三栏（left / chat / inspector）；Context focus 模式为 chat 弱化 + inspector 扩展。
+- **Grid system:** Playground 三栏（left / chat / inspector）；顶栏统一 Focus 开关：chat 弱化 + inspector 扩展（各页签共用，不 per-tab）。
 - **Motion rules:** ease-out 120–200ms；token 条宽度变化用 transition；不做装饰性 parallax。
 - **数据源约定:** UI **只渲染** `AssembleManifest` / `ContextLayersSnapshot`，禁止前端臆造层状态。
 
 ## 7. Anti-Patterns
 
-- **No KPI card wall.** 七层不是七张同等仪表卡；那是把结构信息压成噪声。
+- **No KPI card wall.** 八层不是八张同等仪表卡；那是把结构信息压成噪声。
 - **No pie chart of budget shares.** 七段角度编码差；用单条 stacked bar + 直接标注。
-- **No emoji layer icons.** 七层模型是契约不是表情符号系统。
+- **No emoji layer icons.** 八层模型是契约不是表情符号系统。
 - **No “agent 变聪明了” 式空洞文案.** 只展示 reason / tokens / sources 等可验证字段。
 - **No silent missing layers.** 未注册、空内容、被丢弃必须是三种不同状态，不得都显示成灰掉。
 - **No full systemPrompt 默认展开.** 预览截断 + 溯源；全文属于显式 debug 动作。
@@ -100,7 +100,7 @@
 ## 8. Decision-Making
 
 1. **Truth over polish.** manifest 说什么 UI 就显示什么；冲突时改后端事件而不是改 UI 装饰。
-2. **Chat remains the product center.** 七层是检查器/演示层，不得把工作台改成纯 dashboard。
+2. **Chat remains the product center.** 八层是检查器/演示层，不得把 playground 改成纯 dashboard。
 3. **Distinguish states before adding charts.** 状态可读优先于任何统计图。
 4. **One primary interaction per surface.** 右栏主交互 = 选层看详情；不是七个等权 CTA。
 5. **Demo mode must be the same data path.** 禁止 demo 专用假后端逻辑与生产 UI 分叉。
@@ -109,7 +109,7 @@
 
 1. 读取最新 `ContextLayersSnapshot`（WS 优先，REST 兜底）。
 2. 渲染顶栏预算摘要（systemBudget / used / reserve）。
-3. 按 `order` 渲染七层 band；Information 单独 strip。
+3. 按 `order` 渲染 System 七层 band（产品 L1-L7）；Information（L8）单独 strip。
 4. 用 status → 徽章/色语义映射，禁止颜色-only。
 5. 选中层 → 详情：budget vs tokens、reason、dropped、sources、preview。
 6. 事件 `context.layers.*` 到达时局部刷新，避免整页重置滚动。

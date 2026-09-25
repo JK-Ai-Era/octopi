@@ -45,6 +45,7 @@ body {
 .status-warn { color: var(--color-warn); }
 .status-error { color: var(--color-error); }
 .status-neutral { color: var(--color-neutral); }
+.status-info { color: var(--color-accent-border); }
 
 /* ── Buttons ── */
 button, input, textarea { font: inherit; }
@@ -114,6 +115,8 @@ pre { font-family: var(--font-mono); font-size: 13px; }
 
 .app-header { padding: 10px 16px; border-bottom: 1px solid var(--color-border); background: var(--color-surface); display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; }
 .app-header-title { display: flex; align-items: center; gap: 10px; font-weight: 600; }
+.app-header-actions { display: flex; align-items: center; gap: 8px; }
+.btn-focus-active { background: var(--color-accent); border-color: var(--color-accent-border); }
 
 .app-main { flex: 1; min-height: 0; display: grid; grid-template-columns: var(--sidebar-w) 1fr var(--right-panel-w); overflow: hidden; position: relative; }
 .app-main-focus { grid-template-columns: var(--sidebar-w) minmax(200px, 0.7fr) minmax(360px, 1.6fr); }
@@ -350,9 +353,23 @@ pre { font-family: var(--font-mono); font-size: 13px; }
 .tool-timeline-card { border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: 10px; }
 .tool-timeline-header { cursor: pointer; display: flex; justify-content: space-between; align-items: center; }
 
-/* ── Context Runtime (七层) ── */
+/* ── Context Runtime（产品八层：System L1–L7 + Information L8）── */
 .ctx-runtime { display: grid; gap: 12px; }
 
+.ctx-layer-n {
+  display: inline-block;
+  min-width: 22px;
+  margin-right: 4px;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: var(--color-accent);
+  color: var(--color-accent-border);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 16px;
+  text-align: center;
+}
 .ctx-layer-note {
   display: inline-block;
   margin-left: 6px;

@@ -1,3 +1,26 @@
+## v0.51.11
+
+### fix(web): TokenUsage cache-aware 字段与 SDK DTO 对齐权威类型
+
+- **根因**：Core `TokenUsage` 已改为 cache-aware 七字段，Web UI 仍读旧 `promptTokens`/`completionTokens`/`totalTokens`；SDK `guardMetrics` 手写残缺 DTO 漏掉 Observer `RunGuardMetricsView` 的 wrap-up 字段；`fallbackCommands` 无 `usage` 导致联合类型收窄
+- **对齐**：`guardMetrics` → `Partial<RunGuardMetricsView>`（防再漂移）；usage 展示走 `nominalTotalTokens()` / `reportedPromptTokens()` / `outputTokens`
+- **真 bug**：`guardMetrics.totalTokens` 从来不存在，tokensΣ 兜底改为 `nominalTotalTokens`
+- `CommandCatalogItemDto` 抽出共用；补 `.status-info` 样式
+- `web`：`tsc && vite build` 通过
+
+### feat(webui): 顶栏统一 Focus、Playground 文案、八层检查器
+
+- **Focus**：右栏页签条上的 Focus 按钮统一到顶栏（原「Chat-first workspace」位置），全页签共用
+- **文案**：「交互工作台 / Chat-first workspace」→ **Playground**；帮助页精简
+- **八层**：产品八层 = System ContextLayer L1–L7（含 Runtime）+ Information L8；层号徽章 L1–L8；Runtime 标注改为「Run 活态」（不再「契约附加」）；Information 标为第 8 层
+- `layer-types.ts` 契约注释纠偏到八层口径
+
+### docs: WebUI 设计稿 as-built 归档至 arch/
+
+- `docs/web-runtime-design.md` / `web-conversation-model-design.md` / `context-layers-ui-design.md` → `arch/`（实现交接稿，gitignored）
+- 同步状态头（as-built）、Playground 文案、八层口径；去掉 `/Users/jk/` 绝对路径
+- 对外只留 `web/DESIGN.md` + `docs/context-layer-contracts.md`；交叉引用更新
+
 ## v0.51.10
 
 ### chore(test): 清理 fixture 残留并防止再产生

@@ -237,8 +237,7 @@ Runtime config knobs (see `octopi.example.json` + `docs/KNOWN-ISSUES.md`): `tool
 - [Domain Split](./docs/domain-split.md) — run-guard / orchestration / AsyncTask boundaries
 - [Contributing](./docs/CONTRIBUTING.md) — Development guidelines
 - [Changelog](./CHANGELOG.md) — Version history
-- [Web Runtime Design](./docs/web-runtime-design.md) — Web Protocol SDK / Runtime Store / WebUI design
-- [Web Conversation Model Design](./docs/web-conversation-model-design.md) — Session display model design
+- [Web UI Design](./web/DESIGN.md) — Playground visual system & eight-layer inspector
 
 ---
 

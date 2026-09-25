@@ -237,8 +237,7 @@ src/
 - [领域切分](./docs/domain-split.md) — run-guard / orchestration / AsyncTask
 - [开发规范](./docs/CONTRIBUTING.md) — 开发指南
 - [更新日志](./CHANGELOG.md) — 版本历史
-- [Web Runtime 技术设计](./docs/web-runtime-design.md) — Web Protocol SDK / Runtime Store / WebUI 设计
-- [WebUI 会话显示模型设计](./docs/web-conversation-model-design.md) — Session 展示模型设计
+- [Web UI 设计](./web/DESIGN.md) — Playground 视觉体系与八层检查器
 
 ---
 

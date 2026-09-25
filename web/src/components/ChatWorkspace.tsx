@@ -13,7 +13,7 @@ import type {
   ViewMode,
 } from '../../../src/integration/web/conversation/types';
 import type { RunStatus, InspectorState } from '../../../src/integration/web/runtime/store';
-import type { SessionTaskView, ModelCatalog, SessionModelView } from '../../../src/integration/web/sdk/client';
+import type { SessionTaskView, ModelCatalog, SessionModelView, CommandCatalogItemDto } from '../../../src/integration/web/sdk/client';
 // 浏览器侧直连 token 模块（不经 harness barrel / context/index，避免拉入 Node 专用依赖）
 import { estimateTextTokens } from '../../../src/harness/context/token-estimator';
 import { JSON_CHARS_PER_TOKEN } from '../../../src/harness/context/token-constants';
@@ -347,7 +347,12 @@ function TaskPanel({ tasks }: { tasks: SessionTaskView[] }) {
 
 // ── Main Component ──
 
-export default function ChatWorkspace() {
+export interface ChatWorkspaceProps {
+  /** 顶栏统一 Focus：扩大右栏检查器 */
+  inspectorFocus: boolean;
+}
+
+export default function ChatWorkspace({ inspectorFocus }: ChatWorkspaceProps) {
   const [baseUrl, setBaseUrl] = useState(DEFAULT_BASE);
   const [apiKey, setApiKey] = useState('');
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -370,7 +375,7 @@ export default function ChatWorkspace() {
   const [inspector, setInspector] = useState<InspectorState>({});
   const [tasks, setTasks] = useState<SessionTaskView[]>([]);
   const [input, setInput] = useState('');
-  const [commands, setCommands] = useState<Array<{ name: string; display: string; description: string; usage?: string; kind: string; source: string }>>([]);
+  const [commands, setCommands] = useState<CommandCatalogItemDto[]>([]);
   const [cmdSuggestIndex, setCmdSuggestIndex] = useState(0);
   const [openIssues, setOpenIssues] = useState<Array<{ id: string; severity: string; title: string; detail: string }>>([]);
   const [rightTab, setRightTab] = useState<'context' | 'run' | 'tasks' | 'tools' | 'help'>('context');
@@ -379,7 +384,6 @@ export default function ChatWorkspace() {
   const [creating, setCreating] = useState(false);
   const [mobileTab, setMobileTab] = useState<'chat' | 'left' | 'right'>('chat');
   const [showAllSessions, setShowAllSessions] = useState(false);
-  const [contextFocus, setContextFocus] = useState(false);
 
   const clientRef = useRef<OctopiClient | null>(null);
   const storeRef = useRef<OctopiRuntimeStore | null>(null);
@@ -643,14 +647,15 @@ export default function ChatWorkspace() {
   };
 
   // ── 斜杠命令补全 ──
-  const fallbackCommands = [
-    { name: 'help', display: '/help', description: 'Show available commands', kind: 'control', source: 'builtin' },
-    { name: 'stop', display: '/stop', description: 'Stop the active run', kind: 'control', source: 'builtin' },
-    { name: 'new', display: '/new', description: 'Start a new session', kind: 'control', source: 'builtin' },
-    { name: 'model', display: '/model', description: 'Show or switch model', kind: 'control', source: 'builtin' },
-    { name: 'status', display: '/status', description: 'Show session status', kind: 'control', source: 'builtin' },
-    { name: 'issues', display: '/issues', description: 'List system issues', kind: 'control', source: 'builtin' },
-    { name: 'clear', display: '/clear', description: 'Clear screen (client-side)', kind: 'client', source: 'builtin' },
+  /** 未连上 Gateway 时的本地兜底；形状与 CommandCatalogItemDto 对齐（含 usage） */
+  const fallbackCommands: CommandCatalogItemDto[] = [
+    { name: 'help', display: '/help', description: 'Show available commands', usage: '/help', kind: 'control', source: 'builtin' },
+    { name: 'stop', display: '/stop', description: 'Stop the active run', usage: '/stop', kind: 'control', source: 'builtin' },
+    { name: 'new', display: '/new', description: 'Start a new session', usage: '/new', kind: 'control', source: 'builtin' },
+    { name: 'model', display: '/model', description: 'Show or switch model', usage: '/model [name]', kind: 'control', source: 'builtin' },
+    { name: 'status', display: '/status', description: 'Show session status', usage: '/status', kind: 'control', source: 'builtin' },
+    { name: 'issues', display: '/issues', description: 'List system issues', usage: '/issues', kind: 'control', source: 'builtin' },
+    { name: 'clear', display: '/clear', description: 'Clear screen (client-side)', usage: '/clear', kind: 'client', source: 'builtin' },
   ];
   const catalog = commands.length ? commands : fallbackCommands;
   const cmdQuery = (() => {
@@ -780,7 +785,7 @@ export default function ChatWorkspace() {
         <button className={mobileTab === 'right' ? 'mobile-nav-active' : ''} onClick={() => setMobileTab('right')}>检查</button>
       </nav>
 
-      <main className={`app-main ${contextFocus ? 'app-main-focus' : ''} ${mobileTab === 'left' ? 'mobile-show-left' : ''} ${mobileTab === 'right' ? 'mobile-show-right' : ''}`}>
+      <main className={`app-main ${inspectorFocus ? 'app-main-focus' : ''} ${mobileTab === 'left' ? 'mobile-show-left' : ''} ${mobileTab === 'right' ? 'mobile-show-right' : ''}`}>
         {/* ── 左栏：连接、Agent、会话 ── */}
         <aside className="left-sidebar">
           <section className="panel sidebar-section">
@@ -1070,15 +1075,6 @@ export default function ChatWorkspace() {
             </button>
             <button className={rightTab === 'tools' ? 'btn-tab btn-tab-active' : 'btn-tab'} onClick={() => setRightTab('tools')}>工具</button>
             <button className={rightTab === 'help' ? 'btn-tab btn-tab-active' : 'btn-tab'} onClick={() => setRightTab('help')}>帮助</button>
-            <button
-              type="button"
-              className="btn-ghost small"
-              style={{ marginLeft: 'auto' }}
-              onClick={() => setContextFocus((v) => !v)}
-              title="扩大右栏检查器（上下文 / Run 等）"
-            >
-              {contextFocus ? '退出 Focus' : 'Focus'}
-            </button>
           </div>
 
           {rightTab === 'context' && (
@@ -1155,21 +1151,20 @@ export default function ChatWorkspace() {
             <section className="panel sidebar-section">
               <div className="sidebar-title">使用说明</div>
               <ul style={{ margin: 0, paddingLeft: 18, fontSize: 'var(--text-sm)' }}>
-                <li>左栏负责连接、Agent、会话创建</li>
-                <li>中栏负责主聊天链路</li>
-                <li>中栏「模型」下拉可切换会话模型；新建会话时作为预选</li>
-                <li>会话级模型覆盖只影响该会话，不改动 Agent 配置默认</li>
-                <li>contextWindow 仅认配置；未配置显示「未知」，自动压缩/按窗口预算已禁用</li>
-                <li>中栏「压缩」= 手动结构压缩（头尾+摘要），不依赖 contextWindow</li>
-                <li>也可 POST /api/v1/sessions/:id/compact</li>
-                <li>右栏「上下文」：System 契约层 + Information 消息窗口（产品第 7 层）</li>
-                <li>右栏「Run」：Observer 通道 — RunScope / 时间线 / run messages 全文</li>
-                <li>产品七层 ≠ ContextLayer：Information 是 session，Runtime 是契约附加</li>
-                <li>Focus 模式放大右栏，便于 demo / 深度调试</li>
-                <li>右栏「任务」实时展示会话任务树</li>
+                <li>左栏：连接 Gateway、选 Agent、开/开会话</li>
+                <li>中栏：主对话（模型切换、压缩）</li>
+                <li>右栏：上下文 / Run / 任务 / 工具 — 观察本轮 agent 为什么这样答</li>
+                <li>顶栏 Focus：放大右栏检查器，便于 demo / 深度调试</li>
+                <li>「模型」下拉切换会话模型；新建会话时作为预选</li>
+                <li>会话级模型覆盖只影响该会话，不改 Agent 默认</li>
+                <li>contextWindow 仅认配置；未配置显示「未知」</li>
+                <li>「压缩」= 手动结构压缩（头尾+摘要），也可 POST /api/v1/sessions/:id/compact</li>
+                <li>右栏「上下文」：产品八层 = System 契约层 L1–L7（含 Runtime）+ Information L8</li>
+                <li>Information 是消息窗口（第 8 层），不进 System 装配栈</li>
+                <li>右栏「Run」：Observer — RunScope / 时间线 / run messages</li>
+                <li>右栏「任务」：会话任务树；对 Agent 说「把 xx 标为完成」即可更新</li>
                 <li>连接成功后自动刷新 Agent、模型目录和会话</li>
-                <li>Enter 发送，Shift+Enter 换行</li>
-                <li>输入法组合选词阶段不会误触发送</li>
+                <li>Enter 发送，Shift+Enter 换行；输入法选词阶段不会误触</li>
               </ul>
             </section>
           )}

@@ -1,5 +1,5 @@
 /**
- * ContextLayer — 七层上下文内容契约
+ * ContextLayer — System 内容契约（产品八层之 1–7）
  *
  * @layer harness/context
  *
@@ -23,9 +23,9 @@ import type { Message } from '../../core/types.js';
  *
  * 排列顺序：Wisdom → Persona → Skill → Knowledge → Cognition → Memory → Runtime。
  *
- * **产品七层概念模型的第 7 层是 Information（session 消息）**，不是本契约里的 runtime。
- * Information 由 ContextEngine 管消息窗口，**不是** ContextLayer。
- * runtime 是契约附加层：injectedContext（任务/guidance）等 system 侧动态注入。
+ * **产品八层 = 本契约 7 层（1–7，含 Runtime）+ Information（第 8 层，消息窗口）。**
+ * Runtime 是产品第 7 层（system 侧，归属 Run：injectedContext / tasks / guidance）。
+ * Information 是产品第 8 层，由 ContextEngine 管消息窗口，**不是** ContextLayer。
  */
 export type ContextLayerId =
   | 'wisdom'

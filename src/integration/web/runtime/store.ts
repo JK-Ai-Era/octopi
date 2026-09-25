@@ -146,11 +146,11 @@ export interface InspectorState {
   lastRetryLabel?: string;
   /** 上下文压缩状态（context.compact.*） */
   compact?: CompactStatus;
-  /** 七层装配快照（context.layers.assembled / REST） */
+  /** System 装配快照（产品 L1–L7；context.layers.assembled / REST） */
   contextLayers?: ContextLayersSnapshot;
   /** 近 N 轮装配摘要（timeline） */
   contextLayersTimeline?: ContextLayerTurnSummaryDto[];
-  /** Agent 七层数据面健康（REST） */
+  /** Agent 数据面健康（产品 L1–L7 store 计数；REST） */
   contextHealth?: ContextLayerHealthDto;
   /** Run 观测投影（Observer 通道） */
   runObservatory?: RunObservatorySnapshotDto | null;
@@ -623,7 +623,7 @@ export class OctopiRuntimeStore extends EventTarget {
       tasks,
     };
 
-    // 打开会话时拉取最近一次七层快照 + Agent 数据面健康
+    // 打开会话时拉取最近一次 System 装配快照 + Agent 数据面健康
     // Observer REST 写回前必须确认 chat.sessionId 仍是本次 open 的目标
     const openWriteSeq = this.beginObserverWrite('observatory');
     try {
@@ -1185,7 +1185,7 @@ export class OctopiRuntimeStore extends EventTarget {
     const cached = this.conversationCache.get(sessionId);
     if (!cached) return;
 
-    // 后台会话也写入七层快照（WS 已无 content，状态/timeline 仍有效）
+    // 后台会话也写入 System 装配快照（WS 已无 content，状态/timeline 仍有效）
     let inspector = cached.inspector;
     if (event.type === 'context.layers.assembled') {
       const d = event.data as

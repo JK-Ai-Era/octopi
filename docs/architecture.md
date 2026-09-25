@@ -824,5 +824,7 @@ Gateway serve 路径经 `builder.build()` 装配；治理类子系统 signal 仅
 - `docs/domain-split.md` — run-guard / orchestration / AsyncTask 领域切分
 - `docs/CONTRIBUTING.md` — 开发规范
 - `docs/context-layer-contracts.md` — ContextLayer / Assembler 契约
-- `docs/web-runtime-design.md` — Web Runtime 技术设计
-- `docs/web-conversation-model-design.md` — WebUI 会话显示模型设计
+- `web/DESIGN.md` — WebUI（Playground）视觉与八层检查器设计
+- `arch/web-runtime-design.md` — Web Runtime 技术设计（as-built 归档）
+- `arch/web-conversation-model-design.md` — WebUI 会话显示模型（as-built 归档）
+- `arch/context-layers-ui-design.md` — 上下文 Runtime UI 设计（as-built 归档）

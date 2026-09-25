@@ -18,5 +18,8 @@
 
 ## 关联设计
 
-- `docs/web-runtime-design.md`
-- `docs/web-conversation-model-design.md`
+- `web/DESIGN.md` — 视觉与八层检查器（产品）
+- `docs/context-layer-contracts.md` — System 层契约（对外）
+- `arch/web-runtime-design.md` — Web Runtime 技术设计（as-built 归档）
+- `arch/web-conversation-model-design.md` — 会话显示模型（as-built 归档）
+- `arch/context-layers-ui-design.md` — 上下文 Runtime UI（as-built 归档）

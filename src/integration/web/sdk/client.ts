@@ -17,6 +17,19 @@
 
 export type ConnectionState = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'disconnected' | 'failed';
 
+/**
+ * 对话斜杠命令目录项（与 `CommandCatalogItem` 的传输投影对齐）。
+ * 权威类型：`harness/plugin-ecosystem/commands/types.ts`。
+ */
+export interface CommandCatalogItemDto {
+  name: string;
+  display: string;
+  description: string;
+  usage?: string;
+  kind: string;
+  source: string;
+}
+
 export interface OctopiClientOptions {
   baseUrl: string;
   apiKey?: string;
@@ -149,7 +162,7 @@ export interface MemoryStats {
   avgImportance?: number;
 }
 
-/** 七层装配 UI 快照（与 harness/context/layer-snapshot 对齐） */
+/** System 装配 UI 快照（产品八层之 1–7；与 harness/context/layer-snapshot 对齐） */
 export interface LayerRuntimeViewDto {
   id: 'wisdom' | 'persona' | 'skill' | 'knowledge' | 'cognition' | 'memory' | 'runtime';
   status: 'idle' | 'included' | 'empty' | 'dropped' | 'error' | 'unregistered';
@@ -263,25 +276,12 @@ export interface RunObservatorySnapshotDto {
   messagesSummary?: RunMessagesSummaryDto;
   llmSummary?: RunMessagesSummaryDto;
   llmEstimatedTokens?: number;
-  guardMetrics?: {
-    sessionId?: string;
-    agentId?: string;
-    iteration?: number;
-    totalToolCalls?: number;
-    nominalTotalTokens?: number;
-    usageLedger?: import('../../../harness/accounting/usage-ledger.js').UsageLedgerSnapshot;
-    elapsedMs?: number;
-    consecutiveErrors?: number;
-    consecutiveSameTool?: number;
-    noopStreak?: number;
-    hasProgress?: boolean;
-    uniqueTools?: string[];
-    recentTools?: Array<{ name: string; success: boolean }>;
-    recoveryCount?: number;
-    budgetExceededReason?: string;
-    guardStoppedReason?: string;
-    guardRecovered?: { reason: string; actions: string[] };
-  };
+  /**
+   * Guard / RunMetrics 投影。
+   * 权威类型是 Observer `RunGuardMetricsView`（含 wrap-up / usageLedger）；
+   * 传输层 WS 增量合并可能只有子集，故用 Partial 防漂移。
+   */
+  guardMetrics?: Partial<import('../../../harness/observer/types.js').RunGuardMetricsView>;
   messagesDiff?: {
     entryCount: number;
     finalCount: number;
@@ -504,23 +504,9 @@ export class OctopiClient {
   }
 
   /** 对话斜杠命令目录 */
-  async getCommands(): Promise<Array<{
-    name: string;
-    display: string;
-    description: string;
-    usage?: string;
-    kind: string;
-    source: string;
-  }>> {
+  async getCommands(): Promise<CommandCatalogItemDto[]> {
     const data = await this.getJson('/commands');
-    return (data?.data as Array<{
-      name: string;
-      display: string;
-      description: string;
-      usage?: string;
-      kind: string;
-      source: string;
-    }>) ?? [];
+    return (data?.data as CommandCatalogItemDto[] | undefined) ?? [];
   }
 
   /** 系统问题面 */
@@ -650,7 +636,7 @@ export class OctopiClient {
   }
 
   /**
-   * 会话最近一次七层装配快照
+   * 会话最近一次 System 装配快照（产品 L1–L7）
    *
    * @param sessionId - 会话 id
    * @returns 快照；无装配记录时为 null
@@ -694,7 +680,7 @@ export class OctopiClient {
   }
 
   /**
-   * Agent 七层数据面健康
+   * Agent 数据面健康（产品 L1–L7 store 计数）
    *
    * @param agentId - Agent id
    * @returns 健康快照

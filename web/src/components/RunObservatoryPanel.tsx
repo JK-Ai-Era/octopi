@@ -4,6 +4,16 @@ import type {
   RunTimelineEventDto,
 } from '../../../src/integration/web/sdk/client';
 import type { InspectorState } from '../../../src/integration/web/runtime/store';
+import type { TokenUsage } from '../../../src/core/types/turn';
+import { nominalTotalTokens, reportedPromptTokens } from '../../../src/core/types/turn';
+
+/** TokenUsage 是 cache-aware 七字段；展示统一走 core 汇总函数，禁止读旧 prompt/completion/total 字段 */
+function formatUsageBrief(usage: TokenUsage): string {
+  const p = reportedPromptTokens(usage);
+  const c = usage.outputTokens;
+  const t = nominalTotalTokens(usage);
+  return `p=${p} c=${c} t=${t}${usage.cacheAware ? ' (cache-aware)' : ''}`;
+}
 
 function formatTokens(n: number | undefined | null): string {
   if (n == null || typeof n !== 'number' || !Number.isFinite(n)) return '—';
@@ -295,7 +305,7 @@ export function RunObservatoryPanel({
                 <div className="ctx-metrics" style={{ marginTop: 6 }}>
                   <div className="ctx-metric">
                     <div className="k">tokensΣ (nominal)</div>
-                    <div className="v">{formatTokens(obs.guardMetrics?.usageLedger?.nominalTotalTokens ?? obs.guardMetrics?.totalTokens)}</div>
+                    <div className="v">{formatTokens(obs.guardMetrics?.usageLedger?.nominalTotalTokens ?? obs.guardMetrics?.nominalTotalTokens)}</div>
                   </div>
                   <div className="ctx-metric">
                     <div className="k">cacheAware</div>
@@ -516,8 +526,8 @@ export function RunObservatoryPanel({
                           <div className="ctx-band-meta">
                             {ev.durationMs != null && <span>{formatMs(ev.durationMs)}</span>}
                             {ev.reason && <span>{ev.reason}</span>}
-                            {ev.usage?.totalTokens != null && (
-                              <span>tok {formatTokens(ev.usage.totalTokens)}</span>
+                            {ev.usage != null && (
+                              <span>tok {formatTokens(nominalTotalTokens(ev.usage))}</span>
                             )}
                             <span className="muted">{open ? '收起' : '详情'}</span>
                           </div>
@@ -540,9 +550,7 @@ export function RunObservatoryPanel({
                             <span className="v">{ev.reason || '—'}</span>
                             <span className="k">usage</span>
                             <span className="v">
-                              {ev.usage
-                                ? `p=${ev.usage.promptTokens ?? '—'} c=${ev.usage.completionTokens ?? '—'} t=${ev.usage.totalTokens ?? '—'}`
-                                : '—'}
+                              {ev.usage ? formatUsageBrief(ev.usage) : '—'}
                             </span>
                           </div>
                           <pre className="ctx-layer-content-body" style={{ whiteSpace: 'pre-wrap', marginTop: 6 }}>

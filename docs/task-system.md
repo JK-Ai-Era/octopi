@@ -390,5 +390,5 @@ interface SessionTaskService {
 | 文档 | 关系 |
 |------|------|
 | [domain-split.md](./domain-split.md) | 其余模块领域切分 |
-| [docs/web-conversation-model-design.md](web-conversation-model-design.md) | UI 任务面板可作为 conversation view 一部分 |
+| [arch/web-conversation-model-design.md](../arch/web-conversation-model-design.md) | UI 任务面板可作为 conversation view 一部分（as-built 归档） |
 | [架构宪法](./north-star.md) | 长期不变量（含分层与 Run 作用域） |
