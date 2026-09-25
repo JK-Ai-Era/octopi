@@ -17,10 +17,13 @@ import {
   resolveSupportBinding,
   type ToolSummarySupport,
 } from '../../capabilities/summary/index.js';
+import type { CredentialStore } from '../../credentials/store.js';
 
 export interface HttpRequestToolOptions {
   /** Summary L1/L2 支持；未提供时仅使用内置 L1 binding */
   summary?: ToolSummarySupport;
+  /** 凭证库（credential 参数按名注入 header，模型不见明文） */
+  credentials?: CredentialStore | null;
 }
 
 /**
@@ -50,6 +53,11 @@ export function createHttpRequestTool(options?: HttpRequestToolOptions): Registe
         headers: {
           type: 'object',
           description: 'Request headers as key-value pairs',
+        },
+        credential: {
+          type: 'string',
+          description:
+            'Named credential from the credential store (auth headers injected server-side; secret never returned)',
         },
         body: {
           type: 'string',
@@ -87,6 +95,21 @@ export function createHttpRequestTool(options?: HttpRequestToolOptions): Registe
       const url = args.url as string;
       const method = (args.method as string) ?? 'GET';
       const headers = (args.headers as Record<string, string>) ?? {};
+      const credentialName = args.credential as string | undefined;
+      if (credentialName) {
+        const store = options?.credentials;
+        if (!store) {
+          throw new Error('credential parameter requires a configured CredentialStore');
+        }
+        const resolved = await store.resolve(credentialName);
+        if (!resolved) {
+          throw new Error(`credential not found or secret unavailable: ${credentialName}`);
+        }
+        // 凭证作底，显式 headers 可覆盖
+        for (const [k, v] of Object.entries(resolved.headers)) {
+          if (headers[k] == null) headers[k] = v;
+        }
+      }
       const body = args.body as string | undefined;
       const timeout = Math.min((args.timeout as number) ?? 30_000, 120_000);
       const maxResponseSize = (args.max_response_size as number) ?? 1_048_576;

@@ -5,10 +5,12 @@
  *
  * 目录结构：
  *   ~/.octopi/                         ← 系统根目录（OCTOPI_HOME）
- *     octopi.json                      ← 主配置文件
+ *     octopi.json                      ← 主配置文件（系统级；不含资源访问密钥）
  *     audit/                           ← 子系统审计日志
  *     plugins/                         ← plugin 目录
  *     sessions/                        ← Session 一等存储（JsonlSessionStore）
+ *     knowledge/                       ← Knowledge 服务数据面（knowledge.db 等）
+ *     credentials/                     ← 集成凭证库（credentials.db；密文或 env 引用）
  *     agents/
  *       default/                       ← agent home（persona / skills）
  *         AGENTS.md                    ← 主 persona（loadPersona 最先加载）

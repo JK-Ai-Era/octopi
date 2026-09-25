@@ -5,17 +5,23 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { readFile, readdir, stat } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import { watch, type FSWatcher } from 'node:fs';
 import { join, sep } from 'node:path';
 import { EventEmitter } from 'node:events';
-import { FormatAdapterRegistry } from './adapters.js';
+import { FormatAdapterRegistry, htmlAdapter, markdownAdapter, textAdapter } from './adapters.js';
+import { looksLikeHtml } from './html.js';
 import { hashContent, KnowledgeIndexStore } from './index-store.js';
 import { KnowledgeSourceStore } from './source-store.js';
+import { LocalFsFetcher, UrlFetcher, type SourceFetcher, type VirtualDocument } from './fetchers.js';
+import { ConnectorRegistry } from './connectors.js';
+import { ConnectorFetcher } from './connector-fetcher.js';
+import type { CredentialStore } from '../credentials/store.js';
+import type { ResolvedCredential } from '../credentials/types.js';
 import type { EmbeddingProvider } from '../memory/sqlite/embedding.js';
 import type { KnowledgeSource } from './types.js';
 
-export type IngestJobKind = 'parse_file' | 'walk_source' | 'drop_file' | 'embed_source';
+export type IngestJobKind = 'parse_file' | 'walk_source' | 'drop_file' | 'embed_source' | 'fetch_doc';
 
 export interface IngestProgressEvent {
   type: 'job' | 'source' | 'error' | 'embed';
@@ -47,6 +53,18 @@ export interface KnowledgeIngestOptions {
   embedConcurrency?: number;
   /** 磁盘水位告警（默认 false；仅告警不丢任务） */
   diskWatermarkAlert?: boolean;
+  /** 凭证库（source.authRef 解析；可选） */
+  credentials?: CredentialStore | null;
+  /** 自定义 fetcher 覆盖（测试/扩展） */
+  fetchers?: Partial<Record<'local' | 'url' | 'connector', SourceFetcher>>;
+  /** connector 注册表（U4；默认含 rest） */
+  connectors?: ConnectorRegistry;
+  /** poll 调度 tick ms（默认 60s） */
+  pollTickMs?: number;
+  /** 单源最小 poll 间隔 ms（默认 15min） */
+  pollMinIntervalMs?: number;
+  /** 每轮 poll 最多处理源数（成本上限，默认 8） */
+  maxPollPerTick?: number;
 }
 
 interface JobRow {
@@ -72,7 +90,15 @@ export class KnowledgeIngest extends EventEmitter {
   private readonly embedMinIntervalMs: number;
   private readonly embedConcurrency: number;
   private readonly diskWatermarkAlert: boolean;
+  private readonly credentials: CredentialStore | null;
+  private readonly localFetcher: SourceFetcher;
+  private readonly urlFetcher: SourceFetcher;
+  private readonly connectorFetcher: SourceFetcher;
+  private readonly pollTickMs: number;
+  private readonly pollMinIntervalMs: number;
+  private readonly maxPollPerTick: number;
   private lastEmbedAt = 0;
+  private pollTimer: NodeJS.Timeout | null = null;
 
   private running = 0;
   private runningEmbed = 0;
@@ -99,6 +125,16 @@ export class KnowledgeIngest extends EventEmitter {
     this.embedMinIntervalMs = options.embedMinIntervalMs ?? 0;
     this.embedConcurrency = options.embedConcurrency ?? options.parseConcurrency ?? 2;
     this.diskWatermarkAlert = options.diskWatermarkAlert ?? false;
+    this.credentials = options.credentials ?? null;
+    this.localFetcher =
+      options.fetchers?.local ?? new LocalFsFetcher((p) => this.adapters.shouldSkipPath(p));
+    this.urlFetcher = options.fetchers?.url ?? new UrlFetcher();
+    this.connectorFetcher =
+      options.fetchers?.connector ??
+      new ConnectorFetcher(options.connectors ?? new ConnectorRegistry());
+    this.pollTickMs = options.pollTickMs ?? 60_000;
+    this.pollMinIntervalMs = options.pollMinIntervalMs ?? 15 * 60_000;
+    this.maxPollPerTick = options.maxPollPerTick ?? 8;
   }
 
   get indexStore(): KnowledgeIndexStore {
@@ -113,9 +149,22 @@ export class KnowledgeIngest extends EventEmitter {
     if (!source || source.status === 'removed') {
       throw new Error(`knowledge source not found: ${sourceId}`);
     }
-    if (source.kind !== 'directory' && source.kind !== 'file' && source.kind !== 'workspace') {
-      // url/connector 由后续 adapter/同步策略处理
-      this.sources.update(sourceId, { status: 'error', errors: [{ message: `kind ${source.kind} not supported in P2 local ingest`, at: Date.now() }] });
+    if (
+      source.kind !== 'directory' &&
+      source.kind !== 'file' &&
+      source.kind !== 'workspace' &&
+      source.kind !== 'url' &&
+      source.kind !== 'connector'
+    ) {
+      this.sources.update(sourceId, {
+        status: 'error',
+        errors: [
+          {
+            message: `kind ${source.kind} not supported`,
+            at: Date.now(),
+          },
+        ],
+      });
       return;
     }
 
@@ -129,11 +178,17 @@ export class KnowledgeIngest extends EventEmitter {
       this.sources.update(sourceId, { status: 'discovering', coverage: 0 });
       this.emitProgress({ type: 'source', sourceId, status: 'discovering' });
 
-      const files = await this.walk(source.location);
-      this.discoveredFiles.set(sourceId, files.length);
-      if (opts?.full) {
-        this.index.clearSource(sourceId);
+      // full 不再 clearSource：靠本轮 keepPaths 差量 prune，discover 失败不丢库
+      if (source.kind === 'url' || source.kind === 'connector') {
+        await this.ingestRemoteSource(source);
+        return;
       }
+
+      const files = await this.localFetcher.discover(source);
+      this.discoveredFiles.set(sourceId, files.length);
+      // 差量 prune：磁盘上已消失的 path
+      const localKeep = new Set(files.map((f) => f.path));
+      this.index.pruneMissing(sourceId, localKeep);
 
       this.sources.update(sourceId, { status: 'partial', coverage: 0 });
       this.emitProgress({
@@ -143,8 +198,8 @@ export class KnowledgeIngest extends EventEmitter {
         detail: `${files.length} files`,
       });
 
-      for (const filePath of files) {
-        this.enqueue(sourceId, 'parse_file', filePath, 2, filePath);
+      for (const file of files) {
+        this.enqueue(sourceId, 'parse_file', file.path, 2, file.path);
       }
       if (this.embedding) {
         this.enqueue(sourceId, 'embed_source', null, 3);
@@ -152,6 +207,178 @@ export class KnowledgeIngest extends EventEmitter {
       this.kick();
     } finally {
       this.sourceLocks.delete(sourceId);
+    }
+  }
+
+  /**
+   * URL / connector 源：discover + fetch + 索引
+   */
+  private async ingestRemoteSource(source: KnowledgeSource): Promise<void> {
+    let cred: ResolvedCredential | null;
+    try {
+      cred = await this.resolveCred(source);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      // fail-closed：不降级匿名抓取，也不动已有索引
+      this.sources.update(source.id, {
+        status: 'error',
+        errors: [...(source.errors ?? []), { message: msg, at: Date.now() }].slice(-5),
+      });
+      this.emitProgress({ type: 'error', sourceId: source.id, status: 'credential_failed', detail: msg });
+      return;
+    }
+
+    const fetcher = source.kind === 'connector' ? this.connectorFetcher : this.urlFetcher;
+    let refs;
+    try {
+      refs = await fetcher.discover(source, cred);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.sources.update(source.id, {
+        status: 'error',
+        errors: [...(source.errors ?? []), { message: msg, at: Date.now() }].slice(-5),
+      });
+      this.emitProgress({ type: 'error', sourceId: source.id, status: 'discover_failed', detail: msg });
+      return;
+    }
+    // 条件 GET：带上已有 etag/Last-Modified，304 则整文档跳过
+    const enriched = refs.map((ref) => {
+      const existing = this.index.getFile(source.id, ref.path);
+      return {
+        ...ref,
+        etag: ref.etag ?? existing?.etag,
+        lastModified: ref.lastModified ?? existing?.lastModified,
+      };
+    });
+    this.discoveredFiles.set(source.id, enriched.length);
+    this.sources.update(source.id, { status: 'partial', coverage: 0 });
+    this.emitProgress({
+      type: 'source',
+      sourceId: source.id,
+      status: 'partial',
+      detail: `${enriched.length} docs`,
+    });
+
+    let okCount = 0;
+    let unchanged = 0;
+    for (const ref of enriched) {
+      try {
+        const doc = await fetcher.fetch(source, ref, cred);
+        if (!doc) {
+          // 304 / 未变：保持原索引
+          unchanged += 1;
+          okCount += 1;
+          continue;
+        }
+        if (this.indexVirtualDoc(source.id, doc)) {
+          okCount += 1;
+        }
+      } catch (err) {
+        this.index.markFileError(
+          source.id,
+          ref.path,
+          err instanceof Error ? err.message : String(err),
+        );
+        this.emitProgress({
+          type: 'error',
+          sourceId: source.id,
+          path: ref.path,
+          status: 'fetch_failed',
+          detail: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    // 差量 prune：discover 成功后，源上已消失的文档才删
+    const keep = new Set(enriched.map((r) => r.path));
+    const pruned = this.index.pruneMissing(source.id, keep);
+    if (pruned > 0) {
+      this.emitProgress({
+        type: 'source',
+        sourceId: source.id,
+        status: 'pruned',
+        detail: `removed=${pruned}`,
+      });
+    }
+
+    if (this.embedding) {
+      this.enqueue(source.id, 'embed_source', null, 3);
+      this.kick();
+    }
+    this.refreshCoverage(source.id);
+    this.emitProgress({
+      type: 'source',
+      sourceId: source.id,
+      status: 'ready',
+      detail: `url docs ok=${okCount}/${enriched.length} unchanged=${unchanged}`,
+    });
+  }
+
+  /**
+   * 解析源凭证；配置了 authRef 时 **fail-closed**（解析失败则本轮不抓，不降级匿名）。
+   *
+   * @returns 凭证或 null（仅当源未配置 authRef）
+   * @throws authRef 配置了但无法解析时抛错，由调用方中止本轮
+   */
+  private async resolveCred(source: KnowledgeSource): Promise<ResolvedCredential | null> {
+    if (!source.authRef) return null;
+    if (!this.credentials) {
+      throw new Error(
+        `source ${source.id} has authRef "${source.authRef}" but CredentialStore is not configured`,
+      );
+    }
+    const resolved = await this.credentials.resolve(source.authRef);
+    if (!resolved) {
+      throw new Error(
+        `credential "${source.authRef}" unavailable (missing secret, expired, or not found)`,
+      );
+    }
+    return resolved;
+  }
+
+  /**
+   * 将 VirtualDocument 写入索引（外源 / 规范化后文本）
+   *
+   * @returns 是否成功写入
+   */
+  indexVirtualDoc(sourceId: string, doc: VirtualDocument): boolean {
+    if (!doc.content?.trim()) {
+      this.index.markFileSkipped(sourceId, doc.path, 'empty_content');
+      return false;
+    }
+    // 逻辑键可能无扩展名（connector id / URL path）：按 MIME → 扩展名 → 内容形态回退
+    let adapter = this.adapters.match(doc.path, doc.contentType);
+    if (!adapter) {
+      if (looksLikeHtml(doc.content, doc.contentType)) adapter = htmlAdapter;
+      else if (/^#{1,6}\s|\n\n/.test(doc.content)) adapter = markdownAdapter;
+      else adapter = textAdapter;
+    }
+    const contentHash = hashContent(doc.content);
+    if (this.index.isFresh(sourceId, doc.path, contentHash)) {
+      return true;
+    }
+    try {
+      const chunks = adapter.chunk(doc.content, doc.path);
+      this.index.upsertFile({
+        sourceId,
+        path: doc.path,
+        contentHash,
+        size: doc.size,
+        mtime: Math.floor(Date.now() / 1000),
+        adapterId: adapter.id,
+        chunks,
+        externalUrl: doc.externalUrl,
+        etag: doc.etag,
+        lastModified: doc.lastModified,
+      });
+      return true;
+    } catch (err) {
+      this.index.markFileError(
+        sourceId,
+        doc.path,
+        err instanceof Error ? err.message : String(err),
+      );
+      return false;
     }
   }
 
@@ -256,7 +483,77 @@ export class KnowledgeIngest extends EventEmitter {
 
   dispose(): void {
     this.disposed = true;
+    this.stopPolling();
     for (const id of this.watchers.keys()) this.stopWatch(id);
+  }
+
+  /**
+   * 启动 poll 调度（幂等）；仅处理 sync.strategy=poll 且 enabled 的源
+   */
+  startPolling(): void {
+    if (this.pollTimer || this.disposed) return;
+    this.pollTimer = setInterval(() => {
+      void this.pollDueSources().catch((err) => {
+        this.emitProgress({
+          type: 'error',
+          sourceId: '*',
+          status: 'poll_tick_failed',
+          detail: err instanceof Error ? err.message : String(err),
+        });
+      });
+    }, this.pollTickMs);
+    // 不阻止进程退出
+    this.pollTimer.unref?.();
+  }
+
+  stopPolling(): void {
+    if (this.pollTimer) {
+      clearInterval(this.pollTimer);
+      this.pollTimer = null;
+    }
+  }
+
+  /**
+   * 扫描到期 poll 源并入队刷新（内容未变由 content-hash / 304 短路）
+   *
+   * @returns 本轮实际触发的 sourceId 列表
+   */
+  async pollDueSources(): Promise<string[]> {
+    if (this.disposed) return [];
+    const now = Date.now();
+    const due = this.sources
+      .list()
+      .filter((s) => {
+        if (s.status === 'removed' || s.status === 'disabled') return false;
+        if (s.sync.enabled === false) return false;
+        if (s.sync.strategy !== 'poll') return false;
+        const interval = s.sync.intervalMs ?? this.pollMinIntervalMs;
+        const last = s.lastPolledAt ?? 0;
+        return now - last >= Math.max(interval, this.pollMinIntervalMs);
+      })
+      .slice(0, this.maxPollPerTick);
+
+    const triggered: string[] = [];
+    for (const source of due) {
+      triggered.push(source.id);
+      this.sources.update(source.id, { lastPolledAt: now });
+      this.emitProgress({
+        type: 'source',
+        sourceId: source.id,
+        status: 'poll_due',
+        detail: source.sync.intervalMs?.toString(),
+      });
+      // 异步入队，不阻塞 tick
+      void this.ingestSource(source.id).catch((err) => {
+        this.emitProgress({
+          type: 'error',
+          sourceId: source.id,
+          status: 'poll_failed',
+          detail: err instanceof Error ? err.message : String(err),
+        });
+      });
+    }
+    return triggered;
   }
 
   // ── 内部 ──
@@ -392,6 +689,13 @@ export class KnowledgeIngest extends EventEmitter {
           this.enqueue(job.source_id, 'embed_source', null, 3);
           this.kick();
         }
+      } else if (job.kind === 'fetch_doc' && job.path) {
+        await this.fetchDocJob(job.source_id, job.path);
+        this.refreshCoverage(job.source_id);
+        if (this.embedding) {
+          this.enqueue(job.source_id, 'embed_source', null, 3);
+          this.kick();
+        }
       } else if (job.kind === 'drop_file' && job.path) {
         this.index.removeFile(job.source_id, job.path);
         this.refreshCoverage(job.source_id);
@@ -422,6 +726,30 @@ export class KnowledgeIngest extends EventEmitter {
         .run(message, now, job.id);
       throw err;
     }
+  }
+
+  /**
+   * 外源单文档 job：按逻辑键 fetch + 索引
+   */
+  private async fetchDocJob(sourceId: string, path: string): Promise<void> {
+    const source = this.sources.get(sourceId);
+    if (!source || source.status === 'removed') return;
+    const cred = await this.resolveCred(source);
+    const existing = this.index.getFile(sourceId, path);
+    const ref = {
+      path,
+      externalUrl: existing?.externalUrl ?? source.location,
+      etag: existing?.etag,
+      lastModified: existing?.lastModified,
+    };
+    const fetcher =
+      source.kind === 'url'
+        ? this.urlFetcher
+        : source.kind === 'connector'
+          ? this.connectorFetcher
+          : this.localFetcher;
+    const doc = await fetcher.fetch(source, ref, cred);
+    if (doc) this.indexVirtualDoc(sourceId, doc);
   }
 
   private async parseOne(sourceId: string, filePath: string): Promise<boolean> {
@@ -474,39 +802,6 @@ export class KnowledgeIngest extends EventEmitter {
       );
       return false;
     }
-  }
-
-  private async walk(root: string): Promise<string[]> {
-    const out: string[] = [];
-    const walkDir = async (dir: string): Promise<void> => {
-      let entries;
-      try {
-        entries = await readdir(dir, { withFileTypes: true });
-      } catch {
-        return;
-      }
-      for (const ent of entries) {
-        const abs = join(dir, ent.name);
-        // 目录噪音在 walk 期跳过；文件交给 parse（无 adapter/二进制会记 skipped）
-        if (ent.isDirectory()) {
-          if (this.adapters.shouldSkipPath(abs)) continue;
-          await walkDir(abs);
-        } else if (ent.isFile()) {
-          const base = ent.name;
-          if (base === 'knowledge.db' || base.endsWith('.db')) continue;
-          out.push(abs);
-        }
-      }
-    };
-
-    const st = await stat(root).catch(() => null);
-    if (!st) return out;
-    if (st.isFile()) {
-      out.push(root);
-      return out;
-    }
-    await walkDir(root);
-    return out;
   }
 
   /**

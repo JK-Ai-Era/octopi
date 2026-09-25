@@ -24,6 +24,9 @@ export interface IndexedFileRecord {
   error?: string;
   chunkCount: number;
   indexedAt: number;
+  externalUrl?: string;
+  etag?: string;
+  lastModified?: string;
 }
 
 export interface ChunkHit {
@@ -51,6 +54,9 @@ export class KnowledgeIndexStore {
     mtime: number;
     adapterId: string;
     chunks: KnowledgeChunkDraft[];
+    externalUrl?: string;
+    etag?: string;
+    lastModified?: string;
   }): IndexedFileRecord {
     const now = Date.now();
     const existing = this.db.raw
@@ -71,8 +77,9 @@ export class KnowledgeIndexStore {
       this.db.raw
         .prepare(
           `INSERT INTO knowledge_files (
-            id, source_id, path, content_hash, size, mtime, adapter_id, status, error, chunk_count, indexed_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, 'indexed', NULL, ?, ?)
+            id, source_id, path, content_hash, size, mtime, adapter_id, status, error, chunk_count, indexed_at,
+            external_url, etag, last_modified
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, 'indexed', NULL, ?, ?, ?, ?, ?)
           ON CONFLICT(source_id, path) DO UPDATE SET
             content_hash=excluded.content_hash,
             size=excluded.size,
@@ -81,7 +88,10 @@ export class KnowledgeIndexStore {
             status='indexed',
             error=NULL,
             chunk_count=excluded.chunk_count,
-            indexed_at=excluded.indexed_at`,
+            indexed_at=excluded.indexed_at,
+            external_url=excluded.external_url,
+            etag=excluded.etag,
+            last_modified=excluded.last_modified`,
         )
         .run(
           fileId,
@@ -93,6 +103,9 @@ export class KnowledgeIndexStore {
           input.adapterId,
           input.chunks.length,
           now,
+          input.externalUrl ?? null,
+          input.etag ?? null,
+          input.lastModified ?? null,
         );
 
       const insertChunk = this.db.raw.prepare(
@@ -132,55 +145,50 @@ export class KnowledgeIndexStore {
       status: 'indexed',
       chunkCount: input.chunks.length,
       indexedAt: now,
+      externalUrl: input.externalUrl,
+      etag: input.etag,
+      lastModified: input.lastModified,
     };
   }
 
+  /**
+   * 标记 skipped — **不删** 已有 chunks（瞬时/边界失败保旧索引）；仅元数据。
+   */
   markFileSkipped(sourceId: KnowledgeSourceId | string, path: string, reason: string): void {
-    const now = Date.now();
-    const existing = this.db.raw
-      .prepare('SELECT id FROM knowledge_files WHERE source_id = ? AND path = ?')
-      .get(sourceId, path) as { id?: string } | undefined;
-    const fileId = existing?.id ?? `kf_${randomUUID().slice(0, 12)}`;
-    this.db.raw
-      .prepare(
-        `DELETE FROM knowledge_chunk_embeddings
-         WHERE chunk_id IN (SELECT id FROM knowledge_chunks WHERE file_id = ?)`,
-      )
-      .run(fileId);
-    this.db.raw.prepare('DELETE FROM knowledge_chunks WHERE file_id = ?').run(fileId);
-    this.db.raw
-      .prepare(
-        `INSERT INTO knowledge_files (
-          id, source_id, path, content_hash, size, mtime, adapter_id, status, error, chunk_count, indexed_at
-        ) VALUES (?, ?, ?, '', 0, 0, NULL, 'skipped', ?, 0, ?)
-        ON CONFLICT(source_id, path) DO UPDATE SET
-          status='skipped', error=excluded.error, indexed_at=excluded.indexed_at`,
-      )
-      .run(fileId, sourceId, path, reason, now);
+    this.markFileNonIndexed(sourceId, path, 'skipped', reason);
   }
 
+  /**
+   * 标记 error — **不删** 已有 chunks（网络抖动不得清库）；仅元数据。
+   * 成功 `upsertFile` 才替换 chunks。
+   */
   markFileError(sourceId: KnowledgeSourceId | string, path: string, error: string): void {
+    this.markFileNonIndexed(sourceId, path, 'error', error);
+  }
+
+  private markFileNonIndexed(
+    sourceId: KnowledgeSourceId | string,
+    path: string,
+    status: 'skipped' | 'error',
+    detail: string,
+  ): void {
     const now = Date.now();
     const existing = this.db.raw
-      .prepare('SELECT id FROM knowledge_files WHERE source_id = ? AND path = ?')
-      .get(sourceId, path) as { id?: string } | undefined;
+      .prepare('SELECT id, chunk_count FROM knowledge_files WHERE source_id = ? AND path = ?')
+      .get(sourceId, path) as { id?: string; chunk_count?: number } | undefined;
     const fileId = existing?.id ?? `kf_${randomUUID().slice(0, 12)}`;
-    this.db.raw
-      .prepare(
-        `DELETE FROM knowledge_chunk_embeddings
-         WHERE chunk_id IN (SELECT id FROM knowledge_chunks WHERE file_id = ?)`,
-      )
-      .run(fileId);
-    this.db.raw.prepare('DELETE FROM knowledge_chunks WHERE file_id = ?').run(fileId);
+    const chunkCount = existing?.chunk_count ?? 0;
     this.db.raw
       .prepare(
         `INSERT INTO knowledge_files (
           id, source_id, path, content_hash, size, mtime, adapter_id, status, error, chunk_count, indexed_at
-        ) VALUES (?, ?, ?, '', 0, 0, NULL, 'error', ?, 0, ?)
+        ) VALUES (?, ?, ?, '', 0, 0, NULL, ?, ?, ?, ?)
         ON CONFLICT(source_id, path) DO UPDATE SET
-          status='error', error=excluded.error, indexed_at=excluded.indexed_at`,
+          status=excluded.status,
+          error=excluded.error,
+          indexed_at=excluded.indexed_at`,
       )
-      .run(fileId, sourceId, path, error, now);
+      .run(fileId, sourceId, path, status, detail, chunkCount, now);
   }
 
   /**
@@ -256,6 +264,29 @@ export class KnowledgeIndexStore {
     this.db.raw
       .prepare('DELETE FROM knowledge_files WHERE source_id = ? AND path = ?')
       .run(sourceId, path);
+  }
+
+  /**
+   * 差量 prune：删除本轮 discover **未出现** 的 path（含 chunks）。
+   * 仅在 discover 成功后调用；keepPaths 为空集时 no-op（防误清全库）。
+   *
+   * @returns 删除的文件数
+   */
+  pruneMissing(
+    sourceId: KnowledgeSourceId | string,
+    keepPaths: ReadonlySet<string> | Iterable<string>,
+  ): number {
+    const keep = keepPaths instanceof Set ? keepPaths : new Set(keepPaths);
+    if (keep.size === 0) return 0;
+    const files = this.listFiles(sourceId);
+    let removed = 0;
+    for (const f of files) {
+      if (!keep.has(f.path)) {
+        this.removeFile(sourceId, f.path);
+        removed += 1;
+      }
+    }
+    return removed;
   }
 
   sourceStats(sourceId: KnowledgeSourceId | string): { files: number; chunks: number; errors: number; skipped: number } {
@@ -545,5 +576,8 @@ function rowToFile(row: Record<string, unknown>): IndexedFileRecord {
     error: row.error == null ? undefined : String(row.error),
     chunkCount: Number(row.chunk_count ?? 0),
     indexedAt: Number(row.indexed_at ?? 0),
+    externalUrl: row.external_url == null ? undefined : String(row.external_url),
+    etag: row.etag == null ? undefined : String(row.etag),
+    lastModified: row.last_modified == null ? undefined : String(row.last_modified),
   };
 }

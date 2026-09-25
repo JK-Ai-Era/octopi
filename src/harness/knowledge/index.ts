@@ -14,6 +14,7 @@ export {
   FormatAdapterRegistry,
   textAdapter,
   markdownAdapter,
+  htmlAdapter,
   codeAdapter,
   chunkCodeBySymbols,
   IGNORED_DIRS,
@@ -22,6 +23,21 @@ export {
 export type { FormatAdapter, KnowledgeChunkDraft } from './adapters.js';
 export { KnowledgeIngest } from './ingest.js';
 export type { KnowledgeIngestOptions, IngestProgressEvent, IngestJobKind } from './ingest.js';
+export {
+  LocalFsFetcher,
+  UrlFetcher,
+} from './fetchers.js';
+export type {
+  SourceFetcher,
+  DiscoveredDocRef,
+  VirtualDocument,
+} from './fetchers.js';
+export { ConnectorRegistry, RestConnector } from './connectors.js';
+export type { KnowledgeConnector, ConnectorContext, RestConnectorConfig } from './connectors.js';
+export { ConnectorFetcher } from './connector-fetcher.js';
+export { assertUrlAllowed, guardedFetch, isRestrictedIp } from './network-guard.js';
+export type { NetworkGuardOptions, FetchResult } from './network-guard.js';
+export { htmlToStructuredText, looksLikeHtml } from './html.js';
 export { KnowledgeRetriever } from './retriever.js';
 export type {
   HybridSearchOptions,
@@ -69,6 +85,8 @@ export type {
   KnowledgeSourceStatus,
   KnowledgeSourceSync,
   KnowledgeSourceError,
+  KnowledgeSourceNetwork,
+  KnowledgeSourceDiscover,
   KnowledgeScopeRef,
   KnowledgeScopeLevel,
   KnowledgeSourceId,

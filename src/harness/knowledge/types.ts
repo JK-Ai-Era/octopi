@@ -52,6 +52,32 @@ export interface KnowledgeSourceSync {
   enabled: boolean;
 }
 
+/** 出站网络策略（外源 ingest） */
+export interface KnowledgeSourceNetwork {
+  /** 放行私网/环回（默认 false；内网文档源显式开） */
+  allowPrivateNetwork?: boolean;
+  /** 单响应字节上限（默认 5MB） */
+  maxResponseBytes?: number;
+  /** 单请求超时 ms（默认 30s） */
+  timeoutMs?: number;
+  /** 重定向上限（默认 5） */
+  maxRedirects?: number;
+}
+
+/** URL 源发现策略（U3 多页） */
+export interface KnowledgeSourceDiscover {
+  /** single：location 即文档；sitemap：解析 sitemap；crawl：同域有限 BFS */
+  mode: 'single' | 'sitemap' | 'crawl';
+  /** crawl/sitemap 最大文档数（默认 50） */
+  maxPages?: number;
+  /** crawl 最大深度（默认 3；0 = 仅入口） */
+  maxDepth?: number;
+  /** 发现阶段累计下载字节预算（默认 20MB） */
+  maxBytes?: number;
+  /** sitemapindex 嵌套深度（默认 2） */
+  sitemapMaxDepth?: number;
+}
+
 export interface KnowledgeSourceError {
   path?: string;
   message: string;
@@ -75,6 +101,14 @@ export interface KnowledgeSource {
   generatedDescription?: string;
   catalogPriority?: number;
   hiddenFromCatalog?: boolean;
+  /** CredentialStore 凭证名（密钥不进本库） */
+  authRef?: string;
+  /** 外源网络策略 */
+  network?: KnowledgeSourceNetwork;
+  /** URL 发现策略（缺省 single） */
+  discover?: KnowledgeSourceDiscover;
+  /** 最近一次 poll 完成时间（ms） */
+  lastPolledAt?: number;
   createdAt: number;
   updatedAt: number;
 }
@@ -91,6 +125,9 @@ export type KnowledgeSourceInput = {
   catalogPriority?: number;
   hiddenFromCatalog?: boolean;
   status?: KnowledgeSourceStatus;
+  authRef?: string;
+  network?: KnowledgeSourceNetwork;
+  discover?: KnowledgeSourceDiscover;
 };
 
 export type KnowledgeSourcePatch = Partial<
@@ -98,8 +135,6 @@ export type KnowledgeSourcePatch = Partial<
     KnowledgeSource,
     | 'location'
     | 'sync'
-    | 'displayName'
-    | 'description'
     | 'catalogPriority'
     | 'hiddenFromCatalog'
     | 'status'
@@ -108,6 +143,12 @@ export type KnowledgeSourcePatch = Partial<
   >
 > & {
   scopeRef?: KnowledgeScopeRef;
-  /** 传 null 可清除自动描述 */
+  /** 传 null 可清除 */
+  displayName?: string | null;
+  description?: string | null;
   generatedDescription?: string | null;
+  authRef?: string | null;
+  network?: KnowledgeSourceNetwork | null;
+  discover?: KnowledgeSourceDiscover | null;
+  lastPolledAt?: number;
 };

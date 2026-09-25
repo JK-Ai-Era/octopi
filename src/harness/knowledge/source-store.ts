@@ -64,6 +64,10 @@ function toCatalogItem(source: KnowledgeSource): KnowledgeCatalogItem {
 function rowToSource(row: Record<string, unknown>): KnowledgeSource {
   const sync = JSON.parse(String(row.sync_json ?? '{}')) as KnowledgeSourceSync;
   const errors = JSON.parse(String(row.errors_json ?? '[]')) as KnowledgeSource['errors'];
+  const network =
+    row.network_json == null
+      ? undefined
+      : (JSON.parse(String(row.network_json)) as KnowledgeSource['network']);
   return {
     id: asSourceId(String(row.id)),
     kind: String(row.kind) as KnowledgeSource['kind'],
@@ -82,6 +86,13 @@ function rowToSource(row: Record<string, unknown>): KnowledgeSource {
       row.generated_description == null ? undefined : String(row.generated_description),
     catalogPriority: row.catalog_priority == null ? undefined : Number(row.catalog_priority),
     hiddenFromCatalog: Number(row.hidden_from_catalog) === 1,
+    authRef: row.auth_ref == null ? undefined : String(row.auth_ref),
+    network,
+    discover:
+      row.discover_json == null
+        ? undefined
+        : (JSON.parse(String(row.discover_json)) as KnowledgeSource['discover']),
+    lastPolledAt: row.last_polled_at == null ? undefined : Number(row.last_polled_at),
     createdAt: Number(row.created_at),
     updatedAt: Number(row.updated_at),
   };
@@ -125,6 +136,9 @@ export class KnowledgeSourceStore {
       generatedDescription: input.generatedDescription,
       catalogPriority: input.catalogPriority,
       hiddenFromCatalog: input.hiddenFromCatalog ?? false,
+      authRef: input.authRef,
+      network: input.network,
+      discover: input.discover,
       createdAt: now,
       updatedAt: now,
     };
@@ -142,8 +156,18 @@ export class KnowledgeSourceStore {
       ...existing,
       ...(patch.location !== undefined ? { location: patch.location } : {}),
       ...(patch.sync !== undefined ? { sync: { ...existing.sync, ...patch.sync } } : {}),
-      ...(patch.displayName !== undefined ? { displayName: patch.displayName } : {}),
-      ...(patch.description !== undefined ? { description: patch.description } : {}),
+      ...(patch.displayName !== undefined
+        ? {
+            // displayName 必填：null 表示恢复由 location 推导
+            displayName:
+              patch.displayName === null
+                ? deriveDisplayName(patch.location ?? existing.location)
+                : patch.displayName,
+          }
+        : {}),
+      ...(patch.description !== undefined
+        ? { description: patch.description === null ? undefined : patch.description }
+        : {}),
       ...(patch.generatedDescription !== undefined
         ? {
             generatedDescription:
@@ -160,6 +184,16 @@ export class KnowledgeSourceStore {
       ...(patch.coverage !== undefined ? { coverage: patch.coverage } : {}),
       ...(patch.errors !== undefined ? { errors: patch.errors } : {}),
       ...(patch.scopeRef !== undefined ? { scopeRef: normalizeScope(patch.scopeRef) } : {}),
+      ...(patch.authRef !== undefined
+        ? { authRef: patch.authRef === null ? undefined : patch.authRef }
+        : {}),
+      ...(patch.network !== undefined
+        ? { network: patch.network === null ? undefined : patch.network }
+        : {}),
+      ...(patch.discover !== undefined
+        ? { discover: patch.discover === null ? undefined : patch.discover }
+        : {}),
+      ...(patch.lastPolledAt !== undefined ? { lastPolledAt: patch.lastPolledAt } : {}),
       updatedAt: Date.now(),
     };
     this.upsertRow(next);
@@ -329,8 +363,9 @@ export class KnowledgeSourceStore {
         `INSERT INTO knowledge_sources (
           id, kind, location, scope_level, scope_key, sync_json, status, coverage,
           errors_json, display_name, description, generated_description,
-          catalog_priority, hidden_from_catalog, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          catalog_priority, hidden_from_catalog, auth_ref, network_json, discover_json,
+          last_polled_at, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           kind=excluded.kind,
           location=excluded.location,
@@ -345,6 +380,10 @@ export class KnowledgeSourceStore {
           generated_description=excluded.generated_description,
           catalog_priority=excluded.catalog_priority,
           hidden_from_catalog=excluded.hidden_from_catalog,
+          auth_ref=excluded.auth_ref,
+          network_json=excluded.network_json,
+          discover_json=excluded.discover_json,
+          last_polled_at=excluded.last_polled_at,
           updated_at=excluded.updated_at`,
       )
       .run(
@@ -362,6 +401,10 @@ export class KnowledgeSourceStore {
         source.generatedDescription ?? null,
         source.catalogPriority ?? null,
         source.hiddenFromCatalog ? 1 : 0,
+        source.authRef ?? null,
+        source.network ? JSON.stringify(source.network) : null,
+        source.discover ? JSON.stringify(source.discover) : null,
+        source.lastPolledAt ?? null,
         source.createdAt,
         source.updatedAt,
       );

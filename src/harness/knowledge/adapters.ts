@@ -17,6 +17,8 @@ export interface FormatAdapter {
   id: string;
   /** 可处理的扩展名（小写，含点） */
   extensions: string[];
+  /** 可处理的 MIME（小写，可带参数前缀匹配） */
+  mimes?: string[];
   /**
    * 将文件内容切为 chunks
    *
@@ -412,10 +414,26 @@ export const codeAdapter: FormatAdapter = {
   },
 };
 
+/**
+ * HTML：入站应先经 htmlToStructuredText 规范化；
+ * 本 adapter 仍按标题/段落切，兼容已规范化或轻量 HTML 页。
+ */
+export const htmlAdapter: FormatAdapter = {
+  id: 'html',
+  extensions: ['.html', '.htm', '.xhtml'],
+  mimes: ['text/html', 'application/xhtml+xml'],
+  chunk(content, path) {
+    return markdownAdapter.chunk(content, path);
+  },
+};
+
 export class FormatAdapterRegistry {
   private byExt = new Map<string, FormatAdapter>();
+  private byMime = new Map<string, FormatAdapter>();
 
-  constructor(adapters: FormatAdapter[] = [textAdapter, markdownAdapter, codeAdapter]) {
+  constructor(
+    adapters: FormatAdapter[] = [textAdapter, markdownAdapter, htmlAdapter, codeAdapter],
+  ) {
     for (const a of adapters) this.register(a);
   }
 
@@ -423,12 +441,25 @@ export class FormatAdapterRegistry {
     for (const ext of adapter.extensions) {
       this.byExt.set(ext.toLowerCase(), adapter);
     }
+    for (const mime of adapter.mimes ?? []) {
+      this.byMime.set(mime.toLowerCase(), adapter);
+    }
   }
 
   /**
-   * 按扩展名匹配 adapter
+   * 按 MIME → 扩展名匹配 adapter
+   *
+   * @param path - 逻辑路径 / 文件名
+   * @param mime - 可选 Content-Type（可含 `; charset=`）
    */
-  match(path: string): FormatAdapter | null {
+  match(path: string, mime?: string): FormatAdapter | null {
+    if (mime) {
+      const base = mime.split(';')[0]?.trim().toLowerCase();
+      if (base) {
+        const hit = this.byMime.get(base);
+        if (hit) return hit;
+      }
+    }
     const lower = path.toLowerCase();
     const dot = lower.lastIndexOf('.');
     if (dot < 0) return null;

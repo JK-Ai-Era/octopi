@@ -1,3 +1,68 @@
+## v0.51.18
+
+### test: 删除遗留 skill-command-bridge 测试
+
+- `tests/skill-command-bridge.test.ts` 依赖本机 `~/.octopi/.../summarize-text` fixture，为旧测试遗留，删除
+
+## v0.51.17
+
+### fix(knowledge): 数据正确性 — path 防碰撞 / 差量 prune / tunables
+
+- **path**：query 进短 hash 后缀；跨 origin 加 host 前缀；REST 无稳定键时用内容 hash（不随下标漂移）
+- **差量 prune**：`pruneMissing`（keep 空集 no-op）；`full` 不再 `clearSource`；磁盘/远端消失的 path 本轮清除
+- **tunables**：`network.timeoutMs/maxRedirects`、`discover.sitemapMaxDepth`；`docCache` 每轮 discover 清空
+- **Patch**：`description`/`displayName` 支持 `null` 清除（displayName 回退 location 推导）
+
+## v0.51.16
+
+### fix(knowledge): 审查修复 — 失败不删索引 / 凭证防泄漏 / fail-closed
+
+- **索引保全**：`markFileError`/`markFileSkipped` **不再删除**已有 chunks（仅元数据）；瞬时失败/poll 抖动不丢库
+- **凭证防泄漏**：sitemap `<loc>` **限同源**；`guardedFetch` 跨域重定向剥离 `Authorization` 等敏感头
+- **fail-closed**：`authRef` 解析失败中止本轮（不降级匿名抓取）；`CredentialStore.resolve` 拒绝过期凭证
+- 回归：`tests/harness/knowledge-review-fixes.test.ts`
+
+## v0.51.15
+
+### feat(knowledge): 外部源 U4 — Connector 插件 + REST + http credential
+
+- **`KnowledgeConnector` / `ConnectorRegistry`**：插件面；内置 **`RestConnector`**（list + `contentField`/`urlField`）
+- **`ConnectorFetcher`**：`kind: 'connector'` 接入 ingest；`authRef` 注入 Authorization
+- **http_request**：`credential` 参数 — CredentialStore 按名注入 header，密钥不回显
+- **adapter 回退**：无扩展名逻辑键按 MIME/内容形态落到 html/markdown/text
+- OP-14 U1–U4 闭环（poll/条件 GET/多页/connector）
+
+## v0.51.14
+
+### feat(knowledge): 外部源 U3 — sitemap / 同域有限 crawl
+
+- **`KnowledgeSourceDiscover`**：`mode: single | sitemap | crawl`；`maxPages` / `maxDepth` / `maxBytes` 预算
+- **sitemap**：解析 `urlset` / `sitemapindex`（`<loc>`）；子 sitemap 深度上限
+- **crawl**：同 origin BFS；`extractLinks` 去外域/mailto；发现阶段 `docCache` 避免 discover+fetch 双下载
+- **Schema**：`knowledge_sources.discover_json`
+- 预算耗尽只停在 partial/ready，不抛整库失败
+
+## v0.51.13
+
+### feat(knowledge): 外部源 U2 — poll 调度 + 条件 GET + encrypted 凭证
+
+- **Poll**：`KnowledgeIngest.startPolling` / `pollDueSources`；`sync.strategy=poll` + `intervalMs`；`pollMinIntervalMs` / `maxPollPerTick` 成本上限；`last_polled_at` 落库
+- **条件 GET**：`If-None-Match` / `If-Modified-Since`；304 短路不重 parse；`etag`/`last_modified` 随 `knowledge_files` 持久
+- **修复**：`guardedFetch` 勿把 **304** 当重定向（否则 markFileError 会清索引）
+- **CredentialStore encrypted**：AES-256-GCM；主密钥 `OCTOPI_CREDENTIALS_KEY` / `_FILE`；无主密钥拒绝写入不降级明文
+
+## v0.51.12
+
+### feat(knowledge): 外部源 ingest U1 + CredentialStore（OP-14）
+
+- **设计**：`arch/knowledge-external-ingest.md`（Fetcher 缝、入站可用、path 逻辑键、SSRF、凭证分层）
+- **CredentialStore**：`OCTOPI_HOME/credentials/credentials.db`；`env`/`file` 密钥引用；`authRef` 绑定源；list/get **不回密文**
+- **SourceFetcher**：`LocalFsFetcher` / `UrlFetcher`（U1 单页）；`VirtualDocument`（`path` + `externalUrl` + 规范化文本）
+- **入站规范化**：`htmlToStructuredText`（去 script/nav 壳，保留 title/标题/正文）；`htmlAdapter` + `match(path, mime?)`
+- **网络门禁**：`network-guard` 默认拒私网/metadata；源级 `network.allowPrivateNetwork`；重定向每跳复验
+- **Schema**：`knowledge_files.external_url/etag/last_modified`；`knowledge_sources.auth_ref/network_json`
+- **Ingest**：`kind: 'url'` 不再 error；命中片段为可读正文（非 raw HTML）；CJK 可搜
+
 ## v0.51.11
 
 ### fix(web): TokenUsage cache-aware 字段与 SDK DTO 对齐权威类型

@@ -166,6 +166,41 @@ export class KnowledgeDatabase {
         ON knowledge_jobs(status, priority, created_at);
       CREATE INDEX IF NOT EXISTS idx_knowledge_jobs_source ON knowledge_jobs(source_id);
     `);
+    this.migrate();
+  }
+
+  /** 幂等迁移：外源 ingest / 凭证引用列 */
+  private migrate(): void {
+    const cols = this.db
+      .prepare(`PRAGMA table_info(knowledge_files)`)
+      .all() as Array<{ name: string }>;
+    const names = new Set(cols.map((c) => c.name));
+    if (!names.has('external_url')) {
+      this.db.exec(`ALTER TABLE knowledge_files ADD COLUMN external_url TEXT`);
+    }
+    if (!names.has('etag')) {
+      this.db.exec(`ALTER TABLE knowledge_files ADD COLUMN etag TEXT`);
+    }
+    if (!names.has('last_modified')) {
+      this.db.exec(`ALTER TABLE knowledge_files ADD COLUMN last_modified TEXT`);
+    }
+
+    const srcCols = this.db
+      .prepare(`PRAGMA table_info(knowledge_sources)`)
+      .all() as Array<{ name: string }>;
+    const srcNames = new Set(srcCols.map((c) => c.name));
+    if (!srcNames.has('auth_ref')) {
+      this.db.exec(`ALTER TABLE knowledge_sources ADD COLUMN auth_ref TEXT`);
+    }
+    if (!srcNames.has('network_json')) {
+      this.db.exec(`ALTER TABLE knowledge_sources ADD COLUMN network_json TEXT`);
+    }
+    if (!srcNames.has('last_polled_at')) {
+      this.db.exec(`ALTER TABLE knowledge_sources ADD COLUMN last_polled_at INTEGER`);
+    }
+    if (!srcNames.has('discover_json')) {
+      this.db.exec(`ALTER TABLE knowledge_sources ADD COLUMN discover_json TEXT`);
+    }
   }
 
   get raw(): DatabaseSync {
