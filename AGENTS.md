@@ -56,7 +56,7 @@ Scaffolded by `src/init.ts` (`initOctopi` / `ensureAgentDirs`). Keep init, types
 
 ```
 ~/.octopi/
-  octopi.json
+  octopi.json           # 系统配置 + 系统级密钥（LLM provider…）；不放资源访问凭证
   audit/
   plugins/
   sessions/             # JsonlSessionStore (sessionId 一等；唯一 runtime Session 后端)
@@ -64,6 +64,8 @@ Scaffolded by `src/init.ts` (`initOctopi` / `ensureAgentDirs`). Keep init, types
     <id>.jsonl / <id>.state.json
   sessions.index.db     # 可重建检索投影（可选；非权威，见 arch/session-history-search.md）
   archives/             # 归档冷备 *.sessions.jsonl.gz
+  knowledge/            # Knowledge 服务数据面（knowledge.db；见 docs/knowledge.md）
+  credentials/          # 集成凭证库（credentials.db；env/file 引用或 AES-GCM 密文）
   agents/<id>/          # agent home
     AGENTS.md           # main persona (loaded first by loadPersona)
     persona/            # supplemental persona (*.md, numeric prefix for order)
@@ -71,7 +73,9 @@ Scaffolded by `src/init.ts` (`initOctopi` / `ensureAgentDirs`). Keep init, types
   workspace/<id>/       # tool sandbox cwd
 ```
 
-**Do not create `agents/<id>/memory/` or `agents/<id>/wisdom/` directories.** Memory / Cognition / Wisdom / Knowledge persist in a per-agent SQLite file via `AgentDatabase` (`src/harness/memory/sqlite/agent-db.ts`), not as sibling folders under home.
+**Do not create `agents/<id>/memory/` or `agents/<id>/wisdom/` directories.** Memory / Cognition / Wisdom persist in a per-agent SQLite file via `AgentDatabase` (`src/harness/memory/sqlite/agent-db.ts`), not as sibling folders under home.
+
+**Knowledge 外生语料不在 `agent.db`。** 源注册 + 索引在 `OCTOPI_HOME/knowledge/knowledge.db`；资源访问密钥在 `OCTOPI_HOME/credentials/credentials.db`（`authRef` 引用，密钥明文不进 `knowledge.db` / `octopi.json`）。见 `docs/knowledge.md`。
 
 **Do not use `memory.extractor` ETL or `MemoryExtractionWiring`.** Memory write path is agent `memory_store` + `memory.steward.*` subsystems. See `docs/memory.md` and `arch/memory-system-redesign.md`.
 

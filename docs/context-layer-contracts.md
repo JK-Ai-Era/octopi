@@ -148,7 +148,7 @@ Runner.handle
 - `config-bridge` / capabilities 解析链：**`models.level.summary`** → `contextEngine.summaryModel` → mini → standard → 主模型  
 - 可用 `.disableAutoSummarize()` 关闭自动摘要  
 - **Skill**：`skillDirectory` 或 `home/skills` 在 build 时 discover，每轮注入 `<available_skills>`  
-- **Memory 召回**：`builder.memoryStore`；config-bridge 与 Gateway 从 `home/agent.db` 建 `SqliteMemoryStore`。**Knowledge**：system 只注入 catalog（`builder.knowledgeCatalog`）；源/索引服务见 `arch/knowledge-layer.md`（P1 起接线）
+- **Memory 召回**：`builder.memoryStore`；config-bridge 与 Gateway 从 `home/agent.db` 建 `SqliteMemoryStore`。**Knowledge**：system 只注入 catalog（`builder.knowledgeCatalog`）；源/索引/外源 ingest 见 `docs/knowledge.md`
 - **MemoryStore 单实例**：`AgentBuilder.build()` 在 `buildCore` 前用 `builder.memoryStore` 注册 `memory_store`/`memory_search`；MemoryLayer 召回与 `memory.steward.*` 入库同一实例。Gateway **不再**用进程级 `InMemoryMemoryStore` 挂全局 memory 工具
 - **压缩状态落盘（E4）**：权威桶 `SessionData.contextCompacts[agentId]`；`contextCompact` 为 primary/单 agent 兼容视图。Jsonl `*.state.json` 持久化。`Agent` 内存桥键 = `(sessionId, agentId)`。**不同 agent 不互相借用 compact**。手动压缩：`SessionAwareRunner.compactSession`（与 handle **共 session 锁**，排队；勿仅依赖 `status==='processing'`）
 - **公用能力 Summary / Compact**（`harness/capabilities/`，横切，不计入业务领域计数）：

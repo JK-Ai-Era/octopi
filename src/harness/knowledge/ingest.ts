@@ -57,7 +57,7 @@ export interface KnowledgeIngestOptions {
   credentials?: CredentialStore | null;
   /** 自定义 fetcher 覆盖（测试/扩展） */
   fetchers?: Partial<Record<'local' | 'url' | 'connector', SourceFetcher>>;
-  /** connector 注册表（U4；默认含 rest） */
+  /** connector 注册表（默认含 rest） */
   connectors?: ConnectorRegistry;
   /** poll 调度 tick ms（默认 60s） */
   pollTickMs?: number;

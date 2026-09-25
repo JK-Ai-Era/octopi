@@ -46,7 +46,16 @@
 
 **状态：** 已解决
 
-旧 `harness/knowledge/stage.ts` 的 `KnowledgeStage` 及 `KnowledgeContextEngine` 均已删除；Knowledge 见 `arch/knowledge-layer.md`（catalog + 索引服务路线）。
+旧 `harness/knowledge/stage.ts` 的 `KnowledgeStage` 及 `KnowledgeContextEngine` 均已删除；Knowledge 见 `docs/knowledge.md`（源/索引/外源 ingest）。
+
+## Knowledge 外源出站 — 已知限制
+
+**状态：** OP-14 主线已落地；下列为有意保留的边界
+
+- **DNS TOCTOU**：`network-guard` 在 `lookup` 后校验 IP，但 `fetch` 由 undici 再次解析；未 pin 连接到已校验 IP。极高威胁模型需 custom dispatcher（后续）。
+- **`credential_bindings` 只记录不强制**：绑定用于审计/最小权限方向；`http_request.credential` 仍按名解析（未强制 consumer 白名单）。
+- **`http_request` 自身无 SSRF 门禁**：live-query 工具语义宽松；Knowledge ingest 走 `guardedFetch`。
+- **OAuth**：`oauth2_client` 仅当已换成 access token 时按 bearer。
 
 ## 旧配置字段 `supervisor`
 

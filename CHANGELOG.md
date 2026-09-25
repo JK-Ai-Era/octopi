@@ -1,3 +1,13 @@
+## v0.51.19
+
+### docs: 同步 Knowledge 外源 / CredentialStore 口径，避免后续踩坑
+
+- **AGENTS.md**：`OCTOPI_HOME` 树补 `knowledge/`、`credentials/`；明确 **Knowledge 不在 agent.db**、密钥不进 octopi.json/knowledge.db
+- **docs/knowledge.md**：源 kind（url/connector）、Fetcher 管道、HTML 规范化、poll/条件 GET、authRef、path 逻辑键
+- **arch/knowledge-layer.md**：状态改为「主线已落地」，指向 external-ingest 稿
+- **docs/KNOWN-ISSUES.md**：外源出站已知限制（DNS TOCTOU、binding 不强制、http_request 无 SSRF、OAuth）
+- 清理 credentials / connectors 过期 U1/U2/U4 注释
+
 ## v0.51.18
 
 ### test: 删除遗留 skill-command-bridge 测试

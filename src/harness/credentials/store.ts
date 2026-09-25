@@ -1,8 +1,8 @@
 /**
  * CredentialStore — 命名凭证登记与用时解析
  *
- * 密钥材料：env 引用优先；encrypted 需主密钥（U2）；file 引用可选。
- * 永不通过 list/get 返回明文密钥。
+ * 密钥材料：env 引用（默认）/ file 引用 / encrypted（AES-GCM + OCTOPI_CREDENTIALS_KEY）。
+ * 永不通过 list/get 返回明文密钥；resolve 时校验 expiresAt，过期返回 null。
  */
 
 import { randomUUID } from 'node:crypto';

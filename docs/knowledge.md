@@ -48,8 +48,17 @@ Session    临时语料  —— 随会话生灭（附件等）
 | **Session** | 仅本会话；可显式升为持久源 |
 | **无 Agent 级源** | 「某 agent 独享」= 只挂给它的一个 Project；学习结果归 Memory，不靠 scope 硬隔 |
 
-源类型包括本地 **目录 / 文件 / workspace**，以及文档型外部源（后续扩展）。  
-**活系统**（数据库、API、MCP 实时接口）不进 Knowledge，请用 Tool 查询。
+源类型：
+
+| kind | 说明 |
+|------|------|
+| `directory` / `file` / `workspace` | 本地语料；watch + content-hash 增量 |
+| `url` | 文档型网页/静态站；`discover.mode`: `single` / `sitemap` / `crawl` |
+| `connector` | REST list+get 等连接器（`RestConnector` 等） |
+
+**活系统**（数据库、API、MCP 实时接口）不进 Knowledge，请用 Tool 查询（勿做镜像库）。
+
+外源访问密钥：源上只存 **`authRef`** → `OCTOPI_HOME/credentials/credentials.db`（命名凭证）。密钥明文不进 `knowledge.db` / `octopi.json`。公网默认拒私网（SSRF）；内网文档源可对源开 `network.allowPrivateNetwork`。
 
 ---
 
@@ -57,19 +66,23 @@ Session    临时语料  —— 随会话生灭（附件等）
 
 ```text
 Source 登记
-   │  (kind / scope / sync 策略)
+   │  (kind / scope / sync / authRef)
    ▼
-FormatAdapter 逐文件分发     markdown / 代码 / 纯文本…
+SourceFetcher 取回              本地 walk · Url fetch · Connector list/get
+   │  外源：HTML 主内容规范化（非 raw HTML 灌库）
+   ▼
+FormatAdapter 逐文件分发     html / markdown / 代码 / 纯文本…
    │  （注册制；无 adapter 则跳过并记 skipped）
    ▼
 Parse + Chunk
-   │  Markdown 按标题 · 代码按函数/类启发式 · 结构优先 + 体积封顶
+   │  Markdown/HTML 按标题 · 代码按函数/类启发式 · 结构优先 + 体积封顶
    ▼
 Index（可重建投影）
-   │  路径 / 关键词（含中文二元组） + 可选向量
+   │  逻辑 path + external_url 溯源 · 关键词（含中文二元组） + 可选向量
    ▼
 Freshness
-      本地 watch + debounce；content-hash 增量
+      本地 watch + debounce；外源 poll + 条件 GET（ETag/304）；content-hash 增量
+      差量 prune：本轮 discover 未出现的 path 删除（失败不删旧索引）
 ```
 
 | 能力 | 行为 |
@@ -80,7 +93,7 @@ Freshness
 | **负载** | 解析/嵌入并发与限速可配；队列背压**不丢任务** |
 | **体积** | 结构单元过大再内切；无符号碎块可粘合；**不跨函数/类边界合并** |
 
-数据面：`OCTOPI_HOME/knowledge/`（源权威 + 索引投影 + 任务队列）。
+数据面：`OCTOPI_HOME/knowledge/`（源权威 + 索引投影 + 任务队列）；凭证：`OCTOPI_HOME/credentials/`。
 
 ---
 
@@ -204,6 +217,8 @@ GET    /api/v1/agents/:id/knowledge/stats
 - 注册后可 **reindex** 触发解析/索引，并可选启动文件监听。
 - **删除**会清理索引与使用痕迹（合规可抹除）。
 - 自动描述默认可用，可关闭外发；抽样前做敏感形态扫描。
+- 外源可带 **`authRef`**（指向 credentials 命名凭证）、**`network`**（`allowPrivateNetwork` / 超时）、**`discover`**（sitemap/crawl 预算）。失败/skip **不删**已入库 chunks。
+- 溯源：命中用稳定逻辑 **`path`**；完整 URL 在文件记录 `external_url`。
 
 ---
 
@@ -224,4 +239,5 @@ GET    /api/v1/agents/:id/knowledge/stats
 | [docs/memory.md](./memory.md) | Memory（第 6 层）：命题与分馏 |
 | [docs/context-layer-contracts.md](./context-layer-contracts.md) | system 契约层与装配 |
 | [docs/architecture.md](./architecture.md) | 八层总览与目录 |
-| `arch/knowledge-layer.md` | 内部完整规格（设计与实现） |
+| `arch/knowledge-layer.md` | 内部规格（本体/管道） |
+| `arch/knowledge-external-ingest.md` | 外源 url/connector + CredentialStore |

@@ -1,5 +1,5 @@
 /**
- * KnowledgeConnector — 文档型外源连接器插件面（U4）
+ * KnowledgeConnector — 文档型外源连接器插件面
  *
  * 边界：只同步「文档快照」；活系统 live query 归 Tool，不入 Knowledge。
  * 密钥经 CredentialStore（authRef）注入，配置不进 knowledge.db 明文。

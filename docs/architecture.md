@@ -324,7 +324,7 @@ harness/memory/
 
 > **已移除**：`harness/memory/extraction/`（ETL 采集/桥接/Pending）与 `subsystems/memory-extractor`。  
 > 记忆写入 = agent `memory_store` 工具；旁路 = `memory.steward.backfill` / `memory.steward.govern`（对外见 [`docs/memory.md`](./memory.md)）。  
-> Knowledge（外生语料 / 第 4 层）对外见 [`docs/knowledge.md`](./knowledge.md)。
+> Knowledge（外生语料 / 第 4 层）对外见 [`docs/knowledge.md`](./knowledge.md)。外源 url/connector 与 CredentialStore 已落地（源注册 → Fetcher → 索引）。
 
 `FileWisdomStore` / `FileProjectMemory` / `ContextIntelligence` 已删除；不要再预设 `memory/`、`wisdom/` 文件目录。system prompt 层组装见 `harness/context/`。
 
@@ -672,7 +672,9 @@ Session save：全量 messages + contextCompact 快照
 | `EventSource` | `harness/agent-runtime/event-source-types.ts` | — |
 | `MessageChannel` | `harness/multi-agent/message-channel-types.ts` | — |
 | `MemoryStore` 等 | `harness/memory/types.ts` | InMemory / Sqlite |
-| `KnowledgeCatalogProvider` | `harness/context/knowledge/types.ts` | （catalog；索引服务 P1） |
+| `KnowledgeCatalogProvider` | `harness/context/knowledge/types.ts` | （Tier 0 catalog） |
+| Knowledge Source/Index/Ingest | `harness/knowledge/` | 外源见 `docs/knowledge.md` |
+| CredentialStore | `harness/credentials/` | 资源访问凭证；非 octopi.json |
 | `ContextLayer` / `ContextAssembler` | `harness/context/layer-types.ts` | DefaultContextAssembler + layers |
 | `Planner` / `Reflector` | `harness/orchestration/cognitive-loop.ts` | Rule/LLM/Hybrid |
 

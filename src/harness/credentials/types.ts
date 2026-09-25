@@ -54,9 +54,9 @@ export interface CredentialWrite {
   secretMode?: SecretMode;
   /** mode=env：环境变量名 */
   secretEnv?: string;
-  /** mode=env 时也可用明文写入并自动落到 env 不可能时的 encrypted — U1 仅支持 env/file 引用 */
+  /** mode=file：外挂密钥文件路径 */
   secretFile?: string;
-  /** mode=encrypted 明文（仅写入路径；U1 可不启用） */
+  /** mode=encrypted：写入时的明文（落库前 AES-GCM；不回显） */
   secretValue?: string;
   scope?: CredentialScopeRef;
   expiresAt?: number;
@@ -96,6 +96,6 @@ export function defaultCredentialHeaders(input: {
     }
     return { [headerName ?? 'Authorization']: secret };
   }
-  // oauth2_client：U1 仅当已换成 access token 时按 bearer
+  // oauth2_client：当前仅当已换成 access token 时按 bearer（完整 OAuth 流另册）
   return { Authorization: `${headerPrefix ?? 'Bearer '}${secret}` };
 }
