@@ -99,6 +99,62 @@ export interface AgentConfig {
   channelBindings?: Record<string, string>;
   /** Session ACL 天花板（E6 L1） */
   maxSessionRights?: import('./harness/session-acl/types.js').SessionRights;
+  /** Knowledge 召回姿态（覆盖全局 knowledge.recall；见 arch/knowledge-layer.md） */
+  knowledge?: {
+    recall?: KnowledgeRecallMode;
+  };
+}
+
+/**
+ * Knowledge 内容召回模式
+ * - off：只 catalog；深度走 knowledge_search/read
+ * - hint：只提示「有相关材料」，不自动注入正文
+ * - hybrid：高分 inject + 中分 hint（引擎缺省）
+ * - inject：更积极自动注入（嵌入式/文档问答）
+ */
+export type KnowledgeRecallMode = 'off' | 'hint' | 'hybrid' | 'inject';
+
+/** Knowledge 全局配置（agents[].knowledge 覆盖 recall 等） */
+export interface KnowledgeRuntimeConfig {
+  recall?: KnowledgeRecallMode;
+  autoInject?: {
+    minScore?: number;
+    maxChunks?: number;
+    budgetTokens?: number;
+    budgetRatio?: number;
+    maxBudgetTokens?: number;
+    minCoverage?: number;
+  };
+  hint?: {
+    minScore?: number;
+  };
+  /** hybrid 融合 keyword 权重（默认 0.45） */
+  keywordWeight?: number;
+  catalog?: {
+    maxEntries?: number;
+    showProgress?: 'off' | 'bucket' | 'exact';
+    autoDescribe?: boolean;
+    groupByScope?: boolean;
+  };
+  query?: {
+    includePriorUserTurns?: number;
+    skipIfUserTokensBelow?: number;
+  };
+  index?: {
+    embedding?: boolean;
+    hybridKeyword?: boolean;
+    phaseA?: { concurrency?: number; debounceMs?: number };
+    phaseB?: { embedBatch?: number; concurrency?: number; ratePerMin?: number };
+    queue?: { maxDepth?: number };
+  };
+  load?: {
+    parseConcurrency?: number;
+    diskWatermarkAlert?: boolean;
+  };
+  promotion?: {
+    metrics?: { minSessions?: number; minHits?: number };
+    stewardOnConverge?: boolean;
+  };
 }
 
 // ── Web Search 配置 ──
@@ -743,6 +799,8 @@ export interface HarnessConfig {
       maxLength?: Partial<Record<'fact' | 'method' | 'norm', number>>;
     };
   };
+  /** Knowledge 检索/召回（全局缺省；agents[].knowledge.recall 可覆盖） */
+  knowledge?: KnowledgeRuntimeConfig;
   /**
    * 安全策略（安全不可绕过：无总开关）
    *
@@ -1116,6 +1174,7 @@ export function toGatewayConfig(config: NormalizedHarnessConfig): GatewayConfig 
     skills: ac.skills,
     channelBindings: ac.channelBindings,
     maxSessionRights: ac.maxSessionRights,
+    knowledge: ac.knowledge,
   }));
 
   const gatewayConfig: GatewayConfig = {
@@ -1128,6 +1187,7 @@ export function toGatewayConfig(config: NormalizedHarnessConfig): GatewayConfig 
     context: config.context,
     constitution: config.context?.constitution ?? config.constitution,
     memory: config.memory,
+    knowledge: config.knowledge,
     observer: config.observer,
     embedding: config.models?.embedding,
     modelProviders: config.models?.providers,

@@ -202,6 +202,14 @@ export class Gateway {
   private sessionAcl: SessionAclService;
   /** 进程内共享 Session Lease（E1/E2）：所有 Runner 注入同一实例 */
   private sessionLease: import('../../harness/concurrency/session-lease.js').InProcessSessionLock;
+  /** Knowledge 源注册（OCTOPI_HOME/knowledge/knowledge.db；懒加载） */
+  private knowledgeStorePromise?: Promise<
+    import('../../harness/knowledge/source-store.js').KnowledgeSourceStore
+  >;
+  /** Knowledge ingest（Phase A 解析/关键词索引） */
+  private knowledgeIngestPromise?: Promise<
+    import('../../harness/knowledge/ingest.js').KnowledgeIngest
+  >;
   /** 产品问题面 */
   private issueRegistry: IssueRegistry;
   /** 会话内 /xxx 命令调用面 */
@@ -1205,6 +1213,233 @@ export class Gateway {
     return null;
   }
 
+  // ── Knowledge 源注册（OCTOPI_HOME/knowledge/knowledge.db）──
+
+  /**
+   * 打开/缓存 KnowledgeSourceStore（进程内单例）
+   */
+  async getKnowledgeSourceStore(): Promise<
+    import('../../harness/knowledge/source-store.js').KnowledgeSourceStore
+  > {
+    if (!this.knowledgeStorePromise) {
+      this.knowledgeStorePromise = (async () => {
+        const { KnowledgeSourceStore, resolveKnowledgePaths } = await import(
+          '../../harness/knowledge/index.js'
+        );
+        const { getOctopiHome } = await import('../../init.js');
+        const paths = resolveKnowledgePaths(getOctopiHome());
+        return KnowledgeSourceStore.open({ dbPath: paths.dbPath });
+      })();
+    }
+    return this.knowledgeStorePromise;
+  }
+
+  /**
+   * agent 可见知识源列表（管理面）
+   */
+  async listKnowledgeSources(
+    agentId: string,
+    opts?: { sessionId?: string },
+  ): Promise<import('../../harness/knowledge/types.js').KnowledgeSource[]> {
+    const store = await this.getKnowledgeSourceStore();
+    return store.listVisible(agentId, opts?.sessionId);
+  }
+
+  /**
+   * 注册知识源
+   */
+  async createKnowledgeSource(
+    input: import('../../harness/knowledge/types.js').KnowledgeSourceInput,
+  ): Promise<import('../../harness/knowledge/types.js').KnowledgeSource> {
+    const allowedKinds = new Set(['workspace', 'directory', 'file', 'url', 'connector']);
+    const allowedLevels = new Set(['global', 'project', 'session']);
+    if (!allowedKinds.has(input.kind)) {
+      throw new Error(`invalid kind: ${input.kind}`);
+    }
+    if (!input.location?.trim()) {
+      throw new Error('location is required');
+    }
+    if (!allowedLevels.has(input.scopeRef?.level)) {
+      throw new Error(`invalid scopeRef.level: ${input.scopeRef?.level}`);
+    }
+    const store = await this.getKnowledgeSourceStore();
+    return store.register(input);
+  }
+
+  /**
+   * 更新知识源
+   */
+  async updateKnowledgeSource(
+    id: string,
+    patch: import('../../harness/knowledge/types.js').KnowledgeSourcePatch,
+  ): Promise<import('../../harness/knowledge/types.js').KnowledgeSource | null> {
+    const store = await this.getKnowledgeSourceStore();
+    return store.update(id, patch);
+  }
+
+  /**
+   * 卸载知识源：停 watch + purge index/hits + 删注册
+   */
+  async removeKnowledgeSource(id: string): Promise<boolean> {
+    const store = await this.getKnowledgeSourceStore();
+    const existing = store.get(id);
+    if (!existing) return false;
+    try {
+      const ingest = await this.getKnowledgeIngest();
+      ingest.stopWatch(id);
+    } catch {
+      // ingest 未启动时忽略
+    }
+    const { KnowledgeHitLog } = await import('../../harness/knowledge/hit-log.js');
+    const { KnowledgePurger } = await import('../../harness/knowledge/purge.js');
+    const indexStore = (await this.getKnowledgeIngest()).indexStore;
+    const purger = new KnowledgePurger(store, indexStore, new KnowledgeHitLog(store.database));
+    purger.purgeAndRemoveSource(id);
+    return true;
+  }
+
+  /**
+   * Project 挂载 / Global 屏蔽（可见性）
+   */
+  async setKnowledgeVisibility(action: {
+    op: 'assignProject' | 'unassignProject' | 'hide' | 'unhide';
+    agentId: string;
+    projectKey?: string;
+    sourceId?: string;
+  }): Promise<void> {
+    const store = await this.getKnowledgeSourceStore();
+    if (action.op === 'assignProject' || action.op === 'unassignProject') {
+      if (!action.projectKey) throw new Error('projectKey is required');
+      if (action.op === 'assignProject') store.assignProject(action.projectKey, action.agentId);
+      else store.unassignProject(action.projectKey, action.agentId);
+      return;
+    }
+    if (!action.sourceId) throw new Error('sourceId is required');
+    if (action.op === 'hide') store.hideSource(action.agentId, action.sourceId);
+    else store.unhideSource(action.agentId, action.sourceId);
+  }
+
+  /**
+   * Knowledge 注册表统计
+   */
+  async getKnowledgeStats(): Promise<Record<string, number>> {
+    const store = await this.getKnowledgeSourceStore();
+    return store.database.stats();
+  }
+
+  /**
+   * 提升候选（默认阈值可来自 knowledge.promotion.metrics）
+   */
+  async getKnowledgePromotionCandidates(): Promise<
+    import('../../harness/knowledge/hit-log.js').PromotionCandidate[]
+  > {
+    const store = await this.getKnowledgeSourceStore();
+    const { KnowledgeHitLog } = await import('../../harness/knowledge/hit-log.js');
+    const log = new KnowledgeHitLog(store.database, {
+      stewardOnConverge: this.config.knowledge?.promotion?.stewardOnConverge,
+    });
+    return log.collectOnConverge({
+      minSessions: this.config.knowledge?.promotion?.metrics?.minSessions,
+      minHits: this.config.knowledge?.promotion?.metrics?.minHits,
+    });
+  }
+
+  /**
+   * 打开/缓存 KnowledgeIngest
+   */
+  async getKnowledgeIngest(): Promise<
+    import('../../harness/knowledge/ingest.js').KnowledgeIngest
+  > {
+    if (!this.knowledgeIngestPromise) {
+      this.knowledgeIngestPromise = (async () => {
+        const { KnowledgeIngest } = await import('../../harness/knowledge/ingest.js');
+        const store = await this.getKnowledgeSourceStore();
+        // Phase B：与 memory 共用 models.embedding；未配则纯关键词
+        let embeddingProvider: import('../../harness/memory/sqlite/embedding.js').EmbeddingProvider | null =
+          null;
+        const kn = this.config.knowledge;
+        const wantEmbed = kn?.index?.embedding !== false;
+        try {
+          if (wantEmbed) {
+            const { resolveEmbeddingRuntime } = await import(
+              '../../harness/memory/sqlite/embedding-from-models.js'
+            );
+            const embRuntime = resolveEmbeddingRuntime({
+              providers: this.config.modelProviders ?? {},
+              embedding: this.config.embedding,
+            });
+            embeddingProvider = embRuntime?.provider ?? null;
+          }
+        } catch {
+          embeddingProvider = null;
+        }
+        return new KnowledgeIngest({
+          sourceStore: store,
+          embeddingProvider,
+          parseConcurrency: kn?.load?.parseConcurrency ?? kn?.index?.phaseA?.concurrency,
+          debounceMs: kn?.index?.phaseA?.debounceMs,
+          embedBatch: kn?.index?.phaseB?.embedBatch,
+          embedConcurrency: kn?.index?.phaseB?.concurrency,
+          embedMinIntervalMs: kn?.index?.phaseB?.ratePerMin
+            ? Math.ceil(60_000 / kn.index.phaseB.ratePerMin)
+            : undefined,
+          maxQueueDepth: kn?.index?.queue?.maxDepth,
+          diskWatermarkAlert: kn?.load?.diskWatermarkAlert,
+        });
+      })();
+    }
+    return this.knowledgeIngestPromise;
+  }
+
+  /**
+   * 触发源索引（P2 Phase A）；可选启动 watch；完成后 auto-describe
+   */
+  async reindexKnowledgeSource(
+    sourceId: string,
+    opts?: { full?: boolean; watch?: boolean },
+  ): Promise<{ ok: true; sourceId: string; status: string }> {
+    const ingest = await this.getKnowledgeIngest();
+    await ingest.ingestSource(sourceId, { full: opts?.full });
+    if (opts?.watch !== false) {
+      ingest.startWatch(sourceId);
+    }
+    const store = await this.getKnowledgeSourceStore();
+    if (this.config.knowledge?.catalog?.autoDescribe !== false) {
+      await this.autoDescribeKnowledgeSource(sourceId);
+    }
+    const source = store.get(sourceId);
+    return { ok: true, sourceId, status: source?.status ?? 'unknown' };
+  }
+
+  /**
+   * auto-describe：抽样（文件名+片段）过密钥扫描后写 generatedDescription
+   */
+  async autoDescribeKnowledgeSource(sourceId: string): Promise<void> {
+    const store = await this.getKnowledgeSourceStore();
+    const source = store.get(sourceId);
+    if (!source || source.description?.trim()) return;
+    try {
+      const ingest = await this.getKnowledgeIngest();
+      const { generateKnowledgeDescription } = await import(
+        '../../harness/knowledge/describe.js'
+      );
+      const files = ingest.indexStore.listFiles(sourceId).slice(0, 8);
+      const sampleParts: string[] = [];
+      for (const f of files.slice(0, 4)) {
+        const chunks = ingest.indexStore.listChunksByPath(sourceId, f.path);
+        sampleParts.push(`${f.path}\n${chunks[0]?.text?.slice(0, 200) ?? ''}`);
+      }
+      const result = await generateKnowledgeDescription(
+        source,
+        sampleParts.join('\n---\n').slice(0, 2000),
+        { enabled: true },
+      );
+      store.update(sourceId, { generatedDescription: result.description });
+    } catch {
+      // describe 失败不阻断索引
+    }
+  }
+
   /**
    * 读取会话最近一次七层装配快照（产品 Context 面板）
    *
@@ -1667,7 +1902,6 @@ export class Gateway {
         const { SqliteMemoryStore } = await import('../../harness/memory/sqlite/memory-store.js');
         const { SqliteWisdomStore } = await import('../../harness/memory/sqlite/wisdom-store.js');
         const { SqliteConceptGraph } = await import('../../harness/memory/sqlite/cognition-store.js');
-        const { MemoryKnowledgeStore } = await import('../../harness/context/knowledge/memory-store.js');
         const { resolveEmbeddingRuntime } = await import('../../harness/memory/sqlite/embedding-from-models.js');
 
         const embRuntime = resolveEmbeddingRuntime({
@@ -1692,7 +1926,66 @@ export class Gateway {
         builder.cognitionStore(new SqliteConceptGraph(db, {
           embeddingProvider: embRuntime?.provider ?? null,
         }));
-        builder.knowledgeStore(new MemoryKnowledgeStore());
+        // Knowledge catalog（独立服务面 OCTOPI_HOME/knowledge）
+        try {
+          const kstore = await this.getKnowledgeSourceStore();
+          const agentIdForCatalog = agent.id;
+          const kn = this.config.knowledge;
+          const catalogMax = kn?.catalog?.maxEntries;
+          const catalogGroup = kn?.catalog?.groupByScope;
+          const catalogProgress = kn?.catalog?.showProgress;
+          builder.knowledgeCatalog(
+            (ctx) =>
+              // 返回可见全集；display 截断与 overflow 在 KnowledgeLayer
+              kstore.catalogFor(ctx?.agentId ?? agentIdForCatalog, {
+                sessionId: ctx?.sessionId,
+              }),
+            {
+              maxEntries: catalogMax,
+              groupByScope: catalogGroup,
+              showProgress: catalogProgress,
+            },
+          );
+          const kingest = await this.getKnowledgeIngest();
+          const { KnowledgeRetriever } = await import('../../harness/knowledge/retriever.js');
+          const recall =
+            agent.knowledge?.recall ??
+            kn?.recall ??
+            'hybrid';
+          const retriever = new KnowledgeRetriever({
+            sourceStore: kstore,
+            indexStore: kingest.indexStore,
+            embeddingProvider: embRuntime?.provider ?? null,
+            recall,
+            injectMinScore: kn?.autoInject?.minScore,
+            hintMinScore: kn?.hint?.minScore,
+            minCoverage: kn?.autoInject?.minCoverage,
+            maxChunks: kn?.autoInject?.maxChunks,
+            hybridKeyword: kn?.index?.hybridKeyword,
+            keywordWeight: kn?.keywordWeight,
+          });
+          const { KnowledgeHitLog } = await import('../../harness/knowledge/hit-log.js');
+          builder.knowledgeRetriever({
+            retriever,
+            indexStore: kingest.indexStore,
+            sourceStore: kstore,
+            hitLog: new KnowledgeHitLog(kstore.database, {
+              stewardOnConverge: kn?.promotion?.stewardOnConverge,
+            }),
+            grounding: {
+              budgetTokens: kn?.autoInject?.budgetTokens,
+              budgetRatio: kn?.autoInject?.budgetRatio,
+              maxBudgetTokens: kn?.autoInject?.maxBudgetTokens,
+              maxChunks: kn?.autoInject?.maxChunks,
+              skipIfUserTokensBelow: kn?.query?.skipIfUserTokensBelow,
+              includePriorUserTurns: kn?.query?.includePriorUserTurns,
+            },
+          });
+        } catch (kErr) {
+          console.warn(
+            `[Gateway] knowledge catalog unavailable: ${kErr instanceof Error ? kErr.message : String(kErr)}`,
+          );
+        }
         if (embRuntime?.provider) {
           console.log(
             `[Gateway] memory embedding enabled: model=${embRuntime.model} vectorEngine=${embRuntime.vectorEngine}`,

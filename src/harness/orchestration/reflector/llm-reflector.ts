@@ -12,7 +12,7 @@ import type {
   ExecutionRecord,
 } from '../cognitive-loop.js';
 import type { ModelProvider, LLMRequest } from '../../../core/interfaces/model-provider.js';
-import type { KnowledgeStore, KnowledgeEntry } from '../../context/knowledge/types.js';
+import type { MemoryStore } from '../../memory/types.js';
 
 // ── 配置 ──
 
@@ -21,8 +21,8 @@ export interface LLMReflectorConfig {
   model: ModelProvider;
   /** 使用的模型名 */
   modelName?: string;
-  /** 知识存储（可选，用于自动存储经验） */
-  knowledgeStore?: KnowledgeStore;
+  /** 记忆存储（可选；高置信模式写入 Memory `method`，不写 Knowledge） */
+  memoryStore?: MemoryStore;
   /** 温度 */
   temperature?: number;
 }
@@ -36,13 +36,13 @@ export class LLMReflector implements Reflector {
   readonly name = 'llm-reflector';
   private _model: ModelProvider;
   private _modelName?: string;
-  private _knowledgeStore?: KnowledgeStore;
+  private _memoryStore?: MemoryStore;
   private _temperature: number;
 
   constructor(config: LLMReflectorConfig) {
     this._model = config.model;
     this._modelName = config.modelName;
-    this._knowledgeStore = config.knowledgeStore;
+    this._memoryStore = config.memoryStore;
     this._temperature = config.temperature ?? 0.3;
   }
 
@@ -108,16 +108,18 @@ ${summary}
     const response = await this._callLLM(prompt);
     const patterns = this._parsePatterns(response);
 
-    // 自动存储高置信度的经验教训
-    if (this._knowledgeStore) {
+    // 高置信模式 → Memory `method`（分馏链；Knowledge 不收交互提炼）
+    if (this._memoryStore) {
       for (const pattern of patterns) {
-        if (pattern.confidence >= 0.7) {
-          await this._knowledgeStore.store({
-            type: pattern.type === 'recurring_error' ? 'lesson' : 'pattern',
-            content: pattern.description,
+        if (pattern.confidence >= 0.7 && pattern.description.trim()) {
+          await this._memoryStore.store({
+            type: 'method',
+            content: pattern.description.trim(),
             source: 'reflector',
             confidence: pattern.confidence,
-            tags: [pattern.type],
+            importance: Math.min(1, pattern.confidence),
+            tags: ['reflector', pattern.type],
+            channel: 'model_inference',
           });
         }
       }

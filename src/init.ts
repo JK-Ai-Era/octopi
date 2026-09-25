@@ -389,6 +389,7 @@ export async function initOctopi(
     'plugins',
     'audit',
     'sessions',
+    'knowledge',
   ];
   for (const dir of subDirs) {
     ensureDirTracked(join(home, dir), created, existed);

@@ -229,6 +229,120 @@ export class WebApiRouter {
         return this.json(res, 200, { ok: true, data: health });
       }
 
+      // ── Knowledge sources（Host 管理面；arch/knowledge-layer.md §6）──
+      const knowledgeStatsMatch = relativePath.match(/^\/agents\/([^/]+)\/knowledge\/stats$/);
+      if (knowledgeStatsMatch && method === 'GET') {
+        const stats = await this.gateway.getKnowledgeStats();
+        return this.json(res, 200, { ok: true, data: stats });
+      }
+
+      const knowledgePromoMatch = relativePath.match(
+        /^\/agents\/([^/]+)\/knowledge\/promotion-candidates$/,
+      );
+      if (knowledgePromoMatch && method === 'GET') {
+        const candidates = await this.gateway.getKnowledgePromotionCandidates();
+        // 只返回严格门槛（≥minSessions 且 ≥minHits）；宽松命中见 meetsThreshold 字段
+        const strict = candidates.filter((c) => c.meetsThreshold);
+        return this.json(res, 200, {
+          ok: true,
+          data: { strict, all: candidates },
+        });
+      }
+
+      const knowledgeSourcesMatch = relativePath.match(/^\/agents\/([^/]+)\/knowledge\/sources$/);
+      if (knowledgeSourcesMatch && method === 'GET') {
+        const sessionId = url.searchParams.get('sessionId') ?? undefined;
+        const sources = await this.gateway.listKnowledgeSources(knowledgeSourcesMatch[1], {
+          sessionId,
+        });
+        return this.json(res, 200, { ok: true, data: sources });
+      }
+      if (knowledgeSourcesMatch && method === 'POST') {
+        const body = await this.readBody(req);
+        const kind = body?.kind as string | undefined;
+        const level = body?.scopeRef?.level as string | undefined;
+        const allowedKinds = new Set(['workspace', 'directory', 'file', 'url', 'connector']);
+        const allowedLevels = new Set(['global', 'project', 'session']);
+        if (!kind || !allowedKinds.has(kind) || !body?.location || !level || !allowedLevels.has(level) || !body?.scopeRef?.key) {
+          return this.json(res, 400, {
+            ok: false,
+            error:
+              'kind(workspace|directory|file|url|connector), location, scopeRef.level(global|project|session), scopeRef.key are required',
+          });
+        }
+        try {
+          const source = await this.gateway.createKnowledgeSource(body);
+          return this.json(res, 201, { ok: true, data: source });
+        } catch (err) {
+          return this.json(res, 400, {
+            ok: false,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+
+      const knowledgeSourceMatch = relativePath.match(
+        /^\/agents\/([^/]+)\/knowledge\/sources\/([^/]+)$/,
+      );
+      if (knowledgeSourceMatch && method === 'PATCH') {
+        const body = await this.readBody(req);
+        const updated = await this.gateway.updateKnowledgeSource(knowledgeSourceMatch[2], body ?? {});
+        if (!updated) return this.json(res, 404, { ok: false, error: 'source not found' });
+        return this.json(res, 200, { ok: true, data: updated });
+      }
+      if (knowledgeSourceMatch && method === 'DELETE') {
+        const removed = await this.gateway.removeKnowledgeSource(knowledgeSourceMatch[2]);
+        if (!removed) return this.json(res, 404, { ok: false, error: 'source not found' });
+        return this.json(res, 200, { ok: true, data: { id: knowledgeSourceMatch[2], removed: true } });
+      }
+
+      const knowledgeReindexMatch = relativePath.match(
+        /^\/agents\/([^/]+)\/knowledge\/sources\/([^/]+)\/reindex$/,
+      );
+      if (knowledgeReindexMatch && method === 'POST') {
+        const body = await this.readBody(req).catch(() => ({}));
+        try {
+          const result = await this.gateway.reindexKnowledgeSource(knowledgeReindexMatch[2], {
+            full: Boolean(body?.full),
+            watch: body?.watch !== false,
+          });
+          return this.json(res, 200, { ok: true, data: result });
+        } catch (err) {
+          return this.json(res, 400, {
+            ok: false,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+
+      const knowledgeVisibilityMatch = relativePath.match(
+        /^\/agents\/([^/]+)\/knowledge\/visibility$/,
+      );
+      if (knowledgeVisibilityMatch && method === 'POST') {
+        const body = await this.readBody(req);
+        const op = body?.op as 'assignProject' | 'unassignProject' | 'hide' | 'unhide' | undefined;
+        if (!op || !['assignProject', 'unassignProject', 'hide', 'unhide'].includes(op)) {
+          return this.json(res, 400, {
+            ok: false,
+            error: 'op must be assignProject|unassignProject|hide|unhide',
+          });
+        }
+        try {
+          await this.gateway.setKnowledgeVisibility({
+            op,
+            agentId: knowledgeVisibilityMatch[1],
+            projectKey: typeof body.projectKey === 'string' ? body.projectKey : undefined,
+            sourceId: typeof body.sourceId === 'string' ? body.sourceId : undefined,
+          });
+          return this.json(res, 200, { ok: true, data: { op } });
+        } catch (err) {
+          return this.json(res, 400, {
+            ok: false,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+
       if (relativePath === '/approvals' && method === 'GET') {
         return this.json(res, 200, {
           ok: true,

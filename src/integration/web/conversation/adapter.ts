@@ -51,11 +51,12 @@ function extractText(content: unknown): string {
 }
 
 /**
- * 托管 system prompt / 明显的人格注入，不应作为聊天记录回放
+ * 托管 system prompt / 明显的人格注入 / knowledge grounding，不应作为聊天记录回放
  */
 function isHiddenSystemHistory(msg: MessageRecord): boolean {
-  if (msg.role !== 'system') return false;
   const meta = msg.metadata as { source?: string } | undefined;
+  if (meta?.source === 'knowledgeGrounding') return true;
+  if (msg.role !== 'system') return false;
   if (meta?.source === 'systemPrompt') return true;
   const text = extractText(msg.content);
   // 无 metadata 的历史人格整段注入

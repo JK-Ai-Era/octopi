@@ -511,8 +511,10 @@ export class DefaultContextEngine implements ContextEngine {
       return { messages: reduced };
     }
 
-    // 需要新摘要：压缩 head/tail 之间的中间段
-    const middle = messages.slice(protectFirstN, messages.length - protectLastN);
+    // 需要新摘要：压缩 head/tail 之间的中间段（语义历史，不含 grounding）
+    const middle = this.semanticHistory(
+      messages.slice(protectFirstN, messages.length - protectLastN),
+    );
     if (middle.length === 0) {
       return { messages };
     }
@@ -599,6 +601,18 @@ export class DefaultContextEngine implements ContextEngine {
   }
 
   /**
+   * 压缩/摘要的语义输入：丢掉托管 system 与 knowledgeGrounding
+   * （grounding 每轮现算，不进 previousSummary）
+   */
+  private semanticHistory(messages: Message[]): Message[] {
+    return messages.filter((m) => {
+      if (m.role === 'system' && m.metadata?.source === 'systemPrompt') return false;
+      if (m.metadata?.source === 'knowledgeGrounding') return false;
+      return true;
+    });
+  }
+
+  /**
    * 结构视图：有 previousSummary 时 head + summary + tail；否则原样
    * 用于 contextWindow 未知时的 assemble / 手动压缩后的回放
    */
@@ -672,19 +686,22 @@ export class DefaultContextEngine implements ContextEngine {
       };
     }
 
-    const outcome = await this.config.compactEngine.compactMessages(messages, {
-      protectHead: protectFirstN,
-      protectTail: protectLastN,
-      targetTokens: params.compactTargetTokens,
-      mode: 'structure_only',
-      previousSummary: state?.previousSummary,
-      summarizeFn: summarize,
-      estimator,
-      maxSummaryTokens: params.compactTargetTokens
-        ? Math.max(200, Math.floor(params.compactTargetTokens * 0.3))
-        : undefined,
-      onSummarizeFail: 'truncate',
-    });
+    const outcome = await this.config.compactEngine.compactMessages(
+      this.semanticHistory(messages),
+      {
+        protectHead: protectFirstN,
+        protectTail: protectLastN,
+        targetTokens: params.compactTargetTokens,
+        mode: 'structure_only',
+        previousSummary: state?.previousSummary,
+        summarizeFn: summarize,
+        estimator,
+        maxSummaryTokens: params.compactTargetTokens
+          ? Math.max(200, Math.floor(params.compactTargetTokens * 0.3))
+          : undefined,
+        onSummarizeFail: 'truncate',
+      },
+    );
 
     const summary =
       outcome.summary ??
@@ -883,8 +900,18 @@ export class DefaultContextEngine implements ContextEngine {
       result.push({ role: 'system', content: systemPrompt });
     }
 
-    for (const msg of messages) {
+    // knowledgeGrounding：只保留最近一条（旧 grounding 不回放；每轮现算）
+    let lastGroundingIdx = -1;
+    for (let i = 0; i < messages.length; i++) {
+      if (messages[i].metadata?.source === 'knowledgeGrounding') lastGroundingIdx = i;
+    }
+
+    for (let i = 0; i < messages.length; i++) {
+      const msg = messages[i];
       if (msg.role === 'system' && msg.metadata?.source === 'systemPrompt') {
+        continue;
+      }
+      if (msg.metadata?.source === 'knowledgeGrounding' && i !== lastGroundingIdx) {
         continue;
       }
       result.push(...this.convertMessage(msg));

@@ -1,3 +1,154 @@
+## v0.51.9
+
+### docs(knowledge): 对外 Knowledge 层文档
+
+- 新增 **`docs/knowledge.md`**：理念（外生语料）、资源模型、管道、四层披露、召回模式、工具/配置/管理面、质量口径
+- README / architecture / memory 文档互链
+
+## v0.51.8
+
+### test(knowledge): 端到端验收
+
+- `tests/harness/knowledge-e2e.test.ts`：挂目录 → 索引（中英）→ catalog 可见性/挂载/hide → grounding 不可信块 + hit log → recall hint/off → search/read 可见性 → purge 后不可命中
+- 覆盖 §9 P1–P5 主要验收项（不依赖真实 LLM/外网）
+
+## v0.51.7
+
+### fix(knowledge): Phase A coverage 比例 + Branded id 边界收口；OP-14–16
+
+- **coverage**：`discovered / processed`（walk 发现数为分母）；有 embedding 再混向量覆盖；busy 看 queued+running
+- **Branded**：`ChunkHit` / `IndexedFileRecord` / hit-log / retriever `sourceIds` 等输出侧 branded；入参边界 `asSourceId`/`asChunkId`
+- **OP-14/15/16**：url·connector ingest、会话附件管道、Tier 1 Map/Wiki — 记入 `arch/open-problems.md`，后续专题
+
+## v0.51.6
+
+### fix(knowledge): 二审真实缺口
+
+- **catalog overflow**：provider 返回可见全集，截断/折叠只在 `KnowledgeLayer` 算一次（`…and N more` 恢复生效）
+- **resolveBudget**：ratio 路径 `clamp(×ratio, 400, maxBudgetTokens)`；无 ratio 用 `budgetTokens`
+- **inject 来源**：只记真正纳入的 hit（不再引用未入选路径）
+- **hitLog**：`knowledge_search` / `knowledge_read` 计入（`mode: search|read`）
+- **skipIfUserTokensBelow**：只看**最近一条 user**（短「继续」不再误触发）
+- **embed job 去重**：queued+running，防并发重复 embed
+- promotion REST：`{strict, all}`；密钥扫描放宽未引号 password；showProgress 去重文案
+
+## v0.51.5
+
+### feat(knowledge): 剩余配置细项全量贯通
+
+- **`autoInject.budgetRatio` / `maxBudgetTokens`**：`resolveBudget` 按 messagesBudget×ratio 夹取
+- **`catalog.maxEntries` / `groupByScope` / `showProgress`**：传入 `KnowledgeLayer`（分组 / 状态显隐）
+- **`catalog.autoDescribe`**：false 时 reindex 不外发 describe
+- **`index.hybridKeyword`** / **`keywordWeight`**：可关关键词腿、可调融合权重
+- **`index.phaseB.concurrency`**：embed 独立并发槽
+- **`load.diskWatermarkAlert`**：statfs 告警（不丢任务）
+- **`promotion.stewardOnConverge`**：`KnowledgeHitLog.collectOnConverge` 尊重开关
+- catalog `maxEntries` 缺省统一为 10
+
+## v0.51.4
+
+### feat(knowledge): 配置面收全 + 双注册表收口 + Branded id
+
+- **`knowledge.*` 配置**（schema / example / config-bridge）：`autoInject` / `hint` / `catalog` / `query` / `index` / `load` / `promotion` 全量可配；Gateway 组装 retriever / ingest / grounding
+- **双注册表收口**：`KnowledgeRegistry` 移出公共导出与测试（legacy 文件保留）；产品路径唯一 `OCTOPI_HOME/knowledge`
+- **Branded id**：`KnowledgeSourceId` / `KnowledgeChunkId` + `asSourceId` 边界收窄
+- REST：`GET …/knowledge/promotion-candidates`；`knowledge_read` 已无 raw 双份（此前审查项）
+
+## v0.51.3
+
+### fix(knowledge): 审查 P0/P1 修复 — hybrid 标度 / 事务 / 可见性 / 注入面 / 卸载
+
+- **hybrid 融合**：keyword 相对分 + **向量用原始 cosine**（勿 min-max）；单列表可达 1.0，与 `injectMinScore` 同标度；双命中加成
+- **`upsertFile` 事务** + `isFresh` 要求 `chunk_count>0`（防半写入后永不再索引）
+- **`knowledge_read` 可见性**；工具 **忽略伪造 `session_id`**（只用 Run context）
+- **不可信块剥离**语料内 `</knowledge-grounding>` 标签
+- **卸载**：`removeKnowledgeSource` = stopWatch + purge index/hits + 删注册
+- **watch `rename`**：按文件存在性分支（create ≠ drop）
+- **grounding 按轮**：先剥历史 grounding 再注入；`mode=none` 不留旧块；Web 历史跳过 `knowledgeGrounding`
+- **hitLog** 接入 GroundingAssembler；reindex 后 auto-describe（启发式/LLM 端口）
+- REST：kind/scopeRef 枚举校验；**`.env`/密钥扩展**不进索引；`claimJob` 状态条件；scaleLabel 粗标
+- 旧 `KnowledgeRegistry` 标 `@deprecated`
+
+## v0.51.2
+
+### feat(knowledge): Agent 级 `knowledge.recall` 召回模式
+
+- **`off | hint | hybrid | inject`**：`agents[].knowledge.recall` 覆盖全局 `knowledge.recall`（缺省 hybrid）
+- `hint` **压制自动 inject**（工程/编程 agent 建议）；`inject` 门槛更积极；`off` 仅 catalog
+- 接线：`AgentDefinition` / `toGatewayConfig` / `Gateway.buildAgent` → `KnowledgeRetriever.recall`
+- Schema / example / `arch/knowledge-layer.md` 对齐
+
+## v0.51.1
+
+### feat(knowledge): code-tree 函数/类启发式分块 + OP-13
+
+- `chunkCodeBySymbols`：按函数/class/interface/def/fn 等**符号边界**切分；`chunk.symbol` 带符号名
+- 体积平衡：**结构优先**；> maxChars 内切；无符号碎块可粘合（**不跨符号**）
+- 无符号文件仍回退行窗；Markdown 填充 `symbol`=标题
+- `arch/open-problems.md` **OP-13**：精确符号边界 / AST（tree-sitter）专题，启发式为 fallback
+
+## v0.51.0
+
+### feat(knowledge): P5 提升痕迹 + 合规 purge — Knowledge 路线图闭环
+
+- **`KnowledgeHitLog`**：inject 使用痕迹（path/source/session）；`promotionCandidates`（默认 ≥3 会话 或 ≥10 次）— **只产信号，不直接写 Cognition/Memory**
+- **`KnowledgePurger`**：单文件 / 源级 purge（chunks + embeddings + hits）；`generatedDescription` 标脏（人工 description 不动）
+- GroundingAssembler 注入 hit log；**索引期零提升**
+- Knowledge P0–P5 主线交付齐：catalog → Source → Ingest → Hybrid → Grounding/工具 → 提升/合规
+
+## v0.50.12
+
+### feat(knowledge): P4 消费闭环 — Grounding 槽 / 不可信包装 / 工具
+
+- **`GroundingAssembler`** + `resolveGroundingQuery`（最近 user + 可选前序）；`RunScope.grounding`
+- **消息插槽** `metadata.source='knowledgeGrounding'`（紧贴本轮 user 前）；**只保留最近一条**，旧 grounding 不回放
+- **§4.6 不可信包装**：`<knowledge-grounding trust="untrusted">` + 「非指令」声明 + 来源
+- **compact**：`semanticHistory` 排除 grounding；摘要不吞旧题
+- **工具**：`knowledge_search` / `knowledge_read`（对标 session_search/read）；Builder `knowledgeRetriever()` 接线
+- Gateway 自动挂 retriever；极短 user 可跳过检索（`skipIfUserTokensBelow`）
+
+## v0.50.11
+
+### feat(knowledge): P3 Embedding + Hybrid 检索 + auto-ground 降级
+
+- **Phase B**：`knowledge_chunk_embeddings`；Ingest 在 parse 后排队 `embed_source`（批 + 可限速）；无 provider **纯关键词**（对齐 Memory）
+- **`KnowledgeRetriever`**：keyword + vector 融合（`keywordWeight`）；`coverage`（文件 × 向量）；可见集过滤
+- **`autoGround`**：高分 `inject` / 中分 `hint` / 低分 `none`；**coverage &lt; minCoverage 时抬高 inject 地板**（防半库高分误导）
+- Gateway ingest 自动挂 `models.embedding`（与 memory 共用）
+- 测试：假向量 embed / vectorSearch / hybrid / 可见性 / 降级
+
+## v0.50.10
+
+### feat(knowledge): P2 Ingest 基础 — Adapter / 切块 / 关键词索引 / 队列 / watch
+
+- **FormatAdapter 注册制**：`text` / `markdown` / `code-tree`；逐文件扩展名分发；无 adapter / 二进制记 `skipped` 不挡整库；ignore 对齐 file-search
+- **Phase A 索引**：`knowledge_files` / `knowledge_chunks` / `knowledge_jobs`；content-hash 增量；`KnowledgeIndexStore.search`（Memory 同款 **CJK 二元组**）
+- **`KnowledgeIngest`**：walk → 队列（去重、背压不丢）→ parse；**source 级锁**；`fs.watch` + debounce；`ingestFileNow` 快车道；`knowledge.index.progress` 事件
+- 状态：discovering → partial → ready；coverage 回写 Source
+- REST：`POST /agents/:id/knowledge/sources/:sid/reindex`；Gateway 懒加载 ingest
+- 测试：目录挂载/中文检索/增量/skip/可见集过滤
+
+## v0.50.9
+
+### feat(knowledge): P1 Source 注册 + 可见性 + catalog 服务落点
+
+- 新增 **`harness/knowledge/`**：`KnowledgeDatabase`（`OCTOPI_HOME/knowledge/knowledge.db`）+ `KnowledgeSourceStore`
+- Scope **Global / Project / Session**（无 Agent 级）：Global 默认可见可 `hide`；Project **显式 assign**；Session 仅本会话
+- `catalogFor` / `catalogFingerprint`（粗桶）→ `KnowledgeLayer` Tier 0；`hiddenFromCatalog` 参与可见但不进 system
+- **auto-describe**：`generateKnowledgeDescription` + 密钥形态扫描（命中禁外发）+ 启发式 fallback；可关
+- Gateway 懒加载 store 并挂 `builder.knowledgeCatalog`；Host REST：`GET/POST /agents/:id/knowledge/sources`、`PATCH/DELETE …/sources/:id`、`POST …/visibility`、`GET …/stats`
+- `init` 预建 `knowledge/` 目录
+
+## v0.50.8
+
+### refactor(knowledge): P0 本体清场 — 拆除命题式 Knowledge，收窄为 Tier 0 catalog
+
+- **拆除** `KnowledgeStore` / `KnowledgeEntry` / `MemoryKnowledgeStore` / `KnowledgeContextEngine`（无兼容层；见 `arch/knowledge-layer.md` §8.1）
+- **`KnowledgeLayer`** 改为 **Tier 0 catalog**（`KnowledgeCatalogProvider`）：system 只注入「有哪些源」，不做 query 内容召回
+- **`LLMReflector`** 高置信模式改写 **Memory `method`**（`channel: model_inference`），不再写 Knowledge
+- Builder `knowledgeStore()` → `knowledgeCatalog()`；config-bridge / Gateway 去掉进程内 Knowledge 接线（索引服务 P1）
+- 测试重写：catalog 渲染 / Reflector→Memory；docs 对齐（contracts / architecture / KNOWN-ISSUES / domain-split）
+
 ## v0.50.7
 
 ### docs(agents): Phase A–H 已关闭 — 开放项入口对齐

@@ -10,7 +10,7 @@ import type {
   MemoryStore,
   WisdomStore,
 } from '../memory/types.js';
-import type { KnowledgeStore } from './knowledge/types.js';
+import type { KnowledgeCatalogProvider } from './knowledge/types.js';
 import type { ContextLayerId } from './layer-types.js';
 import { ALL_LAYER_IDS } from './layer-snapshot.js';
 
@@ -45,7 +45,7 @@ export interface ProbeContextHealthDeps {
   agentId: string;
   skillCount?: number;
   memoryStore?: MemoryStore;
-  knowledgeStore?: KnowledgeStore;
+  knowledgeCatalog?: KnowledgeCatalogProvider;
   wisdomStore?: WisdomStore;
   cognitionStore?: ConceptGraphStore;
   personaLoaded?: boolean;
@@ -139,10 +139,13 @@ export async function probeContextLayerHealth(
   }
 
   let knowledgeEntries: number | undefined;
-  if (deps.knowledgeStore) {
+  if (deps.knowledgeCatalog) {
     try {
-      // KnowledgeStore 契约暂无 stats；retrieve 空 query 不可靠，跳过精确计数
-      knowledgeEntries = undefined;
+      const items = await (typeof deps.knowledgeCatalog === 'function'
+        ? deps.knowledgeCatalog()
+        : deps.knowledgeCatalog);
+      knowledgeEntries = items.length;
+      summary.knowledge = knowledgeEntries;
     } catch {
       knowledgeEntries = undefined;
     }
@@ -177,7 +180,7 @@ export async function probeContextLayerHealth(
     persona: deps.personaLoaded !== false,
     // skill 目录存在即视为已接线（count 可为 0）
     skill: deps.skillCount !== undefined,
-    knowledge: Boolean(deps.knowledgeStore),
+    knowledge: Boolean(deps.knowledgeCatalog),
     memory: Boolean(deps.memoryStore),
     wisdom: Boolean(deps.wisdomStore),
     cognition: Boolean(deps.cognitionStore),
@@ -210,7 +213,7 @@ export async function probeContextLayerHealth(
       Boolean(deps.memoryStore) ||
       Boolean(deps.wisdomStore) ||
       Boolean(deps.cognitionStore) ||
-      Boolean(deps.knowledgeStore) ||
+      Boolean(deps.knowledgeCatalog) ||
       deps.skillCount !== undefined ||
       Boolean(deps.personaLoaded),
     layers,

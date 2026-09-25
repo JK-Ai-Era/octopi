@@ -1,8 +1,7 @@
 /**
  * SQLite 存储层测试
  *
- * 测试 AgentDatabase、SqliteMemoryStore、SqliteWisdomStore、
- * SqliteConceptGraph、KnowledgeRegistry
+ * 测试 AgentDatabase、SqliteMemoryStore、SqliteWisdomStore、SqliteConceptGraph
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -10,7 +9,6 @@ import { AgentDatabase } from '../src/harness/memory/sqlite/agent-db.js';
 import { SqliteMemoryStore } from '../src/harness/memory/sqlite/memory-store.js';
 import { SqliteWisdomStore } from '../src/harness/memory/sqlite/wisdom-store.js';
 import { SqliteConceptGraph } from '../src/harness/memory/sqlite/cognition-store.js';
-import { KnowledgeRegistry } from '../src/harness/memory/sqlite/knowledge-registry.js';
 import { cosineSimilarity, cosineDistance } from '../src/harness/memory/sqlite/vector-search.js';
 import type { EmbeddingProvider } from '../src/harness/memory/sqlite/embedding.js';
 
@@ -403,55 +401,6 @@ describe('SqliteConceptGraph with embedding', () => {
     const full = await graph.getFullGraph();
     // 至少应该有1个概念
     expect(full.nodes.length).toBeGreaterThanOrEqual(1);
-  });
-});
-
-// ── KnowledgeRegistry 测试 ──
-
-describe('KnowledgeRegistry', () => {
-  let db: AgentDatabase;
-  let registry: KnowledgeRegistry;
-
-  beforeEach(async () => {
-    db = await AgentDatabase.create({ dbPath: ':memory:' });
-    registry = new KnowledgeRegistry(db);
-  });
-
-  afterEach(() => {
-    db.close();
-  });
-
-  it('should register and list sources', () => {
-    registry.register({
-      id: 'docs',
-      type: 'directory',
-      location: '/project/docs',
-      scope: 'project',
-      metadata: { description: 'Project documentation', filePatterns: ['*.md'] },
-    });
-
-    const sources = registry.list();
-    expect(sources.length).toBe(1);
-    expect(sources[0].id).toBe('docs');
-    expect(sources[0].type).toBe('directory');
-    expect(sources[0].metadata.filePatterns).toEqual(['*.md']);
-  });
-
-  it('should list by scope', () => {
-    registry.register({ id: 'global-api', type: 'url', location: 'https://api.example.com', scope: 'global', metadata: {} });
-    registry.register({ id: 'project-docs', type: 'directory', location: '/docs', scope: 'project', metadata: {} });
-
-    expect(registry.listByScope('global').length).toBe(1);
-    expect(registry.listByScope('project').length).toBe(1);
-    expect(registry.listByScope('agent').length).toBe(0);
-  });
-
-  it('should get and remove source', () => {
-    registry.register({ id: 'test', type: 'file', location: '/test.md', scope: 'agent', metadata: {} });
-
-    expect(registry.get('test')).toBeTruthy();
-    registry.remove('test');
-    expect(registry.get('test')).toBeNull();
   });
 });
 

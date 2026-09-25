@@ -444,8 +444,26 @@ export class AgentBuilder {
   private _backfillCoverage?: import('../memory/backfill-coverage.js').BackfillCoverageStore;
   private _constitutionConfig?: import('../../config.js').ConstitutionConfig | null;
   private _memoryConfig?: import('../../config.js').HarnessConfig['memory'];
-  /** 知识检索（注入 system prompt KnowledgeLayer） */
-  private _knowledgeStore?: import('../context/knowledge/types.js').KnowledgeStore;
+  /** Knowledge Tier 0 catalog（system 注入「有哪些源」） */
+  private _knowledgeCatalog?: import('../context/knowledge/types.js').KnowledgeCatalogProvider;
+  private _knowledgeCatalogOpts?: {
+    maxEntries?: number;
+    groupByScope?: boolean;
+    showProgress?: 'off' | 'bucket' | 'exact';
+  };
+  /** Knowledge 检索（P4 grounding + 工具） */
+  private _knowledgeRetriever?: import('../knowledge/retriever.js').KnowledgeRetriever;
+  private _knowledgeIndexStore?: import('../knowledge/index-store.js').KnowledgeIndexStore;
+  private _knowledgeSourceStore?: import('../knowledge/source-store.js').KnowledgeSourceStore;
+  private _knowledgeHitLog?: import('../knowledge/hit-log.js').KnowledgeHitLog;
+  private _knowledgeGrounding?: {
+    budgetTokens?: number;
+    budgetRatio?: number;
+    maxBudgetTokens?: number;
+    maxChunks?: number;
+    skipIfUserTokensBelow?: number;
+    includePriorUserTurns?: number;
+  };
   /** 智慧（注入 system prompt WisdomLayer） */
   private _wisdomStore?: import('../memory/types.js').WisdomStore;
   /** 认知图谱（注入 system prompt CognitionLayer） */
@@ -662,9 +680,42 @@ export class AgentBuilder {
     return this;
   }
 
-  /** 注入 KnowledgeStore（每轮按 query 召回进 system prompt） */
-  knowledgeStore(store: import('../context/knowledge/types.js').KnowledgeStore): this {
-    this._knowledgeStore = store;
+  /** 注入 Knowledge catalog（Tier 0；内容命中不进 system） */
+  knowledgeCatalog(
+    provider: import('../context/knowledge/types.js').KnowledgeCatalogProvider,
+    opts?: {
+      maxEntries?: number;
+      groupByScope?: boolean;
+      showProgress?: 'off' | 'bucket' | 'exact';
+    },
+  ): this {
+    this._knowledgeCatalog = provider;
+    this._knowledgeCatalogOpts = opts;
+    return this;
+  }
+
+  /**
+   * 注入 Knowledge 检索（grounding + knowledge_search/read）
+   */
+  knowledgeRetriever(deps: {
+    retriever: import('../knowledge/retriever.js').KnowledgeRetriever;
+    indexStore: import('../knowledge/index-store.js').KnowledgeIndexStore;
+    sourceStore: import('../knowledge/source-store.js').KnowledgeSourceStore;
+    hitLog?: import('../knowledge/hit-log.js').KnowledgeHitLog;
+    grounding?: {
+      budgetTokens?: number;
+      budgetRatio?: number;
+      maxBudgetTokens?: number;
+      maxChunks?: number;
+      skipIfUserTokensBelow?: number;
+      includePriorUserTurns?: number;
+    };
+  }): this {
+    this._knowledgeRetriever = deps.retriever;
+    this._knowledgeIndexStore = deps.indexStore;
+    this._knowledgeSourceStore = deps.sourceStore;
+    this._knowledgeHitLog = deps.hitLog;
+    this._knowledgeGrounding = deps.grounding;
     return this;
   }
 
@@ -977,6 +1028,25 @@ export class AgentBuilder {
       console.warn('[AgentBuilder] memory tools skipped: no memoryStore injected');
     }
 
+    // knowledge 工具（P4）：knowledge_search / knowledge_read
+    if (
+      this._knowledgeRetriever &&
+      this._knowledgeIndexStore &&
+      this._knowledgeSourceStore &&
+      !this._toolBus.getTool('knowledge_search')
+    ) {
+      const { createKnowledgeTools } = await import('../plugin-ecosystem/tools/knowledge.js');
+      for (const tool of createKnowledgeTools({
+        retriever: this._knowledgeRetriever,
+        indexStore: this._knowledgeIndexStore,
+        sourceStore: this._knowledgeSourceStore,
+        hitLog: this._knowledgeHitLog,
+      })) {
+        this._toolBus.register(tool);
+      }
+      console.log('[AgentBuilder] knowledge tools registered: knowledge_search, knowledge_read');
+    }
+
     // 核心组件（Agent 门面）；full 模式继续装配 runner / 子系统 / 提取栈
     const core = await this.buildCore();
     const { agent, harness, mcpManager, contextEngine } = core;
@@ -993,7 +1063,7 @@ export class AgentBuilder {
             agentId: agentId ?? 'default',
             skillCount: this._skillManager?.list().length,
             memoryStore: this._memoryStore,
-            knowledgeStore: this._knowledgeStore,
+            knowledgeCatalog: this._knowledgeCatalog,
             wisdomStore: this._wisdomStore,
             cognitionStore: this._cognitionStore,
             personaLoaded: Boolean(
@@ -1022,10 +1092,10 @@ export class AgentBuilder {
       // 传入磁盘 persona 真实内容（可能为 ''），供 runner 区分「从未有人格」与「热删除」
       runner.setSystemPromptResolver(this._personaResolver, this._initialPersonaContent ?? '');
     }
-    // 层契约装配：persona + skill 索引 + wisdom/cognition/memory/knowledge 召回 + runtime
+    // 层契约装配：persona + skill 索引 + wisdom/cognition/memory 召回 + knowledge catalog + runtime
     const skillManager = this._skillManager;
     const memoryStore = this._memoryStore;
-    const knowledgeStore = this._knowledgeStore;
+    const knowledgeCatalog = this._knowledgeCatalog;
     const wisdomStore = this._wisdomStore;
     const cognitionStore = this._cognitionStore;
     const assemblerCfg = this._contextAssemblerConfig;
@@ -1035,7 +1105,10 @@ export class AgentBuilder {
         ? () => skillManager.formatForPrompt()
         : undefined,
       memoryStore,
-      knowledgeStore,
+      knowledgeCatalog,
+      knowledgeMaxEntries: this._knowledgeCatalogOpts?.maxEntries,
+      knowledgeGroupByScope: this._knowledgeCatalogOpts?.groupByScope,
+      knowledgeShowProgress: this._knowledgeCatalogOpts?.showProgress,
       wisdomStore,
       cognitionStore,
       systemBudgetRatio: assemblerCfg?.systemBudgetRatio,
@@ -1052,6 +1125,38 @@ export class AgentBuilder {
       (input) => systemPromptAssembler.assemble(input),
       (sid) => systemPromptAssembler.clearSession(sid),
     );
+
+    // turn 级 Knowledge grounding（消息插槽 knowledgeGrounding；不进 system）
+    if (this._knowledgeRetriever) {
+      const { GroundingAssembler } = await import('../knowledge/grounding.js');
+      const grounding = new GroundingAssembler({
+        retriever: this._knowledgeRetriever,
+        hitLog: this._knowledgeHitLog,
+        budgetTokens: this._knowledgeGrounding?.budgetTokens,
+        budgetRatio: this._knowledgeGrounding?.budgetRatio,
+        maxBudgetTokens: this._knowledgeGrounding?.maxBudgetTokens,
+        maxChunks: this._knowledgeGrounding?.maxChunks,
+        skipIfUserTokensBelow: this._knowledgeGrounding?.skipIfUserTokensBelow,
+        includePriorUserTurns: this._knowledgeGrounding?.includePriorUserTurns,
+      });
+      runner.setGroundingAssembler(async (input) => {
+        const pack = await grounding.assemble(input);
+        return {
+          query: pack.query,
+          mode: pack.mode,
+          hits: pack.hits.map((h) => ({
+            path: h.path,
+            startLine: h.startLine,
+            endLine: h.endLine,
+            text: h.text,
+          })),
+          hint: pack.hint,
+          coverage: pack.coverage,
+          tokens: pack.tokens,
+          text: pack.text,
+        };
+      });
+    }
 
     // 子系统装配：自动发现 + allow/deny 过滤 + 注册
     const allowlist = options?.subsystemAllowlist ?? this._subsystemAllowlist;
@@ -1205,7 +1310,7 @@ export class AgentBuilder {
 
     const skillManagerForHealth = skillManager;
     const memoryStoreForHealth = memoryStore;
-    const knowledgeStoreForHealth = knowledgeStore;
+    const knowledgeCatalogForHealth = knowledgeCatalog;
     const wisdomStoreForHealth = wisdomStore;
     const cognitionStoreForHealth = cognitionStore;
     const personaLoadedForHealth = Boolean(
@@ -1228,7 +1333,7 @@ export class AgentBuilder {
           agentId: agentId ?? 'default',
           skillCount: skillManagerForHealth?.list().length,
           memoryStore: memoryStoreForHealth,
-          knowledgeStore: knowledgeStoreForHealth,
+          knowledgeCatalog: knowledgeCatalogForHealth,
           wisdomStore: wisdomStoreForHealth,
           cognitionStore: cognitionStoreForHealth,
           personaLoaded: personaLoadedForHealth,

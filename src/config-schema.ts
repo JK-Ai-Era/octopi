@@ -60,6 +60,12 @@ export const AgentConfigSchema = z.object({
   channelBindings: z.record(z.string(), z.string()).optional(),
   /** Session ACL 天花板（E6 L1）；与角色 max / 绑定取交集 */
   maxSessionRights: SessionRightsSchema.optional(),
+  /** Knowledge 召回（覆盖全局 knowledge.recall） */
+  knowledge: z
+    .object({
+      recall: z.enum(['off', 'hint', 'hybrid', 'inject']).optional(),
+    })
+    .optional(),
 });
 
 // ── Plugin 配置 Schema ──
@@ -203,6 +209,79 @@ export const ContextAssemblerConfigSchema = z.object({
   includeLayerPreview: z.boolean().optional(),
   layerPreviewChars: z.number().int().positive().max(4000).optional(),
   includeLayerContent: z.boolean().optional(),
+});
+
+/** Knowledge 全局缺省（agents[].knowledge.recall 覆盖） */
+export const KnowledgeConfigSchema = z.object({
+  recall: z.enum(['off', 'hint', 'hybrid', 'inject']).optional(),
+  autoInject: z
+    .object({
+      minScore: z.number().min(0).max(1).optional(),
+      maxChunks: z.number().int().positive().max(20).optional(),
+      budgetTokens: z.number().int().positive().optional(),
+      budgetRatio: z.number().min(0).max(1).optional(),
+      maxBudgetTokens: z.number().int().positive().optional(),
+      minCoverage: z.number().min(0).max(1).optional(),
+    })
+    .optional(),
+  hint: z
+    .object({
+      minScore: z.number().min(0).max(1).optional(),
+    })
+    .optional(),
+  /** hybrid 融合 keyword 权重（0–1；默认 0.45） */
+  keywordWeight: z.number().min(0).max(1).optional(),
+  catalog: z
+    .object({
+      maxEntries: z.number().int().positive().max(100).optional(),
+      showProgress: z.enum(['off', 'bucket', 'exact']).optional(),
+      autoDescribe: z.boolean().optional(),
+      groupByScope: z.boolean().optional(),
+    })
+    .optional(),
+  query: z
+    .object({
+      includePriorUserTurns: z.number().int().min(0).max(5).optional(),
+      skipIfUserTokensBelow: z.number().int().min(0).optional(),
+    })
+    .optional(),
+  index: z
+    .object({
+      embedding: z.boolean().optional(),
+      hybridKeyword: z.boolean().optional(),
+      phaseA: z
+        .object({
+          concurrency: z.number().int().positive().optional(),
+          debounceMs: z.number().int().nonnegative().optional(),
+        })
+        .optional(),
+      phaseB: z
+        .object({
+          embedBatch: z.number().int().positive().optional(),
+          concurrency: z.number().int().positive().optional(),
+          ratePerMin: z.number().positive().optional(),
+        })
+        .optional(),
+      queue: z.object({ maxDepth: z.number().int().positive().optional() }).optional(),
+    })
+    .optional(),
+  load: z
+    .object({
+      parseConcurrency: z.number().int().positive().optional(),
+      diskWatermarkAlert: z.boolean().optional(),
+    })
+    .optional(),
+  promotion: z
+    .object({
+      metrics: z
+        .object({
+          minSessions: z.number().int().positive().optional(),
+          minHits: z.number().int().positive().optional(),
+        })
+        .optional(),
+      stewardOnConverge: z.boolean().optional(),
+    })
+    .optional(),
 });
 
 /** 公用能力：summary（harness/capabilities） */
@@ -642,6 +721,8 @@ export const HarnessConfigSchema = z.object({
   summary: SummaryConfigSchema.optional(),
   /** 公用能力 compact 缺省 */
   compact: CompactCapabilityConfigSchema.optional(),
+  /** Knowledge 全局缺省（agents[].knowledge.recall 覆盖） */
+  knowledge: KnowledgeConfigSchema.optional(),
   context: z
     .object({
       constitution: ConstitutionConfigSchema.optional(),

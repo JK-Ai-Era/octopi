@@ -105,7 +105,7 @@ Octopi 独特的上下文智能组装方法，让 agent 通过更有效的 conte
 
 **实现**：`harness/context/` 的 `ContextLayer` 契约 + `DefaultContextAssembler`。  
 默认路径已接 Persona / Skill / Knowledge / Memory / Runtime；Wisdom / Cognition 待打磨。  
-详见 [docs/context-layer-contracts.md](./docs/context-layer-contracts.md)。
+详见 [docs/context-layer-contracts.md](./docs/context-layer-contracts.md)；Knowledge 见 [docs/knowledge.md](./docs/knowledge.md)。
 
 ---
 

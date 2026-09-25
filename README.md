@@ -16,7 +16,7 @@ Octopi is an embeddable agent engine for building AI-powered applications. It pr
 - **Embeddable** — Not a standalone app, but a component for your product
 - **4-layer architecture** — Loop → Core → Harness → Integration, clean boundaries, independent layers
 - **15 self-contained domains** — Each domain is independently understandable, testable, and replaceable
-- **8-layer context intelligence** — Wisdom, Persona, Skill, Knowledge, Cognition, Memory, Runtime, Information (see [docs/memory.md](./docs/memory.md) for Memory)
+- **8-layer context intelligence** — Wisdom, Persona, Skill, Knowledge, Cognition, Memory, Runtime, Information (see [docs/memory.md](./docs/memory.md) for Memory, [docs/knowledge.md](./docs/knowledge.md) for Knowledge)
 - **Security built-in** — Injection detection, risk evaluation, approval workflows — not optional, not removable
 - **Natively multi-agent** — Distributed intelligence from the ground up
 

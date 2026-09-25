@@ -20,7 +20,7 @@
 | Session.tasks / SessionTask | `harness/session-tasks/` | 一致 |
 | orchestration | `harness/orchestration/` | 一致 |
 | Planner / Reflector 契约 | `harness/orchestration/cognitive-loop.ts` | 曾在 Core |
-| KnowledgeStore 契约 | `harness/context/knowledge/types.ts` | 曾在 Core |
+| Knowledge catalog 契约 | `harness/context/knowledge/types.ts` | 曾在 Core / 曾为 KnowledgeStore |
 | Memory / Wisdom / Cognition | `harness/memory/types.ts` | 曾在 Core |
 | AgentRegistry / MessageChannel | `harness/multi-agent/*-types.ts` | 曾在 Core |
 | MCP | `harness/plugin-ecosystem/mcp/types.ts` | 曾在 Core |

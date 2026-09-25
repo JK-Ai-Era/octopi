@@ -46,7 +46,7 @@
 
 **状态：** 已解决
 
-旧 `harness/knowledge/stage.ts` 的 `KnowledgeStage` 依赖已删除的 ContextPipeline Stage 接口。现已由 `harness/context/knowledge/` 的 `KnowledgeContextEngine` 取代。
+旧 `harness/knowledge/stage.ts` 的 `KnowledgeStage` 及 `KnowledgeContextEngine` 均已删除；Knowledge 见 `arch/knowledge-layer.md`（catalog + 索引服务路线）。
 
 ## 旧配置字段 `supervisor`
 

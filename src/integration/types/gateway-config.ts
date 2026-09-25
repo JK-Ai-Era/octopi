@@ -54,6 +54,8 @@ export interface GatewayConfig {
   context?: import('../../config.js').HarnessConfig['context'];
   constitution?: import('../../config.js').ConstitutionConfig;
   memory?: import('../../config.js').HarnessConfig['memory'];
+  /** Knowledge 全局缺省（agents[].knowledge.recall 覆盖） */
+  knowledge?: import('../../config.js').HarnessConfig['knowledge'];
   /** models.embedding — 向量检索配置（memory 等共用） */
   embedding?: import('../../config.js').EmbeddingModelConfig;
   /** models.providers — 供 embedding 继承 baseUrl/apiKey */

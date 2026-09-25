@@ -45,7 +45,7 @@ export { SqliteWisdomStore } from './wisdom-store.js';
 export { SqliteConceptGraph } from './cognition-store.js';
 export type { SqliteConceptGraphOptions } from './cognition-store.js';
 
-export { KnowledgeRegistry } from './knowledge-registry.js';
-export type { KnowledgeSourceEntry } from './knowledge-registry.js';
+// KnowledgeRegistry 已从公共导出移除（legacy 文件保留供迁移对照）
+// 见 arch/knowledge-layer.md §8.1
 
 export { SqliteBackfillCoverageStore } from './backfill-coverage.js';

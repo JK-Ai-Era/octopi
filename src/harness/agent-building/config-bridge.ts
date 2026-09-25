@@ -351,7 +351,6 @@ async function buildAgent(
       const { SqliteMemoryStore } = await import('../memory/sqlite/memory-store.js');
       const { SqliteWisdomStore } = await import('../memory/sqlite/wisdom-store.js');
       const { SqliteConceptGraph } = await import('../memory/sqlite/cognition-store.js');
-      const { MemoryKnowledgeStore } = await import('../context/knowledge/memory-store.js');
       const { resolveEmbeddingRuntime } = await import('../memory/sqlite/embedding-from-models.js');
 
       const embRuntime = resolveEmbeddingRuntime(shared.modelsConfig);
@@ -373,12 +372,11 @@ async function buildAgent(
       builder.cognitionStore(new SqliteConceptGraph(db, {
         embeddingProvider: embRuntime?.provider ?? null,
       }));
-      // Knowledge 暂无 SQLite 实现，用进程内 store；后续可替换
-      builder.knowledgeStore(new MemoryKnowledgeStore());
+      // Knowledge catalog / 索引归独立 Knowledge 服务（arch/knowledge-layer.md）；P1 前不挂
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.warn(
-        `[ConfigBridge] memory/wisdom/cognition/knowledge stores unavailable for agent home ${agentHome}: ${msg}`,
+        `[ConfigBridge] memory/wisdom/cognition stores unavailable for agent home ${agentHome}: ${msg}`,
       );
       if (/node:sqlite|ERR_UNKNOWN_BUILTIN_MODULE|ERR_DLOPEN|NODE_MODULE_VERSION/i.test(msg)) {
         console.warn(

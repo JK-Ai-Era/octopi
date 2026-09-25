@@ -1,6 +1,8 @@
 /**
- * KnowledgeRegistry — 知识源注册表
+ * KnowledgeRegistry — 旧版知识源注册表（agent.db）
  *
+ * @deprecated 已由 `harness/knowledge` 的 KnowledgeSourceStore（OCTOPI_HOME/knowledge）取代。
+ * 保留仅供旧数据迁移；勿在新路径使用。见 arch/knowledge-layer.md §8.1。
  * @module
  */
 

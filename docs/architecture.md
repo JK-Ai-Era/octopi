@@ -233,7 +233,7 @@ harness/context/
 ├── token-estimator.ts          # HeuristicTokenEstimator
 ├── token-estimate-fns.ts
 ├── token-constants.ts
-├── knowledge/                  # KnowledgeStore + KnowledgeContextEngine
+├── knowledge/                  # Knowledge Tier 0 catalog 契约
 └── （结构压缩算法已委托 harness/capabilities/compact；E4 状态仍在本引擎）
 
 harness/capabilities/          # 横切公用能力：SummaryPort + CompactEngine
@@ -323,7 +323,8 @@ harness/memory/
 ```
 
 > **已移除**：`harness/memory/extraction/`（ETL 采集/桥接/Pending）与 `subsystems/memory-extractor`。  
-> 记忆写入 = agent `memory_store` 工具；旁路 = `memory.steward.backfill` / `memory.steward.govern`（对外见 [`docs/memory.md`](./memory.md)）。
+> 记忆写入 = agent `memory_store` 工具；旁路 = `memory.steward.backfill` / `memory.steward.govern`（对外见 [`docs/memory.md`](./memory.md)）。  
+> Knowledge（外生语料 / 第 4 层）对外见 [`docs/knowledge.md`](./knowledge.md)。
 
 `FileWisdomStore` / `FileProjectMemory` / `ContextIntelligence` 已删除；不要再预设 `memory/`、`wisdom/` 文件目录。system prompt 层组装见 `harness/context/`。
 
@@ -671,7 +672,7 @@ Session save：全量 messages + contextCompact 快照
 | `EventSource` | `harness/agent-runtime/event-source-types.ts` | — |
 | `MessageChannel` | `harness/multi-agent/message-channel-types.ts` | — |
 | `MemoryStore` 等 | `harness/memory/types.ts` | InMemory / Sqlite |
-| `KnowledgeStore` | `harness/context/knowledge/types.ts` | MemoryKnowledgeStore |
+| `KnowledgeCatalogProvider` | `harness/context/knowledge/types.ts` | （catalog；索引服务 P1） |
 | `ContextLayer` / `ContextAssembler` | `harness/context/layer-types.ts` | DefaultContextAssembler + layers |
 | `Planner` / `Reflector` | `harness/orchestration/cognitive-loop.ts` | Rule/LLM/Hybrid |
 
@@ -755,7 +756,7 @@ const { agent, harness, runner, runtime, events, contextHealth } = await new Age
   .persona('./my-agent')
   .skillDirectory('./my-agent/skills')
   .memoryStore(myMemoryStore)   // 七层 MemoryLayer、memory_* 工具、steward 同实例
-  .knowledgeStore(myKnowledgeStore)
+  .knowledgeCatalog(myCatalogProvider)
 
   // 工具
   .tool(myTool)

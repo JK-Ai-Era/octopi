@@ -39,7 +39,7 @@
 ## 依赖
 
 - Core: types/messages
-- Memory 契约：KnowledgeStore / MemoryStore / ConceptGraphStore（薄适配）
+- Memory 契约：MemoryStore / ConceptGraphStore（薄适配）；Knowledge 仅 catalog 契约
 - Harness 同层：`capabilities/compact`（结构压缩算法；类型/端口，非 tools）
 
 ## 文件说明
@@ -53,7 +53,7 @@
 - hybrid-compressor.ts / llm-summarizer.ts / truncate-compressor.ts — 会话路径压缩组件
 - budget-allocator.ts — 消息侧 Token 预算分配
 - token-estimator.ts / token-estimate-fns.ts / token-constants.ts — 估算（跨域经 `context/index.ts` 门面；浏览器可直连 token 模块）
-- knowledge/ — KnowledgeStore + KnowledgeContextEngine
+- knowledge/ — Knowledge Tier 0 catalog 契约（见 `arch/knowledge-layer.md`）
 - compact-key.ts — E4 compact 键 `(sessionId, agentId)`
 
 > 导出：`src/harness/context/index.ts` 与 `src/harness/index.ts`。

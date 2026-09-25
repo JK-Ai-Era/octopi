@@ -30,8 +30,8 @@ export { InMemoryMemoryStore } from './store.js';
 export { InMemoryConceptGraph } from './cognition.js';
 
 // ── SQLite 实现 ──
-export { AgentDatabase, SqliteMemoryStore, SqliteWisdomStore, SqliteConceptGraph, KnowledgeRegistry, createEmbeddingProvider, SqliteBackfillCoverageStore } from './sqlite/index.js';
-export type { AgentDatabaseOptions, SqliteMemoryStoreOptions, SqliteConceptGraphOptions, EmbeddingProvider, EmbeddingConfig, KnowledgeSourceEntry } from './sqlite/index.js';
+export { AgentDatabase, SqliteMemoryStore, SqliteWisdomStore, SqliteConceptGraph, createEmbeddingProvider, SqliteBackfillCoverageStore } from './sqlite/index.js';
+export type { AgentDatabaseOptions, SqliteMemoryStoreOptions, SqliteConceptGraphOptions, EmbeddingProvider, EmbeddingConfig } from './sqlite/index.js';
 export {
   createEmbeddingProviderFromModels,
   resolveEmbeddingRuntime,

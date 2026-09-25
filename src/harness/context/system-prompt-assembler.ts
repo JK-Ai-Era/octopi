@@ -19,7 +19,7 @@ import {
 } from './layers.js';
 import type { ContextAssembler, ContextLayer } from './layer-types.js';
 import type { ConceptGraphStore, MemoryStore, WisdomStore } from '../memory/types.js';
-import type { KnowledgeStore } from './knowledge/types.js';
+import type { KnowledgeCatalogProvider } from './knowledge/types.js';
 import { loadConstitution, type ConstitutionConfig } from './constitution/load-constitution.js';
 
 export interface SystemPromptAssembleInput {
@@ -53,11 +53,14 @@ export function createDefaultSystemPromptAssembler(options?: {
   systemBudgetTokens?: number;
   getSkillPromptText?: () => Promise<string> | string;
   memoryStore?: MemoryStore;
-  knowledgeStore?: KnowledgeStore;
+  /** Knowledge Tier 0 catalog（有哪些源）；内容命中不进 system */
+  knowledgeCatalog?: KnowledgeCatalogProvider;
   wisdomStore?: WisdomStore;
   cognitionStore?: ConceptGraphStore;
   memoryLimit?: number;
-  knowledgeLimit?: number;
+  knowledgeMaxEntries?: number;
+  knowledgeGroupByScope?: boolean;
+  knowledgeShowProgress?: 'off' | 'bucket' | 'exact';
   cognitionDepth?: number;
   /** 全局宪法；提供则 preamble 固定最前 */
   constitution?: ConstitutionConfig | string | null;
@@ -117,7 +120,7 @@ export function createDefaultSystemPromptAssembler(options?: {
       }
       const hasRetrieval = Boolean(
         options?.memoryStore ||
-          options?.knowledgeStore ||
+          options?.knowledgeCatalog ||
           wisdomStore ||
           cognitionStore,
       );
@@ -151,11 +154,13 @@ export function createDefaultSystemPromptAssembler(options?: {
       if (wisdomStore) {
         layers.push(new WisdomLayer({ getEntries: () => wisdomStore.getAll() }));
       }
-      if (options?.knowledgeStore) {
+      if (options?.knowledgeCatalog) {
         layers.push(
           new KnowledgeLayer({
-            store: options.knowledgeStore,
-            limit: options.knowledgeLimit,
+            getCatalog: options.knowledgeCatalog,
+            maxEntries: options.knowledgeMaxEntries,
+            groupByScope: options.knowledgeGroupByScope,
+            showProgress: options.knowledgeShowProgress,
           }),
         );
       }

@@ -1,52 +1,37 @@
 /**
- * KnowledgeStore 类型
+ * Knowledge Tier 0 — Catalog 契约
  *
- * @layer harness/context/knowledge — Context Intelligence 第 4 层存储协议。
+ * @layer harness/context/knowledge
+ *
+ * Knowledge = 外生语料（源登记 / 索引 / 检索），不是命题库。
+ * System 侧只注入 **catalog**（有哪些源、干什么用）；内容命中走 turn 级 grounding（后续阶段）。
+ * 规格：`arch/knowledge-layer.md`。
  */
 
-/** 知识类型 */
-export type KnowledgeType = 'fact' | 'pattern' | 'lesson' | 'preference' | 'skill';
-
-/** 知识条目 */
-export interface KnowledgeEntry {
+/** catalog 中的一条知识源摘要 */
+export interface KnowledgeCatalogItem {
   id: string;
-  type: KnowledgeType;
-  content: string;
-  source: string;
-  confidence: number;
-  accessCount: number;
-  lastAccessedAt: number;
-  createdAt: number;
-  updatedAt: number;
-  tags: string[];
-  metadata?: Record<string, unknown>;
+  displayName: string;
+  /** 源形态：directory | file | url | connector | workspace | … */
+  kind: string;
+  /** 粗状态桶：ready | indexing | error | off */
+  status?: string;
+  /** 一行用途说明（人工 description 或 generatedDescription） */
+  description?: string;
+  /** global | project | session */
+  scopeLevel?: string;
+  /** 规模粗标，如 "~1.2k files" / "small" */
+  scaleLabel?: string;
 }
 
-/** 检索选项 */
-export interface RetrieveOptions {
-  type?: KnowledgeType | KnowledgeType[];
-  tags?: string[];
-  minConfidence?: number;
-  limit?: number;
-  updateAccess?: boolean;
-}
-
-/** 知识统计 */
-export interface KnowledgeStats {
-  totalEntries: number;
-  byType: Record<KnowledgeType, number>;
-  avgConfidence: number;
-  totalAccesses: number;
-}
-
-/** KnowledgeStore — 知识存储接口 */
-export interface KnowledgeStore {
-  readonly name: string;
-  store(entry: Omit<KnowledgeEntry, 'id' | 'accessCount' | 'lastAccessedAt' | 'createdAt' | 'updatedAt'>): Promise<string>;
-  update(id: string, patch: Partial<KnowledgeEntry>): Promise<void>;
-  retrieve(query: string, options?: RetrieveOptions): Promise<KnowledgeEntry[]>;
-  get(id: string): Promise<KnowledgeEntry | null>;
-  delete(id: string): Promise<void>;
-  list(options?: RetrieveOptions): Promise<KnowledgeEntry[]>;
-  stats(): Promise<KnowledgeStats>;
-}
+/**
+ * 提供当前可见 catalog 条目（装配时现取，不持久化 catalog 文本）
+ *
+ * 可选入参用于 Session 级 ephemeral 源过滤；不传则只含 Global/Project 可见集。
+ */
+export type KnowledgeCatalogProvider =
+  | ((ctx?: {
+      agentId?: string;
+      sessionId?: string;
+    }) => Promise<KnowledgeCatalogItem[]> | KnowledgeCatalogItem[])
+  | KnowledgeCatalogItem[];

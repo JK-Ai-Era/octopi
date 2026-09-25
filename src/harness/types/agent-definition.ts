@@ -47,6 +47,10 @@ export interface AgentDefinition {
    * handle authorize 时与角色 max / 绑定取交集。
    */
   maxSessionRights?: SessionRights;
+  /** Knowledge 召回姿态（覆盖全局 knowledge.recall） */
+  knowledge?: {
+    recall?: 'off' | 'hint' | 'hybrid' | 'inject';
+  };
 }
 
 export type { ModelInfo, ToolPolicy };

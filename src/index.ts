@@ -279,7 +279,7 @@ export type {
   MemoryStore, MemoryEntry, MemoryType, MemoryQuery, MemoryStats,
   WisdomStore, WisdomEntry,
   ConceptGraphStore, ConceptNode, ConceptEdge, ConceptGraph,
-  KnowledgeStore, KnowledgeEntry,
+  KnowledgeCatalogItem, KnowledgeCatalogProvider,
   Planner, Reflector, AgentState,
 } from './harness/index.js';
 export type {

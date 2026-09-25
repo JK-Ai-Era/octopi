@@ -1,14 +1,8 @@
 /**
- * Knowledge 模块统一导出
+ * Knowledge 模块 — Tier 0 catalog 契约
+ *
+ * 旧 KnowledgeStore / KnowledgeEntry / MemoryKnowledgeStore / KnowledgeContextEngine
+ * 已按 arch/knowledge-layer.md §8.1 拆除，不留兼容层。
  */
 
-export { MemoryKnowledgeStore } from './memory-store.js';
-export { KnowledgeContextEngine } from './engine.js';
-export type { KnowledgeContextEngineConfig } from './engine.js';
-export type {
-  KnowledgeStore,
-  KnowledgeEntry,
-  KnowledgeType,
-  KnowledgeStats,
-  RetrieveOptions,
-} from './types.js';
+export type { KnowledgeCatalogItem, KnowledgeCatalogProvider } from './types.js';

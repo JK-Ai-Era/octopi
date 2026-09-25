@@ -114,6 +114,29 @@
     }
   },
 
+  "knowledge": {
+    "recall": "hybrid",
+    "autoInject": {
+      "minScore": 0.78,
+      "maxChunks": 4,
+      "budgetTokens": 1200,
+      "minCoverage": 0.5
+    },
+    "hint": { "minScore": 0.55 },
+    "keywordWeight": 0.45,
+    "catalog": {
+      "maxEntries": 10,
+      "autoDescribe": true
+    },
+    "query": {
+      "includePriorUserTurns": 1,
+      "skipIfUserTokensBelow": 8
+    },
+    "promotion": {
+      "metrics": { "minSessions": 3, "minHits": 10 }
+    }
+  },
+
   "runGuard": {
     "enabled": true,
     "checkpointInterval": 15

@@ -45,7 +45,7 @@ Constitution + Layer Providers ──► ContextAssembler ──► systemPrompt
 | wisdom | 10 | 70 | 0.12 | yes | `WisdomStore.getAll()`（薄） |
 | persona | 20 | **100** | 0.35 | **no** | `PersonaSource` / Runner resolve |
 | skill | 30 | 60 | 0.15 | yes | `SkillManager.formatForPrompt()` |
-| knowledge | 40 | 40 | 0.12 | yes | `KnowledgeStore.retrieve` |
+| knowledge | 40 | 40 | 0.12 | yes | `KnowledgeCatalogProvider`（Tier 0 catalog） |
 | cognition | 50 | 20 | 0.06 | yes | `ConceptGraphStore.queryRelated` |
 | memory | 60 | 30 | 0.10 | yes | `MemoryStore.retrieve` |
 | runtime | 70 | 80 | 0.10 | yes | session tasks + injectedContext |
@@ -116,7 +116,7 @@ interface ContextLayer {
 | `PersonaLayer` | 包装已加载人格文本 | 文件监听（仍归 PersonaSource） |
 | `SkillLayer` | 包装 `formatForPrompt()` | 按任务匹配加载全文 |
 | `RuntimeLayer` | 包装每轮动态注入 | — |
-| `KnowledgeLayer` | `retrieve(query, top-k)` + 列表格式化 | embedding / 重排 |
+| `KnowledgeLayer` | `KnowledgeCatalogProvider` → Tier 0 catalog 格式化 | 内容检索 / embedding（归 Knowledge 服务） |
 | `MemoryLayer` | `retrieve({text, limit})` | 衰减策略调参（曲线在 `memory/decay-policy.ts`，由 govern 执行） |
 | `CognitionLayer` | `queryRelated` + 边列表格式化 | 深度遍历策略 |
 | `WisdomLayer` | 全量按 priority 排序后截断 | 场景匹配 |
@@ -148,7 +148,7 @@ Runner.handle
 - `config-bridge` / capabilities 解析链：**`models.level.summary`** → `contextEngine.summaryModel` → mini → standard → 主模型  
 - 可用 `.disableAutoSummarize()` 关闭自动摘要  
 - **Skill**：`skillDirectory` 或 `home/skills` 在 build 时 discover，每轮注入 `<available_skills>`  
-- **Memory/Knowledge 召回**：`builder.memoryStore` / `knowledgeStore`；config-bridge 与 Gateway 从 `home/agent.db` 建 `SqliteMemoryStore`，Knowledge 暂用进程内 `MemoryKnowledgeStore`
+- **Memory 召回**：`builder.memoryStore`；config-bridge 与 Gateway 从 `home/agent.db` 建 `SqliteMemoryStore`。**Knowledge**：system 只注入 catalog（`builder.knowledgeCatalog`）；源/索引服务见 `arch/knowledge-layer.md`（P1 起接线）
 - **MemoryStore 单实例**：`AgentBuilder.build()` 在 `buildCore` 前用 `builder.memoryStore` 注册 `memory_store`/`memory_search`；MemoryLayer 召回与 `memory.steward.*` 入库同一实例。Gateway **不再**用进程级 `InMemoryMemoryStore` 挂全局 memory 工具
 - **压缩状态落盘（E4）**：权威桶 `SessionData.contextCompacts[agentId]`；`contextCompact` 为 primary/单 agent 兼容视图。Jsonl `*.state.json` 持久化。`Agent` 内存桥键 = `(sessionId, agentId)`。**不同 agent 不互相借用 compact**。手动压缩：`SessionAwareRunner.compactSession`（与 handle **共 session 锁**，排队；勿仅依赖 `status==='processing'`）
 - **公用能力 Summary / Compact**（`harness/capabilities/`，横切，不计入业务领域计数）：
@@ -192,7 +192,7 @@ Runner.handle
 - 默认 `createDefaultSystemPromptAssembler` 在依赖存在时注册 Wisdom / Cognition 层
 - `octopi.json` → `contextAssembler.includeLayerPreview` 可在 manifest 写入层 preview（Web 上下文面板）
 - `GET /api/v1/agents/:id/context/health` 暴露 store 计数（数据面健康）
-- Knowledge 的 SQLite 持久化仍缺（进程内 `MemoryKnowledgeStore`）
+- Knowledge 不再使用进程内命题 Store；catalog / 索引 / grounding 见 `arch/knowledge-layer.md`
 
 ---
 

@@ -35,6 +35,17 @@ export interface RunScope {
   runId?: string;
   /** 本轮 systemPrompt 装配结果；供 convertToLlm / 层装配 */
   systemPrompt?: string;
+  /**
+   * turn 级 Knowledge grounding（arch/knowledge-layer.md §4.4）。
+   * 内容命中不进 system；消息侧插槽 source='knowledgeGrounding'。
+   */
+  grounding?: {
+    query: string;
+    mode: 'inject' | 'hint' | 'none';
+    hitCount: number;
+    coverage?: number;
+    tokens: number;
+  };
   /** 工具运行时上下文；缺省时由 Provider 回退 */
   toolRuntime?: RunToolRuntime;
   /** Agent 模板 revision（Reserved：AgentRevision 绑 Run） */

@@ -344,6 +344,20 @@ export class SessionAwareRunner {
   }>;
   /** 会话重置时清理 Assembler 层缓存 */
   private systemPromptAssemblerClear?: (sessionId: string) => void;
+  /** turn 级 Knowledge grounding（可选；arch/knowledge-layer.md §4.4） */
+  private groundingAssembler?: (input: {
+    sessionId: string;
+    agentId?: string;
+    messages: Message[];
+  }) => Promise<{
+    query: string;
+    mode: 'inject' | 'hint' | 'none';
+    hits: Array<{ path: string; startLine: number; endLine: number; text: string }>;
+    hint?: string;
+    coverage?: number;
+    tokens: number;
+    text?: string;
+  }>;
   /** 模型快照解析器（Gateway 注入；每 run 只调一次） */
   private resolveModelOverride?: SessionAwareRunnerConfig['resolveModelOverride'];
 
@@ -493,6 +507,27 @@ export class SessionAwareRunner {
   ): void {
     this.systemPromptAssembler = assembler;
     this.systemPromptAssemblerClear = clearSession;
+  }
+
+  /**
+   * 注入 turn 级 Knowledge grounding（可选）
+   */
+  setGroundingAssembler(
+    assembler: (input: {
+      sessionId: string;
+      agentId?: string;
+      messages: Message[];
+    }) => Promise<{
+      query: string;
+      mode: 'inject' | 'hint' | 'none';
+      hits: Array<{ path: string; startLine: number; endLine: number; text: string }>;
+      hint?: string;
+      coverage?: number;
+      tokens: number;
+      text?: string;
+    }>,
+  ): void {
+    this.groundingAssembler = assembler;
   }
 
   /**
@@ -792,6 +827,31 @@ export class SessionAwareRunner {
         runContext.systemPrompt = this.concatSystemPrompt(basePrompt, effectiveRunConfig.injectedContext, personaFromResolver);
       }
 
+      // system prompt 终装后：turn 级 Knowledge grounding（消息侧插槽，不进 system）
+      // 先算 pack；写入 runScope / 插入消息在 runScope 创建之后
+      let pendingGrounding: {
+        query: string;
+        mode: 'inject' | 'hint' | 'none';
+        hits: Array<{ path: string; startLine: number; endLine: number; text: string }>;
+        hint?: string;
+        coverage?: number;
+        tokens: number;
+        text?: string;
+      } | null = null;
+      if (this.groundingAssembler) {
+        try {
+          pendingGrounding = await this.groundingAssembler({
+            sessionId,
+            agentId: _agentId,
+            messages: session.messages,
+          });
+        } catch (gErr) {
+          const gMsg = gErr instanceof Error ? gErr.message : String(gErr);
+          console.warn(`[octopi] knowledge grounding failed (session=${sessionId}): ${gMsg}`);
+          pendingGrounding = null;
+        }
+      }
+
       // 更新 harness 的 sessionId/agentId（checkpoint 回退；权威身份在 RunScope ALS）
       this.harness.sessionId = sessionId;
       this.harness.agentId = effectiveRunConfig.agentId ?? 'default';
@@ -838,6 +898,53 @@ export class SessionAwareRunner {
           isolation: resolvedToolCwd.mode,
         },
       };
+
+      if (pendingGrounding) {
+        runScope.grounding = {
+          query: pendingGrounding.query,
+          mode: pendingGrounding.mode,
+          hitCount: pendingGrounding.hits.length,
+          coverage: pendingGrounding.coverage,
+          tokens: pendingGrounding.tokens,
+        };
+      }
+      {
+        // turn 级：先剥历史 grounding，再视本轮 mode 决定是否插入
+        // mode=none 时不保留上轮 grounding（避免陈旧内容长期回放）
+        const baseMsgs = session.messages.filter(
+          (m) => m.metadata?.source !== 'knowledgeGrounding',
+        );
+        if (pendingGrounding && pendingGrounding.mode !== 'none' && pendingGrounding.text?.trim()) {
+          const groundingMsg: Message = {
+            role: 'user',
+            content: pendingGrounding.text,
+            timestamp: Date.now(),
+            metadata: {
+              source: 'knowledgeGrounding',
+              mode: pendingGrounding.mode,
+              query: pendingGrounding.query,
+              coverage: pendingGrounding.coverage,
+            },
+          };
+          let insertAt = baseMsgs.length;
+          for (let i = baseMsgs.length - 1; i >= 0; i--) {
+            if (baseMsgs[i].role === 'user') {
+              insertAt = i;
+              break;
+            }
+          }
+          baseMsgs.splice(insertAt, 0, groundingMsg);
+          runContext.messages = baseMsgs;
+          if (runScope.toolRuntime) {
+            runScope.toolRuntime.messages = baseMsgs;
+          }
+        } else if (baseMsgs.length !== session.messages.length) {
+          runContext.messages = baseMsgs;
+          if (runScope.toolRuntime) {
+            runScope.toolRuntime.messages = baseMsgs;
+          }
+        }
+      }
 
       // Observer 通道：Run 现场快照（摘要进事件；全文由 Hub/REST 提供）
       if (this._observerHub?.isEnabled()) {

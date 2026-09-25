@@ -257,9 +257,64 @@ export type {
   AgentSignal,
 } from './agent-runtime/index.js';
 
-// ── Knowledge（Context Intelligence 第 4 层）──
-export { MemoryKnowledgeStore, KnowledgeContextEngine } from './context/knowledge/index.js';
-export type { KnowledgeStore, KnowledgeEntry, KnowledgeType, KnowledgeStats, RetrieveOptions, KnowledgeContextEngineConfig } from './context/knowledge/index.js';
+// ── Knowledge（Tier 0 catalog；见 arch/knowledge-layer.md）──
+export type { KnowledgeCatalogItem, KnowledgeCatalogProvider } from './context/knowledge/index.js';
+export {
+  KnowledgeDatabase,
+  KnowledgeSourceStore,
+  KnowledgeIndexStore,
+  KnowledgeIngest,
+  KnowledgeRetriever,
+  GroundingAssembler,
+  formatKnowledgeGroundingMessage,
+  resolveGroundingQuery,
+  wrapUntrustedKnowledgeBlock,
+  isKnowledgeGroundingMessage,
+  stripKnowledgeGrounding,
+  KnowledgeHitLog,
+  KnowledgePurger,
+  FormatAdapterRegistry,
+  resolveKnowledgePaths,
+  generateKnowledgeDescription,
+  heuristicDescription,
+  scanSecretShapes,
+  hashContent,
+  textAdapter,
+  markdownAdapter,
+  codeAdapter,
+} from './knowledge/index.js';
+export type {
+  KnowledgeDatabaseOptions,
+  KnowledgePaths,
+  KnowledgeDescribePort,
+  KnowledgeDescribeOptions,
+  KnowledgeDescribeResult,
+  KnowledgeSource,
+  KnowledgeSourceInput,
+  KnowledgeSourcePatch,
+  KnowledgeSourceKind,
+  KnowledgeSourceStatus,
+  KnowledgeSourceSync,
+  KnowledgeSourceError,
+  KnowledgeScopeRef,
+  KnowledgeScopeLevel,
+  KnowledgeIngestOptions,
+  IngestProgressEvent,
+  IngestJobKind,
+  HybridSearchOptions,
+  HybridSearchResult,
+  AutoGroundDecision,
+  GroundingMode,
+  KnowledgeRetrieverOptions,
+  KnowledgeHitRecord,
+  KnowledgeHitStats,
+  PromotionCandidate,
+  PurgeResult,
+  FormatAdapter,
+  KnowledgeChunkDraft,
+  IndexedFileRecord,
+  ChunkHit,
+} from './knowledge/index.js';
 
 // ── Orchestration（experimental，默认不进主路径；见 octopi/harness/orchestration）──
 
@@ -267,8 +322,8 @@ export type { KnowledgeStore, KnowledgeEntry, KnowledgeType, KnowledgeStats, Ret
 // (exported from concurrency/index.ts)
 
 // ── Memory ──
-export { InMemoryMemoryStore, InMemoryConceptGraph, AgentDatabase, SqliteMemoryStore, SqliteWisdomStore, SqliteConceptGraph, KnowledgeRegistry, createEmbeddingProvider } from './memory/index.js';
-export type { AgentDatabaseOptions, SqliteMemoryStoreOptions, SqliteConceptGraphOptions, EmbeddingProvider, EmbeddingConfig, KnowledgeSourceEntry } from './memory/index.js';
+export { InMemoryMemoryStore, InMemoryConceptGraph, AgentDatabase, SqliteMemoryStore, SqliteWisdomStore, SqliteConceptGraph, createEmbeddingProvider } from './memory/index.js';
+export type { AgentDatabaseOptions, SqliteMemoryStoreOptions, SqliteConceptGraphOptions, EmbeddingProvider, EmbeddingConfig } from './memory/index.js';
 export {
   createEmbeddingProviderFromModels,
   resolveEmbeddingRuntime,

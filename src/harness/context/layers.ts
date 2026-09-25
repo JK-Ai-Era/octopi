@@ -18,7 +18,10 @@ import {
   LAYER_PRIORITY,
 } from './layer-types.js';
 import type { MemoryStore, ConceptGraphStore } from '../memory/types.js';
-import type { KnowledgeStore } from './knowledge/types.js';
+import type {
+  KnowledgeCatalogItem,
+  KnowledgeCatalogProvider,
+} from './knowledge/types.js';
 
 // ── 基类 ──
 
@@ -148,42 +151,96 @@ export class RuntimeLayer extends BaseLayer {
   }
 }
 
-// ── Knowledge（薄检索） ──
+// ── Knowledge（Tier 0 catalog；内容命中不进 system） ──
+
+function resolveCatalogList(
+  provider: KnowledgeCatalogProvider,
+  ctx?: LayerAssembleContext,
+): Promise<KnowledgeCatalogItem[]> | KnowledgeCatalogItem[] {
+  if (typeof provider !== 'function') return provider;
+  return provider({
+    agentId: ctx?.agentId,
+    sessionId: ctx?.sessionId,
+  });
+}
 
 export class KnowledgeLayer extends BaseLayer {
-  private readonly store: KnowledgeStore;
-  private readonly limit: number;
-  private readonly minConfidence: number;
+  private readonly getCatalog: KnowledgeCatalogProvider;
+  private readonly maxEntries: number;
+  private readonly groupByScope: boolean;
+  /** off=不显示状态；bucket=粗标；exact=含 scale 细节 */
+  private readonly showProgress: 'off' | 'bucket' | 'exact';
 
   constructor(options: {
-    store: KnowledgeStore;
-    limit?: number;
-    minConfidence?: number;
+    getCatalog: KnowledgeCatalogProvider;
+    maxEntries?: number;
+    groupByScope?: boolean;
+    showProgress?: 'off' | 'bucket' | 'exact';
     order?: number;
   }) {
     super('knowledge', { order: options.order });
-    this.store = options.store;
-    this.limit = options.limit ?? 5;
-    this.minConfidence = options.minConfidence ?? 0.3;
+    this.getCatalog = options.getCatalog;
+    this.maxEntries = options.maxEntries ?? 10;
+    this.groupByScope = options.groupByScope ?? false;
+    this.showProgress = options.showProgress ?? 'bucket';
   }
 
   async assemble(ctx: LayerAssembleContext): Promise<LayerContent | null> {
-    if (!ctx.query?.trim()) return null;
-    const entries = await this.store.retrieve(ctx.query, {
-      limit: this.limit,
-      minConfidence: this.minConfidence,
-      updateAccess: true,
-    });
-    if (entries.length === 0) return null;
+    // provider 返回可见全集；截断与 overflow 只在此处算一次
+    const all = await resolveCatalogList(this.getCatalog, ctx);
+    if (!all?.length) return null;
 
-    const body = entries
-      .map((e) => `- [${e.type}] ${e.content} (confidence: ${e.confidence})`)
-      .join('\n');
-    const text = `# 相关知识\n\n${body}`;
-    const { text: truncated, dropped } = this.truncateToBudget(text, ctx.tokenBudget);
+    const shown = all.slice(0, this.maxEntries);
+    const overflow = all.length - shown.length;
+
+    const formatItem = (item: KnowledgeCatalogItem): string => {
+      const metaParts: string[] = [item.kind];
+      if (this.showProgress !== 'off') {
+        if (item.status) metaParts.push(item.status);
+        if (item.scaleLabel && item.scaleLabel !== item.status) {
+          if (this.showProgress === 'exact' || item.scaleLabel !== 'ready') {
+            metaParts.push(item.scaleLabel);
+          }
+        }
+      }
+      if (item.scopeLevel) metaParts.push(item.scopeLevel);
+      const meta = metaParts.filter(Boolean).join(' · ');
+      const head = `- ${item.displayName}${meta ? ` · ${meta}` : ''}`;
+      const desc = item.description?.trim();
+      return desc ? `${head}\n  ${desc}` : head;
+    };
+
+    let body: string;
+    if (this.groupByScope) {
+      const groups = new Map<string, KnowledgeCatalogItem[]>();
+      for (const item of shown) {
+        const key = item.scopeLevel ?? 'other';
+        const list = groups.get(key) ?? [];
+        list.push(item);
+        groups.set(key, list);
+      }
+      const order = ['global', 'project', 'session', 'other'];
+      const sections = order
+        .filter((k) => groups.has(k))
+        .map((k) => `## ${k}\n${(groups.get(k) ?? []).map(formatItem).join('\n')}`);
+      if (overflow > 0) {
+        sections.push(`- …and ${overflow} more (use knowledge_search)`);
+      }
+      body = sections.join('\n\n');
+    } else {
+      const lines = shown.map(formatItem);
+      if (overflow > 0) {
+        lines.push(`- …and ${overflow} more (use knowledge_search)`);
+      }
+      body = lines.join('\n');
+    }
+
+    const text = `# Knowledge Sources\n\n${body}`;
+    const budget = Math.max(ctx.tokenBudget, 400);
+    const { text: truncated, dropped } = this.truncateToBudget(text, budget);
     return this.content(truncated, {
       dropped,
-      sources: entries.map((e) => e.id),
+      sources: shown.map((e) => e.id),
     });
   }
 }
@@ -352,7 +409,10 @@ export interface CreateDefaultLayersOptions {
   personaText?: () => Promise<string> | string;
   skillPromptText?: () => Promise<string> | string;
   runtimeText?: (ctx: LayerAssembleContext) => Promise<string> | string;
-  knowledgeStore?: KnowledgeStore;
+  knowledgeCatalog?: KnowledgeCatalogProvider;
+  knowledgeMaxEntries?: number;
+  knowledgeGroupByScope?: boolean;
+  knowledgeShowProgress?: 'off' | 'bucket' | 'exact';
   memoryStore?: MemoryStore;
   cognitionStore?: ConceptGraphStore;
   wisdomEntries?: () => Promise<Array<{ id: string; content: string; priority: number }>>;
@@ -376,8 +436,15 @@ export function createDefaultLayers(options: CreateDefaultLayersOptions): Contex
   if (options.skillPromptText) {
     layers.push(new SkillLayer({ getPromptText: options.skillPromptText }));
   }
-  if (options.knowledgeStore) {
-    layers.push(new KnowledgeLayer({ store: options.knowledgeStore }));
+  if (options.knowledgeCatalog) {
+    layers.push(
+      new KnowledgeLayer({
+        getCatalog: options.knowledgeCatalog,
+        maxEntries: options.knowledgeMaxEntries,
+        groupByScope: options.knowledgeGroupByScope,
+        showProgress: options.knowledgeShowProgress,
+      }),
+    );
   }
   if (options.cognitionStore) {
     layers.push(new CognitionLayer({ store: options.cognitionStore }));

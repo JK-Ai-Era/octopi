@@ -140,6 +140,18 @@
             "additionalProperties": {
               "type": "string"
             }
+          },
+          "knowledge": {
+            "type": "object",
+            "description": "Knowledge 召回姿态（覆盖全局 knowledge.recall）",
+            "properties": {
+              "recall": {
+                "type": "string",
+                "enum": ["off", "hint", "hybrid", "inject"],
+                "description": "off=仅 catalog；hint=只提示；hybrid=高分注入（缺省）；inject=积极注入"
+              }
+            },
+            "additionalProperties": false
           }
         }
       }
@@ -594,6 +606,116 @@
           "additionalProperties": false
         },
         "contextAssembler": { "$ref": "#/properties/contextAssembler" }
+      },
+      "additionalProperties": false
+    },
+    "knowledge": {
+      "type": "object",
+      "description": "Knowledge 全局缺省（agents[].knowledge.recall 覆盖）",
+      "properties": {
+        "recall": {
+          "type": "string",
+          "enum": ["off", "hint", "hybrid", "inject"],
+          "default": "hybrid",
+          "description": "内容召回模式；工程 agent 建议 hint"
+        },
+        "autoInject": {
+          "type": "object",
+          "properties": {
+            "minScore": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.78 },
+            "maxChunks": { "type": "integer", "minimum": 1, "maximum": 20, "default": 4 },
+            "budgetTokens": { "type": "integer", "minimum": 1, "default": 1200 },
+            "budgetRatio": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.08 },
+            "maxBudgetTokens": { "type": "integer", "minimum": 1, "default": 2400 },
+            "minCoverage": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.5 }
+          },
+          "additionalProperties": false
+        },
+        "hint": {
+          "type": "object",
+          "properties": {
+            "minScore": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.55 }
+          },
+          "additionalProperties": false
+        },
+        "keywordWeight": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "default": 0.45,
+          "description": "hybrid 融合中 keyword 权重"
+        },
+        "catalog": {
+          "type": "object",
+          "properties": {
+            "maxEntries": { "type": "integer", "minimum": 1, "maximum": 100, "default": 10 },
+            "showProgress": { "type": "string", "enum": ["off", "bucket", "exact"], "default": "bucket" },
+            "autoDescribe": { "type": "boolean", "default": true },
+            "groupByScope": { "type": "boolean", "default": false }
+          },
+          "additionalProperties": false
+        },
+        "query": {
+          "type": "object",
+          "properties": {
+            "includePriorUserTurns": { "type": "integer", "minimum": 0, "maximum": 5, "default": 1 },
+            "skipIfUserTokensBelow": { "type": "integer", "minimum": 0, "default": 8 }
+          },
+          "additionalProperties": false
+        },
+        "index": {
+          "type": "object",
+          "properties": {
+            "embedding": { "type": "boolean", "default": true },
+            "hybridKeyword": { "type": "boolean", "default": true },
+            "phaseA": {
+              "type": "object",
+              "properties": {
+                "concurrency": { "type": "integer", "minimum": 1, "default": 4 },
+                "debounceMs": { "type": "integer", "minimum": 0, "default": 2000 }
+              },
+              "additionalProperties": false
+            },
+            "phaseB": {
+              "type": "object",
+              "properties": {
+                "embedBatch": { "type": "integer", "minimum": 1, "default": 32 },
+                "concurrency": { "type": "integer", "minimum": 1, "default": 2 },
+                "ratePerMin": { "type": "number", "minimum": 0 }
+              },
+              "additionalProperties": false
+            },
+            "queue": {
+              "type": "object",
+              "properties": { "maxDepth": { "type": "integer", "minimum": 1, "default": 10000 } },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
+        "load": {
+          "type": "object",
+          "properties": {
+            "parseConcurrency": { "type": "integer", "minimum": 1 },
+            "diskWatermarkAlert": { "type": "boolean", "default": true }
+          },
+          "additionalProperties": false
+        },
+        "promotion": {
+          "type": "object",
+          "properties": {
+            "metrics": {
+              "type": "object",
+              "properties": {
+                "minSessions": { "type": "integer", "minimum": 1, "default": 3 },
+                "minHits": { "type": "integer", "minimum": 1, "default": 10 }
+              },
+              "additionalProperties": false
+            },
+            "stewardOnConverge": { "type": "boolean", "default": true }
+          },
+          "additionalProperties": false
+        }
       },
       "additionalProperties": false
     },

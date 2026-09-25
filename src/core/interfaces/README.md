@@ -24,7 +24,7 @@
 |------|------|
 | ContextEngine 及组件 | `harness/context/types.ts` |
 | Memory / Wisdom / Cognition | `harness/memory/types.ts` |
-| KnowledgeStore | `harness/context/knowledge/types.ts` |
+| KnowledgeCatalogProvider | `harness/context/knowledge/types.ts` |
 | Planner / Reflector | `harness/orchestration/cognitive-loop.ts` |
 | AsyncTask + Store | `harness/orchestration/async-task*.ts` |
 | Skill / AgentDefinition | harness plugin / types |
