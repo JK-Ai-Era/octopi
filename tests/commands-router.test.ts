@@ -1,7 +1,7 @@
 /**
  * CommandRouter / parse / 冲突策略 / skill 桥接
  */
-import { describe, test, expect, beforeEach } from 'vitest';
+import { describe, test, expect, beforeEach, afterEach } from 'vitest';
 import {
   CommandRouter,
   parseCommand,
@@ -254,6 +254,10 @@ describe('Skill frontmatter.command', () => {
   beforeEach(() => {
     rmSync(dir, { recursive: true, force: true });
     mkdirSync(dir, { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
   });
 
   test('解析 command 字段并桥接 expand', async () => {

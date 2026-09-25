@@ -17,3 +17,4 @@ web/src/**/*.js
 
 coverage/
 /draft/
+tests/fixtures/tmp-*/

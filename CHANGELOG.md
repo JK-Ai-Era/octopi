@@ -1,3 +1,10 @@
+## v0.51.10
+
+### chore(test): 清理 fixture 残留并防止再产生
+
+- `commands-router.test.ts` 补 `afterEach` 删除 `tmp-skill-cmd`（原先只在 beforeEach 清）
+- `.gitignore` 增加 `tests/fixtures/tmp-*/`
+
 ## v0.51.9
 
 ### docs(knowledge): 对外 Knowledge 层文档
