@@ -6,6 +6,15 @@
  * in-memory locks are globally valid.
  */
 
+/** Options for {@link SessionLease.acquire} */
+export interface SessionLeaseAcquireOptions {
+  /**
+   * Abort while waiting in the queue. Already-held leases are unaffected;
+   * the caller still owns release once acquire resolves.
+   */
+  signal?: AbortSignal;
+}
+
 /**
  * Session lease / lock port
  */
@@ -14,9 +23,11 @@ export interface SessionLease {
    * Acquire exclusive lease for a session.
    *
    * @param sessionId - lease key (E2)
+   * @param options - optional abort while queued
    * @returns release function (idempotent)
+   * @throws when aborted while waiting (never resolves with a release fn)
    */
-  acquire(sessionId: string): Promise<() => void>;
+  acquire(sessionId: string, options?: SessionLeaseAcquireOptions): Promise<() => void>;
 
   /**
    * Whether the session lease is currently held in this process.
@@ -28,13 +39,18 @@ export interface SessionLease {
 }
 
 interface QueueEntry {
-  resolve: () => void;
+  /** Hand the lease to this waiter; returns false if already settled */
+  settleGrant: () => boolean;
+  /** Fail this waiter; returns false if already settled */
+  settleAbort: (err: Error) => boolean;
 }
 
 /**
  * In-process session lock (v1 default).
  *
  * FIFO queue per sessionId; same process only (E7 single-process assumption).
+ * Waiting acquires honor AbortSignal so a queued run can be cancelled without
+ * waiting for the current holder to finish.
  */
 export class InProcessSessionLock implements SessionLease {
   private locked = new Map<string, boolean>();
@@ -44,15 +60,54 @@ export class InProcessSessionLock implements SessionLease {
    * Acquire session lease
    *
    * @param sessionId - lease key
+   * @param options - optional abort while queued
    * @returns release function
    */
-  async acquire(sessionId: string): Promise<() => void> {
+  async acquire(sessionId: string, options?: SessionLeaseAcquireOptions): Promise<() => void> {
+    const signal = options?.signal;
+    if (signal?.aborted) {
+      throw new Error('Session lease acquire aborted');
+    }
+
     if (this.locked.get(sessionId)) {
-      await new Promise<void>((resolve) => {
-        if (!this.queues.has(sessionId)) {
-          this.queues.set(sessionId, []);
+      await new Promise<void>((resolve, reject) => {
+        let queue = this.queues.get(sessionId);
+        if (!queue) {
+          queue = [];
+          this.queues.set(sessionId, queue);
         }
-        this.queues.get(sessionId)!.push({ resolve });
+
+        let settled = false;
+        const cleanup = () => {
+          signal?.removeEventListener('abort', onAbort);
+        };
+        const onAbort = () => {
+          entry.settleAbort(new Error('Session lease acquire aborted'));
+        };
+        const entry: QueueEntry = {
+          settleGrant: () => {
+            if (settled) return false;
+            settled = true;
+            cleanup();
+            resolve();
+            return true;
+          },
+          settleAbort: (err) => {
+            if (settled) return false;
+            settled = true;
+            cleanup();
+            const q = this.queues.get(sessionId);
+            if (q) {
+              const idx = q.indexOf(entry);
+              if (idx >= 0) q.splice(idx, 1);
+            }
+            reject(err);
+            return true;
+          },
+        };
+
+        signal?.addEventListener('abort', onAbort, { once: true });
+        queue.push(entry);
       });
     }
 
@@ -65,12 +120,14 @@ export class InProcessSessionLock implements SessionLease {
 
       const queue = this.queues.get(sessionId);
       if (queue && queue.length > 0) {
-        const next = queue.shift()!;
-        next.resolve();
-      } else {
-        this.locked.set(sessionId, false);
-        this.queues.delete(sessionId);
+        // Hand off to the next live waiter; skip any already-settled leftovers.
+        while (queue.length > 0) {
+          const next = queue.shift()!;
+          if (next.settleGrant()) return;
+        }
       }
+      this.locked.set(sessionId, false);
+      this.queues.delete(sessionId);
     };
   }
 

@@ -66,6 +66,42 @@ describe('InProcessSessionLock (E2)', () => {
     expect(lock.isHeld('sB')).toBe(false);
   });
 
+  it('queued acquire can be aborted without waiting for holder', async () => {
+    const lock = new InProcessSessionLock();
+    const hold = await lock.acquire('s-abort');
+    const controller = new AbortController();
+
+    const queued = lock.acquire('s-abort', { signal: controller.signal });
+    const aborted = queued.then(
+      () => 'granted',
+      (err: Error) => err.message,
+    );
+    controller.abort();
+    expect(await aborted).toBe('Session lease acquire aborted');
+
+    // 释放后不应把已中止的 waiter 拉起；锁应真正空闲
+    hold();
+    expect(lock.isHeld('s-abort')).toBe(false);
+    const after = await lock.acquire('s-abort');
+    expect(lock.isHeld('s-abort')).toBe(true);
+    after();
+  });
+
+  it('abort after grant handoff is ignored (holder still owns release)', async () => {
+    const lock = new InProcessSessionLock();
+    const hold = await lock.acquire('s-hand');
+    const controller = new AbortController();
+    const queued = lock.acquire('s-hand', { signal: controller.signal });
+
+    hold();
+    const release = await queued;
+    // 已拿到锁后再 abort 不影响持有权
+    controller.abort();
+    expect(lock.isHeld('s-hand')).toBe(true);
+    release();
+    expect(lock.isHeld('s-hand')).toBe(false);
+  });
+
   it('runner accepts injected SessionLease', async () => {
     const custom = new InProcessSessionLock();
     const agentContext = { systemPrompt: '', messages: [] as Message[], tools: [] as unknown[] };
@@ -334,4 +370,62 @@ describe('shared SessionLease + ACL on handle (review fixes)', () => {
     expect(auth.rights?.writeMemory).toBe(false);
     expect(auth.rights?.readScope).toBe('none');
   });
+});
+
+describe('session status recovery after crash / error residue', () => {
+  function makeOkAgent(): Agent {
+    return {
+      context: { systemPrompt: '', messages: [] as Message[], tools: [] },
+      contextSessionId: 'default',
+      tools: [],
+      model: { name: 'mock', defaultModel: 'm' },
+      config: {},
+      harness: {},
+      setSystemPrompt: () => {},
+      setContextSessionId: () => {},
+      setSessionCompactState: (..._a: unknown[]) => {},
+      getSessionCompactState: (..._a: unknown[]) => undefined,
+      setOnAfterTurn: () => {},
+      notifyAfterTurn: async () => {},
+      run: async function* (
+        _s?: AbortSignal,
+        _h?: unknown,
+        opts?: { context?: { messages: Message[] } },
+      ) {
+        if (opts?.context) {
+          opts.context.messages.push({
+            role: 'assistant',
+            content: 'ok',
+            timestamp: Date.now(),
+          });
+        }
+        yield { type: 'turn_end', timestamp: Date.now(), usage: undefined } as never;
+        yield { type: 'agent_end', reason: 'done', timestamp: Date.now() } as never;
+      },
+    } as unknown as Agent;
+  }
+
+  it.each(['processing', 'error'] as const)(
+    'recovers from stuck meta.status=%s and accepts the next message',
+    async (stuck) => {
+      const store = new InMemorySessionStore();
+      const runner = new SessionAwareRunner(makeOkAgent(), {} as never, store);
+      const s = emptySession('s-stuck');
+      s.meta.status = stuck;
+      await store.save('s-stuck', s);
+
+      const events: Array<{ type: string }> = [];
+      for await (const ev of runner.handle(
+        's-stuck',
+        { role: 'user', content: 'hi', timestamp: Date.now() },
+        { systemPrompt: '', agentId: 'a1', sessionId: 's-stuck' },
+      )) {
+        events.push(ev as never);
+      }
+
+      expect(events.some((e) => e.type === 'engine.error')).toBe(false);
+      const loaded = await store.load('s-stuck');
+      expect(loaded?.meta.status).toBe('idle');
+    },
+  );
 });

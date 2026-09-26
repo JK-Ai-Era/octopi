@@ -738,8 +738,15 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
 
     setActionError(null);
     setRunStatus('waiting');
-    await store.sendMessage(text);
-    setInput('');
+    try {
+      await store.sendMessage(text);
+      setInput('');
+    } catch (error) {
+      // 发送失败：store 已退出 waiting；保留输入便于重试
+      setActionError(error instanceof Error ? error.message : String(error));
+      const st = store.getState().chat.runStatus;
+      setRunStatus(st === 'waiting' || st === 'sending' ? 'error' : st);
+    }
   };
 
   // ── 斜杠命令补全 ──
@@ -812,6 +819,7 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
   const abort = () => {
     storeRef.current?.abort();
     setRunStatus('aborted');
+    setActionError(null);
   };
 
   const runManualCompact = async () => {

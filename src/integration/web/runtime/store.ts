@@ -208,6 +208,8 @@ export class OctopiRuntimeStore extends EventTarget {
   private sessionModel: SessionModelView | null = null;
   /** 本轮 run 是否仍活跃；用于忽略终态之后迟到的 state=running */
   private engineActive = false;
+  /** 发送看门狗：半开连接/丢包时避免 UI 永久卡在 waiting */
+  private sendWatchdog: ReturnType<typeof setTimeout> | null = null;
   /** Observer REST 写回代际：防会话切换串写 + entry/final 乱序覆盖 */
   private observerWriteSeq = {
     observatory: 0,
@@ -807,13 +809,50 @@ export class OctopiRuntimeStore extends EventTarget {
     // 消息级模型：显式传入 > 会话选择 > 不覆盖（agent 默认）
     const runModel = options?.model
       ?? (typeof this.sessionModel?.modelId === 'string' ? this.sessionModel.modelId : undefined);
-    this.client.sendChat(this.chat.sessionId, this.chat.agentId, content, runModel ? { model: runModel } : undefined);
+    try {
+      this.client.sendChat(this.chat.sessionId, this.chat.agentId, content, runModel ? { model: runModel } : undefined);
+    } catch (err) {
+      // 发送失败（未连接等）：立刻退出 waiting，避免 UI 卡死无法再发
+      this.engineActive = false;
+      this.clearSendWatchdog();
+      this.setRunStatus('error');
+      throw err instanceof Error ? err : new Error(String(err));
+    }
     this.setRunStatus('waiting');
+    this.armSendWatchdog();
   }
 
   abort(): void {
     if (!this.chat.sessionId) return;
-    this.client.sendAbort(this.chat.sessionId);
+    try {
+      this.client.sendAbort(this.chat.sessionId);
+    } catch {
+      // 未连接时本地也要退出运行态，否则 UI 会一直卡 waiting
+    }
+    this.clearSendWatchdog();
+    this.engineActive = false;
+    this.setRunStatus('aborted');
+  }
+
+  /** 发送后若长时间无 Gateway 确认/事件，判定连接半开或消息丢失 */
+  private armSendWatchdog(timeoutMs = 10_000): void {
+    this.clearSendWatchdog();
+    const sessionId = this.chat.sessionId;
+    this.sendWatchdog = setTimeout(() => {
+      this.sendWatchdog = null;
+      if (!sessionId || this.chat.sessionId !== sessionId) return;
+      if (this.chat.runStatus !== 'waiting' && this.chat.runStatus !== 'sending') return;
+      this.engineActive = false;
+      this.setRunStatus('error');
+      this.emitRuntimeError('发送超时：未收到 Gateway 响应。连接可能已断开，请重试。');
+    }, timeoutMs);
+  }
+
+  private clearSendWatchdog(): void {
+    if (this.sendWatchdog) {
+      clearTimeout(this.sendWatchdog);
+      this.sendWatchdog = null;
+    }
   }
 
   // ──────────────────────────────────
@@ -823,6 +862,14 @@ export class OctopiRuntimeStore extends EventTarget {
   private applyConnectionState(state: ConnectionState): void {
     this.connectionState = state;
     this.dispatch('connection', new ConnectionEvent('connection', { state, agents: this.agents }));
+    // 重连后必须重新订阅当前会话，否则服务端事件无法送达（长离开后 WS 重建）
+    if (state === 'connected' && this.chat.sessionId) {
+      try {
+        this.client.sendSubscribe(this.chat.sessionId, this.chat.agentId);
+      } catch {
+        // 订阅失败由后续 send / 重连路径兜底
+      }
+    }
   }
 
   private applyWelcome(agents: AgentSummary[]): void {
@@ -833,6 +880,7 @@ export class OctopiRuntimeStore extends EventTarget {
   private applyAccepted(sessionId?: string): void {
     // 仅当前会话的 accepted 才更新 UI 状态
     if (sessionId && this.chat.sessionId && sessionId !== this.chat.sessionId) return;
+    this.clearSendWatchdog();
     this.engineActive = true;
     this.setRunStatus('waiting');
   }
@@ -908,6 +956,8 @@ export class OctopiRuntimeStore extends EventTarget {
     }
 
     // ── runStatus 状态机（与后台缓存共用 nextRunStatus） ──
+    // 任一引擎事件到达即确认链路活着，取消发送看门狗
+    this.clearSendWatchdog();
     const prevStatus = this.chat.runStatus;
     const nextStatus = OctopiRuntimeStore.nextRunStatus(event, prevStatus);
     if (nextStatus !== prevStatus) {

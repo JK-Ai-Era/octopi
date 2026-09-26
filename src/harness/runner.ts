@@ -560,8 +560,17 @@ export class SessionAwareRunner {
       }
     }
 
-    // 2. 获取锁（等锁期间可能被 abort）
-    const release = await this.acquireLock(sessionId);
+    // 2. 获取锁（等锁期间响应 abort；被中止则不进入 Run）
+    let release: () => void;
+    try {
+      release = await this.acquireLock(sessionId, signal);
+    } catch (err) {
+      if (signal?.aborted) {
+        gateRelease?.();
+        return;
+      }
+      throw err;
+    }
 
     // 拿锁后若已中止：不 load / 不 push，避免幽灵用户消息（arch/agent-runtime.md 审查项）
     if (signal?.aborted) {
@@ -635,8 +644,16 @@ export class SessionAwareRunner {
         },
       });
 
-      // 状态机：idle → processing
+      // 状态机：→ processing
+      // 持锁后无并发 handle；processing/error 残留来自崩溃或异常退出，先恢复再进入
       const sm = this.getOrCreateStateMachine(sessionId, session.meta.status);
+      if (!sm.canTransition('processing')) {
+        if (sm.canTransition('idle')) {
+          sm.transition('idle');
+        } else {
+          sm.force('idle');
+        }
+      }
       sm.transition('processing');
       session.meta.status = sm.state;
 
@@ -1317,8 +1334,8 @@ export class SessionAwareRunner {
    * 请求按 FIFO 顺序获取锁，无饥饿问题。
    * 分布式：注入 DistributedSessionLease；勿假设 in-process 锁全局有效（E7）。
    */
-  private async acquireLock(sessionId: string): Promise<() => void> {
-    return this.sessionLease.acquire(sessionId);
+  private async acquireLock(sessionId: string, signal?: AbortSignal): Promise<() => void> {
+    return this.sessionLease.acquire(sessionId, signal ? { signal } : undefined);
   }
 
   /**

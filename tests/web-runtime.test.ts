@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { OctopiRuntimeStore } from '../src/integration/web/runtime/store.js';
 
 function createMockClient() {
@@ -30,6 +30,9 @@ function createMockClient() {
     async listApprovals() {
       return [];
     },
+    async listQuestions() {
+      return [];
+    },
     sendSubscribe(sessionId: string, agentId?: string) {
       state.subscribeCalls.push({ sessionId, agentId });
     },
@@ -52,6 +55,7 @@ function createMockClient() {
     on: (events: Record<string, any>) => void;
     connect: () => void;
     listApprovals: () => Promise<any[]>;
+    listQuestions: (sessionId: string) => Promise<any[]>;
     sendSubscribe: (sessionId: string, agentId?: string) => void;
     emitAccepted: (sessionId: string | undefined, messageId: string | undefined) => void;
     emitEvent: (sessionId: string | undefined, event: Record<string, unknown>) => void;
@@ -309,6 +313,7 @@ describe('ViewMode transitions', () => {
         state.welcomeFn?.([]);
       },
       async listApprovals() { return []; },
+      async listQuestions() { return []; },
       sendSubscribe(sessionId: string, agentId?: string) {
         state.subscribeCalls.push({ sessionId, agentId });
       },
@@ -480,6 +485,7 @@ describe('Hybrid mode paths', () => {
         state.eventFn = events.onEvent;
       },
       async listApprovals() { return []; },
+      async listQuestions() { return []; },
       async listSessions() { return []; },
       sendSubscribe() {},
       sendChat() {},
@@ -631,6 +637,7 @@ describe('Session switch preserves tool execution state', () => {
         state.stateFn = events.onState;
       },
       async listApprovals() { return []; },
+      async listQuestions() { return []; },
       async listSessions() { return []; },
       sendSubscribe() {},
       sendChat() {},
@@ -843,5 +850,129 @@ describe('Session switch preserves tool execution state', () => {
     // 切回：必须恢复 waiting，而不是 idle
     await store.openSession('s1');
     expect(store.getState().chat.runStatus).toBe('waiting');
+  });
+});
+
+describe('send failure / abort / reconnect recovery', () => {
+  it('sendMessage throw leaves error status (not stuck waiting) and preserves input path', async () => {
+    const client = createMockClient();
+    const store = new OctopiRuntimeStore(client);
+    client.getSession = async () => ({
+      meta: { id: 's1', agentId: 'a1' },
+      messageCount: 0,
+      turnCount: 0,
+    });
+    client.getSessionMessages = async () => ({ messages: [] });
+    client.listApprovals = async () => [];
+    (client as any).sendChat = () => {
+      throw new Error('WebSocket is not connected');
+    };
+
+    await store.openSession('s1');
+    await expect(store.sendMessage('hello')).rejects.toThrow('WebSocket is not connected');
+    expect(store.getState().chat.runStatus).toBe('error');
+  });
+
+  it('abort clears active run locally even when sendAbort fails', async () => {
+    const client = createMockClient();
+    const store = new OctopiRuntimeStore(client);
+    client.getSession = async () => ({
+      meta: { id: 's1', agentId: 'a1' },
+      messageCount: 0,
+      turnCount: 0,
+    });
+    client.getSessionMessages = async () => ({ messages: [] });
+    client.listApprovals = async () => [];
+    (client as any).sendChat = () => {};
+    (client as any).sendAbort = () => {
+      throw new Error('WebSocket is not connected');
+    };
+
+    await store.openSession('s1');
+    await store.sendMessage('hello');
+    expect(store.getState().chat.runStatus).toBe('waiting');
+
+    store.abort();
+    expect(store.getState().chat.runStatus).toBe('aborted');
+
+    // 终态后迟到的 running 不得把 aborted 打回 streaming
+    client.emitState('s1', 'running');
+    expect(store.getState().chat.runStatus).toBe('aborted');
+  });
+
+  it('resubscribes current session when connection becomes connected again', async () => {
+    const client = createMockClient();
+    const store = new OctopiRuntimeStore(client);
+    client.getSession = async () => ({
+      meta: { id: 's1', agentId: 'a1' },
+      messageCount: 0,
+      turnCount: 0,
+    });
+    client.getSessionMessages = async () => ({ messages: [] });
+    client.listApprovals = async () => [];
+
+    await store.openSession('s1');
+    const before = client.state.subscribeCalls.length;
+    expect(before).toBeGreaterThan(0);
+
+    // 模拟断线重连：connection → connected
+    (client as any).state.connectionFn?.('reconnecting');
+    (client as any).state.connectionFn?.('connected');
+
+    const after = client.state.subscribeCalls;
+    expect(after.length).toBeGreaterThan(before);
+    expect(after[after.length - 1]).toEqual({ sessionId: 's1', agentId: 'a1' });
+  });
+
+  it('send watchdog flips waiting to error when gateway never acks', async () => {
+    vi.useFakeTimers();
+    try {
+      const client = createMockClient();
+      const store = new OctopiRuntimeStore(client);
+      client.getSession = async () => ({
+        meta: { id: 's1', agentId: 'a1' },
+        messageCount: 0,
+        turnCount: 0,
+      });
+      client.getSessionMessages = async () => ({ messages: [] });
+      client.listApprovals = async () => [];
+      (client as any).sendChat = () => {};
+
+      await store.openSession('s1');
+      await store.sendMessage('hello');
+      expect(store.getState().chat.runStatus).toBe('waiting');
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(store.getState().chat.runStatus).toBe('error');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('accepted cancels send watchdog', async () => {
+    vi.useFakeTimers();
+    try {
+      const client = createMockClient();
+      const store = new OctopiRuntimeStore(client);
+      client.getSession = async () => ({
+        meta: { id: 's1', agentId: 'a1' },
+        messageCount: 0,
+        turnCount: 0,
+      });
+      client.getSessionMessages = async () => ({ messages: [] });
+      client.listApprovals = async () => [];
+      (client as any).sendChat = () => {};
+
+      await store.openSession('s1');
+      await store.sendMessage('hello');
+      client.emitAccepted('s1', 'm1');
+      expect(store.getState().chat.runStatus).toBe('waiting');
+
+      await vi.advanceTimersByTimeAsync(15_000);
+      // accepted 已确认链路，不应被看门狗打成 error
+      expect(store.getState().chat.runStatus).toBe('waiting');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

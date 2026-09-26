@@ -1,3 +1,13 @@
+## v0.52.2
+
+### fix(web/runner): 长离开后发送卡 waiting / 「Agent 正在运行」无法恢复
+
+- **Web 发送**：`sendMessage` 失败立刻退出 waiting→error 并保留输入；`abort` 同步清 `engineActive` + 本地 aborted（`sendAbort` 失败也不卡死）
+- **发送看门狗**：发出后 10s 无 `accepted`/引擎事件 → error（半开连接/丢包不再永久 waiting）；`accepted` 取消看门狗
+- **WS 重连**：`connected` 后自动 `sendSubscribe` 当前会话，恢复事件订阅
+- **Session 状态恢复**：持锁后若 `meta.status` 残留 `processing`/`error`（崩溃/异常退出），先回 `idle` 再进下一轮，避免 `Illegal state transition` 拒收新消息
+- **Session 锁**：`InProcessSessionLock.acquire` 支持 `AbortSignal`；排队中的 Run 可被中止，不再空等持锁者
+
 ## v0.52.1
 
 ### docs(constitution): 任务章补 step 拆分判据 — 多单元扫掠禁止吞进单条 goal
