@@ -46,6 +46,7 @@ describe('constitution preamble assembly', () => {
       messages: [{ role: 'user', content: 'hi', timestamp: Date.now() } as any],
       persona: 'only-persona',
     });
-    expect(out.systemPrompt).toBe('only-persona');
+    // 无宪法 preamble；层正文仍带层名标签
+    expect(out.systemPrompt).toBe('<layer name="Persona">\nonly-persona\n</layer>');
   });
 });

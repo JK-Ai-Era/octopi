@@ -567,6 +567,30 @@ export class WebApiRouter {
         return this.json(res, 200, { ok: true, data: resolved });
       }
 
+      if (relativePath === '/questions' && method === 'GET') {
+        const sessionId = url.searchParams.get('sessionId') ?? undefined;
+        return this.json(res, 200, {
+          ok: true,
+          data: this.gateway.listPendingQuestions(sessionId),
+        });
+      }
+
+      const questionMatch = relativePath.match(/^\/questions\/([^/]+)$/);
+      if (questionMatch && method === 'POST') {
+        const body = await this.readBody(req);
+        const answer = typeof body?.answer === 'string' ? body.answer : undefined;
+        if (answer === undefined) {
+          return this.json(res, 400, { ok: false, error: 'answer (string) is required' });
+        }
+
+        const resolved = this.gateway.resolvePendingQuestion(questionMatch[1], { answer });
+        if (!resolved) {
+          return this.json(res, 404, { ok: false, error: 'Question not found' });
+        }
+
+        return this.json(res, 200, { ok: true, data: resolved });
+      }
+
       if (relativePath === '/memory/stats' && method === 'GET') {
         const stats = await this.gateway.getMemoryStats();
         if (!stats) {

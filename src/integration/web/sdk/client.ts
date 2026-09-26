@@ -1,13 +1,13 @@
 /**
  * Octopi Web Protocol SDK
  *
- * 第一版协议层，面向浏览器前端�?
- * 只负责连接、请求、事件分发，不承�?UI 观点�?
+ * 第一版协议层，面向浏览器前端�?
+ * 只负责连接、请求、事件分发，不承�?UI 观点�?
  *
- * 设计目标�?
- * - REST �?/api/v1
- * - WS �?/ws
- * - 连接状态机独立�?UI
+ * 设计目标�?
+ * - REST �?/api/v1
+ * - WS �?/ws
+ * - 连接状态机独立�?UI
  * - 事件映射交给上层 Runtime Store
  */
 
@@ -18,8 +18,8 @@
 export type ConnectionState = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'disconnected' | 'failed';
 
 /**
- * 对话斜杠命令目录项（�?`CommandCatalogItem` 的传输投影对齐）�?
- * 权威类型：`harness/plugin-ecosystem/commands/types.ts`�?
+ * 对话斜杠命令目录项（�?`CommandCatalogItem` 的传输投影对齐）�?
+ * 权威类型：`harness/plugin-ecosystem/commands/types.ts`�?
  */
 export interface CommandCatalogItemDto {
   name: string;
@@ -54,7 +54,7 @@ export interface ModelCatalogItem {
   id: string;
   provider: string;
   model: string;
-  /** 未配置时�?null */
+  /** 未配置时�?null */
   contextWindow: number | null;
   maxOutputTokens?: number;
   known: boolean;
@@ -108,7 +108,7 @@ export interface SessionView {
   taskCount?: number;
 }
 
-/** 会话任务（UI 只读�?*/
+/** 会话任务（UI 只读�?*/
 export interface SessionTaskView {
   id: string;
   parentId?: string;
@@ -192,6 +192,20 @@ export interface PendingApproval {
   decisionReason?: string;
 }
 
+/** ask_user 待答问题 */
+export interface PendingQuestion {
+  id: string;
+  sessionId: string;
+  agentId: string;
+  question: string;
+  options?: string[];
+  status: 'pending' | 'answered' | 'cancelled';
+  createdAt: number;
+  updatedAt?: number;
+  decidedAt?: number;
+  answer?: string;
+}
+
 export interface MemoryStats {
   configured: boolean;
   totalEntries?: number;
@@ -200,7 +214,7 @@ export interface MemoryStats {
   avgImportance?: number;
 }
 
-/** System 装配 UI 快照（产品八层之 1�?；与 harness/context/layer-snapshot 对齐�?*/
+/** System 装配 UI 快照（产品八层之 1�?；与 harness/context/layer-snapshot 对齐�?*/
 export interface LayerRuntimeViewDto {
   id: 'wisdom' | 'persona' | 'skill' | 'knowledge' | 'cognition' | 'memory' | 'runtime';
   status: 'idle' | 'included' | 'empty' | 'dropped' | 'error' | 'unregistered';
@@ -252,7 +266,7 @@ export interface ContextLayerHealthDto {
   };
 }
 
-/** �?N 轮装配摘要（timeline 用） */
+/** �?N 轮装配摘要（timeline 用） */
 export interface ContextLayerTurnSummaryDto {
   assembledAt?: number;
   usedTokens: number;
@@ -315,9 +329,9 @@ export interface RunObservatorySnapshotDto {
   llmSummary?: RunMessagesSummaryDto;
   llmEstimatedTokens?: number;
   /**
-   * Guard / RunMetrics 投影�?
-   * 权威类型�?Observer `RunGuardMetricsView`（含 wrap-up / usageLedger）；
-   * 传输�?WS 增量合并可能只有子集，故�?Partial 防漂移�?
+   * Guard / RunMetrics 投影�?
+   * 权威类型�?Observer `RunGuardMetricsView`（含 wrap-up / usageLedger）；
+   * 传输�?WS 增量合并可能只有子集，故�?Partial 防漂移�?
    */
   guardMetrics?: Partial<import('../../../harness/observer/types.js').RunGuardMetricsView>;
   messagesDiff?: {
@@ -534,7 +548,7 @@ export class OctopiClient {
   }
 
   /**
-   * 模型目录（provider 全量模型 + agent 默认 + levels�?
+   * 模型目录（provider 全量模型 + agent 默认 + levels�?
    */
   async getModels(): Promise<ModelCatalog> {
     const data = await this.getJson('/models');
@@ -547,7 +561,7 @@ export class OctopiClient {
     return (data?.data as CommandCatalogItemDto[] | undefined) ?? [];
   }
 
-  /** 系统问题�?*/
+  /** 系统问题�?*/
   async listIssues(status?: 'open' | 'resolved' | 'dismissed'): Promise<Array<{
     id: string;
     domain: string;
@@ -584,7 +598,7 @@ export class OctopiClient {
   }
 
   /**
-   * 设置 session 模型（null = 恢复 agent 默认�?
+   * 设置 session 模型（null = 恢复 agent 默认�?
    */
   async setSessionModel(
     sessionId: string,
@@ -599,7 +613,7 @@ export class OctopiClient {
   }
 
   /**
-   * 手动结构压缩（不依赖 contextWindow�?
+   * 手动结构压缩（不依赖 contextWindow�?
    */
   async compactSession(sessionId: string, agentId?: string): Promise<{
     ok: boolean;
@@ -624,7 +638,7 @@ export class OctopiClient {
     const query = agentId ? `?agentId=${encodeURIComponent(agentId)}` : '';
     const data = await this.getJson(`/sessions${query}`);
     const sessions = (data?.data as SessionSummary[]) ?? [];
-    // 兜底：确�?lastInteractionAt 始终为有效时间戳
+    // 兜底：确�?lastInteractionAt 始终为有效时间戳
     return sessions.map((s) => ({
       ...s,
       lastInteractionAt: s.lastInteractionAt ?? s.updatedAt ?? s.createdAt ?? Date.now(),
@@ -635,7 +649,7 @@ export class OctopiClient {
     agentId: string;
     sessionId?: string;
     metadata?: Record<string, unknown>;
-    /** 会话级模型（`provider/model` 或裸名）；写�?session.metadata.model */
+    /** 会话级模型（`provider/model` 或裸名）；写�?session.metadata.model */
     model?: string;
   }): Promise<SessionSummary> {
     const data = await this.postJson('/sessions', options);
@@ -674,7 +688,7 @@ export class OctopiClient {
   }
 
   /**
-   * 会话最近一�?System 装配快照（产�?L1–L7�?
+   * 会话最近一�?System 装配快照（产�?L1–L7�?
    *
    * @param sessionId - 会话 id
    * @returns 快照；无装配记录时为 null
@@ -685,7 +699,7 @@ export class OctopiClient {
   }
 
   /**
-   * 会话最近一�?Run 观测投影（Observer 调试�?/debug/run�?
+   * 会话最近一�?Run 观测投影（Observer 调试�?/debug/run�?
    */
   async getSessionRunObservatory(
     sessionId: string,
@@ -700,7 +714,7 @@ export class OctopiClient {
   }
 
   /**
-   * Run messages 快照（摘�?+ 配置允许时全文；调试�?/debug/run�?
+   * Run messages 快照（摘�?+ 配置允许时全文；调试�?/debug/run�?
    */
   async getSessionRunMessages(
     sessionId: string,
@@ -718,7 +732,7 @@ export class OctopiClient {
   }
 
   /**
-   * Agent 数据面健康（产品 L1–L7 store 计数�?
+   * Agent 数据面健康（产品 L1–L7 store 计数�?
    *
    * @param agentId - Agent id
    * @returns 健康快照
@@ -736,6 +750,17 @@ export class OctopiClient {
   async resolveApproval(approvalId: string, input: { action: 'approve' | 'reject'; reason?: string }): Promise<PendingApproval> {
     const data = await this.postJson(`/approvals/${encodeURIComponent(approvalId)}`, input);
     return data?.data as PendingApproval;
+  }
+
+  async listQuestions(sessionId?: string): Promise<PendingQuestion[]> {
+    const q = sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : '';
+    const data = await this.getJson(`/questions${q}`);
+    return (data?.data as PendingQuestion[]) ?? [];
+  }
+
+  async answerQuestion(questionId: string, answer: string): Promise<PendingQuestion> {
+    const data = await this.postJson(`/questions/${encodeURIComponent(questionId)}`, { answer });
+    return data?.data as PendingQuestion;
   }
 
   async getMemoryStats(): Promise<MemoryStats> {

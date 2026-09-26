@@ -97,6 +97,26 @@ export interface PendingApprovalView {
   decisionReason?: string;
 }
 
+/** ask_user 待答问题视图 */
+export interface PendingQuestionView {
+  id: string;
+  sessionId: string;
+  agentId: string;
+  question: string;
+  options?: string[];
+  status: 'pending' | 'answered' | 'cancelled';
+  createdAt: number;
+  updatedAt?: number;
+  decidedAt?: number;
+  answer?: string;
+}
+
+/**
+ * cancel 时回给等待方的哨兵值。
+ * 工具侧识别后抛 abort 错误，不得把空串当用户回答。
+ */
+export const ASK_USER_CANCELLED = '__ask_user_cancelled__';
+
 /** WebUI 模型目录条目（与 harness/model ModelCatalogEntry 对齐） */
 export interface ModelCatalogItem {
   id: string;
@@ -188,6 +208,9 @@ export class Gateway {
   private _defaultStorePromise?: Promise<SessionStore<SessionData>>;
   /** Web Runtime pending approvals */
   private pendingApprovals = new Map<string, PendingApprovalView>();
+  /** ask_user 待答问题（UI 答完 resolve 等待中的工具） */
+  private pendingQuestions = new Map<string, PendingQuestionView>();
+  private questionResolvers = new Map<string, (answer: string) => void>();
   /** 会话最近一次七层装配快照（含 content，仅 REST）；FIFO 防泄漏 */
   private lastContextLayers = new Map<string, ContextLayersSnapshot>();
   private static readonly MAX_CONTEXT_LAYERS_SESSIONS = 256;
@@ -479,6 +502,7 @@ export class Gateway {
    * 归属：Runtime 持有 AbortController；Gateway 转调（arch/agent-runtime.md §8.1）
    */
   abortSession(sessionId: string): void {
+    this.cancelPendingQuestions(sessionId);
     for (const agentId of this.agents.keys()) {
       this.runtime.abort(agentId, sessionId);
     }
@@ -1844,6 +1868,119 @@ export class Gateway {
     approval.updatedAt = now;
 
     return approval;
+  }
+
+  // ================================================================
+  // ask_user：pending questions（工具等待用户回答）
+  // ================================================================
+
+  listPendingQuestions(sessionId?: string): PendingQuestionView[] {
+    const all = Array.from(this.pendingQuestions.values());
+    return sessionId ? all.filter((q) => q.sessionId === sessionId) : all;
+  }
+
+  /**
+   * 把 ask_user 挂成 pending question，并等待 UI 作答。
+   * 供 daemon / builder 注入 AskUserCallback 使用。
+   */
+  askUser(input: {
+    sessionId: string;
+    agentId: string;
+    question: string;
+    options?: string[];
+  }): Promise<string> {
+    const id = randomUUID().slice(0, 8);
+    const view: PendingQuestionView = {
+      id,
+      sessionId: input.sessionId,
+      agentId: input.agentId,
+      question: input.question,
+      options: input.options,
+      status: 'pending',
+      createdAt: Date.now(),
+    };
+    // 先注册 waiter 再广播：emitEvent 同步跑 listener，
+    // 若 listener 在事件里立即 resolvePendingQuestion，resolver 必须已在位
+    return new Promise<string>((resolve) => {
+      this.pendingQuestions.set(id, view);
+      this.questionResolvers.set(id, resolve);
+      this.evictOldQuestions();
+      this.broadcastQuestionEvent(view);
+    });
+  }
+
+  /** 用户作答：标记 answered 并唤醒等待中的 ask_user */
+  resolvePendingQuestion(questionId: string, input: { answer: string }): PendingQuestionView | null {
+    const q = this.pendingQuestions.get(questionId);
+    if (!q || q.status !== 'pending') return null;
+
+    const now = Date.now();
+    q.status = 'answered';
+    q.answer = input.answer;
+    q.decidedAt = now;
+    q.updatedAt = now;
+
+    const resolve = this.questionResolvers.get(questionId);
+    this.questionResolvers.delete(questionId);
+    resolve?.(input.answer);
+    this.broadcastQuestionEvent(q);
+    return q;
+  }
+
+  /**
+   * 会话中止时取消未答问题，避免工具悬挂。
+   * status 记 cancelled（非用户作答）；工具侧应视为 abort/error，不得当用户回答。
+   */
+  cancelPendingQuestions(sessionId: string): void {
+    for (const [id, q] of this.pendingQuestions) {
+      if (q.sessionId !== sessionId || q.status !== 'pending') continue;
+      const now = Date.now();
+      q.status = 'cancelled';
+      q.answer = '';
+      q.decidedAt = now;
+      q.updatedAt = now;
+      const resolve = this.questionResolvers.get(id);
+      this.questionResolvers.delete(id);
+      // 哨兵唤醒：工具侧识别为取消，不当作用户回答
+      resolve?.(ASK_USER_CANCELLED);
+      this.broadcastQuestionEvent(q);
+    }
+  }
+
+  /** 已终态问题保留少量供 UI 对账，防长驻 daemon 无限增长 */
+  private evictOldQuestions(): void {
+    const MAX_QUESTIONS = 256;
+    if (this.pendingQuestions.size <= MAX_QUESTIONS) return;
+    const terminal = [...this.pendingQuestions.values()]
+      .filter((q) => q.status !== 'pending')
+      .sort((a, b) => (a.updatedAt ?? a.createdAt) - (b.updatedAt ?? b.createdAt));
+    for (const q of terminal) {
+      if (this.pendingQuestions.size <= MAX_QUESTIONS) break;
+      this.pendingQuestions.delete(q.id);
+    }
+    // 极端情况：全是 pending 也硬删最旧（不碰 resolver，避免误唤醒）
+    if (this.pendingQuestions.size > MAX_QUESTIONS) {
+      const oldest = [...this.pendingQuestions.values()]
+        .filter((q) => q.status === 'pending')
+        .sort((a, b) => a.createdAt - b.createdAt);
+      for (const q of oldest) {
+        if (this.pendingQuestions.size <= MAX_QUESTIONS) break;
+        this.pendingQuestions.delete(q.id);
+      }
+    }
+  }
+
+  private broadcastQuestionEvent(question: PendingQuestionView): void {
+    const event = {
+      type: question.status === 'pending' ? 'ask_user.pending' : 'ask_user.resolved',
+      sessionId: question.sessionId,
+      timestamp: Date.now(),
+      data: { question },
+    } as unknown as AgentEvent;
+    this.emitEvent(event);
+    for (const adapter of this.streamingAdapters) {
+      adapter.broadcastEvent(question.sessionId, event);
+    }
   }
 
   // ================================================================

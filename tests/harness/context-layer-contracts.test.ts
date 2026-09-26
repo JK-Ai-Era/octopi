@@ -78,7 +78,7 @@ describe('DefaultContextAssembler', () => {
     expect(result.manifest.layers).toHaveLength(0);
   });
 
-  it('按 order 排序拼接，layer 间用分隔符', async () => {
+  it('按 order 排序拼接，layer 间用分隔符，且每段带层名标签', async () => {
     const assembler = new DefaultContextAssembler();
     const result = await assembler.assemble({
       sessionId: 's1',
@@ -98,6 +98,11 @@ describe('DefaultContextAssembler', () => {
     expect(idxS).toBeGreaterThan(idxP);
     expect(idxM).toBeGreaterThan(idxS);
     expect(result.systemPrompt).toContain('---');
+    // 八层标签：与宪法层名对齐
+    expect(result.systemPrompt).toContain('<layer name="Persona">');
+    expect(result.systemPrompt).toContain('<layer name="Skill">');
+    expect(result.systemPrompt).toContain('<layer name="Memory">');
+    expect(result.systemPrompt).toContain('</layer>');
     expect(result.manifest.usedTokens).toBeGreaterThan(0);
   });
 

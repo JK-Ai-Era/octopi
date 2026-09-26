@@ -127,4 +127,29 @@ describe('extension tools', () => {
 
     expect(result.answer).toBe('answer');
   });
+
+  it('ask_user should pass session context and options to callback', async () => {
+    let seen: { q: string; opts?: string[]; sid?: string; aid?: string } | null = null;
+    const tool = createAskUserTool(async (q, opts, ctx) => {
+      seen = { q, opts, sid: ctx.sessionId, aid: ctx.agentId };
+      return 'A';
+    });
+    const result = (await tool.handler(
+      { question: 'pick', options: ['A', 'B'] },
+      { sessionId: 's9', agentId: 'a9', messages: [] },
+    )) as { answer: string };
+
+    expect(result.answer).toBe('A');
+    expect(seen).toEqual({ q: 'pick', opts: ['A', 'B'], sid: 's9', aid: 'a9' });
+  });
+
+  it('ask_user should reject empty question', async () => {
+    const tool = createAskUserTool(async () => 'x');
+    const result = (await tool.handler(
+      { question: '   ' },
+      { sessionId: 's1', agentId: 'a1', messages: [] },
+    )) as { answer: string | null; error?: string };
+    expect(result.answer).toBeNull();
+    expect(result.error).toContain('question');
+  });
 });

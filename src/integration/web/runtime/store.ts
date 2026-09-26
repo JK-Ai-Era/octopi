@@ -21,6 +21,7 @@ import type {
   ModelCatalog,
   OctopiClient,
   PendingApproval,
+  PendingQuestion,
   SessionModelView,
   SessionSummary,
   SessionTaskView,
@@ -74,6 +75,7 @@ export interface RuntimeEventMap {
   'stream': StreamEvent;
   'tool': ToolEvent;
   'approval': ApprovalEvent;
+  'questions': QuestionsEvent;
   'inspector': InspectorEvent;
   'tasks': TasksEvent;
   'error': RuntimeErrorEvent;
@@ -99,6 +101,7 @@ export class ViewModeEvent extends RuntimeEvent<{ mode: ViewMode }> {}
 export class StreamEvent extends RuntimeEvent<{ streaming: boolean; content: string }> {}
 export class ToolEvent extends RuntimeEvent<{ tools: ToolRun[] }> {}
 export class ApprovalEvent extends RuntimeEvent<{ approvals: PendingApproval[] }> {}
+export class QuestionsEvent extends RuntimeEvent<{ questions: PendingQuestion[] }> {}
 export class InspectorEvent extends RuntimeEvent<{ inspector: InspectorState }> {}
 export class TasksEvent extends RuntimeEvent<{ tasks: SessionTaskView[] }> {}
 export class RuntimeErrorEvent extends RuntimeEvent<{ error: string }> {}
@@ -171,6 +174,7 @@ export interface ChatState {
   runStatus: RunStatus;
   tools: ToolRun[];
   approvals: PendingApproval[];
+  questions: PendingQuestion[];
   inspector: InspectorState;
   /** 会话任务（goal/step），UI 只读 */
   tasks: SessionTaskView[];
@@ -251,6 +255,21 @@ export class OctopiRuntimeStore extends EventTarget {
   /** 当前会话任务列表 */
   getTasks(): SessionTaskView[] {
     return this.chat.tasks;
+  }
+
+  /** 当前会话待答问题（ask_user） */
+  getQuestions(): PendingQuestion[] {
+    return this.chat.questions;
+  }
+
+  /** 回答 ask_user 问题 */
+  async answerQuestion(questionId: string, answer: string): Promise<void> {
+    await this.client.answerQuestion(questionId, answer);
+    // 本地先更新，事件到达时再对账
+    this.chat.questions = this.chat.questions.map((q) =>
+      q.id === questionId ? { ...q, status: 'answered' as const, answer } : q,
+    );
+    this.dispatch('questions', new QuestionsEvent('questions', { questions: this.chat.questions }));
   }
 
   /** 模型目录 */
@@ -525,13 +544,15 @@ export class OctopiRuntimeStore extends EventTarget {
     }
 
     const approvals = await this.client.listApprovals();
+    const questions = await this.client.listQuestions(sessionId);
 
-    // ── 同会话重开：live 为权威，只刷新 tasks/approvals，不动 conversation/adapter ──
+    // ── 同会话重开：live 为权威，只刷新 tasks/approvals/questions，不动 conversation/adapter ──
     if (isSameSession) {
-      this.chat = { ...this.chat, tasks, approvals };
+      this.chat = { ...this.chat, tasks, approvals, questions };
       this.dispatch('session', new SessionEvent('session', { session: this.currentSession }));
       this.dispatch('tasks', new TasksEvent('tasks', { tasks }));
       this.dispatch('approval', new ApprovalEvent('approval', { approvals }));
+      this.dispatch('questions', new QuestionsEvent('questions', { questions }));
       return view;
     }
 
@@ -619,6 +640,7 @@ export class OctopiRuntimeStore extends EventTarget {
       runStatus: derivedRunStatus,
       tools,
       approvals,
+      questions,
       inspector: cached?.inspector ? { ...cached.inspector } : {},
       tasks,
     };
@@ -700,6 +722,7 @@ export class OctopiRuntimeStore extends EventTarget {
     this.dispatch('stream', new StreamEvent('stream', { streaming: derivedRunStatus === 'streaming', content: streamingContent }));
     this.dispatch('runStatus', new RunStatusEvent('runStatus', { status: derivedRunStatus }));
     this.dispatch('approval', new ApprovalEvent('approval', { approvals: this.chat.approvals }));
+    this.dispatch('questions', new QuestionsEvent('questions', { questions: this.chat.questions }));
     this.dispatch('inspector', new InspectorEvent('inspector', { inspector: this.chat.inspector }));
     this.dispatch('tasks', new TasksEvent('tasks', { tasks: this.chat.tasks }));
     void this.refreshSessionModel();
@@ -740,6 +763,7 @@ export class OctopiRuntimeStore extends EventTarget {
       runStatus: 'idle',
       tools: [],
       approvals: await this.client.listApprovals(),
+      questions: await this.client.listQuestions(session.id),
       inspector: {},
       tasks: [],
     };
@@ -756,6 +780,7 @@ export class OctopiRuntimeStore extends EventTarget {
     this.dispatch('stream', new StreamEvent('stream', { streaming: false, content: '' }));
     this.dispatch('runStatus', new RunStatusEvent('runStatus', { status: 'idle' }));
     this.dispatch('approval', new ApprovalEvent('approval', { approvals: this.chat.approvals }));
+    this.dispatch('questions', new QuestionsEvent('questions', { questions: this.chat.questions }));
     this.dispatch('inspector', new InspectorEvent('inspector', { inspector: this.chat.inspector }));
     this.dispatch('tasks', new TasksEvent('tasks', { tasks: this.chat.tasks }));
 
@@ -868,6 +893,11 @@ export class OctopiRuntimeStore extends EventTarget {
     // 会话任务事件（只读面板）
     if (event.type === 'session.task.created' || event.type === 'session.task.updated' || event.type === 'session.task.snapshot') {
       this.applyTaskEvent(event);
+    }
+
+    // ask_user 待答问题
+    if (event.type === 'ask_user.pending' || event.type === 'ask_user.resolved') {
+      this.applyQuestionEvent(event);
     }
 
     const convResult = this.conversationAdapter.applyEvent(event, sessionId, this.chat.conversation);
@@ -1324,6 +1354,24 @@ export class OctopiRuntimeStore extends EventTarget {
     this.dispatch('tasks', new TasksEvent('tasks', { tasks: this.chat.tasks }));
   }
 
+  private applyQuestionEvent(event: AgentEventEnvelope): void {
+    const raw = event.data?.question as PendingQuestion | undefined;
+    if (!raw?.id) return;
+
+    const idx = this.chat.questions.findIndex((q) => q.id === raw.id);
+    const next = [...this.chat.questions];
+    if (idx >= 0) {
+      next[idx] = raw;
+    } else {
+      next.push(raw);
+    }
+    // 会话过滤：只保留当前会话的问题
+    this.chat.questions = this.chat.sessionId
+      ? next.filter((q) => q.sessionId === this.chat.sessionId)
+      : next;
+    this.dispatch('questions', new QuestionsEvent('questions', { questions: this.chat.questions }));
+  }
+
   private dispatch(_type: string, event: Event): void {
     this.dispatchEvent(event);
   }
@@ -1348,6 +1396,7 @@ export class OctopiRuntimeStore extends EventTarget {
       runStatus: 'idle',
       tools: [],
       approvals: [],
+      questions: [],
       inspector: {},
       tasks: [],
     };

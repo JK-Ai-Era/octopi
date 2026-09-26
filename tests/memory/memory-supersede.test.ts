@@ -86,8 +86,8 @@ describe('memory_store.supersedes_id', () => {
     expect(text).toContain('supersedes_id');
     expect(text).toContain('memory_search');
     expect(text.toLowerCase()).toContain('supersede');
-    // 原则句：不是主题白名单
-    expect(text).toContain('examples, not an exhaustive filter');
-    expect(text.toLowerCase()).toContain('fact`/`norm`');
+    // 原则：冲突结论先 search 再替换，不靠主题白名单
+    expect(text).toContain('search first, then replace with supersedes_id');
+    expect(text.toLowerCase()).toContain('fact / method / norm');
   });
 });

@@ -80,6 +80,7 @@ interface ContextLayer {
 3. 返回 `null` / 空文本 = 本层无内容（manifest 标 `empty`）。
 4. 层 **不得假设** 自己一定被纳入最终 system。
 5. 层自报 `tokens` 会被 Assembler 用统一 `TokenEstimator` 覆写。
+6. 装配产物中每层正文包 **`<layer name="…">`**（显示名与产品八层一致：Wisdom/Persona/…/Runtime），便于 LLM 识别归属；层内可另有自己的标题。
 
 ---
 

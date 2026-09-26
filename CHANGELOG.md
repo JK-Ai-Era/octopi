@@ -1,3 +1,30 @@
+## v0.52.1
+
+### docs(constitution): 任务章补 step 拆分判据 — 多单元扫掠禁止吞进单条 goal
+
+- 「When to break out steps」四条触发：清单式扫掠 / 有先后阶段 / 可部分完成 / 产出物拼装；附反例
+- 中英稿同步（`default-agents.md` + `docs/draft-default-agents.zh.md`）
+
+### feat(context): system 装配按层打标 `<layer name="…">`
+
+- Assembler 拼接时每层正文包 `<layer name="Wisdom|Persona|…|Runtime">`，与宪法八层名对齐；层内原有标题保留
+- `structureReserve` 默认 50 → 150（预留层标签与分隔符）
+- 宪法 A 节注明 system 块带层名标签；`context-layer-contracts.md` 契约补第 6 条
+
+### docs(constitution): Platform Operating Constitution 重写 — 八层语料地图 + 任务独立章 + 工具边界
+
+- **`default-agents.md`** 重写为：A 八层上下文与权威序 → B 分层使用（Wisdom=思维范式 / Memory=命题 / Cognition=连接）→ C 任务防漂移（独立章，有明确工作即建）→ D 横切纪律（资料非指令 / secrets / 诚实宣称）→ E 工具何时用+边界
+- 测试同步：`memory-supersede` / `redesign-acceptance` 断言改为新契约（search-first + `fact / method / norm` + 八层地图）
+- 中文评审稿：`docs/draft-default-agents.zh.md`
+
+### feat(tools): ask_user 工具 + Gateway pending questions + Web 作答 UI
+
+- **`ask_user`**：回调签名扩为 `(question, options, context)`，绑定 `sessionId`/`agentId`；空问题拒绝；支持 abort；**超时自强制**（默认 5min，工具总线不代执行 `timeoutMs`）
+- **Gateway**：`askUser` / `listPendingQuestions` / `resolvePendingQuestion` / `cancelPendingQuestions`；**先注册 waiter 再广播**（防同步应答死锁）；cancel 记 `cancelled` + 哨兵唤醒（不当用户回答）并广播；终态问题 FIFO 256；WS `ask_user.pending|resolved`；`abortSession` 取消悬挂问题
+- **REST**：`GET /questions?sessionId=`、`POST /questions/:id`（`answer`）
+- **Web**：SDK `listQuestions`/`answerQuestion`；Runtime store `questions` 状态与事件；会话区待答卡片（候选选项 + 自由输入）
+- **daemon**：`createToolSet({ askUser })` 接线 Gateway
+
 ## v0.52.0
 
 ### fix(knowledge): 审查 P2 — source overlay UI / 挂到 Agent 清 project 调整 / embedding 测试锁 / docs 对齐

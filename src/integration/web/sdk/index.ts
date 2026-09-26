@@ -14,5 +14,6 @@ export type {
   MessageRecord,
   MessagePage,
   PendingApproval,
+  PendingQuestion,
   AgentEventEnvelope,
 } from './client.js';

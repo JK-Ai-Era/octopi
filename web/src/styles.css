@@ -211,6 +211,16 @@ pre { font-family: var(--font-mono); font-size: 13px; }
 .msg-system-warning { background: #fffbeb; border: 1px solid #fcd34d; }
 .msg-system-info { background: #f0f9ff; border: 1px solid #93c5fd; }
 
+.question-card { padding: 12px; }
+.question-card input {
+  flex: 1;
+  padding: 6px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg);
+  color: var(--color-text);
+}
+
 /* ── Markdown Content ── */
 .md-root { display: grid; gap: 10px; font-size: var(--text-base); line-height: 1.65; }
 .md-root p,

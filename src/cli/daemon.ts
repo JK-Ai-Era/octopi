@@ -551,6 +551,13 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
     webSearch: webSearchToolCfg,
     summary: summarySupport,
     sessionHistory: sessionHistoryPort,
+    askUser: (question, options, context) =>
+      gateway.askUser({
+        sessionId: context.sessionId,
+        agentId: context.agentId,
+        question,
+        options,
+      }),
   });
   for (const tool of all) gateway.registerTool(tool);
   console.log(`[CLI] Registered ${all.length} global tools: ${all.map(t => t.definition.name).join(', ')}`);

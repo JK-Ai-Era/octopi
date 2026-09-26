@@ -32,6 +32,28 @@ import { HeuristicTokenEstimator } from './token-estimator.js';
 /** 层间分隔（与 PersonaSource 保持一致） */
 const LAYER_SEPARATOR = '\n\n---\n\n';
 
+/**
+ * 层显示名（与产品八层 / 宪法层名一致）
+ *
+ * 装配时给每层正文包 `<layer name="…">`，让 LLM 在 system prompt 里
+ * 能把片段对上八层地图，而不是靠各层自带标题猜归属。
+ */
+const LAYER_DISPLAY_NAME: Record<ContextLayerId, string> = {
+  wisdom: 'Wisdom',
+  persona: 'Persona',
+  skill: 'Skill',
+  knowledge: 'Knowledge',
+  cognition: 'Cognition',
+  memory: 'Memory',
+  runtime: 'Runtime',
+};
+
+/** 给层正文包上层标识（结构标签；正文原样） */
+export function wrapLayerContent(id: ContextLayerId, text: string): string {
+  const name = LAYER_DISPLAY_NAME[id];
+  return `<layer name="${name}">\n${text}\n</layer>`;
+}
+
 /** fingerprint 缓存上限（防 daemon 长驻泄漏） */
 const MAX_FINGERPRINT_SESSIONS = 256;
 
@@ -69,7 +91,7 @@ export function truncateTextToTokens(
 }
 
 export interface DefaultContextAssemblerConfig {
-  /** 总预算中预留给分隔符/结构的 token，默认 50 */
+  /** 总预算中预留给分隔符/层标签等结构的 token，默认 150 */
   structureReserve?: number;
   /**
    * 全局运行宪法正文（preamble）。
@@ -107,7 +129,7 @@ export class DefaultContextAssembler implements ContextAssembler {
   private readonly fingerprints = new Map<string, Map<ContextLayerId, string | null>>();
 
   constructor(config?: DefaultContextAssemblerConfig) {
-    this.structureReserve = config?.structureReserve ?? 50;
+    this.structureReserve = config?.structureReserve ?? 150;
     this.constitutionPreamble = config?.constitutionPreamble?.trim() || undefined;
     this.layerOverflowRatio = config?.layerOverflowRatio ?? 1.0;
     this.includeLayerPreview = config?.includeLayerPreview ?? true;
@@ -275,12 +297,13 @@ export class DefaultContextAssembler implements ContextAssembler {
     }
 
     // 按 order 拼接；宪法 preamble 永远在最前且不可丢
+    // 每层包 <layer name="…">，与宪法八层名对齐，便于 LLM 识别归属
     const parts: string[] = [];
     if (preambleText) parts.push(preambleText);
     for (const layer of ordered) {
       const hit = accepted.get(layer.id);
       if (hit && hasLayerText(hit.content)) {
-        parts.push(hit.content.text.trim());
+        parts.push(wrapLayerContent(layer.id, hit.content.text.trim()));
       }
     }
     const systemPrompt = parts.join(LAYER_SEPARATOR);

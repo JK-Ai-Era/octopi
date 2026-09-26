@@ -14,7 +14,7 @@ import type {
   ViewMode,
 } from '../../../src/integration/web/conversation/types';
 import type { RunStatus, InspectorState } from '../../../src/integration/web/runtime/store';
-import type { SessionTaskView, ModelCatalog, SessionModelView, CommandCatalogItemDto } from '../../../src/integration/web/sdk/client';
+import type { SessionTaskView, ModelCatalog, SessionModelView, CommandCatalogItemDto, PendingQuestion } from '../../../src/integration/web/sdk/client';
 // 浏览器侧直连 token 模块（不经 harness barrel / context/index，避免拉入 Node 专用依赖）
 import { estimateTextTokens } from '../../../src/harness/context/token-estimator';
 import { JSON_CHARS_PER_TOKEN } from '../../../src/harness/context/token-constants';
@@ -262,6 +262,68 @@ function statusLabel(status: SessionTaskView['status']): string {
   }
 }
 
+// ── ask_user pending question card ──
+
+function QuestionCard({
+  question,
+  onAnswer,
+  answering,
+}: {
+  question: PendingQuestion;
+  onAnswer: (answer: string) => void;
+  answering: boolean;
+}) {
+  const [text, setText] = useState('');
+
+  return (
+    <div className="panel question-card" style={{ borderColor: 'var(--color-warn)', marginBottom: 12 }}>
+      <div style={{ fontWeight: 600, marginBottom: 8 }}>
+        <span style={{ color: 'var(--color-warn)' }}>待回答</span>
+        <span style={{ marginLeft: 8, fontWeight: 400 }} className="small muted">{question.question}</span>
+      </div>
+      {question.options && question.options.length > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
+          {question.options.map((opt, idx) => (
+            <button
+              key={`${idx}-${opt}`}
+              className="btn-secondary"
+              disabled={answering}
+              onClick={() => onAnswer(opt)}
+            >
+              {opt}
+            </button>
+          ))}
+        </div>
+      )}
+      <div style={{ display: 'flex', gap: 8 }}>
+        <input
+          style={{ flex: 1 }}
+          value={text}
+          placeholder="输入回答…"
+          disabled={answering}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && text.trim() && !answering) {
+              onAnswer(text.trim());
+              setText('');
+            }
+          }}
+        />
+        <button
+          className="btn-primary"
+          disabled={answering || !text.trim()}
+          onClick={() => {
+            onAnswer(text.trim());
+            setText('');
+          }}
+        >
+          回答
+        </button>
+      </div>
+    </div>
+  );
+}
+
 const TASK_STATUS_ORDER: Record<SessionTaskView['status'], number> = {
   open: 0,
   paused: 1,
@@ -378,6 +440,8 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
   const [runStatus, setRunStatus] = useState<RunStatus>('idle');
   const [inspector, setInspector] = useState<InspectorState>({});
   const [tasks, setTasks] = useState<SessionTaskView[]>([]);
+  const [questions, setQuestions] = useState<PendingQuestion[]>([]);
+  const [answeringQuestion, setAnsweringQuestion] = useState(false);
   const [input, setInput] = useState('');
   const [commands, setCommands] = useState<CommandCatalogItemDto[]>([]);
   const [cmdSuggestIndex, setCmdSuggestIndex] = useState(0);
@@ -433,6 +497,9 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
     }) as EventListener);
     store.addEventListener('tasks', ((e: CustomEvent) => {
       setTasks(e.detail.tasks ?? []);
+    }) as EventListener);
+    store.addEventListener('questions', ((e: CustomEvent) => {
+      setQuestions(e.detail.questions ?? []);
     }) as EventListener);
     store.addEventListener('error', ((e: CustomEvent) => {
       setConnectError(String(e.detail.error ?? ''));
@@ -600,6 +667,7 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
     setRunStatus(state.chat.runStatus);
     setStream(state.chat.streamingContent ?? '');
     setTasks(state.chat.tasks ?? []);
+    setQuestions(state.chat.questions ?? []);
     setConversationItems(state.chat.conversation ?? []);
     setViewMode(state.chat.viewMode);
     await store.refreshSessionModel();
@@ -624,6 +692,7 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
       setRunStatus('idle');
       setStream('');
       setTasks(store.getTasks());
+      setQuestions(store.getQuestions());
       await store.refreshSessionModel();
       const sm = store.getSessionModel();
       setSessionModel(sm);
@@ -632,6 +701,19 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
       setActionError(error instanceof Error ? error.message : String(error));
     } finally {
       setCreating(false);
+    }
+  };
+
+  const answerQuestion = async (questionId: string, answer: string) => {
+    const store = storeRef.current;
+    if (!store) return;
+    setAnsweringQuestion(true);
+    try {
+      await store.answerQuestion(questionId, answer);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setAnsweringQuestion(false);
     }
   };
 
@@ -980,6 +1062,17 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
             {conversationItems.map(item => (
               <ConversationItemCard key={item.id} item={item} />
             ))}
+
+            {questions
+              .filter((q) => q.status === 'pending')
+              .map((q) => (
+                <QuestionCard
+                  key={q.id}
+                  question={q}
+                  answering={answeringQuestion}
+                  onAnswer={(answer) => void answerQuestion(q.id, answer)}
+                />
+              ))}
 
             {stream && runStatus === 'streaming' && !conversationItems.some(
               i => i.role === 'assistant' && (i as AssistantConversationItem).status === 'streaming',

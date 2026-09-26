@@ -20,9 +20,11 @@ describe('constitution loader', () => {
     const r = loadConstitution({ mode: 'product' });
     expect(r.source).toBe('product');
     expect(r.text).toContain('memory_store');
-    expect(r.text).toContain('fact | method | norm');
+    expect(r.text).toContain('fact / method / norm');
     expect(r.text).not.toContain('不在运行空间');
     expect(r.text).not.toContain('assembled at the front of the system prompt');
+    // 八层地图是产品契约，不因精简丢失
+    expect(r.text).toContain('The eight layers');
   });
 
   it('custom missing path throws (build fail, not silent off)', () => {
