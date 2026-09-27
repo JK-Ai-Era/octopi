@@ -243,4 +243,4 @@ src/
 
 ## 许可证
 
-MIT
+Apache-2.0 — 详见 [LICENSE](./LICENSE) 与 [NOTICE](./NOTICE)。

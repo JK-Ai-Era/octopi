@@ -245,4 +245,4 @@ Runtime config knobs (see `octopi.example.json` + `docs/KNOWN-ISSUES.md`): `tool
 
 ## License
 
-MIT
+Apache-2.0 — see [LICENSE](./LICENSE) and [NOTICE](./NOTICE).

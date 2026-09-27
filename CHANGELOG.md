@@ -1,3 +1,10 @@
+## v0.54.6
+
+### chore(license): relicense to Apache-2.0 and restrict npm pack files
+
+- Add `LICENSE` (Apache-2.0) + `NOTICE` (Copyright 2026 Guo Zheqing (James Kwok)); sync `package.json` / README / README_CN / CONTRIBUTING contribution-patent terms
+- npm `files` whitelist (`dist`, web sources/config, schema/example, license docs) — exclude `src`/`tests`/`docs`/`web/node_modules` from the tarball (2.6MB → 1.5MB)
+
 ## v0.54.5
 
 ### docs(session): sync OP-15 attachment docs with as-built

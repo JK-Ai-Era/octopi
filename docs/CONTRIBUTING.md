@@ -172,3 +172,15 @@ my-plugin/
 - [ ] 我已更新被修改模块的 `README.md`
 - [ ] 我已更新 `docs/architecture.md`（如涉及）
 - [ ] 我已更新 `CHANGELOG.md`
+
+## 许可证与贡献授权
+
+本项目采用 **Apache License 2.0**（见仓库根目录 [`LICENSE`](../LICENSE) 与 [`NOTICE`](../NOTICE)）。
+
+向本项目提交 Contribution（含 Pull Request、补丁、文档修订）即表示：
+
+1. 你同意该 Contribution 以 **Apache-2.0** 条款授权给项目（无需另行签署 CLA，除非维护者另行要求）；
+2. 你授予项目及后续使用者 Apache-2.0 §3 所述的**专利许可**（含专利报复条款）；
+3. 你确认有权作出上述授权（例如：工作成果不侵犯第三方权利，或已获雇主/权利人同意）。
+
+修改过的文件请保留原有版权与许可证声明；新增文件建议附带 Apache-2.0 文件头或依赖根目录 `LICENSE` / `NOTICE`。

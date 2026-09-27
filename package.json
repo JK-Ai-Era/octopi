@@ -1,6 +1,6 @@
 {
   "name": "octopi",
-  "version": "0.54.5",
+  "version": "0.54.6",
   "description": "可嵌入的 Agent 引擎",
   "type": "module",
   "main": "dist/index.js",
@@ -69,7 +69,22 @@
   "engines": {
     "node": ">=24"
   },
-  "license": "MIT",
+  "license": "Apache-2.0",
+  "files": [
+    "dist",
+    "web/package.json",
+    "web/package-lock.json",
+    "web/index.html",
+    "web/vite.config.ts",
+    "web/tsconfig.json",
+    "web/src",
+    "octopi.schema.json",
+    "octopi.example.json",
+    "LICENSE",
+    "NOTICE",
+    "README.md",
+    "README_CN.md"
+  ],
   "devDependencies": {
     "@types/node": "^25.9.1",
     "@vitest/coverage-v8": "^4.1.7",
