@@ -83,7 +83,7 @@ LLM providers (OpenAI, Anthropic), storage backends (JSONL, SQLite, Memory), Tel
 
 ---
 
-## Context Intelligence — 7-Layer Model
+## Context Intelligence — 8-Layer Model
 
 Octopi's unique approach to making agents smarter through better context assembly:
 
@@ -94,8 +94,11 @@ Skills (workflow guidance)     ← Conditionally loaded
 Knowledge (external references)← Retrieved on demand
 Cognition (concept graph)      ← Concept relationships
 Memory (actionable insights)    ← fact / method / norm from past sessions
-Information (raw messages)     ← Window managed + compressed
+Runtime (live run context)     ← tasks / guidance / injectedContext (system side)
+Information (raw messages)     ← Window managed + compressed (message window, not a ContextLayer)
 ```
+
+> Product eight layers = system ContextLayer (1–7, including Runtime) + Information (layer 8, message window).
 
 This is an **information distillation system**: raw information is refined through layers of increasing abstraction, producing progressively higher-level understanding.
 

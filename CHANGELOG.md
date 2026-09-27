@@ -1,3 +1,11 @@
+## v0.53.1
+
+### docs(context): fix README context model to eight layers
+
+- **README.md / README_CN.md**: section title "7-Layer / 七层智能模型" → "8-Layer / 八层智能模型"; add missing Runtime layer to the list and note the identity (product eight layers = system ContextLayer 1–7 + Information layer 8)
+- **`src/harness/context/README.md`**: add product eight-layer identity note so "七层" is unambiguously read as the system contract (product 1–7)
+- **`AGENTS.md`**: commit `<description>` must be written in English
+
 ## v0.53.0
 
 ### refactor(harness): 产品域优先目录 + 10 域权威清单

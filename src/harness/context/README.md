@@ -4,6 +4,8 @@
 
 消息选择、压缩、Token 估算，以及七层 **system prompt 内容契约与装配**。
 
+> **口径**：产品八层 = system ContextLayer（1–7，含 Runtime）+ Information（第 8 层，消息窗口）。本目录「七层」均指 system 契约层（产品 1–7）。
+
 **核心理念**：
 - **内容层**（ContextLayer / Assembler）决定 system prompt 里有什么
 - **窗口层**（ContextEngine）决定历史消息怎么压

@@ -193,6 +193,7 @@ npm run lint
 
 - Use [Conventional Commits](https://www.conventionalcommits.org/) format: `<type>(<scope>): <description>`
 - Types: `feat` / `fix` / `refactor` / `docs` / `test` / `chore` / `perf` / `ci`
+- **`<description>` must be written in English.**
 - Each commit has a single responsibility.
 - **Every commit must update `CHANGELOG.md`**, recording changes under the corresponding version entry.
 

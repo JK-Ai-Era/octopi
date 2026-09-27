@@ -81,7 +81,7 @@ LLM Provider（OpenAI、Anthropic）、存储后端（JSONL、SQLite、Memory）
 
 ---
 
-## Context Intelligence — 七层智能模型
+## Context Intelligence — 八层智能模型
 
 Octopi 独特的上下文智能组装方法，让 agent 通过更有效的 context 变得更聪明：
 
@@ -92,8 +92,11 @@ Octopi 独特的上下文智能组装方法，让 agent 通过更有效的 conte
 知识（外部参考资料）    ← 按需检索
 认知（概念关系网络）    ← 概念之间的关系
 记忆（行动命题）        ← fact / method / norm（跨会话可行动洞察）
-信息（原始消息）        ← 窗口管理 + 压缩
+运行时（本轮活态）      ← tasks / guidance / injectedContext（system 侧）
+信息（原始消息）        ← 窗口管理 + 压缩（消息窗口，非 ContextLayer）
 ```
+
+> 产品八层 = system ContextLayer（1–7，含 Runtime）+ Information（第 8 层，消息窗口）。
 
 这是一个**信息分馏系统**：原始信息通过逐层提炼，产出越来越高层级的理解。
 
