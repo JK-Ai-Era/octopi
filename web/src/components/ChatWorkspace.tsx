@@ -3,6 +3,7 @@ import { MarkdownMessage } from './MarkdownMessage';
 import { ContextRuntimePanel } from './ContextRuntimePanel';
 import { RunObservatoryPanel } from './RunObservatoryPanel';
 import { SessionCorpusMenu } from './SessionCorpusMenu';
+import { SessionAttachmentsPanel } from './SessionAttachmentsPanel';
 import { OctopiClient } from '../../../src/integration/web/sdk/client';
 import { OctopiRuntimeStore } from '../../../src/integration/web/runtime/store';
 import type {
@@ -443,10 +444,15 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
   const [questions, setQuestions] = useState<PendingQuestion[]>([]);
   const [answeringQuestion, setAnsweringQuestion] = useState(false);
   const [input, setInput] = useState('');
+  const [pendingAttachments, setPendingAttachments] = useState<
+    Array<{ id: string; name: string; sizeBytes: number; status: string }>
+  >([]);
+  const [uploading, setUploading] = useState(false);
+  const [attachmentsReload, setAttachmentsReload] = useState(0);
   const [commands, setCommands] = useState<CommandCatalogItemDto[]>([]);
   const [cmdSuggestIndex, setCmdSuggestIndex] = useState(0);
   const [openIssues, setOpenIssues] = useState<Array<{ id: string; severity: string; title: string; detail: string }>>([]);
-  const [rightTab, setRightTab] = useState<'context' | 'run' | 'tasks' | 'tools' | 'help'>('context');
+  const [rightTab, setRightTab] = useState<'context' | 'run' | 'tasks' | 'attachments' | 'tools' | 'help'>('context');
   const [connectError, setConnectError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
@@ -557,6 +563,31 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
   }, [conversationItems, stream]);
+
+  // 切换会话时清掉待发附件，避免 A 的文件挂到 B
+  useEffect(() => {
+    setPendingAttachments([]);
+  }, [activeSessionId]);
+
+  // 阻止浏览器把拖入的文件当导航打开
+  useEffect(() => {
+    const preventIfFiles = (e: DragEvent) => {
+      if (e.dataTransfer?.types && Array.from(e.dataTransfer.types).includes('Files')) {
+        e.preventDefault();
+      }
+    };
+    const onDrop = (e: DragEvent) => {
+      if (e.dataTransfer?.files?.length) {
+        e.preventDefault();
+      }
+    };
+    window.addEventListener('dragover', preventIfFiles);
+    window.addEventListener('drop', onDrop);
+    return () => {
+      window.removeEventListener('dragover', preventIfFiles);
+      window.removeEventListener('drop', onDrop);
+    };
+  }, []);
 
   const agentDefaultModelId =
     modelCatalog.agents.find(a => a.agentId === agentId)?.defaultModelId
@@ -719,7 +750,8 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
 
   const sendMessage = async () => {
     const store = storeRef.current;
-    if (!store || !input.trim()) return;
+    const hasAttach = pendingAttachments.length > 0;
+    if (!store || (!input.trim() && !hasAttach)) return;
     const text = input.trim();
 
     // Client-local：/clear
@@ -739,13 +771,53 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
     setActionError(null);
     setRunStatus('waiting');
     try {
-      await store.sendMessage(text);
+      await store.sendMessage(text, {
+        attachmentIds: pendingAttachments.map((a) => a.id),
+      });
       setInput('');
+      setPendingAttachments([]);
     } catch (error) {
       // 发送失败：store 已退出 waiting；保留输入便于重试
       setActionError(error instanceof Error ? error.message : String(error));
       const st = store.getState().chat.runStatus;
       setRunStatus(st === 'waiting' || st === 'sending' ? 'error' : st);
+    }
+  };
+
+  const uploadFiles = async (fileList: FileList | File[]) => {
+    const client = clientRef.current;
+    if (!client || !activeSessionId) {
+      setActionError('请先打开会话再上传附件');
+      return;
+    }
+    const files = Array.from(fileList);
+    if (files.length === 0) return;
+    setUploading(true);
+    try {
+      const payload = await Promise.all(
+        files.map(async (f) => {
+          const buf = await f.arrayBuffer();
+          let binary = '';
+          const bytes = new Uint8Array(buf);
+          for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]!);
+          return {
+            name: f.name,
+            mime: f.type || undefined,
+            dataBase64: btoa(binary),
+          };
+        }),
+      );
+      const uploaded = await client.uploadSessionAttachments(activeSessionId, payload);
+      setPendingAttachments((prev) => [
+        ...prev,
+        ...uploaded.map((u) => ({ id: u.id, name: u.name, sizeBytes: u.sizeBytes, status: u.status })),
+      ]);
+      setAttachmentsReload((n) => n + 1);
+      setToast(`已上传 ${uploaded.length} 个附件（仅本会话）`);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setUploading(false);
     }
   };
 
@@ -1117,7 +1189,29 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
             )}
           </div>
 
-          <div className="composer">
+          <div
+            className="composer"
+            onDragOver={(e) => {
+              if (e.dataTransfer?.types && Array.from(e.dataTransfer.types).includes('Files')) {
+                e.preventDefault();
+                e.stopPropagation();
+              }
+            }}
+            onDrop={(e) => {
+              if (e.dataTransfer?.files?.length) {
+                e.preventDefault();
+                e.stopPropagation();
+                void uploadFiles(e.dataTransfer.files);
+              }
+            }}
+            onPaste={(e) => {
+              const files = Array.from(e.clipboardData?.files ?? []);
+              if (files.length > 0) {
+                e.preventDefault();
+                void uploadFiles(files);
+              }
+            }}
+          >
             {showCmdSuggest && (
               <div className="cmd-suggest" role="listbox">
                 {cmdMatches.map((c, idx) => (
@@ -1136,6 +1230,27 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
                 ))}
               </div>
             )}
+            <div className="composer-attachments">
+              {pendingAttachments.length > 0 && (
+                <div className="attachment-chips">
+                  {pendingAttachments.map((a) => (
+                    <span key={a.id} className="attachment-chip">
+                      {a.name}
+                      <button
+                        type="button"
+                        className="btn-ghost small"
+                        title="移除"
+                        onClick={() =>
+                          setPendingAttachments((prev) => prev.filter((x) => x.id !== a.id))
+                        }
+                      >
+                        ×
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
             <textarea
               value={input}
               onChange={e => {
@@ -1144,10 +1259,22 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
               }}
               onKeyDown={handleComposerKeyDown}
               rows={4}
-              placeholder="输入消息，或 / 打开命令列表"
+              placeholder="输入消息，或 / 打开命令列表；可拖拽/粘贴附件"
             />
             <div className="composer-footer">
               <div className="composer-tools">
+                <label className="btn-secondary small" style={{ cursor: 'pointer' }}>
+                  {uploading ? '上传中…' : '附件'}
+                  <input
+                    type="file"
+                    multiple
+                    style={{ display: 'none' }}
+                    onChange={(e) => {
+                      if (e.target.files?.length) void uploadFiles(e.target.files);
+                      e.target.value = '';
+                    }}
+                  />
+                </label>
                 <SessionCorpusMenu
                   agentId={agentId || 'default'}
                   sessionId={activeSessionId}
@@ -1165,7 +1292,13 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
               </div>
               <div className="composer-actions">
                 <button className="btn-secondary" onClick={() => setInput('')}>清空</button>
-                <button className="btn-primary" onClick={sendMessage} disabled={!activeSessionId || !input.trim()}>发送</button>
+                <button
+                  className="btn-primary"
+                  onClick={sendMessage}
+                  disabled={!activeSessionId || (!input.trim() && pendingAttachments.length === 0)}
+                >
+                  发送
+                </button>
               </div>
             </div>
           </div>
@@ -1195,6 +1328,15 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
                 const n = tasks.filter((t) => !t.parentId && (t.status === 'open' || t.status === 'paused')).length;
                 return n > 0 ? <span className="tab-count">{n}</span> : null;
               })()}
+            </button>
+            <button
+              className={rightTab === 'attachments' ? 'btn-tab btn-tab-active' : 'btn-tab'}
+              onClick={() => setRightTab('attachments')}
+            >
+              附件
+              {pendingAttachments.length > 0 ? (
+                <span className="tab-count">{pendingAttachments.length}</span>
+              ) : null}
             </button>
             <button className={rightTab === 'tools' ? 'btn-tab btn-tab-active' : 'btn-tab'} onClick={() => setRightTab('tools')}>工具</button>
             <button className={rightTab === 'help' ? 'btn-tab btn-tab-active' : 'btn-tab'} onClick={() => setRightTab('help')}>帮助</button>
@@ -1257,6 +1399,15 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
             </div>
           )}
 
+          {rightTab === 'attachments' && (
+            <SessionAttachmentsPanel
+              client={clientRef.current}
+              sessionId={activeSessionId}
+              reloadToken={attachmentsReload}
+              onToast={setToast}
+            />
+          )}
+
           {rightTab === 'tools' && (
             <section className="panel sidebar-section">
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
@@ -1276,7 +1427,8 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
               <ul style={{ margin: 0, paddingLeft: 18, fontSize: 'var(--text-sm)' }}>
                 <li>左栏：连接 Gateway、选 Agent、开/开会话</li>
                 <li>中栏：主对话（模型切换、压缩）</li>
-                <li>右栏：上下文 / Run / 任务 / 工具 — 观察本轮 agent 为什么这样答</li>
+                <li>右栏：上下文 / Run / 任务 / 附件 / 工具 — 观察本轮 agent 为什么这样答</li>
+                <li>附件：选文件/拖拽/粘贴上传；默认仅本会话；卡片「…」可归入项目或删除</li>
                 <li>顶栏 Focus：放大右栏检查器，便于 demo / 深度调试</li>
                 <li>「模型」下拉切换会话模型；新建会话时作为预选</li>
                 <li>会话级模型覆盖只影响该会话，不改 Agent 默认</li>
@@ -1286,6 +1438,7 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
                 <li>Information 是消息窗口（第 8 层），不进 System 装配栈</li>
                 <li>右栏「Run」：Observer — RunScope / 时间线 / run messages</li>
                 <li>右栏「任务」：会话任务树；对 Agent 说「把 xx 标为完成」即可更新</li>
+                <li>右栏「附件」：本会话参考语料；可 file_read 深读</li>
                 <li>连接成功后自动刷新 Agent、模型目录和会话</li>
                 <li>Enter 发送，Shift+Enter 换行；输入法选词阶段不会误触</li>
               </ul>

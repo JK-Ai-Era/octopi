@@ -57,6 +57,17 @@
 - **`http_request` 自身无 SSRF 门禁**：live-query 工具语义宽松；Knowledge ingest 走 `guardedFetch`。
 - **OAuth**：`oauth2_client` 仅当已换成 access token 时按 bearer。
 
+## 会话附件（OP-15）— 已知限制
+
+**状态：** 主链已落地（v0.54.x）；规格 `arch/knowledge-session-attachments.md`（as-built §0.1 / 遗留 §13）
+
+- **大文件默认不全文注入**：超出 `inject.fullTextMaxChars` 只注开头（约 `headChars`），模型可能再 `file_read`——属分层策略，非缺陷。
+- **PDF/Office 无抽取 adapter**：可落盘可读，无 `.extracted.md` / 不进召回。
+- **默认不建 Knowledge source**：检索需显式「升为可检索」或 promote。
+- **manifest 无跨请求锁**：并发上传同会话可能互相覆盖登记（单用户 Web 场景低发）。
+- **上传 API 为 JSON+base64**：超大文件宜后续 multipart。
+- **FileBlock 经 convertToLlm 变为文字指针**：非 provider 原生 file 附件格式。
+
 ## 旧配置字段 `supervisor`
 
 **状态：** 有意不兼容 + 已告警 + 可 doctor 修复

@@ -171,6 +171,23 @@ export interface MessagePage {
   nextCursor?: string;
 }
 
+/** 会话附件（OP-15） */
+export interface SessionAttachmentDto {
+  id: string;
+  name: string;
+  mime: string;
+  sizeBytes: number;
+  contentHash: string;
+  path: string;
+  extractPath?: string;
+  status: 'ready' | 'parsing' | 'parsed' | 'parse_failed' | 'promoted';
+  kind: 'document' | 'image' | 'text' | 'code' | 'other';
+  createdAt: number;
+  parse?: { ok: boolean; chars?: number; error?: string };
+  searchableSourceId?: string;
+  promoted?: { projectKey: string; targetSourceId?: string; at: number };
+}
+
 export interface ApprovalRequest {
   id: string;
   toolName: string;
@@ -661,6 +678,55 @@ export class OctopiClient {
     return data?.data as SessionView;
   }
 
+  /** 会话附件列表 */
+  async listSessionAttachments(sessionId: string): Promise<SessionAttachmentDto[]> {
+    const data = await this.getJson(`/sessions/${encodeURIComponent(sessionId)}/attachments`);
+    return (data?.data as SessionAttachmentDto[]) ?? [];
+  }
+
+  /** 上传会话附件（base64 或 utf8 text） */
+  async uploadSessionAttachments(
+    sessionId: string,
+    files: Array<{ name: string; mime?: string; dataBase64?: string; text?: string }>,
+  ): Promise<SessionAttachmentDto[]> {
+    const data = await this.postJson(`/sessions/${encodeURIComponent(sessionId)}/attachments`, {
+      files,
+    });
+    return (data?.data as SessionAttachmentDto[]) ?? [];
+  }
+
+  /** 删除会话附件 */
+  async deleteSessionAttachment(sessionId: string, attachmentId: string): Promise<void> {
+    await this.deleteJson(
+      `/sessions/${encodeURIComponent(sessionId)}/attachments/${encodeURIComponent(attachmentId)}`,
+    );
+  }
+
+  /** 归入项目 */
+  async promoteSessionAttachment(
+    sessionId: string,
+    attachmentId: string,
+    body: { projectKey: string; targetSourceId?: string },
+  ): Promise<{ attachment: SessionAttachmentDto; targetPath: string }> {
+    const data = await this.postJson(
+      `/sessions/${encodeURIComponent(sessionId)}/attachments/${encodeURIComponent(attachmentId)}/promote`,
+      body,
+    );
+    return data?.data as { attachment: SessionAttachmentDto; targetPath: string };
+  }
+
+  /** 升为可检索（注册 session Knowledge source + ingest） */
+  async makeAttachmentSearchable(
+    sessionId: string,
+    attachmentId: string,
+  ): Promise<{ attachment: SessionAttachmentDto; sourceId: string; status: string }> {
+    const data = await this.postJson(
+      `/sessions/${encodeURIComponent(sessionId)}/attachments/${encodeURIComponent(attachmentId)}/make-searchable`,
+      {},
+    );
+    return data?.data as { attachment: SessionAttachmentDto; sourceId: string; status: string };
+  }
+
   async getSessionMessages(sessionId: string, options?: { limit?: number; cursor?: string }): Promise<MessagePage> {
     const params = new URLSearchParams();
     if (options?.limit) params.set('limit', String(options.limit));
@@ -1075,15 +1141,18 @@ export class OctopiClient {
     sessionId: string,
     agentId: string,
     content: string,
-    options?: { model?: string },
+    options?: { model?: string; attachmentIds?: string[] },
   ): void {
+    const metadata: Record<string, unknown> = {};
+    if (options?.model) metadata.model = options.model;
+    if (options?.attachmentIds?.length) metadata.attachmentIds = options.attachmentIds;
     this.send({
       type: 'chat',
       sessionId,
       agentId,
       content,
       senderId: 'web-ui',
-      ...(options?.model ? { metadata: { model: options.model } } : {}),
+      ...(Object.keys(metadata).length ? { metadata } : {}),
     });
   }
 

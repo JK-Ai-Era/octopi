@@ -789,7 +789,7 @@ export class OctopiRuntimeStore extends EventTarget {
     return session;
   }
 
-  async sendMessage(content: string, options?: { model?: string }): Promise<void> {
+  async sendMessage(content: string, options?: { model?: string; attachmentIds?: string[] }): Promise<void> {
     if (!this.chat.sessionId || !this.chat.agentId) {
       throw new Error('No active session');
     }
@@ -810,7 +810,10 @@ export class OctopiRuntimeStore extends EventTarget {
     const runModel = options?.model
       ?? (typeof this.sessionModel?.modelId === 'string' ? this.sessionModel.modelId : undefined);
     try {
-      this.client.sendChat(this.chat.sessionId, this.chat.agentId, content, runModel ? { model: runModel } : undefined);
+      this.client.sendChat(this.chat.sessionId, this.chat.agentId, content, {
+        ...(runModel ? { model: runModel } : {}),
+        ...(options?.attachmentIds?.length ? { attachmentIds: options.attachmentIds } : {}),
+      });
     } catch (err) {
       // 发送失败（未连接等）：立刻退出 waiting，避免 UI 卡死无法再发
       this.engineActive = false;

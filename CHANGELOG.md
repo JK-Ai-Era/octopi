@@ -1,3 +1,68 @@
+## v0.54.5
+
+### docs(session): sync OP-15 attachment docs with as-built
+
+- Spec status 主链已落地 + §0.1 as-built pitfalls + §13 remaining; OP-15 / knowledge-layer / docs/knowledge.md / KNOWN-ISSUES / octopi.example.json aligned
+
+## v0.54.4
+
+### fix(context): file/image blocks become pointers, not `[file content]`
+
+- `convertToLlm`: `FileBlock` → `[attachment: name | mime | size | path — use file_read]`; local-path images → text pointer (only data:/http(s) go to vision)
+- Compiler: image attachments emit single `ImageBlock` (no duplicate FileBlock)
+- Chat replay: hide `sessionAttachment` grounding; user message shows `[附件: name]`
+
+## v0.54.3
+
+### fix(session): do not wipe attachment limit defaults with undefined config fields
+
+- `SessionAttachmentService` merges only defined limit fields (spread of `allowedExtensions: undefined` wiped defaults → upload `Cannot read properties of undefined (reading 'length')`)
+- Gateway passes only non-null `knowledge.attachments` knobs
+- Regression test for undefined limits
+
+## v0.54.2
+
+### fix(session): attachment injection layering, Windows path guards, WebUI drag/menu
+
+- **Inject**: decide full vs structure/recall from `parse.chars` (not truncated read length); LLM plan modes now actually change payload
+- **Security**: `isPathInside` / `isUnderAttachmentRoot` case-insensitive on Windows; `delete` validates paths before unlink
+- **Lifecycle**: deleting attachment purges linked searchable Knowledge source
+- **Config**: wire `knowledge.attachments.*` limits + inject into gateway/runner (`KnowledgeRuntimeConfig`)
+- **WebUI**: window-level drag preventDefault (no browser open); drop on whole composer; attachments panel `reloadToken` after upload; menu/promote use `position:fixed` (no clip); clear pending chips on session switch
+- Promote: explicit `targetSourceId` miss is 400 (no silent fallback)
+
+## v0.54.1
+
+### feat(session): LLM attachment intent triage + make-searchable session source
+
+- **Intent**: `createLlmIntentResolver` (structured JSON plan) wired into runner attachment grounding; large-file + non-empty text only; fail-open `structure_tools` on timeout/error; `focus` appended to grounding block
+- **Make-searchable**: `POST /sessions/:id/attachments/:attId/make-searchable` registers `scopeRef: session` Knowledge file source + reindex; UI menu「升为可检索」; manifest `searchableSourceId`
+- Tests: LLM plan parse (incl. 翻译稿 false-positive guard) + markSearchable
+
+## v0.54.0
+
+### feat(session): OP-15 session attachments pipeline (upload / FileBlock / read-only roots)
+
+**Session assets (`OCTOPI_HOME/sessions/<sid>/attachments/`)**
+
+- `SessionAttachmentService` — manifest + upload/list/delete/promote; filename sanitize; size/count/type limits
+- Companion extract for plain text (`extractPath`); PDF/Office stay unparsed this release (adapter open)
+- Session delete cleans attachments dir (JsonlSessionStore)
+
+**Message & tools**
+
+- Chat `metadata.attachmentIds` → Trigger `attachments` → `FileBlock` (+ `ImageBlock` for images); empty text uses synthetic prompt
+- Turn-side untrusted `sessionAttachment` grounding block (inventory + full/structure by size)
+- `file_read`/`file_list`/`file_search` accept read-only `attachmentRoots`; `file_write`/`file_edit` refuse writes under them
+
+**Host API / Web**
+
+- `GET/POST /sessions/:id/attachments`, `DELETE …/:attId`, `POST …/:attId/promote` (move into project directory source)
+- Web composer: file picker / drag / paste + chips; right tab「附件」with promote/delete menu
+- Config: `knowledge.attachments.*` (limits, inject.intent, emptyMessagePrompt)
+
+**Design**: `arch/knowledge-session-attachments.md` (OP-15)
+
 ## v0.53.2
 
 ### fix(arch): clear Harness→Integration imports and complete Builder.trace() telemetry wiring

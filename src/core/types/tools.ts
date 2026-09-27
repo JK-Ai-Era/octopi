@@ -64,6 +64,11 @@ export interface ToolExecutionContext {
   messages: import('./messages.js').Message[];
   abortSignal?: AbortSignal;
   cwd?: string;
+  /**
+   * 只读会话附件根（OP-15）：file 系工具可读，不可写。
+   * 路径解析优先命中这些 root；见 arch/knowledge-session-attachments.md §7。
+   */
+  attachmentRoots?: string[];
 }
 
 /** 工具处理函数 */

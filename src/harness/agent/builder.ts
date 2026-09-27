@@ -135,7 +135,13 @@ class DefaultErrorStrategy implements ErrorStrategy {
 
 /** 工具运行时上下文提供者 */
 export interface ToolContextProvider {
-  get(): { sessionId: string; agentId: string; messages: import('../../core/types.js').Message[]; cwd?: string };
+  get(): {
+    sessionId: string;
+    agentId: string;
+    messages: import('../../core/types.js').Message[];
+    cwd?: string;
+    attachmentRoots?: string[];
+  };
   setRuntime(sessionId: string, agentId: string, messages: import('../../core/types.js').Message[]): void;
 }
 
@@ -164,6 +170,7 @@ class RuntimeToolContextProvider implements ToolContextProvider {
         agentId: scope.toolRuntime.agentId,
         messages: scope.toolRuntime.messages,
         cwd: scope.toolRuntime.cwd ?? this.cwd,
+        attachmentRoots: scope.toolRuntime.attachmentRoots,
       };
     }
     if (scope) {

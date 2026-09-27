@@ -24,7 +24,13 @@ import { createFileEditTool } from './file-edit.js';
 import { createFileSearchTool } from './file-search.js';
 import { createHttpRequestTool } from './http.js';
 import { createEnvInfoTool } from './env-info.js';
-import { defaultPathEnv, resolvePlatformShell, resolveToolPath } from './platform.js';
+import {
+  defaultPathEnv,
+  isUnderAttachmentRoot,
+  resolvePlatformShell,
+  resolveReadableToolPath,
+  resolveToolPath,
+} from './platform.js';
 
 /**
  * Shell 工具 — 执行 shell 命令
@@ -226,7 +232,7 @@ export function createFileReadTool(options?: {
 
       const rawPath = args.path as string;
       const cwd = context?.cwd ?? process.cwd();
-      const path = resolveToolPath(rawPath, cwd);
+      const path = resolveReadableToolPath(rawPath, cwd, context?.attachmentRoots);
       const offset = (args.offset as number) ?? 1;
       const limit = (args.limit as number) ?? 2000;
 
@@ -317,6 +323,9 @@ export function createFileWriteTool(): RegisteredTool {
       const rawPath = args.path as string;
       const cwd = context?.cwd ?? process.cwd();
       const path = resolveToolPath(rawPath, cwd);
+      if (isUnderAttachmentRoot(path, context?.attachmentRoots)) {
+        throw new Error('session attachments are read-only; cannot write to attachments root');
+      }
       const content = args.content as string;
       const append = args.append as boolean ?? false;
 
@@ -444,7 +453,7 @@ export function createFileListTool(options?: {
 
       const rawPath = args.path as string;
       const cwd = context?.cwd ?? process.cwd();
-      const basePath = resolveToolPath(rawPath, cwd);
+      const basePath = resolveReadableToolPath(rawPath, cwd, context?.attachmentRoots);
       const recursive = (args.recursive as boolean) ?? false;
       const pattern = compileNamePattern(args.pattern as string | undefined);
       const maxEntries = Math.min(Math.max((args.maxEntries as number) ?? 500, 1), 2000);

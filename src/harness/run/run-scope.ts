@@ -22,6 +22,8 @@ export interface RunToolRuntime {
   cwd?: string;
   /** 本 Run 生效的工具效应隔离模式（I5） */
   isolation?: ToolIsolationMode;
+  /** 只读会话附件根（OP-15）；不改变 toolIsolation 语义 */
+  attachmentRoots?: string[];
 }
 
 /** 一次 Run 的作用域身份（I1） */

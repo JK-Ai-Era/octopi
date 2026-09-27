@@ -24,6 +24,7 @@ export function channelMessageToTrigger(
   sessionId: string,
 ): Trigger {
   const modelOverride = msg.metadata?.model;
+  const attachRefs = msg.metadata?.attachments;
   return {
     id: `trg-${randomUUID().slice(0, 12)}`,
     type: 'message',
@@ -51,6 +52,9 @@ export function channelMessageToTrigger(
               ? { modelProvider: String(msg.metadata.modelProvider) }
               : {}),
           }
+        : {}),
+      ...(Array.isArray(attachRefs) && attachRefs.length > 0
+        ? { attachments: attachRefs as import('../../harness/activation/types.js').TriggerAttachmentRef[] }
         : {}),
     },
   };

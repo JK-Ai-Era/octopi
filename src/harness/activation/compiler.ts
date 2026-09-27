@@ -5,8 +5,8 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import type { Message } from '../../core/types.js';
-import type { RunRequest, RuntimeAgent, Trigger } from './types.js';
+import type { ContentBlock, Message } from '../../core/types.js';
+import type { RunRequest, RuntimeAgent, Trigger, TriggerAttachmentRef } from './types.js';
 
 export function resolveSessionId(agent: RuntimeAgent, trigger: Trigger): string {
   if (agent.resolveSession) return agent.resolveSession(trigger);
@@ -16,6 +16,34 @@ export function resolveSessionId(agent: RuntimeAgent, trigger: Trigger): string 
 
 export function compileMessages(triggers: Trigger[]): Message[] {
   return triggers.map((t) => compileOne(t));
+}
+
+/** 空正文 + 附件时的默认指令（§6.5；与 inject 模板一致） */
+const EMPTY_ATTACHMENT_PROMPT =
+  '（仅附件，无文字指令）请查看所附文件；若意图不明，先简要说明内容再向用户提问。';
+
+function attachmentBlocks(refs: TriggerAttachmentRef[]): ContentBlock[] {
+  const blocks: ContentBlock[] = [];
+  for (const ref of refs) {
+    if (ref.kind === 'image') {
+      // 图片只挂 ImageBlock（vision 直通；无 vision 由 convertToLlm 降为文字）
+      blocks.push({
+        type: 'image',
+        url: ref.path,
+        mimeType: ref.mime,
+        alt: ref.name,
+      });
+    } else {
+      blocks.push({
+        type: 'file',
+        name: ref.name,
+        mimeType: ref.mime,
+        sizeBytes: ref.sizeBytes,
+        url: ref.path,
+      });
+    }
+  }
+  return blocks;
 }
 
 function compileOne(trigger: Trigger): Message {
@@ -32,18 +60,44 @@ function compileOne(trigger: Trigger): Message {
     ...(trigger.metadata?.parentAgentId
       ? { parentAgentId: trigger.metadata.parentAgentId }
       : {}),
+    ...(trigger.metadata?.attachments?.length
+      ? { attachmentIds: trigger.metadata.attachments.map((a) => a.id) }
+      : {}),
+    ...(trigger.metadata?.syntheticInstruction
+      ? { syntheticInstruction: true }
+      : {}),
   };
 
   const base = { timestamp, metadata };
+  const attachRefs = trigger.metadata?.attachments ?? [];
 
   switch (trigger.payload.kind) {
-    case 'user_message':
+    case 'user_message': {
+      const text = trigger.payload.content ?? '';
+      if (attachRefs.length > 0) {
+        const userText = text.trim() ? text : EMPTY_ATTACHMENT_PROMPT;
+        const blocks: ContentBlock[] = [
+          { type: 'text', text: userText },
+          ...attachmentBlocks(attachRefs),
+        ];
+        return {
+          role: 'user',
+          content: blocks,
+          source: trigger.payload.source,
+          ...base,
+          metadata: {
+            ...metadata,
+            ...(text.trim() ? {} : { syntheticInstruction: true }),
+          },
+        } as Message;
+      }
       return {
         role: 'user',
         content: trigger.payload.content,
         source: trigger.payload.source,
         ...base,
       } as Message;
+    }
     case 'system_note':
       return {
         role: 'user',

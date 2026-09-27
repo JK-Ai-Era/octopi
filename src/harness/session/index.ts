@@ -9,3 +9,4 @@ export * from './compact.js';
 export * from './state-machine.js';
 export * from './tasks/index.js';
 export * from './history/index.js';
+export * from './attachments/index.js';

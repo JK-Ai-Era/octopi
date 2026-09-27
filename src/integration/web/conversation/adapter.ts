@@ -56,6 +56,8 @@ function extractText(content: unknown): string {
 function isHiddenSystemHistory(msg: MessageRecord): boolean {
   const meta = msg.metadata as { source?: string } | undefined;
   if (meta?.source === 'knowledgeGrounding') return true;
+  // 会话附件资料块：只进 LLM 上下文，不进聊天回放
+  if (meta?.source === 'sessionAttachment') return true;
   if (msg.role !== 'system') return false;
   if (meta?.source === 'systemPrompt') return true;
   const text = extractText(msg.content);

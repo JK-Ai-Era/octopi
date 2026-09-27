@@ -976,15 +976,27 @@ export class DefaultContextEngine implements ContextEngine {
           return { type: 'text', text: block.text };
         }
         if (block.type === 'image') {
-          const source: Record<string, unknown> = { type: 'image_url' };
-          if (block.url) {
-            source.image_url = { url: block.url };
-          } else if (block.data) {
-            source.image_url = {
-              url: `data:${block.mimeType ?? 'image/png'};base64,${block.data}`,
-            };
+          // 仅 data:/http(s) 可进 vision；本地路径降为文字指针，避免 provider 拒收
+          const url = typeof block.url === 'string' ? block.url : '';
+          const canSendImage =
+            (block.data && block.data.length > 0) ||
+            /^https?:\/\//i.test(url) ||
+            /^data:/i.test(url);
+          if (canSendImage) {
+            const source: Record<string, unknown> = { type: 'image_url' };
+            if (block.data) {
+              source.image_url = {
+                url: `data:${block.mimeType ?? 'image/png'};base64,${block.data}`,
+              };
+            } else {
+              source.image_url = { url };
+            }
+            return source;
           }
-          return source;
+          return {
+            type: 'text',
+            text: `[image: ${block.alt ?? 'attachment'}${url ? ` | path: ${url}` : ''}]`,
+          };
         }
         if (block.type === 'audio') {
           return {
@@ -995,7 +1007,17 @@ export class DefaultContextEngine implements ContextEngine {
             },
           };
         }
-        // 其他类型转为文本描述
+        // file / 其他：文字指针（正文在 sessionAttachment 资料块；深读用 file_read）
+        if (block.type === 'file') {
+          const name = block.name ?? 'attachment';
+          const size = block.sizeBytes != null ? ` ${block.sizeBytes}B` : '';
+          const mime = block.mimeType ? ` ${block.mimeType}` : '';
+          const path = block.url ? ` | path: ${block.url}` : '';
+          return {
+            type: 'text',
+            text: `[attachment: ${name}${mime}${size}${path} — use file_read to open]`,
+          };
+        }
         return { type: 'text', text: `[${block.type} content]` };
       });
       result.push({

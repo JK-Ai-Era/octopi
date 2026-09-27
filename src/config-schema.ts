@@ -282,6 +282,37 @@ export const KnowledgeConfigSchema = z.object({
       stewardOnConverge: z.boolean().optional(),
     })
     .optional(),
+  /** 会话附件（OP-15；arch/knowledge-session-attachments.md） */
+  attachments: z
+    .object({
+      maxFiles: z.number().int().positive().max(64).optional(),
+      maxFileBytes: z.number().int().positive().optional(),
+      maxTotalBytes: z.number().int().positive().optional(),
+      allowedExtensions: z.array(z.string()).optional(),
+      parse: z
+        .object({
+          extract: z.boolean().optional(),
+          keywordIndex: z.boolean().optional(),
+          embedding: z.enum(['off', 'lazy', 'on-upload']).optional(),
+        })
+        .optional(),
+      inject: z
+        .object({
+          fullTextMaxChars: z.number().int().positive().optional(),
+          recallTopK: z.number().int().positive().max(50).optional(),
+          inventory: z.boolean().optional(),
+          intent: z.enum(['llm', 'off']).optional(),
+          intentTimeoutMs: z.number().int().positive().optional(),
+          emptyMessagePrompt: z.string().optional(),
+        })
+        .optional(),
+      tools: z
+        .object({
+          attachmentsRootReadOnly: z.boolean().optional(),
+        })
+        .optional(),
+    })
+    .optional(),
 });
 
 /** 公用能力：summary（harness/context/capabilities） */

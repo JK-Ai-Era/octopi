@@ -6,7 +6,7 @@
  */
 
 import { accessSync, constants, existsSync, statSync } from 'node:fs';
-import { delimiter, isAbsolute, join, resolve } from 'node:path';
+import { delimiter, isAbsolute, join, resolve, sep } from 'node:path';
 
 /** 平台 shell 方言 */
 export type ShellKind = 'bash' | 'powershell' | 'cmd';
@@ -35,6 +35,55 @@ export interface PlatformShell {
 export function resolveToolPath(rawPath: string, cwd?: string): string {
   if (isAbsolute(rawPath)) return resolve(rawPath);
   return resolve(cwd ?? process.cwd(), rawPath);
+}
+
+/**
+ * 只读附件根内解析（OP-15）：相对名优先贴到 attachmentRoots
+ *
+ * @param rawPath - 工具入参路径
+ * @param cwd - 工具 cwd
+ * @param attachmentRoots - 只读会话附件根
+ * @returns 规范化后的绝对路径
+ */
+export function resolveReadableToolPath(
+  rawPath: string,
+  cwd?: string,
+  attachmentRoots?: string[],
+): string {
+  const roots = attachmentRoots ?? [];
+  // 绝对路径原样；相对路径先试 attachments 根（文件名直呼）
+  if (!isAbsolute(rawPath) && roots.length > 0) {
+    const cleaned = rawPath.replace(/^[/\\]+/, '');
+    for (const root of roots) {
+      const candidate = resolve(root, cleaned);
+      const rootResolved = resolve(root);
+      const prefix = rootResolved.endsWith(sep) ? rootResolved : rootResolved + sep;
+      if (candidate === rootResolved || candidate.startsWith(prefix)) {
+        if (existsSync(candidate)) return candidate;
+      }
+    }
+  }
+  return resolveToolPath(rawPath, cwd);
+}
+
+/**
+ * 是否为会话附件根下的路径（写保护）
+ *
+ * @param path - 已 resolve 的路径
+ * @param attachmentRoots - 只读根
+ */
+export function isUnderAttachmentRoot(path: string, attachmentRoots?: string[]): boolean {
+  if (!attachmentRoots?.length) return false;
+  // Windows 路径比较须大小写不敏感，否则可绕过 startsWith 写保护
+  const win = process.platform === 'win32';
+  const norm = (s: string) => (win ? resolve(s).toLowerCase() : resolve(s));
+  const p = norm(path);
+  for (const root of attachmentRoots) {
+    const r = norm(root);
+    const prefix = r.endsWith(sep) ? r : r + sep;
+    if (p === r || p.startsWith(prefix)) return true;
+  }
+  return false;
 }
 
 function isExecutableFile(filePath: string): boolean {

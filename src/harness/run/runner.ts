@@ -11,6 +11,7 @@
  */
 
 import type { Message, Turn, SessionStatus } from '../../core/types.js';
+import { getTextContent } from '../../core/types.js';
 import type { ToolContextProvider } from '../agent/builder.js';
 import type { SessionStore } from '../../core/interfaces/session-store.js';
 import type { SessionData } from '../session/types.js';
@@ -34,6 +35,8 @@ import {
   type ToolIsolationMode,
 } from '../extension/execution-environment/isolation.js';
 import { mkdirSync } from 'node:fs';
+import { join } from 'node:path';
+import { toSessionFileName } from '../../core/session-filename.js';
 import { readSessionCompact, writeSessionCompact } from '../session/compact.js';
 import type { ContextCompactSnapshot } from '../context/types.js';
 import {
@@ -102,6 +105,18 @@ export interface SessionAwareRunnerConfig {
   agentMaxSessionRights?: import('../governance/session-acl/types.js').SessionRights;
   /** 产品 Observer 通道（Run 现场快照；缺省不采集） */
   observerHub?: import('../observability/observer/hub.js').ObserverHub;
+  /**
+   * 会话附件根基路径（OP-15）。通常 `OCTOPI_HOME/sessions`。
+   * 设置后 RunScope.toolRuntime.attachmentRoots = `<base>/<sid>/attachments`（只读）。
+   */
+  sessionAttachmentsBaseDir?: string;
+  /** 附件注入参数（knowledge.attachments.inject；缺省用内建默认） */
+  sessionAttachmentInject?: {
+    fullTextMaxChars?: number;
+    intent?: 'llm' | 'off';
+    intentTimeoutMs?: number;
+    emptyMessagePrompt?: string;
+  };
   /**
    * 事件旁路（Telemetry）。每条适配后事件调用（含 llm_stream_delta），
    * 不改变 yield 语义。由 Builder 注入 RunTelemetry.onEvent。
@@ -909,6 +924,9 @@ export class SessionAwareRunner {
 
       // Run 身份与 RunScope 对齐（Observer/审计共用，不另造第二套 ID）
       const runId = createRunId(sessionId, _agentId);
+      const attachmentRoots = this.config.sessionAttachmentsBaseDir
+        ? [join(this.config.sessionAttachmentsBaseDir, toSessionFileName(sessionId), 'attachments')]
+        : undefined;
       const runScope: RunScope = {
         sessionId,
         agentId: _agentId,
@@ -921,6 +939,7 @@ export class SessionAwareRunner {
           messages: session.messages,
           cwd: resolvedToolCwd.cwd,
           isolation: resolvedToolCwd.mode,
+          attachmentRoots,
         },
       };
 
@@ -937,8 +956,94 @@ export class SessionAwareRunner {
         // turn 级：先剥历史 grounding，再视本轮 mode 决定是否插入
         // mode=none 时不保留上轮 grounding（避免陈旧内容长期回放）
         const baseMsgs = session.messages.filter(
-          (m) => m.metadata?.source !== 'knowledgeGrounding',
+          (m) =>
+            m.metadata?.source !== 'knowledgeGrounding' &&
+            m.metadata?.source !== 'sessionAttachment',
         );
+
+        // OP-15：会话附件资料块（与 Knowledge grounding 同槽位气质，source 不同）
+        let attachmentText: string | null = null;
+        if (this.config.sessionAttachmentsBaseDir) {
+          try {
+            const {
+              SessionAttachmentService,
+              buildAttachmentGroundingText,
+              resolveInjectPlan,
+              createLlmIntentResolver,
+            } = await import('../session/attachments/index.js');
+            const attachSvc = new SessionAttachmentService({
+              sessionsDir: this.config.sessionAttachmentsBaseDir,
+            });
+            const lastUser = [...session.messages].reverse().find((m) => m.role === 'user');
+            const attachIds = Array.isArray(lastUser?.metadata?.attachmentIds)
+              ? (lastUser!.metadata!.attachmentIds as string[]).filter((x) => typeof x === 'string')
+              : [];
+            const userText = lastUser ? getTextContent(lastUser.content) : '';
+            if (attachIds.length > 0) {
+              const items = attachIds
+                .map((id) => attachSvc.get(sessionId, id))
+                .filter((x): x is NonNullable<typeof x> => Boolean(x) && x!.status !== 'promoted');
+              if (items.length > 0) {
+                // 意图分流：大文件 + 非空正文时走 LLM（fail-open structure）
+                const plan = await resolveInjectPlan(
+                  {
+                    userText,
+                    attachments: items,
+                    outlines: Object.fromEntries(
+                      items.map((a) => [
+                        a.name,
+                        (attachSvc.readExtractedText(sessionId, a.id, 200) ?? '').replace(/\s+/g, ' ').slice(0, 200),
+                      ]),
+                    ),
+                  },
+                  {
+                    fullTextMaxChars: this.config.sessionAttachmentInject?.fullTextMaxChars ?? 12_000,
+                    intent: this.config.sessionAttachmentInject?.intent ?? 'llm',
+                    timeoutMs: this.config.sessionAttachmentInject?.intentTimeoutMs ?? 800,
+                    resolver: resolvedModel?.provider
+                      ? createLlmIntentResolver(resolvedModel.provider)
+                      : undefined,
+                  },
+                );
+                attachmentText = buildAttachmentGroundingText(
+                  items,
+                  {
+                    fullTextMaxChars: this.config.sessionAttachmentInject?.fullTextMaxChars ?? 12_000,
+                    readText: (id, max) => attachSvc.readExtractedText(sessionId, id, max),
+                    absolutePath: (id) => attachSvc.resolveAbsolutePath(sessionId, id),
+                  },
+                  plan.mode === 'full' ? 'full' : plan.mode,
+                );
+                if (plan.focus && attachmentText) {
+                  attachmentText = attachmentText.replace(
+                    '</session-attachments>',
+                    `\n检索焦点: ${plan.focus}\n</session-attachments>`,
+                  );
+                }
+              }
+            }
+          } catch (attErr) {
+            console.warn(
+              `[octopi] attachment grounding failed (session=${sessionId}): ${attErr instanceof Error ? attErr.message : String(attErr)}`,
+            );
+          }
+        }
+        if (attachmentText) {
+          const attachMsg: Message = {
+            role: 'user',
+            content: attachmentText,
+            timestamp: Date.now(),
+            metadata: { source: 'sessionAttachment' },
+          };
+          let insertAt = baseMsgs.length;
+          for (let i = baseMsgs.length - 1; i >= 0; i--) {
+            if (baseMsgs[i].role === 'user') {
+              insertAt = i;
+              break;
+            }
+          }
+          baseMsgs.splice(insertAt, 0, attachMsg);
+        }
         if (pendingGrounding && pendingGrounding.mode !== 'none' && pendingGrounding.text?.trim()) {
           const groundingMsg: Message = {
             role: 'user',

@@ -151,6 +151,79 @@ export class WebApiRouter {
         return this.json(res, 200, { ok: true, data: page });
       }
 
+      // ── 会话附件（OP-15）──
+      const attachmentsMatch = relativePath.match(/^\/sessions\/([^/]+)\/attachments$/);
+      if (attachmentsMatch && method === 'GET') {
+        const items = await this.gateway.listSessionAttachments(attachmentsMatch[1]);
+        return this.json(res, 200, { ok: true, data: items });
+      }
+      if (attachmentsMatch && method === 'POST') {
+        // 附件上传：提高 body 上限（base64 会膨胀）
+        const body = await this.readBody(req, Math.max(this.maxBodyBytes, 64 * 1024 * 1024));
+        const files = Array.isArray(body?.files) ? body.files : body?.name ? [body] : [];
+        if (files.length === 0) {
+          return this.json(res, 400, { ok: false, error: 'files[] or {name,dataBase64|text} required' });
+        }
+        try {
+          const items = await this.gateway.uploadSessionAttachments(attachmentsMatch[1], files);
+          return this.json(res, 201, { ok: true, data: items });
+        } catch (err) {
+          return this.json(res, 400, {
+            ok: false,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+      const attachmentOneMatch = relativePath.match(/^\/sessions\/([^/]+)\/attachments\/([^/]+)$/);
+      if (attachmentOneMatch && method === 'DELETE') {
+        const removed = await this.gateway.deleteSessionAttachment(
+          attachmentOneMatch[1],
+          attachmentOneMatch[2],
+        );
+        if (!removed) return this.json(res, 404, { ok: false, error: 'attachment not found' });
+        return this.json(res, 200, { ok: true, data: { id: attachmentOneMatch[2], removed: true } });
+      }
+      const attachmentPromoteMatch = relativePath.match(
+        /^\/sessions\/([^/]+)\/attachments\/([^/]+)\/promote$/,
+      );
+      const attachmentSearchableMatch = relativePath.match(
+        /^\/sessions\/([^/]+)\/attachments\/([^/]+)\/make-searchable$/,
+      );
+      if (attachmentSearchableMatch && method === 'POST') {
+        try {
+          const result = await this.gateway.makeAttachmentSearchable(
+            attachmentSearchableMatch[1],
+            attachmentSearchableMatch[2],
+          );
+          return this.json(res, 200, { ok: true, data: result });
+        } catch (err) {
+          return this.json(res, 400, {
+            ok: false,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+      if (attachmentPromoteMatch && method === 'POST') {
+        const body = await this.readBody(req);
+        const projectKey = body?.projectKey as string | undefined;
+        if (!projectKey) {
+          return this.json(res, 400, { ok: false, error: 'projectKey is required' });
+        }
+        try {
+          const result = await this.gateway.promoteSessionAttachment(
+            attachmentPromoteMatch[1],
+            attachmentPromoteMatch[2],
+            { projectKey, targetSourceId: body?.targetSourceId },
+          );
+          return this.json(res, 200, { ok: true, data: result });
+        } catch (err) {
+          return this.json(res, 400, {
+            ok: false,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+
       const tasksMatch = relativePath.match(/^\/sessions\/([^/]+)\/tasks$/);
       if (tasksMatch && method === 'GET') {
         const agentId = url.searchParams.get('agentId') ?? undefined;
@@ -679,8 +752,8 @@ export class WebApiRouter {
     }
   }
 
-  private async readBody(req: IncomingMessage): Promise<any> {
-    const maxBytes = this.maxBodyBytes;
+  private async readBody(req: IncomingMessage, maxBytesOverride?: number): Promise<any> {
+    const maxBytes = maxBytesOverride ?? this.maxBodyBytes;
     const chunks: Buffer[] = [];
     let totalBytes = 0;
     for await (const chunk of req) {

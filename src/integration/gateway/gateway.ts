@@ -1239,6 +1239,229 @@ export class Gateway {
 
   // ── Knowledge 源注册（OCTOPI_HOME/knowledge/knowledge.db）──
 
+  /** 会话附件服务（OP-15；懒加载） */
+  private attachmentServicePromise?: Promise<
+    import('../../harness/session/attachments/service.js').SessionAttachmentService
+  >;
+
+  /**
+   * 会话附件服务（OCTOPI_HOME/sessions/&lt;sid&gt;/attachments）
+   */
+  async getAttachmentService(): Promise<
+    import('../../harness/session/attachments/service.js').SessionAttachmentService
+  > {
+    if (!this.attachmentServicePromise) {
+      this.attachmentServicePromise = (async () => {
+        const { SessionAttachmentService } = await import(
+          '../../harness/session/attachments/service.js'
+        );
+        const { getOctopiHome } = await import('../../init.js');
+        const { join } = await import('node:path');
+        const att = this.config.knowledge?.attachments;
+        return new SessionAttachmentService({
+          sessionsDir: join(getOctopiHome(), 'sessions'),
+          limits: {
+            ...(att?.maxFiles != null ? { maxFiles: att.maxFiles } : {}),
+            ...(att?.maxFileBytes != null ? { maxFileBytes: att.maxFileBytes } : {}),
+            ...(att?.maxTotalBytes != null ? { maxTotalBytes: att.maxTotalBytes } : {}),
+            ...(att?.allowedExtensions?.length
+              ? { allowedExtensions: att.allowedExtensions }
+              : {}),
+          },
+        });
+      })();
+    }
+    return this.attachmentServicePromise;
+  }
+
+  /**
+   * 列出会话附件
+   */
+  async listSessionAttachments(
+    sessionId: string,
+  ): Promise<import('../../harness/session/attachments/types.js').SessionAttachment[]> {
+    const svc = await this.getAttachmentService();
+    return svc.list(sessionId);
+  }
+
+  /**
+   * 上传会话附件（JSON + base64 或 utf8 文本）
+   */
+  async uploadSessionAttachments(
+    sessionId: string,
+    files: Array<{ name: string; mime?: string; dataBase64?: string; text?: string }>,
+  ): Promise<import('../../harness/session/attachments/types.js').SessionAttachment[]> {
+    const svc = await this.getAttachmentService();
+    const out: import('../../harness/session/attachments/types.js').SessionAttachment[] = [];
+    for (const f of files) {
+      const data = f.dataBase64
+        ? Buffer.from(f.dataBase64, 'base64')
+        : Buffer.from(f.text ?? '', 'utf8');
+      out.push(await svc.save(sessionId, { name: f.name, mime: f.mime, data }));
+    }
+    return out;
+  }
+
+  /**
+   * 删除单条会话附件（若已 make-searchable 则顺带 purge Knowledge source）
+   */
+  async deleteSessionAttachment(sessionId: string, attachmentId: string): Promise<boolean> {
+    const svc = await this.getAttachmentService();
+    const item = svc.get(sessionId, attachmentId);
+    if (!item) return false;
+    const removed = await svc.delete(sessionId, attachmentId);
+    if (removed && item.searchableSourceId) {
+      try {
+        await this.removeKnowledgeSource(item.searchableSourceId);
+      } catch (err) {
+        console.warn(
+          `[Gateway] purge searchable source failed (${item.searchableSourceId}): ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+    return removed;
+  }
+
+  /**
+   * 归入项目：移动到项目 directory 源（OP-15 promote）
+   */
+  async promoteSessionAttachment(
+    sessionId: string,
+    attachmentId: string,
+    opts: { projectKey: string; targetSourceId?: string },
+  ): Promise<{ attachment: import('../../harness/session/attachments/types.js').SessionAttachment; targetPath: string }> {
+    const svc = await this.getAttachmentService();
+    const store = await this.getKnowledgeSourceStore();
+    const sources = store
+      .list()
+      .filter(
+        (s) =>
+          s.scopeRef.level === 'project' &&
+          s.scopeRef.key === opts.projectKey &&
+          (s.kind === 'directory' || s.kind === 'file' || s.kind === 'workspace'),
+      );
+    const target = opts.targetSourceId
+      ? sources.find((s) => s.id === opts.targetSourceId)
+      : sources.find((s) => s.kind === 'directory') ?? sources[0];
+    if (opts.targetSourceId && !target) {
+      throw new Error(`targetSourceId not found in project "${opts.projectKey}": ${opts.targetSourceId}`);
+    }
+    if (!target) {
+      throw new Error(
+        `project "${opts.projectKey}" has no directory/file source to receive the attachment; create one first`,
+      );
+    }
+
+    const { rename, mkdir, access } = await import('node:fs/promises');
+    const { join, dirname } = await import('node:path');
+    void dirname;
+    const item = svc.get(sessionId, attachmentId);
+    if (!item) throw new Error(`attachment not found: ${attachmentId}`);
+    const from = svc.resolveAbsolutePath(sessionId, attachmentId);
+    const destDir =
+      target.kind === 'file' ? dirname(target.location) : target.location;
+    await mkdir(destDir, { recursive: true });
+    const to = join(destDir, item.name);
+    try {
+      await access(to);
+      throw new Error(`target already has a file named ${item.name}`);
+    } catch (err) {
+      if (err instanceof Error && err.message.startsWith('target already')) throw err;
+      // 不存在则继续 move
+    }
+    await rename(from, to);
+    // 若有抽取伴生且不同名，一并移动
+    if (item.extractPath && item.extractPath !== item.path) {
+      const fromExtract = join(svc.attachmentRoot(sessionId), item.extractPath);
+      const toExtract = join(destDir, item.extractPath);
+      try {
+        await rename(fromExtract, toExtract);
+      } catch {
+        // 伴生缺失不阻断 promote
+      }
+    }
+    const marked = await svc.markPromoted(sessionId, attachmentId, {
+      projectKey: opts.projectKey,
+      targetSourceId: target.id,
+    });
+    return { attachment: marked, targetPath: to };
+  }
+
+  /**
+   * 附件升为可检索：注册 scopeRef=session 的 Knowledge source 并 ingest
+   */
+  async makeAttachmentSearchable(
+    sessionId: string,
+    attachmentId: string,
+  ): Promise<{
+    attachment: import('../../harness/session/attachments/types.js').SessionAttachment;
+    sourceId: string;
+    status: string;
+  }> {
+    const svc = await this.getAttachmentService();
+    const item = svc.get(sessionId, attachmentId);
+    if (!item) throw new Error(`attachment not found: ${attachmentId}`);
+    if (item.status === 'promoted') {
+      throw new Error('attachment already promoted to project');
+    }
+    if (item.searchableSourceId) {
+      const { asSourceId } = await import('../../harness/knowledge/types.js');
+      const existing = (await this.getKnowledgeSourceStore()).get(
+        asSourceId(item.searchableSourceId),
+      );
+      if (existing) {
+        return {
+          attachment: item,
+          sourceId: existing.id,
+          status: existing.status,
+        };
+      }
+    }
+    const abs = svc.resolveAbsolutePath(sessionId, attachmentId);
+    const source = await this.createKnowledgeSource({
+      kind: 'file',
+      location: abs,
+      scopeRef: { level: 'session', key: sessionId },
+      displayName: item.name,
+      description: `会话附件 · ${item.name}`,
+      sync: { strategy: 'manual', enabled: true },
+    });
+    const re = await this.reindexKnowledgeSource(source.id, { full: true, watch: false });
+    const marked = await svc.markSearchable(sessionId, attachmentId, source.id);
+    return { attachment: marked, sourceId: source.id, status: re.status };
+  }
+
+  /**
+   * 解析 chat 消息附件指针（TriggerAttachmentRef）
+   */
+  async resolveAttachmentRefs(
+    sessionId: string,
+    attachmentIds: unknown,
+  ): Promise<import('../../harness/activation/types.js').TriggerAttachmentRef[]> {
+    if (!Array.isArray(attachmentIds) || attachmentIds.length === 0) return [];
+    const svc = await this.getAttachmentService();
+    const { join: pathJoin } = await import('node:path');
+    const refs: import('../../harness/activation/types.js').TriggerAttachmentRef[] = [];
+    for (const id of attachmentIds) {
+      if (typeof id !== 'string') continue;
+      const item = svc.get(sessionId, id);
+      if (!item || item.status === 'promoted') continue;
+      const abs = svc.resolveAbsolutePath(sessionId, id);
+      const extractAbs = item.extractPath
+        ? pathJoin(svc.attachmentRoot(sessionId), item.extractPath)
+        : abs;
+      refs.push({
+        id: item.id,
+        name: item.name,
+        mime: item.mime,
+        sizeBytes: item.sizeBytes,
+        path: extractAbs,
+        kind: item.kind,
+      });
+    }
+    return refs;
+  }
+
   /**
    * 打开/缓存 KnowledgeSourceStore（进程内单例）
    */
@@ -2115,9 +2338,28 @@ export class Gateway {
 
     // 4–5. 经激活宿主执行（模型 A）；onEvent 做流式广播（不变量 #6）
     let finalContent = '';
+    // 会话附件指针（OP-15）：metadata.attachmentIds → Trigger.attachments
+    let attachMetadata: Record<string, unknown> = {};
+    const rawAttachIds = (msg.metadata as { attachmentIds?: unknown } | undefined)?.attachmentIds;
+    if (Array.isArray(rawAttachIds) && rawAttachIds.length > 0) {
+      try {
+        const refs = await this.resolveAttachmentRefs(sessionKey, rawAttachIds);
+        if (refs.length > 0) {
+          attachMetadata = { attachments: refs };
+        }
+      } catch (attErr) {
+        console.warn(
+          `[Gateway] resolve attachments failed (session=${sessionKey}): ${attErr instanceof Error ? attErr.message : String(attErr)}`,
+        );
+      }
+    }
     const dispatchResult = await dispatchChannelMessage({
       runtime: this.runtime,
-      msg: { ...msg, content: inboundContent },
+      msg: {
+        ...msg,
+        content: inboundContent,
+        metadata: { ...(msg.metadata ?? {}), ...attachMetadata },
+      },
       resolveAgentId: () => agent.id,
       resolveSessionId: () => sessionKey,
       onEvent: (event) => {
@@ -2269,11 +2511,21 @@ export class Gateway {
       builder.toolIsolation(this.config.toolIsolation);
     }
     // E1/E2：同一进程内所有 Runner 共享一把 session lease；E6：注入 ACL + agent 天花板
+    // OP-15：会话附件只读根（file 工具可读）
+    const { getOctopiHome } = await import('../../init.js');
+    const { join: pathJoinForAttachments } = await import('node:path');
     builder.runnerConfig({
       sessionLease: this.sessionLease,
       sessionAcl: this.sessionAcl,
       agentMaxSessionRights: agent.maxSessionRights,
       observerHub: this.observerHub.isEnabled() ? this.observerHub : undefined,
+      sessionAttachmentsBaseDir: pathJoinForAttachments(getOctopiHome(), 'sessions'),
+      sessionAttachmentInject: {
+        fullTextMaxChars: this.config.knowledge?.attachments?.inject?.fullTextMaxChars,
+        intent: this.config.knowledge?.attachments?.inject?.intent,
+        intentTimeoutMs: this.config.knowledge?.attachments?.inject?.intentTimeoutMs,
+        emptyMessagePrompt: this.config.knowledge?.attachments?.inject?.emptyMessagePrompt,
+      },
     });
 
     // ── 七层数据源：skills / memory / wisdom / cognition / knowledge / assembler ──

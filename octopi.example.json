@@ -135,6 +135,16 @@
     },
     "promotion": {
       "metrics": { "minSessions": 3, "minHits": 10 }
+    },
+    "attachments": {
+      "maxFiles": 8,
+      "maxFileBytes": 26214400,
+      "maxTotalBytes": 52428800,
+      "inject": {
+        "fullTextMaxChars": 12000,
+        "intent": "llm",
+        "intentTimeoutMs": 800
+      }
     }
   },
 

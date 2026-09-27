@@ -155,6 +155,29 @@ export interface KnowledgeRuntimeConfig {
     metrics?: { minSessions?: number; minHits?: number };
     stewardOnConverge?: boolean;
   };
+  /** 会话附件（OP-15） */
+  attachments?: {
+    maxFiles?: number;
+    maxFileBytes?: number;
+    maxTotalBytes?: number;
+    allowedExtensions?: string[];
+    parse?: {
+      extract?: boolean;
+      keywordIndex?: boolean;
+      embedding?: 'off' | 'lazy' | 'on-upload';
+    };
+    inject?: {
+      fullTextMaxChars?: number;
+      recallTopK?: number;
+      inventory?: boolean;
+      intent?: 'llm' | 'off';
+      intentTimeoutMs?: number;
+      emptyMessagePrompt?: string;
+    };
+    tools?: {
+      attachmentsRootReadOnly?: boolean;
+    };
+  };
 }
 
 // ── Web Search 配置 ──

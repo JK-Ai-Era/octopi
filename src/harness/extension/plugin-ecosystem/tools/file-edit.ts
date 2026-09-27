@@ -12,7 +12,7 @@
  */
 
 import type { RegisteredTool } from '../../../../core/types.js';
-import { resolveToolPath } from './platform.js';
+import { isUnderAttachmentRoot, resolveToolPath } from './platform.js';
 
 export function createFileEditTool(): RegisteredTool {
   return {
@@ -51,6 +51,9 @@ export function createFileEditTool(): RegisteredTool {
       const rawPath = args.path as string;
       const cwd = context.cwd ?? process.cwd();
       const path = resolveToolPath(rawPath, cwd);
+      if (isUnderAttachmentRoot(path, context.attachmentRoots)) {
+        throw new Error('session attachments are read-only; cannot edit attachments root');
+      }
       const oldText = args.old_text as string;
       const newText = args.new_text as string;
       const occurrence = (args.occurrence as string) ?? 'first';

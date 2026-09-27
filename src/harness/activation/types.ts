@@ -45,7 +45,22 @@ export interface Trigger {
     modelOverride?: string;
     /** modelOverride 为裸名时的 provider */
     modelProvider?: string;
+    /** 会话附件指针（OP-15）；compile 后进 FileBlock */
+    attachments?: TriggerAttachmentRef[];
+    /** 引擎合成的默认指令（空正文+附件） */
+    syntheticInstruction?: boolean;
   };
+}
+
+/** Trigger 上的附件指针（绝对路径由宿主填好） */
+export interface TriggerAttachmentRef {
+  id: string;
+  name: string;
+  mime?: string;
+  sizeBytes?: number;
+  /** 可读绝对路径（抽取优先） */
+  path: string;
+  kind?: string;
 }
 
 // ── RunRequest ──

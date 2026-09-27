@@ -198,6 +198,7 @@ Tier 3  Full        「原文」                knowledge_read
 | `catalog.*` | system 目录条数、自动描述开关 |
 | `index.*` | 是否 embedding / 关键词腿 / 同步与并发 |
 | `promotion.metrics` | 使用计量阈值（供后续提升信号，**不**直接写 Memory） |
+| `attachments.*` | 会话附件限额与注入（`inject.intent` / `fullTextMaxChars`）；见 OP-15 规格 |
 
 完整键位见 `octopi.schema.json` 与 `octopi.example.json`。
 
@@ -234,7 +235,7 @@ GET    /api/v1/agents/:id/knowledge/promotion-candidates
 - 注册后可 **reindex** 触发解析/索引，并可选启动文件监听。
 - **删除**会清理索引与使用痕迹（合规可抹除）。
 - 自动描述默认可用，可关闭外发；抽样前做敏感形态扫描。
-- 会话临时源（附件）生命周期随 session；**持久化/升级为 Project 源**走管理面 `PATCH scopeRef`（非自动提升）。
+- **会话附件（临时上传）**：落 `sessions/<sid>/attachments/`，仅本 session；消息侧为 `FileBlock` 指针 + turn 侧不可信资料块（正文）。可选 **升为可检索**（注册 `scopeRef: session` 源）或 **归入项目**（promote=move，非自动提升）。API：`/api/v1/sessions/:id/attachments`。详见 `arch/knowledge-session-attachments.md`。
 - 外源可带 **`authRef`**（指向 credentials 命名凭证）、**`network`**（`allowPrivateNetwork` / 超时）、**`discover`**（sitemap/crawl 预算）。失败/skip **不删**已入库 chunks。
 - 溯源：命中用稳定逻辑 **`path`**；完整 URL 在文件记录 `external_url`。
 

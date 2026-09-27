@@ -1119,6 +1119,82 @@ button.ctx-band {
 .corpus-source-ov { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--color-border); display: flex; flex-direction: column; gap: 6px; }
 .corpus-toast { color: var(--color-ok); margin-right: 8px; }
 
+/* ── Session attachments (OP-15) ── */
+.composer-attachments { min-height: 0; }
+.attachment-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+.attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg);
+  font-size: var(--text-sm);
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.attachment-chip button { padding: 0 4px; line-height: 1; }
+.attachment-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow: visible;
+}
+.attachment-row {
+  position: relative;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  overflow: visible;
+}
+.attachment-menu {
+  position: absolute;
+  right: 8px;
+  top: calc(100% - 4px);
+  z-index: 40;
+  min-width: 160px;
+  padding: 6px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.16);
+}
+.attachment-promote {
+  position: absolute;
+  right: 8px;
+  top: calc(100% - 4px);
+  z-index: 40;
+  min-width: 200px;
+  padding: 8px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.16);
+}
+.attachment-panel {
+  overflow: visible;
+}
+.attachment-menu {
+  position: fixed;
+  z-index: 80;
+  min-width: 160px;
+  padding: 6px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.16);
+}
+.attachment-promote {
+  position: fixed;
+  z-index: 80;
+  min-width: 200px;
+  padding: 8px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.16);
+}
+.attachment-menu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  background: transparent;
+}
+
 @media (max-width: 900px) {
   .kn-projects-layout { grid-template-columns: 1fr; }
 }
