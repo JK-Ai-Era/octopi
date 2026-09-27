@@ -4,6 +4,7 @@
  * Enforces dependency direction:
  * - src/core  → no harness / integration / loop / cli / subsystems
  * - src/loop  → no harness / integration
+ * - src/harness → no integration
  *
  * These rules are also mirrored in eslint.config.js (no-restricted-imports).
  */
@@ -29,7 +30,12 @@ function walkTsFiles(dir: string): string[] {
   return out;
 }
 
-/** Extract relative import specifiers from a TS source file. */
+/** Extract relative import specifiers from a TS source file.
+ *
+ * 门禁边界：覆盖静态 `from '…'` 与字面量 `import('…')` / `import type('…')`。
+ * **不**覆盖 `require('…')`、模板串或变量 `import(x)`——那些应靠 code review。
+ * ESLint `no-restricted-imports` 对动态 `import()` 覆盖有限，故以本测试为准。
+ */
 function extractImports(source: string): string[] {
   const specs: string[] = [];
   const patterns = [
@@ -102,6 +108,21 @@ describe('architecture boundaries', () => {
       }
     }
     expect(violations, `Loop→outer imports:\n${violations.join('\n')}`).toEqual([]);
+  });
+
+  it('harness does not import integration', () => {
+    const violations: string[] = [];
+    for (const file of files) {
+      const rel = relative(SRC, file).split(sep).join('/');
+      if (!rel.startsWith('harness/')) continue;
+      const source = readFileSync(file, 'utf8');
+      for (const spec of extractImports(source)) {
+        if (forbiddenTargets(spec).includes('integration')) {
+          violations.push(`${rel}: ${spec}`);
+        }
+      }
+    }
+    expect(violations, `Harness→Integration imports:\n${violations.join('\n')}`).toEqual([]);
   });
 
   it('core does not hold migrated domain contracts', () => {

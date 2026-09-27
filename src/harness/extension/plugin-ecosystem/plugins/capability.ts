@@ -14,7 +14,7 @@
 
 import type { ModelProvider } from '../../../../core/interfaces/model-provider.js';
 import type { ContextEngine } from '../../../context/types.js';
-import type { ChannelAdapter, ChannelMessage, ChannelReply } from '../../../../integration/types/channels.js';
+import type { ChannelAdapter, ChannelMessage, ChannelReply } from '../channel-types.js';
 import type { PluginManifest } from './manifest.js';
 
 /**

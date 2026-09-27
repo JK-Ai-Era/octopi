@@ -26,7 +26,8 @@ export type {
 export { DEFAULT_CONTEXT_WINDOW } from './model-info.js';
 
 // ── Session ──
-export type { SessionStatus, SessionMeta } from './session.js';
+export type { SessionStatus, SessionMeta, SessionAgentMatchPick } from './session.js';
+export { sessionMatchesAgent } from './session.js';
 
 // ── Turn ──
 export type { TokenUsage, Turn } from './turn.js';

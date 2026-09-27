@@ -6,7 +6,7 @@
  */
 
 import { isAbsolute, join, resolve, sep } from 'node:path';
-import { toSessionFileName } from '../../../integration/storage/session-filename.js';
+import { toSessionFileName } from '../../../core/session-filename.js';
 
 /** 工具效应隔离模式（部署可配；schema 字段 `toolIsolation`） */
 export type ToolIsolationMode = 'none' | 'session-subdir' | 'session-lock';

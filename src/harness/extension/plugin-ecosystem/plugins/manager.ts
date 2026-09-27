@@ -21,7 +21,7 @@ import type {
   ToolResult,
   ThinkingLevel,
 } from '../../../../core/types.js';
-import type { ChannelAdapter, ChannelMessage, ChannelReply } from '../../../../integration/types/channels.js';
+import type { ChannelAdapter, ChannelMessage, ChannelReply } from '../channel-types.js';
 import type { HookContext } from '../../../shared/types/hook-context.js';
 import type { ContextEngine } from '../../../context/types.js';
 import type { PluginApi } from './api.js';
@@ -645,8 +645,8 @@ export class PluginManager {
   /**
    * 获取所有已注册的 channels
    */
-  getChannels(): Array<{ pluginId: string; id: string; adapter: import('../../../../integration/types/channels.js').ChannelAdapter }> {
-    const result: Array<{ pluginId: string; id: string; adapter: import('../../../../integration/types/channels.js').ChannelAdapter }> = [];
+  getChannels(): Array<{ pluginId: string; id: string; adapter: ChannelAdapter }> {
+    const result: Array<{ pluginId: string; id: string; adapter: ChannelAdapter }> = [];
     for (const plugin of this.loader.getAllPlugins()) {
       if (!plugin.registered) continue;
       for (const reg of plugin.api._channels) {

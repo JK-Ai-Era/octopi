@@ -4,6 +4,7 @@ import tseslint from 'typescript-eslint';
  * Architecture boundary rules:
  * - Core (Layer 1) must not import Harness / Integration / Loop / CLI / subsystems
  * - Loop (Layer 0) must not import Harness / Integration
+ * - Harness (Layer 2) must not import Integration
  *
  * Dependency direction: Integration → Harness → Loop → Core.
  * Mirrored by tests/architecture/boundaries.test.ts.
@@ -76,6 +77,23 @@ export default tseslint.config(
             {
               group: ['**/integration/**', '../integration/**', '../../integration/**'],
               message: 'Loop (Layer 0) must not import Integration.',
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    files: ['src/harness/**/*.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: ['**/integration/**'],
+              message:
+                'Harness (Layer 2) must not import Integration. Move the contract into Core/Harness or inject the implementation from the host.',
             },
           ],
         },

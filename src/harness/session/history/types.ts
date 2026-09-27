@@ -6,6 +6,7 @@
  */
 
 import type { Message, MessageRole } from '../../../core/types.js';
+import type { SessionData } from '../types.js';
 
 /** 检索模式 */
 export type SessionHistoryQueryMode = 'keyword' | 'phrase' | 'regex';
@@ -119,6 +120,50 @@ export interface SessionHistoryPort {
   search(query: SessionHistoryQuery): Promise<SessionHistorySearchResult>;
   open(request: SessionHistoryOpenRequest): Promise<SessionHistoryWindow | null>;
   list(filter?: SessionHistoryListFilter): Promise<SessionHistoryBrief[]>;
+}
+
+// ── 可选投影索引契约（I2：可重建，非权威） ──
+
+/** 与 Jsonl 旁路钩子对齐 */
+export interface SessionIndexSink {
+  upsertFromSession(sessionId: string, data: SessionData): Promise<void>;
+  remove(sessionId: string): Promise<void>;
+}
+
+export interface SessionIndexPrefilterQuery {
+  /** 关键词（keyword AND，子串）或 phrase 整串 */
+  terms: string[];
+  mode: 'keyword' | 'phrase' | 'regex';
+  roles?: string[];
+  agentId?: string;
+  sessionIds?: string[];
+  since?: number;
+  until?: number;
+  includeArchived?: boolean;
+  includeToolIo?: boolean;
+  limitSessions?: number;
+}
+
+export interface SessionIndexCandidate {
+  sessionId: string;
+  msgIndexes: number[];
+}
+
+export interface SessionIndexBackend extends SessionIndexSink {
+  ensureSchema(): Promise<void>;
+  /**
+   * SQL 缩候选 session（及命中行）；具体打分/ACL 仍由 Port 完成。
+   * 返回 `null` 表示索引不可用/陈旧/可能截断漏检 —— 调用方应回退全量扫描。
+   * 返回 `[]` 表示索引确信无命中。
+   */
+  prefilter(query: SessionIndexPrefilterQuery): Promise<SessionIndexCandidate[] | null>;
+  /** 全量重建（扫权威 store） */
+  rebuildFrom(loadAll: () => AsyncIterable<SessionData>): Promise<{ sessions: number; messages: number }>;
+  /** 权威侧 session 数（用于新鲜度校验） */
+  countSessions(): Promise<number>;
+  /** 是否启用 FTS5 */
+  readonly ftsEnabled: boolean;
+  close(): void;
 }
 
 /** 从 ref 解析 index；非法返回 null */

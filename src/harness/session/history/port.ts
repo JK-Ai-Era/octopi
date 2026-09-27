@@ -16,7 +16,7 @@ import type { SessionData } from '../types.js';
 import type { SessionAclService } from '../../governance/session-acl/service.js';
 import type { EffectiveSessionRights, SessionParticipant, SessionRights } from '../../governance/session-acl/types.js';
 import { computeEffectiveRights } from '../../governance/session-acl/rights.js';
-import { sessionMatchesAgent } from '../../../integration/storage/memory.js';
+import { sessionMatchesAgent } from '../../../core/types/session.js';
 
 import type {
   SessionHistoryBrief,
@@ -28,6 +28,7 @@ import type {
   SessionHistorySessionHit,
   SessionHistoryWindow,
   SessionHistoryWindowMessage,
+  SessionIndexBackend,
 } from './types.js';
 import { formatHistoryRef, parseHistoryRef, messageText } from './types.js';
 import {
@@ -53,7 +54,7 @@ export interface SessionHistoryOptions {
    * 可选投影索引（P2）。提供时 search 先 SQL 缩候选，再精打分；
    * 无索引或索引异常时回退全量扫描（行为与 P1 一致）。
    */
-  index?: import('../../../integration/storage/session-index.js').SessionIndexBackend;
+  index?: SessionIndexBackend;
   /**
    * Agent 天花板（E6：L0 ∩ role.max ∩ **agent.max** ∩ binding）。
    * 与 Runner `agentMaxSessionRights` 同源；缺省不收紧。

@@ -47,6 +47,8 @@ Domain / 产品契约主体在 **harness 领域**。
 
 - Kernel ports + 词汇表 + EventBus/StateMachine/Cron **机制**
 - 安全纯函数（severityToAction / isValidSecurityGuard）
+- Session 词汇纯函数：`sessionMatchesAgent`（SessionMeta 归属匹配，与 `SessionListFilter.agentId` 同规则）
+- Session 文件名映射：`toSessionFileName`（跨层一致的落盘/目录名不变式）
 - **不包含**产品事件词表（AgentEventMap 在 harness/shared/events）
 
 ## 不做什么

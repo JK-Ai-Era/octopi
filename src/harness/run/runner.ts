@@ -102,6 +102,14 @@ export interface SessionAwareRunnerConfig {
   agentMaxSessionRights?: import('../governance/session-acl/types.js').SessionRights;
   /** 产品 Observer 通道（Run 现场快照；缺省不采集） */
   observerHub?: import('../observability/observer/hub.js').ObserverHub;
+  /**
+   * 事件旁路（Telemetry）。每条适配后事件调用（含 llm_stream_delta），
+   * 不改变 yield 语义。由 Builder 注入 RunTelemetry.onEvent。
+   */
+  eventSink?: (
+    event: import('../../core/primitives/event-bus.js').AgentEvent,
+    ctx: { sessionId: string; agentId: string },
+  ) => void;
 }
 
 const DEFAULT_CONFIG: SessionAwareRunnerConfig = {
@@ -1054,6 +1062,8 @@ export class SessionAwareRunner {
           }
 
           yield adapted;
+          // Telemetry 旁路（含 stream delta；由 RunTelemetry 决定采样）
+          this.config.eventSink?.(adapted, meta);
           // 事件桥：循环事件同时广播到 EventBus
           // 跳过高频流式 delta（每 token 一次），避免 EventBus 拥塞
           if (adapted.type !== 'llm_stream_delta') {

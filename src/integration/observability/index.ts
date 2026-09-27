@@ -21,3 +21,5 @@ export { MetricsAggregator, formatMetricsSnapshot } from './metrics.js';
 export type { MetricsSnapshot, LatencyStats, MetricsAggregatorConfig } from './metrics.js';
 export { ObserverBridge } from './observer-bridge.js';
 export type { ObserverBridgeConfig } from './observer-bridge.js';
+export { createRunTelemetry } from './run-telemetry.js';
+export type { CreateRunTelemetryOptions } from './run-telemetry.js';

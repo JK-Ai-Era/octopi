@@ -75,8 +75,19 @@ export type {
 // Harness 层
 // ============================================================
 
+// 观测装配：注册 Integration 默认工厂，使 AgentBuilder.trace() 一行生效
+import { setRunTelemetryFactory } from './harness/observability/run-telemetry.js';
+import { createRunTelemetry } from './integration/observability/run-telemetry.js';
+setRunTelemetryFactory(createRunTelemetry);
+
+export { setRunTelemetryFactory, getRunTelemetryFactory } from './harness/observability/run-telemetry.js';
+export type { RunTelemetry, RunTelemetryFactory } from './harness/observability/run-telemetry.js';
+export { createRunTelemetry } from './integration/observability/run-telemetry.js';
+
 export { AgentBuilder, createAgent, isSubsystemAllowed, discoverSubsystemSpecs } from './harness/agent/builder.js';
+export type { AgentTraceOptions } from './harness/agent/builder.js';
 export type { AgentBuildOptions, AgentBuildResult, AgentBuildCoreResult } from './harness/agent/builder.js';
+export type { ChannelAdapter, ChannelMessage, ChannelReply } from './harness/extension/plugin-ecosystem/channel-types.js';
 export { Agent } from './harness/run/agent/index.js';
 export type { AgentOptions } from './harness/run/agent/index.js';
 export type { HarnessLoopEvent, BudgetControlEvent, ControlStopMetric, PolicyUnit } from './harness/run/reliability/harness-events.js';

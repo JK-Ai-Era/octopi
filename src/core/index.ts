@@ -15,6 +15,9 @@ export type { AgentEvent as EventBusAgentEvent } from './primitives/event-bus.js
 // ── 安全守卫纯函数（SecurityGuard 类型已由 kernel 导出） ──
 export { isValidSecurityGuard, severityToAction } from './security-guard.js';
 
+// ── Session 文件名映射（跨层一致的纯函数不变式） ──
+export { toSessionFileName } from './session-filename.js';
+
 // ── 核心类型（Kernel 词汇表） ──
 export * from './types/index.js';
 export { getTextContent, hasMediaContent } from './types/messages.js';

@@ -16,7 +16,7 @@ import type {
   ToolHandler,
 } from '../../../../core/types.js';
 import type { ContextEngine } from '../../../context/types.js';
-import type { ChannelAdapter, ChannelMessage, ChannelReply } from '../../../../integration/types/channels.js';
+import type { ChannelAdapter, ChannelMessage, ChannelReply } from '../channel-types.js';
 
 /**
  * Hook 注册选项

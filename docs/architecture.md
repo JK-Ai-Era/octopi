@@ -767,6 +767,7 @@ const { agent, harness, runner, runtime, events, contextHealth } = await new Age
 
   // 工具
   .tool(myTool)
+  .mcpClientFactory(createSdkMcpClient)   // Integration 注入（octopi 导出）
   .mcp({ id: 'fs', transport: 'stdio', command: 'npx', args: [...] })
 
   // 上下文
@@ -781,7 +782,7 @@ const { agent, harness, runner, runtime, events, contextHealth } = await new Age
   .runGuard()
   .reliability({ planningRetry: { maxAttempts: 3 } })
 
-  // 可观测性
+  // 可观测性（import 'octopi' 已注册 createRunTelemetry；或 .telemetryFactory(...)）
   .trace({ captureToolArgs: true })
 
   // 自主子系统

@@ -51,14 +51,11 @@ import type {
   Observer,
 } from '../../core/interfaces/observer.js';
 import { summarizeLlmMessages } from '../observability/observer/types.js';
-import type { TraceCollectorConfig } from '../../integration/observability/trace-collector.js';
-import type { MetricsAggregatorConfig } from '../../integration/observability/metrics.js';
-import type { TraceLoggerConfig } from '../../integration/observability/trace-logger.js';
 import type { SessionStore } from '../../core/interfaces/session-store.js';
 import { SessionTaskService } from '../session/tasks/service.js';
 import { createSessionTaskTools } from '../session/tasks/tools.js';
 import type { SessionData } from '../session/types.js';
-import { InMemorySessionStore } from '../../integration/storage/memory.js';
+import { InMemorySessionStore } from '../session/in-memory-store.js';
 
 import {
   DefaultEventBus,
@@ -409,6 +406,10 @@ export async function discoverSubsystemSpecs(override?: AgentBuildOptions['subsy
 
 // wireMemoryExtraction 已移除：Memory Steward 取代 ETL（docs/memory.md）
 
+export type { AgentTraceOptions } from '../observability/run-telemetry.js';
+import type { AgentTraceOptions, RunTelemetry, RunTelemetryFactory } from '../observability/run-telemetry.js';
+import { getRunTelemetryFactory } from '../observability/run-telemetry.js';
+
 /**
  * AgentBuilder — Fluent API
  */
@@ -486,10 +487,12 @@ export class AgentBuilder {
   private _initialPersonaContent?: string;
   private _securityConfig?: SecurityGuardConfig;
 
-  // Observability 配置
-  private _traceConfig?: TraceCollectorConfig;
-  private _loggerConfig?: Partial<TraceLoggerConfig>;
-  private _metricsConfig?: MetricsAggregatorConfig;
+  /** 产品级观测采集意图（具体后端用 .observer() 或已注册 RunTelemetryFactory） */
+  private _traceOptions?: AgentTraceOptions;
+  /** 观测装配工厂（宿主注入；`octopi` 入口默认注册） */
+  private _telemetryFactory?: RunTelemetryFactory;
+  /** build 时装配出的观测句柄 */
+  private _telemetry?: RunTelemetry;
 
   // Runner 配置
   private _store?: SessionStore<SessionData>;
@@ -501,6 +504,8 @@ export class AgentBuilder {
 
   // MCP 配置
   private _mcpConfigs: import('../extension/plugin-ecosystem/mcp/types.js').McpServerConfig[] = [];
+  /** MCP client 工厂（Integration 适配器由宿主注入） */
+  private _mcpClientFactory?: McpClientFactory;
 
   // 自主子系统配置
   private _subsystemSpecs: import('../collaboration/autonomous-subsystem/types.js').SubsystemSpec[] = [];
@@ -569,11 +574,13 @@ export class AgentBuilder {
    *
    * 构建时自动连接，工具注册到 ToolBus。
    * 支持多次调用，连接多个 MCP Server。
+   * 需同时注入 `mcpClientFactory`（Integration 的 `createSdkMcpClient` 或自定义实现）。
    *
    * @example
    * ```ts
    * const { engine, runner } = await new AgentBuilder()
    *   .model('gpt-5.5')
+   *   .mcpClientFactory(createSdkMcpClient)
    *   .mcp({
    *     id: 'filesystem',
    *     transport: 'stdio',
@@ -585,6 +592,12 @@ export class AgentBuilder {
    */
   mcp(config: import('../extension/plugin-ecosystem/mcp/types.js').McpServerConfig): this {
     this._mcpConfigs.push(config);
+    return this;
+  }
+
+  /** 注入 MCP client 工厂（Integration 适配；Harness 不 import Integration） */
+  mcpClientFactory(factory: McpClientFactory): this {
+    this._mcpClientFactory = factory;
     return this;
   }
 
@@ -840,32 +853,35 @@ export class AgentBuilder {
   }
 
   /**
-   * 启用完整可观测性
+   * 启用可观测性采集
    *
-   * 自动创建：
-   * - ObserverBridge（实现 Observer，桥接到 TraceLogger + MetricsAggregator）
-   * - 如果未手动设置 observer，则自动注入 ObserverBridge
+   * 需要其一才能生效：
+   * - 已注册 `RunTelemetryFactory`（`import 'octopi'` 会默认注册 createRunTelemetry）
+   * - 或手动 `.telemetryFactory(...)` / `.observer(...)`
    *
-   * @param traceConfig - TraceCollector 配置（事件流包装）
-   * @param loggerConfig - TraceLogger 配置（日志输出）
-   * @param metricsConfig - MetricsAggregator 配置（指标聚合）
+   * @param options - 采集意图（tool args / stream deltas / metrics…）
    */
-  trace(
-    traceConfig?: Partial<TraceCollectorConfig>,
-    loggerConfig?: Partial<TraceLoggerConfig>,
-    metricsConfig?: MetricsAggregatorConfig,
-  ): this {
-    this._traceConfig = {
+  trace(options?: AgentTraceOptions): this {
+    this._traceOptions = {
       captureStreamDeltas: false,
       captureModelRequest: false,
       captureToolArgs: true,
       captureToolResults: false,
       enableMetrics: true,
-      ...traceConfig,
-    } as TraceCollectorConfig;
-    this._loggerConfig = loggerConfig;
-    this._metricsConfig = metricsConfig;
+      ...options,
+    };
     return this;
+  }
+
+  /** 注入观测装配工厂（Integration 的 createRunTelemetry 或自定义） */
+  telemetryFactory(factory: RunTelemetryFactory): this {
+    this._telemetryFactory = factory;
+    return this;
+  }
+
+  /** 读取采集意图 */
+  getTraceOptions(): AgentTraceOptions | undefined {
+    return this._traceOptions;
   }
 
   /** 设置过程监督（自动创建，使用主模型做 LLM 审查） */
@@ -1086,6 +1102,9 @@ export class AgentBuilder {
       observerHub: this._observerHub ?? this._runnerConfig?.observerHub,
       sessionTaskService,
       events,
+      eventSink: this._telemetry?.onEvent
+        ? (event, ctx) => this._telemetry?.onEvent?.(event, ctx)
+        : this._runnerConfig?.eventSink,
     });
     runner.setToolContextProvider(this._contextProvider);
     if (this._personaResolver) {
@@ -1367,6 +1386,20 @@ export class AgentBuilder {
       this._events = new DefaultEventBus();
     }
 
+    // 观测装配：.trace() → RunTelemetry（工厂由宿主/包入口注入）
+    let loopObserver: import('../../loop/types.js').LoopObserver | undefined;
+    if (this._traceOptions) {
+      const factory = this._telemetryFactory ?? getRunTelemetryFactory();
+      if (factory) {
+        this._telemetry = factory(this._traceOptions);
+        loopObserver = this._telemetry.createLoopObserver(this._traceOptions);
+      } else if (!this._observer) {
+        throw new Error(
+          'trace() requires a RunTelemetryFactory. `import { AgentBuilder } from "octopi"` registers createRunTelemetry, or call .telemetryFactory(...) / .observer(...).',
+        );
+      }
+    }
+
     // 加载 systemPrompt：文件式 persona 走 PersonaSource（run 时热更新）
     let systemPrompt = this._systemPrompt ?? '';
     this._personaResolver = undefined;
@@ -1410,12 +1443,12 @@ export class AgentBuilder {
       model: this._model,
       systemPrompt,
       tools: agentTools,
-      observer: this._observer ? {
+      observer: loopObserver ?? (this._observer ? {
         onLLMStart: (p) => this._observer?.log('info', 'llm.start', p as unknown as Record<string, unknown>),
         onLLMEnd: (p) => this._observer?.log('info', 'llm.end', p as unknown as Record<string, unknown>),
         onToolStart: (p) => this._observer?.log('info', 'tool.start', p as unknown as Record<string, unknown>),
         onToolEnd: (p) => this._observer?.log('info', 'tool.end', p as unknown as Record<string, unknown>),
-      } : undefined,
+      } : undefined),
     };
     const agent = new Agent(agentOptions);
 
@@ -1615,8 +1648,6 @@ export class AgentBuilder {
    * 构建 McpManager 并连接所有配置的 MCP Server
    */
   private async buildMcpManager(): Promise<McpManager> {
-    const { createSdkMcpClient } = await import('../../integration/mcp/sdk-client.js');
-
     // 创建回调，桥接到 this._toolBus
     // MCP 工具全局注册（外部 server 发现的工具天然跨 agent 共享）
     // Agent 级过滤通过 ToolPolicy.deny 实现
@@ -1626,7 +1657,15 @@ export class AgentBuilder {
       getTool: (name) => this._toolBus.getTool(name),
     };
 
-    const clientFactory: McpClientFactory = (config: McpServerConfig) => createSdkMcpClient(config);
+    const factory = this._mcpClientFactory;
+    const clientFactory: McpClientFactory = (config: McpServerConfig) => {
+      if (!factory) {
+        throw new Error(
+          'McpClientFactory not injected. Call .mcpClientFactory(createSdkMcpClient) (from octopi/integration) before .mcp().',
+        );
+      }
+      return factory(config);
+    };
     const manager = new DefaultMcpManager(callbacks, clientFactory);
 
     // 连接所有配置的 MCP Server
@@ -1680,14 +1719,19 @@ Examples:
  * });
  * ```
  */
-export async function createAgent(config: {
+/** createAgent 配置：使用 mcp 时必须同时注入 mcpClientFactory */
+export type CreateAgentConfig = {
   model: ModelProvider;
   persona?: string;
   tools?: RegisteredTool[];
   store?: SessionStore<SessionData>;
   budget?: Partial<BudgetPolicyConfig>;
-  mcp?: McpServerConfig[];
-}): Promise<{ agent: Agent; harness: ReliabilityHarness; runner: SessionAwareRunner; mcpManager: McpManager }> {
+} & (
+  | { mcp?: undefined; mcpClientFactory?: McpClientFactory }
+  | { mcp: McpServerConfig[]; mcpClientFactory: McpClientFactory }
+);
+
+export async function createAgent(config: CreateAgentConfig): Promise<{ agent: Agent; harness: ReliabilityHarness; runner: SessionAwareRunner; mcpManager: McpManager }> {
   const builder = new AgentBuilder()
     .model(config.model);
 
@@ -1695,6 +1739,7 @@ export async function createAgent(config: {
   if (config.tools) builder.tools(...config.tools);
   if (config.store) builder.store(config.store);
   if (config.budget) builder.budget(config.budget);
+  if (config.mcpClientFactory) builder.mcpClientFactory(config.mcpClientFactory);
   if (config.mcp) {
     for (const mcpConfig of config.mcp) builder.mcp(mcpConfig);
   }

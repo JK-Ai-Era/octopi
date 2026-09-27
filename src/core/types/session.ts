@@ -34,3 +34,32 @@ export interface SessionMeta {
   endedAt?: number;
   archivedAt?: number;
 }
+
+/** Session 归属匹配输入（SessionMeta / SessionData 的 agent 投影） */
+export interface SessionAgentMatchPick {
+  agentId?: string;
+  primaryAgentId?: string;
+  preferredAgentId?: string;
+  participantAgentIds?: string[];
+}
+
+/**
+ * meta.agentId / primary / preferred / participant 任一命中。
+ *
+ * 与 `SessionListFilter.agentId` 同一规则；存储实现与会话检索共用。
+ *
+ * @param pick - 会话 agent 投影
+ * @param agentId - 目标 agent
+ * @returns 是否命中
+ */
+export function sessionMatchesAgent(
+  pick: SessionAgentMatchPick,
+  agentId: string,
+): boolean {
+  return (
+    pick.agentId === agentId ||
+    pick.primaryAgentId === agentId ||
+    pick.preferredAgentId === agentId ||
+    (pick.participantAgentIds ?? []).includes(agentId)
+  );
+}

@@ -95,6 +95,22 @@ export class TraceCollector {
   }
 
   /**
+   * 记录单条 Runner/引擎事件（旁路；不包 generator 时使用）
+   *
+   * @param event - AgentEvent
+   * @param ctx - 会话上下文
+   * @param turnId - 轮次 id（可选）
+   */
+  record(
+    event: AgentEvent,
+    ctx: { sessionId?: string; agentId?: string } = {},
+    turnId = `turn_${++this.turnCount}`,
+  ): void {
+    if (!this.currentTurnId) this.currentTurnId = turnId;
+    this.recordEvent(event, ctx, turnId);
+  }
+
+  /**
    * 记录单个事件
    */
   private recordEvent(
@@ -111,6 +127,22 @@ export class TraceCollector {
       // ── 生命周期 ──
       case 'engine.start':
         this.logger.info(TRACE_EVENTS.ENGINE_START, event.data, base);
+        break;
+
+      // Runner 词表：iteration.start ≈ turn 开始
+      case 'iteration.start':
+      case 'turn.start':
+        this.logger.info(TRACE_EVENTS.TURN_START, { turnId }, base);
+        break;
+
+      // Runner 词表：turn.end 携带 usage，映射为 model.call.end
+      case 'turn.end':
+        this.logger.info(TRACE_EVENTS.MODEL_CALL_END, {
+          contentLength: (event.data?.content as string)?.length ?? 0,
+          usage: event.data?.usage,
+          turnId,
+        }, base);
+        this.logger.info(TRACE_EVENTS.TURN_END, { turnId }, base);
         break;
 
       case 'model.call.start':

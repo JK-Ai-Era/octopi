@@ -17,8 +17,8 @@ import { join } from 'node:path';
 import type { SessionStore, SessionListFilter } from '../../core/interfaces/session-store.js';
 import type { SessionData } from '../../harness/session/types.js';
 import type { SessionMeta } from '../../core/types.js';
-import { toSessionFileName } from './session-filename.js';
-import { sessionMatchesAgent } from './memory.js';
+import { toSessionFileName } from '../../core/session-filename.js';
+import { sessionMatchesAgent } from '../../core/types/session.js';
 import type { SessionIndexSink } from './session-index.js';
 
 export interface JsonlSessionStoreOptions {

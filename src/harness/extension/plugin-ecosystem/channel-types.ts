@@ -1,7 +1,13 @@
 /**
- * Channel Adapter — 消息渠道适配器类型
+ * Channel Adapter — 消息渠道适配器契约
  *
- * Integration 层类型。定义外部消息渠道的接入协议。
+ * @layer harness/extension/plugin-ecosystem — 插件 SPI，非 Core Kernel。
+ * 实现方：Integration 协议适配器（HttpChannelAdapter 等）。
+ *
+ * 设计要点：
+ * - 本文件只定义契约，不关心 HTTP / WebSocket 传输
+ * - Plugin 通过 registerChannel(adapter) 注册实现
+ * - Gateway / Integration 按部署形态挂载具体 adapter
  */
 
 export interface ChannelMessage {

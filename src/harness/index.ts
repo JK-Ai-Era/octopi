@@ -56,7 +56,10 @@ export type {
 
 // ── Agent Building ──
 export { AgentBuilder, createAgent, isSubsystemAllowed, discoverSubsystemSpecs } from './agent/builder.js';
-export type { AgentBuildOptions, AgentBuildResult, AgentBuildCoreResult } from './agent/builder.js';
+export type { AgentBuildOptions, AgentBuildResult, AgentBuildCoreResult, AgentTraceOptions } from './agent/builder.js';
+export type { ChannelAdapter, ChannelMessage, ChannelReply } from './extension/plugin-ecosystem/channel-types.js';
+export { setRunTelemetryFactory, getRunTelemetryFactory } from './observability/run-telemetry.js';
+export type { RunTelemetry, RunTelemetryFactory } from './observability/run-telemetry.js';
 export { loadPersona, composePersonas, PersonaSource } from './agent/persona.js';
 export { buildFromConfig, buildFromConfigFile, resolveProviders, resolveSecurityConfig, resolveContextEngine, resolveRunGuard } from './agent/config-bridge.js';
 export type { BuiltAgent } from './agent/config-bridge.js';

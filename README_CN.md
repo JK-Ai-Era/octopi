@@ -125,11 +125,14 @@ for await (const event of runner.handle('session-1', userMessage)) {
 
 ### MCP 集成
 
-一行代码连接任何 MCP Server：
+注入 Integration client 工厂后连接 MCP Server：
 
 ```typescript
+import { AgentBuilder, createSdkMcpClient } from 'octopi';
+
 const { agent, runner } = await new AgentBuilder()
   .model('gpt-4o')
+  .mcpClientFactory(createSdkMcpClient)
   .mcp({
     id: 'filesystem',
     transport: 'stdio',

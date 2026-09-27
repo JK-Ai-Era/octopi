@@ -1,3 +1,24 @@
+## v0.53.2
+
+### fix(arch): clear Harness→Integration imports and complete Builder.trace() telemetry wiring
+
+**Layer boundary (Harness ↛ Integration)**
+
+- Sink pure helpers to Core: `sessionMatchesAgent` (`core/types/session.ts`), `toSessionFileName` (`core/session-filename.ts`); drop `integration/storage/session-filename.ts`
+- Move plugin SPI `ChannelAdapter` / `ChannelMessage` / `ChannelReply` to `harness/extension/plugin-ecosystem/channel-types.ts` (alongside `web-search-types`); export from `octopi` / `harness` barrels
+- Move `SessionIndex*` contracts to `harness/session/history/types.ts`; Sqlite implementation stays Integration
+- Move `InMemorySessionStore` to `harness/session/in-memory-store.ts` (Session-domain in-memory default); `integration/storage/memory.ts` keeps the export surface
+- Builder stops importing Integration: inject `mcpClientFactory` (`.mcpClientFactory()` / `createAgent` union type requires factory when `mcp` is set); `.trace()` no longer references Trace* config types
+- Enforce Harness↛Integration in `eslint.config.js` `no-restricted-imports` + `tests/architecture/boundaries.test.ts`
+
+**Observability root fix (`.trace()` was a dead switch)**
+
+- CHANGELOG-era promise (“一行启用完整观测链路”) was half-shipped: configs stored, never wired; `model.call.*` had no producer vs Runner `turn.end` vocabulary
+- Add Harness `RunTelemetry` port + factory registry (`harness/observability/run-telemetry.ts`); Integration `createRunTelemetry` (LoopObserver for `model.call.*` + Runner `eventSink` for turn/tool/engine/delta → TraceCollector/Metrics)
+- `import { AgentBuilder } from 'octopi'` registers the factory so `.trace()` works one-liner; bare harness requires `.telemetryFactory()` / `.observer()` and fails loudly otherwise
+- `TraceCollector.record()` public; maps Runner `iteration.start`/`turn.end` onto trace/metrics vocabulary
+- Docs (README / README_CN / architecture) show `mcpClientFactory(createSdkMcpClient)` and `.trace()` prerequisites
+
 ## v0.53.1
 
 ### docs(context): fix README context model to eight layers

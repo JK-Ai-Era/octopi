@@ -11,48 +11,19 @@
 import type { DatabaseSync } from 'node:sqlite';
 import type { SessionData } from '../../harness/session/types.js';
 import { extractSearchableFields } from '../../harness/session/history/score.js';
+import type {
+  SessionIndexBackend,
+  SessionIndexCandidate,
+  SessionIndexPrefilterQuery,
+  SessionIndexSink,
+} from '../../harness/session/history/types.js';
 
-/** 与 Jsonl 旁路钩子对齐 */
-export interface SessionIndexSink {
-  upsertFromSession(sessionId: string, data: SessionData): Promise<void>;
-  remove(sessionId: string): Promise<void>;
-}
-
-export interface SessionIndexPrefilterQuery {
-  /** 关键词（keyword AND，子串）或 phrase 整串 */
-  terms: string[];
-  mode: 'keyword' | 'phrase' | 'regex';
-  roles?: string[];
-  agentId?: string;
-  sessionIds?: string[];
-  since?: number;
-  until?: number;
-  includeArchived?: boolean;
-  includeToolIo?: boolean;
-  limitSessions?: number;
-}
-
-export interface SessionIndexCandidate {
-  sessionId: string;
-  msgIndexes: number[];
-}
-
-export interface SessionIndexBackend extends SessionIndexSink {
-  ensureSchema(): Promise<void>;
-  /**
-   * SQL 缩候选 session（及命中行）；具体打分/ACL 仍由 Port 完成。
-   * 返回 `null` 表示索引不可用/陈旧/可能截断漏检 —— 调用方应回退全量扫描。
-   * 返回 `[]` 表示索引确信无命中。
-   */
-  prefilter(query: SessionIndexPrefilterQuery): Promise<SessionIndexCandidate[] | null>;
-  /** 全量重建（扫权威 store） */
-  rebuildFrom(loadAll: () => AsyncIterable<SessionData>): Promise<{ sessions: number; messages: number }>;
-  /** 权威侧 session 数（用于新鲜度校验） */
-  countSessions(): Promise<number>;
-  /** 是否启用 FTS5 */
-  readonly ftsEnabled: boolean;
-  close(): void;
-}
+export type {
+  SessionIndexBackend,
+  SessionIndexCandidate,
+  SessionIndexPrefilterQuery,
+  SessionIndexSink,
+};
 
 /** 单字段入库切片；更长文本可能在预筛中漏检 → prefilter 返回 null 回退扫描 */
 const INDEX_TEXT_SLICE = 2000;

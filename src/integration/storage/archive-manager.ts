@@ -19,7 +19,7 @@ import { join } from 'node:path';
 import type { SessionStore } from '../../core/interfaces/session-store.js';
 import type { SessionData } from '../../harness/session/types.js';
 import type { EventBus } from '../../core/primitives/event-bus.js';
-import { sessionMatchesAgent } from './memory.js';
+import { sessionMatchesAgent } from '../../core/types/session.js';
 
 export interface ArchiveManagerOptions {
   /** 归档目录路径 */

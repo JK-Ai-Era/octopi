@@ -25,6 +25,7 @@ export type {
 // ── Observability ──
 export { NoopObserver } from './observability/noop-observer.js';
 export { LogObserver } from './observability/log-observer.js';
+export { createRunTelemetry } from './observability/run-telemetry.js';
 
 // ── MCP ──
 export { SdkMcpClient, createSdkMcpClient } from './mcp/index.js';

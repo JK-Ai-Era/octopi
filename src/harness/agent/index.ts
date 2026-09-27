@@ -9,6 +9,7 @@
  */
 
 export { AgentBuilder, createAgent, isSubsystemAllowed, discoverSubsystemSpecs } from './builder.js';
+export type { AgentTraceOptions, CreateAgentConfig } from './builder.js';
 export type {
   AgentBuildOptions,
   AgentBuildResult,

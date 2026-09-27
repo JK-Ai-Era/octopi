@@ -6,7 +6,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import type { ChannelMessage } from '../types/channels.js';
+import type { ChannelMessage } from '../../harness/extension/plugin-ecosystem/channel-types.js';
 import type { AgentRuntime } from '../../harness/activation/runtime.js';
 import type { Trigger } from '../../harness/activation/types.js';
 

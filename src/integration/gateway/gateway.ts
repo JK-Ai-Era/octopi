@@ -19,7 +19,7 @@
 
 import type { RegisteredTool, SessionMeta } from '../../core/types.js';
 import type { AgentDefinition, ModelConfig } from '../../harness/shared/types/agent-definition.js';
-import type { ChannelAdapter, ChannelMessage, ChannelReply } from '../types/channels.js';
+import type { ChannelAdapter, ChannelMessage, ChannelReply } from '../../harness/extension/plugin-ecosystem/channel-types.js';
 import type { GatewayConfig } from '../types/gateway-config.js';
 
 import type { HookContext } from '../../harness/shared/types/hook-context.js';

@@ -5,8 +5,8 @@
  * reserved device names (CON, PRN, AUX, NUL, COM1–9, LPT1–9),
  * and trailing dots/spaces.
  *
- * Logical session ids may still contain colons; storage must map consistently
- * via `toSessionFileName` only (no legacy raw-id fallback).
+ * Logical session ids may still contain colons; storage and tool isolation
+ * must map consistently via `toSessionFileName` only (no legacy raw-id fallback).
  */
 
 const ILLEGAL_FILENAME_CHARS = /[<>:"/\\|?*\x00-\x1f]/g;
