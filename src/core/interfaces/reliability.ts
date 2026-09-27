@@ -3,7 +3,7 @@
  *
  * 定义可靠性包装所需的外部依赖。
  * 消费方：`harness/agent` 的 `Agent.run()`（底层实现 `runAgentWithReliability`）。
- * 实现在 harness/reliability/，由 builder 组装注入。
+ * 实现在 harness/run/reliability/，由 builder 组装注入。
  *
  * 提取到 Core 层（v0.8.0）：这是跨域契约，不是实现细节。
  * 多个领域（run-guard、multi-agent）依赖此接口。
@@ -16,7 +16,7 @@ import type { RunGuard } from './run-guard.js';
 /**
  * ResourceBudget 最小契约（Core）
  *
- * 实现在 harness/budget/（非领域模块）。reliability 每轮消费。
+ * 实现在 harness/run/budget/（非领域模块）。reliability 每轮消费。
  * 注意：harness 上的实例是「模板/配置源」；每次 run 应克隆或 reset，
  * 避免长驻进程 / 并发 session 共享计数。
  *

@@ -6,7 +6,7 @@
  * - severityToAction 纯函数
  * - isValidSecurityGuard 验证函数
  *
- * DefaultSecurityGuard 实现在 harness/security/default-security-guard.ts，
+ * DefaultSecurityGuard 实现在 harness/governance/security/default-security-guard.ts，
  * **不由** core/index.ts re-export（Kernel 入口不含 Harness 实现）。
  */
 

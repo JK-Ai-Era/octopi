@@ -14,7 +14,7 @@
 
 import type { EventBus } from '../../core/primitives/event-bus.js';
 import type { SessionStore } from '../../core/interfaces/session-store.js';
-import type { SessionData } from '../session-types.js';
+import type { SessionData } from '../session/types.js';
 import {
   measureSessionDensity,
   parseEvidenceLines,

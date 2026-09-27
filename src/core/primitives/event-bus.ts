@@ -2,7 +2,7 @@
  * EventBus — 事件总线（Core 机制）
  *
  * Core 只保留**开放信封 + 广播机制**。
- * 规范产品词表（AgentEventMap / AgentEvents）在 harness/events/，
+ * 规范产品词表（AgentEventMap / AgentEvents）在 harness/shared/events/，
  * 由 Harness / Integration 消费；Core 不钉产品目录。
  *
  * 两套事件系统：
@@ -31,7 +31,7 @@ export interface Disposable {
 
 // ── 接口 ──
 
-/** EventBus 接口（开放 type；强类型词表见 harness/events） */
+/** EventBus 接口（开放 type；强类型词表见 harness/shared/events） */
 export interface EventBus {
   emit(event: AgentEvent): void;
   on(eventType: string, handler: EventHandler): Disposable;

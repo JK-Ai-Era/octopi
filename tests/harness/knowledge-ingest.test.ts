@@ -232,7 +232,11 @@ describe('KnowledgeDatabase index tables', () => {
   it('可写 jobs/files/chunks', async () => {
     const db = await KnowledgeDatabase.create({ dbPath: ':memory:' });
     const stats = db.stats();
-    expect(stats.knowledge_sources).toBe(0);
+    expect(stats.sources).toBe(0);
+    expect(stats.files).toBe(0);
+    expect(stats.chunks).toBe(0);
+    expect(stats.jobsQueued).toBe(0);
+    expect(stats.jobsRunning).toBe(0);
     db.close();
   });
 });

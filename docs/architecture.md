@@ -4,7 +4,7 @@
 >
 > 本文档是 Octopi 的完整架构设计。
 > 长期不变量见 [架构宪法](./north-star.md)。
-> 与实现对齐：Observer Run Observatory（v0.43.3+）见 [observer-domain.md](./observer-domain.md)；公用能力 Summary/Compact（v0.44.0+）见 [context-layer-contracts.md](./context-layer-contracts.md) 与 `src/harness/capabilities/`。
+> 与实现对齐：Observer Run Observatory（v0.43.3+）见 [observer-domain.md](./observer-domain.md)；公用能力 Summary/Compact（v0.44.0+）见 [context-layer-contracts.md](./context-layer-contracts.md) 与 `src/harness/context/capabilities/`。
 
 ---
 
@@ -58,7 +58,7 @@ AI 在早期阶段，应用构建思路在不断发展。架构设计的核心�
 │  LLM Provider · Web Search · 存储 · 可观测性 · 协议 · Gateway · TUI · Web Runtime │
 │                                                                  │
 │  ┌──────────────────────────────────────────────────────────────┐│
-│  │  Layer 2: Harness — 16 个自包含领域 + capabilities 横切      ││
+│  │  Layer 2: Harness — 10 个产品域 + 横切/基建              ││
 │  │                                                              ││
 │  │  ┌──────────────────────────────────────────────────────────┐││
 │  │  │  Layer 1: Core — 机制原语 + 接口契约 + 核心类型           │││
@@ -146,15 +146,17 @@ src/core/
 └── index.ts              # octopi/core — Kernel
 ```
 
-产品事件词表在 `harness/events/`（AgentEventMap / AgentEvents / scenario-events）。
+产品事件词表在 `harness/shared/events/`（AgentEventMap / AgentEvents / scenario-events）。
 
 Domain 契约在 **harness 领域内**（memory、mcp、multi-agent、orchestration…），不在 Core。
 
-### Layer 2: Harness — 16 个自包含领域 + 横切 capabilities
+### Layer 2: Harness — 10 个产品域 + 横切/基建
 
 **职责**：实现 Core Kernel ports 的具体策略，提供框架的全部高级功能；持有 Domain 产品契约与实现。
 
-**特性**：每个领域有自己的类型、实现、入口文件。领域间通过对方 **types** 通信，不共享内部状态。
+**组织**：`src/harness/` 顶层即产品域目录（域 = 限界上下文）。数字与模块清单以 [`docs/domains.yaml`](./domains.yaml) 为唯一权威；叙事见 [`docs/domains.md`](./domains.md)。
+
+**特性**：每个域有自己的类型、实现、入口文件。域间通过对方 **types** 通信，不共享内部状态。
 
 （详见第 3 节）
 
@@ -177,18 +179,22 @@ src/integration/
 └── index.ts
 ```
 
-> **Observer Domain**：Telemetry（上表 `observability/` + Core `Observer`）与 **Run Observatory**（`harness/observer/`，配置键 `observer`）同属观测领域、实现分离。见 [docs/observer-domain.md](./observer-domain.md)。Run Observatory 缺省 `observer.level=off`；调试 REST 为根路径 `/debug/run/*`（非 `/api/v1`）。
+> **Observer Domain**：Telemetry（上表 `observability/` + Core `Observer`）与 **Run Observatory**（`harness/observability/observer/`，配置键 `observer`）同属观测领域、实现分离。见 [docs/observer-domain.md](./observer-domain.md)。Run Observatory 缺省 `observer.level=off`；调试 REST 为根路径 `/debug/run/*`（非 `/api/v1`）。
 
 ---
 
-## 3. Harness 领域
+## 3. Harness 产品域
+
+> **10 个产品域**（治理 / 会话 / 智能体 / 记忆 / 知识 / 激活 / 运行 / 上下文 / 扩展 / 协作）  
+> 权威清单：[`docs/domains.md`](./domains.md) · [`docs/domains.yaml`](./domains.yaml)  
+> 本节按能力说明实现细节；目录以域优先布局为准（`src/harness/governance|session|agent|memory|knowledge|activation|run|context|extension|collaboration/`）。
 
 ### 3.1 Agent Building — Agent 构建
 
 **职责**：组装 Agent 运行时，加载人格配置，桥接配置文件。产出已 `setHarness` 的 `harness/agent` Agent。
 
 ```
-harness/agent-building/
+harness/run/agent/
 ├── builder.ts            # AgentBuilder — Fluent API
 ├── persona.ts            # 人格加载（根目录 AGENTS.md + persona/*.md）
 ├── config-bridge.ts      # 配置文件 → 新架构桥接
@@ -233,20 +239,20 @@ harness/context/
 ├── token-estimator.ts          # HeuristicTokenEstimator
 ├── token-estimate-fns.ts
 ├── token-constants.ts
-├── knowledge/                  # Knowledge Tier 0 catalog 契约
-└── （结构压缩算法已委托 harness/capabilities/compact；E4 状态仍在本引擎）
+└── （catalog 契约已迁 harness/knowledge/catalog-types.ts）
+└── （结构压缩算法已委托 harness/context/capabilities/compact；E4 状态仍在本引擎）
 
-harness/capabilities/          # 横切公用能力：SummaryPort + CompactEngine
-harness/session-acl/        # E6：角色目录 + authorizeRun + switch
-harness/tool-effect/        # I5：toolIsolation cwd
-harness/observer/           # Run Observatory：ObserverHub + Run 投影（observer.level）
-harness/concurrency/session-lease.ts  # E2/E7：SessionLease
-harness/capabilities/       # 横切公用能力（不计入业务领域计数）：summary + compact
+harness/context/capabilities/          # 横切公用能力：SummaryPort + CompactEngine
+harness/governance/session-acl/        # E6：角色目录 + authorizeRun + switch
+harness/extension/execution-environment/        # I5：toolIsolation cwd
+harness/observability/observer/           # Run Observatory：ObserverHub + Run 投影（observer.level）
+harness/run/concurrency/session-lease.ts  # E2/E7：SessionLease
+harness/context/capabilities/       # 横切公用能力（不计入业务领域计数）：summary + compact
 ```
 
 领域导出见 `harness/index.ts`。设计说明见 [docs/context-layer-contracts.md](./context-layer-contracts.md)、[docs/observer-domain.md](./observer-domain.md)。
 
-**公用能力（capabilities，横切）**：`harness/capabilities/summary|compact` 提供可注入的 LLM 摘要/信息提取与可配置压缩管道。与 `plugin-ecosystem/tools` 边界：tools **只消费** `SummaryPort`，prompt/policy/算法只在 capabilities；会话 compact **E4** 键与 Session 持久化不在 capabilities（仍在 context / session 路径）。配置键：`summary` / `compact` / `models.level.summary`。
+**公用能力（capabilities，横切）**：`harness/context/capabilities/summary|compact` 提供可注入的 LLM 摘要/信息提取与可配置压缩管道。与 `plugin-ecosystem/tools` 边界：tools **只消费** `SummaryPort`，prompt/policy/算法只在 capabilities；会话 compact **E4** 键与 Session 持久化不在 capabilities（仍在 context / session 路径）。配置键：`summary` / `compact` / `models.level.summary`。
 
 ### 3.3 Security — 安全
 
@@ -255,7 +261,7 @@ harness/capabilities/       # 横切公用能力（不计入业务领域计数�
 **分层（安全不可绕过）**：硬边界（确定有害，不受 `enforce` 影响）→ 始终接线的 `ToolCallRiskPolicy`（争议分档）→ 可配置仅 `enforce` / `allowedPaths` / `injectionSensitivity`。不透明载荷（`file_write.content` 等）不做 shell 元字符扫描。
 
 ```
-harness/security/
+harness/governance/security/
 ├── default-security-guard.ts   # 硬边界 + 始终接线 RiskPolicy + Input/Output
 ├── default-risk-policy.ts      # DefaultToolCallRiskPolicy — 规则引擎
 ├── risk-evaluator.ts           # 操作+目标组合风险评估 + 硬边界探测
@@ -272,7 +278,7 @@ harness/security/
 **职责**：审批请求管理、审批策略、用户决策缓存。
 
 ```
-harness/human-in-the-loop/
+harness/governance/human-in-the-loop/
 ├── approval-manager.ts    # 审批请求管理
 ├── approval-policy.ts     # 审批策略（auto / confirm-all / confirm-high-risk）
 ├── decision-cache.ts      # 用户决策缓存
@@ -286,7 +292,7 @@ harness/human-in-the-loop/
 **职责**：沙箱管理、工作区生命周期、高级文件操作、资源限制。
 
 ```
-harness/execution-environment/
+harness/extension/execution-environment/
 ├── sandbox.ts             # 沙箱管理（进程隔离、文件系统隔离）
 ├── workspace.ts           # 工作区生命周期
 ├── file-ops.ts            # 高级文件操作（search、glob、diff）
@@ -333,12 +339,11 @@ harness/memory/
 **职责**：Agent 循环的可靠性包装 — 重试、检测、监督、断路。产出 `HarnessLoopEvent`。
 
 ```
-harness/reliability/
+harness/run/reliability/
 ├── run-agent.ts          # runAgentWithReliability()（底层；业务入口用 Agent.run）
 ├── harness-events.ts     # HarnessLoopEvent = AgentLoopEvent | budget/run_guard 扩展
 ├── circuit-breaker.ts    # CircuitBreaker — 断路器
 ├── provider-wrapper.ts   # wrapProviderWithCircuitBreaker()
-├── budget.ts             # BudgetPolicyEngine（P5 正式定名）
 └── index.ts
 ```
 
@@ -349,7 +354,7 @@ harness/reliability/
 **职责**：持有 context/config/harness，提供 **`Agent.run()`** 唯一推荐运行入口（= reliability 包装）。
 
 ```
-harness/agent/
+harness/run/agent/
 ├── agent.ts              # Agent 类
 └── index.ts
 ```
@@ -363,7 +368,7 @@ Loop 层只有 `agentLoop` 纯函数；不要在业务路径手拼 `runAgentWith
 与 tools/（Agent function-call 调用面）对偶；Command **不是**顶层能力域，也 **不是** Human-in-the-Loop（HITL 只做 risk approval）。
 
 ```
-harness/plugin-ecosystem/
+harness/extension/plugin-ecosystem/
 ├── plugins/              # PluginManager, HookRegistry, Loader
 ├── tools/                # ToolBus, BuiltinTools, web_search（Agent 调用面）
 ├── skills/               # SkillManager（两阶段加载；frontmatter.command → /name）
@@ -372,7 +377,7 @@ harness/plugin-ecosystem/
 └── index.ts
 ```
 
-**命令要点**（实现：`commands/`；问题面：`harness/diagnostics`）：
+**命令要点**（实现：`commands/`；问题面：`harness/observability/diagnostics`）：
 
 - 入站 `/xxx` 在 Agent Loop **前**裁决；handler 只回 `sessionOps`，Host 落地  
 - 冲突 fail-closed：保留名硬保护；同名多候选默认 reject-all（粘性，直到候选收敛）  
@@ -386,7 +391,7 @@ harness/plugin-ecosystem/
 五维模型：Sense + Think + Act + Signal + Boundary。
 
 ```
-harness/autonomous-subsystem/
+harness/collaboration/autonomous-subsystem/
 ├── types.ts              # 五维模型完整类型定义
 ├── loader.ts             # 子系统目录加载器
 ├── runtime.ts            # SubsystemRuntime — 核心运行时
@@ -425,7 +430,7 @@ subsystems/
 **职责**：Agent 注册与发现、多 Agent 协作编排、可追踪的 Agent 进程。
 
 ```
-harness/multi-agent/
+harness/collaboration/multi-agent/
 ├── registry.ts           # DefaultAgentRegistry
 ├── swarm.ts              # AgentSwarm + 编排策略
 ├── process.ts            # AgentProcess / spawn / fork
@@ -433,7 +438,7 @@ harness/multi-agent/
 └── index.ts
 ```
 
-Core 接口：无（契约在 `harness/multi-agent/agent-registry-types.ts`）。
+Core 接口：无（契约在 `harness/collaboration/multi-agent/agent-registry-types.ts`）。
 
 与 Autonomous Subsystem 正交：Multi-Agent 管「多个 Agent 实例如何协作」；Autonomous Subsystem 管「子系统如何感知并回写主系统」。
 
@@ -442,7 +447,7 @@ Core 接口：无（契约在 `harness/multi-agent/agent-registry-types.ts`）�
 **职责**：未闭合工作项列表（goal/step 两级），挂 Session 聚合。
 
 ```
-harness/session-tasks/
+harness/session/tasks/
 ├── service.ts            # SessionTaskService — 唯一写入口
 ├── render.ts             # <session_tasks> 注入（goal + step rollup）
 ├── tools.ts              # task_* 工具
@@ -457,7 +462,7 @@ harness/session-tasks/
 **职责**：判断单次 run 是否跑飞（continue / recover / stop）。
 
 ```
-harness/run-guard/
+harness/run/run-guard/
 ├── default-run-guard.ts  # DefaultRunGuard — 规则检测 + 可选 LLM 审查
 ├── types.ts
 └── index.ts
@@ -470,7 +475,7 @@ Core 接口：`core/interfaces/run-guard.ts`（`RunGuard`）。
 **职责**：把非用户刺激（Trigger）编译成 0..N 次受监督的 Run；多 Agent 显式路由。串行互斥归 Session 级 Runner 锁（模型 A）；详见 [架构宪法](./north-star.md) 与本文 §5 数据流。
 
 ```
-harness/agent-runtime/
+harness/activation/
 ├── runtime.ts            # AgentRuntime
 ├── router.ts / compiler.ts / coalesce.ts / dispatcher.ts
 └── sources/              # Schedule / Escalate / AgentSignal
@@ -485,10 +490,10 @@ Gateway 消息路径经 `runtime.dispatch`；SessionGate 为唯一并发硬闸�
 
 ### 3.13 Orchestration — 编排（experimental）
 
-**职责**：确定性多步骤作业。默认不进主路径；子路径 `octopi/harness/orchestration`。
+**职责**：确定性多步骤作业。默认不进主路径；子路径 `octopi/harness/collaboration/orchestration`。
 
 ```
-harness/orchestration/
+harness/collaboration/orchestration/
 ├── workflow/             # WorkflowEngine — DAG 编排
 ├── scheduler/            # TaskScheduler
 ├── planner/              # Rule/LLM/Hybrid planner
@@ -505,7 +510,7 @@ harness/orchestration/
 **职责**：多 key 分发、会话粘滞、限流。
 
 ```
-harness/concurrency/
+harness/run/concurrency/
 ├── provider-pool.ts      # ProviderPool — 多 Key 负载均衡
 ├── rate-limiter.ts       # RateLimiter — 令牌桶限流
 ├── session-gate.ts       # SessionGate — 并发门控
@@ -518,7 +523,7 @@ harness/concurrency/
 **职责**：打包 Run 可检视现场（Scope / messages / timeline / guard / security / memory / tool.effect），供 Web Run 面板与 `/debug/run/*`。与 Core `Observer`（Telemetry）分属同一 Observer Domain 的不同子域，**不合并实现**。
 
 ```
-harness/observer/
+harness/observability/observer/
 ├── hub.ts            # ObserverHub — 事件摄入 + Run 投影缓存
 ├── types.ts          # ObserverConfig / Run* DTO / resolveObserverConfig
 ├── run-snapshot.ts   # RunScope → UI 视图
@@ -661,22 +666,22 @@ Session save：全量 messages + contextCompact 快照
 | `SecurityGuard` | `core/interfaces/security-guard.ts` | DefaultSecurityGuard |
 | `ToolCallRiskPolicy` | `core/interfaces/security-guard.ts` | DefaultToolCallRiskPolicy |
 | `Observer` | `core/interfaces/observer.ts` | NoopObserver, LogObserver, ObserverBridge（**Telemetry**） |
-| `ObserverHub` / Run Observatory | `harness/observer/*` | ObserverHub（**开发调试**；见 [observer-domain.md](./observer-domain.md)） |
+| `ObserverHub` / Run Observatory | `harness/observability/observer/*` | ObserverHub（**开发调试**；见 [observer-domain.md](./observer-domain.md)） |
 | `SessionStore<T>` | `core/interfaces/session-store.ts` | JsonlSessionStore, InMemorySessionStore |
-| `SessionHistoryPort` | `harness/session-history/` | DefaultSessionHistoryPort（`session_search` / `session_read`） |
+| `SessionHistoryPort` | `harness/session/history/` | DefaultSessionHistoryPort（`session_search` / `session_read`） |
 | `SessionIndexBackend` | `integration/storage/session-index.ts` | SqliteSessionIndex（可重建投影，非权威） |
-| `AsyncTaskStore` | `harness/orchestration/async-task-store.ts` | orchestration |
+| `AsyncTaskStore` | `harness/collaboration/orchestration/async-task-store.ts` | orchestration |
 | `RunGuard` | `core/interfaces/run-guard.ts` | DefaultRunGuard |
-| `AgentRegistry` | `harness/multi-agent/agent-registry-types.ts` | DefaultAgentRegistry |
-| `McpClient` | `harness/plugin-ecosystem/mcp/types.ts` | SdkMcpClient |
-| `EventSource` | `harness/agent-runtime/event-source-types.ts` | — |
-| `MessageChannel` | `harness/multi-agent/message-channel-types.ts` | — |
+| `AgentRegistry` | `harness/collaboration/multi-agent/agent-registry-types.ts` | DefaultAgentRegistry |
+| `McpClient` | `harness/extension/plugin-ecosystem/mcp/types.ts` | SdkMcpClient |
+| `EventSource` | `harness/activation/event-source-types.ts` | — |
+| `MessageChannel` | `harness/collaboration/multi-agent/message-channel-types.ts` | — |
 | `MemoryStore` 等 | `harness/memory/types.ts` | InMemory / Sqlite |
-| `KnowledgeCatalogProvider` | `harness/context/knowledge/types.ts` | （Tier 0 catalog） |
+| `KnowledgeCatalogProvider` | `harness/knowledge/types.ts` | （Tier 0 catalog） |
 | Knowledge Source/Index/Ingest | `harness/knowledge/` | 外源见 `docs/knowledge.md` |
-| CredentialStore | `harness/credentials/` | 资源访问凭证；非 octopi.json |
+| CredentialStore | `harness/governance/credentials/` | 资源访问凭证；非 octopi.json |
 | `ContextLayer` / `ContextAssembler` | `harness/context/layer-types.ts` | DefaultContextAssembler + layers |
-| `Planner` / `Reflector` | `harness/orchestration/cognitive-loop.ts` | Rule/LLM/Hybrid |
+| `Planner` / `Reflector` | `harness/collaboration/orchestration/cognitive-loop.ts` | Rule/LLM/Hybrid |
 
 ### 模型解析收口（ResolvedModel）
 
@@ -684,9 +689,9 @@ Session save：全量 messages + contextCompact 快照
 
 | 模块 | 职责 |
 |------|------|
-| `harness/model/resolver.ts` | `resolveModel` / `resolveCatalogEntry` — **唯一**绑定 + 能力策略 |
-| `harness/model/run-scope.ts` | ALS 只传 `ResolvedModel` |
-| `harness/model/types.ts` | `ResolvedModel.contextWindow?` / `known` / `source` |
+| `harness/run/model/resolver.ts` | `resolveModel` / `resolveCatalogEntry` — **唯一**绑定 + 能力策略 |
+| `harness/run/model/run-scope.ts` | ALS 只传 `ResolvedModel` |
+| `harness/run/model/types.ts` | `ResolvedModel.contextWindow?` / `known` / `source` |
 | `core/types/model-info.ts` | `DEFAULT_CONTEXT_WINDOW`（**仅配置层历史常量**；引擎不作运行时预算回退） |
 
 **contextWindow 语义（未知不猜测）**：
@@ -729,7 +734,7 @@ config → Gateway.setModelResolver → Runner（每 run 一次，且在 system 
 
 WebUI **不做**预算策略，只渲染 `known` / `source` / `contextWindow`。
 
-`harness/reliability/model-binding.ts` 与 `run-model-context.ts` 为兼容 re-export，新代码请 import `harness/model`。
+`harness/run/reliability/model-binding.ts` 与 `run-model-context.ts` 为兼容 re-export，新代码请 import `harness/run/model`。
 
 > 并发与 Run 作用域：同 Agent 多 Session 下，可变上下文只存在于 **RunScope**（见 [架构宪法](./north-star.md) I1）。`SessionAwareRunner` 不以共享 `Agent.context` 作为会话工作区。
 >

@@ -12,9 +12,9 @@ import {
   buildRunMessagesDiff,
   cloneMessages,
   isHiddenFromChat,
-} from '../../src/harness/observer/index.js';
+} from '../../src/harness/observability/observer/index.js';
 import type { Message } from '../../src/core/types.js';
-import type { RunScope } from '../../src/harness/run-scope.js';
+import type { RunScope } from '../../src/harness/run/run-scope.js';
 import { makeTokenUsage } from '../../src/core/types/turn.js';
 
 function msg(partial: Partial<Message> & Pick<Message, 'role'>): Message {

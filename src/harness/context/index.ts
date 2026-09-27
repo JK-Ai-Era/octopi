@@ -96,7 +96,7 @@ export type { CreateDefaultLayersOptions } from './layers.js';
 export type {
   KnowledgeCatalogItem,
   KnowledgeCatalogProvider,
-} from './knowledge/types.js';
+} from '../knowledge/catalog-types.js';
 export { createProviderSummarize, pickSummarizeProvider } from './summarize.js';
 export type { CreateProviderSummarizeOptions } from './summarize.js';
 export { createDefaultSystemPromptAssembler } from './system-prompt-assembler.js';

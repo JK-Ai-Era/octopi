@@ -15,7 +15,7 @@ Octopi is an embeddable agent engine for building AI-powered applications. It pr
 
 - **Embeddable** — Not a standalone app, but a component for your product
 - **4-layer architecture** — Loop → Core → Harness → Integration, clean boundaries, independent layers
-- **15 self-contained domains** — Each domain is independently understandable, testable, and replaceable
+- **10 product domains** — Each domain is independently understandable, testable, and replaceable
 - **8-layer context intelligence** — Wisdom, Persona, Skill, Knowledge, Cognition, Memory, Runtime, Information (see [docs/memory.md](./docs/memory.md) for Memory, [docs/knowledge.md](./docs/knowledge.md) for Knowledge)
 - **Security built-in** — Injection detection, risk evaluation, approval workflows — not optional, not removable
 - **Natively multi-agent** — Distributed intelligence from the ground up
@@ -30,7 +30,7 @@ Octopi is an embeddable agent engine for building AI-powered applications. It pr
 │  LLM Providers · Storage · Observability · Gateway · TUI · Web Runtime │
 │                                                              │
 │  ┌──────────────────────────────────────────────────────────┐│
-│  │  Layer 2: Harness — 15 self-contained domains             ││
+│  │  Layer 2: Harness — 10 product domains             ││
 │  │  agent-building · context · security · reliability         ││
 │  │  plugin-ecosystem · multi-agent · autonomous-subsystem     ││
 │  │  session-tasks · run-guard · orchestration · concurrency   ││
@@ -57,29 +57,25 @@ The heart of the engine. `agentLoop()` is a pure async generator: input messages
 
 ### Layer 1: Core — Kernel Contract
 
-Infrastructure primitives (EventBus, StateMachine) and **Kernel ports** (ModelProvider, ErrorStrategy, SecurityGuard, RunGuard, ReliabilityHarness) plus shared vocabulary types. **Product ports** (ToolBus, SessionStore, Observer = Telemetry metrics/span) and domain contracts (ContextEngine, Memory, MCP, …) live in Harness. Run Observatory (`harness/observer`) is a separate debug product surface — see [docs/observer-domain.md](./docs/observer-domain.md). No strategy implementations. **Does not re-export Loop.**
+Infrastructure primitives (EventBus, StateMachine) and **Kernel ports** (ModelProvider, ErrorStrategy, SecurityGuard, RunGuard, ReliabilityHarness) plus shared vocabulary types. **Product ports** (ToolBus, SessionStore, Observer = Telemetry metrics/span) and domain contracts (ContextEngine, Memory, MCP, …) live in Harness. Run Observatory (`harness/observability/observer`) is a separate debug product surface — see [docs/observer-domain.md](./docs/observer-domain.md). No strategy implementations. **Does not re-export Loop.**
 
-### Layer 2: Harness — Domains
+### Layer 2: Harness — Product Domains
 
-| Domain | Responsibility |
-|--------|---------------|
-| **Agent** | **Runnable facade**: `Agent.run()` = reliability-wrapped loop |
-| **Agent Building** | Builder, persona loading, config bridge |
-| **Context Management** | Message selection, compression, token estimation; 7-layer `ContextLayer` assembly (see [context-layer-contracts](./docs/context-layer-contracts.md)) |
-| **Security** | Risk evaluation, shell parsing, degradation strategies, safety agent |
-| **Reliability** | Reliability wrapper, HarnessLoopEvent, circuit breaker, retry, supervision |
-| **Plugin Ecosystem** | Plugins, tools (Agent 调用面), skills, MCP, **commands**（Principal 对话调用面 `/xxx`）; Diagnostics 见 System Issues |
-| **Multi-Agent** | Agent registry/discovery, Swarm orchestration, AgentProcess |
-| **Autonomous Subsystem** | Sense/Think/Act/Signal/Boundary subsystem framework |
-| **Session Tasks** | Session-level tasks (goal/step), injection, read-only UI; see [task-system](./docs/task-system.md) |
-| **Run Guard** | Checkpoint supervision for a single run (`continue`/`recover`/`stop`) |
-| **Agent Runtime** | Activation host: Trigger → supervised Run (see [arch/agent-runtime.md](./arch/agent-runtime.md)) |
-| **Orchestration** | Experimental workflow/scheduler (subpath `octopi/harness/orchestration`) |
-| **Concurrency** | Multi-key LLM load balancing, rate limiting, session gating |
-| **Execution Environment** | Sandboxing, workspace management, file operations |
-| **Human-in-the-Loop** | Approval workflows, decision caching, risk-based policies |
-| **Memory** | Proposition store (fact/method/norm), gates/confidence, cognition/wisdom stores, Memory Steward — see [docs/memory.md](./docs/memory.md) |
-| **Observer** | Run Observatory for development: `observer.level` (default `off`), `/debug/run/*`, Web Run panel — see [docs/observer-domain.md](./docs/observer-domain.md) (distinct from Telemetry Core `Observer`) |
+| Product Domain | Directory | Question |
+|----------------|-----------|----------|
+| **Governance** | `governance/` | Who may do what? (ACL, security policy, HITL, credentials, ledgers) |
+| **Session** | `session/` | How does continuity hold? (aggregate, Discourse, tasks, history) |
+| **Agent** | `agent/` | Who is it / how is it configured? (template, persona, builder) |
+| **Memory** | `memory/` | What has it learned? (Memory / Cognition / Wisdom substrate) |
+| **Knowledge** | `knowledge/` | What does the world write down? (exogenous corpus, sources, retrieval) |
+| **Activation** | `activation/` | How do stimuli become Runs? |
+| **Run** | `run/` | How does this episode stay safe? (RunScope, reliability, guard, budget) |
+| **Context** | `context/` | What does the model see? (eight-layer assembly, tokens, window) |
+| **Extension** | `extension/` | How are capabilities extended? (Plugin/Tool/Skill/MCP, sandbox) |
+| **Collaboration** | `collaboration/` | How do multi-Agents / subsystems coordinate? |
+
+Cross-cutting / foundation (not counted): `observability/`, `context/capabilities/`, `shared/`.  
+Sole count authority: [docs/domains.yaml](./docs/domains.yaml) · narrative: [docs/domains.md](./docs/domains.md).
 
 ### Layer 3: Integration — External Adapters
 
@@ -198,7 +194,7 @@ src/
 │   ├── primitives/               EventBus, StateMachine
 │   ├── interfaces/               18 interface contracts
 │   └── types/                    Core type definitions
-├── harness/                 Layer 2  Self-contained domains
+├── harness/                 Layer 2  Product domains
 │   ├── agent-building/           Builder, persona, config bridge, runner injection
 │   ├── context/                  ContextLayer assembly, window compression, compact-key (E4)
 │   ├── capabilities/             Cross-cutting capabilities: summary extract + compact engine

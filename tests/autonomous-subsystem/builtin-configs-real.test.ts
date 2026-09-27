@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { SubsystemLoader } from '../../src/harness/autonomous-subsystem/loader.js';
+import { SubsystemLoader } from '../../src/harness/collaboration/autonomous-subsystem/loader.js';
 import { join } from 'node:path';
 
 describe('builtin subsystem configs', () => {

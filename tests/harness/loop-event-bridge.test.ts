@@ -7,8 +7,8 @@
 
 import { describe, it, expect } from 'vitest';
 import { makeTokenUsage } from '../../src/core/types/turn.js';
-import { adaptLoopEvent } from '../../src/harness/runner.js';
-import type { HarnessLoopEvent } from '../../src/harness/reliability/harness-events.js';
+import { adaptLoopEvent } from '../../src/harness/run/runner.js';
+import type { HarnessLoopEvent } from '../../src/harness/run/reliability/harness-events.js';
 
 const meta = { agentId: 'a1', sessionId: 's1' };
 const state = { assistantContent: '', lastUserContent: 'hi user' };

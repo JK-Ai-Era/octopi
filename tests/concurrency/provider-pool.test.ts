@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { ProviderPool } from '../../src/harness/concurrency/provider-pool.js';
+import { ProviderPool } from '../../src/harness/run/concurrency/provider-pool.js';
 import type { ModelProvider, LLMRequest, LLMResponse, LLMStreamChunk, ModelInfo } from '../../src/core/interfaces/model-provider.js';
 
 // ── Mock Provider ──

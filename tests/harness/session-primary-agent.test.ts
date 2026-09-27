@@ -12,13 +12,13 @@ import { describe, it, expect } from 'vitest';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { SessionAwareRunner } from '../../src/harness/runner.js';
-import type { Agent } from '../../src/harness/agent/index.js';
+import { SessionAwareRunner } from '../../src/harness/run/runner.js';
+import type { Agent } from '../../src/harness/run/agent/index.js';
 import type { Message } from '../../src/core/types.js';
 import { InMemorySessionStore } from '../../src/integration/storage/memory.js';
 import { JsonlSessionStore } from '../../src/integration/storage/jsonl.js';
-import { writeSessionCompact } from '../../src/harness/session-compact.js';
-import type { SessionData } from '../../src/harness/session-types.js';
+import { writeSessionCompact } from '../../src/harness/session/compact.js';
+import type { SessionData } from '../../src/harness/session/types.js';
 
 function emptySession(id: string, agentId = 'a1'): SessionData {
   return {

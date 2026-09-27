@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { estimateTextTokens } from '../../src/harness/context/token-estimator.js';
-import { TokenBudgetExceededError } from '../../src/harness/autonomous-subsystem/think/executor.js';
-import { ThinkExecutor } from '../../src/harness/autonomous-subsystem/think/executor.js';
-import { ModelResolver } from '../../src/harness/autonomous-subsystem/think/model-resolver.js';
+import { TokenBudgetExceededError } from '../../src/harness/collaboration/autonomous-subsystem/think/executor.js';
+import { ThinkExecutor } from '../../src/harness/collaboration/autonomous-subsystem/think/executor.js';
+import { ModelResolver } from '../../src/harness/collaboration/autonomous-subsystem/think/model-resolver.js';
 
 const resolver = new ModelResolver({ levels: {}, defaultProvider: 'mock' });
 const executor = new ThinkExecutor({

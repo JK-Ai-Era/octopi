@@ -21,7 +21,7 @@ import type { MemoryStore, ConceptGraphStore } from '../memory/types.js';
 import type {
   KnowledgeCatalogItem,
   KnowledgeCatalogProvider,
-} from './knowledge/types.js';
+} from '../knowledge/catalog-types.js';
 
 // ── 基类 ──
 

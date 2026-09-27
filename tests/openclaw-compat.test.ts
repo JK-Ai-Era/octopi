@@ -12,10 +12,10 @@
  */
 import { describe, test, expect, beforeEach } from 'vitest';
 import { makeTokenUsage, nominalTotalTokens } from '../src/core/types/turn.js';
-import { PluginApi } from '../src/harness/plugin-ecosystem/plugins/api.js';
-import { PluginManager } from '../src/harness/plugin-ecosystem/plugins/manager.js';
-import { definePluginEntry } from '../src/harness/plugin-ecosystem/plugins/entry.js';
-import type { LoadedPlugin } from '../src/harness/plugin-ecosystem/plugins/loader.js';
+import { PluginApi } from '../src/harness/extension/plugin-ecosystem/plugins/api.js';
+import { PluginManager } from '../src/harness/extension/plugin-ecosystem/plugins/manager.js';
+import { definePluginEntry } from '../src/harness/extension/plugin-ecosystem/plugins/entry.js';
+import type { LoadedPlugin } from '../src/harness/extension/plugin-ecosystem/plugins/loader.js';
 
 // ─────────────────────────────────────────────
 // 模拟 OpenClaw 插件的 register 逻辑

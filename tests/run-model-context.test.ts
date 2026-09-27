@@ -12,8 +12,8 @@ import {
   withRunModel,
   getRunModelProvider,
   getRunModelName,
-} from '../src/harness/reliability/run-model-context.js';
-import { bindModelName } from '../src/harness/reliability/model-binding.js';
+} from '../src/harness/run/reliability/run-model-context.js';
+import { bindModelName } from '../src/harness/run/reliability/model-binding.js';
 import type { ModelProvider } from '../src/core/interfaces/model-provider.js';
 
 function makeProvider(name: string, defaultModel: string): ModelProvider {

@@ -333,7 +333,7 @@ interface SessionTaskService {
 | `DefaultTaskDecisionProvider` | Runner 内渲染注入（无独立 Provider 也可；若保留接口则仅为渲染钩子） |
 | `task_create/list/update` | 保留语义，handler 改走 Service；补全错误信息 |
 | `interrupted` 状态 | 删除 |
-| `harness/task-system/tasks/` | 迁至 `harness/session-tasks/` 或并入 session 模块 |
+| `harness/task-system/tasks/` | 迁至 `harness/session/tasks/` 或并入 session 模块 |
 | UI 直写任务 API | 不提供 |
 
 ---

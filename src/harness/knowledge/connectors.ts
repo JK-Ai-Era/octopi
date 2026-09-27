@@ -6,7 +6,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import type { ResolvedCredential } from '../credentials/types.js';
+import type { ResolvedCredential } from '../governance/credentials/types.js';
 import { htmlToStructuredText, looksLikeHtml } from './html.js';
 import type { DiscoveredDocRef, VirtualDocument } from './fetchers.js';
 import { guardedFetch, type NetworkGuardOptions } from './network-guard.js';

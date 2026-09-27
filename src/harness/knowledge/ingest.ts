@@ -16,8 +16,8 @@ import { KnowledgeSourceStore } from './source-store.js';
 import { LocalFsFetcher, UrlFetcher, type SourceFetcher, type VirtualDocument } from './fetchers.js';
 import { ConnectorRegistry } from './connectors.js';
 import { ConnectorFetcher } from './connector-fetcher.js';
-import type { CredentialStore } from '../credentials/store.js';
-import type { ResolvedCredential } from '../credentials/types.js';
+import type { CredentialStore } from '../governance/credentials/store.js';
+import type { ResolvedCredential } from '../governance/credentials/types.js';
 import type { EmbeddingProvider } from '../memory/sqlite/embedding.js';
 import type { KnowledgeSource } from './types.js';
 

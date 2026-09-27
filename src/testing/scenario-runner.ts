@@ -21,11 +21,11 @@
 
 import type { ModelProvider } from '../core/interfaces/model-provider.js';
 import type { SessionStore } from '../core/interfaces/session-store.js';
-import type { SessionData } from '../harness/session-types.js';
+import type { SessionData } from '../harness/session/types.js';
 import type { RegisteredTool } from '../core/types.js';
-import type { AgentEventDetail } from '../harness/events/scenario-events.js';
-import { AgentBuilder } from '../harness/agent-building/builder.js';
-import { SessionAwareRunner } from '../harness/runner.js';
+import type { AgentEventDetail } from '../harness/shared/events/scenario-events.js';
+import { AgentBuilder } from '../harness/agent/builder.js';
+import { SessionAwareRunner } from '../harness/run/runner.js';
 
 import { TraceCollector, type TraceCollectorConfig } from '../integration/observability/trace-collector.js';
 
@@ -144,7 +144,7 @@ export interface ScenarioRunnerConfig {
 export class ScenarioRunner {
   private config: ScenarioRunnerConfig;
   private runner!: SessionAwareRunner;
-  private agent!: import('../harness/agent/index.js').Agent;
+  private agent!: import('../harness/run/agent/index.js').Agent;
   private traceCollector?: TraceCollector;
 
   constructor(config: ScenarioRunnerConfig) {

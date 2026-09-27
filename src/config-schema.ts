@@ -284,7 +284,7 @@ export const KnowledgeConfigSchema = z.object({
     .optional(),
 });
 
-/** 公用能力：summary（harness/capabilities） */
+/** 公用能力：summary（harness/context/capabilities） */
 const ToolSummaryBindingConfigSchema = z.object({
   mode: z.enum(['auto', 'over_threshold', 'always', 'never', 'kind_sensitive']).optional(),
   maxReturnChars: z.number().int().positive().optional(),

@@ -15,7 +15,7 @@ Octopi 是一个可嵌入的 Agent 底座引擎，用于构建 AI 驱动的应�
 
 - **可嵌入** — 不是独立应用，而是产品的组件
 - **4 层架构** — Loop → Core → Harness → Integration，边界清晰，层次独立
-- **15 个自包含领域** — 每个领域可独立理解、独立测试、独立替换
+- **10 个产品域** — 治理、会话、智能体、记忆、知识、激活、运行、上下文、扩展、协作（见 [docs/domains.md](./docs/domains.md)）
 - **8 层上下文智能** — 智慧、人格、技能、知识、认知、记忆、运行时、信息（记忆见 [docs/memory.md](./docs/memory.md)）
 - **安全内置** — 注入检测、风险评估、审批流程——不可选、不可绕过
 - **原生多智能体** — 从架构底层支持分布式智能
@@ -30,11 +30,9 @@ Octopi 是一个可嵌入的 Agent 底座引擎，用于构建 AI 驱动的应�
 │  LLM Provider · 存储 · 可观测性 · Gateway · TUI · Web Runtime   │
 │                                                              │
 │  ┌──────────────────────────────────────────────────────────┐│
-│  │  Layer 2: Harness — 15 个自包含领域                       ││
-│  │  agent-building · context · security · reliability        ││
-│  │  plugin-ecosystem · multi-agent · autonomous-subsystem    ││
-│  │  session-tasks · run-guard · orchestration · concurrency  ││
-│  │  execution-env · hitl · memory                            ││
+│  │  Layer 2: Harness — 10 个产品域                           ││
+│  │  governance · session · agent · memory · knowledge        ││
+│  │  activation · run · context · extension · collaboration   ││
 │  │                                                          ││
 │  │  ┌──────────────────────────────────────────────────────┐││
 │  │  │  Layer 1: Core — 机制原语 + 接口契约 + 核心类型       │││
@@ -59,27 +57,23 @@ Octopi 是一个可嵌入的 Agent 底座引擎，用于构建 AI 驱动的应�
 
 基础设施原语（EventBus、StateMachine）和 **Kernel ports**（ModelProvider、ErrorStrategy、SecurityGuard、RunGuard、ReliabilityHarness）+ 共享词汇表。**Product ports**（ToolBus、SessionStore、Observer=Telemetry）与 Domain 契约（ContextEngine、Memory、MCP…）在 Harness。Run Observatory 见 [docs/observer-domain.md](./docs/observer-domain.md)。不包含策略实现。**不 re-export Loop。**
 
-### Layer 2: Harness — 领域
+### Layer 2: Harness — 产品域
 
-| 领域 | 职责 |
-|------|------|
-| **Agent** | **可运行门面**：`Agent.run()` = reliability 包装 |
-| **Agent Building** | Builder、人格加载、配置桥接 |
-| **Context Management** | 消息选择、压缩、Token 估算；七层 ContextLayer 装配（见 [context-layer-contracts](./docs/context-layer-contracts.md)） |
-| **Security** | 风险评估、Shell 解析、降级策略、安全智能体 |
-| **Reliability** | 可靠性包装、HarnessLoopEvent、断路器、重试、监督 |
-| **Plugin Ecosystem** | Plugin、Tool、Skill、MCP、斜杠命令 |
-| **Multi-Agent** | Agent 注册发现、Swarm 编排、AgentProcess |
-| **Autonomous Subsystem** | Sense/Think/Act/Signal/Boundary 五维子系统框架 |
-| **Session Tasks** | 会话任务（goal/step）、注入、只读 UI；见 [task-system](./docs/task-system.md) |
-| **Run Guard** | 单次 run 过程监督（continue/recover/stop） |
-| **Agent Runtime** | 激活宿主：Trigger → 受监督 Run（long-lived；见 [arch/agent-runtime.md](./arch/agent-runtime.md)） |
-| **Orchestration** | experimental 编排（子路径 `octopi/harness/orchestration`） |
-| **Concurrency** | 多 Key LLM 负载均衡、限流、Session 门控 |
-| **Execution Environment** | 沙箱、工作区管理、文件操作 |
-| **Human-in-the-Loop** | 审批流程、决策缓存、基于风险的策略 |
-| **Memory** | 命题记忆（fact/method/norm）、门控/置信度、认知/智慧存储、Memory Steward — 见 [docs/memory.md](./docs/memory.md) |
-| **Observer** | 开发调试用 Run Observatory：`observer.level`（缺省 `off`）、`/debug/run/*`、Web Run 面板 — 见 [docs/observer-domain.md](./docs/observer-domain.md)（与 Telemetry 的 Core `Observer` 分离） |
+| 产品域 | 目录 | 问题 |
+|--------|------|------|
+| **Governance 治理** | `governance/` | 谁能做什么？（ACL、安全策略、HITL、凭证、账本） |
+| **Session 会话** | `session/` | 连续性如何维持？（聚合、Discourse、任务、历史） |
+| **Agent 智能体** | `agent/` | 它是谁、怎么配？（模板、persona、构建） |
+| **Memory 记忆** | `memory/` | 它学到过什么？（Memory/Cognition/Wisdom 基质） |
+| **Knowledge 知识** | `knowledge/` | 世界上写着什么？（外生语料、源、检索） |
+| **Activation 激活** | `activation/` | 刺激如何变成 Run？ |
+| **Run 运行** | `run/` | 这一轮如何跑安全？（RunScope、可靠性、守卫、预算） |
+| **Context 上下文** | `context/` | 模型看见什么？（八层装配、Token、窗口） |
+| **Extension 扩展** | `extension/` | 能力如何扩展？（Plugin/Tool/Skill/MCP、沙箱） |
+| **Collaboration 协作** | `collaboration/` | 多 Agent / 子系统如何协同？ |
+
+横切/基建（不计数）：`observability/`、`context/capabilities/`、`shared/`。  
+数字与模块清单唯一权威：[docs/domains.yaml](./docs/domains.yaml)。
 
 ### Layer 3: Integration — 外部适配
 

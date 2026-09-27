@@ -12,7 +12,7 @@
 - StateMachine — 状态机（状态转换管理）
 - Cron — 时间数学（parse / nextFire / intervalNext / formatHuman）；**不是**中心 Scheduler
 
-> AsyncTask 已迁至 `harness/orchestration/`（调度产品件，非 Kernel）。
+> AsyncTask 已迁至 `harness/collaboration/orchestration/`（调度产品件，非 Kernel）。
 > ProcessModel 已删除。
 > 谁 arm timer、点火后做什么，留在 agent-runtime / orchestration / autonomous-subsystem。
 

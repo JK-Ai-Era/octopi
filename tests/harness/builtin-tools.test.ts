@@ -4,10 +4,10 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 
-import { createFileEditTool } from '../../src/harness/plugin-ecosystem/tools/file-edit.js';
-import { createFileSearchTool } from '../../src/harness/plugin-ecosystem/tools/file-search.js';
-import { createEnvInfoTool } from '../../src/harness/plugin-ecosystem/tools/env-info.js';
-import { getBuiltinTools } from '../../src/harness/plugin-ecosystem/tools/builtin.js';
+import { createFileEditTool } from '../../src/harness/extension/plugin-ecosystem/tools/file-edit.js';
+import { createFileSearchTool } from '../../src/harness/extension/plugin-ecosystem/tools/file-search.js';
+import { createEnvInfoTool } from '../../src/harness/extension/plugin-ecosystem/tools/env-info.js';
+import { getBuiltinTools } from '../../src/harness/extension/plugin-ecosystem/tools/builtin.js';
 import type { ToolExecutionContext } from '../../src/core/types/tools.js';
 
 function makeContext(overrides?: Partial<ToolExecutionContext>): ToolExecutionContext {
@@ -588,7 +588,7 @@ describe('file_list entry caps and skip dirs', () => {
 
   it('recursive skips node_modules/.git and caps entries', async () => {
     const { createFileListTool } = await import(
-      '../../src/harness/plugin-ecosystem/tools/builtin.js'
+      '../../src/harness/extension/plugin-ecosystem/tools/builtin.js'
     );
     const tool = createFileListTool();
     const result = (await tool.handler(
@@ -604,7 +604,7 @@ describe('file_list entry caps and skip dirs', () => {
 
   it('caps entries at maxEntries', async () => {
     const { createFileListTool } = await import(
-      '../../src/harness/plugin-ecosystem/tools/builtin.js'
+      '../../src/harness/extension/plugin-ecosystem/tools/builtin.js'
     );
     for (let i = 0; i < 5; i++) {
       await writeFile(join(tmpDir, 'src', `f${i}.ts`), 'x');
@@ -623,7 +623,7 @@ describe('file_list entry caps and skip dirs', () => {
 
   it('stops recursion at maxDepth and reports depthCapped', async () => {
     const { createFileListTool } = await import(
-      '../../src/harness/plugin-ecosystem/tools/builtin.js'
+      '../../src/harness/extension/plugin-ecosystem/tools/builtin.js'
     );
     // depth 1=src, 2=a, 3=b, 4=c, 5=d（默认 maxDepth=4 时不应出现 d）
     await mkdir(join(tmpDir, 'src', 'a', 'b', 'c', 'd'), { recursive: true });
@@ -654,7 +654,7 @@ describe('file_list entry caps and skip dirs', () => {
 
   it('clamps maxDepth to hard cap 8', async () => {
     const { createFileListTool } = await import(
-      '../../src/harness/plugin-ecosystem/tools/builtin.js'
+      '../../src/harness/extension/plugin-ecosystem/tools/builtin.js'
     );
     const tool = createFileListTool();
     const result = (await tool.handler(
@@ -667,7 +667,7 @@ describe('file_list entry caps and skip dirs', () => {
 
   it('accepts glob pattern *.md without regex crash', async () => {
     const { createFileListTool } = await import(
-      '../../src/harness/plugin-ecosystem/tools/builtin.js'
+      '../../src/harness/extension/plugin-ecosystem/tools/builtin.js'
     );
     const tool = createFileListTool();
     const result = (await tool.handler(
@@ -681,7 +681,7 @@ describe('file_list entry caps and skip dirs', () => {
 
   it('still accepts regex patterns', async () => {
     const { createFileListTool } = await import(
-      '../../src/harness/plugin-ecosystem/tools/builtin.js'
+      '../../src/harness/extension/plugin-ecosystem/tools/builtin.js'
     );
     const tool = createFileListTool();
     const result = (await tool.handler(
@@ -694,7 +694,7 @@ describe('file_list entry caps and skip dirs', () => {
 
   it('recursive + pattern still descends into non-matching dirs', async () => {
     const { createFileListTool } = await import(
-      '../../src/harness/plugin-ecosystem/tools/builtin.js'
+      '../../src/harness/extension/plugin-ecosystem/tools/builtin.js'
     );
     await mkdir(join(tmpDir, 'src', 'docs'), { recursive: true });
     await writeFile(join(tmpDir, 'src', 'docs', 'guide.md'), '#');
@@ -711,7 +711,7 @@ describe('file_list entry caps and skip dirs', () => {
 
   it('glob is anchored: *.md does not match file.md.bak', async () => {
     const { createFileListTool } = await import(
-      '../../src/harness/plugin-ecosystem/tools/builtin.js'
+      '../../src/harness/extension/plugin-ecosystem/tools/builtin.js'
     );
     await writeFile(join(tmpDir, 'src', 'file.md.bak'), 'x');
 

@@ -8,7 +8,7 @@ import { readFileSync, writeFileSync, unlinkSync, existsSync, mkdirSync } from '
 import type { CliArgs } from './args.js';
 import { getOctopiHome, isInitialized, initOctopi, formatInitReport } from '../init.js';
 import { loadConfig, toGatewayConfig } from '../config.js';
-import { createToolSet } from '../harness/plugin-ecosystem/tools/tool-set.js';
+import { createToolSet } from '../harness/extension/plugin-ecosystem/tools/tool-set.js';
 import type { ModelProviderConfig } from '../config.js';
 import type { ModelProvider } from '../core/interfaces/model-provider.js';
 import { OpenAIProvider } from '../integration/providers/openai.js';
@@ -437,7 +437,7 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
   //（SqliteMemoryStore(agent.db)）创建 memory_store/search，与七层 MemoryLayer / memory.steward.* 同实例。
   // SessionTaskService 随 AgentBuilder/Gateway 的 SessionStore 自动接线；不再单独建 TaskTracker。
 
-  let webSearchToolCfg: { provider: import('../harness/plugin-ecosystem/tools/web-search-types.js').WebSearchProvider; defaultLimit?: number; timeoutMs?: number } | undefined;
+  let webSearchToolCfg: { provider: import('../harness/extension/plugin-ecosystem/tools/web-search-types.js').WebSearchProvider; defaultLimit?: number; timeoutMs?: number } | undefined;
   if (config.webSearch?.providers && Object.keys(config.webSearch.providers).length > 0) {
     const { resolveWebSearchProviders, createWebSearchWithFallback } = await import('../integration/web-search/factory.js');
     const resolved = resolveWebSearchProviders(config.webSearch);
@@ -455,10 +455,10 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
   }
 
   // 公用能力 SummaryPort（http_request / file_read L2）；无可用 provider 时仅 L1
-  let summarySupport: import('../harness/capabilities/summary/index.js').ToolSummarySupport | undefined;
+  let summarySupport: import('../harness/context/capabilities/summary/index.js').ToolSummarySupport | undefined;
   try {
     const { createSummaryPort, createToolSummarySupport, createMemorySummaryCache } = await import(
-      '../harness/capabilities/summary/index.js'
+      '../harness/context/capabilities/summary/index.js'
     );
     const providerMap = new Map<string, import('../core/interfaces/model-provider.js').ModelProvider>();
     let fallback: import('../core/interfaces/model-provider.js').ModelProvider | undefined;
@@ -480,7 +480,7 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
         | undefined;
 
       let cache:
-        | import('../harness/capabilities/summary/index.js').SummaryCachePort
+        | import('../harness/context/capabilities/summary/index.js').SummaryCachePort
         | undefined;
       let cacheEnabled = false;
       if (summaryCfg?.cache?.enabled) {
@@ -492,7 +492,7 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
       }
 
       const policyOverrides = summaryCfg?.policies as
-        | Record<string, import('../harness/capabilities/summary/index.js').SummaryPolicy>
+        | Record<string, import('../harness/context/capabilities/summary/index.js').SummaryPolicy>
         | undefined;
 
       const portOptions = {
@@ -529,10 +529,10 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
   // memory_store/memory_search **不在**全局注册：由 AgentBuilder 在 agent build 时
   // 按各 agent 的 MemoryStore（SqliteMemoryStore(agent.db)）注入，与 MemoryLayer 同实例。
   // session_search / session_read：Information 历史检索，绑 Gateway 同一 SessionStore。
-  let sessionHistoryPort: import('../harness/session-history/index.js').SessionHistoryPort | undefined;
+  let sessionHistoryPort: import('../harness/session/history/index.js').SessionHistoryPort | undefined;
   try {
-    const { createSessionHistoryPort } = await import('../harness/session-history/index.js');
-    const { SessionAclService } = await import('../harness/session-acl/service.js');
+    const { createSessionHistoryPort } = await import('../harness/session/history/index.js');
+    const { SessionAclService } = await import('../harness/governance/session-acl/service.js');
     sessionHistoryPort = createSessionHistoryPort({
       store: gatewayStoreForHistory,
       sessionAcl: new SessionAclService(gatewayConfig.sessionAcl),
@@ -565,7 +565,7 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
 
   // ── 子系统发现（启动可见；Agent 首次 build 时按 allow/deny 实际注册） ──
   try {
-    const { discoverSubsystemSpecs } = await import('../harness/agent-building/builder.js');
+    const { discoverSubsystemSpecs } = await import('../harness/agent/builder.js');
     const { specs, errors } = await discoverSubsystemSpecs();
     if (specs.length > 0) {
       console.log(`[CLI] subsystems discovered: ${specs.map((s) => s.id).join(', ')}`);

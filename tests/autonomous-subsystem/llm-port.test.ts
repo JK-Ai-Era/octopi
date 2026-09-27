@@ -1,10 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
-import { createSubsystemLLMPort, DEP_LLM_PORT, DEP_SUBSYSTEM_PROMPT } from '../../src/harness/autonomous-subsystem/think/llm-port.js';
-import { ModelResolver } from '../../src/harness/autonomous-subsystem/think/model-resolver.js';
-import { SubsystemRuntime } from '../../src/harness/autonomous-subsystem/runtime.js';
+import { createSubsystemLLMPort, DEP_LLM_PORT, DEP_SUBSYSTEM_PROMPT } from '../../src/harness/collaboration/autonomous-subsystem/think/llm-port.js';
+import { ModelResolver } from '../../src/harness/collaboration/autonomous-subsystem/think/model-resolver.js';
+import { SubsystemRuntime } from '../../src/harness/collaboration/autonomous-subsystem/runtime.js';
 import { DefaultEventBus } from '../../src/core/primitives/event-bus.js';
 import type { ModelProvider, LLMRequest, LLMResponse } from '../../src/core/interfaces/model-provider.js';
-import type { SubsystemSpec, SubsystemLLMPort } from '../../src/harness/autonomous-subsystem/index.js';
+import type { SubsystemSpec, SubsystemLLMPort } from '../../src/harness/collaboration/autonomous-subsystem/index.js';
 
 function mockProvider(responses: Array<'ok' | 'error'> | 'ok'): ModelProvider & { chat: ReturnType<typeof vi.fn> } {
   let call = 0;
@@ -138,7 +138,7 @@ describe('createSubsystemLLMPort', () => {
   });
 
   it('does not match overly broad error strings for fallback', async () => {
-    const { shouldFallbackModel } = await import('../../src/harness/autonomous-subsystem/think/llm-port.js');
+    const { shouldFallbackModel } = await import('../../src/harness/collaboration/autonomous-subsystem/think/llm-port.js');
     expect(shouldFallbackModel(new Error('failed to generate certificate'))).toBe(false);
     expect(shouldFallbackModel(new Error('serverless invoke failed'))).toBe(false);
     expect(shouldFallbackModel(new Error('rate limit exceeded'))).toBe(true);

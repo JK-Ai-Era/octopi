@@ -10,8 +10,8 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-import type { WebSearchProvider, WebSearchResponse } from '../../harness/plugin-ecosystem/tools/web-search-types.js';
-import { createWebSearchTool } from '../../src/harness/plugin-ecosystem/tools/web-search.js';
+import type { WebSearchProvider, WebSearchResponse } from '../../src/harness/extension/plugin-ecosystem/tools/web-search-types.js';
+import { createWebSearchTool } from '../../src/harness/extension/plugin-ecosystem/tools/web-search.js';
 import {
   createWebSearchProviderFromSlot,
   resolveWebSearchProviders,
@@ -22,7 +22,7 @@ import { createTavilyProvider } from '../../src/integration/web-search/tavily.js
 import { createBraveProvider } from '../../src/integration/web-search/brave.js';
 import { createSerperProvider } from '../../src/integration/web-search/serper.js';
 import { createMimoProvider } from '../../src/integration/web-search/mimo.js';
-import { createToolSet } from '../../src/harness/plugin-ecosystem/tools/tool-set.js';
+import { createToolSet } from '../../src/harness/extension/plugin-ecosystem/tools/tool-set.js';
 import type { ToolExecutionContext } from '../../src/core/types/tools.js';
 
 function makeContext(overrides?: Partial<ToolExecutionContext>): ToolExecutionContext {

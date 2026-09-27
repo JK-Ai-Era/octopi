@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { TokenBudgetExceededError } from '../../src/harness/autonomous-subsystem/think/executor.js';
+import { TokenBudgetExceededError } from '../../src/harness/collaboration/autonomous-subsystem/think/executor.js';
 
 describe('TokenBudgetExceededError', () => {
   it('keeps expected name and message', () => {

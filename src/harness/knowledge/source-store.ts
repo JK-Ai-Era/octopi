@@ -3,7 +3,7 @@
  */
 
 import { randomUUID, createHash } from 'node:crypto';
-import type { KnowledgeCatalogItem } from '../context/knowledge/types.js';
+import type { KnowledgeCatalogItem } from './catalog-types.js';
 import { KnowledgeDatabase } from './db.js';
 import { asSourceId } from './types.js';
 import type {

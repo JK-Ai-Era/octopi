@@ -24,8 +24,8 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   };
 });
 
-import { PersonaSource, loadPersona, composePersonas } from '../src/harness/agent-building/persona.js';
-import { AgentBuilder } from '../src/harness/agent-building/builder.js';
+import { PersonaSource, loadPersona, composePersonas } from '../src/harness/agent/persona.js';
+import { AgentBuilder } from '../src/harness/agent/builder.js';
 import { InMemorySessionStore } from '../src/integration/storage/memory.js';
 import type { ModelProvider, LLMRequest } from '../src/core/interfaces/model-provider.js';
 import type { SecurityGuard, SecurityCheckResult } from '../src/core/interfaces/security-guard.js';

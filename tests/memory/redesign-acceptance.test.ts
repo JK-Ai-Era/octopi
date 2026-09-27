@@ -11,8 +11,8 @@ import { AgentDatabase } from '../../src/harness/memory/sqlite/agent-db.js';
 import { SqliteMemoryStore } from '../../src/harness/memory/sqlite/memory-store.js';
 import { loadConstitution } from '../../src/harness/context/constitution/load-constitution.js';
 import { DefaultContextAssembler } from '../../src/harness/context/assembler.js';
-import { isSubsystemAllowed } from '../../src/harness/agent-building/builder.js';
-import { SubsystemLoader } from '../../src/harness/autonomous-subsystem/loader.js';
+import { isSubsystemAllowed } from '../../src/harness/agent/builder.js';
+import { SubsystemLoader } from '../../src/harness/collaboration/autonomous-subsystem/loader.js';
 import { admitCandidates } from '../../src/subsystems/memory-steward/shared/policy.js';
 
 describe('constitution loader', () => {

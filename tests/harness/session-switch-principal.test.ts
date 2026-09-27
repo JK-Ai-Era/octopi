@@ -9,10 +9,10 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { SessionAclService } from '../../src/harness/session-acl/service.js';
-import type { SessionData } from '../../src/harness/session-types.js';
-import { buildRunRequest } from '../../src/harness/agent-runtime/compiler.js';
-import type { RuntimeAgent, Trigger } from '../../src/harness/agent-runtime/types.js';
+import { SessionAclService } from '../../src/harness/governance/session-acl/service.js';
+import type { SessionData } from '../../src/harness/session/types.js';
+import { buildRunRequest } from '../../src/harness/activation/compiler.js';
+import type { RuntimeAgent, Trigger } from '../../src/harness/activation/types.js';
 
 function session(id = 's1', agentId = 'owner-agent'): SessionData {
   return {

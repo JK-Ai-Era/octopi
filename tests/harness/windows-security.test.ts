@@ -1,12 +1,12 @@
 import { describe, it, expect } from 'vitest';
 
-import { parseShellCommand } from '../../src/harness/security/shell-parser.js';
+import { parseShellCommand } from '../../src/harness/governance/security/shell-parser.js';
 import {
   evaluateShellCommand,
   evaluateNonShellTool,
   resetSecurityPathCache,
   detectCatastrophicRecursiveDelete,
-} from '../../src/harness/security/risk-evaluator.js';
+} from '../../src/harness/governance/security/risk-evaluator.js';
 import type { ToolCall } from '../../src/core/types.js';
 
 function tc(name: string, args: Record<string, unknown>): ToolCall {

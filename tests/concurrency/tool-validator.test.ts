@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { ToolValidator } from '../../src/harness/concurrency/tool-validator.js';
+import { ToolValidator } from '../../src/harness/run/concurrency/tool-validator.js';
 
 describe('ToolValidator', () => {
   let validator: ToolValidator;

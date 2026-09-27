@@ -5,8 +5,8 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { SessionLedger } from '../../../src/harness/accounting/session-ledger.js';
-import type { UsageLedgerSnapshot } from '../../../src/harness/accounting/usage-ledger.js';
+import { SessionLedger } from '../../../src/harness/governance/accounting/session-ledger.js';
+import type { UsageLedgerSnapshot } from '../../../src/harness/governance/accounting/usage-ledger.js';
 
 function createMockRunSnapshot(overrides?: Partial<UsageLedgerSnapshot>): UsageLedgerSnapshot {
   return {

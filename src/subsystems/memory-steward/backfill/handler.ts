@@ -8,13 +8,13 @@
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { SubsystemInput, SubsystemOutput, InjectedDependencies } from '../../../harness/autonomous-subsystem/types.js';
+import type { SubsystemInput, SubsystemOutput, InjectedDependencies } from '../../../harness/collaboration/autonomous-subsystem/types.js';
 import type { MemoryStore } from '../../../harness/memory/types.js';
 import {
   DEP_LLM_PORT,
   DEP_SUBSYSTEM_PROMPT,
   type SubsystemLLMPort,
-} from '../../../harness/autonomous-subsystem/index.js';
+} from '../../../harness/collaboration/autonomous-subsystem/index.js';
 import { admitCandidates, type StewardCandidate } from '../shared/policy.js';
 import {
   measureSessionDensity,

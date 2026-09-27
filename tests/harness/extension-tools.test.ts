@@ -1,13 +1,13 @@
 import { describe, it, expect } from 'vitest';
 
-import { createToolSet } from '../../src/harness/plugin-ecosystem/tools/tool-set.js';
-import { createMemoryTools } from '../../src/harness/plugin-ecosystem/tools/memory.js';
-import { createSessionTaskTools } from '../../src/harness/session-tasks/tools.js';
-import { createAskUserTool } from '../../src/harness/plugin-ecosystem/tools/ask-user.js';
+import { createToolSet } from '../../src/harness/extension/plugin-ecosystem/tools/tool-set.js';
+import { createMemoryTools } from '../../src/harness/extension/plugin-ecosystem/tools/memory.js';
+import { createSessionTaskTools } from '../../src/harness/session/tasks/tools.js';
+import { createAskUserTool } from '../../src/harness/extension/plugin-ecosystem/tools/ask-user.js';
 import { InMemoryMemoryStore } from '../../src/harness/memory/store.js';
 import { InMemorySessionStore } from '../../src/integration/storage/memory.js';
-import { SessionTaskService } from '../../src/harness/session-tasks/service.js';
-import type { SessionData } from '../../src/harness/session-types.js';
+import { SessionTaskService } from '../../src/harness/session/tasks/service.js';
+import type { SessionData } from '../../src/harness/session/types.js';
 
 function createSession(id = 's1', agentId = 'a1'): SessionData {
   return {

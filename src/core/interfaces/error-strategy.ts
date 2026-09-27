@@ -8,7 +8,7 @@
  * - Loop 层 (agentLoop) 使用 OnErrorFn 回调（loop/types.ts）
  *   OnErrorFn 签名：(error: ClassifiedError) => Promise<'retry' | 'abort'>
  * - Harness 层的 ErrorStrategy 被包装为 OnErrorFn 注入到循环中
- *   包装逻辑在 harness/reliability/run-agent.ts：
+ *   包装逻辑在 harness/run/reliability/run-agent.ts：
  *     onModelError() → retry 保持 retry；abort/skip 映射为 abort
  * - ErrorStrategy 提供更丰富的决策（retry/skip/abort），
  *   OnErrorFn 简化为 retry/abort；Loop 对业务错误永不 throw，

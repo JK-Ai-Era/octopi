@@ -271,7 +271,7 @@ export interface AgentLoopConfig extends ToolHooksConfig, TurnHooksConfig {
  *
  * 仅包含 agentLoop / callModel 会产出的事件。
  * Harness 层扩展事件（budget_exceeded / run_guard_*）见
- * `harness/reliability/harness-events.ts` 的 `HarnessLoopEvent`。
+ * `harness/run/reliability/harness-events.ts` 的 `HarnessLoopEvent`。
  */
 export type AgentLoopEvent =
   | { type: 'agent_start'; timestamp: number }

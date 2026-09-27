@@ -6,7 +6,7 @@
  * 晋升候选只出信号，不写 Wisdom。
  */
 
-import type { SubsystemInput, SubsystemOutput, InjectedDependencies } from '../../../harness/autonomous-subsystem/types.js';
+import type { SubsystemInput, SubsystemOutput, InjectedDependencies } from '../../../harness/collaboration/autonomous-subsystem/types.js';
 import type { MemoryStore } from '../../../harness/memory/types.js';
 import {
   applyBoosts,

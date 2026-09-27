@@ -14,25 +14,25 @@
 | **Core 定位** | 仅 Kernel ports + 词汇表 + EventBus/StateMachine | 「Domain 可暂住 Core」 |
 | `octopi/core` 入口 | 只出 Kernel | — |
 | `octopi/core/domain` | **已删除** | 曾作为 Domain 入口 |
-| AsyncTask | `harness/orchestration/async-task.ts` | Core primitives |
-| AsyncTaskStore | `harness/orchestration/async-task-store.ts` | Core interfaces |
+| AsyncTask | `harness/collaboration/orchestration/async-task.ts` | Core primitives |
+| AsyncTaskStore | `harness/collaboration/orchestration/async-task-store.ts` | Core interfaces |
 | RunGuard | `core/interfaces/run-guard.ts`（**Kernel**） | 由 task-supervisor 重命名（仍成立） |
-| Session.tasks / SessionTask | `harness/session-tasks/` | 一致 |
-| orchestration | `harness/orchestration/` | 一致 |
-| Planner / Reflector 契约 | `harness/orchestration/cognitive-loop.ts` | 曾在 Core |
-| Knowledge catalog 契约 | `harness/context/knowledge/types.ts` | 曾在 Core / 曾为 KnowledgeStore |
+| Session.tasks / SessionTask | `harness/session/tasks/` | 一致 |
+| orchestration | `harness/collaboration/orchestration/` | 一致 |
+| Planner / Reflector 契约 | `harness/collaboration/orchestration/cognitive-loop.ts` | 曾在 Core |
+| Knowledge catalog 契约 | `harness/knowledge/types.ts` | 曾在 Core / 曾为 KnowledgeStore |
 | Memory / Wisdom / Cognition | `harness/memory/types.ts` | 曾在 Core |
-| AgentRegistry / MessageChannel | `harness/multi-agent/*-types.ts` | 曾在 Core |
-| MCP | `harness/plugin-ecosystem/mcp/types.ts` | 曾在 Core |
-| SkillManager | `harness/plugin-ecosystem/skills/types.ts` | 曾在 Core types |
-| AgentDefinition / Persona | `harness/types/agent-definition.ts` | 曾在 Core types |
+| AgentRegistry / MessageChannel | `harness/collaboration/multi-agent/*-types.ts` | 曾在 Core |
+| MCP | `harness/extension/plugin-ecosystem/mcp/types.ts` | 曾在 Core |
+| SkillManager | `harness/extension/plugin-ecosystem/skills/types.ts` | 曾在 Core types |
+| AgentDefinition / Persona | `harness/shared/types/agent-definition.ts` | 曾在 Core types |
 | ProcessModel | **已删除** | — |
 
 **Kernel ports（现行，仍在 Core）**：ModelProvider、ErrorStrategy、SecurityGuard、RunGuard、ReliabilityHarness。
 
 **Product ports（类型可留 Core，非 thin-run）**：ToolBus、SessionStore、`Observer`（**Telemetry** metrics/span/log）。ContextEngine 在 `harness/context/types.ts`。
 
-**Run Observatory（勿与 Core Observer 混淆）**：产品调试观测在 `harness/observer/`（`ObserverHub`），配置键 `observer`，缺省 `level=off`。与 Telemetry（`observability` + Core `Observer`）同属 Observer Domain、实现分离。见 [observer-domain.md](./observer-domain.md)。
+**Run Observatory（勿与 Core Observer 混淆）**：产品调试观测在 `harness/observability/observer/`（`ObserverHub`），配置键 `observer`，缺省 `level=off`。与 Telemetry（`observability` + Core `Observer`）同属 Observer Domain、实现分离。见 [observer-domain.md](./observer-domain.md)。
 
 **依赖规则（现行）**：
 
@@ -51,7 +51,7 @@ Harness 领域间：只 import 对方 types，不 import 实现
 | 旧模块 | 真实本质 | 2026-06 归属 | 2026-09 现行 |
 |--------|----------|--------------|--------------|
 | `tasks/`（Tracker/Manager/Decision） | 会话任务列表 | Session 聚合 | 同左（session-tasks） |
-| `async-task` + `TaskStore` | 异步执行单元 | **Core** runtime-primitives | **harness/orchestration** |
+| `async-task` + `TaskStore` | 异步执行单元 | **Core** runtime-primitives | **harness/collaboration/orchestration** |
 | `supervisor/` | 过程监督 | run-guard | 同左（Core 契约 RunGuard） |
 | workflow / scheduler / planner… | 编排 | orchestration | 同左 |
 
@@ -86,10 +86,10 @@ Harness 领域间：只 import 对方 types，不 import 实现
 
 | 名称 | 职责 | 现行位置 |
 |------|------|----------|
-| Session.tasks | 未闭合工作项（goal/step） | harness/session-tasks + Session 聚合 |
-| run-guard | 单次 run 是否跑飞 | harness/run-guard；契约 Core Kernel |
-| orchestration | 确定性多步骤作业 | harness/orchestration |
-| AsyncTask | 异步工作单元（无用户语义） | harness/orchestration |
+| Session.tasks | 未闭合工作项（goal/step） | harness/session/tasks + Session 聚合 |
+| run-guard | 单次 run 是否跑飞 | harness/run/run-guard；契约 Core Kernel |
+| orchestration | 确定性多步骤作业 | harness/collaboration/orchestration |
+| AsyncTask | 异步工作单元（无用户语义） | harness/collaboration/orchestration |
 
 ---
 
@@ -100,7 +100,7 @@ Harness 领域间：只 import 对方 types，不 import 实现
 | 设计 | [task-system.md](./task-system.md) |
 | 数据 | `SessionData.tasks: SessionTask[]` |
 | 写入 | 主 LLM `task_*` → `SessionTaskService` |
-| 目录 | `src/harness/session-tasks/` |
+| 目录 | `src/harness/session/tasks/` |
 
 ---
 
@@ -108,7 +108,7 @@ Harness 领域间：只 import 对方 types，不 import 实现
 
 | 项 | 内容 |
 |----|------|
-| 实现 | `src/harness/run-guard/` |
+| 实现 | `src/harness/run/run-guard/` |
 | 契约 | `core/interfaces/run-guard.ts`（Kernel port） |
 | 裁决 | `continue \| recover \| stop` |
 
@@ -118,7 +118,7 @@ Harness 领域间：只 import 对方 types，不 import 实现
 
 ## 5. orchestration（仍有效）
 
-目录 `src/harness/orchestration/`：workflow / scheduler / planner / strategy / quality / reflector，以及 **async-task**、**cognitive-loop 契约**。
+目录 `src/harness/collaboration/orchestration/`：workflow / scheduler / planner / strategy / quality / reflector，以及 **async-task**、**cognitive-loop 契约**。
 
 与 Session.tasks 仅允许单向可选适配（规范见本域 README）。
 
@@ -128,8 +128,8 @@ Harness 领域间：只 import 对方 types，不 import 实现
 
 | 项 | 2026-06 | **现行（2026-09）** |
 |----|---------|---------------------|
-| 位置 | Core primitives | `harness/orchestration/async-task.ts` |
-| Store 契约 | Core | `harness/orchestration/async-task-store.ts` |
+| 位置 | Core primitives | `harness/collaboration/orchestration/async-task.ts` |
+| Store 契约 | Core | `harness/collaboration/orchestration/async-task-store.ts` |
 | 理由 | 「通用原语」 | Loop/裸 run 不依赖；唯一生产消费方 TaskScheduler |
 
 命名仍禁止：裸 `Task` / 会话侧与原语侧共用无前缀类型。
@@ -145,9 +145,9 @@ Harness 领域间：只 import 对方 types，不 import 实现
 ```text
 src/core/primitives/async-task.ts   # 现已不在 Core
 src/core/interfaces/async-task-store.ts
-src/harness/session-tasks/
-src/harness/run-guard/
-src/harness/orchestration/
+src/harness/session/tasks/
+src/harness/run/run-guard/
+src/harness/collaboration/orchestration/
 ```
 
 现行树见 [architecture.md](./architecture.md) §Core / §Harness。
@@ -160,9 +160,9 @@ src/harness/orchestration/
 |------------|----------|--------------|
 | task-supervisor.ts | run-guard.ts | 已完成；RunGuard 为 Kernel |
 | task-store.ts | async-task-store.ts | 已迁出 Core → orchestration |
-| task-system/workflow/* | harness/orchestration/ | 已完成 |
-| task-system/knowledge/* | harness/context/knowledge/ | 契约已迁本域 types.ts |
-| Plan/Planner/Reflector | Core cognitive-loop | **已迁** harness/orchestration/cognitive-loop.ts |
+| task-system/workflow/* | harness/collaboration/orchestration/ | 已完成 |
+| task-system/knowledge/* | harness/knowledge/ | 契约已迁本域 types.ts |
+| Plan/Planner/Reflector | Core cognitive-loop | **已迁** harness/collaboration/orchestration/cognitive-loop.ts |
 
 ---
 
@@ -179,4 +179,4 @@ Guard 管「这次跑得健不健康」，Runtime 管「要不要开始跑」。
 | [architecture.md](./architecture.md) | **当前架构权威** |
 | `src/core/README.md` | Kernel 定位与 I/O 门禁 |
 | [task-system.md](./task-system.md) | SessionTask 唯一基准 |
-| `src/harness/orchestration/README.md` | AsyncTask / 编排现行说明 |
+| `src/harness/collaboration/orchestration/README.md` | AsyncTask / 编排现行说明 |

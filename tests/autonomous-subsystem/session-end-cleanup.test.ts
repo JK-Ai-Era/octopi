@@ -1,7 +1,7 @@
 ﻿import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { SubsystemRuntime } from '../../src/harness/autonomous-subsystem/runtime.js';
+import { SubsystemRuntime } from '../../src/harness/collaboration/autonomous-subsystem/runtime.js';
 import { DefaultEventBus } from '../../src/core/primitives/event-bus.js';
-import type { SubsystemSpec } from '../../src/harness/autonomous-subsystem/types.js';
+import type { SubsystemSpec } from '../../src/harness/collaboration/autonomous-subsystem/types.js';
 
 function makeSpec(overrides?: Partial<SubsystemSpec>): SubsystemSpec {
   return {
@@ -53,7 +53,7 @@ describe('SubsystemRuntime session end cleanup', () => {
       sessionId: 'session-1',
     });
 
-    // 杩欓噷涓昏楠岃瘉涓嶄細鎶涢敊涓?runtime 浠嶅彲鐢紙娓呯悊璺緞鎵ц鎴愬姛锛?
+    // 这里主要验证不会抛错且 runtime 仍可用（清理路径执行成功）
     expect(runtime.subsystemCount).toBe(1);
   });
 });

@@ -2,7 +2,7 @@
  * 轻量状态机（纯机制）
  *
  * 定义合法状态转换路径，非法转换自动拦截。
- * Session 等领域策略见 harness/session-state-machine.ts。
+ * Session 等领域策略见 harness/session/state-machine.ts。
  *
  * @module
  */

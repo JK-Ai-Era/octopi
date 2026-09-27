@@ -26,7 +26,7 @@ import type {
   SessionSummary,
   SessionTaskView,
   SessionView,
-} from '../../web/sdk/client.js';
+} from '../sdk/client.js';
 
 import { ConversationAdapter } from '../conversation/adapter.js';
 import type { AdapterSnapshot } from '../conversation/adapter.js';

@@ -10,10 +10,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { JsonlSessionStore } from '../src/integration/storage/jsonl.js';
-import { createSessionHistoryPort, parseHistoryRef } from '../src/harness/session-history/index.js';
-import { createSessionHistoryTools } from '../src/harness/plugin-ecosystem/tools/session-history.js';
-import { SessionAclService } from '../src/harness/session-acl/service.js';
-import type { SessionData } from '../src/harness/session-types.js';
+import { createSessionHistoryPort, parseHistoryRef } from '../src/harness/session/history/index.js';
+import { createSessionHistoryTools } from '../src/harness/extension/plugin-ecosystem/tools/session-history.js';
+import { SessionAclService } from '../src/harness/governance/session-acl/service.js';
+import type { SessionData } from '../src/harness/session/types.js';
 import type { ToolExecutionContext } from '../src/core/types/tools.js';
 
 const gzipAsync = promisify(gzip);

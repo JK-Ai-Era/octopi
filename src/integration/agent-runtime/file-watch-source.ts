@@ -6,7 +6,7 @@
 
 import { watch, type FSWatcher } from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import type { Trigger, TriggerSource } from '../../harness/agent-runtime/types.js';
+import type { Trigger, TriggerSource } from '../../harness/activation/types.js';
 
 export interface FileWatchSourceConfig {
   id?: string;

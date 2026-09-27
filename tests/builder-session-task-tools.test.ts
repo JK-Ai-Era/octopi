@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { AgentBuilder } from '../src/harness/agent-building/builder.js';
+import { AgentBuilder } from '../src/harness/agent/builder.js';
 import type { ModelProvider } from '../src/core/interfaces/model-provider.js';
 
 const stubProvider: ModelProvider = {

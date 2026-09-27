@@ -5,7 +5,7 @@
  */
 
 import { describe, test, expect, vi } from 'vitest';
-import { FallbackProvider } from '../src/harness/reliability/fallback-provider.js';
+import { FallbackProvider } from '../src/harness/run/reliability/fallback-provider.js';
 import type {
   ModelProvider,
   LLMRequest,
@@ -13,7 +13,7 @@ import type {
   LLMStreamChunk,
 } from '../src/core/interfaces/model-provider.js';
 import type { ModelInfo } from '../src/core/types/agent-definition.js';
-import type { ModelConfig } from '../src/harness/types/agent-definition.js';
+import type { ModelConfig } from '../src/harness/shared/types/agent-definition.js';
 
 function makeRequest(model?: string): LLMRequest {
   return {

@@ -1,3 +1,14 @@
+## v0.53.0
+
+### refactor(harness): 产品域优先目录 + 10 域权威清单
+
+- **`src/harness/` 顶层 = 10 个产品域**（governance / session / agent / memory / knowledge / activation / run / context / extension / collaboration）+ observability + shared；模块退入域内
+- 孤儿归位：`session/{types,compact,state-machine}`、`run/{runner,run-scope}`；`Agent.run()` 门面在 `run/agent/`
+- Knowledge 契约合一：`context/knowledge` → `knowledge/catalog-types`；tool-effect 并入 `execution-environment/isolation.ts`
+- **`docs/domains.yaml`** 为唯一计数权威；叙事 `docs/domains.md`；宪法 Collaboration 升正式产品域
+- 对外文档与 `@module` 注释路径同步；`package.json` 子路径出口指向新 dist（对外名 `octopi/harness/orchestration` 不变）
+- 修复既有测试：`stats` 键名、mock 缺 `listQuestions`；清理 UTF-8 注释截断
+
 ## v0.52.2
 
 ### fix(web/runner): 长离开后发送卡 waiting / 「Agent 正在运行」无法恢复

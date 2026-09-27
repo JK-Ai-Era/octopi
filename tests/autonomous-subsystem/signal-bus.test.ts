@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { SignalBus } from '../../src/harness/autonomous-subsystem/signal/bus.js';
+import { SignalBus } from '../../src/harness/collaboration/autonomous-subsystem/signal/bus.js';
 import { DefaultEventBus } from '../../src/core/primitives/event-bus.js';
 
 describe('SignalBus', () => {

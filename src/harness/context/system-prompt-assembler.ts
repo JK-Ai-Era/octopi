@@ -19,7 +19,7 @@ import {
 } from './layers.js';
 import type { ContextAssembler, ContextLayer } from './layer-types.js';
 import type { ConceptGraphStore, MemoryStore, WisdomStore } from '../memory/types.js';
-import type { KnowledgeCatalogProvider } from './knowledge/types.js';
+import type { KnowledgeCatalogProvider } from '../knowledge/catalog-types.js';
 import { loadConstitution, type ConstitutionConfig } from './constitution/load-constitution.js';
 
 export interface SystemPromptAssembleInput {

@@ -7,11 +7,11 @@
 import { describe, it, expect } from 'vitest';
 import { KnowledgeLayer } from '../../src/harness/context/layers.js';
 import { InMemoryMemoryStore } from '../../src/harness/memory/store.js';
-import { LLMReflector } from '../../src/harness/orchestration/reflector/index.js';
+import { LLMReflector } from '../../src/harness/collaboration/orchestration/reflector/index.js';
 import type { ModelProvider } from '../../src/core/interfaces/model-provider.js';
-import type { ExecutionRecord } from '../../src/harness/orchestration/cognitive-loop.js';
+import type { ExecutionRecord } from '../../src/harness/collaboration/orchestration/cognitive-loop.js';
 import type { LayerAssembleContext } from '../../src/harness/context/layer-types.js';
-import type { KnowledgeCatalogItem } from '../../src/harness/context/knowledge/types.js';
+import type { KnowledgeCatalogItem } from '../../src/harness/knowledge/catalog-types.js';
 
 function mockModel(response: string): ModelProvider {
   return {

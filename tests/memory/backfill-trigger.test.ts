@@ -14,8 +14,8 @@ import { findDuplicate } from '../../src/harness/memory/similarity.js';
 import { handler as backfillHandler } from '../../src/subsystems/memory-steward/backfill/handler.js';
 import { admitCandidates } from '../../src/subsystems/memory-steward/shared/policy.js';
 import { InMemoryMemoryStore } from '../../src/harness/memory/store.js';
-import type { SubsystemLLMPort } from '../../src/harness/autonomous-subsystem/think/llm-port.js';
-import type { SessionData } from '../../src/harness/session-types.js';
+import type { SubsystemLLMPort } from '../../src/harness/collaboration/autonomous-subsystem/think/llm-port.js';
+import type { SessionData } from '../../src/harness/session/types.js';
 
 function makeSession(id: string, turns = 3): SessionData {
   const messages = [] as SessionData['messages'];

@@ -17,7 +17,7 @@ import { gzip, gunzip } from 'node:zlib';
 import { promisify } from 'node:util';
 import { join } from 'node:path';
 import type { SessionStore } from '../../core/interfaces/session-store.js';
-import type { SessionData } from '../../harness/session-types.js';
+import type { SessionData } from '../../harness/session/types.js';
 import type { EventBus } from '../../core/primitives/event-bus.js';
 import { sessionMatchesAgent } from './memory.js';
 

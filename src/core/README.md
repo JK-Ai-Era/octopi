@@ -47,7 +47,7 @@ Domain / 产品契约主体在 **harness 领域**。
 
 - Kernel ports + 词汇表 + EventBus/StateMachine/Cron **机制**
 - 安全纯函数（severityToAction / isValidSecurityGuard）
-- **不包含**产品事件词表（AgentEventMap 在 harness/events）
+- **不包含**产品事件词表（AgentEventMap 在 harness/shared/events）
 
 ## 不做什么
 

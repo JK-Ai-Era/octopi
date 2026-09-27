@@ -5,29 +5,29 @@
  */
 
 // ── Accounting（用量账本；arch/budget-redesign.md P1） ──
-export { UsageLedger, SessionLedger } from './accounting/index.js';
-export type { UsageLedgerSnapshot, SessionLedgerSnapshot } from './accounting/index.js';
+export { UsageLedger, SessionLedger } from './governance/accounting/index.js';
+export type { UsageLedgerSnapshot, SessionLedgerSnapshot } from './governance/accounting/index.js';
 
 // ── Tool 系统 ──
-export { createToolSet } from './plugin-ecosystem/tools/tool-set.js';
-export type { ToolSet, ToolSetConfig } from './plugin-ecosystem/tools/tool-set.js';
-export { createWebSearchTool } from './plugin-ecosystem/tools/web-search.js';
-export type { WebSearchToolOptions } from './plugin-ecosystem/tools/web-search.js';
+export { createToolSet } from './extension/plugin-ecosystem/tools/tool-set.js';
+export type { ToolSet, ToolSetConfig } from './extension/plugin-ecosystem/tools/tool-set.js';
+export { createWebSearchTool } from './extension/plugin-ecosystem/tools/web-search.js';
+export type { WebSearchToolOptions } from './extension/plugin-ecosystem/tools/web-search.js';
 export {
   createSessionHistoryPort,
   resolveHistoryAccess,
-} from './session-history/index.js';
+} from './session/history/index.js';
 export {
   createSessionHistoryTools,
   createSessionSearchTool,
   createSessionReadTool,
-} from './plugin-ecosystem/tools/session-history.js';
+} from './extension/plugin-ecosystem/tools/session-history.js';
 export type {
   SessionHistoryPort,
   SessionHistoryQuery,
   SessionHistorySearchResult,
   SessionHistoryOptions,
-} from './session-history/index.js';
+} from './session/history/index.js';
 
 // ── Capabilities（公用能力；横切，不计入业务领域口径） ──
 export {
@@ -38,7 +38,7 @@ export {
   getToolSummaryBinding,
   createCompactEngine,
   createMemorySummaryCache,
-} from './capabilities/index.js';
+} from './context/capabilities/index.js';
 export type {
   ContentUnit,
   ContentKind,
@@ -52,14 +52,14 @@ export type {
   CompactEngine,
   CompactOptions,
   CompactOutcome,
-} from './capabilities/index.js';
+} from './context/capabilities/index.js';
 
 // ── Agent Building ──
-export { AgentBuilder, createAgent, isSubsystemAllowed, discoverSubsystemSpecs } from './agent-building/builder.js';
-export type { AgentBuildOptions, AgentBuildResult, AgentBuildCoreResult } from './agent-building/builder.js';
-export { loadPersona, composePersonas, PersonaSource } from './agent-building/persona.js';
-export { buildFromConfig, buildFromConfigFile, resolveProviders, resolveSecurityConfig, resolveContextEngine, resolveRunGuard } from './agent-building/config-bridge.js';
-export type { BuiltAgent } from './agent-building/config-bridge.js';
+export { AgentBuilder, createAgent, isSubsystemAllowed, discoverSubsystemSpecs } from './agent/builder.js';
+export type { AgentBuildOptions, AgentBuildResult, AgentBuildCoreResult } from './agent/builder.js';
+export { loadPersona, composePersonas, PersonaSource } from './agent/persona.js';
+export { buildFromConfig, buildFromConfigFile, resolveProviders, resolveSecurityConfig, resolveContextEngine, resolveRunGuard } from './agent/config-bridge.js';
+export type { BuiltAgent } from './agent/config-bridge.js';
 
 // ── Context Management ──
 export { DefaultContextEngine } from './context/default-context-engine.js';
@@ -131,39 +131,39 @@ export type {
 } from './context/index.js';
 
 // ── Security ──
-export { CapabilityEnforcer, PluginTrustLevel } from './security/capability-enforcer.js';
+export { CapabilityEnforcer, PluginTrustLevel } from './governance/security/capability-enforcer.js';
 
 // ── Reliability ──
-export { runAgentWithReliability, DEFAULT_RELIABILITY_CONFIG } from './reliability/index.js';
-export type { ReliabilityConfig, ConcreteReliabilityHarness } from './reliability/index.js';
+export { runAgentWithReliability, DEFAULT_RELIABILITY_CONFIG } from './run/reliability/index.js';
+export type { ReliabilityConfig, ConcreteReliabilityHarness } from './run/reliability/index.js';
 export type { ReliabilityHarness, ResourceBudgetLike } from '../core/interfaces/reliability.js';
-export { RunMetricsCollector } from './reliability/run-metrics-collector.js';
-export { CircuitBreaker } from './reliability/circuit-breaker.js';
-export { wrapProviderWithCircuitBreaker } from './reliability/provider-wrapper.js';
-export { FallbackProvider } from './reliability/fallback-provider.js';
+export { RunMetricsCollector } from './run/reliability/run-metrics-collector.js';
+export { CircuitBreaker } from './run/reliability/circuit-breaker.js';
+export { wrapProviderWithCircuitBreaker } from './run/reliability/provider-wrapper.js';
+export { FallbackProvider } from './run/reliability/fallback-provider.js';
 
 // ── Plugin Ecosystem ──
-export { PluginManager } from './plugin-ecosystem/plugins/manager.js';
-export { definePluginEntry, defineChannelPluginEntry } from './plugin-ecosystem/plugins/entry.js';
-export type { OctopiPluginDefinition, OctopiChannelPluginDefinition } from './plugin-ecosystem/plugins/entry.js';
-export { PluginApi } from './plugin-ecosystem/plugins/api.js';
-export { PluginLoader } from './plugin-ecosystem/plugins/loader.js';
-export type { LoadedPlugin, PluginLoaderConfig, PluginEntryConfig } from './plugin-ecosystem/plugins/loader.js';
-export { CapabilityRegistry } from './plugin-ecosystem/plugins/capability.js';
-export { validateManifest, parseManifest } from './plugin-ecosystem/plugins/manifest.js';
-export type { PluginManifest, PluginContracts, ActivationConfig } from './plugin-ecosystem/plugins/manifest.js';
-export { DefaultToolBus } from './plugin-ecosystem/tools/tool-bus.js';
-export { getBuiltinTools, createShellTool, createFileReadTool, createFileWriteTool, createFileListTool } from './plugin-ecosystem/tools/builtin.js';
-export { DefaultSkillManager, FileSystemSkillSource } from './plugin-ecosystem/skills/manager.js';
-export type { SkillSource, DiscoveredSkill } from './plugin-ecosystem/skills/manager.js';
-export type { SkillDefinition, SkillManager } from './plugin-ecosystem/skills/types.js';
-export { IssueRegistry } from './diagnostics/index.js';
+export { PluginManager } from './extension/plugin-ecosystem/plugins/manager.js';
+export { definePluginEntry, defineChannelPluginEntry } from './extension/plugin-ecosystem/plugins/entry.js';
+export type { OctopiPluginDefinition, OctopiChannelPluginDefinition } from './extension/plugin-ecosystem/plugins/entry.js';
+export { PluginApi } from './extension/plugin-ecosystem/plugins/api.js';
+export { PluginLoader } from './extension/plugin-ecosystem/plugins/loader.js';
+export type { LoadedPlugin, PluginLoaderConfig, PluginEntryConfig } from './extension/plugin-ecosystem/plugins/loader.js';
+export { CapabilityRegistry } from './extension/plugin-ecosystem/plugins/capability.js';
+export { validateManifest, parseManifest } from './extension/plugin-ecosystem/plugins/manifest.js';
+export type { PluginManifest, PluginContracts, ActivationConfig } from './extension/plugin-ecosystem/plugins/manifest.js';
+export { DefaultToolBus } from './extension/plugin-ecosystem/tools/tool-bus.js';
+export { getBuiltinTools, createShellTool, createFileReadTool, createFileWriteTool, createFileListTool } from './extension/plugin-ecosystem/tools/builtin.js';
+export { DefaultSkillManager, FileSystemSkillSource } from './extension/plugin-ecosystem/skills/manager.js';
+export type { SkillSource, DiscoveredSkill } from './extension/plugin-ecosystem/skills/manager.js';
+export type { SkillDefinition, SkillManager } from './extension/plugin-ecosystem/skills/types.js';
+export { IssueRegistry } from './observability/diagnostics/index.js';
 export type {
   IssueDomain,
   IssueSeverity,
   IssueStatus,
   SystemIssue,
-} from './diagnostics/index.js';
+} from './observability/diagnostics/index.js';
 export {
   CommandRouter,
   parseCommand,
@@ -173,61 +173,61 @@ export {
   skillCommandsFromManager,
   loadUserCommandDefs,
   pluginCommandsFromManager,
-} from './plugin-ecosystem/commands/index.js';
+} from './extension/plugin-ecosystem/commands/index.js';
 export type {
   CommandCatalogItem,
   CommandConflict,
   CommandDefinition,
   CommandResult,
   SessionOp,
-} from './plugin-ecosystem/commands/index.js';
-export type { AgentPersona, ModelConfig, AgentDefinition } from './types/agent-definition.js';
-export { DefaultMcpManager, mcpToolToOctopiDefinition, extractMcpToolResult, splitNamespacedToolName, MCP_NAMESPACE_SEP, loadMcpServersFromDir, DEFAULT_MCP_SERVERS_DIR } from './plugin-ecosystem/mcp/index.js';
-export type { McpClientFactory, McpManagerCallbacks, McpClient, McpManager, McpServerConfig } from './plugin-ecosystem/mcp/index.js';
-export type { WebSearchProvider, WebSearchOptions, WebSearchResponse } from './plugin-ecosystem/tools/web-search-types.js';
+} from './extension/plugin-ecosystem/commands/index.js';
+export type { AgentPersona, ModelConfig, AgentDefinition } from './shared/types/agent-definition.js';
+export { DefaultMcpManager, mcpToolToOctopiDefinition, extractMcpToolResult, splitNamespacedToolName, MCP_NAMESPACE_SEP, loadMcpServersFromDir, DEFAULT_MCP_SERVERS_DIR } from './extension/plugin-ecosystem/mcp/index.js';
+export type { McpClientFactory, McpManagerCallbacks, McpClient, McpManager, McpServerConfig } from './extension/plugin-ecosystem/mcp/index.js';
+export type { WebSearchProvider, WebSearchOptions, WebSearchResponse } from './extension/plugin-ecosystem/tools/web-search-types.js';
 
 // ── Multi-Agent ──
-export { DefaultAgentRegistry, AgentSwarm, RoundRobinStrategy, CapabilityStrategy, PipelineStrategy, SwarmEvents, AgentProcess, spawnAgentProcess, forkAgentProcess, AgentProcessEvents } from './multi-agent/index.js';
-export type { SwarmTopology, SwarmConfig, SwarmAgent, SwarmTask, OrchestrationStrategy, AgentProcessState, AgentProcessResult, AgentProcessAnnounce, AgentProcessConfig, AgentRegistry, AgentInfo, AgentQuery, AgentRelation } from './multi-agent/index.js';
-export { AgentRegistryEvents } from './multi-agent/agent-registry-types.js';
+export { DefaultAgentRegistry, AgentSwarm, RoundRobinStrategy, CapabilityStrategy, PipelineStrategy, SwarmEvents, AgentProcess, spawnAgentProcess, forkAgentProcess, AgentProcessEvents } from './collaboration/multi-agent/index.js';
+export type { SwarmTopology, SwarmConfig, SwarmAgent, SwarmTask, OrchestrationStrategy, AgentProcessState, AgentProcessResult, AgentProcessAnnounce, AgentProcessConfig, AgentRegistry, AgentInfo, AgentQuery, AgentRelation } from './collaboration/multi-agent/index.js';
+export { AgentRegistryEvents } from './collaboration/multi-agent/agent-registry-types.js';
 
 // ── HITL / Execution Environment ──
-export type { ApprovalLevel, ApprovalProvider, ApprovalPolicy, ApprovalRequest, ApprovalDecision } from './human-in-the-loop/types.js';
-export type { MessageChannel, ProcessMessage, MessageHandler } from './multi-agent/message-channel-types.js';
-export type { SandboxProvider, Workspace, SandboxResult, IsolationLevel } from './execution-environment/types.js';
-export type { EventSource, EventSourceDescriptor, ExternalEvent } from './agent-runtime/event-source-types.js';
+export type { ApprovalLevel, ApprovalProvider, ApprovalPolicy, ApprovalRequest, ApprovalDecision } from './governance/human-in-the-loop/types.js';
+export type { MessageChannel, ProcessMessage, MessageHandler } from './collaboration/multi-agent/message-channel-types.js';
+export type { SandboxProvider, Workspace, SandboxResult, IsolationLevel } from './extension/execution-environment/types.js';
+export type { EventSource, EventSourceDescriptor, ExternalEvent } from './activation/event-source-types.js';
 
 // ── Autonomous Subsystem ──
-export { SubsystemRuntime } from './autonomous-subsystem/runtime.js';
-export type { SharedDeps, SubsystemRuntimeConfig } from './autonomous-subsystem/runtime.js';
-export { SubsystemLoader } from './autonomous-subsystem/loader.js';
-export type { SubsystemLoaderConfig, LoadResult } from './autonomous-subsystem/loader.js';
-export { SenseEngine, MetricsStore } from './autonomous-subsystem/sense/index.js';
-export { ThinkExecutor, ModelResolver } from './autonomous-subsystem/think/index.js';
+export { SubsystemRuntime } from './collaboration/autonomous-subsystem/runtime.js';
+export type { SharedDeps, SubsystemRuntimeConfig } from './collaboration/autonomous-subsystem/runtime.js';
+export { SubsystemLoader } from './collaboration/autonomous-subsystem/loader.js';
+export type { SubsystemLoaderConfig, LoadResult } from './collaboration/autonomous-subsystem/loader.js';
+export { SenseEngine, MetricsStore } from './collaboration/autonomous-subsystem/sense/index.js';
+export { ThinkExecutor, ModelResolver } from './collaboration/autonomous-subsystem/think/index.js';
 export {
   createSubsystemLLMPort,
   DEP_LLM_PORT,
   DEP_SUBSYSTEM_PROMPT,
   DEP_RESOLVED_MODEL,
   DEP_RESOLVED_MODELS,
-} from './autonomous-subsystem/think/index.js';
+} from './collaboration/autonomous-subsystem/think/index.js';
 export type {
   SubsystemLLMPort,
   SubsystemLLMPortChatRequest,
-} from './autonomous-subsystem/think/index.js';
-export { SignalBus } from './autonomous-subsystem/signal/index.js';
-export { SubsystemSessionManager, parseTTL } from './autonomous-subsystem/session/index.js';
-export { AuditWriter, AuditReader } from './autonomous-subsystem/audit/index.js';
-export { validateSubsystemSpec } from './autonomous-subsystem/boundary/index.js';
+} from './collaboration/autonomous-subsystem/think/index.js';
+export { SignalBus } from './collaboration/autonomous-subsystem/signal/index.js';
+export { SubsystemSessionManager, parseTTL } from './collaboration/autonomous-subsystem/session/index.js';
+export { AuditWriter, AuditReader } from './collaboration/autonomous-subsystem/audit/index.js';
+export { validateSubsystemSpec } from './collaboration/autonomous-subsystem/boundary/index.js';
 
 // ── Session Tasks（会话任务，Session 聚合）──
-export { SessionTaskService, renderSessionTasksInjection, createSessionTaskTools } from './session-tasks/index.js';
-export type { SessionTask, SessionTaskStatus, SessionTaskListFilter } from './session-tasks/index.js';
+export { SessionTaskService, renderSessionTasksInjection, createSessionTaskTools } from './session/tasks/index.js';
+export type { SessionTask, SessionTaskStatus, SessionTaskListFilter } from './session/tasks/index.js';
 
 // ── Run Guard（过程监督）──
 // AgentSupervisor 已归档（arch/agent-runtime.md §10）
-export { DefaultRunGuard, createRunGuard } from './run-guard/index.js';
-export type { RunGuardConfig } from './run-guard/index.js';
+export { DefaultRunGuard, createRunGuard } from './run/run-guard/index.js';
+export type { RunGuardConfig } from './run/run-guard/index.js';
 
 // ── Agent Runtime（激活宿主；arch/agent-runtime.md）──
 export {
@@ -240,7 +240,7 @@ export {
   emitEscalate,
   emitAgentSignal,
   RuntimeEvents as AgentRuntimeEvents,
-} from './agent-runtime/index.js';
+} from './activation/index.js';
 export type {
   AgentRuntimeConfig,
   Trigger,
@@ -255,10 +255,10 @@ export type {
   ScheduleJob,
   EscalateBridgeConfig,
   AgentSignal,
-} from './agent-runtime/index.js';
+} from './activation/index.js';
 
 // ── Knowledge（Tier 0 catalog；见 arch/knowledge-layer.md）──
-export type { KnowledgeCatalogItem, KnowledgeCatalogProvider } from './context/knowledge/index.js';
+export type { KnowledgeCatalogItem, KnowledgeCatalogProvider } from './knowledge/catalog-index.js';
 export {
   KnowledgeDatabase,
   KnowledgeSourceStore,
@@ -316,7 +316,7 @@ export type {
   ChunkHit,
 } from './knowledge/index.js';
 
-// ── Orchestration（experimental，默认不进主路径；见 octopi/harness/orchestration）──
+// ── Orchestration（experimental，默认不进主路径；见 octopi/harness/collaboration/orchestration）──
 
 // ── Concurrency ──
 // (exported from concurrency/index.ts)
@@ -339,29 +339,29 @@ export type { ConceptNode, ConceptEdge, ConceptGraph, ConceptGraphStore } from '
 export type {
   Planner, Reflector, AgentState, AgentStats, Plan, PlanStep,
   StepResult, ExecutionRecord, Assessment, Pattern,
-} from './orchestration/cognitive-loop.js';
+} from './collaboration/orchestration/cognitive-loop.js';
 
 // ── Session 类型 ──
-export type { SessionData, SessionLifecycleMeta, SessionLifecycleStatus, MemoryExtractionStatus } from './session-types.js';
+export type { SessionData, SessionLifecycleMeta, SessionLifecycleStatus, MemoryExtractionStatus } from './session/types.js';
 
 // ── Runner ──
-export { SessionAwareRunner } from './runner.js';
-export type { SessionAwareRunnerConfig } from './runner.js';
+export { SessionAwareRunner } from './run/runner.js';
+export type { SessionAwareRunnerConfig } from './run/runner.js';
 
 // ── Tool effect isolation (I5) ──
 export {
   DEFAULT_TOOL_ISOLATION,
   resolveToolIsolationCwd,
-} from './tool-effect/isolation.js';
+} from './extension/execution-environment/isolation.js';
 export type {
   ToolIsolationMode,
   ResolveToolIsolationCwdInput,
   ResolveToolIsolationCwdResult,
-} from './tool-effect/isolation.js';
+} from './extension/execution-environment/isolation.js';
 
 // ── Session Lease (E2/E7) ──
-export { InProcessSessionLock } from './concurrency/session-lease.js';
-export type { SessionLease, DistributedSessionLease } from './concurrency/session-lease.js';
+export { InProcessSessionLock } from './run/concurrency/session-lease.js';
+export type { SessionLease, DistributedSessionLease } from './run/concurrency/session-lease.js';
 
 // ── Session ACL (E6) ──
 export {
@@ -373,7 +373,7 @@ export {
   applyRightsOverlay,
   exceedsRightsCeiling,
   L0_SESSION_RIGHTS_FLOOR,
-} from './session-acl/index.js';
+} from './governance/session-acl/index.js';
 export type {
   SessionRights,
   EffectiveSessionRights,
@@ -386,10 +386,10 @@ export type {
   PrincipalRef,
   SessionSwitchMode,
   SwitchSessionResult,
-} from './session-acl/types.js';
-export type { SessionSwitchRecord } from './session-types.js';
-export type { RunAuditRecord } from './agent-runtime/types.js';
-export { readSessionCompact, writeSessionCompact } from './session-compact.js';
+} from './governance/session-acl/types.js';
+export type { SessionSwitchRecord } from './session/types.js';
+export type { RunAuditRecord } from './activation/types.js';
+export { readSessionCompact, writeSessionCompact } from './session/compact.js';
 export { compactStateKey } from './context/compact-key.js';
 
 // ── Config Bridge ──
@@ -400,16 +400,16 @@ export { agentLoop, callModel, classifyError } from '../loop/index.js';
 export type { AgentContext, AgentTool, LoopToolResult, AgentLoopConfig, AgentLoopEvent, LoopObserver, ClassifiedError as LoopClassifiedError } from '../loop/index.js';
 
 // ── Agent 门面（Harness） ──
-export { Agent } from './agent/index.js';
-export type { AgentOptions } from './agent/index.js';
-export { withRunScope, getRunScope, getRunSessionId, createRunId } from './run-scope.js';
-export type { RunScope, RunToolRuntime } from './run-scope.js';
-export { ObserverHub } from './observer/hub.js';
+export { Agent } from './run/agent/index.js';
+export type { AgentOptions } from './run/agent/index.js';
+export { withRunScope, getRunScope, getRunSessionId, createRunId } from './run/run-scope.js';
+export type { RunScope, RunToolRuntime } from './run/run-scope.js';
+export { ObserverHub } from './observability/observer/hub.js';
 export {
   resolveObserverConfig,
   DEFAULT_OBSERVER_CONFIG,
   summarizeMessages,
-} from './observer/index.js';
+} from './observability/observer/index.js';
 export type {
   ObserverConfig,
   ObserverLevel,
@@ -421,7 +421,7 @@ export type {
   RunSecurityEventView,
   RunMemoryActivityView,
   RunToolEffectView,
-} from './observer/index.js';
+} from './observability/observer/index.js';
 
 // ── Harness 循环事件 ──
 export type {
@@ -430,20 +430,20 @@ export type {
   BudgetExceededEvent,
   RunGuardRecoveredEvent,
   RunGuardStoppedEvent,
-} from './reliability/harness-events.js';
+} from './run/reliability/harness-events.js';
 
 // ── Harness 层类型 ──
-export * from './types/index.js';
+export * from './shared/types/index.js';
 
 // ── Concurrency re-exports ──
-export * from './concurrency/tool-loop-detection.js';
+export * from './run/concurrency/tool-loop-detection.js';
 export { StateMachine } from '../core/primitives/state-machine.js';
 export type { StateTransition, StateMachineConfig } from '../core/primitives/state-machine.js';
-export { createSessionStateMachine } from './session-state-machine.js';
-export { AgentEvents } from './events/agent-event-map.js';
-export type { AgentEventMap, KnownAgentEventType, TypedAgentEvent } from './events/agent-event-map.js';
-export type { LoopEndReason, AgentEventDetail, AgentEventListener } from './events/scenario-events.js';
-export { AsyncTask, TaskTimeoutError, TaskCancelledError, spawnTask, TaskEvents } from './orchestration/async-task.js';
-export type { TaskOptions, TaskExecutor } from './orchestration/async-task.js';
-export type { AsyncTaskStore, AsyncTaskRecord, AsyncTaskStatus, AsyncTaskPriority, AsyncTaskFilter } from './orchestration/async-task-store.js';
-export * from './budget/index.js';
+export { createSessionStateMachine } from './session/state-machine.js';
+export { AgentEvents } from './shared/events/agent-event-map.js';
+export type { AgentEventMap, KnownAgentEventType, TypedAgentEvent } from './shared/events/agent-event-map.js';
+export type { LoopEndReason, AgentEventDetail, AgentEventListener } from './shared/events/scenario-events.js';
+export { AsyncTask, TaskTimeoutError, TaskCancelledError, spawnTask, TaskEvents } from './collaboration/orchestration/async-task.js';
+export type { TaskOptions, TaskExecutor } from './collaboration/orchestration/async-task.js';
+export type { AsyncTaskStore, AsyncTaskRecord, AsyncTaskStatus, AsyncTaskPriority, AsyncTaskFilter } from './collaboration/orchestration/async-task-store.js';
+export * from './run/budget/index.js';

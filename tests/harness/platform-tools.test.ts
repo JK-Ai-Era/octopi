@@ -11,9 +11,9 @@ import {
   findExecutable,
   commandExists,
   defaultPathEnv,
-} from '../../src/harness/plugin-ecosystem/tools/platform.js';
-import { createShellTool } from '../../src/harness/plugin-ecosystem/tools/builtin.js';
-import { createEnvInfoTool } from '../../src/harness/plugin-ecosystem/tools/env-info.js';
+} from '../../src/harness/extension/plugin-ecosystem/tools/platform.js';
+import { createShellTool } from '../../src/harness/extension/plugin-ecosystem/tools/builtin.js';
+import { createEnvInfoTool } from '../../src/harness/extension/plugin-ecosystem/tools/env-info.js';
 import type { ToolExecutionContext } from '../../src/core/types/tools.js';
 
 function makeContext(overrides?: Partial<ToolExecutionContext>): ToolExecutionContext {
@@ -149,7 +149,7 @@ describe('file tools accept platform absolute paths', () => {
     const filePath = join(tmpDir, 'x.txt');
 
     const { createFileReadTool, createFileWriteTool } = await import(
-      '../../src/harness/plugin-ecosystem/tools/builtin.js'
+      '../../src/harness/extension/plugin-ecosystem/tools/builtin.js'
     );
 
     await createFileWriteTool().handler(

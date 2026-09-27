@@ -39,11 +39,11 @@
  */
 
 import type { ToolPolicy, ModelInfo } from './core/types.js';
-import type { AgentDefinition, ModelConfig as _ModelConfig } from './harness/types/agent-definition.js';
+import type { AgentDefinition, ModelConfig as _ModelConfig } from './harness/shared/types/agent-definition.js';
 import type { GatewayConfig } from './integration/types/gateway-config.js';
 import type { ModelProvider } from './core/interfaces/model-provider.js';
 import type { SessionStore } from './core/interfaces/session-store.js';
-import type { SessionData } from './harness/session-types.js';
+import type { SessionData } from './harness/session/types.js';
 import { validateConfigOrThrow } from './config-schema.js';
 import { applyLegacyBudget, detectConfigMigrations } from './config-migrations.js';
 import { getOctopiHome } from './init.js';
@@ -98,7 +98,7 @@ export interface AgentConfig {
   /** Channel 绑定 */
   channelBindings?: Record<string, string>;
   /** Session ACL 天花板（E6 L1） */
-  maxSessionRights?: import('./harness/session-acl/types.js').SessionRights;
+  maxSessionRights?: import('./harness/governance/session-acl/types.js').SessionRights;
   /** Knowledge 召回姿态（覆盖全局 knowledge.recall；见 arch/knowledge-layer.md） */
   knowledge?: {
     recall?: KnowledgeRecallMode;
@@ -354,7 +354,7 @@ export interface BudgetPolicyJsonConfig {
  * 过程监督，与 budget 组合：Budget 管资源，RunGuard 管行为是否跑飞。
  * 通过检查点机制实现：每 N 轮迭代审查一次，决定继续/恢复/终止。
  *
- * 注意：与 harness/run-guard 的 `RunGuardConfig`（实现配置）同结构但不同名，
+ * 注意：与 harness/run/run-guard 的 `RunGuardConfig`（实现配置）同结构但不同名，
  * 避免调用方 import 错模块。
  */
 export interface RunGuardJsonConfig {
@@ -467,7 +467,7 @@ export interface ContextEngineConfig {
 }
 
 /**
- * 公用能力 summary 配置（harness/capabilities）
+ * 公用能力 summary 配置（harness/context/capabilities）
  */
 export interface SummaryCapabilityConfig {
   /** 模型档名；缺省解析链使用 summary */
@@ -753,7 +753,7 @@ export interface HarnessConfig {
   agentRuntime?: AgentRuntimeJsonConfig;
   /** 上下文引擎配置 */
   contextEngine?: ContextEngineConfig;
-  /** 公用能力 summary（harness/capabilities） */
+  /** 公用能力 summary（harness/context/capabilities） */
   summary?: SummaryCapabilityConfig;
   /** 公用能力 compact 缺省 */
   compact?: CompactCapabilityConfig;
@@ -837,7 +837,7 @@ export interface HarnessConfig {
    *
    * 缺省使用内置五角色；可覆盖/新增。handoff 默认仅宿主。
    */
-  sessionAcl?: import('./harness/session-acl/types.js').SessionAclConfig;
+  sessionAcl?: import('./harness/governance/session-acl/types.js').SessionAclConfig;
   /** 并发控制配置 */
   concurrency?: {
     /** 多 Key Provider 负载均衡池 */
@@ -894,7 +894,7 @@ export interface HarnessConfig {
     host?: NetworkHostConfig;
   };
   /** 产品 Observer 通道（开发/测试 Run 现场；生产可 summary/off） */
-  observer?: import('./harness/observer/types.js').ObserverConfig;
+  observer?: import('./harness/observability/observer/types.js').ObserverConfig;
   /** 可观测性配置 */
   observability?: {
     /** 日志级别: 0=FATAL, 1=ERROR, 2=WARN, 3=INFO, 4=DEBUG, 5=TRACE */
@@ -921,7 +921,7 @@ export interface HarnessConfig {
  * @returns 解析后的配置
  */
 
-// ModelConfig 定义见 harness/types/agent-definition.ts（已在此文件顶部 import）
+// ModelConfig 定义见 harness/shared/types/agent-definition.ts（已在此文件顶部 import）
 
 /**
  * 解析 Agent 的模型配置

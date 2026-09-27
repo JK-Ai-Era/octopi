@@ -1,0 +1,316 @@
+# Octopi 产品域与模块清单（机器权威）
+# Single source of truth for product domains / capability / foundation modules.
+# 文档与 CI 只准从本文件取数；禁止手写领域个数。
+# 人工叙事见 docs/domains.md；宪法见 docs/north-star.md。
+#
+# kind:
+#   domain     — 产品域（计入宣传数字）
+#   capability — 横切公用能力（不计数）
+#   foundation — 层基建/词表（不计数）
+#   pending    — 产品完整所需、实现未完成的域（计数，status: incomplete）
+
+version: 1
+updated: 2026-09-26
+
+product_domain_count: 10
+capability_count: 2
+foundation_count: 3
+
+# ---------------------------------------------------------------------------
+# 产品域（10）— 对齐宪法本体概念；一域一语言
+# ---------------------------------------------------------------------------
+domains:
+
+  - id: governance
+    name_zh: 治理
+    name_en: Governance
+    plane: Control
+    question: 谁能做什么？
+    owns_concepts:
+      - Principal
+      - Intent
+      - RoleDefinition
+      - RoleBinding
+      - Policy
+      - Approval
+      - Credential
+      - Quota
+    failure_mode: 授权错误、越权、密钥泄露
+    modules:
+      - session-acl
+      - security
+      - human-in-the-loop
+      - credentials
+      - accounting
+    status: active
+
+  - id: session
+    name_zh: 会话
+    name_en: Session
+    plane: Continuity
+    question: 连续性如何维持、旧账如何查？
+    owns_concepts:
+      - Session
+      - Discourse
+      - Projection
+      - CompactState
+      - SessionTask
+    failure_mode: 连续性丢失或污染、任务丢失、compact 串键
+    modules:
+      - session          # 目标目录：聚合根（types/state-machine/compact）；现为根目录孤儿文件
+      - session-tasks
+      - session-history
+    status: active
+    notes: 根目录 session-types.ts / session-compact.ts / session-state-machine.ts 应归入 session/
+
+  - id: agent
+    name_zh: 智能体
+    name_en: Agent
+    plane: Agent & Substrate
+    question: 它是谁、出厂怎么配？
+    owns_concepts:
+      - Agent
+      - Persona
+      - Revision
+      - Mount
+    failure_mode: 装错人设/工具、模板版本漂移
+    modules:
+      - agent-building
+    notes: types/agent-definition 归本域契约；Agent.run() 门面入口见 run 域
+    status: active
+
+  - id: memory
+    name_zh: 记忆
+    name_en: Memory
+    plane: Agent & Substrate
+    question: 它学到过什么？
+    owns_concepts:
+      - Substrate
+      - Memory
+      - Cognition
+      - Wisdom
+    failure_mode: 学歪、遗忘、基质污染
+    modules:
+      - memory
+    status: active
+    notes: 基质 = 学习产物；E3 只写本 Agent。不与 Knowledge 合并。
+
+  - id: knowledge
+    name_zh: 知识
+    name_en: Knowledge
+    plane: Agent & Substrate
+    question: 世界上写着什么？
+    owns_concepts:
+      - Knowledge
+      - Source
+      - KnowledgeScope
+    failure_mode: 无源/错源、检索错语料、索引当权威
+    modules:
+      - knowledge
+    status: active
+    notes: >
+      外生语料：源管理/解析/embedding/检索。不是基质。
+      Scope = Global / Project / Session（无 Agent 级源）。契约在 context/knowledge/ 应迁入本域。
+
+  - id: activation
+    name_zh: 激活
+    name_en: Activation
+    plane: Activation
+    question: 刺激如何变成 0..N 次受监督的 Run？
+    owns_concepts:
+      - Trigger
+      - Dispatch
+      - Coalesce
+      - PreferredResolve
+    failure_mode: 该跑没跑、重复跑、错 Agent
+    modules:
+      - agent-runtime
+    status: active
+
+  - id: run
+    name_zh: 运行
+    name_en: Run
+    plane: Execution
+    question: 这一轮如何安全、正确地跑完？
+    owns_concepts:
+      - Run
+      - RunScope
+      - SessionLease
+      - EffectEnforcement
+      - Reliability
+      - RunGuard
+      - BudgetValve
+    failure_mode: 串会话、跑飞、效应失控、烧预算
+    modules:
+      - run              # 目标目录：run-scope + runner + model/run-scope 身份
+      - reliability
+      - run-guard
+      - budget
+      - concurrency
+      - model
+      - agent            # Agent.run() 可靠性门面 = 本域生产入口（E5）
+    status: active
+    notes: 根目录 runner.ts / run-scope.ts 应归入本域（或 run/ 子模块）
+
+  - id: context
+    name_zh: 上下文
+    name_en: Context
+    plane: Context
+    question: 这一轮 LLM 到底看见什么？
+    owns_concepts:
+      - ContextLayer
+      - Assembler
+      - Token
+      - MessageWindow
+      - CompressionEntry
+    failure_mode: 模型看见不该看/看不见该看
+    modules:
+      - context
+      - capabilities
+    status: active
+    notes: capabilities 为横切公用能力（summary/compact 算法），也服务本域
+
+  - id: extension
+    name_zh: 扩展
+    name_en: Extension
+    plane: Extension
+    question: 能力如何扩展？工具在哪跑？
+    owns_concepts:
+      - Tool
+      - Effect
+      - Plugin
+      - Skill
+      - MCP
+      - Sandbox
+      - Workspace
+    failure_mode: 插件炸、工具踩盘、cwd 逃逸
+    modules:
+      - plugin-ecosystem
+      - tool-effect
+      - execution-environment
+    status: active
+    notes: tool-effect 仅 cwd 解析，语义属「工具在哪执行」，应并入 execution-environment
+
+  - id: collaboration
+    name_zh: 协作
+    name_en: Collaboration
+    plane: Collaboration
+    question: 多 Agent / 子系统如何协同？
+    owns_concepts:
+      - Swarm
+      - Subsystem
+      - Signal
+      - Workflow
+      - AgentProcess
+      - Discovery
+    failure_mode: 协同死锁、信号丢失、自治体越界
+    modules:
+      - multi-agent
+      - orchestration
+      - autonomous-subsystem
+    status: incomplete
+    notes: >
+      产品完整性必有域；实现可分期。
+      宪法横切 Collaboration 提升为正式产品域（2026-09-26 产品拍板）。
+
+# ---------------------------------------------------------------------------
+# 横切能力（2）— 不计入产品域
+# ---------------------------------------------------------------------------
+capabilities:
+  - id: observability
+    name_zh: 观测
+    name_en: Observability
+    modules:
+      - observer
+      - diagnostics
+    notes: 调试/指标/Issue；合规流水在 Continuity（Audit）
+
+  - id: summary-compact
+    name_zh: 公用摘要与压缩
+    name_en: Summary & Compact
+    modules:
+      - capabilities
+    notes: 与 context 域共享；tools 只消费 port
+
+# ---------------------------------------------------------------------------
+# 层基建（3）— 不计入产品域
+# ---------------------------------------------------------------------------
+foundation:
+  - id: events
+    name_zh: 事件词表
+    name_en: Event vocabulary
+    modules:
+      - events
+
+  - id: types
+    name_zh: 层共享类型
+    name_en: Shared types
+    modules:
+      - types
+
+  - id: harness-entry
+    name_zh: 层入口
+    name_en: Harness entry
+    modules:
+      - index
+    notes: src/harness/index.ts 统一导出
+
+# ---------------------------------------------------------------------------
+# 目录映射（域优先布局已落地）— CI 校验用
+# id = 相对 src/harness/ 的路径
+# ---------------------------------------------------------------------------
+module_catalog:
+
+  # Governance
+  - { id: governance/session-acl, domain: governance }
+  - { id: governance/security, domain: governance }
+  - { id: governance/human-in-the-loop, domain: governance }
+  - { id: governance/credentials, domain: governance }
+  - { id: governance/accounting, domain: governance }
+
+  # Session
+  - { id: session, domain: session }
+  - { id: session/tasks, domain: session }
+  - { id: session/history, domain: session }
+
+  # Agent
+  - { id: agent, domain: agent }
+
+  # Memory
+  - { id: memory, domain: memory }
+
+  # Knowledge
+  - { id: knowledge, domain: knowledge }
+
+  # Activation
+  - { id: activation, domain: activation }
+
+  # Run
+  - { id: run, domain: run }
+  - { id: run/agent, domain: run }
+  - { id: run/reliability, domain: run }
+  - { id: run/run-guard, domain: run }
+  - { id: run/budget, domain: run }
+  - { id: run/concurrency, domain: run }
+  - { id: run/model, domain: run }
+
+  # Context
+  - { id: context, domain: context }
+  - { id: context/capabilities, domain: context, kind: capability }
+
+  # Extension
+  - { id: extension/plugin-ecosystem, domain: extension }
+  - { id: extension/execution-environment, domain: extension }
+
+  # Collaboration
+  - { id: collaboration/multi-agent, domain: collaboration }
+  - { id: collaboration/orchestration, domain: collaboration }
+  - { id: collaboration/autonomous-subsystem, domain: collaboration }
+
+  # Observability capability
+  - { id: observability/observer, domain: observability, kind: capability }
+  - { id: observability/diagnostics, domain: observability, kind: capability }
+
+  # Foundation
+  - { id: shared/events, domain: foundation, kind: foundation }
+  - { id: shared/types, domain: foundation, kind: foundation }

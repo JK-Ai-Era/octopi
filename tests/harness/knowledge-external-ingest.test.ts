@@ -9,7 +9,7 @@ import { assertUrlAllowed, isRestrictedIp } from '../../src/harness/knowledge/ne
 import { UrlFetcher } from '../../src/harness/knowledge/fetchers.js';
 import { KnowledgeSourceStore } from '../../src/harness/knowledge/source-store.js';
 import { KnowledgeIngest } from '../../src/harness/knowledge/ingest.js';
-import { CredentialStore } from '../../src/harness/credentials/store.js';
+import { CredentialStore } from '../../src/harness/governance/credentials/store.js';
 
 function makeHtml(): string {
   return `<!doctype html>

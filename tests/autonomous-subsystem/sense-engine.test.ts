@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { SenseEngine } from '../../src/harness/autonomous-subsystem/sense/engine.js';
+import { SenseEngine } from '../../src/harness/collaboration/autonomous-subsystem/sense/engine.js';
 import { DefaultEventBus } from '../../src/core/primitives/event-bus.js';
-import type { SubsystemSpec } from '../../src/harness/autonomous-subsystem/types.js';
+import type { SubsystemSpec } from '../../src/harness/collaboration/autonomous-subsystem/types.js';
 
 function makeSpec(overrides?: Partial<SubsystemSpec>): SubsystemSpec {
   return {

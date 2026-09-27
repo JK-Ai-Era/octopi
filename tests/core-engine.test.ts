@@ -9,15 +9,15 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { makeTokenUsage } from '../src/core/types/turn.js';
-import { Agent } from '../src/harness/agent/agent.js';
-import { runAgentWithReliability } from '../src/harness/reliability/run-agent.js';
-import type { ReliabilityHarness } from '../src/harness/reliability/run-agent.js';
+import { Agent } from '../src/harness/run/agent/agent.js';
+import { runAgentWithReliability } from '../src/harness/run/reliability/run-agent.js';
+import type { ReliabilityHarness } from '../src/harness/run/reliability/run-agent.js';
 import type { AgentLoopEvent } from '../src/loop/types.js';
 import type { ModelProvider, LLMRequest, LLMResponse, LLMStreamChunk } from '../src/core/interfaces/model-provider.js';
 import type { Message, RegisteredTool } from '../src/core/types.js';
 import { DefaultEventBus, NoopEventBus } from '../src/core/primitives/event-bus.js';
-import { DefaultSecurityGuard } from '../src/harness/security/default-security-guard.js';
-import { BudgetPolicyEngine } from '../src/harness/budget/budget.js';
+import { DefaultSecurityGuard } from '../src/harness/governance/security/default-security-guard.js';
+import { BudgetPolicyEngine } from '../src/harness/run/budget/budget.js';
 
 // ── Helper ──
 
@@ -44,7 +44,7 @@ function createSequentialProvider(responses: LLMResponse[]): ModelProvider {
   };
 }
 
-function createHarness(overrides?: Partial<import('../src/harness/reliability/run-agent.js').ReliabilityConfig>): ReliabilityHarness {
+function createHarness(overrides?: Partial<import('../src/harness/run/reliability/run-agent.js').ReliabilityConfig>): ReliabilityHarness {
   return {
     config: {
       planningRetry: { maxAttempts: 0, steerInstruction: '' },

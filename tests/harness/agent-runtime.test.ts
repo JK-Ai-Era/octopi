@@ -9,7 +9,7 @@ import {
   CoalesceBuffer,
   compileMessages,
   RuntimeEvents,
-} from '../../src/harness/agent-runtime/index.js';
+} from '../../src/harness/activation/index.js';
 import type {
   DispatchResult,
   RunDispatcher,
@@ -17,7 +17,7 @@ import type {
   RuntimeAgent,
   Trigger,
   TriggerSource,
-} from '../../src/harness/agent-runtime/index.js';
+} from '../../src/harness/activation/index.js';
 import type { AgentEvent } from '../../src/core/primitives/event-bus.js';
 import { DefaultEventBus } from '../../src/core/index.js';
 

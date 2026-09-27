@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { AgentBuilder } from '../../src/harness/agent-building/builder.js';
+import { AgentBuilder } from '../../src/harness/agent/builder.js';
 import { DefaultContextEngine } from '../../src/harness/context/default-context-engine.js';
 import type { ContextCompactEvent } from '../../src/harness/context/types.js';
 import type { ModelProvider, LLMMessage } from '../../src/core/interfaces/model-provider.js';
@@ -112,7 +112,7 @@ describe('Builder → EventBus 桥接', () => {
     agent.setContextSessionId('sess-bridge');
 
     // convertToLlm 只读 run snapshot.contextWindow（禁止二次 getModelInfo）
-    const { withResolvedModel } = await import('../../src/harness/model/run-scope.js');
+    const { withResolvedModel } = await import('../../src/harness/run/model/run-scope.js');
     async function* probe() {
       yield await agent.config.convertToLlm!(msgs);
     }

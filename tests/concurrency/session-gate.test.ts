@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { SessionGate } from '../../src/harness/concurrency/session-gate.js';
+import { SessionGate } from '../../src/harness/run/concurrency/session-gate.js';
 
 describe('SessionGate', () => {
   beforeEach(() => {

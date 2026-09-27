@@ -1,34 +1,29 @@
-# Agent — 运行时门面
+# Agent — 智能体模板与构建
 
-> Layer: Layer 2
+> 产品域（Agent & Substrate 平面）｜问题：**它是谁、出厂怎么配？**  
+> 拥有：Agent 模板、Persona、Revision、挂载。学习产物见 `memory/`；外生语料见 `knowledge/`。
 
-Harness 层的可运行 Agent 门面。
-
-**核心理念**：Loop 只有 `agentLoop` 纯函数；「能 run 的 Agent」住在 Harness，以便 `run()` 自带可靠性包装，且不违反外→内依赖。
+组装 Agent 运行时：persona、tools、七层 ContextAssembler、子系统、配置桥接。
 
 ## 职责
 
-- 持有 `AgentContext`（messages / tools / systemPrompt）
-- 持有 `AgentLoopConfig` 与 `ReliabilityHarness`
-- **`run(signal?, harnessOverride?)` = `runAgentWithReliability`** — 唯一推荐运行入口
+- `AgentBuilder`：fluent 构建；`build({ mode: 'full' | 'core' })`
+- `config-bridge`：从 `octopi.json` 装配 Provider / stores / constitution / subsystems / `toolIsolation` / `sessionAcl`
+- `isSubsystemAllowed` / `discoverSubsystemSpecs`
+- **Runner 注入（E1/E5/E6/I5）**：Gateway/config-bridge 经 `builder.runnerConfig({ sessionLease, sessionAcl, agentMaxSessionRights })` 与 `builder.toolIsolation(mode)` / `builder.workspace(dir)` 注入；Runner 再解析 `toolRuntime.cwd` 与 authorize
 
-## 不做什么
+## Memory 接线（redesign 后）
 
-- 不实现 Loop 协议（在 `loop/agent-loop.ts`）
-- 不做具体安全/预算/RunGuard 策略（由 harness 装备注入）
+- 注入 `memoryStore` 后：`buildCore` 前用**同一实例**注册 `memory_store` / `memory_search`
+- 同实例注入七层 `MemoryLayer` 与 `runtimeInject.memoryStore`
+- **不再**存在 ETL 的 `MemoryExtractionWiring` / Bridge / PendingExtractor 句柄
+- 旁路自动化走 `memory.steward.backfill` / `memory.steward.govern` 子系统（见 `docs/memory.md`）
 
-## 依赖
-
-- Loop: AgentContext、AgentLoopConfig、AgentLoopEvent
-- Harness: reliability/run-agent、reliability/harness-events
-
-## 用法
+## 返回值
 
 ```ts
-const agent = new Agent({ model, systemPrompt, tools, harness });
-for await (const event of agent.run(signal)) {
-  // event: HarnessLoopEvent
-}
+const { agent, harness, runner, runtime, events, contextHealth } = await builder.build();
 ```
 
-Builder 组装路径会在 build 时 `agent.setHarness(harness)`；Runner 使用 `agent.run()`。
+- `runtime`：SubsystemRuntime（若注册了子系统）
+- **无** `memoryExtraction` 字段；历史 ETL API 已删除

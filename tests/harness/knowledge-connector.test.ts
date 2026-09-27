@@ -7,8 +7,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { KnowledgeSourceStore } from '../../src/harness/knowledge/source-store.js';
 import { KnowledgeIngest } from '../../src/harness/knowledge/ingest.js';
 import { RestConnector, ConnectorRegistry } from '../../src/harness/knowledge/connectors.js';
-import { CredentialStore } from '../../src/harness/credentials/store.js';
-import { createHttpRequestTool } from '../../src/harness/plugin-ecosystem/tools/http.js';
+import { CredentialStore } from '../../src/harness/governance/credentials/store.js';
+import { createHttpRequestTool } from '../../src/harness/extension/plugin-ecosystem/tools/http.js';
 
 describe('RestConnector', () => {
   const servers: http.Server[] = [];

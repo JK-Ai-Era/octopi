@@ -10,10 +10,10 @@ import {
   createBuiltinCommands,
   createClientCatalogCommand,
   skillCommandsFromManager,
-} from '../src/harness/plugin-ecosystem/commands/index.js';
-import type { CommandDefinition, SessionReadView } from '../src/harness/plugin-ecosystem/commands/types.js';
-import { IssueRegistry } from '../src/harness/diagnostics/registry.js';
-import { DefaultSkillManager } from '../src/harness/plugin-ecosystem/skills/manager.js';
+} from '../src/harness/extension/plugin-ecosystem/commands/index.js';
+import type { CommandDefinition, SessionReadView } from '../src/harness/extension/plugin-ecosystem/commands/types.js';
+import { IssueRegistry } from '../src/harness/observability/diagnostics/registry.js';
+import { DefaultSkillManager } from '../src/harness/extension/plugin-ecosystem/skills/manager.js';
 import { resolve } from 'node:path';
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
 

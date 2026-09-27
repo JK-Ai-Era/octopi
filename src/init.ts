@@ -55,7 +55,7 @@ export const OCTOPI_HOME_ENV = 'OCTOPI_HOME';
 
 // ── Persona 模板 ──
 //
-// loadPersona 约定（见 harness/agent-building/persona.ts）：
+// loadPersona 约定（见 harness/agent/persona.ts）：
 // - 根目录 AGENTS.md 最先加载
 // - persona/*.md 按文件名字母序加载；数字前缀控制顺序
 const PERSONA_TEMPLATES: Record<string, string> = {

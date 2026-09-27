@@ -5,7 +5,7 @@ import {
   recordToolCall,
   detectNoProgressLoop,
   type ToolCallRecord,
-} from '../src/harness/concurrency/tool-loop-detection-core.js';
+} from '../src/harness/run/concurrency/tool-loop-detection-core.js';
 
 describe('ToolLoopDetection', () => {
   describe('hashToolCall', () => {

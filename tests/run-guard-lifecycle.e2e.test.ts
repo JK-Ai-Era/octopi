@@ -4,11 +4,11 @@
 
 import { describe, it, expect } from 'vitest';
 import { makeTokenUsage } from '../src/core/types/turn.js';
-import { DefaultRunGuard } from '../src/harness/run-guard/default-run-guard.js';
-import { runAgentWithReliability } from '../src/harness/reliability/run-agent.js';
-import { BudgetPolicyEngine } from '../src/harness/budget/budget.js';
+import { DefaultRunGuard } from '../src/harness/run/run-guard/default-run-guard.js';
+import { runAgentWithReliability } from '../src/harness/run/reliability/run-agent.js';
+import { BudgetPolicyEngine } from '../src/harness/run/budget/budget.js';
 import { DefaultEventBus } from '../src/core/primitives/event-bus.js';
-import { Agent } from '../src/harness/agent/agent.js';
+import { Agent } from '../src/harness/run/agent/agent.js';
 import type { ModelProvider } from '../src/core/interfaces/model-provider.js';
 import type { ReliabilityHarness } from '../src/core/interfaces/reliability.js';
 

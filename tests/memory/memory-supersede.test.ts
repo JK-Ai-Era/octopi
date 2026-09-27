@@ -3,7 +3,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import { InMemoryMemoryStore } from '../../src/harness/memory/store.js';
-import { createMemoryStoreTool, createMemorySearchTool } from '../../src/harness/plugin-ecosystem/tools/memory.js';
+import { createMemoryStoreTool, createMemorySearchTool } from '../../src/harness/extension/plugin-ecosystem/tools/memory.js';
 import { loadConstitution } from '../../src/harness/context/constitution/load-constitution.js';
 
 const ctx = { sessionId: 'sess-supersede' };

@@ -15,7 +15,7 @@
 import { access, mkdir, readFile, writeFile, unlink, rename } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { SessionStore, SessionListFilter } from '../../core/interfaces/session-store.js';
-import type { SessionData } from '../../harness/session-types.js';
+import type { SessionData } from '../../harness/session/types.js';
 import type { SessionMeta } from '../../core/types.js';
 import { toSessionFileName } from './session-filename.js';
 import { sessionMatchesAgent } from './memory.js';

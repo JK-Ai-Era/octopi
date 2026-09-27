@@ -11,9 +11,9 @@
 
 import { describe, it, expect } from 'vitest';
 import { makeTokenUsage } from '../src/core/types/turn.js';
-import { Agent } from '../src/harness/agent/agent.js';
-import { runAgentWithReliability } from '../src/harness/reliability/run-agent.js';
-import type { ReliabilityHarness } from '../src/harness/reliability/run-agent.js';
+import { Agent } from '../src/harness/run/agent/agent.js';
+import { runAgentWithReliability } from '../src/harness/run/reliability/run-agent.js';
+import type { ReliabilityHarness } from '../src/harness/run/reliability/run-agent.js';
 import type { AgentLoopEvent } from '../src/loop/types.js';
 import type { ModelProvider, LLMRequest, LLMResponse, LLMStreamChunk } from '../src/core/interfaces/model-provider.js';
 import type { Message, RegisteredTool } from '../src/core/types.js';
@@ -72,7 +72,7 @@ function createAgentTools(): import('../src/loop/types.js').AgentTool[] {
   }];
 }
 
-function createHarness(config?: Partial<import('../src/harness/reliability/run-agent.js').ReliabilityConfig>): ReliabilityHarness {
+function createHarness(config?: Partial<import('../src/harness/run/reliability/run-agent.js').ReliabilityConfig>): ReliabilityHarness {
   return {
     config: {
       planningRetry: { maxAttempts: 0, steerInstruction: '' },

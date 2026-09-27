@@ -3,9 +3,9 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { SessionGate } from '../../src/harness/concurrency/session-gate.js';
-import { SessionAwareRunner } from '../../src/harness/runner.js';
-import { Agent } from '../../src/harness/agent/agent.js';
+import { SessionGate } from '../../src/harness/run/concurrency/session-gate.js';
+import { SessionAwareRunner } from '../../src/harness/run/runner.js';
+import { Agent } from '../../src/harness/run/agent/agent.js';
 import { InMemorySessionStore } from '../../src/integration/storage/memory.js';
 import type { ModelProvider } from '../../src/core/interfaces/model-provider.js';
 import type { ReliabilityHarness } from '../../src/core/interfaces/reliability.js';

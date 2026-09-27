@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { AgentBuilder } from '../../src/harness/agent-building/builder.js';
+import { AgentBuilder } from '../../src/harness/agent/builder.js';
 import type { ModelProvider, LLMRequest } from '../../src/core/interfaces/model-provider.js';
 import type { Message } from '../../src/core/types.js';
 import { createProviderSummarize, pickSummarizeProvider } from '../../src/harness/context/summarize.js';

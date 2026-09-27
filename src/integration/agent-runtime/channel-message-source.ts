@@ -7,8 +7,8 @@
 
 import { randomUUID } from 'node:crypto';
 import type { ChannelMessage } from '../types/channels.js';
-import type { AgentRuntime } from '../../harness/agent-runtime/runtime.js';
-import type { Trigger } from '../../harness/agent-runtime/types.js';
+import type { AgentRuntime } from '../../harness/activation/runtime.js';
+import type { Trigger } from '../../harness/activation/types.js';
 
 export interface ChannelMessageSourceOptions {
   runtime: AgentRuntime;

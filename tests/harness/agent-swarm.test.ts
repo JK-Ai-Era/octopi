@@ -4,15 +4,15 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { makeTokenUsage } from '../../src/core/types/turn.js';
-import { AgentSwarm, RoundRobinStrategy, CapabilityStrategy, PipelineStrategy } from '../../src/harness/multi-agent/swarm.js';
-import { DefaultAgentRegistry } from '../../src/harness/multi-agent/registry.js';
+import { AgentSwarm, RoundRobinStrategy, CapabilityStrategy, PipelineStrategy } from '../../src/harness/collaboration/multi-agent/swarm.js';
+import { DefaultAgentRegistry } from '../../src/harness/collaboration/multi-agent/registry.js';
 import { DefaultEventBus } from '../../src/core/primitives/event-bus.js';
-import { Agent } from '../../src/harness/agent/agent.js';
-import type { ReliabilityHarness } from '../../src/harness/reliability/run-agent.js';
-import { SwarmEvents } from '../../src/harness/multi-agent/types.js';
-import type { SwarmAgent, SwarmTask } from '../../src/harness/multi-agent/types.js';
+import { Agent } from '../../src/harness/run/agent/agent.js';
+import type { ReliabilityHarness } from '../../src/harness/run/reliability/run-agent.js';
+import { SwarmEvents } from '../../src/harness/collaboration/multi-agent/types.js';
+import type { SwarmAgent, SwarmTask } from '../../src/harness/collaboration/multi-agent/types.js';
 import type { ModelProvider, LLMRequest, LLMResponse, LLMStreamChunk } from '../../src/core/interfaces/model-provider.js';
-import type { AgentInfo } from '../../harness/multi-agent/agent-registry-types.js';
+import type { AgentInfo } from '../../src/harness/collaboration/multi-agent/agent-registry-types.js';
 import type { Message } from '../../src/core/types.js';
 
 // ── Mock 工厂 ──

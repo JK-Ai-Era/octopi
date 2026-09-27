@@ -10,8 +10,8 @@ import { findDuplicate } from '../../src/harness/memory/similarity.js';
 import { admitCandidates, planBoosts, planPromotionCandidates } from '../../src/subsystems/memory-steward/shared/policy.js';
 import { handler as backfillHandler } from '../../src/subsystems/memory-steward/backfill/handler.js';
 import { handler as governHandler } from '../../src/subsystems/memory-steward/govern/handler.js';
-import { createMemoryStoreTool } from '../../src/harness/plugin-ecosystem/tools/memory.js';
-import type { SubsystemLLMPort } from '../../src/harness/autonomous-subsystem/think/llm-port.js';
+import { createMemoryStoreTool } from '../../src/harness/extension/plugin-ecosystem/tools/memory.js';
+import type { SubsystemLLMPort } from '../../src/harness/collaboration/autonomous-subsystem/think/llm-port.js';
 
 function mockLlm(content: string, opts?: { finishReason?: 'stop' | 'error'; cognitivePrompt?: string; throwMsg?: string }): SubsystemLLMPort {
   return {

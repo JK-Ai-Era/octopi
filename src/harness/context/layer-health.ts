@@ -10,7 +10,7 @@ import type {
   MemoryStore,
   WisdomStore,
 } from '../memory/types.js';
-import type { KnowledgeCatalogProvider } from './knowledge/types.js';
+import type { KnowledgeCatalogProvider } from '../knowledge/catalog-types.js';
 import type { ContextLayerId } from './layer-types.js';
 import { ALL_LAYER_IDS } from './layer-snapshot.js';
 

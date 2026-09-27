@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { KnowledgeSourceStore } from '../../src/harness/knowledge/source-store.js';
 import { KnowledgeIngest } from '../../src/harness/knowledge/ingest.js';
 import { UrlFetcher } from '../../src/harness/knowledge/fetchers.js';
-import { CredentialStore } from '../../src/harness/credentials/store.js';
+import { CredentialStore } from '../../src/harness/governance/credentials/store.js';
 
 describe('index retention on failure', () => {
   const servers: http.Server[] = [];

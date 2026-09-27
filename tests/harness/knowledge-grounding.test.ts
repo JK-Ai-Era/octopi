@@ -18,7 +18,7 @@ import {
 import { KnowledgeSourceStore } from '../../src/harness/knowledge/source-store.js';
 import { KnowledgeIngest } from '../../src/harness/knowledge/ingest.js';
 import { KnowledgeRetriever } from '../../src/harness/knowledge/retriever.js';
-import { createKnowledgeTools } from '../../src/harness/plugin-ecosystem/tools/knowledge.js';
+import { createKnowledgeTools } from '../../src/harness/extension/plugin-ecosystem/tools/knowledge.js';
 import type { Message } from '../../src/core/types.js';
 
 function user(text: string): Message {

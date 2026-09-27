@@ -4,7 +4,7 @@
  * Integration 层类型。Gateway 是 Integration 层组件。
  */
 
-import type { AgentDefinition } from '../../harness/types/agent-definition.js';
+import type { AgentDefinition } from '../../harness/shared/types/agent-definition.js';
 
 export interface GatewayConfig {
   port?: number;
@@ -30,7 +30,7 @@ export interface GatewayConfig {
   /** 工具效应隔离策略（宪法 I5）；默认 none */
   toolIsolation?: 'none' | 'session-subdir' | 'session-lock';
   /** Session ACL 角色目录（E6）；缺省内置五角色 */
-  sessionAcl?: import('../../harness/session-acl/types.js').SessionAclConfig;
+  sessionAcl?: import('../../harness/governance/session-acl/types.js').SessionAclConfig;
   trace?: {
     outputDir?: string;
     level?: 'ERROR' | 'WARN' | 'INFO' | 'DEBUG' | 'TRACE';
@@ -48,7 +48,7 @@ export interface GatewayConfig {
     coalesceBufferLimit?: number;
   };
   /** 产品 Observer 通道（Run 观测；生产可 summary/off） */
-  observer?: import('../../harness/observer/types.js').ObserverConfig;
+  observer?: import('../../harness/observability/observer/types.js').ObserverConfig;
   /** system prompt 七层装配器调参（preview / content / budget ratio） */
   contextAssembler?: import('../../config.js').ContextAssemblerConfig;
   context?: import('../../config.js').HarnessConfig['context'];

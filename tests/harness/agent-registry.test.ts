@@ -3,10 +3,10 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { DefaultAgentRegistry } from '../../src/harness/multi-agent/registry.js';
+import { DefaultAgentRegistry } from '../../src/harness/collaboration/multi-agent/registry.js';
 import { DefaultEventBus } from '../../src/core/primitives/event-bus.js';
-import { AgentRegistryEvents } from '../../src/harness/multi-agent/agent-registry-types.js';
-import type { AgentInfo, AgentQuery, AgentRelation } from '../../src/harness/multi-agent/agent-registry-types.js';
+import { AgentRegistryEvents } from '../../src/harness/collaboration/multi-agent/agent-registry-types.js';
+import type { AgentInfo, AgentQuery, AgentRelation } from '../../src/harness/collaboration/multi-agent/agent-registry-types.js';
 
 // ── 辅助函数 ──
 

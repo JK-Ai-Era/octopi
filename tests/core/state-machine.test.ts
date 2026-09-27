@@ -1,6 +1,6 @@
 /**
  * StateMachine 机制测试（Core）
- * Session 策略工厂见 tests/harness/session-state-machine.test.ts
+ * Session 策略工厂见 tests/harness/session/state-machine.test.ts
  */
 
 import { describe, it, expect, vi } from 'vitest';

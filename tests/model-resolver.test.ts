@@ -1,5 +1,5 @@
 /**
- * harness/model — contextWindow 仅认显式配置
+ * harness/run/model — contextWindow 仅认显式配置
  */
 
 import { describe, it, expect } from 'vitest';
@@ -8,7 +8,7 @@ import {
   resolveModelRef,
   resolveCatalogEntry,
   lookupModelCapability,
-} from '../src/harness/model/index.js';
+} from '../src/harness/run/model/index.js';
 import type { ModelProvider } from '../src/core/interfaces/model-provider.js';
 
 function makeProvider(

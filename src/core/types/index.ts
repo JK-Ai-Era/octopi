@@ -51,4 +51,4 @@ export type {
 export type { QueueMode } from './queue-mode.js';
 export type { ThinkingLevel } from './thinking-level.js';
 
-// 测试编排词表见 harness/events/scenario-events.ts
+// 测试编排词表见 harness/shared/events/scenario-events.ts

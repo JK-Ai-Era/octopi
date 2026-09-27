@@ -7,7 +7,7 @@ import {
   formatRuntimeDatetimeInjection,
   withRuntimeDatetimeInjection,
 } from '../../src/harness/context/runtime-datetime.js';
-import { AgentBuilder } from '../../src/harness/agent-building/builder.js';
+import { AgentBuilder } from '../../src/harness/agent/builder.js';
 import { InMemorySessionStore } from '../../src/integration/storage/memory.js';
 import type { ModelProvider, LLMRequest } from '../../src/core/interfaces/model-provider.js';
 import type { Message } from '../../src/core/types.js';

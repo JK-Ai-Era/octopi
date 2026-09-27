@@ -15,7 +15,7 @@ import { KnowledgeRetriever } from '../../src/harness/knowledge/retriever.js';
 import { GroundingAssembler, stripKnowledgeGrounding } from '../../src/harness/knowledge/grounding.js';
 import { KnowledgeHitLog } from '../../src/harness/knowledge/hit-log.js';
 import { KnowledgePurger } from '../../src/harness/knowledge/purge.js';
-import { createKnowledgeTools } from '../../src/harness/plugin-ecosystem/tools/knowledge.js';
+import { createKnowledgeTools } from '../../src/harness/extension/plugin-ecosystem/tools/knowledge.js';
 import { createDefaultSystemPromptAssembler } from '../../src/harness/context/system-prompt-assembler.js';
 import { InMemoryMemoryStore } from '../../src/harness/memory/store.js';
 import type { EmbeddingProvider } from '../../src/harness/memory/sqlite/embedding.js';

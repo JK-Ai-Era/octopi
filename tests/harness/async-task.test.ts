@@ -9,10 +9,10 @@ import {
   TaskCancelledError,
   spawnTask,
   TaskEvents,
-} from '../../src/harness/orchestration/async-task.js';
+} from '../../src/harness/collaboration/orchestration/async-task.js';
 import { DefaultEventBus } from '../../src/core/index.js';
 import type { EventBus, AgentEvent } from '../../src/core/index.js';
-import type { AsyncTaskStore, AsyncTaskRecord } from '../../src/harness/orchestration/async-task-store.js';
+import type { AsyncTaskStore, AsyncTaskRecord } from '../../src/harness/collaboration/orchestration/async-task-store.js';
 
 // ── 辅助 ──
 

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { AgentBuilder } from '../../src/harness/agent-building/builder.js';
+import { AgentBuilder } from '../../src/harness/agent/builder.js';
 import { InMemoryMemoryStore } from '../../src/harness/memory/store.js';
 import type { ModelProvider, LLMRequest } from '../../src/core/interfaces/model-provider.js';
 import { join } from 'node:path';

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { ModelResolver } from '../../src/harness/autonomous-subsystem/think/model-resolver.js';
+import { ModelResolver } from '../../src/harness/collaboration/autonomous-subsystem/think/model-resolver.js';
 
 describe('ModelResolver', () => {
   const levels = {

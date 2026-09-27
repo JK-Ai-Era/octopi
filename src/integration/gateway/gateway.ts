@@ -18,11 +18,11 @@
  */
 
 import type { RegisteredTool, SessionMeta } from '../../core/types.js';
-import type { AgentDefinition, ModelConfig } from '../../harness/types/agent-definition.js';
+import type { AgentDefinition, ModelConfig } from '../../harness/shared/types/agent-definition.js';
 import type { ChannelAdapter, ChannelMessage, ChannelReply } from '../types/channels.js';
 import type { GatewayConfig } from '../types/gateway-config.js';
 
-import type { HookContext } from '../../harness/types/hook-context.js';
+import type { HookContext } from '../../harness/shared/types/hook-context.js';
 import type { AgentEvent } from '../../core/primitives/event-bus.js';
 import {
   buildContextLayersSnapshot,
@@ -35,17 +35,17 @@ import type {
 import type { ModelProvider } from '../../core/interfaces/model-provider.js';
 import type { Observer } from '../../core/interfaces/observer.js';
 import type { SessionStore } from '../../core/interfaces/session-store.js';
-import type { SessionData } from '../../harness/session-types.js';
+import type { SessionData } from '../../harness/session/types.js';
 import type { StreamingChannelAdapter } from '../protocols/http.js';
 import type { Message } from '../../core/types.js';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { existsSync } from 'node:fs';
-import { CircuitBreaker } from '../../harness/reliability/circuit-breaker.js';
-import { wrapProviderWithCircuitBreaker } from '../../harness/reliability/provider-wrapper.js';
-import { resolveModel, resolveModelRef, resolveCatalogEntry, parseModelRef } from '../../harness/model/index.js';
-import { PluginManager } from '../../harness/plugin-ecosystem/plugins/manager.js';
-import { CommandRouter } from '../../harness/plugin-ecosystem/commands/router.js';
+import { CircuitBreaker } from '../../harness/run/reliability/circuit-breaker.js';
+import { wrapProviderWithCircuitBreaker } from '../../harness/run/reliability/provider-wrapper.js';
+import { resolveModel, resolveModelRef, resolveCatalogEntry, parseModelRef } from '../../harness/run/model/index.js';
+import { PluginManager } from '../../harness/extension/plugin-ecosystem/plugins/manager.js';
+import { CommandRouter } from '../../harness/extension/plugin-ecosystem/commands/router.js';
 import {
   createBuiltinCommands,
   createClientCatalogCommand,
@@ -54,22 +54,22 @@ import {
   loadUserCommandDefs,
   pluginCommandsFromManager,
   type BuiltinHost,
-} from '../../harness/plugin-ecosystem/commands/index.js';
-import type { CommandCatalogItem, SessionOp, SessionReadView } from '../../harness/plugin-ecosystem/commands/types.js';
-import { IssueRegistry } from '../../harness/diagnostics/registry.js';
-import type { SystemIssue } from '../../harness/diagnostics/types.js';
+} from '../../harness/extension/plugin-ecosystem/commands/index.js';
+import type { CommandCatalogItem, SessionOp, SessionReadView } from '../../harness/extension/plugin-ecosystem/commands/types.js';
+import { IssueRegistry } from '../../harness/observability/diagnostics/registry.js';
+import type { SystemIssue } from '../../harness/observability/diagnostics/types.js';
 
 import { DefaultEventBus } from '../../core/primitives/event-bus.js';
-import { SessionAwareRunner } from '../../harness/runner.js';
-import { AgentRuntime, SessionRunnerDispatcher, ExplicitRouter } from '../../harness/agent-runtime/index.js';
+import { SessionAwareRunner } from '../../harness/run/runner.js';
+import { AgentRuntime, SessionRunnerDispatcher, ExplicitRouter } from '../../harness/activation/index.js';
 import { dispatchChannelMessage } from '../agent-runtime/channel-message-source.js';
-import { SessionAclService } from '../../harness/session-acl/service.js';
-import { InProcessSessionLock } from '../../harness/concurrency/session-lease.js';
-import { ObserverHub } from '../../harness/observer/hub.js';
+import { SessionAclService } from '../../harness/governance/session-acl/service.js';
+import { InProcessSessionLock } from '../../harness/run/concurrency/session-lease.js';
+import { ObserverHub } from '../../harness/observability/observer/hub.js';
 import type {
   RunMessagesSnapshot,
   RunObservatorySnapshot,
-} from '../../harness/observer/types.js';
+} from '../../harness/observability/observer/types.js';
 
 // Web REST 骨架所需的 Gateway 扩展类型
 // ================================================================
@@ -117,7 +117,7 @@ export interface PendingQuestionView {
  */
 export const ASK_USER_CANCELLED = '__ask_user_cancelled__';
 
-/** WebUI 模型目录条目（与 harness/model ModelCatalogEntry 对齐） */
+/** WebUI 模型目录条目（与 harness/run/model ModelCatalogEntry 对齐） */
 export interface ModelCatalogItem {
   id: string;
   provider: string;
@@ -195,7 +195,7 @@ export class Gateway {
   private tools: RegisteredTool[] = [];
   /** Agent 缓存（避免每条消息重建） */
   private agentCache = new Map<string, {
-    agent: import('../../harness/agent/index.js').Agent;
+    agent: import('../../harness/run/agent/index.js').Agent;
     runner: SessionAwareRunner;
     contextEngine?: import('../../harness/context/types.js').ContextEngine;
     contextHealth?: (agentId?: string) => Promise<import('../../harness/context/layer-health.js').ContextLayerHealth>;
@@ -224,7 +224,7 @@ export class Gateway {
   /** Session ACL（E6）；缺省内置五角色 */
   private sessionAcl: SessionAclService;
   /** 进程内共享 Session Lease（E1/E2）：所有 Runner 注入同一实例 */
-  private sessionLease: import('../../harness/concurrency/session-lease.js').InProcessSessionLock;
+  private sessionLease: import('../../harness/run/concurrency/session-lease.js').InProcessSessionLock;
   /** Knowledge 源注册（OCTOPI_HOME/knowledge/knowledge.db；懒加载） */
   private knowledgeStorePromise?: Promise<
     import('../../harness/knowledge/source-store.js').KnowledgeSourceStore
@@ -331,7 +331,7 @@ export class Gateway {
     agentSignal?: boolean;
   }): Promise<void> {
     if (cfg.schedule && cfg.schedule.length > 0) {
-      const { ScheduleSource } = await import('../../harness/agent-runtime/sources/schedule.js');
+      const { ScheduleSource } = await import('../../harness/activation/sources/schedule.js');
       this.runtime.addSource(
         new ScheduleSource({
           jobs: cfg.schedule.map((job) => ({
@@ -350,7 +350,7 @@ export class Gateway {
     }
     if (cfg.escalate) {
       const { EscalateBridge } = await import(
-        '../../harness/agent-runtime/sources/escalate-bridge.js'
+        '../../harness/activation/sources/escalate-bridge.js'
       );
       this.runtime.addSource(
         new EscalateBridge({
@@ -365,7 +365,7 @@ export class Gateway {
     }
     if (cfg.agentSignal) {
       const { AgentSignalSource } = await import(
-        '../../harness/agent-runtime/sources/agent-signal.js'
+        '../../harness/activation/sources/agent-signal.js'
       );
       this.runtime.addSource(new AgentSignalSource({ events: this.gatewayBus }));
       console.log('[Gateway] AgentRuntime AgentSignalSource');
@@ -562,7 +562,7 @@ export class Gateway {
   }
 
   /** Skill command 桥接（启动 / buildAgent 发现 skill 后调用；冲突进 Issue） */
-  registerSkillCommands(skills: import('../../harness/plugin-ecosystem/skills/types.js').SkillManager): void {
+  registerSkillCommands(skills: import('../../harness/extension/plugin-ecosystem/skills/types.js').SkillManager): void {
     const defs = skillCommandsFromManager(skills, (id) => skills.load(id));
     // ref = skillId：同 skill 重载 upsert；不同 skill 同 command 名可冲突
     for (const skill of skills.list()) {
@@ -608,7 +608,7 @@ export class Gateway {
       try {
         if (existsSync(skillDir)) {
           const { DefaultSkillManager } = await import(
-            '../../harness/plugin-ecosystem/skills/manager.js'
+            '../../harness/extension/plugin-ecosystem/skills/manager.js'
           );
           const skillManager = new DefaultSkillManager();
           await skillManager.discover(skillDir);
@@ -1104,7 +1104,7 @@ export class Gateway {
     const agentDef = this.agents.get(effectiveAgentId);
     const modelRef = this.readSessionModelId(session.metadata);
     const { createProviderSummarize } = await import('../../harness/context/summarize.js');
-    const { resolveModelRef } = await import('../../harness/model/index.js');
+    const { resolveModelRef } = await import('../../harness/run/model/index.js');
     type SummarizeFn = (messages: import('../../core/interfaces/model-provider.js').LLMMessage[], opts?: { maxTokens?: number }) => Promise<string>;
 
     let summarize: SummarizeFn | undefined;
@@ -2215,7 +2215,7 @@ export class Gateway {
    * 为 Agent 构建 Agent + SessionAwareRunner（新架构）
    */
   private async buildAgent(agent: AgentDefinition): Promise<{
-    agent: import('../../harness/agent/index.js').Agent;
+    agent: import('../../harness/run/agent/index.js').Agent;
     runner: SessionAwareRunner;
     contextEngine?: import('../../harness/context/types.js').ContextEngine;
     contextHealth?: (agentId?: string) => Promise<import('../../harness/context/layer-health.js').ContextLayerHealth>;
@@ -2244,7 +2244,7 @@ export class Gateway {
     // 如果配置了 fallbackModels，构建 FallbackProvider（回退 provider 也包装 circuit breaker）
     let finalProvider: import('../../core/interfaces/model-provider.js').ModelProvider = wrappedProvider;
     if (agent.model.fallbackModels && agent.model.fallbackModels.length > 0) {
-      const { FallbackProvider } = await import('../../harness/reliability/fallback-provider.js');
+      const { FallbackProvider } = await import('../../harness/run/reliability/fallback-provider.js');
       const wrappedProviders = new Map<string, import('../../core/interfaces/model-provider.js').ModelProvider>();
       for (const [name, p] of this.providers) {
         wrappedProviders.set(name, wrapProviderWithCircuitBreaker(p, this.getCircuitBreaker(name)));
@@ -2259,7 +2259,7 @@ export class Gateway {
     }
 
     // 使用 AgentBuilder 构建；与 Runtime 同源 EventBus，Escalate/子系统事件才可达
-    const builder = new (await import('../../harness/agent-building/builder.js')).AgentBuilder()
+    const builder = new (await import('../../harness/agent/builder.js')).AgentBuilder()
       .model(finalProvider)
       .store(this.store)
       .workspace(agent.workspace ?? '')
@@ -2284,7 +2284,7 @@ export class Gateway {
       agent.skillDirectory ?? (agent.home ? join(agent.home, 'skills') : undefined);
     if (skillDir && existsSync(skillDir)) {
       try {
-        const { DefaultSkillManager } = await import('../../harness/plugin-ecosystem/skills/manager.js');
+        const { DefaultSkillManager } = await import('../../harness/extension/plugin-ecosystem/skills/manager.js');
         const skillManager = new DefaultSkillManager();
         await skillManager.discover(skillDir);
         builder.skills(skillManager);

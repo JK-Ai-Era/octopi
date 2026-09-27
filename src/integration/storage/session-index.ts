@@ -9,8 +9,8 @@
  */
 
 import type { DatabaseSync } from 'node:sqlite';
-import type { SessionData } from '../../harness/session-types.js';
-import { extractSearchableFields } from '../../harness/session-history/score.js';
+import type { SessionData } from '../../harness/session/types.js';
+import { extractSearchableFields } from '../../harness/session/history/score.js';
 
 /** 与 Jsonl 旁路钩子对齐 */
 export interface SessionIndexSink {

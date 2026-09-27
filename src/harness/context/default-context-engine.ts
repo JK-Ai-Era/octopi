@@ -42,8 +42,8 @@ import { DefaultBudgetAllocator } from './budget-allocator.js';
 import { SmartRouter } from './smart-router.js';
 import type { SmartRouterConfig } from './smart-router.js';
 import { compactStateKey } from './compact-key.js';
-import { createCompactEngine } from '../capabilities/compact/index.js';
-import type { CompactEngine } from '../capabilities/compact/index.js';
+import { createCompactEngine } from './capabilities/compact/index.js';
+import type { CompactEngine } from './capabilities/compact/index.js';
 
 // ── 配置 ──
 

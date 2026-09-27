@@ -7,7 +7,7 @@ export type {
   WebSearchOptions,
   WebSearchResponse,
   WebSearchResultItem,
-} from '../../harness/plugin-ecosystem/tools/web-search-types.js';
+} from '../../harness/extension/plugin-ecosystem/tools/web-search-types.js';
 
 export { createDuckDuckGoProvider } from './duckduckgo.js';
 export type { DuckDuckGoProviderConfig } from './duckduckgo.js';

@@ -7,7 +7,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { JsonlSessionStore } from '../src/integration/storage/jsonl.js';
 import { SessionArchiveManager } from '../src/integration/storage/archive-manager.js';
-import type { SessionData } from '../src/harness/session-types.js';
+import type { SessionData } from '../src/harness/session/types.js';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';

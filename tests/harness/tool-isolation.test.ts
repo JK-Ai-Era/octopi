@@ -15,15 +15,15 @@ import { join, resolve, sep } from 'node:path';
 import {
   DEFAULT_TOOL_ISOLATION,
   resolveToolIsolationCwd,
-} from '../../src/harness/tool-effect/isolation.js';
-import { SessionAwareRunner } from '../../src/harness/runner.js';
-import { withRunScope, getRunScope } from '../../src/harness/run-scope.js';
-import { getRunScope as getScopeFromRunnerModule } from '../../src/harness/run-scope.js';
+} from '../../src/harness/extension/execution-environment/isolation.js';
+import { SessionAwareRunner } from '../../src/harness/run/runner.js';
+import { withRunScope, getRunScope } from '../../src/harness/run/run-scope.js';
+import { getRunScope as getScopeFromRunnerModule } from '../../src/harness/run/run-scope.js';
 import type { Agent } from '../../src/harness/agent/index.js';
 import type { Message } from '../../src/core/types.js';
 import { InMemorySessionStore } from '../../src/integration/storage/memory.js';
-import type { SessionData } from '../../src/harness/session-types.js';
-import type { ToolIsolationMode } from '../../src/harness/tool-effect/isolation.js';
+import type { SessionData } from '../../src/harness/session/types.js';
+import type { ToolIsolationMode } from '../../src/harness/extension/execution-environment/isolation.js';
 
 void getScopeFromRunnerModule;
 

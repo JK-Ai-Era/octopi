@@ -19,7 +19,7 @@ import {
 import {
   DefaultEventBus,
 } from '../src/core/index.js';
-import { BudgetPolicyEngine } from '../src/harness/budget/budget.js';
+import { BudgetPolicyEngine } from '../src/harness/run/budget/budget.js';
 import type {
   ModelProvider,
   LLMStreamChunk,
@@ -381,7 +381,7 @@ describe('DefaultContextEngine', () => {
 
 describe('Config Bridge — RunGuard 解析', () => {
   it('应该从配置创建 DefaultRunGuard', async () => {
-    const { resolveRunGuard } = await import('../src/harness/agent-building/config-bridge.js');
+    const { resolveRunGuard } = await import('../src/harness/agent/config-bridge.js');
     const providers = new Map<string, ModelProvider>();
     providers.set('mock', createMockModelProvider());
 
@@ -396,7 +396,7 @@ describe('Config Bridge — RunGuard 解析', () => {
   });
 
   it('enabled=false 应该返回 undefined', async () => {
-    const { resolveRunGuard } = await import('../src/harness/agent-building/config-bridge.js');
+    const { resolveRunGuard } = await import('../src/harness/agent/config-bridge.js');
     const providers = new Map<string, ModelProvider>();
 
     const runGuard = resolveRunGuard({ enabled: false }, providers);
@@ -405,7 +405,7 @@ describe('Config Bridge — RunGuard 解析', () => {
   });
 
   it('无配置应该返回 undefined', async () => {
-    const { resolveRunGuard } = await import('../src/harness/agent-building/config-bridge.js');
+    const { resolveRunGuard } = await import('../src/harness/agent/config-bridge.js');
     const providers = new Map<string, ModelProvider>();
 
     const runGuard = resolveRunGuard(undefined, providers);

@@ -16,9 +16,9 @@
 - queue-mode.ts — QueueMode
 - thinking-level.ts — ThinkingLevel
 
-测试编排词表（AgentEventDetail）与产品事件 Map 已迁 `harness/events/`。
+测试编排词表（AgentEventDetail）与产品事件 Map 已迁 `harness/shared/events/`。
 
-Skill 类型与 SkillManager 已迁至 harness/plugin-ecosystem/skills（非 Kernel）。
+Skill 类型与 SkillManager 已迁至 harness/extension/plugin-ecosystem/skills（非 Kernel）。
 
 ## 不做什么
 

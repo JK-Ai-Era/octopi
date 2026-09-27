@@ -3,12 +3,12 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { SessionAwareRunner } from '../src/harness/runner.js';
-import type { Agent } from '../src/harness/agent/index.js';
-import type { ResolvedModel } from '../src/harness/model/types.js';
+import { SessionAwareRunner } from '../src/harness/run/runner.js';
+import type { Agent } from '../src/harness/run/agent/index.js';
+import type { ResolvedModel } from '../src/harness/run/model/types.js';
 import type { ModelProvider } from '../src/core/interfaces/model-provider.js';
 import { InMemorySessionStore } from '../src/integration/storage/memory.js';
-import type { SessionData } from '../src/harness/session-types.js';
+import type { SessionData } from '../src/harness/session/types.js';
 
 function makeProvider(name: string, model: string, contextWindow?: number): ModelProvider {
   return {

@@ -4,11 +4,11 @@
 import { describe, test, expect, beforeEach, afterEach } from 'vitest';
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { loadUserCommandDefs } from '../src/harness/plugin-ecosystem/commands/user-source.js';
-import { pluginCommandsFromManager } from '../src/harness/plugin-ecosystem/commands/plugin-bridge.js';
-import { CommandRouter } from '../src/harness/plugin-ecosystem/commands/router.js';
-import type { SessionReadView } from '../src/harness/plugin-ecosystem/commands/types.js';
-import type { PluginManager } from '../src/harness/plugin-ecosystem/plugins/manager.js';
+import { loadUserCommandDefs } from '../src/harness/extension/plugin-ecosystem/commands/user-source.js';
+import { pluginCommandsFromManager } from '../src/harness/extension/plugin-ecosystem/commands/plugin-bridge.js';
+import { CommandRouter } from '../src/harness/extension/plugin-ecosystem/commands/router.js';
+import type { SessionReadView } from '../src/harness/extension/plugin-ecosystem/commands/types.js';
+import type { PluginManager } from '../src/harness/extension/plugin-ecosystem/plugins/manager.js';
 
 const view: SessionReadView = { sessionId: 's', agentId: 'a', hasActiveRun: false };
 

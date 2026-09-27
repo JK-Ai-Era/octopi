@@ -7,7 +7,7 @@ import {
   DefaultEventBus,
   severityToAction,
 } from '../src/core/index.js';
-import { DefaultSecurityGuard } from '../src/harness/security/default-security-guard.js';
+import { DefaultSecurityGuard } from '../src/harness/governance/security/default-security-guard.js';
 import {
   CapabilityEnforcer,
   PluginTrustLevel,

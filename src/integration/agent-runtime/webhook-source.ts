@@ -6,8 +6,8 @@
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { randomUUID } from 'node:crypto';
-import type { AgentRuntime } from '../../harness/agent-runtime/runtime.js';
-import type { Trigger, TriggerSource } from '../../harness/agent-runtime/types.js';
+import type { AgentRuntime } from '../../harness/activation/runtime.js';
+import type { Trigger, TriggerSource } from '../../harness/activation/types.js';
 
 export interface WebhookSourceConfig {
   id?: string;

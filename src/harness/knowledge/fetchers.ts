@@ -8,7 +8,7 @@
 import { createHash } from 'node:crypto';
 import { readFile, readdir, stat } from 'node:fs/promises';
 import { basename, join } from 'node:path';
-import type { ResolvedCredential } from '../credentials/types.js';
+import type { ResolvedCredential } from '../governance/credentials/types.js';
 import { htmlToStructuredText, looksLikeHtml } from './html.js';
 import { guardedFetch, type NetworkGuardOptions } from './network-guard.js';
 import type { KnowledgeSource } from './types.js';

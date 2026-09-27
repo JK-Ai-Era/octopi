@@ -2,7 +2,7 @@
  * ConnectorFetcher — 将 KnowledgeConnector 适配为 SourceFetcher
  */
 
-import type { ResolvedCredential } from '../credentials/types.js';
+import type { ResolvedCredential } from '../governance/credentials/types.js';
 import type { DiscoveredDocRef, SourceFetcher, VirtualDocument } from './fetchers.js';
 import type { ConnectorRegistry } from './connectors.js';
 import type { KnowledgeSource } from './types.js';

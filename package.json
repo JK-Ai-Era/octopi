@@ -1,6 +1,6 @@
 {
   "name": "octopi",
-  "version": "0.52.2",
+  "version": "0.53.0",
   "description": "可嵌入的 Agent 引擎",
   "type": "module",
   "main": "dist/index.js",
@@ -14,28 +14,28 @@
       "import": "./dist/index.js"
     },
     "./plugin-sdk/plugin-entry": {
-      "types": "./dist/plugins/entry.d.ts",
-      "import": "./dist/plugins/entry.js"
+      "types": "./dist/harness/extension/plugin-ecosystem/plugins/entry.d.ts",
+      "import": "./dist/harness/extension/plugin-ecosystem/plugins/entry.js"
     },
     "./plugin-sdk/api": {
-      "types": "./dist/plugins/api.d.ts",
-      "import": "./dist/plugins/api.js"
+      "types": "./dist/harness/extension/plugin-ecosystem/plugins/api.d.ts",
+      "import": "./dist/harness/extension/plugin-ecosystem/plugins/api.js"
     },
     "./plugin-sdk/manifest": {
-      "types": "./dist/plugins/manifest.d.ts",
-      "import": "./dist/plugins/manifest.js"
+      "types": "./dist/harness/extension/plugin-ecosystem/plugins/manifest.d.ts",
+      "import": "./dist/harness/extension/plugin-ecosystem/plugins/manifest.js"
     },
     "./plugin-sdk/capability": {
-      "types": "./dist/plugins/capability.d.ts",
-      "import": "./dist/plugins/capability.js"
+      "types": "./dist/harness/extension/plugin-ecosystem/plugins/capability.d.ts",
+      "import": "./dist/harness/extension/plugin-ecosystem/plugins/capability.js"
     },
     "./plugin-sdk/loader": {
-      "types": "./dist/plugins/loader.d.ts",
-      "import": "./dist/plugins/loader.js"
+      "types": "./dist/harness/extension/plugin-ecosystem/plugins/loader.d.ts",
+      "import": "./dist/harness/extension/plugin-ecosystem/plugins/loader.js"
     },
     "./plugin-sdk/manager": {
-      "types": "./dist/plugins/manager.d.ts",
-      "import": "./dist/plugins/manager.js"
+      "types": "./dist/harness/extension/plugin-ecosystem/plugins/manager.d.ts",
+      "import": "./dist/harness/extension/plugin-ecosystem/plugins/manager.js"
     },
     "./core": {
       "types": "./dist/core/index.d.ts",
@@ -46,8 +46,8 @@
       "import": "./dist/harness/index.js"
     },
     "./harness/orchestration": {
-      "types": "./dist/harness/orchestration/index.d.ts",
-      "import": "./dist/harness/orchestration/index.js"
+      "types": "./dist/harness/collaboration/orchestration/index.d.ts",
+      "import": "./dist/harness/collaboration/orchestration/index.js"
     },
     "./integration": {
       "types": "./dist/integration/index.d.ts",

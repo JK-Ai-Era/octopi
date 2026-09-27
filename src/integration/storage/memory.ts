@@ -6,7 +6,7 @@
  */
 
 import type { SessionStore, SessionListFilter } from '../../core/interfaces/session-store.js';
-import type { SessionData } from '../../harness/session-types.js';
+import type { SessionData } from '../../harness/session/types.js';
 import type { SessionMeta } from '../../core/types.js';
 
 /** meta.agentId / primary / preferred / participant 任一命中 */

@@ -1,9 +1,19 @@
 /**
- * Agent 门面（Harness）
+ * Agent Building 领域 — Agent 构建
  *
- * Loop 层只有 agentLoop 纯函数；可运行的 Agent 门面住在 Harness，
- * 以便 `run()` 自带可靠性包装且不违反外→内依赖。
+ * 职责：组装 Agent 运行时，加载人格配置，桥接配置文件。
+ *
+ * 依赖：
+ * - Core: interfaces/*, types/*, loop/*
+ * - Harness: reliability, context, security, concurrency, plugins, mcp, distributed
  */
 
-export { Agent } from './agent.js';
-export type { AgentOptions } from './agent.js';
+export { AgentBuilder, createAgent, isSubsystemAllowed, discoverSubsystemSpecs } from './builder.js';
+export type {
+  AgentBuildOptions,
+  AgentBuildResult,
+  AgentBuildCoreResult,
+} from './builder.js';
+export { loadPersona, composePersonas, PersonaSource } from './persona.js';
+export { buildFromConfig, buildFromConfigFile, resolveProviders, resolveSecurityConfig } from './config-bridge.js';
+export type { BuiltAgent } from './config-bridge.js';

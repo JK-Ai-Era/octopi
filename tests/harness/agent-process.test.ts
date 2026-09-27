@@ -4,11 +4,11 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { makeTokenUsage } from '../../src/core/types/turn.js';
-import { AgentProcess, spawnAgentProcess, forkAgentProcess, AgentProcessEvents } from '../../src/harness/multi-agent/process.js';
+import { AgentProcess, spawnAgentProcess, forkAgentProcess, AgentProcessEvents } from '../../src/harness/collaboration/multi-agent/process.js';
 import { DefaultEventBus } from '../../src/core/primitives/event-bus.js';
-import { Agent } from '../../src/harness/agent/agent.js';
-import type { ReliabilityHarness } from '../../src/harness/reliability/run-agent.js';
-import type { AgentInfo } from '../../harness/multi-agent/agent-registry-types.js';
+import { Agent } from '../../src/harness/run/agent/agent.js';
+import type { ReliabilityHarness } from '../../src/harness/run/reliability/run-agent.js';
+import type { AgentInfo } from '../../src/harness/collaboration/multi-agent/agent-registry-types.js';
 import type { ModelProvider, LLMRequest, LLMResponse, LLMStreamChunk } from '../../src/core/interfaces/model-provider.js';
 import type { Message } from '../../src/core/types.js';
 

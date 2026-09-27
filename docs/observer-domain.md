@@ -12,7 +12,7 @@ Octopi 的「Observer」不是单一类，而是 **观测领域（Observer Domai
 | 子域 | 代码位置 | 消费者 | 生产缺省 |
 |------|----------|--------|----------|
 | **Telemetry**（运营可观测） | `core/interfaces/observer.ts` + `integration/observability/*`（NoopObserver / LogObserver / ObserverBridge / TraceLogger / MetricsAggregator） | 指标、追踪、Exporter | 可接生产（`observability` 配置） |
-| **Run Observatory**（开发调试） | `harness/observer/*`（ObserverHub + Run 投影） | Web 右栏 **Run** 面板、`/debug/run/*` | **`observer.level=off`** |
+| **Run Observatory**（开发调试） | `harness/observability/observer/*`（ObserverHub + Run 投影） | Web 右栏 **Run** 面板、`/debug/run/*` | **`observer.level=off`** |
 
 ```text
 Observer Domain
@@ -75,7 +75,7 @@ summary/full 预设默认开启已实现通道：`run.scope` / `run.messages` / 
 
 ### 2.4 Run 身份
 
-- `RunScope.runId` + `createRunId(sessionId, agentId)`（`harness/run-scope.ts`）  
+- `RunScope.runId` + `createRunId(sessionId, agentId)`（`harness/run/run-scope.ts`）  
 - Observer **不另造权威 Run ID**；Hub 优先 `scope.runId`  
 - 与宪法 Run = `(sessionId, agentId, …)` 对齐  
 
@@ -143,5 +143,5 @@ Web UI：右栏 **Run** 页签（`RunObservatoryPanel`）。
 - [architecture.md](./architecture.md) — 分层与 Harness 领域  
 - [north-star.md](./north-star.md) — 宪法不变量  
 - [CONTRIBUTING.md](./CONTRIBUTING.md) — 文档/测试同步规范  
-- `src/harness/observer/*` — Hub / DTO / 快照实现  
+- `src/harness/observability/observer/*` — Hub / DTO / 快照实现  
 - `octopi.schema.json` — `observer` 配置 Schema  

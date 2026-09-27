@@ -23,8 +23,8 @@ import {
   createDefaultToolBindings,
   shouldProcessUnit,
   validateStructured,
-} from '../../../src/harness/capabilities/summary/index.js';
-import type { ContentUnit, SummaryPolicy } from '../../../src/harness/capabilities/summary/index.js';
+} from '../../../src/harness/context/capabilities/summary/index.js';
+import type { ContentUnit, SummaryPolicy } from '../../../src/harness/context/capabilities/summary/index.js';
 import { pickSummarizeProvider } from '../../../src/harness/context/summarize.js';
 
 function mockProvider(content = 'extracted-facts'): ModelProvider & { calls: LLMRequest[] } {

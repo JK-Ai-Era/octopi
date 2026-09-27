@@ -4,8 +4,8 @@
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { CredentialStore } from '../../src/harness/credentials/store.js';
-import { decryptSecret, encryptSecret } from '../../src/harness/credentials/crypto.js';
+import { CredentialStore } from '../../src/harness/governance/credentials/store.js';
+import { decryptSecret, encryptSecret } from '../../src/harness/governance/credentials/crypto.js';
 import { KnowledgeSourceStore } from '../../src/harness/knowledge/source-store.js';
 import { KnowledgeIngest } from '../../src/harness/knowledge/ingest.js';
 import { UrlFetcher } from '../../src/harness/knowledge/fetchers.js';

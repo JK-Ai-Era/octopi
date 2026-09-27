@@ -1,7 +1,7 @@
 /**
  * Core 层主入口（Layer 1）— Kernel + 机制
  *
- * 产品事件词表：harness/events
+ * 产品事件词表：harness/shared/events
  * Domain 契约：harness 各领域
  */
 

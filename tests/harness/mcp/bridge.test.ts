@@ -8,8 +8,8 @@ import {
   extractMcpToolResult,
   splitNamespacedToolName,
   MCP_NAMESPACE_SEP,
-} from '../../../src/harness/plugin-ecosystem/mcp/bridge.js';
-import type { McpToolDefinition, McpToolResult } from '../../../harness/plugin-ecosystem/mcp/types.js';
+} from '../../../src/harness/extension/plugin-ecosystem/mcp/bridge.js';
+import type { McpToolDefinition, McpToolResult } from '../../../harness/extension/plugin-ecosystem/mcp/types.js';
 
 describe('MCP Bridge', () => {
   describe('splitNamespacedToolName', () => {

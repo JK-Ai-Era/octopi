@@ -9,7 +9,7 @@ import {
   bindModelRef,
   lookupDeclaredContextWindow,
   lookupModelCapability,
-} from '../src/harness/reliability/model-binding.js';
+} from '../src/harness/run/reliability/model-binding.js';
 import type { ModelProvider, LLMRequest } from '../src/core/interfaces/model-provider.js';
 
 function makeProvider(name: string, defaultModel: string): ModelProvider & { lastRequest?: LLMRequest } {

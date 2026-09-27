@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { DefaultToolBus } from '../../src/harness/plugin-ecosystem/tools/tool-bus.js';
+import { DefaultToolBus } from '../../src/harness/extension/plugin-ecosystem/tools/tool-bus.js';
 
 function createRegistry() {
   const registry = new DefaultToolBus();

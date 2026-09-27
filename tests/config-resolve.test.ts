@@ -10,7 +10,7 @@ import {
   flattenModels,
 } from '../src/config.js';
 import type { ModelsConfig, NormalizedModelInfo } from '../src/config.js';
-import type { ModelConfig } from '../src/harness/types/agent-definition.js';
+import type { ModelConfig } from '../src/harness/shared/types/agent-definition.js';
 
 // ── flattenModels ──
 
@@ -202,7 +202,7 @@ describe('resolveFallbackModels depth limit', () => {
 // ── InMemorySessionStore sessionId 一等 ──
 
 import { InMemorySessionStore } from '../src/integration/storage/memory.js';
-import type { SessionData } from '../src/harness/session-types.js';
+import type { SessionData } from '../src/harness/session/types.js';
 
 describe('InMemorySessionStore sessionId first-class', () => {
   function makeSession(id: string, agentId: string): SessionData {

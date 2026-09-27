@@ -5,10 +5,10 @@
 
 import { describe, it, expect, beforeEach } from 'vitest';
 import { InMemorySessionStore } from '../src/integration/storage/memory.js';
-import { SessionTaskService } from '../src/harness/session-tasks/service.js';
-import { renderSessionTasksInjection } from '../src/harness/session-tasks/render.js';
-import { createSessionTaskTools } from '../src/harness/session-tasks/tools.js';
-import type { SessionData } from '../src/harness/session-types.js';
+import { SessionTaskService } from '../src/harness/session/tasks/service.js';
+import { renderSessionTasksInjection } from '../src/harness/session/tasks/render.js';
+import { createSessionTaskTools } from '../src/harness/session/tasks/tools.js';
+import type { SessionData } from '../src/harness/session/types.js';
 import type { AgentEvent } from '../src/core/primitives/event-bus.js';
 import type { EventBus } from '../src/core/primitives/event-bus.js';
 

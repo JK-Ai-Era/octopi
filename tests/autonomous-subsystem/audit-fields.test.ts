@@ -2,9 +2,9 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { SubsystemRuntime } from '../../src/harness/autonomous-subsystem/runtime.js';
+import { SubsystemRuntime } from '../../src/harness/collaboration/autonomous-subsystem/runtime.js';
 import { DefaultEventBus } from '../../src/core/primitives/event-bus.js';
-import type { SubsystemSpec } from '../../src/harness/autonomous-subsystem/types.js';
+import type { SubsystemSpec } from '../../src/harness/collaboration/autonomous-subsystem/types.js';
 
 function makeSpec(overrides?: Partial<SubsystemSpec>): SubsystemSpec {
   return {

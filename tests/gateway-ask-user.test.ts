@@ -5,7 +5,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { Gateway } from '../src/integration/gateway/gateway.js';
 import type { ModelProvider } from '../src/core/interfaces/model-provider.js';
-import type { AgentDefinition } from '../src/harness/types/agent-definition.js';
+import type { AgentDefinition } from '../src/harness/shared/types/agent-definition.js';
 import { InMemorySessionStore } from '../src/integration/storage/memory.js';
 
 function makeProvider(): ModelProvider {

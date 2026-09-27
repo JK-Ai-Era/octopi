@@ -69,6 +69,7 @@ function makeMockClient(handlers?: {
     }),
     getSessionTasks: async () => [],
     listApprovals: async () => [],
+    listQuestions: async () => [],
     getSessionMessages: async () => ({ messages: [] }),
     getSessionContextLayers: async () => null,
     getAgentContextHealth: async () => null,

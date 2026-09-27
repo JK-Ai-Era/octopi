@@ -3,10 +3,10 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { AgentBuilder } from '../../src/harness/agent-building/builder.js';
+import { AgentBuilder } from '../../src/harness/agent/builder.js';
 import type { ModelProvider } from '../../src/core/interfaces/model-provider.js';
 import type { Message } from '../../src/core/types.js';
-import type { SessionData } from '../../src/harness/session-types.js';
+import type { SessionData } from '../../src/harness/session/types.js';
 import type { SessionStore } from '../../src/core/interfaces/session-store.js';
 
 function mockProvider(): ModelProvider {

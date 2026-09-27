@@ -33,7 +33,7 @@ npm run dev            # tsc --watch
 |---|---|---|---|
 | Loop | `src/loop/` | 纯执行循环 | 仅依赖 Core 类型 |
 | Core | `src/core/` | 机制原语 + 接口契约 + 核心类型 | 无外部依赖 |
-| Harness | `src/harness/` | 15 个自包含领域 | 依赖 Core + Loop |
+| Harness | `src/harness/` | 10 个产品域（见 `docs/domains.md`） | 依赖 Core + Loop |
 | Integration | `src/integration/` | 外部系统适配 | 依赖 Core + Loop + Harness |
 
 详细架构见 [docs/architecture.md](./architecture.md)；长期不变量见 [架构宪法](./north-star.md)。
@@ -43,7 +43,7 @@ npm run dev            # tsc --watch
 
 - `toolIsolation`（默认 `none`）：多 Session 写文件请配置 `session-subdir`（I5）
 - compact 键 = `(sessionId, agentId)`；勿用纯 sessionId 共享 Agent compact（E4）
-- 公用能力 `harness/capabilities/`：summary/compact **不是** LLM 工具面；tools 只消费 `SummaryPort`；prompt/policy/算法不得写进 `plugin-ecosystem/tools`；E4 会话 compact 状态不在 capabilities
+- 公用能力 `harness/context/capabilities/`：summary/compact **不是** LLM 工具面；tools 只消费 `SummaryPort`；prompt/policy/算法不得写进 `plugin-ecosystem/tools`；E4 会话 compact 状态不在 capabilities
 - 工具结果进主会话前：**L1 硬顶**（`maxReturnChars`）必须生效；禁止「先回原文再由 Agent 调 summary」作为防撑爆主路径
 - Session 锁/租约键 = `sessionId`；Gateway 注入**共享** `InProcessSessionLock`；跨进程勿假设内存锁有效（E2/E7）
 - Gateway 默认注入 Session ACL；`preferredAgentId` ≠ `primaryAgentId`；handoff 默认 host-only（I3/E6）
@@ -68,7 +68,7 @@ npx vitest run --grep "SecurityGuard"
 
 **测试文件命名：** `tests/<module>.test.ts`
 
-**当前测试分布：** 见仓库 `tests/**`（含 `tests/harness/capabilities/` 公用能力）
+**当前测试分布：** 见仓库 `tests/**`（含 `tests/harness/context/capabilities/` 公用能力）
 
 | 测试领域 | 覆盖范围 |
 |---|---|
@@ -76,7 +76,7 @@ npx vitest run --grep "SecurityGuard"
 | Harness 门面 | Agent.run、AgentBuilder、SessionAwareRunner、可靠性包装 |
 | 安全 | SecurityGuard、RiskEvaluator、DefaultRiskPolicy、ShellParser |
 | 上下文管理 | ContextEngine、SmartRouter、MessageSelector、Compressor、ContextLayer/Assembler、主动摘要 |
-| 公用能力 capabilities | SummaryPort/L1L2/structured/oversized、CompactEngine、tools 接线（`tests/harness/capabilities/`） |
+| 公用能力 capabilities | SummaryPort/L1L2/structured/oversized、CompactEngine、tools 接线（`tests/harness/context/capabilities/`） |
 | 会话任务 / 过程监督 | SessionTaskService、task_* 工具、DefaultRunGuard |
 | Plugin 系统 | PluginManager、HookRegistry、CapabilityRegistry |
 | Skill 管理 | SkillManager 两阶段加载 |

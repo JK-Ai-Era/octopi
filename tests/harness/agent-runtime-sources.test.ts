@@ -12,8 +12,8 @@ import {
   emitEscalate,
   emitAgentSignal,
   RuntimeEvents,
-} from '../../src/harness/agent-runtime/index.js';
-import type { RunDispatcher, Trigger } from '../../src/harness/agent-runtime/index.js';
+} from '../../src/harness/activation/index.js';
+import type { RunDispatcher, Trigger } from '../../src/harness/activation/index.js';
 import type { AgentEvent } from '../../src/core/primitives/event-bus.js';
 
 function mockDispatcher(calls: unknown[]): RunDispatcher {

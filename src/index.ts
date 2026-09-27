@@ -22,14 +22,14 @@
 // ============================================================
 
 export { DefaultEventBus, NoopEventBus } from './core/primitives/event-bus.js';
-export { AgentEvents } from './harness/events/agent-event-map.js';
-export type { AgentEventMap, KnownAgentEventType, TypedAgentEvent } from './harness/events/agent-event-map.js';
+export { AgentEvents } from './harness/shared/events/agent-event-map.js';
+export type { AgentEventMap, KnownAgentEventType, TypedAgentEvent } from './harness/shared/events/agent-event-map.js';
 export type { AgentEvent, EventHandler, Disposable } from './core/primitives/event-bus.js';
-export { DefaultSecurityGuard } from './harness/security/default-security-guard.js';
-export { BudgetPolicyEngine, DEFAULT_BUDGET } from './harness/budget/budget.js';
-export type { BudgetPolicyConfig } from './harness/budget/budget.js';
-export { UsageLedger } from './harness/accounting/usage-ledger.js';
-export type { UsageLedgerSnapshot } from './harness/accounting/usage-ledger.js';
+export { DefaultSecurityGuard } from './harness/governance/security/default-security-guard.js';
+export { BudgetPolicyEngine, DEFAULT_BUDGET } from './harness/run/budget/budget.js';
+export type { BudgetPolicyConfig } from './harness/run/budget/budget.js';
+export { UsageLedger } from './harness/governance/accounting/usage-ledger.js';
+export type { UsageLedgerSnapshot } from './harness/governance/accounting/usage-ledger.js';
 export {
   emptyTokenUsage,
   makeTokenUsage,
@@ -46,7 +46,7 @@ export type { ErrorStrategy, ErrorAction, OverflowAction } from './core/interfac
 export type { SecurityAction } from './core/security-guard.js';
 export type { Observer, Span, LogLevel } from './core/interfaces/observer.js';
 export type { SessionStore, SessionListFilter } from './core/interfaces/session-store.js';
-export type { SessionData, SessionLifecycleMeta, SessionLifecycleStatus, MemoryExtractionStatus } from './harness/session-types.js';
+export type { SessionData, SessionLifecycleMeta, SessionLifecycleStatus, MemoryExtractionStatus } from './harness/session/types.js';
 
 // Context Engine (new)
 export type {
@@ -75,24 +75,24 @@ export type {
 // Harness 层
 // ============================================================
 
-export { AgentBuilder, createAgent, isSubsystemAllowed, discoverSubsystemSpecs } from './harness/agent-building/builder.js';
-export type { AgentBuildOptions, AgentBuildResult, AgentBuildCoreResult } from './harness/agent-building/builder.js';
-export { Agent } from './harness/agent/index.js';
-export type { AgentOptions } from './harness/agent/index.js';
-export type { HarnessLoopEvent, BudgetControlEvent, ControlStopMetric, PolicyUnit } from './harness/reliability/harness-events.js';
-export { SessionAwareRunner } from './harness/runner.js';
+export { AgentBuilder, createAgent, isSubsystemAllowed, discoverSubsystemSpecs } from './harness/agent/builder.js';
+export type { AgentBuildOptions, AgentBuildResult, AgentBuildCoreResult } from './harness/agent/builder.js';
+export { Agent } from './harness/run/agent/index.js';
+export type { AgentOptions } from './harness/run/agent/index.js';
+export type { HarnessLoopEvent, BudgetControlEvent, ControlStopMetric, PolicyUnit } from './harness/run/reliability/harness-events.js';
+export { SessionAwareRunner } from './harness/run/runner.js';
 export {
   DEFAULT_TOOL_ISOLATION,
   resolveToolIsolationCwd,
-} from './harness/tool-effect/isolation.js';
-export type { ToolIsolationMode } from './harness/tool-effect/isolation.js';
-export { InProcessSessionLock } from './harness/concurrency/session-lease.js';
-export type { SessionLease } from './harness/concurrency/session-lease.js';
+} from './harness/extension/execution-environment/isolation.js';
+export type { ToolIsolationMode } from './harness/extension/execution-environment/isolation.js';
+export { InProcessSessionLock } from './harness/run/concurrency/session-lease.js';
+export type { SessionLease } from './harness/run/concurrency/session-lease.js';
 export {
   SessionAclService,
   BUILTIN_SESSION_ROLES,
   computeEffectiveRights,
-} from './harness/session-acl/index.js';
+} from './harness/governance/session-acl/index.js';
 export type {
   SessionRights,
   EffectiveSessionRights,
@@ -101,10 +101,10 @@ export type {
   PrincipalRef,
   SessionSwitchMode,
   SwitchSessionResult,
-} from './harness/session-acl/types.js';
-export type { SessionSwitchRecord } from './harness/session-types.js';
-export type { RunAuditRecord } from './harness/agent-runtime/types.js';
-export { loadPersona, composePersonas, PersonaSource } from './harness/agent-building/persona.js';
+} from './harness/governance/session-acl/types.js';
+export type { SessionSwitchRecord } from './harness/session/types.js';
+export type { RunAuditRecord } from './harness/activation/types.js';
+export { loadPersona, composePersonas, PersonaSource } from './harness/agent/persona.js';
 
 // Context Engine
 export { DefaultContextEngine } from './harness/context/default-context-engine.js';
@@ -119,59 +119,59 @@ export { SmartRouter } from './harness/context/smart-router.js';
 export type { SmartRouterConfig, Route, RoutingDecision } from './harness/context/smart-router.js';
 
 // Harness 安全
-export { CapabilityEnforcer, PluginTrustLevel } from './harness/security/capability-enforcer.js';
+export { CapabilityEnforcer, PluginTrustLevel } from './harness/governance/security/capability-enforcer.js';
 
 // Harness Plugin 系统
-export { PluginManager } from './harness/plugin-ecosystem/plugins/manager.js';
-export { definePluginEntry, defineChannelPluginEntry } from './harness/plugin-ecosystem/plugins/entry.js';
-export type { OctopiPluginDefinition, OctopiChannelPluginDefinition } from './harness/plugin-ecosystem/plugins/entry.js';
-export { PluginApi } from './harness/plugin-ecosystem/plugins/api.js';
-export { PluginLoader } from './harness/plugin-ecosystem/plugins/loader.js';
-export type { LoadedPlugin, PluginLoaderConfig, PluginEntryConfig } from './harness/plugin-ecosystem/plugins/loader.js';
-export { CapabilityRegistry } from './harness/plugin-ecosystem/plugins/capability.js';
-export { validateManifest, parseManifest } from './harness/plugin-ecosystem/plugins/manifest.js';
-export type { PluginManifest, PluginContracts, ActivationConfig } from './harness/plugin-ecosystem/plugins/manifest.js';
+export { PluginManager } from './harness/extension/plugin-ecosystem/plugins/manager.js';
+export { definePluginEntry, defineChannelPluginEntry } from './harness/extension/plugin-ecosystem/plugins/entry.js';
+export type { OctopiPluginDefinition, OctopiChannelPluginDefinition } from './harness/extension/plugin-ecosystem/plugins/entry.js';
+export { PluginApi } from './harness/extension/plugin-ecosystem/plugins/api.js';
+export { PluginLoader } from './harness/extension/plugin-ecosystem/plugins/loader.js';
+export type { LoadedPlugin, PluginLoaderConfig, PluginEntryConfig } from './harness/extension/plugin-ecosystem/plugins/loader.js';
+export { CapabilityRegistry } from './harness/extension/plugin-ecosystem/plugins/capability.js';
+export { validateManifest, parseManifest } from './harness/extension/plugin-ecosystem/plugins/manifest.js';
+export type { PluginManifest, PluginContracts, ActivationConfig } from './harness/extension/plugin-ecosystem/plugins/manifest.js';
 
 // Harness Skill 系统
-export { DefaultSkillManager, FileSystemSkillSource } from './harness/plugin-ecosystem/skills/manager.js';
-export type { SkillSource, DiscoveredSkill } from './harness/plugin-ecosystem/skills/manager.js';
-export type { SkillDefinition, SkillManager } from './harness/plugin-ecosystem/skills/types.js';
+export { DefaultSkillManager, FileSystemSkillSource } from './harness/extension/plugin-ecosystem/skills/manager.js';
+export type { SkillSource, DiscoveredSkill } from './harness/extension/plugin-ecosystem/skills/manager.js';
+export type { SkillDefinition, SkillManager } from './harness/extension/plugin-ecosystem/skills/types.js';
 /** 产品装配 DTO（非 Kernel）；ModelInfo/ToolPolicy 仍从 core/types 导出 */
-export type { AgentPersona, ModelConfig, AgentDefinition } from './harness/types/agent-definition.js';
+export type { AgentPersona, ModelConfig, AgentDefinition } from './harness/shared/types/agent-definition.js';
 
 // Harness Tool 系统
-export { DefaultToolBus } from './harness/plugin-ecosystem/tools/tool-bus.js';
-export { getBuiltinTools, createShellTool, createFileReadTool, createFileWriteTool, createFileListTool } from './harness/plugin-ecosystem/tools/builtin.js';
-export { createToolSet } from './harness/plugin-ecosystem/tools/tool-set.js';
-export { createSummaryPort, applyToolOutputGate, createCompactEngine } from './harness/capabilities/index.js';
-export type { SummaryPort, SummaryPolicy, ContentUnit, ToolSummarySupport, CompactEngine } from './harness/capabilities/index.js';
-export type { ToolSet, ToolSetConfig } from './harness/plugin-ecosystem/tools/tool-set.js';
-export { createWebSearchTool } from './harness/plugin-ecosystem/tools/web-search.js';
-export type { WebSearchToolOptions } from './harness/plugin-ecosystem/tools/web-search.js';
+export { DefaultToolBus } from './harness/extension/plugin-ecosystem/tools/tool-bus.js';
+export { getBuiltinTools, createShellTool, createFileReadTool, createFileWriteTool, createFileListTool } from './harness/extension/plugin-ecosystem/tools/builtin.js';
+export { createToolSet } from './harness/extension/plugin-ecosystem/tools/tool-set.js';
+export { createSummaryPort, applyToolOutputGate, createCompactEngine } from './harness/context/capabilities/index.js';
+export type { SummaryPort, SummaryPolicy, ContentUnit, ToolSummarySupport, CompactEngine } from './harness/context/capabilities/index.js';
+export type { ToolSet, ToolSetConfig } from './harness/extension/plugin-ecosystem/tools/tool-set.js';
+export { createWebSearchTool } from './harness/extension/plugin-ecosystem/tools/web-search.js';
+export type { WebSearchToolOptions } from './harness/extension/plugin-ecosystem/tools/web-search.js';
 export {
   createSessionHistoryPort,
   resolveHistoryAccess,
-} from './harness/session-history/index.js';
+} from './harness/session/history/index.js';
 export {
   createSessionHistoryTools,
   createSessionSearchTool,
   createSessionReadTool,
-} from './harness/plugin-ecosystem/tools/session-history.js';
+} from './harness/extension/plugin-ecosystem/tools/session-history.js';
 export type {
   SessionHistoryPort,
   SessionHistoryQuery,
   SessionHistorySearchResult,
-} from './harness/session-history/index.js';
+} from './harness/session/history/index.js';
 
 // Config Bridge（配置文件 → 新架构）
-export { buildFromConfig, buildFromConfigFile } from './harness/agent-building/config-bridge.js';
-export type { BuiltAgent } from './harness/agent-building/config-bridge.js';
+export { buildFromConfig, buildFromConfigFile } from './harness/agent/config-bridge.js';
+export type { BuiltAgent } from './harness/agent/config-bridge.js';
 
 // Multi-Agent 系统
-export { DefaultAgentRegistry, AgentSwarm, RoundRobinStrategy, CapabilityStrategy, PipelineStrategy, SwarmEvents, AgentProcess, spawnAgentProcess, forkAgentProcess, AgentProcessEvents } from './harness/multi-agent/index.js';
-export type { SwarmTopology, SwarmConfig, SwarmAgent, SwarmTask, OrchestrationStrategy, AgentProcessState, AgentProcessResult, AgentProcessAnnounce, AgentProcessConfig } from './harness/multi-agent/index.js';
-export type { AgentRegistry, AgentInfo, AgentQuery, AgentRelation, AgentRelationType } from './harness/multi-agent/agent-registry-types.js';
-export { AgentRegistryEvents } from './harness/multi-agent/agent-registry-types.js';
+export { DefaultAgentRegistry, AgentSwarm, RoundRobinStrategy, CapabilityStrategy, PipelineStrategy, SwarmEvents, AgentProcess, spawnAgentProcess, forkAgentProcess, AgentProcessEvents } from './harness/collaboration/multi-agent/index.js';
+export type { SwarmTopology, SwarmConfig, SwarmAgent, SwarmTask, OrchestrationStrategy, AgentProcessState, AgentProcessResult, AgentProcessAnnounce, AgentProcessConfig } from './harness/collaboration/multi-agent/index.js';
+export type { AgentRegistry, AgentInfo, AgentQuery, AgentRelation, AgentRelationType } from './harness/collaboration/multi-agent/agent-registry-types.js';
+export { AgentRegistryEvents } from './harness/collaboration/multi-agent/agent-registry-types.js';
 
 // ============================================================
 // Integration 层
@@ -274,7 +274,7 @@ export * from './core/types.js';
 export { getTextContent, hasMediaContent } from './core/types.js';
 
 // Domain 契约（已迁 harness 领域，主包仍导出常用类型）
-export type { AsyncTaskStore, AsyncTaskRecord } from './harness/orchestration/async-task-store.js';
+export type { AsyncTaskStore, AsyncTaskRecord } from './harness/collaboration/orchestration/async-task-store.js';
 export type {
   MemoryStore, MemoryEntry, MemoryType, MemoryQuery, MemoryStats,
   WisdomStore, WisdomEntry,
@@ -284,16 +284,16 @@ export type {
 } from './harness/index.js';
 export type {
   McpClient, McpManager, McpServerConfig, McpToolDefinition, McpToolResult,
-} from './harness/plugin-ecosystem/mcp/types.js';
+} from './harness/extension/plugin-ecosystem/mcp/types.js';
 export type {
   MessageChannel, ProcessMessage,
-} from './harness/multi-agent/message-channel-types.js';
+} from './harness/collaboration/multi-agent/message-channel-types.js';
 export type {
   ApprovalProvider, ApprovalPolicy, ApprovalRequest, ApprovalDecision,
-} from './harness/human-in-the-loop/types.js';
+} from './harness/governance/human-in-the-loop/types.js';
 export type {
   SandboxProvider, Workspace, IsolationLevel, SandboxConfig, SandboxResult,
-} from './harness/execution-environment/types.js';
+} from './harness/extension/execution-environment/types.js';
 export type {
   EventSource, EventSourceDescriptor, ExternalEvent,
-} from './harness/agent-runtime/event-source-types.js';
+} from './harness/activation/event-source-types.js';
