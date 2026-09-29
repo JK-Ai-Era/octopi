@@ -108,5 +108,7 @@ export type {
 } from './system-prompt-assembler.js';
 export {
   formatRuntimeDatetimeInjection,
+  formatRuntimeWorkspaceInjection,
   withRuntimeDatetimeInjection,
+  withRuntimeEnvironmentInjection,
 } from './runtime-datetime.js';

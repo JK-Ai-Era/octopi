@@ -5,7 +5,9 @@
 import { describe, it, expect } from 'vitest';
 import {
   formatRuntimeDatetimeInjection,
+  formatRuntimeWorkspaceInjection,
   withRuntimeDatetimeInjection,
+  withRuntimeEnvironmentInjection,
 } from '../../src/harness/context/runtime-datetime.js';
 import { AgentBuilder } from '../../src/harness/agent/builder.js';
 import { InMemorySessionStore } from '../../src/integration/storage/memory.js';
@@ -68,6 +70,41 @@ describe('withRuntimeDatetimeInjection', () => {
   });
 });
 
+describe('formatRuntimeWorkspaceInjection', () => {
+  it('输出 Workspace 锚点与检索指引', () => {
+    const text = formatRuntimeWorkspaceInjection('C:\\Users\\me\\.octopi\\workspace\\default');
+    expect(text).toContain('Workspace: C:\\Users\\me\\.octopi\\workspace\\default');
+    expect(text).toContain('Relative tool paths resolve against this directory.');
+    expect(text).toContain('Prefer searching here first');
+  });
+
+  it('cwd 为空时返回空串', () => {
+    expect(formatRuntimeWorkspaceInjection(undefined)).toBe('');
+    expect(formatRuntimeWorkspaceInjection('  ')).toBe('');
+  });
+});
+
+describe('withRuntimeEnvironmentInjection', () => {
+  it('datetime + workspace + 既有注入按序拼接', () => {
+    const text = withRuntimeEnvironmentInjection('TASKS', {
+      now: new Date(2026, 0, 1, 8, 0),
+      cwd: '/home/me/workspace',
+    });
+    const dtIdx = text.indexOf('Current datetime:');
+    const wsIdx = text.indexOf('Workspace: /home/me/workspace');
+    const taskIdx = text.indexOf('TASKS');
+    expect(dtIdx).toBeGreaterThanOrEqual(0);
+    expect(wsIdx).toBeGreaterThan(dtIdx);
+    expect(taskIdx).toBeGreaterThan(wsIdx);
+  });
+
+  it('无 cwd 时不注入 Workspace 块', () => {
+    const text = withRuntimeEnvironmentInjection(undefined, { now: new Date(2026, 0, 1, 8, 0) });
+    expect(text).toContain('Current datetime:');
+    expect(text).not.toContain('Workspace:');
+  });
+});
+
 describe('SessionAwareRunner 注入 datetime', () => {
   it('每轮 system prompt 含 Current datetime，且叠加调用方 injectedContext', async () => {
     const captured: LLMRequest[] = [];
@@ -92,5 +129,29 @@ describe('SessionAwareRunner 注入 datetime', () => {
     expect(system).toContain('CALLER-INJECT');
     // I1：装配结果在 Run 工作区；共享 agent.context 不再作为「当前会话 system」权威
     expect(system.indexOf('Current datetime:')).toBeGreaterThan(-1);
+  });
+
+  it('配置 agent.workspace 时 system prompt 含 Workspace 锚点', async () => {
+    const captured: LLMRequest[] = [];
+    const provider = createMockProvider((req) => captured.push(req));
+    const ws = 'C:\\Users\\me\\.octopi\\workspace\\default';
+    const { runner } = await new AgentBuilder()
+      .model(provider)
+      .systemPrompt('You are test-agent.')
+      .workspace(ws)
+      .store(new InMemorySessionStore())
+      .build();
+
+    for await (const _ of runner.handle('s2', userMsg('find my doc'), {
+      systemPrompt: '',
+      agentId: 'a',
+      sessionId: 's2',
+    })) {
+      // drain
+    }
+
+    const system = String(captured[0]?.messages.find((m) => m.role === 'system')?.content ?? '');
+    expect(system).toContain(`Workspace: ${ws}`);
+    expect(system).toContain('Prefer searching here first');
   });
 });

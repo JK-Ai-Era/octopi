@@ -452,3 +452,64 @@ describe('Helper Functions', () => {
     expect(hasCommand(parsed, 'rm')).toBe(false);
   });
 });
+
+// ═══════════════════════════════════════════════════
+// 内联代码风险分档（skill 基础操作不应被误杀）
+// ═══════════════════════════════════════════════════
+
+describe('Inline code risk tiers', () => {
+  const cwd = '/home/me/project';
+
+  it('python -c 良性载荷 → medium（与脚本文件同权）', () => {
+    const risk = evaluateShellCommand(
+      `python -c "import docx; print('ok')"`,
+      cwd,
+    );
+    expect(risk.level).toBe('medium');
+  });
+
+  it('python -c 载荷含 os.system → high', () => {
+    const risk = evaluateShellCommand(
+      `python -c "import os; os.system('whoami')"`,
+      cwd,
+    );
+    expect(risk.level).toBe('high');
+  });
+
+  it('python -c 载荷含网络库 → medium+', () => {
+    const risk = evaluateShellCommand(
+      `python -c "import urllib.request; urllib.request.urlopen('http://x')"`,
+      cwd,
+    );
+    expect(risk.level === 'medium' || risk.level === 'high').toBe(true);
+  });
+
+  it('python -c 载荷破坏保护路径 → critical', () => {
+    const risk = evaluateShellCommand(
+      `python -c "import shutil; shutil.rmtree('C:\\\\Windows')"`,
+      cwd,
+    );
+    expect(risk.level === 'high' || risk.level === 'critical').toBe(true);
+  });
+
+  it('python script.py（无 -c）→ low，不因解释器被抬高', () => {
+    const risk = evaluateShellCommand('python dump_docx.py out.txt', cwd);
+    expect(risk.level).toBe('low');
+  });
+
+  it('2>&1 不拆成「未知命令」', () => {
+    const parsed = parseShellCommand('python -c "print(1)" 2>&1; python --version 2>&1');
+    const names = getCommandNames(parsed);
+    expect(names).not.toContain('1');
+    expect(names.every((n) => n === 'python')).toBe(true);
+    const risk = evaluateShellCommand('python -c "print(1)" 2>&1; python --version 2>&1', cwd);
+    expect(risk.reason).not.toContain('未知命令: 1');
+  });
+
+  it('degradation 建议内联代码落盘执行', () => {
+    const alt = suggestDegradation(`python -c "print(1)"`);
+    expect(alt).not.toBeNull();
+    expect(alt!.description).toContain('脚本文件');
+    expect(alt!.steps?.length ?? 0).toBeGreaterThan(0);
+  });
+});

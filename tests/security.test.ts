@@ -565,8 +565,8 @@ describe('severityToAction', () => {
   it('critical 应该返回 block', () => {
     expect(severityToAction('critical')).toBe('block');
   });
-  it('high 应该返回 reject', () => {
-    expect(severityToAction('high')).toBe('reject');
+  it('high 应该返回 confirm（人工确认，无审批通道时由调用方回退 reject）', () => {
+    expect(severityToAction('high')).toBe('confirm');
   });
   it('medium 应该返回 warn', () => {
     expect(severityToAction('medium')).toBe('warn');

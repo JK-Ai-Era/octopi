@@ -2696,6 +2696,28 @@ export class Gateway {
       onSecurityViolation: (v) => ({ action: 'block', reason: v.description }),
     });
 
+    // high 风险人工确认：接到 ask_user UI（有交互则确认，无人值守 fail-safe 拒绝）
+    builder.confirmHighRisk(async (req) => {
+      const sessionId = req.sessionId ?? 'unknown';
+      const agentId = req.agentId ?? 'default';
+      const toolName = req.toolCall?.name ?? 'tool';
+      const argsPreview = JSON.stringify(req.toolCall?.arguments ?? {}).slice(0, 200);
+      try {
+        const answer = await this.askUser({
+          sessionId,
+          agentId,
+          question:
+            `High-risk tool requires confirmation.\n` +
+            `Tool: ${toolName}\nArgs: ${argsPreview}\nRisk: ${req.reason}\n\n` +
+            `Allow this call?`,
+          options: ['yes', 'no'],
+        });
+        return answer.trim().toLowerCase() === 'yes' || answer.trim().toLowerCase() === 'y';
+      } catch {
+        return false;
+      }
+    });
+
     // 构建（builder.observerHub 已注入；setObserverHub 兼容仅 runnerConfig 传入的路径）
     builder.observerHub(this.observerHub.isEnabled() ? this.observerHub : undefined);
     const built = await builder.build();

@@ -12,6 +12,7 @@
 import type { SecurityGuard } from './security-guard.js';
 import type { ErrorStrategy } from './error-strategy.js';
 import type { RunGuard } from './run-guard.js';
+import type { ToolCall } from '../types/messages.js';
 
 /**
  * ResourceBudget 最小契约（Core）
@@ -89,4 +90,16 @@ export interface ReliabilityHarness {
   sessionLedger?: unknown;
   /** P5: Context 压力回调（可选，用于 context wrap-up 判断） */
   getContextPressure?: () => { estimatedTokens: number; contextWindow?: number } | undefined;
+  /**
+   * high 风险人工确认（可选）。
+   * 返回 true = 确认放行；false / 抛错 = 拒绝。
+   * 未提供时 high 回退为 reject（fail-safe，无人值守场景不放行）。
+   */
+  confirmHighRisk?: (req: {
+    toolCall: ToolCall;
+    reason: string;
+    severity: string;
+    sessionId?: string;
+    agentId?: string;
+  }) => Promise<boolean>;
 }

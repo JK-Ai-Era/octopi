@@ -283,6 +283,37 @@ function hasStructuredPlanningOnlyFormat(text: string): boolean {
          (bulletLineCount >= 2 && hasPlanningCueLine);
 }
 
+// ── high 风险确认 ──
+
+/**
+ * high 风险人工确认
+ *
+ * - 有 `harness.confirmHighRisk`：请求确认，用户拒绝/异常 → false
+ * - 无审批通道：回退 reject（false），无人值守不放行
+ */
+async function confirmHighRiskDecision(
+  harness: CoreReliabilityHarness,
+  toolCall: ToolCall,
+  reason: string,
+  severity: string,
+): Promise<boolean> {
+  const confirm = harness.confirmHighRisk;
+  if (!confirm) return false;
+  try {
+    const scope = getRunScope();
+    return await confirm({
+      toolCall,
+      reason,
+      severity,
+      sessionId: scope?.sessionId,
+      agentId: scope?.agentId,
+    });
+  } catch {
+    // 审批通道异常按拒绝处理（fail-safe）；此处吞掉仅因异常不改变「不放行」结论
+    return false;
+  }
+}
+
 // ── 核心包装函数 ──
 
 /**
@@ -379,13 +410,28 @@ export async function* runAgentWithReliability(
       if (harness.security) {
         const toolCheck = harness.security.checkToolCall(ctx.toolCall);
         if (!toolCheck.isClean) {
-          const action = severityToAction(
-            toolCheck.violations.reduce((worst, v) => {
-              const order = { critical: 4, high: 3, medium: 2, low: 1 };
-              return order[v.severity] > order[worst.severity] ? v : worst;
-            }, toolCheck.violations[0]).severity,
-          );
-          if (action === 'block' || action === 'reject') {
+          const worst = toolCheck.violations.reduce((worst, v) => {
+            const order = { critical: 4, high: 3, medium: 2, low: 1 };
+            return order[v.severity] > order[worst.severity] ? v : worst;
+          }, toolCheck.violations[0]);
+          const action = severityToAction(worst.severity);
+          if (action === 'block' || action === 'reject' || action === 'confirm') {
+            // high：优先走人工确认；无审批通道或用户拒绝时回退 reject
+            if (action === 'confirm') {
+              const confirmed = await confirmHighRiskDecision(
+                harness,
+                ctx.toolCall,
+                worst.description,
+                worst.severity,
+              );
+              if (confirmed) {
+                // 确认放行：继续原始 beforeToolCall
+                if (originalBeforeToolCall) {
+                  return originalBeforeToolCall(ctx, signal);
+                }
+                return undefined;
+              }
+            }
             const scope = getRunScope();
             state.pendingSecurityEvents.push({
               type: 'security_blocked',
@@ -393,10 +439,10 @@ export async function* runAgentWithReliability(
               data: {
                 sessionId: scope?.sessionId,
                 agentId: scope?.agentId,
-                reason: toolCheck.violations[0]?.description,
+                reason: worst.description,
                 toolName: ctx.toolCall.name,
-                action,
-                severity: toolCheck.violations[0]?.severity,
+                action: action === 'confirm' ? 'reject' : action,
+                severity: worst.severity,
                 violations: toolCheck.violations.map((v) => ({
                   type: v.type,
                   severity: v.severity,
@@ -406,7 +452,7 @@ export async function* runAgentWithReliability(
             });
             return {
               block: true,
-              reason: toolCheck.violations[0]?.description,
+              reason: worst.description,
               terminate: action === 'block',
             };
           }
@@ -445,7 +491,8 @@ export async function* runAgentWithReliability(
               return order[v.severity] > order[worst.severity] ? v : worst;
             }, outputCheck.violations[0]).severity,
           );
-          if (action === 'block' || action === 'reject') {
+          // 输出侧无「事前确认」语义：confirm/high 一律拦截该输出
+          if (action === 'block' || action === 'reject' || action === 'confirm') {
             const reason = outputCheck.violations
               .map((v) => v.description)
               .filter(Boolean)

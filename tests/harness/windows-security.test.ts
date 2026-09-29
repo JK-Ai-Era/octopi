@@ -92,7 +92,8 @@ describe('Windows security regression', () => {
       expect(parsed.segments[0].command).toBe('cmd');
       expect(parsed.hasInlineCode).toBe(true);
       const risk = evaluateShellCommand('cmd /c echo hello', cwd);
-      expect(risk.level).toBe('high');
+      // 载荷 echo hello 无危险模式 → medium（不再一刀切 high）
+      expect(risk.level).toBe('medium');
     });
 
     it('start is not unwrapped to /b', () => {
@@ -103,19 +104,22 @@ describe('Windows security regression', () => {
   });
 
   describe('PowerShell inline code', () => {
-    it('powershell -Command → high', () => {
+    it('powershell -Command with destructive payload → high', () => {
       const parsed = parseShellCommand('powershell -Command "Remove-Item -Recurse C:\\Windows"');
       expect(parsed.hasInlineCode).toBe(true);
       const risk = evaluateShellCommand(
         'powershell -Command "Remove-Item -Recurse C:\\Windows"',
         cwd,
       );
-      expect(risk.level).toBe('high');
+      // Remove-Item + 系统路径 → 危险模式抬升
+      expect(risk.level === 'high' || risk.level === 'critical').toBe(true);
     });
 
-    it('pwsh -EncodedCommand → high', () => {
+    it('pwsh -EncodedCommand → high (uninspectable)', () => {
       const parsed = parseShellCommand('pwsh -EncodedCommand AAAA');
       expect(parsed.hasInlineCode).toBe(true);
+      const risk = evaluateShellCommand('pwsh -EncodedCommand AAAA', cwd);
+      expect(risk.level).toBe('high');
     });
 
     it('curl | powershell still high', () => {

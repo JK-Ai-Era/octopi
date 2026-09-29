@@ -27,6 +27,7 @@ export function suggestDegradation(command: string): SafeAlternative | null {
   // 按优先级检查降级策略
   return (
     checkCurlPipeSh(parsed) ??
+    checkInlineCodeToFile(parsed) ??
     checkSafeDelete(parsed) ??
     checkSafeForcePush(parsed) ??
     checkSudoInstall(parsed) ??
@@ -34,6 +35,45 @@ export function suggestDegradation(command: string): SafeAlternative | null {
     checkSafeRedirect(parsed) ??
     null
   );
+}
+
+/**
+ * 内联代码 → 落盘脚本再执行
+ *
+ * `python -c "..."` 与 `python script.py` 能力等价；
+ * 落盘后可审查、可复用、可审计，是 skill 工作流的自然形态。
+ */
+function checkInlineCodeToFile(parsed: ParsedCommand): SafeAlternative | null {
+  if (!parsed.hasInlineCode) return null;
+
+  for (const seg of parsed.segments) {
+    const key = seg.command.toLowerCase().replace(/\.exe$/i, '');
+    const flagMap: Record<string, { flag: string; ext: string; runner: string }> = {
+      python: { flag: '-c', ext: 'py', runner: 'python' },
+      python3: { flag: '-c', ext: 'py', runner: 'python3' },
+      node: { flag: '-e', ext: 'js', runner: 'node' },
+      ruby: { flag: '-e', ext: 'rb', runner: 'ruby' },
+      perl: { flag: '-e', ext: 'pl', runner: 'perl' },
+    };
+    const meta = flagMap[key];
+    if (!meta) continue;
+    const idx = seg.args.findIndex((a) => a.toLowerCase() === meta.flag);
+    if (idx < 0) continue;
+    const payload = seg.args.slice(idx + 1).join(' ').trim();
+    if (!payload) continue;
+
+    const scriptName = `inline_snippet.${meta.ext}`;
+    return {
+      description: `将内联代码写入工作区脚本文件后执行（可审查、可复用）`,
+      command: `write ${scriptName} then ${meta.runner} ${scriptName}`,
+      steps: [
+        `1. 用 file_write 将代码写入 ${scriptName}`,
+        `2. 需要时用 file_read 审查内容`,
+        `3. 执行: ${meta.runner} ${scriptName}`,
+      ],
+    };
+  }
+  return null;
 }
 
 // ── 降级策略实现 ──

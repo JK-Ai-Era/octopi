@@ -1,3 +1,14 @@
+## v0.54.7
+
+### fix(runtime,security): workspace anchor + skill absolute paths + honest inline-code risk
+
+- **Workspace awareness**: Runtime layer injects `Workspace: <cwd>` (same resolution as `toolRuntime.cwd` / I5) so models search the agent workspace first; `file_list` path defaults to workspace, returns `base`, and **pattern implies recursive** so `*.docx` finds `docs/plan.docx` instead of only the top level
+- **Skill paths**: `formatForPrompt` emits absolute `<path>` per skill (skills live under agent home, not workspace); models no longer ENOENT on `workspace/skills/.../SKILL.md`
+- **Inline code risk**: bare `python -c` / `node -e` is **medium** (aligned with writing a script file); payload content scan escalates `os.system` / `subprocess` / `eval` / `Remove-Item` / system-path writes to high/critical; `-EncodedCommand` stays high
+- **high → confirm**: `severityToAction('high')` returns `confirm`; run-agent asks `harness.confirmHighRisk` (Gateway wires `ask_user` yes/no). No approval channel or deny → fail-safe reject. Tool *output* high still blocks the payload
+- **Parser**: `2>&1` / `>&2` / `&>file` are fd redirects, not command separators (no more fake `未知命令: 1`)
+- **Degradation**: inline code suggests write-to-workspace-script then execute
+
 ## v0.54.6
 
 ### chore(license): relicense to Apache-2.0 and restrict npm pack files

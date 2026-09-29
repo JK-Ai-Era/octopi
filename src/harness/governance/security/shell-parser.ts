@@ -208,6 +208,18 @@ function splitByConnectors(cmd: string): { parts: string[]; connectors: Connecto
         i += 2;
         continue;
       }
+      // `>&` / `N>&M`：文件描述符重定向（2>&1、>&2），不是命令分隔
+      if (i > 0 && cmd[i - 1] === '>') {
+        current += ch;
+        i++;
+        continue;
+      }
+      // `&>` / `&>>`：bash 重定向合一，不是命令分隔
+      if (cmd[i + 1] === '>') {
+        current += ch;
+        i++;
+        continue;
+      }
       // 单 `&` 既是后台标记也是命令分隔：`true & rm -rf /` 必须拆段
       pushPart(parts, current);
       current = '';
@@ -441,8 +453,27 @@ function tokenize(raw: string): string[] {
 
 /**
  * 匹配 >file 或 >>file 格式（无空格的重定向）
+ *
+ * 同时识别文件描述符重定向（`2>&1`、`>&2`、`&>file`）：
+ * 它们是 IO 重定向，不是命令参数，更不是「未知命令」。
  */
 function matchRedirect(token: string): Redirect | null {
+  // `&>` / `&>>`：bash 重定向合一
+  if (token.startsWith('&>>')) {
+    return { type: 'append', target: token.slice(3) };
+  }
+  if (token.startsWith('&>') && token.length > 2) {
+    return { type: 'overwrite', target: token.slice(2) };
+  }
+  // 文件描述符重定向：`2>&1`、`>&2`、`1>&2` 等
+  // target 用 fd: 标记，避免被当成路径做风险分类
+  const fdDup = token.match(/^(\d*)>{1,2}&(\d+)$/);
+  if (fdDup) {
+    return {
+      type: token.includes('>>') ? 'append' : 'overwrite',
+      target: `fd:${fdDup[2]}`,
+    };
+  }
   // 先检查开头的重定向
   if (token.startsWith('>>')) {
     return { type: 'append', target: token.slice(2) };
@@ -453,9 +484,12 @@ function matchRedirect(token: string): Redirect | null {
   if (token.startsWith('<') && token.length > 1) {
     return { type: 'input', target: token.slice(1) };
   }
-  // 检查 token 中间的重定向（如 hello>/tmp/out.txt）
+  // 检查 token 中间的重定向（如 hello>/tmp/out.txt）；`>&N` 已由 fdDup 覆盖
   const gtIdx = token.indexOf('>') ;
   if (gtIdx > 0 && gtIdx < token.length - 1) {
+    if (token[gtIdx + 1] === '&') {
+      return null;
+    }
     if (token[gtIdx + 1] === '>') {
       return { type: 'append', target: token.slice(gtIdx + 2) };
     }

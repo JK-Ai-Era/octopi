@@ -43,6 +43,8 @@ export interface SecurityCheckResult {
 export type SecurityAction =
   | { action: 'block'; reason: string }
   | { action: 'reject'; reason: string }
+  /** high 风险：需人工确认；无审批通道时由调用方回退为 reject */
+  | { action: 'confirm'; reason: string }
   | { action: 'warn'; reason: string }
   | { action: 'sanitize'; replacement: string };
 

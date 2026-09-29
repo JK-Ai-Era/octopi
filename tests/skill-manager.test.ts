@@ -124,12 +124,13 @@ describe('DefaultSkillManager', () => {
       expect(prompt).toContain('</available_skills>');
     });
 
-    test('每个 Skill 有 name 和 description', async () => {
+    test('每个 Skill 有 name、description 与绝对 path', async () => {
       await manager.discover(FIXTURES);
 
       const prompt = manager.formatForPrompt();
       expect(prompt).toContain('<name>valid-skill</name>');
       expect(prompt).toContain('<description>这是一个用于测试的有效 Skill</description>');
+      expect(prompt).toMatch(/<path>[^<]*valid-skill[\\/]SKILL\.md<\/path>/);
     });
 
     test('不包含 disableModelInvocation 的 Skill', async () => {
@@ -140,12 +141,13 @@ describe('DefaultSkillManager', () => {
       expect(prompt).not.toContain('隐藏 Skill');
     });
 
-    test('末尾包含 read 工具提示', async () => {
+    test('末尾提示用绝对 <path> 读取，且说明 skill 不在 workspace', async () => {
       await manager.discover(FIXTURES);
 
       const prompt = manager.formatForPrompt();
-      expect(prompt).toContain('read');
+      expect(prompt).toContain('file_read');
       expect(prompt).toContain('SKILL.md');
+      expect(prompt).toContain('NOT under the workspace');
     });
 
     test('无 Skill 时返回空字符串', () => {

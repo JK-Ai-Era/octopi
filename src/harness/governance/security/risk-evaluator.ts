@@ -398,20 +398,19 @@ export function evaluateShellCommand(
     });
   }
 
-  if (parsed.hasInlineCode) {
-    factors.push({
-      source: 'method',
-      description: '内联代码执行（-c/-e 参数）',
-      level: 'high',
-    });
-  }
-
   if (parsed.hasSubshell) {
     factors.push({
       source: 'method',
       description: '子 shell 执行',
       level: 'medium',
     });
+  }
+
+  // 内联代码：按载荷内容分档，不再「见到 -c 就 high」
+  // python -c "print(1)" 与写脚本再执行能力等价，应同档；
+  // 真正危险的是载荷里的系统调用/破坏/外联，由 evaluateInlineCodeRisk 抬升。
+  if (parsed.hasInlineCode) {
+    factors.push(...evaluateInlineCodeRisk(parsed, cwd));
   }
 
   // 2. 评估每个命令段
@@ -714,11 +713,18 @@ function extractDeleteTargets(args: string[]): string[] {
 }
 
 /**
- * 解释器内联脚本参数（powershell -Command / cmd /c / bash -c …）
+ * 解释器内联脚本参数（python -c / node -e / powershell -Command / cmd /c / bash -c …）
  *
- * 这些形态下真实删除命令在参数串里，而不是 seg.command。
+ * 这些形态下真实代码在参数串里，而不是 seg.command。
+ * 必须覆盖 skill 常用的 python -c，否则载荷探测会漏掉。
  */
 const INTERPRETER_INLINE_FLAGS: Record<string, string[]> = {
+  'python': ['-c'],
+  'python3': ['-c'],
+  'node': ['-e', '--eval'],
+  'ruby': ['-e'],
+  'perl': ['-e'],
+  'php': ['-r'],
   'powershell': ['-command', '-c'],
   'powershell.exe': ['-command', '-c'],
   'pwsh': ['-command', '-c'],
@@ -729,6 +735,127 @@ const INTERPRETER_INLINE_FLAGS: Record<string, string[]> = {
   'sh': ['-c'],
   'zsh': ['-c'],
 };
+
+/** 无法确定性解码的内联形态（-EncodedCommand 等）— 载荷不可审计 → 保持 high */
+const UNINSPECTABLE_INLINE_FLAGS = new Set([
+  '-encodedcommand',
+  '-encodedcommand'.toUpperCase(),
+  '-e', // pwsh -e 与 node -e 歧义；Encod 语义下保守
+]);
+
+/**
+ * 内联载荷中的危险 API / 破坏 / 外联模式（确定性子串/词界匹配，不引入 LLM）
+ *
+ * 原则：与「写脚本再执行」同权——脚本文件里的这些调用同样是 high，
+ * 只是当前对脚本文件不做内容扫描；内联形态因载荷在参数里，可以廉价探测。
+ */
+const INLINE_DANGEROUS_PATTERNS: Array<{ re: RegExp; description: string; level: RiskLevel }> = [
+  // 进程 / 任意命令执行
+  { re: /\bos\.system\b/i, description: 'os.system', level: 'high' },
+  { re: /\bsubprocess\b/i, description: 'subprocess', level: 'high' },
+  { re: /\b(eval|exec)\s*\(/i, description: 'eval/exec', level: 'high' },
+  { re: /\b__import__\s*\(/i, description: '__import__', level: 'high' },
+  { re: /\b(shell\s*=\s*True)\b/i, description: 'shell=True', level: 'high' },
+  { re: /\b(Invoke-Expression|IEX)\b/i, description: 'Invoke-Expression', level: 'high' },
+  // 破坏性文件操作
+  { re: /\bshutil\.rmtree\b/i, description: 'shutil.rmtree', level: 'high' },
+  { re: /\bos\.(remove|unlink|rmdir)\b/i, description: 'os.remove/unlink/rmdir', level: 'high' },
+  { re: /\bRemove-Item\b/i, description: 'Remove-Item', level: 'high' },
+  { re: /\b(rm|del|rd)\s+(-[a-zA-Z]+\s+)*[/\\]/, description: 'absolute-path delete', level: 'high' },
+  // 外联 / 数据外带
+  { re: /\b(socket|requests|urllib|httpx|aiohttp)\b/i, description: 'network library', level: 'medium' },
+  { re: /\b(curl|wget)\b/i, description: 'download helper', level: 'medium' },
+  // 写系统路径
+  { re: /(?:C:\\\\Windows|C:\/Windows|\/etc\/|\/usr\/|C:\\\\Program\s+Files)/i, description: 'system path in payload', level: 'high' },
+];
+
+/**
+ * 内联代码风险分档
+ *
+ * - 载荷可提取：基线 medium（与脚本文件同权）；命中危险模式按模式抬升
+ * - 载荷不可审计（-EncodedCommand）：保持 high
+ * - 载荷含保护路径 + 破坏语义：critical（由 detectCatastrophic 之外的组合判定）
+ *
+ * @param parsed - 解析后的命令
+ * @param cwd - 可选工作目录（保护路径判定）
+ * @returns 风险因子列表
+ */
+function evaluateInlineCodeRisk(parsed: ParsedCommand, cwd?: string): RiskFactor[] {
+  const factors: RiskFactor[] = [];
+  let sawInspectable = false;
+  let maxLevel: RiskLevel = 'low';
+  const hitDescriptions: string[] = [];
+
+  for (const seg of parsed.segments) {
+    // 不可审计形态（-EncodedCommand 等）
+    const uninspectable = seg.args.some((a) => {
+      const lower = a.toLowerCase();
+      if (lower === '-encodedcommand' || lower === '-enc') return true;
+      // pwsh -e <base64> 且载荷无法确定性解码
+      if (UNINSPECTABLE_INLINE_FLAGS.has(lower) && cmdKey(seg.command).includes('pwsh')) {
+        return true;
+      }
+      return false;
+    });
+    if (uninspectable) {
+      factors.push({
+        source: 'method',
+        description: '内联代码不可审计（EncodedCommand 等）',
+        level: 'high',
+      });
+      maxLevel = 'high';
+      continue;
+    }
+
+    for (const payload of extractInlinePayloads(seg)) {
+      sawInspectable = true;
+      for (const pattern of INLINE_DANGEROUS_PATTERNS) {
+        if (pattern.re.test(payload)) {
+          hitDescriptions.push(pattern.description);
+          if (RISK_ORDER[pattern.level] > RISK_ORDER[maxLevel]) {
+            maxLevel = pattern.level;
+          }
+        }
+      }
+      // 载荷内保护路径 + 删除语义 → critical
+      if (/\b(rm|Remove-Item|del|rd|shutil\.rmtree|os\.remove)\b/i.test(payload)) {
+        for (const m of payload.matchAll(/[A-Za-z]:[\\/][^\s"']+|\/(?:etc|usr|bin|sbin|System)[^\s"']*/g)) {
+          if (isProtectedPath(m[0], cwd)) {
+            hitDescriptions.push(`destructive op on protected path: ${m[0]}`);
+            maxLevel = 'critical';
+          }
+        }
+      }
+    }
+  }
+
+  if (!sawInspectable && maxLevel === 'low') {
+    // hasInlineCode 为真但没能抽出载荷：保守 medium（不是 high）
+    factors.push({
+      source: 'method',
+      description: '内联代码执行（载荷未能完整提取）',
+      level: 'medium',
+    });
+    return factors;
+  }
+
+  if (hitDescriptions.length > 0) {
+    factors.push({
+      source: 'method',
+      description: `内联代码载荷命中危险模式: ${hitDescriptions.join(', ')}`,
+      level: maxLevel,
+    });
+  } else {
+    // 可审计且无危险模式：与 python script.py 同权
+    factors.push({
+      source: 'method',
+      description: '内联代码执行（载荷已审计，无危险模式）',
+      level: 'medium',
+    });
+  }
+
+  return factors;
+}
 
 /** 提取解释器内联脚本文本（跳过 -EncodedCommand 等无法确定性解码的形态） */
 function extractInlinePayloads(seg: ParsedSegment): string[] {

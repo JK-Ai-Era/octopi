@@ -724,4 +724,59 @@ describe('file_list entry caps and skip dirs', () => {
     expect(result.entries.some((e) => e.name === 'file.md.bak')).toBe(false);
     expect(result.entries.every((e) => e.name.endsWith('.md'))).toBe(true);
   });
+
+  it('pattern without explicit recursive defaults to recursive (finds nested files)', async () => {
+    const { createFileListTool } = await import(
+      '../../src/harness/extension/plugin-ecosystem/tools/builtin.js'
+    );
+    await mkdir(join(tmpDir, 'docs'), { recursive: true });
+    await writeFile(join(tmpDir, 'docs', 'plan.docx'), 'x');
+
+    const tool = createFileListTool();
+    const result = (await tool.handler(
+      { pattern: '*.docx' },
+      makeContext({ cwd: tmpDir }),
+    )) as {
+      base: string;
+      recursive: boolean;
+      entries: Array<{ name: string; path: string }>;
+    };
+
+    expect(result.base).toBe(tmpDir);
+    expect(result.recursive).toBe(true);
+    expect(result.entries.some((e) => e.name === 'plan.docx' && e.path.includes('docs'))).toBe(true);
+  });
+
+  it('explicit recursive:false with pattern only lists top level', async () => {
+    const { createFileListTool } = await import(
+      '../../src/harness/extension/plugin-ecosystem/tools/builtin.js'
+    );
+    await mkdir(join(tmpDir, 'docs'), { recursive: true });
+    await writeFile(join(tmpDir, 'docs', 'plan.docx'), 'x');
+    await writeFile(join(tmpDir, 'top.docx'), 'x');
+
+    const tool = createFileListTool();
+    const result = (await tool.handler(
+      { pattern: '*.docx', recursive: false },
+      makeContext({ cwd: tmpDir }),
+    )) as { entries: Array<{ name: string }>; recursive: boolean };
+
+    expect(result.recursive).toBe(false);
+    expect(result.entries.some((e) => e.name === 'top.docx')).toBe(true);
+    expect(result.entries.some((e) => e.name === 'plan.docx')).toBe(false);
+  });
+
+  it('path defaults to workspace cwd and reports base', async () => {
+    const { createFileListTool } = await import(
+      '../../src/harness/extension/plugin-ecosystem/tools/builtin.js'
+    );
+    const tool = createFileListTool();
+    const result = (await tool.handler(
+      {},
+      makeContext({ cwd: tmpDir }),
+    )) as { base: string; entries: Array<{ name: string }> };
+
+    expect(result.base).toBe(tmpDir);
+    expect(result.entries.some((e) => e.name === 'README.md')).toBe(true);
+  });
 });

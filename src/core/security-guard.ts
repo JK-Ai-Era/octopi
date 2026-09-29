@@ -27,11 +27,16 @@ export type {
 
 /**
  * 根据 severity 自动决定安全动作
+ *
+ * - critical：确定灾难 → block
+ * - high：高风险但非确定灾难 → **confirm**（人工确认；无审批通道时由调用方回退 reject）
+ *   这样 `python -c` 载荷命中危险模式等场景可走审批，而不是一刀切拒绝。
+ * - medium/low：记录告警后放行
  */
 export function severityToAction(severity: SecurityViolation['severity']): SecurityAction['action'] {
   switch (severity) {
     case 'critical': return 'block';
-    case 'high': return 'reject';
+    case 'high': return 'confirm';
     case 'medium': return 'warn';
     case 'low': return 'warn';
   }

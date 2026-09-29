@@ -435,6 +435,7 @@ export class AgentBuilder {
   private _riskPolicy?: import('../../core/security-guard.js').ToolCallRiskPolicy;
   private _budget?: BudgetPolicyEngine;
   private _errorStrategy?: ErrorStrategy;
+  private _confirmHighRisk?: NonNullable<import('../../core/interfaces/reliability.js').ReliabilityHarness['confirmHighRisk']>;
   private _observer?: Observer;
   private _runGuard?: RunGuard;
   private _runGuardConfig?: RunGuardConfig;
@@ -810,6 +811,17 @@ export class AgentBuilder {
   /** 注入工具调用风险策略（由 Harness 层实现，注入到 Core 的 SecurityGuard） */
   withRiskPolicy(policy: import('../../core/security-guard.js').ToolCallRiskPolicy): this {
     this._riskPolicy = policy;
+    return this;
+  }
+
+  /**
+   * high 风险人工确认通道
+   *
+   * 未设置时 high 回退 reject（无人值守 fail-safe）。
+   * Gateway 可接到 ask_user / pendingApproval UI。
+   */
+  confirmHighRisk(fn: NonNullable<import('../../core/interfaces/reliability.js').ReliabilityHarness['confirmHighRisk']>): this {
+    this._confirmHighRisk = fn;
     return this;
   }
 
@@ -1643,6 +1655,8 @@ export class AgentBuilder {
       budget,
       // P5: Context 压力回调（从 ContextEngine assemble 获取）
       getContextPressure: () => builderRef._lastContextPressure,
+      // high 风险确认：有则走人工审批，无则 run-agent 回退 reject
+      confirmHighRisk: this._confirmHighRisk,
     };
 
     // Agent.run() 需要 harness；Builder 组装期绑定

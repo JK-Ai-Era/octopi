@@ -382,13 +382,14 @@ function compileNamePattern(raw: string | undefined): RegExp | null {
  * File List 工具 — 列出目录内容
  *
  * 参数：
- * - path (string, required): 目录路径
- * - recursive (boolean, optional): 是否递归列出（默认 false）
+ * - path (string, optional): 目录路径；省略或 `.` = workspace cwd（不是磁盘根）
+ * - recursive (boolean, optional): 是否递归列出；**指定 pattern 时默认 true**（找文件意图）
  * - pattern (string, optional): 文件名过滤，glob（`*.md` / `*test*`）或正则
  * - maxEntries (number, optional): 条目硬顶（默认 500）
  * - maxDepth (number, optional): 递归深度上限（默认 4，硬顶 8）；仅 recursive 时生效
  *
  * 返回：
+ * - base: 实际扫描的绝对路径（排查「找错目录」用）
  * - entries: 文件和目录列表（受 maxEntries / L1 约束）
  * - count: 本页条目数
  * - totalCount: 扫描到的总条目（可能 > count）
@@ -422,20 +423,21 @@ export function createFileListTool(options?: {
     definition: {
       name: 'file_list',
       description:
-        'List files and directories in a path. Supports recursive listing and pattern filtering. Recursive mode skips node_modules/.git by default. Output is capped.',
+        'List files and directories. Relative paths resolve against the workspace cwd (see Runtime Workspace anchor) — not the disk root. path defaults to workspace. When pattern is set, recursive defaults to true so files in subdirectories (e.g. docs/) are found. Skips node_modules/.git. Output is capped.',
       parameters: {
         path: {
           type: 'string',
-          description: 'Directory path to list',
-          required: true,
+          description: 'Directory path to list (optional; default "." = workspace cwd)',
         },
         recursive: {
           type: 'boolean',
-          description: 'If true, list recursively (default: false). Skips node_modules/.git/build caches.',
+          description:
+            'List recursively (default: false; **true when pattern is set**). Skips node_modules/.git/build caches.',
         },
         pattern: {
           type: 'string',
-          description: 'Filter by file name: glob (*.md, *test*) or regex. Matched against the file/dir name, not full path.',
+          description:
+            'Filter by file name: glob (*.md, *test*) or regex. Matched against the file/dir name, not full path. Setting pattern enables recursive by default.',
         },
         maxEntries: {
           type: 'number',
@@ -451,10 +453,14 @@ export function createFileListTool(options?: {
       const { readdir, stat } = await import('node:fs/promises');
       const { join, relative } = await import('node:path');
 
-      const rawPath = args.path as string;
+      const rawPath = (args.path as string | undefined) ?? '.';
       const cwd = context?.cwd ?? process.cwd();
       const basePath = resolveReadableToolPath(rawPath, cwd, context?.attachmentRoots);
-      const recursive = (args.recursive as boolean) ?? false;
+      // 找文件意图（带 pattern）默认递归；显式 recursive:false 仍只列本层
+      const hasPattern = Boolean((args.pattern as string | undefined)?.trim());
+      const recursive = args.recursive === undefined && hasPattern
+        ? true
+        : ((args.recursive as boolean) ?? false);
       const pattern = compileNamePattern(args.pattern as string | undefined);
       const maxEntries = Math.min(Math.max((args.maxEntries as number) ?? 500, 1), 2000);
       const maxDepth = Math.min(Math.max((args.maxDepth as number) ?? 4, 1), 8);
@@ -516,7 +522,13 @@ export function createFileListTool(options?: {
 
       try {
         await walk(basePath, 1);
-        const rawBody = JSON.stringify({ entries, count: entries.length, totalCount });
+        const rawBody = JSON.stringify({
+          base: basePath,
+          recursive,
+          entries,
+          count: entries.length,
+          totalCount,
+        });
 
         const { applyToolOutputGate, resolveSupportBinding } = await import(
           '../../../context/capabilities/summary/index.js'
@@ -550,6 +562,8 @@ export function createFileListTool(options?: {
             used += chunk;
           }
           return {
+            base: basePath,
+            recursive,
             entries: kept,
             count: kept.length,
             totalCount,
@@ -565,6 +579,8 @@ export function createFileListTool(options?: {
         }
 
         return {
+          base: basePath,
+          recursive,
           entries,
           count: entries.length,
           totalCount,

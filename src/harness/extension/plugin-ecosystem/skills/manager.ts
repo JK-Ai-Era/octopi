@@ -235,8 +235,12 @@ export class DefaultSkillManager implements SkillManager {
    *   <skill>
    *     <name>video-frames</name>
    *     <description>Extract frames from videos using ffmpeg</description>
+   *     <path>/abs/path/to/skills/video-frames/SKILL.md</path>
    *   </skill>
    * </available_skills>
+   *
+   * `path` 必须是 **绝对路径**：skill 目录通常在 agent home，不在 workspace。
+   * 模型若按 `skills/<id>/SKILL.md` 相对路径去读，会解析到 workspace 下而 ENOENT。
    *
    * disableModelInvocation 的 Skill 不输出（只能显式调用）
    */
@@ -252,13 +256,14 @@ export class DefaultSkillManager implements SkillManager {
       lines.push('  <skill>');
       lines.push(`    <name>${this.xmlEscape(skill.id)}</name>`);
       lines.push(`    <description>${this.xmlEscape(skill.description)}</description>`);
+      lines.push(`    <path>${this.xmlEscape(skill.filePath)}</path>`);
       lines.push('  </skill>');
     }
     lines.push('</available_skills>');
     lines.push('');
     lines.push(
-      'Use the read tool to load a skill file when needed. ' +
-        'Example: read("skills/video-frames/SKILL.md")',
+      'Load a skill with file_read using the absolute <path> above (skill files are NOT under the workspace cwd). ' +
+        'Example: file_read(path=<path of the skill you need>)',
     );
 
     return lines.join('\n');

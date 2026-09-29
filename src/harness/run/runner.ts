@@ -25,7 +25,7 @@ import { createSessionStateMachine } from '../session/state-machine.js';
 import type { StateMachine } from '../../core/primitives/state-machine.js';
 import { HeuristicTokenEstimator } from '../context/index.js';
 import { extractLayerQuery } from '../context/layer-types.js';
-import { withRuntimeDatetimeInjection } from '../context/runtime-datetime.js';
+import { withRuntimeEnvironmentInjection } from '../context/runtime-datetime.js';
 import type { SessionTaskService } from '../session/tasks/service.js';
 import { renderSessionTasksInjection } from '../session/tasks/render.js';
 import { createRunId, type RunScope } from './run-scope.js';
@@ -721,11 +721,28 @@ export class SessionAwareRunner {
         }
       }
 
-      // Runtime datetime：每轮锚定当前时间，供时间敏感任务使用
-      effectiveRunConfig = {
-        ...effectiveRunConfig,
-        injectedContext: withRuntimeDatetimeInjection(effectiveRunConfig.injectedContext),
-      };
+      // Runtime 锚点：时间 + 工具工作目录（模型据此优先在 workspace 找文件，而非全盘扫）
+      // cwd 与下方 I5 toolRuntime.cwd 同源同构，保证 system prompt 与工具解析一致
+      {
+        const runtimeIsolationMode: ToolIsolationMode =
+          effectiveRunConfig.toolIsolation
+          ?? this.config.toolIsolation
+          ?? DEFAULT_TOOL_ISOLATION;
+        const runtimeBaseCwd =
+          (effectiveRunConfig.cwd?.trim() ? effectiveRunConfig.cwd.trim() : undefined)
+          ?? (this.config.agentWorkspace?.trim() ? this.config.agentWorkspace.trim() : undefined);
+        const runtimeCwd = resolveToolIsolationCwd({
+          mode: runtimeIsolationMode,
+          sessionId,
+          baseCwd: runtimeBaseCwd,
+        }).cwd;
+        effectiveRunConfig = {
+          ...effectiveRunConfig,
+          injectedContext: withRuntimeEnvironmentInjection(effectiveRunConfig.injectedContext, {
+            cwd: runtimeCwd,
+          }),
+        };
+      }
 
       // 8. 工具运行时：setRuntime 仅作无 ALS 时的回退；权威身份在 RunScope
       if (this.toolContextProvider) {
