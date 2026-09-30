@@ -2,7 +2,7 @@
   "name": "@octopi-agent/webui",
   "private": false,
   "version": "0.55.0",
-  "description": "Octopi WebUI — 预构建控制台静态工程（product 形态外挂）",
+  "description": "Octopi WebUI — prebuilt web console (static dist)",
   "type": "module",
   "files": [
     "dist",

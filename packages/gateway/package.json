@@ -1,7 +1,7 @@
 {
   "name": "@octopi-agent/gateway",
   "version": "0.55.0",
-  "description": "Octopi Gateway — HTTP/WS 进程面 + Channel 挂载 + Web 运行时",
+  "description": "Octopi Gateway — HTTP/WS process plane, channel adapters, and Web runtime",
   "type": "module",
   "license": "Apache-2.0",
   "main": "./dist/index.js",

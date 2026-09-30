@@ -1,7 +1,7 @@
 {
   "name": "@octopi-agent/core",
   "version": "0.55.0",
-  "description": "Octopi Core — agentLoop + Kernel 契约（Layer 0–1）",
+  "description": "Octopi Core — pure agent loop and Kernel contracts (Layer 0-1)",
   "type": "module",
   "license": "Apache-2.0",
   "main": "./dist/core/index.js",

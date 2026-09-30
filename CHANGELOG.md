@@ -30,6 +30,7 @@ octopi-agent (suite, bin: octopi)
 
 - Docs/README/AGENTS import-map and monorepo layout synced; boundaries tests cover engine/gateway package rules
 - LICENSE + NOTICE shipped in every package tarball
+- Package `description` fields are English-only
 
 ## v0.54.7
 

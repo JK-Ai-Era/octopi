@@ -1,7 +1,7 @@
 {
   "name": "@octopi-agent/engine",
   "version": "0.55.0",
-  "description": "Octopi Engine — Harness 10 域 + Integration 库能力",
+  "description": "Octopi Engine — Harness product domains, library integrations, and embeddable Agent.run()",
   "type": "module",
   "license": "Apache-2.0",
   "main": "./dist/index.js",
