@@ -6,8 +6,8 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { validateSubsystemSpec } from '../../src/harness/collaboration/autonomous-subsystem/boundary/validator.js';
-import type { SubsystemSpec } from '../../src/harness/collaboration/autonomous-subsystem/types.js';
+import { validateSubsystemSpec } from '@octopi-agent/engine/harness/collaboration/autonomous-subsystem/boundary/validator.js';
+import type { SubsystemSpec } from '@octopi-agent/engine/harness/collaboration/autonomous-subsystem/types.js';
 
 /**
  * 构建最小合法的 SubsystemSpec

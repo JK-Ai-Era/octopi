@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { StateMachine } from '../../src/core/primitives/state-machine.js';
+import { StateMachine } from '@octopi-agent/core/primitives/state-machine.js';
 
 describe('StateMachine', () => {
   it('初始状态正确', () => {

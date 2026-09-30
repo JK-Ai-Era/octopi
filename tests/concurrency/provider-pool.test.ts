@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { ProviderPool } from '../../src/harness/run/concurrency/provider-pool.js';
-import type { ModelProvider, LLMRequest, LLMResponse, LLMStreamChunk, ModelInfo } from '../../src/core/interfaces/model-provider.js';
+import { ProviderPool } from '@octopi-agent/engine/harness/run/concurrency/provider-pool.js';
+import type { ModelProvider, LLMRequest, LLMResponse, LLMStreamChunk, ModelInfo } from '@octopi-agent/core/interfaces/model-provider.js';
 
 // ── Mock Provider ──
 

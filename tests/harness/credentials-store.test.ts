@@ -2,7 +2,7 @@
  * CredentialStore — env 模式 / 绑定 / resolve
  */
 import { afterEach, describe, expect, it } from 'vitest';
-import { CredentialStore } from '../../src/harness/governance/credentials/store.js';
+import { CredentialStore } from '@octopi-agent/engine/harness/governance/credentials/store.js';
 
 const envKey = 'OCTOPI_TEST_CRED_TOKEN';
 

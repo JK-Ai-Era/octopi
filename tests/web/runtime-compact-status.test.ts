@@ -3,8 +3,8 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { OctopiRuntimeStore } from '../../src/integration/web/runtime/store.js';
-import type { OctopiClient, AgentEventEnvelope } from '../../src/integration/web/sdk/client.js';
+import { OctopiRuntimeStore } from '@octopi-agent/gateway/web/runtime/store.js';
+import type { OctopiClient, AgentEventEnvelope } from '@octopi-agent/gateway/web/sdk/client.js';
 
 function mockClient(): OctopiClient {
   const listeners: Record<string, unknown> = {};

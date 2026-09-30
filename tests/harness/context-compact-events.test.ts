@@ -3,12 +3,12 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { AgentBuilder } from '../../src/harness/agent/builder.js';
-import { DefaultContextEngine } from '../../src/harness/context/default-context-engine.js';
-import type { ContextCompactEvent } from '../../src/harness/context/types.js';
-import type { ModelProvider, LLMMessage } from '../../src/core/interfaces/model-provider.js';
-import type { Message } from '../../src/core/types.js';
-import type { AgentEvent } from '../../src/core/primitives/event-bus.js';
+import { AgentBuilder } from '@octopi-agent/engine/harness/agent/builder.js';
+import { DefaultContextEngine } from '@octopi-agent/engine/harness/context/default-context-engine.js';
+import type { ContextCompactEvent } from '@octopi-agent/engine/harness/context/types.js';
+import type { ModelProvider, LLMMessage } from '@octopi-agent/core/interfaces/model-provider.js';
+import type { Message } from '@octopi-agent/core/types.js';
+import type { AgentEvent } from '@octopi-agent/core/primitives/event-bus.js';
 
 function userMsg(text: string): Message {
   return { role: 'user', content: text, timestamp: Date.now() };
@@ -112,7 +112,7 @@ describe('Builder → EventBus 桥接', () => {
     agent.setContextSessionId('sess-bridge');
 
     // convertToLlm 只读 run snapshot.contextWindow（禁止二次 getModelInfo）
-    const { withResolvedModel } = await import('../../src/harness/run/model/run-scope.js');
+    const { withResolvedModel } = await import('@octopi-agent/engine/harness/run/model/run-scope.js');
     async function* probe() {
       yield await agent.config.convertToLlm!(msgs);
     }

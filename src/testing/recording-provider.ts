@@ -7,8 +7,8 @@
 
 import { existsSync, mkdirSync, appendFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { ModelProvider, LLMRequest, LLMResponse, LLMStreamChunk } from '../core/interfaces/model-provider.js';
-import type { ModelInfo } from '../core/types.js';
+import type { ModelProvider, LLMRequest, LLMResponse, LLMStreamChunk } from '@octopi-agent/core/interfaces/model-provider.js';
+import type { ModelInfo } from '@octopi-agent/core/types.js';
 
 /** 录制条目 */
 export interface RecordingEntry {
@@ -187,7 +187,7 @@ export class RecordingProvider implements ModelProvider {
     let content = '';
     const toolCalls: Array<{ id: string; name: string; arguments: Record<string, unknown> }> = [];
     const toolCallBuffers = new Map<number, { id: string; name: string; argsBuffer: string }>();
-    let usage: import('../core/types/turn.js').TokenUsage | undefined;
+    let usage: import('@octopi-agent/core/types/turn.js').TokenUsage | undefined;
 
     for (const chunk of chunks) {
       if (chunk.type === 'content' && chunk.content) {

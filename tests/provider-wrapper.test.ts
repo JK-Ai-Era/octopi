@@ -5,10 +5,10 @@
  */
 
 import { describe, test, expect, beforeEach } from 'vitest';
-import { wrapProviderWithCircuitBreaker } from '../src/harness/run/reliability/provider-wrapper.js';
-import { CircuitBreaker } from '../src/harness/run/reliability/circuit-breaker.js';
-import type { ModelProvider, LLMRequest, LLMResponse } from '../src/core/interfaces/model-provider.js';
-import type { ModelInfo } from '../src/core/types.js';
+import { wrapProviderWithCircuitBreaker } from '@octopi-agent/engine/harness/run/reliability/provider-wrapper.js';
+import { CircuitBreaker } from '@octopi-agent/engine/harness/run/reliability/circuit-breaker.js';
+import type { ModelProvider, LLMRequest, LLMResponse } from '@octopi-agent/core/interfaces/model-provider.js';
+import type { ModelInfo } from '@octopi-agent/core/types.js';
 
 // ── Mock Provider ──
 

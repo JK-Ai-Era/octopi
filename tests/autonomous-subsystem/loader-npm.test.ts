@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { SubsystemLoader } from '../../src/harness/collaboration/autonomous-subsystem/loader.js';
+import { SubsystemLoader } from '@octopi-agent/engine/harness/collaboration/autonomous-subsystem/loader.js';
 
 function writeSubsystem(dir: string, id: string, overrides: Record<string, unknown> = {}) {
   mkdirSync(dir, { recursive: true });
@@ -51,19 +51,19 @@ describe('SubsystemLoader npm discovery', () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it('discovers @octopi/subsystem-* packages from node_modules', async () => {
+  it('discovers @octopi-agent/subsystem-* packages from node_modules', async () => {
     const projectDir = join(tmpDir, 'project', '.octopi', 'subsystems');
     const npmDir = join(tmpDir, 'project', 'node_modules');
 
     writeSubsystem(join(projectDir, 'local-sub'), 'local.sub', { emits: ['local'] });
-    writeSubsystem(join(npmDir, '@octopi', 'subsystem-safe'), '@octopi/subsystem-safe', { emits: ['safe'] });
+    writeSubsystem(join(npmDir, '@octopi-agent', 'subsystem-safe'), '@octopi-agent/subsystem-safe', { emits: ['safe'] });
 
     const loader = new SubsystemLoader({ projectDir, npmDir });
     const result = await loader.loadAll();
 
     expect(result.errors).toEqual([]);
     const ids = result.specs.map((s) => s.id).sort();
-    expect(ids).toEqual(['@octopi/subsystem-safe', 'local.sub']);
+    expect(ids).toEqual(['@octopi-agent/subsystem-safe', 'local.sub']);
   });
 
   it('supports plain octopi-subsystem-* naming', async () => {

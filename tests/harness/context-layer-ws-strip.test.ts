@@ -3,8 +3,8 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { buildContextLayersSnapshot } from '../../src/harness/context/layer-snapshot.js';
-import type { AssembleManifest } from '../../src/harness/context/layer-types.js';
+import { buildContextLayersSnapshot } from '@octopi-agent/engine/harness/context/layer-snapshot.js';
+import type { AssembleManifest } from '@octopi-agent/engine/harness/context/layer-types.js';
 
 /** 与 gateway stripLayerContentFromEvent 相同的剥离逻辑 */
 function stripManifestContent(manifest: AssembleManifest): AssembleManifest {

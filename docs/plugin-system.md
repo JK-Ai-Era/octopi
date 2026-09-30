@@ -97,7 +97,7 @@ my-plugins/
 
 ```ts
 // index.ts
-import { definePluginEntry } from 'octopi/plugin-sdk/plugin-entry';
+import { definePluginEntry } from '@octopi-agent/engine/plugin-sdk/plugin-entry';
 
 export default definePluginEntry({
   id: 'tool-preflight',
@@ -120,7 +120,7 @@ export default definePluginEntry({
 ### 4. 加载 Plugin
 
 ```ts
-import { PluginManager } from 'octopi/plugins/manager';
+import { PluginManager } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/plugins/manager';
 
 const pm = new PluginManager({
   loadPaths: ['/path/to/my-plugins'],
@@ -189,7 +189,7 @@ const result = await pm.runHook('before_tool_call', event, null);
 使用 `definePluginEntry()` 创建 plugin 定义，default export。
 
 ```ts
-import { definePluginEntry } from 'octopi/plugin-sdk/plugin-entry';
+import { definePluginEntry } from '@octopi-agent/engine/plugin-sdk/plugin-entry';
 
 export default definePluginEntry({
   id: 'my-plugin',
@@ -723,7 +723,7 @@ await pluginDef.register(api);
 不从文件系统加载时，直接用 `definePluginEntry()` 创建：
 
 ```ts
-import { definePluginEntry } from 'octopi/plugin-sdk/plugin-entry';
+import { definePluginEntry } from '@octopi-agent/engine/plugin-sdk/plugin-entry';
 
 const myPlugin = definePluginEntry({
   id: 'inline-plugin',
@@ -842,7 +842,7 @@ Manifest 中的 `activation` 字段控制 plugin 何时被加载：
 **`index.ts`：**
 
 ```ts
-import { definePluginEntry } from 'octopi/plugin-sdk/plugin-entry';
+import { definePluginEntry } from '@octopi-agent/engine/plugin-sdk/plugin-entry';
 
 export default definePluginEntry({
   id: 'tool-preflight',
@@ -896,7 +896,7 @@ export default definePluginEntry({
 **`index.ts`：**
 
 ```ts
-import { definePluginEntry } from 'octopi/plugin-sdk/plugin-entry';
+import { definePluginEntry } from '@octopi-agent/engine/plugin-sdk/plugin-entry';
 
 export default definePluginEntry({
   id: 'tool-logger',
@@ -926,7 +926,7 @@ export default definePluginEntry({
 完整的 hook 编排 — `before_agent_reply` 做任务决策，`before_prompt_build` 注入上下文。
 
 ```ts
-import { definePluginEntry } from 'octopi/plugin-sdk/plugin-entry';
+import { definePluginEntry } from '@octopi-agent/engine/plugin-sdk/plugin-entry';
 
 export default definePluginEntry({
   id: 'task-manager',
@@ -969,32 +969,32 @@ export default definePluginEntry({
 
 ```ts
 // Plugin 入口定义
-import { definePluginEntry, defineChannelPluginEntry } from 'octopi/plugin-sdk/plugin-entry';
-import type { OctopiPluginDefinition, OctopiChannelPluginDefinition } from 'octopi/plugin-sdk/plugin-entry';
+import { definePluginEntry, defineChannelPluginEntry } from '@octopi-agent/engine/plugin-sdk/plugin-entry';
+import type { OctopiPluginDefinition, OctopiChannelPluginDefinition } from '@octopi-agent/engine/plugin-sdk/plugin-entry';
 
 // Plugin API
-import { PluginApi } from 'octopi/plugin-sdk/api';
-import type { PluginLogger, HookRegistrationOptions } from 'octopi/plugin-sdk/api';
+import { PluginApi } from '@octopi-agent/engine/plugin-sdk/api';
+import type { PluginLogger, HookRegistrationOptions } from '@octopi-agent/engine/plugin-sdk/api';
 
 // Manifest
-import { validateManifest, parseManifest } from 'octopi/plugin-sdk/manifest';
-import type { PluginManifest, PluginContracts } from 'octopi/plugin-sdk/manifest';
+import { validateManifest, parseManifest } from '@octopi-agent/engine/plugin-sdk/manifest';
+import type { PluginManifest, PluginContracts } from '@octopi-agent/engine/plugin-sdk/manifest';
 
 // Capability Registry
-import { CapabilityRegistry } from 'octopi/plugin-sdk/capability';
+import { CapabilityRegistry } from '@octopi-agent/engine/plugin-sdk/capability';
 
 // Plugin Loader
-import { PluginLoader } from 'octopi/plugin-sdk/loader';
-import type { LoadedPlugin, PluginLoaderConfig } from 'octopi/plugin-sdk/loader';
+import { PluginLoader } from '@octopi-agent/engine/plugin-sdk/loader';
+import type { LoadedPlugin, PluginLoaderConfig } from '@octopi-agent/engine/plugin-sdk/loader';
 
 // Plugin Manager（顶层）
-import { PluginManager } from 'octopi/plugin-sdk/manager';
+import { PluginManager } from '@octopi-agent/engine/plugin-sdk/manager';
 ```
 
 也可以从主入口导入：
 
 ```ts
-import { PluginManager, definePluginEntry, PluginApi } from 'octopi';
+import { PluginManager, definePluginEntry, PluginApi } from 'octopi-agent';
 ```
 
 ---

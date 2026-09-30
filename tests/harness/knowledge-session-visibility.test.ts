@@ -3,7 +3,7 @@
  * 规格：arch/knowledge-admin-ui.md §1
  */
 import { describe, expect, it } from 'vitest';
-import { KnowledgeSourceStore } from '../../src/harness/knowledge/source-store.js';
+import { KnowledgeSourceStore } from '@octopi-agent/engine/harness/knowledge/source-store.js';
 
 async function openStore(): Promise<KnowledgeSourceStore> {
   return KnowledgeSourceStore.open({ dbPath: ':memory:' });

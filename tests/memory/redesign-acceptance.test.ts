@@ -4,16 +4,16 @@
 import { describe, it, expect } from 'vitest';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { evaluateGates, mapLegacyType } from '../../src/harness/memory/gates.js';
-import { provisionalConfidence } from '../../src/harness/memory/confidence.js';
-import { InMemoryMemoryStore } from '../../src/harness/memory/store.js';
-import { AgentDatabase } from '../../src/harness/memory/sqlite/agent-db.js';
-import { SqliteMemoryStore } from '../../src/harness/memory/sqlite/memory-store.js';
-import { loadConstitution } from '../../src/harness/context/constitution/load-constitution.js';
-import { DefaultContextAssembler } from '../../src/harness/context/assembler.js';
-import { isSubsystemAllowed } from '../../src/harness/agent/builder.js';
-import { SubsystemLoader } from '../../src/harness/collaboration/autonomous-subsystem/loader.js';
-import { admitCandidates } from '../../src/subsystems/memory-steward/shared/policy.js';
+import { evaluateGates, mapLegacyType } from '@octopi-agent/engine/harness/memory/gates.js';
+import { provisionalConfidence } from '@octopi-agent/engine/harness/memory/confidence.js';
+import { InMemoryMemoryStore } from '@octopi-agent/engine/harness/memory/store.js';
+import { AgentDatabase } from '@octopi-agent/engine/harness/memory/sqlite/agent-db.js';
+import { SqliteMemoryStore } from '@octopi-agent/engine/harness/memory/sqlite/memory-store.js';
+import { loadConstitution } from '@octopi-agent/engine/harness/context/constitution/load-constitution.js';
+import { DefaultContextAssembler } from '@octopi-agent/engine/harness/context/assembler.js';
+import { isSubsystemAllowed } from '@octopi-agent/engine/harness/agent/builder.js';
+import { SubsystemLoader } from '@octopi-agent/engine/harness/collaboration/autonomous-subsystem/loader.js';
+import { admitCandidates } from '@octopi-agent/engine/harness/memory/steward-policy.js';
 
 describe('constitution loader', () => {
   it('product loads English operational body without product meta', () => {
@@ -194,7 +194,7 @@ describe('hybrid channel filter + supersede safety', () => {
   });
 
   it('near-duplicate supersede uses trigram similarity not bare prefix', async () => {
-    const { planSoftDeletes, charTrigramSimilarity } = await import('../../src/subsystems/memory-steward/shared/policy.js');
+    const { planSoftDeletes, charTrigramSimilarity } = await import('@octopi-agent/engine/harness/memory/steward-policy.js');
     const now = Date.now();
     const a = 'Memory backend uses SqliteMemoryStore on agent.db';
     const b = 'Memory backend uses SqliteMemoryStore on agent.db file';
@@ -272,7 +272,7 @@ describe('hybrid channel filter + supersede safety', () => {
 
 describe('loader packageId consistency', () => {
   it('single-spec package uses directory basename as packageId', async () => {
-    const loader = new SubsystemLoader({ builtinDir: join(process.cwd(), 'src', 'subsystems') });
+    const loader = new SubsystemLoader({ builtinDir: join(process.cwd(), 'packages', 'engine', 'src', 'subsystems') });
     const { specs } = await loader.loadAll();
     const safety = specs.find((s) => s.id === 'safety-guard');
     expect(safety?.packageId).toBe('safety-guard');
@@ -281,10 +281,10 @@ describe('loader packageId consistency', () => {
   });
 
   it('does not discover removed memory.extractor package', async () => {
-    const loader = new SubsystemLoader({ builtinDir: join(process.cwd(), 'src', 'subsystems') });
+    const loader = new SubsystemLoader({ builtinDir: join(process.cwd(), 'packages', 'engine', 'src', 'subsystems') });
     const { specs } = await loader.loadAll();
     expect(specs.map((s) => s.id)).not.toContain('memory.extractor');
-    expect(existsSync(join(process.cwd(), 'src', 'subsystems', 'memory-extractor'))).toBe(false);
+    expect(existsSync(join(process.cwd(), 'packages', 'engine', 'src', 'subsystems', 'memory-extractor'))).toBe(false);
   });
 });
 

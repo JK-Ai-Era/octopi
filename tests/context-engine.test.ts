@@ -10,21 +10,21 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { makeTokenUsage } from '../src/core/types/turn.js';
-import type { Message } from '../src/core/types.js';
-import type { LLMMessage, LLMToolDefinition } from '../src/core/interfaces/model-provider.js';
+import { makeTokenUsage } from '@octopi-agent/core/types/turn.js';
+import type { Message } from '@octopi-agent/core/types.js';
+import type { LLMMessage, LLMToolDefinition } from '@octopi-agent/core/interfaces/model-provider.js';
 import type {
   ContextEngine,
   AssembleParams,
   TokenEstimator,
   SummarizeFunction,
-} from '../src/harness/context/types.js';
-import { HeuristicTokenEstimator, estimateTextTokens, estimateLLMMessages } from '../src/harness/context/token-estimator.js';
+} from '@octopi-agent/engine/harness/context/types.js';
+import { HeuristicTokenEstimator, estimateTextTokens, estimateLLMMessages } from '@octopi-agent/engine/harness/context/token-estimator.js';
 import {
   estimateContentBlock,
   estimateToolCallTokens,
   estimateTokens,
-} from '../src/harness/context/token-estimate-fns.js';
+} from '@octopi-agent/engine/harness/context/token-estimate-fns.js';
 import {
   IMAGE_TOKEN_ESTIMATE,
   AUDIO_TOKEN_ESTIMATE,
@@ -32,14 +32,14 @@ import {
   MESSAGE_OVERHEAD_TOKENS,
   JSON_CHARS_PER_TOKEN,
   TOOL_RESULT_CHARS_PER_TOKEN,
-} from '../src/harness/context/token-constants.js';
-import { DefaultMessageSelector } from '../src/harness/context/message-selector.js';
-import { TruncateCompressor } from '../src/harness/context/truncate-compressor.js';
-import { LLMSummaryCompressor } from '../src/harness/context/llm-summarizer.js';
-import { HybridCompressor } from '../src/harness/context/hybrid-compressor.js';
-import { DefaultBudgetAllocator } from '../src/harness/context/budget-allocator.js';
-import { DefaultContextEngine } from '../src/harness/context/default-context-engine.js';
-import { SmartRouter } from '../src/harness/context/smart-router.js';
+} from '@octopi-agent/engine/harness/context/token-constants.js';
+import { DefaultMessageSelector } from '@octopi-agent/engine/harness/context/message-selector.js';
+import { TruncateCompressor } from '@octopi-agent/engine/harness/context/truncate-compressor.js';
+import { LLMSummaryCompressor } from '@octopi-agent/engine/harness/context/llm-summarizer.js';
+import { HybridCompressor } from '@octopi-agent/engine/harness/context/hybrid-compressor.js';
+import { DefaultBudgetAllocator } from '@octopi-agent/engine/harness/context/budget-allocator.js';
+import { DefaultContextEngine } from '@octopi-agent/engine/harness/context/default-context-engine.js';
+import { SmartRouter } from '@octopi-agent/engine/harness/context/smart-router.js';
 
 // ── 测试工具函数 ──
 

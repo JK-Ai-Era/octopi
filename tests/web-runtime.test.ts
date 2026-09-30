@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { OctopiRuntimeStore } from '../src/integration/web/runtime/store.js';
+import { OctopiRuntimeStore } from '@octopi-agent/gateway/web/runtime/store.js';
 
 function createMockClient() {
   const state: {

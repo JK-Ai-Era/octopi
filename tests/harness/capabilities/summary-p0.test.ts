@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import type { ModelProvider, LLMRequest } from '../../../src/core/interfaces/model-provider.js';
+import type { ModelProvider, LLMRequest } from '@octopi-agent/core/interfaces/model-provider.js';
 import {
   applyL1Truncate,
   applyToolOutputGate,
@@ -23,9 +23,9 @@ import {
   createDefaultToolBindings,
   shouldProcessUnit,
   validateStructured,
-} from '../../../src/harness/context/capabilities/summary/index.js';
-import type { ContentUnit, SummaryPolicy } from '../../../src/harness/context/capabilities/summary/index.js';
-import { pickSummarizeProvider } from '../../../src/harness/context/summarize.js';
+} from '@octopi-agent/engine/harness/context/capabilities/summary/index.js';
+import type { ContentUnit, SummaryPolicy } from '@octopi-agent/engine/harness/context/capabilities/summary/index.js';
+import { pickSummarizeProvider } from '@octopi-agent/engine/harness/context/summarize.js';
 
 function mockProvider(content = 'extracted-facts'): ModelProvider & { calls: LLMRequest[] } {
   const calls: LLMRequest[] = [];

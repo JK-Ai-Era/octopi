@@ -19,15 +19,15 @@
  * ```
  */
 
-import type { ModelProvider } from '../core/interfaces/model-provider.js';
-import type { SessionStore } from '../core/interfaces/session-store.js';
-import type { SessionData } from '../harness/session/types.js';
-import type { RegisteredTool } from '../core/types.js';
-import type { AgentEventDetail } from '../harness/shared/events/scenario-events.js';
-import { AgentBuilder } from '../harness/agent/builder.js';
-import { SessionAwareRunner } from '../harness/run/runner.js';
+import type { ModelProvider } from '@octopi-agent/core/interfaces/model-provider.js';
+import type { SessionStore } from '@octopi-agent/core/interfaces/session-store.js';
+import type { SessionData } from '@octopi-agent/engine/harness/session/types.js';
+import type { RegisteredTool } from '@octopi-agent/core/types.js';
+import type { AgentEventDetail } from '@octopi-agent/engine/harness/shared/events/scenario-events.js';
+import { AgentBuilder } from '@octopi-agent/engine/harness/agent/builder.js';
+import { SessionAwareRunner } from '@octopi-agent/engine/harness/run/runner.js';
 
-import { TraceCollector, type TraceCollectorConfig } from '../integration/observability/trace-collector.js';
+import { TraceCollector, type TraceCollectorConfig } from '@octopi-agent/engine/integration/observability/trace-collector.js';
 
 // ── 场景定义 ──
 
@@ -144,7 +144,7 @@ export interface ScenarioRunnerConfig {
 export class ScenarioRunner {
   private config: ScenarioRunnerConfig;
   private runner!: SessionAwareRunner;
-  private agent!: import('../harness/run/agent/index.js').Agent;
+  private agent!: import('@octopi-agent/engine/harness/run/agent/index.js').Agent;
   private traceCollector?: TraceCollector;
 
   constructor(config: ScenarioRunnerConfig) {

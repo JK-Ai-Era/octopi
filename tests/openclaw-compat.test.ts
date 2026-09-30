@@ -11,11 +11,11 @@
  * 4. OpenRouter — registerProvider + registerMediaUnderstanding + registerImageGeneration + registerModelCatalog + registerSpeech + registerMusic + registerVideo
  */
 import { describe, test, expect, beforeEach } from 'vitest';
-import { makeTokenUsage, nominalTotalTokens } from '../src/core/types/turn.js';
-import { PluginApi } from '../src/harness/extension/plugin-ecosystem/plugins/api.js';
-import { PluginManager } from '../src/harness/extension/plugin-ecosystem/plugins/manager.js';
-import { definePluginEntry } from '../src/harness/extension/plugin-ecosystem/plugins/entry.js';
-import type { LoadedPlugin } from '../src/harness/extension/plugin-ecosystem/plugins/loader.js';
+import { makeTokenUsage, nominalTotalTokens } from '@octopi-agent/core/types/turn.js';
+import { PluginApi } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/plugins/api.js';
+import { PluginManager } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/plugins/manager.js';
+import { definePluginEntry } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/plugins/entry.js';
+import type { LoadedPlugin } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/plugins/loader.js';
 
 // ─────────────────────────────────────────────
 // 模拟 OpenClaw 插件的 register 逻辑

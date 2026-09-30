@@ -1,0 +1,25 @@
+# Web — Octopi Web Runtime / WebUI
+
+第一版 Web Runtime 骨架，用于通过浏览器接入 Gateway。
+
+## 模块
+
+| 目录 | 职责 |
+|------|------|
+| `api/` | Web API Router（REST 骨架） |
+| `sdk/` | Web Protocol SDK（REST + WS + 连接状态机） |
+| `runtime/` | Web Runtime Store（会话、聊天、工具、inspector 状态层） |
+
+## 当前定位
+
+- 作为 Gateway 的另一类客户端
+- 优先覆盖：连接、agents、sessions、messages、abort、approvals、memory
+- 不直接替代 TUI，而是提供浏览器侧的交互运行时
+
+## 关联设计
+
+- `packages/webui/DESIGN.md` — 视觉与八层检查器（产品）
+- `docs/context-layer-contracts.md` — System 层契约（对外）
+- `arch/web-runtime-design.md` — Web Runtime 技术设计（as-built 归档）
+- `arch/web-conversation-model-design.md` — 会话显示模型（as-built 归档）
+- `arch/context-layers-ui-design.md` — 上下文 Runtime UI（as-built 归档）

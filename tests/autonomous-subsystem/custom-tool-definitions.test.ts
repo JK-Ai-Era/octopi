@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { SubsystemRuntime } from '../../src/harness/collaboration/autonomous-subsystem/runtime.js';
-import { DefaultEventBus } from '../../src/core/primitives/event-bus.js';
-import type { SubsystemSpec } from '../../src/harness/collaboration/autonomous-subsystem/types.js';
+import { SubsystemRuntime } from '@octopi-agent/engine/harness/collaboration/autonomous-subsystem/runtime.js';
+import { DefaultEventBus } from '@octopi-agent/core/primitives/event-bus.js';
+import type { SubsystemSpec } from '@octopi-agent/engine/harness/collaboration/autonomous-subsystem/types.js';
 
 const events = new DefaultEventBus();
 

@@ -3,13 +3,13 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import type { Message } from '../../../src/core/types.js';
-import type { LLMMessage } from '../../../src/core/interfaces/model-provider.js';
-import { createCompactEngine } from '../../../src/harness/context/capabilities/compact/index.js';
-import { DefaultContextEngine } from '../../../src/harness/context/default-context-engine.js';
-import { createMemorySummaryCache } from '../../../src/harness/context/capabilities/summary/memory-cache.js';
-import { createSummaryPort } from '../../../src/harness/context/capabilities/summary/index.js';
-import type { ModelProvider } from '../../../src/core/interfaces/model-provider.js';
+import type { Message } from '@octopi-agent/core/types.js';
+import type { LLMMessage } from '@octopi-agent/core/interfaces/model-provider.js';
+import { createCompactEngine } from '@octopi-agent/engine/harness/context/capabilities/compact/index.js';
+import { DefaultContextEngine } from '@octopi-agent/engine/harness/context/default-context-engine.js';
+import { createMemorySummaryCache } from '@octopi-agent/engine/harness/context/capabilities/summary/memory-cache.js';
+import { createSummaryPort } from '@octopi-agent/engine/harness/context/capabilities/summary/index.js';
+import type { ModelProvider } from '@octopi-agent/core/interfaces/model-provider.js';
 
 function userMsg(text: string): Message {
   return { role: 'user', content: text, timestamp: Date.now() };

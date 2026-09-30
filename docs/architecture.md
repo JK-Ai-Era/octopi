@@ -4,7 +4,7 @@
 >
 > 本文档是 Octopi 的完整架构设计。
 > 长期不变量见 [架构宪法](./north-star.md)。
-> 与实现对齐：Observer Run Observatory（v0.43.3+）见 [observer-domain.md](./observer-domain.md)；公用能力 Summary/Compact（v0.44.0+）见 [context-layer-contracts.md](./context-layer-contracts.md) 与 `src/harness/context/capabilities/`。
+> 与实现对齐：Observer Run Observatory（v0.43.3+）见 [observer-domain.md](./observer-domain.md)；公用能力 Summary/Compact（v0.44.0+）见 [context-layer-contracts.md](./context-layer-contracts.md) 与 `packages/engine/src/harness/context/capabilities/`。
 
 ---
 
@@ -100,7 +100,7 @@ AI 在早期阶段，应用构建思路在不断发展。架构设计的核心�
 Runner 映射到 EventBus 的 `turn.end` 时会带上 `data.phase`。Web `runStatus`：`pre_tools → 'tools'`，`final → 'idle'`。TUI 在 `pre_tools` 时保持 processing。
 
 ```
-src/loop/
+packages/core/src/loop/
 ├── agent-loop.ts         # agentLoop() — 纯函数
 ├── call-model.ts         # callModel() — LLM 调用（watchdog + finishReason）
 ├── error-classifier.ts   # classifyError() — 错误分类
@@ -108,7 +108,7 @@ src/loop/
 └── index.ts
 ```
 
-可运行 Agent 门面在 `src/harness/agent/`（`run()` = reliability 包装）。
+可运行 Agent 门面在 `packages/engine/src/harness/agent/`（`run()` = reliability 包装）。
 
 ### Layer 1: Core — 机制原语 + 接口契约
 
@@ -117,7 +117,7 @@ src/loop/
 **特性**：不依赖任何外层。不包含策略实现。**不 re-export Loop**（`agentLoop` / `AgentLoopEvent` 从 `loop/` 导入；Agent 门面从 `harness/agent/` 导入）。
 
 ```
-src/core/
+packages/core/src/core/
 ├── interfaces/           # Kernel + Product port 类型
 │   ├── kernel.ts
 │   ├── model-provider.ts
@@ -154,7 +154,7 @@ Domain 契约在 **harness 领域内**（memory、mcp、multi-agent、orchestrat
 
 **职责**：实现 Core Kernel ports 的具体策略，提供框架的全部高级功能；持有 Domain 产品契约与实现。
 
-**组织**：`src/harness/` 顶层即产品域目录（域 = 限界上下文）。数字与模块清单以 [`docs/domains.yaml`](./domains.yaml) 为唯一权威；叙事见 [`docs/domains.md`](./domains.md)。
+**组织**：`packages/engine/src/harness/` 顶层即产品域目录（域 = 限界上下文）。数字与模块清单以 [`docs/domains.yaml`](./domains.yaml) 为唯一权威；叙事见 [`docs/domains.md`](./domains.md)。
 
 **特性**：每个域有自己的类型、实现、入口文件。域间通过对方 **types** 通信，不共享内部状态。
 
@@ -167,16 +167,19 @@ Domain 契约在 **harness 领域内**（memory、mcp、multi-agent、orchestrat
 **特性**：只做适配转换，不做业务逻辑决策。
 
 ```
-src/integration/
+packages/engine/src/integration/   # 库能力（随 @octopi-agent/engine）
 ├── providers/            # LLM Provider（OpenAI, Anthropic）
 ├── web-search/           # Web Search Provider（DuckDuckGo, Tavily, Brave, Serper, MiMo）
 ├── storage/              # 存储后端（JSONL, SQLite, Memory）
 ├── observability/        # Telemetry：Trace、Metrics、Exporters（Core Observer 适配）
-├── gateway/              # 网关
+├── mcp/ · agent-runtime/
+
+packages/gateway/src/              # 进程面（@octopi-agent/gateway）
+├── gateway/              # Gateway HTTP/WS
 ├── protocols/            # 协议适配（HTTP）
-├── tui/                  # 终端 UI
-├── web/                  # Web Runtime / WebUI 骨架
-└── index.ts
+└── web/                  # Web Runtime / SDK
+
+src/integration/tui/               # 套件产品壳
 ```
 
 > **Observer Domain**：Telemetry（上表 `observability/` + Core `Observer`）与 **Run Observatory**（`harness/observability/observer/`，配置键 `observer`）同属观测领域、实现分离。见 [docs/observer-domain.md](./observer-domain.md)。Run Observatory 缺省 `observer.level=off`；调试 REST 为根路径 `/debug/run/*`（非 `/api/v1`）。
@@ -187,7 +190,7 @@ src/integration/
 
 > **10 个产品域**（治理 / 会话 / 智能体 / 记忆 / 知识 / 激活 / 运行 / 上下文 / 扩展 / 协作）  
 > 权威清单：[`docs/domains.md`](./domains.md) · [`docs/domains.yaml`](./domains.yaml)  
-> 本节按能力说明实现细节；目录以域优先布局为准（`src/harness/governance|session|agent|memory|knowledge|activation|run|context|extension|collaboration/`）。
+> 本节按能力说明实现细节；目录以域优先布局为准（`packages/engine/src/harness/governance|session|agent|memory|knowledge|activation|run|context|extension|collaboration/`）。
 
 ### 3.1 Agent Building — Agent 构建
 
@@ -423,7 +426,7 @@ subsystems/
 └── ...
 ```
 
-**支持来源**：框架内置、用户自定义、npm 包（`@octopi/subsystem-*` / `octopi-subsystem-*`）
+**支持来源**：框架内置、用户自定义、npm 包（`@octopi-agent/subsystem-*` / `octopi-subsystem-*`）
 
 ### 3.10 Multi-Agent — 多 Agent 编排
 
@@ -832,7 +835,7 @@ Gateway serve 路径经 `builder.build()` 装配；治理类子系统 signal 仅
 - `docs/domain-split.md` — run-guard / orchestration / AsyncTask 领域切分
 - `docs/CONTRIBUTING.md` — 开发规范
 - `docs/context-layer-contracts.md` — ContextLayer / Assembler 契约
-- `web/DESIGN.md` — WebUI（Playground）视觉与八层检查器设计
+- `packages/webui/DESIGN.md` — WebUI（Playground）视觉与八层检查器设计
 - `arch/web-runtime-design.md` — Web Runtime 技术设计（as-built 归档）
 - `arch/web-conversation-model-design.md` — WebUI 会话显示模型（as-built 归档）
 - `arch/context-layers-ui-design.md` — 上下文 Runtime UI 设计（as-built 归档）

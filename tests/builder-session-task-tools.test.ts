@@ -4,8 +4,8 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { AgentBuilder } from '../src/harness/agent/builder.js';
-import type { ModelProvider } from '../src/core/interfaces/model-provider.js';
+import { AgentBuilder } from '@octopi-agent/engine/harness/agent/builder.js';
+import type { ModelProvider } from '@octopi-agent/core/interfaces/model-provider.js';
 
 const stubProvider: ModelProvider = {
   name: 'stub',

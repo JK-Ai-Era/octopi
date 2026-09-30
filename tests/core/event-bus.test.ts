@@ -6,8 +6,8 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   DefaultEventBus,
   ThrottledEventBus,
-} from '../../src/core/primitives/event-bus.js';
-import type { AgentEvent } from '../../src/core/primitives/event-bus.js';
+} from '@octopi-agent/core/primitives/event-bus.js';
+import type { AgentEvent } from '@octopi-agent/core/primitives/event-bus.js';
 
 describe('DefaultEventBus', () => {
   it('订阅与发射', () => {

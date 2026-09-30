@@ -5,7 +5,7 @@
 > An agent is not a class — it's a complete runtime.
 > A framework's value lies not in how many defaults it ships, but in how many clean interfaces it defines.
 
-[中文文档](./README_CN.md) | [Architecture](./docs/ARCHITECTURE.md) | [Contributing](./docs/CONTRIBUTING.md)
+[中文文档](./README_CN.md) | [Architecture](./docs/architecture.md) | [Contributing](./docs/CONTRIBUTING.md)
 
 ---
 
@@ -111,7 +111,7 @@ See [docs/context-layer-contracts.md](./docs/context-layer-contracts.md).
 ## Quick Start
 
 ```typescript
-import { AgentBuilder, OpenAIProvider } from 'octopi';
+import { AgentBuilder, OpenAIProvider } from 'octopi-agent';
 
 const { agent, runner } = await new AgentBuilder()
   .model(new OpenAIProvider({ apiKey: process.env.OPENAI_API_KEY! }))
@@ -130,7 +130,7 @@ for await (const event of runner.handle('session-1', userMessage)) {
 Connect any MCP Server (inject the Integration client factory):
 
 ```typescript
-import { AgentBuilder, createSdkMcpClient } from 'octopi';
+import { AgentBuilder, createSdkMcpClient } from 'octopi-agent';
 
 const { agent, runner } = await new AgentBuilder()
   .model('gpt-4o')
@@ -193,36 +193,34 @@ npm test
 
 ## Project Structure
 
+npm workspaces monorepo — five publishable packages:
+
 ```
-src/
-├── loop/                    Layer 0  Pure execution loop
-├── core/                    Layer 1  Primitives + interfaces + types
-│   ├── primitives/               EventBus, StateMachine
-│   ├── interfaces/               18 interface contracts
-│   └── types/                    Core type definitions
-├── harness/                 Layer 2  Product domains
-│   ├── agent-building/           Builder, persona, config bridge, runner injection
-│   ├── context/                  ContextLayer assembly, window compression, compact-key (E4)
-│   ├── capabilities/             Cross-cutting capabilities: summary extract + compact engine
-│   ├── session-acl/              Role catalog, authorizeRun, preferred/handoff (E6/I3)
-│   ├── tool-effect/              toolIsolation cwd policy (I5)
-│   ├── security/                 Risk evaluation, shell parsing
-│   ├── reliability/              Reliability wrapper, circuit breaker
-│   ├── plugin-ecosystem/         Plugins, tools, skills, MCP
-│   ├── multi-agent/              Agent registry, Swarm, AgentProcess
-│   ├── autonomous-subsystem/     Sense/Think/Act/Signal/Boundary framework
-│   ├── session-tasks/            SessionTask (goal/step) — default path
-│   ├── run-guard/                Checkpoint supervision (DefaultRunGuard)
-│   ├── orchestration/            Experimental workflow/scheduler/planner
-│   ├── concurrency/              Load balancing, rate limiting, SessionLease
-│   ├── execution-environment/    Sandboxing, workspace
-│   ├── human-in-the-loop/        Approval workflows
-│   ├── memory/                   Memory, cognition, wisdom
-│   └── runner.ts                 SessionAwareRunner (session lock, tool cwd, ACL)
-├── integration/             Layer 3  External adapters
-│   └── web-search/               DuckDuckGo, Tavily, Brave, Serper, MiMo
-└── testing/                 Test utilities
+octopi-agent                 Suite (CLI bin: octopi) + config IO
+  ├─ @octopi-agent/engine    Harness 10 domains + library integrations
+  │    └─ @octopi-agent/core Loop + Kernel contracts
+  ├─ @octopi-agent/gateway   HTTP/WS process plane + Web runtime
+  └─ @octopi-agent/webui     Prebuilt Web console (static)
+
+packages/
+  core/       Layer 0–1   src/loop + src/core (agentLoop, Kernel ports)
+  engine/     Layer 2–3   src/harness/** + integration/{providers,storage,mcp,observability,web-search,agent-runtime} + subsystems
+  gateway/    Layer 3     gateway/, protocols/, web/{api,runtime,sdk,conversation}
+  webui/      Product     Vite React console
+src/          Suite       cli/, init, config IO + compose, testing/, tui/
+tests/        Vitest (root)
+docs/         Public docs · arch/  Internal design
 ```
+
+Import surfaces:
+
+| Need | Import |
+|------|--------|
+| Suite / CLI | `octopi-agent` |
+| Runtime | `@octopi-agent/engine` |
+| Kernel | `@octopi-agent/core` |
+| Gateway / Web client | `@octopi-agent/gateway` |
+| Plugin SDK | `@octopi-agent/engine/plugin-sdk/plugin-entry` |
 
 Runtime config knobs (see `octopi.example.json` + `docs/KNOWN-ISSUES.md`): `toolIsolation`, `sessionAcl`, `agents[].workspace` / `maxSessionRights`, plus capability keys `summary` / `compact` / `models.level.summary`.
 
@@ -230,16 +228,14 @@ Runtime config knobs (see `octopi.example.json` + `docs/KNOWN-ISSUES.md`): `tool
 
 ## Related Docs
 
-- [Architecture](./docs/ARCHITECTURE.md) — Full architecture design
-- [Architecture Overview](./arch/overview.md) — DDD domain organization
-- [Layer Rules](./arch/layer-rules.md) — Dependency rules
-- [Invariants](./arch/invariants.md) — Architecture invariants
+- [Architecture](./docs/architecture.md) — Full architecture design
+- [Package split](./arch/npm-package-split.md) — Five-package topology (internal handoff)
 - [Plugin System](./docs/plugin-system.md) — Plugin system details
 - [Session Tasks](./docs/task-system.md) — SessionTask design baseline
 - [Domain Split](./docs/domain-split.md) — run-guard / orchestration / AsyncTask boundaries
 - [Contributing](./docs/CONTRIBUTING.md) — Development guidelines
 - [Changelog](./CHANGELOG.md) — Version history
-- [Web UI Design](./web/DESIGN.md) — Playground visual system & eight-layer inspector
+- [Web UI Design](./packages/webui/DESIGN.md) — Playground visual system & eight-layer inspector
 
 ---
 

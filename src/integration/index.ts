@@ -1,64 +1,9 @@
 /**
- * Integration 层统一导出
+ * Integration 层统一导出（根兼容入口）
  *
- * Layer 3: 集成层
- * 协议适配、存储后端、沙盒、可观测性
+ * engine 库能力见 `@octopi-agent/engine/integration`；
+ * gateway 进程面见 `@octopi-agent/gateway`。
  */
 
-// ── Storage ──
-export { JsonlSessionStore } from './storage/jsonl.js';
-export { InMemorySessionStore } from './storage/memory.js';
-export { SessionArchiveManager } from './storage/archive-manager.js';
-export type { ArchiveManagerOptions } from './storage/archive-manager.js';
-export {
-  createSqliteSessionIndex,
-  rebuildSessionIndexFromStore,
-  ensureSessionIndexFresh,
-} from './storage/session-index.js';
-export type {
-  SessionIndexBackend,
-  SessionIndexSink,
-  SessionIndexPrefilterQuery,
-  SessionIndexCandidate,
-} from './storage/session-index.js';
-
-// ── Observability ──
-export { NoopObserver } from './observability/noop-observer.js';
-export { LogObserver } from './observability/log-observer.js';
-export { createRunTelemetry } from './observability/run-telemetry.js';
-
-// ── MCP ──
-export { SdkMcpClient, createSdkMcpClient } from './mcp/index.js';
-
-// ── Web Search ──
-export {
-  createDuckDuckGoProvider,
-  createTavilyProvider,
-  createBraveProvider,
-  createSerperProvider,
-  createMimoProvider,
-  createWebSearchProviderFromSlot,
-  resolveWebSearchProviders,
-  createWebSearchWithFallback,
-} from './web-search/index.js';
-export type {
-  WebSearchConfig,
-  WebSearchProviderSlotConfig,
-  ResolvedWebSearchProviders,
-} from './web-search/index.js';
-
-// ── Agent Runtime sources（Integration 适配）──
-export {
-  channelMessageToTrigger,
-  dispatchChannelMessage,
-  WebhookSource,
-  FileWatchSource,
-} from './agent-runtime/index.js';
-export type {
-  ChannelMessageSourceOptions,
-  WebhookSourceConfig,
-  FileWatchSourceConfig,
-} from './agent-runtime/index.js';
-
-// ── Integration 层类型（canonical） ──
-export * from './types/index.js';
+export * from '@octopi-agent/engine/integration';
+export * from '@octopi-agent/gateway';

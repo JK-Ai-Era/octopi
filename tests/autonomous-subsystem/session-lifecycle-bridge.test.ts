@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
-import { DefaultEventBus } from '../../src/core/primitives/event-bus.js';
-import { MetricsStore } from '../../src/harness/collaboration/autonomous-subsystem/sense/metrics.js';
-import { SessionLifecycleBridge } from '../../src/harness/collaboration/autonomous-subsystem/sense/session-lifecycle-bridge.js';
+import { DefaultEventBus } from '@octopi-agent/core/primitives/event-bus.js';
+import { MetricsStore } from '@octopi-agent/engine/harness/collaboration/autonomous-subsystem/sense/metrics.js';
+import { SessionLifecycleBridge } from '@octopi-agent/engine/harness/collaboration/autonomous-subsystem/sense/session-lifecycle-bridge.js';
 
 function createBridge() {
   const events = new DefaultEventBus({ debug: false });

@@ -9,21 +9,21 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { agentLoop } from '../src/loop/agent-loop.js';
-import { callModel } from '../src/loop/call-model.js';
+import { agentLoop } from '@octopi-agent/core/loop/agent-loop.js';
+import { callModel } from '@octopi-agent/core/loop/call-model.js';
 import type {
   AgentContext,
   AgentLoopConfig,
   AgentLoopEvent,
   AgentTool,
-} from '../src/loop/types.js';
+} from '@octopi-agent/core/loop/types.js';
 import type {
   ModelProvider,
   LLMRequest,
   LLMResponse,
   LLMStreamChunk,
-} from '../src/core/interfaces/model-provider.js';
-import type { Message } from '../src/core/types.js';
+} from '@octopi-agent/core/interfaces/model-provider.js';
+import type { Message } from '@octopi-agent/core/types.js';
 
 function userMsg(content: string): Message {
   return { role: 'user', content, timestamp: Date.now() };

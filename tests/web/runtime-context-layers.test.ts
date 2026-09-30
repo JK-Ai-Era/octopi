@@ -3,9 +3,9 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { OctopiRuntimeStore } from '../../src/integration/web/runtime/store.js';
-import type { OctopiClient, AgentEventEnvelope } from '../../src/integration/web/sdk/client.js';
-import type { AssembleManifest } from '../../src/harness/context/layer-types.js';
+import { OctopiRuntimeStore } from '@octopi-agent/gateway/web/runtime/store.js';
+import type { OctopiClient, AgentEventEnvelope } from '@octopi-agent/gateway/web/sdk/client.js';
+import type { AssembleManifest } from '@octopi-agent/engine/harness/context/layer-types.js';
 
 function mockClient(): OctopiClient & { __emit(e: AgentEventEnvelope): void } {
   const listeners: Record<string, unknown> = {};

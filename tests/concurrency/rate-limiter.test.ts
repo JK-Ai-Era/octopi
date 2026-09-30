@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { RateLimiter, ProviderRateLimitManager } from '../../src/harness/run/concurrency/rate-limiter.js';
+import { RateLimiter, ProviderRateLimitManager } from '@octopi-agent/engine/harness/run/concurrency/rate-limiter.js';
 
 describe('RateLimiter', () => {
   beforeEach(() => {

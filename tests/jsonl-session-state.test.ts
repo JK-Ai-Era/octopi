@@ -6,8 +6,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { JsonlSessionStore } from '../src/integration/storage/jsonl.js';
-import type { SessionData } from '../src/harness/session/types.js';
+import { JsonlSessionStore } from '@octopi-agent/engine/integration/storage/jsonl.js';
+import type { SessionData } from '@octopi-agent/engine/harness/session/types.js';
 
 function makeSession(id: string, agentId: string): SessionData {
   return {

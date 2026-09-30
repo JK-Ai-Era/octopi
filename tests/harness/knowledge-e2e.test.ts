@@ -9,18 +9,18 @@ import { mkdtemp, writeFile, mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { KnowledgeSourceStore } from '../../src/harness/knowledge/source-store.js';
-import { KnowledgeIngest } from '../../src/harness/knowledge/ingest.js';
-import { KnowledgeRetriever } from '../../src/harness/knowledge/retriever.js';
-import { GroundingAssembler, stripKnowledgeGrounding } from '../../src/harness/knowledge/grounding.js';
-import { KnowledgeHitLog } from '../../src/harness/knowledge/hit-log.js';
-import { KnowledgePurger } from '../../src/harness/knowledge/purge.js';
-import { createKnowledgeTools } from '../../src/harness/extension/plugin-ecosystem/tools/knowledge.js';
-import { createDefaultSystemPromptAssembler } from '../../src/harness/context/system-prompt-assembler.js';
-import { InMemoryMemoryStore } from '../../src/harness/memory/store.js';
-import type { EmbeddingProvider } from '../../src/harness/memory/sqlite/embedding.js';
-import type { Message } from '../../src/core/types.js';
-import type { RegisteredTool } from '../../src/core/types.js';
+import { KnowledgeSourceStore } from '@octopi-agent/engine/harness/knowledge/source-store.js';
+import { KnowledgeIngest } from '@octopi-agent/engine/harness/knowledge/ingest.js';
+import { KnowledgeRetriever } from '@octopi-agent/engine/harness/knowledge/retriever.js';
+import { GroundingAssembler, stripKnowledgeGrounding } from '@octopi-agent/engine/harness/knowledge/grounding.js';
+import { KnowledgeHitLog } from '@octopi-agent/engine/harness/knowledge/hit-log.js';
+import { KnowledgePurger } from '@octopi-agent/engine/harness/knowledge/purge.js';
+import { createKnowledgeTools } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/tools/knowledge.js';
+import { createDefaultSystemPromptAssembler } from '@octopi-agent/engine/harness/context/system-prompt-assembler.js';
+import { InMemoryMemoryStore } from '@octopi-agent/engine/harness/memory/store.js';
+import type { EmbeddingProvider } from '@octopi-agent/engine/harness/memory/sqlite/embedding.js';
+import type { Message } from '@octopi-agent/core/types.js';
+import type { RegisteredTool } from '@octopi-agent/core/types.js';
 
 function user(text: string): Message {
   return { role: 'user', content: text, timestamp: Date.now() };

@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { DefaultEventBus } from '../../src/core/index.js';
+import { DefaultEventBus } from '@octopi-agent/core/index.js';
 import {
   AgentRuntime,
   ScheduleSource,
@@ -12,9 +12,9 @@ import {
   emitEscalate,
   emitAgentSignal,
   RuntimeEvents,
-} from '../../src/harness/activation/index.js';
-import type { RunDispatcher, Trigger } from '../../src/harness/activation/index.js';
-import type { AgentEvent } from '../../src/core/primitives/event-bus.js';
+} from '@octopi-agent/engine/harness/activation/index.js';
+import type { RunDispatcher, Trigger } from '@octopi-agent/engine/harness/activation/index.js';
+import type { AgentEvent } from '@octopi-agent/core/primitives/event-bus.js';
 
 function mockDispatcher(calls: unknown[]): RunDispatcher {
   return {

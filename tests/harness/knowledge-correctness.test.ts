@@ -2,9 +2,9 @@
  * 数据正确性包 — path 防碰撞 / 差量 prune / tunables
  */
 import { describe, expect, it } from 'vitest';
-import { UrlFetcher } from '../../src/harness/knowledge/fetchers.js';
-import { KnowledgeSourceStore } from '../../src/harness/knowledge/source-store.js';
-import { KnowledgeIndexStore } from '../../src/harness/knowledge/index-store.js';
+import { UrlFetcher } from '@octopi-agent/engine/harness/knowledge/fetchers.js';
+import { KnowledgeSourceStore } from '@octopi-agent/engine/harness/knowledge/source-store.js';
+import { KnowledgeIndexStore } from '@octopi-agent/engine/harness/knowledge/index-store.js';
 
 describe('pathFromUrl stability', () => {
   it('separates query variants', () => {

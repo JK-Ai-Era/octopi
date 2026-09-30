@@ -8,7 +8,7 @@
 
 import { existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { getOctopiHome } from '../../init.js';
+import { getOctopiHome } from '@octopi-agent/engine/paths.js';
 
 export interface DataFixResult {
   findings: Array<{
@@ -162,7 +162,7 @@ export function detectDataLayer(targets: AgentDataTarget[]): DataFixResult['find
  */
 export async function migrateAgentDatabase(target: AgentDataTarget): Promise<string> {
   const dbPath = join(target.home, 'agent.db');
-  const { AgentDatabase } = await import('../../harness/memory/sqlite/agent-db.js');
+  const { AgentDatabase } = await import('@octopi-agent/engine/harness/memory/sqlite/agent-db.js');
   const created = !existsSync(dbPath);
   const db = await AgentDatabase.create({ dbPath });
   try {

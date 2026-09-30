@@ -12,9 +12,9 @@ import {
   withRunModel,
   getRunModelProvider,
   getRunModelName,
-} from '../src/harness/run/reliability/run-model-context.js';
-import { bindModelName } from '../src/harness/run/reliability/model-binding.js';
-import type { ModelProvider } from '../src/core/interfaces/model-provider.js';
+} from '@octopi-agent/engine/harness/run/reliability/run-model-context.js';
+import { bindModelName } from '@octopi-agent/engine/harness/run/reliability/model-binding.js';
+import type { ModelProvider } from '@octopi-agent/core/interfaces/model-provider.js';
 
 function makeProvider(name: string, defaultModel: string): ModelProvider {
   return {

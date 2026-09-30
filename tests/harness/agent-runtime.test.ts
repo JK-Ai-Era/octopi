@@ -9,7 +9,7 @@ import {
   CoalesceBuffer,
   compileMessages,
   RuntimeEvents,
-} from '../../src/harness/activation/index.js';
+} from '@octopi-agent/engine/harness/activation/index.js';
 import type {
   DispatchResult,
   RunDispatcher,
@@ -17,9 +17,9 @@ import type {
   RuntimeAgent,
   Trigger,
   TriggerSource,
-} from '../../src/harness/activation/index.js';
-import type { AgentEvent } from '../../src/core/primitives/event-bus.js';
-import { DefaultEventBus } from '../../src/core/index.js';
+} from '@octopi-agent/engine/harness/activation/index.js';
+import type { AgentEvent } from '@octopi-agent/core/primitives/event-bus.js';
+import { DefaultEventBus } from '@octopi-agent/core/index.js';
 
 // ── helpers ──
 

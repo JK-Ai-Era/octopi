@@ -5,16 +5,16 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { makeTokenUsage } from '../src/core/types/turn.js';
-import { OpenAIProvider } from '../src/integration/providers/openai.js';
-import { AnthropicProvider } from '../src/integration/providers/anthropic.js';
+import { makeTokenUsage } from '@octopi-agent/core/types/turn.js';
+import { OpenAIProvider } from '@octopi-agent/engine/integration/providers/openai.js';
+import { AnthropicProvider } from '@octopi-agent/engine/integration/providers/anthropic.js';
 import { loadConfig } from '../src/config.js';
-import { Agent } from '../src/harness/run/agent/agent.js';
-import type { ModelProvider, LLMResponse } from '../src/core/interfaces/model-provider.js';
-import type { RegisteredTool } from '../src/core/types.js';
-import { DefaultEventBus } from '../src/core/primitives/event-bus.js';
-import { DefaultSecurityGuard } from '../src/harness/governance/security/default-security-guard.js';
-import { DefaultContextEngine } from '../src/harness/context/default-context-engine.js';
+import { Agent } from '@octopi-agent/engine/harness/run/agent/agent.js';
+import type { ModelProvider, LLMResponse } from '@octopi-agent/core/interfaces/model-provider.js';
+import type { RegisteredTool } from '@octopi-agent/core/types.js';
+import { DefaultEventBus } from '@octopi-agent/core/primitives/event-bus.js';
+import { DefaultSecurityGuard } from '@octopi-agent/engine/harness/governance/security/default-security-guard.js';
+import { DefaultContextEngine } from '@octopi-agent/engine/harness/context/default-context-engine.js';
 import { writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';

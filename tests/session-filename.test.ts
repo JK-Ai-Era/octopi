@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { toSessionFileName } from '../src/core/session-filename.js';
+import { toSessionFileName } from '@octopi-agent/core/session-filename.js';
 
 describe('toSessionFileName', () => {
   it('maps colons to underscores', () => {

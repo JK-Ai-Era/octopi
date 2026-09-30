@@ -1,0 +1,109 @@
+{
+  "name": "@octopi-agent/engine",
+  "version": "0.55.0",
+  "description": "Octopi Engine — Harness 10 域 + Integration 库能力",
+  "type": "module",
+  "license": "Apache-2.0",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./harness": {
+      "types": "./dist/harness/index.d.ts",
+      "import": "./dist/harness/index.js"
+    },
+    "./harness/orchestration": {
+      "types": "./dist/harness/collaboration/orchestration/index.d.ts",
+      "import": "./dist/harness/collaboration/orchestration/index.js"
+    },
+    "./integration": {
+      "types": "./dist/integration/index.d.ts",
+      "import": "./dist/integration/index.js"
+    },
+    "./plugin-sdk/plugin-entry": {
+      "types": "./dist/harness/extension/plugin-ecosystem/plugins/entry.d.ts",
+      "import": "./dist/harness/extension/plugin-ecosystem/plugins/entry.js"
+    },
+    "./plugin-sdk/api": {
+      "types": "./dist/harness/extension/plugin-ecosystem/plugins/api.d.ts",
+      "import": "./dist/harness/extension/plugin-ecosystem/plugins/api.js"
+    },
+    "./plugin-sdk/manifest": {
+      "types": "./dist/harness/extension/plugin-ecosystem/plugins/manifest.d.ts",
+      "import": "./dist/harness/extension/plugin-ecosystem/plugins/manifest.js"
+    },
+    "./plugin-sdk/capability": {
+      "types": "./dist/harness/extension/plugin-ecosystem/plugins/capability.d.ts",
+      "import": "./dist/harness/extension/plugin-ecosystem/plugins/capability.js"
+    },
+    "./plugin-sdk/loader": {
+      "types": "./dist/harness/extension/plugin-ecosystem/plugins/loader.d.ts",
+      "import": "./dist/harness/extension/plugin-ecosystem/plugins/loader.js"
+    },
+    "./plugin-sdk/manager": {
+      "types": "./dist/harness/extension/plugin-ecosystem/plugins/manager.d.ts",
+      "import": "./dist/harness/extension/plugin-ecosystem/plugins/manager.js"
+    },
+    "./package.json": "./package.json",
+    "./harness/*": {
+      "types": "./dist/harness/*",
+      "import": "./dist/harness/*"
+    },
+    "./integration/*": {
+      "types": "./dist/integration/*",
+      "import": "./dist/integration/*"
+    },
+    "./config-schema/*": {
+      "types": "./dist/config-schema/*",
+      "import": "./dist/config-schema/*"
+    },
+    "./*": {
+      "types": "./dist/*",
+      "import": "./dist/*"
+    }
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "NOTICE",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node ./scripts/copy-engine-assets.mjs",
+    "dev": "tsc -p tsconfig.json --watch"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@octopi-agent/core": "^0.55.0",
+    "js-yaml": "^4.3.2",
+    "zod": "^4.4.3"
+  },
+  "optionalDependencies": {
+    "sqlite-vec": "^0.1.9"
+  },
+  "private": false,
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JK-Ai-Era/octopi.git",
+    "directory": "packages/engine"
+  },
+  "homepage": "https://github.com/JK-Ai-Era/octopi#readme",
+  "bugs": {
+    "url": "https://github.com/JK-Ai-Era/octopi/issues"
+  },
+  "keywords": [
+    "agent",
+    "ai",
+    "llm",
+    "octopi"
+  ]
+}

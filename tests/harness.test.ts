@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { makeTokenUsage } from '../src/core/types/turn.js';
+import { makeTokenUsage } from '@octopi-agent/core/types/turn.js';
 import {
   AgentBuilder,
   createAgent,
@@ -12,19 +12,19 @@ import {
   DefaultContextEngine,
   SessionAwareRunner,
   DefaultRunGuard,
-} from '../src/harness/index.js';
+} from '@octopi-agent/engine/harness/index.js';
 import {
   InMemorySessionStore,
-} from '../src/integration/storage/memory.js';
+} from '@octopi-agent/engine/integration/storage/memory.js';
 import {
   DefaultEventBus,
-} from '../src/core/index.js';
-import { BudgetPolicyEngine } from '../src/harness/run/budget/budget.js';
+} from '@octopi-agent/core/index.js';
+import { BudgetPolicyEngine } from '@octopi-agent/engine/harness/run/budget/budget.js';
 import type {
   ModelProvider,
   LLMStreamChunk,
   RegisteredTool,
-} from '../src/core/index.js';
+} from '@octopi-agent/core/index.js';
 
 // ── Mock 工厂 ──
 
@@ -381,7 +381,7 @@ describe('DefaultContextEngine', () => {
 
 describe('Config Bridge — RunGuard 解析', () => {
   it('应该从配置创建 DefaultRunGuard', async () => {
-    const { resolveRunGuard } = await import('../src/harness/agent/config-bridge.js');
+    const { resolveRunGuard } = await import('@octopi-agent/engine/harness/agent/config-bridge.js');
     const providers = new Map<string, ModelProvider>();
     providers.set('mock', createMockModelProvider());
 
@@ -396,7 +396,7 @@ describe('Config Bridge — RunGuard 解析', () => {
   });
 
   it('enabled=false 应该返回 undefined', async () => {
-    const { resolveRunGuard } = await import('../src/harness/agent/config-bridge.js');
+    const { resolveRunGuard } = await import('@octopi-agent/engine/harness/agent/config-bridge.js');
     const providers = new Map<string, ModelProvider>();
 
     const runGuard = resolveRunGuard({ enabled: false }, providers);
@@ -405,7 +405,7 @@ describe('Config Bridge — RunGuard 解析', () => {
   });
 
   it('无配置应该返回 undefined', async () => {
-    const { resolveRunGuard } = await import('../src/harness/agent/config-bridge.js');
+    const { resolveRunGuard } = await import('@octopi-agent/engine/harness/agent/config-bridge.js');
     const providers = new Map<string, ModelProvider>();
 
     const runGuard = resolveRunGuard(undefined, providers);

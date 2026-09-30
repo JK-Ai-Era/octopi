@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { SignalBus } from '../../src/harness/collaboration/autonomous-subsystem/signal/bus.js';
-import { DefaultEventBus } from '../../src/core/primitives/event-bus.js';
+import { SignalBus } from '@octopi-agent/engine/harness/collaboration/autonomous-subsystem/signal/bus.js';
+import { DefaultEventBus } from '@octopi-agent/core/primitives/event-bus.js';
 
 describe('SignalBus', () => {
   let events: DefaultEventBus;

@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { makeTokenUsage } from '../src/core/types/turn.js';
+import { makeTokenUsage } from '@octopi-agent/core/types/turn.js';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, utimesSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -24,12 +24,12 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   };
 });
 
-import { PersonaSource, loadPersona, composePersonas } from '../src/harness/agent/persona.js';
-import { AgentBuilder } from '../src/harness/agent/builder.js';
-import { InMemorySessionStore } from '../src/integration/storage/memory.js';
-import type { ModelProvider, LLMRequest } from '../src/core/interfaces/model-provider.js';
-import type { SecurityGuard, SecurityCheckResult } from '../src/core/interfaces/security-guard.js';
-import type { Message } from '../src/core/types/messages.js';
+import { PersonaSource, loadPersona, composePersonas } from '@octopi-agent/engine/harness/agent/persona.js';
+import { AgentBuilder } from '@octopi-agent/engine/harness/agent/builder.js';
+import { InMemorySessionStore } from '@octopi-agent/engine/integration/storage/memory.js';
+import type { ModelProvider, LLMRequest } from '@octopi-agent/core/interfaces/model-provider.js';
+import type { SecurityGuard, SecurityCheckResult } from '@octopi-agent/core/interfaces/security-guard.js';
+import type { Message } from '@octopi-agent/core/types/messages.js';
 
 function createMockProvider(onChat?: (req: LLMRequest) => void): ModelProvider {
   return {
@@ -294,7 +294,7 @@ describe('AgentBuilder + SessionAwareRunner 热更新', () => {
     writeAgentHome(home, '# Main', '# Soul v1');
     const captured: LLMRequest[] = [];
     const provider = createMockProvider((req) => captured.push(req));
-    const { DefaultEventBus } = await import('../src/core/primitives/event-bus.js');
+    const { DefaultEventBus } = await import('@octopi-agent/core/primitives/event-bus.js');
     const bus = new DefaultEventBus();
     const failedEvents: Array<{ type: string; data?: Record<string, unknown> }> = [];
     bus.on('persona.resolve.failed', (e) => failedEvents.push(e));

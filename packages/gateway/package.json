@@ -1,0 +1,81 @@
+{
+  "name": "@octopi-agent/gateway",
+  "version": "0.55.0",
+  "description": "Octopi Gateway — HTTP/WS 进程面 + Channel 挂载 + Web 运行时",
+  "type": "module",
+  "license": "Apache-2.0",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json",
+    "./gateway/*": {
+      "types": "./dist/gateway/*",
+      "import": "./dist/gateway/*"
+    },
+    "./protocols/*": {
+      "types": "./dist/protocols/*",
+      "import": "./dist/protocols/*"
+    },
+    "./web/*": {
+      "types": "./dist/web/*",
+      "import": "./dist/web/*"
+    },
+    "./types/*": {
+      "types": "./dist/types/*",
+      "import": "./dist/types/*"
+    },
+    "./config-schema/*": {
+      "types": "./dist/config-schema/*",
+      "import": "./dist/config-schema/*"
+    },
+    "./*": {
+      "types": "./dist/*",
+      "import": "./dist/*"
+    }
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "NOTICE",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsc -p tsconfig.json --watch"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "dependencies": {
+    "@octopi-agent/core": "^0.55.0",
+    "@octopi-agent/engine": "^0.55.0",
+    "ws": "^8.21.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.18.1"
+  },
+  "private": false,
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JK-Ai-Era/octopi.git",
+    "directory": "packages/gateway"
+  },
+  "homepage": "https://github.com/JK-Ai-Era/octopi#readme",
+  "bugs": {
+    "url": "https://github.com/JK-Ai-Era/octopi/issues"
+  },
+  "keywords": [
+    "agent",
+    "ai",
+    "llm",
+    "octopi"
+  ]
+}

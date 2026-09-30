@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { RecordingProvider } from '../src/testing/recording-provider.js';
 import { ReplayProvider, createReplayProvider } from '../src/testing/replay-provider.js';
-import type { ModelProvider, LLMRequest, LLMResponse, LLMStreamChunk } from '../src/core/interfaces/model-provider.js';
+import type { ModelProvider, LLMRequest, LLMResponse, LLMStreamChunk } from '@octopi-agent/core/interfaces/model-provider.js';
 
 // ── Mock Provider ──
 

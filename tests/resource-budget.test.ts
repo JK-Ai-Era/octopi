@@ -4,14 +4,14 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { makeTokenUsage } from '../src/core/types/turn.js';
-import { BudgetPolicyEngine, DEFAULT_BUDGET } from '../src/harness/run/budget/budget.js';
-import { DefaultEventBus } from '../src/core/primitives/event-bus.js';
-import { RunMetricsCollector } from '../src/harness/run/reliability/run-metrics-collector.js';
-import { runAgentWithReliability } from '../src/harness/run/reliability/run-agent.js';
-import { Agent } from '../src/harness/run/agent/agent.js';
-import type { ModelProvider } from '../src/core/interfaces/model-provider.js';
-import type { ReliabilityHarness } from '../src/core/interfaces/reliability.js';
+import { makeTokenUsage } from '@octopi-agent/core/types/turn.js';
+import { BudgetPolicyEngine, DEFAULT_BUDGET } from '@octopi-agent/engine/harness/run/budget/budget.js';
+import { DefaultEventBus } from '@octopi-agent/core/primitives/event-bus.js';
+import { RunMetricsCollector } from '@octopi-agent/engine/harness/run/reliability/run-metrics-collector.js';
+import { runAgentWithReliability } from '@octopi-agent/engine/harness/run/reliability/run-agent.js';
+import { Agent } from '@octopi-agent/engine/harness/run/agent/agent.js';
+import type { ModelProvider } from '@octopi-agent/core/interfaces/model-provider.js';
+import type { ReliabilityHarness } from '@octopi-agent/core/interfaces/reliability.js';
 
 function mockModel(tokensPerCall = 100): ModelProvider {
   return {
@@ -106,7 +106,7 @@ describe('RunMetricsCollector', () => {
 
 describe('Builder 默认 RunBudget', () => {
   it('未显式 .budget() 时 harness 仍有默认安全阀', async () => {
-    const { AgentBuilder } = await import('../src/harness/agent/builder.js');
+    const { AgentBuilder } = await import('@octopi-agent/engine/harness/agent/builder.js');
     const model = mockModel(10);
     const { harness } = await new AgentBuilder().model(model).buildAgent();
     expect(harness.budget).toBeDefined();

@@ -3,10 +3,10 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import { Gateway } from '../src/integration/gateway/gateway.js';
-import { InMemorySessionStore } from '../src/integration/storage/memory.js';
-import type { SessionData } from '../src/harness/session/types.js';
-import type { GatewayConfig } from '../src/core/types.js';
+import { Gateway } from '@octopi-agent/gateway/gateway/gateway.js';
+import { InMemorySessionStore } from '@octopi-agent/engine/integration/storage/memory.js';
+import type { SessionData } from '@octopi-agent/engine/harness/session/types.js';
+import type { GatewayConfig } from '@octopi-agent/core/types.js';
 
 function makeSession(agentId: string, sessionId: string, tasks: SessionData['tasks']): SessionData {
   return {

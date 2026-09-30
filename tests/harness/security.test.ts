@@ -6,9 +6,9 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { parseShellCommand, getCommandNames, hasCommand } from '../../src/harness/governance/security/shell-parser.js';
-import { evaluateRisk, evaluateShellCommand, evaluateNonShellTool } from '../../src/harness/governance/security/risk-evaluator.js';
-import { suggestDegradation } from '../../src/harness/governance/security/degradation.js';
+import { parseShellCommand, getCommandNames, hasCommand } from '@octopi-agent/engine/harness/governance/security/shell-parser.js';
+import { evaluateRisk, evaluateShellCommand, evaluateNonShellTool } from '@octopi-agent/engine/harness/governance/security/risk-evaluator.js';
+import { suggestDegradation } from '@octopi-agent/engine/harness/governance/security/degradation.js';
 
 // ═══════════════════════════════════════════════════
 // Shell Parser 测试

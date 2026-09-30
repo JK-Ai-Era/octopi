@@ -12,13 +12,13 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { AgentBuilder } from '../../src/harness/agent/builder.js';
-import { OpenAIProvider } from '../../src/integration/providers/openai.js';
-import { JsonlSessionStore } from '../../src/integration/storage/jsonl.js';
-import { createToolSet } from '../../src/harness/extension/plugin-ecosystem/tools/tool-set.js';
+import { AgentBuilder } from '@octopi-agent/engine/harness/agent/builder.js';
+import { OpenAIProvider } from '@octopi-agent/engine/integration/providers/openai.js';
+import { JsonlSessionStore } from '@octopi-agent/engine/integration/storage/jsonl.js';
+import { createToolSet } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/tools/tool-set.js';
 import { initOctopi } from '../../src/init.js';
-import type { RunConfig } from '../../src/harness/run/runner.js';
-import type { SessionAwareRunner } from '../../src/harness/run/runner.js';
+import type { RunConfig } from '@octopi-agent/engine/harness/run/runner.js';
+import type { SessionAwareRunner } from '@octopi-agent/engine/harness/run/runner.js';
 
 // 跳过条件：没有 API key 时跳过
 const API_KEY = process.env.TEST_API_KEY;
@@ -28,7 +28,7 @@ const skipIfNoKey = API_KEY ? describe : describe.skip;
 
 skipIfNoKey('Chat Simulation', () => {
   let tempDir: string;
-  let agent: import('../../src/harness/run/agent/index.js').Agent;
+  let agent: import('@octopi-agent/engine/harness/run/agent/index.js').Agent;
   let runner: SessionAwareRunner;
   let workspaceDir: string;
   const sessionId = `test:sim:${Date.now()}`;

@@ -16,7 +16,7 @@ import {
 import { createInterface } from 'node:readline/promises';
 import { dirname, join, resolve } from 'node:path';
 import type { CliArgs } from '../args.js';
-import { getOctopiHome } from '../../init.js';
+import { getOctopiHome } from '@octopi-agent/engine/paths.js';
 import { validateConfig } from '../../config-schema.js';
 import {
   applyConfigMigrations,

@@ -6,10 +6,10 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { Agent } from '../src/harness/run/agent/agent.js';
-import type { ModelProvider, LLMResponse, LLMStreamChunk } from '../src/core/interfaces/model-provider.js';
-import type { ReliabilityHarness } from '../src/core/interfaces/reliability.js';
-import type { HarnessLoopEvent } from '../src/harness/run/reliability/harness-events.js';
+import { Agent } from '@octopi-agent/engine/harness/run/agent/agent.js';
+import type { ModelProvider, LLMResponse, LLMStreamChunk } from '@octopi-agent/core/interfaces/model-provider.js';
+import type { ReliabilityHarness } from '@octopi-agent/core/interfaces/reliability.js';
+import type { HarnessLoopEvent } from '@octopi-agent/engine/harness/run/reliability/harness-events.js';
 
 function createProvider(responses: LLMResponse[]): ModelProvider {
   let i = 0;

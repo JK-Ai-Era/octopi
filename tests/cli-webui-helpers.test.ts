@@ -7,7 +7,7 @@ import { mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from 'node
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
-  findWebDir,
+  findWebDist,
   readWebUiPidFile,
   readWebUiPidRecord,
   writeWebUiPidFile,
@@ -20,7 +20,7 @@ let prevWebDirEnv: string | undefined;
 
 function writeFakeWeb(dir: string): void {
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'octopi-web', private: true }));
+  writeFileSync(join(dir, 'index.html'), '<!doctype html><title>web</title>');
 }
 
 beforeEach(() => {
@@ -38,7 +38,7 @@ afterEach(() => {
   if (existsSync(tempDir)) rmSync(tempDir, { recursive: true, force: true });
 });
 
-describe('findWebDir', () => {
+describe('findWebDist', () => {
   test('prefers OCTOPI_WEB_DIR', () => {
     const envWeb = join(tempDir, 'env-web');
     const configWeb = join(tempDir, 'config-web');
@@ -46,14 +46,14 @@ describe('findWebDir', () => {
     writeFakeWeb(configWeb);
     process.env.OCTOPI_WEB_DIR = envWeb;
 
-    const found = findWebDir(undefined, configWeb);
+    const found = findWebDist(undefined, configWeb);
     expect(found).toBe(envWeb);
   });
 
   test('uses config web.dir when env unset', () => {
     const configWeb = join(tempDir, 'from-config');
     writeFakeWeb(configWeb);
-    expect(findWebDir(undefined, configWeb)).toBe(configWeb);
+    expect(findWebDist(undefined, configWeb)).toBe(configWeb);
   });
 
   test('uses config file sibling web/', () => {
@@ -63,16 +63,21 @@ describe('findWebDir', () => {
     const configPath = join(home, 'octopi.json');
     writeFileSync(configPath, JSON.stringify({ agents: [], models: {} }));
 
-    expect(findWebDir(configPath)).toBe(web);
+    expect(findWebDist(configPath)).toBe(web);
+  });
+
+  test('accepts package root with dist/index.html', () => {
+    const pkg = join(tempDir, 'webui-pkg');
+    writeFakeWeb(join(pkg, 'dist'));
+    process.env.OCTOPI_WEB_DIR = pkg;
+    expect(findWebDist()).toBe(join(pkg, 'dist'));
   });
 
   test('returns null when nothing matches', () => {
     const emptyConfigDir = join(tempDir, 'empty-home');
     mkdirSync(emptyConfigDir, { recursive: true });
-    // 避免 cwd/包根/包home 的 web 被误匹配：仅验证显式无效 env 路径不崩溃
     process.env.OCTOPI_WEB_DIR = join(tempDir, 'does-not-exist');
-    // 不传 configPath/configWebDir 时可能命中包内 web —— 这里只断言显式无效 env 不导致抛错
-    expect(() => findWebDir(join(emptyConfigDir, 'octopi.json'), join(tempDir, 'missing-dir'))).not.toThrow();
+    expect(() => findWebDist(join(emptyConfigDir, 'octopi.json'), join(tempDir, 'missing-dir'))).not.toThrow();
   });
 });
 

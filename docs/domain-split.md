@@ -1,7 +1,7 @@
 # 领域切分（历史附录）
 
 > **地位**：2026-06 任务域迁移的设计记录，**不是当前目录权威**。  
-> **现行权威**：[architecture.md](./architecture.md)、`src/core/README.md`、`src/harness/**/README.md`。  
+> **现行权威**：[architecture.md](./architecture.md)、`packages/core/src/core/README.md`、`packages/engine/src/harness/**/README.md`。  
 > **语义对齐**：2026-09 Core Kernel 收敛后，本文中「原语/契约在 Core」等归属已大量失效。  
 > 会话任务（SessionTask）的设计仍以 [task-system.md](./task-system.md) 为准。
 
@@ -100,7 +100,7 @@ Harness 领域间：只 import 对方 types，不 import 实现
 | 设计 | [task-system.md](./task-system.md) |
 | 数据 | `SessionData.tasks: SessionTask[]` |
 | 写入 | 主 LLM `task_*` → `SessionTaskService` |
-| 目录 | `src/harness/session/tasks/` |
+| 目录 | `packages/engine/src/harness/session/tasks/` |
 
 ---
 
@@ -108,7 +108,7 @@ Harness 领域间：只 import 对方 types，不 import 实现
 
 | 项 | 内容 |
 |----|------|
-| 实现 | `src/harness/run/run-guard/` |
+| 实现 | `packages/engine/src/harness/run/run-guard/` |
 | 契约 | `core/interfaces/run-guard.ts`（Kernel port） |
 | 裁决 | `continue \| recover \| stop` |
 
@@ -118,7 +118,7 @@ Harness 领域间：只 import 对方 types，不 import 实现
 
 ## 5. orchestration（仍有效）
 
-目录 `src/harness/collaboration/orchestration/`：workflow / scheduler / planner / strategy / quality / reflector，以及 **async-task**、**cognitive-loop 契约**。
+目录 `packages/engine/src/harness/collaboration/orchestration/`：workflow / scheduler / planner / strategy / quality / reflector，以及 **async-task**、**cognitive-loop 契约**。
 
 与 Session.tasks 仅允许单向可选适配（规范见本域 README）。
 
@@ -143,11 +143,11 @@ Harness 领域间：只 import 对方 types，不 import 实现
 原文曾规划：
 
 ```text
-src/core/primitives/async-task.ts   # 现已不在 Core
-src/core/interfaces/async-task-store.ts
-src/harness/session/tasks/
-src/harness/run/run-guard/
-src/harness/collaboration/orchestration/
+packages/core/src/core/primitives/async-task.ts   # 现已不在 Core
+packages/core/src/core/interfaces/async-task-store.ts
+packages/engine/src/harness/session/tasks/
+packages/engine/src/harness/run/run-guard/
+packages/engine/src/harness/collaboration/orchestration/
 ```
 
 现行树见 [architecture.md](./architecture.md) §Core / §Harness。
@@ -177,6 +177,6 @@ Guard 管「这次跑得健不健康」，Runtime 管「要不要开始跑」。
 | 文档 | 关系 |
 |------|------|
 | [architecture.md](./architecture.md) | **当前架构权威** |
-| `src/core/README.md` | Kernel 定位与 I/O 门禁 |
+| `packages/core/src/core/README.md` | Kernel 定位与 I/O 门禁 |
 | [task-system.md](./task-system.md) | SessionTask 唯一基准 |
-| `src/harness/collaboration/orchestration/README.md` | AsyncTask / 编排现行说明 |
+| `packages/engine/src/harness/collaboration/orchestration/README.md` | AsyncTask / 编排现行说明 |

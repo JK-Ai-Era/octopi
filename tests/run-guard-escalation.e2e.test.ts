@@ -3,10 +3,10 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { makeTokenUsage } from '../src/core/types/turn.js';
-import { DefaultRunGuard } from '../src/harness/run/run-guard/default-run-guard.js';
-import type { CheckpointContext } from '../src/core/interfaces/run-guard.js';
-import { RunMetricsCollector } from '../src/harness/run/reliability/run-metrics-collector.js';
+import { makeTokenUsage } from '@octopi-agent/core/types/turn.js';
+import { DefaultRunGuard } from '@octopi-agent/engine/harness/run/run-guard/default-run-guard.js';
+import type { CheckpointContext } from '@octopi-agent/core/interfaces/run-guard.js';
+import { RunMetricsCollector } from '@octopi-agent/engine/harness/run/reliability/run-metrics-collector.js';
 
 function metricsStuck() {
   return {

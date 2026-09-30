@@ -2,11 +2,11 @@ import { describe, it, expect } from 'vitest';
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { SubsystemLoader } from '../../src/harness/collaboration/autonomous-subsystem/loader.js';
-import { planSoftDeletes } from '../../src/subsystems/memory-steward/shared/policy.js';
-import { handler as governHandler } from '../../src/subsystems/memory-steward/govern/handler.js';
-import { InMemoryMemoryStore } from '../../src/harness/memory/store.js';
-import type { MemoryEntry } from '../../src/harness/memory/types.js';
+import { SubsystemLoader } from '@octopi-agent/engine/harness/collaboration/autonomous-subsystem/loader.js';
+import { planSoftDeletes } from '@octopi-agent/engine/harness/memory/steward-policy.js';
+import { handler as governHandler } from '@octopi-agent/engine/subsystems/memory-steward/govern/handler.js';
+import { InMemoryMemoryStore } from '@octopi-agent/engine/harness/memory/store.js';
+import type { MemoryEntry } from '@octopi-agent/engine/harness/memory/types.js';
 
 function entry(partial: Partial<MemoryEntry> & { id: string; content: string }): MemoryEntry {
   return {
@@ -74,7 +74,7 @@ describe('subsystem loader multi-spec package', () => {
 
   it('ships built-in memory-steward package', async () => {
     const loader = new SubsystemLoader({
-      builtinDir: join(process.cwd(), 'src', 'subsystems'),
+      builtinDir: join(process.cwd(), 'packages', 'engine', 'src', 'subsystems'),
     });
     const result = await loader.loadAll();
     const ids = result.specs.map((s) => s.id);

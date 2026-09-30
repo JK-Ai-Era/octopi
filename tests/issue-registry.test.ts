@@ -2,7 +2,7 @@
  * System Issues — IssueRegistry 幂等 / resolve
  */
 import { describe, test, expect } from 'vitest';
-import { IssueRegistry } from '../src/harness/observability/diagnostics/registry.js';
+import { IssueRegistry } from '@octopi-agent/engine/harness/observability/diagnostics/registry.js';
 
 describe('IssueRegistry', () => {
   test('report 幂等更新，且 resolved 后复现重开', () => {

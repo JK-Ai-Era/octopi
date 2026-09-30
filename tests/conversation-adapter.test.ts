@@ -1,13 +1,13 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { ConversationAdapter } from '../src/integration/web/conversation/adapter.js';
+import { ConversationAdapter } from '@octopi-agent/gateway/web/conversation/adapter.js';
 import type {
   ConversationItem,
   AssistantConversationItem,
   ToolConversationItem,
   SystemConversationItem,
   UserConversationItem,
-} from '../src/integration/web/conversation/types.js';
-import type { AgentEventEnvelope, MessageRecord } from '../src/integration/web/sdk/client.js';
+} from '@octopi-agent/gateway/web/conversation/types.js';
+import type { AgentEventEnvelope, MessageRecord } from '@octopi-agent/gateway/web/sdk/client.js';
 
 function roleItems(items: ConversationItem[], role: string) {
   return items.filter((i) => i.role === role);

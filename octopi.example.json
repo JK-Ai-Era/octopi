@@ -210,5 +210,11 @@
   "web": {
     "dir": "./web",
     "host": "local"
+  },
+
+  "gateway": {
+    "port": 8787,
+    "host": "local",
+    "debugRest": false
   }
 }

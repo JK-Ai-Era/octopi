@@ -1,83 +1,49 @@
 {
-  "name": "octopi",
-  "version": "0.54.7",
-  "description": "可嵌入的 Agent 引擎",
+  "name": "octopi-agent",
+  "version": "0.55.0",
+  "description": "Octopi 开箱套件 — CLI + Engine + Gateway + WebUI（bin: octopi）",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
     "octopi": "./dist/cli/index.js"
   },
+  "publishConfig": {
+    "access": "public"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
-    "./plugin-sdk/plugin-entry": {
-      "types": "./dist/harness/extension/plugin-ecosystem/plugins/entry.d.ts",
-      "import": "./dist/harness/extension/plugin-ecosystem/plugins/entry.js"
-    },
-    "./plugin-sdk/api": {
-      "types": "./dist/harness/extension/plugin-ecosystem/plugins/api.d.ts",
-      "import": "./dist/harness/extension/plugin-ecosystem/plugins/api.js"
-    },
-    "./plugin-sdk/manifest": {
-      "types": "./dist/harness/extension/plugin-ecosystem/plugins/manifest.d.ts",
-      "import": "./dist/harness/extension/plugin-ecosystem/plugins/manifest.js"
-    },
-    "./plugin-sdk/capability": {
-      "types": "./dist/harness/extension/plugin-ecosystem/plugins/capability.d.ts",
-      "import": "./dist/harness/extension/plugin-ecosystem/plugins/capability.js"
-    },
-    "./plugin-sdk/loader": {
-      "types": "./dist/harness/extension/plugin-ecosystem/plugins/loader.d.ts",
-      "import": "./dist/harness/extension/plugin-ecosystem/plugins/loader.js"
-    },
-    "./plugin-sdk/manager": {
-      "types": "./dist/harness/extension/plugin-ecosystem/plugins/manager.d.ts",
-      "import": "./dist/harness/extension/plugin-ecosystem/plugins/manager.js"
-    },
-    "./core": {
-      "types": "./dist/core/index.d.ts",
-      "import": "./dist/core/index.js"
-    },
-    "./harness": {
-      "types": "./dist/harness/index.d.ts",
-      "import": "./dist/harness/index.js"
-    },
-    "./harness/orchestration": {
-      "types": "./dist/harness/collaboration/orchestration/index.d.ts",
-      "import": "./dist/harness/collaboration/orchestration/index.js"
-    },
-    "./integration": {
-      "types": "./dist/integration/index.d.ts",
-      "import": "./dist/integration/index.js"
-    }
+    "./package.json": "./package.json"
   },
   "scripts": {
-    "build": "tsc && node scripts/copy-build-assets.mjs",
+    "clean": "node scripts/clean-dist.mjs",
+    "build": "npm run clean && npm run build:core && npm run build:engine && npm run build:gateway && tsc && node scripts/copy-build-assets.mjs && node scripts/generate-octopi-schema.mjs",
+    "build:core": "npm --prefix packages/core run build",
+    "build:engine": "npm --prefix packages/engine run build",
+    "build:gateway": "npm --prefix packages/gateway run build",
     "copy:build-assets": "node scripts/copy-build-assets.mjs",
+    "generate:schema": "node scripts/generate-octopi-schema.mjs",
     "dev": "tsc --watch",
     "test": "node --experimental-vm-modules node_modules/vitest/vitest.mjs run",
     "lint": "eslint .",
     "test:coverage": "node --experimental-vm-modules node_modules/vitest/vitest.mjs run --coverage",
-    "install:all": "npm install && npm --prefix web install",
-    "build:web": "npm --prefix web run build",
+    "install:all": "npm install && npm --prefix packages/webui install",
+    "build:web": "npm --prefix packages/webui run build",
     "serve": "node dist/cli/index.js serve fg",
-    "web": "npm --prefix web run dev"
+    "web": "npm --prefix packages/webui run dev"
   },
   "engines": {
     "node": ">=24"
   },
   "license": "Apache-2.0",
+  "workspaces": [
+    "packages/*"
+  ],
   "files": [
     "dist",
-    "web/package.json",
-    "web/package-lock.json",
-    "web/index.html",
-    "web/vite.config.ts",
-    "web/tsconfig.json",
-    "web/src",
     "octopi.schema.json",
     "octopi.example.json",
     "LICENSE",
@@ -96,6 +62,10 @@
   "dependencies": {
     "@earendil-works/pi-tui": "^0.78.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "@octopi-agent/core": "^0.55.0",
+    "@octopi-agent/engine": "^0.55.0",
+    "@octopi-agent/gateway": "^0.55.0",
+    "@octopi-agent/webui": "^0.55.0",
     "@types/ws": "^8.18.1",
     "chalk": "^5.6.2",
     "js-yaml": "^4.3.2",
@@ -107,5 +77,20 @@
   },
   "allowScripts": {
     "fsevents@2.3.3": true
-  }
+  },
+  "private": false,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JK-Ai-Era/octopi.git"
+  },
+  "homepage": "https://github.com/JK-Ai-Era/octopi#readme",
+  "bugs": {
+    "url": "https://github.com/JK-Ai-Era/octopi/issues"
+  },
+  "keywords": [
+    "agent",
+    "ai",
+    "llm",
+    "octopi"
+  ]
 }

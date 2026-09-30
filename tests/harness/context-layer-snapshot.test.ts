@@ -8,8 +8,8 @@ import {
   buildContextLayersSnapshot,
   deriveLayerStatus,
   emptyContextLayersSnapshot,
-} from '../../src/harness/context/layer-snapshot.js';
-import type { AssembleManifest } from '../../src/harness/context/layer-types.js';
+} from '@octopi-agent/engine/harness/context/layer-snapshot.js';
+import type { AssembleManifest } from '@octopi-agent/engine/harness/context/layer-types.js';
 
 function manifest(partial?: Partial<AssembleManifest>): AssembleManifest {
   return {

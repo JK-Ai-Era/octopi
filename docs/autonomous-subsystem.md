@@ -51,7 +51,7 @@ subsystems/memory-steward/
 | `<project>/.octopi/subsystems/` | 项目级 | 项目团队 |
 | `~/.octopi/subsystems/` | 用户级 | 用户个人 |
 | `<octopi-bundle>/subsystems/` | 框架级 | octopi 团队 |
-| `node_modules/@octopi/subsystem-*` | npm | npm 包 |
+| `node_modules/@octopi-agent/subsystem-*` | npm | npm 包 |
 | `node_modules/octopi-subsystem-*` | npm | 社区包 |
 
 ---
@@ -231,7 +231,7 @@ tools:
 ### 7.2 通过代码注册
 
 ```typescript
-import { SubsystemRuntime } from 'octopi/harness';
+import { SubsystemRuntime } from '@octopi-agent/engine';
 
 runtime.register({
   id: 'my-sub',
@@ -291,7 +291,7 @@ tools:
 | `__resolved_models__` | `DEP_RESOLVED_MODELS` | `{ primary, fallback, fromLevel }` |
 
 ```typescript
-import type { SubsystemLLMPort } from 'octopi/harness';
+import type { SubsystemLLMPort } from '@octopi-agent/engine';
 
 export async function handler(input, deps) {
   const port = deps.llmPort as SubsystemLLMPort;
@@ -319,14 +319,14 @@ export async function handler(input, deps) {
 
 ### 8.1 命名规范
 
-- 官方：`@octopi/subsystem-<name>`
+- 官方：`@octopi-agent/subsystem-<name>`
 - 社区：`octopi-subsystem-<name>`
 
 ### 8.2 包结构
 
 ```
-@octopi/subsystem-safety-guard/
-├── package.json          # name: "@octopi/subsystem-safety-guard"
+@octopi-agent/subsystem-safety-guard/
+├── package.json          # name: "@octopi-agent/subsystem-safety-guard"
 ├── config.yaml
 ├── SUBSYSTEM.md
 ├── handler.ts
@@ -336,7 +336,7 @@ export async function handler(input, deps) {
 ### 8.3 使用方式
 
 ```sh
-npm install @octopi/subsystem-safety-guard
+npm install @octopi-agent/subsystem-safety-guard
 ```
 
 框架在启动时自动扫描 `node_modules/` 下符合命名规范的包，与项目级/用户级/框架级子系统合并加载。

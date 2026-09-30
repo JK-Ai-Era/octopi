@@ -5,8 +5,8 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { DefaultContextEngine } from '../../src/harness/context/default-context-engine.js';
-import type { Message } from '../../src/core/types.js';
+import { DefaultContextEngine } from '@octopi-agent/engine/harness/context/default-context-engine.js';
+import type { Message } from '@octopi-agent/core/types.js';
 import type {
   MessageSelector,
   SelectResult,
@@ -16,8 +16,8 @@ import type {
   CompressParams,
   CompressResult,
   AssembleParams,
-} from '../../src/harness/context/types.js';
-import { HeuristicTokenEstimator } from '../../src/harness/context/token-estimator.js';
+} from '@octopi-agent/engine/harness/context/types.js';
+import { HeuristicTokenEstimator } from '@octopi-agent/engine/harness/context/token-estimator.js';
 
 // ── 辅助函数 ──
 

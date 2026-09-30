@@ -31,10 +31,10 @@ npm run dev            # tsc --watch
 
 | 层 | 目录 | 职责 | 依赖 |
 |---|---|---|---|
-| Loop | `src/loop/` | 纯执行循环 | 仅依赖 Core 类型 |
-| Core | `src/core/` | 机制原语 + 接口契约 + 核心类型 | 无外部依赖 |
-| Harness | `src/harness/` | 10 个产品域（见 `docs/domains.md`） | 依赖 Core + Loop |
-| Integration | `src/integration/` | 外部系统适配 | 依赖 Core + Loop + Harness |
+| Loop | `packages/core/src/loop/` | 纯执行循环 | 仅依赖 Core 类型 |
+| Core | `packages/core/src/core/` | 机制原语 + 接口契约 + 核心类型 | 无外部依赖 |
+| Harness | `packages/engine/src/harness/` | 10 个产品域（见 `docs/domains.md`） | 依赖 Core + Loop |
+| Integration | `packages/engine/src/integration/` + `packages/gateway/src/` | 外部系统适配 | 依赖 Core + Loop + Harness |
 
 详细架构见 [docs/architecture.md](./architecture.md)；长期不变量见 [架构宪法](./north-star.md)。
 实现状态与开放项见 [docs/KNOWN-ISSUES.md](./KNOWN-ISSUES.md) 与 [CHANGELOG](../CHANGELOG.md)。
@@ -108,7 +108,7 @@ npx vitest run --grep "SecurityGuard"
 | 新增 Plugin hook | `docs/plugin-system.md` + `docs/architecture.md`（如涉及） |
 | 新增模块 | `docs/architecture.md` + 模块内 `README.md` |
 | Observer / 配置 `observer` | `docs/observer-domain.md` + `docs/architecture.md` + `octopi.schema.json` / `octopi.example.json` |
-| 公用能力 summary/compact | `docs/context-layer-contracts.md` + `docs/architecture.md` + `src/harness/README.md` + `src/harness/context/README.md` + schema/example；内部 `arch/summary-compact.md`（若存在） |
+| 公用能力 summary/compact | `docs/context-layer-contracts.md` + `docs/architecture.md` + `packages/engine/src/harness/README.md` + `packages/engine/src/harness/context/README.md` + schema/example；内部 `arch/summary-compact.md`（若存在） |
 | 修改层间依赖 / 分层 | `docs/architecture.md`；不得违反 [架构宪法](./north-star.md) 与本文件「依赖方向」 |
 | 修改架构不变量 | **`docs/north-star.md`**（须显式评审）+ `CHANGELOG.md` |
 | 测试数量变化 | `README.md` + `CHANGELOG.md` |

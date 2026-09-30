@@ -12,10 +12,10 @@ import {
   buildRunMessagesDiff,
   cloneMessages,
   isHiddenFromChat,
-} from '../../src/harness/observability/observer/index.js';
-import type { Message } from '../../src/core/types.js';
-import type { RunScope } from '../../src/harness/run/run-scope.js';
-import { makeTokenUsage } from '../../src/core/types/turn.js';
+} from '@octopi-agent/engine/harness/observability/observer/index.js';
+import type { Message } from '@octopi-agent/core/types.js';
+import type { RunScope } from '@octopi-agent/engine/harness/run/run-scope.js';
+import { makeTokenUsage } from '@octopi-agent/core/types/turn.js';
 
 function msg(partial: Partial<Message> & Pick<Message, 'role'>): Message {
   return {

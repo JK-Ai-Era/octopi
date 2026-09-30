@@ -8,11 +8,11 @@ import {
   formatRuntimeWorkspaceInjection,
   withRuntimeDatetimeInjection,
   withRuntimeEnvironmentInjection,
-} from '../../src/harness/context/runtime-datetime.js';
-import { AgentBuilder } from '../../src/harness/agent/builder.js';
-import { InMemorySessionStore } from '../../src/integration/storage/memory.js';
-import type { ModelProvider, LLMRequest } from '../../src/core/interfaces/model-provider.js';
-import type { Message } from '../../src/core/types.js';
+} from '@octopi-agent/engine/harness/context/runtime-datetime.js';
+import { AgentBuilder } from '@octopi-agent/engine/harness/agent/builder.js';
+import { InMemorySessionStore } from '@octopi-agent/engine/integration/storage/memory.js';
+import type { ModelProvider, LLMRequest } from '@octopi-agent/core/interfaces/model-provider.js';
+import type { Message } from '@octopi-agent/core/types.js';
 
 function createMockProvider(capture?: (req: LLMRequest) => void): ModelProvider {
   return {

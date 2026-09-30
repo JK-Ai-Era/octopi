@@ -4,11 +4,11 @@
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { CredentialStore } from '../../src/harness/governance/credentials/store.js';
-import { decryptSecret, encryptSecret } from '../../src/harness/governance/credentials/crypto.js';
-import { KnowledgeSourceStore } from '../../src/harness/knowledge/source-store.js';
-import { KnowledgeIngest } from '../../src/harness/knowledge/ingest.js';
-import { UrlFetcher } from '../../src/harness/knowledge/fetchers.js';
+import { CredentialStore } from '@octopi-agent/engine/harness/governance/credentials/store.js';
+import { decryptSecret, encryptSecret } from '@octopi-agent/engine/harness/governance/credentials/crypto.js';
+import { KnowledgeSourceStore } from '@octopi-agent/engine/harness/knowledge/source-store.js';
+import { KnowledgeIngest } from '@octopi-agent/engine/harness/knowledge/ingest.js';
+import { UrlFetcher } from '@octopi-agent/engine/harness/knowledge/fetchers.js';
 
 const MASTER_HEX = 'a'.repeat(64);
 

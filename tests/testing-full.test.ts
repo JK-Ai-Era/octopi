@@ -5,13 +5,13 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { makeTokenUsage, nominalTotalTokens } from '../src/core/types/turn.js';
+import { makeTokenUsage, nominalTotalTokens } from '@octopi-agent/core/types/turn.js';
 import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { RecordingProvider } from '../src/testing/recording-provider.js';
 import { ReplayProvider, createReplayProvider } from '../src/testing/replay-provider.js';
-import type { ModelProvider, LLMRequest, LLMResponse, LLMStreamChunk } from '../src/core/interfaces/model-provider.js';
+import type { ModelProvider, LLMRequest, LLMResponse, LLMStreamChunk } from '@octopi-agent/core/interfaces/model-provider.js';
 
 // ── Mock Provider ──
 

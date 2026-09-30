@@ -5,15 +5,15 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import type { Message } from '../../src/core/types.js';
+import type { Message } from '@octopi-agent/core/types.js';
 import type {
   ContextLayer,
   LayerAssembleContext,
   LayerContent,
-} from '../../src/harness/context/layer-types.js';
-import { extractLayerQuery, LAYER_ORDER } from '../../src/harness/context/layer-types.js';
-import { DefaultContextAssembler } from '../../src/harness/context/assembler.js';
-import { createDefaultLayers } from '../../src/harness/context/layers.js';
+} from '@octopi-agent/engine/harness/context/layer-types.js';
+import { extractLayerQuery, LAYER_ORDER } from '@octopi-agent/engine/harness/context/layer-types.js';
+import { DefaultContextAssembler } from '@octopi-agent/engine/harness/context/assembler.js';
+import { createDefaultLayers } from '@octopi-agent/engine/harness/context/layers.js';
 
 function userMsg(text: string): Message {
   return { role: 'user', content: text, timestamp: Date.now() };

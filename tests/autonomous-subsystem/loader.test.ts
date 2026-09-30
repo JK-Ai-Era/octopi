@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { SubsystemLoader } from '../../src/harness/collaboration/autonomous-subsystem/loader.js';
+import { SubsystemLoader } from '@octopi-agent/engine/harness/collaboration/autonomous-subsystem/loader.js';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';

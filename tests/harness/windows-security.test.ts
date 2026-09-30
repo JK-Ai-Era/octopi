@@ -1,13 +1,13 @@
 import { describe, it, expect } from 'vitest';
 
-import { parseShellCommand } from '../../src/harness/governance/security/shell-parser.js';
+import { parseShellCommand } from '@octopi-agent/engine/harness/governance/security/shell-parser.js';
 import {
   evaluateShellCommand,
   evaluateNonShellTool,
   resetSecurityPathCache,
   detectCatastrophicRecursiveDelete,
-} from '../../src/harness/governance/security/risk-evaluator.js';
-import type { ToolCall } from '../../src/core/types.js';
+} from '@octopi-agent/engine/harness/governance/security/risk-evaluator.js';
+import type { ToolCall } from '@octopi-agent/core/types.js';
 
 function tc(name: string, args: Record<string, unknown>): ToolCall {
   return { id: '1', name, arguments: args } as ToolCall;

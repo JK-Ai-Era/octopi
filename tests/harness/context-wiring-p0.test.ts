@@ -3,11 +3,11 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { AgentBuilder } from '../../src/harness/agent/builder.js';
-import type { ModelProvider, LLMRequest } from '../../src/core/interfaces/model-provider.js';
-import type { Message } from '../../src/core/types.js';
-import { createProviderSummarize, pickSummarizeProvider } from '../../src/harness/context/summarize.js';
-import { createDefaultSystemPromptAssembler } from '../../src/harness/context/system-prompt-assembler.js';
+import { AgentBuilder } from '@octopi-agent/engine/harness/agent/builder.js';
+import type { ModelProvider, LLMRequest } from '@octopi-agent/core/interfaces/model-provider.js';
+import type { Message } from '@octopi-agent/core/types.js';
+import { createProviderSummarize, pickSummarizeProvider } from '@octopi-agent/engine/harness/context/summarize.js';
+import { createDefaultSystemPromptAssembler } from '@octopi-agent/engine/harness/context/system-prompt-assembler.js';
 
 function mockProvider(onChat?: (req: LLMRequest) => void): ModelProvider & { chatCalls: LLMRequest[] } {
   const chatCalls: LLMRequest[] = [];

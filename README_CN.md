@@ -5,7 +5,7 @@
 > Agent 不是一个 class，是一个完整的运行时。
 > 框架的价值不在于提供了多少默认实现，而在于定义了多少清晰的接口。
 
-[English](./README.md) | [架构设计](./docs/ARCHITECTURE.md) | [开发规范](./docs/CONTRIBUTING.md)
+[English](./README.md) | [架构设计](./docs/architecture.md) | [开发规范](./docs/CONTRIBUTING.md)
 
 ---
 
@@ -109,7 +109,7 @@ Octopi 独特的上下文智能组装方法，让 agent 通过更有效的 conte
 ## 快速开始
 
 ```typescript
-import { AgentBuilder, OpenAIProvider } from 'octopi';
+import { AgentBuilder, OpenAIProvider } from 'octopi-agent';
 
 const { agent, runner } = await new AgentBuilder()
   .model(new OpenAIProvider({ apiKey: process.env.OPENAI_API_KEY! }))
@@ -128,7 +128,7 @@ for await (const event of runner.handle('session-1', userMessage)) {
 注入 Integration client 工厂后连接 MCP Server：
 
 ```typescript
-import { AgentBuilder, createSdkMcpClient } from 'octopi';
+import { AgentBuilder, createSdkMcpClient } from 'octopi-agent';
 
 const { agent, runner } = await new AgentBuilder()
   .model('gpt-4o')
@@ -191,35 +191,32 @@ npm test
 
 ## 项目结构
 
+npm workspaces monorepo — 五个可发布包：
+
 ```
-src/
-├── loop/                    Layer 0  纯执行循环
-├── core/                    Layer 1  原语 + 接口 + 类型
-│   ├── primitives/               EventBus、StateMachine
-│   ├── interfaces/               18 个接口契约
-│   └── types/                    核心类型定义
-├── harness/                 Layer 2  自包含领域
-│   ├── agent-building/           Builder、人格、配置桥、Runner 注入
-│   ├── context/                  ContextLayer 装配、窗口压缩、compact-key（E4）
-│   ├── capabilities/             公用能力（横切）：summary 摘要提取 + compact 压缩引擎
-│   ├── session-acl/              角色目录、authorizeRun、preferred/handoff（E6/I3）
-│   ├── tool-effect/              toolIsolation 工具 cwd（I5）
-│   ├── security/                 风险评估、Shell 解析
-│   ├── reliability/              可靠性包装、断路器
-│   ├── plugin-ecosystem/         Plugin、Tool、Skill、MCP
-│   ├── multi-agent/              Agent 注册发现、Swarm、AgentProcess
-│   ├── autonomous-subsystem/     Sense/Think/Act/Signal/Boundary 子系统框架
-│   ├── session-tasks/            会话任务 SessionTask（默认）
-│   ├── run-guard/                过程监督（DefaultRunGuard）
-│   ├── orchestration/            experimental 编排（workflow/scheduler/planner）
-│   ├── concurrency/              负载均衡、限流、SessionLease
-│   ├── execution-environment/    沙箱、工作区
-│   ├── human-in-the-loop/        审批流程
-│   ├── memory/                   记忆、认知、智慧
-│   └── runner.ts                 SessionAwareRunner（session 锁、tool cwd、ACL）
-├── integration/             Layer 3  外部适配
-└── testing/                 测试工具
+octopi-agent                 开箱套件（CLI bin: octopi）+ 配置 IO
+  ├─ @octopi-agent/engine    Harness 十域 + 库集成
+  │    └─ @octopi-agent/core Loop + Kernel 契约
+  ├─ @octopi-agent/gateway   HTTP/WS 进程面 + Web 运行时
+  └─ @octopi-agent/webui     预构建 Web 控制台
+
+packages/
+  core/       Layer 0–1   src/loop + src/core
+  engine/     Layer 2–3   src/harness/** + integration 库能力 + 内置子系统
+  gateway/    Layer 3     gateway/、protocols/、web/**
+  webui/      产品         Vite React 控制台
+src/          套件         cli/、init、config IO + 组合校验、testing/、tui/
+tests/        根目录 Vitest
+docs/         对外文档 · arch/  内部设计
 ```
+
+| 需求 | Import |
+|------|--------|
+| 套件 / CLI | `octopi-agent` |
+| 运行时 | `@octopi-agent/engine` |
+| Kernel | `@octopi-agent/core` |
+| Gateway / Web SDK | `@octopi-agent/gateway` |
+| Plugin SDK | `@octopi-agent/engine/plugin-sdk/plugin-entry` |
 
 运行时关键配置（见 `octopi.example.json` 与 `docs/KNOWN-ISSUES.md`）：
 `toolIsolation`、`sessionAcl`、`agents[].workspace` / `maxSessionRights`、`summary` / `compact` / `models.level.summary`（公用能力）。
@@ -228,16 +225,14 @@ src/
 
 ## 相关文档
 
-- [架构设计](./docs/ARCHITECTURE.md) — 完整架构设计文档
-- [架构全景](./arch/overview.md) — DDD 领域组织
-- [分层规则](./arch/layer-rules.md) — 依赖方向规则
-- [架构不变量](./arch/invariants.md) — 架构约束
+- [架构设计](./docs/architecture.md) — 完整架构设计文档
+- [包拆分](./arch/npm-package-split.md) — 五包拓扑（内部 handoff）
 - [Plugin 系统](./docs/plugin-system.md) — Plugin 系统详细文档
 - [会话任务 SessionTask](./docs/task-system.md) — 设计基准
 - [领域切分](./docs/domain-split.md) — run-guard / orchestration / AsyncTask
 - [开发规范](./docs/CONTRIBUTING.md) — 开发指南
 - [更新日志](./CHANGELOG.md) — 版本历史
-- [Web UI 设计](./web/DESIGN.md) — Playground 视觉体系与八层检查器
+- [Web UI 设计](./packages/webui/DESIGN.md) — Playground 视觉体系与八层检查器
 
 ---
 

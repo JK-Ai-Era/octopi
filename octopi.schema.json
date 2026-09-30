@@ -1,61 +1,52 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "Octopi Configuration",
-  "description": "Octopi Agent Framework 配置文件 (v0.3.0)",
   "type": "object",
-  "required": [
-    "agents"
-  ],
   "properties": {
+    "subsystems": {
+      "type": "object",
+      "properties": {
+        "auditDir": {
+          "type": "string"
+        },
+        "allowlist": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "denylist": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
     "agents": {
-      "type": "array",
-      "description": "Agent 定义列表",
       "minItems": 1,
+      "type": "array",
       "items": {
         "type": "object",
-        "required": [
-          "id",
-          "model"
-        ],
         "properties": {
           "id": {
             "type": "string",
-            "description": "Agent 唯一标识"
+            "minLength": 1
           },
           "home": {
-            "type": "string",
-            "description": "Agent home 目录：persona、skills、sessions、extract 的根目录（memory/wisdom 走 AgentDatabase SQLite）"
+            "type": "string"
           },
           "workspace": {
-            "type": "string",
-            "description": "沙箱工作目录：agent 工具操作的 cwd"
-          },
-          "maxSessionRights": {
-            "type": "object",
-            "description": "Session ACL 天花板（E6 L1）；与角色 max / 绑定取交集",
-            "properties": {
-              "canRun": { "type": "boolean" },
-              "readScope": {
-                "type": "string",
-                "enum": ["full", "from_grant", "summary_tail", "none"]
-              },
-              "writeMemory": { "type": "boolean" },
-              "canManageTasks": { "type": "boolean" },
-              "canHandoff": { "type": "boolean" }
-            }
+            "type": "string"
           },
           "persona": {
-            "description": "Persona 配置（向后兼容：string 形式等价于 home）",
-            "oneOf": [
+            "anyOf": [
               {
-                "type": "string",
-                "description": "Persona 目录路径（已废弃，请使用 home）"
+                "type": "string"
               },
               {
                 "type": "object",
-                "required": [
-                  "systemPrompt"
-                ],
                 "properties": {
                   "name": {
                     "type": "string"
@@ -64,43 +55,94 @@
                     "type": "string"
                   },
                   "systemPrompt": {
-                    "type": "string"
+                    "type": "string",
+                    "minLength": 1
                   }
-                }
+                },
+                "required": [
+                  "systemPrompt"
+                ]
               }
             ]
           },
           "model": {
-            "type": "object",
-            "required": [
-              "provider",
-              "model"
-            ],
-            "properties": {
-              "provider": {
+            "anyOf": [
+              {
                 "type": "string",
-                "description": "Provider 名称（引用 providers[].name）"
+                "minLength": 1
               },
-              "model": {
-                "type": "string",
-                "description": "模型名称"
-              },
-              "temperature": {
-                "type": "number",
-                "minimum": 0,
-                "maximum": 2
-              },
-              "maxTokens": {
-                "type": "integer",
-                "minimum": 1
-              },
-              "fallbackModels": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                }
+              {
+                "type": "object",
+                "properties": {
+                  "provider": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "model": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "temperature": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 2
+                  },
+                  "maxTokens": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  "contextWindow": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  "fallbackModels": {
+                    "type": "array",
+                    "items": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "provider": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "model": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "temperature": {
+                              "type": "number",
+                              "minimum": 0,
+                              "maximum": 2
+                            },
+                            "maxTokens": {
+                              "type": "number",
+                              "exclusiveMinimum": 0
+                            },
+                            "contextWindow": {
+                              "type": "number",
+                              "exclusiveMinimum": 0
+                            }
+                          },
+                          "required": [
+                            "provider",
+                            "model"
+                          ]
+                        }
+                      ]
+                    }
+                  }
+                },
+                "required": [
+                  "provider",
+                  "model"
+                ]
               }
-            }
+            ]
           },
           "tools": {
             "type": "object",
@@ -116,18 +158,11 @@
                 "items": {
                   "type": "string"
                 }
-              },
-              "requireConfirmation": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                }
               }
             }
           },
           "skillDirectory": {
-            "type": "string",
-            "description": "Skill 目录路径"
+            "type": "string"
           },
           "skills": {
             "type": "array",
@@ -137,137 +172,178 @@
           },
           "channelBindings": {
             "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
             "additionalProperties": {
               "type": "string"
             }
           },
+          "maxSessionRights": {
+            "type": "object",
+            "properties": {
+              "canRun": {
+                "type": "boolean"
+              },
+              "readScope": {
+                "type": "string",
+                "enum": [
+                  "full",
+                  "from_grant",
+                  "summary_tail",
+                  "none"
+                ]
+              },
+              "writeMemory": {
+                "type": "boolean"
+              },
+              "canManageTasks": {
+                "type": "boolean"
+              },
+              "canHandoff": {
+                "type": "boolean"
+              }
+            }
+          },
           "knowledge": {
             "type": "object",
-            "description": "Knowledge 召回姿态（覆盖全局 knowledge.recall）",
             "properties": {
               "recall": {
                 "type": "string",
-                "enum": ["off", "hint", "hybrid", "inject"],
-                "description": "off=仅 catalog；hint=只提示；hybrid=高分注入（缺省）；inject=积极注入"
+                "enum": [
+                  "off",
+                  "hint",
+                  "hybrid",
+                  "inject"
+                ]
               }
-            },
-            "additionalProperties": false
+            }
           }
-        }
+        },
+        "required": [
+          "id",
+          "model"
+        ]
       }
     },
     "models": {
       "type": "object",
-      "description": "集中模型配置",
       "properties": {
         "mode": {
           "type": "string",
           "enum": [
             "merge",
             "replace"
-          ],
-          "description": "合并模式：merge=与 builtin 合并，replace=完全替代"
+          ]
         },
         "providers": {
           "type": "object",
-          "description": "Provider 映射（key = provider 名称）",
+          "propertyNames": {
+            "type": "string"
+          },
           "additionalProperties": {
             "type": "object",
-            "required": [
-              "baseUrl",
-              "apiKey",
-              "api",
-              "models"
-            ],
             "properties": {
               "baseUrl": {
                 "type": "string",
-                "description": "API Base URL"
+                "minLength": 1
               },
               "apiKey": {
                 "type": "string",
-                "description": "API Key（支持 ${ENV_VAR} 语法）"
+                "minLength": 1
               },
               "api": {
                 "type": "string",
                 "enum": [
                   "openai-completions",
                   "anthropic-messages"
-                ],
-                "description": "API 协议类型"
+                ]
               },
               "models": {
+                "minItems": 1,
                 "type": "array",
-                "description": "模型列表",
                 "items": {
                   "type": "object",
-                  "required": [
-                    "id"
-                  ],
                   "properties": {
                     "id": {
                       "type": "string",
-                      "description": "模型 ID"
+                      "minLength": 1
                     },
                     "name": {
-                      "type": "string",
-                      "description": "模型名称（默认等于 id）"
-                    },
-                    "contextWindow": {
-                      "type": "integer",
-                      "description": "上下文窗口大小"
-                    },
-                    "maxTokens": {
-                      "type": "integer",
-                      "description": "最大输出 token 数"
+                      "type": "string"
                     },
                     "reasoning": {
-                      "type": "boolean",
-                      "description": "是否支持推理模式"
+                      "type": "boolean"
+                    },
+                    "input": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "enum": [
+                          "text",
+                          "image",
+                          "audio",
+                          "video"
+                        ]
+                      }
+                    },
+                    "contextWindow": {
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    },
+                    "maxTokens": {
+                      "type": "number",
+                      "exclusiveMinimum": 0
                     }
-                  }
+                  },
+                  "required": [
+                    "id"
+                  ]
                 }
               },
               "timeoutSeconds": {
                 "type": "number",
-                "description": "请求超时（秒）"
+                "exclusiveMinimum": 0
               }
-            }
+            },
+            "required": [
+              "baseUrl",
+              "apiKey",
+              "api",
+              "models"
+            ]
           }
         },
         "level": {
           "type": "object",
-          "description": "模型级别映射（子系统通过级别名引用具体模型）",
+          "propertyNames": {
+            "type": "string"
+          },
           "additionalProperties": {
             "type": "object",
-            "required": [
-              "primary"
-            ],
             "properties": {
               "primary": {
                 "type": "string",
-                "description": "主模型，格式: provider/model"
+                "minLength": 1
               },
               "fallback": {
                 "type": "array",
                 "items": {
-                  "type": "string"
-                },
-                "description": "降级模型列表（按优先级排列，格式: provider/model）"
+                  "type": "string",
+                  "minLength": 1
+                }
               }
-            }
+            },
+            "required": [
+              "primary"
+            ]
           }
         },
         "embedding": {
           "type": "object",
-          "description": "Embedding 模型配置（models 节点下，memory/knowledge/plugin 可共用）",
-          "required": [
-            "model"
-          ],
           "properties": {
             "enabled": {
-              "type": "boolean",
-              "description": "显式关闭向量路径；缺省视为开启"
+              "type": "boolean"
             },
             "type": {
               "type": "string",
@@ -276,80 +352,87 @@
                 "ollama",
                 "http",
                 "custom"
-              ],
-              "description": "嵌入 API 协议；缺省按 provider/baseUrl 推断（openai 兼容）"
+              ]
             },
             "provider": {
               "type": "string",
-              "description": "引用 models.providers 中的 key；继承 baseUrl，apiKey 仅在未写出时继承"
+              "minLength": 1
             },
             "model": {
               "type": "string",
-              "description": "Embedding 模型名（如 text-embedding-3-small / bge-m3）"
+              "minLength": 1
             },
             "baseUrl": {
               "type": "string",
-              "description": "Embedding API Base URL（可覆盖 provider 继承值）"
+              "minLength": 1
             },
             "apiKey": {
-              "type": "string",
-              "description": "API Key（支持 ${ENV_VAR}）。省略或空字符串 = 不发送鉴权头，适合内网/无鉴权远程"
+              "type": "string"
             },
             "apiKeyHeader": {
-              "type": "string",
-              "description": "Key 所在 Header，默认 Authorization；空字符串表示不发送"
+              "type": "string"
             },
             "apiKeyPrefix": {
-              "type": "string",
-              "description": "Key 前缀；Authorization 默认 \"Bearer \""
+              "type": "string"
             },
             "path": {
               "type": "string",
-              "description": "请求 path；openai 默认 /embeddings，ollama 默认 /api/embeddings"
+              "minLength": 1
             },
             "headers": {
               "type": "object",
-              "additionalProperties": { "type": "string" },
-              "description": "额外请求头"
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {
+                "type": "string"
+              }
             },
             "request": {
               "type": "object",
-              "description": "通用 HTTP 字段映射（type=http 或覆盖默认协议）",
               "properties": {
-                "inputField": { "type": "string", "description": "请求体文本字段名" },
-                "modelField": { "type": "string", "description": "请求体模型字段名" },
+                "inputField": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "modelField": {
+                  "type": "string",
+                  "minLength": 1
+                },
                 "embeddingsPath": {
                   "type": "string",
-                  "description": "响应向量路径，如 data / embedding / data.0.embedding"
+                  "minLength": 1
                 },
                 "itemEmbeddingPath": {
                   "type": "string",
-                  "description": "批量时每项向量字段，默认 embedding"
+                  "minLength": 1
                 },
                 "extraBody": {
                   "type": "object",
-                  "description": "请求体附加静态字段"
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "additionalProperties": {}
                 }
               }
             },
             "supportsBatch": {
-              "type": "boolean",
-              "description": "是否支持批量接口；仅单条时设 false"
+              "type": "boolean"
             },
             "maxBatchSize": {
               "type": "integer",
-              "minimum": 1,
-              "description": "单次批量上限（百炼 qwen3.7-text-embedding=20；超出自动切片）"
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
             },
             "timeoutMs": {
               "type": "integer",
-              "minimum": 1,
-              "description": "请求超时毫秒"
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
             },
             "dimensions": {
               "type": "integer",
-              "minimum": 1,
-              "description": "向量维度；**仅显式配置时**作为请求体 dimensions 下发，未配置由服务端决定（百炼 qwen3.7 默认 1024）。本地假定：openai 1536 / ollama 1024"
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
             },
             "vectorEngine": {
               "type": "string",
@@ -357,354 +440,743 @@
                 "auto",
                 "js",
                 "sqlite-vec"
-              ],
-              "description": "向量检索引擎：auto=优先 sqlite-vec，不可用时退回 JS 余弦"
+              ]
             },
             "sqliteVecExtensionPath": {
               "type": "string",
-              "description": "sqlite-vec 扩展路径（可选；默认用 npm 包内置二进制）"
+              "minLength": 1
             }
-          }
+          },
+          "required": [
+            "model"
+          ]
+        }
+      },
+      "required": [
+        "providers"
+      ]
+    },
+    "defaults": {
+      "type": "object",
+      "properties": {
+        "contextWindow": {
+          "type": "number",
+          "exclusiveMinimum": 0
         }
       }
     },
     "plugins": {
       "type": "object",
-      "description": "Plugin 配置",
       "properties": {
         "loadPaths": {
           "type": "array",
           "items": {
             "type": "string"
-          },
-          "description": "Plugin 目录扫描路径"
+          }
         },
         "configs": {
           "type": "object",
-          "description": "单个 plugin 的配置（plugin id → config）",
+          "propertyNames": {
+            "type": "string"
+          },
           "additionalProperties": {
-            "type": "object"
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {}
           }
+        }
+      }
+    },
+    "budgetPolicy": {
+      "type": "object",
+      "properties": {
+        "maxWallClockMs": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "maxIterations": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "maxToolCalls": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "onPolicyHit": {
+          "type": "string",
+          "enum": [
+            "stop",
+            "wrap_up_then_stop"
+          ]
+        },
+        "wrapUpTurns": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "contextWrapUpRatio": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "units": {
+          "type": "object",
+          "properties": {
+            "maxCost": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "maxUncachedInputTokens": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "maxOutputTokens": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "maxLlmCalls": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            }
+          }
+        },
+        "pricing": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "inputPer1M": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "cachedInputPer1M": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "outputPer1M": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              }
+            },
+            "required": [
+              "inputPer1M",
+              "outputPer1M"
+            ]
+          }
+        },
+        "advisory": {
+          "type": "object",
+          "properties": {
+            "unit": {
+              "type": "string",
+              "enum": [
+                "wall_clock_ms",
+                "cost",
+                "uncached_input_tokens",
+                "output_tokens",
+                "llm_calls"
+              ]
+            },
+            "threshold": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            }
+          },
+          "required": [
+            "unit",
+            "threshold"
+          ]
+        }
+      }
+    },
+    "runGuard": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "checkpointInterval": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "minCheckpointInterval": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "maxCheckpointInterval": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "enableLLMReview": {
+          "type": "boolean"
+        },
+        "llmReviewInterval": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "llmModel": {
+          "type": "string"
+        },
+        "hardLimit": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "hardWallClockMs": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        }
+      }
+    },
+    "agentRuntime": {
+      "type": "object",
+      "properties": {
+        "coalesceWindowMs": {
+          "type": "number",
+          "minimum": 0
+        },
+        "expectedMaxConcurrentRuns": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "coalesceBufferLimit": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "schedule": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "agentId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "sessionId": {
+                "type": "string"
+              },
+              "intervalMs": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "cron": {
+                "type": "string"
+              },
+              "content": {
+                "type": "string",
+                "minLength": 1
+              },
+              "coalesceKey": {
+                "type": "string"
+              },
+              "runOnStart": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "agentId",
+              "content"
+            ]
+          }
+        },
+        "escalate": {
+          "type": "object",
+          "properties": {
+            "defaultAgentId": {
+              "type": "string"
+            },
+            "eventType": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "agentSignal": {
+          "type": "boolean"
         }
       }
     },
     "contextEngine": {
       "type": "object",
-      "description": "上下文引擎配置（消息窗口压缩 + 主动摘要）",
       "properties": {
         "type": {
           "type": "string",
-          "enum": ["default", "custom"],
-          "default": "default"
+          "enum": [
+            "default",
+            "custom"
+          ]
         },
         "protectFirstN": {
-          "type": "integer",
-          "minimum": 0,
-          "default": 3,
-          "description": "头部保护消息数"
+          "type": "number",
+          "minimum": 0
         },
         "protectLastN": {
-          "type": "integer",
-          "minimum": 0,
-          "default": 20,
-          "description": "尾部保护消息数"
+          "type": "number",
+          "minimum": 0
         },
         "compactThreshold": {
           "type": "number",
           "minimum": 0,
-          "maximum": 1,
-          "default": 0.5,
-          "description": "触发存储压缩的阈值比例"
+          "maximum": 1
         },
         "proactiveCompactRatio": {
           "type": "number",
           "minimum": 0,
-          "maximum": 1,
-          "default": 0.6,
-          "description": "主动摘要阈值：消息 token / messagesBudget 超过该比例时，在硬溢出前 LLM 摘要（0=关闭）"
+          "maximum": 1
         },
         "proactiveCooldownMs": {
           "type": "number",
-          "minimum": 0,
-          "default": 30000,
-          "description": "主动 LLM 摘要冷却毫秒；冷却期内优先缓存重建（0=不冷却）"
+          "minimum": 0
         },
         "outputRatio": {
           "type": "number",
           "minimum": 0,
-          "maximum": 1,
-          "default": 0.2,
-          "description": "输出预留比例"
+          "maximum": 1
         },
         "minOutputReserve": {
           "type": "number",
-          "exclusiveMinimum": 0,
-          "default": 2000
+          "exclusiveMinimum": 0
         },
         "maxOutputReserve": {
           "type": "number",
-          "exclusiveMinimum": 0,
-          "default": 8000
+          "exclusiveMinimum": 0
         },
         "enableLLMSummary": {
-          "type": "boolean",
-          "default": true
+          "type": "boolean"
         },
         "summaryModel": {
-          "type": "string",
-          "description": "摘要模型（可选）"
+          "type": "string"
         }
-      },
-      "additionalProperties": false
+      }
     },
     "contextAssembler": {
       "type": "object",
-      "description": "system prompt 七层装配器配置（层预算与可观测 preview）",
       "properties": {
         "systemBudgetRatio": {
           "type": "number",
           "minimum": 0.05,
-          "maximum": 0.5,
-          "default": 0.22,
-          "description": "system 预算占 contextWindow 比例"
+          "maximum": 0.5
+        },
+        "systemBudgetTokens": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "compactTargetTokens": {
+          "type": "number",
+          "exclusiveMinimum": 0
         },
         "layerShares": {
           "type": "object",
-          "description": "单层硬顶：层 id → contentBudget 比例 [0,1]。默认不配置=无单层配额；仅配置的层超出时先截断到硬顶。",
-          "additionalProperties": false,
-          "properties": {
-            "wisdom": { "type": "number", "minimum": 0, "maximum": 1 },
-            "persona": { "type": "number", "minimum": 0, "maximum": 1 },
-            "skill": { "type": "number", "minimum": 0, "maximum": 1 },
-            "knowledge": { "type": "number", "minimum": 0, "maximum": 1 },
-            "cognition": { "type": "number", "minimum": 0, "maximum": 1 },
-            "memory": { "type": "number", "minimum": 0, "maximum": 1 },
-            "runtime": { "type": "number", "minimum": 0, "maximum": 1 }
-          }
+          "propertyNames": {
+            "type": "string",
+            "enum": [
+              "wisdom",
+              "persona",
+              "skill",
+              "knowledge",
+              "cognition",
+              "memory",
+              "runtime"
+            ]
+          },
+          "additionalProperties": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "required": [
+            "wisdom",
+            "persona",
+            "skill",
+            "knowledge",
+            "cognition",
+            "memory",
+            "runtime"
+          ]
         },
         "includeLayerPreview": {
-          "type": "boolean",
-          "default": true,
-          "description": "是否在 AssembleManifest 写入层正文 preview（供 Web 上下文面板）"
+          "type": "boolean"
         },
         "layerPreviewChars": {
           "type": "integer",
-          "minimum": 1,
-          "maximum": 4000,
-          "default": 400,
-          "description": "层 preview 最大字符数"
+          "exclusiveMinimum": 0,
+          "maximum": 4000
         },
         "includeLayerContent": {
-          "type": "boolean",
-          "default": true,
-          "description": "是否在 AssembleManifest 写入层正文全文（点选层查看内容）"
+          "type": "boolean"
         }
-      },
-      "additionalProperties": false
+      }
     },
     "summary": {
       "type": "object",
-      "description": "公用能力 summary（harness/capabilities）：LLM 摘要与信息提取",
       "properties": {
         "modelLevel": {
-          "type": "string",
-          "description": "默认模型档名；解析链优先 models.level[此名]，约定 summary"
+          "type": "string"
         },
         "model": {
-          "type": "string",
-          "description": "显式 provider/model，优先于 modelLevel"
+          "type": "string"
         },
         "defaultInputBudgetTokens": {
           "type": "integer",
-          "minimum": 256,
-          "default": 24000,
-          "description": "模型 contextWindow 未知时的输入预算缺省"
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
         },
         "safetyMarginTokens": {
           "type": "integer",
           "minimum": 0,
-          "default": 2000
+          "maximum": 9007199254740991
         },
         "oversizedStrategy": {
           "type": "string",
-          "enum": ["map_reduce", "window", "truncate_fallback", "fail"],
-          "default": "map_reduce"
+          "enum": [
+            "map_reduce",
+            "window",
+            "truncate_fallback",
+            "fail"
+          ]
         },
         "gate": {
           "type": "object",
           "properties": {
-            "minTokens": { "type": "integer", "minimum": 0 },
-            "minBytes": { "type": "integer", "minimum": 0 },
-            "respectPolicyBudget": { "type": "boolean", "default": true }
-          },
-          "additionalProperties": false
+            "minTokens": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "minBytes": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "respectPolicyBudget": {
+              "type": "boolean"
+            }
+          }
         },
         "policies": {
           "type": "object",
-          "description": "按 policy id 整策略替换（全量覆盖，不深合并）"
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {}
         },
         "tools": {
           "type": "object",
-          "description": "工具侧 L1/L2 binding 覆盖",
           "properties": {
-            "maxReturnChars": { "type": "integer", "minimum": 1 }
+            "maxReturnChars": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            }
           },
-          "additionalProperties": true
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "auto",
+                  "over_threshold",
+                  "always",
+                  "never",
+                  "kind_sensitive"
+                ]
+              },
+              "maxReturnChars": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              "defaultPolicyId": {
+                "type": "string"
+              },
+              "kindFromSource": {
+                "type": "boolean"
+              },
+              "informationalKinds": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "web_page",
+                    "file_text",
+                    "document",
+                    "code",
+                    "api_json",
+                    "log",
+                    "conversation",
+                    "opaque",
+                    "auto"
+                  ]
+                }
+              },
+              "onFail": {
+                "type": "string",
+                "enum": [
+                  "truncate_l1",
+                  "error"
+                ]
+              },
+              "gate": {
+                "type": "object",
+                "properties": {
+                  "minTokens": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "minBytes": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "respectPolicyBudget": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
         },
         "cache": {
           "type": "object",
-          "description": "摘要结果缓存（可选；无 Redis 硬依赖）",
           "properties": {
-            "enabled": { "type": "boolean", "default": false },
-            "backend": { "type": "string", "enum": ["memory", "file"], "default": "memory" },
-            "ttlMs": { "type": "integer", "minimum": 1, "default": 600000 },
-            "maxEntries": { "type": "integer", "minimum": 1, "default": 256 },
-            "dir": { "type": "string" }
-          },
-          "additionalProperties": false
+            "enabled": {
+              "type": "boolean"
+            },
+            "backend": {
+              "type": "string",
+              "enum": [
+                "memory",
+                "file"
+              ]
+            },
+            "ttlMs": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "maxEntries": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "dir": {
+              "type": "string"
+            }
+          }
         }
-      },
-      "additionalProperties": false
+      }
     },
     "compact": {
       "type": "object",
-      "description": "公用能力 compact 缺省（会话路径仍可用 contextEngine.* 键）",
       "properties": {
-        "defaultProtectHead": { "type": "integer", "minimum": 0 },
-        "defaultProtectTail": { "type": "integer", "minimum": 0 },
-        "defaultTargetTokens": { "type": "integer", "minimum": 1 },
+        "defaultProtectHead": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "defaultProtectTail": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "defaultTargetTokens": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
         "defaultMode": {
           "type": "string",
-          "enum": ["structure_only", "summary_only", "head_tail_only", "auto"]
+          "enum": [
+            "structure_only",
+            "summary_only",
+            "head_tail_only",
+            "auto"
+          ]
         }
-      },
-      "additionalProperties": false
-    },
-    "constitution": {
-      "type": "object",
-      "description": "全局运行宪法（等价 context.constitution）。product=包内资产；custom=集成商全文；off=不装配 preamble",
-      "properties": {
-        "mode": {
-          "type": "string",
-          "enum": ["product", "custom", "off"],
-          "default": "product"
-        },
-        "path": {
-          "type": ["string", "null"],
-          "description": "mode=custom 时必填的宪法文件路径"
-        }
-      },
-      "required": ["mode"],
-      "additionalProperties": false
-    },
-    "context": {
-      "type": "object",
-      "description": "context 域扩展配置",
-      "properties": {
-        "constitution": {
-          "type": "object",
-          "properties": {
-            "mode": { "type": "string", "enum": ["product", "custom", "off"] },
-            "path": { "type": ["string", "null"] }
-          },
-          "required": ["mode"],
-          "additionalProperties": false
-        },
-        "contextAssembler": { "$ref": "#/properties/contextAssembler" }
-      },
-      "additionalProperties": false
+      }
     },
     "knowledge": {
       "type": "object",
-      "description": "Knowledge 全局缺省（agents[].knowledge.recall 覆盖）",
       "properties": {
         "recall": {
           "type": "string",
-          "enum": ["off", "hint", "hybrid", "inject"],
-          "default": "hybrid",
-          "description": "内容召回模式；工程 agent 建议 hint"
+          "enum": [
+            "off",
+            "hint",
+            "hybrid",
+            "inject"
+          ]
         },
         "autoInject": {
           "type": "object",
           "properties": {
-            "minScore": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.78 },
-            "maxChunks": { "type": "integer", "minimum": 1, "maximum": 20, "default": 4 },
-            "budgetTokens": { "type": "integer", "minimum": 1, "default": 1200 },
-            "budgetRatio": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.08 },
-            "maxBudgetTokens": { "type": "integer", "minimum": 1, "default": 2400 },
-            "minCoverage": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.5 }
-          },
-          "additionalProperties": false
+            "minScore": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "maxChunks": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 20
+            },
+            "budgetTokens": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "budgetRatio": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "maxBudgetTokens": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "minCoverage": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            }
+          }
         },
         "hint": {
           "type": "object",
           "properties": {
-            "minScore": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.55 }
-          },
-          "additionalProperties": false
+            "minScore": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            }
+          }
         },
         "keywordWeight": {
           "type": "number",
           "minimum": 0,
-          "maximum": 1,
-          "default": 0.45,
-          "description": "hybrid 融合中 keyword 权重"
+          "maximum": 1
         },
         "catalog": {
           "type": "object",
           "properties": {
-            "maxEntries": { "type": "integer", "minimum": 1, "maximum": 100, "default": 10 },
-            "showProgress": { "type": "string", "enum": ["off", "bucket", "exact"], "default": "bucket" },
-            "autoDescribe": { "type": "boolean", "default": true },
-            "groupByScope": { "type": "boolean", "default": false }
-          },
-          "additionalProperties": false
+            "maxEntries": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 100
+            },
+            "showProgress": {
+              "type": "string",
+              "enum": [
+                "off",
+                "bucket",
+                "exact"
+              ]
+            },
+            "autoDescribe": {
+              "type": "boolean"
+            },
+            "groupByScope": {
+              "type": "boolean"
+            }
+          }
         },
         "query": {
           "type": "object",
           "properties": {
-            "includePriorUserTurns": { "type": "integer", "minimum": 0, "maximum": 5, "default": 1 },
-            "skipIfUserTokensBelow": { "type": "integer", "minimum": 0, "default": 8 }
-          },
-          "additionalProperties": false
+            "includePriorUserTurns": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 5
+            },
+            "skipIfUserTokensBelow": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          }
         },
         "index": {
           "type": "object",
           "properties": {
-            "embedding": { "type": "boolean", "default": true },
-            "hybridKeyword": { "type": "boolean", "default": true },
+            "embedding": {
+              "type": "boolean"
+            },
+            "hybridKeyword": {
+              "type": "boolean"
+            },
             "phaseA": {
               "type": "object",
               "properties": {
-                "concurrency": { "type": "integer", "minimum": 1, "default": 4 },
-                "debounceMs": { "type": "integer", "minimum": 0, "default": 2000 }
-              },
-              "additionalProperties": false
+                "concurrency": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "debounceMs": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                }
+              }
             },
             "phaseB": {
               "type": "object",
               "properties": {
-                "embedBatch": { "type": "integer", "minimum": 1, "default": 32 },
-                "concurrency": { "type": "integer", "minimum": 1, "default": 2 },
-                "ratePerMin": { "type": "number", "minimum": 0 }
-              },
-              "additionalProperties": false
+                "embedBatch": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "concurrency": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "ratePerMin": {
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                }
+              }
             },
             "queue": {
               "type": "object",
-              "properties": { "maxDepth": { "type": "integer", "minimum": 1, "default": 10000 } },
-              "additionalProperties": false
+              "properties": {
+                "maxDepth": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991
+                }
+              }
             }
-          },
-          "additionalProperties": false
+          }
         },
         "load": {
           "type": "object",
           "properties": {
-            "parseConcurrency": { "type": "integer", "minimum": 1 },
-            "diskWatermarkAlert": { "type": "boolean", "default": true }
-          },
-          "additionalProperties": false
+            "parseConcurrency": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "diskWatermarkAlert": {
+              "type": "boolean"
+            }
+          }
         },
         "promotion": {
           "type": "object",
@@ -712,447 +1184,443 @@
             "metrics": {
               "type": "object",
               "properties": {
-                "minSessions": { "type": "integer", "minimum": 1, "default": 3 },
-                "minHits": { "type": "integer", "minimum": 1, "default": 10 }
-              },
-              "additionalProperties": false
+                "minSessions": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "minHits": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991
+                }
+              }
             },
-            "stewardOnConverge": { "type": "boolean", "default": true }
-          },
-          "additionalProperties": false
+            "stewardOnConverge": {
+              "type": "boolean"
+            }
+          }
         },
         "attachments": {
           "type": "object",
-          "description": "会话附件（OP-15）；默认仅 session 可见，升项目走显式 promote",
           "properties": {
-            "maxFiles": { "type": "integer", "minimum": 1, "maximum": 64, "default": 8 },
-            "maxFileBytes": { "type": "integer", "minimum": 1, "default": 26214400 },
-            "maxTotalBytes": { "type": "integer", "minimum": 1, "default": 52428800 },
-            "allowedExtensions": { "type": "array", "items": { "type": "string" } },
+            "maxFiles": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 64
+            },
+            "maxFileBytes": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "maxTotalBytes": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "allowedExtensions": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
             "parse": {
               "type": "object",
               "properties": {
-                "extract": { "type": "boolean", "default": true },
-                "keywordIndex": { "type": "boolean", "default": true },
-                "embedding": { "type": "string", "enum": ["off", "lazy", "on-upload"], "default": "lazy" }
-              },
-              "additionalProperties": false
+                "extract": {
+                  "type": "boolean"
+                },
+                "keywordIndex": {
+                  "type": "boolean"
+                },
+                "embedding": {
+                  "type": "string",
+                  "enum": [
+                    "off",
+                    "lazy",
+                    "on-upload"
+                  ]
+                }
+              }
             },
             "inject": {
               "type": "object",
               "properties": {
-                "fullTextMaxChars": { "type": "integer", "minimum": 1, "default": 12000 },
-                "recallTopK": { "type": "integer", "minimum": 1, "maximum": 50, "default": 6 },
-                "inventory": { "type": "boolean", "default": true },
-                "intent": { "type": "string", "enum": ["llm", "off"], "default": "llm" },
-                "intentTimeoutMs": { "type": "integer", "minimum": 1, "default": 800 },
-                "emptyMessagePrompt": { "type": "string" }
-              },
-              "additionalProperties": false
+                "fullTextMaxChars": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "recallTopK": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 50
+                },
+                "inventory": {
+                  "type": "boolean"
+                },
+                "intent": {
+                  "type": "string",
+                  "enum": [
+                    "llm",
+                    "off"
+                  ]
+                },
+                "intentTimeoutMs": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "emptyMessagePrompt": {
+                  "type": "string"
+                }
+              }
             },
             "tools": {
               "type": "object",
               "properties": {
-                "attachmentsRootReadOnly": { "type": "boolean", "default": true }
-              },
-              "additionalProperties": false
+                "attachmentsRootReadOnly": {
+                  "type": "boolean"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "context": {
+      "type": "object",
+      "properties": {
+        "constitution": {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "type": "string",
+              "enum": [
+                "product",
+                "custom",
+                "off"
+              ]
+            },
+            "path": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             }
           },
-          "additionalProperties": false
+          "required": [
+            "mode"
+          ]
+        },
+        "contextAssembler": {
+          "type": "object",
+          "properties": {
+            "systemBudgetRatio": {
+              "type": "number",
+              "minimum": 0.05,
+              "maximum": 0.5
+            },
+            "systemBudgetTokens": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "compactTargetTokens": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "layerShares": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string",
+                "enum": [
+                  "wisdom",
+                  "persona",
+                  "skill",
+                  "knowledge",
+                  "cognition",
+                  "memory",
+                  "runtime"
+                ]
+              },
+              "additionalProperties": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "required": [
+                "wisdom",
+                "persona",
+                "skill",
+                "knowledge",
+                "cognition",
+                "memory",
+                "runtime"
+              ]
+            },
+            "includeLayerPreview": {
+              "type": "boolean"
+            },
+            "layerPreviewChars": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 4000
+            },
+            "includeLayerContent": {
+              "type": "boolean"
+            }
+          }
+        }
+      }
+    },
+    "constitution": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "product",
+            "custom",
+            "off"
+          ]
+        },
+        "path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
-      "additionalProperties": false
+      "required": [
+        "mode"
+      ]
     },
     "memory": {
       "type": "object",
-      "description": "Memory 写入与置信度策略",
       "properties": {
         "profile": {
           "type": "string",
-          "enum": ["personal_assistant", "embedded_interactive", "embedded_headless"]
+          "enum": [
+            "personal_assistant",
+            "embedded_interactive",
+            "embedded_headless"
+          ]
         },
         "backfill": {
           "type": "object",
-          "description": "自动补录（Steward LLM 提取）；enabled=false 可省成本，govern 治理不受影响",
           "properties": {
             "enabled": {
-              "type": "boolean",
-              "default": true,
-              "description": "是否启动补录触发脉搏（硬收敛 / idle 漂移 / 覆盖差）"
+              "type": "boolean"
             },
             "idleDelayMs": {
               "type": "integer",
-              "minimum": 1000,
-              "default": 1200000,
-              "description": "空闲漂移阈值（毫秒），距最后活动超过该时长后软收敛补录"
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
             },
             "gapScanMs": {
               "type": "integer",
-              "minimum": 1000,
-              "default": 21600000,
-              "description": "覆盖差扫描间隔（毫秒）"
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
             },
             "minUserTurns": {
               "type": "integer",
-              "minimum": 1,
-              "default": 2,
-              "description": "密度预筛：最少 user 轮次"
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
             },
             "minTotalChars": {
               "type": "integer",
-              "minimum": 1,
-              "default": 200,
-              "description": "密度预筛：最少实质字符量"
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
             }
-          },
-          "additionalProperties": false
+          }
         },
         "decay": {
           "type": "object",
-          "description": "按 MemoryType 的衰减曲线（govern 每轮 decay()）",
           "properties": {
             "typeParams": {
               "type": "object",
-              "additionalProperties": false,
               "properties": {
                 "fact": {
                   "type": "object",
-                  "additionalProperties": false,
                   "properties": {
-                    "idleDays": { "type": "number", "exclusiveMinimum": 0 },
-                    "factor": { "type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1 },
-                    "min": { "type": "number", "minimum": 0, "maximum": 1 }
+                    "idleDays": {
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    },
+                    "factor": {
+                      "type": "number",
+                      "exclusiveMinimum": 0,
+                      "exclusiveMaximum": 1
+                    },
+                    "min": {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 1
+                    }
                   }
                 },
                 "method": {
                   "type": "object",
-                  "additionalProperties": false,
                   "properties": {
-                    "idleDays": { "type": "number", "exclusiveMinimum": 0 },
-                    "factor": { "type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1 },
-                    "min": { "type": "number", "minimum": 0, "maximum": 1 }
+                    "idleDays": {
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    },
+                    "factor": {
+                      "type": "number",
+                      "exclusiveMinimum": 0,
+                      "exclusiveMaximum": 1
+                    },
+                    "min": {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 1
+                    }
                   }
                 },
                 "norm": {
                   "type": "object",
-                  "additionalProperties": false,
                   "properties": {
-                    "idleDays": { "type": "number", "exclusiveMinimum": 0 },
-                    "factor": { "type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1 },
-                    "min": { "type": "number", "minimum": 0, "maximum": 1 }
+                    "idleDays": {
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    },
+                    "factor": {
+                      "type": "number",
+                      "exclusiveMinimum": 0,
+                      "exclusiveMaximum": 1
+                    },
+                    "min": {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 1
+                    }
                   }
                 }
               }
             }
-          },
-          "additionalProperties": false
+          }
         },
         "health": {
           "type": "object",
-          "description": "MemoryHealthProbe 双脉搏阈值（补充 govern 1h schedule）",
           "properties": {
             "intervalMs": {
               "type": "integer",
-              "minimum": 1000,
-              "default": 3600000,
-              "description": "探测间隔（毫秒）"
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
             },
             "shadowBacklogLimit": {
               "type": "integer",
               "minimum": 0,
-              "default": 50,
-              "description": "shadow 积压阈值"
+              "maximum": 9007199254740991
             },
             "limits": {
               "type": "object",
-              "additionalProperties": false,
               "properties": {
-                "fact": { "type": "integer", "minimum": 0, "default": 200 },
-                "method": { "type": "integer", "minimum": 0, "default": 100 },
-                "norm": { "type": "integer", "minimum": 0, "default": 150 }
+                "fact": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "method": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "norm": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                }
               }
             }
-          },
-          "additionalProperties": false
-        },
-        "gates": {
-          "type": "object",
-          "description": "写入结构门控长度",
-          "properties": {
-            "maxLength": {
-              "type": "object",
-              "additionalProperties": false,
-              "properties": {
-                "fact": { "type": "integer", "minimum": 1 },
-                "method": { "type": "integer", "minimum": 1 },
-                "norm": { "type": "integer", "minimum": 1 }
-              }
-            }
-          },
-          "additionalProperties": false
+          }
         },
         "confidence": {
           "type": "object",
           "properties": {
-            "injectMinScore": { "type": "number", "minimum": 0, "maximum": 1 },
+            "injectMinScore": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
             "channelPriors": {
               "type": "object",
-              "additionalProperties": false,
               "properties": {
-                "user_directive": { "type": "number", "minimum": 0, "maximum": 1 },
-                "decision": { "type": "number", "minimum": 0, "maximum": 1 },
-                "fail_fix": { "type": "number", "minimum": 0, "maximum": 1 },
-                "model_inference": { "type": "number", "minimum": 0, "maximum": 1 },
-                "admin": { "type": "number", "minimum": 0, "maximum": 1 }
+                "user_directive": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "decision": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "fail_fix": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "model_inference": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "admin": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                }
               }
             }
-          },
-          "additionalProperties": false
-        }
-      },
-      "additionalProperties": false
-    },
-    "runGuard": {
-      "type": "object",
-      "description": "过程监督配置（智能监督，替代硬预算限制）",
-      "properties": {
-        "enabled": {
-          "type": "boolean",
-          "default": true,
-          "description": "是否启用过程监督"
-        },
-        "checkpointInterval": {
-          "type": "integer",
-          "minimum": 1,
-          "default": 15,
-          "description": "基础检查间隔（迭代数）"
-        },
-        "minCheckpointInterval": {
-          "type": "integer",
-          "minimum": 1,
-          "default": 5,
-          "description": "最小检查间隔"
-        },
-        "maxCheckpointInterval": {
-          "type": "integer",
-          "minimum": 1,
-          "default": 50,
-          "description": "最大检查间隔"
-        },
-        "enableLLMReview": {
-          "type": "boolean",
-          "default": true,
-          "description": "启用 LLM 审查（规则层不确定时用轻量模型判断）"
-        },
-        "llmReviewInterval": {
-          "type": "integer",
-          "minimum": 1,
-          "default": 3,
-          "description": "LLM 审查频率（每 N 个检查点审查一次）"
-        },
-        "llmModel": {
-          "type": "string",
-          "description": "审查用模型。格式: \"model\"（用主 provider）或 \"provider/model\"（指定 provider）"
-        },
-        "hardLimit": {
-          "type": "integer",
-          "minimum": 1,
-          "default": 1000,
-          "description": "硬上限：最大迭代数（安全兜底）"
-        },
-        "hardWallClockMs": {
-          "type": "integer",
-          "minimum": 1000,
-          "default": 36000000,
-          "description": "硬上限：最大运行时间（毫秒，默认 10 小时）"
-        }
-      }
-    },
-    "agentRuntime": {
-      "type": "object",
-      "description": "激活宿主（long-lived）。消息路径始终经 Runtime；Schedule/Escalate 按配置块挂载（不写则不挂，无 enabled 总开关）。设计见 arch/agent-runtime.md",
-      "properties": {
-        "coalesceWindowMs": {
-          "type": "integer",
-          "minimum": 0,
-          "default": 400,
-          "description": "合批窗口（毫秒）"
-        },
-        "coalesceBufferLimit": {
-          "type": "integer",
-          "minimum": 1,
-          "default": 256,
-          "description": "合批缓冲条目上限"
-        },
-        "expectedMaxConcurrentRuns": {
-          "type": "integer",
-          "minimum": 1,
-          "description": "期望最大并发 Run（仅观测；硬闸归 SessionGate）"
-        },
-        "schedule": {
-          "type": "array",
-          "description": "定时触发任务（每条绑定 agentId）",
-          "items": {
-            "type": "object",
-            "required": ["agentId", "content"],
-            "properties": {
-              "agentId": { "type": "string" },
-              "sessionId": { "type": "string" },
-              "intervalMs": { "type": "integer", "minimum": 1 },
-              "cron": {
-                "type": "string",
-                "description": "简化 cron（分 时 日 月 周）；与 intervalMs 二选一"
-              },
-              "content": { "type": "string", "description": "注入内容（system note）" },
-              "coalesceKey": { "type": "string" },
-              "runOnStart": { "type": "boolean", "default": false }
-            }
           }
         },
-        "escalate": {
+        "gates": {
           "type": "object",
-          "description": "子系统 escalate → 唤醒主 Agent。需与 Subsystem 同一 EventBus（Gateway 已接 gatewayBus）",
           "properties": {
-            "defaultAgentId": { "type": "string" },
-            "eventType": {
-              "oneOf": [
-                { "type": "string" },
-                { "type": "array", "items": { "type": "string" } }
-              ],
-              "description": "默认同时订阅 subsystem.signal.escalate 与 subsystem.escalate"
-            }
-          }
-        },
-        "agentSignal": {
-          "type": "boolean",
-          "description": "订阅 runtime.agent_signal；默认在 escalate.defaultAgentId 存在时挂载，或显式 true"
-        }
-      }
-    },
-    "budgetPolicy": {
-      "type": "object",
-      "description": "Run 安全阀/策略（arch/budget-redesign.md）。默认无 nominal token hard；与 runGuard 组合。",
-      "properties": {
-        "maxWallClockMs": {
-          "type": "integer",
-          "minimum": 1000,
-          "default": 21600000,
-          "description": "安全阀：最大运行时间（毫秒，默认 6 小时）"
-        },
-        "maxIterations": {
-          "type": "integer",
-          "minimum": 1,
-          "description": "最大迭代次数。仅显式设置时硬停"
-        },
-        "maxToolCalls": {
-          "type": "integer",
-          "minimum": 1,
-          "description": "最大工具调用次数。仅显式设置时硬停"
-        },
-        "onPolicyHit": {
-          "type": "string",
-          "enum": ["stop", "wrap_up_then_stop"],
-          "default": "wrap_up_then_stop",
-          "description": "Policy 触达时的行为：stop 立即停止 | wrap_up_then_stop 先总结再停止"
-        },
-        "wrapUpTurns": {
-          "type": "integer",
-          "minimum": 1,
-          "default": 3,
-          "description": "wrap-up 窗口的轮次数"
-        },
-        "contextWrapUpRatio": {
-          "type": "number",
-          "minimum": 0,
-          "maximum": 1,
-          "default": 0.85,
-          "description": "context 轴 wrap-up 触发阈值比例"
-        },
-        "units": {
-          "type": "object",
-          "description": "预算单位配置（仅显式配置才启用 hard）",
-          "properties": {
-            "maxCost": {
-              "type": "number",
-              "minimum": 0,
-              "description": "最大花费（币种由 pricing 决定）"
-            },
-            "maxUncachedInputTokens": {
-              "type": "integer",
-              "minimum": 1,
-              "description": "最大 uncached input tokens"
-            },
-            "maxOutputTokens": {
-              "type": "integer",
-              "minimum": 1,
-              "description": "最大 output tokens"
-            },
-            "maxLlmCalls": {
-              "type": "integer",
-              "minimum": 1,
-              "description": "最大 LLM 调用次数"
-            }
-          },
-          "additionalProperties": false
-        },
-        "pricing": {
-          "type": "object",
-          "description": "模型定价（用于 cost 估算，币种自定义）",
-          "additionalProperties": {
-            "type": "object",
-            "properties": {
-              "inputPer1M": {
-                "type": "number",
-                "minimum": 0,
-                "description": "每 1M input tokens 价格"
-              },
-              "cachedInputPer1M": {
-                "type": "number",
-                "minimum": 0,
-                "description": "每 1M cached input tokens 价格"
-              },
-              "outputPer1M": {
-                "type": "number",
-                "minimum": 0,
-                "description": "每 1M output tokens 价格"
+            "maxLength": {
+              "type": "object",
+              "properties": {
+                "fact": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "method": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "norm": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991
+                }
               }
-            },
-            "required": ["inputPer1M", "outputPer1M"],
-            "additionalProperties": false
-          }
-        },
-        "advisory": {
-          "type": "object",
-          "description": "advisory 告警配置",
-          "properties": {
-            "unit": {
-              "type": "string",
-              "enum": ["wall_clock_ms", "cost", "uncached_input_tokens", "output_tokens", "llm_calls"],
-              "description": "告警单位"
-            },
-            "threshold": {
-              "type": "number",
-              "minimum": 0,
-              "description": "告警阈值"
             }
-          },
-          "required": ["unit", "threshold"],
-          "additionalProperties": false
+          }
         }
-      },
-      "additionalProperties": false
+      }
     },
     "security": {
       "type": "object",
-      "description": "安全策略（无总开关：硬边界与 RiskPolicy 始终执行）",
       "properties": {
         "enforce": {
           "type": "string",
           "enum": [
             "block",
             "audit"
-          ],
-          "description": "风险命中后的处置；硬边界不受影响。block=按 severity 拦截，audit=只记事件不拦"
+          ]
         },
         "injectionSensitivity": {
           "type": "string",
@@ -1160,54 +1628,64 @@
             "low",
             "medium",
             "high"
-          ],
-          "description": "注入检测灵敏度"
+          ]
         },
         "allowedPaths": {
           "type": "array",
           "items": {
             "type": "string"
-          },
-          "description": "绝对路径额外允许范围"
+          }
         }
       }
     },
     "channels": {
       "type": "array",
-      "description": "Channel 适配器列表",
       "items": {
         "type": "object",
-        "required": [
-          "type"
-        ],
         "properties": {
           "type": {
             "type": "string",
-            "description": "Channel 类型"
+            "minLength": 1
           },
           "port": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 65535
+            "type": "number",
+            "exclusiveMinimum": 0
           },
           "host": {
-            "type": "string",
-            "minLength": 1,
-            "description": "监听 host：local（默认，仅本机 127.0.0.1）| lan（局域网 0.0.0.0）| 具体 IP/主机名"
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "local",
+                  "lan"
+                ]
+              },
+              {
+                "type": "string",
+                "minLength": 1
+              }
+            ]
           },
           "path": {
             "type": "string"
           },
           "apiKey": {
-            "type": "string",
-            "description": "API Key（HTTP channel 认证）"
+            "type": "string"
+          },
+          "corsOrigins": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
-        }
+        },
+        "required": [
+          "type"
+        ]
       }
     },
     "session": {
       "type": "object",
-      "description": "Session 路由配置（仅 dmScope；存储固定为 OCTOPI_HOME/sessions/，session.store 已废弃）",
       "properties": {
         "dmScope": {
           "type": "string",
@@ -1215,36 +1693,10 @@
             "main",
             "per-peer",
             "per-channel-peer"
-          ],
-          "description": "DM 作用域"
-        },
-        "store": {
-          "type": "object",
-          "description": "[Deprecated] Session 存储配置已废弃：runtime 固定使用 OCTOPI_HOME/sessions/，忽略 store/dataDir。保留仅为兼容旧配置；octopi doctor --fix 会迁入 _legacy.session.store",
-          "required": [
-            "type"
-          ],
-          "properties": {
-            "type": {
-              "type": "string",
-              "enum": [
-                "memory",
-                "jsonl",
-                "sqlite"
-              ],
-              "description": "[Deprecated] 存储类型（runtime 忽略）"
-            },
-            "dataDir": {
-              "type": "string",
-              "description": "[Deprecated] 数据目录；runtime 不读，会话在 OCTOPI_HOME/sessions/"
-            },
-            "dbPath": {
-              "type": "string",
-              "description": "[Deprecated] 数据库文件路径（runtime 忽略）"
-            }
-          }
+          ]
         }
-      }
+      },
+      "additionalProperties": {}
     },
     "toolIsolation": {
       "type": "string",
@@ -1252,252 +1704,503 @@
         "none",
         "session-subdir",
         "session-lock"
-      ],
-      "default": "none",
-      "description": "工具效应面隔离策略（宪法 I5）。none=多 Session 共享 agent.workspace（默认）；session-subdir=cwd 为 <workspace>/<sessionId>/；session-lock=共享路径，同 sessionId 由 Runner 锁串行，不提供跨 Session 路径隔离"
+      ]
     },
     "sessionAcl": {
       "type": "object",
-      "description": "Session ACL 角色目录（宪法 E6）。缺省使用内置五角色 owner/specialist/reviewer/operator/steward；handoff 默认仅宿主",
       "properties": {
         "roles": {
           "type": "array",
-          "description": "角色覆盖/新增（同 id 覆盖内置种子）",
           "items": {
             "type": "object",
-            "required": [
-              "id",
-              "defaults"
-            ],
             "properties": {
-              "id": { "type": "string", "minLength": 1 },
-              "description": { "type": "string" },
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": {
+                "type": "string"
+              },
               "defaults": {
                 "type": "object",
+                "properties": {
+                  "canRun": {
+                    "type": "boolean"
+                  },
+                  "readScope": {
+                    "type": "string",
+                    "enum": [
+                      "full",
+                      "from_grant",
+                      "summary_tail",
+                      "none"
+                    ]
+                  },
+                  "writeMemory": {
+                    "type": "boolean"
+                  },
+                  "canManageTasks": {
+                    "type": "boolean"
+                  },
+                  "canHandoff": {
+                    "type": "boolean"
+                  }
+                },
                 "required": [
                   "canRun",
                   "readScope",
                   "writeMemory",
                   "canManageTasks",
                   "canHandoff"
-                ],
-                "properties": {
-                  "canRun": { "type": "boolean" },
-                  "readScope": {
-                    "type": "string",
-                    "enum": ["full", "from_grant", "summary_tail", "none"]
-                  },
-                  "writeMemory": { "type": "boolean" },
-                  "canManageTasks": { "type": "boolean" },
-                  "canHandoff": { "type": "boolean" }
-                }
+                ]
               },
               "max": {
                 "type": "object",
                 "properties": {
-                  "canRun": { "type": "boolean" },
+                  "canRun": {
+                    "type": "boolean"
+                  },
                   "readScope": {
                     "type": "string",
-                    "enum": ["full", "from_grant", "summary_tail", "none"]
+                    "enum": [
+                      "full",
+                      "from_grant",
+                      "summary_tail",
+                      "none"
+                    ]
                   },
-                  "writeMemory": { "type": "boolean" },
-                  "canManageTasks": { "type": "boolean" },
-                  "canHandoff": { "type": "boolean" }
-                }
+                  "writeMemory": {
+                    "type": "boolean"
+                  },
+                  "canManageTasks": {
+                    "type": "boolean"
+                  },
+                  "canHandoff": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "canRun",
+                  "readScope",
+                  "writeMemory",
+                  "canManageTasks",
+                  "canHandoff"
+                ]
               }
-            }
+            },
+            "required": [
+              "id",
+              "defaults"
+            ]
           }
         },
         "switchDefaults": {
           "type": "object",
           "properties": {
-            "preferredOnly": { "type": "boolean", "default": true },
-            "consultGrantRole": { "type": "string", "default": "specialist" },
-            "requireExplicitHandoff": { "type": "boolean", "default": true }
+            "preferredOnly": {
+              "type": "boolean"
+            },
+            "consultGrantRole": {
+              "type": "string",
+              "minLength": 1
+            },
+            "requireExplicitHandoff": {
+              "type": "boolean"
+            }
           }
         },
         "allowAgentInitiatedHandoff": {
-          "type": "boolean",
-          "default": false,
-          "description": "是否允许 agent 发起 handoff（I3；出厂 false）"
+          "type": "boolean"
+        }
+      }
+    },
+    "observability": {
+      "type": "object",
+      "properties": {
+        "level": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 5
+        },
+        "consoleLevel": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 5
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "traceDir": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "captureStreamDeltas": {
+          "type": "boolean"
+        },
+        "captureModelRequest": {
+          "type": "boolean"
         }
       }
     },
     "observer": {
       "type": "object",
-      "description": "产品 Observer / Run Observatory（开发调试通道）。缺省 level=off 不采集；webPanel 跟 level（off 强制关）。调试 REST：GET /debug/run/:sessionId/scope|messages。与 Core Observer（metrics/trace）不同：本键只控制 Run 现场快照。",
       "properties": {
         "level": {
           "type": "string",
-          "enum": ["off", "summary", "full"],
-          "default": "off",
-          "description": "总开关：off=关闭；summary=开观测无 message 全文；full=允许全文与 context.llm"
+          "enum": [
+            "off",
+            "summary",
+            "full"
+          ]
         },
         "channels": {
           "type": "object",
-          "description": "分通道覆盖；未列出的按 level 预设。summary/full 默认开启已实现通道（含 security/memory/tool.effect/context.compact）",
           "properties": {
-            "run.scope": { "type": "boolean" },
-            "run.messages": { "type": "boolean" },
-            "run.timeline": { "type": "boolean" },
-            "run.guard": { "type": "boolean" },
-            "context.layers": { "type": "boolean" },
-            "context.compact": { "type": "boolean" },
-            "context.llm": { "type": "boolean" },
-            "tool.effect": { "type": "boolean" },
-            "security": { "type": "boolean" },
-            "memory": { "type": "boolean" }
-          },
-          "additionalProperties": false
+            "run.scope": {
+              "type": "boolean"
+            },
+            "run.messages": {
+              "type": "boolean"
+            },
+            "run.timeline": {
+              "type": "boolean"
+            },
+            "run.guard": {
+              "type": "boolean"
+            },
+            "context.layers": {
+              "type": "boolean"
+            },
+            "context.compact": {
+              "type": "boolean"
+            },
+            "context.llm": {
+              "type": "boolean"
+            },
+            "tool.effect": {
+              "type": "boolean"
+            },
+            "security": {
+              "type": "boolean"
+            },
+            "memory": {
+              "type": "boolean"
+            }
+          }
         },
         "payload": {
           "type": "object",
-          "description": "正文类 payload；message 全文需 messageFullText=true 且 retention.messagesPerRun=full",
           "properties": {
-            "layerContent": { "type": "boolean" },
-            "layerPreview": { "type": "boolean" },
-            "messageFullText": { "type": "boolean" },
-            "streamDelta": { "type": "boolean" },
-            "modelRequest": { "type": "boolean" }
-          },
-          "additionalProperties": false
+            "layerContent": {
+              "type": "boolean"
+            },
+            "layerPreview": {
+              "type": "boolean"
+            },
+            "messageFullText": {
+              "type": "boolean"
+            },
+            "streamDelta": {
+              "type": "boolean"
+            },
+            "modelRequest": {
+              "type": "boolean"
+            }
+          }
         },
         "retention": {
           "type": "object",
           "properties": {
-            "runsPerSession": { "type": "integer", "minimum": 1, "maximum": 64 },
-            "timelineEvents": { "type": "integer", "minimum": 1, "maximum": 2000 },
-            "messagesPerRun": { "type": "string", "enum": ["full", "summary-only"] }
-          },
-          "additionalProperties": false
+            "runsPerSession": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 64
+            },
+            "timelineEvents": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 2000
+            },
+            "messagesPerRun": {
+              "type": "string",
+              "enum": [
+                "full",
+                "summary-only"
+              ]
+            }
+          }
         },
         "webPanel": {
-          "type": "boolean",
-          "description": "是否暴露 /debug/run/*；level=off 时强制 false"
+          "type": "boolean"
         },
         "failOpen": {
-          "type": "boolean",
-          "default": true,
-          "description": "观测失败只 warn、不打断 run"
-        }
-      },
-      "additionalProperties": false
-    },
-    "subsystems": {
-      "type": "object",
-      "description": "自主子系统框架级配置（子系统自身参数写在各自 config.yaml）",
-      "properties": {
-        "auditDir": {
-          "type": "string",
-          "description": "审计日志目录（默认 ~/.octopi/audit）"
-        },
-        "allowlist": {
-          "type": "array",
-          "items": { "type": "string" },
-          "description": "允许注册：id / packageId / memory.steward.* 前缀"
-        },
-        "denylist": {
-          "type": "array",
-          "items": { "type": "string" },
-          "description": "禁止注册（优先于 allowlist）"
+          "type": "boolean"
         }
       }
     },
-    "web": {
+    "concurrency": {
       "type": "object",
-      "description": "Web UI 运行配置",
       "properties": {
-        "dir": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Web UI 源码目录（含 package.json 的 Vite 项目）。未设置时 CLI 按 OCTOPI_WEB_DIR → 配置旁 web/ → ~/.octopi/web → CLI 包内 web/ → cwd/web 探测"
+        "providerPool": {
+          "type": "object",
+          "properties": {
+            "slots": {
+              "minItems": 1,
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "provider": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "weight": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  "rateLimit": {
+                    "type": "object",
+                    "properties": {
+                      "requestsPerMinute": {
+                        "type": "number",
+                        "exclusiveMinimum": 0
+                      },
+                      "burstCapacity": {
+                        "type": "number",
+                        "exclusiveMinimum": 0
+                      },
+                      "maxWaitMs": {
+                        "type": "number",
+                        "exclusiveMinimum": 0
+                      }
+                    },
+                    "required": [
+                      "requestsPerMinute"
+                    ]
+                  }
+                },
+                "required": [
+                  "provider"
+                ]
+              }
+            },
+            "routing": {
+              "type": "object",
+              "properties": {
+                "strategy": {
+                  "type": "string",
+                  "enum": [
+                    "sticky",
+                    "round-robin",
+                    "least-loaded"
+                  ]
+                },
+                "stickyTtlMs": {
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                },
+                "failover": {
+                  "type": "string",
+                  "enum": [
+                    "auto",
+                    "manual"
+                  ]
+                }
+              }
+            },
+            "rateLimit": {
+              "type": "object",
+              "properties": {
+                "requestsPerMinute": {
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                },
+                "burstCapacity": {
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                },
+                "maxWaitMs": {
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                }
+              },
+              "required": [
+                "requestsPerMinute"
+              ]
+            }
+          },
+          "required": [
+            "slots"
+          ]
         },
-        "host": {
-          "type": "string",
-          "minLength": 1,
-          "description": "监听 host：local（默认，仅本机）| lan（局域网）| 具体 IP/主机名。控制 Web UI（Vite）绑定；Gateway HTTP 见 channels[].host（未设置时继承 web.host）"
+        "sessionGate": {
+          "type": "object",
+          "properties": {
+            "maxConcurrent": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "waitTimeoutMs": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            }
+          }
         }
       }
     },
     "webSearch": {
       "type": "object",
-      "description": "web_search 工具多 provider 配置",
       "properties": {
         "provider": {
           "type": "string",
-          "minLength": 1,
-          "description": "主 provider key（对应 providers 的 key）；未指定时取 providers 第一个"
+          "minLength": 1
         },
         "fallbacks": {
           "type": "array",
-          "description": "失败降级链（provider key 列表）",
-          "items": { "type": "string", "minLength": 1 }
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
         },
         "defaultLimit": {
           "type": "integer",
           "minimum": 1,
-          "maximum": 20,
-          "default": 5,
-          "description": "默认返回条数"
+          "maximum": 20
         },
         "timeoutMs": {
-          "type": "integer",
-          "minimum": 1,
-          "default": 15000,
-          "description": "全局超时（毫秒）"
+          "type": "number",
+          "exclusiveMinimum": 0
         },
         "providers": {
           "type": "object",
-          "description": "provider 映射",
+          "propertyNames": {
+            "type": "string",
+            "minLength": 1
+          },
           "additionalProperties": {
             "type": "object",
-            "required": ["api"],
             "properties": {
               "api": {
                 "type": "string",
-                "enum": ["duckduckgo", "tavily", "brave", "serper", "mimo"],
-                "description": "实现类型"
+                "enum": [
+                  "duckduckgo",
+                  "tavily",
+                  "brave",
+                  "serper",
+                  "mimo"
+                ]
               },
               "apiKey": {
-                "type": "string",
-                "description": "API Key（支持 ${ENV_VAR}；duckduckgo 可省略）"
+                "type": "string"
               },
               "baseUrl": {
-                "type": "string",
-                "description": "覆盖默认 baseUrl"
+                "type": "string"
               },
               "timeoutMs": {
-                "type": "integer",
-                "minimum": 1,
-                "description": "覆盖默认超时（毫秒）"
+                "type": "number",
+                "exclusiveMinimum": 0
               },
               "model": {
                 "type": "string",
-                "description": "MiMo 专用：模型 ID（默认 mimo-v2.5-pro）"
+                "minLength": 1
               },
               "maxKeyword": {
                 "type": "integer",
                 "minimum": 1,
-                "maximum": 10,
-                "description": "MiMo 专用：搜索关键词数上限（max_keyword，默认 3）"
+                "maximum": 10
               },
               "forceSearch": {
-                "type": "boolean",
-                "description": "MiMo 专用：是否强制搜索（force_search，默认 true）"
+                "type": "boolean"
               },
               "userLocation": {
                 "type": "object",
-                "description": "MiMo 专用：用户位置（approximate）",
                 "properties": {
-                  "country": { "type": "string" },
-                  "region": { "type": "string" },
-                  "city": { "type": "string" }
+                  "country": {
+                    "type": "string"
+                  },
+                  "region": {
+                    "type": "string"
+                  },
+                  "city": {
+                    "type": "string"
+                  }
                 }
               }
-            }
+            },
+            "required": [
+              "api"
+            ]
           }
         }
       }
+    },
+    "gateway": {
+      "type": "object",
+      "properties": {
+        "port": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "host": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "local",
+                "lan"
+              ]
+            },
+            {
+              "type": "string",
+              "minLength": 1
+            }
+          ]
+        },
+        "debugRest": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "web": {
+      "type": "object",
+      "properties": {
+        "dir": {
+          "type": "string"
+        },
+        "host": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "local",
+                "lan"
+              ]
+            },
+            {
+              "type": "string",
+              "minLength": 1
+            }
+          ]
+        }
+      }
     }
-  }
+  },
+  "required": [
+    "agents",
+    "models"
+  ],
+  "title": "Octopi Config",
+  "description": "octopi.json — 单文件配置（engine + gateway + web 段；由 Zod 组合 schema 生成）"
 }

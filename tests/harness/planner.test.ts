@@ -10,12 +10,12 @@ import {
   SECURITY_EVENT_RULE,
   LLMPlanner,
   HybridPlanner,
-} from '../../src/harness/collaboration/orchestration/planner/index.js';
-import { TaskScheduler } from '../../src/harness/collaboration/orchestration/scheduler/index.js';
-import type { Rule } from '../../src/harness/collaboration/orchestration/planner/index.js';
-import type { AgentState } from '../../src/harness/collaboration/orchestration/cognitive-loop.js';
-import type { EventBusAgentEvent as AgentEvent } from '../../src/core/index.js';
-import { DefaultEventBus } from '../../src/core/index.js';
+} from '@octopi-agent/engine/harness/collaboration/orchestration/planner/index.js';
+import { TaskScheduler } from '@octopi-agent/engine/harness/collaboration/orchestration/scheduler/index.js';
+import type { Rule } from '@octopi-agent/engine/harness/collaboration/orchestration/planner/index.js';
+import type { AgentState } from '@octopi-agent/engine/harness/collaboration/orchestration/cognitive-loop.js';
+import type { EventBusAgentEvent as AgentEvent } from '@octopi-agent/core/index.js';
+import { DefaultEventBus } from '@octopi-agent/core/index.js';
 
 // ── 辅助 ──
 

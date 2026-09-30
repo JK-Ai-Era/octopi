@@ -4,7 +4,7 @@ import {
   nextFireTime,
   intervalNext,
   formatHuman,
-} from '../../src/core/primitives/cron.js';
+} from '@octopi-agent/core/primitives/cron.js';
 
 /** 固定本地时间构造，避免时区对日历字段的干扰 */
 function at(y: number, mo: number, d: number, h: number, mi: number): number {

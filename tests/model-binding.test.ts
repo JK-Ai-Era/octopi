@@ -9,8 +9,8 @@ import {
   bindModelRef,
   lookupDeclaredContextWindow,
   lookupModelCapability,
-} from '../src/harness/run/reliability/model-binding.js';
-import type { ModelProvider, LLMRequest } from '../src/core/interfaces/model-provider.js';
+} from '@octopi-agent/engine/harness/run/reliability/model-binding.js';
+import type { ModelProvider, LLMRequest } from '@octopi-agent/core/interfaces/model-provider.js';
 
 function makeProvider(name: string, defaultModel: string): ModelProvider & { lastRequest?: LLMRequest } {
   const provider = {

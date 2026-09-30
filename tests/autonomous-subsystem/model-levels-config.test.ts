@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { ModelResolver } from '../../src/harness/collaboration/autonomous-subsystem/think/model-resolver.js';
-import type { ModelLevelMap } from '../../src/harness/collaboration/autonomous-subsystem/types.js';
+import { ModelResolver } from '@octopi-agent/engine/harness/collaboration/autonomous-subsystem/think/model-resolver.js';
+import type { ModelLevelMap } from '@octopi-agent/engine/harness/collaboration/autonomous-subsystem/types.js';
 
 describe('ModelResolver with config-defined levels', () => {
   const levels: ModelLevelMap = {

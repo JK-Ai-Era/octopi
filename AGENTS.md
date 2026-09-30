@@ -17,15 +17,28 @@ This file governs AI coding agent behavior in the `octopi` repository. **Read th
 
 ## Repository Layout
 
+npm workspaces monorepo (see `arch/npm-package-split.md`):
+
 ```
-src/           Source code entry point
-tests/         Test directory
-docs/          Documentation
-arch/          Architecture design documents (internal)
-config/        Configuration
-web/           Web runtime interface
-data/          Data/Session storage
+packages/core/       @octopi-agent/core — Loop + Kernel (Layer 0–1)
+packages/engine/     @octopi-agent/engine — Harness 10 domains + library integrations + built-in subsystems
+packages/gateway/    @octopi-agent/gateway — HTTP/WS + web runtime
+packages/webui/      @octopi-agent/webui — prebuilt Web console
+src/                 Suite octopi-agent — cli/, init, config IO + compose, testing/, tui/
+tests/               Vitest suite (root)
+docs/                Public documentation
+arch/                Internal design handoffs
 ```
+
+**Import map (do not invent alternatives):**
+
+| Surface | Package |
+|---------|---------|
+| CLI / `loadConfig` / compose schema | `octopi-agent` |
+| `Agent.run()` / Harness | `@octopi-agent/engine` |
+| Kernel / Loop | `@octopi-agent/core` |
+| Gateway / Web SDK | `@octopi-agent/gateway` |
+| Plugin SDK | `@octopi-agent/engine/plugin-sdk/*` |
 
 ---
 
@@ -48,7 +61,7 @@ octopi serve start -c ~/.octopi/octopi.json
 cd ~/.octopi && octopi serve start
 ```
 
-CLI helpers (`ensureInitialized` / `ensureDaemonConfig`) prefer `OCTOPI_HOME` over cwd. When changing config shape, update **both** `src/config-schema.ts` and `octopi.schema.json` / `octopi.example.json`.
+CLI helpers (`ensureInitialized` / `ensureDaemonConfig`) prefer `OCTOPI_HOME` over cwd. When changing config shape, update **Zod** under `packages/engine/src/config-schema/` + root compose (`src/config-schema/`); regenerate `octopi.schema.json` via `npm run generate:schema`.
 
 ### Runtime home layout (`OCTOPI_HOME`, default `~/.octopi`)
 
@@ -56,16 +69,16 @@ Scaffolded by `src/init.ts` (`initOctopi` / `ensureAgentDirs`). Keep init, types
 
 ```
 ~/.octopi/
-  octopi.json           # 系统配置 + 系统级密钥（LLM provider…）；不放资源访问凭证
+  octopi.json           # System config + system-level secrets (LLM providers…); do not put resource-access credentials here
   audit/
   plugins/
-  sessions/             # JsonlSessionStore (sessionId 一等；唯一 runtime Session 后端)
-    sessions.json       # meta 索引（含 lifecycle/endedAt）
+  sessions/             # JsonlSessionStore (sessionId is first-class; the only runtime Session backend)
+    sessions.json       # meta index (lifecycle / endedAt)
     <id>.jsonl / <id>.state.json
-  sessions.index.db     # 可重建检索投影（可选；非权威，见 arch/session-history-search.md）
-  archives/             # 归档冷备 *.sessions.jsonl.gz
-  knowledge/            # Knowledge 服务数据面（knowledge.db；见 docs/knowledge.md）
-  credentials/          # 集成凭证库（credentials.db；env/file 引用或 AES-GCM 密文）
+  sessions.index.db     # Rebuildable search projection (optional; not authoritative — see arch/session-history-search.md)
+  archives/             # Cold archive backup *.sessions.jsonl.gz
+  knowledge/            # Knowledge data plane (knowledge.db; see docs/knowledge.md)
+  credentials/          # Integration credentials vault (credentials.db; env/file refs or AES-GCM ciphertext)
   agents/<id>/          # agent home
     AGENTS.md           # main persona (loaded first by loadPersona)
     persona/            # supplemental persona (*.md, numeric prefix for order)
@@ -73,13 +86,13 @@ Scaffolded by `src/init.ts` (`initOctopi` / `ensureAgentDirs`). Keep init, types
   workspace/<id>/       # tool sandbox cwd
 ```
 
-**Do not create `agents/<id>/memory/` or `agents/<id>/wisdom/` directories.** Memory / Cognition / Wisdom persist in a per-agent SQLite file via `AgentDatabase` (`src/harness/memory/sqlite/agent-db.ts`), not as sibling folders under home.
+**Do not create `agents/<id>/memory/` or `agents/<id>/wisdom/` directories.** Memory / Cognition / Wisdom persist in a per-agent SQLite file via `AgentDatabase` (`packages/engine/src/harness/memory/sqlite/agent-db.ts`), not as sibling folders under home.
 
-**Knowledge 外生语料不在 `agent.db`。** 源注册 + 索引在 `OCTOPI_HOME/knowledge/knowledge.db`；资源访问密钥在 `OCTOPI_HOME/credentials/credentials.db`（`authRef` 引用，密钥明文不进 `knowledge.db` / `octopi.json`）。见 `docs/knowledge.md`。
+**Knowledge exogenous corpus does not live in `agent.db`.** Source registration + indexes are in `OCTOPI_HOME/knowledge/knowledge.db`; resource-access credentials are in `OCTOPI_HOME/credentials/credentials.db` (referenced via `authRef`; plaintext secrets never enter `knowledge.db` / `octopi.json`). See `docs/knowledge.md`.
 
 **Do not use `memory.extractor` ETL or `MemoryExtractionWiring`.** Memory write path is agent `memory_store` + `memory.steward.*` subsystems. See `docs/memory.md` and `arch/memory-system-redesign.md`.
 
-**Do not reintroduce `SqliteSessionStore`.** Runtime sessions are Jsonl-only (`OCTOPI_HOME/sessions/`). `sessions.index.db` is a rebuildable search projection (FTS5+LIKE), never a second authority. History tools: `session_search` / `session_read` (Information 原文) vs `memory_search` (命题). Spec: `arch/session-history-search.md`.
+**Do not reintroduce `SqliteSessionStore`.** Runtime sessions are Jsonl-only (`OCTOPI_HOME/sessions/`). `sessions.index.db` is a rebuildable search projection (FTS5+LIKE), never a second authority. History tools: `session_search` / `session_read` (Information verbatim) vs `memory_search` (propositions). Spec: `arch/session-history-search.md`.
 
 ---
 
@@ -99,14 +112,14 @@ Scaffolded by `src/init.ts` (`initOctopi` / `ensureAgentDirs`). Keep init, types
   - **E4**: Compact key is `(sessionId, agentId)`; do not borrow another agent’s compact as default.
   - **E6/I3**: Session ACL effective rights = L0 ∩ role.max ∩ agent.max ∩ binding; `preferredAgentId` ≠ `primaryAgentId`; handoff is host-plane by default.
   - **I5**: Tool cwd policy is `toolIsolation` (default `none`); `session-subdir` for multi-session file writes.
-  - Config/schema changes: keep `src/config-schema.ts` in sync with `octopi.schema.json` / `octopi.example.json`.
-- **Shipped runtime knobs** (see `docs/KNOWN-ISSUES.md` + `CHANGELOG` + `docs/observer-domain.md` + `docs/context-layer-contracts.md`): top-level `toolIsolation`, `sessionAcl`, **`observer`** (Run Observatory；缺省 `level: off`；调试 REST `GET /debug/run/*`，非 `/api/v1`；与 Telemetry 键 `observability` / Core `Observer` 分离); **`summary` / `compact` / `models.level.summary`**（Harness 横切公用能力 `harness/context/capabilities/`：SummaryPort + CompactEngine；tools 端 L1 硬顶 + L2 摘要；E4 会话 compact 状态不在 capabilities）; agents[].`workspace` / `maxSessionRights`; SessionData `primaryAgentId` / `preferredAgentId` / `participants` / `contextCompacts`. Gateway injects ACL + a **shared** session lease into all Runners. Observer 采样归 Runner `emitObserved` / Builder ContextEngine emit；Gateway **不要**二次 `hub.ingestEvent`。
+  - Config/schema changes: edit Zod (`packages/engine/src/config-schema/` + root `src/config-schema/` compose), then `npm run generate:schema`; keep `octopi.example.json` valid against generated schema.
+- **Shipped runtime knobs** (see `docs/KNOWN-ISSUES.md` + `CHANGELOG` + `docs/observer-domain.md` + `docs/context-layer-contracts.md`): top-level `toolIsolation`, `sessionAcl`, **`observer`** (Run Observatory; default `level: off`; debug REST is `GET /debug/run/*`, **not** `/api/v1`; separate from Telemetry key `observability` and Core `Observer`); **`summary` / `compact` / `models.level.summary`** (Harness cross-cutting capabilities under `harness/context/capabilities/`: SummaryPort + CompactEngine; tools side L1 hard cap + L2 summary; E4 session compact state is **not** in capabilities); agents[].`workspace` / `maxSessionRights`; SessionData `primaryAgentId` / `preferredAgentId` / `participants` / `contextCompacts`. Gateway injects ACL + a **shared** session lease into all Runners. Observer sampling belongs to Runner `emitObserved` / Builder ContextEngine emit; Gateway must **not** call `hub.ingestEvent` a second time.
 - **Phase A–H minimum sets are closed.** Do not invent a parallel roadmap. For remaining work: open research items in internal `arch/open-problems.md`, capability-layer gaps (distributed Lease, session directory de-coupling, quota, role DB) in `docs/KNOWN-ISSUES.md`, and the short open-item list in `arch/NEXT-STEPS.md`. `arch/IMPLEMENTATION-PLAN.md` is an archival summary only.
 
 ### The 4-Layer Architecture
 1.  **Layer 0: Loop** — Pure execution loop (`agentLoop`). Zero state, zero external dependencies. Protocol events only (`AgentLoopEvent`).
 2.  **Layer 1: Core** — Mechanism primitives (EventBus, StateMachine) and Interface contracts. No strategy implementations. Does **not** re-export Loop.
-3.  **Layer 2: Harness** — **10 product domains** (domain-first directories under `src/harness/`; counts only from `docs/domains.yaml`) + cross-cutting **capabilities** (`harness/context/capabilities/`: summary/compact ports). **Runnable Agent facade** lives at `harness/run/agent` (`Agent.run()` = reliability, E5 entry). Strategies and workflows live here. See `docs/domains.md`.
+3.  **Layer 2: Harness** — **10 product domains** (domain-first directories under `packages/engine/src/harness/`; counts only from `docs/domains.yaml`) + cross-cutting **capabilities** (`harness/context/capabilities/`: summary/compact ports). **Runnable Agent facade** lives at `harness/run/agent` (`Agent.run()` = reliability, E5 entry). Strategies and workflows live here. See `docs/domains.md`.
 4.  **Layer 3: Integration** — External adapters (LLM Providers, Storage, Observability).
 
 **Runtime entry**: prefer `Agent.run()` over hand-wiring `runAgentWithReliability`. Harness-level events (`budget_exceeded`, `run_guard_*`) are `HarnessLoopEvent`, not `AgentLoopEvent`.

@@ -1,6 +1,6 @@
 # Context Layer 契约设计
 
-> 状态：契约已落地（`src/harness/context/layer-types.ts` / `assembler.ts` / `layers.ts`）  
+> 状态：契约已落地（`packages/engine/src/harness/context/layer-types.ts` / `assembler.ts` / `layers.ts`）  
 > 范围：**只定契约与最小装配闭环**；各层业务实现后续逐个打磨。  
 > 日期：与 v0.26 契约化阶段对齐
 
@@ -208,11 +208,11 @@ Runner.handle
 
 | 文件 | 说明 |
 |------|------|
-| `src/harness/context/layer-types.ts` | 契约 + 默认 order/priority/share |
-| `src/harness/context/assembler.ts` | `DefaultContextAssembler` |
-| `src/harness/context/layers.ts` | 薄适配层 + `createDefaultLayers` |
-| `src/harness/context/system-prompt-assembler.ts` | Runner 每轮 system 装配端口 |
-| `src/harness/context/summarize.ts` | 摘要 provider 挑选（summary→mini→standard→primary） |
-| `src/harness/context/capabilities/**` | SummaryPort / CompactEngine 公用能力 |
+| `packages/engine/src/harness/context/layer-types.ts` | 契约 + 默认 order/priority/share |
+| `packages/engine/src/harness/context/assembler.ts` | `DefaultContextAssembler` |
+| `packages/engine/src/harness/context/layers.ts` | 薄适配层 + `createDefaultLayers` |
+| `packages/engine/src/harness/context/system-prompt-assembler.ts` | Runner 每轮 system 装配端口 |
+| `packages/engine/src/harness/context/summarize.ts` | 摘要 provider 挑选（summary→mini→standard→primary） |
+| `packages/engine/src/harness/context/capabilities/**` | SummaryPort / CompactEngine 公用能力 |
 | `tests/harness/context-layer-contracts.test.ts` | 契约行为测试 |
 | `tests/harness/context-wiring-p0.test.ts` | 接线回归 |

@@ -1,3 +1,36 @@
+## v0.55.0
+
+### feat(packaging): npm five-package monorepo split (core / engine / gateway / webui / suite)
+
+**Topology** (`arch/npm-package-split.md` §3)
+
+```
+octopi-agent (suite, bin: octopi)
+  ├─ @octopi-agent/engine  →  @octopi-agent/core
+  ├─ @octopi-agent/gateway →  engine
+  └─ @octopi-agent/webui
+```
+
+- **`@octopi-agent/core`** — `agentLoop` + Kernel contracts (`packages/core`)
+- **`@octopi-agent/engine`** — Harness 10 domains + library integrations (providers/storage/mcp/observability/web-search/agent-runtime) + built-in subsystems (memory-steward, safety-guard) + config types/factories (`packages/engine`)
+- **`@octopi-agent/gateway`** — HTTP/WS process plane, channel adapters, web api/runtime/sdk/conversation (`packages/gateway`)
+- **`@octopi-agent/webui`** — prebuilt Web console; independent registry package (scheme B: suite depends on it, does **not** bundle `dist`); `@octopi-agent/{core,engine,gateway}` are webui **devDependencies** (bundled by Vite)
+- **`octopi-agent`** — suite: CLI (`bin: octopi`), `loadConfig` / `toGatewayConfig` / compose schema, tui, testing helpers (root)
+
+**Breaking (internal R&D; no compat shims)**
+
+- Import surfaces: `octopi-agent` · `@octopi-agent/core` · `@octopi-agent/engine` · `@octopi-agent/gateway` · plugin SDK via `@octopi-agent/engine/plugin-sdk/*` (removed root `plugin-sdk/*` / `./core` / `./harness` re-export stubs)
+- npm subsystem packages: `@octopi-agent/subsystem-*` (was `@octopi/subsystem-*`)
+- Config: types/factories in engine; IO (`loadConfig`, `toGatewayConfig`, `buildFromConfigFile`) in suite; `getOctopiHome` in engine `paths.ts`
+- `octopi.schema.json` generated from Zod (`npm run generate:schema`) — no dual-source drift
+- Release artifacts: no `sourceMap` / `declarationMap`; `files` = `dist` + LICENSE/NOTICE only; `npm run clean` strips stale dist and accidental emit in `src/`
+- All five packages version-aligned **0.55.0**; internal deps `^0.55.0`; `publishConfig.access: public`
+
+**Also**
+
+- Docs/README/AGENTS import-map and monorepo layout synced; boundaries tests cover engine/gateway package rules
+- LICENSE + NOTICE shipped in every package tarball
+
 ## v0.54.7
 
 ### fix(runtime,security): workspace anchor + skill absolute paths + honest inline-code risk

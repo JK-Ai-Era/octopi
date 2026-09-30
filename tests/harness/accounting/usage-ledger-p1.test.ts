@@ -8,9 +8,9 @@ import {
   nominalTotalTokens,
   reportedPromptTokens,
   emptyTokenUsage,
-} from '../../../src/core/types/turn.js';
-import { tokenUsageFromOpenAi, tokenUsageFromAnthropic } from '../../../src/integration/providers/usage.js';
-import { UsageLedger } from '../../../src/harness/governance/accounting/usage-ledger.js';
+} from '@octopi-agent/core/types/turn.js';
+import { tokenUsageFromOpenAi, tokenUsageFromAnthropic } from '@octopi-agent/engine/integration/providers/usage.js';
+import { UsageLedger } from '@octopi-agent/engine/harness/governance/accounting/usage-ledger.js';
 
 describe('TokenUsage 分项', () => {
   it('makeTokenUsage 无 cache 时 uncached≈prompt', () => {

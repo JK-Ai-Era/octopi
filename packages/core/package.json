@@ -1,0 +1,60 @@
+{
+  "name": "@octopi-agent/core",
+  "version": "0.55.0",
+  "description": "Octopi Core — agentLoop + Kernel 契约（Layer 0–1）",
+  "type": "module",
+  "license": "Apache-2.0",
+  "main": "./dist/core/index.js",
+  "types": "./dist/core/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/core/index.d.ts",
+      "import": "./dist/core/index.js"
+    },
+    "./loop": {
+      "types": "./dist/loop/index.d.ts",
+      "import": "./dist/loop/index.js"
+    },
+    "./loop/*": {
+      "types": "./dist/loop/*",
+      "import": "./dist/loop/*"
+    },
+    "./package.json": "./package.json",
+    "./*": {
+      "types": "./dist/core/*",
+      "import": "./dist/core/*"
+    }
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "NOTICE",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsc -p tsconfig.json --watch"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "private": false,
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JK-Ai-Era/octopi.git",
+    "directory": "packages/core"
+  },
+  "homepage": "https://github.com/JK-Ai-Era/octopi#readme",
+  "bugs": {
+    "url": "https://github.com/JK-Ai-Era/octopi/issues"
+  },
+  "keywords": [
+    "agent",
+    "ai",
+    "llm",
+    "octopi"
+  ]
+}

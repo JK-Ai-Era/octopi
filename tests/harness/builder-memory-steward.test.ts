@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { AgentBuilder } from '../../src/harness/agent/builder.js';
-import { InMemoryMemoryStore } from '../../src/harness/memory/store.js';
-import type { ModelProvider, LLMRequest } from '../../src/core/interfaces/model-provider.js';
+import { AgentBuilder } from '@octopi-agent/engine/harness/agent/builder.js';
+import { InMemoryMemoryStore } from '@octopi-agent/engine/harness/memory/store.js';
+import type { ModelProvider, LLMRequest } from '@octopi-agent/core/interfaces/model-provider.js';
 import { join } from 'node:path';
 
 function mockProvider(): ModelProvider {
@@ -35,7 +35,7 @@ describe('AgentBuilder memory steward registration', () => {
       .memoryStore(memoryStore)
       .build({
         mode: 'full',
-        subsystemDirs: { builtin: join(process.cwd(), 'src', 'subsystems') },
+        subsystemDirs: { builtin: join(process.cwd(), 'packages', 'engine', 'src', 'subsystems') },
       });
 
     expect(built.runtime).toBeDefined();

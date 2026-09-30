@@ -11,8 +11,8 @@
  * 用于测试框架的容错能力。
  */
 
-import type { ModelProvider, LLMRequest, LLMResponse, LLMStreamChunk } from '../core/interfaces/model-provider.js';
-import type { ModelInfo } from '../core/types.js';
+import type { ModelProvider, LLMRequest, LLMResponse, LLMStreamChunk } from '@octopi-agent/core/interfaces/model-provider.js';
+import type { ModelInfo } from '@octopi-agent/core/types.js';
 
 // ── 故障规则 ──
 

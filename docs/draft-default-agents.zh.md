@@ -1,6 +1,6 @@
 # Platform Operating Constitution（中文草稿）
 
-> 状态：内容已定稿并译入 `src/harness/context/constitution/default-agents.md`；本文件为中文对照稿。
+> 状态：内容已定稿并译入 `packages/engine/src/harness/context/constitution/default-agents.md`；本文件为中文对照稿。
 > 原则：面向 agent 的可执行指令；不写产品/架构名词；硬规则只留与门控对齐或明确不可触犯的边界
 
 ---

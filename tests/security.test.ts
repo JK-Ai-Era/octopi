@@ -6,12 +6,12 @@ import { describe, it, expect } from 'vitest';
 import {
   DefaultEventBus,
   severityToAction,
-} from '../src/core/index.js';
-import { DefaultSecurityGuard } from '../src/harness/governance/security/default-security-guard.js';
+} from '@octopi-agent/core/index.js';
+import { DefaultSecurityGuard } from '@octopi-agent/engine/harness/governance/security/default-security-guard.js';
 import {
   CapabilityEnforcer,
   PluginTrustLevel,
-} from '../src/harness/index.js';
+} from '@octopi-agent/engine/harness/index.js';
 
 describe('CapabilityEnforcer', () => {
   it('BUILTIN 应该有全部权限', () => {

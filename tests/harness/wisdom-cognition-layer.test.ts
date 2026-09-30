@@ -3,11 +3,11 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { createDefaultSystemPromptAssembler } from '../../src/harness/context/system-prompt-assembler.js';
-import { DefaultContextAssembler } from '../../src/harness/context/assembler.js';
-import { InMemoryConceptGraph } from '../../src/harness/memory/cognition.js';
-import type { WisdomStore, WisdomEntry } from '../../src/harness/memory/types.js';
-import type { Message } from '../../src/core/types.js';
+import { createDefaultSystemPromptAssembler } from '@octopi-agent/engine/harness/context/system-prompt-assembler.js';
+import { DefaultContextAssembler } from '@octopi-agent/engine/harness/context/assembler.js';
+import { InMemoryConceptGraph } from '@octopi-agent/engine/harness/memory/cognition.js';
+import type { WisdomStore, WisdomEntry } from '@octopi-agent/engine/harness/memory/types.js';
+import type { Message } from '@octopi-agent/core/types.js';
 
 function userMsg(text: string): Message {
   return { role: 'user', content: text, timestamp: Date.now() };

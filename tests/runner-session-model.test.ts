@@ -3,12 +3,12 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { SessionAwareRunner } from '../src/harness/run/runner.js';
-import type { Agent } from '../src/harness/run/agent/index.js';
-import type { ResolvedModel } from '../src/harness/run/model/types.js';
-import type { ModelProvider } from '../src/core/interfaces/model-provider.js';
-import { InMemorySessionStore } from '../src/integration/storage/memory.js';
-import type { SessionData } from '../src/harness/session/types.js';
+import { SessionAwareRunner } from '@octopi-agent/engine/harness/run/runner.js';
+import type { Agent } from '@octopi-agent/engine/harness/run/agent/index.js';
+import type { ResolvedModel } from '@octopi-agent/engine/harness/run/model/types.js';
+import type { ModelProvider } from '@octopi-agent/core/interfaces/model-provider.js';
+import { InMemorySessionStore } from '@octopi-agent/engine/integration/storage/memory.js';
+import type { SessionData } from '@octopi-agent/engine/harness/session/types.js';
 
 function makeProvider(name: string, model: string, contextWindow?: number): ModelProvider {
   return {

@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { evaluateGates } from '../../src/harness/memory/gates.js';
-import { provisionalConfidence, injectFilter, hasQuoteEvidence } from '../../src/harness/memory/confidence.js';
-import { InMemoryMemoryStore } from '../../src/harness/memory/store.js';
-import { mapLegacyType } from '../../src/harness/memory/gates.js';
+import { evaluateGates } from '@octopi-agent/engine/harness/memory/gates.js';
+import { provisionalConfidence, injectFilter, hasQuoteEvidence } from '@octopi-agent/engine/harness/memory/confidence.js';
+import { InMemoryMemoryStore } from '@octopi-agent/engine/harness/memory/store.js';
+import { mapLegacyType } from '@octopi-agent/engine/harness/memory/gates.js';
 
 describe('memory gates', () => {
   it('rejects statistical summaries without anchors/futureUse/quote', () => {

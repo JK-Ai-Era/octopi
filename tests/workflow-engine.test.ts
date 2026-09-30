@@ -6,13 +6,13 @@ import { describe, test, expect, beforeEach, vi } from 'vitest';
 import {
   WorkflowEngine,
   SimpleStepExecutor,
-} from '../src/harness/collaboration/orchestration/workflow/engine.js';
+} from '@octopi-agent/engine/harness/collaboration/orchestration/workflow/engine.js';
 import type {
   WorkflowDefinition,
   WorkflowStep,
   StepExecutor,
   WorkflowContext,
-} from '../src/harness/collaboration/orchestration/workflow/types.js';
+} from '@octopi-agent/engine/harness/collaboration/orchestration/workflow/types.js';
 
 function createSimpleWorkflow(): WorkflowDefinition {
   return {

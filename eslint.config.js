@@ -2,16 +2,16 @@ import tseslint from 'typescript-eslint';
 
 /**
  * Architecture boundary rules:
- * - Core (Layer 1) must not import Harness / Integration / Loop / CLI / subsystems
- * - Loop (Layer 0) must not import Harness / Integration
- * - Harness (Layer 2) must not import Integration
+ * - Core (packages/core) must not import Harness / Integration / Loop / CLI / subsystems
+ * - Loop (packages/core) must not import Harness / Integration
+ * - Harness (packages/engine) must not import Integration / gateway / cli / web
  *
  * Dependency direction: Integration → Harness → Loop → Core.
  * Mirrored by tests/architecture/boundaries.test.ts.
  */
 export default tseslint.config(
   {
-    ignores: ['dist/**', 'node_modules/**', 'web/**', 'coverage/**'],
+    ignores: ['dist/**', 'node_modules/**', 'web/**', 'coverage/**', 'packages/*/dist/**', 'packages/webui/**'],
   },
   {
     files: ['**/*.ts'],
@@ -31,14 +31,14 @@ export default tseslint.config(
     },
   },
   {
-    files: ['src/core/**/*.ts'],
+    files: ['packages/core/src/core/**/*.ts'],
     rules: {
       'no-restricted-imports': [
         'error',
         {
           patterns: [
             {
-              group: ['**/harness/**', '../harness/**', '../../harness/**'],
+              group: ['**/harness/**', '../harness/**', '../../harness/**', '@octopi-agent/engine/**'],
               message:
                 'Core (Layer 1) must not import Harness. Move the contract into Core or invert the dependency.',
             },
@@ -64,14 +64,14 @@ export default tseslint.config(
     },
   },
   {
-    files: ['src/loop/**/*.ts'],
+    files: ['packages/core/src/loop/**/*.ts'],
     rules: {
       'no-restricted-imports': [
         'error',
         {
           patterns: [
             {
-              group: ['**/harness/**', '../harness/**', '../../harness/**'],
+              group: ['**/harness/**', '../harness/**', '../../harness/**', '@octopi-agent/engine/**'],
               message: 'Loop (Layer 0) must not import Harness.',
             },
             {
@@ -84,7 +84,7 @@ export default tseslint.config(
     },
   },
   {
-    files: ['src/harness/**/*.ts'],
+    files: ['packages/engine/src/harness/**/*.ts'],
     rules: {
       'no-restricted-imports': [
         'error',
@@ -94,6 +94,11 @@ export default tseslint.config(
               group: ['**/integration/**'],
               message:
                 'Harness (Layer 2) must not import Integration. Move the contract into Core/Harness or inject the implementation from the host.',
+            },
+            {
+              group: ['**/gateway/**', '**/cli/**', '**/web/**', '**/webui/**'],
+              message:
+                'Harness (Layer 2) must not import gateway / cli / web. Those belong to outer packages.',
             },
           ],
         },

@@ -8,17 +8,17 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { SessionAwareRunner } from '../../src/harness/run/runner.js';
-import type { Agent } from '../../src/harness/run/agent/index.js';
-import type { Message } from '../../src/core/types.js';
-import { InMemorySessionStore } from '../../src/integration/storage/memory.js';
-import type { SessionData } from '../../src/harness/session/types.js';
-import { compactStateKey } from '../../src/harness/context/compact-key.js';
+import { SessionAwareRunner } from '@octopi-agent/engine/harness/run/runner.js';
+import type { Agent } from '@octopi-agent/engine/harness/run/agent/index.js';
+import type { Message } from '@octopi-agent/core/types.js';
+import { InMemorySessionStore } from '@octopi-agent/engine/integration/storage/memory.js';
+import type { SessionData } from '@octopi-agent/engine/harness/session/types.js';
+import { compactStateKey } from '@octopi-agent/engine/harness/context/compact-key.js';
 import {
   readSessionCompact,
   writeSessionCompact,
-} from '../../src/harness/session/compact.js';
-import { Agent as RealAgent } from '../../src/harness/run/agent/index.js';
+} from '@octopi-agent/engine/harness/session/compact.js';
+import { Agent as RealAgent } from '@octopi-agent/engine/harness/run/agent/index.js';
 
 function emptySession(id: string, agentId = 'a1'): SessionData {
   return {

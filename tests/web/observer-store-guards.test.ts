@@ -3,8 +3,8 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { OctopiRuntimeStore } from '../../src/integration/web/runtime/store.js';
-import type { OctopiClient } from '../../src/integration/web/sdk/client.js';
+import { OctopiRuntimeStore } from '@octopi-agent/gateway/web/runtime/store.js';
+import type { OctopiClient } from '@octopi-agent/gateway/web/sdk/client.js';
 
 type Snapshot = {
   sessionId: string;

@@ -5,8 +5,8 @@
 
 describe('memory extractor removal', () => {
   it('statistical extractCandidates no longer produced by redesign path', async () => {
-    const { InMemoryMemoryStore } = await import('../../src/harness/memory/store.js');
-    const { evaluateGates } = await import('../../src/harness/memory/gates.js');
+    const { InMemoryMemoryStore } = await import('@octopi-agent/engine/harness/memory/store.js');
+    const { evaluateGates } = await import('@octopi-agent/engine/harness/memory/gates.js');
     const store = new InMemoryMemoryStore();
     const junk = '用户在会话中明确表达/确认了 3 条约束或偏好';
     const gate = evaluateGates({

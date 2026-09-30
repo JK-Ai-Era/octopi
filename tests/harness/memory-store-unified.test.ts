@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { InMemoryMemoryStore } from '../../src/harness/memory/store.js';
-import { createMemoryStoreTool, createMemorySearchTool } from '../../src/harness/extension/plugin-ecosystem/tools/memory.js';
+import { InMemoryMemoryStore } from '@octopi-agent/engine/harness/memory/store.js';
+import { createMemoryStoreTool, createMemorySearchTool } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/tools/memory.js';
 
 async function execTool(tool: { definition: { name: string }; handler: (args: any, ctx?: any) => Promise<any> }, args: any) {
   return tool.handler(args, { sessionId: 'sess-1' });

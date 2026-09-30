@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { DefaultContextAssembler } from '../../src/harness/context/assembler.js';
-import { PersonaLayer } from '../../src/harness/context/layers.js';
-import { createDefaultSystemPromptAssembler } from '../../src/harness/context/system-prompt-assembler.js';
-import { InMemoryMemoryStore } from '../../src/harness/memory/store.js';
+import { DefaultContextAssembler } from '@octopi-agent/engine/harness/context/assembler.js';
+import { PersonaLayer } from '@octopi-agent/engine/harness/context/layers.js';
+import { createDefaultSystemPromptAssembler } from '@octopi-agent/engine/harness/context/system-prompt-assembler.js';
+import { InMemoryMemoryStore } from '@octopi-agent/engine/harness/memory/store.js';
 
 describe('constitution preamble assembly', () => {
   it('places constitution first and keeps persona', async () => {

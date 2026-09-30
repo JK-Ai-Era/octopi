@@ -31,7 +31,7 @@
  *
  * 使用方式：
  * ```ts
- * import { initOctopi, ensureAgentDirs } from 'octopi/init';
+ * import { initOctopi, ensureAgentDirs } from 'octopi-agent';
  *
  * // 首次初始化（创建完整目录结构）
  * await initOctopi();
@@ -43,15 +43,13 @@
 
 import { existsSync, mkdirSync, writeFileSync, renameSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { homedir } from 'node:os';
+import {
+  DEFAULT_OCTOPI_HOME,
+  OCTOPI_HOME_ENV,
+  getOctopiHome,
+} from '@octopi-agent/engine/paths.js';
 
-// ── 常量 ──
-
-/** 默认系统根目录 */
-export const DEFAULT_OCTOPI_HOME = join(homedir(), '.octopi');
-
-/** 环境变量名 */
-export const OCTOPI_HOME_ENV = 'OCTOPI_HOME';
+export { DEFAULT_OCTOPI_HOME, OCTOPI_HOME_ENV, getOctopiHome };
 
 // ── Persona 模板 ──
 //
@@ -158,7 +156,7 @@ const LEGACY_PERSONA_MOVES: Array<{ from: string; to: string }> = [
 function generateDefaultConfig(homeDir: string, agentId: string = 'default'): object {
   const agentHome = join(homeDir, 'agents', agentId);
   return {
-    $schema: './node_modules/octopi/octopi.schema.json',
+    $schema: './node_modules/octopi-agent/octopi.schema.json',
     models: {
       mode: 'merge',
       providers: {
@@ -231,17 +229,6 @@ function generateDefaultConfig(homeDir: string, agentId: string = 'default'): ob
 }
 
 // ── 核心函数 ──
-
-/**
- * 获取 Octopi 系统根目录
- *
- * 优先级：
- * 1. 环境变量 OCTOPI_HOME
- * 2. 默认值 ~/.octopi
- */
-export function getOctopiHome(): string {
-  return resolve(process.env[OCTOPI_HOME_ENV] ?? DEFAULT_OCTOPI_HOME);
-}
 
 /**
  * 确保目录存在（递归创建）

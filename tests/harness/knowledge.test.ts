@@ -5,13 +5,13 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { KnowledgeLayer } from '../../src/harness/context/layers.js';
-import { InMemoryMemoryStore } from '../../src/harness/memory/store.js';
-import { LLMReflector } from '../../src/harness/collaboration/orchestration/reflector/index.js';
-import type { ModelProvider } from '../../src/core/interfaces/model-provider.js';
-import type { ExecutionRecord } from '../../src/harness/collaboration/orchestration/cognitive-loop.js';
-import type { LayerAssembleContext } from '../../src/harness/context/layer-types.js';
-import type { KnowledgeCatalogItem } from '../../src/harness/knowledge/catalog-types.js';
+import { KnowledgeLayer } from '@octopi-agent/engine/harness/context/layers.js';
+import { InMemoryMemoryStore } from '@octopi-agent/engine/harness/memory/store.js';
+import { LLMReflector } from '@octopi-agent/engine/harness/collaboration/orchestration/reflector/index.js';
+import type { ModelProvider } from '@octopi-agent/core/interfaces/model-provider.js';
+import type { ExecutionRecord } from '@octopi-agent/engine/harness/collaboration/orchestration/cognitive-loop.js';
+import type { LayerAssembleContext } from '@octopi-agent/engine/harness/context/layer-types.js';
+import type { KnowledgeCatalogItem } from '@octopi-agent/engine/harness/knowledge/catalog-types.js';
 
 function mockModel(response: string): ModelProvider {
   return {

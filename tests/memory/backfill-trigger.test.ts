@@ -2,20 +2,20 @@
  * BackfillTrigger — 硬收敛 / idle 漂移 / 覆盖表
  */
 import { describe, it, expect } from 'vitest';
-import { DefaultEventBus } from '../../src/core/primitives/event-bus.js';
+import { DefaultEventBus } from '@octopi-agent/core/primitives/event-bus.js';
 import {
   InMemoryBackfillCoverageStore,
   measureSessionDensity,
   passesPrefilter,
   shouldAttempt,
-} from '../../src/harness/memory/backfill-coverage.js';
-import { BackfillTrigger, BACKFILL_REQUEST_EVENT } from '../../src/harness/memory/backfill-trigger.js';
-import { findDuplicate } from '../../src/harness/memory/similarity.js';
-import { handler as backfillHandler } from '../../src/subsystems/memory-steward/backfill/handler.js';
-import { admitCandidates } from '../../src/subsystems/memory-steward/shared/policy.js';
-import { InMemoryMemoryStore } from '../../src/harness/memory/store.js';
-import type { SubsystemLLMPort } from '../../src/harness/collaboration/autonomous-subsystem/think/llm-port.js';
-import type { SessionData } from '../../src/harness/session/types.js';
+} from '@octopi-agent/engine/harness/memory/backfill-coverage.js';
+import { BackfillTrigger, BACKFILL_REQUEST_EVENT } from '@octopi-agent/engine/harness/memory/backfill-trigger.js';
+import { findDuplicate } from '@octopi-agent/engine/harness/memory/similarity.js';
+import { handler as backfillHandler } from '@octopi-agent/engine/subsystems/memory-steward/backfill/handler.js';
+import { admitCandidates } from '@octopi-agent/engine/harness/memory/steward-policy.js';
+import { InMemoryMemoryStore } from '@octopi-agent/engine/harness/memory/store.js';
+import type { SubsystemLLMPort } from '@octopi-agent/engine/harness/collaboration/autonomous-subsystem/think/llm-port.js';
+import type { SessionData } from '@octopi-agent/engine/harness/session/types.js';
 
 function makeSession(id: string, turns = 3): SessionData {
   const messages = [] as SessionData['messages'];
@@ -94,7 +94,7 @@ describe('memory.backfill.enabled config', () => {
 
 describe('type-aware decay + semantic conflict + health', () => {
   it('decay applies per-type idle/factor', async () => {
-    const { InMemoryMemoryStore } = await import('../../src/harness/memory/store.js');
+    const { InMemoryMemoryStore } = await import('@octopi-agent/engine/harness/memory/store.js');
     const store = new InMemoryMemoryStore();
     const now = Date.now();
     const methodId = await store.store({
@@ -216,7 +216,7 @@ describe('type-aware decay + semantic conflict + health', () => {
     }
     const types: string[] = [];
     events.onAll((e) => types.push(e.type));
-    const { MemoryHealthProbe } = await import('../../src/harness/memory/health-probe.js');
+    const { MemoryHealthProbe } = await import('@octopi-agent/engine/harness/memory/health-probe.js');
     const probe = new MemoryHealthProbe({
       events,
       memoryStore: store,

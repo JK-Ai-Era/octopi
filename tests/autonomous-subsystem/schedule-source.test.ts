@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { SenseEngine } from '../../src/harness/collaboration/autonomous-subsystem/sense/engine.js';
-import { SubsystemRuntime } from '../../src/harness/collaboration/autonomous-subsystem/runtime.js';
-import { validateSubsystemSpec } from '../../src/harness/collaboration/autonomous-subsystem/boundary/validator.js';
-import { DefaultEventBus } from '../../src/core/primitives/event-bus.js';
-import type { SubsystemSpec } from '../../src/harness/collaboration/autonomous-subsystem/types.js';
+import { SenseEngine } from '@octopi-agent/engine/harness/collaboration/autonomous-subsystem/sense/engine.js';
+import { SubsystemRuntime } from '@octopi-agent/engine/harness/collaboration/autonomous-subsystem/runtime.js';
+import { validateSubsystemSpec } from '@octopi-agent/engine/harness/collaboration/autonomous-subsystem/boundary/validator.js';
+import { DefaultEventBus } from '@octopi-agent/core/primitives/event-bus.js';
+import type { SubsystemSpec } from '@octopi-agent/engine/harness/collaboration/autonomous-subsystem/types.js';
 
 function makeSpec(overrides?: Partial<SubsystemSpec>): SubsystemSpec {
   return {

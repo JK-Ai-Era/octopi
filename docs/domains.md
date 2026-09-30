@@ -11,7 +11,7 @@
 | 层 | 含义 | 数量 | 出现在 |
 |----|------|------|--------|
 | **产品域 Domain** | 限界上下文：一域一语言、可独立替换 | **10** | 对外介绍、本文 |
-| **模块 Module** | `src/harness/<dir>/` 实现单元 | 20–30，会增减 | `domains.yaml`、CI |
+| **模块 Module** | `packages/engine/src/harness/<dir>/` 实现单元 | 20–30，会增减 | `domains.yaml`、CI |
 | **能力 / 基建** | 横切公用能力、层词表 | 5 | 清单 `kind`，**不计入域数** |
 
 **域 ≠ 目录。** 新建目录不自动成域；门面、词表、横切不算域。
@@ -216,7 +216,7 @@
 
 1. **唯一计数权威**：`docs/domains.yaml`  
 2. **禁止手写数字**：README_CN、CONTRIBUTING、architecture.md、harness/README 一律引用本文或清单  
-3. **CI**：`src/harness/` 目录集合 ≡ `module_catalog`（`planned: true` 允许暂缺）；未登记 fail  
+3. **CI**：`packages/engine/src/harness/` 目录集合 ≡ `module_catalog`（`planned: true` 允许暂缺）；未登记 fail  
 4. **DoD**：新建/改名/合并/删除 harness 目录的 PR 必须同 PR 更新 `domains.yaml`  
 
 ---
@@ -225,5 +225,5 @@
 
 | 日期 | 内容 |
 |------|------|
-| 2026-09-26 | **域优先目录落地**：`src/harness/` 顶层 = 10 域 + observability + shared；tool-effect 并入 execution-environment；knowledge 契约合一；孤儿文件归 session/ 与 run/ |
+| 2026-09-26 | **域优先目录落地**：`packages/engine/src/harness/` 顶层 = 10 域 + observability + shared；tool-effect 并入 execution-environment；knowledge 契约合一；孤儿文件归 session/ 与 run/ |
 | 2026-09-26 | 初版：10 产品域（Memory/Knowledge 分立；Collaboration 独立且计入）；清单 `domains.yaml` |

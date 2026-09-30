@@ -3,10 +3,10 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { Agent } from '../src/harness/run/agent/index.js';
-import type { ModelProvider } from '../src/core/interfaces/model-provider.js';
-import type { ReliabilityHarness } from '../src/harness/run/reliability/run-agent.js';
-import { bindModelName } from '../src/harness/run/reliability/model-binding.js';
+import { Agent } from '@octopi-agent/engine/harness/run/agent/index.js';
+import type { ModelProvider } from '@octopi-agent/core/interfaces/model-provider.js';
+import type { ReliabilityHarness } from '@octopi-agent/engine/harness/run/reliability/run-agent.js';
+import { bindModelName } from '@octopi-agent/engine/harness/run/reliability/model-binding.js';
 
 function makeProvider(name: string, defaultModel: string) {
   return {

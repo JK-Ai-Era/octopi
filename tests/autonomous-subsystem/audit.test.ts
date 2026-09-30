@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { AuditWriter } from '../../src/harness/collaboration/autonomous-subsystem/audit/writer.js';
-import { AuditReader } from '../../src/harness/collaboration/autonomous-subsystem/audit/reader.js';
-import type { SubsystemRun } from '../../src/harness/collaboration/autonomous-subsystem/types.js';
+import { AuditWriter } from '@octopi-agent/engine/harness/collaboration/autonomous-subsystem/audit/writer.js';
+import { AuditReader } from '@octopi-agent/engine/harness/collaboration/autonomous-subsystem/audit/reader.js';
+import type { SubsystemRun } from '@octopi-agent/engine/harness/collaboration/autonomous-subsystem/types.js';
 import { mkdtempSync, rmSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';

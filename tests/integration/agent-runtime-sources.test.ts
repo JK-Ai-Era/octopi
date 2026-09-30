@@ -10,9 +10,9 @@ import {
   WebhookSource,
   FileWatchSource,
 } from '../../src/integration/index.js';
-import { AgentRuntime } from '../../src/harness/activation/index.js';
-import type { RunDispatcher } from '../../src/harness/activation/index.js';
-import type { AgentEvent } from '../../src/core/primitives/event-bus.js';
+import { AgentRuntime } from '@octopi-agent/engine/harness/activation/index.js';
+import type { RunDispatcher } from '@octopi-agent/engine/harness/activation/index.js';
+import type { AgentEvent } from '@octopi-agent/core/primitives/event-bus.js';
 
 function mockDispatcher(calls: unknown[]): RunDispatcher {
   return {

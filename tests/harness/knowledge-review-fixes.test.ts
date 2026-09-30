@@ -4,10 +4,10 @@
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
-import { KnowledgeSourceStore } from '../../src/harness/knowledge/source-store.js';
-import { KnowledgeIngest } from '../../src/harness/knowledge/ingest.js';
-import { UrlFetcher } from '../../src/harness/knowledge/fetchers.js';
-import { CredentialStore } from '../../src/harness/governance/credentials/store.js';
+import { KnowledgeSourceStore } from '@octopi-agent/engine/harness/knowledge/source-store.js';
+import { KnowledgeIngest } from '@octopi-agent/engine/harness/knowledge/ingest.js';
+import { UrlFetcher } from '@octopi-agent/engine/harness/knowledge/fetchers.js';
+import { CredentialStore } from '@octopi-agent/engine/harness/governance/credentials/store.js';
 
 describe('index retention on failure', () => {
   const servers: http.Server[] = [];
@@ -200,7 +200,7 @@ describe('credential leak guards', () => {
     const goodBase = `http://127.0.0.1:${(good.address() as AddressInfo).port}`;
 
     const fetcher = new UrlFetcher({ allowPrivateNetwork: true, maxRedirects: 5 });
-    const { guardedFetch } = await import('../../src/harness/knowledge/network-guard.js');
+    const { guardedFetch } = await import('@octopi-agent/engine/harness/knowledge/network-guard.js');
     await guardedFetch(
       `${goodBase}/start`,
       { allowPrivateNetwork: true },

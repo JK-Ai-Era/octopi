@@ -3,14 +3,14 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { makeTokenUsage } from '../src/core/types/turn.js';
-import { DefaultRunGuard } from '../src/harness/run/run-guard/default-run-guard.js';
-import { runAgentWithReliability } from '../src/harness/run/reliability/run-agent.js';
-import { BudgetPolicyEngine } from '../src/harness/run/budget/budget.js';
-import { DefaultEventBus } from '../src/core/primitives/event-bus.js';
-import { Agent } from '../src/harness/run/agent/agent.js';
-import type { ModelProvider } from '../src/core/interfaces/model-provider.js';
-import type { ReliabilityHarness } from '../src/core/interfaces/reliability.js';
+import { makeTokenUsage } from '@octopi-agent/core/types/turn.js';
+import { DefaultRunGuard } from '@octopi-agent/engine/harness/run/run-guard/default-run-guard.js';
+import { runAgentWithReliability } from '@octopi-agent/engine/harness/run/reliability/run-agent.js';
+import { BudgetPolicyEngine } from '@octopi-agent/engine/harness/run/budget/budget.js';
+import { DefaultEventBus } from '@octopi-agent/core/primitives/event-bus.js';
+import { Agent } from '@octopi-agent/engine/harness/run/agent/agent.js';
+import type { ModelProvider } from '@octopi-agent/core/interfaces/model-provider.js';
+import type { ReliabilityHarness } from '@octopi-agent/core/interfaces/reliability.js';
 
 function failingToolModel(tokens = 50): ModelProvider {
   let n = 0;

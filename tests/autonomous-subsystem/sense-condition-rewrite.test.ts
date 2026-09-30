@@ -2,9 +2,9 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   SenseEngine,
   rewriteConditionExpression,
-} from '../../src/harness/collaboration/autonomous-subsystem/sense/engine.js';
-import { DefaultEventBus } from '../../src/core/primitives/event-bus.js';
-import type { SubsystemSpec } from '../../src/harness/collaboration/autonomous-subsystem/types.js';
+} from '@octopi-agent/engine/harness/collaboration/autonomous-subsystem/sense/engine.js';
+import { DefaultEventBus } from '@octopi-agent/core/primitives/event-bus.js';
+import type { SubsystemSpec } from '@octopi-agent/engine/harness/collaboration/autonomous-subsystem/types.js';
 
 const MEMORY_CONDITION =
   "(sessionLifecycle === 'recent' && extractionStatus === 'pending') || (eventData?.bundle != null)";

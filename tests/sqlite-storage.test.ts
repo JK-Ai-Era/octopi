@@ -5,12 +5,12 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { AgentDatabase } from '../src/harness/memory/sqlite/agent-db.js';
-import { SqliteMemoryStore } from '../src/harness/memory/sqlite/memory-store.js';
-import { SqliteWisdomStore } from '../src/harness/memory/sqlite/wisdom-store.js';
-import { SqliteConceptGraph } from '../src/harness/memory/sqlite/cognition-store.js';
-import { cosineSimilarity, cosineDistance } from '../src/harness/memory/sqlite/vector-search.js';
-import type { EmbeddingProvider } from '../src/harness/memory/sqlite/embedding.js';
+import { AgentDatabase } from '@octopi-agent/engine/harness/memory/sqlite/agent-db.js';
+import { SqliteMemoryStore } from '@octopi-agent/engine/harness/memory/sqlite/memory-store.js';
+import { SqliteWisdomStore } from '@octopi-agent/engine/harness/memory/sqlite/wisdom-store.js';
+import { SqliteConceptGraph } from '@octopi-agent/engine/harness/memory/sqlite/cognition-store.js';
+import { cosineSimilarity, cosineDistance } from '@octopi-agent/engine/harness/memory/sqlite/vector-search.js';
+import type { EmbeddingProvider } from '@octopi-agent/engine/harness/memory/sqlite/embedding.js';
 
 // ── Mock Embedding Provider ──
 

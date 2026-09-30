@@ -2,9 +2,10 @@
  * Architecture boundary tests
  *
  * Enforces dependency direction:
- * - src/core  → no harness / integration / loop / cli / subsystems
- * - src/loop  → no harness / integration
- * - src/harness → no integration
+ * - packages/core/src/core  → no harness / integration / loop / cli / subsystems
+ * - packages/core/src/loop  → no harness / integration
+ * - packages/engine/src/harness → no integration / gateway / cli / web
+ * - packages/gateway/src → no cli / suite init
  *
  * These rules are also mirrored in eslint.config.js (no-restricted-imports).
  */
@@ -15,9 +16,13 @@ import { join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const SRC = fileURLToPath(new URL('../../src', import.meta.url));
+const CORE_SRC = fileURLToPath(new URL('../../packages/core/src', import.meta.url));
+const ENGINE_SRC = fileURLToPath(new URL('../../packages/engine/src', import.meta.url));
+const GATEWAY_SRC = fileURLToPath(new URL('../../packages/gateway/src', import.meta.url));
 
 function walkTsFiles(dir: string): string[] {
   const out: string[] = [];
+  if (!statSync(dir, { throwIfNoEntry: false })) return out;
   for (const name of readdirSync(dir)) {
     const full = join(dir, name);
     const st = statSync(full);
@@ -52,19 +57,11 @@ function extractImports(source: string): string[] {
   return specs;
 }
 
-function layerOf(file: string): 'core' | 'loop' | 'other' {
-  const rel = relative(SRC, file).split(sep).join('/');
-  if (rel.startsWith('core/')) return 'core';
-  if (rel.startsWith('loop/')) return 'loop';
-  return 'other';
-}
-
 function forbiddenTargets(spec: string): string[] {
-  // Only relative imports can leave a layer; package imports are external.
+  // Only relative imports can leave a layer; package imports are checked separately.
   if (!spec.startsWith('.')) return [];
   const hit: string[] = [];
-  // Normalize roughly by checking path segments in the specifier
-  for (const layer of ['harness', 'integration', 'loop', 'cli', 'subsystems']) {
+  for (const layer of ['harness', 'integration', 'loop', 'cli', 'subsystems', 'gateway', 'web', 'webui']) {
     if (spec.includes(`/${layer}/`) || spec.endsWith(`/${layer}`) || spec === `./${layer}` || spec === `../${layer}`) {
       hit.push(layer);
     }
@@ -72,21 +69,39 @@ function forbiddenTargets(spec: string): string[] {
   return hit;
 }
 
+function packageForbiddenTargets(spec: string): string[] {
+  const hit: string[] = [];
+  if (spec.startsWith('@octopi-agent/engine/')) {
+    for (const layer of ['harness', 'integration', 'gateway', 'cli', 'web']) {
+      if (spec.includes(`/${layer}/`) || spec.endsWith(`/${layer}`)) hit.push(layer);
+    }
+  }
+  return hit;
+}
+
 describe('architecture boundaries', () => {
-  const files = walkTsFiles(SRC);
+  const coreFiles = walkTsFiles(CORE_SRC);
+  const engineFiles = walkTsFiles(ENGINE_SRC);
+  const gatewayFiles = walkTsFiles(GATEWAY_SRC);
+  const rootFiles = walkTsFiles(SRC);
 
   it('core does not import harness / integration / loop / cli / subsystems', () => {
     const violations: string[] = [];
-    for (const file of files) {
-      if (layerOf(file) !== 'core') continue;
+    for (const file of coreFiles) {
+      const rel = relative(CORE_SRC, file).split(sep).join('/');
+      // package facade may re-export loop; Layer-1 core/ must not
+      const isCore = !rel.startsWith('loop/') && rel !== 'index.ts';
+      if (!isCore) continue;
       const source = readFileSync(file, 'utf8');
       for (const spec of extractImports(source)) {
-        // core → loop is forbidden (loop is Layer 0, depends on core)
-        // but allow nothing outer
-        const hits = forbiddenTargets(spec);
-        // For core files, ANY of harness/integration/loop/cli/subsystems is bad
+        const hits = forbiddenTargets(spec).filter((h) =>
+          ['harness', 'integration', 'loop', 'cli', 'subsystems'].includes(h),
+        );
         if (hits.length > 0) {
-          violations.push(`${relative(SRC, file).split(sep).join('/')}: ${spec}`);
+          violations.push(`${rel}: ${spec}`);
+        }
+        if (packageForbiddenTargets(spec).length > 0) {
+          violations.push(`${rel}: ${spec}`);
         }
       }
     }
@@ -95,37 +110,87 @@ describe('architecture boundaries', () => {
 
   it('loop does not import harness / integration', () => {
     const violations: string[] = [];
-    for (const file of files) {
-      if (layerOf(file) !== 'loop') continue;
+    for (const file of coreFiles) {
+      const rel = relative(CORE_SRC, file).split(sep).join('/');
+      const isLoop = rel.startsWith('loop/');
+      if (!isLoop) continue;
       const source = readFileSync(file, 'utf8');
       for (const spec of extractImports(source)) {
         const hits = forbiddenTargets(spec).filter(
           (h) => h === 'harness' || h === 'integration',
         );
         if (hits.length > 0) {
-          violations.push(`${relative(SRC, file).split(sep).join('/')}: ${spec}`);
+          violations.push(`${rel}: ${spec}`);
         }
       }
     }
     expect(violations, `Loop→outer imports:\n${violations.join('\n')}`).toEqual([]);
   });
 
-  it('harness does not import integration', () => {
+  it('harness does not import integration / gateway / cli / web', () => {
     const violations: string[] = [];
-    for (const file of files) {
-      const rel = relative(SRC, file).split(sep).join('/');
+    for (const file of engineFiles) {
+      const rel = relative(ENGINE_SRC, file).split(sep).join('/');
       if (!rel.startsWith('harness/')) continue;
       const source = readFileSync(file, 'utf8');
       for (const spec of extractImports(source)) {
-        if (forbiddenTargets(spec).includes('integration')) {
+        const hits = forbiddenTargets(spec).filter((h) =>
+          ['integration', 'gateway', 'cli', 'web', 'webui'].includes(h),
+        );
+        if (hits.length > 0) {
+          violations.push(`${rel}: ${spec}`);
+        }
+        if (spec.startsWith('@octopi-agent/engine/integration')) {
+          violations.push(`${rel}: ${spec}`);
+        }
+        // engine must not reach gateway/cli/web through relative escapes
+        if (/\/(gateway|cli|web|webui)(\/|$)/.test(spec) && spec.startsWith('.')) {
           violations.push(`${rel}: ${spec}`);
         }
       }
     }
-    expect(violations, `Harness→Integration imports:\n${violations.join('\n')}`).toEqual([]);
+    expect(
+      violations,
+      `Harness→outer imports:\n${violations.join('\n')}`,
+    ).toEqual([]);
   });
 
-  it('core does not hold migrated domain contracts', () => {
+  it('engine does not import gateway / suite cli', () => {
+    const violations: string[] = [];
+    for (const file of engineFiles) {
+      const rel = relative(ENGINE_SRC, file).split(sep).join('/');
+      const source = readFileSync(file, 'utf8');
+      for (const spec of extractImports(source)) {
+        if (spec.startsWith('@octopi-agent/gateway')) {
+          violations.push(`${rel}: ${spec}`);
+        }
+        if (spec.includes('/cli/') || spec.endsWith('/cli')) {
+          violations.push(`${rel}: ${spec}`);
+        }
+      }
+    }
+    expect(violations, `Engine→gateway/cli:\n${violations.join('\n')}`).toEqual([]);
+  });
+
+  it('gateway does not import suite cli / root init IO', () => {
+    const violations: string[] = [];
+    for (const file of gatewayFiles) {
+      const rel = relative(GATEWAY_SRC, file).split(sep).join('/');
+      const source = readFileSync(file, 'utf8');
+      for (const spec of extractImports(source)) {
+        if (spec.includes('/cli/') || spec.endsWith('/cli')) {
+          violations.push(`${rel}: ${spec}`);
+        }
+        // suite init (scaffolding) must not leak into gateway; paths live in engine
+        if (/(\.\.\/)+init(\.js)?$/.test(spec)) {
+          violations.push(`${rel}: ${spec}`);
+        }
+      }
+    }
+    expect(violations, `Gateway→suite:\n${violations.join('\n')}`).toEqual([]);
+  });
+
+  it('engine does not hold migrated domain contracts', () => {
     const gone = [
       'memory.ts',
       'knowledge-store.ts',
@@ -143,18 +208,18 @@ describe('architecture boundaries', () => {
       'events.ts',
     ];
     for (const f of gone) {
-      expect(() => readFileSync(join(SRC, 'core', 'interfaces', f)), f).toThrow();
+      expect(() => readFileSync(join(CORE_SRC, 'core', 'interfaces', f)), f).toThrow();
     }
   });
 
   it('core/index (package entry) is Kernel-only — no Domain ports', () => {
-    const index = readFileSync(join(SRC, 'core', 'index.ts'), 'utf8');
+    const index = readFileSync(join(CORE_SRC, 'core', 'index.ts'), 'utf8');
     expect(index).not.toMatch(/interfaces\/domain\.js/);
     expect(index).not.toMatch(/from\s+['"]\.\/domain\.js['"]/);
     expect(index).toMatch(/interfaces\/kernel\.js/);
   });
 
   it('core/domain entry removed (Domain lives in harness)', () => {
-    expect(() => readFileSync(join(SRC, 'core', 'domain.ts'))).toThrow();
+    expect(() => readFileSync(join(CORE_SRC, 'core', 'domain.ts'))).toThrow();
   });
 });

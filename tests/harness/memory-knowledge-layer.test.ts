@@ -3,9 +3,9 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { createDefaultSystemPromptAssembler } from '../../src/harness/context/system-prompt-assembler.js';
-import { InMemoryMemoryStore } from '../../src/harness/memory/store.js';
-import type { Message } from '../../src/core/types.js';
+import { createDefaultSystemPromptAssembler } from '@octopi-agent/engine/harness/context/system-prompt-assembler.js';
+import { InMemoryMemoryStore } from '@octopi-agent/engine/harness/memory/store.js';
+import type { Message } from '@octopi-agent/core/types.js';
 
 function userMsg(text: string): Message {
   return { role: 'user', content: text, timestamp: Date.now() };

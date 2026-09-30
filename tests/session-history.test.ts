@@ -9,12 +9,12 @@ import { promisify } from 'node:util';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { JsonlSessionStore } from '../src/integration/storage/jsonl.js';
-import { createSessionHistoryPort, parseHistoryRef } from '../src/harness/session/history/index.js';
-import { createSessionHistoryTools } from '../src/harness/extension/plugin-ecosystem/tools/session-history.js';
-import { SessionAclService } from '../src/harness/governance/session-acl/service.js';
-import type { SessionData } from '../src/harness/session/types.js';
-import type { ToolExecutionContext } from '../src/core/types/tools.js';
+import { JsonlSessionStore } from '@octopi-agent/engine/integration/storage/jsonl.js';
+import { createSessionHistoryPort, parseHistoryRef } from '@octopi-agent/engine/harness/session/history/index.js';
+import { createSessionHistoryTools } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/tools/session-history.js';
+import { SessionAclService } from '@octopi-agent/engine/harness/governance/session-acl/service.js';
+import type { SessionData } from '@octopi-agent/engine/harness/session/types.js';
+import type { ToolExecutionContext } from '@octopi-agent/core/types/tools.js';
 
 const gzipAsync = promisify(gzip);
 
@@ -256,7 +256,7 @@ describe('P2 sessions.index.db projection', () => {
 
   it('save maintains index; search with index matches scan results', async () => {
     const { createSqliteSessionIndex, rebuildSessionIndexFromStore } = await import(
-      '../src/integration/storage/session-index.js'
+      '@octopi-agent/engine/integration/storage/session-index.js'
     );
     const index = await createSqliteSessionIndex({
       dbPath: join(tempDir, 'sessions.index.db'),
@@ -306,7 +306,7 @@ describe('P2 sessions.index.db projection', () => {
   });
 
   it('prefilter respects participated agent scope', async () => {
-    const { createSqliteSessionIndex } = await import('../src/integration/storage/session-index.js');
+    const { createSqliteSessionIndex } = await import('@octopi-agent/engine/integration/storage/session-index.js');
     const index = await createSqliteSessionIndex({ dbPath: join(tempDir, 'i2.db') });
     const store = new JsonlSessionStore({ sessionsDir: join(tempDir, 's2'), index });
     await store.save('mine', session('mine', 'agent-a', [
@@ -323,7 +323,7 @@ describe('P2 sessions.index.db projection', () => {
   });
 
   it('FTS5 trigram + LIKE hybrid covers short CJK and ASCII', async () => {
-    const { createSqliteSessionIndex } = await import('../src/integration/storage/session-index.js');
+    const { createSqliteSessionIndex } = await import('@octopi-agent/engine/integration/storage/session-index.js');
     const index = await createSqliteSessionIndex({ dbPath: join(tempDir, 'fts.db') });
     expect(index.ftsEnabled).toBe(true);
 
@@ -359,7 +359,7 @@ describe('P2 sessions.index.db projection', () => {
   });
 
   it('fts:false stays on LIKE and matches scan', async () => {
-    const { createSqliteSessionIndex } = await import('../src/integration/storage/session-index.js');
+    const { createSqliteSessionIndex } = await import('@octopi-agent/engine/integration/storage/session-index.js');
     const index = await createSqliteSessionIndex({
       dbPath: join(tempDir, 'like-only.db'),
       fts: false,
@@ -377,7 +377,7 @@ describe('P2 sessions.index.db projection', () => {
 
   it('ensureSessionIndexFresh rebuilds when projection lags authority', async () => {
     const { createSqliteSessionIndex, ensureSessionIndexFresh } = await import(
-      '../src/integration/storage/session-index.js'
+      '@octopi-agent/engine/integration/storage/session-index.js'
     );
     const index = await createSqliteSessionIndex({ dbPath: join(tempDir, 'fresh.db') });
     // 无钩子 store：只写权威，投影为空

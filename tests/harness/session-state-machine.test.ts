@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { createSessionStateMachine } from '../../src/harness/session/state-machine.js';
+import { createSessionStateMachine } from '@octopi-agent/engine/harness/session/state-machine.js';
 
 describe('createSessionStateMachine', () => {
   it('idle → processing → idle', () => {

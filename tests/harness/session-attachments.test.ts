@@ -6,14 +6,14 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { SessionAttachmentService } from '../../src/harness/session/attachments/service.js';
-import { sanitizeAttachmentName, isPathInside } from '../../src/harness/session/attachments/sanitize.js';
+import { SessionAttachmentService } from '@octopi-agent/engine/harness/session/attachments/service.js';
+import { sanitizeAttachmentName, isPathInside } from '@octopi-agent/engine/harness/session/attachments/sanitize.js';
 import {
   buildAttachmentMessageContent,
   buildAttachmentGroundingText,
   DEFAULT_EMPTY_ATTACHMENT_PROMPT,
-} from '../../src/harness/session/attachments/inject.js';
-import { fallbackInjectPlan, resolveInjectPlan } from '../../src/harness/session/attachments/intent.js';
+} from '@octopi-agent/engine/harness/session/attachments/inject.js';
+import { fallbackInjectPlan, resolveInjectPlan } from '@octopi-agent/engine/harness/session/attachments/intent.js';
 
 describe('SessionAttachmentService', () => {
   let sessionsDir: string;
@@ -231,7 +231,7 @@ describe('isPathInside', () => {
 describe('createLlmIntentResolver', () => {
   it('parses JSON plan from model output', async () => {
     const { createLlmIntentResolver } = await import(
-      '../../src/harness/session/attachments/llm-intent.js'
+      '@octopi-agent/engine/harness/session/attachments/llm-intent.js'
     );
     const provider = {
       chat: async () => ({

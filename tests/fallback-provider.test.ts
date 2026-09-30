@@ -5,15 +5,15 @@
  */
 
 import { describe, test, expect, vi } from 'vitest';
-import { FallbackProvider } from '../src/harness/run/reliability/fallback-provider.js';
+import { FallbackProvider } from '@octopi-agent/engine/harness/run/reliability/fallback-provider.js';
 import type {
   ModelProvider,
   LLMRequest,
   LLMResponse,
   LLMStreamChunk,
-} from '../src/core/interfaces/model-provider.js';
-import type { ModelInfo } from '../src/core/types/agent-definition.js';
-import type { ModelConfig } from '../src/harness/shared/types/agent-definition.js';
+} from '@octopi-agent/core/interfaces/model-provider.js';
+import type { ModelInfo } from '@octopi-agent/core/types/agent-definition.js';
+import type { ModelConfig } from '@octopi-agent/engine/harness/shared/types/agent-definition.js';
 
 function makeRequest(model?: string): LLMRequest {
   return {

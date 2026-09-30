@@ -10,11 +10,11 @@ import {
   isLanHost,
   resolveViteHostArg,
   type NetworkHostConfig,
-} from '../config.js';
+} from '@octopi-agent/engine/config.js';
 import { ensureDaemonConfig } from './daemon.js';
-import { getOctopiHome } from '../init.js';
+import { getOctopiHome } from '@octopi-agent/engine/paths.js';
 import {
-  findWebDir,
+  findWebDist,
   startWebUi,
   stopWebUi,
   readWebUiPidRecord,
@@ -113,50 +113,49 @@ export async function webuiStartCommand(
   const webSettings = readConfigWebSettings(configPath);
   const configWebDir = webSettings.dir;
   const webHost = webSettings.host;
-  const webDir = findWebDir(configPath, configWebDir);
-  if (!webDir) {
+  const webDist = findWebDist(configPath, configWebDir);
+  if (!webDist) {
     if (soft) {
-      console.warn('⚠️  Web UI directory not found, skipping Web UI');
-      console.warn('   Set "web.dir" in config, $OCTOPI_WEB_DIR, or run from a directory that contains web/package.json');
+      console.warn('⚠️  Web UI dist not found, skipping Web UI');
+      console.warn('   Set "web.dir" in config, $OCTOPI_WEB_DIR, or install @octopi-agent/webui');
       return;
     }
-    console.error('❌ Web UI directory not found. Searched:');
+    console.error('❌ Web UI dist not found. Searched:');
     console.error('   - $OCTOPI_WEB_DIR (if set)');
     console.error('   - Config "web.dir" (if set)');
-    console.error('   - Config file directory + /web');
-    console.error('   - ~/.octopi/web');
-    console.error('   - CLI package root + /web');
-    console.error('   - ./web/package.json (current directory)');
+    console.error('   - node_modules/@octopi-agent/webui/dist');
+    console.error('   - packages/webui/dist (monorepo)');
+    console.error('   - ~/.octopi/web/dist');
     process.exit(1);
   }
 
-  const hostArg = resolveViteHostArg(webHost);
+  const listenHost = resolveViteHostArg(webHost);
   const lanOpen = isLanHost(webHost);
+  const port = 5173;
 
-  const pid = startWebUi(webDir, { hostArg });
+  const pid = startWebUi(webDist, { hostArg: listenHost, port });
   if (!pid) {
     if (soft) {
-      console.warn('⚠️  Failed to start Web UI (is web/ installed?). Gateway continues without it.');
-      console.warn(`   Directory: ${webDir}`);
-      console.warn(`   Run: npm --prefix "${webDir}" install`);
+      console.warn('⚠️  Failed to start Web UI static server. Gateway continues without it.');
+      console.warn(`   Dist: ${webDist}`);
       return;
     }
     console.error('❌ Failed to start Web UI');
-    console.error(`   Directory: ${webDir}`);
-    console.error(`   Ensure dependencies are installed: npm --prefix "${webDir}" install`);
+    console.error(`   Dist: ${webDist}`);
     process.exit(1);
   }
 
-  writeWebUiPidFile(pid, { dir: webDir, host: webHost });
+  writeWebUiPidFile(pid, { dir: webDist, host: webHost });
   console.log(`✅ Web UI started (PID: ${pid})`);
-  console.log(`   Directory: ${webDir}`);
+  console.log(`   Dist:   ${webDist}`);
   if (lanOpen) {
     const lanIp = firstLanIPv4();
-    console.log(`   Access:    LAN (host=${hostArg})`);
-    if (lanIp) console.log(`   URL:       http://${lanIp}:5173`);
-    console.log('   Note:      Gateway 也需 channels[].host/web.host 为 "lan"，局域网客户端才能连上 API');
+    console.log(`   Access: LAN (host=${listenHost})`);
+    if (lanIp) console.log(`   URL:    http://${lanIp}:${port}`);
+    console.log('   Note:   Gateway 也需 channels[].host/web.host 为 "lan"，局域网客户端才能连上 API');
   } else {
-    console.log(`   Access:    local only (host=${hostArg})`);
+    console.log(`   Access: local only (host=${listenHost})`);
+    console.log(`   URL:    http://${listenHost === '0.0.0.0' ? '127.0.0.1' : listenHost}:${port}`);
   }
   console.log(`\nUse 'octopi webui stop' to stop, 'octopi webui status' to check.`);
 
@@ -222,8 +221,8 @@ export async function webuiStatusCommand(): Promise<void> {
       console.log(`   But port ${portHit.port} is LISTENING (PID: ${portHit.pid}) — started outside CLI?`);
     }
     const configWebDir = readConfigWebDir();
-    const webDir = findWebDir(undefined, configWebDir);
-    if (webDir) console.log(`   Detected Web UI directory (not started via CLI): ${webDir}`);
+    const webDist = findWebDist(undefined, configWebDir);
+    if (webDist) console.log(`   Detected Web UI dist (not started via CLI): ${webDist}`);
     return;
   }
 

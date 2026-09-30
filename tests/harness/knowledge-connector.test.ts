@@ -4,11 +4,11 @@
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
-import { KnowledgeSourceStore } from '../../src/harness/knowledge/source-store.js';
-import { KnowledgeIngest } from '../../src/harness/knowledge/ingest.js';
-import { RestConnector, ConnectorRegistry } from '../../src/harness/knowledge/connectors.js';
-import { CredentialStore } from '../../src/harness/governance/credentials/store.js';
-import { createHttpRequestTool } from '../../src/harness/extension/plugin-ecosystem/tools/http.js';
+import { KnowledgeSourceStore } from '@octopi-agent/engine/harness/knowledge/source-store.js';
+import { KnowledgeIngest } from '@octopi-agent/engine/harness/knowledge/ingest.js';
+import { RestConnector, ConnectorRegistry } from '@octopi-agent/engine/harness/knowledge/connectors.js';
+import { CredentialStore } from '@octopi-agent/engine/harness/governance/credentials/store.js';
+import { createHttpRequestTool } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/tools/http.js';
 
 describe('RestConnector', () => {
   const servers: http.Server[] = [];

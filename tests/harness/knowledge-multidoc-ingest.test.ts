@@ -4,9 +4,9 @@
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
-import { UrlFetcher } from '../../src/harness/knowledge/fetchers.js';
-import { KnowledgeSourceStore } from '../../src/harness/knowledge/source-store.js';
-import { KnowledgeIngest } from '../../src/harness/knowledge/ingest.js';
+import { UrlFetcher } from '@octopi-agent/engine/harness/knowledge/fetchers.js';
+import { KnowledgeSourceStore } from '@octopi-agent/engine/harness/knowledge/source-store.js';
+import { KnowledgeIngest } from '@octopi-agent/engine/harness/knowledge/ingest.js';
 
 const serverPages = new Map<string, string>();
 

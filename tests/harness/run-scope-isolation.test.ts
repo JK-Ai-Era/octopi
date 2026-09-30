@@ -8,12 +8,12 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { withRunScope, getRunScope } from '../../src/harness/run/run-scope.js';
-import { SessionAwareRunner } from '../../src/harness/run/runner.js';
-import type { Agent } from '../../src/harness/run/agent/index.js';
-import type { Message } from '../../src/core/types.js';
-import { InMemorySessionStore } from '../../src/integration/storage/memory.js';
-import type { SessionData } from '../../src/harness/session/types.js';
+import { withRunScope, getRunScope } from '@octopi-agent/engine/harness/run/run-scope.js';
+import { SessionAwareRunner } from '@octopi-agent/engine/harness/run/runner.js';
+import type { Agent } from '@octopi-agent/engine/harness/run/agent/index.js';
+import type { Message } from '@octopi-agent/core/types.js';
+import { InMemorySessionStore } from '@octopi-agent/engine/integration/storage/memory.js';
+import type { SessionData } from '@octopi-agent/engine/harness/session/types.js';
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));

@@ -1,10 +1,10 @@
 import { it, expect } from 'vitest';
-import { SubsystemLoader } from '../../src/harness/collaboration/autonomous-subsystem/loader.js';
+import { SubsystemLoader } from '@octopi-agent/engine/harness/collaboration/autonomous-subsystem/loader.js';
 import { join } from 'node:path';
 
 it('loads safety-guard from subsystems/ directory', async () => {
   const loader = new SubsystemLoader({
-    builtinDir: join(process.cwd(), 'src', 'subsystems'),
+    builtinDir: join(process.cwd(), 'packages', 'engine', 'src', 'subsystems'),
   });
   const result = await loader.loadAll();
 

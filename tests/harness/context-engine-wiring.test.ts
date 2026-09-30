@@ -3,10 +3,10 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { AgentBuilder } from '../../src/harness/agent/builder.js';
-import type { ModelProvider } from '../../src/core/interfaces/model-provider.js';
-import type { ContextEngine, AssembleParams, AssembleResult } from '../../src/harness/context/types.js';
-import type { Message } from '../../src/core/types.js';
+import { AgentBuilder } from '@octopi-agent/engine/harness/agent/builder.js';
+import type { ModelProvider } from '@octopi-agent/core/interfaces/model-provider.js';
+import type { ContextEngine, AssembleParams, AssembleResult } from '@octopi-agent/engine/harness/context/types.js';
+import type { Message } from '@octopi-agent/core/types.js';
 
 function mockProvider(): ModelProvider {
   return {

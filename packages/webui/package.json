@@ -1,0 +1,54 @@
+{
+  "name": "@octopi-agent/webui",
+  "private": false,
+  "version": "0.55.0",
+  "description": "Octopi WebUI — 预构建控制台静态工程（product 形态外挂）",
+  "type": "module",
+  "files": [
+    "dist",
+    "LICENSE",
+    "NOTICE",
+    "README.md",
+    "package.json"
+  ],
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-markdown": "^10.1.0",
+    "rehype-highlight": "^7.0.2",
+    "remark-gfm": "^4.0.1"
+  },
+  "devDependencies": {
+    "@octopi-agent/core": "^0.55.0",
+    "@octopi-agent/engine": "^0.55.0",
+    "@octopi-agent/gateway": "^0.55.0",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "typescript": "^5.5.4",
+    "vite": "^5.4.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JK-Ai-Era/octopi.git",
+    "directory": "packages/webui"
+  },
+  "homepage": "https://github.com/JK-Ai-Era/octopi#readme",
+  "bugs": {
+    "url": "https://github.com/JK-Ai-Era/octopi/issues"
+  },
+  "keywords": [
+    "agent",
+    "ai",
+    "llm",
+    "octopi"
+  ]
+}

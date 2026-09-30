@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { ConversationAdapter } from '../../src/integration/web/conversation/adapter.js';
+import { ConversationAdapter } from '@octopi-agent/gateway/web/conversation/adapter.js';
 
 describe('buildHistoryItems hides managed systemPrompt', () => {
   it('跳过 metadata.source=systemPrompt', () => {

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { SubsystemSessionManager, parseTTL } from '../../src/harness/collaboration/autonomous-subsystem/session/manager.js';
+import { SubsystemSessionManager, parseTTL } from '@octopi-agent/engine/harness/collaboration/autonomous-subsystem/session/manager.js';
 
 describe('parseTTL', () => {
   it('parses minutes', () => { expect(parseTTL('30m')).toBe(30 * 60 * 1000); });

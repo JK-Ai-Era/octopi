@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { DefaultToolCallRiskPolicy } from '../../src/harness/governance/security/default-risk-policy.js';
+import { DefaultToolCallRiskPolicy } from '@octopi-agent/engine/harness/governance/security/default-risk-policy.js';
 
 describe('DefaultToolCallRiskPolicy', () => {
   const policy = new DefaultToolCallRiskPolicy({ cwd: '/Users/dev/myproject' });

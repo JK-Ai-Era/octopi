@@ -3,10 +3,10 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { makeTokenUsage } from '../src/core/types/turn.js';
-import { DefaultRunGuard, createRunGuard } from '../src/harness/run/run-guard/default-run-guard.js';
-import type { CheckpointContext, CheckpointMetrics } from '../src/core/interfaces/run-guard.js';
-import type { ModelProvider } from '../src/core/interfaces/model-provider.js';
+import { makeTokenUsage } from '@octopi-agent/core/types/turn.js';
+import { DefaultRunGuard, createRunGuard } from '@octopi-agent/engine/harness/run/run-guard/default-run-guard.js';
+import type { CheckpointContext, CheckpointMetrics } from '@octopi-agent/core/interfaces/run-guard.js';
+import type { ModelProvider } from '@octopi-agent/core/interfaces/model-provider.js';
 
 // ── 工具函数 ──
 
@@ -375,7 +375,7 @@ describe('DefaultRunGuard', () => {
 
   describe('Builder 自动接入', () => {
     it('无参 runGuard() 应该自动创建 DefaultRunGuard', async () => {
-      const { AgentBuilder } = await import('../src/harness/agent/builder.js');
+      const { AgentBuilder } = await import('@octopi-agent/engine/harness/agent/builder.js');
       const mockModel: ModelProvider = {
         name: 'mock',
         chat: vi.fn().mockResolvedValue({ content: 'Hello!', model: 'mock', usage: makeTokenUsage({ promptTokens: 10, completionTokens: 5 }) }),
@@ -397,7 +397,7 @@ describe('DefaultRunGuard', () => {
     });
 
     it('config 形式 runGuard({}) 应该自动接入 model', async () => {
-      const { AgentBuilder } = await import('../src/harness/agent/builder.js');
+      const { AgentBuilder } = await import('@octopi-agent/engine/harness/agent/builder.js');
       const mockModel: ModelProvider = {
         name: 'mock',
         chat: vi.fn().mockResolvedValue({ content: 'OK', model: 'mock', usage: makeTokenUsage({ promptTokens: 10, completionTokens: 5 }) }),

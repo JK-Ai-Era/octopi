@@ -3,12 +3,12 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { SessionGate } from '../../src/harness/run/concurrency/session-gate.js';
-import { SessionAwareRunner } from '../../src/harness/run/runner.js';
-import { Agent } from '../../src/harness/run/agent/agent.js';
-import { InMemorySessionStore } from '../../src/integration/storage/memory.js';
-import type { ModelProvider } from '../../src/core/interfaces/model-provider.js';
-import type { ReliabilityHarness } from '../../src/core/interfaces/reliability.js';
+import { SessionGate } from '@octopi-agent/engine/harness/run/concurrency/session-gate.js';
+import { SessionAwareRunner } from '@octopi-agent/engine/harness/run/runner.js';
+import { Agent } from '@octopi-agent/engine/harness/run/agent/agent.js';
+import { InMemorySessionStore } from '@octopi-agent/engine/integration/storage/memory.js';
+import type { ModelProvider } from '@octopi-agent/core/interfaces/model-provider.js';
+import type { ReliabilityHarness } from '@octopi-agent/core/interfaces/reliability.js';
 
 function mockProvider(): ModelProvider {
   return {

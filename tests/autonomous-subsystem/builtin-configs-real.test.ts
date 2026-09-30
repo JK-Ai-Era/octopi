@@ -1,11 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { SubsystemLoader } from '../../src/harness/collaboration/autonomous-subsystem/loader.js';
+import { SubsystemLoader } from '@octopi-agent/engine/harness/collaboration/autonomous-subsystem/loader.js';
 import { join } from 'node:path';
 
 describe('builtin subsystem configs', () => {
   it('loads memory-steward multi-spec package and safety-guard', async () => {
     const loader = new SubsystemLoader({
-      builtinDir: join(process.cwd(), 'src', 'subsystems'),
+      builtinDir: join(process.cwd(), 'packages', 'engine', 'src', 'subsystems'),
     });
     const { specs, errors } = await loader.loadAll();
     const ids = specs.map((s) => s.id);

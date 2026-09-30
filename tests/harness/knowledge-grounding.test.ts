@@ -14,12 +14,12 @@ import {
   isKnowledgeGroundingMessage,
   stripKnowledgeGrounding,
   KNOWLEDGE_GROUNDING_SOURCE,
-} from '../../src/harness/knowledge/grounding.js';
-import { KnowledgeSourceStore } from '../../src/harness/knowledge/source-store.js';
-import { KnowledgeIngest } from '../../src/harness/knowledge/ingest.js';
-import { KnowledgeRetriever } from '../../src/harness/knowledge/retriever.js';
-import { createKnowledgeTools } from '../../src/harness/extension/plugin-ecosystem/tools/knowledge.js';
-import type { Message } from '../../src/core/types.js';
+} from '@octopi-agent/engine/harness/knowledge/grounding.js';
+import { KnowledgeSourceStore } from '@octopi-agent/engine/harness/knowledge/source-store.js';
+import { KnowledgeIngest } from '@octopi-agent/engine/harness/knowledge/ingest.js';
+import { KnowledgeRetriever } from '@octopi-agent/engine/harness/knowledge/retriever.js';
+import { createKnowledgeTools } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/tools/knowledge.js';
+import type { Message } from '@octopi-agent/core/types.js';
 
 function user(text: string): Message {
   return { role: 'user', content: text, timestamp: Date.now() };

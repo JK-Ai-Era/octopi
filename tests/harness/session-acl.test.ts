@@ -10,14 +10,14 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { SessionAclService } from '../../src/harness/governance/session-acl/service.js';
-import { BUILTIN_SESSION_ROLES } from '../../src/harness/governance/session-acl/seed-roles.js';
+import { SessionAclService } from '@octopi-agent/engine/harness/governance/session-acl/service.js';
+import { BUILTIN_SESSION_ROLES } from '@octopi-agent/engine/harness/governance/session-acl/seed-roles.js';
 import {
   computeEffectiveRights,
   intersectRights,
   exceedsRightsCeiling,
-} from '../../src/harness/governance/session-acl/rights.js';
-import type { SessionData } from '../../src/harness/session/types.js';
+} from '@octopi-agent/engine/harness/governance/session-acl/rights.js';
+import type { SessionData } from '@octopi-agent/engine/harness/session/types.js';
 
 function session(id = 's1', agentId = 'owner-agent'): SessionData {
   return {

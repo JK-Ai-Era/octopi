@@ -6,11 +6,11 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { mkdtemp, writeFile, mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { KnowledgeSourceStore } from '../../src/harness/knowledge/source-store.js';
-import { KnowledgeIndexStore } from '../../src/harness/knowledge/index-store.js';
-import { KnowledgeIngest } from '../../src/harness/knowledge/ingest.js';
-import { KnowledgeRetriever } from '../../src/harness/knowledge/retriever.js';
-import type { EmbeddingProvider } from '../../src/harness/memory/sqlite/embedding.js';
+import { KnowledgeSourceStore } from '@octopi-agent/engine/harness/knowledge/source-store.js';
+import { KnowledgeIndexStore } from '@octopi-agent/engine/harness/knowledge/index-store.js';
+import { KnowledgeIngest } from '@octopi-agent/engine/harness/knowledge/ingest.js';
+import { KnowledgeRetriever } from '@octopi-agent/engine/harness/knowledge/retriever.js';
+import type { EmbeddingProvider } from '@octopi-agent/engine/harness/memory/sqlite/embedding.js';
 
 /** 确定性假向量：按词哈希到维度桶 */
 function fakeEmbedding(dim = 8): EmbeddingProvider {

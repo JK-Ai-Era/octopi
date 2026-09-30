@@ -3,9 +3,9 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { probeContextLayerHealth } from '../../src/harness/context/layer-health.js';
-import { InMemoryMemoryStore } from '../../src/harness/memory/store.js';
-import type { WisdomStore, WisdomEntry } from '../../src/harness/memory/types.js';
+import { probeContextLayerHealth } from '@octopi-agent/engine/harness/context/layer-health.js';
+import { InMemoryMemoryStore } from '@octopi-agent/engine/harness/memory/store.js';
+import type { WisdomStore, WisdomEntry } from '@octopi-agent/engine/harness/memory/types.js';
 
 class TestWisdomStore implements WisdomStore {
   private entries: WisdomEntry[] = [];
@@ -61,7 +61,7 @@ describe('probeContextLayerHealth', () => {
 
 describe('probeAgentHomeHealth', () => {
   it('无 home 数据时 configured=false', async () => {
-    const { probeAgentHomeHealth } = await import('../../src/harness/context/layer-health.js');
+    const { probeAgentHomeHealth } = await import('@octopi-agent/engine/harness/context/layer-health.js');
     const health = await probeAgentHomeHealth('a3', 'C:\\no\\such\\home\\octopi-test');
     expect(health.configured).toBe(false);
   });
@@ -75,7 +75,7 @@ describe('probeAgentHomeHealth', () => {
       await fs.writeFile(join(home, 'AGENTS.md'), '# agent\n');
       await fs.mkdir(join(home, 'skills', 'demo'), { recursive: true });
       await fs.writeFile(join(home, 'skills', 'demo', 'SKILL.md'), '---\nname: demo\n---\n');
-      const { probeAgentHomeHealth } = await import('../../src/harness/context/layer-health.js');
+      const { probeAgentHomeHealth } = await import('@octopi-agent/engine/harness/context/layer-health.js');
       const health = await probeAgentHomeHealth('a4', home);
       expect(health.configured).toBe(true);
       expect(health.summary.personaLoaded).toBe(true);

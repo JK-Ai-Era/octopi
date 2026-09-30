@@ -18,8 +18,8 @@ import {
 } from '@earendil-works/pi-tui';
 import { theme, editorTheme } from './theme.js';
 import { ChatLog } from './components.js';
-import type { AgentEvent } from '../../core/primitives/event-bus.js';
-import { GatewayChatClient } from '../gateway/client.js';
+import type { AgentEvent } from '@octopi-agent/core/primitives/event-bus.js';
+import { GatewayChatClient } from '@octopi-agent/gateway/gateway/client.js';
 
 // ── Types ──
 

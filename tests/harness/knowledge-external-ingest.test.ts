@@ -4,12 +4,12 @@
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
-import { htmlToStructuredText, looksLikeHtml } from '../../src/harness/knowledge/html.js';
-import { assertUrlAllowed, isRestrictedIp } from '../../src/harness/knowledge/network-guard.js';
-import { UrlFetcher } from '../../src/harness/knowledge/fetchers.js';
-import { KnowledgeSourceStore } from '../../src/harness/knowledge/source-store.js';
-import { KnowledgeIngest } from '../../src/harness/knowledge/ingest.js';
-import { CredentialStore } from '../../src/harness/governance/credentials/store.js';
+import { htmlToStructuredText, looksLikeHtml } from '@octopi-agent/engine/harness/knowledge/html.js';
+import { assertUrlAllowed, isRestrictedIp } from '@octopi-agent/engine/harness/knowledge/network-guard.js';
+import { UrlFetcher } from '@octopi-agent/engine/harness/knowledge/fetchers.js';
+import { KnowledgeSourceStore } from '@octopi-agent/engine/harness/knowledge/source-store.js';
+import { KnowledgeIngest } from '@octopi-agent/engine/harness/knowledge/ingest.js';
+import { CredentialStore } from '@octopi-agent/engine/harness/governance/credentials/store.js';
 
 function makeHtml(): string {
   return `<!doctype html>

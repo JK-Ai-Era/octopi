@@ -3,8 +3,8 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { getBuiltinModelInfo, mergeWithBuiltinInfo } from '../src/builtin-model-info.js';
-import { OpenAIProvider } from '../src/integration/providers/openai.js';
+import { getBuiltinModelInfo, mergeWithBuiltinInfo } from '@octopi-agent/engine/builtin-model-info.js';
+import { OpenAIProvider } from '@octopi-agent/engine/integration/providers/openai.js';
 
 describe('Builtin ModelInfo（仅数据表）', () => {
   it('returns info for known models', () => {

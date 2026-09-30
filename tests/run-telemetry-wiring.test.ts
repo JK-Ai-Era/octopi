@@ -6,15 +6,15 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { AgentBuilder } from '../src/harness/agent/builder.js';
+import { AgentBuilder } from '@octopi-agent/engine/harness/agent/builder.js';
 import {
   setRunTelemetryFactory,
   getRunTelemetryFactory,
-} from '../src/harness/observability/run-telemetry.js';
-import { createRunTelemetry } from '../src/integration/observability/run-telemetry.js';
-import { InMemorySessionStore } from '../src/harness/session/in-memory-store.js';
-import type { ModelProvider, LLMStreamChunk } from '../src/core/index.js';
-import type { AgentEvent } from '../src/core/primitives/event-bus.js';
+} from '@octopi-agent/engine/harness/observability/run-telemetry.js';
+import { createRunTelemetry } from '@octopi-agent/engine/integration/observability/run-telemetry.js';
+import { InMemorySessionStore } from '@octopi-agent/engine/harness/session/in-memory-store.js';
+import type { ModelProvider, LLMStreamChunk } from '@octopi-agent/core/index.js';
+import type { AgentEvent } from '@octopi-agent/core/primitives/event-bus.js';
 
 function mockProvider(): ModelProvider {
   return {

@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { AgentEvents } from '../../src/harness/shared/events/agent-event-map.js';
+import { AgentEvents } from '@octopi-agent/engine/harness/shared/events/agent-event-map.js';
 
 const MAP_KEYS = [
   'engine.start',

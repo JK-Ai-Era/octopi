@@ -3,20 +3,20 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { AgentDatabase } from '../../src/harness/memory/sqlite/agent-db.js';
-import { SqliteMemoryStore } from '../../src/harness/memory/sqlite/memory-store.js';
-import { InMemoryMemoryStore } from '../../src/harness/memory/store.js';
+import { AgentDatabase } from '@octopi-agent/engine/harness/memory/sqlite/agent-db.js';
+import { SqliteMemoryStore } from '@octopi-agent/engine/harness/memory/sqlite/memory-store.js';
+import { InMemoryMemoryStore } from '@octopi-agent/engine/harness/memory/store.js';
 import {
   tokenizeKeywordQuery,
   scoreKeywordFields,
   buildKeywordLikeSql,
-} from '../../src/harness/memory/sqlite/keyword-search.js';
+} from '@octopi-agent/engine/harness/memory/sqlite/keyword-search.js';
 import {
   resolveEmbeddingRuntime,
   createEmbeddingProviderFromModels,
   isEmbeddingEnabled,
-} from '../../src/harness/memory/sqlite/embedding-from-models.js';
-import type { EmbeddingProvider } from '../../src/harness/memory/sqlite/embedding.js';
+} from '@octopi-agent/engine/harness/memory/sqlite/embedding-from-models.js';
+import type { EmbeddingProvider } from '@octopi-agent/engine/harness/memory/sqlite/embedding.js';
 import type { ModelsConfig } from '../../src/config.js';
 
 function createMockEmbedding(dimensions = 32): EmbeddingProvider {
@@ -189,7 +189,7 @@ describe('models.embedding resolve', () => {
 describe('HttpEmbeddingProvider generic mapping', () => {
   it('parses custom embeddingsPath without auth header', async () => {
     const { createEmbeddingProvider } = await import(
-      '../../src/harness/memory/sqlite/embedding.js'
+      '@octopi-agent/engine/harness/memory/sqlite/embedding.js'
     );
     const provider = createEmbeddingProvider({
       type: 'http',
@@ -228,7 +228,7 @@ describe('HttpEmbeddingProvider response parsing', () => {
 
   it('parses ollama flat embedding at path "embedding"', async () => {
     const { createEmbeddingProvider } = await import(
-      '../../src/harness/memory/sqlite/embedding.js'
+      '@octopi-agent/engine/harness/memory/sqlite/embedding.js'
     );
     const provider = createEmbeddingProvider({
       type: 'ollama',
@@ -242,7 +242,7 @@ describe('HttpEmbeddingProvider response parsing', () => {
 
   it('parses openai data[0].embedding', async () => {
     const { createEmbeddingProvider } = await import(
-      '../../src/harness/memory/sqlite/embedding.js'
+      '@octopi-agent/engine/harness/memory/sqlite/embedding.js'
     );
     const provider = createEmbeddingProvider({
       type: 'openai',
@@ -257,7 +257,7 @@ describe('HttpEmbeddingProvider response parsing', () => {
 
   it('parses nested embeddings array (ollama /api/embed style)', async () => {
     const { createEmbeddingProvider } = await import(
-      '../../src/harness/memory/sqlite/embedding.js'
+      '@octopi-agent/engine/harness/memory/sqlite/embedding.js'
     );
     const provider = createEmbeddingProvider({
       type: 'ollama',
@@ -277,7 +277,7 @@ describe('HttpEmbeddingProvider response parsing', () => {
 
   it('defaults ollama supportsBatch=false so embedBatch stays serial', async () => {
     const { createEmbeddingProvider } = await import(
-      '../../src/harness/memory/sqlite/embedding.js'
+      '@octopi-agent/engine/harness/memory/sqlite/embedding.js'
     );
     const provider = createEmbeddingProvider({
       type: 'ollama',
@@ -310,7 +310,7 @@ describe('HttpEmbeddingProvider response parsing', () => {
 
   it('sends dimensions in body only when user configured it', async () => {
     const { createEmbeddingProvider } = await import(
-      '../../src/harness/memory/sqlite/embedding.js'
+      '@octopi-agent/engine/harness/memory/sqlite/embedding.js'
     );
     const bodies: Array<Record<string, unknown>> = [];
     globalThis.fetch = (async (_url: unknown, init?: { body?: string }) => {
@@ -345,7 +345,7 @@ describe('HttpEmbeddingProvider response parsing', () => {
 
   it('slices embedBatch by maxBatchSize', async () => {
     const { createEmbeddingProvider } = await import(
-      '../../src/harness/memory/sqlite/embedding.js'
+      '@octopi-agent/engine/harness/memory/sqlite/embedding.js'
     );
     const batchSizes: number[] = [];
     globalThis.fetch = (async (_url: unknown, init?: { body?: string }) => {

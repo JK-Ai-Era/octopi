@@ -3,9 +3,9 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import type { Message } from '../../src/core/types.js';
-import type { LLMMessage } from '../../src/core/interfaces/model-provider.js';
-import { DefaultContextEngine } from '../../src/harness/context/default-context-engine.js';
+import type { Message } from '@octopi-agent/core/types.js';
+import type { LLMMessage } from '@octopi-agent/core/interfaces/model-provider.js';
+import { DefaultContextEngine } from '@octopi-agent/engine/harness/context/default-context-engine.js';
 
 function userMsg(text: string): Message {
   return { role: 'user', content: text, timestamp: Date.now() };

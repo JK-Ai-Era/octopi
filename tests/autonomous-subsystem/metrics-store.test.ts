@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { MetricsStore } from '../../src/harness/collaboration/autonomous-subsystem/sense/metrics.js';
+import { MetricsStore } from '@octopi-agent/engine/harness/collaboration/autonomous-subsystem/sense/metrics.js';
 
 describe('MetricsStore', () => {
   it('update / get', () => {

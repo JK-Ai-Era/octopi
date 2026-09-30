@@ -3,11 +3,11 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { AgentBuilder } from '../../src/harness/agent/builder.js';
-import type { ModelProvider } from '../../src/core/interfaces/model-provider.js';
-import type { Message } from '../../src/core/types.js';
-import type { SessionData } from '../../src/harness/session/types.js';
-import type { SessionStore } from '../../src/core/interfaces/session-store.js';
+import { AgentBuilder } from '@octopi-agent/engine/harness/agent/builder.js';
+import type { ModelProvider } from '@octopi-agent/core/interfaces/model-provider.js';
+import type { Message } from '@octopi-agent/core/types.js';
+import type { SessionData } from '@octopi-agent/engine/harness/session/types.js';
+import type { SessionStore } from '@octopi-agent/core/interfaces/session-store.js';
 
 function mockProvider(): ModelProvider {
   return {

@@ -10,13 +10,13 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { makeTokenUsage } from '../src/core/types/turn.js';
-import { Agent } from '../src/harness/run/agent/agent.js';
-import { runAgentWithReliability } from '../src/harness/run/reliability/run-agent.js';
-import type { ReliabilityHarness } from '../src/harness/run/reliability/run-agent.js';
-import type { AgentLoopEvent } from '../src/loop/types.js';
-import type { ModelProvider, LLMRequest, LLMResponse, LLMStreamChunk } from '../src/core/interfaces/model-provider.js';
-import type { Message, RegisteredTool } from '../src/core/types.js';
+import { makeTokenUsage } from '@octopi-agent/core/types/turn.js';
+import { Agent } from '@octopi-agent/engine/harness/run/agent/agent.js';
+import { runAgentWithReliability } from '@octopi-agent/engine/harness/run/reliability/run-agent.js';
+import type { ReliabilityHarness } from '@octopi-agent/engine/harness/run/reliability/run-agent.js';
+import type { AgentLoopEvent } from '@octopi-agent/core/loop/types.js';
+import type { ModelProvider, LLMRequest, LLMResponse, LLMStreamChunk } from '@octopi-agent/core/interfaces/model-provider.js';
+import type { Message, RegisteredTool } from '@octopi-agent/core/types.js';
 
 /**
  * 创建顺序 Provider。
@@ -55,7 +55,7 @@ const shellTool: RegisteredTool = {
   handler: async (args) => `output of: ${args.command}`,
 };
 
-function createAgentTools(): import('../src/loop/types.js').AgentTool[] {
+function createAgentTools(): import('@octopi-agent/core/loop/types.js').AgentTool[] {
   return [{
     name: 'shell',
     description: 'Run command',
@@ -72,7 +72,7 @@ function createAgentTools(): import('../src/loop/types.js').AgentTool[] {
   }];
 }
 
-function createHarness(config?: Partial<import('../src/harness/run/reliability/run-agent.js').ReliabilityConfig>): ReliabilityHarness {
+function createHarness(config?: Partial<import('@octopi-agent/engine/harness/run/reliability/run-agent.js').ReliabilityConfig>): ReliabilityHarness {
   return {
     config: {
       planningRetry: { maxAttempts: 0, steerInstruction: '' },

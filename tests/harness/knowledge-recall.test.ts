@@ -6,11 +6,11 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { mkdtemp, writeFile, mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { KnowledgeSourceStore } from '../../src/harness/knowledge/source-store.js';
-import { KnowledgeIngest } from '../../src/harness/knowledge/ingest.js';
-import { KnowledgeRetriever } from '../../src/harness/knowledge/retriever.js';
-import type { Message } from '../../src/core/types.js';
-import { GroundingAssembler } from '../../src/harness/knowledge/grounding.js';
+import { KnowledgeSourceStore } from '@octopi-agent/engine/harness/knowledge/source-store.js';
+import { KnowledgeIngest } from '@octopi-agent/engine/harness/knowledge/ingest.js';
+import { KnowledgeRetriever } from '@octopi-agent/engine/harness/knowledge/retriever.js';
+import type { Message } from '@octopi-agent/core/types.js';
+import { GroundingAssembler } from '@octopi-agent/engine/harness/knowledge/grounding.js';
 
 function user(text: string): Message {
   return { role: 'user', content: text, timestamp: Date.now() };

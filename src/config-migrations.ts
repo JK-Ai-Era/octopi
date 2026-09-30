@@ -532,7 +532,7 @@ export function detectSchemaRef(raw: RawObject): MigrationFinding | null {
     id: 'CFG005',
     severity: 'info',
     message: `$schema does not reference octopi.schema.json (${schema})`,
-    hint: 'point $schema at ./octopi.schema.json or node_modules/octopi/octopi.schema.json',
+    hint: 'point $schema at ./octopi.schema.json or node_modules/octopi-agent/octopi.schema.json',
     autoFixable: true,
   };
 }
@@ -547,7 +547,7 @@ export function applySchemaRef(raw: RawObject): boolean {
   const schema = raw.$schema;
   if (typeof schema !== 'string' || !schema) return false;
   if (schema.includes('octopi.schema.json')) return false;
-  raw.$schema = './node_modules/octopi/octopi.schema.json';
+  raw.$schema = './node_modules/octopi-agent/octopi.schema.json';
   return true;
 }
 

@@ -3,8 +3,8 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { OpenAIProvider } from '../src/integration/providers/openai.js';
-import { AnthropicProvider } from '../src/integration/providers/anthropic.js';
+import { OpenAIProvider } from '@octopi-agent/engine/integration/providers/openai.js';
+import { AnthropicProvider } from '@octopi-agent/engine/integration/providers/anthropic.js';
 
 describe('ModelInfo — 配置驱动', () => {
   it('OpenAI：用户配置的 ModelInfo 保留', () => {

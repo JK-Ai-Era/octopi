@@ -8,12 +8,12 @@ import { readFileSync, writeFileSync, unlinkSync, existsSync, mkdirSync } from '
 import type { CliArgs } from './args.js';
 import { getOctopiHome, isInitialized, initOctopi, formatInitReport } from '../init.js';
 import { loadConfig, toGatewayConfig } from '../config.js';
-import { createToolSet } from '../harness/extension/plugin-ecosystem/tools/tool-set.js';
-import type { ModelProviderConfig } from '../config.js';
-import type { ModelProvider } from '../core/interfaces/model-provider.js';
-import { OpenAIProvider } from '../integration/providers/openai.js';
-import { AnthropicProvider } from '../integration/providers/anthropic.js';
-import { Gateway } from '../integration/gateway/gateway.js';
+import { createToolSet } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/tools/tool-set.js';
+import type { ModelProviderConfig } from '@octopi-agent/engine/config.js';
+import type { ModelProvider } from '@octopi-agent/core/interfaces/model-provider.js';
+import { OpenAIProvider } from '@octopi-agent/engine/integration/providers/openai.js';
+import { AnthropicProvider } from '@octopi-agent/engine/integration/providers/anthropic.js';
+import { Gateway } from '@octopi-agent/gateway/gateway/gateway.js';
 import { webuiStartCommand, webuiStopCommand } from './webui.js';
 import {
   delay,
@@ -390,18 +390,18 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
   }
 
   // 与 Gateway 共享 SessionStore（history 检索与运行时同一真相源）
-  const { getOctopiHome } = await import('../init.js');
+  const { getOctopiHome } = await import('@octopi-agent/engine/paths.js');
   const { join: joinPath } = await import('node:path');
-  const { JsonlSessionStore } = await import('../integration/storage/jsonl.js');
+  const { JsonlSessionStore } = await import('@octopi-agent/engine/integration/storage/jsonl.js');
   const home = getOctopiHome();
-  let sessionIndex: import('../integration/storage/session-index.js').SessionIndexBackend | undefined;
+  let sessionIndex: import('@octopi-agent/engine/integration/storage/session-index.js').SessionIndexBackend | undefined;
   // 先建无 index 的 store 供新鲜度校验；再挂投影
   const storeForRebuild = new JsonlSessionStore({
     sessionsDir: joinPath(home, 'sessions'),
   });
   try {
     const { createSqliteSessionIndex, ensureSessionIndexFresh } = await import(
-      '../integration/storage/session-index.js'
+      '@octopi-agent/engine/integration/storage/session-index.js'
     );
     sessionIndex = await createSqliteSessionIndex({
       dbPath: joinPath(home, 'sessions.index.db'),
@@ -437,9 +437,9 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
   //（SqliteMemoryStore(agent.db)）创建 memory_store/search，与七层 MemoryLayer / memory.steward.* 同实例。
   // SessionTaskService 随 AgentBuilder/Gateway 的 SessionStore 自动接线；不再单独建 TaskTracker。
 
-  let webSearchToolCfg: { provider: import('../harness/extension/plugin-ecosystem/tools/web-search-types.js').WebSearchProvider; defaultLimit?: number; timeoutMs?: number } | undefined;
+  let webSearchToolCfg: { provider: import('@octopi-agent/engine/harness/extension/plugin-ecosystem/tools/web-search-types.js').WebSearchProvider; defaultLimit?: number; timeoutMs?: number } | undefined;
   if (config.webSearch?.providers && Object.keys(config.webSearch.providers).length > 0) {
-    const { resolveWebSearchProviders, createWebSearchWithFallback } = await import('../integration/web-search/factory.js');
+    const { resolveWebSearchProviders, createWebSearchWithFallback } = await import('@octopi-agent/engine/integration/web-search/factory.js');
     const resolved = resolveWebSearchProviders(config.webSearch);
     if (resolved.primary) {
       webSearchToolCfg = {
@@ -455,13 +455,13 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
   }
 
   // 公用能力 SummaryPort（http_request / file_read L2）；无可用 provider 时仅 L1
-  let summarySupport: import('../harness/context/capabilities/summary/index.js').ToolSummarySupport | undefined;
+  let summarySupport: import('@octopi-agent/engine/harness/context/capabilities/summary/index.js').ToolSummarySupport | undefined;
   try {
     const { createSummaryPort, createToolSummarySupport, createMemorySummaryCache } = await import(
-      '../harness/context/capabilities/summary/index.js'
+      '@octopi-agent/engine/harness/context/capabilities/summary/index.js'
     );
-    const providerMap = new Map<string, import('../core/interfaces/model-provider.js').ModelProvider>();
-    let fallback: import('../core/interfaces/model-provider.js').ModelProvider | undefined;
+    const providerMap = new Map<string, import('@octopi-agent/core/interfaces/model-provider.js').ModelProvider>();
+    let fallback: import('@octopi-agent/core/interfaces/model-provider.js').ModelProvider | undefined;
     for (const [providerName, providerCfg] of Object.entries(config.models?.providers ?? {})) {
       const provider = createProvider(providerName, providerCfg);
       if (provider) {
@@ -480,7 +480,7 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
         | undefined;
 
       let cache:
-        | import('../harness/context/capabilities/summary/index.js').SummaryCachePort
+        | import('@octopi-agent/engine/harness/context/capabilities/summary/index.js').SummaryCachePort
         | undefined;
       let cacheEnabled = false;
       if (summaryCfg?.cache?.enabled) {
@@ -492,7 +492,7 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
       }
 
       const policyOverrides = summaryCfg?.policies as
-        | Record<string, import('../harness/context/capabilities/summary/index.js').SummaryPolicy>
+        | Record<string, import('@octopi-agent/engine/harness/context/capabilities/summary/index.js').SummaryPolicy>
         | undefined;
 
       const portOptions = {
@@ -529,10 +529,10 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
   // memory_store/memory_search **不在**全局注册：由 AgentBuilder 在 agent build 时
   // 按各 agent 的 MemoryStore（SqliteMemoryStore(agent.db)）注入，与 MemoryLayer 同实例。
   // session_search / session_read：Information 历史检索，绑 Gateway 同一 SessionStore。
-  let sessionHistoryPort: import('../harness/session/history/index.js').SessionHistoryPort | undefined;
+  let sessionHistoryPort: import('@octopi-agent/engine/harness/session/history/index.js').SessionHistoryPort | undefined;
   try {
-    const { createSessionHistoryPort } = await import('../harness/session/history/index.js');
-    const { SessionAclService } = await import('../harness/governance/session-acl/service.js');
+    const { createSessionHistoryPort } = await import('@octopi-agent/engine/harness/session/history/index.js');
+    const { SessionAclService } = await import('@octopi-agent/engine/harness/governance/session-acl/service.js');
     sessionHistoryPort = createSessionHistoryPort({
       store: gatewayStoreForHistory,
       sessionAcl: new SessionAclService(gatewayConfig.sessionAcl),
@@ -565,7 +565,7 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
 
   // ── 子系统发现（启动可见；Agent 首次 build 时按 allow/deny 实际注册） ──
   try {
-    const { discoverSubsystemSpecs } = await import('../harness/agent/builder.js');
+    const { discoverSubsystemSpecs } = await import('@octopi-agent/engine/harness/agent/builder.js');
     const { specs, errors } = await discoverSubsystemSpecs();
     if (specs.length > 0) {
       console.log(`[CLI] subsystems discovered: ${specs.map((s) => s.id).join(', ')}`);
@@ -595,9 +595,9 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
   // web.host 可作 Gateway HTTP 的缺省（局域网访问两者都要放开）；channels[].host 优先
   const listenHostConfig = httpConfig?.host ?? config.web?.host;
   if (httpConfig || args.port) {
-    const { HttpChannelAdapter } = await import('../integration/protocols/http.js');
-    const { WebApiRouter } = await import('../integration/web/api/router.js');
-    const { resolveListenHost } = await import('../config.js');
+    const { HttpChannelAdapter } = await import('@octopi-agent/gateway/protocols/http.js');
+    const { WebApiRouter } = await import('@octopi-agent/gateway/web/api/router.js');
+    const { resolveListenHost } = await import('@octopi-agent/engine/config.js');
     const webApiRouter = new WebApiRouter({ gateway, basePath: '/api/v1' });
     const listenHost = resolveListenHost(listenHostConfig);
     gateway.registerChannel(new HttpChannelAdapter({

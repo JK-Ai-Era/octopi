@@ -219,7 +219,7 @@ export async function pluginCommand(args: CliArgs): Promise<void> {
  * ${pluginName} plugin
  */
 
-import { definePluginEntry } from 'octopi/plugin-sdk/plugin-entry';
+import { definePluginEntry } from '@octopi-agent/engine/plugin-sdk/plugin-entry';
 
 export default definePluginEntry({
   id: '${pluginName}',
@@ -234,7 +234,7 @@ export default definePluginEntry({
   fs.writeFileSync(path.join(targetDir, 'index.ts'), entryCode);
 
   const pkg = {
-    name: `@octopi/plugin-${pluginName}`,
+    name: `@octopi-agent/plugin-${pluginName}`,
     version: '0.1.0',
     type: 'module',
     main: 'index.js',

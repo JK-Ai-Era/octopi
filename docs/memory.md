@@ -157,4 +157,4 @@ Memory **不是**对话备份、不是任务列表、不是外部文档库。这
 - Knowledge（外生语料）：[docs/knowledge.md](./knowledge.md)
 - 层契约与 system 装配：`docs/context-layer-contracts.md`
 - 架构总览：`docs/architecture.md`
-- 实现入口：`src/harness/memory/`
+- 实现入口：`packages/engine/src/harness/memory/`

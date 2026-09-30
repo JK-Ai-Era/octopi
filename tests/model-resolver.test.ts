@@ -8,8 +8,8 @@ import {
   resolveModelRef,
   resolveCatalogEntry,
   lookupModelCapability,
-} from '../src/harness/run/model/index.js';
-import type { ModelProvider } from '../src/core/interfaces/model-provider.js';
+} from '@octopi-agent/engine/harness/run/model/index.js';
+import type { ModelProvider } from '@octopi-agent/core/interfaces/model-provider.js';
 
 function makeProvider(
   name: string,

@@ -3,12 +3,12 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import { makeTokenUsage } from '../src/core/types/turn.js';
-import { ObserverBridge } from '../src/integration/observability/observer-bridge.js';
-import { TraceCollector } from '../src/integration/observability/trace-collector.js';
-import { MetricsAggregator } from '../src/integration/observability/metrics.js';
-import { TraceLevel } from '../src/integration/observability/trace-events.js';
-import type { AgentEvent } from '../src/core/primitives/event-bus.js';
+import { makeTokenUsage } from '@octopi-agent/core/types/turn.js';
+import { ObserverBridge } from '@octopi-agent/engine/integration/observability/observer-bridge.js';
+import { TraceCollector } from '@octopi-agent/engine/integration/observability/trace-collector.js';
+import { MetricsAggregator } from '@octopi-agent/engine/integration/observability/metrics.js';
+import { TraceLevel } from '@octopi-agent/engine/integration/observability/trace-events.js';
+import type { AgentEvent } from '@octopi-agent/core/primitives/event-bus.js';
 
 // ── ObserverBridge 测试 ──
 

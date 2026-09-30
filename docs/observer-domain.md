@@ -143,5 +143,5 @@ Web UI：右栏 **Run** 页签（`RunObservatoryPanel`）。
 - [architecture.md](./architecture.md) — 分层与 Harness 领域  
 - [north-star.md](./north-star.md) — 宪法不变量  
 - [CONTRIBUTING.md](./CONTRIBUTING.md) — 文档/测试同步规范  
-- `src/harness/observability/observer/*` — Hub / DTO / 快照实现  
+- `packages/engine/src/harness/observability/observer/*` — Hub / DTO / 快照实现  
 - `octopi.schema.json` — `observer` 配置 Schema  

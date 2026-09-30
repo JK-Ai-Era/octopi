@@ -3,13 +3,13 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { InProcessSessionLock } from '../../src/harness/run/concurrency/session-lease.js';
-import { SessionAwareRunner } from '../../src/harness/run/runner.js';
-import { getRunScope } from '../../src/harness/run/run-scope.js';
-import type { Agent } from '../../src/harness/run/agent/index.js';
-import type { Message } from '../../src/core/types.js';
-import { InMemorySessionStore } from '../../src/integration/storage/memory.js';
-import type { SessionData } from '../../src/harness/session/types.js';
+import { InProcessSessionLock } from '@octopi-agent/engine/harness/run/concurrency/session-lease.js';
+import { SessionAwareRunner } from '@octopi-agent/engine/harness/run/runner.js';
+import { getRunScope } from '@octopi-agent/engine/harness/run/run-scope.js';
+import type { Agent } from '@octopi-agent/engine/harness/run/agent/index.js';
+import type { Message } from '@octopi-agent/core/types.js';
+import { InMemorySessionStore } from '@octopi-agent/engine/integration/storage/memory.js';
+import type { SessionData } from '@octopi-agent/engine/harness/session/types.js';
 
 function emptySession(id: string, agentId = 'a1'): SessionData {
   return {
@@ -273,7 +273,7 @@ describe('shared SessionLease + ACL on handle (review fixes)', () => {
   });
 
   it('ACL-injected handle denies non-primary without participant', async () => {
-    const { SessionAclService } = await import('../../src/harness/governance/session-acl/service.js');
+    const { SessionAclService } = await import('@octopi-agent/engine/harness/governance/session-acl/service.js');
     const acl = new SessionAclService();
     const store = new InMemorySessionStore();
     const ran: string[] = [];
@@ -316,7 +316,7 @@ describe('shared SessionLease + ACL on handle (review fixes)', () => {
   });
 
   it('handle authorizeRun clamps by agentMaxSessionRights (E6 L1)', async () => {
-    const { SessionAclService } = await import('../../src/harness/governance/session-acl/service.js');
+    const { SessionAclService } = await import('@octopi-agent/engine/harness/governance/session-acl/service.js');
     const acl = new SessionAclService();
     const store = new InMemorySessionStore();
     const agentMax = { writeMemory: false, readScope: 'none' as const };

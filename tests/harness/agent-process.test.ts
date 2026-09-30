@@ -3,14 +3,14 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { makeTokenUsage } from '../../src/core/types/turn.js';
-import { AgentProcess, spawnAgentProcess, forkAgentProcess, AgentProcessEvents } from '../../src/harness/collaboration/multi-agent/process.js';
-import { DefaultEventBus } from '../../src/core/primitives/event-bus.js';
-import { Agent } from '../../src/harness/run/agent/agent.js';
-import type { ReliabilityHarness } from '../../src/harness/run/reliability/run-agent.js';
-import type { AgentInfo } from '../../src/harness/collaboration/multi-agent/agent-registry-types.js';
-import type { ModelProvider, LLMRequest, LLMResponse, LLMStreamChunk } from '../../src/core/interfaces/model-provider.js';
-import type { Message } from '../../src/core/types.js';
+import { makeTokenUsage } from '@octopi-agent/core/types/turn.js';
+import { AgentProcess, spawnAgentProcess, forkAgentProcess, AgentProcessEvents } from '@octopi-agent/engine/harness/collaboration/multi-agent/process.js';
+import { DefaultEventBus } from '@octopi-agent/core/primitives/event-bus.js';
+import { Agent } from '@octopi-agent/engine/harness/run/agent/agent.js';
+import type { ReliabilityHarness } from '@octopi-agent/engine/harness/run/reliability/run-agent.js';
+import type { AgentInfo } from '@octopi-agent/engine/harness/collaboration/multi-agent/agent-registry-types.js';
+import type { ModelProvider, LLMRequest, LLMResponse, LLMStreamChunk } from '@octopi-agent/core/interfaces/model-provider.js';
+import type { Message } from '@octopi-agent/core/types.js';
 
 // ── Mock 工厂 ──
 

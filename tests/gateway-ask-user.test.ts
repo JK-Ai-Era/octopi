@@ -3,10 +3,10 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import { Gateway } from '../src/integration/gateway/gateway.js';
-import type { ModelProvider } from '../src/core/interfaces/model-provider.js';
-import type { AgentDefinition } from '../src/harness/shared/types/agent-definition.js';
-import { InMemorySessionStore } from '../src/integration/storage/memory.js';
+import { Gateway } from '@octopi-agent/gateway/gateway/gateway.js';
+import type { ModelProvider } from '@octopi-agent/core/interfaces/model-provider.js';
+import type { AgentDefinition } from '@octopi-agent/engine/harness/shared/types/agent-definition.js';
+import { InMemorySessionStore } from '@octopi-agent/engine/integration/storage/memory.js';
 
 function makeProvider(): ModelProvider {
   return {

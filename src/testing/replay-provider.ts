@@ -6,8 +6,8 @@
  */
 
 import { readFileSync, existsSync } from 'node:fs';
-import type { ModelProvider, LLMRequest, LLMResponse, LLMStreamChunk } from '../core/interfaces/model-provider.js';
-import type { ModelInfo } from '../core/types.js';
+import type { ModelProvider, LLMRequest, LLMResponse, LLMStreamChunk } from '@octopi-agent/core/interfaces/model-provider.js';
+import type { ModelInfo } from '@octopi-agent/core/types.js';
 import type { RecordingEntry } from './recording-provider.js';
 
 /** 回放配置 */

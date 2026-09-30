@@ -3,11 +3,11 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import { DefaultMcpManager } from '../../../src/harness/extension/plugin-ecosystem/mcp/manager.js';
-import type { McpClientFactory, McpManagerCallbacks } from '../../../src/harness/extension/plugin-ecosystem/mcp/manager.js';
-import type { McpClient, McpServerCapabilities, McpToolDefinition, McpToolResult } from '../../../harness/extension/plugin-ecosystem/mcp/types.js';
-import type { McpServerConfig } from '../../../harness/extension/plugin-ecosystem/mcp/types.js';
-import { DefaultToolBus } from '../../../src/harness/extension/plugin-ecosystem/tools/tool-bus.js';
+import { DefaultMcpManager } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/mcp/manager.js';
+import type { McpClientFactory, McpManagerCallbacks } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/mcp/manager.js';
+import type { McpClient, McpServerCapabilities, McpToolDefinition, McpToolResult } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/mcp/types.js';
+import type { McpServerConfig } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/mcp/types.js';
+import { DefaultToolBus } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/tools/tool-bus.js';
 
 // ── Mock McpClient ──
 

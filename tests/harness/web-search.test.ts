@@ -10,20 +10,20 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-import type { WebSearchProvider, WebSearchResponse } from '../../src/harness/extension/plugin-ecosystem/tools/web-search-types.js';
-import { createWebSearchTool } from '../../src/harness/extension/plugin-ecosystem/tools/web-search.js';
+import type { WebSearchProvider, WebSearchResponse } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/tools/web-search-types.js';
+import { createWebSearchTool } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/tools/web-search.js';
 import {
   createWebSearchProviderFromSlot,
   resolveWebSearchProviders,
   createWebSearchWithFallback,
-} from '../../src/integration/web-search/factory.js';
-import { createDuckDuckGoProvider } from '../../src/integration/web-search/duckduckgo.js';
-import { createTavilyProvider } from '../../src/integration/web-search/tavily.js';
-import { createBraveProvider } from '../../src/integration/web-search/brave.js';
-import { createSerperProvider } from '../../src/integration/web-search/serper.js';
-import { createMimoProvider } from '../../src/integration/web-search/mimo.js';
-import { createToolSet } from '../../src/harness/extension/plugin-ecosystem/tools/tool-set.js';
-import type { ToolExecutionContext } from '../../src/core/types/tools.js';
+} from '@octopi-agent/engine/integration/web-search/factory.js';
+import { createDuckDuckGoProvider } from '@octopi-agent/engine/integration/web-search/duckduckgo.js';
+import { createTavilyProvider } from '@octopi-agent/engine/integration/web-search/tavily.js';
+import { createBraveProvider } from '@octopi-agent/engine/integration/web-search/brave.js';
+import { createSerperProvider } from '@octopi-agent/engine/integration/web-search/serper.js';
+import { createMimoProvider } from '@octopi-agent/engine/integration/web-search/mimo.js';
+import { createToolSet } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/tools/tool-set.js';
+import type { ToolExecutionContext } from '@octopi-agent/core/types/tools.js';
 
 function makeContext(overrides?: Partial<ToolExecutionContext>): ToolExecutionContext {
   return {

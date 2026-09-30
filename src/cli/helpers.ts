@@ -5,12 +5,11 @@
 import { resolve, dirname, join } from 'node:path';
 import { readFileSync, writeFileSync, unlinkSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { getOctopiHome } from '../init.js';
+import { getOctopiHome } from '@octopi-agent/engine/paths.js';
 import { readPidFile } from './daemon.js';
 import {
   isProcessAlive,
   killProcess,
-  resolveViteLaunch,
   spawnDetached,
 } from './process-utils.js';
 
@@ -29,19 +28,35 @@ function getCliPackageRoot(): string {
   return resolve(here, '..', '..');
 }
 
+function hasIndexHtml(dir: string): boolean {
+  return existsSync(join(dir, 'index.html'));
+}
+
+/** 目录若本身是预构建 dist，或其下有 dist/，返回 dist 路径（排除 Vite 源码根） */
+function asDistDir(dir: string): string | null {
+  if (!existsSync(dir)) return null;
+  const nested = join(dir, 'dist');
+  if (hasIndexHtml(nested)) return nested;
+  // 明确的 dist（无 vite 源码标志）
+  const looksLikeSource =
+    existsSync(join(dir, 'vite.config.ts')) ||
+    existsSync(join(dir, 'vite.config.js')) ||
+    existsSync(join(dir, 'package.json'));
+  if (hasIndexHtml(dir) && !looksLikeSource) return dir;
+  return null;
+}
+
 /**
- * 解析 Web UI 源码目录
+ * 解析预构建 WebUI dist（产品形态：静态托管，不启 Vite）
  *
  * 查找顺序（显式优先）：
- * 1. $OCTOPI_WEB_DIR
+ * 1. $OCTOPI_WEB_DIR（可指向 dist 或包根）
  * 2. 配置 web.dir
- * 3. 配置文件同级 /web
- * 4. OCTOPI_HOME/web
- * 5. CLI 包根 /web（全局 npm 安装自带 web/ 时生效）
- * 6. cwd/web
- * 7. 自 cwd 向上寻找 web/package.json
+ * 3. node_modules/@octopi-agent/webui/dist（npm 依赖 — 方案 B）
+ * 4. monorepo packages/webui/dist
+ * 5. ~/.octopi/web/dist
  */
-export function findWebDir(
+export function findWebDist(
   configPath?: string,
   configWebDir?: string,
 ): string | null {
@@ -50,46 +65,57 @@ export function findWebDir(
   if (process.env.OCTOPI_WEB_DIR) {
     candidates.push(resolve(process.env.OCTOPI_WEB_DIR));
   }
-
   if (configWebDir) {
     candidates.push(resolve(configWebDir));
   }
-
   if (configPath) {
     candidates.push(resolve(dirname(resolve(configPath)), 'web'));
+    candidates.push(resolve(dirname(resolve(configPath)), 'packages', 'webui'));
   }
 
+  const root = getCliPackageRoot();
+  // published: octopi-agent/node_modules/@octopi-agent/webui/dist
+  candidates.push(resolve(root, 'node_modules', '@octopi-agent', 'webui'));
+  candidates.push(resolve(root, 'node_modules', '@octopi-agent', 'webui', 'dist'));
+  // monorepo workspace link
+  candidates.push(resolve(root, 'packages', 'webui'));
+  candidates.push(resolve(root, 'packages', 'webui', 'dist'));
   candidates.push(resolve(getOctopiHome(), 'web'));
-  candidates.push(resolve(getCliPackageRoot(), 'web'));
-  candidates.push(resolve(process.cwd(), 'web'));
-
-  let dir = process.cwd();
-  let prev = '';
-  while (dir !== prev) {
-    const candidate = join(dir, 'web');
-    if (existsSync(join(candidate, 'package.json'))) {
-      candidates.push(candidate);
-      break;
-    }
-    prev = dir;
-    dir = dirname(dir);
-  }
+  candidates.push(resolve(process.cwd(), 'node_modules', '@octopi-agent', 'webui'));
+  candidates.push(resolve(process.cwd(), 'packages', 'webui'));
 
   for (const candidate of candidates) {
-    if (existsSync(join(candidate, 'package.json'))) return candidate;
+    const dist = asDistDir(candidate);
+    if (dist) return dist;
   }
   return null;
 }
 
-export interface StartWebUiOptions {
-  /** Vite `--host` 参数（如 `localhost` / `0.0.0.0`）；省略则用 vite.config 默认 */
-  hostArg?: string;
+/** @deprecated use {@link findWebDist} — product serves prebuilt dist */
+export function findWebDir(
+  configPath?: string,
+  configWebDir?: string,
+): string | null {
+  return findWebDist(configPath, configWebDir);
 }
 
-export function startWebUi(webDir: string, options?: StartWebUiOptions): number | null {
-  const launch = resolveViteLaunch(webDir, { hostArg: options?.hostArg });
-  if (!launch) return null;
-  return spawnDetached(launch.command, launch.args, { cwd: webDir });
+export interface StartWebUiOptions {
+  /** listen host（local → 127.0.0.1，lan → 0.0.0.0） */
+  hostArg?: string;
+  /** listen port（默认 5173） */
+  port?: number;
+}
+
+export function startWebUi(distDir: string, options?: StartWebUiOptions): number | null {
+  const serveJs = join(getCliPackageRoot(), 'dist', 'cli', 'serve-webui.js');
+  const entry = existsSync(serveJs)
+    ? serveJs
+    : join(dirname(fileURLToPath(import.meta.url)), 'serve-webui.js');
+  if (!existsSync(entry)) return null;
+  const args = [entry, distDir];
+  if (options?.hostArg) args.push('--host', options.hostArg);
+  if (options?.port) args.push('--port', String(options.port));
+  return spawnDetached(process.execPath, args, { cwd: distDir });
 }
 
 export async function stopWebUi(pid: number): Promise<void> {

@@ -9,10 +9,10 @@ import {
   TaskCancelledError,
   spawnTask,
   TaskEvents,
-} from '../../src/harness/collaboration/orchestration/async-task.js';
-import { DefaultEventBus } from '../../src/core/index.js';
-import type { EventBus, AgentEvent } from '../../src/core/index.js';
-import type { AsyncTaskStore, AsyncTaskRecord } from '../../src/harness/collaboration/orchestration/async-task-store.js';
+} from '@octopi-agent/engine/harness/collaboration/orchestration/async-task.js';
+import { DefaultEventBus } from '@octopi-agent/core/index.js';
+import type { EventBus, AgentEvent } from '@octopi-agent/core/index.js';
+import type { AsyncTaskStore, AsyncTaskRecord } from '@octopi-agent/engine/harness/collaboration/orchestration/async-task-store.js';
 
 // ── 辅助 ──
 

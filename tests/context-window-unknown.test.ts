@@ -3,8 +3,8 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { DefaultContextEngine } from '../src/harness/context/default-context-engine.js';
-import type { Message } from '../src/core/types.js';
+import { DefaultContextEngine } from '@octopi-agent/engine/harness/context/default-context-engine.js';
+import type { Message } from '@octopi-agent/core/types.js';
 
 function msgs(n: number): Message[] {
   return Array.from({ length: n }, (_, i) => ({

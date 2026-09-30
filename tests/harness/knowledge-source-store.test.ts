@@ -3,12 +3,12 @@
  */
 
 import { describe, it, expect, afterEach } from 'vitest';
-import { KnowledgeSourceStore } from '../../src/harness/knowledge/source-store.js';
+import { KnowledgeSourceStore } from '@octopi-agent/engine/harness/knowledge/source-store.js';
 import {
   generateKnowledgeDescription,
   heuristicDescription,
-} from '../../src/harness/knowledge/describe.js';
-import { scanSecretShapes } from '../../src/harness/knowledge/secret-scan.js';
+} from '@octopi-agent/engine/harness/knowledge/describe.js';
+import { scanSecretShapes } from '@octopi-agent/engine/harness/knowledge/secret-scan.js';
 
 async function openStore(): Promise<KnowledgeSourceStore> {
   return KnowledgeSourceStore.open({ dbPath: ':memory:' });

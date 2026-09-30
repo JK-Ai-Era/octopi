@@ -3,8 +3,8 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { InMemoryMemoryStore } from '../../src/harness/memory/store.js';
-import type { MemoryStore, MemoryEntry } from '../../src/harness/memory/types.js';
+import { InMemoryMemoryStore } from '@octopi-agent/engine/harness/memory/store.js';
+import type { MemoryStore, MemoryEntry } from '@octopi-agent/engine/harness/memory/types.js';
 
 function sampleEntry(overrides?: Partial<Parameters<MemoryStore['store']>[0]>) {
   return {

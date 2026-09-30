@@ -6,11 +6,11 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { mkdtemp, writeFile, mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { KnowledgeSourceStore } from '../../src/harness/knowledge/source-store.js';
-import { KnowledgeIndexStore } from '../../src/harness/knowledge/index-store.js';
-import { KnowledgeIngest } from '../../src/harness/knowledge/ingest.js';
-import { markdownAdapter, codeAdapter, FormatAdapterRegistry } from '../../src/harness/knowledge/adapters.js';
-import { KnowledgeDatabase } from '../../src/harness/knowledge/db.js';
+import { KnowledgeSourceStore } from '@octopi-agent/engine/harness/knowledge/source-store.js';
+import { KnowledgeIndexStore } from '@octopi-agent/engine/harness/knowledge/index-store.js';
+import { KnowledgeIngest } from '@octopi-agent/engine/harness/knowledge/ingest.js';
+import { markdownAdapter, codeAdapter, FormatAdapterRegistry } from '@octopi-agent/engine/harness/knowledge/adapters.js';
+import { KnowledgeDatabase } from '@octopi-agent/engine/harness/knowledge/db.js';
 
 async function makeWorkspace(): Promise<{ root: string; store: KnowledgeSourceStore; ingest: KnowledgeIngest; cleanup: () => Promise<void> }> {
   const root = await mkdtemp(join(tmpdir(), 'octopi-kn-'));

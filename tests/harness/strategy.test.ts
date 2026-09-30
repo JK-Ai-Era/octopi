@@ -6,7 +6,7 @@ import { describe, it, expect } from 'vitest';
 import {
   RuleTaskClassifier,
   DefaultStrategyRouter,
-} from '../../src/harness/collaboration/orchestration/strategy/index.js';
+} from '@octopi-agent/engine/harness/collaboration/orchestration/strategy/index.js';
 
 // ── RuleTaskClassifier 测试 ──
 
