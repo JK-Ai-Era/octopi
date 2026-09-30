@@ -1,3 +1,10 @@
+## v0.55.1
+
+### fix(cli): bind Web UI static server to IPv4 localhost
+
+- `octopi webui start` used `localhost`, which on Windows binds IPv6 `::1` only; `http://127.0.0.1:5173` failed to connect
+- Use `resolveListenHost` (`127.0.0.1` / `0.0.0.0`) for the prebuilt-dist static server
+
 ## v0.55.0
 
 ### feat(packaging): npm five-package monorepo split (core / engine / gateway / webui / suite)

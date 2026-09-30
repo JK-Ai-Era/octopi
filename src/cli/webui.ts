@@ -8,7 +8,7 @@ import { networkInterfaces } from 'node:os';
 import type { CliArgs } from './args.js';
 import {
   isLanHost,
-  resolveViteHostArg,
+  resolveListenHost,
   type NetworkHostConfig,
 } from '@octopi-agent/engine/config.js';
 import { ensureDaemonConfig } from './daemon.js';
@@ -129,7 +129,8 @@ export async function webuiStartCommand(
     process.exit(1);
   }
 
-  const listenHost = resolveViteHostArg(webHost);
+  // Static server must bind IPv4 127.0.0.1 for local (Windows `localhost` may be IPv6-only)
+  const listenHost = resolveListenHost(webHost);
   const lanOpen = isLanHost(webHost);
   const port = 5173;
 
