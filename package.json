@@ -26,6 +26,8 @@
     "build:gateway": "npm --prefix packages/gateway run build",
     "copy:build-assets": "node scripts/copy-build-assets.mjs",
     "generate:schema": "node scripts/generate-octopi-schema.mjs",
+    "release:prep": "node scripts/release.mjs prep",
+    "release:print": "node scripts/release.mjs print",
     "dev": "tsc --watch",
     "test": "node --experimental-vm-modules node_modules/vitest/vitest.mjs run",
     "lint": "eslint .",

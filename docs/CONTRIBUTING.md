@@ -131,6 +131,17 @@ npx vitest run --grep "SecurityGuard"
 - **Minor (v2.0 → v2.1)**: 新增模块、重要接口变更
 - **Patch (v2.0.1 → v2.0.2)**: 勘误、细节补充
 
+### 发行版本（五包锁步）
+
+自 **v0.56.0** 起，`octopi-agent` 与 `@octopi-agent/{core,engine,gateway,webui}` **始终同一版本号**，内部依赖钉死为该版本（非 `^`）。
+
+```sh
+npm run release:prep -- 0.56.0   # 五包同号 + 依赖钉版
+npm run release:print            # 打印发布顺序
+```
+
+流程：改版本 → 写 `CHANGELOG` → commit + tag → 按 `core → engine → gateway → webui → octopi-agent` 发布。详见 `AGENTS.md` Version Numbering Rules。
+
 ## 新增模块检查清单
 
 新增一个模块时：

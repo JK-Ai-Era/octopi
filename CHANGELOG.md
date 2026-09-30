@@ -5,6 +5,11 @@
 - `octopi webui start` used `localhost`, which on Windows binds IPv6 `::1` only; `http://127.0.0.1:5173` failed to connect
 - Use `resolveListenHost` (`127.0.0.1` / `0.0.0.0`) for the prebuilt-dist static server
 
+### chore(release): lockstep versioning from v0.56.0
+
+- All five packages share one version; internal `@octopi-agent/*` deps pinned to that version
+- `npm run release:prep` / `release:print` (`scripts/release.mjs`)
+
 ## v0.55.0
 
 ### feat(packaging): npm five-package monorepo split (core / engine / gateway / webui / suite)
