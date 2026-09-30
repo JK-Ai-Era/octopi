@@ -76,6 +76,7 @@
     "agent",
     "ai",
     "llm",
-    "octopi"
+    "octopi",
+    "harness"
   ]
 }
