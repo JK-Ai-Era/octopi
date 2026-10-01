@@ -118,7 +118,7 @@ export async function chatCommand(args: CliArgs): Promise<void> {
     }
     const channels = config.channels ?? [];
     const httpChannel = channels.find((c) => c.type === "http");
-    const port = httpChannel?.port ?? 3000;
+    const port = httpChannel?.port ?? 18180;
     writePidFile({
       pid: child.pid,
       config: configPath ?? join(getOctopiHome(), 'octopi.json'),

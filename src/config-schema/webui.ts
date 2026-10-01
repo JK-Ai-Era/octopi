@@ -13,4 +13,6 @@ export const WebConfigSchema = z.object({
   dir: z.string().optional(),
   /** 监听 host：local（默认仅本机）| lan（局域网）| 具体 IP/主机名 */
   host: NetworkHostSchema.optional(),
+  /** 监听端口（默认 8180；`octopi webui start --port` 优先） */
+  port: z.number().int().min(1).max(65535).optional(),
 });

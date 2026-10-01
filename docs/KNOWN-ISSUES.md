@@ -1,6 +1,6 @@
 # 已知问题
 
-> 最后更新：2026-09-21（Phase G/H 验收对齐）
+> 最后更新：2026-10-01（默认端口迁移 v0.56.0）
 
 ## 同 Agent 多 Session 抢占共享 Agent 上下文（I1 已落地）
 
@@ -73,3 +73,13 @@
 **状态：** 有意不兼容 + 已告警 + 可 doctor 修复
 
 `octopi.json` 中的 `supervisor` 字段在 v0.20.0 起改名为 `runGuard`。`octopi doctor --fix` 会将其改写为 `runGuard`。
+
+## WebUI → Gateway 回源地址仅构建期可配（v0.56.0）
+
+**状态：** 开放（默认端口迁移后的升级路径注意）
+
+WebUI 前端连接 Gateway 的地址由构建期 env `VITE_OCTOPI_BASE` 决定；未设置时兜底为**默认网关端口 18180**（`resolveDefaultBase`，见 `ChatWorkspace` / `SessionCorpusMenu` / `KnowledgeAdminPanel` 三处）。运行时无注入机制——`serve-webui` 只发静态文件。
+
+- **影响**：网关配置了**非默认端口**（如存量配置显式 `port: 3000`）而 WebUI 使用新默认构建时，页面回源连错端口，聊天不可用。
+- **出路**：把配置端口改回默认 18180，或以 `VITE_OCTOPI_BASE=http://127.0.0.1:<port>` 重新构建 WebUI。
+- **后续方向**：`serve-webui` 启动时下发运行时配置（如 `/octopi-config.js`），前端优先读运行时值再回落构建期兜底。

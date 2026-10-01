@@ -6,6 +6,13 @@
 - `tasklist` has no `/PID` (that's `taskkill` syntax); process names resolve via `/FI "PID eq <n>"` (`getProcessName`)
 - Ignore npm pack output (`*.tgz`)
 
+### feat(config): default gateway/webui ports 18180/8180 and web.port option
+
+- Gateway default `3000 → 18180` (init scaffold, CLI fallbacks, example config, WebUI gateway-URL fallback); WebUI default `5173 → 8180` (static server, vite dev, start/stop/status)
+- Existing configs with an explicit `channels[].port` keep working unchanged (config always wins over defaults)
+- New `web.port` config field with precedence `octopi webui start --port` > `web.port` > 8180; `configPath` threaded through webui stop/restart/status; probe list checks the expected port first and keeps legacy 5173/5174/4173 for instance adoption
+- `octopi.schema.json` regenerated; upgrade-path caveat recorded in `docs/KNOWN-ISSUES.md` (WebUI gateway URL is build-time `VITE_OCTOPI_BASE` only)
+
 ## v0.55.1
 
 ### fix(cli): bind Web UI static server to IPv4 localhost

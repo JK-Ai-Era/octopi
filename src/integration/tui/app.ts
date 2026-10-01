@@ -25,7 +25,7 @@ import { GatewayChatClient } from '@octopi-agent/gateway/gateway/client.js';
 
 export interface TuiAppConfig {
   agentId: string;
-  /** Gateway URL（如 http://localhost:3000） */
+  /** Gateway URL（如 http://localhost:18180） */
   gatewayUrl: string;
 }
 

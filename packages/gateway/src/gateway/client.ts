@@ -9,7 +9,7 @@ import type { AgentEvent } from '@octopi-agent/core/primitives/event-bus.js';
 import WebSocket from 'ws';
 
 export interface GatewayClientOptions {
-  /** Gateway URL，如 http://localhost:3000 */
+  /** Gateway URL，如 http://localhost:18180 */
   url: string;
 }
 

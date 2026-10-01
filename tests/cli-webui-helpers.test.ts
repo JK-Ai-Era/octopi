@@ -6,6 +6,7 @@ import { describe, test, expect, beforeEach, afterEach } from 'vitest';
 import { mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { createServer as createTcpServer } from 'node:net';
 import {
   findWebDist,
   readWebUiPidFile,
@@ -14,6 +15,9 @@ import {
   removeWebUiPidFile,
   getWebUiPidPath,
 } from '../src/cli/helpers.js';
+import { resolveWebUiPort, findPidOnVitePorts } from '../src/cli/webui.js';
+import { WebConfigSchema } from '../src/config-schema/webui.js';
+import { spawnDetached, killProcess, findPidOnPort, delay } from '../src/cli/process-utils.js';
 
 let tempDir: string;
 let prevWebDirEnv: string | undefined;
@@ -105,4 +109,79 @@ describe('webui pid file', () => {
     expect(readWebUiPidRecord()).toBeNull();
     expect(readWebUiPidFile()).toBeNull();
   });
+});
+
+describe('WebConfigSchema web.port', () => {
+  test('accepts valid port and rejects out-of-range', () => {
+    expect(WebConfigSchema.safeParse({ port: 9000 }).success).toBe(true);
+    expect(WebConfigSchema.safeParse({ port: 8180 }).success).toBe(true);
+    expect(WebConfigSchema.safeParse({ port: 0 }).success).toBe(false);
+    expect(WebConfigSchema.safeParse({ port: 70000 }).success).toBe(false);
+    expect(WebConfigSchema.safeParse({ port: 1.5 }).success).toBe(false);
+    expect(WebConfigSchema.safeParse({ port: '9000' }).success).toBe(false);
+  });
+});
+
+describe('resolveWebUiPort', () => {
+  function writeConfig(web: Record<string, unknown>): string {
+    const p = join(tempDir, 'octopi.json');
+    writeFileSync(p, JSON.stringify({ web }, null, 2));
+    return p;
+  }
+
+  test('CLI --port overrides config and default', () => {
+    const configPath = writeConfig({ port: 9000 });
+    expect(resolveWebUiPort(configPath, 7000)).toBe(7000);
+  });
+
+  test('config web.port beats default', () => {
+    const configPath = writeConfig({ port: 9000 });
+    expect(resolveWebUiPort(configPath)).toBe(9000);
+    expect(resolveWebUiPort(configPath, NaN)).toBe(9000);
+  });
+
+  test('falls back to 8180 when config absent', () => {
+    const configPath = join(tempDir, 'empty.json');
+    writeFileSync(configPath, '{}');
+    expect(resolveWebUiPort(configPath)).toBe(8180);
+  });
+
+  test('ignores invalid override / config port', () => {
+    const configPath = writeConfig({ port: 70000 });
+    expect(resolveWebUiPort(configPath)).toBe(8180);
+    expect(resolveWebUiPort(configPath, 0)).toBe(8180);
+    expect(resolveWebUiPort(configPath, -1)).toBe(8180);
+    expect(resolveWebUiPort(configPath, NaN)).toBe(8180);
+  });
+});
+
+describe('findPidOnVitePorts', () => {
+  test('prefers expected custom port over legacy ports', async () => {
+    // 拿一个空闲端口（环境里可能同时有旧 5173 实例，期望端口必须优先命中）
+    const probe = createTcpServer();
+    await new Promise<void>((r) => probe.listen(0, '127.0.0.1', r));
+    const addr = probe.address();
+    if (typeof addr === 'string' || addr === null) throw new Error('expected port');
+    const port = addr.port;
+    await new Promise<void>((r) => probe.close(() => r()));
+
+    const childPid = spawnDetached(process.execPath, [
+      '-e',
+      `require('net').createServer(() => {}).listen(${port}, '127.0.0.1')`,
+    ]);
+    expect(childPid).not.toBeNull();
+    try {
+      let ready = false;
+      for (let i = 0; i < 25 && !ready; i++) {
+        ready = findPidOnPort(port) === childPid;
+        if (!ready) await delay(200);
+      }
+      expect(ready).toBe(true);
+
+      const hit = findPidOnVitePorts(port);
+      expect(hit).toEqual({ pid: childPid, port });
+    } finally {
+      await killProcess(childPid!, { timeoutMs: 3000 });
+    }
+  }, 30_000);
 });

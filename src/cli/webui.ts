@@ -26,13 +26,22 @@ import { findPidOnPort, isProcessAlive } from './process-utils.js';
 export interface WebUiStartOptions {
   /** soft: 失败只警告，不 process.exit（供 serve start 使用） */
   soft?: boolean;
+  /** CLI `--port` 覆盖（仅 webui 子命令传入；优先于配置 web.port） */
+  port?: number;
 }
 
-/** Vite 开发服务器常见端口（用于认领未写入 pid 文件的实例） */
-const VITE_DEV_PORTS = [5173, 5174, 4173] as const;
+/** Web UI 默认监听端口 */
+const DEFAULT_WEBUI_PORT = 8180;
 
-/** 轻量读取配置中的 web.dir / web.host，避免 loadConfig 重复打日志/强校验 */
-function readConfigWebSettings(configPath?: string): { dir?: string; host?: NetworkHostConfig } {
+/** 旧版默认与常见 vite dev 端口（认领未写入 pid 文件的实例） */
+const LEGACY_VITE_PORTS = [5173, 5174, 4173] as const;
+
+/** 轻量读取配置中的 web 段（dir / host / port），避免 loadConfig 重复打日志/强校验 */
+function readConfigWebSettings(configPath?: string): {
+  dir?: string;
+  host?: NetworkHostConfig;
+  port?: number;
+} {
   try {
     let filePath: string;
     if (configPath) {
@@ -44,16 +53,33 @@ function readConfigWebSettings(configPath?: string): { dir?: string; host?: Netw
     }
     if (!existsSync(filePath)) return {};
     const raw = JSON.parse(readFileSync(filePath, 'utf-8')) as {
-      web?: { dir?: unknown; host?: unknown };
+      web?: { dir?: unknown; host?: unknown; port?: unknown };
     };
     const dir = typeof raw.web?.dir === 'string' && raw.web.dir.trim() ? raw.web.dir.trim() : undefined;
     const host = typeof raw.web?.host === 'string' && raw.web.host.trim()
       ? (raw.web.host.trim() as NetworkHostConfig)
       : undefined;
-    return { dir, host };
+    const port = typeof raw.web?.port === 'number' ? raw.web.port : undefined;
+    return { dir, host, port: isValidPort(port) ? port : undefined };
   } catch {
     return {};
   }
+}
+
+function isValidPort(port: number | undefined): port is number {
+  return typeof port === 'number' && Number.isInteger(port) && port >= 1 && port <= 65535;
+}
+
+/**
+ * 解析 Web UI 监听端口：CLI `--port` > 配置 `web.port` > 默认 8180
+ *
+ * @param configPath 配置文件路径（缺省按 cwd / OCTOPI_HOME 查找）
+ * @param override CLI 传入的端口（非法值忽略，回落配置/默认）
+ * @returns 监听端口
+ */
+export function resolveWebUiPort(configPath?: string, override?: number): number {
+  if (isValidPort(override)) return override;
+  return readConfigWebSettings(configPath).port ?? DEFAULT_WEBUI_PORT;
 }
 
 /** 读取配置中的 web.dir */
@@ -76,9 +102,13 @@ function firstLanIPv4(): string | null {
   return null;
 }
 
-/** 在常见 dev 端口上探测疑似 Vite 进程 */
-function findPidOnVitePorts(): { pid: number; port: number } | null {
-  for (const port of VITE_DEV_PORTS) {
+/** 探测疑似 Web UI 实例：先查期望端口（配置/默认），再查旧版与常见 vite 端口 */
+export function findPidOnVitePorts(expectedPort?: number): { pid: number; port: number } | null {
+  const ports = [expectedPort ?? DEFAULT_WEBUI_PORT, ...LEGACY_VITE_PORTS];
+  const seen = new Set<number>();
+  for (const port of ports) {
+    if (seen.has(port)) continue;
+    seen.add(port);
     const pid = findPidOnPort(port);
     if (pid && isProcessAlive(pid)) return { pid, port };
   }
@@ -99,7 +129,8 @@ export async function webuiStartCommand(
   }
 
   // pid 文件缺失/失效，但端口上已有实例：提示而非叠跑第二个 vite
-  const portHit = findPidOnVitePorts();
+  const port = resolveWebUiPort(configPath, options?.port);
+  const portHit = findPidOnVitePorts(port);
   if (portHit) {
     console.log(`⚠️  Web UI appears already running on port ${portHit.port} (PID: ${portHit.pid})`);
     console.log('   Not tracked in ~/.octopi/webui.pid (started outside CLI?)');
@@ -132,7 +163,6 @@ export async function webuiStartCommand(
   // Static server must bind IPv4 127.0.0.1 for local (Windows `localhost` may be IPv6-only)
   const listenHost = resolveListenHost(webHost);
   const lanOpen = isLanHost(webHost);
-  const port = 5173;
 
   const pid = startWebUi(webDist, { hostArg: listenHost, port });
   if (!pid) {
@@ -167,7 +197,7 @@ export async function webuiStartCommand(
   }
 }
 
-export async function webuiStopCommand(): Promise<void> {
+export async function webuiStopCommand(configPath?: string): Promise<void> {
   const record = readWebUiPidRecord();
   let pid = record?.pid;
   let source: 'pidfile' | 'port' | 'none' = pid ? 'pidfile' : 'none';
@@ -178,7 +208,7 @@ export async function webuiStopCommand(): Promise<void> {
       removeWebUiPidFile();
       pid = undefined;
     }
-    const portHit = findPidOnVitePorts();
+    const portHit = findPidOnVitePorts(resolveWebUiPort(configPath));
     if (portHit) {
       pid = portHit.pid;
       source = 'port';
@@ -188,7 +218,7 @@ export async function webuiStopCommand(): Promise<void> {
 
   if (!pid) {
     console.log('ℹ️  No Web UI instance found.');
-    console.log('   CLI tracks ~/.octopi/webui.pid; it also probes ports 5173/5174/4173.');
+    console.log('   CLI tracks ~/.octopi/webui.pid; it also probes the configured port (default 8180) and legacy 5173/5174/4173.');
     console.log('   Manually started vite outside those ports must be stopped in its own terminal.');
     return;
   }
@@ -205,24 +235,24 @@ export async function webuiStopCommand(): Promise<void> {
   }
 }
 
-export async function webuiRestartCommand(configPath?: string): Promise<void> {
-  await webuiStopCommand();
+export async function webuiRestartCommand(configPath?: string, options?: WebUiStartOptions): Promise<void> {
+  await webuiStopCommand(configPath);
   await new Promise((r) => setTimeout(r, 500));
-  await webuiStartCommand(configPath);
+  await webuiStartCommand(configPath, options);
 }
 
-export async function webuiStatusCommand(): Promise<void> {
+export async function webuiStatusCommand(configPath?: string): Promise<void> {
   const record = readWebUiPidRecord();
   const pid = record?.pid;
-  const portHit = findPidOnVitePorts();
+  const portHit = findPidOnVitePorts(resolveWebUiPort(configPath));
 
   if (!pid) {
     console.log('ℹ️  No Web UI instance found in ~/.octopi/webui.pid.');
     if (portHit && isProcessAlive(portHit.pid)) {
       console.log(`   But port ${portHit.port} is LISTENING (PID: ${portHit.pid}) — started outside CLI?`);
     }
-    const configWebDir = readConfigWebDir();
-    const webDist = findWebDist(undefined, configWebDir);
+    const configWebDir = readConfigWebDir(configPath);
+    const webDist = findWebDist(configPath, configWebDir);
     if (webDist) console.log(`   Detected Web UI dist (not started via CLI): ${webDist}`);
     return;
   }
@@ -253,20 +283,20 @@ export async function webuiCommand(args: CliArgs): Promise<void> {
   const configPath = await ensureDaemonConfig(args);
   switch (args.subcommand) {
     case 'start':
-      await webuiStartCommand(configPath);
+      await webuiStartCommand(configPath, { port: args.port });
       break;
     case 'stop':
-      await webuiStopCommand();
+      await webuiStopCommand(configPath);
       break;
     case 'restart':
-      await webuiRestartCommand(configPath);
+      await webuiRestartCommand(configPath, { port: args.port });
       break;
     case 'status':
-      await webuiStatusCommand();
+      await webuiStatusCommand(configPath);
       break;
     case undefined:
       console.log('💡 Tip: Use "octopi webui start" to start Web UI.\n');
-      await webuiStartCommand(configPath);
+      await webuiStartCommand(configPath, { port: args.port });
       break;
     default:
       console.error(`Unknown webui subcommand: ${args.subcommand}`);

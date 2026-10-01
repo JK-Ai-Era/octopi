@@ -15,7 +15,7 @@ if (!distArg) {
 
 const distDir = resolve(distArg);
 let host = '127.0.0.1';
-let port = 5173;
+let port = 8180;
 for (let i = 3; i < process.argv.length; i++) {
   if (process.argv[i] === '--host' && process.argv[i + 1]) host = process.argv[++i];
   if (process.argv[i] === '--port' && process.argv[i + 1]) port = Number(process.argv[++i]);

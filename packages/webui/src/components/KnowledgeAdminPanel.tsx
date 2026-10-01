@@ -24,9 +24,9 @@ function resolveDefaultBase(): string {
   if (fromEnv) return fromEnv;
   if (typeof window !== 'undefined' && window.location?.hostname) {
     const { protocol, hostname } = window.location;
-    return `${protocol}//${hostname}:3000`;
+    return `${protocol}//${hostname}:18180`;
   }
-  return 'http://localhost:3000';
+  return 'http://localhost:18180';
 }
 
 function statusClass(status: string): string {

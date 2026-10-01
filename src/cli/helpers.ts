@@ -102,7 +102,7 @@ export function findWebDir(
 export interface StartWebUiOptions {
   /** listen host（local → 127.0.0.1，lan → 0.0.0.0） */
   hostArg?: string;
-  /** listen port（默认 5173） */
+  /** listen port（默认 8180） */
   port?: number;
 }
 
@@ -183,5 +183,5 @@ export function resolveGatewayUrl(config: Record<string, unknown>): string {
   if (httpChannel?.port) {
     return `http://localhost:${httpChannel.port as number}`;
   }
-  return 'http://localhost:3000';
+  return 'http://localhost:18180';
 }

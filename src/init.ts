@@ -200,7 +200,7 @@ function generateDefaultConfig(homeDir: string, agentId: string = 'default'): ob
     channels: [
       {
         type: 'http',
-        port: 3000,
+        port: 18180,
         // local=仅本机；lan=局域网访问
         host: 'local',
         path: '/messages',
