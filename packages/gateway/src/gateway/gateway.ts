@@ -1258,8 +1258,10 @@ export class Gateway {
         const { getOctopiHome } = await import('@octopi-agent/engine/paths.js');
         const { join } = await import('node:path');
         const att = this.config.knowledge?.attachments;
+        const documentPort = await this.getDocumentPort();
         return new SessionAttachmentService({
           sessionsDir: join(getOctopiHome(), 'sessions'),
+          documentPort,
           limits: {
             ...(att?.maxFiles != null ? { maxFiles: att.maxFiles } : {}),
             ...(att?.maxFileBytes != null ? { maxFileBytes: att.maxFileBytes } : {}),
@@ -1272,6 +1274,43 @@ export class Gateway {
       })();
     }
     return this.attachmentServicePromise;
+  }
+
+  private documentPortPromise?: Promise<
+    import('@octopi-agent/engine/harness/context/capabilities/document/types.js').DocumentPort | null
+  >;
+
+  /**
+   * DocumentPort（documents.extract.enabled === false 时为 null）
+   */
+  async getDocumentPort(): Promise<
+    import('@octopi-agent/engine/harness/context/capabilities/document/types.js').DocumentPort | null
+  > {
+    if (!this.documentPortPromise) {
+      this.documentPortPromise = (async () => {
+        const extract = this.config.documents?.extract;
+        if (extract?.enabled === false) return null;
+        const { createDefaultDocumentPort, createLegacyConverterFromConfig } = await import(
+          '@octopi-agent/engine/harness/context/capabilities/document/index.js'
+        );
+        const legacy = this.config.documents?.legacy;
+        return createDefaultDocumentPort({
+          config: {
+            enabled: true,
+            timeoutMs: extract?.timeoutMs,
+            maxFileBytes: extract?.maxFileBytes,
+            allowedRoots: extract?.allowedRoots,
+          },
+          legacyConverter: createLegacyConverterFromConfig({
+            converter: legacy?.converter ?? 'none',
+            sofficePath: legacy?.sofficePath,
+            timeoutMs: legacy?.timeoutMs,
+            cacheDir: legacy?.cacheDir,
+          }),
+        });
+      })();
+    }
+    return this.documentPortPromise;
   }
 
   /**
@@ -1864,6 +1903,7 @@ export class Gateway {
         const ingest = new KnowledgeIngest({
           sourceStore: store,
           embeddingProvider,
+          documentPort: await this.getDocumentPort(),
           parseConcurrency: kn?.load?.parseConcurrency ?? kn?.index?.phaseA?.concurrency,
           debounceMs: kn?.index?.phaseA?.debounceMs,
           embedBatch: kn?.index?.phaseB?.embedBatch,

@@ -1,5 +1,15 @@
 ## v0.56.0
 
+### feat(capabilities): DocumentPort document extract (P0–P1.5)
+
+- New Harness cross-cut capability `harness/context/capabilities/document/`: `DocumentPort` (extract → Markdown), format sniff, structured `DocumentExtractError`, pluggable T0 backends (plain/unpdf/mammoth/SheetJS/officeparser), optional soffice legacy gate with content-hash convert cache
+- Knowledge ingest and session attachments call DocumentPort when configured (PDF/Office no longer hard-skipped); Gateway injects `documents.extract` / `documents.legacy` config; `document_read` / `document_probe` builtin tools registered when a port is present
+- New top-level `documents.*` config (Zod + `octopi.schema.json`); optional npm deps `unpdf` / `mammoth` / `xlsx` / `officeparser` (absent = degrade, still Node-only deploy)
+- Tests: `tests/harness/capabilities/document-*.test.ts` (format/routing/timeout/legacy/tools/wiring + unpdf smoke)
+- XMind T0 backend (zip + `content.json` / `content.xml` outline); real-corpus smoke `scripts/document-port-smoke.mjs`
+
+
+
 ### fix(cli): quote spawnDetached Windows args and fix tasklist name lookup
 
 - `Start-Process -ArgumentList` dropped inner quoting — multi-word `-e` scripts and paths containing spaces were split at the child boundary; args are now pre-quoted with CommandLineToArgvW rules (`winQuoteArg`)

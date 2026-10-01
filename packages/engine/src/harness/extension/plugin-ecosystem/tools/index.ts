@@ -1,4 +1,5 @@
 export { getBuiltinTools } from './builtin.js';
+export { createDocumentReadTool, createDocumentProbeTool } from './document-tools.js';
 export { createFileEditTool } from './file-edit.js';
 export { createFileSearchTool } from './file-search.js';
 export { createHttpRequestTool } from './http.js';

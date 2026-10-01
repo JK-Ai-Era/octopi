@@ -56,6 +56,8 @@ export interface GatewayConfig {
   memory?: import('@octopi-agent/engine/config.js').HarnessConfig['memory'];
   /** Knowledge 全局缺省（agents[].knowledge.recall 覆盖） */
   knowledge?: import('@octopi-agent/engine/config.js').HarnessConfig['knowledge'];
+  /** 公用能力 documents（DocumentPort 读抽取） */
+  documents?: import('@octopi-agent/engine/config.js').HarnessConfig['documents'];
   /** models.embedding — 向量检索配置（memory 等共用） */
   embedding?: import('@octopi-agent/engine/config.js').EmbeddingModelConfig;
   /** models.providers — 供 embedding 继承 baseUrl/apiKey */

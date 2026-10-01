@@ -1,7 +1,7 @@
 /**
  * 附件抽取 — 生成可读伴生文本（.extracted.md）
  *
- * 本期：文本类直接可读（extractPath = path）；PDF/Office 无 adapter 不抽取。
+ * 文本类直接可读（extractPath = path）；PDF/Office 经 DocumentPort 抽取写伴生文件。
  * 归属：Session 资产侧，不进 Knowledge ingest（要检索再升 source）。
  */
 
@@ -31,7 +31,24 @@ export function classifyAttachmentKind(name: string): AttachmentKind {
   if (IMAGE_EXTENSIONS.has(ext)) return 'image';
   if (CODE_EXTENSIONS.has(ext)) return 'code';
   if (TEXT_EXTENSIONS.has(ext)) return 'text';
-  if (ext === '.pdf' || ext === '.docx' || ext === '.xlsx' || ext === '.pptx') return 'document';
+  if (
+    ext === '.pdf' ||
+    ext === '.docx' ||
+    ext === '.xlsx' ||
+    ext === '.pptx' ||
+    ext === '.doc' ||
+    ext === '.xls' ||
+    ext === '.ppt' ||
+    ext === '.rtf' ||
+    ext === '.odt' ||
+    ext === '.ods' ||
+    ext === '.odp' ||
+    ext === '.odg' ||
+    ext === '.epub' ||
+    ext === '.xmind'
+  ) {
+    return 'document';
+  }
   return 'other';
 }
 
@@ -68,12 +85,11 @@ export function extractText(
 }
 
 /**
- * 伴生抽取文件名（原件旁）
+ * 伴生抽取文件名（原件旁）；保留源扩展名避免 foo.pdf / foo.docx 撞名
  *
  * @param fileName - 原件相对名
+ * @returns 例如 report.pdf → report.pdf.extracted.md
  */
 export function extractCompanionName(fileName: string): string {
-  const ext = extname(fileName);
-  const stem = ext ? fileName.slice(0, -ext.length) : fileName;
-  return `${stem}.extracted.md`;
+  return `${fileName}.extracted.md`;
 }

@@ -78,6 +78,24 @@
     }
   },
 
+  "documents": {
+    "extract": {
+      "enabled": true,
+      "timeoutMs": 30000,
+      "maxFileBytes": 52428800
+    },
+    "legacy": {
+      "converter": "none"
+    },
+    "markitdown": {
+      "enabled": false
+    },
+    "enhanced": {
+      "enabled": false,
+      "provider": "mineru"
+    }
+  },
+
   "contextAssembler": {
     "systemBudgetRatio": 0.22,
     "includeLayerPreview": true,

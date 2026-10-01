@@ -559,7 +559,13 @@ export class KnowledgeIndexStore {
   }
 }
 
-export function hashContent(content: string): string {
+/**
+ * 内容指纹（新鲜度判断）
+ *
+ * @param content - UTF-8 文本或原始字节（二进制文档用 bytes）
+ * @returns sha256 hex
+ */
+export function hashContent(content: string | Uint8Array): string {
   return createHash('sha256').update(content).digest('hex');
 }
 

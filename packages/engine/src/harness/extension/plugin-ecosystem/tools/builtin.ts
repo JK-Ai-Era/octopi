@@ -24,6 +24,7 @@ import { createFileEditTool } from './file-edit.js';
 import { createFileSearchTool } from './file-search.js';
 import { createHttpRequestTool } from './http.js';
 import { createEnvInfoTool } from './env-info.js';
+import { createDocumentProbeTool, createDocumentReadTool } from './document-tools.js';
 import {
   defaultPathEnv,
   isUnderAttachmentRoot,
@@ -604,6 +605,7 @@ export function createFileListTool(options?: {
 /** 获取内置工具（零依赖，所有环境可用）。shell 靠后注册，提示模型优先专用工具 */
 export function getBuiltinTools(options?: {
   summary?: import('../../../context/capabilities/summary/index.js').ToolSummarySupport;
+  documentPort?: import('./document-tools.js').DocumentToolOptions['documentPort'];
 }): RegisteredTool[] {
   return [
     createFileReadTool({ summary: options?.summary }),
@@ -611,6 +613,15 @@ export function getBuiltinTools(options?: {
     createFileWriteTool(),
     createFileEditTool(),
     createFileSearchTool(),
+    ...(options?.documentPort
+      ? [
+          createDocumentReadTool({
+            summary: options.summary,
+            documentPort: options.documentPort,
+          }),
+          createDocumentProbeTool({ documentPort: options.documentPort }),
+        ]
+      : []),
     createHttpRequestTool({ summary: options?.summary }),
     createEnvInfoTool(),
     createShellTool({ summary: options?.summary }),

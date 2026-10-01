@@ -17,6 +17,7 @@ import {
   ConstitutionConfigSchema,
   ContextAssemblerConfigSchema,
   ContextEngineConfigSchema,
+  DocumentsConfigSchema,
   SummaryConfigSchema,
 } from './context.js';
 import { KnowledgeConfigSchema, MemoryConfigSchema } from './substrate.js';
@@ -48,6 +49,8 @@ export const engineConfigSchema = z.object({
   summary: SummaryConfigSchema.optional(),
   /** 公用能力 compact 缺省 */
   compact: CompactCapabilityConfigSchema.optional(),
+  /** 公用能力 documents（DocumentPort 读抽取） */
+  documents: DocumentsConfigSchema.optional(),
   /** Knowledge 全局缺省（agents[].knowledge.recall 覆盖） */
   knowledge: KnowledgeConfigSchema.optional(),
   context: z

@@ -831,10 +831,12 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
     console.warn(`[CLI] session history tools unavailable: ${err instanceof Error ? err.message : String(err)}`);
   }
 
+  const documentPort = await gateway.getDocumentPort().catch(() => null);
   const { all } = createToolSet({
     webSearch: webSearchToolCfg,
     summary: summarySupport,
     sessionHistory: sessionHistoryPort,
+    documentPort,
     askUser: (question, options, context) =>
       gateway.askUser({
         sessionId: context.sessionId,

@@ -31,6 +31,8 @@ export interface ToolSetConfig {
   };
   /** Summary 公用能力（http_request / file_read L1/L2） */
   summary?: import('../../../context/capabilities/summary/index.js').ToolSummarySupport;
+  /** DocumentPort（document_read / document_probe） */
+  documentPort?: import('./document-tools.js').DocumentToolOptions['documentPort'];
   /** Information 历史检索（session_search / session_read） */
   sessionHistory?: SessionHistoryPort;
 }
@@ -43,7 +45,10 @@ export interface ToolSet {
 
 export function createToolSet(config?: ToolSetConfig): ToolSet {
   const taskService = config?.sessionTaskService ?? config?.taskTracker;
-  const builtin = getBuiltinTools({ summary: config?.summary });
+  const builtin = getBuiltinTools({
+    summary: config?.summary,
+    documentPort: config?.documentPort,
+  });
   const extensions: RegisteredTool[] = [
     ...(config?.memoryStore ? createMemoryTools(config.memoryStore, config?.memory) : []),
     ...(taskService ? createSessionTaskTools(taskService) : []),

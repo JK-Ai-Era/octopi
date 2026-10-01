@@ -20,6 +20,9 @@ import type { CredentialStore } from '../governance/credentials/store.js';
 import type { ResolvedCredential } from '../governance/credentials/types.js';
 import type { EmbeddingProvider } from '../memory/sqlite/embedding.js';
 import type { KnowledgeSource } from './types.js';
+import type { DocumentPort } from '../context/capabilities/document/types.js';
+import { isDocumentPath } from '../context/capabilities/document/format.js';
+import { isDocumentExtractError } from '../context/capabilities/document/errors.js';
 
 export type IngestJobKind = 'parse_file' | 'walk_source' | 'drop_file' | 'embed_source' | 'fetch_doc';
 
@@ -65,6 +68,11 @@ export interface KnowledgeIngestOptions {
   pollMinIntervalMs?: number;
   /** 每轮 poll 最多处理源数（成本上限，默认 8） */
   maxPollPerTick?: number;
+  /**
+   * DocumentPort：启用后 PDF/Office 等走抽取 → Markdown 切块
+   * （缺省 null = 维持 BINARY skip 语义）
+   */
+  documentPort?: DocumentPort | null;
 }
 
 interface JobRow {
@@ -97,6 +105,7 @@ export class KnowledgeIngest extends EventEmitter {
   private readonly pollTickMs: number;
   private readonly pollMinIntervalMs: number;
   private readonly maxPollPerTick: number;
+  private readonly documentPort: DocumentPort | null;
   private lastEmbedAt = 0;
   private pollTimer: NodeJS.Timeout | null = null;
 
@@ -126,8 +135,9 @@ export class KnowledgeIngest extends EventEmitter {
     this.embedConcurrency = options.embedConcurrency ?? options.parseConcurrency ?? 2;
     this.diskWatermarkAlert = options.diskWatermarkAlert ?? false;
     this.credentials = options.credentials ?? null;
+    this.documentPort = options.documentPort ?? null;
     this.localFetcher =
-      options.fetchers?.local ?? new LocalFsFetcher((p) => this.adapters.shouldSkipPath(p));
+      options.fetchers?.local ?? new LocalFsFetcher((p) => this.shouldSkipFile(p));
     this.urlFetcher = options.fetchers?.url ?? new UrlFetcher();
     this.connectorFetcher =
       options.fetchers?.connector ??
@@ -139,6 +149,17 @@ export class KnowledgeIngest extends EventEmitter {
 
   get indexStore(): KnowledgeIndexStore {
     return this.index;
+  }
+
+  /**
+   * 路径过滤：有 DocumentPort 时文档扩展名不再被 BINARY 短路。
+   *
+   * @param p - 文件路径
+   * @returns 是否跳过
+   */
+  private shouldSkipFile(p: string): boolean {
+    if (this.documentPort && isDocumentPath(p)) return false;
+    return this.adapters.shouldSkipPath(p);
   }
 
   /**
@@ -439,7 +460,7 @@ export class KnowledgeIngest extends EventEmitter {
       const watcher = watch(source.location, { recursive: true }, (event, filename) => {
         if (!filename) return;
         const abs = join(source.location, filename.toString().split(sep).join(sep));
-        if (this.adapters.shouldSkipPath(abs)) return;
+        if (this.shouldSkipFile(abs)) return;
         this.handleFsChange(sourceId, abs, event === 'rename' ? 'rename' : 'change');
       });
       this.watchers.set(sourceId, watcher);
@@ -753,12 +774,15 @@ export class KnowledgeIngest extends EventEmitter {
   }
 
   private async parseOne(sourceId: string, filePath: string): Promise<boolean> {
-    if (this.adapters.shouldSkipPath(filePath)) {
+    if (this.shouldSkipFile(filePath)) {
       this.index.markFileSkipped(sourceId, filePath, 'ignored_path');
       return false;
     }
     const adapter = this.adapters.match(filePath);
     if (!adapter) {
+      if (this.documentPort && isDocumentPath(filePath)) {
+        return this.parseDocumentFile(sourceId, filePath);
+      }
       this.index.markFileSkipped(sourceId, filePath, 'no_adapter');
       return false;
     }
@@ -795,6 +819,70 @@ export class KnowledgeIngest extends EventEmitter {
       });
       return true;
     } catch (err) {
+      this.index.markFileError(
+        sourceId,
+        filePath,
+        err instanceof Error ? err.message : String(err),
+      );
+      return false;
+    }
+  }
+
+  /**
+   * PDF/Office：DocumentPort 抽取为 Markdown 后走 markdownAdapter 切块。
+   * 新鲜度以原件字节 hash 为准。
+   *
+   * @param sourceId - 知识源 id
+   * @param filePath - 本地文件路径
+   * @returns 是否成功入索引
+   */
+  private async parseDocumentFile(sourceId: string, filePath: string): Promise<boolean> {
+    const port = this.documentPort;
+    if (!port) return false;
+
+    let st;
+    try {
+      st = await stat(filePath);
+    } catch {
+      this.index.removeFile(sourceId, filePath);
+      return false;
+    }
+    if (!st.isFile()) return false;
+    if (st.size > this.maxFileBytes) {
+      this.index.markFileSkipped(sourceId, filePath, 'oversize');
+      return false;
+    }
+
+    const raw = await readFile(filePath);
+    const contentHash = hashContent(raw);
+    if (this.index.isFresh(sourceId, filePath, contentHash)) {
+      return true;
+    }
+
+    try {
+      const result = await port.extract({ path: filePath, name: filePath });
+      const markdown = result.markdown?.trim();
+      if (!markdown) {
+        this.index.markFileSkipped(sourceId, filePath, 'empty_content');
+        return false;
+      }
+      const chunks = markdownAdapter.chunk(markdown, filePath);
+      this.index.upsertFile({
+        sourceId,
+        path: filePath,
+        contentHash,
+        size: st.size,
+        mtime: Math.floor(st.mtimeMs),
+        adapterId: `document:${result.backend}`,
+        chunks,
+      });
+      return true;
+    } catch (err) {
+      if (isDocumentExtractError(err)) {
+        // 结构化跳过（密码/老格式/超大等），不挡整库
+        this.index.markFileSkipped(sourceId, filePath, err.code.toLowerCase());
+        return false;
+      }
       this.index.markFileError(
         sourceId,
         filePath,

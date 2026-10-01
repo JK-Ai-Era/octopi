@@ -488,6 +488,40 @@ export interface CompactCapabilityConfig {
 }
 
 /**
+ * 公用能力 documents（DocumentPort 读抽取）
+ */
+export interface DocumentsCapabilityConfig {
+  extract?: {
+    enabled?: boolean;
+    backend?: 'auto' | 't0-only';
+    timeoutMs?: number;
+    maxFileBytes?: number;
+    allowedRoots?: string[];
+  };
+  legacy?: {
+    converter?: 'none' | 'soffice' | 'remote';
+    sofficePath?: string | null;
+    cacheDir?: string | null;
+    cacheMaxBytes?: number;
+    timeoutMs?: number;
+    allowTextScrape?: boolean;
+  };
+  markitdown?: {
+    enabled?: boolean;
+    command?: string;
+  };
+  enhanced?: {
+    enabled?: boolean;
+    provider?: 'mineru' | 'azure-di' | 'azure-cu' | string;
+    endpoint?: string | null;
+    command?: string | null;
+    authRef?: string | null;
+    timeoutMs?: number;
+    preferOn?: string[];
+  };
+}
+
+/**
  * system prompt 层装配器配置（七层 ContextAssembler）
  *
  * 与 contextEngine 分工：本配置管 **system 总预算与可选单层硬顶**；
@@ -736,6 +770,8 @@ export interface HarnessConfig {
   summary?: SummaryCapabilityConfig;
   /** 公用能力 compact 缺省 */
   compact?: CompactCapabilityConfig;
+  /** 公用能力 documents（DocumentPort 读抽取） */
+  documents?: DocumentsCapabilityConfig;
   /** system prompt 七层装配器配置 */
   contextAssembler?: ContextAssemblerConfig;
   /** context 域扩展：全局宪法等 */

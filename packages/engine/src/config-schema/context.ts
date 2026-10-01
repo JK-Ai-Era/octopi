@@ -103,6 +103,46 @@ export const CompactCapabilityConfigSchema = z.object({
   defaultMode: z.enum(['structure_only', 'summary_only', 'head_tail_only', 'auto']).optional(),
 });
 
+/** 公用能力：documents（DocumentPort 读抽取） */
+export const DocumentsConfigSchema = z.object({
+  extract: z
+    .object({
+      enabled: z.boolean().optional(),
+      backend: z.enum(['auto', 't0-only']).optional(),
+      timeoutMs: z.number().int().positive().optional(),
+      maxFileBytes: z.number().int().positive().optional(),
+      allowedRoots: z.array(z.string()).optional(),
+    })
+    .optional(),
+  legacy: z
+    .object({
+      converter: z.enum(['none', 'soffice', 'remote']).optional(),
+      sofficePath: z.string().nullable().optional(),
+      cacheDir: z.string().nullable().optional(),
+      cacheMaxBytes: z.number().int().positive().optional(),
+      timeoutMs: z.number().int().positive().optional(),
+      allowTextScrape: z.boolean().optional(),
+    })
+    .optional(),
+  markitdown: z
+    .object({
+      enabled: z.boolean().optional(),
+      command: z.string().optional(),
+    })
+    .optional(),
+  enhanced: z
+    .object({
+      enabled: z.boolean().optional(),
+      provider: z.string().optional(),
+      endpoint: z.string().nullable().optional(),
+      command: z.string().nullable().optional(),
+      authRef: z.string().nullable().optional(),
+      timeoutMs: z.number().int().positive().optional(),
+      preferOn: z.array(z.string()).optional(),
+    })
+    .optional(),
+});
+
 /** 全局运行宪法（产品资产 / 集成商替换 / 关闭） */
 export const ConstitutionConfigSchema = z
   .object({

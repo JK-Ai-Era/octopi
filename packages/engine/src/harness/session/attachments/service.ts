@@ -14,6 +14,7 @@ import { resolveSessionAttachmentsPaths } from './paths.js';
 import { attachmentExtension, isPathInside, sanitizeAttachmentName } from './sanitize.js';
 import {
   classifyAttachmentKind,
+  extractCompanionName,
   extractText,
   isPlainReadable,
 } from './extract.js';
@@ -24,22 +25,28 @@ import {
   type AttachmentUploadInput,
   type SessionAttachment,
 } from './types.js';
+import type { DocumentPort } from '../../context/capabilities/document/types.js';
+import { isDocumentExtractError } from '../../context/capabilities/document/errors.js';
 
 export interface SessionAttachmentServiceOptions {
   /** 通常 `OCTOPI_HOME/sessions` */
   sessionsDir: string;
   limits?: Partial<AttachmentLimits>;
+  /** DocumentPort：PDF/Office 抽取伴生 `.extracted.md`；缺省不抽 */
+  documentPort?: DocumentPort | null;
 }
 
 export class SessionAttachmentService {
   private readonly sessionsDir: string;
   private readonly limits: AttachmentLimits;
+  private readonly documentPort: DocumentPort | null;
 
   /**
-   * @param options - sessionsDir + 可选限额覆盖
+   * @param options - sessionsDir + 可选限额覆盖 + documentPort
    */
   constructor(options: SessionAttachmentServiceOptions) {
     this.sessionsDir = options.sessionsDir;
+    this.documentPort = options.documentPort ?? null;
     // 只合并已定义字段：`{ ...defaults, allowedExtensions: undefined }` 会把默认值抹掉
     const o = options.limits ?? {};
     this.limits = {
@@ -164,8 +171,43 @@ export class SessionAttachmentService {
         item.status = 'parse_failed';
         item.parse = { ok: false, error: 'binary content in text extension' };
       }
+    } else if (kind === 'document' && this.documentPort) {
+      const companion = extractCompanionName(uniqueName);
+      item.extractPath = companion;
+      try {
+        const result = await this.documentPort.extract({
+          data: new Uint8Array(data),
+          name: uniqueName,
+        });
+        const absExtract = join(root, companion);
+        if (!isPathInside(root, absExtract)) {
+          throw new Error('invalid extract path');
+        }
+        await writeFile(absExtract, result.markdown);
+        item.status = 'parsed';
+        item.parse = { ok: true, chars: result.markdown.length };
+      } catch (err) {
+        item.status = 'parse_failed';
+        if (isDocumentExtractError(err)) {
+          item.parse = {
+            ok: false,
+            error: `${err.code}${err.requires ? ` (requires: ${err.requires.join(',')})` : ''}`,
+          };
+        } else {
+          item.parse = {
+            ok: false,
+            error: err instanceof Error ? err.message : String(err),
+          };
+        }
+      }
     } else if (kind === 'image') {
       item.status = 'ready';
+    } else if (kind === 'document') {
+      item.status = 'ready';
+      item.parse = {
+        ok: false,
+        error: 'document extract disabled (no DocumentPort)',
+      };
     } else {
       item.status = 'ready';
       item.parse = { ok: false, error: 'no extractor for this type (see OP adapter)' };

@@ -8,4 +8,5 @@
 
 export * from './summary/index.js';
 export * from './compact/index.js';
+export * from './document/index.js';
 export { createMemorySummaryCache } from './summary/memory-cache.js';

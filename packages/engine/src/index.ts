@@ -134,8 +134,8 @@ export type { AgentPersona, ModelConfig, AgentDefinition } from './harness/share
 export { DefaultToolBus } from './harness/extension/plugin-ecosystem/tools/tool-bus.js';
 export { getBuiltinTools, createShellTool, createFileReadTool, createFileWriteTool, createFileListTool } from './harness/extension/plugin-ecosystem/tools/builtin.js';
 export { createToolSet } from './harness/extension/plugin-ecosystem/tools/tool-set.js';
-export { createSummaryPort, applyToolOutputGate, createCompactEngine } from './harness/context/capabilities/index.js';
-export type { SummaryPort, SummaryPolicy, ContentUnit, ToolSummarySupport, CompactEngine } from './harness/context/capabilities/index.js';
+export { createSummaryPort, applyToolOutputGate, createCompactEngine, createDefaultDocumentPort, DocumentExtractError } from './harness/context/capabilities/index.js';
+export type { SummaryPort, SummaryPolicy, ContentUnit, ToolSummarySupport, CompactEngine, DocumentPort, ExtractResult, ExtractSource } from './harness/context/capabilities/index.js';
 export type { ToolSet, ToolSetConfig } from './harness/extension/plugin-ecosystem/tools/tool-set.js';
 export { createWebSearchTool } from './harness/extension/plugin-ecosystem/tools/web-search.js';
 export type { WebSearchToolOptions } from './harness/extension/plugin-ecosystem/tools/web-search.js';

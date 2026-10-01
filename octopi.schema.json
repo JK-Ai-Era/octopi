@@ -1009,6 +1009,151 @@
         }
       }
     },
+    "documents": {
+      "type": "object",
+      "properties": {
+        "extract": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "backend": {
+              "type": "string",
+              "enum": [
+                "auto",
+                "t0-only"
+              ]
+            },
+            "timeoutMs": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "maxFileBytes": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "allowedRoots": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "legacy": {
+          "type": "object",
+          "properties": {
+            "converter": {
+              "type": "string",
+              "enum": [
+                "none",
+                "soffice",
+                "remote"
+              ]
+            },
+            "sofficePath": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "cacheDir": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "cacheMaxBytes": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "timeoutMs": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "allowTextScrape": {
+              "type": "boolean"
+            }
+          }
+        },
+        "markitdown": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "command": {
+              "type": "string"
+            }
+          }
+        },
+        "enhanced": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "provider": {
+              "type": "string"
+            },
+            "endpoint": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "command": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "authRef": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "timeoutMs": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "preferOn": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
     "knowledge": {
       "type": "object",
       "properties": {
