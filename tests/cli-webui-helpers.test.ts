@@ -15,7 +15,8 @@ import {
   removeWebUiPidFile,
   getWebUiPidPath,
 } from '../src/cli/helpers.js';
-import { resolveWebUiPort, findPidOnVitePorts } from '../src/cli/webui.js';
+import { resolveWebUiPort, findPidOnVitePorts, readGatewayPort } from '../src/cli/webui.js';
+import { gatewayConfigScript } from '../src/cli/helpers.js';
 import { WebConfigSchema } from '../src/config-schema/webui.js';
 import { spawnDetached, killProcess, findPidOnPort, delay } from '../src/cli/process-utils.js';
 
@@ -184,4 +185,32 @@ describe('findPidOnVitePorts', () => {
       await killProcess(childPid!, { timeoutMs: 3000 });
     }
   }, 30_000);
+});
+
+describe('gatewayConfigScript（/octopi-config.js 运行时下发）', () => {
+  test('serializes port for runtime injection', () => {
+    expect(gatewayConfigScript(18180)).toBe('window.__OCTOPI_GATEWAY__={"port":18180};\n');
+    expect(gatewayConfigScript(3000)).toContain('"port":3000');
+  });
+
+  test('emits null when port absent (frontend falls back to default)', () => {
+    expect(gatewayConfigScript(undefined)).toBe('window.__OCTOPI_GATEWAY__=null;\n');
+  });
+});
+
+describe('readGatewayPort', () => {
+  test('reads channels[type=http].port from config', () => {
+    const p = join(tempDir, 'gw.json');
+    writeFileSync(p, JSON.stringify({ channels: [{ type: 'http', port: 3000, path: '/messages' }] }));
+    expect(readGatewayPort(p)).toBe(3000);
+  });
+
+  test('returns undefined when channel/port missing or invalid', () => {
+    const p = join(tempDir, 'gw-none.json');
+    writeFileSync(p, JSON.stringify({ web: { port: 8180 } }));
+    expect(readGatewayPort(p)).toBeUndefined();
+    writeFileSync(p, JSON.stringify({ channels: [{ type: 'http', port: 70000 }] }));
+    expect(readGatewayPort(p)).toBeUndefined();
+    expect(readGatewayPort(join(tempDir, 'not-exists.json'))).toBeUndefined();
+  });
 });

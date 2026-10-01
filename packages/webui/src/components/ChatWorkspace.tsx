@@ -19,17 +19,7 @@ import type { SessionTaskView, ModelCatalog, SessionModelView, CommandCatalogIte
 // 浏览器侧直连 token 模块（不经 harness barrel / context/index，避免拉入 Node 专用依赖）
 import { estimateTextTokens } from '@octopi-agent/engine/harness/context/token-estimator';
 import { JSON_CHARS_PER_TOKEN } from '@octopi-agent/engine/harness/context/token-constants';
-
-/** 同主机回源：局域网打开 WebUI 时连宿主机 Gateway，而不是访问者本机 localhost */
-function resolveDefaultBase(): string {
-  const fromEnv = (import.meta.env.VITE_OCTOPI_BASE as string | undefined)?.replace(/\/$/, '');
-  if (fromEnv) return fromEnv;
-  if (typeof window !== 'undefined' && window.location?.hostname) {
-    const { protocol, hostname } = window.location;
-    return `${protocol}//${hostname}:18180`;
-  }
-  return 'http://localhost:18180';
-}
+import { resolveDefaultBase } from '../gateway-base';
 
 const DEFAULT_BASE = resolveDefaultBase();
 

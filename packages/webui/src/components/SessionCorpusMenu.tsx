@@ -4,22 +4,13 @@
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { OctopiClient, type KnowledgeSessionVisibilityItemDto } from '@octopi-agent/gateway/web/sdk/client';
+import { resolveDefaultBase } from '../gateway-base';
 
 interface ProjectRow {
   projectKey: string;
   displayName?: string;
   sourceCount: number;
   assignedAgentIds: string[];
-}
-
-function resolveDefaultBase(): string {
-  const fromEnv = (import.meta.env.VITE_OCTOPI_BASE as string | undefined)?.replace(/\/$/, '');
-  if (fromEnv) return fromEnv;
-  if (typeof window !== 'undefined' && window.location?.hostname) {
-    const { protocol, hostname } = window.location;
-    return `${protocol}//${hostname}:18180`;
-  }
-  return 'http://localhost:18180';
 }
 
 export function SessionCorpusMenu({

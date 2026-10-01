@@ -104,6 +104,8 @@ export interface StartWebUiOptions {
   hostArg?: string;
   /** listen port（默认 8180） */
   port?: number;
+  /** 网关端口：透传给 serve-webui 动态下发 /octopi-config.js（缺省不下发） */
+  gatewayPort?: number;
 }
 
 export function startWebUi(distDir: string, options?: StartWebUiOptions): number | null {
@@ -115,11 +117,27 @@ export function startWebUi(distDir: string, options?: StartWebUiOptions): number
   const args = [entry, distDir];
   if (options?.hostArg) args.push('--host', options.hostArg);
   if (options?.port) args.push('--port', String(options.port));
+  if (options?.gatewayPort) args.push('--gateway-port', String(options.gatewayPort));
   return spawnDetached(process.execPath, args, { cwd: distDir });
 }
 
 export async function stopWebUi(pid: number): Promise<void> {
   await killProcess(pid, { timeoutMs: 3000 });
+}
+
+/**
+ * `/octopi-config.js` 响应体：把网关端口运行时下发给前端。
+ *
+ * 唯一真相源是 `octopi.json`——serve-webui 启动时读取，前端加载本脚本后
+ * 优先使用其中的端口，构建期兜底仅作回退。
+ *
+ * @param port 网关端口；undefined 时下发 null（前端走默认）
+ * @returns JavaScript 赋值语句
+ */
+export function gatewayConfigScript(port?: number): string {
+  return port !== undefined
+    ? `window.__OCTOPI_GATEWAY__=${JSON.stringify({ port })};\n`
+    : 'window.__OCTOPI_GATEWAY__=null;\n';
 }
 
 export function getWebUiPidPath(): string {

@@ -11,7 +11,13 @@
 - Gateway default `3000 → 18180` (init scaffold, CLI fallbacks, example config, WebUI gateway-URL fallback); WebUI default `5173 → 8180` (static server, vite dev, start/stop/status)
 - Existing configs with an explicit `channels[].port` keep working unchanged (config always wins over defaults)
 - New `web.port` config field with precedence `octopi webui start --port` > `web.port` > 8180; `configPath` threaded through webui stop/restart/status; probe list checks the expected port first and keeps legacy 5173/5174/4173 for instance adoption
-- `octopi.schema.json` regenerated; upgrade-path caveat recorded in `docs/KNOWN-ISSUES.md` (WebUI gateway URL is build-time `VITE_OCTOPI_BASE` only)
+- `octopi.schema.json` regenerated; WebUI→Gateway address now comes from runtime injection (`/octopi-config.js`), see the `feat(webui)` entry below
+
+### feat(webui): runtime gateway address injection via /octopi-config.js
+
+- `serve-webui` dynamically serves `/octopi-config.js` (no-store) with the gateway port read from `octopi.json` when the WebUI starts — config stays the single source of truth; changing `channels[].port` no longer requires a WebUI rebuild
+- Address resolution consolidated in `packages/webui/src/gateway-base.ts` (shared by all three components): build-time `VITE_OCTOPI_BASE` > runtime injection > default 18180
+- Scheme policy: http pages connect `hostname:<injected port>` directly; https pages (TLS terminated at a reverse proxy) use same-origin — the proxy must also forward `/ws`, `/api/*`, `/messages`, `/health` (the gateway itself speaks plain http/ws only)
 
 ### feat(cli): diagnosable serve startup with port preflight and fast-fail
 

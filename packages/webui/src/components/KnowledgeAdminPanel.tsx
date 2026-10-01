@@ -9,6 +9,7 @@ import {
 } from '@octopi-agent/gateway/web/sdk/client';
 import { SourceDetailPanel } from './SourceDetailPanel';
 import { AgentKnowledgeView } from './AgentKnowledgeView';
+import { resolveDefaultBase } from '../gateway-base';
 
 type Panel = 'global' | 'projects' | 'agents' | 'search';
 
@@ -17,16 +18,6 @@ interface ProjectRow {
   displayName?: string;
   sourceCount: number;
   assignedAgentIds: string[];
-}
-
-function resolveDefaultBase(): string {
-  const fromEnv = (import.meta.env.VITE_OCTOPI_BASE as string | undefined)?.replace(/\/$/, '');
-  if (fromEnv) return fromEnv;
-  if (typeof window !== 'undefined' && window.location?.hostname) {
-    const { protocol, hostname } = window.location;
-    return `${protocol}//${hostname}:18180`;
-  }
-  return 'http://localhost:18180';
 }
 
 function statusClass(status: string): string {

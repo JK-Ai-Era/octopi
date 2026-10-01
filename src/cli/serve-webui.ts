@@ -1,24 +1,30 @@
 /**
  * Static file server for prebuilt WebUI dist (product path — no Vite).
  *
- * Spawn: node dist/cli/serve-webui.js <distDir> [--host <host>] [--port <port>]
+ * Spawn: node dist/cli/serve-webui.js <distDir> [--host <host>] [--port <port>] [--gateway-port <port>]
  */
 import { createServer } from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
 import { join, normalize, extname, resolve, sep } from 'node:path';
+import { gatewayConfigScript } from './helpers.js';
 
 const distArg = process.argv[2];
 if (!distArg) {
-  console.error('usage: serve-webui <distDir> [--host host] [--port port]');
+  console.error('usage: serve-webui <distDir> [--host host] [--port port] [--gateway-port port]');
   process.exit(1);
 }
 
 const distDir = resolve(distArg);
 let host = '127.0.0.1';
 let port = 8180;
+let gatewayPort: number | undefined;
 for (let i = 3; i < process.argv.length; i++) {
   if (process.argv[i] === '--host' && process.argv[i + 1]) host = process.argv[++i];
   if (process.argv[i] === '--port' && process.argv[i + 1]) port = Number(process.argv[++i]);
+  if (process.argv[i] === '--gateway-port' && process.argv[i + 1]) {
+    const gp = Number(process.argv[++i]);
+    if (Number.isInteger(gp) && gp >= 1 && gp <= 65535) gatewayPort = gp;
+  }
 }
 
 const MIME: Record<string, string> = {
@@ -49,6 +55,16 @@ function safeJoin(root: string, urlPath: string): string | null {
 
 const server = createServer(async (req, res) => {
   try {
+    const reqPath = (req.url || '/').split('?')[0];
+    // 运行时配置优先于静态文件：每次启动按 octopi.json 重新应答，no-store 防缓存
+    if (req.method === 'GET' && reqPath === '/octopi-config.js') {
+      res.writeHead(200, {
+        'Content-Type': 'application/javascript; charset=utf-8',
+        'Cache-Control': 'no-store',
+      });
+      res.end(gatewayConfigScript(gatewayPort));
+      return;
+    }
     let file = safeJoin(distDir, req.url || '/');
     if (!file) {
       res.writeHead(403).end('Forbidden');

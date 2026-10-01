@@ -36,11 +36,12 @@ const DEFAULT_WEBUI_PORT = 8180;
 /** 旧版默认与常见 vite dev 端口（认领未写入 pid 文件的实例） */
 const LEGACY_VITE_PORTS = [5173, 5174, 4173] as const;
 
-/** 轻量读取配置中的 web 段（dir / host / port），避免 loadConfig 重复打日志/强校验 */
+/** 轻量读取配置（web 段 + 网关 http 端口），避免 loadConfig 重复打日志/强校验 */
 function readConfigWebSettings(configPath?: string): {
   dir?: string;
   host?: NetworkHostConfig;
   port?: number;
+  gatewayPort?: number;
 } {
   try {
     let filePath: string;
@@ -54,13 +55,26 @@ function readConfigWebSettings(configPath?: string): {
     if (!existsSync(filePath)) return {};
     const raw = JSON.parse(readFileSync(filePath, 'utf-8')) as {
       web?: { dir?: unknown; host?: unknown; port?: unknown };
+      channels?: unknown;
     };
     const dir = typeof raw.web?.dir === 'string' && raw.web.dir.trim() ? raw.web.dir.trim() : undefined;
     const host = typeof raw.web?.host === 'string' && raw.web.host.trim()
       ? (raw.web.host.trim() as NetworkHostConfig)
       : undefined;
     const port = typeof raw.web?.port === 'number' ? raw.web.port : undefined;
-    return { dir, host, port: isValidPort(port) ? port : undefined };
+    const httpChannel = Array.isArray(raw.channels)
+      ? (raw.channels.find(
+          (c): c is Record<string, unknown> =>
+            !!c && typeof c === 'object' && (c as { type?: unknown }).type === 'http',
+        ) ?? null)
+      : null;
+    const gatewayPort = typeof httpChannel?.port === 'number' ? httpChannel.port : undefined;
+    return {
+      dir,
+      host,
+      port: isValidPort(port) ? port : undefined,
+      gatewayPort: isValidPort(gatewayPort) ? gatewayPort : undefined,
+    };
   } catch {
     return {};
   }
@@ -85,6 +99,18 @@ export function resolveWebUiPort(configPath?: string, override?: number): number
 /** 读取配置中的 web.dir */
 function readConfigWebDir(configPath?: string): string | undefined {
   return readConfigWebSettings(configPath).dir;
+}
+
+/**
+ * 读取网关 HTTP 监听端口（`channels[type=http].port`）
+ *
+ * 供 serve-webui 下发 `/octopi-config.js`；缺省 undefined 时前端回落默认 18180。
+ *
+ * @param configPath 配置文件路径（缺省按 cwd / OCTOPI_HOME 查找）
+ * @returns 合法端口号，配置缺失/非法时为 undefined
+ */
+export function readGatewayPort(configPath?: string): number | undefined {
+  return readConfigWebSettings(configPath).gatewayPort;
 }
 
 /** 探测本机局域网 IPv4（用于启动提示） */
@@ -164,7 +190,11 @@ export async function webuiStartCommand(
   const listenHost = resolveListenHost(webHost);
   const lanOpen = isLanHost(webHost);
 
-  const pid = startWebUi(webDist, { hostArg: listenHost, port });
+  const pid = startWebUi(webDist, {
+    hostArg: listenHost,
+    port,
+    gatewayPort: webSettings.gatewayPort,
+  });
   if (!pid) {
     if (soft) {
       console.warn('⚠️  Failed to start Web UI static server. Gateway continues without it.');
