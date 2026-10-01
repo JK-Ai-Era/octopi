@@ -133,6 +133,32 @@ export function findPidOnPort(port: number): number | null {
     : findPidOnPortUnix(port);
 }
 
+/** 尽力获取进程可执行名（Windows: tasklist；Unix: ps）。失败返回 null */
+export function getProcessName(pid: number): string | null {
+  if (!Number.isInteger(pid) || pid <= 0) return null;
+  try {
+    if (process.platform === 'win32') {
+      const out = execFileSync('tasklist', ['/FI', `PID eq ${pid}`, '/FO', 'CSV', '/NH'], {
+        encoding: 'utf-8',
+        timeout: 5000,
+        stdio: 'pipe',
+      }).trim();
+      if (!out || out.startsWith('INFO')) return null;
+      const name = out.split(',')[0]?.replace(/^"|"$/g, '').trim();
+      return name || null;
+    }
+    const out = execFileSync('ps', ['-p', String(pid), '-o', 'comm='], {
+      encoding: 'utf-8',
+      timeout: 5000,
+      stdio: 'pipe',
+    }).trim();
+    return out || null;
+  } catch {
+    // 进程可能已退出或无权限查询：名字是锦上添花，缺失不阻塞主流程
+    return null;
+  }
+}
+
 /**
  * 终结进程（Windows 用 taskkill 杀进程树，避免 vite/cmd 残留子进程）
  *
@@ -253,13 +279,41 @@ function psQuote(value: string): string {
   return `'${value.replace(/'/g, "''")}'`;
 }
 
+/**
+ * 按 CommandLineToArgvW 规则给单个参数加双引号。
+ *
+ * `Start-Process -ArgumentList` 会把数组元素按空格拼接且不补引号，
+ * 不预先 quoting 的话，含空格/引号的参数（长 -e 脚本、带空格的用户路径）
+ * 传到子进程会被拆碎。
+ */
+function winQuoteArg(arg: string): string {
+  if (arg.length > 0 && !/[\s"]/.test(arg)) return arg;
+  let result = '"';
+  let backslashes = 0;
+  for (const ch of arg) {
+    if (ch === '\\') {
+      backslashes++;
+      continue;
+    }
+    if (ch === '"') {
+      result += '\\'.repeat(backslashes * 2 + 1) + '"';
+      backslashes = 0;
+      continue;
+    }
+    result += '\\'.repeat(backslashes) + ch;
+    backslashes = 0;
+  }
+  result += '\\'.repeat(backslashes * 2) + '"';
+  return result;
+}
+
 function spawnDetachedWindows(
   command: string,
   args: string[],
   options: SpawnOptions,
 ): number | null {
   const cwd = typeof options.cwd === 'string' && options.cwd ? options.cwd : undefined;
-  const argArray = args.map(psQuote).join(', ');
+  const argArray = args.map((a) => psQuote(winQuoteArg(a))).join(', ');
   const workDir = cwd ? ` -WorkingDirectory ${psQuote(cwd)}` : '';
   const script =
     `$p = Start-Process -FilePath ${psQuote(command)} -ArgumentList @(${argArray})${workDir} -WindowStyle Hidden -PassThru; ` +

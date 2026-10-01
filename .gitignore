@@ -18,3 +18,5 @@ web/src/**/*.js
 coverage/
 /draft/
 tests/fixtures/tmp-*/
+# npm pack artifacts
+*.tgz

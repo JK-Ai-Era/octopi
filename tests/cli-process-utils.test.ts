@@ -10,6 +10,7 @@ import { createServer } from 'node:net';
 import {
   delay,
   findPidOnPort,
+  getProcessName,
   isProcessAlive,
   isSelfOrAncestorPid,
   killProcess,
@@ -61,6 +62,13 @@ describe('process-utils', () => {
 
     // 关闭后再查，大概率为空（或被系统快速复用，故只断言不崩溃）
     expect(() => findPidOnPort(port)).not.toThrow();
+  });
+
+  test('getProcessName returns executable name for own pid', () => {
+    const name = getProcessName(process.pid);
+    expect(name).toBeTruthy();
+    expect(name!.toLowerCase()).toContain('node');
+    expect(getProcessName(-1)).toBeNull();
   });
 
   test('resolveViteLaunch prefers vite.js entry', () => {

@@ -1,3 +1,11 @@
+## v0.56.0
+
+### fix(cli): quote spawnDetached Windows args and fix tasklist name lookup
+
+- `Start-Process -ArgumentList` dropped inner quoting — multi-word `-e` scripts and paths containing spaces were split at the child boundary; args are now pre-quoted with CommandLineToArgvW rules (`winQuoteArg`)
+- `tasklist` has no `/PID` (that's `taskkill` syntax); process names resolve via `/FI "PID eq <n>"` (`getProcessName`)
+- Ignore npm pack output (`*.tgz`)
+
 ## v0.55.1
 
 ### fix(cli): bind Web UI static server to IPv4 localhost
