@@ -1,38 +1,10 @@
 # 已知问题
 
-> 最后更新：2026-10-01（默认端口迁移 v0.56.0）
+> 最后更新：2026-10-01（清理已解决条目——本文件仅保留**开放项**与**现存边界**；已解决/已关闭问题见 `CHANGELOG` 与对应架构文档）
 
-## 同 Agent 多 Session 抢占共享 Agent 上下文（I1 已落地）
+## Session / ACL 能力层
 
-**状态：** Run 物理 **I1 已实现**（v0.35.0）→ 架构宪法 **`docs/north-star.md`**
-
-`SessionAwareRunner` 不再把共享 `Agent.context` 当会话工作区；每 Run 使用私有 `AgentContext` + `RunScope` ALS。锁仍按 `sessionId`。同 Agent 多 Session 并发的 **消息串味** 已由回归测试覆盖。
-
-## 工具效应面 I5（最小集已落地）
-
-**状态：** Phase B **v0.36.0** 配置 + cwd 解析 + 双 Session 路径隔离测试。
-
-`octopi.json` 顶层字段 **`toolIsolation`**：
-
-| 值 | 行为 |
-|----|------|
-| `none`（**默认**） | 多 Session 共享 `agent.workspace`（向后兼容） |
-| `session-subdir` | 工具 cwd = `<workspace>/<sessionId>/` |
-| `session-lock` | 路径仍共享；并发安全依赖 Runner **sessionId 锁**（E1） |
-
-多 Session 并发写文件时，宿主应显式配置 `toolIsolation: "session-subdir"`。
-
-## Session 一等数据 / Compact / ACL / Switch（Phase C–F + 评审修复）
-
-| 阶段 | 版本 | 内容 |
-|------|------|------|
-| C | v0.37.0 | 模型 2 字段（`primaryAgentId` + `Message.agentId` 归因）；目录当时未迁 |
-| D | v0.38.0 | compact 与 run **共 session 锁**；键 `(sessionId, agentId)` |
-| E | v0.39.0 | 五角色 ACL + `authorizeRun`；配置 `sessionAcl`；**无角色 DB** |
-| F | v0.40.0 | `preferredAgentId` ≠ primary；handoff host-only + `admin_handoff`；Principal 字段位 |
-| 修复 | v0.42.0 | Jsonl 完整持久化 model-2 状态；Gateway **共享** SessionLease；session-subdir 路径消毒；`canHandoff` 策略门控；compact/reset 边角；**Runner handle 可注入 ACL**（Gateway 已接线） |
-
-**运行时 ACL（v0.42.0+ / v0.43.0）：**
+**运行时行为注记（v0.42.0+ / v0.43.0）：**
 
 - Gateway **默认**注入 `SessionAclService` + **进程内共享** `SessionLease` 到全部 Runner（**非 opt-in 兼容性变化**）。
 - `handle` 在 run 前 `authorizeRun`：primary 自动 owner；非 primary 无绑定 → `engine.error`；effective 交集含 `agents[].maxSessionRights`（E6 L1）。
@@ -41,12 +13,6 @@
 - `filterHistory` / `appendRunAudit` / 业务 grant 仍供宿主调用；guest/handoff 经 sessionId 一等存储可读同一 Session。
 
 **仍开放：** 分布式 Session Lease 实现；工具 capability 收紧；角色 DB/控制台；Quota 经济层。
-
-## KnowledgeStage（已关闭）
-
-**状态：** 已解决
-
-旧 `harness/knowledge/stage.ts` 的 `KnowledgeStage` 及 `KnowledgeContextEngine` 均已删除；Knowledge 见 `docs/knowledge.md`（源/索引/外源 ingest）。
 
 ## Knowledge 外源出站 — 已知限制
 
@@ -67,19 +33,3 @@
 - **manifest 无跨请求锁**：并发上传同会话可能互相覆盖登记（单用户 Web 场景低发）。
 - **上传 API 为 JSON+base64**：超大文件宜后续 multipart。
 - **FileBlock 经 convertToLlm 变为文字指针**：非 provider 原生 file 附件格式。
-
-## 旧配置字段 `supervisor`
-
-**状态：** 有意不兼容 + 已告警 + 可 doctor 修复
-
-`octopi.json` 中的 `supervisor` 字段在 v0.20.0 起改名为 `runGuard`。`octopi doctor --fix` 会将其改写为 `runGuard`。
-
-## WebUI → Gateway 回源地址仅构建期可配（v0.56.0）
-
-**状态：** 开放（默认端口迁移后的升级路径注意）
-
-WebUI 前端连接 Gateway 的地址由构建期 env `VITE_OCTOPI_BASE` 决定；未设置时兜底为**默认网关端口 18180**（`resolveDefaultBase`，见 `ChatWorkspace` / `SessionCorpusMenu` / `KnowledgeAdminPanel` 三处）。运行时无注入机制——`serve-webui` 只发静态文件。
-
-- **影响**：网关配置了**非默认端口**（如存量配置显式 `port: 3000`）而 WebUI 使用新默认构建时，页面回源连错端口，聊天不可用。
-- **出路**：把配置端口改回默认 18180，或以 `VITE_OCTOPI_BASE=http://127.0.0.1:<port>` 重新构建 WebUI。
-- **后续方向**：`serve-webui` 启动时下发运行时配置（如 `/octopi-config.js`），前端优先读运行时值再回落构建期兜底。

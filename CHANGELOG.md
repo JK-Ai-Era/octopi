@@ -27,6 +27,11 @@
 - Replacing a still-alive pid file warns with the exact stop command; daemon fallback port literal aligned to 18180; `webui status` honors `-c` for `web.dir` discovery
 - 17 new tests: preflight decision matrix, failure diagnosis mapping, process name lookup
 
+### docs: prune resolved entries from KNOWN-ISSUES
+
+- remove sections that are resolved or migrated out: I1 shared-context (v0.35.0), I5 toolIsolation minimal set (shipped knob), KnowledgeStage (closed), legacy `supervisor` field (doctor --fix), and the WebUI build-time-only caveat (closed by `/octopi-config.js` injection)
+- slim the Session/ACL section to runtime behavior notes plus the open capability gaps that AGENTS.md points to; keep only open items and intentional current boundaries
+
 ## v0.55.1
 
 ### fix(cli): bind Web UI static server to IPv4 localhost
