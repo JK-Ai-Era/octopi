@@ -71,6 +71,7 @@ Scaffolded by `src/init.ts` (`initOctopi` / `ensureAgentDirs`). Keep init, types
 ~/.octopi/
   octopi.json           # System config + system-level secrets (LLM providers…); do not put resource-access credentials here
   audit/
+  logs/                 # gateway.log — serve start daemon log & startup failure diagnostics
   plugins/
   sessions/             # JsonlSessionStore (sessionId is first-class; the only runtime Session backend)
     sessions.json       # meta index (lifecycle / endedAt)

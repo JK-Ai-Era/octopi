@@ -3,8 +3,17 @@
  */
 
 import { resolve, dirname, join } from 'node:path';
-import { fork } from 'node:child_process';
-import { readFileSync, writeFileSync, unlinkSync, existsSync, mkdirSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import {
+  readFileSync,
+  writeFileSync,
+  unlinkSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  closeSync,
+  writeSync,
+} from 'node:fs';
 import type { CliArgs } from './args.js';
 import { getOctopiHome, isInitialized, initOctopi, formatInitReport } from '../init.js';
 import { loadConfig, toGatewayConfig } from '../config.js';
@@ -18,6 +27,7 @@ import { webuiStartCommand, webuiStopCommand } from './webui.js';
 import {
   delay,
   findPidOnPort,
+  getProcessName,
   isProcessAlive,
   killProcess,
   killProcessOnPort,
@@ -72,7 +82,7 @@ export function resolveListenPort(
     const httpChannel = config.channels?.find((c: { type: string }) => c.type === 'http');
     if (httpChannel?.port) return httpChannel.port;
   } catch { /* fall through */ }
-  return 3000;
+  return 18180;
 }
 
 /**
@@ -99,25 +109,209 @@ export function resolveGatewayPid(args: Pick<CliArgs, 'port' | 'config'>, config
   return { pid: null, port, source: 'none' };
 }
 
-async function waitGatewayReady(port: number, timeoutMs = 20_000): Promise<number | null> {
+/** 端口占用者三态：空闲 / 自己的 Gateway / 其他进程 / 无法识别 */
+export type PortOccupantState = 'free' | 'own-gateway' | 'foreign' | 'unknown';
+
+export interface PortOccupant {
+  state: PortOccupantState;
+  port: number;
+  /** 端口监听进程 PID（探测不到时为 null） */
+  pid: number | null;
+  /** foreign 时尽力获取的进程名（如 node.exe） */
+  processName?: string;
+  /** own-gateway：进程存活但 health 尚未响应（启动中 / 卡住） */
+  healthy: boolean;
+  /** own-gateway：来自 pid 文件 */
+  startedAt?: string;
+  config?: string;
+}
+
+type HealthProbe = 'octopi' | 'other' | 'none';
+
+/**
+ * 探测端口上的 HTTP 服务是否为 Octopi Gateway
+ *
+ * - `octopi`：`/health` 返回 200 且 body 形如 `{status:"ok"}`
+ * - `other`：有 HTTP 响应但不是 octopi health 形状（被别的服务占用）
+ * - `none`：无响应（端口空闲 / 非 HTTP 服务 / 连接被拒）
+ */
+async function probeGatewayHealth(port: number): Promise<HealthProbe> {
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/health`, {
+      signal: AbortSignal.timeout(800),
+    });
+    if (!res.ok) return 'other';
+    const body: unknown = await res.json().catch(() => null);
+    if (
+      typeof body === 'object' &&
+      body !== null &&
+      (body as { status?: unknown }).status === 'ok'
+    ) {
+      return 'octopi';
+    }
+    return 'other';
+  } catch {
+    return 'none';
+  }
+}
+
+/**
+ * 识别端口占用者，供 `serve start` 决策：
+ *
+ * 1. health 是 octopi → 自己的 Gateway（幂等，不是错误）
+ * 2. 监听者 pid 与 pid 文件一致 → 自己的 Gateway（health 未响应 = 启动中/卡住）
+ * 3. 监听者是其他进程 → foreign（错误：给出占用者身份 + 出路）
+ * 4. 无监听者但 pid 文件进程存活且端口一致 → 自己的 Gateway（启动窗口期，防双开）
+ * 5. 有 HTTP 响应但拿不到 pid → unknown（警告后继续，失败由子进程日志上浮）
+ * 6. 其余 → free
+ *
+ * @param port 待检查的监听端口
+ */
+export async function identifyPortOccupant(port: number): Promise<PortOccupant> {
+  const probe = await probeGatewayHealth(port);
+  const pid = findPidOnPort(port);
+  const pidFile = readPidFile();
+  const base = { port, healthy: probe === 'octopi' };
+
+  if (probe === 'octopi') {
+    return {
+      ...base,
+      state: 'own-gateway',
+      pid,
+      startedAt: pidFile?.startedAt,
+      config: pidFile?.config,
+    };
+  }
+
+  if (pid !== null) {
+    if (pidFile && pidFile.pid === pid && isProcessAlive(pidFile.pid)) {
+      return {
+        ...base,
+        state: 'own-gateway',
+        pid,
+        startedAt: pidFile.startedAt,
+        config: pidFile.config,
+      };
+    }
+    return {
+      ...base,
+      state: 'foreign',
+      pid,
+      processName: getProcessName(pid) ?? undefined,
+    };
+  }
+
+  if (pidFile && isProcessAlive(pidFile.pid) && (pidFile.port ?? port) === port) {
+    return {
+      ...base,
+      state: 'own-gateway',
+      pid: pidFile.pid,
+      startedAt: pidFile.startedAt,
+      config: pidFile.config,
+    };
+  }
+
+  if (probe === 'other') {
+    return { ...base, state: 'unknown', pid: null };
+  }
+
+  return { ...base, state: 'free', pid: null };
+}
+
+/** serve start 等待子进程就绪的超时 */
+const STARTUP_TIMEOUT_MS = 20_000;
+
+/**
+ * 等待子进程的 Gateway 就绪
+ *
+ * 就绪判定（任一满足）：
+ * 1. 端口持有者 === child.pid（直连 spawn，pid 可信）
+ * 2. `/health` 返回 octopi 形状（端口表探测失效时兜底；pid 取端口探测值或 child.pid）
+ *
+ * 端口被外来者占据时不视为就绪——等子进程退出（race 由上层捕获）或超时，
+ * 由 diagnoseStartupFailure 给出结论，避免把外来实例误判为成功。
+ *
+ * @param port 监听端口
+ * @param childPid spawn 返回的子进程 pid
+ * @param timeoutMs 最长等待时间
+ * @returns 就绪实例 pid；超时返回 null
+ */
+async function waitGatewayReady(
+  port: number,
+  childPid: number,
+  timeoutMs = STARTUP_TIMEOUT_MS,
+): Promise<number | null> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const portPid = findPidOnPort(port);
-    if (portPid && portPid !== process.pid) {
-      return portPid;
+    if (portPid === childPid) return childPid;
+    if ((await probeGatewayHealth(port)) === 'octopi') {
+      return portPid ?? childPid;
     }
-    // health 探测兜底（端口表可能稍慢）
-    try {
-      const res = await fetch(`http://127.0.0.1:${port}/health`, {
-        signal: AbortSignal.timeout(800),
-      });
-      if (res.ok) {
-        return findPidOnPort(port);
-      }
-    } catch { /* not ready */ }
     await delay(300);
   }
   return null;
+}
+
+/** Gateway 守护进程日志路径（`OCTOPI_HOME/logs/gateway.log`） */
+export function getGatewayLogPath(): string {
+  return join(getOctopiHome(), 'logs', 'gateway.log');
+}
+
+/** 读取日志尾部若干非空行 */
+export function readLogTail(logPath: string, maxLines = 20): string[] {
+  try {
+    const lines = readFileSync(logPath, 'utf-8').split(/\r?\n/);
+    return lines.filter((l) => l.trim().length > 0).slice(-maxLines);
+  } catch {
+    // fork 前失败 / 日志未创建 / 无读权限：降级为“空日志”，诊断走通用提示
+    return [];
+  }
+}
+
+/**
+ * 把子进程日志尾部翻译成用户可执行的结论（原因 + 出路 + 证据位置）
+ *
+ * @param opts.logTail 日志尾部行（readLogTail 结果）
+ * @param opts.port Gateway 监听端口
+ * @param opts.configPath 本次使用的配置路径
+ * @param opts.logPath 完整日志路径
+ * @returns 逐行输出的诊断文本
+ */
+export function diagnoseStartupFailure(opts: {
+  logTail: string[];
+  port: number;
+  configPath?: string;
+  logPath: string;
+}): string[] {
+  const { logTail, port, configPath, logPath } = opts;
+  const tail = logTail.join('\n');
+  const lines: string[] = [];
+
+  if (/EADDRINUSE/i.test(tail)) {
+    lines.push(`Port ${port} was taken by another process after the preflight check (EADDRINUSE).`);
+    lines.push(`   Re-run 'octopi serve start', or start on another port with --port <other>.`);
+  } else if (/\bEACCES\b|\bEPERM\b/i.test(tail)) {
+    lines.push(`Not allowed to bind port ${port} (EACCES) — ports below 1024 may require elevated privileges.`);
+  } else if (/Cannot find module|ERR_MODULE_NOT_FOUND/i.test(tail)) {
+    lines.push('A required module failed to load — the installation may be incomplete or out of sync.');
+    lines.push('   Reinstall: npm install (project) or npm install -g octopi-agent (global).');
+  } else if (/Config file not found/i.test(tail)) {
+    lines.push(`Config file not found (searched cwd and ${configPath ?? join(getOctopiHome(), 'octopi.json')}).`);
+    lines.push("   Run 'octopi init' to create one, or pass -c <path>.");
+  } else if (/Config validation failed/i.test(tail)) {
+    lines.push(`Configuration is invalid: ${configPath ?? join(getOctopiHome(), 'octopi.json')}`);
+    lines.push('   Fix the field reported in the log, then re-run.');
+  } else if (logTail.length > 0) {
+    lines.push('Last lines from the Gateway log:');
+    for (const line of logTail) lines.push(`   ${line}`);
+  } else {
+    lines.push('The Gateway log is empty — the child process produced no output.');
+  }
+
+  lines.push(`Full log: ${logPath}`);
+  lines.push(`Foreground debug: octopi serve fg${configPath ? ` -c ${configPath}` : ''}`);
+  return lines;
 }
 
 export function createProvider(name: string, cfg: ModelProviderConfig): ModelProvider | null {
@@ -164,30 +358,80 @@ export async function ensureDaemonConfig(args: CliArgs): Promise<string | undefi
 
 export async function serveStartCommand(args: CliArgs): Promise<void> {
   const configPath = await ensureDaemonConfig(args);
-  const existing = resolveGatewayPid(args, configPath);
-  if (existing.pid) {
-    console.log(`⚠️  Gateway is already running (PID: ${existing.pid}, port ${existing.port})`);
-    console.log(`\nUse 'octopi serve restart' to restart, or 'octopi serve stop' to stop.`);
-    // Gateway 已在跑时仍尝试拉起 Web UI（restart 半失败 / 仅缺 Web UI 的场景）
+  const port = resolveListenPort(args, configPath);
+  const logPath = getGatewayLogPath();
+  const occupant = await identifyPortOccupant(port);
+
+  // 幂等：自己的 Gateway 已在跑 → 引导 status/restart，不报错
+  if (occupant.state === 'own-gateway') {
+    console.log(`⚠️  Gateway is already running (PID: ${occupant.pid ?? 'unknown'}, port ${port}).`);
+    if (occupant.healthy) {
+      console.log('   Health: OK');
+    } else {
+      console.log('   Health: process alive but not responding yet (starting or stuck).');
+      console.log("   If it stays this way, run 'octopi serve restart'.");
+    }
+    if (occupant.startedAt) console.log(`   Started: ${occupant.startedAt}`);
+    if (occupant.config) console.log(`   Config:  ${occupant.config}`);
+    console.log(`\nUse 'octopi serve status' to inspect, 'octopi serve restart' to restart, or 'octopi serve stop' to stop.`);
     await webuiStartCommand(configPath, { soft: true });
     process.exit(0);
   }
 
+  // 被无关进程占用 → 明确报错 + 三条出路，绝不静默
+  if (occupant.state === 'foreign') {
+    const who = [
+      occupant.processName ?? 'unknown process',
+      occupant.pid ? `PID ${occupant.pid}` : null,
+    ]
+      .filter(Boolean)
+      .join(', ');
+    console.error(`❌ Cannot start Gateway: port ${port} is occupied by ${who}.`);
+    console.error('   The occupant is not an Octopi Gateway.');
+    console.error('\n   How to resolve:');
+    console.error("   1. Stop the occupying process, then run 'octopi serve start' again");
+    console.error(`   2. Start on another port:       octopi serve start --port ${port + 1}`);
+    console.error(
+      `   3. Change the port permanently: set channels[type=http].port in ${configPath ?? 'your config'}`,
+    );
+    process.exit(1);
+  }
+
+  if (occupant.state === 'unknown') {
+    console.warn(`⚠️  Port ${port} has an HTTP service that could not be identified; attempting to start anyway.`);
+    console.warn(`   If startup fails, the reason will be shown here and in ${logPath}.`);
+  }
+
+  // pid 文件是单槽设计：换端口启动时若旧实例仍存活，先明示再接管，避免静默变孤儿
+  const prevPidFile = readPidFile();
+  if (
+    prevPidFile &&
+    isProcessAlive(prevPidFile.pid) &&
+    prevPidFile.port !== undefined &&
+    prevPidFile.port !== port
+  ) {
+    console.warn(`⚠️  A tracked Gateway (PID ${prevPidFile.pid}, port ${prevPidFile.port}) is still alive.`);
+    console.warn(`   Its PID file will be replaced. To stop the old instance: octopi serve stop --port ${prevPidFile.port}`);
+  }
   removePidFile();
+
+  mkdirSync(dirname(logPath), { recursive: true });
+  const logFd = openSync(logPath, 'a');
+  writeSync(logFd, `\n--- octopi serve start ${new Date().toISOString()} port=${port} ---\n`);
 
   const cliPath = resolve(process.argv[1]);
   const childArgs = ['serve', 'fg'];
   if (configPath) childArgs.push('--config', configPath);
-  if (args.port) childArgs.push('--port', String(args.port));
+  childArgs.push('--port', String(port));
   if (args.verbose) childArgs.push('--verbose');
 
-  const child = fork(cliPath, childArgs, {
+  // 子进程 stdout/stderr 落日志：失败原因不再随 stdio:ignore 丢弃
+  const child = spawn(process.execPath, [cliPath, ...childArgs], {
     detached: true,
-    stdio: 'ignore',
-    execArgv: [],
+    stdio: ['ignore', logFd, logFd],
     env: { ...process.env, OCTOPI_DAEMON: '1' },
   });
-
+  closeSync(logFd);
   child.unref();
 
   if (!child.pid) {
@@ -195,19 +439,52 @@ export async function serveStartCommand(args: CliArgs): Promise<void> {
     process.exit(1);
   }
 
-  const port = resolveListenPort(args, configPath);
-  console.log(`⏳ Waiting for Gateway on port ${port}...`);
-  const realPid = await waitGatewayReady(port);
+  let childExitCode: number | null = null;
+  let spawnError: string | null = null;
+  const exited = new Promise<void>((resolveExit) => {
+    child.once('exit', (code) => {
+      childExitCode = code;
+      resolveExit();
+    });
+    // spawn 本身失败（权限/资源等）只走 error 不走 exit：不挂监听会以裸栈 uncaughtException 收场
+    child.once('error', (err) => {
+      spawnError = err instanceof Error ? err.message : String(err);
+      resolveExit();
+    });
+  });
 
-  if (!realPid) {
-    console.error('❌ Gateway did not become ready within 20s');
-    console.error(`   Check logs / try: octopi serve fg -c ${configPath ?? '<config>'}`);
-    // 尽量回收 fork 出的子进程树
-    await killProcess(child.pid, { timeoutMs: 2000 }).catch(() => undefined);
+  console.log(`⏳ Waiting for Gateway on port ${port}...`);
+  const outcome = await Promise.race([
+    waitGatewayReady(port, child.pid).then((pid) => ({ kind: 'ready' as const, pid })),
+    exited.then(() => ({ kind: 'exited' as const, pid: null as null })),
+  ]);
+
+  if (outcome.kind !== 'ready' || !outcome.pid) {
+    if (outcome.kind === 'exited') {
+      if (spawnError) {
+        console.error(`❌ Failed to launch Gateway child process: ${spawnError}`);
+      } else {
+        console.error(`❌ Gateway exited during startup (exit code ${childExitCode ?? 'unknown'}).`);
+      }
+    } else {
+      console.error(`❌ Gateway did not become ready within ${STARTUP_TIMEOUT_MS / 1000}s.`);
+      // 尽量回收 spawn 出的子进程树
+      await killProcess(child.pid, { timeoutMs: 2000 }).catch(() => undefined);
+    }
+    for (const line of diagnoseStartupFailure({
+      logTail: readLogTail(logPath),
+      port,
+      configPath,
+      logPath,
+    })) {
+      console.error(line);
+    }
     process.exit(1);
   }
 
-  // 以端口探测到的真实 PID 覆盖，避免 Windows fork pid 不一致
+  const realPid = outcome.pid;
+
+  // 以端口探测到的真实 PID 为准（与 spawn 返回的 pid 可能不一致）
   writePidFile({
     pid: realPid,
     config: configPath ?? join(getOctopiHome(), 'octopi.json'),
@@ -218,6 +495,7 @@ export async function serveStartCommand(args: CliArgs): Promise<void> {
   console.log(`✅ Gateway started (PID: ${realPid})`);
   console.log(`   Config: ${configPath ?? join(getOctopiHome(), 'octopi.json')}`);
   console.log(`   Port:   ${port}`);
+  console.log(`   Log:    ${logPath}`);
 
   // Web UI 为可选：失败不拖垮 Gateway（跨平台/无 web 依赖时仍可 serve）
   await webuiStartCommand(configPath, { soft: true });
@@ -226,7 +504,7 @@ export async function serveStartCommand(args: CliArgs): Promise<void> {
   process.exit(0);
 }
 
-export async function serveStopCommand(args: Pick<CliArgs, 'port'> = {}): Promise<void> {
+export async function serveStopCommand(args: Pick<CliArgs, 'port' | 'config'> = {}): Promise<void> {
   const resolved = resolveGatewayPid(args);
   const pidFile = readPidFile();
 
@@ -239,7 +517,7 @@ export async function serveStopCommand(args: Pick<CliArgs, 'port'> = {}): Promis
       removePidFile();
       console.log('ℹ️  No running Gateway found (cleaned PID file if any).');
     }
-    await webuiStopCommand();
+    await webuiStopCommand(args.config);
     return;
   }
 
@@ -286,7 +564,7 @@ export async function serveStopCommand(args: Pick<CliArgs, 'port'> = {}): Promis
 
   console.log(anyStillAlive ? '⚠️  Gateway not fully stopped.' : '✅ Gateway stopped.');
 
-  await webuiStopCommand();
+  await webuiStopCommand(args.config);
 }
 
 export async function serveRestartCommand(args: CliArgs): Promise<void> {
@@ -329,6 +607,12 @@ export async function serveFgCommand(args: CliArgs): Promise<void> {
   const port = resolveListenPort(args, configPath);
   const portPid = findPidOnPort(port);
   if (portPid && portPid !== process.pid) {
+    // 守护模式下 preflight 已做过占用者识别：静默杀进程与「失败上浮」契约冲突，
+    // 直接失败让父进程按日志给出结论（EADDRINUSE / 占用者信息）
+    if (process.env.OCTOPI_DAEMON === '1') {
+      console.error(`❌ Port ${port} is already occupied by PID ${portPid} (appeared after preflight).`);
+      process.exit(1);
+    }
     console.log(`⚠️  Port ${port} is occupied by PID ${portPid}. Killing...`);
     const killed = await killProcess(portPid, { timeoutMs: 3000 });
     if (!killed && findPidOnPort(port) === portPid) {
@@ -591,7 +875,7 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
   });
 
   const httpConfig = config.channels?.find((c: any) => c.type === 'http');
-  const listenPort = args.port ?? httpConfig?.port ?? 3000;
+  const listenPort = args.port ?? httpConfig?.port ?? 18180;
   // web.host 可作 Gateway HTTP 的缺省（局域网访问两者都要放开）；channels[].host 优先
   const listenHostConfig = httpConfig?.host ?? config.web?.host;
   if (httpConfig || args.port) {

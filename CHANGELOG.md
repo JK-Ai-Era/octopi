@@ -13,6 +13,14 @@
 - New `web.port` config field with precedence `octopi webui start --port` > `web.port` > 8180; `configPath` threaded through webui stop/restart/status; probe list checks the expected port first and keeps legacy 5173/5174/4173 for instance adoption
 - `octopi.schema.json` regenerated; upgrade-path caveat recorded in `docs/KNOWN-ISSUES.md` (WebUI gateway URL is build-time `VITE_OCTOPI_BASE` only)
 
+### feat(cli): diagnosable serve startup with port preflight and fast-fail
+
+- `serve start` preflight classifies the port holder (`identifyPortOccupant`: free / own-gateway / foreign / unknown): an already-running Gateway is idempotent (exit 0 with health info); a foreign occupant fails fast with process name + PID + three concrete remedies (exit 1)
+- Daemon child stdout/stderr streams to `OCTOPI_HOME/logs/gateway.log`; the parent races child `exit` against port readiness so startup failures surface in under a second, and `diagnoseStartupFailure` translates EADDRINUSE / config / module errors into actionable lines + log location
+- Output contract: every exit path ends with ✅/⚠️/❌, evidence, and a meaningful exit code; daemon-mode `serve fg` no longer silently kills a post-preflight occupant (interactive `serve fg` unchanged)
+- Replacing a still-alive pid file warns with the exact stop command; daemon fallback port literal aligned to 18180; `webui status` honors `-c` for `web.dir` discovery
+- 17 new tests: preflight decision matrix, failure diagnosis mapping, process name lookup
+
 ## v0.55.1
 
 ### fix(cli): bind Web UI static server to IPv4 localhost
