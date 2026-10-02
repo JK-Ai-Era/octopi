@@ -214,7 +214,7 @@ npm run lint
 
 ### Version Numbering Rules
 
-**Lockstep (from v0.56.0):** all five packages (`octopi-agent`, `@octopi-agent/{core,engine,gateway,webui}`) **always share one version**. Internal dependencies are pinned to that exact version (not `^`).
+**Lockstep:** all five packages (`octopi-agent`, `@octopi-agent/{core,engine,gateway,webui}`) **always share one version**. Internal dependencies are pinned to that exact version (not `^`).
 
 Version format is `X.Y.Z` (semantic versioning), updated as follows:
 
@@ -230,7 +230,5 @@ Version format is `X.Y.Z` (semantic versioning), updated as follows:
 2. Update `CHANGELOG.md` under `## v<X.Y.Z>` (one entry for the product)
 3. Commit + tag `v<X.Y.Z>`
 4. Publish in dependency order (script prints the commands): `core` → `engine` → `gateway` → `webui` → `octopi-agent`
-
-Historical note: `0.55.1` was a suite-only patch before this policy; `0.56.0` starts strict lockstep.
 
 ---

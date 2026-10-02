@@ -1,5 +1,9 @@
 ## v0.57.0
 
+### docs(agents): drop stale lockstep version notes
+
+- AGENTS.md no longer references the v0.56.0 adoption cutoff or the 0.55.1 historical note
+
 ### feat(memory): relevance-aware auto-recall (floor + hybrid rank + query expansion)
 
 - **Relevance floor**: vector paths (sqlite-vec / JS hybrid) drop hits below `minSimilarity` (default 0.35); ranking is `similarityWeight·similarity + (1-w)·(importance×confidence×decay)` instead of quality-only reorder that buried topical entries
