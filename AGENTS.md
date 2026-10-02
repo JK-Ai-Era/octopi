@@ -210,7 +210,7 @@ npm run lint
 - Types: `feat` / `fix` / `refactor` / `docs` / `test` / `chore` / `perf` / `ci`
 - **`<description>` must be written in English.**
 - Each commit has a single responsibility.
-- **Every commit must update `CHANGELOG.md`**, recording changes under the corresponding version entry.
+- **Every content commit must include a version bump and a CHANGELOG entry** (see Version Numbering Rules). Do not leave `package.json` at an older version while landing behavior/docs/tests changes.
 
 ### Version Numbering Rules
 
@@ -222,13 +222,18 @@ Version format is `X.Y.Z` (semantic versioning), updated as follows:
 |---------|---------|---------|
 | **X** (major) | Updated on explicit user request | `1.0.0` → `2.0.0` |
 | **Y** (minor) | Major feature addition or architecture change | `1.2.3` → `1.3.0` |
-| **Z** (patch) | Updated on every commit / release | `1.2.3` → `1.2.4` |
+| **Z** (patch) | Every other content commit (fix/docs/test/chore/small feat) | `1.2.3` → `1.2.4` |
 
-**Release process (lockstep):**
+**Content commit checklist (same commit, no later “release chore” required):**
 
-1. `npm run release:prep -- <X.Y.Z>` — sets every package to `<X.Y.Z>`, pins internal deps to `<X.Y.Z>`
-2. Update `CHANGELOG.md` under `## v<X.Y.Z>` (one entry for the product)
-3. Commit + tag `v<X.Y.Z>`
-4. Publish in dependency order (script prints the commands): `core` → `engine` → `gateway` → `webui` → `octopi-agent`
+1. Pick `X` / `Y` / `Z` from the table above.
+2. Run `npm run release:prep -- <X.Y.Z>` (skip only if that version is already set on all five packages).
+3. Write `CHANGELOG.md` under `## v<X.Y.Z>` (create the section if needed).
+4. Commit code + version files + CHANGELOG together.
+
+**Tag / publish are separate** (do them when cutting a release or when the user asks):
+
+1. `git tag v<X.Y.Z>` (if not already tagged for that version)
+2. Publish in dependency order (`node scripts/release.mjs print`): `core` → `engine` → `gateway` → `webui` → `octopi-agent`
 
 ---

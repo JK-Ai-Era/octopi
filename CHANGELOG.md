@@ -1,3 +1,10 @@
+## v0.57.1
+
+### docs(agents): bind content commits to lockstep version bumps
+
+- AGENTS.md: every content commit must include `release:prep` + CHANGELOG under the new `## vX.Y.Z` in the same commit; tag/publish stay separate (release / user request only)
+- Removes the “update CHANGELOG first, bump version at release” ambiguity
+
 ## v0.57.0
 
 ### docs(agents): drop stale lockstep version notes
