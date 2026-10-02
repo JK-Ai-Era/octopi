@@ -53,6 +53,8 @@ const catalog: KnowledgeCatalogItem[] = [
     description: '主代码与设计文档',
     scaleLabel: '~1.2k files',
     scopeLevel: 'project',
+    location: '/data/project-foo',
+    topics: ['auth', 'context'],
   },
   {
     id: 'src-bar',
@@ -60,19 +62,31 @@ const catalog: KnowledgeCatalogItem[] = [
     kind: 'directory',
     status: 'indexing',
     description: '产品需求与 API 规格',
+    scaleLabel: 'partial',
     scopeLevel: 'global',
+    location: '/data/product-specs',
+    topics: ['api'],
   },
 ];
 
 describe('KnowledgeLayer（Tier 0 catalog）', () => {
-  it('渲染源列表与描述，不按 query 检索', async () => {
+  it('渲染标签化 catalog（id/name/type/status/scale/location + purpose/topics）', async () => {
     const layer = new KnowledgeLayer({ getCatalog: () => catalog });
     const result = await layer.assemble(layerCtx());
     expect(result).not.toBeNull();
-    expect(result!.text).toContain('Knowledge Sources');
-    expect(result!.text).toContain('project-foo');
-    expect(result!.text).toContain('主代码与设计文档');
-    expect(result!.text).toContain('product-specs');
+    expect(result!.text).toContain('## Knowledge Sources');
+    expect(result!.text).toContain('Legend:');
+    expect(result!.text).toContain(
+      '- id=src-foo name=project-foo type=directory status=ready scale=~1.2k files location=/data/project-foo',
+    );
+    expect(result!.text).toContain('purpose: 主代码与设计文档');
+    expect(result!.text).toContain('topics: auth · context');
+    expect(result!.text).toContain(
+      '- id=src-bar name=product-specs type=directory status=indexing scale=partial location=/data/product-specs',
+    );
+    expect(result!.text).toContain('purpose: 产品需求与 API 规格');
+    // 扁平行不带 scope 标签
+    expect(result!.text).not.toContain('scope=');
     expect(result!.sources).toEqual(['src-foo', 'src-bar']);
   });
 
@@ -90,7 +104,7 @@ describe('KnowledgeLayer（Tier 0 catalog）', () => {
     // provider 返回全集，Layer 负责截断
     const layer = new KnowledgeLayer({ getCatalog: () => many, maxEntries: 3 });
     const result = await layer.assemble(layerCtx());
-    expect(result!.text).toContain('…and 9 more');
+    expect(result!.text).toContain('9 more sources (use knowledge_search)');
     expect(result!.text).toContain('src-0');
     expect(result!.text).not.toContain('src-3');
   });
@@ -102,6 +116,16 @@ describe('KnowledgeLayer（Tier 0 catalog）', () => {
     const result = await layer.assemble(layerCtx());
     expect(result!.text).toContain('project-foo');
     expect(result!.text).not.toContain('product-specs');
+  });
+
+  it('groupByScope 用 Global/Project/Session 分组头', async () => {
+    const layer = new KnowledgeLayer({
+      getCatalog: () => catalog,
+      groupByScope: true,
+    });
+    const result = await layer.assemble(layerCtx());
+    expect(result!.text).toContain('## Project');
+    expect(result!.text).toContain('## Global');
   });
 });
 

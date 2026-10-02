@@ -27,7 +27,6 @@ export function SourceDetailPanel({
   client,
   agentId,
   sourceId,
-  onChanged,
 }: {
   client: OctopiClient;
   agentId: string;
@@ -58,7 +57,7 @@ export function SourceDetailPanel({
     void load();
   }, [load]);
 
-  // 索引未就绪时轻量轮询（progress WS 后续替换）
+  // 索引未就绪时轻量轮询（只刷详情，不触发父级全量 refresh）
   useEffect(() => {
     if (!detail) return;
     const active =
@@ -67,10 +66,10 @@ export function SourceDetailPanel({
       detail.status === 'partial';
     if (!active) return;
     const t = setInterval(() => {
-      void load().then(() => onChanged?.());
-    }, 2500);
+      void load();
+    }, 3000);
     return () => clearInterval(t);
-  }, [detail?.status, load, onChanged]);
+  }, [detail?.status, load]);
 
   const openFile = async (path: string) => {
     if (openPath === path) {
@@ -100,21 +99,21 @@ export function SourceDetailPanel({
         </span>
         <span className="mono muted">{detail.kind}</span>
         <span>
-          files {detail.fileCount} · chunks {detail.chunkCount}
+          文件 {detail.fileCount} · 分块 {detail.chunkCount} · 向量 {detail.embeddingCount ?? 0}
           {detail.errorFileCount > 0 && (
-            <span className="status-error"> · err {detail.errorFileCount}</span>
+            <span className="status-error"> · 失败 {detail.errorFileCount}</span>
           )}
           {detail.skippedFileCount > 0 && (
-            <span className="muted"> · skip {detail.skippedFileCount}</span>
+            <span className="muted"> · 跳过 {detail.skippedFileCount}</span>
           )}
         </span>
         {detail.coverage != null && (
-          <span className="muted">coverage {Math.round(detail.coverage * 100)}%</span>
+          <span className="muted">覆盖 {Math.round(detail.coverage * 100)}%</span>
         )}
       </div>
       <div className="small mono muted">{detail.location}</div>
       {detail.description && <div className="small">{detail.description}</div>}
-      {!detail.description && detail.generatedDescription && (
+      {detail.generatedDescription && (
         <div className="small muted">自动描述：{detail.generatedDescription}</div>
       )}
       {detail.scopeRef.level === 'project' && (

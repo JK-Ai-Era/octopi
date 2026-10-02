@@ -113,8 +113,8 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
     this.server = createServer(async (req, res) => {
       // CORS
       res.setHeader('Access-Control-Allow-Origin', this.corsOrigins);
-      res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
-      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, PUT, DELETE, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Accept');
 
       if (req.method === 'OPTIONS') {
         res.writeHead(204);

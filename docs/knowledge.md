@@ -106,8 +106,10 @@ Tier 2  Hits        「和本问相关的片段」    本轮 grounding / 工具�
 Tier 3  Full        「原文」                knowledge_read
 ```
 
-- **Catalog** 是源列表 + 用途描述（`displayName` / `description`），不是文件树。
+- **Catalog** 是标签化能力面（`id/name/type/status/scale/location` + `purpose`/`topics`），不是文件树。规格见 `arch/knowledge-catalog-redesign.md`。
 - **内容命中不进 system**：避免污染人格与常备约束；按轮注入、可 strip。
+- **定向检索**：`knowledge_search` 可用 `source_id` / `source`（catalog 句柄）限定单一语料；可见性仍由服务端裁剪。
+- **代码 vs 文档**：代码（`code-tree`）只做路径/符号/关键词（Phase A），**默认不 embedding**——原文用 `file_read`，检索用 `file_search` / 关键词；文档/规格/正文才进向量（Phase B），避免片段逻辑失真并降低 embed 成本。
 
 ---
 
@@ -227,17 +229,35 @@ PUT    /api/v1/agents/:id/knowledge/session-visibility     # 全量替换
 DELETE /api/v1/agents/:id/knowledge/session-visibility?sessionId=[&targetType=&targetId=]
 GET    /api/v1/agents/:id/knowledge/stats
 GET    /api/v1/agents/:id/knowledge/promotion-candidates
+POST   /api/v1/agents/:id/knowledge/sources/:sid/abort      # 中止该源
+POST   /api/v1/agents/:id/knowledge/abort                   # 中止全部
+POST   /api/v1/agents/:id/knowledge/sources/:sid/resume     # 继续/恢复（非全量 reindex）
+POST   /api/v1/agents/:id/knowledge/resume
 ```
 
 - **两级注册**：公共知识库（global）/ 项目（project，先建项目再挂源；删项目须先卸源）。
 - **会话视图**：`session-visibility` overlay 只改本场 effective view，不改源归属；`scopeLevel=session` 必须带 `sessionId`。
 - `sources` 的 `scopeLevel=global|project` 为管理面全量列表（不过滤可见性）。
 - 注册后可 **reindex** 触发解析/索引，并可选启动文件监听。
-- **删除**会清理索引与使用痕迹（合规可抹除）。
-- 自动描述默认可用，可关闭外发；抽样前做敏感形态扫描。
+- **reindex = supersede**：先作废本源 queued/running，再按磁盘全量重扫（勿与「继续」混淆：继续=清中止态接着跑）。
+- **删除**会清理索引与使用痕迹（合规可抹除）；目录移出用 `removePathTree` 清子路径。
+- 自动描述默认可用，可关闭外发；抽样前做敏感形态扫描；**源稳定后**由 reconcile 触发（勿挂 `idle` 短超时）。
 - **会话附件（临时上传）**：落 `sessions/<sid>/attachments/`，仅本 session；消息侧为 `FileBlock` 指针 + turn 侧不可信资料块（正文）。可选 **升为可检索**（注册 `scopeRef: session` 源）或 **归入项目**（promote=move，非自动提升）。API：`/api/v1/sessions/:id/attachments`。详见 `arch/knowledge-session-attachments.md`。
 - 外源可带 **`authRef`**（指向 credentials 命名凭证）、**`network`**（`allowPrivateNetwork` / 超时）、**`discover`**（sitemap/crawl 预算）。失败/skip **不删**已入库 chunks。
 - 溯源：命中用稳定逻辑 **`path`**；完整 URL 在文件记录 `external_url`。
+
+### 8.1 索引任务语义（实现口径，防踩坑）
+
+| 主题 | 约定 |
+|------|------|
+| **Phase A / B** | 解析+分块+关键词 **优先**；embedding **不得**抢 parse 槽（parse 有积压时不认领 embed） |
+| **time-to-search** | 解析完即可关键词搜；向量后台补（`embeddable` 才计向量进度） |
+| **代码** | `adapter_id=code-tree` **不 embedding**（file_search / file_read） |
+| **向量存** | `knowledge_chunk_embeddings.embedding` = **Float32 BLOB**（非 JSON）；大表 DROP 后需 **VACUUM** 才缩文件 |
+| **Office/大文件** | 文档抽取走 **worker** + 超时；禁止同步 xlsx 堵事件循环 |
+| **watch** | 目录增量；漏事件由 reconcile **parse 缺口扫描**（磁盘有、索引无 → parse）兜底 |
+| **删除文件** | watch → `drop_file` → `removePathTree`（含子路径）；`(source_id,path)` 须有索引 |
+| **看门狗** | `startReconciler`：回收孤儿 running、补 embed、补 parse 缺口、稳定后 auto-describe |
 
 ---
 

@@ -78,11 +78,15 @@ export async function generateKnowledgeDescription(
 
 /**
  * 启发式一行描述（不能当正确描述，仅 fallback）
+ *
+ * 形态：用途/何时搜，而不是 `directory source at <path>` 这种无信息句。
  */
 export function heuristicDescription(source: {
   displayName: string;
   kind: string;
   location: string;
 }): string {
-  return `${source.kind} source at ${source.location}`;
+  const loc = source.location.replace(/[\\/]+$/, '');
+  const tail = loc.split(/[\\/]/).filter(Boolean).slice(-2).join('/');
+  return `derived: ${source.kind} corpus «${source.displayName}»${tail ? ` (${tail})` : ''}; search when you need what this corpus documents`;
 }

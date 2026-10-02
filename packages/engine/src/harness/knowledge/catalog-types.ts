@@ -22,6 +22,10 @@ export interface KnowledgeCatalogItem {
   scopeLevel?: string;
   /** 规模粗标，如 "~1.2k files" / "small" */
   scaleLabel?: string;
+  /** 源根/文档位置 — 定位与 file_* 跳转 */
+  location?: string;
+  /** 派生主题线索（索引投影，短词，≤6 个） */
+  topics?: string[];
 }
 
 /**

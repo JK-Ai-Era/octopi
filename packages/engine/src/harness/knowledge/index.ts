@@ -67,6 +67,8 @@ export { KnowledgePurger } from './purge.js';
 export type { PurgeResult } from './purge.js';
 export { resolveKnowledgePaths } from './paths.js';
 export type { KnowledgePaths } from './paths.js';
+export { deriveTopicsFromPaths } from './topics.js';
+export type { KnowledgeCatalogItem, KnowledgeCatalogProvider } from './catalog-types.js';
 export {
   generateKnowledgeDescription,
   heuristicDescription,

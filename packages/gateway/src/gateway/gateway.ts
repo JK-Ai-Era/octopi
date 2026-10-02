@@ -1514,7 +1514,11 @@ export class Gateway {
         );
         const { getOctopiHome } = await import('@octopi-agent/engine/paths.js');
         const paths = resolveKnowledgePaths(getOctopiHome());
-        return KnowledgeSourceStore.open({ dbPath: paths.dbPath });
+        const store = await KnowledgeSourceStore.open({ dbPath: paths.dbPath });
+        // 列表/统计也会碰到知识库：必须在此拉起 ingest，
+        // 否则 reconciler/watch 不启动（迁移后不补 embed、移出文件无反应）
+        void this.getKnowledgeIngest().catch(() => undefined);
+        return store;
       })();
     }
     return this.knowledgeStorePromise;
@@ -1670,6 +1674,7 @@ export class Gateway {
     | (import('@octopi-agent/engine/harness/knowledge/types.js').KnowledgeSource & {
         fileCount: number;
         chunkCount: number;
+        embeddingCount: number;
         errorFileCount: number;
         skippedFileCount: number;
         assignedAgentIds: string[];
@@ -1686,6 +1691,7 @@ export class Gateway {
       ...source,
       fileCount: stats.files,
       chunkCount: stats.chunks,
+      embeddingCount: stats.embeddings,
       errorFileCount: stats.errors,
       skippedFileCount: stats.skipped,
       assignedAgentIds:
@@ -1939,6 +1945,21 @@ export class Gateway {
             adapter.broadcastEvent('*', event);
           }
         });
+        // 看门狗：回收孤儿 running、缺向量续跑、刷 status（防静默停摆）
+        ingest.startReconciler(15_000);
+        ingest.startPolling();
+        // 源稳定后补 auto-describe（长索引不可依赖 idle 超时）
+        ingest.onSourceSettled = (sid) => {
+          void this.maybeAutoDescribe(sid);
+        };
+        // 恢复本地目录 watch（否则重启后增量索引失效，直到手工 reindex）
+        for (const s of store.list()) {
+          if (s.kind === 'directory' || s.kind === 'workspace') {
+            if (s.status !== 'removed' && s.status !== 'disabled') {
+              ingest.startWatch(s.id);
+            }
+          }
+        }
         return ingest;
       })();
     }
@@ -1946,7 +1967,9 @@ export class Gateway {
   }
 
   /**
-   * 触发源索引（P2 Phase A）；可选启动 watch；完成后 auto-describe
+   * 触发源索引（P2 Phase A）；可选启动 watch；索引排空后后台 auto-describe
+   *
+   * HTTP 不等待整库 parse 完成——大目录会把请求挂住，且与 UI 轮询读库争用。
    */
   async reindexKnowledgeSource(
     sourceId: string,
@@ -1957,21 +1980,82 @@ export class Gateway {
     if (opts?.watch !== false) {
       ingest.startWatch(sourceId);
     }
+    // 后台：稳定后由 onSourceSettled → maybeAutoDescribe 补描述
+    void this.describeAfterIndexIdle(sourceId);
     const store = await this.getKnowledgeSourceStore();
-    if (this.config.knowledge?.catalog?.autoDescribe !== false) {
-      await this.autoDescribeKnowledgeSource(sourceId);
-    }
     const source = store.get(sourceId);
     return { ok: true, sourceId, status: source?.status ?? 'unknown' };
   }
 
   /**
+   * 手动中止知识索引任务
+   *
+   * @param sourceId - 仅中止该源；undefined = 全部源
+   * @returns 取消统计
+   */
+  async abortKnowledgeJobs(sourceId?: string): Promise<{
+    ok: true;
+    cancelledQueued: number;
+    abortedRunning: number;
+  }> {
+    const ingest = await this.getKnowledgeIngest();
+    const r = ingest.abortJobs(sourceId ? { sourceId } : undefined);
+    return { ok: true, ...r };
+  }
+
+  /**
+   * 恢复/继续索引（中止后）；非全量 reindex
+   *
+   * @param sourceId - 可选，仅该源
+   * @returns 恢复统计
+   */
+  async resumeKnowledgeJobs(sourceId?: string): Promise<{
+    ok: true;
+    restoredCancelled: number;
+    embedQueued: number;
+  }> {
+    const ingest = await this.getKnowledgeIngest();
+    const r = ingest.resumeJobs(sourceId ? { sourceId } : undefined);
+    return { ok: true, ...r };
+  }
+
+  /** 索引稳定后写 generatedDescription；长任务不靠 idle 超时 */
+  private async describeAfterIndexIdle(sourceId: string): Promise<void> {
+    try {
+      // 兜底：若本源已无队列（增量小文件）可立即描述；否则等 onSourceSettled
+      await this.maybeAutoDescribe(sourceId);
+    } catch {
+      /* describe 失败不影响索引 */
+    }
+  }
+
+  /** 无 generatedDescription 时生成（人工 description 不挡生成） */
+  private async maybeAutoDescribe(sourceId: string): Promise<void> {
+    if (this.config.knowledge?.catalog?.autoDescribe === false) return;
+    const store = await this.getKnowledgeSourceStore();
+    const source = store.get(sourceId);
+    if (!source || source.status === 'removed') return;
+    if (source.generatedDescription?.trim()) return;
+    // 仍有任务在跑：等 onSourceSettled
+    const busy = store.database.raw
+      .prepare(
+        `SELECT COUNT(*) AS n FROM knowledge_jobs WHERE source_id = ? AND status IN ('queued','running')`,
+      )
+      .get(sourceId) as { n: number };
+    if ((busy?.n ?? 0) > 0) return;
+    await this.autoDescribeKnowledgeSource(sourceId);
+  }
+
+  /**
    * auto-describe：抽样（文件名+片段）过密钥扫描后写 generatedDescription
+   *
+   * 人工 description 权威覆盖 purpose；本函数始终尽量填 generatedDescription，
+   * 便于 catalog/UI 并列展示，不因人工一句短描述而短路。
    */
   async autoDescribeKnowledgeSource(sourceId: string): Promise<void> {
     const store = await this.getKnowledgeSourceStore();
     const source = store.get(sourceId);
-    if (!source || source.description?.trim()) return;
+    if (!source) return;
     try {
       const ingest = await this.getKnowledgeIngest();
       const { generateKnowledgeDescription } = await import(
@@ -1986,12 +2070,43 @@ export class Gateway {
       const result = await generateKnowledgeDescription(
         source,
         sampleParts.join('\n---\n').slice(0, 2000),
-        { enabled: true },
+        {
+          enabled: this.config.knowledge?.catalog?.autoDescribe !== false,
+          describePort: this.buildKnowledgeDescribePort(),
+        },
       );
       store.update(sourceId, { generatedDescription: result.description });
     } catch {
       // describe 失败不阻断索引
     }
+  }
+
+  /** 有可用 LLM 时构造 describe 端口；无则走启发式 */
+  private buildKnowledgeDescribePort():
+    | import('@octopi-agent/engine/harness/knowledge/describe.js').KnowledgeDescribePort
+    | undefined {
+    const provider = [...this.providers.values()][0];
+    if (!provider) return undefined;
+    return async ({ displayName, kind, location, sample }) => {
+      const res = await provider.chat({
+        messages: [
+          {
+            role: 'system',
+            content:
+              'Write one short purpose line for a knowledge corpus catalog. ' +
+              'Say WHAT it covers and WHEN to search it (typical questions). ' +
+              'Plain text only, no list markers, max 120 words.',
+          },
+          {
+            role: 'user',
+            content: `name: ${displayName}\ntype: ${kind}\nlocation: ${location}\n\nsample:\n${sample}`,
+          },
+        ],
+        temperature: 0.2,
+        maxTokens: 200,
+      });
+      return res.content ?? '';
+    };
   }
 
   /**

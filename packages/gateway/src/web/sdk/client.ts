@@ -144,6 +144,7 @@ export interface KnowledgeSourceDto {
 export interface KnowledgeSourceDetailDto extends KnowledgeSourceDto {
   fileCount: number;
   chunkCount: number;
+  embeddingCount: number;
   errorFileCount: number;
   skippedFileCount: number;
   assignedAgentIds: string[];
@@ -934,6 +935,62 @@ export class OctopiClient {
       opts ?? {},
     );
     return data?.data as { ok: true; sourceId: string; status: string };
+  }
+
+  /** 中止某源索引任务 */
+  async abortKnowledgeSourceJobs(
+    agentId: string,
+    sourceId: string,
+  ): Promise<{ ok: true; cancelledQueued: number; abortedRunning: number }> {
+    const data = await this.postJson(
+      `/agents/${agentId}/knowledge/sources/${encodeURIComponent(sourceId)}/abort`,
+      {},
+    );
+    return data?.data as {
+      ok: true;
+      cancelledQueued: number;
+      abortedRunning: number;
+    };
+  }
+
+  /** 中止全部知识索引任务 */
+  async abortAllKnowledgeJobs(
+    agentId: string,
+  ): Promise<{ ok: true; cancelledQueued: number; abortedRunning: number }> {
+    const data = await this.postJson(`/agents/${agentId}/knowledge/abort`, {});
+    return data?.data as {
+      ok: true;
+      cancelledQueued: number;
+      abortedRunning: number;
+    };
+  }
+
+  /** 恢复/继续某源索引（中止后） */
+  async resumeKnowledgeSourceJobs(
+    agentId: string,
+    sourceId: string,
+  ): Promise<{ ok: true; restoredCancelled: number; embedQueued: number }> {
+    const data = await this.postJson(
+      `/agents/${agentId}/knowledge/sources/${encodeURIComponent(sourceId)}/resume`,
+      {},
+    );
+    return data?.data as {
+      ok: true;
+      restoredCancelled: number;
+      embedQueued: number;
+    };
+  }
+
+  /** 恢复/继续全部知识索引（中止后） */
+  async resumeAllKnowledgeJobs(
+    agentId: string,
+  ): Promise<{ ok: true; restoredCancelled: number; embedQueued: number }> {
+    const data = await this.postJson(`/agents/${agentId}/knowledge/resume`, {});
+    return data?.data as {
+      ok: true;
+      restoredCancelled: number;
+      embedQueued: number;
+    };
   }
 
   async listKnowledgeSourceFiles(

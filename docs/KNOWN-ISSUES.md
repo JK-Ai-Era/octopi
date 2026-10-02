@@ -33,3 +33,14 @@
 - **manifest 无跨请求锁**：并发上传同会话可能互相覆盖登记（单用户 Web 场景低发）。
 - **上传 API 为 JSON+base64**：超大文件宜后续 multipart。
 - **FileBlock 经 convertToLlm 变为文字指针**：非 provider 原生 file 附件格式。
+
+## Knowledge 索引 / 向量 — 开放边界（2026-10 as-built）
+
+**状态：** Phase A/B、watch、abort/resume、supersede reindex、BLOB 向量、代码不嵌入 已落地（见 `docs/knowledge.md` §8.1）
+
+- **中止态在内存**：进程重启后 abort 自动清除，看门狗会续跑；若需「跨重启仍保持中止」须落库。
+- **Office 同步抽取**：已改 worker+超时；超大表仍可能慢/超时 skip（`parse_timeout`），不无限重试。
+- **sqlite-vec 可选**：未加载则 JS 余弦；大库时检索仍 O(N)，ANN 索引覆盖待扩。
+- **DROP 后文件体积**：SQLite 不自动缩容，需 `VACUUM`（迁移路径已做；手工大删后仍可能涨）。
+- **watch 仍可能漏事件**：靠 reconcile `parse 缺口扫描`（约 60s）兜底，不是零延迟。
+- **`running` 槽**：UI「任务」= job 数；embed 并行是 job 内 lanes，不表现为多个 running。

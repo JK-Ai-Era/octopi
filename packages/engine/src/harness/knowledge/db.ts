@@ -13,13 +13,20 @@ export interface KnowledgeDatabaseOptions {
   dbPath?: string;
   wal?: boolean;
   busyTimeoutMs?: number;
+  /** 尝试加载 sqlite-vec（默认 true；失败则 JS 余弦） */
+  sqliteVec?: boolean;
 }
 
 export class KnowledgeDatabase {
   private db: DatabaseSync;
+  private _sqliteVec = false;
 
   private constructor(db: DatabaseSync) {
     this.db = db;
+  }
+
+  get sqliteVecEnabled(): boolean {
+    return this._sqliteVec;
   }
 
   /**
@@ -42,8 +49,11 @@ export class KnowledgeDatabase {
     }
 
     const db = new DatabaseSyncCtor(dbPath, {
-      timeout: options?.busyTimeoutMs ?? 5000,
+      // 索引写入与管理面读并发时需要更长 busy 窗口
+      timeout: options?.busyTimeoutMs ?? 15_000,
       enableForeignKeyConstraints: false,
+      // sqlite-vec 扩展（可选）；构造后无法补开
+      allowExtension: options?.sqliteVec !== false,
     });
     if (options?.wal !== false) {
       db.exec('PRAGMA journal_mode = WAL');
@@ -51,6 +61,14 @@ export class KnowledgeDatabase {
 
     const kdb = new KnowledgeDatabase(db);
     kdb.createTables();
+    if (options?.sqliteVec !== false) {
+      try {
+        const { tryLoadSqliteVec } = await import('../memory/sqlite/sqlite-vec.js');
+        kdb._sqliteVec = await tryLoadSqliteVec(db);
+      } catch {
+        kdb._sqliteVec = false;
+      }
+    }
     return kdb;
   }
 
@@ -142,11 +160,11 @@ export class KnowledgeDatabase {
       CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_source ON knowledge_chunks(source_id);
       CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_file ON knowledge_chunks(file_id);
 
-      -- Phase B 向量（可关；未配 embedding 则不写）
+      -- Phase B 向量（Float32 BLOB；可选 sqlite-vec 加速）
       CREATE TABLE IF NOT EXISTS knowledge_chunk_embeddings (
         chunk_id      TEXT PRIMARY KEY,
         dimensions    INTEGER NOT NULL,
-        embedding_json TEXT NOT NULL,
+        embedding     BLOB NOT NULL,
         created_at    INTEGER NOT NULL
       );
 
@@ -182,12 +200,49 @@ export class KnowledgeDatabase {
       CREATE INDEX IF NOT EXISTS idx_knowledge_jobs_status
         ON knowledge_jobs(status, priority, created_at);
       CREATE INDEX IF NOT EXISTS idx_knowledge_jobs_source ON knowledge_jobs(source_id);
+
+      -- path 删除/查找：无此索引时 5 万+ chunks 全表扫会堵死事件循环
+      CREATE INDEX IF NOT EXISTS idx_knowledge_files_source_path
+        ON knowledge_files(source_id, path);
+      CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_source_path
+        ON knowledge_chunks(source_id, path);
     `);
     this.migrate();
   }
 
   /** 幂等迁移：外源 ingest / 凭证引用列 */
   private migrate(): void {
+    // 旧 JSON 向量表 → Float32 BLOB（测试库可重建；不读旧 JSON）
+    const embCols = this.db
+      .prepare(`PRAGMA table_info(knowledge_chunk_embeddings)`)
+      .all() as Array<{ name: string }>;
+    const embNames = new Set(embCols.map((c) => c.name));
+    if (embNames.has('embedding_json') && !embNames.has('embedding')) {
+      this.db.exec('DROP TABLE IF EXISTS knowledge_chunk_embeddings');
+      this.db.exec(`
+        CREATE TABLE knowledge_chunk_embeddings (
+          chunk_id      TEXT PRIMARY KEY,
+          dimensions    INTEGER NOT NULL,
+          embedding     BLOB NOT NULL,
+          created_at    INTEGER NOT NULL
+        );
+      `);
+      // DROP 只进 freelist，文件不缩；大表迁移后立刻 VACUUM
+      try {
+        this.db.exec('VACUUM');
+      } catch {
+        // busy 时跳过；可稍后手工 VACUUM
+      }
+    }
+
+    // 旧库可能缺 path 复合索引（删文件曾阻塞主进程）
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_knowledge_files_source_path
+        ON knowledge_files(source_id, path);
+      CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_source_path
+        ON knowledge_chunks(source_id, path);
+    `);
+
     const cols = this.db
       .prepare(`PRAGMA table_info(knowledge_files)`)
       .all() as Array<{ name: string }>;
@@ -236,6 +291,9 @@ export class KnowledgeDatabase {
       sessionVisibility: 'SELECT COUNT(*) AS count FROM knowledge_session_visibility',
       files: 'SELECT COUNT(*) AS count FROM knowledge_files',
       chunks: 'SELECT COUNT(*) AS count FROM knowledge_chunks',
+      embeddableChunks: `SELECT COUNT(*) AS count FROM knowledge_chunks c
+         LEFT JOIN knowledge_files f ON f.source_id = c.source_id AND f.path = c.path
+         WHERE (f.adapter_id IS NULL OR f.adapter_id NOT IN ('code-tree'))`,
       embeddings: 'SELECT COUNT(*) AS count FROM knowledge_chunk_embeddings',
       hits: 'SELECT COUNT(*) AS count FROM knowledge_hits',
       jobsQueued: "SELECT COUNT(*) AS count FROM knowledge_jobs WHERE status = 'queued'",

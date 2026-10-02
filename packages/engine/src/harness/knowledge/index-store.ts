@@ -12,6 +12,10 @@ import { asChunkId, asSourceId } from './types.js';
 import type { KnowledgeChunkId, KnowledgeSourceId } from './types.js';
 import type { KnowledgeChunkDraft } from './adapters.js';
 
+/** 可嵌入向量的 chunk 条件：非 code-tree（代码走 file_search / 原文） */
+const EMBEDDABLE_WHERE =
+  "(f.adapter_id IS NULL OR f.adapter_id NOT IN ('code-tree'))";
+
 export interface IndexedFileRecord {
   id: string;
   sourceId: KnowledgeSourceId | string;
@@ -267,29 +271,112 @@ export class KnowledgeIndexStore {
   }
 
   /**
+   * 批量删除 path（同一事务，减少 sync 往返）
+   *
+   * @param sourceId - 知识源 id
+   * @param paths - 精确 path 列表
+   */
+  removeFiles(sourceId: KnowledgeSourceId | string, paths: string[]): void {
+    if (paths.length === 0) return;
+    const chunkIds: string[] = [];
+    const select = this.db.raw.prepare(
+      `SELECT id FROM knowledge_chunks WHERE source_id = ? AND path = ?`,
+    );
+    for (const p of paths) {
+      const rows = select.all(sourceId, p) as Array<{ id: string }>;
+      for (const r of rows) chunkIds.push(r.id);
+    }
+    this.db.raw.exec('BEGIN');
+    try {
+      if (chunkIds.length > 0) {
+        const delEmb = this.db.raw.prepare('DELETE FROM knowledge_chunk_embeddings WHERE chunk_id = ?');
+        for (const id of chunkIds) delEmb.run(id);
+      }
+      const delChunks = this.db.raw.prepare(
+        'DELETE FROM knowledge_chunks WHERE source_id = ? AND path = ?',
+      );
+      const delFiles = this.db.raw.prepare(
+        'DELETE FROM knowledge_files WHERE source_id = ? AND path = ?',
+      );
+      for (const p of paths) {
+        delChunks.run(sourceId, p);
+        delFiles.run(sourceId, p);
+      }
+      this.db.raw.exec('COMMIT');
+    } catch (e) {
+      this.db.raw.exec('ROLLBACK');
+      throw e;
+    }
+  }
+
+  /**
+   * 删除路径及子树（目录被移出 / 删除）
+   *
+   * @param sourceId - 知识源 id
+   * @param path - 文件或目录绝对路径
+   */
+  removePathTree(sourceId: KnowledgeSourceId | string, path: string): void {
+    this.db.raw.exec('BEGIN');
+    try {
+      this.removeFile(sourceId, path);
+      const likeSlash = `${path}/%`;
+      const likeBack = `${path}\\%`;
+      this.db.raw
+        .prepare(
+          `DELETE FROM knowledge_chunk_embeddings
+           WHERE chunk_id IN (
+             SELECT id FROM knowledge_chunks
+             WHERE source_id = ? AND (path LIKE ? OR path LIKE ?)
+           )`,
+        )
+        .run(sourceId, likeSlash, likeBack);
+      this.db.raw
+        .prepare(
+          `DELETE FROM knowledge_chunks WHERE source_id = ? AND (path LIKE ? OR path LIKE ?)`,
+        )
+        .run(sourceId, likeSlash, likeBack);
+      this.db.raw
+        .prepare(
+          `DELETE FROM knowledge_files WHERE source_id = ? AND (path LIKE ? OR path LIKE ?)`,
+        )
+        .run(sourceId, likeSlash, likeBack);
+      this.db.raw.exec('COMMIT');
+    } catch (e) {
+      this.db.raw.exec('ROLLBACK');
+      throw e;
+    }
+  }
+
+  /**
    * 差量 prune：删除本轮 discover **未出现** 的 path（含 chunks）。
    * 仅在 discover 成功后调用；keepPaths 为空集时 no-op（防误清全库）。
    *
+   * @param keepPaths - 应保留的 path 集
+   * @param opts.allowEmptyKeep - walk 成功且目录为空时允许清空（默认 false）
    * @returns 删除的文件数
    */
   pruneMissing(
     sourceId: KnowledgeSourceId | string,
     keepPaths: ReadonlySet<string> | Iterable<string>,
+    opts?: { allowEmptyKeep?: boolean },
   ): number {
     const keep = keepPaths instanceof Set ? keepPaths : new Set(keepPaths);
-    if (keep.size === 0) return 0;
+    if (keep.size === 0 && !opts?.allowEmptyKeep) return 0;
     const files = this.listFiles(sourceId);
-    let removed = 0;
-    for (const f of files) {
-      if (!keep.has(f.path)) {
-        this.removeFile(sourceId, f.path);
-        removed += 1;
-      }
-    }
-    return removed;
+    const gone = files.filter((f) => !keep.has(f.path)).map((f) => f.path);
+    if (gone.length === 0) return 0;
+    this.removeFiles(sourceId, gone);
+    return gone.length;
   }
 
-  sourceStats(sourceId: KnowledgeSourceId | string): { files: number; chunks: number; errors: number; skipped: number } {
+  sourceStats(sourceId: KnowledgeSourceId | string): {
+    files: number;
+    chunks: number;
+    embeddableChunks: number;
+    embeddings: number;
+    errors: number;
+    skipped: number;
+  } {
     const f = this.db.raw
       .prepare(
         `SELECT
@@ -302,9 +389,25 @@ export class KnowledgeIndexStore {
     const c = this.db.raw
       .prepare('SELECT COUNT(*) AS n FROM knowledge_chunks WHERE source_id = ?')
       .get(sourceId) as { n: number };
+    const ec = this.db.raw
+      .prepare(
+        `SELECT COUNT(*) AS n FROM knowledge_chunks c
+         LEFT JOIN knowledge_files f ON f.source_id = c.source_id AND f.path = c.path
+         WHERE c.source_id = ? AND ${EMBEDDABLE_WHERE}`,
+      )
+      .get(sourceId) as { n: number };
+    const e = this.db.raw
+      .prepare(
+        `SELECT COUNT(*) AS n FROM knowledge_chunk_embeddings e
+         JOIN knowledge_chunks c ON c.id = e.chunk_id
+         WHERE c.source_id = ?`,
+      )
+      .get(sourceId) as { n: number };
     return {
       files: f?.total ?? 0,
       chunks: c?.n ?? 0,
+      embeddableChunks: ec?.n ?? 0,
+      embeddings: e?.n ?? 0,
       errors: f?.errors ?? 0,
       skipped: f?.skipped ?? 0,
     };
@@ -449,23 +552,89 @@ export class KnowledgeIndexStore {
   }
 
   /**
-   * 写入 chunk 向量（JSON 冗余；P3 用 JS cosine）
+   * 写入 chunk 向量（Float32 BLOB；sqlite-vec 可用时同步进 vec 表）
    */
   setChunkEmbedding(chunkId: KnowledgeChunkId | string, embedding: number[]): void {
-    this.db.raw
-      .prepare(
-        `INSERT INTO knowledge_chunk_embeddings (chunk_id, dimensions, embedding_json, created_at)
-         VALUES (?, ?, ?, ?)
-         ON CONFLICT(chunk_id) DO UPDATE SET
-           dimensions=excluded.dimensions,
-           embedding_json=excluded.embedding_json,
-           created_at=excluded.created_at`,
-      )
-      .run(chunkId, embedding.length, JSON.stringify(embedding), Date.now());
+    this.setChunkEmbeddings([[chunkId, embedding]]);
+  }
+
+  /**
+   * 批量写向量（单事务，减少与 parse 写路径的锁竞争）
+   *
+   * @param rows - [chunkId, embedding] 列表
+   */
+  setChunkEmbeddings(rows: Array<[string, number[]]>): void {
+    if (rows.length === 0) return;
+    const upsert = this.db.raw.prepare(
+      `INSERT INTO knowledge_chunk_embeddings (chunk_id, dimensions, embedding, created_at)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(chunk_id) DO UPDATE SET
+         dimensions=excluded.dimensions,
+         embedding=excluded.embedding,
+         created_at=excluded.created_at`,
+    );
+    this.db.raw.exec('BEGIN');
+    try {
+      const now = Date.now();
+      for (const [chunkId, embedding] of rows) {
+        upsert.run(chunkId, embedding.length, toF32Blob(embedding), now);
+        this.upsertKnowledgeVec(chunkId, embedding);
+      }
+      this.db.raw.exec('COMMIT');
+    } catch (e) {
+      this.db.raw.exec('ROLLBACK');
+      throw e;
+    }
+  }
+
+  /** sqlite-vec 表名 */
+  private static readonly VEC_TABLE = 'knowledge_vec';
+
+  /** 确保 vec0 虚拟表（维度首次写入时确定） */
+  private ensureVecTable(dimensions: number): boolean {
+    if (!this.db.sqliteVecEnabled) return false;
+    try {
+      const row = this.db.raw
+        .prepare(
+          `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?`,
+        )
+        .get(KnowledgeIndexStore.VEC_TABLE) as { sql?: string } | undefined;
+      if (row?.sql) {
+        const m = /float\[(\d+)\]/i.exec(row.sql);
+        return !m || Number(m[1]) === dimensions;
+      }
+      this.db.raw.exec(`
+        CREATE VIRTUAL TABLE IF NOT EXISTS ${KnowledgeIndexStore.VEC_TABLE} USING vec0(
+          chunk_id TEXT PRIMARY KEY,
+          embedding float[${dimensions}] distance_metric=cosine
+        );
+      `);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private upsertKnowledgeVec(chunkId: KnowledgeSourceId | string | KnowledgeChunkId, embedding: number[]): void {
+    if (!this.ensureVecTable(embedding.length)) return;
+    try {
+      this.db.raw
+        .prepare(
+          `INSERT INTO ${KnowledgeIndexStore.VEC_TABLE} (chunk_id, embedding)
+           VALUES (?, ?)
+           ON CONFLICT(chunk_id) DO UPDATE SET embedding = excluded.embedding`,
+        )
+        .run(String(chunkId), toF32Blob(embedding));
+    } catch {
+      // vec 表不可用时忽略，检索走 JS 路径
+    }
   }
 
   /**
    * 列出待嵌入 chunk（无向量行）
+   *
+   * **代码不进向量**：原文件已可 file_search；片段易失真。
+   * 仅文档/正文类（text / markdown / document:* 等）参与 embedding。
    */
   listChunksMissingEmbedding(sourceId: KnowledgeSourceId | string, limit = 100): Array<{
     id: KnowledgeChunkId;
@@ -477,7 +646,9 @@ export class KnowledgeIndexStore {
         `SELECT c.id, c.text, c.path
          FROM knowledge_chunks c
          LEFT JOIN knowledge_chunk_embeddings e ON e.chunk_id = c.id
+         LEFT JOIN knowledge_files f ON f.source_id = c.source_id AND f.path = c.path
          WHERE c.source_id = ? AND e.chunk_id IS NULL
+           AND ${EMBEDDABLE_WHERE}
          ORDER BY c.path, c.ordinal
          LIMIT ?`,
       )
@@ -486,25 +657,30 @@ export class KnowledgeIndexStore {
   }
 
   /**
-   * 向量覆盖度（0–1；无 chunk 时为 1）
+   * 向量覆盖度（0–1；无可嵌入 chunk 时为 1）
    */
   embeddingCoverage(sourceId: KnowledgeSourceId | string): number {
     const total = this.db.raw
-      .prepare('SELECT COUNT(*) AS n FROM knowledge_chunks WHERE source_id = ?')
+      .prepare(
+        `SELECT COUNT(*) AS n FROM knowledge_chunks c
+         LEFT JOIN knowledge_files f ON f.source_id = c.source_id AND f.path = c.path
+         WHERE c.source_id = ? AND ${EMBEDDABLE_WHERE}`,
+      )
       .get(sourceId) as { n: number };
     if (!total?.n) return 1;
     const embedded = this.db.raw
       .prepare(
         `SELECT COUNT(*) AS n FROM knowledge_chunk_embeddings e
          JOIN knowledge_chunks c ON c.id = e.chunk_id
-         WHERE c.source_id = ?`,
+         LEFT JOIN knowledge_files f ON f.source_id = c.source_id AND f.path = c.path
+         WHERE c.source_id = ? AND ${EMBEDDABLE_WHERE}`,
       )
       .get(sourceId) as { n: number };
     return Math.min(1, (embedded?.n ?? 0) / total.n);
   }
 
   /**
-   * 向量检索（JS cosine）；embeddingJson 不可用的 chunk 跳过
+   * 向量检索：优先 sqlite-vec KNN；否则 JS cosine（BLOB）
    */
   vectorSearch(
     queryEmbedding: number[],
@@ -512,14 +688,76 @@ export class KnowledgeIndexStore {
   ): ChunkHit[] {
     if (opts.sourceIds.length === 0 || !queryEmbedding?.length) return [];
     const limit = opts.limit ?? 8;
+
+    // vec 表可能尚未回填；0 命中时退 JS，避免空结果短路
+    const viaVec = this.vectorSearchVec(queryEmbedding, opts, limit);
+    if (viaVec && viaVec.length > 0) return viaVec;
+
+    return this.vectorSearchJs(queryEmbedding, opts, limit);
+  }
+
+  /** sqlite-vec KNN（不可用时返回 null） */
+  private vectorSearchVec(
+    queryEmbedding: number[],
+    opts: { sourceIds: KnowledgeSourceId[] },
+    limit: number,
+  ): ChunkHit[] | null {
+    if (!this.db.sqliteVecEnabled) return null;
+    if (!this.ensureVecTable(queryEmbedding.length)) return null;
+    const placeholders = opts.sourceIds.map(() => '?').join(',');
+    try {
+      const rows = this.db.raw
+        .prepare(
+          `SELECT c.id, c.source_id, c.path, c.ordinal, c.text, c.start_line, c.end_line, v.distance AS distance
+           FROM (
+             SELECT chunk_id, distance
+             FROM ${KnowledgeIndexStore.VEC_TABLE}
+             WHERE embedding MATCH ?
+               AND k = ?
+           ) v
+           JOIN knowledge_chunks c ON c.id = v.chunk_id
+           WHERE c.source_id IN (${placeholders})
+           ORDER BY v.distance ASC`,
+        )
+        .all(toF32Blob(queryEmbedding), Math.max(limit * 2, 16), ...opts.sourceIds) as Array<{
+        id: string;
+        source_id: string;
+        path: string;
+        ordinal: number;
+        text: string;
+        start_line: number;
+        end_line: number;
+        distance: number;
+      }>;
+      return rows.slice(0, limit).map((row) => ({
+        chunkId: asChunkId(row.id),
+        sourceId: asSourceId(row.source_id),
+        path: row.path,
+        ordinal: row.ordinal,
+        text: row.text,
+        startLine: row.start_line,
+        endLine: row.end_line,
+        score: 1 - Number(row.distance),
+      }));
+    } catch {
+      return null;
+    }
+  }
+
+  /** JS 余弦（Float32 BLOB；无 JSON.parse） */
+  private vectorSearchJs(
+    queryEmbedding: number[],
+    opts: { sourceIds: KnowledgeSourceId[] },
+    limit: number,
+  ): ChunkHit[] {
     const placeholders = opts.sourceIds.map(() => '?').join(',');
     const rows = this.db.raw
       .prepare(
-        `SELECT c.id, c.source_id, c.path, c.ordinal, c.text, c.start_line, c.end_line, e.embedding_json
+        `SELECT c.id, c.source_id, c.path, c.ordinal, c.text, c.start_line, c.end_line, e.embedding
          FROM knowledge_chunks c
          JOIN knowledge_chunk_embeddings e ON e.chunk_id = c.id
          WHERE c.source_id IN (${placeholders})
-         LIMIT 20000`,
+         LIMIT 200000`,
       )
       .all(...opts.sourceIds) as Array<{
       id: string;
@@ -529,17 +767,12 @@ export class KnowledgeIndexStore {
       text: string;
       start_line: number;
       end_line: number;
-      embedding_json: string;
+      embedding: Uint8Array | Buffer;
     }>;
 
     const hits: ChunkHit[] = [];
     for (const row of rows) {
-      let emb: number[] | null = null;
-      try {
-        emb = JSON.parse(row.embedding_json) as number[];
-      } catch {
-        emb = null;
-      }
+      const emb = fromF32Blob(row.embedding);
       if (!emb?.length || emb.length !== queryEmbedding.length) continue;
       const sim = cosineSimilarity(queryEmbedding, emb);
       if (sim <= 0) continue;
@@ -557,6 +790,21 @@ export class KnowledgeIndexStore {
     hits.sort((a, b) => b.score - a.score);
     return hits.slice(0, limit);
   }
+}
+
+/** number[] → float32 blob */
+function toF32Blob(embedding: number[]): Buffer {
+  const f32 = Float32Array.from(embedding);
+  return Buffer.from(f32.buffer, f32.byteOffset, f32.byteLength);
+}
+
+/** float32 blob → number[] */
+function fromF32Blob(buf: Uint8Array | Buffer | null | undefined): number[] | null {
+  if (!buf || buf.byteLength === 0) return null;
+  if (buf.byteLength % 4 !== 0) return null;
+  const u8 = buf instanceof Buffer ? new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength) : buf;
+  const f32 = new Float32Array(u8.buffer, u8.byteOffset, u8.byteLength / 4);
+  return Array.from(f32);
 }
 
 /**

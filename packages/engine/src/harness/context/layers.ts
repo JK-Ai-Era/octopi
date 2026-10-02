@@ -193,22 +193,36 @@ export class KnowledgeLayer extends BaseLayer {
     const shown = all.slice(0, this.maxEntries);
     const overflow = all.length - shown.length;
 
+    // 标签化 catalog（arch/knowledge-catalog-redesign.md）：id/name/type/status/scale/location + purpose/topics
     const formatItem = (item: KnowledgeCatalogItem): string => {
-      const metaParts: string[] = [item.kind];
+      const tags: string[] = [`id=${item.id}`, `name=${item.displayName}`];
+      if (item.kind) tags.push(`type=${item.kind}`);
       if (this.showProgress !== 'off') {
-        if (item.status) metaParts.push(item.status);
+        if (item.status) tags.push(`status=${item.status}`);
         if (item.scaleLabel && item.scaleLabel !== item.status) {
           if (this.showProgress === 'exact' || item.scaleLabel !== 'ready') {
-            metaParts.push(item.scaleLabel);
+            tags.push(`scale=${item.scaleLabel}`);
           }
         }
       }
-      if (item.scopeLevel) metaParts.push(item.scopeLevel);
-      const meta = metaParts.filter(Boolean).join(' · ');
-      const head = `- ${item.displayName}${meta ? ` · ${meta}` : ''}`;
+      if (item.location) tags.push(`location=${item.location}`);
+      const head = `- ${tags.join(' ')}`;
+      const lines = [head];
       const desc = item.description?.trim();
-      return desc ? `${head}\n  ${desc}` : head;
+      if (desc) lines.push(`  purpose: ${desc}`);
+      if (item.topics?.length) lines.push(`  topics: ${item.topics.join(' · ')}`);
+      return lines.join('\n');
     };
+
+    const overflowLine = `- ${overflow} more sources (use knowledge_search)`;
+    const legend = [
+      'Legend: id=source handle name=display type=kind',
+      this.showProgress === 'off'
+        ? 'location=root'
+        : 'status=ready|indexing|error|off scale=size location=root',
+      'Purpose (indented) = when to search. Prefer knowledge_search(query, source_id) then knowledge_read.',
+      'status=ready means searchable; indexing means incomplete hits.',
+    ].join('\n');
 
     let body: string;
     if (this.groupByScope) {
@@ -219,23 +233,29 @@ export class KnowledgeLayer extends BaseLayer {
         list.push(item);
         groups.set(key, list);
       }
+      const scopeTitle: Record<string, string> = {
+        global: 'Global',
+        project: 'Project',
+        session: 'Session',
+        other: 'Other',
+      };
       const order = ['global', 'project', 'session', 'other'];
       const sections = order
         .filter((k) => groups.has(k))
-        .map((k) => `## ${k}\n${(groups.get(k) ?? []).map(formatItem).join('\n')}`);
+        .map((k) => `## ${scopeTitle[k] ?? k}\n${(groups.get(k) ?? []).map(formatItem).join('\n')}`);
       if (overflow > 0) {
-        sections.push(`- …and ${overflow} more (use knowledge_search)`);
+        sections.push(overflowLine);
       }
       body = sections.join('\n\n');
     } else {
       const lines = shown.map(formatItem);
       if (overflow > 0) {
-        lines.push(`- …and ${overflow} more (use knowledge_search)`);
+        lines.push(overflowLine);
       }
       body = lines.join('\n');
     }
 
-    const text = `# Knowledge Sources\n\n${body}`;
+    const text = `## Knowledge Sources\n${legend}\n\n${body}`;
     const budget = Math.max(ctx.tokenBudget, 400);
     const { text: truncated, dropped } = this.truncateToBudget(text, budget);
     return this.content(truncated, {

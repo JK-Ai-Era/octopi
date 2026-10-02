@@ -1,3 +1,36 @@
+## v0.58.0
+
+### feat(knowledge): catalog 标签化、代码不嵌入、向量 BLOB、任务可控与解析优先
+
+**Catalog / 模型可见能力面**
+
+- Tier 0 catalog 改为**自解释标签**：`id/name/type/status/scale/location` + `purpose`/`topics` + Legend（`arch/knowledge-catalog-redesign.md`）
+- `topics` 由索引路径派生（不依赖人工文笔）；人工 `description` 只覆盖 purpose；`knowledge_search` 支持 `source_id`/`source` 定向
+
+**索引管道（业务完整）**
+
+- **解析/分块优先**：parse 有积压时不认领 embed；解析完即可关键词搜，向量后台补
+- **代码（`code-tree`）不 embedding**；文档/正文才进向量（防片段逻辑失真、降成本）
+- Office/大文件：**worker 抽取 + 超时**，避免同步 xlsx 堵死事件循环
+- watch 漏事件由 **parse 缺口扫描**（磁盘有、索引无）兜底；删除走 `removePathTree`（含子路径）
+- **reindex = supersede**（作废本源未完成任务再重扫）；**abort / resume** API + UI（中止/继续）
+
+**存储 / 性能**
+
+- `knowledge_chunk_embeddings` 改为 **Float32 BLOB**（弃 JSON）；sqlite-vec 可选 KNN，失败退 JS 余弦
+- 大表 DROP 后 **VACUUM** 缩文件；`(source_id,path)` 复合索引，删除不再全表扫
+- 看门狗 `reconcile`：孤儿 running 回收、embed 续跑、parse 缺口、稳定后 auto-describe
+
+**WebUI**
+
+- 人工描述「保存」按钮；状态中文；索引进度条单行省略
+- CORS 放行 PATCH/DELETE；知识面板 refresh 限流（避免 `ERR_INSUFFICIENT_RESOURCES`）
+
+### fix(webui): knowledge admin save + CORS + request storm
+
+- 保存描述显式按钮 + Enter；`Access-Control-Allow-Methods` 含 PATCH/DELETE
+- WS 进度不每文件全量 refresh；并发 merge，防浏览器连接耗尽
+
 ## v0.57.1
 
 ### docs(agents): bind content commits to lockstep version bumps

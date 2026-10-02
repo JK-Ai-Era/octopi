@@ -76,7 +76,8 @@ describe('Memory/Knowledge 层进 system prompt', () => {
     });
     expect(result.systemPrompt).toContain('You are test.');
     expect(result.systemPrompt).not.toContain('相关记忆');
-    expect(result.systemPrompt).not.toContain('Knowledge Sources');
+    // 空 catalog 不注入层块（宪法正文可能提到 Knowledge 字样，故断言层标题）
+    expect(result.systemPrompt).not.toContain('## Knowledge Sources');
   });
 
   it('仅注入 retrieval store 时不会因空 persona 短路', async () => {

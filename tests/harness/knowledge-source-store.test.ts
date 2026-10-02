@@ -4,10 +4,7 @@
 
 import { describe, it, expect, afterEach } from 'vitest';
 import { KnowledgeSourceStore } from '@octopi-agent/engine/harness/knowledge/source-store.js';
-import {
-  generateKnowledgeDescription,
-  heuristicDescription,
-} from '@octopi-agent/engine/harness/knowledge/describe.js';
+import { generateKnowledgeDescription } from '@octopi-agent/engine/harness/knowledge/describe.js';
 import { scanSecretShapes } from '@octopi-agent/engine/harness/knowledge/secret-scan.js';
 
 async function openStore(): Promise<KnowledgeSourceStore> {
@@ -155,9 +152,8 @@ describe('auto-describe + secret scan', () => {
     );
     expect(result.source).toBe('blocked_secret');
     expect(result.secretHits?.length).toBeGreaterThan(0);
-    expect(result.description).toBe(
-      heuristicDescription({ displayName: 'cfg', kind: 'file', location: '/cfg' }),
-    );
+    expect(result.description).toContain('cfg');
+    expect(result.description).toContain('derived:');
   });
 
   it('无端口时启发式；enabled=false 不调用 LLM', async () => {

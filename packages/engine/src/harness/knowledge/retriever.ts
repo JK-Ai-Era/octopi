@@ -15,6 +15,12 @@ export interface HybridSearchOptions {
   limit?: number;
   /** 仅关键词（跳过 embedding query） */
   keywordOnly?: boolean;
+  /**
+   * 可选源过滤（与可见集求交，禁止越权）。
+   * `sourceIds` 精确 id；`source` 为 displayName/id 模糊（单源）。
+   */
+  sourceIds?: string[];
+  source?: string;
 }
 
 export interface HybridSearchResult {
@@ -93,11 +99,48 @@ export class KnowledgeRetriever {
     return this.sources.listVisible(agentId, sessionId).map((s) => s.id);
   }
 
+  /** 可见集 ∩ 请求过滤；无过滤时原样返回可见集 */
+  private filterSourceIds(
+    visible: import('./types.js').KnowledgeSourceId[],
+    opts: HybridSearchOptions,
+  ): import('./types.js').KnowledgeSourceId[] {
+    const requested = opts.sourceIds?.map((s) => s.trim()).filter(Boolean) ?? [];
+    const name = opts.source?.trim();
+    if (requested.length === 0 && !name) return visible;
+
+    const visibleSet = new Set(visible);
+    let allowed: Set<string> | null = null;
+
+    if (requested.length > 0) {
+      allowed = new Set(requested.filter((id) => visibleSet.has(id as never)));
+    }
+    if (name) {
+      const lower = name.toLowerCase();
+      const matched = visible.filter((id) => {
+        const src = this.sources.get(id);
+        if (!src) return false;
+        return (
+          src.id.toLowerCase() === lower ||
+          src.displayName.toLowerCase() === lower ||
+          src.displayName.toLowerCase().includes(lower) ||
+          src.id.toLowerCase().includes(lower)
+        );
+      });
+      if (allowed) {
+        allowed = new Set(matched.filter((id) => allowed!.has(id)));
+      } else {
+        allowed = new Set(matched);
+      }
+    }
+    return visible.filter((id) => allowed?.has(id) ?? true);
+  }
+
   /**
    * hybrid 检索
    */
   async search(query: string, opts: HybridSearchOptions): Promise<HybridSearchResult> {
-    const sourceIds = this.visibleSourceIds(opts.agentId, opts.sessionId);
+    const visible = this.visibleSourceIds(opts.agentId, opts.sessionId);
+    const sourceIds = this.filterSourceIds(visible, opts);
     const limit = opts.limit ?? 8;
 
     const keywordHits = this.hybridKeyword

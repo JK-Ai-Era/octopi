@@ -305,14 +305,28 @@ export class WebApiRouter {
       // ── Knowledge sources（Host 管理面；arch/knowledge-layer.md §6 / knowledge-admin-ui.md §4）──
       const knowledgeStatsMatch = relativePath.match(/^\/agents\/([^/]+)\/knowledge\/stats$/);
       if (knowledgeStatsMatch && method === 'GET') {
-        const stats = await this.gateway.getKnowledgeStats();
-        return this.json(res, 200, { ok: true, data: stats });
+        try {
+          const stats = await this.gateway.getKnowledgeStats();
+          return this.json(res, 200, { ok: true, data: stats });
+        } catch (err) {
+          return this.json(res, 503, {
+            ok: false,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
       }
 
       const knowledgeProjectsMatch = relativePath.match(/^\/agents\/([^/]+)\/knowledge\/projects$/);
       if (knowledgeProjectsMatch && method === 'GET') {
-        const projects = await this.gateway.listKnowledgeProjects();
-        return this.json(res, 200, { ok: true, data: projects });
+        try {
+          const projects = await this.gateway.listKnowledgeProjects();
+          return this.json(res, 200, { ok: true, data: projects });
+        } catch (err) {
+          return this.json(res, 503, {
+            ok: false,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
       }
       if (knowledgeProjectsMatch && method === 'POST') {
         const body = await this.readBody(req);
@@ -577,6 +591,62 @@ export class WebApiRouter {
             full: Boolean(body?.full),
             watch: body?.watch !== false,
           });
+          return this.json(res, 200, { ok: true, data: result });
+        } catch (err) {
+          return this.json(res, 400, {
+            ok: false,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+
+      // 中止索引任务：单源 / 全部
+      const knowledgeAbortSourceMatch = relativePath.match(
+        /^\/agents\/([^/]+)\/knowledge\/sources\/([^/]+)\/abort$/,
+      );
+      if (knowledgeAbortSourceMatch && method === 'POST') {
+        try {
+          const result = await this.gateway.abortKnowledgeJobs(knowledgeAbortSourceMatch[2]);
+          return this.json(res, 200, { ok: true, data: result });
+        } catch (err) {
+          return this.json(res, 400, {
+            ok: false,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+      const knowledgeAbortAllMatch = relativePath.match(/^\/agents\/([^/]+)\/knowledge\/abort$/);
+      if (knowledgeAbortAllMatch && method === 'POST') {
+        try {
+          const result = await this.gateway.abortKnowledgeJobs();
+          return this.json(res, 200, { ok: true, data: result });
+        } catch (err) {
+          return this.json(res, 400, {
+            ok: false,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+
+      // 恢复/继续（中止后）；非全量 reindex
+      const knowledgeResumeSourceMatch = relativePath.match(
+        /^\/agents\/([^/]+)\/knowledge\/sources\/([^/]+)\/resume$/,
+      );
+      if (knowledgeResumeSourceMatch && method === 'POST') {
+        try {
+          const result = await this.gateway.resumeKnowledgeJobs(knowledgeResumeSourceMatch[2]);
+          return this.json(res, 200, { ok: true, data: result });
+        } catch (err) {
+          return this.json(res, 400, {
+            ok: false,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+      const knowledgeResumeAllMatch = relativePath.match(/^\/agents\/([^/]+)\/knowledge\/resume$/);
+      if (knowledgeResumeAllMatch && method === 'POST') {
+        try {
+          const result = await this.gateway.resumeKnowledgeJobs();
           return this.json(res, 200, { ok: true, data: result });
         } catch (err) {
           return this.json(res, 400, {

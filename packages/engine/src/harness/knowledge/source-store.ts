@@ -5,6 +5,7 @@
 import { randomUUID, createHash } from 'node:crypto';
 import type { KnowledgeCatalogItem } from './catalog-types.js';
 import { KnowledgeDatabase } from './db.js';
+import { deriveTopicsFromPaths } from './topics.js';
 import { asSourceId } from './types.js';
 import type {
   KnowledgeSource,
@@ -25,10 +26,24 @@ function statusBucket(status: string): string {
   return 'pending';
 }
 
-function scaleLabel(source: KnowledgeSource): string | undefined {
+/** 规模粗标：`~1.2k files` / `small`（arch/knowledge-layer.md §4.1）；不输出精确 coverage */
+function formatFileScale(fileCount: number): string {
+  if (fileCount <= 0) return 'empty';
+  if (fileCount < 30) return 'small';
+  if (fileCount < 1000) return `~${fileCount} files`;
+  if (fileCount < 1_000_000) {
+    const k = fileCount / 1000;
+    return `~${k >= 10 ? Math.round(k) : Math.round(k * 10) / 10}k files`;
+  }
+  const m = fileCount / 1_000_000;
+  return `~${m >= 10 ? Math.round(m) : Math.round(m * 10) / 10}m files`;
+}
+
+function scaleLabel(source: KnowledgeSource, fileCount?: number): string | undefined {
+  if (fileCount != null && fileCount > 0) return formatFileScale(fileCount);
   const cov = source.coverage;
   if (cov == null) return undefined;
-  // 粗标，避免 coverage 数字抖动进 catalog fingerprint
+  // 尚无文件规模时用覆盖粗桶；避免 coverage 数字抖动进 catalog fingerprint
   if (cov >= 0.999) return 'ready';
   if (cov >= 0.5) return 'partial';
   return 'indexing';
@@ -49,7 +64,10 @@ function deriveDisplayName(location: string): string {
   return parts[parts.length - 1] || location || 'source';
 }
 
-function toCatalogItem(source: KnowledgeSource): KnowledgeCatalogItem {
+function toCatalogItem(
+  source: KnowledgeSource,
+  extras?: { fileCount?: number; topics?: string[] },
+): KnowledgeCatalogItem {
   return {
     id: source.id,
     displayName: source.displayName,
@@ -57,7 +75,9 @@ function toCatalogItem(source: KnowledgeSource): KnowledgeCatalogItem {
     status: statusBucket(source.status),
     description: source.description?.trim() || source.generatedDescription?.trim() || undefined,
     scopeLevel: source.scopeRef.level,
-    scaleLabel: scaleLabel(source),
+    scaleLabel: scaleLabel(source, extras?.fileCount),
+    location: source.location,
+    topics: extras?.topics?.length ? extras.topics : undefined,
   };
 }
 
@@ -566,10 +586,43 @@ export class KnowledgeSourceStore {
       if (pa !== pb) return pb - pa;
       return a.displayName.localeCompare(b.displayName);
     });
+    const fileCounts = this.fileCountsBySource();
+    const topicsBySource = this.topicsBySource();
     return sorted
       .filter((s) => !s.hiddenFromCatalog)
       .slice(0, max)
-      .map((s) => toCatalogItem(s));
+      .map((s) =>
+        toCatalogItem(s, {
+          fileCount: fileCounts.get(s.id),
+          topics: topicsBySource.get(s.id),
+        }),
+      );
+  }
+
+  /** 每源已入库文件数（catalog 规模粗标用） */
+  private fileCountsBySource(): Map<string, number> {
+    const rows = this.db.raw
+      .prepare('SELECT source_id AS id, COUNT(*) AS n FROM knowledge_files GROUP BY source_id')
+      .all() as Array<{ id: string; n: number }>;
+    return new Map(rows.map((r) => [r.id, r.n]));
+  }
+
+  /** 每源路径派生 topics（catalog 搜索线索） */
+  private topicsBySource(): Map<string, string[]> {
+    const rows = this.db.raw
+      .prepare('SELECT source_id AS id, path AS path FROM knowledge_files')
+      .all() as Array<{ id: string; path: string }>;
+    const bySource = new Map<string, string[]>();
+    for (const r of rows) {
+      const list = bySource.get(r.id) ?? [];
+      list.push(r.path);
+      bySource.set(r.id, list);
+    }
+    const out = new Map<string, string[]>();
+    for (const [id, paths] of bySource) {
+      out.set(id, deriveTopicsFromPaths(paths));
+    }
+    return out;
   }
 
   /**
@@ -579,7 +632,14 @@ export class KnowledgeSourceStore {
     const items = this.catalogFor(agentId, { ...opts, maxEntries: 10_000 });
     const payload = items
       .map((i) =>
-        [i.id, i.displayName, i.status ?? '', i.description ?? '', i.scopeLevel ?? ''].join('|'),
+        [
+          i.id,
+          i.displayName,
+          i.status ?? '',
+          i.description ?? '',
+          i.scopeLevel ?? '',
+          (i.topics ?? []).join(','),
+        ].join('|'),
       )
       .join('\n');
     return createHash('sha256').update(payload).digest('hex').slice(0, 16);

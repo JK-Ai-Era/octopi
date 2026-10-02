@@ -44,16 +44,30 @@ function SourceRow({
   source: KnowledgeSourceDto;
   onReindex: () => void;
   onDelete: () => void;
-  onPatch: (patch: Record<string, unknown>) => void;
+  onPatch: (patch: Record<string, unknown>) => Promise<void> | void;
   onChanged?: () => void;
   extra?: React.ReactNode;
 }) {
   const [desc, setDesc] = useState(source.description ?? '');
   const [open, setOpen] = useState(false);
   const [hideOpen, setHideOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
   useEffect(() => setDesc(source.description ?? ''), [source.description]);
 
   const isGlobal = source.scopeRef.level === 'global';
+  const nextDesc = desc.trim();
+  const prevDesc = source.description ?? '';
+  const dirty = nextDesc !== prevDesc;
+
+  const saveDesc = useCallback(async () => {
+    if (saving || !dirty) return;
+    setSaving(true);
+    try {
+      await onPatch({ description: nextDesc ? nextDesc : null });
+    } finally {
+      setSaving(false);
+    }
+  }, [dirty, nextDesc, onPatch, saving]);
 
   return (
     <div className="kn-source-row">
@@ -71,24 +85,41 @@ function SourceRow({
           <span className={`small ${statusClass(source.status)}`}>{source.status}</span>
           <span className="small muted mono">{source.kind}</span>
           {source.coverage != null && (
-            <span className="small muted">coverage {Math.round(source.coverage * 100)}%</span>
+            <span className="small muted">覆盖 {Math.round(source.coverage * 100)}%</span>
           )}
         </div>
         <div className="small mono muted">{source.location}</div>
         <div className="kn-source-desc">
-          <input
-            value={desc}
-            placeholder="人工描述（权威，覆盖自动摘要）"
-            onChange={(e) => setDesc(e.target.value)}
-            onBlur={() => {
-              const next = desc.trim();
-              const prev = source.description ?? '';
-              if (next !== prev) onPatch({ description: next ? next : null });
-            }}
-          />
-          {!source.description && source.generatedDescription && (
+          <div className="kn-source-desc-row">
+            <input
+              value={desc}
+              placeholder="用途/何时搜（权威，覆盖自动描述）：例如「架构与协议设计决策，含 docs/ 与 arch/」"
+              onChange={(e) => setDesc(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  void saveDesc();
+                }
+              }}
+              onBlur={() => void saveDesc()}
+            />
+            <button
+              type="button"
+              className="btn-primary small"
+              disabled={!dirty || saving}
+              onClick={() => void saveDesc()}
+            >
+              {saving ? '保存中…' : '保存'}
+            </button>
+          </div>
+          {source.generatedDescription && (
             <div className="small muted">
-              自动：{source.generatedDescription.slice(0, 80)}
+              自动：{source.generatedDescription.slice(0, 120)}
+            </div>
+          )}
+          {!source.description && !source.generatedDescription && (
+            <div className="small muted">
+              重建索引后生成自动用途；人工填写后以人工为准（并列展示）。
             </div>
           )}
         </div>
@@ -124,6 +155,24 @@ function SourceRow({
       <div className="kn-source-actions">
         <button type="button" className="btn-secondary small" onClick={onReindex}>
           重建索引
+        </button>
+        <button
+          type="button"
+          className="btn-ghost small"
+          onClick={() => {
+            void client.abortKnowledgeSourceJobs(agentId, source.id).then(onChanged ?? (() => {})).catch(() => {});
+          }}
+        >
+          中止
+        </button>
+        <button
+          type="button"
+          className="btn-secondary small"
+          onClick={() => {
+            void client.resumeKnowledgeSourceJobs(agentId, source.id).then(onChanged ?? (() => {})).catch(() => {});
+          }}
+        >
+          继续
         </button>
         <button type="button" className="btn-ghost small" onClick={onDelete}>
           卸载
@@ -231,8 +280,17 @@ export function KnowledgeAdminPanel({ agentId }: { agentId: string }) {
   } | null>(null);
   const [selectedAgentView, setSelectedAgentView] = useState(agentId);
   const refreshRef = useRef<() => Promise<void>>(async () => {});
+  const refreshBusyRef = useRef(false);
+  const refreshQueuedRef = useRef(false);
+  const wsRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const refresh = useCallback(async () => {
+    // 合并并发：索引 WS + 轮询会叠请求，打满浏览器连接（ERR_INSUFFICIENT_RESOURCES）
+    if (refreshBusyRef.current) {
+      refreshQueuedRef.current = true;
+      return;
+    }
+    refreshBusyRef.current = true;
     try {
       setError(null);
       const [globals, projs, agentList, st] = await Promise.all([
@@ -254,6 +312,12 @@ export function KnowledgeAdminPanel({ agentId }: { agentId: string }) {
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      refreshBusyRef.current = false;
+      if (refreshQueuedRef.current) {
+        refreshQueuedRef.current = false;
+        void refresh();
+      }
     }
   }, [agentId, client, selectedProject]);
 
@@ -267,6 +331,7 @@ export function KnowledgeAdminPanel({ agentId }: { agentId: string }) {
       onEvent: (_sid, event) => {
         if (event.type !== 'knowledge.index.progress') return;
         const d = (event.data ?? {}) as {
+          type?: string;
           sourceId?: string;
           path?: string;
           status?: string;
@@ -278,11 +343,20 @@ export function KnowledgeAdminPanel({ agentId }: { agentId: string }) {
           status: d.status ?? '',
           detail: d.detail,
         });
-        void refreshRef.current();
+        // job 级事件每文件一条；只在 source/error 收敛后刷列表，避免请求风暴
+        const significant =
+          d.type === 'source' || d.type === 'error' || d.status === 'ready' || d.status === 'error';
+        if (!significant) return;
+        if (wsRefreshTimerRef.current) clearTimeout(wsRefreshTimerRef.current);
+        wsRefreshTimerRef.current = setTimeout(() => {
+          wsRefreshTimerRef.current = null;
+          void refreshRef.current();
+        }, 800);
       },
     });
     client.connect();
     return () => {
+      if (wsRefreshTimerRef.current) clearTimeout(wsRefreshTimerRef.current);
       client.disconnect();
     };
   }, [client]);
@@ -293,18 +367,17 @@ export function KnowledgeAdminPanel({ agentId }: { agentId: string }) {
 
   const hasActiveIndexing = useMemo(() => {
     const all = [...globalSources, ...projectSources];
+    const jobsActive = (stats.jobsQueued ?? 0) > 0 || (stats.jobsRunning ?? 0) > 0;
+    // 只有真正在跑任务才算 indexing；status=partial 但队列空 → 显示 embed 未完而非 indexing
     return (
-      all.some((s) =>
-        s.status === 'pending' || s.status === 'discovering' || s.status === 'partial',
-      ) ||
-      (stats.jobsQueued ?? 0) > 0 ||
-      (stats.jobsRunning ?? 0) > 0
+      jobsActive ||
+      all.some((s) => s.status === 'discovering' || s.status === 'pending')
     );
   }, [globalSources, projectSources, stats]);
 
   useEffect(() => {
     if (!hasActiveIndexing) return;
-    const t = setInterval(() => void refresh(), 2500);
+    const t = setInterval(() => void refresh(), 4000);
     return () => clearInterval(t);
   }, [hasActiveIndexing, refresh]);
 
@@ -387,17 +460,69 @@ export function KnowledgeAdminPanel({ agentId }: { agentId: string }) {
       {error && <div className="kn-error">{error}</div>}
 
       <div className="kn-stats small muted mono">
-        sources {stats.sources ?? 0} · files {stats.files ?? 0} · chunks {stats.chunks ?? 0}
+        源 {stats.sources ?? 0} · 文件 {stats.files ?? 0} · 分块 {stats.chunks ?? 0}
         {' · '}
-        queue {stats.jobsQueued ?? 0} / running {stats.jobsRunning ?? 0}
-        {hasActiveIndexing && <span className="status-warn"> · indexing…</span>}
+        可嵌入 {stats.embeddableChunks ?? 0}
+        {' · '}
+        向量 {stats.embeddings ?? 0}
+        {(stats.embeddableChunks ?? 0) > 0 && `/${stats.embeddableChunks}`}
+        {' · '}
+        待检查 {stats.jobsQueued ?? 0} / 任务 {stats.jobsRunning ?? 0}
+        {hasActiveIndexing && (
+          <span className="status-warn">
+            {' '}
+            · 索引中…（解析/分块优先，完成后可关键词搜索；向量后台补）
+          </span>
+        )}
+        {!hasActiveIndexing &&
+          (stats.embeddings ?? 0) < (stats.embeddableChunks ?? 0) &&
+          (stats.embeddableChunks ?? 0) > 0 && <span className="status-warn"> · 向量待补</span>}
+        {!hasActiveIndexing &&
+          (stats.embeddableChunks ?? 0) > 0 &&
+          (stats.embeddings ?? 0) >= (stats.embeddableChunks ?? 0) && (
+            <span className="status-ok"> · 就绪</span>
+          )}
+        {!hasActiveIndexing &&
+          (stats.embeddableChunks ?? 0) === 0 &&
+          (stats.chunks ?? 0) > 0 && <span className="status-ok"> · 就绪（代码无需向量）</span>}
+        {hasActiveIndexing ? (
+          <button
+            type="button"
+            className="btn-ghost small"
+            style={{ marginLeft: 8 }}
+            onClick={() => {
+              void client.abortAllKnowledgeJobs(agentId).then(refresh).catch((e: unknown) => {
+                setError(e instanceof Error ? e.message : String(e));
+              });
+            }}
+          >
+            中止索引
+          </button>
+        ) : (
+          (stats.embeddableChunks ?? 0) > (stats.embeddings ?? 0) ||
+          (stats.jobsQueued ?? 0) > 0 ||
+          (stats.jobsRunning ?? 0) > 0 ? (
+            <button
+              type="button"
+              className="btn-secondary small"
+              style={{ marginLeft: 8 }}
+              onClick={() => {
+                void client.resumeAllKnowledgeJobs(agentId).then(refresh).catch((e: unknown) => {
+                  setError(e instanceof Error ? e.message : String(e));
+                });
+              }}
+            >
+              继续索引
+            </button>
+          ) : null
+        )}
       </div>
 
       {progress && (
-        <div className="kn-progress small">
+        <div className="kn-progress small" title={progress.path ?? undefined}>
           <span className="status-warn">索引</span>
           <span className="mono">{progress.sourceId}</span>
-          {progress.path && <span className="mono muted">{progress.path}</span>}
+          {progress.path && <span className="mono muted kn-progress-path">{progress.path}</span>}
           <span>{progress.status}</span>
           {progress.detail && <span className="muted">{progress.detail}</span>}
           <button type="button" className="btn-ghost small" onClick={() => setProgress(null)}>
@@ -466,7 +591,7 @@ export function KnowledgeAdminPanel({ agentId }: { agentId: string }) {
                     void client.deleteKnowledgeSource(agentId, s.id).then(refresh);
                   }
                 }}
-                onPatch={(patch) => void patchSource(s.id, patch)}
+                onPatch={(patch) => patchSource(s.id, patch)}
                 onChanged={refresh}
               />
             ))}
@@ -620,7 +745,7 @@ export function KnowledgeAdminPanel({ agentId }: { agentId: string }) {
                           void client.deleteKnowledgeSource(agentId, s.id).then(refresh);
                         }
                       }}
-                      onPatch={(patch) => void patchSource(s.id, patch)}
+                      onPatch={(patch) => patchSource(s.id, patch)}
                       onChanged={refresh}
                     />
                   ))}
@@ -663,7 +788,7 @@ export function KnowledgeAdminPanel({ agentId }: { agentId: string }) {
                     .then((r) => {
                       setSearchHits(r.hits);
                       setSearchMeta(
-                        `hits=${r.hits.length} · vector=${r.usedVector ? 'on' : 'off'} · coverage=${Math.round((r.coverage ?? 0) * 100)}%`,
+                        `命中 ${r.hits.length} · 向量 ${r.usedVector ? '开' : '关'} · 覆盖 ${Math.round((r.coverage ?? 0) * 100)}%`,
                       );
                     })
                     .catch((err) => setError(err instanceof Error ? err.message : String(err)));
@@ -679,7 +804,7 @@ export function KnowledgeAdminPanel({ agentId }: { agentId: string }) {
                   .then((r) => {
                     setSearchHits(r.hits);
                     setSearchMeta(
-                      `hits=${r.hits.length} · vector=${r.usedVector ? 'on' : 'off'} · coverage=${Math.round((r.coverage ?? 0) * 100)}%`,
+                      `命中 ${r.hits.length} · 向量 ${r.usedVector ? '开' : '关'} · 覆盖 ${Math.round((r.coverage ?? 0) * 100)}%`,
                     );
                   })
                   .catch((err) => setError(err instanceof Error ? err.message : String(err)));
