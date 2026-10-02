@@ -1,3 +1,14 @@
+## v0.57.0
+
+### feat(memory): relevance-aware auto-recall (floor + hybrid rank + query expansion)
+
+- **Relevance floor**: vector paths (sqlite-vec / JS hybrid) drop hits below `minSimilarity` (default 0.35); ranking is `similarityWeight·similarity + (1-w)·(importance×confidence×decay)` instead of quality-only reorder that buried topical entries
+- **宁缺毋滥**: empty relevance returns empty (MemoryLayer skips); embedding success + all-below-floor does **not** keyword-fill; only hard embed failure degrades to keyword
+- **Keyword scoring**: drop length-1 tokens (`is`⊂`this`); CJK sliding bigrams score ×0.5 so weak overlap alone cannot pass `minKeywordScore` (default 3); empty query does not dump the library (type/tags/channel/status browse still allowed)
+- **Query expansion**: `extractLayerQuery` uses last user message; pure acks (继续/好/可以…) pull up to 2 earlier user turns + task `topicHints` (`extractTaskQueryHints`: active goals + current step). Independent questions stay undiluted (no task/history mix-in)
+- **Config**: `memory.retrieval.{minSimilarity,similarityWeight,minKeywordScore}` (Zod + schema + example); `memory_search` stays looser for LLM browsing
+- Tests: `tests/memory/retrieval-relevance.test.ts` (unrelated query such as 附子/炖肉 must not fill top-5), ack/topicHints expansion contracts
+
 ## v0.56.0
 
 ### feat(capabilities): DocumentPort document extract (P0–P1.5)

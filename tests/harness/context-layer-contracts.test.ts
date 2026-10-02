@@ -63,6 +63,37 @@ describe('extractLayerQuery', () => {
   it('无用户消息时返回空串', () => {
     expect(extractLayerQuery([])).toBe('');
   });
+
+  it('纯应答（继续）回看上文用户主题', () => {
+    const q = extractLayerQuery([
+      userMsg('帮我研究 memory 自动召回机制'),
+      { role: 'assistant', content: '好的', timestamp: Date.now() },
+      userMsg('继续'),
+    ]);
+    expect(q).toContain('memory 自动召回');
+    expect(q).toContain('继续');
+  });
+
+  it('纯应答时才附加任务线索', () => {
+    const q = extractLayerQuery(
+      [userMsg('帮我研究 memory 自动召回机制'), userMsg('继续')],
+      { topicHints: '修订 110 接警语音转写方案' },
+    );
+    expect(q).toContain('memory 自动召回');
+    expect(q).toContain('110 接警');
+  });
+
+  it('独立新问题不掺任务/上文（避免稀释主题）', () => {
+    const q = extractLayerQuery(
+      [userMsg('上个话题关于 110 方案'), userMsg('附子是什么？炖肉有什么好处？')],
+      { topicHints: '修订 110 接警语音转写方案' },
+    );
+    expect(q).toBe('附子是什么？炖肉有什么好处？');
+  });
+
+  it('topicHints 在无用户消息时仍可用', () => {
+    expect(extractLayerQuery([], { topicHints: '任务：修复召回' })).toBe('任务：修复召回');
+  });
 });
 
 describe('DefaultContextAssembler', () => {

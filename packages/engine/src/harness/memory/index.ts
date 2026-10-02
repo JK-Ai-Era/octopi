@@ -41,10 +41,22 @@ export {
 export type { ResolvedEmbeddingRuntime } from './sqlite/index.js';
 export {
   tokenizeKeywordQuery,
+  tokenizeKeywordDetail,
   scoreKeywordFields,
   buildKeywordLikeSql,
 } from './sqlite/index.js';
-export type { KeywordFields } from './sqlite/index.js';
+export type { KeywordFields, KeywordTokens } from './sqlite/index.js';
+
+// ── 检索排序 ──
+export {
+  DEFAULT_MIN_SIMILARITY,
+  DEFAULT_SIMILARITY_WEIGHT,
+  DEFAULT_MIN_KEYWORD_SCORE,
+  qualityScore,
+  blendRank,
+  passesSimilarityFloor,
+  resolveRetrievalKnobs,
+} from './retrieval-rank.js';
 
 // ── 写入去重 ──
 export { findDuplicate, normalizedProposition, charTrigramSimilarity } from './similarity.js';

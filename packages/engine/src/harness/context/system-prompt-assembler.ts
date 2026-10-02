@@ -18,6 +18,7 @@ import {
   WisdomLayer,
 } from './layers.js';
 import type { ContextAssembler, ContextLayer } from './layer-types.js';
+import { extractLayerQuery } from './layer-types.js';
 import type { ConceptGraphStore, MemoryStore, WisdomStore } from '../memory/types.js';
 import type { KnowledgeCatalogProvider } from '../knowledge/catalog-types.js';
 import { loadConstitution, type ConstitutionConfig } from './constitution/load-constitution.js';
@@ -30,6 +31,11 @@ export interface SystemPromptAssembleInput {
   injectedContext?: string;
   /** 显式配置的上下文窗口；未知时省略 */
   contextWindow?: number;
+  /**
+   * 检索主题线索（会话任务标题/当前步骤）。
+   * 与最近用户消息一起构成 Memory/Cognition 层 query。
+   */
+  topicHints?: string;
   signal?: AbortSignal;
 }
 
@@ -193,6 +199,7 @@ export function createDefaultSystemPromptAssembler(options?: {
         systemBudget,
         layers,
         signal: input.signal,
+        query: extractLayerQuery(input.messages, { topicHints: input.topicHints }),
         constitutionPreamble: passPreamblePerAssemble || resolvedPreamble ? resolvedPreamble : undefined,
       });
 

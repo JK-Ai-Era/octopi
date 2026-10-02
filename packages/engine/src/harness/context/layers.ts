@@ -250,11 +250,19 @@ export class KnowledgeLayer extends BaseLayer {
 export class MemoryLayer extends BaseLayer {
   private readonly store: MemoryStore;
   private readonly limit: number;
+  /** 向量相关性地板；默认见 retrieval-rank（与 search 工具相比更严） */
+  private readonly minSimilarity?: number;
 
-  constructor(options: { store: MemoryStore; limit?: number; order?: number }) {
+  constructor(options: {
+    store: MemoryStore;
+    limit?: number;
+    order?: number;
+    minSimilarity?: number;
+  }) {
     super('memory', { order: options.order });
     this.store = options.store;
     this.limit = options.limit ?? 5;
+    this.minSimilarity = options.minSimilarity;
   }
 
   async assemble(ctx: LayerAssembleContext): Promise<LayerContent | null> {
@@ -265,6 +273,7 @@ export class MemoryLayer extends BaseLayer {
       updateAccess: true,
       includeShadow: false,
       includeDeleted: false,
+      minSimilarity: this.minSimilarity,
     });
     const { injectFilter } = await import('../memory/confidence.js');
     const injectable = entries.filter((e) => injectFilter(e));

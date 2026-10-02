@@ -27,6 +27,7 @@ import { searchTopK, parseEmbedding, serializeEmbedding } from './vector-search.
 import {
   buildKeywordLikeSql,
   scoreKeywordFields,
+  tokenizeKeywordDetail,
   tokenizeKeywordQuery,
 } from './keyword-search.js';
 import {
@@ -36,6 +37,14 @@ import {
   upsertMemoryVector,
 } from './sqlite-vec.js';
 import type { VectorEngineChoice } from '../../../config.js';
+import {
+  DEFAULT_MIN_KEYWORD_SCORE,
+  DEFAULT_MIN_SIMILARITY,
+  DEFAULT_SIMILARITY_WEIGHT,
+  blendRank,
+  qualityScore,
+  resolveRetrievalKnobs,
+} from '../retrieval-rank.js';
 
 export interface SqliteMemoryStoreOptions {
   embeddingProvider?: EmbeddingProvider | null;
@@ -43,10 +52,26 @@ export interface SqliteMemoryStoreOptions {
   candidateCap?: number;
   /** 向量引擎；auto=优先 sqlite-vec（需 db 已 load 扩展），否则 JS */
   vectorEngine?: VectorEngineChoice;
+  /** 向量路径默认相关性地板（query.minSimilarity 可覆盖） */
+  minSimilarity?: number;
+  /** 混合排序相似度权重；其余为 quality */
+  similarityWeight?: number;
+  /** 关键词路径默认最低命中分 */
+  minKeywordScore?: number;
 }
 
 function emptyTypes(): Record<MemoryType, number> {
   return { fact: 0, method: 0, norm: 0 };
+}
+
+/** text 为空时仍允许的结构过滤浏览（type/tags/channel/status；min* 单独不算） */
+function hasStructuralFilter(query: MemoryQuery): boolean {
+  return (
+    query.type !== undefined ||
+    (query.tags?.length ?? 0) > 0 ||
+    query.channel !== undefined ||
+    query.status !== undefined
+  );
 }
 
 export class SqliteMemoryStore implements MemoryStore {
@@ -56,6 +81,9 @@ export class SqliteMemoryStore implements MemoryStore {
   private embedding: EmbeddingProvider | null;
   private readonly candidateCap: number;
   private readonly vectorEngine: VectorEngineChoice;
+  private readonly defaultMinSimilarity: number;
+  private readonly similarityWeight: number;
+  private readonly defaultMinKeywordScore: number;
   private vecReady = false;
   private embeddingBackfillScheduled = false;
 
@@ -64,6 +92,9 @@ export class SqliteMemoryStore implements MemoryStore {
     this.embedding = options?.embeddingProvider ?? null;
     this.candidateCap = Math.max(20, options?.candidateCap ?? 500);
     this.vectorEngine = options?.vectorEngine ?? 'auto';
+    this.defaultMinSimilarity = options?.minSimilarity ?? DEFAULT_MIN_SIMILARITY;
+    this.similarityWeight = options?.similarityWeight ?? DEFAULT_SIMILARITY_WEIGHT;
+    this.defaultMinKeywordScore = options?.minKeywordScore ?? DEFAULT_MIN_KEYWORD_SCORE;
 
     if (this.embedding && this.vectorEngine !== 'js') {
       const dims = this.embedding.dimensions;
@@ -166,15 +197,28 @@ export class SqliteMemoryStore implements MemoryStore {
   }
 
   async retrieve(query: MemoryQuery): Promise<MemoryEntry[]> {
-    if (this.embedding && query.text.trim()) {
+    const knobs = resolveRetrievalKnobs(
+      query.minSimilarity,
+      query.minKeywordScore,
+      this.defaultMinSimilarity,
+      this.defaultMinKeywordScore,
+    );
+    const q: MemoryQuery = { ...query, minSimilarity: knobs.minSimilarity, minKeywordScore: knobs.minKeywordScore };
+    if (this.embedding && q.text?.trim()) {
       await this.maybeBackfillEmbeddings();
-      if (this.vecReady && this.vectorEngine !== 'js') {
-        const viaVec = await this.vecRetrieveAsync(query);
-        if (viaVec.length > 0) return viaVec;
+      // embedding 路径：仅在 embed 硬失败时降级关键词；过不了相关性地板则宁缺返回空
+      try {
+        if (this.vecReady && this.vectorEngine !== 'js') {
+          const viaVec = await this.vecRetrieveAsync(q);
+          if (viaVec.length > 0) return viaVec;
+          // vec 命中为空：可能是 vec 表稀疏，继续 hybrid（仍用 embedding）；不走关键词填充
+        }
+        return await this.hybridRetrieve(q, { allowKeywordFallback: false });
+      } catch {
+        return this.structuredRetrieve(q);
       }
-      return this.hybridRetrieve(query);
     }
-    return this.structuredRetrieve(query);
+    return this.structuredRetrieve(q);
   }
 
   private visibilityWhere(query: MemoryQuery): { sql: string; params: unknown[] } {
@@ -194,7 +238,7 @@ export class SqliteMemoryStore implements MemoryStore {
     return { sql, params };
   }
 
-  /** sqlite-vec KNN 检索（需先 embed 查询文本） */
+  /** sqlite-vec KNN 检索（需先 embed 查询文本）；过相关性地板后按混合分排序 */
   private async vecRetrieveAsync(query: MemoryQuery): Promise<MemoryEntry[]> {
     if (!this.embedding || !this.vecReady) return [];
     let queryVec: number[];
@@ -206,36 +250,45 @@ export class SqliteMemoryStore implements MemoryStore {
 
     const vis = this.visibilityWhere(query);
     const k = Math.max(query.limit ?? 10, 20);
+    const minSim = query.minSimilarity ?? this.defaultMinSimilarity;
     const hits = searchMemoryVectors(this.db.raw, queryVec, k * 3, vis.sql, vis.params);
     if (hits.length === 0) return [];
 
-    const entries: MemoryEntry[] = [];
+    const scored: Array<{ e: MemoryEntry; similarity: number }> = [];
     for (const hit of hits) {
+      // vec0 distance_metric=cosine → distance ∈ [0,2]，similarity = 1 - distance
+      const similarity = 1 - hit.distance;
+      if (similarity < minSim) continue;
       const row = this.db.raw.prepare('SELECT * FROM memories WHERE id = ?').get(hit.id) as any;
       if (!row) continue;
-      entries.push(this.rowToEntry(row));
-      if (entries.length >= k) break;
+      const entry = this.rowToEntry(row);
+      if (!this.passesApplyFilters(entry, query)) continue;
+      scored.push({ e: entry, similarity });
+      if (scored.length >= (query.limit ?? 10) * 2) break;
     }
-
-    const filtered = this.applyFilters(entries, query);
-    if (filtered.length === 0) return [];
-    return this.sortAndLimit(filtered, query);
+    if (scored.length === 0) return [];
+    return this.sortLimitScored(scored, query);
   }
 
   /**
-   * 混合检索：SQL 预筛候选（避免全表载入 embedding）→ JS 余弦 topK
-   * candidateCap 默认 500，可通过 SqliteMemoryStoreOptions 覆盖。
+   * 混合检索：SQL 预筛候选 → JS 余弦 topK → 相关性地板。
+   * 命中不足 limit 时**不**用无关条目填充。
+   * @param options.allowKeywordFallback - 仅 embed 硬失败场景允许；默认 false（宁缺）
    */
-  private async hybridRetrieve(query: MemoryQuery): Promise<MemoryEntry[]> {
+  private async hybridRetrieve(
+    query: MemoryQuery,
+    options?: { allowKeywordFallback?: boolean },
+  ): Promise<MemoryEntry[]> {
     let queryVec: number[];
     try {
       queryVec = await this.embedding!.embed(query.text);
     } catch {
-      // embedding 服务不可用：退回关键词（与 vecRetrieve / store 写入路径对称）
+      // embedding 服务不可用：仅此时退回关键词
       return this.structuredRetrieve(query);
     }
     const vis = this.visibilityWhere(query);
     const cap = this.candidateCap;
+    const minSim = query.minSimilarity ?? this.defaultMinSimilarity;
 
     let sql = `SELECT id, type, content, source, confidence, importance, access_count, last_accessed_at, created_at, decay_factor, tags, embedding, status, channel, future_use, anchors, evidence, deleted, deleted_at, deleted_by, deleted_reason, deleted_meta, reinforced_at
        FROM memories WHERE embedding IS NOT NULL${vis.sql}`;
@@ -265,17 +318,26 @@ export class SqliteMemoryStore implements MemoryStore {
       })
       .filter((c): c is NonNullable<typeof c> => c !== null);
 
-    const vectorResults = searchTopK(queryVec, candidates, Math.min(candidates.length, Math.max(50, (query.limit ?? 10) * 5)));
-    let filtered = this.applyFilters(vectorResults.map(r => r.item), query);
+    // searchTopK 的 maxDistance = 1 - minSimilarity（cosine distance）
+    const vectorResults = searchTopK(
+      queryVec,
+      candidates,
+      Math.min(candidates.length, Math.max(50, (query.limit ?? 10) * 5)),
+      1 - minSim,
+    );
+    const scored = vectorResults
+      .map(r => ({ e: r.item, similarity: 1 - r.distance }))
+      .filter(s => s.similarity >= minSim && this.passesApplyFilters(s.e, query));
 
-    if (filtered.length < (query.limit ?? 10) && candidates.length < cap) {
-      // 候选池未打满仍不足 → 结构化降级
+    // 有相关命中则只返回这些（宁缺毋滥，不回填关键词噪声）
+    if (scored.length > 0) {
+      return this.sortLimitScored(scored, query);
+    }
+    // 地板之下零命中：默认不降级关键词，避免「向量说无关、关键词硬填」
+    if (options?.allowKeywordFallback) {
       return this.structuredRetrieve(query);
     }
-    if (filtered.length === 0) {
-      return this.structuredRetrieve(query);
-    }
-    return this.sortAndLimit(filtered, query);
+    return [];
   }
 
   private structuredRetrieve(query: MemoryQuery): Promise<MemoryEntry[]> {
@@ -308,8 +370,8 @@ export class SqliteMemoryStore implements MemoryStore {
       params.push(query.minImportance);
     }
 
-    const tokens = tokenizeKeywordQuery(query.text);
-    const like = buildKeywordLikeSql(tokens);
+    const tokens = tokenizeKeywordDetail(query.text);
+    const like = buildKeywordLikeSql(tokens.all);
     if (like.sql) {
       sql += like.sql;
       params.push(...like.params);
@@ -319,7 +381,8 @@ export class SqliteMemoryStore implements MemoryStore {
     const entries = rows.map(r => this.rowToEntry(r));
     const filtered = this.filterByTags(entries, query);
 
-    if (tokens.length > 0) {
+    const minKeyword = query.minKeywordScore ?? this.defaultMinKeywordScore;
+    if (tokens.all.length > 0) {
       const scored = filtered
         .map((e) => ({
           e,
@@ -334,11 +397,11 @@ export class SqliteMemoryStore implements MemoryStore {
             tokens,
           ),
         }))
-        .filter((s) => s.score > 0);
+        .filter((s) => s.score >= minKeyword);
 
       scored.sort((a, b) => {
-        const rankA = a.score * 10 + a.e.importance * a.e.confidence * a.e.decayFactor;
-        const rankB = b.score * 10 + b.e.importance * b.e.confidence * b.e.decayFactor;
+        const rankA = a.score * 10 + qualityScore(a.e);
+        const rankB = b.score * 10 + qualityScore(b.e);
         return rankB - rankA;
       });
 
@@ -356,7 +419,15 @@ export class SqliteMemoryStore implements MemoryStore {
       return Promise.resolve(results);
     }
 
-    return Promise.resolve(this.sortAndLimit(filtered, query));
+    // 无检索词：仅结构过滤时浏览；禁止空 query 扫全库
+    if (!hasStructuralFilter(query)) return Promise.resolve([]);
+    filtered.sort((a, b) => qualityScore(b) - qualityScore(a));
+    return Promise.resolve(this.limitAndUpdate(filtered, query));
+  }
+
+  /** 单条结构化过滤（向量路径逐条判断） */
+  private passesApplyFilters(entry: MemoryEntry, query: MemoryQuery): boolean {
+    return this.applyFilters([entry], query).length > 0;
   }
 
   /** 与 InMemory 对齐：tags 交集过滤 */
@@ -389,13 +460,21 @@ export class SqliteMemoryStore implements MemoryStore {
     return this.filterByTags(results, query);
   }
 
-  private sortAndLimit(entries: MemoryEntry[], query: MemoryQuery): MemoryEntry[] {
-    entries.sort((a, b) => {
-      const scoreA = a.importance * a.confidence * a.decayFactor;
-      const scoreB = b.importance * b.confidence * b.decayFactor;
-      return scoreB - scoreA;
+  /** 向量命中：similarity 参与排序（禁止仅按 quality 顶掉贴题条目） */
+  private sortLimitScored(
+    scored: Array<{ e: MemoryEntry; similarity: number }>,
+    query: MemoryQuery,
+  ): MemoryEntry[] {
+    const w = this.similarityWeight;
+    scored.sort((a, b) => {
+      const rankA = blendRank(a.similarity, qualityScore(a.e), w);
+      const rankB = blendRank(b.similarity, qualityScore(b.e), w);
+      return rankB - rankA;
     });
+    return this.limitAndUpdate(scored.map((s) => s.e), query);
+  }
 
+  private limitAndUpdate(entries: MemoryEntry[], query: MemoryQuery): MemoryEntry[] {
     const limit = query.limit ?? 10;
     const results = entries.slice(0, limit);
 

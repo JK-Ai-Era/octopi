@@ -179,6 +179,17 @@ export const MemoryConfigSchema = z.object({
         .optional(),
     })
     .optional(),
+  /** 检索相关性地板与混合排序（自动注入宁缺毋滥） */
+  retrieval: z
+    .object({
+      /** 向量路径最低余弦相似度（默认 0.35）；低于则丢弃 */
+      minSimilarity: z.number().min(0).max(1).optional(),
+      /** 混合排序中相似度权重（默认 0.65），其余为 importance×confidence×decay */
+      similarityWeight: z.number().min(0).max(1).optional(),
+      /** 关键词路径最低命中分（默认 2） */
+      minKeywordScore: z.number().min(0).optional(),
+    })
+    .optional(),
   gates: z
     .object({
       maxLength: z

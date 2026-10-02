@@ -202,6 +202,9 @@ export function createMemorySearchTool(store: MemoryStore): RegisteredTool {
         updateAccess: true,
         includeShadow,
         includeDeleted: false,
+        // 主动检索可浏览弱相关线索；自动注入（MemoryLayer）才用严地板
+        minSimilarity: 0,
+        minKeywordScore: 1,
       });
       return {
         results: results.map((e) => ({

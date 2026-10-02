@@ -64,3 +64,31 @@ export function renderSessionTasksInjection(tasks: SessionTask[]): string {
 
   return lines.join('\n');
 }
+
+/**
+ * 从会话任务提取检索主题线索（Memory/Cognition 层 query 用）。
+ *
+ * 取未闭合 goal 描述 + 当前 open step，压缩为一行，避免注入全文。
+ *
+ * @param tasks - 会话全部任务
+ * @param maxChars - 线索字符上限（默认 240）
+ * @returns 单行主题线索；无活跃任务时空串
+ */
+export function extractTaskQueryHints(tasks: SessionTask[], maxChars = 240): string {
+  const goals = tasks
+    .filter((t) => !t.parentId && isActive(t.status))
+    .sort((a, b) => a.createdAt - b.createdAt);
+  if (goals.length === 0) return '';
+
+  const parts: string[] = [];
+  for (const goal of goals.slice(0, 3)) {
+    parts.push(goal.description.trim());
+    const currentStep = tasks
+      .filter((t) => t.parentId === goal.id && t.status === 'open')
+      .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))[0];
+    if (currentStep?.description) {
+      parts.push(currentStep.description.trim());
+    }
+  }
+  return parts.filter(Boolean).join('；').slice(0, maxChars);
+}

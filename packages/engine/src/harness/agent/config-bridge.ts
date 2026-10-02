@@ -366,6 +366,9 @@ async function buildAgent(
         new SqliteMemoryStore(db, {
           embeddingProvider: embRuntime?.provider ?? null,
           vectorEngine: embRuntime?.vectorEngine ?? 'auto',
+          minSimilarity: shared.memoryConfig?.retrieval?.minSimilarity,
+          similarityWeight: shared.memoryConfig?.retrieval?.similarityWeight,
+          minKeywordScore: shared.memoryConfig?.retrieval?.minKeywordScore,
         }),
       );
       builder.wisdomStore(new SqliteWisdomStore(db));

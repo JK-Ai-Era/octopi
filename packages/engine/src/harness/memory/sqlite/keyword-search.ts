@@ -23,27 +23,50 @@ function isCjk(ch: string): boolean {
 /**
  * 查询分词：空白/标点切分；连续 CJK 片段额外产出二元组。
  *
+ * 丢弃长度 &lt; 2 的 token：单字母/单字 `includes` 会命中任意子串（`is`⊂`this`）。
+ * 派生二元组（长 CJK 滑窗）记入 weak：单独命中不足以过相关性地板。
+ *
  * @param text - 原始查询
- * @returns 去重后的检索词（小写）
+ * @returns 去重后的检索词（小写）；与 {@link tokenizeKeywordDetail}.all 一致
  */
 export function tokenizeKeywordQuery(text: string): string[] {
-  const raw = (text ?? '').trim().toLowerCase();
-  if (!raw) return [];
+  return tokenizeKeywordDetail(text).all;
+}
 
-  const tokens = new Set<string>();
+/** 分词明细：strong=整词/整段；weak=长 CJK 滑窗二元组 */
+export interface KeywordTokens {
+  all: string[];
+  strong: string[];
+  weak: string[];
+}
+
+/**
+ * 分词并区分强弱 token。
+ *
+ * @param text - 原始查询
+ */
+export function tokenizeKeywordDetail(text: string): KeywordTokens {
+  const raw = (text ?? '').trim().toLowerCase();
+  if (!raw) return { all: [], strong: [], weak: [] };
+
+  const strong = new Set<string>();
+  const weak = new Set<string>();
   const parts = raw.split(/[^\p{L}\p{N}_]+/u).filter(Boolean);
 
   for (const part of parts) {
-    if (part.length >= 1) tokens.add(part);
+    if (part.length >= 2) strong.add(part);
     if (!isCjk(part[0] ?? '')) continue;
 
-    // CJK 连续段：按段再切，生成二元组（保留整段词）
     let run = '';
     const flush = () => {
       if (!run) return;
-      if (run.length >= 2) tokens.add(run);
-      for (let i = 0; i + 1 < run.length; i++) {
-        tokens.add(run.slice(i, i + 2));
+      if (run.length >= 2) strong.add(run);
+      // 仅长段的滑窗二元组算 weak（整段本身已进 strong）
+      if (run.length > 2) {
+        for (let i = 0; i + 1 < run.length; i++) {
+          const bi = run.slice(i, i + 2);
+          if (!strong.has(bi)) weak.add(bi);
+        }
       }
       run = '';
     };
@@ -54,7 +77,8 @@ export function tokenizeKeywordQuery(text: string): string[] {
     flush();
   }
 
-  return [...tokens].filter((t) => t.length > 0);
+  const all = [...new Set([...strong, ...weak])].filter((t) => t.length >= 2);
+  return { all, strong: [...strong].filter((t) => t.length >= 2), weak: [...weak] };
 }
 
 function asText(v: string[] | string | null | undefined): string {
@@ -66,10 +90,18 @@ function asText(v: string[] | string | null | undefined): string {
 /**
  * 单条记忆的关键词命中得分。
  *
+ * 字段权重：content > future_use/tags > evidence/anchors。
+ * weak token（CJK 滑窗二元组）命中权重减半，避免「什么/好处」类弱重叠单独过关。
+ *
  * @returns 0 表示无命中；字段权重相加
  */
-export function scoreKeywordFields(fields: KeywordFields, tokens: string[]): number {
-  if (tokens.length === 0) return 0;
+export function scoreKeywordFields(
+  fields: KeywordFields,
+  tokens: string[] | KeywordTokens,
+): number {
+  const list = Array.isArray(tokens) ? tokens : tokens.all;
+  if (list.length === 0) return 0;
+  const weakSet = new Set(Array.isArray(tokens) ? [] : tokens.weak);
 
   const content = (fields.content ?? '').toLowerCase();
   const futureUse = (fields.futureUse ?? '').toLowerCase();
@@ -78,13 +110,14 @@ export function scoreKeywordFields(fields: KeywordFields, tokens: string[]): num
   const evidence = (fields.evidence ?? '').toLowerCase();
 
   let score = 0;
-  for (const token of tokens) {
+  for (const token of list) {
     if (!token) continue;
-    if (content.includes(token)) score += 3;
-    if (futureUse.includes(token)) score += 2;
-    if (tags.includes(token)) score += 2;
-    if (anchors.includes(token)) score += 1;
-    if (evidence.includes(token)) score += 1;
+    const w = weakSet.has(token) ? 0.5 : 1;
+    if (content.includes(token)) score += 3 * w;
+    if (futureUse.includes(token)) score += 2 * w;
+    if (tags.includes(token)) score += 2 * w;
+    if (anchors.includes(token)) score += 1 * w;
+    if (evidence.includes(token)) score += 1 * w;
   }
   return score;
 }

@@ -86,6 +86,13 @@ export interface MemoryQuery {
   includeDeleted?: boolean;
   status?: MemoryStatus | MemoryStatus[];
   channel?: MemoryChannel | MemoryChannel[];
+  /**
+   * 向量路径最低余弦相似度；低于则丢弃（宁缺毋滥）。
+   * 未写出时用 store 默认（注入路径偏严，search 可放宽为 0）。
+   */
+  minSimilarity?: number;
+  /** 关键词路径最低命中分；未写出时用 store 默认 */
+  minKeywordScore?: number;
 }
 
 /** 记忆统计 */

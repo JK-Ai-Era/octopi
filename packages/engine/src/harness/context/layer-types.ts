@@ -240,20 +240,85 @@ export interface ContextAssembleParams {
 
 // ── 工具函数 ──
 
-/** 从消息中提取默认检索查询（最近用户文本） */
-export function extractLayerQuery(messages: Message[]): string {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const m = messages[i];
-    if (m.role !== 'user') continue;
-    if (typeof m.content === 'string') return m.content;
-    if (Array.isArray(m.content)) {
-      return m.content
-        .filter((b): b is { type: 'text'; text: string } => b.type === 'text')
-        .map((b) => b.text)
-        .join(' ');
-    }
+/** 纯应答/推进语：本身无检索语义，需要回看上文 */
+const ACK_LAYER_QUERY_RE =
+  /^(好|好的|好呀|好吧|嗯+|行|可以|继续|接着|然后呢?|下一步|收到|开始吧?|没问题|就这样|ok+|okay|yes|yeah|yep|go(\s+on)?|proceed)[\s!！。.~～]*$/i;
+
+export interface ExtractLayerQueryOptions {
+  /**
+   * 额外主题线索（会话任务标题/当前步骤等）。
+   * **仅在最近用户消息是纯应答或为空时追加**，避免任务主题稀释独立新问题。
+   */
+  topicHints?: string;
+  /** query 总字符上限（默认 600） */
+  maxChars?: number;
+}
+
+function userMessageText(m: Message): string {
+  if (typeof m.content === 'string') return m.content;
+  if (Array.isArray(m.content)) {
+    return m.content
+      .filter((b): b is { type: 'text'; text: string } => b.type === 'text')
+      .map((b) => b.text)
+      .join(' ');
   }
   return '';
+}
+
+/**
+ * 是否无检索语义的短应答（继续/好/可以…）
+ *
+ * @param text - 最近用户消息
+ */
+export function isThinLayerQuery(text: string): boolean {
+  const t = (text ?? '').trim();
+  if (!t) return true;
+  return ACK_LAYER_QUERY_RE.test(t);
+}
+
+/**
+ * 从消息提取检索 query。
+ *
+ * 默认取最近一条用户消息；若其为纯应答（「继续」「好」），回看最多 2 条更早的用户消息，
+ * 并追加 `topicHints`（任务 focus）。独立新问题只用本句，不掺任务/上文，避免稀释主题。
+ *
+ * @param messages - 会话消息（含本轮用户输入）
+ * @param options - topicHints / maxChars
+ * @returns 检索用文本
+ */
+export function extractLayerQuery(
+  messages: Message[],
+  options?: ExtractLayerQueryOptions,
+): string {
+  const userTexts: string[] = [];
+  for (let i = messages.length - 1; i >= 0 && userTexts.length < 3; i--) {
+    const m = messages[i];
+    if (m.role !== 'user') continue;
+    const text = userMessageText(m).trim();
+    if (text) userTexts.push(text);
+  }
+  if (userTexts.length === 0) {
+    return (options?.topicHints ?? '').trim();
+  }
+
+  const last = userTexts[0];
+  const parts: string[] = [last];
+  const thin = isThinLayerQuery(last);
+  if (thin) {
+    // 纯应答无主题：补上更早的用户意图（最多再 2 条）
+    for (let i = 1; i < userTexts.length && parts.length < 3; i++) {
+      if (!isThinLayerQuery(userTexts[i]) || i === userTexts.length - 1) {
+        parts.push(userTexts[i]);
+      }
+    }
+    const hints = (options?.topicHints ?? '').trim();
+    if (hints) {
+      parts.push(hints);
+    }
+  }
+
+  const maxChars = options?.maxChars ?? 600;
+  return parts.join('\n').slice(0, maxChars).trim();
 }
 
 /** 启用层是否产生非空正文 */

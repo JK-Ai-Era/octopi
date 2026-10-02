@@ -23,10 +23,11 @@ export type { VectorSearchResult } from './vector-search.js';
 
 export {
   tokenizeKeywordQuery,
+  tokenizeKeywordDetail,
   scoreKeywordFields,
   buildKeywordLikeSql,
 } from './keyword-search.js';
-export type { KeywordFields } from './keyword-search.js';
+export type { KeywordFields, KeywordTokens } from './keyword-search.js';
 
 export {
   tryLoadSqliteVec,

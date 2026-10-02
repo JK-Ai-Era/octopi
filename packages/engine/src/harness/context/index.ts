@@ -50,6 +50,7 @@ export {
   LAYER_PRIORITY,
   LAYER_DEFAULT_SHARE,
   extractLayerQuery,
+  isThinLayerQuery,
   hasLayerText,
 } from './layer-types.js';
 export type {
@@ -62,6 +63,7 @@ export type {
   SystemAssembleResult,
   ContextAssembler,
   ContextAssembleParams,
+  ExtractLayerQueryOptions,
 } from './layer-types.js';
 export { DefaultContextAssembler, truncateTextToTokens } from './assembler.js';
 export type { DefaultContextAssemblerConfig } from './assembler.js';

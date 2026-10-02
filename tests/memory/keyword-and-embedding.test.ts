@@ -519,7 +519,13 @@ describe('SqliteMemoryStore with embedding (JS hybrid fallback)', () => {
     };
     expect(row.embedding).toBeTruthy();
 
-    const results = await store.retrieve({ text: 'Vitest mock', limit: 5, updateAccess: false });
+    const results = await store.retrieve({
+      text: 'Vitest mock',
+      limit: 5,
+      updateAccess: false,
+      // 本用例验证 hybrid 写读；mock 向量与真实语义无关，关掉相关性地板
+      minSimilarity: 0,
+    });
     expect(results.some((r) => r.id === id)).toBe(true);
     expect(store.vectorEngineActive).toBe('js');
   });

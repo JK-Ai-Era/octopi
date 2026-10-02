@@ -74,6 +74,10 @@ Memory **不是**对话备份、不是任务列表、不是外部文档库。这
 
 与 **`session_search`** 分工：Memory = 蒸馏命题；Session = 原文与过程。
 
+**相关性地板（宁缺毋滥）**：向量路径按余弦相似度过滤（默认 `minSimilarity=0.35`），排序为 `similarityWeight·sim + (1-w)·(importance×confidence×decay)`；关键词路径要求命中分 ≥ `minKeywordScore`（默认 3；CJK 滑窗二元组权重减半）。无命中返回空；embedding 成功但不过地板时**不**用关键词回填。配置见 `memory.retrieval`。
+
+**召回 query**：默认 = 最近用户消息；若该句是纯应答（「继续」「好」），回看最多 2 条更早用户意图，并拼接任务主题线索（未闭合 goal + 当前步骤）。独立新问题只用本句，不掺任务/上文。
+
 ---
 
 ## 5. 治理（Steward.govern）
@@ -114,6 +118,11 @@ Memory **不是**对话备份、不是任务列表、不是外部文档库。这
       "limits": { "fact": 200, "method": 100, "norm": 150 }
     },
     "confidence": { "injectMinScore": 0.55 },
+    "retrieval": {
+      "minSimilarity": 0.35,
+      "similarityWeight": 0.65,
+      "minKeywordScore": 3
+    },
     "gates": { "maxLength": { "fact": 400, "method": 500, "norm": 300 } }
   }
 }
@@ -126,6 +135,7 @@ Memory **不是**对话备份、不是任务列表、不是外部文档库。这
 | `decay.typeParams` | 按 fact/method/norm 的衰减 idle / 步进 / 下限 |
 | `health.*` | 库存水位 / shadow 积压探测阈值（触发治理双脉搏） |
 | `confidence` / `gates` | 注入分数地板、结构长度 |
+| `retrieval.*` | 检索相关性地板与混合排序（自动注入宁缺毋滥） |
 
 ---
 

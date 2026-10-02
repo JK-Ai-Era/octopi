@@ -6,7 +6,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { InMemorySessionStore } from '@octopi-agent/engine/integration/storage/memory.js';
 import { SessionTaskService } from '@octopi-agent/engine/harness/session/tasks/service.js';
-import { renderSessionTasksInjection } from '@octopi-agent/engine/harness/session/tasks/render.js';
+import { extractTaskQueryHints, renderSessionTasksInjection } from '@octopi-agent/engine/harness/session/tasks/render.js';
 import { createSessionTaskTools } from '@octopi-agent/engine/harness/session/tasks/tools.js';
 import type { SessionData } from '@octopi-agent/engine/harness/session/types.js';
 import type { AgentEvent } from '@octopi-agent/core/primitives/event-bus.js';
@@ -286,5 +286,34 @@ describe('task_* 工具', () => {
       total: number;
     };
     expect(planned.total).toBe(2);
+  });
+});
+
+describe('extractTaskQueryHints', () => {
+  it('无活跃 goal 返回空串', () => {
+    expect(extractTaskQueryHints([])).toBe('');
+  });
+
+  it('提取 goal 描述 + 当前 open step', () => {
+    const hints = extractTaskQueryHints([
+      {
+        id: 'g1',
+        description: '修订 110 接警语音转写方案',
+        status: 'open',
+        createdAt: 1,
+        updatedAt: 1,
+      },
+      {
+        id: 's1',
+        parentId: 'g1',
+        description: '突出云南方言识别率痛点',
+        status: 'open',
+        order: 0,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ]);
+    expect(hints).toContain('110 接警');
+    expect(hints).toContain('方言识别率');
   });
 });

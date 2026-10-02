@@ -238,7 +238,7 @@ export { AuditWriter, AuditReader } from './collaboration/autonomous-subsystem/a
 export { validateSubsystemSpec } from './collaboration/autonomous-subsystem/boundary/index.js';
 
 // ── Session Tasks（会话任务，Session 聚合）──
-export { SessionTaskService, renderSessionTasksInjection, createSessionTaskTools } from './session/tasks/index.js';
+export { SessionTaskService, renderSessionTasksInjection, extractTaskQueryHints, createSessionTaskTools } from './session/tasks/index.js';
 export type { SessionTask, SessionTaskStatus, SessionTaskListFilter } from './session/tasks/index.js';
 
 // ── Run Guard（过程监督）──

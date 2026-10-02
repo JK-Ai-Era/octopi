@@ -27,7 +27,7 @@ import { HeuristicTokenEstimator } from '../context/index.js';
 import { extractLayerQuery } from '../context/layer-types.js';
 import { withRuntimeEnvironmentInjection } from '../context/runtime-datetime.js';
 import type { SessionTaskService } from '../session/tasks/service.js';
-import { renderSessionTasksInjection } from '../session/tasks/render.js';
+import { extractTaskQueryHints, renderSessionTasksInjection } from '../session/tasks/render.js';
 import { createRunId, type RunScope } from './run-scope.js';
 import {
   DEFAULT_TOOL_ISOLATION,
@@ -359,6 +359,8 @@ export class SessionAwareRunner {
     persona: string;
     injectedContext?: string;
     contextWindow?: number;
+    /** 任务主题线索（Memory/Cognition 检索 query） */
+    topicHints?: string;
     signal?: AbortSignal;
   }) => Promise<{
     systemPrompt: string;
@@ -524,6 +526,7 @@ export class SessionAwareRunner {
       persona: string;
       injectedContext?: string;
       contextWindow?: number;
+      topicHints?: string;
       signal?: AbortSignal;
     }) => Promise<{ systemPrompt: string; manifest?: import('../context/layer-types.js').AssembleManifest }>,
     clearSession?: (sessionId: string) => void,
@@ -825,6 +828,7 @@ export class SessionAwareRunner {
       // 结果只写入 runContext / RunScope，不作为「Agent 当前会话状态」
       if (this.systemPromptAssembler) {
         try {
+          const topicHints = extractTaskQueryHints(session.tasks ?? []);
           const assembled = await this.systemPromptAssembler({
             sessionId,
             agentId: _agentId,
@@ -832,6 +836,7 @@ export class SessionAwareRunner {
             persona: basePrompt,
             injectedContext: effectiveRunConfig.injectedContext,
             contextWindow: effectiveRunConfig.contextWindow,
+            topicHints,
             signal,
           });
           runContext.systemPrompt = assembled.systemPrompt;
@@ -847,7 +852,7 @@ export class SessionAwareRunner {
                 agentId: _agentId,
                 manifest: assembled.manifest,
                 enabledLayerIds: assembled.manifest.layers.map((l) => l.id),
-                query: extractLayerQuery(session.messages),
+                query: extractLayerQuery(session.messages, { topicHints }),
                 assembledAt,
               },
             });

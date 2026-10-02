@@ -2616,6 +2616,9 @@ export class Gateway {
           new SqliteMemoryStore(db, {
             embeddingProvider: embRuntime?.provider ?? null,
             vectorEngine: embRuntime?.vectorEngine ?? 'auto',
+            minSimilarity: this.config.memory?.retrieval?.minSimilarity,
+            similarityWeight: this.config.memory?.retrieval?.similarityWeight,
+            minKeywordScore: this.config.memory?.retrieval?.minKeywordScore,
           }),
         );
         builder.wisdomStore(new SqliteWisdomStore(db));

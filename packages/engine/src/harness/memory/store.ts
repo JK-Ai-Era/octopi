@@ -19,11 +19,26 @@ import { MEMORY_TYPES } from './types.js';
 import { mapLegacyType } from './gates.js';
 import {
   scoreKeywordFields,
-  tokenizeKeywordQuery,
+  tokenizeKeywordDetail,
 } from './sqlite/keyword-search.js';
+import {
+  DEFAULT_MIN_KEYWORD_SCORE,
+  qualityScore,
+  resolveRetrievalKnobs,
+} from './retrieval-rank.js';
 
 function emptyTypes(): Record<MemoryType, number> {
   return { fact: 0, method: 0, norm: 0 };
+}
+
+/** 是否带结构过滤（text 为空时仍可按 type/tags/channel/status 浏览；min* 单独不算） */
+function hasStructuralFilter(query: MemoryQuery): boolean {
+  return (
+    query.type !== undefined ||
+    (query.tags?.length ?? 0) > 0 ||
+    query.channel !== undefined ||
+    query.status !== undefined
+  );
 }
 
 function normalizeStatus(entry: MemoryEntry): MemoryStatus {
@@ -67,6 +82,13 @@ export class InMemoryMemoryStore implements MemoryStore {
   }
 
   async retrieve(query: MemoryQuery): Promise<MemoryEntry[]> {
+    const { minKeywordScore } = resolveRetrievalKnobs(
+      query.minSimilarity,
+      query.minKeywordScore,
+      undefined,
+      DEFAULT_MIN_KEYWORD_SCORE,
+    );
+
     let results = Array.from(this.entries.values()).filter((e) => passesVisibility(e, query));
 
     if (query.type) {
@@ -91,31 +113,41 @@ export class InMemoryMemoryStore implements MemoryStore {
       results = results.filter((e) => e.importance >= query.minImportance!);
     }
 
-    const tokens = tokenizeKeywordQuery(query.text ?? '');
-    let scored: Array<{ e: MemoryEntry; score: number }>;
-    if (tokens.length > 0) {
-      scored = results
-        .map((e) => ({
-          e,
-          score: scoreKeywordFields(
-            {
-              content: e.content,
-              tags: e.tags,
-              futureUse: e.futureUse,
-              anchors: e.anchors,
-              evidence: e.evidence,
-            },
-            tokens,
-          ),
-        }))
-        .filter((s) => s.score > 0);
-    } else {
-      scored = results.map((e) => ({ e, score: 0 }));
+    const tokens = tokenizeKeywordDetail(query.text ?? '');
+    if (tokens.all.length === 0) {
+      // 无检索词：仅在显式结构过滤时浏览；禁止空 query 扫全库
+      if (!hasStructuralFilter(query)) return [];
+      results.sort((a, b) => qualityScore(b) - qualityScore(a));
+      const limit = query.limit ?? 10;
+      results = results.slice(0, limit);
+      if (query.updateAccess !== false) {
+        for (const entry of results) {
+          entry.accessCount++;
+          entry.lastAccessedAt = Date.now();
+        }
+      }
+      return results;
     }
 
+    const scored = results
+      .map((e) => ({
+        e,
+        score: scoreKeywordFields(
+          {
+            content: e.content,
+            tags: e.tags,
+            futureUse: e.futureUse,
+            anchors: e.anchors,
+            evidence: e.evidence,
+          },
+          tokens,
+        ),
+      }))
+      .filter((s) => s.score >= minKeywordScore);
+
     scored.sort((a, b) => {
-      const rankA = a.score * 10 + a.e.importance * a.e.confidence * a.e.decayFactor;
-      const rankB = b.score * 10 + b.e.importance * b.e.confidence * b.e.decayFactor;
+      const rankA = a.score * 10 + qualityScore(a.e);
+      const rankB = b.score * 10 + qualityScore(b.e);
       return rankB - rankA;
     });
 

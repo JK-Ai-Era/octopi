@@ -812,6 +812,15 @@ export interface HarnessConfig {
       injectMinScore?: number;
       channelPriors?: Partial<Record<'user_directive' | 'decision' | 'fail_fix' | 'model_inference' | 'admin', number>>;
     };
+    /** 检索相关性地板与混合排序（自动注入宁缺毋滥） */
+    retrieval?: {
+      /** 向量路径最低余弦相似度（默认 0.35） */
+      minSimilarity?: number;
+      /** 混合排序相似度权重（默认 0.65） */
+      similarityWeight?: number;
+      /** 关键词路径最低命中分（默认 2） */
+      minKeywordScore?: number;
+    };
     gates?: {
       maxLength?: Partial<Record<'fact' | 'method' | 'norm', number>>;
     };

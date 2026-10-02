@@ -78,6 +78,14 @@
     }
   },
 
+  "memory": {
+    "retrieval": {
+      "minSimilarity": 0.35,
+      "similarityWeight": 0.65,
+      "minKeywordScore": 3
+    }
+  },
+
   "documents": {
     "extract": {
       "enabled": true,

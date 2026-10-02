@@ -8,7 +8,7 @@ export type { SessionTask, SessionTaskStatus, SessionTaskEventType } from './typ
 export { ACTIVE_SESSION_TASK_STATUSES } from './types.js';
 export { SessionTaskService } from './service.js';
 export type { SessionTaskListFilter, SessionTaskCommandActor } from './service.js';
-export { renderSessionTasksInjection } from './render.js';
+export { renderSessionTasksInjection, extractTaskQueryHints } from './render.js';
 export {
   createSessionTaskTools,
   createTaskListTool,
