@@ -18,9 +18,12 @@ export interface EmbeddingProvider {
   readonly name: string;
   /** 向量维度 */
   readonly dimensions: number;
-  /** 生成 embedding */
+  /** 生成 embedding；输入超模型上下文时由实现做截断回退 */
   embed(text: string): Promise<number[]>;
-  /** 批量生成 embedding */
+  /**
+   * 批量生成 embedding。
+   * 与入参等长；失败条目为空数组，由调用方按条续试（禁止静默丢条）。
+   */
   embedBatch(texts: string[]): Promise<number[][]>;
 }
 
@@ -111,6 +114,28 @@ function asEmbedding(value: unknown): number[] | null {
   if (typeof value[0] === 'number') return value as number[];
   // float32 buffer 等情况暂不支持
   return null;
+}
+
+/** 服务端提示输入超过模型上下文（Ollama/TEI/OpenAI 措辞不一） */
+function isContextLengthError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return /context length|input length|prompt is too long|maximum context|too many tokens|exceeds the (max|context)|max_?tokens|token limit/i.test(
+    msg,
+  );
+}
+
+/**
+ * 为 embedding 缩短输入：保头 72% + 尾 28%（表头/结论都在），中间用省略号衔接。
+ * 全文仍留在检索侧；这里只影响向量语义覆盖面。
+ */
+function shrinkEmbedText(text: string, maxChars: number): string {
+  const t = text.trim();
+  if (t.length <= maxChars) return t;
+  const marker = '\n…\n';
+  const budget = Math.max(48, maxChars - marker.length);
+  const head = Math.ceil(budget * 0.72);
+  const tail = Math.floor(budget * 0.28);
+  return `${t.slice(0, head)}${marker}${t.slice(t.length - tail)}`;
 }
 
 function defaultPath(type: EmbeddingConfig['type'], custom?: string): string {
@@ -291,7 +316,8 @@ class HttpEmbeddingProvider implements EmbeddingProvider {
           continue;
         }
         const vec = asEmbedding(getByPath(item, mapping.itemEmbeddingPath));
-        if (vec) out.push(vec);
+        // 保留空槽对齐下标；调用方按条重试，禁止静默丢条
+        out.push(vec ?? []);
       }
     }
 
@@ -303,20 +329,39 @@ class HttpEmbeddingProvider implements EmbeddingProvider {
     return out;
   }
 
-  async embed(text: string): Promise<number[]> {
+  /** 单次请求；不做截断回退 */
+  private async embedRaw(text: string): Promise<number[]> {
     const res = await fetch(this.opts.url, {
       method: 'POST',
       headers: this.buildHeaders(),
       body: JSON.stringify(this.buildBody(text)),
       signal: AbortSignal.timeout(this.opts.timeoutMs),
     });
+    const rawText = await res.text().catch(() => '');
+    let data: unknown = {};
+    if (rawText) {
+      try {
+        data = JSON.parse(rawText);
+      } catch {
+        data = {};
+      }
+    } else if (typeof (res as { json?: unknown }).json === 'function') {
+      // 测试桩可能只实现 json()；真响应 body 空则维持 {}
+      data = await res.json().catch(() => ({}));
+    }
     if (!res.ok) {
-      const detail = await res.text().catch(() => '');
+      const errText =
+        typeof (data as { error?: unknown })?.error === 'string'
+          ? (data as { error: string }).error
+          : rawText.slice(0, 200);
       throw new Error(
-        `Embedding request failed: ${res.status} ${res.statusText} ${detail.slice(0, 200)}`,
+        `Embedding request failed: ${res.status} ${res.statusText} ${errText}`.slice(0, 400),
       );
     }
-    const data = (await res.json()) as unknown;
+    const apiErr = (data as { error?: unknown })?.error;
+    if (typeof apiErr === 'string' && apiErr) {
+      throw new Error(`Embedding request failed: ${apiErr}`);
+    }
     const vec = this.extractOne(data);
     if (!vec || vec.length === 0) {
       throw new Error(
@@ -326,14 +371,43 @@ class HttpEmbeddingProvider implements EmbeddingProvider {
     return vec;
   }
 
+  async embed(text: string): Promise<number[]> {
+    try {
+      return await this.embedRaw(text);
+    } catch (err) {
+      // 模型上下文按 token 计：同字数中文密度不同，有的 2400 字能进有的不能
+      if (!isContextLengthError(err)) throw err;
+      let size = Math.min(text.trim().length, 1600);
+      while (size >= 200) {
+        try {
+          return await this.embedRaw(shrinkEmbedText(text, size));
+        } catch (e2) {
+          if (!isContextLengthError(e2)) throw e2;
+          size = Math.floor(size * 0.7);
+        }
+      }
+      throw err;
+    }
+  }
+
   async embedBatch(texts: string[]): Promise<number[][]> {
     if (texts.length === 0) return [];
     if (!this.opts.supportsBatch) {
-      // 串行调用 embed，避免并发压垮单条接口
+      // 串行调用 embed（含截断回退）；单条失败不拖垮同批其它条
       const out: number[][] = [];
+      let lastErr: unknown;
+      let ok = 0;
       for (const t of texts) {
-        out.push(await this.embed(t));
+        try {
+          const vec = await this.embed(t);
+          out.push(vec);
+          ok += 1;
+        } catch (e) {
+          lastErr = e;
+          out.push([]);
+        }
       }
+      if (ok === 0 && lastErr) throw lastErr;
       return out;
     }
 
@@ -366,20 +440,37 @@ class HttpEmbeddingProvider implements EmbeddingProvider {
     }
     const data = (await res.json()) as unknown;
     const many = this.extractMany(data);
-    if (many.length >= 1) {
-      if (many.length === texts.length) return many;
-      if (texts.length > 1) return this.embedSerial(texts);
-      return many.slice(0, 1);
+    if (many.length === texts.length) {
+      // 对齐后仍有空槽：按条补齐（embed 内含上下文截断回退）；单条失败留空槽给上层续试
+      for (let i = 0; i < many.length; i++) {
+        if (many[i]?.length) continue;
+        try {
+          many[i] = await this.embed(texts[i]!);
+        } catch {
+          many[i] = [];
+        }
+      }
+      return many;
     }
-    return this.embedSerial(texts);
+    if (texts.length > 1) return this.embedSerial(texts);
+    return many.slice(0, 1);
   }
 
   /** 串行单条（批量失败回退；避免并发风暴触发限流） */
   private async embedSerial(texts: string[]): Promise<number[][]> {
     const out: number[][] = [];
+    let lastErr: unknown;
+    let ok = 0;
     for (const t of texts) {
-      out.push(await this.embed(t));
+      try {
+        out.push(await this.embed(t));
+        ok += 1;
+      } catch (e) {
+        lastErr = e;
+        out.push([]);
+      }
     }
+    if (ok === 0 && lastErr) throw lastErr;
     return out;
   }
 }

@@ -70,6 +70,12 @@ export class KnowledgeIndexStore {
 
     this.db.raw.exec('BEGIN');
     try {
+      const oldIds = (
+        this.db.raw
+          .prepare('SELECT id FROM knowledge_chunks WHERE file_id = ?')
+          .all(fileId) as Array<{ id: string }>
+      ).map((r) => r.id);
+      this.deleteKnowledgeVec(oldIds);
       this.db.raw
         .prepare(
           `DELETE FROM knowledge_chunk_embeddings
@@ -157,17 +163,30 @@ export class KnowledgeIndexStore {
 
   /**
    * 标记 skipped — **不删** 已有 chunks（瞬时/边界失败保旧索引）；仅元数据。
+   *
+   * @param reason - 跳过原因（oversize / no_adapter / …）
+   * @param size - 文件字节数（可选；便于 UI 展示真实体积）
    */
-  markFileSkipped(sourceId: KnowledgeSourceId | string, path: string, reason: string): void {
-    this.markFileNonIndexed(sourceId, path, 'skipped', reason);
+  markFileSkipped(
+    sourceId: KnowledgeSourceId | string,
+    path: string,
+    reason: string,
+    size?: number,
+  ): void {
+    this.markFileNonIndexed(sourceId, path, 'skipped', reason, size);
   }
 
   /**
    * 标记 error — **不删** 已有 chunks（网络抖动不得清库）；仅元数据。
    * 成功 `upsertFile` 才替换 chunks。
    */
-  markFileError(sourceId: KnowledgeSourceId | string, path: string, error: string): void {
-    this.markFileNonIndexed(sourceId, path, 'error', error);
+  markFileError(
+    sourceId: KnowledgeSourceId | string,
+    path: string,
+    error: string,
+    size?: number,
+  ): void {
+    this.markFileNonIndexed(sourceId, path, 'error', error, size);
   }
 
   private markFileNonIndexed(
@@ -175,24 +194,27 @@ export class KnowledgeIndexStore {
     path: string,
     status: 'skipped' | 'error',
     detail: string,
+    size?: number,
   ): void {
     const now = Date.now();
     const existing = this.db.raw
-      .prepare('SELECT id, chunk_count FROM knowledge_files WHERE source_id = ? AND path = ?')
-      .get(sourceId, path) as { id?: string; chunk_count?: number } | undefined;
+      .prepare('SELECT id, chunk_count, size FROM knowledge_files WHERE source_id = ? AND path = ?')
+      .get(sourceId, path) as { id?: string; chunk_count?: number; size?: number } | undefined;
     const fileId = existing?.id ?? `kf_${randomUUID().slice(0, 12)}`;
     const chunkCount = existing?.chunk_count ?? 0;
+    const fileSize = size ?? existing?.size ?? 0;
     this.db.raw
       .prepare(
         `INSERT INTO knowledge_files (
           id, source_id, path, content_hash, size, mtime, adapter_id, status, error, chunk_count, indexed_at
-        ) VALUES (?, ?, ?, '', 0, 0, NULL, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, '', ?, 0, NULL, ?, ?, ?, ?)
         ON CONFLICT(source_id, path) DO UPDATE SET
           status=excluded.status,
           error=excluded.error,
+          size=excluded.size,
           indexed_at=excluded.indexed_at`,
       )
-      .run(fileId, sourceId, path, status, detail, chunkCount, now);
+      .run(fileId, sourceId, path, fileSize, status, detail, chunkCount, now);
   }
 
   /**
@@ -226,6 +248,166 @@ export class KnowledgeIndexStore {
   }
 
   /**
+   * 源文件分页 + 状态/扩展名筛选（管理面列表）
+   *
+   * @param sourceId - 源 id
+   * @param opts - status / ext / q / page / pageSize
+   * @returns 当前页 + 总数 + 状态/扩展名聚合（供筛选芯片）
+   */
+  listFilesPaged(
+    sourceId: KnowledgeSourceId | string,
+    opts?: {
+      status?: 'indexed' | 'skipped' | 'error' | 'all';
+      /** 扩展名（不含点；`all`/空 = 不限） */
+      ext?: string;
+      /** path 子串（大小写不敏感） */
+      q?: string;
+      page?: number;
+      pageSize?: number;
+    },
+  ): {
+    items: Array<IndexedFileRecord & { ext: string }>;
+    total: number;
+    page: number;
+    pageSize: number;
+    statusCounts: { indexed: number; skipped: number; error: number };
+    extCounts: Array<{ ext: string; n: number }>;
+  } {
+    const page = Math.max(1, Math.floor(opts?.page ?? 1));
+    const pageSize = Math.min(200, Math.max(1, Math.floor(opts?.pageSize ?? 50)));
+    const status = opts?.status && opts.status !== 'all' ? opts.status : null;
+    const ext = opts?.ext?.trim().replace(/^\./, '').toLowerCase() || null;
+    const q = opts?.q?.trim() || null;
+
+    const where: string[] = ['source_id = ?'];
+    const params: Array<string | number> = [String(sourceId)];
+    if (status) {
+      where.push('status = ?');
+      params.push(status);
+    }
+    if (ext) {
+      // 后缀精确（忽略大小写）
+      where.push(`LOWER(path) LIKE ?`);
+      params.push(`%.${ext}`);
+    }
+    if (q) {
+      where.push(`LOWER(path) LIKE ?`);
+      params.push(`%${q.toLowerCase()}%`);
+    }
+    const whereSql = where.join(' AND ');
+
+    const totalRow = this.db.raw
+      .prepare(`SELECT COUNT(*) AS n FROM knowledge_files WHERE ${whereSql}`)
+      .get(...params) as { n: number };
+    const total = Number(totalRow?.n ?? 0);
+
+    const rows = this.db.raw
+      .prepare(
+        `SELECT * FROM knowledge_files WHERE ${whereSql}
+         ORDER BY path LIMIT ? OFFSET ?`,
+      )
+      .all(...params, pageSize, (page - 1) * pageSize) as Array<Record<string, unknown>>;
+
+    const statusRows = this.db.raw
+      .prepare(
+        `SELECT status, COUNT(*) AS n FROM knowledge_files
+         WHERE source_id = ? GROUP BY status`,
+      )
+      .all(sourceId) as Array<{ status: string; n: number }>;
+    const statusCounts = { indexed: 0, skipped: 0, error: 0 };
+    for (const r of statusRows) {
+      if (r.status === 'indexed' || r.status === 'skipped' || r.status === 'error') {
+        statusCounts[r.status] = Number(r.n);
+      }
+    }
+
+    // 扩展名聚合：忽略当前 ext 筛选，便于切换类型（path 行数可控；admin 面偶发）
+    const facetRows = this.db.raw
+      .prepare(
+        `SELECT path FROM knowledge_files WHERE source_id = ? AND status = COALESCE(?, status)`,
+      )
+      .all(sourceId, status) as Array<{ path: string }>;
+    const extMap = new Map<string, number>();
+    for (const r of facetRows) {
+      const p = r.path;
+      const dot = p.lastIndexOf('.');
+      const slash = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'));
+      const e = dot > slash && dot >= 0 ? p.slice(dot + 1).toLowerCase() : '';
+      if (!e) continue;
+      extMap.set(e, (extMap.get(e) ?? 0) + 1);
+    }
+
+    const items = rows.map((row) => {
+      const rec = rowToFile(row);
+      const path = rec.path;
+      const dot = path.lastIndexOf('.');
+      const slash = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
+      const e = dot > slash && dot >= 0 ? path.slice(dot + 1).toLowerCase() : '';
+      return { ...rec, ext: e };
+    });
+
+    return {
+      items,
+      total,
+      page,
+      pageSize,
+      statusCounts,
+      extCounts: [...extMap.entries()]
+        .map(([ext, n]) => ({ ext, n }))
+        .sort((a, b) => b.n - a.n || a.ext.localeCompare(b.ext))
+        .slice(0, 30),
+    };
+  }
+
+  /**
+   * 重做前失效 contentHash，强制下次 parse 跳过 isFresh。
+   * **不删** chunks/embeddings：成功 upsert 才替换，失败不丢旧索引。
+   *
+   * @param sourceId - 源 id
+   * @param path - 文件路径
+   */
+  invalidateFileForReparse(sourceId: KnowledgeSourceId | string, path: string): void {
+    this.db.raw
+      .prepare(
+        `UPDATE knowledge_files SET content_hash = '' WHERE source_id = ? AND path = ?`,
+      )
+      .run(String(sourceId), path);
+  }
+
+  /**
+   * 按筛选列出 path（批量重做用；不分页）
+   *
+   * @param sourceId - 源 id
+   * @param opts - 与 listFilesPaged 相同筛选语义
+   */
+  listFilePathsFiltered(
+    sourceId: KnowledgeSourceId | string,
+    opts?: { status?: 'indexed' | 'skipped' | 'error' | 'all'; ext?: string; q?: string },
+  ): string[] {
+    const where: string[] = ['source_id = ?'];
+    const params: Array<string | number> = [String(sourceId)];
+    const status = opts?.status && opts.status !== 'all' ? opts.status : null;
+    if (status) {
+      where.push('status = ?');
+      params.push(status);
+    }
+    const ext = opts?.ext?.trim().replace(/^\./, '').toLowerCase();
+    if (ext && ext !== 'all') {
+      where.push('LOWER(path) LIKE ?');
+      params.push(`%.${ext}`);
+    }
+    const q = opts?.q?.trim();
+    if (q) {
+      where.push('LOWER(path) LIKE ?');
+      params.push(`%${q.toLowerCase()}%`);
+    }
+    const rows = this.db.raw
+      .prepare(`SELECT path FROM knowledge_files WHERE ${where.join(' AND ')} ORDER BY path`)
+      .all(...params) as Array<{ path: string }>;
+    return rows.map((r) => r.path);
+  }
+
+  /**
    * 单文件 purge（合规）：chunks + embeddings + files 行
    */
   purgePath(sourceId: KnowledgeSourceId | string, path: string): void {
@@ -243,6 +425,12 @@ export class KnowledgeIndexStore {
    * 删除源下全部 index（卸载 / rebuild）
    */
   clearSource(sourceId: KnowledgeSourceId | string): void {
+    const ids = (
+      this.db.raw
+        .prepare('SELECT id FROM knowledge_chunks WHERE source_id = ?')
+        .all(sourceId) as Array<{ id: string }>
+    ).map((r) => r.id);
+    this.deleteKnowledgeVec(ids);
     this.db.raw
       .prepare(
         `DELETE FROM knowledge_chunk_embeddings
@@ -254,6 +442,12 @@ export class KnowledgeIndexStore {
   }
 
   removeFile(sourceId: KnowledgeSourceId | string, path: string): void {
+    const oldIds = (
+      this.db.raw
+        .prepare('SELECT id FROM knowledge_chunks WHERE source_id = ? AND path = ?')
+        .all(sourceId, path) as Array<{ id: string }>
+    ).map((r) => r.id);
+    this.deleteKnowledgeVec(oldIds);
     this.db.raw
       .prepare(
         `DELETE FROM knowledge_chunk_embeddings
@@ -289,6 +483,7 @@ export class KnowledgeIndexStore {
     this.db.raw.exec('BEGIN');
     try {
       if (chunkIds.length > 0) {
+        this.deleteKnowledgeVec(chunkIds);
         const delEmb = this.db.raw.prepare('DELETE FROM knowledge_chunk_embeddings WHERE chunk_id = ?');
         for (const id of chunkIds) delEmb.run(id);
       }
@@ -618,17 +813,100 @@ export class KnowledgeIndexStore {
   private upsertKnowledgeVec(chunkId: KnowledgeSourceId | string | KnowledgeChunkId, embedding: number[]): void {
     if (!this.ensureVecTable(embedding.length)) return;
     try {
+      // vec0 虚拟表不支持 INSERT … ON CONFLICT UPSERT → 必须 DELETE + INSERT
+      this.db.raw
+        .prepare(`DELETE FROM ${KnowledgeIndexStore.VEC_TABLE} WHERE chunk_id = ?`)
+        .run(String(chunkId));
       this.db.raw
         .prepare(
           `INSERT INTO ${KnowledgeIndexStore.VEC_TABLE} (chunk_id, embedding)
-           VALUES (?, ?)
-           ON CONFLICT(chunk_id) DO UPDATE SET embedding = excluded.embedding`,
+           VALUES (?, ?)`,
         )
         .run(String(chunkId), toF32Blob(embedding));
     } catch {
       // vec 表不可用时忽略，检索走 JS 路径
     }
   }
+
+  /** 删除 sqlite-vec 行（chunk 级清理；扩展未加载时 no-op） */
+  private deleteKnowledgeVec(chunkIds: string[]): void {
+    if (chunkIds.length === 0 || !this.db.sqliteVecEnabled) return;
+    try {
+      const del = this.db.raw.prepare(
+        `DELETE FROM ${KnowledgeIndexStore.VEC_TABLE} WHERE chunk_id = ?`,
+      );
+      for (const id of chunkIds) del.run(String(id));
+    } catch {
+      // 扩展不可用 / 表不存在
+    }
+  }
+
+  /**
+   * 把已有 BLOB 向量回填进 sqlite-vec。
+   *
+   * **必须小批量 + 让出事件循环**：node:sqlite 同步，大循环会堵死 HTTP（中止按钮假死）。
+   * 按 chunk_id 游标推进，避免每次从头 JOIN 大表。
+   *
+   * @param limit - 本轮最多回填条数（建议 ≤50）
+   * @returns 本轮写入条数；扩展未启用时 0
+   */
+  async backfillVecFromEmbeddings(limit = 25): Promise<number> {
+    if (!this.db.sqliteVecEnabled) return 0;
+    if (this._vecBackfillBusy) return 0;
+    this._vecBackfillBusy = true;
+    try {
+      const dimRow = this.db.raw
+        .prepare(
+          `SELECT dimensions FROM knowledge_chunk_embeddings
+           WHERE dimensions > 0 ORDER BY created_at DESC LIMIT 1`,
+        )
+        .get() as { dimensions?: number } | undefined;
+      const dims = Number(dimRow?.dimensions ?? 0);
+      if (!dims || !this.ensureVecTable(dims)) return 0;
+
+      const rows = this.db.raw
+        .prepare(
+          `SELECT chunk_id, embedding FROM knowledge_chunk_embeddings
+           WHERE dimensions = ? AND chunk_id > ?
+           ORDER BY chunk_id
+           LIMIT ?`,
+        )
+        .all(dims, this._vecBackfillCursor, Math.min(50, Math.max(1, limit))) as Array<{
+        chunk_id: string;
+        embedding: Uint8Array | Buffer;
+      }>;
+      if (rows.length === 0) {
+        // 游标到尾：重置，便于后续新向量（幂等重写也无害）
+        this._vecBackfillCursor = '';
+        return 0;
+      }
+      let n = 0;
+      for (const r of rows) {
+        try {
+          this.db.raw
+            .prepare(`DELETE FROM ${KnowledgeIndexStore.VEC_TABLE} WHERE chunk_id = ?`)
+            .run(String(r.chunk_id));
+          this.db.raw
+            .prepare(
+              `INSERT INTO ${KnowledgeIndexStore.VEC_TABLE} (chunk_id, embedding) VALUES (?, ?)`,
+            )
+            .run(String(r.chunk_id), r.embedding);
+          n += 1;
+          this._vecBackfillCursor = String(r.chunk_id);
+        } catch {
+          // 单条失败跳过
+        }
+        // 每条让出一次，保证 abort/HTTP 可调度
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+      return n;
+    } finally {
+      this._vecBackfillBusy = false;
+    }
+  }
+
+  private _vecBackfillBusy = false;
+  private _vecBackfillCursor = '';
 
   /**
    * 列出待嵌入 chunk（无向量行）

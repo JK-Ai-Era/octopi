@@ -9,6 +9,7 @@ import {
 } from '@octopi-agent/gateway/web/sdk/client';
 import { SourceDetailPanel } from './SourceDetailPanel';
 import { AgentKnowledgeView } from './AgentKnowledgeView';
+import { OpFeedback, useOpFeedback } from './OpFeedback';
 import { resolveDefaultBase } from '../gateway-base';
 
 type Panel = 'global' | 'projects' | 'agents' | 'search';
@@ -42,7 +43,7 @@ function SourceRow({
   agentId: string;
   agents: string[];
   source: KnowledgeSourceDto;
-  onReindex: () => void;
+  onReindex: () => void | Promise<unknown>;
   onDelete: () => void;
   onPatch: (patch: Record<string, unknown>) => Promise<void> | void;
   onChanged?: () => void;
@@ -52,7 +53,38 @@ function SourceRow({
   const [open, setOpen] = useState(false);
   const [hideOpen, setHideOpen] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [jobControl, setJobControl] = useState<{
+    aborted: boolean;
+    canAbort: boolean;
+    canResume: boolean;
+  } | null>(null);
+  const { op, busy, show, run } = useOpFeedback();
   useEffect(() => setDesc(source.description ?? ''), [source.description]);
+
+  // 中止/继续 互斥：按任务读数刷新（与全局工具栏同一语义）
+  useEffect(() => {
+    let stop = false;
+    const load = async () => {
+      try {
+        const d = await client.getKnowledgeSourceDetail(agentId, source.id);
+        if (stop || !d?.jobControl) return;
+        setJobControl({
+          aborted: d.jobControl.aborted,
+          canAbort: d.jobControl.canAbort,
+          canResume: d.jobControl.canResume,
+        });
+      } catch {
+        /* 控制按钮读数失败不阻断主面板 */
+      }
+    };
+    void load();
+    // 操作后加快刷新，按钮状态尽快切换
+    const t = setInterval(() => void load(), busy ? 1500 : 4000);
+    return () => {
+      stop = true;
+      clearInterval(t);
+    };
+  }, [agentId, busy, client, source.id]);
 
   const isGlobal = source.scopeRef.level === 'global';
   const nextDesc = desc.trim();
@@ -153,31 +185,75 @@ function SourceRow({
         )}
       </div>
       <div className="kn-source-actions">
-        <button type="button" className="btn-secondary small" onClick={onReindex}>
-          重建索引
-        </button>
-        <button
-          type="button"
-          className="btn-ghost small"
-          onClick={() => {
-            void client.abortKnowledgeSourceJobs(agentId, source.id).then(onChanged ?? (() => {})).catch(() => {});
-          }}
-        >
-          中止
-        </button>
         <button
           type="button"
           className="btn-secondary small"
-          onClick={() => {
-            void client.resumeKnowledgeSourceJobs(agentId, source.id).then(onChanged ?? (() => {})).catch(() => {});
-          }}
+          disabled={busy === 'reindex'}
+          onClick={() =>
+            void run(
+              'reindex',
+              async () => {
+                await onReindex();
+                return null;
+              },
+              () => {
+                show('已开始重建索引…（后台解析，可继续用关键词搜）', 'info');
+                onChanged?.();
+              },
+            )
+          }
         >
-          继续
+          {busy === 'reindex' ? '重建中…' : '重建索引'}
         </button>
+        {jobControl?.canAbort && (
+          <button
+            type="button"
+            className="btn-ghost small"
+            disabled={busy === 'abort'}
+            onClick={() =>
+              void run(
+                'abort',
+                () => client.abortKnowledgeSourceJobs(agentId, source.id),
+                (r) => {
+                  const tail = r.runningJobs ?? 0;
+                  show(
+                    tail > 0
+                      ? `已中止：清队列 ${r.cancelledQueued} 条 · 仍有 ${tail} 个任务在收尾（当前 embedding 批次返回后停）`
+                      : `已中止：清队列 ${r.cancelledQueued} 条`,
+                    'warn',
+                  );
+                  onChanged?.();
+                },
+              )
+            }
+          >
+            {busy === 'abort' ? '中止中…' : '中止'}
+          </button>
+        )}
+        {!jobControl?.canAbort && jobControl?.canResume && (
+          <button
+            type="button"
+            className="btn-secondary small"
+            disabled={busy === 'resume'}
+            onClick={() =>
+              void run(
+                'resume',
+                () => client.resumeKnowledgeSourceJobs(agentId, source.id),
+                (r) => {
+                  show(`已继续：恢复 ${r.restoredCancelled} 条 · 补向量 ${r.embedQueued} 条`, 'ok');
+                  onChanged?.();
+                },
+              )
+            }
+          >
+            {busy === 'resume' ? '继续中…' : '继续'}
+          </button>
+        )}
         <button type="button" className="btn-ghost small" onClick={onDelete}>
           卸载
         </button>
       </div>
+      <OpFeedback op={op} />
     </div>
   );
 }
@@ -258,6 +334,7 @@ export function KnowledgeAdminPanel({ agentId }: { agentId: string }) {
   const [agents, setAgents] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const { op: globalOp, busy: opBusy, show: showOp, run: runOp } = useOpFeedback();
 
   const [newProjectKey, setNewProjectKey] = useState('');
   const [newSource, setNewSource] = useState({
@@ -490,13 +567,25 @@ export function KnowledgeAdminPanel({ agentId }: { agentId: string }) {
             type="button"
             className="btn-ghost small"
             style={{ marginLeft: 8 }}
-            onClick={() => {
-              void client.abortAllKnowledgeJobs(agentId).then(refresh).catch((e: unknown) => {
-                setError(e instanceof Error ? e.message : String(e));
-              });
-            }}
+            disabled={opBusy === 'abortAll'}
+            onClick={() =>
+              void runOp(
+                'abortAll',
+                () => client.abortAllKnowledgeJobs(agentId),
+                (r) => {
+                  const tail = r.runningJobs ?? 0;
+                  showOp(
+                    tail > 0
+                      ? `已中止全部：清队列 ${r.cancelledQueued} 条 · ${tail} 个任务收尾中（embedding 批次返回后停）`
+                      : `已中止全部：清队列 ${r.cancelledQueued} 条`,
+                    'warn',
+                  );
+                  void refresh();
+                },
+              )
+            }
           >
-            中止索引
+            {opBusy === 'abortAll' ? '中止中…' : '中止索引'}
           </button>
         ) : (
           (stats.embeddableChunks ?? 0) > (stats.embeddings ?? 0) ||
@@ -506,17 +595,24 @@ export function KnowledgeAdminPanel({ agentId }: { agentId: string }) {
               type="button"
               className="btn-secondary small"
               style={{ marginLeft: 8 }}
-              onClick={() => {
-                void client.resumeAllKnowledgeJobs(agentId).then(refresh).catch((e: unknown) => {
-                  setError(e instanceof Error ? e.message : String(e));
-                });
-              }}
+              disabled={opBusy === 'resumeAll'}
+              onClick={() =>
+                void runOp(
+                  'resumeAll',
+                  () => client.resumeAllKnowledgeJobs(agentId),
+                  (r) => {
+                    showOp(`已继续索引：恢复 ${r.restoredCancelled} 条 · 补向量 ${r.embedQueued} 条`, 'ok');
+                    void refresh();
+                  },
+                )
+              }
             >
-              继续索引
+              {opBusy === 'resumeAll' ? '继续中…' : '继续索引'}
             </button>
           ) : null
         )}
       </div>
+      <OpFeedback op={globalOp} />
 
       {progress && (
         <div className="kn-progress small" title={progress.path ?? undefined}>
@@ -583,9 +679,9 @@ export function KnowledgeAdminPanel({ agentId }: { agentId: string }) {
                 agentId={agentId}
                 agents={agents}
                 source={s}
-                onReindex={() => {
-                  void client.reindexKnowledgeSource(agentId, s.id).then(refresh);
-                }}
+                onReindex={() =>
+                  client.reindexKnowledgeSource(agentId, s.id).then(() => refresh())
+                }
                 onDelete={() => {
                   if (confirm(`卸载「${s.displayName}」？会清索引与使用痕迹。`)) {
                     void client.deleteKnowledgeSource(agentId, s.id).then(refresh);
@@ -737,9 +833,9 @@ export function KnowledgeAdminPanel({ agentId }: { agentId: string }) {
                       agentId={agentId}
                       agents={agents}
                       source={s}
-                      onReindex={() => {
-                        void client.reindexKnowledgeSource(agentId, s.id).then(refresh);
-                      }}
+                      onReindex={() =>
+                        client.reindexKnowledgeSource(agentId, s.id).then(() => refresh())
+                      }
                       onDelete={() => {
                         if (confirm(`卸载「${s.displayName}」？会清索引与使用痕迹。`)) {
                           void client.deleteKnowledgeSource(agentId, s.id).then(refresh);

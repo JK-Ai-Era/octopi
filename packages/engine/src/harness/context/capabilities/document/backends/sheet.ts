@@ -75,7 +75,7 @@ export const sheetXlsxBackend: DocumentExtractBackend = {
   accepts({ format }) {
     return format === 'xlsx' || format === 'xls';
   },
-  async extract(source: ResolvedExtractSource, _options: ExtractOptions): Promise<ExtractResult> {
+  async extract(source: ResolvedExtractSource, options: ExtractOptions): Promise<ExtractResult> {
     const xlsx = await loadXlsx();
     if (!xlsx) {
       throw new DocumentExtractError('BACKEND_UNAVAILABLE', 'xlsx (SheetJS) is not installed', [
@@ -91,11 +91,35 @@ export const sheetXlsxBackend: DocumentExtractBackend = {
       throw new DocumentExtractError('INVALID_SOURCE', `Spreadsheet extract failed: ${msg}`);
     }
 
+    const warnings: ExtractResult['warnings'] = [];
+    const maxSheets = options.maxSheets && options.maxSheets > 0 ? options.maxSheets : Infinity;
+    const maxRows =
+      options.maxRowsPerSheet && options.maxRowsPerSheet > 0
+        ? options.maxRowsPerSheet
+        : Infinity;
+
+    const names = wb.SheetNames;
+    const usedNames = names.slice(0, maxSheets === Infinity ? names.length : maxSheets);
+    if (usedNames.length < names.length) {
+      warnings.push({
+        code: 'PARTIAL_EXTRACT',
+        message: `sheets truncated: ${usedNames.length}/${names.length} (maxSheets=${options.maxSheets})`,
+      });
+    }
+
     const parts: string[] = [];
-    for (const name of wb.SheetNames) {
+    for (const name of usedNames) {
       const sheet = wb.Sheets[name];
       const rows = xlsx.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: '' });
-      parts.push(`## ${name}\n\n${sheetToMarkdown(rows)}`);
+      const usedRows =
+        maxRows === Infinity || rows.length <= maxRows ? rows : rows.slice(0, maxRows);
+      if (usedRows.length < rows.length) {
+        warnings.push({
+          code: 'PARTIAL_EXTRACT',
+          message: `sheet "${name}" rows truncated: ${usedRows.length}/${rows.length} (maxRowsPerSheet=${options.maxRowsPerSheet})`,
+        });
+      }
+      parts.push(`## ${name}\n\n${sheetToMarkdown(usedRows)}`);
     }
 
     return {
@@ -103,7 +127,7 @@ export const sheetXlsxBackend: DocumentExtractBackend = {
       meta: {
         format: source.formatHint === 'xls' ? 'xls' : 'xlsx',
       },
-      warnings: [],
+      warnings,
       backend: 'sheet-xlsx',
     };
   },

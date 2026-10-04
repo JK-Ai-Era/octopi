@@ -546,8 +546,82 @@ export class WebApiRouter {
         /^\/agents\/([^/]+)\/knowledge\/sources\/([^/]+)\/files$/,
       );
       if (knowledgeSourceFilesMatch && method === 'GET') {
+        const page = Number(url.searchParams.get('page') ?? '1');
+        const pageSize = Number(url.searchParams.get('pageSize') ?? '50');
+        const status = (url.searchParams.get('status') ?? 'all') as
+          | 'indexed'
+          | 'skipped'
+          | 'error'
+          | 'all';
+        const ext = url.searchParams.get('ext') ?? undefined;
+        const q = url.searchParams.get('q') ?? undefined;
+        // 带分页参数时走分页；无参保持旧「全量数组」响应
+        const paged =
+          url.searchParams.has('page') ||
+          url.searchParams.has('pageSize') ||
+          url.searchParams.has('status') ||
+          url.searchParams.has('ext') ||
+          url.searchParams.has('q');
+        if (paged) {
+          const data = await this.gateway.listKnowledgeSourceFilesPaged(
+            knowledgeSourceFilesMatch[2],
+            {
+              status,
+              ext,
+              q,
+              page: Number.isFinite(page) && page > 0 ? page : 1,
+              pageSize: Number.isFinite(pageSize) && pageSize > 0 ? pageSize : 50,
+            },
+          );
+          return this.json(res, 200, { ok: true, data });
+        }
         const files = await this.gateway.listKnowledgeSourceFiles(knowledgeSourceFilesMatch[2]);
         return this.json(res, 200, { ok: true, data: files });
+      }
+
+      // 重做文件：单路径 / 批量路径 / 按筛选批量
+      const knowledgeReprocessMatch = relativePath.match(
+        /^\/agents\/([^/]+)\/knowledge\/sources\/([^/]+)\/reprocess$/,
+      );
+      if (knowledgeReprocessMatch && method === 'POST') {
+        const body = await this.readBody(req).catch(() => ({}));
+        try {
+          const result = await this.gateway.reprocessKnowledgeFiles(
+            knowledgeReprocessMatch[2],
+            {
+              paths: Array.isArray(body?.paths)
+                ? body.paths.filter((p: unknown) => typeof p === 'string' && p)
+                : undefined,
+              filter: body?.filter ?? {
+                status: body?.status,
+                ext: body?.ext,
+                q: body?.q,
+              },
+            },
+          );
+          return this.json(res, 200, result);
+        } catch (err) {
+          return this.json(res, 400, {
+            ok: false,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+
+      // 路径任务状态（重做完成跟踪）
+      const knowledgePathJobsMatch = relativePath.match(
+        /^\/agents\/([^/]+)\/knowledge\/sources\/([^/]+)\/path-jobs$/,
+      );
+      if (knowledgePathJobsMatch && method === 'POST') {
+        const body = await this.readBody(req).catch(() => ({}));
+        const paths = Array.isArray(body?.paths)
+          ? body.paths.filter((p: unknown) => typeof p === 'string' && p)
+          : [];
+        const data = await this.gateway.knowledgePathJobStates(
+          knowledgePathJobsMatch[2],
+          paths,
+        );
+        return this.json(res, 200, { ok: true, data });
       }
 
       const knowledgeChunksMatch = relativePath.match(/^\/agents\/([^/]+)\/knowledge\/chunks$/);

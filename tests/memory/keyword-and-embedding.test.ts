@@ -375,6 +375,84 @@ describe('HttpEmbeddingProvider response parsing', () => {
     expect(batchSizes).toEqual([2, 2, 1]);
   });
 
+  it('retries embed with head+tail truncation on context-length error', async () => {
+    const { createEmbeddingProvider } = await import(
+      '@octopi-agent/engine/harness/memory/sqlite/embedding.js'
+    );
+    const lengths: number[] = [];
+    globalThis.fetch = (async (_url: unknown, init?: { body?: string }) => {
+      const body = JSON.parse(init?.body ?? '{}') as { prompt?: string };
+      const prompt = body.prompt ?? '';
+      lengths.push(prompt.length);
+      if (prompt.length > 1000) {
+        return {
+          ok: false,
+          status: 400,
+          statusText: 'Bad Request',
+          json: async () => ({ error: 'the input length exceeds the context length' }),
+          text: async () => '{"error":"the input length exceeds the context length"}',
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        json: async () => ({ embedding: [1, 0] }),
+        text: async () => '',
+      };
+    }) as unknown as typeof fetch;
+
+    const provider = createEmbeddingProvider({
+      type: 'ollama',
+      baseUrl: 'http://127.0.0.1:11434',
+      model: 'bge-m3',
+      dimensions: 2,
+    });
+    const long = '表'.repeat(2400);
+    await expect(provider!.embed(long)).resolves.toEqual([1, 0]);
+    expect(lengths[0]).toBe(2400);
+    expect(lengths.some((n) => n > 0 && n < 2400)).toBe(true);
+  });
+
+  it('embedBatch serial keeps partial successes and leaves empty slots for failures', async () => {
+    const { createEmbeddingProvider } = await import(
+      '@octopi-agent/engine/harness/memory/sqlite/embedding.js'
+    );
+    globalThis.fetch = (async (_url: unknown, init?: { body?: string }) => {
+      const body = JSON.parse(init?.body ?? '{}') as { prompt?: string };
+      const prompt = body.prompt ?? '';
+      if (prompt.includes('BAD')) {
+        return {
+          ok: false,
+          status: 500,
+          statusText: 'ERR',
+          json: async () => ({ error: 'boom' }),
+          text: async () => '{"error":"boom"}',
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        json: async () => ({ embedding: [1, 0] }),
+        text: async () => '',
+      };
+    }) as unknown as typeof fetch;
+
+    const provider = createEmbeddingProvider({
+      type: 'ollama',
+      baseUrl: 'http://127.0.0.1:11434',
+      model: 'bge-m3',
+      dimensions: 2,
+    });
+    const out = await provider!.embedBatch(['ok1', 'BAD', 'ok2']);
+    expect(out).toEqual([
+      [1, 0],
+      [],
+      [1, 0],
+    ]);
+  });
+
   it('memory retrieve degrades to keyword when embed fails', async () => {
     const db = await AgentDatabase.create({ dbPath: ':memory:' });
     const failing: EmbeddingProvider = {

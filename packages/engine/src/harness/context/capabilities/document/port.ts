@@ -86,8 +86,10 @@ function tierOrder(tier: ExtractTier | undefined): Array<'t0' | 't1' | 't2'> {
 async function resolveBytes(
   source: ExtractSource,
   config: DocumentPortConfig,
+  extractOptions?: ExtractOptions,
 ): Promise<{ data: Uint8Array; name?: string }> {
-  const maxBytes = config.maxFileBytes ?? DEFAULT_CONFIG.maxFileBytes;
+  const maxBytes =
+    extractOptions?.maxFileBytes ?? config.maxFileBytes ?? DEFAULT_CONFIG.maxFileBytes;
 
   if (source.data) {
     if (source.data.byteLength > maxBytes) {
@@ -292,7 +294,7 @@ export function createDefaultDocumentPort(options: CreateDocumentPortOptions = {
         throw new DocumentExtractError('BACKEND_UNAVAILABLE', 'document extract is disabled');
       }
 
-      const { data, name } = await resolveBytes(source, config);
+      const { data, name } = await resolveBytes(source, config, extractOptions);
       const head = data.subarray(0, 8);
       let format = resolveFormat(source, head);
       if (format === 'unknown') {

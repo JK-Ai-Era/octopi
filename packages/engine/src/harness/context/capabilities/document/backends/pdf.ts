@@ -73,7 +73,8 @@ export const pdfUnpdfBackend: DocumentExtractBackend = {
       const pdf = await unpdf.getDocumentProxy(source.data, {
         ...(source.password ? { password: source.password } : {}),
       });
-      const { totalPages, text } = await unpdf.extractText(pdf, { mergePages: true });
+      // mergePages:false → 按页数组，便于 maxPages 截断
+      const { totalPages, text } = await unpdf.extractText(pdf, { mergePages: false });
       let title: string | undefined;
       let author: string | undefined;
       try {
@@ -84,7 +85,18 @@ export const pdfUnpdfBackend: DocumentExtractBackend = {
         // metadata is optional; extraction result remains usable
       }
 
-      const markdown = Array.isArray(text) ? text.join('\n\n') : text;
+      const pages = Array.isArray(text) ? text : [text];
+      const maxPages =
+        options.maxPages && options.maxPages > 0 ? options.maxPages : pages.length;
+      const usedPages = pages.slice(0, Math.min(maxPages, pages.length));
+      if (usedPages.length < totalPages) {
+        warnings.push({
+          code: 'PARTIAL_EXTRACT',
+          message: `pages truncated: ${usedPages.length}/${totalPages} (maxPages=${options.maxPages})`,
+        });
+      }
+
+      const markdown = usedPages.join('\n\n');
       return {
         markdown,
         meta: {

@@ -1,3 +1,67 @@
+## v0.59.0
+
+### feat(knowledge): 大文件分级限额 + 部分入索引（可配置）
+
+**问题**：ingest 全局 5MB 直接 skip，云锡语料 132 个 oversize 里 **111 个是 pptx 汇报材料**；DocumentPort 本可抽 50MB，知识层却提前拦掉。
+
+**方案**（业务完整优先：软超限 partial，而不是整文件消失）
+
+- **按格式分级上限**（缺省可配 `knowledge.index.files`）  
+  `officeDoc`(docx/pptx) 200MB · `pdf` 50MB · `sheet` 50MB · `text` 20MB · 兜底 50MB  
+  `hardMaxFileBytes` 256MB：partial 尝试的绝对内存闸门
+- **`oversize: partial | skip`**（默认 partial）：软超限仍入索引  
+  - xlsx：maxSheets=20 / maxRowsPerSheet=5000  
+  - pdf：maxPdfPages=200  
+  - text：maxTextChars=2e6  
+  抽取侧写 `PARTIAL_EXTRACT` warning
+- **parse 超时随体积放大**（45s + 5s/MB，封顶 5min）；外层 job 超时同步放大
+- **skip 落库真实 size**（原先一律 0，UI 无法看出体积）
+- **媒体（m4a 等）**：仍走「无适配器 → no_adapter 跳过」，后续加适配器即可接入；**压缩包**继续不抽（BINARY/ignored_path）
+- DocumentPort `ExtractOptions.maxFileBytes` 可按次覆盖；知识层用 hardMax 打开 partial 通道
+
+**为何「跑了任务仍不入索引」**
+
+- 缺口扫描原先只补「库里完全没有的文件」，**已 `skipped` 的 oversize 永不重试**
+- `reconcileJobs` 在未配置 embedding 时提前 return，**parse 缺口扫描也不跑**
+- 现：`oversize*` / `empty_content` 在限额可接受时自动再入队；legacy `oversize`（size=0）也会重试并写入真实 size；媒体 `no_adapter`、压缩包 `ignored_path` 不重试
+
+**向量 / sqlite-vec**
+
+- **vec0 不支持 `INSERT … ON CONFLICT` UPSERT**：旧写入被静默吞掉，`knowledge_vec` 恒空 → 检索一直走 JS 余弦  
+  现改为 **DELETE + INSERT**；删 chunk 时同步清 vec 行；对账时 **backfill** 存量 BLOB → vec（可走 KNN）
+- **修「点中止后假死」**：vec 回填原 2000 条同步写 + 大表 JOIN 会堵死事件循环，HTTP 全部超时  
+  现为 **游标 + 每轮 ≤25 条 + setImmediate 让出**；清理脏行 60s 节流；前端操作请求 15s 超时回执
+- **中止态下的「重做」**：原先 enqueue 静默丢弃却仍改 contentHash 并误报已入队  
+  现为 **显式重做 = 自动 resume + 可靠入队**，回执含 `已自动继续索引`；enqueue 返回是否真实入队
+- **重做回执可信**：区分 `新入队 / 已在执行 / 目录脏行已清理`，不再把「已在队列」说成「未入队」；入队后**轮询到任务结束**再报 `完成：indexed·N块` / `skipped`
+
+**管理面 / 索引卫生**
+
+- **操作反馈**：中止/继续/重建/重做 按钮忙态 + 即时回执条（清队列 N · 收尾 M · 已入队重做 N）；中止时 embedding **逐条可中断**，不再整片跑完
+- 单源「中止 / 继续」**互斥**：`jobControl`（queued/running/cancelled + aborted）驱动，不再双按钮常显
+- **目录不再进 `knowledge_files`**：`parseOne` 先 `stat`；非文件不写 `no_adapter` 并清历史脏行；watch 的目录 `change` 也不再 parse
+- 源详情文件列表：**状态/类型/路径筛选 + 分页**（默认 50/页，上限 200）；`GET .../files?page&pageSize&status&ext&q`，避免大库一次拉爆
+- **文件「重做」/「批量重做」**：强制重新解析→分块→向量（失效 contentHash，旧索引保留到 upsert 成功）；单文件按钮 + 按当前筛选批量；适配失败重试、新适配器后重跑 `no_adapter`
+- **`npm run build` 现包含 `build:web`**：主流程会重打 WebUI dist，避免只更新 engine/gateway 仍托管旧界面
+
+**配置**（机器资源不足时下调）：`knowledge.index.files.{oversize,maxFileBytes,hardMaxFileBytes,maxBytes.*,partial.*,parseTimeout*}` — 见 `octopi.example.json`
+
+## v0.58.1
+
+### fix(knowledge): embed 长文本上下文截断回退 + 禁止静默丢向量
+
+**根因**（云锡文档 ~32 条永久缺向量）
+
+- `bge-m3` / Ollama 按 **token** 计上下文：同为 2400 字，密集中文表有的能进、有的报 `the input length exceeds the context length`
+- 旧 `embedBatch` 串行路径**一遇错误整批 throw**，同片已成功条目也不落库；`embedOneSlice` 对空向量**静默跳过**，job 看起来完成但 coverage 卡住
+
+**修复**
+
+- `HttpEmbeddingProvider.embed`：识别 context-length 错误后按 **保头 72% + 尾 28%** 渐进截断重试（全文仍在 chunk/关键词侧，只影响向量覆盖面）
+- `embedBatch` 串行/补槽：单条失败写空槽不拖垮同批；空槽再按条补齐
+- `embedOneSlice`：成功条**立即分批落库**；空槽/长度不对齐时按条 `embed` 续试；超时随片长放大（避免 32 条串行顶穿 120s 整片超时）
+- 响应体 `{error}`（含 HTTP 200 包装）一并抛出，可被截断回退捕获
+
 ## v0.58.0
 
 ### feat(knowledge): catalog 标签化、代码不嵌入、向量 BLOB、任务可控与解析优先

@@ -102,6 +102,33 @@ export interface KnowledgeRuntimeConfig {
     phaseA?: { concurrency?: number; debounceMs?: number };
     phaseB?: { embedBatch?: number; concurrency?: number; ratePerMin?: number };
     queue?: { maxDepth?: number };
+    /**
+     * 索引文件限额（按格式分级；缺省见 DEFAULT_KNOWLEDGE_FILE_LIMITS）
+     * 机器资源不足时下调 maxBytes / hardMaxFileBytes
+     */
+    files?: {
+      /** 超格式上限：partial=截断入索引（默认）| skip=整文件跳过 */
+      oversize?: 'partial' | 'skip';
+      /** 兜底/未归类格式上限 */
+      maxFileBytes?: number;
+      /** 绝对内存闸门（partial 也拒绝） */
+      hardMaxFileBytes?: number;
+      maxBytes?: {
+        text?: number;
+        pdf?: number;
+        officeDoc?: number;
+        sheet?: number;
+      };
+      partial?: {
+        maxSheets?: number;
+        maxRowsPerSheet?: number;
+        maxPdfPages?: number;
+        maxTextChars?: number;
+      };
+      parseTimeoutMs?: number;
+      parseTimeoutPerMBMs?: number;
+      maxParseTimeoutMs?: number;
+    };
   };
   load?: {
     parseConcurrency?: number;

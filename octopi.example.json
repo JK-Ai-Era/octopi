@@ -159,6 +159,28 @@
       "includePriorUserTurns": 1,
       "skipIfUserTokensBelow": 8
     },
+    "index": {
+      "files": {
+        "oversize": "partial",
+        "maxFileBytes": 50000000,
+        "hardMaxFileBytes": 268435456,
+        "maxBytes": {
+          "text": 20000000,
+          "pdf": 50000000,
+          "officeDoc": 200000000,
+          "sheet": 50000000
+        },
+        "partial": {
+          "maxSheets": 20,
+          "maxRowsPerSheet": 5000,
+          "maxPdfPages": 200,
+          "maxTextChars": 2000000
+        },
+        "parseTimeoutMs": 45000,
+        "parseTimeoutPerMBMs": 5000,
+        "maxParseTimeoutMs": 300000
+      }
+    },
     "promotion": {
       "metrics": { "minSessions": 3, "minHits": 10 }
     },

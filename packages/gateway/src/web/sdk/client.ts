@@ -141,6 +141,16 @@ export interface KnowledgeSourceDto {
   updatedAt: number;
 }
 
+export interface KnowledgeJobControlDto {
+  aborted: boolean;
+  jobsQueued: number;
+  jobsRunning: number;
+  jobsCancelled: number;
+  embedMissing: boolean;
+  canAbort: boolean;
+  canResume: boolean;
+}
+
 export interface KnowledgeSourceDetailDto extends KnowledgeSourceDto {
   fileCount: number;
   chunkCount: number;
@@ -149,6 +159,8 @@ export interface KnowledgeSourceDetailDto extends KnowledgeSourceDto {
   skippedFileCount: number;
   assignedAgentIds: string[];
   hiddenForAgentIds: string[];
+  /** 中止/继续 互斥按钮读数 */
+  jobControl?: KnowledgeJobControlDto;
 }
 
 export interface KnowledgeSessionVisibilityItemDto {
@@ -941,7 +953,12 @@ export class OctopiClient {
   async abortKnowledgeSourceJobs(
     agentId: string,
     sourceId: string,
-  ): Promise<{ ok: true; cancelledQueued: number; abortedRunning: number }> {
+  ): Promise<{
+    ok: true;
+    cancelledQueued: number;
+    abortedRunning: number;
+    runningJobs?: number;
+  }> {
     const data = await this.postJson(
       `/agents/${agentId}/knowledge/sources/${encodeURIComponent(sourceId)}/abort`,
       {},
@@ -950,18 +967,25 @@ export class OctopiClient {
       ok: true;
       cancelledQueued: number;
       abortedRunning: number;
+      runningJobs?: number;
     };
   }
 
   /** 中止全部知识索引任务 */
   async abortAllKnowledgeJobs(
     agentId: string,
-  ): Promise<{ ok: true; cancelledQueued: number; abortedRunning: number }> {
+  ): Promise<{
+    ok: true;
+    cancelledQueued: number;
+    abortedRunning: number;
+    runningJobs?: number;
+  }> {
     const data = await this.postJson(`/agents/${agentId}/knowledge/abort`, {});
     return data?.data as {
       ok: true;
       cancelledQueued: number;
       abortedRunning: number;
+      runningJobs?: number;
     };
   }
 
@@ -993,6 +1017,7 @@ export class OctopiClient {
     };
   }
 
+  /** 源文件全量列表（兼容旧用法） */
   async listKnowledgeSourceFiles(
     agentId: string,
     sourceId: string,
@@ -1001,6 +1026,132 @@ export class OctopiClient {
       `/agents/${agentId}/knowledge/sources/${encodeURIComponent(sourceId)}/files`,
     );
     return (data?.data as Array<{ path: string; status: string; chunkCount: number; error?: string }>) ?? [];
+  }
+
+  /** 重做文件：强制重新解析/分块/向量（单文件或按筛选批量；中止态会自动继续） */
+  async reprocessKnowledgeFiles(
+    agentId: string,
+    sourceId: string,
+    opts: {
+      paths?: string[];
+      filter?: {
+        status?: 'indexed' | 'skipped' | 'error' | 'all';
+        ext?: string;
+        q?: string;
+      };
+    },
+  ): Promise<{
+    ok: true;
+    queued: number;
+    alreadyActive?: number;
+    cleanedNonFiles?: number;
+    resumed?: boolean;
+  }> {
+    const data = await this.postJson(
+      `/agents/${agentId}/knowledge/sources/${encodeURIComponent(sourceId)}/reprocess`,
+      opts,
+    );
+    return (
+      (data?.data as {
+        ok: true;
+        queued: number;
+        alreadyActive?: number;
+        cleanedNonFiles?: number;
+        resumed?: boolean;
+      }) ?? { ok: true, queued: 0 }
+    );
+  }
+
+  /** 路径任务/文件状态（跟踪重做是否完成） */
+  async getKnowledgePathJobStates(
+    agentId: string,
+    sourceId: string,
+    paths: string[],
+  ): Promise<
+    Array<{
+      path: string;
+      jobsActive: number;
+      fileStatus: string | null;
+      chunkCount: number;
+      error: string | null;
+      exists: boolean;
+    }>
+  > {
+    const data = await this.postJson(
+      `/agents/${agentId}/knowledge/sources/${encodeURIComponent(sourceId)}/path-jobs`,
+      { paths },
+    );
+    return (
+      (data?.data as Array<{
+        path: string;
+        jobsActive: number;
+        fileStatus: string | null;
+        chunkCount: number;
+        error: string | null;
+        exists: boolean;
+      }>) ?? []
+    );
+  }
+
+  /** 源文件分页 + 筛选（状态 / 扩展名 / 路径关键词） */
+  async listKnowledgeSourceFilesPaged(
+    agentId: string,
+    sourceId: string,
+    opts?: {
+      status?: 'indexed' | 'skipped' | 'error' | 'all';
+      ext?: string;
+      q?: string;
+      page?: number;
+      pageSize?: number;
+    },
+  ): Promise<{
+    items: Array<{
+      path: string;
+      status: string;
+      chunkCount: number;
+      error?: string;
+      size: number;
+      ext: string;
+    }>;
+    total: number;
+    page: number;
+    pageSize: number;
+    statusCounts: { indexed: number; skipped: number; error: number };
+    extCounts: Array<{ ext: string; n: number }>;
+  }> {
+    const params = new URLSearchParams();
+    if (opts?.status && opts.status !== 'all') params.set('status', opts.status);
+    if (opts?.ext && opts.ext !== 'all') params.set('ext', opts.ext);
+    if (opts?.q) params.set('q', opts.q);
+    params.set('page', String(opts?.page ?? 1));
+    params.set('pageSize', String(opts?.pageSize ?? 50));
+    const data = await this.getJson(
+      `/agents/${agentId}/knowledge/sources/${encodeURIComponent(sourceId)}/files?${params.toString()}`,
+    );
+    return (
+      (data?.data as {
+        items: Array<{
+          path: string;
+          status: string;
+          chunkCount: number;
+          error?: string;
+          size: number;
+          ext: string;
+        }>;
+        total: number;
+        page: number;
+        pageSize: number;
+        statusCounts: { indexed: number; skipped: number; error: number };
+        extCounts: Array<{ ext: string; n: number }>;
+      }) ?? {
+        items: [],
+        total: 0,
+        page: 1,
+        pageSize: opts?.pageSize ?? 50,
+        statusCounts: { indexed: 0, skipped: 0, error: 0 },
+        extCounts: [],
+      }
+    );
   }
 
   async listKnowledgeChunks(

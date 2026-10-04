@@ -6,6 +6,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { readFile, stat } from 'node:fs/promises';
+import { statSync } from 'node:fs';
 import { watch, type FSWatcher } from 'node:fs';
 import { join, sep } from 'node:path';
 import { EventEmitter } from 'node:events';
@@ -23,8 +24,28 @@ import type { KnowledgeSource, KnowledgeChunkId } from './types.js';
 import type { DocumentPort } from '../context/capabilities/document/types.js';
 import { isDocumentPath } from '../context/capabilities/document/format.js';
 import { isDocumentExtractError } from '../context/capabilities/document/errors.js';
+import {
+  classifyFileKind,
+  decideBySize,
+  isRetryableSkipReason,
+  parseTimeoutForSize,
+  resolveKnowledgeFileLimits,
+  type KnowledgeFileLimits,
+  type KnowledgeFileLimitsInput,
+} from './file-limits.js';
 
 export type IngestJobKind = 'parse_file' | 'walk_source' | 'drop_file' | 'embed_source' | 'fetch_doc';
+
+/** 中止/继续 控制面读数（UI 互斥按钮） */
+export interface KnowledgeJobControlState {
+  aborted: boolean;
+  jobsQueued: number;
+  jobsRunning: number;
+  jobsCancelled: number;
+  embedMissing: boolean;
+  canAbort: boolean;
+  canResume: boolean;
+}
 
 export interface IngestProgressEvent {
   type: 'job' | 'source' | 'error' | 'embed';
@@ -44,8 +65,13 @@ export interface KnowledgeIngestOptions {
   maxQueueDepth?: number;
   /** fs watch debounce ms（默认 2000） */
   debounceMs?: number;
-  /** 单文件大小上限（默认 5MB；超出 skip） */
+  /** 单文件大小兜底上限（可选；格式分级见 fileLimits） */
   maxFileBytes?: number;
+  /**
+   * 按格式分级的文件限额 + 部分抽取策略。
+   * 机器资源不足时下调 maxBytes / hardMaxFileBytes。
+   */
+  fileLimits?: KnowledgeFileLimitsInput;
   /** 单文件 parse 超时 ms（默认 45000） */
   parseTimeoutMs?: number;
   /** Phase B embedding（未配则纯关键词） */
@@ -95,6 +121,7 @@ export class KnowledgeIngest extends EventEmitter {
   private readonly maxQueueDepth: number;
   private readonly debounceMs: number;
   private readonly maxFileBytes: number;
+  private readonly fileLimits: KnowledgeFileLimits;
   /** 单文件 parse/fetch 超时（默认 45s；大 Office 同步抽取会堵事件循环） */
   private readonly parseTimeoutMs: number;
   private readonly embedding: EmbeddingProvider | null;
@@ -141,8 +168,13 @@ export class KnowledgeIngest extends EventEmitter {
     this.maxQueueDepth = options.maxQueueDepth ?? 10_000;
     // watch 批量落盘时缩短静默窗，新增文件更快入队
     this.debounceMs = options.debounceMs ?? 800;
-    this.maxFileBytes = options.maxFileBytes ?? 5_000_000;
-    this.parseTimeoutMs = options.parseTimeoutMs ?? 45_000;
+    this.fileLimits = resolveKnowledgeFileLimits({
+      ...options.fileLimits,
+      maxFileBytes: options.fileLimits?.maxFileBytes ?? options.maxFileBytes,
+      parseTimeoutMs: options.fileLimits?.parseTimeoutMs ?? options.parseTimeoutMs,
+    });
+    this.maxFileBytes = this.fileLimits.maxFileBytes;
+    this.parseTimeoutMs = this.fileLimits.parseTimeoutMs;
     this.embedding = options.embeddingProvider ?? null;
     this.embedBatch = options.embedBatch ?? 32;
     this.embedMinIntervalMs = options.embedMinIntervalMs ?? 0;
@@ -162,6 +194,52 @@ export class KnowledgeIngest extends EventEmitter {
     this.maxPollPerTick = options.maxPollPerTick ?? 8;
     // 崩溃/重启遗留的 running 会堵住 enqueue 去重并永久显示 indexing
     this.reclaimOrphanRunningJobs();
+    // 历史脏行：目录等非文件曾被标成 no_adapter，启动即清
+    this.cleanupNonFileIndexRows();
+  }
+
+  private lastCleanupAt = 0;
+
+  /**
+   * 清掉「非普通文件」误入 knowledge_files 的行（目录曾被标 no_adapter）。
+   *
+   * 仅处理 skipped/error 且无 chunk 的行：有 chunk 的仍走 pruneMissing/磁盘对齐。
+   * 默认 60s 节流，避免每轮 reconcile 扫全表 stat。
+   *
+   * @param sourceId - 限定源；省略则全部源
+   * @param opts.force - 忽略节流
+   * @returns 删除行数
+   */
+  cleanupNonFileIndexRows(sourceId?: string, opts?: { force?: boolean }): number {
+    const now = Date.now();
+    if (!opts?.force && sourceId == null && now - this.lastCleanupAt < 60_000) {
+      return 0;
+    }
+    this.lastCleanupAt = now;
+    const ids = sourceId
+      ? [sourceId]
+      : this.sources.list().map((s) => s.id);
+    let removed = 0;
+    for (const id of ids) {
+      const rows = this.sources.database.raw
+        .prepare(
+          `SELECT path FROM knowledge_files
+           WHERE source_id = ? AND status IN ('skipped', 'error') AND chunk_count = 0`,
+        )
+        .all(id) as Array<{ path: string }>;
+      for (const r of rows) {
+        try {
+          const st = statSync(r.path);
+          if (!st.isFile()) {
+            this.index.removeFile(id, r.path);
+            removed += 1;
+          }
+        } catch {
+          // 路径不存在：留给 pruneMissing（磁盘对齐），避免误删有效但暂时不可见的文件
+        }
+      }
+    }
+    return removed;
   }
 
   /**
@@ -442,6 +520,124 @@ export class KnowledgeIngest extends EventEmitter {
   }
 
   /**
+   * 重做指定文件：强制重新 解析 → 分块 → 向量
+   *
+   * - 失效 contentHash（忽略 isFresh），旧 chunks 保留到 upsert 成功
+   * - **源处于中止态时自动 resume**：显式重做 = 意图要跑活，不允许静默丢弃
+   * - 目录等非文件：直接清脏行，不假装入队
+   * - 入队 parse_file；完成后走既有 embed 链路
+   *
+   * @param sourceId - 源 id
+   * @param paths - 文件路径列表
+   * @returns queued=新入队；alreadyActive=已在队列/执行；cleanedNonFiles=清掉的目录脏行
+   */
+  reprocessFiles(
+    sourceId: string,
+    paths: string[],
+  ): { queued: number; alreadyActive: number; cleanedNonFiles: number; resumed: boolean } {
+    if (!paths.length) return { queued: 0, alreadyActive: 0, cleanedNonFiles: 0, resumed: false };
+    let resumed = false;
+    if (this.isAborted(sourceId)) {
+      this.beginAbortEpoch(sourceId);
+      resumed = true;
+    }
+    let queued = 0;
+    let alreadyActive = 0;
+    let cleanedNonFiles = 0;
+    for (const p of paths) {
+      // 目录/设备节点：清脏行即可，没有「解析」可跑
+      try {
+        const st = statSync(p);
+        if (!st.isFile()) {
+          this.index.removeFile(sourceId, p);
+          cleanedNonFiles += 1;
+          continue;
+        }
+      } catch {
+        // 路径不存在：仍按文件流程，让 parse 自清理
+      }
+      // 总是失效 hash：即使已在队列，跑起来也不能 isFresh 跳过
+      this.index.invalidateFileForReparse(sourceId, p);
+      if (this.enqueue(sourceId, 'parse_file', p, 1, p)) {
+        queued += 1;
+      } else if (this.hasActiveParseJob(sourceId, p)) {
+        alreadyActive += 1;
+      }
+    }
+    this.kick();
+    return { queued, alreadyActive, cleanedNonFiles, resumed };
+  }
+
+  /** 路径上是否已有 queued/running 的 parse_file */
+  private hasActiveParseJob(sourceId: string, path: string): boolean {
+    const row = this.sources.database.raw
+      .prepare(
+        `SELECT id FROM knowledge_jobs
+         WHERE source_id = ? AND path = ? AND kind = 'parse_file' AND status IN ('queued','running')
+         LIMIT 1`,
+      )
+      .get(sourceId, path) as { id?: string } | undefined;
+    return Boolean(row?.id);
+  }
+
+  /**
+   * 路径级任务/文件状态（UI 跟踪重做完成）
+   *
+   * @param sourceId - 源 id
+   * @param paths - 路径列表
+   */
+  jobStateForPaths(
+    sourceId: string,
+    paths: string[],
+  ): Array<{
+    path: string;
+    jobsActive: number;
+    fileStatus: string | null;
+    chunkCount: number;
+    error: string | null;
+    exists: boolean;
+  }> {
+    return paths.map((p) => {
+      const jobs = this.sources.database.raw
+        .prepare(
+          `SELECT COUNT(*) AS n FROM knowledge_jobs
+           WHERE source_id = ? AND path = ? AND status IN ('queued','running')`,
+        )
+        .get(sourceId, p) as { n: number };
+      const f = this.index.getFile(sourceId, p);
+      let exists = false;
+      try {
+        exists = statSync(p).isFile();
+      } catch {
+        exists = false;
+      }
+      return {
+        path: p,
+        jobsActive: Number(jobs?.n ?? 0),
+        fileStatus: f?.status ?? null,
+        chunkCount: f?.chunkCount ?? 0,
+        error: f?.error ?? null,
+        exists,
+      };
+    });
+  }
+
+  /**
+   * 按筛选批量重做（当前列表的 status/ext/q 条件）
+   *
+   * @param sourceId - 源 id
+   * @param opts - 与文件列表筛选一致
+   * @returns 入队条数
+   */
+  reprocessByFilter(
+    sourceId: string,
+    opts?: { status?: 'indexed' | 'skipped' | 'error' | 'all'; ext?: string; q?: string },
+  ): { queued: number; alreadyActive: number; cleanedNonFiles: number; resumed: boolean } {
+    const paths = this.index.listFilePathsFiltered(sourceId, opts);
+    return this.reprocessFiles(sourceId, paths);
+  }
+
+  /**
    * 处理 fs 变更（debounce 后入队）
    */
   handleFsChange(sourceId: string, filePath: string, event: 'change' | 'rename'): void {
@@ -453,25 +649,24 @@ export class KnowledgeIngest extends EventEmitter {
       key,
       setTimeout(() => {
         this.debounceTimers.delete(key);
-        if (event === 'rename') {
-          // inotify：create/move 也报 rename — 按存在性分支，勿一律 drop
-          void stat(filePath)
-            .then((st) => {
-              if (st.isFile()) {
-                this.enqueue(sourceId, 'parse_file', filePath, 1, filePath);
-              } else {
-                this.enqueue(sourceId, 'drop_file', filePath, 1, filePath);
-              }
-              this.kick();
-            })
-            .catch(() => {
+        // 统一先 stat：目录误报 change 时不得 parse 成 no_adapter
+        void stat(filePath)
+          .then((st) => {
+            if (st.isFile()) {
+              this.enqueue(sourceId, 'parse_file', filePath, 1, filePath);
+            } else if (event === 'rename' || !st.isDirectory()) {
+              // rename 到目录 = 新目录/移出；非文件也走 drop 清残行
               this.enqueue(sourceId, 'drop_file', filePath, 1, filePath);
-              this.kick();
-            });
-          return;
-        }
-        this.enqueue(sourceId, 'parse_file', filePath, 1, filePath);
-        this.kick();
+            } else {
+              // 目录上的 change：子文件由各自事件处理；仅清历史脏行
+              this.index.removeFile(sourceId, filePath);
+            }
+            this.kick();
+          })
+          .catch(() => {
+            this.enqueue(sourceId, 'drop_file', filePath, 1, filePath);
+            this.kick();
+          });
       }, this.debounceMs),
     );
   }
@@ -548,6 +743,7 @@ export class KnowledgeIngest extends EventEmitter {
   abortJobs(opts?: { sourceId?: string }): {
     cancelledQueued: number;
     abortedRunning: number;
+    runningJobs: number;
   } {
     const sid = opts?.sourceId?.trim();
     const ids = sid ? [sid] : [...this.abortBySource.keys(), ...this.sources.list().map((s) => s.id)];
@@ -585,13 +781,22 @@ export class KnowledgeIngest extends EventEmitter {
       )
       .run(Date.now());
 
+    const runningRow = this.sources.database.raw
+      .prepare(
+        sid
+          ? `SELECT COUNT(*) AS n FROM knowledge_jobs WHERE source_id = ? AND status = 'running'`
+          : `SELECT COUNT(*) AS n FROM knowledge_jobs WHERE status = 'running'`,
+      )
+      .get(...(sid ? [sid] : [])) as { n: number };
+    const runningJobs = Number(runningRow?.n ?? 0);
+
     this.emitProgress({
       type: 'source',
       sourceId: sid ?? '*',
       status: 'aborted',
-      detail: `cancelledQueued=${cancelledQueued}`,
+      detail: `cancelledQueued=${cancelledQueued} runningTail=${runningJobs}`,
     });
-    return { cancelledQueued, abortedRunning };
+    return { cancelledQueued, abortedRunning, runningJobs };
   }
 
   /**
@@ -703,20 +908,27 @@ export class KnowledgeIngest extends EventEmitter {
     } catch {
       return 0;
     }
-    const indexed = new Set(this.index.listFiles(sourceId).map((f) => f.path));
+    const byPath = new Map(this.index.listFiles(sourceId).map((f) => [f.path, f]));
     let added = 0;
+    let retriedSkipped = 0;
     for (const f of found) {
-      if (!indexed.has(f.path)) {
-        this.enqueue(sourceId, 'parse_file', f.path, 2, f.path);
-        added += 1;
-      }
+      const existing = byPath.get(f.path);
+      // 缺文件必补；已 skipped 的 oversize/空内容在限额可接受时重试（配置调宽后能进索引）
+      const need =
+        !existing ||
+        (existing.status === 'skipped' &&
+          isRetryableSkipReason(existing.error ?? null, existing.size, this.fileLimits));
+      if (!need) continue;
+      this.enqueue(sourceId, 'parse_file', f.path, 2, f.path);
+      added += 1;
+      if (existing) retriedSkipped += 1;
     }
     if (added > 0) {
       this.emitProgress({
         type: 'source',
         sourceId,
         status: 'parse_gap_found',
-        detail: `missing_files=${added}`,
+        detail: `missing_files=${added - retriedSkipped} retry_skipped=${retriedSkipped}`,
       });
       this.kick();
     }
@@ -804,6 +1016,45 @@ export class KnowledgeIngest extends EventEmitter {
   }
 
   /**
+   * 中止/继续 控制面读数（互斥按钮用）
+   *
+   * @param sourceId - 源 id
+   * @returns 队列计数 + 是否已中止 + 是否仍缺向量
+   */
+  jobControlState(sourceId: string): KnowledgeJobControlState {
+    const row = this.sources.database.raw
+      .prepare(
+        `SELECT
+           SUM(CASE WHEN status = 'queued' THEN 1 ELSE 0 END) AS q,
+           SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END) AS r,
+           SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) AS c
+         FROM knowledge_jobs WHERE source_id = ?`,
+      )
+      .get(sourceId) as { q: number | null; r: number | null; c: number | null };
+    const jobsQueued = Number(row?.q ?? 0);
+    const jobsRunning = Number(row?.r ?? 0);
+    const jobsCancelled = Number(row?.c ?? 0);
+    const aborted = this.isAborted(sourceId);
+    const embedMissing = this.embedding
+      ? this.index.listChunksMissingEmbedding(sourceId, 1).length > 0
+      : false;
+    const active = jobsQueued + jobsRunning > 0;
+    // 可中止：还有活在排队/执行，且当前未处于中止态
+    const canAbort = active && !aborted;
+    // 可继续：被中止过、有 cancelled 可捞，或缺向量且当前无活
+    const canResume = aborted || jobsCancelled > 0 || (embedMissing && !active);
+    return {
+      aborted,
+      jobsQueued,
+      jobsRunning,
+      jobsCancelled,
+      embedMissing,
+      canAbort,
+      canResume,
+    };
+  }
+
+  /**
    * 任务对账（看门狗）— 不依赖单次 ensureEmbedJob
    *
    * 解决「续跑被去重吞掉 / 进程中断 / 状态卡 partial」等静默停摆：
@@ -837,34 +1088,35 @@ export class KnowledgeIngest extends EventEmitter {
   async reconcileJobs(): Promise<void> {
     if (this.disposed) return;
     this.reclaimStaleRunningJobs(5 * 60_000);
-    if (!this.embedding) {
-      for (const s of this.sources.list()) {
-        if (s.status === 'removed' || s.status === 'disabled') continue;
-        this.refreshCoverage(s.id);
-      }
-      return;
-    }
+    // 目录脏行等历史误入项（轻量；非每轮全表）
+    this.cleanupNonFileIndexRows();
+    // 存量向量回填：小批量 + 让出事件循环，禁止 2000 条同步写（会堵死 abort）
+    await this.index.backfillVecFromEmbeddings(25);
     for (const s of this.sources.list()) {
       if (s.status === 'removed' || s.status === 'disabled') continue;
       if (this.isAborted(s.id)) continue;
-      // watch 漏事件时补齐 parse：磁盘有、索引无 → 入队（解析优先于 embed）
+      // watch 漏事件 / skip 可重试时补齐 parse（与是否配置 embedding 无关）
       const lastGap = this.lastParseGapScanAt.get(s.id) ?? 0;
       if (Date.now() - lastGap > 60_000) {
         this.lastParseGapScanAt.set(s.id, Date.now());
         await this.ensureParseCoverage(s.id);
       }
-      const missing = this.index.listChunksMissingEmbedding(s.id, 1).length > 0;
-      const active = this.countActiveJobs(s.id);
-      if (missing && active.embed === 0) {
-        this.ensureEmbedJob(s.id);
-      } else if (!missing && active.total === 0) {
-        this.refreshCoverage(s.id);
-        // 稳定态收尾（auto-describe 等）；回调不得抛出打断对账
-        try {
-          this.onSourceSettled?.(s.id);
-        } catch {
-          /* ignore settle hook errors */
+      if (this.embedding) {
+        const missing = this.index.listChunksMissingEmbedding(s.id, 1).length > 0;
+        const active = this.countActiveJobs(s.id);
+        if (missing && active.embed === 0) {
+          this.ensureEmbedJob(s.id);
+        } else if (!missing && active.total === 0) {
+          this.refreshCoverage(s.id);
+          // 稳定态收尾（auto-describe 等）；回调不得抛出打断对账
+          try {
+            this.onSourceSettled?.(s.id);
+          } catch {
+            /* ignore settle hook errors */
+          }
         }
+      } else {
+        this.refreshCoverage(s.id);
       }
     }
     this.kick();
@@ -985,8 +1237,8 @@ export class KnowledgeIngest extends EventEmitter {
     path: string | null,
     priority: number,
     _detail?: string,
-  ): void {
-    if (this.isAborted(sourceId)) return;
+  ): boolean {
+    if (this.isAborted(sourceId)) return false;
     // 同 source+kind 去重（queued + running，避免并发重复 embed）
     const activeStatuses = ['queued', 'running'];
     if (path != null) {
@@ -997,7 +1249,7 @@ export class KnowledgeIngest extends EventEmitter {
            WHERE source_id = ? AND kind = ? AND path = ? AND status IN (${placeholders})`,
         )
         .get(sourceId, kind, path, ...activeStatuses) as { id?: string } | undefined;
-      if (dup?.id) return;
+      if (dup?.id) return false;
     } else {
       const placeholders = activeStatuses.map(() => '?').join(',');
       const dup = this.sources.database.raw
@@ -1006,7 +1258,7 @@ export class KnowledgeIngest extends EventEmitter {
            WHERE source_id = ? AND kind = ? AND path IS NULL AND status IN (${placeholders})`,
         )
         .get(sourceId, kind, ...activeStatuses) as { id?: string } | undefined;
-      if (dup?.id) return;
+      if (dup?.id) return false;
     }
 
     const now = Date.now();
@@ -1031,6 +1283,7 @@ export class KnowledgeIngest extends EventEmitter {
          VALUES (?, ?, ?, ?, ?, 'queued', 0, ?, ?)`,
       )
       .run(`kj_${randomUUID().slice(0, 12)}`, sourceId, kind, path, priority, now, now);
+    return true;
   }
 
   private kick(): void {
@@ -1146,10 +1399,17 @@ export class KnowledgeIngest extends EventEmitter {
     }
     try {
       if (job.kind === 'parse_file' && job.path) {
-        // 单文件解析硬超时：大 xlsx/pdf 同步抽取会堵死事件循环
+        // 单文件解析硬超时：大 xlsx/pdf 同步抽取会堵死事件循环；超时随体积放大
+        let parseTimeoutMs = this.parseTimeoutMs;
+        try {
+          const st = await stat(job.path);
+          if (st.isFile()) parseTimeoutMs = parseTimeoutForSize(st.size, this.fileLimits);
+        } catch {
+          // 路径已删时交给 parseOne 自清理
+        }
         await this.withTimeout(
           this.parseOne(job.source_id, job.path),
-          this.parseTimeoutMs,
+          parseTimeoutMs,
           `parse_timeout:${job.path}`,
         );
         if (this.isAborted(job.source_id)) {
@@ -1267,15 +1527,8 @@ export class KnowledgeIngest extends EventEmitter {
       this.index.markFileSkipped(sourceId, filePath, 'ignored_path');
       return false;
     }
-    const adapter = this.adapters.match(filePath);
-    if (!adapter) {
-      if (this.documentPort && isDocumentPath(filePath)) {
-        return this.parseDocumentFile(sourceId, filePath);
-      }
-      this.index.markFileSkipped(sourceId, filePath, 'no_adapter');
-      return false;
-    }
 
+    // 先确认是普通文件：目录/设备节点不得进 knowledge_files（历史上曾误标 no_adapter）
     let st;
     try {
       st = await stat(filePath);
@@ -1283,20 +1536,41 @@ export class KnowledgeIngest extends EventEmitter {
       this.index.removeFile(sourceId, filePath);
       return false;
     }
-    if (!st.isFile()) return false;
-    if (st.size > this.maxFileBytes) {
-      this.index.markFileSkipped(sourceId, filePath, 'oversize');
+    if (!st.isFile()) {
+      this.index.removeFile(sourceId, filePath);
       return false;
     }
 
+    const adapter = this.adapters.match(filePath);
+    if (!adapter) {
+      if (this.documentPort && isDocumentPath(filePath)) {
+        return this.parseDocumentFile(sourceId, filePath);
+      }
+      this.index.markFileSkipped(sourceId, filePath, 'no_adapter', st.size);
+      return false;
+    }
+
+    const kind = classifyFileKind(filePath);
+    const sizeDecision = decideBySize(st.size, kind, this.fileLimits);
+    if (sizeDecision.action === 'skip') {
+      this.index.markFileSkipped(sourceId, filePath, sizeDecision.reason, st.size);
+      return false;
+    }
+
+    // 软超限 partial：只索引头部，全文 hash 保新鲜度
+    const maxTextChars = this.fileLimits.partial.maxTextChars;
     const content = await readFile(filePath, 'utf8');
     const contentHash = hashContent(content);
     if (this.index.isFresh(sourceId, filePath, contentHash)) {
       return true;
     }
+    const text =
+      sizeDecision.action === 'partial' && content.length > maxTextChars
+        ? `${content.slice(0, maxTextChars)}\n\n…[truncated: ${content.length - maxTextChars} chars omitted]`
+        : content;
 
     try {
-      const chunks = adapter.chunk(content, filePath);
+      const chunks = adapter.chunk(text, filePath);
       this.index.upsertFile({
         sourceId,
         path: filePath,
@@ -1312,6 +1586,7 @@ export class KnowledgeIngest extends EventEmitter {
         sourceId,
         filePath,
         err instanceof Error ? err.message : String(err),
+        st.size,
       );
       return false;
     }
@@ -1337,8 +1612,11 @@ export class KnowledgeIngest extends EventEmitter {
       return false;
     }
     if (!st.isFile()) return false;
-    if (st.size > this.maxFileBytes) {
-      this.index.markFileSkipped(sourceId, filePath, 'oversize');
+
+    const kind = classifyFileKind(filePath);
+    const sizeDecision = decideBySize(st.size, kind, this.fileLimits);
+    if (sizeDecision.action === 'skip') {
+      this.index.markFileSkipped(sourceId, filePath, sizeDecision.reason, st.size);
       return false;
     }
 
@@ -1350,10 +1628,10 @@ export class KnowledgeIngest extends EventEmitter {
 
     try {
       // worker 抽取：同步 xlsx/pdf 不堵主循环；超时/中止可 terminate
-      const result = await this.extractDocument(filePath, sourceId);
+      const result = await this.extractDocument(filePath, sourceId, st.size);
       const markdown = result.markdown?.trim();
       if (!markdown) {
-        this.index.markFileSkipped(sourceId, filePath, 'empty_content');
+        this.index.markFileSkipped(sourceId, filePath, 'empty_content', st.size);
         return false;
       }
       const chunks = markdownAdapter.chunk(markdown, filePath);
@@ -1370,26 +1648,36 @@ export class KnowledgeIngest extends EventEmitter {
     } catch (err) {
       if (isDocumentExtractError(err)) {
         // 结构化跳过（密码/老格式/超大等），不挡整库
-        this.index.markFileSkipped(sourceId, filePath, err.code.toLowerCase());
+        this.index.markFileSkipped(sourceId, filePath, err.code.toLowerCase(), st.size);
         return false;
       }
       this.index.markFileError(
         sourceId,
         filePath,
         err instanceof Error ? err.message : String(err),
+        st.size,
       );
       return false;
     }
   }
 
   /** 优先 worker 抽取；worker 不可用时退回进程内 port */
-  private async extractDocument(filePath: string, sourceId: string) {
+  private async extractDocument(filePath: string, sourceId: string, fileSize = 0) {
     const signal = this.abortSignalFor(sourceId);
+    const timeoutMs = parseTimeoutForSize(fileSize, this.fileLimits);
+    const extractOpts = {
+      timeoutMs,
+      // knowledge 走 hardMax：软超限仍可 partial 抽取
+      maxFileBytes: this.fileLimits.hardMaxFileBytes,
+      maxSheets: this.fileLimits.partial.maxSheets,
+      maxRowsPerSheet: this.fileLimits.partial.maxRowsPerSheet,
+      maxPages: this.fileLimits.partial.maxPdfPages,
+      maxTextChars: this.fileLimits.partial.maxTextChars,
+    };
     try {
       const { extractDocumentInWorker } = await import('./extract-document.js');
       return await extractDocumentInWorker(filePath, {
-        timeoutMs: this.parseTimeoutMs,
-        maxFileBytes: this.maxFileBytes,
+        ...extractOpts,
         signal,
       });
     } catch (err) {
@@ -1398,10 +1686,7 @@ export class KnowledgeIngest extends EventEmitter {
         throw new Error('aborted');
       }
       if (msg.includes('Cannot find module') || msg.includes('ERR_MODULE')) {
-        return this.documentPort!.extract(
-          { path: filePath, name: filePath },
-          { timeoutMs: this.parseTimeoutMs },
-        );
+        return this.documentPort!.extract({ path: filePath, name: filePath }, extractOpts);
       }
       throw err;
     }
@@ -1470,28 +1755,58 @@ export class KnowledgeIngest extends EventEmitter {
     this.refreshCoverage(sourceId);
   }
 
-  /** 单片 embedding；返回成功写入条数 */
+  /** 单片 embedding；返回成功写入条数。成功条立即落库，禁止被同片失败拖丢 */
   private async embedOneSlice(
     sourceId: string,
     slice: Array<{ id: KnowledgeChunkId; text: string }>,
   ): Promise<number> {
     if (slice.length === 0) return 0;
-    const vectors = await Promise.race([
-      this.embedding!.embedBatch(slice.map((p) => p.text)),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('embed_batch_timeout')), 120_000),
-      ),
-    ]);
-    let ok = 0;
-    const batch: Array<[string, number[]]> = [];
-    for (let i = 0; i < slice.length; i++) {
-      const vec = vectors[i];
-      if (vec?.length) {
-        batch.push([slice[i].id, vec]);
-        ok += 1;
+    // 超时随片长放大：远程串行 Ollama 单条 1–3s，32 条会顶穿旧 120s 整片超时
+    const timeoutMs = 60_000 + 20_000 * slice.length;
+    let vectors: number[][] = [];
+    if (!this.isAborted(sourceId)) {
+      try {
+        vectors = await Promise.race([
+          this.embedding!.embedBatch(slice.map((p) => p.text)),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('embed_batch_timeout')), timeoutMs),
+          ),
+        ]);
+      } catch {
+        vectors = [];
       }
     }
-    if (batch.length > 0) this.index.setChunkEmbeddings(batch);
+
+    let ok = 0;
+    const batch: Array<[string, number[]]> = [];
+    const flush = () => {
+      if (batch.length > 0) {
+        this.index.setChunkEmbeddings(batch.splice(0, batch.length));
+      }
+    };
+
+    for (let i = 0; i < slice.length; i++) {
+      // 中止后立刻停，不把整片跑完（用户点「中止」要能感知）
+      if (this.isAborted(sourceId)) {
+        flush();
+        return ok;
+      }
+      let vec = vectors[i];
+      if (!vec?.length) {
+        // 批量空槽 / 长度不对齐：按条补（provider 内含上下文截断回退）
+        try {
+          vec = await this.embedding!.embed(slice[i]!.text);
+        } catch {
+          vec = [];
+        }
+      }
+      if (vec?.length) {
+        batch.push([slice[i]!.id, vec]);
+        ok += 1;
+        if (batch.length >= 8) flush();
+      }
+    }
+    flush();
     return ok;
   }
 

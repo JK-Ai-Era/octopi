@@ -57,6 +57,16 @@ export interface ExtractOptions {
   tier?: ExtractTier;
   /** 取消 / 会话级 abort */
   signal?: AbortSignal;
+  /** 本次调用的大小闸门（覆盖 port 配置；知识索引 partial 用） */
+  maxFileBytes?: number;
+  /** 部分抽取：xlsx 最大 sheet 数 */
+  maxSheets?: number;
+  /** 部分抽取：xlsx 每 sheet 最大行数 */
+  maxRowsPerSheet?: number;
+  /** 部分抽取：pdf 最大页数 */
+  maxPages?: number;
+  /** 部分抽取：纯文本最大字符数 */
+  maxTextChars?: number;
 }
 
 export interface DocumentMeta {

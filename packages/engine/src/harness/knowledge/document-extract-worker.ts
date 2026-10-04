@@ -11,6 +11,10 @@ interface WorkerJob {
   name?: string;
   timeoutMs?: number;
   maxFileBytes?: number;
+  maxSheets?: number;
+  maxRowsPerSheet?: number;
+  maxPages?: number;
+  maxTextChars?: number;
 }
 
 async function main(): Promise<void> {
@@ -22,7 +26,17 @@ async function main(): Promise<void> {
       maxFileBytes: job.maxFileBytes ?? 50 * 1024 * 1024,
     },
   });
-  const result = await port.extract({ path: job.path, name: job.name ?? job.path });
+  const result = await port.extract(
+    { path: job.path, name: job.name ?? job.path },
+    {
+      timeoutMs: job.timeoutMs ?? 60_000,
+      maxFileBytes: job.maxFileBytes,
+      maxSheets: job.maxSheets,
+      maxRowsPerSheet: job.maxRowsPerSheet,
+      maxPages: job.maxPages,
+      maxTextChars: job.maxTextChars,
+    },
+  );
   parentPort?.postMessage({ ok: true, result });
 }
 

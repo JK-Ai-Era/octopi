@@ -87,8 +87,34 @@ describe('KnowledgeIngest.reconcileJobs', () => {
     const ingest = new KnowledgeIngest({ sourceStore: sources, indexStore: index });
     await ingest.reconcileJobs();
     const row = sources.database.raw
-      .prepare("SELECT status FROM knowledge_jobs WHERE id = 'kj_stale'")
-      .get() as { status: string };
-    expect(row.status).toBe('queued');
+      .prepare("SELECT status, updated_at FROM knowledge_jobs WHERE id = 'kj_stale'")
+      .get() as { status: string; updated_at: number };
+    // reclaim 后 kick 可能立刻再 claim；关键是不再是陈旧 running
+    expect(row.updated_at).toBeGreaterThan(old);
+    expect(['queued', 'running', 'done', 'failed']).toContain(row.status);
+  });
+
+  it('gap 扫描会重试 oversize skipped（配置调宽后可进索引）', async () => {
+    const sources = await KnowledgeSourceStore.open({ dbPath: ':memory:' });
+    const index = new KnowledgeIndexStore(sources.database);
+    const filePath = join(root, 'a.md');
+    const src = sources.register({
+      kind: 'directory',
+      location: root,
+      scopeRef: { level: 'global', key: 'global' },
+      displayName: 'recon-oversize',
+    });
+    // 模拟旧策略：oversize skip 且未记录 size
+    index.markFileSkipped(src.id, filePath, 'oversize', 0);
+
+    const ingest = new KnowledgeIngest({ sourceStore: sources, indexStore: index });
+    await ingest.reconcileJobs();
+    const job = sources.database.raw
+      .prepare(
+        `SELECT COUNT(*) AS n FROM knowledge_jobs
+         WHERE source_id = ? AND kind = 'parse_file' AND path = ?`,
+      )
+      .get(src.id, filePath) as { n: number };
+    expect(job.n).toBeGreaterThan(0);
   });
 });

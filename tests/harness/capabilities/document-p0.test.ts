@@ -93,6 +93,25 @@ describe('DocumentPort extract (plain + routing)', () => {
     );
   });
 
+  it('extract options maxFileBytes overrides port config', async () => {
+    const port = createDefaultDocumentPort({ config: { maxFileBytes: 8 } });
+    const res = await port.extract(
+      { data: utf8('this is longer than eight'), name: 'a.txt' },
+      { maxFileBytes: 1024 },
+    );
+    expect(res.markdown).toContain('longer');
+  });
+
+  it('truncates plain text via maxTextChars with PARTIAL_EXTRACT', async () => {
+    const port = createDefaultDocumentPort();
+    const res = await port.extract(
+      { data: utf8('abcdefghij'), name: 'a.txt' },
+      { maxTextChars: 4 },
+    );
+    expect(res.markdown.startsWith('abcd')).toBe(true);
+    expect(res.warnings.some((w) => w.code === 'PARTIAL_EXTRACT')).toBe(true);
+  });
+
   it('fails structured for unsupported legacy without converter', async () => {
     const port = createDefaultDocumentPort();
     // OLE2 magic → doc

@@ -1080,6 +1080,19 @@ button.ctx-band {
 .kn-chunks { display: flex; flex-direction: column; gap: 6px; padding: 8px; border-top: 1px solid var(--color-border); }
 .kn-chunk { padding: 6px 8px; border-left: 2px solid #2563eb; background: var(--color-bg); border-radius: 2px; }
 .kn-chunk-text { margin: 4px 0 0; font-family: var(--font-mono); font-size: 11px; white-space: pre-wrap; color: var(--color-text); }
+.kn-file-filters { display: flex; flex-direction: column; gap: 6px; margin: 4px 0 6px; }
+.kn-filter-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.kn-file-pager { display: flex; gap: 10px; align-items: center; justify-content: center; padding: 8px 0 2px; }
+.kn-op-feedback {
+  margin: 4px 0 2px;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+.kn-op-feedback.info { border-color: #93c5fd; color: #1d4ed8; }
+.kn-op-feedback.ok { border-color: #86efac; color: #15803d; }
+.kn-op-feedback.warn { border-color: #fcd34d; color: #b45309; }
 .kn-progress {
   display: flex;
   flex-wrap: nowrap;

@@ -10,13 +10,18 @@ export interface DocumentExtractWorkerOptions {
   maxFileBytes?: number;
   /** 中止信号：abort 时立刻 terminate worker */
   signal?: AbortSignal;
+  /** 部分抽取限额（xlsx/pdf/text） */
+  maxSheets?: number;
+  maxRowsPerSheet?: number;
+  maxPages?: number;
+  maxTextChars?: number;
 }
 
 /**
  * 在 worker 线程抽取文档为 Markdown。
  *
  * @param filePath - 本地文件路径
- * @param options - 超时 / 大小 / 中止信号
+ * @param options - 超时 / 大小 / 中止 / 部分抽取限额
  * @returns ExtractResult
  * @throws Error 超时 / abort / worker 失败 / 抽取错误
  */
@@ -37,6 +42,10 @@ export function extractDocumentInWorker(
         name: filePath,
         timeoutMs,
         maxFileBytes: options.maxFileBytes,
+        maxSheets: options.maxSheets,
+        maxRowsPerSheet: options.maxRowsPerSheet,
+        maxPages: options.maxPages,
+        maxTextChars: options.maxTextChars,
       },
     });
     const finish = (fn: () => void) => {

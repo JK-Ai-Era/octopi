@@ -1679,6 +1679,7 @@ export class Gateway {
         skippedFileCount: number;
         assignedAgentIds: string[];
         hiddenForAgentIds: string[];
+        jobControl: import('@octopi-agent/engine/harness/knowledge/ingest.js').KnowledgeJobControlState;
       })
     | null
   > {
@@ -1700,6 +1701,7 @@ export class Gateway {
         source.scopeRef.level === 'global'
           ? this.listAgentsHidingSource(store, sourceId)
           : [],
+      jobControl: ingest.jobControlState(sourceId),
     };
   }
 
@@ -1716,13 +1718,91 @@ export class Gateway {
   }
 
   /**
-   * 源下索引文件列表
+   * 源下索引文件列表（全量，兼容旧客户端）
    */
   async listKnowledgeSourceFiles(sourceId: string): Promise<
     import('@octopi-agent/engine/harness/knowledge/index-store.js').IndexedFileRecord[]
   > {
     const ingest = await this.getKnowledgeIngest();
     return ingest.indexStore.listFiles(sourceId);
+  }
+
+  /** 源文件分页查询（管理面：状态/扩展名/关键词筛选） */
+  async listKnowledgeSourceFilesPaged(
+    sourceId: string,
+    opts?: {
+      status?: 'indexed' | 'skipped' | 'error' | 'all';
+      ext?: string;
+      q?: string;
+      page?: number;
+      pageSize?: number;
+    },
+  ): Promise<{
+    items: Array<
+      import('@octopi-agent/engine/harness/knowledge/index-store.js').IndexedFileRecord & {
+        ext: string;
+      }
+    >;
+    total: number;
+    page: number;
+    pageSize: number;
+    statusCounts: { indexed: number; skipped: number; error: number };
+    extCounts: Array<{ ext: string; n: number }>;
+  }> {
+    const ingest = await this.getKnowledgeIngest();
+    // 顺手清目录脏行，避免历史 no_adapter 占着列表
+    ingest.cleanupNonFileIndexRows(sourceId);
+    return ingest.indexStore.listFilesPaged(sourceId, opts);
+  }
+
+  /**
+   * 重做文件：强制重新解析/分块/向量
+   *
+   * @param sourceId - 源 id
+   * @param opts.paths - 指定路径；或
+   * @param opts.filter - 按当前列表筛选批量
+   * @returns 入队条数
+   */
+  async reprocessKnowledgeFiles(
+    sourceId: string,
+    opts: {
+      paths?: string[];
+      filter?: {
+        status?: 'indexed' | 'skipped' | 'error' | 'all';
+        ext?: string;
+        q?: string;
+      };
+    },
+  ): Promise<{
+    ok: true;
+    queued: number;
+    alreadyActive: number;
+    cleanedNonFiles: number;
+    resumed: boolean;
+  }> {
+    const ingest = await this.getKnowledgeIngest();
+    if (opts.paths?.length) {
+      return { ok: true, ...ingest.reprocessFiles(sourceId, opts.paths) };
+    }
+    return { ok: true, ...ingest.reprocessByFilter(sourceId, opts.filter) };
+  }
+
+  /** 路径级任务/文件状态（重做完成跟踪） */
+  async knowledgePathJobStates(
+    sourceId: string,
+    paths: string[],
+  ): Promise<
+    Array<{
+      path: string;
+      jobsActive: number;
+      fileStatus: string | null;
+      chunkCount: number;
+      error: string | null;
+      exists: boolean;
+    }>
+  > {
+    const ingest = await this.getKnowledgeIngest();
+    return ingest.jobStateForPaths(sourceId, paths);
   }
 
   /**
@@ -1919,6 +1999,7 @@ export class Gateway {
             : undefined,
           maxQueueDepth: kn?.index?.queue?.maxDepth,
           diskWatermarkAlert: kn?.load?.diskWatermarkAlert,
+          fileLimits: kn?.index?.files,
         });
         // 索引进度 → Web WS（系统级 '*'；UI 勿当会话消息）
         ingest.on('knowledge.index.progress', (evt: unknown) => {
@@ -1997,6 +2078,7 @@ export class Gateway {
     ok: true;
     cancelledQueued: number;
     abortedRunning: number;
+    runningJobs: number;
   }> {
     const ingest = await this.getKnowledgeIngest();
     const r = ingest.abortJobs(sourceId ? { sourceId } : undefined);

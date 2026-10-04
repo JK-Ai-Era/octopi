@@ -33,18 +33,27 @@ export const plainTextBackend: DocumentExtractBackend = {
   accepts({ format }) {
     return format === 'txt' || format === 'md' || format === 'csv' || format === 'html';
   },
-  async extract(source: ResolvedExtractSource, _options: ExtractOptions): Promise<ExtractResult> {
+  async extract(source: ResolvedExtractSource, options: ExtractOptions): Promise<ExtractResult> {
     if (looksLikeBinary(source.data)) {
       const { DocumentExtractError } = await import('../errors.js');
       throw new DocumentExtractError('INVALID_SOURCE', 'plain-text backend received binary data');
     }
-    const text = decodeUtf8(source.data);
+    let text = decodeUtf8(source.data);
+    const warnings: ExtractResult['warnings'] = [];
+    const maxChars = options.maxTextChars && options.maxTextChars > 0 ? options.maxTextChars : 0;
+    if (maxChars > 0 && text.length > maxChars) {
+      text = `${text.slice(0, maxChars)}\n\n…[truncated: ${text.length - maxChars} chars omitted]`;
+      warnings.push({
+        code: 'PARTIAL_EXTRACT',
+        message: `text truncated to maxTextChars=${maxChars}`,
+      });
+    }
     const format = source.formatHint ?? 'txt';
     // html 原样保留标签交给 knowledge htmlAdapter；此处仅保证可读文本
     return {
       markdown: text,
       meta: { format },
-      warnings: [],
+      warnings,
       backend: 'plain-text',
     };
   },

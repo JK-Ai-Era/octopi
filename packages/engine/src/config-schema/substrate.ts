@@ -57,6 +57,33 @@ export const KnowledgeConfigSchema = z.object({
         })
         .optional(),
       queue: z.object({ maxDepth: z.number().int().positive().optional() }).optional(),
+      /** 索引文件限额（按格式分级；缺省见 DEFAULT_KNOWLEDGE_FILE_LIMITS） */
+      files: z
+        .object({
+          oversize: z.enum(['partial', 'skip']).optional(),
+          maxFileBytes: z.number().int().positive().optional(),
+          hardMaxFileBytes: z.number().int().positive().optional(),
+          maxBytes: z
+            .object({
+              text: z.number().int().positive().optional(),
+              pdf: z.number().int().positive().optional(),
+              officeDoc: z.number().int().positive().optional(),
+              sheet: z.number().int().positive().optional(),
+            })
+            .optional(),
+          partial: z
+            .object({
+              maxSheets: z.number().int().positive().optional(),
+              maxRowsPerSheet: z.number().int().positive().optional(),
+              maxPdfPages: z.number().int().positive().optional(),
+              maxTextChars: z.number().int().positive().optional(),
+            })
+            .optional(),
+          parseTimeoutMs: z.number().int().positive().optional(),
+          parseTimeoutPerMBMs: z.number().int().nonnegative().optional(),
+          maxParseTimeoutMs: z.number().int().positive().optional(),
+        })
+        .optional(),
     })
     .optional(),
   load: z

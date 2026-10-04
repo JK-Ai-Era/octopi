@@ -22,7 +22,27 @@ export {
 } from './adapters.js';
 export type { FormatAdapter, KnowledgeChunkDraft } from './adapters.js';
 export { KnowledgeIngest } from './ingest.js';
-export type { KnowledgeIngestOptions, IngestProgressEvent, IngestJobKind } from './ingest.js';
+export type {
+  KnowledgeIngestOptions,
+  IngestProgressEvent,
+  IngestJobKind,
+  KnowledgeJobControlState,
+} from './ingest.js';
+export {
+  DEFAULT_KNOWLEDGE_FILE_LIMITS,
+  classifyFileKind,
+  decideBySize,
+  formatMaxBytes,
+  isRetryableSkipReason,
+  parseTimeoutForSize,
+  resolveKnowledgeFileLimits,
+} from './file-limits.js';
+export type {
+  KnowledgeFileKind,
+  KnowledgeFileLimits,
+  KnowledgeFileLimitsInput,
+  OversizePolicy,
+} from './file-limits.js';
 export {
   LocalFsFetcher,
   UrlFetcher,
