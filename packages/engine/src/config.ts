@@ -99,6 +99,8 @@ export interface KnowledgeRuntimeConfig {
   index?: {
     embedding?: boolean;
     hybridKeyword?: boolean;
+    /** embedding 外发前敏感形态策略（默认 redact） */
+    embedSecretPolicy?: 'allow' | 'redact' | 'skip';
     phaseA?: { concurrency?: number; debounceMs?: number };
     phaseB?: { embedBatch?: number; concurrency?: number; ratePerMin?: number };
     queue?: { maxDepth?: number };

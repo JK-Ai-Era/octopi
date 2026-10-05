@@ -8,13 +8,20 @@ import { randomUUID } from 'node:crypto';
 import { readFile, stat } from 'node:fs/promises';
 import { statSync } from 'node:fs';
 import { watch, type FSWatcher } from 'node:fs';
-import { join, sep } from 'node:path';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { EventEmitter } from 'node:events';
 import { FormatAdapterRegistry, htmlAdapter, markdownAdapter, textAdapter } from './adapters.js';
 import { looksLikeHtml } from './html.js';
 import { hashContent, KnowledgeIndexStore } from './index-store.js';
+import { KnowledgeJobControl } from './job-control.js';
 import { KnowledgeSourceStore } from './source-store.js';
-import { LocalFsFetcher, UrlFetcher, type SourceFetcher, type VirtualDocument } from './fetchers.js';
+import {
+  LocalFsFetcher,
+  UrlFetcher,
+  type DiscoverResult,
+  type SourceFetcher,
+  type VirtualDocument,
+} from './fetchers.js';
 import { ConnectorRegistry } from './connectors.js';
 import { ConnectorFetcher } from './connector-fetcher.js';
 import type { CredentialStore } from '../governance/credentials/store.js';
@@ -33,8 +40,11 @@ import {
   type KnowledgeFileLimits,
   type KnowledgeFileLimitsInput,
 } from './file-limits.js';
+import { EmbedRunner, type EmbedSecretPolicy } from './embed-runner.js';
+import { JobQueue, type IngestJobKind as JobKind, type JobRow } from './job-queue.js';
 
-export type IngestJobKind = 'parse_file' | 'walk_source' | 'drop_file' | 'embed_source' | 'fetch_doc';
+export type { EmbedSecretPolicy };
+export type IngestJobKind = JobKind;
 
 /** 中止/继续 控制面读数（UI 互斥按钮） */
 export interface KnowledgeJobControlState {
@@ -59,7 +69,7 @@ export interface KnowledgeIngestOptions {
   sourceStore: KnowledgeSourceStore;
   indexStore?: KnowledgeIndexStore;
   adapterRegistry?: FormatAdapterRegistry;
-  /** parse 并发（默认 4） */
+  /** parse 并发（默认 8） */
   parseConcurrency?: number;
   /** 队列深度上限（超出只报警，不丢任务） */
   maxQueueDepth?: number;
@@ -101,16 +111,13 @@ export interface KnowledgeIngestOptions {
    * （缺省 null = 维持 BINARY skip 语义）
    */
   documentPort?: DocumentPort | null;
-}
-
-interface JobRow {
-  id: string;
-  source_id: string;
-  kind: string;
-  path: string | null;
-  priority: number;
-  status: string;
-  attempts: number;
+  /**
+   * embedding 外发前敏感形态策略（默认 redact）
+   * - allow：原文外发（内网/本地模型）
+   * - redact：命中替换为 [REDACTED:rule] 再 embed
+   * - skip：命中则不写向量（关键词仍可搜）
+   */
+  embedSecretPolicy?: EmbedSecretPolicy;
 }
 
 export class KnowledgeIngest extends EventEmitter {
@@ -137,11 +144,13 @@ export class KnowledgeIngest extends EventEmitter {
   private readonly pollMinIntervalMs: number;
   private readonly maxPollPerTick: number;
   private readonly documentPort: DocumentPort | null;
-  private lastEmbedAt = 0;
+  private readonly embedSecretPolicy: EmbedSecretPolicy;
+  private readonly embedRunner: EmbedRunner;
   private pollTimer: NodeJS.Timeout | null = null;
   private reconcileTimer: NodeJS.Timeout | null = null;
-  /** 源级中止控制器（手动 abort / 重建前清场） */
-  private abortBySource = new Map<string, AbortController>();
+  /** 源级中止：DB 权威 + 本进程 AbortSignal（跨重启） */
+  private readonly jobControl: KnowledgeJobControl;
+  private readonly jobQueue: JobQueue;
   /** 源任务稳定（无 queued/running）时回调 — 用于 auto-describe 等收尾 */
   onSourceSettled?: (sourceId: string) => void;
   /** 上次 parse 缺口扫描时间 */
@@ -162,10 +171,24 @@ export class KnowledgeIngest extends EventEmitter {
   constructor(options: KnowledgeIngestOptions) {
     super();
     this.sources = options.sourceStore;
+    this.maxQueueDepth = options.maxQueueDepth ?? 10_000;
+    this.jobControl = new KnowledgeJobControl(options.sourceStore.database);
+    this.jobQueue = new JobQueue({
+      db: options.sourceStore.database,
+      maxQueueDepth: this.maxQueueDepth,
+      isAborted: (id) => this.isAborted(id),
+      onBackpressure: (sourceId, queued) => {
+        this.emitProgress({
+          type: 'error',
+          sourceId,
+          status: 'queue_backpressure',
+          detail: `queued=${queued} (delay only, jobs kept)`,
+        });
+      },
+    });
     this.index = options.indexStore ?? new KnowledgeIndexStore(options.sourceStore.database);
     this.adapters = options.adapterRegistry ?? new FormatAdapterRegistry();
     this.parseConcurrency = options.parseConcurrency ?? 8;
-    this.maxQueueDepth = options.maxQueueDepth ?? 10_000;
     // watch 批量落盘时缩短静默窗，新增文件更快入队
     this.debounceMs = options.debounceMs ?? 800;
     this.fileLimits = resolveKnowledgeFileLimits({
@@ -183,6 +206,31 @@ export class KnowledgeIngest extends EventEmitter {
     this.diskWatermarkAlert = options.diskWatermarkAlert ?? false;
     this.credentials = options.credentials ?? null;
     this.documentPort = options.documentPort ?? null;
+    this.embedSecretPolicy = options.embedSecretPolicy ?? 'redact';
+    this.embedRunner = new EmbedRunner({
+      index: this.index,
+      embedding: this.embedding,
+      embedBatch: this.embedBatch,
+      embedConcurrency: this.embedConcurrency,
+      embedMinIntervalMs: this.embedMinIntervalMs,
+      embedSecretPolicy: this.embedSecretPolicy,
+      isAborted: (id) => this.isAborted(id),
+      heartbeatJob: (id) => this.heartbeatJob(id),
+      refreshCoverage: (id) => this.refreshCoverage(id),
+      emitProgress: (evt) => this.emitProgress(evt),
+      recordSecretHit: (input) => this.recordEmbedSecretHit(input),
+    });
+    // embedding 外发审计（合规可查；非权威计量）
+    this.sources.database.raw.exec(`
+      CREATE TABLE IF NOT EXISTS knowledge_embed_secret_log (
+        id         TEXT PRIMARY KEY,
+        source_id  TEXT NOT NULL,
+        chunk_id   TEXT NOT NULL,
+        action     TEXT NOT NULL,
+        hits_json  TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      );
+    `);
     this.localFetcher =
       options.fetchers?.local ?? new LocalFsFetcher((p) => this.shouldSkipFile(p));
     this.urlFetcher = options.fetchers?.url ?? new UrlFetcher();
@@ -247,9 +295,7 @@ export class KnowledgeIngest extends EventEmitter {
    * 仅构造时调用——运行中同进程的 running 是合法的。
    */
   private reclaimOrphanRunningJobs(): void {
-    this.sources.database.raw
-      .prepare(`UPDATE knowledge_jobs SET status = 'queued', updated_at = ? WHERE status = 'running'`)
-      .run(Date.now());
+    this.jobQueue.reclaimOrphanRunning();
   }
 
   get indexStore(): KnowledgeIndexStore {
@@ -268,11 +314,47 @@ export class KnowledgeIngest extends EventEmitter {
   }
 
   /**
-   * 全量/增量索引某源（Phase A）
+   * 路径归属：`parse_file` / 本地读文件只允许读源 root 内的路径。
+   * 外源（url/connector）的 path 是逻辑键，只接受已登记路径。
+   *
+   * @param source - 知识源
+   * @param path - 请求路径（本地绝对路径，或外源逻辑键）
    */
-  async ingestSource(sourceId: string, opts?: { full?: boolean }): Promise<void> {
-    // 重建 = supersede：以本次磁盘扫描为准，作废本源未完成任务
-    this.supersedeSourceWork(sourceId);
+  private sourceOwnsPath(source: KnowledgeSource, path: string): boolean {
+    if (source.kind === 'url' || source.kind === 'connector') {
+      return Boolean(this.index.getFile(source.id, path));
+    }
+    const root = resolve(source.location);
+    const target = resolve(path);
+    const eq = (a: string, b: string) =>
+      process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b;
+    if (eq(root, target)) return true;
+    const rel = relative(root, target);
+    return Boolean(rel) && !rel.startsWith('..') && !isAbsolute(rel);
+  }
+
+  /**
+   * 全量/增量索引某源（Phase A）
+   *
+   * @param opts.full - 显式重建（supersede 未完成任务）；poll/增量默认不打断在跑
+   * @param opts.incremental - 增量同步（poll）：有 active 任务则跳过本轮
+   */
+  async ingestSource(
+    sourceId: string,
+    opts?: { full?: boolean; incremental?: boolean },
+  ): Promise<void> {
+    // 仅显式 full/reindex 才 supersede；poll 不得取消在跑的大源 parse
+    if (opts?.full !== false && !opts?.incremental) {
+      this.supersedeSourceWork(sourceId);
+    } else if (this.countActiveJobs(sourceId).total > 0) {
+      this.emitProgress({
+        type: 'source',
+        sourceId,
+        status: 'poll_skipped',
+        detail: 'active jobs in flight',
+      });
+      return;
+    }
     const source = this.sources.get(sourceId);
     if (!source || source.status === 'removed') {
       throw new Error(`knowledge source not found: ${sourceId}`);
@@ -312,11 +394,16 @@ export class KnowledgeIngest extends EventEmitter {
         return;
       }
 
-      const files = await this.localFetcher.discover(source);
+      const localDiscovery = await this.localFetcher.discover(source);
+      const files = localDiscovery.docs;
       this.discoveredFiles.set(sourceId, files.length);
-      // 差量 prune：磁盘上已消失的 path
-      const localKeep = new Set(files.map((f) => f.path));
-      this.index.pruneMissing(sourceId, localKeep);
+      // 中止后不 prune、不入队（半截 keep 会误删）
+      if (this.isAborted(sourceId)) return;
+      // 差量 prune：仅 walk 完整时执行；出错/截断时 keep 不完整会误删
+      if (localDiscovery.complete) {
+        const localKeep = new Set(files.map((f) => f.path));
+        this.index.pruneMissing(sourceId, localKeep);
+      }
 
       this.sources.update(sourceId, { status: 'partial', coverage: 0 });
       this.emitProgress({
@@ -327,9 +414,10 @@ export class KnowledgeIngest extends EventEmitter {
       });
 
       for (const file of files) {
+        if (this.isAborted(sourceId)) return;
         this.enqueue(sourceId, 'parse_file', file.path, 2, file.path);
       }
-      if (this.embedding) {
+      if (this.embedding && !this.isAborted(sourceId)) {
         this.enqueue(sourceId, 'embed_source', null, 3);
       }
       this.kick();
@@ -357,9 +445,9 @@ export class KnowledgeIngest extends EventEmitter {
     }
 
     const fetcher = source.kind === 'connector' ? this.connectorFetcher : this.urlFetcher;
-    let refs;
+    let discovered: DiscoverResult;
     try {
-      refs = await fetcher.discover(source, cred);
+      discovered = await fetcher.discover(source, cred);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.sources.update(source.id, {
@@ -369,6 +457,7 @@ export class KnowledgeIngest extends EventEmitter {
       this.emitProgress({ type: 'error', sourceId: source.id, status: 'discover_failed', detail: msg });
       return;
     }
+    const refs = discovered.docs;
     // 条件 GET：带上已有 etag/Last-Modified，304 则整文档跳过
     const enriched = refs.map((ref) => {
       const existing = this.index.getFile(source.id, ref.path);
@@ -390,6 +479,16 @@ export class KnowledgeIngest extends EventEmitter {
     let okCount = 0;
     let unchanged = 0;
     for (const ref of enriched) {
+      // 中止后立刻停：不再外发、不再写索引
+      if (this.isAborted(source.id)) {
+        this.emitProgress({
+          type: 'source',
+          sourceId: source.id,
+          status: 'aborted',
+          detail: `stopped after ${okCount + unchanged}/${enriched.length}`,
+        });
+        return;
+      }
       try {
         const doc = await fetcher.fetch(source, ref, cred);
         if (!doc) {
@@ -417,19 +516,22 @@ export class KnowledgeIngest extends EventEmitter {
       }
     }
 
-    // 差量 prune：discover 成功后，源上已消失的文档才删
-    const keep = new Set(enriched.map((r) => r.path));
-    const pruned = this.index.pruneMissing(source.id, keep);
-    if (pruned > 0) {
-      this.emitProgress({
-        type: 'source',
-        sourceId: source.id,
-        status: 'pruned',
-        detail: `removed=${pruned}`,
-      });
+    // 差量 prune：仅当 discover **完整** 时才可删；截断/walk 失败时 keep 不完整，prune 会误删
+    // 中止后不做 prune：半截 keep 会误删已入库文档
+    if (!this.isAborted(source.id) && discovered.complete) {
+      const keep = new Set(enriched.map((r) => r.path));
+      const pruned = this.index.pruneMissing(source.id, keep);
+      if (pruned > 0) {
+        this.emitProgress({
+          type: 'source',
+          sourceId: source.id,
+          status: 'pruned',
+          detail: `removed=${pruned}`,
+        });
+      }
     }
 
-    if (this.embedding) {
+    if (this.embedding && !this.isAborted(source.id)) {
       this.enqueue(source.id, 'embed_source', null, 3);
       this.kick();
     }
@@ -522,20 +624,33 @@ export class KnowledgeIngest extends EventEmitter {
   /**
    * 重做指定文件：强制重新 解析 → 分块 → 向量
    *
+   * - 路径必须归属本源（防越权读盘）；外源逻辑键走 fetch_doc 重取
    * - 失效 contentHash（忽略 isFresh），旧 chunks 保留到 upsert 成功
    * - **源处于中止态时自动 resume**：显式重做 = 意图要跑活，不允许静默丢弃
    * - 目录等非文件：直接清脏行，不假装入队
-   * - 入队 parse_file；完成后走既有 embed 链路
+   * - 完成后走既有 embed 链路
    *
    * @param sourceId - 源 id
    * @param paths - 文件路径列表
-   * @returns queued=新入队；alreadyActive=已在队列/执行；cleanedNonFiles=清掉的目录脏行
+   * @returns queued=新入队；alreadyActive=已在队列/执行；cleanedNonFiles=清掉的目录脏行；rejected=越权/不属本源
    */
   reprocessFiles(
     sourceId: string,
     paths: string[],
-  ): { queued: number; alreadyActive: number; cleanedNonFiles: number; resumed: boolean } {
-    if (!paths.length) return { queued: 0, alreadyActive: 0, cleanedNonFiles: 0, resumed: false };
+  ): {
+    queued: number;
+    alreadyActive: number;
+    cleanedNonFiles: number;
+    resumed: boolean;
+    rejected: number;
+  } {
+    if (!paths.length) {
+      return { queued: 0, alreadyActive: 0, cleanedNonFiles: 0, resumed: false, rejected: 0 };
+    }
+    const source = this.sources.get(sourceId);
+    if (!source) {
+      return { queued: 0, alreadyActive: 0, cleanedNonFiles: 0, resumed: false, rejected: paths.length };
+    }
     let resumed = false;
     if (this.isAborted(sourceId)) {
       this.beginAbortEpoch(sourceId);
@@ -544,7 +659,23 @@ export class KnowledgeIngest extends EventEmitter {
     let queued = 0;
     let alreadyActive = 0;
     let cleanedNonFiles = 0;
+    let rejected = 0;
+    const isRemote = source.kind === 'url' || source.kind === 'connector';
     for (const p of paths) {
+      if (!this.sourceOwnsPath(source, p)) {
+        rejected += 1;
+        continue;
+      }
+      if (isRemote) {
+        // 外源：path 是逻辑键，重做 = 重新 fetch + 索引（不读本地盘）
+        this.index.invalidateFileForReparse(sourceId, p);
+        if (this.enqueue(sourceId, 'fetch_doc', p, 1, p)) {
+          queued += 1;
+        } else if (this.hasActiveParseJob(sourceId, p)) {
+          alreadyActive += 1;
+        }
+        continue;
+      }
       // 目录/设备节点：清脏行即可，没有「解析」可跑
       try {
         const st = statSync(p);
@@ -565,19 +696,12 @@ export class KnowledgeIngest extends EventEmitter {
       }
     }
     this.kick();
-    return { queued, alreadyActive, cleanedNonFiles, resumed };
+    return { queued, alreadyActive, cleanedNonFiles, resumed, rejected };
   }
 
-  /** 路径上是否已有 queued/running 的 parse_file */
+  /** 路径上是否已有 queued/running 的 parse/fetch 任务 */
   private hasActiveParseJob(sourceId: string, path: string): boolean {
-    const row = this.sources.database.raw
-      .prepare(
-        `SELECT id FROM knowledge_jobs
-         WHERE source_id = ? AND path = ? AND kind = 'parse_file' AND status IN ('queued','running')
-         LIMIT 1`,
-      )
-      .get(sourceId, path) as { id?: string } | undefined;
-    return Boolean(row?.id);
+    return this.jobQueue.hasActivePathJob(sourceId, path);
   }
 
   /**
@@ -632,7 +756,13 @@ export class KnowledgeIngest extends EventEmitter {
   reprocessByFilter(
     sourceId: string,
     opts?: { status?: 'indexed' | 'skipped' | 'error' | 'all'; ext?: string; q?: string },
-  ): { queued: number; alreadyActive: number; cleanedNonFiles: number; resumed: boolean } {
+  ): {
+    queued: number;
+    alreadyActive: number;
+    cleanedNonFiles: number;
+    resumed: boolean;
+    rejected: number;
+  } {
     const paths = this.index.listFilePathsFiltered(sourceId, opts);
     return this.reprocessFiles(sourceId, paths);
   }
@@ -746,13 +876,22 @@ export class KnowledgeIngest extends EventEmitter {
     runningJobs: number;
   } {
     const sid = opts?.sourceId?.trim();
-    const ids = sid ? [sid] : [...this.abortBySource.keys(), ...this.sources.list().map((s) => s.id)];
+    const ids = sid
+      ? [sid]
+      : [
+          ...this.jobControl.listAbortedSourceIds(),
+          ...this.sources.list().map((s) => s.id),
+        ];
     const unique = [...new Set(ids)];
     let cancelledQueued = 0;
     let abortedRunning = 0;
 
-    // 1) 清空 queued → cancelled
     for (const id of unique) {
+      // 1) DB 落中止态（跨重启）+ 打断本进程信号
+      const newly = this.jobControl.markAborted(id);
+      if (newly) abortedRunning += 1;
+
+      // 2) 清空 queued → cancelled
       const res = this.sources.database.raw
         .prepare(
           `UPDATE knowledge_jobs SET status = 'cancelled', last_error = 'aborted', updated_at = ?
@@ -760,26 +899,24 @@ export class KnowledgeIngest extends EventEmitter {
         )
         .run(Date.now(), id);
       cancelledQueued += Number(res.changes ?? 0);
-
-      // 2) 打断在跑（worker terminate / embed 循环退出）；保持 aborted 直到下次 reindex
-      let ctrl = this.abortBySource.get(id);
-      if (!ctrl) {
-        ctrl = new AbortController();
-        this.abortBySource.set(id, ctrl);
-      }
-      if (!ctrl.signal.aborted) {
-        ctrl.abort();
-        abortedRunning += 1;
-      }
     }
 
-    // 3) 看门狗不要再把 aborted running 收回 queued
-    this.sources.database.raw
-      .prepare(
-        `UPDATE knowledge_jobs SET status = 'cancelled', last_error = 'aborted', updated_at = ?
-         WHERE status = 'running' AND last_error = 'aborted'`,
-      )
-      .run(Date.now());
+    // 3) 看门狗不要再把 aborted running 收回 queued（限定本次涉及的源）
+    if (sid) {
+      this.sources.database.raw
+        .prepare(
+          `UPDATE knowledge_jobs SET status = 'cancelled', last_error = 'aborted', updated_at = ?
+           WHERE source_id = ? AND status = 'running' AND last_error = 'aborted'`,
+        )
+        .run(Date.now(), sid);
+    } else {
+      this.sources.database.raw
+        .prepare(
+          `UPDATE knowledge_jobs SET status = 'cancelled', last_error = 'aborted', updated_at = ?
+           WHERE status = 'running' AND last_error = 'aborted'`,
+        )
+        .run(Date.now());
+    }
 
     const runningRow = this.sources.database.raw
       .prepare(
@@ -817,19 +954,24 @@ export class KnowledgeIngest extends EventEmitter {
     const sid = opts?.sourceId?.trim();
     const ids = sid
       ? [sid]
-      : [...new Set([...this.abortBySource.keys(), ...this.sources.list().map((s) => s.id)])];
+      : [
+          ...new Set([
+            ...this.jobControl.listAbortedSourceIds(),
+            ...this.sources.list().map((s) => s.id),
+          ]),
+        ];
 
     let restoredCancelled = 0;
     let embedQueued = 0;
     for (const id of ids) {
-      // 1) 清除中止纪元
+      // 1) 清除中止态（DB + 新纪元信号）
       this.beginAbortEpoch(id);
 
       // 2) cancelled → queued（用户中止时被杀的活）
       const res = this.sources.database.raw
         .prepare(
-          `UPDATE knowledge_jobs SET status = 'queued', updated_at = ?
-           WHERE source_id = ? AND status = 'cancelled'`,
+          `UPDATE knowledge_jobs SET status = 'queued', last_error = NULL, updated_at = ?
+           WHERE source_id = ? AND status = 'cancelled' AND (last_error IS NULL OR last_error = 'aborted')`,
         )
         .run(Date.now(), id);
       restoredCancelled += Number(res.changes ?? 0);
@@ -855,9 +997,9 @@ export class KnowledgeIngest extends EventEmitter {
     return { restoredCancelled, embedQueued };
   }
 
-  /** 开启新的中止纪元（abort 后新任务不受旧信号影响） */
+  /** 开启新的未中止纪元（resume / supersede 后用；清 DB 中止态） */
   private beginAbortEpoch(sourceId: string): void {
-    this.abortBySource.set(sourceId, new AbortController());
+    this.jobControl.beginEpoch(sourceId);
   }
 
   /**
@@ -875,15 +1017,8 @@ export class KnowledgeIngest extends EventEmitter {
       )
       .run(Date.now(), sourceId);
 
-    // 打断在跑 parse/embed；再开新纪元，避免 walk 自己被 abort 卡死
-    let ctrl = this.abortBySource.get(sourceId);
-    if (!ctrl) {
-      ctrl = new AbortController();
-      this.abortBySource.set(sourceId, ctrl);
-    }
-    if (!ctrl.signal.aborted) {
-      ctrl.abort();
-    }
+    // 打断在跑 parse/embed；再开新纪元（清中止态），避免 walk 自己被 abort 卡死
+    this.jobControl.markAborted(sourceId);
     this.beginAbortEpoch(sourceId);
 
     this.emitProgress({
@@ -899,10 +1034,10 @@ export class KnowledgeIngest extends EventEmitter {
     if (!source || source.status === 'removed' || source.status === 'disabled') return 0;
     if (source.kind !== 'directory' && source.kind !== 'workspace') return 0;
     if (this.isAborted(sourceId)) return 0;
-    // 已有 parse 积压则不重复扫
-    if (this.countQueuedKinds(['parse_file', 'walk_source']) > 0) return 0;
+    // 本源已有 parse 积压则不重复扫（禁止全局互斥拖死其他源的缺口补扫）
+    if (this.countQueuedKinds(['parse_file', 'walk_source'], sourceId) > 0) return 0;
 
-    let found: Awaited<ReturnType<typeof this.localFetcher.discover>>;
+    let found: DiscoverResult;
     try {
       found = await this.localFetcher.discover(source);
     } catch {
@@ -911,7 +1046,7 @@ export class KnowledgeIngest extends EventEmitter {
     const byPath = new Map(this.index.listFiles(sourceId).map((f) => [f.path, f]));
     let added = 0;
     let retriedSkipped = 0;
-    for (const f of found) {
+    for (const f of found.docs) {
       const existing = byPath.get(f.path);
       // 缺文件必补；已 skipped 的 oversize/空内容在限额可接受时重试（配置调宽后能进索引）
       const need =
@@ -952,9 +1087,14 @@ export class KnowledgeIngest extends EventEmitter {
     if (source.kind === 'directory' || source.kind === 'workspace') {
       try {
         const found = await this.localFetcher.discover(source);
-        const keep = new Set(found.map((f) => f.path));
-        // walk 成功：即使空目录也可清空（与逐文件 stat 语义一致）
-        removed = this.index.pruneMissing(sourceId, keep, { allowEmptyKeep: true });
+        if (!found.complete) {
+          // walk 不完整：退回逐文件 stat，禁止用残缺 keep 清库
+          removed = await this.pruneByStatScan(sourceId);
+        } else {
+          const keep = new Set(found.docs.map((f) => f.path));
+          // walk 完整：即使空目录也可清空（与逐文件 stat 语义一致）
+          removed = this.index.pruneMissing(sourceId, keep, { allowEmptyKeep: true });
+        }
       } catch {
         removed = await this.pruneByStatScan(sourceId);
       }
@@ -1003,16 +1143,11 @@ export class KnowledgeIngest extends EventEmitter {
   }
 
   private abortSignalFor(sourceId: string): AbortSignal {
-    let ac = this.abortBySource.get(sourceId);
-    if (!ac) {
-      ac = new AbortController();
-      this.abortBySource.set(sourceId, ac);
-    }
-    return ac.signal;
+    return this.jobControl.signalFor(sourceId);
   }
 
   private isAborted(sourceId: string): boolean {
-    return this.abortSignalFor(sourceId).aborted;
+    return this.jobControl.isAborted(sourceId);
   }
 
   /**
@@ -1087,9 +1222,12 @@ export class KnowledgeIngest extends EventEmitter {
   /** 对账入口（也可手工调用） */
   async reconcileJobs(): Promise<void> {
     if (this.disposed) return;
-    this.reclaimStaleRunningJobs(5 * 60_000);
+    // stale 阈值必须 **大于** 硬超时，否则合法的长 parse 会被收回后双跑
+    this.reclaimStaleRunningJobs(this.fileLimits.maxParseTimeoutMs + 60_000);
     // 目录脏行等历史误入项（轻量；非每轮全表）
     this.cleanupNonFileIndexRows();
+    // 终态 job 定期清理，防表无限增长
+    this.cleanupTerminalJobs();
     // 存量向量回填：小批量 + 让出事件循环，禁止 2000 条同步写（会堵死 abort）
     await this.index.backfillVecFromEmbeddings(25);
     for (const s of this.sources.list()) {
@@ -1101,56 +1239,41 @@ export class KnowledgeIngest extends EventEmitter {
         this.lastParseGapScanAt.set(s.id, Date.now());
         await this.ensureParseCoverage(s.id);
       }
-      if (this.embedding) {
-        const missing = this.index.listChunksMissingEmbedding(s.id, 1).length > 0;
-        const active = this.countActiveJobs(s.id);
-        if (missing && active.embed === 0) {
-          this.ensureEmbedJob(s.id);
-        } else if (!missing && active.total === 0) {
-          this.refreshCoverage(s.id);
-          // 稳定态收尾（auto-describe 等）；回调不得抛出打断对账
-          try {
-            this.onSourceSettled?.(s.id);
-          } catch {
-            /* ignore settle hook errors */
-          }
+      const active = this.countActiveJobs(s.id);
+      const missingEmbed = this.embedding
+        ? this.index.listChunksMissingEmbedding(s.id, 1).length > 0
+        : false;
+      if (this.embedding && missingEmbed && active.embed === 0) {
+        this.ensureEmbedJob(s.id);
+        continue;
+      }
+      if (active.total === 0) {
+        this.refreshCoverage(s.id);
+        // 稳定态收尾（auto-describe 等）——纯关键词部署同样要触发
+        try {
+          this.onSourceSettled?.(s.id);
+        } catch {
+          /* ignore settle hook errors */
         }
       } else {
-        this.refreshCoverage(s.id);
+        this.flushCoverageDirty(s.id);
       }
     }
     this.kick();
   }
 
+  /** 终态 job 清理（done/failed/cancelled 超过保留期） */
+  private cleanupTerminalJobs(retainMs = 24 * 60 * 60_000): void {
+    this.jobQueue.cleanupTerminal(retainMs);
+  }
+
   /** running 超时（无 heartbeat）→ 收回 queued；多次失败的直接标 failed，防毒文件死循环 */
   private reclaimStaleRunningJobs(staleMs: number): void {
-    const cutoff = Date.now() - staleMs;
-    // 先放弃重试过多的
-    this.sources.database.raw
-      .prepare(
-        `UPDATE knowledge_jobs SET status = 'failed', last_error = COALESCE(last_error, 'stale_give_up'), updated_at = ?
-         WHERE status = 'running' AND updated_at < ? AND attempts >= 2`,
-      )
-      .run(Date.now(), cutoff);
-    this.sources.database.raw
-      .prepare(
-        `UPDATE knowledge_jobs SET status = 'queued', attempts = attempts + 1, updated_at = ?
-         WHERE status = 'running' AND updated_at < ? AND attempts < 2`,
-      )
-      .run(Date.now(), cutoff);
+    this.jobQueue.reclaimStaleRunning(staleMs);
   }
 
   private countActiveJobs(sourceId: string): { total: number; embed: number } {
-    const row = this.sources.database.raw
-      .prepare(
-        `SELECT
-           COUNT(*) AS total,
-           SUM(CASE WHEN kind = 'embed_source' THEN 1 ELSE 0 END) AS embed
-         FROM knowledge_jobs
-         WHERE source_id = ? AND status IN ('queued', 'running')`,
-      )
-      .get(sourceId) as { total: number; embed: number | null };
-    return { total: row?.total ?? 0, embed: row?.embed ?? 0 };
+    return this.jobQueue.countActiveJobs(sourceId);
   }
 
   /**
@@ -1209,8 +1332,8 @@ export class KnowledgeIngest extends EventEmitter {
         status: 'poll_due',
         detail: source.sync.intervalMs?.toString(),
       });
-      // 异步入队，不阻塞 tick
-      void this.ingestSource(source.id).catch((err) => {
+      // 异步入队，不阻塞 tick；增量：有 active 则跳过，禁止 supersede 打断
+      void this.ingestSource(source.id, { incremental: true }).catch((err) => {
         this.emitProgress({
           type: 'error',
           sourceId: source.id,
@@ -1225,10 +1348,7 @@ export class KnowledgeIngest extends EventEmitter {
   // ── 内部 ──
 
   private hasQueuedJobs(): boolean {
-    const row = this.sources.database.raw
-      .prepare(`SELECT COUNT(*) AS n FROM knowledge_jobs WHERE status = 'queued'`)
-      .get() as { n: number };
-    return (row?.n ?? 0) > 0;
+    return this.jobQueue.hasQueuedJobs();
   }
 
   private enqueue(
@@ -1238,52 +1358,11 @@ export class KnowledgeIngest extends EventEmitter {
     priority: number,
     _detail?: string,
   ): boolean {
-    if (this.isAborted(sourceId)) return false;
-    // 同 source+kind 去重（queued + running，避免并发重复 embed）
-    const activeStatuses = ['queued', 'running'];
-    if (path != null) {
-      const placeholders = activeStatuses.map(() => '?').join(',');
-      const dup = this.sources.database.raw
-        .prepare(
-          `SELECT id FROM knowledge_jobs
-           WHERE source_id = ? AND kind = ? AND path = ? AND status IN (${placeholders})`,
-        )
-        .get(sourceId, kind, path, ...activeStatuses) as { id?: string } | undefined;
-      if (dup?.id) return false;
-    } else {
-      const placeholders = activeStatuses.map(() => '?').join(',');
-      const dup = this.sources.database.raw
-        .prepare(
-          `SELECT id FROM knowledge_jobs
-           WHERE source_id = ? AND kind = ? AND path IS NULL AND status IN (${placeholders})`,
-        )
-        .get(sourceId, kind, ...activeStatuses) as { id?: string } | undefined;
-      if (dup?.id) return false;
-    }
-
-    const now = Date.now();
-    const depth = this.sources.database.raw
-      .prepare(`SELECT COUNT(*) AS n FROM knowledge_jobs WHERE status = 'queued'`)
-      .get() as { n: number };
-    if ((depth?.n ?? 0) >= this.maxQueueDepth) {
-      this.emitProgress({
-        type: 'error',
-        sourceId,
-        status: 'queue_backpressure',
-        detail: `queued=${depth.n} (delay only, jobs kept)`,
-      });
-    }
-    if (this.diskWatermarkAlert) {
+    const ok = this.jobQueue.enqueue(sourceId, kind, path, priority);
+    if (ok && this.diskWatermarkAlert) {
       void this.warnDiskWatermark(sourceId);
     }
-
-    this.sources.database.raw
-      .prepare(
-        `INSERT INTO knowledge_jobs (id, source_id, kind, path, priority, status, attempts, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, 'queued', 0, ?, ?)`,
-      )
-      .run(`kj_${randomUUID().slice(0, 12)}`, sourceId, kind, path, priority, now, now);
-    return true;
+    return ok;
   }
 
   private kick(): void {
@@ -1305,7 +1384,9 @@ export class KnowledgeIngest extends EventEmitter {
   }
 
   private drain(): void {
+    if (this.disposed) return;
     for (;;) {
+      if (this.disposed) return;
       const allowParse = this.runningParse < this.parseConcurrency;
       const allowEmbed = this.runningEmbed < this.embedConcurrency;
       if (!allowParse && !allowEmbed) return;
@@ -1329,7 +1410,11 @@ export class KnowledgeIngest extends EventEmitter {
       }
 
       const job = this.claimJob(kinds);
-      if (!job) return;
+      if (!job) {
+        // 队列清空：合并刷新被 parse/drop 标脏的 coverage，避免每文件一次 COUNT
+        this.flushCoverageDirty();
+        return;
+      }
 
       const isEmbed = job.kind === 'embed_source';
       if (isEmbed) this.runningEmbed += 1;
@@ -1353,37 +1438,13 @@ export class KnowledgeIngest extends EventEmitter {
     }
   }
 
-  private countQueuedKinds(kinds: IngestJobKind[]): number {
-    if (kinds.length === 0) return 0;
-    const placeholders = kinds.map(() => '?').join(',');
-    const row = this.sources.database.raw
-      .prepare(
-        `SELECT COUNT(*) AS n FROM knowledge_jobs WHERE status = 'queued' AND kind IN (${placeholders})`,
-      )
-      .get(...kinds) as { n: number };
-    return row?.n ?? 0;
+  private countQueuedKinds(kinds: IngestJobKind[], sourceId?: string): number {
+    if (this.disposed) return 0;
+    return this.jobQueue.countQueuedKinds(kinds, sourceId);
   }
 
   private claimJob(kinds: IngestJobKind[]): JobRow | null {
-    if (kinds.length === 0) return null;
-    const placeholders = kinds.map(() => '?').join(',');
-    const row = this.sources.database.raw
-      .prepare(
-        `SELECT * FROM knowledge_jobs
-         WHERE status = 'queued' AND kind IN (${placeholders})
-         ORDER BY priority ASC, created_at ASC
-         LIMIT 1`,
-      )
-      .get(...kinds) as JobRow | undefined;
-    if (!row) return null;
-    const res = this.sources.database.raw
-      .prepare(
-        `UPDATE knowledge_jobs SET status = 'running', updated_at = ?
-         WHERE id = ? AND status = 'queued'`,
-      )
-      .run(Date.now(), row.id);
-    if (Number(res.changes ?? 0) === 0) return null;
-    return row;
+    return this.jobQueue.claimJob(kinds);
   }
 
   private async runJob(job: JobRow): Promise<void> {
@@ -1398,6 +1459,13 @@ export class KnowledgeIngest extends EventEmitter {
       return;
     }
     try {
+      // 归属闸门：任何会碰本地盘 / 外源逻辑键的 path 任务都必须属于本源
+      if (job.path && (job.kind === 'parse_file' || job.kind === 'fetch_doc')) {
+        const owner = this.sources.get(job.source_id);
+        if (owner && !this.sourceOwnsPath(owner, job.path)) {
+          throw new Error(`path not owned by source: ${job.path}`);
+        }
+      }
       if (job.kind === 'parse_file' && job.path) {
         // 单文件解析硬超时：大 xlsx/pdf 同步抽取会堵死事件循环；超时随体积放大
         let parseTimeoutMs = this.parseTimeoutMs;
@@ -1407,26 +1475,33 @@ export class KnowledgeIngest extends EventEmitter {
         } catch {
           // 路径已删时交给 parseOne 自清理
         }
+        this.heartbeatJob(job.id);
         await this.withTimeout(
-          this.parseOne(job.source_id, job.path),
+          (signal) => this.parseOne(job.source_id, job.path!, signal),
           parseTimeoutMs,
           `parse_timeout:${job.path}`,
+          this.abortSignalFor(job.source_id),
         );
         if (this.isAborted(job.source_id)) {
           throw new Error('aborted');
         }
-        this.refreshCoverage(job.source_id);
+        this.markCoverageDirty(job.source_id);
         if (this.embedding) {
           this.enqueue(job.source_id, 'embed_source', null, 3);
           this.kick();
         }
       } else if (job.kind === 'fetch_doc' && job.path) {
+        this.heartbeatJob(job.id);
         await this.withTimeout(
-          this.fetchDocJob(job.source_id, job.path),
+          (signal) => this.fetchDocJob(job.source_id, job.path!, signal),
           this.parseTimeoutMs,
           `fetch_timeout:${job.path}`,
+          this.abortSignalFor(job.source_id),
         );
-        this.refreshCoverage(job.source_id);
+        if (this.isAborted(job.source_id)) {
+          throw new Error('aborted');
+        }
+        this.markCoverageDirty(job.source_id);
         if (this.embedding) {
           this.enqueue(job.source_id, 'embed_source', null, 3);
           this.kick();
@@ -1434,9 +1509,12 @@ export class KnowledgeIngest extends EventEmitter {
       } else if (job.kind === 'drop_file' && job.path) {
         // 目录移出/删除：连同子路径一并清（否则只剩空目录节点）
         this.index.removePathTree(job.source_id, job.path);
-        this.refreshCoverage(job.source_id);
+        this.markCoverageDirty(job.source_id);
       } else if (job.kind === 'walk_source') {
         await this.ingestSource(job.source_id);
+        if (this.isAborted(job.source_id)) {
+          throw new Error('aborted');
+        }
       } else if (job.kind === 'embed_source') {
         if (!this.embedding) {
           const stillMissing = this.index.listChunksMissingEmbedding(job.source_id, 1).length > 0;
@@ -1447,6 +1525,13 @@ export class KnowledgeIngest extends EventEmitter {
           return;
         }
         await this.embedPending(job.source_id, 50, job.id);
+        if (this.isAborted(job.source_id)) {
+          throw new Error('aborted');
+        }
+      }
+      // 统一收尾闸门：任何 kind 中止后都不得标 done
+      if (this.isAborted(job.source_id)) {
+        throw new Error('aborted');
       }
       this.sources.database.raw
         .prepare(
@@ -1467,7 +1552,9 @@ export class KnowledgeIngest extends EventEmitter {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       const aborted = message === 'aborted' || this.isAborted(job.source_id);
-      if (job.kind === 'parse_file' && job.path && !aborted) {
+      // 归属拒绝不是「文件解析失败」，不得写入 knowledge_files
+      const ownership = message.includes('not owned by source');
+      if (job.kind === 'parse_file' && job.path && !aborted && !ownership) {
         this.index.markFileError(job.source_id, job.path, message);
       }
       this.sources.database.raw
@@ -1484,26 +1571,42 @@ export class KnowledgeIngest extends EventEmitter {
     }
   }
 
-  private async withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
-    let timer: NodeJS.Timeout | undefined;
+  /**
+   * 带截止时间的可取消执行：超时会 abort signal，工作侧必须在副作用前检查。
+   * 禁止再用 Promise.race 包不可取消的 Promise——那会在超时后留下僵尸写入。
+   */
+  private async withTimeout<T>(
+    work: (signal: AbortSignal) => Promise<T>,
+    ms: number,
+    label: string,
+    parent?: AbortSignal,
+  ): Promise<T> {
+    const controller = new AbortController();
+    const onParentAbort = () => controller.abort();
+    parent?.addEventListener('abort', onParentAbort, { once: true });
+    const timer = setTimeout(() => controller.abort(), ms);
     try {
-      return await Promise.race([
-        p,
-        new Promise<never>((_, reject) => {
-          timer = setTimeout(() => reject(new Error(label)), ms);
-        }),
-      ]);
+      return await work(controller.signal);
+    } catch (err) {
+      if (controller.signal.aborted) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg === 'aborted' || msg.includes('abort')) throw new Error(label);
+        throw new Error(label);
+      }
+      throw err;
     } finally {
-      if (timer) clearTimeout(timer);
+      clearTimeout(timer);
+      parent?.removeEventListener('abort', onParentAbort);
     }
   }
 
   /**
    * 外源单文档 job：按逻辑键 fetch + 索引
    */
-  private async fetchDocJob(sourceId: string, path: string): Promise<void> {
+  private async fetchDocJob(sourceId: string, path: string, signal?: AbortSignal): Promise<void> {
     const source = this.sources.get(sourceId);
     if (!source || source.status === 'removed') return;
+    if (signal?.aborted) throw new Error('aborted');
     const cred = await this.resolveCred(source);
     const existing = this.index.getFile(sourceId, path);
     const ref = {
@@ -1522,7 +1625,17 @@ export class KnowledgeIngest extends EventEmitter {
     if (doc) this.indexVirtualDoc(sourceId, doc);
   }
 
-  private async parseOne(sourceId: string, filePath: string): Promise<boolean> {
+  private async parseOne(
+    sourceId: string,
+    filePath: string,
+    signal?: AbortSignal,
+  ): Promise<boolean> {
+    const source = this.sources.get(sourceId);
+    // 防御深度：即使队列被污染，也不读源 root 外的本地文件
+    if (source && !this.sourceOwnsPath(source, filePath)) {
+      throw new Error(`path not owned by source: ${filePath}`);
+    }
+    if (signal?.aborted) throw new Error('aborted');
     if (this.shouldSkipFile(filePath)) {
       this.index.markFileSkipped(sourceId, filePath, 'ignored_path');
       return false;
@@ -1544,7 +1657,7 @@ export class KnowledgeIngest extends EventEmitter {
     const adapter = this.adapters.match(filePath);
     if (!adapter) {
       if (this.documentPort && isDocumentPath(filePath)) {
-        return this.parseDocumentFile(sourceId, filePath);
+        return this.parseDocumentFile(sourceId, filePath, signal);
       }
       this.index.markFileSkipped(sourceId, filePath, 'no_adapter', st.size);
       return false;
@@ -1564,6 +1677,8 @@ export class KnowledgeIngest extends EventEmitter {
     if (this.index.isFresh(sourceId, filePath, contentHash)) {
       return true;
     }
+    // 副作用前再查一次：超时/中止后不得把僵尸结果写进索引
+    if (signal?.aborted) throw new Error('aborted');
     const text =
       sizeDecision.action === 'partial' && content.length > maxTextChars
         ? `${content.slice(0, maxTextChars)}\n\n…[truncated: ${content.length - maxTextChars} chars omitted]`
@@ -1582,6 +1697,10 @@ export class KnowledgeIngest extends EventEmitter {
       });
       return true;
     } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg === 'aborted' || msg.startsWith('parse_timeout') || signal?.aborted) {
+        throw err;
+      }
       this.index.markFileError(
         sourceId,
         filePath,
@@ -1600,9 +1719,14 @@ export class KnowledgeIngest extends EventEmitter {
    * @param filePath - 本地文件路径
    * @returns 是否成功入索引
    */
-  private async parseDocumentFile(sourceId: string, filePath: string): Promise<boolean> {
+  private async parseDocumentFile(
+    sourceId: string,
+    filePath: string,
+    signal?: AbortSignal,
+  ): Promise<boolean> {
     const port = this.documentPort;
     if (!port) return false;
+    if (signal?.aborted) throw new Error('aborted');
 
     let st;
     try {
@@ -1628,12 +1752,13 @@ export class KnowledgeIngest extends EventEmitter {
 
     try {
       // worker 抽取：同步 xlsx/pdf 不堵主循环；超时/中止可 terminate
-      const result = await this.extractDocument(filePath, sourceId, st.size);
+      const result = await this.extractDocument(filePath, sourceId, st.size, signal);
       const markdown = result.markdown?.trim();
       if (!markdown) {
         this.index.markFileSkipped(sourceId, filePath, 'empty_content', st.size);
         return false;
       }
+      if (signal?.aborted) throw new Error('aborted');
       const chunks = markdownAdapter.chunk(markdown, filePath);
       this.index.upsertFile({
         sourceId,
@@ -1646,6 +1771,11 @@ export class KnowledgeIngest extends EventEmitter {
       });
       return true;
     } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      // 中止/超时不是「这个文件解析失败」，必须上抛让 job 标 failed，禁止静默 done
+      if (msg === 'aborted' || msg.startsWith('parse_timeout') || signal?.aborted) {
+        throw err;
+      }
       if (isDocumentExtractError(err)) {
         // 结构化跳过（密码/老格式/超大等），不挡整库
         this.index.markFileSkipped(sourceId, filePath, err.code.toLowerCase(), st.size);
@@ -1662,8 +1792,18 @@ export class KnowledgeIngest extends EventEmitter {
   }
 
   /** 优先 worker 抽取；worker 不可用时退回进程内 port */
-  private async extractDocument(filePath: string, sourceId: string, fileSize = 0) {
-    const signal = this.abortSignalFor(sourceId);
+  private async extractDocument(
+    filePath: string,
+    sourceId: string,
+    fileSize = 0,
+    extraSignal?: AbortSignal,
+  ) {
+    const sourceSignal = this.abortSignalFor(sourceId);
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    sourceSignal.addEventListener('abort', abort, { once: true });
+    extraSignal?.addEventListener('abort', abort, { once: true });
+    const signal = controller.signal;
     const timeoutMs = parseTimeoutForSize(fileSize, this.fileLimits);
     const extractOpts = {
       timeoutMs,
@@ -1686,9 +1826,17 @@ export class KnowledgeIngest extends EventEmitter {
         throw new Error('aborted');
       }
       if (msg.includes('Cannot find module') || msg.includes('ERR_MODULE')) {
-        return this.documentPort!.extract({ path: filePath, name: filePath }, extractOpts);
+        if (signal.aborted) throw new Error('aborted');
+        // 必须 await：return promise 会立刻跑 finally 拆掉 abort 监听
+        return await this.documentPort!.extract(
+          { path: filePath, name: filePath },
+          { ...extractOpts, signal },
+        );
       }
       throw err;
+    } finally {
+      sourceSignal.removeEventListener('abort', abort);
+      extraSignal?.removeEventListener('abort', abort);
     }
   }
 
@@ -1699,115 +1847,28 @@ export class KnowledgeIngest extends EventEmitter {
    * 失败/超时也 re-enqueue，避免 job 标 done 后 coverage 永久卡住。
    */
   private async embedPending(sourceId: string, maxRounds = 20, jobId?: string): Promise<void> {
-    if (!this.embedding) {
-      if (this.index.listChunksMissingEmbedding(sourceId, 1).length > 0) {
-        throw new Error('embedding_provider_missing');
-      }
-      return;
-    }
-    // 磁盘对齐在 reindex/walk 做；embed 任务内不再全量 prune（曾拖慢解析）
-
-    const lanes = Math.max(1, this.embedConcurrency);
-    const batchSize = Math.max(1, this.embedBatch);
-
-    for (let round = 0; round < maxRounds; round++) {
-      if (this.isAborted(sourceId)) return;
-      const pending = this.index.listChunksMissingEmbedding(sourceId, batchSize * lanes);
-      if (pending.length === 0) {
-        this.refreshCoverage(sourceId);
-        return;
-      }
-      if (jobId) this.heartbeatJob(jobId);
-
-      // 轮次限速（并行片共享同一闸门）
-      if (this.embedMinIntervalMs > 0) {
-        const wait = this.lastEmbedAt + this.embedMinIntervalMs - Date.now();
-        if (wait > 0) await new Promise((r) => setTimeout(r, wait));
-      }
-
-      const slices: typeof pending[] = [];
-      for (let i = 0; i < pending.length; i += batchSize) {
-        slices.push(pending.slice(i, i + batchSize));
-      }
-
-      const settled = await Promise.allSettled(
-        slices.map((slice) => this.embedOneSlice(sourceId, slice)),
-      );
-
-      let ok = 0;
-      let failed = false;
-      for (const s of settled) {
-        if (s.status === 'fulfilled') ok += s.value;
-        else failed = true;
-      }
-      this.lastEmbedAt = Date.now();
-      this.emitProgress({
-        type: 'embed',
-        sourceId,
-        status: 'batch_done',
-        detail: `embedded=${ok}/${pending.length} lanes=${slices.length}`,
-      });
-      if (failed) {
-        // 至少一片失败：交给 done 后的 ensureEmbedJob 续跑，不把整 job 打成 failed
-        return;
-      }
-    }
-    this.refreshCoverage(sourceId);
+    await this.embedRunner.embedPending(sourceId, maxRounds, jobId);
   }
 
-  /** 单片 embedding；返回成功写入条数。成功条立即落库，禁止被同片失败拖丢 */
-  private async embedOneSlice(
-    sourceId: string,
-    slice: Array<{ id: KnowledgeChunkId; text: string }>,
-  ): Promise<number> {
-    if (slice.length === 0) return 0;
-    // 超时随片长放大：远程串行 Ollama 单条 1–3s，32 条会顶穿旧 120s 整片超时
-    const timeoutMs = 60_000 + 20_000 * slice.length;
-    let vectors: number[][] = [];
-    if (!this.isAborted(sourceId)) {
-      try {
-        vectors = await Promise.race([
-          this.embedding!.embedBatch(slice.map((p) => p.text)),
-          new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new Error('embed_batch_timeout')), timeoutMs),
-          ),
-        ]);
-      } catch {
-        vectors = [];
-      }
-    }
-
-    let ok = 0;
-    const batch: Array<[string, number[]]> = [];
-    const flush = () => {
-      if (batch.length > 0) {
-        this.index.setChunkEmbeddings(batch.splice(0, batch.length));
-      }
-    };
-
-    for (let i = 0; i < slice.length; i++) {
-      // 中止后立刻停，不把整片跑完（用户点「中止」要能感知）
-      if (this.isAborted(sourceId)) {
-        flush();
-        return ok;
-      }
-      let vec = vectors[i];
-      if (!vec?.length) {
-        // 批量空槽 / 长度不对齐：按条补（provider 内含上下文截断回退）
-        try {
-          vec = await this.embedding!.embed(slice[i]!.text);
-        } catch {
-          vec = [];
-        }
-      }
-      if (vec?.length) {
-        batch.push([slice[i]!.id, vec]);
-        ok += 1;
-        if (batch.length >= 8) flush();
-      }
-    }
-    flush();
-    return ok;
+  private recordEmbedSecretHit(input: {
+    sourceId: string;
+    chunkId: string;
+    action: string;
+    hits: string[];
+  }): void {
+    this.sources.database.raw
+      .prepare(
+        `INSERT INTO knowledge_embed_secret_log (id, source_id, chunk_id, action, hits_json, created_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        `kes_${randomUUID().slice(0, 12)}`,
+        input.sourceId,
+        input.chunkId,
+        input.action,
+        JSON.stringify(input.hits),
+        Date.now(),
+      );
   }
 
   /** 仍有缺向量则排队下一个 embed_source（须在当前 job 标 done 之后调用） */
@@ -1820,9 +1881,21 @@ export class KnowledgeIngest extends EventEmitter {
   }
 
   private heartbeatJob(jobId: string): void {
-    this.sources.database.raw
-      .prepare(`UPDATE knowledge_jobs SET updated_at = ? WHERE id = ? AND status = 'running'`)
-      .run(Date.now(), jobId);
+    this.jobQueue.heartbeat(jobId);
+  }
+
+  /** parse 完成不立刻刷 coverage（O(N) 写放大）；标脏，drain/reconcile 时合并刷新 */
+  private coverageDirty = new Set<string>();
+
+  private markCoverageDirty(sourceId: string): void {
+    this.coverageDirty.add(sourceId);
+  }
+
+  private flushCoverageDirty(sourceId?: string): void {
+    const ids = sourceId ? [sourceId] : [...this.coverageDirty];
+    if (sourceId) this.coverageDirty.delete(sourceId);
+    else this.coverageDirty.clear();
+    for (const id of ids) this.refreshCoverage(id);
   }
 
   private refreshCoverage(sourceId: string): void {

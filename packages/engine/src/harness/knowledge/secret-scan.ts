@@ -1,7 +1,7 @@
 /**
- * 密钥/敏感形态扫描 — auto-describe 抽样外发前的门
+ * 密钥/敏感形态扫描 — 外发前的门（auto-describe / embedding）
  *
- * 只做形态匹配，不做语义理解。命中则拒绝外发该样本。
+ * 只做形态匹配，不做语义理解。
  */
 
 const SECRET_PATTERNS: Array<{ name: string; re: RegExp }> = [
@@ -17,6 +17,10 @@ const SECRET_PATTERNS: Array<{ name: string; re: RegExp }> = [
   },
 ];
 
+function withGlobal(re: RegExp): RegExp {
+  return re.flags.includes('g') ? re : new RegExp(re.source, `${re.flags}g`);
+}
+
 /**
  * 扫描文本中的密钥形态
  *
@@ -29,4 +33,29 @@ export function scanSecretShapes(text: string): string[] {
     if (re.test(text)) hits.push(name);
   }
   return hits;
+}
+
+export interface RedactResult {
+  text: string;
+  hits: string[];
+}
+
+/**
+ * 脱敏：命中形态替换为 `[REDACTED:rule]`，供 embedding 外发前使用。
+ *
+ * @param text - 原文
+ * @returns 脱敏后文本与命中规则名
+ */
+export function redactSecretShapes(text: string): RedactResult {
+  if (!text) return { text: '', hits: [] };
+  let out = text;
+  const hits: string[] = [];
+  for (const { name, re } of SECRET_PATTERNS) {
+    const g = withGlobal(re);
+    if (g.test(out)) {
+      hits.push(name);
+      out = out.replace(g, `[REDACTED:${name}]`);
+    }
+  }
+  return { text: out, hits };
 }

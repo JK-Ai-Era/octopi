@@ -2,7 +2,7 @@
  * Knowledge 源模型 — 外生语料登记（arch/knowledge-layer.md）
  *
  * Scope：Global（默认可见可屏蔽）/ Project（显式挂载）/ Session（临时）。
- * 无 Agent 级源。Index 不在本模块（P2+）；此处是权威注册表与可见性。
+ * 无 Agent 级源。此处是源类型与可见性契约；Index 投影在 index-store/db。
  */
 
 /** 不透明 branded id（跨边界防混用；AGENTS：Brand opaque IDs） */

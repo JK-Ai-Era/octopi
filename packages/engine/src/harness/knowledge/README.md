@@ -28,6 +28,19 @@ Knowledge · Source · KnowledgeScope（Global / Project / Session）
 `catalog-types.ts` / `catalog-index.ts`：Tier 0 catalog（system 只注入「有哪些源」）。  
 实现依赖本目录 `types.ts`；**不**再拆到 `context/knowledge/`。
 
+实现口径（FTS5 / 中止跨重启 / 向量闸门 / embed secret / 拆分）见 **`docs/knowledge.md` §8.1**。
+
+## 模块（拆分后）
+
+| 文件 | 职责 |
+|------|------|
+| `ingest.ts` | 编排 / parse / watch / poll / reconcile |
+| `job-queue.ts` | jobs 表原语 |
+| `job-control.ts` | 中止纪元（DB 权威） |
+| `embed-runner.ts` | Phase B + 外发 secret 策略 |
+| `fts.ts` / `vector-ann.ts` | 关键词倒排 / 向量桶裁剪 |
+| `index-store.ts` | files/chunks/向量投影 |
+
 ## 边界
 
 - **不做**：命题记忆；活系统当前态（Tool 实时查）

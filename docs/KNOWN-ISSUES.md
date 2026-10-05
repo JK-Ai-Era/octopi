@@ -36,11 +36,19 @@
 
 ## Knowledge 索引 / 向量 — 开放边界（2026-10 as-built）
 
-**状态：** Phase A/B、watch、abort/resume、supersede reindex、BLOB 向量、代码不嵌入 已落地（见 `docs/knowledge.md` §8.1）
+**状态：** Phase A/B、watch、abort/resume（**跨重启**）、supersede reindex、BLOB 向量、FTS5、代码不嵌入、embed secret 策略 已落地（见 `docs/knowledge.md` §8.1）。
 
-- **中止态在内存**：进程重启后 abort 自动清除，看门狗会续跑；若需「跨重启仍保持中止」须落库。
-- **Office 同步抽取**：已改 worker+超时；超大表仍可能慢/超时 skip（`parse_timeout`），不无限重试。
-- **sqlite-vec 可选**：未加载则 JS 余弦；大库时检索仍 O(N)，ANN 索引覆盖待扩。
-- **DROP 后文件体积**：SQLite 不自动缩容，需 `VACUUM`（迁移路径已做；手工大删后仍可能涨）。
-- **watch 仍可能漏事件**：靠 reconcile `parse 缺口扫描`（约 60s）兜底，不是零延迟。
-- **`running` 槽**：UI「任务」= job 数；embed 并行是 job 内 lanes，不表现为多个 running。
+**v0.59.1 已修**（摘要）：鉴权闸门、路径归属、凭证跨域、SSRF/body 超时、`.html` 归属、parse 可取消超时、向量闸门看 KNN 结果、强制 hybrid、FTS5、中止落库、poll 不 supersede、embed 硬超时、ANN-lite 桶、ingest 模块拆分、prune/LIKE/FTS 清扫。
+
+**仍开放：**
+
+- **Office 超大表**：worker+可取消超时；仍可能 `parse_timeout` skip，不无限重试。
+- **sqlite-vec 生产必选**：未加载时大库（>5 万向量）**禁止 JS 全扫**，走邻桶 + 强制关键词；百万级必须 `stats.sqliteVec=1`。HNSW 可选后端待立项。
+- **DROP 后文件体积**：SQLite 不自动缩容，需 `VACUUM`。
+- **watch 可能漏事件**：reconcile parse 缺口扫描（约 60s）兜底，非零延迟。
+- **`running` 槽**：UI「任务」= job 数；embed 并行是 job 内 lanes。
+- **catalog topics 抽样**：每源最多 128 条 path。
+- **embed secret skip 墓碑**：`dimensions=0` 不自动重嵌；改策略后需 reprocess。
+- **DNS TOCTOU / credential_bindings 不强制**：无 IP 钉扎；极高威胁模型需 custom dispatcher。
+- **symlink**：`sourceOwnsPath` 未 `realpath`，root 内链出文件可能入索引（低优先级）。
+- **`ingest.ts` 体量**：已拆 job-control/queue/embed-runner/fts/vector-ann；watch/poll/parse 仍在主文件。

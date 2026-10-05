@@ -31,6 +31,8 @@ export interface HybridSearchResult {
   /** 0–1：索引文件覆盖粗度（P2）× 向量覆盖（有 provider 时） */
   coverage: number;
   sourceIds: import('./types.js').KnowledgeSourceId[];
+  /** 向量后端（百万级应为 sqlite-vec） */
+  vectorBackend?: 'sqlite-vec' | 'js-bucket' | 'disabled';
 }
 
 export interface AutoGroundDecision {
@@ -143,7 +145,14 @@ export class KnowledgeRetriever {
     const sourceIds = this.filterSourceIds(visible, opts);
     const limit = opts.limit ?? 8;
 
-    const keywordHits = this.hybridKeyword
+    const vectorBackend = this.index.vectorBackend();
+    // 百万级：无 sqlite-vec 时强制关键词腿（禁止纯向量）
+    const forceKeyword =
+      this.hybridKeyword ||
+      vectorBackend === 'js-bucket' ||
+      vectorBackend === 'disabled';
+
+    const keywordHits = forceKeyword
       ? this.index.search(query, { sourceIds, limit: limit * 2 })
       : [];
     let vectorHits: ChunkHit[] = [];
@@ -153,15 +162,16 @@ export class KnowledgeRetriever {
       try {
         const qEmb = await this.embedding.embed(query);
         vectorHits = this.index.vectorSearch(qEmb, { sourceIds, limit: limit * 2 });
-        usedVector = true;
+        usedVector = vectorHits.length > 0;
       } catch {
         usedVector = false;
         vectorHits = [];
       }
     }
 
-    const kwW = !this.hybridKeyword ? 0 : usedVector ? this.keywordWeight : 1;
-    const vecW = usedVector ? (this.hybridKeyword ? 1 - this.keywordWeight : 1) : 0;
+    const useKw = forceKeyword || !usedVector;
+    const kwW = !useKw ? 0 : usedVector ? this.keywordWeight : 1;
+    const vecW = usedVector ? (useKw ? 1 - this.keywordWeight : 1) : 0;
     const fused = fuseHits(keywordHits, vectorHits, {
       keywordWeight: kwW,
       vectorWeight: vecW,
@@ -175,6 +185,7 @@ export class KnowledgeRetriever {
       vectorHits: vectorHits.length,
       coverage,
       sourceIds,
+      vectorBackend,
     };
   }
 

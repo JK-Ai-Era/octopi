@@ -55,6 +55,20 @@ describe('network guard', () => {
     expect(isRestrictedIp('8.8.8.8')).toBe(false);
   });
 
+  it('flags unspecified / mapped-loopback addresses', () => {
+    // 0.0.0.0/8 与 :: 未指定地址：连出常落本机
+    expect(isRestrictedIp('0.0.0.0')).toBe(true);
+    expect(isRestrictedIp('0.1.2.3')).toBe(true);
+    expect(isRestrictedIp('::')).toBe(true);
+    expect(isRestrictedIp('0:0:0:0:0:0:0:0')).toBe(true);
+    // IPv4-mapped：点分与十六进制形态都要拦
+    expect(isRestrictedIp('::ffff:127.0.0.1')).toBe(true);
+    expect(isRestrictedIp('::ffff:7f00:1')).toBe(true);
+    expect(isRestrictedIp('::ffff:10.0.0.1')).toBe(true);
+    // 公网 mapped 不拦
+    expect(isRestrictedIp('::ffff:8.8.8.8')).toBe(false);
+  });
+
   it('rejects private url by default and allows with flag', async () => {
     await expect(assertUrlAllowed('http://127.0.0.1/x')).rejects.toThrow(/not allowed/);
     await expect(
@@ -64,6 +78,26 @@ describe('network guard', () => {
 
   it('rejects non-http protocol', async () => {
     await expect(assertUrlAllowed('file:///etc/passwd')).rejects.toThrow(/protocol/);
+  });
+
+  it('times out slow response body (covers body read, not just headers)', async () => {
+    const { guardedFetch } = await import(
+      '@octopi-agent/engine/harness/knowledge/network-guard.js'
+    );
+    const server = http.createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'text/plain' });
+      res.write('chunk1');
+      // 不再写、不 end：模拟 drip body
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    try {
+      await expect(
+        guardedFetch(`${base}/drip`, { allowPrivateNetwork: true, timeoutMs: 200 }),
+      ).rejects.toThrow();
+    } finally {
+      await new Promise<void>((r) => server.close(() => r()));
+    }
   });
 });
 

@@ -89,6 +89,26 @@ describe('FormatAdapter', () => {
     expect(reg.shouldSkipPath('a/node_modules/b.ts')).toBe(true);
     expect(reg.shouldSkipPath('a/b.ts')).toBe(false);
   });
+
+  it('.html 归 htmlAdapter（文档可嵌入），不得被 code-tree 抢走', () => {
+    const reg = new FormatAdapterRegistry();
+    expect(reg.match('x.html')?.id).toBe('html');
+    expect(reg.match('x.htm')?.id).toBe('html');
+    expect(reg.match('x.xhtml')?.id).toBe('html');
+    // code-tree 才被 EMBEDDABLE_WHERE 排除；html 必须能进向量
+    expect(reg.match('x.html')?.id).not.toBe('code-tree');
+  });
+
+  it('register 拒绝扩展名冲突（归属显式，禁止静默覆盖）', () => {
+    const reg = new FormatAdapterRegistry();
+    expect(() =>
+      reg.register({
+        id: 'hijack',
+        extensions: ['.md'],
+        chunk: () => [],
+      }),
+    ).toThrow(/conflict/);
+  });
 });
 
 describe('KnowledgeIngest', () => {

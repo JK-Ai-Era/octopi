@@ -1779,6 +1779,7 @@ export class Gateway {
     alreadyActive: number;
     cleanedNonFiles: number;
     resumed: boolean;
+    rejected: number;
   }> {
     const ingest = await this.getKnowledgeIngest();
     if (opts.paths?.length) {
@@ -2000,6 +2001,7 @@ export class Gateway {
           maxQueueDepth: kn?.index?.queue?.maxDepth,
           diskWatermarkAlert: kn?.load?.diskWatermarkAlert,
           fileLimits: kn?.index?.files,
+          embedSecretPolicy: kn?.index?.embedSecretPolicy,
         });
         // 索引进度 → Web WS（系统级 '*'；UI 勿当会话消息）
         ingest.on('knowledge.index.progress', (evt: unknown) => {

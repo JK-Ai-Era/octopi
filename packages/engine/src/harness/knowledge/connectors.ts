@@ -8,8 +8,8 @@
 import { createHash } from 'node:crypto';
 import type { ResolvedCredential } from '../governance/credentials/types.js';
 import { htmlToStructuredText, looksLikeHtml } from './html.js';
-import type { DiscoveredDocRef, VirtualDocument } from './fetchers.js';
-import { guardedFetch, type NetworkGuardOptions } from './network-guard.js';
+import type { DiscoveredDocRef, DiscoverResult, VirtualDocument } from './fetchers.js';
+import { authHeadersForUrl, guardedFetch, type NetworkGuardOptions } from './network-guard.js';
 import type { KnowledgeSource, KnowledgeSourceNetwork } from './types.js';
 
 export interface ConnectorContext {
@@ -23,7 +23,7 @@ export interface ConnectorContext {
 
 export interface KnowledgeConnector {
   id: string;
-  discover(ctx: ConnectorContext, source: KnowledgeSource): Promise<DiscoveredDocRef[]>;
+  discover(ctx: ConnectorContext, source: KnowledgeSource): Promise<DiscoverResult>;
   fetch(
     ctx: ConnectorContext,
     source: KnowledgeSource,
@@ -108,14 +108,15 @@ function itemPath(item: Record<string, unknown>, cfg: RestConnectorConfig, index
 export class RestConnector implements KnowledgeConnector {
   readonly id = 'rest';
 
-  async discover(ctx: ConnectorContext, source: KnowledgeSource): Promise<DiscoveredDocRef[]> {
+  async discover(ctx: ConnectorContext, source: KnowledgeSource): Promise<DiscoverResult> {
     const cfg = parseRestConfig(ctx.location);
     const maxPages = ctx.maxPages ?? cfg.maxPages ?? 50;
     const res = await guardedFetch(cfg.listUrl, networkFrom(ctx, source), {
       headers: { ...(ctx.auth?.headers ?? {}), accept: 'application/json' },
     });
     const body = JSON.parse(res.body) as unknown;
-    const items = pickItems(body, cfg.itemsPath).slice(0, maxPages);
+    const allItems = pickItems(body, cfg.itemsPath);
+    const items = allItems.slice(0, maxPages);
     const out: DiscoveredDocRef[] = [];
     items.forEach((raw, index) => {
       if (!raw || typeof raw !== 'object') return;
@@ -126,7 +127,7 @@ export class RestConnector implements KnowledgeConnector {
         : cfg.listUrl;
       out.push({ path, externalUrl });
     });
-    return out;
+    return { docs: out, complete: allItems.length <= maxPages };
   }
 
   async fetch(
@@ -161,8 +162,10 @@ export class RestConnector implements KnowledgeConnector {
       const pageUrl = String(dig(item, cfg.urlField) ?? '');
       if (!pageUrl) return null;
       externalUrl = pageUrl;
+      // 凭证只跟 listUrl 同源；被投毒列表指向的外域不得带走 token
+      const listOrigin = new URL(cfg.listUrl).origin;
       const page = await guardedFetch(pageUrl, networkFrom(ctx, source), {
-        headers: ctx.auth?.headers,
+        headers: authHeadersForUrl(listOrigin, pageUrl, ctx.auth?.headers),
       });
       content = looksLikeHtml(page.body, page.contentType)
         ? htmlToStructuredText(page.body)
@@ -189,6 +192,8 @@ function networkFrom(
   return {
     allowPrivateNetwork: source.network?.allowPrivateNetwork === true,
     maxResponseBytes: source.network?.maxResponseBytes,
+    timeoutMs: source.network?.timeoutMs,
+    maxRedirects: source.network?.maxRedirects,
   };
 }
 

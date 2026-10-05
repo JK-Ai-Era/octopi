@@ -95,6 +95,18 @@ Freshness
 
 数据面：`OCTOPI_HOME/knowledge/`（源权威 + 索引投影 + 任务队列）；凭证：`OCTOPI_HOME/credentials/`。
 
+### 3.1 百万级向量检索（生产）
+
+| 规模 | 向量后端 | 行为 |
+|------|----------|------|
+| **&lt; 5 万**向量 | JS 桶裁剪可兜底 | 邻桶优先，不足可全扫 |
+| **≥ 5 万** 且无 sqlite-vec | **禁止 JS 全扫** | 仅邻桶 + **强制关键词腿**（hybrid） |
+| **任意规模生产** | **sqlite-vec 必开** | KNN；`stats.sqliteVec=1` |
+
+- **hybrid 默认**：FTS/关键词先收候选 → 向量 rerank；纯向量全库检索不作默认路径。
+- **健康检查**：`GET …/knowledge/stats` 含 `sqliteVec`（0/1）、`embeddings` 数量。
+- **真 ANN（HNSW）**：可选后端（`VectorIndex` 抽象）；百万级无扩展时再引入，勿在 JS 全扫上硬扛。
+
 ---
 
 ## 4. 提供给上下文的四层
@@ -252,12 +264,19 @@ POST   /api/v1/agents/:id/knowledge/resume
 |------|------|
 | **Phase A / B** | 解析+分块+关键词 **优先**；embedding **不得**抢 parse 槽（parse 有积压时不认领 embed） |
 | **time-to-search** | 解析完即可关键词搜；向量后台补（`embeddable` 才计向量进度） |
-| **代码** | `adapter_id=code-tree` **不 embedding**（file_search / file_read） |
-| **向量存** | `knowledge_chunk_embeddings.embedding` = **Float32 BLOB**（非 JSON）；大表 DROP 后需 **VACUUM** 才缩文件 |
-| **Office/大文件** | 文档抽取走 **worker** + 超时；禁止同步 xlsx 堵事件循环 |
+| **代码** | `adapter_id=code-tree` **不 embedding**（file_search / file_read）；**`.html` 归 `htmlAdapter`**（可进向量），勿再声明进 code-tree |
+| **向量存** | `knowledge_chunk_embeddings.embedding` = **Float32 BLOB** + `bucket`（ANN-lite）；`dimensions=0` = secret-skip 墓碑（不重试） |
+| **向量检索** | 优先 sqlite-vec KNN；**闸门看 KNN 是否返回**（非 flag）；无 KNN 且 >5 万向量 **禁止 JS 全扫** |
+| **关键词** | FTS5 倒排（CJK 二元组 token）优先，退 SQL LIKE；与 Memory 分词对齐 |
+| **embed 外发** | 默认 `embedSecretPolicy=redact`；审计 `knowledge_embed_secret_log` |
+| **Office/大文件** | 文档抽取走 **worker** + **可取消**超时；禁止同步 xlsx 堵事件循环 |
 | **watch** | 目录增量；漏事件由 reconcile **parse 缺口扫描**（磁盘有、索引无 → parse）兜底 |
-| **删除文件** | watch → `drop_file` → `removePathTree`（含子路径）；`(source_id,path)` 须有索引 |
-| **看门狗** | `startReconciler`：回收孤儿 running、补 embed、补 parse 缺口、稳定后 auto-describe |
+| **删除文件** | watch → `drop_file` → `removePathTree`（含子路径 + FTS/vec）；`(source_id,path)` 须有索引 |
+| **看门狗** | `startReconciler`：回收孤儿 running、补 embed、补 parse 缺口、终态 job 清理、稳定后 auto-describe（**纯关键词部署也触发**） |
+| **中止** | **跨重启**：`knowledge_source_control` 为权威；claim 跳过 aborted；resume 只复活 `aborted` 取消 |
+| **poll vs reindex** | reindex=supersede；**poll=`incremental`**：有 active 则跳过，不打断在跑 parse |
+| **模块** | `job-control` / `job-queue` / `embed-runner` / `fts` / `vector-ann` 已拆出；`ingest.ts` 只做编排 |
+| **路径归属** | `sourceOwnsPath`：本地只读 `location` 内；外源只接受已登记逻辑键（`reprocess`/`parse`/`fetch` 三处执法） |
 
 ---
 

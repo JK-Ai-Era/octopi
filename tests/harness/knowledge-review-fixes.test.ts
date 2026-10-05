@@ -209,4 +209,137 @@ describe('credential leak guards', () => {
 
     expect(evilAuth).toBeUndefined();
   });
+
+  it('strips custom token headers on cross-origin redirect (allowlist)', async () => {
+    let evilCustom: string | undefined;
+    const evil = http.createServer((req, res) => {
+      evilCustom = req.headers['x-custom-token'] as string | undefined;
+      res.setHeader('content-type', 'text/html');
+      res.end('<html><body><p>x</p></body></html>');
+    });
+    servers.push(evil);
+    await new Promise<void>((r) => evil.listen(0, '127.0.0.1', r));
+    const evilBase = `http://127.0.0.1:${(evil.address() as AddressInfo).port}`;
+
+    const good = http.createServer((_req, res) => {
+      res.statusCode = 302;
+      res.setHeader('location', `${evilBase}/x.html`);
+      res.end();
+    });
+    servers.push(good);
+    await new Promise<void>((r) => good.listen(0, '127.0.0.1', r));
+    const goodBase = `http://127.0.0.1:${(good.address() as AddressInfo).port}`;
+
+    const { guardedFetch } = await import('@octopi-agent/engine/harness/knowledge/network-guard.js');
+    await guardedFetch(
+      `${goodBase}/start`,
+      { allowPrivateNetwork: true },
+      { headers: { 'X-Custom-Token': 'CUSTOM-SECRET', accept: 'text/html' } },
+    );
+
+    expect(evilCustom).toBeUndefined();
+  });
+
+  it('authHeadersForUrl keeps credentials only on trusted origin', async () => {
+    const { authHeadersForUrl } = await import(
+      '@octopi-agent/engine/harness/knowledge/network-guard.js'
+    );
+    const headers = {
+      Authorization: 'Bearer SECRET',
+      'X-Api-Key': 'k',
+      accept: 'application/json',
+    };
+    const same = authHeadersForUrl('https://docs.example.com', 'https://docs.example.com/api', headers);
+    expect(same.Authorization).toBe('Bearer SECRET');
+
+    const cross = authHeadersForUrl('https://docs.example.com', 'https://evil.example.net/x', headers);
+    expect(cross.Authorization).toBeUndefined();
+    expect(cross['X-Api-Key']).toBeUndefined();
+    expect(cross.accept).toBe('application/json');
+  });
+
+  it('discover 截断时禁止 prune（防误删未发现文档）', async () => {
+    const { KnowledgeIndexStore } = await import(
+      '@octopi-agent/engine/harness/knowledge/index-store.js'
+    );
+    const sources = await KnowledgeSourceStore.open({ dbPath: ':memory:' });
+    const index = new KnowledgeIndexStore(sources.database);
+    const src = sources.register({
+      kind: 'directory',
+      location: '/tmp/kn-prune-guard',
+      scopeRef: { level: 'global', key: 'global' },
+      displayName: 'prune-guard',
+    });
+    // 已有两条索引
+    for (const p of ['/tmp/kn-prune-guard/a.md', '/tmp/kn-prune-guard/b.md']) {
+      index.upsertFile({
+        sourceId: src.id,
+        path: p,
+        contentHash: 'h',
+        size: 1,
+        mtime: Date.now(),
+        adapterId: 'markdown',
+        chunks: [{ ordinal: 0, text: 'x', startLine: 1, endLine: 1 }],
+      });
+    }
+    // 模拟「walk 不完整」：只 keep a.md，但 complete=false 时调用方不得 prune
+    // 这里直接验证 pruneMissing 在空 keep 时的保护仍生效（另一路径）
+    const pruned = index.pruneMissing(src.id, new Set<string>(), {});
+    expect(pruned).toBe(0);
+
+    const { LocalFsFetcher } = await import(
+      '@octopi-agent/engine/harness/knowledge/fetchers.js'
+    );
+    const fetcher = new LocalFsFetcher(() => false);
+    // 不存在的根 → complete=false
+    const res = await fetcher.discover({
+      id: src.id,
+      kind: 'directory',
+      location: '/definitely/missing/kn-root',
+      scopeRef: { level: 'global', key: 'global' },
+      sync: { strategy: 'manual', enabled: true },
+      status: 'pending',
+      displayName: 'missing',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    } as never);
+    expect(res.complete).toBe(false);
+    sources.database.close();
+  });
+
+  it('removePathTree 对 _ / % 转义，不误删兄弟路径', async () => {
+    const { KnowledgeIndexStore } = await import(
+      '@octopi-agent/engine/harness/knowledge/index-store.js'
+    );
+    const sources = await KnowledgeSourceStore.open({ dbPath: ':memory:' });
+    const index = new KnowledgeIndexStore(sources.database);
+    const src = sources.register({
+      kind: 'directory',
+      location: '/tmp/kn-like',
+      scopeRef: { level: 'global', key: 'global' },
+      displayName: 'like',
+    });
+    const paths = [
+      '/tmp/kn-like/a_b/c.md',
+      '/tmp/kn-like/aXb/c.md', // 不应被 a_b 误匹配
+      '/tmp/kn-like/a_b/d.md',
+    ];
+    for (const p of paths) {
+      index.upsertFile({
+        sourceId: src.id,
+        path: p,
+        contentHash: 'h',
+        size: 1,
+        mtime: Date.now(),
+        adapterId: 'markdown',
+        chunks: [{ ordinal: 0, text: 'x', startLine: 1, endLine: 1 }],
+      });
+    }
+    index.removePathTree(src.id, '/tmp/kn-like/a_b');
+    const left = index.listFiles(src.id).map((f) => f.path);
+    expect(left).toContain('/tmp/kn-like/aXb/c.md');
+    expect(left).not.toContain('/tmp/kn-like/a_b/c.md');
+    expect(left).not.toContain('/tmp/kn-like/a_b/d.md');
+    sources.database.close();
+  });
 });

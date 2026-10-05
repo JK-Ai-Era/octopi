@@ -1264,6 +1264,14 @@
             "hybridKeyword": {
               "type": "boolean"
             },
+            "embedSecretPolicy": {
+              "type": "string",
+              "enum": [
+                "allow",
+                "redact",
+                "skip"
+              ]
+            },
             "phaseA": {
               "type": "object",
               "properties": {

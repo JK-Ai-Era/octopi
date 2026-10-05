@@ -385,7 +385,8 @@ export const codeAdapter: FormatAdapter = {
     '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs',
     '.py', '.go', '.rs', '.java', '.kt', '.c', '.cc', '.cpp', '.h', '.hpp',
     '.rb', '.php', '.cs', '.swift', '.scala', '.sh', '.bash', '.ps1',
-    '.sql', '.html', '.css', '.scss', '.vue', '.svelte',
+    // .html/.htm/.xhtml 归 htmlAdapter（文档进向量）；勿再声明在此
+    '.sql', '.css', '.scss', '.vue', '.svelte',
   ],
   chunk(content) {
     const bySymbol = chunkCodeBySymbols(content);
@@ -439,10 +440,24 @@ export class FormatAdapterRegistry {
 
   register(adapter: FormatAdapter): void {
     for (const ext of adapter.extensions) {
-      this.byExt.set(ext.toLowerCase(), adapter);
+      const key = ext.toLowerCase();
+      const prev = this.byExt.get(key);
+      if (prev && prev.id !== adapter.id) {
+        throw new Error(
+          `format adapter extension conflict: ${key} owned by ${prev.id}, cannot register ${adapter.id}`,
+        );
+      }
+      this.byExt.set(key, adapter);
     }
     for (const mime of adapter.mimes ?? []) {
-      this.byMime.set(mime.toLowerCase(), adapter);
+      const key = mime.toLowerCase();
+      const prev = this.byMime.get(key);
+      if (prev && prev.id !== adapter.id) {
+        throw new Error(
+          `format adapter mime conflict: ${key} owned by ${prev.id}, cannot register ${adapter.id}`,
+        );
+      }
+      this.byMime.set(key, adapter);
     }
   }
 

@@ -3,7 +3,7 @@
  */
 
 import type { ResolvedCredential } from '../governance/credentials/types.js';
-import type { DiscoveredDocRef, SourceFetcher, VirtualDocument } from './fetchers.js';
+import type { DiscoveredDocRef, DiscoverResult, SourceFetcher, VirtualDocument } from './fetchers.js';
 import type { ConnectorRegistry } from './connectors.js';
 import type { KnowledgeSource } from './types.js';
 
@@ -13,7 +13,7 @@ export class ConnectorFetcher implements SourceFetcher {
   async discover(
     source: KnowledgeSource,
     cred?: ResolvedCredential | null,
-  ): Promise<DiscoveredDocRef[]> {
+  ): Promise<DiscoverResult> {
     const connector = this.registry.resolve(source);
     return connector.discover(
       {

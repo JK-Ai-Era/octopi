@@ -160,6 +160,7 @@
       "skipIfUserTokensBelow": 8
     },
     "index": {
+      "embedSecretPolicy": "redact",
       "files": {
         "oversize": "partial",
         "maxFileBytes": 50000000,

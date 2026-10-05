@@ -1,3 +1,132 @@
+## v0.59.1
+
+### docs(knowledge): 同步 as-built 口径与过期注释
+
+- `docs/knowledge.md` §8.1：补 FTS5 / 向量闸门 / embed secret / 中止跨重启 / poll 增量 / 模块拆分 / `.html` 归属
+- `docs/KNOWN-ISSUES.md` 合并开放边界
+- 修正：`db.ts`「不存 chunk/vector」、`network-guard`「防 rebinding」夸大、parse 并发默认 8、types/README/arch 状态指针
+
+### fix(knowledge): 中止闭环 — remote 抓取 / walk 入队 / job 收尾统一 isAborted
+
+- `ingestRemoteSource` 循环内查中止：停外发、**半截不 prune**、不排 embed
+- 本地 walk 入队循环可中断；中止后不 prune
+- `runJob` 对 fetch_doc / walk_source / embed_source / 全 kind **收尾闸门**：中止后标 `cancelled`，不得 `done`
+- 测试：`knowledge-abort-loops.test.ts`（2）
+
+### fix(knowledge): 独立审查修复 — 闸门看 KNN 结果、embed 硬超时、FTS 清扫
+
+- **向量闸门**：`allowJsFullScan` 改为看 **KNN 是否真正返回**（`viaVec !== null`），而非 `sqliteVecEnabled`；扩展在但 vec 表未建时不再对 1M 行 JS 全扫
+- **embed 硬超时**：批/单条均 `withDeadline`（单条 30s），防挂死占槽
+- **poll 不 supersede**：`ingestSource({ incremental })` 有 active 则跳过；reindex 仍 supersede
+- **`removePathTree` 清 FTS/vec** 子树残留
+- **`listFilePathsFiltered` ext LIKE 转义**
+- **`abortJobs(sourceId)`** 第 3 步按源过滤
+
+**测试**：scale-gate 扩到 4 条（ext 转义、闸门契约）；全量 knowledge 160 绿。
+
+### feat(knowledge): 百万级向量闸门 — 禁大库 JS 全扫 + 强制 hybrid
+
+**问题**：两项目已 8 万+ chunk，生产百万级；JS 全扫 / 纯向量会堵死事件循环。
+
+**方案**
+
+- `vectorSearch` **规模闸门**：无 sqlite-vec 且 `embeddings > 50k` → **禁止 JS 全表兜底**（仅邻桶裁剪）
+- Retriever：无 `sqlite-vec` 时 **强制关键词腿**（即使 `hybridKeyword: false`）
+- `vectorBackend()`：`sqlite-vec` | `js-bucket` | `disabled`；`stats.sqliteVec`（0/1）
+- `docs/knowledge.md` §3.1：百万级部署 **必须开 sqlite-vec**；hybrid 默认
+
+**测试**：`knowledge-scale-gate.test.ts`（3）
+
+### feat(knowledge): 向量 ANN-lite — 桶分区裁剪（无 sqlite-vec 时降 O(N)）
+
+**问题**：sqlite-vec 可选；未加载时 JS 余弦全扫 embedding，大库 O(N)。
+
+**方案**
+
+- `vector-ann.ts`：粗量化哈希 → 256 桶；查询取主桶 + 汉明邻桶优先扫
+- `knowledge_chunk_embeddings.bucket` 列 + 索引；写入向量时落桶
+- JS 检索两阶段：邻桶候选 → 不足再全扫（正确性优先）；正文仍只对 top-k
+- sqlite-vec KNN 路径不变（仍优先）；Index 非权威，bucket 可重算
+
+**测试**：`knowledge-vector-ann.test.ts`（3）
+
+### refactor(knowledge): ingest 拆出 job-control / job-queue / embed-runner
+
+- `job-control.ts`：中止纪元 + DB 权威（跨重启）
+- `job-queue.ts`：enqueue/claim/heartbeat/reclaim/cleanup（`knowledge_jobs` 原语）
+- `embed-runner.ts`：Phase B 向量写入 + 外发敏感策略（含 `EmbedSecretPolicy`）
+- `ingest.ts` 2030 → ~1810 行；对外 API 不变，153 测全绿
+
+### feat(knowledge): embedding 外发敏感形态策略（默认 redact）
+
+**问题**：chunk 明文直送 embedding 供应商；`secret-scan` 只护 auto-describe。
+
+**方案**（业务完整：脱敏可 embed，skip 仍可关键词搜）
+
+- **`knowledge.index.embedSecretPolicy`**：`allow` | `redact`（默认）| `skip`
+  - `redact`：命中形态替换为 `[REDACTED:rule]` 再外发
+  - `skip`：命中不写向量（`dimensions=0` 墓碑防反复重试）；关键词/FTS 仍可搜
+  - `allow`：内网/本地模型原文外发
+- **审计**：`knowledge_embed_secret_log`（source/chunk/action/hits）
+- `redactSecretShapes` 导出；`embeddingCoverage` 只计 `dimensions>0`
+
+**测试**：`knowledge-embed-secret.test.ts`（4）
+
+### feat(knowledge): FTS5 倒排 + 中止态跨重启 + job-control 拆出
+
+**FTS5 关键词倒排**
+
+- `knowledge_chunks_fts`（unicode61 + 自建 CJK 二元组 token，对齐 Memory 分词）
+- upsert/remove 同步维护；`search` 优先 MATCH，无候选退 LIKE
+- 存量库首次挂载自动 rebuild；`rebuildFromChunks` 可整库重跑（Index 非权威）
+- 中文两字词可搜（trigram 对 2 字失效，故不用 trigram）
+
+**中止态跨重启**
+
+- 新表 `knowledge_source_control`：`aborted` 为权威；内存 AbortController 只是本进程信号
+- `claimJob` 跳过中止源；重启后看门狗不得自动续跑
+- `resume` 只复活 `last_error=aborted` 的 cancelled，不碰 `superseded_by_reindex`
+- 抽出 `job-control.ts`（从 ingest.ts 拆出 abort/resume/纪元）
+
+**测试**：`knowledge-fts`（4）、`knowledge-abort-persist`（3）
+
+### perf(knowledge): catalog 抽样缓存、coverage 合并刷新、jobs 清理、缺口扫描按源
+
+- **catalog 不再全表拉 path**：topics 每源抽样 128 条 + 2s TTL 缓存（Tier 0 每轮装配）
+- **写放大**：parse/drop 只标 coverage 脏，drain 空闲时合并刷新（原先每文件 4 次 COUNT + UPDATE）
+- **jobs 表**：reconcile 清理 24h 前终态行
+- **vec backfill**：`NOT EXISTS` 跳过已有行，游标回绕不再无限重写全表
+- **缺口扫描**：`countQueuedKinds` 按 sourceId 隔离，A 源积压不挡 B 源补扫
+- **onSourceSettled**：纯关键词部署同样触发（原先只在 embedding 分支）
+- **JS 向量打分**：先只读向量取 top-k，再取正文（降大库内存峰值）
+- 测试：`knowledge-scale.test.ts`（4）
+
+### fix(knowledge): 安全收口 + 正确性根因修复
+
+按「根因修复、不掩盖症状」清理 knowledge 层审查问题；内部研发，无兼容过渡。
+
+**安全（P0）**
+
+- **HTTP 鉴权闸门**：`apiKey` 设置后除 `OPTIONS` / `GET /health` 外**全部**过 `checkAuth`（含 `onRequest` 扩展路由 `/api/v1`、`/debug/run`）。原先闸门散落在 `/messages`、`/metrics`，Web 管理 API 可匿名访问
+- **路径归属**：`sourceOwnsPath` 执法于 `reprocess` / `parseOne` / `fetch_doc`；本地源只读 `source.location` 内路径，外源只接受已登记逻辑键。外源「重做」改走 `fetch_doc` 重取，不再 `statSync` 本地任意文件
+- **凭证信任边界**：`authHeadersForUrl` — 鉴权头只跟源入口 origin；`RestConnector.urlField` / `UrlFetcher.fetch` 跨域一律剥凭证；跨域重定向改**安全头白名单**（不再黑名单）
+- **SSRF 补全**：拦 `0.0.0.0/8`、`::`、IPv4-mapped 十六进制形态（`::ffff:7f00:1` 等）
+- **body 超时**：`guardedFetch` 超时覆盖响应头+响应体全程，drip 响应不能永久占槽
+
+**正确性（P0/P1）**
+
+- **`.html` 归 `htmlAdapter`**：原先被后注册的 `codeAdapter` 静默抢走 → 文档被 `EMBEDDABLE_WHERE` 排除出向量；`register` 现拒绝扩展名冲突
+- **parse 超时真取消**：`withTimeout` 改为 abort signal（禁止 `Promise.race` 僵尸写）；`parseDocumentFile`/`parseOne` 副作用前检查；中止/超时**上抛**标 job `failed`（原先吞掉后标 `done`）；stale 回收阈值 = `maxParseTimeoutMs + 60s`（原先 5min 与硬超时同量级会双跑）
+- **向量检索**：KNN `k` 放大（全局 top-k 再滤 source 会丢命中）；命中不足退 JS 补满
+- **prune 误删**：`DiscoverResult.complete` 门禁 — walk 出错 / maxPages·maxBytes 截断时**禁止** prune
+- **LIKE 转义**：`removePathTree` / 文件筛选对 `_` `%` `ESCAPE`，防路径通配误删
+
+**检索性能**
+
+- 关键词检索 SQL `LIKE` 预过滤（对齐 Memory），不再整表 2 万 chunk 载入 JS 打分
+
+**测试**：`http-adapter-auth`（7）、`knowledge-parse-timeout`（2）、`knowledge-job-control` 路径归属（3）、adapter 归属/冲突（2）、SSRF/body 超时（3）、凭证跨域（2）、prune/LIKE（2）；knowledge 套件 138 绿。
+
 ## v0.59.0
 
 ### feat(knowledge): 大文件分级限额 + 部分入索引（可配置）

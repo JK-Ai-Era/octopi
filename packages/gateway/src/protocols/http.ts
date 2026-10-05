@@ -35,9 +35,10 @@ export interface HttpAdapterOptions {
   /**
    * API Key 认证
    *
-   * 设置后，所有请求必须携带 Authorization: Bearer <apiKey> 头。
+   * 设置后，除公开白名单外的所有 HTTP 请求必须携带
+   * Authorization: Bearer <apiKey> 头（含 onRequest 扩展路由）。
    * WebSocket 连接需要在连接后发送 auth 消息：{ type: "auth", token: "<apiKey>" }
-   * health 端点不需要认证。
+   * 公开端点：OPTIONS 预检、GET /health。
    */
   apiKey?: string;
   /**
@@ -122,6 +123,7 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
         return;
       }
 
+      // 公开健康检查（探针/负载均衡）；其余一律过鉴权闸门
       if (req.method === 'GET' && req.url === '/health') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
@@ -134,13 +136,16 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
         return;
       }
 
+      // 单一鉴权闸门：覆盖 onRequest 扩展（/api/v1、/debug/run…）与内置路由。
+      // 禁止在下游再各自 checkAuth——那会随新路由再次漏检。
+      if (!this.checkAuth(req, res)) return;
+
       if (this.onRequest) {
         const handled = await this.onRequest(req, res);
         if (handled) return;
       }
 
       if (req.method === 'GET' && req.url === '/metrics') {
-        if (!this.checkAuth(req, res)) return;
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
           connections: this.wsSessions.size,
@@ -152,9 +157,6 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
       }
 
       if (req.method === 'POST' && req.url === this.path) {
-        // 认证检查
-        if (!this.checkAuth(req, res)) return;
-
         try {
           const body = await this.readBody(req);
           const message: ChannelMessage = {

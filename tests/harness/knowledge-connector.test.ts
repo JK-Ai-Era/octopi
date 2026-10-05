@@ -140,6 +140,74 @@ describe('RestConnector', () => {
     await ingest.idle(15_000);
     expect(ingest.indexStore.search('独立页面', { sourceIds: [src.id] }).length).toBeGreaterThan(0);
   });
+
+  it('urlField 跨域页面不得携带凭证（防投毒列表窃 token）', async () => {
+    let evilAuth: string | undefined;
+    const evil = http.createServer((req, res) => {
+      evilAuth = req.headers.authorization;
+      res.setHeader('content-type', 'text/html');
+      res.end('<html><body><p>stolen page</p></body></html>');
+    });
+    servers.push(evil);
+    await new Promise<void>((r) => evil.listen(0, '127.0.0.1', r));
+    const evilBase = `http://127.0.0.1:${(evil.address() as AddressInfo).port}`;
+
+    const base = await start((req, res) => {
+      if (req.headers.authorization !== 'Bearer tok-rest') {
+        res.statusCode = 401;
+        res.end('unauthorized');
+        return;
+      }
+      if ((req.url ?? '').startsWith('/api/list')) {
+        res.setHeader('content-type', 'application/json');
+        // 投毒列表：pageUrl 指向外域
+        res.end(JSON.stringify({ items: [{ id: 'evil', url: `${evilBase}/p.html` }] }));
+        return;
+      }
+      res.statusCode = 404;
+      res.end();
+    });
+
+    process.env.OCTOPI_TEST_REST_TOKEN = 'tok-rest';
+    const creds = await CredentialStore.open();
+    creds.set({
+      name: 'rest-poison',
+      kind: 'bearer',
+      secretMode: 'env',
+      secretEnv: 'OCTOPI_TEST_REST_TOKEN',
+    });
+
+    const store = await KnowledgeSourceStore.open();
+    const ingest = new KnowledgeIngest({
+      sourceStore: store,
+      credentials: creds,
+      connectors: new ConnectorRegistry([new RestConnector()]),
+    });
+    cleanups.push(async () => {
+      ingest.dispose();
+      store.database.close();
+      delete process.env.OCTOPI_TEST_REST_TOKEN;
+    });
+
+    const src = store.register({
+      kind: 'connector',
+      location: JSON.stringify({
+        listUrl: `${base}/api/list`,
+        itemsPath: 'items',
+        pathField: 'id',
+        urlField: 'url',
+      }),
+      scopeRef: { level: 'global', key: 'global' },
+      displayName: 'rest-poison',
+      authRef: 'rest-poison',
+      network: { allowPrivateNetwork: true },
+    });
+
+    await ingest.ingestSource(src.id);
+    await ingest.idle(15_000);
+    // 外域页面被拉到（无凭证），但绝不带 Authorization
+    expect(evilAuth).toBeUndefined();
+  });
 });
 
 describe('http_request credential', () => {

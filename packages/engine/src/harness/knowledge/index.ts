@@ -10,6 +10,13 @@ export type { KnowledgeDatabaseOptions } from './db.js';
 export { KnowledgeSourceStore } from './source-store.js';
 export { KnowledgeIndexStore, hashContent } from './index-store.js';
 export type { IndexedFileRecord, ChunkHit } from './index-store.js';
+export { KnowledgeFts, buildFtsTokens, buildFtsQuery } from './fts.js';
+export {
+  vectorBucket,
+  queryBuckets,
+  scoreAnnCandidates,
+  VECTOR_BUCKETS,
+} from './vector-ann.js';
 export {
   FormatAdapterRegistry,
   textAdapter,
@@ -28,6 +35,11 @@ export type {
   IngestJobKind,
   KnowledgeJobControlState,
 } from './ingest.js';
+export { KnowledgeJobControl } from './job-control.js';
+export { JobQueue } from './job-queue.js';
+export type { IngestJobKind as JobKind, JobRow } from './job-queue.js';
+export { EmbedRunner } from './embed-runner.js';
+export type { EmbedSecretPolicy } from './embed-runner.js';
 export {
   DEFAULT_KNOWLEDGE_FILE_LIMITS,
   classifyFileKind,
@@ -50,12 +62,13 @@ export {
 export type {
   SourceFetcher,
   DiscoveredDocRef,
+  DiscoverResult,
   VirtualDocument,
 } from './fetchers.js';
 export { ConnectorRegistry, RestConnector } from './connectors.js';
 export type { KnowledgeConnector, ConnectorContext, RestConnectorConfig } from './connectors.js';
 export { ConnectorFetcher } from './connector-fetcher.js';
-export { assertUrlAllowed, guardedFetch, isRestrictedIp } from './network-guard.js';
+export { assertUrlAllowed, authHeadersForUrl, guardedFetch, isRestrictedIp } from './network-guard.js';
 export type { NetworkGuardOptions, FetchResult } from './network-guard.js';
 export { htmlToStructuredText, looksLikeHtml } from './html.js';
 export { KnowledgeRetriever } from './retriever.js';
@@ -98,7 +111,8 @@ export type {
   KnowledgeDescribeOptions,
   KnowledgeDescribeResult,
 } from './describe.js';
-export { scanSecretShapes } from './secret-scan.js';
+export { scanSecretShapes, redactSecretShapes } from './secret-scan.js';
+export type { RedactResult } from './secret-scan.js';
 export type {
   KnowledgeSource,
   KnowledgeSourceInput,

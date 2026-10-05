@@ -197,4 +197,110 @@ describe('directory paths must not enter knowledge_files', () => {
       .get(src.id, filePath) as { n: number };
     expect(jobs.n).toBe(1);
   });
+
+  it('reprocess 拒绝源 root 外路径（防越权读盘）', async () => {
+    const sources = await KnowledgeSourceStore.open({ dbPath: ':memory:' });
+    const index = new KnowledgeIndexStore(sources.database);
+    const src = sources.register({
+      kind: 'directory',
+      location: root,
+      scopeRef: { level: 'global', key: 'global' },
+      displayName: 'repro-acl',
+    });
+    const ingest = new KnowledgeIngest({ sourceStore: sources, indexStore: index });
+
+    const outside = join(tmpdir(), 'octopi-secret-should-not-index.md');
+    await writeFile(outside, 'apiKey=sk-should-never-enter', 'utf8');
+    try {
+      const r = ingest.reprocessFiles(src.id, [outside, join(root, 'b.md')]);
+      expect(r.rejected).toBe(1);
+      expect(r.queued).toBe(1);
+      // 越权路径不得产生任何 parse 任务
+      const leaked = sources.database.raw
+        .prepare('SELECT COUNT(*) AS n FROM knowledge_jobs WHERE path = ?')
+        .get(outside) as { n: number };
+      expect(leaked.n).toBe(0);
+    } finally {
+      await rm(outside, { force: true });
+    }
+  });
+
+  it('parseOne 对源外路径直接抛错（防御深度）', async () => {
+    const sources = await KnowledgeSourceStore.open({ dbPath: ':memory:' });
+    const index = new KnowledgeIndexStore(sources.database);
+    const src = sources.register({
+      kind: 'directory',
+      location: root,
+      scopeRef: { level: 'global', key: 'global' },
+      displayName: 'parse-acl',
+    });
+    const ingest = new KnowledgeIngest({ sourceStore: sources, indexStore: index });
+
+    const outside = join(tmpdir(), 'octopi-parse-outside.md');
+    await writeFile(outside, 'should not parse', 'utf8');
+    try {
+      // 绕过 reprocess 直接污染队列，检验 parseOne 闸门
+      sources.database.raw
+        .prepare(
+          `INSERT INTO knowledge_jobs (id, source_id, kind, path, priority, status, attempts, created_at, updated_at)
+           VALUES ('kj_evil', ?, 'parse_file', ?, 1, 'queued', 0, ?, ?)`,
+        )
+        .run(src.id, outside, Date.now(), Date.now());
+      ingest.kick();
+      await ingest.idle(5_000);
+
+      // 不得写入 knowledge_files / chunks
+      const files = sources.database.raw
+        .prepare(`SELECT COUNT(*) AS n FROM knowledge_files WHERE path = ?`)
+        .get(outside) as { n: number };
+      expect(files.n).toBe(0);
+      const chunks = sources.database.raw
+        .prepare(`SELECT COUNT(*) AS n FROM knowledge_chunks WHERE path = ?`)
+        .get(outside) as { n: number };
+      expect(chunks.n).toBe(0);
+      // job 以 failed 收场（path not owned）
+      const job = sources.database.raw
+        .prepare(`SELECT status, last_error FROM knowledge_jobs WHERE id = 'kj_evil'`)
+        .get() as { status: string; last_error: string | null } | undefined;
+      expect(job?.status).toBe('failed');
+      expect(job?.last_error).toMatch(/not owned/i);
+    } finally {
+      await rm(outside, { force: true });
+    }
+  });
+
+  it('外源 reprocess 只接受已登记逻辑键，并走 fetch_doc', async () => {
+    const sources = await KnowledgeSourceStore.open({ dbPath: ':memory:' });
+    const index = new KnowledgeIndexStore(sources.database);
+    const src = sources.register({
+      kind: 'url',
+      location: 'https://docs.example.com/api',
+      scopeRef: { level: 'global', key: 'global' },
+      displayName: 'remote-repro',
+    });
+    index.upsertFile({
+      sourceId: src.id,
+      path: '/api/guide.md',
+      contentHash: 'h',
+      size: 10,
+      mtime: Date.now(),
+      adapterId: 'markdown',
+      chunks: [{ ordinal: 0, text: 'guide', startLine: 1, endLine: 1 }],
+    });
+    const ingest = new KnowledgeIngest({ sourceStore: sources, indexStore: index });
+
+    // 未登记逻辑键 + 任意本地路径都拒绝
+    const r = ingest.reprocessFiles(src.id, ['/api/unknown.md', join(root, 'b.md')]);
+    expect(r.rejected).toBe(2);
+    expect(r.queued).toBe(0);
+
+    // 已登记逻辑键 → fetch_doc，且不是 parse_file
+    const r2 = ingest.reprocessFiles(src.id, ['/api/guide.md']);
+    expect(r2.queued).toBe(1);
+    expect(r2.rejected).toBe(0);
+    const job = sources.database.raw
+      .prepare(`SELECT kind FROM knowledge_jobs WHERE path = '/api/guide.md' AND status = 'queued'`)
+      .get() as { kind: string } | undefined;
+    expect(job?.kind).toBe('fetch_doc');
+  });
 });

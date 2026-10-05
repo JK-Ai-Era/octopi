@@ -43,6 +43,11 @@ export const KnowledgeConfigSchema = z.object({
     .object({
       embedding: z.boolean().optional(),
       hybridKeyword: z.boolean().optional(),
+      /**
+       * embedding 外发前敏感形态策略（默认 redact）
+       * allow=原文；redact=脱敏后 embed；skip=命中不写向量
+       */
+      embedSecretPolicy: z.enum(['allow', 'redact', 'skip']).optional(),
       phaseA: z
         .object({
           concurrency: z.number().int().positive().optional(),

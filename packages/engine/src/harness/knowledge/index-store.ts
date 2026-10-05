@@ -8,6 +8,8 @@ import { randomUUID, createHash } from 'node:crypto';
 import { tokenizeKeywordQuery, scoreKeywordFields } from '../memory/sqlite/keyword-search.js';
 import { cosineSimilarity } from '../memory/sqlite/vector-search.js';
 import { KnowledgeDatabase } from './db.js';
+import { KnowledgeFts } from './fts.js';
+import { queryBuckets, scoreAnnCandidates, vectorBucket, VECTOR_BUCKETS } from './vector-ann.js';
 import { asChunkId, asSourceId } from './types.js';
 import type { KnowledgeChunkId, KnowledgeSourceId } from './types.js';
 import type { KnowledgeChunkDraft } from './adapters.js';
@@ -45,7 +47,23 @@ export interface ChunkHit {
 }
 
 export class KnowledgeIndexStore {
-  constructor(private readonly db: KnowledgeDatabase) {}
+  private readonly fts: KnowledgeFts;
+
+  constructor(private readonly db: KnowledgeDatabase) {
+    this.fts = new KnowledgeFts(db);
+    // 存量库首次挂 FTS 时补齐倒排（Index 非权威，幂等）
+    if (this.fts.available) {
+      const n = (
+        this.db.raw.prepare('SELECT COUNT(*) AS n FROM knowledge_chunks').get() as { n: number }
+      ).n;
+      const ftsN = (
+        this.db.raw.prepare('SELECT COUNT(*) AS n FROM knowledge_chunks_fts').get() as {
+          n: number;
+        }
+      ).n;
+      if (n > 0 && ftsN === 0) this.fts.rebuildFromChunks();
+    }
+  }
 
   /**
    * 写入/替换某文件的 chunks（幂等：先删旧 chunk 与向量）
@@ -76,6 +94,7 @@ export class KnowledgeIndexStore {
           .all(fileId) as Array<{ id: string }>
       ).map((r) => r.id);
       this.deleteKnowledgeVec(oldIds);
+      this.fts.removeMany(oldIds);
       this.db.raw
         .prepare(
           `DELETE FROM knowledge_chunk_embeddings
@@ -122,9 +141,11 @@ export class KnowledgeIndexStore {
         `INSERT INTO knowledge_chunks (id, file_id, source_id, path, ordinal, text, start_line, end_line)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       );
+      const ftsRows: Array<{ id: string; text: string; path: string }> = [];
       for (const c of input.chunks) {
+        const cid = `kc_${randomUUID().slice(0, 12)}`;
         insertChunk.run(
-          `kc_${randomUUID().slice(0, 12)}`,
+          cid,
           fileId,
           input.sourceId,
           input.path,
@@ -133,7 +154,9 @@ export class KnowledgeIndexStore {
           c.startLine,
           c.endLine,
         );
+        ftsRows.push({ id: cid, text: c.text, path: input.path });
       }
+      this.fts.upsertMany(ftsRows);
       this.db.raw.exec('COMMIT');
     } catch (err) {
       try {
@@ -286,13 +309,13 @@ export class KnowledgeIndexStore {
       params.push(status);
     }
     if (ext) {
-      // 后缀精确（忽略大小写）
-      where.push(`LOWER(path) LIKE ?`);
-      params.push(`%.${ext}`);
+      // 后缀精确（忽略大小写）；ext 来自配置/筛选，仍转义防通配
+      where.push(`LOWER(path) LIKE ? ESCAPE '\\'`);
+      params.push(`%.${ext.replace(/[\\%_]/g, (c) => `\\${c}`)}`);
     }
     if (q) {
-      where.push(`LOWER(path) LIKE ?`);
-      params.push(`%${q.toLowerCase()}%`);
+      where.push(`LOWER(path) LIKE ? ESCAPE '\\'`);
+      params.push(`%${q.toLowerCase().replace(/[\\%_]/g, (c) => `\\${c}`)}%`);
     }
     const whereSql = where.join(' AND ');
 
@@ -393,13 +416,13 @@ export class KnowledgeIndexStore {
     }
     const ext = opts?.ext?.trim().replace(/^\./, '').toLowerCase();
     if (ext && ext !== 'all') {
-      where.push('LOWER(path) LIKE ?');
-      params.push(`%.${ext}`);
+      where.push("LOWER(path) LIKE ? ESCAPE '\\'");
+      params.push(`%.${ext.replace(/[\\%_]/g, (c) => `\\${c}`)}`);
     }
     const q = opts?.q?.trim();
     if (q) {
-      where.push('LOWER(path) LIKE ?');
-      params.push(`%${q.toLowerCase()}%`);
+      where.push("LOWER(path) LIKE ? ESCAPE '\\'");
+      params.push(`%${q.toLowerCase().replace(/[\\%_]/g, (c) => `\\${c}`)}%`);
     }
     const rows = this.db.raw
       .prepare(`SELECT path FROM knowledge_files WHERE ${where.join(' AND ')} ORDER BY path`)
@@ -431,6 +454,7 @@ export class KnowledgeIndexStore {
         .all(sourceId) as Array<{ id: string }>
     ).map((r) => r.id);
     this.deleteKnowledgeVec(ids);
+    this.fts.removeMany(ids);
     this.db.raw
       .prepare(
         `DELETE FROM knowledge_chunk_embeddings
@@ -448,6 +472,7 @@ export class KnowledgeIndexStore {
         .all(sourceId, path) as Array<{ id: string }>
     ).map((r) => r.id);
     this.deleteKnowledgeVec(oldIds);
+    this.fts.removeMany(oldIds);
     this.db.raw
       .prepare(
         `DELETE FROM knowledge_chunk_embeddings
@@ -484,6 +509,7 @@ export class KnowledgeIndexStore {
     try {
       if (chunkIds.length > 0) {
         this.deleteKnowledgeVec(chunkIds);
+        this.fts.removeMany(chunkIds);
         const delEmb = this.db.raw.prepare('DELETE FROM knowledge_chunk_embeddings WHERE chunk_id = ?');
         for (const id of chunkIds) delEmb.run(id);
       }
@@ -514,25 +540,38 @@ export class KnowledgeIndexStore {
     this.db.raw.exec('BEGIN');
     try {
       this.removeFile(sourceId, path);
-      const likeSlash = `${path}/%`;
-      const likeBack = `${path}\\%`;
+      // LIKE 通配符必须转义：path 含 _ / % 时否则会误删兄弟路径
+      const esc = (s: string) => s.replace(/[\\%_]/g, (c) => `\\${c}`);
+      const likeSlash = `${esc(path)}/%`;
+      const likeBack = `${esc(path)}\\%`;
+      // 先取子树 chunk id：FTS 行必须一并删，否则倒排残留
+      const subtreeIds = (
+        this.db.raw
+          .prepare(
+            `SELECT id FROM knowledge_chunks
+             WHERE source_id = ? AND (path LIKE ? ESCAPE '\\' OR path LIKE ? ESCAPE '\\')`,
+          )
+          .all(sourceId, likeSlash, likeBack) as Array<{ id: string }>
+      ).map((r) => r.id);
+      this.deleteKnowledgeVec(subtreeIds);
+      this.fts.removeMany(subtreeIds);
       this.db.raw
         .prepare(
           `DELETE FROM knowledge_chunk_embeddings
            WHERE chunk_id IN (
              SELECT id FROM knowledge_chunks
-             WHERE source_id = ? AND (path LIKE ? OR path LIKE ?)
+             WHERE source_id = ? AND (path LIKE ? ESCAPE '\\' OR path LIKE ? ESCAPE '\\')
            )`,
         )
         .run(sourceId, likeSlash, likeBack);
       this.db.raw
         .prepare(
-          `DELETE FROM knowledge_chunks WHERE source_id = ? AND (path LIKE ? OR path LIKE ?)`,
+          `DELETE FROM knowledge_chunks WHERE source_id = ? AND (path LIKE ? ESCAPE '\\' OR path LIKE ? ESCAPE '\\')`,
         )
         .run(sourceId, likeSlash, likeBack);
       this.db.raw
         .prepare(
-          `DELETE FROM knowledge_files WHERE source_id = ? AND (path LIKE ? OR path LIKE ?)`,
+          `DELETE FROM knowledge_files WHERE source_id = ? AND (path LIKE ? ESCAPE '\\' OR path LIKE ? ESCAPE '\\')`,
         )
         .run(sourceId, likeSlash, likeBack);
       this.db.raw.exec('COMMIT');
@@ -623,15 +662,9 @@ export class KnowledgeIndexStore {
 
     const limit = opts.limit ?? 8;
     const placeholders = opts.sourceIds.map(() => '?').join(',');
-    const rows = this.db.raw
-      .prepare(
-        `SELECT id, source_id, path, ordinal, text, start_line, end_line
-         FROM knowledge_chunks
-         WHERE source_id IN (${placeholders})
-         ORDER BY source_id, path, ordinal
-         LIMIT 20000`,
-      )
-      .all(...opts.sourceIds) as Array<{
+
+    // FTS5 倒排优先；无候选时退 LIKE（正确性优先）
+    type ChunkRow = {
       id: string;
       source_id: string;
       path: string;
@@ -639,10 +672,45 @@ export class KnowledgeIndexStore {
       text: string;
       start_line: number;
       end_line: number;
-    }>;
+    };
+    let rows: ChunkRow[] | null = null;
+
+    const ftsIds = this.fts.search(query, opts.sourceIds as string[], Math.max(limit * 4, 32));
+    if (ftsIds && ftsIds.length > 0) {
+      const idPh = ftsIds.map(() => '?').join(',');
+      rows = this.db.raw
+        .prepare(
+          `SELECT id, source_id, path, ordinal, text, start_line, end_line
+           FROM knowledge_chunks
+           WHERE id IN (${idPh}) AND source_id IN (${placeholders})`,
+        )
+        .all(...ftsIds, ...opts.sourceIds) as ChunkRow[];
+    }
+
+    if (!rows || rows.length === 0) {
+      const likeClauses: string[] = [];
+      const likeParams: string[] = [];
+      for (const token of tokens) {
+        const like = `%${token.toLowerCase().replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+        likeClauses.push(`LOWER(text) LIKE ? ESCAPE '\\'`);
+        likeParams.push(like);
+        likeClauses.push(`LOWER(path) LIKE ? ESCAPE '\\'`);
+        likeParams.push(like);
+      }
+      rows = this.db.raw
+        .prepare(
+          `SELECT id, source_id, path, ordinal, text, start_line, end_line
+           FROM knowledge_chunks
+           WHERE source_id IN (${placeholders})
+             AND (${likeClauses.join(' OR ')})
+           ORDER BY source_id, path, ordinal
+           LIMIT 20000`,
+        )
+        .all(...opts.sourceIds, ...likeParams) as ChunkRow[];
+    }
 
     const hits: ChunkHit[] = [];
-    for (const row of rows) {
+    for (const row of rows ?? []) {
       const score = scoreKeywordFields(
         { content: row.text, tags: row.path },
         tokens,
@@ -761,18 +829,20 @@ export class KnowledgeIndexStore {
   setChunkEmbeddings(rows: Array<[string, number[]]>): void {
     if (rows.length === 0) return;
     const upsert = this.db.raw.prepare(
-      `INSERT INTO knowledge_chunk_embeddings (chunk_id, dimensions, embedding, created_at)
-       VALUES (?, ?, ?, ?)
+      `INSERT INTO knowledge_chunk_embeddings (chunk_id, dimensions, embedding, bucket, created_at)
+       VALUES (?, ?, ?, ?, ?)
        ON CONFLICT(chunk_id) DO UPDATE SET
          dimensions=excluded.dimensions,
          embedding=excluded.embedding,
+         bucket=excluded.bucket,
          created_at=excluded.created_at`,
     );
     this.db.raw.exec('BEGIN');
     try {
       const now = Date.now();
       for (const [chunkId, embedding] of rows) {
-        upsert.run(chunkId, embedding.length, toF32Blob(embedding), now);
+        const bucket = embedding.length > 0 ? vectorBucket(embedding) : -1;
+        upsert.run(chunkId, embedding.length, toF32Blob(embedding), bucket, now);
         this.upsertKnowledgeVec(chunkId, embedding);
       }
       this.db.raw.exec('COMMIT');
@@ -811,6 +881,7 @@ export class KnowledgeIndexStore {
   }
 
   private upsertKnowledgeVec(chunkId: KnowledgeSourceId | string | KnowledgeChunkId, embedding: number[]): void {
+    if (!embedding?.length) return;
     if (!this.ensureVecTable(embedding.length)) return;
     try {
       // vec0 虚拟表不支持 INSERT … ON CONFLICT UPSERT → 必须 DELETE + INSERT
@@ -866,9 +937,12 @@ export class KnowledgeIndexStore {
 
       const rows = this.db.raw
         .prepare(
-          `SELECT chunk_id, embedding FROM knowledge_chunk_embeddings
-           WHERE dimensions = ? AND chunk_id > ?
-           ORDER BY chunk_id
+          `SELECT e.chunk_id, e.embedding FROM knowledge_chunk_embeddings e
+           WHERE e.dimensions = ? AND e.chunk_id > ?
+             AND NOT EXISTS (
+               SELECT 1 FROM ${KnowledgeIndexStore.VEC_TABLE} v WHERE v.chunk_id = e.chunk_id
+             )
+           ORDER BY e.chunk_id
            LIMIT ?`,
         )
         .all(dims, this._vecBackfillCursor, Math.min(50, Math.max(1, limit))) as Array<{
@@ -876,7 +950,7 @@ export class KnowledgeIndexStore {
         embedding: Uint8Array | Buffer;
       }>;
       if (rows.length === 0) {
-        // 游标到尾：重置，便于后续新向量（幂等重写也无害）
+        // 游标到尾且无缺口：重置游标只服务「之后新增向量」；NOT EXISTS 防无限重写
         this._vecBackfillCursor = '';
         return 0;
       }
@@ -951,14 +1025,41 @@ export class KnowledgeIndexStore {
         `SELECT COUNT(*) AS n FROM knowledge_chunk_embeddings e
          JOIN knowledge_chunks c ON c.id = e.chunk_id
          LEFT JOIN knowledge_files f ON f.source_id = c.source_id AND f.path = c.path
-         WHERE c.source_id = ? AND ${EMBEDDABLE_WHERE}`,
+         WHERE c.source_id = ? AND e.dimensions > 0 AND ${EMBEDDABLE_WHERE}`,
       )
       .get(sourceId) as { n: number };
     return Math.min(1, (embedded?.n ?? 0) / total.n);
   }
 
   /**
-   * 向量检索：优先 sqlite-vec KNN；否则 JS cosine（BLOB）
+   * 向量后端能力（百万级部署依据）
+   *
+   * - `sqlite-vec`：KNN，可上百万
+   * - `js-bucket`：桶裁剪，仅适合中小库
+   * - `disabled`：无 embedding 行 / 关闭
+   */
+  vectorBackend(): 'sqlite-vec' | 'js-bucket' | 'disabled' {
+    const n = this.countEmbeddings();
+    if (n === 0) return 'disabled';
+    return this.db.sqliteVecEnabled ? 'sqlite-vec' : 'js-bucket';
+  }
+
+  /** 有效向量条数（dimensions>0） */
+  countEmbeddings(): number {
+    const row = this.db.raw
+      .prepare(
+        `SELECT COUNT(*) AS n FROM knowledge_chunk_embeddings WHERE dimensions > 0`,
+      )
+      .get() as { n: number };
+    return row?.n ?? 0;
+  }
+
+  /**
+   * 向量检索：优先 sqlite-vec KNN；结果不足时退 JS 补齐。
+   *
+   * **规模闸门**：无 sqlite-vec 且向量数超过 `VECTOR_JS_FULL_SCAN_MAX` 时
+   * **禁止** JS 全表兜底（百万级会堵死事件循环）；仅保留邻桶裁剪结果。
+   * 正确性由 hybrid 关键词腿 + FTS 兜底，不靠全库暴力余弦。
    */
   vectorSearch(
     queryEmbedding: number[],
@@ -967,12 +1068,25 @@ export class KnowledgeIndexStore {
     if (opts.sourceIds.length === 0 || !queryEmbedding?.length) return [];
     const limit = opts.limit ?? 8;
 
-    // vec 表可能尚未回填；0 命中时退 JS，避免空结果短路
     const viaVec = this.vectorSearchVec(queryEmbedding, opts, limit);
-    if (viaVec && viaVec.length > 0) return viaVec;
+    if (viaVec && viaVec.length >= limit) return viaVec;
 
-    return this.vectorSearchJs(queryEmbedding, opts, limit);
+    // 闸门看「KNN 是否真正可用」，不是 sqlite-vec flag：
+    // 扩展已加载但 vec 表未建 / KNN 抛错时，viaVec=null，仍可能对 1M 行 JS 全扫。
+    const n = this.countEmbeddings();
+    const knnAvailable = viaVec !== null;
+    const allowJsFullScan = knnAvailable || n <= KnowledgeIndexStore.VECTOR_JS_FULL_SCAN_MAX;
+    const viaJs = this.vectorSearchJs(queryEmbedding, opts, limit, allowJsFullScan);
+    if (!viaVec || viaVec.length === 0) return viaJs;
+
+    const byId = new Map<string, ChunkHit>();
+    for (const h of viaVec) byId.set(h.chunkId, h);
+    for (const h of viaJs) if (!byId.has(h.chunkId)) byId.set(h.chunkId, h);
+    return [...byId.values()].sort((a, b) => b.score - a.score).slice(0, limit);
   }
+
+  /** 无 ANN 时禁止 JS 全扫的向量数上限（超过只走邻桶 / 拒绝纯向量） */
+  private static readonly VECTOR_JS_FULL_SCAN_MAX = 50_000;
 
   /** sqlite-vec KNN（不可用时返回 null） */
   private vectorSearchVec(
@@ -984,6 +1098,8 @@ export class KnowledgeIndexStore {
     if (!this.ensureVecTable(queryEmbedding.length)) return null;
     const placeholders = opts.sourceIds.map(() => '?').join(',');
     try {
+      // k 放大：全局 top-k 再滤 source，k 太小会把目标源的命中挤出候选
+      const k = Math.max(limit * 20, 64);
       const rows = this.db.raw
         .prepare(
           `SELECT c.id, c.source_id, c.path, c.ordinal, c.text, c.start_line, c.end_line, v.distance AS distance
@@ -997,7 +1113,7 @@ export class KnowledgeIndexStore {
            WHERE c.source_id IN (${placeholders})
            ORDER BY v.distance ASC`,
         )
-        .all(toF32Blob(queryEmbedding), Math.max(limit * 2, 16), ...opts.sourceIds) as Array<{
+        .all(toF32Blob(queryEmbedding), k, ...opts.sourceIds) as Array<{
         id: string;
         source_id: string;
         path: string;
@@ -1022,22 +1138,81 @@ export class KnowledgeIndexStore {
     }
   }
 
-  /** JS 余弦（Float32 BLOB；无 JSON.parse） */
+  /**
+   * JS 余弦（Float32 BLOB）
+   *
+   * 两阶段：先按 query 邻桶裁剪（ANN-lite）；`allowFullScan` 时不足再全扫。
+   * 大库无 sqlite-vec 时 `allowFullScan=false`，只返回邻桶结果（可为空）。
+   */
   private vectorSearchJs(
     queryEmbedding: number[],
     opts: { sourceIds: KnowledgeSourceId[] },
     limit: number,
+    allowFullScan = true,
   ): ChunkHit[] {
     const placeholders = opts.sourceIds.map(() => '?').join(',');
-    const rows = this.db.raw
+    const loadRows = (bucketFilter: string, bucketParams: number[] = []) =>
+      this.db.raw
+        .prepare(
+          `SELECT c.id, c.source_id, c.path, c.ordinal, c.start_line, c.end_line, e.embedding
+           FROM knowledge_chunks c
+           JOIN knowledge_chunk_embeddings e ON e.chunk_id = c.id
+           WHERE c.source_id IN (${placeholders})
+             AND e.dimensions > 0
+             ${bucketFilter}
+           LIMIT 200000`,
+        )
+        .all(...opts.sourceIds, ...bucketParams) as Array<{
+        id: string;
+        source_id: string;
+        path: string;
+        ordinal: number;
+        start_line: number;
+        end_line: number;
+        embedding: Uint8Array | Buffer;
+      }>;
+
+    const toScoredInput = (rows: ReturnType<typeof loadRows>) =>
+      rows.map((r) => ({
+        id: r.id,
+        source_id: r.source_id,
+        path: r.path,
+        ordinal: r.ordinal,
+        start_line: r.start_line,
+        end_line: r.end_line,
+        embedding: fromF32Blob(r.embedding),
+      }));
+
+    // 1) 邻桶候选（降 O(N)）
+    const buckets = queryBuckets(queryEmbedding);
+    const bucketPh = buckets.map(() => '?').join(',');
+    let scored = scoreAnnCandidates(
+      queryEmbedding,
+      toScoredInput(loadRows(`AND e.bucket IN (${bucketPh})`, buckets)),
+      limit,
+    );
+
+    // 2) 不足则扩到全库（仅小库 / 有 vec 兜底时；大库禁扫防堵死）
+    if (allowFullScan && scored.length < limit) {
+      const all = scoreAnnCandidates(queryEmbedding, toScoredInput(loadRows('')), limit);
+      const seen = new Set(scored.map((s) => s.id));
+      for (const h of all) {
+        if (!seen.has(h.id)) scored.push(h);
+      }
+      scored.sort((a, b) => b.score - a.score);
+      scored = scored.slice(0, limit);
+    }
+    if (scored.length === 0) return [];
+
+    // 只对 top-k 取正文与元数据
+    const topIds = scored.map((s) => s.id);
+    const idPh = topIds.map(() => '?').join(',');
+    const topRows = this.db.raw
       .prepare(
-        `SELECT c.id, c.source_id, c.path, c.ordinal, c.text, c.start_line, c.end_line, e.embedding
-         FROM knowledge_chunks c
-         JOIN knowledge_chunk_embeddings e ON e.chunk_id = c.id
-         WHERE c.source_id IN (${placeholders})
-         LIMIT 200000`,
+        `SELECT id, source_id, path, ordinal, text, start_line, end_line
+         FROM knowledge_chunks WHERE id IN (${idPh})`,
       )
-      .all(...opts.sourceIds) as Array<{
+      .all(...topIds) as Array<{
       id: string;
       source_id: string;
       path: string;
@@ -1045,15 +1220,12 @@ export class KnowledgeIndexStore {
       text: string;
       start_line: number;
       end_line: number;
-      embedding: Uint8Array | Buffer;
     }>;
-
+    const byId = new Map(topRows.map((r) => [r.id, r]));
     const hits: ChunkHit[] = [];
-    for (const row of rows) {
-      const emb = fromF32Blob(row.embedding);
-      if (!emb?.length || emb.length !== queryEmbedding.length) continue;
-      const sim = cosineSimilarity(queryEmbedding, emb);
-      if (sim <= 0) continue;
+    for (const s of scored) {
+      const row = byId.get(s.id);
+      if (!row) continue;
       hits.push({
         chunkId: asChunkId(row.id),
         sourceId: asSourceId(row.source_id),
@@ -1062,11 +1234,10 @@ export class KnowledgeIndexStore {
         text: row.text,
         startLine: row.start_line,
         endLine: row.end_line,
-        score: sim,
+        score: s.score,
       });
     }
-    hits.sort((a, b) => b.score - a.score);
-    return hits.slice(0, limit);
+    return hits;
   }
 }
 

@@ -10,7 +10,7 @@ import { readFile, readdir, stat } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import type { ResolvedCredential } from '../governance/credentials/types.js';
 import { htmlToStructuredText, looksLikeHtml } from './html.js';
-import { guardedFetch, type NetworkGuardOptions } from './network-guard.js';
+import { authHeadersForUrl, guardedFetch, type NetworkGuardOptions } from './network-guard.js';
 import type { KnowledgeSource } from './types.js';
 
 export interface DiscoveredDocRef {
@@ -19,6 +19,15 @@ export interface DiscoveredDocRef {
   externalUrl?: string;
   etag?: string;
   lastModified?: string;
+}
+
+export interface DiscoverResult {
+  docs: DiscoveredDocRef[];
+  /**
+   * 是否为全量结果。false = 被 maxPages/maxBytes 截断或 walk 出错——
+   * 此时**禁止** prune，否则会把仍存在的文档误删。
+   */
+  complete: boolean;
 }
 
 export interface VirtualDocument {
@@ -33,7 +42,7 @@ export interface VirtualDocument {
 }
 
 export interface SourceFetcher {
-  discover(source: KnowledgeSource, cred?: ResolvedCredential | null): Promise<DiscoveredDocRef[]>;
+  discover(source: KnowledgeSource, cred?: ResolvedCredential | null): Promise<DiscoverResult>;
   fetch(
     source: KnowledgeSource,
     ref: DiscoveredDocRef,
@@ -55,14 +64,17 @@ export class LocalFsFetcher implements SourceFetcher {
    */
   constructor(private readonly shouldSkipPath: (path: string) => boolean) {}
 
-  async discover(source: KnowledgeSource): Promise<DiscoveredDocRef[]> {
+  async discover(source: KnowledgeSource): Promise<DiscoverResult> {
     const root = source.location;
     const out: DiscoveredDocRef[] = [];
+    let complete = true;
     const walkDir = async (dir: string): Promise<void> => {
       let entries;
       try {
         entries = await readdir(dir, { withFileTypes: true });
       } catch {
+        // 子目录读失败 → keep 集不完整，禁止 prune
+        complete = false;
         return;
       }
       for (const ent of entries) {
@@ -78,12 +90,12 @@ export class LocalFsFetcher implements SourceFetcher {
     };
 
     const st = await stat(root).catch(() => null);
-    if (!st) return out;
+    if (!st) return { docs: out, complete: false };
     if (st.isFile()) {
-      return [{ path: root }];
+      return { docs: [{ path: root }], complete: true };
     }
     await walkDir(root);
-    return out;
+    return { docs: out, complete };
   }
 
   async fetch(source: KnowledgeSource, ref: DiscoveredDocRef): Promise<VirtualDocument | null> {
@@ -194,7 +206,7 @@ export class UrlFetcher implements SourceFetcher {
     };
   }
 
-  async discover(source: KnowledgeSource, cred?: ResolvedCredential | null): Promise<DiscoveredDocRef[]> {
+  async discover(source: KnowledgeSource, cred?: ResolvedCredential | null): Promise<DiscoverResult> {
     const location = source.location.trim();
     if (!/^https?:\/\//i.test(location)) {
       throw new Error(`url source location must be http(s): ${location}`);
@@ -207,12 +219,15 @@ export class UrlFetcher implements SourceFetcher {
     this.docCache.clear();
 
     if (mode === 'single') {
-      return [
-        {
-          path: UrlFetcher.pathFromUrl(location, location),
-          externalUrl: location,
-        },
-      ];
+      return {
+        docs: [
+          {
+            path: UrlFetcher.pathFromUrl(location, location),
+            externalUrl: location,
+          },
+        ],
+        complete: true,
+      };
     }
     if (mode === 'sitemap') {
       return this.discoverSitemap(location, source, cred, maxPages, maxBytes, sitemapMaxDepth);
@@ -227,13 +242,14 @@ export class UrlFetcher implements SourceFetcher {
     maxPages: number,
     maxBytes: number,
     sitemapMaxDepth = 2,
-  ): Promise<DiscoveredDocRef[]> {
+  ): Promise<DiscoverResult> {
     const opts = this.networkOpts(source);
     const seenSm = new Set<string>();
     const queue: Array<{ url: string; depth: number }> = [{ url: sitemapUrl, depth: 0 }];
     const docs: DiscoveredDocRef[] = [];
     const seenDoc = new Set<string>();
     let downloaded = 0;
+    let truncated = false;
 
     while (queue.length && docs.length < maxPages) {
       const item = queue.shift()!;
@@ -246,7 +262,10 @@ export class UrlFetcher implements SourceFetcher {
         { headers: mergeHeaders(cred) },
       );
       downloaded += res.body.length;
-      if (downloaded > maxBytes) break;
+      if (downloaded > maxBytes) {
+        truncated = true;
+        break;
+      }
 
       const locs = UrlFetcher.parseSitemapLocs(res.body);
       const isIndex = /<sitemapindex/i.test(res.body);
@@ -262,10 +281,13 @@ export class UrlFetcher implements SourceFetcher {
             path: UrlFetcher.pathFromUrl(loc, sitemapUrl),
             externalUrl: loc,
           });
+        } else if (!seenDoc.has(loc) && docs.length >= maxPages) {
+          truncated = true;
         }
       }
     }
-    return docs;
+    if (queue.length > 0) truncated = true;
+    return { docs, complete: !truncated };
   }
 
   private async discoverCrawl(
@@ -275,13 +297,14 @@ export class UrlFetcher implements SourceFetcher {
     maxPages: number,
     maxDepth: number,
     maxBytes: number,
-  ): Promise<DiscoveredDocRef[]> {
+  ): Promise<DiscoverResult> {
     const opts = this.networkOpts(source);
     const origin = new URL(startUrl).origin;
     const seen = new Set<string>();
     const queue: Array<{ url: string; depth: number }> = [{ url: startUrl, depth: 0 }];
     const docs: DiscoveredDocRef[] = [];
     let downloaded = 0;
+    let truncated = false;
 
     while (queue.length && docs.length < maxPages) {
       const item = queue.shift()!;
@@ -302,7 +325,10 @@ export class UrlFetcher implements SourceFetcher {
         continue;
       }
       downloaded += res.body.length;
-      if (downloaded > maxBytes) break;
+      if (downloaded > maxBytes) {
+        truncated = true;
+        break;
+      }
 
       const contentType = res.contentType ?? '';
       const isHtml = looksLikeHtml(res.body, contentType);
@@ -333,7 +359,8 @@ export class UrlFetcher implements SourceFetcher {
         }
       }
     }
-    return docs.slice(0, maxPages);
+    if (queue.length > 0) truncated = true;
+    return { docs: docs.slice(0, maxPages), complete: !truncated };
   }
 
   async fetch(
@@ -351,6 +378,8 @@ export class UrlFetcher implements SourceFetcher {
 
     const maxDoc = this.network?.maxDocumentBytes ?? this.network?.maxResponseBytes ?? 5_000_000;
 
+    // 凭证只属于 source.location 的 origin；ref 外域不带鉴权
+    const trustedOrigin = new URL(source.location).origin;
     const res = await guardedFetch(
       url,
       {
@@ -359,7 +388,7 @@ export class UrlFetcher implements SourceFetcher {
         etag: ref.etag,
         lastModified: ref.lastModified,
       },
-      { headers: mergeHeaders(cred) },
+      { headers: authHeadersForUrl(trustedOrigin, url, mergeHeaders(cred)) },
     );
 
     if (res.notModified) return null;

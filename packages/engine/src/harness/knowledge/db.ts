@@ -1,8 +1,8 @@
 /**
  * KnowledgeDatabase — OCTOPI_HOME/knowledge/knowledge.db
  *
- * 全 scope Source 权威 + Project 挂载 + Global 屏蔽。
- * 不存 chunk/vector（Index 可重建投影，P2+）。
+ * Source 权威 + Project 挂载 + Global 屏蔽 + **Index 投影**
+ * （files/chunks/embeddings/FTS/jobs/control）。Index 非权威，可整库 rebuild。
  */
 
 import { mkdir } from 'node:fs/promises';
@@ -160,13 +160,16 @@ export class KnowledgeDatabase {
       CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_source ON knowledge_chunks(source_id);
       CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_file ON knowledge_chunks(file_id);
 
-      -- Phase B 向量（Float32 BLOB；可选 sqlite-vec 加速）
+      -- Phase B 向量（Float32 BLOB；可选 sqlite-vec 加速；bucket=ANN-lite 分区）
       CREATE TABLE IF NOT EXISTS knowledge_chunk_embeddings (
         chunk_id      TEXT PRIMARY KEY,
         dimensions    INTEGER NOT NULL,
         embedding     BLOB NOT NULL,
+        bucket        INTEGER NOT NULL DEFAULT -1,
         created_at    INTEGER NOT NULL
       );
+      CREATE INDEX IF NOT EXISTS idx_knowledge_chunk_embeddings_bucket
+        ON knowledge_chunk_embeddings(bucket);
 
       -- 使用痕迹（P5；提升候选计量，非权威）
       CREATE TABLE IF NOT EXISTS knowledge_hits (
@@ -224,6 +227,7 @@ export class KnowledgeDatabase {
           chunk_id      TEXT PRIMARY KEY,
           dimensions    INTEGER NOT NULL,
           embedding     BLOB NOT NULL,
+          bucket        INTEGER NOT NULL DEFAULT -1,
           created_at    INTEGER NOT NULL
         );
       `);
@@ -242,6 +246,20 @@ export class KnowledgeDatabase {
       CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_source_path
         ON knowledge_chunks(source_id, path);
     `);
+
+    const embCols2 = this.db
+      .prepare(`PRAGMA table_info(knowledge_chunk_embeddings)`)
+      .all() as Array<{ name: string }>;
+    const embNames2 = new Set(embCols2.map((c) => c.name));
+    if (!embNames2.has('bucket')) {
+      this.db.exec(
+        `ALTER TABLE knowledge_chunk_embeddings ADD COLUMN bucket INTEGER NOT NULL DEFAULT -1`,
+      );
+      this.db.exec(
+        `CREATE INDEX IF NOT EXISTS idx_knowledge_chunk_embeddings_bucket
+         ON knowledge_chunk_embeddings(bucket)`,
+      );
+    }
 
     const cols = this.db
       .prepare(`PRAGMA table_info(knowledge_files)`)
@@ -308,6 +326,8 @@ export class KnowledgeDatabase {
         result[key] = 0;
       }
     }
+    // 0=无 ANN（仅桶/FTS）；1=sqlite-vec KNN —— 百万级部署必须为 1
+    result.sqliteVec = this._sqliteVec ? 1 : 0;
     return result;
   }
 }

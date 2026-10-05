@@ -570,6 +570,14 @@ export class KnowledgeSourceStore {
 
   // ── Catalog ──
 
+  /** catalog 规模/topics 派生缓存（Tier 0 每轮装配；短 TTL 足够） */
+  private catalogExtrasCache: {
+    at: number;
+    fileCounts: Map<string, number>;
+    topics: Map<string, string[]>;
+  } | null = null;
+  private static readonly CATALOG_EXTRAS_TTL_MS = 2_000;
+
   /**
    * 生成 agent 可见 catalog（Tier 0）
    * 默认返回可见全集（display 截断在 KnowledgeLayer）；maxEntries 仅作安全硬顶
@@ -586,17 +594,31 @@ export class KnowledgeSourceStore {
       if (pa !== pb) return pb - pa;
       return a.displayName.localeCompare(b.displayName);
     });
-    const fileCounts = this.fileCountsBySource();
-    const topicsBySource = this.topicsBySource();
+    const extras = this.catalogExtras();
     return sorted
       .filter((s) => !s.hiddenFromCatalog)
       .slice(0, max)
       .map((s) =>
         toCatalogItem(s, {
-          fileCount: fileCounts.get(s.id),
-          topics: topicsBySource.get(s.id),
+          fileCount: extras.fileCounts.get(s.id),
+          topics: extras.topics.get(s.id),
         }),
       );
+  }
+
+  /** 规模 + topics（短 TTL 缓存；禁止每轮全表拉 path） */
+  private catalogExtras(): {
+    fileCounts: Map<string, number>;
+    topics: Map<string, string[]>;
+  } {
+    const now = Date.now();
+    if (this.catalogExtrasCache && now - this.catalogExtrasCache.at < KnowledgeSourceStore.CATALOG_EXTRAS_TTL_MS) {
+      return this.catalogExtrasCache;
+    }
+    const fileCounts = this.fileCountsBySource();
+    const topics = this.topicsBySource();
+    this.catalogExtrasCache = { at: now, fileCounts, topics };
+    return this.catalogExtrasCache;
   }
 
   /** 每源已入库文件数（catalog 规模粗标用） */
@@ -607,20 +629,24 @@ export class KnowledgeSourceStore {
     return new Map(rows.map((r) => [r.id, r.n]));
   }
 
-  /** 每源路径派生 topics（catalog 搜索线索） */
+  /**
+   * 每源路径派生 topics（catalog 搜索线索）
+   *
+   * 只抽样前 N 条 path（按字典序），避免大库全表扫；topics 是粗线索不是精确索引。
+   */
   private topicsBySource(): Map<string, string[]> {
-    const rows = this.db.raw
-      .prepare('SELECT source_id AS id, path AS path FROM knowledge_files')
-      .all() as Array<{ id: string; path: string }>;
-    const bySource = new Map<string, string[]>();
-    for (const r of rows) {
-      const list = bySource.get(r.id) ?? [];
-      list.push(r.path);
-      bySource.set(r.id, list);
-    }
+    const sourceIds = (
+      this.db.raw
+        .prepare(`SELECT id FROM knowledge_sources WHERE status != 'removed'`)
+        .all() as Array<{ id: string }>
+    ).map((r) => r.id);
     const out = new Map<string, string[]>();
-    for (const [id, paths] of bySource) {
-      out.set(id, deriveTopicsFromPaths(paths));
+    const stmt = this.db.raw.prepare(
+      `SELECT path FROM knowledge_files WHERE source_id = ? ORDER BY path LIMIT 128`,
+    );
+    for (const id of sourceIds) {
+      const paths = (stmt.all(id) as Array<{ path: string }>).map((r) => r.path);
+      if (paths.length > 0) out.set(id, deriveTopicsFromPaths(paths));
     }
     return out;
   }
