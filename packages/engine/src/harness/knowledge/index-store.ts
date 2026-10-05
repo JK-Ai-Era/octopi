@@ -828,6 +828,8 @@ export class KnowledgeIndexStore {
    */
   setChunkEmbeddings(rows: Array<[string, number[]]>): void {
     if (rows.length === 0) return;
+    // 写入前确保 schema（旧库可能尚未补 bucket 列）
+    this.db.ensureEmbeddingSchema();
     const upsert = this.db.raw.prepare(
       `INSERT INTO knowledge_chunk_embeddings (chunk_id, dimensions, embedding, bucket, created_at)
        VALUES (?, ?, ?, ?, ?)

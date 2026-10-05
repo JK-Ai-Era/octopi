@@ -161,6 +161,8 @@ export class KnowledgeDatabase {
       CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_file ON knowledge_chunks(file_id);
 
       -- Phase B 向量（Float32 BLOB；可选 sqlite-vec 加速；bucket=ANN-lite 分区）
+      -- 注意：旧库可能已存在**无 bucket 列**的表；CREATE IF NOT EXISTS 不会补列。
+      -- bucket 索引不得写在本批，必须在 ensureEmbedSchema 之后。
       CREATE TABLE IF NOT EXISTS knowledge_chunk_embeddings (
         chunk_id      TEXT PRIMARY KEY,
         dimensions    INTEGER NOT NULL,
@@ -168,8 +170,6 @@ export class KnowledgeDatabase {
         bucket        INTEGER NOT NULL DEFAULT -1,
         created_at    INTEGER NOT NULL
       );
-      CREATE INDEX IF NOT EXISTS idx_knowledge_chunk_embeddings_bucket
-        ON knowledge_chunk_embeddings(bucket);
 
       -- 使用痕迹（P5；提升候选计量，非权威）
       CREATE TABLE IF NOT EXISTS knowledge_hits (
@@ -213,6 +213,28 @@ export class KnowledgeDatabase {
     this.migrate();
   }
 
+  /**
+   * 保证 embeddings 表含 `bucket` 列并建索引。
+   *
+   * 必须在任何 `INSERT … bucket` / `WHERE bucket` **之前**调用；
+   * 且不得与 `CREATE INDEX … (bucket)` 同批执行（旧表无该列时会先炸索引）。
+   */
+  ensureEmbeddingSchema(): void {
+    const cols = this.db
+      .prepare(`PRAGMA table_info(knowledge_chunk_embeddings)`)
+      .all() as Array<{ name: string }>;
+    const names = new Set(cols.map((c) => c.name));
+    if (!names.has('bucket')) {
+      this.db.exec(
+        `ALTER TABLE knowledge_chunk_embeddings ADD COLUMN bucket INTEGER NOT NULL DEFAULT -1`,
+      );
+    }
+    this.db.exec(
+      `CREATE INDEX IF NOT EXISTS idx_knowledge_chunk_embeddings_bucket
+       ON knowledge_chunk_embeddings(bucket)`,
+    );
+  }
+
   /** 幂等迁移：外源 ingest / 凭证引用列 */
   private migrate(): void {
     // 旧 JSON 向量表 → Float32 BLOB（测试库可重建；不读旧 JSON）
@@ -247,19 +269,8 @@ export class KnowledgeDatabase {
         ON knowledge_chunks(source_id, path);
     `);
 
-    const embCols2 = this.db
-      .prepare(`PRAGMA table_info(knowledge_chunk_embeddings)`)
-      .all() as Array<{ name: string }>;
-    const embNames2 = new Set(embCols2.map((c) => c.name));
-    if (!embNames2.has('bucket')) {
-      this.db.exec(
-        `ALTER TABLE knowledge_chunk_embeddings ADD COLUMN bucket INTEGER NOT NULL DEFAULT -1`,
-      );
-      this.db.exec(
-        `CREATE INDEX IF NOT EXISTS idx_knowledge_chunk_embeddings_bucket
-         ON knowledge_chunk_embeddings(bucket)`,
-      );
-    }
+    // bucket 列 + 索引：旧表无列时先 ALTER，再建索引（顺序不可反）
+    this.ensureEmbeddingSchema();
 
     const cols = this.db
       .prepare(`PRAGMA table_info(knowledge_files)`)

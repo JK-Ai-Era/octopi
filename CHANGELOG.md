@@ -1,3 +1,11 @@
+## v0.59.2
+
+### fix(knowledge): 旧库升级炸在 bucket 列 — CREATE INDEX 先于 ALTER
+
+**问题**：已有 `knowledge_chunk_embeddings`（无 `bucket`）时，`CREATE TABLE IF NOT EXISTS` 不补列，同批 `CREATE INDEX … (bucket)` 直接抛 `no such column: bucket`，`migrate()` 无法执行 → 管理面 400/503。
+
+**方案**：`ensureEmbeddingSchema()` 先 ALTER 再建索引；索引移出建表批；`setChunkEmbeddings` 写入前再确保一次。回归：`knowledge-db-migrate.test.ts`（旧 schema 文件库升级）。
+
 ## v0.59.1
 
 ### docs(knowledge): 同步 as-built 口径与过期注释
