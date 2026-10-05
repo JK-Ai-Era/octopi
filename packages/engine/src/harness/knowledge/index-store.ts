@@ -48,21 +48,41 @@ export interface ChunkHit {
 
 export class KnowledgeIndexStore {
   private readonly fts: KnowledgeFts;
+  private ftsBackfillPromise: Promise<number> | null = null;
 
   constructor(private readonly db: KnowledgeDatabase) {
     this.fts = new KnowledgeFts(db);
-    // 存量库首次挂 FTS 时补齐倒排（Index 非权威，幂等）
-    if (this.fts.available) {
-      const n = (
-        this.db.raw.prepare('SELECT COUNT(*) AS n FROM knowledge_chunks').get() as { n: number }
-      ).n;
-      const ftsN = (
-        this.db.raw.prepare('SELECT COUNT(*) AS n FROM knowledge_chunks_fts').get() as {
-          n: number;
-        }
-      ).n;
-      if (n > 0 && ftsN === 0) this.fts.rebuildFromChunks();
-    }
+    // **禁止**在此同步 rebuild：大库会堵死事件循环（Gateway /health 超时）。
+    // 缺口由 ensureFtsBackfill() 在 reconcile/后台补。
+  }
+
+  /** FTS 是否可用（FTS5 编译进 sqlite） */
+  get ftsAvailable(): boolean {
+    return this.fts.available;
+  }
+
+  /**
+   * 存量库 FTS 后台补齐（幂等；并发调用合并为一次）。
+   *
+   * @returns 本轮写入条数；无需重建时为 0
+   */
+  ensureFtsBackfill(): Promise<number> {
+    if (!this.fts.available) return Promise.resolve(0);
+    if (this.ftsBackfillPromise) return this.ftsBackfillPromise;
+    const n = (
+      this.db.raw.prepare('SELECT COUNT(*) AS n FROM knowledge_chunks').get() as { n: number }
+    ).n;
+    const ftsN = (
+      this.db.raw.prepare('SELECT COUNT(*) AS n FROM knowledge_chunks_fts').get() as { n: number }
+    ).n;
+    if (n === 0 || ftsN > 0) return Promise.resolve(0);
+    this.ftsBackfillPromise = this.fts
+      .rebuildFromChunksAsync()
+      .catch(() => 0)
+      .finally(() => {
+        this.ftsBackfillPromise = null;
+      });
+    return this.ftsBackfillPromise;
   }
 
   /**

@@ -1,3 +1,11 @@
+## v0.59.3
+
+### fix(knowledge): 首次 FTS 重建同步阻塞导致 Gateway 假死
+
+**问题**：大库首次打开时 `KnowledgeIndexStore` 构造函数**同步** `rebuildFromChunks()`（数万 chunk 分词 + 写 FTS），堵死事件循环 → 进程在听端口但 `/health` 与 API 超时。
+
+**方案**：构造期不再 rebuild；`ensureFtsBackfill()` 分批 + `setImmediate` 让出循环，由 reconcile 后台补齐；缺口期间检索退 LIKE。
+
 ## v0.59.2
 
 ### fix(knowledge): 旧库升级炸在 bucket 列 — CREATE INDEX 先于 ALTER

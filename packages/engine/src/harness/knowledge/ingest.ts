@@ -1228,6 +1228,8 @@ export class KnowledgeIngest extends EventEmitter {
     this.cleanupNonFileIndexRows();
     // 终态 job 定期清理，防表无限增长
     this.cleanupTerminalJobs();
+    // 存量 FTS 后台补齐（分批让出事件循环；构造期禁止同步 rebuild）
+    void this.index.ensureFtsBackfill();
     // 存量向量回填：小批量 + 让出事件循环，禁止 2000 条同步写（会堵死 abort）
     await this.index.backfillVecFromEmbeddings(25);
     for (const s of this.sources.list()) {

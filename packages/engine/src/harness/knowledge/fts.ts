@@ -147,6 +147,8 @@ export class KnowledgeFts {
   /**
    * 全量重建（Index 非权威；可整库重跑）
    *
+   * **同步**版本：仅测试/小库。大库请用 {@link rebuildFromChunksAsync}。
+   *
    * @returns 写入条数
    */
   rebuildFromChunks(batch = 500): number {
@@ -165,6 +167,39 @@ export class KnowledgeFts {
       this.upsertMany(rows);
       n += rows.length;
       cursor = rows[rows.length - 1].id;
+    }
+    return n;
+  }
+
+  /**
+   * 分批 + 让出事件循环的重建。禁止在构造/请求同步路径整库跑（会堵死 Gateway）。
+   *
+   * @param opts.batch - 每批条数
+   * @param opts.onProgress - 进度回调
+   * @returns 写入条数
+   */
+  async rebuildFromChunksAsync(
+    opts?: { batch?: number; onProgress?: (done: number) => void },
+  ): Promise<number> {
+    if (!this.enabled) return 0;
+    const batch = Math.max(50, opts?.batch ?? 200);
+    this.db.raw.exec('DELETE FROM knowledge_chunks_fts');
+    let cursor = '';
+    let n = 0;
+    for (;;) {
+      const rows = this.db.raw
+        .prepare(
+          `SELECT id, text, path FROM knowledge_chunks
+           WHERE id > ? ORDER BY id LIMIT ?`,
+        )
+        .all(cursor, batch) as Array<{ id: string; text: string; path: string }>;
+      if (rows.length === 0) break;
+      this.upsertMany(rows);
+      n += rows.length;
+      cursor = rows[rows.length - 1].id;
+      opts?.onProgress?.(n);
+      // 让出事件循环，保证 /health 与管理 API 可响应
+      await new Promise<void>((r) => setImmediate(r));
     }
     return n;
   }
