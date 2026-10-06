@@ -245,17 +245,18 @@ harness/context/
 └── （catalog 契约已迁 harness/knowledge/catalog-types.ts）
 └── （结构压缩算法已委托 harness/context/capabilities/compact；E4 状态仍在本引擎）
 
-harness/context/capabilities/          # 横切公用能力：SummaryPort + CompactEngine
+harness/capabilities/document/       # 跨域 Document 抽取（createDocumentPortFromConfig + documents.*）
+harness/context/capabilities/          # Context 组装公用能力：SummaryPort + CompactEngine
 harness/governance/session-acl/        # E6：角色目录 + authorizeRun + switch
 harness/extension/execution-environment/        # I5：toolIsolation cwd
 harness/observability/observer/           # Run Observatory：ObserverHub + Run 投影（observer.level）
 harness/run/concurrency/session-lease.ts  # E2/E7：SessionLease
-harness/context/capabilities/       # 横切公用能力（不计入业务领域计数）：summary + compact
+harness/knowledge/                       # 外生语料域 + Knowledge Service（http-app/serve/client；唯一写 knowledge.db）
 ```
 
 领域导出见 `harness/index.ts`。设计说明见 [docs/context-layer-contracts.md](./context-layer-contracts.md)、[docs/observer-domain.md](./observer-domain.md)。
 
-**公用能力（capabilities，横切）**：`harness/context/capabilities/summary|compact` 提供可注入的 LLM 摘要/信息提取与可配置压缩管道。与 `plugin-ecosystem/tools` 边界：tools **只消费** `SummaryPort`，prompt/policy/算法只在 capabilities；会话 compact **E4** 键与 Session 持久化不在 capabilities（仍在 context / session 路径）。配置键：`summary` / `compact` / `models.level.summary`。
+**公用能力（capabilities，横切）**：`harness/context/capabilities/summary|compact` 提供可注入的 LLM 摘要/信息提取与可配置压缩管道。`harness/capabilities/document` 为跨域 Document 抽取 Port（session/knowledge/tools 共用；`createDocumentPortFromConfig` + `documents.*`）。与 `plugin-ecosystem/tools` 边界：tools **只消费** `SummaryPort`，prompt/policy/算法只在 capabilities；会话 compact **E4** 键与 Session 持久化不在 capabilities（仍在 context / session 路径）。配置键：`summary` / `compact` / `models.level.summary` / `documents.*`。
 
 ### 3.3 Security — 安全
 
@@ -333,7 +334,7 @@ harness/memory/
 
 > **已移除**：`harness/memory/extraction/`（ETL 采集/桥接/Pending）与 `subsystems/memory-extractor`。  
 > 记忆写入 = agent `memory_store` 工具；旁路 = `memory.steward.backfill` / `memory.steward.govern`（对外见 [`docs/memory.md`](./memory.md)）。  
-> Knowledge（外生语料 / 第 4 层）对外见 [`docs/knowledge.md`](./knowledge.md)。外源 url/connector 与 CredentialStore 已落地（源注册 → Fetcher → 索引）。
+> Knowledge（外生语料 / 第 4 层）对外见 [`docs/knowledge.md`](./knowledge.md)。**v0.60**：Knowledge 拆为独立 HTTP Service（唯一写 `knowledge.db`；Gateway 走 Client；File identity + Membership）；契约 `arch/knowledge-service-http.md`。Document 抽取在 `harness/capabilities/document`（`createDocumentPortFromConfig`）。
 
 `FileWisdomStore` / `FileProjectMemory` / `ContextIntelligence` 已删除；不要再预设 `memory/`、`wisdom/` 文件目录。system prompt 层组装见 `harness/context/`。
 
@@ -681,7 +682,9 @@ Session save：全量 messages + contextCompact 快照
 | `MessageChannel` | `harness/collaboration/multi-agent/message-channel-types.ts` | — |
 | `MemoryStore` 等 | `harness/memory/types.ts` | InMemory / Sqlite |
 | `KnowledgeCatalogProvider` | `harness/knowledge/types.ts` | （Tier 0 catalog） |
-| Knowledge Source/Index/Ingest | `harness/knowledge/` | 外源见 `docs/knowledge.md` |
+| Knowledge Service / Client | `harness/knowledge/{http-app,serve,client}.ts` | 唯一写 `knowledge.db`；Gateway 不 open db |
+| Knowledge Source/Index/Ingest | `harness/knowledge/` | File identity + Membership；见 `docs/knowledge.md` |
+| `DocumentPort` | `harness/capabilities/document/` | `createDocumentPortFromConfig(documents.*)` |
 | CredentialStore | `harness/governance/credentials/` | 资源访问凭证；非 octopi.json |
 | `ContextLayer` / `ContextAssembler` | `harness/context/layer-types.ts` | DefaultContextAssembler + layers |
 | `Planner` / `Reflector` | `harness/collaboration/orchestration/cognitive-loop.ts` | Rule/LLM/Hybrid |

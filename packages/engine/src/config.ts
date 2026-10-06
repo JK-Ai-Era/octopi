@@ -533,7 +533,7 @@ export interface DocumentsCapabilityConfig {
     cacheDir?: string | null;
     cacheMaxBytes?: number;
     timeoutMs?: number;
-    allowTextScrape?: boolean;
+    maxInputBytes?: number;
   };
   markitdown?: {
     enabled?: boolean;

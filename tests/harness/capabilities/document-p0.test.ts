@@ -13,12 +13,12 @@ import {
   isDocumentExtractError,
   resolveFormat,
   htmlFragmentToMarkdown,
-} from '../../../packages/engine/src/harness/context/capabilities/document/index.js';
+} from '../../../packages/engine/src/harness/capabilities/document/index.js';
 import type {
   DocumentExtractBackend,
   ExtractResult,
   ResolvedExtractSource,
-} from '../../../packages/engine/src/harness/context/capabilities/document/types.js';
+} from '../../../packages/engine/src/harness/capabilities/document/types.js';
 
 function utf8(s: string): Uint8Array {
   return new TextEncoder().encode(s);

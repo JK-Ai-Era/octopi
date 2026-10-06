@@ -1,7 +1,7 @@
 /**
  * Document 抽取结构化错误
  *
- * @module harness/context/capabilities/document/errors
+ * @module harness/capabilities/document/errors
  */
 
 import type { ExtractErrorCode } from './types.js';

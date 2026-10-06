@@ -7,7 +7,7 @@ import type { LegacyConverter } from '../types.js';
 /**
  * 按配置创建 legacy 转换器；converter=none 返回 null
  *
- * @param options - converter / sofficePath / timeoutMs
+ * @param options - converter / sofficePath / timeoutMs / cacheDir / cacheMaxBytes / maxInputBytes
  * @returns LegacyConverter | null
  */
 export function createLegacyConverterFromConfig(options: {
@@ -15,6 +15,8 @@ export function createLegacyConverterFromConfig(options: {
   sofficePath?: string | null;
   timeoutMs?: number;
   cacheDir?: string | null;
+  cacheMaxBytes?: number;
+  maxInputBytes?: number;
 }): LegacyConverter | null {
   if (!options.converter || options.converter === 'none') return null;
   if (options.converter === 'soffice') {
@@ -22,6 +24,8 @@ export function createLegacyConverterFromConfig(options: {
       sofficePath: options.sofficePath,
       timeoutMs: options.timeoutMs,
       cacheDir: options.cacheDir,
+      cacheMaxBytes: options.cacheMaxBytes,
+      maxInputBytes: options.maxInputBytes,
     });
   }
   // remote（MinerU/WPS/云转换）后续接入

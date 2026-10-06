@@ -76,7 +76,7 @@ export class JobQueue {
   }
 
   /**
-   * 入队（同 source+kind+path 去重；中止源拒绝）
+   * 入队（同 source+kind+path 去重；有 file_id 时按 (file_id,kind) 去重；中止源拒绝）
    *
    * @returns 是否真正插入
    */
@@ -85,10 +85,21 @@ export class JobQueue {
     kind: IngestJobKind,
     path: string | null,
     priority: number,
+    fileId?: string | null,
   ): boolean {
     if (this.deps.isAborted(sourceId)) return false;
     const activeStatuses = ['queued', 'running'];
     const placeholders = activeStatuses.map(() => '?').join(',');
+    // 优先 (file_id, kind)：共享 File 不双 parse
+    if (fileId) {
+      const byFile = this.deps.db.raw
+        .prepare(
+          `SELECT id FROM knowledge_jobs
+           WHERE file_id = ? AND kind = ? AND status IN (${placeholders}) LIMIT 1`,
+        )
+        .get(fileId, kind, ...activeStatuses) as { id?: string } | undefined;
+      if (byFile?.id) return false;
+    }
     const dup = (
       path != null
         ? this.deps.db.raw
@@ -116,10 +127,19 @@ export class JobQueue {
 
     this.deps.db.raw
       .prepare(
-        `INSERT INTO knowledge_jobs (id, source_id, kind, path, priority, status, attempts, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, 'queued', 0, ?, ?)`,
+        `INSERT INTO knowledge_jobs (id, source_id, file_id, kind, path, priority, status, attempts, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)`,
       )
-      .run(`kj_${randomUUID().slice(0, 12)}`, sourceId, kind, path, priority, now, now);
+      .run(
+        `kj_${randomUUID().slice(0, 12)}`,
+        sourceId,
+        fileId ?? null,
+        kind,
+        path,
+        priority,
+        now,
+        now,
+      );
     return true;
   }
 

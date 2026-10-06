@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import {
   createDefaultDocumentPort,
   isDocumentExtractError,
-} from '../../../packages/engine/src/harness/context/capabilities/document/index.js';
+} from '../../../packages/engine/src/harness/capabilities/document/index.js';
 
 function utf8(s: string): Uint8Array {
   return new TextEncoder().encode(s);

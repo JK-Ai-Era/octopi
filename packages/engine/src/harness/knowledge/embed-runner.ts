@@ -82,7 +82,9 @@ export class EmbedRunner {
 
     for (let round = 0; round < maxRounds; round++) {
       if (isAborted(sourceId)) return;
-      const pending = index.listChunksMissingEmbedding(sourceId, batchSize * lanes);
+      const pending = index
+        .listChunksMissingEmbedding(sourceId, batchSize * lanes)
+        .map((c) => ({ id: c.chunkId as KnowledgeChunkId, text: c.text }));
       if (pending.length === 0) {
         refreshCoverage(sourceId);
         return;

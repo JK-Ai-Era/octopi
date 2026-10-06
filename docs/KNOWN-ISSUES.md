@@ -28,7 +28,7 @@
 **状态：** 主链已落地（v0.54.x）；规格 `arch/knowledge-session-attachments.md`（as-built §0.1 / 遗留 §13）
 
 - **大文件默认不全文注入**：超出 `inject.fullTextMaxChars` 只注开头（约 `headChars`），模型可能再 `file_read`——属分层策略，非缺陷。
-- **PDF/Office 无抽取 adapter**：可落盘可读，无 `.extracted.md` / 不进召回。
+- **文档抽取**：会话附件与 Knowledge ingest 共用 `harness/capabilities/document`（`documents.*`）；未启用抽取/无后端时仍只落盘不进召回。
 - **默认不建 Knowledge source**：检索需显式「升为可检索」或 promote。
 - **manifest 无跨请求锁**：并发上传同会话可能互相覆盖登记（单用户 Web 场景低发）。
 - **上传 API 为 JSON+base64**：超大文件宜后续 multipart。
@@ -36,9 +36,9 @@
 
 ## Knowledge 索引 / 向量 — 开放边界（2026-10 as-built）
 
-**状态：** Phase A/B、watch、abort/resume（**跨重启**）、supersede reindex、BLOB 向量、FTS5、代码不嵌入、embed secret 策略 已落地（见 `docs/knowledge.md` §8.1）。
+**状态：** Phase A/B、watch、abort/resume（**跨重启**）、supersede reindex、BLOB 向量、FTS5、代码不嵌入、embed secret 策略、**Knowledge Service 拆分（唯一写者 + File identity）** 已落地（见 `docs/knowledge.md` §8.1 / `arch/knowledge-service-http.md`）。
 
-**v0.59.1 已修**（摘要）：鉴权闸门、路径归属、凭证跨域、SSRF/body 超时、`.html` 归属、parse 可取消超时、向量闸门看 KNN 结果、强制 hybrid、FTS5、中止落库、poll 不 supersede、embed 硬超时、ANN-lite 桶、ingest 模块拆分、prune/LIKE/FTS 清扫。
+**v0.59.1–v0.60.0 已修**（摘要）：鉴权闸门、路径归属、凭证跨域、SSRF/body 超时、`.html` 归属、parse 可取消超时、向量闸门看 KNN 结果、强制 hybrid、FTS5、中止落库、poll 不 supersede、embed 硬超时、ANN-lite 桶、ingest 模块拆分、prune/LIKE/FTS 清扫；**注册即 ingest、Document worker 路由、Document 能力迁 `harness/capabilities/document` + 单一工厂、停机 SSE 死锁、worker 错误序列化、walk 不 supersede**。
 
 **仍开放：**
 

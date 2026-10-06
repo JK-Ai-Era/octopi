@@ -50,6 +50,8 @@ export interface HttpAdapterOptions {
   /** JSON 请求体大小上限（字节），默认 1MB。文件上传应使用独立端点。 */
   maxBodyBytes?: number;
   onRequest?: HttpCustomRequestHandler;
+  /** /health 额外字段（如 knowledge 状态） */
+  healthExtras?: () => Record<string, unknown>;
 }
 
 export type HttpCustomRequestHandler = (req: IncomingMessage, res: ServerResponse) => Promise<boolean> | boolean;
@@ -88,6 +90,7 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
   private corsOrigins: string;
   private maxBodyBytes: number;
   private onRequest?: HttpCustomRequestHandler;
+  private healthExtras?: () => Record<string, unknown>;
   private handler?: (msg: ChannelMessage) => Promise<void>;
   private server?: Server;
   private wss?: WebSocketServer;
@@ -102,6 +105,7 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
     this.host = options.host ?? '127.0.0.1';
     this.path = options.path ?? '/messages';
     this.enableWebSocket = options.enableWebSocket ?? true;
+    this.healthExtras = options.healthExtras;
     this.apiKey = options.apiKey;
     this.corsOrigins = options.corsOrigins?.join(', ') ?? '*';
     this.maxBodyBytes = options.maxBodyBytes ?? 1_048_576;
@@ -125,6 +129,7 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
 
       // 公开健康检查（探针/负载均衡）；其余一律过鉴权闸门
       if (req.method === 'GET' && req.url === '/health') {
+        const extra = this.healthExtras ? this.healthExtras() : {};
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
           status: 'ok',
@@ -132,6 +137,7 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
           websocket: this.enableWebSocket,
           connections: this.wsSessions.size,
           auth: !!this.apiKey,
+          ...extra,
         }));
         return;
       }

@@ -1084,8 +1084,10 @@
               "exclusiveMinimum": 0,
               "maximum": 9007199254740991
             },
-            "allowTextScrape": {
-              "type": "boolean"
+            "maxInputBytes": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
             }
           }
         },
@@ -1157,6 +1159,38 @@
     "knowledge": {
       "type": "object",
       "properties": {
+        "service": {
+          "type": "object",
+          "properties": {
+            "baseUrl": {
+              "type": "string"
+            },
+            "token": {
+              "type": "string"
+            },
+            "manageLocal": {
+              "type": "boolean"
+            },
+            "port": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 65535
+            },
+            "timeoutMs": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "connectTimeoutMs": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            }
+          }
+        },
+        "required": {
+          "type": "boolean"
+        },
         "recall": {
           "type": "string",
           "enum": [

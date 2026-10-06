@@ -1,7 +1,7 @@
 /**
  * 电子表格后端 — SheetJS `xlsx`（可选依赖，T0；覆盖 xlsx + xls）
  *
- * @module harness/context/capabilities/document/backends/sheet
+ * @module harness/capabilities/document/backends/sheet
  */
 
 import { DocumentExtractError } from '../errors.js';

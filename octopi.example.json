@@ -143,6 +143,11 @@
 
   "knowledge": {
     "recall": "hybrid",
+    "required": false,
+    "service": {
+      "manageLocal": true,
+      "port": 18280
+    },
     "autoInject": {
       "minScore": 0.78,
       "maxChunks": 4,

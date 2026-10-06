@@ -122,10 +122,11 @@ export class RestConnector implements KnowledgeConnector {
       if (!raw || typeof raw !== 'object') return;
       const item = raw as Record<string, unknown>;
       const path = itemPath(item, cfg, index);
+      // contentField 条目无独立页面 URL：不得共用 listUrl 当 identity
       const externalUrl = cfg.urlField
-        ? String(dig(item, cfg.urlField) ?? cfg.listUrl)
-        : cfg.listUrl;
-      out.push({ path, externalUrl });
+        ? String(dig(item, cfg.urlField) ?? '')
+        : undefined;
+      out.push({ path, externalUrl: externalUrl || undefined });
     });
     return { docs: out, complete: allItems.length <= maxPages };
   }
@@ -153,7 +154,7 @@ export class RestConnector implements KnowledgeConnector {
     const item = hit as Record<string, unknown>;
 
     let content = '';
-    let externalUrl = ref.externalUrl ?? cfg.listUrl;
+    let externalUrl = ref.externalUrl;
     if (cfg.contentField) {
       const raw = dig(item, cfg.contentField);
       content = raw == null ? '' : String(raw);

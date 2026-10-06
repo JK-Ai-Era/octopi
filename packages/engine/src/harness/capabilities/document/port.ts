@@ -1,7 +1,7 @@
 /**
  * createDefaultDocumentPort — DocumentPort 工厂 / 默认路由
  *
- * @module harness/context/capabilities/document/port
+ * @module harness/capabilities/document/port
  */
 
 import { open, readFile, stat } from 'node:fs/promises';

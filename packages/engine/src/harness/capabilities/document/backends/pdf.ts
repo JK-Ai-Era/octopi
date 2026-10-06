@@ -1,7 +1,7 @@
 /**
  * PDF 后端 — unpdf（可选依赖，T0）
  *
- * @module harness/context/capabilities/document/backends/pdf
+ * @module harness/capabilities/document/backends/pdf
  */
 
 import { DocumentExtractError } from '../errors.js';

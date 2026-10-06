@@ -60,29 +60,64 @@ Session    临时语料  —— 随会话生灭（附件等）
 
 外源访问密钥：源上只存 **`authRef`** → `OCTOPI_HOME/credentials/credentials.db`（命名凭证）。密钥明文不进 `knowledge.db` / `octopi.json`。公网默认拒私网（SSRF）；内网文档源可对源开 `network.allowPrivateNetwork`。
 
+### 2.1 Knowledge Service（独立服务）
+
+Knowledge 数据面是 **独立 HTTP Service**（唯一写者），不是 Gateway 进程内模块：
+
+| 角色 | 职责 |
+|------|------|
+| **Knowledge Service** | 唯一写 `knowledge.db`；ingest / 索引 / 检索 / SSE 进度 |
+| **Gateway** | **不打开** `knowledge.db`；Host API 与 `knowledge_search`/`read` 经 `KnowledgeClient` |
+| **多 Gateway** | 同一 Service（或共享远程 baseUrl）可挂多 Gateway；写路径不双开 |
+
+- **契约**：`arch/knowledge-service-http.md`（token → `(tenantId, gatewayId)`；业务键不从 body 伪造）
+- **装配**：`knowledge.service.manageLocal`（默认 `true`）→ 本机拉起 Service，缺省端口 **18280**；`manageLocal: false` + `baseUrl` → 只连远程；二者皆无 → 知识面 `disabled`
+- **单写者**：`knowledge.db.writer.lock`；`wx` 独占创建，持有者 PID 死则回收
+- **状态**：`ready` / `degraded` / `disabled`（Service 起不来时可感知；`knowledge.required` 可 fail-closed）
+
+### 2.2 File 本位防重（identity + Membership）
+
+**Corpus 概念已废弃。** 去重键是 **File**，不是路径：
+
+```text
+File        identity_key = inode / win fileId / url+authRef   ← 本体
+            version = size + mtime
+Membership  (source_id, file_id, logical_path)                ← 认领
+```
+
+| 规则 | 含义 |
+|------|------|
+| 同物理文件多 Source / 嵌套路径 | 只 **parse 一次**；召回去重 + `sourceIds[]` |
+| **不同 authRef** 的同 URL | **不同 File**（凭证变体） |
+| URL **保留 query** | `?id=1` ≠ `?id=2`（契约修订） |
+| 解绑 | 扫 remaining；**零认领才 purge** File + chunks |
+| 中止 | 只杀**该源独占**任务；共享 File 的 parse 继续 |
+
 ---
 
 ## 3. 管道：解析、索引、同步
 
 ```text
-Source 登记
+Source 登记  ──注册即自动 ingest（pending → discovering）──
    │  (kind / scope / sync / authRef)
    ▼
 SourceFetcher 取回              本地 walk · Url fetch · Connector list/get
    │  外源：HTML 主内容规范化（非 raw HTML 灌库）
    ▼
 FormatAdapter 逐文件分发     html / markdown / 代码 / 纯文本…
-   │  （注册制；无 adapter 则跳过并记 skipped）
+   │  （注册制）
+   │  PDF/Office/xlsx… → DocumentPort worker 抽取 → Markdown（createDocumentPortFromConfig）
+   │  无 adapter 且非文档 → skipped
    ▼
 Parse + Chunk
    │  Markdown/HTML 按标题 · 代码按函数/类启发式 · 结构优先 + 体积封顶
    ▼
 Index（可重建投影）
-   │  逻辑 path + external_url 溯源 · 关键词（含中文二元组） + 可选向量
+   │  File + Membership · 逻辑 path + external_url 溯源 · 关键词（含中文二元组） + 可选向量
    ▼
 Freshness
-      本地 watch + debounce；外源 poll + 条件 GET（ETag/304）；content-hash 增量
-      差量 prune：本轮 discover 未出现的 path 删除（失败不删旧索引）
+   本地 watch + debounce；外源 poll + 条件 GET（ETag/304）；content-hash 增量
+   差量 prune：本轮 discover 未出现的 path 删除（失败不删旧索引）
 ```
 
 | 能力 | 行为 |
@@ -93,7 +128,7 @@ Freshness
 | **负载** | 解析/嵌入并发与限速可配；队列背压**不丢任务** |
 | **体积** | 结构单元过大再内切；无符号碎块可粘合；**不跨函数/类边界合并** |
 
-数据面：`OCTOPI_HOME/knowledge/`（源权威 + 索引投影 + 任务队列）；凭证：`OCTOPI_HOME/credentials/`。
+数据面：`OCTOPI_HOME/knowledge/`（`knowledge.db` = Service 唯一写；含源权威 + 索引投影 + 任务队列）；凭证：`OCTOPI_HOME/credentials/`。**Gateway 不直接 open knowledge.db。**
 
 ### 3.1 百万级向量检索（生产）
 
@@ -182,6 +217,11 @@ Tier 3  Full        「原文」                knowledge_read
 {
   "knowledge": {
     "recall": "hybrid",
+    "required": false,
+    "service": {
+      "manageLocal": true,
+      "port": 18280
+    },
     "autoInject": {
       "minScore": 0.78,
       "maxChunks": 4,
@@ -207,12 +247,18 @@ Tier 3  Full        「原文」                knowledge_read
 
 | 键 | 作用 |
 |----|------|
+| `service.baseUrl` / `token` | 远程 Knowledge Service（`manageLocal: false` 时必填 baseUrl） |
+| `service.manageLocal` | 默认 `true`：本机拉起 Service；`false` 只连 `baseUrl` |
+| `service.port` | manageLocal 监听端口（缺省 **18280**；测试可用 `0`） |
+| `required` | `true` 时 Knowledge Service 不可用则 fail-closed |
 | `recall` | 内容召回模式（见 §5） |
 | `autoInject.*` | 注入门槛、条数、预算 |
 | `catalog.*` | system 目录条数、自动描述开关 |
 | `index.*` | 是否 embedding / 关键词腿 / 同步与并发 |
 | `promotion.metrics` | 使用计量阈值（供后续提升信号，**不**直接写 Memory） |
 | `attachments.*` | 会话附件限额与注入（`inject.intent` / `fullTextMaxChars`）；见 OP-15 规格 |
+
+文档抽取配置在 **`documents.*`**（与 Knowledge worker / Gateway **同源** `createDocumentPortFromConfig`）：`extract.timeoutMs/maxFileBytes`、`legacy.converter=soffice` + `sofficePath/cacheDir/cacheMaxBytes/maxInputBytes`。
 
 完整键位见 `octopi.schema.json` 与 `octopi.example.json`。
 
@@ -250,13 +296,14 @@ POST   /api/v1/agents/:id/knowledge/resume
 - **两级注册**：公共知识库（global）/ 项目（project，先建项目再挂源；删项目须先卸源）。
 - **会话视图**：`session-visibility` overlay 只改本场 effective view，不改源归属；`scopeLevel=session` 必须带 `sessionId`。
 - `sources` 的 `scopeLevel=global|project` 为管理面全量列表（不过滤可见性）。
-- 注册后可 **reindex** 触发解析/索引，并可选启动文件监听。
+- **注册即自动 ingest**（`POST …/sources` → Service 内 `ingestSource`）；`reindex` = 显式全量重建（supersede）。注册后无需再点「重建」才解析。
 - **reindex = supersede**：先作废本源 queued/running，再按磁盘全量重扫（勿与「继续」混淆：继续=清中止态接着跑）。
-- **删除**会清理索引与使用痕迹（合规可抹除）；目录移出用 `removePathTree` 清子路径。
+- **删除**会清理索引与使用痕迹（合规可抹除）；目录移出用 `removePathTree` 清子路径；零认领 File 才 purge。
 - 自动描述默认可用，可关闭外发；抽样前做敏感形态扫描；**源稳定后**由 reconcile 触发（勿挂 `idle` 短超时）。
 - **会话附件（临时上传）**：落 `sessions/<sid>/attachments/`，仅本 session；消息侧为 `FileBlock` 指针 + turn 侧不可信资料块（正文）。可选 **升为可检索**（注册 `scopeRef: session` 源）或 **归入项目**（promote=move，非自动提升）。API：`/api/v1/sessions/:id/attachments`。详见 `arch/knowledge-session-attachments.md`。
 - 外源可带 **`authRef`**（指向 credentials 命名凭证）、**`network`**（`allowPrivateNetwork` / 超时）、**`discover`**（sitemap/crawl 预算）。失败/skip **不删**已入库 chunks。
 - 溯源：命中用稳定逻辑 **`path`**；完整 URL 在文件记录 `external_url`。
+- Host API 经 **KnowledgeClient** → Service；Gateway 进程内**无** ingest 写路径。
 
 ### 8.1 索引任务语义（实现口径，防踩坑）
 
@@ -269,13 +316,16 @@ POST   /api/v1/agents/:id/knowledge/resume
 | **向量检索** | 优先 sqlite-vec KNN；**闸门看 KNN 是否返回**（非 flag）；无 KNN 且 >5 万向量 **禁止 JS 全扫** |
 | **关键词** | FTS5 倒排（CJK 二元组 token）优先，退 SQL LIKE；与 Memory 分词对齐 |
 | **embed 外发** | 默认 `embedSecretPolicy=redact`；审计 `knowledge_embed_secret_log` |
-| **Office/大文件** | 文档抽取走 **worker** + **可取消**超时；禁止同步 xlsx 堵事件循环 |
+| **Office/大文件** | 文档抽取走 **worker**（`createDocumentPortFromConfig` 与 Gateway 同源）+ **可取消**超时；禁止同步 xlsx 堵事件循环 |
+| **File identity** | `identity_key`（inode/win fileId/url+authRef）+ Membership；同文件多源只 parse 一次；零认领才 purge |
+| **Service** | **唯一写者** `knowledge.db`；Gateway 只走 Client；`writer.lock`（`wx`）；默认端口 18280 |
+| **启动恢复** | `startIngestRuntime`：恢复 watch、补跑 pending、启动 reconciler/poll |
 | **watch** | 目录增量；漏事件由 reconcile **parse 缺口扫描**（磁盘有、索引无 → parse）兜底 |
 | **删除文件** | watch → `drop_file` → `removePathTree`（含子路径 + FTS/vec）；`(source_id,path)` 须有索引 |
-| **看门狗** | `startReconciler`：回收孤儿 running、补 embed、补 parse 缺口、终态 job 清理、稳定后 auto-describe（**纯关键词部署也触发**） |
-| **中止** | **跨重启**：`knowledge_source_control` 为权威；claim 跳过 aborted；resume 只复活 `aborted` 取消 |
-| **poll vs reindex** | reindex=supersede；**poll=`incremental`**：有 active 则跳过，不打断在跑 parse |
-| **模块** | `job-control` / `job-queue` / `embed-runner` / `fts` / `vector-ann` 已拆出；`ingest.ts` 只做编排 |
+| **看门狗** | `startReconciler`：回收孤儿 running、补 embed、补 parse 缺口、清 `path:` 零认领、终态 job 清理、稳定后 auto-describe（**纯关键词部署也触发**） |
+| **中止** | **跨重启**：`knowledge_source_control` 为权威；claim 跳过 aborted；resume 只复活 `aborted` 取消；**共享 File parse 不杀** |
+| **poll vs reindex** | reindex=supersede；**poll=`incremental`**：有 active 则跳过；`walk_source`=`fromQueue` 不作废队列 |
+| **模块** | `job-control` / `job-queue` / `embed-runner` / `fts` / `vector-ann` / `http-app` / `serve` / `client` 已拆出；`ingest.ts` 只做编排 |
 | **路径归属** | `sourceOwnsPath`：本地只读 `location` 内；外源只接受已登记逻辑键（`reprocess`/`parse`/`fetch` 三处执法） |
 
 ---
@@ -297,5 +347,7 @@ POST   /api/v1/agents/:id/knowledge/resume
 | [docs/memory.md](./memory.md) | Memory（第 6 层）：命题与分馏 |
 | [docs/context-layer-contracts.md](./context-layer-contracts.md) | system 契约层与装配 |
 | [docs/architecture.md](./architecture.md) | 八层总览与目录 |
+| `arch/knowledge-service-http.md` | **Knowledge Service HTTP 契约**（鉴权 / File identity / 多 Gateway） |
 | `arch/knowledge-layer.md` | 内部规格（本体/管道） |
 | `arch/knowledge-external-ingest.md` | 外源 url/connector + CredentialStore |
+| `harness/capabilities/document/` | Document 抽取 Port（`createDocumentPortFromConfig` + `documents.*`） |

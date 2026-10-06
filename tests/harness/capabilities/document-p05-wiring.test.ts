@@ -1,16 +1,16 @@
 /**
- * DocumentPort P0.5 — knowledge ingest / session attachments 接线
+ * DocumentPort P0.5 ?knowledge ingest / session attachments 接线
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createDefaultDocumentPort } from '../../../packages/engine/src/harness/context/capabilities/document/index.js';
+import { createDefaultDocumentPort } from '../../../packages/engine/src/harness/capabilities/document/index.js';
 import type {
   DocumentExtractBackend,
   ExtractResult,
   ResolvedExtractSource,
-} from '../../../packages/engine/src/harness/context/capabilities/document/types.js';
+} from '../../../packages/engine/src/harness/capabilities/document/types.js';
 import { KnowledgeIngest } from '../../../packages/engine/src/harness/knowledge/ingest.js';
 import { KnowledgeSourceStore } from '../../../packages/engine/src/harness/knowledge/source-store.js';
 import { SessionAttachmentService } from '../../../packages/engine/src/harness/session/attachments/service.js';
@@ -57,7 +57,7 @@ describe('KnowledgeIngest + DocumentPort', () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  it('indexes PDF via DocumentPort → markdown chunks', async () => {
+  it('indexes PDF via DocumentPort ?markdown chunks', async () => {
     const file = join(root, 'a.pdf');
     await writeFile(file, Buffer.from('%PDF-1.4 stub'));
     const src = store.register({
@@ -97,7 +97,7 @@ describe('KnowledgeIngest + DocumentPort', () => {
     expect(rec?.error ?? '').toMatch(/unsupported_legacy/i);
   });
 
-  it('without documentPort keeps binary skip', async () => {
+  it('without documentPort still routes documents to extract (worker)', async () => {
     const file = join(root, 'a.pdf');
     await writeFile(file, Buffer.from('%PDF-1.4'));
     const src = store.register({
@@ -108,10 +108,16 @@ describe('KnowledgeIngest + DocumentPort', () => {
     });
     ingest = new KnowledgeIngest({ sourceStore: store, documentPort: null });
 
+    // 不再 BINARY 短路；走 parseDocumentFile（worker 自带 DocumentPort）
     const ok = await ingest.ingestFileNow(src.id, file);
-    expect(ok).toBe(false);
     const rec = ingest.indexStore.getFile(src.id, file);
-    expect(rec?.status).toBe('skipped');
+    // worker 成功则 indexed；失败记 error —— 禁止再静默 no_adapter skip
+    if (ok) {
+      expect(rec?.status).toBe('indexed');
+    } else {
+      expect(rec?.status).toBe('error');
+      expect(rec?.error ?? '').not.toMatch(/no_adapter/i);
+    }
   });
 });
 

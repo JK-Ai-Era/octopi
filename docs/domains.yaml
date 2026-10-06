@@ -104,13 +104,17 @@ domains:
       - Knowledge
       - Source
       - KnowledgeScope
-    failure_mode: 无源/错源、检索错语料、索引当权威
+      - FileIdentity
+      - Membership
+    failure_mode: 无源/错源、检索错语料、索引当权威、双写 knowledge.db
     modules:
       - knowledge
     status: active
     notes: >
       外生语料：源管理/解析/embedding/检索。不是基质。
-      Scope = Global / Project / Session（无 Agent 级源）。契约在 context/knowledge/ 应迁入本域。
+      Scope = Global / Project / Session（无 Agent 级源）。
+      v0.60：Knowledge Service（http-app/serve/client）为 knowledge.db 唯一写者；
+      File identity + Membership（Corpus 废弃）。
 
   - id: activation
     name_zh: 激活
@@ -297,6 +301,9 @@ module_catalog:
   # Context
   - { id: context, domain: context }
   - { id: context/capabilities, domain: context, kind: capability }
+
+  # Cross-domain harness capability (Document extract Port)
+  - { id: capabilities/document, domain: foundation, kind: capability }
 
   # Extension
   - { id: extension/plugin-ecosystem, domain: extension }

@@ -1,3 +1,62 @@
+## v0.60.0
+
+### fix(knowledge): 独立审查修复 — 停机 SSE 死锁 / worker 错误还原 / walk supersede
+
+- **P0 停机**：Gateway 先 abort SSE 再关 Service；`serve.close` 先 `dispose` + `closeAllConnections`，不再卡在 `server.close` 等长连接
+- **worker 错误**：`DocumentExtractError` 跨 `postMessage` 序列化并还原；加密 PDF/legacy 回到 `skipped` 而非 `error`
+- **walk_source**：`fromQueue` 不 supersede、不跳过 active；reindex 仍作废队列
+- **静默 kick**：注册/reindex/恢复失败改 `console.warn`；reconciler 补跑 idle `pending`/`discovering`
+- **identity**：`markFileError/Skipped` 带真实 key；`purgeOrphanPathIdentityFiles` 清 `path:` 零认领残留
+- **路径**：`\\?\C:\` / `\\?\UNC\` 归一正确
+- **ACL**：`GET /v1/jobs/control` 走 `assertSourceOwner`
+
+- **P2 根除**：`cacheMaxBytes` 落地为缓存淘汰；`maxInputBytes` 透传 soffice；**删除**无消费方的 `allowTextScrape`（schema 诚实）；writer.lock 改 `wx` 独占创建；SSE 进度与 list/search 同一可见性（public 可见）；Service 内 `documentPort` 同工厂回退
+
+### refactor(knowledge): Document 能力升为 harness/capabilities + 单一装配
+
+**问题**：DocumentPort 挂在 `context/capabilities`（Context 组装），却被 session/knowledge/tools 共用；Gateway 与 Knowledge worker **各自** `createDefaultDocumentPort` 拼默认值 → soffice/超时/限额分叉，Office 在 Knowledge 侧被 BINARY 整批跳过。
+
+**方案**：
+
+- 迁至 `harness/capabilities/document`（跨域 Port；准入：≥2 域、无产品策略、非 Integration）
+- `createDocumentPortFromConfig(documents.*)` 唯一工厂；Gateway `getDocumentPort` 与 Knowledge worker 同源
+- `summary`/`compact` 仍留在 `context/capabilities`（Context 组装专用）
+- 依赖方向不变：Integration 外层依赖 Harness，DocumentPort 不下沉 Integration
+
+### fix(knowledge): 注册源后永不索引 — Service 未拉起 ingest 运行时
+
+**问题**：`POST /v1/sources` 只写库；`startReconciler` / `startPolling` / `startWatch` 从生产路径从未调用。源永远停在 `pending`、`knowledge_jobs=0`，只有手点「重建索引」才解析。
+
+**方案**：
+
+- 注册后自动 `ingestSource({ full: true })`
+- `startKnowledgeService` → `startIngestRuntime()`：恢复 watch、补跑 pending 源、启动 reconciler/poll
+- `ingestSource` 本地 walk 时挂上 fs watch
+- WebUI：`pending` 且无任务不再谎报「索引中」
+
+### fix(knowledge): Office/PDF 在 discover 被整批 BINARY 短路
+
+**问题**：`shouldSkipFile` / `parseOne` 要求注入 `documentPort` 才放行文档；但 worker 自带 DocumentPort。知识库目录里 xlsx/docx/pptx/pdf 全部 `no_adapter` 跳过。
+
+**方案**：`isDocumentPath` 即走 `parseDocumentFile`（worker 抽取）；注入 port 仅作 worker 不可用时的回退。
+
+### feat(knowledge): Knowledge Service 拆分 — File identity + HTTP + 多 Gateway
+
+架构变更（契约 `arch/knowledge-service-http.md` v2.1）：
+
+- **File 本位防重**：`identity_key`（inode / win fileId / url+authRef）与 version（size/mtime）分离；chunk 挂 `file_id`；**Membership** `(source, file, logical_path)`；同文件多 Source/嵌套路径只 parse 一次；召回去重 + `sourceIds[]`
+- **Corpus 概念废弃**；解绑扫 remaining，**零认领才 purge** File
+- **Knowledge HTTP Service**（`http-app` / `serve` / `client`）：token → `(tenantId, gatewayId)`；sources/projects/visibility/search/read/jobs/SSE
+- **Gateway 不打开 knowledge.db**：`manageLocal` 拉起 Service 或连 `baseUrl`；Host API 与 `knowledge_search`/`knowledge_read` 走 Client；disabled/degraded 可感知
+- 配置：`knowledge.service`（baseUrl/token/**manageLocal**）、`knowledge.required`
+- 无兼容过渡；旧 `(source_id,path)` 文件表与进程内 ingest 路径删除
+
+### test(knowledge): File share / HTTP / Client / manageLocal
+
+- 父子目录同 `file_id`、双 Source 召回去重、原地更新覆盖
+- HTTP 鉴权/隔离/visibility/jobs；Client 端到端；`GatewayKnowledgeRuntime` disabled/ready
+- 注册即自动索引（无需显式 reindex）
+
 ## v0.59.3
 
 ### fix(knowledge): 首次 FTS 重建同步阻塞导致 Gateway 假死

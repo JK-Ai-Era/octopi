@@ -121,7 +121,7 @@ export const DocumentsConfigSchema = z.object({
       cacheDir: z.string().nullable().optional(),
       cacheMaxBytes: z.number().int().positive().optional(),
       timeoutMs: z.number().int().positive().optional(),
-      allowTextScrape: z.boolean().optional(),
+      maxInputBytes: z.number().int().positive().optional(),
     })
     .optional(),
   markitdown: z

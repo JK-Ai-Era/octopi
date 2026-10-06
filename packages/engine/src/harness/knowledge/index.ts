@@ -7,6 +7,23 @@
 
 export { KnowledgeDatabase } from './db.js';
 export type { KnowledgeDatabaseOptions } from './db.js';
+export {
+  identifyLocalFile,
+  identifyUrl,
+  identifyConnector,
+  normalizeFsPath,
+  normalizePathLexical,
+  urlIdentityKey,
+  connectorIdentityKey,
+  logicalPathFrom,
+  isPathPrefix,
+  canonicalizeUrl,
+} from './file-identity.js';
+export type { FileIdentity } from './file-identity.js';
+export { MembershipStore } from './membership-store.js';
+export type { MembershipRow, FileRow, ReconcileResult } from './membership-store.js';
+export { FileIndexStore } from './file-index-store.js';
+export type { ChunkDraft, UpsertFileResult } from './file-index-store.js';
 export { KnowledgeSourceStore } from './source-store.js';
 export { KnowledgeIndexStore, hashContent } from './index-store.js';
 export type { IndexedFileRecord, ChunkHit } from './index-store.js';
@@ -72,6 +89,12 @@ export { assertUrlAllowed, authHeadersForUrl, guardedFetch, isRestrictedIp } fro
 export type { NetworkGuardOptions, FetchResult } from './network-guard.js';
 export { htmlToStructuredText, looksLikeHtml } from './html.js';
 export { KnowledgeRetriever } from './retriever.js';
+export { KnowledgeHttpApp, createKnowledgeHttpApp } from './http-app.js';
+export type { KnowledgeServiceToken, KnowledgeServiceOptions, AuthContext } from './http-app.js';
+export { startKnowledgeService } from './serve.js';
+export type { KnowledgeServeOptions, KnowledgeServeHandle } from './serve.js';
+export { KnowledgeClient } from './client.js';
+export type { KnowledgeClientOptions } from './client.js';
 export type {
   HybridSearchOptions,
   HybridSearchResult,

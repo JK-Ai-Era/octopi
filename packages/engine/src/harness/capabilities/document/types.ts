@@ -3,7 +3,7 @@
  *
  * 读路径统一抽取为 Markdown；写路径不进本 Port。
  *
- * @module harness/context/capabilities/document/types
+ * @module harness/capabilities/document/types
  */
 
 /** 品牌 ID：后端名 / 转换器名 */

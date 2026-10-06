@@ -445,10 +445,10 @@ export function KnowledgeAdminPanel({ agentId }: { agentId: string }) {
   const hasActiveIndexing = useMemo(() => {
     const all = [...globalSources, ...projectSources];
     const jobsActive = (stats.jobsQueued ?? 0) > 0 || (stats.jobsRunning ?? 0) > 0;
-    // 只有真正在跑任务才算 indexing；status=partial 但队列空 → 显示 embed 未完而非 indexing
+    // 只有真正在跑任务才算 indexing；pending 且无任务 = 尚未开始，不得谎报「索引中」
     return (
       jobsActive ||
-      all.some((s) => s.status === 'discovering' || s.status === 'pending')
+      all.some((s) => s.status === 'discovering' || (s.status === 'pending' && jobsActive))
     );
   }, [globalSources, projectSources, stats]);
 

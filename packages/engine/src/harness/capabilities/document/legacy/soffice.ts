@@ -3,7 +3,7 @@
  *
  * 将 .doc/.xls/.ppt 转为 OOXML 后走 T0 抽取；不常驻、用完即退。
  *
- * @module harness/context/capabilities/document/legacy/soffice
+ * @module harness/capabilities/document/legacy/soffice
  */
 
 import { spawn } from 'node:child_process';
@@ -23,6 +23,8 @@ export interface SofficeLegacyOptions {
   maxInputBytes?: number;
   /** 转换件缓存目录；缺省不缓存 */
   cacheDir?: string | null;
+  /** 缓存目录总量上限；超出按 mtime 淘汰（默认 256MB） */
+  cacheMaxBytes?: number;
 }
 
 const EXT_TO_TARGET: Record<string, 'docx' | 'xlsx' | 'pptx' | 'pdf'> = {
@@ -47,6 +49,7 @@ export function createSofficeLegacyConverter(options: SofficeLegacyOptions = {})
   const timeoutMs = options.timeoutMs ?? 60_000;
   const maxInputBytes = options.maxInputBytes ?? 50 * 1024 * 1024;
   const cacheDir = options.cacheDir?.trim() || null;
+  const cacheMaxBytes = options.cacheMaxBytes ?? 256 * 1024 * 1024;
 
   return {
     id: 'soffice',
@@ -93,6 +96,7 @@ export function createSofficeLegacyConverter(options: SofficeLegacyOptions = {})
         try {
           await mkdir(cacheDir, { recursive: true });
           await writeFile(join(cacheDir, cacheKey), result.data);
+          await evictCacheDir(cacheDir, cacheMaxBytes);
         } catch {
           // cache write is best-effort
         }
@@ -100,6 +104,42 @@ export function createSofficeLegacyConverter(options: SofficeLegacyOptions = {})
       return result;
     },
   };
+}
+
+/** 缓存超限时按 mtime 淘汰最旧（含当前新写入后仍超的情况） */
+async function evictCacheDir(cacheDir: string, maxBytes: number): Promise<void> {
+  if (maxBytes <= 0) return;
+  const { readdir } = await import('node:fs/promises');
+  let entries: Array<{ name: string; mtimeMs: number; size: number }>;
+  try {
+    entries = (await readdir(cacheDir, { withFileTypes: true }))
+      .filter((e) => e.isFile())
+      .map((e) => ({ name: e.name, mtimeMs: 0, size: 0 }));
+  } catch {
+    return;
+  }
+  let total = 0;
+  for (const e of entries) {
+    try {
+      const st = await stat(join(cacheDir, e.name));
+      e.mtimeMs = st.mtimeMs;
+      e.size = st.size;
+      total += st.size;
+    } catch {
+      // 已消失
+    }
+  }
+  if (total <= maxBytes) return;
+  entries.sort((a, b) => a.mtimeMs - b.mtimeMs);
+  for (const e of entries) {
+    if (total <= maxBytes) break;
+    try {
+      await rm(join(cacheDir, e.name), { force: true });
+      total -= e.size;
+    } catch {
+      // 淘汰失败跳过
+    }
+  }
 }
 
 async function readSourcePath(source: ExtractSource, maxInputBytes: number): Promise<Uint8Array> {

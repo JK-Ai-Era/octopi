@@ -159,6 +159,7 @@ Runner.handle
   - **structured_json**：L0 解析 + L1 `fields`/`fieldTypes` 轻量契约（`structuredError`）；完整 Schema 可选端口
   - 配置：`summary` / `compact`；示例见 `octopi.example.json`；内部设计 `arch/summary-compact.md`
   - **P2 子系统包装暂缓**：当前消费方为 tools L1/L2 与会话 compact；出现旁路/事件批处理需求时再挂 `subsystems/content-summary|compact`
+- **跨域 Document 抽取**（`harness/capabilities/document`，非 Context 专用）：session 附件 / knowledge ingest / document 工具共用；唯一装配 `createDocumentPortFromConfig(documents.*)`。Context 层不直接持有 DocumentPort。
 
 **主动摘要（防长会话失忆）：**
 

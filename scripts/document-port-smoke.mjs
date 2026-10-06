@@ -4,7 +4,7 @@
  */
 import { readdir, stat } from 'node:fs/promises';
 import { join, extname, basename } from 'node:path';
-import { createDefaultDocumentPort } from '../packages/engine/dist/harness/context/capabilities/document/port.js';
+import { createDefaultDocumentPort } from '../packages/engine/dist/harness/capabilities/document/port.js';
 
 const dir = process.argv[2] ?? String.raw`C:\Users\James\.octopi\workspace\default\documents-test`;
 

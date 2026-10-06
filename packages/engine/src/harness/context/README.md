@@ -9,7 +9,7 @@
 **核心理念**：
 - **内容层**（ContextLayer / Assembler）决定 system prompt 里有什么
 - **窗口层**（ContextEngine）决定历史消息怎么压
-- **算法委托**：结构压缩算法在 **`harness/capabilities/compact`**；本域维护 **E4 状态**与会话窗口语义
+- **算法委托**：结构压缩算法在 **`harness/context/capabilities/compact`**；本域维护 **E4 状态**与会话窗口语义
 
 ## 职责
 
@@ -42,7 +42,7 @@
 
 - Core: types/messages
 - Memory 契约：MemoryStore / ConceptGraphStore（薄适配）；Knowledge 仅 catalog 契约
-- Harness 同层：`capabilities/compact`（结构压缩算法；类型/端口，非 tools）
+- Harness 同层：`context/capabilities/compact`（结构压缩算法；类型/端口，非 tools）；跨域文档抽取在 `harness/capabilities/document`
 
 ## 文件说明
 
@@ -61,4 +61,4 @@
 > 导出：`packages/engine/src/harness/context/index.ts` 与 `packages/engine/src/harness/index.ts`。
 > 七层内容组装以本目录 `ContextLayer` 契约为准；旧 `ContextIntelligence` 已删除。
 > Token 估算是本域策略，不是 Core Kernel 能力；Budget 计量吃真实 `usage`，不走启发式。
-> Summary/Compact **公用能力**（工具 L2、旁路可调用）在 `harness/capabilities/`，不在本目录重复实现算法。
+> Summary/Compact **公用能力**（工具 L2、旁路可调用）在 `harness/context/capabilities/`，不在本目录重复实现算法。Document 抽取 Port 在 `harness/capabilities/document`（非 Context 专用）。

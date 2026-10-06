@@ -113,9 +113,10 @@ describe('embed secret policy', () => {
       expect(sent.length).toBe(0);
       const emb = sources.database.raw
         .prepare(
-          `SELECT dimensions FROM knowledge_chunk_embeddings e
+          `SELECT e.dimensions AS dimensions FROM knowledge_chunk_embeddings e
            JOIN knowledge_chunks c ON c.id = e.chunk_id
-           WHERE c.source_id = ?`,
+           JOIN knowledge_memberships m ON m.file_id = c.file_id
+           WHERE m.source_id = ?`,
         )
         .all(src.id) as Array<{ dimensions: number }>;
       expect(emb.length).toBeGreaterThan(0);

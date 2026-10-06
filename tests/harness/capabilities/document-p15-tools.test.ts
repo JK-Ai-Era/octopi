@@ -5,11 +5,11 @@ import { describe, expect, it } from 'vitest';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createDefaultDocumentPort } from '../../../packages/engine/src/harness/context/capabilities/document/index.js';
+import { createDefaultDocumentPort } from '../../../packages/engine/src/harness/capabilities/document/index.js';
 import type {
   DocumentExtractBackend,
   ExtractResult,
-} from '../../../packages/engine/src/harness/context/capabilities/document/types.js';
+} from '../../../packages/engine/src/harness/capabilities/document/types.js';
 import {
   createDocumentProbeTool,
   createDocumentReadTool,

@@ -7,6 +7,21 @@ import { z } from 'zod';
 
 /** Knowledge 全局缺省（agents[].knowledge.recall 覆盖） */
 export const KnowledgeConfigSchema = z.object({
+  /** Knowledge Service 连接（v2：Gateway 不打开 knowledge.db） */
+  service: z
+    .object({
+      baseUrl: z.string().optional(),
+      token: z.string().optional(),
+      /** 缺省 true：serve 时拉起本地 Knowledge；false 则只连 baseUrl */
+      manageLocal: z.boolean().optional(),
+      /** manageLocal 本地监听端口（缺省 18280） */
+      port: z.number().int().positive().max(65535).optional(),
+      timeoutMs: z.number().int().positive().optional(),
+      connectTimeoutMs: z.number().int().positive().optional(),
+    })
+    .optional(),
+  /** true = Knowledge 不可用则 run 失败（默认 fail-open） */
+  required: z.boolean().optional(),
   recall: z.enum(['off', 'hint', 'hybrid', 'inject']).optional(),
   autoInject: z
     .object({

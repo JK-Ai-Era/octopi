@@ -4,6 +4,11 @@
 
 export { Gateway } from './gateway/gateway.js';
 export type { GatewayConfig } from './types/gateway-config.js';
+export { GatewayKnowledgeRuntime } from './gateway/knowledge-runtime.js';
+export type {
+  KnowledgeServiceConfig,
+  KnowledgeRuntimeState,
+} from './gateway/knowledge-runtime.js';
 export { GatewayChatClient } from './gateway/client.js';
 export { HttpChannelAdapter } from './protocols/http.js';
 export type { StreamingChannelAdapter } from './protocols/http.js';

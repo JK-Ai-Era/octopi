@@ -30,6 +30,12 @@ import {
   checkDeprecatedSessionStore,
   detectDataLayer,
   resolveAgentDataTargets,
+  detectKnowledgeDb,
+  detectKnowledgeSourcesAsync,
+  migrateKnowledgeDatabase,
+  knowledgeDbPath,
+  listKnowledgeSources,
+  removeKnowledgeSource,
 } from './data.js';
 import type { AgentDataTarget } from './data.js';
 import {
@@ -357,12 +363,12 @@ interface Diagnosis {
   targets: AgentDataTarget[];
 }
 
-function diagnoseConfigLayoutData(
+async function diagnoseConfigLayoutData(
   home: string,
   configPath: string | null,
   allowDeleteLegacyDirs: boolean,
   explicitConfig: boolean,
-): Diagnosis {
+): Promise<Diagnosis> {
   const findings: DoctorFinding[] = [];
   let rawUnexpanded: Record<string, unknown> | null = null;
   let parseRecovered = false;
@@ -425,6 +431,8 @@ function diagnoseConfigLayoutData(
 
   const targets = resolveAgentDataTargets(home, rawUnexpanded);
   findings.push(...detectDataLayer(targets));
+  // knowledge 源注册健康（不自动删源）
+  findings.push(...(await detectKnowledgeSourcesAsync()));
   if (configPath) {
     findings.push(...checkDeprecatedSessionStore(rawUnexpanded, targets, dirname(resolve(configPath))));
   }
@@ -480,7 +488,7 @@ export async function runDoctor(
   const explicitConfig = Boolean(args.config);
   const fixFindings: DoctorFinding[] = [];
 
-  let diagnosis = diagnoseConfigLayoutData(
+  let diagnosis = await diagnoseConfigLayoutData(
     paths.home,
     paths.configPath,
     Boolean(options.allowDeleteLegacyDirs),
@@ -587,7 +595,7 @@ export async function runDoctor(
       fixFindings.push(...dataResult.findings);
     }
 
-    diagnosis = diagnoseConfigLayoutData(
+    diagnosis = await diagnoseConfigLayoutData(
       paths.home,
       paths.configPath,
       Boolean(options.allowDeleteLegacyDirs),
@@ -872,4 +880,10 @@ export {
   applyDataLayerFixes,
   resolveAgentDataTargets,
   checkDeprecatedSessionStore,
+  detectKnowledgeDb,
+  detectKnowledgeSourcesAsync,
+  migrateKnowledgeDatabase,
+  knowledgeDbPath,
+  listKnowledgeSources,
+  removeKnowledgeSource,
 };

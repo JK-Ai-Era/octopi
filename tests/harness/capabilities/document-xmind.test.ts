@@ -7,7 +7,7 @@ import {
   createDefaultDocumentPort,
   xmindJsonToMarkdown,
   xmindXmlToMarkdown,
-} from '../../../packages/engine/src/harness/context/capabilities/document/index.js';
+} from '../../../packages/engine/src/harness/capabilities/document/index.js';
 
 describe('xmindJsonToMarkdown', () => {
   it('walks nested attached children as outline', () => {

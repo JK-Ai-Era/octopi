@@ -67,14 +67,14 @@ Infrastructure primitives (EventBus, StateMachine) and **Kernel ports** (ModelPr
 | **Session** | `session/` | How does continuity hold? (aggregate, Discourse, tasks, history) |
 | **Agent** | `agent/` | Who is it / how is it configured? (template, persona, builder) |
 | **Memory** | `memory/` | What has it learned? (Memory / Cognition / Wisdom substrate) |
-| **Knowledge** | `knowledge/` | What does the world write down? (exogenous corpus, sources, retrieval) |
+| **Knowledge** | `knowledge/` | What does the world write down? (exogenous sources, Knowledge Service, retrieval) |
 | **Activation** | `activation/` | How do stimuli become Runs? |
 | **Run** | `run/` | How does this episode stay safe? (RunScope, reliability, guard, budget) |
 | **Context** | `context/` | What does the model see? (eight-layer assembly, tokens, window) |
 | **Extension** | `extension/` | How are capabilities extended? (Plugin/Tool/Skill/MCP, sandbox) |
 | **Collaboration** | `collaboration/` | How do multi-Agents / subsystems coordinate? |
 
-Cross-cutting / foundation (not counted): `observability/`, `context/capabilities/`, `shared/`.  
+Cross-cutting / foundation (not counted): `observability/`, `context/capabilities/` (summary/compact), `capabilities/document/` (Document extract Port), `shared/`.  
 Sole count authority: [docs/domains.yaml](./docs/domains.yaml) · narrative: [docs/domains.md](./docs/domains.md).
 
 ### Layer 3: Integration — External Adapters

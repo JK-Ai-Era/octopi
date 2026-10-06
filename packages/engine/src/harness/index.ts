@@ -38,11 +38,14 @@ export {
   getToolSummaryBinding,
   createCompactEngine,
   createMemorySummaryCache,
+} from './context/capabilities/index.js';
+export {
   createDefaultDocumentPort,
   createDefaultBackends,
+  createDocumentPortFromConfig,
   DocumentExtractError,
   isDocumentExtractError,
-} from './context/capabilities/index.js';
+} from './capabilities/document/index.js';
 export type {
   ContentUnit,
   ContentKind,
@@ -56,6 +59,8 @@ export type {
   CompactEngine,
   CompactOptions,
   CompactOutcome,
+} from './context/capabilities/index.js';
+export type {
   DocumentPort,
   DocumentCapabilities,
   DocumentMeta,
@@ -66,7 +71,8 @@ export type {
   DocumentExtractBackend,
   LegacyConverter,
   CreateDocumentPortOptions,
-} from './context/capabilities/index.js';
+  DocumentCapabilityConfig,
+} from './capabilities/document/index.js';
 
 // ── Agent Building ──
 export { AgentBuilder, createAgent, isSubsystemAllowed, discoverSubsystemSpecs } from './agent/builder.js';

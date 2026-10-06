@@ -161,8 +161,9 @@ describe('million-scale vector gate', () => {
       });
     }
     const paths = index.listFilePathsFiltered(src.id, { ext: 'x_y' });
-    expect(paths).toContain(join(root, 'a.x_y'));
-    expect(paths).not.toContain(join(root, 'a.xzy'));
+    const norm = (p: string) => p.replace(/\\/g, '/');
+    expect(paths.map(norm)).toContain(norm(join(root, 'a.x_y')));
+    expect(paths.map(norm)).not.toContain(norm(join(root, 'a.xzy')));
     sources.database.close();
   });
 });

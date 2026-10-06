@@ -8,7 +8,7 @@ import {
   createSofficeLegacyConverter,
   isDocumentExtractError,
   probeSoffice,
-} from '../../../packages/engine/src/harness/context/capabilities/document/index.js';
+} from '../../../packages/engine/src/harness/capabilities/document/index.js';
 
 describe('soffice legacy converter', () => {
   it('factory: none → null; soffice → converter', () => {

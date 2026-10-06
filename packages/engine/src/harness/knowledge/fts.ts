@@ -106,26 +106,30 @@ export class KnowledgeFts {
     for (const id of chunkIds) del.run(id);
   }
 
-  /** 源级清空（卸载 / rebuild） */
+  /** 源级清空（卸载 / rebuild）— 经 Membership */
   clearSource(sourceId: string): void {
     if (!this.enabled) return;
     this.db.raw
       .prepare(
         `DELETE FROM knowledge_chunks_fts
-         WHERE chunk_id IN (SELECT id FROM knowledge_chunks WHERE source_id = ?)`,
+         WHERE chunk_id IN (
+           SELECT c.id FROM knowledge_chunks c
+           JOIN knowledge_memberships m ON m.file_id = c.file_id
+           WHERE m.source_id = ?
+         )`,
       )
       .run(sourceId);
   }
 
   /**
-   * MATCH 检索，返回 chunkId（已按源过滤）
+   * MATCH 检索，返回 chunkId（已按可见 Membership 过滤）
    *
    * @returns 命中 chunk id 列表；FTS 不可用或 query 空时返回 null（调用方退 LIKE）
    */
   search(query: string, sourceIds: string[], limit: number): string[] | null {
     if (!this.enabled) return null;
     const match = buildFtsQuery(query);
-    if (!match) return null;
+    if (!match || sourceIds.length === 0) return null;
     const placeholders = sourceIds.map(() => '?').join(',');
     try {
       const rows = this.db.raw
@@ -133,8 +137,9 @@ export class KnowledgeFts {
           `SELECT f.chunk_id AS id
            FROM knowledge_chunks_fts f
            JOIN knowledge_chunks c ON c.id = f.chunk_id
+           JOIN knowledge_memberships m ON m.file_id = c.file_id
            WHERE knowledge_chunks_fts MATCH ?
-             AND c.source_id IN (${placeholders})
+             AND m.source_id IN (${placeholders})
            LIMIT ?`,
         )
         .all(match, ...sourceIds, limit) as Array<{ id: string }>;
@@ -159,12 +164,12 @@ export class KnowledgeFts {
     for (;;) {
       const rows = this.db.raw
         .prepare(
-          `SELECT id, text, path FROM knowledge_chunks
+          `SELECT id, text FROM knowledge_chunks
            WHERE id > ? ORDER BY id LIMIT ?`,
         )
-        .all(cursor, batch) as Array<{ id: string; text: string; path: string }>;
+        .all(cursor, batch) as Array<{ id: string; text: string }>;
       if (rows.length === 0) break;
-      this.upsertMany(rows);
+      this.upsertMany(rows.map((r) => ({ id: r.id, text: r.text })));
       n += rows.length;
       cursor = rows[rows.length - 1].id;
     }
@@ -189,12 +194,12 @@ export class KnowledgeFts {
     for (;;) {
       const rows = this.db.raw
         .prepare(
-          `SELECT id, text, path FROM knowledge_chunks
+          `SELECT id, text FROM knowledge_chunks
            WHERE id > ? ORDER BY id LIMIT ?`,
         )
-        .all(cursor, batch) as Array<{ id: string; text: string; path: string }>;
+        .all(cursor, batch) as Array<{ id: string; text: string }>;
       if (rows.length === 0) break;
-      this.upsertMany(rows);
+      this.upsertMany(rows.map((r) => ({ id: r.id, text: r.text })));
       n += rows.length;
       cursor = rows[rows.length - 1].id;
       opts?.onProgress?.(n);

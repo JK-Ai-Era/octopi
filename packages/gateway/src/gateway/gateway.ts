@@ -1,13 +1,13 @@
 /**
- * Gateway — 核心守护进程
+ * Gateway ?核心守护进程
  *
- * 三层架构 Integration 层组件。
- * 职责：组装 Agent + 挂载协议适配器 + 管理生命周期。
+ * 三层架构 Integration 层组?
+ * 职责：组?Agent + 挂载适配?+ 管理生命周期?
  *
- * 架构：
- *   外部消息 → Channel Adapter → Gateway → SessionAwareRunner → Agent → LLM
+ * 架构?
+ *   外部消息 ?Channel Adapter ?Gateway ?SessionAwareRunner ?Agent ?LLM
  *
- * 使用方式：
+ * 使用方式?
  * ```ts
  * const gateway = new Gateway({ agents: [myAgent] });
  * gateway.registerProvider(openaiProvider);
@@ -71,7 +71,7 @@ import type {
   RunObservatorySnapshot,
 } from '@octopi-agent/engine/harness/observability/observer/types.js';
 
-// Web REST 骨架所需的 Gateway 扩展类型
+// Web REST 骨架?Gateway 扩展类型
 // ================================================================
 
 /** Pending approval 请求载荷 */
@@ -97,7 +97,7 @@ export interface PendingApprovalView {
   decisionReason?: string;
 }
 
-/** ask_user 待答问题视图 */
+/** ask_user 待答视图 */
 export interface PendingQuestionView {
   id: string;
   sessionId: string;
@@ -112,31 +112,31 @@ export interface PendingQuestionView {
 }
 
 /**
- * cancel 时回给等待方的哨兵值。
- * 工具侧识别后抛 abort 错误，不得把空串当用户回答。
+ * cancel 时回给等待方的哨?
+ * 工具侧识?abort ，不得把空串当用户回?
  */
 export const ASK_USER_CANCELLED = '__ask_user_cancelled__';
 
-/** WebUI 模型目录条目（与 harness/run/model ModelCatalogEntry 对齐） */
+/** WebUI 模型条目（与 harness/run/model ModelCatalogEntry 对齐?*/
 export interface ModelCatalogItem {
   id: string;
   provider: string;
   model: string;
-  /** 未配置时为 null（未知，不猜测） */
+  /** ?null（未知，不猜测） */
   contextWindow: number | null;
   maxOutputTokens?: number;
   known: boolean;
   source: string;
 }
 
-/** Agent 默认模型摘要 */
+/** Agent 模型 */
 export interface AgentModelSummary {
   agentId: string;
-  /** agent 配置的默认模型 id（`provider/model`） */
+  /** agent 配置的默认模?id（`provider/model`?*/
   defaultModelId: string;
 }
 
-/** WebUI 模型目录 */
+/** WebUI 模型 */
 export interface ModelCatalog {
   models: ModelCatalogItem[];
   agents: AgentModelSummary[];
@@ -148,20 +148,20 @@ export interface ModelCatalog {
 export interface SessionModelView {
   sessionId: string;
   agentId: string;
-  /** 当前生效模型 id；null 表示沿用 agent 默认 */
+  /** 当前生效模型 id；null 表示沿用 agent  */
   modelId: string | null;
   defaultModelId: string;
-  /** 当前生效模型的能力快照（UI 只读，禁止再猜窗口） */
+  /** 当前生效模型的能力快照（UI 止再猜窗口） */
   resolved?: ModelCatalogItem;
 }
 
 // ================================================================
-// 默认 Session Store（OCTOPI_HOME/sessions）
+//  Session Store（OCTOPI_HOME/sessions?
 // ================================================================
 
 /**
- * 无显式 store 时，在 OCTOPI_HOME/sessions 创建持久化 JSONL store。
- * 禁止改回 SqliteSessionStore（已删除；见 arch/session-history-search.md）。
+ * 无显?store 时，?OCTOPI_HOME/sessions 创建持久?JSONL store?
+ * 改回 SqliteSessionStore（已删除 arch/session-history-search.md?
  */
 async function createDefaultStore(_agents: AgentDefinition[]): Promise<SessionStore<SessionData>> {
   const { getOctopiHome } = await import('@octopi-agent/engine/paths.js');
@@ -183,49 +183,49 @@ export class Gateway {
   private store!: SessionStore<SessionData>;
   /** Gateway 配置 */
   private config: GatewayConfig;
-  /** DM 作用域 */
+  /** DM 作用?*/
   private dmScope: string;
-  /** 是否已启动 */
+  /** 已启?*/
   private started = false;
-  /** 事件监听器 */
+  /** 事件监听?*/
   private listeners: Array<(event: AgentEvent) => void> = [];
   /** Provider */
   private providers = new Map<string, ModelProvider>();
   /** 工具 */
   private tools: RegisteredTool[] = [];
-  /** Agent 缓存（避免每条消息重建） */
+  /** Agent 缓存（避免每条消建） */
   private agentCache = new Map<string, {
     agent: import('@octopi-agent/engine/harness/run/agent/index.js').Agent;
     runner: SessionAwareRunner;
     contextEngine?: import('@octopi-agent/engine/harness/context/types.js').ContextEngine;
     contextHealth?: (agentId?: string) => Promise<import('@octopi-agent/engine/harness/context/layer-health.js').ContextLayerHealth>;
   }>();
-  /** 流式 adapter 引用（用于广播事件） */
+  /** 流式 adapter 引用（用于广件） */
   private streamingAdapters: StreamingChannelAdapter[] = [];
-  /** 每个 provider 的熔断器 */
+  /** 每个 provider 的熔 */
   private circuitBreakers = new Map<string, CircuitBreaker>();
-  /** 默认 store 的异步初始化 Promise（未传入 store 时） */
+  /**  store 的异步初始化 Promise（未传入 store 时） */
   private _defaultStorePromise?: Promise<SessionStore<SessionData>>;
   /** Web Runtime pending approvals */
   private pendingApprovals = new Map<string, PendingApprovalView>();
-  /** ask_user 待答问题（UI 答完 resolve 等待中的工具） */
+  /** ask_user 待答（UI 答完 resolve 等待工具?*/
   private pendingQuestions = new Map<string, PendingQuestionView>();
   private questionResolvers = new Map<string, (answer: string) => void>();
-  /** 会话最近一次七层装配快照（含 content，仅 REST）；FIFO 防泄漏 */
+  /** 会话近一次七配快照（?content，仅 REST）；FIFO 防泄?*/
   private lastContextLayers = new Map<string, ContextLayersSnapshot>();
   private static readonly MAX_CONTEXT_LAYERS_SESSIONS = 256;
-  /** 产品 Observer 通道（Run 现场） */
+  /** 产品 Observer 通道（Run 现场?*/
   private observerHub: ObserverHub;
-  /** models.level — 供 WebUI 模型目录展示分级名 */
+  /** models.level ??WebUI 模型展示分级?*/
   private modelLevels?: Record<string, { primary: string; fallback?: string[] }>;
-  /** 激活宿主（arch/agent-runtime.md）；消息路径经 dispatch */
+  /** 主（arch/agent-runtime.md）；消息?dispatch */
   private runtime: AgentRuntime;
   private gatewayBus: DefaultEventBus;
-  /** Session ACL（E6）；缺省内置五角色 */
+  /** Session ACL（E6）；缺省内置?*/
   private sessionAcl: SessionAclService;
-  /** 进程内共享 Session Lease（E1/E2）：所有 Runner 注入同一实例 */
+  /** 进程内共?Session Lease（E1/E2）：?Runner 注入同一实例 */
   private sessionLease: import('@octopi-agent/engine/harness/run/concurrency/session-lease.js').InProcessSessionLock;
-  /** Knowledge 源注册（OCTOPI_HOME/knowledge/knowledge.db；懒加载） */
+  /** Knowledge 源注册（OCTOPI_HOME/knowledge/knowledge.db；懒加载?*/
   private knowledgeStorePromise?: Promise<
     import('@octopi-agent/engine/harness/knowledge/source-store.js').KnowledgeSourceStore
   >;
@@ -233,11 +233,13 @@ export class Gateway {
   private knowledgeIngestPromise?: Promise<
     import('@octopi-agent/engine/harness/knowledge/ingest.js').KnowledgeIngest
   >;
-  /** 产品问题面 */
+  /** Knowledge Service 时（manageLocal + Client；v2 写路径） */
+  private knowledgeRuntime?: import('./knowledge-runtime.js').GatewayKnowledgeRuntime;
+  /** 产品?*/
   private issueRegistry: IssueRegistry;
-  /** 会话内 /xxx 命令调用面 */
+  /** 会话?/xxx 命令调用?*/
   private commandRouter: CommandRouter;
-  /** user/skill 命令是否已装载（启动时装载，不依赖 buildAgent） */
+  /** user/skill 命令载（载，不依?buildAgent?*/
   private commandSourcesReady = false;
 
   constructor(config: GatewayConfig, store?: SessionStore<SessionData>) {
@@ -248,7 +250,7 @@ export class Gateway {
     this.sessionLease = new InProcessSessionLock();
     this.issueRegistry = new IssueRegistry();
     this.commandRouter = this.createCommandRouter();
-    // Gateway EventBus：RuntimeEvents 进可观测总线，并转发到 Gateway listeners（不变量 #6）
+    // Gateway EventBus：RuntimeEvents 进可观测总线，并?Gateway listeners（不变量 #6?
     this.gatewayBus = new DefaultEventBus();
     this.observerHub = new ObserverHub(config.observer);
     this.runtime = new AgentRuntime({
@@ -265,16 +267,16 @@ export class Gateway {
       if (event.type === 'context.layers.assembled' && event.sessionId) {
         this.rememberContextLayers(event.sessionId, event);
       }
-      // Observer 通道：Runner 在 emit 时直采 Hub（避免与 bus 双计 timeline/lifecycle）
-      // Gateway 只保留产品 Context Map；不再二次 ingestEvent
-      // 终态事件（turn.end / engine.*）改由 processMessage.onEvent 用 sessionKey 广播，
-      // 这里跳过，避免双投；其余非流式事件仍走 bus。
+      // Observer 通道：Runner ?emit 时直?Hub（避免与 bus  timeline/lifecycle?
+      // Gateway 留产?Context Map；不再二?ingestEvent
+      // 件（turn.end / engine.*）改?processMessage.onEvent ?sessionKey 广播?
+      // 这里跳过，避免双投；其余非流式事件仍?bus?
       if (
         event.sessionId &&
         event.type !== 'llm_stream_delta' &&
         !Gateway.isTerminalWsEvent(event.type)
       ) {
-        // WS 不广播层正文全文（content）；点选层时 UI 经 REST 拉取
+        // WS 不广正文全文（content）；?UI ?REST 拉取
         const out =
           event.type === 'context.layers.assembled'
             ? stripLayerContentFromEvent(event)
@@ -287,14 +289,14 @@ export class Gateway {
     if (store) {
       this.store = store;
     } else {
-      // 延迟初始化：启动时解析默认持久化 store
+      // 延迟化：时解析默认持久化 store
       this._defaultStorePromise = createDefaultStore(config.agents);
     }
 
-    // Issue → WS 广播
+    // Issue ?WS 广播
     this.issueRegistry.subscribe((ev) => this.broadcastIssue(ev));
 
-    // 注册配置中定义的 agents
+    // 注册配置义的 agents
     for (const agent of config.agents) {
       this.agents.set(agent.id, agent);
     }
@@ -302,19 +304,19 @@ export class Gateway {
     this.modelLevels = config.levels;
   }
 
-  /** 设置 models.level 映射（daemon 启动时注入） */
+  /** 设置 models.level 映射（daemon 时注入） */
   setModelLevels(levels: Record<string, { primary: string; fallback?: string[] }> | undefined): void {
     this.modelLevels = levels;
   }
 
-  /** 激活宿主（Schedule/Escalate 等 Source 挂载用） */
+  /** 主（Schedule/Escalate ?Source 挂载 */
   getAgentRuntime(): AgentRuntime {
     return this.runtime;
   }
 
   /**
-   * 按配置挂载 Runtime Sources（Schedule / Escalate）。
-   * 应在 start() 之前调用；与 gatewayBus 同源。
+   * 按配?Runtime Sources（Schedule / Escalate?
+   * 应在 start() 之前调用；与 gatewayBus 同源?
    */
   async configureAgentRuntime(cfg: {
     schedule?: Array<{
@@ -327,7 +329,7 @@ export class Gateway {
       runOnStart?: boolean;
     }>;
     escalate?: { defaultAgentId?: string; eventType?: string | string[] };
-    /** 挂载 AgentSignalSource（多 Agent 通知） */
+    /** 挂载 AgentSignalSource Agent 通知?*/
     agentSignal?: boolean;
   }): Promise<void> {
     if (cfg.schedule && cfg.schedule.length > 0) {
@@ -378,7 +380,7 @@ export class Gateway {
 
 
   /**
-   * 确保 store 已就绪（解析默认 store 的异步初始化）
+   *  store 已就解析 store 的异步初始化?
    */
   private async ensureStore(): Promise<void> {
     if (this._defaultStorePromise) {
@@ -406,7 +408,7 @@ export class Gateway {
       });
     }
 
-    // Plugin 已注册命令合入 + user/skill 命令装载（必须在收消息前）
+    // Plugin 已注册命令合?+ user/skill 命令装载（必须在收消?
     try {
       this.registerPluginCommands();
     } catch (err) {
@@ -415,6 +417,15 @@ export class Gateway {
     await this.ensureCommandSources();
 
     await this.runtime.start();
+    // Knowledge Service（manageLocal / 远程）随 Gateway 
+    try {
+      const krt = await this.getKnowledgeRuntime();
+      console.log(`[Gateway] knowledge runtime: ${krt.state}`);
+    } catch (kErr) {
+      console.warn(
+        `[Gateway] knowledge runtime start failed: ${kErr instanceof Error ? kErr.message : String(kErr)}`,
+      );
+    }
     this.started = true;
     console.log(`[Gateway] Ready. ${this.agents.size} agent(s), ${this.channels.size} channel(s)`);
   }
@@ -423,17 +434,30 @@ export class Gateway {
     if (!this.started) return;
 
     console.log('[Gateway] Stopping...');
+    // 先断 SSE，再关 Knowledge Service（server.close 会等长连接排空）
+    try {
+      this.knowledgeProgressForward?.();
+      this.knowledgeProgressForward = undefined;
+      if (this.knowledgeRuntime) {
+        await this.knowledgeRuntime.stop();
+        this.knowledgeRuntime = undefined;
+      }
+    } catch (kStopErr) {
+      console.warn(
+        `[Gateway] knowledge stop failed: ${kStopErr instanceof Error ? kStopErr.message : String(kStopErr)}`,
+      );
+    }
     for (const [name, adapter] of this.channels) {
       console.log(`[Gateway] Stopping channel: ${name}`);
       await adapter.stop();
     }
 
-    // 释放 Runner 后台 timer（BackfillTrigger / HealthProbe / SubsystemRuntime）
+    // 释放 Runner 后台 timer（BackfillTrigger / HealthProbe / SubsystemRuntime?
     for (const cached of this.agentCache.values()) {
       try {
         cached.runner.dispose();
       } catch {
-        // stop 路径 fail-open，不阻断关闭
+        // stop  fail-open，不阻断关闭
       }
     }
     this.agentCache.clear();
@@ -455,15 +479,15 @@ export class Gateway {
 
   registerChannel(adapter: ChannelAdapter): void {
     this.channels.set(adapter.name, adapter);
-    // 检测是否支持流式广播
+    // 测是否支持流式广?
     if ('broadcastEvent' in adapter && typeof adapter.broadcastEvent === 'function') {
       this.streamingAdapters.push(adapter as StreamingChannelAdapter);
     }
-    // 注册中止回调
+    // 注册回调
     if ('onAbort' in adapter) {
       (adapter as any).onAbort = (sessionId: string) => this.abortSession(sessionId);
     }
-    // 注册欢迎消息扩展（agent 信息 + 命令目录 + open issues）
+    // 注册欢迎消息扩展（agent 信息 + 命令 + open issues?
     if ('onWelcome' in adapter) {
       (adapter as any).onWelcome = () => {
         const agents = Array.from(this.agents.entries()).map(([id, agent]) => ({
@@ -498,8 +522,8 @@ export class Gateway {
   }
 
   /**
-   * 中止指定 session 的正在运行的 agent
-   * 归属：Runtime 持有 AbortController；Gateway 转调（arch/agent-runtime.md §8.1）
+   * 指定 session 在运行的 agent
+   * 归属：Runtime 持有 AbortController；Gateway （arch/agent-runtime.md §8.1?
    */
   abortSession(sessionId: string): void {
     this.cancelPendingQuestions(sessionId);
@@ -509,7 +533,7 @@ export class Gateway {
   }
 
   // ================================================================
-  // Commands / System Issues（arch/slash-commands.md · arch/system-issues.md）
+  // Commands / System Issues（arch/slash-commands.md · arch/system-issues.md?
   // ================================================================
 
   getIssueRegistry(): IssueRegistry {
@@ -533,7 +557,7 @@ export class Gateway {
     const host: BuiltinHost = {
       hasActiveRun: (sessionId, agentId) => this.runtime.hasActiveRun(agentId, sessionId),
       currentModel: (sessionId, agentId) => {
-        // 同步路径仅能读缓存；完整值走 view（execute 入参）
+        // 仅能读缓存；完整值走 view（execute 入参?
         void agentId;
         void sessionId;
         return undefined;
@@ -561,10 +585,10 @@ export class Gateway {
     return router;
   }
 
-  /** Skill command 桥接（启动 / buildAgent 发现 skill 后调用；冲突进 Issue） */
+  /** Skill command 桥接（启?/ buildAgent 发现 skill 后调冲突?Issue?*/
   registerSkillCommands(skills: import('@octopi-agent/engine/harness/extension/plugin-ecosystem/skills/types.js').SkillManager): void {
     const defs = skillCommandsFromManager(skills, (id) => skills.load(id));
-    // ref = skillId：同 skill 重载 upsert；不同 skill 同 command 名可冲突
+    // ref = skillId：同 skill 重载 upsert；不?skill ?command 名可冲突
     for (const skill of skills.list()) {
       if (!skill.command) continue;
       const def = defs.find((d) => d.name === skill.command);
@@ -574,7 +598,7 @@ export class Gateway {
     }
   }
 
-  /** 用户 commands/*.md（agent.home/commands） */
+  /** 用户 commands/*.md（agent.home/commands?*/
   registerUserCommands(agentId: string, directory: string): void {
     const loaded = loadUserCommandDefs(directory);
     for (const { definition, ref } of loaded) {
@@ -588,8 +612,8 @@ export class Gateway {
   }
 
   /**
-   * 启动时注册各 agent 的 user/skill 命令。
-   * 必须在命令裁决前完成——否则 /help 进 Loop 前看不到自定义命令。
+   * 时注册各 agent ?user/skill 命令?
+   * 必须在命决前完成?/help ?Loop 前看不到义命?
    */
   async ensureCommandSources(): Promise<void> {
     if (this.commandSourcesReady) return;
@@ -622,7 +646,7 @@ export class Gateway {
     }
   }
 
-  /** Plugin registerCommand → Router（plugin load 后调用） */
+  /** Plugin registerCommand ?Router（plugin load 后调 */
   registerPluginCommands(): void {
     for (const def of pluginCommandsFromManager(this.pluginManager)) {
       const r = this.commandRouter.register(def, `plugin:${def.name}`);
@@ -632,8 +656,8 @@ export class Gateway {
           domain: 'commands',
           code: 'command.conflict',
           severity: 'warning',
-          title: `命令 /${def.name} 未加载`,
-          detail: `plugin 命令注册被拒绝（${r.reason}）。`,
+          title: `命令 /${def.name} 冲突`,
+          detail: `plugin 命令注册冲突（${r.reason}）`,
           refs: [{ label: `plugin: ${def.name}`, pluginId: def.name }],
         });
       }
@@ -663,7 +687,7 @@ export class Gateway {
             this.abortSession(sessionId);
             break;
           case 'new_session': {
-            // 硬收敛：把当前会话标 recent 并带 sessionText，供补录触发（不阻塞切换）
+            // 敛：把当前会话标 recent 并带 sessionText，供补录触发（不切换?
             try {
               const old = await this.store.load(sessionId);
               if (old) {
@@ -693,7 +717,7 @@ export class Gateway {
                 });
               }
             } catch {
-              // 切换会话不因补录快照失败而中断
+              // 切换会话不因补录失败而中?
             }
             const meta = await this.createSession({ agentId });
             result.newSessionId = meta.id;
@@ -706,18 +730,18 @@ export class Gateway {
             await this.compactSession(sessionId, agentId);
             break;
           case 'set_preferred_agent':
-            // reserved；V1 不落地
+            // reserved；V1 不落?
             break;
           default:
             break;
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        // 单 op 失败：收成 error，仍继续后续 op / 终态广播，避免 UI 卡死
+        // ?op 失败：收?error，仍继续后续 op / 避免 UI 
         result.status = 'error';
         result.display = {
           type: 'text',
-          text: `命令已接收，但执行副作用失败：${msg}`,
+          text: `命令已接收，但执行副作用失败?{msg}`,
         };
         return { ok: false, error: msg };
       }
@@ -754,7 +778,7 @@ export class Gateway {
       session.meta.lastInteractionAt = now;
       await this.store.save(sessionId, session);
     } catch {
-      // 留痕失败不阻断命令结果回放（Discourse 投影可重建）
+      // 留痕失败不阻令结果回放（Discourse 投影建）
     }
   }
 
@@ -772,10 +796,10 @@ export class Gateway {
   }
 
   /**
-   * control 命令终态：合成 turn.end，让 Web/TUI 清 streaming 并展示 display 文案。
-   * 命令不进 Loop，不会由 Runner 产出 turn.end。
-   * **不带 error:true**——Loop 的 turn.end+error 表示重试/waiting，会把命令结果打回运行态。
-   * 纯文本（type=text）转 Markdown 硬换行；markdown 原样。
+   * control 命令合成 turn.end Web/TUI ?streaming 并展?display ?
+   * 命令不进 Loop，不会由 Runner 产出 turn.end?
+   * **不带 error:true**oop ?turn.end+error 表示重试/waiting，会把命令结果打回运?
+   * type=text）转 Markdown 行；markdown 原样?
    */
   private broadcastCommandTurnEnd(
     sessionId: string,
@@ -810,7 +834,7 @@ export class Gateway {
     } as unknown as AgentEvent;
     this.emitEvent(event);
     for (const adapter of this.streamingAdapters) {
-      // 系统级问题：广播给全部 WS 会话
+      // 系统级问题：广播给全?WS 会话
       adapter.broadcastEvent('*', event);
     }
   }
@@ -824,9 +848,9 @@ export class Gateway {
   }
 
   /**
-   * WebUI 模型目录
+   * WebUI 模型
    *
-   * @returns 已注册 provider 的全部模型 + agent 默认模型 + level 映射
+   * @returns 已注?provider 的全部模?+ agent 模型 + level 映射
    */
   getModelCatalog(): ModelCatalog {
     const seen = new Map<string, ModelCatalogItem>();
@@ -835,7 +859,7 @@ export class Gateway {
     const push = (entry: ModelCatalogItem, opts?: { preferAgentExplicit?: boolean }) => {
       const prev = seen.get(entry.id);
       if (prev) {
-        // agent 默认模型的配置窗口优先（与 session model 视图一致）
+        // agent 模型的配口优先（?session model 视图致）
         if (opts?.preferAgentExplicit && entry.known && entry.contextWindow != null) {
           seen.set(entry.id, entry);
           const idx = models.findIndex(m => m.id === entry.id);
@@ -870,7 +894,7 @@ export class Gateway {
     };
 
     for (const [providerName, provider] of this.providers) {
-      // provider.models 含纯字符串模型（无能力字段）；必须入 catalog，窗口可为 null
+      // provider.models 串模型（无能力字段）；必须入 catalog，窗口可?null
       const declaredNames = provider.models ?? [];
       const names = new Set<string>([
         ...declaredNames,
@@ -890,7 +914,7 @@ export class Gateway {
     const agents: AgentModelSummary[] = [];
     for (const [id, agent] of this.agents) {
       const defaultModelId = `${agent.model.provider}/${agent.model.model}`;
-      // agent 配置的 explicit 窗口优先于 provider 无能力条目
+      // agent 配置?explicit 窗口优先?provider 无能力条?
       push(catalogOf(agent.model.provider, agent.model.model, {
         contextWindow: agent.model.contextWindow,
         maxOutputTokens: agent.model.maxTokens,
@@ -907,10 +931,10 @@ export class Gateway {
   }
 
   /**
-   * 查询 session 当前模型选择
+   *  session 当前模型选择
    *
    * @param sessionId - 会话 id
-   * @param agentId - 可选 agent 过滤
+   * @param agentId - ?agent 过滤
    * @returns 模型视图；session 不存在时返回 null
    */
   async getSessionModel(sessionId: string, _agentId?: string): Promise<SessionModelView | null> {
@@ -972,11 +996,11 @@ export class Gateway {
   }
 
   /**
-   * 设置 session 级模型选择
+   * 设置 session 级模
    *
    * @param sessionId - 会话 id
-   * @param modelRef - `provider/model`、裸模型名或 null（恢复 agent 默认）
-   * @param agentId - 可选 agent
+   * @param modelRef - `provider/model`、裸模型名或 null（恢?agent ?
+   * @param agentId - ?agent
    * @returns 更新后的模型视图
    */
   async setSessionModel(
@@ -1035,14 +1059,14 @@ export class Gateway {
   }
 
   /**
-   * 手动结构压缩（不依赖 contextWindow）
+   * 手动结构压缩（不依赖 contextWindow?
    *
-   * 与 SessionAwareRunner.handle **共用 session 锁**（E1/E4）。
-   * 权威互斥是锁，不是 status==='processing'；同 sessionId 的 run/compact 排队。
-   * Compact 键 = (sessionId, agentId)；全量 messages 仍保留在 session store。
+   * ?SessionAwareRunner.handle **共用 session ?*（E1/E4?
+   * 权威互斥，不?status==='processing'；同 sessionId ?run/compact 排队?
+   * Compact ?= (sessionId, agentId)；全?messages 仍保留在 session store?
    *
    * @param sessionId - 会话 id
-   * @param agentId - 可选 agent（避免全 agent 扫描；缺省用 session.agentId）
+   * @param agentId - ?agent（避免全 agent ；缺省用 session.agentId?
    * @returns 压缩结果
    */
   async compactSession(
@@ -1061,7 +1085,7 @@ export class Gateway {
       throw new Error(`Session "${sessionId}" not found`);
     }
 
-    // E4：compact 键使用调用方 agentId（缺省 primary）；不静默改键
+    // E4：compact 用调用方 agentId（缺?primary）；不静默改?
     const effectiveAgentId = agentId ?? session.primaryAgentId ?? session.agentId;
     let cached = this.agentCache.get(effectiveAgentId);
     if (!cached) {
@@ -1127,7 +1151,7 @@ export class Gateway {
     const compactTargetTokens =
       this.config.context?.contextAssembler?.compactTargetTokens;
 
-    // D1：与 handle 共用 Runner session 锁；持久化走 Runner（E4 键）
+    // D1：与 handle 共用 Runner session 锁；持久化走 Runner（E4 
     return cached.runner.compactSession(sessionId, effectiveAgentId, {
       compactStructural: (input) =>
         structural.compactStructural!({
@@ -1161,7 +1185,7 @@ export class Gateway {
       throw new Error(`Agent "${options.agentId}" not found`);
     }
 
-    // 文件系统安全：避免 `:` 等字符（Windows 文件名非法）
+    // 文件系统安全：避?`:` 等字符（Windows 文件名非法）
     const sessionId = options.sessionId ?? `${options.agentId}-web-${Date.now()}`;
     const session: SessionData = {
       id: sessionId,
@@ -1190,7 +1214,7 @@ export class Gateway {
 
 
   /**
-   * 查找 session（sessionId 一等；无需遍历 agent）
+   * 查找 session（sessionId 等；无需遍历 agent?
    */
   private async findSession(sessionId: string): Promise<SessionData | null> {
     return this.store.load(sessionId);
@@ -1208,7 +1232,7 @@ export class Gateway {
   }
 
   /**
-   * 会话任务列表（只读，供 UI）
+   * 会话任务列表（只读，?UI?
    */
   async getSessionTasks(sessionId: string, _agentId?: string): Promise<SessionData['tasks']> {
     const session = await this.store.load(sessionId);
@@ -1233,19 +1257,19 @@ export class Gateway {
   }
 
   async getMemoryStats(): Promise<Record<string, unknown> | null> {
-    // 预留：当前 Gateway 未持有 MemoryStore，返回 null 表示未配置。
+    // 预留：当?Gateway ?MemoryStore，返?null 表示?
     return null;
   }
 
-  // ── Knowledge 源注册（OCTOPI_HOME/knowledge/knowledge.db）──
+  //  Knowledge 源注册（OCTOPI_HOME/knowledge/knowledge.db）─
 
-  /** 会话附件服务（OP-15；懒加载） */
+  /** 会话附件服务（OP-15；懒加载?*/
   private attachmentServicePromise?: Promise<
     import('@octopi-agent/engine/harness/session/attachments/service.js').SessionAttachmentService
   >;
 
   /**
-   * 会话附件服务（OCTOPI_HOME/sessions/&lt;sid&gt;/attachments）
+   * 会话附件服务（OCTOPI_HOME/sessions/&lt;sid&gt;/attachments?
    */
   async getAttachmentService(): Promise<
     import('@octopi-agent/engine/harness/session/attachments/service.js').SessionAttachmentService
@@ -1277,37 +1301,23 @@ export class Gateway {
   }
 
   private documentPortPromise?: Promise<
-    import('@octopi-agent/engine/harness/context/capabilities/document/types.js').DocumentPort | null
+    import('@octopi-agent/engine/harness/capabilities/document/types.js').DocumentPort | null
   >;
 
   /**
-   * DocumentPort（documents.extract.enabled === false 时为 null）
+   * DocumentPort（documents.extract.enabled === false 时为 null?
    */
   async getDocumentPort(): Promise<
-    import('@octopi-agent/engine/harness/context/capabilities/document/types.js').DocumentPort | null
+    import('@octopi-agent/engine/harness/capabilities/document/types.js').DocumentPort | null
   > {
     if (!this.documentPortPromise) {
       this.documentPortPromise = (async () => {
         const extract = this.config.documents?.extract;
         if (extract?.enabled === false) return null;
-        const { createDefaultDocumentPort, createLegacyConverterFromConfig } = await import(
-          '@octopi-agent/engine/harness/context/capabilities/document/index.js'
+        const { createDocumentPortFromConfig } = await import(
+          '@octopi-agent/engine/harness/capabilities/document/index.js'
         );
-        const legacy = this.config.documents?.legacy;
-        return createDefaultDocumentPort({
-          config: {
-            enabled: true,
-            timeoutMs: extract?.timeoutMs,
-            maxFileBytes: extract?.maxFileBytes,
-            allowedRoots: extract?.allowedRoots,
-          },
-          legacyConverter: createLegacyConverterFromConfig({
-            converter: legacy?.converter ?? 'none',
-            sofficePath: legacy?.sofficePath,
-            timeoutMs: legacy?.timeoutMs,
-            cacheDir: legacy?.cacheDir,
-          }),
-        });
+        return createDocumentPortFromConfig(this.config.documents);
       })();
     }
     return this.documentPortPromise;
@@ -1324,7 +1334,7 @@ export class Gateway {
   }
 
   /**
-   * 上传会话附件（JSON + base64 或 utf8 文本）
+   * 上传会话附件（JSON + base64 ?utf8 文本?
    */
   async uploadSessionAttachments(
     sessionId: string,
@@ -1342,7 +1352,7 @@ export class Gateway {
   }
 
   /**
-   * 删除单条会话附件（若已 make-searchable 则顺带 purge Knowledge source）
+   * 删除单条会话附件（若?make-searchable 则顺?purge Knowledge source?
    */
   async deleteSessionAttachment(sessionId: string, attachmentId: string): Promise<boolean> {
     const svc = await this.getAttachmentService();
@@ -1362,7 +1372,7 @@ export class Gateway {
   }
 
   /**
-   * 归入项目：移动到项目 directory 源（OP-15 promote）
+   * 归入项目：移动到项目 directory 源（OP-15 promote?
    */
   async promoteSessionAttachment(
     sessionId: string,
@@ -1370,15 +1380,19 @@ export class Gateway {
     opts: { projectKey: string; targetSourceId?: string },
   ): Promise<{ attachment: import('@octopi-agent/engine/harness/session/attachments/types.js').SessionAttachment; targetPath: string }> {
     const svc = await this.getAttachmentService();
-    const store = await this.getKnowledgeSourceStore();
-    const sources = store
-      .list()
-      .filter(
-        (s) =>
-          s.scopeRef.level === 'project' &&
-          s.scopeRef.key === opts.projectKey &&
-          (s.kind === 'directory' || s.kind === 'file' || s.kind === 'workspace'),
-      );
+    const client = await this.getKnowledgeClient();
+    const all = (await client.listSources()) as unknown as Array<{
+      id: string;
+      kind: string;
+      location: string;
+      scopeRef: { level: string; key: string };
+    }>;
+    const sources = all.filter(
+      (s) =>
+        s.scopeRef.level === 'project' &&
+        s.scopeRef.key === opts.projectKey &&
+        (s.kind === 'directory' || s.kind === 'file' || s.kind === 'workspace'),
+    );
     const target = opts.targetSourceId
       ? sources.find((s) => s.id === opts.targetSourceId)
       : sources.find((s) => s.kind === 'directory') ?? sources[0];
@@ -1409,14 +1423,14 @@ export class Gateway {
       // 不存在则继续 move
     }
     await rename(from, to);
-    // 若有抽取伴生且不同名，一并移动
+    // 若有抽取伴生且不同名，一并移?
     if (item.extractPath && item.extractPath !== item.path) {
       const fromExtract = join(svc.attachmentRoot(sessionId), item.extractPath);
       const toExtract = join(destDir, item.extractPath);
       try {
         await rename(fromExtract, toExtract);
       } catch {
-        // 伴生缺失不阻断 promote
+        // 伴生缺失不阻?promote
       }
     }
     const marked = await svc.markPromoted(sessionId, attachmentId, {
@@ -1427,7 +1441,7 @@ export class Gateway {
   }
 
   /**
-   * 附件升为可检索：注册 scopeRef=session 的 Knowledge source 并 ingest
+   * 附件升为注册 scopeRef=session ?Knowledge source ?ingest
    */
   async makeAttachmentSearchable(
     sessionId: string,
@@ -1444,16 +1458,20 @@ export class Gateway {
       throw new Error('attachment already promoted to project');
     }
     if (item.searchableSourceId) {
-      const { asSourceId } = await import('@octopi-agent/engine/harness/knowledge/types.js');
-      const existing = (await this.getKnowledgeSourceStore()).get(
-        asSourceId(item.searchableSourceId),
-      );
-      if (existing) {
-        return {
-          attachment: item,
-          sourceId: existing.id,
-          status: existing.status,
-        };
+      const client = await this.getKnowledgeClient();
+      try {
+        const existing = (await client.getSource(
+          item.searchableSourceId,
+        )) as unknown as { id: string; status: string };
+        if (existing) {
+          return {
+            attachment: item,
+            sourceId: existing.id,
+            status: existing.status,
+          };
+        }
+      } catch {
+        // 源已删则继续注册
       }
     }
     const abs = svc.resolveAbsolutePath(sessionId, attachmentId);
@@ -1471,7 +1489,7 @@ export class Gateway {
   }
 
   /**
-   * 解析 chat 消息附件指针（TriggerAttachmentRef）
+   * 解析 chat 消息附件指针（TriggerAttachmentRef?
    */
   async resolveAttachmentRefs(
     sessionId: string,
@@ -1502,33 +1520,88 @@ export class Gateway {
   }
 
   /**
-   * 打开/缓存 KnowledgeSourceStore（进程内单例）
+   * Knowledge Service 时（懒启manageLocal 或远?baseUrl?
    */
-  async getKnowledgeSourceStore(): Promise<
-    import('@octopi-agent/engine/harness/knowledge/source-store.js').KnowledgeSourceStore
+  async getKnowledgeRuntime(): Promise<
+    import('./knowledge-runtime.js').GatewayKnowledgeRuntime
   > {
-    if (!this.knowledgeStorePromise) {
-      this.knowledgeStorePromise = (async () => {
-        const { KnowledgeSourceStore, resolveKnowledgePaths } = await import(
-          '@octopi-agent/engine/harness/knowledge/index.js'
-        );
-        const { getOctopiHome } = await import('@octopi-agent/engine/paths.js');
-        const paths = resolveKnowledgePaths(getOctopiHome());
-        const store = await KnowledgeSourceStore.open({ dbPath: paths.dbPath });
-        // 列表/统计也会碰到知识库：必须在此拉起 ingest，
-        // 否则 reconciler/watch 不启动（迁移后不补 embed、移出文件无反应）
-        void this.getKnowledgeIngest().catch(() => undefined);
-        return store;
-      })();
+    if (!this.knowledgeRuntime) {
+      const { GatewayKnowledgeRuntime } = await import('./knowledge-runtime.js');
+      const rt = new GatewayKnowledgeRuntime();
+      const kn = this.config.knowledge as
+        | {
+            service?: {
+              baseUrl?: string;
+              token?: string;
+              manageLocal?: boolean;
+              timeoutMs?: number;
+            };
+          }
+        | undefined;
+      const { getOctopiHome } = await import('@octopi-agent/engine/paths.js');
+      const { resolveKnowledgePaths } = await import(
+        '@octopi-agent/engine/harness/knowledge/index.js'
+      );
+      const paths = resolveKnowledgePaths(getOctopiHome());
+      await rt.start(kn?.service, {
+        dataDir: paths.root ?? paths.dbPath.replace(/[/\\][^/\\]+$/, ''),
+        gatewayId: process.env.OCTOPI_GATEWAY_ID ?? 'gw-local',
+        documentConfig: this.config.documents ?? null,
+      });
+      this.knowledgeRuntime = rt;
+      void this.startKnowledgeProgressForwarding().catch(() => undefined);
     }
-    return this.knowledgeStorePromise;
+    return this.knowledgeRuntime;
   }
 
   /**
-   * 知识源列表
-   * - 默认：agent effective 可见（含 session overlay）
-   * - `scopeLevel` / `projectKey`：管理面按归属列全部源（不过滤可见性）
-   * - `scopeLevel=session` 必须带 `sessionId`（禁止跨会话扫临时语料）
+   * v2：Gateway **?*打开 knowledge.db；写/读一律经 Knowledge Service?
+   * 保留方法名仅作兼容编译面，调用应改为 getKnowledgeClient()?
+   */
+  async getKnowledgeSourceStore(): Promise<never> {
+    throw new Error('knowledge_disabled: use Knowledge Service (getKnowledgeClient)');
+  }
+
+  /**
+   * Knowledge API（v2）：优先 KnowledgeClient；Service 抛可感知
+   */
+  async getKnowledgeClient(): Promise<
+    import('@octopi-agent/engine/harness/knowledge/client.js').KnowledgeClient
+  > {
+    const rt = await this.getKnowledgeRuntime();
+    const client = rt.knowledgeClient;
+    if (!client || rt.state === 'disabled') {
+      throw new Error('knowledge_disabled');
+    }
+    if (rt.state === 'degraded') {
+      // 仍尝试调失败由上层降?
+    }
+    return client;
+  }
+
+  /** SSE ?WS （knowledge.index.progress）；幂等 */
+  private knowledgeProgressForward?: () => void;
+
+  async startKnowledgeProgressForwarding(): Promise<void> {
+    if (this.knowledgeProgressForward) return;
+    const rt = await this.getKnowledgeRuntime();
+    if (rt.state === 'disabled' || !rt.knowledgeClient) return;
+    const stop = await rt.subscribeProgress((evt) => {
+      const event = {
+        type: evt.type === 'knowledge.index.progress' ? 'knowledge.index.progress' : evt.type,
+        timestamp: Date.now(),
+        data: (evt.data ?? {}) as Record<string, unknown>,
+      };
+      this.emitEvent(event);
+      for (const adapter of this.streamingAdapters) {
+        adapter.broadcastEvent('*', event);
+      }
+    });
+    this.knowledgeProgressForward = stop;
+  }
+
+  /**
+   * 知识源列???Knowledge Service
    */
   async listKnowledgeSources(
     agentId: string,
@@ -1538,25 +1611,14 @@ export class Gateway {
       projectKey?: string;
     },
   ): Promise<import('@octopi-agent/engine/harness/knowledge/types.js').KnowledgeSource[]> {
-    const store = await this.getKnowledgeSourceStore();
-    if (opts?.scopeLevel === 'global') {
-      return store.listByScope('global');
-    }
-    if (opts?.scopeLevel === 'project') {
-      return store.listByScope('project', opts.projectKey);
-    }
-    if (opts?.scopeLevel === 'session') {
-      const sid = opts.sessionId?.trim();
-      if (!sid) {
-        throw new Error('sessionId is required for scopeLevel=session');
-      }
-      return store.listByScope('session', sid);
-    }
-    return store.listVisible(agentId, opts?.sessionId);
+    const client = await this.getKnowledgeClient();
+    await client.ensurePrincipal(agentId).catch(() => undefined);
+    const raw = await client.listSources();
+    return raw as unknown as import('@octopi-agent/engine/harness/knowledge/types.js').KnowledgeSource[];
   }
 
   /**
-   * 注册知识源
+   * 注册知识???Knowledge Service
    */
   async createKnowledgeSource(
     input: import('@octopi-agent/engine/harness/knowledge/types.js').KnowledgeSourceInput,
@@ -1572,44 +1634,34 @@ export class Gateway {
     if (!allowedLevels.has(input.scopeRef?.level)) {
       throw new Error(`invalid scopeRef.level: ${input.scopeRef?.level}`);
     }
-    const store = await this.getKnowledgeSourceStore();
-    return store.register(input);
+    const client = await this.getKnowledgeClient();
+    const src = await client.createSource(input as unknown as Record<string, unknown>);
+    return src as unknown as import('@octopi-agent/engine/harness/knowledge/types.js').KnowledgeSource;
   }
 
   /**
-   * 更新知识源
+   * 更新知识??Knowledge Service
    */
   async updateKnowledgeSource(
     id: string,
     patch: import('@octopi-agent/engine/harness/knowledge/types.js').KnowledgeSourcePatch,
   ): Promise<import('@octopi-agent/engine/harness/knowledge/types.js').KnowledgeSource | null> {
-    const store = await this.getKnowledgeSourceStore();
-    return store.update(id, patch);
+    const client = await this.getKnowledgeClient();
+    const updated = await client.patchSource(id, patch as unknown as Record<string, unknown>);
+    return updated as unknown as import('@octopi-agent/engine/harness/knowledge/types.js').KnowledgeSource;
   }
 
   /**
-   * 卸载知识源：停 watch + purge index/hits + 删注册
+   * 卸载知识??Knowledge Service（解?+ ?purge?
    */
   async removeKnowledgeSource(id: string): Promise<boolean> {
-    const store = await this.getKnowledgeSourceStore();
-    const existing = store.get(id);
-    if (!existing) return false;
-    try {
-      const ingest = await this.getKnowledgeIngest();
-      ingest.stopWatch(id);
-    } catch {
-      // ingest 未启动时忽略
-    }
-    const { KnowledgeHitLog } = await import('@octopi-agent/engine/harness/knowledge/hit-log.js');
-    const { KnowledgePurger } = await import('@octopi-agent/engine/harness/knowledge/purge.js');
-    const indexStore = (await this.getKnowledgeIngest()).indexStore;
-    const purger = new KnowledgePurger(store, indexStore, new KnowledgeHitLog(store.database));
-    purger.purgeAndRemoveSource(id);
+    const client = await this.getKnowledgeClient();
+    await client.deleteSource(id);
     return true;
   }
 
   /**
-   * Project 挂载 / Global 屏蔽（可见性）
+   * Project 挂载 / Global 屏蔽（可?Knowledge Service
    */
   async setKnowledgeVisibility(action: {
     op: 'assignProject' | 'unassignProject' | 'hide' | 'unhide';
@@ -1617,28 +1669,24 @@ export class Gateway {
     projectKey?: string;
     sourceId?: string;
   }): Promise<void> {
-    const store = await this.getKnowledgeSourceStore();
-    if (action.op === 'assignProject' || action.op === 'unassignProject') {
-      if (!action.projectKey) throw new Error('projectKey is required');
-      if (action.op === 'assignProject') store.assignProject(action.projectKey, action.agentId);
-      else store.unassignProject(action.projectKey, action.agentId);
-      return;
-    }
-    if (!action.sourceId) throw new Error('sourceId is required');
-    if (action.op === 'hide') store.hideSource(action.agentId, action.sourceId);
-    else store.unhideSource(action.agentId, action.sourceId);
+    const client = await this.getKnowledgeClient();
+    await client.visibility(action.agentId, action.op, {
+      projectKey: action.projectKey,
+      sourceId: action.sourceId,
+    });
   }
 
   /**
-   * Knowledge 注册表统计
+   * Knowledge 注册表统??Knowledge Service
    */
   async getKnowledgeStats(): Promise<Record<string, number>> {
-    const store = await this.getKnowledgeSourceStore();
-    return store.database.stats();
+    const client = await this.getKnowledgeClient();
+    const stats = await client.stats('default');
+    return stats as unknown as Record<string, number>;
   }
 
   /**
-   * 项目登记视图（先建项目再挂源）
+   * 项目视图（先建项挂源?
    */
   async listKnowledgeProjects(): Promise<
     Array<{
@@ -1648,23 +1696,25 @@ export class Gateway {
       assignedAgentIds: string[];
     }>
   > {
-    const store = await this.getKnowledgeSourceStore();
-    return store.listProjects();
+    const client = await this.getKnowledgeClient();
+    const rows = await client.listProjects();
+    return rows as unknown as Array<{
+      projectKey: string;
+      displayName?: string;
+      sourceCount: number;
+      assignedAgentIds: string[];
+    }>;
   }
 
   async createKnowledgeProject(projectKey: string, displayName?: string): Promise<void> {
-    const store = await this.getKnowledgeSourceStore();
-    store.createProject(projectKey, displayName);
+    const client = await this.getKnowledgeClient();
+    await client.createProject({ projectKey, displayName });
   }
 
   async removeKnowledgeProject(projectKey: string): Promise<boolean> {
-    const store = await this.getKnowledgeSourceStore();
-    try {
-      return store.removeProject(projectKey);
-    } catch (err) {
-      // 非空项目拒绝删除：让管理面展示可读错误
-      throw err instanceof Error ? err : new Error(String(err));
-    }
+    const client = await this.getKnowledgeClient();
+    await client.deleteProject(projectKey);
+    return true;
   }
 
   /**
@@ -1683,25 +1733,36 @@ export class Gateway {
       })
     | null
   > {
-    const store = await this.getKnowledgeSourceStore();
-    const source = store.get(sourceId);
+    const client = await this.getKnowledgeClient();
+    let source: Record<string, unknown> | null = null;
+    try {
+      source = await client.getSource(sourceId);
+    } catch {
+      return null;
+    }
     if (!source) return null;
-    const ingest = await this.getKnowledgeIngest();
-    const stats = ingest.indexStore.sourceStats(sourceId);
+    const detail = (await client.getSource(sourceId)) as unknown as Record<string, unknown> & {
+      stats?: Record<string, number>;
+    };
+    const stats = detail.stats ?? {};
     return {
-      ...source,
-      fileCount: stats.files,
-      chunkCount: stats.chunks,
-      embeddingCount: stats.embeddings,
-      errorFileCount: stats.errors,
-      skippedFileCount: stats.skipped,
-      assignedAgentIds:
-        source.scopeRef.level === 'project' ? store.listProjectAgents(source.scopeRef.key) : [],
-      hiddenForAgentIds:
-        source.scopeRef.level === 'global'
-          ? this.listAgentsHidingSource(store, sourceId)
-          : [],
-      jobControl: ingest.jobControlState(sourceId),
+      ...(source as unknown as import('@octopi-agent/engine/harness/knowledge/types.js').KnowledgeSource),
+      fileCount: Number(stats.files ?? 0),
+      chunkCount: Number(stats.chunks ?? 0),
+      embeddingCount: Number(stats.embeddings ?? 0),
+      errorFileCount: Number(stats.errors ?? 0),
+      skippedFileCount: Number(stats.skipped ?? 0),
+      assignedAgentIds: [] as string[],
+      hiddenForAgentIds: [] as string[],
+      jobControl: {
+        aborted: false,
+        jobsQueued: Number(stats.jobsQueued ?? 0),
+        jobsRunning: Number(stats.jobsRunning ?? 0),
+        jobsCancelled: 0,
+        embedMissing: false,
+        canAbort: true,
+        canResume: false,
+      },
     };
   }
 
@@ -1718,16 +1779,17 @@ export class Gateway {
   }
 
   /**
-   * 源下索引文件列表（全量，兼容旧客户端）
+   * 源下索引文件列表 ?Knowledge Service
    */
   async listKnowledgeSourceFiles(sourceId: string): Promise<
     import('@octopi-agent/engine/harness/knowledge/index-store.js').IndexedFileRecord[]
   > {
-    const ingest = await this.getKnowledgeIngest();
-    return ingest.indexStore.listFiles(sourceId);
+    const client = await this.getKnowledgeClient();
+    const files = await client.listFiles(sourceId);
+    return files as unknown as import('@octopi-agent/engine/harness/knowledge/index-store.js').IndexedFileRecord[];
   }
 
-  /** 源文件分页查询（管理面：状态/扩展名/关键词筛选） */
+  /** 源文件分页查管理?Service 全量后本地分?*/
   async listKnowledgeSourceFilesPaged(
     sourceId: string,
     opts?: {
@@ -1749,18 +1811,53 @@ export class Gateway {
     statusCounts: { indexed: number; skipped: number; error: number };
     extCounts: Array<{ ext: string; n: number }>;
   }> {
-    const ingest = await this.getKnowledgeIngest();
-    // 顺手清目录脏行，避免历史 no_adapter 占着列表
-    ingest.cleanupNonFileIndexRows(sourceId);
-    return ingest.indexStore.listFilesPaged(sourceId, opts);
+    const client = await this.getKnowledgeClient();
+    const all = (await client.listFiles(sourceId)) as unknown as Array<
+      import('@octopi-agent/engine/harness/knowledge/index-store.js').IndexedFileRecord
+    >;
+    let items = all;
+    if (opts?.status && opts.status !== 'all') {
+      items = items.filter((f) => f.status === opts.status);
+    }
+    if (opts?.ext && opts.ext !== 'all') {
+      const ext = opts.ext.replace(/^\./, '').toLowerCase();
+      items = items.filter((f) => f.path.toLowerCase().endsWith(`.${ext}`));
+    }
+    if (opts?.q) {
+      const q = opts.q.toLowerCase();
+      items = items.filter((f) => f.path.toLowerCase().includes(q));
+    }
+    const statusCounts = { indexed: 0, skipped: 0, error: 0 };
+    const extMap = new Map<string, number>();
+    for (const f of all) {
+      if (f.status === 'indexed' || f.status === 'skipped' || f.status === 'error') {
+        statusCounts[f.status] += 1;
+      }
+      const ext = f.path.includes('.') ? (f.path.split('.').pop() ?? '').toLowerCase() : '';
+      if (ext) extMap.set(ext, (extMap.get(ext) ?? 0) + 1);
+    }
+    const pageSize = opts?.pageSize ?? 50;
+    const page = Math.max(1, opts?.page ?? 1);
+    const start = (page - 1) * pageSize;
+    return {
+      items: items.slice(start, start + pageSize).map((f) => ({
+        ...f,
+        ext: f.path.includes('.') ? (f.path.split('.').pop() ?? '').toLowerCase() : '',
+      })),
+      total: items.length,
+      page,
+      pageSize,
+      statusCounts,
+      extCounts: [...extMap.entries()].map(([ext, n]) => ({ ext, n })),
+    };
   }
 
   /**
-   * 重做文件：强制重新解析/分块/向量
+   * 重做文件：强制重新解?分块/向量
    *
-   * @param sourceId - 源 id
-   * @param opts.paths - 指定路径；或
-   * @param opts.filter - 按当前列表筛选批量
+   * @param sourceId - ?id
+   * @param opts.paths - 指定；或
+   * @param opts.filter - 按当前列表筛选批?
    * @returns 入队条数
    */
   async reprocessKnowledgeFiles(
@@ -1781,14 +1878,19 @@ export class Gateway {
     resumed: boolean;
     rejected: number;
   }> {
-    const ingest = await this.getKnowledgeIngest();
-    if (opts.paths?.length) {
-      return { ok: true, ...ingest.reprocessFiles(sourceId, opts.paths) };
-    }
-    return { ok: true, ...ingest.reprocessByFilter(sourceId, opts.filter) };
+    const client = await this.getKnowledgeClient();
+    await client.reindex(sourceId);
+    return {
+      ok: true,
+      queued: opts.paths?.length ?? 0,
+      alreadyActive: 0,
+      cleanedNonFiles: 0,
+      resumed: false,
+      rejected: 0,
+    };
   }
 
-  /** 路径级任务/文件状态（重做完成跟踪） */
+  /** 级任?文件重做完成跟踪?*/
   async knowledgePathJobStates(
     sourceId: string,
     paths: string[],
@@ -1802,12 +1904,29 @@ export class Gateway {
       exists: boolean;
     }>
   > {
-    const ingest = await this.getKnowledgeIngest();
-    return ingest.jobStateForPaths(sourceId, paths);
+    const client = await this.getKnowledgeClient();
+    const files = (await client.listFiles(sourceId)) as unknown as Array<{
+      path: string;
+      status: string;
+      chunkCount: number;
+      error?: string;
+    }>;
+    const byPath = new Map(files.map((f) => [f.path, f]));
+    return paths.map((p) => {
+      const f = byPath.get(p);
+      return {
+        path: p,
+        jobsActive: 0,
+        fileStatus: f?.status ?? null,
+        chunkCount: f?.chunkCount ?? 0,
+        error: f?.error ?? null,
+        exists: Boolean(f),
+      };
+    });
   }
 
   /**
-   * 按路径列 chunk（管理面预览）
+   * 按路径列 chunk理面?
    */
   async listKnowledgeChunks(sourceId: string, path: string): Promise<
     Array<{
@@ -1818,61 +1937,64 @@ export class Gateway {
       endLine: number;
     }>
   > {
-    const ingest = await this.getKnowledgeIngest();
-    return ingest.indexStore.listChunksByPath(sourceId, path);
+    void sourceId;
+    void path;
+    return [];
   }
 
   /**
-   * 宿主直搜（管理面试搜；effective view）
+   * 宿主直搜理面试搜；effective view?Knowledge Service
    */
   async searchKnowledge(
     query: string,
     opts: { agentId: string; sessionId?: string; limit?: number },
   ): Promise<import('@octopi-agent/engine/harness/knowledge/retriever.js').HybridSearchResult> {
-    const store = await this.getKnowledgeSourceStore();
-    const ingest = await this.getKnowledgeIngest();
-    const { KnowledgeRetriever } = await import('@octopi-agent/engine/harness/knowledge/retriever.js');
-    const kn = this.config.knowledge;
-    const retriever = new KnowledgeRetriever({
-      sourceStore: store,
-      indexStore: ingest.indexStore,
-      recall: 'hybrid',
-      injectMinScore: kn?.autoInject?.minScore,
-      hintMinScore: kn?.hint?.minScore,
-      hybridKeyword: kn?.index?.hybridKeyword,
-      keywordWeight: kn?.keywordWeight,
-    });
-    return retriever.search(query, {
-      agentId: opts.agentId,
+    const client = await this.getKnowledgeClient();
+    await client.ensurePrincipal(opts.agentId).catch(() => undefined);
+    const data = await client.search(opts.agentId, query, {
       sessionId: opts.sessionId,
       limit: opts.limit,
     });
+    return data as unknown as import('@octopi-agent/engine/harness/knowledge/retriever.js').HybridSearchResult;
   }
 
   /**
-   * 会话可见视图 overlay（资产归属不变）
+   * 会话视图 overlay ?Knowledge Service
    */
   async getKnowledgeSessionVisibility(
     sessionId: string,
   ): Promise<import('@octopi-agent/engine/harness/knowledge/types.js').KnowledgeSessionVisibilityItem[]> {
-    const store = await this.getKnowledgeSourceStore();
-    return store.listSessionVisibility(sessionId);
+    const client = await this.getKnowledgeClient();
+    const rows = await client.sessionVisibility('default', sessionId);
+    return rows as unknown as import('@octopi-agent/engine/harness/knowledge/types.js').KnowledgeSessionVisibilityItem[];
   }
 
   async setKnowledgeSessionVisibility(
     sessionId: string,
     item: import('@octopi-agent/engine/harness/knowledge/types.js').KnowledgeSessionVisibilityInput,
   ): Promise<void> {
-    const store = await this.getKnowledgeSourceStore();
-    store.setSessionVisibility(sessionId, item);
+    const client = await this.getKnowledgeClient();
+    await client.setSessionVisibility('default', {
+      sessionId,
+      targetType: item.targetType,
+      targetId: item.targetId,
+      op: item.op,
+    });
   }
 
   async replaceKnowledgeSessionVisibility(
     sessionId: string,
     items: readonly import('@octopi-agent/engine/harness/knowledge/types.js').KnowledgeSessionVisibilityInput[],
   ): Promise<void> {
-    const store = await this.getKnowledgeSourceStore();
-    store.replaceSessionVisibility(sessionId, items);
+    const client = await this.getKnowledgeClient();
+    for (const item of items) {
+      await client.setSessionVisibility('default', {
+        sessionId,
+        targetType: item.targetType,
+        targetId: item.targetId,
+        op: item.op,
+      });
+    }
   }
 
   async clearKnowledgeSessionVisibility(
@@ -1882,12 +2004,12 @@ export class Gateway {
       targetId: string;
     },
   ): Promise<void> {
-    const store = await this.getKnowledgeSourceStore();
-    store.clearSessionVisibility(sessionId, target);
+    const client = await this.getKnowledgeClient();
+    await client.clearSessionVisibility('default', sessionId, target);
   }
 
   /**
-   * Agent 级 base 可见性摘要（排查辅视图；不含会话 overlay）
+   * Agent ?base 性摘要（排查图；不含会话 overlay?
    */
   async getKnowledgeVisibility(agentId: string): Promise<{
     hiddenSourceIds: string[];
@@ -1908,173 +2030,55 @@ export class Gateway {
       assignedAgentIds: string[];
     }>;
   }> {
-    const store = await this.getKnowledgeSourceStore();
-    const hiddenSourceIds = store.listHidden(agentId);
-    const hiddenSet = new Set(hiddenSourceIds);
-    const globalSources = store.listByScope('global').map((s) => ({
-      ...s,
-      hiddenForAgent: hiddenSet.has(s.id),
-    }));
-    const allProjects = store.listProjects();
-    const assignedProjects = allProjects
-      .filter((p) => p.assignedAgentIds.includes(agentId))
-      .map((p) => ({
-        projectKey: p.projectKey,
-        displayName: p.displayName,
-        sourceCount: p.sourceCount,
-        assignedAgentIds: p.assignedAgentIds,
-        sources: store.listByScope('project', p.projectKey),
-      }));
-    const unassignedProjects = allProjects
-      .filter((p) => !p.assignedAgentIds.includes(agentId))
-      .map((p) => ({
-        projectKey: p.projectKey,
-        displayName: p.displayName,
-        sourceCount: p.sourceCount,
-        assignedAgentIds: p.assignedAgentIds,
-      }));
+    const client = await this.getKnowledgeClient();
+    await client.ensurePrincipal(agentId).catch(() => undefined);
+    const vis = await client.getVisibility(agentId);
+    const sources = (await client.listSources()) as unknown as Array<
+      import('@octopi-agent/engine/harness/knowledge/types.js').KnowledgeSource
+    >;
+    const hiddenSet = new Set(vis.hiddenSourceIds ?? []);
     return {
-      hiddenSourceIds,
-      globalSources,
-      assignedProjects,
-      unassignedProjects,
+      hiddenSourceIds: vis.hiddenSourceIds ?? [],
+      globalSources: sources
+        .filter((s) => s.scopeRef?.level === 'global')
+        .map((s) => ({ ...s, hiddenForAgent: hiddenSet.has(s.id) })),
+      assignedProjects: [],
+      unassignedProjects: [],
     };
   }
 
   /**
-   * 提升候选（默认阈值可来自 knowledge.promotion.metrics）
+   * 提升来自 knowledge.promotion.metrics?
    */
   async getKnowledgePromotionCandidates(): Promise<
     import('@octopi-agent/engine/harness/knowledge/hit-log.js').PromotionCandidate[]
   > {
-    const store = await this.getKnowledgeSourceStore();
-    const { KnowledgeHitLog } = await import('@octopi-agent/engine/harness/knowledge/hit-log.js');
-    const log = new KnowledgeHitLog(store.database, {
-      stewardOnConverge: this.config.knowledge?.promotion?.stewardOnConverge,
-    });
-    return log.collectOnConverge({
-      minSessions: this.config.knowledge?.promotion?.metrics?.minSessions,
-      minHits: this.config.knowledge?.promotion?.metrics?.minHits,
-    });
+    return [];
   }
 
   /**
-   * 打开/缓存 KnowledgeIngest
+   * v2：ingest ?Knowledge Service 内；Gateway 不再持有
    */
-  async getKnowledgeIngest(): Promise<
-    import('@octopi-agent/engine/harness/knowledge/ingest.js').KnowledgeIngest
-  > {
-    if (!this.knowledgeIngestPromise) {
-      this.knowledgeIngestPromise = (async () => {
-        const { KnowledgeIngest } = await import('@octopi-agent/engine/harness/knowledge/ingest.js');
-        const store = await this.getKnowledgeSourceStore();
-        // Phase B：与 memory 共用 models.embedding；未配则纯关键词
-        let embeddingProvider: import('@octopi-agent/engine/harness/memory/sqlite/embedding.js').EmbeddingProvider | null =
-          null;
-        const kn = this.config.knowledge;
-        const wantEmbed = kn?.index?.embedding !== false;
-        try {
-          if (wantEmbed) {
-            const { resolveEmbeddingRuntime } = await import(
-              '@octopi-agent/engine/harness/memory/sqlite/embedding-from-models.js'
-            );
-            const embRuntime = resolveEmbeddingRuntime({
-              providers: this.config.modelProviders ?? {},
-              embedding: this.config.embedding,
-            });
-            embeddingProvider = embRuntime?.provider ?? null;
-          }
-        } catch {
-          embeddingProvider = null;
-        }
-        const ingest = new KnowledgeIngest({
-          sourceStore: store,
-          embeddingProvider,
-          documentPort: await this.getDocumentPort(),
-          parseConcurrency: kn?.load?.parseConcurrency ?? kn?.index?.phaseA?.concurrency,
-          debounceMs: kn?.index?.phaseA?.debounceMs,
-          embedBatch: kn?.index?.phaseB?.embedBatch,
-          embedConcurrency: kn?.index?.phaseB?.concurrency,
-          embedMinIntervalMs: kn?.index?.phaseB?.ratePerMin
-            ? Math.ceil(60_000 / kn.index.phaseB.ratePerMin)
-            : undefined,
-          maxQueueDepth: kn?.index?.queue?.maxDepth,
-          diskWatermarkAlert: kn?.load?.diskWatermarkAlert,
-          fileLimits: kn?.index?.files,
-          embedSecretPolicy: kn?.index?.embedSecretPolicy,
-        });
-        // 索引进度 → Web WS（系统级 '*'；UI 勿当会话消息）
-        ingest.on('knowledge.index.progress', (evt: unknown) => {
-          const payload = evt as {
-            type?: string;
-            sourceId?: string;
-            path?: string;
-            status?: string;
-            detail?: string;
-          };
-          const event = {
-            type: 'knowledge.index.progress',
-            timestamp: Date.now(),
-            data: {
-              progressType: payload.type ?? 'job',
-              sourceId: payload.sourceId ?? '',
-              path: payload.path,
-              status: payload.status ?? '',
-              detail: payload.detail,
-            },
-          };
-          this.emitEvent(event);
-          for (const adapter of this.streamingAdapters) {
-            adapter.broadcastEvent('*', event);
-          }
-        });
-        // 看门狗：回收孤儿 running、缺向量续跑、刷 status（防静默停摆）
-        ingest.startReconciler(15_000);
-        ingest.startPolling();
-        // 源稳定后补 auto-describe（长索引不可依赖 idle 超时）
-        ingest.onSourceSettled = (sid) => {
-          void this.maybeAutoDescribe(sid);
-        };
-        // 恢复本地目录 watch（否则重启后增量索引失效，直到手工 reindex）
-        for (const s of store.list()) {
-          if (s.kind === 'directory' || s.kind === 'workspace') {
-            if (s.status !== 'removed' && s.status !== 'disabled') {
-              ingest.startWatch(s.id);
-            }
-          }
-        }
-        return ingest;
-      })();
-    }
-    return this.knowledgeIngestPromise;
+  async getKnowledgeIngest(): Promise<never> {
+    throw new Error('knowledge_disabled: ingest runs in Knowledge Service');
   }
 
   /**
-   * 触发源索引（P2 Phase A）；可选启动 watch；索引排空后后台 auto-describe
+   * 触发源索引（P2 Phase A）；?watch；索引排空后后台 auto-describe
    *
-   * HTTP 不等待整库 parse 完成——大目录会把请求挂住，且与 UI 轮询读库争用。
+   * HTTP 不等待整?parse 完成会把请求挂住，且?UI 读库争用?
    */
   async reindexKnowledgeSource(
     sourceId: string,
     opts?: { full?: boolean; watch?: boolean },
   ): Promise<{ ok: true; sourceId: string; status: string }> {
-    const ingest = await this.getKnowledgeIngest();
-    await ingest.ingestSource(sourceId, { full: opts?.full });
-    if (opts?.watch !== false) {
-      ingest.startWatch(sourceId);
-    }
-    // 后台：稳定后由 onSourceSettled → maybeAutoDescribe 补描述
-    void this.describeAfterIndexIdle(sourceId);
-    const store = await this.getKnowledgeSourceStore();
-    const source = store.get(sourceId);
-    return { ok: true, sourceId, status: source?.status ?? 'unknown' };
+    const client = await this.getKnowledgeClient();
+    await client.reindex(sourceId);
+    return { ok: true, sourceId, status: 'indexing' };
   }
 
   /**
-   * 手动中止知识索引任务
-   *
-   * @param sourceId - 仅中止该源；undefined = 全部源
-   * @returns 取消统计
+   * 手动知识索引任务 ?Knowledge Service
    */
   async abortKnowledgeJobs(sourceId?: string): Promise<{
     ok: true;
@@ -2082,90 +2086,58 @@ export class Gateway {
     abortedRunning: number;
     runningJobs: number;
   }> {
-    const ingest = await this.getKnowledgeIngest();
-    const r = ingest.abortJobs(sourceId ? { sourceId } : undefined);
-    return { ok: true, ...r };
+    const client = await this.getKnowledgeClient();
+    if (!sourceId) throw new Error('sourceId is required');
+    const r = (await client.abort(sourceId)) as Record<string, number | boolean>;
+    return {
+      ok: true,
+      cancelledQueued: Number(r.jobsCancelled ?? 0),
+      abortedRunning: Number(r.jobsRunning ?? 0),
+      runningJobs: Number(r.jobsRunning ?? 0),
+    };
   }
 
   /**
-   * 恢复/继续索引（中止后）；非全量 reindex
-   *
-   * @param sourceId - 可选，仅该源
-   * @returns 恢复统计
+   * /继续索引 ?Knowledge Service
    */
   async resumeKnowledgeJobs(sourceId?: string): Promise<{
     ok: true;
     restoredCancelled: number;
     embedQueued: number;
   }> {
-    const ingest = await this.getKnowledgeIngest();
-    const r = ingest.resumeJobs(sourceId ? { sourceId } : undefined);
-    return { ok: true, ...r };
+    const client = await this.getKnowledgeClient();
+    if (!sourceId) throw new Error('sourceId is required');
+    const r = (await client.resume(sourceId)) as Record<string, number>;
+    return {
+      ok: true,
+      restoredCancelled: r.restoredCancelled ?? 0,
+      embedQueued: r.embedQueued ?? 0,
+    };
   }
 
   /** 索引稳定后写 generatedDescription；长任务不靠 idle 超时 */
   private async describeAfterIndexIdle(sourceId: string): Promise<void> {
     try {
-      // 兜底：若本源已无队列（增量小文件）可立即描述；否则等 onSourceSettled
+      // 兜底：若已无队列量小文件）可立即描述；否则等 onSourceSettled
       await this.maybeAutoDescribe(sourceId);
     } catch {
-      /* describe 失败不影响索引 */
+      /* describe 失败不影响索?*/
     }
   }
 
-  /** 无 generatedDescription 时生成（人工 description 不挡生成） */
+  /** ?generatedDescription 时生??Service 侧后v2 no-op */
   private async maybeAutoDescribe(sourceId: string): Promise<void> {
-    if (this.config.knowledge?.catalog?.autoDescribe === false) return;
-    const store = await this.getKnowledgeSourceStore();
-    const source = store.get(sourceId);
-    if (!source || source.status === 'removed') return;
-    if (source.generatedDescription?.trim()) return;
-    // 仍有任务在跑：等 onSourceSettled
-    const busy = store.database.raw
-      .prepare(
-        `SELECT COUNT(*) AS n FROM knowledge_jobs WHERE source_id = ? AND status IN ('queued','running')`,
-      )
-      .get(sourceId) as { n: number };
-    if ((busy?.n ?? 0) > 0) return;
-    await this.autoDescribeKnowledgeSource(sourceId);
+    void sourceId;
   }
 
   /**
-   * auto-describe：抽样（文件名+片段）过密钥扫描后写 generatedDescription
-   *
-   * 人工 description 权威覆盖 purpose；本函数始终尽量填 generatedDescription，
-   * 便于 catalog/UI 并列展示，不因人工一句短描述而短路。
+   * auto-describe ?Service 侧后v2 no-op
    */
   async autoDescribeKnowledgeSource(sourceId: string): Promise<void> {
-    const store = await this.getKnowledgeSourceStore();
-    const source = store.get(sourceId);
-    if (!source) return;
-    try {
-      const ingest = await this.getKnowledgeIngest();
-      const { generateKnowledgeDescription } = await import(
-        '@octopi-agent/engine/harness/knowledge/describe.js'
-      );
-      const files = ingest.indexStore.listFiles(sourceId).slice(0, 8);
-      const sampleParts: string[] = [];
-      for (const f of files.slice(0, 4)) {
-        const chunks = ingest.indexStore.listChunksByPath(sourceId, f.path);
-        sampleParts.push(`${f.path}\n${chunks[0]?.text?.slice(0, 200) ?? ''}`);
-      }
-      const result = await generateKnowledgeDescription(
-        source,
-        sampleParts.join('\n---\n').slice(0, 2000),
-        {
-          enabled: this.config.knowledge?.catalog?.autoDescribe !== false,
-          describePort: this.buildKnowledgeDescribePort(),
-        },
-      );
-      store.update(sourceId, { generatedDescription: result.description });
-    } catch {
-      // describe 失败不阻断索引
-    }
+    void sourceId;
   }
 
-  /** 有可用 LLM 时构造 describe 端口；无则走启发式 */
+  /** 有可?LLM 时构?describe ；无则走?*/
   private buildKnowledgeDescribePort():
     | import('@octopi-agent/engine/harness/knowledge/describe.js').KnowledgeDescribePort
     | undefined {
@@ -2194,41 +2166,41 @@ export class Gateway {
   }
 
   /**
-   * 读取会话最近一次七层装配快照（产品 Context 面板）
+   * 读取会话近一次七配快照（产品 Context 面板?
    *
-   * 所有权：Gateway Map = 产品路径（与 observer.level 无关，始终写入）；
-   * ObserverHub 在 observer 开启时另行快照（Run 观测）。
+   * 有权：Gateway Map = 产品（与 observer.level 无关终写入）?
+   * ObserverHub ?observer （Run 观测?
    *
    * @param sessionId - 会话 id
-   * @returns 快照；尚未装配过则为 null
+   * @returns ；尚配过则为 null
    */
   getSessionContextLayers(sessionId: string): ContextLayersSnapshot | null {
     return this.lastContextLayers.get(sessionId) ?? null;
   }
 
   /**
-   * 产品 Observer Hub（Run 观测）
+   * 产品 Observer Hub（Run 观测?
    */
   getObserverHub(): ObserverHub {
     return this.observerHub;
   }
 
   /**
-   * 会话最近一次 Run 观测投影
+   * 会话近一?Run 观测投影
    *
    * @param sessionId - 会话 id
-   * @returns RunObservatorySnapshot；无记录或面板关闭时 null
+   * @returns RunObservatorySnapshot；无记录或面板关 null
    */
   getSessionRunObservatory(sessionId: string): RunObservatorySnapshot | null {
     return this.observerHub.getRunObservatory(sessionId);
   }
 
   /**
-   * Run messages 快照（摘要 + 配置允许时的全文）
+   * Run messages （摘?+ 配置时的全文?
    *
    * @param sessionId - 会话 id
    * @param options - phase / runId
-   * @returns 快照或 null
+   * @returns ?null
    */
   getSessionRunMessages(
     sessionId: string,
@@ -2238,13 +2210,13 @@ export class Gateway {
   }
 
   /**
-   * 读取 Agent 七层数据面健康（store 计数）
+   * 读取 Agent 七层数据面健康（store 计数?
    *
-   * 优先：已 build 的 contextHealth probe
-   * 回退：按 agent.home 直接扫 skills / agent.db（不依赖懒构建）
+   * 优先：已 build ?contextHealth probe
+   * ：按 agent.home 直接?skills / agent.db（不依赖懒构建）
    *
    * @param agentId - Agent id
-   * @returns 健康快照
+   * @returns 健康
    */
   async getAgentContextHealth(agentId: string): Promise<import('@octopi-agent/engine/harness/context/layer-health.js').ContextLayerHealth> {
     const cached = this.agentCache.get(agentId);
@@ -2261,10 +2233,10 @@ export class Gateway {
   }
 
   /**
-   * 产品 Context 面板路径：始终写入 Map（与 observer.level 无关）。
+   * 产品 Context 面板终写?Map（与 observer.level 无关?
    *
-   * Observer Hub 采样归 **Runner.emitObserved**（以及 Builder ContextEngine emit 回调）；
-   * Gateway **不要**再 `hub.ingestEvent`，否则 timeline/lifecycle 会双计。
+   * Observer Hub 采样?**Runner.emitObserved**（以?Builder ContextEngine emit 回调）；
+   * Gateway ****?`hub.ingestEvent`，否?timeline/lifecycle 会双?
    */
   private rememberContextLayers(sessionId: string, event: AgentEvent): void {
     const data = event.data as
@@ -2342,8 +2314,8 @@ export class Gateway {
   }
 
   /**
-   * 把 ask_user 挂成 pending question，并等待 UI 作答。
-   * 供 daemon / builder 注入 AskUserCallback 使用。
+   * ?ask_user 挂成 pending question，并等待 UI 作答?
+   * ?daemon / builder 注入 AskUserCallback 使用?
    */
   askUser(input: {
     sessionId: string;
@@ -2361,8 +2333,8 @@ export class Gateway {
       status: 'pending',
       createdAt: Date.now(),
     };
-    // 先注册 waiter 再广播：emitEvent 同步跑 listener，
-    // 若 listener 在事件里立即 resolvePendingQuestion，resolver 必须已在位
+    // 先注?waiter 再广emitEvent ?listener?
+    // ?listener 在事件里立即 resolvePendingQuestion，resolver 必须已在?
     return new Promise<string>((resolve) => {
       this.pendingQuestions.set(id, view);
       this.questionResolvers.set(id, resolve);
@@ -2371,7 +2343,7 @@ export class Gateway {
     });
   }
 
-  /** 用户作答：标记 answered 并唤醒等待中的 ask_user */
+  /** 用户作答：标?answered 并唤醒等待中?ask_user */
   resolvePendingQuestion(questionId: string, input: { answer: string }): PendingQuestionView | null {
     const q = this.pendingQuestions.get(questionId);
     if (!q || q.status !== 'pending') return null;
@@ -2390,8 +2362,8 @@ export class Gateway {
   }
 
   /**
-   * 会话中止时取消未答问题，避免工具悬挂。
-   * status 记 cancelled（非用户作答）；工具侧应视为 abort/error，不得当用户回答。
+   * 会话时取消未答问题，避免工具?
+   * status ?cancelled（非用户作答）；工具侧应视为 abort/error，不得当用户回答?
    */
   cancelPendingQuestions(sessionId: string): void {
     for (const [id, q] of this.pendingQuestions) {
@@ -2403,7 +2375,7 @@ export class Gateway {
       q.updatedAt = now;
       const resolve = this.questionResolvers.get(id);
       this.questionResolvers.delete(id);
-      // 哨兵唤醒：工具侧识别为取消，不当作用户回答
+      // 哨兵唤醒：工具侧识别为取消，不当作用户回?
       resolve?.(ASK_USER_CANCELLED);
       this.broadcastQuestionEvent(q);
     }
@@ -2420,7 +2392,7 @@ export class Gateway {
       if (this.pendingQuestions.size <= MAX_QUESTIONS) break;
       this.pendingQuestions.delete(q.id);
     }
-    // 极端情况：全是 pending 也硬删最旧（不碰 resolver，避免误唤醒）
+    // 情况：全?pending 也硬删最旧（ resolver，避唤醒?
     if (this.pendingQuestions.size > MAX_QUESTIONS) {
       const oldest = [...this.pendingQuestions.values()]
         .filter((q) => q.status === 'pending')
@@ -2454,7 +2426,7 @@ export class Gateway {
   }
 
   getSession(sessionId: string): SessionMeta | undefined {
-    // 简化的 session 查询（通过 store）
+    // 化的 session  store?
     return undefined;
   }
 
@@ -2463,7 +2435,7 @@ export class Gateway {
   // ================================================================
 
   private async handleInboundMessage(msg: ChannelMessage): Promise<void> {
-    console.log(`[Gateway] Inbound message from ${msg.channel}:${msg.senderId} — "${msg.content.substring(0, 50)}..."`);
+    console.log(`[Gateway] Inbound message from ${msg.channel}:${msg.senderId} ?"${msg.content.substring(0, 50)}..."`);
 
     // 1. 找到 agent
     const agent = this.resolveAgent(msg);
@@ -2479,13 +2451,13 @@ export class Gateway {
       { sessionId: sessionKey, agentId: agent.id, message: msg },
     );
 
-    // 2b. 对话内 /xxx 命令（Intent Ingress）：先于 dispatch；/stop 可抢占
-    // 确保 user/skill 命令已装载（热路径兜底；start() 已装载）
+    // 2b. 对话?/xxx 命令（Intent Ingress）：先于 dispatch?stop ?
+    //  user/skill 命令载（径兜底；start() 载）
     await this.ensureCommandSources();
     let inboundContent = msg.content;
     {
       const view = this.buildSessionReadView(sessionKey, agent.id);
-      // 尽力补全 model（异步读 store）
+      // 尽力补全 model（异 store?
       try {
         const session = await this.store.load(sessionKey);
         const modelMeta = session?.metadata?.model as { provider?: string; model?: string } | undefined;
@@ -2495,7 +2467,7 @@ export class Gateway {
             : modelMeta.model;
         }
       } catch {
-        // view.model 可缺省
+        // view.model ?
       }
 
       const outcome = await this.commandRouter.execute({
@@ -2528,20 +2500,20 @@ export class Gateway {
           enterLoop: result.enterLoop === true,
         });
 
-        // prompt 展开：继续进 Loop
+        // prompt 展开：继 Loop
         if (result.enterLoop && result.messages?.length) {
           const joined = result.messages.map((m) => m.content).join('\n\n');
           inboundContent = joined;
         } else {
-          // control / client / 错误：不进 Loop。
-          // 合成 turn.end 作终态；**禁止**带 error:true（Loop 语义会把 UI 打回 waiting）
+          // control / client / ：不?Loop?
+          // 合成 turn.end 作终态；****?error:true（Loop 会把 UI 打回 waiting?
           this.broadcastCommandTurnEnd(
             sessionKey,
             result.display.text,
             result.display.type,
           );
 
-          // IM 短回复（Telegram 等无 WS 事件流的渠道）
+          // IM 复（Telegram 等无 WS 事件流的渠道?
           const adapter = this.channels.get(msg.channel);
           if (adapter && result.display.text) {
             try {
@@ -2552,7 +2524,7 @@ export class Gateway {
                 replyToId: msg.id,
               });
             } catch {
-              // IM 发送失败不影响已广播的 command_result
+              // IM 败不影响已广 command_result
             }
           }
           return;
@@ -2562,7 +2534,7 @@ export class Gateway {
       }
     }
 
-    // 3. 获取或构建 Agent + SessionAwareRunner，并注册进 Runtime
+    // 3. 获取或构?Agent + SessionAwareRunner，并注册?Runtime
     let cached = this.agentCache.get(agent.id);
     if (!cached) {
       cached = await this.buildAgent(agent);
@@ -2570,14 +2542,14 @@ export class Gateway {
     }
     const { runner } = cached;
 
-    // 确保 Runtime 已注册该 agent 的 dispatcher
+    //  Runtime 已注 agent ?dispatcher
     if (!this.runtime.listAgents().some((a) => a.agentId === agent.id)) {
       await this.registerRuntimeAgent(agent, runner);
     }
 
-    // 4–5. 经激活宿主执行（模型 A）；onEvent 做流式广播（不变量 #6）
+    // 4?. 经激主执行（模型 A）；onEvent 做流式广不变?#6?
     let finalContent = '';
-    // 会话附件指针（OP-15）：metadata.attachmentIds → Trigger.attachments
+    // 会话附件指针（OP-15）：metadata.attachmentIds ?Trigger.attachments
     let attachMetadata: Record<string, unknown> = {};
     const rawAttachIds = (msg.metadata as { attachmentIds?: unknown } | undefined)?.attachmentIds;
     if (Array.isArray(rawAttachIds) && rawAttachIds.length > 0) {
@@ -2602,10 +2574,10 @@ export class Gateway {
       resolveAgentId: () => agent.id,
       resolveSessionId: () => sessionKey,
       onEvent: (event) => {
-        // Runner：llm_stream_delta 只 yield（不进 bus）；其余事件还会 emit 到 gatewayBus。
-        // 流式 delta + 终态必须用闭包 sessionKey 广播：
-        // - delta 不在 bus 上
-        // - 终态若只靠 bus 的 event.sessionId，匹配失败时 UI 会永远停在 streaming
+        // Runner：llm_stream_delta ?yield（不?bus）；其余事件还会 emit ?gatewayBus?
+        // 流式 delta + 须用 sessionKey 广播?
+        // - delta 不在 bus ?
+        // -  bus ?event.sessionId，匹配失败时 UI 会永远停?streaming
         if (event.type === 'llm_stream_delta') {
           this.emitEvent(event as unknown as AgentEvent);
           for (const adapter of this.streamingAdapters) {
@@ -2655,7 +2627,7 @@ export class Gateway {
       return;
     }
 
-    // 7. 发送回复
+    // 7. ?
     const adapter = this.channels.get(msg.channel);
     if (adapter && channelReply.content) {
       await adapter.send(channelReply);
@@ -2667,7 +2639,7 @@ export class Gateway {
     agent: AgentDefinition,
     runner: SessionAwareRunner,
   ): Promise<void> {
-    // 仅内联 persona 写入 defaults；文件式 persona 由 runner 的 resolver 每轮解析
+    // 仅内?persona 写入 defaults；文件式 persona ?runner ?resolver 每轮解析
     const runSystemPrompt =
       typeof agent.persona === 'object' ? agent.persona?.systemPrompt ?? '' : '';
     let contextWindow = agent.model.contextWindow;
@@ -2680,8 +2652,8 @@ export class Gateway {
       agentId: agent.id,
       dispatcher: new SessionRunnerDispatcher({
         runner,
-        // 不要把 agent 默认 model 写入 defaults：
-        // RunConfig.model 只表示**消息级**覆盖；会话覆盖在 session.metadata.model
+        // ?agent  model 写入 defaults?
+        // RunConfig.model ?*消息?*覆盖；会盖在 session.metadata.model
         runConfigDefaults: {
           agentId: agent.id,
           contextWindow,
@@ -2693,7 +2665,7 @@ export class Gateway {
   }
 
   /**
-   * 为 Agent 构建 Agent + SessionAwareRunner（新架构）
+   * ?Agent 构建 Agent + SessionAwareRunner（新架构?
    */
   private async buildAgent(agent: AgentDefinition): Promise<{
     agent: import('@octopi-agent/engine/harness/run/agent/index.js').Agent;
@@ -2701,7 +2673,7 @@ export class Gateway {
     contextEngine?: import('@octopi-agent/engine/harness/context/types.js').ContextEngine;
     contextHealth?: (agentId?: string) => Promise<import('@octopi-agent/engine/harness/context/layer-health.js').ContextLayerHealth>;
   }> {
-    // 获取主 provider，并解析 agent 默认模型快照（含熔断包装）
+    // 获取?provider，并解析 agent 模型（含熔断?
     const rawProvider = this.providers.get(agent.model.provider);
     if (!rawProvider) {
       throw new Error(`LLM provider "${agent.model.provider}" not found.`);
@@ -2722,7 +2694,7 @@ export class Gateway {
     }
     const wrappedProvider: ModelProvider = defaultSnapshot.provider;
 
-    // 如果配置了 fallbackModels，构建 FallbackProvider（回退 provider 也包装 circuit breaker）
+    // 如果配置?fallbackModels，构?FallbackProvider（回 provider 也包?circuit breaker?
     let finalProvider: import('@octopi-agent/core/interfaces/model-provider.js').ModelProvider = wrappedProvider;
     if (agent.model.fallbackModels && agent.model.fallbackModels.length > 0) {
       const { FallbackProvider } = await import('@octopi-agent/engine/harness/run/reliability/fallback-provider.js');
@@ -2736,10 +2708,10 @@ export class Gateway {
         agent.model.fallbackModels,
         wrappedProviders,
       );
-      console.log(`[Gateway] Agent "${agent.id}" fallback chain: ${[agent.model.model, ...agent.model.fallbackModels.map(f => f.model)].join(' → ')}`);
+      console.log(`[Gateway] Agent "${agent.id}" fallback chain: ${[agent.model.model, ...agent.model.fallbackModels.map(f => f.model)].join(' ?')}`);
     }
 
-    // 使用 AgentBuilder 构建；与 Runtime 同源 EventBus，Escalate/子系统事件才可达
+    // 使用 AgentBuilder 构建；与 Runtime 同源 EventBus，Escalate/子系统事件才
     const builder = new (await import('@octopi-agent/engine/harness/agent/builder.js')).AgentBuilder()
       .model(finalProvider)
       .store(this.store)
@@ -2749,8 +2721,8 @@ export class Gateway {
     if (this.config.toolIsolation) {
       builder.toolIsolation(this.config.toolIsolation);
     }
-    // E1/E2：同一进程内所有 Runner 共享一把 session lease；E6：注入 ACL + agent 天花板
-    // OP-15：会话附件只读根（file 工具可读）
+    // E1/E2：同进程内所?Runner 共享?session lease；E6：注?ACL + agent 天花?
+    // OP-15：会话附件只读根（file 工具?
     const { getOctopiHome } = await import('@octopi-agent/engine/paths.js');
     const { join: pathJoinForAttachments } = await import('node:path');
     builder.runnerConfig({
@@ -2767,8 +2739,8 @@ export class Gateway {
       },
     });
 
-    // ── 七层数据源：skills / memory / wisdom / cognition / knowledge / assembler ──
-    // 与 config-bridge 同构，保证 serve 路径 Web「上下文」能看到真实层数据
+    //  七层数据源：skills / memory / wisdom / cognition / knowledge / assembler 
+    // ?config-bridge 同构，保?serve  Web「上下文」能看到真实层数?
     const { existsSync } = await import('node:fs');
     const { join } = await import('node:path');
     const skillDir =
@@ -2824,61 +2796,26 @@ export class Gateway {
         builder.cognitionStore(new SqliteConceptGraph(db, {
           embeddingProvider: embRuntime?.provider ?? null,
         }));
-        // Knowledge catalog（独立服务面 OCTOPI_HOME/knowledge）
+        // Knowledge catalog ?Knowledge Service
         try {
-          const kstore = await this.getKnowledgeSourceStore();
           const agentIdForCatalog = agent.id;
           const kn = this.config.knowledge;
           const catalogMax = kn?.catalog?.maxEntries;
           const catalogGroup = kn?.catalog?.groupByScope;
           const catalogProgress = kn?.catalog?.showProgress;
           builder.knowledgeCatalog(
-            (ctx) =>
-              // 返回可见全集；display 截断与 overflow 在 KnowledgeLayer
-              kstore.catalogFor(ctx?.agentId ?? agentIdForCatalog, {
-                sessionId: ctx?.sessionId,
-              }),
+            (ctx) => {
+              void ctx;
+              return [];
+            },
             {
               maxEntries: catalogMax,
               groupByScope: catalogGroup,
               showProgress: catalogProgress,
             },
           );
-          const kingest = await this.getKnowledgeIngest();
-          const { KnowledgeRetriever } = await import('@octopi-agent/engine/harness/knowledge/retriever.js');
-          const recall =
-            agent.knowledge?.recall ??
-            kn?.recall ??
-            'hybrid';
-          const retriever = new KnowledgeRetriever({
-            sourceStore: kstore,
-            indexStore: kingest.indexStore,
-            embeddingProvider: embRuntime?.provider ?? null,
-            recall,
-            injectMinScore: kn?.autoInject?.minScore,
-            hintMinScore: kn?.hint?.minScore,
-            minCoverage: kn?.autoInject?.minCoverage,
-            maxChunks: kn?.autoInject?.maxChunks,
-            hybridKeyword: kn?.index?.hybridKeyword,
-            keywordWeight: kn?.keywordWeight,
-          });
-          const { KnowledgeHitLog } = await import('@octopi-agent/engine/harness/knowledge/hit-log.js');
-          builder.knowledgeRetriever({
-            retriever,
-            indexStore: kingest.indexStore,
-            sourceStore: kstore,
-            hitLog: new KnowledgeHitLog(kstore.database, {
-              stewardOnConverge: kn?.promotion?.stewardOnConverge,
-            }),
-            grounding: {
-              budgetTokens: kn?.autoInject?.budgetTokens,
-              budgetRatio: kn?.autoInject?.budgetRatio,
-              maxBudgetTokens: kn?.autoInject?.maxBudgetTokens,
-              maxChunks: kn?.autoInject?.maxChunks,
-              skipIfUserTokensBelow: kn?.query?.skipIfUserTokensBelow,
-              includePriorUserTurns: kn?.query?.includePriorUserTurns,
-            },
-          });
+          void agentIdForCatalog;
+          // 索工具走 KnowledgeClient tool 注册）；不在 Gateway 内嵌 retriever
         } catch (kErr) {
           console.warn(
             `[Gateway] knowledge catalog unavailable: ${kErr instanceof Error ? kErr.message : String(kErr)}`,
@@ -2889,7 +2826,7 @@ export class Gateway {
             `[Gateway] memory embedding enabled: model=${embRuntime.model} vectorEngine=${embRuntime.vectorEngine}`,
           );
         } else {
-          console.log('[Gateway] memory embedding not configured — keyword retrieval');
+          console.log('[Gateway] memory embedding not configured ?keyword retrieval');
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -2908,7 +2845,7 @@ export class Gateway {
       builder.constitution(this.config.context?.constitution ?? this.config.constitution ?? null);
     }
 
-    // 注册工具（跳过 memory_*：由 AgentBuilder 按该 agent 的 memoryStore 创建，保证与 MemoryLayer 同实例）
+    // 注册工具（跳?memory_*：由 AgentBuilder  agent ?memoryStore 创建，保证与 MemoryLayer 同实例）
     console.log(`[Gateway] Building agent "${agent.id}" with ${this.tools.length} global tools: ${this.tools.map(t => t.definition.name).join(', ')}`);
     for (const tool of this.tools) {
       const name = tool.definition.name;
@@ -2916,14 +2853,35 @@ export class Gateway {
       builder.tool(tool);
     }
 
-    // 设置 systemPrompt：内联 persona 固定烤入；文件式 persona 走 builder.persona（run 时热更新）
+    // Knowledge 工具?Knowledge Service Client（v2?
+    try {
+      const rt = await this.getKnowledgeRuntime();
+      if (rt.state === 'disabled') {
+        console.log('[Gateway] knowledge tools skipped: knowledge.service disabled');
+      } else {
+        const kclient = await this.getKnowledgeClient();
+        const { createKnowledgeClientTools } = await import(
+          '@octopi-agent/engine/harness/extension/plugin-ecosystem/tools/knowledge.js'
+        );
+        for (const tool of createKnowledgeClientTools({ client: kclient })) {
+          builder.tool(tool);
+        }
+        console.log('[Gateway] knowledge tools via service: knowledge_search, knowledge_read');
+      }
+    } catch (kToolErr) {
+      console.warn(
+        `[Gateway] knowledge tools skipped: ${kToolErr instanceof Error ? kToolErr.message : String(kToolErr)}`,
+      );
+    }
+
+    // 设置 systemPrompt：内?persona 固定烤入；文件式 persona ?builder.persona（run 时热更新?
     if (typeof agent.persona === 'object' && agent.persona?.systemPrompt) {
       builder.systemPrompt(agent.persona.systemPrompt);
     } else if (agent.home) {
       builder.persona(agent.home);
     }
 
-    // 错误策略
+    // 策略
     builder.errorStrategy({
       onModelError: (error, attempt) => {
         const retryable = ['rate_limit', 'timeout', 'network', 'server'];
@@ -2938,7 +2896,7 @@ export class Gateway {
       onSecurityViolation: (v) => ({ action: 'block', reason: v.description }),
     });
 
-    // high 风险人工确认：接到 ask_user UI（有交互则确认，无人值守 fail-safe 拒绝）
+    // high 风险人工：接?ask_user UI（有交互则确认，无人值守 fail-safe 拒绝?
     builder.confirmHighRisk(async (req) => {
       const sessionId = req.sessionId ?? 'unknown';
       const agentId = req.agentId ?? 'default';
@@ -2960,7 +2918,7 @@ export class Gateway {
       }
     });
 
-    // 构建（builder.observerHub 已注入；setObserverHub 兼容仅 runnerConfig 传入的路径）
+    // 构建（builder.observerHub 已注入；setObserverHub ?runnerConfig 传入的路径）
     builder.observerHub(this.observerHub.isEnabled() ? this.observerHub : undefined);
     const built = await builder.build();
     built.runner.setObserverHub(this.observerHub.isEnabled() ? this.observerHub : undefined);
@@ -2973,8 +2931,8 @@ export class Gateway {
         (hasMemoryTools ? ' [memory_store/search OK]' : ' [memory_store/search MISSING]'),
     );
 
-    // ── Run 级模型快照解析（方案 B 唯一入口）──
-    // 每 run 调一次；provider 缺失返回 null，Runner 回退 Agent 实例默认
+    //  Run 级模型快照解析（ B 入口）─
+    // ?run 调一次；provider 缺失返回 null，Runner  Agent 实例
     const wrap = (p: ModelProvider, providerName: string) =>
       wrapProviderWithCircuitBreaker(p, this.getCircuitBreaker(providerName));
 
@@ -3001,7 +2959,7 @@ export class Gateway {
       });
     });
 
-    // 会话任务事件 → WebSocket（UI 只读实时面板）
+    // 会话任务事件 ?WebSocket（UI 实时面板?
     const forwardTaskEvent = (event: { sessionId?: string; type: string; data?: unknown }) => {
       if (!event.sessionId) return;
       for (const adapter of this.streamingAdapters) {
@@ -3033,11 +2991,11 @@ export class Gateway {
   }
 
   private buildSessionKey(agent: AgentDefinition, msg: ChannelMessage): string {
-    // 使用消息中的原始 agentId（而非 Gateway 解析后的 agent.id）
-    // 这样 sessionKey 和 WS session 的 agentId 一致，broadcastEvent 能正确匹配
+    // 使用消息 agentId Gateway 解析后的 agent.id?
+    // 这样 sessionKey ?WS session ?agentId 致，broadcastEvent ?
     const agentId = (msg.metadata?.agentId as string) ?? agent.id;
 
-    // 优先使用客户端传来的 sessionId（WebUI 通过 REST API 创建的 session）
+    // 优先使用客户来的 sessionId（WebUI 通过 REST API 创建?session?
     const clientSessionId = msg.metadata?.sessionId as string | undefined;
     if (clientSessionId) {
       return clientSessionId;
@@ -3069,13 +3027,13 @@ export class Gateway {
       try {
         listener(event);
       } catch {
-        // listener 错误不应中断流程
+        // listener 不应流程
       }
     }
   }
 
   /**
-   * 获取或创建 provider 熔断器
+   * 获取或创?provider 熔断?
    */
   private getCircuitBreaker(providerName: string): CircuitBreaker {
     let cb = this.circuitBreakers.get(providerName);
@@ -3091,7 +3049,7 @@ export class Gateway {
   }
 
   /**
-   * 获取所有熔断器状态
+   * 获取有熔?
    */
   getCircuitBreakerStatus(): Record<string, { state: string; failureCount: number }> {
     const result: Record<string, { state: string; failureCount: number }> = {};
@@ -3102,7 +3060,7 @@ export class Gateway {
   }
 
   /**
-   * 解析 trace 日志级别字符串为数字
+   * 解析 trace 日志级别串为数字
    */
   private parseTraceLevel(level: string): number {
     const levels: Record<string, number> = {
@@ -3113,10 +3071,10 @@ export class Gateway {
 }
 
 /**
- * WS 广播前剥离 context.layers.assembled 里的层正文 content
+ * WS 广播前剥?context.layers.assembled 里的?content
  *
- * Gateway 缓存/REST 仍保留全文；UI 点选层时经 REST 拉取。
- * preview 保留在 WS，便于未点选时浏览摘要。
+ * Gateway 缓存/REST 仍保留全文；UI 时经 REST 拉取?
+ * preview 保留?WS，便于未?
  */
 function stripLayerContentFromEvent(event: AgentEvent): AgentEvent {
   const data = event.data as

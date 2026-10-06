@@ -1,7 +1,7 @@
 /**
  * DOCX 后端 — mammoth（可选依赖，T0）→ HTML → Markdown
  *
- * @module harness/context/capabilities/document/backends/docx
+ * @module harness/capabilities/document/backends/docx
  */
 
 import { DocumentExtractError } from '../errors.js';

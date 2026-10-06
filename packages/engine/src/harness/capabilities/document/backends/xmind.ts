@@ -4,7 +4,7 @@
  * XMind 2020+：content.json 树（children.attached）
  * XMind 8：content.xml topic 树（尽力解析）
  *
- * @module harness/context/capabilities/document/backends/xmind
+ * @module harness/capabilities/document/backends/xmind
  */
 
 import { DocumentExtractError } from '../errors.js';

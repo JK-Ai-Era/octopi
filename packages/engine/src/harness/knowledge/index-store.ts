@@ -1,7 +1,8 @@
 /**
- * KnowledgeIndexStore — files / chunks 投影 + 关键词检索（Phase A）
+ * KnowledgeIndexStore — File 本位索引投影
  *
- * Index 非权威；可整库重跑。检索用 Memory 同款 CJK 二元组分词。
+ * chunk/file 挂 file_id；logical path 在 Membership。
+ * sourceId+path 的 API 保留为「Membership 视图」，内部按 identity 去重。
  */
 
 import { randomUUID, createHash } from 'node:crypto';
@@ -10,11 +11,12 @@ import { cosineSimilarity } from '../memory/sqlite/vector-search.js';
 import { KnowledgeDatabase } from './db.js';
 import { KnowledgeFts } from './fts.js';
 import { queryBuckets, scoreAnnCandidates, vectorBucket, VECTOR_BUCKETS } from './vector-ann.js';
+import { toVecBlob } from '../memory/sqlite/sqlite-vec.js';
 import { asChunkId, asSourceId } from './types.js';
 import type { KnowledgeChunkId, KnowledgeSourceId } from './types.js';
 import type { KnowledgeChunkDraft } from './adapters.js';
+import { normalizePathLexical } from './file-identity.js';
 
-/** 可嵌入向量的 chunk 条件：非 code-tree（代码走 file_search / 原文） */
 const EMBEDDABLE_WHERE =
   "(f.adapter_id IS NULL OR f.adapter_id NOT IN ('code-tree'))";
 
@@ -44,6 +46,37 @@ export interface ChunkHit {
   startLine: number;
   endLine: number;
   score: number;
+  /** 共享 File 的全部可见绑定 */
+  sourceIds?: string[];
+  /** sourceId → logical path */
+  logicalPaths?: Record<string, string>;
+}
+
+function defaultIdentityKey(path: string): string {
+  try {
+    return `path:${normalizePathLexical(path)}`;
+  } catch {
+    return `path:${path.replace(/\\/g, '/')}`;
+  }
+}
+
+function rowToFile(row: Record<string, unknown>): IndexedFileRecord {
+  return {
+    id: String(row.id),
+    sourceId: asSourceId(String(row.source_id ?? row.membership_source_id ?? '')),
+    path: String(row.logical_path ?? row.path ?? ''),
+    contentHash: String(row.content_hash ?? ''),
+    size: Number(row.size ?? 0),
+    mtime: Number(row.mtime ?? 0),
+    adapterId: row.adapter_id == null ? null : String(row.adapter_id),
+    status: String(row.status) as IndexedFileRecord['status'],
+    error: row.error == null ? undefined : String(row.error),
+    chunkCount: Number(row.chunk_count ?? 0),
+    indexedAt: Number(row.indexed_at ?? 0),
+    externalUrl: row.external_url == null ? undefined : String(row.external_url),
+    etag: row.etag == null ? undefined : String(row.etag),
+    lastModified: row.last_modified == null ? undefined : String(row.last_modified),
+  };
 }
 
 export class KnowledgeIndexStore {
@@ -52,20 +85,12 @@ export class KnowledgeIndexStore {
 
   constructor(private readonly db: KnowledgeDatabase) {
     this.fts = new KnowledgeFts(db);
-    // **禁止**在此同步 rebuild：大库会堵死事件循环（Gateway /health 超时）。
-    // 缺口由 ensureFtsBackfill() 在 reconcile/后台补。
   }
 
-  /** FTS 是否可用（FTS5 编译进 sqlite） */
   get ftsAvailable(): boolean {
     return this.fts.available;
   }
 
-  /**
-   * 存量库 FTS 后台补齐（幂等；并发调用合并为一次）。
-   *
-   * @returns 本轮写入条数；无需重建时为 0
-   */
   ensureFtsBackfill(): Promise<number> {
     if (!this.fts.available) return Promise.resolve(0);
     if (this.ftsBackfillPromise) return this.ftsBackfillPromise;
@@ -85,9 +110,47 @@ export class KnowledgeIndexStore {
     return this.ftsBackfillPromise;
   }
 
-  /**
-   * 写入/替换某文件的 chunks（幂等：先删旧 chunk 与向量）
-   */
+  /** 解析或创建 File（identity 去重）+ Membership */
+  private resolveFile(
+    sourceId: string,
+    path: string,
+    meta: { identityKey?: string; size?: number; mtime?: number; tenantId?: string },
+  ): string {
+    const identityKey = meta.identityKey ?? defaultIdentityKey(path);
+    const tenant = meta.tenantId ?? 'default';
+    const now = Date.now();
+    let row = this.db.raw
+      .prepare('SELECT id, size, mtime FROM knowledge_files WHERE tenant_id = ? AND identity_key = ?')
+      .get(tenant, identityKey) as { id: string; size: number; mtime: number } | undefined;
+    if (!row) {
+      const id = `kf_${randomUUID().slice(0, 12)}`;
+      this.db.raw
+        .prepare(
+          `INSERT INTO knowledge_files
+             (id, tenant_id, identity_key, size, mtime, content_hash, status, chunk_count, indexed_at)
+           VALUES (?, ?, ?, ?, ?, NULL, 'pending', 0, ?)`,
+        )
+        .run(id, tenant, identityKey, meta.size ?? 0, meta.mtime ?? 0, now);
+      row = { id, size: meta.size ?? 0, mtime: meta.mtime ?? 0 };
+    } else if (
+      (meta.size != null && meta.size !== row.size) ||
+      (meta.mtime != null && meta.mtime !== row.mtime)
+    ) {
+      this.db.raw
+        .prepare('UPDATE knowledge_files SET size = ?, mtime = ? WHERE id = ?')
+        .run(meta.size ?? row.size, meta.mtime ?? row.mtime, row.id);
+    }
+    const logical = path.replace(/\\/g, '/');
+    this.db.raw
+      .prepare(
+        `INSERT INTO knowledge_memberships (source_id, file_id, logical_path, created_at)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(source_id, logical_path) DO UPDATE SET file_id = excluded.file_id`,
+      )
+      .run(sourceId, row.id, logical, now);
+    return row.id;
+  }
+
   upsertFile(input: {
     sourceId: KnowledgeSourceId | string;
     path: string;
@@ -96,15 +159,17 @@ export class KnowledgeIndexStore {
     mtime: number;
     adapterId: string;
     chunks: KnowledgeChunkDraft[];
+    identityKey?: string;
     externalUrl?: string;
     etag?: string;
     lastModified?: string;
   }): IndexedFileRecord {
     const now = Date.now();
-    const existing = this.db.raw
-      .prepare('SELECT id FROM knowledge_files WHERE source_id = ? AND path = ?')
-      .get(input.sourceId, input.path) as { id?: string } | undefined;
-    const fileId = existing?.id ?? `kf_${randomUUID().slice(0, 12)}`;
+    const fileId = this.resolveFile(String(input.sourceId), input.path, {
+      identityKey: input.identityKey,
+      size: input.size,
+      mtime: input.mtime,
+    });
 
     this.db.raw.exec('BEGIN');
     try {
@@ -113,39 +178,18 @@ export class KnowledgeIndexStore {
           .prepare('SELECT id FROM knowledge_chunks WHERE file_id = ?')
           .all(fileId) as Array<{ id: string }>
       ).map((r) => r.id);
-      this.deleteKnowledgeVec(oldIds);
-      this.fts.removeMany(oldIds);
-      this.db.raw
-        .prepare(
-          `DELETE FROM knowledge_chunk_embeddings
-           WHERE chunk_id IN (SELECT id FROM knowledge_chunks WHERE file_id = ?)`,
-        )
-        .run(fileId);
+      this.dropChunks(oldIds);
       this.db.raw.prepare('DELETE FROM knowledge_chunks WHERE file_id = ?').run(fileId);
 
       this.db.raw
         .prepare(
-          `INSERT INTO knowledge_files (
-            id, source_id, path, content_hash, size, mtime, adapter_id, status, error, chunk_count, indexed_at,
-            external_url, etag, last_modified
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, 'indexed', NULL, ?, ?, ?, ?, ?)
-          ON CONFLICT(source_id, path) DO UPDATE SET
-            content_hash=excluded.content_hash,
-            size=excluded.size,
-            mtime=excluded.mtime,
-            adapter_id=excluded.adapter_id,
-            status='indexed',
-            error=NULL,
-            chunk_count=excluded.chunk_count,
-            indexed_at=excluded.indexed_at,
-            external_url=excluded.external_url,
-            etag=excluded.etag,
-            last_modified=excluded.last_modified`,
+          `UPDATE knowledge_files
+           SET content_hash = ?, size = ?, mtime = ?, adapter_id = ?,
+               status = 'indexed', error = NULL, chunk_count = ?, indexed_at = ?,
+               external_url = ?, etag = ?, last_modified = ?
+           WHERE id = ?`,
         )
         .run(
-          fileId,
-          input.sourceId,
-          input.path,
           input.contentHash,
           input.size,
           input.mtime,
@@ -155,25 +199,17 @@ export class KnowledgeIndexStore {
           input.externalUrl ?? null,
           input.etag ?? null,
           input.lastModified ?? null,
+          fileId,
         );
 
       const insertChunk = this.db.raw.prepare(
-        `INSERT INTO knowledge_chunks (id, file_id, source_id, path, ordinal, text, start_line, end_line)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO knowledge_chunks (id, file_id, ordinal, text, start_line, end_line)
+         VALUES (?, ?, ?, ?, ?, ?)`,
       );
       const ftsRows: Array<{ id: string; text: string; path: string }> = [];
       for (const c of input.chunks) {
         const cid = `kc_${randomUUID().slice(0, 12)}`;
-        insertChunk.run(
-          cid,
-          fileId,
-          input.sourceId,
-          input.path,
-          c.ordinal,
-          c.text,
-          c.startLine,
-          c.endLine,
-        );
+        insertChunk.run(cid, fileId, c.ordinal, c.text, c.startLine, c.endLine);
         ftsRows.push({ id: cid, text: c.text, path: input.path });
       }
       this.fts.upsertMany(ftsRows);
@@ -182,7 +218,7 @@ export class KnowledgeIndexStore {
       try {
         this.db.raw.exec('ROLLBACK');
       } catch {
-        // rollback 失败仅吞掉：上层以原异常为准，避免掩盖根因
+        // 以原异常为准
       }
       throw err;
     }
@@ -204,106 +240,136 @@ export class KnowledgeIndexStore {
     };
   }
 
-  /**
-   * 标记 skipped — **不删** 已有 chunks（瞬时/边界失败保旧索引）；仅元数据。
-   *
-   * @param reason - 跳过原因（oversize / no_adapter / …）
-   * @param size - 文件字节数（可选；便于 UI 展示真实体积）
-   */
   markFileSkipped(
     sourceId: KnowledgeSourceId | string,
     path: string,
     reason: string,
     size?: number,
+    identityKey?: string,
   ): void {
-    this.markFileNonIndexed(sourceId, path, 'skipped', reason, size);
+    this.markFileNonIndexed(sourceId, path, 'skipped', reason, size, identityKey);
   }
 
-  /**
-   * 标记 error — **不删** 已有 chunks（网络抖动不得清库）；仅元数据。
-   * 成功 `upsertFile` 才替换 chunks。
-   */
   markFileError(
     sourceId: KnowledgeSourceId | string,
     path: string,
     error: string,
     size?: number,
+    identityKey?: string,
   ): void {
-    this.markFileNonIndexed(sourceId, path, 'error', error, size);
+    this.markFileNonIndexed(sourceId, path, 'error', error, size, identityKey);
   }
 
+  /**
+   * 标记 skipped/error — **不删** 已有 chunks。
+   * 若已有 membership，只改状态；**不得**用 path-identity 新建 File 顶掉带 chunk 的行。
+   */
   private markFileNonIndexed(
     sourceId: KnowledgeSourceId | string,
     path: string,
     status: 'skipped' | 'error',
     detail: string,
     size?: number,
+    identityKey?: string,
   ): void {
-    const now = Date.now();
+    const logical = path.replace(/\\/g, '/');
     const existing = this.db.raw
-      .prepare('SELECT id, chunk_count, size FROM knowledge_files WHERE source_id = ? AND path = ?')
-      .get(sourceId, path) as { id?: string; chunk_count?: number; size?: number } | undefined;
-    const fileId = existing?.id ?? `kf_${randomUUID().slice(0, 12)}`;
-    const chunkCount = existing?.chunk_count ?? 0;
-    const fileSize = size ?? existing?.size ?? 0;
-    this.db.raw
       .prepare(
-        `INSERT INTO knowledge_files (
-          id, source_id, path, content_hash, size, mtime, adapter_id, status, error, chunk_count, indexed_at
-        ) VALUES (?, ?, ?, '', ?, 0, NULL, ?, ?, ?, ?)
-        ON CONFLICT(source_id, path) DO UPDATE SET
-          status=excluded.status,
-          error=excluded.error,
-          size=excluded.size,
-          indexed_at=excluded.indexed_at`,
+        `SELECT file_id FROM knowledge_memberships WHERE source_id = ? AND logical_path = ?`,
       )
-      .run(fileId, sourceId, path, fileSize, status, detail, chunkCount, now);
+      .get(String(sourceId), logical) as { file_id: string } | undefined;
+    if (existing?.file_id) {
+      this.db.raw
+        .prepare('UPDATE knowledge_files SET status = ?, error = ?, indexed_at = ? WHERE id = ?')
+        .run(status, detail, Date.now(), existing.file_id);
+      return;
+    }
+    // 优先真实 identity（win:/unix:），避免 path: 与成功路径分裂出零认领行
+    const fileId = this.resolveFile(String(sourceId), path, { size, identityKey });
+    this.db.raw
+      .prepare('UPDATE knowledge_files SET status = ?, error = ?, indexed_at = ? WHERE id = ?')
+      .run(status, detail, Date.now(), fileId);
   }
 
   /**
-   * 文件是否已用同一 contentHash 索引（且确有 chunk，防半写入）
+   * 清零认领的 path: 降级 File（错误路径与成功路径 identity 分裂残留）。
+   *
+   * @returns 删除的 File 行数
    */
+  purgeOrphanPathIdentityFiles(): number {
+    const res = this.db.raw
+      .prepare(
+        `DELETE FROM knowledge_files
+         WHERE identity_key LIKE 'path:%'
+           AND NOT EXISTS (
+             SELECT 1 FROM knowledge_memberships m WHERE m.file_id = knowledge_files.id
+           )`,
+      )
+      .run();
+    return Number(res.changes ?? 0);
+  }
+
   isFresh(sourceId: KnowledgeSourceId | string, path: string, contentHash: string): boolean {
+    const logical = path.replace(/\\/g, '/');
     const row = this.db.raw
       .prepare(
-        `SELECT content_hash, chunk_count FROM knowledge_files
-         WHERE source_id = ? AND path = ? AND status = 'indexed'`,
+        `SELECT f.content_hash AS content_hash, f.chunk_count AS chunk_count
+         FROM knowledge_memberships m
+         JOIN knowledge_files f ON f.id = m.file_id
+         WHERE m.source_id = ? AND m.logical_path = ? AND f.status = 'indexed'`,
       )
-      .get(sourceId, path) as { content_hash?: string; chunk_count?: number } | undefined;
-    return (
-      row?.content_hash === contentHash &&
-      (row?.chunk_count ?? 0) > 0
-    );
+      .get(String(sourceId), logical) as
+      | { content_hash?: string; chunk_count?: number }
+      | undefined;
+    return row?.content_hash === contentHash && (row?.chunk_count ?? 0) > 0;
+  }
+
+  invalidateFileForReparse(
+    sourceId: KnowledgeSourceId | string,
+    path: string,
+  ): void {
+    const logical = path.replace(/\\/g, '/');
+    const row = this.db.raw
+      .prepare(
+        `SELECT file_id FROM knowledge_memberships WHERE source_id = ? AND logical_path = ?`,
+      )
+      .get(String(sourceId), logical) as { file_id: string } | undefined;
+    if (!row) return;
+    this.db.raw
+      .prepare(`UPDATE knowledge_files SET content_hash = '' WHERE id = ?`)
+      .run(row.file_id);
   }
 
   getFile(sourceId: KnowledgeSourceId | string, path: string): IndexedFileRecord | null {
+    const logical = path.replace(/\\/g, '/');
     const row = this.db.raw
-      .prepare('SELECT * FROM knowledge_files WHERE source_id = ? AND path = ?')
-      .get(sourceId, path) as Record<string, unknown> | undefined;
+      .prepare(
+        `SELECT f.*, m.source_id AS membership_source_id, m.logical_path AS logical_path
+         FROM knowledge_memberships m
+         JOIN knowledge_files f ON f.id = m.file_id
+         WHERE m.source_id = ? AND m.logical_path = ?`,
+      )
+      .get(String(sourceId), logical) as Record<string, unknown> | undefined;
     return row ? rowToFile(row) : null;
   }
 
   listFiles(sourceId: KnowledgeSourceId | string): IndexedFileRecord[] {
     const rows = this.db.raw
-      .prepare('SELECT * FROM knowledge_files WHERE source_id = ? ORDER BY path')
-      .all(sourceId) as Array<Record<string, unknown>>;
+      .prepare(
+        `SELECT f.*, m.source_id AS membership_source_id, m.logical_path AS logical_path
+         FROM knowledge_memberships m
+         JOIN knowledge_files f ON f.id = m.file_id
+         WHERE m.source_id = ? ORDER BY m.logical_path`,
+      )
+      .all(String(sourceId)) as Array<Record<string, unknown>>;
     return rows.map(rowToFile);
   }
 
-  /**
-   * 源文件分页 + 状态/扩展名筛选（管理面列表）
-   *
-   * @param sourceId - 源 id
-   * @param opts - status / ext / q / page / pageSize
-   * @returns 当前页 + 总数 + 状态/扩展名聚合（供筛选芯片）
-   */
   listFilesPaged(
     sourceId: KnowledgeSourceId | string,
     opts?: {
       status?: 'indexed' | 'skipped' | 'error' | 'all';
-      /** 扩展名（不含点；`all`/空 = 不限） */
       ext?: string;
-      /** path 子串（大小写不敏感） */
       q?: string;
       page?: number;
       pageSize?: number;
@@ -316,305 +382,175 @@ export class KnowledgeIndexStore {
     statusCounts: { indexed: number; skipped: number; error: number };
     extCounts: Array<{ ext: string; n: number }>;
   } {
-    const page = Math.max(1, Math.floor(opts?.page ?? 1));
-    const pageSize = Math.min(200, Math.max(1, Math.floor(opts?.pageSize ?? 50)));
-    const status = opts?.status && opts.status !== 'all' ? opts.status : null;
-    const ext = opts?.ext?.trim().replace(/^\./, '').toLowerCase() || null;
-    const q = opts?.q?.trim() || null;
-
-    const where: string[] = ['source_id = ?'];
-    const params: Array<string | number> = [String(sourceId)];
-    if (status) {
-      where.push('status = ?');
-      params.push(status);
+    const all = this.listFiles(sourceId);
+    let items = all;
+    if (opts?.status && opts.status !== 'all') {
+      items = items.filter((f) => f.status === opts.status);
     }
-    if (ext) {
-      // 后缀精确（忽略大小写）；ext 来自配置/筛选，仍转义防通配
-      where.push(`LOWER(path) LIKE ? ESCAPE '\\'`);
-      params.push(`%.${ext.replace(/[\\%_]/g, (c) => `\\${c}`)}`);
+    if (opts?.ext && opts.ext !== 'all') {
+      const ext = opts.ext.replace(/^\./, '').toLowerCase();
+      items = items.filter((f) => f.path.toLowerCase().endsWith(`.${ext}`));
     }
-    if (q) {
-      where.push(`LOWER(path) LIKE ? ESCAPE '\\'`);
-      params.push(`%${q.toLowerCase().replace(/[\\%_]/g, (c) => `\\${c}`)}%`);
+    if (opts?.q) {
+      const q = opts.q.toLowerCase();
+      items = items.filter((f) => f.path.toLowerCase().includes(q));
     }
-    const whereSql = where.join(' AND ');
-
-    const totalRow = this.db.raw
-      .prepare(`SELECT COUNT(*) AS n FROM knowledge_files WHERE ${whereSql}`)
-      .get(...params) as { n: number };
-    const total = Number(totalRow?.n ?? 0);
-
-    const rows = this.db.raw
-      .prepare(
-        `SELECT * FROM knowledge_files WHERE ${whereSql}
-         ORDER BY path LIMIT ? OFFSET ?`,
-      )
-      .all(...params, pageSize, (page - 1) * pageSize) as Array<Record<string, unknown>>;
-
-    const statusRows = this.db.raw
-      .prepare(
-        `SELECT status, COUNT(*) AS n FROM knowledge_files
-         WHERE source_id = ? GROUP BY status`,
-      )
-      .all(sourceId) as Array<{ status: string; n: number }>;
     const statusCounts = { indexed: 0, skipped: 0, error: 0 };
-    for (const r of statusRows) {
-      if (r.status === 'indexed' || r.status === 'skipped' || r.status === 'error') {
-        statusCounts[r.status] = Number(r.n);
-      }
-    }
-
-    // 扩展名聚合：忽略当前 ext 筛选，便于切换类型（path 行数可控；admin 面偶发）
-    const facetRows = this.db.raw
-      .prepare(
-        `SELECT path FROM knowledge_files WHERE source_id = ? AND status = COALESCE(?, status)`,
-      )
-      .all(sourceId, status) as Array<{ path: string }>;
     const extMap = new Map<string, number>();
-    for (const r of facetRows) {
-      const p = r.path;
-      const dot = p.lastIndexOf('.');
-      const slash = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'));
-      const e = dot > slash && dot >= 0 ? p.slice(dot + 1).toLowerCase() : '';
-      if (!e) continue;
-      extMap.set(e, (extMap.get(e) ?? 0) + 1);
+    for (const f of all) {
+      if (f.status === 'indexed' || f.status === 'skipped' || f.status === 'error') {
+        statusCounts[f.status] += 1;
+      }
+      const ext = f.path.includes('.') ? (f.path.split('.').pop() ?? '').toLowerCase() : '';
+      if (ext) extMap.set(ext, (extMap.get(ext) ?? 0) + 1);
     }
-
-    const items = rows.map((row) => {
-      const rec = rowToFile(row);
-      const path = rec.path;
-      const dot = path.lastIndexOf('.');
-      const slash = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
-      const e = dot > slash && dot >= 0 ? path.slice(dot + 1).toLowerCase() : '';
-      return { ...rec, ext: e };
-    });
-
+    const pageSize = opts?.pageSize ?? 50;
+    const page = Math.max(1, opts?.page ?? 1);
+    const start = (page - 1) * pageSize;
+    const slice = items.slice(start, start + pageSize).map((f) => ({
+      ...f,
+      ext: f.path.includes('.') ? (f.path.split('.').pop() ?? '').toLowerCase() : '',
+    }));
     return {
-      items,
-      total,
+      items: slice,
+      total: items.length,
       page,
       pageSize,
       statusCounts,
-      extCounts: [...extMap.entries()]
-        .map(([ext, n]) => ({ ext, n }))
-        .sort((a, b) => b.n - a.n || a.ext.localeCompare(b.ext))
-        .slice(0, 30),
+      extCounts: [...extMap.entries()].map(([ext, n]) => ({ ext, n })),
     };
   }
 
-  /**
-   * 重做前失效 contentHash，强制下次 parse 跳过 isFresh。
-   * **不删** chunks/embeddings：成功 upsert 才替换，失败不丢旧索引。
-   *
-   * @param sourceId - 源 id
-   * @param path - 文件路径
-   */
-  invalidateFileForReparse(sourceId: KnowledgeSourceId | string, path: string): void {
-    this.db.raw
-      .prepare(
-        `UPDATE knowledge_files SET content_hash = '' WHERE source_id = ? AND path = ?`,
-      )
-      .run(String(sourceId), path);
-  }
-
-  /**
-   * 按筛选列出 path（批量重做用；不分页）
-   *
-   * @param sourceId - 源 id
-   * @param opts - 与 listFilesPaged 相同筛选语义
-   */
   listFilePathsFiltered(
     sourceId: KnowledgeSourceId | string,
-    opts?: { status?: 'indexed' | 'skipped' | 'error' | 'all'; ext?: string; q?: string },
+    filter?: { status?: string; ext?: string; max?: number },
   ): string[] {
-    const where: string[] = ['source_id = ?'];
-    const params: Array<string | number> = [String(sourceId)];
-    const status = opts?.status && opts.status !== 'all' ? opts.status : null;
-    if (status) {
-      where.push('status = ?');
-      params.push(status);
-    }
-    const ext = opts?.ext?.trim().replace(/^\./, '').toLowerCase();
-    if (ext && ext !== 'all') {
-      where.push("LOWER(path) LIKE ? ESCAPE '\\'");
-      params.push(`%.${ext.replace(/[\\%_]/g, (c) => `\\${c}`)}`);
-    }
-    const q = opts?.q?.trim();
-    if (q) {
-      where.push("LOWER(path) LIKE ? ESCAPE '\\'");
-      params.push(`%${q.toLowerCase().replace(/[\\%_]/g, (c) => `\\${c}`)}%`);
-    }
     const rows = this.db.raw
-      .prepare(`SELECT path FROM knowledge_files WHERE ${where.join(' AND ')} ORDER BY path`)
-      .all(...params) as Array<{ path: string }>;
-    return rows.map((r) => r.path);
+      .prepare(
+        `SELECT m.logical_path AS path, f.status AS status
+         FROM knowledge_memberships m
+         JOIN knowledge_files f ON f.id = m.file_id
+         WHERE m.source_id = ? ORDER BY m.logical_path`,
+      )
+      .all(String(sourceId)) as Array<{ path: string; status: string }>;
+    let out = rows.map((r) => r.path);
+    if (filter?.status) {
+      out = rows.filter((r) => r.status === filter.status).map((r) => r.path);
+    }
+    if (filter?.ext && filter.ext !== 'all') {
+      const ext = filter.ext.replace(/^\./, '').toLowerCase();
+      out = out.filter((p) => p.toLowerCase().endsWith(`.${ext}`));
+    }
+    if (filter?.max != null) out = out.slice(0, filter.max);
+    return out;
   }
 
-  /**
-   * 单文件 purge（合规）：chunks + embeddings + files 行
-   */
+  /** 解绑 path；File 仅在零认领时 purge */
+  removeFile(sourceId: KnowledgeSourceId | string, path: string): void {
+    const logical = path.replace(/\\/g, '/');
+    const row = this.db.raw
+      .prepare(
+        `SELECT file_id FROM knowledge_memberships WHERE source_id = ? AND logical_path = ?`,
+      )
+      .get(String(sourceId), logical) as { file_id: string } | undefined;
+    this.db.raw
+      .prepare('DELETE FROM knowledge_memberships WHERE source_id = ? AND logical_path = ?')
+      .run(String(sourceId), logical);
+    if (!row) return;
+    const n = (
+      this.db.raw
+        .prepare('SELECT COUNT(*) AS n FROM knowledge_memberships WHERE file_id = ?')
+        .get(row.file_id) as { n: number }
+    ).n;
+    if (n === 0) this.purgeFileRow(row.file_id);
+  }
+
+  removeFiles(sourceId: KnowledgeSourceId | string, paths: string[]): void {
+    for (const p of paths) this.removeFile(sourceId, p);
+  }
+
+  removePathTree(sourceId: KnowledgeSourceId | string, path: string): void {
+    const prefix = path.replace(/\\/g, '/').replace(/\/+$/, '');
+    const rows = this.db.raw
+      .prepare(
+        `SELECT logical_path FROM knowledge_memberships
+         WHERE source_id = ? AND (logical_path = ? OR logical_path LIKE ? ESCAPE '\\')`,
+      )
+      .all(String(sourceId), prefix, `${prefix.replace(/[\\%_]/g, (c) => `\\${c}`)}/%`) as Array<{
+      logical_path: string;
+    }>;
+    for (const r of rows) this.removeFile(sourceId, r.logical_path);
+  }
+
+  clearSource(sourceId: KnowledgeSourceId | string): void {
+    const rows = this.db.raw
+      .prepare('SELECT file_id FROM knowledge_memberships WHERE source_id = ?')
+      .all(String(sourceId)) as Array<{ file_id: string }>;
+    this.db.raw
+      .prepare('DELETE FROM knowledge_memberships WHERE source_id = ?')
+      .run(String(sourceId));
+    for (const r of rows) {
+      const n = (
+        this.db.raw
+          .prepare('SELECT COUNT(*) AS n FROM knowledge_memberships WHERE file_id = ?')
+          .get(r.file_id) as { n: number }
+      ).n;
+      if (n === 0) this.purgeFileRow(r.file_id);
+    }
+  }
+
   purgePath(sourceId: KnowledgeSourceId | string, path: string): void {
     this.removeFile(sourceId, path);
   }
 
-  /**
-   * 源级 purge
-   */
+  /** 按 fileId 物理删除（membership 已清） */
+  purgeFile(fileId: string): void {
+    this.purgeFileRow(fileId);
+  }
+
   purgeSource(sourceId: KnowledgeSourceId | string): void {
     this.clearSource(sourceId);
   }
 
-  /**
-   * 删除源下全部 index（卸载 / rebuild）
-   */
-  clearSource(sourceId: KnowledgeSourceId | string): void {
-    const ids = (
-      this.db.raw
-        .prepare('SELECT id FROM knowledge_chunks WHERE source_id = ?')
-        .all(sourceId) as Array<{ id: string }>
-    ).map((r) => r.id);
-    this.deleteKnowledgeVec(ids);
-    this.fts.removeMany(ids);
-    this.db.raw
-      .prepare(
-        `DELETE FROM knowledge_chunk_embeddings
-         WHERE chunk_id IN (SELECT id FROM knowledge_chunks WHERE source_id = ?)`,
-      )
-      .run(sourceId);
-    this.db.raw.prepare('DELETE FROM knowledge_chunks WHERE source_id = ?').run(sourceId);
-    this.db.raw.prepare('DELETE FROM knowledge_files WHERE source_id = ?').run(sourceId);
-  }
-
-  removeFile(sourceId: KnowledgeSourceId | string, path: string): void {
+  private purgeFileRow(fileId: string): void {
     const oldIds = (
       this.db.raw
-        .prepare('SELECT id FROM knowledge_chunks WHERE source_id = ? AND path = ?')
-        .all(sourceId, path) as Array<{ id: string }>
+        .prepare('SELECT id FROM knowledge_chunks WHERE file_id = ?')
+        .all(fileId) as Array<{ id: string }>
     ).map((r) => r.id);
-    this.deleteKnowledgeVec(oldIds);
-    this.fts.removeMany(oldIds);
-    this.db.raw
-      .prepare(
-        `DELETE FROM knowledge_chunk_embeddings
-         WHERE chunk_id IN (
-           SELECT id FROM knowledge_chunks WHERE source_id = ? AND path = ?
-         )`,
-      )
-      .run(sourceId, path);
-    this.db.raw
-      .prepare('DELETE FROM knowledge_chunks WHERE source_id = ? AND path = ?')
-      .run(sourceId, path);
-    this.db.raw
-      .prepare('DELETE FROM knowledge_files WHERE source_id = ? AND path = ?')
-      .run(sourceId, path);
+    this.dropChunks(oldIds);
+    this.db.raw.prepare('DELETE FROM knowledge_chunks WHERE file_id = ?').run(fileId);
+    this.db.raw.prepare('DELETE FROM knowledge_jobs WHERE file_id = ?').run(fileId);
+    this.db.raw.prepare('DELETE FROM knowledge_files WHERE id = ?').run(fileId);
   }
 
-  /**
-   * 批量删除 path（同一事务，减少 sync 往返）
-   *
-   * @param sourceId - 知识源 id
-   * @param paths - 精确 path 列表
-   */
-  removeFiles(sourceId: KnowledgeSourceId | string, paths: string[]): void {
-    if (paths.length === 0) return;
-    const chunkIds: string[] = [];
-    const select = this.db.raw.prepare(
-      `SELECT id FROM knowledge_chunks WHERE source_id = ? AND path = ?`,
-    );
-    for (const p of paths) {
-      const rows = select.all(sourceId, p) as Array<{ id: string }>;
-      for (const r of rows) chunkIds.push(r.id);
-    }
-    this.db.raw.exec('BEGIN');
+  private dropChunks(chunkIds: string[]): void {
+    if (chunkIds.length === 0) return;
+    const ph = chunkIds.map(() => '?').join(',');
+    this.db.raw
+      .prepare(`DELETE FROM knowledge_chunk_embeddings WHERE chunk_id IN (${ph})`)
+      .run(...chunkIds);
+    this.deleteKnowledgeVec(chunkIds);
+    this.fts.removeMany(chunkIds);
+  }
+
+  private deleteKnowledgeVec(chunkIds: string[]): void {
+    if (!this.db.sqliteVecEnabled || chunkIds.length === 0) return;
     try {
-      if (chunkIds.length > 0) {
-        this.deleteKnowledgeVec(chunkIds);
-        this.fts.removeMany(chunkIds);
-        const delEmb = this.db.raw.prepare('DELETE FROM knowledge_chunk_embeddings WHERE chunk_id = ?');
-        for (const id of chunkIds) delEmb.run(id);
-      }
-      const delChunks = this.db.raw.prepare(
-        'DELETE FROM knowledge_chunks WHERE source_id = ? AND path = ?',
-      );
-      const delFiles = this.db.raw.prepare(
-        'DELETE FROM knowledge_files WHERE source_id = ? AND path = ?',
-      );
-      for (const p of paths) {
-        delChunks.run(sourceId, p);
-        delFiles.run(sourceId, p);
-      }
-      this.db.raw.exec('COMMIT');
-    } catch (e) {
-      this.db.raw.exec('ROLLBACK');
-      throw e;
+      const del = this.db.raw.prepare('DELETE FROM knowledge_vec WHERE chunk_id = ?');
+      for (const id of chunkIds) del.run(id);
+    } catch {
+      // 无 vec 表时忽略
     }
   }
 
-  /**
-   * 删除路径及子树（目录被移出 / 删除）
-   *
-   * @param sourceId - 知识源 id
-   * @param path - 文件或目录绝对路径
-   */
-  removePathTree(sourceId: KnowledgeSourceId | string, path: string): void {
-    this.db.raw.exec('BEGIN');
-    try {
-      this.removeFile(sourceId, path);
-      // LIKE 通配符必须转义：path 含 _ / % 时否则会误删兄弟路径
-      const esc = (s: string) => s.replace(/[\\%_]/g, (c) => `\\${c}`);
-      const likeSlash = `${esc(path)}/%`;
-      const likeBack = `${esc(path)}\\%`;
-      // 先取子树 chunk id：FTS 行必须一并删，否则倒排残留
-      const subtreeIds = (
-        this.db.raw
-          .prepare(
-            `SELECT id FROM knowledge_chunks
-             WHERE source_id = ? AND (path LIKE ? ESCAPE '\\' OR path LIKE ? ESCAPE '\\')`,
-          )
-          .all(sourceId, likeSlash, likeBack) as Array<{ id: string }>
-      ).map((r) => r.id);
-      this.deleteKnowledgeVec(subtreeIds);
-      this.fts.removeMany(subtreeIds);
-      this.db.raw
-        .prepare(
-          `DELETE FROM knowledge_chunk_embeddings
-           WHERE chunk_id IN (
-             SELECT id FROM knowledge_chunks
-             WHERE source_id = ? AND (path LIKE ? ESCAPE '\\' OR path LIKE ? ESCAPE '\\')
-           )`,
-        )
-        .run(sourceId, likeSlash, likeBack);
-      this.db.raw
-        .prepare(
-          `DELETE FROM knowledge_chunks WHERE source_id = ? AND (path LIKE ? ESCAPE '\\' OR path LIKE ? ESCAPE '\\')`,
-        )
-        .run(sourceId, likeSlash, likeBack);
-      this.db.raw
-        .prepare(
-          `DELETE FROM knowledge_files WHERE source_id = ? AND (path LIKE ? ESCAPE '\\' OR path LIKE ? ESCAPE '\\')`,
-        )
-        .run(sourceId, likeSlash, likeBack);
-      this.db.raw.exec('COMMIT');
-    } catch (e) {
-      this.db.raw.exec('ROLLBACK');
-      throw e;
-    }
-  }
-
-  /**
-   * 差量 prune：删除本轮 discover **未出现** 的 path（含 chunks）。
-   * 仅在 discover 成功后调用；keepPaths 为空集时 no-op（防误清全库）。
-   *
-   * @param keepPaths - 应保留的 path 集
-   * @param opts.allowEmptyKeep - walk 成功且目录为空时允许清空（默认 false）
-   * @returns 删除的文件数
-   */
   pruneMissing(
     sourceId: KnowledgeSourceId | string,
     keepPaths: ReadonlySet<string> | Iterable<string>,
     opts?: { allowEmptyKeep?: boolean },
   ): number {
     const keep = keepPaths instanceof Set ? keepPaths : new Set(keepPaths);
+    // discover 成功且目录为空时允许清空（契约 §6.2）；空 keep 默认 no-op 防误清
     if (keep.size === 0 && !opts?.allowEmptyKeep) return 0;
     const files = this.listFiles(sourceId);
     const gone = files.filter((f) => !keep.has(f.path)).map((f) => f.path);
@@ -635,28 +571,36 @@ export class KnowledgeIndexStore {
       .prepare(
         `SELECT
            COUNT(*) AS total,
-           SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) AS errors,
-           SUM(CASE WHEN status = 'skipped' THEN 1 ELSE 0 END) AS skipped
-         FROM knowledge_files WHERE source_id = ?`,
+           SUM(CASE WHEN f.status = 'error' THEN 1 ELSE 0 END) AS errors,
+           SUM(CASE WHEN f.status = 'skipped' THEN 1 ELSE 0 END) AS skipped
+         FROM knowledge_memberships m
+         JOIN knowledge_files f ON f.id = m.file_id
+         WHERE m.source_id = ?`,
       )
-      .get(sourceId) as { total: number; errors: number | null; skipped: number | null };
+      .get(String(sourceId)) as { total: number; errors: number | null; skipped: number | null };
     const c = this.db.raw
-      .prepare('SELECT COUNT(*) AS n FROM knowledge_chunks WHERE source_id = ?')
-      .get(sourceId) as { n: number };
+      .prepare(
+        `SELECT COUNT(*) AS n FROM knowledge_chunks c
+         JOIN knowledge_memberships m ON m.file_id = c.file_id
+         WHERE m.source_id = ?`,
+      )
+      .get(String(sourceId)) as { n: number };
     const ec = this.db.raw
       .prepare(
         `SELECT COUNT(*) AS n FROM knowledge_chunks c
-         LEFT JOIN knowledge_files f ON f.source_id = c.source_id AND f.path = c.path
-         WHERE c.source_id = ? AND ${EMBEDDABLE_WHERE}`,
+         JOIN knowledge_files f ON f.id = c.file_id
+         JOIN knowledge_memberships m ON m.file_id = c.file_id
+         WHERE m.source_id = ? AND ${EMBEDDABLE_WHERE}`,
       )
-      .get(sourceId) as { n: number };
+      .get(String(sourceId)) as { n: number };
     const e = this.db.raw
       .prepare(
         `SELECT COUNT(*) AS n FROM knowledge_chunk_embeddings e
          JOIN knowledge_chunks c ON c.id = e.chunk_id
-         WHERE c.source_id = ?`,
+         JOIN knowledge_memberships m ON m.file_id = c.file_id
+         WHERE m.source_id = ?`,
       )
-      .get(sourceId) as { n: number };
+      .get(String(sourceId)) as { n: number };
     return {
       files: f?.total ?? 0,
       chunks: c?.n ?? 0,
@@ -668,7 +612,7 @@ export class KnowledgeIndexStore {
   }
 
   /**
-   * 关键词检索（CJK 二元组 + Latin）；限定 sourceIds（可见集）
+   * 关键词检索。sourceIds = 可见 Membership；chunk 按 file 去重。
    */
   search(
     query: string,
@@ -679,32 +623,33 @@ export class KnowledgeIndexStore {
   ): ChunkHit[] {
     const tokens = tokenizeKeywordQuery(query);
     if (tokens.length === 0 || opts.sourceIds.length === 0) return [];
-
     const limit = opts.limit ?? 8;
     const placeholders = opts.sourceIds.map(() => '?').join(',');
 
-    // FTS5 倒排优先；无候选时退 LIKE（正确性优先）
-    type ChunkRow = {
+    type Row = {
       id: string;
-      source_id: string;
-      path: string;
+      file_id: string;
       ordinal: number;
       text: string;
       start_line: number;
       end_line: number;
+      source_id: string;
+      logical_path: string;
     };
-    let rows: ChunkRow[] | null = null;
 
+    let rows: Row[] | null = null;
     const ftsIds = this.fts.search(query, opts.sourceIds as string[], Math.max(limit * 4, 32));
     if (ftsIds && ftsIds.length > 0) {
       const idPh = ftsIds.map(() => '?').join(',');
       rows = this.db.raw
         .prepare(
-          `SELECT id, source_id, path, ordinal, text, start_line, end_line
-           FROM knowledge_chunks
-           WHERE id IN (${idPh}) AND source_id IN (${placeholders})`,
+          `SELECT c.id, c.file_id, c.ordinal, c.text, c.start_line, c.end_line,
+                  m.source_id, m.logical_path
+           FROM knowledge_chunks c
+           JOIN knowledge_memberships m ON m.file_id = c.file_id
+           WHERE c.id IN (${idPh}) AND m.source_id IN (${placeholders})`,
         )
-        .all(...ftsIds, ...opts.sourceIds) as ChunkRow[];
+        .all(...ftsIds, ...opts.sourceIds) as Row[];
     }
 
     if (!rows || rows.length === 0) {
@@ -712,597 +657,406 @@ export class KnowledgeIndexStore {
       const likeParams: string[] = [];
       for (const token of tokens) {
         const like = `%${token.toLowerCase().replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
-        likeClauses.push(`LOWER(text) LIKE ? ESCAPE '\\'`);
+        likeClauses.push(`LOWER(c.text) LIKE ? ESCAPE '\\'`);
         likeParams.push(like);
-        likeClauses.push(`LOWER(path) LIKE ? ESCAPE '\\'`);
+        likeClauses.push(`LOWER(m.logical_path) LIKE ? ESCAPE '\\'`);
         likeParams.push(like);
       }
       rows = this.db.raw
         .prepare(
-          `SELECT id, source_id, path, ordinal, text, start_line, end_line
-           FROM knowledge_chunks
-           WHERE source_id IN (${placeholders})
+          `SELECT c.id, c.file_id, c.ordinal, c.text, c.start_line, c.end_line,
+                  m.source_id, m.logical_path
+           FROM knowledge_chunks c
+           JOIN knowledge_memberships m ON m.file_id = c.file_id
+           WHERE m.source_id IN (${placeholders})
              AND (${likeClauses.join(' OR ')})
-           ORDER BY source_id, path, ordinal
-           LIMIT 20000`,
+           LIMIT ?`,
         )
-        .all(...opts.sourceIds, ...likeParams) as ChunkRow[];
+        .all(...opts.sourceIds, ...likeParams, Math.max(limit * 8, 64)) as Row[];
     }
 
-    const hits: ChunkHit[] = [];
-    for (const row of rows ?? []) {
-      const score = scoreKeywordFields(
-        { content: row.text, tags: row.path },
-        tokens,
-      );
-      if (score <= 0) continue;
-      hits.push({
-        chunkId: asChunkId(row.id),
-        sourceId: asSourceId(row.source_id),
-        path: row.path,
-        ordinal: row.ordinal,
-        text: row.text,
-        startLine: row.start_line,
-        endLine: row.end_line,
-        score,
-      });
+    const byChunk = new Map<
+      string,
+      {
+        chunkId: string;
+        fileId: string;
+        sourceIds: string[];
+        logicalPaths: Record<string, string>;
+        path: string;
+        ordinal: number;
+        text: string;
+        startLine: number;
+        endLine: number;
+        score: number;
+      }
+    >();
+    for (const r of rows) {
+      let h = byChunk.get(r.id);
+      if (!h) {
+        if (byChunk.size >= limit * 3) continue;
+        const score = scoreKeywordFields({ content: r.text, tags: r.logical_path }, tokens);
+        h = {
+          chunkId: r.id,
+          fileId: r.file_id,
+          sourceIds: [],
+          logicalPaths: {},
+          path: r.logical_path,
+          ordinal: r.ordinal,
+          text: r.text,
+          startLine: r.start_line,
+          endLine: r.end_line,
+          score: score ?? 0,
+        };
+        byChunk.set(r.id, h);
+      }
+      if (!h.sourceIds.includes(r.source_id)) h.sourceIds.push(r.source_id);
+      h.logicalPaths[r.source_id] = r.logical_path;
     }
-    hits.sort((a, b) => b.score - a.score);
-    return hits.slice(0, limit);
+
+    return [...byChunk.values()]
+      .sort((a, b) => b.score - a.score)
+      .slice(0, limit)
+      .map((h) => ({
+        chunkId: asChunkId(h.chunkId),
+        sourceId: asSourceId(h.sourceIds[0] ?? ''),
+        path: h.path,
+        ordinal: h.ordinal,
+        text: h.text,
+        startLine: h.startLine,
+        endLine: h.endLine,
+        score: h.score,
+        // 契约 §8.4：共享 File 多绑定溯源
+        sourceIds: h.sourceIds,
+        logicalPaths: h.logicalPaths,
+      }));
   }
 
-  // ── Phase B 向量 ──
+  vectorBackend(): 'sqlite-vec' | 'js-bucket' | 'disabled' {
+    if (this.countEmbeddings() === 0) return 'disabled';
+    return this.db.sqliteVecEnabled ? 'sqlite-vec' : 'js-bucket';
+  }
+
+  vectorSearch(
+    embedding: Float32Array | number[],
+    opts: { sourceIds: KnowledgeSourceId[]; limit?: number; buckets?: number[] },
+  ): ChunkHit[] {
+    const sourceIds = opts.sourceIds.map((s) => String(s));
+    if (sourceIds.length === 0) return [];
+    const limit = opts.limit ?? 8;
+    const emb = embedding instanceof Float32Array ? embedding : Float32Array.from(embedding);
+    const placeholders = sourceIds.map(() => '?').join(',');
+    const joinChunks = `JOIN knowledge_chunks c ON c.id = %s
+                  JOIN knowledge_memberships m ON m.file_id = c.file_id`;
+    const where = `WHERE m.source_id IN (${placeholders})`;
+
+    const load = (ids: string[], scores?: Map<string, number>): ChunkHit[] => {
+      if (ids.length === 0) return [];
+      const idPh = ids.map(() => '?').join(',');
+      const rows = this.db.raw
+        .prepare(
+          `SELECT c.id, c.ordinal, c.text, c.start_line, c.end_line,
+                  m.source_id, m.logical_path
+           FROM knowledge_chunks c
+           JOIN knowledge_memberships m ON m.file_id = c.file_id
+           WHERE c.id IN (${idPh})`,
+        )
+        .all(...ids) as Array<{
+        id: string;
+        ordinal: number;
+        text: string;
+        start_line: number;
+        end_line: number;
+        source_id: string;
+        logical_path: string;
+      }>;
+      // 保持 scores 顺序（SQL IN 不保证序）
+      const byId = new Map(rows.map((r) => [r.id, r]));
+      const ordered = (scores ? ids : ids).map((id) => byId.get(id)).filter(Boolean) as typeof rows;
+      return ordered.map((r) => ({
+        chunkId: asChunkId(r.id),
+        sourceId: asSourceId(r.source_id),
+        path: r.logical_path,
+        ordinal: r.ordinal,
+        text: r.text,
+        startLine: r.start_line,
+        endLine: r.end_line,
+        score: scores?.get(r.id) ?? 0,
+      }));
+    };
+
+    if (this.db.sqliteVecEnabled) {
+      try {
+        const ph = Buffer.from(emb.buffer, emb.byteOffset, emb.byteLength);
+        const knn = this.db.raw
+          .prepare(
+            `SELECT c.id AS id, vec_distance_cosine(v.embedding, ?) AS dist FROM knowledge_vec v
+             ${joinChunks.replace('%s', 'v.chunk_id')} ${where}
+             ORDER BY dist LIMIT ?`,
+          )
+          .all(ph, ...sourceIds, limit) as Array<{ id: string; dist: number }>;
+        if (knn.length > 0) {
+          const scores = new Map(knn.map((r) => [r.id, 1 - Number(r.dist ?? 1)]));
+          return load(knn.map((r) => r.id), scores);
+        }
+      } catch {
+        // 退 JS
+      }
+    }
+
+    const rows = this.db.raw
+      .prepare(
+        `SELECT e.chunk_id AS chunk_id, e.embedding AS embedding, e.bucket AS bucket,
+                c.id AS id, c.ordinal AS ordinal, c.text AS text,
+                c.start_line AS start_line, c.end_line AS end_line,
+                m.source_id AS source_id, m.logical_path AS logical_path
+         FROM knowledge_chunk_embeddings e
+         ${joinChunks.replace('%s', 'e.chunk_id')} ${where}
+         LIMIT 50000`,
+      )
+      .all(...sourceIds) as Array<{
+      chunk_id: string;
+      embedding: ArrayBuffer | Uint8Array;
+      bucket: number;
+      id: string;
+      ordinal: number;
+      text: string;
+      start_line: number;
+      end_line: number;
+      source_id: string;
+      logical_path: string;
+    }>;
+    if (rows.length > 50_000) {
+      // 闸门：禁止 JS 全扫
+      return [];
+    }
+    const candidates = rows.map((r) => {
+      const buf =
+        r.embedding instanceof Uint8Array
+          ? r.embedding
+          : new Uint8Array(r.embedding as ArrayBuffer);
+      const vec = new Float32Array(buf.buffer, buf.byteOffset, buf.byteLength / 4);
+      return { ...r, score: cosineSimilarity(Array.from(emb), Array.from(vec)) };
+    });
+    candidates.sort((a, b) => b.score - a.score);
+    return candidates.slice(0, limit).map((r) => ({
+      chunkId: asChunkId(r.id),
+      sourceId: asSourceId(r.source_id),
+      path: r.logical_path,
+      ordinal: r.ordinal,
+      text: r.text,
+      startLine: r.start_line,
+      endLine: r.end_line,
+      score: r.score,
+    }));
+  }
+
+  listChunksMissingEmbedding(
+    sourceId: KnowledgeSourceId | string,
+    limit = 50,
+  ): Array<{ chunkId: string; text: string }> {
+    const rows = this.db.raw
+      .prepare(
+        `SELECT c.id AS id, c.text AS text
+         FROM knowledge_chunks c
+         JOIN knowledge_files f ON f.id = c.file_id
+         JOIN knowledge_memberships m ON m.file_id = c.file_id
+         LEFT JOIN knowledge_chunk_embeddings e ON e.chunk_id = c.id
+         WHERE m.source_id = ? AND e.chunk_id IS NULL AND ${EMBEDDABLE_WHERE}
+         LIMIT ?`,
+      )
+      .all(String(sourceId), limit) as Array<{ id: string; text: string }>;
+    return rows.map((r) => ({ chunkId: r.id, text: r.text }));
+  }
 
   /**
-   * 按 chunk id 读取
+   * 批量写入嵌入。pairs: `[chunkId, number[]]`；空向量 = secret-skip 墓碑。
    */
-  getChunkById(
-    chunkId: KnowledgeChunkId | string,
-  ): {
-    id: KnowledgeChunkId;
-    sourceId: KnowledgeSourceId | string;
+  setChunkEmbeddings(pairs: Array<[string, number[]]>): void {
+    if (!pairs || pairs.length === 0) return;
+    this.db.ensureEmbeddingSchema();
+    const now = Date.now();
+    const insert = this.db.raw.prepare(
+      `INSERT INTO knowledge_chunk_embeddings (chunk_id, dimensions, embedding, bucket, created_at)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(chunk_id) DO UPDATE SET
+         dimensions = excluded.dimensions,
+         embedding = excluded.embedding,
+         bucket = excluded.bucket`,
+    );
+    for (const [chunkId, embedding] of pairs) {
+      const vec = Float32Array.from(embedding ?? []);
+      const dims = vec.length;
+      const buf = Buffer.from(vec.buffer, vec.byteOffset, vec.byteLength);
+      insert.run(chunkId, dims, buf, dims > 0 ? vectorBucket(Array.from(vec)) : -1, now);
+      this.writeKnowledgeVec(chunkId, embedding ?? []);
+    }
+  }
+
+  setChunkEmbedding(chunkId: string, embedding: number[]): void {
+    this.setChunkEmbeddings([[chunkId, embedding]]);
+  }
+
+  private writeKnowledgeVec(chunkId: string, embedding: number[]): void {
+    if (!this.db.sqliteVecEnabled || !embedding?.length) return;
+    try {
+      const dims = embedding.length;
+      this.db.raw.exec(`
+        CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_vec USING vec0(
+          chunk_id TEXT PRIMARY KEY,
+          embedding float[${dims}] distance_metric=cosine
+        );
+      `);
+      this.db.raw.prepare('DELETE FROM knowledge_vec WHERE chunk_id = ?').run(chunkId);
+      this.db.raw
+        .prepare('INSERT INTO knowledge_vec (chunk_id, embedding) VALUES (?, ?)')
+        .run(chunkId, toVecBlob(embedding));
+    } catch {
+      // 无 sqlite-vec 时忽略
+    }
+  }
+
+  embeddingCoverage(sourceId?: KnowledgeSourceId | string): number {
+    if (sourceId) {
+      const t = (
+        this.db.raw
+          .prepare(
+            `SELECT COUNT(*) AS n FROM knowledge_chunks c
+             JOIN knowledge_files f ON f.id = c.file_id
+             JOIN knowledge_memberships m ON m.file_id = c.file_id
+             WHERE m.source_id = ? AND ${EMBEDDABLE_WHERE}`,
+          )
+          .get(String(sourceId)) as { n: number }
+      ).n;
+      if (t === 0) return 1;
+      const e = (
+        this.db.raw
+          .prepare(
+            `SELECT COUNT(*) AS n FROM knowledge_chunk_embeddings e
+             JOIN knowledge_chunks c ON c.id = e.chunk_id
+             JOIN knowledge_memberships m ON m.file_id = c.file_id
+             WHERE m.source_id = ?`,
+          )
+          .get(String(sourceId)) as { n: number }
+      ).n;
+      return Math.min(1, e / t);
+    }
+    const t = (
+      this.db.raw
+        .prepare(
+          `SELECT COUNT(*) AS n FROM knowledge_chunks c
+           JOIN knowledge_files f ON f.id = c.file_id WHERE ${EMBEDDABLE_WHERE}`,
+        )
+        .get() as { n: number }
+    ).n;
+    if (t === 0) return 1;
+    const e = (
+      this.db.raw
+        .prepare('SELECT COUNT(*) AS n FROM knowledge_chunk_embeddings')
+        .get() as { n: number }
+    ).n;
+    return Math.min(1, e / t);
+  }
+
+  backfillVecFromEmbeddings(batch = 100): number {
+    if (!this.db.sqliteVecEnabled) return 0;
+    const rows = this.db.raw
+      .prepare(
+        `SELECT chunk_id, embedding, dimensions FROM knowledge_chunk_embeddings
+         WHERE dimensions > 0 LIMIT ?`,
+      )
+      .all(batch) as Array<{
+      chunk_id: string;
+      embedding: ArrayBuffer | Uint8Array;
+      dimensions: number;
+    }>;
+    let n = 0;
+    for (const r of rows) {
+      const buf =
+        r.embedding instanceof Uint8Array
+          ? r.embedding
+          : new Uint8Array(r.embedding as ArrayBuffer);
+      const vec = Array.from(new Float32Array(buf.buffer, buf.byteOffset, buf.byteLength / 4));
+      this.writeKnowledgeVec(r.chunk_id, vec);
+      n += 1;
+    }
+    return n;
+  }
+
+  getChunk(chunkId: string): {
+    id: string;
+    sourceId: string;
     path: string;
     text: string;
     startLine: number;
     endLine: number;
   } | null {
-    const row = this.db.raw
+    const r = this.db.raw
       .prepare(
-        'SELECT id, source_id, path, text, start_line, end_line FROM knowledge_chunks WHERE id = ?',
+        `SELECT c.id, c.text, c.start_line, c.end_line, m.source_id, m.logical_path
+         FROM knowledge_chunks c
+         LEFT JOIN knowledge_memberships m ON m.file_id = c.file_id
+         WHERE c.id = ? LIMIT 1`,
       )
       .get(chunkId) as
       | {
           id: string;
-          source_id: string;
-          path: string;
           text: string;
           start_line: number;
           end_line: number;
+          source_id: string | null;
+          logical_path: string | null;
         }
       | undefined;
-    if (!row) return null;
+    if (!r) return null;
     return {
-      id: asChunkId(row.id),
-      sourceId: asSourceId(row.source_id),
-      path: row.path,
-      text: row.text,
-      startLine: row.start_line,
-      endLine: row.end_line,
-    };
-  }
-
-  /**
-   * 按路径列出 chunks（可选行窗）
-   */
-  listChunksByPath(
-    sourceId: KnowledgeSourceId | string,
-    path: string,
-    opts?: { startLine?: number; endLine?: number },
-  ): Array<{
-    id: KnowledgeChunkId;
-    path: string;
-    text: string;
-    startLine: number;
-    endLine: number;
-  }> {
-    const rows = this.db.raw
-      .prepare(
-        `SELECT id, path, text, start_line, end_line FROM knowledge_chunks
-         WHERE source_id = ? AND path = ?
-         ORDER BY ordinal`,
-      )
-      .all(sourceId, path) as Array<{
-      id: string;
-      path: string;
-      text: string;
-      start_line: number;
-      end_line: number;
-    }>;
-    let mapped = rows.map((r) => ({
-      id: asChunkId(r.id),
-      path: r.path,
+      id: r.id,
+      sourceId: r.source_id ?? '',
+      path: r.logical_path ?? '',
       text: r.text,
       startLine: r.start_line,
       endLine: r.end_line,
-    }));
-    if (opts?.startLine != null) {
-      mapped = mapped.filter((c) => c.endLine >= opts.startLine!);
-    }
-    if (opts?.endLine != null) {
-      mapped = mapped.filter((c) => c.startLine <= opts.endLine!);
-    }
-    return mapped;
+    };
   }
 
-  /**
-   * 写入 chunk 向量（Float32 BLOB；sqlite-vec 可用时同步进 vec 表）
-   */
-  setChunkEmbedding(chunkId: KnowledgeChunkId | string, embedding: number[]): void {
-    this.setChunkEmbeddings([[chunkId, embedding]]);
-  }
-
-  /**
-   * 批量写向量（单事务，减少与 parse 写路径的锁竞争）
-   *
-   * @param rows - [chunkId, embedding] 列表
-   */
-  setChunkEmbeddings(rows: Array<[string, number[]]>): void {
-    if (rows.length === 0) return;
-    // 写入前确保 schema（旧库可能尚未补 bucket 列）
-    this.db.ensureEmbeddingSchema();
-    const upsert = this.db.raw.prepare(
-      `INSERT INTO knowledge_chunk_embeddings (chunk_id, dimensions, embedding, bucket, created_at)
-       VALUES (?, ?, ?, ?, ?)
-       ON CONFLICT(chunk_id) DO UPDATE SET
-         dimensions=excluded.dimensions,
-         embedding=excluded.embedding,
-         bucket=excluded.bucket,
-         created_at=excluded.created_at`,
-    );
-    this.db.raw.exec('BEGIN');
-    try {
-      const now = Date.now();
-      for (const [chunkId, embedding] of rows) {
-        const bucket = embedding.length > 0 ? vectorBucket(embedding) : -1;
-        upsert.run(chunkId, embedding.length, toF32Blob(embedding), bucket, now);
-        this.upsertKnowledgeVec(chunkId, embedding);
-      }
-      this.db.raw.exec('COMMIT');
-    } catch (e) {
-      this.db.raw.exec('ROLLBACK');
-      throw e;
-    }
-  }
-
-  /** sqlite-vec 表名 */
-  private static readonly VEC_TABLE = 'knowledge_vec';
-
-  /** 确保 vec0 虚拟表（维度首次写入时确定） */
-  private ensureVecTable(dimensions: number): boolean {
-    if (!this.db.sqliteVecEnabled) return false;
-    try {
-      const row = this.db.raw
-        .prepare(
-          `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?`,
-        )
-        .get(KnowledgeIndexStore.VEC_TABLE) as { sql?: string } | undefined;
-      if (row?.sql) {
-        const m = /float\[(\d+)\]/i.exec(row.sql);
-        return !m || Number(m[1]) === dimensions;
-      }
-      this.db.raw.exec(`
-        CREATE VIRTUAL TABLE IF NOT EXISTS ${KnowledgeIndexStore.VEC_TABLE} USING vec0(
-          chunk_id TEXT PRIMARY KEY,
-          embedding float[${dimensions}] distance_metric=cosine
-        );
-      `);
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  private upsertKnowledgeVec(chunkId: KnowledgeSourceId | string | KnowledgeChunkId, embedding: number[]): void {
-    if (!embedding?.length) return;
-    if (!this.ensureVecTable(embedding.length)) return;
-    try {
-      // vec0 虚拟表不支持 INSERT … ON CONFLICT UPSERT → 必须 DELETE + INSERT
-      this.db.raw
-        .prepare(`DELETE FROM ${KnowledgeIndexStore.VEC_TABLE} WHERE chunk_id = ?`)
-        .run(String(chunkId));
-      this.db.raw
-        .prepare(
-          `INSERT INTO ${KnowledgeIndexStore.VEC_TABLE} (chunk_id, embedding)
-           VALUES (?, ?)`,
-        )
-        .run(String(chunkId), toF32Blob(embedding));
-    } catch {
-      // vec 表不可用时忽略，检索走 JS 路径
-    }
-  }
-
-  /** 删除 sqlite-vec 行（chunk 级清理；扩展未加载时 no-op） */
-  private deleteKnowledgeVec(chunkIds: string[]): void {
-    if (chunkIds.length === 0 || !this.db.sqliteVecEnabled) return;
-    try {
-      const del = this.db.raw.prepare(
-        `DELETE FROM ${KnowledgeIndexStore.VEC_TABLE} WHERE chunk_id = ?`,
-      );
-      for (const id of chunkIds) del.run(String(id));
-    } catch {
-      // 扩展不可用 / 表不存在
-    }
-  }
-
-  /**
-   * 把已有 BLOB 向量回填进 sqlite-vec。
-   *
-   * **必须小批量 + 让出事件循环**：node:sqlite 同步，大循环会堵死 HTTP（中止按钮假死）。
-   * 按 chunk_id 游标推进，避免每次从头 JOIN 大表。
-   *
-   * @param limit - 本轮最多回填条数（建议 ≤50）
-   * @returns 本轮写入条数；扩展未启用时 0
-   */
-  async backfillVecFromEmbeddings(limit = 25): Promise<number> {
-    if (!this.db.sqliteVecEnabled) return 0;
-    if (this._vecBackfillBusy) return 0;
-    this._vecBackfillBusy = true;
-    try {
-      const dimRow = this.db.raw
-        .prepare(
-          `SELECT dimensions FROM knowledge_chunk_embeddings
-           WHERE dimensions > 0 ORDER BY created_at DESC LIMIT 1`,
-        )
-        .get() as { dimensions?: number } | undefined;
-      const dims = Number(dimRow?.dimensions ?? 0);
-      if (!dims || !this.ensureVecTable(dims)) return 0;
-
-      const rows = this.db.raw
-        .prepare(
-          `SELECT e.chunk_id, e.embedding FROM knowledge_chunk_embeddings e
-           WHERE e.dimensions = ? AND e.chunk_id > ?
-             AND NOT EXISTS (
-               SELECT 1 FROM ${KnowledgeIndexStore.VEC_TABLE} v WHERE v.chunk_id = e.chunk_id
-             )
-           ORDER BY e.chunk_id
-           LIMIT ?`,
-        )
-        .all(dims, this._vecBackfillCursor, Math.min(50, Math.max(1, limit))) as Array<{
-        chunk_id: string;
-        embedding: Uint8Array | Buffer;
-      }>;
-      if (rows.length === 0) {
-        // 游标到尾且无缺口：重置游标只服务「之后新增向量」；NOT EXISTS 防无限重写
-        this._vecBackfillCursor = '';
-        return 0;
-      }
-      let n = 0;
-      for (const r of rows) {
-        try {
-          this.db.raw
-            .prepare(`DELETE FROM ${KnowledgeIndexStore.VEC_TABLE} WHERE chunk_id = ?`)
-            .run(String(r.chunk_id));
-          this.db.raw
-            .prepare(
-              `INSERT INTO ${KnowledgeIndexStore.VEC_TABLE} (chunk_id, embedding) VALUES (?, ?)`,
-            )
-            .run(String(r.chunk_id), r.embedding);
-          n += 1;
-          this._vecBackfillCursor = String(r.chunk_id);
-        } catch {
-          // 单条失败跳过
-        }
-        // 每条让出一次，保证 abort/HTTP 可调度
-        await new Promise<void>((resolve) => setImmediate(resolve));
-      }
-      return n;
-    } finally {
-      this._vecBackfillBusy = false;
-    }
-  }
-
-  private _vecBackfillBusy = false;
-  private _vecBackfillCursor = '';
-
-  /**
-   * 列出待嵌入 chunk（无向量行）
-   *
-   * **代码不进向量**：原文件已可 file_search；片段易失真。
-   * 仅文档/正文类（text / markdown / document:* 等）参与 embedding。
-   */
-  listChunksMissingEmbedding(sourceId: KnowledgeSourceId | string, limit = 100): Array<{
-    id: KnowledgeChunkId;
-    text: string;
-    path: string;
-  }> {
+  listChunksByPath(
+    sourceId: KnowledgeSourceId | string,
+    path: string,
+  ): Array<{ id: string; text: string; startLine: number; endLine: number; ordinal: number; path: string }> {
+    const logical = path.replace(/\\/g, '/');
     const rows = this.db.raw
       .prepare(
-        `SELECT c.id, c.text, c.path
+        `SELECT c.id, c.text, c.start_line, c.end_line, c.ordinal
          FROM knowledge_chunks c
-         LEFT JOIN knowledge_chunk_embeddings e ON e.chunk_id = c.id
-         LEFT JOIN knowledge_files f ON f.source_id = c.source_id AND f.path = c.path
-         WHERE c.source_id = ? AND e.chunk_id IS NULL
-           AND ${EMBEDDABLE_WHERE}
-         ORDER BY c.path, c.ordinal
-         LIMIT ?`,
+         JOIN knowledge_memberships m ON m.file_id = c.file_id
+         WHERE m.source_id = ? AND m.logical_path = ?
+         ORDER BY c.ordinal`,
       )
-      .all(sourceId, limit) as Array<{ id: string; text: string; path: string }>;
-    return rows.map((r) => ({ id: asChunkId(r.id), text: r.text, path: r.path }));
-  }
-
-  /**
-   * 向量覆盖度（0–1；无可嵌入 chunk 时为 1）
-   */
-  embeddingCoverage(sourceId: KnowledgeSourceId | string): number {
-    const total = this.db.raw
-      .prepare(
-        `SELECT COUNT(*) AS n FROM knowledge_chunks c
-         LEFT JOIN knowledge_files f ON f.source_id = c.source_id AND f.path = c.path
-         WHERE c.source_id = ? AND ${EMBEDDABLE_WHERE}`,
-      )
-      .get(sourceId) as { n: number };
-    if (!total?.n) return 1;
-    const embedded = this.db.raw
-      .prepare(
-        `SELECT COUNT(*) AS n FROM knowledge_chunk_embeddings e
-         JOIN knowledge_chunks c ON c.id = e.chunk_id
-         LEFT JOIN knowledge_files f ON f.source_id = c.source_id AND f.path = c.path
-         WHERE c.source_id = ? AND e.dimensions > 0 AND ${EMBEDDABLE_WHERE}`,
-      )
-      .get(sourceId) as { n: number };
-    return Math.min(1, (embedded?.n ?? 0) / total.n);
-  }
-
-  /**
-   * 向量后端能力（百万级部署依据）
-   *
-   * - `sqlite-vec`：KNN，可上百万
-   * - `js-bucket`：桶裁剪，仅适合中小库
-   * - `disabled`：无 embedding 行 / 关闭
-   */
-  vectorBackend(): 'sqlite-vec' | 'js-bucket' | 'disabled' {
-    const n = this.countEmbeddings();
-    if (n === 0) return 'disabled';
-    return this.db.sqliteVecEnabled ? 'sqlite-vec' : 'js-bucket';
-  }
-
-  /** 有效向量条数（dimensions>0） */
-  countEmbeddings(): number {
-    const row = this.db.raw
-      .prepare(
-        `SELECT COUNT(*) AS n FROM knowledge_chunk_embeddings WHERE dimensions > 0`,
-      )
-      .get() as { n: number };
-    return row?.n ?? 0;
-  }
-
-  /**
-   * 向量检索：优先 sqlite-vec KNN；结果不足时退 JS 补齐。
-   *
-   * **规模闸门**：无 sqlite-vec 且向量数超过 `VECTOR_JS_FULL_SCAN_MAX` 时
-   * **禁止** JS 全表兜底（百万级会堵死事件循环）；仅保留邻桶裁剪结果。
-   * 正确性由 hybrid 关键词腿 + FTS 兜底，不靠全库暴力余弦。
-   */
-  vectorSearch(
-    queryEmbedding: number[],
-    opts: { sourceIds: KnowledgeSourceId[]; limit?: number },
-  ): ChunkHit[] {
-    if (opts.sourceIds.length === 0 || !queryEmbedding?.length) return [];
-    const limit = opts.limit ?? 8;
-
-    const viaVec = this.vectorSearchVec(queryEmbedding, opts, limit);
-    if (viaVec && viaVec.length >= limit) return viaVec;
-
-    // 闸门看「KNN 是否真正可用」，不是 sqlite-vec flag：
-    // 扩展已加载但 vec 表未建 / KNN 抛错时，viaVec=null，仍可能对 1M 行 JS 全扫。
-    const n = this.countEmbeddings();
-    const knnAvailable = viaVec !== null;
-    const allowJsFullScan = knnAvailable || n <= KnowledgeIndexStore.VECTOR_JS_FULL_SCAN_MAX;
-    const viaJs = this.vectorSearchJs(queryEmbedding, opts, limit, allowJsFullScan);
-    if (!viaVec || viaVec.length === 0) return viaJs;
-
-    const byId = new Map<string, ChunkHit>();
-    for (const h of viaVec) byId.set(h.chunkId, h);
-    for (const h of viaJs) if (!byId.has(h.chunkId)) byId.set(h.chunkId, h);
-    return [...byId.values()].sort((a, b) => b.score - a.score).slice(0, limit);
-  }
-
-  /** 无 ANN 时禁止 JS 全扫的向量数上限（超过只走邻桶 / 拒绝纯向量） */
-  private static readonly VECTOR_JS_FULL_SCAN_MAX = 50_000;
-
-  /** sqlite-vec KNN（不可用时返回 null） */
-  private vectorSearchVec(
-    queryEmbedding: number[],
-    opts: { sourceIds: KnowledgeSourceId[] },
-    limit: number,
-  ): ChunkHit[] | null {
-    if (!this.db.sqliteVecEnabled) return null;
-    if (!this.ensureVecTable(queryEmbedding.length)) return null;
-    const placeholders = opts.sourceIds.map(() => '?').join(',');
-    try {
-      // k 放大：全局 top-k 再滤 source，k 太小会把目标源的命中挤出候选
-      const k = Math.max(limit * 20, 64);
-      const rows = this.db.raw
-        .prepare(
-          `SELECT c.id, c.source_id, c.path, c.ordinal, c.text, c.start_line, c.end_line, v.distance AS distance
-           FROM (
-             SELECT chunk_id, distance
-             FROM ${KnowledgeIndexStore.VEC_TABLE}
-             WHERE embedding MATCH ?
-               AND k = ?
-           ) v
-           JOIN knowledge_chunks c ON c.id = v.chunk_id
-           WHERE c.source_id IN (${placeholders})
-           ORDER BY v.distance ASC`,
-        )
-        .all(toF32Blob(queryEmbedding), k, ...opts.sourceIds) as Array<{
-        id: string;
-        source_id: string;
-        path: string;
-        ordinal: number;
-        text: string;
-        start_line: number;
-        end_line: number;
-        distance: number;
-      }>;
-      return rows.slice(0, limit).map((row) => ({
-        chunkId: asChunkId(row.id),
-        sourceId: asSourceId(row.source_id),
-        path: row.path,
-        ordinal: row.ordinal,
-        text: row.text,
-        startLine: row.start_line,
-        endLine: row.end_line,
-        score: 1 - Number(row.distance),
-      }));
-    } catch {
-      return null;
-    }
-  }
-
-  /**
-   * JS 余弦（Float32 BLOB）
-   *
-   * 两阶段：先按 query 邻桶裁剪（ANN-lite）；`allowFullScan` 时不足再全扫。
-   * 大库无 sqlite-vec 时 `allowFullScan=false`，只返回邻桶结果（可为空）。
-   */
-  private vectorSearchJs(
-    queryEmbedding: number[],
-    opts: { sourceIds: KnowledgeSourceId[] },
-    limit: number,
-    allowFullScan = true,
-  ): ChunkHit[] {
-    const placeholders = opts.sourceIds.map(() => '?').join(',');
-    const loadRows = (bucketFilter: string, bucketParams: number[] = []) =>
-      this.db.raw
-        .prepare(
-          `SELECT c.id, c.source_id, c.path, c.ordinal, c.start_line, c.end_line, e.embedding
-           FROM knowledge_chunks c
-           JOIN knowledge_chunk_embeddings e ON e.chunk_id = c.id
-           WHERE c.source_id IN (${placeholders})
-             AND e.dimensions > 0
-             ${bucketFilter}
-           LIMIT 200000`,
-        )
-        .all(...opts.sourceIds, ...bucketParams) as Array<{
-        id: string;
-        source_id: string;
-        path: string;
-        ordinal: number;
-        start_line: number;
-        end_line: number;
-        embedding: Uint8Array | Buffer;
-      }>;
-
-    const toScoredInput = (rows: ReturnType<typeof loadRows>) =>
-      rows.map((r) => ({
-        id: r.id,
-        source_id: r.source_id,
-        path: r.path,
-        ordinal: r.ordinal,
-        start_line: r.start_line,
-        end_line: r.end_line,
-        embedding: fromF32Blob(r.embedding),
-      }));
-
-    // 1) 邻桶候选（降 O(N)）
-    const buckets = queryBuckets(queryEmbedding);
-    const bucketPh = buckets.map(() => '?').join(',');
-    let scored = scoreAnnCandidates(
-      queryEmbedding,
-      toScoredInput(loadRows(`AND e.bucket IN (${bucketPh})`, buckets)),
-      limit,
-    );
-
-    // 2) 不足则扩到全库（仅小库 / 有 vec 兜底时；大库禁扫防堵死）
-    if (allowFullScan && scored.length < limit) {
-      const all = scoreAnnCandidates(queryEmbedding, toScoredInput(loadRows('')), limit);
-      const seen = new Set(scored.map((s) => s.id));
-      for (const h of all) {
-        if (!seen.has(h.id)) scored.push(h);
-      }
-      scored.sort((a, b) => b.score - a.score);
-      scored = scored.slice(0, limit);
-    }
-    if (scored.length === 0) return [];
-
-    // 只对 top-k 取正文与元数据
-    const topIds = scored.map((s) => s.id);
-    const idPh = topIds.map(() => '?').join(',');
-    const topRows = this.db.raw
-      .prepare(
-        `SELECT id, source_id, path, ordinal, text, start_line, end_line
-         FROM knowledge_chunks WHERE id IN (${idPh})`,
-      )
-      .all(...topIds) as Array<{
+      .all(String(sourceId), logical) as Array<{
       id: string;
-      source_id: string;
-      path: string;
-      ordinal: number;
       text: string;
       start_line: number;
       end_line: number;
+      ordinal: number;
     }>;
-    const byId = new Map(topRows.map((r) => [r.id, r]));
-    const hits: ChunkHit[] = [];
-    for (const s of scored) {
-      const row = byId.get(s.id);
-      if (!row) continue;
-      hits.push({
-        chunkId: asChunkId(row.id),
-        sourceId: asSourceId(row.source_id),
-        path: row.path,
-        ordinal: row.ordinal,
-        text: row.text,
-        startLine: row.start_line,
-        endLine: row.end_line,
-        score: s.score,
-      });
-    }
-    return hits;
+    return rows.map((r) => ({
+      id: r.id,
+      text: r.text,
+      startLine: r.start_line,
+      endLine: r.end_line,
+      ordinal: r.ordinal,
+      path: logical,
+    }));
+  }
+
+  countEmbeddings(): number {
+    return (
+      this.db.raw
+        .prepare('SELECT COUNT(*) AS n FROM knowledge_chunk_embeddings')
+        .get() as { n: number }
+    ).n;
   }
 }
 
-/** number[] → float32 blob */
-function toF32Blob(embedding: number[]): Buffer {
-  const f32 = Float32Array.from(embedding);
-  return Buffer.from(f32.buffer, f32.byteOffset, f32.byteLength);
-}
-
-/** float32 blob → number[] */
-function fromF32Blob(buf: Uint8Array | Buffer | null | undefined): number[] | null {
-  if (!buf || buf.byteLength === 0) return null;
-  if (buf.byteLength % 4 !== 0) return null;
-  const u8 = buf instanceof Buffer ? new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength) : buf;
-  const f32 = new Float32Array(u8.buffer, u8.byteOffset, u8.byteLength / 4);
-  return Array.from(f32);
-}
-
-/**
- * 内容指纹（新鲜度判断）
- *
- * @param content - UTF-8 文本或原始字节（二进制文档用 bytes）
- * @returns sha256 hex
- */
 export function hashContent(content: string | Uint8Array): string {
   return createHash('sha256').update(content).digest('hex');
-}
-
-function rowToFile(row: Record<string, unknown>): IndexedFileRecord {
-  return {
-    id: String(row.id),
-    sourceId: asSourceId(String(row.source_id)),
-    path: String(row.path),
-    contentHash: String(row.content_hash ?? ''),
-    size: Number(row.size ?? 0),
-    mtime: Number(row.mtime ?? 0),
-    adapterId: row.adapter_id == null ? null : String(row.adapter_id),
-    status: String(row.status) as IndexedFileRecord['status'],
-    error: row.error == null ? undefined : String(row.error),
-    chunkCount: Number(row.chunk_count ?? 0),
-    indexedAt: Number(row.indexed_at ?? 0),
-    externalUrl: row.external_url == null ? undefined : String(row.external_url),
-    etag: row.etag == null ? undefined : String(row.etag),
-    lastModified: row.last_modified == null ? undefined : String(row.last_modified),
-  };
 }

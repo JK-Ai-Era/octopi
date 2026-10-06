@@ -25,8 +25,8 @@ import {
   type AttachmentUploadInput,
   type SessionAttachment,
 } from './types.js';
-import type { DocumentPort } from '../../context/capabilities/document/types.js';
-import { isDocumentExtractError } from '../../context/capabilities/document/errors.js';
+import type { DocumentPort } from '../../capabilities/document/types.js';
+import { isDocumentExtractError } from '../../capabilities/document/errors.js';
 
 export interface SessionAttachmentServiceOptions {
   /** 通常 `OCTOPI_HOME/sessions` */

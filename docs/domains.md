@@ -102,12 +102,12 @@
 |---|---|
 | **问题** | 世界上写着什么？ |
 | **平面** | Agent & Substrate |
-| **独占概念** | Knowledge、Source、KnowledgeScope |
-| **模块** | `knowledge` |
-| **失败模式** | 无源/错源、检索错语料、索引当权威 |
+| **独占概念** | Knowledge、Source、KnowledgeScope、File identity / Membership |
+| **模块** | `knowledge`（含 **Knowledge Service** `http-app`/`serve`/`client`） |
+| **失败模式** | 无源/错源、检索错语料、索引当权威、双写 knowledge.db |
 | **不做** | 命题记忆；活系统当前态（Tool） |
 
-**独立成域**：含外生资源管理、解析、embedding、检索；**不是基质**。Scope = Global / Project / Session（无 Agent 级源）。详见 [`knowledge.md`](./knowledge.md)。
+**独立成域**：含外生资源管理、解析、embedding、检索；**不是基质**。Scope = Global / Project / Session（无 Agent 级源）。**v0.60**：独立 HTTP Service 为 `knowledge.db` 唯一写者（Gateway 经 Client）；File 本位防重 + Membership。详见 [`knowledge.md`](./knowledge.md) 与 `arch/knowledge-service-http.md`。
 
 ---
 
@@ -187,7 +187,8 @@
 | 类 | id | 模块 | 说明 |
 |----|-----|------|------|
 | Capability | observability | `observer` `diagnostics` | 调试/指标/Issue；合规 Audit 在 Session |
-| Capability | summary-compact | `capabilities` | 摘要/压缩公用算法（亦服务 Context） |
+| Capability | summary-compact | `context/capabilities` | 摘要/压缩公用算法（Context 组装专用） |
+| Capability | document-extract | `capabilities/document` | 跨域 Document 抽取 Port（session/knowledge/tools；`documents.*`） |
 | Foundation | events | `events` | 事件词表 |
 | Foundation | types | `types` | 层共享类型 |
 | Foundation | harness-entry | `index.ts` | 层统一导出 |

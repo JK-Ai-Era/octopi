@@ -15,6 +15,9 @@ export interface HybridSearchOptions {
   limit?: number;
   /** 仅关键词（跳过 embedding query） */
   keywordOnly?: boolean;
+  /** 跨 Gateway 隔离：registered_by ∪ public */
+  tenantId?: string;
+  gatewayId?: string;
   /**
    * 可选源过滤（与可见集求交，禁止越权）。
    * `sourceIds` 精确 id；`source` 为 displayName/id 模糊（单源）。
@@ -97,8 +100,15 @@ export class KnowledgeRetriever {
   /**
    * 可见 sourceId 列表
    */
-  visibleSourceIds(agentId: string, sessionId?: string): import('./types.js').KnowledgeSourceId[] {
-    return this.sources.listVisible(agentId, sessionId).map((s) => s.id);
+  visibleSourceIds(
+    agentId: string,
+    sessionId?: string,
+    identity?: { tenantId?: string; gatewayId?: string },
+  ): import('./types.js').KnowledgeSourceId[] {
+    return this.sources
+      .listVisible(agentId, sessionId)
+      .filter((s) => this.sources.isGatewayVisible(s, identity))
+      .map((s) => s.id);
   }
 
   /** 可见集 ∩ 请求过滤；无过滤时原样返回可见集 */
@@ -141,20 +151,20 @@ export class KnowledgeRetriever {
    * hybrid 检索
    */
   async search(query: string, opts: HybridSearchOptions): Promise<HybridSearchResult> {
-    const visible = this.visibleSourceIds(opts.agentId, opts.sessionId);
+    const visible = this.visibleSourceIds(opts.agentId, opts.sessionId, {
+      tenantId: opts.tenantId,
+      gatewayId: opts.gatewayId,
+    });
     const sourceIds = this.filterSourceIds(visible, opts);
     const limit = opts.limit ?? 8;
 
     const vectorBackend = this.index.vectorBackend();
-    // 百万级：无 sqlite-vec 时强制关键词腿（禁止纯向量）
-    const forceKeyword =
+    // 百万级：无 KNN / 配置强制时走关键词腿（闸门看结果而非 flag）
+    const preferKeyword =
       this.hybridKeyword ||
       vectorBackend === 'js-bucket' ||
       vectorBackend === 'disabled';
 
-    const keywordHits = forceKeyword
-      ? this.index.search(query, { sourceIds, limit: limit * 2 })
-      : [];
     let vectorHits: ChunkHit[] = [];
     let usedVector = false;
 
@@ -168,6 +178,11 @@ export class KnowledgeRetriever {
         vectorHits = [];
       }
     }
+
+    const forceKeyword = preferKeyword || !usedVector;
+    const keywordHits = forceKeyword
+      ? this.index.search(query, { sourceIds, limit: limit * 2 })
+      : [];
 
     const useKw = forceKeyword || !usedVector;
     const kwW = !useKw ? 0 : usedVector ? this.keywordWeight : 1;

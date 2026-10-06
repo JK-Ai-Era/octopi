@@ -3,7 +3,7 @@
  *
  * 只覆盖 mammoth 常见语义标签，不引入 turndown 依赖。
  *
- * @module harness/context/capabilities/document/html-to-md
+ * @module harness/capabilities/document/html-to-md
  */
 
 /**

@@ -497,6 +497,16 @@ export async function serveStartCommand(args: CliArgs): Promise<void> {
   console.log(`   Port:   ${port}`);
   console.log(`   Log:    ${logPath}`);
 
+  // Knowledge Service 启动状态（manageLocal / 远程 / disabled）
+  const knLines = readLogTail(logPath, 30).filter((l) => l.includes('[Knowledge]'));
+  if (knLines.length > 0) {
+    for (const line of knLines.slice(-3)) {
+      console.log(`   ${line.trim()}`);
+    }
+  } else {
+    console.log('   Knowledge: (no [Knowledge] line yet — see gateway.log)');
+  }
+
   // Web UI 为可选：失败不拖垮 Gateway（跨平台/无 web 依赖时仍可 serve）
   await webuiStartCommand(configPath, { soft: true });
 
@@ -893,6 +903,14 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
       apiKey: httpConfig?.apiKey,
       corsOrigins: httpConfig?.corsOrigins,
       onRequest: (req, res) => webApiRouter.handle(req, res),
+      healthExtras: () => {
+        try {
+          const kn = (gateway as unknown as { knowledgeRuntime?: { state?: string } }).knowledgeRuntime;
+          return { knowledge: kn?.state ?? 'disabled' };
+        } catch {
+          return { knowledge: 'unknown' };
+        }
+      },
     }));
   }
 

@@ -78,7 +78,7 @@ Scaffolded by `src/init.ts` (`initOctopi` / `ensureAgentDirs`). Keep init, types
     <id>.jsonl / <id>.state.json
   sessions.index.db     # Rebuildable search projection (optional; not authoritative — see arch/session-history-search.md)
   archives/             # Cold archive backup *.sessions.jsonl.gz
-  knowledge/            # Knowledge data plane (knowledge.db; see docs/knowledge.md)
+  knowledge/            # Knowledge data plane (knowledge.db — **sole writer is Knowledge Service**; see docs/knowledge.md)
   credentials/          # Integration credentials vault (credentials.db; env/file refs or AES-GCM ciphertext)
   agents/<id>/          # agent home
     AGENTS.md           # main persona (loaded first by loadPersona)
@@ -89,7 +89,7 @@ Scaffolded by `src/init.ts` (`initOctopi` / `ensureAgentDirs`). Keep init, types
 
 **Do not create `agents/<id>/memory/` or `agents/<id>/wisdom/` directories.** Memory / Cognition / Wisdom persist in a per-agent SQLite file via `AgentDatabase` (`packages/engine/src/harness/memory/sqlite/agent-db.ts`), not as sibling folders under home.
 
-**Knowledge exogenous corpus does not live in `agent.db`.** Source registration + indexes are in `OCTOPI_HOME/knowledge/knowledge.db`; resource-access credentials are in `OCTOPI_HOME/credentials/credentials.db` (referenced via `authRef`; plaintext secrets never enter `knowledge.db` / `octopi.json`). See `docs/knowledge.md`.
+**Knowledge exogenous corpus does not live in `agent.db`.** Source registration + indexes are in `OCTOPI_HOME/knowledge/knowledge.db`. **v0.60: Knowledge is a standalone HTTP Service and the sole writer of `knowledge.db`** — Gateway never opens it; Host API / `knowledge_search` / `knowledge_read` go through `KnowledgeClient` (`knowledge.service.manageLocal|baseUrl`, default port **18280**). File identity (`identity_key`) + Membership replace Corpus. Resource-access credentials are in `OCTOPI_HOME/credentials/credentials.db` (referenced via `authRef`; plaintext secrets never enter `knowledge.db` / `octopi.json`). See `docs/knowledge.md` and `arch/knowledge-service-http.md`.
 
 **Do not use `memory.extractor` ETL or `MemoryExtractionWiring`.** Memory write path is agent `memory_store` + `memory.steward.*` subsystems. See `docs/memory.md` and `arch/memory-system-redesign.md`.
 
@@ -115,13 +115,13 @@ Scaffolded by `src/init.ts` (`initOctopi` / `ensureAgentDirs`). Keep init, types
   - **I5**: Tool cwd policy is `toolIsolation` (default `none`); `session-subdir` for multi-session file writes.
   - Config/schema changes: edit Zod (`packages/engine/src/config-schema/` + root `src/config-schema/` compose), then `npm run generate:schema`; keep `octopi.example.json` valid against generated schema.
 - **Shipped runtime knobs** (see `docs/KNOWN-ISSUES.md` + `CHANGELOG` + `docs/observer-domain.md` + `docs/context-layer-contracts.md`): top-level `toolIsolation`, `sessionAcl`, **`observer`** (Run Observatory; default `level: off`; debug REST is `GET /debug/run/*`, **not** `/api/v1`; separate from Telemetry key `observability` and Core `Observer`); **`summary` / `compact` / `models.level.summary`** (Harness cross-cutting capabilities under `harness/context/capabilities/`: SummaryPort + CompactEngine; tools side L1 hard cap + L2 summary; E4 session compact state is **not** in capabilities); agents[].`workspace` / `maxSessionRights`; SessionData `primaryAgentId` / `preferredAgentId` / `participants` / `contextCompacts`. Gateway injects ACL + a **shared** session lease into all Runners. Observer sampling belongs to Runner `emitObserved` / Builder ContextEngine emit; Gateway must **not** call `hub.ingestEvent` a second time.
-- **Default ports**: Gateway fallback **18180** (`channels[type=http].port`), WebUI fallback **8180** (`web.port`); precedence CLI `--port` > config > default. WebUI probes legacy `5173/5174/4173` only to adopt already-running instances — never hardcode `3000`/`5173` as defaults again (address resolution lives in `packages/webui/src/gateway-base.ts`: build-time `VITE_OCTOPI_BASE` > runtime `/octopi-config.js` served by `serve-webui` from `octopi.json` > default 18180).
+- **Default ports**: Gateway fallback **18180** (`channels[type=http].port`), WebUI fallback **8180** (`web.port`), Knowledge Service fallback **18280** (`knowledge.service.port`); precedence CLI `--port` > config > default. WebUI probes legacy `5173/5174/4173` only to adopt already-running instances — never hardcode `3000`/`5173` as defaults again (address resolution lives in `packages/webui/src/gateway-base.ts`: build-time `VITE_OCTOPI_BASE` > runtime `/octopi-config.js` served by `serve-webui` from `octopi.json` > default 18180).
 - **Phase A–H minimum sets are closed.** Do not invent a parallel roadmap. For remaining work: open research items in internal `arch/open-problems.md`, capability-layer gaps (distributed Lease, session directory de-coupling, quota, role DB) in `docs/KNOWN-ISSUES.md`, and the short open-item list in `arch/NEXT-STEPS.md`. `arch/IMPLEMENTATION-PLAN.md` is an archival summary only.
 
 ### The 4-Layer Architecture
 1.  **Layer 0: Loop** — Pure execution loop (`agentLoop`). Zero state, zero external dependencies. Protocol events only (`AgentLoopEvent`).
 2.  **Layer 1: Core** — Mechanism primitives (EventBus, StateMachine) and Interface contracts. No strategy implementations. Does **not** re-export Loop.
-3.  **Layer 2: Harness** — **10 product domains** (domain-first directories under `packages/engine/src/harness/`; counts only from `docs/domains.yaml`) + cross-cutting **capabilities** (`harness/context/capabilities/`: summary/compact ports). **Runnable Agent facade** lives at `harness/run/agent` (`Agent.run()` = reliability, E5 entry). Strategies and workflows live here. See `docs/domains.md`.
+3.  **Layer 2: Harness** — **10 product domains** (domain-first directories under `packages/engine/src/harness/`; counts only from `docs/domains.yaml`) + cross-cutting **capabilities**: `harness/context/capabilities/` (summary/compact — Context 组装专用) 与 `harness/capabilities/document`（Document 抽取 Port，session/knowledge/tools 共用；唯一装配 `createDocumentPortFromConfig` + `documents.*`）。准入：跨 ≥2 域的稳定 Port，不含产品策略，不是 Integration 外设。**Runnable Agent facade** lives at `harness/run/agent` (`Agent.run()` = reliability, E5 entry). Strategies and workflows live here. See `docs/domains.md`.
 4.  **Layer 3: Integration** — External adapters (LLM Providers, Storage, Observability).
 
 **Runtime entry**: prefer `Agent.run()` over hand-wiring `runAgentWithReliability`. Harness-level events (`budget_exceeded`, `run_guard_*`) are `HarnessLoopEvent`, not `AgentLoopEvent`.

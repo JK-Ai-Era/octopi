@@ -2,7 +2,33 @@
  * extractDocumentInWorker — 线程内文档抽取 + 可终止超时/中止
  */
 import { Worker } from 'node:worker_threads';
-import type { ExtractResult } from '../context/capabilities/document/types.js';
+import { DocumentExtractError } from '../capabilities/document/errors.js';
+import type { DocumentCapabilityConfig } from '../capabilities/document/factory.js';
+import type { ExtractErrorCode, ExtractResult } from '../capabilities/document/types.js';
+
+interface WorkerErrorPayload {
+  name?: string;
+  code?: string;
+  message: string;
+  requires?: string[];
+}
+
+/** postMessage 不保留 class 原型；按 name/code 还原 DocumentExtractError */
+function rehydrateWorkerError(payload: unknown): Error {
+  if (typeof payload === 'string') return new Error(payload);
+  if (payload && typeof payload === 'object' && 'message' in payload) {
+    const e = payload as WorkerErrorPayload;
+    if (e.name === 'DocumentExtractError' && e.code) {
+      return new DocumentExtractError(
+        e.code as ExtractErrorCode,
+        e.message,
+        e.requires,
+      );
+    }
+    return new Error(e.message);
+  }
+  return new Error('extract_worker_failed');
+}
 
 export interface DocumentExtractWorkerOptions {
   /** 抽取超时（默认 60s；到点 terminate worker） */
@@ -15,6 +41,8 @@ export interface DocumentExtractWorkerOptions {
   maxRowsPerSheet?: number;
   maxPages?: number;
   maxTextChars?: number;
+  /** documents.* 配置（与 Gateway 同源；含 legacy/soffice） */
+  documentConfig?: DocumentCapabilityConfig | null;
 }
 
 /**
@@ -46,6 +74,7 @@ export function extractDocumentInWorker(
         maxRowsPerSheet: options.maxRowsPerSheet,
         maxPages: options.maxPages,
         maxTextChars: options.maxTextChars,
+        documentConfig: options.documentConfig ?? null,
       },
     });
     const finish = (fn: () => void) => {
@@ -64,11 +93,11 @@ export function extractDocumentInWorker(
       finish(() => reject(new Error(`extract_worker_timeout after ${timeoutMs}ms`)));
     }, timeoutMs);
 
-    worker.on('message', (msg: { ok: boolean; result?: ExtractResult; error?: string }) => {
+    worker.on('message', (msg: { ok: boolean; result?: ExtractResult; error?: unknown }) => {
       if (msg?.ok && msg.result) {
         finish(() => resolve(msg.result!));
       } else {
-        finish(() => reject(new Error(msg?.error || 'extract_worker_failed')));
+        finish(() => reject(rehydrateWorkerError(msg?.error)));
       }
     });
     worker.on('error', (err) => {

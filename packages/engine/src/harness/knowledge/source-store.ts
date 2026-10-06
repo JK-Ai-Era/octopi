@@ -297,25 +297,28 @@ export class KnowledgeSourceStore {
   /**
    * 将 agent 挂到 Project（显式）
    */
-  assignProject(projectKey: string, agentId: string): void {
+  assignProject(projectKey: string, agentId: string, opts?: { tenantId?: string; gatewayId?: string }): void {
     this.db.raw
       .prepare(
-        `INSERT OR IGNORE INTO knowledge_project_agents (project_key, agent_id, created_at)
-         VALUES (?, ?, ?)`,
+        `INSERT OR IGNORE INTO knowledge_project_agents
+           (tenant_id, gateway_id, local_agent_id, project_key, created_at)
+         VALUES (?, ?, ?, ?, ?)`,
       )
-      .run(projectKey, agentId, Date.now());
+      .run(opts?.tenantId ?? 'default', opts?.gatewayId ?? 'default', agentId, projectKey, Date.now());
   }
 
-  unassignProject(projectKey: string, agentId: string): void {
+  unassignProject(projectKey: string, agentId: string, opts?: { tenantId?: string; gatewayId?: string }): void {
     this.db.raw
-      .prepare('DELETE FROM knowledge_project_agents WHERE project_key = ? AND agent_id = ?')
-      .run(projectKey, agentId);
+      .prepare(
+        'DELETE FROM knowledge_project_agents WHERE tenant_id = ? AND gateway_id = ? AND project_key = ? AND local_agent_id = ?',
+      )
+      .run(opts?.tenantId ?? 'default', opts?.gatewayId ?? 'default', projectKey, agentId);
   }
 
   listProjectAgents(projectKey: string): string[] {
     const rows = this.db.raw
       .prepare(
-        'SELECT agent_id FROM knowledge_project_agents WHERE project_key = ? ORDER BY agent_id',
+        'SELECT local_agent_id AS agent_id FROM knowledge_project_agents WHERE project_key = ? ORDER BY local_agent_id',
       )
       .all(projectKey) as Array<{ agent_id: string }>;
     return rows.map((r) => r.agent_id);
@@ -324,7 +327,11 @@ export class KnowledgeSourceStore {
   /**
    * 屏蔽 Global 源对某 agent 的可见（仅 global 源有意义）
    */
-  hideSource(agentId: string, sourceId: KnowledgeSourceId | string): void {
+  hideSource(
+    agentId: string,
+    sourceId: KnowledgeSourceId | string,
+    opts?: { tenantId?: string; gatewayId?: string },
+  ): void {
     const source = this.get(sourceId);
     if (source && source.scopeRef.level !== 'global') {
       throw new Error(
@@ -333,22 +340,39 @@ export class KnowledgeSourceStore {
     }
     this.db.raw
       .prepare(
-        `INSERT OR IGNORE INTO knowledge_agent_hidden (agent_id, source_id, created_at)
-         VALUES (?, ?, ?)`,
+        `INSERT OR IGNORE INTO knowledge_agent_hidden
+           (tenant_id, gateway_id, local_agent_id, source_id, created_at)
+         VALUES (?, ?, ?, ?, ?)`,
       )
-      .run(agentId, sourceId, Date.now());
+      .run(
+        opts?.tenantId ?? 'default',
+        opts?.gatewayId ?? 'default',
+        agentId,
+        sourceId,
+        Date.now(),
+      );
   }
 
-  unhideSource(agentId: string, sourceId: KnowledgeSourceId | string): void {
+  unhideSource(
+    agentId: string,
+    sourceId: KnowledgeSourceId | string,
+    opts?: { tenantId?: string; gatewayId?: string },
+  ): void {
     this.db.raw
-      .prepare('DELETE FROM knowledge_agent_hidden WHERE agent_id = ? AND source_id = ?')
-      .run(agentId, sourceId);
+      .prepare(
+        'DELETE FROM knowledge_agent_hidden WHERE tenant_id = ? AND gateway_id = ? AND local_agent_id = ? AND source_id = ?',
+      )
+      .run(opts?.tenantId ?? 'default', opts?.gatewayId ?? 'default', agentId, sourceId);
   }
 
-  listHidden(agentId: string): string[] {
+  listHidden(agentId: string, opts?: { tenantId?: string; gatewayId?: string }): string[] {
     const rows = this.db.raw
-      .prepare('SELECT source_id FROM knowledge_agent_hidden WHERE agent_id = ? ORDER BY source_id')
-      .all(agentId) as Array<{ source_id: string }>;
+      .prepare(
+        'SELECT source_id FROM knowledge_agent_hidden WHERE tenant_id = ? AND gateway_id = ? AND local_agent_id = ? ORDER BY source_id',
+      )
+      .all(opts?.tenantId ?? 'default', opts?.gatewayId ?? 'default', agentId) as Array<{
+      source_id: string;
+    }>;
     return rows.map((r) => r.source_id);
   }
 
@@ -363,9 +387,11 @@ export class KnowledgeSourceStore {
     if (!item.targetId?.trim()) throw new Error('targetId is required');
     this.db.raw
       .prepare(
-        `INSERT INTO knowledge_session_visibility (session_id, target_type, target_id, op, created_at)
-         VALUES (?, ?, ?, ?, ?)
-         ON CONFLICT(session_id, target_type, target_id) DO UPDATE SET op = excluded.op`,
+        `INSERT INTO knowledge_session_visibility
+           (tenant_id, gateway_id, local_session_id, target_type, target_id, op, created_at)
+         VALUES ('default', 'default', ?, ?, ?, ?, ?)
+         ON CONFLICT(tenant_id, gateway_id, local_session_id, target_type, target_id)
+           DO UPDATE SET op = excluded.op`,
       )
       .run(sessionId, item.targetType, item.targetId, item.op, Date.now());
   }
@@ -379,7 +405,7 @@ export class KnowledgeSourceStore {
   ): void {
     if (!sessionId?.trim()) throw new Error('sessionId is required');
     this.db.raw
-      .prepare('DELETE FROM knowledge_session_visibility WHERE session_id = ?')
+      .prepare('DELETE FROM knowledge_session_visibility WHERE local_session_id = ?')
       .run(sessionId);
     for (const item of items) this.setSessionVisibility(sessionId, item);
   }
@@ -391,21 +417,21 @@ export class KnowledgeSourceStore {
     if (target) {
       this.db.raw
         .prepare(
-          'DELETE FROM knowledge_session_visibility WHERE session_id = ? AND target_type = ? AND target_id = ?',
+          'DELETE FROM knowledge_session_visibility WHERE local_session_id = ? AND target_type = ? AND target_id = ?',
         )
         .run(sessionId, target.targetType, target.targetId);
       return;
     }
     this.db.raw
-      .prepare('DELETE FROM knowledge_session_visibility WHERE session_id = ?')
+      .prepare('DELETE FROM knowledge_session_visibility WHERE local_session_id = ?')
       .run(sessionId);
   }
 
   listSessionVisibility(sessionId: string): import('./types.js').KnowledgeSessionVisibilityItem[] {
     const rows = this.db.raw
       .prepare(
-        `SELECT session_id, target_type, target_id, op, created_at
-         FROM knowledge_session_visibility WHERE session_id = ?
+        `SELECT local_session_id AS session_id, target_type, target_id, op, created_at
+         FROM knowledge_session_visibility WHERE local_session_id = ?
          ORDER BY created_at`,
       )
       .all(sessionId) as Array<{
@@ -461,9 +487,10 @@ export class KnowledgeSourceStore {
     const now = Date.now();
     this.db.raw
       .prepare(
-        `INSERT INTO knowledge_projects (project_key, display_name, created_at, updated_at)
-         VALUES (?, ?, ?, ?)
-         ON CONFLICT(project_key) DO UPDATE SET
+        `INSERT INTO knowledge_projects
+           (tenant_id, project_key, display_name, registered_by, visibility, created_at, updated_at)
+         VALUES ('default', ?, ?, 'default', 'private', ?, ?)
+         ON CONFLICT(tenant_id, project_key) DO UPDATE SET
            display_name = COALESCE(excluded.display_name, knowledge_projects.display_name),
            updated_at = excluded.updated_at`,
       )
@@ -502,22 +529,54 @@ export class KnowledgeSourceStore {
   }
 
   /**
-   * 源是否对 (agent, session) 可见（effective = base ⊕ session overlay）
+   * 源是否对 (agent, session) 可见（gateway 漏斗 ⊕ base ⊕ session overlay）
    */
-  isVisible(source: KnowledgeSource, agentId: string, sessionId?: string): boolean {
+  isVisible(
+    source: KnowledgeSource,
+    agentId: string,
+    sessionId?: string,
+    identity?: { tenantId?: string; gatewayId?: string },
+  ): boolean {
     if (source.status === 'removed' || source.status === 'disabled') return false;
-    return this.applySessionOverlay(source, this.isBaseVisible(source, agentId, sessionId), sessionId);
+    if (!this.isGatewayVisible(source, identity)) return false;
+    return this.applySessionOverlay(source, this.isBaseVisible(source, agentId, sessionId, identity), sessionId);
+  }
+
+  /** 网关漏斗：registered_by=己方 ∪ public */
+  isGatewayVisible(
+    source: KnowledgeSource,
+    identity?: { tenantId?: string; gatewayId?: string },
+  ): boolean {
+    const gw = identity?.gatewayId;
+    if (!gw) return true;
+    const row = this.db.raw
+      .prepare('SELECT registered_by, visibility, tenant_id FROM knowledge_sources WHERE id = ?')
+      .get(source.id) as
+      | { registered_by?: string; visibility?: string; tenant_id?: string }
+      | undefined;
+    if (!row) return true;
+    const tenant = identity?.tenantId ?? 'default';
+    if (row.tenant_id && row.tenant_id !== tenant) return false;
+    if (row.registered_by && row.registered_by !== gw && row.visibility !== 'public') {
+      return false;
+    }
+    return true;
   }
 
   /** Agent 级 base 可见（不含会话 overlay；排查用） */
-  isBaseVisible(source: KnowledgeSource, agentId: string, sessionId?: string): boolean {
+  isBaseVisible(
+    source: KnowledgeSource,
+    agentId: string,
+    sessionId?: string,
+    identity?: { tenantId?: string; gatewayId?: string },
+  ): boolean {
     if (source.status === 'removed' || source.status === 'disabled') return false;
     const { level, key } = source.scopeRef;
     if (level === 'global') {
-      return !this.isHidden(agentId, source.id);
+      return !this.isHidden(agentId, source.id, identity);
     }
     if (level === 'project') {
-      return this.isProjectAssigned(key, agentId);
+      return this.isProjectAssigned(key, agentId, identity);
     }
     return Boolean(sessionId) && key === sessionId;
   }
@@ -546,25 +605,45 @@ export class KnowledgeSourceStore {
   ): import('./types.js').KnowledgeVisibilityOp | null {
     const row = this.db.raw
       .prepare(
-        'SELECT op FROM knowledge_session_visibility WHERE session_id = ? AND target_type = ? AND target_id = ?',
+        'SELECT op FROM knowledge_session_visibility WHERE local_session_id = ? AND target_type = ? AND target_id = ?',
       )
       .get(sessionId, targetType, targetId) as { op?: string } | undefined;
     return (row?.op as import('./types.js').KnowledgeVisibilityOp | undefined) ?? null;
   }
 
-  private isHidden(agentId: string, sourceId: string): boolean {
+  private isHidden(
+    agentId: string,
+    sourceId: string,
+    identity?: { tenantId?: string; gatewayId?: string },
+  ): boolean {
     const row = this.db.raw
-      .prepare('SELECT 1 AS ok FROM knowledge_agent_hidden WHERE agent_id = ? AND source_id = ?')
-      .get(agentId, sourceId) as { ok?: number } | undefined;
+      .prepare(
+        'SELECT 1 AS ok FROM knowledge_agent_hidden WHERE tenant_id = ? AND gateway_id = ? AND local_agent_id = ? AND source_id = ?',
+      )
+      .get(
+        identity?.tenantId ?? 'default',
+        identity?.gatewayId ?? 'default',
+        agentId,
+        sourceId,
+      ) as { ok?: number } | undefined;
     return Boolean(row);
   }
 
-  private isProjectAssigned(projectKey: string, agentId: string): boolean {
+  private isProjectAssigned(
+    projectKey: string,
+    agentId: string,
+    identity?: { tenantId?: string; gatewayId?: string },
+  ): boolean {
     const row = this.db.raw
       .prepare(
-        'SELECT 1 AS ok FROM knowledge_project_agents WHERE project_key = ? AND agent_id = ?',
+        'SELECT 1 AS ok FROM knowledge_project_agents WHERE tenant_id = ? AND gateway_id = ? AND project_key = ? AND local_agent_id = ?',
       )
-      .get(projectKey, agentId) as { ok?: number } | undefined;
+      .get(
+        identity?.tenantId ?? 'default',
+        identity?.gatewayId ?? 'default',
+        projectKey,
+        agentId,
+      ) as { ok?: number } | undefined;
     return Boolean(row);
   }
 
@@ -624,7 +703,9 @@ export class KnowledgeSourceStore {
   /** 每源已入库文件数（catalog 规模粗标用） */
   private fileCountsBySource(): Map<string, number> {
     const rows = this.db.raw
-      .prepare('SELECT source_id AS id, COUNT(*) AS n FROM knowledge_files GROUP BY source_id')
+      .prepare(
+        'SELECT source_id AS id, COUNT(*) AS n FROM knowledge_memberships GROUP BY source_id',
+      )
       .all() as Array<{ id: string; n: number }>;
     return new Map(rows.map((r) => [r.id, r.n]));
   }
@@ -642,7 +723,7 @@ export class KnowledgeSourceStore {
     ).map((r) => r.id);
     const out = new Map<string, string[]>();
     const stmt = this.db.raw.prepare(
-      `SELECT path FROM knowledge_files WHERE source_id = ? ORDER BY path LIMIT 128`,
+      `SELECT logical_path AS path FROM knowledge_memberships WHERE source_id = ? ORDER BY logical_path LIMIT 128`,
     );
     for (const id of sourceIds) {
       const paths = (stmt.all(id) as Array<{ path: string }>).map((r) => r.path);

@@ -88,7 +88,11 @@ describe('directory paths must not enter knowledge_files', () => {
     await ingest.ingestFileNow(src.id, subDir);
 
     const row = sources.database.raw
-      .prepare('SELECT COUNT(*) AS n FROM knowledge_files WHERE source_id = ? AND path = ?')
+      .prepare(
+        `SELECT COUNT(*) AS n FROM knowledge_memberships m
+         JOIN knowledge_files f ON f.id = m.file_id
+         WHERE m.source_id = ? AND m.logical_path = ?`,
+      )
       .get(src.id, subDir) as { n: number };
     expect(row.n).toBe(0);
   });
@@ -111,11 +115,15 @@ describe('directory paths must not enter knowledge_files', () => {
     expect(removed).toBeGreaterThanOrEqual(1);
 
     const dirLeft = sources.database.raw
-      .prepare('SELECT COUNT(*) AS n FROM knowledge_files WHERE path = ?')
-      .get(subDir) as { n: number };
+      .prepare(
+        `SELECT COUNT(*) AS n FROM knowledge_memberships WHERE logical_path = ?`,
+      )
+      .get(subDir.replace(/\\/g, '/')) as { n: number };
     const fileLeft = sources.database.raw
-      .prepare('SELECT COUNT(*) AS n FROM knowledge_files WHERE path = ?')
-      .get(filePath) as { n: number };
+      .prepare(
+        `SELECT COUNT(*) AS n FROM knowledge_memberships WHERE logical_path = ?`,
+      )
+      .get(filePath.replace(/\\/g, '/')) as { n: number };
     expect(dirLeft.n).toBe(0);
     expect(fileLeft.n).toBe(1);
   });
@@ -146,10 +154,17 @@ describe('directory paths must not enter knowledge_files', () => {
     expect(r.cleanedNonFiles).toBe(0);
 
     const row = sources.database.raw
-      .prepare('SELECT content_hash, chunk_count FROM knowledge_files WHERE path = ?')
-      .get(filePath) as { content_hash: string; chunk_count: number };
-    expect(row.content_hash).toBe('');
-    expect(row.chunk_count).toBe(1); // 旧 chunk 保留到 upsert
+      .prepare(
+        `SELECT f.content_hash AS content_hash, f.chunk_count AS chunk_count
+         FROM knowledge_memberships m
+         JOIN knowledge_files f ON f.id = m.file_id
+         WHERE m.logical_path = ?`,
+      )
+      .get(filePath.replace(/\\/g, '/')) as
+      | { content_hash: string; chunk_count: number }
+      | undefined;
+    expect(row?.content_hash).toBe('');
+    expect(row?.chunk_count).toBe(1); // 旧 chunk 保留到 upsert
 
     const jobs = sources.database.raw
       .prepare(
@@ -251,12 +266,18 @@ describe('directory paths must not enter knowledge_files', () => {
 
       // 不得写入 knowledge_files / chunks
       const files = sources.database.raw
-        .prepare(`SELECT COUNT(*) AS n FROM knowledge_files WHERE path = ?`)
-        .get(outside) as { n: number };
+        .prepare(
+          `SELECT COUNT(*) AS n FROM knowledge_memberships WHERE logical_path = ?`,
+        )
+        .get(outside.replace(/\\/g, '/')) as { n: number };
       expect(files.n).toBe(0);
       const chunks = sources.database.raw
-        .prepare(`SELECT COUNT(*) AS n FROM knowledge_chunks WHERE path = ?`)
-        .get(outside) as { n: number };
+        .prepare(
+          `SELECT COUNT(*) AS n FROM knowledge_chunks c
+           JOIN knowledge_memberships m ON m.file_id = c.file_id
+           WHERE m.logical_path = ?`,
+        )
+        .get(outside.replace(/\\/g, '/')) as { n: number };
       expect(chunks.n).toBe(0);
       // job 以 failed 收场（path not owned）
       const job = sources.database.raw

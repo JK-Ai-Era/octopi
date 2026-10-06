@@ -1,7 +1,7 @@
 /**
  * 格式嗅探 — 扩展名 + magic bytes
  *
- * @module harness/context/capabilities/document/format
+ * @module harness/capabilities/document/format
  */
 
 import { extname } from 'node:path';

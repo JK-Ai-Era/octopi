@@ -1,7 +1,7 @@
 /**
  * 纯文本 / Markdown / CSV 后端（无外部依赖）
  *
- * @module harness/context/capabilities/document/backends/plain
+ * @module harness/capabilities/document/backends/plain
  */
 
 import type {

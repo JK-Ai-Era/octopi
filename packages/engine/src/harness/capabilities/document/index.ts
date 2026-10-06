@@ -3,7 +3,7 @@
  *
  * 读路径：二进制/文档 → Markdown；写路径不在此层。
  *
- * @module harness/context/capabilities/document
+ * @module harness/capabilities/document
  */
 
 export * from './types.js';
@@ -18,6 +18,8 @@ export {
 } from './format.js';
 export { htmlFragmentToMarkdown } from './html-to-md.js';
 export { createDefaultBackends, createDefaultDocumentPort } from './port.js';
+export { createDocumentPortFromConfig } from './factory.js';
+export type { DocumentCapabilityConfig } from './factory.js';
 export { plainTextBackend } from './backends/plain.js';
 export { pdfUnpdfBackend } from './backends/pdf.js';
 export { docxMammothBackend } from './backends/docx.js';

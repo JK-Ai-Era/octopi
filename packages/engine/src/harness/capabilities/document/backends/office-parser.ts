@@ -1,7 +1,7 @@
 /**
  * PPTX / 长尾后端 — officeparser（可选依赖，T0 长尾）
  *
- * @module harness/context/capabilities/document/backends/office-parser
+ * @module harness/capabilities/document/backends/office-parser
  */
 
 import { DocumentExtractError } from '../errors.js';
