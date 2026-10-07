@@ -3,6 +3,15 @@
  *
  * 无 adapter 的类型跳过并记 skipped，不挡整库。
  */
+import { htmlToStructuredText } from './html.js';
+
+/**
+ * Axure 导出侧车（data.js / document.js）：压缩伪代码，无检索价值。
+ * **只认内容标记**，不按文件名一刀切——业务项目的 data.js 仍须正常索引。
+ */
+export function looksLikeAxureExportJs(head: string): boolean {
+  return head.includes('$axure.loadCurrentPage') || head.includes('$axure.utils.Browser');
+}
 
 export interface KnowledgeChunkDraft {
   ordinal: number;
@@ -70,6 +79,8 @@ function pushParagraphs(
   const chunks: KnowledgeChunkDraft[] = [];
   const lines = content.split('\n');
   let buf: string[] = [];
+  /** 当前 buf 的近似长度（避免每行 join 整段） */
+  let bufLen = 0;
   let bufStart = startLineBase;
   let ordinal = 0;
 
@@ -78,23 +89,38 @@ function pushParagraphs(
     if (text) {
       chunks.push({
         ordinal: ordinal++,
-        text: text.slice(0, maxChars),
+        text,
         startLine: bufStart,
         endLine,
       });
     }
     buf = [];
+    bufLen = 0;
   };
 
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
+    let line = lines[i];
     const absLine = startLineBase + i;
+
+    // 超长单行（压缩 HTML / 导出页）按 maxChars 切开，禁止 slice 丢弃尾部
+    while (line.length > maxChars) {
+      if (bufLen > 0) flush(absLine - 1);
+      const head = line.slice(0, maxChars);
+      chunks.push({
+        ordinal: ordinal++,
+        text: head,
+        startLine: absLine,
+        endLine: absLine,
+      });
+      line = line.slice(maxChars);
+    }
+
     if (buf.length === 0) bufStart = absLine;
     buf.push(line);
-    const joined = buf.join('\n');
-    if (line.trim() === '' && joined.trim().length >= MIN_CHUNK_CHARS) {
-      flush(absLine);
-    } else if (joined.length >= maxChars) {
+    bufLen += line.length + 1;
+
+    const isBlank = line.trim() === '';
+    if ((isBlank && bufLen >= MIN_CHUNK_CHARS) || bufLen >= maxChars) {
       flush(absLine);
     }
   }
@@ -418,15 +444,18 @@ export const codeAdapter: FormatAdapter = {
 };
 
 /**
- * HTML：入站应先经 htmlToStructuredText 规范化；
- * 本 adapter 仍按标题/段落切，兼容已规范化或轻量 HTML 页。
+ * HTML：先抽正文再切块。
+ * 本地/外源统一走 htmlToStructuredText——Axure 等导出页含大段 script/style，
+ * 若 raw HTML 直接进 markdown 切块 + FTS，会产生海量 token 并写爆索引。
  */
 export const htmlAdapter: FormatAdapter = {
   id: 'html',
   extensions: ['.html', '.htm', '.xhtml'],
   mimes: ['text/html', 'application/xhtml+xml'],
   chunk(content, path) {
-    return markdownAdapter.chunk(content, path);
+    const looksRaw = /<\s*[a-z!/?]/i.test(content);
+    const text = looksRaw ? htmlToStructuredText(content) : content;
+    return markdownAdapter.chunk(text, path);
   },
 };
 

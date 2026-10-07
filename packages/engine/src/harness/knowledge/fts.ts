@@ -10,21 +10,30 @@ import { tokenizeKeywordQuery } from '../memory/sqlite/keyword-search.js';
 
 const TOKEN_SPLIT = /[^\p{L}\p{N}_]+/u;
 const CJK_RE = /[㐀-䶿一-鿿豈-﫿぀-ヿ]/;
+/** 超长 token（base64/uuid/hash/压缩 JS 标识）不进倒排，避免 FTS 膨胀 */
+const MAX_TOKEN_CHARS = 32;
+/** 单 chunk token 流上限，防止病态正文写爆 FTS */
+const MAX_TOKENS_PER_CHUNK = 4000;
 
 /** 路径 + 正文 → 空格分隔 token 流（FTS unicode61 再切一次也无害） */
 export function buildFtsTokens(text: string, path?: string): string {
   const parts: string[] = [];
   const push = (s: string) => {
-    if (!s) return;
+    if (!s || s.length > MAX_TOKEN_CHARS) return;
+    if (parts.length >= MAX_TOKENS_PER_CHUNK) return;
     parts.push(s.toLowerCase());
   };
   const add = (raw: string) => {
     for (const p of raw.split(TOKEN_SPLIT)) {
       if (!p) continue;
+      if (p.length > MAX_TOKEN_CHARS) continue;
       push(p);
       if (CJK_RE.test(p[0] ?? '')) {
         // CJK 二元组：两字中文词在 unicode61 下也是单 token，滑窗保证子串可搜
-        for (let i = 0; i + 1 < p.length; i++) push(p.slice(i, i + 2));
+        for (let i = 0; i + 1 < p.length; i++) {
+          if (parts.length >= MAX_TOKENS_PER_CHUNK) return;
+          push(p.slice(i, i + 2));
+        }
       }
     }
   };

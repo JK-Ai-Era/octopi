@@ -105,7 +105,7 @@ export function SourceDetailPanel({
     const t = setInterval(() => {
       void loadDetail();
       void loadFiles();
-    }, 3000);
+    }, 8000);
     return () => clearInterval(t);
   }, [detail?.status, loadDetail, loadFiles]);
 

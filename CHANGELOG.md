@@ -1,3 +1,25 @@
+## v0.61.2
+
+### perf(knowledge): HTML 抽正文后再切块，FTS token 防膨胀
+
+**问题**：本地 `.html` 未走 `htmlToStructuredText`，Axure 导出页的 script/style 整页进 markdown 切块与 CJK FTS；`pushParagraphs` 每行 `join` 整段且超长行 `slice(0,maxChars)` 丢弃尾部；token 流含 base64/长标识，写库体积可达正文数倍。
+
+**优化**：
+
+- `htmlAdapter.chunk` 先 `htmlToStructuredText`（已规范化文本不重复处理）
+- `pushParagraphs` 改为长度累计 + 超长行按 maxChars 切开（不丢内容）
+- `buildFtsTokens` 跳过 >32 字符 token，单 chunk token 数封顶 4000
+
+### fix(knowledge): 对账 prune 已删文件 + Axure 侧车内容嗅探
+
+- `reconcileJobs` 在缺口扫描后调用 `pruneMissingOnDisk`（watch 批量删除会漏，否则已删文件一直可搜）
+- `.js` 文件头嗅探 `$axure.loadCurrentPage` / `$axure.utils.Browser` → `skipped(axure_export_sidecar)`；**不按文件名一刀切**，普通 `data.js` 照常索引
+
+### fix(webui): 轮询放宽 8s；拉取失败诚实提示
+
+- 主面板 / jobControl / 源详情轮询统一 8s
+- 超时显示「拉取失败，稍后重试」，不再误显示为「尚无源」
+
 ## v0.61.1
 
 ### fix(knowledge): parse 半写入完整性 + 入队层未变更跳过

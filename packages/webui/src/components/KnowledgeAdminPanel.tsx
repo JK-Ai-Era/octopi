@@ -78,8 +78,8 @@ function SourceRow({
       }
     };
     void load();
-    // 操作后加快刷新，按钮状态尽快切换
-    const t = setInterval(() => void load(), busy ? 1500 : 4000);
+    // 放宽轮询，降低索引期对 Knowledge Engine 的请求压力
+    const t = setInterval(() => void load(), 8000);
     return () => {
       stop = true;
       clearInterval(t);
@@ -505,7 +505,7 @@ export function KnowledgeAdminPanel({ agentId }: { agentId: string }) {
 
   useEffect(() => {
     if (!hasActiveIndexing) return;
-    const t = setInterval(() => void refresh(), 4000);
+    const t = setInterval(() => void refresh(), 8000);
     return () => clearInterval(t);
   }, [hasActiveIndexing, refresh]);
 

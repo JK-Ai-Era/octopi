@@ -9,7 +9,13 @@ import { join } from 'node:path';
 import { KnowledgeSourceStore } from '@octopi-agent/engine/harness/knowledge/source-store.js';
 import { KnowledgeIndexStore } from '@octopi-agent/engine/harness/knowledge/index-store.js';
 import { KnowledgeIngest } from '@octopi-agent/engine/harness/knowledge/ingest.js';
-import { markdownAdapter, codeAdapter, FormatAdapterRegistry } from '@octopi-agent/engine/harness/knowledge/adapters.js';
+import {
+  markdownAdapter,
+  codeAdapter,
+  htmlAdapter,
+  textAdapter,
+  FormatAdapterRegistry,
+} from '@octopi-agent/engine/harness/knowledge/adapters.js';
 import { KnowledgeDatabase } from '@octopi-agent/engine/harness/knowledge/db.js';
 
 async function makeWorkspace(): Promise<{ root: string; store: KnowledgeSourceStore; ingest: KnowledgeIngest; cleanup: () => Promise<void> }> {
@@ -97,6 +103,59 @@ describe('FormatAdapter', () => {
     expect(reg.match('x.xhtml')?.id).toBe('html');
     // code-tree 才被 EMBEDDABLE_WHERE 排除；html 必须能进向量
     expect(reg.match('x.html')?.id).not.toBe('code-tree');
+  });
+
+  it('htmlAdapter 先抽正文：script 不进 chunk，长行切开不丢弃', () => {
+    const script = `<script>${'var x=1;'.repeat(500)}</script>`;
+    const body = `<div>${'<p>库存管理总览产购销存</p>'.repeat(30)}</div>`;
+    const html = `<html><head>${script}</head><body>${body}</body></html>`;
+    const chunks = htmlAdapter.chunk(html, 'a.html');
+    const all = chunks.map((c) => c.text).join('\n');
+    expect(all).toContain('库存管理');
+    expect(all).not.toContain('var x=1');
+    // 超长单行必须拆成多段且保留尾部
+    const longLine = 'Z'.repeat(5000) + 'TAILMARK';
+    const parts = textAdapter.chunk(longLine, 'a.txt');
+    expect(parts.length).toBeGreaterThan(1);
+    expect(parts.map((p) => p.text).join('')).toContain('TAILMARK');
+  });
+
+  it('Axure data.js 内容嗅探跳过；普通 data.js 不误伤', async () => {
+    const local = await makeWorkspace();
+    try {
+      const dir = join(local.root, 'proj');
+      await mkdir(dir, { recursive: true });
+      await writeFile(
+        join(dir, 'axure-data.js'),
+        '$axure.loadCurrentPage(\n(function(){ var b="url"; return _creator(); })());\n',
+        'utf8',
+      );
+      await writeFile(
+        join(dir, 'data.js'),
+        'export const config = { title: "用户中心列表页" };\n',
+        'utf8',
+      );
+      const src = local.store.register({
+        kind: 'directory',
+        location: dir,
+        scopeRef: { level: 'global', key: 'global' },
+        displayName: 'axure-sniff',
+      });
+      await local.ingest.ingestSource(src.id);
+      await local.ingest.idle(10_000);
+
+      const files = local.ingest.indexStore.listFiles(src.id);
+      const axure = files.find((f) => f.path.endsWith('axure-data.js'));
+      const normal = files.find((f) => /(^|\/)data\.js$/i.test(f.path));
+      expect(axure?.status).toBe('skipped');
+      expect(axure?.error).toBe('axure_export_sidecar');
+      expect(normal?.status).toBe('indexed');
+      expect(
+        local.ingest.indexStore.search('用户中心', { sourceIds: [src.id] }).length,
+      ).toBeGreaterThan(0);
+    } finally {
+      await local.cleanup();
+    }
   });
 
   it('register 拒绝扩展名冲突（归属显式，禁止静默覆盖）', () => {

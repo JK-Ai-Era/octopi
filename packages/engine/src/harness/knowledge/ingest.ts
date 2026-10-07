@@ -5,12 +5,19 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { readFile, stat } from 'node:fs/promises';
+import { open, readFile, stat } from 'node:fs/promises';
 import { statSync, realpathSync } from 'node:fs';
 import { watch, type FSWatcher } from 'node:fs';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { EventEmitter } from 'node:events';
-import { FormatAdapterRegistry, htmlAdapter, markdownAdapter, textAdapter, type KnowledgeChunkDraft } from './adapters.js';
+import {
+  FormatAdapterRegistry,
+  htmlAdapter,
+  looksLikeAxureExportJs,
+  markdownAdapter,
+  textAdapter,
+  type KnowledgeChunkDraft,
+} from './adapters.js';
 import { looksLikeHtml } from './html.js';
 import { hashContent, KnowledgeIndexStore } from './index-store.js';
 import {
@@ -324,6 +331,22 @@ export class KnowledgeIngest extends EventEmitter {
   private shouldSkipFile(p: string): boolean {
     if (isDocumentPath(p)) return false;
     return this.adapters.shouldSkipPath(p);
+  }
+
+  /** 读文件头做内容嗅探；失败返回 null（不挡后续 parse） */
+  private async readFileHead(filePath: string, bytes = 256): Promise<string | null> {
+    try {
+      const fh = await open(filePath, 'r');
+      try {
+        const buf = Buffer.alloc(bytes);
+        const { bytesRead } = await fh.read(buf, 0, bytes, 0);
+        return buf.subarray(0, bytesRead).toString('utf8');
+      } finally {
+        await fh.close();
+      }
+    } catch {
+      return null;
+    }
   }
 
   /** 尽量拿真实 identity；失败返回 undefined（退回 path: 降级键） */
@@ -1354,6 +1377,8 @@ export class KnowledgeIngest extends EventEmitter {
       if (Date.now() - lastGap > 60_000) {
         this.lastParseGapScanAt.set(s.id, Date.now());
         await this.ensureParseCoverage(s.id);
+        // watch 批量删除会漏事件；对账时与磁盘对齐，否则已删文件一直可搜
+        await this.pruneMissingOnDisk(s.id);
       }
       const missingEmbed = this.embedding
         ? this.index.hasChunksMissingEmbedding(s.id)
@@ -1762,6 +1787,21 @@ export class KnowledgeIngest extends EventEmitter {
         await this.identityKeyFor(filePath),
       );
       return false;
+    }
+
+    // Axure 导出 data.js/document.js：内容嗅探后 skip，避免误伤普通 data.js
+    if (/\.(js|cjs|mjs)$/i.test(filePath)) {
+      const head = await this.readFileHead(filePath, 256);
+      if (head && looksLikeAxureExportJs(head)) {
+        this.index.markFileSkipped(
+          sourceId,
+          filePath,
+          'axure_export_sidecar',
+          st.size,
+          await this.identityKeyFor(filePath),
+        );
+        return false;
+      }
     }
 
     const kind = classifyFileKind(filePath);
