@@ -19,6 +19,9 @@ export interface DiscoveredDocRef {
   externalUrl?: string;
   etag?: string;
   lastModified?: string;
+  /** 本地文件版本（入队层廉价变更检测用；与 knowledge_files.size/mtime 对齐） */
+  size?: number;
+  mtime?: number;
 }
 
 export interface DiscoverResult {
@@ -84,7 +87,17 @@ export class LocalFsFetcher implements SourceFetcher {
           await walkDir(abs);
         } else if (ent.isFile()) {
           if (ent.name === 'knowledge.db' || ent.name.endsWith('.db')) continue;
-          out.push({ path: abs });
+          try {
+            const fst = await stat(abs);
+            if (!fst.isFile()) continue;
+            out.push({
+              path: abs,
+              size: fst.size,
+              mtime: Math.floor(fst.mtimeMs),
+            });
+          } catch {
+            // 竞态删除：当作未发现，避免入队后又 drop
+          }
         }
       }
     };
@@ -92,7 +105,10 @@ export class LocalFsFetcher implements SourceFetcher {
     const st = await stat(root).catch(() => null);
     if (!st) return { docs: out, complete: false };
     if (st.isFile()) {
-      return { docs: [{ path: root }], complete: true };
+      return {
+        docs: [{ path: root, size: st.size, mtime: Math.floor(st.mtimeMs) }],
+        complete: true,
+      };
     }
     await walkDir(root);
     return { docs: out, complete };

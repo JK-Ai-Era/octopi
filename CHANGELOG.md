@@ -1,3 +1,24 @@
+## v0.61.1
+
+### fix(knowledge): parse 半写入完整性 + 入队层未变更跳过
+
+**问题**：`upsertFile` 分批写 chunk 失败/中止时留下 partial 且标 `error`（检索会捞出半成品）；`status='indexing'` 崩溃残留不在 gap 扫描内；本地源 reindex/poll 未变更仍全量入队 `parse_file`（读盘+hash+切块后才 `isFresh`）；Windows 下 `pruneMissing` 用反斜杠 keep 集误删已索引文件。
+
+**修复**：
+
+- `upsertFile` 半写入收尾 `markUpsertIncomplete`：清掉 partial chunks，回到 `status='indexing'` + `chunk_count=0`（可重试、不可搜）；接受 `AbortSignal`，批边界停
+- `ensureParseCoverage` 补扫 `status='indexing'`；路径比较统一 `/` 归一
+- `pruneMissing` keep/实际路径两边归一，避免 Windows 反斜杠误删
+- 本地 `discover` 返回 `size`/`mtime`；`ingestSource` 对 `status='indexed' && chunk_count>0 && content_hash` 且 size/mtime 未变的文件跳过入队（`reprocessFiles` 仍强制失效 hash）
+- 测试：`tests/harness/knowledge-parse-integrity.test.ts`
+
+### fix(webui/knowledge): 重建期间加载态，避免闪 0 / 空列表
+
+- reindex 不再把 `coverage` 硬写成 0（保留旧值，discover 后再刷）
+- 源行 / 详情在 `discovering|indexing` 显示「覆盖 扫描中…」
+- 统计条首次拉取前显示「加载中…」；项目源切换/加载中不显示「尚无源」
+- **Engine 忙时 list 超时**：vec 表只建一次；embedding 批写进事务并让出事件循环；coverage 统计节流（收尾 force）；UI 对 `knowledge_http_timeout` 软失败并保留旧数据
+
 ## v0.61.0
 
 ### feat(knowledge): independent process + engine-thread architecture

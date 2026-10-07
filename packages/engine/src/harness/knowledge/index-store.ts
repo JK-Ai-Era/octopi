@@ -82,6 +82,7 @@ function rowToFile(row: Record<string, unknown>): IndexedFileRecord {
 export class KnowledgeIndexStore {
   private readonly fts: KnowledgeFts;
   private ftsBackfillPromise: Promise<number> | null = null;
+  private vecTableReady = false;
 
   constructor(private readonly db: KnowledgeDatabase) {
     this.fts = new KnowledgeFts(db);
@@ -160,7 +161,9 @@ export class KnowledgeIndexStore {
    * 大 xlsx 数千 chunk 不得整文件一个同步事务堵死 Service。
    *
    * 语义：旧 chunk 先清；`status='indexing'` 直到全部批次落库后才 `indexed`。
-   * 检索不认 `indexing`（半成品）；`error` 且已有 chunks 时旧内容仍可搜（更新失败不抹库）。
+   * 检索不认 `indexing`（半成品）。批次失败/中止会清掉 partial chunks，
+   * 并留在 `indexing`（chunk_count=0）供 gap 扫描重试——不得把半成品标成 `error`
+   * 而让 partial 变得可搜。
    */
   async upsertFile(
     input: {
@@ -176,15 +179,21 @@ export class KnowledgeIndexStore {
       etag?: string;
       lastModified?: string;
     },
-    opts?: { batchSize?: number },
+    opts?: { batchSize?: number; signal?: AbortSignal },
   ): Promise<IndexedFileRecord> {
     const now = Date.now();
     const batchSize = Math.max(50, opts?.batchSize ?? 200);
+    const signal = opts?.signal;
     const fileId = this.resolveFile(String(input.sourceId), input.path, {
       identityKey: input.identityKey,
       size: input.size,
       mtime: input.mtime,
     });
+
+    if (signal?.aborted) {
+      this.markUpsertIncomplete(fileId, 'aborted');
+      throw new Error('aborted');
+    }
 
     // 旧索引作废（含 embeddings/FTS/vec）
     this.db.raw.exec('BEGIN');
@@ -226,6 +235,10 @@ export class KnowledgeIndexStore {
     }
 
     for (let offset = 0; offset < input.chunks.length; offset += batchSize) {
+      if (signal?.aborted) {
+        this.markUpsertIncomplete(fileId, 'aborted');
+        throw new Error('aborted');
+      }
       const batch = input.chunks.slice(offset, offset + batchSize);
       this.db.raw.exec('BEGIN');
       try {
@@ -252,16 +265,18 @@ export class KnowledgeIndexStore {
         } catch {
           // 以原异常为准
         }
-        this.db.raw
-          .prepare(
-            `UPDATE knowledge_files SET status = 'error', error = ?, indexed_at = ? WHERE id = ?`,
-          )
-          .run(err instanceof Error ? err.message : String(err), Date.now(), fileId);
+        const message = err instanceof Error ? err.message : String(err);
+        this.markUpsertIncomplete(fileId, message);
         throw err;
       }
       if (offset + batchSize < input.chunks.length) {
         await new Promise<void>((r) => setImmediate(r));
       }
+    }
+
+    if (signal?.aborted) {
+      this.markUpsertIncomplete(fileId, 'aborted');
+      throw new Error('aborted');
     }
 
     this.db.raw
@@ -287,6 +302,37 @@ export class KnowledgeIndexStore {
       etag: input.etag,
       lastModified: input.lastModified,
     };
+  }
+
+  /**
+   * 半写入收尾：清掉已落地的 partial chunks，回到可重试的 `indexing`。
+   * 不得标成 `error`——error 行上的 partial 会被检索捞出。
+   */
+  private markUpsertIncomplete(fileId: string, message: string): void {
+    try {
+      this.db.raw.exec('BEGIN');
+      const ids = (
+        this.db.raw
+          .prepare('SELECT id FROM knowledge_chunks WHERE file_id = ?')
+          .all(fileId) as Array<{ id: string }>
+      ).map((r) => r.id);
+      this.dropChunks(ids);
+      this.db.raw.prepare('DELETE FROM knowledge_chunks WHERE file_id = ?').run(fileId);
+      this.db.raw
+        .prepare(
+          `UPDATE knowledge_files
+           SET status = 'indexing', chunk_count = 0, error = ?, indexed_at = ?
+           WHERE id = ?`,
+        )
+        .run(message, Date.now(), fileId);
+      this.db.raw.exec('COMMIT');
+    } catch {
+      try {
+        this.db.raw.exec('ROLLBACK');
+      } catch {
+        // 清理失败时至少保证调用方仍看到原异常；半成品由 gap 扫描按 indexing 重做
+      }
+    }
   }
 
   markFileSkipped(
@@ -602,11 +648,15 @@ export class KnowledgeIndexStore {
     keepPaths: ReadonlySet<string> | Iterable<string>,
     opts?: { allowEmptyKeep?: boolean },
   ): number {
-    const keep = keepPaths instanceof Set ? keepPaths : new Set(keepPaths);
+    // keep 可能来自 discover（Windows 反斜杠）；logical_path 存的是正斜杠。两边都归一再比。
+    const normalize = (p: string): string => p.replace(/\\/g, '/');
+    const keep = new Set(
+      Array.from(keepPaths instanceof Set ? keepPaths : new Set(keepPaths), normalize),
+    );
     // discover 成功且目录为空时允许清空（契约 §6.2）；空 keep 默认 no-op 防误清
     if (keep.size === 0 && !opts?.allowEmptyKeep) return 0;
     const files = this.listFiles(sourceId);
-    const gone = files.filter((f) => !keep.has(f.path)).map((f) => f.path);
+    const gone = files.filter((f) => !keep.has(normalize(f.path))).map((f) => f.path);
     if (gone.length === 0) return 0;
     this.removeFiles(sourceId, gone);
     return gone.length;
@@ -955,12 +1005,23 @@ export class KnowledgeIndexStore {
          embedding = excluded.embedding,
          bucket = excluded.bucket`,
     );
-    for (const [chunkId, embedding] of pairs) {
-      const vec = Float32Array.from(embedding ?? []);
-      const dims = vec.length;
-      const buf = Buffer.from(vec.buffer, vec.byteOffset, vec.byteLength);
-      insert.run(chunkId, dims, buf, dims > 0 ? vectorBucket(Array.from(vec)) : -1, now);
-      this.writeKnowledgeVec(chunkId, embedding ?? []);
+    this.db.raw.exec('BEGIN');
+    try {
+      for (const [chunkId, embedding] of pairs) {
+        const vec = Float32Array.from(embedding ?? []);
+        const dims = vec.length;
+        const buf = Buffer.from(vec.buffer, vec.byteOffset, vec.byteLength);
+        insert.run(chunkId, dims, buf, dims > 0 ? vectorBucket(Array.from(vec)) : -1, now);
+        this.writeKnowledgeVec(chunkId, embedding ?? []);
+      }
+      this.db.raw.exec('COMMIT');
+    } catch (err) {
+      try {
+        this.db.raw.exec('ROLLBACK');
+      } catch {
+        // 以原异常为准
+      }
+      throw err;
     }
   }
 
@@ -972,12 +1033,15 @@ export class KnowledgeIndexStore {
     if (!this.db.sqliteVecEnabled || !embedding?.length) return;
     try {
       const dims = embedding.length;
-      this.db.raw.exec(`
-        CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_vec USING vec0(
-          chunk_id TEXT PRIMARY KEY,
-          embedding float[${dims}] distance_metric=cosine
-        );
-      `);
+      if (!this.vecTableReady) {
+        this.db.raw.exec(`
+          CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_vec USING vec0(
+            chunk_id TEXT PRIMARY KEY,
+            embedding float[${dims}] distance_metric=cosine
+          );
+        `);
+        this.vecTableReady = true;
+      }
       this.db.raw.prepare('DELETE FROM knowledge_vec WHERE chunk_id = ?').run(chunkId);
       this.db.raw
         .prepare('INSERT INTO knowledge_vec (chunk_id, embedding) VALUES (?, ?)')

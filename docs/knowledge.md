@@ -140,6 +140,7 @@ Index（可重建投影）
    ▼
 Freshness
    本地 watch + debounce；外源 poll + 条件 GET（ETag/304）；content-hash 增量
+   本地全量 walk：size/mtime 未变且已 indexed 则不入队（强制重做走 reprocess）
    差量 prune：本轮 discover 未出现的 path 删除（失败不删旧索引）
 ```
 
@@ -343,9 +344,11 @@ POST   /api/v1/agents/:id/knowledge/resume
 | **File identity** | `identity_key`（inode/win fileId/url+authRef）+ Membership；同文件多源只 parse 一次；零认领才 purge |
 | **Service** | **唯一写者** `knowledge.db`；Gateway 只走 Client；`writer.lock`（`wx`）；默认端口 18280 |
 | **启动恢复** | `startIngestRuntime`：恢复 watch、补跑 pending、启动 reconciler/poll |
-| **watch** | 目录增量；漏事件由 reconcile **parse 缺口扫描**（磁盘有、索引无 → parse）兜底 |
+| **watch** | 目录增量；漏事件由 reconcile **parse 缺口扫描**（磁盘有、索引无，或 `status='indexing'` 半写入 → parse）兜底 |
+| **入队增量** | 本地 discover 带 `size`/`mtime`；`status='indexed' && chunk_count>0 && content_hash` 且版本未变则 **不入队** `parse_file`；强制重做走 `reprocessFiles`（失效 hash） |
+| **半写入** | `upsertFile` 分批写；失败/中止清 partial 并停在 `indexing`（`chunk_count=0`，检索不认）；**不得**把 partial 标成 `error` 让其可搜 |
 | **删除文件** | watch → `drop_file` → `removePathTree`（含子路径 + FTS/vec）；`(source_id,path)` 须有索引 |
-| **看门狗** | `startReconciler`：回收孤儿 running、补 embed、补 parse 缺口、清 `path:` 零认领、终态 job 清理、稳定后 auto-describe（**纯关键词部署也触发**） |
+| **看门狗** | `startReconciler`：回收孤儿 running、补 embed、补 parse 缺口（含 indexing）、清 `path:` 零认领、终态 job 清理、稳定后 auto-describe（**纯关键词部署也触发**） |
 | **中止** | **跨重启**：`knowledge_source_control` 为权威；claim 跳过 aborted；resume 只复活 `aborted` 取消；**共享 File parse 不杀** |
 | **poll vs reindex** | reindex=supersede；**poll=`incremental`**：有 active 则跳过；`walk_source`=`fromQueue` 不作废队列 |
 | **模块** | `job-control` / `job-queue` / `embed-runner` / `fts` / `vector-ann` / `http-app` / `serve` / `client` 已拆出；`ingest.ts` 只做编排 |

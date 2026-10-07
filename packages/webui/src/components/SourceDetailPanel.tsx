@@ -269,9 +269,11 @@ export function SourceDetailPanel({
             <span className="muted"> · 跳过 {detail.skippedFileCount}</span>
           )}
         </span>
-        {detail.coverage != null && (
+        {detail.status === 'discovering' || detail.status === 'indexing' ? (
+          <span className="muted">覆盖 扫描中…</span>
+        ) : detail.coverage != null ? (
           <span className="muted">覆盖 {Math.round(detail.coverage * 100)}%</span>
-        )}
+        ) : null}
       </div>
       <div className="small mono muted">{detail.location}</div>
       {detail.description && <div className="small">{detail.description}</div>}

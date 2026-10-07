@@ -116,9 +116,13 @@ function SourceRow({
           <strong>{source.displayName}</strong>
           <span className={`small ${statusClass(source.status)}`}>{source.status}</span>
           <span className="small muted mono">{source.kind}</span>
-          {source.coverage != null && (
-            <span className="small muted">覆盖 {Math.round(source.coverage * 100)}%</span>
-          )}
+          {source.status === 'discovering' || source.status === 'indexing' ? (
+            <span className="small muted kn-coverage">覆盖 扫描中…</span>
+          ) : source.coverage != null ? (
+            <span className="small muted kn-coverage">
+              覆盖 {Math.round(source.coverage * 100)}%
+            </span>
+          ) : null}
         </div>
         <div className="small mono muted">{source.location}</div>
         <div className="kn-source-desc">
@@ -356,6 +360,9 @@ export function KnowledgeAdminPanel({ agentId }: { agentId: string }) {
     detail?: string;
   } | null>(null);
   const [selectedAgentView, setSelectedAgentView] = useState(agentId);
+  const [booted, setBooted] = useState(false);
+  const [projectSourcesLoading, setProjectSourcesLoading] = useState(false);
+  const [fetchFailed, setFetchFailed] = useState(false);
   const refreshRef = useRef<() => Promise<void>>(async () => {});
   const refreshBusyRef = useRef(false);
   const refreshQueuedRef = useRef(false);
@@ -370,24 +377,62 @@ export function KnowledgeAdminPanel({ agentId }: { agentId: string }) {
     refreshBusyRef.current = true;
     try {
       setError(null);
-      const [globals, projs, agentList, st] = await Promise.all([
+      setFetchFailed(false);
+      const results = await Promise.allSettled([
         client.listKnowledgeSources(agentId, { scopeLevel: 'global' }),
         client.listKnowledgeProjects(agentId),
         client.getAgents(),
         client.getKnowledgeStats(agentId),
       ]);
-      setGlobalSources(globals);
-      setProjects(projs);
-      setAgents(agentList.map((a) => a.id));
-      setStats(st);
+      const [globalsR, projsR, agentListR, stR] = results;
+      let softBusy = false;
+      const noteFailure = (r: PromiseSettledResult<unknown>): boolean => {
+        if (r.status !== 'rejected') return false;
+        const msg = r.reason instanceof Error ? r.reason.message : String(r.reason);
+        if (msg.includes('knowledge_http_timeout') || msg.includes('busy')) {
+          softBusy = true;
+          return true;
+        }
+        throw r.reason;
+      };
+      noteFailure(globalsR);
+      noteFailure(projsR);
+      noteFailure(agentListR);
+      noteFailure(stR);
+      if (globalsR.status === 'fulfilled') setGlobalSources(globalsR.value);
+      if (projsR.status === 'fulfilled') setProjects(projsR.value);
+      if (agentListR.status === 'fulfilled') {
+        setAgents(agentListR.value.map((a) => a.id));
+      }
+      if (stR.status === 'fulfilled') setStats(stR.value);
+      if (globalsR.status === 'fulfilled' || stR.status === 'fulfilled') {
+        setBooted(true);
+      }
       if (selectedProject) {
-        const ps = await client.listKnowledgeSources(agentId, {
-          scopeLevel: 'project',
-          projectKey: selectedProject,
-        });
-        setProjectSources(ps);
+        setProjectSourcesLoading(projectSources.length === 0);
+        try {
+          const ps = await client.listKnowledgeSources(agentId, {
+            scopeLevel: 'project',
+            projectKey: selectedProject,
+          });
+          setProjectSources(ps);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          if (msg.includes('knowledge_http_timeout') || msg.includes('busy')) {
+            softBusy = true;
+          } else {
+            throw err;
+          }
+        } finally {
+          setProjectSourcesLoading(false);
+        }
+      }
+      if (softBusy) {
+        setFetchFailed(true);
+        setError('知识服务繁忙，拉取失败，稍后自动重试');
       }
     } catch (err) {
+      setFetchFailed(true);
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       refreshBusyRef.current = false;
@@ -401,6 +446,12 @@ export function KnowledgeAdminPanel({ agentId }: { agentId: string }) {
   useEffect(() => {
     refreshRef.current = refresh;
   }, [refresh]);
+
+  // 切换项目时立刻进入加载态，避免沿用上一项目列表或闪「尚无源」
+  useEffect(() => {
+    if (!selectedProject) return;
+    setProjectSourcesLoading(true);
+  }, [selectedProject]);
 
   // WS：knowledge.index.progress（系统级）
   useEffect(() => {
@@ -537,29 +588,40 @@ export function KnowledgeAdminPanel({ agentId }: { agentId: string }) {
       {error && <div className="kn-error">{error}</div>}
 
       <div className="kn-stats small muted mono">
-        源 {stats.sources ?? 0} · 文件 {stats.files ?? 0} · 分块 {stats.chunks ?? 0}
-        {' · '}
-        可嵌入 {stats.embeddableChunks ?? 0}
-        {' · '}
-        向量 {stats.embeddings ?? 0}
-        {(stats.embeddableChunks ?? 0) > 0 && `/${stats.embeddableChunks}`}
-        {' · '}
-        待检查 {stats.jobsQueued ?? 0} / 任务 {stats.jobsRunning ?? 0}
-        {hasActiveIndexing && (
+        {!booted && !fetchFailed ? (
+          <span>加载中…</span>
+        ) : fetchFailed && !booted ? (
+          <span>拉取失败，稍后重试…</span>
+        ) : (
+          <>
+            源 {stats.sources ?? 0} · 文件 {stats.files ?? 0} · 分块 {stats.chunks ?? 0}
+            {' · '}
+            可嵌入 {stats.embeddableChunks ?? 0}
+            {' · '}
+            向量 {stats.embeddings ?? 0}
+            {(stats.embeddableChunks ?? 0) > 0 && `/${stats.embeddableChunks}`}
+            {' · '}
+            待检查 {stats.jobsQueued ?? 0} / 任务 {stats.jobsRunning ?? 0}
+          </>
+        )}
+        {booted && hasActiveIndexing && (
           <span className="status-warn">
             {' '}
             · 索引中…（解析/分块优先，完成后可关键词搜索；向量后台补）
           </span>
         )}
-        {!hasActiveIndexing &&
+        {booted &&
+          !hasActiveIndexing &&
           (stats.embeddings ?? 0) < (stats.embeddableChunks ?? 0) &&
           (stats.embeddableChunks ?? 0) > 0 && <span className="status-warn"> · 向量待补</span>}
-        {!hasActiveIndexing &&
+        {booted &&
+          !hasActiveIndexing &&
           (stats.embeddableChunks ?? 0) > 0 &&
           (stats.embeddings ?? 0) >= (stats.embeddableChunks ?? 0) && (
             <span className="status-ok"> · 就绪</span>
           )}
-        {!hasActiveIndexing &&
+        {booted &&
+          !hasActiveIndexing &&
           (stats.embeddableChunks ?? 0) === 0 &&
           (stats.chunks ?? 0) > 0 && <span className="status-ok"> · 就绪（代码无需向量）</span>}
         {hasActiveIndexing ? (
@@ -669,7 +731,13 @@ export function KnowledgeAdminPanel({ agentId }: { agentId: string }) {
           </div>
 
           <div className="kn-list">
-            {globalSources.length === 0 && (
+            {!booted && !fetchFailed && globalSources.length === 0 && (
+              <div className="small muted">加载中…</div>
+            )}
+            {fetchFailed && globalSources.length === 0 && (
+              <div className="small muted">拉取失败，稍后重试。</div>
+            )}
+            {booted && !fetchFailed && globalSources.length === 0 && (
               <div className="small muted">尚无公共源。注册后 agent 默认可见。</div>
             )}
             {globalSources.map((s) => (
@@ -823,7 +891,13 @@ export function KnowledgeAdminPanel({ agentId }: { agentId: string }) {
                 </div>
 
                 <div className="kn-list">
-                  {projectSources.length === 0 && (
+                  {projectSourcesLoading && projectSources.length === 0 && !fetchFailed && (
+                    <div className="small muted">加载中…</div>
+                  )}
+                  {fetchFailed && projectSources.length === 0 && !projectSourcesLoading && (
+                    <div className="small muted">拉取失败，稍后重试。</div>
+                  )}
+                  {!projectSourcesLoading && !fetchFailed && projectSources.length === 0 && (
                     <div className="small muted">本项目尚无源。</div>
                   )}
                   {projectSources.map((s) => (

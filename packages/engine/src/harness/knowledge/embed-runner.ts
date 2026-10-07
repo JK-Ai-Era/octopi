@@ -104,6 +104,8 @@ export class EmbedRunner {
       const settled = await Promise.allSettled(
         slices.map((slice) => this.embedOneSlice(sourceId, slice)),
       );
+      // 向量落库是同步写：批间让出，避免 Engine 线程连轴堵住 /v1/sources
+      await new Promise<void>((r) => setImmediate(r));
 
       let ok = 0;
       let failed = false;

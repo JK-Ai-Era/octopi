@@ -1051,6 +1051,7 @@ button.ctx-band {
 }
 .kn-source-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
 .kn-source-title { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; }
+.kn-coverage { min-width: 7.5em; white-space: nowrap; }
 .kn-source-actions { display: flex; flex-direction: column; gap: 6px; }
 .kn-projects-layout { display: grid; grid-template-columns: 280px 1fr; gap: 12px; align-items: start; }
 .kn-project-item {

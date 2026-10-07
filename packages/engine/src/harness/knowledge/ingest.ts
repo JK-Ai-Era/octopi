@@ -421,7 +421,8 @@ export class KnowledgeIngest extends EventEmitter {
     }
     this.sourceLocks.add(sourceId);
     try {
-      this.sources.update(sourceId, { status: 'discovering', coverage: 0 });
+      // 保留旧 coverage：重建期间索引仍在库中，写 0 会让 UI 误判为清空
+      this.sources.update(sourceId, { status: 'discovering' });
       this.emitProgress({ type: 'source', sourceId, status: 'discovering' });
 
       // full 不再 clearSource：靠 keepPaths  prune，discover 失败不丢?
@@ -455,6 +456,7 @@ export class KnowledgeIngest extends EventEmitter {
 
       for (const file of files) {
         if (this.isAborted(sourceId)) return;
+        if (this.isUnchangedIndexed(sourceId, file)) continue;
         this.enqueue(sourceId, 'parse_file', file.path, 2, file.path);
       }
       if (this.embedding && !this.isAborted(sourceId)) {
@@ -464,6 +466,24 @@ export class KnowledgeIngest extends EventEmitter {
     } finally {
       this.sourceLocks.delete(sourceId);
     }
+  }
+
+  /**
+   * 入队层廉价变更检测：已完整索引且 size/mtime 未变则跳过 parse_file。
+   * 仅对 `status='indexed' && chunk_count>0 && content_hash` 生效——
+   * indexing/error/半成品必须重做，避免把未完成当成新鲜。
+   */
+  private isUnchangedIndexed(
+    sourceId: string,
+    ref: { path: string; size?: number; mtime?: number },
+  ): boolean {
+    if (ref.size == null || ref.mtime == null) return false;
+    const existing = this.index.getFile(sourceId, ref.path);
+    if (!existing) return false;
+    if (existing.status !== 'indexed') return false;
+    if (existing.chunkCount <= 0) return false;
+    if (!existing.contentHash) return false;
+    return existing.size === ref.size && existing.mtime === ref.mtime;
   }
 
   /**
@@ -575,7 +595,7 @@ export class KnowledgeIngest extends EventEmitter {
       this.enqueue(source.id, 'embed_source', null, 3);
       this.kick();
     }
-    this.refreshCoverage(source.id);
+    this.refreshCoverage(source.id, { force: true });
     this.emitProgress({
       type: 'source',
       sourceId: source.id,
@@ -1106,27 +1126,34 @@ export class KnowledgeIngest extends EventEmitter {
     } catch {
       return 0;
     }
-    const byPath = new Map(this.index.listFiles(sourceId).map((f) => [f.path, f]));
+    const byPath = new Map(
+      this.index.listFiles(sourceId).map((f) => [f.path.replace(/\\/g, '/'), f]),
+    );
     let added = 0;
     let retriedSkipped = 0;
+    let retriedIncomplete = 0;
     for (const f of found.docs) {
-      const existing = byPath.get(f.path);
-      // 缺文件必补；?skipped ?oversize/空内容在受时重试（配宽后能进索引?
+      const logical = f.path.replace(/\\/g, '/');
+      const existing = byPath.get(logical);
+      // 缺文件必补；indexing=半写入/崩溃残留必补；skipped 且原因可重试时补
       const need =
         !existing ||
+        existing.status === 'indexing' ||
         (existing.status === 'skipped' &&
           isRetryableSkipReason(existing.error ?? null, existing.size, this.fileLimits));
       if (!need) continue;
       this.enqueue(sourceId, 'parse_file', f.path, 2, f.path);
       added += 1;
-      if (existing) retriedSkipped += 1;
+      if (!existing) continue;
+      if (existing.status === 'indexing') retriedIncomplete += 1;
+      else retriedSkipped += 1;
     }
     if (added > 0) {
       this.emitProgress({
         type: 'source',
         sourceId,
         status: 'parse_gap_found',
-        detail: `missing_files=${added - retriedSkipped} retry_skipped=${retriedSkipped}`,
+        detail: `missing_files=${added - retriedSkipped - retriedIncomplete} retry_skipped=${retriedSkipped} retry_indexing=${retriedIncomplete}`,
       });
       this.kick();
     }
@@ -1172,7 +1199,7 @@ export class KnowledgeIngest extends EventEmitter {
         status: 'pruned_missing',
         detail: `removed_files=${removed}`,
       });
-      this.refreshCoverage(sourceId);
+      this.refreshCoverage(sourceId, { force: true });
     }
     return removed;
   }
@@ -1313,7 +1340,7 @@ export class KnowledgeIngest extends EventEmitter {
       // 稳定态收尾（auto-describe 等）关键词部署同触发
       // 先看 active，再 gap ；避免刚入队?gap job 挡住 settled
       if (active.total === 0) {
-        this.refreshCoverage(s.id);
+        this.refreshCoverage(s.id, { force: true });
         try {
           this.onSourceSettled?.(s.id);
         } catch {
@@ -1614,7 +1641,7 @@ export class KnowledgeIngest extends EventEmitter {
       // ?done 后再：否?enqueue 去重会把「自?active 而丢掉下?
       if (job.kind === 'embed_source' && !this.isAborted(job.source_id)) {
         this.ensureEmbedJob(job.source_id);
-        this.refreshCoverage(job.source_id);
+        this.refreshCoverage(job.source_id, { force: true });
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -1767,16 +1794,19 @@ export class KnowledgeIngest extends EventEmitter {
       }
       if (signal?.aborted) throw new Error('aborted');
       const ident = await identifyLocalFile(filePath);
-      await this.index.upsertFile({
-        sourceId,
-        path: filePath,
-        contentHash: parsed.contentHash,
-        size: st.size,
-        mtime: Math.floor(st.mtimeMs),
-        adapterId: parsed.adapterId,
-        chunks: parsed.chunks,
-        identityKey: ident.key,
-      });
+      await this.index.upsertFile(
+        {
+          sourceId,
+          path: filePath,
+          contentHash: parsed.contentHash,
+          size: st.size,
+          mtime: Math.floor(st.mtimeMs),
+          adapterId: parsed.adapterId,
+          chunks: parsed.chunks,
+          identityKey: ident.key,
+        },
+        { signal },
+      );
       return true;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -1841,16 +1871,19 @@ export class KnowledgeIngest extends EventEmitter {
       }
       if (signal?.aborted) throw new Error('aborted');
       const ident = await identifyLocalFile(filePath);
-      await this.index.upsertFile({
-        sourceId,
-        path: filePath,
-        contentHash,
-        size: st.size,
-        mtime: Math.floor(st.mtimeMs),
-        adapterId: `document:${extracted.result.backend}`,
-        chunks: extracted.chunks,
-        identityKey: ident.key,
-      });
+      await this.index.upsertFile(
+        {
+          sourceId,
+          path: filePath,
+          contentHash,
+          size: st.size,
+          mtime: Math.floor(st.mtimeMs),
+          adapterId: `document:${extracted.result.backend}`,
+          chunks: extracted.chunks,
+          identityKey: ident.key,
+        },
+        { signal },
+      );
       return true;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -2001,10 +2034,18 @@ export class KnowledgeIngest extends EventEmitter {
     const ids = sourceId ? [sourceId] : [...this.coverageDirty];
     if (sourceId) this.coverageDirty.delete(sourceId);
     else this.coverageDirty.clear();
-    for (const id of ids) this.refreshCoverage(id);
+    for (const id of ids) this.refreshCoverage(id, { force: true });
   }
 
-  private refreshCoverage(sourceId: string): void {
+  private lastCoverageRefreshAt = new Map<string, number>();
+
+  private refreshCoverage(sourceId: string, opts?: { force?: boolean }): void {
+    const now = Date.now();
+    const last = this.lastCoverageRefreshAt.get(sourceId) ?? 0;
+    // 大库 sourceStats/embeddingCoverage 是多表 COUNT；解析/嵌入高频调用时节流，
+    // 避免 Engine 线程被统计查询堵住导致 HTTP list 超时。收尾路径 force。
+    if (!opts?.force && now - last < 2_000) return;
+    this.lastCoverageRefreshAt.set(sourceId, now);
     const stats = this.index.sourceStats(sourceId);
     const source = this.sources.get(sourceId);
     if (!source) return;
