@@ -36,7 +36,11 @@ Knowledge · Source · KnowledgeScope（Global / Project / Session）· File ide
 
 | 文件 | 职责 |
 |------|------|
-| `http-app.ts` / `serve.ts` / `client.ts` | **Knowledge Service** HTTP 面 + 进程入口 + Client |
+| `serve.ts` / `http-bridge.ts` | 主线程 HTTP 桥（`/health` + token 鉴权 + SSE） |
+| `engine-thread.ts` / `http-app.ts` | Engine Worker：业务路由 + HttpApp |
+| `client.ts` | Gateway 侧 Client |
+| `knowledge-serve-child.ts` / `start-service-process.ts` / `writer-lock.ts` | manageLocal fork 子进程 + 写者锁 |
+| `parse-text-in-worker.ts` / `text-parse-worker.ts` | 文本切块 + FTS token（Worker） |
 | `file-identity.ts` / `membership-store.ts` | File identity / 认领 / 零认领 purge |
 | `ingest.ts` | 编排 / parse / watch / poll / reconcile（`startIngestRuntime`） |
 | `job-queue.ts` | jobs 表原语 |

@@ -16,7 +16,7 @@ describe('KnowledgeIndexStore.listFilesPaged', () => {
       displayName: 'page',
     });
     for (let i = 0; i < 5; i++) {
-      index.upsertFile({
+      await index.upsertFile({
         sourceId: src.id,
         path: `/tmp/kn-page/a${i}.md`,
         contentHash: `h${i}`,

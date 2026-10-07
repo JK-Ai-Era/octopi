@@ -31,7 +31,7 @@ describe('KnowledgeIngest.reconcileJobs', () => {
       scopeRef: { level: 'global', key: 'global' },
       displayName: 'recon',
     });
-    index.upsertFile({
+    await index.upsertFile({
       sourceId: src.id,
       path: filePath,
       contentHash: 'h',

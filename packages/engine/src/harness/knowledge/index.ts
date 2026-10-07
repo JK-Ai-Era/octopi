@@ -93,6 +93,15 @@ export { KnowledgeHttpApp, createKnowledgeHttpApp } from './http-app.js';
 export type { KnowledgeServiceToken, KnowledgeServiceOptions, AuthContext } from './http-app.js';
 export { startKnowledgeService } from './serve.js';
 export type { KnowledgeServeOptions, KnowledgeServeHandle } from './serve.js';
+export { startKnowledgeServiceProcess } from './start-service-process.js';
+export type {
+  KnowledgeServiceProcessOptions,
+  KnowledgeServiceProcessHandle,
+} from './start-service-process.js';
+export { acquireKnowledgeWriterLock } from './writer-lock.js';
+export type { WriterLockHolder } from './writer-lock.js';
+export { parseTextInWorker } from './parse-text-in-worker.js';
+export type { TextParseResult, TextParseWorkerOptions } from './parse-text-in-worker.js';
 export { KnowledgeClient } from './client.js';
 export type { KnowledgeClientOptions } from './client.js';
 export type {

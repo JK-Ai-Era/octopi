@@ -8,7 +8,7 @@ import { KnowledgeSourceStore } from '@octopi-agent/engine/harness/knowledge/sou
 import { KnowledgeIndexStore } from '@octopi-agent/engine/harness/knowledge/index-store.js';
 
 describe('deriveTopicsFromPaths', () => {
-  it('从目录/文件名抽出稳定短词，过滤停用词', () => {
+  it('从目录/文件名抽出稳定短词，过滤停用词', async () => {
     const topics = deriveTopicsFromPaths([
       '/data/docs/architecture.md',
       '/data/docs/knowledge-layer.md',
@@ -22,7 +22,7 @@ describe('deriveTopicsFromPaths', () => {
     expect(topics).not.toContain('tests');
   });
 
-  it('空路径返回空列表', () => {
+  it('空路径返回空列表', async () => {
     expect(deriveTopicsFromPaths([])).toEqual([]);
   });
 });
@@ -44,7 +44,7 @@ describe('KnowledgeRetriever source filter', () => {
       displayName: 'beta',
     });
 
-    index.upsertFile({
+    await index.upsertFile({
       sourceId: a.id,
       path: '/tmp/kn-a/doc.md',
       contentHash: 'h1',

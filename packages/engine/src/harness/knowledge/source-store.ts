@@ -315,12 +315,16 @@ export class KnowledgeSourceStore {
       .run(opts?.tenantId ?? 'default', opts?.gatewayId ?? 'default', projectKey, agentId);
   }
 
-  listProjectAgents(projectKey: string): string[] {
+  listProjectAgents(projectKey: string, opts?: { tenantId?: string; gatewayId?: string }): string[] {
     const rows = this.db.raw
       .prepare(
-        'SELECT local_agent_id AS agent_id FROM knowledge_project_agents WHERE project_key = ? ORDER BY local_agent_id',
+        `SELECT local_agent_id AS agent_id FROM knowledge_project_agents
+         WHERE tenant_id = ? AND gateway_id = ? AND project_key = ?
+         ORDER BY local_agent_id`,
       )
-      .all(projectKey) as Array<{ agent_id: string }>;
+      .all(opts?.tenantId ?? 'default', opts?.gatewayId ?? 'default', projectKey) as Array<{
+      agent_id: string;
+    }>;
     return rows.map((r) => r.agent_id);
   }
 
@@ -374,6 +378,21 @@ export class KnowledgeSourceStore {
       source_id: string;
     }>;
     return rows.map((r) => r.source_id);
+  }
+
+  /** 哪些 agent 对该 global 源做了隐藏 */
+  listAgentsHidingSource(
+    sourceId: string,
+    opts?: { tenantId?: string; gatewayId?: string },
+  ): string[] {
+    const rows = this.db.raw
+      .prepare(
+        'SELECT local_agent_id FROM knowledge_agent_hidden WHERE tenant_id = ? AND gateway_id = ? AND source_id = ? ORDER BY local_agent_id',
+      )
+      .all(opts?.tenantId ?? 'default', opts?.gatewayId ?? 'default', sourceId) as Array<{
+      local_agent_id: string;
+    }>;
+    return rows.map((r) => r.local_agent_id);
   }
 
   /**
@@ -451,63 +470,71 @@ export class KnowledgeSourceStore {
   }
 
   /** 项目登记视图（管理面：先建项目再挂源；**不**用孤儿源计数复活已删项目） */
-  listProjects(): Array<{
+  listProjects(opts?: { tenantId?: string; gatewayId?: string }): Array<{
     projectKey: string;
     displayName?: string;
     sourceCount: number;
     assignedAgentIds: string[];
   }> {
+    const tenant = opts?.tenantId ?? 'default';
     const registered = this.db.raw
       .prepare(
-        `SELECT project_key, display_name FROM knowledge_projects ORDER BY project_key`,
+        `SELECT project_key, display_name FROM knowledge_projects
+         WHERE tenant_id = ? ORDER BY project_key`,
       )
-      .all() as Array<{ project_key: string; display_name: string | null }>;
+      .all(tenant) as Array<{ project_key: string; display_name: string | null }>;
     const counts = this.db.raw
       .prepare(
         `SELECT scope_key AS project_key, COUNT(*) AS source_count
          FROM knowledge_sources
-         WHERE scope_level = 'project' AND status != 'removed'
+         WHERE scope_level = 'project' AND status != 'removed' AND tenant_id = ?
          GROUP BY scope_key`,
       )
-      .all() as Array<{ project_key: string; source_count: number }>;
+      .all(tenant) as Array<{ project_key: string; source_count: number }>;
     const countMap = new Map(counts.map((c) => [c.project_key, c.source_count]));
     // 只列已登记项目；孤儿源（项目已删）不再“复活”项目行
     return registered.map((r) => ({
       projectKey: r.project_key,
       displayName: r.display_name ?? undefined,
       sourceCount: countMap.get(r.project_key) ?? 0,
-      assignedAgentIds: this.listProjectAgents(r.project_key),
+      assignedAgentIds: this.listProjectAgents(r.project_key, opts),
     }));
   }
 
   /** 登记空项目（先建项目再挂源） */
-  createProject(projectKey: string, displayName?: string): void {
+  createProject(
+    projectKey: string,
+    displayName?: string,
+    opts?: { tenantId?: string; registeredBy?: string },
+  ): void {
     const key = projectKey.trim();
     if (!key) throw new Error('projectKey is required');
+    const tenant = opts?.tenantId ?? 'default';
     const now = Date.now();
     this.db.raw
       .prepare(
         `INSERT INTO knowledge_projects
            (tenant_id, project_key, display_name, registered_by, visibility, created_at, updated_at)
-         VALUES ('default', ?, ?, 'default', 'private', ?, ?)
+         VALUES (?, ?, ?, ?, 'private', ?, ?)
          ON CONFLICT(tenant_id, project_key) DO UPDATE SET
            display_name = COALESCE(excluded.display_name, knowledge_projects.display_name),
            updated_at = excluded.updated_at`,
       )
-      .run(key, displayName ?? null, now, now);
+      .run(tenant, key, displayName ?? null, opts?.registeredBy ?? 'default', now, now);
   }
 
   /**
    * 删除项目登记。非空项目拒绝（先卸载/删除项目下源），避免孤儿源与静默收养。
    */
-  removeProject(projectKey: string): boolean {
+  removeProject(projectKey: string, opts?: { tenantId?: string }): boolean {
+    const tenant = opts?.tenantId ?? 'default';
     const sourceCount = (
       this.db.raw
         .prepare(
           `SELECT COUNT(*) AS n FROM knowledge_sources
-           WHERE scope_level = 'project' AND scope_key = ? AND status != 'removed'`,
+           WHERE scope_level = 'project' AND scope_key = ? AND status != 'removed' AND tenant_id = ?`,
         )
-        .get(projectKey) as { n: number }
+        .get(projectKey, tenant) as { n: number }
     ).n;
     if (sourceCount > 0) {
       throw new Error(

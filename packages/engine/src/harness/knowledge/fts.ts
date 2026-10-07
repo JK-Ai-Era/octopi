@@ -80,8 +80,10 @@ export class KnowledgeFts {
   /**
    * 批量 upsert。**不自开事务**：调用方（upsertFile 等）已在外层事务内，
    * 嵌套 BEGIN 会炸；rebuild 时由调用方包事务。
+   *
+   * `toks` 已预计算时直接写入，避免在写事务里跑 CJK 滑窗。
    */
-  upsertMany(rows: Array<{ id: string; text: string; path?: string }>): void {
+  upsertMany(rows: Array<{ id: string; text: string; path?: string; toks?: string }>): void {
     if (!this.enabled || rows.length === 0) return;
     const del = this.db.raw.prepare('DELETE FROM knowledge_chunks_fts WHERE chunk_id = ?');
     const ins = this.db.raw.prepare(
@@ -89,7 +91,7 @@ export class KnowledgeFts {
     );
     for (const r of rows) {
       del.run(r.id);
-      ins.run(r.id, buildFtsTokens(r.text, r.path));
+      ins.run(r.id, r.toks ?? buildFtsTokens(r.text, r.path));
     }
   }
 
@@ -102,8 +104,13 @@ export class KnowledgeFts {
 
   removeMany(chunkIds: string[]): void {
     if (!this.enabled || chunkIds.length === 0) return;
-    const del = this.db.raw.prepare('DELETE FROM knowledge_chunks_fts WHERE chunk_id = ?');
-    for (const id of chunkIds) del.run(id);
+    // 批量 IN 删除：单条 DELETE 循环在数千 chunk 时会把事件循环堵成秒级
+    const del = this.db.raw.prepare(
+      `DELETE FROM knowledge_chunks_fts WHERE chunk_id IN (${chunkIds.map(() => '?').join(',')})`,
+    );
+    for (let i = 0; i < chunkIds.length; i += 400) {
+      del.run(...chunkIds.slice(i, i + 400));
+    }
   }
 
   /** 源级清空（卸载 / rebuild）— 经 Membership */
@@ -187,7 +194,8 @@ export class KnowledgeFts {
     opts?: { batch?: number; onProgress?: (done: number) => void },
   ): Promise<number> {
     if (!this.enabled) return 0;
-    const batch = Math.max(50, opts?.batch ?? 200);
+    // 小批量 + 频繁让出：CJK 滑窗分词是主线程 CPU，批太大仍会饿死 /health
+    const batch = Math.max(20, opts?.batch ?? 50);
     this.db.raw.exec('DELETE FROM knowledge_chunks_fts');
     let cursor = '';
     let n = 0;
@@ -203,7 +211,6 @@ export class KnowledgeFts {
       n += rows.length;
       cursor = rows[rows.length - 1].id;
       opts?.onProgress?.(n);
-      // 让出事件循环，保证 /health 与管理 API 可响应
       await new Promise<void>((r) => setImmediate(r));
     }
     return n;

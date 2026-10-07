@@ -11,7 +11,9 @@ import { KnowledgeIndexStore } from './index-store.js';
 import { MembershipStore } from './membership-store.js';
 import { KnowledgeIngest } from './ingest.js';
 import { KnowledgeRetriever } from './retriever.js';
-import { createDocumentPortFromConfig } from '../capabilities/document/factory.js';
+import { KnowledgeHitLog } from './hit-log.js';
+import { generateKnowledgeDescription } from './describe.js';
+import { matchKnowledgeToken } from './http-bridge.js';
 
 export interface KnowledgeServiceToken {
   token: string;
@@ -26,6 +28,15 @@ export interface KnowledgeServiceOptions {
   autoRegisterPrincipals?: boolean;
   /** documents.* — Document 抽取/legacy 与 Gateway 同源 */
   documentConfig?: import('../capabilities/document/factory.js').DocumentCapabilityConfig | null;
+  /** Phase B embedding；未配则 embed_source 不写向量 */
+  embeddingProvider?: import('../memory/sqlite/embedding.js').EmbeddingProvider | null;
+  embed?: {
+    enabled?: boolean;
+    embedBatch?: number;
+    embedMinIntervalMs?: number;
+    embedConcurrency?: number;
+    embedSecretPolicy?: 'allow' | 'redact' | 'skip';
+  } | null;
 }
 
 export interface AuthContext {
@@ -127,12 +138,22 @@ export class KnowledgeHttpApp {
     }
     let ingest = this.ingests.get(key);
     if (!ingest) {
-      // documentConfig → worker；documentPort（同工厂）作 worker 不可用时的回退
+      // 生产路径只给 documentConfig：抽取走 extractDocumentInWorker（CPU 隔离）
+      // documentPort 留给测试/宿主注入自定义后端，不在 Service 内再拼一份进程内 port
+      const embed = this.opts.embed ?? null;
       ingest = new KnowledgeIngest({
         sourceStore: sources,
         indexStore: index,
         documentConfig: this.opts.documentConfig ?? null,
-        documentPort: createDocumentPortFromConfig(this.opts.documentConfig ?? null),
+        embeddingProvider: embed?.enabled === false ? null : (this.opts.embeddingProvider ?? null),
+        ...(embed?.embedBatch != null ? { embedBatch: embed.embedBatch } : {}),
+        ...(embed?.embedMinIntervalMs != null
+          ? { embedMinIntervalMs: embed.embedMinIntervalMs }
+          : {}),
+        ...(embed?.embedConcurrency != null ? { embedConcurrency: embed.embedConcurrency } : {}),
+        ...(embed?.embedSecretPolicy != null
+          ? { embedSecretPolicy: embed.embedSecretPolicy }
+          : {}),
       });
       this.ingests.set(key, ingest);
     }
@@ -164,12 +185,18 @@ export class KnowledgeHttpApp {
     });
 
     this.route('GET', '/v1/ready', (_req, res) => {
+      const { index } = this.bundle();
       const stats = this.db.stats();
+      const chunks = Number(stats.chunks ?? 0);
+      const ftsRows = Number(stats.ftsChunks ?? 0);
       json(res, 200, {
         ready: true,
         sqliteVec: this.db.sqliteVecEnabled,
-        fts: true,
-        ftsBackfill: { running: false, pendingChunks: 0 },
+        fts: index.ftsAvailable,
+        ftsBackfill: {
+          running: index.ftsBackfillRunning,
+          pendingChunks: Math.max(0, chunks - ftsRows),
+        },
         writeLocked: false,
         stats,
       });
@@ -200,9 +227,15 @@ export class KnowledgeHttpApp {
       json(res, 200, { ok: true, data: row });
     });
 
-    this.route('GET', '/v1/projects', (_req, res) => {
+    this.route('GET', '/v1/projects', (_req, res, ctx) => {
       const { sources } = this.bundle();
-      json(res, 200, { ok: true, data: sources.listProjects() });
+      json(res, 200, {
+        ok: true,
+        data: sources.listProjects({
+          tenantId: ctx.tenantId,
+          gatewayId: ctx.gatewayId,
+        }),
+      });
     });
 
     this.route('POST', '/v1/projects', (_req, res, ctx, _p, body) => {
@@ -211,22 +244,26 @@ export class KnowledgeHttpApp {
       const existing = this.db.raw
         .prepare(
           `SELECT registered_by FROM knowledge_projects
-           WHERE tenant_id = 'default' AND project_key = ?`,
+           WHERE tenant_id = ? AND project_key = ?`,
         )
-        .get(b.projectKey) as { registered_by?: string } | undefined;
+        .get(ctx.tenantId, b.projectKey) as { registered_by?: string } | undefined;
       if (existing?.registered_by && existing.registered_by !== ctx.gatewayId) {
         return err(res, 403, 'not_resource_owner', 'project owned by another gateway');
       }
       const { sources } = this.bundle();
-      sources.createProject(b.projectKey, b.displayName);
+      sources.createProject(b.projectKey, b.displayName, {
+        tenantId: ctx.tenantId,
+        registeredBy: ctx.gatewayId,
+      });
       this.db.raw
         .prepare(
           `UPDATE knowledge_projects SET registered_by = ?, visibility = ?
-           WHERE tenant_id = 'default' AND project_key = ?`,
+           WHERE tenant_id = ? AND project_key = ?`,
         )
         .run(
           ctx.gatewayId,
           b.visibility === 'public' ? 'public' : 'private',
+          ctx.tenantId,
           b.projectKey,
         );
       json(res, 201, {
@@ -245,15 +282,15 @@ export class KnowledgeHttpApp {
       const row = this.db.raw
         .prepare(
           `SELECT registered_by FROM knowledge_projects
-           WHERE tenant_id = 'default' AND project_key = ?`,
+           WHERE tenant_id = ? AND project_key = ?`,
         )
-        .get(key) as { registered_by?: string } | undefined;
+        .get(ctx.tenantId, key) as { registered_by?: string } | undefined;
       if (row?.registered_by && row.registered_by !== ctx.gatewayId) {
         return err(res, 403, 'not_resource_owner', 'not project owner');
       }
       const { sources } = this.bundle();
       try {
-        const removed = sources.removeProject(key);
+        const removed = sources.removeProject(key, { tenantId: ctx.tenantId });
         json(res, 200, { ok: true, data: { projectKey: key, removed } });
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
@@ -297,9 +334,26 @@ export class KnowledgeHttpApp {
       });
     });
 
-    this.route('GET', '/v1/sources', (_req, res, ctx) => {
+    this.route('GET', '/v1/sources', (req, res, ctx) => {
       const { sources } = this.bundle();
-      const list = sources.list().filter((s) => this.sourceVisibleToGateway(s, ctx));
+      const url = new URL(req.url ?? '/v1/sources', 'http://internal');
+      const scopeLevel = url.searchParams.get('scopeLevel');
+      const projectKey = url.searchParams.get('projectKey') ?? undefined;
+      const sessionId = url.searchParams.get('sessionId') ?? undefined;
+      let list = sources.list().filter((s) => this.sourceVisibleToGateway(s, ctx));
+      if (scopeLevel === 'global' || scopeLevel === 'project' || scopeLevel === 'session') {
+        list = list.filter((s) => s.scopeRef.level === scopeLevel);
+      }
+      if (projectKey != null && projectKey !== '') {
+        list = list.filter((s) => s.scopeRef.key === projectKey);
+      }
+      if (sessionId != null && sessionId !== '') {
+        // 会话过滤必须真过滤：session 级源只保留本会话；其余按 overlay/base
+        list = list.filter((s) => {
+          if (s.scopeRef.level === 'session') return s.scopeRef.key === sessionId;
+          return true;
+        });
+      }
       json(res, 200, { ok: true, data: list });
     });
 
@@ -353,14 +407,23 @@ export class KnowledgeHttpApp {
     });
 
     this.route('GET', '/v1/sources/:sid', (_req, res, ctx, params) => {
-      const { sources, index } = this.bundle();
+      const { sources, index, ingest } = this.bundle();
       const src = sources.get(params.sid!);
       if (!src || !this.sourceVisibleToGateway(src, ctx)) {
         return err(res, 404, 'source_not_found', 'source not found');
       }
+      const identity = { tenantId: ctx.tenantId, gatewayId: ctx.gatewayId };
+      const assignedAgentIds =
+        src.scopeRef.level === 'project' ? sources.listProjectAgents(src.scopeRef.key) : [];
       json(res, 200, {
         ok: true,
-        data: { ...src, stats: index.sourceStats(src.id) },
+        data: {
+          ...src,
+          stats: index.sourceStats(src.id),
+          jobControl: ingest.jobControlState(src.id),
+          assignedAgentIds,
+          hiddenForAgentIds: sources.listAgentsHidingSource(src.id, identity),
+        },
       });
     });
 
@@ -421,8 +484,11 @@ export class KnowledgeHttpApp {
         return err(res, 403, 'not_resource_owner', 'not source owner');
       }
       const { ingest } = this.bundle();
-      ingest.abortJobs({ sourceId: params.sid! });
-      json(res, 200, { ok: true, data: ingest.jobControlState(params.sid!) });
+      const stats = ingest.abortJobs({ sourceId: params.sid! });
+      json(res, 200, {
+        ok: true,
+        data: { ...stats, ...ingest.jobControlState(params.sid!) },
+      });
     });
 
     this.route('POST', '/v1/sources/:sid/resume', (_req, res, ctx, params) => {
@@ -432,6 +498,67 @@ export class KnowledgeHttpApp {
       const { ingest } = this.bundle();
       ingest.resumeJobs({ sourceId: params.sid! });
       json(res, 200, { ok: true, data: ingest.jobControlState(params.sid!) });
+    });
+
+    this.route('POST', '/v1/sources/:sid/describe', async (_req, res, ctx, params) => {
+      if (!this.assertSourceOwner(ctx, params.sid!)) {
+        return err(res, 403, 'not_resource_owner', 'not source owner');
+      }
+      const { sources } = this.bundle();
+      const src = sources.get(params.sid!);
+      if (!src) return err(res, 404, 'source_not_found', 'source not found');
+      const paths = this.db.raw
+        .prepare(
+          'SELECT logical_path FROM knowledge_memberships WHERE source_id = ? ORDER BY logical_path LIMIT 20',
+        )
+        .all(src.id) as Array<{ logical_path: string }>;
+      const sample = paths.map((p) => p.logical_path).join('\n') || src.location;
+      const r = await generateKnowledgeDescription(src, sample, { enabled: true });
+      sources.update(src.id, { generatedDescription: r.description });
+      json(res, 200, {
+        ok: true,
+        data: { generatedDescription: r.description, source: r.source },
+      });
+    });
+
+    /** 全局中止/继续：仅作用于本 Gateway 注册的源（与单源 ACL 同口径） */
+    const runJobsOpForOwned = (
+      ctx: AuthContext,
+      op: 'abort' | 'resume',
+    ): { ok: true; data: Record<string, number> } => {
+      const { ingest, sources } = this.bundle();
+      const owned = sources.list().filter((s) => this.assertSourceOwner(ctx, s.id));
+      let cancelledQueued = 0;
+      let abortedRunning = 0;
+      let runningJobs = 0;
+      let restoredCancelled = 0;
+      let embedQueued = 0;
+      for (const s of owned) {
+        if (op === 'abort') {
+          const st = ingest.abortJobs({ sourceId: s.id });
+          cancelledQueued += st.cancelledQueued;
+          abortedRunning += st.abortedRunning;
+          runningJobs += st.runningJobs;
+        } else {
+          const st = ingest.resumeJobs({ sourceId: s.id });
+          restoredCancelled += st.restoredCancelled;
+          embedQueued += st.embedQueued;
+        }
+      }
+      return {
+        ok: true,
+        data:
+          op === 'abort'
+            ? { cancelledQueued, abortedRunning, runningJobs }
+            : { restoredCancelled, embedQueued },
+      };
+    };
+
+    this.route('POST', '/v1/jobs/abort', (_req, res, ctx) => {
+      json(res, 200, runJobsOpForOwned(ctx, 'abort'));
+    });
+    this.route('POST', '/v1/jobs/resume', (_req, res, ctx) => {
+      json(res, 200, runJobsOpForOwned(ctx, 'resume'));
     });
 
     this.route('GET', '/v1/sources/:sid/files', (_req, res, ctx, params) => {
@@ -475,7 +602,10 @@ export class KnowledgeHttpApp {
               .list()
               .filter((s) => s.scopeRef.level === 'project' && sources.isVisible(s, agentId))
               .map((s) => s.scopeRef.key),
-            hiddenSourceIds: [] as string[],
+            hiddenSourceIds: sources.listHidden(agentId, {
+              tenantId: ctx.tenantId,
+              gatewayId: ctx.gatewayId,
+            }),
           },
           visibleSources: visible.length,
         },
@@ -500,7 +630,11 @@ export class KnowledgeHttpApp {
       if (!sourceId || !path) {
         return err(res, 400, 'bad_request', 'sourceId and path required');
       }
-      const { index } = this.bundle();
+      const { index, sources } = this.bundle();
+      const src = sources.get(sourceId);
+      if (!src || !this.sourceVisibleToGateway(src, ctx) || !sources.isVisible(src, agentId, ctx.sessionId)) {
+        return err(res, 404, 'file_not_found', 'source not found');
+      }
       json(res, 200, { ok: true, data: index.listChunksByPath(sourceId, path) });
     });
 
@@ -555,14 +689,19 @@ export class KnowledgeHttpApp {
       const agentId = params.agentId!;
       this.ensurePrincipal(ctx, agentId);
       const { sources } = this.bundle();
+      const identity = { tenantId: ctx.tenantId, gatewayId: ctx.gatewayId };
       const assigned = sources
         .list()
-        .filter((s) => s.scopeRef.level === 'project' && sources.isVisible(s, agentId))
+        .filter(
+          (s) => s.scopeRef.level === 'project' && sources.isVisible(s, agentId, undefined, identity),
+        )
         .map((s) => s.scopeRef.key);
-      const hidden: string[] = [];
       json(res, 200, {
         ok: true,
-        data: { assignedProjects: [...new Set(assigned)], hiddenSourceIds: hidden },
+        data: {
+          assignedProjects: [...new Set(assigned)],
+          hiddenSourceIds: sources.listHidden(agentId, identity),
+        },
       });
     });
 
@@ -571,13 +710,15 @@ export class KnowledgeHttpApp {
       this.ensurePrincipal(ctx, agentId);
       this.assertOwnPrincipal(ctx, agentId);
       const { sources } = this.bundle();
+      const identity = { tenantId: ctx.tenantId, gatewayId: ctx.gatewayId };
       const op = (body as { op?: string })?.op;
       const projectKey = (body as { projectKey?: string })?.projectKey;
       const sourceId = (body as { sourceId?: string })?.sourceId;
-      if (op === 'assignProject' && projectKey) sources.assignProject(projectKey, agentId);
-      else if (op === 'unassignProject' && projectKey) sources.unassignProject(projectKey, agentId);
-      else if (op === 'hide' && sourceId) sources.hideSource(agentId, sourceId);
-      else if (op === 'unhide' && sourceId) sources.unhideSource(agentId, sourceId);
+      if (op === 'assignProject' && projectKey) sources.assignProject(projectKey, agentId, identity);
+      else if (op === 'unassignProject' && projectKey)
+        sources.unassignProject(projectKey, agentId, identity);
+      else if (op === 'hide' && sourceId) sources.hideSource(agentId, sourceId, identity);
+      else if (op === 'unhide' && sourceId) sources.unhideSource(agentId, sourceId, identity);
       else return err(res, 400, 'bad_request', 'unknown visibility op');
       json(res, 200, { ok: true, data: { op, projectKey, sourceId } });
     });
@@ -597,6 +738,37 @@ export class KnowledgeHttpApp {
           ok: true,
           data: sources.listSessionVisibility(sessionId),
         });
+      },
+    );
+
+    this.route(
+      'PUT',
+      '/v1/principals/:agentId/session-visibility',
+      (_req, res, ctx, params, body) => {
+        const agentId = params.agentId!;
+        this.ensurePrincipal(ctx, agentId);
+        this.assertOwnPrincipal(ctx, agentId);
+        const b = body as {
+          sessionId?: string;
+          items?: Array<{ targetType?: string; targetId?: string; op?: string }>;
+        };
+        const sessionId = b?.sessionId;
+        if (!sessionId) return err(res, 400, 'bad_request', 'sessionId required');
+        const { sources } = this.bundle();
+        // replace 语义：先清后写，禁止残留旧 include/exclude
+        sources.clearSessionVisibility(sessionId);
+        const items: Array<{ targetType: 'project' | 'source'; targetId: string; op: 'include' | 'exclude' }> = [];
+        for (const raw of b.items ?? []) {
+          const targetType = raw?.targetType as 'project' | 'source' | undefined;
+          const targetId = typeof raw?.targetId === 'string' ? raw.targetId : '';
+          const op = raw?.op as 'include' | 'exclude' | undefined;
+          if (!targetId || (targetType !== 'project' && targetType !== 'source') || (op !== 'include' && op !== 'exclude')) {
+            return err(res, 400, 'bad_request', 'items[] invalid');
+          }
+          items.push({ targetType, targetId, op });
+          sources.setSessionVisibility(sessionId, { targetType, targetId, op });
+        }
+        json(res, 200, { ok: true, data: { sessionId, count: items.length } });
       },
     );
 
@@ -685,6 +857,11 @@ export class KnowledgeHttpApp {
       }
       const { ingest } = this.bundle();
       json(res, 200, { ok: true, data: ingest.jobControlState(sourceId) });
+    });
+
+    this.route('GET', '/v1/promotion-candidates', (_req, res) => {
+      const hitLog = new KnowledgeHitLog(this.db);
+      json(res, 200, { ok: true, data: hitLog.promotionCandidates() });
     });
   }
 
@@ -778,6 +955,25 @@ export class KnowledgeHttpApp {
    */
   startIngestRuntime(): void {
     const { sources, ingest } = this.bundle();
+    // 源任务稳定后补 generatedDescription（Service 无 LLM 时走启发式，不再空转）
+    ingest.onSourceSettled = (sourceId) => {
+      void (async () => {
+        try {
+          const src = sources.get(sourceId);
+          if (!src || src.description?.trim()) return;
+          const paths = this.db.raw
+            .prepare(
+              'SELECT logical_path FROM knowledge_memberships WHERE source_id = ? ORDER BY logical_path LIMIT 20',
+            )
+            .all(sourceId) as Array<{ logical_path: string }>;
+          const sample = paths.map((p) => p.logical_path).join('\n') || src.location;
+          const r = await generateKnowledgeDescription(src, sample, { enabled: true });
+          sources.update(sourceId, { generatedDescription: r.description });
+        } catch {
+          /* describe 失败不影响索引 */
+        }
+      })();
+    };
     for (const s of sources.list()) {
       if (s.status === 'removed' || s.status === 'disabled') continue;
       if (s.sync.enabled !== false && s.sync.strategy === 'watch') {
@@ -863,10 +1059,7 @@ export class KnowledgeHttpApp {
   };
 
   private authenticate(req: IncomingMessage): AuthContext | null {
-    const header = req.headers.authorization;
-    if (!header || !header.startsWith('Bearer ')) return null;
-    const token = header.slice('Bearer '.length).trim();
-    const hit = this.opts.tokens.find((t) => t.token === token);
+    const hit = matchKnowledgeToken(this.opts.tokens, req.headers.authorization);
     if (!hit) return null;
     return { tenantId: hit.tenantId, gatewayId: hit.gatewayId };
   }

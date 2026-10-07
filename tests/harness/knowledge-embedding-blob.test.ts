@@ -15,7 +15,7 @@ describe('chunk embeddings as Float32 BLOB', () => {
       scopeRef: { level: 'global', key: 'global' },
       displayName: 'blob',
     });
-    index.upsertFile({
+    await index.upsertFile({
       sourceId: src.id,
       path: '/tmp/kn-blob/a.md',
       contentHash: 'h',

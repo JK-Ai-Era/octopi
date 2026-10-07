@@ -225,16 +225,10 @@ export class Gateway {
   private sessionAcl: SessionAclService;
   /** 进程内共?Session Lease（E1/E2）：?Runner 注入同一实例 */
   private sessionLease: import('@octopi-agent/engine/harness/run/concurrency/session-lease.js').InProcessSessionLock;
-  /** Knowledge 源注册（OCTOPI_HOME/knowledge/knowledge.db；懒加载?*/
-  private knowledgeStorePromise?: Promise<
-    import('@octopi-agent/engine/harness/knowledge/source-store.js').KnowledgeSourceStore
+  /** Knowledge Service（manageLocal + Client）；Promise 缓存防并发双启动 */
+  private knowledgeRuntimePromise?: Promise<
+    import('./knowledge-runtime.js').GatewayKnowledgeRuntime
   >;
-  /** Knowledge ingest（Phase A 解析/关键词索引） */
-  private knowledgeIngestPromise?: Promise<
-    import('@octopi-agent/engine/harness/knowledge/ingest.js').KnowledgeIngest
-  >;
-  /** Knowledge Service 时（manageLocal + Client；v2 写路径） */
-  private knowledgeRuntime?: import('./knowledge-runtime.js').GatewayKnowledgeRuntime;
   /** 产品?*/
   private issueRegistry: IssueRegistry;
   /** 会话?/xxx 命令调用?*/
@@ -438,9 +432,12 @@ export class Gateway {
     try {
       this.knowledgeProgressForward?.();
       this.knowledgeProgressForward = undefined;
-      if (this.knowledgeRuntime) {
-        await this.knowledgeRuntime.stop();
-        this.knowledgeRuntime = undefined;
+      const kn = await this.knowledgeRuntimePromise?.catch(
+        () => null as import('./knowledge-runtime.js').GatewayKnowledgeRuntime | null,
+      );
+      this.knowledgeRuntimePromise = undefined;
+      if (kn) {
+        await kn.stop();
       }
     } catch (kStopErr) {
       console.warn(
@@ -1525,33 +1522,52 @@ export class Gateway {
   async getKnowledgeRuntime(): Promise<
     import('./knowledge-runtime.js').GatewayKnowledgeRuntime
   > {
-    if (!this.knowledgeRuntime) {
-      const { GatewayKnowledgeRuntime } = await import('./knowledge-runtime.js');
-      const rt = new GatewayKnowledgeRuntime();
-      const kn = this.config.knowledge as
-        | {
-            service?: {
-              baseUrl?: string;
-              token?: string;
-              manageLocal?: boolean;
-              timeoutMs?: number;
-            };
-          }
-        | undefined;
-      const { getOctopiHome } = await import('@octopi-agent/engine/paths.js');
-      const { resolveKnowledgePaths } = await import(
-        '@octopi-agent/engine/harness/knowledge/index.js'
-      );
-      const paths = resolveKnowledgePaths(getOctopiHome());
-      await rt.start(kn?.service, {
-        dataDir: paths.root ?? paths.dbPath.replace(/[/\\][^/\\]+$/, ''),
-        gatewayId: process.env.OCTOPI_GATEWAY_ID ?? 'gw-local',
-        documentConfig: this.config.documents ?? null,
-      });
-      this.knowledgeRuntime = rt;
-      void this.startKnowledgeProgressForwarding().catch(() => undefined);
+    if (!this.knowledgeRuntimePromise) {
+      this.knowledgeRuntimePromise = (async () => {
+        const { GatewayKnowledgeRuntime } = await import('./knowledge-runtime.js');
+        const rt = new GatewayKnowledgeRuntime();
+        const kn = this.config.knowledge as
+          | {
+              service?: {
+                baseUrl?: string;
+                token?: string;
+                manageLocal?: boolean;
+                timeoutMs?: number;
+              };
+              embed?: {
+                enabled?: boolean;
+                embedBatch?: number;
+                embedMinIntervalMs?: number;
+                embedConcurrency?: number;
+                embedSecretPolicy?: 'allow' | 'redact' | 'skip';
+              };
+            }
+          | undefined;
+        const { getOctopiHome } = await import('@octopi-agent/engine/paths.js');
+        const { resolveKnowledgePaths } = await import(
+          '@octopi-agent/engine/harness/knowledge/index.js'
+        );
+        const paths = resolveKnowledgePaths(getOctopiHome());
+        const embeddingModels = {
+          providers: this.config.modelProviders ?? {},
+          embedding: this.config.embedding,
+        };
+        const embForVec = this.config.embedding as { sqliteVecExtensionPath?: string } | undefined;
+        await rt.start(kn?.service, {
+          dataDir: paths.root ?? paths.dbPath.replace(/[/\\][^/\\]+$/, ''),
+          gatewayId: process.env.OCTOPI_GATEWAY_ID ?? 'gw-local',
+          documentConfig: this.config.documents ?? null,
+          embeddingModels,
+          embed: kn?.embed,
+          ...(embForVec?.sqliteVecExtensionPath
+            ? { sqliteVecExtensionPath: embForVec.sqliteVecExtensionPath }
+            : {}),
+        });
+        void this.startKnowledgeProgressForwarding().catch(() => undefined);
+        return rt;
+      })();
     }
-    return this.knowledgeRuntime;
+    return this.knowledgeRuntimePromise;
   }
 
   /**
@@ -1613,7 +1629,11 @@ export class Gateway {
   ): Promise<import('@octopi-agent/engine/harness/knowledge/types.js').KnowledgeSource[]> {
     const client = await this.getKnowledgeClient();
     await client.ensurePrincipal(agentId).catch(() => undefined);
-    const raw = await client.listSources();
+    const raw = await client.listSources({
+      ...(opts?.scopeLevel ? { scopeLevel: opts.scopeLevel } : {}),
+      ...(opts?.projectKey ? { projectKey: opts.projectKey } : {}),
+      ...(opts?.sessionId ? { sessionId: opts.sessionId } : {}),
+    });
     return raw as unknown as import('@octopi-agent/engine/harness/knowledge/types.js').KnowledgeSource[];
   }
 
@@ -1679,9 +1699,10 @@ export class Gateway {
   /**
    * Knowledge 注册表统??Knowledge Service
    */
-  async getKnowledgeStats(): Promise<Record<string, number>> {
+  async getKnowledgeStats(agentId: string): Promise<Record<string, number>> {
     const client = await this.getKnowledgeClient();
-    const stats = await client.stats('default');
+    await client.ensurePrincipal(agentId).catch(() => undefined);
+    const stats = await client.stats(agentId);
     return stats as unknown as Record<string, number>;
   }
 
@@ -1734,48 +1755,34 @@ export class Gateway {
     | null
   > {
     const client = await this.getKnowledgeClient();
-    let source: Record<string, unknown> | null = null;
+    let detail: Record<string, unknown> | null = null;
     try {
-      source = await client.getSource(sourceId);
+      detail = (await client.getSource(sourceId)) as Record<string, unknown> | null;
     } catch {
       return null;
     }
-    if (!source) return null;
-    const detail = (await client.getSource(sourceId)) as unknown as Record<string, unknown> & {
-      stats?: Record<string, number>;
-    };
-    const stats = detail.stats ?? {};
+    if (!detail) return null;
+    const stats = (detail.stats ?? {}) as Record<string, number>;
+    const jobControl = (detail.jobControl ?? {
+      aborted: false,
+      jobsQueued: 0,
+      jobsRunning: 0,
+      jobsCancelled: 0,
+      embedMissing: false,
+      canAbort: false,
+      canResume: false,
+    }) as import('@octopi-agent/engine/harness/knowledge/ingest.js').KnowledgeJobControlState;
     return {
-      ...(source as unknown as import('@octopi-agent/engine/harness/knowledge/types.js').KnowledgeSource),
+      ...(detail as unknown as import('@octopi-agent/engine/harness/knowledge/types.js').KnowledgeSource),
       fileCount: Number(stats.files ?? 0),
       chunkCount: Number(stats.chunks ?? 0),
       embeddingCount: Number(stats.embeddings ?? 0),
       errorFileCount: Number(stats.errors ?? 0),
       skippedFileCount: Number(stats.skipped ?? 0),
-      assignedAgentIds: [] as string[],
-      hiddenForAgentIds: [] as string[],
-      jobControl: {
-        aborted: false,
-        jobsQueued: Number(stats.jobsQueued ?? 0),
-        jobsRunning: Number(stats.jobsRunning ?? 0),
-        jobsCancelled: 0,
-        embedMissing: false,
-        canAbort: true,
-        canResume: false,
-      },
+      assignedAgentIds: (detail.assignedAgentIds as string[] | undefined) ?? [],
+      hiddenForAgentIds: (detail.hiddenForAgentIds as string[] | undefined) ?? [],
+      jobControl,
     };
-  }
-
-  private listAgentsHidingSource(
-    store: import('@octopi-agent/engine/harness/knowledge/source-store.js').KnowledgeSourceStore,
-    sourceId: string,
-  ): string[] {
-    const rows = store.database.raw
-      .prepare(
-        'SELECT agent_id FROM knowledge_agent_hidden WHERE source_id = ? ORDER BY agent_id',
-      )
-      .all(sourceId) as Array<{ agent_id: string }>;
-    return rows.map((r) => r.agent_id);
   }
 
   /**
@@ -1878,14 +1885,21 @@ export class Gateway {
     resumed: boolean;
     rejected: number;
   }> {
+    if (opts?.paths?.length || opts?.filter) {
+      // 未实现 per-path 入队时不得伪造 counts / 静默整源 reindex
+      throw new Error(
+        'not_implemented: per-path reprocess (paths/filter); use source reindex or engine ingest.reprocessFiles',
+      );
+    }
     const client = await this.getKnowledgeClient();
     await client.reindex(sourceId);
+    const jc = await client.jobControl(sourceId);
     return {
       ok: true,
-      queued: opts.paths?.length ?? 0,
-      alreadyActive: 0,
+      queued: jc.jobsQueued,
+      alreadyActive: jc.jobsRunning,
       cleanedNonFiles: 0,
-      resumed: false,
+      resumed: !jc.aborted,
       rejected: 0,
     };
   }
@@ -1905,18 +1919,26 @@ export class Gateway {
     }>
   > {
     const client = await this.getKnowledgeClient();
-    const files = (await client.listFiles(sourceId)) as unknown as Array<{
-      path: string;
-      status: string;
-      chunkCount: number;
-      error?: string;
-    }>;
+    const [files, jobs] = await Promise.all([
+      client.listFiles(sourceId) as unknown as Promise<
+        Array<{ path: string; status: string; chunkCount: number; error?: string }>
+      >,
+      client.jobs({ sourceId }) as unknown as Promise<
+        Array<{ path?: string | null; status: string }>
+      >,
+    ]);
     const byPath = new Map(files.map((f) => [f.path, f]));
+    const activeByPath = new Map<string, number>();
+    for (const j of jobs) {
+      if (!j.path) continue;
+      if (j.status !== 'queued' && j.status !== 'running') continue;
+      activeByPath.set(j.path, (activeByPath.get(j.path) ?? 0) + 1);
+    }
     return paths.map((p) => {
       const f = byPath.get(p);
       return {
         path: p,
-        jobsActive: 0,
+        jobsActive: activeByPath.get(p) ?? 0,
         fileStatus: f?.status ?? null,
         chunkCount: f?.chunkCount ?? 0,
         error: f?.error ?? null,
@@ -1928,7 +1950,7 @@ export class Gateway {
   /**
    * 按路径列 chunk理面?
    */
-  async listKnowledgeChunks(sourceId: string, path: string): Promise<
+  async listKnowledgeChunks(agentId: string, sourceId: string, path: string): Promise<
     Array<{
       id: string;
       path: string;
@@ -1937,9 +1959,16 @@ export class Gateway {
       endLine: number;
     }>
   > {
-    void sourceId;
-    void path;
-    return [];
+    const client = await this.getKnowledgeClient();
+    await client.ensurePrincipal(agentId).catch(() => undefined);
+    const rows = await client.listChunks(agentId, sourceId, path);
+    return rows.map((r) => ({
+      id: r.id,
+      path: r.path,
+      text: r.text,
+      startLine: r.startLine,
+      endLine: r.endLine,
+    }));
   }
 
   /**
@@ -1962,19 +1991,22 @@ export class Gateway {
    * 会话视图 overlay ?Knowledge Service
    */
   async getKnowledgeSessionVisibility(
+    agentId: string,
     sessionId: string,
   ): Promise<import('@octopi-agent/engine/harness/knowledge/types.js').KnowledgeSessionVisibilityItem[]> {
     const client = await this.getKnowledgeClient();
-    const rows = await client.sessionVisibility('default', sessionId);
+    await client.ensurePrincipal(agentId).catch(() => undefined);
+    const rows = await client.sessionVisibility(agentId, sessionId);
     return rows as unknown as import('@octopi-agent/engine/harness/knowledge/types.js').KnowledgeSessionVisibilityItem[];
   }
 
   async setKnowledgeSessionVisibility(
+    agentId: string,
     sessionId: string,
     item: import('@octopi-agent/engine/harness/knowledge/types.js').KnowledgeSessionVisibilityInput,
   ): Promise<void> {
     const client = await this.getKnowledgeClient();
-    await client.setSessionVisibility('default', {
+    await client.setSessionVisibility(agentId, {
       sessionId,
       targetType: item.targetType,
       targetId: item.targetId,
@@ -1983,21 +2015,21 @@ export class Gateway {
   }
 
   async replaceKnowledgeSessionVisibility(
+    agentId: string,
     sessionId: string,
     items: readonly import('@octopi-agent/engine/harness/knowledge/types.js').KnowledgeSessionVisibilityInput[],
   ): Promise<void> {
     const client = await this.getKnowledgeClient();
-    for (const item of items) {
-      await client.setSessionVisibility('default', {
-        sessionId,
-        targetType: item.targetType,
-        targetId: item.targetId,
-        op: item.op,
-      });
-    }
+    // Service 侧 PUT replace（先清后写），不在 Gateway 循环 upsert
+    await client.replaceSessionVisibility(
+      agentId,
+      sessionId,
+      items.map((i) => ({ targetType: i.targetType, targetId: i.targetId, op: i.op })),
+    );
   }
 
   async clearKnowledgeSessionVisibility(
+    agentId: string,
     sessionId: string,
     target?: {
       targetType: import('@octopi-agent/engine/harness/knowledge/types.js').KnowledgeVisibilityTargetType;
@@ -2005,7 +2037,7 @@ export class Gateway {
     },
   ): Promise<void> {
     const client = await this.getKnowledgeClient();
-    await client.clearSessionVisibility('default', sessionId, target);
+    await client.clearSessionVisibility(agentId, sessionId, target);
   }
 
   /**
@@ -2036,14 +2068,39 @@ export class Gateway {
     const sources = (await client.listSources()) as unknown as Array<
       import('@octopi-agent/engine/harness/knowledge/types.js').KnowledgeSource
     >;
+    const projects = (await client.listProjects()) as Array<{
+      projectKey: string;
+      displayName?: string;
+      sourceCount: number;
+      assignedAgentIds: string[];
+    }>;
     const hiddenSet = new Set(vis.hiddenSourceIds ?? []);
+    const assignedKeys = new Set(vis.assignedProjects ?? []);
+    const sourcesOfProject = (key: string) =>
+      sources.filter((s) => s.scopeRef?.level === 'project' && s.scopeRef?.key === key);
+    const isMountedForAgent = (p: { projectKey: string; assignedAgentIds: string[] }) =>
+      assignedKeys.has(p.projectKey) || p.assignedAgentIds.includes(agentId);
+
     return {
       hiddenSourceIds: vis.hiddenSourceIds ?? [],
       globalSources: sources
         .filter((s) => s.scopeRef?.level === 'global')
         .map((s) => ({ ...s, hiddenForAgent: hiddenSet.has(s.id) })),
-      assignedProjects: [],
-      unassignedProjects: [],
+      assignedProjects: projects.filter(isMountedForAgent).map((p) => ({
+        projectKey: p.projectKey,
+        displayName: p.displayName,
+        sourceCount: p.sourceCount,
+        assignedAgentIds: p.assignedAgentIds,
+        sources: sourcesOfProject(p.projectKey),
+      })),
+      unassignedProjects: projects
+        .filter((p) => !isMountedForAgent(p))
+        .map((p) => ({
+          projectKey: p.projectKey,
+          displayName: p.displayName,
+          sourceCount: p.sourceCount,
+          assignedAgentIds: p.assignedAgentIds,
+        })),
     };
   }
 
@@ -2053,7 +2110,8 @@ export class Gateway {
   async getKnowledgePromotionCandidates(): Promise<
     import('@octopi-agent/engine/harness/knowledge/hit-log.js').PromotionCandidate[]
   > {
-    return [];
+    const client = await this.getKnowledgeClient();
+    return (await client.promotionCandidates()) as import('@octopi-agent/engine/harness/knowledge/hit-log.js').PromotionCandidate[];
   }
 
   /**
@@ -2087,14 +2145,23 @@ export class Gateway {
     runningJobs: number;
   }> {
     const client = await this.getKnowledgeClient();
-    if (!sourceId) throw new Error('sourceId is required');
-    const r = (await client.abort(sourceId)) as Record<string, number | boolean>;
-    return {
-      ok: true,
-      cancelledQueued: Number(r.jobsCancelled ?? 0),
-      abortedRunning: Number(r.jobsRunning ?? 0),
-      runningJobs: Number(r.jobsRunning ?? 0),
-    };
+    try {
+      const r = (await client.abort(sourceId)) as Record<string, number | boolean>;
+      return {
+        ok: true,
+        cancelledQueued: Number(r.cancelledQueued ?? r.jobsCancelled ?? 0),
+        abortedRunning: Number(r.abortedRunning ?? 0),
+        runningJobs: Number(r.runningJobs ?? r.jobsRunning ?? 0),
+      };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.startsWith('knowledge_http_timeout')) {
+        throw new Error(
+          `Knowledge Service 无响应（${msg}）；中止指令未确认。若索引卡住请重启 Gateway/Service。`,
+        );
+      }
+      throw err;
+    }
   }
 
   /**
@@ -2106,7 +2173,6 @@ export class Gateway {
     embedQueued: number;
   }> {
     const client = await this.getKnowledgeClient();
-    if (!sourceId) throw new Error('sourceId is required');
     const r = (await client.resume(sourceId)) as Record<string, number>;
     return {
       ok: true,
@@ -2125,16 +2191,14 @@ export class Gateway {
     }
   }
 
-  /** ?generatedDescription 时生??Service 侧后v2 no-op */
+  /** 索引稳定后生成 generatedDescription（Service 启发式 / LLM 由 Service 配置） */
   private async maybeAutoDescribe(sourceId: string): Promise<void> {
-    void sourceId;
+    await this.autoDescribeKnowledgeSource(sourceId);
   }
 
-  /**
-   * auto-describe ?Service 侧后v2 no-op
-   */
   async autoDescribeKnowledgeSource(sourceId: string): Promise<void> {
-    void sourceId;
+    const client = await this.getKnowledgeClient();
+    await client.describeSource(sourceId);
   }
 
   /** 有可?LLM 时构?describe ；无则走?*/
@@ -2796,7 +2860,7 @@ export class Gateway {
         builder.cognitionStore(new SqliteConceptGraph(db, {
           embeddingProvider: embRuntime?.provider ?? null,
         }));
-        // Knowledge catalog ?Knowledge Service
+        // Knowledge catalog → Knowledge Service（不得再写死 []）
         try {
           const agentIdForCatalog = agent.id;
           const kn = this.config.knowledge;
@@ -2804,9 +2868,14 @@ export class Gateway {
           const catalogGroup = kn?.catalog?.groupByScope;
           const catalogProgress = kn?.catalog?.showProgress;
           builder.knowledgeCatalog(
-            (ctx) => {
-              void ctx;
-              return [];
+            async () => {
+              try {
+                const client = await this.getKnowledgeClient();
+                const items = await client.catalog(agentIdForCatalog);
+                return items as import('@octopi-agent/engine/harness/knowledge/catalog-types.js').KnowledgeCatalogItem[];
+              } catch {
+                return [];
+              }
             },
             {
               maxEntries: catalogMax,
@@ -2814,8 +2883,6 @@ export class Gateway {
               showProgress: catalogProgress,
             },
           );
-          void agentIdForCatalog;
-          // 索工具走 KnowledgeClient tool 注册）；不在 Gateway 内嵌 retriever
         } catch (kErr) {
           console.warn(
             `[Gateway] knowledge catalog unavailable: ${kErr instanceof Error ? kErr.message : String(kErr)}`,

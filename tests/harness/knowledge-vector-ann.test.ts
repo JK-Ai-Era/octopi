@@ -11,7 +11,7 @@ import {
 } from '@octopi-agent/engine/harness/knowledge/vector-ann.js';
 
 describe('vector ANN-lite', () => {
-  it('vectorBucket 稳定；queryBuckets 含主桶与邻桶', () => {
+  it('vectorBucket 稳定；queryBuckets 含主桶与邻桶', async () => {
     const v = [1, 0.5, -0.2, 0, 0, 0, 0, 0, 9, 9];
     const b = vectorBucket(v);
     expect(b).toBe(vectorBucket([...v]));
@@ -39,7 +39,7 @@ describe('vector ANN-lite', () => {
     // 远簇
     const far = [-1, -0.2, 0.1, -0.05, 0, 0, 0, 0];
 
-    index.upsertFile({
+    await index.upsertFile({
       sourceId: src.id,
       path: '/tmp/kn-ann/a.md',
       contentHash: 'h1',
@@ -48,7 +48,7 @@ describe('vector ANN-lite', () => {
       adapterId: 'markdown',
       chunks: [{ ordinal: 0, text: 'near a', startLine: 1, endLine: 1 }],
     });
-    index.upsertFile({
+    await index.upsertFile({
       sourceId: src.id,
       path: '/tmp/kn-ann/b.md',
       contentHash: 'h2',
@@ -57,7 +57,7 @@ describe('vector ANN-lite', () => {
       adapterId: 'markdown',
       chunks: [{ ordinal: 0, text: 'near b', startLine: 1, endLine: 1 }],
     });
-    index.upsertFile({
+    await index.upsertFile({
       sourceId: src.id,
       path: '/tmp/kn-ann/c.md',
       contentHash: 'h3',
@@ -96,7 +96,7 @@ describe('vector ANN-lite', () => {
     sources.database.close();
   });
 
-  it('scoreAnnCandidates 只认对齐维度并 top-k 截断', () => {
+  it('scoreAnnCandidates 只认对齐维度并 top-k 截断', async () => {
     const q = [1, 0, 0];
     const rows = [
       { id: 'a', embedding: [1, 0, 0] },

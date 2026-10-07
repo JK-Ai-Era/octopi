@@ -107,7 +107,7 @@
 | **失败模式** | 无源/错源、检索错语料、索引当权威、双写 knowledge.db |
 | **不做** | 命题记忆；活系统当前态（Tool） |
 
-**独立成域**：含外生资源管理、解析、embedding、检索；**不是基质**。Scope = Global / Project / Session（无 Agent 级源）。**v0.60**：独立 HTTP Service 为 `knowledge.db` 唯一写者（Gateway 经 Client）；File 本位防重 + Membership。详见 [`knowledge.md`](./knowledge.md) 与 `arch/knowledge-service-http.md`。
+**独立成域**：含外生资源管理、解析、embedding、检索；**不是基质**。Scope = Global / Project / Session（无 Agent 级源）。**v0.60**：独立 HTTP Service 为 `knowledge.db` 唯一写者（Gateway 经 Client）；File 本位防重 + Membership。Service 内再分线程：主线程 `/health`+鉴权，Engine Worker 跑 SQLite/ingest。详见 [`knowledge.md`](./knowledge.md) 与 `arch/knowledge-service-http.md`。
 
 ---
 

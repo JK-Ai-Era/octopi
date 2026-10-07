@@ -118,7 +118,7 @@ describe('index retention on failure', () => {
   });
 });
 
-describe('credential leak guards', () => {
+describe('credential leak guards', async () => {
   const servers: http.Server[] = [];
   const cleanups: Array<() => Promise<void>> = [];
 
@@ -272,7 +272,7 @@ describe('credential leak guards', () => {
     });
     // 已有两条索引
     for (const p of ['/tmp/kn-prune-guard/a.md', '/tmp/kn-prune-guard/b.md']) {
-      index.upsertFile({
+      await index.upsertFile({
         sourceId: src.id,
         path: p,
         contentHash: 'h',
@@ -325,7 +325,7 @@ describe('credential leak guards', () => {
       '/tmp/kn-like/a_b/d.md',
     ];
     for (const p of paths) {
-      index.upsertFile({
+      await index.upsertFile({
         sourceId: src.id,
         path: p,
         contentHash: 'h',

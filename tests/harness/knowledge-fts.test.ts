@@ -11,7 +11,7 @@ import {
 } from '@octopi-agent/engine/harness/knowledge/fts.js';
 
 describe('knowledge FTS5', () => {
-  it('buildFtsTokens 含 CJK 二元组；buildFtsQuery 为 OR', () => {
+  it('buildFtsTokens 含 CJK 二元组；buildFtsQuery 为 OR', async () => {
     const toks = buildFtsTokens('使用 JWT 做会话鉴权', 'docs/auth-guide.md');
     expect(toks).toContain('jwt');
     expect(toks).toContain('鉴权');
@@ -32,7 +32,7 @@ describe('knowledge FTS5', () => {
       displayName: 'fts',
     });
 
-    index.upsertFile({
+    await index.upsertFile({
       sourceId: src.id,
       path: '/tmp/kn-fts/auth.md',
       contentHash: 'h1',
@@ -80,7 +80,7 @@ describe('knowledge FTS5', () => {
       scopeRef: { level: 'global', key: 'global' },
       displayName: 'b',
     });
-    index.upsertFile({
+    await index.upsertFile({
       sourceId: a.id,
       path: '/tmp/kn-fts-a/doc.md',
       contentHash: 'h',
@@ -89,7 +89,7 @@ describe('knowledge FTS5', () => {
       adapterId: 'markdown',
       chunks: [{ ordinal: 0, text: '独特的关键字甲', startLine: 1, endLine: 1 }],
     });
-    index.upsertFile({
+    await index.upsertFile({
       sourceId: b.id,
       path: '/tmp/kn-fts-b/doc.md',
       contentHash: 'h',
@@ -118,7 +118,7 @@ describe('knowledge FTS5', () => {
       scopeRef: { level: 'global', key: 'global' },
       displayName: 'rb',
     });
-    index.upsertFile({
+    await index.upsertFile({
       sourceId: src.id,
       path: '/tmp/kn-fts-rb/x.md',
       contentHash: 'h',

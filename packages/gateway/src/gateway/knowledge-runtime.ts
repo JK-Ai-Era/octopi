@@ -1,11 +1,12 @@
 /**
- * Gateway 侧 Knowledge Service 运行时 — manageLocal + Client
+ * Gateway 侧 Knowledge Service 运行时 — manageLocal 子进程 + Client
  *
- * 契约：arch/knowledge-service-http.md；Gateway **不**打开 knowledge.db。
+ * 契约：arch/knowledge-service-http.md；Gateway **不**打开 knowledge.db，
+ * 也**不**与 Service 共进程。manageLocal = fork `knowledge-serve-child`。
  */
 
 import type { KnowledgeClient } from '@octopi-agent/engine/harness/knowledge/client.js';
-import type { KnowledgeServeHandle } from '@octopi-agent/engine/harness/knowledge/serve.js';
+import type { KnowledgeServiceProcessHandle } from '@octopi-agent/engine/harness/knowledge/start-service-process.js';
 
 export interface KnowledgeServiceConfig {
   baseUrl?: string;
@@ -19,19 +20,9 @@ export interface KnowledgeServiceConfig {
 
 export type KnowledgeRuntimeState = 'disabled' | 'ready' | 'degraded';
 
-async function isPidAlive(pid: number): Promise<boolean> {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 export class GatewayKnowledgeRuntime {
   private client: KnowledgeClient | null = null;
-  private local: KnowledgeServeHandle | null = null;
-  private lockPath: string | null = null;
+  private local: KnowledgeServiceProcessHandle | null = null;
   private _state: KnowledgeRuntimeState = 'disabled';
   private gatewayId = 'gw-local';
   private tenantId = 'default';
@@ -51,6 +42,8 @@ export class GatewayKnowledgeRuntime {
    * @param opts.gatewayId - 本 Gateway 身份（token 一致）
    * @param opts.dataDir - manageLocal 时的 OCTOPI_HOME/knowledge
    * @param opts.documentConfig - documents.*（与 Gateway 抽取同源）
+   * @param opts.embeddingModels - models.*（子进程内重建 EmbeddingProvider）
+   * @param opts.embed - embed 批/限速/密钥策略
    */
   async start(
     cfg: KnowledgeServiceConfig | undefined,
@@ -59,6 +52,19 @@ export class GatewayKnowledgeRuntime {
       gatewayId?: string;
       tenantId?: string;
       documentConfig?: import('@octopi-agent/engine/harness/capabilities/document/factory.js').DocumentCapabilityConfig | null;
+      /** models.providers + models.embedding（子进程 resolveEmbeddingRuntime） */
+      embeddingModels?: {
+        providers?: Record<string, unknown>;
+        embedding?: unknown;
+      } | null;
+      embed?: {
+        enabled?: boolean;
+        embedBatch?: number;
+        embedMinIntervalMs?: number;
+        embedConcurrency?: number;
+        embedSecretPolicy?: 'allow' | 'redact' | 'skip';
+      };
+      sqliteVecExtensionPath?: string;
     },
   ): Promise<void> {
     this.gatewayId = opts.gatewayId ?? this.gatewayId;
@@ -66,10 +72,12 @@ export class GatewayKnowledgeRuntime {
 
     const manageLocal = cfg?.manageLocal !== false;
     const baseUrl = cfg?.baseUrl?.trim();
-    const token = cfg?.token?.trim() ?? `local:${this.gatewayId}`;
+    // 可推导的默认 token 等同无鉴权；未配置时每进程随机，不可猜测
+    const token =
+      cfg?.token?.trim() ||
+      `local:${this.gatewayId}:${(await import('node:crypto')).randomBytes(16).toString('hex')}`;
 
     if (!baseUrl && !manageLocal) {
-      // 未配置且不拉起 → disabled（产品关闭知识面）
       this._state = 'disabled';
       this.client = null;
       return;
@@ -77,71 +85,44 @@ export class GatewayKnowledgeRuntime {
 
     try {
       if (manageLocal && !baseUrl) {
-        const { startKnowledgeService } = await import(
-          '@octopi-agent/engine/harness/knowledge/serve.js'
+        const { startKnowledgeServiceProcess } = await import(
+          '@octopi-agent/engine/harness/knowledge/start-service-process.js'
         );
-        const { join, dirname } = await import('node:path');
-        const { mkdirSync, writeFileSync, readFileSync, unlinkSync } = await import('node:fs');
+        const { join } = await import('node:path');
+        const { mkdirSync } = await import('node:fs');
         const dbPath = join(opts.dataDir, 'knowledge.db');
-        mkdirSync(dirname(dbPath), { recursive: true });
-        // 单写者：同机双 Gateway manageLocal 不得同时写同一 knowledge.db
-        const lockPath = `${dbPath}.writer.lock`;
-        const tryWriteLock = (): void => {
-          writeFileSync(
-            lockPath,
-            JSON.stringify({ pid: process.pid, at: Date.now() }),
-            { encoding: 'utf8', flag: 'wx' },
-          );
-        };
-        try {
-          tryWriteLock();
-        } catch {
-          // EEXIST：读持有者；死锁回收后再独占创建
-          let holderPid: number | undefined;
-          try {
-            const lock = JSON.parse(readFileSync(lockPath, 'utf8')) as { pid?: number };
-            holderPid = lock.pid;
-          } catch {
-            holderPid = undefined;
-          }
-          const holderAlive =
-            holderPid != null &&
-            holderPid !== process.pid &&
-            (await isPidAlive(holderPid));
-          if (holderAlive) {
-            throw new Error(
-              `knowledge.db already locked by PID ${holderPid} (${lockPath}); use remote baseUrl or stop the other instance`,
-            );
-          }
-          try {
-            unlinkSync(lockPath);
-          } catch {
-            /* ignore */
-          }
-          console.warn(
-            `[Knowledge] reclaimed stale writer.lock (pid=${holderPid ?? 'unknown'})`,
-          );
-          // 仍用 wx：并发回收方只有一人成功
-          tryWriteLock();
-        }
-        this.lockPath = lockPath;
-        this.local = await startKnowledgeService({
+        mkdirSync(opts.dataDir, { recursive: true });
+
+        this.local = await startKnowledgeServiceProcess({
           dbPath,
           port: cfg?.port,
           tokens: [{ token, tenantId: this.tenantId, gatewayId: this.gatewayId }],
-          autoRegisterPrincipals: true,
           documentConfig: opts.documentConfig ?? null,
+          embed: opts.embed ?? undefined,
+          embeddingModels: opts.embeddingModels ?? null,
+          ...(opts.sqliteVecExtensionPath
+            ? { sqliteVecExtensionPath: opts.sqliteVecExtensionPath }
+            : {}),
         });
+
+        // 子进程崩溃 → degraded（不得拖死 Gateway）
+        this.local.child.once('exit', () => {
+          if (this._state !== 'disabled') {
+            this._state = 'degraded';
+            console.warn('[Knowledge] service process exited; state=degraded');
+          }
+        });
+
         const { KnowledgeClient } = await import(
           '@octopi-agent/engine/harness/knowledge/client.js'
         );
         this.client = new KnowledgeClient({
           baseUrl: `http://127.0.0.1:${this.local.port}`,
           token,
-          timeoutMs: cfg?.timeoutMs ?? 5000,
+          timeoutMs: cfg?.timeoutMs ?? 30_000,
         });
         console.log(
-          `[Knowledge] manageLocal started (port=${this.local.port}, db=${dbPath}, gatewayId=${this.gatewayId})`,
+          `[Knowledge] manageLocal child started (port=${this.local.port}, pid=${this.local.child.pid}, db=${dbPath}, gatewayId=${this.gatewayId})`,
         );
       } else if (baseUrl) {
         const { KnowledgeClient } = await import(
@@ -150,13 +131,12 @@ export class GatewayKnowledgeRuntime {
         this.client = new KnowledgeClient({
           baseUrl,
           token,
-          timeoutMs: cfg?.timeoutMs ?? 5000,
+          timeoutMs: cfg?.timeoutMs ?? 30_000,
         });
         console.log(`[Knowledge] remote client → ${baseUrl} (gatewayId=${this.gatewayId})`);
       } else {
         console.log('[Knowledge] disabled (manageLocal=false and no baseUrl)');
       }
-      // 探活
       if (this.client) {
         await this.client.health();
       }
@@ -174,17 +154,8 @@ export class GatewayKnowledgeRuntime {
 
   async stop(): Promise<void> {
     if (this.local) {
-      await this.local.close();
+      await this.local.stop();
       this.local = null;
-    }
-    if (this.lockPath) {
-      try {
-        const { unlinkSync } = await import('node:fs');
-        unlinkSync(this.lockPath);
-      } catch {
-        // ignore
-      }
-      this.lockPath = null;
     }
     this.client = null;
     this._state = 'disabled';

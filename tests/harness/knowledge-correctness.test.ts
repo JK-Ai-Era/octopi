@@ -7,19 +7,19 @@ import { KnowledgeSourceStore } from '@octopi-agent/engine/harness/knowledge/sou
 import { KnowledgeIndexStore } from '@octopi-agent/engine/harness/knowledge/index-store.js';
 
 describe('pathFromUrl stability', () => {
-  it('separates query variants', () => {
+  it('separates query variants', async () => {
     const a = UrlFetcher.pathFromUrl('https://ex.com/doc?page=1');
     const b = UrlFetcher.pathFromUrl('https://ex.com/doc?page=2');
     expect(a).not.toBe(b);
     expect(a.startsWith('doc')).toBe(true);
   });
 
-  it('prefixes host when origin differs from base', () => {
+  it('prefixes host when origin differs from base', async () => {
     const p = UrlFetcher.pathFromUrl('https://cdn.example.com/api.html', 'https://docs.example.com/sitemap.xml');
     expect(p).toContain('cdn.example.com');
   });
 
-  it('keeps same-origin relative path', () => {
+  it('keeps same-origin relative path', async () => {
     const p = UrlFetcher.pathFromUrl('https://docs.example.com/guide/a.html', 'https://docs.example.com/guide/');
     expect(p).toBe('a.html');
   });
@@ -36,7 +36,7 @@ describe('pruneMissing', () => {
       displayName: 'x',
     });
 
-    index.upsertFile({
+    await index.upsertFile({
       sourceId: src.id,
       path: 'keep.md',
       contentHash: 'h1',
@@ -45,7 +45,7 @@ describe('pruneMissing', () => {
       adapterId: 'markdown',
       chunks: [{ ordinal: 0, text: 'keep content here for test', startLine: 1, endLine: 1 }],
     });
-    index.upsertFile({
+    await index.upsertFile({
       sourceId: src.id,
       path: 'gone.md',
       contentHash: 'h2',
@@ -66,7 +66,7 @@ describe('pruneMissing', () => {
   });
 });
 
-describe('KnowledgeSourcePatch null clears', () => {
+describe('KnowledgeSourcePatch null clears', async () => {
   it('clears description via null and re-derives displayName', async () => {
     const store = await KnowledgeSourceStore.open();
     const src = store.register({

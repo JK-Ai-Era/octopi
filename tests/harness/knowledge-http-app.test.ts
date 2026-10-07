@@ -143,6 +143,241 @@ describe('KnowledgeHttpApp', () => {
     });
   });
 
+  it('visibility GET 返回 assignedProjects 与 hiddenSourceIds', async () => {
+    await withServer(async (base) => {
+      const h = { authorization: 'Bearer tok-a', 'content-type': 'application/json' };
+      const dir = await mkdtemp(join(tmpdir(), 'kn-vis2-'));
+      const created = await fetch(`${base}/v1/sources`, {
+        method: 'POST',
+        headers: h,
+        body: JSON.stringify({
+          kind: 'directory',
+          location: dir,
+          scopeRef: { level: 'project', key: 'p-vis' },
+          displayName: 'pvis',
+        }),
+      });
+      expect(created.status).toBe(201);
+      const src = (await created.json()).data;
+
+      await fetch(`${base}/v1/principals/a-vis`, {
+        method: 'PUT',
+        headers: h,
+        body: JSON.stringify({ displayName: 'A', status: 'active' }),
+      });
+      await fetch(`${base}/v1/principals/a-vis/visibility`, {
+        method: 'POST',
+        headers: h,
+        body: JSON.stringify({ op: 'assignProject', projectKey: 'p-vis' }),
+      });
+
+      const before = await (
+        await fetch(`${base}/v1/principals/a-vis/visibility`, { headers: h })
+      ).json();
+      expect(before.data.assignedProjects).toContain('p-vis');
+      expect(before.data.hiddenSourceIds ?? []).not.toContain(src.id);
+
+      // hide 仅 global：注册 global 源再 hide
+      const gdir = await mkdtemp(join(tmpdir(), 'kn-vis-g-'));
+      const g = await fetch(`${base}/v1/sources`, {
+        method: 'POST',
+        headers: h,
+        body: JSON.stringify({
+          kind: 'directory',
+          location: gdir,
+          scopeRef: { level: 'global', key: 'global' },
+          displayName: 'g-hide',
+        }),
+      });
+      const gId = (await g.json()).data.id as string;
+      await fetch(`${base}/v1/principals/a-vis/visibility`, {
+        method: 'POST',
+        headers: h,
+        body: JSON.stringify({ op: 'hide', sourceId: gId }),
+      });
+      const after = await (
+        await fetch(`${base}/v1/principals/a-vis/visibility`, { headers: h })
+      ).json();
+      expect(after.data.hiddenSourceIds).toContain(gId);
+      expect(after.data.assignedProjects).toContain('p-vis');
+    });
+  });
+
+  it('GET /v1/sources/:sid 的 jobControl 随中止切换 canAbort/canResume', async () => {
+    await withServer(async (base) => {
+      const h = { authorization: 'Bearer tok-a', 'content-type': 'application/json' };
+      const dir = await mkdtemp(join(tmpdir(), 'kn-jc-'));
+      const created = await fetch(`${base}/v1/sources`, {
+        method: 'POST',
+        headers: h,
+        body: JSON.stringify({
+          kind: 'directory',
+          location: dir,
+          scopeRef: { level: 'global', key: 'global' },
+          displayName: 'jc',
+        }),
+      });
+      expect(created.status).toBe(201);
+      const srcId = (await created.json()).data.id as string;
+
+      // 有任务时 canAbort=true；中止后应变为 canResume=true / canAbort=false
+      await fetch(`${base}/v1/sources/${srcId}/abort`, { method: 'POST', headers: h });
+      const detail = await (
+        await fetch(`${base}/v1/sources/${srcId}`, { headers: h })
+      ).json();
+      expect(detail.data.jobControl.aborted).toBe(true);
+      expect(detail.data.jobControl.canAbort).toBe(false);
+      expect(detail.data.jobControl.canResume).toBe(true);
+
+      await fetch(`${base}/v1/sources/${srcId}/resume`, { method: 'POST', headers: h });
+      const after = await (
+        await fetch(`${base}/v1/sources/${srcId}`, { headers: h })
+      ).json();
+      expect(after.data.jobControl.aborted).toBe(false);
+    });
+  });
+
+  it('POST /v1/jobs/resume 全局继续不要求 sourceId', async () => {
+    await withServer(async (base) => {
+      const h = { authorization: 'Bearer tok-a', 'content-type': 'application/json' };
+      const dir = await mkdtemp(join(tmpdir(), 'kn-resume-all-'));
+      const created = await fetch(`${base}/v1/sources`, {
+        method: 'POST',
+        headers: h,
+        body: JSON.stringify({
+          kind: 'directory',
+          location: dir,
+          scopeRef: { level: 'global', key: 'global' },
+          displayName: 'resume-all',
+        }),
+      });
+      expect(created.status).toBe(201);
+      const srcId = (await created.json()).data.id as string;
+
+      await fetch(`${base}/v1/sources/${srcId}/abort`, { method: 'POST', headers: h });
+      const resume = await fetch(`${base}/v1/jobs/resume`, { method: 'POST', headers: h });
+      expect(resume.status).toBe(200);
+      const body = await resume.json();
+      expect(body.ok).toBe(true);
+      expect(body.data).toHaveProperty('restoredCancelled');
+
+      const abort = await fetch(`${base}/v1/jobs/abort`, { method: 'POST', headers: h });
+      expect(abort.status).toBe(200);
+      expect((await abort.json()).data).toHaveProperty('cancelledQueued');
+    });
+  });
+
+  it('listSources?sessionId 只保留本会话源；replace 会话可见性先清后写', async () => {
+    await withServer(async (base) => {
+      const h = { authorization: 'Bearer tok-a', 'content-type': 'application/json' };
+      const dir = await mkdtemp(join(tmpdir(), 'kn-sess-filt-'));
+      const created = await fetch(`${base}/v1/sources`, {
+        method: 'POST',
+        headers: h,
+        body: JSON.stringify({
+          kind: 'directory',
+          location: dir,
+          scopeRef: { level: 'session', key: 'sess-1' },
+          displayName: 'sess-src',
+        }),
+      });
+      expect(created.status).toBe(201);
+      const sessSrcId = (await created.json()).data.id as string;
+
+      const all = await (
+        await fetch(`${base}/v1/sources?sessionId=sess-1`, { headers: h })
+      ).json();
+      const ids = (all.data as Array<{ id: string; scopeRef: { level: string; key: string } }>).map(
+        (s) => s.id,
+      );
+      expect(ids).toContain(sessSrcId);
+      const notMine = await (
+        await fetch(`${base}/v1/sources?sessionId=sess-other`, { headers: h })
+      ).json();
+      const otherIds = (notMine.data as Array<{ id: string }>).map((s) => s.id);
+      expect(otherIds).not.toContain(sessSrcId);
+
+      await fetch(`${base}/v1/principals/a1`, {
+        method: 'PUT',
+        headers: h,
+        body: JSON.stringify({ displayName: 'A', status: 'active' }),
+      });
+      await fetch(`${base}/v1/principals/a1/session-visibility`, {
+        method: 'PUT',
+        headers: h,
+        body: JSON.stringify({
+          sessionId: 's1',
+          items: [{ targetType: 'project', targetId: 'p-old', op: 'include' }],
+        }),
+      });
+      await fetch(`${base}/v1/principals/a1/session-visibility`, {
+        method: 'PUT',
+        headers: h,
+        body: JSON.stringify({
+          sessionId: 's1',
+          items: [{ targetType: 'project', targetId: 'p-new', op: 'include' }],
+        }),
+      });
+      const vis = await (
+        await fetch(`${base}/v1/principals/a1/session-visibility?sessionId=s1`, { headers: h })
+      ).json();
+      const targets = (vis.data as Array<{ targetId: string }>).map((v) => v.targetId);
+      expect(targets).toContain('p-new');
+      expect(targets).not.toContain('p-old');
+    });
+  });
+
+  it('GET /v1/sources?scopeLevel=global 不含项目源', async () => {
+    await withServer(async (base) => {
+      const h = { authorization: 'Bearer tok-a', 'content-type': 'application/json' };
+      const dirG = await mkdtemp(join(tmpdir(), 'kn-scope-g-'));
+      const dirP = await mkdtemp(join(tmpdir(), 'kn-scope-p-'));
+      const g = await fetch(`${base}/v1/sources`, {
+        method: 'POST',
+        headers: h,
+        body: JSON.stringify({
+          kind: 'directory',
+          location: dirG,
+          scopeRef: { level: 'global', key: 'global' },
+          displayName: 'g-src',
+        }),
+      });
+      const p = await fetch(`${base}/v1/sources`, {
+        method: 'POST',
+        headers: h,
+        body: JSON.stringify({
+          kind: 'directory',
+          location: dirP,
+          scopeRef: { level: 'project', key: 'proj-x' },
+          displayName: 'p-src',
+        }),
+      });
+      expect(g.status).toBe(201);
+      expect(p.status).toBe(201);
+      const gId = (await g.json()).data.id as string;
+      const pId = (await p.json()).data.id as string;
+
+      const globals = await (
+        await fetch(`${base}/v1/sources?scopeLevel=global`, { headers: h })
+      ).json();
+      const gIds = (globals.data as Array<{ id: string }>).map((s) => s.id);
+      expect(gIds).toContain(gId);
+      expect(gIds).not.toContain(pId);
+
+      const projs = await (
+        await fetch(`${base}/v1/sources?scopeLevel=project&projectKey=proj-x`, { headers: h })
+      ).json();
+      const pIds = (projs.data as Array<{ id: string }>).map((s) => s.id);
+      expect(pIds).toContain(pId);
+      expect(pIds).not.toContain(gId);
+
+      const all = await (await fetch(`${base}/v1/sources`, { headers: h })).json();
+      const allIds = (all.data as Array<{ id: string }>).map((s) => s.id);
+      expect(allIds).toContain(gId);
+      expect(allIds).toContain(pId);
+    });
+  });
+
   it('visibility assign/hide + session overlay + jobs', async () => {
     await withServer(async (base) => {
       const h = { authorization: 'Bearer tok-a', 'content-type': 'application/json' };

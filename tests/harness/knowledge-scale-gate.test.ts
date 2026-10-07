@@ -31,7 +31,7 @@ describe('million-scale vector gate', () => {
       scopeRef: { level: 'global', key: 'global' },
       displayName: 'backend',
     });
-    index.upsertFile({
+    await index.upsertFile({
       sourceId: src.id,
       path: join(root, 'a.md'),
       contentHash: 'h',
@@ -62,7 +62,7 @@ describe('million-scale vector gate', () => {
       scopeRef: { level: 'global', key: 'global' },
       displayName: 'hybrid-force',
     });
-    index.upsertFile({
+    await index.upsertFile({
       sourceId: src.id,
       path: join(root, 'kw.md'),
       contentHash: 'h',
@@ -110,7 +110,7 @@ describe('million-scale vector gate', () => {
     // （构造分散桶：奇偶交替主维度符号）
     for (let i = 0; i < 8; i++) {
       const p = join(root, `v${i}.md`);
-      index.upsertFile({
+      await index.upsertFile({
         sourceId: src.id,
         path: p,
         contentHash: `h${i}`,
@@ -150,7 +150,7 @@ describe('million-scale vector gate', () => {
     });
     // ext=x_y → LIKE '%.x_y'；未转义时 _ 匹配任意字符
     for (const p of [join(root, 'a.x_y'), join(root, 'a.xzy'), join(root, 'a.md')]) {
-      index.upsertFile({
+      await index.upsertFile({
         sourceId: src.id,
         path: p,
         contentHash: 'h',

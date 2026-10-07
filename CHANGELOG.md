@@ -1,3 +1,30 @@
+## v0.61.0
+
+### feat(knowledge): independent process + engine-thread architecture
+
+**问题**：Knowledge 与 Gateway 同进程时，同步 parse/FTS/写库堵死 Gateway；拆成 HTTP Service 后仍与 `node:sqlite` 挤在同一条事件循环，`/health` 与管理面在大库索引期假死。
+
+**结构**：
+
+- `manageLocal` **fork 独立子进程**（`knowledge-serve-child` / `start-service-process` / `writer-lock`）；Gateway 只走 `KnowledgeClient`
+- Service 进程内：**主线程**只做 `/health` + token 鉴权 + SSE；**Engine Worker** 跑 HttpApp + SQLite + ingest；**嵌套 Worker** 做 extract / chunk / FTS token
+- Electron 宿主 fork：`process.execPath` + `ELECTRON_RUN_AS_NODE`（换捆绑 node 当 `execPath` 会切断 IPC）
+- embedding 与 parse **分槽并行**（不再等全部 parse 结束）
+- 写库分批 + `ftsToks` 预计算；FTS 重建小批量让出事件循环
+
+### fix(knowledge): scope / visibility / jobControl 假数据与越权
+
+- `GET /v1/sources?scopeLevel=` 真过滤（项目源不再进公共库）
+- Agent 视野 `assignedProjects` / `jobControl` 不再写死；`canAbort/canResume` 跟真实状态
+- `/v1/principals/:id/chunks` 补可见性闸门
+- `/v1/ready` 返回真实 fts/backfill；`reprocess` 对 `paths/filter` 走 `not_implemented` 而非假计数
+- 会话语料 `PUT replace` 先清后写；`sessionId` 列表过滤生效
+- 真实 **agentId / tenantId**（禁 `'default'` 占位）；默认 Knowledge token 改随机
+
+### docs: knowledge thread boundary + engineering discipline
+
+- `docs/knowledge.md` §2.1.1 线程边界；`arch/knowledge-service-http.md` 职责表；`AGENTS.md` 假数据禁令 + first-principles / verify / root-cause
+
 ## v0.60.0
 
 ### fix(knowledge): 独立审查修复 — 停机 SSE 死锁 / worker 错误还原 / walk supersede

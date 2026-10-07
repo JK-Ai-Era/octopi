@@ -32,7 +32,7 @@ describe('KnowledgeIngest embed continuation', () => {
       scopeRef: { level: 'global', key: 'global' },
       displayName: 'embed-cont',
     });
-    index.upsertFile({
+    await index.upsertFile({
       sourceId: src.id,
       path: filePath,
       contentHash: 'h',

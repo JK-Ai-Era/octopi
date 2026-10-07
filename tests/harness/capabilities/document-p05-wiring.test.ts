@@ -111,11 +111,11 @@ describe('KnowledgeIngest + DocumentPort', () => {
     // 不再 BINARY 短路；走 parseDocumentFile（worker 自带 DocumentPort）
     const ok = await ingest.ingestFileNow(src.id, file);
     const rec = ingest.indexStore.getFile(src.id, file);
-    // worker 成功则 indexed；失败记 error —— 禁止再静默 no_adapter skip
+    // worker 成功则 indexed；失败记 error 或结构化 skip（缺可选后端）—— 禁止 no_adapter
     if (ok) {
       expect(rec?.status).toBe('indexed');
     } else {
-      expect(rec?.status).toBe('error');
+      expect(['error', 'skipped']).toContain(rec?.status);
       expect(rec?.error ?? '').not.toMatch(/no_adapter/i);
     }
   });

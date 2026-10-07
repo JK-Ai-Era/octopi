@@ -34,7 +34,7 @@ describe('knowledge scale fixes', () => {
       displayName: 't4-catalog',
     });
     for (let i = 0; i < 30; i++) {
-      index.upsertFile({
+      await index.upsertFile({
         sourceId: src.id,
         path: join(root, 'docs', `file-${i}.md`),
         contentHash: `h${i}`,

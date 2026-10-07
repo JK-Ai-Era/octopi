@@ -1,7 +1,7 @@
 /**
- * Document extract worker — 在独立线程跑同步 Office/SheetJS 抽取
+ * Document extract worker — 在独立线程跑同步 Office/SheetJS 抽取 + 切块 + FTS token
  *
- * 避免 xlsx.read 等同步实现堵死主事件循环。
+ * 避免 xlsx.read / 切块 / CJK 滑窗堵死 Service 事件循环。
  * 装配走 createDocumentPortFromConfig：与 Gateway 共用 documents.* 单源。
  */
 import { parentPort, workerData } from 'node:worker_threads';
@@ -10,6 +10,8 @@ import {
   type DocumentCapabilityConfig,
 } from '../capabilities/document/factory.js';
 import { DocumentExtractError } from '../capabilities/document/errors.js';
+import { markdownAdapter, type KnowledgeChunkDraft } from './adapters.js';
+import { buildFtsTokens } from './fts.js';
 
 interface WorkerJob {
   path: string;
@@ -38,7 +40,15 @@ async function main(): Promise<void> {
       maxTextChars: job.maxTextChars,
     },
   );
-  parentPort?.postMessage({ ok: true, result });
+  const markdown = result.markdown?.trim() ?? '';
+  let chunks: KnowledgeChunkDraft[] = [];
+  if (markdown) {
+    chunks = markdownAdapter.chunk(markdown, job.path);
+    for (const c of chunks) {
+      c.ftsToks = buildFtsTokens(c.text, job.path);
+    }
+  }
+  parentPort?.postMessage({ ok: true, result, chunks });
 }
 
 main().catch((err: unknown) => {

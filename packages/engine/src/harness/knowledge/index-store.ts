@@ -28,7 +28,7 @@ export interface IndexedFileRecord {
   size: number;
   mtime: number;
   adapterId: string | null;
-  status: 'indexed' | 'skipped' | 'error';
+  status: 'indexed' | 'indexing' | 'skipped' | 'error';
   error?: string;
   chunkCount: number;
   indexedAt: number;
@@ -91,6 +91,10 @@ export class KnowledgeIndexStore {
     return this.fts.available;
   }
 
+  get ftsBackfillRunning(): boolean {
+    return this.ftsBackfillPromise != null;
+  }
+
   ensureFtsBackfill(): Promise<number> {
     if (!this.fts.available) return Promise.resolve(0);
     if (this.ftsBackfillPromise) return this.ftsBackfillPromise;
@@ -151,26 +155,38 @@ export class KnowledgeIndexStore {
     return row.id;
   }
 
-  upsertFile(input: {
-    sourceId: KnowledgeSourceId | string;
-    path: string;
-    contentHash: string;
-    size: number;
-    mtime: number;
-    adapterId: string;
-    chunks: KnowledgeChunkDraft[];
-    identityKey?: string;
-    externalUrl?: string;
-    etag?: string;
-    lastModified?: string;
-  }): IndexedFileRecord {
+  /**
+   * 替换文件索引。chunk/FTS **分批**写入并让出事件循环，
+   * 大 xlsx 数千 chunk 不得整文件一个同步事务堵死 Service。
+   *
+   * 语义：旧 chunk 先清；`status='indexing'` 直到全部批次落库后才 `indexed`。
+   * 检索不认 `indexing`（半成品）；`error` 且已有 chunks 时旧内容仍可搜（更新失败不抹库）。
+   */
+  async upsertFile(
+    input: {
+      sourceId: KnowledgeSourceId | string;
+      path: string;
+      contentHash: string;
+      size: number;
+      mtime: number;
+      adapterId: string;
+      chunks: KnowledgeChunkDraft[];
+      identityKey?: string;
+      externalUrl?: string;
+      etag?: string;
+      lastModified?: string;
+    },
+    opts?: { batchSize?: number },
+  ): Promise<IndexedFileRecord> {
     const now = Date.now();
+    const batchSize = Math.max(50, opts?.batchSize ?? 200);
     const fileId = this.resolveFile(String(input.sourceId), input.path, {
       identityKey: input.identityKey,
       size: input.size,
       mtime: input.mtime,
     });
 
+    // 旧索引作废（含 embeddings/FTS/vec）
     this.db.raw.exec('BEGIN');
     try {
       const oldIds = (
@@ -180,12 +196,11 @@ export class KnowledgeIndexStore {
       ).map((r) => r.id);
       this.dropChunks(oldIds);
       this.db.raw.prepare('DELETE FROM knowledge_chunks WHERE file_id = ?').run(fileId);
-
       this.db.raw
         .prepare(
           `UPDATE knowledge_files
            SET content_hash = ?, size = ?, mtime = ?, adapter_id = ?,
-               status = 'indexed', error = NULL, chunk_count = ?, indexed_at = ?,
+               status = 'indexing', error = NULL, chunk_count = 0, indexed_at = ?,
                external_url = ?, etag = ?, last_modified = ?
            WHERE id = ?`,
         )
@@ -194,25 +209,12 @@ export class KnowledgeIndexStore {
           input.size,
           input.mtime,
           input.adapterId,
-          input.chunks.length,
           now,
           input.externalUrl ?? null,
           input.etag ?? null,
           input.lastModified ?? null,
           fileId,
         );
-
-      const insertChunk = this.db.raw.prepare(
-        `INSERT INTO knowledge_chunks (id, file_id, ordinal, text, start_line, end_line)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-      );
-      const ftsRows: Array<{ id: string; text: string; path: string }> = [];
-      for (const c of input.chunks) {
-        const cid = `kc_${randomUUID().slice(0, 12)}`;
-        insertChunk.run(cid, fileId, c.ordinal, c.text, c.startLine, c.endLine);
-        ftsRows.push({ id: cid, text: c.text, path: input.path });
-      }
-      this.fts.upsertMany(ftsRows);
       this.db.raw.exec('COMMIT');
     } catch (err) {
       try {
@@ -222,6 +224,53 @@ export class KnowledgeIndexStore {
       }
       throw err;
     }
+
+    for (let offset = 0; offset < input.chunks.length; offset += batchSize) {
+      const batch = input.chunks.slice(offset, offset + batchSize);
+      this.db.raw.exec('BEGIN');
+      try {
+        const insertChunk = this.db.raw.prepare(
+          `INSERT INTO knowledge_chunks (id, file_id, ordinal, text, start_line, end_line)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+        );
+        const ftsRows: Array<{ id: string; text: string; path?: string; toks?: string }> = [];
+        for (const c of batch) {
+          const cid = `kc_${randomUUID().slice(0, 12)}`;
+          insertChunk.run(cid, fileId, c.ordinal, c.text, c.startLine, c.endLine);
+          ftsRows.push({
+            id: cid,
+            text: c.text,
+            path: input.path,
+            ...(c.ftsToks != null ? { toks: c.ftsToks } : {}),
+          });
+        }
+        this.fts.upsertMany(ftsRows);
+        this.db.raw.exec('COMMIT');
+      } catch (err) {
+        try {
+          this.db.raw.exec('ROLLBACK');
+        } catch {
+          // 以原异常为准
+        }
+        this.db.raw
+          .prepare(
+            `UPDATE knowledge_files SET status = 'error', error = ?, indexed_at = ? WHERE id = ?`,
+          )
+          .run(err instanceof Error ? err.message : String(err), Date.now(), fileId);
+        throw err;
+      }
+      if (offset + batchSize < input.chunks.length) {
+        await new Promise<void>((r) => setImmediate(r));
+      }
+    }
+
+    this.db.raw
+      .prepare(
+        `UPDATE knowledge_files
+         SET status = 'indexed', error = NULL, chunk_count = ?, indexed_at = ?
+         WHERE id = ?`,
+      )
+      .run(input.chunks.length, now, fileId);
 
     return {
       id: fileId,
@@ -316,7 +365,7 @@ export class KnowledgeIndexStore {
         `SELECT f.content_hash AS content_hash, f.chunk_count AS chunk_count
          FROM knowledge_memberships m
          JOIN knowledge_files f ON f.id = m.file_id
-         WHERE m.source_id = ? AND m.logical_path = ? AND f.status = 'indexed'`,
+         WHERE m.source_id = ? AND m.logical_path = ? AND f.status <> 'indexing'`,
       )
       .get(String(sourceId), logical) as
       | { content_hash?: string; chunk_count?: number }
@@ -537,8 +586,12 @@ export class KnowledgeIndexStore {
   private deleteKnowledgeVec(chunkIds: string[]): void {
     if (!this.db.sqliteVecEnabled || chunkIds.length === 0) return;
     try {
-      const del = this.db.raw.prepare('DELETE FROM knowledge_vec WHERE chunk_id = ?');
-      for (const id of chunkIds) del.run(id);
+      const del = this.db.raw.prepare(
+        `DELETE FROM knowledge_vec WHERE chunk_id IN (${chunkIds.map(() => '?').join(',')})`,
+      );
+      for (let i = 0; i < chunkIds.length; i += 400) {
+        del.run(...chunkIds.slice(i, i + 400));
+      }
     } catch {
       // 无 vec 表时忽略
     }
@@ -646,6 +699,7 @@ export class KnowledgeIndexStore {
           `SELECT c.id, c.file_id, c.ordinal, c.text, c.start_line, c.end_line,
                   m.source_id, m.logical_path
            FROM knowledge_chunks c
+           JOIN knowledge_files f ON f.id = c.file_id AND f.status <> 'indexing'
            JOIN knowledge_memberships m ON m.file_id = c.file_id
            WHERE c.id IN (${idPh}) AND m.source_id IN (${placeholders})`,
         )
@@ -667,6 +721,7 @@ export class KnowledgeIndexStore {
           `SELECT c.id, c.file_id, c.ordinal, c.text, c.start_line, c.end_line,
                   m.source_id, m.logical_path
            FROM knowledge_chunks c
+           JOIN knowledge_files f ON f.id = c.file_id AND f.status <> 'indexing'
            JOIN knowledge_memberships m ON m.file_id = c.file_id
            WHERE m.source_id IN (${placeholders})
              AND (${likeClauses.join(' OR ')})
@@ -746,6 +801,7 @@ export class KnowledgeIndexStore {
     const emb = embedding instanceof Float32Array ? embedding : Float32Array.from(embedding);
     const placeholders = sourceIds.map(() => '?').join(',');
     const joinChunks = `JOIN knowledge_chunks c ON c.id = %s
+                  JOIN knowledge_files f ON f.id = c.file_id AND f.status <> 'indexing'
                   JOIN knowledge_memberships m ON m.file_id = c.file_id`;
     const where = `WHERE m.source_id IN (${placeholders})`;
 
@@ -866,6 +922,22 @@ export class KnowledgeIndexStore {
       )
       .all(String(sourceId), limit) as Array<{ id: string; text: string }>;
     return rows.map((r) => ({ chunkId: r.id, text: r.text }));
+  }
+
+  /** 是否仍有缺向量 chunk（EXISTS，不拉正文） */
+  hasChunksMissingEmbedding(sourceId: KnowledgeSourceId | string): boolean {
+    const row = this.db.raw
+      .prepare(
+        `SELECT 1 AS ok
+         FROM knowledge_chunks c
+         JOIN knowledge_files f ON f.id = c.file_id
+         JOIN knowledge_memberships m ON m.file_id = c.file_id
+         LEFT JOIN knowledge_chunk_embeddings e ON e.chunk_id = c.id
+         WHERE m.source_id = ? AND e.chunk_id IS NULL AND ${EMBEDDABLE_WHERE}
+         LIMIT 1`,
+      )
+      .get(String(sourceId)) as { ok?: number } | undefined;
+    return Boolean(row);
   }
 
   /**

@@ -10,7 +10,7 @@ import { statSync, realpathSync } from 'node:fs';
 import { watch, type FSWatcher } from 'node:fs';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { EventEmitter } from 'node:events';
-import { FormatAdapterRegistry, htmlAdapter, markdownAdapter, textAdapter } from './adapters.js';
+import { FormatAdapterRegistry, htmlAdapter, markdownAdapter, textAdapter, type KnowledgeChunkDraft } from './adapters.js';
 import { looksLikeHtml } from './html.js';
 import { hashContent, KnowledgeIndexStore } from './index-store.js';
 import {
@@ -537,7 +537,7 @@ export class KnowledgeIngest extends EventEmitter {
           okCount += 1;
           continue;
         }
-        if (this.indexVirtualDoc(source.id, doc, source.authRef)) {
+        if (await this.indexVirtualDoc(source.id, doc, source.authRef)) {
           okCount += 1;
         }
       } catch (err) {
@@ -611,12 +611,16 @@ export class KnowledgeIngest extends EventEmitter {
    *
    * @returns 成功写入
    */
-  indexVirtualDoc(sourceId: string, doc: VirtualDocument, authRef?: string | null): boolean {
+  async indexVirtualDoc(
+    sourceId: string,
+    doc: VirtualDocument,
+    authRef?: string | null,
+  ): Promise<boolean> {
     if (!doc.content?.trim()) {
       this.index.markFileSkipped(sourceId, doc.path, 'empty_content');
       return false;
     }
-    // 逻辑能无扩展名（connector id / URL path）：?MIME ?扩展??
+    // 逻辑能无扩展名（connector id / URL path）：按 MIME / 内容启发式
     let adapter = this.adapters.match(doc.path, doc.contentType);
     if (!adapter) {
       if (looksLikeHtml(doc.content, doc.contentType)) adapter = htmlAdapter;
@@ -628,7 +632,7 @@ export class KnowledgeIngest extends EventEmitter {
       return true;
     }
     try {
-      const chunks = adapter.chunk(doc.content, doc.path);
+      const chunks = await this.chunkTextInWorker(doc.content, doc.path, undefined, adapter.id);
       let identityKey: string;
       if (doc.externalUrl) {
         identityKey = urlIdentityKey(doc.externalUrl, authRef);
@@ -639,7 +643,7 @@ export class KnowledgeIngest extends EventEmitter {
           identityKey = `path:${doc.path.replace(/\\/g, '/')}`;
         }
       }
-      this.index.upsertFile({
+      await this.index.upsertFile({
         sourceId,
         path: doc.path,
         contentHash,
@@ -1229,8 +1233,9 @@ export class KnowledgeIngest extends EventEmitter {
     const jobsRunning = Number(row?.r ?? 0);
     const jobsCancelled = Number(row?.c ?? 0);
     const aborted = this.isAborted(sourceId);
+    // EXISTS：大库缺向量检查不得拉 chunk 正文
     const embedMissing = this.embedding
-      ? this.index.listChunksMissingEmbedding(sourceId, 1).length > 0
+      ? this.index.hasChunksMissingEmbedding(sourceId)
       : false;
     const active = jobsQueued + jobsRunning > 0;
     // 还有活在排队/，且当前于中?
@@ -1324,7 +1329,7 @@ export class KnowledgeIngest extends EventEmitter {
         await this.ensureParseCoverage(s.id);
       }
       const missingEmbed = this.embedding
-        ? this.index.listChunksMissingEmbedding(s.id, 1).length > 0
+        ? this.index.hasChunksMissingEmbedding(s.id)
         : false;
       if (this.embedding && missingEmbed && active.embed === 0) {
         this.ensureEmbedJob(s.id);
@@ -1462,21 +1467,12 @@ export class KnowledgeIngest extends EventEmitter {
       const allowEmbed = this.runningEmbed < this.embedConcurrency;
       if (!allowParse && !allowEmbed) return;
 
-      const parsePending = this.countQueuedKinds([
-        'parse_file',
-        'walk_source',
-        'drop_file',
-        'fetch_doc',
-      ]);
-
       const kinds: IngestJobKind[] = [];
       if (allowParse) kinds.push('parse_file', 'drop_file', 'walk_source', 'fetch_doc');
-      // 业务优先级：解析/分块做完即可关键词搜；embedding 仅在?parse 时占?
-      if (allowEmbed && parsePending === 0) kinds.push('embed_source');
+      // parse 优先（priority 2 < 3），但 **不得** 等全部 parse 结束才 embed：
+      // 大库 parse 可能跑数小时，否则向量永远 0。embed 与 parse 并行，仅受 embed 槽限制。
+      if (allowEmbed) kinds.push('embed_source');
       if (kinds.length === 0) {
-        if (!allowParse && allowEmbed && parsePending === 0) return;
-        // parse 槽满但仍?parse  ??parse，不?embed
-        if (parsePending > 0 && !allowParse) return;
         return;
       }
 
@@ -1693,7 +1689,7 @@ export class KnowledgeIngest extends EventEmitter {
           ? this.connectorFetcher
           : this.localFetcher;
     const doc = await fetcher.fetch(source, ref, cred);
-    if (doc) this.indexVirtualDoc(sourceId, doc, source.authRef);
+    if (doc) await this.indexVirtualDoc(sourceId, doc, source.authRef);
   }
 
   private async parseOne(
@@ -1754,37 +1750,37 @@ export class KnowledgeIngest extends EventEmitter {
       return false;
     }
 
-    // ?partial：只索引头部，全?hash 保新鲜度
+    // 读盘 + hash + 切块 + FTS token 全在 worker（Service 事件循环只做写库）
     const maxTextChars = this.fileLimits.partial.maxTextChars;
-    const content = await readFile(filePath, 'utf8');
-    const contentHash = hashContent(content);
-    if (this.index.isFresh(sourceId, filePath, contentHash)) {
-      return true;
-    }
-    // 用前再查次：超时/后不得把僵尸结果写进索引
     if (signal?.aborted) throw new Error('aborted');
-    const text =
-      sizeDecision.action === 'partial' && content.length > maxTextChars
-        ? `${content.slice(0, maxTextChars)}\n\ntruncated: ${content.length - maxTextChars} chars omitted]`
-        : content;
 
     try {
-      const chunks = adapter.chunk(text, filePath);
+      const { parseTextInWorker } = await import('./parse-text-in-worker.js');
+      const parsed = await parseTextInWorker(filePath, {
+        sizeDecision: sizeDecision.action === 'partial' ? 'partial' : 'ok',
+        maxTextChars,
+        timeoutMs: this.parseTimeoutMs,
+        signal,
+      });
+      if (this.index.isFresh(sourceId, filePath, parsed.contentHash)) {
+        return true;
+      }
+      if (signal?.aborted) throw new Error('aborted');
       const ident = await identifyLocalFile(filePath);
-      this.index.upsertFile({
+      await this.index.upsertFile({
         sourceId,
         path: filePath,
-        contentHash,
+        contentHash: parsed.contentHash,
         size: st.size,
         mtime: Math.floor(st.mtimeMs),
-        adapterId: adapter.id,
-        chunks,
+        adapterId: parsed.adapterId,
+        chunks: parsed.chunks,
         identityKey: ident.key,
       });
       return true;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      if (msg === 'aborted' || msg.startsWith('parse_timeout') || signal?.aborted) {
+      if (msg === 'aborted' || msg.startsWith('text_parse_timeout') || signal?.aborted) {
         throw err;
       }
       this.index.markFileError(
@@ -1792,6 +1788,7 @@ export class KnowledgeIngest extends EventEmitter {
         filePath,
         err instanceof Error ? err.message : String(err),
         st.size,
+        await this.identityKeyFor(filePath),
       );
       return false;
     }
@@ -1835,24 +1832,23 @@ export class KnowledgeIngest extends EventEmitter {
     }
 
     try {
-      // worker 抽取：同?xlsx/pdf 不堵主循超时/?terminate
-      const result = await this.extractDocument(filePath, sourceId, st.size, signal);
-      const markdown = result.markdown?.trim();
-      if (!markdown) {
+      // worker 抽取 + 切块 + ftsToks：xlsx/pdf 不堵 Service 事件循环
+      const extracted = await this.extractDocument(filePath, sourceId, st.size, signal);
+      const markdown = extracted.result.markdown?.trim();
+      if (!markdown || extracted.chunks.length === 0) {
         this.index.markFileSkipped(sourceId, filePath, 'empty_content', st.size);
         return false;
       }
       if (signal?.aborted) throw new Error('aborted');
-      const chunks = markdownAdapter.chunk(markdown, filePath);
       const ident = await identifyLocalFile(filePath);
-      this.index.upsertFile({
+      await this.index.upsertFile({
         sourceId,
         path: filePath,
         contentHash,
         size: st.size,
         mtime: Math.floor(st.mtimeMs),
-        adapterId: `document:${result.backend}`,
-        chunks,
+        adapterId: `document:${extracted.result.backend}`,
+        chunks: extracted.chunks,
         identityKey: ident.key,
       });
       return true;
@@ -1885,13 +1881,13 @@ export class KnowledgeIngest extends EventEmitter {
     }
   }
 
-  /** 优先 worker 抽取；worker 不可用时回进程内 port */
+  /** worker 抽取 + 切块；worker 模块不可用时回进程内 port 再切块 */
   private async extractDocument(
     filePath: string,
     sourceId: string,
     fileSize = 0,
     extraSignal?: AbortSignal,
-  ) {
+  ): Promise<{ result: import('../capabilities/document/types.js').ExtractResult; chunks: KnowledgeChunkDraft[] }> {
     const sourceSignal = this.abortSignalFor(sourceId);
     const controller = new AbortController();
     const abort = () => controller.abort();
@@ -1901,7 +1897,7 @@ export class KnowledgeIngest extends EventEmitter {
     const timeoutMs = parseTimeoutForSize(fileSize, this.fileLimits);
     const extractOpts = {
       timeoutMs,
-      // knowledge ?hardMax：软超限仍可 partial 抽取
+      // knowledge hardMax：软超限仍可 partial 抽取
       maxFileBytes: this.fileLimits.hardMaxFileBytes,
       maxSheets: this.fileLimits.partial.maxSheets,
       maxRowsPerSheet: this.fileLimits.partial.maxRowsPerSheet,
@@ -1909,6 +1905,18 @@ export class KnowledgeIngest extends EventEmitter {
       maxTextChars: this.fileLimits.partial.maxTextChars,
     };
     try {
+      // 注入的 documentPort 是调用方选定的抽取实现（测试 stub / 自定义后端）
+      if (this.documentPort) {
+        const result = await this.documentPort.extract(
+          { path: filePath, name: filePath },
+          { ...extractOpts, signal },
+        );
+        const markdown = result.markdown?.trim() ?? '';
+        const chunks = markdown
+          ? await this.chunkTextInWorker(markdown, filePath, signal)
+          : [];
+        return { result, chunks };
+      }
       const { extractDocumentInWorker } = await import('./extract-document.js');
       return await extractDocumentInWorker(filePath, {
         ...extractOpts,
@@ -1920,22 +1928,22 @@ export class KnowledgeIngest extends EventEmitter {
       if (msg === 'extract_aborted' || signal.aborted) {
         throw new Error('aborted');
       }
-      if (msg.includes('Cannot find module') || msg.includes('ERR_MODULE')) {
-        if (signal.aborted) throw new Error('aborted');
-        if (this.documentPort) {
-          // 必须 await：return promise 会立刻跑 finally 拆掉 abort 监听
-          return await this.documentPort.extract(
-            { path: filePath, name: filePath },
-            { ...extractOpts, signal },
-          );
-        }
-        throw err;
-      }
       throw err;
     } finally {
       sourceSignal.removeEventListener('abort', abort);
       extraSignal?.removeEventListener('abort', abort);
     }
+  }
+
+  /** 纯文本切块 + ftsToks（虚拟文档 / port 回退共用） */
+  private async chunkTextInWorker(
+    text: string,
+    path: string,
+    signal?: AbortSignal,
+    adapterId?: string,
+  ): Promise<KnowledgeChunkDraft[]> {
+    const { chunkTextWithFtsToks } = await import('./parse-text-in-worker.js');
+    return chunkTextWithFtsToks(text, path, signal, adapterId);
   }
 
   /**

@@ -1172,7 +1172,7 @@ export class OctopiClient {
     );
   }
 
-  async getKnowledgeStats(agentId = 'default'): Promise<Record<string, number>> {
+  async getKnowledgeStats(agentId: string): Promise<Record<string, number>> {
     const data = await this.getJson(`/agents/${agentId}/knowledge/stats`);
     return (data?.data as Record<string, number>) ?? {};
   }

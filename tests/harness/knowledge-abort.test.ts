@@ -16,7 +16,7 @@ describe('KnowledgeIngest.abortJobs', () => {
       scopeRef: { level: 'global', key: 'global' },
       displayName: 'abort-me',
     });
-    index.upsertFile({
+    await index.upsertFile({
       sourceId: src.id,
       path: '/tmp/kn-abort/a.md',
       contentHash: 'h',

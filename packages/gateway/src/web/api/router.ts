@@ -306,7 +306,7 @@ export class WebApiRouter {
       const knowledgeStatsMatch = relativePath.match(/^\/agents\/([^/]+)\/knowledge\/stats$/);
       if (knowledgeStatsMatch && method === 'GET') {
         try {
-          const stats = await this.gateway.getKnowledgeStats();
+          const stats = await this.gateway.getKnowledgeStats(knowledgeStatsMatch[1]);
           return this.json(res, 200, { ok: true, data: stats });
         } catch (err) {
           return this.json(res, 503, {
@@ -397,7 +397,10 @@ export class WebApiRouter {
         if (!sessionId) {
           return this.json(res, 400, { ok: false, error: 'sessionId is required' });
         }
-        const items = await this.gateway.getKnowledgeSessionVisibility(sessionId);
+        const items = await this.gateway.getKnowledgeSessionVisibility(
+          knowledgeSessionVisMatch[1],
+          sessionId,
+        );
         return this.json(res, 200, { ok: true, data: items });
       }
       if (knowledgeSessionVisMatch && method === 'PUT') {
@@ -426,7 +429,11 @@ export class WebApiRouter {
           }
           items.push({ targetType, targetId, op });
         }
-        await this.gateway.replaceKnowledgeSessionVisibility(sessionId, items);
+        await this.gateway.replaceKnowledgeSessionVisibility(
+          knowledgeSessionVisMatch[1],
+          sessionId,
+          items,
+        );
         return this.json(res, 200, { ok: true, data: { sessionId, count: items.length } });
       }
       if (knowledgeSessionVisMatch && method === 'POST') {
@@ -447,7 +454,11 @@ export class WebApiRouter {
               'sessionId, targetType(project|source), targetId, op(include|exclude) are required',
           });
         }
-        await this.gateway.setKnowledgeSessionVisibility(sessionId, { targetType, targetId, op });
+        await this.gateway.setKnowledgeSessionVisibility(knowledgeSessionVisMatch[1], sessionId, {
+          targetType,
+          targetId,
+          op,
+        });
         return this.json(res, 200, { ok: true, data: { sessionId, targetType, targetId, op } });
       }
       if (knowledgeSessionVisMatch && method === 'DELETE') {
@@ -458,12 +469,12 @@ export class WebApiRouter {
         const targetType = url.searchParams.get('targetType') as 'project' | 'source' | null;
         const targetId = url.searchParams.get('targetId');
         if (targetType && targetId) {
-          await this.gateway.clearKnowledgeSessionVisibility(sessionId, {
+          await this.gateway.clearKnowledgeSessionVisibility(knowledgeSessionVisMatch[1], sessionId, {
             targetType,
             targetId,
           });
         } else {
-          await this.gateway.clearKnowledgeSessionVisibility(sessionId);
+          await this.gateway.clearKnowledgeSessionVisibility(knowledgeSessionVisMatch[1], sessionId);
         }
         return this.json(res, 200, { ok: true, data: { sessionId } });
       }
@@ -631,7 +642,11 @@ export class WebApiRouter {
         if (!sourceId || !path) {
           return this.json(res, 400, { ok: false, error: 'sourceId and path are required' });
         }
-        const chunks = await this.gateway.listKnowledgeChunks(sourceId, path);
+        const chunks = await this.gateway.listKnowledgeChunks(
+          knowledgeChunksMatch[1],
+          sourceId,
+          path,
+        );
         return this.json(res, 200, { ok: true, data: chunks });
       }
 

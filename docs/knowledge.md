@@ -71,9 +71,32 @@ Knowledge 数据面是 **独立 HTTP Service**（唯一写者），不是 Gatewa
 | **多 Gateway** | 同一 Service（或共享远程 baseUrl）可挂多 Gateway；写路径不双开 |
 
 - **契约**：`arch/knowledge-service-http.md`（token → `(tenantId, gatewayId)`；业务键不从 body 伪造）
-- **装配**：`knowledge.service.manageLocal`（默认 `true`）→ 本机拉起 Service，缺省端口 **18280**；`manageLocal: false` + `baseUrl` → 只连远程；二者皆无 → 知识面 `disabled`
-- **单写者**：`knowledge.db.writer.lock`；`wx` 独占创建，持有者 PID 死则回收
+- **装配**：`knowledge.service.manageLocal`（默认 `true`）→ 本机 **fork 子进程**拉起 Service，缺省端口 **18280**；`manageLocal: false` + `baseUrl` → 只连远程；二者皆无 → 知识面 `disabled`
+- **单写者**：`knowledge.db.writer.lock`（由 **Service 进程**持有，不是 Gateway）
 - **状态**：`ready` / `degraded` / `disabled`（Service 起不来时可感知；`knowledge.required` 可 fail-closed）
+
+#### 2.1.1 进程内线程边界（勿把重活塞回主线程）
+
+```text
+Knowledge Service 进程
+├── 主线程：listen · GET /health · token 鉴权 · SSE 泵出   ← 禁止业务/SQLite
+├── Engine Worker：HttpApp 路由 · knowledge.db · ingest   ← 允许阻塞
+└── 嵌套 Worker：Document 抽取 · 切块 · FTS token          ← CPU
+```
+
+| 层 | 可否阻塞 | 放什么 |
+|----|----------|--------|
+| 主线程 | **否** | HTTP accept、存活探测、token 内存表鉴权、SSE 写出 |
+| Engine Worker | 是 | 业务路由/handler、同步 `node:sqlite`、FTS/写库、walk、对账 |
+| Parse Worker | 是 | SheetJS/Office 抽取、chunk、CJK 分词 |
+
+**工程纪律**（踩坑总结）：
+
+- `/health` 必须主线程应答，否则引擎忙时探活假死。
+- token 鉴权在主线程（`matchKnowledgeToken`），与 Engine 同一函数；业务路由只在 Engine（与 handler 同源）。
+- 禁止假数据桩：禁止 `void arg; return []`、写死 `canAbort: true`、忽略 `scopeLevel` 过滤等（见 `AGENTS.md`）。
+- embedding 与 parse **分槽并行**；勿写成「全部 parse 结束才 embed」。
+- Electron 宿主 fork 子进程：用 `process.execPath` + `ELECTRON_RUN_AS_NODE=1`，**不要**换捆绑 `node.exe` 当 `execPath`（会切断 IPC）。
 
 ### 2.2 File 本位防重（identity + Membership）
 

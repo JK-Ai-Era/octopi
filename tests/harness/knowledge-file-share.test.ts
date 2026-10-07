@@ -46,7 +46,7 @@ describe('File identity 共享与去重', () => {
     ms.claim(sParent.id, fileId, 'specs/a.md');
     ms.claim(sChild.id, fileId, 'a.md');
 
-    index.upsertFile({
+    await index.upsertFile({
       sourceId: sParent.id,
       path: 'specs/a.md',
       contentHash: 'h',
@@ -102,7 +102,7 @@ describe('File identity 共享与去重', () => {
     });
 
     const ident = await identifyLocalFile(file);
-    index.upsertFile({
+    await index.upsertFile({
       sourceId: s1.id,
       path: 'doc.md',
       contentHash: 'h',
@@ -113,7 +113,7 @@ describe('File identity 共享与去重', () => {
       chunks: [{ ordinal: 0, text: 'unique phrase here', startLine: 1, endLine: 1 }],
     });
     // 第二 Source 只 claim，不重 parse
-    index.upsertFile({
+    await index.upsertFile({
       sourceId: s2.id,
       path: 'doc.md',
       contentHash: 'h',
@@ -156,7 +156,7 @@ describe('File identity 共享与去重', () => {
     });
 
     const id1 = await identifyLocalFile(file);
-    index.upsertFile({
+    await index.upsertFile({
       sourceId: s.id,
       path: 'u.md',
       contentHash: 'h1',
@@ -170,7 +170,7 @@ describe('File identity 共享与去重', () => {
     await writeFile(file, 'new words beta\n', 'utf8');
     const id2 = await identifyLocalFile(file);
     expect(id2.key).toBe(id1.key);
-    index.upsertFile({
+    await index.upsertFile({
       sourceId: s.id,
       path: 'u.md',
       contentHash: 'h2',

@@ -13,8 +13,8 @@ export interface KnowledgeDatabaseOptions {
   dbPath?: string;
   wal?: boolean;
   busyTimeoutMs?: number;
-  /** 尝试加载 sqlite-vec（默认 true；失败则 JS 余弦） */
-  sqliteVec?: boolean;
+  /** 尝试加载 sqlite-vec（默认 true；失败则 JS 余弦）；可指定扩展路径 */
+  sqliteVec?: boolean | { extensionPath?: string };
 }
 
 export class KnowledgeDatabase {
@@ -48,12 +48,13 @@ export class KnowledgeDatabase {
       await mkdir(dirname(dbPath), { recursive: true });
     }
 
+    const vecOpt = options?.sqliteVec;
     const db = new DatabaseSyncCtor(dbPath, {
       // 索引写入与管理面读并发时需要更长 busy 窗口
       timeout: options?.busyTimeoutMs ?? 15_000,
       enableForeignKeyConstraints: false,
       // sqlite-vec 扩展（可选）；构造后无法补开
-      allowExtension: options?.sqliteVec !== false,
+      allowExtension: vecOpt !== false,
     });
     if (options?.wal !== false) {
       db.exec('PRAGMA journal_mode = WAL');
@@ -61,10 +62,11 @@ export class KnowledgeDatabase {
 
     const kdb = new KnowledgeDatabase(db);
     kdb.createTables();
-    if (options?.sqliteVec !== false) {
+    if (vecOpt !== false) {
       try {
         const { tryLoadSqliteVec } = await import('../memory/sqlite/sqlite-vec.js');
-        kdb._sqliteVec = await tryLoadSqliteVec(db);
+        const extensionPath = typeof vecOpt === 'object' ? vecOpt.extensionPath : undefined;
+        kdb._sqliteVec = await tryLoadSqliteVec(db, extensionPath);
       } catch {
         kdb._sqliteVec = false;
       }
@@ -607,6 +609,7 @@ export class KnowledgeDatabase {
       agentHidden: 'SELECT COUNT(*) AS count FROM knowledge_agent_hidden',
       sessionVisibility: 'SELECT COUNT(*) AS count FROM knowledge_session_visibility',
       chunks: 'SELECT COUNT(*) AS count FROM knowledge_chunks',
+      ftsChunks: 'SELECT COUNT(*) AS count FROM knowledge_chunks_fts',
       embeddableChunks: `SELECT COUNT(*) AS count FROM knowledge_chunks c
          LEFT JOIN knowledge_files f ON f.id = c.file_id
          WHERE (f.adapter_id IS NULL OR f.adapter_id NOT IN ('code-tree'))`,

@@ -5,6 +5,10 @@
 export interface KnowledgeClientOptions {
   baseUrl: string;
   token: string;
+  /**
+   * HTTP 超时。默认 30s：索引期 FTS/写库会让 Service 短暂繁忙，
+   * 5s 会把正常的「忙」误报成 timeout/503。仍应通过分批让出保证 /health 可达。
+   */
   timeoutMs?: number;
 }
 
@@ -26,8 +30,12 @@ export class KnowledgeClient {
     headers?: Record<string, string>,
   ): Promise<T> {
     const url = `${this.opts.baseUrl.replace(/\/+$/, '')}${path}`;
+    const timeoutMs = this.opts.timeoutMs ?? 30_000;
     const ac = new AbortController();
-    const t = setTimeout(() => ac.abort(), this.opts.timeoutMs ?? 5000);
+    const timeoutErr = new Error(
+      `knowledge_http_timeout ${method} ${path} after ${timeoutMs}ms (service busy or blocked)`,
+    );
+    const t = setTimeout(() => ac.abort(timeoutErr), timeoutMs);
     try {
       const res = await fetch(url, {
         method,
@@ -44,6 +52,9 @@ export class KnowledgeClient {
         throw new Error(json.error?.message ?? `knowledge_http_${res.status}`);
       }
       return (json.data ?? json) as T;
+    } catch (err) {
+      if (ac.signal.aborted) throw timeoutErr;
+      throw err;
     } finally {
       clearTimeout(t);
     }
@@ -64,8 +75,17 @@ export class KnowledgeClient {
     });
   }
 
-  listSources(): Promise<Array<Record<string, unknown>>> {
-    return this.request('GET', '/v1/sources');
+  listSources(opts?: {
+    scopeLevel?: 'global' | 'project' | 'session';
+    projectKey?: string;
+    sessionId?: string;
+  }): Promise<Array<Record<string, unknown>>> {
+    const qs = new URLSearchParams();
+    if (opts?.scopeLevel) qs.set('scopeLevel', opts.scopeLevel);
+    if (opts?.projectKey) qs.set('projectKey', opts.projectKey);
+    if (opts?.sessionId) qs.set('sessionId', opts.sessionId);
+    const q = qs.toString();
+    return this.request('GET', `/v1/sources${q ? `?${q}` : ''}`);
   }
 
   createSource(input: Record<string, unknown>): Promise<Record<string, unknown>> {
@@ -133,12 +153,18 @@ export class KnowledgeClient {
     return this.request('GET', `/v1/sources/${encodeURIComponent(sourceId)}`);
   }
 
-  abort(sourceId: string): Promise<unknown> {
-    return this.request('POST', `/v1/sources/${encodeURIComponent(sourceId)}/abort`);
+  /** 中止源任务；省略 sourceId = 中止本 Gateway 全部源 */
+  abort(sourceId?: string): Promise<unknown> {
+    return sourceId
+      ? this.request('POST', `/v1/sources/${encodeURIComponent(sourceId)}/abort`)
+      : this.request('POST', '/v1/jobs/abort');
   }
 
-  resume(sourceId: string): Promise<unknown> {
-    return this.request('POST', `/v1/sources/${encodeURIComponent(sourceId)}/resume`);
+  /** 继续源任务；省略 sourceId = 继续本 Gateway 全部源 */
+  resume(sourceId?: string): Promise<unknown> {
+    return sourceId
+      ? this.request('POST', `/v1/sources/${encodeURIComponent(sourceId)}/resume`)
+      : this.request('POST', '/v1/jobs/resume');
   }
 
   listFiles(sourceId: string): Promise<Array<Record<string, unknown>>> {
@@ -147,6 +173,14 @@ export class KnowledgeClient {
 
   catalog(agentId: string): Promise<unknown[]> {
     return this.request('GET', `/v1/principals/${encodeURIComponent(agentId)}/catalog`);
+  }
+
+  promotionCandidates(): Promise<unknown[]> {
+    return this.request('GET', '/v1/promotion-candidates');
+  }
+
+  describeSource(sourceId: string): Promise<{ generatedDescription: string; source: string }> {
+    return this.request('POST', `/v1/sources/${encodeURIComponent(sourceId)}/describe`);
   }
 
   listChunks(
@@ -210,6 +244,17 @@ export class KnowledgeClient {
     );
   }
 
+  replaceSessionVisibility(
+    agentId: string,
+    sessionId: string,
+    items: Array<{ targetType: 'project' | 'source'; targetId: string; op: 'include' | 'exclude' }>,
+  ): Promise<unknown> {
+    return this.request('PUT', `/v1/principals/${encodeURIComponent(agentId)}/session-visibility`, {
+      sessionId,
+      items,
+    });
+  }
+
   clearSessionVisibility(
     agentId: string,
     sessionId: string,
@@ -223,6 +268,21 @@ export class KnowledgeClient {
     return this.request(
       'DELETE',
       `/v1/principals/${encodeURIComponent(agentId)}/session-visibility?${qs}`,
+    );
+  }
+
+  jobControl(sourceId: string): Promise<{
+    aborted: boolean;
+    jobsQueued: number;
+    jobsRunning: number;
+    jobsCancelled: number;
+    embedMissing: boolean;
+    canAbort: boolean;
+    canResume: boolean;
+  }> {
+    return this.request(
+      'GET',
+      `/v1/jobs/control?sourceId=${encodeURIComponent(sourceId)}`,
     );
   }
 

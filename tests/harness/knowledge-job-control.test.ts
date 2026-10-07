@@ -71,7 +71,7 @@ describe('KnowledgeIngest jobControlState', () => {
   });
 });
 
-describe('directory paths must not enter knowledge_files', () => {
+describe('directory paths must not enter knowledge_files', async () => {
   it('parseOne(目录) 不写 no_adapter，且清历史脏行', async () => {
     const sources = await KnowledgeSourceStore.open({ dbPath: ':memory:' });
     const index = new KnowledgeIndexStore(sources.database);
@@ -138,7 +138,7 @@ describe('directory paths must not enter knowledge_files', () => {
       displayName: 'repro',
     });
     const filePath = join(root, 'b.md');
-    index.upsertFile({
+    await index.upsertFile({
       sourceId: src.id,
       path: filePath,
       contentHash: 'old-hash',
@@ -299,7 +299,7 @@ describe('directory paths must not enter knowledge_files', () => {
       scopeRef: { level: 'global', key: 'global' },
       displayName: 'remote-repro',
     });
-    index.upsertFile({
+    await index.upsertFile({
       sourceId: src.id,
       path: '/api/guide.md',
       contentHash: 'h',

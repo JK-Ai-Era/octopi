@@ -11,6 +11,8 @@ export interface KnowledgeChunkDraft {
   endLine: number;
   /** 符号名（代码启发式；Markdown 为标题；可选） */
   symbol?: string;
+  /** 预计算 FTS token 流（worker 产出；写库直用，避免主线程 CJK 分词） */
+  ftsToks?: string;
 }
 
 export interface FormatAdapter {

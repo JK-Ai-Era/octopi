@@ -44,7 +44,7 @@ describe('knowledge.db bucket migration', () => {
       scopeRef: { level: 'global', key: 'global' },
       displayName: 'mig',
     });
-    index.upsertFile({
+    await index.upsertFile({
       sourceId: src.id,
       path: join(dir, 'a.md'),
       contentHash: 'h',

@@ -60,7 +60,7 @@ describe('abort closes remote/walk loops', () => {
     });
 
     // 预置一条旧索引：中止后不得被 prune 掉（半截 keep）
-    index.upsertFile({
+    await index.upsertFile({
       sourceId: src.id,
       path: '/keep-me',
       contentHash: 'old',

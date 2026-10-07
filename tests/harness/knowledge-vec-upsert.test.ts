@@ -38,7 +38,7 @@ describe('knowledge_vec upsert (DELETE+INSERT)', () => {
       displayName: 'vec',
     });
 
-    index.upsertFile({
+    await index.upsertFile({
       sourceId: src.id,
       path: '/tmp/a.md',
       contentHash: 'h1',
@@ -61,7 +61,7 @@ describe('knowledge_vec upsert (DELETE+INSERT)', () => {
     expect(vecN()).toBe(2);
 
     // 同路径 upsert：旧 chunk/vec 必须清掉
-    index.upsertFile({
+    await index.upsertFile({
       sourceId: src.id,
       path: '/tmp/a.md',
       contentHash: 'h2',

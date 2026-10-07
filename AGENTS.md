@@ -169,6 +169,18 @@ npm run lint
 - **Explicit over implicit**: at module boundaries, do not hide default behavior behind `?? default`.
 - **No hardcoded tunables**: deployment-varying configuration must be exposed through verifiable config fields.
 - **Brand opaque cross-boundary IDs** (`Branded<T>`), never bare `string`.
+- **No fake-data stubs (用户明确要求)**: an API that accepts parameters MUST return real computed data or `throw`. Forbidden patterns in production paths:
+  - `void arg; return [];` / `return {};` / `return []` as a placeholder body
+  - hardcoded booleans that ignore state (`canAbort: true`, `aborted: false`, …)
+  - hardcoded empty collections where the caller expects live data (`assignedProjects: []`, `hiddenSourceIds: []`, …)
+  - silently ignoring filter/scope parameters and returning the full set
+  Allowed: a **failure/degraded** fallback to empty only after a real attempt failed (and that must not look like success-with-data). If a feature is not implemented yet, `throw new Error('not_implemented: …')` so the UI/API can surface it.
+
+### Engineering Discipline
+
+- **First principles over surface fixes**: engineering problems must be analyzed from first principles (data flow, ownership, process/thread boundaries, invariants)—not patched at the symptom layer. If a design choice is wrong (e.g. shared event loop, ignored filter, stubbed return), change the design; do not add another band-aid on top.
+- **Verify uncertainty; never guess**: when something is unclear (API shape, runtime behavior, config meaning, cross-process contract), **read the relevant code, docs, tests, or config schema and confirm** before acting. Do not invent APIs, field names, or root causes from memory. If evidence is still insufficient, say so and investigate further—do not ship a guess.
+- **Root-cause bug fixes under complete business semantics**: a bug is fixed only when (1) the **root cause** is identified and removed, and (2) the **intended business behavior remains complete**. Hiding symptoms (skip/drop/degrade/silence/swallow) is not a fix. “The error went away” is not success if capability was lost or data is now wrong.
 
 ### Code Style
 
