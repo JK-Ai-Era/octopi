@@ -143,6 +143,21 @@ export class WebApiRouter {
         return this.json(res, 200, { ok: true, data: session });
       }
 
+      if (sessionMatch && method === 'PATCH') {
+        const body = await this.readBody(req);
+        if (typeof body?.title !== 'string' || !body.title.trim()) {
+          return this.json(res, 400, { ok: false, error: 'title is required' });
+        }
+        try {
+          const meta = await this.gateway.renameSession(sessionMatch[1], body.title);
+          return this.json(res, 200, { ok: true, data: meta });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          const code = msg.includes('not found') ? 404 : 400;
+          return this.json(res, code, { ok: false, error: msg });
+        }
+      }
+
       const messageMatch = relativePath.match(/^\/sessions\/([^/]+)\/messages$/);
       if (messageMatch && method === 'GET') {
         const limit = Math.min(Math.max(Number(url.searchParams.get('limit') ?? '50'), 1), 200);

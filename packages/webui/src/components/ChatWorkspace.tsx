@@ -72,6 +72,13 @@ function formatTimestamp(ts: number | undefined | null): string {
   return `${dateStr} ${time}`;
 }
 
+/** 列表/标题栏展示名：有 title 用 title，否则短 id */
+function sessionDisplayTitle(s: { id: string; title?: string }): string {
+  const t = s.title?.trim();
+  if (t) return t;
+  return s.id.length > 18 ? `…${s.id.slice(-12)}` : s.id;
+}
+
 /** 末尾是否已有带内容的已完成 assistant（用于抑制结束后残留的「思考中」占位） */
 function hasCompletedAssistantTail(items: ConversationItem[]): boolean {
   for (let i = items.length - 1; i >= 0; i--) {
@@ -423,7 +430,15 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
   const [modelError, setModelError] = useState<string | null>(null);
   const [compactMsg, setCompactMsg] = useState<string | null>(null);
   const [compacting, setCompacting] = useState(false);
-  const [sessions, setSessions] = useState<Array<{ id: string; agentId: string; lastInteractionAt: number }>>([]);
+  const [sessions, setSessions] = useState<Array<{
+    id: string;
+    agentId: string;
+    lastInteractionAt: number;
+    title?: string;
+    titleSource?: 'snippet' | 'auto' | 'user';
+  }>>([]);
+  const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState('');
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [conversationItems, setConversationItems] = useState<ConversationItem[]>([]);
   const [viewMode, setViewMode] = useState<ViewMode>('history');
@@ -695,6 +710,33 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
     const sm = store.getSessionModel();
     setSessionModel(sm);
     if (sm) setSelectedModelId(sm.modelId ?? sm.defaultModelId);
+  };
+
+  const startRenameSession = (sessionId: string, currentTitle: string) => {
+    setRenamingSessionId(sessionId);
+    setRenameDraft(currentTitle);
+    setActionError(null);
+  };
+
+  const commitRenameSession = async () => {
+    const store = storeRef.current;
+    const sessionId = renamingSessionId;
+    if (!store || !sessionId) {
+      setRenamingSessionId(null);
+      return;
+    }
+    const title = renameDraft.trim();
+    if (!title) {
+      setActionError('标题不能为空');
+      return;
+    }
+    try {
+      await store.renameSession(sessionId, title);
+      setRenamingSessionId(null);
+      setRenameDraft('');
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : String(e));
+    }
   };
 
   const createSession = async () => {
@@ -1021,14 +1063,38 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
             <div className="sidebar-title">历史会话</div>
             <div style={{ display: 'grid', gap: 6 }}>
               {displayedSessions.map(s => (
-                <button
-                  key={s.id}
-                  className={`btn-secondary session-btn ${activeSessionId === s.id ? 'session-btn-active' : ''}`}
-                  onClick={() => openSession(s.id)}
-                >
-                  <div style={{ fontWeight: 600 }}>{s.id}</div>
-                  <div className="small muted">{s.agentId} · {formatTimestamp(s.lastInteractionAt)}</div>
-                </button>
+                renamingSessionId === s.id ? (
+                  <div key={s.id} className="btn-secondary session-btn session-btn-active" style={{ display: 'grid', gap: 4 }}>
+                    <input
+                      className="model-select"
+                      value={renameDraft}
+                      onChange={(e) => setRenameDraft(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') void commitRenameSession();
+                        if (e.key === 'Escape') { setRenamingSessionId(null); setRenameDraft(''); }
+                      }}
+                      autoFocus
+                      maxLength={40}
+                    />
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      <button className="btn-primary small" style={{ flex: 1 }} onClick={() => void commitRenameSession()}>保存</button>
+                      <button className="btn-ghost small" style={{ flex: 1 }} onClick={() => { setRenamingSessionId(null); setRenameDraft(''); }}>取消</button>
+                    </div>
+                  </div>
+                ) : (
+                  <button
+                    key={s.id}
+                    className={`btn-secondary session-btn ${activeSessionId === s.id ? 'session-btn-active' : ''}`}
+                    onClick={() => openSession(s.id)}
+                    onDoubleClick={() => startRenameSession(s.id, s.title ?? sessionDisplayTitle(s))}
+                    title="单击打开 · 双击重命名"
+                  >
+                    <div style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {sessionDisplayTitle(s)}
+                    </div>
+                    <div className="small muted">{s.agentId} · {formatTimestamp(s.lastInteractionAt)}</div>
+                  </button>
+                )
               ))}
               {!agentSessions.length && <div className="small muted">暂无历史会话</div>}
               {hiddenSessionCount > 0 && !showAllSessions && (
@@ -1058,7 +1124,26 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
           <div className="center-header">
             <div className="center-header-row">
               <div>
-                <div style={{ fontWeight: 600 }}>{activeSessionId ?? '未选择会话'}</div>
+                <div style={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {activeSessionId
+                      ? sessionDisplayTitle(sessions.find(s => s.id === activeSessionId) ?? { id: activeSessionId })
+                      : '未选择会话'}
+                  </span>
+                  {activeSessionId && (
+                    <button
+                      className="btn-ghost small"
+                      style={{ flexShrink: 0 }}
+                      onClick={() => {
+                        const cur = sessions.find(s => s.id === activeSessionId);
+                        startRenameSession(activeSessionId, cur?.title ?? sessionDisplayTitle(cur ?? { id: activeSessionId }));
+                      }}
+                      title="重命名会话"
+                    >
+                      重命名
+                    </button>
+                  )}
+                </div>
                 <div className="small muted">{agentId ? `Agent: ${agentId}` : '请先选择 Agent'}</div>
                 <div className="center-model-row">
                   <label className="small muted" htmlFor="session-model-select">模型</label>

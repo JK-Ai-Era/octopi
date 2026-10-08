@@ -494,6 +494,54 @@ export class OctopiRuntimeStore extends EventTarget {
     return this.sessions;
   }
 
+  /** 手动重命名会话标题 */
+  async renameSession(sessionId: string, title: string): Promise<void> {
+    const meta = await this.client.renameSession(sessionId, title);
+    this.sessions = this.sessions.map((s) => (s.id === sessionId ? { ...s, ...meta } : s));
+    if (this.currentSession?.meta?.id === sessionId) {
+      this.currentSession = {
+        ...this.currentSession,
+        meta: { ...this.currentSession.meta, ...meta },
+      };
+    }
+    this.dispatch('sessions', new SessionsEvent('sessions', { sessions: this.sessions }));
+    this.dispatch('session', new SessionEvent('session', { session: this.currentSession }));
+  }
+
+  /** 应用 session.updated（标题等）到本地列表 */
+  private applySessionMetaEvent(event: AgentEventEnvelope): void {
+    const d = (event.data ?? {}) as {
+      sessionId?: string;
+      title?: string;
+      titleSource?: 'snippet' | 'auto' | 'user';
+      updatedAt?: number;
+    };
+    const sid = d.sessionId ?? event.sessionId;
+    if (!sid) return;
+    const patch = {
+      ...(d.title !== undefined ? { title: d.title } : {}),
+      ...(d.titleSource !== undefined ? { titleSource: d.titleSource } : {}),
+      ...(d.updatedAt !== undefined ? { updatedAt: d.updatedAt } : {}),
+    };
+    let changed = false;
+    this.sessions = this.sessions.map((s) => {
+      if (s.id !== sid) return s;
+      changed = true;
+      return { ...s, ...patch };
+    });
+    if (this.currentSession?.meta?.id === sid) {
+      this.currentSession = {
+        ...this.currentSession,
+        meta: { ...this.currentSession.meta, ...patch },
+      };
+      changed = true;
+    }
+    if (changed) {
+      this.dispatch('sessions', new SessionsEvent('sessions', { sessions: this.sessions }));
+      this.dispatch('session', new SessionEvent('session', { session: this.currentSession }));
+    }
+  }
+
   /** 将当前会话的运行时状态写入缓存（切走时调用） */
   private cacheCurrentSession(): void {
     const sid = this.chat.sessionId;
@@ -924,6 +972,12 @@ export class OctopiRuntimeStore extends EventTarget {
   private applyEvent(eventSessionId: string | undefined, event: AgentEventEnvelope): void {
     // 系统级索引进度（sessionKey='*'）：不改会话对话状态
     if (event.type === 'knowledge.index.progress') {
+      return;
+    }
+
+    // 会话标题等展示元数据：只刷新列表/当前 meta
+    if (event.type === 'session.updated') {
+      this.applySessionMetaEvent(event);
       return;
     }
 

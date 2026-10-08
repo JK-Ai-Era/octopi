@@ -33,6 +33,16 @@ export interface SessionMeta {
   lifecycle?: 'active' | 'recent' | 'archived';
   endedAt?: number;
   archivedAt?: number;
+  /** 会话展示标题（历史列表 / 标题栏）；缺省时 UI 回退短 id */
+  title?: string;
+  /**
+   * 标题来源：
+   * - `snippet` — 首条用户消息截断（临时，信号足够后可被 auto 覆盖）
+   * - `auto` — 小模型摘要（只生成一次，不被后续自动覆盖）
+   * - `user` — 手动重命名（永不被自动覆盖）
+   */
+  titleSource?: 'snippet' | 'auto' | 'user';
+  titleUpdatedAt?: number;
 }
 
 /** Session 归属匹配输入（SessionMeta / SessionData 的 agent 投影） */

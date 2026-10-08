@@ -21,6 +21,7 @@ const MAP_KEYS = [
   'policy.violated',
   'session.lifecycle.updated',
   'session.ended',
+  'session.updated',
   'persona.resolve.failed',
   'context.compact.start',
   'context.compact.end',

@@ -95,6 +95,13 @@ export interface AgentEventMap {
     agentId?: string;
     reason?: string;
   };
+  /** 会话展示元数据变更（标题等；UI 列表刷新） */
+  'session.updated': {
+    sessionId: string;
+    title?: string;
+    titleSource?: 'snippet' | 'auto' | 'user';
+    updatedAt?: number;
+  };
   /** Persona 磁盘解析失败（Runner） */
   'persona.resolve.failed': {
     error: string;
@@ -220,6 +227,7 @@ export const AgentEvents = {
 
   SESSION_LIFECYCLE_UPDATED: 'session.lifecycle.updated',
   SESSION_ENDED: 'session.ended',
+  SESSION_UPDATED: 'session.updated',
   PERSONA_RESOLVE_FAILED: 'persona.resolve.failed',
   CONTEXT_COMPACT_START: 'context.compact.start',
   CONTEXT_COMPACT_END: 'context.compact.end',

@@ -99,6 +99,10 @@ export interface SessionSummary {
   sessionStartedAt: number;
   lastInteractionAt: number;
   updatedAt: number;
+  /** 展示标题（snippet / auto / user）；缺省回退短 id */
+  title?: string;
+  titleSource?: 'snippet' | 'auto' | 'user';
+  titleUpdatedAt?: number;
 }
 
 export interface SessionView {
@@ -689,6 +693,12 @@ export class OctopiClient {
   async getSession(sessionId: string): Promise<SessionView> {
     const data = await this.getJson(`/sessions/${encodeURIComponent(sessionId)}`);
     return data?.data as SessionView;
+  }
+
+  /** 手动重命名会话标题（titleSource=user，不被自动摘要覆盖） */
+  async renameSession(sessionId: string, title: string): Promise<SessionSummary> {
+    const data = await this.patchJson(`/sessions/${encodeURIComponent(sessionId)}`, { title });
+    return data?.data as SessionSummary;
   }
 
   /** 会话附件列表 */

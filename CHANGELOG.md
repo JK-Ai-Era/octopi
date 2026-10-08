@@ -1,3 +1,23 @@
+## v0.66.0
+
+### feat(session): auto-generate readable history titles
+
+**问题**：历史会话列表直接展示 sessionId（`default-web-<ts>`），无法一眼认出对话主题。
+
+**方案**（「有信号再生成」）：
+
+- `SessionMeta` 增加 `title` / `titleSource`（`snippet` | `auto` | `user`）/ `titleUpdatedAt`
+- 临时标题：首条有语义用户消息截断（避免被「你好」占位卡住）
+- 摘要标题：首条或最新用户消息 ≥16 字，或累计用户内容 ≥40 字且已有助手回复时，用小模型（`models.level.summary → mini → standard → 主模型`，失败回退会话主模型）生成一次
+- 弱标题（寒暄/过短）拒收且允许升级；手动重命名（`user`）永不覆盖
+- 写回前重读 session，避免旧快照覆盖 Runner 消息；同 session 标题更新串行 + trailing 补跑
+- API：`PATCH /api/v1/sessions/:id` 重命名；`session.updated` 事件驱动 WebUI 列表刷新
+- WebUI：列表/标题栏展示标题，双击或「重命名」编辑
+
+**提示词**：按「对话面向的是什么事」输出主题标签（对象+事项+专名），过滤寒暄后再送入模型。
+
+**测试**：`tests/session-title.test.ts`（25）；`agent-events-map` 同步 `session.updated`。
+
 ## v0.65.0
 
 ### fix(knowledge): vectorSearch 走 sqlite-vec ANN，消除 search 超时

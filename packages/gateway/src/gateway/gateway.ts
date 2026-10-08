@@ -36,6 +36,7 @@ import type { ModelProvider } from '@octopi-agent/core/interfaces/model-provider
 import type { Observer } from '@octopi-agent/core/interfaces/observer.js';
 import type { SessionStore } from '@octopi-agent/core/interfaces/session-store.js';
 import type { SessionData } from '@octopi-agent/engine/harness/session/types.js';
+import { applyUserTitle, maybeUpdateSessionTitle } from './session-title.js';
 import type { StreamingChannelAdapter } from '../protocols/http.js';
 import type { Message } from '@octopi-agent/core/types.js';
 import { randomUUID } from 'node:crypto';
@@ -225,6 +226,10 @@ export class Gateway {
   private sessionAcl: SessionAclService;
   /** 进程内共?Session Lease（E1/E2）：?Runner 注入同一实例 */
   private sessionLease: import('@octopi-agent/engine/harness/run/concurrency/session-lease.js').InProcessSessionLock;
+  /** 会话标题更新去重（同 session 并发只跑一次） */
+  private titleUpdatePromises = new Map<string, Promise<void>>();
+  /** 进行中又有新触发时的 trailing 标记 */
+  private titleUpdatePending = new Set<string>();
   /** Knowledge Service（manageLocal + Client）；Promise 缓存防并发双启动 */
   private knowledgeRuntimePromise?: Promise<
     import('./knowledge-runtime.js').GatewayKnowledgeRuntime
@@ -1174,6 +1179,111 @@ export class Gateway {
 
   async listSessions(agentId?: string): Promise<SessionMeta[]> {
     return this.store.list(agentId ? { agentId } : undefined);
+  }
+
+  /**
+   * 手动重命名会话标题（titleSource=user，永不被自动摘要覆盖）。
+   *
+   * @param sessionId - 目标会话
+   * @param title - 用户标题
+   * @returns 更新后的 SessionMeta
+   */
+  async renameSession(sessionId: string, title: string): Promise<SessionMeta> {
+    const session = await this.store.load(sessionId);
+    if (!session) {
+      throw new Error(`Session "${sessionId}" not found`);
+    }
+    const applied = applyUserTitle(session, title);
+    if (!applied) {
+      throw new Error('title must not be empty');
+    }
+    await this.store.save(sessionId, session);
+    this.broadcastSessionUpdated(sessionId, applied, 'user');
+    return session.meta;
+  }
+
+  /**
+   * turn 落盘后异步更新标题（snippet / 小模型摘要）；失败不影响主流程。
+   *
+   * 同 session 串行；进行中再触发则标记 trailing，结束后补跑一次，避免丢掉第二轮升级。
+   *
+   * @param sessionId - 目标会话
+   */
+  private scheduleSessionTitleUpdate(sessionId: string): void {
+    if (this.titleUpdatePromises.has(sessionId)) {
+      this.titleUpdatePending.add(sessionId);
+      return;
+    }
+    const run = async (): Promise<void> => {
+      try {
+        await maybeUpdateSessionTitle(sessionId, {
+          load: (id) => this.store.load(id),
+          save: (id, data) => this.store.save(id, data),
+          providers: this.providers,
+          modelLevels: this.modelLevels,
+          resolveFallback: (session) => this.resolveTitleModelRef(session),
+          onTitleUpdated: (id, title, titleSource) => this.broadcastSessionUpdated(id, title, titleSource),
+        });
+      } catch (err) {
+        // 标题是展示元数据；失败保持原标题，不阻断对话
+        console.warn(
+          `[SessionTitle] update failed (session=${sessionId}): ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    };
+    const task = (async () => {
+      try {
+        await run();
+      } finally {
+        this.titleUpdatePromises.delete(sessionId);
+        if (this.titleUpdatePending.delete(sessionId)) {
+          this.scheduleSessionTitleUpdate(sessionId);
+        }
+      }
+    })();
+    this.titleUpdatePromises.set(sessionId, task);
+  }
+
+  private resolveTitleModelRef(session: SessionData): { provider: ModelProvider; model?: string } | null {
+    const agentId = session.primaryAgentId ?? session.agentId;
+    const agentDef = this.agents.get(agentId);
+    const modelRef = this.readSessionModelId(session.metadata);
+    const tryResolve = (ref: string): { provider: ModelProvider; model?: string } | null => {
+      const slash = ref.indexOf('/');
+      if (slash <= 0) return null;
+      const providerName = ref.slice(0, slash);
+      const model = ref.slice(slash + 1);
+      const provider = this.providers.get(providerName);
+      return provider ? { provider, model } : null;
+    };
+    if (modelRef) {
+      const bound = tryResolve(modelRef);
+      if (bound) return bound;
+    }
+    if (agentDef) {
+      const bound = tryResolve(`${agentDef.model.provider}/${agentDef.model.model}`);
+      if (bound) return bound;
+      const provider = this.providers.get(agentDef.model.provider);
+      if (provider) return { provider, model: agentDef.model.model };
+    }
+    return null;
+  }
+
+  private broadcastSessionUpdated(
+    sessionId: string,
+    title: string,
+    titleSource: 'snippet' | 'auto' | 'user',
+  ): void {
+    const event = {
+      type: 'session.updated',
+      sessionId,
+      timestamp: Date.now(),
+      data: { sessionId, title, titleSource, updatedAt: Date.now() },
+    } as unknown as AgentEvent;
+    this.emitEvent(event);
+    for (const adapter of this.streamingAdapters) {
+      adapter.broadcastEvent(sessionId, event);
+    }
   }
 
   async createSession(options: { agentId: string; sessionId?: string; metadata?: Record<string, unknown> }): Promise<SessionMeta> {
@@ -2639,6 +2749,9 @@ export class Gateway {
       finalContent = `[Gateway Error] ${err}`;
     } else if (dispatchResult.status === 'skipped') {
       console.warn(`[Gateway] Dispatch skipped: ${dispatchResult.reason}`);
+    } else {
+      // 会话标题：snippet 兜底 / 信号足够时小模型摘要（异步，不阻塞回复）
+      this.scheduleSessionTitleUpdate(sessionKey);
     }
 
     // 6. Plugin: message_sending
