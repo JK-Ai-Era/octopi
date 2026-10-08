@@ -2904,6 +2904,38 @@ export class Gateway {
           builder.tool(tool);
         }
         console.log('[Gateway] knowledge tools via service: knowledge_search, knowledge_read');
+
+        // turn 级 auto-ground（recall=off 则不装）
+        const recall =
+          (agent as { knowledge?: { recall?: string } }).knowledge?.recall ??
+          this.config.knowledge?.recall ??
+          'hybrid';
+        if (recall !== 'off') {
+          const { ClientKnowledgeGrounding } = await import(
+            '@octopi-agent/engine/harness/knowledge/client.js'
+          );
+          const g = this.config.knowledge?.autoInject;
+          const q = this.config.knowledge?.query;
+          builder.knowledgeGrounding(
+            new ClientKnowledgeGrounding(
+              kclient,
+              recall as 'hint' | 'hybrid' | 'inject',
+            ),
+            {
+              ...(g?.budgetTokens != null ? { budgetTokens: g.budgetTokens } : {}),
+              ...(g?.budgetRatio != null ? { budgetRatio: g.budgetRatio } : {}),
+              ...(g?.maxBudgetTokens != null ? { maxBudgetTokens: g.maxBudgetTokens } : {}),
+              ...(g?.maxChunks != null ? { maxChunks: g.maxChunks } : {}),
+              ...(q?.skipIfUserTokensBelow != null
+                ? { skipIfUserTokensBelow: q.skipIfUserTokensBelow }
+                : {}),
+              ...(q?.includePriorUserTurns != null
+                ? { includePriorUserTurns: q.includePriorUserTurns }
+                : {}),
+            },
+          );
+          console.log(`[Gateway] knowledge grounding via service (recall=${recall})`);
+        }
       }
     } catch (kToolErr) {
       console.warn(

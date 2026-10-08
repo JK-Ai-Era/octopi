@@ -12,6 +12,7 @@ import { KnowledgeRetriever } from './retriever.js';
 import {
   LocalKnowledgeQueryService,
   type SearchQuery,
+  type AutoGroundQuery,
   type ListSourcesQuery,
   type QueryIdentity,
   type ListJobsQuery,
@@ -48,6 +49,7 @@ const META_METHODS = new Set([
 
 const SEARCH_METHODS = new Set([
   'search',
+  'autoGround',
   'catalog',
   'listChunks',
   'read',
@@ -60,6 +62,7 @@ const SEARCH_METHODS = new Set([
 
 type QueryCall =
   | { id: number; method: 'search'; query: SearchQuery }
+  | { id: number; method: 'autoGround'; query: AutoGroundQuery }
   | { id: number; method: 'listSources'; query: ListSourcesQuery }
   | { id: number; method: 'listProjects'; identity?: QueryIdentity }
   | { id: number; method: 'getSource'; sourceId: string; identity?: QueryIdentity }
@@ -184,6 +187,9 @@ async function main(): Promise<void> {
         switch (msg.method) {
           case 'search':
             data = await svc.search(msg.query);
+            break;
+          case 'autoGround':
+            data = await svc.autoGround(msg.query);
             break;
           case 'listSources':
             data = await svc.listSources(msg.query);

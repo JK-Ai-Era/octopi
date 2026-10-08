@@ -1,3 +1,35 @@
+## v0.65.0
+
+### fix(knowledge): vectorSearch 走 sqlite-vec ANN，消除 search 超时
+
+**问题**：试搜 / `knowledge_search` 稳定 `knowledge_query_timeout`。根因不是 LIKE/JS 兜底，而是所谓 KNN 写成了 `ORDER BY vec_distance_cosine(...)` 全表暴力扫（本机 14.6 万向量约 59s），远超 query worker 超时。
+
+**修复**：
+
+- `vectorSearch` 改用 vec0 原生 `WHERE embedding MATCH ? AND k = ?`，再按 Membership 裁剪；ANN 结果（含 0 命中）即权威，不再退 JS 全表
+- 无 sqlite-vec 时 JS 路径有界（≤2000 条，不拉 text）
+- 实测检索 1.3–3s 返回
+
+**测试**：`knowledge-vector-search-ann`。
+
+### feat(knowledge): auto-ground 绝对相关度 + Service 侧 autoGround 接线
+
+**分数语义**（修复「组内 min-max 使最强命中恒为 1.0 → 必 inject」）：
+
+- `scoreKeywordCoverage`：查询 token 加权覆盖分（strong 1 / weak 0.5；content 1.0 / tags 0.6 / 其它 0.3）
+- `fuseHits`：加权平均（0.45 kw + 0.55 vec）+ 双高分微升，不再相加顶满
+- 地板：inject ≥ 0.72 / hint ≥ 0.50；indexCoverage&lt;0.5 时 +0.10（≤0.90）
+- `hasEnoughQuerySignal`：strong&lt;2 且非 CJK 长段（≥3 字）→ `query_signal_too_weak`，闲聊不检索
+
+**Grounding 接线**（独立 Knowledge Service 路径恢复 turn 级自动召回）：
+
+- QueryService/Worker/HTTP/Client 新增 `autoGround`（`GET /v1/principals/:id/ground`）
+- `AutoGroundPort` + `ClientKnowledgeGrounding`；`GroundingAssembler` 只依赖端口
+- Builder `knowledgeGrounding(port)`；Gateway 在 `knowledge.recall ≠ off` 时装配
+- 沿用不可信包装 / 消息插槽 / 预算与 maxChunks
+
+**测试**：`knowledge-client-grounding`；recall / query-worker / keyword 覆盖分门槛。
+
 ## v0.64.3
 
 ### docs(knowledge): 同步线程边界与唯一写者口径

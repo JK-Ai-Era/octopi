@@ -129,3 +129,74 @@ describe('knowledge.recall', () => {
     expect(pack.text).toBeUndefined();
   });
 });
+
+describe('autoGround 分数语义（绝对覆盖分）', () => {
+  let ctx: Awaited<ReturnType<typeof setup>>;
+
+  afterEach(async () => {
+    await ctx?.cleanup();
+  });
+
+  it('闲聊短查询不检索（strong 信号不足）', async () => {
+    ctx = await setup();
+    const r = new KnowledgeRetriever({
+      sourceStore: ctx.store,
+      indexStore: ctx.ingest.indexStore,
+      recall: 'hybrid',
+      injectMinScore: 0.01,
+      hintMinScore: 0.01,
+      minCoverage: 0,
+    });
+    for (const q of ['继续', '好的', 'ok', '嗯']) {
+      const d = await r.autoGround(q, { agentId: 'a1' });
+      expect(d.mode).toBe('none');
+      expect(d.reason).toBe('query_signal_too_weak');
+    }
+  });
+
+  it('CJK 整段 ≥3 字视为多概念，可过信号门槛', async () => {
+    ctx = await setup();
+    const r = new KnowledgeRetriever({
+      sourceStore: ctx.store,
+      indexStore: ctx.ingest.indexStore,
+      recall: 'hybrid',
+      injectMinScore: 0.01,
+      hintMinScore: 0.01,
+      minCoverage: 0,
+    });
+    const d = await r.autoGround('compliance retention policy', { agentId: 'a1' });
+    expect(d.reason).not.toBe('query_signal_too_weak');
+  });
+
+  it('只覆盖查询少数词 → 不 inject', async () => {
+    ctx = await setup();
+    // 文档含全部查询词时覆盖分高；换一条只沾一个词的查询
+    const r = new KnowledgeRetriever({
+      sourceStore: ctx.store,
+      indexStore: ctx.ingest.indexStore,
+      recall: 'hybrid',
+      // 地板用默认 0.72
+      minCoverage: 0,
+    });
+    // a.md 正文: "specific compliance retention policy text"
+    // 查询含大量未命中词 → 覆盖率低
+    const d = await r.autoGround('quantum banana unrelated compliance', { agentId: 'a1' });
+    if (d.mode === 'inject') {
+      throw new Error(`partial coverage must not inject (reason=${d.reason})`);
+    }
+  });
+
+  it('覆盖大部分查询词 → 可 inject', async () => {
+    ctx = await setup();
+    const r = new KnowledgeRetriever({
+      sourceStore: ctx.store,
+      indexStore: ctx.ingest.indexStore,
+      recall: 'hybrid',
+      minCoverage: 0,
+    });
+    const d = await r.autoGround('compliance retention policy', { agentId: 'a1' });
+    expect(d.mode).toBe('inject');
+    expect(d.hits.length).toBeGreaterThan(0);
+    expect(d.scoreFloor).toBeCloseTo(0.72, 5);
+  });
+});

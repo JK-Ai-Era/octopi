@@ -465,6 +465,8 @@ export class AgentBuilder {
   private _knowledgeIndexStore?: import('../knowledge/index-store.js').KnowledgeIndexStore;
   private _knowledgeSourceStore?: import('../knowledge/source-store.js').KnowledgeSourceStore;
   private _knowledgeHitLog?: import('../knowledge/hit-log.js').KnowledgeHitLog;
+  /** 独立 Service 路径：仅 grounding（工具走 client tools） */
+  private _knowledgeGroundingPort?: import('../knowledge/retriever.js').AutoGroundPort;
   private _knowledgeGrounding?: {
     budgetTokens?: number;
     budgetRatio?: number;
@@ -737,6 +739,26 @@ export class AgentBuilder {
     this._knowledgeSourceStore = deps.sourceStore;
     this._knowledgeHitLog = deps.hitLog;
     this._knowledgeGrounding = deps.grounding;
+    return this;
+  }
+
+  /**
+   * 仅注入 turn 级 grounding（Knowledge Service client 路径）。
+   * 工具面请另用 createKnowledgeClientTools；本地 store 路径请用 knowledgeRetriever。
+   */
+  knowledgeGrounding(
+    port: import('../knowledge/retriever.js').AutoGroundPort,
+    opts?: {
+      budgetTokens?: number;
+      budgetRatio?: number;
+      maxBudgetTokens?: number;
+      maxChunks?: number;
+      skipIfUserTokensBelow?: number;
+      includePriorUserTurns?: number;
+    },
+  ): this {
+    this._knowledgeGroundingPort = port;
+    this._knowledgeGrounding = opts;
     return this;
   }
 
@@ -1165,10 +1187,11 @@ export class AgentBuilder {
     );
 
     // turn 级 Knowledge grounding（消息插槽 knowledgeGrounding；不进 system）
-    if (this._knowledgeRetriever) {
+    const groundingPort = this._knowledgeGroundingPort ?? this._knowledgeRetriever;
+    if (groundingPort) {
       const { GroundingAssembler } = await import('../knowledge/grounding.js');
       const grounding = new GroundingAssembler({
-        retriever: this._knowledgeRetriever,
+        retriever: groundingPort,
         hitLog: this._knowledgeHitLog,
         budgetTokens: this._knowledgeGrounding?.budgetTokens,
         budgetRatio: this._knowledgeGrounding?.budgetRatio,

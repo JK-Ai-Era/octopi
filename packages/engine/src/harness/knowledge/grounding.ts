@@ -8,7 +8,7 @@ import type { Message } from '@octopi-agent/core/types.js';
 import { getTextContent } from '@octopi-agent/core/types.js';
 import type { ChunkHit, KnowledgeIndexStore } from './index-store.js';
 import type { KnowledgeHitLog } from './hit-log.js';
-import type { KnowledgeRetriever } from './retriever.js';
+import type { AutoGroundPort } from './retriever.js';
 
 /** 消息 metadata.source 标记 */
 export const KNOWLEDGE_GROUNDING_SOURCE = 'knowledgeGrounding' as const;
@@ -26,7 +26,8 @@ export interface GroundingPack {
 }
 
 export interface GroundingAssemblerOptions {
-  retriever: KnowledgeRetriever;
+  /** 自动召回端口：本进程 KnowledgeRetriever 或 ClientKnowledgeGrounding */
+  retriever: AutoGroundPort;
   indexStore?: KnowledgeIndexStore;
   /** 固定预算 token（无 messagesBudget 时用；默认 1200） */
   budgetTokens?: number;
@@ -119,7 +120,7 @@ function latestUserText(messages: Message[]): string {
  * GroundingAssembler — 与 SystemPromptAssembler 平级；Runner 编排
  */
 export class GroundingAssembler {
-  private readonly retriever: KnowledgeRetriever;
+  private readonly retriever: AutoGroundPort;
   private readonly budgetTokens: number;
   private readonly budgetRatio?: number;
   private readonly maxBudgetTokens: number;

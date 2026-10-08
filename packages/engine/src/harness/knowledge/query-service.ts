@@ -10,7 +10,12 @@
 import type { KnowledgeDatabase } from './db.js';
 import type { KnowledgeSourceStore } from './source-store.js';
 import type { KnowledgeIndexStore, IndexedFileRecord } from './index-store.js';
-import type { KnowledgeRetriever, HybridSearchResult } from './retriever.js';
+import type {
+  KnowledgeRetriever,
+  HybridSearchResult,
+  AutoGroundDecision,
+  KnowledgeRecallMode,
+} from './retriever.js';
 import type { KnowledgeSource, KnowledgeSourceId } from './types.js';
 import type { KnowledgeCatalogItem } from './catalog-types.js';
 import {
@@ -32,6 +37,16 @@ export interface SearchQuery {
   keywordOnly?: boolean;
   sourceIds?: string[];
   source?: string;
+  identity?: QueryIdentity;
+}
+
+export interface AutoGroundQuery {
+  agentId: string;
+  q: string;
+  sessionId?: string;
+  limit?: number;
+  /** 覆盖全局/实例 recall */
+  recall?: KnowledgeRecallMode;
   identity?: QueryIdentity;
 }
 
@@ -107,6 +122,8 @@ export interface ReadChunkResult {
  */
 export interface KnowledgeQueryService {
   search(query: SearchQuery): Promise<HybridSearchResult>;
+  /** turn 级自动召回分档（GroundingAssembler / client grounding） */
+  autoGround(query: AutoGroundQuery): Promise<AutoGroundDecision>;
   listSources(query: ListSourcesQuery): Promise<KnowledgeSource[]>;
   listProjects(identity?: QueryIdentity): Promise<Array<Record<string, unknown>>>;
   getSource(
@@ -207,6 +224,17 @@ export class LocalKnowledgeQueryService implements KnowledgeQueryService {
       gatewayId: query.identity?.gatewayId,
       sourceIds: query.sourceIds,
       source: query.source,
+    });
+  }
+
+  async autoGround(query: AutoGroundQuery): Promise<AutoGroundDecision> {
+    return this.deps.retriever.autoGround(query.q, {
+      agentId: query.agentId,
+      sessionId: query.sessionId,
+      limit: query.limit,
+      tenantId: query.identity?.tenantId,
+      gatewayId: query.identity?.gatewayId,
+      ...(query.recall ? { recall: query.recall } : {}),
     });
   }
 

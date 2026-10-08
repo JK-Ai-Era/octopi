@@ -64,6 +64,7 @@ export function isPureReadRoute(method: string, path: string): boolean {
     if (/^\/v1\/sources\/[^/]+\/files$/.test(path)) return true;
     if (/^\/v1\/principals\/[^/]+$/.test(path)) return true;
     if (/^\/v1\/principals\/[^/]+\/search$/.test(path)) return true;
+    if (/^\/v1\/principals\/[^/]+\/ground$/.test(path)) return true;
     if (/^\/v1\/principals\/[^/]+\/stats$/.test(path)) return true;
     if (/^\/v1\/principals\/[^/]+\/catalog$/.test(path)) return true;
     if (/^\/v1\/principals\/[^/]+\/chunks$/.test(path)) return true;
@@ -230,6 +231,28 @@ export async function handleKnowledgeReadHttp(
             q,
             sessionId,
             limit,
+            identity: identityOf(ctx),
+          }),
+        });
+        return true;
+      }
+      if (sub === '/ground') {
+        const q = url.searchParams.get('q') ?? '';
+        const limit = Number(url.searchParams.get('limit') ?? 8);
+        const sessionId = url.searchParams.get('sessionId') ?? undefined;
+        const recallRaw = url.searchParams.get('recall');
+        const recall =
+          recallRaw === 'off' || recallRaw === 'hint' || recallRaw === 'hybrid' || recallRaw === 'inject'
+            ? recallRaw
+            : undefined;
+        json(res, 200, {
+          ok: true,
+          data: await search.autoGround({
+            agentId,
+            q,
+            sessionId,
+            limit,
+            ...(recall ? { recall } : {}),
             identity: identityOf(ctx),
           }),
         });

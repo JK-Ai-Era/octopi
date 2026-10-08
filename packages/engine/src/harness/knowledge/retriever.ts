@@ -3,6 +3,10 @@
  */
 
 import type { EmbeddingProvider } from '../memory/sqlite/embedding.js';
+import {
+  hasEnoughQuerySignal,
+  tokenizeKeywordDetail,
+} from '../memory/sqlite/keyword-search.js';
 import type { ChunkHit, KnowledgeIndexStore } from './index-store.js';
 import type { KnowledgeSourceStore } from './source-store.js';
 
@@ -24,6 +28,8 @@ export interface HybridSearchOptions {
    */
   sourceIds?: string[];
   source?: string;
+  /** 覆盖实例级 recall（agents[].knowledge.recall / 全局） */
+  recall?: KnowledgeRecallMode;
 }
 
 export interface HybridSearchResult {
@@ -47,15 +53,23 @@ export interface AutoGroundDecision {
   scoreFloor: number;
 }
 
+/**
+ * 自动召回端口 — GroundingAssembler 只依赖此口。
+ * 本进程 KnowledgeRetriever 或 Knowledge Client 适配器均可实现。
+ */
+export interface AutoGroundPort {
+  autoGround(query: string, opts: HybridSearchOptions): Promise<AutoGroundDecision>;
+}
+
 export interface KnowledgeRetrieverOptions {
   sourceStore: KnowledgeSourceStore;
   indexStore: KnowledgeIndexStore;
   embeddingProvider?: EmbeddingProvider | null;
   /** hybrid 权重：keyword 相对（默认 0.45） */
   keywordWeight?: number;
-  /** auto-inject 最低分（默认 0.78，语义分归一后） */
+  /** auto-inject 最低分（默认 0.72；绝对相关度空间） */
   injectMinScore?: number;
-  /** hint 最低分（默认 0.55） */
+  /** hint 最低分（默认 0.50） */
   hintMinScore?: number;
   /** coverage 低于此值时抬高地板（默认 0.5） */
   minCoverage?: number;
@@ -89,8 +103,8 @@ export class KnowledgeRetriever {
     this.index = options.indexStore;
     this.embedding = options.embeddingProvider ?? null;
     this.keywordWeight = options.keywordWeight ?? 0.45;
-    this.injectMinScore = options.injectMinScore ?? 0.78;
-    this.hintMinScore = options.hintMinScore ?? 0.55;
+    this.injectMinScore = options.injectMinScore ?? 0.72;
+    this.hintMinScore = options.hintMinScore ?? 0.5;
     this.minCoverage = options.minCoverage ?? 0.5;
     this.maxChunks = options.maxChunks ?? 4;
     this.recall = options.recall ?? 'hybrid';
@@ -205,11 +219,12 @@ export class KnowledgeRetriever {
   }
 
   /**
-   * auto-ground 分档（高分注入 / 中分 hint / 低分忽略）；coverage 低时抬地板
-   * 受 recall 模式约束：off/hint 会压制 inject
+   * auto-ground 分档（高分注入 / 中分 hint / 低分忽略）；indexCoverage 低时抬地板
+   * 受 recall 模式约束：off/hint 会压制 inject；闲聊短查询直接 none
    */
   async autoGround(query: string, opts: HybridSearchOptions): Promise<AutoGroundDecision> {
-    if (this.recall === 'off') {
+    const recall = opts.recall ?? this.recall;
+    if (recall === 'off') {
       return {
         mode: 'none',
         hits: [],
@@ -219,19 +234,30 @@ export class KnowledgeRetriever {
       };
     }
 
+    if (!hasEnoughQuerySignal(tokenizeKeywordDetail(query))) {
+      return {
+        mode: 'none',
+        hits: [],
+        reason: 'query_signal_too_weak',
+        coverage: 1,
+        scoreFloor: this.injectMinScore,
+      };
+    }
+
     const result = await this.search(query, { ...opts, limit: Math.max(opts.limit ?? 8, this.maxChunks * 2) });
     const lowCoverage = result.coverage < this.minCoverage;
     // inject 模式更积极；hint/hybrid 维持默认地板
     const baseFloor =
-      this.recall === 'inject'
+      recall === 'inject'
         ? Math.max(0.15, this.injectMinScore - 0.15)
         : this.injectMinScore;
+    // indexCoverage 不足时更保守（索引完备度，非相关度）
     const scoreFloor = lowCoverage
-      ? Math.min(0.95, baseFloor + 0.12)
+      ? Math.min(0.9, baseFloor + 0.1)
       : baseFloor;
 
     const injectable = result.hits.filter((h) => h.score >= scoreFloor).slice(0, this.maxChunks);
-    if (injectable.length > 0 && this.recall !== 'hint') {
+    if (injectable.length > 0 && recall !== 'hint') {
       return {
         mode: 'inject',
         hits: injectable,
@@ -249,7 +275,7 @@ export class KnowledgeRetriever {
         hits: [],
         hint: `存在与本问相关的材料（${hintable.length} 处）：${titles}`,
         reason:
-          this.recall === 'hint' && injectable.length > 0
+          recall === 'hint' && injectable.length > 0
             ? 'hint_suppress_inject'
             : lowCoverage
               ? 'hint_low_coverage'
@@ -290,36 +316,42 @@ function fuseHits(
   vector: ChunkHit[],
   weights: { keywordWeight: number; vectorWeight: number },
 ): ChunkHit[] {
-  const byId = new Map<string, ChunkHit>();
-  const kMax = Math.max(...keyword.map((h) => h.score), 1);
+  const byId = new Map<
+    string,
+    { hit: ChunkHit; kw: number | null; vec: number | null }
+  >();
   const useKw = weights.keywordWeight > 0;
   const useVec = weights.vectorWeight > 0;
 
   for (const h of keyword) {
     if (!useKw) continue;
-    // 关键词：列表内相对分（0–1）
-    const score = h.score / kMax;
-    const prev = byId.get(h.chunkId);
-    byId.set(h.chunkId, { ...h, score: (prev?.score ?? 0) + score });
+    // 关键词已是绝对覆盖分（0–1），勿再 min-max
+    const score = Math.max(0, Math.min(1, h.score));
+    const prev = byId.get(h.chunkId) ?? { hit: h, kw: null, vec: null };
+    byId.set(h.chunkId, { ...prev, hit: { ...prev.hit, ...h }, kw: score });
   }
   for (const h of vector) {
     if (!useVec) continue;
-    // 向量：用原始 cosine（勿 min-max，否则单条命中恒为 1.0）
     const score = Math.max(0, Math.min(1, h.score));
-    const prev = byId.get(h.chunkId);
-    if (prev) {
-      byId.set(h.chunkId, { ...prev, score: prev.score + score });
-    } else {
-      byId.set(h.chunkId, { ...h, score });
-    }
+    const prev = byId.get(h.chunkId) ?? { hit: h, kw: null, vec: null };
+    byId.set(h.chunkId, { ...prev, hit: { ...prev.hit, ...h }, vec: score });
   }
 
-  const kwIds = new Set(keyword.map((k) => k.chunkId));
-  const vecIds = new Set(vector.map((v) => v.chunkId));
+  const kwW = weights.keywordWeight;
+  const vecW = weights.vectorWeight;
   return [...byId.values()]
-    .map((h) => {
-      const dual = kwIds.has(h.chunkId) && vecIds.has(h.chunkId);
-      return { ...h, score: Math.min(1, dual ? h.score * 0.85 + 0.15 : h.score) };
+    .map(({ hit, kw, vec }) => {
+      let score: number;
+      if (kw != null && vec != null) {
+        // 加权平均，保持 0–1 语义；双高分一致性命中微升
+        score = kwW * kw + vecW * vec;
+        if (kw >= 0.5 && vec >= 0.5) score = Math.min(1, score + 0.05);
+      } else if (kw != null) {
+        score = kw;
+      } else {
+        score = vec ?? 0;
+      }
+      return { ...hit, score };
     })
     .sort((a, b) => b.score - a.score);
 }

@@ -8,7 +8,10 @@ import { SqliteMemoryStore } from '@octopi-agent/engine/harness/memory/sqlite/me
 import { InMemoryMemoryStore } from '@octopi-agent/engine/harness/memory/store.js';
 import {
   tokenizeKeywordQuery,
+  tokenizeKeywordDetail,
   scoreKeywordFields,
+  scoreKeywordCoverage,
+  hasEnoughQuerySignal,
   buildKeywordLikeSql,
 } from '@octopi-agent/engine/harness/memory/sqlite/keyword-search.js';
 import {
@@ -51,6 +54,15 @@ describe('tokenizeKeywordQuery', () => {
     expect(tokens).toContain('栈选');
     expect(tokens).toContain('选择');
   });
+
+  it('hasEnoughQuerySignal：闲聊 false，多概念 true，CJK 长段 true', () => {
+    expect(hasEnoughQuerySignal(tokenizeKeywordDetail('继续'))).toBe(false);
+    expect(hasEnoughQuerySignal(tokenizeKeywordDetail('好的'))).toBe(false);
+    expect(hasEnoughQuerySignal(tokenizeKeywordDetail('ok'))).toBe(false);
+    expect(hasEnoughQuerySignal(tokenizeKeywordDetail('技术栈选择'))).toBe(true);
+    expect(hasEnoughQuerySignal(tokenizeKeywordDetail('sqlite vector'))).toBe(true);
+    expect(hasEnoughQuerySignal(tokenizeKeywordDetail('云锡 经营'))).toBe(true);
+  });
 });
 
 describe('scoreKeywordFields / buildKeywordLikeSql', () => {
@@ -73,6 +85,17 @@ describe('scoreKeywordFields / buildKeywordLikeSql', () => {
     expect(sql).toContain('tags');
     expect(sql).toContain('future_use');
     expect(params.length).toBeGreaterThan(4);
+  });
+
+  it('scoreKeywordCoverage 绝对分：全命中 1.0，半命中 ≈0.5，与结果集无关', () => {
+    const tokens = tokenizeKeywordDetail('alpha beta gamma delta');
+    const full = scoreKeywordCoverage({ content: 'alpha beta gamma delta are here' }, tokens);
+    expect(full).toBeGreaterThanOrEqual(0.9);
+    const half = scoreKeywordCoverage({ content: 'alpha beta only' }, tokens);
+    expect(half).toBeGreaterThan(0.3);
+    expect(half).toBeLessThan(0.7);
+    const lone = scoreKeywordCoverage({ content: 'alpha unrelated stuff' }, tokens);
+    expect(lone).toBeLessThan(0.5);
   });
 });
 

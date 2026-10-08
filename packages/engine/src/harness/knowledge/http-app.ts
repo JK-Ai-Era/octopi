@@ -456,6 +456,29 @@ export class KnowledgeHttpApp {
       json(res, 200, { ok: true, data: result });
     });
 
+    this.route('GET', '/v1/principals/:agentId/ground', async (req, res, ctx, params) => {
+      const url = new URL(req.url ?? '/', 'http://local');
+      await this.write.ensurePrincipal(
+        this.identityOf(ctx),
+        params.agentId!,
+        this.opts.autoRegisterPrincipals ?? true,
+      );
+      const recallRaw = url.searchParams.get('recall');
+      const recall =
+        recallRaw === 'off' || recallRaw === 'hint' || recallRaw === 'hybrid' || recallRaw === 'inject'
+          ? recallRaw
+          : undefined;
+      const result = await this.query().autoGround({
+        agentId: params.agentId!,
+        q: url.searchParams.get('q') ?? '',
+        sessionId: url.searchParams.get('sessionId') ?? undefined,
+        limit: Number(url.searchParams.get('limit') ?? 8),
+        ...(recall ? { recall } : {}),
+        identity: this.identityOf(ctx),
+      });
+      json(res, 200, { ok: true, data: result });
+    });
+
     this.route('GET', '/v1/principals/:agentId/stats', async (_req, res, ctx, params) => {
       await this.write.ensurePrincipal(
         this.identityOf(ctx),

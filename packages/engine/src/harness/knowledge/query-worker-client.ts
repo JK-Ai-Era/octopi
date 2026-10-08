@@ -8,6 +8,7 @@ import { resolveWorkerUrl } from '../../worker-path.js';
 import type {
   KnowledgeQueryService,
   SearchQuery,
+  AutoGroundQuery,
   ListSourcesQuery,
   QueryIdentity,
   PrincipalStats,
@@ -19,7 +20,7 @@ import type {
   QueryWorkerRole,
 } from './query-service.js';
 import type { PromotionCandidate } from './hit-log.js';
-import type { HybridSearchResult } from './retriever.js';
+import type { HybridSearchResult, AutoGroundDecision } from './retriever.js';
 import type { KnowledgeSource, KnowledgeSourceId } from './types.js';
 import type { KnowledgeCatalogItem } from './catalog-types.js';
 import type { IndexedFileRecord } from './index-store.js';
@@ -151,6 +152,10 @@ export class WorkerQueryService implements KnowledgeQueryService {
 
   async search(query: SearchQuery): Promise<HybridSearchResult> {
     return (await this.call({ method: 'search', query })) as HybridSearchResult;
+  }
+
+  async autoGround(query: AutoGroundQuery): Promise<AutoGroundDecision> {
+    return (await this.call({ method: 'autoGround', query }, 20_000)) as AutoGroundDecision;
   }
 
   async listSources(query: ListSourcesQuery): Promise<KnowledgeSource[]> {

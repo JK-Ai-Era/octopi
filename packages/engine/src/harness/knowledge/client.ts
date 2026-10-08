@@ -156,6 +156,36 @@ export class KnowledgeClient {
     );
   }
 
+  /** turn 级自动召回分档（与 Search Worker `autoGround` 同源） */
+  autoGround(
+    agentId: string,
+    q: string,
+    opts?: {
+      sessionId?: string;
+      limit?: number;
+      recall?: 'off' | 'hint' | 'hybrid' | 'inject';
+    },
+  ): Promise<{
+    mode: 'inject' | 'hint' | 'none';
+    hits: unknown[];
+    hint?: string;
+    reason: string;
+    coverage: number;
+    scoreFloor: number;
+  }> {
+    const qs = new URLSearchParams({ q });
+    if (opts?.sessionId) qs.set('sessionId', opts.sessionId);
+    if (opts?.limit != null) qs.set('limit', String(opts.limit));
+    if (opts?.recall) qs.set('recall', opts.recall);
+    return this.request(
+      'GET',
+      `/v1/principals/${encodeURIComponent(agentId)}/ground?${qs}`,
+      undefined,
+      undefined,
+      { read: true },
+    );
+  }
+
   stats(agentId: string): Promise<Record<string, number>> {
     return this.request(
       'GET',
@@ -404,5 +434,37 @@ export class KnowledgeClient {
     return this.request('GET', `/v1/jobs${s ? `?${s}` : ''}`, undefined, undefined, {
       read: true,
     });
+  }
+}
+
+/**
+ * AutoGroundPort 适配器 — Gateway 侧 turn 级 grounding 走 Knowledge Service。
+ * 不打开 knowledge.db；分档逻辑在 Search Worker 的 KnowledgeRetriever.autoGround。
+ */
+export class ClientKnowledgeGrounding {
+  constructor(
+    private readonly client: KnowledgeClient,
+    /** 缺省 recall（agents[].knowledge.recall / 全局）；请求可覆盖 */
+    private readonly defaultRecall?: 'off' | 'hint' | 'hybrid' | 'inject',
+  ) {}
+
+  async autoGround(
+    query: string,
+    opts: {
+      agentId: string;
+      sessionId?: string;
+      limit?: number;
+      tenantId?: string;
+      gatewayId?: string;
+      recall?: 'off' | 'hint' | 'hybrid' | 'inject';
+    },
+  ): Promise<import('./retriever.js').AutoGroundDecision> {
+    await this.client.ensurePrincipal(opts.agentId).catch(() => undefined);
+    const recall = opts.recall ?? this.defaultRecall;
+    return (await this.client.autoGround(opts.agentId, query, {
+      ...(opts.sessionId != null ? { sessionId: opts.sessionId } : {}),
+      ...(opts.limit != null ? { limit: opts.limit } : {}),
+      ...(recall ? { recall } : {}),
+    })) as import('./retriever.js').AutoGroundDecision;
   }
 }

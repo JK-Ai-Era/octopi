@@ -95,6 +95,7 @@ export {
 export type {
   KnowledgeQueryService,
   SearchQuery,
+  AutoGroundQuery,
   ListSourcesQuery,
   QueryIdentity,
   PrincipalStats,
@@ -142,12 +143,13 @@ export { acquireKnowledgeWriterLock } from './writer-lock.js';
 export type { WriterLockHolder } from './writer-lock.js';
 export { parseTextInWorker } from './parse-text-in-worker.js';
 export type { TextParseResult, TextParseWorkerOptions } from './parse-text-in-worker.js';
-export { KnowledgeClient } from './client.js';
+export { KnowledgeClient, ClientKnowledgeGrounding } from './client.js';
 export type { KnowledgeClientOptions } from './client.js';
 export type {
   HybridSearchOptions,
   HybridSearchResult,
   AutoGroundDecision,
+  AutoGroundPort,
   GroundingMode,
   KnowledgeRecallMode,
   KnowledgeRetrieverOptions,

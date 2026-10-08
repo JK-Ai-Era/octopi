@@ -86,6 +86,23 @@ describe('knowledge query worker isolation', () => {
       expect(workerHits.hits.length).toBe(localHits.hits.length);
       expect(workerHits.hits[0]?.text).toContain('unique-query-token-xyz');
 
+      const workerGround = await worker.autoGround({
+        agentId: 'agent-1',
+        q: 'unique query token xyz content',
+        limit: 4,
+      });
+      const localGround = await local.autoGround({
+        agentId: 'agent-1',
+        q: 'unique query token xyz content',
+        limit: 4,
+      });
+      expect(workerGround.mode).toBe(localGround.mode);
+      expect(['inject', 'hint', 'none']).toContain(workerGround.mode);
+      // 闲聊不检索
+      const weak = await worker.autoGround({ agentId: 'agent-1', q: '继续' });
+      expect(weak.mode).toBe('none');
+      expect(weak.reason).toBe('query_signal_too_weak');
+
       const localStats = await local.principalStats('agent-1');
       const workerStats = await worker.principalStats('agent-1');
       expect(workerStats.stats.chunks).toBe(localStats.stats.chunks);

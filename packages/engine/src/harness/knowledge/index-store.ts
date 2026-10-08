@@ -6,11 +6,14 @@
  */
 
 import { randomUUID, createHash } from 'node:crypto';
-import { tokenizeKeywordQuery, scoreKeywordFields } from '../memory/sqlite/keyword-search.js';
-import { cosineSimilarity } from '../memory/sqlite/vector-search.js';
+import {
+  tokenizeKeywordQuery,
+  tokenizeKeywordDetail,
+  scoreKeywordCoverage,
+} from '../memory/sqlite/keyword-search.js';
 import { KnowledgeDatabase } from './db.js';
 import { KnowledgeFts } from './fts.js';
-import { queryBuckets, scoreAnnCandidates, vectorBucket, VECTOR_BUCKETS } from './vector-ann.js';
+import { vectorBucket } from './vector-ann.js';
 import { toVecBlob } from '../memory/sqlite/sqlite-vec.js';
 import { asChunkId, asSourceId } from './types.js';
 import type { KnowledgeChunkId, KnowledgeSourceId } from './types.js';
@@ -1065,6 +1068,7 @@ export class KnowledgeIndexStore {
     },
   ): ChunkHit[] {
     const tokens = tokenizeKeywordQuery(query);
+    const tokenDetail = tokenizeKeywordDetail(query);
     if (tokens.length === 0 || opts.sourceIds.length === 0) return [];
     const limit = opts.limit ?? 8;
     const placeholders = opts.sourceIds.map(() => '?').join(',');
@@ -1139,7 +1143,7 @@ export class KnowledgeIndexStore {
       let h = byChunk.get(r.id);
       if (!h) {
         if (byChunk.size >= limit * 3) continue;
-        const score = scoreKeywordFields({ content: r.text, tags: r.logical_path }, tokens);
+        const score = scoreKeywordCoverage({ content: r.text, tags: r.logical_path }, tokenDetail);
         h = {
           chunkId: r.id,
           fileId: r.file_id,
@@ -1231,69 +1235,69 @@ export class KnowledgeIndexStore {
     };
 
     if (this.db.sqliteVecEnabled) {
+      // 必须走 vec0 ANN（MATCH + k）。禁止 ORDER BY vec_distance_cosine —— 那是全表暴力扫，
+      // 14 万向量会跑到 50s+，直接打穿 query timeout。
       try {
         const ph = Buffer.from(emb.buffer, emb.byteOffset, emb.byteLength);
+        // 先 ANN 过采，再按 Membership 裁剪，最后截断
+        const k = Math.min(Math.max(limit * 4, 64), 1024);
         const knn = this.db.raw
           .prepare(
-            `SELECT c.id AS id, vec_distance_cosine(v.embedding, ?) AS dist FROM knowledge_vec v
+            `SELECT c.id AS id, v.distance AS dist
+             FROM (
+               SELECT chunk_id, distance FROM knowledge_vec
+               WHERE embedding MATCH ? AND k = ?
+             ) v
              ${joinChunks.replace('%s', 'v.chunk_id')} ${where}
-             ORDER BY dist LIMIT ?`,
+             ORDER BY v.distance LIMIT ?`,
           )
-          .all(ph, ...sourceIds, limit) as Array<{ id: string; dist: number }>;
-        if (knn.length > 0) {
-          const scores = new Map(knn.map((r) => [r.id, 1 - Number(r.dist ?? 1)]));
-          return load(knn.map((r) => r.id), scores);
-        }
+          .all(ph, k, ...sourceIds, limit) as Array<{ id: string; dist: number }>;
+        // ANN 完成即权威结果（含 0 命中）；不再退 JS 全表
+        const scores = new Map(knn.map((r) => [r.id, 1 - Number(r.dist ?? 1)]));
+        return load(knn.map((r) => r.id), scores);
       } catch {
-        // 退 JS
+        // 扩展查询失败才落到有界 JS 路径
       }
     }
 
+    // 无 sqlite-vec 的有界 JS 路径：只取 id/embedding，不拉 text
     const rows = this.db.raw
       .prepare(
-        `SELECT e.chunk_id AS chunk_id, e.embedding AS embedding, e.bucket AS bucket,
-                c.id AS id, c.ordinal AS ordinal, c.text AS text,
-                c.start_line AS start_line, c.end_line AS end_line,
-                m.source_id AS source_id, m.logical_path AS logical_path
+        `SELECT e.chunk_id AS chunk_id, e.embedding AS embedding
          FROM knowledge_chunk_embeddings e
          ${joinChunks.replace('%s', 'e.chunk_id')} ${where}
-         LIMIT 50000`,
+         LIMIT 2000`,
       )
       .all(...sourceIds) as Array<{
       chunk_id: string;
       embedding: ArrayBuffer | Uint8Array;
-      bucket: number;
-      id: string;
-      ordinal: number;
-      text: string;
-      start_line: number;
-      end_line: number;
-      source_id: string;
-      logical_path: string;
     }>;
-    if (rows.length > 50_000) {
-      // 闸门：禁止 JS 全扫
-      return [];
-    }
-    const candidates = rows.map((r) => {
-      const buf =
-        r.embedding instanceof Uint8Array
-          ? r.embedding
-          : new Uint8Array(r.embedding as ArrayBuffer);
+    if (rows.length === 0) return [];
+    const qArr = emb instanceof Float32Array ? emb : Float32Array.from(emb);
+    const scored: Array<{ id: string; score: number }> = [];
+    for (const r of rows) {
+      const raw = r.embedding;
+      const buf = raw instanceof Uint8Array ? raw : new Uint8Array(raw as ArrayBuffer);
       const vec = new Float32Array(buf.buffer, buf.byteOffset, buf.byteLength / 4);
-      return { ...r, score: cosineSimilarity(Array.from(emb), Array.from(vec)) };
-    });
-    candidates.sort((a, b) => b.score - a.score);
-    return candidates.slice(0, limit).map((r) => ({
-      chunkId: asChunkId(r.id),
-      sourceId: asSourceId(r.source_id),
-      path: r.logical_path,
-      ordinal: r.ordinal,
-      text: r.text,
-      startLine: r.start_line,
-      endLine: r.end_line,
-      score: r.score,
-    }));
+      if (vec.length !== qArr.length) continue;
+      let dot = 0;
+      let nA = 0;
+      let nB = 0;
+      for (let d = 0; d < qArr.length; d++) {
+        const a = qArr[d]!;
+        const b = vec[d]!;
+        dot += a * b;
+        nA += a * a;
+        nB += b * b;
+      }
+      const den = Math.sqrt(nA) * Math.sqrt(nB);
+      const score = den === 0 ? 0 : dot / den;
+      if (score > 0) scored.push({ id: r.chunk_id, score });
+    }
+    scored.sort((a, b) => b.score - a.score);
+    const top = scored.slice(0, limit);
+    const scores = new Map(top.map((s) => [s.id, s.score]));
+    return load(top.map((s) => s.id), scores);
   }
 
   listChunksMissingEmbedding(

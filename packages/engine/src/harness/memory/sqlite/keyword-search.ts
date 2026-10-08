@@ -81,6 +81,71 @@ export function tokenizeKeywordDetail(text: string): KeywordTokens {
   return { all, strong: [...strong].filter((t) => t.length >= 2), weak: [...weak] };
 }
 
+/**
+ * 查询是否有足够语义信号做自动召回（grounding）。
+ *
+ * - ≥2 个 strong 词 → 有
+ * - 单个 CJK 整段长度 ≥3（如「技术栈选择」）→ 视为多概念
+ * - 否则（「继续」「好的」「ok」）→ 无
+ *
+ * @param tokens - {@link tokenizeKeywordDetail} 结果
+ */
+export function hasEnoughQuerySignal(tokens: KeywordTokens | string[]): boolean {
+  const strong = Array.isArray(tokens) ? tokens : tokens.strong;
+  const usable = strong.filter((t) => t.length >= 2);
+  if (usable.length >= 2) return true;
+  return usable.some((t) => t.length >= 3 && isCjk(t[0] ?? ''));
+}
+
+/**
+ * 绝对关键词相关度（0–1）：查询 token 被正文/路径覆盖的加权比例。
+ *
+ * 与结果集无关，供 inject/hint 地板使用；**不要**再做组内 min-max。
+ * strong 权重 1，weak（CJK 滑窗二元组）0.5；命中字段：content 1.0 / tags 0.6 / 其它 0.3。
+ *
+ * @param fields - 可检索字段
+ * @param tokens - 查询分词
+ * @returns 0–1；无 token 时 0
+ */
+export function scoreKeywordCoverage(
+  fields: KeywordFields,
+  tokens: string[] | KeywordTokens,
+): number {
+  const detail: KeywordTokens = Array.isArray(tokens)
+    ? {
+        all: tokens,
+        strong: tokens,
+        weak: [],
+      }
+    : tokens;
+  const list = detail.all;
+  if (list.length === 0) return 0;
+
+  const weakSet = new Set(detail.weak);
+  const content = (fields.content ?? '').toLowerCase();
+  const futureUse = (fields.futureUse ?? '').toLowerCase();
+  const tags = asText(fields.tags).toLowerCase();
+  const anchors = asText(fields.anchors).toLowerCase();
+  const evidence = (fields.evidence ?? '').toLowerCase();
+
+  let totalW = 0;
+  let hitW = 0;
+  for (const token of list) {
+    if (!token) continue;
+    const tw = weakSet.has(token) ? 0.5 : 1;
+    totalW += tw;
+    if (content.includes(token)) {
+      hitW += tw * 1.0;
+    } else if (tags.includes(token)) {
+      hitW += tw * 0.6;
+    } else if (futureUse.includes(token) || anchors.includes(token) || evidence.includes(token)) {
+      hitW += tw * 0.3;
+    }
+  }
+  if (totalW === 0) return 0;
+  return Math.min(1, hitW / totalW);
+}
+
 function asText(v: string[] | string | null | undefined): string {
   if (v == null) return '';
   if (Array.isArray(v)) return v.join(' ');
