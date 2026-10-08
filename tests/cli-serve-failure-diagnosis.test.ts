@@ -9,7 +9,13 @@ import { describe, test, expect, beforeEach, afterEach } from 'vitest';
 import { mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { diagnoseStartupFailure, readLogTail, getGatewayLogPath } from '../src/cli/daemon.js';
+import {
+  diagnoseStartupFailure,
+  readLogTail,
+  getGatewayLogPath,
+  readKnowledgeLinesSince,
+  waitForKnowledgeLines,
+} from '../src/cli/daemon.js';
 
 let tempDir: string;
 let logPath: string;
@@ -45,6 +51,79 @@ describe('readLogTail', () => {
     writeFileSync(logPath, 'line1\n\nline2\nline3\nline4\n', 'utf-8');
     expect(readLogTail(logPath, 2)).toEqual(['line3', 'line4']);
     expect(readLogTail(logPath)).toHaveLength(4);
+  });
+});
+
+describe('readKnowledgeLinesSince', () => {
+  const marker = '--- octopi serve start 2026-10-08T18:07:31.397Z port=18180 ---';
+
+  test('excludes [Knowledge] lines from previous runs (appended log)', () => {
+    mkdirSync(dirname(logPath), { recursive: true });
+    writeFileSync(
+      logPath,
+      [
+        '[Knowledge] manageLocal child started (port=18280, pid=1)',
+        '[Knowledge] state=ready',
+        '',
+        marker,
+        '[config] Loading config',
+        '[HTTP Adapter] Listening on 127.0.0.1:18180',
+      ].join('\n'),
+      'utf-8',
+    );
+    expect(readKnowledgeLinesSince(logPath, marker)).toEqual([]);
+  });
+
+  test('returns only [Knowledge] lines after the current start marker', () => {
+    mkdirSync(dirname(logPath), { recursive: true });
+    writeFileSync(
+      logPath,
+      [
+        '[Knowledge] stale from previous run',
+        marker,
+        '[HTTP Adapter] Listening on 127.0.0.1:18180',
+        '[Knowledge] manageLocal child started (port=18280, pid=2)',
+        '[Knowledge] state=ready',
+      ].join('\n'),
+      'utf-8',
+    );
+    expect(readKnowledgeLinesSince(logPath, marker)).toEqual([
+      '[Knowledge] manageLocal child started (port=18280, pid=2)',
+      '[Knowledge] state=ready',
+    ]);
+  });
+
+  test('missing file returns empty array', () => {
+    expect(readKnowledgeLinesSince(join(tempDir, 'nope.log'), marker)).toEqual([]);
+  });
+});
+
+describe('waitForKnowledgeLines', () => {
+  const marker = '--- octopi serve start 2026-10-08T18:07:31.397Z port=18180 ---';
+
+  test('returns once a terminal [Knowledge] line appears (startup race)', async () => {
+    mkdirSync(dirname(logPath), { recursive: true });
+    writeFileSync(logPath, `${marker}\n[HTTP Adapter] Listening\n`, 'utf-8');
+
+    // 模拟 Knowledge 在端口就绪后才写日志
+    setTimeout(() => {
+      writeFileSync(
+        logPath,
+        `${marker}\n[HTTP Adapter] Listening\n[Knowledge] state=ready\n`,
+        'utf-8',
+      );
+    }, 150);
+
+    const lines = await waitForKnowledgeLines(logPath, marker, 2_000);
+    expect(lines.some((l) => l.includes('state=ready'))).toBe(true);
+  });
+
+  test('times out with partial/empty lines when Knowledge never logs', async () => {
+    mkdirSync(dirname(logPath), { recursive: true });
+    writeFileSync(logPath, `${marker}\n[HTTP Adapter] Listening\n`, 'utf-8');
+
+    const lines = await waitForKnowledgeLines(logPath, marker, 250);
+    expect(lines).toEqual([]);
   });
 });
 

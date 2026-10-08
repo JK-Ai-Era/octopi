@@ -1,3 +1,23 @@
+## v0.66.1
+
+### fix(serve): report real Knowledge state after startup
+
+**问题**：`octopi serve restart` 打印 `Knowledge: (no [Knowledge] line yet)`，但 gateway.log 里其实已有 `[Knowledge] state=ready`；同时 Gateway `/health` 的 `knowledge` 恒为 `disabled`。
+
+**根因**：
+
+- HTTP 端口先于 Knowledge 就绪，CLI 读日志过早，撞上启动竞态
+- `healthExtras` 访问不存在的 `gateway.knowledgeRuntime`，永远回落 `disabled`（假数据）
+- gateway.log 追加写入，tail 可能混入上次运行的 `[Knowledge]` 行
+
+**修复**：
+
+- Gateway 新增 `getKnowledgeState()` 同步快照（`ready`/`disabled`/`degraded`/`starting`）；Knowledge 与 channel 并行拉起，`Ready` 前拿到终态
+- `/health` 改读真实快照
+- CLI 按本次 `serve start` 标记之后再筛 `[Knowledge]` 行，并短轮询（≤5s）等终态
+
+**测试**：`cli-serve-failure-diagnosis` 扩展日志筛选/等待竞态；新增 `gateway-knowledge-state`。
+
 ## v0.66.0
 
 ### feat(session): auto-generate readable history titles

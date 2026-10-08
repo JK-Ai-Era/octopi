@@ -234,6 +234,10 @@ export class Gateway {
   private knowledgeRuntimePromise?: Promise<
     import('./knowledge-runtime.js').GatewayKnowledgeRuntime
   >;
+  /** start() 完成后的 runtime 实例，供 /health 同步读取 */
+  private knowledgeRuntimeRef?: import('./knowledge-runtime.js').GatewayKnowledgeRuntime;
+  /** 启动过程状态：ref 未就绪时用，避免 /health 把 starting 误报成 disabled */
+  private knowledgeBootState: 'idle' | 'starting' | 'failed' = 'idle';
   /** 产品?*/
   private issueRegistry: IssueRegistry;
   /** 会话?/xxx 命令调用?*/
@@ -400,6 +404,9 @@ export class Gateway {
     console.log(`[Gateway] Agents: ${Array.from(this.agents.keys()).join(', ') || '(none)'}`);
     console.log(`[Gateway] Channels: ${Array.from(this.channels.keys()).join(', ') || '(none)'}`);
 
+    // Knowledge 与 channel 并行拉起：HTTP 就绪时 /health 不必再读到启动窗口
+    const knowledgeBoot = this.bootKnowledgeRuntime();
+
     for (const [name, adapter] of this.channels) {
       console.log(`[Gateway] Starting channel: ${name}`);
       await adapter.start(async (msg) => {
@@ -416,17 +423,35 @@ export class Gateway {
     await this.ensureCommandSources();
 
     await this.runtime.start();
-    // Knowledge Service（manageLocal / 远程）随 Gateway 
+    // Ready 前必须拿到 Knowledge 终态，保证启动日志与 /health 一致
+    await knowledgeBoot;
+    this.started = true;
+    console.log(`[Gateway] Ready. ${this.agents.size} agent(s), ${this.channels.size} channel(s)`);
+  }
+
+  /** 拉起 Knowledge Service（manageLocal / 远程）；失败只降级，不拖死 Gateway */
+  private async bootKnowledgeRuntime(): Promise<void> {
     try {
       const krt = await this.getKnowledgeRuntime();
       console.log(`[Gateway] knowledge runtime: ${krt.state}`);
     } catch (kErr) {
+      this.knowledgeBootState = 'failed';
       console.warn(
         `[Gateway] knowledge runtime start failed: ${kErr instanceof Error ? kErr.message : String(kErr)}`,
       );
     }
-    this.started = true;
-    console.log(`[Gateway] Ready. ${this.agents.size} agent(s), ${this.channels.size} channel(s)`);
+  }
+
+  /**
+   * Knowledge 运行时同步状态快照（供 /health）。不编造 ready。
+   *
+   * @returns starting=启动中；disabled=未启用/未拉起；ready/degraded 来自 runtime 实测
+   */
+  getKnowledgeState(): import('./knowledge-runtime.js').KnowledgeRuntimeState | 'starting' {
+    if (this.knowledgeRuntimeRef) return this.knowledgeRuntimeRef.state;
+    if (this.knowledgeBootState === 'starting') return 'starting';
+    if (this.knowledgeBootState === 'failed') return 'degraded';
+    return 'disabled';
   }
 
   async stop(): Promise<void> {
@@ -441,6 +466,8 @@ export class Gateway {
         () => null as import('./knowledge-runtime.js').GatewayKnowledgeRuntime | null,
       );
       this.knowledgeRuntimePromise = undefined;
+      this.knowledgeRuntimeRef = undefined;
+      this.knowledgeBootState = 'idle';
       if (kn) {
         await kn.stop();
       }
@@ -1633,6 +1660,7 @@ export class Gateway {
     import('./knowledge-runtime.js').GatewayKnowledgeRuntime
   > {
     if (!this.knowledgeRuntimePromise) {
+      this.knowledgeBootState = 'starting';
       this.knowledgeRuntimePromise = (async () => {
         const { GatewayKnowledgeRuntime } = await import('./knowledge-runtime.js');
         const rt = new GatewayKnowledgeRuntime();
@@ -1673,6 +1701,7 @@ export class Gateway {
             ? { sqliteVecExtensionPath: embForVec.sqliteVecExtensionPath }
             : {}),
         });
+        this.knowledgeRuntimeRef = rt;
         void this.startKnowledgeProgressForwarding().catch(() => undefined);
         return rt;
       })();

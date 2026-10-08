@@ -270,6 +270,59 @@ export function readLogTail(logPath: string, maxLines = 20): string[] {
 }
 
 /**
+ * 读取本次 `serve start` 标记之后的 `[Knowledge]` 行。
+ *
+ * gateway.log 是追加写入，不能只看 tail——上一次运行的 `[Knowledge]` 会混进来。
+ *
+ * @param logPath Gateway 日志路径
+ * @param startMarker 本次启动写入的 `--- octopi serve start ... ---` 行
+ * @returns 标记之后的 `[Knowledge]` 行（按时间顺序）
+ */
+export function readKnowledgeLinesSince(logPath: string, startMarker: string): string[] {
+  try {
+    const text = readFileSync(logPath, 'utf-8');
+    const idx = text.lastIndexOf(startMarker);
+    const slice = idx >= 0 ? text.slice(idx + startMarker.length) : text;
+    return slice
+      .split(/\r?\n/)
+      .filter((l) => l.includes('[Knowledge]') && l.trim().length > 0);
+  } catch {
+    return [];
+  }
+}
+
+/** Knowledge 启动终态：ready / disabled / failed / degraded / remote 均会落日志 */
+const KNOWLEDGE_TERMINAL_RE = /state=ready|disabled \(|failed|degraded|remote client/;
+
+/**
+ * 等待本次启动的 `[Knowledge]` 终态行。
+ *
+ * Knowledge 在 HTTP 端口绑定后仍可能未写完日志（启动竞态），故短轮询而非只读一次。
+ *
+ * @param logPath Gateway 日志路径
+ * @param startMarker 本次启动标记
+ * @param timeoutMs 最长等待毫秒（默认 5s）
+ * @returns 已观察到的 `[Knowledge]` 行；超时则返回目前收集到的（可能为空）
+ */
+export async function waitForKnowledgeLines(
+  logPath: string,
+  startMarker: string,
+  timeoutMs = 5_000,
+): Promise<string[]> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const lines = readKnowledgeLinesSince(logPath, startMarker);
+    if (lines.some((l) => KNOWLEDGE_TERMINAL_RE.test(l))) {
+      return lines;
+    }
+    if (Date.now() >= deadline) {
+      return lines;
+    }
+    await delay(200);
+  }
+}
+
+/**
  * 把子进程日志尾部翻译成用户可执行的结论（原因 + 出路 + 证据位置）
  *
  * @param opts.logTail 日志尾部行（readLogTail 结果）
@@ -417,7 +470,8 @@ export async function serveStartCommand(args: CliArgs): Promise<void> {
 
   mkdirSync(dirname(logPath), { recursive: true });
   const logFd = openSync(logPath, 'a');
-  writeSync(logFd, `\n--- octopi serve start ${new Date().toISOString()} port=${port} ---\n`);
+  const startMarker = `--- octopi serve start ${new Date().toISOString()} port=${port} ---`;
+  writeSync(logFd, `\n${startMarker}\n`);
 
   const cliPath = resolve(process.argv[1]);
   const childArgs = ['serve', 'fg'];
@@ -497,8 +551,9 @@ export async function serveStartCommand(args: CliArgs): Promise<void> {
   console.log(`   Port:   ${port}`);
   console.log(`   Log:    ${logPath}`);
 
-  // Knowledge Service 启动状态（manageLocal / 远程 / disabled）
-  const knLines = readLogTail(logPath, 30).filter((l) => l.includes('[Knowledge]'));
+  // Knowledge Service 启动状态（manageLocal / 远程 / disabled）。
+  // HTTP 端口先于 Knowledge 就绪，需等待本次启动的 [Knowledge] 终态，避免竞态误报。
+  const knLines = await waitForKnowledgeLines(logPath, startMarker, 5_000);
   if (knLines.length > 0) {
     for (const line of knLines.slice(-3)) {
       console.log(`   ${line.trim()}`);
@@ -903,14 +958,7 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
       apiKey: httpConfig?.apiKey,
       corsOrigins: httpConfig?.corsOrigins,
       onRequest: (req, res) => webApiRouter.handle(req, res),
-      healthExtras: () => {
-        try {
-          const kn = (gateway as unknown as { knowledgeRuntime?: { state?: string } }).knowledgeRuntime;
-          return { knowledge: kn?.state ?? 'disabled' };
-        } catch {
-          return { knowledge: 'unknown' };
-        }
-      },
+      healthExtras: () => ({ knowledge: gateway.getKnowledgeState() }),
     }));
   }
 

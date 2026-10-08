@@ -1,6 +1,6 @@
 {
   "name": "@octopi-agent/engine",
-  "version": "0.66.0",
+  "version": "0.66.1",
   "description": "Octopi Engine — Harness product domains, library integrations, and embeddable Agent.run()",
   "type": "module",
   "license": "Apache-2.0",
@@ -80,7 +80,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "@octopi-agent/core": "0.66.0",
+    "@octopi-agent/core": "0.66.1",
     "js-yaml": "^4.3.2",
     "zod": "^4.4.3"
   },
