@@ -5,6 +5,8 @@
  * 装配走 createDocumentPortFromConfig：与 Gateway 共用 documents.* 单源。
  */
 import { parentPort, workerData } from 'node:worker_threads';
+import { createHash } from 'node:crypto';
+import { createReadStream } from 'node:fs';
 import {
   createDocumentPortFromConfig,
   type DocumentCapabilityConfig,
@@ -12,6 +14,18 @@ import {
 import { DocumentExtractError } from '../capabilities/document/errors.js';
 import { markdownAdapter, type KnowledgeChunkDraft } from './adapters.js';
 import { buildFtsTokens } from './fts.js';
+
+/** 流式 SHA-256：不在 Engine/本 worker 一次性吞下整文件 Buffer */
+async function hashFileSha256(path: string): Promise<string> {
+  const hash = createHash('sha256');
+  await new Promise<void>((resolve, reject) => {
+    const stream = createReadStream(path);
+    stream.on('data', (chunk) => hash.update(chunk));
+    stream.once('end', () => resolve());
+    stream.once('error', reject);
+  });
+  return hash.digest('hex');
+}
 
 interface WorkerJob {
   path: string;
@@ -48,7 +62,8 @@ async function main(): Promise<void> {
       c.ftsToks = buildFtsTokens(c.text, job.path);
     }
   }
-  parentPort?.postMessage({ ok: true, result, chunks });
+  const contentHash = await hashFileSha256(job.path);
+  parentPort?.postMessage({ ok: true, result, chunks, contentHash });
 }
 
 main().catch((err: unknown) => {

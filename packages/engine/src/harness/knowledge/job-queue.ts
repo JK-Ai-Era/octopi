@@ -12,6 +12,7 @@ export type IngestJobKind = 'parse_file' | 'walk_source' | 'drop_file' | 'embed_
 export interface JobRow {
   id: string;
   source_id: string;
+  file_id: string | null;
   kind: string;
   path: string | null;
   priority: number;
@@ -30,13 +31,25 @@ export interface JobQueueDeps {
 }
 
 export class JobQueue {
+  /** 深度探测节流：watch 突发 800 文件时禁止每次 enqueue 都 COUNT(*) */
+  private depthSampledAt = 0;
+  private depthSample = 0;
+
   constructor(private readonly deps: JobQueueDeps) {}
 
-  hasQueuedJobs(): boolean {
+  private sampleDepth(): number {
+    const now = Date.now();
+    if (now - this.depthSampledAt < 250) return this.depthSample;
+    this.depthSampledAt = now;
     const row = this.deps.db.raw
       .prepare(`SELECT COUNT(*) AS n FROM knowledge_jobs WHERE status = 'queued'`)
       .get() as { n: number };
-    return (row?.n ?? 0) > 0;
+    this.depthSample = row?.n ?? 0;
+    return this.depthSample;
+  }
+
+  hasQueuedJobs(): boolean {
+    return this.sampleDepth() > 0;
   }
 
   countQueuedKinds(kinds: IngestJobKind[], sourceId?: string): number {
@@ -118,11 +131,9 @@ export class JobQueue {
     if (dup?.id) return false;
 
     const now = Date.now();
-    const depth = this.deps.db.raw
-      .prepare(`SELECT COUNT(*) AS n FROM knowledge_jobs WHERE status = 'queued'`)
-      .get() as { n: number };
-    if ((depth?.n ?? 0) >= this.deps.maxQueueDepth) {
-      this.deps.onBackpressure?.(sourceId, depth.n);
+    const depth = this.sampleDepth() + 1;
+    if (depth >= this.deps.maxQueueDepth) {
+      this.deps.onBackpressure?.(sourceId, depth);
     }
 
     this.deps.db.raw
@@ -143,28 +154,36 @@ export class JobQueue {
     return true;
   }
 
-  /** 原子认领：queued → running；中止源不派发 */
-  claimJob(kinds: IngestJobKind[]): JobRow | null {
+  /**
+   * 原子认领：queued → running；中止源不派发。
+   *
+   * @param kinds - 允许的 job 类型
+   * @param accept - 槽位/类型闸门；返回 false 则跳过该条继续找下一条（不永久占队）
+   */
+  claimJob(kinds: IngestJobKind[], accept?: (job: JobRow) => boolean): JobRow | null {
     if (kinds.length === 0) return null;
     const placeholders = kinds.map(() => '?').join(',');
-    const row = this.deps.db.raw
+    const rows = this.deps.db.raw
       .prepare(
         `SELECT * FROM knowledge_jobs
          WHERE status = 'queued' AND kind IN (${placeholders})
            AND source_id NOT IN (SELECT source_id FROM knowledge_source_control WHERE aborted = 1)
          ORDER BY priority ASC, created_at ASC
-         LIMIT 1`,
+         LIMIT 32`,
       )
-      .get(...kinds) as JobRow | undefined;
-    if (!row) return null;
-    const res = this.deps.db.raw
-      .prepare(
-        `UPDATE knowledge_jobs SET status = 'running', updated_at = ?
-         WHERE id = ? AND status = 'queued'`,
-      )
-      .run(Date.now(), row.id);
-    if (Number(res.changes ?? 0) === 0) return null;
-    return row;
+      .all(...kinds) as unknown as JobRow[];
+    for (const row of rows) {
+      if (accept && !accept(row)) continue;
+      const res = this.deps.db.raw
+        .prepare(
+          `UPDATE knowledge_jobs SET status = 'running', updated_at = ?
+           WHERE id = ? AND status = 'queued'`,
+        )
+        .run(Date.now(), row.id);
+      if (Number(res.changes ?? 0) === 0) continue;
+      return row;
+    }
+    return null;
   }
 
   heartbeat(jobId: string): void {

@@ -58,11 +58,11 @@ describe('review fixes', () => {
         displayName: 'walk',
       });
       // 入队一条 parse，再 fromQueue walk：不得被 supersede 取消
-      (
+      await (
         ingest as unknown as {
-          enqueue: (s: string, k: string, p: string | null, pr: number, path?: string) => void;
+          enqueue: (s: string, k: string, p: string | null, pr: number) => Promise<boolean>;
         }
-      ).enqueue(src.id, 'parse_file', join(root, 'a.md'), 2, join(root, 'a.md'));
+      ).enqueue(src.id, 'parse_file', join(root, 'a.md'), 2);
       await ingest.ingestSource(src.id, { fromQueue: true });
       const row = store.database.raw
         .prepare(`SELECT status FROM knowledge_jobs WHERE source_id = ? AND kind = 'parse_file'`)

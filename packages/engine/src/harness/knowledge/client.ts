@@ -10,6 +10,11 @@ export interface KnowledgeClientOptions {
    * 5s 会把正常的「忙」误报成 timeout/503。仍应通过分批让出保证 /health 可达。
    */
   timeoutMs?: number;
+  /**
+   * 只读 API 超时（search/list/stats）。默认 12s：
+   * 查询走 Query Worker，应快速失败并由 UI 重试，而不是拖到 30s。
+   */
+  readTimeoutMs?: number;
 }
 
 export class KnowledgeClient {
@@ -28,9 +33,13 @@ export class KnowledgeClient {
     path: string,
     body?: unknown,
     headers?: Record<string, string>,
+    opts?: { read?: boolean },
   ): Promise<T> {
     const url = `${this.opts.baseUrl.replace(/\/+$/, '')}${path}`;
-    const timeoutMs = this.opts.timeoutMs ?? 30_000;
+    // 显式 timeoutMs 约束所有请求；readTimeoutMs 仅在未设 timeoutMs 时给只读更短缺省
+    const timeoutMs = opts?.read
+      ? (this.opts.readTimeoutMs ?? this.opts.timeoutMs ?? 12_000)
+      : (this.opts.timeoutMs ?? 30_000);
     const ac = new AbortController();
     const timeoutErr = new Error(
       `knowledge_http_timeout ${method} ${path} after ${timeoutMs}ms (service busy or blocked)`,
@@ -61,11 +70,11 @@ export class KnowledgeClient {
   }
 
   health(): Promise<{ ok: boolean; service: string; version: string }> {
-    return this.request('GET', '/health');
+    return this.request('GET', '/health', undefined, undefined, { read: true });
   }
 
   ready(): Promise<{ ready: boolean; sqliteVec: boolean }> {
-    return this.request('GET', '/v1/ready');
+    return this.request('GET', '/v1/ready', undefined, undefined, { read: true });
   }
 
   ensurePrincipal(localAgentId: string, displayName?: string): Promise<unknown> {
@@ -85,7 +94,9 @@ export class KnowledgeClient {
     if (opts?.projectKey) qs.set('projectKey', opts.projectKey);
     if (opts?.sessionId) qs.set('sessionId', opts.sessionId);
     const q = qs.toString();
-    return this.request('GET', `/v1/sources${q ? `?${q}` : ''}`);
+    return this.request('GET', `/v1/sources${q ? `?${q}` : ''}`, undefined, undefined, {
+      read: true,
+    });
   }
 
   createSource(input: Record<string, unknown>): Promise<Record<string, unknown>> {
@@ -115,11 +126,23 @@ export class KnowledgeClient {
     const qs = new URLSearchParams({ q });
     if (opts?.sessionId) qs.set('sessionId', opts.sessionId);
     if (opts?.limit != null) qs.set('limit', String(opts.limit));
-    return this.request('GET', `/v1/principals/${encodeURIComponent(agentId)}/search?${qs}`);
+    return this.request(
+      'GET',
+      `/v1/principals/${encodeURIComponent(agentId)}/search?${qs}`,
+      undefined,
+      undefined,
+      { read: true },
+    );
   }
 
   stats(agentId: string): Promise<Record<string, number>> {
-    return this.request('GET', `/v1/principals/${encodeURIComponent(agentId)}/stats`);
+    return this.request(
+      'GET',
+      `/v1/principals/${encodeURIComponent(agentId)}/stats`,
+      undefined,
+      undefined,
+      { read: true },
+    );
   }
 
   visibility(
@@ -150,7 +173,13 @@ export class KnowledgeClient {
   }
 
   getSource(sourceId: string): Promise<Record<string, unknown>> {
-    return this.request('GET', `/v1/sources/${encodeURIComponent(sourceId)}`);
+    return this.request(
+      'GET',
+      `/v1/sources/${encodeURIComponent(sourceId)}`,
+      undefined,
+      undefined,
+      { read: true },
+    );
   }
 
   /** 中止源任务；省略 sourceId = 中止本 Gateway 全部源 */
@@ -168,15 +197,60 @@ export class KnowledgeClient {
   }
 
   listFiles(sourceId: string): Promise<Array<Record<string, unknown>>> {
-    return this.request('GET', `/v1/sources/${encodeURIComponent(sourceId)}/files`);
+    return this.request(
+      'GET',
+      `/v1/sources/${encodeURIComponent(sourceId)}/files`,
+      undefined,
+      undefined,
+      { read: true },
+    );
+  }
+
+  listFilesPaged(
+    sourceId: string,
+    opts?: {
+      status?: 'indexed' | 'skipped' | 'error' | 'all';
+      ext?: string;
+      q?: string;
+      page?: number;
+      pageSize?: number;
+    },
+  ): Promise<{
+    items: Array<Record<string, unknown>>;
+    total: number;
+    page: number;
+    pageSize: number;
+    statusCounts: { indexed: number; skipped: number; error: number };
+    extCounts: Array<{ ext: string; n: number }>;
+  }> {
+    const qs = new URLSearchParams();
+    if (opts?.status) qs.set('status', opts.status);
+    if (opts?.ext) qs.set('ext', opts.ext);
+    if (opts?.q) qs.set('q', opts.q);
+    if (opts?.page != null) qs.set('page', String(opts.page));
+    if (opts?.pageSize != null) qs.set('pageSize', String(opts.pageSize));
+    const s = qs.toString();
+    return this.request(
+      'GET',
+      `/v1/sources/${encodeURIComponent(sourceId)}/files${s ? `?${s}` : ''}`,
+      undefined,
+      undefined,
+      { read: true },
+    );
   }
 
   catalog(agentId: string): Promise<unknown[]> {
-    return this.request('GET', `/v1/principals/${encodeURIComponent(agentId)}/catalog`);
+    return this.request(
+      'GET',
+      `/v1/principals/${encodeURIComponent(agentId)}/catalog`,
+      undefined,
+      undefined,
+      { read: true },
+    );
   }
 
   promotionCandidates(): Promise<unknown[]> {
-    return this.request('GET', '/v1/promotion-candidates');
+    return this.request('GET', '/v1/promotion-candidates', undefined, undefined, { read: true });
   }
 
   describeSource(sourceId: string): Promise<{ generatedDescription: string; source: string }> {
@@ -194,6 +268,9 @@ export class KnowledgeClient {
     return this.request(
       'GET',
       `/v1/principals/${encodeURIComponent(agentId)}/chunks?${qs}`,
+      undefined,
+      undefined,
+      { read: true },
     );
   }
 
@@ -215,7 +292,13 @@ export class KnowledgeClient {
     assignedProjects: string[];
     hiddenSourceIds: string[];
   }> {
-    return this.request('GET', `/v1/principals/${encodeURIComponent(agentId)}/visibility`);
+    return this.request(
+      'GET',
+      `/v1/principals/${encodeURIComponent(agentId)}/visibility`,
+      undefined,
+      undefined,
+      { read: true },
+    );
   }
 
   sessionVisibility(
@@ -225,6 +308,9 @@ export class KnowledgeClient {
     return this.request(
       'GET',
       `/v1/principals/${encodeURIComponent(agentId)}/session-visibility?sessionId=${encodeURIComponent(sessionId)}`,
+      undefined,
+      undefined,
+      { read: true },
     );
   }
 
@@ -283,6 +369,9 @@ export class KnowledgeClient {
     return this.request(
       'GET',
       `/v1/jobs/control?sourceId=${encodeURIComponent(sourceId)}`,
+      undefined,
+      undefined,
+      { read: true },
     );
   }
 
@@ -291,6 +380,8 @@ export class KnowledgeClient {
     if (query?.sourceId) qs.set('sourceId', query.sourceId);
     if (query?.status) qs.set('status', query.status);
     const s = qs.toString();
-    return this.request('GET', `/v1/jobs${s ? `?${s}` : ''}`);
+    return this.request('GET', `/v1/jobs${s ? `?${s}` : ''}`, undefined, undefined, {
+      read: true,
+    });
   }
 }

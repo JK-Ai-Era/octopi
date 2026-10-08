@@ -169,6 +169,36 @@ async function main(): Promise<void> {
     embeddingProvider = runtime?.provider ?? null;
   }
 
+  // 只读查询：文件库用独立线程（WAL 一写多读）；:memory: 无法跨连接共享，只能同连接
+  const { createKnowledgeQueryService } = await import('./query-service.js');
+  const { KnowledgeSourceStore } = await import('./source-store.js');
+  const { KnowledgeIndexStore } = await import('./index-store.js');
+  const { KnowledgeRetriever } = await import('./retriever.js');
+  let query;
+  if (boot.dbPath === ':memory:') {
+    const sources = new KnowledgeSourceStore(db);
+    const index = new KnowledgeIndexStore(db);
+    const retriever = new KnowledgeRetriever({
+      sourceStore: sources,
+      indexStore: index,
+      embeddingProvider: embeddingProvider as never,
+    });
+    query = await createKnowledgeQueryService({
+      dbPath: boot.dbPath,
+      mode: 'local',
+      local: { db, sources, index, retriever },
+    });
+  } else {
+    query = await createKnowledgeQueryService({
+      dbPath: boot.dbPath,
+      mode: 'worker',
+      embeddingModels: boot.testEmbeddingStub ? null : (boot.embeddingModels ?? null),
+      ...(boot.sqliteVecExtensionPath
+        ? { sqliteVecExtensionPath: boot.sqliteVecExtensionPath }
+        : {}),
+    });
+  }
+
   const app = createKnowledgeHttpApp({
     db,
     tokens: boot.tokens,
@@ -176,6 +206,7 @@ async function main(): Promise<void> {
     documentConfig: boot.documentConfig ?? null,
     embeddingProvider: embeddingProvider as never,
     embed: boot.embed ?? null,
+    query,
   });
   app.startIngestRuntime();
 
@@ -231,17 +262,19 @@ async function main(): Promise<void> {
       return;
     }
     if (msg?.type === 'shutdown') {
-      try {
-        app.dispose();
-      } catch {
-        /* dispose 幂等 */
-      }
-      try {
-        db.close();
-      } catch {
-        /* already closed */
-      }
-      port.postMessage({ type: 'shutdown-ack' });
+      void (async () => {
+        try {
+          await app.dispose();
+        } catch {
+          /* dispose 幂等 */
+        }
+        try {
+          db.close();
+        } catch {
+          /* already closed */
+        }
+        port.postMessage({ type: 'shutdown-ack' });
+      })();
       return;
     }
   });

@@ -121,15 +121,23 @@ describe('knowledge scale fixes', () => {
   it('countQueuedKinds 按源隔离：A 源积压不挡 B 源缺口扫描', async () => {
     const sources = await KnowledgeSourceStore.open({ dbPath: ':memory:' });
     const index = new KnowledgeIndexStore(sources.database);
+    // 两棵不相交目录：共享 File 会合法地只 parse 一次，不能用来测「按源补扫」
+    const dirA = join(root, 'src-a');
+    const dirB = join(root, 'src-b');
+    await mkdir(dirA, { recursive: true });
+    await mkdir(dirB, { recursive: true });
+    for (let i = 0; i < 5; i++) {
+      await writeFile(join(dirB, `b-${i}.md`), `# b ${i}\n\nbody\n`, 'utf8');
+    }
     const srcA = sources.register({
       kind: 'directory',
-      location: root,
+      location: dirA,
       scopeRef: { level: 'global', key: 'global' },
       displayName: 't4-a',
     });
     const srcB = sources.register({
       kind: 'directory',
-      location: join(root, 'docs'),
+      location: dirB,
       scopeRef: { level: 'global', key: 'global' },
       displayName: 't4-b',
     });

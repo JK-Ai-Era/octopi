@@ -37,7 +37,8 @@ Knowledge · Source · KnowledgeScope（Global / Project / Session）· File ide
 | 文件 | 职责 |
 |------|------|
 | `serve.ts` / `http-bridge.ts` | 主线程 HTTP 桥（`/health` + token 鉴权 + SSE） |
-| `engine-thread.ts` / `http-app.ts` | Engine Worker：业务路由 + HttpApp |
+| `engine-thread.ts` / `http-app.ts` | Engine Worker：写路由 + HttpApp |
+| `query-service.ts` / `query-worker.ts` / `query-worker-client.ts` | **只读查询面**（文件库独立线程；`:memory:` Local） |
 | `client.ts` | Gateway 侧 Client |
 | `knowledge-serve-child.ts` / `start-service-process.ts` / `writer-lock.ts` | manageLocal fork 子进程 + 写者锁 |
 | `parse-text-in-worker.ts` / `text-parse-worker.ts` | 文本切块 + FTS token（Worker） |

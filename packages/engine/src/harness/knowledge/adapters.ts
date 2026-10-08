@@ -115,12 +115,16 @@ function pushParagraphs(
       line = line.slice(maxChars);
     }
 
+    // 先断再装：禁止「加完一行才 flush」导致 chunk 超 maxChars 一整行
+    if (buf.length > 0 && bufLen + line.length + 1 > maxChars) {
+      flush(absLine - 1);
+    }
     if (buf.length === 0) bufStart = absLine;
     buf.push(line);
     bufLen += line.length + 1;
 
     const isBlank = line.trim() === '';
-    if ((isBlank && bufLen >= MIN_CHUNK_CHARS) || bufLen >= maxChars) {
+    if (isBlank && bufLen >= MIN_CHUNK_CHARS) {
       flush(absLine);
     }
   }

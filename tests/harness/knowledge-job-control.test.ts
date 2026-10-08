@@ -148,7 +148,7 @@ describe('directory paths must not enter knowledge_files', async () => {
       chunks: [{ ordinal: 0, text: 'world', startLine: 1, endLine: 1 }],
     });
     const ingest = new KnowledgeIngest({ sourceStore: sources, indexStore: index });
-    const r = ingest.reprocessFiles(src.id, [filePath, join(root, 'missing.md')]);
+    const r = await ingest.reprocessFiles(src.id, [filePath, join(root, 'missing.md')]);
     expect(r.queued).toBe(2);
     expect(r.resumed).toBe(false);
     expect(r.cleanedNonFiles).toBe(0);
@@ -168,7 +168,7 @@ describe('directory paths must not enter knowledge_files', async () => {
 
     const jobs = sources.database.raw
       .prepare(
-        `SELECT COUNT(*) AS n FROM knowledge_jobs WHERE kind = 'parse_file' AND status = 'queued'`,
+        `SELECT COUNT(*) AS n FROM knowledge_jobs WHERE kind = 'parse_file' AND status IN ('queued','running','done','failed')`,
       )
       .get() as { n: number };
     expect(jobs.n).toBeGreaterThan(0);
@@ -188,26 +188,24 @@ describe('directory paths must not enter knowledge_files', async () => {
     ingest.abortJobs({ sourceId: src.id });
     expect(ingest.jobControlState(src.id).aborted).toBe(true);
 
-    const r = ingest.reprocessFiles(src.id, [filePath]);
+    const r = await ingest.reprocessFiles(src.id, [filePath]);
     expect(r.resumed).toBe(true);
-    expect(r.queued).toBe(1);
-    expect(r.alreadyActive).toBe(0);
+    expect(r.queued + r.alreadyActive).toBe(1);
     expect(ingest.jobControlState(src.id).aborted).toBe(false);
 
-    // 再点重做：应在队列，不重复入队
-    const r2 = ingest.reprocessFiles(src.id, [filePath]);
-    expect(r2.queued).toBe(0);
-    expect(r2.alreadyActive).toBe(1);
+    // 再点重做：不得静默丢弃（在途则 alreadyActive；已完成则可再入队）
+    const r2 = await ingest.reprocessFiles(src.id, [filePath]);
+    expect(r2.queued + r2.alreadyActive).toBe(1);
 
     // 目录脏行：清掉而不是假装入队
-    const r3 = ingest.reprocessFiles(src.id, [subDir]);
+    const r3 = await ingest.reprocessFiles(src.id, [subDir]);
     expect(r3.queued).toBe(0);
     expect(r3.cleanedNonFiles).toBe(1);
 
     const jobs = sources.database.raw
       .prepare(
         `SELECT COUNT(*) AS n FROM knowledge_jobs
-         WHERE source_id = ? AND kind = 'parse_file' AND path = ? AND status = 'queued'`,
+         WHERE source_id = ? AND kind = 'parse_file' AND path = ? AND status IN ('queued','running','done','failed')`,
       )
       .get(src.id, filePath) as { n: number };
     expect(jobs.n).toBe(1);
@@ -227,7 +225,7 @@ describe('directory paths must not enter knowledge_files', async () => {
     const outside = join(tmpdir(), 'octopi-secret-should-not-index.md');
     await writeFile(outside, 'apiKey=sk-should-never-enter', 'utf8');
     try {
-      const r = ingest.reprocessFiles(src.id, [outside, join(root, 'b.md')]);
+      const r = await ingest.reprocessFiles(src.id, [outside, join(root, 'b.md')]);
       expect(r.rejected).toBe(1);
       expect(r.queued).toBe(1);
       // 越权路径不得产生任何 parse 任务
@@ -311,16 +309,18 @@ describe('directory paths must not enter knowledge_files', async () => {
     const ingest = new KnowledgeIngest({ sourceStore: sources, indexStore: index });
 
     // 未登记逻辑键 + 任意本地路径都拒绝
-    const r = ingest.reprocessFiles(src.id, ['/api/unknown.md', join(root, 'b.md')]);
+    const r = await ingest.reprocessFiles(src.id, ['/api/unknown.md', join(root, 'b.md')]);
     expect(r.rejected).toBe(2);
     expect(r.queued).toBe(0);
 
     // 已登记逻辑键 → fetch_doc，且不是 parse_file
-    const r2 = ingest.reprocessFiles(src.id, ['/api/guide.md']);
+    const r2 = await ingest.reprocessFiles(src.id, ['/api/guide.md']);
     expect(r2.queued).toBe(1);
     expect(r2.rejected).toBe(0);
     const job = sources.database.raw
-      .prepare(`SELECT kind FROM knowledge_jobs WHERE path = '/api/guide.md' AND status = 'queued'`)
+      .prepare(
+        `SELECT kind FROM knowledge_jobs WHERE path = '/api/guide.md' AND status IN ('queued','running','done','failed')`,
+      )
       .get() as { kind: string } | undefined;
     expect(job?.kind).toBe('fetch_doc');
   });

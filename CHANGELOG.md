@@ -1,3 +1,96 @@
+## v0.62.0
+
+### fix(knowledge): purge ∥ parse 竞态 — 同 File 写锁
+
+`purgeFileRowAsync` 在 `dropChunksAsync` 让出窗口内与 `upsertFile` 交错，会留下孤儿 FTS（实测 100–150 行）/ 悬空 membership。同 `identity_key` 的 upsert/purge 改为串行写锁；同步 `purgeFileRow` 无让出、无需加锁。
+
+测试：`knowledge-purge-parse-race`（并行 purge+upsert 后孤儿 FTS=0）。
+
+### perf(knowledge): listFilesPaged counts 下推 SQL 聚合
+
+每页轮询仍会 `SELECT status, logical_path` 全源再在 JS 计 `statusCounts`/`extCounts`。改为 `GROUP BY f.status` + basename 后缀 `GROUP BY`（JSON split，目录名带点不误判）；不再向 JS 搬全表路径。
+
+### fix(knowledge): job.file_id 贯通 — 共享 File 不双 parse，purge 真清 job
+
+`ingest.enqueue` 此前把第 5 参当 `_detail` 丢掉，`JobQueue` 的 `(file_id,kind)` 去重 / purge 清 job / abort 共享 File 守卫全部空转。
+
+- 入队解析并写入真实 `file_id`（membership → identity）；parse/fetch 成功后 `bindJobFileId` 回填
+- 共享 File 在途 parse：只补 Membership，禁止双 parse
+- `reprocessFiles` 改为 async（入队要 await identity）
+- 修 gap 扫描与 fire-and-forget `ingestSource` 的 `sourceLocks` 竞态（补扫被误挡）
+- 测试：`knowledge-job-file-id`；job-control 断言改为不依赖 kick 后的瞬时 status
+
+### fix(knowledge): Query Worker 生命周期 — dispose 真发 shutdown、只读打开不跑 DDL
+
+审查确认：`WorkerQueryService.dispose` 先置 `disposed` 再 `call(shutdown)`，shutdown 永远发不出去；Query Worker 用可写连接跑 `createTables`/升列，与 Engine 争写锁。
+
+- `dispose()`：先 shutdown RPC，再 `disposed`/terminate
+- `KnowledgeDatabase.create({ readOnly, skipMigrate })`；Query Worker 只读打开
+- boot 握手 `id:0` 快速失败（不再 30s 空等）；`engine-thread` shutdown 等 dispose 再 ack
+- 测试：`knowledge-query-worker-lifecycle`
+
+### fix(knowledge): 删除路径全面让出 + drop/prune 双打消除
+
+**问题**：重启后删大目录仍卡。`purgeFileRow`/`dropChunks` 在单 job 内同步连环删 chunk；`pruneByStatScan` 对每个 gone 文件做 `removePathTree` LIKE；gap 扫描又并行 `pruneMissingOnDisk`，与 `drop_file` 双路径删同一子树。Engine 事件循环冻住 → Query Worker 回包也发不出去（间歇 503）。
+
+**修复**：
+
+- `purgeFileRowAsync` / `dropChunksAsync`：chunk 删除批间 `setImmediate`
+- `removeFilesAsync` 每 **5** 个文件让出（原 25）
+- `pruneByStatScan`：单文件 `removeFileAsync`，并发 32→4
+- `drop_file` 在途时跳过 `pruneMissingOnDisk`（禁止双删）
+- 删源 `unclaimAllForSourceAsync` 走异步 purge
+
+### fix(knowledge): 缺口补扫不得被「队列里还有 parse_file」挡住
+
+**问题**：`ensureParseCoverage` 在 `countQueuedKinds(['parse_file','walk_source']) > 0` 时直接 return。Windows 批量拷贝 watch 只抓到少数文件（如 84），其余被门闩挡住，要等这批 parse **完全排空** 才补扫，表现为「待检查 84」过一会突然变 726。
+
+**修复**：
+
+- 仅当 `walk_source` 在途 / source 锁占用时跳过补扫；**individual parse_file 排队不再挡缺口**
+- watch 突发 `requestGapScan`（3s）触发补扫，不等 60s 节流；reconciler 同样认 urgent
+- 测试：`knowledge-parse-gap`
+
+### perf(knowledge): files 分页服务端化 + watch 入队削峰 — 索引期 UI 轮询不再超时
+
+**问题**：UI 每次 `files?page=1&pageSize=50` 经 Gateway **全量 `listFiles`** 再本地分页（1k+ 行 JSON）；watch 突发 800 文件时 `enqueue` 每次 `COUNT(*)`；`upsertFile` 200/批 FTS 写仍偏重。表现为索引期大量 pending / 超时。
+
+**修复**：
+
+- `listFilesPaged` SQL `LIMIT/OFFSET` + 服务端过滤；HttpApp/Client/Gateway 分页接口贯通
+- `JobQueue` 深度探测 250ms 节流（禁止每次 enqueue COUNT）
+- `upsertFile` 默认批 200→**50**，批间 `setImmediate`
+
+### perf(knowledge): 批量删除让出事件循环 — 删大目录不再堵死查询
+
+**问题**：删 800+ 文件目录时 `removePathTree` / `pruneMissing` 同步连环 `DELETE`，Engine 事件循环被占死；Query Worker 即使算完也无法调度 HTTP 回包。前端 `sources`/`stats`/`projects` 超时（Gateway 误标 400/503）。
+
+**修复**：
+
+- `removeFilesAsync` / `removePathTreeAsync` / `pruneMissingAsync` / `clearSourceAsync` / `unclaimAllForSourceAsync`：每 25 条 `setImmediate` 让出
+- `drop_file` job、walk/prune、删源走异步批量路径
+- `GET /v1/projects` 改走 Query Worker（此前仍打 Engine）
+- Gateway sources 列表超时/busy 改 **503**（不再伪装成 400）
+
+### perf(knowledge): 查询与 ingest 写路径隔离 — 多文件/大文件 parse 不再卡死前端
+
+**问题**：Engine Worker 同线程跑 HttpApp 查询 + 同步 `node:sqlite` 写；多文件/大文件 parse 时 upsert/FTS/删旧索引占满事件循环，前端 `search/list/stats` 排队到 `knowledge_http_timeout`。文档路径还在 Engine 上 `readFile` 整文件 + SHA-256。
+
+**结构**：
+
+- **Query Worker**（`query-service` / `query-worker` / `query-worker-client`）：只读 search/list/stats/catalog/chunks/read 独立线程 + 独立连接（WAL 一写多读）；写路径仍只在 Engine ingest。`:memory:` 必须走 Local（内存库无法跨连接共享）
+- **文档 hash 移出 Engine**：extract worker 流式 SHA-256；`parseDocumentFile` 不再整文件读入。`documentPort` 测试路径用 `hashFileStreaming`
+- **dropChunks 分批**（400/批，对齐 FTS）；大文件重解析删旧索引不再单次超大 `IN`
+- **文档抽取并发分级**：`documentParseConcurrency`（默认 2）与总 `parseConcurrency`（默认 8）分离；`claimJob` 支持槽位闸门
+- **超时口径统一**：`parseTextInWorker`/`chunkTextWithFtsToks` 跟随 `parseTimeoutForSize`；Client 只读默认 12s（可被 `timeoutMs` 覆盖）
+- **检索接上 embedding provider**（HttpApp retriever 此前未注入，HTTP hybrid 退化为纯关键词）
+
+### fix(knowledge): textAdapter 无空行大段 chunk 超 maxChars
+
+`pushParagraphs` 加完一行才 flush，单行可把 chunk 顶过 2400；改为装行前预判断开。
+
+**测试**：`knowledge-query-worker`（Worker/Local 一致 + 流式 hash）；knowledge 套件 222 绿。
+
 ## v0.61.2
 
 ### perf(knowledge): HTML 抽正文后再切块，FTS token 防膨胀

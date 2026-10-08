@@ -54,4 +54,37 @@ describe('KnowledgeIndexStore.listFilesPaged', () => {
     expect(q.total).toBe(1);
     expect(q.items[0]?.path).toContain('bad');
   });
+
+  it('extCounts 按 basename 后缀：目录名带点不误判', async () => {
+    const sources = await KnowledgeSourceStore.open({ dbPath: ':memory:' });
+    const index = new KnowledgeIndexStore(sources.database);
+    const src = sources.register({
+      kind: 'directory',
+      location: '/tmp/kn-ext',
+      scopeRef: { level: 'global', key: 'global' },
+      displayName: 'ext',
+    });
+    await index.upsertFile({
+      sourceId: src.id,
+      path: '/tmp/kn-ext/foo.bar/readme',
+      contentHash: 'h1',
+      size: 1,
+      mtime: 1,
+      adapterId: 'md',
+      chunks: [{ ordinal: 0, text: 'x', startLine: 1, endLine: 1 }],
+    });
+    await index.upsertFile({
+      sourceId: src.id,
+      path: '/tmp/kn-ext/foo.bar/note.md',
+      contentHash: 'h2',
+      size: 1,
+      mtime: 1,
+      adapterId: 'md',
+      chunks: [{ ordinal: 0, text: 'y', startLine: 1, endLine: 1 }],
+    });
+    const page = index.listFilesPaged(src.id, { pageSize: 50 });
+    expect(page.extCounts.some((e) => e.ext === 'md' && e.n === 1)).toBe(true);
+    // 目录 foo.bar 不应产生 ext "bar/readme" 或 "bar"
+    expect(page.extCounts.some((e) => e.ext.includes('/') || e.ext === 'bar')).toBe(false);
+  });
 });

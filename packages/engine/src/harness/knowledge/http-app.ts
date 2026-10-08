@@ -14,6 +14,11 @@ import { KnowledgeRetriever } from './retriever.js';
 import { KnowledgeHitLog } from './hit-log.js';
 import { generateKnowledgeDescription } from './describe.js';
 import { matchKnowledgeToken } from './http-bridge.js';
+import {
+  LocalKnowledgeQueryService,
+  type KnowledgeQueryService,
+  type QueryIdentity,
+} from './query-service.js';
 
 export interface KnowledgeServiceToken {
   token: string;
@@ -37,6 +42,11 @@ export interface KnowledgeServiceOptions {
     embedConcurrency?: number;
     embedSecretPolicy?: 'allow' | 'redact' | 'skip';
   } | null;
+  /**
+   * 只读查询面。生产（engine-thread）注入 Query Worker；缺省则用进程内 Local。
+   * 写路径永不经过 query。
+   */
+  query?: KnowledgeQueryService;
 }
 
 export interface AuthContext {
@@ -112,6 +122,26 @@ export class KnowledgeHttpApp {
   private memberships = new Map<string, MembershipStore>();
   private ingests = new Map<string, KnowledgeIngest>();
   private retrievers = new Map<string, KnowledgeRetriever>();
+  private localQuery: KnowledgeQueryService | null = null;
+
+  /** 只读查询面：外部注入的 Worker，或本地 bundle */
+  private query(): KnowledgeQueryService {
+    if (this.opts.query) return this.opts.query;
+    if (!this.localQuery) {
+      const { sources, index, retriever } = this.bundle();
+      this.localQuery = new LocalKnowledgeQueryService({
+        db: this.db,
+        sources,
+        index,
+        retriever,
+      });
+    }
+    return this.localQuery;
+  }
+
+  private identityOf(ctx: AuthContext): QueryIdentity {
+    return { tenantId: ctx.tenantId, gatewayId: ctx.gatewayId };
+  }
 
   /** 懒绑定（单库单实例即可；键保留扩展空间） */
   private bundle(key = 'default'): {
@@ -159,7 +189,11 @@ export class KnowledgeHttpApp {
     }
     let retriever = this.retrievers.get(key);
     if (!retriever) {
-      retriever = new KnowledgeRetriever({ sourceStore: sources, indexStore: index });
+      retriever = new KnowledgeRetriever({
+        sourceStore: sources,
+        indexStore: index,
+        embeddingProvider: this.opts.embeddingProvider ?? null,
+      });
       this.retrievers.set(key, retriever);
     }
     return { sources, index, memberships, ingest, retriever };
@@ -227,15 +261,9 @@ export class KnowledgeHttpApp {
       json(res, 200, { ok: true, data: row });
     });
 
-    this.route('GET', '/v1/projects', (_req, res, ctx) => {
-      const { sources } = this.bundle();
-      json(res, 200, {
-        ok: true,
-        data: sources.listProjects({
-          tenantId: ctx.tenantId,
-          gatewayId: ctx.gatewayId,
-        }),
-      });
+    this.route('GET', '/v1/projects', async (_req, res, ctx) => {
+      const data = await this.query().listProjects(this.identityOf(ctx));
+      json(res, 200, { ok: true, data });
     });
 
     this.route('POST', '/v1/projects', (_req, res, ctx, _p, body) => {
@@ -334,26 +362,19 @@ export class KnowledgeHttpApp {
       });
     });
 
-    this.route('GET', '/v1/sources', (req, res, ctx) => {
-      const { sources } = this.bundle();
+    this.route('GET', '/v1/sources', async (req, res, ctx) => {
       const url = new URL(req.url ?? '/v1/sources', 'http://internal');
       const scopeLevel = url.searchParams.get('scopeLevel');
       const projectKey = url.searchParams.get('projectKey') ?? undefined;
       const sessionId = url.searchParams.get('sessionId') ?? undefined;
-      let list = sources.list().filter((s) => this.sourceVisibleToGateway(s, ctx));
-      if (scopeLevel === 'global' || scopeLevel === 'project' || scopeLevel === 'session') {
-        list = list.filter((s) => s.scopeRef.level === scopeLevel);
-      }
-      if (projectKey != null && projectKey !== '') {
-        list = list.filter((s) => s.scopeRef.key === projectKey);
-      }
-      if (sessionId != null && sessionId !== '') {
-        // 会话过滤必须真过滤：session 级源只保留本会话；其余按 overlay/base
-        list = list.filter((s) => {
-          if (s.scopeRef.level === 'session') return s.scopeRef.key === sessionId;
-          return true;
-        });
-      }
+      const list = await this.query().listSources({
+        ...(scopeLevel === 'global' || scopeLevel === 'project' || scopeLevel === 'session'
+          ? { scopeLevel }
+          : {}),
+        ...(projectKey != null && projectKey !== '' ? { projectKey } : {}),
+        ...(sessionId != null && sessionId !== '' ? { sessionId } : {}),
+        identity: this.identityOf(ctx),
+      });
       json(res, 200, { ok: true, data: list });
     });
 
@@ -406,12 +427,13 @@ export class KnowledgeHttpApp {
       }
     });
 
-    this.route('GET', '/v1/sources/:sid', (_req, res, ctx, params) => {
-      const { sources, index, ingest } = this.bundle();
-      const src = sources.get(params.sid!);
-      if (!src || !this.sourceVisibleToGateway(src, ctx)) {
+    this.route('GET', '/v1/sources/:sid', async (_req, res, ctx, params) => {
+      const { sources, ingest } = this.bundle();
+      const got = await this.query().getSource(params.sid!, this.identityOf(ctx));
+      if (!got) {
         return err(res, 404, 'source_not_found', 'source not found');
       }
+      const src = got.source;
       const identity = { tenantId: ctx.tenantId, gatewayId: ctx.gatewayId };
       const assignedAgentIds =
         src.scopeRef.level === 'project' ? sources.listProjectAgents(src.scopeRef.key) : [];
@@ -419,7 +441,7 @@ export class KnowledgeHttpApp {
         ok: true,
         data: {
           ...src,
-          stats: index.sourceStats(src.id),
+          stats: got.stats,
           jobControl: ingest.jobControlState(src.id),
           assignedAgentIds,
           hiddenForAgentIds: sources.listAgentsHidingSource(src.id, identity),
@@ -450,7 +472,7 @@ export class KnowledgeHttpApp {
       }
     });
 
-    this.route('DELETE', '/v1/sources/:sid', (_req, res, ctx, params) => {
+    this.route('DELETE', '/v1/sources/:sid', async (_req, res, ctx, params) => {
       const { sources, index, memberships } = this.bundle();
       const sid = params.sid!;
       const src = sources.get(sid);
@@ -461,7 +483,9 @@ export class KnowledgeHttpApp {
       if (row?.registered_by && row.registered_by !== ctx.gatewayId) {
         return err(res, 403, 'not_resource_owner', 'not source owner');
       }
-      const purged = memberships.unclaimAllForSource(sid, (fileId) => index.purgeFile(fileId));
+      const purged = await memberships.unclaimAllForSourceAsync(sid, (fileId) =>
+        index.purgeFileAsync(fileId),
+      );
       sources.remove(sid);
       json(res, 200, { ok: true, data: { id: sid, purgedFiles: purged } });
     });
@@ -561,12 +585,40 @@ export class KnowledgeHttpApp {
       json(res, 200, runJobsOpForOwned(ctx, 'resume'));
     });
 
-    this.route('GET', '/v1/sources/:sid/files', (_req, res, ctx, params) => {
+    this.route('GET', '/v1/sources/:sid/files', async (req, res, ctx, params) => {
       if (!this.assertSourceOwner(ctx, params.sid!)) {
         return err(res, 403, 'not_resource_owner', 'not source owner');
       }
-      const { index } = this.bundle();
-      json(res, 200, { ok: true, data: index.listFiles(params.sid!) });
+      const url = new URL(req.url ?? '/', 'http://local');
+      const paged =
+        url.searchParams.has('page') ||
+        url.searchParams.has('pageSize') ||
+        url.searchParams.has('status') ||
+        url.searchParams.has('ext') ||
+        url.searchParams.has('q');
+      if (paged) {
+        const status = url.searchParams.get('status') ?? undefined;
+        const data = await this.query().listFilesPaged(
+          params.sid!,
+          {
+            ...(status === 'indexed' || status === 'skipped' || status === 'error' || status === 'all'
+              ? { status }
+              : {}),
+            ...(url.searchParams.get('ext') ? { ext: url.searchParams.get('ext')! } : {}),
+            ...(url.searchParams.get('q') ? { q: url.searchParams.get('q')! } : {}),
+            ...(url.searchParams.get('page')
+              ? { page: Number(url.searchParams.get('page')) }
+              : {}),
+            ...(url.searchParams.get('pageSize')
+              ? { pageSize: Number(url.searchParams.get('pageSize')) }
+              : {}),
+          },
+          this.identityOf(ctx),
+        );
+        return json(res, 200, { ok: true, data });
+      }
+      const files = await this.query().listFiles(params.sid!, this.identityOf(ctx));
+      json(res, 200, { ok: true, data: files });
     });
 
     this.route('GET', '/v1/principals/:agentId/search', async (req, res, ctx, params) => {
@@ -576,52 +628,38 @@ export class KnowledgeHttpApp {
       const sessionId = url.searchParams.get('sessionId') ?? undefined;
       const agentId = params.agentId!;
       this.ensurePrincipal(ctx, agentId);
-      const { retriever } = this.bundle();
-      const result = await retriever.search(q, {
+      const result = await this.query().search({
         agentId,
+        q,
         sessionId,
         limit,
-        tenantId: ctx.tenantId,
-        gatewayId: ctx.gatewayId,
+        identity: this.identityOf(ctx),
       });
       json(res, 200, { ok: true, data: result });
     });
 
-    this.route('GET', '/v1/principals/:agentId/stats', (_req, res, ctx, params) => {
+    this.route('GET', '/v1/principals/:agentId/stats', async (_req, res, ctx, params) => {
       const agentId = params.agentId!;
       this.ensurePrincipal(ctx, agentId);
-      const { sources, index } = this.bundle();
-      const visible = sources.listVisible(agentId);
-      const stats = this.db.stats();
+      const principal = await this.query().principalStats(agentId, this.identityOf(ctx));
       json(res, 200, {
         ok: true,
         data: {
-          ...stats,
-          visibility: {
-            assignedProjects: sources
-              .list()
-              .filter((s) => s.scopeRef.level === 'project' && sources.isVisible(s, agentId))
-              .map((s) => s.scopeRef.key),
-            hiddenSourceIds: sources.listHidden(agentId, {
-              tenantId: ctx.tenantId,
-              gatewayId: ctx.gatewayId,
-            }),
-          },
-          visibleSources: visible.length,
+          ...principal.stats,
+          visibility: principal.visibility,
+          visibleSources: principal.visibleSources,
         },
       });
-      void index;
     });
 
-    this.route('GET', '/v1/principals/:agentId/catalog', (_req, res, ctx, params) => {
+    this.route('GET', '/v1/principals/:agentId/catalog', async (_req, res, ctx, params) => {
       const agentId = params.agentId!;
       this.ensurePrincipal(ctx, agentId);
-      const { sources } = this.bundle();
-      const items = sources.catalogFor(agentId);
+      const items = await this.query().catalog(agentId, this.identityOf(ctx));
       json(res, 200, { ok: true, data: items });
     });
 
-    this.route('GET', '/v1/principals/:agentId/chunks', (req, res, ctx, params) => {
+    this.route('GET', '/v1/principals/:agentId/chunks', async (req, res, ctx, params) => {
       const agentId = params.agentId!;
       this.ensurePrincipal(ctx, agentId);
       const url = new URL(req.url ?? '/', 'http://local');
@@ -630,15 +668,20 @@ export class KnowledgeHttpApp {
       if (!sourceId || !path) {
         return err(res, 400, 'bad_request', 'sourceId and path required');
       }
-      const { index, sources } = this.bundle();
-      const src = sources.get(sourceId);
-      if (!src || !this.sourceVisibleToGateway(src, ctx) || !sources.isVisible(src, agentId, ctx.sessionId)) {
+      const data = await this.query().listChunks(
+        agentId,
+        sourceId,
+        path,
+        this.identityOf(ctx),
+        ctx.sessionId,
+      );
+      if (data == null) {
         return err(res, 404, 'file_not_found', 'source not found');
       }
-      json(res, 200, { ok: true, data: index.listChunksByPath(sourceId, path) });
+      json(res, 200, { ok: true, data });
     });
 
-    this.route('POST', '/v1/principals/:agentId/read', (_req, res, ctx, params, body) => {
+    this.route('POST', '/v1/principals/:agentId/read', async (_req, res, ctx, params, body) => {
       const agentId = params.agentId!;
       this.ensurePrincipal(ctx, agentId);
       const b = body as {
@@ -646,33 +689,26 @@ export class KnowledgeHttpApp {
         sourceId?: string;
         path?: string;
       };
-      const { index, sources } = this.bundle();
-      if (b?.chunkId) {
-        const row = index.getChunk(b.chunkId);
-        if (!row) return err(res, 404, 'file_not_found', 'chunk not found');
-        const src = sources.get(row.sourceId);
-        if (!src || !sources.isVisible(src, agentId, ctx.sessionId)) {
-          return err(res, 404, 'file_not_found', 'chunk not found');
-        }
-        return json(res, 200, {
-          ok: true,
-          data: {
-            found: true,
-            path: row.path,
-            startLine: row.startLine,
-            endLine: row.endLine,
-            text: row.text,
-          },
-        });
-      }
-      if (!b?.sourceId || !b?.path) {
+      if (!b?.chunkId && (!b?.sourceId || !b?.path)) {
         return err(res, 400, 'bad_request', 'chunkId or (sourceId+path) required');
       }
-      const src = sources.get(b.sourceId);
-      if (!src || !sources.isVisible(src, agentId, ctx.sessionId)) {
+      if (b.chunkId) {
+        const data = await this.query().read(agentId, b, this.identityOf(ctx), ctx.sessionId);
+        if (!data.found) {
+          return err(res, 404, 'file_not_found', 'chunk not found');
+        }
+        return json(res, 200, { ok: true, data });
+      }
+      const chunks = await this.query().listChunks(
+        agentId,
+        b.sourceId!,
+        b.path!,
+        this.identityOf(ctx),
+        ctx.sessionId,
+      );
+      if (chunks == null) {
         return err(res, 404, 'source_not_found', 'source not found');
       }
-      const chunks = index.listChunksByPath(b.sourceId, b.path);
       json(res, 200, {
         ok: true,
         data: {
@@ -685,24 +721,11 @@ export class KnowledgeHttpApp {
       });
     });
 
-    this.route('GET', '/v1/principals/:agentId/visibility', (_req, res, ctx, params) => {
+    this.route('GET', '/v1/principals/:agentId/visibility', async (_req, res, ctx, params) => {
       const agentId = params.agentId!;
       this.ensurePrincipal(ctx, agentId);
-      const { sources } = this.bundle();
-      const identity = { tenantId: ctx.tenantId, gatewayId: ctx.gatewayId };
-      const assigned = sources
-        .list()
-        .filter(
-          (s) => s.scopeRef.level === 'project' && sources.isVisible(s, agentId, undefined, identity),
-        )
-        .map((s) => s.scopeRef.key);
-      json(res, 200, {
-        ok: true,
-        data: {
-          assignedProjects: [...new Set(assigned)],
-          hiddenSourceIds: sources.listHidden(agentId, identity),
-        },
-      });
+      const data = await this.query().visibility(agentId, this.identityOf(ctx));
+      json(res, 200, { ok: true, data });
     });
 
     this.route('POST', '/v1/principals/:agentId/visibility', (_req, res, ctx, params, body) => {
@@ -726,18 +749,19 @@ export class KnowledgeHttpApp {
     this.route(
       'GET',
       '/v1/principals/:agentId/session-visibility',
-      (req, res, ctx, params) => {
+      async (req, res, ctx, params) => {
         const agentId = params.agentId!;
         this.ensurePrincipal(ctx, agentId);
         this.assertOwnPrincipal(ctx, agentId);
         const url = new URL(req.url ?? '/', 'http://local');
         const sessionId = url.searchParams.get('sessionId') ?? '';
         if (!sessionId) return err(res, 400, 'session_required', 'sessionId required');
-        const { sources } = this.bundle();
-        json(res, 200, {
-          ok: true,
-          data: sources.listSessionVisibility(sessionId),
-        });
+        const data = await this.query().sessionVisibility(
+          agentId,
+          sessionId,
+          this.identityOf(ctx),
+        );
+        json(res, 200, { ok: true, data });
       },
     );
 
@@ -992,12 +1016,13 @@ export class KnowledgeHttpApp {
     ingest.startPolling();
   }
 
-  /** 停 ingest 定时器 / watch（Service 关闭） */
-  dispose(): void {
+  /** 停 ingest 定时器 / watch 与 Query Worker（Service 关闭） */
+  dispose(): void | Promise<void> {
     for (const ingest of this.ingests.values()) {
       ingest.dispose();
     }
     this.ingests.clear();
+    return this.opts.query?.dispose();
   }
 
   /**

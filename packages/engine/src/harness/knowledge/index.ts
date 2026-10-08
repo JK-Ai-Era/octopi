@@ -89,6 +89,19 @@ export { assertUrlAllowed, authHeadersForUrl, guardedFetch, isRestrictedIp } fro
 export type { NetworkGuardOptions, FetchResult } from './network-guard.js';
 export { htmlToStructuredText, looksLikeHtml } from './html.js';
 export { KnowledgeRetriever } from './retriever.js';
+export {
+  LocalKnowledgeQueryService,
+  createKnowledgeQueryService,
+} from './query-service.js';
+export type {
+  KnowledgeQueryService,
+  SearchQuery,
+  ListSourcesQuery,
+  QueryIdentity,
+  PrincipalStats,
+  ReadChunkResult,
+  SourceStatsBundle,
+} from './query-service.js';
 export { KnowledgeHttpApp, createKnowledgeHttpApp } from './http-app.js';
 export type { KnowledgeServiceToken, KnowledgeServiceOptions, AuthContext } from './http-app.js';
 export { startKnowledgeService } from './serve.js';

@@ -80,22 +80,26 @@ Knowledge 数据面是 **独立 HTTP Service**（唯一写者），不是 Gatewa
 ```text
 Knowledge Service 进程
 ├── 主线程：listen · GET /health · token 鉴权 · SSE 泵出   ← 禁止业务/SQLite
-├── Engine Worker：HttpApp 路由 · knowledge.db · ingest   ← 允许阻塞
-└── 嵌套 Worker：Document 抽取 · 切块 · FTS token          ← CPU
+├── Engine Worker：HttpApp 写路径 · knowledge.db · ingest   ← 允许阻塞
+├── Query Worker：只读 search/list/stats/catalog…           ← 独立连接（WAL）
+└── 嵌套 Worker：Document 抽取 · 切块 · FTS token · 流式 hash ← CPU
 ```
 
 | 层 | 可否阻塞 | 放什么 |
 |----|----------|--------|
 | 主线程 | **否** | HTTP accept、存活探测、token 内存表鉴权、SSE 写出 |
-| Engine Worker | 是 | 业务路由/handler、同步 `node:sqlite`、FTS/写库、walk、对账 |
-| Parse Worker | 是 | SheetJS/Office 抽取、chunk、CJK 分词 |
+| Engine Worker | 是 | 写路由/handler、同步 `node:sqlite` 写、FTS/写库、walk、对账 |
+| Query Worker | 是 | 只读 SQL（search / list / stats / catalog / chunks）；**禁止写** |
+| Parse Worker | 是 | SheetJS/Office 抽取、chunk、CJK 分词、原件流式 hash |
 
 **工程纪律**（踩坑总结）：
 
 - `/health` 必须主线程应答，否则引擎忙时探活假死。
 - token 鉴权在主线程（`matchKnowledgeToken`），与 Engine 同一函数；业务路由只在 Engine（与 handler 同源）。
+- **查询走 Query Worker**，与 ingest 写事务线程分离；`:memory:` 只能 Local 同连接（Worker 各自空库）。
+- **批量删除必须异步让出**：`removePathTreeAsync` / `pruneMissingAsync` 等每 N 条 `setImmediate`；同步连环 DELETE 会堵死 Engine，Query 回包也发不出去。
 - 禁止假数据桩：禁止 `void arg; return []`、写死 `canAbort: true`、忽略 `scopeLevel` 过滤等（见 `AGENTS.md`）。
-- embedding 与 parse **分槽并行**；勿写成「全部 parse 结束才 embed」。
+- embedding 与 parse **分槽并行**；勿写成「全部 parse 结束才 embed」。文档抽取单独限流（`documentParseConcurrency`）。
 - Electron 宿主 fork 子进程：用 `process.execPath` + `ELECTRON_RUN_AS_NODE=1`，**不要**换捆绑 `node.exe` 当 `execPath`（会切断 IPC）。
 
 ### 2.2 File 本位防重（identity + Membership）
@@ -340,7 +344,7 @@ POST   /api/v1/agents/:id/knowledge/resume
 | **向量检索** | 优先 sqlite-vec KNN；**闸门看 KNN 是否返回**（非 flag）；无 KNN 且 >5 万向量 **禁止 JS 全扫** |
 | **关键词** | FTS5 倒排（CJK 二元组 token）优先，退 SQL LIKE；与 Memory 分词对齐 |
 | **embed 外发** | 默认 `embedSecretPolicy=redact`；审计 `knowledge_embed_secret_log` |
-| **Office/大文件** | 文档抽取走 **worker**（`createDocumentPortFromConfig` 与 Gateway 同源）+ **可取消**超时；禁止同步 xlsx 堵事件循环 |
+| **Office/大文件** | 文档抽取走 **worker**（`createDocumentPortFromConfig` 与 Gateway 同源）+ **可取消**超时 + **流式 hash**；禁止同步 xlsx / 整文件 `readFile` 堵事件循环；`documentParseConcurrency` 限流 |
 | **File identity** | `identity_key`（inode/win fileId/url+authRef）+ Membership；同文件多源只 parse 一次；零认领才 purge |
 | **Service** | **唯一写者** `knowledge.db`；Gateway 只走 Client；`writer.lock`（`wx`）；默认端口 18280 |
 | **启动恢复** | `startIngestRuntime`：恢复 watch、补跑 pending、启动 reconciler/poll |

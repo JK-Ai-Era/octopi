@@ -68,6 +68,7 @@ export function chunkTextWithFtsToks(
   path: string,
   signal?: AbortSignal,
   adapterId?: string,
+  timeoutMs = 60_000,
 ): Promise<KnowledgeChunkDraft[]> {
   return (async () => {
     await acquireTextSlot(DEFAULT_TEXT_CONCURRENCY);
@@ -97,8 +98,8 @@ export function chunkTextWithFtsToks(
         const onAbort = () => finish(() => reject(new Error('parse_aborted')));
         signal?.addEventListener('abort', onAbort, { once: true });
         const timer = setTimeout(() => {
-          finish(() => reject(new Error('text_parse_timeout after 60000ms')));
-        }, 60_000);
+          finish(() => reject(new Error(`text_parse_timeout after ${timeoutMs}ms`)));
+        }, timeoutMs);
         worker.on(
           'message',
           (msg: { ok: boolean; chunks?: KnowledgeChunkDraft[]; error?: { message?: string } }) => {

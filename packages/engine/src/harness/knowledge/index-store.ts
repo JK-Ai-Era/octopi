@@ -83,9 +83,30 @@ export class KnowledgeIndexStore {
   private readonly fts: KnowledgeFts;
   private ftsBackfillPromise: Promise<number> | null = null;
   private vecTableReady = false;
+  /** 同 File 写序（upsert ∥ purge）：键 = identity_key */
+  private readonly writeLocks = new Map<string, Promise<unknown>>();
 
   constructor(private readonly db: KnowledgeDatabase) {
     this.fts = new KnowledgeFts(db);
+  }
+
+  /**
+   * 按 File identity 串行写（upsert / purge）。
+   * purge 在 dropChunks 让出窗口内与 upsert 交错会留下孤儿 FTS / 悬空 membership。
+   */
+  private async withFileWriteLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
+    const prev = this.writeLocks.get(key) ?? Promise.resolve();
+    const run = prev.then(() => fn());
+    const tail = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.writeLocks.set(key, tail);
+    try {
+      return await run;
+    } finally {
+      if (this.writeLocks.get(key) === tail) this.writeLocks.delete(key);
+    }
   }
 
   get ftsAvailable(): boolean {
@@ -156,6 +177,26 @@ export class KnowledgeIndexStore {
     return row.id;
   }
 
+  /** 按 identity_key 查已有 File（不建行）；供 job 入队绑定 file_id */
+  findFileIdByIdentity(identityKey: string, tenantId = 'default'): string | null {
+    const row = this.db.raw
+      .prepare('SELECT id FROM knowledge_files WHERE tenant_id = ? AND identity_key = ?')
+      .get(tenantId, identityKey) as { id: string } | undefined;
+    return row?.id ?? null;
+  }
+
+  /** 只挂 Membership（共享 File：已有 parse 在途时补认领，禁止双 parse） */
+  attachMembership(sourceId: string, fileId: string, path: string): void {
+    const logical = path.replace(/\\/g, '/');
+    this.db.raw
+      .prepare(
+        `INSERT INTO knowledge_memberships (source_id, file_id, logical_path, created_at)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(source_id, logical_path) DO UPDATE SET file_id = excluded.file_id`,
+      )
+      .run(sourceId, fileId, logical, Date.now());
+  }
+
   /**
    * 替换文件索引。chunk/FTS **分批**写入并让出事件循环，
    * 大 xlsx 数千 chunk 不得整文件一个同步事务堵死 Service。
@@ -181,8 +222,31 @@ export class KnowledgeIndexStore {
     },
     opts?: { batchSize?: number; signal?: AbortSignal },
   ): Promise<IndexedFileRecord> {
+    const lockKey = input.identityKey ?? defaultIdentityKey(input.path);
+    return this.withFileWriteLock(lockKey, async () => {
+      return this.upsertFileLocked(input, opts);
+    });
+  }
+
+  private async upsertFileLocked(
+    input: {
+      sourceId: KnowledgeSourceId | string;
+      path: string;
+      contentHash: string;
+      size: number;
+      mtime: number;
+      adapterId: string;
+      chunks: KnowledgeChunkDraft[];
+      identityKey?: string;
+      externalUrl?: string;
+      etag?: string;
+      lastModified?: string;
+    },
+    opts?: { batchSize?: number; signal?: AbortSignal },
+  ): Promise<IndexedFileRecord> {
     const now = Date.now();
-    const batchSize = Math.max(50, opts?.batchSize ?? 200);
+    // 小批量 + 批间让出：200/批 的 FTS 写在 8 文件并发 parse 时仍会长时间占住 Engine
+    const batchSize = Math.max(20, opts?.batchSize ?? 50);
     const signal = opts?.signal;
     const fileId = this.resolveFile(String(input.sourceId), input.path, {
       identityKey: input.identityKey,
@@ -477,42 +541,109 @@ export class KnowledgeIndexStore {
     statusCounts: { indexed: number; skipped: number; error: number };
     extCounts: Array<{ ext: string; n: number }>;
   } {
-    const all = this.listFiles(sourceId);
-    let items = all;
-    if (opts?.status && opts.status !== 'all') {
-      items = items.filter((f) => f.status === opts.status);
-    }
-    if (opts?.ext && opts.ext !== 'all') {
-      const ext = opts.ext.replace(/^\./, '').toLowerCase();
-      items = items.filter((f) => f.path.toLowerCase().endsWith(`.${ext}`));
-    }
-    if (opts?.q) {
-      const q = opts.q.toLowerCase();
-      items = items.filter((f) => f.path.toLowerCase().includes(q));
-    }
-    const statusCounts = { indexed: 0, skipped: 0, error: 0 };
-    const extMap = new Map<string, number>();
-    for (const f of all) {
-      if (f.status === 'indexed' || f.status === 'skipped' || f.status === 'error') {
-        statusCounts[f.status] += 1;
-      }
-      const ext = f.path.includes('.') ? (f.path.split('.').pop() ?? '').toLowerCase() : '';
-      if (ext) extMap.set(ext, (extMap.get(ext) ?? 0) + 1);
-    }
-    const pageSize = opts?.pageSize ?? 50;
+    const pageSize = Math.max(1, Math.min(200, opts?.pageSize ?? 50));
     const page = Math.max(1, opts?.page ?? 1);
-    const start = (page - 1) * pageSize;
-    const slice = items.slice(start, start + pageSize).map((f) => ({
-      ...f,
-      ext: f.path.includes('.') ? (f.path.split('.').pop() ?? '').toLowerCase() : '',
-    }));
+    const status = opts?.status && opts.status !== 'all' ? opts.status : null;
+    const ext =
+      opts?.ext && opts.ext !== 'all'
+        ? opts.ext.replace(/^\./, '').toLowerCase()
+        : null;
+    const q = opts?.q?.trim().toLowerCase() || null;
+
+    // SQL 过滤 + LIMIT/OFFSET：禁止全量拉表再在内存分页（1k+ 文件时 UI 轮询会拖垮 Engine/回包）
+    const where: string[] = ['m.source_id = ?'];
+    const params: Array<string | number> = [String(sourceId)];
+    if (status) {
+      where.push('f.status = ?');
+      params.push(status);
+    }
+    if (ext) {
+      where.push("LOWER(m.logical_path) LIKE ? ESCAPE '\\'");
+      params.push(`%.${ext.replace(/[\\%_]/g, (c) => `\\${c}`)}`);
+    }
+    if (q) {
+      where.push("LOWER(m.logical_path) LIKE ? ESCAPE '\\'");
+      params.push(`%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`);
+    }
+    const whereSql = where.join(' AND ');
+
+    const totalRow = this.db.raw
+      .prepare(
+        `SELECT COUNT(*) AS n FROM knowledge_memberships m
+         JOIN knowledge_files f ON f.id = m.file_id
+         WHERE ${whereSql}`,
+      )
+      .get(...params) as { n: number };
+
+    const rows = this.db.raw
+      .prepare(
+        `SELECT f.*, m.source_id AS membership_source_id, m.logical_path AS logical_path
+         FROM knowledge_memberships m
+         JOIN knowledge_files f ON f.id = m.file_id
+         WHERE ${whereSql}
+         ORDER BY m.logical_path
+         LIMIT ? OFFSET ?`,
+      )
+      .all(...params, pageSize, (page - 1) * pageSize) as Array<Record<string, unknown>>;
+
+    // counts 走 SQL 聚合：禁止把整源 logical_path 拉进 JS 再计数（UI 每页轮询会打满 Engine）
+    const statusCounts = { indexed: 0, skipped: 0, error: 0 };
+    const statusRows = this.db.raw
+      .prepare(
+        `SELECT f.status AS status, COUNT(*) AS n
+         FROM knowledge_memberships m
+         JOIN knowledge_files f ON f.id = m.file_id
+         WHERE m.source_id = ?
+         GROUP BY f.status`,
+      )
+      .all(String(sourceId)) as Array<{ status: string; n: number }>;
+    for (const r of statusRows) {
+      if (r.status === 'indexed' || r.status === 'skipped' || r.status === 'error') {
+        statusCounts[r.status] = Number(r.n ?? 0);
+      }
+    }
+
+    // ext：basename → 后缀（目录名带点不影响）；JSON split 规避 SQLite 无 rsplit
+    const extRows = this.db.raw
+      .prepare(
+        `SELECT lower(ext) AS ext, COUNT(*) AS n FROM (
+           SELECT
+             CASE
+               WHEN instr(name, '.') = 0 OR name IS NULL THEN ''
+               ELSE json_extract('["' || replace(name, '.', '","') || '"]', '$[#-1]')
+             END AS ext
+           FROM (
+             SELECT
+               json_extract(
+                 '["' || replace(replace(COALESCE(m.logical_path, ''), char(92), '","'), '/', '","') || '"]',
+                 '$[#-1]'
+               ) AS name
+             FROM knowledge_memberships m
+             WHERE m.source_id = ?
+           )
+         )
+         WHERE ext IS NOT NULL AND ext != ''
+         GROUP BY ext`,
+      )
+      .all(String(sourceId)) as Array<{ ext: string; n: number }>;
+    const extCounts = extRows
+      .filter((r) => r.ext)
+      .map((r) => ({ ext: r.ext, n: Number(r.n ?? 0) }));
+
+    const items = rows.map((row) => {
+      const f = rowToFile(row);
+      const extName = f.path.includes('.')
+        ? (f.path.split('.').pop() ?? '').toLowerCase()
+        : '';
+      return { ...f, ext: extName };
+    });
     return {
-      items: slice,
-      total: items.length,
+      items,
+      total: Number(totalRow?.n ?? 0),
       page,
       pageSize,
       statusCounts,
-      extCounts: [...extMap.entries()].map(([ext, n]) => ({ ext, n })),
+      extCounts,
     };
   }
 
@@ -540,7 +671,7 @@ export class KnowledgeIndexStore {
     return out;
   }
 
-  /** 解绑 path；File 仅在零认领时 purge */
+  /** 解绑 path；File 仅在零认领时 purge（单文件同步语义，供测试/轻量路径） */
   removeFile(sourceId: KnowledgeSourceId | string, path: string): void {
     const logical = path.replace(/\\/g, '/');
     const row = this.db.raw
@@ -560,8 +691,80 @@ export class KnowledgeIndexStore {
     if (n === 0) this.purgeFileRow(row.file_id);
   }
 
+  /**
+   * 解绑 path + 可能的 purge（异步让出）。
+   * 单文件 purge 也可能删数千 chunk——必须让出，否则 Engine 调度不了 HTTP 回包。
+   */
+  async removeFileAsync(
+    sourceId: KnowledgeSourceId | string,
+    path: string,
+    opts?: { yieldEvery?: number },
+  ): Promise<void> {
+    const logical = path.replace(/\\/g, '/');
+    const row = this.db.raw
+      .prepare(
+        `SELECT file_id FROM knowledge_memberships WHERE source_id = ? AND logical_path = ?`,
+      )
+      .get(String(sourceId), logical) as { file_id: string } | undefined;
+    this.db.raw
+      .prepare('DELETE FROM knowledge_memberships WHERE source_id = ? AND logical_path = ?')
+      .run(String(sourceId), logical);
+    if (!row) return;
+    const n = (
+      this.db.raw
+        .prepare('SELECT COUNT(*) AS n FROM knowledge_memberships WHERE file_id = ?')
+        .get(row.file_id) as { n: number }
+    ).n;
+    if (n === 0) await this.purgeFileRowAsync(row.file_id, opts);
+  }
+
+  /**
+   * 批量解绑：每 `yieldEvery` 条让出事件循环。
+   * 删大目录（数百文件）时同步连环 DELETE 会堵死 Engine，HTTP/Query 回包都无法调度。
+   */
+  async removeFilesAsync(
+    sourceId: KnowledgeSourceId | string,
+    paths: string[],
+    opts?: { yieldEvery?: number },
+  ): Promise<number> {
+    const yieldEvery = Math.max(1, opts?.yieldEvery ?? 5);
+    let n = 0;
+    for (let i = 0; i < paths.length; i++) {
+      await this.removeFileAsync(sourceId, paths[i]!, opts);
+      n += 1;
+      if ((i + 1) % yieldEvery === 0) {
+        await new Promise<void>((r) => setImmediate(r));
+      }
+    }
+    return n;
+  }
+
   removeFiles(sourceId: KnowledgeSourceId | string, paths: string[]): void {
     for (const p of paths) this.removeFile(sourceId, p);
+  }
+
+  /**
+   * 删除 path 及子树：先收集 logical_path，再分批异步解绑 + purge。
+   */
+  async removePathTreeAsync(
+    sourceId: KnowledgeSourceId | string,
+    path: string,
+    opts?: { yieldEvery?: number },
+  ): Promise<number> {
+    const prefix = path.replace(/\\/g, '/').replace(/\/+$/, '');
+    const rows = this.db.raw
+      .prepare(
+        `SELECT logical_path FROM knowledge_memberships
+         WHERE source_id = ? AND (logical_path = ? OR logical_path LIKE ? ESCAPE '\\')`,
+      )
+      .all(String(sourceId), prefix, `${prefix.replace(/[\\%_]/g, (c) => `\\${c}`)}/%`) as Array<{
+      logical_path: string;
+    }>;
+    return this.removeFilesAsync(
+      sourceId,
+      rows.map((r) => r.logical_path),
+      opts,
+    );
   }
 
   removePathTree(sourceId: KnowledgeSourceId | string, path: string): void {
@@ -575,6 +778,39 @@ export class KnowledgeIndexStore {
       logical_path: string;
     }>;
     for (const r of rows) this.removeFile(sourceId, r.logical_path);
+  }
+
+  /**
+   * 清空源认领：分批 purge，避免一次清数千 File 堵死事件循环。
+   */
+  async clearSourceAsync(
+    sourceId: KnowledgeSourceId | string,
+    opts?: { yieldEvery?: number },
+  ): Promise<number> {
+    const yieldEvery = Math.max(1, opts?.yieldEvery ?? 5);
+    const rows = this.db.raw
+      .prepare('SELECT file_id FROM knowledge_memberships WHERE source_id = ?')
+      .all(String(sourceId)) as Array<{ file_id: string }>;
+    this.db.raw
+      .prepare('DELETE FROM knowledge_memberships WHERE source_id = ?')
+      .run(String(sourceId));
+    let purged = 0;
+    for (let i = 0; i < rows.length; i++) {
+      const fileId = rows[i]!.file_id;
+      const n = (
+        this.db.raw
+          .prepare('SELECT COUNT(*) AS n FROM knowledge_memberships WHERE file_id = ?')
+          .get(fileId) as { n: number }
+      ).n;
+      if (n === 0) {
+        await this.purgeFileRowAsync(fileId, opts);
+        purged += 1;
+      }
+      if ((i + 1) % yieldEvery === 0) {
+        await new Promise<void>((r) => setImmediate(r));
+      }
+    }
+    return purged;
   }
 
   clearSource(sourceId: KnowledgeSourceId | string): void {
@@ -603,6 +839,10 @@ export class KnowledgeIndexStore {
     this.purgeFileRow(fileId);
   }
 
+  async purgeFileAsync(fileId: string, opts?: { yieldEvery?: number }): Promise<void> {
+    await this.purgeFileRowAsync(fileId, opts);
+  }
+
   purgeSource(sourceId: KnowledgeSourceId | string): void {
     this.clearSource(sourceId);
   }
@@ -619,14 +859,58 @@ export class KnowledgeIndexStore {
     this.db.raw.prepare('DELETE FROM knowledge_files WHERE id = ?').run(fileId);
   }
 
+  /**
+   * purge + 分批让出。大文件数千 chunk 时 dropChunks 同步段仍可能秒级——批间 setImmediate。
+   * 与 upsertFile 共用 File 写锁，避免让出窗口被 parse 插入后残留孤儿 FTS。
+   */
+  private async purgeFileRowAsync(
+    fileId: string,
+    opts?: { yieldEvery?: number },
+  ): Promise<void> {
+    const keyRow = this.db.raw
+      .prepare('SELECT identity_key FROM knowledge_files WHERE id = ?')
+      .get(fileId) as { identity_key?: string } | undefined;
+    const lockKey = keyRow?.identity_key ?? `id:${fileId}`;
+    await this.withFileWriteLock(lockKey, async () => {
+      const oldIds = (
+        this.db.raw
+          .prepare('SELECT id FROM knowledge_chunks WHERE file_id = ?')
+          .all(fileId) as Array<{ id: string }>
+      ).map((r) => r.id);
+      await this.dropChunksAsync(oldIds);
+      this.db.raw.prepare('DELETE FROM knowledge_chunks WHERE file_id = ?').run(fileId);
+      this.db.raw.prepare('DELETE FROM knowledge_jobs WHERE file_id = ?').run(fileId);
+      this.db.raw.prepare('DELETE FROM knowledge_files WHERE id = ?').run(fileId);
+      await new Promise<void>((r) => setImmediate(r));
+    });
+    void opts;
+  }
+
   private dropChunks(chunkIds: string[]): void {
     if (chunkIds.length === 0) return;
-    const ph = chunkIds.map(() => '?').join(',');
+    // 分批：大文件重解析时数千 id 一次 IN 会长时间占住 Engine 事件循环
+    for (let i = 0; i < chunkIds.length; i += 400) {
+      this.dropChunksBatch(chunkIds.slice(i, i + 400));
+    }
+  }
+
+  private async dropChunksAsync(chunkIds: string[]): Promise<void> {
+    if (chunkIds.length === 0) return;
+    for (let i = 0; i < chunkIds.length; i += 400) {
+      this.dropChunksBatch(chunkIds.slice(i, i + 400));
+      // 批间必须让出：否则单文件数千 chunk 仍会冻住 Engine 数秒
+      await new Promise<void>((r) => setImmediate(r));
+    }
+  }
+
+  private dropChunksBatch(batch: string[]): void {
+    if (batch.length === 0) return;
+    const ph = batch.map(() => '?').join(',');
     this.db.raw
       .prepare(`DELETE FROM knowledge_chunk_embeddings WHERE chunk_id IN (${ph})`)
-      .run(...chunkIds);
-    this.deleteKnowledgeVec(chunkIds);
-    this.fts.removeMany(chunkIds);
+      .run(...batch);
+    this.deleteKnowledgeVec(batch);
+    this.fts.removeMany(batch);
   }
 
   private deleteKnowledgeVec(chunkIds: string[]): void {
@@ -641,6 +925,30 @@ export class KnowledgeIndexStore {
     } catch {
       // 无 vec 表时忽略
     }
+  }
+
+  /**
+   * 对账差量删除：批量路径，内部让出事件循环。
+   *
+   * @returns 删除条数
+   */
+  async pruneMissingAsync(
+    sourceId: KnowledgeSourceId | string,
+    keepPaths: ReadonlySet<string> | Iterable<string>,
+    opts?: { allowEmptyKeep?: boolean; yieldEvery?: number },
+  ): Promise<number> {
+    // keep 可能来自 discover（Windows 反斜杠）；logical_path 存的是正斜杠。两边都归一再比。
+    const normalize = (p: string): string => p.replace(/\\/g, '/');
+    const keep = new Set(
+      Array.from(keepPaths instanceof Set ? keepPaths : new Set(keepPaths), normalize),
+    );
+    // discover 成功且目录为空时允许清空（契约 §6.2）；空 keep 默认 no-op 防误清
+    if (keep.size === 0 && !opts?.allowEmptyKeep) return 0;
+    const files = this.listFiles(sourceId);
+    const gone = files.filter((f) => !keep.has(normalize(f.path))).map((f) => f.path);
+    if (gone.length === 0) return 0;
+    await this.removeFilesAsync(sourceId, gone, opts);
+    return gone.length;
   }
 
   pruneMissing(

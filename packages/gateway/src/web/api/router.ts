@@ -523,9 +523,14 @@ export class WebApiRouter {
           });
           return this.json(res, 200, { ok: true, data: sources });
         } catch (err) {
-          return this.json(res, 400, {
+          const message = err instanceof Error ? err.message : String(err);
+          const status =
+            /knowledge_http_timeout|knowledge_query_timeout|busy|disabled/i.test(message)
+              ? 503
+              : 400;
+          return this.json(res, status, {
             ok: false,
-            error: err instanceof Error ? err.message : String(err),
+            error: message,
           });
         }
       }

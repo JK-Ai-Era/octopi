@@ -1796,7 +1796,7 @@ export class Gateway {
     return files as unknown as import('@octopi-agent/engine/harness/knowledge/index-store.js').IndexedFileRecord[];
   }
 
-  /** 源文件分页查管理?Service 全量后本地分?*/
+  /** 源文件分页：走 Service 服务端分页（禁止全量 listFiles 再本地分） */
   async listKnowledgeSourceFilesPaged(
     sourceId: string,
     opts?: {
@@ -1819,44 +1819,18 @@ export class Gateway {
     extCounts: Array<{ ext: string; n: number }>;
   }> {
     const client = await this.getKnowledgeClient();
-    const all = (await client.listFiles(sourceId)) as unknown as Array<
-      import('@octopi-agent/engine/harness/knowledge/index-store.js').IndexedFileRecord
-    >;
-    let items = all;
-    if (opts?.status && opts.status !== 'all') {
-      items = items.filter((f) => f.status === opts.status);
-    }
-    if (opts?.ext && opts.ext !== 'all') {
-      const ext = opts.ext.replace(/^\./, '').toLowerCase();
-      items = items.filter((f) => f.path.toLowerCase().endsWith(`.${ext}`));
-    }
-    if (opts?.q) {
-      const q = opts.q.toLowerCase();
-      items = items.filter((f) => f.path.toLowerCase().includes(q));
-    }
-    const statusCounts = { indexed: 0, skipped: 0, error: 0 };
-    const extMap = new Map<string, number>();
-    for (const f of all) {
-      if (f.status === 'indexed' || f.status === 'skipped' || f.status === 'error') {
-        statusCounts[f.status] += 1;
-      }
-      const ext = f.path.includes('.') ? (f.path.split('.').pop() ?? '').toLowerCase() : '';
-      if (ext) extMap.set(ext, (extMap.get(ext) ?? 0) + 1);
-    }
-    const pageSize = opts?.pageSize ?? 50;
-    const page = Math.max(1, opts?.page ?? 1);
-    const start = (page - 1) * pageSize;
-    return {
-      items: items.slice(start, start + pageSize).map((f) => ({
-        ...f,
-        ext: f.path.includes('.') ? (f.path.split('.').pop() ?? '').toLowerCase() : '',
-      })),
-      total: items.length,
-      page,
-      pageSize,
-      statusCounts,
-      extCounts: [...extMap.entries()].map(([ext, n]) => ({ ext, n })),
-    };
+    return client.listFilesPaged(sourceId, opts) as unknown as Promise<{
+      items: Array<
+        import('@octopi-agent/engine/harness/knowledge/index-store.js').IndexedFileRecord & {
+          ext: string;
+        }
+      >;
+      total: number;
+      page: number;
+      pageSize: number;
+      statusCounts: { indexed: number; skipped: number; error: number };
+      extCounts: Array<{ ext: string; n: number }>;
+    }>;
   }
 
   /**

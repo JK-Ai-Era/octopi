@@ -158,6 +158,36 @@ export class MembershipStore {
 
   /**
    * 解绑 Source：删其全部 Membership，并对失去认领的 File 做 purge。
+   * 大源删除分批让出，避免同步连环 purge 堵死 Engine。
+   *
+   * @returns purge 的 fileId 列表
+   */
+  async unclaimAllForSourceAsync(
+    sourceId: string,
+    purge: (fileId: string) => void | Promise<void>,
+    opts?: { yieldEvery?: number },
+  ): Promise<string[]> {
+    const yieldEvery = Math.max(1, opts?.yieldEvery ?? 5);
+    const files = this.db.raw
+      .prepare(`SELECT DISTINCT file_id FROM knowledge_memberships WHERE source_id = ?`)
+      .all(sourceId) as Array<{ file_id: string }>;
+    this.db.raw.prepare(`DELETE FROM knowledge_memberships WHERE source_id = ?`).run(sourceId);
+    const purged: string[] = [];
+    for (let i = 0; i < files.length; i++) {
+      const f = files[i]!;
+      if (this.claimCount(f.file_id) === 0) {
+        await purge(f.file_id);
+        purged.push(f.file_id);
+      }
+      if ((i + 1) % yieldEvery === 0) {
+        await new Promise<void>((r) => setImmediate(r));
+      }
+    }
+    return purged;
+  }
+
+  /**
+   * 解绑 Source：删其全部 Membership，并对失去认领的 File 做 purge。
    * 返回 purge 的 fileId 列表。
    */
   unclaimAllForSource(sourceId: string, purge: (fileId: string) => void): string[] {

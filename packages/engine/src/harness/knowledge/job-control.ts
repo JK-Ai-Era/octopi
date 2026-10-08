@@ -30,12 +30,16 @@ export class KnowledgeJobControl {
     `);
   }
 
-  /** 是否处于中止态（DB 权威；进程重启后仍生效） */
+  /** 是否处于中止态（DB 权威；进程重启后仍生效）。连接已关时视为停止调度 */
   isAborted(sourceId: string): boolean {
-    const row = this.db.raw
-      .prepare('SELECT aborted FROM knowledge_source_control WHERE source_id = ?')
-      .get(sourceId) as { aborted?: number } | undefined;
-    return Number(row?.aborted ?? 0) === 1;
+    try {
+      const row = this.db.raw
+        .prepare('SELECT aborted FROM knowledge_source_control WHERE source_id = ?')
+        .get(sourceId) as { aborted?: number } | undefined;
+      return Number(row?.aborted ?? 0) === 1;
+    } catch {
+      return true;
+    }
   }
 
   /** 本进程 AbortSignal（无记录时惰性创建未中止的纪元） */

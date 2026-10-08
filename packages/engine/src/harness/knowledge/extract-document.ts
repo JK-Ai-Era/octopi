@@ -51,6 +51,8 @@ export interface DocumentExtractWorkerResult {
   result: ExtractResult;
   /** 预计算 ftsToks 的切块（markdown 空时为空数组） */
   chunks: KnowledgeChunkDraft[];
+  /** 原件字节 SHA-256（worker 内流式计算，禁止在 Engine 读全文件） */
+  contentHash: string;
 }
 
 /**
@@ -110,11 +112,16 @@ export function extractDocumentInWorker(
         ok: boolean;
         result?: ExtractResult;
         chunks?: KnowledgeChunkDraft[];
+        contentHash?: string;
         error?: unknown;
       }) => {
-        if (msg?.ok && msg.result) {
+        if (msg?.ok && msg.result && msg.contentHash) {
           finish(() =>
-            resolve({ result: msg.result!, chunks: msg.chunks ?? [] }),
+            resolve({
+              result: msg.result!,
+              chunks: msg.chunks ?? [],
+              contentHash: msg.contentHash!,
+            }),
           );
         } else {
           finish(() => reject(rehydrateWorkerError(msg?.error)));
