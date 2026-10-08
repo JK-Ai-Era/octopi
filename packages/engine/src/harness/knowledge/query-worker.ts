@@ -14,16 +14,49 @@ import {
   type SearchQuery,
   type ListSourcesQuery,
   type QueryIdentity,
+  type ListJobsQuery,
+  type QueryWorkerRole,
 } from './query-service.js';
 
 interface QueryBoot {
   dbPath: string;
   sqliteVecExtensionPath?: string;
+  role?: QueryWorkerRole;
   embeddingModels?: {
     providers?: Record<string, unknown>;
     embedding?: unknown;
   } | null;
 }
+
+/** meta：列表/控制面（UI 轮询必须稳）；search：检索/catalog（可慢） */
+const META_METHODS = new Set([
+  'listProjects',
+  'listSources',
+  'getSource',
+  'getSourceDetail',
+  'getPrincipal',
+  'isPrincipalForeign',
+  'isSourceOwner',
+  'ready',
+  'listJobs',
+  'jobControlState',
+  'visibility',
+  'sessionVisibility',
+  'dbStats',
+  'promotionCandidates',
+]);
+
+const SEARCH_METHODS = new Set([
+  'search',
+  'catalog',
+  'listChunks',
+  'read',
+  'listFiles',
+  'listFilesPaged',
+  'principalStats',
+  // boot 握手探活（WorkerQueryService.start）
+  'dbStats',
+]);
 
 type QueryCall =
   | { id: number; method: 'search'; query: SearchQuery }
@@ -72,12 +105,26 @@ type QueryCall =
       identity?: QueryIdentity;
     }
   | { id: number; method: 'dbStats' }
+  | { id: number; method: 'getSourceDetail'; sourceId: string; identity?: QueryIdentity }
+  | { id: number; method: 'getPrincipal'; identity: QueryIdentity; agentId: string }
+  | { id: number; method: 'isPrincipalForeign'; identity: QueryIdentity; agentId: string }
+  | { id: number; method: 'isSourceOwner'; sourceId: string; gatewayId: string }
+  | { id: number; method: 'ready' }
+  | { id: number; method: 'listJobs'; query: ListJobsQuery }
+  | { id: number; method: 'promotionCandidates' }
   | { id: number; method: 'shutdown' };
 
 async function main(): Promise<void> {
   const boot = workerData as QueryBoot;
   const port = parentPort;
   if (!port) throw new Error('knowledge query worker requires parentPort');
+  const role: QueryWorkerRole = boot.role ?? 'all';
+  const allowed =
+    role === 'meta'
+      ? META_METHODS
+      : role === 'search'
+        ? SEARCH_METHODS
+        : new Set([...META_METHODS, ...SEARCH_METHODS]);
 
   // 只读连接：跳过 DDL，不与 Engine 争写锁；唯一写者仍是 Engine ingest
   const db = await KnowledgeDatabase.create({
@@ -107,7 +154,13 @@ async function main(): Promise<void> {
     indexStore: index,
     embeddingProvider: embeddingProvider as never,
   });
-  const svc = new LocalKnowledgeQueryService({ db, sources, index, retriever });
+  const svc = new LocalKnowledgeQueryService({
+    db,
+    sources,
+    index,
+    retriever,
+    embeddingEnabled: Boolean(embeddingProvider),
+  });
 
   port.on('message', (msg: QueryCall) => {
     void (async () => {
@@ -115,6 +168,19 @@ async function main(): Promise<void> {
       if (id == null) return;
       try {
         let data: unknown;
+        if (msg.method === 'shutdown') {
+          try {
+            db.close();
+          } catch {
+            /* already closed */
+          }
+          port.postMessage({ id, ok: true, data: null });
+          port.close();
+          return;
+        }
+        if (!allowed.has(msg.method)) {
+          throw new Error(`query_method_not_in_role:${msg.method}:${role}`);
+        }
         switch (msg.method) {
           case 'search':
             data = await svc.search(msg.query);
@@ -155,15 +221,27 @@ async function main(): Promise<void> {
           case 'dbStats':
             data = await svc.dbStats();
             break;
-          case 'shutdown':
-            try {
-              db.close();
-            } catch {
-              /* already closed */
-            }
-            port.postMessage({ id, ok: true, data: null });
-            port.close();
-            return;
+          case 'getSourceDetail':
+            data = await svc.getSourceDetail(msg.sourceId, msg.identity);
+            break;
+          case 'getPrincipal':
+            data = await svc.getPrincipal(msg.identity, msg.agentId);
+            break;
+          case 'isPrincipalForeign':
+            data = await svc.isPrincipalForeign(msg.identity, msg.agentId);
+            break;
+          case 'isSourceOwner':
+            data = await svc.isSourceOwner(msg.sourceId, msg.gatewayId);
+            break;
+          case 'ready':
+            data = await svc.ready();
+            break;
+          case 'listJobs':
+            data = await svc.listJobs(msg.query);
+            break;
+          case 'promotionCandidates':
+            data = await svc.promotionCandidates();
+            break;
           default:
             throw new Error(`unknown_query_method`);
         }

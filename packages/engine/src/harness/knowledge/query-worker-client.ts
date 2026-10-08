@@ -13,7 +13,12 @@ import type {
   PrincipalStats,
   ReadChunkResult,
   SourceStatsBundle,
+  SourceDetail,
+  ListJobsQuery,
+  ReadySnapshot,
+  QueryWorkerRole,
 } from './query-service.js';
+import type { PromotionCandidate } from './hit-log.js';
 import type { HybridSearchResult } from './retriever.js';
 import type { KnowledgeSource, KnowledgeSourceId } from './types.js';
 import type { KnowledgeCatalogItem } from './catalog-types.js';
@@ -90,6 +95,7 @@ export class WorkerQueryService implements KnowledgeQueryService {
     dbPath: string;
     sqliteVecExtensionPath?: string;
     queryTimeoutMs?: number;
+    role?: QueryWorkerRole;
     embeddingModels?: {
       providers?: Record<string, unknown>;
       embedding?: unknown;
@@ -100,6 +106,7 @@ export class WorkerQueryService implements KnowledgeQueryService {
         dbPath: opts.dbPath,
         sqliteVecExtensionPath: opts.sqliteVecExtensionPath,
         embeddingModels: opts.embeddingModels ?? null,
+        role: opts.role ?? 'all',
       },
     });
     const client = new WorkerQueryService(worker, opts.queryTimeoutMs ?? 15_000);
@@ -267,6 +274,43 @@ export class WorkerQueryService implements KnowledgeQueryService {
 
   async dbStats(): Promise<Record<string, number>> {
     return (await this.call({ method: 'dbStats' })) as Record<string, number>;
+  }
+
+  async getSourceDetail(
+    sourceId: string,
+    identity?: QueryIdentity,
+  ): Promise<SourceDetail | null> {
+    return (await this.call({ method: 'getSourceDetail', sourceId, identity })) as SourceDetail | null;
+  }
+
+  async getPrincipal(
+    identity: QueryIdentity,
+    agentId: string,
+  ): Promise<Record<string, unknown> | null> {
+    return (await this.call({ method: 'getPrincipal', identity, agentId })) as Record<
+      string,
+      unknown
+    > | null;
+  }
+
+  async isPrincipalForeign(identity: QueryIdentity, agentId: string): Promise<boolean> {
+    return (await this.call({ method: 'isPrincipalForeign', identity, agentId })) as boolean;
+  }
+
+  async isSourceOwner(sourceId: string, gatewayId: string): Promise<boolean> {
+    return (await this.call({ method: 'isSourceOwner', sourceId, gatewayId })) as boolean;
+  }
+
+  async ready(): Promise<ReadySnapshot> {
+    return (await this.call({ method: 'ready' })) as ReadySnapshot;
+  }
+
+  async listJobs(query: ListJobsQuery): Promise<Array<Record<string, unknown>>> {
+    return (await this.call({ method: 'listJobs', query })) as Array<Record<string, unknown>>;
+  }
+
+  async promotionCandidates(): Promise<PromotionCandidate[]> {
+    return (await this.call({ method: 'promotionCandidates' })) as PromotionCandidate[];
   }
 
   async dispose(): Promise<void> {

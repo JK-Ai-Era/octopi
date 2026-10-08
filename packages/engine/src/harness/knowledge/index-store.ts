@@ -85,9 +85,26 @@ export class KnowledgeIndexStore {
   private vecTableReady = false;
   /** 同 File 写序（upsert ∥ purge）：键 = identity_key */
   private readonly writeLocks = new Map<string, Promise<unknown>>();
+  /** 大库 COUNT 短 TTL：UI 轮询 / jobControl 不必每请求全表 JOIN */
+  private readonly statsCache = new Map<string, { at: number; value: unknown }>();
+  private static readonly STATS_TTL_MS = 1_000;
 
   constructor(private readonly db: KnowledgeDatabase) {
     this.fts = new KnowledgeFts(db);
+  }
+
+  private cached<T>(key: string, compute: () => T): T {
+    const now = Date.now();
+    const hit = this.statsCache.get(key);
+    if (hit && now - hit.at < KnowledgeIndexStore.STATS_TTL_MS) return hit.value as T;
+    const value = compute();
+    this.statsCache.set(key, { at: now, value });
+    return value;
+  }
+
+  /** 写路径后立刻让统计可见（收尾 force 也可走此绕过 TTL） */
+  invalidateStatsCache(): void {
+    this.statsCache.clear();
   }
 
   /**
@@ -255,52 +272,54 @@ export class KnowledgeIndexStore {
     });
 
     if (signal?.aborted) {
-      this.markUpsertIncomplete(fileId, 'aborted');
+      await this.markUpsertIncomplete(fileId, 'aborted');
       throw new Error('aborted');
     }
 
-    // 旧索引作废（含 embeddings/FTS/vec）
-    this.db.raw.exec('BEGIN');
-    try {
+    // 旧索引作废（含 embeddings/FTS/vec）— 分批让出，禁止同步连环 DELETE 冻住 Engine
+    {
       const oldIds = (
         this.db.raw
           .prepare('SELECT id FROM knowledge_chunks WHERE file_id = ?')
           .all(fileId) as Array<{ id: string }>
       ).map((r) => r.id);
-      this.dropChunks(oldIds);
-      this.db.raw.prepare('DELETE FROM knowledge_chunks WHERE file_id = ?').run(fileId);
-      this.db.raw
-        .prepare(
-          `UPDATE knowledge_files
-           SET content_hash = ?, size = ?, mtime = ?, adapter_id = ?,
-               status = 'indexing', error = NULL, chunk_count = 0, indexed_at = ?,
-               external_url = ?, etag = ?, last_modified = ?
-           WHERE id = ?`,
-        )
-        .run(
-          input.contentHash,
-          input.size,
-          input.mtime,
-          input.adapterId,
-          now,
-          input.externalUrl ?? null,
-          input.etag ?? null,
-          input.lastModified ?? null,
-          fileId,
-        );
-      this.db.raw.exec('COMMIT');
-    } catch (err) {
+      await this.dropChunksAsync(oldIds);
+      this.db.raw.exec('BEGIN');
       try {
-        this.db.raw.exec('ROLLBACK');
-      } catch {
-        // 以原异常为准
+        this.db.raw.prepare('DELETE FROM knowledge_chunks WHERE file_id = ?').run(fileId);
+        this.db.raw
+          .prepare(
+            `UPDATE knowledge_files
+             SET content_hash = ?, size = ?, mtime = ?, adapter_id = ?,
+                 status = 'indexing', error = NULL, chunk_count = 0, indexed_at = ?,
+                 external_url = ?, etag = ?, last_modified = ?
+             WHERE id = ?`,
+          )
+          .run(
+            input.contentHash,
+            input.size,
+            input.mtime,
+            input.adapterId,
+            now,
+            input.externalUrl ?? null,
+            input.etag ?? null,
+            input.lastModified ?? null,
+            fileId,
+          );
+        this.db.raw.exec('COMMIT');
+      } catch (err) {
+        try {
+          this.db.raw.exec('ROLLBACK');
+        } catch {
+          // 以原异常为准
+        }
+        throw err;
       }
-      throw err;
     }
 
     for (let offset = 0; offset < input.chunks.length; offset += batchSize) {
       if (signal?.aborted) {
-        this.markUpsertIncomplete(fileId, 'aborted');
+        await this.markUpsertIncomplete(fileId, 'aborted');
         throw new Error('aborted');
       }
       const batch = input.chunks.slice(offset, offset + batchSize);
@@ -330,7 +349,7 @@ export class KnowledgeIndexStore {
           // 以原异常为准
         }
         const message = err instanceof Error ? err.message : String(err);
-        this.markUpsertIncomplete(fileId, message);
+        await this.markUpsertIncomplete(fileId, message);
         throw err;
       }
       if (offset + batchSize < input.chunks.length) {
@@ -339,7 +358,7 @@ export class KnowledgeIndexStore {
     }
 
     if (signal?.aborted) {
-      this.markUpsertIncomplete(fileId, 'aborted');
+      await this.markUpsertIncomplete(fileId, 'aborted');
       throw new Error('aborted');
     }
 
@@ -350,6 +369,7 @@ export class KnowledgeIndexStore {
          WHERE id = ?`,
       )
       .run(input.chunks.length, now, fileId);
+    this.invalidateStatsCache();
 
     return {
       id: fileId,
@@ -372,15 +392,15 @@ export class KnowledgeIndexStore {
    * 半写入收尾：清掉已落地的 partial chunks，回到可重试的 `indexing`。
    * 不得标成 `error`——error 行上的 partial 会被检索捞出。
    */
-  private markUpsertIncomplete(fileId: string, message: string): void {
+  private async markUpsertIncomplete(fileId: string, message: string): Promise<void> {
     try {
-      this.db.raw.exec('BEGIN');
       const ids = (
         this.db.raw
           .prepare('SELECT id FROM knowledge_chunks WHERE file_id = ?')
           .all(fileId) as Array<{ id: string }>
       ).map((r) => r.id);
-      this.dropChunks(ids);
+      await this.dropChunksAsync(ids);
+      this.db.raw.exec('BEGIN');
       this.db.raw.prepare('DELETE FROM knowledge_chunks WHERE file_id = ?').run(fileId);
       this.db.raw
         .prepare(
@@ -911,6 +931,7 @@ export class KnowledgeIndexStore {
       .run(...batch);
     this.deleteKnowledgeVec(batch);
     this.fts.removeMany(batch);
+    this.invalidateStatsCache();
   }
 
   private deleteKnowledgeVec(chunkIds: string[]): void {
@@ -971,6 +992,17 @@ export class KnowledgeIndexStore {
   }
 
   sourceStats(sourceId: KnowledgeSourceId | string): {
+    files: number;
+    chunks: number;
+    embeddableChunks: number;
+    embeddings: number;
+    errors: number;
+    skipped: number;
+  } {
+    return this.cached(`src-stats:${sourceId}`, () => this.computeSourceStats(sourceId));
+  }
+
+  private computeSourceStats(sourceId: KnowledgeSourceId | string): {
     files: number;
     chunks: number;
     embeddableChunks: number;
@@ -1284,18 +1316,20 @@ export class KnowledgeIndexStore {
 
   /** 是否仍有缺向量 chunk（EXISTS，不拉正文） */
   hasChunksMissingEmbedding(sourceId: KnowledgeSourceId | string): boolean {
-    const row = this.db.raw
-      .prepare(
-        `SELECT 1 AS ok
-         FROM knowledge_chunks c
-         JOIN knowledge_files f ON f.id = c.file_id
-         JOIN knowledge_memberships m ON m.file_id = c.file_id
-         LEFT JOIN knowledge_chunk_embeddings e ON e.chunk_id = c.id
-         WHERE m.source_id = ? AND e.chunk_id IS NULL AND ${EMBEDDABLE_WHERE}
-         LIMIT 1`,
-      )
-      .get(String(sourceId)) as { ok?: number } | undefined;
-    return Boolean(row);
+    return this.cached(`emb-miss:${sourceId}`, () => {
+      const row = this.db.raw
+        .prepare(
+          `SELECT 1 AS ok
+           FROM knowledge_chunks c
+           JOIN knowledge_files f ON f.id = c.file_id
+           JOIN knowledge_memberships m ON m.file_id = c.file_id
+           LEFT JOIN knowledge_chunk_embeddings e ON e.chunk_id = c.id
+           WHERE m.source_id = ? AND e.chunk_id IS NULL AND ${EMBEDDABLE_WHERE}
+           LIMIT 1`,
+        )
+        .get(String(sourceId)) as { ok?: number } | undefined;
+      return Boolean(row);
+    });
   }
 
   /**
@@ -1323,6 +1357,7 @@ export class KnowledgeIndexStore {
         this.writeKnowledgeVec(chunkId, embedding ?? []);
       }
       this.db.raw.exec('COMMIT');
+      this.invalidateStatsCache();
     } catch (err) {
       try {
         this.db.raw.exec('ROLLBACK');
@@ -1360,6 +1395,10 @@ export class KnowledgeIndexStore {
   }
 
   embeddingCoverage(sourceId?: KnowledgeSourceId | string): number {
+    return this.cached(`emb-cov:${sourceId ?? 'global'}`, () => this.computeEmbeddingCoverage(sourceId));
+  }
+
+  private computeEmbeddingCoverage(sourceId?: KnowledgeSourceId | string): number {
     if (sourceId) {
       const t = (
         this.db.raw

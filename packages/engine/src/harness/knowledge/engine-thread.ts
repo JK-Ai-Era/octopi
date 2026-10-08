@@ -1,10 +1,9 @@
 /**
- * Engine Thread — Knowledge 业务 + SQLite + ingest 全在 Worker
+ * Engine Thread — Knowledge **API** 编排（写路由 + SSE）
  *
- * 主线程（serve.ts）只做 HTTP 转发。本线程允许阻塞（同步 node:sqlite、FTS、写库），
- * 但不得影响主线程 /health 与连接接受。
- *
- * 解析 CPU 仍用嵌套 worker_threads（extract / chunk / ftsToks）。
+ * 唯一写者是 **Writer Worker**（独立线程持 knowledge.db + ingest）。
+ * 本线程禁止打开可写 SQLite；残留读路由用只读连接 Local query。
+ * 纯读在主线程 Meta/Search Worker（serve.ts），不经过本线程。
  */
 import { parentPort, workerData } from 'node:worker_threads';
 import type { IncomingMessage, ServerResponse } from 'node:http';
@@ -12,6 +11,13 @@ import { KnowledgeDatabase } from './db.js';
 import { createKnowledgeHttpApp, type KnowledgeServiceToken } from './http-app.js';
 import type { DocumentCapabilityConfig } from '../capabilities/document/factory.js';
 import type { HttpBridgeRequest, HttpBridgeOutbound } from './http-bridge.js';
+import type { KnowledgeWriteService } from './writer-service.js';
+import { LocalKnowledgeWriteService } from './writer-service.js';
+import type { KnowledgeQueryService } from './query-service.js';
+import { LocalKnowledgeQueryService } from './query-service.js';
+import { KnowledgeSourceStore } from './source-store.js';
+import { KnowledgeIndexStore } from './index-store.js';
+import { KnowledgeRetriever } from './retriever.js';
 
 interface EngineBoot {
   dbPath: string;
@@ -19,6 +25,8 @@ interface EngineBoot {
   autoRegisterPrincipals?: boolean;
   documentConfig?: DocumentCapabilityConfig | null;
   sqliteVecExtensionPath?: string;
+  /** 文件库生产：纯读在主线程 Meta/Search Worker */
+  skipQueryWorker?: boolean;
   embeddingModels?: {
     providers?: Record<string, unknown>;
     embedding?: unknown;
@@ -30,7 +38,6 @@ interface EngineBoot {
     embedConcurrency?: number;
     embedSecretPolicy?: 'allow' | 'redact' | 'skip';
   } | null;
-  /** 测试用：确定性 stub embedding（不可序列化闭包从主线程传入） */
   testEmbeddingStub?: boolean;
 }
 
@@ -147,76 +154,107 @@ function stubEmbeddingProvider() {
   };
 }
 
-async function main(): Promise<void> {
-  const boot = workerData as EngineBoot;
-  const db = await KnowledgeDatabase.create({
-    dbPath: boot.dbPath,
-    sqliteVec: boot.sqliteVecExtensionPath
-      ? { extensionPath: boot.sqliteVecExtensionPath }
-      : true,
-  });
-
-  let embeddingProvider: unknown = null;
-  if (boot.testEmbeddingStub) {
-    embeddingProvider = stubEmbeddingProvider();
-  } else if (boot.embeddingModels && boot.embed?.enabled !== false) {
+async function resolveEmbedding(boot: EngineBoot): Promise<unknown> {
+  if (boot.testEmbeddingStub) return stubEmbeddingProvider();
+  if (boot.embeddingModels && boot.embed?.enabled !== false) {
     const { resolveEmbeddingRuntime } = await import(
       '../memory/sqlite/embedding-from-models.js'
     );
     const runtime = resolveEmbeddingRuntime(
       boot.embeddingModels as Parameters<typeof resolveEmbeddingRuntime>[0],
     );
-    embeddingProvider = runtime?.provider ?? null;
+    return runtime?.provider ?? null;
   }
+  return null;
+}
 
-  // 只读查询：文件库用独立线程（WAL 一写多读）；:memory: 无法跨连接共享，只能同连接
-  const { createKnowledgeQueryService } = await import('./query-service.js');
-  const { KnowledgeSourceStore } = await import('./source-store.js');
-  const { KnowledgeIndexStore } = await import('./index-store.js');
-  const { KnowledgeRetriever } = await import('./retriever.js');
-  let query;
-  if (boot.dbPath === ':memory:') {
-    const sources = new KnowledgeSourceStore(db);
-    const index = new KnowledgeIndexStore(db);
+async function main(): Promise<void> {
+  const boot = workerData as EngineBoot;
+  const port = parentPort;
+  if (!port) throw new Error('knowledge engine thread requires parentPort');
+
+  const embeddingProvider = await resolveEmbedding(boot);
+  const memoryMode = boot.dbPath === ':memory:';
+
+  let write: KnowledgeWriteService;
+  let query: KnowledgeQueryService;
+  let writeDb: KnowledgeDatabase | null = null;
+  let readDb: KnowledgeDatabase | null = null;
+
+  if (memoryMode) {
+    // :memory: 无法跨连接共享 → 写/读同连接
+    writeDb = await KnowledgeDatabase.create({
+      dbPath: boot.dbPath,
+      sqliteVec: boot.sqliteVecExtensionPath
+        ? { extensionPath: boot.sqliteVecExtensionPath }
+        : true,
+    });
+    write = new LocalKnowledgeWriteService({
+      db: writeDb,
+      documentConfig: boot.documentConfig ?? null,
+      embeddingProvider: embeddingProvider as never,
+      embed: boot.embed ?? null,
+    });
+    const sources = new KnowledgeSourceStore(writeDb);
+    const index = new KnowledgeIndexStore(writeDb);
     const retriever = new KnowledgeRetriever({
       sourceStore: sources,
       indexStore: index,
       embeddingProvider: embeddingProvider as never,
     });
-    query = await createKnowledgeQueryService({
-      dbPath: boot.dbPath,
-      mode: 'local',
-      local: { db, sources, index, retriever },
+    query = new LocalKnowledgeQueryService({
+      db: writeDb,
+      sources,
+      index,
+      retriever,
+      embeddingEnabled: Boolean(embeddingProvider),
     });
   } else {
-    query = await createKnowledgeQueryService({
+    // Writer Worker：唯一写者 + ingest
+    const { WorkerWriteService } = await import('./writer-worker-client.js');
+    write = await WorkerWriteService.start({
       dbPath: boot.dbPath,
-      mode: 'worker',
+      documentConfig: boot.documentConfig ?? null,
+      sqliteVecExtensionPath: boot.sqliteVecExtensionPath,
       embeddingModels: boot.testEmbeddingStub ? null : (boot.embeddingModels ?? null),
-      ...(boot.sqliteVecExtensionPath
-        ? { sqliteVecExtensionPath: boot.sqliteVecExtensionPath }
-        : {}),
+      embed: boot.embed ?? null,
+      testEmbeddingStub: boot.testEmbeddingStub ?? false,
+    });
+    // 残留写路由上的短读：独立只读连接（WAL）
+    readDb = await KnowledgeDatabase.create({
+      dbPath: boot.dbPath,
+      readOnly: true,
+      skipMigrate: true,
+      sqliteVec: boot.sqliteVecExtensionPath
+        ? { extensionPath: boot.sqliteVecExtensionPath }
+        : true,
+    });
+    const sources = new KnowledgeSourceStore(readDb);
+    const index = new KnowledgeIndexStore(readDb);
+    const retriever = new KnowledgeRetriever({
+      sourceStore: sources,
+      indexStore: index,
+      embeddingProvider: embeddingProvider as never,
+    });
+    query = new LocalKnowledgeQueryService({
+      db: readDb,
+      sources,
+      index,
+      retriever,
+      embeddingEnabled: Boolean(embeddingProvider),
     });
   }
 
   const app = createKnowledgeHttpApp({
-    db,
+    write,
+    query,
     tokens: boot.tokens,
     autoRegisterPrincipals: boot.autoRegisterPrincipals ?? true,
-    documentConfig: boot.documentConfig ?? null,
-    embeddingProvider: embeddingProvider as never,
-    embed: boot.embed ?? null,
-    query,
   });
-  app.startIngestRuntime();
-
-  const port = parentPort;
-  if (!port) throw new Error('knowledge engine thread requires parentPort');
+  await write.startIngestRuntime();
 
   const out: Out = (msg) => port.postMessage(msg);
-  // SSE：主线程客户端断开时通知本线程清理订阅
   const clientCloseByReq = new Map<number, () => void>();
-  /** handle 尚未返回时到达的 client-close：标记后在 then 里立刻执行，避免监听泄漏 */
   const earlyClose = new Set<number>();
 
   port.on('message', (msg: { type?: string; id?: number; req?: HttpBridgeRequest }) => {
@@ -269,7 +307,12 @@ async function main(): Promise<void> {
           /* dispose 幂等 */
         }
         try {
-          db.close();
+          readDb?.close();
+        } catch {
+          /* already closed */
+        }
+        try {
+          writeDb?.close();
         } catch {
           /* already closed */
         }

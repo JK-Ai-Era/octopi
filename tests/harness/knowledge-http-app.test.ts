@@ -6,23 +6,21 @@ import { createServer, type Server } from 'node:http';
 import { mkdtemp, writeFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { KnowledgeDatabase } from '@octopi-agent/engine/harness/knowledge/db.js';
-import { createKnowledgeHttpApp } from '@octopi-agent/engine/harness/knowledge/http-app.js';
+import { createLocalKnowledgeStack } from '@octopi-agent/engine/harness/knowledge/local-stack.js';
 
 async function withServer(
   fn: (base: string) => Promise<void>,
 ): Promise<void> {
-  const db = await KnowledgeDatabase.create({ dbPath: ':memory:' });
-  const app = createKnowledgeHttpApp({
-    db,
+  const stack = await createLocalKnowledgeStack({
     tokens: [
       { token: 'tok-a', tenantId: 'acme', gatewayId: 'gw-a' },
       { token: 'tok-b', tenantId: 'acme', gatewayId: 'gw-b' },
     ],
     autoRegisterPrincipals: true,
+    testEmbeddingStub: true,
   });
   const server: Server = createServer((req, res) => {
-    void app.handle(req, res);
+    void stack.app.handle(req, res);
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const addr = server.address();
@@ -31,9 +29,8 @@ async function withServer(
   try {
     await fn(base);
   } finally {
-    app.dispose();
+    await stack.dispose();
     await new Promise<void>((resolve) => server.close(() => resolve()));
-    db.close();
   }
 }
 

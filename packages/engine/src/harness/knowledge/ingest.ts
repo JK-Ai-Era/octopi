@@ -90,20 +90,11 @@ export async function hashFileStreaming(
   return hash.digest('hex');
 }
 import { JobQueue, type IngestJobKind as JobKind, type JobRow } from './job-queue.js';
+import { readJobControlState, type KnowledgeJobControlState } from './job-control-state.js';
 
 export type { EmbedSecretPolicy };
 export type IngestJobKind = JobKind;
-
-/** /继续 控制数（UI 互斥按钮?*/
-export interface KnowledgeJobControlState {
-  aborted: boolean;
-  jobsQueued: number;
-  jobsRunning: number;
-  jobsCancelled: number;
-  embedMissing: boolean;
-  canAbort: boolean;
-  canResume: boolean;
-}
+export type { KnowledgeJobControlState };
 
 export interface IngestProgressEvent {
   type: 'job' | 'source' | 'error' | 'embed';
@@ -111,6 +102,10 @@ export interface IngestProgressEvent {
   path?: string;
   status: string;
   detail?: string;
+  /** SSE 过滤用：源归属（Writer 在 emit 时补齐，API 不得再 RPC 查） */
+  tenantId?: string;
+  registeredBy?: string;
+  visibility?: string;
 }
 
 export interface KnowledgeIngestOptions {
@@ -1342,37 +1337,9 @@ export class KnowledgeIngest extends EventEmitter {
    * @returns 队列计数 + 已中?+ 仍缺向量
    */
   jobControlState(sourceId: string): KnowledgeJobControlState {
-    const row = this.sources.database.raw
-      .prepare(
-        `SELECT
-           SUM(CASE WHEN status = 'queued' THEN 1 ELSE 0 END) AS q,
-           SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END) AS r,
-           SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) AS c
-         FROM knowledge_jobs WHERE source_id = ?`,
-      )
-      .get(sourceId) as { q: number | null; r: number | null; c: number | null };
-    const jobsQueued = Number(row?.q ?? 0);
-    const jobsRunning = Number(row?.r ?? 0);
-    const jobsCancelled = Number(row?.c ?? 0);
-    const aborted = this.isAborted(sourceId);
-    // EXISTS：大库缺向量检查不得拉 chunk 正文
-    const embedMissing = this.embedding
-      ? this.index.hasChunksMissingEmbedding(sourceId)
-      : false;
-    const active = jobsQueued + jobsRunning > 0;
-    // 还有活在排队/，且当前于中?
-    const canAbort = active && !aborted;
-    // 止过、有 cancelled ，或缺向量且当前无活
-    const canResume = aborted || jobsCancelled > 0 || (embedMissing && !active);
-    return {
-      aborted,
-      jobsQueued,
-      jobsRunning,
-      jobsCancelled,
-      embedMissing,
-      canAbort,
-      canResume,
-    };
+    return readJobControlState(this.sources.database, this.index, sourceId, {
+      embeddingEnabled: Boolean(this.embedding),
+    });
   }
 
   /**
@@ -2311,8 +2278,30 @@ export class KnowledgeIngest extends EventEmitter {
   }
 
   private emitProgress(evt: IngestProgressEvent): void {
-    this.emit('progress', evt);
-    this.emit('knowledge.index.progress', evt);
+    let out = evt;
+    if (evt.sourceId && evt.registeredBy === undefined) {
+      try {
+        const row = this.sources.database.raw
+          .prepare(
+            'SELECT tenant_id, registered_by, visibility FROM knowledge_sources WHERE id = ?',
+          )
+          .get(evt.sourceId) as
+          | { tenant_id?: string; registered_by?: string; visibility?: string }
+          | undefined;
+        if (row) {
+          out = {
+            ...evt,
+            tenantId: row.tenant_id,
+            registeredBy: row.registered_by,
+            visibility: row.visibility,
+          };
+        }
+      } catch {
+        /* 源已删时保持原事件；SSE 侧按无归属放行到 fallback */
+      }
+    }
+    this.emit('progress', out);
+    this.emit('knowledge.index.progress', out);
   }
 
   /** 磁盘水位（仅，不务） */

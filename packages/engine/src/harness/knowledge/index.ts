@@ -50,7 +50,6 @@ export type {
   KnowledgeIngestOptions,
   IngestProgressEvent,
   IngestJobKind,
-  KnowledgeJobControlState,
 } from './ingest.js';
 export { KnowledgeJobControl } from './job-control.js';
 export { JobQueue } from './job-queue.js';
@@ -101,9 +100,36 @@ export type {
   PrincipalStats,
   ReadChunkResult,
   SourceStatsBundle,
+  SourceDetail,
+  ListJobsQuery,
+  ReadySnapshot,
+  QueryWorkerRole,
 } from './query-service.js';
+export { readJobControlState } from './job-control-state.js';
+export type { KnowledgeJobControlState } from './job-control-state.js';
+export {
+  handleKnowledgeReadHttp,
+  isPureReadRoute,
+  authenticateRead,
+} from './read-http.js';
+export type { ReadHttpDeps } from './read-http.js';
 export { KnowledgeHttpApp, createKnowledgeHttpApp } from './http-app.js';
 export type { KnowledgeServiceToken, KnowledgeServiceOptions, AuthContext } from './http-app.js';
+export {
+  LocalKnowledgeWriteService,
+} from './writer-service.js';
+export type {
+  KnowledgeWriteService,
+  WriteIdentity,
+  WriteAbortStats,
+  WriteResumeStats,
+  WriteRegisterResult,
+  WriteDescribeResult,
+} from './writer-service.js';
+export { WorkerWriteService } from './writer-worker-client.js';
+export type { WorkerWriteStartOptions } from './writer-worker-client.js';
+export { createLocalKnowledgeStack } from './local-stack.js';
+export type { LocalKnowledgeStack } from './local-stack.js';
 export { startKnowledgeService } from './serve.js';
 export type { KnowledgeServeOptions, KnowledgeServeHandle } from './serve.js';
 export { startKnowledgeServiceProcess } from './start-service-process.js';

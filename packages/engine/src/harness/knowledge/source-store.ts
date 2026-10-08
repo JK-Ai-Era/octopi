@@ -401,6 +401,7 @@ export class KnowledgeSourceStore {
   setSessionVisibility(
     sessionId: string,
     item: import('./types.js').KnowledgeSessionVisibilityInput,
+    identity?: { tenantId?: string; gatewayId?: string },
   ): void {
     if (!sessionId?.trim()) throw new Error('sessionId is required');
     if (!item.targetId?.trim()) throw new Error('targetId is required');
@@ -408,52 +409,78 @@ export class KnowledgeSourceStore {
       .prepare(
         `INSERT INTO knowledge_session_visibility
            (tenant_id, gateway_id, local_session_id, target_type, target_id, op, created_at)
-         VALUES ('default', 'default', ?, ?, ?, ?, ?)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(tenant_id, gateway_id, local_session_id, target_type, target_id)
            DO UPDATE SET op = excluded.op`,
       )
-      .run(sessionId, item.targetType, item.targetId, item.op, Date.now());
+      .run(
+        identity?.tenantId ?? 'default',
+        identity?.gatewayId ?? 'default',
+        sessionId,
+        item.targetType,
+        item.targetId,
+        item.op,
+        Date.now(),
+      );
   }
 
   /**
-   * 会话 overlay：全量替换
+   * 会话 overlay：全量替换（按 tenant/gateway 隔离，禁清他方行）
    */
   replaceSessionVisibility(
     sessionId: string,
     items: readonly import('./types.js').KnowledgeSessionVisibilityInput[],
+    identity?: { tenantId?: string; gatewayId?: string },
   ): void {
     if (!sessionId?.trim()) throw new Error('sessionId is required');
-    this.db.raw
-      .prepare('DELETE FROM knowledge_session_visibility WHERE local_session_id = ?')
-      .run(sessionId);
-    for (const item of items) this.setSessionVisibility(sessionId, item);
+    this.clearSessionVisibility(sessionId, undefined, identity);
+    for (const item of items) this.setSessionVisibility(sessionId, item, identity);
   }
 
-  clearSessionVisibility(sessionId: string, target?: {
-    targetType: import('./types.js').KnowledgeVisibilityTargetType;
-    targetId: string;
-  }): void {
+  clearSessionVisibility(
+    sessionId: string,
+    target?: {
+      targetType: import('./types.js').KnowledgeVisibilityTargetType;
+      targetId: string;
+    },
+    identity?: { tenantId?: string; gatewayId?: string },
+  ): void {
+    const tenant = identity?.tenantId ?? 'default';
+    const gateway = identity?.gatewayId ?? 'default';
     if (target) {
       this.db.raw
         .prepare(
-          'DELETE FROM knowledge_session_visibility WHERE local_session_id = ? AND target_type = ? AND target_id = ?',
+          `DELETE FROM knowledge_session_visibility
+           WHERE tenant_id = ? AND gateway_id = ? AND local_session_id = ?
+             AND target_type = ? AND target_id = ?`,
         )
-        .run(sessionId, target.targetType, target.targetId);
+        .run(tenant, gateway, sessionId, target.targetType, target.targetId);
       return;
     }
     this.db.raw
-      .prepare('DELETE FROM knowledge_session_visibility WHERE local_session_id = ?')
-      .run(sessionId);
+      .prepare(
+        `DELETE FROM knowledge_session_visibility
+         WHERE tenant_id = ? AND gateway_id = ? AND local_session_id = ?`,
+      )
+      .run(tenant, gateway, sessionId);
   }
 
-  listSessionVisibility(sessionId: string): import('./types.js').KnowledgeSessionVisibilityItem[] {
+  listSessionVisibility(
+    sessionId: string,
+    identity?: { tenantId?: string; gatewayId?: string },
+  ): import('./types.js').KnowledgeSessionVisibilityItem[] {
     const rows = this.db.raw
       .prepare(
         `SELECT local_session_id AS session_id, target_type, target_id, op, created_at
-         FROM knowledge_session_visibility WHERE local_session_id = ?
+         FROM knowledge_session_visibility
+         WHERE tenant_id = ? AND gateway_id = ? AND local_session_id = ?
          ORDER BY created_at`,
       )
-      .all(sessionId) as Array<{
+      .all(
+        identity?.tenantId ?? 'default',
+        identity?.gatewayId ?? 'default',
+        sessionId,
+      ) as Array<{
       session_id: string;
       target_type: string;
       target_id: string;
@@ -477,6 +504,7 @@ export class KnowledgeSourceStore {
     assignedAgentIds: string[];
   }> {
     const tenant = opts?.tenantId ?? 'default';
+    const gateway = opts?.gatewayId ?? 'default';
     const registered = this.db.raw
       .prepare(
         `SELECT project_key, display_name FROM knowledge_projects
@@ -492,12 +520,26 @@ export class KnowledgeSourceStore {
       )
       .all(tenant) as Array<{ project_key: string; source_count: number }>;
     const countMap = new Map(counts.map((c) => [c.project_key, c.source_count]));
+    // 一次拉齐 project→agents，禁止每项目一条 N+1
+    const agentRows = this.db.raw
+      .prepare(
+        `SELECT project_key, local_agent_id FROM knowledge_project_agents
+         WHERE tenant_id = ? AND gateway_id = ?
+         ORDER BY project_key, local_agent_id`,
+      )
+      .all(tenant, gateway) as Array<{ project_key: string; local_agent_id: string }>;
+    const agentsByProject = new Map<string, string[]>();
+    for (const row of agentRows) {
+      const list = agentsByProject.get(row.project_key) ?? [];
+      list.push(row.local_agent_id);
+      agentsByProject.set(row.project_key, list);
+    }
     // 只列已登记项目；孤儿源（项目已删）不再“复活”项目行
     return registered.map((r) => ({
       projectKey: r.project_key,
       displayName: r.display_name ?? undefined,
       sourceCount: countMap.get(r.project_key) ?? 0,
-      assignedAgentIds: this.listProjectAgents(r.project_key, opts),
+      assignedAgentIds: agentsByProject.get(r.project_key) ?? [],
     }));
   }
 
@@ -566,7 +608,12 @@ export class KnowledgeSourceStore {
   ): boolean {
     if (source.status === 'removed' || source.status === 'disabled') return false;
     if (!this.isGatewayVisible(source, identity)) return false;
-    return this.applySessionOverlay(source, this.isBaseVisible(source, agentId, sessionId, identity), sessionId);
+    return this.applySessionOverlay(
+      source,
+      this.isBaseVisible(source, agentId, sessionId, identity),
+      sessionId,
+      identity,
+    );
   }
 
   /** 网关漏斗：registered_by=己方 ∪ public */
@@ -612,13 +659,14 @@ export class KnowledgeSourceStore {
     source: KnowledgeSource,
     base: boolean,
     sessionId?: string,
+    identity?: { tenantId?: string; gatewayId?: string },
   ): boolean {
     if (!sessionId) return base;
-    const srcOp = this.sessionOp(sessionId, 'source', source.id);
+    const srcOp = this.sessionOp(sessionId, 'source', source.id, identity);
     if (srcOp === 'exclude') return false;
     if (srcOp === 'include') return true;
     if (source.scopeRef.level === 'project') {
-      const projOp = this.sessionOp(sessionId, 'project', source.scopeRef.key);
+      const projOp = this.sessionOp(sessionId, 'project', source.scopeRef.key, identity);
       if (projOp === 'exclude') return false;
       if (projOp === 'include') return true;
     }
@@ -629,12 +677,21 @@ export class KnowledgeSourceStore {
     sessionId: string,
     targetType: import('./types.js').KnowledgeVisibilityTargetType,
     targetId: string,
+    identity?: { tenantId?: string; gatewayId?: string },
   ): import('./types.js').KnowledgeVisibilityOp | null {
     const row = this.db.raw
       .prepare(
-        'SELECT op FROM knowledge_session_visibility WHERE local_session_id = ? AND target_type = ? AND target_id = ?',
+        `SELECT op FROM knowledge_session_visibility
+         WHERE tenant_id = ? AND gateway_id = ? AND local_session_id = ?
+           AND target_type = ? AND target_id = ?`,
       )
-      .get(sessionId, targetType, targetId) as { op?: string } | undefined;
+      .get(
+        identity?.tenantId ?? 'default',
+        identity?.gatewayId ?? 'default',
+        sessionId,
+        targetType,
+        targetId,
+      ) as { op?: string } | undefined;
     return (row?.op as import('./types.js').KnowledgeVisibilityOp | undefined) ?? null;
   }
 

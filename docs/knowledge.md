@@ -79,25 +79,34 @@ Knowledge 数据面是 **独立 HTTP Service**（唯一写者），不是 Gatewa
 
 ```text
 Knowledge Service 进程
-├── 主线程：listen · GET /health · token 鉴权 · SSE 泵出   ← 禁止业务/SQLite
-├── Engine Worker：HttpApp 写路径 · knowledge.db · ingest   ← 允许阻塞
-├── Query Worker：只读 search/list/stats/catalog…           ← 独立连接（WAL）
-└── 嵌套 Worker：Document 抽取 · 切块 · FTS token · 流式 hash ← CPU
+├── 主线程：listen · /health · token 鉴权 · 纯读直达 Meta/Search · SSE 泵出
+├── Meta Worker：projects / sources / detail / jobs / ready     ← 只读连接
+├── Search Worker：search / catalog / files / chunks            ← 只读连接
+├── Engine/API Worker：写路由编排 · SSE 转发                     ← 禁止可写 SQLite
+├── Writer Worker：knowledge.db 唯一写者 + ingest                ← 允许阻塞
+└── 嵌套 Parse Worker：Document 抽取 · 切块 · FTS token           ← CPU
 ```
 
 | 层 | 可否阻塞 | 放什么 |
 |----|----------|--------|
-| 主线程 | **否** | HTTP accept、存活探测、token 内存表鉴权、SSE 写出 |
-| Engine Worker | 是 | 写路由/handler、同步 `node:sqlite` 写、FTS/写库、walk、对账 |
-| Query Worker | 是 | 只读 SQL（search / list / stats / catalog / chunks）；**禁止写** |
+| 主线程 | **否** | HTTP accept、存活探测、token 鉴权、**纯读 RPC 分发**、SSE 写出 |
+| Meta Worker | 是 | 列表/控制面只读 SQL（projects / sources / getSourceDetail / jobs） |
+| Search Worker | 是 | 检索只读 SQL（search / catalog / listFiles / chunks）；**禁止写** |
+| Engine/API Worker | 是 | 写 HTTP 编排 → Writer RPC；残留短读走 **只读连接** |
+| Writer Worker | 是 | **唯一写连接** + ingest + FTS/写库 + walk/对账 |
 | Parse Worker | 是 | SheetJS/Office 抽取、chunk、CJK 分词、原件流式 hash |
 
 **工程纪律**（踩坑总结）：
 
 - `/health` 必须主线程应答，否则引擎忙时探活假死。
-- token 鉴权在主线程（`matchKnowledgeToken`），与 Engine 同一函数；业务路由只在 Engine（与 handler 同源）。
-- **查询走 Query Worker**，与 ingest 写事务线程分离；`:memory:` 只能 Local 同连接（Worker 各自空库）。
-- **批量删除必须异步让出**：`removePathTreeAsync` / `pruneMissingAsync` 等每 N 条 `setImmediate`；同步连环 DELETE 会堵死 Engine，Query 回包也发不出去。
+- token 鉴权在主线程（`matchKnowledgeToken`）。**纯读路由不得进 Engine**（`read-http.ts` / `isPureReadRoute`）。
+- **API 不得打开可写 knowledge.db**；一切变更走 `KnowledgeWriteService`（`writer-service.ts` → Writer Worker RPC）。
+- **Meta / Search 分角色 Query Worker**：重 search 不得堵住 `listProjects`/`listSources`。boot 握手允许 `dbStats`。
+- Query Worker **必须在 Writer 建库之后**再 `readOnly` 打开（缺文件时 open 会炸）。
+- Writer 长同步段必须让出，否则 abort 等控制 RPC 会排队（`upsertFile` 旧索引清理 `dropChunksAsync` 等）。
+- **源详情/jobControl 纯 SQL**（`job-control-state.ts`），禁止依赖 ingest 内存态。
+- `listProjects` 一次拉齐 project→agents，禁止每项目 N+1。
+- 大库 COUNT 走 `KnowledgeIndexStore` 1s TTL 缓存；写路径 `invalidateStatsCache()`。
 - 禁止假数据桩：禁止 `void arg; return []`、写死 `canAbort: true`、忽略 `scopeLevel` 过滤等（见 `AGENTS.md`）。
 - embedding 与 parse **分槽并行**；勿写成「全部 parse 结束才 embed」。文档抽取单独限流（`documentParseConcurrency`）。
 - Electron 宿主 fork 子进程：用 `process.execPath` + `ELECTRON_RUN_AS_NODE=1`，**不要**换捆绑 `node.exe` 当 `execPath`（会切断 IPC）。

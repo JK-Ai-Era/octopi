@@ -249,9 +249,18 @@ export class KnowledgeDatabase {
         created_at   INTEGER NOT NULL,
         updated_at   INTEGER NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS knowledge_source_control (
+        source_id   TEXT PRIMARY KEY,
+        aborted     INTEGER NOT NULL DEFAULT 0,
+        aborted_at  INTEGER,
+        updated_at  INTEGER NOT NULL
+      );
+
       CREATE INDEX IF NOT EXISTS idx_knowledge_jobs_status
         ON knowledge_jobs(status, priority, created_at);
       CREATE INDEX IF NOT EXISTS idx_knowledge_jobs_file ON knowledge_jobs(file_id);
+      CREATE INDEX IF NOT EXISTS idx_knowledge_jobs_source_status
+        ON knowledge_jobs(source_id, status);
     `);
     this.migrate();
   }

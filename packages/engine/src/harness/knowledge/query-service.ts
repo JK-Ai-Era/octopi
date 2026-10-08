@@ -13,6 +13,11 @@ import type { KnowledgeIndexStore, IndexedFileRecord } from './index-store.js';
 import type { KnowledgeRetriever, HybridSearchResult } from './retriever.js';
 import type { KnowledgeSource, KnowledgeSourceId } from './types.js';
 import type { KnowledgeCatalogItem } from './catalog-types.js';
+import {
+  readJobControlState,
+  type KnowledgeJobControlState,
+} from './job-control-state.js';
+import { KnowledgeHitLog, type PromotionCandidate } from './hit-log.js';
 
 export interface QueryIdentity {
   tenantId?: string;
@@ -46,6 +51,29 @@ export interface SourceStatsBundle {
   embeddings: number;
   errors: number;
   skipped: number;
+}
+
+export interface SourceDetail {
+  source: KnowledgeSource;
+  stats: SourceStatsBundle;
+  jobControl: KnowledgeJobControlState;
+  assignedAgentIds: string[];
+  hiddenForAgentIds: string[];
+}
+
+export interface ListJobsQuery {
+  identity: QueryIdentity;
+  sourceId?: string;
+  status?: string;
+  limit?: number;
+}
+
+export interface ReadySnapshot {
+  ready: true;
+  sqliteVec: boolean;
+  fts: boolean;
+  ftsBackfill: { running: boolean; pendingChunks: number };
+  stats: Record<string, number>;
 }
 
 export interface PrincipalStats {
@@ -135,6 +163,21 @@ export interface KnowledgeQueryService {
     identity?: QueryIdentity,
   ): Promise<Array<Record<string, unknown>>>;
   dbStats(): Promise<Record<string, number>>;
+  /** 源详情（stats + jobControl + 项目/隐藏 agent）— 禁止走写连接 */
+  getSourceDetail(
+    sourceId: string,
+    identity?: QueryIdentity,
+  ): Promise<SourceDetail | null>;
+  getPrincipal(
+    identity: QueryIdentity,
+    agentId: string,
+  ): Promise<Record<string, unknown> | null>;
+  /** 是否被**其他** gateway 登记了同名 principal（只读鉴权用） */
+  isPrincipalForeign(identity: QueryIdentity, agentId: string): Promise<boolean>;
+  isSourceOwner(sourceId: string, gatewayId: string): Promise<boolean>;
+  ready(): Promise<ReadySnapshot>;
+  listJobs(query: ListJobsQuery): Promise<Array<Record<string, unknown>>>;
+  promotionCandidates(): Promise<PromotionCandidate[]>;
   dispose(): Promise<void> | void;
 }
 
@@ -143,6 +186,8 @@ export interface LocalQueryDeps {
   sources: KnowledgeSourceStore;
   index: KnowledgeIndexStore;
   retriever: KnowledgeRetriever;
+  /** jobControl.embedMissing 语义：无 embedding provider 时应 false */
+  embeddingEnabled?: boolean;
 }
 
 /**
@@ -367,7 +412,7 @@ export class LocalKnowledgeQueryService implements KnowledgeQueryService {
     identity?: QueryIdentity,
   ): Promise<Array<Record<string, unknown>>> {
     void agentId;
-    const list = this.deps.sources.listSessionVisibility(sessionId);
+    const list = this.deps.sources.listSessionVisibility(sessionId, identity);
     if (!identity) return list as unknown as Array<Record<string, unknown>>;
     return (list as Array<{ targetId: string; targetType: string }>).filter((item) => {
       if (item.targetType !== 'source') return true;
@@ -378,6 +423,110 @@ export class LocalKnowledgeQueryService implements KnowledgeQueryService {
 
   async dbStats(): Promise<Record<string, number>> {
     return this.deps.db.stats();
+  }
+
+  async getSourceDetail(
+    sourceId: string,
+    identity?: QueryIdentity,
+  ): Promise<SourceDetail | null> {
+    const { sources, index, db } = this.deps;
+    const src = sources.get(sourceId);
+    if (!src) return null;
+    if (identity && !this.gatewayVisible(src, identity)) return null;
+    const jobControl = readJobControlState(db, index, sourceId, {
+      embeddingEnabled: this.deps.embeddingEnabled ?? true,
+    });
+    return {
+      source: src,
+      stats: index.sourceStats(sourceId),
+      jobControl,
+      assignedAgentIds:
+        src.scopeRef.level === 'project'
+          ? sources.listProjectAgents(src.scopeRef.key, identity)
+          : [],
+      hiddenForAgentIds: sources.listAgentsHidingSource(sourceId, identity),
+    };
+  }
+
+  async getPrincipal(
+    identity: QueryIdentity,
+    agentId: string,
+  ): Promise<Record<string, unknown> | null> {
+    const row = this.deps.db.raw
+      .prepare(
+        `SELECT * FROM knowledge_principals
+         WHERE tenant_id = ? AND gateway_id = ? AND local_agent_id = ?`,
+      )
+      .get(identity.tenantId ?? 'default', identity.gatewayId ?? 'default', agentId) as
+      | Record<string, unknown>
+      | undefined;
+    return row ?? null;
+  }
+
+  async isPrincipalForeign(identity: QueryIdentity, agentId: string): Promise<boolean> {
+    const row = this.deps.db.raw
+      .prepare(
+        `SELECT 1 AS ok FROM knowledge_principals
+         WHERE tenant_id = ? AND local_agent_id = ? AND gateway_id != ?
+         LIMIT 1`,
+      )
+      .get(
+        identity.tenantId ?? 'default',
+        agentId,
+        identity.gatewayId ?? 'default',
+      ) as { ok?: number } | undefined;
+    return Boolean(row);
+  }
+
+  async isSourceOwner(sourceId: string, gatewayId: string): Promise<boolean> {
+    const row = this.deps.db.raw
+      .prepare('SELECT registered_by FROM knowledge_sources WHERE id = ?')
+      .get(sourceId) as { registered_by?: string } | undefined;
+    if (!row) return false;
+    if (row.registered_by && row.registered_by !== gatewayId) return false;
+    return true;
+  }
+
+  async ready(): Promise<ReadySnapshot> {
+    const { db, index } = this.deps;
+    const stats = db.stats();
+    const chunks = Number(stats.chunks ?? 0);
+    const ftsRows = Number(stats.ftsChunks ?? 0);
+    return {
+      ready: true,
+      sqliteVec: db.sqliteVecEnabled,
+      fts: index.ftsAvailable,
+      ftsBackfill: {
+        running: index.ftsBackfillRunning,
+        pendingChunks: Math.max(0, chunks - ftsRows),
+      },
+      stats,
+    };
+  }
+
+  async listJobs(query: ListJobsQuery): Promise<Array<Record<string, unknown>>> {
+    const where: string[] = [
+      `source_id IN (SELECT id FROM knowledge_sources WHERE tenant_id = ? AND (registered_by = ? OR visibility = 'public'))`,
+    ];
+    const args: unknown[] = [query.identity.tenantId ?? 'default', query.identity.gatewayId ?? 'default'];
+    if (query.sourceId) {
+      where.push('source_id = ?');
+      args.push(query.sourceId);
+    }
+    if (query.status) {
+      where.push('status = ?');
+      args.push(query.status);
+    }
+    const limit = Math.max(1, Math.min(query.limit ?? 200, 1000));
+    return this.deps.db.raw
+      .prepare(
+        `SELECT * FROM knowledge_jobs WHERE ${where.join(' AND ')} ORDER BY created_at DESC LIMIT ?`,
+      )
+      .all(...(args as never[]), limit) as Array<Record<string, unknown>>;
+  }
+
+  async promotionCandidates(): Promise<PromotionCandidate[]> {
+    return new KnowledgeHitLog(this.deps.db).promotionCandidates();
   }
 
   dispose(): void {
@@ -404,6 +553,8 @@ export class LocalKnowledgeQueryService implements KnowledgeQueryService {
  *
  * @param opts - dbPath / 本地 deps / embeddingModels（Worker 内重建 provider）
  */
+export type QueryWorkerRole = 'meta' | 'search' | 'all';
+
 export async function createKnowledgeQueryService(opts: {
   dbPath: string;
   mode: 'worker' | 'local';
@@ -413,6 +564,9 @@ export async function createKnowledgeQueryService(opts: {
     embedding?: unknown;
   } | null;
   sqliteVecExtensionPath?: string;
+  /** Worker 角色：meta=列表/控制面，search=检索/catalog，all=单 Worker 全量 */
+  role?: QueryWorkerRole;
+  queryTimeoutMs?: number;
 }): Promise<KnowledgeQueryService> {
   if (opts.mode === 'local' || opts.dbPath === ':memory:') {
     if (!opts.local) throw new Error('local query service requires local deps');
@@ -423,5 +577,7 @@ export async function createKnowledgeQueryService(opts: {
     dbPath: opts.dbPath,
     embeddingModels: opts.embeddingModels ?? null,
     sqliteVecExtensionPath: opts.sqliteVecExtensionPath,
+    role: opts.role ?? 'all',
+    queryTimeoutMs: opts.queryTimeoutMs,
   });
 }

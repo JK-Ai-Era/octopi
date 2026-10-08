@@ -1,24 +1,14 @@
 /**
  * Knowledge Service HTTP — 契约 arch/knowledge-service-http.md v2.1
  *
- * 唯一写者；鉴权 token → (tenantId, gatewayId)；业务键不用 body 伪造。
+ * API 线程只编排：写走 KnowledgeWriteService（Writer Worker / Local），
+ * 读走 KnowledgeQueryService。**禁止**在此打开 knowledge.db。
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { KnowledgeDatabase } from './db.js';
-import { KnowledgeSourceStore } from './source-store.js';
-import { KnowledgeIndexStore } from './index-store.js';
-import { MembershipStore } from './membership-store.js';
-import { KnowledgeIngest } from './ingest.js';
-import { KnowledgeRetriever } from './retriever.js';
-import { KnowledgeHitLog } from './hit-log.js';
-import { generateKnowledgeDescription } from './describe.js';
 import { matchKnowledgeToken } from './http-bridge.js';
-import {
-  LocalKnowledgeQueryService,
-  type KnowledgeQueryService,
-  type QueryIdentity,
-} from './query-service.js';
+import type { KnowledgeQueryService, QueryIdentity } from './query-service.js';
+import type { KnowledgeWriteService, WriteIdentity } from './writer-service.js';
 
 export interface KnowledgeServiceToken {
   token: string;
@@ -27,26 +17,13 @@ export interface KnowledgeServiceToken {
 }
 
 export interface KnowledgeServiceOptions {
-  db: KnowledgeDatabase;
+  /** 唯一写者端口（Writer Worker RPC 或 Local） */
+  write: KnowledgeWriteService;
+  /** 只读查询面（Meta/Search Worker 或 Local） */
+  query: KnowledgeQueryService;
   tokens: KnowledgeServiceToken[];
-  /** 单机 dev：未注册 principal 自动建 */
+  /** 单机 dev：未注册 principal 自动建（写路径才注册） */
   autoRegisterPrincipals?: boolean;
-  /** documents.* — Document 抽取/legacy 与 Gateway 同源 */
-  documentConfig?: import('../capabilities/document/factory.js').DocumentCapabilityConfig | null;
-  /** Phase B embedding；未配则 embed_source 不写向量 */
-  embeddingProvider?: import('../memory/sqlite/embedding.js').EmbeddingProvider | null;
-  embed?: {
-    enabled?: boolean;
-    embedBatch?: number;
-    embedMinIntervalMs?: number;
-    embedConcurrency?: number;
-    embedSecretPolicy?: 'allow' | 'redact' | 'skip';
-  } | null;
-  /**
-   * 只读查询面。生产（engine-thread）注入 Query Worker；缺省则用进程内 Local。
-   * 写路径永不经过 query。
-   */
-  query?: KnowledgeQueryService;
 }
 
 export interface AuthContext {
@@ -87,16 +64,39 @@ function err(
   message: string,
   details?: unknown,
 ): void {
-  json(res, status, {
-    error: { code, message, details },
-  });
+  json(res, status, { error: { code, message, details } });
+}
+
+function mapWriteError(res: ServerResponse, e: unknown): boolean {
+  const code = (e as { code?: string }).code ?? '';
+  const msg = e instanceof Error ? e.message : String(e);
+  if (code === 'not_resource_owner' || /not resource owner|not source owner|not project owner/i.test(msg)) {
+    err(res, 403, 'not_resource_owner', msg);
+    return true;
+  }
+  if (code === 'not_principal_owner' || /not principal owner/i.test(msg)) {
+    err(res, 403, 'not_principal_owner', msg);
+    return true;
+  }
+  if (code === 'principal_not_registered' || /principal not registered/i.test(msg)) {
+    err(res, 403, 'principal_not_registered', msg);
+    return true;
+  }
+  if (code === 'source_not_found' || /source not found/i.test(msg)) {
+    err(res, 404, 'source_not_found', msg);
+    return true;
+  }
+  if (code === 'project_not_empty' || /not empty|non-empty|仍有/i.test(msg)) {
+    err(res, 409, 'project_not_empty', msg);
+    return true;
+  }
+  return false;
 }
 
 async function readBody(req: IncomingMessage): Promise<unknown> {
   if (req.method === 'GET' || req.method === 'HEAD') return undefined;
   const chunks: Buffer[] = [];
   for await (const c of req) chunks.push(c as Buffer);
-  if (chunks.length === 0) return undefined;
   const raw = Buffer.concat(chunks).toString('utf8');
   if (!raw) return undefined;
   try {
@@ -108,95 +108,22 @@ async function readBody(req: IncomingMessage): Promise<unknown> {
 
 export class KnowledgeHttpApp {
   private readonly routes: Route[] = [];
+  private progressOff: (() => void) | null = null;
 
   constructor(private readonly opts: KnowledgeServiceOptions) {
     this.registerRoutes();
   }
 
-  private get db(): KnowledgeDatabase {
-    return this.opts.db;
+  private get write(): KnowledgeWriteService {
+    return this.opts.write;
   }
 
-  private sources = new Map<string, KnowledgeSourceStore>();
-  private indexes = new Map<string, KnowledgeIndexStore>();
-  private memberships = new Map<string, MembershipStore>();
-  private ingests = new Map<string, KnowledgeIngest>();
-  private retrievers = new Map<string, KnowledgeRetriever>();
-  private localQuery: KnowledgeQueryService | null = null;
-
-  /** 只读查询面：外部注入的 Worker，或本地 bundle */
   private query(): KnowledgeQueryService {
-    if (this.opts.query) return this.opts.query;
-    if (!this.localQuery) {
-      const { sources, index, retriever } = this.bundle();
-      this.localQuery = new LocalKnowledgeQueryService({
-        db: this.db,
-        sources,
-        index,
-        retriever,
-      });
-    }
-    return this.localQuery;
+    return this.opts.query;
   }
 
-  private identityOf(ctx: AuthContext): QueryIdentity {
+  private identityOf(ctx: AuthContext): WriteIdentity & QueryIdentity {
     return { tenantId: ctx.tenantId, gatewayId: ctx.gatewayId };
-  }
-
-  /** 懒绑定（单库单实例即可；键保留扩展空间） */
-  private bundle(key = 'default'): {
-    sources: KnowledgeSourceStore;
-    index: KnowledgeIndexStore;
-    memberships: MembershipStore;
-    ingest: KnowledgeIngest;
-    retriever: KnowledgeRetriever;
-  } {
-    let sources = this.sources.get(key);
-    if (!sources) {
-      sources = new KnowledgeSourceStore(this.db);
-      this.sources.set(key, sources);
-    }
-    let index = this.indexes.get(key);
-    if (!index) {
-      index = new KnowledgeIndexStore(this.db);
-      this.indexes.set(key, index);
-    }
-    let memberships = this.memberships.get(key);
-    if (!memberships) {
-      memberships = new MembershipStore(this.db);
-      this.memberships.set(key, memberships);
-    }
-    let ingest = this.ingests.get(key);
-    if (!ingest) {
-      // 生产路径只给 documentConfig：抽取走 extractDocumentInWorker（CPU 隔离）
-      // documentPort 留给测试/宿主注入自定义后端，不在 Service 内再拼一份进程内 port
-      const embed = this.opts.embed ?? null;
-      ingest = new KnowledgeIngest({
-        sourceStore: sources,
-        indexStore: index,
-        documentConfig: this.opts.documentConfig ?? null,
-        embeddingProvider: embed?.enabled === false ? null : (this.opts.embeddingProvider ?? null),
-        ...(embed?.embedBatch != null ? { embedBatch: embed.embedBatch } : {}),
-        ...(embed?.embedMinIntervalMs != null
-          ? { embedMinIntervalMs: embed.embedMinIntervalMs }
-          : {}),
-        ...(embed?.embedConcurrency != null ? { embedConcurrency: embed.embedConcurrency } : {}),
-        ...(embed?.embedSecretPolicy != null
-          ? { embedSecretPolicy: embed.embedSecretPolicy }
-          : {}),
-      });
-      this.ingests.set(key, ingest);
-    }
-    let retriever = this.retrievers.get(key);
-    if (!retriever) {
-      retriever = new KnowledgeRetriever({
-        sourceStore: sources,
-        indexStore: index,
-        embeddingProvider: this.opts.embeddingProvider ?? null,
-      });
-      this.retrievers.set(key, retriever);
-    }
-    return { sources, index, memberships, ingest, retriever };
   }
 
   private route(method: string, pattern: string, handler: Handler): void {
@@ -218,27 +145,17 @@ export class KnowledgeHttpApp {
       json(res, 200, { ok: true, service: 'knowledge', version: '0.60.0' });
     });
 
-    this.route('GET', '/v1/ready', (_req, res) => {
-      const { index } = this.bundle();
-      const stats = this.db.stats();
-      const chunks = Number(stats.chunks ?? 0);
-      const ftsRows = Number(stats.ftsChunks ?? 0);
-      json(res, 200, {
-        ready: true,
-        sqliteVec: this.db.sqliteVecEnabled,
-        fts: index.ftsAvailable,
-        ftsBackfill: {
-          running: index.ftsBackfillRunning,
-          pendingChunks: Math.max(0, chunks - ftsRows),
-        },
-        writeLocked: false,
-        stats,
-      });
+    this.route('GET', '/v1/ready', async (_req, res) => {
+      json(res, 200, await this.query().ready());
     });
 
-    this.route('PUT', '/v1/principals/:agentId', (req, res, ctx, params, body) => {
+    this.route('PUT', '/v1/principals/:agentId', async (_req, res, ctx, params, body) => {
       const agentId = params.agentId!;
-      this.upsertPrincipal(ctx, agentId, (body as { displayName?: string; status?: string }) ?? {});
+      await this.write.upsertPrincipal(
+        this.identityOf(ctx),
+        agentId,
+        (body as { displayName?: string; status?: string }) ?? {},
+      );
       json(res, 200, {
         ok: true,
         data: {
@@ -250,82 +167,44 @@ export class KnowledgeHttpApp {
       });
     });
 
-    this.route('GET', '/v1/principals/:agentId', (_req, res, ctx, params) => {
-      const row = this.db.raw
-        .prepare(
-          `SELECT * FROM knowledge_principals
-           WHERE tenant_id = ? AND gateway_id = ? AND local_agent_id = ?`,
-        )
-        .get(ctx.tenantId, ctx.gatewayId, params.agentId) as Record<string, unknown> | undefined;
+    this.route('GET', '/v1/principals/:agentId', async (_req, res, ctx, params) => {
+      const row = await this.query().getPrincipal(this.identityOf(ctx), params.agentId!);
       if (!row) return err(res, 404, 'principal_not_registered', 'principal not found');
       json(res, 200, { ok: true, data: row });
     });
 
     this.route('GET', '/v1/projects', async (_req, res, ctx) => {
-      const data = await this.query().listProjects(this.identityOf(ctx));
-      json(res, 200, { ok: true, data });
+      json(res, 200, {
+        ok: true,
+        data: await this.query().listProjects(this.identityOf(ctx)),
+      });
     });
 
-    this.route('POST', '/v1/projects', (_req, res, ctx, _p, body) => {
+    this.route('POST', '/v1/projects', async (_req, res, ctx, _p, body) => {
       const b = body as { projectKey?: string; displayName?: string; visibility?: string };
       if (!b?.projectKey) return err(res, 400, 'bad_request', 'projectKey required');
-      const existing = this.db.raw
-        .prepare(
-          `SELECT registered_by FROM knowledge_projects
-           WHERE tenant_id = ? AND project_key = ?`,
-        )
-        .get(ctx.tenantId, b.projectKey) as { registered_by?: string } | undefined;
-      if (existing?.registered_by && existing.registered_by !== ctx.gatewayId) {
-        return err(res, 403, 'not_resource_owner', 'project owned by another gateway');
-      }
-      const { sources } = this.bundle();
-      sources.createProject(b.projectKey, b.displayName, {
-        tenantId: ctx.tenantId,
-        registeredBy: ctx.gatewayId,
-      });
-      this.db.raw
-        .prepare(
-          `UPDATE knowledge_projects SET registered_by = ?, visibility = ?
-           WHERE tenant_id = ? AND project_key = ?`,
-        )
-        .run(
-          ctx.gatewayId,
-          b.visibility === 'public' ? 'public' : 'private',
-          ctx.tenantId,
-          b.projectKey,
-        );
-      json(res, 201, {
-        ok: true,
-        data: {
+      try {
+        const data = await this.write.createProject(this.identityOf(ctx), {
           projectKey: b.projectKey,
-          displayName: b.displayName ?? null,
-          registeredBy: ctx.gatewayId,
-          visibility: b.visibility === 'public' ? 'public' : 'private',
-        },
-      });
+          displayName: b.displayName,
+          visibility: b.visibility,
+        });
+        json(res, 201, { ok: true, data });
+      } catch (e) {
+        if (!mapWriteError(res, e)) {
+          err(res, 400, 'bad_request', e instanceof Error ? e.message : String(e));
+        }
+      }
     });
 
-    this.route('DELETE', '/v1/projects/:projectKey', (_req, res, ctx, params) => {
-      const key = params.projectKey!;
-      const row = this.db.raw
-        .prepare(
-          `SELECT registered_by FROM knowledge_projects
-           WHERE tenant_id = ? AND project_key = ?`,
-        )
-        .get(ctx.tenantId, key) as { registered_by?: string } | undefined;
-      if (row?.registered_by && row.registered_by !== ctx.gatewayId) {
-        return err(res, 403, 'not_resource_owner', 'not project owner');
-      }
-      const { sources } = this.bundle();
+    this.route('DELETE', '/v1/projects/:projectKey', async (_req, res, ctx, params) => {
       try {
-        const removed = sources.removeProject(key, { tenantId: ctx.tenantId });
-        json(res, 200, { ok: true, data: { projectKey: key, removed } });
+        const data = await this.write.removeProject(this.identityOf(ctx), params.projectKey!);
+        json(res, 200, { ok: true, data });
       } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        if (/not empty|non-empty|仍有/i.test(msg)) {
-          return err(res, 409, 'project_not_empty', msg);
+        if (!mapWriteError(res, e)) {
+          err(res, 400, 'bad_request', e instanceof Error ? e.message : String(e));
         }
-        err(res, 400, 'bad_request', msg);
       }
     });
 
@@ -339,25 +218,33 @@ export class KnowledgeHttpApp {
         res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
       };
       send('hello', { tenantId: ctx.tenantId, gatewayId: ctx.gatewayId, ts: Date.now() });
-      const { ingest } = this.bundle();
-      const onProgress = (evt: unknown) => {
-        const p = evt as { sourceId?: string };
-        // 与 list/search 同一可见性：owner 或 public（不是只给注册方）
+      const off = this.write.onProgress((evt) => {
+        const p = evt as {
+          sourceId?: string;
+          tenantId?: string;
+          registeredBy?: string;
+          visibility?: string;
+        };
+        if (p?.sourceId && p.registeredBy != null) {
+          // 事件自带归属：禁止再 RPC Writer（重索引期会堵 abort）
+          if (p.tenantId && p.tenantId !== ctx.tenantId) return;
+          if (p.registeredBy !== ctx.gatewayId && p.visibility !== 'public') return;
+          send('knowledge.index.progress', evt);
+          return;
+        }
         if (p?.sourceId) {
-          const src = this.bundle().sources.get(p.sourceId);
-          if (src && !this.sourceVisibleToGateway(src, ctx)) return;
+          void this.write
+            .sourceVisibleToGateway(p.sourceId, ctx.gatewayId)
+            .then((ok) => {
+              if (ok) send('knowledge.index.progress', evt);
+            })
+            .catch(() => undefined);
+          return;
         }
         send('knowledge.index.progress', evt);
-      };
-      // KnowledgeIngest EventEmitter
-      (ingest as unknown as { on?: (n: string, f: (e: unknown) => void) => void }).on?.(
-        'knowledge.index.progress',
-        onProgress,
-      );
+      });
       req.on('close', () => {
-        (
-          ingest as unknown as { off?: (n: string, f: (e: unknown) => void) => void }
-        ).off?.('knowledge.index.progress', onProgress);
+        off();
         res.end();
       });
     });
@@ -379,214 +266,109 @@ export class KnowledgeHttpApp {
     });
 
     this.route('POST', '/v1/sources', async (_req, res, ctx, _p, body) => {
-      const input = body as Record<string, unknown>;
-      if (!input || typeof input !== 'object') {
+      if (!body || typeof body !== 'object') {
         return err(res, 400, 'bad_request', 'body required');
       }
-      const { sources } = this.bundle();
       try {
-        // 禁止客户端注入 id / registered_by / tenant_id
-        const input = body as Record<string, unknown>;
-        delete input.id;
-        delete input.registeredBy;
-        delete input.registered_by;
-        delete input.tenantId;
-        delete input.tenant_id;
-        const src = sources.register(
-          input as unknown as import('./types.js').KnowledgeSourceInput,
+        const data = await this.write.registerSource(
+          this.identityOf(ctx),
+          body as Record<string, unknown>,
         );
-        // 标记注册方 / 可见性（schema 列）
-        this.db.raw
-          .prepare(
-            `UPDATE knowledge_sources SET registered_by = ?, visibility = ?, tenant_id = ?
-             WHERE id = ?`,
-          )
-          .run(
-            ctx.gatewayId,
-            typeof input.visibility === 'string' ? input.visibility : 'private',
-            ctx.tenantId,
-            src.id,
-          );
-        // 注册即开索引：否则源永远停在 pending、jobs=0（重建按钮才是唯一入口）
-        const { ingest } = this.bundle();
-        void ingest.ingestSource(src.id, { full: true }).catch((e) => {
-          // 禁止静默吞掉：否则源卡 pending/discovering、jobs=0
-          console.warn(
-            `[Knowledge] auto-ingest after register failed (${src.id}): ${e instanceof Error ? e.message : String(e)}`,
-          );
-        });
-        json(res, 201, {
-          ok: true,
-          data: {
-            ...src,
-            registeredBy: ctx.gatewayId,
-          },
-        });
+        json(res, 201, { ok: true, data });
       } catch (e) {
-        err(res, 400, 'bad_request', e instanceof Error ? e.message : String(e));
+        if (!mapWriteError(res, e)) {
+          err(res, 400, 'bad_request', e instanceof Error ? e.message : String(e));
+        }
       }
     });
 
     this.route('GET', '/v1/sources/:sid', async (_req, res, ctx, params) => {
-      const { sources, ingest } = this.bundle();
-      const got = await this.query().getSource(params.sid!, this.identityOf(ctx));
-      if (!got) {
+      const detail = await this.query().getSourceDetail(params.sid!, this.identityOf(ctx));
+      if (!detail) {
         return err(res, 404, 'source_not_found', 'source not found');
       }
-      const src = got.source;
-      const identity = { tenantId: ctx.tenantId, gatewayId: ctx.gatewayId };
-      const assignedAgentIds =
-        src.scopeRef.level === 'project' ? sources.listProjectAgents(src.scopeRef.key) : [];
       json(res, 200, {
         ok: true,
         data: {
-          ...src,
-          stats: got.stats,
-          jobControl: ingest.jobControlState(src.id),
-          assignedAgentIds,
-          hiddenForAgentIds: sources.listAgentsHidingSource(src.id, identity),
+          ...detail.source,
+          stats: detail.stats,
+          jobControl: detail.jobControl,
+          assignedAgentIds: detail.assignedAgentIds,
+          hiddenForAgentIds: detail.hiddenForAgentIds,
         },
       });
     });
 
-    this.route('PATCH', '/v1/sources/:sid', (_req, res, ctx, params, body) => {
-      const { sources } = this.bundle();
-      const sid = params.sid!;
-      const row = this.db.raw
-        .prepare('SELECT registered_by FROM knowledge_sources WHERE id = ?')
-        .get(sid) as { registered_by?: string } | undefined;
-      if (row?.registered_by && row.registered_by !== ctx.gatewayId) {
-        return err(res, 403, 'not_resource_owner', 'not source owner');
-      }
+    this.route('PATCH', '/v1/sources/:sid', async (_req, res, ctx, params, body) => {
       try {
-        const updated = sources.update(sid, body as never);
+        const updated = await this.write.updateSource(
+          this.identityOf(ctx),
+          params.sid!,
+          (body as Record<string, unknown>) ?? {},
+        );
         if (!updated) return err(res, 404, 'source_not_found', 'source not found');
-        if (typeof (body as { visibility?: string })?.visibility === 'string') {
-          this.db.raw
-            .prepare('UPDATE knowledge_sources SET visibility = ? WHERE id = ?')
-            .run((body as { visibility: string }).visibility, sid);
-        }
         json(res, 200, { ok: true, data: updated });
       } catch (e) {
-        err(res, 400, 'bad_request', e instanceof Error ? e.message : String(e));
+        if (!mapWriteError(res, e)) {
+          err(res, 400, 'bad_request', e instanceof Error ? e.message : String(e));
+        }
       }
     });
 
     this.route('DELETE', '/v1/sources/:sid', async (_req, res, ctx, params) => {
-      const { sources, index, memberships } = this.bundle();
-      const sid = params.sid!;
-      const src = sources.get(sid);
-      if (!src) return err(res, 404, 'source_not_found', 'source not found');
-      const row = this.db.raw
-        .prepare('SELECT registered_by FROM knowledge_sources WHERE id = ?')
-        .get(sid) as { registered_by?: string } | undefined;
-      if (row?.registered_by && row.registered_by !== ctx.gatewayId) {
-        return err(res, 403, 'not_resource_owner', 'not source owner');
+      try {
+        const data = await this.write.removeSource(this.identityOf(ctx), params.sid!);
+        json(res, 200, { ok: true, data });
+      } catch (e) {
+        if (!mapWriteError(res, e)) {
+          err(res, 400, 'bad_request', e instanceof Error ? e.message : String(e));
+        }
       }
-      const purged = await memberships.unclaimAllForSourceAsync(sid, (fileId) =>
-        index.purgeFileAsync(fileId),
-      );
-      sources.remove(sid);
-      json(res, 200, { ok: true, data: { id: sid, purgedFiles: purged } });
     });
 
-    this.route('POST', '/v1/sources/:sid/reindex', (_req, res, ctx, params) => {
-      if (!this.assertSourceOwner(ctx, params.sid!)) {
+    this.route('POST', '/v1/sources/:sid/reindex', async (_req, res, ctx, params) => {
+      if (!(await this.write.isSourceOwner(params.sid!, ctx.gatewayId))) {
         return err(res, 403, 'not_resource_owner', 'not source owner');
       }
-      const { ingest } = this.bundle();
-      void ingest.ingestSource(params.sid!, { full: true }).catch((e) => {
-        console.warn(
-          `[Knowledge] reindex kick failed (${params.sid}): ${e instanceof Error ? e.message : String(e)}`,
-        );
-      });
+      await this.write.reindexSource(params.sid!);
       json(res, 202, { ok: true, data: { sourceId: params.sid, accepted: true } });
     });
 
-    this.route('POST', '/v1/sources/:sid/abort', (_req, res, ctx, params) => {
-      if (!this.assertSourceOwner(ctx, params.sid!)) {
+    this.route('POST', '/v1/sources/:sid/abort', async (_req, res, ctx, params) => {
+      if (!(await this.write.isSourceOwner(params.sid!, ctx.gatewayId))) {
         return err(res, 403, 'not_resource_owner', 'not source owner');
       }
-      const { ingest } = this.bundle();
-      const stats = ingest.abortJobs({ sourceId: params.sid! });
-      json(res, 200, {
-        ok: true,
-        data: { ...stats, ...ingest.jobControlState(params.sid!) },
-      });
+      json(res, 200, { ok: true, data: await this.write.abortSource(params.sid!) });
     });
 
-    this.route('POST', '/v1/sources/:sid/resume', (_req, res, ctx, params) => {
-      if (!this.assertSourceOwner(ctx, params.sid!)) {
+    this.route('POST', '/v1/sources/:sid/resume', async (_req, res, ctx, params) => {
+      if (!(await this.write.isSourceOwner(params.sid!, ctx.gatewayId))) {
         return err(res, 403, 'not_resource_owner', 'not source owner');
       }
-      const { ingest } = this.bundle();
-      ingest.resumeJobs({ sourceId: params.sid! });
-      json(res, 200, { ok: true, data: ingest.jobControlState(params.sid!) });
+      json(res, 200, { ok: true, data: await this.write.resumeSource(params.sid!) });
     });
 
     this.route('POST', '/v1/sources/:sid/describe', async (_req, res, ctx, params) => {
-      if (!this.assertSourceOwner(ctx, params.sid!)) {
-        return err(res, 403, 'not_resource_owner', 'not source owner');
-      }
-      const { sources } = this.bundle();
-      const src = sources.get(params.sid!);
-      if (!src) return err(res, 404, 'source_not_found', 'source not found');
-      const paths = this.db.raw
-        .prepare(
-          'SELECT logical_path FROM knowledge_memberships WHERE source_id = ? ORDER BY logical_path LIMIT 20',
-        )
-        .all(src.id) as Array<{ logical_path: string }>;
-      const sample = paths.map((p) => p.logical_path).join('\n') || src.location;
-      const r = await generateKnowledgeDescription(src, sample, { enabled: true });
-      sources.update(src.id, { generatedDescription: r.description });
-      json(res, 200, {
-        ok: true,
-        data: { generatedDescription: r.description, source: r.source },
-      });
-    });
-
-    /** 全局中止/继续：仅作用于本 Gateway 注册的源（与单源 ACL 同口径） */
-    const runJobsOpForOwned = (
-      ctx: AuthContext,
-      op: 'abort' | 'resume',
-    ): { ok: true; data: Record<string, number> } => {
-      const { ingest, sources } = this.bundle();
-      const owned = sources.list().filter((s) => this.assertSourceOwner(ctx, s.id));
-      let cancelledQueued = 0;
-      let abortedRunning = 0;
-      let runningJobs = 0;
-      let restoredCancelled = 0;
-      let embedQueued = 0;
-      for (const s of owned) {
-        if (op === 'abort') {
-          const st = ingest.abortJobs({ sourceId: s.id });
-          cancelledQueued += st.cancelledQueued;
-          abortedRunning += st.abortedRunning;
-          runningJobs += st.runningJobs;
-        } else {
-          const st = ingest.resumeJobs({ sourceId: s.id });
-          restoredCancelled += st.restoredCancelled;
-          embedQueued += st.embedQueued;
+      try {
+        const data = await this.write.describeSource(this.identityOf(ctx), params.sid!);
+        if (!data) return err(res, 404, 'source_not_found', 'source not found');
+        json(res, 200, { ok: true, data });
+      } catch (e) {
+        if (!mapWriteError(res, e)) {
+          err(res, 400, 'bad_request', e instanceof Error ? e.message : String(e));
         }
       }
-      return {
-        ok: true,
-        data:
-          op === 'abort'
-            ? { cancelledQueued, abortedRunning, runningJobs }
-            : { restoredCancelled, embedQueued },
-      };
-    };
-
-    this.route('POST', '/v1/jobs/abort', (_req, res, ctx) => {
-      json(res, 200, runJobsOpForOwned(ctx, 'abort'));
     });
-    this.route('POST', '/v1/jobs/resume', (_req, res, ctx) => {
-      json(res, 200, runJobsOpForOwned(ctx, 'resume'));
+
+    this.route('POST', '/v1/jobs/abort', async (_req, res, ctx) => {
+      json(res, 200, { ok: true, data: await this.write.abortAllOwned(this.identityOf(ctx)) });
+    });
+    this.route('POST', '/v1/jobs/resume', async (_req, res, ctx) => {
+      json(res, 200, { ok: true, data: await this.write.resumeAllOwned(this.identityOf(ctx)) });
     });
 
     this.route('GET', '/v1/sources/:sid/files', async (req, res, ctx, params) => {
-      if (!this.assertSourceOwner(ctx, params.sid!)) {
+      if (!(await this.write.isSourceOwner(params.sid!, ctx.gatewayId))) {
         return err(res, 403, 'not_resource_owner', 'not source owner');
       }
       const url = new URL(req.url ?? '/', 'http://local');
@@ -617,31 +399,36 @@ export class KnowledgeHttpApp {
         );
         return json(res, 200, { ok: true, data });
       }
-      const files = await this.query().listFiles(params.sid!, this.identityOf(ctx));
-      json(res, 200, { ok: true, data: files });
+      json(res, 200, {
+        ok: true,
+        data: await this.query().listFiles(params.sid!, this.identityOf(ctx)),
+      });
     });
 
     this.route('GET', '/v1/principals/:agentId/search', async (req, res, ctx, params) => {
       const url = new URL(req.url ?? '/', 'http://local');
-      const q = url.searchParams.get('q') ?? '';
-      const limit = Number(url.searchParams.get('limit') ?? 8);
-      const sessionId = url.searchParams.get('sessionId') ?? undefined;
-      const agentId = params.agentId!;
-      this.ensurePrincipal(ctx, agentId);
+      await this.write.ensurePrincipal(
+        this.identityOf(ctx),
+        params.agentId!,
+        this.opts.autoRegisterPrincipals ?? true,
+      );
       const result = await this.query().search({
-        agentId,
-        q,
-        sessionId,
-        limit,
+        agentId: params.agentId!,
+        q: url.searchParams.get('q') ?? '',
+        sessionId: url.searchParams.get('sessionId') ?? undefined,
+        limit: Number(url.searchParams.get('limit') ?? 8),
         identity: this.identityOf(ctx),
       });
       json(res, 200, { ok: true, data: result });
     });
 
     this.route('GET', '/v1/principals/:agentId/stats', async (_req, res, ctx, params) => {
-      const agentId = params.agentId!;
-      this.ensurePrincipal(ctx, agentId);
-      const principal = await this.query().principalStats(agentId, this.identityOf(ctx));
+      await this.write.ensurePrincipal(
+        this.identityOf(ctx),
+        params.agentId!,
+        this.opts.autoRegisterPrincipals ?? true,
+      );
+      const principal = await this.query().principalStats(params.agentId!, this.identityOf(ctx));
       json(res, 200, {
         ok: true,
         data: {
@@ -653,15 +440,23 @@ export class KnowledgeHttpApp {
     });
 
     this.route('GET', '/v1/principals/:agentId/catalog', async (_req, res, ctx, params) => {
-      const agentId = params.agentId!;
-      this.ensurePrincipal(ctx, agentId);
-      const items = await this.query().catalog(agentId, this.identityOf(ctx));
-      json(res, 200, { ok: true, data: items });
+      await this.write.ensurePrincipal(
+        this.identityOf(ctx),
+        params.agentId!,
+        this.opts.autoRegisterPrincipals ?? true,
+      );
+      json(res, 200, {
+        ok: true,
+        data: await this.query().catalog(params.agentId!, this.identityOf(ctx)),
+      });
     });
 
     this.route('GET', '/v1/principals/:agentId/chunks', async (req, res, ctx, params) => {
-      const agentId = params.agentId!;
-      this.ensurePrincipal(ctx, agentId);
+      await this.write.ensurePrincipal(
+        this.identityOf(ctx),
+        params.agentId!,
+        this.opts.autoRegisterPrincipals ?? true,
+      );
       const url = new URL(req.url ?? '/', 'http://local');
       const sourceId = url.searchParams.get('sourceId') ?? '';
       const path = url.searchParams.get('path') ?? '';
@@ -669,7 +464,7 @@ export class KnowledgeHttpApp {
         return err(res, 400, 'bad_request', 'sourceId and path required');
       }
       const data = await this.query().listChunks(
-        agentId,
+        params.agentId!,
         sourceId,
         path,
         this.identityOf(ctx),
@@ -682,25 +477,29 @@ export class KnowledgeHttpApp {
     });
 
     this.route('POST', '/v1/principals/:agentId/read', async (_req, res, ctx, params, body) => {
-      const agentId = params.agentId!;
-      this.ensurePrincipal(ctx, agentId);
-      const b = body as {
-        chunkId?: string;
-        sourceId?: string;
-        path?: string;
-      };
+      await this.write.ensurePrincipal(
+        this.identityOf(ctx),
+        params.agentId!,
+        this.opts.autoRegisterPrincipals ?? true,
+      );
+      const b = body as { chunkId?: string; sourceId?: string; path?: string };
       if (!b?.chunkId && (!b?.sourceId || !b?.path)) {
         return err(res, 400, 'bad_request', 'chunkId or (sourceId+path) required');
       }
       if (b.chunkId) {
-        const data = await this.query().read(agentId, b, this.identityOf(ctx), ctx.sessionId);
+        const data = await this.query().read(
+          params.agentId!,
+          b,
+          this.identityOf(ctx),
+          ctx.sessionId,
+        );
         if (!data.found) {
           return err(res, 404, 'file_not_found', 'chunk not found');
         }
         return json(res, 200, { ok: true, data });
       }
       const chunks = await this.query().listChunks(
-        agentId,
+        params.agentId!,
         b.sourceId!,
         b.path!,
         this.identityOf(ctx),
@@ -722,28 +521,43 @@ export class KnowledgeHttpApp {
     });
 
     this.route('GET', '/v1/principals/:agentId/visibility', async (_req, res, ctx, params) => {
-      const agentId = params.agentId!;
-      this.ensurePrincipal(ctx, agentId);
-      const data = await this.query().visibility(agentId, this.identityOf(ctx));
-      json(res, 200, { ok: true, data });
+      await this.write.ensurePrincipal(
+        this.identityOf(ctx),
+        params.agentId!,
+        this.opts.autoRegisterPrincipals ?? true,
+      );
+      json(res, 200, {
+        ok: true,
+        data: await this.query().visibility(params.agentId!, this.identityOf(ctx)),
+      });
     });
 
-    this.route('POST', '/v1/principals/:agentId/visibility', (_req, res, ctx, params, body) => {
+    this.route('POST', '/v1/principals/:agentId/visibility', async (_req, res, ctx, params, body) => {
       const agentId = params.agentId!;
-      this.ensurePrincipal(ctx, agentId);
-      this.assertOwnPrincipal(ctx, agentId);
-      const { sources } = this.bundle();
-      const identity = { tenantId: ctx.tenantId, gatewayId: ctx.gatewayId };
+      await this.write.ensurePrincipal(this.identityOf(ctx), agentId, this.opts.autoRegisterPrincipals ?? true);
+      await this.write.assertOwnPrincipal(this.identityOf(ctx), agentId);
+      const identity = this.identityOf(ctx);
       const op = (body as { op?: string })?.op;
       const projectKey = (body as { projectKey?: string })?.projectKey;
       const sourceId = (body as { sourceId?: string })?.sourceId;
-      if (op === 'assignProject' && projectKey) sources.assignProject(projectKey, agentId, identity);
-      else if (op === 'unassignProject' && projectKey)
-        sources.unassignProject(projectKey, agentId, identity);
-      else if (op === 'hide' && sourceId) sources.hideSource(agentId, sourceId, identity);
-      else if (op === 'unhide' && sourceId) sources.unhideSource(agentId, sourceId, identity);
-      else return err(res, 400, 'bad_request', 'unknown visibility op');
-      json(res, 200, { ok: true, data: { op, projectKey, sourceId } });
+      try {
+        if (op === 'assignProject' && projectKey) {
+          await this.write.assignProject(identity, agentId, projectKey);
+        } else if (op === 'unassignProject' && projectKey) {
+          await this.write.unassignProject(identity, agentId, projectKey);
+        } else if (op === 'hide' && sourceId) {
+          await this.write.hideSource(identity, agentId, sourceId);
+        } else if (op === 'unhide' && sourceId) {
+          await this.write.unhideSource(identity, agentId, sourceId);
+        } else {
+          return err(res, 400, 'bad_request', 'unknown visibility op');
+        }
+        json(res, 200, { ok: true, data: { op, projectKey, sourceId } });
+      } catch (e) {
+        if (!mapWriteError(res, e)) {
+          err(res, 400, 'bad_request', e instanceof Error ? e.message : String(e));
+        }
+      }
     });
 
     this.route(
@@ -751,59 +565,54 @@ export class KnowledgeHttpApp {
       '/v1/principals/:agentId/session-visibility',
       async (req, res, ctx, params) => {
         const agentId = params.agentId!;
-        this.ensurePrincipal(ctx, agentId);
-        this.assertOwnPrincipal(ctx, agentId);
+        await this.write.ensurePrincipal(this.identityOf(ctx), agentId, this.opts.autoRegisterPrincipals ?? true);
+        await this.write.assertOwnPrincipal(this.identityOf(ctx), agentId);
         const url = new URL(req.url ?? '/', 'http://local');
         const sessionId = url.searchParams.get('sessionId') ?? '';
         if (!sessionId) return err(res, 400, 'session_required', 'sessionId required');
-        const data = await this.query().sessionVisibility(
-          agentId,
-          sessionId,
-          this.identityOf(ctx),
-        );
-        json(res, 200, { ok: true, data });
+        json(res, 200, {
+          ok: true,
+          data: await this.query().sessionVisibility(agentId, sessionId, this.identityOf(ctx)),
+        });
       },
     );
 
     this.route(
       'PUT',
       '/v1/principals/:agentId/session-visibility',
-      (_req, res, ctx, params, body) => {
+      async (_req, res, ctx, params, body) => {
         const agentId = params.agentId!;
-        this.ensurePrincipal(ctx, agentId);
-        this.assertOwnPrincipal(ctx, agentId);
+        await this.write.ensurePrincipal(this.identityOf(ctx), agentId, this.opts.autoRegisterPrincipals ?? true);
+        await this.write.assertOwnPrincipal(this.identityOf(ctx), agentId);
         const b = body as {
           sessionId?: string;
           items?: Array<{ targetType?: string; targetId?: string; op?: string }>;
         };
         const sessionId = b?.sessionId;
         if (!sessionId) return err(res, 400, 'bad_request', 'sessionId required');
-        const { sources } = this.bundle();
-        // replace 语义：先清后写，禁止残留旧 include/exclude
-        sources.clearSessionVisibility(sessionId);
-        const items: Array<{ targetType: 'project' | 'source'; targetId: string; op: 'include' | 'exclude' }> = [];
-        for (const raw of b.items ?? []) {
-          const targetType = raw?.targetType as 'project' | 'source' | undefined;
-          const targetId = typeof raw?.targetId === 'string' ? raw.targetId : '';
-          const op = raw?.op as 'include' | 'exclude' | undefined;
-          if (!targetId || (targetType !== 'project' && targetType !== 'source') || (op !== 'include' && op !== 'exclude')) {
-            return err(res, 400, 'bad_request', 'items[] invalid');
+        try {
+          const count = await this.write.replaceSessionVisibility(
+            this.identityOf(ctx),
+            agentId,
+            sessionId,
+            (b.items ?? []) as Array<{ targetType: string; targetId: string; op: string }>,
+          );
+          json(res, 200, { ok: true, data: { sessionId, count } });
+        } catch (e) {
+          if (!mapWriteError(res, e)) {
+            err(res, 400, 'bad_request', e instanceof Error ? e.message : String(e));
           }
-          items.push({ targetType, targetId, op });
-          sources.setSessionVisibility(sessionId, { targetType, targetId, op });
         }
-        json(res, 200, { ok: true, data: { sessionId, count: items.length } });
       },
     );
 
     this.route(
       'POST',
       '/v1/principals/:agentId/session-visibility',
-      (_req, res, ctx, params, body) => {
+      async (_req, res, ctx, params, body) => {
         const agentId = params.agentId!;
-        this.ensurePrincipal(ctx, agentId);
-        this.assertOwnPrincipal(ctx, agentId);
-        const { sources } = this.bundle();
+        await this.write.ensurePrincipal(this.identityOf(ctx), agentId, this.opts.autoRegisterPrincipals ?? true);
+        await this.write.assertOwnPrincipal(this.identityOf(ctx), agentId);
         const item = body as {
           sessionId?: string;
           targetType?: 'project' | 'source';
@@ -813,7 +622,7 @@ export class KnowledgeHttpApp {
         if (!item?.sessionId || !item.targetType || !item.targetId || !item.op) {
           return err(res, 400, 'bad_request', 'sessionId/targetType/targetId/op required');
         }
-        sources.setSessionVisibility(item.sessionId, {
+        await this.write.setSessionVisibilityItem(this.identityOf(ctx), item.sessionId, {
           targetType: item.targetType,
           targetId: item.targetId,
           op: item.op,
@@ -825,209 +634,72 @@ export class KnowledgeHttpApp {
     this.route(
       'DELETE',
       '/v1/principals/:agentId/session-visibility',
-      (req, res, ctx, params) => {
+      async (req, res, ctx, params) => {
         const agentId = params.agentId!;
-        this.ensurePrincipal(ctx, agentId);
-        this.assertOwnPrincipal(ctx, agentId);
+        await this.write.ensurePrincipal(this.identityOf(ctx), agentId, this.opts.autoRegisterPrincipals ?? true);
+        await this.write.assertOwnPrincipal(this.identityOf(ctx), agentId);
         const url = new URL(req.url ?? '/', 'http://local');
         const sessionId = url.searchParams.get('sessionId') ?? '';
         if (!sessionId) return err(res, 400, 'session_required', 'sessionId required');
         const targetType = url.searchParams.get('targetType');
         const targetId = url.searchParams.get('targetId');
-        const { sources } = this.bundle();
         if (targetType && targetId) {
-          sources.clearSessionVisibility(sessionId, {
+          await this.write.clearSessionVisibility(this.identityOf(ctx), sessionId, {
             targetType: targetType as 'project' | 'source',
             targetId,
           });
           json(res, 200, { ok: true, data: { sessionId, targetType, targetId } });
           return;
         }
-        sources.clearSessionVisibility(sessionId);
+        await this.write.clearSessionVisibility(this.identityOf(ctx), sessionId);
         json(res, 200, { ok: true, data: { sessionId, cleared: true } });
       },
     );
 
-    this.route('GET', '/v1/jobs', (req, res, ctx) => {
+    this.route('GET', '/v1/jobs', async (req, res, ctx) => {
       const url = new URL(req.url ?? '/', 'http://local');
-      const sourceId = url.searchParams.get('sourceId') ?? undefined;
-      const status = url.searchParams.get('status') ?? undefined;
-      const where: string[] = [
-        `source_id IN (SELECT id FROM knowledge_sources WHERE tenant_id = ? AND (registered_by = ? OR visibility = 'public'))`,
-      ];
-      const args: unknown[] = [ctx.tenantId, ctx.gatewayId];
-      if (sourceId) {
-        where.push('source_id = ?');
-        args.push(sourceId);
-      }
-      if (status) {
-        where.push('status = ?');
-        args.push(status);
-      }
-      const rows = this.db.raw
-        .prepare(
-          `SELECT * FROM knowledge_jobs WHERE ${where.join(' AND ')} ORDER BY created_at DESC LIMIT 200`,
-        )
-        .all(...(args as never[]));
-      json(res, 200, { ok: true, data: rows });
+      json(res, 200, {
+        ok: true,
+        data: await this.query().listJobs({
+          identity: this.identityOf(ctx),
+          sourceId: url.searchParams.get('sourceId') ?? undefined,
+          status: url.searchParams.get('status') ?? undefined,
+        }),
+      });
     });
 
-    this.route('GET', '/v1/jobs/control', (req, res, ctx) => {
+    this.route('GET', '/v1/jobs/control', async (req, res, ctx) => {
       const url = new URL(req.url ?? '/', 'http://local');
       const sourceId = url.searchParams.get('sourceId') ?? '';
       if (!sourceId) return err(res, 400, 'bad_request', 'sourceId required');
-      if (!this.assertSourceOwner(ctx, sourceId)) {
+      if (!(await this.write.isSourceOwner(sourceId, ctx.gatewayId))) {
         return err(res, 403, 'not_resource_owner', 'not source owner');
       }
-      const { ingest } = this.bundle();
-      json(res, 200, { ok: true, data: ingest.jobControlState(sourceId) });
+      const detail = await this.query().getSourceDetail(sourceId, this.identityOf(ctx));
+      if (!detail) return err(res, 404, 'source_not_found', 'source not found');
+      json(res, 200, { ok: true, data: detail.jobControl });
     });
 
-    this.route('GET', '/v1/promotion-candidates', (_req, res) => {
-      const hitLog = new KnowledgeHitLog(this.db);
-      json(res, 200, { ok: true, data: hitLog.promotionCandidates() });
-    });
-  }
-
-  private assertOwnPrincipal(ctx: AuthContext, localAgentId: string): void {
-    const row = this.db.raw
-      .prepare(
-        `SELECT gateway_id FROM knowledge_principals
-         WHERE tenant_id = ? AND gateway_id = ? AND local_agent_id = ?`,
-      )
-      .get(ctx.tenantId, ctx.gatewayId, localAgentId) as { gateway_id?: string } | undefined;
-    if (row?.gateway_id && row.gateway_id !== ctx.gatewayId) {
-      throw Object.assign(new Error('not principal owner'), { code: 'not_principal_owner' });
-    }
-    // 未注册 principal 时 autoRegister 已处理；此处仅防跨 gateway 误用
-  }
-
-  /** 源是否由本 Gateway 注册（管理写操作） */
-  private assertSourceOwner(ctx: AuthContext, sourceId: string): boolean {
-    const row = this.db.raw
-      .prepare('SELECT registered_by FROM knowledge_sources WHERE id = ?')
-      .get(sourceId) as { registered_by?: string } | undefined;
-    if (!row) return false;
-    if (row.registered_by && row.registered_by !== ctx.gatewayId) return false;
-    return true;
-  }
-
-  private sourceVisibleToGateway(
-    src: { id: string; registeredBy?: string },
-    ctx: AuthContext,
-  ): boolean {
-    const row = this.db.raw
-      .prepare('SELECT registered_by, visibility FROM knowledge_sources WHERE id = ?')
-      .get(src.id) as { registered_by?: string; visibility?: string } | undefined;
-    if (!row) return true;
-    if (row.registered_by === ctx.gatewayId) return true;
-    return row.visibility === 'public';
-  }
-
-  private upsertPrincipal(
-    ctx: AuthContext,
-    localAgentId: string,
-    body: { displayName?: string; status?: string },
-  ): void {
-    const now = Date.now();
-    this.db.raw
-      .prepare(
-        `INSERT INTO knowledge_principals
-           (tenant_id, gateway_id, local_agent_id, display_name, status, last_seen_at, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(tenant_id, gateway_id, local_agent_id) DO UPDATE SET
-           display_name = COALESCE(excluded.display_name, knowledge_principals.display_name),
-           status = excluded.status,
-           last_seen_at = excluded.last_seen_at,
-           updated_at = excluded.updated_at`,
-      )
-      .run(
-        ctx.tenantId,
-        ctx.gatewayId,
-        localAgentId,
-        body.displayName ?? null,
-        body.status ?? 'active',
-        now,
-        now,
-        now,
-      );
-  }
-
-  private ensurePrincipal(ctx: AuthContext, localAgentId: string): void {
-    const row = this.db.raw
-      .prepare(
-        `SELECT status FROM knowledge_principals
-         WHERE tenant_id = ? AND gateway_id = ? AND local_agent_id = ?`,
-      )
-      .get(ctx.tenantId, ctx.gatewayId, localAgentId) as { status?: string } | undefined;
-    if (row) return;
-    if (this.opts.autoRegisterPrincipals) {
-      this.upsertPrincipal(ctx, localAgentId, {});
-      return;
-    }
-    throw Object.assign(new Error('principal not registered'), {
-      code: 'principal_not_registered',
+    this.route('GET', '/v1/promotion-candidates', async (_req, res) => {
+      json(res, 200, { ok: true, data: await this.query().promotionCandidates() });
     });
   }
 
-  /**
-   * 拉起 ingest 运行时（Service 进程入口调用一次）。
-   *
-   * - 恢复 watch 源的 fs 监听
-   * - 补跑从未开索引的 pending 源（注册后崩溃 / 历史遗留）
-   * - 启动 reconciler / poll 看门狗（否则任务静默停摆无人捡）
-   */
+  /** 拉起 ingest 运行时（Service 入口调用一次；实现落在 Writer） */
   startIngestRuntime(): void {
-    const { sources, ingest } = this.bundle();
-    // 源任务稳定后补 generatedDescription（Service 无 LLM 时走启发式，不再空转）
-    ingest.onSourceSettled = (sourceId) => {
-      void (async () => {
-        try {
-          const src = sources.get(sourceId);
-          if (!src || src.description?.trim()) return;
-          const paths = this.db.raw
-            .prepare(
-              'SELECT logical_path FROM knowledge_memberships WHERE source_id = ? ORDER BY logical_path LIMIT 20',
-            )
-            .all(sourceId) as Array<{ logical_path: string }>;
-          const sample = paths.map((p) => p.logical_path).join('\n') || src.location;
-          const r = await generateKnowledgeDescription(src, sample, { enabled: true });
-          sources.update(sourceId, { generatedDescription: r.description });
-        } catch {
-          /* describe 失败不影响索引 */
-        }
-      })();
-    };
-    for (const s of sources.list()) {
-      if (s.status === 'removed' || s.status === 'disabled') continue;
-      if (s.sync.enabled !== false && s.sync.strategy === 'watch') {
-        ingest.startWatch(s.id);
-      }
-      // 仅 pending：已 discovering/partial 的缺口交给 reconciler 的 gap 扫描
-      if (s.status === 'pending') {
-        void ingest.ingestSource(s.id, { full: true }).catch((e) => {
-          console.warn(
-            `[Knowledge] recover pending failed (${s.id}): ${e instanceof Error ? e.message : String(e)}`,
-          );
-        });
-      }
-    }
-    ingest.startReconciler();
-    ingest.startPolling();
+    void this.write.startIngestRuntime().catch((e) => {
+      console.warn(
+        `[Knowledge] startIngestRuntime failed: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    });
   }
 
-  /** 停 ingest 定时器 / watch 与 Query Worker（Service 关闭） */
   dispose(): void | Promise<void> {
-    for (const ingest of this.ingests.values()) {
-      ingest.dispose();
-    }
-    this.ingests.clear();
-    return this.opts.query?.dispose();
+    this.progressOff?.();
+    this.progressOff = null;
+    return this.write.dispose();
   }
 
-  /**
-   * node:http 入口。
-   */
   handle = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     try {
       const url = new URL(req.url ?? '/', 'http://local');
@@ -1067,19 +739,9 @@ export class KnowledgeHttpApp {
       }
       err(res, 404, 'not_found', `no route ${method} ${path}`);
     } catch (e) {
-      const code =
-        (e as { code?: string }).code ??
-        (e instanceof Error ? e.message : 'internal_error');
-      if (code === 'principal_not_registered') {
-        return err(res, 403, code, 'principal not registered');
-      }
-      if (code === 'not_principal_owner') {
-        return err(res, 403, code, 'not principal owner');
-      }
-      if (code === 'not_resource_owner') {
-        return err(res, 403, code, 'not resource owner');
-      }
-      err(res, 500, 'internal_error', e instanceof Error ? e.message : String(e));
+      if (mapWriteError(res, e)) return;
+      const code = (e as { code?: string }).code ?? (e instanceof Error ? e.message : 'internal_error');
+      err(res, 500, 'internal_error', String(code));
     }
   };
 
@@ -1091,9 +753,8 @@ export class KnowledgeHttpApp {
 }
 
 /**
- * 修正 route 参数名：注册时把 :name 存进 handler 元数据。
+ * 创建 HTTP 编排层（写/读端口注入；不碰 SQLite）。
  */
 export function createKnowledgeHttpApp(opts: KnowledgeServiceOptions): KnowledgeHttpApp {
-  const app = new KnowledgeHttpApp(opts);
-  return app;
+  return new KnowledgeHttpApp(opts);
 }

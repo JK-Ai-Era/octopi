@@ -1,3 +1,65 @@
+## v0.64.1
+
+### fix(knowledge): 审查修复 — principal 鉴权空转 / session-visibility 跨 Gateway / 删源竞态
+
+子代理审查后核验确认并修复：
+
+- **`assertOwnPrincipal` 永不失败**：SQL 已按 `gateway_id` 预过滤再比较自身。改为查同 tenant 下同名 principal，**他方 gateway 已登记**才 `not_principal_owner`。
+- **session-visibility 表有 tenant/gateway 列但读写只按 sessionId**，且写死 `'default','default'`。set/list/clear/overlay 全部按 identity 隔离；只读路径对 session-visibility/visibility 增加 `isPrincipalForeign` 闸门。
+- **`removeSource` 未停在途 ingest**：purge 让出窗口内 upsert 会写回孤儿 File/Chunk。删除前 `abortJobs`。
+- **Query Worker boot 失败泄漏 Engine/Writer**：`serve.ts` 失败路径 terminate。
+- **`ready().writeLocked: false` 假字段**（违 AGENTS 禁桩）：从契约删除。
+
+**测试**：knowledge 224 绿。
+
+### test/perf(knowledge): 跨 Gateway 回归 + SSE 进度自带归属字段
+
+- `knowledge-cross-gateway`：session-visibility 按 tenant/gateway 隔离、`assertOwnPrincipal` / `isPrincipalForeign` 同口径、`removeSource` 留下中止纪元、progress 带 `registeredBy`/`visibility`
+- **SSE 过滤改本地字段**：`IngestProgressEvent` 在 Writer `emitProgress` 补齐 `tenantId`/`registeredBy`/`visibility`；API 不再每条 progress RPC Writer（重索引期避免堵 abort）
+
+**测试**：knowledge 229 绿。
+
+## v0.64.0
+
+### refactor(knowledge): Writer Worker — API 与唯一写者/ingest 分线程
+
+**问题**：写路由与 ingest 同在 Engine Worker；重索引期 abort / 注册源等写 HTTP 会在事件循环上排队。生产需要写控制面与长写事务隔离。
+
+**结构**（无兼容层）：
+
+- **`KnowledgeWriteService`**（`writer-service.ts`）：唯一变更端口（principal/project/source/ingest 控制/visibility/session-visibility）
+- **Writer Worker**（`writer-worker.ts` + `writer-worker-client.ts`）：独占可写 `knowledge.db` + `KnowledgeIngest` + describe/ingest runtime；progress 事件转发给 API（SSE）
+- **Engine/API Worker**：只做写 HTTP 编排 + SSE；**禁止可写 SQLite**；残留短读用 `readOnly` 连接 Local query
+- **`http-app.ts` 收成编排层**：只依赖 `write` + `query`；错误码从 Writer 透传（`not_resource_owner` 等）
+- **`createLocalKnowledgeStack`**：测试 / `:memory:` 同进程装配（非生产）
+- `:memory:` 仍写/读同连接（无法跨连接共享）；文件库生产路径 Writer + 只读 query
+
+**测试**：knowledge 套件 224 绿（含 `startKnowledgeServiceProcess` / SSE close / http-app / client）。
+
+## v0.63.0
+
+### perf(knowledge): 纯读直达 Query Worker — 任务在跑时列表/详情不再卡
+
+**问题**：`GET /v1/projects` / `sources` / 源详情即使走 Query Worker，仍要先在 Engine Worker 事件循环上分发；ingest 同步写事务（`upsertFile` 同步 `dropChunks`、coverage 全量 COUNT、jobControl 重 JOIN）占死写线程 → UI 轮询超时。源详情还混用写连接（`jobControlState` / `listProjectAgents`）。
+
+**结构**（无兼容层）：
+
+- **主线程纯读直达**：`read-http.ts` + `isPureReadRoute`——鉴权后 `projects/sources/detail/files/jobs/search/catalog/ready` 不再 `postMessage` 进 Engine
+- **Meta / Search 分角色 Query Worker**（`role: meta|search|all`）：重 search 不堵 list；boot 握手允许 `dbStats`
+- **源详情只读拼装**：`getSourceDetail`（source + stats + jobControl + assigned/hidden agents）；`readJobControlState` 纯 SQL（`job-control-state.ts`），与 ingest 内存态脱钩
+- Engine **先建库**再起 Query Worker（`readOnly` 打不开不存在的文件）；`:memory:` 仍走 Engine Local
+
+### perf(knowledge): 写路径让出 + COUNT 缓存 + jobs 索引
+
+- `upsertFile` 旧索引清理改 `dropChunksAsync`（批间 `setImmediate`）；`markUpsertIncomplete` 异步化
+- `sourceStats` / `embeddingCoverage` / `hasChunksMissingEmbedding` 1s TTL 缓存；写路径 `invalidateStatsCache()`
+- `listProjects` 一次拉齐 project→agents（去 N+1）
+- `idx_knowledge_jobs_source_status`；`knowledge_source_control` 并入 `createTables`（Query 侧可读中止态）
+
+**测试**：`knowledge-read-isolation`（路由分类 + getSourceDetail/jobControl 纯 SQL）；knowledge 套件 224 绿。
+
+**边界**：写 HTTP 与 ingest 仍在 Engine（唯一写者）；控制类写操作已短事务 + 让出。若写 API 在重索引期仍嫌慢，下一步再拆 Writer Worker（本版读隔离已消掉 UI 主路径）。
+
 ## v0.62.0
 
 ### fix(knowledge): purge ∥ parse 竞态 — 同 File 写锁

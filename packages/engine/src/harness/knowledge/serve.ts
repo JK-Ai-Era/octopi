@@ -1,14 +1,15 @@
 /**
- * Knowledge Service 进程入口 — `octopi knowledge serve` / manageLocal 子进程
+ * serve 入口线程模型（v0.63+）
  *
- * 线程边界（按职责，不按「像不像都要放一起」）：
- * - 主线程：listen、**存活探测 /health**、**token 鉴权（内存表）**、SSE 泵出。可阻塞业务为零。
- * - Engine Worker：业务路由 + HttpApp + SQLite + ingest（允许阻塞）。
- * - 嵌套 Worker：解析 / 切块 / FTS token。
+ * - 主线程：listen · /health · token 鉴权 · **纯读直达 Meta/Search Worker** · SSE 泵出
+ * - Engine Worker：写路由 + HttpApp + SQLite 写 + ingest（允许阻塞；不影响纯读）
+ * - Meta Worker：只读列表/控制面（projects / sources / jobs / ready）
+ * - Search Worker：只读检索（search / catalog / files / chunks）
+ * - 嵌套 Parse Worker：抽取 / 切块 / FTS token
  *
- * 为何鉴权不进 Engine：token 在内存数组上 O(n) 查找，与路由表无关；引擎忙时仍须 401/health。
- * 为何业务路由进 Engine：route ↔ handler 必须同处一源，拆到主线程只会双份维护。
+ * 纯读 **不得** 再 postMessage 进 Engine——ingest 写事务占死写线程时 UI 列表仍须应答。
  */
+
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { Worker } from 'node:worker_threads';
 import { resolveWorkerUrl } from '../../worker-path.js';
@@ -19,6 +20,12 @@ import {
   type HttpBridgeRequest,
   type HttpBridgeWorkerInbound,
 } from './http-bridge.js';
+import type { KnowledgeQueryService, QueryWorkerRole } from './query-service.js';
+import {
+  authenticateRead,
+  handleKnowledgeReadHttp,
+  isPureReadRoute,
+} from './read-http.js';
 
 export interface KnowledgeServeOptions {
   dbPath: string;
@@ -63,8 +70,26 @@ function toBridgeHeaders(
   return { ...headers };
 }
 
+async function startQueryWorker(opts: {
+  dbPath: string;
+  role: QueryWorkerRole;
+  sqliteVecExtensionPath?: string;
+  embeddingModels?: KnowledgeServeOptions['embeddingModels'];
+}): Promise<KnowledgeQueryService> {
+  const { createKnowledgeQueryService } = await import('./query-service.js');
+  return createKnowledgeQueryService({
+    dbPath: opts.dbPath,
+    mode: 'worker',
+    role: opts.role,
+    embeddingModels: opts.embeddingModels ?? null,
+    ...(opts.sqliteVecExtensionPath
+      ? { sqliteVecExtensionPath: opts.sqliteVecExtensionPath }
+      : {}),
+  });
+}
+
 /**
- * 启动 Knowledge HTTP 服务（唯一写者；业务在 Engine Worker）。
+ * 启动 Knowledge HTTP 服务（唯一写者；业务写在 Engine Worker，纯读直达 Query Worker）。
  *
  * @param opts - db 路径 / 监听 / token 表 / embedding
  * @returns 可关闭的 listen handle
@@ -72,6 +97,9 @@ function toBridgeHeaders(
 export async function startKnowledgeService(
   opts: KnowledgeServeOptions,
 ): Promise<KnowledgeServeHandle> {
+  const useSplitQuery = opts.dbPath !== ':memory:';
+
+  // Engine 先起：建库/建表后 Query Worker 才能只读打开（缺文件时 readOnly 会炸）
   const entry = fileURLToWorker('./engine-thread.js');
   const worker = new Worker(entry, {
     workerData: {
@@ -83,6 +111,8 @@ export async function startKnowledgeService(
       embeddingModels: opts.embeddingModels ?? null,
       embed: opts.embed ?? null,
       testEmbeddingStub: opts.testEmbeddingStub ?? false,
+      // 文件库：Engine 不再自建 Query Worker（纯读在主线程）
+      skipQueryWorker: useSplitQuery,
     },
     // 嵌套解析 worker 需要相对 dist 加载
     env: process.env,
@@ -111,6 +141,34 @@ export async function startKnowledgeService(
       reject(new Error(`knowledge_engine_thread_exit_${code}`));
     });
   });
+
+  let metaQuery: KnowledgeQueryService | null = null;
+  let searchQuery: KnowledgeQueryService | null = null;
+  if (useSplitQuery) {
+    try {
+      [metaQuery, searchQuery] = await Promise.all([
+        startQueryWorker({
+          dbPath: opts.dbPath,
+          role: 'meta',
+          sqliteVecExtensionPath: opts.sqliteVecExtensionPath,
+          embeddingModels: opts.embeddingModels,
+        }),
+        startQueryWorker({
+          dbPath: opts.dbPath,
+          role: 'search',
+          sqliteVecExtensionPath: opts.sqliteVecExtensionPath,
+          embeddingModels: opts.embeddingModels,
+        }),
+      ]);
+    } catch (e) {
+      await Promise.all([
+        metaQuery?.dispose() ?? Promise.resolve(),
+        searchQuery?.dispose() ?? Promise.resolve(),
+      ]);
+      await worker.terminate().catch(() => undefined);
+      throw e;
+    }
+  }
 
   let nextId = 1;
   /** id → 非 SSE 响应等待 / SSE res */
@@ -215,6 +273,30 @@ export async function startKnowledgeService(
           }
         }
 
+        // 纯读：主线程 → Meta/Search Worker（不进 Engine 事件循环）
+        if (useSplitQuery && metaQuery && searchQuery && isPureReadRoute(method, urlPath)) {
+          const auth = authenticateRead(tokens, req);
+          if (!auth) {
+            res.writeHead(401, { 'content-type': 'application/json; charset=utf-8' });
+            res.end(
+              JSON.stringify({ ok: false, error: { code: 'unauthorized', message: 'missing or invalid token' } }),
+            );
+            return;
+          }
+          const handled = await handleKnowledgeReadHttp(
+            {
+              meta: metaQuery,
+              search: searchQuery,
+              tokens,
+              autoRegisterPrincipals: opts.autoRegisterPrincipals ?? true,
+            },
+            req,
+            res,
+            auth,
+          );
+          if (handled) return;
+        }
+
         const body = await readBody(req);
         const bridgeReq: HttpBridgeRequest = {
           method,
@@ -294,6 +376,10 @@ export async function startKnowledgeService(
           resolve();
         });
       });
+      await Promise.all([
+        metaQuery?.dispose() ?? Promise.resolve(),
+        searchQuery?.dispose() ?? Promise.resolve(),
+      ]);
       await new Promise<void>((resolve) => {
         const timer = setTimeout(() => {
           void worker.terminate().finally(() => resolve());
