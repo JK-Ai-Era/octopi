@@ -258,6 +258,10 @@ export type {
   MemoryStore, MemoryEntry, MemoryType, MemoryQuery, MemoryStats,
   WisdomStore, WisdomEntry,
   ConceptGraphStore, ConceptNode, ConceptEdge, ConceptGraph,
+  ConceptKind, ConceptRelationType, ConceptStatus, EvidenceClass, EdgeBasis,
+  AdmitConceptInput, AdmitConceptResult, AdmitEdgeInput, AdmitEdgeResult,
+  SpreadingActivateOptions, ActivatedGraph, ConceptGraphStats, DecayResult,
+  MergeCandidate, ConceptGateReason,
   KnowledgeCatalogItem, KnowledgeCatalogProvider,
   Planner, Reflector, AgentState,
 } from './harness/index.js';

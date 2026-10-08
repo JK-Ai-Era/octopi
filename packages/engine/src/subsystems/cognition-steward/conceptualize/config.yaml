@@ -1,0 +1,50 @@
+id: cognition.steward.conceptualize
+name: Cognition Steward Conceptualize
+description: 命题+语境 → 概念图谱（持证关系；写 concepts/concept_edges）
+
+sense:
+  source: eventBus
+  filter:
+    condition: "true"
+    events: ['cognition.conceptualize.request']
+    emits: ['cognition.conceptualized']
+  isolation: isolated
+
+think:
+  implementation: llm
+  strategy: single
+  maxIterations: 1
+
+act:
+  mode: inject
+
+signal:
+  severity: info
+  channel: [event]
+
+boundary:
+  visibility: isolated
+  authority: act
+  security: trusted
+
+tools:
+  mode: none
+
+session:
+  mode: ephemeral
+  scope: agent
+
+lifecycle:
+  maxConcurrent: 1
+  maxDurationMs: 30000
+
+runtimeInject:
+  requires: ['conceptGraphStore']
+
+observability:
+  eventPrefix: cognition.steward.conceptualize
+
+metadata:
+  config:
+    maxNodesPerProposition: 6
+    maxEdgesPerProposition: 12

@@ -1,0 +1,54 @@
+id: cognition.steward.consolidate
+name: Cognition Steward Consolidate
+description: 概念图巩固：衰减、晋升、GC、容量检查（事件+TTL）
+
+sense:
+  source: schedule
+  interval: 86400000
+  filter:
+    condition: "true"
+    events: ['cognition.consolidate.request', 'session.ended', 'memory.steward.governed']
+    emits: ['cognition.consolidated']
+  isolation: isolated
+
+think:
+  implementation: code
+  strategy: deterministic
+  maxIterations: 1
+
+act:
+  mode: inject
+
+signal:
+  severity: info
+  channel: [event]
+
+boundary:
+  visibility: isolated
+  authority: act
+  security: trusted
+
+tools:
+  mode: none
+
+session:
+  mode: ephemeral
+  scope: agent
+
+lifecycle:
+  maxConcurrent: 1
+  maxDurationMs: 15000
+
+runtimeInject:
+  requires: ['conceptGraphStore']
+
+observability:
+  eventPrefix: cognition.steward.consolidate
+
+metadata:
+  config:
+    promoteMinSupport: 3
+    warnNodes: 5000
+    warnEdges: 20000
+    stopNodes: 10000
+    stopEdges: 40000

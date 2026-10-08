@@ -3,8 +3,24 @@
  */
 
 export type {
+  ConceptKind,
+  ConceptRelationType,
+  ConceptStatus,
+  EvidenceClass,
+  EdgeBasis,
   ConceptNode,
   ConceptEdge,
   ConceptGraph,
+  MergeCandidate,
+  EdgeAux,
+  AdmitConceptInput,
+  AdmitConceptResult,
+  AdmitEdgeInput,
+  AdmitEdgeResult,
+  ConceptGateReason,
+  SpreadingActivateOptions,
+  ActivatedGraph,
+  ConceptGraphStats,
+  DecayResult,
   ConceptGraphStore,
 } from './types.js';

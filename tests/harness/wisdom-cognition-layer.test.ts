@@ -56,15 +56,33 @@ describe('Wisdom/Cognition 层接入默认 Assembler', () => {
 
   it('CognitionStore 有相关概念时注入 # 相关概念', async () => {
     const graph = new InMemoryConceptGraph();
-    const a = await graph.addConcept({ name: 'ContextLayer', description: '七层契约' });
-    const b = await graph.addConcept({ name: 'Assembler', description: '装配器' });
-    await graph.addEdge({
-      sourceId: a,
-      targetId: b,
-      relationType: 'related',
+    const a = await graph.admitConcept({
+      name: 'ContextLayer',
+      kind: 'construct',
+      description: '七层契约',
+      supportCount: 2,
+    });
+    const b = await graph.admitConcept({
+      name: 'Assembler',
+      kind: 'construct',
+      description: '装配器',
+      supportCount: 2,
+    });
+    await graph.admitEdge({
+      sourceId: a.id!,
+      targetId: b.id!,
+      relationType: 'part_of',
       strength: 0.9,
       description: 'layer feeds assembler',
+      basis: {
+        memoryIds: ['m1', 'm2'],
+        cue: 'layer feeds assembler',
+        evidenceClass: 'mereonymy',
+        licensedAt: Date.now(),
+      },
+      evidenceText: 'layer feeds assembler',
     });
+    await graph.promote([a.id!, b.id!], 'active');
 
     const asm = createDefaultSystemPromptAssembler({ cognitionStore: graph });
     const result = await asm.assemble({

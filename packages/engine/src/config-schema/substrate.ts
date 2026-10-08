@@ -249,3 +249,68 @@ export const MemoryConfigSchema = z.object({
     })
     .optional(),
 });
+
+/** Cognition 概念图谱（arch/cognition-graph-formation.md） */
+export const CognitionConfigSchema = z.object({
+  enabled: z.boolean().optional(),
+  conceptualize: z
+    .object({
+      onMemoryWrite: z.boolean().optional(),
+      onSessionEnd: z.boolean().optional(),
+      maxNodesPerProposition: z.number().int().positive().max(20).optional(),
+      maxEdgesPerProposition: z.number().int().positive().max(40).optional(),
+    })
+    .optional(),
+  relations: z
+    .object({
+      requireCue: z.boolean().optional(),
+      causesMinIndependentMemories: z.number().int().positive().min(1).max(10).optional(),
+      allowCooccurEscalation: z.literal(false).optional(),
+    })
+    .optional(),
+  identity: z
+    .object({
+      mergeThreshold: z.number().min(0).max(1).optional(),
+      candidateBandLo: z.number().min(0).max(1).optional(),
+      candidateBandHi: z.number().min(0).max(1).optional(),
+    })
+    .optional(),
+  plasticity: z
+    .object({
+      eta: z.number().gt(0).lt(1).optional(),
+      deltaRetrieval: z.number().gt(0).lt(1).optional(),
+      decayPerDay: z
+        .object({
+          related: z.number().min(0).lt(1).optional(),
+          causes: z.number().min(0).lt(1).optional(),
+          part_of: z.number().min(0).lt(1).optional(),
+          opposes: z.number().min(0).lt(1).optional(),
+          similar_to: z.number().min(0).lt(1).optional(),
+          evolves_to: z.number().min(0).lt(1).optional(),
+        })
+        .optional(),
+    })
+    .optional(),
+  consolidation: z
+    .object({
+      debounceMinutes: z.number().int().nonnegative().optional(),
+      ttlHours: z.number().int().positive().optional(),
+    })
+    .optional(),
+  capacity: z
+    .object({
+      warnNodes: z.number().int().positive().optional(),
+      warnEdges: z.number().int().positive().optional(),
+      stopNodes: z.number().int().positive().optional(),
+      stopEdges: z.number().int().positive().optional(),
+    })
+    .optional(),
+  retrieval: z
+    .object({
+      depth: z.number().int().positive().max(5).optional(),
+      delta: z.number().gt(0).lt(1).optional(),
+      tau: z.number().min(0).max(1).optional(),
+      limit: z.number().int().positive().max(100).optional(),
+    })
+    .optional(),
+});

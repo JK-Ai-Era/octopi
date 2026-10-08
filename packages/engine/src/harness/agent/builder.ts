@@ -768,7 +768,7 @@ export class AgentBuilder {
     return this;
   }
 
-  /** 注入 ConceptGraphStore（按 query 召回概念边，进 system prompt CognitionLayer） */
+  /** 注入 ConceptGraphStore（spreadingActivate 召回概念子图，进 system prompt CognitionLayer） */
   cognitionStore(store: import('../memory/types.js').ConceptGraphStore): this {
     this._cognitionStore = store;
     return this;
@@ -1077,6 +1077,26 @@ export class AgentBuilder {
         gates: memCfg?.gates?.maxLength
           ? { maxLength: memCfg.gates.maxLength }
           : undefined,
+        onStored:
+          this._cognitionStore && events
+            ? (info) => {
+                void import('../memory/cognition-trigger.js')
+                  .then(({ emitConceptualizeRequest }) => {
+                    emitConceptualizeRequest(events, {
+                      memoryId: info.id,
+                      proposition: info.proposition,
+                      evidence: info.evidence,
+                      memoryType: info.type,
+                      memoryStatus: info.status as 'shadow' | 'active' | 'strengthened',
+                      channel: info.channel,
+                      sessionId: info.sessionId,
+                    });
+                  })
+                  .catch(() => {
+                    // 动态加载失败不阻断 memory 写
+                  });
+              }
+            : undefined,
       })) {
         this._toolBus.register(tool);
       }
@@ -1281,9 +1301,12 @@ export class AgentBuilder {
         }
       }
 
-      // 依赖注入：memoryStore / sessionStore / constitution / backfillCoverage
+      // 依赖注入：memoryStore / conceptGraphStore / sessionStore / constitution / backfillCoverage
       if (this._memoryStore) {
         subsystemRuntime.registerDependency('memoryStore', this._memoryStore);
+      }
+      if (this._cognitionStore) {
+        subsystemRuntime.registerDependency('conceptGraphStore', this._cognitionStore);
       }
       {
         const { InMemoryBackfillCoverageStore } = await import('../memory/backfill-coverage.js');

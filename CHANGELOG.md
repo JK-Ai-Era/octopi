@@ -1,3 +1,23 @@
+## v0.67.0
+
+### feat(cognition): concept graph formation from memory propositions
+
+**问题**：Cognition 层只有存储壳与正则 `extractFromText`（质量过低），无生产写入路径；`addConcept`/`queryRelated` 等旧 API 会把词面合并与等权 BFS 锁进后续开发。
+
+**方案**（`arch/cognition-graph-formation.md`，无兼容层）：
+
+- **概念化**：`conceptualizer.ts` 以「Memory 命题 + evidence + contextSlice」为唯一入口；LLM 出结构化节点/边假设，门控执法（cue ⊆ 证据、MDL 出生门槛、kind 合法性）
+- **持证关系**：强边（`causes`/`part_of`/`opposes`/`evolves_to`）需证据形态匹配 + 独立多证据；共现禁止升格；证据不足降级 `related` 或 `causal_candidate`；`causes` 的 strengthened 例外要求 `fail_fix` 闭环
+- **结构同一性**：同名按指纹（kind/domain）合并或拆分；embedding 近邻只进 `merge_candidates`，不静默合并；`resolveMerge` 事务化（UNIQUE/自环安全）
+- **可塑性**：Hebbian 加强、分型衰减、反证降权；`admitEdge` 跨调用累积同 pair `memoryIds`（多证据可转正）
+- **检索**：`spreadingActivate` 替换等权 BFS；空 seeds 返回空图；邻接两端 status 过滤；`CognitionLayer` 强边 `A —[rel]→ B` / 弱边折叠「相关：…」
+- **触发**：`memory_store` 落库 → `cognition.conceptualize.request`（eventBus）→ `cognition.steward.conceptualize`；`consolidate` 走 schedule/TTL，未做步骤显式 `skippedSteps`
+- **配置**：`cognition.*`（阈值/容量/多证据门槛）进 Zod + example + schema，并接到 `SqliteConceptGraph`
+
+**删除**：`extractFromText` / `addConcept` / `addEdge` / `queryRelated`（及正则抽概念路径）。AGENTS.md 增加禁止复活约束。
+
+**测试**：`tests/memory/cognition-formation.test.ts`（门控/多证据/合并/扩散/异义拆分）；`tests/sqlite-storage` mock embedding 改为词元哈希（字符 bag 在 embedText 下无法过相关性地板，属测试假象而非 Store 缺陷）。
+
 ## v0.66.1
 
 ### fix(serve): report real Knowledge state after startup

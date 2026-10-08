@@ -241,6 +241,7 @@ export async function buildFromConfig(config: NormalizedHarnessConfig): Promise<
         contextAssemblerConfig,
         constitutionConfig,
         memoryConfig: config.memory,
+        cognitionConfig: config.cognition,
         flatModels,
         levelMap: config.levelMap,
         modelsConfig: config.models,
@@ -274,6 +275,7 @@ async function buildAgent(
     contextAssemblerConfig?: import('../../config.js').ContextAssemblerConfig;
     constitutionConfig?: import('../../config.js').ConstitutionConfig;
     memoryConfig?: import('../../config.js').HarnessConfig['memory'];
+    cognitionConfig?: import('../../config.js').HarnessConfig['cognition'];
     flatModels: NormalizedModelInfo[];
     levelMap?: import('../../config.js').LevelMap;
     modelsConfig?: import('../../config.js').ModelsConfig;
@@ -372,9 +374,17 @@ async function buildAgent(
         }),
       );
       builder.wisdomStore(new SqliteWisdomStore(db));
-      builder.cognitionStore(new SqliteConceptGraph(db, {
-        embeddingProvider: embRuntime?.provider ?? null,
-      }));
+      const cog = shared.cognitionConfig;
+      if (cog?.enabled !== false) {
+        builder.cognitionStore(new SqliteConceptGraph(db, {
+          embeddingProvider: embRuntime?.provider ?? null,
+          mergeThreshold: cog?.identity?.mergeThreshold,
+          candidateBandHi: cog?.identity?.candidateBandHi,
+          stopNodes: cog?.capacity?.stopNodes,
+          stopEdges: cog?.capacity?.stopEdges,
+          causesMinIndependentMemories: cog?.relations?.causesMinIndependentMemories,
+        }));
+      }
       // Knowledge catalog / 索引归独立 Knowledge 服务（arch/knowledge-layer.md）；P1 前不挂
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

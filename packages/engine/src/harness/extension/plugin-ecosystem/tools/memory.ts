@@ -24,6 +24,16 @@ export interface MemoryToolOptions {
   gates?: GateConfig;
   /** 每次触发默认最大写入条数提示（工具描述用） */
   maxWritesPerTrigger?: number;
+  /** 成功落库后回调（概念化触发等）；不得抛错打断写路径 */
+  onStored?: (info: {
+    id: string;
+    proposition: string;
+    evidence: string;
+    type: MemoryType;
+    status: string;
+    channel: MemoryChannel;
+    sessionId?: string;
+  }) => void;
 }
 
 /** 创建记忆工具集 */
@@ -159,6 +169,20 @@ export function createMemoryStoreTool(store: MemoryStore, options?: MemoryToolOp
           reason: 'superseded',
           winnerId: id,
         });
+      }
+
+      try {
+        options?.onStored?.({
+          id,
+          proposition,
+          evidence,
+          type,
+          status,
+          channel,
+          sessionId: context.sessionId,
+        });
+      } catch {
+        // 触发回调失败不影响 Memory 已落库事实
       }
 
       return {

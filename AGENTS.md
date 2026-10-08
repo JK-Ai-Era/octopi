@@ -93,6 +93,8 @@ Scaffolded by `src/init.ts` (`initOctopi` / `ensureAgentDirs`). Keep init, types
 
 **Do not use `memory.extractor` ETL or `MemoryExtractionWiring`.** Memory write path is agent `memory_store` + `memory.steward.*` subsystems. See `docs/memory.md` and `arch/memory-system-redesign.md`.
 
+**Do not reintroduce `extractFromText` regex concept mining or `ConceptGraphStore.addConcept`/`addEdge`/`queryRelated`.** Cognition writes only via `admitConcept`/`admitEdge` + `cognition.steward.*` (evidence-licensed relations). See `arch/cognition-graph-formation.md`.
+
 **Do not reintroduce `SqliteSessionStore`.** Runtime sessions are Jsonl-only (`OCTOPI_HOME/sessions/`). `sessions.index.db` is a rebuildable search projection (FTS5+LIKE), never a second authority. History tools: `session_search` / `session_read` (Information verbatim) vs `memory_search` (propositions). Spec: `arch/session-history-search.md`.
 
 ---

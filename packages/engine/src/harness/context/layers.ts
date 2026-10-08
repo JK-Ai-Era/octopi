@@ -313,7 +313,7 @@ export class MemoryLayer extends BaseLayer {
   }
 }
 
-// ── Cognition（薄图谱片段） ──
+// ── Cognition（扩散激活子图；强弱边分列） ──
 
 export class CognitionLayer extends BaseLayer {
   private readonly store: ConceptGraphStore;
@@ -322,29 +322,52 @@ export class CognitionLayer extends BaseLayer {
   constructor(options: { store: ConceptGraphStore; depth?: number; order?: number }) {
     super('cognition', { order: options.order });
     this.store = options.store;
-    this.depth = options.depth ?? 1;
+    this.depth = options.depth ?? 2;
   }
 
   async assemble(ctx: LayerAssembleContext): Promise<LayerContent | null> {
     if (!ctx.query?.trim()) return null;
-    const graph = await resolveCognitionGraph(this.store, ctx.query, this.depth);
+    const queryTokens = ctx.query
+      .split(/\s+/)
+      .map((t) => t.trim())
+      .filter((t) => t.length >= 2)
+      .slice(0, 8);
+    const seeds = queryTokens.length ? queryTokens : [ctx.query.trim()];
+
+    const graph = await this.store.spreadingActivate(seeds, {
+      depth: this.depth,
+      limit: 40,
+    });
     if (!graph.nodes.length) return null;
 
-    const lines: string[] = [];
+    const nameOf = new Map(graph.nodes.map((n) => [n.id, n.name]));
+    const strong: string[] = [];
+    const weakNames = new Set<string>();
+
     for (const edge of graph.edges) {
-      const source = graph.nodes.find((n: { id: string }) => n.id === edge.sourceId);
-      const target = graph.nodes.find((n: { id: string }) => n.id === edge.targetId);
-      if (source && target) {
-        const desc = edge.description ? ` (${edge.description})` : '';
-        lines.push(`- ${source.name} —[${edge.relationType}]→ ${target.name}${desc}`);
+      const source = nameOf.get(edge.sourceId);
+      const target = nameOf.get(edge.targetId);
+      if (!source || !target) continue;
+      if (edge.relationType === 'related' || edge.status === 'shadow') {
+        weakNames.add(source);
+        weakNames.add(target);
+        continue;
+      }
+      const desc = edge.description ? ` (${edge.description})` : '';
+      strong.push(`- ${source} —[${edge.relationType}]→ ${target}${desc}`);
+    }
+
+    // 弱边只作折叠相关，不伪造成因果格式
+    for (const n of graph.nodes) {
+      if (!weakNames.has(n.name) && !strong.some((l) => l.includes(n.name))) {
+        weakNames.add(n.name);
       }
     }
-    // 无边时仍列出命中概念，避免「有节点却整层 empty」
-    if (lines.length === 0) {
-      for (const node of graph.nodes) {
-        const desc = node.description ? `: ${node.description}` : '';
-        lines.push(`- ${node.name}${desc}`);
-      }
+
+    const lines: string[] = [...strong];
+    const weak = [...weakNames].filter((name) => !strong.some((l) => l.includes(name)));
+    if (weak.length) {
+      lines.push(`相关：${weak.join('、')}`);
     }
     if (lines.length === 0) return null;
 
@@ -352,51 +375,9 @@ export class CognitionLayer extends BaseLayer {
     const { text: truncated, dropped } = this.truncateToBudget(text, ctx.tokenBudget);
     return this.content(truncated, {
       dropped,
-      sources: graph.nodes.map((n: { id: string }) => n.id),
+      sources: graph.nodes.map((n) => n.id),
     });
   }
-}
-
-/**
- * 解析认知图：先 store.queryRelated，失败则从全图按「概念名 ⊆ query」筛种子再扩边
- *
- * @param store - ConceptGraphStore
- * @param query - 检索文本（通常为最近用户消息）
- * @param depth - 扩展深度
- * @returns 命中的子图（可能为空）
- */
-async function resolveCognitionGraph(
-  store: ConceptGraphStore,
-  query: string,
-  depth: number,
-): Promise<{ nodes: Array<{ id: string; name: string; description?: string }>; edges: Array<{ sourceId: string; targetId: string; relationType: string; description?: string }> }> {
-  const direct = await store.queryRelated(query, depth);
-  if (direct.nodes.length) return direct;
-
-  const full = await store.getFullGraph();
-  const q = query.toLowerCase();
-  const seeds = full.nodes.filter((n) => n.name && q.includes(n.name.toLowerCase()));
-  if (!seeds.length) return { nodes: [], edges: [] };
-
-  const collected = new Map(seeds.map((n) => [n.id, n]));
-  const nodeById = new Map(full.nodes.map((n) => [n.id, n]));
-  const visited = new Set(seeds.map((n) => n.id));
-  const queue = seeds.map((n) => ({ id: n.id, d: 0 }));
-  while (queue.length > 0) {
-    const { id, d } = queue.shift()!;
-    if (d >= depth) continue;
-    for (const e of full.edges) {
-      const neighborId = e.sourceId === id ? e.targetId : e.targetId === id ? e.sourceId : null;
-      if (!neighborId || visited.has(neighborId)) continue;
-      const node = nodeById.get(neighborId);
-      if (!node) continue;
-      visited.add(neighborId);
-      collected.set(neighborId, node);
-      queue.push({ id: neighborId, d: d + 1 });
-    }
-  }
-  const edges = full.edges.filter((e) => collected.has(e.sourceId) && collected.has(e.targetId));
-  return { nodes: [...collected.values()], edges };
 }
 
 // ── Wisdom（静态/半静态） ──

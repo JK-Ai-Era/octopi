@@ -142,6 +142,41 @@ export class AgentDatabase {
   }
 
   /**
+   * Cognition 表结构一次性重建（概念图未投入生产；发现旧列即 DROP 重建）。
+   * 禁止对旧 `concepts(name)` UNIQUE 语义做兼容——义项允许多节点同名。
+   */
+  private migrateConceptTables(): void {
+    let needsRebuild = false;
+    try {
+      const cols = this.db.prepare('PRAGMA table_info(concepts)').all() as Array<{ name: string }>;
+      const names = new Set(cols.map((c) => c.name));
+      if (cols.length > 0 && (!names.has('kind') || !names.has('status') || !names.has('domain'))) {
+        needsRebuild = true;
+      }
+    } catch {
+      // table missing — CREATE IF NOT EXISTS will handle
+    }
+    try {
+      const edgeCols = this.db.prepare('PRAGMA table_info(concept_edges)').all() as Array<{ name: string }>;
+      const edgeNames = new Set(edgeCols.map((c) => c.name));
+      if (edgeCols.length > 0 && (!edgeNames.has('status') || !edgeNames.has('basis'))) {
+        needsRebuild = true;
+      }
+    } catch {
+      // ignore
+    }
+
+    if (!needsRebuild) return;
+
+    this.db.exec(`
+      DROP TABLE IF EXISTS concept_edges_aux;
+      DROP TABLE IF EXISTS concept_merge_candidates;
+      DROP TABLE IF EXISTS concept_edges;
+      DROP TABLE IF EXISTS concepts;
+    `);
+  }
+
+  /**
    * 创建所有表结构
    *
    * 顺序：CREATE TABLE IF NOT EXISTS → migrate 旧库列 → CREATE INDEX。
@@ -179,6 +214,7 @@ export class AgentDatabase {
 
     // 旧库可能仍是无 deleted/status 的 schema —— 先补列再建索引
     this.migrateMemoryColumns();
+    this.migrateConceptTables();
 
     this.db.exec(`
       CREATE INDEX IF NOT EXISTS idx_memories_type ON memories(type);
@@ -187,37 +223,66 @@ export class AgentDatabase {
       CREATE INDEX IF NOT EXISTS idx_memories_created ON memories(created_at);
       CREATE INDEX IF NOT EXISTS idx_memories_deleted ON memories(deleted);
 
-      -- ── Concept 表 ──
+      -- ── Concept 表（cognition-graph-formation；义项可同名多节点）──
       CREATE TABLE IF NOT EXISTS concepts (
         id          TEXT PRIMARY KEY,
         name        TEXT NOT NULL,
+        kind        TEXT NOT NULL DEFAULT 'construct',
         description TEXT,
         frequency   INTEGER NOT NULL DEFAULT 1,
         memory_ids  TEXT NOT NULL DEFAULT '[]',
-        properties  TEXT NOT NULL DEFAULT '[]',
+        domain      TEXT NOT NULL DEFAULT '[]',
+        status      TEXT NOT NULL DEFAULT 'shadow',
         embedding   TEXT,
         created_at  INTEGER NOT NULL,
         updated_at  INTEGER NOT NULL
       );
 
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_concepts_name ON concepts(name);
-
-      -- ── Concept Edge 表 ──
       CREATE TABLE IF NOT EXISTS concept_edges (
         id            TEXT PRIMARY KEY,
-        source_id     TEXT NOT NULL REFERENCES concepts(id),
-        target_id     TEXT NOT NULL REFERENCES concepts(id),
+        source_id     TEXT NOT NULL,
+        target_id     TEXT NOT NULL,
         relation_type TEXT NOT NULL,
         strength      REAL NOT NULL DEFAULT 0.5,
         description   TEXT,
-        constraints   TEXT NOT NULL DEFAULT '[]',
+        status        TEXT NOT NULL DEFAULT 'shadow',
+        basis         TEXT NOT NULL DEFAULT '{}',
         created_at    INTEGER NOT NULL,
+        updated_at    INTEGER NOT NULL,
         UNIQUE(source_id, target_id, relation_type)
       );
 
+      CREATE TABLE IF NOT EXISTS concept_merge_candidates (
+        id               TEXT PRIMARY KEY,
+        left_id          TEXT NOT NULL,
+        right_id         TEXT NOT NULL,
+        reason           TEXT NOT NULL,
+        distance         REAL,
+        fingerprint_diff TEXT NOT NULL DEFAULT '[]',
+        status           TEXT NOT NULL DEFAULT 'open',
+        created_at       INTEGER NOT NULL,
+        resolved_at      INTEGER,
+        resolved_action  TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS concept_edges_aux (
+        id         TEXT PRIMARY KEY,
+        edge_key   TEXT NOT NULL,
+        kind       TEXT NOT NULL,
+        memory_ids TEXT NOT NULL DEFAULT '[]',
+        cue        TEXT NOT NULL DEFAULT '',
+        note       TEXT,
+        created_at INTEGER NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_concepts_name ON concepts(name);
+      CREATE INDEX IF NOT EXISTS idx_concepts_status ON concepts(status);
+      CREATE INDEX IF NOT EXISTS idx_concepts_kind ON concepts(kind);
       CREATE INDEX IF NOT EXISTS idx_edges_source ON concept_edges(source_id);
       CREATE INDEX IF NOT EXISTS idx_edges_target ON concept_edges(target_id);
       CREATE INDEX IF NOT EXISTS idx_edges_type ON concept_edges(relation_type);
+      CREATE INDEX IF NOT EXISTS idx_edges_status ON concept_edges(status);
+      CREATE INDEX IF NOT EXISTS idx_merge_candidates_status ON concept_merge_candidates(status);
 
       -- ── Wisdom 表 ──
       CREATE TABLE IF NOT EXISTS wisdom (
@@ -296,7 +361,15 @@ export class AgentDatabase {
    * 统计信息
    */
   stats(): Record<string, number> {
-    const tables = ['memories', 'concepts', 'concept_edges', 'wisdom', 'knowledge_sources'];
+    const tables = [
+      'memories',
+      'concepts',
+      'concept_edges',
+      'concept_merge_candidates',
+      'concept_edges_aux',
+      'wisdom',
+      'knowledge_sources',
+    ];
     const result: Record<string, number> = {};
     for (const table of tables) {
       try {

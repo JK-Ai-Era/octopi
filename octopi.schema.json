@@ -1905,6 +1905,187 @@
         }
       }
     },
+    "cognition": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "conceptualize": {
+          "type": "object",
+          "properties": {
+            "onMemoryWrite": {
+              "type": "boolean"
+            },
+            "onSessionEnd": {
+              "type": "boolean"
+            },
+            "maxNodesPerProposition": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 20
+            },
+            "maxEdgesPerProposition": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 40
+            }
+          }
+        },
+        "relations": {
+          "type": "object",
+          "properties": {
+            "requireCue": {
+              "type": "boolean"
+            },
+            "causesMinIndependentMemories": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10
+            },
+            "allowCooccurEscalation": {
+              "type": "boolean",
+              "const": false
+            }
+          }
+        },
+        "identity": {
+          "type": "object",
+          "properties": {
+            "mergeThreshold": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "candidateBandLo": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "candidateBandHi": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            }
+          }
+        },
+        "plasticity": {
+          "type": "object",
+          "properties": {
+            "eta": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "exclusiveMaximum": 1
+            },
+            "deltaRetrieval": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "exclusiveMaximum": 1
+            },
+            "decayPerDay": {
+              "type": "object",
+              "properties": {
+                "related": {
+                  "type": "number",
+                  "minimum": 0,
+                  "exclusiveMaximum": 1
+                },
+                "causes": {
+                  "type": "number",
+                  "minimum": 0,
+                  "exclusiveMaximum": 1
+                },
+                "part_of": {
+                  "type": "number",
+                  "minimum": 0,
+                  "exclusiveMaximum": 1
+                },
+                "opposes": {
+                  "type": "number",
+                  "minimum": 0,
+                  "exclusiveMaximum": 1
+                },
+                "similar_to": {
+                  "type": "number",
+                  "minimum": 0,
+                  "exclusiveMaximum": 1
+                },
+                "evolves_to": {
+                  "type": "number",
+                  "minimum": 0,
+                  "exclusiveMaximum": 1
+                }
+              }
+            }
+          }
+        },
+        "consolidation": {
+          "type": "object",
+          "properties": {
+            "debounceMinutes": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "ttlHours": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            }
+          }
+        },
+        "capacity": {
+          "type": "object",
+          "properties": {
+            "warnNodes": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "warnEdges": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "stopNodes": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "stopEdges": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            }
+          }
+        },
+        "retrieval": {
+          "type": "object",
+          "properties": {
+            "depth": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 5
+            },
+            "delta": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "exclusiveMaximum": 1
+            },
+            "tau": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "limit": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 100
+            }
+          }
+        }
+      }
+    },
     "security": {
       "type": "object",
       "properties": {

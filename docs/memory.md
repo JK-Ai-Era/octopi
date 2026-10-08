@@ -147,9 +147,9 @@ Memory **不是**对话备份、不是任务列表、不是外部文档库。这
 | 进行中任务 / 开放回路 | Session Tasks |
 | API 文档、静态资料 | Knowledge |
 | 人格、语气、平台规则 | Persona / Constitution |
-| 思维范式二次提炼 | Wisdom / Cognition（下游） |
+| 思维范式二次提炼 | Wisdom（Cognition 概念图见 `arch/cognition-graph-formation.md`） |
 
-持久化为 **per-agent** `agent.db`（内置 `node:sqlite`，Node ≥ 24）。Memory 与 Cognition/Wisdom 同库不同表；Steward 只写 Memory。
+持久化为 **per-agent** `agent.db`（内置 `node:sqlite`，Node ≥ 24）。Memory 与 Cognition/Wisdom 同库不同表；**memory.steward 只写 Memory**，Cognition 由 `cognition.steward.conceptualize` 从命题派生。
 
 ---
 

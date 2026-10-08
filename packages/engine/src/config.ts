@@ -854,6 +854,39 @@ export interface HarnessConfig {
       maxLength?: Partial<Record<'fact' | 'method' | 'norm', number>>;
     };
   };
+  /** Cognition 概念图谱（arch/cognition-graph-formation.md） */
+  cognition?: {
+    enabled?: boolean;
+    conceptualize?: {
+      onMemoryWrite?: boolean;
+      maxNodesPerProposition?: number;
+      maxEdgesPerProposition?: number;
+    };
+    relations?: {
+      requireCue?: boolean;
+      causesMinIndependentMemories?: number;
+    };
+    identity?: {
+      mergeThreshold?: number;
+      candidateBandHi?: number;
+    };
+    capacity?: {
+      warnNodes?: number;
+      warnEdges?: number;
+      stopNodes?: number;
+      stopEdges?: number;
+    };
+    retrieval?: {
+      depth?: number;
+      delta?: number;
+      tau?: number;
+      limit?: number;
+    };
+    consolidation?: {
+      debounceMinutes?: number;
+      ttlHours?: number;
+    };
+  };
   /** Knowledge 检索/召回（全局缺省；agents[].knowledge.recall 可覆盖） */
   knowledge?: KnowledgeRuntimeConfig;
   /**

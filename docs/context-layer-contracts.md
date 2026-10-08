@@ -46,7 +46,7 @@ Constitution + Layer Providers ──► ContextAssembler ──► systemPrompt
 | persona | 20 | **100** | 0.35 | **no** | `PersonaSource` / Runner resolve |
 | skill | 30 | 60 | 0.15 | yes | `SkillManager.formatForPrompt()` |
 | knowledge | 40 | 40 | 0.12 | yes | `KnowledgeCatalogProvider`（Tier 0 catalog） |
-| cognition | 50 | 20 | 0.06 | yes | `ConceptGraphStore.queryRelated` |
+| cognition | 50 | 20 | 0.06 | yes | `ConceptGraphStore.spreadingActivate` |
 | memory | 60 | 30 | 0.10 | yes | `MemoryStore.retrieve` |
 | runtime | 70 | 80 | 0.10 | yes | session tasks + injectedContext |
 
@@ -119,7 +119,7 @@ interface ContextLayer {
 | `RuntimeLayer` | 包装每轮动态注入 | — |
 | `KnowledgeLayer` | `KnowledgeCatalogProvider` → Tier 0 catalog 格式化 | 内容检索 / embedding（归 Knowledge 服务） |
 | `MemoryLayer` | `retrieve({text, limit})` | 衰减策略调参（曲线在 `memory/decay-policy.ts`，由 govern 执行） |
-| `CognitionLayer` | `queryRelated` + 边列表格式化 | 深度遍历策略 |
+| `CognitionLayer` | `spreadingActivate` + 强弱边格式化（强边 `A —[rel]→ B` / 弱边折叠「相关：…」） | 共现升格、假因果写入（归 cognition-gates） |
 | `WisdomLayer` | 全量按 priority 排序后截断 | 场景匹配 |
 | `createDefaultLayers` | 只注册有依赖的层 | 自动发现 |
 

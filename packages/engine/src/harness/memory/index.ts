@@ -18,12 +18,72 @@ export type {
   MemoryWriteSlot,
   WisdomEntry,
   WisdomStore,
+  ConceptKind,
+  ConceptRelationType,
+  ConceptStatus,
+  EvidenceClass,
+  EdgeBasis,
   ConceptNode,
   ConceptEdge,
   ConceptGraph,
+  MergeCandidate,
+  EdgeAux,
+  AdmitConceptInput,
+  AdmitConceptResult,
+  AdmitEdgeInput,
+  AdmitEdgeResult,
+  ConceptGateReason,
+  SpreadingActivateOptions,
+  ActivatedGraph,
+  ConceptGraphStats,
+  DecayResult,
   ConceptGraphStore,
 } from './types.js';
-export { MEMORY_TYPES } from './types.js';
+export {
+  MEMORY_TYPES,
+  CONCEPT_KINDS,
+  CONCEPT_RELATION_TYPES,
+  STRONG_RELATION_TYPES,
+} from './types.js';
+
+// ── Cognition 门控 / 可塑 / 概念化 ──
+export {
+  evaluateConceptGate,
+  licenseEdge,
+  edgeBasisFromLicense,
+  normalizeForCue,
+} from './cognition-gates.js';
+export type {
+  ConceptGateOutcome,
+  EdgeLicenseInput,
+  EdgeLicenseOutcome,
+} from './cognition-gates.js';
+export {
+  DEFAULT_EDGE_DECAY_PER_DAY,
+  DEFAULT_EDGE_DECAY_FLOOR,
+  DEFAULT_RETRIEVE_STATUSES,
+  decayMultiplier,
+  nextEdgeStrength,
+  hebbianStrengthen,
+  counterEvidenceWeaken,
+} from './cognition-decay.js';
+export type { EdgeDecayConfig } from './cognition-decay.js';
+export {
+  conceptualizeAndAdmit,
+  parseConceptualizerJson,
+} from './conceptualizer.js';
+export type {
+  ConceptualizerInput,
+  ConceptualizerResult,
+  ConceptualizerNodeOut,
+  ConceptualizerEdgeOut,
+  RawConceptualizerOutput,
+} from './conceptualizer.js';
+export {
+  COGNITIZE_REQUEST_EVENT,
+  emitConceptualizeRequest,
+} from './cognition-trigger.js';
+export type { ConceptualizeRequestPayload } from './cognition-trigger.js';
 
 // ── 内存实现 ──
 export { InMemoryMemoryStore } from './store.js';

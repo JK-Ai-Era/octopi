@@ -141,6 +141,29 @@
     }
   },
 
+  "cognition": {
+    "enabled": true,
+    "conceptualize": {
+      "onMemoryWrite": true
+    },
+    "relations": {
+      "causesMinIndependentMemories": 2
+    },
+    "identity": {
+      "mergeThreshold": 0.2,
+      "candidateBandHi": 0.35
+    },
+    "capacity": {
+      "warnNodes": 5000,
+      "warnEdges": 20000,
+      "stopNodes": 10000,
+      "stopEdges": 40000
+    },
+    "consolidation": {
+      "ttlHours": 24
+    }
+  },
+
   "knowledge": {
     "recall": "hybrid",
     "required": false,

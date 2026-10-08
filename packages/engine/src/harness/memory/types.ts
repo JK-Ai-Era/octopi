@@ -149,23 +149,90 @@ export interface WisdomStore {
 }
 
 // ── Cognition ──
+// 规范：arch/cognition-graph-formation.md（持证关系 / 结构同一性 / 快慢两态）
 
-/** 概念节点 */
+/** 概念种类 — 基本层级偏置 */
+export type ConceptKind = 'entity' | 'construct' | 'method' | 'problem' | 'constraint';
+
+export const CONCEPT_KINDS: readonly ConceptKind[] = [
+  'entity',
+  'construct',
+  'method',
+  'problem',
+  'constraint',
+] as const;
+
+/** 关系类型；`related` 为弱边（共现级） */
+export type ConceptRelationType =
+  | 'causes'
+  | 'part_of'
+  | 'opposes'
+  | 'similar_to'
+  | 'evolves_to'
+  | 'related';
+
+export const CONCEPT_RELATION_TYPES: readonly ConceptRelationType[] = [
+  'causes',
+  'part_of',
+  'opposes',
+  'similar_to',
+  'evolves_to',
+  'related',
+] as const;
+
+/** 强关系（需持证）；`related` / `similar_to` 不在此列 */
+export const STRONG_RELATION_TYPES: readonly ConceptRelationType[] = [
+  'causes',
+  'part_of',
+  'opposes',
+  'evolves_to',
+] as const;
+
+/** 概念/边运行时状态（与 Memory 对齐） */
+export type ConceptStatus = 'shadow' | 'active' | 'strengthened';
+
+/** 证据形态 — 持证件字段 */
+export type EvidenceClass = 'causal' | 'mereonymy' | 'negation' | 'analogy' | 'evolution' | 'cooccur';
+
+/** 边持证件：强边入库必填 */
+export interface EdgeBasis {
+  /** 独立支撑命题 */
+  memoryIds: string[];
+  /** 证据中的原句片段（须 ⊆ evidence/contextSlice） */
+  cue: string;
+  evidenceClass: EvidenceClass;
+  licensedAt: number;
+}
+
+/** 概念节点（义项，非词面） */
 export interface ConceptNode {
   id: string;
   name: string;
+  kind: ConceptKind;
+  /** 原型描述（含论域） */
   description?: string;
   frequency: number;
   memoryIds: string[];
+  /** 论域标签（义项指纹） */
+  domain: string[];
+  status: ConceptStatus;
+  embedding?: number[] | null;
+  createdAt: number;
+  updatedAt: number;
 }
 
 /** 概念关系 */
 export interface ConceptEdge {
+  id: string;
   sourceId: string;
   targetId: string;
-  relationType: 'causes' | 'part_of' | 'opposes' | 'similar_to' | 'evolves_to' | 'related';
+  relationType: ConceptRelationType;
   strength: number;
   description?: string;
+  status: ConceptStatus;
+  basis: EdgeBasis;
+  createdAt: number;
+  updatedAt: number;
 }
 
 /** 认知图谱 */
@@ -174,13 +241,173 @@ export interface ConceptGraph {
   edges: ConceptEdge[];
 }
 
-/** ConceptGraphStore — 认知图谱存储接口 */
+/** 合并候选（近阈带 / 指纹可疑） */
+export interface MergeCandidate {
+  id: string;
+  leftId: string;
+  rightId: string;
+  reason: string;
+  distance: number | null;
+  fingerprintDiff: string[];
+  status: 'open' | 'merged' | 'kept_split' | 'dropped';
+  createdAt: number;
+  resolvedAt?: number;
+  resolvedAction?: string;
+}
+
+/** `causal_candidate` 等旁路假设，不进慢图强边 */
+export interface EdgeAux {
+  id: string;
+  edgeKey: string;
+  kind: 'causal_candidate';
+  memoryIds: string[];
+  cue: string;
+  note?: string;
+  createdAt: number;
+}
+
+export type AdmitConceptAction = 'created' | 'merged' | 'merge_candidate' | 'rejected';
+
+export interface AdmitConceptResult {
+  action: AdmitConceptAction;
+  /** created / merged 时的节点 id */
+  id?: string;
+  /** merge_candidate 时的候选 id */
+  candidateId?: string;
+  reason?: ConceptGateReason;
+  message?: string;
+}
+
+export type AdmitEdgeAction = 'active' | 'shadow' | 'demoted' | 'rejected' | 'candidate_only';
+
+export interface AdmitEdgeResult {
+  action: AdmitEdgeAction;
+  edgeId?: string;
+  /** demoted 时实际入库的关系类型 */
+  relationType?: ConceptRelationType;
+  reason?: ConceptGateReason;
+  message?: string;
+}
+
+export type ConceptGateReason =
+  | 'ok'
+  | 'empty_name'
+  | 'invalid_kind'
+  | 'invalid_relation'
+  | 'mdl_insufficient'
+  | 'pseudo_concept'
+  | 'secret_like'
+  | 'budget_node'
+  | 'budget_edge'
+  | 'cue_mismatch'
+  | 'multi_evidence_required'
+  | 'cooccur_no_escalation'
+  | 'demoted_related'
+  | 'candidate_only'
+  | 'fingerprint_conflict'
+  | 'capacity_admit_stop'
+  | 'no_context_slice';
+
+export interface AdmitConceptInput {
+  name: string;
+  kind: ConceptKind;
+  description?: string;
+  domain?: string[];
+  memoryIds?: string[];
+  /** 提出该概念的命题条数（MDL）；缺省用 memoryIds.length */
+  supportCount?: number;
+}
+
+export interface AdmitEdgeInput {
+  sourceId: string;
+  targetId: string;
+  relationType: ConceptRelationType;
+  strength: number;
+  description?: string;
+  basis: EdgeBasis;
+  /** 用于 cue 校验的证据/语境全文；缺省跳过 cue 子串校验（仅类型门控） */
+  evidenceText?: string;
+}
+
+export interface SpreadingActivateOptions {
+  /** BFS/扩散深度（默认 2） */
+  depth?: number;
+  /** 距离衰减（默认 0.55） */
+  delta?: number;
+  /** 激活地板（默认 0.08） */
+  tau?: number;
+  /** 节点上限（默认 40） */
+  limit?: number;
+  /** 仅这些 status（默认 active + strengthened） */
+  statuses?: ConceptStatus[];
+}
+
+export interface ActivatedGraph extends ConceptGraph {
+  /** nodeId → 激活值 */
+  activation: Record<string, number>;
+  seeds: string[];
+}
+
+export interface ConceptGraphStats {
+  nodes: number;
+  edges: number;
+  byStatus: Record<ConceptStatus, number>;
+  byKind: Record<ConceptKind, number>;
+  openMergeCandidates: number;
+  causalCandidates: number;
+}
+
+export interface DecayResult {
+  decayedEdges: number;
+  gcNodes: number;
+  gcEdges: number;
+}
+
+/**
+ * ConceptGraphStore — 认知图谱存储
+ *
+ * 写入只经 admit*（门控在 layers 之上的 cognition-gates / conceptualizer）。
+ * 检索主路径是 spreadingActivate；getFullGraph 供巩固与 health。
+ */
 export interface ConceptGraphStore {
-  addConcept(concept: Omit<ConceptNode, 'id' | 'frequency' | 'memoryIds'>): Promise<string>;
-  addEdge(edge: ConceptEdge): Promise<void>;
-  queryRelated(conceptName: string, depth?: number): Promise<ConceptGraph>;
-  extractFromText(text: string, memoryId: string): Promise<void>;
+  admitConcept(input: AdmitConceptInput): Promise<AdmitConceptResult>;
+  admitEdge(input: AdmitEdgeInput): Promise<AdmitEdgeResult>;
+  /** 记录「假因果」假设，不进慢图 */
+  addCausalCandidate(input: {
+    sourceId: string;
+    targetId: string;
+    memoryIds: string[];
+    cue: string;
+    note?: string;
+  }): Promise<void>;
+  listMergeCandidates(limit?: number): Promise<MergeCandidate[]>;
+  resolveMerge(
+    id: string,
+    action: 'merge' | 'keep_split' | 'drop',
+  ): Promise<void>;
+  /** Hebbian 加强（使用痕迹 / 新证据） */
+  reinforce(input: {
+    nodeIds?: string[];
+    edgeIds?: string[];
+    /** 0–1 证据强度 */
+    evidenceStrength?: number;
+  }): Promise<void>;
+  /** 反证：降权或改型 */
+  counterEvidence(input: {
+    edgeId: string;
+    memoryId?: string;
+    /** 是否改标 opposes */
+    markOpposes?: boolean;
+  }): Promise<void>;
+  promote(ids: string[], to: 'active' | 'strengthened'): Promise<void>;
+  demote(ids: string[], to: 'shadow'): Promise<void>;
+  applyDecay(now?: number): Promise<DecayResult>;
+  spreadingActivate(
+    seeds: string[],
+    options?: SpreadingActivateOptions,
+  ): Promise<ActivatedGraph>;
   getFullGraph(): Promise<ConceptGraph>;
+  stats(): Promise<ConceptGraphStats>;
 }
 
 // ── 写入槽位（memory 工具 / Steward 共用） ──

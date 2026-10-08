@@ -358,7 +358,36 @@ export {
 // ── Memory 领域类型 ──
 export type { MemoryType, MemoryEntry, MemoryQuery, MemoryStats, MemoryStore } from './memory/types.js';
 export type { WisdomEntry, WisdomStore } from './memory/types.js';
-export type { ConceptNode, ConceptEdge, ConceptGraph, ConceptGraphStore } from './memory/types.js';
+export type {
+  ConceptKind,
+  ConceptRelationType,
+  ConceptStatus,
+  EvidenceClass,
+  EdgeBasis,
+  ConceptNode,
+  ConceptEdge,
+  ConceptGraph,
+  MergeCandidate,
+  AdmitConceptInput,
+  AdmitConceptResult,
+  AdmitEdgeInput,
+  AdmitEdgeResult,
+  ConceptGateReason,
+  SpreadingActivateOptions,
+  ActivatedGraph,
+  ConceptGraphStats,
+  DecayResult,
+  ConceptGraphStore,
+} from './memory/types.js';
+export {
+  evaluateConceptGate,
+  licenseEdge,
+  conceptualizeAndAdmit,
+  parseConceptualizerJson,
+  DEFAULT_EDGE_DECAY_PER_DAY,
+  hebbianStrengthen,
+  nextEdgeStrength,
+} from './memory/index.js';
 export type {
   Planner, Reflector, AgentState, AgentStats, Plan, PlanStep,
   StepResult, ExecutionRecord, Assessment, Pattern,

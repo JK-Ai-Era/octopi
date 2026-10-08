@@ -31,17 +31,25 @@
 | `JsonlExtractorStore` / `agentHome/extract/` | 补录读 SessionStore |
 | `MemoryType: preference/decision/lesson/discovery` | `fact \| method \| norm` |
 | 统计句 `extractCandidates` | 宪法 + LLM 命题 + gates |
+| `extractFromText` / 正则大写词抽概念 | `conceptualizer.ts`（命题+contextSlice） |
+| `ConceptGraphStore.addConcept` / `addEdge` / `queryRelated` | `admitConcept` / `admitEdge` / `spreadingActivate` |
 
-完整规格：`arch/memory-system-redesign.md`；对外说明：`docs/memory.md`。
+完整规格：`arch/memory-system-redesign.md`；Cognition 规格：`arch/cognition-graph-formation.md`；对外说明：`docs/memory.md`。
 
 ## 文件说明
 
-- types.ts — MemoryType/Entry/Query/Store
+- types.ts — MemoryType/Entry/Query/Store + Cognition 契约（ConceptGraphStore）
 - store.ts / sqlite/memory-store.ts — 实现（含 softDelete/undelete/listForGovern/decay）
 - confidence.ts / gates.ts — 写入暂定与准入
 - similarity.ts — 归一化 / trigram / findDuplicate（无语义极性）
 - decay-policy.ts — 按类型衰减曲线
 - backfill-coverage.ts / backfill-trigger.ts — 补录覆盖与脉搏
 - health-probe.ts — 库存水位双脉搏
-- cognition.ts / sqlite/cognition-store.ts — 概念图谱（工具面暂缓）
+- cognition-gates.ts — 概念/关系持证执法（cue、MDL、保守降级）
+- cognition-decay.ts — 边衰减 / Hebbian / 反证
+- cognition-trigger.ts — 落库后 emit `cognition.conceptualize.request`
+- conceptualizer.ts — 命题+contextSlice → 概念化（唯一概念化入口）
+- cognition.ts / sqlite/cognition-store.ts — 概念图谱（结构同一性、扩散激活）
 - index.ts — 导出
+
+子系统：`subsystems/cognition-steward/`（conceptualize / consolidate）。

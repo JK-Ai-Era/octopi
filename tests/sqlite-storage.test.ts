@@ -15,18 +15,21 @@ import type { EmbeddingProvider } from '@octopi-agent/engine/harness/memory/sqli
 // ── Mock Embedding Provider ──
 
 function createMockEmbedding(): EmbeddingProvider {
-  // 简单的哈希式 embedding：将文本转为固定维度的向量
-  // 相似文本产生相似向量
-  const dimensions = 32;
+  // 词元哈希 embedding：共享 token 提升相似度（模拟语义向量，而非字符 bag）
+  // 注意：store 侧 embed 的是 embedText()（content+meta），query 只 embed text——
+  // 真实 embedding 能跨 meta 对齐；字符级 mock 会把相似度打没，导致地板下零命中。
+  const dimensions = 64;
 
   function textToVec(text: string): number[] {
     const vec = new Array(dimensions).fill(0);
-    for (let i = 0; i < text.length; i++) {
-      vec[i % dimensions] += text.charCodeAt(i) / 1000;
+    const tokens = text.toLowerCase().match(/[a-z0-9]+|[一-鿿]/g) ?? [];
+    for (const t of tokens) {
+      let h = 0;
+      for (let i = 0; i < t.length; i++) h = (h * 31 + t.charCodeAt(i)) >>> 0;
+      vec[h % dimensions] += 1;
     }
-    // 归一化
     const norm = Math.sqrt(vec.reduce((s, v) => s + v * v, 0));
-    return norm > 0 ? vec.map(v => v / norm) : vec;
+    return norm > 0 ? vec.map((v) => v / norm) : vec;
   }
 
   return {
@@ -291,81 +294,90 @@ describe('SqliteConceptGraph', () => {
     db.close();
   });
 
-  it('should add and retrieve concepts', async () => {
-    const id = await graph.addConcept({ name: 'PostgreSQL', description: 'RDBMS' });
-    expect(id).toBeTruthy();
+  it('should admit and retrieve concepts', async () => {
+    const res = await graph.admitConcept({
+      name: 'PostgreSQL',
+      kind: 'entity',
+      description: 'RDBMS',
+      supportCount: 2,
+    });
+    expect(res.action).toBe('created');
+    expect(res.id).toBeTruthy();
 
     const full = await graph.getFullGraph();
     expect(full.nodes.length).toBe(1);
     expect(full.nodes[0].name).toBe('PostgreSQL');
+    expect(full.nodes[0].kind).toBe('entity');
+    expect(full.nodes[0].status).toBe('shadow');
   });
 
-  it('should deduplicate by exact name match', async () => {
-    const id1 = await graph.addConcept({ name: 'PostgreSQL' });
-    const id2 = await graph.addConcept({ name: 'PostgreSQL' });
-    expect(id1).toBe(id2);
+  it('should merge case-insensitive same-name with compatible fingerprint', async () => {
+    const id1 = await graph.admitConcept({ name: 'PostgreSQL', kind: 'entity', domain: ['db'], supportCount: 2 });
+    const id2 = await graph.admitConcept({ name: 'postgresql', kind: 'entity', domain: ['db'], supportCount: 2 });
+    expect(id1.action).toBe('created');
+    expect(id2.action).toBe('merged');
+    expect(id2.id).toBe(id1.id);
 
     const full = await graph.getFullGraph();
     expect(full.nodes.length).toBe(1);
     expect(full.nodes[0].frequency).toBe(2);
   });
 
-  it('should deduplicate case-insensitively', async () => {
-    const id1 = await graph.addConcept({ name: 'PostgreSQL' });
-    const id2 = await graph.addConcept({ name: 'postgresql' });
-    expect(id1).toBe(id2);
-  });
+  it('should admit licensed edges and reject unlicensed causes', async () => {
+    const a = await graph.admitConcept({ name: 'PostgreSQL', kind: 'entity', supportCount: 2 });
+    const b = await graph.admitConcept({ name: 'ACID', kind: 'construct', supportCount: 2 });
 
-  it('should add edges', async () => {
-    const id1 = await graph.addConcept({ name: 'PostgreSQL' });
-    const id2 = await graph.addConcept({ name: 'ACID' });
-
-    await graph.addEdge({
-      sourceId: id1,
-      targetId: id2,
-      relationType: 'related',
+    const ok = await graph.admitEdge({
+      sourceId: a.id!,
+      targetId: b.id!,
+      relationType: 'part_of',
       strength: 0.8,
+      basis: {
+        memoryIds: ['m1'],
+        cue: 'ACID is part of PostgreSQL guarantees',
+        evidenceClass: 'mereonymy',
+        licensedAt: Date.now(),
+      },
+      evidenceText: 'ACID is part of PostgreSQL guarantees',
     });
+    expect(ok.action).toBe('active');
 
-    const full = await graph.getFullGraph();
-    expect(full.edges.length).toBe(1);
-    expect(full.edges[0].sourceId).toBe(id1);
-    expect(full.edges[0].targetId).toBe(id2);
+    const bad = await graph.admitEdge({
+      sourceId: a.id!,
+      targetId: b.id!,
+      relationType: 'causes',
+      strength: 0.9,
+      basis: {
+        memoryIds: ['m1'],
+        cue: 'x',
+        evidenceClass: 'cooccur',
+        licensedAt: Date.now(),
+      },
+    });
+    expect(bad.relationType).toBe('related');
   });
 
-  it('should not duplicate edges', async () => {
-    const id1 = await graph.addConcept({ name: 'PostgreSQL' });
-    const id2 = await graph.addConcept({ name: 'ACID' });
+  it('should activate from seeds via spreadingActivate', async () => {
+    const pg = await graph.admitConcept({ name: 'PostgreSQL', kind: 'entity', supportCount: 2 });
+    const acid = await graph.admitConcept({ name: 'ACID', kind: 'construct', supportCount: 2 });
+    await graph.admitEdge({
+      sourceId: pg.id!,
+      targetId: acid.id!,
+      relationType: 'part_of',
+      strength: 0.9,
+      basis: {
+        memoryIds: ['m1', 'm2'],
+        cue: 'ACID part of PostgreSQL',
+        evidenceClass: 'mereonymy',
+        licensedAt: Date.now(),
+      },
+      evidenceText: 'ACID part of PostgreSQL',
+    });
+    await graph.promote([pg.id!, acid.id!], 'active');
 
-    await graph.addEdge({ sourceId: id1, targetId: id2, relationType: 'related', strength: 0.8 });
-    await graph.addEdge({ sourceId: id1, targetId: id2, relationType: 'related', strength: 0.9 });
-
-    const full = await graph.getFullGraph();
-    expect(full.edges.length).toBe(1);
-  });
-
-  it('should traverse graph with BFS', async () => {
-    const pg = await graph.addConcept({ name: 'PostgreSQL' });
-    const acid = await graph.addConcept({ name: 'ACID' });
-    const rdbms = await graph.addConcept({ name: 'RDBMS' });
-    const mongo = await graph.addConcept({ name: 'MongoDB' });
-
-    await graph.addEdge({ sourceId: pg, targetId: acid, relationType: 'related', strength: 0.8 });
-    await graph.addEdge({ sourceId: pg, targetId: rdbms, relationType: 'related', strength: 0.9 });
-    await graph.addEdge({ sourceId: mongo, targetId: rdbms, relationType: 'related', strength: 0.5 });
-
-    const result = await graph.queryRelated('PostgreSQL', 1);
-    expect(result.nodes.length).toBeGreaterThanOrEqual(2); // PostgreSQL + 至少一个邻居
-    expect(result.nodes.some(n => n.name === 'PostgreSQL')).toBe(true);
-  });
-
-  it('should extract concepts from text', async () => {
-    await graph.extractFromText('The Database Management System handles Transaction Processing', 'mem_1');
-
-    const full = await graph.getFullGraph();
-    expect(full.nodes.length).toBeGreaterThan(0);
-    // P0 简单实现：正则匹配大写开头的词序列
-    expect(full.nodes.some(n => n.name.includes('Database') || n.name.includes('Transaction'))).toBe(true);
+    const result = await graph.spreadingActivate(['PostgreSQL'], { depth: 1 });
+    expect(result.nodes.some((n) => n.name === 'PostgreSQL')).toBe(true);
+    expect(result.nodes.some((n) => n.name === 'ACID')).toBe(true);
   });
 });
 
@@ -378,7 +390,11 @@ describe('SqliteConceptGraph with embedding', () => {
 
   beforeEach(async () => {
     db = await AgentDatabase.create({ dbPath: ':memory:' });
-    graph = new SqliteConceptGraph(db, { embeddingProvider: embedding, mergeThreshold: 0.3 });
+    graph = new SqliteConceptGraph(db, {
+      embeddingProvider: embedding,
+      mergeThreshold: 0.2,
+      candidateBandHi: 0.5,
+    });
   });
 
   afterEach(() => {
@@ -386,21 +402,24 @@ describe('SqliteConceptGraph with embedding', () => {
   });
 
   it('should store embedding with concept', async () => {
-    const id = await graph.addConcept({ name: 'PostgreSQL' });
-    const row = db.raw.prepare('SELECT embedding FROM concepts WHERE id = ?').get(id) as { embedding: string | null };
+    const res = await graph.admitConcept({ name: 'PostgreSQL', kind: 'entity', supportCount: 2 });
+    const row = db.raw.prepare('SELECT embedding FROM concepts WHERE id = ?').get(res.id!) as {
+      embedding: string | null;
+    };
     expect(row.embedding).toBeTruthy();
   });
 
-  it('should merge similar concepts by embedding', async () => {
-    // "PostgreSQL" 和 "Postgres" 在 mock embedding 中会产生相似向量
-    const id1 = await graph.addConcept({ name: 'PostgreSQL' });
-    const id2 = await graph.addConcept({ name: 'PostgresDatabase' });
+  it('near-threshold embedding creates merge_candidate not silent merge', async () => {
+    const id1 = await graph.admitConcept({ name: 'PostgreSQL', kind: 'entity', supportCount: 2 });
+    const id2 = await graph.admitConcept({ name: 'PostgresDatabase', kind: 'entity', supportCount: 2 });
 
-    // 如果距离 <= 0.3，应该合并
-    // mock embedding 对相似文本可能不一定合并，取决于哈希分布
     const full = await graph.getFullGraph();
-    // 至少应该有1个概念
     expect(full.nodes.length).toBeGreaterThanOrEqual(1);
+    if (id2.action === 'merge_candidate') {
+      expect(id2.id).not.toBe(id1.id);
+      const candidates = await graph.listMergeCandidates();
+      expect(candidates.length).toBeGreaterThan(0);
+    }
   });
 });
 

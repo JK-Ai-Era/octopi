@@ -320,7 +320,11 @@ harness/memory/
 ├── backfill-trigger.ts   # 补录脉搏（硬收敛 / idle / gap）
 ├── health-probe.ts       # 库存水位双脉搏（memory.health.*）
 ├── cognition.ts          # InMemoryConceptGraph
-├── types.ts              # MemoryType = fact|method|norm；Store 契约
+├── cognition-gates.ts    # 概念/关系持证门控
+├── cognition-decay.ts    # 边衰减 / Hebbian / 反证
+├── cognition-trigger.ts  # 命题落库 → cognition.conceptualize.request
+├── conceptualizer.ts     # 命题+contextSlice → 概念化（无正则 extractFromText）
+├── types.ts              # MemoryType = fact|method|norm；Store 契约（含 Cognition）
 ├── sqlite/
 │   ├── agent-db.ts       # AgentDatabase — per-agent agent.db
 │   ├── memory-store.ts   # SqliteMemoryStore
@@ -580,7 +584,7 @@ harness/observability/observer/
 | 2 | **Persona** | agent 的 DNA | Agent 基质 | **已接线** |
 | 3 | **Skill** | 工作流定义 | Agent 基质 | **已接线**（`formatForPrompt` 索引） |
 | 4 | **Knowledge** | 外部参考资料 | Knowledge scope（默认 agent） | **已接线**（进程内 store） |
-| 5 | **Cognition** | 概念关系网络 | Agent 基质 | **已接线**（Builder/Gateway 可挂 ConceptGraphStore） |
+| 5 | **Cognition** | 概念关系网络 | Agent 基质 | **已接线**（Conceptualizer + ConceptGraphStore + CognitionLayer；见 `arch/cognition-graph-formation.md`） |
 | 6 | **Memory** | 交互中提取的洞察 | 库归 Agent；原料来自 Session | **已接线**（`SqliteMemoryStore`） |
 | 7 | **Runtime** | 本轮/本会话活态注入 | **Run**（Session 感知） | **已接线**（tasks / guidance / `injectedContext`） |
 | 8 | **Information** | 原始交互记录（session 消息） | **Session** | **已接线**（消息窗口，**不是** ContextLayer） |
@@ -620,7 +624,7 @@ System 契约层 order（= 产品八层之 1–7）：
 
 ```
 Information → Memory   提炼：可行动命题（fact / method / norm）
-Memory → Cognition     结构化：概念之间的关系（后续子系统）
+Memory → Cognition     结构化：概念之间的关系（cognition.steward.conceptualize，见 arch/cognition-graph-formation.md）
 Memory → Wisdom        升华：思维范式（后续子系统）
 ```
 
@@ -655,7 +659,7 @@ HarnessLoopEvent + context.compact.* / context.layers.assembled 事件
   ↓
 Session save：全量 messages + contextCompact 快照
   ↓
-[任务结束后] → 主 agent 显著时 memory_store / memory.steward 补录·治理（Information→Memory；Cognition/Wisdom 另有下游子系统）
+[任务结束后] → 主 agent 显著时 memory_store / memory.steward 补录·治理（Information→Memory）；Memory→Cognition 走 cognition.steward.conceptualize；Wisdom 仍有下游子系统
 ```
 
 ---
