@@ -3,6 +3,7 @@
  *
  * API 线程只编排：写走 KnowledgeWriteService（Writer Worker / Local），
  * 读走 KnowledgeQueryService。**禁止**在此打开 knowledge.db。
+ * 纯读 GET 在主线程 `read-http.ts` 直达 Meta/Search，不经本层。
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http';

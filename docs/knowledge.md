@@ -331,7 +331,7 @@ POST   /api/v1/agents/:id/knowledge/resume
 ```
 
 - **两级注册**：公共知识库（global）/ 项目（project，先建项目再挂源；删项目须先卸源）。
-- **会话视图**：`session-visibility` overlay 只改本场 effective view，不改源归属；`scopeLevel=session` 必须带 `sessionId`。
+- **会话视图**：`session-visibility` overlay 只改本场 effective view，不改源归属；`scopeLevel=session` 必须带 `sessionId`。行按 **(tenant, gateway, sessionId)** 隔离，禁止跨 Gateway 读写他方 overlay。
 - `sources` 的 `scopeLevel=global|project` 为管理面全量列表（不过滤可见性）。
 - **注册即自动 ingest**（`POST …/sources` → Service 内 `ingestSource`）；`reindex` = 显式全量重建（supersede）。注册后无需再点「重建」才解析。
 - **reindex = supersede**：先作废本源 queued/running，再按磁盘全量重扫（勿与「继续」混淆：继续=清中止态接着跑）。

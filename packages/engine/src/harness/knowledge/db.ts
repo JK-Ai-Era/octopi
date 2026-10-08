@@ -16,8 +16,8 @@ export interface KnowledgeDatabaseOptions {
   /** 尝试加载 sqlite-vec（默认 true；失败则 JS 余弦）；可指定扩展路径 */
   sqliteVec?: boolean | { extensionPath?: string };
   /**
-   * 只读打开（Query Worker）：跳过 DDL/升列，不抢写锁。
-   * 业务写路径必须走 Engine 唯一写者；此模式仅用于同库只读连接。
+   * 只读打开（Query Worker / Engine 残留短读）：跳过 DDL/升列，不抢写锁。
+   * 业务写路径必须走 Writer Worker 唯一写者；此模式仅用于同库只读连接。
    */
   readOnly?: boolean;
   /** 跳过 createTables/upgrade（默认 false；readOnly 时强制 true） */

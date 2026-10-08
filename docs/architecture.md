@@ -334,7 +334,7 @@ harness/memory/
 
 > **已移除**：`harness/memory/extraction/`（ETL 采集/桥接/Pending）与 `subsystems/memory-extractor`。  
 > 记忆写入 = agent `memory_store` 工具；旁路 = `memory.steward.backfill` / `memory.steward.govern`（对外见 [`docs/memory.md`](./memory.md)）。  
-> Knowledge（外生语料 / 第 4 层）对外见 [`docs/knowledge.md`](./knowledge.md)。**v0.60**：Knowledge 拆为独立 HTTP Service（唯一写 `knowledge.db`；Gateway 走 Client；File identity + Membership）；契约 `arch/knowledge-service-http.md`。Document 抽取在 `harness/capabilities/document`（`createDocumentPortFromConfig`）。**线程边界**：Service 主线程只做 `/health` + token 鉴权 + SSE；HttpApp/SQLite/ingest 在 Engine Worker；解析 CPU 在嵌套 Worker（见 `docs/knowledge.md` §2.1.1）。
+> Knowledge（外生语料 / 第 4 层）对外见 [`docs/knowledge.md`](./knowledge.md)。**v0.60+**：Knowledge 拆为独立 HTTP Service（唯一写 `knowledge.db`；Gateway 走 Client；File identity + Membership）；契约 `arch/knowledge-service-http.md`。Document 抽取在 `harness/capabilities/document`（`createDocumentPortFromConfig`）。**线程边界**（v0.64）：主线程 `/health` + 鉴权 + **纯读直达 Meta/Search Worker** + SSE；写 HTTP 在 Engine/API（只编排）；**Writer Worker** 独占可写库 + ingest；解析 CPU 在嵌套 Worker（见 `docs/knowledge.md` §2.1.1）。
 
 `FileWisdomStore` / `FileProjectMemory` / `ContextIntelligence` 已删除；不要再预设 `memory/`、`wisdom/` 文件目录。system prompt 层组装见 `harness/context/`。
 

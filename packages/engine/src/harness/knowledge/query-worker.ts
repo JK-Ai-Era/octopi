@@ -126,7 +126,7 @@ async function main(): Promise<void> {
         ? SEARCH_METHODS
         : new Set([...META_METHODS, ...SEARCH_METHODS]);
 
-  // 只读连接：跳过 DDL，不与 Engine 争写锁；唯一写者仍是 Engine ingest
+  // 只读连接：跳过 DDL，不与 Writer 争写锁；唯一写者是 Writer Worker
   const db = await KnowledgeDatabase.create({
     dbPath: boot.dbPath,
     readOnly: true,

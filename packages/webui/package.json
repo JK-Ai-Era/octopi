@@ -1,7 +1,7 @@
 {
   "name": "@octopi-agent/webui",
   "private": false,
-  "version": "0.64.2",
+  "version": "0.64.3",
   "description": "Octopi WebUI — prebuilt web console (static dist)",
   "type": "module",
   "files": [
@@ -24,9 +24,9 @@
     "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
-    "@octopi-agent/core": "0.64.2",
-    "@octopi-agent/engine": "0.64.2",
-    "@octopi-agent/gateway": "0.64.2",
+    "@octopi-agent/core": "0.64.3",
+    "@octopi-agent/engine": "0.64.3",
+    "@octopi-agent/gateway": "0.64.3",
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.3.1",

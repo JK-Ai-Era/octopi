@@ -1,3 +1,9 @@
+## v0.64.3
+
+### docs(knowledge): 同步线程边界与唯一写者口径
+
+将 `docs/architecture.md` / `domains.md` / `knowledge.md` / `harness/knowledge/README.md` 及 serve/query/db 注释对齐 v0.64 结构：主线程纯读直达 Meta/Search、Engine/API 只编排、Writer Worker 唯一写 + ingest；session-visibility 注明 (tenant, gateway, sessionId) 隔离。
+
 ## v0.64.2
 
 ### fix(knowledge): 文件「重做」per-path reprocess 接通

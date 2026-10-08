@@ -4,7 +4,7 @@
  * 生产：Query Worker + 独立只读连接（WAL 一写多读），与 ingest 写路径线程分离。
  * 测试 / :memory:：LocalKnowledgeQueryService（同连接，小库可接受）。
  *
- * **禁止**在此接口上实现任何写路径（唯一写者仍是 Engine ingest）。
+ * **禁止**在此接口上实现任何写路径（唯一写者是 Writer Worker / LocalKnowledgeWriteService）。
  */
 
 import type { KnowledgeDatabase } from './db.js';

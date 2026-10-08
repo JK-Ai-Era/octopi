@@ -1,13 +1,14 @@
 /**
- * serve 入口线程模型（v0.63+）
+ * serve 入口线程模型（v0.64+）
  *
  * - 主线程：listen · /health · token 鉴权 · **纯读直达 Meta/Search Worker** · SSE 泵出
- * - Engine Worker：写路由 + HttpApp + SQLite 写 + ingest（允许阻塞；不影响纯读）
+ * - Engine/API Worker：写路由编排 + SSE；**不得**打开可写 knowledge.db
+ * - Writer Worker：knowledge.db 唯一写者 + ingest（允许阻塞）
  * - Meta Worker：只读列表/控制面（projects / sources / jobs / ready）
  * - Search Worker：只读检索（search / catalog / files / chunks）
  * - 嵌套 Parse Worker：抽取 / 切块 / FTS token
  *
- * 纯读 **不得** 再 postMessage 进 Engine——ingest 写事务占死写线程时 UI 列表仍须应答。
+ * 纯读 **不得** postMessage 进 Engine；变更 **不得** 在 API 线程直接写库。
  */
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
@@ -89,7 +90,7 @@ async function startQueryWorker(opts: {
 }
 
 /**
- * 启动 Knowledge HTTP 服务（唯一写者；业务写在 Engine Worker，纯读直达 Query Worker）。
+ * 启动 Knowledge HTTP 服务（唯一写者在 Writer Worker；纯读直达 Meta/Search）。
  *
  * @param opts - db 路径 / 监听 / token 表 / embedding
  * @returns 可关闭的 listen handle
@@ -111,7 +112,7 @@ export async function startKnowledgeService(
       embeddingModels: opts.embeddingModels ?? null,
       embed: opts.embed ?? null,
       testEmbeddingStub: opts.testEmbeddingStub ?? false,
-      // 文件库：Engine 不再自建 Query Worker（纯读在主线程）
+      // 文件库：纯读在主线程 Meta/Search；Engine 只做写编排 + 残留短读
       skipQueryWorker: useSplitQuery,
     },
     // 嵌套解析 worker 需要相对 dist 加载

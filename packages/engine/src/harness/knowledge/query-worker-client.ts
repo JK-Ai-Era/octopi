@@ -1,5 +1,5 @@
 /**
- * WorkerQueryService — Engine 侧 Query Worker RPC 客户端
+ * WorkerQueryService — Query Worker RPC 客户端（主线程 Meta/Search 或 Engine 残留读）
  *
  * 只读操作转发到独立线程；写路径永不经过这里。
  */
