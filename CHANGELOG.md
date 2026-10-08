@@ -1,3 +1,18 @@
+## v0.64.2
+
+### fix(knowledge): 文件「重做」per-path reprocess 接通
+
+**问题**：Web 重做单文件/按筛选批量时 Gateway 抛 `not_implemented`；且 router 在无 filter 时仍塞空 `filter` 对象，paths-only 也会误入该分支。
+
+**修复**：
+
+- `KnowledgeWriteService.reprocessFiles` / `reprocessByFilter` → Writer（ingest 已有实现）
+- HttpApp `POST /v1/sources/:sid/reprocess` + `KnowledgeClient.reprocess`
+- Gateway `reprocessKnowledgeFiles` 真正调用 Service，不再伪造 counts 或整源 reindex
+- router 仅在 status/ext/q 有值时传 `filter`
+
+**测试**：`knowledge-reprocess`；knowledge 230 绿。
+
 ## v0.64.1
 
 ### fix(knowledge): 审查修复 — principal 鉴权空转 / session-visibility 跨 Gateway / 删源竞态

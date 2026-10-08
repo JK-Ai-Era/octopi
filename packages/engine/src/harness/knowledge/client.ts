@@ -118,6 +118,27 @@ export class KnowledgeClient {
     return this.request('POST', `/v1/sources/${encodeURIComponent(sourceId)}/reindex`);
   }
 
+  /** 按路径 / 筛选强制重解析（中止态自动 resume） */
+  reprocess(
+    sourceId: string,
+    opts: {
+      paths?: string[];
+      filter?: { status?: string; ext?: string; q?: string };
+    },
+  ): Promise<{
+    queued: number;
+    alreadyActive: number;
+    cleanedNonFiles: number;
+    resumed: boolean;
+    rejected: number;
+  }> {
+    return this.request(
+      'POST',
+      `/v1/sources/${encodeURIComponent(sourceId)}/reprocess`,
+      opts,
+    );
+  }
+
   search(
     agentId: string,
     q: string,

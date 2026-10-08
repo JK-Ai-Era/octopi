@@ -1846,7 +1846,7 @@ export class Gateway {
     opts: {
       paths?: string[];
       filter?: {
-        status?: 'indexed' | 'skipped' | 'error' | 'all';
+        status?: string;
         ext?: string;
         q?: string;
       };
@@ -1859,23 +1859,19 @@ export class Gateway {
     resumed: boolean;
     rejected: number;
   }> {
-    if (opts?.paths?.length || opts?.filter) {
-      // 未实现 per-path 入队时不得伪造 counts / 静默整源 reindex
-      throw new Error(
-        'not_implemented: per-path reprocess (paths/filter); use source reindex or engine ingest.reprocessFiles',
-      );
+    const paths = opts?.paths?.filter((p) => typeof p === 'string' && p) ?? [];
+    const filter = opts?.filter;
+    const hasFilter =
+      filter != null && (filter.status != null || filter.ext != null || filter.q != null);
+    if (paths.length === 0 && !hasFilter) {
+      throw new Error('bad_request: paths or filter required');
     }
     const client = await this.getKnowledgeClient();
-    await client.reindex(sourceId);
-    const jc = await client.jobControl(sourceId);
-    return {
-      ok: true,
-      queued: jc.jobsQueued,
-      alreadyActive: jc.jobsRunning,
-      cleanedNonFiles: 0,
-      resumed: !jc.aborted,
-      rejected: 0,
-    };
+    const data = await client.reprocess(sourceId, {
+      ...(paths.length > 0 ? { paths } : {}),
+      ...(hasFilter ? { filter } : {}),
+    });
+    return { ok: true, ...data };
   }
 
   /** 级任?文件重做完成跟踪?*/

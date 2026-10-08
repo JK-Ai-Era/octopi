@@ -1,6 +1,6 @@
 {
   "name": "@octopi-agent/core",
-  "version": "0.64.1",
+  "version": "0.64.2",
   "description": "Octopi Core — pure agent loop and Kernel contracts (Layer 0-1)",
   "type": "module",
   "license": "Apache-2.0",

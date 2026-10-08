@@ -165,6 +165,20 @@ async function main(): Promise<void> {
             await write.reindexSource(String(args.sourceId));
             data = null;
             break;
+          case 'reprocessFiles':
+            data = await write.reprocessFiles(
+              String(args.sourceId),
+              (args.paths as string[]) ?? [],
+            );
+            break;
+          case 'reprocessByFilter':
+            data = await write.reprocessByFilter(
+              String(args.sourceId),
+              args.filter as
+                | { status?: 'indexed' | 'skipped' | 'error' | 'all'; ext?: string; q?: string }
+                | undefined,
+            );
+            break;
           case 'abortSource':
             data = await write.abortSource(String(args.sourceId));
             break;

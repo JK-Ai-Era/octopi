@@ -334,6 +334,39 @@ export class KnowledgeHttpApp {
       json(res, 202, { ok: true, data: { sourceId: params.sid, accepted: true } });
     });
 
+    this.route('POST', '/v1/sources/:sid/reprocess', async (_req, res, ctx, params, body) => {
+      if (!(await this.write.isSourceOwner(params.sid!, ctx.gatewayId))) {
+        return err(res, 403, 'not_resource_owner', 'not source owner');
+      }
+      const sid = params.sid!;
+      const b = (body ?? {}) as {
+        paths?: unknown;
+        filter?: { status?: string; ext?: string; q?: string };
+      };
+      const paths = Array.isArray(b.paths)
+        ? b.paths.filter((p): p is string => typeof p === 'string' && p.length > 0)
+        : [];
+      const filter = b.filter;
+      const hasFilter =
+        filter != null &&
+        (filter.status != null || filter.ext != null || filter.q != null);
+      try {
+        if (paths.length > 0) {
+          const data = await this.write.reprocessFiles(sid, paths);
+          return json(res, 200, { ok: true, data });
+        }
+        if (hasFilter) {
+          const data = await this.write.reprocessByFilter(sid, filter);
+          return json(res, 200, { ok: true, data });
+        }
+        err(res, 400, 'bad_request', 'paths or filter required');
+      } catch (e) {
+        if (!mapWriteError(res, e)) {
+          err(res, 400, 'bad_request', e instanceof Error ? e.message : String(e));
+        }
+      }
+    });
+
     this.route('POST', '/v1/sources/:sid/abort', async (_req, res, ctx, params) => {
       if (!(await this.write.isSourceOwner(params.sid!, ctx.gatewayId))) {
         return err(res, 403, 'not_resource_owner', 'not source owner');

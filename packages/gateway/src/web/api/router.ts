@@ -602,17 +602,25 @@ export class WebApiRouter {
       if (knowledgeReprocessMatch && method === 'POST') {
         const body = await this.readBody(req).catch(() => ({}));
         try {
+          const rawFilter = body?.filter as
+            | { status?: string; ext?: string; q?: string }
+            | undefined;
+          const flatFilter = {
+            status: body?.status as string | undefined,
+            ext: body?.ext as string | undefined,
+            q: body?.q as string | undefined,
+          };
+          const filterSrc = rawFilter ?? flatFilter;
+          const hasFilter =
+            filterSrc != null &&
+            (filterSrc.status != null || filterSrc.ext != null || filterSrc.q != null);
           const result = await this.gateway.reprocessKnowledgeFiles(
             knowledgeReprocessMatch[2],
             {
               paths: Array.isArray(body?.paths)
                 ? body.paths.filter((p: unknown) => typeof p === 'string' && p)
                 : undefined,
-              filter: body?.filter ?? {
-                status: body?.status,
-                ext: body?.ext,
-                q: body?.q,
-              },
+              ...(hasFilter ? { filter: filterSrc } : {}),
             },
           );
           return this.json(res, 200, result);

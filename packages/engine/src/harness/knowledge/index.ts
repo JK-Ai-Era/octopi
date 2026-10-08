@@ -125,6 +125,7 @@ export type {
   WriteResumeStats,
   WriteRegisterResult,
   WriteDescribeResult,
+  WriteReprocessResult,
 } from './writer-service.js';
 export { WorkerWriteService } from './writer-worker-client.js';
 export type { WorkerWriteStartOptions } from './writer-worker-client.js';

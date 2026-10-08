@@ -12,6 +12,7 @@ import type {
   WriteResumeStats,
   WriteRegisterResult,
   WriteDescribeResult,
+  WriteReprocessResult,
 } from './writer-service.js';
 import type { KnowledgeSource } from './types.js';
 import type { KnowledgeJobControlState } from './job-control-state.js';
@@ -311,6 +312,25 @@ export class WorkerWriteService implements KnowledgeWriteService {
   async reindexSource(sourceId: string): Promise<void> {
     try {
       await this.call('reindexSource', { sourceId });
+    } catch (e) {
+      this.rethrow(e);
+    }
+  }
+
+  async reprocessFiles(sourceId: string, paths: string[]): Promise<WriteReprocessResult> {
+    try {
+      return (await this.call('reprocessFiles', { sourceId, paths }, 120_000)) as never;
+    } catch (e) {
+      this.rethrow(e);
+    }
+  }
+
+  async reprocessByFilter(
+    sourceId: string,
+    filter?: { status?: string; ext?: string; q?: string },
+  ): Promise<WriteReprocessResult> {
+    try {
+      return (await this.call('reprocessByFilter', { sourceId, filter }, 120_000)) as never;
     } catch (e) {
       this.rethrow(e);
     }

@@ -41,6 +41,14 @@ export interface WriteDescribeResult {
   source: string;
 }
 
+export interface WriteReprocessResult {
+  queued: number;
+  alreadyActive: number;
+  cleanedNonFiles: number;
+  resumed: boolean;
+  rejected: number;
+}
+
 /** API → Writer 的变更面。读走 KnowledgeQueryService。 */
 export interface KnowledgeWriteService {
   upsertPrincipal(
@@ -82,6 +90,12 @@ export interface KnowledgeWriteService {
   describeSource(identity: WriteIdentity, sourceId: string): Promise<WriteDescribeResult | null>;
 
   reindexSource(sourceId: string): Promise<void>;
+  /** 按路径强制重解析（中止态自动 resume） */
+  reprocessFiles(sourceId: string, paths: string[]): Promise<WriteReprocessResult>;
+  reprocessByFilter(
+    sourceId: string,
+    filter?: { status?: string; ext?: string; q?: string },
+  ): Promise<WriteReprocessResult>;
   abortSource(sourceId: string): Promise<WriteAbortStats & KnowledgeJobControlState>;
   resumeSource(sourceId: string): Promise<KnowledgeJobControlState>;
   abortAllOwned(identity: WriteIdentity): Promise<WriteAbortStats>;
@@ -406,6 +420,17 @@ export class LocalKnowledgeWriteService implements KnowledgeWriteService {
         `[Knowledge] reindex kick failed (${sourceId}): ${e instanceof Error ? e.message : String(e)}`,
       );
     });
+  }
+
+  async reprocessFiles(sourceId: string, paths: string[]): Promise<WriteReprocessResult> {
+    return this.ingest.reprocessFiles(sourceId, paths);
+  }
+
+  async reprocessByFilter(
+    sourceId: string,
+    filter?: { status?: string; ext?: string; q?: string },
+  ): Promise<WriteReprocessResult> {
+    return this.ingest.reprocessByFilter(sourceId, filter as never);
   }
 
   async abortSource(sourceId: string): Promise<WriteAbortStats & KnowledgeJobControlState> {
