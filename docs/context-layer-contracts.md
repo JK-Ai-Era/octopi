@@ -42,7 +42,7 @@ Constitution + Layer Providers ──► ContextAssembler ──► systemPrompt
 
 | id | order（位置） | priority（保序） | share（份额） | droppable | 当前 provider 来源 |
 |----|---------------|------------------|---------------|-----------|-------------------|
-| wisdom | 10 | 70 | 0.12 | yes | `WisdomStore.getAll()`（薄） |
+| wisdom | 10 | 70 | 0.12 | yes | `WisdomStore.selectForInjection`（core+scenario） |
 | persona | 20 | **100** | 0.35 | **no** | `PersonaSource` / Runner resolve |
 | skill | 30 | 60 | 0.15 | yes | `SkillManager.formatForPrompt()` |
 | knowledge | 40 | 40 | 0.12 | yes | `KnowledgeCatalogProvider`（Tier 0 catalog） |
@@ -120,7 +120,7 @@ interface ContextLayer {
 | `KnowledgeLayer` | `KnowledgeCatalogProvider` → Tier 0 catalog 格式化 | 内容检索 / embedding（归 Knowledge 服务） |
 | `MemoryLayer` | `retrieve({text, limit})` | 衰减策略调参（曲线在 `memory/decay-policy.ts`，由 govern 执行） |
 | `CognitionLayer` | `spreadingActivate` + 强弱边格式化（强边 `A —[rel]→ B` / 弱边折叠「相关：…」） | 共现升格、假因果写入（归 cognition-gates） |
-| `WisdomLayer` | 全量按 priority 排序后截断 | 场景匹配 |
+| `WisdomLayer` | 小核心 + 关键词场景匹配 + maxim 排版 | embedding/llm 匹配（归后续） |
 | `createDefaultLayers` | 只注册有依赖的层 | 自动发现 |
 
 后续打磨任一层时：**只换 `assemble` 实现或替换类，不改契约。**

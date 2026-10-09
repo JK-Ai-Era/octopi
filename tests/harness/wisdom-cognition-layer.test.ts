@@ -6,39 +6,29 @@ import { describe, it, expect } from 'vitest';
 import { createDefaultSystemPromptAssembler } from '@octopi-agent/engine/harness/context/system-prompt-assembler.js';
 import { DefaultContextAssembler } from '@octopi-agent/engine/harness/context/assembler.js';
 import { InMemoryConceptGraph } from '@octopi-agent/engine/harness/memory/cognition.js';
-import type { WisdomStore, WisdomEntry } from '@octopi-agent/engine/harness/memory/types.js';
+import { InMemoryWisdomStore } from '@octopi-agent/engine/harness/memory/wisdom.js';
 import type { Message } from '@octopi-agent/core/types.js';
 
 function userMsg(text: string): Message {
   return { role: 'user', content: text, timestamp: Date.now() };
 }
 
-class TestWisdomStore implements WisdomStore {
-  private entries: WisdomEntry[] = [];
-
-  async store(entry: Omit<WisdomEntry, 'id' | 'createdAt'>): Promise<string> {
-    const id = `wis_${this.entries.length + 1}`;
-    this.entries.push({ ...entry, id, createdAt: Date.now() });
-    return id;
-  }
-
-  async getAll(): Promise<WisdomEntry[]> {
-    return this.entries;
-  }
-
-  async delete(id: string): Promise<void> {
-    this.entries = this.entries.filter((e) => e.id !== id);
-  }
+async function seedWisdom(store: InMemoryWisdomStore, statement: string) {
+  return store.admit({
+    statement,
+    scenario: { problemTypes: ['验证型宣称'], signals: ['证据'] },
+    effect: { posture: '先证伪', questions: ['证据在哪里？'] },
+    derivedFrom: { memoryIds: ['m1', 'm2'] },
+    kind: 'corrective',
+    origin: 'factory',
+    initialStatus: 'active',
+  });
 }
 
 describe('Wisdom/Cognition 层接入默认 Assembler', () => {
   it('WisdomStore 有条目时注入 # 思维框架', async () => {
-    const wisdomStore = new TestWisdomStore();
-    await wisdomStore.store({
-      content: '先核对契约，再改实现',
-      derivedFrom: ['lesson'],
-      priority: 80,
-    });
+    const wisdomStore = new InMemoryWisdomStore();
+    await seedWisdom(wisdomStore, '先核对契约，再改实现');
 
     const asm = createDefaultSystemPromptAssembler({ wisdomStore });
     const result = await asm.assemble({
@@ -97,7 +87,7 @@ describe('Wisdom/Cognition 层接入默认 Assembler', () => {
     expect(cognition?.included).toBe(true);
   });
 
-  it('未提供 wisdom/cognition 时 manifest 不出现这两层（或 unregistered 由 snapshot 侧呈现）', async () => {
+  it('未提供 wisdom/cognition 时 manifest 不出现这两层', async () => {
     const asm = createDefaultSystemPromptAssembler({});
     const result = await asm.assemble({
       sessionId: 's',
@@ -113,12 +103,8 @@ describe('Wisdom/Cognition 层接入默认 Assembler', () => {
 
 describe('includeLayerContent / preview', () => {
   it('默认写入 content 与 preview', async () => {
-    const wisdomStore = new TestWisdomStore();
-    await wisdomStore.store({
-      content: 'layer content should appear for UI click-through',
-      derivedFrom: [],
-      priority: 50,
-    });
+    const wisdomStore = new InMemoryWisdomStore();
+    await seedWisdom(wisdomStore, 'layer content should appear for UI click-through');
 
     const asm = createDefaultSystemPromptAssembler({ wisdomStore });
     const result = await asm.assemble({
@@ -134,12 +120,8 @@ describe('includeLayerContent / preview', () => {
   });
 
   it('关闭 includeLayerContent 后 content 为 undefined', async () => {
-    const wisdomStore = new TestWisdomStore();
-    await wisdomStore.store({
-      content: 'should not leak full content when disabled',
-      derivedFrom: [],
-      priority: 10,
-    });
+    const wisdomStore = new InMemoryWisdomStore();
+    await seedWisdom(wisdomStore, 'should not leak full content when disabled');
     const assembler = new DefaultContextAssembler({
       includeLayerContent: false,
       includeLayerPreview: false,

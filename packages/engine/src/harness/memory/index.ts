@@ -16,7 +16,26 @@ export type {
   MemoryStats,
   MemoryStore,
   MemoryWriteSlot,
+  WisdomStatus,
+  WisdomOrigin,
+  WisdomKind,
+  WisdomRetireReason,
+  WisdomScenario,
+  WisdomEffect,
+  WisdomDerivation,
+  WisdomCounterevidence,
+  WisdomOutcomes,
   WisdomEntry,
+  WisdomGateReason,
+  WisdomGateOutcome,
+  AdmitWisdomInput,
+  AdmitWisdomAction,
+  AdmitWisdomResult,
+  WisdomInjectQuery,
+  WisdomInjectPick,
+  WisdomOutcomeSignal,
+  WisdomOutcomeEvent,
+  WisdomStats,
   WisdomStore,
   ConceptKind,
   ConceptRelationType,
@@ -41,10 +60,52 @@ export type {
 } from './types.js';
 export {
   MEMORY_TYPES,
+  WISDOM_STATUSES,
+  WISDOM_INJECTABLE_STATUSES,
+  WISDOM_ORIGINS,
+  WISDOM_KINDS,
   CONCEPT_KINDS,
   CONCEPT_RELATION_TYPES,
   STRONG_RELATION_TYPES,
 } from './types.js';
+
+// ── Wisdom 门控 / 策略 / 形成 ──
+export {
+  evaluateWisdomGate,
+  resolveInitialWisdomStatus,
+  normalizeStatement,
+  looksOpposed,
+  WISDOM_DEFAULT_MIN_SUPPORT,
+} from './wisdom-gates.js';
+export {
+  DEFAULT_WISDOM_EVALUATION,
+  DEFAULT_WISDOM_GOVERN,
+  foldOutcomeEvents,
+  planConfidenceUpdate,
+  planWisdomGovern,
+  wisdomUtility,
+  wisdomInjectScore,
+} from './wisdom-policy.js';
+export type {
+  WisdomEvaluationConfig,
+  WisdomGovernConfig,
+  WisdomConfidenceUpdate,
+  WisdomGoverPlanItem,
+} from './wisdom-policy.js';
+export {
+  parseWisdomFormationJson,
+  normalizeWisdomFormation,
+  toAdmitWisdomInput,
+  formAndAdmit,
+  scenarioMatchScore,
+  pickForInjection,
+  formatWisdomBody,
+} from './wisdom-formation.js';
+export type {
+  RawWisdomFormationOutput,
+  ParsedWisdomItem,
+  ParsedWisdomFormation,
+} from './wisdom-formation.js';
 
 // ── Cognition 门控 / 可塑 / 概念化 ──
 export {
@@ -87,6 +148,7 @@ export type { ConceptualizeRequestPayload } from './cognition-trigger.js';
 
 // ── 内存实现 ──
 export { InMemoryMemoryStore } from './store.js';
+export { InMemoryWisdomStore } from './wisdom.js';
 export { InMemoryConceptGraph } from './cognition.js';
 
 // ── SQLite 实现 ──

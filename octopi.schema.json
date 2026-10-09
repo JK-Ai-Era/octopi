@@ -2086,6 +2086,148 @@
         }
       }
     },
+    "wisdom": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "capacity": {
+          "type": "object",
+          "properties": {
+            "softCap": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "hardCap": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            }
+          }
+        },
+        "formation": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "dryRun": {
+              "type": "boolean"
+            },
+            "ttlHours": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "minMemorySupport": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10
+            },
+            "minClusterSize": {
+              "type": "integer",
+              "minimum": 2,
+              "maximum": 50
+            },
+            "minPromotionStack": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 20
+            },
+            "maxItemsPerRun": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 10
+            },
+            "maxEvidenceChars": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            }
+          }
+        },
+        "evaluation": {
+          "type": "object",
+          "properties": {
+            "dryRun": {
+              "type": "boolean"
+            },
+            "windowHours": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "minAppliesForActive": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "contestRate": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "counterevidenceWeight": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "strengthenMinApplies": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            }
+          }
+        },
+        "injection": {
+          "type": "object",
+          "properties": {
+            "coreMaxItems": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 32
+            },
+            "coreMaxTokens": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "scenarioMaxItems": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 32
+            },
+            "trialVisible": {
+              "type": "boolean"
+            }
+          }
+        },
+        "govern": {
+          "type": "object",
+          "properties": {
+            "dryRun": {
+              "type": "boolean"
+            },
+            "zeroApplyIdleMs": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "priorityDecayStep": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "priorityFloor": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          }
+        }
+      }
+    },
     "security": {
       "type": "object",
       "properties": {

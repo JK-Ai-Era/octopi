@@ -314,3 +314,54 @@ export const CognitionConfigSchema = z.object({
     })
     .optional(),
 });
+
+/** Wisdom 判断范式（arch/wisdom-layer-formation.md） */
+export const WisdomConfigSchema = z.object({
+  enabled: z.boolean().optional(),
+  capacity: z
+    .object({
+      /** 存活面软顶（govern 淘汰）；默认 50 */
+      softCap: z.number().int().positive().optional(),
+      /** admit 硬顶；默认 80 */
+      hardCap: z.number().int().positive().optional(),
+    })
+    .optional(),
+  formation: z
+    .object({
+      enabled: z.boolean().optional(),
+      dryRun: z.boolean().optional(),
+      ttlHours: z.number().int().positive().optional(),
+      minMemorySupport: z.number().int().positive().min(1).max(10).optional(),
+      minClusterSize: z.number().int().positive().min(2).max(50).optional(),
+      minPromotionStack: z.number().int().positive().min(1).max(20).optional(),
+      maxItemsPerRun: z.number().int().positive().max(10).optional(),
+      maxEvidenceChars: z.number().int().positive().optional(),
+    })
+    .optional(),
+  evaluation: z
+    .object({
+      dryRun: z.boolean().optional(),
+      windowHours: z.number().int().positive().optional(),
+      minAppliesForActive: z.number().int().positive().optional(),
+      contestRate: z.number().min(0).max(1).optional(),
+      counterevidenceWeight: z.number().positive().optional(),
+      strengthenMinApplies: z.number().int().positive().optional(),
+    })
+    .optional(),
+  injection: z
+    .object({
+      coreMaxItems: z.number().int().positive().max(32).optional(),
+      coreMaxTokens: z.number().int().positive().optional(),
+      scenarioMaxItems: z.number().int().positive().max(32).optional(),
+      trialVisible: z.boolean().optional(),
+    })
+    .optional(),
+  govern: z
+    .object({
+      dryRun: z.boolean().optional(),
+      zeroApplyIdleMs: z.number().int().positive().optional(),
+      priorityDecayStep: z.number().int().positive().optional(),
+      priorityFloor: z.number().int().nonnegative().optional(),
+    })
+    .optional(),
+});

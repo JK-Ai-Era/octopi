@@ -256,7 +256,9 @@ export { getTextContent, hasMediaContent } from '@octopi-agent/core/types.js';
 export type { AsyncTaskStore, AsyncTaskRecord } from './harness/collaboration/orchestration/async-task-store.js';
 export type {
   MemoryStore, MemoryEntry, MemoryType, MemoryQuery, MemoryStats,
-  WisdomStore, WisdomEntry,
+  WisdomStore, WisdomEntry, WisdomStatus, WisdomOrigin, WisdomKind,
+  WisdomScenario, WisdomEffect, WisdomDerivation, WisdomOutcomes,
+  AdmitWisdomInput, AdmitWisdomResult, WisdomInjectQuery, WisdomInjectPick, WisdomStats,
   ConceptGraphStore, ConceptNode, ConceptEdge, ConceptGraph,
   ConceptKind, ConceptRelationType, ConceptStatus, EvidenceClass, EdgeBasis,
   AdmitConceptInput, AdmitConceptResult, AdmitEdgeInput, AdmitEdgeResult,

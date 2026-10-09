@@ -1,4 +1,39 @@
-## v0.67.0
+## v0.68.1
+
+### fix(wisdom): review fixes — confidence watermark, provenance, dryRun, inject applied
+
+**问题**：子代理审查发现 P0 置信度把终身累计当增量重复折入（空跑 pulse 也抬 confidence，打穿 W5）；另有溯源幻觉、状态绕过、formation 无 dryRun、结局环无生产者等。
+
+**修复**：
+
+- **P0**：`outcomes.evalAssisted/evalContested` 水位；`planConfidenceUpdate` 只吃增量；`recordOutcomes`/evaluate 写回水位；evaluate 跳过 superseded/retired；空跑幂等有测试
+- **P1**：`allowedMemoryIds` 交集拒幻觉溯源；`initialStatus` 白名单（distilled 不得 active）；`formAndAdmit` dryRun；`WisdomLayer.onInjected` → `touchApplied`（S1 applied）；formation 触发收紧（簇或晋升堆叠）；`wisdom.*` 进 Zod + HarnessConfig + hardCap 可配
+- **P2**：冲突扫描仅 active/strengthened；未知 kind 丢弃；supersedes 缺目标 reason 码；layer-health 计存活条目；排版收敛 `formatWisdomBody`
+
+**测试**：幂等 evaluate/水位、dryRun、幻觉溯源、状态白名单、touchApplied、确定性对立断言。全量 2378 绿。
+
+## v0.68.0
+
+### feat(wisdom): maxim model, formation/evaluate/govern stewards, scenario injection
+
+**问题**：Wisdom 只有 `content` 薄条目 + 全量 `getAll` 注入；产生/验证/淘汰（OP-5）空缺，method 抬升版与格言化无门控可拦。
+
+**方案**（`arch/wisdom-layer-formation.md`，无旧 API 兼容层）：
+
+- **maxim 模型**：`statement + scenario{problemTypes/signals/antiScenarios} + effect{questions/biases/posture} + derivedFrom + counterevidence + outcomes + status 七态`（`candidate→trial→active⇄strengthened|contested→retired|superseded`）
+- **出生门控 W2**：多源 MDL（distilled ≥2）、必须有操作效应与适用域、secret/人格改写拒、查重 + 义务词对立启发；factory 可零源
+- **SQLite**：`wisdom` 表 maxim 列 + 旧 `content` 形态打开时一次性 DROP 重建（不迁移）
+- **注入**：`WisdomLayer` 小核心（factory/strengthened/宽覆盖）+ 关键词场景匹配；antiScenario / contested 不注入；按 problemTypes 分组排版
+- **形成**：`wisdom.steward.formation`（T1 聚簇 + T4 晋升候选 → LLM 炼制 → `formAndAdmit`）；缺料 skip，缺 llmPort failed
+- **验证**：`wisdom.steward.evaluate` 弱归因 `recordOutcomes` + 贝叶斯式 confidence/状态迁移（applied=0 不减 confidence）
+- **治理**：`wisdom.steward.govern` 零应用 priority 衰减、超 softCap 按 utility 淘汰（保护 factory/strengthened）
+- **Store API**：`admit/selectForInjection/listForGovern/update/softRetire/recordOutcomes/stats`；`InMemoryWisdomStore` 对齐
+
+**删除**：`WisdomEntry.content` / `WisdomStore.store|getAll|delete` / `SqliteWisdomStore.evict` / `WisdomLayer` 全量 dump。
+
+**测试**：`tests/memory/wisdom-formation.test.ts`（18）；`sqlite-storage` / `wisdom-cognition-layer` / `context-layer-health` 随 API 重写。全量 `npm test` 2373 绿。
+
+
 
 ### feat(cognition): concept graph formation from memory propositions
 

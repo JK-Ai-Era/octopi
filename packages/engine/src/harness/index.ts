@@ -345,7 +345,7 @@ export type {
 // (exported from concurrency/index.ts)
 
 // ── Memory ──
-export { InMemoryMemoryStore, InMemoryConceptGraph, AgentDatabase, SqliteMemoryStore, SqliteWisdomStore, SqliteConceptGraph, createEmbeddingProvider } from './memory/index.js';
+export { InMemoryMemoryStore, InMemoryWisdomStore, InMemoryConceptGraph, AgentDatabase, SqliteMemoryStore, SqliteWisdomStore, SqliteConceptGraph, createEmbeddingProvider } from './memory/index.js';
 export type { AgentDatabaseOptions, SqliteMemoryStoreOptions, SqliteConceptGraphOptions, EmbeddingProvider, EmbeddingConfig } from './memory/index.js';
 export {
   createEmbeddingProviderFromModels,
@@ -357,7 +357,22 @@ export {
 
 // ── Memory 领域类型 ──
 export type { MemoryType, MemoryEntry, MemoryQuery, MemoryStats, MemoryStore } from './memory/types.js';
-export type { WisdomEntry, WisdomStore } from './memory/types.js';
+export type {
+  WisdomEntry,
+  WisdomStore,
+  WisdomStatus,
+  WisdomOrigin,
+  WisdomKind,
+  WisdomScenario,
+  WisdomEffect,
+  WisdomDerivation,
+  WisdomOutcomes,
+  AdmitWisdomInput,
+  AdmitWisdomResult,
+  WisdomInjectQuery,
+  WisdomInjectPick,
+  WisdomStats,
+} from './memory/types.js';
 export type {
   ConceptKind,
   ConceptRelationType,

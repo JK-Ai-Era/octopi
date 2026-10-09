@@ -20,7 +20,12 @@ import {
   DocumentsConfigSchema,
   SummaryConfigSchema,
 } from './context.js';
-import { CognitionConfigSchema, KnowledgeConfigSchema, MemoryConfigSchema } from './substrate.js';
+import {
+  CognitionConfigSchema,
+  KnowledgeConfigSchema,
+  MemoryConfigSchema,
+  WisdomConfigSchema,
+} from './substrate.js';
 import {
   SecurityConfigSchema,
   SessionAclConfigSchema,
@@ -62,6 +67,8 @@ export const engineConfigSchema = z.object({
   constitution: ConstitutionConfigSchema.optional(),
   memory: MemoryConfigSchema.optional(),
   cognition: CognitionConfigSchema.optional(),
+  /** Wisdom 判断范式（maxim） */
+  wisdom: WisdomConfigSchema.optional(),
   security: SecurityConfigSchema.optional(),
   channels: z.array(ChannelConfigSchema).optional(),
   session: SessionConfigSchema.optional(),

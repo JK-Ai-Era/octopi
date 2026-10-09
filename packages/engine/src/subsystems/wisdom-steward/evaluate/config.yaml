@@ -1,0 +1,50 @@
+id: wisdom.steward.evaluate
+name: Wisdom Steward Evaluate
+description: 弱归因结局入账 + confidence/状态迁移（可 dryRun；不写 Memory/Cognition）
+
+sense:
+  source: eventBus
+  filter:
+    condition: "true"
+    events: ['wisdom.steward.evaluate.request']
+    emits: ['wisdom.steward.evaluated']
+  isolation: isolated
+
+think:
+  implementation: code
+  strategy: deterministic
+  maxIterations: 1
+
+act:
+  mode: inject
+
+signal:
+  severity: info
+  channel: [event]
+
+boundary:
+  visibility: isolated
+  authority: act
+  security: trusted
+
+tools:
+  mode: none
+
+session:
+  mode: ephemeral
+  scope: agent
+
+lifecycle:
+  maxConcurrent: 1
+  maxDurationMs: 15000
+
+runtimeInject:
+  requires: ['wisdomStore']
+
+observability:
+  eventPrefix: wisdom.steward.evaluate
+
+metadata:
+  config:
+    dryRun: false
+    minAppliesForActive: 3

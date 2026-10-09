@@ -1,0 +1,54 @@
+id: wisdom.steward.formation
+name: Wisdom Steward Formation
+description: 从 Memory/Cognition 稳定结构炼制判断范式（maxim；多源门控；不写 Memory/Cognition）
+
+sense:
+  source: schedule
+  interval: 86400000
+  filter:
+    condition: "true"
+    events: ['wisdom.steward.formation.request']
+    emits: ['wisdom.steward.formed', 'wisdom.steward.formation.failed']
+  isolation: isolated
+
+think:
+  implementation: llm
+  strategy: single
+  model: summary
+  maxIterations: 1
+
+act:
+  mode: inject
+
+signal:
+  severity: info
+  channel: [event]
+
+boundary:
+  visibility: isolated
+  authority: act
+  security: trusted
+
+tools:
+  mode: none
+
+session:
+  mode: ephemeral
+  scope: agent
+
+lifecycle:
+  maxConcurrent: 1
+  maxDurationMs: 60000
+
+runtimeInject:
+  requires: ['wisdomStore', 'memoryStore']
+
+observability:
+  eventPrefix: wisdom.steward.formation
+
+metadata:
+  config:
+    maxItemsPerRun: 2
+    minMemorySupport: 2
+    minClusterSize: 5
+    maxEvidenceChars: 6000

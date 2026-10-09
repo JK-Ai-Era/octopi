@@ -154,8 +154,9 @@ export async function probeContextLayerHealth(
   let wisdomEntries: number | undefined;
   if (deps.wisdomStore) {
     try {
-      const all = await deps.wisdomStore.getAll();
-      wisdomEntries = all.length;
+      const stats = await deps.wisdomStore.stats();
+      // 未退役条目（含 trial/contested）；不是注入命中数
+      wisdomEntries = stats.total - (stats.byStatus.retired ?? 0) - (stats.byStatus.superseded ?? 0);
       summary.wisdom = wisdomEntries;
     } catch {
       wisdomEntries = undefined;

@@ -129,23 +129,257 @@ export interface MemoryStore {
 }
 
 // ── Wisdom ──
+// 规范：arch/wisdom-layer-formation.md（maxim / 状态机 / W1–W5）
 
-/** 智慧条目 — 思维范式 */
-export interface WisdomEntry {
-  id: string;
-  content: string;
-  derivedFrom: string[];
-  priority: number;
-  confidence?: number;
-  createdAt: number;
-  applicableScenarios?: string[];
+/** 范式生命周期 */
+export type WisdomStatus =
+  | 'candidate'
+  | 'trial'
+  | 'active'
+  | 'strengthened'
+  | 'contested'
+  | 'retired'
+  | 'superseded';
+
+export const WISDOM_STATUSES: readonly WisdomStatus[] = [
+  'candidate',
+  'trial',
+  'active',
+  'strengthened',
+  'contested',
+  'retired',
+  'superseded',
+] as const;
+
+/** 可注入状态（contested 默认不注入） */
+export const WISDOM_INJECTABLE_STATUSES: readonly WisdomStatus[] = [
+  'trial',
+  'active',
+  'strengthened',
+] as const;
+
+/** 写入来源 */
+export type WisdomOrigin = 'factory' | 'distilled' | 'agent_write' | 'admin';
+
+export const WISDOM_ORIGINS: readonly WisdomOrigin[] = [
+  'factory',
+  'distilled',
+  'agent_write',
+  'admin',
+] as const;
+
+/** 范式形态 */
+export type WisdomKind = 'generalize' | 'corrective' | 'selection' | 'boundary';
+
+export const WISDOM_KINDS: readonly WisdomKind[] = [
+  'generalize',
+  'corrective',
+  'selection',
+  'boundary',
+] as const;
+
+/** 软退休原因 */
+export type WisdomRetireReason =
+  | 'capacity'
+  | 'high_miss'
+  | 'zero_apply'
+  | 'superseded'
+  | 'counterevidence'
+  | 'admin';
+
+/** 适用域 — 问题形态签名（非主题关键词堆） */
+export interface WisdomScenario {
+  /** 问题形态（如「验证型宣称」「失败排查」） */
+  problemTypes: string[];
+  /** 触发线索（任务特征 / 领域 / 失败模式） */
+  signals?: string[];
+  /** 明确不适用 */
+  antiScenarios?: string[];
 }
 
-/** WisdomStore — 智慧存储接口 */
+/** 操作效应 — 元认知可执行（禁止空壳格言） */
+export interface WisdomEffect {
+  /** 推理时先问的问题 */
+  questions?: string[];
+  /** 要校准的偏见 */
+  biases?: string[];
+  /** 姿态简述 */
+  posture?: string;
+}
+
+/** 溯源 — MDL 多源压缩 */
+export interface WisdomDerivation {
+  memoryIds: string[];
+  conceptIds?: string[];
+  sessionIds?: string[];
+  communityId?: string;
+  promotionBatchId?: string;
+}
+
+/** 反证登记（可错论） */
+export interface WisdomCounterevidence {
+  ref: string;
+  note: string;
+  at: number;
+  weight: number;
+}
+
+/** 结局统计（弱归因线索，非因果证明） */
+export interface WisdomOutcomes {
+  applied: number;
+  cited: number;
+  assisted: number;
+  contested: number;
+  lastAppliedAt?: number;
+  lastOutcomeAt?: number;
+  /** 置信度评估水位：已并入 confidence 的 assisted/contested 累计值（增量更新） */
+  evalAssisted?: number;
+  evalContested?: number;
+}
+
+/** 智慧条目 — 判断范式（maxim） */
+export interface WisdomEntry {
+  id: string;
+  /** 核心范式陈述 */
+  statement: string;
+  rationale?: string;
+  scenario: WisdomScenario;
+  effect: WisdomEffect;
+  status: WisdomStatus;
+  confidence: number;
+  priority: number;
+  derivedFrom: WisdomDerivation;
+  exceptions?: string[];
+  counterevidence?: WisdomCounterevidence[];
+  outcomes: WisdomOutcomes;
+  origin: WisdomOrigin;
+  kind: WisdomKind;
+  supersededBy?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** 出生门控 reason */
+export type WisdomGateReason =
+  | 'ok'
+  | 'empty_statement'
+  | 'statement_too_long'
+  | 'empty_problem_types'
+  | 'empty_effect'
+  | 'secret_like'
+  | 'persona_overwrite'
+  | 'insufficient_support'
+  | 'duplicate_statement'
+  | 'semantic_conflict'
+  | 'capacity_admit_stop'
+  | 'invalid_status'
+  | 'invalid_origin'
+  | 'invalid_kind'
+  | 'missing_derived_from'
+  | 'unknown_derived_id'
+  | 'supersedes_target_missing';
+
+export interface WisdomGateOutcome {
+  ok: boolean;
+  reason: WisdomGateReason;
+  message?: string;
+}
+
+/** admit 入口（代码执法；意图归 LLM） */
+export interface AdmitWisdomInput {
+  statement: string;
+  rationale?: string;
+  scenario: WisdomScenario;
+  effect: WisdomEffect;
+  derivedFrom: WisdomDerivation;
+  kind: WisdomKind;
+  origin?: WisdomOrigin;
+  exceptions?: string[];
+  /** 显式取代既有条目 */
+  supersedesId?: string;
+  priority?: number;
+  confidence?: number;
+  /** factory / 显式 agent_write 可直达 active；distilled 一律 trial 起步 */
+  initialStatus?: WisdomStatus;
+}
+
+export type AdmitWisdomAction = 'created' | 'superseded' | 'rejected';
+
+export interface AdmitWisdomResult {
+  action: AdmitWisdomAction;
+  id?: string;
+  reason?: WisdomGateReason;
+  message?: string;
+}
+
+/** 注入检索 */
+export interface WisdomInjectQuery {
+  /** 本轮任务/查询文本（场景匹配） */
+  text?: string;
+  /** 小核心条数硬顶 */
+  coreMaxItems?: number;
+  /** 场景条数硬顶 */
+  scenarioMaxItems?: number;
+  /** 是否包含 trial（默认 false） */
+  includeTrial?: boolean;
+}
+
+export interface WisdomInjectPick {
+  entry: WisdomEntry;
+  /** core = 常备小核心；scenario = 本轮匹配 */
+  bucket: 'core' | 'scenario';
+  /** 场景匹配分（core 为 1） */
+  score: number;
+}
+
+export type WisdomOutcomeSignal =
+  | 'applied'
+  | 'cited'
+  | 'assisted'
+  | 'contested'
+  | 'ignored';
+
+/** 结局观测窗口内的一次弱信号 */
+export interface WisdomOutcomeEvent {
+  wisdomId: string;
+  signal: WisdomOutcomeSignal;
+  at?: number;
+  note?: string;
+  ref?: string;
+}
+
+export interface WisdomStats {
+  total: number;
+  byStatus: Record<WisdomStatus, number>;
+  avgConfidence: number;
+  avgPriority: number;
+  totalApplied: number;
+  totalContested: number;
+}
+
+/**
+ * WisdomStore — 判断范式存储
+ *
+ * 写入只经 admit*（门控在 wisdom-gates）。检索主路径是 selectForInjection。
+ */
 export interface WisdomStore {
-  store(entry: Omit<WisdomEntry, 'id' | 'createdAt'>): Promise<string>;
-  getAll(): Promise<WisdomEntry[]>;
-  delete(id: string): Promise<void>;
+  readonly name: string;
+  admit(
+    input: AdmitWisdomInput,
+    options?: { allowedMemoryIds?: ReadonlySet<string> },
+  ): Promise<AdmitWisdomResult>;
+  get(id: string): Promise<WisdomEntry | null>;
+  /** 注入选择：core + scenario（不含 retired/superseded/candidate） */
+  selectForInjection(query: WisdomInjectQuery): Promise<WisdomInjectPick[]>;
+  /** 治理全量读（含 contested；不含 superseded 链内容可另取） */
+  listForGovern(filter?: { includeRetired?: boolean }): Promise<WisdomEntry[]>;
+  update(id: string, patch: Partial<WisdomEntry>): Promise<void>;
+  softRetire(id: string, meta: { by: string; reason: WisdomRetireReason | string }): Promise<void>;
+  /** 弱归因结局入账 */
+  recordOutcomes(events: WisdomOutcomeEvent[]): Promise<void>;
+  /** 注入命中轻量入账（S1 applied）；不跑 confidence 规划 */
+  touchApplied(ids: string[]): Promise<void>;
+  stats(): Promise<WisdomStats>;
 }
 
 // ── Cognition ──

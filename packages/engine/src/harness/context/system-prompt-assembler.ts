@@ -62,6 +62,9 @@ export function createDefaultSystemPromptAssembler(options?: {
   /** Knowledge Tier 0 catalog（有哪些源）；内容命中不进 system */
   knowledgeCatalog?: KnowledgeCatalogProvider;
   wisdomStore?: WisdomStore;
+  /** Wisdom 注入条数硬顶 */
+  wisdomCoreMaxItems?: number;
+  wisdomScenarioMaxItems?: number;
   cognitionStore?: ConceptGraphStore;
   memoryLimit?: number;
   knowledgeMaxEntries?: number;
@@ -158,7 +161,19 @@ export function createDefaultSystemPromptAssembler(options?: {
         layers.push(new SkillLayer({ getPromptText: getSkillPromptText }));
       }
       if (wisdomStore) {
-        layers.push(new WisdomLayer({ getEntries: () => wisdomStore.getAll() }));
+        layers.push(
+          new WisdomLayer({
+            select: async (query) => {
+              const picks = await wisdomStore.selectForInjection({
+                text: query,
+                coreMaxItems: options?.wisdomCoreMaxItems,
+                scenarioMaxItems: options?.wisdomScenarioMaxItems,
+              });
+              return picks.map((p) => ({ entry: p.entry, bucket: p.bucket }));
+            },
+            onInjected: (ids) => wisdomStore.touchApplied(ids),
+          }),
+        );
       }
       if (options?.knowledgeCatalog) {
         layers.push(

@@ -41,6 +41,7 @@ export {
 export {
   KnowledgeConfigSchema,
   MemoryConfigSchema,
+  WisdomConfigSchema,
 } from '@octopi-agent/engine/config-schema/substrate.js';
 export {
   SecurityConfigSchema,

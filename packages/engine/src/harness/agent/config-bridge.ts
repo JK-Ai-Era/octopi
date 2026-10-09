@@ -242,6 +242,7 @@ export async function buildFromConfig(config: NormalizedHarnessConfig): Promise<
         constitutionConfig,
         memoryConfig: config.memory,
         cognitionConfig: config.cognition,
+        wisdomConfig: config.wisdom,
         flatModels,
         levelMap: config.levelMap,
         modelsConfig: config.models,
@@ -276,6 +277,7 @@ async function buildAgent(
     constitutionConfig?: import('../../config.js').ConstitutionConfig;
     memoryConfig?: import('../../config.js').HarnessConfig['memory'];
     cognitionConfig?: import('../../config.js').HarnessConfig['cognition'];
+    wisdomConfig?: import('../../config.js').HarnessConfig['wisdom'];
     flatModels: NormalizedModelInfo[];
     levelMap?: import('../../config.js').LevelMap;
     modelsConfig?: import('../../config.js').ModelsConfig;
@@ -373,7 +375,12 @@ async function buildAgent(
           minKeywordScore: shared.memoryConfig?.retrieval?.minKeywordScore,
         }),
       );
-      builder.wisdomStore(new SqliteWisdomStore(db));
+      const wis = shared.wisdomConfig;
+      if (wis?.enabled !== false) {
+        builder.wisdomStore(
+          new SqliteWisdomStore(db, { hardCap: wis?.capacity?.hardCap }),
+        );
+      }
       const cog = shared.cognitionConfig;
       if (cog?.enabled !== false) {
         builder.cognitionStore(new SqliteConceptGraph(db, {

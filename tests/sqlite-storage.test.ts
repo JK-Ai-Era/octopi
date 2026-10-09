@@ -231,51 +231,105 @@ describe('SqliteWisdomStore', () => {
     db.close();
   });
 
-  it('should store and retrieve wisdom', async () => {
-    const id = await store.store({
-      content: '遇到性能问题时优先考虑缓存',
-      derivedFrom: ['mem_1'],
-      priority: 10,
-      confidence: 0.8,
+  function admitInput(statement: string, priority: number) {
+    return {
+      statement,
+      scenario: { problemTypes: ['验证型宣称'], signals: ['证据'] },
+      effect: { posture: '先证伪' },
+      derivedFrom: { memoryIds: ['m1', 'm2'] },
+      kind: 'corrective' as const,
+      origin: 'factory' as const,
+      initialStatus: 'active' as const,
+      priority,
+    };
+  }
+
+  it('admit + selectForInjection 得到 maxim', async () => {
+    const r = await store.admit(admitInput('遇到性能问题时优先考虑缓存', 10));
+    expect(r.action).toBe('created');
+    const picks = await store.selectForInjection({ text: '验证型宣称', includeTrial: true });
+    expect(picks.length).toBeGreaterThanOrEqual(1);
+    expect(picks[0].entry.statement).toBe('遇到性能问题时优先考虑缓存');
+    expect(picks[0].entry.derivedFrom.memoryIds).toEqual(['m1', 'm2']);
+  });
+
+  it('拒绝单源 distilled', async () => {
+    const r = await store.admit({
+      statement: '单源不够',
+      scenario: { problemTypes: ['t'] },
+      effect: { posture: 'p' },
+      derivedFrom: { memoryIds: ['only'] },
+      kind: 'generalize',
+      origin: 'distilled',
     });
-
-    const all = await store.getAll();
-    expect(all.length).toBe(1);
-    expect(all[0].content).toBe('遇到性能问题时优先考虑缓存');
-    expect(all[0].derivedFrom).toEqual(['mem_1']);
+    expect(r.action).toBe('rejected');
+    expect(r.reason).toBe('insufficient_support');
   });
 
-  it('should order by priority DESC', async () => {
-    await store.store({ content: 'low priority', derivedFrom: [], priority: 1 });
-    await store.store({ content: 'high priority', derivedFrom: [], priority: 10 });
-    await store.store({ content: 'medium priority', derivedFrom: [], priority: 5 });
-
-    const all = await store.getAll();
-    expect(all[0].content).toBe('high priority');
-    expect(all[1].content).toBe('medium priority');
-    expect(all[2].content).toBe('low priority');
+  it('softRetire 后不可注入', async () => {
+    const r = await store.admit(admitInput('将被退休', 20));
+    await store.softRetire(r.id!, { by: 'test', reason: 'admin' });
+    const picks = await store.selectForInjection({ text: '验证型宣称', includeTrial: true });
+    expect(picks.some((p) => p.entry.id === r.id)).toBe(false);
   });
 
-  it('should soft delete wisdom', async () => {
-    const id = await store.store({ content: 'to delete', derivedFrom: [], priority: 1 });
-    await store.delete(id);
-
-    const all = await store.getAll();
-    expect(all.length).toBe(0);
+  it('recordOutcomes + stats', async () => {
+    const r = await store.admit(admitInput('结局入账', 30));
+    await store.recordOutcomes([
+      { wisdomId: r.id!, signal: 'applied' },
+      { wisdomId: r.id!, signal: 'assisted' },
+    ]);
+    const e = await store.get(r.id!);
+    expect(e?.outcomes.applied).toBe(1);
+    expect(e?.outcomes.assisted).toBe(1);
+    const stats = await store.stats();
+    expect(stats.total).toBe(1);
+    expect(stats.totalApplied).toBe(1);
   });
 
-  it('should evict lowest priority', async () => {
-    for (let i = 0; i < 5; i++) {
-      await store.store({ content: `wisdom ${i}`, derivedFrom: [], priority: i });
+  it('schema 为 maxim（无 content 列）', async () => {
+    const cols = db.raw.prepare('PRAGMA table_info(wisdom)').all() as Array<{ name: string }>;
+    const names = new Set(cols.map((c) => c.name));
+    expect(names.has('statement')).toBe(true);
+    expect(names.has('content')).toBe(false);
+    expect(names.has('derived_from')).toBe(false);
+    expect(names.has('derived_from_json')).toBe(true);
+    expect(names.has('outcomes_json')).toBe(true);
+  });
+
+  it('旧 content 形态在 migrate 时被拆除', async () => {
+    const fs = await import('node:fs/promises');
+    const os = await import('node:os');
+    const { join } = await import('node:path');
+    const dir = await fs.mkdtemp(join(os.tmpdir(), 'octopi-wis-'));
+    const path = join(dir, 'agent.db');
+    try {
+      const d1 = await AgentDatabase.create({ dbPath: path });
+      d1.raw.exec(`DROP TABLE IF EXISTS wisdom`);
+      d1.raw.exec(`CREATE TABLE wisdom (
+        id TEXT PRIMARY KEY, content TEXT NOT NULL, derived_from TEXT NOT NULL DEFAULT '[]',
+        priority INTEGER NOT NULL DEFAULT 0, confidence REAL NOT NULL DEFAULT 0.5,
+        applicable_scenarios TEXT NOT NULL DEFAULT '[]', status TEXT NOT NULL DEFAULT 'active',
+        created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+      )`);
+      d1.raw
+        .prepare(
+          `INSERT INTO wisdom (id, content, derived_from, priority, created_at, updated_at) VALUES (?,?,?,?,?,?)`,
+        )
+        .run('old', 'legacy', '[]', 1, 1, 1);
+      d1.close();
+
+      const d2 = await AgentDatabase.create({ dbPath: path });
+      const cols = d2.raw.prepare('PRAGMA table_info(wisdom)').all() as Array<{ name: string }>;
+      const names = new Set(cols.map((c) => c.name));
+      expect(names.has('statement')).toBe(true);
+      expect(names.has('content')).toBe(false);
+      const count = d2.raw.prepare(`SELECT COUNT(*) as c FROM wisdom`).get() as { c: number };
+      expect(count.c).toBe(0);
+      d2.close();
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
     }
-
-    expect(store.count()).toBe(5);
-    const evicted = await store.evict(3);
-    expect(evicted).toBe(2);
-    expect(store.count()).toBe(3);
-
-    const all = await store.getAll();
-    expect(all[0].content).toBe('wisdom 4'); // 最高优先级保留
   });
 });
 

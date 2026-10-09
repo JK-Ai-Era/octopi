@@ -1301,9 +1301,12 @@ export class AgentBuilder {
         }
       }
 
-      // 依赖注入：memoryStore / conceptGraphStore / sessionStore / constitution / backfillCoverage
+      // 依赖注入：memoryStore / wisdomStore / conceptGraphStore / sessionStore / constitution / backfillCoverage
       if (this._memoryStore) {
         subsystemRuntime.registerDependency('memoryStore', this._memoryStore);
+      }
+      if (this._wisdomStore) {
+        subsystemRuntime.registerDependency('wisdomStore', this._wisdomStore);
       }
       if (this._cognitionStore) {
         subsystemRuntime.registerDependency('conceptGraphStore', this._cognitionStore);

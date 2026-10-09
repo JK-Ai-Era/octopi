@@ -580,7 +580,7 @@ harness/observability/observer/
 
 | # | 层 | 本质 | 归属 | 默认路径状态 |
 |---|---|---|---|---|
-| 1 | **Wisdom** | 思维范式 | Agent 基质 | **已接线**（Builder/Gateway 可挂 WisdomStore） |
+| 1 | **Wisdom** | 思维范式 | Agent 基质 | **已接线**（maxim + 场景注入 + `wisdom.steward`；见 `arch/wisdom-layer-formation.md`） |
 | 2 | **Persona** | agent 的 DNA | Agent 基质 | **已接线** |
 | 3 | **Skill** | 工作流定义 | Agent 基质 | **已接线**（`formatForPrompt` 索引） |
 | 4 | **Knowledge** | 外部参考资料 | Knowledge scope（默认 agent） | **已接线**（进程内 store） |
@@ -625,7 +625,7 @@ System 契约层 order（= 产品八层之 1–7）：
 ```
 Information → Memory   提炼：可行动命题（fact / method / norm）
 Memory → Cognition     结构化：概念之间的关系（cognition.steward.conceptualize，见 arch/cognition-graph-formation.md）
-Memory → Wisdom        升华：思维范式（后续子系统）
+Memory → Wisdom        升华：思维范式（wisdom.steward.formation；见 arch/wisdom-layer-formation.md）
 ```
 
 写入通道：主 agent `memory_store`（宪法 + 门控 + 置信度）→ MemoryStore；  
@@ -659,7 +659,7 @@ HarnessLoopEvent + context.compact.* / context.layers.assembled 事件
   ↓
 Session save：全量 messages + contextCompact 快照
   ↓
-[任务结束后] → 主 agent 显著时 memory_store / memory.steward 补录·治理（Information→Memory）；Memory→Cognition 走 cognition.steward.conceptualize；Wisdom 仍有下游子系统
+[任务结束后] → 主 agent 显著时 memory_store / memory.steward 补录·治理（Information→Memory）；Memory→Cognition 走 cognition.steward.conceptualize；Memory→Wisdom 走 wisdom.steward.formation（多源门控）
 ```
 
 ---

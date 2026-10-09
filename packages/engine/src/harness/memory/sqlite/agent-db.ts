@@ -177,6 +177,24 @@ export class AgentDatabase {
   }
 
   /**
+   * Wisdom 一次性重建：旧 content 形态无兼容价值，发现即 DROP（maxim 表随后 CREATE）。
+   */
+  private migrateWisdomTable(): void {
+    let needsRebuild = false;
+    try {
+      const cols = this.db.prepare('PRAGMA table_info(wisdom)').all() as Array<{ name: string }>;
+      const names = new Set(cols.map((c) => c.name));
+      if (cols.length > 0 && (!names.has('statement') || names.has('content') || names.has('derived_from'))) {
+        needsRebuild = true;
+      }
+    } catch {
+      // table missing — CREATE IF NOT EXISTS will handle
+    }
+    if (!needsRebuild) return;
+    this.db.exec(`DROP TABLE IF EXISTS wisdom`);
+  }
+
+  /**
    * 创建所有表结构
    *
    * 顺序：CREATE TABLE IF NOT EXISTS → migrate 旧库列 → CREATE INDEX。
@@ -215,6 +233,7 @@ export class AgentDatabase {
     // 旧库可能仍是无 deleted/status 的 schema —— 先补列再建索引
     this.migrateMemoryColumns();
     this.migrateConceptTables();
+    this.migrateWisdomTable();
 
     this.db.exec(`
       CREATE INDEX IF NOT EXISTS idx_memories_type ON memories(type);
@@ -284,18 +303,28 @@ export class AgentDatabase {
       CREATE INDEX IF NOT EXISTS idx_edges_status ON concept_edges(status);
       CREATE INDEX IF NOT EXISTS idx_merge_candidates_status ON concept_merge_candidates(status);
 
-      -- ── Wisdom 表 ──
+      -- ── Wisdom 表（maxim）──旧 content 形态在 migrateWisdomSchema 一次性拆除
       CREATE TABLE IF NOT EXISTS wisdom (
         id                    TEXT PRIMARY KEY,
-        content               TEXT NOT NULL,
-        derived_from          TEXT NOT NULL DEFAULT '[]',
-        priority              INTEGER NOT NULL DEFAULT 0,
+        statement             TEXT NOT NULL,
+        rationale             TEXT,
+        scenario_json         TEXT NOT NULL DEFAULT '{"problemTypes":[]}',
+        effect_json           TEXT NOT NULL DEFAULT '{}',
+        status                TEXT NOT NULL DEFAULT 'trial',
         confidence            REAL NOT NULL DEFAULT 0.5,
-        applicable_scenarios  TEXT NOT NULL DEFAULT '[]',
-        status                TEXT NOT NULL DEFAULT 'active',
+        priority              INTEGER NOT NULL DEFAULT 30,
+        derived_from_json     TEXT NOT NULL DEFAULT '{"memoryIds":[]}',
+        exceptions_json       TEXT NOT NULL DEFAULT '[]',
+        counterevidence_json  TEXT NOT NULL DEFAULT '[]',
+        outcomes_json         TEXT NOT NULL DEFAULT '{"applied":0,"cited":0,"assisted":0,"contested":0}',
+        origin                TEXT NOT NULL DEFAULT 'distilled',
+        kind                  TEXT NOT NULL DEFAULT 'generalize',
+        superseded_by         TEXT,
         created_at            INTEGER NOT NULL,
         updated_at            INTEGER NOT NULL
       );
+      CREATE INDEX IF NOT EXISTS idx_wisdom_status ON wisdom(status);
+      CREATE INDEX IF NOT EXISTS idx_wisdom_priority ON wisdom(priority);
 
       -- ── Knowledge Sources 注册表 ──
       CREATE TABLE IF NOT EXISTS knowledge_sources (

@@ -887,6 +887,44 @@ export interface HarnessConfig {
       ttlHours?: number;
     };
   };
+  /** Wisdom 判断范式（arch/wisdom-layer-formation.md） */
+  wisdom?: {
+    enabled?: boolean;
+    capacity?: {
+      softCap?: number;
+      hardCap?: number;
+    };
+    formation?: {
+      enabled?: boolean;
+      dryRun?: boolean;
+      ttlHours?: number;
+      minMemorySupport?: number;
+      minClusterSize?: number;
+      minPromotionStack?: number;
+      maxItemsPerRun?: number;
+      maxEvidenceChars?: number;
+    };
+    evaluation?: {
+      dryRun?: boolean;
+      windowHours?: number;
+      minAppliesForActive?: number;
+      contestRate?: number;
+      counterevidenceWeight?: number;
+      strengthenMinApplies?: number;
+    };
+    injection?: {
+      coreMaxItems?: number;
+      coreMaxTokens?: number;
+      scenarioMaxItems?: number;
+      trialVisible?: boolean;
+    };
+    govern?: {
+      dryRun?: boolean;
+      zeroApplyIdleMs?: number;
+      priorityDecayStep?: number;
+      priorityFloor?: number;
+    };
+  };
   /** Knowledge 检索/召回（全局缺省；agents[].knowledge.recall 可覆盖） */
   knowledge?: KnowledgeRuntimeConfig;
   /**

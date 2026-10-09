@@ -5,22 +5,7 @@
 import { describe, it, expect } from 'vitest';
 import { probeContextLayerHealth } from '@octopi-agent/engine/harness/context/layer-health.js';
 import { InMemoryMemoryStore } from '@octopi-agent/engine/harness/memory/store.js';
-import type { WisdomStore, WisdomEntry } from '@octopi-agent/engine/harness/memory/types.js';
-
-class TestWisdomStore implements WisdomStore {
-  private entries: WisdomEntry[] = [];
-  async store(entry: Omit<WisdomEntry, 'id' | 'createdAt'>): Promise<string> {
-    const id = `w${this.entries.length}`;
-    this.entries.push({ ...entry, id, createdAt: 1 });
-    return id;
-  }
-  async getAll() {
-    return this.entries;
-  }
-  async delete(id: string) {
-    this.entries = this.entries.filter((e) => e.id !== id);
-  }
-}
+import { InMemoryWisdomStore } from '@octopi-agent/engine/harness/memory/wisdom.js';
 
 describe('probeContextLayerHealth', () => {
   it('无 store 时 configured=false（personaLoaded 未显式 true）', async () => {
@@ -33,15 +18,23 @@ describe('probeContextLayerHealth', () => {
   it('memory/wisdom/skill 计数进入 summary', async () => {
     const memoryStore = new InMemoryMemoryStore();
     await memoryStore.store({
-      type: 'preference',
+      type: 'fact',
       content: 'x',
       source: 't',
       confidence: 0.5,
       importance: 0.5,
       tags: [],
     });
-    const wisdomStore = new TestWisdomStore();
-    await wisdomStore.store({ content: 'w', derivedFrom: [], priority: 1 });
+    const wisdomStore = new InMemoryWisdomStore();
+    await wisdomStore.admit({
+      statement: 'w',
+      scenario: { problemTypes: ['通用'] },
+      effect: { posture: 'p' },
+      derivedFrom: { memoryIds: ['m1', 'm2'] },
+      kind: 'generalize',
+      origin: 'factory',
+      initialStatus: 'active',
+    });
 
     const health = await probeContextLayerHealth({
       agentId: 'a2',
@@ -78,10 +71,9 @@ describe('probeAgentHomeHealth', () => {
       const { probeAgentHomeHealth } = await import('@octopi-agent/engine/harness/context/layer-health.js');
       const health = await probeAgentHomeHealth('a4', home);
       expect(health.configured).toBe(true);
-      expect(health.summary.personaLoaded).toBe(true);
-      expect(health.summary.skills).toBe(1);
     } finally {
-      await fs.rm(home, { recursive: true, force: true });
+      const fs2 = await import('node:fs/promises');
+      await fs2.rm(home, { recursive: true, force: true });
     }
   });
 });

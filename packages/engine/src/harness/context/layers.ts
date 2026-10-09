@@ -18,6 +18,7 @@ import {
   LAYER_PRIORITY,
 } from './layer-types.js';
 import type { MemoryStore, ConceptGraphStore } from '../memory/types.js';
+import { formatWisdomBody } from '../memory/wisdom-formation.js';
 import type {
   KnowledgeCatalogItem,
   KnowledgeCatalogProvider,
@@ -383,32 +384,54 @@ export class CognitionLayer extends BaseLayer {
 // ── Wisdom（静态/半静态） ──
 
 /**
- * Wisdom 层 — 从 WisdomStore 读取高优先思维范式
+ * Wisdom 层 — 小核心 + 场景匹配注入判断范式
  *
- * 当前薄实现：取全部并按 priority 排序后截断。
- * 后续可改为场景匹配 / applicableScenarios 过滤。
+ * 不做全量 dump。匹配失败只注入 core（宁缺毋滥）。
  */
 export class WisdomLayer extends BaseLayer {
-  private readonly getEntries: () => Promise<Array<{ id: string; content: string; priority: number }>>;
+  private readonly select: (query: string) => Promise<
+    Array<{ entry: { id: string; statement: string; scenario: { problemTypes: string[]; antiScenarios?: string[] }; effect: { posture?: string; questions?: string[] } }; bucket: 'core' | 'scenario' }>
+  >;
+  private readonly onInjected?: (ids: string[]) => void | Promise<void>;
+  private readonly coreMaxItems?: number;
+  private readonly scenarioMaxItems?: number;
 
   constructor(options: {
-    getEntries: () => Promise<Array<{ id: string; content: string; priority: number }>>;
+    select: (query: string) => Promise<
+      Array<{ entry: { id: string; statement: string; scenario: { problemTypes: string[]; antiScenarios?: string[] }; effect: { posture?: string; questions?: string[] } }; bucket: 'core' | 'scenario' }>
+    >;
+    /** S1 applied 入账（注入命中） */
+    onInjected?: (ids: string[]) => void | Promise<void>;
+    coreMaxItems?: number;
+    scenarioMaxItems?: number;
     order?: number;
   }) {
     super('wisdom', { order: options.order });
-    this.getEntries = options.getEntries;
+    this.select = options.select;
+    this.onInjected = options.onInjected;
+    this.coreMaxItems = options.coreMaxItems;
+    this.scenarioMaxItems = options.scenarioMaxItems;
   }
 
   async assemble(ctx: LayerAssembleContext): Promise<LayerContent | null> {
-    const entries = await this.getEntries();
-    if (entries.length === 0) return null;
-    const sorted = [...entries].sort((a, b) => b.priority - a.priority);
-    const body = sorted.map((w) => w.content).join('\n\n');
+    const picks = await this.select(ctx.query ?? '');
+    if (picks.length === 0) return null;
+    const body = formatWisdomBody(picks as never);
+    if (!body) return null;
     const text = `# 思维框架\n\n${body}`;
     const { text: truncated, dropped } = this.truncateToBudget(text, ctx.tokenBudget);
+    const sources = picks.map((p) => p.entry.id);
+    // S1：实际进入 system 的条目记 applied（轻量，不跑 confidence）
+    if (this.onInjected && sources.length) {
+      try {
+        await this.onInjected(sources);
+      } catch {
+        // 入账失败不拖垮装配；结局环可由 evaluate 兜
+      }
+    }
     return this.content(truncated, {
       dropped,
-      sources: sorted.map((e) => e.id),
+      sources,
     });
   }
 }
@@ -425,7 +448,9 @@ export interface CreateDefaultLayersOptions {
   knowledgeShowProgress?: 'off' | 'bucket' | 'exact';
   memoryStore?: MemoryStore;
   cognitionStore?: ConceptGraphStore;
-  wisdomEntries?: () => Promise<Array<{ id: string; content: string; priority: number }>>;
+  wisdomStore?: import('../memory/types.js').WisdomStore;
+  wisdomCoreMaxItems?: number;
+  wisdomScenarioMaxItems?: number;
 }
 
 /**
@@ -437,8 +462,23 @@ export interface CreateDefaultLayersOptions {
 export function createDefaultLayers(options: CreateDefaultLayersOptions): ContextLayer[] {
   const layers: ContextLayer[] = [];
 
-  if (options.wisdomEntries) {
-    layers.push(new WisdomLayer({ getEntries: options.wisdomEntries }));
+  if (options.wisdomStore) {
+    const store = options.wisdomStore;
+    layers.push(
+      new WisdomLayer({
+        select: async (query) => {
+          const picks = await store.selectForInjection({
+            text: query,
+            coreMaxItems: options.wisdomCoreMaxItems,
+            scenarioMaxItems: options.wisdomScenarioMaxItems,
+          });
+          return picks.map((p) => ({ entry: p.entry, bucket: p.bucket }));
+        },
+        onInjected: (ids) => store.touchApplied(ids),
+        coreMaxItems: options.wisdomCoreMaxItems,
+        scenarioMaxItems: options.wisdomScenarioMaxItems,
+      }),
+    );
   }
   if (options.personaText) {
     layers.push(new PersonaLayer({ getText: options.personaText }));
