@@ -320,7 +320,7 @@ export class LocalKnowledgeQueryService implements KnowledgeQueryService {
 
   async principalStats(agentId: string, identity?: QueryIdentity): Promise<PrincipalStats> {
     const { sources, db } = this.deps;
-    const visible = sources.listVisible(agentId).filter((s) => {
+    const visible = sources.listVisible(agentId, undefined, identity).filter((s) => {
       return !identity || this.gatewayVisible(s, identity);
     });
     const stats = db.stats();
@@ -332,7 +332,7 @@ export class LocalKnowledgeQueryService implements KnowledgeQueryService {
           .filter(
             (s) =>
               s.scopeRef.level === 'project' &&
-              sources.isVisible(s, agentId) &&
+              sources.isVisible(s, agentId, undefined, identity) &&
               (!identity || this.gatewayVisible(s, identity)),
           )
           .map((s) => s.scopeRef.key),
@@ -343,7 +343,7 @@ export class LocalKnowledgeQueryService implements KnowledgeQueryService {
   }
 
   async catalog(agentId: string, identity?: QueryIdentity): Promise<KnowledgeCatalogItem[]> {
-    const items = this.deps.sources.catalogFor(agentId);
+    const items = this.deps.sources.catalogFor(agentId, { identity });
     if (!identity) return items;
     return items.filter((item) => {
       const src = this.deps.sources.get(item.id as KnowledgeSourceId);
@@ -365,7 +365,7 @@ export class LocalKnowledgeQueryService implements KnowledgeQueryService {
     const src = sources.get(sourceId);
     if (!src) return null;
     if (identity && !this.gatewayVisible(src, identity)) return null;
-    if (!sources.isVisible(src, agentId, sessionId)) return null;
+    if (!sources.isVisible(src, agentId, sessionId, identity)) return null;
     return index.listChunksByPath(sourceId, path);
   }
 
@@ -379,7 +379,7 @@ export class LocalKnowledgeQueryService implements KnowledgeQueryService {
     const visible = (src: KnowledgeSource | null): boolean => {
       if (!src) return false;
       if (identity && !this.gatewayVisible(src, identity)) return false;
-      return sources.isVisible(src, agentId, sessionId);
+      return sources.isVisible(src, agentId, sessionId, identity);
     };
     if (body.chunkId) {
       const row = index.getChunk(body.chunkId);

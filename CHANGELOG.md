@@ -1,3 +1,22 @@
+## v0.68.2
+
+### fix(knowledge): catalog 与挂载同口径，不再误显未挂载 Project 源
+
+**问题**：WebUI「项目挂载」显示 `default` 未挂载（`尚未挂载给任何 Agent`），system 的 Knowledge Sources catalog 却仍列出 `云锡`。两套口径不一致。
+
+**根因**：
+
+1. **脏挂载行**：`knowledge_project_agents` 残留 `gateway_id='default'` 的挂载（历史写路径未带 identity），而 principal / source 归属是 `gw-local`。
+2. **catalog 未传 identity**：`catalogFor` / `listVisible` / `listBaseVisible` 判断 Project 挂载时丢掉 identity，`isProjectAssigned` 回退 `gateway_id='default'`，正好命中脏行；UI 的 `listProjects` 则按 token identity（`gw-local`）过滤，看到的是空。于是 UI 说未挂载、catalog 却展示。
+
+**修复**：
+
+- `catalogFor` / `catalogFingerprint` / `listVisible` / `listBaseVisible` 透传 `identity`（tenant/gateway）到 `isVisible`
+- `query-service.catalog` / `principalStats` / `listChunks` / `read`、`retriever.visibleSourceIds` 统一带 identity
+- 与 UI 挂载查询同口径：token identity 是什么，catalog 就按什么过滤
+
+**测试**：`knowledge-cross-gateway.test.ts` 新增 — 跨 gateway 挂载不得进 catalog；`gateway_id=default` 脏挂载行不得被运行时 `gw-local` identity 误命中。
+
 ## v0.68.1
 
 ### fix(wisdom): review fixes — confidence watermark, provenance, dryRun, inject applied

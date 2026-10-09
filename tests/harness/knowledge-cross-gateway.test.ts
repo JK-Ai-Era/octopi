@@ -132,4 +132,57 @@ describe('cross-gateway isolation', () => {
     }
     db.close();
   });
+
+  it('catalog/挂载同口径：他方 gateway 的 project 挂载不得进 catalog', async () => {
+    const { store, write, query, db } = await openStack();
+    await write.registerSource(gwA, {
+      kind: 'directory',
+      location: '/tmp/docs-cat',
+      scopeRef: { level: 'project', key: 'docs' },
+      displayName: 'docs',
+      visibility: 'public',
+      sync: { enabled: false, strategy: 'manual' },
+    });
+
+    // 只挂在 gw-b / coder；gw-a 同名 agent 不得看见
+    store.assignProject('docs', 'coder', gwB);
+
+    expect(store.catalogFor('coder', { identity: gwB }).map((i) => i.displayName)).toEqual([
+      'docs',
+    ]);
+    expect(store.catalogFor('coder', { identity: gwA })).toEqual([]);
+    expect(await query.catalog('coder', gwB)).toHaveLength(1);
+    expect(await query.catalog('coder', gwA)).toHaveLength(0);
+    expect((await query.visibility('coder', gwB)).assignedProjects).toContain('docs');
+    expect((await query.visibility('coder', gwA)).assignedProjects).not.toContain('docs');
+    db.close();
+  });
+
+  it('catalog 不得误命中 gateway_id=default 的脏挂载行（运行时 identity=gw-local）', async () => {
+    const { store, write, query, db } = await openStack();
+    await write.registerSource(gwA, {
+      kind: 'directory',
+      location: '/tmp/docs-orphan',
+      scopeRef: { level: 'project', key: 'orphan' },
+      displayName: 'orphan',
+      visibility: 'public',
+      sync: { enabled: false, strategy: 'manual' },
+    });
+
+    // 模拟历史脏数据：挂载行落在 gateway_id=default，运行时 principal 却是 gw-local
+    store.assignProject('orphan', 'default', {
+      tenantId: 'acme',
+      gatewayId: 'default',
+    });
+
+    const runtime = { tenantId: 'acme', gatewayId: 'gw-local' };
+    expect(store.catalogFor('default', { identity: runtime })).toEqual([]);
+    expect(await query.catalog('default', runtime)).toHaveLength(0);
+    expect((await query.visibility('default', runtime)).assignedProjects).toEqual([]);
+    // 同一挂载行对 default 口径仍可见（非跨 gateway 泄漏）
+    expect(
+      store.catalogFor('default', { identity: { tenantId: 'acme', gatewayId: 'default' } }),
+    ).toHaveLength(1);
+    db.close();
+  });
 });

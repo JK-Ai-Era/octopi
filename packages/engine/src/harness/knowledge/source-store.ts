@@ -744,13 +744,20 @@ export class KnowledgeSourceStore {
   /**
    * 生成 agent 可见 catalog（Tier 0）
    * 默认返回可见全集（display 截断在 KnowledgeLayer）；maxEntries 仅作安全硬顶
+   * identity 必须与 UI 挂载查询同口径（tenant/gateway），否则会误命中他方挂载行
    */
   catalogFor(
     agentId: string,
-    opts?: { sessionId?: string; maxEntries?: number },
+    opts?: {
+      sessionId?: string;
+      maxEntries?: number;
+      identity?: { tenantId?: string; gatewayId?: string };
+    },
   ): KnowledgeCatalogItem[] {
     const max = opts?.maxEntries ?? 200;
-    const visible = this.list().filter((s) => this.isVisible(s, agentId, opts?.sessionId));
+    const visible = this.list().filter((s) =>
+      this.isVisible(s, agentId, opts?.sessionId, opts?.identity),
+    );
     const sorted = [...visible].sort((a, b) => {
       const pa = a.catalogPriority ?? 0;
       const pb = b.catalogPriority ?? 0;
@@ -819,7 +826,10 @@ export class KnowledgeSourceStore {
   /**
    * catalog 粗桶指纹（防每轮重渲）
    */
-  catalogFingerprint(agentId: string, opts?: { sessionId?: string }): string {
+  catalogFingerprint(
+    agentId: string,
+    opts?: { sessionId?: string; identity?: { tenantId?: string; gatewayId?: string } },
+  ): string {
     const items = this.catalogFor(agentId, { ...opts, maxEntries: 10_000 });
     const payload = items
       .map((i) =>
@@ -839,13 +849,21 @@ export class KnowledgeSourceStore {
   /**
    * 可见源列表（effective = base ⊕ session overlay；含 hiddenFromCatalog）
    */
-  listVisible(agentId: string, sessionId?: string): KnowledgeSource[] {
-    return this.list().filter((s) => this.isVisible(s, agentId, sessionId));
+  listVisible(
+    agentId: string,
+    sessionId?: string,
+    identity?: { tenantId?: string; gatewayId?: string },
+  ): KnowledgeSource[] {
+    return this.list().filter((s) => this.isVisible(s, agentId, sessionId, identity));
   }
 
   /** Agent 级 base 可见源（不含会话 overlay） */
-  listBaseVisible(agentId: string, sessionId?: string): KnowledgeSource[] {
-    return this.list().filter((s) => this.isBaseVisible(s, agentId, sessionId));
+  listBaseVisible(
+    agentId: string,
+    sessionId?: string,
+    identity?: { tenantId?: string; gatewayId?: string },
+  ): KnowledgeSource[] {
+    return this.list().filter((s) => this.isBaseVisible(s, agentId, sessionId, identity));
   }
 
   private upsertRow(source: KnowledgeSource): void {

@@ -120,7 +120,7 @@ export class KnowledgeRetriever {
     identity?: { tenantId?: string; gatewayId?: string },
   ): import('./types.js').KnowledgeSourceId[] {
     return this.sources
-      .listVisible(agentId, sessionId)
+      .listVisible(agentId, sessionId, identity)
       .filter((s) => this.sources.isGatewayVisible(s, identity))
       .map((s) => s.id);
   }
