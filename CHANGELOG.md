@@ -1,3 +1,18 @@
+## v0.69.2
+
+### feat(client-tools): persist terminal calls and html_ui assets
+
+**问题**：ClientToolCall 仅在内存、resolve 后即删；`html_ui` 的 HTML 随标签页丢失，无法回放/对账。
+
+**方案**：
+
+- 终态 call 写入 `session.metadata.clientToolCalls`（cap 200；超长 `args.html` 截断，正文在 attachment）
+- `html_ui` invoke 时落 session attachment，`call.assetId`
+- 内存 `recentTerminal`（100）短期对账；`listClientToolCalls` = pending + recent + store
+- WebUI 打开会话时从持久化 call 恢复 `html_ui` 预览
+
+**测试**：`tests/gateway-client-tools.test.ts` 增加 persist/recent 断言。
+
 ## v0.69.1
 
 ### fix(loop): classify connection drops and protect sync model fallback

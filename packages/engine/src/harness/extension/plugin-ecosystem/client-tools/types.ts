@@ -78,6 +78,8 @@ export interface ClientToolCall {
   state: 'pending' | 'running' | 'succeeded' | 'failed';
   outcome?: ClientToolCallOutcome;
   completedByPrincipalId?: string;
+  /** html_ui 等大正文落 attachment 后的引用 */
+  assetId?: string;
   createdAt: number;
   ttlAt: number;
 }

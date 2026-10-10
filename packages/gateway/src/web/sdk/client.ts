@@ -293,6 +293,8 @@ export interface ClientToolCallDto {
   targetClientInstanceId?: string;
   outcome?: ClientToolCallOutcomeDto;
   completedByPrincipalId?: string;
+  /** html_ui 正文 attachment 引用 */
+  assetId?: string;
   createdAt: number;
   ttlAt: number;
 }

@@ -207,4 +207,48 @@ describe('ClientToolHost', () => {
     expect(out.error).toBe('cancelled');
     expect(host.listSessionCalls('s1')).toHaveLength(0);
   });
+
+  it('persists terminal call and keeps it in recent list', async () => {
+    const registry = new ClientToolRegistry();
+    const persisted: Array<{ id: string; state: string }> = [];
+    const host = new ClientToolHost({
+      registry,
+      registerGlobalTool: () => {},
+      unregisterGlobalTool: () => {},
+      syncAgentTools: () => {},
+      emitSessionEvent: () => {},
+      persistCall: (call) => {
+        persisted.push({ id: call.id, state: call.state });
+      },
+      makeCallId: () => 'ctc_persist1',
+      defaultTimeoutMs: 5_000,
+    });
+    host.registerClientTools({
+      sessionId: 's1',
+      clientInstanceId: 'web-1',
+      descriptors: [noteForm],
+    });
+    const tool = host.createInvoker();
+    const invokeP = tool(
+      {
+        name: 'note_form',
+        args: { title: 't' },
+        sessionId: 's1',
+        agentId: 'a1',
+        callId: 'ctc_persist1',
+        ttlAt: Date.now() + 5_000,
+      },
+      { sessionId: 's1', agentId: 'a1', messages: [] },
+    );
+    await Promise.resolve();
+    host.resolveCall('ctc_persist1', {
+      status: 'ok',
+      result: { kind: 'value', data: { ok: true } },
+    });
+    await invokeP;
+    expect(persisted).toEqual([{ id: 'ctc_persist1', state: 'succeeded' }]);
+    const recent = host.listRecentTerminalCalls('s1');
+    expect(recent).toHaveLength(1);
+    expect(recent[0]!.id).toBe('ctc_persist1');
+  });
 });

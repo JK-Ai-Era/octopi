@@ -35,6 +35,26 @@ function webuiClientInstanceId(): string {
   return id;
 }
 
+/** 从已持久化的 html_ui call 恢复预览 */
+function webViewsFromCalls(calls: ClientToolCallDto[]): RenderedWebView[] {
+  const out: RenderedWebView[] = [];
+  for (const c of calls) {
+    if (c.name !== 'html_ui' || c.state === 'pending') continue;
+    const args = (c.args ?? {}) as { title?: unknown; html?: unknown; height?: unknown; mode?: unknown };
+    const html = typeof args.html === 'string' ? args.html : '';
+    if (!html) continue;
+    out.push({
+      id: c.id,
+      title: typeof args.title === 'string' && args.title ? args.title : '网页',
+      html,
+      height: typeof args.height === 'number' ? args.height : 420,
+      mode: args.mode === 'form' ? 'form' : 'display',
+      createdAt: c.createdAt || 0,
+    });
+  }
+  return out;
+}
+
 /** P0 样板 Client Tool（arch/client-tools.md） */
 const WEBUI_SAMPLE_CLIENT_TOOLS: ClientToolDescriptorDto[] = [
   {
@@ -754,7 +774,7 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
     setTasks(state.chat.tasks ?? []);
     setQuestions(state.chat.questions ?? []);
     setClientToolCalls(state.chat.clientToolCalls ?? []);
-    setRenderedWebViews([]);
+    setRenderedWebViews(webViewsFromCalls(state.chat.clientToolCalls ?? []));
     setConversationItems(state.chat.conversation ?? []);
     setViewMode(state.chat.viewMode);
     await store.refreshSessionModel();

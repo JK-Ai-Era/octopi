@@ -336,6 +336,20 @@ export class Gateway {
       },
       syncAgentTools: (ops) => this.syncClientToolsToAgents(ops),
       providerLiveTtlMs: 90_000,
+      persistCall: (call) => this.persistClientToolCall(call),
+      saveHtmlAsset: async (input) => {
+        const svc = await this.getAttachmentService();
+        const att = await svc.save(input.sessionId, {
+          name: input.name,
+          mime: 'text/html',
+          data: Buffer.from(input.html, 'utf8'),
+        });
+        return {
+          assetId: att.id,
+          mime: att.mime || 'text/html',
+          sizeBytes: att.sizeBytes ?? Buffer.byteLength(input.html, 'utf8'),
+        };
+      },
       emitSessionEvent: (sessionId, event) => {
         const ev = event as unknown as AgentEvent;
         this.emitEvent(ev);
@@ -2707,8 +2721,41 @@ export class Gateway {
     return this.clientTools.unregisterClientTools(input);
   }
 
-  listClientToolCalls(sessionId: string): ClientToolCall[] {
-    return this.clientTools.listSessionCalls(sessionId);
+  async listClientToolCalls(sessionId: string): Promise<ClientToolCall[]> {
+    const live = this.clientTools.listSessionCalls(sessionId);
+    const recent = this.clientTools.listRecentTerminalCalls(sessionId);
+    const seen = new Set(live.map((c) => c.id).concat(recent.map((c) => c.id)));
+    let stored: ClientToolCall[] = [];
+    try {
+      const session = await this.store.load(sessionId);
+      const raw = session?.metadata?.clientToolCalls;
+      if (Array.isArray(raw)) {
+        stored = (raw as ClientToolCall[]).filter((c) => c?.id && !seen.has(c.id));
+      }
+    } catch {
+      // 历史不可读时只返回内存中的 call
+    }
+    return [...live, ...recent, ...stored];
+  }
+
+  /**
+   * 终态 ClientToolCall 写入 session.metadata（Jsonl 快照随 SessionStore.save 落盘）。
+   * 上限 200 条/会话；args.html 超大时截断（正文已在 attachment）。
+   */
+  private async persistClientToolCall(call: ClientToolCall): Promise<void> {
+    const session = await this.store.load(call.sessionId);
+    if (!session) return;
+    const meta = session.metadata ?? (session.metadata = {});
+    const key = 'clientToolCalls';
+    const prev = Array.isArray(meta[key]) ? (meta[key] as ClientToolCall[]) : [];
+    const record: ClientToolCall = { ...call };
+    const html = record.args?.html;
+    if (typeof html === 'string' && html.length > 64 * 1024) {
+      record.args = { ...record.args, html: `${html.slice(0, 2048)}…[${html.length} chars, assetId=${record.assetId ?? 'n/a'}]` };
+    }
+    const next = prev.filter((c) => c.id !== record.id).concat(record);
+    meta[key] = next.slice(-200);
+    await this.store.save(call.sessionId, session);
   }
 
   getClientToolCall(callId: ClientToolCallId): ClientToolCall | undefined {

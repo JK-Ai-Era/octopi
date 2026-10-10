@@ -926,7 +926,7 @@ export class WebApiRouter {
         }
         return this.json(res, 200, {
           ok: true,
-          data: this.gateway.listClientToolCalls(sessionId),
+          data: await this.gateway.listClientToolCalls(sessionId),
         });
       }
 

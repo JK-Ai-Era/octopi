@@ -37,6 +37,14 @@ export interface ClientToolHostDeps {
     timestamp: number;
     data: Record<string, unknown>;
   }) => void;
+  /** 终态 call 持久化到 SessionStore（可选） */
+  persistCall?: (call: ClientToolCall) => void | Promise<void>;
+  /** html_ui 大正文落 attachment（可选） */
+  saveHtmlAsset?: (input: {
+    sessionId: string;
+    name: string;
+    html: string;
+  }) => Promise<{ assetId: string; mime: string; sizeBytes: number }>;
   /** callId 生成（可测） */
   makeCallId?: () => string;
   /** 默认 TTL */
@@ -59,6 +67,9 @@ export class ClientToolHost {
   /** 已装进 tool 面的名字 → RegisteredTool */
   private installed = new Map<ClientToolName, RegisteredTool>();
   private calls = new Map<ClientToolCallId, PendingCall>();
+  /** 终态 call 短期保留（内存；权威在 persistCall） */
+  private recentTerminal: ClientToolCall[] = [];
+  private static readonly RECENT_TERMINAL_MAX = 100;
 
   constructor(deps: ClientToolHostDeps) {
     this.deps = deps;
@@ -202,8 +213,15 @@ export class ClientToolHost {
       .filter((c) => c.sessionId === sessionId);
   }
 
+  /** 已终态但仍在近期窗口内的 call（UI 对账 / 回放） */
+  listRecentTerminalCalls(sessionId: string): ClientToolCall[] {
+    return this.recentTerminal
+      .filter((c) => c.sessionId === sessionId)
+      .map((c) => c);
+  }
+
   getCall(callId: ClientToolCallId): ClientToolCall | undefined {
-    return this.calls.get(callId)?.call;
+    return this.calls.get(callId)?.call ?? this.recentTerminal.find((c) => c.id === callId);
   }
 
   listSessionTools(sessionId: string): Array<{ name: string; description: string; interaction?: string }> {
@@ -294,6 +312,23 @@ export class ClientToolHost {
       ttlAt: input.ttlAt,
     };
 
+    // html_ui：大正文落 attachment，call 只带 assetId（I2）
+    if (call.name === 'html_ui' && this.deps.saveHtmlAsset) {
+      const html = input.args.html;
+      if (typeof html === 'string' && html.length > 0) {
+        try {
+          const asset = await this.deps.saveHtmlAsset({
+            sessionId: call.sessionId,
+            name: `html_ui_${call.id}.html`,
+            html,
+          });
+          call.assetId = asset.assetId;
+        } catch {
+          // 落盘失败不阻塞展示；call 仍带 args.html
+        }
+      }
+    }
+
     const outcome = await new Promise<ClientToolCallOutcome>((resolve, reject) => {
       if (this.calls.has(call.id)) {
         reject(new Error(`client tool call id collision: ${call.id}`));
@@ -357,6 +392,7 @@ export class ClientToolHost {
     pending.call.state = outcome.status === 'ok' ? 'succeeded' : 'failed';
     pending.call.outcome = outcome;
     this.calls.delete(callId);
+    this.pushRecentTerminal(pending.call);
 
     this.deps.emitSessionEvent(pending.call.sessionId, {
       type: 'client_tool.resolved',
@@ -365,7 +401,19 @@ export class ClientToolHost {
       data: { call: publicCall(pending.call) },
     });
 
+    void Promise.resolve(this.deps.persistCall?.(pending.call)).catch(() => {
+      // 持久化失败不改变工具结局；权威在内存 call 与 tool_result
+    });
+
     pending.resolve(outcome);
+  }
+
+  private pushRecentTerminal(call: ClientToolCall): void {
+    this.recentTerminal = this.recentTerminal.filter((c) => c.id !== call.id);
+    this.recentTerminal.push({ ...call });
+    if (this.recentTerminal.length > ClientToolHost.RECENT_TERMINAL_MAX) {
+      this.recentTerminal.splice(0, this.recentTerminal.length - ClientToolHost.RECENT_TERMINAL_MAX);
+    }
   }
 
   private installTool(descriptor: ClientToolDescriptor): RegisteredTool {
@@ -399,6 +447,7 @@ function publicCall(call: ClientToolCall): Record<string, unknown> {
     targetClientInstanceId: call.targetClientInstanceId,
     outcome: call.outcome,
     completedByPrincipalId: call.completedByPrincipalId,
+    assetId: call.assetId,
     createdAt: call.createdAt,
     ttlAt: call.ttlAt,
   };
