@@ -2,6 +2,7 @@ export type {
   ClientToolCall,
   ClientToolCallId,
   ClientToolCallOutcome,
+  ClientToolClientFilter,
   ClientToolDescriptor,
   ClientToolDeviceMeta,
   ClientToolErrorReason,
@@ -28,3 +29,19 @@ export {
   ClientToolRegistry,
   type ClientToolRouteDecision,
 } from './registry.js';
+
+export {
+  ClientStreamTransport,
+  createSinkStreamTool,
+  createSourceStreamTool,
+  createStreamStopTool,
+  type ClientStreamChannel,
+  type ClientStreamDirection,
+  type ClientStreamEvent,
+  type ClientStreamEventType,
+  type ClientStreamSampleInput,
+  type ClientStreamTransportDeps,
+  type OpenStreamInput,
+  type StreamDomainToolDeps,
+  type StreamStopToolDeps,
+} from './stream.js';

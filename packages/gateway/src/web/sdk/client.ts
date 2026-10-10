@@ -252,6 +252,12 @@ export interface ClientToolDescriptorDto {
     consent?: 'none' | 'prompt' | 'strict';
   };
   resultKinds?: Array<'value' | 'asset'>;
+  processing?: 'server' | 'local';
+  /** Host 流通道域工具（§15.1）；LLM 结果仍为 value 句柄 */
+  stream?: {
+    direction: 'source' | 'sink' | 'stop';
+    handleKey?: string;
+  };
   version?: string;
 }
 
@@ -547,6 +553,22 @@ export interface AgentEventEnvelope {
   agentId?: string;
   sessionId?: string;
   data?: Record<string, unknown>;
+}
+
+export interface ClientStreamChannelDto {
+  streamId: string;
+  direction: 'source' | 'sink';
+  sampleHint?: string;
+  owner: {
+    sessionId: string;
+    clientInstanceId: string;
+    toolCallId?: string;
+    toolName?: string;
+  };
+  status: 'open' | 'closed';
+  openedAt: number;
+  closedAt?: number;
+  maxDurationMs?: number;
 }
 
 export interface WsEnvelope {
@@ -946,6 +968,47 @@ export class OctopiClient {
   async listClientToolCalls(sessionId: string): Promise<ClientToolCallDto[]> {
     const data = await this.getJson(`/client-tool-calls?sessionId=${encodeURIComponent(sessionId)}`);
     return (data?.data as ClientToolCallDto[]) ?? [];
+  }
+
+  // ── Client Streams（§15.1 Host 通道）──
+
+  async openClientStream(input: {
+    sessionId: string;
+    clientInstanceId: string;
+    direction: 'source' | 'sink';
+    toolName?: string;
+    sampleHint?: string;
+    maxDurationMs?: number;
+  }): Promise<ClientStreamChannelDto> {
+    const data = await this.postJson('/client-streams', input);
+    return data?.data as ClientStreamChannelDto;
+  }
+
+  async writeClientStreamSamples(
+    streamId: string,
+    samples: unknown[],
+  ): Promise<{ accepted: number }> {
+    const data = await this.postJson(
+      `/client-streams/${encodeURIComponent(streamId)}/samples`,
+      { samples },
+    );
+    return data?.data as { accepted: number };
+  }
+
+  async closeClientStream(
+    streamId: string,
+    reason?: string,
+  ): Promise<ClientStreamChannelDto> {
+    const data = await this.postJson(
+      `/client-streams/${encodeURIComponent(streamId)}/close`,
+      { reason },
+    );
+    return data?.data as ClientStreamChannelDto;
+  }
+
+  async listClientStreams(sessionId: string): Promise<ClientStreamChannelDto[]> {
+    const data = await this.getJson(`/client-streams?sessionId=${encodeURIComponent(sessionId)}`);
+    return (data?.data as ClientStreamChannelDto[]) ?? [];
   }
 
   /** UI/设备提交结果 */

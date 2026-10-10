@@ -19,7 +19,11 @@ import type {
 } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/client-tools/index.js';
 import {
   createClientTool,
+  createSinkStreamTool,
+  createSourceStreamTool,
+  createStreamStopTool,
 } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/client-tools/index.js';
+import type { ClientStreamTransport } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/client-tools/index.js';
 import type { RegisteredTool } from '@octopi-agent/core/types/tools.js';
 
 export interface ClientToolHostDeps {
@@ -51,6 +55,8 @@ export interface ClientToolHostDeps {
   defaultTimeoutMs?: number;
   /** provider 在线 TTL（超过未心跳视为离线） */
   providerLiveTtlMs?: number;
+  /** Host 流通道（§15.1）；client 下线/会话取消时联动 close */
+  streamTransport?: ClientStreamTransport;
 }
 
 interface PendingCall {
@@ -121,6 +127,7 @@ export class ClientToolHost {
           data: {
             reason: 'stale',
             toolNames: this.deps.registry.sessionToolNames(entry.sessionId, now),
+            removedNames: entry.removedNames,
           },
         });
       }
@@ -152,12 +159,20 @@ export class ClientToolHost {
     }
     if (ops.length > 0) this.deps.syncAgentTools(ops);
 
-    this.deps.emitSessionEvent(input.sessionId, {
-      type: 'client_tools.changed',
-      sessionId: input.sessionId,
-      timestamp: Date.now(),
-      data: { clientInstanceId: input.clientInstanceId, toolNames: allNames },
-    });
+    // 仅能力面增减时广播（§15.5）
+    if (addedNames.length > 0) {
+      this.deps.emitSessionEvent(input.sessionId, {
+        type: 'client_tools.changed',
+        sessionId: input.sessionId,
+        timestamp: Date.now(),
+        data: {
+          clientInstanceId: input.clientInstanceId,
+          toolNames: allNames,
+          addedNames,
+          removedNames: [],
+        },
+      });
+    }
 
     return { toolNames: allNames };
   }
@@ -182,27 +197,66 @@ export class ClientToolHost {
     }
     if (ops.length > 0) this.deps.syncAgentTools(ops);
 
-    this.deps.emitSessionEvent(input.sessionId, {
-      type: 'client_tools.changed',
-      sessionId: input.sessionId,
-      timestamp: Date.now(),
-      data: { clientInstanceId: input.clientInstanceId, toolNames: this.deps.registry.sessionToolNames(input.sessionId) },
-    });
-
-    // 取消该端未完成 call
-    for (const [id, pending] of this.calls) {
-      if (
-        pending.call.sessionId === input.sessionId &&
-        pending.call.targetClientInstanceId === input.clientInstanceId &&
-        pending.call.state === 'pending'
-      ) {
-        this.finishCall(id, {
-          status: 'error',
-          reason: 'client_unavailable',
-          hint: 'client unregistered while tool was pending',
-        });
-      }
+    if (removedNames.length > 0) {
+      this.deps.emitSessionEvent(input.sessionId, {
+        type: 'client_tools.changed',
+        sessionId: input.sessionId,
+        timestamp: Date.now(),
+        data: {
+          clientInstanceId: input.clientInstanceId,
+          toolNames: this.deps.registry.sessionToolNames(input.sessionId),
+          addedNames: [],
+          removedNames,
+        },
+      });
     }
+
+    // 取消或换端该端未完成 call（§15.3：仅非敏感且未钉端可换端）
+    for (const [id, pending] of [...this.calls.entries()]) {
+      if (
+        pending.call.sessionId !== input.sessionId ||
+        pending.call.targetClientInstanceId !== input.clientInstanceId ||
+        pending.call.state !== 'pending'
+      ) {
+        continue;
+      }
+      const sensitivity = pending.call.sensitivity ?? 'public';
+      const pinned = pending.call.pinnedClient === true;
+      // 本次调用为 sensitive / 钉端 → 不换端（不看 alt 自报的 descriptor）
+      const next = pinned || sensitivity === 'sensitive'
+        ? ({ ok: false as const })
+        : this.deps.registry.resolveTarget(pending.call.sessionId, pending.call.name);
+      const altOk = next.ok && next.clientInstanceId !== input.clientInstanceId;
+      if (altOk && next.ok) {
+        // 仍拒绝换到另一台敏感设备（多端 descriptor 可不一致）
+        const altSensitive = next.descriptor.device?.sensitivity === 'sensitive';
+        if (!altSensitive) {
+          pending.call.targetClientInstanceId = next.clientInstanceId;
+          this.deps.emitSessionEvent(pending.call.sessionId, {
+            type: 'client_tool.pending',
+            sessionId: pending.call.sessionId,
+            timestamp: Date.now(),
+            data: { call: publicCall(pending.call), reason: 'failover' },
+          });
+          continue;
+        }
+      }
+      this.finishCall(id, {
+        status: 'error',
+        reason: 'client_unavailable',
+        hint:
+          sensitivity === 'sensitive' || pinned
+            ? 'sensitive or pinned client tool target left; not failing over'
+            : 'client unregistered while tool was pending',
+      });
+    }
+
+    this.deps.streamTransport?.closeWhere(
+      (c) =>
+        c.owner.sessionId === input.sessionId &&
+        c.owner.clientInstanceId === input.clientInstanceId,
+      'client_unavailable',
+    );
 
     return { removedNames: globallyRemoved };
   }
@@ -259,6 +313,7 @@ export class ClientToolHost {
       if (pending.call.sessionId !== sessionId || pending.call.state !== 'pending') continue;
       this.finishCall(id, { status: 'error', reason: 'cancelled', hint: reason });
     }
+    this.deps.streamTransport?.closeWhere((c) => c.owner.sessionId === sessionId, 'cancelled');
   }
 
   /**
@@ -308,6 +363,9 @@ export class ClientToolHost {
       args: input.args,
       targetClientInstanceId: route.clientInstanceId,
       state: 'pending',
+      processing: route.descriptor.processing ?? 'server',
+      sensitivity: route.descriptor.device?.sensitivity ?? 'public',
+      pinnedClient: Boolean(route.descriptor.clientFilter?.instanceId),
       createdAt: Date.now(),
       ttlAt: input.ttlAt,
     };
@@ -391,6 +449,17 @@ export class ClientToolHost {
     }
     pending.call.state = outcome.status === 'ok' ? 'succeeded' : 'failed';
     pending.call.outcome = outcome;
+    if (outcome.processing) pending.call.processing = outcome.processing;
+    if (
+      outcome.status === 'ok' &&
+      pending.call.targetClientInstanceId
+    ) {
+      this.deps.registry.notePreferred(
+        pending.call.sessionId,
+        pending.call.name,
+        pending.call.targetClientInstanceId,
+      );
+    }
     this.calls.delete(callId);
     this.pushRecentTerminal(pending.call);
 
@@ -419,13 +488,56 @@ export class ClientToolHost {
   private installTool(descriptor: ClientToolDescriptor): RegisteredTool {
     const existing = this.installed.get(descriptor.name);
     if (existing) return existing;
-    const tool = createClientTool(descriptor, this.createInvoker(), {
-      timeoutMs: this.deps.defaultTimeoutMs,
-      makeCallId: this.deps.makeCallId,
-    });
+    const tool = this.buildTool(descriptor);
     this.installed.set(descriptor.name, tool);
     this.deps.registerGlobalTool(tool);
     return tool;
+  }
+
+  private buildTool(descriptor: ClientToolDescriptor): RegisteredTool {
+    const stream = descriptor.stream;
+    if (!stream) {
+      // 不传 timeoutMs：Host.invoke 的 timer 是唯一 TTL
+      return createClientTool(descriptor, this.createInvoker(), {
+        makeCallId: this.deps.makeCallId,
+      });
+    }
+    const transport = this.deps.streamTransport;
+    if (!transport) {
+      throw new Error(
+        `client tool "${descriptor.name}" declares stream but streamTransport is not configured`,
+      );
+    }
+    const handleKey = stream.handleKey ?? (stream.direction === 'source' ? 'watchId' : 'playId');
+    const openChannel = ({
+      args,
+      context,
+    }: {
+      args: Record<string, unknown>;
+      context: { sessionId?: string };
+    }) => {
+      const sessionId = context.sessionId ?? (typeof args.sessionId === 'string' ? args.sessionId : '');
+      if (!sessionId) {
+        throw new Error('sessionId is required to open a client stream');
+      }
+      const route = this.deps.registry.resolveTarget(sessionId, descriptor.name);
+      if (!route.ok) {
+        throw new Error(route.hint ?? `cannot route client tool "${descriptor.name}"`);
+      }
+      return {
+        sessionId,
+        clientInstanceId: route.clientInstanceId,
+        toolCallId: typeof args.toolCallId === 'string' ? args.toolCallId : undefined,
+        sampleHint: typeof args.sampleHint === 'string' ? args.sampleHint : undefined,
+      };
+    };
+    if (stream.direction === 'stop') {
+      return createStreamStopTool(descriptor, { transport, handleKey });
+    }
+    if (stream.direction === 'source') {
+      return createSourceStreamTool(descriptor, { transport, openChannel, handleKey });
+    }
+    return createSinkStreamTool(descriptor, { transport, openChannel, handleKey });
   }
 
   private uninstallTool(name: ClientToolName): boolean {
@@ -448,6 +560,7 @@ function publicCall(call: ClientToolCall): Record<string, unknown> {
     outcome: call.outcome,
     completedByPrincipalId: call.completedByPrincipalId,
     assetId: call.assetId,
+    processing: call.processing,
     createdAt: call.createdAt,
     ttlAt: call.ttlAt,
   };

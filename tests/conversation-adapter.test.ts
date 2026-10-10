@@ -556,6 +556,33 @@ describe('ConversationAdapter', () => {
       expect(sys.message).toBe('unsafe content');
     });
 
+    it('creates tools_changed notice with delta', () => {
+      const r = adapter.applyEvent(
+        {
+          type: 'client_tools.changed',
+          data: { toolNames: ['note_form', 'photo_capture'], addedNames: ['photo_capture'], removedNames: ['html_ui'] },
+        },
+        sid,
+        items,
+      );
+      const sys = r.items.find((i) => i.role === 'system') as SystemConversationItem;
+      expect(sys).toBeDefined();
+      expect(sys.kind).toBe('tools_changed');
+      expect(sys.message).toContain('+photo_capture');
+      expect(sys.message).toContain('−html_ui');
+    });
+
+    it('creates tools_changed notice listing tools when no delta', () => {
+      const r = adapter.applyEvent(
+        { type: 'client_tools.changed', data: { toolNames: ['note_form'] } },
+        sid,
+        items,
+      );
+      const sys = r.items.find((i) => i.role === 'system') as SystemConversationItem;
+      expect(sys.kind).toBe('tools_changed');
+      expect(sys.message).toContain('note_form');
+    });
+
     it('creates truncated notice', () => {
       const r = adapter.applyEvent(
         { type: 'context.truncated', data: { from: 100, to: 50 } },

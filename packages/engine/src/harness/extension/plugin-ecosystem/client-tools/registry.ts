@@ -1,8 +1,9 @@
 /**
  * ClientToolRegistry — 会话内客户端能力注册表
  *
- * - 多个 client 可注册同名 tool；默认路由「最近活跃端」
- * - 敏感 device：候选必须唯一（或后续由 Host 显式钉 instance），否则拒绝
+ * - 多个 client 可注册同名 tool；默认路由「最近活跃」，成功后 session sticky
+ * - `clientFilter` 可钉 platform / instance
+ * - 敏感 device：候选必须唯一（或 filter 钉端），否则拒绝
  * - 某名字最后一家下线时，由调用方 unregister 对应 RegisteredTool
  */
 
@@ -19,6 +20,8 @@ export type ClientToolRouteDecision =
 export class ClientToolRegistry {
   /** sessionId → clientInstanceId → provider */
   private bySession = new Map<string, Map<string, ClientToolProvider>>();
+  /** session sticky：sessionId|name → 最近成功端 */
+  private preferred = new Map<string, string>();
   /** 在线性：超过该时长未心跳的 provider 视为离线（不进 tool 面、不可路由） */
   private readonly liveTtlMs: number;
   /** 可注入时钟（测试用）；默认 Date.now */
@@ -35,6 +38,30 @@ export class ClientToolRegistry {
 
   private isLive(p: ClientToolProvider, now: number): boolean {
     return now - p.lastActiveAt <= this.liveTtlMs;
+  }
+
+  private stickyKey(sessionId: string, name: ClientToolName): string {
+    return `${sessionId}|${name}`;
+  }
+
+  /** 某 tool 在 session 内成功后钉偏好端（在线期间优先） */
+  notePreferred(sessionId: string, name: ClientToolName, clientInstanceId: string): void {
+    this.preferred.set(this.stickyKey(sessionId, name), clientInstanceId);
+  }
+
+  /** 清理失效 sticky（provider 不再 live 或已不声明该 tool） */
+  private dropStalePreferred(): void {
+    for (const [key, clientInstanceId] of [...this.preferred.entries()]) {
+      const sep = key.indexOf('|');
+      const sessionId = key.slice(0, sep);
+      const name = key.slice(sep + 1);
+      const p = this.bySession.get(sessionId)?.get(clientInstanceId);
+      const live =
+        p !== undefined &&
+        this.isLive(p, this.clock()) &&
+        p.descriptors.some((d) => d.name === name);
+      if (!live) this.preferred.delete(key);
+    }
   }
 
   /**
@@ -55,6 +82,7 @@ export class ClientToolRegistry {
       const removedNames = before.filter((n) => !after.includes(n));
       if (removedNames.length > 0) out.push({ sessionId, removedNames });
     }
+    this.dropStalePreferred();
     return out;
   }
 
@@ -112,6 +140,7 @@ export class ClientToolRegistry {
     const before = this.sessionToolNames(input.sessionId);
     sessionMap.delete(input.clientInstanceId);
     const after = this.sessionToolNames(input.sessionId);
+    this.dropStalePreferred();
     return { removedNames: before.filter((n) => !after.includes(n)) };
   }
 
@@ -180,16 +209,43 @@ export class ClientToolRegistry {
     return undefined;
   }
 
-  /**
-   * 解析执行端。仅 live provider；默认最近活跃；敏感 device 要求候选唯一。
-   */
-  resolveTarget(sessionId: string, name: ClientToolName, now?: number): ClientToolRouteDecision {
+  private matchesFilter(
+    provider: ClientToolProvider,
+    descriptor: ClientToolDescriptor,
+  ): boolean {
+    const filter = descriptor.clientFilter;
+    if (!filter) return true;
+    if (filter.instanceId && filter.instanceId !== provider.clientInstanceId) return false;
+    if (filter.platforms && filter.platforms.length > 0) {
+      const platform = provider.platform;
+      if (!platform || !filter.platforms.includes(platform)) return false;
+    }
+    return true;
+  }
+
+  /** 会话内某 tool 的 live 候选（已过 clientFilter） */
+  listCandidates(
+    sessionId: string,
+    name: ClientToolName,
+    now?: number,
+  ): Array<{ provider: ClientToolProvider; descriptor: ClientToolDescriptor }> {
     const ts = this.at(now);
     const candidates: Array<{ provider: ClientToolProvider; descriptor: ClientToolDescriptor }> = [];
     for (const p of this.listProviders(sessionId, ts)) {
       const d = p.descriptors.find((x) => x.name === name);
-      if (d) candidates.push({ provider: p, descriptor: d });
+      if (d && this.matchesFilter(p, d)) candidates.push({ provider: p, descriptor: d });
     }
+    return candidates;
+  }
+
+  /**
+   * 解析执行端。仅 live provider；clientFilter → sticky → 最近活跃。
+   * 敏感 device：候选必须唯一，否则拒绝。
+   */
+  resolveTarget(sessionId: string, name: ClientToolName, now?: number): ClientToolRouteDecision {
+    const ts = this.at(now);
+    this.dropStalePreferred();
+    const candidates = this.listCandidates(sessionId, name, ts);
 
     if (candidates.length === 0) {
       return {
@@ -211,8 +267,20 @@ export class ClientToolRegistry {
         reason: 'ambiguous',
         hint:
           `tool "${name}" is sensitivity=sensitive and ${candidates.length} clients provide it; ` +
-          'pin targetClientInstanceId or disconnect extras',
+          'pin clientFilter.instanceId or disconnect extras',
       };
+    }
+
+    const stickyId = this.preferred.get(this.stickyKey(sessionId, name));
+    if (stickyId) {
+      const sticky = candidates.find((c) => c.provider.clientInstanceId === stickyId);
+      if (sticky) {
+        return {
+          ok: true,
+          clientInstanceId: sticky.provider.clientInstanceId,
+          descriptor: sticky.descriptor,
+        };
+      }
     }
 
     candidates.sort((a, b) => b.provider.lastActiveAt - a.provider.lastActiveAt);

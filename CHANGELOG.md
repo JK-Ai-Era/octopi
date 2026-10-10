@@ -1,3 +1,43 @@
+## v0.70.0
+
+### feat(client-tools): P1 多端路由 + Host 流通道 + WebUI 页面指标样板
+
+**设计**：`arch/client-tools.md` §15（stream = Host 通道，LLM 仍只吃 value/asset）。
+
+**P1.1 能力面通知**
+- `client_tools.changed` 带 session 级 `addedNames` / `removedNames`
+- ConversationAdapter 生成 `SystemConversationItem.kind:'tools_changed'`（工具面更新：+a −b）
+- 不承载正文/字幕/采样
+
+**P1.2 `processing` 标注**
+- descriptor / outcome / call 支持 `processing: 'server'|'local'`（默认 server）
+- 校验拒绝未知值；Host 审计落 call；LLM 结果形状不变
+
+**P1.3 多端路由**
+- `clientFilter.platforms` / `clientFilter.instanceId` 过滤候选（LLM 不可见 instanceId）
+- session sticky：某 tool 成功后钉端，离线退回最近活跃
+- pending 目标端掉线：**非敏感且未钉端**换端重发 `client_tool.pending`；敏感/钉端显式 `client_unavailable`
+
+**P1.4 Host `ClientStreamTransport` + WebUI 样板**
+- source/sink/stop 通道、样本节流批播、TTL、`client_stream.opened|sample|closed`
+- descriptor `stream.direction` 自动装 `createSourceStreamTool` / `createSinkStreamTool` / `createStreamStopTool`（value 句柄 watchId/playId）
+- REST：`POST /client-streams`、`…/samples`、`…/close`；SDK/Store 同步
+- Host 流通道 + 域工具工厂（source/sink/stop）+ REST 样本接口（WebUI 演示工具已移除，不注册 page_metrics/meter_pulse）
+- **通道复用**：sink 支持 `playId` 续写 / sticky，持续下发不新开
+- **无** LLM 通用 `stream_read/write/close`
+
+**测试**：`tests/harness/client-tools.test.ts` · `tests/harness/client-stream-transport.test.ts` · `tests/gateway-client-tools.test.ts` · `tests/conversation-adapter.test.ts`（83）。
+
+**未做（后续）**：Plugin SDK `registerClientTool`、同意 TTL 缓存、meter_pulse 实景动画增强。
+
+**审查修复（同版本）**
+- stream 开通道走 `resolveTarget`（敏感/sticky/最近活跃）；device 流工具 `requiresConfirmation`
+- stop/续写/REST samples·close 校验 `owner.sessionId`（禁跨会话）
+- 换端按**本次调用** `sensitivity`/`pinnedClient` 判定，不看 alt 自报 descriptor
+- 去掉 createClientTool 本地双定时器（Host 单点 TTL）；拒绝 `unknown` sessionId
+- `client_tools.changed` 仅在 added/removed 非空时广播
+- 校验 sensitive+consent:none；去掉 `args.pulses` 别名
+
 ## v0.69.2
 
 ### feat(client-tools): persist terminal calls and html_ui assets

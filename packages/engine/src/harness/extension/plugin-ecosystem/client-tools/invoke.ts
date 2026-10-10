@@ -111,6 +111,42 @@ export function validateClientToolDescriptor(raw: unknown): string | null {
   if (d.interaction != null && !['silent', 'ui', 'device'].includes(String(d.interaction))) {
     return `descriptor "${d.name}": interaction must be silent|ui|device`;
   }
+  if (d.processing != null && !['server', 'local'].includes(String(d.processing))) {
+    return `descriptor "${d.name}": processing must be server|local`;
+  }
+  if (d.clientFilter != null) {
+    if (typeof d.clientFilter !== 'object' || Array.isArray(d.clientFilter)) {
+      return `descriptor "${d.name}": clientFilter must be an object`;
+    }
+    const f = d.clientFilter as { platforms?: unknown; instanceId?: unknown };
+    if (f.platforms != null && !Array.isArray(f.platforms)) {
+      return `descriptor "${d.name}": clientFilter.platforms must be an array`;
+    }
+    if (f.instanceId != null && typeof f.instanceId !== 'string') {
+      return `descriptor "${d.name}": clientFilter.instanceId must be a string`;
+    }
+  }
+  if (d.stream != null) {
+    if (typeof d.stream !== 'object' || Array.isArray(d.stream)) {
+      return `descriptor "${d.name}": stream must be an object`;
+    }
+    const s = d.stream as { direction?: unknown; handleKey?: unknown };
+    if (!['source', 'sink', 'stop'].includes(String(s.direction))) {
+      return `descriptor "${d.name}": stream.direction must be source|sink|stop`;
+    }
+    if (s.handleKey != null && typeof s.handleKey !== 'string') {
+      return `descriptor "${d.name}": stream.handleKey must be a string`;
+    }
+  }
+  if (
+    d.device &&
+    typeof d.device === 'object' &&
+    !Array.isArray(d.device) &&
+    (d.device as { sensitivity?: unknown }).sensitivity === 'sensitive' &&
+    (d.device as { consent?: unknown }).consent === 'none'
+  ) {
+    return `descriptor "${d.name}": sensitive device must not use consent=none`;
+  }
   return null;
 }
 
@@ -118,6 +154,9 @@ export function validateClientToolDescriptor(raw: unknown): string | null {
 export function validateClientToolOutcome(raw: unknown): string | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return 'outcome must be an object';
   const o = raw as Record<string, unknown>;
+  if (o.processing != null && !['server', 'local'].includes(String(o.processing))) {
+    return 'outcome.processing must be server|local';
+  }
   if (o.status === 'ok') {
     const result = o.result as Record<string, unknown> | undefined;
     if (!result || typeof result !== 'object') return 'outcome.ok requires result';
@@ -177,23 +216,23 @@ function toLlmSuccess(result: ClientToolResult): unknown {
  * 创建可注册进 ToolBus 的 Client Tool
  *
  * @param descriptor - 客户端注册的能力契约
- * @param invoker - Host 执行体（路由 + 等待）
- * @param options.timeoutMs - 等待上限；超时返回 expired
+ * @param invoker - Host 执行体（路由 + 等待 + TTL）
+ * @param options.timeoutMs - **仅** standalone 时作本地兜底超时；Host 路径不要传，避免双定时器
  */
 export function createClientTool(
   descriptor: ClientToolDescriptor,
   invoker: ClientToolInvoker,
   options?: { timeoutMs?: number; makeCallId?: () => string },
 ): RegisteredTool {
-  const timeoutMs = options?.timeoutMs ?? DEFAULT_CLIENT_TOOL_TIMEOUT_MS;
   const makeCallId = options?.makeCallId ?? makeClientToolCallId;
+  const fallbackTimeoutMs = options?.timeoutMs;
 
   return {
     definition: {
       name: descriptor.name,
       description: descriptor.description,
       parameters: descriptor.parameters,
-      timeoutMs,
+      // Host 负责 TTL；此处不写 timeoutMs，避免与 Host 双定时器分叉
       version: descriptor.version,
       requiresConfirmation:
         descriptor.interaction === 'device' &&
@@ -202,6 +241,14 @@ export function createClientTool(
     handler: async (args, context) => {
       if (context?.abortSignal?.aborted) {
         return { error: 'cancelled', hint: 'aborted before client tool invoke' };
+      }
+      const sessionId = context?.sessionId;
+      const agentId = context?.agentId;
+      if (!sessionId || !agentId) {
+        return {
+          error: 'invalid_arguments',
+          hint: 'sessionId and agentId are required in tool context',
+        };
       }
 
       const argError = validateClientToolArgs(descriptor.parameters ?? {}, args);
@@ -214,7 +261,8 @@ export function createClientTool(
       }
 
       const callId = makeCallId();
-      const ttlAt = Date.now() + timeoutMs;
+      const ttlMs = fallbackTimeoutMs ?? DEFAULT_CLIENT_TOOL_TIMEOUT_MS;
+      const ttlAt = Date.now() + ttlMs;
 
       const abortSignal = context?.abortSignal;
       let timer: ReturnType<typeof setTimeout> | undefined;
@@ -230,6 +278,7 @@ export function createClientTool(
             status: 'error',
             reason: 'cancelled',
             hint: 'run aborted while waiting for client tool',
+            processing: descriptor.processing ?? 'server',
           });
         };
 
@@ -241,21 +290,24 @@ export function createClientTool(
           }
         }
 
-        timer = setTimeout(() => {
-          cleanup();
-          resolve({
-            status: 'error',
-            reason: 'expired',
-            hint: `client tool timed out after ${timeoutMs}ms`,
-          });
-        }, timeoutMs);
+        if (fallbackTimeoutMs !== undefined) {
+          timer = setTimeout(() => {
+            cleanup();
+            resolve({
+              status: 'error',
+              reason: 'expired',
+              hint: `client tool timed out after ${fallbackTimeoutMs}ms`,
+              processing: descriptor.processing ?? 'server',
+            });
+          }, fallbackTimeoutMs);
+        }
 
         invoker(
           {
             name: descriptor.name,
             args,
-            sessionId: context?.sessionId ?? 'unknown',
-            agentId: context?.agentId ?? 'unknown',
+            sessionId,
+            agentId,
             callId,
             ttlAt,
             abortSignal,
@@ -264,7 +316,10 @@ export function createClientTool(
         ).then(
           (value) => {
             cleanup();
-            resolve(value);
+            resolve({
+              ...value,
+              processing: value.processing ?? descriptor.processing ?? 'server',
+            });
           },
           (err) => {
             cleanup();
@@ -272,6 +327,7 @@ export function createClientTool(
               status: 'error',
               reason: 'internal',
               hint: err instanceof Error ? err.message : String(err),
+              processing: descriptor.processing ?? 'server',
             });
           },
         );

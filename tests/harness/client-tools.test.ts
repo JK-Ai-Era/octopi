@@ -3,6 +3,8 @@ import { describe, it, expect } from 'vitest';
 import {
   createClientTool,
   ClientToolRegistry,
+  validateClientToolDescriptor,
+  validateClientToolOutcome,
   type ClientToolCallOutcome,
   type ClientToolDescriptor,
 } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/client-tools/index.js';
@@ -234,5 +236,102 @@ describe('createClientTool', () => {
     const out = (await tool.handler({}, ctx)) as { error: string; hint?: string };
     expect(out.error).toBe('invalid_arguments');
     expect(out.hint).toMatch(/purpose/);
+  });
+});
+
+describe('processing validation', () => {
+  it('accepts descriptor processing local|server and rejects other', () => {
+    expect(
+      validateClientToolDescriptor({
+        name: 'ocr_local',
+        description: 'local ocr',
+        parameters: {},
+        processing: 'local',
+      }),
+    ).toBeNull();
+    expect(
+      validateClientToolDescriptor({
+        name: 'ocr_bad',
+        description: 'bad',
+        parameters: {},
+        processing: 'cloud',
+      }),
+    ).toMatch(/processing/);
+  });
+
+  it('rejects outcome with unknown processing', () => {
+    expect(
+      validateClientToolOutcome({
+        status: 'ok',
+        processing: 'edge',
+        result: { kind: 'value', data: 1 },
+      }),
+    ).toMatch(/processing/);
+    expect(
+      validateClientToolOutcome({
+        status: 'ok',
+        processing: 'local',
+        result: { kind: 'value', data: 1 },
+      }),
+    ).toBeNull();
+  });
+});
+
+describe('multi-client routing', () => {
+  it('filters candidates by clientFilter.platforms and instanceId', () => {
+    const reg = new ClientToolRegistry();
+    reg.registerClientProviders({
+      sessionId: 's1',
+      clientInstanceId: 'ios-1',
+      platform: 'ios',
+      descriptors: [
+        {
+          name: 'photo_capture',
+          description: 'photo',
+          parameters: {},
+          clientFilter: { platforms: ['ios'] },
+        },
+      ],
+    });
+    reg.registerClientProviders({
+      sessionId: 's1',
+      clientInstanceId: 'web-1',
+      platform: 'web',
+      descriptors: [
+        {
+          name: 'photo_capture',
+          description: 'photo',
+          parameters: {},
+          clientFilter: { platforms: ['ios'] },
+        },
+      ],
+    });
+    const route = reg.resolveTarget('s1', 'photo_capture');
+    expect(route.ok).toBe(true);
+    if (route.ok) expect(route.clientInstanceId).toBe('ios-1');
+  });
+
+  it('prefers sticky instance after notePreferred', () => {
+    const reg = new ClientToolRegistry({ clock: () => 1_000 });
+    reg.registerClientProviders({
+      sessionId: 's1',
+      clientInstanceId: 'web-1',
+      platform: 'web',
+      descriptors: [noteForm],
+      now: 1_000,
+    });
+    reg.registerClientProviders({
+      sessionId: 's1',
+      clientInstanceId: 'web-2',
+      platform: 'web',
+      descriptors: [noteForm],
+      now: 2_000,
+    });
+    // 最近活跃应为 web-2
+    let route = reg.resolveTarget('s1', 'note_form', 3_000);
+    expect(route.ok && route.clientInstanceId).toBe('web-2');
+    reg.notePreferred('s1', 'note_form', 'web-1');
+    route = reg.resolveTarget('s1', 'note_form', 3_000);
+    expect(route.ok && route.clientInstanceId).toBe('web-1');
   });
 });

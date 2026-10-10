@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { ClientToolRegistry } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/client-tools/index.js';
+import { ClientToolRegistry, ClientStreamTransport } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/client-tools/index.js';
 import type {
   ClientToolDescriptor,
 } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/client-tools/index.js';
@@ -71,6 +71,220 @@ describe('ClientToolHost', () => {
     expect(r2.removedNames).toEqual(['note_form']);
     expect(unregistered).toEqual(['note_form']);
     expect(agentOps.length).toBe(2);
+  });
+
+  it('emits client_tools.changed with session-level added/removed names', () => {
+    const { host, events } = makeHost();
+    host.registerClientTools({
+      sessionId: 's1',
+      clientInstanceId: 'web-1',
+      descriptors: [noteForm],
+    });
+    const reg = events.find((e) => e.type === 'client_tools.changed');
+    expect(reg?.data.addedNames).toEqual(['note_form']);
+    expect(reg?.data.toolNames).toEqual(['note_form']);
+    expect(reg?.data.removedNames).toEqual([]);
+
+    host.registerClientTools({
+      sessionId: 's1',
+      clientInstanceId: 'web-2',
+      descriptors: [photoCapture],
+    });
+    const reg2 = events.filter((e) => e.type === 'client_tools.changed').at(-1);
+    expect(reg2?.data.addedNames).toEqual(['photo_capture']);
+
+    host.unregisterClientTools({ sessionId: 's1', clientInstanceId: 'web-1' });
+    const unreg = events.filter((e) => e.type === 'client_tools.changed').at(-1);
+    expect(unreg?.data.removedNames).toEqual(['note_form']);
+    expect(unreg?.data.toolNames).toEqual(['photo_capture']);
+  });
+
+  it('does not emit client_tools.changed when re-registering same tools', () => {
+    const { host, events } = makeHost();
+    host.registerClientTools({
+      sessionId: 's1',
+      clientInstanceId: 'web-1',
+      descriptors: [noteForm],
+    });
+    const before = events.filter((e) => e.type === 'client_tools.changed').length;
+    host.registerClientTools({
+      sessionId: 's1',
+      clientInstanceId: 'web-1',
+      descriptors: [noteForm],
+    });
+    const after = events.filter((e) => e.type === 'client_tools.changed').length;
+    expect(after).toBe(before);
+  });
+
+  it('does not failover when original call is sensitive even if alt is public', async () => {
+    const { host, registered } = makeHost();
+    const sensitiveForm: ClientToolDescriptor = {
+      name: 'note_form',
+      description: 'sensitive variant',
+      parameters: {
+        title: { type: 'string', description: 't', required: true },
+        purpose: { type: 'string', description: 'why', required: true },
+      },
+      interaction: 'device',
+      device: { class: 'sensor', sensitivity: 'sensitive', consent: 'strict' },
+      resultKinds: ['value'],
+    };
+    host.registerClientTools({
+      sessionId: 's1',
+      clientInstanceId: 'web-1',
+      descriptors: [sensitiveForm],
+    });
+    // 解析会钉 web-1（唯一 sensitive）
+    const tool = registered.find((t) => t.definition.name === 'note_form')!;
+    const p = tool.handler(
+      { title: 'x', purpose: 'demo' },
+      { sessionId: 's1', agentId: 'a1', messages: [] },
+    );
+    await Promise.resolve();
+    const call = host.listSessionCalls('s1')[0]!;
+    expect(call.sensitivity).toBe('sensitive');
+
+    // 同名 public 端加入后再掉线原端 —— 不得换到 public
+    host.registerClientTools({
+      sessionId: 's1',
+      clientInstanceId: 'web-2',
+      descriptors: [noteForm],
+    });
+    host.unregisterClientTools({ sessionId: 's1', clientInstanceId: 'web-1' });
+    const after = host.getCall(call.id)!;
+    expect(after.state).toBe('failed');
+    expect(after.outcome).toMatchObject({ status: 'error', reason: 'client_unavailable' });
+    await expect(p).resolves.toMatchObject({ error: 'client_unavailable' });
+  });
+
+  it('stamps call.processing from descriptor and resolve may override', async () => {
+    const { host, registered } = makeHost();
+    host.registerClientTools({
+      sessionId: 's1',
+      clientInstanceId: 'web-1',
+      descriptors: [{ ...noteForm, name: 'ocr_local', processing: 'local' }],
+    });
+    const tool = registered.find((t) => t.definition.name === 'ocr_local')!;
+    const p = tool.handler(
+      { title: 'x' },
+      { sessionId: 's1', agentId: 'a1', messages: [] },
+    );
+    await Promise.resolve();
+    const call = host.listSessionCalls('s1')[0]!;
+    expect(call.processing).toBe('local');
+    host.resolveCall(call.id, {
+      status: 'ok',
+      result: { kind: 'value', data: { text: 'ok' } },
+      processing: 'local',
+    });
+    await p;
+    expect(host.getCall(call.id)?.processing).toBe('local');
+  });
+
+  it('fails over pending non-sensitive call when target unregisters', async () => {
+    const { host, registered, events } = makeHost();
+    host.registerClientTools({
+      sessionId: 's1',
+      clientInstanceId: 'web-1',
+      descriptors: [noteForm],
+    });
+    host.registerClientTools({
+      sessionId: 's1',
+      clientInstanceId: 'web-2',
+      descriptors: [noteForm],
+    });
+    host.heartbeat({ sessionId: 's1', clientInstanceId: 'web-2', now: Date.now() + 1_000 });
+    const tool = registered.find((t) => t.definition.name === 'note_form')!;
+    const p = tool.handler(
+      { title: 'x' },
+      { sessionId: 's1', agentId: 'a1', messages: [] },
+    );
+    await Promise.resolve();
+    const call = host.listSessionCalls('s1')[0]!;
+    expect(call.targetClientInstanceId).toBe('web-2');
+
+    host.unregisterClientTools({ sessionId: 's1', clientInstanceId: 'web-2' });
+    const after = host.getCall(call.id)!;
+    expect(after.state).toBe('pending');
+    expect(after.targetClientInstanceId).toBe('web-1');
+    expect(
+      events.some((e) => e.type === 'client_tool.pending' && e.data.reason === 'failover'),
+    ).toBe(true);
+
+    host.resolveCall(call.id, {
+      status: 'ok',
+      result: { kind: 'value', data: { ok: true } },
+    });
+    await p;
+  });
+
+  it('does not fail over sensitive tool when target unregisters', async () => {
+    const { host, registered } = makeHost();
+    host.registerClientTools({
+      sessionId: 's1',
+      clientInstanceId: 'ios-1',
+      descriptors: [photoCapture],
+    });
+    host.registerClientTools({
+      sessionId: 's1',
+      clientInstanceId: 'ios-2',
+      descriptors: [photoCapture],
+    });
+    // sensitive 多候选 invoke 直接失败；改为钉一家再测掉线
+    host.unregisterClientTools({ sessionId: 's1', clientInstanceId: 'ios-2' });
+    const tool = registered.find((t) => t.definition.name === 'photo_capture')!;
+    const p = tool.handler(
+      { purpose: 'scan' },
+      { sessionId: 's1', agentId: 'a1', messages: [] },
+    );
+    await Promise.resolve();
+    const call = host.listSessionCalls('s1')[0]!;
+    host.unregisterClientTools({ sessionId: 's1', clientInstanceId: 'ios-1' });
+    const after = host.getCall(call.id)!;
+    expect(after.state).toBe('failed');
+    expect(after.outcome).toMatchObject({ status: 'error', reason: 'client_unavailable' });
+    await expect(p).resolves.toMatchObject({ error: 'client_unavailable' });
+  });
+
+  it('installs stream domain tools when descriptor.stream is set', async () => {
+    const events: Array<{ type: string; data: Record<string, unknown> }> = [];
+    const registry = new ClientToolRegistry();
+    const transport = new ClientStreamTransport({
+      emitEvent: (e) => events.push({ type: e.type, data: e.data }),
+      defaultMaxDurationMs: 0,
+      makeStreamId: () => 'cs_watch1',
+    });
+    const registered: CoreRegisteredTool[] = [];
+    const host = new ClientToolHost({
+      registry,
+      streamTransport: transport,
+      registerGlobalTool: (tool) => registered.push(tool),
+      unregisterGlobalTool: () => {},
+      syncAgentTools: () => {},
+      emitSessionEvent: () => {},
+    });
+    host.registerClientTools({
+      sessionId: 's1',
+      clientInstanceId: 'web-1',
+      descriptors: [
+        {
+          name: 'page_metrics_watch',
+          description: 'watch page metrics',
+          parameters: {},
+          interaction: 'silent',
+          resultKinds: ['value'],
+          stream: { direction: 'source', handleKey: 'watchId' },
+        },
+      ],
+    });
+    const tool = registered.find((t) => t.definition.name === 'page_metrics_watch')!;
+    const out = (await tool.handler({}, { sessionId: 's1', agentId: 'a1', messages: [] })) as {
+      kind: string;
+      data: Record<string, unknown>;
+    };
+    expect(out.kind).toBe('value');
+    expect(out.data.watchId).toBe('cs_watch1');
+    expect(events.some((e) => e.type === 'client_stream.opened')).toBe(true);
   });
 
   it('invoke routes to client and resolve completes waiter', async () => {

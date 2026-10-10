@@ -48,6 +48,9 @@ import { resolveModel, resolveModelRef, resolveCatalogEntry, parseModelRef } fro
 import { PluginManager } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/plugins/manager.js';
 import {
   ClientToolRegistry,
+  ClientStreamTransport,
+  type ClientStreamChannel,
+  type ClientStreamSampleInput,
   type ClientToolCall,
   type ClientToolCallId,
   type ClientToolCallOutcome,
@@ -284,6 +287,7 @@ export class Gateway {
   private questionResolvers = new Map<string, (answer: string) => void>();
   /** Client Tool（客户端能力 → tool 面）*/
   private clientToolRegistry = new ClientToolRegistry();
+  private clientStreamTransport!: ClientStreamTransport;
   private clientTools!: ClientToolHost;
   /** 会话近一次七配快照（?content，仅 REST）；FIFO 防泄?*/
   private lastContextLayers = new Map<string, ContextLayersSnapshot>();
@@ -326,8 +330,23 @@ export class Gateway {
     this.sessionLease = new InProcessSessionLock();
     this.issueRegistry = new IssueRegistry();
     this.commandRouter = this.createCommandRouter();
+    this.clientStreamTransport = new ClientStreamTransport({
+      emitEvent: (event) => {
+        const ev = {
+          type: event.type,
+          sessionId: event.sessionId,
+          timestamp: event.timestamp,
+          data: event.data,
+        } as unknown as AgentEvent;
+        this.emitEvent(ev);
+        for (const adapter of this.streamingAdapters) {
+          adapter.broadcastEvent(event.sessionId, ev);
+        }
+      },
+    });
     this.clientTools = new ClientToolHost({
       registry: this.clientToolRegistry,
+      streamTransport: this.clientStreamTransport,
       registerGlobalTool: (tool) => {
         this.tools.push(tool);
       },
@@ -2781,6 +2800,37 @@ export class Gateway {
     clientInstanceId: string;
   }): { alive: boolean } {
     return this.clientTools.heartbeat(input);
+  }
+
+  // Client Stream（arch/client-tools.md §15.1；Host 通道，非 LLM API）
+  openClientStream(input: {
+    direction: 'source' | 'sink';
+    sessionId: string;
+    clientInstanceId: string;
+    toolName?: string;
+    sampleHint?: string;
+    maxDurationMs?: number;
+  }): ClientStreamChannel {
+    return this.clientStreamTransport.open(input);
+  }
+
+  writeClientStreamSamples(
+    streamId: string,
+    samples: ClientStreamSampleInput[],
+  ): boolean {
+    return this.clientStreamTransport.writeSamples(streamId, samples);
+  }
+
+  closeClientStream(streamId: string, reason?: string): ClientStreamChannel | null {
+    return this.clientStreamTransport.close(streamId, reason);
+  }
+
+  listClientStreams(sessionId: string): ClientStreamChannel[] {
+    return this.clientStreamTransport.list(sessionId);
+  }
+
+  getClientStream(streamId: string): ClientStreamChannel | undefined {
+    return this.clientStreamTransport.get(streamId);
   }
 
   /** 把动态 client tool 同步进已 build 的 Agent（E5 下同 session 串行，无需锁 tool 列表） */

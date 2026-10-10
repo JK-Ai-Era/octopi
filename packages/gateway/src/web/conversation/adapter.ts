@@ -50,6 +50,11 @@ function extractText(content: unknown): string {
   return '';
 }
 
+function asStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((v): v is string => typeof v === 'string' && v.length > 0);
+}
+
 /**
  * 托管 system prompt / 明显的人格注入 / knowledge grounding，不应作为聊天记录回放
  */
@@ -482,6 +487,38 @@ export class ConversationAdapter {
           source: 'runtime',
           kind: 'warning',
           message: `Budget ${status}`,
+        };
+        items = [...items, notice];
+        changed = true;
+        break;
+      }
+
+      // ── Client Tool 能力面增减（不承载正文/字幕/采样）──
+      case 'client_tools.changed': {
+        const data = (event.data ?? {}) as {
+          toolNames?: unknown;
+          addedNames?: unknown;
+          removedNames?: unknown;
+        };
+        const toolNames = asStringArray(data.toolNames);
+        const added = asStringArray(data.addedNames);
+        const removed = asStringArray(data.removedNames);
+        const delta = [
+          ...added.map((n) => `+${n}`),
+          ...removed.map((n) => `−${n}`),
+        ].join(' ');
+        const message =
+          delta.length > 0
+            ? `工具面更新：${delta}`
+            : `工具面更新：${toolNames.length > 0 ? toolNames.join(', ') : '（空）'}`;
+        const notice: SystemConversationItem = {
+          id: ConversationAdapter.makeId('sys'),
+          role: 'system',
+          createdAt: Date.now(),
+          sessionId,
+          source: 'runtime',
+          kind: 'tools_changed',
+          message,
         };
         items = [...items, notice];
         changed = true;

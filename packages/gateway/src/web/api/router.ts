@@ -953,6 +953,98 @@ export class WebApiRouter {
         return this.json(res, 200, { ok: true, data: resolved });
       }
 
+      // ── Client Streams（§15.1 Host 通道；非 LLM API）──
+      if (relativePath === '/client-streams' && method === 'GET') {
+        const sessionId = url.searchParams.get('sessionId') ?? '';
+        if (!sessionId) {
+          return this.json(res, 400, { ok: false, error: 'sessionId is required' });
+        }
+        return this.json(res, 200, {
+          ok: true,
+          data: this.gateway.listClientStreams(sessionId),
+        });
+      }
+
+      if (relativePath === '/client-streams' && method === 'POST') {
+        const body = await this.readBody(req);
+        const sessionId = String(body?.sessionId ?? '');
+        const clientInstanceId = String(body?.clientInstanceId ?? '');
+        const direction = body?.direction;
+        if (!sessionId || !clientInstanceId) {
+          return this.json(res, 400, {
+            ok: false,
+            error: 'sessionId, clientInstanceId are required',
+          });
+        }
+        if (direction !== 'source' && direction !== 'sink') {
+          return this.json(res, 400, { ok: false, error: 'direction must be source|sink' });
+        }
+        const channel = this.gateway.openClientStream({
+          direction,
+          sessionId,
+          clientInstanceId,
+          toolName: typeof body?.toolName === 'string' ? body.toolName : undefined,
+          sampleHint: typeof body?.sampleHint === 'string' ? body.sampleHint : undefined,
+          maxDurationMs:
+            typeof body?.maxDurationMs === 'number' ? body.maxDurationMs : undefined,
+        });
+        return this.json(res, 200, { ok: true, data: channel });
+      }
+
+      const streamSamplesMatch = relativePath.match(/^\/client-streams\/([^/]+)\/samples$/);
+      if (streamSamplesMatch && method === 'POST') {
+        const body = await this.readBody(req);
+        const streamId = streamSamplesMatch[1];
+        const channel = this.gateway.getClientStream(streamId);
+        if (!channel) {
+          return this.json(res, 404, { ok: false, error: 'stream not found or closed' });
+        }
+        const sessionId = typeof body?.sessionId === 'string' ? body.sessionId : '';
+        const clientInstanceId =
+          typeof body?.clientInstanceId === 'string' ? body.clientInstanceId : '';
+        if (sessionId && sessionId !== channel.owner.sessionId) {
+          return this.json(res, 403, { ok: false, error: 'stream belongs to another session' });
+        }
+        if (clientInstanceId && clientInstanceId !== channel.owner.clientInstanceId) {
+          return this.json(res, 403, {
+            ok: false,
+            error: 'stream belongs to another client instance',
+          });
+        }
+        const raw = body?.samples;
+        if (!Array.isArray(raw)) {
+          return this.json(res, 400, { ok: false, error: 'samples must be an array' });
+        }
+        const samples = raw.map((data: unknown) => ({ data }));
+        const ok = this.gateway.writeClientStreamSamples(streamId, samples);
+        if (!ok) {
+          return this.json(res, 404, { ok: false, error: 'stream not found or closed' });
+        }
+        return this.json(res, 200, { ok: true, data: { accepted: samples.length } });
+      }
+
+      const streamCloseMatch = relativePath.match(/^\/client-streams\/([^/]+)\/close$/);
+      if (streamCloseMatch && method === 'POST') {
+        const body = await this.readBody(req);
+        const streamId = streamCloseMatch[1];
+        const channel = this.gateway.getClientStream(streamId);
+        if (!channel) {
+          return this.json(res, 404, { ok: false, error: 'stream not found' });
+        }
+        const sessionId = typeof body?.sessionId === 'string' ? body.sessionId : '';
+        if (sessionId && sessionId !== channel.owner.sessionId) {
+          return this.json(res, 403, { ok: false, error: 'stream belongs to another session' });
+        }
+        const closed = this.gateway.closeClientStream(
+          streamId,
+          typeof body?.reason === 'string' ? body.reason : 'closed',
+        );
+        if (!closed) {
+          return this.json(res, 404, { ok: false, error: 'stream not found' });
+        }
+        return this.json(res, 200, { ok: true, data: closed });
+      }
+
       if (relativePath === '/memory/stats' && method === 'GET') {
         const stats = await this.gateway.getMemoryStats();
         if (!stats) {

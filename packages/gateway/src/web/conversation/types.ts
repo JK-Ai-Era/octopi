@@ -65,7 +65,7 @@ export interface ToolConversationItem extends BaseConversationItem {
 
 export interface SystemConversationItem extends BaseConversationItem {
   role: 'system';
-  kind: 'info' | 'warning' | 'error' | 'retry' | 'truncated' | 'blocked' | 'aborted';
+  kind: 'info' | 'warning' | 'error' | 'retry' | 'truncated' | 'blocked' | 'aborted' | 'tools_changed';
   message: string;
 }
 

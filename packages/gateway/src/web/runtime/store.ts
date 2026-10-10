@@ -17,6 +17,7 @@
 import type {
   AgentEventEnvelope,
   AgentSummary,
+  ClientStreamChannelDto,
   ClientToolCallDto,
   ClientToolCallOutcomeDto,
   ClientToolDescriptorDto,
@@ -107,6 +108,10 @@ export class ToolEvent extends RuntimeEvent<{ tools: ToolRun[] }> {}
 export class ApprovalEvent extends RuntimeEvent<{ approvals: PendingApproval[] }> {}
 export class QuestionsEvent extends RuntimeEvent<{ questions: PendingQuestion[] }> {}
 export class ClientToolCallsEvent extends RuntimeEvent<{ calls: ClientToolCallDto[] }> {}
+export class ClientStreamsEvent extends RuntimeEvent<{
+  streams: ClientStreamChannelDto[];
+  samples: Map<string, unknown[]>;
+}> {}
 export class InspectorEvent extends RuntimeEvent<{ inspector: InspectorState }> {}
 export class TasksEvent extends RuntimeEvent<{ tasks: SessionTaskView[] }> {}
 export class RuntimeErrorEvent extends RuntimeEvent<{ error: string }> {}
@@ -182,6 +187,10 @@ export interface ChatState {
   questions: PendingQuestion[];
   /** Client Tool 待完成调用（UI/设备） */
   clientToolCalls: ClientToolCallDto[];
+  /** Host 流通道（§15.1） */
+  clientStreams: ClientStreamChannelDto[];
+  /** 各 stream 最近样本（UI 用，有上限） */
+  clientStreamSamples: Map<string, unknown[]>;
   inspector: InspectorState;
   /** 会话任务（goal/step），UI 只读 */
   tasks: SessionTaskView[];
@@ -295,6 +304,35 @@ export class OctopiRuntimeStore extends EventTarget {
   /** 心跳续期（在线性） */
   async heartbeatClientTools(sessionId: string, clientInstanceId: string): Promise<{ alive: boolean }> {
     return this.client.heartbeatClientTools(sessionId, clientInstanceId);
+  }
+
+  // ── Client Streams（§15.1）──
+
+  async openClientStream(input: {
+    sessionId: string;
+    clientInstanceId: string;
+    direction: 'source' | 'sink';
+    toolName?: string;
+    sampleHint?: string;
+    maxDurationMs?: number;
+  }): Promise<ClientStreamChannelDto> {
+    return this.client.openClientStream(input);
+  }
+
+  async writeClientStreamSamples(streamId: string, samples: unknown[]): Promise<void> {
+    await this.client.writeClientStreamSamples(streamId, samples);
+  }
+
+  async closeClientStream(streamId: string, reason?: string): Promise<void> {
+    await this.client.closeClientStream(streamId, reason);
+  }
+
+  getClientStreams(): ClientStreamChannelDto[] {
+    return this.chat.clientStreams;
+  }
+
+  getClientStreamSamples(streamId: string): unknown[] {
+    return this.chat.clientStreamSamples.get(streamId) ?? [];
   }
 
   /** UI/设备完成 call */
@@ -749,6 +787,8 @@ export class OctopiRuntimeStore extends EventTarget {
       approvals,
       questions,
       clientToolCalls,
+      clientStreams: [],
+      clientStreamSamples: new Map(),
       inspector: cached?.inspector ? { ...cached.inspector } : {},
       tasks,
     };
@@ -877,6 +917,8 @@ export class OctopiRuntimeStore extends EventTarget {
       approvals: await this.client.listApprovals(),
       questions: await this.client.listQuestions(session.id),
       clientToolCalls: await this.client.listClientToolCalls(session.id),
+      clientStreams: [],
+      clientStreamSamples: new Map(),
       inspector: {},
       tasks: [],
     };
@@ -1075,6 +1117,15 @@ export class OctopiRuntimeStore extends EventTarget {
     // Client Tool pending / resolved
     if (event.type === 'client_tool.pending' || event.type === 'client_tool.resolved') {
       this.applyClientToolCallEvent(event);
+    }
+
+    // Client Stream 通道（样本只进 store，不进对话正文）
+    if (
+      event.type === 'client_stream.opened' ||
+      event.type === 'client_stream.sample' ||
+      event.type === 'client_stream.closed'
+    ) {
+      this.applyClientStreamEvent(event);
     }
 
     const convResult = this.conversationAdapter.applyEvent(event, sessionId, this.chat.conversation);
@@ -1572,6 +1623,41 @@ export class OctopiRuntimeStore extends EventTarget {
     );
   }
 
+  private applyClientStreamEvent(event: AgentEventEnvelope): void {
+    const data = event.data ?? {};
+    if (event.type === 'client_stream.opened') {
+      const channel = data.channel as ClientStreamChannelDto | undefined;
+      if (!channel?.streamId) return;
+      this.chat.clientStreams = [
+        ...this.chat.clientStreams.filter((s) => s.streamId !== channel.streamId),
+        channel,
+      ];
+    } else if (event.type === 'client_stream.closed') {
+      const channel = data.channel as ClientStreamChannelDto | undefined;
+      const streamId = channel?.streamId ?? String(data.streamId ?? '');
+      if (!streamId) return;
+      this.chat.clientStreams = this.chat.clientStreams.map((s) =>
+        s.streamId === streamId
+          ? { ...s, status: 'closed', closedAt: channel?.closedAt ?? Date.now() }
+          : s,
+      );
+    } else if (event.type === 'client_stream.sample') {
+      const streamId = String(data.streamId ?? '');
+      if (!streamId) return;
+      const samples = Array.isArray(data.samples) ? data.samples : [];
+      const prev = this.chat.clientStreamSamples.get(streamId) ?? [];
+      const next = [...prev, ...samples].slice(-100);
+      this.chat.clientStreamSamples.set(streamId, next);
+    }
+    this.dispatch(
+      'clientStreams',
+      new ClientStreamsEvent('clientStreams', {
+        streams: this.chat.clientStreams,
+        samples: this.chat.clientStreamSamples,
+      }),
+    );
+  }
+
   private dispatch(_type: string, event: Event): void {
     this.dispatchEvent(event);
   }
@@ -1598,6 +1684,8 @@ export class OctopiRuntimeStore extends EventTarget {
       approvals: [],
       questions: [],
       clientToolCalls: [],
+      clientStreams: [],
+      clientStreamSamples: new Map(),
       inspector: {},
       tasks: [],
     };

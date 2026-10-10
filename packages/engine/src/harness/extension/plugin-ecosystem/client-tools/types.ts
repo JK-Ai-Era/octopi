@@ -25,6 +25,12 @@ export interface ClientToolDeviceMeta {
   consent?: 'none' | 'prompt' | 'strict';
 }
 
+/** 候选端过滤（LLM 不可见 instanceId；钉端走注册描述符） */
+export interface ClientToolClientFilter {
+  platforms?: string[];
+  instanceId?: string;
+}
+
 /**
  * 插件/客户端注册的工具描述符。
  * `parameters` 与 Core `ToolDefinition.parameters` 同形，便于直接装进 tool 面。
@@ -36,8 +42,22 @@ export interface ClientToolDescriptor {
   parameters: Record<string, ToolParameter>;
   interaction?: ClientToolInteraction;
   device?: ClientToolDeviceMeta;
-  /** 声明可能的结果种类（P0 支持 value / asset） */
+  /** 哪些端可执行；缺省 = 任一已声明该 name 的 live client */
+  clientFilter?: ClientToolClientFilter;
+  /** 声明可能的结果种类（LLM 结果仅 value/asset；source/sink 为 Host 通道） */
   resultKinds?: Array<'value' | 'asset'>;
+  /** 解释发生地：默认 server；local 仅标注端上处理（审计），schema 校验不变 */
+  processing?: 'server' | 'local';
+  /**
+   * 声明为 Host 流通道域工具（§15.1）：
+   * source=watch 类，sink=播放类。LLM 仍只拿 value 域句柄。
+   */
+  stream?: {
+    /** source=watch 类；sink=播放类；stop=按域句柄关通道 */
+    direction: 'source' | 'sink' | 'stop';
+    /** value 句柄字段名，默认 watchId / playId */
+    handleKey?: string;
+  };
   version?: string;
 }
 
@@ -63,8 +83,8 @@ export type ClientToolErrorReason =
   | 'internal';
 
 export type ClientToolCallOutcome =
-  | { status: 'ok'; result: ClientToolResult }
-  | { status: 'error'; reason: ClientToolErrorReason; hint?: string };
+  | { status: 'ok'; result: ClientToolResult; processing?: 'server' | 'local' }
+  | { status: 'error'; reason: ClientToolErrorReason; hint?: string; processing?: 'server' | 'local' };
 
 export interface ClientToolCall {
   id: ClientToolCallId;
@@ -80,6 +100,12 @@ export interface ClientToolCall {
   completedByPrincipalId?: string;
   /** html_ui 等大正文落 attachment 后的引用 */
   assetId?: string;
+  /** 解释发生地（审计） */
+  processing?: 'server' | 'local';
+  /** 调用解析时的敏感度（换端判定，§15.3） */
+  sensitivity?: ClientToolSensitivity;
+  /** 调用解析时是否 clientFilter 钉端（钉端不换端） */
+  pinnedClient?: boolean;
   createdAt: number;
   ttlAt: number;
 }

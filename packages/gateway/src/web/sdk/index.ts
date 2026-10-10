@@ -16,4 +16,5 @@ export type {
   PendingApproval,
   PendingQuestion,
   AgentEventEnvelope,
+  ClientStreamChannelDto,
 } from './client.js';
