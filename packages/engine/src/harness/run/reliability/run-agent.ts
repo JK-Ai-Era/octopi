@@ -787,8 +787,14 @@ export async function* runAgentWithReliability(
         return 'abort';
       }
 
-      // 默认：重试 rate_limit / timeout / server（最多 3 次，避免无界重试）
-      if (classified.reason === 'rate_limit' || classified.reason === 'timeout' || classified.reason === 'server') {
+      // 默认：重试 rate_limit / timeout / network / server（最多 3 次，避免无界重试）
+      // network 含对端断连（undici terminated / socket hang up），重试常可自愈
+      if (
+        classified.reason === 'rate_limit' ||
+        classified.reason === 'timeout' ||
+        classified.reason === 'network' ||
+        classified.reason === 'server'
+      ) {
         if (attempt < 3) {
           const delayMs = classified.retryAfterMs ?? (attempt + 1) * 1000;
           if (delayMs > 0) {

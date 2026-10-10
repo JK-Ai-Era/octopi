@@ -15,10 +15,12 @@ import type { ClassifiedError, ErrorReason } from './types.js';
  * 分类错误
  *
  * 优先检查 HTTP 状态码（结构化信息），回退到消息文本匹配。
+ * 文本匹配会拼接 `message` / `cause` / `code`，覆盖 undici 的
+ * `TypeError: terminated`（cause: other side closed）一类被包装的断连错误。
  */
 export function classifyError(err: unknown): ClassifiedError {
   const message = err instanceof Error ? err.message : String(err);
-  const lower = message.toLowerCase();
+  const lower = collectErrorText(err);
 
   // 1. 优先从 error 对象提取 HTTP 状态码
   const statusCode = extractStatusCode(err);
@@ -35,6 +37,7 @@ export function classifyError(err: unknown): ClassifiedError {
     else if (lower.includes('auth') || lower.includes('401')) reason = 'auth';
     else if (lower.includes('billing') || lower.includes('429')) reason = 'rate_limit';
     else if (lower.includes('timeout') || lower.includes('abort')) reason = 'timeout';
+    else if (isConnectionDropText(lower)) reason = 'network';
     else if (lower.includes('network') || lower.includes('fetch') || lower.includes('econnrefused')) reason = 'network';
     else if (lower.includes('500') || lower.includes('502') || lower.includes('503')) reason = 'server';
   }
@@ -43,6 +46,64 @@ export function classifyError(err: unknown): ClassifiedError {
   const retryAfterMs = extractRetryAfter(err);
 
   return { reason, message, originalError: err, retryAfterMs };
+}
+
+/**
+ * 拼接错误对象的 message / cause / code，供文本分类使用。
+ *
+ * undici 会把底层 socket 错误包进 `cause`，只看 message 会把
+ * `TypeError: terminated` 误判成 unknown。
+ */
+function collectErrorText(err: unknown): string {
+  const parts: string[] = [];
+  const seen = new Set<unknown>();
+
+  const visit = (value: unknown, depth: number): void => {
+    if (value == null || depth > 3 || seen.has(value)) return;
+    seen.add(value);
+    if (value instanceof Error) {
+      parts.push(value.message);
+      const code = (value as { code?: unknown }).code;
+      if (typeof code === 'string') parts.push(code);
+      visit(value.cause, depth + 1);
+      return;
+    }
+    if (typeof value === 'string') {
+      parts.push(value);
+      return;
+    }
+    if (typeof value === 'object') {
+      const code = (value as { code?: unknown }).code;
+      if (typeof code === 'string') parts.push(code);
+      const message = (value as { message?: unknown }).message;
+      if (typeof message === 'string') parts.push(message);
+    }
+  };
+
+  visit(err, 0);
+  return parts.join(' ').toLowerCase();
+}
+
+/**
+ * 对端断连 / socket 中断特征（undici fetch、Node http）。
+ *
+ * 这些错误在重试后经常自愈，必须归到 network（可重试），不能落到 unknown。
+ */
+function isConnectionDropText(lower: string): boolean {
+  return (
+    lower.includes('terminated') ||
+    lower.includes('other side closed') ||
+    lower.includes('socket hang up') ||
+    lower.includes('socket disconnected') ||
+    lower.includes('econnreset') ||
+    lower.includes('econnaborted') ||
+    lower.includes('connection reset') ||
+    lower.includes('connection closed') ||
+    lower.includes('premature close') ||
+    lower.includes('und_err_socket') ||
+    lower.includes('und_err_body') ||
+    lower.includes('socketerror')
+  );
 }
 
 /**

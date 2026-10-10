@@ -1,6 +1,6 @@
 {
   "name": "octopi-agent",
-  "version": "0.69.0",
+  "version": "0.69.1",
   "description": "Octopi suite — CLI (bin: octopi), config IO, and dependency umbrella for core/engine/gateway/webui",
   "type": "module",
   "main": "dist/index.js",
@@ -64,10 +64,10 @@
   "dependencies": {
     "@earendil-works/pi-tui": "^0.78.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "@octopi-agent/core": "0.69.0",
-    "@octopi-agent/engine": "0.69.0",
-    "@octopi-agent/gateway": "0.69.0",
-    "@octopi-agent/webui": "0.69.0",
+    "@octopi-agent/core": "0.69.1",
+    "@octopi-agent/engine": "0.69.1",
+    "@octopi-agent/gateway": "0.69.1",
+    "@octopi-agent/webui": "0.69.1",
     "@types/ws": "^8.18.1",
     "chalk": "^5.6.2",
     "js-yaml": "^4.3.2",

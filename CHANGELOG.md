@@ -1,3 +1,24 @@
+## v0.69.1
+
+### fix(loop): classify connection drops and protect sync model fallback
+
+**问题**：线上实测出现 `Stream fallback to sync (Model call idle timeout…)` 后，约 5 分钟再报 `error terminated` 并直接结束，无重试。会话无任何 assistant 回复。
+
+**根因**：
+
+1. **同步 fallback 无引擎超时**：stream idle timeout 后 `model.chat()` 裸奔，只能等对端断连或 provider 超时
+2. **undici 断连误分类**：`TypeError: terminated`（cause: `other side closed`）只看 message 会落到 `unknown`，`DefaultErrorStrategy` / 默认策略都不重试
+3. **stream 取消不彻底**：超时后只 `generator.return()`，打断不了挂起的 `reader.read()`，底层 fetch 悬挂
+
+**修复**：
+
+- `classifyError` 拼接 `message`/`cause`/`code`；`terminated` / `socket hang up` / `ECONNRESET` / `premature close` 等归 **`network`**（可重试）
+- `callModel` 同步 fallback 套 watchdog（`Model call sync timeout`，预算 `max(idle, remainingAbsolute)`）
+- stream 专用 `AbortController`，放弃时真正 abort provider HTTP；chat 仍用 parent signal；用户 abort 不再启动同步 fallback
+- `run-agent` 无 ErrorStrategy 时默认重试补上 `network`，与 `DefaultErrorStrategy` 对齐
+
+**测试**：`tests/loop-model-watchdog.test.ts`（11）— terminated→network、sync timeout、stream abort 不误伤 chat；`loop-p0-contracts` 等回归绿。
+
 ## v0.69.0
 
 ### feat(client-tools): Client Tool 基础设施 — 客户端能力接入 agent tool 面
