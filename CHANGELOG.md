@@ -1,3 +1,23 @@
+## v0.69.0
+
+### feat(client-tools): Client Tool 基础设施 — 客户端能力接入 agent tool 面
+
+**问题**：Agent loop / server tools 已完整，但 tool 作用域只有部署机；客户端仅有文本通道。需要一套机制：端上功能（UI / 设备）经插件注册成为 tool，LLM 自动可见、按需调用，且不把控件写进模型上下文。
+
+**方案**（`arch/client-tools.md`，无兼容垫片）：
+
+- **契约**（`plugin-ecosystem/client-tools/`）：`ClientToolDescriptor` / `ClientToolResult(value|asset)` / `ClientToolCall` / `ClientToolRegistry` / `createClientTool`；与 Server Tool 同构进 tool 面
+- **Host**（`gateway/client-tools-host.ts`）：注册 → 装 tool 面 → 路由 live client → pending → `resolve`；敏感 `device` 多候选直接失败；结果单点回流
+- **在线性**：provider `lastActiveAt` + TTL（默认 90s）+ WebUI 30s 心跳；过期不进 tool 面、不可路由（非「每请求带 tools」）
+- **会话 tool 面**：`Agent.toolsForSession` — 无 live provider 的 Client Tool 不进该 session 的 LLM 列表
+- **REST/WS**：`/client-tools`、`/client-tools/heartbeat`、`/client-tool-calls/:id/resolve`；`client_tool.pending|resolved`
+- **WebUI 样板**：`html_ui`（display 立即返回 / form 收集表单，沙箱 iframe + 最大化）与 `photo_capture`（purpose + 同意 + attachment asset）；时间线交错渲染
+- **校验**：descriptor / args / outcome 形状；敏感 device 必带 `purpose`；禁止空成功
+
+**Breaking**：动态 tool 面（客户端上线才 register）；敏感多候选不静默降级；`ask_user` 保持独立（未合并）。
+
+**测试**：`tests/harness/client-tools.test.ts` · `tests/gateway-client-tools.test.ts`（21）；`web-runtime` mock 同步。
+
 ## v0.68.2
 
 ### fix(knowledge): catalog 与挂载同口径，不再误显未挂载 Project 源

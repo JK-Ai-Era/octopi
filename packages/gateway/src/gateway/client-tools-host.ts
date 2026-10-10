@@ -1,0 +1,405 @@
+/**
+ * ClientToolHost — Gateway 侧 Client Tool 运行时
+ *
+ * - 维护 ClientToolRegistry（会话 → 端 → 能力）
+ * - 将动态 tool 装进 Gateway.tools / 已 build 的 Agent
+ * - invoke：创建 ClientToolCall pending → 等 UI/设备 → outcome
+ *
+ * 归属：Gateway（Integration 门面）；契约来自 engine client-tools。
+ */
+
+import type {
+  ClientToolCall,
+  ClientToolCallId,
+  ClientToolCallOutcome,
+  ClientToolDescriptor,
+  ClientToolName,
+  ClientToolRegistry,
+  ClientToolInvoker,
+} from '@octopi-agent/engine/harness/extension/plugin-ecosystem/client-tools/index.js';
+import {
+  createClientTool,
+} from '@octopi-agent/engine/harness/extension/plugin-ecosystem/client-tools/index.js';
+import type { RegisteredTool } from '@octopi-agent/core/types/tools.js';
+
+export interface ClientToolHostDeps {
+  registry: ClientToolRegistry;
+  /** 注册进 Gateway 全局 tool 面（新 build 的 agent 会带上） */
+  registerGlobalTool: (tool: RegisteredTool) => void;
+  /** 从全局 tool 面移除 */
+  unregisterGlobalTool: (name: string) => void;
+  /** 热更新已 build 的 Agent 工具列表 */
+  syncAgentTools: (ops: Array<{ op: 'add'; tool: RegisteredTool } | { op: 'remove'; name: string }>) => void;
+  /** 广播会话事件（client_tool.*） */
+  emitSessionEvent: (sessionId: string, event: {
+    type: string;
+    sessionId: string;
+    timestamp: number;
+    data: Record<string, unknown>;
+  }) => void;
+  /** callId 生成（可测） */
+  makeCallId?: () => string;
+  /** 默认 TTL */
+  defaultTimeoutMs?: number;
+  /** provider 在线 TTL（超过未心跳视为离线） */
+  providerLiveTtlMs?: number;
+}
+
+interface PendingCall {
+  call: ClientToolCall;
+  resolve: (outcome: ClientToolCallOutcome) => void;
+  reject: (err: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+  abortSignal?: AbortSignal;
+  onAbort?: () => void;
+}
+
+export class ClientToolHost {
+  private readonly deps: ClientToolHostDeps;
+  /** 已装进 tool 面的名字 → RegisteredTool */
+  private installed = new Map<ClientToolName, RegisteredTool>();
+  private calls = new Map<ClientToolCallId, PendingCall>();
+
+  constructor(deps: ClientToolHostDeps) {
+    this.deps = deps;
+  }
+
+  /** 是否为本 Host 管理的 Client Tool（server tool 恒可见） */
+  isClientTool(name: string): boolean {
+    return this.installed.has(name);
+  }
+
+  /** 会话 tool 面过滤：Client Tool 仅在本 session 有 live provider 时可见 */
+  createVisibilityFilter(): (sessionId: string, toolName: string) => boolean {
+    return (sessionId, toolName) => {
+      if (!this.installed.has(toolName)) return true;
+      return this.deps.registry.hasLiveProvider(sessionId, toolName);
+    };
+  }
+
+  /** 心跳续期；可顺带踢掉过期 provider */
+  heartbeat(input: {
+    sessionId: string;
+    clientInstanceId: string;
+    now?: number;
+  }): { alive: boolean } {
+    const now = input.now ?? Date.now();
+    this.reapStale(now);
+    const alive = this.deps.registry.touchClient(input.sessionId, input.clientInstanceId, now);
+    return { alive };
+  }
+
+  /** 剔除超时 provider 并卸下全局 tool 面上已无 live 提供者的名字 */
+  private reapStale(now = Date.now()): void {
+    const stale = this.deps.registry.expireStaleProviders(now);
+    if (stale.length === 0) return;
+    const ops: Array<{ op: 'remove'; name: string }> = [];
+    const globallyRemoved = new Set<string>();
+    for (const entry of stale) {
+      for (const name of entry.removedNames) {
+        if (!this.deps.registry.hasAnyProvider(name) && this.uninstallTool(name)) {
+          ops.push({ op: 'remove', name });
+          globallyRemoved.add(name);
+        }
+      }
+      if (entry.removedNames.length > 0) {
+        this.deps.emitSessionEvent(entry.sessionId, {
+          type: 'client_tools.changed',
+          sessionId: entry.sessionId,
+          timestamp: now,
+          data: {
+            reason: 'stale',
+            toolNames: this.deps.registry.sessionToolNames(entry.sessionId, now),
+          },
+        });
+      }
+    }
+    if (ops.length > 0) this.deps.syncAgentTools(ops);
+  }
+
+  /**
+   * 客户端上报能力。新 tool 名会进入 tool 面。
+   */
+  registerClientTools(input: {
+    sessionId: string;
+    clientInstanceId: string;
+    platform?: string;
+    principalId?: string;
+    descriptors: ClientToolDescriptor[];
+    now?: number;
+  }): { toolNames: string[] } {
+    const now = input.now ?? Date.now();
+    this.reapStale(now);
+    const { addedNames, allNames } = this.deps.registry.registerClientProviders({ ...input, now });
+
+    const ops: Array<{ op: 'add'; tool: RegisteredTool } | { op: 'remove'; name: string }> = [];
+    for (const name of addedNames) {
+      const descriptor = this.deps.registry.getDescriptor(input.sessionId, name);
+      if (!descriptor) continue;
+      const tool = this.installTool(descriptor);
+      ops.push({ op: 'add', tool });
+    }
+    if (ops.length > 0) this.deps.syncAgentTools(ops);
+
+    this.deps.emitSessionEvent(input.sessionId, {
+      type: 'client_tools.changed',
+      sessionId: input.sessionId,
+      timestamp: Date.now(),
+      data: { clientInstanceId: input.clientInstanceId, toolNames: allNames },
+    });
+
+    return { toolNames: allNames };
+  }
+
+  /**
+   * 客户端下线。无 provider 的 tool 名从 tool 面移除。
+   */
+  unregisterClientTools(input: {
+    sessionId: string;
+    clientInstanceId: string;
+  }): { removedNames: string[] } {
+    this.reapStale();
+    const { removedNames } = this.deps.registry.unregisterClientProviders(input);
+    const ops: Array<{ op: 'remove'; name: string }> = [];
+    const globallyRemoved: string[] = [];
+    for (const name of removedNames) {
+      // 仅当全局（所有 session）都没有 provider 时才从 tool 面卸下
+      if (!this.deps.registry.hasAnyProvider(name) && this.uninstallTool(name)) {
+        ops.push({ op: 'remove', name });
+        globallyRemoved.push(name);
+      }
+    }
+    if (ops.length > 0) this.deps.syncAgentTools(ops);
+
+    this.deps.emitSessionEvent(input.sessionId, {
+      type: 'client_tools.changed',
+      sessionId: input.sessionId,
+      timestamp: Date.now(),
+      data: { clientInstanceId: input.clientInstanceId, toolNames: this.deps.registry.sessionToolNames(input.sessionId) },
+    });
+
+    // 取消该端未完成 call
+    for (const [id, pending] of this.calls) {
+      if (
+        pending.call.sessionId === input.sessionId &&
+        pending.call.targetClientInstanceId === input.clientInstanceId &&
+        pending.call.state === 'pending'
+      ) {
+        this.finishCall(id, {
+          status: 'error',
+          reason: 'client_unavailable',
+          hint: 'client unregistered while tool was pending',
+        });
+      }
+    }
+
+    return { removedNames: globallyRemoved };
+  }
+
+  listSessionCalls(sessionId: string): ClientToolCall[] {
+    return Array.from(this.calls.values())
+      .map((p) => p.call)
+      .filter((c) => c.sessionId === sessionId);
+  }
+
+  getCall(callId: ClientToolCallId): ClientToolCall | undefined {
+    return this.calls.get(callId)?.call;
+  }
+
+  listSessionTools(sessionId: string): Array<{ name: string; description: string; interaction?: string }> {
+    const byName = new Map<string, { name: string; description: string; interaction?: string }>();
+    for (const p of this.deps.registry.listProviders(sessionId)) {
+      for (const d of p.descriptors) {
+        if (!byName.has(d.name)) {
+          byName.set(d.name, { name: d.name, description: d.description, interaction: d.interaction });
+        }
+      }
+    }
+    return Array.from(byName.values());
+  }
+
+  /**
+   * UI/设备完成 call。仅 pending 可 resolve。
+   */
+  resolveCall(
+    callId: ClientToolCallId,
+    outcome: ClientToolCallOutcome,
+    completedByPrincipalId?: string,
+  ): ClientToolCall | null {
+    const pending = this.calls.get(callId);
+    if (!pending || pending.call.state !== 'pending') return null;
+    if (completedByPrincipalId) {
+      pending.call.completedByPrincipalId = completedByPrincipalId;
+    }
+    this.finishCall(callId, outcome);
+    return pending.call;
+  }
+
+  /** 会话取消：pending call 一律 cancelled */
+  cancelSessionCalls(sessionId: string, reason = 'session cancelled'): void {
+    for (const [id, pending] of this.calls) {
+      if (pending.call.sessionId !== sessionId || pending.call.state !== 'pending') continue;
+      this.finishCall(id, { status: 'error', reason: 'cancelled', hint: reason });
+    }
+  }
+
+  /**
+   * 供 createClientTool 使用的 invoker。
+   */
+  createInvoker(): ClientToolInvoker {
+    return async (request, context) => {
+      return this.invoke({
+        name: request.name,
+        args: request.args,
+        sessionId: request.sessionId,
+        agentId: request.agentId,
+        callId: request.callId,
+        ttlAt: request.ttlAt,
+        runId: request.runId,
+        abortSignal: request.abortSignal ?? context?.abortSignal,
+      });
+    };
+  }
+
+  private async invoke(input: {
+    name: ClientToolName;
+    args: Record<string, unknown>;
+    sessionId: string;
+    agentId: string;
+    callId: ClientToolCallId;
+    ttlAt: number;
+    runId?: string;
+    abortSignal?: AbortSignal;
+  }): Promise<ClientToolCallOutcome> {
+    this.reapStale();
+    const route = this.deps.registry.resolveTarget(input.sessionId, input.name);
+    if (!route.ok) {
+      return {
+        status: 'error',
+        reason: route.reason === 'ambiguous' ? 'unsupported' : route.reason,
+        hint: route.hint,
+      };
+    }
+
+    const call: ClientToolCall = {
+      id: input.callId,
+      name: input.name,
+      sessionId: input.sessionId,
+      runId: input.runId,
+      agentId: input.agentId,
+      args: input.args,
+      targetClientInstanceId: route.clientInstanceId,
+      state: 'pending',
+      createdAt: Date.now(),
+      ttlAt: input.ttlAt,
+    };
+
+    const outcome = await new Promise<ClientToolCallOutcome>((resolve, reject) => {
+      if (this.calls.has(call.id)) {
+        reject(new Error(`client tool call id collision: ${call.id}`));
+        return;
+      }
+      const timeoutMs = Math.max(0, call.ttlAt - Date.now());
+      const timer = setTimeout(() => {
+        this.finishCall(call.id, {
+          status: 'error',
+          reason: 'expired',
+          hint: `client tool "${input.name}" timed out`,
+        });
+      }, timeoutMs);
+
+      const onAbort = () => {
+        this.finishCall(call.id, {
+          status: 'error',
+          reason: 'cancelled',
+          hint: 'run aborted while client tool was pending',
+        });
+      };
+      if (input.abortSignal) {
+        if (input.abortSignal.aborted) {
+          clearTimeout(timer);
+          resolve({
+            status: 'error',
+            reason: 'cancelled',
+            hint: 'run aborted before client tool pending',
+          });
+          return;
+        }
+        input.abortSignal.addEventListener('abort', onAbort, { once: true });
+      }
+
+      this.calls.set(call.id, {
+        call,
+        resolve,
+        reject,
+        timer,
+        abortSignal: input.abortSignal,
+        onAbort,
+      });
+      this.deps.emitSessionEvent(call.sessionId, {
+        type: 'client_tool.pending',
+        sessionId: call.sessionId,
+        timestamp: call.createdAt,
+        data: { call: publicCall(call) },
+      });
+    });
+
+    return outcome;
+  }
+
+  private finishCall(callId: ClientToolCallId, outcome: ClientToolCallOutcome): void {
+    const pending = this.calls.get(callId);
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    if (pending.abortSignal && pending.onAbort) {
+      pending.abortSignal.removeEventListener('abort', pending.onAbort);
+    }
+    pending.call.state = outcome.status === 'ok' ? 'succeeded' : 'failed';
+    pending.call.outcome = outcome;
+    this.calls.delete(callId);
+
+    this.deps.emitSessionEvent(pending.call.sessionId, {
+      type: 'client_tool.resolved',
+      sessionId: pending.call.sessionId,
+      timestamp: Date.now(),
+      data: { call: publicCall(pending.call) },
+    });
+
+    pending.resolve(outcome);
+  }
+
+  private installTool(descriptor: ClientToolDescriptor): RegisteredTool {
+    const existing = this.installed.get(descriptor.name);
+    if (existing) return existing;
+    const tool = createClientTool(descriptor, this.createInvoker(), {
+      timeoutMs: this.deps.defaultTimeoutMs,
+      makeCallId: this.deps.makeCallId,
+    });
+    this.installed.set(descriptor.name, tool);
+    this.deps.registerGlobalTool(tool);
+    return tool;
+  }
+
+  private uninstallTool(name: ClientToolName): boolean {
+    if (!this.installed.delete(name)) return false;
+    this.deps.unregisterGlobalTool(name);
+    return true;
+  }
+}
+
+function publicCall(call: ClientToolCall): Record<string, unknown> {
+  return {
+    id: call.id,
+    name: call.name,
+    sessionId: call.sessionId,
+    runId: call.runId,
+    agentId: call.agentId,
+    args: call.args,
+    state: call.state,
+    targetClientInstanceId: call.targetClientInstanceId,
+    outcome: call.outcome,
+    completedByPrincipalId: call.completedByPrincipalId,
+    createdAt: call.createdAt,
+    ttlAt: call.ttlAt,
+  };
+}

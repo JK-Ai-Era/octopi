@@ -89,6 +89,8 @@ export class Agent {
     lastProactiveTokens?: number;
   }>();
   private _onAfterTurn?: (usage?: import('@octopi-agent/core/types/turn.js').TokenUsage, turn?: Message[]) => Promise<void>;
+  /** Client Tool 会话可见性；undefined = 全部可见 */
+  private _toolVisibilityFilter?: (sessionId: string, toolName: string) => boolean;
 
   constructor(options: AgentOptions) {
     this._context = {
@@ -139,6 +141,24 @@ export class Agent {
 
   setTools(tools: AgentTool[]): void {
     this._context.tools = [...tools];
+  }
+
+  /**
+   * 会话级 tool 面可见性（Client Tool：无 live client 则不进 LLM tool 面）。
+   * 返回 false 的 tool 对该 session 的 run 隐藏；server tool 不受影响。
+   */
+  setToolVisibilityFilter(
+    filter: ((sessionId: string, toolName: string) => boolean) | undefined,
+  ): void {
+    this._toolVisibilityFilter = filter;
+  }
+
+  /** 本 session 的 tool 列表（含可见性过滤） */
+  toolsForSession(sessionId: string): AgentTool[] {
+    const tools = this.tools;
+    const filter = this._toolVisibilityFilter;
+    if (!filter) return tools;
+    return tools.filter((t) => filter(sessionId, t.name));
   }
 
   // ── 动态配置 ──
@@ -268,7 +288,9 @@ export class Agent {
     const runScope: import('../run-scope.js').RunScope = {
       sessionId: options?.runScope?.sessionId ?? this._contextSessionId,
       agentId: options?.runScope?.agentId ?? harness.agentId ?? 'default',
+      runId: options?.runScope?.runId,
       systemPrompt: options?.runScope?.systemPrompt ?? context.systemPrompt,
+      grounding: options?.runScope?.grounding,
       toolRuntime: options?.runScope?.toolRuntime,
       agentRevision: options?.runScope?.agentRevision,
     };

@@ -33,6 +33,9 @@ function createMockClient() {
     async listQuestions() {
       return [];
     },
+    async listClientToolCalls() {
+      return [];
+    },
     sendSubscribe(sessionId: string, agentId?: string) {
       state.subscribeCalls.push({ sessionId, agentId });
     },
@@ -56,6 +59,7 @@ function createMockClient() {
     connect: () => void;
     listApprovals: () => Promise<any[]>;
     listQuestions: (sessionId: string) => Promise<any[]>;
+    listClientToolCalls: (sessionId: string) => Promise<any[]>;
     sendSubscribe: (sessionId: string, agentId?: string) => void;
     emitAccepted: (sessionId: string | undefined, messageId: string | undefined) => void;
     emitEvent: (sessionId: string | undefined, event: Record<string, unknown>) => void;
@@ -314,6 +318,7 @@ describe('ViewMode transitions', () => {
       },
       async listApprovals() { return []; },
       async listQuestions() { return []; },
+      async listClientToolCalls() { return []; },
       sendSubscribe(sessionId: string, agentId?: string) {
         state.subscribeCalls.push({ sessionId, agentId });
       },
@@ -337,6 +342,7 @@ describe('ViewMode transitions', () => {
       messages: [{ role: 'user', content: 'hi', timestamp: 1000 }],
     });
     client.listApprovals = async () => [];
+    (client as any).listClientToolCalls = async () => [];
 
     await store.openSession('s1');
     expect(store.getState().chat.viewMode).toBe('history');
@@ -350,6 +356,7 @@ describe('ViewMode transitions', () => {
       status: 'idle', createdAt: 1, sessionStartedAt: 1, lastInteractionAt: 1, updatedAt: 1,
     });
     client.listApprovals = async () => [];
+    (client as any).listClientToolCalls = async () => [];
     client.listSessions = async () => [];
     client.sendSubscribe = () => {};
 
@@ -367,6 +374,7 @@ describe('ViewMode transitions', () => {
     });
     client.getSessionMessages = async () => ({ messages: [] });
     client.listApprovals = async () => [];
+    (client as any).listClientToolCalls = async () => [];
 
     await store.openSession('s1');
     expect(store.getState().chat.viewMode).toBe('history');
@@ -392,6 +400,7 @@ describe('ViewMode transitions', () => {
     });
     client.getSessionMessages = async () => ({ messages: [] });
     client.listApprovals = async () => [];
+    (client as any).listClientToolCalls = async () => [];
     client.sendChat = () => {};
 
     await store.openSession('s1');
@@ -417,6 +426,7 @@ describe('ViewMode transitions', () => {
     });
     client.getSessionMessages = async () => ({ messages: [] });
     client.listApprovals = async () => [];
+    (client as any).listClientToolCalls = async () => [];
 
     const modes: string[] = [];
     store.addEventListener('viewMode', ((e: CustomEvent) => {
@@ -437,6 +447,7 @@ describe('ViewMode transitions', () => {
     });
     client.getSessionMessages = async () => ({ messages: [] });
     client.listApprovals = async () => [];
+    (client as any).listClientToolCalls = async () => [];
     client.sendChat = () => {};
 
     await store.openSession('s1');
@@ -467,6 +478,7 @@ describe('ViewMode transitions', () => {
       ],
     });
     client.listApprovals = async () => [];
+    (client as any).listClientToolCalls = async () => [];
 
     await store.openSession('s1');
     const conv = store.getState().chat.conversation;
@@ -486,6 +498,7 @@ describe('Hybrid mode paths', () => {
       },
       async listApprovals() { return []; },
       async listQuestions() { return []; },
+      async listClientToolCalls() { return []; },
       async listSessions() { return []; },
       sendSubscribe() {},
       sendChat() {},
@@ -508,6 +521,7 @@ describe('Hybrid mode paths', () => {
       messages: [{ role: 'user', content: 'old question', timestamp: 100 }],
     });
     client.listApprovals = async () => [];
+    (client as any).listClientToolCalls = async () => [];
     await store.openSession('s1');
     return store;
   }
@@ -570,6 +584,7 @@ describe('Hybrid mode paths', () => {
       status: 'idle', createdAt: 1, sessionStartedAt: 1, lastInteractionAt: 1, updatedAt: 1,
     });
     client.listApprovals = async () => [];
+    (client as any).listClientToolCalls = async () => [];
     client.listSessions = async () => [];
 
     await store.createSession('a1');
@@ -587,6 +602,7 @@ describe('Hybrid mode paths', () => {
       status: 'idle', createdAt: 1, sessionStartedAt: 1, lastInteractionAt: 1, updatedAt: 1,
     });
     client.listApprovals = async () => [];
+    (client as any).listClientToolCalls = async () => [];
     client.listSessions = async () => [];
     client.sendChat = () => {};
 
@@ -614,6 +630,7 @@ describe('Hybrid mode paths', () => {
     });
     client.getSessionMessages = async () => ({ messages: [] });
     client.listApprovals = async () => [];
+    (client as any).listClientToolCalls = async () => [];
 
     await store.openSession('s1');
     client.emitEvent('s1', { type: 'llm_stream_delta', data: { delta: 'hello from s1' } });
@@ -638,6 +655,7 @@ describe('Session switch preserves tool execution state', () => {
       },
       async listApprovals() { return []; },
       async listQuestions() { return []; },
+      async listClientToolCalls() { return []; },
       async listSessions() { return []; },
       sendSubscribe() {},
       sendChat() {},
@@ -660,6 +678,7 @@ describe('Session switch preserves tool execution state', () => {
     });
     client.getSessionMessages = async () => ({ messages: [] });
     client.listApprovals = async () => [];
+    (client as any).listClientToolCalls = async () => [];
     await store.openSession(sessionId);
   }
 
@@ -797,6 +816,7 @@ describe('Session switch preserves tool execution state', () => {
       turnCount: 0,
     });
     client.listApprovals = async () => [];
+    (client as any).listClientToolCalls = async () => [];
     // 第一次打开 s1：空历史
     client.getSessionMessages = async () => ({ messages: [] });
     await store.openSession('s1');
@@ -836,6 +856,7 @@ describe('Session switch preserves tool execution state', () => {
     });
     client.getSessionMessages = async () => ({ messages: [] });
     client.listApprovals = async () => [];
+    (client as any).listClientToolCalls = async () => [];
     await store.openSession('s1');
 
     // 工具完成 → 下一轮 LLM（iteration.start = waiting）
@@ -864,6 +885,7 @@ describe('send failure / abort / reconnect recovery', () => {
     });
     client.getSessionMessages = async () => ({ messages: [] });
     client.listApprovals = async () => [];
+    (client as any).listClientToolCalls = async () => [];
     (client as any).sendChat = () => {
       throw new Error('WebSocket is not connected');
     };
@@ -883,6 +905,7 @@ describe('send failure / abort / reconnect recovery', () => {
     });
     client.getSessionMessages = async () => ({ messages: [] });
     client.listApprovals = async () => [];
+    (client as any).listClientToolCalls = async () => [];
     (client as any).sendChat = () => {};
     (client as any).sendAbort = () => {
       throw new Error('WebSocket is not connected');
@@ -910,6 +933,7 @@ describe('send failure / abort / reconnect recovery', () => {
     });
     client.getSessionMessages = async () => ({ messages: [] });
     client.listApprovals = async () => [];
+    (client as any).listClientToolCalls = async () => [];
 
     await store.openSession('s1');
     const before = client.state.subscribeCalls.length;
@@ -936,6 +960,7 @@ describe('send failure / abort / reconnect recovery', () => {
       });
       client.getSessionMessages = async () => ({ messages: [] });
       client.listApprovals = async () => [];
+    (client as any).listClientToolCalls = async () => [];
       (client as any).sendChat = () => {};
 
       await store.openSession('s1');
@@ -961,6 +986,7 @@ describe('send failure / abort / reconnect recovery', () => {
       });
       client.getSessionMessages = async () => ({ messages: [] });
       client.listApprovals = async () => [];
+    (client as any).listClientToolCalls = async () => [];
       (client as any).sendChat = () => {};
 
       await store.openSession('s1');

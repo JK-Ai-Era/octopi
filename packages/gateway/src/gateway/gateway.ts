@@ -46,6 +46,14 @@ import { CircuitBreaker } from '@octopi-agent/engine/harness/run/reliability/cir
 import { wrapProviderWithCircuitBreaker } from '@octopi-agent/engine/harness/run/reliability/provider-wrapper.js';
 import { resolveModel, resolveModelRef, resolveCatalogEntry, parseModelRef } from '@octopi-agent/engine/harness/run/model/index.js';
 import { PluginManager } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/plugins/manager.js';
+import {
+  ClientToolRegistry,
+  type ClientToolCall,
+  type ClientToolCallId,
+  type ClientToolCallOutcome,
+  type ClientToolDescriptor,
+} from '@octopi-agent/engine/harness/extension/plugin-ecosystem/client-tools/index.js';
+import { ClientToolHost } from './client-tools-host.js';
 import { CommandRouter } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/commands/router.js';
 import {
   createBuiltinCommands,
@@ -62,6 +70,7 @@ import type { SystemIssue } from '@octopi-agent/engine/harness/observability/dia
 
 import { DefaultEventBus } from '@octopi-agent/core/primitives/event-bus.js';
 import { SessionAwareRunner } from '@octopi-agent/engine/harness/run/runner.js';
+import { getRunScope } from '@octopi-agent/engine/harness/run/run-scope.js';
 import { AgentRuntime, SessionRunnerDispatcher, ExplicitRouter } from '@octopi-agent/engine/harness/activation/index.js';
 import { dispatchChannelMessage } from '@octopi-agent/engine/integration/agent-runtime/channel-message-source.js';
 import { SessionAclService } from '@octopi-agent/engine/harness/governance/session-acl/service.js';
@@ -117,6 +126,67 @@ export interface PendingQuestionView {
  * 工具侧识?abort ，不得把空串当用户回?
  */
 export const ASK_USER_CANCELLED = '__ask_user_cancelled__';
+
+/** RegisteredTool → AgentTool（热更新已 build Agent 的 client tool） */
+function registeredToolToAgentTool(tool: RegisteredTool): {
+  name: string;
+  description: string;
+  parameters?: Record<string, unknown>;
+  execute: (
+    toolCallId: string,
+    args: unknown,
+    signal?: AbortSignal,
+  ) => Promise<{
+    toolCallId: string;
+    name: string;
+    content: unknown;
+    isError?: boolean;
+    durationMs?: number;
+  }>;
+} {
+  return {
+    name: tool.definition.name,
+    description: tool.definition.description,
+    parameters: {
+      type: 'object',
+      properties: Object.fromEntries(
+        Object.entries(tool.definition.parameters).map(([key, param]) => [
+          key,
+          { type: param.type, description: param.description, ...(param.enum && { enum: param.enum }) },
+        ]),
+      ),
+      required: Object.entries(tool.definition.parameters)
+        .filter(([, param]) => param.required)
+        .map(([key]) => key),
+    },
+    execute: async (toolCallId, args, signal) => {
+      const startTime = Date.now();
+      try {
+        const scope = getRunScope();
+        const result = await tool.handler(args as Record<string, unknown>, {
+          sessionId: scope?.sessionId ?? 'unknown',
+          agentId: scope?.agentId ?? 'unknown',
+          messages: scope?.toolRuntime?.messages ?? [],
+          abortSignal: signal,
+        });
+        return {
+          toolCallId,
+          name: tool.definition.name,
+          content: result,
+          durationMs: Date.now() - startTime,
+        };
+      } catch (error) {
+        return {
+          toolCallId,
+          name: tool.definition.name,
+          content: `Error: ${error instanceof Error ? error.message : String(error)}`,
+          isError: true,
+          durationMs: Date.now() - startTime,
+        };
+      }
+    },
+  };
+}
 
 /** WebUI 模型条目（与 harness/run/model ModelCatalogEntry 对齐?*/
 export interface ModelCatalogItem {
@@ -212,6 +282,9 @@ export class Gateway {
   /** ask_user 待答（UI 答完 resolve 等待工具?*/
   private pendingQuestions = new Map<string, PendingQuestionView>();
   private questionResolvers = new Map<string, (answer: string) => void>();
+  /** Client Tool（客户端能力 → tool 面）*/
+  private clientToolRegistry = new ClientToolRegistry();
+  private clientTools!: ClientToolHost;
   /** 会话近一次七配快照（?content，仅 REST）；FIFO 防泄?*/
   private lastContextLayers = new Map<string, ContextLayersSnapshot>();
   private static readonly MAX_CONTEXT_LAYERS_SESSIONS = 256;
@@ -253,6 +326,24 @@ export class Gateway {
     this.sessionLease = new InProcessSessionLock();
     this.issueRegistry = new IssueRegistry();
     this.commandRouter = this.createCommandRouter();
+    this.clientTools = new ClientToolHost({
+      registry: this.clientToolRegistry,
+      registerGlobalTool: (tool) => {
+        this.tools.push(tool);
+      },
+      unregisterGlobalTool: (name) => {
+        this.tools = this.tools.filter((t) => t.definition.name !== name);
+      },
+      syncAgentTools: (ops) => this.syncClientToolsToAgents(ops),
+      providerLiveTtlMs: 90_000,
+      emitSessionEvent: (sessionId, event) => {
+        const ev = event as unknown as AgentEvent;
+        this.emitEvent(ev);
+        for (const adapter of this.streamingAdapters) {
+          adapter.broadcastEvent(sessionId, ev);
+        }
+      },
+    });
     // Gateway EventBus：RuntimeEvents 进可观测总线，并?Gateway listeners（不变量 #6?
     this.gatewayBus = new DefaultEventBus();
     this.observerHub = new ObserverHub(config.observer);
@@ -556,6 +647,7 @@ export class Gateway {
    */
   abortSession(sessionId: string): void {
     this.cancelPendingQuestions(sessionId);
+    this.clientTools.cancelSessionCalls(sessionId, 'session aborted');
     for (const agentId of this.agents.keys()) {
       this.runtime.abort(agentId, sessionId);
     }
@@ -2591,6 +2683,82 @@ export class Gateway {
   }
 
   // ================================================================
+  // Client Tools（arch/client-tools.md）
+  // ================================================================
+
+  /**
+   * 客户端上报能力；新 tool 进入 tool 面。
+   */
+  registerClientTools(input: {
+    sessionId: string;
+    clientInstanceId: string;
+    platform?: string;
+    principalId?: string;
+    descriptors: ClientToolDescriptor[];
+  }): { toolNames: string[] } {
+    return this.clientTools.registerClientTools(input);
+  }
+
+  /** 客户端下线；无 provider 的 tool 移出 tool 面 */
+  unregisterClientTools(input: {
+    sessionId: string;
+    clientInstanceId: string;
+  }): { removedNames: string[] } {
+    return this.clientTools.unregisterClientTools(input);
+  }
+
+  listClientToolCalls(sessionId: string): ClientToolCall[] {
+    return this.clientTools.listSessionCalls(sessionId);
+  }
+
+  getClientToolCall(callId: ClientToolCallId): ClientToolCall | undefined {
+    return this.clientTools.getCall(callId);
+  }
+
+  listSessionClientTools(sessionId: string): ReturnType<ClientToolHost['listSessionTools']> {
+    return this.clientTools.listSessionTools(sessionId);
+  }
+
+  /** UI/设备提交结果 */
+  resolveClientToolCall(
+    callId: ClientToolCallId,
+    outcome: ClientToolCallOutcome,
+    completedByPrincipalId?: string,
+  ): ClientToolCall | null {
+    return this.clientTools.resolveCall(callId, outcome, completedByPrincipalId);
+  }
+
+  /** 客户端心跳（在线性续期） */
+  heartbeatClientTools(input: {
+    sessionId: string;
+    clientInstanceId: string;
+  }): { alive: boolean } {
+    return this.clientTools.heartbeat(input);
+  }
+
+  /** 把动态 client tool 同步进已 build 的 Agent（E5 下同 session 串行，无需锁 tool 列表） */
+  private syncClientToolsToAgents(
+    ops: Array<{ op: 'add'; tool: RegisteredTool } | { op: 'remove'; name: string }>,
+  ): void {
+    const visibility = this.clientTools.createVisibilityFilter();
+    for (const { agent } of this.agentCache.values()) {
+      agent.setToolVisibilityFilter(visibility);
+      if (ops.length === 0) continue;
+      const current = agent.tools;
+      let next = [...current];
+      for (const op of ops) {
+        if (op.op === 'add') {
+          next = next.filter((t) => t.name !== op.tool.definition.name);
+          next.push(registeredToolToAgentTool(op.tool));
+        } else {
+          next = next.filter((t) => t.name !== op.name);
+        }
+      }
+      agent.setTools(next);
+    }
+  }
+
+  // ================================================================
   // 核心消息处理
   // ================================================================
 
@@ -3180,6 +3348,9 @@ export class Gateway {
     for (const type of ['session.task.created', 'session.task.updated', 'session.task.snapshot']) {
       built.events.on(type, forwardTaskEvent);
     }
+
+    // Client Tool 会话可见性：无 live client 的 tool 不进该 session 的 LLM tool 面
+    built.agent.setToolVisibilityFilter(this.clientTools.createVisibilityFilter());
 
     return { agent: built.agent, runner: built.runner, contextEngine: built.contextEngine, contextHealth: built.contextHealth };
   }

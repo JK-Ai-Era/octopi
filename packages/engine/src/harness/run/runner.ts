@@ -756,7 +756,8 @@ export class SessionAwareRunner {
       const runContext: AgentContext = {
         systemPrompt: '',
         messages: session.messages,
-        tools: this.agent.tools,
+        // 会话级 tool 面：Client Tool 无 live client 时不进 LLM 列表
+        tools: this.agent.toolsForSession(sessionId),
       };
       // 播种压缩状态（E4 键 = sessionId × agentId）；供 convertToLlm / 重启重建
       this.agent.setSessionCompactState(

@@ -1,6 +1,6 @@
 {
   "name": "@octopi-agent/gateway",
-  "version": "0.68.2",
+  "version": "0.69.0",
   "description": "Octopi Gateway — HTTP/WS process plane, channel adapters, and Web runtime",
   "type": "module",
   "license": "Apache-2.0",
@@ -51,8 +51,8 @@
     "node": ">=24"
   },
   "dependencies": {
-    "@octopi-agent/core": "0.68.2",
-    "@octopi-agent/engine": "0.68.2",
+    "@octopi-agent/core": "0.69.0",
+    "@octopi-agent/engine": "0.69.0",
     "ws": "^8.21.0",
     "zod": "^4.4.3"
   },

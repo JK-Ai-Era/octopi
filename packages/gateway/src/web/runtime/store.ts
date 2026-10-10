@@ -17,6 +17,9 @@
 import type {
   AgentEventEnvelope,
   AgentSummary,
+  ClientToolCallDto,
+  ClientToolCallOutcomeDto,
+  ClientToolDescriptorDto,
   ConnectionState,
   ModelCatalog,
   OctopiClient,
@@ -76,6 +79,7 @@ export interface RuntimeEventMap {
   'tool': ToolEvent;
   'approval': ApprovalEvent;
   'questions': QuestionsEvent;
+  'clientToolCalls': ClientToolCallsEvent;
   'inspector': InspectorEvent;
   'tasks': TasksEvent;
   'error': RuntimeErrorEvent;
@@ -102,6 +106,7 @@ export class StreamEvent extends RuntimeEvent<{ streaming: boolean; content: str
 export class ToolEvent extends RuntimeEvent<{ tools: ToolRun[] }> {}
 export class ApprovalEvent extends RuntimeEvent<{ approvals: PendingApproval[] }> {}
 export class QuestionsEvent extends RuntimeEvent<{ questions: PendingQuestion[] }> {}
+export class ClientToolCallsEvent extends RuntimeEvent<{ calls: ClientToolCallDto[] }> {}
 export class InspectorEvent extends RuntimeEvent<{ inspector: InspectorState }> {}
 export class TasksEvent extends RuntimeEvent<{ tasks: SessionTaskView[] }> {}
 export class RuntimeErrorEvent extends RuntimeEvent<{ error: string }> {}
@@ -175,6 +180,8 @@ export interface ChatState {
   tools: ToolRun[];
   approvals: PendingApproval[];
   questions: PendingQuestion[];
+  /** Client Tool 待完成调用（UI/设备） */
+  clientToolCalls: ClientToolCallDto[];
   inspector: InspectorState;
   /** 会话任务（goal/step），UI 只读 */
   tasks: SessionTaskView[];
@@ -262,6 +269,55 @@ export class OctopiRuntimeStore extends EventTarget {
   /** 当前会话待答问题（ask_user） */
   getQuestions(): PendingQuestion[] {
     return this.chat.questions;
+  }
+
+  /** 当前会话 pending 的 Client Tool 调用 */
+  getClientToolCalls(): ClientToolCallDto[] {
+    return this.chat.clientToolCalls;
+  }
+
+  /** 上报客户端能力 */
+  async registerClientTools(input: {
+    sessionId: string;
+    clientInstanceId: string;
+    platform?: string;
+    principalId?: string;
+    descriptors: ClientToolDescriptorDto[];
+  }): Promise<{ toolNames: string[] }> {
+    return this.client.registerClientTools(input);
+  }
+
+  /** 撤回本端能力 */
+  async unregisterClientTools(sessionId: string, clientInstanceId: string): Promise<{ removedNames: string[] }> {
+    return this.client.unregisterClientTools(sessionId, clientInstanceId);
+  }
+
+  /** 心跳续期（在线性） */
+  async heartbeatClientTools(sessionId: string, clientInstanceId: string): Promise<{ alive: boolean }> {
+    return this.client.heartbeatClientTools(sessionId, clientInstanceId);
+  }
+
+  /** UI/设备完成 call */
+  async resolveClientToolCall(
+    callId: string,
+    outcome: ClientToolCallOutcomeDto,
+    completedByPrincipalId?: string,
+  ): Promise<void> {
+    await this.client.resolveClientToolCall(callId, outcome, completedByPrincipalId);
+    this.chat.clientToolCalls = this.chat.clientToolCalls.map((c) =>
+      c.id === callId
+        ? {
+            ...c,
+            state: outcome.status === 'ok' ? ('succeeded' as const) : ('failed' as const),
+            outcome,
+            completedByPrincipalId: completedByPrincipalId ?? c.completedByPrincipalId,
+          }
+        : c,
+    );
+    this.dispatch(
+      'clientToolCalls',
+      new ClientToolCallsEvent('clientToolCalls', { calls: this.chat.clientToolCalls }),
+    );
   }
 
   /** 回答 ask_user 问题 */
@@ -595,6 +651,7 @@ export class OctopiRuntimeStore extends EventTarget {
 
     const approvals = await this.client.listApprovals();
     const questions = await this.client.listQuestions(sessionId);
+    const clientToolCalls = await this.client.listClientToolCalls(sessionId);
 
     // ── 同会话重开：live 为权威，只刷新 tasks/approvals/questions，不动 conversation/adapter ──
     if (isSameSession) {
@@ -691,6 +748,7 @@ export class OctopiRuntimeStore extends EventTarget {
       tools,
       approvals,
       questions,
+      clientToolCalls,
       inspector: cached?.inspector ? { ...cached.inspector } : {},
       tasks,
     };
@@ -773,6 +831,10 @@ export class OctopiRuntimeStore extends EventTarget {
     this.dispatch('runStatus', new RunStatusEvent('runStatus', { status: derivedRunStatus }));
     this.dispatch('approval', new ApprovalEvent('approval', { approvals: this.chat.approvals }));
     this.dispatch('questions', new QuestionsEvent('questions', { questions: this.chat.questions }));
+    this.dispatch(
+      'clientToolCalls',
+      new ClientToolCallsEvent('clientToolCalls', { calls: this.chat.clientToolCalls }),
+    );
     this.dispatch('inspector', new InspectorEvent('inspector', { inspector: this.chat.inspector }));
     this.dispatch('tasks', new TasksEvent('tasks', { tasks: this.chat.tasks }));
     void this.refreshSessionModel();
@@ -814,6 +876,7 @@ export class OctopiRuntimeStore extends EventTarget {
       tools: [],
       approvals: await this.client.listApprovals(),
       questions: await this.client.listQuestions(session.id),
+      clientToolCalls: await this.client.listClientToolCalls(session.id),
       inspector: {},
       tasks: [],
     };
@@ -831,6 +894,10 @@ export class OctopiRuntimeStore extends EventTarget {
     this.dispatch('runStatus', new RunStatusEvent('runStatus', { status: 'idle' }));
     this.dispatch('approval', new ApprovalEvent('approval', { approvals: this.chat.approvals }));
     this.dispatch('questions', new QuestionsEvent('questions', { questions: this.chat.questions }));
+    this.dispatch(
+      'clientToolCalls',
+      new ClientToolCallsEvent('clientToolCalls', { calls: this.chat.clientToolCalls }),
+    );
     this.dispatch('inspector', new InspectorEvent('inspector', { inspector: this.chat.inspector }));
     this.dispatch('tasks', new TasksEvent('tasks', { tasks: this.chat.tasks }));
 
@@ -1003,6 +1070,11 @@ export class OctopiRuntimeStore extends EventTarget {
     // ask_user 待答问题
     if (event.type === 'ask_user.pending' || event.type === 'ask_user.resolved') {
       this.applyQuestionEvent(event);
+    }
+
+    // Client Tool pending / resolved
+    if (event.type === 'client_tool.pending' || event.type === 'client_tool.resolved') {
+      this.applyClientToolCallEvent(event);
     }
 
     const convResult = this.conversationAdapter.applyEvent(event, sessionId, this.chat.conversation);
@@ -1479,6 +1551,27 @@ export class OctopiRuntimeStore extends EventTarget {
     this.dispatch('questions', new QuestionsEvent('questions', { questions: this.chat.questions }));
   }
 
+  private applyClientToolCallEvent(event: AgentEventEnvelope): void {
+    const raw = event.data?.call as ClientToolCallDto | undefined;
+    if (!raw?.id) return;
+
+    const idx = this.chat.clientToolCalls.findIndex((c) => c.id === raw.id);
+    const next = [...this.chat.clientToolCalls];
+    if (raw.state === 'pending') {
+      if (idx >= 0) next[idx] = raw;
+      else next.push(raw);
+    } else if (idx >= 0) {
+      next[idx] = raw;
+    }
+    this.chat.clientToolCalls = this.chat.sessionId
+      ? next.filter((c) => c.sessionId === this.chat.sessionId && c.state === 'pending')
+      : next.filter((c) => c.state === 'pending');
+    this.dispatch(
+      'clientToolCalls',
+      new ClientToolCallsEvent('clientToolCalls', { calls: this.chat.clientToolCalls }),
+    );
+  }
+
   private dispatch(_type: string, event: Event): void {
     this.dispatchEvent(event);
   }
@@ -1504,6 +1597,7 @@ export class OctopiRuntimeStore extends EventTarget {
       tools: [],
       approvals: [],
       questions: [],
+      clientToolCalls: [],
       inspector: {},
       tasks: [],
     };

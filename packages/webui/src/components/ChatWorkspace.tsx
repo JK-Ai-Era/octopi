@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { MarkdownMessage } from './MarkdownMessage';
 import { ContextRuntimePanel } from './ContextRuntimePanel';
 import { RunObservatoryPanel } from './RunObservatoryPanel';
@@ -15,13 +15,57 @@ import type {
   ViewMode,
 } from '@octopi-agent/gateway/web/conversation/types';
 import type { RunStatus, InspectorState } from '@octopi-agent/gateway/web/runtime/store';
-import type { SessionTaskView, ModelCatalog, SessionModelView, CommandCatalogItemDto, PendingQuestion } from '@octopi-agent/gateway/web/sdk/client';
+import type { SessionTaskView, ModelCatalog, SessionModelView, CommandCatalogItemDto, PendingQuestion, ClientToolCallDto, ClientToolDescriptorDto } from '@octopi-agent/gateway/web/sdk/client';
+import { ClientToolCallCard, WebViewPreview, type RenderedWebView } from './ClientToolCallCard';
 // 浏览器侧直连 token 模块（不经 harness barrel / context/index，避免拉入 Node 专用依赖）
 import { estimateTextTokens } from '@octopi-agent/engine/harness/context/token-estimator';
 import { JSON_CHARS_PER_TOKEN } from '@octopi-agent/engine/harness/context/token-constants';
 import { resolveDefaultBase } from '../gateway-base';
 
 const DEFAULT_BASE = resolveDefaultBase();
+
+/** WebUI 会话级 clientInstanceId（同一标签页稳定） */
+function webuiClientInstanceId(): string {
+  const key = 'octopi.webui.clientInstanceId';
+  let id = sessionStorage.getItem(key);
+  if (!id) {
+    id = `webui_${Math.random().toString(36).slice(2, 10)}`;
+    sessionStorage.setItem(key, id);
+  }
+  return id;
+}
+
+/** P0 样板 Client Tool（arch/client-tools.md） */
+const WEBUI_SAMPLE_CLIENT_TOOLS: ClientToolDescriptorDto[] = [
+  {
+    name: 'html_ui',
+    description:
+      'Show an HTML UI on the user device. mode="display" (default): pure presentation, returns immediately {shown:true}. mode="form": embedded HTML form; returns {submitted:true,values} when the user submits or clicks done. Pass a complete HTML document in `html`. Prefer forms over asking for free-text when collecting structured input.',
+    parameters: {
+      title: { type: 'string', description: 'View title shown above the page', required: true },
+      html: { type: 'string', description: 'Complete HTML document (inline CSS/JS allowed)', required: true },
+      mode: {
+        type: 'string',
+        description: 'display = show only and return; form = collect form fields',
+        enum: ['display', 'form'],
+      },
+      height: { type: 'number', description: 'Iframe height in px (160-1200, default 420)' },
+    },
+    interaction: 'ui',
+    resultKinds: ['value'],
+  },
+  {
+    name: 'photo_capture',
+    description:
+      'Take a photo with the device camera and return an image asset. Requires user consent. result.kind=asset.',
+    parameters: {
+      purpose: { type: 'string', description: 'Why the photo is needed', required: true },
+    },
+    interaction: 'device',
+    device: { class: 'sensor', sensitivity: 'sensitive', consent: 'strict' },
+    resultKinds: ['asset'],
+  },
+];
 
 function formatTokens(n: number | undefined | null): string {
   if (n == null || typeof n !== 'number' || !Number.isFinite(n)) return '未知';
@@ -448,6 +492,8 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
   const [tasks, setTasks] = useState<SessionTaskView[]>([]);
   const [questions, setQuestions] = useState<PendingQuestion[]>([]);
   const [answeringQuestion, setAnsweringQuestion] = useState(false);
+  const [clientToolCalls, setClientToolCalls] = useState<ClientToolCallDto[]>([]);
+  const [renderedWebViews, setRenderedWebViews] = useState<RenderedWebView[]>([]);
   const [input, setInput] = useState('');
   const [pendingAttachments, setPendingAttachments] = useState<
     Array<{ id: string; name: string; sizeBytes: number; status: string }>
@@ -511,6 +557,9 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
     }) as EventListener);
     store.addEventListener('questions', ((e: CustomEvent) => {
       setQuestions(e.detail.questions ?? []);
+    }) as EventListener);
+    store.addEventListener('clientToolCalls', ((e: CustomEvent) => {
+      setClientToolCalls(e.detail.calls ?? []);
     }) as EventListener);
     store.addEventListener('error', ((e: CustomEvent) => {
       setConnectError(String(e.detail.error ?? ''));
@@ -704,13 +753,62 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
     setStream(state.chat.streamingContent ?? '');
     setTasks(state.chat.tasks ?? []);
     setQuestions(state.chat.questions ?? []);
+    setClientToolCalls(state.chat.clientToolCalls ?? []);
+    setRenderedWebViews([]);
     setConversationItems(state.chat.conversation ?? []);
     setViewMode(state.chat.viewMode);
     await store.refreshSessionModel();
     const sm = store.getSessionModel();
     setSessionModel(sm);
     if (sm) setSelectedModelId(sm.modelId ?? sm.defaultModelId);
+    void registerSampleClientTools(sessionId);
   };
+
+  /** 注册 WebUI 样板 Client Tool（幂等） */
+  const registerSampleClientTools = async (sessionId: string) => {
+    const store = storeRef.current;
+    if (!store || !sessionId) return;
+    try {
+      await store.registerClientTools({
+        sessionId,
+        clientInstanceId: webuiClientInstanceId(),
+        platform: 'web',
+        descriptors: WEBUI_SAMPLE_CLIENT_TOOLS,
+      });
+    } catch {
+      // Gateway 未升级/路由不可用时不阻塞会话
+    }
+  };
+
+  // 在线性心跳：30s 续期（服务端 90s TTL）
+  useEffect(() => {
+    if (!activeSessionId || connection !== 'connected') return;
+    const tick = () => {
+      const store = storeRef.current;
+      if (!store || !activeSessionId) return;
+      void store.heartbeatClientTools(activeSessionId, webuiClientInstanceId()).catch(() => {});
+    };
+    tick();
+    const timer = setInterval(tick, 30_000);
+    return () => clearInterval(timer);
+  }, [activeSessionId, connection]);
+
+  /** 卸载当前标签页能力，避免多标签卡死敏感 tool */
+  useEffect(() => {
+    const unload = () => {
+      const store = storeRef.current;
+      const sessionId = activeSessionId;
+      if (!store || !sessionId) return;
+      try {
+        void store.unregisterClientTools?.(sessionId, webuiClientInstanceId());
+      } catch {
+        // pagehide 尽力而为
+      }
+    };
+    window.addEventListener('pagehide', unload);
+    return () => window.removeEventListener('pagehide', unload);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSessionId]);
 
   const startRenameSession = (sessionId: string, currentTitle: string) => {
     setRenamingSessionId(sessionId);
@@ -756,6 +854,8 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
       setStream('');
       setTasks(store.getTasks());
       setQuestions(store.getQuestions());
+      setClientToolCalls(store.getClientToolCalls());
+      void registerSampleClientTools(created.id);
       await store.refreshSessionModel();
       const sm = store.getSessionModel();
       setSessionModel(sm);
@@ -1214,20 +1314,77 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
               </div>
             )}
 
-            {conversationItems.map(item => (
-              <ConversationItemCard key={item.id} item={item} />
-            ))}
+            {(() => {
+              // 时间线：会话项 + 问题 + Client Tool 卡片 + html_ui 预览，按 createdAt 交错
+              type TimelineNode = {
+                id: string;
+                at: number;
+                node: ReactNode;
+              };
+              const nodes: TimelineNode[] = [];
+              const richToolNames = new Set(['html_ui', 'photo_capture']);
 
-            {questions
-              .filter((q) => q.status === 'pending')
-              .map((q) => (
-                <QuestionCard
-                  key={q.id}
-                  question={q}
-                  answering={answeringQuestion}
-                  onAnswer={(answer) => void answerQuestion(q.id, answer)}
-                />
-              ))}
+              for (const item of conversationItems) {
+                if (item.role === 'tool' && richToolNames.has(item.toolName)) continue;
+                nodes.push({
+                  id: item.id,
+                  at: item.createdAt,
+                  node: <ConversationItemCard key={item.id} item={item} />,
+                });
+              }
+
+              for (const q of questions.filter((x) => x.status === 'pending')) {
+                nodes.push({
+                  id: q.id,
+                  at: q.createdAt || Date.now(),
+                  node: (
+                    <QuestionCard
+                      key={q.id}
+                      question={q}
+                      answering={answeringQuestion}
+                      onAnswer={(answer) => void answerQuestion(q.id, answer)}
+                    />
+                  ),
+                });
+              }
+
+              for (const c of clientToolCalls.filter((x) => x.state === 'pending')) {
+                const client = clientRef.current;
+                if (!client || !activeSessionId) continue;
+                nodes.push({
+                  id: c.id,
+                  at: c.createdAt || Date.now(),
+                  node: (
+                    <ClientToolCallCard
+                      key={c.id}
+                      call={c}
+                      client={client}
+                      sessionId={activeSessionId}
+                      busy={false}
+                      onResolved={() => {
+                        setClientToolCalls((prev) => prev.filter((x) => x.id !== c.id));
+                      }}
+                      onWebView={(view) => {
+                        setRenderedWebViews((prev) =>
+                          prev.some((v) => v.id === view.id) ? prev : [...prev, view],
+                        );
+                      }}
+                    />
+                  ),
+                });
+              }
+
+              for (const v of renderedWebViews) {
+                nodes.push({
+                  id: v.id,
+                  at: v.createdAt || Date.now(),
+                  node: <WebViewPreview key={v.id} view={v} />,
+                });
+              }
+
+              nodes.sort((a, b) => a.at - b.at || a.id.localeCompare(b.id));
+              return nodes.map((n) => n.node);
+            })()}
 
             {stream && runStatus === 'streaming' && !conversationItems.some(
               i => i.role === 'assistant' && (i as AssistantConversationItem).status === 'streaming',

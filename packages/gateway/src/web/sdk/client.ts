@@ -240,6 +240,63 @@ export interface PendingQuestion {
   answer?: string;
 }
 
+/** Client Tool 描述符（客户端上报） */
+export interface ClientToolDescriptorDto {
+  name: string;
+  description: string;
+  parameters: Record<string, unknown>;
+  interaction?: 'silent' | 'ui' | 'device';
+  device?: {
+    class?: 'sensor' | 'actuator' | 'media_io';
+    sensitivity?: 'public' | 'personal' | 'sensitive';
+    consent?: 'none' | 'prompt' | 'strict';
+  };
+  resultKinds?: Array<'value' | 'asset'>;
+  version?: string;
+}
+
+export type ClientToolCallOutcomeDto =
+  | {
+      status: 'ok';
+      result:
+        | { kind: 'value'; data: unknown }
+        | {
+            kind: 'asset';
+            assetId: string;
+            mime: string;
+            sizeBytes: number;
+            name?: string;
+            preview?: string;
+          };
+    }
+  | {
+      status: 'error';
+      reason:
+        | 'invalid_arguments'
+        | 'client_unavailable'
+        | 'consent_denied'
+        | 'permission_denied'
+        | 'expired'
+        | 'cancelled'
+        | 'unsupported'
+        | 'internal';
+      hint?: string;
+    };
+
+export interface ClientToolCallDto {
+  id: string;
+  name: string;
+  sessionId: string;
+  agentId: string;
+  args: Record<string, unknown>;
+  state: 'pending' | 'running' | 'succeeded' | 'failed';
+  targetClientInstanceId?: string;
+  outcome?: ClientToolCallOutcomeDto;
+  completedByPrincipalId?: string;
+  createdAt: number;
+  ttlAt: number;
+}
+
 export interface MemoryStats {
   configured: boolean;
   totalEntries?: number;
@@ -850,6 +907,56 @@ export class OctopiClient {
   async answerQuestion(questionId: string, answer: string): Promise<PendingQuestion> {
     const data = await this.postJson(`/questions/${encodeURIComponent(questionId)}`, { answer });
     return data?.data as PendingQuestion;
+  }
+
+  // ── Client Tools（arch/client-tools.md）──
+
+  /** 客户端上报能力（UI/设备 tool） */
+  async registerClientTools(input: {
+    sessionId: string;
+    clientInstanceId: string;
+    platform?: string;
+    principalId?: string;
+    descriptors: ClientToolDescriptorDto[];
+  }): Promise<{ toolNames: string[] }> {
+    const data = await this.postJson('/client-tools', input);
+    return data?.data as { toolNames: string[] };
+  }
+
+  async unregisterClientTools(sessionId: string, clientInstanceId: string): Promise<{ removedNames: string[] }> {
+    const data = await this.deleteJson(
+      `/client-tools/${encodeURIComponent(clientInstanceId)}?sessionId=${encodeURIComponent(sessionId)}`,
+    );
+    return data?.data as { removedNames: string[] };
+  }
+
+  /** 心跳续期（在线性） */
+  async heartbeatClientTools(sessionId: string, clientInstanceId: string): Promise<{ alive: boolean }> {
+    const data = await this.postJson('/client-tools/heartbeat', { sessionId, clientInstanceId });
+    return data?.data as { alive: boolean };
+  }
+
+  async listSessionClientTools(sessionId: string): Promise<Array<{ name: string; description: string; interaction?: string }>> {
+    const data = await this.getJson(`/client-tools?sessionId=${encodeURIComponent(sessionId)}`);
+    return (data?.data as Array<{ name: string; description: string; interaction?: string }>) ?? [];
+  }
+
+  async listClientToolCalls(sessionId: string): Promise<ClientToolCallDto[]> {
+    const data = await this.getJson(`/client-tool-calls?sessionId=${encodeURIComponent(sessionId)}`);
+    return (data?.data as ClientToolCallDto[]) ?? [];
+  }
+
+  /** UI/设备提交结果 */
+  async resolveClientToolCall(
+    callId: string,
+    outcome: ClientToolCallOutcomeDto,
+    completedByPrincipalId?: string,
+  ): Promise<ClientToolCallDto> {
+    const data = await this.postJson(`/client-tool-calls/${encodeURIComponent(callId)}/resolve`, {
+      outcome,
+      completedByPrincipalId,
+    });
+    return data?.data as ClientToolCallDto;
   }
 
   async getMemoryStats(): Promise<MemoryStats> {

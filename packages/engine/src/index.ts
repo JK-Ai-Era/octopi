@@ -132,6 +132,28 @@ export type { SkillDefinition, SkillManager } from './harness/extension/plugin-e
 export type { AgentPersona, ModelConfig, AgentDefinition } from './harness/shared/types/agent-definition.js';
 
 export { DefaultToolBus } from './harness/extension/plugin-ecosystem/tools/tool-bus.js';
+
+export {
+  createClientTool,
+  makeClientToolCallId,
+  ClientToolRegistry,
+  DEFAULT_CLIENT_TOOL_TIMEOUT_MS,
+} from './harness/extension/plugin-ecosystem/client-tools/index.js';
+export type {
+  ClientToolCall,
+  ClientToolCallId,
+  ClientToolCallOutcome,
+  ClientToolDescriptor,
+  ClientToolDeviceMeta,
+  ClientToolErrorReason,
+  ClientToolInvoker,
+  ClientToolInteraction,
+  ClientToolName,
+  ClientToolProvider,
+  ClientToolResult,
+  ClientToolSensitivity,
+  ClientToolRouteDecision,
+} from './harness/extension/plugin-ecosystem/client-tools/index.js';
 export { getBuiltinTools, createShellTool, createFileReadTool, createFileWriteTool, createFileListTool } from './harness/extension/plugin-ecosystem/tools/builtin.js';
 export { createToolSet } from './harness/extension/plugin-ecosystem/tools/tool-set.js';
 export { createSummaryPort, applyToolOutputGate, createCompactEngine } from './harness/context/capabilities/index.js';

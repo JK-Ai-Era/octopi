@@ -851,6 +851,108 @@ export class WebApiRouter {
         return this.json(res, 200, { ok: true, data: resolved });
       }
 
+      // ── Client Tools（arch/client-tools.md）──
+      if (relativePath === '/client-tools' && method === 'GET') {
+        const sessionId = url.searchParams.get('sessionId') ?? '';
+        if (!sessionId) {
+          return this.json(res, 400, { ok: false, error: 'sessionId is required' });
+        }
+        return this.json(res, 200, {
+          ok: true,
+          data: this.gateway.listSessionClientTools(sessionId),
+        });
+      }
+
+      if (relativePath === '/client-tools' && method === 'POST') {
+        const body = await this.readBody(req);
+        const sessionId = typeof body?.sessionId === 'string' ? body.sessionId : '';
+        const clientInstanceId =
+          typeof body?.clientInstanceId === 'string' ? body.clientInstanceId : '';
+        const descriptors = Array.isArray(body?.descriptors) ? body.descriptors : null;
+        if (!sessionId || !clientInstanceId || !descriptors) {
+          return this.json(res, 400, {
+            ok: false,
+            error: 'sessionId, clientInstanceId, descriptors are required',
+          });
+        }
+        const { validateClientToolDescriptor } = await import(
+          '@octopi-agent/engine/harness/extension/plugin-ecosystem/client-tools/index.js'
+        );
+        for (const d of descriptors) {
+          const err = validateClientToolDescriptor(d);
+          if (err) return this.json(res, 400, { ok: false, error: err });
+        }
+        const result = this.gateway.registerClientTools({
+          sessionId,
+          clientInstanceId,
+          platform: typeof body?.platform === 'string' ? body.platform : undefined,
+          principalId: typeof body?.principalId === 'string' ? body.principalId : undefined,
+          descriptors: descriptors as never,
+        });
+        return this.json(res, 200, { ok: true, data: result });
+      }
+
+      if (relativePath === '/client-tools/heartbeat' && method === 'POST') {
+        const body = await this.readBody(req);
+        const sessionId = typeof body?.sessionId === 'string' ? body.sessionId : '';
+        const clientInstanceId = typeof body?.clientInstanceId === 'string' ? body.clientInstanceId : '';
+        if (!sessionId || !clientInstanceId) {
+          return this.json(res, 400, {
+            ok: false,
+            error: 'sessionId, clientInstanceId are required',
+          });
+        }
+        const result = this.gateway.heartbeatClientTools({ sessionId, clientInstanceId });
+        return this.json(res, 200, { ok: true, data: result });
+      }
+
+      const clientToolUnregMatch = relativePath.match(/^\/client-tools\/([^/]+)$/);
+      if (clientToolUnregMatch && method === 'DELETE') {
+        const sessionId = url.searchParams.get('sessionId') ?? '';
+        if (!sessionId) {
+          return this.json(res, 400, { ok: false, error: 'sessionId is required' });
+        }
+        const result = this.gateway.unregisterClientTools({
+          sessionId,
+          clientInstanceId: clientToolUnregMatch[1],
+        });
+        return this.json(res, 200, { ok: true, data: result });
+      }
+
+      if (relativePath === '/client-tool-calls' && method === 'GET') {
+        const sessionId = url.searchParams.get('sessionId') ?? '';
+        if (!sessionId) {
+          return this.json(res, 400, { ok: false, error: 'sessionId is required' });
+        }
+        return this.json(res, 200, {
+          ok: true,
+          data: this.gateway.listClientToolCalls(sessionId),
+        });
+      }
+
+      const clientToolCallResolveMatch = relativePath.match(/^\/client-tool-calls\/([^/]+)\/resolve$/);
+      if (clientToolCallResolveMatch && method === 'POST') {
+        const body = await this.readBody(req);
+        const outcome = body?.outcome;
+        const { validateClientToolOutcome } = await import(
+          '@octopi-agent/engine/harness/extension/plugin-ecosystem/client-tools/index.js'
+        );
+        const outcomeError = validateClientToolOutcome(outcome);
+        if (outcomeError) {
+          return this.json(res, 400, { ok: false, error: outcomeError });
+        }
+        // completedByPrincipalId 仅作展示元数据，不作授权依据（未接 ACL 前不可信）
+        const resolved = this.gateway.resolveClientToolCall(
+          clientToolCallResolveMatch[1],
+          outcome as never,
+          typeof body?.completedByPrincipalId === 'string' ? body.completedByPrincipalId : undefined,
+        );
+        if (!resolved) {
+          return this.json(res, 404, { ok: false, error: 'Client tool call not found or not pending' });
+        }
+        return this.json(res, 200, { ok: true, data: resolved });
+      }
+
       if (relativePath === '/memory/stats' && method === 'GET') {
         const stats = await this.gateway.getMemoryStats();
         if (!stats) {
