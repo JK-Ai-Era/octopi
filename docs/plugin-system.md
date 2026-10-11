@@ -1,6 +1,6 @@
 # Plugin System
 
-Octopi 的 Plugin 系统完全对齐 [OpenClaw Plugin Architecture](https://docs.openclaw.ai/plugins)，提供声明式能力注册、全生命周期 hook 拦截、以及标准化的加载流程。
+Octopi 的 Plugin 系统提供声明式能力注册、全生命周期 hook 拦截、以及标准化的加载流程。
 
 ---
 
@@ -46,12 +46,12 @@ Octopi 的 Plugin 系统完全对齐 [OpenClaw Plugin Architecture](https://docs
 
 ### 4 层加载管线
 
-| 阶段 | 职责 | 对齐 OpenClaw |
-|------|------|--------------|
-| **Discovery** | 扫描 loadPaths，发现 `octopi.plugin.json` | Plugin Discovery |
-| **Validation** | 验证 manifest 格式、contracts、依赖 | Manifest Validation |
-| **Loading** | 动态 `import()` 入口文件，获取 plugin 定义 | Module Loading |
-| **Registration** | 调用 `register(api)`，收集 hooks/tools/providers | Registration Phase |
+| 阶段 | 职责 |
+|------|------|
+| **Discovery** | 扫描 loadPaths，发现 `octopi.plugin.json` |
+| **Validation** | 验证 manifest 格式、contracts、依赖 |
+| **Loading** | 动态 `import()` 入口文件，获取 plugin 定义 |
+| **Registration** | 调用 `register(api)`，收集 hooks/tools/providers |
 
 ### 核心设计原则
 
@@ -921,41 +921,39 @@ export default definePluginEntry({
 });
 ```
 
-### 示例 3：Task Manager Plugin
+### 示例 3：跨 Hook 编排 Plugin
 
-完整的 hook 编排 — `before_agent_reply` 做任务决策，`before_prompt_build` 注入上下文。
+完整的 hook 编排 — `after_tool_call` 记录工具失败，`before_prompt_build` 注入排查提示。
 
 ```ts
 import { definePluginEntry } from '@octopi-agent/engine/plugin-sdk/plugin-entry';
 
 export default definePluginEntry({
-  id: 'task-manager',
-  name: 'Task Manager',
-  description: '任务编排系统',
+  id: 'focus-context',
+  name: 'Focus Context',
+  description: '工具调用失败后，向本轮注入排查提示',
 
   register(api) {
     const pendingContext = new Map<string, string>();
 
-    // priority: 10 — 在默认 0 之前执行
-    api.on('before_agent_reply', async (event: any) => {
-      const { messages, sessionId } = event;
-
-      // 调用 TaskManager LLM 做决策
-      const decision = await taskManager.decide({ messages, sessionId });
-
-      if (decision.injectTaskContext && decision.taskContext) {
-        pendingContext.set(sessionId, decision.taskContext);
+    // 工具失败 → 暂存排查提示（会话键在 ctx.sessionId）
+    api.on('after_tool_call', async (event: any) => {
+      if (event.result?.isError) {
+        pendingContext.set(
+          event.ctx.sessionId,
+          `上一轮 ${event.call.toolName} 调用失败：请先核对路径与参数，再继续执行。`
+        );
       }
+      return null;
+    });
 
-      return null; // 不拦截，让主 LLM 处理
-    }, { priority: 10 });
-
+    // priority: 10 — 在默认 0 之前执行
     api.on('before_prompt_build', async (event: any) => {
-      const ctx = pendingContext.get(event.sessionId);
-      if (!ctx) return null;
+      const tip = pendingContext.get(event.ctx.sessionId);
+      if (!tip) return null;
 
-      pendingContext.delete(event.sessionId); // 用完即删
-      return { prependContext: ctx };
+      pendingContext.delete(event.ctx.sessionId); // 用完即删
+      return { prependContext: tip };
     }, { priority: 10 });
   },
 });
@@ -965,7 +963,7 @@ export default definePluginEntry({
 
 ## 子路径导出
 
-对齐 OpenClaw 的 `openclaw/plugin-sdk/*` 导入路径：
+子路径导出（`@octopi-agent/engine/plugin-sdk/*`）：
 
 ```ts
 // Plugin 入口定义

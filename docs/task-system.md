@@ -1,7 +1,7 @@
 # SessionTask（会话任务）
 
 > **地位**：会话任务的**唯一设计基准**。实现、命名、测试与此冲突时以本文为准。  
-> 其余曾被塞进 `task-system` 的模块见 [docs/domain-split.md](./domain-split.md)。  
+> 其余曾被塞进 `task-system` 的模块已按领域切分归位（见 [domains.md](./domains.md)）。  
 > 最后更新：2026-06-12
 
 ---
@@ -381,7 +381,7 @@ interface SessionTaskService {
 4. Runner 注入渲染 `<session_tasks>`。  
 5. Gateway/Web 暴露只读任务 API / 事件。  
 6. 删除旧 Tracker JSONL / TaskManager 默认路径。  
-7. 按 [domain-split.md](./domain-split.md) 拆走 run-guard / orchestration。
+7. 按领域切分拆走 run-guard / orchestration（已落地；历史设计记录已归档）。
 
 ---
 
@@ -389,6 +389,5 @@ interface SessionTaskService {
 
 | 文档 | 关系 |
 |------|------|
-| [domain-split.md](./domain-split.md) | 其余模块领域切分 |
-| [arch/web-conversation-model-design.md](../arch/web-conversation-model-design.md) | UI 任务面板可作为 conversation view 一部分（as-built 归档） |
+| [domains.md](./domains.md) | 产品域与模块归属 |
 | [架构宪法](./north-star.md) | 长期不变量（含分层与 Run 作用域） |

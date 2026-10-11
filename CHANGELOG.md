@@ -1,3 +1,18 @@
+## v0.70.6
+
+### docs: remediate external docs and gate harness domains catalog
+
+**问题**：docs/ 全量审计（对照 v0.70.5）发现——非对外材料混在对外目录（GTM 备料含竞品点名、翻译草稿、历史附录）；`plugin-system.md` 点名竞品并对齐其插件架构、示例使用已删除的 TaskManager API；`domains.yaml` module_catalog 缺 4 个目录且横切计数与 `domains.md` 不一致；CONTRIBUTING 重复标题 / 大小写死链 / 错误 vitest 参数；多份文档残留 `arch/`（gitignored）引用与死链。
+
+**调整**：
+- 移出 docs/ → `arch/`（gitignored）：`gtm/positioning.en.md`、`draft-default-agents.zh.md`、`domain-split.md`
+- `plugin-system.md`：移除竞品点名与对齐表述；示例 3 改用真实 hook API（`after_tool_call` / `before_prompt_build`，会话键 `ctx.sessionId`）
+- `domains.yaml`：补登 `session/attachments` `activation/sources` `context/constitution` `memory/sqlite`；document-extract 计入横切能力（能力 3 + 基建 3）；tool-effect 并入 execution-environment 落账；清理过期孤儿注记
+- `domains.md` / `CONTRIBUTING.md` / `context-layer-contracts.md` / `task-system.md` / `autonomous-subsystem.md` / `knowledge.md` / `KNOWN-ISSUES.md` / `memory.md` / `observer-domain.md` / `architecture.md` 一致性修缮；对外文档清除全部 `arch/`（gitignored）引用 25 处与 `domain-split` 死链 3 处
+- 新增 `tests/architecture/domains-catalog.test.ts`：harness 目录（深度 1–2）与 module_catalog 双向一致、`product_domain_count`=10，未登记 fail（取代旧 `arch/check-domains.py`）
+
+**测试**：`domains-catalog`（4）通过。
+
 ## v0.70.5
 
 ### feat(summary): raise tool L2 defaults and map config sources to code

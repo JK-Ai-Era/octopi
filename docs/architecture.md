@@ -216,7 +216,7 @@ Agent home 目录约定（由 `initOctopi` / `ensureAgentDirs` 脚手架）：
 
 Memory / Cognition / Wisdom / Knowledge **不按目录落盘**，统一由 per-agent SQLite `AgentDatabase`（`agent.db`）承载。
 
-Jsonl 会话目录为 **sessionId 一等** `OCTOPI_HOME/sessions/`；`SessionData` 含模型 2 字段（`primaryAgentId` / `preferredAgentId` / `participants` / `contextCompacts`）。`SessionStore.load(sessionId)` 已实现；**无** `agents/<id>/sessions/` 兼容回退。运行时 **唯一** Session 后端是 `JsonlSessionStore`（`SqliteSessionStore` 已删除）。可选投影 `sessions.index.db`（可重建）仅供 `session_search` 预筛，**不是**第二权威（`arch/session-history-search.md`）。
+Jsonl 会话目录为 **sessionId 一等** `OCTOPI_HOME/sessions/`；`SessionData` 含模型 2 字段（`primaryAgentId` / `preferredAgentId` / `participants` / `contextCompacts`）。`SessionStore.load(sessionId)` 已实现；**无** `agents/<id>/sessions/` 兼容回退。运行时 **唯一** Session 后端是 `JsonlSessionStore`（`SqliteSessionStore` 已删除）。可选投影 `sessions.index.db`（可重建）仅供 `session_search` 预筛，**不是**第二权威（索引投影为内部规格，不对外）。
 
 > 旧 `extract/`（JsonlExtractorStore）目录已随 memory ETL 提取器移除；补录/治理走 `memory.steward.*` 子系统，素材读 SessionStore。
 
@@ -337,7 +337,7 @@ harness/memory/
 
 > **已移除**：`harness/memory/extraction/`（ETL 采集/桥接/Pending）与 `subsystems/memory-extractor`。  
 > 记忆写入 = agent `memory_store` 工具；旁路 = `memory.steward.backfill` / `memory.steward.govern`（对外见 [`docs/memory.md`](./memory.md)）。  
-> Knowledge（外生语料 / 第 4 层）对外见 [`docs/knowledge.md`](./knowledge.md)。**v0.60+**：Knowledge 拆为独立 HTTP Service（唯一写 `knowledge.db`；Gateway 走 Client；File identity + Membership）；契约 `arch/knowledge-service-http.md`。Document 抽取在 `harness/capabilities/document`（`createDocumentPortFromConfig`）。**线程边界**（v0.64）：主线程 `/health` + 鉴权 + **纯读直达 Meta/Search Worker** + SSE；写 HTTP 在 Engine/API（只编排）；**Writer Worker** 独占可写库 + ingest；解析 CPU 在嵌套 Worker（见 `docs/knowledge.md` §2.1.1）。
+> Knowledge（外生语料 / 第 4 层）对外见 [`docs/knowledge.md`](./knowledge.md)。**v0.60+**：Knowledge 拆为独立 HTTP Service（唯一写 `knowledge.db`；Gateway 走 Client；File identity + Membership）；HTTP 契约为内部规格（不对外）。Document 抽取在 `harness/capabilities/document`（`createDocumentPortFromConfig`）。**线程边界**（v0.64）：主线程 `/health` + 鉴权 + **纯读直达 Meta/Search Worker** + SSE；写 HTTP 在 Engine/API（只编排）；**Writer Worker** 独占可写库 + ingest；解析 CPU 在嵌套 Worker（见 `docs/knowledge.md` §2.1.1）。
 
 `FileWisdomStore` / `FileProjectMemory` / `ContextIntelligence` 已删除；不要再预设 `memory/`、`wisdom/` 文件目录。system prompt 层组装见 `harness/context/`。
 
@@ -510,7 +510,7 @@ harness/collaboration/orchestration/
 └── index.ts
 ```
 
-领域切分见 [docs/domain-split.md](./domain-split.md)。
+领域切分见 [`docs/domains.md`](./domains.md)。
 
 ### 3.14 Concurrency — 并发控制
 
@@ -579,11 +579,11 @@ harness/observability/observer/
 
 | # | 层 | 本质 | 归属 | 默认路径状态 |
 |---|---|---|---|---|
-| 1 | **Wisdom** | 思维范式 | Agent 基质 | **已接线**（maxim + 场景注入 + `wisdom.steward`；见 `arch/wisdom-layer-formation.md`） |
+| 1 | **Wisdom** | 思维范式 | Agent 基质 | **已接线**（maxim + 场景注入 + `wisdom.steward`） |
 | 2 | **Persona** | agent 的 DNA | Agent 基质 | **已接线** |
 | 3 | **Skill** | 工作流定义 | Agent 基质 | **已接线**（`formatForPrompt` 索引） |
 | 4 | **Knowledge** | 外部参考资料 | Knowledge scope（默认 agent） | **已接线**（进程内 store） |
-| 5 | **Cognition** | 概念关系网络 | Agent 基质 | **已接线**（Conceptualizer + ConceptGraphStore + CognitionLayer；见 `arch/cognition-graph-formation.md`） |
+| 5 | **Cognition** | 概念关系网络 | Agent 基质 | **已接线**（Conceptualizer + ConceptGraphStore + CognitionLayer） |
 | 6 | **Memory** | 交互中提取的洞察 | 库归 Agent；原料来自 Session | **已接线**（`SqliteMemoryStore`） |
 | 7 | **Runtime** | 本轮/本会话活态注入 | **Run**（Session 感知） | **已接线**（tasks / guidance / `injectedContext`） |
 | 8 | **Information** | 原始交互记录（session 消息） | **Session** | **已接线**（消息窗口，**不是** ContextLayer） |
@@ -623,8 +623,8 @@ System 契约层 order（= 产品八层之 1–7）：
 
 ```
 Information → Memory   提炼：可行动命题（fact / method / norm）
-Memory → Cognition     结构化：概念之间的关系（cognition.steward.conceptualize，见 arch/cognition-graph-formation.md）
-Memory → Wisdom        升华：思维范式（wisdom.steward.formation；见 arch/wisdom-layer-formation.md）
+Memory → Cognition     结构化：概念之间的关系（cognition.steward.conceptualize）
+Memory → Wisdom        升华：思维范式（wisdom.steward.formation）
 ```
 
 写入通道：主 agent `memory_store`（宪法 + 门控 + 置信度）→ MemoryStore；  
@@ -838,10 +838,8 @@ Gateway serve 路径经 `builder.build()` 装配；治理类子系统 signal 仅
 - [已知问题](./KNOWN-ISSUES.md) — 对外问题摘要
 - `docs/plugin-system.md` — Plugin 系统详细文档
 - `docs/task-system.md` — SessionTask 设计基准
-- `docs/domain-split.md` — run-guard / orchestration / AsyncTask 领域切分
+- `docs/domains.md` — 产品域与模块归属（run-guard / orchestration / AsyncTask 见 Collaboration / Run 域）
 - `docs/CONTRIBUTING.md` — 开发规范
 - `docs/context-layer-contracts.md` — ContextLayer / Assembler 契约
 - `packages/webui/DESIGN.md` — WebUI（Playground）视觉与八层检查器设计
-- `arch/web-runtime-design.md` — Web Runtime 技术设计（as-built 归档）
-- `arch/web-conversation-model-design.md` — WebUI 会话显示模型（as-built 归档）
-- `arch/context-layers-ui-design.md` — 上下文 Runtime UI 设计（as-built 归档）
+- Web Runtime / 会话显示 / 上下文 UI 设计 — 内部归档（as-built，不对外）

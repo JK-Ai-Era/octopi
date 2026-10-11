@@ -12,7 +12,7 @@
 |----|------|------|--------|
 | **产品域 Domain** | 限界上下文：一域一语言、可独立替换 | **10** | 对外介绍、本文 |
 | **模块 Module** | `packages/engine/src/harness/<dir>/` 实现单元 | 20–30，会增减 | `domains.yaml`、CI |
-| **能力 / 基建** | 横切公用能力、层词表 | 5 | 清单 `kind`，**不计入域数** |
+| **能力 / 基建** | 横切公用能力、层词表 | 6（能力 3 + 基建 3） | 清单 `kind`，**不计入域数** |
 
 **域 ≠ 目录。** 新建目录不自动成域；门面、词表、横切不算域。
 
@@ -60,7 +60,7 @@
 | **问题** | 连续性如何维持、旧账如何查？ |
 | **平面** | Continuity |
 | **独占概念** | Session 聚合、Discourse、Projection、Compact 状态、SessionTask |
-| **模块** | `session/`（types / compact / state-machine）`session/tasks` `session/history` |
+| **模块** | `session/`（types / compact / state-machine）`session/tasks` `session/history` `session/attachments` |
 | **失败模式** | 连续性丢失/污染、任务丢失、compact 串键 |
 | **不做** | 基质内容质量；本轮是否跑对（Run） |
 
@@ -107,7 +107,7 @@
 | **失败模式** | 无源/错源、检索错语料、索引当权威、双写 knowledge.db |
 | **不做** | 命题记忆；活系统当前态（Tool） |
 
-**独立成域**：含外生资源管理、解析、embedding、检索；**不是基质**。Scope = Global / Project / Session（无 Agent 级源）。**v0.60+**：独立 HTTP Service 为 `knowledge.db` 唯一写者（Gateway 经 Client）；File 本位防重 + Membership。Service 内分线程（v0.64）：主线程 `/health`+鉴权+纯读分发，**Writer Worker** 跑写库/ingest，Meta/Search Query Worker 只读。详见 [`knowledge.md`](./knowledge.md) 与 `arch/knowledge-service-http.md`。
+**独立成域**：含外生资源管理、解析、embedding、检索；**不是基质**。Scope = Global / Project / Session（无 Agent 级源）。**v0.60+**：独立 HTTP Service 为 `knowledge.db` 唯一写者（Gateway 经 Client）；File 本位防重 + Membership。Service 内分线程（v0.64）：主线程 `/health`+鉴权+纯读分发，**Writer Worker** 跑写库/ingest，Meta/Search Query Worker 只读。详见 [`knowledge.md`](./knowledge.md)（Service HTTP 契约为内部规格，不对外）。
 
 ---
 
@@ -161,7 +161,7 @@
 | **问题** | 能力如何扩展？工具在哪跑？ |
 | **平面** | Extension |
 | **独占概念** | Tool、Effect、Plugin、Skill、MCP、Sandbox、Workspace |
-| **模块** | `plugin-ecosystem` `tool-effect` `execution-environment` |
+| **模块** | `plugin-ecosystem` `execution-environment` |
 | **失败模式** | 插件炸、工具踩盘、cwd 逃逸 |
 | **不做** | 风险判定（Governance 策略）；会话语义 |
 
@@ -217,7 +217,7 @@
 
 1. **唯一计数权威**：`docs/domains.yaml`  
 2. **禁止手写数字**：README_CN、CONTRIBUTING、architecture.md、harness/README 一律引用本文或清单  
-3. **CI**：`packages/engine/src/harness/` 目录集合 ≡ `module_catalog`（`planned: true` 允许暂缺）；未登记 fail  
+3. **CI**：`tests/architecture/domains-catalog.test.ts` 校验 `harness/` 目录与 `module_catalog` 一致（每个目录须登记，或其下含已登记子模块；`planned: true` 允许暂缺）；未登记 fail  
 4. **DoD**：新建/改名/合并/删除 harness 目录的 PR 必须同 PR 更新 `domains.yaml`  
 
 ---
@@ -228,3 +228,4 @@
 |------|------|
 | 2026-09-26 | **域优先目录落地**：`packages/engine/src/harness/` 顶层 = 10 域 + observability + shared；tool-effect 并入 execution-environment；knowledge 契约合一；孤儿文件归 session/ 与 run/ |
 | 2026-09-26 | 初版：10 产品域（Memory/Knowledge 分立；Collaboration 独立且计入）；清单 `domains.yaml` |
+| 2026-10-12 | 清单补登 `session/attachments` `activation/sources` `context/constitution` `memory/sqlite`；document-extract 计入横切能力（能力 3 + 基建 3）；tool-effect 并入 execution-environment 落账；移除过期孤儿注记；目录清单 CI 校验落地（`tests/architecture/domains-catalog.test.ts`） |

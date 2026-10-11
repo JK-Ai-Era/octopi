@@ -1,9 +1,7 @@
 # Octopi 贡献指南
 
 > 本文档面向 Octopi 项目的开发者和贡献者。
-> 如果你是集成开发者（选用 Octopi 作为 Agent 底座），请参考 [ARCHITECTURE.md](./ARCHITECTURE.md) 中的公共 API 示例。
-
-# Octopi 贡献指南
+> 如果你是集成开发者（选用 Octopi 作为 Agent 底座），请参考 [architecture.md](./architecture.md) 中的公共 API 示例。
 
 ## 环境要求
 
@@ -33,7 +31,7 @@ npm run dev            # tsc --watch
 |---|---|---|---|
 | Loop | `packages/core/src/loop/` | 纯执行循环 | 仅依赖 Core 类型 |
 | Core | `packages/core/src/core/` | 机制原语 + 接口契约 + 核心类型 | 无外部依赖 |
-| Harness | `packages/engine/src/harness/` | 10 个产品域（见 `docs/domains.md`） | 依赖 Core + Loop |
+| Harness | `packages/engine/src/harness/` | 产品域组织（见 `docs/domains.md`） | 依赖 Core + Loop |
 | Integration | `packages/engine/src/integration/` + `packages/gateway/src/` | 外部系统适配 | 依赖 Core + Loop + Harness |
 
 详细架构见 [docs/architecture.md](./architecture.md)；长期不变量见 [架构宪法](./north-star.md)。
@@ -48,7 +46,7 @@ npm run dev            # tsc --watch
 - Session 锁/租约键 = `sessionId`；Gateway 注入**共享** `InProcessSessionLock`；跨进程勿假设内存锁有效（E2/E7）
 - Gateway 默认注入 Session ACL；`preferredAgentId` ≠ `primaryAgentId`；handoff 默认 host-only（I3/E6）
 - SessionStore 为 sessionId 一等：`load(sessionId)` / `save(sessionId, data)`；目录 `OCTOPI_HOME/sessions/`（唯一 runtime 后端 `JsonlSessionStore`）
-- 历史检索：`session_search` / `session_read`（Information 原文，≠ `memory_search` 命题）；索引投影见 `arch/session-history-search.md`
+- 历史检索：`session_search` / `session_read`（Information 原文，≠ `memory_search` 命题）；索引投影见内部规格（不对外）
 - Config 变更：同步 `src/config-schema.ts`、`octopi.schema.json`、`octopi.example.json`
 
 **依赖方向：外 → 内。修改内层时必须确认不影响外层。**
@@ -63,7 +61,7 @@ npm test
 npx vitest run tests/core-engine.test.ts
 
 # 运行匹配的测试
-npx vitest run --grep "SecurityGuard"
+npx vitest run -t "SecurityGuard"
 ```
 
 **测试文件命名：** `tests/<module>.test.ts`
@@ -89,6 +87,7 @@ npx vitest run --grep "SecurityGuard"
 | Run Observatory | ObserverHub、resolveObserverConfig、security/memory/tool.effect 投影、store 会话守卫 |
 | 集成 | OpenAI/Anthropic Provider、MCP Client |
 | 录制回放 | RecordingProvider、ReplayProvider、ChaosProvider |
+| 架构门禁 | 分层依赖方向（boundaries）、domains.yaml 目录清单（domains-catalog，`tests/architecture/`） |
 
 ## 代码规范
 
@@ -108,7 +107,7 @@ npx vitest run --grep "SecurityGuard"
 | 新增 Plugin hook | `docs/plugin-system.md` + `docs/architecture.md`（如涉及） |
 | 新增模块 | `docs/architecture.md` + 模块内 `README.md` |
 | Observer / 配置 `observer` | `docs/observer-domain.md` + `docs/architecture.md` + `octopi.schema.json` / `octopi.example.json` |
-| 公用能力 summary/compact | `docs/context-layer-contracts.md` + `docs/architecture.md` + `packages/engine/src/harness/README.md` + `packages/engine/src/harness/context/README.md` + schema/example；内部 `arch/summary-compact.md`（若存在） |
+| 公用能力 summary/compact | `docs/context-layer-contracts.md` + `docs/architecture.md` + `packages/engine/src/harness/README.md` + `packages/engine/src/harness/context/README.md` + schema/example；内部规格（不对外） |
 | 修改层间依赖 / 分层 | `docs/architecture.md`；不得违反 [架构宪法](./north-star.md) 与本文件「依赖方向」 |
 | 修改架构不变量 | **`docs/north-star.md`**（须显式评审）+ `CHANGELOG.md` |
 | 测试数量变化 | `README.md` + `CHANGELOG.md` |
@@ -125,7 +124,7 @@ npx vitest run --grep "SecurityGuard"
 
 ### 架构文档版本号
 
-`ARCHITECTURE.md` 使用语义化版本号：
+`architecture.md` 使用语义化版本号：
 
 - **Major (v2 → v3)**: 整体架构调整、核心概念变更
 - **Minor (v2.0 → v2.1)**: 新增模块、重要接口变更

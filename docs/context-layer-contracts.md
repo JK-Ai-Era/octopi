@@ -2,7 +2,7 @@
 
 > 状态：契约已落地（`packages/engine/src/harness/context/layer-types.ts` / `assembler.ts` / `layers.ts`）  
 > 范围：**只定契约与最小装配闭环**；各层业务实现后续逐个打磨。  
-> 日期：与 v0.26 契约化阶段对齐
+> 日期：契约定稿于 v0.26；随实现持续更新（校对 2026-10-12）
 
 ---
 
@@ -110,7 +110,7 @@ interface ContextLayer {
 
 ---
 
-## 5. 薄适配层（本阶段实现范围）
+## 5. 薄适配层（as-built）
 
 | 类 | 做什么 | 刻意不做 |
 |----|--------|----------|
@@ -149,7 +149,7 @@ Runner.handle
 - `config-bridge` / capabilities 解析链：**`models.level.summary`** → `contextEngine.summaryModel` → mini → standard → 主模型  
 - 可用 `.disableAutoSummarize()` 关闭自动摘要  
 - **Skill**：`skillDirectory` 或 `home/skills` 在 build 时 discover，每轮注入 `<available_skills>`  
-- **Memory 召回**：`builder.memoryStore`；config-bridge 与 Gateway 从 `home/agent.db` 建 `SqliteMemoryStore`。**Knowledge**：system 只注入 catalog（`builder.knowledgeCatalog`）；catalog 为**标签化** `id/name/type/status/scale/location` + `purpose`/`topics`（见 `arch/knowledge-catalog-redesign.md`）；源/索引/外源 ingest 见 `docs/knowledge.md`
+- **Memory 召回**：`builder.memoryStore`；config-bridge 与 Gateway 从 `home/agent.db` 建 `SqliteMemoryStore`。**Knowledge**：system 只注入 catalog（`builder.knowledgeCatalog`）；catalog 为**标签化** `id/name/type/status/scale/location` + `purpose`/`topics`；源/索引/外源 ingest 见 `docs/knowledge.md`
 - **MemoryStore 单实例**：`AgentBuilder.build()` 在 `buildCore` 前用 `builder.memoryStore` 注册 `memory_store`/`memory_search`；MemoryLayer 召回与 `memory.steward.*` 入库同一实例。Gateway **不再**用进程级 `InMemoryMemoryStore` 挂全局 memory 工具
 - **压缩状态落盘（E4）**：权威桶 `SessionData.contextCompacts[agentId]`；`contextCompact` 为 primary/单 agent 兼容视图。Jsonl `*.state.json` 持久化。`Agent` 内存桥键 = `(sessionId, agentId)`。**不同 agent 不互相借用 compact**。手动压缩：`SessionAwareRunner.compactSession`（与 handle **共 session 锁**，排队；勿仅依赖 `status==='processing'`）
 - **公用能力 Summary / Compact**（`harness/context/capabilities/`，横切，不计入业务领域计数）：
@@ -157,7 +157,7 @@ Runner.handle
   - **工具 L1/L2**：决策在 tools 端；L1 `maxReturnChars` 硬顶始终生效；L2 经 SummaryPort；`summarize=off` 仍 L1；`file_read`+code 默认不 L2
   - **CompactEngine**：调用方可指定头尾条数 / 目标 token / 模式；`DefaultContextEngine.structuralCompact` **委托**该引擎；**E4 状态仍只在 ContextEngine / Session 路径**
   - **structured_json**：L0 解析 + L1 `fields`/`fieldTypes` 轻量契约（`structuredError`）；完整 Schema 可选端口
-  - 配置：`summary` / `compact`；示例见 `octopi.example.json`；内部设计 `arch/summary-compact.md`
+  - 配置：`summary` / `compact`；示例见 `octopi.example.json`；内部设计规格（不对外）
   - **P2 子系统包装暂缓**：当前消费方为 tools L1/L2 与会话 compact；出现旁路/事件批处理需求时再挂 `subsystems/content-summary|compact`
 - **跨域 Document 抽取**（`harness/capabilities/document`，非 Context 专用）：session 附件 / knowledge ingest / document 工具共用；唯一装配 `createDocumentPortFromConfig(documents.*)`。Context 层不直接持有 DocumentPort。
 
@@ -194,11 +194,11 @@ Runner.handle
 - 默认 `createDefaultSystemPromptAssembler` 在依赖存在时注册 Wisdom / Cognition 层
 - `octopi.json` → `contextAssembler.includeLayerPreview` 可在 manifest 写入层 preview（Web 上下文面板）
 - `GET /api/v1/agents/:id/context/health` 暴露 store 计数（数据面健康）
-- Knowledge 不再使用进程内命题 Store；catalog / 索引 / grounding 见 `arch/knowledge-layer.md`
+- Knowledge 不再使用进程内命题 Store；catalog / 索引 / grounding 见 `docs/knowledge.md`
 
 ---
 
-## 7. 本阶段不做
+## 7. 刻意不做（长期边界）
 
 - 不实现 embedding 检索 / 相关性重排  
 - 不改 `DefaultContextEngine` **消息窗口选择**算法本身（结构压缩算法已委托 `capabilities/compact`，状态键仍 E4）

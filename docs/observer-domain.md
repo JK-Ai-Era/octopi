@@ -1,7 +1,7 @@
 # Observer Domain — 观测领域
 
 > **地位**：外部文档（tracked）。与 [architecture.md](./architecture.md)、[north-star.md](./north-star.md) 一致。  
-> **内部设计笔记**：`arch/observer-domain.md`（gitignored，不入库）。
+> **内部设计笔记**存于内部目录（gitignored，不入库，不对外）。
 
 ---
 

@@ -10,10 +10,10 @@
 #   pending    — 产品完整所需、实现未完成的域（计数，status: incomplete）
 
 version: 1
-updated: 2026-09-26
+updated: 2026-10-12
 
 product_domain_count: 10
-capability_count: 2
+capability_count: 3
 foundation_count: 3
 
 # ---------------------------------------------------------------------------
@@ -61,7 +61,7 @@ domains:
       - session-tasks
       - session-history
     status: active
-    notes: 根目录 session-types.ts / session-compact.ts / session-state-machine.ts 应归入 session/
+    notes: 会话附件（session/attachments）归本域；原根目录孤儿文件已并入 session/
 
   - id: agent
     name_zh: 智能体
@@ -154,7 +154,7 @@ domains:
       - model
       - agent            # Agent.run() 可靠性门面 = 本域生产入口（E5）
     status: active
-    notes: 根目录 runner.ts / run-scope.ts 应归入本域（或 run/ 子模块）
+    notes: 原根目录 runner.ts / run-scope.ts 已并入 run/
 
   - id: context
     name_zh: 上下文
@@ -190,10 +190,9 @@ domains:
     failure_mode: 插件炸、工具踩盘、cwd 逃逸
     modules:
       - plugin-ecosystem
-      - tool-effect
       - execution-environment
     status: active
-    notes: tool-effect 仅 cwd 解析，语义属「工具在哪执行」，应并入 execution-environment
+    notes: tool-effect 已并入 execution-environment（2026-09-26）
 
   - id: collaboration
     name_zh: 协作
@@ -236,6 +235,13 @@ capabilities:
       - capabilities
     notes: 与 context 域共享；tools 只消费 port
 
+  - id: document-extract
+    name_zh: 文档抽取
+    name_en: Document Extract
+    modules:
+      - capabilities/document
+    notes: 跨域 Document 抽取 Port（session/knowledge/tools；documents.*）
+
 # ---------------------------------------------------------------------------
 # 层基建（3）— 不计入产品域
 # ---------------------------------------------------------------------------
@@ -276,18 +282,21 @@ module_catalog:
   - { id: session, domain: session }
   - { id: session/tasks, domain: session }
   - { id: session/history, domain: session }
+  - { id: session/attachments, domain: session }
 
   # Agent
   - { id: agent, domain: agent }
 
   # Memory
   - { id: memory, domain: memory }
+  - { id: memory/sqlite, domain: memory }
 
   # Knowledge
   - { id: knowledge, domain: knowledge }
 
   # Activation
   - { id: activation, domain: activation }
+  - { id: activation/sources, domain: activation }
 
   # Run
   - { id: run, domain: run }
@@ -301,9 +310,10 @@ module_catalog:
   # Context
   - { id: context, domain: context }
   - { id: context/capabilities, domain: context, kind: capability }
+  - { id: context/constitution, domain: context }
 
   # Cross-domain harness capability (Document extract Port)
-  - { id: capabilities/document, domain: foundation, kind: capability }
+  - { id: capabilities/document, domain: document-extract, kind: capability }
 
   # Extension
   - { id: extension/plugin-ecosystem, domain: extension }

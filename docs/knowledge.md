@@ -70,7 +70,7 @@ Knowledge 数据面是 **独立 HTTP Service**（唯一写者），不是 Gatewa
 | **Gateway** | **不打开** `knowledge.db`；Host API 与 `knowledge_search`/`read` 经 `KnowledgeClient` |
 | **多 Gateway** | 同一 Service（或共享远程 baseUrl）可挂多 Gateway；写路径不双开 |
 
-- **契约**：`arch/knowledge-service-http.md`（token → `(tenantId, gatewayId)`；业务键不从 body 伪造）
+- **契约**（内部规格，不对外）：token → `(tenantId, gatewayId)`；业务键不从 body 伪造
 - **装配**：`knowledge.service.manageLocal`（默认 `true`）→ 本机 **fork 子进程**拉起 Service，缺省端口 **18280**；`manageLocal: false` + `baseUrl` → 只连远程；二者皆无 → 知识面 `disabled`
 - **单写者**：`knowledge.db.writer.lock`（由 **Service 进程**持有，不是 Gateway）
 - **状态**：`ready` / `degraded` / `disabled`（Service 起不来时可感知；`knowledge.required` 可 fail-closed）
@@ -190,7 +190,7 @@ Tier 2  Hits        「和本问相关的片段」    本轮 grounding / 工具�
 Tier 3  Full        「原文」                knowledge_read
 ```
 
-- **Catalog** 是标签化能力面（`id/name/type/status/scale/location` + `purpose`/`topics`），不是文件树。规格见 `arch/knowledge-catalog-redesign.md`。
+- **Catalog** 是标签化能力面（`id/name/type/status/scale/location` + `purpose`/`topics`），不是文件树。
 - **内容命中不进 system**：避免污染人格与常备约束；按轮注入、可 strip。
 - **定向检索**：`knowledge_search` 可用 `source_id` / `source`（catalog 句柄）限定单一语料；可见性仍由服务端裁剪。
 - **代码 vs 文档**：代码（`code-tree`）只做路径/符号/关键词（Phase A），**默认不 embedding**——原文用 `file_read`，检索用 `file_search` / 关键词；文档/规格/正文才进向量（Phase B），避免片段逻辑失真并降低 embed 成本。
@@ -337,7 +337,7 @@ POST   /api/v1/agents/:id/knowledge/resume
 - **reindex = supersede**：先作废本源 queued/running，再按磁盘全量重扫（勿与「继续」混淆：继续=清中止态接着跑）。
 - **删除**会清理索引与使用痕迹（合规可抹除）；目录移出用 `removePathTree` 清子路径；零认领 File 才 purge。
 - 自动描述默认可用，可关闭外发；抽样前做敏感形态扫描；**源稳定后**由 reconcile 触发（勿挂 `idle` 短超时）。
-- **会话附件（临时上传）**：落 `sessions/<sid>/attachments/`，仅本 session；消息侧为 `FileBlock` 指针 + turn 侧不可信资料块（正文）。可选 **升为可检索**（注册 `scopeRef: session` 源）或 **归入项目**（promote=move，非自动提升）。API：`/api/v1/sessions/:id/attachments`。详见 `arch/knowledge-session-attachments.md`。
+- **会话附件（临时上传）**：落 `sessions/<sid>/attachments/`，仅本 session；消息侧为 `FileBlock` 指针 + turn 侧不可信资料块（正文）。可选 **升为可检索**（注册 `scopeRef: session` 源）或 **归入项目**（promote=move，非自动提升）。API：`/api/v1/sessions/:id/attachments`；已知边界见 [`KNOWN-ISSUES.md`](./KNOWN-ISSUES.md)。
 - 外源可带 **`authRef`**（指向 credentials 命名凭证）、**`network`**（`allowPrivateNetwork` / 超时）、**`discover`**（sitemap/crawl 预算）。失败/skip **不删**已入库 chunks。
 - 溯源：命中用稳定逻辑 **`path`**；完整 URL 在文件记录 `external_url`。
 - Host API 经 **KnowledgeClient** → Service；Gateway 进程内**无** ingest 写路径。
@@ -386,7 +386,5 @@ POST   /api/v1/agents/:id/knowledge/resume
 | [docs/memory.md](./memory.md) | Memory（第 6 层）：命题与分馏 |
 | [docs/context-layer-contracts.md](./context-layer-contracts.md) | system 契约层与装配 |
 | [docs/architecture.md](./architecture.md) | 八层总览与目录 |
-| `arch/knowledge-service-http.md` | **Knowledge Service HTTP 契约**（鉴权 / File identity / 多 Gateway） |
-| `arch/knowledge-layer.md` | 内部规格（本体/管道） |
-| `arch/knowledge-external-ingest.md` | 外源 url/connector + CredentialStore |
+| 内部设计规格（不对外） | Knowledge Service HTTP 契约、知识层本体/管道、外源 ingest |
 | `harness/capabilities/document/` | Document 抽取 Port（`createDocumentPortFromConfig` + `documents.*`） |
