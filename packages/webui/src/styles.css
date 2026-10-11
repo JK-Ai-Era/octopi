@@ -1248,3 +1248,18 @@ button.ctx-band {
 @media (min-width: 769px) {
   .mobile-nav { display: none; }
 }
+
+/* 文件卡片：文件名高对比、可点击 */
+.file-card .file-card-name {
+  color: #111827 !important;
+  font-weight: 700 !important;
+}
+.file-card .file-card-name:hover {
+  color: #1e1b4b !important;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.file-card .file-card-name:disabled {
+  color: #6b7280 !important;
+  cursor: wait;
+}

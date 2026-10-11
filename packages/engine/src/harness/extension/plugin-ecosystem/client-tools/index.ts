@@ -9,6 +9,7 @@ export type {
   ClientToolInteraction,
   ClientToolName,
   ClientToolProvider,
+  ClientToolFileRef,
   ClientToolResult,
   ClientToolSensitivity,
 } from './types.js';

@@ -49,6 +49,26 @@ export interface ClientToolHostDeps {
     name: string;
     html: string;
   }) => Promise<{ assetId: string; mime: string; sizeBytes: number }>;
+  /**
+   * send_file：路径策略校验后签发 fileId（正文走内容 API，不进 pending）。
+   * 失败应 throw（PATH_FORBIDDEN / SENSITIVE_* / invalid_arguments…）。
+   */
+  releaseFile?: (input: {
+    sessionId: string;
+    agentId: string;
+    runId?: string;
+    toolCallId?: string;
+    toolName: string;
+    path: string;
+    name?: string;
+    purpose?: string;
+    clientInstanceId?: string;
+  }) => Promise<{
+    fileId: string;
+    name: string;
+    mime: string;
+    sizeBytes: number;
+  }>;
   /** callId 生成（可测） */
   makeCallId?: () => string;
   /** 默认 TTL */
@@ -387,6 +407,47 @@ export class ClientToolHost {
       }
     }
 
+    // send_file：Host 签发 fileId（正文经内容 API，不进 call / tool_result）
+    if (call.name === 'send_file' && this.deps.releaseFile) {
+      const rawPath = input.args.path;
+      if (typeof rawPath !== 'string' || !rawPath.trim()) {
+        return {
+          status: 'error',
+          reason: 'invalid_arguments',
+          hint: 'send_file requires a non-empty path',
+        };
+      }
+      const name = typeof input.args.title === 'string' && input.args.title.trim()
+        ? input.args.title.trim()
+        : undefined;
+      const purpose = typeof input.args.purpose === 'string' ? input.args.purpose : undefined;
+      try {
+        const fileRef = await this.deps.releaseFile({
+          sessionId: call.sessionId,
+          agentId: call.agentId,
+          runId: call.runId,
+          toolCallId: undefined,
+          toolName: 'send_file',
+          path: rawPath,
+          name,
+          purpose,
+          clientInstanceId: call.targetClientInstanceId,
+        });
+        call.fileRef = fileRef;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        const forbidden =
+          message.includes('PATH_FORBIDDEN') ||
+          message.includes('SENSITIVE') ||
+          message.includes('permission_denied');
+        return {
+          status: 'error',
+          reason: forbidden ? 'permission_denied' : 'invalid_arguments',
+          hint: message,
+        };
+      }
+    }
+
     const outcome = await new Promise<ClientToolCallOutcome>((resolve, reject) => {
       if (this.calls.has(call.id)) {
         reject(new Error(`client tool call id collision: ${call.id}`));
@@ -560,6 +621,7 @@ function publicCall(call: ClientToolCall): Record<string, unknown> {
     outcome: call.outcome,
     completedByPrincipalId: call.completedByPrincipalId,
     assetId: call.assetId,
+    fileRef: call.fileRef,
     processing: call.processing,
     createdAt: call.createdAt,
     ttlAt: call.ttlAt,

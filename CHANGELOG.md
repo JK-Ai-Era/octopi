@@ -1,3 +1,20 @@
+## v0.71.0
+
+### feat(files): send_file client tool with release API, audit, and local cache
+
+**问题**：Agent 无法把 gateway 侧文件安全地「发给用户看」。若走 `file_read` 会把正文灌进 LLM 上下文；`html_ui` 只适合内嵌 HTML。文本/图片/音视频/文档缺少统一外发与回放能力；路径与敏感文件缺外发门禁；浏览器无法暂存与转存。
+
+**调整**：
+- **`send_file` client tool**（替代 `show_file`，无兼容层）：Host 只签发不透明 `fileId` + `fileRef{name,mime,sizeBytes}`，LLM tool_result 保持小 value，正文不进上下文
+- **`FileReleaseService`**：路径策略（workspace / session-subdir / attachments，`realpath` 防 symlink 逃逸）+ 敏感名/路径拦截 + fail-closed 审计（`file.released|fetched|rejected|denied` 写入 `OCTOPI_HOME/audit/files/`，无 `file.saved`）
+- **内容 API**：`GET /sessions/:sid/files/:fileId`（Range / 流式）+ `GET .../files`；`Content-Disposition: attachment` + `nosniff`，SVG 不走 image 预览，防网关源 XSS
+- **配置 `fileSend`**：`maxBytes`（默认 2GB）、`maxReleasesPerSession`（默认 0=不限）；Zod + example + schema
+- **WebUI**：OPFS 本地缓存（`file-cache.ts`）+ mime 分发（文本/Markdown、图片、原生音视频、二进制转存）；对话卡片点文件名 → 有渲染器进右栏「文件」，否则转存；多文件切换；会话回放从 `clientToolCalls` + `listSessionFiles` 恢复，刷新自动打开最近会话
+- **SecurityGuard**：`Agent.setTools|registerTool|setHarness` 同步 `registeredTools`，动态 client tool 不再被 `unauthorized_tool` 拦截
+- **store**：终态 `clientToolCall`（含 `fileRef`）不再被 pending 过滤器丢弃，保证回放
+
+**测试**：`gateway-file-release`（release/审计/Range/symlink/hydrate/重启恢复）、`gateway-client-tools`（send_file）、`security`（动态工具白名单）等通过。
+
 ## v0.70.8
 
 ### chore(examples): remove outdated plugin samples

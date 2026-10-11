@@ -150,6 +150,7 @@ export type {
   ClientToolInteraction,
   ClientToolName,
   ClientToolProvider,
+  ClientToolFileRef,
   ClientToolResult,
   ClientToolSensitivity,
   ClientToolRouteDecision,

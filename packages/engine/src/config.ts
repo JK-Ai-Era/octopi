@@ -962,6 +962,16 @@ export interface HarnessConfig {
    * 缺省使用内置五角色；可覆盖/新增。handoff 默认仅宿主。
    */
   sessionAcl?: import('@octopi-agent/engine/harness/governance/session-acl/types.js').SessionAclConfig;
+  /**
+   * send_file 外发限额
+   *
+   * - `maxBytes`：单文件上限（字节）；缺省 2GB
+   * - `maxReleasesPerSession`：每会话 release 次数；缺省 / 0 = 不限
+   */
+  fileSend?: {
+    maxBytes?: number;
+    maxReleasesPerSession?: number;
+  };
   /** 并发控制配置 */
   concurrency?: {
     /** 多 Key Provider 负载均衡池 */

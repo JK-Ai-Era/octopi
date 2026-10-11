@@ -25,6 +25,17 @@ export const SessionConfigSchema = z.object({
  */
 export const ToolIsolationConfigSchema = z.enum(['none', 'session-subdir', 'session-lock']);
 
+/**
+ * `fileSend` — send_file 外发限额
+ *
+ * - `maxBytes`：单文件上限（字节）；缺省 **2GB**
+ * - `maxReleasesPerSession`：每会话 release 次数上限；缺省 / `0` = **不限**
+ */
+export const FileSendConfigSchema = z.object({
+  maxBytes: z.number().int().positive().optional(),
+  maxReleasesPerSession: z.number().int().nonnegative().optional(),
+});
+
 const SessionEffectiveRightsSchema = z.object({
   canRun: z.boolean(),
   readScope: z.enum(['full', 'from_grant', 'summary_tail', 'none']),

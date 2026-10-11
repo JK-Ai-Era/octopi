@@ -57,6 +57,8 @@ import {
   type ClientToolDescriptor,
 } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/client-tools/index.js';
 import { ClientToolHost } from './client-tools-host.js';
+import { FileReleaseService, type FileReleaseIndexEntry } from './file-release.js';
+import { getOctopiHome } from '@octopi-agent/engine/paths.js';
 import { CommandRouter } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/commands/router.js';
 import {
   createBuiltinCommands,
@@ -289,6 +291,8 @@ export class Gateway {
   private clientToolRegistry = new ClientToolRegistry();
   private clientStreamTransport!: ClientStreamTransport;
   private clientTools!: ClientToolHost;
+  private fileReleases!: FileReleaseService;
+  private sessionMetaQueues = new Map<string, Promise<void>>();
   /** 会话近一次七配快照（?content，仅 REST）；FIFO 防泄?*/
   private lastContextLayers = new Map<string, ContextLayersSnapshot>();
   private static readonly MAX_CONTEXT_LAYERS_SESSIONS = 256;
@@ -344,6 +348,23 @@ export class Gateway {
         }
       },
     });
+    this.fileReleases = new FileReleaseService({
+      auditDir: join(getOctopiHome(), 'audit'),
+      maxBytes: config.fileSend?.maxBytes,
+      maxReleasesPerSession: config.fileSend?.maxReleasesPerSession,
+      persistIndex: async (sessionId, entries) => {
+        await this.withSessionMetadata(sessionId, (session) => {
+          const meta = session.metadata ?? (session.metadata = {});
+          meta.fileReleases = entries;
+        });
+      },
+      loadIndex: async (sessionId) => {
+        await this.ensureStore();
+        const session = await this.store.load(sessionId);
+        const raw = session?.metadata?.fileReleases;
+        return Array.isArray(raw) ? (raw as FileReleaseIndexEntry[]) : [];
+      },
+    });
     this.clientTools = new ClientToolHost({
       registry: this.clientToolRegistry,
       streamTransport: this.clientStreamTransport,
@@ -356,6 +377,38 @@ export class Gateway {
       syncAgentTools: (ops) => this.syncClientToolsToAgents(ops),
       providerLiveTtlMs: 90_000,
       persistCall: (call) => this.persistClientToolCall(call),
+      releaseFile: async (input) => {
+        const agent = this.agents.get(input.agentId);
+        const { resolve: pathResolve } = await import('node:path');
+        const { getOctopiHome: homeFn } = await import('@octopi-agent/engine/paths.js');
+        const { resolveSessionAttachmentsPaths } = await import(
+          '@octopi-agent/engine/harness/session/attachments/paths.js'
+        );
+        const workspace = agent?.workspace?.trim() ? pathResolve(agent.workspace) : undefined;
+        const sessionSubdir = workspace ? pathResolve(workspace, input.sessionId) : undefined;
+        const sessionsDir = pathResolve(homeFn(), 'sessions');
+        const attachmentsRoot = resolveSessionAttachmentsPaths(sessionsDir, input.sessionId).root;
+        const allowedRoots = [workspace, sessionSubdir, pathResolve(attachmentsRoot)].filter(
+          (r): r is string => Boolean(r),
+        );
+        const resolveBases = [sessionSubdir, workspace, pathResolve(attachmentsRoot)].filter(
+          (r): r is string => Boolean(r),
+        );
+        const result = await this.fileReleases.release({
+          sessionId: input.sessionId,
+          agentId: input.agentId,
+          runId: input.runId,
+          toolName: input.toolName,
+          toolCallId: input.toolCallId,
+          path: input.path,
+          name: input.name,
+          purpose: input.purpose,
+          clientInstanceId: input.clientInstanceId,
+          allowedRoots,
+          resolveBases,
+        });
+        return result.fileRef;
+      },
       saveHtmlAsset: async (input) => {
         const svc = await this.getAttachmentService();
         const att = await svc.save(input.sessionId, {
@@ -2740,7 +2793,31 @@ export class Gateway {
     return this.clientTools.unregisterClientTools(input);
   }
 
+  /** 已 release 文件列表（不含字节）；重启后自动 hydrate */
+  async listSessionFileReleases(sessionId: string) {
+    return (await this.fileReleases.listSessionReleases(sessionId)).map((r) => ({
+      fileId: r.fileId,
+      name: r.name,
+      mime: r.mime,
+      sizeBytes: r.sizeBytes,
+      sourcePathDisplay: r.sourcePathDisplay,
+      sourceKind: r.sourceKind,
+      toolName: r.toolName,
+      createdAt: r.createdAt,
+    }));
+  }
+
+  /** 文件内容下发（Range 头）；未授权返回 null */
+  async getSessionFileContent(
+    sessionId: string,
+    fileId: string,
+    options?: { rangeHeader?: string; clientInstanceId?: string },
+  ) {
+    return this.fileReleases.readContent(sessionId, fileId, options);
+  }
+
   async listClientToolCalls(sessionId: string): Promise<ClientToolCall[]> {
+    await this.ensureStore();
     const live = this.clientTools.listSessionCalls(sessionId);
     const recent = this.clientTools.listRecentTerminalCalls(sessionId);
     const seen = new Set(live.map((c) => c.id).concat(recent.map((c) => c.id)));
@@ -2757,24 +2834,42 @@ export class Gateway {
     return [...live, ...recent, ...stored];
   }
 
-  /**
-   * 终态 ClientToolCall 写入 session.metadata（Jsonl 快照随 SessionStore.save 落盘）。
-   * 上限 200 条/会话；args.html 超大时截断（正文已在 attachment）。
-   */
   private async persistClientToolCall(call: ClientToolCall): Promise<void> {
-    const session = await this.store.load(call.sessionId);
-    if (!session) return;
-    const meta = session.metadata ?? (session.metadata = {});
-    const key = 'clientToolCalls';
-    const prev = Array.isArray(meta[key]) ? (meta[key] as ClientToolCall[]) : [];
-    const record: ClientToolCall = { ...call };
-    const html = record.args?.html;
-    if (typeof html === 'string' && html.length > 64 * 1024) {
-      record.args = { ...record.args, html: `${html.slice(0, 2048)}…[${html.length} chars, assetId=${record.assetId ?? 'n/a'}]` };
-    }
-    const next = prev.filter((c) => c.id !== record.id).concat(record);
-    meta[key] = next.slice(-200);
-    await this.store.save(call.sessionId, session);
+    await this.withSessionMetadata(call.sessionId, (session) => {
+      const meta = session.metadata ?? (session.metadata = {});
+      const key = 'clientToolCalls';
+      const prev = Array.isArray(meta[key]) ? (meta[key] as ClientToolCall[]) : [];
+      const record: ClientToolCall = { ...call };
+      const html = record.args?.html;
+      if (typeof html === 'string' && html.length > 64 * 1024) {
+        record.args = {
+          ...record.args,
+          html: `${html.slice(0, 2048)}…[${html.length} chars, assetId=${record.assetId ?? 'n/a'}]`,
+        };
+      }
+      const next = prev.filter((c) => c.id !== record.id).concat(record);
+      meta[key] = next.slice(-200);
+    });
+  }
+
+  /** session.metadata 读改写串行（按 sessionId），避免 load→save 丢更新 */
+  private async withSessionMetadata(
+    sessionId: string,
+    mutate: (session: SessionData) => void,
+  ): Promise<void> {
+    await this.ensureStore();
+    const prev = this.sessionMetaQueues.get(sessionId) ?? Promise.resolve();
+    const next = prev.catch(() => {}).then(async () => {
+      const session = await this.store.load(sessionId);
+      if (!session) return;
+      mutate(session);
+      await this.store.save(sessionId, session);
+    });
+    this.sessionMetaQueues.set(
+      sessionId,
+      next.catch(() => {}),
+    );
+    await next;
   }
 
   getClientToolCall(callId: ClientToolCallId): ClientToolCall | undefined {

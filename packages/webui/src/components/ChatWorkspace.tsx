@@ -17,6 +17,7 @@ import type {
 import type { RunStatus, InspectorState } from '@octopi-agent/gateway/web/runtime/store';
 import type { SessionTaskView, ModelCatalog, SessionModelView, CommandCatalogItemDto, PendingQuestion, ClientToolCallDto, ClientToolDescriptorDto } from '@octopi-agent/gateway/web/sdk/client';
 import { ClientToolCallCard, WebViewPreview, type RenderedWebView } from './ClientToolCallCard';
+import { FileCard, FilePreviewPanel, fileRefFromCall, type FileRef } from './FileDelivery';
 // 浏览器侧直连 token 模块（不经 harness barrel / context/index，避免拉入 Node 专用依赖）
 import { estimateTextTokens } from '@octopi-agent/engine/harness/context/token-estimator';
 import { JSON_CHARS_PER_TOKEN } from '@octopi-agent/engine/harness/context/token-constants';
@@ -85,6 +86,25 @@ const WEBUI_SAMPLE_CLIENT_TOOLS: ClientToolDescriptorDto[] = [
     interaction: 'device',
     device: { class: 'sensor', sensitivity: 'sensitive', consent: 'strict' },
     resultKinds: ['asset'],
+  },
+  {
+    name: 'send_file',
+    description:
+      'Send a gateway file to the user (any format). Text and markdown open in the right File tab; images, audio, and video render in the conversation with local cache and save-as. ' +
+      'Returns only a small confirmation (fileId, mime, size) — never the file body. Prefer this over dumping long file text into chat. ' +
+      'For LLM-side reading of file contents use file_read instead. Paths are limited to the agent workspace and session attachments.',
+    parameters: {
+      path: {
+        type: 'string',
+        description: 'Absolute path or workspace-relative path (workspace / session attachments)',
+        required: true,
+      },
+      title: { type: 'string', description: 'Display name (default: file basename)' },
+      purpose: { type: 'string', description: 'Why this file is being sent to the user' },
+    },
+    interaction: 'ui',
+    resultKinds: ['value'],
+    processing: 'server',
   },
 ];
 
@@ -505,6 +525,7 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
   const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState('');
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const activeSessionIdRef = useRef<string | null>(null);
   const [conversationItems, setConversationItems] = useState<ConversationItem[]>([]);
   const [viewMode, setViewMode] = useState<ViewMode>('history');
   const [stream, setStream] = useState('');
@@ -515,6 +536,8 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
   const [answeringQuestion, setAnsweringQuestion] = useState(false);
   const [clientToolCalls, setClientToolCalls] = useState<ClientToolCallDto[]>([]);
   const [renderedWebViews, setRenderedWebViews] = useState<RenderedWebView[]>([]);
+  const [deliveredFiles, setDeliveredFiles] = useState<Array<{ ref: FileRef; createdAt: number }>>([]);
+  const [focusFileId, setFocusFileId] = useState<string | null>(null);
   const [input, setInput] = useState('');
   const [pendingAttachments, setPendingAttachments] = useState<
     Array<{ id: string; name: string; sizeBytes: number; status: string }>
@@ -524,7 +547,7 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
   const [commands, setCommands] = useState<CommandCatalogItemDto[]>([]);
   const [cmdSuggestIndex, setCmdSuggestIndex] = useState(0);
   const [openIssues, setOpenIssues] = useState<Array<{ id: string; severity: string; title: string; detail: string }>>([]);
-  const [rightTab, setRightTab] = useState<'context' | 'run' | 'tasks' | 'attachments' | 'tools' | 'help'>('context');
+  const [rightTab, setRightTab] = useState<'context' | 'run' | 'tasks' | 'attachments' | 'file' | 'tools' | 'help'>('context');
   const [connectError, setConnectError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
@@ -558,7 +581,15 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
       }
     }) as EventListener);
     store.addEventListener('sessions', ((e: CustomEvent) => {
+      const list = (e.detail.sessions ?? []) as Array<{ id: string; lastInteractionAt?: number }>;
       setSessions(e.detail.sessions);
+      // 刷新后自动打开最近会话，否则回放文件卡片无从恢复
+      if (!activeSessionIdRef.current && list.length > 0) {
+        const latest = [...list].sort(
+          (a, b) => (b.lastInteractionAt ?? 0) - (a.lastInteractionAt ?? 0),
+        )[0];
+        if (latest) void openSession(latest.id);
+      }
     }) as EventListener);
     store.addEventListener('conversation', ((e: CustomEvent) => {
       setConversationItems(e.detail.items);
@@ -582,7 +613,20 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
       setQuestions(e.detail.questions ?? []);
     }) as EventListener);
     store.addEventListener('clientToolCalls', ((e: CustomEvent) => {
-      setClientToolCalls(e.detail.calls ?? []);
+      const calls = (e.detail.calls ?? []) as ClientToolCallDto[];
+      setClientToolCalls(calls);
+      setDeliveredFiles((prev) => {
+        const next = [...prev];
+        for (const c of calls) {
+          const ref = fileRefFromCall(c);
+          if (!ref) continue;
+          if (!next.some((x) => x.ref.fileId === ref.fileId)) {
+            next.push({ ref, createdAt: c.createdAt || Date.now() });
+          }
+        }
+        next.sort((a, b) => a.createdAt - b.createdAt);
+        return next;
+      });
     }) as EventListener);
     store.addEventListener('error', ((e: CustomEvent) => {
       setConnectError(String(e.detail.error ?? ''));
@@ -793,6 +837,7 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
     // 打开会话始终从底部开始看
     stickToBottomRef.current = true;
     setActiveSessionId(sessionId);
+    activeSessionIdRef.current = sessionId;
     // 从 store 恢复，不硬编码 idle —— 切回时可能仍有 running 工具或流式内容
     setRunStatus(state.chat.runStatus);
     setStream(state.chat.streamingContent ?? '');
@@ -800,6 +845,36 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
     setQuestions(state.chat.questions ?? []);
     setClientToolCalls(state.chat.clientToolCalls ?? []);
     setRenderedWebViews(webViewsFromCalls(state.chat.clientToolCalls ?? []));
+    setDeliveredFiles([]);
+    setFocusFileId(null);
+    const restored: Array<{ ref: FileRef; createdAt: number }> = [];
+    for (const c of state.chat.clientToolCalls ?? []) {
+      const ref = fileRefFromCall(c);
+      if (ref) restored.push({ ref, createdAt: c.createdAt || 0 });
+    }
+    // 再从 file release 索引补齐（重启后 call 列表可能不全）
+    try {
+      const client = clientRef.current;
+      if (client) {
+        const files = await client.listSessionFiles(sessionId);
+        for (const f of files) {
+          const ref: FileRef = {
+            fileId: f.fileId,
+            name: f.name,
+            mime: f.mime,
+            sizeBytes: f.sizeBytes,
+          };
+          if (!restored.some((x) => x.ref.fileId === ref.fileId)) {
+            restored.push({ ref, createdAt: f.createdAt || 0 });
+          }
+        }
+      }
+    } catch {
+      // 列表失败时仅依赖 clientToolCalls
+    }
+    restored.sort((a, b) => a.createdAt - b.createdAt);
+    setDeliveredFiles(restored);
+    setFocusFileId(restored.length ? restored[restored.length - 1]!.ref.fileId : null);
     setConversationItems(state.chat.conversation ?? []);
     setViewMode(state.chat.viewMode);
     await store.refreshSessionModel();
@@ -1425,6 +1500,15 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
                           prev.some((v) => v.id === view.id) ? prev : [...prev, view],
                         );
                       }}
+                      onFileRef={(ref, createdAt) => {
+                        setDeliveredFiles((prev) =>
+                          prev.some((x) => x.ref.fileId === ref.fileId)
+                            ? prev
+                            : [...prev, { ref, createdAt }],
+                        );
+                        setFocusFileId(ref.fileId);
+                        setRightTab('file');
+                      }}
                     />
                   ),
                 });
@@ -1435,6 +1519,26 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
                   id: v.id,
                   at: v.createdAt || Date.now(),
                   node: <WebViewPreview key={v.id} view={v} />,
+                });
+              }
+
+              for (const f of deliveredFiles) {
+                nodes.push({
+                  id: `file_${f.ref.fileId}`,
+                  at: f.createdAt || Date.now(),
+                  node: (
+                    <FileCard
+                      key={f.ref.fileId}
+                      client={clientRef.current}
+                      sessionId={activeSessionId}
+                      fileRef={f.ref}
+                      createdAt={f.createdAt}
+                      onOpen={(ref) => {
+                        setFocusFileId(ref.fileId);
+                        setRightTab('file');
+                      }}
+                    />
+                  ),
                 });
               }
 
@@ -1626,6 +1730,13 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
                 <span className="tab-count">{pendingAttachments.length}</span>
               ) : null}
             </button>
+            <button
+              className={rightTab === 'file' ? 'btn-tab btn-tab-active' : 'btn-tab'}
+              onClick={() => setRightTab('file')}
+            >
+              文件
+              {deliveredFiles.length > 0 ? <span className="tab-count">{deliveredFiles.length}</span> : null}
+            </button>
             <button className={rightTab === 'tools' ? 'btn-tab btn-tab-active' : 'btn-tab'} onClick={() => setRightTab('tools')}>工具</button>
             <button className={rightTab === 'help' ? 'btn-tab btn-tab-active' : 'btn-tab'} onClick={() => setRightTab('help')}>帮助</button>
           </div>
@@ -1696,6 +1807,16 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
             />
           )}
 
+          {rightTab === 'file' && (
+            <FilePreviewPanel
+              client={clientRef.current}
+              sessionId={activeSessionId}
+              files={deliveredFiles}
+              focusFileId={focusFileId}
+              onSelect={(ref) => setFocusFileId(ref.fileId)}
+            />
+          )}
+
           {rightTab === 'tools' && (
             <section className="panel sidebar-section">
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
@@ -1727,6 +1848,7 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
                 <li>右栏「Run」：Observer — RunScope / 时间线 / run messages</li>
                 <li>右栏「任务」：会话任务树；对 Agent 说「把 xx 标为完成」即可更新</li>
                 <li>右栏「附件」：本会话参考语料；可 file_read 深读</li>
+                <li>右栏「文件」：send_file 发送的文本文件；图片/音视频在对话中展示，可转存</li>
                 <li>连接成功后自动刷新 Agent、模型目录和会话</li>
                 <li>Enter 发送，Shift+Enter 换行；输入法选词阶段不会误触</li>
               </ul>

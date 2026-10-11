@@ -49,6 +49,7 @@ export {
   SessionConfigSchema,
   SessionRightsSchema,
   ToolIsolationConfigSchema,
+  FileSendConfigSchema,
 } from '@octopi-agent/engine/config-schema/governance.js';
 export {
   ObservabilityConfigSchema,

@@ -265,6 +265,36 @@ describe('ToolGuard', () => {
     expect(result.violations.some(v => v.type === 'unauthorized_tool')).toBe(true);
   });
 
+  it('Agent.setTools 动态注册的 client tool 会进入 SecurityGuard 白名单', async () => {
+    const { Agent } = await import('@octopi-agent/engine/harness/run/agent/agent.js');
+    const bus = new DefaultEventBus();
+    const guard = new DefaultSecurityGuard(bus, {});
+    const provider = {
+      name: 'mock',
+      async chat() {
+        return { content: 'ok', model: 'm', finishReason: 'stop' as const };
+      },
+    };
+    const agent = new Agent({
+      model: provider as never,
+      systemPrompt: 't',
+      tools: [{ name: 'file_read', description: 'd', parameters: { type: 'object', properties: {} }, execute: async () => ({}) }],
+    });
+    agent.setHarness({
+      config: {},
+      security: guard,
+    });
+    // setHarness / 初始 tools 已同步
+    expect(guard.checkToolCall({ id: '1', name: 'send_file', arguments: {} }).violations.some((v) => v.type === 'unauthorized_tool')).toBe(true);
+
+    agent.setTools([
+      ...agent.tools,
+      { name: 'send_file', description: 'd', parameters: { type: 'object', properties: {} }, execute: async () => ({}) },
+    ]);
+    expect(guard.checkToolCall({ id: '1', name: 'send_file', arguments: {} }).violations.some((v) => v.type === 'unauthorized_tool')).toBe(false);
+    expect(guard.checkToolCall({ id: '1', name: 'not_a_tool', arguments: {} }).violations.some((v) => v.type === 'unauthorized_tool')).toBe(true);
+  });
+
   it('自定义 sensitivePatterns 无 g 不应死循环', () => {
     const bus = new DefaultEventBus();
     const guard = new DefaultSecurityGuard(bus, {

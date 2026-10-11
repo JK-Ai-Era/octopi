@@ -82,6 +82,14 @@ export type ClientToolErrorReason =
   | 'unsupported'
   | 'internal';
 
+/** 已 release 的文件引用（send_file）；正文经 fileId 内容 API 获取，不进 tool_result */
+export interface ClientToolFileRef {
+  fileId: string;
+  name: string;
+  mime: string;
+  sizeBytes: number;
+}
+
 export type ClientToolCallOutcome =
   | { status: 'ok'; result: ClientToolResult; processing?: 'server' | 'local' }
   | { status: 'error'; reason: ClientToolErrorReason; hint?: string; processing?: 'server' | 'local' };
@@ -100,6 +108,8 @@ export interface ClientToolCall {
   completedByPrincipalId?: string;
   /** html_ui 等大正文落 attachment 后的引用 */
   assetId?: string;
+  /** send_file 已 release 的文件引用；正文经 GET files/:fileId */
+  fileRef?: ClientToolFileRef;
   /** 解释发生地（审计） */
   processing?: 'server' | 'local';
   /** 调用解析时的敏感度（换端判定，§15.3） */

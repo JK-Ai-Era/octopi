@@ -167,6 +167,68 @@ export class WebApiRouter {
       }
 
       // ── 会话附件（OP-15）──
+      // 已 release 文件内容（send_file）GET/列表
+      const fileContentMatch = relativePath.match(/^\/sessions\/([^/]+)\/files\/([^/]+)$/);
+      if (fileContentMatch && method === 'GET') {
+        const sessionId = fileContentMatch[1];
+        const fileId = fileContentMatch[2];
+        const rangeHeader = req.headers['range'] as string | undefined;
+        const result = await this.gateway.getSessionFileContent(sessionId, fileId, {
+          rangeHeader,
+        });
+        if (!result) {
+          return this.json(res, 404, { ok: false, error: 'file not released for this session' });
+        }
+        if (result.ok === false) {
+          if (result.reason === 'unsatisfiable') {
+            res.statusCode = 416;
+            res.setHeader('Content-Range', `bytes */${result.totalSize ?? 0}`);
+            res.setHeader('X-Content-Type-Options', 'nosniff');
+            res.end();
+            return true;
+          }
+          return this.json(res, 404, { ok: false, error: result.reason });
+        }
+        const { record, totalSize, start, end, ranged, handle } = result;
+        const length = totalSize === 0 ? 0 : end - start + 1;
+        // 防 XSS：一律 attachment + nosniff；WebUI 走 fetch/blob
+        res.statusCode = ranged ? 206 : 200;
+        res.setHeader('Content-Type', 'application/octet-stream');
+        res.setHeader('Content-Length', String(length));
+        res.setHeader('Accept-Ranges', 'bytes');
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+        res.setHeader('X-Content-Type', record.mime || 'application/octet-stream');
+        res.setHeader('X-File-Name', encodeURIComponent(record.name));
+        res.setHeader('X-File-Id', record.fileId);
+        const asciiName = record.name.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_');
+        res.setHeader(
+          'Content-Disposition',
+          `attachment; filename="${asciiName}"; filename*=UTF-8''${encodeURIComponent(record.name)}`,
+        );
+        if (ranged) {
+          res.setHeader('Content-Range', `bytes ${start}-${end}/${totalSize}`);
+        }
+        await handle.close().catch(() => {});
+        if (length === 0) {
+          res.end();
+          return true;
+        }
+        const { createReadStream } = await import('node:fs');
+        const stream = createReadStream(record.absPath, { start, end });
+        stream.on('error', () => {
+          res.destroy();
+        });
+        stream.pipe(res);
+        return true;
+      }
+      const fileListMatch = relativePath.match(/^\/sessions\/([^/]+)\/files$/);
+      if (fileListMatch && method === 'GET') {
+        return this.json(res, 200, {
+          ok: true,
+          data: await this.gateway.listSessionFileReleases(fileListMatch[1]),
+        });
+      }
+
       const attachmentsMatch = relativePath.match(/^\/sessions\/([^/]+)\/attachments$/);
       if (attachmentsMatch && method === 'GET') {
         const items = await this.gateway.listSessionAttachments(attachmentsMatch[1]);

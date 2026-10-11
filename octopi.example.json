@@ -247,6 +247,11 @@
 
   "toolIsolation": "session-subdir",
 
+  "fileSend": {
+    "maxBytes": 2147483648,
+    "maxReleasesPerSession": 0
+  },
+
   "sessionAcl": {
     "switchDefaults": {
       "preferredOnly": true,

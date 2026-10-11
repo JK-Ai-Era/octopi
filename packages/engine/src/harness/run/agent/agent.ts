@@ -135,12 +135,25 @@ export class Agent {
 
   // ── 工具管理 ──
 
+  /**
+   * 同步 SecurityGuard 未注册工具硬边界名单。
+   * Client Tool 等动态注册会经 setTools 进入 tool 面；若不同步，会被
+   * DefaultSecurityGuard 以 unauthorized_tool 拦截。
+   */
+  private syncSecurityRegisteredTools(): void {
+    const security = this._harness?.security;
+    if (!security?.setRegisteredTools) return;
+    security.setRegisteredTools(new Set(this.tools.map((t) => t.name)));
+  }
+
   registerTool(tool: AgentTool): void {
     this._context.tools = [...(this._context.tools ?? []), tool];
+    this.syncSecurityRegisteredTools();
   }
 
   setTools(tools: AgentTool[]): void {
     this._context.tools = [...tools];
+    this.syncSecurityRegisteredTools();
   }
 
   /**
@@ -173,6 +186,7 @@ export class Agent {
 
   setHarness(harness: ReliabilityHarness): void {
     this._harness = harness;
+    this.syncSecurityRegisteredTools();
   }
 
   /** 当前 ContextEngine 会话键（多 Session 时由 Runner 注入） */

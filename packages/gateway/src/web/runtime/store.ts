@@ -691,13 +691,17 @@ export class OctopiRuntimeStore extends EventTarget {
     const questions = await this.client.listQuestions(sessionId);
     const clientToolCalls = await this.client.listClientToolCalls(sessionId);
 
-    // ── 同会话重开：live 为权威，只刷新 tasks/approvals/questions，不动 conversation/adapter ──
+    // ── 同会话重开：live 为权威，刷新 tasks/approvals/questions/clientToolCalls ──
     if (isSameSession) {
-      this.chat = { ...this.chat, tasks, approvals, questions };
+      this.chat = { ...this.chat, tasks, approvals, questions, clientToolCalls };
       this.dispatch('session', new SessionEvent('session', { session: this.currentSession }));
       this.dispatch('tasks', new TasksEvent('tasks', { tasks }));
       this.dispatch('approval', new ApprovalEvent('approval', { approvals }));
       this.dispatch('questions', new QuestionsEvent('questions', { questions }));
+      this.dispatch(
+        'clientToolCalls',
+        new ClientToolCallsEvent('clientToolCalls', { calls: this.chat.clientToolCalls }),
+      );
       return view;
     }
 
@@ -1613,10 +1617,17 @@ export class OctopiRuntimeStore extends EventTarget {
       else next.push(raw);
     } else if (idx >= 0) {
       next[idx] = raw;
+    } else {
+      // 终态（send_file/html_ui 回放）也要进列表，避免重启后卡片丢失
+      next.push(raw);
     }
     this.chat.clientToolCalls = this.chat.sessionId
-      ? next.filter((c) => c.sessionId === this.chat.sessionId && c.state === 'pending')
-      : next.filter((c) => c.state === 'pending');
+      ? next.filter((c) => c.sessionId === this.chat.sessionId)
+      : next;
+    // 内存上限，防止长会话无界增长
+    if (this.chat.clientToolCalls.length > 200) {
+      this.chat.clientToolCalls = this.chat.clientToolCalls.slice(-200);
+    }
     this.dispatch(
       'clientToolCalls',
       new ClientToolCallsEvent('clientToolCalls', { calls: this.chat.clientToolCalls }),

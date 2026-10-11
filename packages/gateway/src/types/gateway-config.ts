@@ -31,6 +31,11 @@ export interface GatewayConfig {
   toolIsolation?: 'none' | 'session-subdir' | 'session-lock';
   /** Session ACL 角色目录（E6）；缺省内置五角色 */
   sessionAcl?: import('@octopi-agent/engine/harness/governance/session-acl/types.js').SessionAclConfig;
+  /** send_file 外发限额；缺省 maxBytes=2GB，maxReleasesPerSession 不限 */
+  fileSend?: {
+    maxBytes?: number;
+    maxReleasesPerSession?: number;
+  };
   trace?: {
     outputDir?: string;
     level?: 'ERROR' | 'WARN' | 'INFO' | 'DEBUG' | 'TRACE';

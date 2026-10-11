@@ -2430,6 +2430,21 @@
         }
       }
     },
+    "fileSend": {
+      "type": "object",
+      "properties": {
+        "maxBytes": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "maxReleasesPerSession": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      }
+    },
     "observability": {
       "type": "object",
       "properties": {

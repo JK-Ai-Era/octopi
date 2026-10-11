@@ -1,13 +1,12 @@
 /**
- * ClientToolCallCard — Client Tool pending 卡片（P0 样板）
+ * ClientToolCallCard — Client Tool pending 卡片
  *
  * 支持：
  * - html_ui（interaction=ui）
  *   - mode=display：纯展示，挂载即 resolve，预览保留
  *   - mode=form：内嵌表单；提交/「完成」回传 values
+ * - send_file（interaction=ui）：签发 fileId，挂载即 resolve，正文走内容 API
  * - photo_capture（interaction=device）：purpose + 同意 + 拍照/选图 → upload attachment → kind:asset
- *
- * 其他 tool 名：展示 args + 允许取消（error/cancelled）。
  */
 
 import { useEffect, useRef, useState, type Ref } from 'react';
@@ -16,6 +15,7 @@ import type {
   ClientToolCallOutcomeDto,
   OctopiClient,
 } from '@octopi-agent/gateway/web/sdk/client';
+import type { FileRef } from './FileDelivery';
 
 export interface RenderedWebView {
   id: string;
@@ -23,7 +23,6 @@ export interface RenderedWebView {
   html: string;
   height: number;
   mode: 'display' | 'form';
-  /** 用于插入对话时间线 */
   createdAt: number;
 }
 
@@ -33,11 +32,12 @@ export interface ClientToolCallCardProps {
   sessionId: string;
   busy: boolean;
   onResolved: () => void;
-  /** html_ui 渲染后保留预览 */
   onWebView?: (view: RenderedWebView) => void;
+  /** send_file：登记文件引用（时间线卡片 + 右栏） */
+  onFileRef?: (ref: FileRef, createdAt: number) => void;
 }
 
-/** 注入：表单提交 / 收集 values → postMessage 给父页（iframe 无 same-origin，不能直接读 DOM） */
+/** 注入：表单提交 / 收集 values → postMessage 给父页（iframe 非 same-origin） */
 const OCTOPI_FORM_HELPER = `
 <script>
 (function () {
@@ -48,7 +48,6 @@ const OCTOPI_FORM_HELPER = `
       var fd = new FormData(forms[i]);
       fd.forEach(function (v, k) { values[k] = v; });
     }
-    // 非 form 控件：带 name 的 input/select/textarea
     document.querySelectorAll('input[name],select[name],textarea[name]').forEach(function (el) {
       if (el.type === 'checkbox') {
         values[el.name] = !!el.checked;
@@ -185,6 +184,7 @@ export function ClientToolCallCard({
   busy,
   onResolved,
   onWebView,
+  onFileRef,
 }: ClientToolCallCardProps) {
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -206,6 +206,8 @@ export function ClientToolCallCard({
   };
 
   const htmlUi = call.name === 'html_ui' ? parseHtmlUiArgs(call.args as Record<string, unknown>) : null;
+  const fileRef: FileRef | null =
+    call.name === 'send_file' && call.fileRef?.fileId ? call.fileRef : null;
   const preview: RenderedWebView | null = htmlUi?.html
     ? {
         id: call.id,
@@ -224,6 +226,7 @@ export function ClientToolCallCard({
         <span style={{ marginLeft: 8, fontWeight: 400 }} className="small muted">
           {call.name}
           {htmlUi ? ` · ${htmlUi.mode === 'form' ? '交互表单' : '纯展示'}` : ''}
+          {fileRef ? ' · 文件' : ''}
         </span>
       </div>
       {call.args && typeof call.args === 'object' && 'purpose' in call.args ? (
@@ -259,6 +262,28 @@ export function ClientToolCallCard({
             );
           }}
         />
+      ) : fileRef ? (
+        <SendFileBody
+          locked={locked}
+          fileRef={fileRef}
+          onReady={() => {
+            if (locked) return;
+            if (onFileRef) onFileRef(fileRef, call.createdAt || Date.now());
+            void finish({
+              status: 'ok',
+              result: {
+                kind: 'value',
+                data: {
+                  shown: true,
+                  fileId: fileRef.fileId,
+                  name: fileRef.name,
+                  mime: fileRef.mime,
+                  sizeBytes: fileRef.sizeBytes,
+                },
+              },
+            });
+          }}
+        />
       ) : call.name === 'photo_capture' ? (
         <PhotoCaptureBody
           disabled={locked}
@@ -274,7 +299,7 @@ export function ClientToolCallCard({
         </div>
       )}
 
-      {!htmlUi ? (
+      {!htmlUi && !fileRef ? (
         <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
           <button
             className="btn-secondary"
@@ -286,6 +311,35 @@ export function ClientToolCallCard({
         </div>
       ) : null}
       {error ? <div className="small" style={{ color: 'var(--color-danger, #dc2626)', marginTop: 6 }}>{error}</div> : null}
+    </div>
+  );
+}
+
+function SendFileBody({
+  locked,
+  fileRef,
+  onReady,
+}: {
+  locked: boolean;
+  fileRef: FileRef;
+  onReady: () => void;
+}) {
+  const firedRef = useRef(false);
+  useEffect(() => {
+    if (firedRef.current || locked) return;
+    firedRef.current = true;
+    const t = setTimeout(onReady, 0);
+    return () => clearTimeout(t);
+  }, [locked, onReady]);
+
+  return (
+    <div style={{ display: 'grid', gap: 8 }}>
+      <div className="small" style={{ wordBreak: 'break-all' }}>
+        {fileRef.name}
+      </div>
+      <div className="small muted">
+        {fileRef.mime || 'application/octet-stream'} · {fileRef.sizeBytes.toLocaleString()} 字节 · 已发送
+      </div>
     </div>
   );
 }
@@ -325,7 +379,6 @@ function HtmlUiBody({
     return () => window.removeEventListener('message', onMessage);
   }, [mode, onFormValues]);
 
-  // display：挂载即返回，不阻塞 agent
   useEffect(() => {
     if (mode !== 'display' || displayFiredRef.current) return;
     displayFiredRef.current = true;
@@ -347,7 +400,6 @@ function HtmlUiBody({
     };
     window.addEventListener('message', onMessage);
     frameRef.current?.contentWindow?.postMessage({ type: 'octopi.form.collect', token }, '*');
-    // 兜底：1s 内无响应则按空表单关闭，避免悬挂
     setTimeout(() => {
       window.removeEventListener('message', onMessage);
       setCollecting(false);
@@ -426,13 +478,13 @@ function PhotoCaptureBody({
           dataBase64,
         },
       ]);
-      if (!att) throw new Error('attachment upload returned empty');
+      if (!att) throw new Error('upload returned no attachment');
       onAsset({
         kind: 'asset',
         assetId: att.id,
         mime: att.mime || file.type || 'image/jpeg',
         sizeBytes: att.sizeBytes ?? file.size,
-        name: att.name,
+        name: att.name || file.name,
       });
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
@@ -441,39 +493,37 @@ function PhotoCaptureBody({
     }
   };
 
+  if (!consented) {
+    return (
+      <div style={{ display: 'grid', gap: 8 }}>
+        <div className="small">需要使用摄像头/相册采集图片。</div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button className="btn-primary" disabled={disabled} onClick={() => setConsented(true)}>
+            允许
+          </button>
+          <button className="btn-secondary" disabled={disabled} onClick={onDeny}>
+            拒绝
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div style={{ display: 'grid', gap: 8 }}>
-      {!consented ? (
-        <>
-          <div className="small">
-            需要使用摄像头/相册获取一张照片。是否允许？（本次为敏感采集）
-          </div>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button className="btn-primary" disabled={disabled} onClick={() => setConsented(true)}>
-              允许并继续
-            </button>
-            <button className="btn-secondary" disabled={disabled} onClick={onDeny}>
-              拒绝
-            </button>
-          </div>
-        </>
-      ) : (
-        <label className="btn-secondary" style={{ display: 'inline-block', cursor: 'pointer' }}>
-          {uploading ? '上传中…' : '拍照 / 选择图片'}
-          <input
-            type="file"
-            accept="image/*"
-            capture="environment"
-            style={{ display: 'none' }}
-            disabled={disabled || uploading}
-            onChange={(e) => {
-              const file = e.target.files?.[0] ?? null;
-              e.target.value = '';
-              void onFile(file);
-            }}
-          />
-        </label>
-      )}
+      <label className="btn-secondary" style={{ display: 'inline-block', cursor: 'pointer' }}>
+        {uploading ? '上传中…' : '选择图片'}
+        <input
+          type="file"
+          accept="image/*"
+          disabled={disabled || uploading}
+          style={{ display: 'none' }}
+          onChange={(e) => void onFile(e.target.files?.[0] ?? null)}
+        />
+      </label>
+      <button className="btn-secondary" disabled={disabled} onClick={onDeny}>
+        取消
+      </button>
     </div>
   );
 }
@@ -483,10 +533,10 @@ function fileToBase64(file: File): Promise<string> {
     const reader = new FileReader();
     reader.onload = () => {
       const result = String(reader.result ?? '');
-      const comma = result.indexOf(',');
-      resolve(comma >= 0 ? result.slice(comma + 1) : result);
+      const idx = result.indexOf(',');
+      resolve(idx >= 0 ? result.slice(idx + 1) : result);
     };
-    reader.onerror = () => reject(reader.error ?? new Error('read file failed'));
+    reader.onerror = () => reject(reader.error ?? new Error('read failed'));
     reader.readAsDataURL(file);
   });
 }

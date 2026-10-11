@@ -129,6 +129,7 @@ export function toGatewayConfig(config: NormalizedHarnessConfig): GatewayConfig 
     session: config.session ? { dmScope: config.session.dmScope } : undefined,
     toolIsolation: config.toolIsolation,
     sessionAcl: config.sessionAcl,
+    fileSend: config.fileSend,
     budgetPolicy: config.budgetPolicy,
     contextAssembler: config.context?.contextAssembler ?? config.contextAssembler,
     context: config.context,

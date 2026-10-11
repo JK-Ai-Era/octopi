@@ -9,6 +9,7 @@ import type {
 } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/client-tools/index.js';
 import type { RegisteredTool as CoreRegisteredTool } from '@octopi-agent/core/types/tools.js';
 import { ClientToolHost } from '@octopi-agent/gateway/gateway/client-tools-host.js';
+import type { ClientToolHostDeps } from '@octopi-agent/gateway/gateway/client-tools-host.js';
 
 const noteForm: ClientToolDescriptor = {
   name: 'note_form',
@@ -464,5 +465,143 @@ describe('ClientToolHost', () => {
     const recent = host.listRecentTerminalCalls('s1');
     expect(recent).toHaveLength(1);
     expect(recent[0]!.id).toBe('ctc_persist1');
+  });
+});
+
+describe('ClientToolHost send_file release', () => {
+  const sendFile: ClientToolDescriptor = {
+    name: 'send_file',
+    description: 'Release a gateway file for the user.',
+    parameters: {
+      path: { type: 'string', description: 'path', required: true },
+      title: { type: 'string', description: 'title' },
+      purpose: { type: 'string', description: 'purpose' },
+    },
+    interaction: 'ui',
+    resultKinds: ['value'],
+    processing: 'server',
+  };
+
+  function makeSendFileHost(releaseFile: ClientToolHostDeps['releaseFile']) {
+    const registry = new ClientToolRegistry();
+    const events: Array<{ type: string; data: Record<string, unknown> }> = [];
+    const host = new ClientToolHost({
+      registry,
+      registerGlobalTool: () => {},
+      unregisterGlobalTool: () => {},
+      syncAgentTools: () => {},
+      emitSessionEvent: (_sid, event) => {
+        events.push({ type: event.type, data: event.data });
+      },
+      releaseFile,
+      makeCallId: () => 'ctc_send1',
+      defaultTimeoutMs: 5_000,
+    });
+    host.registerClientTools({
+      sessionId: 's1',
+      clientInstanceId: 'web-1',
+      descriptors: [sendFile],
+    });
+    return { host, events };
+  }
+
+  it('stamps fileRef on pending call and resolves with small value', async () => {
+    const { host, events } = makeSendFileHost(async () => ({
+      fileId: 'f_abc',
+      name: 'report.md',
+      mime: 'text/markdown',
+      sizeBytes: 20,
+    }));
+
+    const invoker = host.createInvoker();
+    const invokeP = invoker(
+      {
+        name: 'send_file',
+        args: { path: 'report.md', title: 'report' },
+        sessionId: 's1',
+        agentId: 'a1',
+        callId: 'ctc_send1',
+        ttlAt: Date.now() + 5_000,
+      },
+      { sessionId: 's1', agentId: 'a1', messages: [] },
+    );
+    await Promise.resolve();
+
+    const pending = events.find((e) => e.type === 'client_tool.pending');
+    expect(pending).toBeTruthy();
+    const call = pending!.data.call as {
+      fileRef?: { fileId: string; name: string; mime: string; sizeBytes: number };
+      args: Record<string, unknown>;
+      preview?: unknown;
+    };
+    expect(call.fileRef?.fileId).toBe('f_abc');
+    expect(call.fileRef?.mime).toBe('text/markdown');
+    expect(call.preview).toBeUndefined();
+    expect(call.args.path).toBe('report.md');
+
+    host.resolveCall('ctc_send1', {
+      status: 'ok',
+      result: {
+        kind: 'value',
+        data: {
+          shown: true,
+          fileId: 'f_abc',
+          name: 'report.md',
+          mime: 'text/markdown',
+          sizeBytes: 20,
+        },
+      },
+    });
+    const outcome = await invokeP;
+    expect(outcome.status).toBe('ok');
+  });
+
+  it('maps PATH_FORBIDDEN to permission_denied without hanging', async () => {
+    const { host, events } = makeSendFileHost(async () => {
+      throw new Error('PATH_FORBIDDEN: path not under allowed roots');
+    });
+
+    const invoker = host.createInvoker();
+    const outcome = await invoker(
+      {
+        name: 'send_file',
+        args: { path: '/etc/passwd' },
+        sessionId: 's1',
+        agentId: 'a1',
+        callId: 'ctc_send1',
+        ttlAt: Date.now() + 5_000,
+      },
+      { sessionId: 's1', agentId: 'a1', messages: [] },
+    );
+    expect(outcome.status).toBe('error');
+    if (outcome.status === 'error') {
+      expect(outcome.reason).toBe('permission_denied');
+    }
+    expect(events.some((e) => e.type === 'client_tool.pending')).toBe(false);
+  });
+
+  it('rejects missing path before invoke', async () => {
+    const { host } = makeSendFileHost(async () => ({
+      fileId: 'f_x',
+      name: 'x',
+      mime: 'text/plain',
+      sizeBytes: 1,
+    }));
+    const invoker = host.createInvoker();
+    const outcome = await invoker(
+      {
+        name: 'send_file',
+        args: {},
+        sessionId: 's1',
+        agentId: 'a1',
+        callId: 'ctc_send1',
+        ttlAt: Date.now() + 5_000,
+      },
+      { sessionId: 's1', agentId: 'a1', messages: [] },
+    );
+    expect(outcome.status).toBe('error');
+    if (outcome.status === 'error') {
+      expect(outcome.reason).toBe('invalid_arguments');
+    }
   });
 });

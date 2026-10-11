@@ -301,6 +301,13 @@ export interface ClientToolCallDto {
   completedByPrincipalId?: string;
   /** html_ui 正文 attachment 引用 */
   assetId?: string;
+  /** send_file 已 release 文件引用；正文 GET /sessions/:id/files/:fileId */
+  fileRef?: {
+    fileId: string;
+    name: string;
+    mime: string;
+    sizeBytes: number;
+  };
   createdAt: number;
   ttlAt: number;
 }
@@ -968,6 +975,31 @@ export class OctopiClient {
   async listClientToolCalls(sessionId: string): Promise<ClientToolCallDto[]> {
     const data = await this.getJson(`/client-tool-calls?sessionId=${encodeURIComponent(sessionId)}`);
     return (data?.data as ClientToolCallDto[]) ?? [];
+  }
+
+  /** 已 release 文件列表（元数据） */
+  async listSessionFiles(sessionId: string): Promise<
+    Array<{
+      fileId: string;
+      name: string;
+      mime: string;
+      sizeBytes: number;
+      sourcePathDisplay: string;
+      sourceKind: string;
+      toolName: string;
+      createdAt: number;
+    }>
+  > {
+    const data = await this.getJson(`/sessions/${encodeURIComponent(sessionId)}/files`);
+    return (data?.data as never) ?? [];
+  }
+
+  /** 拉取已 release 文件字节 */
+  async fetchSessionFile(sessionId: string, fileId: string): Promise<Response> {
+    const url = `${this.restBase}/sessions/${encodeURIComponent(sessionId)}/files/${encodeURIComponent(fileId)}`;
+    const headers: Record<string, string> = {};
+    if (this.options.apiKey) headers.Authorization = `Bearer ${this.options.apiKey}`;
+    return fetch(url, { headers });
   }
 
   // ── Client Streams（§15.1 Host 通道）──
