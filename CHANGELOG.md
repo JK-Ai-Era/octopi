@@ -1,3 +1,15 @@
+## v0.70.3
+
+### docs(readme): rewrite README as a constitution-driven engine narrative (EN + CN)
+
+**README.md / README_CN.md — 全文重写（双语同步）**
+- 张力式开场「A loop is not a product」：demo 到生产之间的五堵墙（失忆 / 垃圾记忆 / 上下文腐烂 / 权限只是承诺 / 无人值守运行）
+- 宪法章：本体表（Session/Discourse/Projection/Run/RunScope/Substrate/Principal/Intent）+ 不变量 I1/I2/I3/I5/I6 作为物理定律；新增「宪法驱动开发」小节——宪法即开发方法、项目可靠性最大保障，按语言链接对应宪法版本（EN → `docs/north-star.en.md`，CN → `docs/north-star.md`）
+- 五门科学主体：知识形成科学（分馏链、命题门控、shadow 记忆、持证边、可证伪 maxim）、上下文物理学（八层 × Scope、所有权带、manifest）、权威法学（权限格交集、问责 ≠ 能动、审计化 handoff）、权力治理（两层安全、五层守卫、Client Tools 同意模型、检索投毒拆引信）、运行工程学（预算 ⊥ 守卫、失败分类学、恢复阶梯、激活宿主）
+- Quick Start 重写：CLI 最快路径（`octopi init/doctor/chat/serve`）、文件即配置目录示例、MCP 挂载
+- 修正漂移：架构图 Layer 2 改为 10 域口径；移除 `arch/` 坏链（内部目录不对外）；测试规模改防漂写法（240+ test files）
+- 新增 Status & Boundaries 诚实边界章与 Concepts/Guides/Reference 三组文档地图
+
 ## v0.70.2
 
 ### docs: correct architecture map and document check-sync gate
