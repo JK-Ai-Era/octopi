@@ -1,3 +1,17 @@
+## v0.70.4
+
+### fix(session): compress path noise in history titles
+
+**问题**：首条消息带长 `file://` / percent-encoded 路径时，侧栏 snippet 被截成「帮我评估一下， file:///…」；同路径噪声还会吃光摘要 prompt 预算，导致小模型标题失败或弱标题，要跑几轮才升成 auto。
+
+**修复**（`harness/session/title.ts`）：
+- `compactTitleText`：URL / Windows 路径压缩为解码后的文件名，snippet 与摘要 prompt 共用
+- snippet 剥掉「帮我/请/麻烦…」开场前缀；纯路径消息不再进标题
+- 摘要 prompt 正文走压缩文本，并要求忽略路径/URL、写实际事项
+- 路径主导的 auto 标题视为弱标题，允许后续升级
+
+**测试**：`tests/session-title.test.ts`（36）。
+
 ## v0.70.3
 
 ### docs(readme): rewrite README as a constitution-driven engine narrative (EN + CN)

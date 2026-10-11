@@ -30,9 +30,55 @@ function messageText(msg: Message): string {
   return getTextContent(msg.content).replace(/\s+/g, ' ').trim();
 }
 
-/** 收集标题相关的用户文本（按时间序） */
+function safeDecodeURIComponent(s: string): string {
+  try {
+    return decodeURIComponent(s);
+  } catch {
+    // 非法 percent-encoding 原样返回，不因个别字符丢掉整段
+    return s;
+  }
+}
+
+/** 从 URL / 路径 token 取文件名（尽量解码 percent-encoding） */
+function filenameFromUrlLike(token: string): string {
+  const withoutScheme = token.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '');
+  const withoutDrive = withoutScheme.replace(/^[A-Za-z]:[\\/]?/, '');
+  const last = withoutDrive.split(/[\\/]/).filter(Boolean).pop() ?? '';
+  const base = last.split(/[?#]/)[0] ?? '';
+  const decoded = safeDecodeURIComponent(base).trim();
+  if (!decoded) return '路径';
+  return decoded.length > 40 ? `${decoded.slice(0, 39)}…` : decoded;
+}
+
+/**
+ * 压缩 URL / 本地路径，避免路径噪声占满 snippet 与摘要 prompt。
+ *
+ * 长 percent-encoded file:// 路径会把 24 字 snippet 截成「帮我评估一下， file:///…」，
+ * 也会把送入小模型的前 400 字预算吃光，导致摘要失败或弱标题。
+ *
+ * @param text - 原始消息文本
+ * @returns 路径替换为文件名后的文本
+ */
+export function compactTitleText(text: string): string {
+  return text
+    .replace(/\b(?:file|https?):\/\/[^\s<>"']+/gi, (m) => filenameFromUrlLike(m))
+    .replace(/\b[A-Za-z]:[\\/][^\s<>"']+/g, (m) => filenameFromUrlLike(m))
+    .replace(/(?:^|[\s（(「『])((?:\/[\w.@-]+){2,})/g, (m, path: string) => {
+      const lead = m.slice(0, m.length - path.length);
+      return `${lead}${filenameFromUrlLike(path)}`;
+    })
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** 标题用文本：纯文本 + 路径压缩 */
+function titleText(msg: Message): string {
+  return compactTitleText(messageText(msg));
+}
+
+/** 收集标题相关的用户文本（按时间序，已压缩路径） */
 export function collectTitleUserTexts(messages: Message[]): string[] {
-  return messages.filter(isTitleRelevantUserMessage).map(messageText).filter(Boolean);
+  return messages.filter(isTitleRelevantUserMessage).map(titleText).filter(Boolean);
 }
 
 /**
@@ -90,16 +136,36 @@ export function looksLikeCodeOrMarkup(text: string): boolean {
   return false;
 }
 
+/** 是否几乎只是路径 / URL / percent-encoding 堆叠 */
+function isPathDominated(text: string): boolean {
+  const t = text.trim();
+  if (!t) return true;
+  if (/^(?:file|https?):\/\//i.test(t)) return true;
+  if (/^[A-Za-z]:[\\/]/.test(t)) return true;
+  if (t.startsWith('/')) return true;
+  // percent-encoding 占比过高：解码后语义信息量不足
+  const stripped = t.replace(/%[0-9A-Fa-f]{2}/g, '');
+  if (t.length >= 12 && stripped.length < t.length * 0.4) return true;
+  // 纯 ASCII 文件名（无语义词），如 report.pdf / data.json
+  if (/^[\w.-]+\.[A-Za-z0-9]{1,8}$/.test(t)) return true;
+  return false;
+}
+
+/** 开场客套前缀——截断前去掉，让 snippet 落在事项上 */
+const LEAD_IN_RE = /^(?:请|麻烦|帮我|给我|帮忙|能不能|可不可以|想请你|请问|你好[，,]?\s*)+/;
+
 /**
  * 构建临时标题：优先首条「有语义」的用户消息，否则取最长一条。
  *
- * 避免「你好」占位后复杂提问也一直显示「你好」。
+ * 避免「你好」占位后复杂提问也一直显示「你好」；路径已压缩为文件名。
  *
  * @param messages - 会话消息
  * @returns 截断后的 snippet；无有效用户消息时返回 null
  */
 export function buildSnippetTitle(messages: Message[]): string | null {
-  const userTexts = collectTitleUserTexts(messages).filter((t) => !looksLikeCodeOrMarkup(t));
+  const userTexts = collectTitleUserTexts(messages)
+    .map((t) => t.replace(LEAD_IN_RE, '').trim() || t)
+    .filter((t) => !looksLikeCodeOrMarkup(t) && !isPathDominated(t));
   if (userTexts.length === 0) return null;
   const substantial = userTexts.find((t) => t.length >= TITLE_MIN_FIRST_USER_CHARS);
   const preferred = substantial
@@ -155,6 +221,7 @@ export function isWeakTitle(title: string | undefined): boolean {
   const t = title.trim();
   if (!t) return true;
   if (looksLikeCodeOrMarkup(t)) return true;
+  if (isPathDominated(t)) return true;
   return isNoiseForTitle(t);
 }
 
@@ -162,6 +229,7 @@ export function isWeakTitle(title: string | undefined): boolean {
  * 构建摘要标题的 LLM 消息。
  *
  * 标题语义 = 「这段对话面向的是什么事」（主题标签），不是对话内容复述。
+ * 正文先压缩 URL/路径，避免 percent-encoded 路径吃光上下文预算。
  *
  * @param messages - 会话消息（跳过寒暄与命令留痕）
  * @returns 送给 ModelProvider.chat 的 messages
@@ -172,7 +240,7 @@ export function buildTitlePrompt(messages: Message[]): Array<{ role: 'system' | 
     if (msg.role !== 'user' && msg.role !== 'assistant') continue;
     const kind = msg.metadata?.kind;
     if (kind === 'command' || kind === 'command_result') continue;
-    const text = messageText(msg);
+    const text = titleText(msg);
     if (!text) continue;
     entries.push({ role: msg.role === 'user' ? 'user' : 'assistant', text });
   }
@@ -192,6 +260,7 @@ export function buildTitlePrompt(messages: Message[]): Array<{ role: 'system' | 
       content:
         '你是会话标题生成器。判断这段对话「面向的是什么事」，输出一个主题式短标题。\n' +
         '写法：像文件名/标签，点明对象+事项，优先保留专名（项目名、系统名、模块名、文档名）。\n' +
+        '忽略路径、URL、命令行等载荷噪音，标题写实际要做的事。\n' +
         '使用与对话相同的语言。6–16 个字为宜，不超过 20 字。\n' +
         '不要引号、不要句号、不要解释，只输出标题本身。',
     },

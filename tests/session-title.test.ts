@@ -4,6 +4,7 @@ import type { SessionData } from '@octopi-agent/engine/harness/session/types.js'
 import {
   buildSnippetTitle,
   buildTitlePrompt,
+  compactTitleText,
   isTitleSignalReady,
   isWeakTitle,
   looksLikeCodeOrMarkup,
@@ -133,6 +134,44 @@ describe('snippet title', () => {
       ]),
     ).toBeNull();
   });
+
+  it('compresses file:// URL to filename in snippet (not raw path)', () => {
+    const text =
+      '帮我评估一下， file:///C:/Users/James/Documents/xwechat_files/wxid_n38/msg/file/2026-10/%E4%B8%BD%E5%8D%87%E5%A4%A7%E6%95%B0%E6%8D%AE%E7%B2%BE%E5%87%86%E8%AF%84%E4%BC%B0%E7%B3%BB%E7%BB%9F.pdf 里面描述的这几套系统的开发难度，规模，如果要自己开发的话，报价在多少合适';
+    const title = buildSnippetTitle([msg('user', text)]);
+    expect(title).not.toBeNull();
+    expect(title).not.toContain('file://');
+    expect(title).not.toContain('C:/Users');
+    expect(title).not.toContain('%E4%B8%BD');
+    // 文件名解码后应进入标题信号，而不是「帮我评估一下， file:///…」
+    expect(title).toMatch(/丽升|评估|报价|系统/);
+  });
+
+  it('drops pure path user text from snippet', () => {
+    expect(
+      buildSnippetTitle([
+        msg('user', 'file:///C:/Users/James/Documents/very/deep/path/report.pdf'),
+      ]),
+    ).toBeNull();
+  });
+});
+
+describe('compactTitleText', () => {
+  it('replaces URL with decoded filename and keeps surrounding request', () => {
+    const out = compactTitleText(
+      '帮我评估一下， file:///C:/tmp/%E4%BD%A0%E5%A5%BD.pdf 里的内容',
+    );
+    expect(out).not.toContain('file://');
+    expect(out).toContain('你好.pdf');
+    expect(out).toContain('里的内容');
+  });
+
+  it('replaces Windows absolute path with filename', () => {
+    const out = compactTitleText('看下 C:\\Users\\James\\Desktop\\方案说明.docx 这个文件');
+    expect(out).not.toContain('C:\\Users');
+    expect(out).toContain('方案说明.docx');
+    expect(out).toContain('这个文件');
+  });
 });
 
 describe('looksLikeCodeOrMarkup', () => {
@@ -147,6 +186,17 @@ describe('isWeakTitle markup', () => {
   it('treats markup auto title as weak so it can be upgraded', () => {
     expect(isWeakTitle('<knowledge-grounding source="x">foo')).toBe(true);
     expect(shouldUpdateTitle({ title: '<knowledge-grounding source="x">foo', titleSource: 'auto' })).toBe(true);
+  });
+
+  it('treats path-dominated auto title as weak', () => {
+    expect(isWeakTitle('file:///C:/Users/James/Documents/report.pdf')).toBe(true);
+    expect(isWeakTitle('C:\\Users\\James\\Desktop\\x.pdf')).toBe(true);
+    expect(
+      shouldUpdateTitle({
+        title: 'file:///C:/Users/James/Documents/report.pdf',
+        titleSource: 'auto',
+      }),
+    ).toBe(true);
   });
 });
 
@@ -219,6 +269,16 @@ describe('buildTitlePrompt', () => {
     ]);
     expect(prompt[1].content).not.toContain('你好');
     expect(prompt[1].content).toContain('云锡二阶段');
+  });
+
+  it('compresses paths in dialogue so model sees the request not the URL', () => {
+    const text =
+      '帮我评估一下， file:///C:/Users/James/Documents/x/%E4%B8%BD%E5%8D%87%E6%96%B9%E6%A1%88.pdf 里面描述的这几套系统的开发难度和报价';
+    const prompt = buildTitlePrompt([msg('user', text)]);
+    expect(prompt[1].content).not.toContain('file://');
+    expect(prompt[1].content).not.toContain('%E4%B8%BD');
+    expect(prompt[1].content).toContain('开发难度');
+    expect(prompt[0].content).toContain('忽略路径');
   });
 });
 
@@ -303,7 +363,8 @@ describe('maybeUpdateSessionTitle', () => {
     });
     expect(ok).toBe(true);
     expect(session.meta.titleSource).toBe('snippet');
-    expect(session.meta.title).toContain('帮我写一个会话标题');
+    // 开场「帮我」被剥掉，snippet 落在事项上
+    expect(session.meta.title).toContain('写一个会话标题');
   });
 
   it('upgrades greeting snippet to auto after later substantial turn', async () => {
