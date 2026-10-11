@@ -1,3 +1,13 @@
+## v0.70.8
+
+### chore(examples): remove outdated plugin samples
+
+**问题**：`examples/plugins` 下 `tool-logger` / `tool-preflight` 的 import 路径（`../../../src/plugins/entry.js`）在 monorepo 拆分后已失效，对外入口应为 `@octopi-agent/engine/plugin-sdk/plugin-entry`；运行时 `plugins.loadPaths` 默认 `~/.octopi/plugins`，测试零引用，只剩文档样板价值。
+
+**调整**：删除 `examples/`（两示例插件共 4 个文件）。`docs/plugin-system.md` 中的同名样板名保留，待后续设计更有实际意义的示例。
+
+**测试**：无测试或运行时路径依赖被删文件。
+
 ## v0.70.7
 
 ### docs(plugin): explain rationale behind core design principles
