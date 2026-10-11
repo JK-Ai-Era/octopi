@@ -1,4 +1,18 @@
-﻿## v0.70.1
+## v0.70.2
+
+### docs: correct architecture map and document check-sync gate
+
+**docs/architecture.md**
+- 执行环境（§3.5）按代码校正模块树：`isolation.ts` 为 toolIsolation cwd（非进程/文件系统沙箱）；search/glob/diff 归 `workspace.ts` FileWorkspace；沙箱级 `ResourceLimits` 留在本域，run 级硬停归 Budget/Run
+- 文档头标注校对时点（2026-10-11），计数权威仍为 `docs/domains.yaml`
+
+**AGENTS.md**
+- 新增 Documentation Sync：列出跑 `arch/check-sync.sh` 的触发时机（增删改模块 / 层依赖 / arch 路径 / 结构性提交前门禁）
+- 纪律：红灯是资产——locator 修地图或补代码，historical/proposal 走语境标注；禁止为过检削弱检查器
+
+**关联**（arch 子仓库，另提交）：check-sync 按 locator/historical/proposal 三角色区分断言，修正 as-built 僵尸路径与 sync-protocol 归类表。
+
+## v0.70.1
 
 ### fix(webui): sticky chat follow-scroll, hide empty assistant bubbles, safer session titles
 

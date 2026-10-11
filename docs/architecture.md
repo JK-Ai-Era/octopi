@@ -1,6 +1,6 @@
 # Octopi 架构设计文档
 
-> 版本：v0.36.0 | 日期：2026-09-21
+> 版本：v0.36.0（初版） | 日期：2026-09-21 | **校对：2026-10-11（v0.70.0 时点；模块树等已按代码校正，计数权威 `docs/domains.yaml`，专题以各专篇为准）**
 >
 > 本文档是 Octopi 的完整架构设计。
 > 长期不变量见 [架构宪法](./north-star.md)。
@@ -293,15 +293,14 @@ harness/governance/human-in-the-loop/
 
 ### 3.5 Execution Environment — 执行环境 [新增]
 
-**职责**：沙箱管理、工作区生命周期、高级文件操作、资源限制。
+**职责**：沙箱管理、工作区生命周期、高级文件操作（search/glob/diff 由 `workspace.ts` 的 FileWorkspace 承担）；沙箱级资源限制（timeout/输出上限等，见 `types.ts` `ResourceLimits`）仍在本域，run 级硬停（token/iteration/wall-clock）归 Budget/Run 面（2026-10-11 核对）。
 
 ```
 harness/extension/execution-environment/
 ├── sandbox.ts             # 沙箱管理（进程隔离、文件系统隔离）
 ├── workspace.ts           # 工作区生命周期
-├── file-ops.ts            # 高级文件操作（search、glob、diff）
-├── resource-limits.ts     # 资源限制
-├── types.ts
+├── isolation.ts           # 工具效应隔离（toolIsolation cwd：none / session-subdir / session-lock）
+├── types.ts               # 含 ResourceLimits（沙箱级）等契约
 └── index.ts
 ```
 

@@ -216,6 +216,19 @@ npm run lint
 
 ---
 
+## Documentation Sync (`arch/`)
+
+`arch/` is the map used before code changes. Run `bash arch/check-sync.sh` after any of the following (also see `arch/sync-protocol.md`):
+
+1. Adding / deleting / renaming a module, or moving files (including `packages/*` splits).
+2. Changing cross-layer imports or dependency direction.
+3. Editing path lists or structure trees inside `arch/*.md`.
+4. Before content commits or releases that affect structure — treat a red result as a gate.
+
+**Discipline:** red lights are the asset. For a **locator** miss, fix the arch path or add the code; mark **historical** / **proposal** references by context wording. **Never weaken the checker** (skip directories, allowlists, looser regex) just to turn a result green.
+
+---
+
 ## Commit and PR Conventions
 
 ### Commit
