@@ -5,6 +5,8 @@ import {
   buildSnippetTitle,
   buildTitlePrompt,
   isTitleSignalReady,
+  isWeakTitle,
+  looksLikeCodeOrMarkup,
   normalizeGeneratedTitle,
   shouldUpdateTitle,
   TITLE_MIN_FIRST_USER_CHARS,
@@ -113,6 +115,46 @@ describe('snippet title', () => {
     ]);
     expect(title).not.toBe('你好');
     expect(title).toContain('二阶段');
+  });
+
+  it('skips markup/tool payload user text when building snippet', () => {
+    const title = buildSnippetTitle([
+      msg('user', '<knowledge-grounding source="kb">请检索并引用相关知识后再回答</knowledge-grounding>'),
+      msg('user', '帮我核对二阶段场景上线收尾情况'),
+    ]);
+    expect(title).toContain('二阶段');
+    expect(title).not.toContain('knowledge-grounding');
+  });
+
+  it('returns null when only markup payload exists', () => {
+    expect(
+      buildSnippetTitle([
+        msg('user', '<knowledge-grounding source="kb">请检索并引用相关知识</knowledge-grounding>'),
+      ]),
+    ).toBeNull();
+  });
+});
+
+describe('looksLikeCodeOrMarkup', () => {
+  it('flags tag-like titles but keeps normal topics', () => {
+    expect(looksLikeCodeOrMarkup('<knowledge-grounding source="x">…')).toBe(true);
+    expect(looksLikeCodeOrMarkup('npm 依赖冲突怎么处理')).toBe(false);
+    expect(looksLikeCodeOrMarkup('修复登录 bug')).toBe(false);
+  });
+});
+
+describe('isWeakTitle markup', () => {
+  it('treats markup auto title as weak so it can be upgraded', () => {
+    expect(isWeakTitle('<knowledge-grounding source="x">foo')).toBe(true);
+    expect(shouldUpdateTitle({ title: '<knowledge-grounding source="x">foo', titleSource: 'auto' })).toBe(true);
+  });
+});
+
+describe('normalizeGeneratedTitle rejects markup', () => {
+  it('unwraps simple tags and rejects bare tag payloads', () => {
+    expect(normalizeGeneratedTitle('<title>依赖治理</title>')).toBe('依赖治理');
+    expect(normalizeGeneratedTitle('<knowledge-grounding source="kb">')).toBeNull();
+    expect(normalizeGeneratedTitle('<knowledge-grounding source="kb">检索</knowledge-grounding>')).toBe('检索');
   });
 });
 

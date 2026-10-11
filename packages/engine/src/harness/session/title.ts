@@ -71,6 +71,26 @@ export function shouldUpdateTitle(meta: Pick<SessionMeta, 'title' | 'titleSource
 }
 
 /**
+ * 是否像代码 / 标记 / 工具载荷——不适合当会话标题。
+ *
+ * 只拦「本身就是载荷」的开头，不误伤「npm 依赖冲突」这类正常主题。
+ *
+ * @param text - 候选标题或消息正文
+ * @returns true = 应跳过或视为弱标题
+ */
+export function looksLikeCodeOrMarkup(text: string): boolean {
+  const t = text.trim();
+  if (!t) return true;
+  // XML/HTML/自定义标签开头（含 </…>、<!…>、<?…>）
+  if (/^<[a-zA-Z!?/]/.test(t)) return true;
+  // 被转义的尖括号标签
+  if (/^(?:&lt;|&#60;)/i.test(t)) return true;
+  // 完整 JSON / 配置块
+  if (t.length > 20 && /^[{[][\s\S]*[}\]]$/.test(t)) return true;
+  return false;
+}
+
+/**
  * 构建临时标题：优先首条「有语义」的用户消息，否则取最长一条。
  *
  * 避免「你好」占位后复杂提问也一直显示「你好」。
@@ -79,7 +99,7 @@ export function shouldUpdateTitle(meta: Pick<SessionMeta, 'title' | 'titleSource
  * @returns 截断后的 snippet；无有效用户消息时返回 null
  */
 export function buildSnippetTitle(messages: Message[]): string | null {
-  const userTexts = collectTitleUserTexts(messages);
+  const userTexts = collectTitleUserTexts(messages).filter((t) => !looksLikeCodeOrMarkup(t));
   if (userTexts.length === 0) return null;
   const substantial = userTexts.find((t) => t.length >= TITLE_MIN_FIRST_USER_CHARS);
   const preferred = substantial
@@ -104,7 +124,10 @@ export function normalizeGeneratedTitle(raw: string): string | null {
     .replace(/(?:["'」』]|&quot;)+$/, '')
     .replace(/\s+/g, ' ')
     .trim();
+  // 去掉一层简单包裹标签，如 <title>xxx</title>
+  t = t.replace(/^<([a-zA-Z][\w:-]*)[^>]*>([\s\S]*)<\/\1>$/, '$2').trim();
   if (!t) return null;
+  if (looksLikeCodeOrMarkup(t)) return null;
   if (t.length > TITLE_MAX_CHARS) t = `${t.slice(0, TITLE_MAX_CHARS - 1)}…`;
   return t;
 }
@@ -131,6 +154,7 @@ export function isWeakTitle(title: string | undefined): boolean {
   if (!title) return true;
   const t = title.trim();
   if (!t) return true;
+  if (looksLikeCodeOrMarkup(t)) return true;
   return isNoiseForTitle(t);
 }
 

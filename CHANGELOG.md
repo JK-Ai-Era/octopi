@@ -1,3 +1,22 @@
+﻿## v0.70.1
+
+### fix(webui): sticky chat follow-scroll, hide empty assistant bubbles, safer session titles
+
+**对话列表滚动**
+- 流式输出时仅在用户贴近底部（≤48px）时自动跟随；上滑阅读中不再强制拽回底部
+- 滚回底部或发起新一轮（发送 / 作答问题 / 打开会话）恢复粘底跟随
+
+**会话回放渲染**
+- 空正文助手气泡（原显示「(空)」+ toolCalls id）不再进入时间线；工具调用卡片保留
+- 有正文或有 error 的助手消息照常展示
+
+**会话标题**
+- 无标题会话侧栏统一显示「新会话」，不再露出截断 session id
+- snippet / 模型输出过滤 `<knowledge-grounding…>` 等标记/载荷样文本；已是垃圾标题按弱标题，下一轮可被模型升级覆盖
+- 模型摘要标题主路径未改（信号足够仍走小模型）
+
+**测试**：`tests/session-title.test.ts`（30）。
+
 ## v0.70.0
 
 ### feat(client-tools): P1 多端路由 + Host 流通道 + WebUI 页面指标样板

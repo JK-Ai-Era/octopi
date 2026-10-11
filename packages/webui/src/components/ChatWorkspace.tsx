@@ -20,6 +20,7 @@ import { ClientToolCallCard, WebViewPreview, type RenderedWebView } from './Clie
 // 浏览器侧直连 token 模块（不经 harness barrel / context/index，避免拉入 Node 专用依赖）
 import { estimateTextTokens } from '@octopi-agent/engine/harness/context/token-estimator';
 import { JSON_CHARS_PER_TOKEN } from '@octopi-agent/engine/harness/context/token-constants';
+import { looksLikeCodeOrMarkup } from '@octopi-agent/engine/harness/session/title';
 import { resolveDefaultBase } from '../gateway-base';
 
 const DEFAULT_BASE = resolveDefaultBase();
@@ -136,11 +137,11 @@ function formatTimestamp(ts: number | undefined | null): string {
   return `${dateStr} ${time}`;
 }
 
-/** 列表/标题栏展示名：有 title 用 title，否则短 id */
+/** 列表/标题栏展示名：有 title 用 title，否则「新会话」；标记/载荷样标题不当标题 */
 function sessionDisplayTitle(s: { id: string; title?: string }): string {
   const t = s.title?.trim();
-  if (t) return t;
-  return s.id.length > 18 ? `…${s.id.slice(-12)}` : s.id;
+  if (!t || looksLikeCodeOrMarkup(t)) return '新会话';
+  return t;
 }
 
 /** 末尾是否已有带内容的已完成 assistant（用于抑制结束后残留的「思考中」占位） */
@@ -533,6 +534,8 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
   const clientRef = useRef<OctopiClient | null>(null);
   const storeRef = useRef<OctopiRuntimeStore | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  /** 跟随输出滚到底；用户上滑后暂停，回到底部或新一轮回复再恢复 */
+  const stickToBottomRef = useRef(true);
 
   // Initialize store once
   useEffect(() => {
@@ -633,10 +636,30 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
     if (agentDefault) setSelectedModelId(agentDefault);
   }, [agentId, agents, modelCatalog.agents, activeSessionId]);
 
-  // Auto-scroll
+  const scrollToBottom = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  };
+
+  /** 新一轮 agent 回复 / 打开会话时恢复粘底跟随 */
+  const enableStickToBottom = () => {
+    stickToBottomRef.current = true;
+    scrollToBottom();
+  };
+
+  const handleConversationScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    // 阈值内视为“在底部”：轻微布局抖动不会打断跟随
+    stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight <= 48;
+  };
+
+  // Auto-scroll：仅在用户仍贴近底部时跟随；上滑阅读中不打断
   useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
-  }, [conversationItems, stream]);
+    if (!stickToBottomRef.current) return;
+    scrollToBottom();
+  }, [conversationItems, stream, questions, clientToolCalls, renderedWebViews]);
 
   // 切换会话时清掉待发附件，避免 A 的文件挂到 B
   useEffect(() => {
@@ -767,6 +790,8 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
     if (!store) return;
     await store.openSession(sessionId);
     const state = store.getState();
+    // 打开会话始终从底部开始看
+    stickToBottomRef.current = true;
     setActiveSessionId(sessionId);
     // 从 store 恢复，不硬编码 idle —— 切回时可能仍有 running 工具或流式内容
     setRunStatus(state.chat.runStatus);
@@ -869,6 +894,7 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
         ? selectedModelId
         : undefined;
       const created = await store.createSession(agentId, modelToApply ? { model: modelToApply } : undefined);
+      stickToBottomRef.current = true;
       setActiveSessionId(created.id);
       setRunStatus('idle');
       setStream('');
@@ -890,6 +916,8 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
   const answerQuestion = async (questionId: string, answer: string) => {
     const store = storeRef.current;
     if (!store) return;
+    // 作答后是新一轮 agent 输出，恢复跟随
+    enableStickToBottom();
     setAnsweringQuestion(true);
     try {
       await store.answerQuestion(questionId, answer);
@@ -921,6 +949,8 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
     }
 
     setActionError(null);
+    // 用户主动发起新一轮：恢复粘底跟随
+    enableStickToBottom();
     setRunStatus('waiting');
     try {
       await store.sendMessage(text, {
@@ -1324,7 +1354,7 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
             )}
           </div>
 
-          <div ref={scrollRef} className="conversation-scroll">
+          <div ref={scrollRef} className="conversation-scroll" onScroll={handleConversationScroll}>
             {!activeSessionId && (
               <div className="panel empty-hint">
                 <div className="empty-hint-title">从左侧开始</div>
@@ -1346,6 +1376,12 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
 
               for (const item of conversationItems) {
                 if (item.role === 'tool' && richToolNames.has(item.toolName)) continue;
+                // 空助手气泡不渲染（避免 (空) + 仅 toolCalls id）；工具调用卡片单独保留
+                if (item.role === 'assistant') {
+                  const a = item as AssistantConversationItem;
+                  const hasText = Boolean(a.content && a.content.trim());
+                  if (!hasText && !a.error) continue;
+                }
                 nodes.push({
                   id: item.id,
                   at: item.createdAt,
