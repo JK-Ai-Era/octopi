@@ -53,12 +53,19 @@ Octopi 的 Plugin 系统提供声明式能力注册、全生命周期 hook 拦�
 | **Loading** | 动态 `import()` 入口文件，获取 plugin 定义 |
 | **Registration** | 调用 `register(api)`，收集 hooks/tools/providers |
 
-### 核心设计原则
+### 核心设计原则与依据
 
-1. **Manifest 先行** — 不执行代码就能读取元数据
-2. **Capability Ownership** — 每个能力有且仅有一个 owner
-3. **Hook 拦截语义** — 返回非 null 中断后续 handlers
-4. **Priority 排序** — 数字越大越先执行
+1. **Manifest 先行** — 不执行代码就能读取元数据。
+   插件是第三方代码，「加载即执行」等于把审计推迟到出事之后。manifest 让冲突检测、激活规划、能力清单都在执行前完成——这也是 Capability Ownership 四个用途的前提。
+
+2. **Capability Ownership** — 每个能力有且仅有一个 owner。
+   Plugin 是能力边界：tool / provider / channel 若允许多主，结果是静默覆盖与责任不清；排他性资源（如 memory provider）更无法保证同一时刻只有一个 active。contracts 声明让「谁拥有什么」不加载代码就可查，冲突在注册期报错而不是运行期错乱。
+
+3. **Hook 拦截语义** — 返回非 null 中断后续 handlers。
+   观察与拦截必须一眼可分：返回 `null` 的 handler 不改变行为，返回值即显式短路；`block` / `cancel` 等 Terminal 结果立即终止。单个 handler 的超时与异常被**捕获隔离**，一个插件故障不拖垮整条链。
+
+4. **Priority 排序** — 数字越大越先执行。
+   多插件叠加时执行顺序必须确定且可预测；安全、审计类 handler 以更高优先级先于业务 handler 执行，避免「先做了再被检查」。
 
 ---
 

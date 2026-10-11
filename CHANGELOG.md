@@ -1,3 +1,13 @@
+## v0.70.7
+
+### docs(plugin): explain rationale behind core design principles
+
+**问题**：`plugin-system.md` 核心设计原则只有结论、没有由来——插件作者不知为何 Manifest 先行、能力单属、拦截语义与 Priority 排序这样设计。
+
+**调整**：「核心设计原则」扩为「核心设计原则与依据」，四条原则各补设计由来（审计前置、能力单属防静默覆盖、观察/拦截可分且故障隔离、叠加顺序确定可预测）。
+
+**测试**：文档改动，无测试变化。
+
 ## v0.70.6
 
 ### docs: remediate external docs and gate harness domains catalog
