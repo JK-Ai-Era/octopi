@@ -1,3 +1,18 @@
+## v0.70.5
+
+### feat(summary): raise tool L2 defaults and map config sources to code
+
+**问题**：`file_read` 自动摘要 gate（2000 tokens / 8000 bytes）过低，中等体量也触发 L2；摘要输出预算（约 1400–2000 tokens）偏紧，抽取结果常被压扁。配置/序列化源（`.yml`/`.json` 等）曾归 `file_text`，会被自动摘要而丢掉可编辑原文。
+
+**调整**（`harness/context/capabilities/summary/` + `tools/builtin.ts`）：
+- **L2 gate 3×**：`minTokens` 2000→**6000**，`minBytes` 8000→**24000**
+- **摘要输出 3×**：`file_text_extract`/`document_extract` 1800→**5400**，`code_overview` 1600→**4800**，`log_digest` 1400→**4200**，`web_page_extract` 2000→**6000**
+- **`file_read` L1 3×**：`maxReturnChars` 12000→**36000**（否则 5400-token 摘要仍被硬顶截断）
+- **kind 路由**：配置/序列化源（`.yml` `.yaml` `.toml` `.xml` `.json` `.jsonl` 及 `.ini`/`.cfg`/`.json5`/`.proto`/…）与补全的语言/脚本/样式扩展一并归 **`code`**——`file_read` 默认不 L2，保护可编辑原文；`.md`/`.csv` 仍 `file_text`，`.log`→`log`，`.html`→`web_page`；HTTP `application/json` 仍 `api_json`
+- 同步 `octopi.example.json`；`tests/harness/capabilities/summary-p0.test.ts` 补 kind 断言
+
+**测试**：`summary-p0`（26）通过；`npm run lint` 通过。
+
 ## v0.70.4
 
 ### fix(session): compress path noise in history titles

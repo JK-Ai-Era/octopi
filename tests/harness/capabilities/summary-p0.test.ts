@@ -66,6 +66,15 @@ describe('kind routing', () => {
     expect(kindFromContentType('application/json')).toBe('api_json');
     expect(kindFromExtension('.ts')).toBe('code');
     expect(kindFromExtension('.md')).toBe('file_text');
+    // 配置/序列化源按 code 保护可编辑原文
+    expect(kindFromExtension('.yml')).toBe('code');
+    expect(kindFromExtension('.yaml')).toBe('code');
+    expect(kindFromExtension('.toml')).toBe('code');
+    expect(kindFromExtension('.xml')).toBe('code');
+    expect(kindFromExtension('.json')).toBe('code');
+    expect(kindFromExtension('.jsonl')).toBe('code');
+    expect(kindFromExtension('.log')).toBe('log');
+    expect(kindFromExtension('.html')).toBe('web_page');
   });
 
   it('channel=tool 与 kind 分维', () => {

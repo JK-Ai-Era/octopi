@@ -6,7 +6,7 @@
 
 import type { ContentKind, ToolSummaryBinding } from './types.js';
 
-/** 文件扩展名 → ContentKind（声明式路由，非正文抽取） */
+/** 文件扩展名 → ContentKind（声明式路由，非正文抽取；code 优先走 CODE_EXTS） */
 const EXT_KIND: Record<string, ContentKind> = {
   '.md': 'file_text',
   '.markdown': 'file_text',
@@ -14,32 +14,37 @@ const EXT_KIND: Record<string, ContentKind> = {
   '.log': 'log',
   '.html': 'web_page',
   '.htm': 'web_page',
-  '.json': 'api_json',
-  '.ts': 'code',
-  '.tsx': 'code',
-  '.js': 'code',
-  '.jsx': 'code',
-  '.mjs': 'code',
-  '.cjs': 'code',
-  '.py': 'code',
-  '.go': 'code',
-  '.rs': 'code',
-  '.java': 'code',
-  '.kt': 'code',
-  '.c': 'code',
-  '.h': 'code',
-  '.cpp': 'code',
-  '.css': 'code',
-  '.yml': 'file_text',
-  '.yaml': 'file_text',
-  '.toml': 'file_text',
-  '.xml': 'file_text',
   '.csv': 'file_text',
 };
 
+/**
+ * 可编辑源码/配置/结构化源：kind=code。
+ * 含语言、样式、脚本、配置序列化、IDL/构建——agent 通常需要可编辑原文，不走 L2 摘要。
+ */
 const CODE_EXTS = new Set([
-  '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.py', '.go', '.rs',
-  '.java', '.kt', '.c', '.h', '.cpp', '.css', '.sql', '.sh',
+  // languages
+  '.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs',
+  '.py', '.pyi', '.pyw',
+  '.go', '.rs', '.java', '.kt', '.kts',
+  '.c', '.h', '.cc', '.cpp', '.cxx', '.hpp', '.hh', '.hxx',
+  '.cs', '.fs', '.fsx', '.vb',
+  '.swift', '.scala', '.lua', '.php', '.rb', '.r', '.dart',
+  '.pl', '.pm', '.ex', '.exs', '.erl', '.hrl', '.hs',
+  '.clj', '.cljs', '.cljc', '.edn',
+  '.zig', '.nim', '.cr', '.jl', '.groovy', '.gradle',
+  '.vue', '.svelte', '.astro',
+  // styles
+  '.css', '.scss', '.sass', '.less', '.styl',
+  // shell / scripts
+  '.sh', '.bash', '.zsh', '.ksh', '.fish', '.ps1', '.bat', '.cmd', '.awk',
+  // config / structured source
+  '.json', '.jsonl', '.ndjson', '.json5', '.jsonc',
+  '.yml', '.yaml', '.toml', '.xml', '.plist',
+  '.ini', '.cfg', '.conf', '.config', '.properties',
+  '.tf', '.tfvars', '.hcl',
+  '.proto', '.thrift', '.graphql', '.gql', '.avsc', '.avdl',
+  // build / query
+  '.sql', '.cmake', '.mk', '.bazel', '.bzl', '.ninja',
 ]);
 
 /**
@@ -130,7 +135,7 @@ export function createDefaultToolBindings(): Record<string, ToolSummaryBinding> 
     file_read: {
       tool: 'file_read',
       mode: 'kind_sensitive',
-      maxReturnChars: 12000,
+      maxReturnChars: 36000,
       kindFromSource: true,
       // code 默认不 L2，保护「需要可编辑原文」的场景
       informationalKinds: ['document', 'log', 'file_text', 'web_page'],

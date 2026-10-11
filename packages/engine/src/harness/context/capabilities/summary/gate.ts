@@ -8,8 +8,8 @@ import { estimateTextTokens } from '../../token-estimate-fns.js';
 import type { ContentUnit, SummaryGateConfig } from './types.js';
 
 export const DEFAULT_GATE: Required<Pick<SummaryGateConfig, 'minTokens' | 'minBytes' | 'respectPolicyBudget'>> = {
-  minTokens: 2000,
-  minBytes: 8000,
+  minTokens: 6000,
+  minBytes: 24000,
   respectPolicyBudget: true,
 };
 

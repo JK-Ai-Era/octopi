@@ -250,7 +250,7 @@ export function createFileReadTool(options?: {
           '../../../context/capabilities/summary/index.js'
         );
         const support = options?.summary;
-        const binding = resolveSupportBinding('file_read', support, 12000);
+        const binding = resolveSupportBinding('file_read', support, 36000);
 
         const applied = await applyToolOutputGate({
           tool: 'file_read',
