@@ -10,6 +10,7 @@ import { MEMORY_TYPES } from '../../../memory/types.js';
 import { provisionalConfidence, type ConfidenceProfileConfig } from '../../../memory/confidence.js';
 import { evaluateGates, type GateConfig } from '../../../memory/gates.js';
 import { findDuplicate } from '../../../memory/similarity.js';
+import { formatMemoryClock, parseAsOf } from '../../../memory/time-format.js';
 
 const CHANNELS: MemoryChannel[] = [
   'user_directive',
@@ -84,6 +85,11 @@ export function createMemoryStoreTool(store: MemoryStore, options?: MemoryToolOp
           description:
             'Existing memory id from memory_search to supersede when this proposition replaces an obsolete/conflicting stored conclusion. Only use ids you actually saw in search results.',
         },
+        as_of: {
+          type: 'string',
+          description:
+            'When the proposition held true (YYYY-MM-DD or epoch ms). Strongly recommended for time-sensitive facts so later recall can judge freshness.',
+        },
         importance: { type: 'number', description: '0-1 optional', minimum: 0, maximum: 1 },
         tags: { type: 'array', description: 'optional tags', items: { type: 'string', description: 'tag' } },
       },
@@ -96,6 +102,17 @@ export function createMemoryStoreTool(store: MemoryStore, options?: MemoryToolOp
       const anchors = Array.isArray(args.anchors) ? (args.anchors as string[]) : [];
       const channel = (args.channel as MemoryChannel) ?? 'model_inference';
       const supersedesId = args.supersedes_id ? String(args.supersedes_id).trim() : undefined;
+      let asOf: number | undefined;
+      try {
+        asOf = parseAsOf(args.as_of);
+      } catch (err) {
+        return {
+          stored: false,
+          rejected: true,
+          reason: 'invalid_as_of',
+          message: err instanceof Error ? err.message : 'invalid as_of',
+        };
+      }
 
       const gate = evaluateGates(
         { type, proposition, evidence, futureUse, anchors, channel },
@@ -160,6 +177,7 @@ export function createMemoryStoreTool(store: MemoryStore, options?: MemoryToolOp
         futureUse,
         anchors,
         evidence,
+        asOf,
       });
 
       // 先写新条再软删旧条，避免写失败导致旧结论丢失
@@ -194,6 +212,8 @@ export function createMemoryStoreTool(store: MemoryStore, options?: MemoryToolOp
         importance: conf.importance,
         content: proposition,
         supersededId: supersedesId ?? null,
+        recordedAt: formatMemoryClock(Date.now()),
+        asOf: asOf != null ? formatMemoryClock(asOf) : null,
       };
     },
   };
@@ -204,7 +224,7 @@ export function createMemorySearchTool(store: MemoryStore): RegisteredTool {
     definition: {
       name: 'memory_search',
       description:
-        'Search long-term memory propositions by text. Results include memory `id` for follow-up (e.g. memory_store.supersedes_id when replacing an obsolete conclusion). Includes shadow entries (hypotheses only). Excludes soft-deleted entries. Use concrete entity names as query terms.',
+        'Search long-term memory propositions by text. Results include memory `id` for follow-up (e.g. memory_store.supersedes_id when replacing an obsolete conclusion) and `recordedAt`/`asOf` times — check them against Current datetime before trusting time-sensitive facts. Includes shadow entries (hypotheses only). Excludes soft-deleted entries. Use concrete entity names as query terms.',
       parameters: {
         query: { type: 'string', description: 'Search query (prefer entities)', required: true },
         type: { type: 'string', description: 'Filter by type', enum: [...MEMORY_TYPES] },
@@ -241,6 +261,8 @@ export function createMemorySearchTool(store: MemoryStore): RegisteredTool {
           confidence: e.confidence,
           futureUse: e.futureUse,
           tags: e.tags,
+          recordedAt: formatMemoryClock(e.createdAt),
+          asOf: e.asOf != null ? formatMemoryClock(e.asOf) : undefined,
           createdAt: e.createdAt,
           accessCount: e.accessCount,
         })),

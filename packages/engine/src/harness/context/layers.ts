@@ -19,6 +19,7 @@ import {
 } from './layer-types.js';
 import type { MemoryStore, ConceptGraphStore } from '../memory/types.js';
 import { formatWisdomBody } from '../memory/wisdom-formation.js';
+import { formatMemoryTimeSuffix } from '../memory/time-format.js';
 import type {
   KnowledgeCatalogItem,
   KnowledgeCatalogProvider,
@@ -301,9 +302,10 @@ export class MemoryLayer extends BaseLayer {
     if (injectable.length === 0) return null;
 
     const body = injectable
-      .map((m: { type: string; content: string; futureUse?: string }) =>
-        m.futureUse ? `- [${m.type}] ${m.content} (when: ${m.futureUse})` : `- [${m.type}] ${m.content}`,
-      )
+      .map((m: { type: string; content: string; futureUse?: string; createdAt?: number; asOf?: number }) => {
+        const when = m.futureUse ? ` (when: ${m.futureUse})` : '';
+        return `- [${m.type}] ${m.content}${when}${formatMemoryTimeSuffix(m)}`;
+      })
       .join('\n');
     const text = `# 相关记忆\n\n${body}`;
     const { text: truncated, dropped } = this.truncateToBudget(text, ctx.tokenBudget);

@@ -1,3 +1,17 @@
+## v0.72.2
+
+### feat(memory): surface recall timestamps and as-of freshness
+
+**问题**：memory 召回几乎不带时间——MemoryLayer 注入只有 `- [type] content`，`memory_search` 返回裸 epoch `createdAt`。时效敏感 fact（环境、版本、约定）被当成现状采信，导致误判。且只有入库时刻 `createdAt`，没有「命题当时成立」的 as-of 语义。
+
+**调整**：
+- **P0 召回带时间**：MemoryLayer 每条后缀 `· recorded YYYY-MM-DD HH:mm`（本地墙上时钟，与 Runtime `Current datetime` 对齐）；`memory_search` 返回可读 `recordedAt` / `asOf`，工具描述要求对照当前时间判时效
+- **P1 asOf**：`memory_store` 可选 `as_of`（`YYYY-MM-DD` / epoch）；非法值 `invalid_as_of` 且不写库。`MemoryEntry` / `MemoryWriteSlot` 增 `asOf`；`agent.db` 补 `as_of` 列（旧库 ALTER 迁移）
+- **产品宪法** Memory 段：时效敏感 fact 须对照 `Current datetime`，过时用 `supersedes_id` 纠正
+- `docs/memory.md`：区分 recorded（入库）与 as of（成立）
+
+**测试**：`tests/memory/memory-recall-time.test.ts`（格式化/解析、store+search 时间字段、非法 as_of 拒写、MemoryLayer 注入、Sqlite 往返）；memory 相关套件 181 过。
+
 ## v0.72.1
 
 ### docs(session): sync comments and contracts after lease/branch/edit-resend

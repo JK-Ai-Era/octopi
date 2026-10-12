@@ -63,6 +63,11 @@ export interface MemoryEntry {
   evidence?: string;
   /** 最近强化时间 */
   reinforcedAt?: number;
+  /**
+   * 命题成立时刻（as-of）— 与 createdAt（入库时刻）区分。
+   * 时效敏感 fact 用：「3 月时版本是 1.2」≠「3 月写入了当前版本是 1.2」。
+   */
+  asOf?: number;
   /** 软删除 */
   deleted?: boolean;
   deletedAt?: number;
@@ -658,6 +663,8 @@ export interface MemoryWriteSlot {
   channel: MemoryChannel;
   importance?: number;
   tags?: string[];
+  /** 命题成立时刻（epoch ms）；时效敏感 fact 建议写入 */
+  asOf?: number;
 }
 
 /** 门控/置信度可调用的 store 入参 */

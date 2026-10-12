@@ -226,6 +226,7 @@ export {
 export type { ChannelPriors, ConfidenceProfileConfig, MemoryProfileName, ProvisionalInput, ProvisionalResult } from './confidence.js';
 export { evaluateGates, mapLegacyType } from './gates.js';
 export type { GateCandidate, GateConfig, GateOutcome, GateRejectReason } from './gates.js';
+export { formatMemoryClock, formatMemoryTimeSuffix, parseAsOf } from './time-format.js';
 
 // ── Steward 共享策略（subsystem 从 @octopi-agent/engine 引用） ──
 export {

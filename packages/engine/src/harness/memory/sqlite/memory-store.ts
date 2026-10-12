@@ -145,8 +145,8 @@ export class SqliteMemoryStore implements MemoryStore {
       INSERT INTO memories (
         id, type, content, source, confidence, importance,
         access_count, last_accessed_at, created_at, decay_factor, tags, embedding,
-        status, channel, future_use, anchors, evidence, deleted
-      ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, 1.0, ?, ?, ?, ?, ?, ?, ?, 0)
+        status, channel, future_use, anchors, evidence, deleted, as_of
+      ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, 1.0, ?, ?, ?, ?, ?, ?, ?, 0, ?)
     `).run(
       id,
       mapLegacyType(entry.type),
@@ -163,6 +163,7 @@ export class SqliteMemoryStore implements MemoryStore {
       entry.futureUse ?? null,
       JSON.stringify(entry.anchors ?? []),
       entry.evidence ?? null,
+      entry.asOf ?? null,
     );
 
     if (embeddingStr && this.vecReady) {
@@ -290,7 +291,7 @@ export class SqliteMemoryStore implements MemoryStore {
     const cap = this.candidateCap;
     const minSim = query.minSimilarity ?? this.defaultMinSimilarity;
 
-    let sql = `SELECT id, type, content, source, confidence, importance, access_count, last_accessed_at, created_at, decay_factor, tags, embedding, status, channel, future_use, anchors, evidence, deleted, deleted_at, deleted_by, deleted_reason, deleted_meta, reinforced_at
+    let sql = `SELECT id, type, content, source, confidence, importance, access_count, last_accessed_at, created_at, decay_factor, tags, embedding, status, channel, future_use, anchors, evidence, deleted, deleted_at, deleted_by, deleted_reason, deleted_meta, reinforced_at, as_of
        FROM memories WHERE embedding IS NOT NULL${vis.sql}`;
     const params: unknown[] = [...vis.params];
 
@@ -570,6 +571,7 @@ export class SqliteMemoryStore implements MemoryStore {
     if (patch.anchors !== undefined) set('anchors', JSON.stringify(patch.anchors));
     if (patch.evidence !== undefined) set('evidence', patch.evidence);
     if (patch.reinforcedAt !== undefined) set('reinforced_at', patch.reinforcedAt);
+    if (patch.asOf !== undefined) set('as_of', patch.asOf);
     if (patch.deleted !== undefined) set('deleted', patch.deleted ? 1 : 0);
     if (patch.deletedAt !== undefined) set('deleted_at', patch.deletedAt);
     if (patch.deletedBy !== undefined) set('deleted_by', patch.deletedBy);
@@ -721,6 +723,7 @@ export class SqliteMemoryStore implements MemoryStore {
       anchors: row.anchors ? JSON.parse(row.anchors) : [],
       evidence: row.evidence ?? undefined,
       reinforcedAt: row.reinforced_at ?? undefined,
+      asOf: row.as_of ?? undefined,
       deleted: !!row.deleted,
       deletedAt: row.deleted_at ?? undefined,
       deletedBy: row.deleted_by ?? undefined,

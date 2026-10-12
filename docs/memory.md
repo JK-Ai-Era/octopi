@@ -29,6 +29,8 @@ Memory **不是**对话备份、不是任务列表、不是外部文档库。这
 
 不入库：开放回路（进行中任务）、外部静态资料、人格/平台规则、密钥、统计句（「有 3 条约束」）。
 
+**时效**：每条记忆有 **`recorded`（入库时刻）**；时效敏感的 fact 可另写 **`as of`（命题成立时刻）**——区分「何时记下」与「当时什么为真」。召回两条路径（MemoryLayer 注入 / `memory_search`）都会带上这些时间，供与 Runtime 的 `Current datetime` 对照。
+
 ---
 
 ## 3. 写入
@@ -68,9 +70,9 @@ Memory **不是**对话备份、不是任务列表、不是外部文档库。这
 
 | 路径 | 行为 |
 |------|------|
-| **MemoryLayer** | 按当前任务召回 active/strengthened，拼进 system prompt；不含 shadow / 已删 |
-| **`memory_search`** | LLM 主动检索；含 shadow（弱线索）；排除已删 |
-| **`memory_store`** | 写入；可选 `supersedes_id` 替换过时结论（软删旧条） |
+| **MemoryLayer** | 按当前任务召回 active/strengthened，拼进 system prompt（每条带 `recorded` / `as of`）；不含 shadow / 已删 |
+| **`memory_search`** | LLM 主动检索；含 shadow（弱线索）；排除已删；结果含 `recordedAt` / `asOf` |
+| **`memory_store`** | 写入；可选 `as_of`（命题成立时刻）与 `supersedes_id` 替换过时结论（软删旧条） |
 
 与 **`session_search`** 分工：Memory = 蒸馏命题；Session = 原文与过程。
 
