@@ -596,6 +596,7 @@ export class ConversationAdapter {
             createdAt: ts,
             sessionId,
             source: 'history',
+            sourceIndex: (msg as { index?: number }).index,
             content: extractText(msg.content),
           };
           items.push(item);

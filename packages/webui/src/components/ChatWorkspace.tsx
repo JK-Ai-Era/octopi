@@ -276,15 +276,80 @@ function ToolTimelineCard({ item }: { item: ToolConversationItem }) {
 
 // ── Conversation Item Card ──
 
-function ConversationItemCard({ item }: { item: ConversationItem }) {
+function ConversationItemCard({
+  item,
+  onBranch,
+  onEditResend,
+}: {
+  item: ConversationItem;
+  onBranch?: (sourceIndex: number) => void;
+  onEditResend?: (sourceIndex: number | undefined, content: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState('');
   switch (item.role) {
     case 'user': {
       const u = item as UserConversationItem;
+      // 会话第一条用户气泡没有「更早历史」可分叉
+      const canBranch = typeof u.sourceIndex === 'number' && u.sourceIndex > 0 && onBranch;
       return (
         <div className="msg-user">
-          <div className="msg-user-bubble">
-            <div className="msg-user-label">用户</div>
-            <div className="msg-user-content">{u.content}</div>
+          <div className={`msg-user-bubble${editing ? ' editing' : ''}`}>
+            <div className="msg-user-label">
+              用户
+              {canBranch && (
+                <button
+                  className="btn-secondary"
+                  style={{ marginLeft: 8, padding: '1px 8px', fontSize: 12 }}
+                  title="从此条之前分叉：新会话不含本条，可改写后继续"
+                  onClick={() => onBranch!(u.sourceIndex!)}
+                >
+                  分叉
+                </button>
+              )}
+              {u.editResendable && onEditResend && !editing && (
+                <button
+                  className="btn-secondary"
+                  style={{ marginLeft: 8, padding: '1px 8px', fontSize: 12 }}
+                  title="编辑后重发：丢掉本轮中止残片，同会话继续"
+                  onClick={() => {
+                    setDraft(u.content);
+                    setEditing(true);
+                  }}
+                >
+                  编辑重发
+                </button>
+              )}
+            </div>
+            {editing ? (
+              <div style={{ marginTop: 6 }}>
+                <textarea
+                  className="msg-user-edit"
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                  rows={5}
+                  autoFocus
+                />
+                <div className="small" style={{ marginTop: 8, display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                  <button
+                    className="btn-primary"
+                    onClick={() => {
+                      const text = draft.trim();
+                      if (!text) return;
+                      setEditing(false);
+                      onEditResend?.(u.sourceIndex, text);
+                    }}
+                  >
+                    重发
+                  </button>
+                  <button className="btn-secondary" onClick={() => setEditing(false)}>
+                    取消
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="msg-user-content">{u.content}</div>
+            )}
           </div>
         </div>
       );
@@ -997,6 +1062,50 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
     }
   };
 
+  const branchFromIndex = async (beforeIndex: number) => {
+    const store = storeRef.current;
+    const parent = activeSessionId;
+    if (!store || !parent) {
+      setActionError('请先打开要分叉的历史会话。');
+      return;
+    }
+    setActionError(null);
+    try {
+      const created = await store.branchSession(parent, beforeIndex);
+      stickToBottomRef.current = true;
+      setActiveSessionId(created.id);
+      setRunStatus('idle');
+      setStream('');
+      setTasks(store.getTasks());
+      setQuestions(store.getQuestions());
+      setClientToolCalls(store.getClientToolCalls());
+      void registerSampleClientTools(created.id);
+      await store.refreshSessionModel();
+      const sm = store.getSessionModel();
+      setSessionModel(sm);
+      if (sm) setSelectedModelId(sm.modelId ?? sm.defaultModelId);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const editAndResend = async (userMessageIndex: number | undefined, content: string) => {
+    const store = storeRef.current;
+    if (!store) return;
+    setActionError(null);
+    try {
+      await store.editAndResend(userMessageIndex, content);
+      stickToBottomRef.current = true;
+      setRunStatus(store.getState().chat.runStatus);
+      setStream('');
+      setTasks(store.getTasks());
+      setQuestions(store.getQuestions());
+      setClientToolCalls(store.getClientToolCalls());
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
   const answerQuestion = async (questionId: string, answer: string) => {
     const store = storeRef.current;
     if (!store) return;
@@ -1457,6 +1566,14 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
               };
               const nodes: TimelineNode[] = [];
               const richToolNames = new Set(['html_ui', 'photo_capture']);
+              /** 会话首条用户气泡：无更早用户历史，不提供分叉 */
+              let firstUserItemId: string | undefined;
+              for (const it of conversationItems) {
+                if (it.role === 'user') {
+                  firstUserItemId = it.id;
+                  break;
+                }
+              }
 
               for (const item of conversationItems) {
                 if (item.role === 'tool' && richToolNames.has(item.toolName)) continue;
@@ -1466,10 +1583,31 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
                   const hasText = Boolean(a.content && a.content.trim());
                   if (!hasText && !a.error) continue;
                 }
+                const isFirstUser = item.role === 'user' && item.id === firstUserItemId;
+                const userIdx =
+                  item.role === 'user' ? (item as UserConversationItem).sourceIndex : undefined;
                 nodes.push({
                   id: item.id,
                   at: item.createdAt,
-                  node: <ConversationItemCard key={item.id} item={item} />,
+                  node: (
+                    <ConversationItemCard
+                      key={item.id}
+                      item={item}
+                      onBranch={
+                        item.role === 'user' &&
+                        !isFirstUser &&
+                        typeof userIdx === 'number' &&
+                        userIdx > 0
+                          ? (idx) => void branchFromIndex(idx)
+                          : undefined
+                      }
+                      onEditResend={
+                        item.role === 'user' && (item as UserConversationItem).editResendable
+                          ? (idx, text) => void editAndResend(idx, text)
+                          : undefined
+                      }
+                    />
+                  ),
                 });
               }
 

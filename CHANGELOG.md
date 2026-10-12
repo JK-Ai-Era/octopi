@@ -1,3 +1,18 @@
+## v0.72.0
+
+### feat(session): context lease, copy-prefix branch, and abort edit-resend
+
+**问题**：从历史会话继续对话时像「新会话」——Runner 的 daily/idle reset 会清空 `session.messages` 与 compact；同时缺少从任意用户节点分叉、以及中止后原地纠错的能力。
+
+**调整**：
+- **上下文租约（opt-in）**：删除破坏性 `enableDailyReset` / 消息清空；`session.idleExpiryMs` 显式配置才生效，闲置超时仅写 `contextDetachIndex` 截断 LLM 默认窗口（Discourse 全量保留，可 `session_search` / `session_read`）。与 memory 冷沉淀解耦；超窗继续走 compact；新开会话用 `/new`
+- **Session 分叉（copy-prefix）**：`POST /sessions/:id/branch`（`beforeIndex`）复制 `[0, beforeIndex)` 到新会话并播种 compact；`getSessionMessages` 附带绝对 `index`；用户气泡「分叉」（首条用户气泡不提供）
+- **中止后编辑重发（同会话，不建分支）**：Runner 仅在本轮未完成被掐断时打 `abortedTurn`；`POST /sessions/:id/messages/truncate` + store `editAndResend` 原地截断残片后重发；`abortedTurn` 删键走 `updateMetadata`（save 浅合并删不掉）
+- **一致性**：`contextDetachIndex` 随 messages 重写/截断同步；truncate 持 `sessionLease` 与 runner 写回串行；`editResendable` 不进 conversation cache，正常收尾清除入口
+- **UI**：编辑态气泡加宽；侧栏会话卡片长标题截断不溢出
+
+**测试**：`context-lease`（默认全量 / 截窗保留 Discourse / 不触发 memory）、`session-branch`（前缀切割 / 越界 / index）、`session-edit-resend`（truncate + 删键 + detach 钳制 + 过期标记）通过。
+
 ## v0.71.1
 
 ### fix(session): preserve session.metadata across concurrent run saves

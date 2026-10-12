@@ -17,6 +17,8 @@ export interface GatewayConfig {
   };
   session?: {
     dmScope?: 'main' | 'per-peer' | 'per-channel-peer';
+    /** 上下文租约（毫秒）；显式配置才生效 */
+    idleExpiryMs?: number;
     reset?: {
       dailyHour?: number;
       idleMinutes?: number;

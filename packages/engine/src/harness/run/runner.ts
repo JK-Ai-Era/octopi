@@ -46,12 +46,13 @@ import {
 
 /** 运行器配置 */
 export interface SessionAwareRunnerConfig {
-  /** Session 过期时间（毫秒，默认 24 小时） */
-  sessionExpiryMs?: number;
-  /** 空闲过期时间（毫秒，默认 2 小时） */
+  /**
+   * 上下文租约（毫秒）。**显式配置才生效**；缺省 / 0 = 关闭。
+   *
+   * 闲置超过本值后，下一轮 LLM 默认消息窗口从租约点截断（Discourse 全量保留）。
+   * 需要旧内容时走 session_search / session_read。与 memory 冷沉淀解耦。
+   */
   idleExpiryMs?: number;
-  /** 是否启用 daily reset */
-  enableDailyReset?: boolean;
   /**
    * 并发 session 门控（可选）
    *
@@ -128,9 +129,7 @@ export interface SessionAwareRunnerConfig {
 }
 
 const DEFAULT_CONFIG: SessionAwareRunnerConfig = {
-  sessionExpiryMs: 24 * 60 * 60 * 1000, // 24 小时
-  idleExpiryMs: 2 * 60 * 60 * 1000,     // 2 小时
-  enableDailyReset: true,
+  // idleExpiryMs 缺省关闭：上下文租约 opt-in，续聊默认带全量窗口
 };
 
 export interface RunConfig {
@@ -620,6 +619,8 @@ export class SessionAwareRunner {
       if (!session) {
         session = this.createSession(sessionId, runConfig.agentId ?? 'default');
       }
+      /** 上下文租约点之前的 Discourse 前缀（写回时并回，不进默认 LLM 窗口） */
+      let contextLeasePrefix: Message[] = [];
       // 模型 2：历史数据缺省 primary 时回填（单 agent 行为不变）
       if (!session.primaryAgentId) {
         session.primaryAgentId = session.agentId || _agentId;
@@ -646,8 +647,20 @@ export class SessionAwareRunner {
         }
       }
 
-      // 4. 检查 session 是否需要重置
-      this.checkSessionReset(session);
+      // 4. 上下文租约（opt-in；只标截断点，不改 Discourse）
+      this.applyContextLease(session);
+
+      // 4a. 新一轮开始：作废上一轮中止标记（避免已完成轮仍显示编辑重发）
+      if (session.metadata?.abortedTurn) {
+        session.metadata = { ...session.metadata };
+        delete session.metadata.abortedTurn;
+        // 与 save 浅合并对齐：立即 updateMetadata 真删，防止本轮 save 又合并回来
+        if (this.store.updateMetadata) {
+          await this.store.updateMetadata(sessionId, (meta) => {
+            delete meta.abortedTurn;
+          });
+        }
+      }
 
       // 4b. 绑定会话任务服务（工具与注入共用同一内存对象）
       this.config.sessionTaskService?.attachSession(session);
@@ -978,11 +991,19 @@ export class SessionAwareRunner {
       {
         // turn 级：先剥历史 grounding，再视本轮 mode 决定是否插入
         // mode=none 时不保留上轮 grounding（避免陈旧内容长期回放）
-        const baseMsgs = session.messages.filter(
-          (m) =>
-            m.metadata?.source !== 'knowledgeGrounding' &&
-            m.metadata?.source !== 'sessionAttachment',
+        // 上下文租约：detach 点之前的历史不进默认 LLM 窗口（Discourse 仍在 session.messages）
+        const detachIdx = Math.min(
+          Math.max(session.contextDetachIndex ?? 0, 0),
+          session.messages.length,
         );
+        contextLeasePrefix = session.messages.slice(0, detachIdx);
+        const baseMsgs = session.messages
+          .slice(detachIdx)
+          .filter(
+            (m) =>
+              m.metadata?.source !== 'knowledgeGrounding' &&
+              m.metadata?.source !== 'sessionAttachment',
+          );
 
         // OP-15：会话附件资料块（与 Knowledge grounding 同槽位气质，source 不同）
         let attachmentText: string | null = null;
@@ -1091,7 +1112,7 @@ export class SessionAwareRunner {
           if (runScope.toolRuntime) {
             runScope.toolRuntime.messages = baseMsgs;
           }
-        } else if (baseMsgs.length !== session.messages.length) {
+        } else if (detachIdx > 0 || baseMsgs.length !== session.messages.length) {
           runContext.messages = baseMsgs;
           if (runScope.toolRuntime) {
             runScope.toolRuntime.messages = baseMsgs;
@@ -1159,6 +1180,8 @@ export class SessionAwareRunner {
       const adaptState: { assistantContent: string; lastUserContent: string; stopReason?: string } = { assistantContent: '', lastUserContent: '' };
       /** 本轮起始消息下标（afterTurn 只传增量） */
       let turnStartIndex = runContext.messages.length;
+      /** 用户中止（编辑重发标记用） */
+      let runAborted = false;
 
       // resolvedModel 已在 system assembler 之前解析；此处只组装 run options
       const agentRunOptions = {
@@ -1168,6 +1191,9 @@ export class SessionAwareRunner {
       };
 
       for await (const loopEvent of this.agent.run(signal, undefined, agentRunOptions)) {
+        if (loopEvent.type === 'agent_end' && loopEvent.reason === 'aborted') {
+          runAborted = true;
+        }
         // 适配事件格式（向后兼容）
         const adapted = adaptLoopEvent(loopEvent, meta, adaptState);
         if (adapted) {
@@ -1247,7 +1273,17 @@ export class SessionAwareRunner {
           m.agentId = _agentId;
         }
       }
-      session.messages = runContext.messages;
+      // 租约点之前的历史必须保留（I2 Discourse）；窗口内为 runContext.messages（含本轮新消息）
+      const keptPrefix = contextLeasePrefix.filter(
+        (m) =>
+          m.metadata?.source !== 'knowledgeGrounding' &&
+          m.metadata?.source !== 'sessionAttachment',
+      );
+      session.messages = [...keptPrefix, ...runContext.messages];
+      // contextDetachIndex 是 messages 下标：写回重排后必须对齐 keptPrefix 长度
+      if (typeof session.contextDetachIndex === 'number') {
+        session.contextDetachIndex = keptPrefix.length;
+      }
 
       // 11. 引擎异常退出时的 session 一致性修复（须在 Observer final 采样之前）
       if (!hasTurnEnd) {
@@ -1276,6 +1312,32 @@ export class SessionAwareRunner {
       // P5: 使用 stopReason 区分终态（context_stopped / behavior_stopped / policy_stopped / security_stopped / completed）
       observerEndReason = adaptState.stopReason ?? (hasTurnEnd ? 'completed' : 'no_turn_end');
 
+      // 中止标记：仅在本轮**未完成**被掐断时打标（hasTurnEnd = 正常收尾）。
+      // 迟到 abort / signal 竞态不得给已完成轮贴编辑重发。
+      let clearAbortedTurn = false;
+      const abortedMidTurn = runAborted || (Boolean(signal?.aborted) && !hasTurnEnd);
+      if (abortedMidTurn) {
+        let userIdx = -1;
+        for (let i = session.messages.length - 1; i >= 0; i--) {
+          const m = session.messages[i];
+          if (m.role === 'user' && m.metadata?.source !== 'sessionAttachment') {
+            userIdx = i;
+            break;
+          }
+        }
+        if (userIdx >= 0) {
+          session.metadata = {
+            ...session.metadata,
+            abortedTurn: { userMessageIndex: userIdx, at: Date.now() },
+          };
+        }
+      } else if (session.metadata?.abortedTurn) {
+        // save 浅合并删不掉 metadata 键，这里先从对象移除，persist 后再 updateMetadata 真删
+        const { abortedTurn: _drop, ...rest } = session.metadata;
+        session.metadata = rest;
+        clearAbortedTurn = true;
+      }
+
       // 12. 持久化
       sm.transition('idle');
       session.meta.status = sm.state;
@@ -1284,6 +1346,11 @@ export class SessionAwareRunner {
       const compactSnap = this.agent.getSessionCompactState(sessionId, _agentId);
       writeSessionCompact(session, _agentId, compactSnap);
       await this.store.save(sessionId, session);
+      if (clearAbortedTurn && this.store.updateMetadata) {
+        await this.store.updateMetadata(sessionId, (meta) => {
+          delete meta.abortedTurn;
+        });
+      }
 
       // 通知子系统：本轮处理完成（保持 active，但刷新 lastInteractionAt）
       this._backfillTrigger?.noteActivity(sessionId, _agentId, session.meta.lastInteractionAt);
@@ -1543,83 +1610,18 @@ export class SessionAwareRunner {
   /**
    * 检查 Session 是否需要重置
    */
-  private checkSessionReset(session: SessionData): void {
-    const now = Date.now();
-    let didReset = false;
-
-    // Daily reset
-    if (this.config.enableDailyReset) {
-      const sessionDay = new Date(session.meta.sessionStartedAt).toDateString();
-      const today = new Date(now).toDateString();
-      if (sessionDay !== today) {
-        session.messages = [];
-        session.turns = [];
-        session.meta.sessionStartedAt = now;
-        didReset = true;
-      }
-    }
-
-    // Idle reset：历史清空前把会话标为 recent+pending，供 memory extract 触发
-    if (this.config.idleExpiryMs) {
-      const idle = now - session.meta.lastInteractionAt;
-      if (idle > this.config.idleExpiryMs) {
-        this.markSessionRecent(session, now);
-        session.messages = [];
-        session.turns = [];
-        session.meta.sessionStartedAt = now;
-        didReset = true;
-      }
-    }
-
-    if (didReset) {
-      // 历史清空后，层指纹与压缩快照一并失效（E4：清全部 agent 桶）
-      this.systemPromptAssemblerClear?.(session.id);
-      writeSessionCompact(session, session.primaryAgentId ?? session.agentId, undefined);
-      const resetAgentIds = new Set<string>([
-        session.primaryAgentId ?? session.agentId,
-        session.agentId,
-        ...Object.keys(session.contextCompacts ?? {}),
-      ]);
-      for (const aid of resetAgentIds) {
-        this.agent.setSessionCompactState(session.id, aid, undefined);
-      }
-      delete session.contextCompact;
-      delete session.contextCompacts;
-    }
-  }
-
   /**
-   * 将 session 生命周期落到 recent + endedAt，并广播事件。
-   * 状态在 SessionData.lifecycle；由后续 save 持久化（meta 索引投影）。
-   * 不写 memoryExtraction（进度归 memory.steward）；事件仍带 extractionStatus 供 Sense 感知。
+   * 上下文租约（opt-in）：闲置超时后仅记录截断点，供 LLM 默认窗口裁剪。
+   *
+   * 不删 Discourse、不碰 compact/memory。冷沉淀归 memory.steward 的 idle 扫描。
+   * 在 push 本轮 input 之前调用，保证新消息落在租约点之后。
    */
-  private markSessionRecent(session: SessionData, now: number): void {
-    // 补录快照：idle reset 会清空 messages，必须在清空前固化 sessionText
-    const sessionText = (session.messages ?? [])
-      .filter((m) => {
-        const kind = m.metadata?.kind;
-        return kind !== 'command' && kind !== 'command_result';
-      })
-      .map((m) => `[${m.role}] ${typeof m.content === 'string' ? m.content : JSON.stringify(m.content ?? '')}`)
-      .join('\n')
-      .slice(0, 8000);
-
-    session.lifecycle = {
-      lifecycle: 'recent',
-      endedAt: now,
-    };
-
-    this.emitObserved({
-      type: 'session.lifecycle.updated',
-      timestamp: now,
-      agentId: session.agentId,
-      sessionId: session.id,
-      data: {
-        lifecycle: 'recent',
-        extractionStatus: 'pending',
-        lastInteractionAt: session.meta.lastInteractionAt,
-        sessionText,
-      },
-    });
+  private applyContextLease(session: SessionData): void {
+    const leaseMs = this.config.idleExpiryMs;
+    if (!leaseMs || leaseMs <= 0) return;
+    const idle = Date.now() - session.meta.lastInteractionAt;
+    if (idle > leaseMs) {
+      session.contextDetachIndex = session.messages.length;
+    }
   }
 }

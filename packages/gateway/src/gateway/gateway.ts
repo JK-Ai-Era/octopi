@@ -1539,15 +1539,76 @@ export class Gateway {
     return this.store.load(sessionId);
   }
 
-  async getSessionView(sessionId: string, _agentId?: string): Promise<{ meta: SessionMeta; messageCount: number; turnCount: number; taskCount?: number } | null> {
+  async getSessionView(sessionId: string, _agentId?: string): Promise<{
+    meta: SessionMeta;
+    messageCount: number;
+    turnCount: number;
+    taskCount?: number;
+    abortedTurn?: { userMessageIndex: number; at?: number };
+  } | null> {
     const session = await this.store.load(sessionId);
     if (!session) return null;
+    const raw = session.metadata?.abortedTurn as
+      | { userMessageIndex: number; at?: number }
+      | undefined;
+    let abortedTurn: { userMessageIndex: number; at?: number } | undefined;
+    if (raw && typeof raw.userMessageIndex === 'number') {
+      const idx = raw.userMessageIndex;
+      const msg = session.messages[idx];
+      // 过期标记：下标错位，或该用户气泡之后已有更新的用户消息（后续轮已盖过）
+      let hasNewerUser = false;
+      if (msg) {
+        for (let i = idx + 1; i < session.messages.length; i++) {
+          if (session.messages[i].role === 'user') {
+            hasNewerUser = true;
+            break;
+          }
+        }
+      }
+      if (msg?.role === 'user' && !hasNewerUser) {
+        abortedTurn = raw;
+      }
+    }
     return {
       meta: session.meta,
       messageCount: session.messages.length,
       turnCount: session.turns.length,
       taskCount: session.tasks?.length ?? 0,
+      abortedTurn,
     };
+  }
+
+  /**
+   * 编辑重发准备：从 `fromIndex` 起截断（含），丢掉被中止轮的用户输入与残片。
+   * 调用方随后用 sendChat 发送编辑后的用户消息（同会话，不建分支）。
+   *
+   * 与 Runner.handle 共 sessionLease，避免与 in-flight 写回竞态。
+   */
+  async truncateMessagesFrom(sessionId: string, fromIndex: number): Promise<{ messageCount: number }> {
+    const release = await this.sessionLease.acquire(sessionId);
+    try {
+      const session = await this.store.load(sessionId);
+      if (!session) {
+        throw new Error(`Session "${sessionId}" not found`);
+      }
+      if (!Number.isInteger(fromIndex) || fromIndex < 0 || fromIndex > session.messages.length) {
+        throw new Error(`fromIndex out of range: ${fromIndex}`);
+      }
+      session.messages = session.messages.slice(0, fromIndex);
+      // 租约下标必须随 messages 重写收缩，否则下一轮 LLM 窗口被裁空
+      if (typeof session.contextDetachIndex === 'number') {
+        session.contextDetachIndex = Math.min(session.contextDetachIndex, fromIndex);
+      }
+      session.meta.updatedAt = Date.now();
+      // abortedTurn 是 metadata 键：save 浅合并删不掉，必须 updateMetadata
+      await this.store.save(sessionId, session);
+      await this.patchSessionMetadata(sessionId, (meta) => {
+        delete meta.abortedTurn;
+      });
+      return { messageCount: session.messages.length };
+    } finally {
+      release();
+    }
   }
 
   /**
@@ -1561,7 +1622,10 @@ export class Gateway {
     return (session.tasks ?? []).map((t) => ({ ...t }));
   }
 
-  async getSessionMessages(sessionId: string, options: { limit: number; cursor?: string; agentId?: string }): Promise<{ messages: Message[]; nextCursor?: string }> {
+  async getSessionMessages(
+    sessionId: string,
+    options: { limit: number; cursor?: string; agentId?: string },
+  ): Promise<{ messages: Array<Message & { index: number }>; nextCursor?: string }> {
     const session = await this.store.load(sessionId);
     if (!session) {
       throw new Error(`Session "${sessionId}" not found`);
@@ -1572,7 +1636,74 @@ export class Gateway {
     const nextOffset = offset + slice.length;
     const nextCursor = nextOffset < session.messages.length ? Buffer.from(String(nextOffset)).toString('base64') : undefined;
 
-    return { messages: slice, nextCursor };
+    return {
+      messages: slice.map((m, i) => ({ ...m, index: offset + i })),
+      nextCursor,
+    };
+  }
+
+  /**
+   * 从历史会话切出前缀，新建分支会话（Discourse 复制，不改原会话）。
+   *
+   * `beforeIndex` 为 session.messages 下标，新会话包含 `[0, beforeIndex)`，
+   * **不含**下标 beforeIndex 那条（落在用户气泡上 = 不含该条）。
+   */
+  async branchSession(
+    sessionId: string,
+    options: { beforeIndex: number; agentId?: string },
+  ): Promise<SessionMeta> {
+    const src = await this.store.load(sessionId);
+    if (!src) {
+      throw new Error(`Session "${sessionId}" not found`);
+    }
+    const beforeIndex = options.beforeIndex;
+    if (!Number.isInteger(beforeIndex) || beforeIndex < 0 || beforeIndex > src.messages.length) {
+      throw new Error(`beforeIndex out of range: ${beforeIndex}`);
+    }
+
+    const agentId = options.agentId ?? src.primaryAgentId ?? src.agentId;
+    const newSessionId = `${agentId}-branch-${Date.now()}`;
+    const now = Date.now();
+    const prefix = src.messages.slice(0, beforeIndex).map((m) => ({ ...m }));
+
+    const { readSessionCompact, writeSessionCompact } = await import(
+      '@octopi-agent/engine/harness/session/compact.js'
+    );
+    const compactSnap = readSessionCompact(src, agentId);
+
+    const session: SessionData = {
+      id: newSessionId,
+      agentId: src.agentId,
+      primaryAgentId: src.primaryAgentId ?? src.agentId,
+      preferredAgentId: src.preferredAgentId,
+      meta: {
+        id: newSessionId,
+        agentId: src.agentId,
+        channelId: src.meta.channelId ?? 'web',
+        peerId: src.meta.peerId ?? 'web-ui',
+        status: 'idle',
+        createdAt: now,
+        sessionStartedAt: now,
+        lastInteractionAt: now,
+        updatedAt: now,
+      },
+      messages: prefix,
+      turns: [],
+      // 不复制 tasks / clientToolCalls / fileReleases / 附件体；只留溯源
+      metadata: {
+        parentSessionId: sessionId,
+        branchFromIndex: beforeIndex,
+        branchedAt: now,
+      },
+      tasks: [],
+    };
+    // compact 作前缀种子（E4：写到新 session 键下，不借用）
+    if (compactSnap) {
+      writeSessionCompact(session, agentId, compactSnap);
+    }
+
+    await this.store.save(newSessionId, session);
+    return session.meta;
   }
 
   async getMemoryStats(): Promise<Record<string, unknown> | null> {
@@ -3292,6 +3423,8 @@ export class Gateway {
       sessionLease: this.sessionLease,
       sessionAcl: this.sessionAcl,
       agentMaxSessionRights: agent.maxSessionRights,
+      // 上下文租约 opt-in：缺省关闭，续聊默认带全量窗口
+      idleExpiryMs: this.config.session?.idleExpiryMs,
       observerHub: this.observerHub.isEnabled() ? this.observerHub : undefined,
       sessionAttachmentsBaseDir: pathJoinForAttachments(getOctopiHome(), 'sessions'),
       sessionAttachmentInject: {

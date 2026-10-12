@@ -2310,6 +2310,11 @@
             "per-peer",
             "per-channel-peer"
           ]
+        },
+        "idleExpiryMs": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
         }
       },
       "additionalProperties": {}

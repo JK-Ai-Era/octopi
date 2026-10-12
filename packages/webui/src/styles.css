@@ -123,12 +123,13 @@ pre { font-family: var(--font-mono); font-size: 13px; }
 .app-main-focus .center-panel { opacity: 0.62; }
 
 /* ── Left Sidebar ── */
-.left-sidebar { padding: 12px; overflow-y: auto; border-right: 1px solid var(--color-border); display: flex; flex-direction: column; gap: 12px; }
-.sidebar-section { padding: 12px; }
+.left-sidebar { padding: 12px; overflow-y: auto; overflow-x: hidden; border-right: 1px solid var(--color-border); display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.sidebar-section { padding: 12px; min-width: 0; overflow: hidden; }
 .sidebar-title { font-weight: 600; margin-bottom: 8px; }
-.agent-btn { text-align: left; width: 100%; }
+.agent-btn { text-align: left; width: 100%; min-width: 0; max-width: 100%; overflow: hidden; }
 .agent-btn-selected { background: var(--color-accent); border-color: var(--color-accent-border); }
-.session-btn { text-align: left; width: 100%; }
+.session-btn { text-align: left; width: 100%; min-width: 0; max-width: 100%; overflow: hidden; }
+.session-btn > div { min-width: 0; max-width: 100%; }
 .session-btn-active { background: #f8fafc; }
 
 /* ── Center ── */
@@ -187,6 +188,25 @@ pre { font-family: var(--font-mono); font-size: 13px; }
 /* ── Conversation Items ── */
 .msg-user { margin-bottom: 12px; display: flex; justify-content: flex-end; }
 .msg-user-bubble { max-width: 75%; padding: 8px 12px; background: var(--color-accent); border-radius: 12px; border-bottom-right-radius: 4px; word-break: break-word; white-space: pre-wrap; }
+.msg-user-bubble.editing {
+  width: 92%;
+  max-width: 92%;
+  min-width: min(520px, 92%);
+  box-sizing: border-box;
+}
+.msg-user-edit {
+  display: block;
+  width: 100%;
+  min-height: 140px;
+  resize: vertical;
+  font: inherit;
+  line-height: 1.5;
+  padding: 8px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-bg);
+  box-sizing: border-box;
+}
 .msg-user-label { font-size: var(--text-sm); color: var(--color-muted); margin-bottom: 4px; text-align: right; }
 .msg-user-content { margin: 0; font: inherit; white-space: pre-wrap; word-break: break-word; }
 

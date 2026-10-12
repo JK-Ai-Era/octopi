@@ -110,6 +110,8 @@ export interface SessionView {
   messageCount: number;
   turnCount: number;
   taskCount?: number;
+  /** 被中止的轮（编辑重发入口）；userMessageIndex 为 session.messages 下标 */
+  abortedTurn?: { userMessageIndex: number; at?: number };
 }
 
 /** 会话任务（UI 只读）*/
@@ -179,6 +181,8 @@ export interface MessageRecord {
   role: string;
   content: unknown;
   timestamp: number;
+  /** 在 session.messages 中的绝对下标（分叉定位用） */
+  index?: number;
   source?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
 }
@@ -776,6 +780,35 @@ export class OctopiClient {
   }): Promise<SessionSummary> {
     const data = await this.postJson('/sessions', options);
     return data?.data as SessionSummary;
+  }
+
+  /**
+   * 从历史切前缀新建分支会话。
+   * `beforeIndex` 为 session.messages 绝对下标；新会话含 `[0, beforeIndex)`，不含该条。
+   */
+  async branchSession(
+    sessionId: string,
+    options: { beforeIndex: number; agentId?: string },
+  ): Promise<SessionSummary> {
+    const data = await this.postJson(
+      `/sessions/${encodeURIComponent(sessionId)}/branch`,
+      options,
+    );
+    return data?.data as SessionSummary;
+  }
+
+  /**
+   * 从 fromIndex 起截断（含），用于「编辑重发」：丢掉被中止轮的用户输入与残片。
+   */
+  async truncateMessagesFrom(
+    sessionId: string,
+    fromIndex: number,
+  ): Promise<{ messageCount: number }> {
+    const data = await this.postJson(
+      `/sessions/${encodeURIComponent(sessionId)}/messages/truncate`,
+      { fromIndex },
+    );
+    return data?.data as { messageCount: number };
   }
 
   async getSession(sessionId: string): Promise<SessionView> {

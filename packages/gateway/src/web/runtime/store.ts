@@ -34,7 +34,7 @@ import type {
 
 import { ConversationAdapter } from '../conversation/adapter.js';
 import type { AdapterSnapshot } from '../conversation/adapter.js';
-import type { ConversationItem, ToolConversationItem, ViewMode } from '../conversation/types.js';
+import type { ConversationItem, ToolConversationItem, UserConversationItem, ViewMode } from '../conversation/types.js';
 import {
   buildContextLayersSnapshot,
   type ContextLayersSnapshot,
@@ -645,8 +645,14 @@ export class OctopiRuntimeStore extends EventTarget {
       const oldest = this.conversationCache.keys().next().value;
       if (oldest) this.conversationCache.delete(oldest);
     }
+    // editResendable 不进 cache：恢复时只认服务端 abortedTurn
+    const items = this.chat.conversation.map((it) =>
+      it.role === 'user' && (it as UserConversationItem).editResendable
+        ? { ...it, editResendable: false }
+        : it,
+    );
     this.conversationCache.set(sid, {
-      items: this.chat.conversation,
+      items,
       viewMode: this.chat.viewMode,
       adapterState: this.conversationAdapter.getState(),
       inspector: { ...this.chat.inspector },
@@ -720,6 +726,24 @@ export class OctopiRuntimeStore extends EventTarget {
       conversationItems = [];
     }
 
+    // 中止轮：用户气泡可编辑重发（唯一权威 = 服务端 abortedTurn；禁止 cache 残留）
+    const abortedTurn = view.abortedTurn;
+    const stripEditResendable = (items: ConversationItem[]): ConversationItem[] =>
+      items.map((it) =>
+        it.role === 'user' && (it as UserConversationItem).editResendable
+          ? { ...it, editResendable: false }
+          : it,
+      );
+    conversationItems = stripEditResendable(conversationItems);
+    if (abortedTurn && typeof abortedTurn.userMessageIndex === 'number') {
+      const idx = abortedTurn.userMessageIndex;
+      conversationItems = conversationItems.map((it) =>
+        it.role === 'user' && it.sourceIndex === idx
+          ? { ...it, editResendable: true }
+          : it,
+      );
+    }
+
     // await 期间缓存可能已被后台事件更新，重新读取
     const cached = this.conversationCache.get(sessionId);
     let usedCacheItems = false;
@@ -733,7 +757,16 @@ export class OctopiRuntimeStore extends EventTarget {
         ) || Boolean(cached.adapterState.streamingContent) || Boolean(cached.adapterState.currentAssistantId);
 
       if (cacheHasRuntimeActivity || cached.items.length > conversationItems.length) {
-        conversationItems = cached.items;
+        // cache 只作运行时补充；editResendable 一律以服务端 abortedTurn 为准
+        conversationItems = stripEditResendable(cached.items);
+        if (abortedTurn && typeof abortedTurn.userMessageIndex === 'number') {
+          const idx = abortedTurn.userMessageIndex;
+          conversationItems = conversationItems.map((it) =>
+            it.role === 'user' && it.sourceIndex === idx
+              ? { ...it, editResendable: true }
+              : it,
+          );
+        }
         viewMode = cached.viewMode === 'history' ? 'hybrid' : cached.viewMode;
         usedCacheItems = true;
       } else if (cached.viewMode !== 'history') {
@@ -886,6 +919,72 @@ export class OctopiRuntimeStore extends EventTarget {
     return view;
   }
 
+  /**
+   * 从历史会话切前缀建分支，并打开新会话。
+   * `beforeIndex` = session.messages 绝对下标；新会话含 `[0, beforeIndex)`。
+   */
+  async branchSession(parentSessionId: string, beforeIndex: number): Promise<SessionSummary> {
+    this.cacheCurrentSession();
+    const session = await this.client.branchSession(parentSessionId, { beforeIndex });
+    await this.openSession(session.id);
+    await this.refreshSessions();
+    return session;
+  }
+
+  /**
+   * 编辑重发（同会话，不建分支）：
+   * 截断 userMessageIndex 起（含被中止的用户输入与残片），再发送编辑后的文本。
+   * `userMessageIndex` 可省略（自动取 abortedTurn）。
+   */
+  async editAndResend(userMessageIndex: number | undefined, content: string): Promise<void> {
+    if (!this.chat.sessionId) {
+      throw new Error('No active session');
+    }
+    const sessionId = this.chat.sessionId;
+    let idx = userMessageIndex;
+    if (idx == null) {
+      const view = await this.client.getSession(sessionId);
+      idx = view.abortedTurn?.userMessageIndex;
+    }
+    if (idx == null) {
+      throw new Error('没有可编辑重发的中止轮');
+    }
+    await this.client.truncateMessagesFrom(sessionId, idx);
+
+    // 同会话 openSession 不会重建 conversation（live 权威）；这里必须从 store 重载
+    // 并丢掉缓存里的中止残片，否则旧 tool/user 条目会被 cache 盖回来
+    this.conversationCache.delete(sessionId);
+    this.conversationAdapter.reset();
+    let items: ConversationItem[] = [];
+    try {
+      // 逐页拉全量（单页上限 200），避免长会话只重建前 100 条
+      const all: Array<{ role: string; content: unknown; timestamp: number; index?: number }> = [];
+      let cursor: string | undefined;
+      for (let page = 0; page < 20; page++) {
+        const chunk = await this.client.getSessionMessages(sessionId, { limit: 200, cursor });
+        all.push(...(chunk.messages ?? []));
+        if (!chunk.nextCursor) break;
+        cursor = chunk.nextCursor;
+      }
+      items = ConversationAdapter.buildHistoryItems(all as never, sessionId);
+    } catch {
+      items = [];
+    }
+    this.chat.conversation = items;
+    this.chat.tools = this.deriveTools(items);
+    this.chat.streamingContent = '';
+    this.chat.runStatus = 'idle';
+    this.chat.tasks = [];
+    this.engineActive = false;
+    this.dispatch('chat', new ChatEvent('chat', { conversation: items }));
+    this.dispatch('conversation', new ConversationEvent('conversation', { items }));
+    this.dispatch('tool', new ToolEvent('tool', { tools: this.chat.tools }));
+    this.dispatch('stream', new StreamEvent('stream', { streaming: false, content: '' }));
+    this.dispatch('runStatus', new RunStatusEvent('runStatus', { status: 'idle' }));
+
+    await this.sendMessage(content);
+  }
+
   async createSession(agentId: string, options?: { sessionId?: string; metadata?: Record<string, unknown>; model?: string }): Promise<SessionSummary> {
     // 离开当前会话前先缓存，避免丢掉进行中的工具/流式状态
     this.cacheCurrentSession();
@@ -955,6 +1054,9 @@ export class OctopiRuntimeStore extends EventTarget {
       throw new Error('No active session');
     }
 
+    // 新一轮开始：清掉历史气泡上的编辑重发入口
+    this.clearEditResendableFlags();
+
     this.chat.conversation = this.conversationAdapter.injectUserMessage(content, this.chat.sessionId, this.chat.conversation);
 
     this.setViewMode(this.chat.viewMode === 'history' ? 'hybrid' : 'runtime');
@@ -988,6 +1090,11 @@ export class OctopiRuntimeStore extends EventTarget {
 
   abort(): void {
     if (!this.chat.sessionId) return;
+    const wasActive =
+      this.chat.runStatus === 'sending' ||
+      this.chat.runStatus === 'waiting' ||
+      this.chat.runStatus === 'streaming' ||
+      this.chat.runStatus === 'tools';
     try {
       this.client.sendAbort(this.chat.sessionId);
     } catch {
@@ -996,6 +1103,40 @@ export class OctopiRuntimeStore extends EventTarget {
     this.clearSendWatchdog();
     this.engineActive = false;
     this.setRunStatus('aborted');
+    // 仅在真有进行中 run 被掐断时开放编辑重发；已完成轮不标记
+    if (wasActive) {
+      this.markLastUserEditResendable();
+    }
+  }
+
+  /** 中止后：最近一条用户气泡开放「编辑重发」 */
+  private markLastUserEditResendable(): void {
+    const items = this.chat.conversation;
+    for (let i = items.length - 1; i >= 0; i--) {
+      const it = items[i];
+      if (it.role === 'user') {
+        this.chat.conversation = items.map((x, j) =>
+          j === i ? { ...x, editResendable: true } : x,
+        ) as typeof items;
+        this.dispatch('conversation', new ConversationEvent('conversation', { items: this.chat.conversation }));
+        this.dispatch('chat', new ChatEvent('chat', { conversation: this.chat.conversation }));
+        return;
+      }
+    }
+  }
+
+  /** 正常收尾 / 新一轮：关掉所有编辑重发入口 */
+  private clearEditResendableFlags(): void {
+    if (!this.chat.conversation.some((it) => it.role === 'user' && (it as UserConversationItem).editResendable)) {
+      return;
+    }
+    this.chat.conversation = this.chat.conversation.map((it) =>
+      it.role === 'user' && (it as UserConversationItem).editResendable
+        ? { ...it, editResendable: false }
+        : it,
+    ) as typeof this.chat.conversation;
+    this.dispatch('conversation', new ConversationEvent('conversation', { items: this.chat.conversation }));
+    this.dispatch('chat', new ChatEvent('chat', { conversation: this.chat.conversation }));
   }
 
   /** 发送后若长时间无 Gateway 确认/事件，判定连接半开或消息丢失 */
@@ -1069,10 +1210,15 @@ export class OctopiRuntimeStore extends EventTarget {
           this.setRunStatus('idle');
         }
         break;
-      case 'aborted':
+      case 'aborted': {
+        const wasActive = this.engineActive || this.chat.runStatus === 'waiting' || this.chat.runStatus === 'streaming' || this.chat.runStatus === 'tools' || this.chat.runStatus === 'sending';
         this.engineActive = false;
         this.setRunStatus('aborted');
+        if (wasActive) {
+          this.markLastUserEditResendable();
+        }
         break;
+      }
       case 'error':
         this.engineActive = false;
         this.setRunStatus('error');
@@ -1168,7 +1314,7 @@ export class OctopiRuntimeStore extends EventTarget {
     ) {
       this.engineActive = false;
     }
-    // 终态清流式
+    // 终态清流式；正常收尾同时关掉编辑重发（中止终态保留）
     if (
       event.type === 'engine.end' ||
       event.type === 'interrupted' ||
@@ -1178,6 +1324,10 @@ export class OctopiRuntimeStore extends EventTarget {
     ) {
       this.chat.streamingContent = '';
       this.dispatch('stream', new StreamEvent('stream', { streaming: false, content: '' }));
+      const endReason = (event.data as { reason?: string } | undefined)?.reason;
+      if (endReason !== 'aborted') {
+        this.clearEditResendableFlags();
+      }
     }
 
     if (convResult.changed) {

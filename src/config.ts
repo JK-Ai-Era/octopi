@@ -126,7 +126,9 @@ export function toGatewayConfig(config: NormalizedHarnessConfig): GatewayConfig 
 
   const gatewayConfig: GatewayConfig = {
     agents: resolvedAgents,
-    session: config.session ? { dmScope: config.session.dmScope } : undefined,
+    session: config.session
+      ? { dmScope: config.session.dmScope, idleExpiryMs: config.session.idleExpiryMs }
+      : undefined,
     toolIsolation: config.toolIsolation,
     sessionAcl: config.sessionAcl,
     fileSend: config.fileSend,

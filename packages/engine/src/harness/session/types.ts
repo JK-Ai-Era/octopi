@@ -72,6 +72,13 @@ export interface SessionData {
   metadata: Record<string, unknown>;
   lifecycle?: SessionLifecycleMeta;
   /**
+   * 上下文租约截断点（messages 下标）。
+   *
+   * 仅影响 LLM 默认消息窗口；Discourse 全量仍在 `messages`。
+   * `undefined` / `0` = 不截断。由 Runner 在 `idleExpiryMs` 显式配置且闲置超时后写入。
+   */
+  contextDetachIndex?: number;
+  /**
    * 会话任务（goal/step 两级）。见 docs/task-system.md。
    * 历史数据可能缺省；Service/Runner 会视作 []。
    */

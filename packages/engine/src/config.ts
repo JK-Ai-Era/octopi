@@ -207,6 +207,13 @@ export interface WebSearchToolConfig {
 export interface SessionConfig {
   /** DM 作用域: main / per-peer / per-channel-peer */
   dmScope?: 'main' | 'per-peer' | 'per-channel-peer';
+  /**
+   * 上下文租约（毫秒）。**显式配置才生效**；缺省关闭。
+   *
+   * 闲置超过该值后，下一轮 LLM 默认消息窗口从租约点截断（Discourse 全量保留，
+   * 可用 session_search / session_read 查旧内容）。与 memory 冷沉淀解耦。
+   */
+  idleExpiryMs?: number;
 }
 
 // ── Plugin 配置 ──

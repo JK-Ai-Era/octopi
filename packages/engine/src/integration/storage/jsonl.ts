@@ -70,6 +70,7 @@ export class JsonlSessionStore implements SessionStore<SessionData> {
     preferredAgentId?: string;
     switchAudit?: SessionData['switchAudit'];
     participants?: SessionData['participants'];
+    contextDetachIndex?: SessionData['contextDetachIndex'];
     contextCompact?: SessionData['contextCompact'];
     contextCompacts?: SessionData['contextCompacts'];
     lifecycle?: SessionData['lifecycle'];
@@ -156,6 +157,7 @@ export class JsonlSessionStore implements SessionStore<SessionData> {
       preferredAgentId?: string;
       switchAudit?: SessionData['switchAudit'];
       participants?: SessionData['participants'];
+      contextDetachIndex?: SessionData['contextDetachIndex'];
       contextCompact?: SessionData['contextCompact'];
       contextCompacts?: SessionData['contextCompacts'];
       lifecycle?: SessionData['lifecycle'];
@@ -185,6 +187,7 @@ export class JsonlSessionStore implements SessionStore<SessionData> {
       preferredAgentId: state.preferredAgentId ?? meta?.preferredAgentId,
       switchAudit: state.switchAudit,
       participants: state.participants,
+      contextDetachIndex: state.contextDetachIndex,
       contextCompact: state.contextCompact,
       contextCompacts: state.contextCompacts,
       lifecycle,
@@ -270,6 +273,7 @@ export class JsonlSessionStore implements SessionStore<SessionData> {
         preferredAgentId: data.preferredAgentId,
         switchAudit: data.switchAudit ?? [],
         participants: data.participants ?? [],
+        contextDetachIndex: data.contextDetachIndex,
         contextCompact: data.contextCompact,
         contextCompacts: data.contextCompacts,
         lifecycle: data.lifecycle,

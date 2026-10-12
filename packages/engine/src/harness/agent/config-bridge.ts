@@ -251,6 +251,7 @@ export async function buildFromConfig(config: NormalizedHarnessConfig): Promise<
         subsystemAllowlist: config.subsystems?.allowlist,
         subsystemDenylist: config.subsystems?.denylist,
         toolIsolation: config.toolIsolation,
+        sessionIdleExpiryMs: config.session?.idleExpiryMs,
       });
       agents.set(agentConfig.id, built);
     } catch (err) {
@@ -286,6 +287,7 @@ async function buildAgent(
     subsystemAllowlist?: string[];
     subsystemDenylist?: string[];
     toolIsolation?: import('../../config.js').HarnessConfig['toolIsolation'];
+    sessionIdleExpiryMs?: number;
   },
 ): Promise<BuiltAgent> {
   const builder = new AgentBuilder();
@@ -314,6 +316,11 @@ async function buildAgent(
   // ── Tool isolation (I5) ──
   if (shared.toolIsolation) {
     builder.toolIsolation(shared.toolIsolation);
+  }
+
+  // ── Context lease (opt-in) ──
+  if (shared.sessionIdleExpiryMs && shared.sessionIdleExpiryMs > 0) {
+    builder.runnerConfig({ idleExpiryMs: shared.sessionIdleExpiryMs });
   }
 
   // ── Home / Persona ──

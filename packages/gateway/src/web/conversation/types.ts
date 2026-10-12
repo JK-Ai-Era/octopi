@@ -29,6 +29,8 @@ interface BaseConversationItem {
   source: ConversationSource;
   /** 此 item 在面板中可被 focus/选中 */
   focusable?: boolean;
+  /** history 条目在 session.messages 中的绝对下标（分叉定位） */
+  sourceIndex?: number;
 }
 
 // ──────────────────────────────────────
@@ -38,6 +40,8 @@ interface BaseConversationItem {
 export interface UserConversationItem extends BaseConversationItem {
   role: 'user';
   content: string;
+  /** 本轮被中止时可编辑重发（同会话原地改写，不建分支） */
+  editResendable?: boolean;
 }
 
 export interface AssistantConversationItem extends BaseConversationItem {

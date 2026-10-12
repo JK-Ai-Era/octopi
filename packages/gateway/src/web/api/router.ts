@@ -166,6 +166,46 @@ export class WebApiRouter {
         return this.json(res, 200, { ok: true, data: page });
       }
 
+      const branchMatch = relativePath.match(/^\/sessions\/([^/]+)\/branch$/);
+      if (branchMatch && method === 'POST') {
+        const body = await this.readBody(req);
+        const beforeIndex = body?.beforeIndex;
+        if (!Number.isInteger(beforeIndex)) {
+          return this.json(res, 400, { ok: false, error: 'beforeIndex (integer) is required' });
+        }
+        try {
+          const meta = await this.gateway.branchSession(branchMatch[1], {
+            beforeIndex: beforeIndex as number,
+            agentId: typeof body?.agentId === 'string' ? body.agentId : undefined,
+          });
+          return this.json(res, 201, { ok: true, data: meta });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          const code = msg.includes('not found') ? 404 : 400;
+          return this.json(res, code, { ok: false, error: msg });
+        }
+      }
+
+      const truncateMatch = relativePath.match(/^\/sessions\/([^/]+)\/messages\/truncate$/);
+      if (truncateMatch && method === 'POST') {
+        const body = await this.readBody(req);
+        const fromIndex = body?.fromIndex;
+        if (!Number.isInteger(fromIndex)) {
+          return this.json(res, 400, { ok: false, error: 'fromIndex (integer) is required' });
+        }
+        try {
+          const result = await this.gateway.truncateMessagesFrom(
+            truncateMatch[1],
+            fromIndex as number,
+          );
+          return this.json(res, 200, { ok: true, data: result });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          const code = msg.includes('not found') ? 404 : 400;
+          return this.json(res, code, { ok: false, error: msg });
+        }
+      }
+
       // ── 会话附件（OP-15）──
       // 已 release 文件内容（send_file）GET/列表
       const fileContentMatch = relativePath.match(/^\/sessions\/([^/]+)\/files\/([^/]+)$/);

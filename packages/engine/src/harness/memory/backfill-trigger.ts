@@ -2,7 +2,7 @@
  * BackfillTrigger — 补录脉搏协调器
  *
  * 时机：
- * - 硬收敛（session → recent / /new / idle reset）立即评估并 emit
+ * - 硬收敛（session → recent / `/new`）立即评估并 emit
  * - 空闲漂移（默认 20min）软收敛
  * - 覆盖差扫描（默认 6h）兜底
  *
@@ -106,7 +106,7 @@ export class BackfillTrigger {
           void this.requestHardConverge({
             sessionId,
             agentId,
-            // idle reset 场景 messages 即将被清空：优先用事件携带的快照
+            // 事件可带 sessionText 快照；store.messages 不会因 lifecycle 收敛被清空
             sessionText: typeof data.sessionText === 'string' ? data.sessionText : undefined,
             trigger: 'hard_converge',
           });
@@ -236,7 +236,7 @@ export class BackfillTrigger {
       }
     }
 
-    // 快照优先：idle reset / `/new` 会在 store.messages 清空后才可见，
+    // 事件快照优先；store.messages 仍保留全量 Discourse
     // 此时必须用事件里的 sessionText，不得退回空密度。
     const snapshot = input.sessionText?.trim() ? input.sessionText : undefined;
     const sessionText = snapshot ?? (session ? this.renderSessionText(session) : undefined);
