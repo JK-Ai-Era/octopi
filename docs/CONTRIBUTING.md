@@ -46,6 +46,10 @@ npm run dev            # tsc --watch
 - Session 锁/租约键 = `sessionId`；Gateway 注入**共享** `InProcessSessionLock`；跨进程勿假设内存锁有效（E2/E7）
 - Gateway 默认注入 Session ACL；`preferredAgentId` ≠ `primaryAgentId`；handoff 默认 host-only（I3/E6）
 - SessionStore 为 sessionId 一等：`load(sessionId)` / `save(sessionId, data)`；目录 `OCTOPI_HOME/sessions/`（唯一 runtime 后端 `JsonlSessionStore`）
+  - **`save` 对已有会话 metadata 浅合并**（磁盘键不被陈旧空对象抹掉）；**删键必须 `updateMetadata`**（如 `abortedTurn`、`setSessionModel(null)`）
+  - `contextDetachIndex` 是 `messages` **下标**；任何改写 `messages` 的路径（写回过滤 / truncate）必须同步钳制或重算
+  - 改 `session.messages` 的 Gateway 路径（如 `truncateMessagesFrom`）须持 **同一 `sessionLease`**，避免与 Runner 写回竞态
+  - 上下文租约 `session.idleExpiryMs`：**opt-in**，只截 LLM 默认窗口，不删 Discourse；超窗走 compact，新开用 `/new`
 - 历史检索：`session_search` / `session_read`（Information 原文，≠ `memory_search` 命题）；索引投影见内部规格（不对外）
 - Config 变更：同步 `src/config-schema.ts`、`octopi.schema.json`、`octopi.example.json`
 

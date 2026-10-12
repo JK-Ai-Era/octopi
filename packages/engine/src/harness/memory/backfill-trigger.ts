@@ -155,7 +155,7 @@ export class BackfillTrigger {
 
   /**
    * 硬收敛：立即评估并 emit（穿透意图是「这段干完了」）
-   * 可传入 session 快照，避免 reset 清空 messages 后读到空库。
+   * 可传入 session 快照；`/new` 后旧会话仍可读，事件快照与 store 并存。
    */
   async requestHardConverge(input: {
     sessionId: string;

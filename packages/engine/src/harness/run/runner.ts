@@ -2,9 +2,10 @@
  * SessionAwareRunner — Session 感知的运行器
  *
  * Harness 层组件。在 Agent.run()（自带 reliability）之上管理 Session 生命周期：
- * - 消息持久化
+ * - 消息持久化（Discourse 追加日志；不因 idle/跨日清空）
  * - Session 锁（同一 session 同时只有一个运行）
- * - Daily reset / Idle reset
+ * - 上下文租约（`idleExpiryMs` opt-in：只截 LLM 默认窗口）
+ * - 中止轮标记（`abortedTurn`，供 UI 编辑重发）
  * - 并发控制
  *
  * Agent 是 Harness 运行时门面；不要再手拼 runAgentWithReliability。
@@ -366,7 +367,7 @@ export class SessionAwareRunner {
     manifest?: import('../context/layer-types.js').AssembleManifest;
     skippedBudget?: boolean;
   }>;
-  /** 会话重置时清理 Assembler 层缓存 */
+  /** Assembler 层缓存清理钩子（可选接线；与 contextDetachIndex 无关） */
   private systemPromptAssemblerClear?: (sessionId: string) => void;
   /** turn 级 Knowledge grounding（可选；arch/knowledge-layer.md §4.4） */
   private groundingAssembler?: (input: {

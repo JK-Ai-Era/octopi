@@ -1,3 +1,18 @@
+## v0.72.1
+
+### docs(session): sync comments and contracts after lease/branch/edit-resend
+
+**问题**：v0.72.0 改了会话连续性模型后，Runner 文件头、backfill 注释、`arch/*` 仍写「daily/idle reset 会清空 messages / `markSessionRecent`」，后续开发会按旧模型改代码。
+
+**调整**：
+- Runner 头注释与 Assembler 钩子注释改为「上下文租约 / 中止编辑重发」语义
+- `backfill-trigger` 注释去掉「reset 清空 messages」
+- `arch/session-history-search.md` 状态表：结束/`/new` 硬收敛 → `recent`；去掉 `markSessionRecent`
+- `arch/session-agent-run.md` 验收项改为上下文租约 + abort/edit-resend
+- `docs/CONTRIBUTING.md` 补 SessionStore 契约：`save` 浅合并 metadata、删键必须 `updateMetadata`、`contextDetachIndex` 随 messages 重写同步、truncate 须持 sessionLease
+
+**测试**：`arch/check-sync.sh` 通过；无行为变更。
+
 ## v0.72.0
 
 ### feat(session): context lease, copy-prefix branch, and abort edit-resend
