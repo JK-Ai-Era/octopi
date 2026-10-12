@@ -418,3 +418,5 @@ export function fileRefFromCall(call: {
   if (call.fileRef?.fileId) return call.fileRef;
   return null;
 }
+
+export { fileRefFromToolResult } from '../file-ref';

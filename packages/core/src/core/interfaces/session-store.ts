@@ -31,8 +31,25 @@ export interface SessionStore<T = unknown> {
   /** 按 sessionId 加载（一等键；不存在返回 null） */
   load(sessionId: string): Promise<T | null>;
 
-  /** 按 sessionId 覆盖写入 */
+  /**
+   * 按 sessionId 覆盖写入。
+   *
+   * 对已存在会话，`metadata` 与磁盘现值浅合并（调用方键优先）；
+   * **删 metadata 键必须走 `updateMetadata`**。长驻 run 对象上的陈旧
+   * `metadata` 不得抹掉并发写入的键（如 clientToolCalls / fileReleases）。
+   */
   save(sessionId: string, data: T): Promise<void>;
+
+  /**
+   * 会话 metadata 原子读改写（支持删键）。
+   *
+   * 与 `save` 同会话串行。`mutate` 原地改或返回替换对象；
+   * 返回 `undefined` 表示使用原地修改结果。
+   */
+  updateMetadata?(
+    sessionId: string,
+    mutate: (meta: Record<string, unknown>) => void | Record<string, unknown>,
+  ): Promise<void>;
 
   /** 列出 session 元数据；可选按参与 agent 过滤 */
   list(filter?: SessionListFilter): Promise<SessionMeta[]>;

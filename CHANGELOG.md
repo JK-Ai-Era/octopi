@@ -1,3 +1,17 @@
+## v0.71.1
+
+### fix(session): preserve session.metadata across concurrent run saves
+
+**问题**：会话回放时 `send_file` 对话卡片在 gateway 重启后丢失，但 tool 调用记录仍在。根因是 Runner 在 run 末尾用 t0 加载的陈旧 `session` 对象整份 `store.save`，覆盖了运行中经 `withSessionMetadata` 写入的 `metadata.clientToolCalls` / `metadata.fileReleases`。浏览器刷新仍可见是因为 `recentTerminal` / `FileReleaseService` 内存缓存仍在；重启后只剩被写坏的磁盘 metadata。
+
+**调整**：
+- **SessionStore 契约**：`save` 对已有会话 metadata 做浅合并（调用方键优先，磁盘键不被陈旧空对象抹掉）；新增可选 `updateMetadata` 做原子读改写（支持删键），与 `save` 同会话串行
+- **JsonlSessionStore / InMemorySessionStore**：实现 per-session 写锁 + `updateMetadata`；`setSessionModel(null)` 等删键路径走 `updateMetadata`
+- **Gateway**：`clientToolCalls` / `fileReleases` / `session.metadata.model` 统一 `patchSessionMetadata` → `updateMetadata`
+- **WebUI**：`openSession` 从 history `send_file` 的 `toolResults` 抽出 `fileId/name/mime/sizeBytes` 兜底重建 FileCard（`file-ref.ts`），与 `clientToolCalls` + `listSessionFiles` 去重
+
+**测试**：`session-metadata-preserve`（陈旧 save 不丢键 / 删键 / 并发串行 / 重启 hydrate）、`file-ref-from-tool-result`、`gateway-model-catalog`（含 `setSessionModel(null)`）等通过。
+
 ## v0.71.0
 
 ### feat(files): send_file client tool with release API, audit, and local cache

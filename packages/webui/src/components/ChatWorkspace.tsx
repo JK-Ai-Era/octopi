@@ -17,7 +17,7 @@ import type {
 import type { RunStatus, InspectorState } from '@octopi-agent/gateway/web/runtime/store';
 import type { SessionTaskView, ModelCatalog, SessionModelView, CommandCatalogItemDto, PendingQuestion, ClientToolCallDto, ClientToolDescriptorDto } from '@octopi-agent/gateway/web/sdk/client';
 import { ClientToolCallCard, WebViewPreview, type RenderedWebView } from './ClientToolCallCard';
-import { FileCard, FilePreviewPanel, fileRefFromCall, type FileRef } from './FileDelivery';
+import { FileCard, FilePreviewPanel, fileRefFromCall, fileRefFromToolResult, type FileRef } from './FileDelivery';
 // 浏览器侧直连 token 模块（不经 harness barrel / context/index，避免拉入 Node 专用依赖）
 import { estimateTextTokens } from '@octopi-agent/engine/harness/context/token-estimator';
 import { JSON_CHARS_PER_TOKEN } from '@octopi-agent/engine/harness/context/token-constants';
@@ -852,6 +852,15 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
       const ref = fileRefFromCall(c);
       if (ref) restored.push({ ref, createdAt: c.createdAt || 0 });
     }
+    // 历史 tool_result 兜底：metadata.clientToolCalls 被覆盖时仍可重建卡片
+    for (const item of state.chat.conversation ?? []) {
+      if (item.role !== 'tool') continue;
+      const t = item as { toolName?: string; result?: unknown; createdAt?: number };
+      const ref = fileRefFromToolResult(t.toolName ?? '', t.result);
+      if (ref && !restored.some((x) => x.ref.fileId === ref.fileId)) {
+        restored.push({ ref, createdAt: t.createdAt || item.createdAt || 0 });
+      }
+    }
     // 再从 file release 索引补齐（重启后 call 列表可能不全）
     try {
       const client = clientRef.current;
@@ -870,7 +879,7 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
         }
       }
     } catch {
-      // 列表失败时仅依赖 clientToolCalls
+      // 列表失败时仅依赖 clientToolCalls / history
     }
     restored.sort((a, b) => a.createdAt - b.createdAt);
     setDeliveredFiles(restored);

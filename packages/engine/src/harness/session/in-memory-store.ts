@@ -31,7 +31,27 @@ export class InMemorySessionStore implements SessionStore<SessionData> {
   }
 
   async save(sessionId: string, data: SessionData): Promise<void> {
-    this.sessions.set(sessionId, { ...data, id: sessionId });
+    const prev = this.sessions.get(sessionId);
+    // 与 JsonlSessionStore 对齐：已有会话的 metadata 浅合并，删键走 updateMetadata
+    const metadata = {
+      ...(prev?.metadata ?? {}),
+      ...(data.metadata ?? {}),
+    };
+    this.sessions.set(sessionId, { ...data, id: sessionId, metadata });
+  }
+
+  async updateMetadata(
+    sessionId: string,
+    mutate: (meta: Record<string, unknown>) => void | Record<string, unknown>,
+  ): Promise<void> {
+    const prev = this.sessions.get(sessionId);
+    if (!prev) return;
+    const meta: Record<string, unknown> = { ...prev.metadata };
+    const replaced = mutate(meta);
+    this.sessions.set(sessionId, {
+      ...prev,
+      metadata: replaced === undefined ? meta : replaced,
+    });
   }
 
   async list(filter?: SessionListFilter): Promise<SessionMeta[]> {

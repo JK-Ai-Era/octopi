@@ -40,6 +40,8 @@ async function fileExists(path: string): Promise<boolean> {
 export class JsonlSessionStore implements SessionStore<SessionData> {
   private readonly sessionsDir: string;
   private readonly index?: SessionIndexSink;
+  /** 同 sessionId 读改写串行（save / updateMetadata / delete） */
+  private readonly writeQueues = new Map<string, Promise<void>>();
 
   /**
    * @param options - sessionsDir + 可选 index
@@ -47,6 +49,41 @@ export class JsonlSessionStore implements SessionStore<SessionData> {
   constructor(options: JsonlSessionStoreOptions) {
     this.sessionsDir = options.sessionsDir;
     this.index = options.index;
+  }
+
+  private withWriteLock<T>(sessionId: string, fn: () => Promise<T>): Promise<T> {
+    const prev = this.writeQueues.get(sessionId) ?? Promise.resolve();
+    const run = prev.then(fn, fn);
+    this.writeQueues.set(
+      sessionId,
+      run.then(
+        () => undefined,
+        () => undefined,
+      ),
+    );
+    return run;
+  }
+
+  private async readStateData(sessionId: string): Promise<{
+    agentId?: string;
+    primaryAgentId?: string;
+    preferredAgentId?: string;
+    switchAudit?: SessionData['switchAudit'];
+    participants?: SessionData['participants'];
+    contextCompact?: SessionData['contextCompact'];
+    contextCompacts?: SessionData['contextCompacts'];
+    lifecycle?: SessionData['lifecycle'];
+    tasks?: SessionData['tasks'];
+    turns?: SessionData['turns'];
+    metadata?: SessionData['metadata'];
+  } | null> {
+    const statePath = this.sessionStateFile(sessionId);
+    if (!(await fileExists(statePath))) return null;
+    try {
+      return JSON.parse(await readFile(statePath, 'utf-8'));
+    } catch {
+      return null;
+    }
   }
 
   private metaFile(): string {
@@ -210,45 +247,103 @@ export class JsonlSessionStore implements SessionStore<SessionData> {
   }
 
   async save(sessionId: string, data: SessionData): Promise<void> {
-    await mkdir(this.sessionsDir, { recursive: true });
+    return this.withWriteLock(sessionId, async () => {
+      await mkdir(this.sessionsDir, { recursive: true });
 
-    // 写数据文件在前，索引在后：crash 时索引最多缺条目（load 仍能直接读文件），
-    // 不会出现索引有但数据没写完的不一致
-    const jsonl = data.messages.map(msg => JSON.stringify(msg)).join('\n') + '\n';
-    await writeFile(this.sessionFile(sessionId), jsonl);
+      // 写数据文件在前，索引在后：crash 时索引最多缺条目（load 仍能直接读文件），
+      // 不会出现索引有但数据没写完的不一致
+      const jsonl = data.messages.map(msg => JSON.stringify(msg)).join('\n') + '\n';
+      await writeFile(this.sessionFile(sessionId), jsonl);
 
-    await writeFile(this.sessionStateFile(sessionId), JSON.stringify({
-      agentId: data.agentId,
-      primaryAgentId: data.primaryAgentId ?? data.agentId,
-      preferredAgentId: data.preferredAgentId,
-      switchAudit: data.switchAudit ?? [],
-      participants: data.participants ?? [],
-      contextCompact: data.contextCompact,
-      contextCompacts: data.contextCompacts,
-      lifecycle: data.lifecycle,
-      tasks: data.tasks ?? [],
-      turns: data.turns ?? [],
-      metadata: data.metadata ?? {},
-    }, null, 2));
+      // metadata 浅合并：长驻 run 对象上的陈旧/空 metadata 不得抹掉
+      // 并发 updateMetadata 写入的键（clientToolCalls / fileReleases…）。
+      // 删键必须走 updateMetadata。
+      const prevState = await this.readStateData(sessionId);
+      const metadata = {
+        ...(prevState?.metadata ?? {}),
+        ...(data.metadata ?? {}),
+      };
 
-    // 索引携带 lifecycle 投影：list 过滤 / 归档扫描不必打开 state
+      await writeFile(this.sessionStateFile(sessionId), JSON.stringify({
+        agentId: data.agentId,
+        primaryAgentId: data.primaryAgentId ?? data.agentId,
+        preferredAgentId: data.preferredAgentId,
+        switchAudit: data.switchAudit ?? [],
+        participants: data.participants ?? [],
+        contextCompact: data.contextCompact,
+        contextCompacts: data.contextCompacts,
+        lifecycle: data.lifecycle,
+        tasks: data.tasks ?? [],
+        turns: data.turns ?? [],
+        metadata,
+      }, null, 2));
 
-    // 索引最后更新：数据就绪才写入
-    const index = await this.readMetaIndex();
-    index[sessionId] = this.buildIndexEntry({ ...data, id: sessionId });
-    await this.writeMetaIndex(index);
+      // 索引携带 lifecycle 投影：list 过滤 / 归档扫描不必打开 state
 
-    // 可搜投影（失败不阻断；权威已落盘，可 rebuild）
-    if (this.index) {
-      try {
-        await this.index.upsertFromSession(sessionId, { ...data, id: sessionId });
-      } catch (err) {
-        // 投影可重建，吞掉索引写失败（不拖垮权威 save）
-        console.warn(
-          `[JsonlSessionStore] session index upsert failed for ${sessionId}: ${err instanceof Error ? err.message : String(err)}`,
-        );
+      // 索引最后更新：数据就绪才写入
+      const index = await this.readMetaIndex();
+      index[sessionId] = this.buildIndexEntry({ ...data, id: sessionId, metadata });
+      await this.writeMetaIndex(index);
+
+      // 可搜投影（失败不阻断；权威已落盘，可 rebuild）
+      if (this.index) {
+        try {
+          await this.index.upsertFromSession(sessionId, { ...data, id: sessionId, metadata });
+        } catch (err) {
+          // 投影可重建，吞掉索引写失败（不拖垮权威 save）
+          console.warn(
+            `[JsonlSessionStore] session index upsert failed for ${sessionId}: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
       }
-    }
+    });
+  }
+
+  /**
+   * metadata 原子读改写（含删键）。与 save 同会话串行。
+   *
+   * @param sessionId - 会话 id
+   * @param mutate - 原地修改 meta，或返回替换对象；返回 undefined 表示用原地结果
+   */
+  async updateMetadata(
+    sessionId: string,
+    mutate: (meta: Record<string, unknown>) => void | Record<string, unknown>,
+  ): Promise<void> {
+    return this.withWriteLock(sessionId, async () => {
+      const prev = await this.readStateData(sessionId);
+      const hasMessages = await fileExists(this.sessionFile(sessionId));
+      if (!prev && !hasMessages) return;
+
+      const meta: Record<string, unknown> = { ...(prev?.metadata ?? {}) };
+      const replaced = mutate(meta);
+      const metadata = replaced === undefined ? meta : replaced;
+
+      await mkdir(this.sessionsDir, { recursive: true });
+      await writeFile(this.sessionStateFile(sessionId), JSON.stringify({
+        agentId: prev?.agentId,
+        primaryAgentId: prev?.primaryAgentId,
+        preferredAgentId: prev?.preferredAgentId,
+        switchAudit: prev?.switchAudit ?? [],
+        participants: prev?.participants ?? [],
+        contextCompact: prev?.contextCompact,
+        contextCompacts: prev?.contextCompacts,
+        lifecycle: prev?.lifecycle,
+        tasks: prev?.tasks ?? [],
+        turns: prev?.turns ?? [],
+        metadata,
+      }, null, 2));
+
+      try {
+        const index = await this.readMetaIndex();
+        const entry = index[sessionId];
+        if (entry) {
+          index[sessionId] = { ...entry, updatedAt: Date.now() };
+          await this.writeMetaIndex(index);
+        }
+      } catch {
+        // 索引投影可重建；metadata 权威已落盘
+      }
+    });
   }
 
   async list(filter?: SessionListFilter): Promise<SessionMeta[]> {
@@ -272,14 +367,16 @@ export class JsonlSessionStore implements SessionStore<SessionData> {
   }
 
   async delete(sessionId: string): Promise<void> {
-    await this.removeSessionFiles(sessionId);
-    if (this.index) {
-      try {
-        await this.index.remove(sessionId);
-      } catch {
-        // 投影可重建
+    return this.withWriteLock(sessionId, async () => {
+      await this.removeSessionFiles(sessionId);
+      if (this.index) {
+        try {
+          await this.index.remove(sessionId);
+        } catch {
+          // 投影可重建
+        }
       }
-    }
+    });
   }
 
   async exists(sessionId: string): Promise<boolean> {

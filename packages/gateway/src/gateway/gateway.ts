@@ -353,8 +353,7 @@ export class Gateway {
       maxBytes: config.fileSend?.maxBytes,
       maxReleasesPerSession: config.fileSend?.maxReleasesPerSession,
       persistIndex: async (sessionId, entries) => {
-        await this.withSessionMetadata(sessionId, (session) => {
-          const meta = session.metadata ?? (session.metadata = {});
+        await this.patchSessionMetadata(sessionId, (meta) => {
           meta.fileReleases = entries;
         });
       },
@@ -1222,13 +1221,10 @@ export class Gateway {
 
     const agent = this.agents.get(session.agentId);
     const defaultProvider = agent?.model.provider;
-    const defaultModelId = agent
-      ? `${agent.model.provider}/${agent.model.model}`
-      : '';
 
-    if (modelRef === null || modelRef === '') {
-      delete session.metadata.model;
-    } else {
+    // 先算出目标 model 值，再原子写入 metadata（删键必须走 updateMetadata）
+    let nextModel: { provider: string; model: string } | undefined;
+    if (modelRef !== null && modelRef !== '') {
       const parsed = parseModelRef(modelRef, defaultProvider);
       const providerName = parsed.provider ?? defaultProvider;
       if (!providerName) {
@@ -1239,15 +1235,26 @@ export class Gateway {
         throw new Error(`LLM provider "${providerName}" not found`);
       }
       // 规范化存储为 provider/model
-      session.metadata.model = {
+      nextModel = {
         provider: providerName,
         model: parsed.model,
       };
     }
 
-    session.meta.updatedAt = Date.now();
-    await this.store.save(session.id, session);
+    await this.patchSessionMetadata(sessionId, (meta) => {
+      if (nextModel) {
+        meta.model = nextModel;
+      } else {
+        delete meta.model;
+      }
+    });
 
+    const fresh = await this.store.load(sessionId);
+    if (fresh) {
+      fresh.meta.updatedAt = Date.now();
+      await this.store.save(fresh.id, fresh);
+      return this.buildSessionModelView(fresh);
+    }
     return this.buildSessionModelView(session);
   }
 
@@ -2835,8 +2842,7 @@ export class Gateway {
   }
 
   private async persistClientToolCall(call: ClientToolCall): Promise<void> {
-    await this.withSessionMetadata(call.sessionId, (session) => {
-      const meta = session.metadata ?? (session.metadata = {});
+    await this.patchSessionMetadata(call.sessionId, (meta) => {
       const key = 'clientToolCalls';
       const prev = Array.isArray(meta[key]) ? (meta[key] as ClientToolCall[]) : [];
       const record: ClientToolCall = { ...call };
@@ -2849,6 +2855,27 @@ export class Gateway {
       }
       const next = prev.filter((c) => c.id !== record.id).concat(record);
       meta[key] = next.slice(-200);
+    });
+  }
+
+  /**
+   * 会话 metadata 原子读改写（含删键）。
+   * 与 JsonlSessionStore.updateMetadata 对齐；长驻 run 的 store.save 不得覆盖这些键。
+   */
+  private async patchSessionMetadata(
+    sessionId: string,
+    mutate: (meta: Record<string, unknown>) => void,
+  ): Promise<void> {
+    await this.ensureStore();
+    const update = this.store.updateMetadata?.bind(this.store);
+    if (update) {
+      await update(sessionId, mutate);
+      return;
+    }
+    // 老 store 无 updateMetadata：退化为串行 load-modify-save（metadata 合并仍由 save 保证）
+    await this.withSessionMetadata(sessionId, (session) => {
+      const meta = session.metadata ?? (session.metadata = {});
+      mutate(meta);
     });
   }
 
