@@ -1,23 +1,23 @@
-# 自主子系统 — 开发者指南
+# Autonomous Subsystems — Developer Guide
 
-> 本文档面向子系统作者，说明子系统规格（spec）的写法、能力边界与审计约定。
+> This document is for subsystem authors. It describes how to write a subsystem spec, capability boundaries, and audit conventions.
 
 ---
 
-## 1. 子系统目录结构
+## 1. Subsystem directory structure
 
 ```
-# 单 spec 包
+# Single-spec package
 subsystems/my-subsystem/
-├── config.yaml           # 运行时配置（必需）
-├── SUBSYSTEM.md          # LLM 认知指令（system prompt；llm 必需，code 会注入 handler）
-├── handler.ts            # 代码逻辑（code/hybrid 模式必需）
-├── references/           # 参考知识（可选；loader 暂不扫描）
-└── scripts/              # 辅助脚本（可选）
+├── config.yaml           # Runtime config (required)
+├── SUBSYSTEM.md          # LLM cognitive instructions (system prompt; required for llm; code injects it into the handler)
+├── handler.ts            # Code logic (required for code/hybrid mode)
+├── references/           # Reference knowledge (optional; loader does not scan it yet)
+└── scripts/              # Auxiliary scripts (optional)
 
-# 多 spec 包（同一 package 下多个子系统 + 共享代码）
+# Multi-spec package (multiple subsystems + shared code under one package)
 subsystems/memory-steward/
-├── shared/               # 共享策略（loader 跳过，handler 相对 import）
+├── shared/               # Shared policy (loader skips; handlers relatively import)
 ├── backfill/
 │   ├── config.yaml       # id: memory.steward.backfill
 │   ├── SUBSYSTEM.md
@@ -28,40 +28,40 @@ subsystems/memory-steward/
     └── handler.ts
 ```
 
-**Loader 规则**：
+**Loader rules**:
 
-- 搜索根下一级目录若含 `config.yaml`/`SUBSYSTEM.md` → 单 spec 包
-- 否则扫描其子目录；子目录含 spec 则分别 `loadOne`；`shared`/`lib`/`references`/`scripts` 静默跳过
-- `packageId` = 包目录名（如 `memory-steward` 或 `safety-guard`）；`packageRoot` = 包路径
-- allow/deny 支持：完整 id（`memory.steward.govern`）、packageId（`memory-steward`）、前缀（`memory.steward.*`）
+- If a first-level directory under the search root contains `config.yaml`/`SUBSYSTEM.md` → single-spec package
+- Otherwise scan its subdirectories; subdirectories that contain a spec are `loadOne`d separately; `shared`/`lib`/`references`/`scripts` are silently skipped
+- `packageId` = package directory name (e.g. `memory-steward` or `safety-guard`); `packageRoot` = package path
+- allow/deny supports: full id (`memory.steward.govern`), packageId (`memory-steward`), prefix (`memory.steward.*`)
 
-**SUBSYSTEM.md 的角色**：与主 Agent 的 SKILL.md 同类——Markdown 认知指令。
+**Role of SUBSYSTEM.md**: same family as a main Agent's SKILL.md — Markdown cognitive instructions.
 
-| implementation | 正文如何生效 |
+| implementation | How the body takes effect |
 |----------------|--------------|
-| `llm` / `hybrid` | → `think.systemPrompt` → 框架 Agent 的 system prompt |
-| `code` | 注入 handler 的 `deps.__subsystem_prompt__`，并作为 `llmPort.chat()` 默认 system |
+| `llm` / `hybrid` | → `think.systemPrompt` → the framework Agent's system prompt |
+| `code` | Injected into the handler as `deps.__subsystem_prompt__`, and used as the default system for `llmPort.chat()` |
 
-作者文档（依赖表、观测、恢复策略等）请写 `README.md`，不要写进 `SUBSYSTEM.md`。
+Author docs (dependency tables, observability, recovery policy, etc.) belong in `README.md`, not `SUBSYSTEM.md`.
 
-子系统可从以下位置加载（按优先级，同名覆盖）：
+Subsystems can be loaded from the following locations (by priority; same-name overrides):
 
-| 位置 | 作用域 | 谁管理 |
+| Location | Scope | Managed by |
 |------|--------|--------|
-| `<project>/.octopi/subsystems/` | 项目级 | 项目团队 |
-| `~/.octopi/subsystems/` | 用户级 | 用户个人 |
-| `<octopi-bundle>/subsystems/` | 框架级 | octopi 团队 |
-| `node_modules/@octopi-agent/subsystem-*` | npm | npm 包 |
-| `node_modules/octopi-subsystem-*` | npm | 社区包 |
+| `<project>/.octopi/subsystems/` | Project | Project team |
+| `~/.octopi/subsystems/` | User | Individual user |
+| `<octopi-bundle>/subsystems/` | Framework | octopi team |
+| `node_modules/@octopi-agent/subsystem-*` | npm | npm packages |
+| `node_modules/octopi-subsystem-*` | npm | Community packages |
 
 ---
 
-## 2. 显式必填字段
+## 2. Explicit required fields
 
-以下三个字段在 `config.yaml` 中**必须显式声明**，缺失会导致加载失败：
+The following three fields **must be declared explicitly** in `config.yaml`; missing fields cause load failure:
 
 ```yaml
-# 必填
+# Required
 act:
   mode: none | block | modify | inject
 
@@ -75,52 +75,52 @@ boundary:
   security: sandboxed | trusted | privileged
 ```
 
-框架不会为这三个字段提供默认值。这是设计约束——子系统的能力边界必须显式声明。
+The framework provides no defaults for these three fields. This is a design constraint — a subsystem's capability boundary must be declared explicitly.
 
-> **`boundary.security` 现状**：目前是作者声明与文档契约，运行时**尚未**按级别做差异化 I/O 检查或沙箱。硬约束由 `authority`（限制 act.mode）与 `visibility`（裁剪输入）承担。
+> **`boundary.security` status**: currently an author declaration and documentation contract. The runtime does **not yet** perform differentiated I/O checks or sandboxing by level. Hard constraints are carried by `authority` (limits act.mode) and `visibility` (trims input).
 
 ---
 
-## 3. 信号通道（signal.channel）
+## 3. Signal channels (signal.channel)
 
-`signal.channel` 决定信号如何投递到主系统。框架严格按配置路由，不再仅按 action 推断：
+`signal.channel` decides how signals are delivered to the main system. The framework routes strictly by configuration and no longer infers from action alone:
 
-| 通道 | 语义 | 时序 |
+| Channel | Semantics | Timing |
 |------|------|------|
-| `context` | 注入为上下文信息 | 下一次 LLM 调用前生效（`applyPendingInjections`） |
-| `steering` | 注入为引导消息 | 当前轮次立即生效（Runner `consumePendingGuidance`） |
-| `event` | 通过 EventBus 广播 | 异步，其他子系统可监听 |
-| `escalate` | 请求主系统介入 | 当前轮次优先处理（同 steering，escalate 段落排前） |
+| `context` | Injected as context information | Takes effect before the next LLM call (`applyPendingInjections`) |
+| `steering` | Injected as a guidance message | Takes effect immediately in the current turn (Runner `consumePendingGuidance`) |
+| `event` | Broadcast via EventBus | Asynchronous; other subsystems can listen |
+| `escalate` | Request main-system intervention | Prioritized in the current turn (same as steering; escalate section is placed first) |
 
-示例：
+Example:
 
 ```yaml
 signal:
   severity: advisory
-  channel: [context, event]   # 信号同时注入上下文 + 广播事件
+  channel: [context, event]   # signal is injected as context and broadcast as an event
 ```
 
 ---
 
-## 4. 生命周期约束（lifecycle）
+## 4. Lifecycle constraints (lifecycle)
 
 ```yaml
 lifecycle:
-  maxDurationMs: 15000        # 超时中断（毫秒），超时后审计记录 status=timeout
-  maxTokens: 10000            # token 预算上限（基于输入输出体积估算）
-  maxConcurrent: 1            # 最大并发实例数
-  degradeOn: timeout | error | both   # 降级策略
+  maxDurationMs: 15000        # timeout interrupt (ms); audit records status=timeout on expiry
+  maxTokens: 10000            # token budget cap (estimated from input/output size)
+  maxConcurrent: 1            # maximum concurrent instances
+  degradeOn: timeout | error | both   # degradation policy
 ```
 
-- `maxDurationMs`：code handler 也会被 AbortSignal 打断，不仅限于 LLM 模式。
-- `degradeOn`：决定中断时是否发送信号。`timeout` 时不发送（子系统未完成，无有效信号）；`error`/`both` 时发送中断信号。
-- `maxTokens`：按 `HeuristicTokenEstimator` 口径估算。执行前若输入估算已超预算会直接失败；LLM 路径在返回后仍会按真实 usage 再校验。超出时按 `degradeOn` 策略处理。
+- `maxDurationMs`: code handlers are also aborted via AbortSignal, not only LLM mode.
+- `degradeOn`: decides whether to send a signal on interrupt. On `timeout` nothing is sent (the subsystem did not finish; there is no valid signal); on `error`/`both` an interrupt signal is sent.
+- `maxTokens`: estimated on the `HeuristicTokenEstimator` basis. If the input estimate already exceeds the budget before execution, it fails immediately; the LLM path re-validates against real usage after return. Overflow is handled by the `degradeOn` policy.
 
 ---
 
-## 5. 条件触发（condition / conditionRef）
+## 5. Conditional triggering (condition / conditionRef)
 
-### 5.1 声明式 condition
+### 5.1 Declarative condition
 
 ```yaml
 sense:
@@ -130,11 +130,11 @@ sense:
     condition: "turn.count % 10 === 0"
 ```
 
-- 变量名映射到 `ctx.metrics[key]`，由主循环注入。
-- 支持多变量、点号分隔的 key（如 `sessionLifecycle === 'recent'`）。
-- 与 `conditionRef` **互斥**。
+- Variable names map to `ctx.metrics[key]`, injected by the main loop.
+- Supports multiple variables and dot-separated keys (e.g. `sessionLifecycle === 'recent'`).
+- Mutually exclusive with `conditionRef`.
 
-### 5.2 代码引用 conditionRef
+### 5.2 Code reference conditionRef
 
 ```yaml
 sense:
@@ -144,45 +144,45 @@ sense:
     conditionRef: "./handler.ts:shouldExtract"
 ```
 
-- 格式：`<modulePath>:<exportName>`
-- 函数签名：`(ctx: SenseContext) => boolean | Promise<boolean>`
-- 框架会动态 import 并缓存首次加载结果。
-- 与 `condition` **互斥**。
+- Format: `<modulePath>:<exportName>`
+- Function signature: `(ctx: SenseContext) => boolean | Promise<boolean>`
+- The framework dynamically imports and caches the first load result.
+- Mutually exclusive with `condition`.
 
-### 5.3 schedule 定时感知
+### 5.3 schedule timed sensing
 
 ```yaml
 sense:
   source: schedule
-  interval: 60000          # 毫秒，必须 >= 1000
+  interval: 60000          # milliseconds; must be >= 1000
   isolation: structured
   filter:
-    condition: "turn.count > 0"   # 可选
+    condition: "turn.count > 0"   # optional
 ```
 
-- `interval` 必填且 ≥ 1000ms，否则注册失败。
-- 到点后复用与 eventBus 相同的冷却期、传播深度、condition / conditionRef 与 `onTrigger`。
-- `unregister` / `dispose` 会拆除对应定时器。
-- cron 语法为独立议题，尚未接入主路径。
+- `interval` is required and must be ≥ 1000ms, otherwise registration fails.
+- When the interval fires, it reuses the same cooldown, propagation depth, condition / conditionRef and `onTrigger` as eventBus.
+- `unregister` / `dispose` tears down the corresponding timer.
+- cron syntax is a separate topic and is not yet on the main path.
 
 ---
 
-## 6. 循环防护（emits 声明）
+## 6. Loop protection (emits declaration)
 
-### 6.1 为什么需要 emits
+### 6.1 Why emits is needed
 
-子系统通过 EventBus 信号互相触发时，可能形成循环：A → B → A。框架在注册时做静态检测。
+When subsystems trigger each other through EventBus signals, a cycle can form: A → B → A. The framework performs static detection at registration time.
 
-### 6.2 声明方式
+### 6.2 How to declare
 
 ```yaml
 sense:
   filter:
     events: [session.lifecycle.updated]
-    emits: [memory.steward.backfilled]     # 该子系统可能产生的事件类型
+    emits: [memory.steward.backfilled]     # event types this subsystem may produce
 ```
 
-或在顶层声明（优先级更高）：
+Or declare at the top level (higher precedence):
 
 ```yaml
 emits: [memory.steward.backfilled]
@@ -191,44 +191,44 @@ sense:
     events: [session.lifecycle.updated]
 ```
 
-### 6.3 通配符
+### 6.3 Wildcard
 
-LLM 驱动的子系统无法静态确定产出事件时，可声明通配符：
+When an LLM-driven subsystem cannot statically determine its emitted events, it may declare a wildcard:
 
 ```yaml
-emits: ["*"]   # 可能产生任意已监听事件（保守参与多节点环检测）
+emits: ["*"]   # may produce any listened event (conservative participation in multi-node cycle detection)
 ```
 
-- `*` **不会**因「自环」被拒（eventBus 监听 + `emits: ['*']` 可正常注册）。
-- `*` **仍会**因与其它子系统构成多节点环而被拒。
-- 能精确写出事件类型时，优先写具体 `emits`。
+- `*` is **not** rejected for a "self-loop" (eventBus listen + `emits: ['*']` registers fine).
+- `*` **is still** rejected when it forms a multi-node cycle with other subsystems.
+- When you can name the event types precisely, prefer concrete `emits`.
 
-### 6.4 检测行为
+### 6.4 Detection behavior
 
-- 注册时构建 emits → listen 依赖图。
-- 自环：`listen ∩ emit` 具体事件重叠即拒绝。
-- 多节点环：按依赖图 DFS，发现则拒绝并返回路径。
-- 三层叠加防护：静态检测（启动时）+ 深度限制（运行时，默认 5）+ 冷却期（单个子系统，默认 5 秒）。
+- At registration, build the emits → listen dependency graph.
+- Self-loop: reject when `listen ∩ emit` concrete events overlap.
+- Multi-node cycle: DFS on the dependency graph; on discovery, reject and return the path.
+- Three-layer protection: static detection (startup) + depth limit (runtime, default 5) + cooldown (per subsystem, default 5 seconds).
 
 ---
 
-## 7. 自定义工具（tools.definitions）
+## 7. Custom tools (tools.definitions)
 
-### 7.1 四种模式
+### 7.1 Four modes
 
 ```yaml
 tools:
   mode: none | subset | full | custom
 ```
 
-| 模式 | 语义 |
+| Mode | Semantics |
 |------|------|
-| `none` | 无工具（默认） |
-| `subset` | 从主 Agent 工具集中选子集（需 `names`） |
-| `full` | 继承主 Agent 全部工具 |
-| `custom` | 完全自定义工具集（需 `definitions`） |
+| `none` | No tools (default) |
+| `subset` | Subset of the main Agent tool set (requires `names`) |
+| `full` | Inherit all main Agent tools |
+| `custom` | Fully custom tool set (requires `definitions`) |
 
-### 7.2 通过代码注册
+### 7.2 Register in code
 
 ```typescript
 import { SubsystemRuntime } from '@octopi-agent/engine';
@@ -242,11 +242,11 @@ runtime.register({
       {
         definition: {
           name: 'analyze',
-          description: '分析内容',
+          description: 'Analyze content',
           parameters: {
             type: 'object',
             properties: {
-              text: { type: 'string', description: '输入文本' },
+              text: { type: 'string', description: 'Input text' },
             },
             required: ['text'],
           },
@@ -260,34 +260,34 @@ runtime.register({
 });
 ```
 
-### 7.3 通过 YAML 声明
+### 7.3 Declare in YAML
 
 ```yaml
 tools:
   mode: custom
   definitions:
     - name: analyze
-      description: "分析内容"
+      description: "Analyze content"
       parameters:
         type: object
         properties:
           text:
             type: string
-            description: "输入文本"
+            description: "Input text"
         required: [text]
 ```
 
-> **注意**：YAML 声明的 definitions 不含运行时 handler。如果 LLM 调用了该工具，会抛出 "does not have a runtime handler" 错误。完整的 custom tool 需要通过代码注册，或在 `scripts/` 中提供可执行脚本。
+> **Note**: YAML-declared definitions contain no runtime handler. If the LLM calls such a tool, it throws "does not have a runtime handler". A complete custom tool must be registered in code, or provide an executable script under `scripts/`.
 
-### 7.4 code handler 的 LLM 能力（llmPort）
+### 7.4 LLM capability for code handlers (llmPort)
 
-框架**始终**向 `handler(input, deps)` 注入统一 LLM 端口与认知 prompt，无需在 `runtimeInject` 中声明：
+The framework **always** injects a unified LLM port and cognitive prompt into `handler(input, deps)`; no `runtimeInject` declaration is required:
 
-| deps 键 | 常量 | 含义 |
+| deps key | Constant | Meaning |
 |---------|------|------|
-| `llmPort` | `DEP_LLM_PORT` | 统一 LLM 端口：`chat()` + 完整 fallback 链 |
-| `__subsystem_prompt__` | `DEP_SUBSYSTEM_PROMPT` | `SUBSYSTEM.md` 正文 |
-| `__resolved_model__` | `DEP_RESOLVED_MODEL` | 解析后的主模型名 |
+| `llmPort` | `DEP_LLM_PORT` | Unified LLM port: `chat()` + full fallback chain |
+| `__subsystem_prompt__` | `DEP_SUBSYSTEM_PROMPT` | `SUBSYSTEM.md` body |
+| `__resolved_model__` | `DEP_RESOLVED_MODEL` | Resolved primary model name |
 | `__resolved_models__` | `DEP_RESOLVED_MODELS` | `{ primary, fallback, fromLevel }` |
 
 ```typescript
@@ -295,10 +295,10 @@ import type { SubsystemLLMPort } from '@octopi-agent/engine';
 
 export async function handler(input, deps) {
   const port = deps.llmPort as SubsystemLLMPort;
-  // 默认 system = SUBSYSTEM.md；可按调用覆盖
+  // Default system = SUBSYSTEM.md; override per call if needed
   const res = await port.chat({
-    messages: [{ role: 'user', content: '从这段对话提取记忆…' }],
-    // systemPrompt: '临时覆盖',
+    messages: [{ role: 'user', content: 'Extract memory from this conversation…' }],
+    // systemPrompt: 'temporary override',
     // model: 'mini',
     temperature: 0.3,
     maxTokens: 2048,
@@ -307,22 +307,22 @@ export async function handler(input, deps) {
 }
 ```
 
-`runtimeInject.requires` 仍用于业务依赖（如 `memoryStore`）。`modelProvider` 可继续使用；新代码优先 `llmPort`。
+`runtimeInject.requires` remains for business dependencies (e.g. `memoryStore`). `modelProvider` may still be used; prefer `llmPort` for new code.
 
-**API trigger**：`SubsystemRuntime.trigger(id, senseCtx?)` → `{ triggered, status }`。可传 `eventData.bundle` 等 Sense 覆盖；`status` 为 run 终态（`failed`/`timeout` ≠ 业务成功）。
+**API trigger**: `SubsystemRuntime.trigger(id, senseCtx?)` → `{ triggered, status }`. Sense overrides such as `eventData.bundle` may be passed; `status` is the run terminal state (`failed`/`timeout` ≠ business success).
 
-**implementation 语义**：`code` = handler 自己编排（可调 `llmPort`）；`llm`/`hybrid` = 框架用同一套模型解析跑 Agent loop。
+**implementation semantics**: `code` = the handler orchestrates itself (may call `llmPort`); `llm`/`hybrid` = the framework runs the Agent loop with the same model resolution.
 
 ---
 
-## 8. npm 子系统分发
+## 8. npm subsystem distribution
 
-### 8.1 命名规范
+### 8.1 Naming
 
-- 官方：`@octopi-agent/subsystem-<name>`
-- 社区：`octopi-subsystem-<name>`
+- Official: `@octopi-agent/subsystem-<name>`
+- Community: `octopi-subsystem-<name>`
 
-### 8.2 包结构
+### 8.2 Package structure
 
 ```
 @octopi-agent/subsystem-safety-guard/
@@ -333,17 +333,17 @@ export async function handler(input, deps) {
 └── references/
 ```
 
-### 8.3 使用方式
+### 8.3 Usage
 
 ```sh
 npm install @octopi-agent/subsystem-safety-guard
 ```
 
-框架在启动时自动扫描 `node_modules/` 下符合命名规范的包，与项目级/用户级/框架级子系统合并加载。
+At startup the framework automatically scans `node_modules/` for packages matching the naming convention and merges them with project/user/framework-level subsystems.
 
 ---
 
-## 9. 会话隔离与销毁
+## 9. Session isolation and teardown
 
 ```yaml
 session:
@@ -352,34 +352,33 @@ session:
   ttl: "24h"
 ```
 
-| scope | 语义 |
+| scope | Semantics |
 |-------|------|
-| `global` | 所有 Agent、所有 Session 共享一个持久会话 |
-| `agent` | 同一 Agent 跨 Session 共享 |
-| `session` | 每个主 Session 独立 |
+| `global` | All Agents, all Sessions share one persistent session |
+| `agent` | Shared across Sessions for the same Agent |
+| `session` | Independent per main Session |
 
-`session.scope=session` 的子系统会话会在主会话结束时（收到 `session.ended` 事件）自动清理，避免跨会话污染。
+For subsystems with `session.scope=session`, the subsystem session is cleaned up automatically when the main session ends (on the `session.ended` event), avoiding cross-session pollution.
 
 ---
 
-## 10. 审计记录
+## 10. Audit records
 
-每次执行都会写入审计记录（无论成功失败），路径：
+Every execution writes an audit record (success or failure). Path:
 
 ```
 ~/.octopi/audit/[agentId/]<subsystemId>/<date>.jsonl
 ```
 
-关键字段：
+Key fields:
 
-| 字段 | 说明 |
+| Field | Notes |
 |------|------|
 | `status` | `success / failed / timeout / degraded` |
-| `input` | 子系统输入快照 |
-| `output` | 子系统输出（失败时可能为空） |
-| `signals` | 发出的信号列表 |
-| `acts` | 执行的直接行动列表 |
-| `tokenUsage` | token 消耗（成功路径基于输入输出体积估算） |
-| `durationMs` | 执行时长 |
-| `sessionKey` | 会话标识 |
-
+| `input` | Subsystem input snapshot |
+| `output` | Subsystem output (may be empty on failure) |
+| `signals` | List of signals emitted |
+| `acts` | List of direct actions performed |
+| `tokenUsage` | Token consumption (success path estimated from input/output size) |
+| `durationMs` | Execution duration |
+| `sessionKey` | Session identifier |

@@ -1,200 +1,201 @@
-# Octopi 贡献指南
+# Octopi Contributing Guide
 
-> 本文档面向 Octopi 项目的开发者和贡献者。
-> 如果你是集成开发者（选用 Octopi 作为 Agent 底座），请参考 [architecture.md](./architecture.md) 中的公共 API 示例。
+> **Language note**: This English edition is the **working authority**. The Chinese translation is [`CONTRIBUTING.zh.md`](./CONTRIBUTING.zh.md). Keep both in sync.
+> This document is for developers and contributors to the Octopi project.
+> If you are an integration developer (adopting Octopi as your agent substrate), see the public API examples in [architecture.md](./architecture.md).
 
-## 环境要求
+## Requirements
 
-- Node.js >= 24（持久层使用内置 `node:sqlite`，无需原生 SQLite 扩展编译）
+- Node.js >= 24 (the persistence layer uses built-in `node:sqlite`; no native SQLite extension build)
 - TypeScript >= 5.0
 
-## 开发命令
+## Development Commands
 
 ```bash
-# 构建
-npm run build          # tsc 编译
+# Build
+npm run build          # tsc compile
 
-# 测试
-npm test               # 运行所有测试（node --experimental-vm-modules）
-npx vitest run         # 等效命令
-npx vitest watch       # 监听模式
+# Test
+npm test               # run all tests (node --experimental-vm-modules)
+npx vitest run         # equivalent command
+npx vitest watch       # watch mode
 
-# 开发
+# Development
 npm run dev            # tsc --watch
 ```
 
-## 架构分层
+## Architecture Layers
 
-项目采用四层洋葱架构 + DDD 领域组织：
+The project uses a four-layer onion architecture + DDD domain organization:
 
-| 层 | 目录 | 职责 | 依赖 |
+| Layer | Directory | Responsibility | Dependencies |
 |---|---|---|---|
-| Loop | `packages/core/src/loop/` | 纯执行循环 | 仅依赖 Core 类型 |
-| Core | `packages/core/src/core/` | 机制原语 + 接口契约 + 核心类型 | 无外部依赖 |
-| Harness | `packages/engine/src/harness/` | 产品域组织（见 `docs/domains.md`） | 依赖 Core + Loop |
-| Integration | `packages/engine/src/integration/` + `packages/gateway/src/` | 外部系统适配 | 依赖 Core + Loop + Harness |
+| Loop | `packages/core/src/loop/` | Pure execution loop | Core types only |
+| Core | `packages/core/src/core/` | Mechanism primitives + interface contracts + core types | No external dependencies |
+| Harness | `packages/engine/src/harness/` | Product domain organization (see `docs/domains.md`) | Core + Loop |
+| Integration | `packages/engine/src/integration/` + `packages/gateway/src/` | External system adapters | Core + Loop + Harness |
 
-详细架构见 [docs/architecture.md](./architecture.md)；长期不变量见 [架构宪法](./north-star.md)。
-实现状态与开放项见 [docs/KNOWN-ISSUES.md](./KNOWN-ISSUES.md) 与 [CHANGELOG](../CHANGELOG.md)。
+For the detailed architecture see [docs/architecture.md](./architecture.md); for long-term invariants see the [Architecture Constitution](./north-star.md).
+Implementation status and open items: [docs/KNOWN-ISSUES.md](./KNOWN-ISSUES.md) and [CHANGELOG](../CHANGELOG.md).
 
-**开发注意（宪法已落地的运行时语义）：**
+**Development notes (runtime semantics already fixed by the constitution):**
 
-- `effectPolicy`（缺省 `host`）：工具效应模式 + L2 + turn undo（文件/记忆/shell snapshot）+ host-gate + `shellJournal`/`undoLimit`；`toolIsolation` 仅 cwd 布局（I5）。多 Session 写文件用 `session-subdir` 或 `project` 模式。LLM 工具调用必填 `purpose`（行动简述）。
-- compact 键 = `(sessionId, agentId)`；勿用纯 sessionId 共享 Agent compact（E4）
-- 公用能力 `harness/context/capabilities/`：summary/compact **不是** LLM 工具面；tools 只消费 `SummaryPort`；prompt/policy/算法不得写进 `plugin-ecosystem/tools`；E4 会话 compact 状态不在 capabilities
-- 工具结果进主会话前：**L1 硬顶**（`maxReturnChars`）必须生效；禁止「先回原文再由 Agent 调 summary」作为防撑爆主路径
-- Session 锁/租约键 = `sessionId`；Gateway 注入**共享** `InProcessSessionLock`；跨进程勿假设内存锁有效（E2/E7）
-- Gateway 默认注入 Session ACL；`preferredAgentId` ≠ `primaryAgentId`；handoff 默认 host-only（I3/E6）
-- SessionStore 为 sessionId 一等：`load(sessionId)` / `save(sessionId, data)`；目录 `OCTOPI_HOME/sessions/`（唯一 runtime 后端 `JsonlSessionStore`）
-  - **`save` 对已有会话 metadata 浅合并**（磁盘键不被陈旧空对象抹掉）；**删键必须 `updateMetadata`**（如 `abortedTurn`、`setSessionModel(null)`）
-  - `contextDetachIndex` 是 `messages` **下标**；任何改写 `messages` 的路径（写回过滤 / truncate）必须同步钳制或重算
-  - 改 `session.messages` 的 Gateway 路径（如 `truncateMessagesFrom`）须持 **同一 `sessionLease`**，避免与 Runner 写回竞态
-  - 上下文租约 `session.idleExpiryMs`：**opt-in**，只截 LLM 默认窗口，不删 Discourse；超窗走 compact，新开用 `/new`
-- 历史检索：`session_search` / `session_read`（Information 原文，≠ `memory_search` 命题）；索引投影见内部规格（不对外）
-- Config 变更：同步 `src/config-schema.ts`、`octopi.schema.json`、`octopi.example.json`
+- `effectPolicy` (default `host`): tool effect mode + L2 + turn undo (file/memory/shell snapshot) + host-gate + `shellJournal`/`undoLimit`; `toolIsolation` covers cwd layout only (I5). Multi-session file writes use `session-subdir` or `project` mode. LLM tool calls require `purpose` (brief action description).
+- compact key = `(sessionId, agentId)`; do not share one agent compact under a bare sessionId (E4)
+- Shared capabilities `harness/context/capabilities/`: summary/compact are **not** LLM tool surfaces; tools only consume `SummaryPort`; prompt/policy/algorithms must not go into `plugin-ecosystem/tools`; E4 session compact state does not live in capabilities
+- Before a tool result enters the main session: the **L1 hard cap** (`maxReturnChars`) must apply; “return the full text first, then let the Agent call summary” is forbidden as the main anti-overflow path
+- Session lock/lease key = `sessionId`; Gateway injects a **shared** `InProcessSessionLock`; do not assume an in-memory lock is valid across processes (E2/E7)
+- Gateway injects Session ACL by default; `preferredAgentId` ≠ `primaryAgentId`; handoff is host-only by default (I3/E6)
+- SessionStore treats sessionId as first-class: `load(sessionId)` / `save(sessionId, data)`; directory `OCTOPI_HOME/sessions/` (sole runtime backend `JsonlSessionStore`)
+  - **`save` shallow-merges metadata for existing sessions** (on-disk keys are not wiped by a stale empty object); **deleting keys requires `updateMetadata`** (e.g. `abortedTurn`, `setSessionModel(null)`)
+  - `contextDetachIndex` is an index into `messages`; any path that rewrites `messages` (write-back filtering / truncate) must clamp or recompute it
+  - Gateway paths that mutate `session.messages` (e.g. `truncateMessagesFrom`) must hold the **same `sessionLease`** to avoid races with Runner write-back
+  - Context lease `session.idleExpiryMs`: **opt-in**; only truncates the LLM default window, does not delete Discourse; over-window goes to compact; start fresh with `/new`
+- History retrieval: `session_search` / `session_read` (Information originals, ≠ `memory_search` propositions); index projection is an internal spec (not public)
+- Config changes: keep `src/config-schema.ts`, `octopi.schema.json`, `octopi.example.json` in sync
 
-**依赖方向：外 → 内。修改内层时必须确认不影响外层。**
+**Dependency direction: outer → inner. When changing an inner layer, confirm it does not affect outer layers.**
 
-## 测试规范
+## Testing Standards
 
 ```bash
-# 运行全部测试
+# Run all tests
 npm test
 
-# 运行单个测试文件
+# Run a single test file
 npx vitest run tests/core-engine.test.ts
 
-# 运行匹配的测试
+# Run matching tests
 npx vitest run -t "SecurityGuard"
 ```
 
-**测试文件命名：** `tests/<module>.test.ts`
+**Test file naming:** `tests/<module>.test.ts`
 
-**当前测试分布：** 见仓库 `tests/**`（含 `tests/harness/context/capabilities/` 公用能力）
+**Current test distribution:** see the repository `tests/**` (including shared capabilities under `tests/harness/context/capabilities/`)
 
-| 测试领域 | 覆盖范围 |
+| Test area | Coverage |
 |---|---|
-| Loop 协议 | agentLoop 纯函数、callModel、错误分类、terminate/finishReason/phase 契约 |
-| Harness 门面 | Agent.run、AgentBuilder、SessionAwareRunner、可靠性包装 |
-| 安全 | SecurityGuard、RiskEvaluator、DefaultRiskPolicy、ShellParser |
-| 上下文管理 | ContextEngine、SmartRouter、MessageSelector、Compressor、ContextLayer/Assembler、主动摘要 |
-| 公用能力 capabilities | SummaryPort/L1L2/structured/oversized、CompactEngine、tools 接线（`tests/harness/context/capabilities/`） |
-| 会话任务 / 过程监督 | SessionTaskService、task_* 工具、DefaultRunGuard |
-| Plugin 系统 | PluginManager、HookRegistry、CapabilityRegistry |
-| Skill 管理 | SkillManager 两阶段加载 |
-| 工具系统 | ToolRegistry、工具版本管理 |
-| 自主子系统 | SubsystemRuntime、SenseEngine、ThinkExecutor、SignalBus |
-| 多智能体 | AgentSwarm、OrchestrationStrategy |
-| 并发控制 | ProviderPool、SessionGate、RateLimiter |
-| 输出质量 | OutputQualityGate |
-| 可观测性 | TraceCollector、MetricsAggregator、ObserverBridge（Telemetry） |
-| Run Observatory | ObserverHub、resolveObserverConfig、security/memory/tool.effect 投影、store 会话守卫 |
-| 集成 | OpenAI/Anthropic Provider、MCP Client |
-| 录制回放 | RecordingProvider、ReplayProvider、ChaosProvider |
-| 架构门禁 | 分层依赖方向（boundaries）、domains.yaml 目录清单（domains-catalog，`tests/architecture/`） |
+| Loop protocol | agentLoop pure functions, callModel, error classification, terminate/finishReason/phase contracts |
+| Harness facade | Agent.run, AgentBuilder, SessionAwareRunner, reliability wrappers |
+| Security | SecurityGuard, RiskEvaluator, DefaultRiskPolicy, ShellParser |
+| Context management | ContextEngine, SmartRouter, MessageSelector, Compressor, ContextLayer/Assembler, proactive summary |
+| Shared capabilities | SummaryPort/L1L2/structured/oversized, CompactEngine, tools wiring (`tests/harness/context/capabilities/`) |
+| Session tasks / process supervision | SessionTaskService, task_* tools, DefaultRunGuard |
+| Plugin system | PluginManager, HookRegistry, CapabilityRegistry |
+| Skill management | SkillManager two-phase loading |
+| Tool system | ToolRegistry, tool versioning |
+| Autonomous subsystem | SubsystemRuntime, SenseEngine, ThinkExecutor, SignalBus |
+| Multi-agent | AgentSwarm, OrchestrationStrategy |
+| Concurrency | ProviderPool, SessionGate, RateLimiter |
+| Output quality | OutputQualityGate |
+| Observability | TraceCollector, MetricsAggregator, ObserverBridge (Telemetry) |
+| Run Observatory | ObserverHub, resolveObserverConfig, security/memory/tool.effect projections, store session guards |
+| Integration | OpenAI/Anthropic Provider, MCP Client |
+| Record & replay | RecordingProvider, ReplayProvider, ChaosProvider |
+| Architecture gates | Layered dependency direction (boundaries), domains.yaml directory catalog (domains-catalog, `tests/architecture/`) |
 
-## 代码规范
+## Code Standards
 
 - TypeScript strict mode
-- ESM（`"type": "module"`）
-- 导入使用 `.js` 后缀（TypeScript ESM 要求）
-- 注释使用 JSDoc 格式
-- 文件头部必须有模块说明注释
+- ESM (`"type": "module"`)
+- Import specifiers use the `.js` suffix (TypeScript ESM requirement)
+- Comments use JSDoc format
+- Every file must have a module-level header comment
 
-## 文档同步规范
+## Documentation Sync
 
-**核心原则：代码变更必须同步更新文档。**
+**Core principle: code changes must update documentation in sync.**
 
-| 变更类型 | 需要更新的文档 |
+| Change type | Docs to update |
 |----------|---------------|
-| 新增/修改核心接口 | `docs/architecture.md` 对应章节 + `CHANGELOG.md` |
-| 新增 Plugin hook | `docs/plugin-system.md` + `docs/architecture.md`（如涉及） |
-| 新增模块 | `docs/architecture.md` + 模块内 `README.md` |
-| Observer / 配置 `observer` | `docs/observer-domain.md` + `docs/architecture.md` + `octopi.schema.json` / `octopi.example.json` |
-| 公用能力 summary/compact | `docs/context-layer-contracts.md` + `docs/architecture.md` + `packages/engine/src/harness/README.md` + `packages/engine/src/harness/context/README.md` + schema/example；内部规格（不对外） |
-| 修改层间依赖 / 分层 | `docs/architecture.md`；不得违反 [架构宪法](./north-star.md) 与本文件「依赖方向」 |
-| 修改架构不变量 | **`docs/north-star.md`**（须显式评审）+ `CHANGELOG.md` |
-| 测试数量变化 | `README.md` + `CHANGELOG.md` |
+| Add/modify a core interface | Matching section in `docs/architecture.md` + `CHANGELOG.md` |
+| Add a Plugin hook | `docs/plugin-system.md` + `docs/architecture.md` (if applicable) |
+| Add a module | `docs/architecture.md` + the module’s `README.md` |
+| Observer / `observer` config | `docs/observer-domain.md` + `docs/architecture.md` + `octopi.schema.json` / `octopi.example.json` |
+| Shared capabilities summary/compact | `docs/context-layer-contracts.md` + `docs/architecture.md` + `packages/engine/src/harness/README.md` + `packages/engine/src/harness/context/README.md` + schema/example; internal spec (not public) |
+| Change inter-layer dependencies / layering | `docs/architecture.md`; must not violate the [Architecture Constitution](./north-star.md) or this file’s “dependency direction” |
+| Change architecture invariants | **`docs/north-star.md`** (explicit review required) + `CHANGELOG.md` |
+| Test count changes | `README.md` + `CHANGELOG.md` |
 
-### 文档更新检查清单
+### Documentation Update Checklist
 
-提交前确认：
+Before committing, confirm:
 
-- [ ] `docs/architecture.md` 对应章节是否更新（若涉及）
-- [ ] 新增的接口/类型是否有文档说明
-- [ ] 测试数量是否更新
-- [ ] `CHANGELOG.md` 是否记录变更
-- [ ] 未违反 [架构宪法](./north-star.md) 不变量（I1–I6 / E1–E7）
+- [ ] Matching section in `docs/architecture.md` updated (if applicable)
+- [ ] New interfaces/types are documented
+- [ ] Test count updated
+- [ ] `CHANGELOG.md` records the change
+- [ ] No violation of [Architecture Constitution](./north-star.md) invariants (I1–I6 / E1–E7)
 
-### 架构文档版本号
+### Architecture Document Versioning
 
-`architecture.md` 使用语义化版本号：
+`architecture.md` uses semantic versioning:
 
-- **Major (v2 → v3)**: 整体架构调整、核心概念变更
-- **Minor (v2.0 → v2.1)**: 新增模块、重要接口变更
-- **Patch (v2.0.1 → v2.0.2)**: 勘误、细节补充
+- **Major (v2 → v3)**: overall architecture changes, core concept changes
+- **Minor (v2.0 → v2.1)**: new modules, important interface changes
+- **Patch (v2.0.1 → v2.0.2)**: errata, detail supplements
 
-### 发行版本（五包锁步）
+### Release Versions (five-package lockstep)
 
-自 **v0.56.0** 起，`octopi-agent` 与 `@octopi-agent/{core,engine,gateway,webui}` **始终同一版本号**，内部依赖钉死为该版本（非 `^`）。
+Since **v0.56.0**, `octopi-agent` and `@octopi-agent/{core,engine,gateway,webui}` **always share one version number**, with internal dependencies pinned to that exact version (not `^`).
 
 ```sh
-npm run release:prep -- 0.56.0   # 五包同号 + 依赖钉版
-npm run release:print            # 打印发布顺序
+npm run release:prep -- 0.56.0   # same version on all five packages + pin deps
+npm run release:print            # print publish order
 ```
 
-流程：改版本 → 写 `CHANGELOG` → commit + tag → 按 `core → engine → gateway → webui → octopi-agent` 发布。详见 `AGENTS.md` Version Numbering Rules。
+Flow: bump version → write `CHANGELOG` → commit + tag → publish in order `core → engine → gateway → webui → octopi-agent`. See `AGENTS.md` Version Numbering Rules.
 
-## 新增模块检查清单
+## New Module Checklist
 
-新增一个模块时：
+When adding a module:
 
-1. 确定它属于哪一层（Core / Harness / Integration）
-2. 在对应层的 `index.ts` 中导出
-3. 在 `src/index.ts` 中添加导出（如果是公共 API）
-4. 编写测试文件 `tests/<module>.test.ts`
-5. 更新 `docs/architecture.md` 对应章节（若对外可见行为/结构变化）
-6. 更新 `CHANGELOG.md`
+1. Decide which layer it belongs to (Core / Harness / Integration)
+2. Export it from that layer’s `index.ts`
+3. Add the export in `src/index.ts` (if it is public API)
+4. Write test file `tests/<module>.test.ts`
+5. Update the matching section of `docs/architecture.md` (if externally visible behavior/structure changed)
+6. Update `CHANGELOG.md`
 
-## Plugin 开发
+## Plugin Development
 
-Plugin 目录结构：
+Plugin directory layout:
 ```
 my-plugin/
 ├── octopi.plugin.json   ← manifest
-└── index.ts             ← 入口（definePluginEntry）
+└── index.ts             ← entry (definePluginEntry)
 ```
 
-详见 [Plugin 系统文档](plugin-system.md)。
+See the [Plugin system docs](plugin-system.md).
 
-## 文档同步铁律
+## Documentation Sync Rules
 
-### 1. 架构文档同步
+### 1. Architecture Documentation Sync
 
-修改涉及架构调整时（接口变更、新增模块、依赖方向变化），同步更新 `docs/architecture.md`；若触及长期不变量，必须修订 **`docs/north-star.md`** 并走评审。
+When a change involves architecture adjustments (interface changes, new modules, dependency direction changes), update `docs/architecture.md` in sync; if it touches long-term invariants, you must revise **`docs/north-star.md`** and go through review.
 
-### 2. 模块 README 同步
+### 2. Module README Sync
 
-修改任何模块时，同步更新该模块目录下的 `README.md`：
+When modifying any module, update that module directory’s `README.md` in sync:
 
-- **职责变化** — 更新"职责"和"不做什么"部分
-- **新增/删除文件** — 更新"文件说明"部分
-- **依赖变化** — 更新"依赖"部分
-- **新增模块** — 创建对应的 `README.md`
+- **Responsibility changes** — update “Responsibilities” and “What it does not do”
+- **Files added/removed** — update “File notes”
+- **Dependency changes** — update “Dependencies”
+- **New module** — create the corresponding `README.md`
 
-检查清单：
-- [ ] 我已更新被修改模块的 `README.md`
-- [ ] 我已更新 `docs/architecture.md`（如涉及）
-- [ ] 我已更新 `CHANGELOG.md`
+Checklist:
+- [ ] I updated the modified module’s `README.md`
+- [ ] I updated `docs/architecture.md` (if applicable)
+- [ ] I updated `CHANGELOG.md`
 
-## 许可证与贡献授权
+## License and Contribution Grant
 
-本项目采用 **Apache License 2.0**（见仓库根目录 [`LICENSE`](../LICENSE) 与 [`NOTICE`](../NOTICE)）。
+This project uses the **Apache License 2.0** (see repository root [`LICENSE`](../LICENSE) and [`NOTICE`](../NOTICE)).
 
-向本项目提交 Contribution（含 Pull Request、补丁、文档修订）即表示：
+By submitting a Contribution to this project (including pull requests, patches, and documentation revisions), you agree that:
 
-1. 你同意该 Contribution 以 **Apache-2.0** 条款授权给项目（无需另行签署 CLA，除非维护者另行要求）；
-2. 你授予项目及后续使用者 Apache-2.0 §3 所述的**专利许可**（含专利报复条款）；
-3. 你确认有权作出上述授权（例如：工作成果不侵犯第三方权利，或已获雇主/权利人同意）。
+1. You license that Contribution to the project under **Apache-2.0** (no separate CLA required unless maintainers ask);
+2. You grant the project and downstream users the **patent license** described in Apache-2.0 §3 (including the patent retaliation clause);
+3. You have the right to make that grant (for example: the work does not infringe third-party rights, or you have employer/rightsholder consent).
 
-修改过的文件请保留原有版权与许可证声明；新增文件建议附带 Apache-2.0 文件头或依赖根目录 `LICENSE` / `NOTICE`。
+Keep existing copyright and license notices in modified files; for new files, prefer an Apache-2.0 file header or rely on the root `LICENSE` / `NOTICE`.

@@ -5,7 +5,7 @@
 > An agent is not a class — it's a complete runtime.
 > Runtime, continuity, and governance — in one constitution.
 
-[中文文档](./README_CN.md) · [Documentation](./docs/) · [Architecture](./docs/architecture.md) · [Contributing](./docs/CONTRIBUTING.md)
+[中文文档](./README.zh.md) · [Documentation](./docs/) · [Architecture](./docs/architecture.md) · [Contributing](./docs/CONTRIBUTING.md)
 
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue) ![Node](https://img.shields.io/badge/node-%3E%3D24-brightgreen) ![npm](https://img.shields.io/npm/v/octopi-agent?label=octopi-agent)
 
@@ -91,7 +91,7 @@ boundary checks, catalog single-sources-of-truth, and tests that fail when the
 law is broken. New work is judged by one question first: *does it violate
 the constitution?*
 
-📖 **[Read the full constitution →](./docs/north-star.en.md)** (中文版：[docs/north-star.md](./docs/north-star.md))
+📖 **[Read the full constitution →](./docs/north-star.md)** (中文版：[docs/north-star.zh.md](./docs/north-star.zh.md))
 
 ---
 
@@ -433,7 +433,7 @@ octopi-agent               Suite (CLI bin: octopi) + config IO
 
 ## Documentation
 
-- **Concepts** — [Constitution](./docs/north-star.en.md) · [Domains](./docs/domains.md) · [Memory](./docs/memory.md) · [Knowledge](./docs/knowledge.md) · [Context layers](./docs/context-layer-contracts.md) · [Tasks](./docs/task-system.md) · [Plugins](./docs/plugin-system.md) · [Autonomous subsystems](./docs/autonomous-subsystem.md) · [Observer](./docs/observer-domain.md)
+- **Concepts** — [Constitution](./docs/north-star.md) · [Domains](./docs/domains.md) · [Memory](./docs/memory.md) · [Knowledge](./docs/knowledge.md) · [Context layers](./docs/context-layer-contracts.md) · [Tasks](./docs/task-system.md) · [Plugins](./docs/plugin-system.md) · [Autonomous subsystems](./docs/autonomous-subsystem.md) · [Observer](./docs/observer-domain.md)
 - **Guides** — [Contributing](./docs/CONTRIBUTING.md) · [Known issues](./docs/KNOWN-ISSUES.md) · [Example config](./octopi.example.json) · [JSON schema](./octopi.schema.json)
 - **Reference** — [Architecture](./docs/architecture.md) · [Domain catalog](./docs/domains.yaml) · [Changelog](./CHANGELOG.md)
 

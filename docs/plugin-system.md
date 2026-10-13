@@ -1,26 +1,26 @@
 # Plugin System
 
-Octopi 的 Plugin 系统提供声明式能力注册、全生命周期 hook 拦截、以及标准化的加载流程。
+Octopi’s Plugin system provides declarative capability registration, full-lifecycle hook interception, and a standardized loading pipeline.
 
 ---
 
-## 目录
+## Table of contents
 
-- [架构概览](#架构概览)
-- [快速开始](#快速开始)
-- [Plugin 结构](#plugin-结构)
-- [PluginApi 详解](#pluginapi-详解)
-- [Hook 系统](#hook-系统)
+- [Architecture overview](#architecture-overview)
+- [Quick start](#quick-start)
+- [Plugin structure](#plugin-structure)
+- [PluginApi in detail](#pluginapi-in-detail)
+- [Hook system](#hook-system)
 - [Capability Ownership Model](#capability-ownership-model)
-- [Plugin 加载流程](#plugin-加载流程)
-- [配置系统](#配置系统)
-- [完整示例](#完整示例)
-- [子路径导出](#子路径导出)
-- [API 参考](#api-参考)
+- [Plugin loading flow](#plugin-loading-flow)
+- [Configuration system](#configuration-system)
+- [Complete examples](#complete-examples)
+- [Subpath exports](#subpath-exports)
+- [API reference](#api-reference)
 
 ---
 
-## 架构概览
+## Architecture overview
 
 ```
 ┌─────────────────────────────────────────────────────────┐
@@ -44,49 +44,49 @@ Octopi 的 Plugin 系统提供声明式能力注册、全生命周期 hook 拦�
 └─────────────────────────────────────────────────────────┘
 ```
 
-### 4 层加载管线
+### 4-stage loading pipeline
 
-| 阶段 | 职责 |
+| Stage | Responsibility |
 |------|------|
-| **Discovery** | 扫描 loadPaths，发现 `octopi.plugin.json` |
-| **Validation** | 验证 manifest 格式、contracts、依赖 |
-| **Loading** | 动态 `import()` 入口文件，获取 plugin 定义 |
-| **Registration** | 调用 `register(api)`，收集 hooks/tools/providers |
+| **Discovery** | Scan `loadPaths`, find `octopi.plugin.json` |
+| **Validation** | Validate manifest format, contracts, dependencies |
+| **Loading** | Dynamically `import()` the entry file and obtain the plugin definition |
+| **Registration** | Call `register(api)`, collect hooks/tools/providers |
 
-### 核心设计原则与依据
+### Core design principles and rationale
 
-1. **Manifest 先行** — 不执行代码就能读取元数据。
-   插件是第三方代码，「加载即执行」等于把审计推迟到出事之后。manifest 让冲突检测、激活规划、能力清单都在执行前完成——这也是 Capability Ownership 四个用途的前提。
+1. **Manifest first** — metadata can be read without executing code.  
+   Plugins are third-party code; “load equals execute” defers auditing until after something goes wrong. The manifest lets conflict detection, activation planning, and the capability inventory all complete before execution — this is also the precondition for the four uses of Capability Ownership.
 
-2. **Capability Ownership** — 每个能力有且仅有一个 owner。
-   Plugin 是能力边界：tool / provider / channel 若允许多主，结果是静默覆盖与责任不清；排他性资源（如 memory provider）更无法保证同一时刻只有一个 active。contracts 声明让「谁拥有什么」不加载代码就可查，冲突在注册期报错而不是运行期错乱。
+2. **Capability Ownership** — every capability has exactly one owner.  
+   The Plugin is the capability boundary: if tools / providers / channels allowed multiple owners, the result would be silent overrides and unclear responsibility; exclusive resources (such as a memory provider) could not guarantee a single active instance at a time. The `contracts` declaration makes “who owns what” queryable without loading code, and conflicts fail at registration time rather than causing runtime chaos.
 
-3. **Hook 拦截语义** — 返回非 null 中断后续 handlers。
-   观察与拦截必须一眼可分：返回 `null` 的 handler 不改变行为，返回值即显式短路；`block` / `cancel` 等 Terminal 结果立即终止。单个 handler 的超时与异常被**捕获隔离**，一个插件故障不拖垮整条链。
+3. **Hook interception semantics** — a non-null return interrupts later handlers.  
+   Observation and interception must be distinguishable at a glance: a handler that returns `null` does not change behavior; a return value is an explicit short-circuit; Terminal results such as `block` / `cancel` stop the chain immediately. Timeouts and exceptions of a single handler are **caught and isolated** — one plugin failure does not take down the whole chain.
 
-4. **Priority 排序** — 数字越大越先执行。
-   多插件叠加时执行顺序必须确定且可预测；安全、审计类 handler 以更高优先级先于业务 handler 执行，避免「先做了再被检查」。
+4. **Priority ordering** — higher numbers run first.  
+   When multiple plugins stack, execution order must be deterministic and predictable; security and audit handlers run before business handlers at higher priority, avoiding “act first, be checked later.”
 
 ---
 
-## 快速开始
+## Quick start
 
-### 1. 创建 Plugin 目录
+### 1. Create a Plugin directory
 
 ```
 my-plugins/
   tool-preflight/
-    octopi.plugin.json    ← manifest（必填）
-    index.ts              ← 入口文件（必填）
+    octopi.plugin.json    ← manifest (required)
+    index.ts              ← entry file (required)
 ```
 
-### 2. 编写 Manifest
+### 2. Write the Manifest
 
 ```json
 {
   "id": "tool-preflight",
   "name": "Tool Preflight",
-  "description": "拦截并验证 tool 调用",
+  "description": "Intercept and validate tool calls",
   "version": "1.0.0",
   "configSchema": {
     "type": "object",
@@ -100,7 +100,7 @@ my-plugins/
 }
 ```
 
-### 3. 编写入口文件
+### 3. Write the entry file
 
 ```ts
 // index.ts
@@ -109,7 +109,7 @@ import { definePluginEntry } from '@octopi-agent/engine/plugin-sdk/plugin-entry'
 export default definePluginEntry({
   id: 'tool-preflight',
   name: 'Tool Preflight',
-  description: '拦截并验证 tool 调用',
+  description: 'Intercept and validate tool calls',
 
   register(api) {
     const blockedTools = (api.pluginConfig.blockedTools as string[]) ?? [];
@@ -118,13 +118,13 @@ export default definePluginEntry({
       if (blockedTools.includes(event.toolName)) {
         return { block: true, blockReason: 'Blocked by policy' };
       }
-      return null; // 放行
+      return null; // allow
     }, { priority: 50 });
   },
 });
 ```
 
-### 4. 加载 Plugin
+### 4. Load the Plugin
 
 ```ts
 import { PluginManager } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/plugins/manager';
@@ -136,19 +136,19 @@ const pm = new PluginManager({
 const plugins = await pm.discover();
 console.log(`Loaded ${plugins.length} plugins`);
 
-// 在 AgentLoop 中使用
+// Use within AgentLoop
 const result = await pm.runHook('before_tool_call', event, null);
 ```
 
 ---
 
-## Plugin 结构
+## Plugin structure
 
-每个 Plugin 由两部分组成：
+Each Plugin consists of two parts:
 
 ### Manifest (`octopi.plugin.json`)
 
-声明式元数据，框架在不执行代码的情况下就能读取。
+Declarative metadata the framework can read without executing code.
 
 ```json
 {
@@ -173,27 +173,27 @@ const result = await pm.runHook('before_tool_call', event, null);
 }
 ```
 
-**必填字段：**
+**Required fields:**
 
-| 字段 | 类型 | 说明 |
+| Field | Type | Description |
 |------|------|------|
-| `id` | string | Plugin 唯一标识 |
-| `configSchema` | JSON Schema | 配置结构描述（即使无配置也要传 `{}`） |
+| `id` | string | Unique Plugin identifier |
+| `configSchema` | JSON Schema | Configuration structure description (pass `{}` even when there is no config) |
 
-**常用可选字段：**
+**Common optional fields:**
 
-| 字段 | 类型 | 说明 |
+| Field | Type | Description |
 |------|------|------|
-| `name` | string | 人类可读名称 |
-| `description` | string | 简短描述 |
-| `version` | string | 语义化版本 |
-| `contracts` | object | 能力声明（见 [Capability Ownership](#capability-ownership-model)） |
-| `activation` | object | 激活条件（见 [激活配置](#激活配置)） |
-| `requiresPlugins` | string[] | 依赖的其他 plugin IDs |
+| `name` | string | Human-readable name |
+| `description` | string | Short description |
+| `version` | string | Semantic version |
+| `contracts` | object | Capability declarations (see [Capability Ownership](#capability-ownership-model)) |
+| `activation` | object | Activation conditions (see [Activation config](#activation-config)) |
+| `requiresPlugins` | string[] | Depended-on plugin IDs |
 
-### 入口文件 (`index.ts`)
+### Entry file (`index.ts`)
 
-使用 `definePluginEntry()` 创建 plugin 定义，default export。
+Create the plugin definition with `definePluginEntry()`, default export.
 
 ```ts
 import { definePluginEntry } from '@octopi-agent/engine/plugin-sdk/plugin-entry';
@@ -204,7 +204,7 @@ export default definePluginEntry({
   description: 'What this plugin does',
 
   register(api) {
-    // 通过 api 注册各种能力
+    // Register capabilities through the api
     api.on('gateway_start', async () => {
       api.logger.info('Plugin initialized');
     });
@@ -214,48 +214,48 @@ export default definePluginEntry({
 
 ---
 
-## PluginApi 详解
+## PluginApi in detail
 
-`PluginApi` 是 `register()` 回调中接收的 api 对象。Plugin 通过它注册所有能力。
+`PluginApi` is the api object received in the `register()` callback. Plugins register all capabilities through it.
 
-### 属性
+### Properties
 
-| 属性 | 类型 | 说明 |
+| Property | Type | Description |
 |------|------|------|
 | `id` | string | Plugin ID |
-| `name` | string | Plugin 名称 |
-| `version` | string? | Plugin 版本 |
-| `description` | string? | Plugin 描述 |
-| `source` | string | 入口文件路径 |
-| `rootDir` | string? | Plugin 根目录 |
-| `pluginConfig` | Record<string, unknown> | 用户配置（来自 config.json） |
-| `logger` | PluginLogger | 带前缀的 logger |
+| `name` | string | Plugin name |
+| `version` | string? | Plugin version |
+| `description` | string? | Plugin description |
+| `source` | string | Entry file path |
+| `rootDir` | string? | Plugin root directory |
+| `pluginConfig` | Record<string, unknown> | User configuration (from config.json) |
+| `logger` | PluginLogger | Prefixed logger |
 
-### 注册方法
+### Registration methods
 
 #### `api.on(hookName, handler, opts?)`
 
-注册 hook handler。Hook 按 priority 降序执行。
+Register a hook handler. Hooks run in descending priority order.
 
 ```ts
 api.on('before_tool_call', async (event) => {
-  // 拦截逻辑
-  return null; // 放行
+  // Intercept logic
+  return null; // allow
 }, { priority: 50, timeoutMs: 5000 });
 ```
 
-**参数：**
+**Parameters:**
 
-| 参数 | 类型 | 说明 |
+| Parameter | Type | Description |
 |------|------|------|
-| `hookName` | string | Hook 名称（见 [Hook 系统](#hook-系统)） |
-| `handler` | (event) => Promise | Handler 函数 |
-| `opts.priority` | number | 优先级，数字越大越先执行（默认 0） |
-| `opts.timeoutMs` | number | 单个 handler 超时毫秒数（默认 30000） |
+| `hookName` | string | Hook name (see [Hook system](#hook-system)) |
+| `handler` | (event) => Promise | Handler function |
+| `opts.priority` | number | Priority; higher numbers run first (default 0) |
+| `opts.timeoutMs` | number | Per-handler timeout in milliseconds (default 30000) |
 
 #### `api.registerTool(definition, handler, opts?)`
 
-注册 Agent Tool。
+Register an Agent Tool.
 
 ```ts
 api.registerTool(
@@ -275,7 +275,7 @@ api.registerTool(
 
 #### `api.registerProvider(registration)`
 
-注册 LLM Provider。
+Register an LLM Provider.
 
 ```ts
 api.registerProvider({
@@ -292,7 +292,7 @@ api.registerProvider({
 
 #### `api.registerChannel(registration)`
 
-注册 Channel Adapter。
+Register a Channel Adapter.
 
 ```ts
 api.registerChannel({
@@ -307,37 +307,37 @@ api.registerChannel({
 
 #### `api.registerContextEngine(id, engine)`
 
-注册 Context Engine（exclusive slot — 同一时刻只有一个 active）。
+Register a Context Engine (exclusive slot — only one active at a time).
 
 #### `api.registerCommand(def)`
 
-注册 Command（绕过 LLM，直接执行）。
+Register a Command (bypasses the LLM and executes directly).
 
 ```ts
 api.registerCommand({
   name: 'clear',
-  description: '清除 session 历史',
+  description: 'Clear session history',
   handler: async (event) => {
-    // 清除逻辑
+    // Clear logic
   },
 });
 ```
 
 #### `api.registerService(service)`
 
-注册后台服务（Gateway 启动时 start，关闭时 stop）。
+Register a background service (started when Gateway starts, stopped on shutdown).
 
 ```ts
 api.registerService({
   id: 'health-checker',
-  start: async () => { /* 启动健康检查 */ },
-  stop: async () => { /* 停止健康检查 */ },
+  start: async () => { /* Start health check */ },
+  stop: async () => { /* Stop health check */ },
 });
 ```
 
 #### `api.resolvePath(relativePath)`
 
-解析相对于 plugin root 的路径。
+Resolve a path relative to the plugin root.
 
 ```ts
 const configPath = api.resolvePath('./config/default.json');
@@ -345,115 +345,115 @@ const configPath = api.resolvePath('./config/default.json');
 
 ### Logger
 
-`api.logger` 提供带前缀的日志输出：
+`api.logger` provides prefixed log output:
 
 ```ts
-api.logger.debug('调试信息');
-api.logger.info('运行信息');
-api.logger.warn('警告');
-api.logger.error('错误');
-// 输出: [plugin:my-plugin] 运行信息
+api.logger.debug('Debug message');
+api.logger.info('Info message');
+api.logger.warn('Warning');
+api.logger.error('Error');
+// Output: [plugin:my-plugin] Info message
 ```
 
 ---
 
-## Hook 系统
+## Hook system
 
-### Hook 执行模型
+### Hook execution model
 
 ```
-Handler 按 priority 降序执行
+Handlers run in descending priority order
 
   priority: 100 ──→ handler_1()
                         │
-                   返回非 null? ──→ 中断链，返回结果
+                   non-null return? ──→ break chain, return result
                         │
-                   返回 null ──→ 继续
+                   return null ──→ continue
                         ▼
   priority: 50  ──→ handler_2()
                         │
-                   返回非 null? ──→ 中断链，返回结果
+                   non-null return? ──→ break chain, return result
                         │
-                   返回 null ──→ 继续
+                   return null ──→ continue
                         ▼
   priority: 0   ──→ handler_3()
                         │
-                   返回结果
+                   return result
                         ▼
-                   使用 defaultResult
+                   use defaultResult
 ```
 
-**关键规则：**
+**Key rules:**
 
-- **拦截语义**：handler 返回 `null` / `undefined` → 继续执行下一个 handler
-- **拦截语义**：handler 返回非 null 值 → 中断链，该值作为最终结果
-- **Terminal 检测**：返回 `{ block: true }` / `{ cancel: true }` / `{ outcome: 'block' }` 时立即中断，跳过后续 handlers
-- **超时**：单个 handler 超时会被捕获，不影响后续 handlers
-- **异常**：单个 handler 抛出异常会被捕获，不影响后续 handlers
+- **Interception semantics**: a handler returns `null` / `undefined` → continue to the next handler
+- **Interception semantics**: a handler returns a non-null value → break the chain; that value is the final result
+- **Terminal detection**: returning `{ block: true }` / `{ cancel: true }` / `{ outcome: 'block' }` breaks immediately and skips remaining handlers
+- **Timeout**: a single handler timeout is caught and does not affect later handlers
+- **Exception**: a single handler exception is caught and does not affect later handlers
 
-### Hook 分类
+### Hook categories
 
-| Hook | 类型 | 返回值 | 说明 |
+| Hook | Type | Return value | Description |
 |------|------|--------|------|
-| `gateway_start` | 观察 | — | Gateway 启动时触发 |
-| `gateway_stop` | 观察 | — | Gateway 关闭时触发 |
-| `session_start` | 观察 | — | Session 创建时触发 |
-| `session_end` | 观察 | — | Session 结束时触发 |
-| `message_received` | 观察 | — | 收到渠道消息时触发 |
-| `message_sending` | 拦截 | `{ cancel: true }` | 发送回复前触发 |
-| `message_sent` | 观察 | — | 回复发送后触发 |
-| `before_model_resolve` | 拦截 | `{ provider?, model? }` | LLM 调用前，可覆盖模型 |
-| `before_prompt_build` | 注入 | `{ prependContext?, systemPrompt? }` | Prompt 构建前（runAgentLoop），可注入上下文 |
-| `before_agent_run` | 拦截 | `{ outcome: 'block', message? }` | Agent 执行前，可阻止 |
-| `before_agent_reply` | 拦截 | `Message` | LLM 回复前，可返回合成回复 |
-| `before_agent_finalize` | 拦截 | `{ action: 'revise' }` | 回复定稿前，可要求修订 |
-| `before_tool_call` | 拦截 | `ToolCallResult` | Tool 执行前，可阻止/审批 |
-| `after_tool_call` | 观察 | — | Tool 执行后触发 |
-| `agent_end` | 观察 | — | Agent 执行完成时触发 |
-| `before_compaction` | 观察 | — | Context 压缩前触发 |
-| `after_compaction` | 观察 | — | Context 压缩后触发 |
-| `before_install` | 拦截 | `{ block: true }` | Skill/Plugin 安装前触发 |
+| `gateway_start` | Observe | — | Fired when Gateway starts |
+| `gateway_stop` | Observe | — | Fired when Gateway stops |
+| `session_start` | Observe | — | Fired when a Session is created |
+| `session_end` | Observe | — | Fired when a Session ends |
+| `message_received` | Observe | — | Fired when a channel message arrives |
+| `message_sending` | Intercept | `{ cancel: true }` | Fired before a reply is sent |
+| `message_sent` | Observe | — | Fired after a reply is sent |
+| `before_model_resolve` | Intercept | `{ provider?, model? }` | Before the LLM call; may override the model |
+| `before_prompt_build` | Inject | `{ prependContext?, systemPrompt? }` | Before prompt build (`runAgentLoop`); may inject context |
+| `before_agent_run` | Intercept | `{ outcome: 'block', message? }` | Before Agent execution; may block |
+| `before_agent_reply` | Intercept | `Message` | Before the LLM reply; may return a synthesized reply |
+| `before_agent_finalize` | Intercept | `{ action: 'revise' }` | Before finalizing the reply; may request revision |
+| `before_tool_call` | Intercept | `ToolCallResult` | Before Tool execution; may block/approve |
+| `after_tool_call` | Observe | — | Fired after Tool execution |
+| `agent_end` | Observe | — | Fired when Agent execution completes |
+| `before_compaction` | Observe | — | Fired before Context compaction |
+| `after_compaction` | Observe | — | Fired after Context compaction |
+| `before_install` | Intercept | `{ block: true }` | Fired before Skill/Plugin install |
 
-### Hook 执行位置架构
+### Hook execution-site architecture
 
-Hook 按执行位置分为两类：
+Hooks fall into two categories by execution site:
 
-**Gateway 级 Hook**（在 `agent-runner.ts` 中调用）
+**Gateway-level Hooks** (called in `agent-runner.ts`)
 
-这些 Hook 处理 session 生命周期、消息路由、Agent 级拦截：
+These Hooks handle session lifecycle, message routing, and Agent-level interception:
 
-| Hook | 执行位置 | 作用 |
+| Hook | Execution site | Role |
 |------|----------|------|
-| `session_start` | resolveSession | 新 Session 创建时 |
-| `session_end` | Session 过期/关闭 | Session 结束时 |
-| `message_received` | AgentRunner | 消息到达 Gateway 时 |
-| `before_agent_run` | AgentRunner.run | Agent 执行前，可阻止 |
-| `before_agent_reply` | AgentRunner.run | LLM 回复前，可合成回复 |
-| `before_agent_finalize` | AgentRunner.run | 回复定稿前，可修订 |
-| `agent_end` | AgentRunner.run | Agent 执行完成时 |
-| `message_sending` | AgentRunner.run | 发送回复前，可取消 |
-| `message_sent` | AgentRunner.run | 回复发送后 |
+| `session_start` | resolveSession | When a new Session is created |
+| `session_end` | Session expire/close | When a Session ends |
+| `message_received` | AgentRunner | When a message reaches the Gateway |
+| `before_agent_run` | AgentRunner.run | Before Agent execution; may block |
+| `before_agent_reply` | AgentRunner.run | Before the LLM reply; may synthesize a reply |
+| `before_agent_finalize` | AgentRunner.run | Before finalizing the reply; may revise |
+| `agent_end` | AgentRunner.run | When Agent execution completes |
+| `message_sending` | AgentRunner.run | Before sending a reply; may cancel |
+| `message_sent` | AgentRunner.run | After a reply is sent |
 
-**Loop 级 Hook**（在 `runAgentLoop` 中调用）
+**Loop-level Hooks** (called in `runAgentLoop`)
 
-这些 Hook 处理迭代、工具执行、Prompt 构建等 Agent Loop 内部逻辑：
+These Hooks handle iteration, tool execution, prompt build, and other Agent Loop internals:
 
-| Hook | 执行位置 | 作用 |
+| Hook | Execution site | Role |
 |------|----------|------|
-| `before_iteration` | runAgentLoop 每轮迭代前 | 注入消息/覆盖参数/决定停止 |
-| `before_tool_call` | runAgentLoop 工具执行前 | 阻止/审批/覆盖参数 |
-| `after_tool_call` | runAgentLoop 工具执行后 | 观察工具结果 |
-| `before_prompt_build` | runAgentLoop LLM 调用前 | 注入上下文（RAG、记忆） |
-| `before_compaction` | runAgentLoop 上下文压缩前 | 观察压缩前状态 |
-| `after_compaction` | runAgentLoop 上下文压缩后 | 观察压缩后状态 |
+| `before_iteration` | Before each `runAgentLoop` iteration | Inject messages / override params / decide stop |
+| `before_tool_call` | Before tool execution in `runAgentLoop` | Block / approve / override params |
+| `after_tool_call` | After tool execution in `runAgentLoop` | Observe tool results |
+| `before_prompt_build` | Before the LLM call in `runAgentLoop` | Inject context (RAG, memory) |
+| `before_compaction` | Before context compaction in `runAgentLoop` | Observe pre-compaction state |
+| `after_compaction` | After context compaction in `runAgentLoop` | Observe post-compaction state |
 
-**设计说明**
+**Design notes**
 
-- Gateway 级 Hook 处理跨 session 的决策（路由、审批、合成回复）
-- Loop 级 Hook 处理单次迭代的决策（工具执行、上下文注入）
-- `before_iteration` 综合了原 `before_model_resolve` 的功能（provider/model 覆盖）
+- Gateway-level Hooks handle cross-session decisions (routing, approval, synthesized replies)
+- Loop-level Hooks handle per-iteration decisions (tool execution, context injection)
+- `before_iteration` absorbs the former `before_model_resolve` functionality (provider/model override)
 
-### Hook Event 和 Result 类型
+### Hook Event and Result types
 
 #### `before_tool_call`
 
@@ -468,10 +468,10 @@ interface BeforeToolCallEvent {
 
 // Result
 interface ToolCallResult {
-  params?: Record<string, unknown>;     // 覆盖参数
-  block?: boolean;                       // 阻止执行
-  blockReason?: string;                  // 阻止原因
-  requireApproval?: {                    // 需要用户审批
+  params?: Record<string, unknown>;     // Override params
+  block?: boolean;                       // Block execution
+  blockReason?: string;                  // Reason for blocking
+  requireApproval?: {                    // Require user approval
     title: string;
     description: string;
     severity?: 'info' | 'warning' | 'critical';
@@ -483,32 +483,32 @@ interface ToolCallResult {
 
 #### `before_prompt_build`
 
-执行位置：`runAgentLoop` —— 每轮迭代中，LLM 调用之前。
+Execution site: `runAgentLoop` — each iteration, before the LLM call.
 
 ```ts
 // Event
 interface BeforePromptBuildEvent {
   agentId: string;            // Agent ID
   sessionId: string;          // Session ID
-  messages: Message[];        // 当前对话消息
-  ctx: HookContext;           // Hook 上下文
+  messages: Message[];        // Current conversation messages
+  ctx: HookContext;           // Hook context
 }
 
 // Result
 interface PromptBuildResult {
-  prependContext?: string;      // 在消息前插入
-  appendContext?: string;       // 在消息后追加
-  systemPrompt?: string;        // 覆盖 system prompt
-  prependSystemContext?: string; // system prompt 前置追加
-  appendSystemContext?: string;  // system prompt 后置追加
+  prependContext?: string;      // Insert before messages
+  appendContext?: string;       // Append after messages
+  systemPrompt?: string;        // Override system prompt
+  prependSystemContext?: string; // Prepend to system prompt
+  appendSystemContext?: string;  // Append to system prompt
 }
 ```
 
 #### `before_agent_reply`
 
 ```ts
-// 返回 Message → 替代 LLM 回复
-// 返回 null → 让 LLM 正常处理
+// Return Message → replace LLM reply
+// Return null → let the LLM handle it normally
 type AgentReplyResult = Message | null;
 ```
 
@@ -517,14 +517,14 @@ type AgentReplyResult = Message | null;
 ```ts
 // Result
 interface MessageSendingResult {
-  cancel: boolean;        // 取消发送
-  cancelReason?: string;  // 取消原因
+  cancel: boolean;        // Cancel sending
+  cancelReason?: string;  // Reason for cancellation
 }
 ```
 
-### 实际使用示例
+### Practical examples
 
-#### Tool 拦截 + Approval
+#### Tool interception + Approval
 
 ```ts
 api.on('before_tool_call', async (event) => {
@@ -542,11 +542,11 @@ api.on('before_tool_call', async (event) => {
     };
   }
 
-  return null; // 放行
+  return null; // allow
 }, { priority: 50 });
 ```
 
-#### RAG 上下文注入
+#### RAG context injection
 
 ```ts
 api.on('before_prompt_build', async (event) => {
@@ -565,10 +565,10 @@ api.on('before_prompt_build', async (event) => {
 }, { priority: 10 });
 ```
 
-#### 观察语义（日志记录）
+#### Observation semantics (logging)
 
 ```ts
-// 不返回值 = 不拦截 = 所有 plugin 都执行
+// No return value = no interception = all plugins run
 api.on('after_tool_call', async (event) => {
   const { call, result } = event;
   api.logger.info(`Tool ${call.toolName}: ${result.isError ? 'FAIL' : 'OK'}`);
@@ -579,16 +579,16 @@ api.on('after_tool_call', async (event) => {
 
 ## Capability Ownership Model
 
-核心原则：**Plugin 是能力边界**。每个 provider、channel、tool 都有且仅有一个 owner。
+Core principle: **the Plugin is the capability boundary**. Every provider, channel, and tool has exactly one owner.
 
-### 为什么需要 Capability Ownership？
+### Why Capability Ownership?
 
-1. **不加载代码就能知道谁拥有什么能力** — 通过 manifest 的 `contracts` 字段
-2. **冲突检测** — 两个 plugin 注册同名 tool 时报错
-3. **激活规划** — 根据 manifest 决定是否需要加载某个 plugin
-4. **排他性资源管理** — 某些能力（如 memory provider）同一时刻只能有一个 active
+1. **Know who owns what without loading code** — via the manifest `contracts` field
+2. **Conflict detection** — error when two plugins register a tool with the same name
+3. **Activation planning** — decide whether a plugin needs loading from its manifest
+4. **Exclusive resource management** — some capabilities (such as a memory provider) may have only one active plugin at a time
 
-### contracts 声明
+### contracts declaration
 
 ```json
 {
@@ -602,7 +602,7 @@ api.on('after_tool_call', async (event) => {
 }
 ```
 
-### 冲突检测
+### Conflict detection
 
 ```ts
 const registry = new CapabilityRegistry();
@@ -610,11 +610,11 @@ const registry = new CapabilityRegistry();
 registry.register('plugin-a', manifestA);
 registry.register('plugin-b', manifestB);
 
-// 如果 manifestA 和 manifestB 都声明拥有 "web_search" tool
-// → 抛出 PluginConflictError
+// If both manifestA and manifestB declare ownership of the "web_search" tool
+// → throws PluginConflictError
 ```
 
-### 查询能力
+### Query capabilities
 
 ```ts
 const owner = registry.getOwner('tools', 'web_search');
@@ -624,9 +624,9 @@ const allTools = registry.getCapabilitiesByType('tools');
 // → Map<string, string>  (capabilityId → pluginId)
 ```
 
-### 排他性 Slots
+### Exclusive slots
 
-某些能力类型（`kind: 'memory'`、`kind: 'context-engine'`）在同一时刻只能有一个 active plugin：
+Some capability types (`kind: 'memory'`, `kind: 'context-engine'`) allow only one active plugin at a time:
 
 ```json
 {
@@ -636,71 +636,71 @@ const allTools = registry.getCapabilitiesByType('tools');
 }
 ```
 
-### Capability 与 Hook 的关系
+### Relationship between Capability and Hook
 
-Capability 和 Hook 是两个独立但互补的机制：
+Capability and Hook are two independent but complementary mechanisms:
 
-| 维度 | Capability | Hook |
+| Dimension | Capability | Hook |
 |------|-----------|------|
-| **本质** | "是什么" — 声明 Plugin 拥有的能力 | "做什么" — 注册事件处理逻辑 |
-| **定义位置** | `manifest.contracts` | `register(api)` 回调中的 `api.on()` |
-| **运行时行为** | 无，纯注册表查询 | 有，按 priority 执行拦截/观察逻辑 |
-| **冲突检测** | 同一 capability ID 不能被两个 plugin 注册 | 无冲突概念，所有 plugin 的 handler 都可注册 |
+| **Essence** | “What it is” — declares the capabilities a Plugin owns | “What it does” — registers event-handling logic |
+| **Defined in** | `manifest.contracts` | `api.on()` inside the `register(api)` callback |
+| **Runtime behavior** | None; pure registry lookup | Yes; intercept/observe logic runs by priority |
+| **Conflict detection** | The same capability ID cannot be registered by two plugins | No conflict concept; every plugin’s handlers may register |
 
-**典型模式：** 一个 Plugin 声明了某个 Capability 后，通常会注册相关的 Hook 来实现该能力的具体行为。
+**Typical pattern:** after a Plugin declares a Capability, it usually registers related Hooks that implement that capability’s behavior.
 
 ```ts
-// 声明 capability（manifest.json）
+// Declare capability (manifest.json)
 // { "contracts": { "tools": ["web_search"] } }
 
-// 实现 capability 行为（register 回调）
+// Implement capability behavior (register callback)
 register(api) {
   api.registerTool(webSearchDef, webSearchHandler);
 
-  // 同时注册 hook 来增强该 capability 的行为
+  // Also register a hook to enhance this capability's behavior
   api.on('before_tool_call', async (event) => {
     if (event.toolName === 'web_search') {
-      // 对 web_search 工具做额外的安全检查
+      // Perform additional security checks on the web_search tool
     }
     return null;
   });
 }
 ```
 
-**注意：** Capability 声明不是必须的。Plugin 可以只注册 Hook（不声明 capability），也可以只声明 Capability（不注册 hook，由其他 Plugin 消费该能力）。两者是正交的。
+**Note:** Capability declaration is optional. A Plugin may register only Hooks (no capability), or declare only Capabilities (no hooks, consumed by other Plugins). The two are orthogonal.
 
 ---
 
-## Plugin 加载流程
+## Plugin loading flow
 
 ### Discovery
 
-`PluginLoader` 扫描配置的 `loadPaths`，查找包含 `octopi.plugin.json` 的目录：
+`PluginLoader` scans the configured `loadPaths` for directories containing `octopi.plugin.json`:
 
 ```
 loadPaths/
   ├── tool-preflight/
-  │   ├── octopi.plugin.json  ← 发现
+  │   ├── octopi.plugin.json  ← discovered
   │   └── index.ts
   ├── tool-logger/
-  │   ├── octopi.plugin.json  ← 发现
+  │   ├── octopi.plugin.json  ← discovered
   │   └── index.ts
   └── not-a-plugin/
-      └── random.txt           ← 跳过
+      └── random.txt           ← skipped
 ```
 
 ### Validation
 
-对每个发现的 manifest 执行验证：
+Each discovered manifest is validated:
 
-1. JSON 格式合法
-2. 必填字段存在（`id`、`configSchema`）
-3. `requiresPlugins` 依赖满足
-4. 无 contracts 冲突
+1. JSON is well-formed
+2. Required fields exist (`id`, `configSchema`)
+3. `requiresPlugins` dependencies are satisfied
+4. No contracts conflicts
 
 ### Loading
 
-动态 `import()` 入口文件，获取 default export：
+Dynamically `import()` the entry file and take the default export:
 
 ```ts
 const entry = await import(path.join(pluginDir, 'index.ts'));
@@ -709,7 +709,7 @@ const pluginDef = entry.default; // OctopiPluginDefinition
 
 ### Registration
 
-创建 `PluginApi` 实例，调用 `register(api)`：
+Create a `PluginApi` instance and call `register(api)`:
 
 ```ts
 const api = new PluginApi({
@@ -722,12 +722,12 @@ const api = new PluginApi({
 
 await pluginDef.register(api);
 
-// api._hooks, api._tools, api._providers 等已被填充
+// api._hooks, api._tools, api._providers etc. are now populated
 ```
 
-### 代码中直接创建 Plugin
+### Creating a Plugin directly in code
 
-不从文件系统加载时，直接用 `definePluginEntry()` 创建：
+When not loading from the filesystem, create one with `definePluginEntry()`:
 
 ```ts
 import { definePluginEntry } from '@octopi-agent/engine/plugin-sdk/plugin-entry';
@@ -745,19 +745,19 @@ const myPlugin = definePluginEntry({
 
 ---
 
-## 配置系统
+## Configuration system
 
-### 用户配置文件
+### User config files
 
-每个 plugin 可以有独立的配置文件，通过 `PluginLoaderConfig.configDir` 指定目录：
+Each plugin may have its own config file; the directory is set via `PluginLoaderConfig.configDir`:
 
 ```
 config-dir/
-  tool-preflight.json    ← 对应 plugin id
+  tool-preflight.json    ← corresponds to plugin id
   tool-logger.json
 ```
 
-配置文件内容是一个 JSON 对象，对应 manifest 中 `configSchema` 定义的结构：
+The config file is a JSON object matching the structure defined by `configSchema` in the manifest:
 
 ```json
 // tool-preflight.json
@@ -767,9 +767,9 @@ config-dir/
 }
 ```
 
-### 配置注入
+### Config injection
 
-配置通过 `api.pluginConfig` 传入 `register()` 回调：
+Configuration is passed into the `register()` callback via `api.pluginConfig`:
 
 ```ts
 register(api) {
@@ -785,9 +785,9 @@ register(api) {
 }
 ```
 
-### 激活配置
+### Activation config
 
-Manifest 中的 `activation` 字段控制 plugin 何时被加载：
+The `activation` field in the Manifest controls when a plugin is loaded:
 
 ```json
 {
@@ -802,30 +802,30 @@ Manifest 中的 `activation` 字段控制 plugin 何时被加载：
 }
 ```
 
-| 字段 | 说明 |
+| Field | Description |
 |------|------|
-| `onStartup` | Gateway 启动时加载 |
-| `onProviders` | 配置了指定 provider 时加载 |
-| `onCommands` | 用户使用指定 command 时加载 |
-| `onChannels` | 配置了指定 channel 时加载 |
-| `onConfigPaths` | 指定 config path 有值时加载 |
-| `onCapabilities` | 需要指定能力类型时加载 |
+| `onStartup` | Load when Gateway starts |
+| `onProviders` | Load when the specified provider is configured |
+| `onCommands` | Load when the user uses the specified command |
+| `onChannels` | Load when the specified channel is configured |
+| `onConfigPaths` | Load when the specified config path has a value |
+| `onCapabilities` | Load when the specified capability type is needed |
 
 ---
 
-## 完整示例
+## Complete examples
 
-### 示例 1：Tool Preflight Plugin
+### Example 1: Tool Preflight Plugin
 
-拦截 tool 调用，支持 approval 机制。
+Intercepts tool calls and supports an approval mechanism.
 
-**`octopi.plugin.json`：**
+**`octopi.plugin.json`:**
 
 ```json
 {
   "id": "tool-preflight",
   "name": "Tool Preflight",
-  "description": "拦截并验证 tool 调用，支持 approval 机制",
+  "description": "Intercept and validate tool calls, with approval support",
   "version": "1.0.0",
   "configSchema": {
     "type": "object",
@@ -846,7 +846,7 @@ Manifest 中的 `activation` 字段控制 plugin 何时被加载：
 }
 ```
 
-**`index.ts`：**
+**`index.ts`:**
 
 ```ts
 import { definePluginEntry } from '@octopi-agent/engine/plugin-sdk/plugin-entry';
@@ -854,14 +854,14 @@ import { definePluginEntry } from '@octopi-agent/engine/plugin-sdk/plugin-entry'
 export default definePluginEntry({
   id: 'tool-preflight',
   name: 'Tool Preflight',
-  description: '拦截并验证 tool 调用，支持 approval 机制',
+  description: 'Intercept and validate tool calls, with approval support',
 
   register(api) {
     const config = api.pluginConfig;
     const blockedTools = (config.blockedTools as string[]) ?? [];
     const requireApprovalFor = (config.requireApprovalFor as string[]) ?? [];
 
-    // priority: 50 — 在默认 priority 0 之前执行
+    // priority: 50 — runs before the default priority 0
     api.on('before_tool_call', async (event: any) => {
       const toolName = event.toolName;
 
@@ -886,7 +886,7 @@ export default definePluginEntry({
         };
       }
 
-      return null; // 放行
+      return null; // allow
     }, { priority: 50 });
 
     api.on('gateway_start', async () => {
@@ -896,11 +896,11 @@ export default definePluginEntry({
 });
 ```
 
-### 示例 2：Tool Logger Plugin
+### Example 2: Tool Logger Plugin
 
-观察语义 hook — 记录所有 tool 调用，不拦截。
+Observation-semantics hooks — log all tool calls without intercepting.
 
-**`index.ts`：**
+**`index.ts`:**
 
 ```ts
 import { definePluginEntry } from '@octopi-agent/engine/plugin-sdk/plugin-entry';
@@ -908,10 +908,10 @@ import { definePluginEntry } from '@octopi-agent/engine/plugin-sdk/plugin-entry'
 export default definePluginEntry({
   id: 'tool-logger',
   name: 'Tool Logger',
-  description: '记录所有 tool 调用和消息事件',
+  description: 'Log all tool calls and message events',
 
   register(api) {
-    // 低优先级，确保在其他 plugin 之后执行
+    // Low priority, ensures it runs after other plugins
     api.on('before_tool_call', async (event: any) => {
       api.logger.debug(`→ ${event.toolName}(${JSON.stringify(event.params).slice(0, 100)})`);
     }, { priority: -10 });
@@ -928,9 +928,9 @@ export default definePluginEntry({
 });
 ```
 
-### 示例 3：跨 Hook 编排 Plugin
+### Example 3: Cross-hook orchestration Plugin
 
-完整的 hook 编排 — `after_tool_call` 记录工具失败，`before_prompt_build` 注入排查提示。
+Full hook orchestration — `after_tool_call` records tool failures, `before_prompt_build` injects troubleshooting hints.
 
 ```ts
 import { definePluginEntry } from '@octopi-agent/engine/plugin-sdk/plugin-entry';
@@ -938,28 +938,28 @@ import { definePluginEntry } from '@octopi-agent/engine/plugin-sdk/plugin-entry'
 export default definePluginEntry({
   id: 'focus-context',
   name: 'Focus Context',
-  description: '工具调用失败后，向本轮注入排查提示',
+  description: 'Inject troubleshooting hints into this turn after a tool call fails',
 
   register(api) {
     const pendingContext = new Map<string, string>();
 
-    // 工具失败 → 暂存排查提示（会话键在 ctx.sessionId）
+    // Tool failure → stash a troubleshooting hint (session key is ctx.sessionId)
     api.on('after_tool_call', async (event: any) => {
       if (event.result?.isError) {
         pendingContext.set(
           event.ctx.sessionId,
-          `上一轮 ${event.call.toolName} 调用失败：请先核对路径与参数，再继续执行。`
+          `The previous ${event.call.toolName} call failed: verify the path and parameters before continuing.`
         );
       }
       return null;
     });
 
-    // priority: 10 — 在默认 0 之前执行
+    // priority: 10 — runs before the default 0
     api.on('before_prompt_build', async (event: any) => {
       const tip = pendingContext.get(event.ctx.sessionId);
       if (!tip) return null;
 
-      pendingContext.delete(event.ctx.sessionId); // 用完即删
+      pendingContext.delete(event.ctx.sessionId); // delete after use
       return { prependContext: tip };
     }, { priority: 10 });
   },
@@ -968,12 +968,12 @@ export default definePluginEntry({
 
 ---
 
-## 子路径导出
+## Subpath exports
 
-子路径导出（`@octopi-agent/engine/plugin-sdk/*`）：
+Subpath exports (`@octopi-agent/engine/plugin-sdk/*`):
 
 ```ts
-// Plugin 入口定义
+// Plugin entry definition
 import { definePluginEntry, defineChannelPluginEntry } from '@octopi-agent/engine/plugin-sdk/plugin-entry';
 import type { OctopiPluginDefinition, OctopiChannelPluginDefinition } from '@octopi-agent/engine/plugin-sdk/plugin-entry';
 
@@ -992,11 +992,11 @@ import { CapabilityRegistry } from '@octopi-agent/engine/plugin-sdk/capability';
 import { PluginLoader } from '@octopi-agent/engine/plugin-sdk/loader';
 import type { LoadedPlugin, PluginLoaderConfig } from '@octopi-agent/engine/plugin-sdk/loader';
 
-// Plugin Manager（顶层）
+// Plugin Manager (top-level)
 import { PluginManager } from '@octopi-agent/engine/plugin-sdk/manager';
 ```
 
-也可以从主入口导入：
+You can also import from the main entry:
 
 ```ts
 import { PluginManager, definePluginEntry, PluginApi } from 'octopi-agent';
@@ -1004,81 +1004,81 @@ import { PluginManager, definePluginEntry, PluginApi } from 'octopi-agent';
 
 ---
 
-## API 参考
+## API reference
 
 ### `definePluginEntry(definition)`
 
-创建 Plugin 定义。返回传入的 definition 对象（带验证）。
+Creates a Plugin definition. Returns the passed definition object (with validation).
 
-**参数验证：**
-- `id` — 必填，string
-- `name` — 必填，string
-- `register` — 必填，function
+**Parameter validation:**
+- `id` — required, string
+- `name` — required, string
+- `register` — required, function
 
 ### `defineChannelPluginEntry(definition)`
 
-创建 Channel Plugin 定义。额外验证 `channelId` 必填。
+Creates a Channel Plugin definition. Additionally validates that `channelId` is required.
 
 ### `PluginManager`
 
-顶层管理器。
+Top-level manager.
 
-| 方法 | 返回值 | 说明 |
+| Method | Returns | Description |
 |------|--------|------|
-| `discover()` | `Promise<LoadedPlugin[]>` | 发现并加载所有 plugins |
-| `getAllPlugins()` | `LoadedPlugin[]` | 获取所有已加载的 plugins |
-| `getRegisteredIds()` | `string[]` | 获取已注册的 plugin IDs |
-| `getPlugin(id)` | `LoadedPlugin?` | 获取指定 plugin |
-| `runHook(hookName, event, defaultResult, config?)` | `Promise<T>` | 运行指定 hook（拦截语义） |
-| `runAllHooks(hookName, event)` | `Promise<void>` | 运行指定 hook（观察语义） |
-| `getProviders()` | `Array` | 获取所有已注册的 providers |
-| `getChannels()` | `Array` | 获取所有已注册的 channels |
-| `getTools(includeOptional?)` | `Array` | 获取所有已注册的 tools |
-| `getContextEngines()` | `Array` | 获取所有已注册的 context engines |
-| `getCommands()` | `Array` | 获取所有已注册的 commands |
-| `getServices()` | `Array` | 获取所有已注册的 services |
-| `onGatewayStart(config?, workspaceDir?)` | `Promise<void>` | 触发 gateway_start + 启动服务 |
-| `onGatewayStop()` | `Promise<void>` | 触发 gateway_stop + 停止服务 |
-| `capabilities` | `CapabilityRegistry` | 能力注册中心 |
+| `discover()` | `Promise<LoadedPlugin[]>` | Discover and load all plugins |
+| `getAllPlugins()` | `LoadedPlugin[]` | Get all loaded plugins |
+| `getRegisteredIds()` | `string[]` | Get registered plugin IDs |
+| `getPlugin(id)` | `LoadedPlugin?` | Get a specific plugin |
+| `runHook(hookName, event, defaultResult, config?)` | `Promise<T>` | Run the named hook (interception semantics) |
+| `runAllHooks(hookName, event)` | `Promise<void>` | Run the named hook (observation semantics) |
+| `getProviders()` | `Array` | Get all registered providers |
+| `getChannels()` | `Array` | Get all registered channels |
+| `getTools(includeOptional?)` | `Array` | Get all registered tools |
+| `getContextEngines()` | `Array` | Get all registered context engines |
+| `getCommands()` | `Array` | Get all registered commands |
+| `getServices()` | `Array` | Get all registered services |
+| `onGatewayStart(config?, workspaceDir?)` | `Promise<void>` | Fire gateway_start + start services |
+| `onGatewayStop()` | `Promise<void>` | Fire gateway_stop + stop services |
+| `capabilities` | `CapabilityRegistry` | Capability registry |
 
 ### `PluginApi`
 
-register() 回调中接收的 api 对象。
+The api object received in the register() callback.
 
-| 方法 | 说明 |
+| Method | Description |
 |------|------|
-| `on(hookName, handler, opts?)` | 注册 hook handler |
-| `registerTool(definition, handler, opts?)` | 注册 Agent Tool |
-| `registerProvider(registration)` | 注册 LLM Provider |
-| `registerChannel(registration)` | 注册 Channel Adapter |
-| `registerContextEngine(id, engine)` | 注册 Context Engine |
-| `registerCommand(def)` | 注册 Command |
-| `registerService(service)` | 注册后台服务 |
-| `resolvePath(relativePath)` | 解析相对路径 |
+| `on(hookName, handler, opts?)` | Register a hook handler |
+| `registerTool(definition, handler, opts?)` | Register an Agent Tool |
+| `registerProvider(registration)` | Register an LLM Provider |
+| `registerChannel(registration)` | Register a Channel Adapter |
+| `registerContextEngine(id, engine)` | Register a Context Engine |
+| `registerCommand(def)` | Register a Command |
+| `registerService(service)` | Register a background service |
+| `resolvePath(relativePath)` | Resolve a relative path |
 
 ### `CapabilityRegistry`
 
-| 方法 | 说明 |
+| Method | Description |
 |------|------|
-| `register(pluginId, manifest)` | 注册 plugin 的能力声明 |
-| `unregister(pluginId)` | 移除 plugin 的能力声明 |
-| `getOwner(type, id)` | 获取能力的 owner plugin ID |
-| `getCapabilitiesByType(type)` | 获取指定类型的所有能力 |
-| `getPluginCapabilities(pluginId)` | 获取 plugin 的所有能力声明 |
-| `hasCapability(type, id)` | 检查能力是否存在 |
-| `assertNoConflicts(pluginId, manifest)` | 断言无冲突 |
-| `hasExclusiveSlotConflict(kind, manifest)` | 检查排他性 slot 冲突 |
-| `listConflicts()` | 列出所有冲突 |
+| `register(pluginId, manifest)` | Register a plugin’s capability declarations |
+| `unregister(pluginId)` | Remove a plugin’s capability declarations |
+| `getOwner(type, id)` | Get the owner plugin ID of a capability |
+| `getCapabilitiesByType(type)` | Get all capabilities of a type |
+| `getPluginCapabilities(pluginId)` | Get all capability declarations of a plugin |
+| `hasCapability(type, id)` | Check whether a capability exists |
+| `assertNoConflicts(pluginId, manifest)` | Assert there are no conflicts |
+| `hasExclusiveSlotConflict(kind, manifest)` | Check for exclusive-slot conflicts |
+| `listConflicts()` | List all conflicts |
 
 ### `PluginLoader`
 
-| 方法 | 说明 |
+| Method | Description |
 |------|------|
-| `discover()` | 发现并加载所有 plugins |
-| `getAllPlugins()` | 获取所有已加载的 plugins |
-| `getRegisteredIds()` | 获取已注册的 plugin IDs |
-| `getPlugin(id)` | 获取指定 plugin |
-| `capabilities` | CapabilityRegistry 实例 |
+| `discover()` | Discover and load all plugins |
+| `getAllPlugins()` | Get all loaded plugins |
+| `getRegisteredIds()` | Get registered plugin IDs |
+| `getPlugin(id)` | Get a specific plugin |
+| `capabilities` | CapabilityRegistry instance |
 
 ### `LoadedPlugin`
 

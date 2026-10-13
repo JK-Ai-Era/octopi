@@ -1,55 +1,56 @@
-# Observer Domain — 观测领域
+# Observer Domain
 
-> **地位**：外部文档（tracked）。与 [architecture.md](./architecture.md)、[north-star.md](./north-star.md) 一致。  
-> **内部设计笔记**存于内部目录（gitignored，不入库，不对外）。
+> **Language note**: This English edition is the **working authority**. The Chinese translation is [`observer-domain.zh.md`](./observer-domain.zh.md). Keep both in sync.
+> **Status**: external document (tracked). Consistent with [architecture.md](./architecture.md) and [north-star.md](./north-star.md).  
+> **Internal design notes** live in the internal directory (gitignored, not in the repo, not public).
 
 ---
 
-## 1. 产品心智：一个领域，两个子域
+## 1. Product Mindset: One Domain, Two Subdomains
 
-Octopi 的「Observer」不是单一类，而是 **观测领域（Observer Domain）** 下两个正交子域：
+Octopi’s “Observer” is not a single class. It is two orthogonal subdomains under the **Observer Domain**:
 
-| 子域 | 代码位置 | 消费者 | 生产缺省 |
+| Subdomain | Code location | Consumers | Production default |
 |------|----------|--------|----------|
-| **Telemetry**（运营可观测） | `core/interfaces/observer.ts` + `integration/observability/*`（NoopObserver / LogObserver / ObserverBridge / TraceLogger / MetricsAggregator） | 指标、追踪、Exporter | 可接生产（`observability` 配置） |
-| **Run Observatory**（开发调试） | `harness/observability/observer/*`（ObserverHub + Run 投影） | Web 右栏 **Run** 面板、`/debug/run/*` | **`observer.level=off`** |
+| **Telemetry** (operational observability) | `core/interfaces/observer.ts` + `integration/observability/*` (NoopObserver / LogObserver / ObserverBridge / TraceLogger / MetricsAggregator) | Metrics, tracing, exporters | Can run in production (`observability` config) |
+| **Run Observatory** (dev debugging) | `harness/observability/observer/*` (ObserverHub + Run projections) | Web right-rail **Run** panel, `/debug/run/*` | **`observer.level=off`** |
 
 ```text
 Observer Domain
-├── Telemetry        — Core Observer → Trace / Metrics（运营）
-└── Run Observatory  — ObserverHub → 快照 / debug REST / Run 面板（开发）
+├── Telemetry        — Core Observer → Trace / Metrics (ops)
+└── Run Observatory  — ObserverHub → snapshots / debug REST / Run panel (dev)
          ▲
-         └── 共享事件源：EventBus / HarnessLoopEvent / SecurityGuard
+         └── Shared event sources: EventBus / HarnessLoopEvent / SecurityGuard
 ```
 
-**不合并成一个实现类**：敏感面、失败策略、保留策略、消费者均不同。配置键保持双轨：
+**Do not merge into one implementation class**: sensitive surfaces, failure policies, retention policies, and consumers all differ. Config keys stay on two rails:
 
 - `observability` — Telemetry  
-- `observer` — Run Observatory（Run 现场）
+- `observer` — Run Observatory (live Run scene)
 
-二者同属 Observer Domain 心智，实现分离。
+Both belong to the Observer Domain mindset; implementations stay separate.
 
 ---
 
-## 2. Run Observatory（开发调试）
+## 2. Run Observatory (dev debugging)
 
-### 2.1 职责
+### 2.1 Responsibilities
 
-开发/测试时观察 **Run 可变现场**（宪法 I1）：RunScope、workspace vs LLM messages、Guard metrics、timeline，以及 security / memory / tool.effect 投影。  
-**EventBus 仍是协调总线**；ObserverHub 负责打包可检视快照，观测失败 fail-open，不打断业务路径。
+Observe the **mutable Run scene** during development/test (constitution I1): RunScope, workspace vs LLM messages, Guard metrics, timeline, plus security / memory / tool.effect projections.  
+**EventBus remains the coordination bus**; ObserverHub packages inspectable snapshots. Observation failures are fail-open and never interrupt the business path.
 
-### 2.2 与 Core `Observer` 的区别
+### 2.2 Difference from Core `Observer`
 
 | | Core `Observer` | Run Observatory `ObserverHub` |
 |--|-----------------|-------------------------------|
-| 接口 | `recordMetric` / `startSpan` / `log` | 事件摄入 + 快照投影 |
-| 数据 | 计数、延迟、span | systemPrompt、消息、工具、安全事件 |
-| 缺省 | 可 Noop / 常开 | **`level=off`** |
-| 出口 | OTel/Webhook/文件 | `/debug/run/*` + Web Run 面板 |
+| Interface | `recordMetric` / `startSpan` / `log` | Event ingestion + snapshot projection |
+| Data | Counts, latency, spans | systemPrompt, messages, tools, security events |
+| Default | May be Noop / always on | **`level=off`** |
+| Egress | OTel/Webhook/file | `/debug/run/*` + Web Run panel |
 
-禁止把产品 `ObserverHub` 实现成 Core `Observer`，也禁止在 Core→Harness 方向依赖 Hub。
+Do not implement the product `ObserverHub` as a Core `Observer`, and do not depend on the Hub in the Core→Harness direction.
 
-### 2.3 配置（`octopi.json`）
+### 2.3 Configuration (`octopi.json`)
 
 ```json
 {
@@ -61,87 +62,87 @@ Observer Domain
 }
 ```
 
-| 字段 | 语义 |
+| Field | Semantics |
 |------|------|
-| `level` | `off`（**缺省**，不采集）/ `summary`（无 message 全文）/ `full`（全文 + `context.llm`） |
-| `webPanel` | 跟 level：`off` 强制关；开启档位默认 true，可显式 false |
-| `channels` | 分通道覆盖；未列出按 level 预设 |
-| `payload` / `retention` | 正文开关与保留；**message 全文**须 `payload.messageFullText && retention.messagesPerRun==='full'` |
-| `failOpen` | 观测异常只 warn（默认 true） |
+| `level` | `off` (**default**, no collection) / `summary` (no full message text) / `full` (full text + `context.llm`) |
+| `webPanel` | Follows level: forced off at `off`; default true at enabled levels, can be explicitly false |
+| `channels` | Per-channel overrides; unlisted channels use the level preset |
+| `payload` / `retention` | Body switches and retention; **full message text** requires `payload.messageFullText && retention.messagesPerRun==='full'` |
+| `failOpen` | Observation errors only warn (default true) |
 
-summary/full 预设默认开启已实现通道：`run.scope` / `run.messages` / `run.timeline` / `run.guard` / `context.layers` / `context.compact` / `tool.effect` / `security` / `memory`；`context.llm` 仅 `level=full`。
+summary/full presets default-enable already-implemented channels: `run.scope` / `run.messages` / `run.timeline` / `run.guard` / `context.layers` / `context.compact` / `tool.effect` / `security` / `memory`; `context.llm` only at `level=full`.
 
-配置形态必须与 `src/config-schema.ts`、`octopi.schema.json`、`octopi.example.json` 同步。
+Config shape must stay in sync with `src/config-schema.ts`, `octopi.schema.json`, `octopi.example.json`.
 
-### 2.4 Run 身份
+### 2.4 Run Identity
 
-- `RunScope.runId` + `createRunId(sessionId, agentId)`（`harness/run/run-scope.ts`）  
-- Observer **不另造权威 Run ID**；Hub 优先 `scope.runId`  
-- 与宪法 Run = `(sessionId, agentId, …)` 对齐  
+- `RunScope.runId` + `createRunId(sessionId, agentId)` (`harness/run/run-scope.ts`)  
+- Observer **does not mint a separate authoritative Run ID**; Hub prefers `scope.runId`  
+- Aligned with constitution Run = `(sessionId, agentId, …)`  
 
-### 2.5 采样路径（避免双计）
+### 2.5 Sampling Paths (avoid double-counting)
 
-| 来源 | 路径 |
+| Source | Path |
 |------|------|
-| Runner 生命周期 / loop 适配事件 | `SessionAwareRunner.emitObserved` → **先** `hub.ingestEvent` **再** EventBus |
-| ContextEngine（compact 等） | Builder `assemble` 的 `emit` 回调 → Hub + bus |
-| SecurityGuard | `emitRunEvent` 附带 RunScope 身份；reliability 拦截 → `security_blocked` → `security.blocked` |
-| Gateway | **只写** Context 面板用的 layers Map；**不**再 `hub.ingestEvent`（防止 timeline/lifecycle 双计） |
+| Runner lifecycle / loop adapter events | `SessionAwareRunner.emitObserved` → **first** `hub.ingestEvent` **then** EventBus |
+| ContextEngine (compact etc.) | Builder `assemble`’s `emit` callback → Hub + bus |
+| SecurityGuard | `emitRunEvent` carries RunScope identity; reliability intercept → `security_blocked` → `security.blocked` |
+| Gateway | **Only writes** the layers Map for the Context panel; **does not** call `hub.ingestEvent` again (prevents timeline/lifecycle double-counting) |
 
-Context 契约层（产品「上下文」页签）与 Run 现场（Observer）**并存**：
+Context contract layer (product “Context” tab) and the Run scene (Observer) **coexist**:
 
-- Gateway `lastContextLayers` — Context 面板，与 `observer.level` 无关  
-- ObserverHub — Run 观测，在 level≠off 时快照  
+- Gateway `lastContextLayers` — Context panel, independent of `observer.level`  
+- ObserverHub — Run observation, snapshots when level≠off  
 
-### 2.6 调试 REST（非产品 API）
+### 2.6 Debug REST (not a product API)
 
-挂在 HTTP 根路径（**不在** `/api/v1` 下）：
+Mounted at the HTTP root (**not** under `/api/v1`):
 
 ```http
 GET /debug/run/:sessionId/scope
 GET /debug/run/:sessionId/messages?phase=entry|final&runId=&view=workspace|llm
 ```
 
-受 `observer.level` / `webPanel` 门控。SDK 使用 `baseUrl + /debug/run/...`（`getDebugJson`），不要拼进 `restBase=/api/v1`。
+Gated by `observer.level` / `webPanel`. SDK uses `baseUrl + /debug/run/...` (`getDebugJson`); do not fold it into `restBase=/api/v1`.
 
-### 2.7 通道投影（`RunObservatorySnapshot`）
+### 2.7 Channel Projections (`RunObservatorySnapshot`)
 
-| 通道 | 内容 |
+| Channel | Content |
 |------|------|
-| run.scope | agentId / model / cwd / isolation / systemPrompt 长度与预览（full 另有全文切换） |
-| run.messages | workspace entry/final；full 下含正文；diff |
-| run.timeline | engine / tool / compact / security 等适配后事件 |
-| run.guard | iteration、tokensΣ nominal（诊断）、usageLedger 分项（uncached/cached/out + cacheAware）、consecErr 等 |
-| context.llm | ContextEngine 出口消息摘要（full 可看正文） |
-| tool.effect (I5) | 本 Run cwd/isolation + 按工具 calls/errors |
-| security | injection / policy / sensitive / blocked 等结构化事件 |
-| memory | memory_store / memory_search **只读**摘要（Observer 不写库，E3） |
+| run.scope | agentId / model / cwd / isolation / systemPrompt length and preview (full also has full-text toggle) |
+| run.messages | workspace entry/final; body text at full; diff |
+| run.timeline | Adapted engine / tool / compact / security events |
+| run.guard | iteration, tokensΣ nominal (diagnostics), usageLedger breakdown (uncached/cached/out + cacheAware), consecErr, etc. |
+| context.llm | ContextEngine egress message summary (body visible at full) |
+| tool.effect (I5) | This Run’s cwd/isolation + per-tool calls/errors |
+| security | injection / policy / sensitive / blocked structured events |
+| memory | memory_store / memory_search **read-only** summary (Observer does not write stores, E3) |
 
-Web UI：右栏 **Run** 页签（`RunObservatoryPanel`）。
+Web UI: right-rail **Run** tab (`RunObservatoryPanel`).
 
-### 2.8 内存与保留
+### 2.8 Memory and Retention
 
-- runs / timeline：FIFO（`retention.runsPerSession` / `timelineEvents`）  
-- session 键与 `lastLlmBySession` 随 run/session 淘汰清理  
-- 进程内缓存；跨进程部署时观测天然是 per-process（与 E7 单进程假设一致）  
-
----
-
-## 3. 开发者注意
-
-1. **生产/嵌入缺省不采集**；要调试再显式 `observer.level=summary|full` 并重启引擎。  
-2. **新跑一轮才会采样**；改配置后不会回填历史 run。  
-3. 改配置 shape 时同步 Zod + schema + example + 本文。  
-4. 勿在 Gateway 再次 `hub.ingestEvent` Runner 已摄入的事件。  
-5. Core Telemetry（`observability`）与 Run Observatory（`observer`）不要混用配置键。  
-6. 宪法约束仍适用：I1（现场只在 RunScope）、I2（Discourse 权威）、E3（memory 只读投影）、I5（工具效应面）。
+- runs / timeline: FIFO (`retention.runsPerSession` / `timelineEvents`)  
+- session keys and `lastLlmBySession` are cleaned up as runs/sessions are evicted  
+- In-process cache; under multi-process deployment observation is naturally per-process (consistent with the E7 single-process assumption)  
 
 ---
 
-## 4. 相关文档
+## 3. Developer Notes
 
-- [architecture.md](./architecture.md) — 分层与 Harness 领域  
-- [north-star.md](./north-star.md) — 宪法不变量  
-- [CONTRIBUTING.md](./CONTRIBUTING.md) — 文档/测试同步规范  
-- `packages/engine/src/harness/observability/observer/*` — Hub / DTO / 快照实现  
-- `octopi.schema.json` — `observer` 配置 Schema  
+1. **Production/embedded defaults collect nothing**; to debug, explicitly set `observer.level=summary|full` and restart the engine.  
+2. **Only new runs are sampled**; changing config does not backfill historical runs.  
+3. When changing config shape, sync Zod + schema + example + this doc.  
+4. Do not call `hub.ingestEvent` in Gateway for events the Runner already ingested.  
+5. Do not mix config keys between Core Telemetry (`observability`) and Run Observatory (`observer`).  
+6. Constitution constraints still apply: I1 (scene only in RunScope), I2 (Discourse authority), E3 (memory read-only projection), I5 (tool effect plane).
+
+---
+
+## 4. Related Documents
+
+- [architecture.md](./architecture.md) — layering and Harness domains  
+- [north-star.md](./north-star.md) — constitutional invariants  
+- [CONTRIBUTING.md](./CONTRIBUTING.md) — documentation/test sync standards  
+- `packages/engine/src/harness/observability/observer/*` — Hub / DTO / snapshot implementation  
+- `octopi.schema.json` — `observer` config schema  

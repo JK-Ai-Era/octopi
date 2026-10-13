@@ -5,7 +5,9 @@
 > Agent 不是一个 class——它是一个完整的运行时。
 > 运行时、连续性、治理——一部宪法管到底。
 
-[English](./README.md) · [文档](./docs/) · [架构](./docs/architecture.md) · [参与贡献](./docs/CONTRIBUTING.md)
+> **语言说明**：英文版见 [README.md](./README.md)。本文为中文对译，变更须双语同步。
+
+[English](./README.md) · [文档](./docs/) · [架构](./docs/architecture.zh.md) · [参与贡献](./docs/CONTRIBUTING.zh.md)
 
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue) ![Node](https://img.shields.io/badge/node-%3E%3D24-brightgreen) ![npm](https://img.shields.io/npm/v/octopi-agent?label=octopi-agent)
 
@@ -73,7 +75,7 @@ Octopi 是一台**可嵌入的 Agent 引擎**——你构建 AI 驱动产品的�
 
 这就是上面那些不变量能在并发与生长中活下来的原因：RunScope 隔离、Discourse 权威、权限格不是开发者记得的口号——它们被**检查**：依赖边界自动校验、清单单一权威、违法即失败的测试。任何新工作只先回答一个问题：*它违反宪法吗？*
 
-📖 **[阅读完整宪法 →](./docs/north-star.md)** (English: [docs/north-star.en.md](./docs/north-star.en.md))
+📖 **[阅读完整宪法 →](./docs/north-star.zh.md)** (English: [docs/north-star.md](./docs/north-star.md))
 
 ---
 
@@ -163,7 +165,7 @@ Information ──蒸馏──► Memory ──织网──► Cognition ──�
 └────────────────────────────────────────────────────────────┘
 ```
 
-Octopi Harness 分 10 个产品域——治理、会话、智能体、记忆、知识、激活、运行、上下文、扩展、协作——按三个平面分组：*权威*（治理 · 会话 · 智能体 · 记忆 · 知识）、*阶段*（激活 · 运行）、*能力*（上下文 · 扩展 · 协作）。计数权威是 [docs/domains.yaml](./docs/domains.yaml)，叙事见 [docs/domains.md](./docs/domains.md)。
+Octopi Harness 分 10 个产品域——治理、会话、智能体、记忆、知识、激活、运行、上下文、扩展、协作——按三个平面分组：*权威*（治理 · 会话 · 智能体 · 记忆 · 知识）、*阶段*（激活 · 运行）、*能力*（上下文 · 扩展 · 协作）。计数权威是 [docs/domains.yaml](./docs/domains.yaml)，叙事见 [docs/domains.zh.md](./docs/domains.zh.md)。
 
 Loop 层是**纯 async generator**——零状态、零外部依赖——所以它之上的整个运行时都是可替换的契约：`ModelProvider`、`SessionStore`、`ContextEngine`、`SecurityGuard`……
 
@@ -219,7 +221,7 @@ my-agent/
         └── SKILL.md    # 两阶段加载：先读元数据，内容按需加载
 ```
 
-学习基质（Memory / Cognition / Wisdom）住在每个 agent 自己的 SQLite 库里——它是*长出来的*，不是手写的。见 [docs/memory.md](./docs/memory.md)。
+学习基质（Memory / Cognition / Wisdom）住在每个 agent 自己的 SQLite 库里——它是*长出来的*，不是手写的。见 [docs/memory.zh.md](./docs/memory.zh.md)。
 
 ### 挂载 MCP 服务器
 
@@ -244,17 +246,17 @@ const { agent, runner } = await new AgentBuilder()
 
 | 能力 | 一句话 | 详情 |
 |---|---|---|
-| **插件与 hooks** | 拦截 + 观察两类语义、按优先级排序、per-handler 超时；生命周期覆盖从模型解析到循环结束 | [docs/plugin-system.md](./docs/plugin-system.md) |
-| **技能** | 两阶段加载：启动只读 frontmatter，内容按需——100 个技能只花几百 token | [docs/plugin-system.md](./docs/plugin-system.md) |
-| **MCP** | 原生，命名空间 `{serverId}__{toolName}`；stdio/SSE | [docs/architecture.md](./docs/architecture.md) |
-| **知识** | 源是权威、索引可重建；两阶段索引（分钟级可搜）；Global/Project/Session 三级 Scope；独立 Knowledge Service 是 `knowledge.db` 的唯一写者 | [docs/knowledge.md](./docs/knowledge.md) |
-| **会话任务** | 目标与步骤作为会话投影，配任务工具 | [docs/task-system.md](./docs/task-system.md) |
+| **插件与 hooks** | 拦截 + 观察两类语义、按优先级排序、per-handler 超时；生命周期覆盖从模型解析到循环结束 | [docs/plugin-system.zh.md](./docs/plugin-system.zh.md) |
+| **技能** | 两阶段加载：启动只读 frontmatter，内容按需——100 个技能只花几百 token | [docs/plugin-system.zh.md](./docs/plugin-system.zh.md) |
+| **MCP** | 原生，命名空间 `{serverId}__{toolName}`；stdio/SSE | [docs/architecture.zh.md](./docs/architecture.zh.md) |
+| **知识** | 源是权威、索引可重建；两阶段索引（分钟级可搜）；Global/Project/Session 三级 Scope；独立 Knowledge Service 是 `knowledge.db` 的唯一写者 | [docs/knowledge.zh.md](./docs/knowledge.zh.md) |
+| **会话任务** | 目标与步骤作为会话投影，配任务工具 | [docs/task-system.zh.md](./docs/task-system.zh.md) |
 | **Web 搜索** | `web_search` 工具；内置 duckduckgo / tavily / brave / serper / mimo，按序降级 | `octopi.example.json` |
-| **文档端口** | PDF / Office 抽取公用能力（`documents.*`） | [docs/architecture.md](./docs/architecture.md) |
-| **多智能体** | Swarm 拓扑（层级 / 流水线 / 广播 / 对等），跑在受治理的角色之上 | [docs/domains.md](./docs/domains.md) |
-| **人机协同** | 审批请求/决议是引擎契约，Gateway 与 UI 都能接 | [docs/architecture.md](./docs/architecture.md) |
-| **可观测性** | Telemetry（trace、metrics、exporter）+ Run Observatory 调试观测 | [docs/observer-domain.md](./docs/observer-domain.md) |
-| **交互面** | 终端（TUI）、Gateway（REST + WS）、带上下文检查器的 Web Runtime | [docs/architecture.md](./docs/architecture.md) |
+| **文档端口** | PDF / Office 抽取公用能力（`documents.*`） | [docs/architecture.zh.md](./docs/architecture.zh.md) |
+| **多智能体** | Swarm 拓扑（层级 / 流水线 / 广播 / 对等），跑在受治理的角色之上 | [docs/domains.zh.md](./docs/domains.zh.md) |
+| **人机协同** | 审批请求/决议是引擎契约，Gateway 与 UI 都能接 | [docs/architecture.zh.md](./docs/architecture.zh.md) |
+| **可观测性** | Telemetry（trace、metrics、exporter）+ Run Observatory 调试观测 | [docs/observer-domain.zh.md](./docs/observer-domain.zh.md) |
+| **交互面** | 终端（TUI）、Gateway（REST + WS）、带上下文检查器的 Web Runtime | [docs/architecture.zh.md](./docs/architecture.zh.md) |
 
 ---
 
@@ -288,7 +290,7 @@ Octopi 处于 v0.7x，迭代很快。诚实地说清边界：
 - **协作域**标注 `status: incomplete`——语义已定义，部分实现分期交付。
 - **不适合所有人**：如果单厂商 SDK 的 loop 就够用，或者你要的是垂直业务流程引擎，或者你要把人级 IAM 放进引擎里——Octopi 不是你想要的。它是为"在自身产品逻辑之下还需要连续性、学习与治理"的产品准备的引擎。
 
-开放项见 [docs/KNOWN-ISSUES.md](./docs/KNOWN-ISSUES.md)。
+开放项见 [docs/KNOWN-ISSUES.zh.md](./docs/KNOWN-ISSUES.zh.md)。
 
 ---
 
@@ -316,9 +318,9 @@ octopi-agent               套件（CLI bin: octopi）+ 配置 IO
 
 ## 文档
 
-- **概念**——[宪法](./docs/north-star.md) · [产品域](./docs/domains.md) · [记忆](./docs/memory.md) · [知识](./docs/knowledge.md) · [上下文层](./docs/context-layer-contracts.md) · [任务](./docs/task-system.md) · [插件](./docs/plugin-system.md) · [自主子系统](./docs/autonomous-subsystem.md) · [观测](./docs/observer-domain.md)
-- **指南**——[参与贡献](./docs/CONTRIBUTING.md) · [已知问题](./docs/KNOWN-ISSUES.md) · [示例配置](./octopi.example.json) · [JSON Schema](./octopi.schema.json)
-- **参考**——[架构](./docs/architecture.md) · [域清单](./docs/domains.yaml) · [变更日志](./CHANGELOG.md)
+- **概念**——[宪法](./docs/north-star.zh.md) · [产品域](./docs/domains.zh.md) · [记忆](./docs/memory.zh.md) · [知识](./docs/knowledge.zh.md) · [上下文层](./docs/context-layer-contracts.zh.md) · [任务](./docs/task-system.zh.md) · [插件](./docs/plugin-system.zh.md) · [自主子系统](./docs/autonomous-subsystem.zh.md) · [观测](./docs/observer-domain.zh.md)
+- **指南**——[参与贡献](./docs/CONTRIBUTING.zh.md) · [已知问题](./docs/KNOWN-ISSUES.zh.md) · [示例配置](./octopi.example.json) · [JSON Schema](./octopi.schema.json)
+- **参考**——[架构](./docs/architecture.zh.md) · [域清单](./docs/domains.yaml) · [变更日志](./CHANGELOG.md)
 
 ---
 

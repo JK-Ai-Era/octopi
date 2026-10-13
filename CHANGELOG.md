@@ -1,3 +1,17 @@
+﻿## v0.74.1
+
+### docs: English-authoritative public docs with Chinese `.zh.md` twins
+
+**问题**：面向全球开发者后，对外文档仍以中文为权威（`north-star.md` 中文正文 + `north-star.en.md` 对译），其余 `docs/*` 与 `README_CN.md` 也是中文为主；AGENTS.md 混有宪法摘录、中英夹杂与过时阶段指针，容易漂移。
+
+**调整**：
+- **语言政策**：对外文档英文权威，中文为同级 `*.zh.md`；同一内容提交内双语同步；不一致以英文为准
+- **宪法**：`docs/north-star.md` 改为英文工作权威，中文移至 `docs/north-star.zh.md`；文首语言说明与变更记录同步
+- **文档对**：`architecture` / `autonomous-subsystem` / `context-layer-contracts` / `CONTRIBUTING` / `domains` / `knowledge` / `KNOWN-ISSUES` / `memory` / `observer-domain` / `plugin-system` / `task-system` 全部英文化并补 `.zh.md` 对译
+- **README**：`README_CN.md` → `README.zh.md`；交叉引用与 `package.json` / `scripts/sync-docs-paths.mjs` 清单同步
+- **AGENTS.md**：宪法节改为纯 gate（必读 + 不得违反 + 不在此复述不变量）；Default ports 归 Configuration；未决工作入口归 Documentation Sync；Layer 2 中文段译英；删除 `arch/IMPLEMENTATION-PLAN.md` 指针并移除该归档文件
+
+**测试**：英文公开文档无 CJK 残留；12 对 `*.md` / `*.zh.md` 齐全；无行为变更。
 ## v0.74.0
 
 ### feat(harness): shell effect ledger, purpose titles, and ToolEffectPolicy hardening

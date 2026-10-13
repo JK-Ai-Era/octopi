@@ -22,7 +22,7 @@ const files = [
   ...walk('packages'),
   ...walk('src'),
   'README.md',
-  'README_CN.md',
+  'README.zh.md',
   'AGENTS.md',
 ];
 
