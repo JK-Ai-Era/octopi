@@ -44,6 +44,19 @@ export interface AgentEventMap {
     hasError?: boolean;
     result?: unknown;
     durationMs?: number;
+    /** 行动简述 */
+    purpose?: string;
+  };
+  /** ToolEffectPolicy §5.6 效应账本摘要（turn 级；Observer tool.effect） */
+  'tool.effect.ledger': {
+    entries: number;
+    truncated?: boolean;
+    notReversed?: {
+      reason: string;
+      created?: string[];
+      modified?: string[];
+      deleted?: string[];
+    };
   };
 
   // ── 预算 / 过程监督 ──

@@ -106,6 +106,7 @@ export type { MemoryEffectJournal, MemoryEffectDomain } from '@octopi-agent/core
 export {
   resolveEffectiveEffectPolicy,
   isPathAllowed,
+  DEFAULT_EFFECT_RUN_MODE,
 } from './harness/extension/execution-environment/effect-policy.js';
 export {
   runWithToolLimits,
@@ -124,12 +125,21 @@ export type {
   PathContainment,
   ShellEscapePolicy,
 } from './harness/extension/execution-environment/effect-policy.js';
+export {
+  scanOrphanSessionUndo,
+} from './harness/extension/execution-environment/undo-log.js';
 export type {
   SessionUndoPaths,
   FileUndoEntry,
   DiscardFileEffectsResult,
   DiscardConflictReason,
+  EditResendResult,
+  NotReversedEffects,
+  NotReversedReason,
+  UndoLimitConfig,
+  OrphanUndoDir,
 } from './harness/extension/execution-environment/undo-log.js';
+export type { ShellJournalMode } from './harness/extension/execution-environment/effect-policy.js';
 export type { ToolFileEffects } from '@octopi-agent/core/types/tools.js';
 export { InProcessSessionLock } from './harness/run/concurrency/session-lease.js';
 export type { SessionLease } from './harness/run/concurrency/session-lease.js';

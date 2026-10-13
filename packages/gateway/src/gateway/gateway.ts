@@ -482,6 +482,8 @@ export class Gateway {
 
     // Issue ?WS 广播
     this.issueRegistry.subscribe((ev) => this.broadcastIssue(ev));
+    // doctor 兜底：崩溃残留 undo 目录
+    void this.scanOrphanUndo().catch(() => undefined);
 
     // 注册配置义的 agents
     for (const agent of config.agents) {
@@ -649,12 +651,16 @@ export class Gateway {
     const { getOctopiHome } = await import('@octopi-agent/engine/paths.js');
     const { join } = await import('node:path');
     const sessionsDir = join(getOctopiHome(), 'sessions');
-    const onClose =
-      (this.config.effectPolicy?.onClose as 'commit' | 'discard' | undefined) ?? 'commit';
     const agentId = await this.store
       .load(sessionId)
       .then((s) => s?.primaryAgentId ?? s?.agentId)
       .catch(() => undefined);
+    const agentEff = (this.config.agents as Array<{ id?: string; effectPolicy?: { onClose?: string } }> | undefined)
+      ?.find((a) => a.id === agentId)?.effectPolicy;
+    const onClose =
+      (agentEff?.onClose as 'commit' | 'discard' | undefined)
+      ?? (this.config.effectPolicy?.onClose as 'commit' | 'discard' | undefined)
+      ?? 'commit';
     const memoryRestorer = agentId ? this.memoryRestorers.get(agentId) : undefined;
     return resolveSessionUndoOnClose({
       sessionsDir,
@@ -691,10 +697,16 @@ export class Gateway {
         } catch {
           continue;
         }
-        await resolveSessionUndoOnClose({ sessionsDir, sessionId: name, onClose }).catch(
-          () => undefined,
-        );
-        void resolveSessionUndoPaths;
+        const memRestorer = await this.store
+          .load(name)
+          .then((s) => this.memoryRestorers.get(s?.primaryAgentId ?? s?.agentId ?? ''))
+          .catch(() => undefined);
+        await resolveSessionUndoOnClose({
+          sessionsDir,
+          sessionId: name,
+          onClose,
+          memoryRestorer: memRestorer,
+        }).catch(() => undefined);
       }
     } catch {
       // stop fail-open
@@ -811,6 +823,43 @@ export class Gateway {
 
   getIssueRegistry(): IssueRegistry {
     return this.issueRegistry;
+  }
+
+  /**
+   * doctor：扫描会话 undo 孤儿目录（崩溃残留）并登记 Issue。
+   *
+   * @returns 孤儿列表
+   */
+  async scanOrphanUndo(): Promise<Array<{
+    sessionDirName: string;
+    undoRoot: string;
+    entries: number;
+    hasMemory: boolean;
+    hasNotReversed: boolean;
+  }>> {
+    const { scanOrphanSessionUndo } = await import('@octopi-agent/engine');
+    const { getOctopiHome } = await import('@octopi-agent/engine/paths.js');
+    const { join } = await import('node:path');
+    const sessionsDir = join(getOctopiHome(), 'sessions');
+    const orphans = await scanOrphanSessionUndo(sessionsDir).catch(() => [] as never[]);
+    if (orphans.length > 0) {
+      const list = orphans
+        .map((o) => `${o.sessionDirName}(${o.entries} entries)`)
+        .join(', ');
+      this.issueRegistry.report({
+        id: 'orphan-session-undo',
+        domain: 'other',
+        code: 'undo_orphan_dirs',
+        severity: 'warning',
+        title: '发现残留 undo 目录',
+        detail: `崩溃或异常退出后未清理的 turn undo：${list}。可对最后一轮执行编辑重发 discard，或手动删除 sessions/*/undo。`,
+        refs: orphans.slice(0, 5).map((o) => ({ label: o.sessionDirName, path: o.undoRoot })),
+        actions: [{ id: 'doctor', label: '重新扫描' }],
+      });
+    } else {
+      this.issueRegistry.resolve('orphan-session-undo');
+    }
+    return orphans;
   }
 
   getCommandRouter(): CommandRouter {
@@ -1660,6 +1709,18 @@ export class Gateway {
       const session = await this.store.load(sessionId);
       if (!session) {
         throw new Error(`Session "${sessionId}" not found`);
+      }
+      // 仅服务「最后一轮进行中 → 回到本轮起点」；效应是整轮 discard，不是按 index 定点回滚
+      const aborted = session.metadata?.abortedTurn as
+        | { userMessageIndex?: number }
+        | undefined;
+      const allowed = aborted && typeof aborted.userMessageIndex === 'number'
+        ? aborted.userMessageIndex
+        : undefined;
+      if (allowed === undefined || fromIndex !== allowed) {
+        throw new Error(
+          `edit_resend_only_last_aborted_turn: fromIndex must equal abortedTurn.userMessageIndex`,
+        );
       }
       if (!Number.isInteger(fromIndex) || fromIndex < 0 || fromIndex > session.messages.length) {
         throw new Error(`fromIndex out of range: ${fromIndex}`);
@@ -3749,13 +3810,16 @@ export class Gateway {
       const sessionId = req.sessionId ?? 'unknown';
       const agentId = req.agentId ?? 'default';
       const toolName = req.toolCall?.name ?? 'tool';
-      const argsPreview = JSON.stringify(req.toolCall?.arguments ?? {}).slice(0, 200);
+      const args = (req.toolCall?.arguments ?? {}) as Record<string, unknown>;
+      const purpose = typeof args.purpose === 'string' ? args.purpose.trim() : '';
+      const argsPreview = JSON.stringify(args).slice(0, 200);
       try {
         const answer = await this.askUser({
           sessionId,
           agentId,
           question:
             `High-risk tool requires confirmation.\n` +
+            (purpose ? `Action: ${purpose}\n` : '') +
             `Tool: ${toolName}\nArgs: ${argsPreview}\nRisk: ${req.reason}\n\n` +
             `Allow this call?`,
           options: ['yes', 'no'],

@@ -1,3 +1,23 @@
+## v0.74.0
+
+### feat(harness): shell effect ledger, purpose titles, and ToolEffectPolicy hardening
+
+**问题**：shell 写盘不进 undo，编辑重发回滚不完整且可能误报成功；工具卡/审批只见工具名+原始参数；审查暴露截断快照误判 create、coalesce 吞 delete、`truncated` 不落盘等问题。
+
+**调整**：
+- **效应账本（§5.6）**：`ToolFileEffects` 扩展 delete/create/rename/overwrite/noteNotReversed；discard 逆序；`EditResendResult` 含 `notReversed`/`truncated`
+- **shellJournal**：`snapshot|off`（缺省 snapshot）；roots before 快照 → 同一 undo log；截断/无 roots **不装懂**（只进 notReversed）；预算缺省不限
+- **undoLimit**：缺省不限；撞顶停记 before、业务写继续 + `meta.json` truncated（异进程 discard 可读）
+- **产品缺省 mode=host**；`mode` schema 可选；`onClose` 支持 per-agent
+- **编辑重发**：仅接受 `abortedTurn.userMessageIndex`；WebUI 条带 + `editResendEffects`
+- **doctor**：`scanOrphanSessionUndo` + Gateway 启动登记
+- **Observer**：`tool.effect.ledger` → `RunToolEffectView.undo`
+- **tool `purpose`**：LLM 必填行动简述；工具卡/审批标题 `toolName: purpose`；handler 不接收
+- **LLM schema 净化**：剥离 `maxLength` 等扩展关键字（修复 OpenAI 兼容 400）
+- **审查修复**：截断不推断 create；last-op `agentDeleted`；rename 压目标；undo 目录写保护
+
+**测试**：effect-ledger / undo-orphan-scan / tool-purpose 等；`tests/harness` 全量通过；`arch/check-sync.sh` 通过。
+
 ## v0.73.0
 
 ### feat(harness): ToolEffectPolicy — turn undo, run modes, host-gate, L1 limits

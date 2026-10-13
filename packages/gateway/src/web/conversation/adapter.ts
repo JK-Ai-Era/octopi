@@ -164,6 +164,9 @@ export class ConversationAdapter {
           break;
         }
 
+        const argsObj = event.data?.args as Record<string, unknown> | undefined;
+        const purposeFromArgs =
+          argsObj && typeof argsObj.purpose === 'string' ? argsObj.purpose : undefined;
         const toolItem: ToolConversationItem = {
           id: ConversationAdapter.makeId('tool'),
           role: 'tool',
@@ -172,6 +175,7 @@ export class ConversationAdapter {
           source: 'runtime',
           toolName: String(event.data?.toolName ?? 'unknown'),
           toolCallId,
+          purpose: purposeFromArgs,
           status: 'running',
           args: event.data?.args,
           expandable: true,
@@ -208,11 +212,14 @@ export class ConversationAdapter {
           }
         }
         if (itemId) {
+          const purposeFromEnd =
+            typeof event.data?.purpose === 'string' ? event.data.purpose : undefined;
           items = items.map((it) =>
             it.id === itemId && it.role === 'tool'
               ? {
                   ...it,
                   status: isError ? 'error' : 'success',
+                  purpose: purposeFromEnd ?? (it as ToolConversationItem).purpose,
                   result: event.data?.result,
                   error: isError ? String(event.data?.result ?? 'Tool failed') : undefined,
                   endedAt: event.timestamp ?? Date.now(),
@@ -629,6 +636,7 @@ export class ConversationAdapter {
                 sessionId,
                 source: 'history',
                 toolName: tr.name ?? 'unknown',
+                purpose: extractPurposeFromArgs((tr as { args?: unknown }).args),
                 toolCallId: tr.toolCallId ?? `tc_${ts}`,
                 status: tr.isError ? 'error' : 'success',
                 result: tr.result,
@@ -752,6 +760,11 @@ function extractToolResults(msg: MessageRecord): Array<{ toolCallId: string; nam
     }));
   }
   return [];
+}
+
+function extractPurposeFromArgs(args: unknown): string | undefined {
+  const a = args as Record<string, unknown> | undefined;
+  return a && typeof a.purpose === 'string' && a.purpose.trim() ? a.purpose.trim() : undefined;
 }
 
 function extractToolName(msg: MessageRecord): string {

@@ -248,7 +248,7 @@
   "toolIsolation": "session-subdir",
 
   "effectPolicy": {
-    "mode": "workspace"
+    "mode": "host"
   },
 
   "fileSend": {

@@ -489,6 +489,23 @@ export class ObserverHub {
         // 继续落入 timeline（若启用）
       }
 
+      if (event.type === 'tool.effect.ledger') {
+        const d = (event.data ?? {}) as {
+          entries?: number;
+          truncated?: boolean;
+          notReversed?: { reason?: string; created?: string[]; modified?: string[]; deleted?: string[] };
+        };
+        const nr = d.notReversed;
+        record.toolEffect.undo = {
+          entries: Number(d.entries ?? 0),
+          truncated: d.truncated === true,
+          notReversedReason: nr?.reason,
+          notReversedPaths:
+            (nr?.created?.length ?? 0) + (nr?.modified?.length ?? 0) + (nr?.deleted?.length ?? 0),
+        };
+        record.updatedAt = Date.now();
+        return;
+      }
       // memory / tool.effect：从 tool.exec.end 投影
       if (
         event.type === 'tool.exec.end' &&
@@ -941,6 +958,7 @@ export class ObserverHub {
         ? {
             ...record.toolEffect,
             tools: record.toolEffect.tools.map((t) => ({ ...t })),
+            undo: record.toolEffect.undo ? { ...record.toolEffect.undo } : undefined,
             notes: record.toolEffect.notes ? [...record.toolEffect.notes] : undefined,
           }
         : undefined,

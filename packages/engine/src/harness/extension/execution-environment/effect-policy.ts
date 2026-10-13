@@ -10,10 +10,16 @@ import type { ToolIsolationMode } from './isolation.js';
 /** 命名运行模式 */
 export type EffectRunMode = 'workspace' | 'project' | 'host' | 'untrusted';
 
+/**
+ * 产品缺省运行模式（未配置 `effectPolicy` / 未写 `mode` 时）。
+ * `host`：本机自动化——shell allow、路径不设牢笼；严格场景显式 `workspace`。
+ */
+export const DEFAULT_EFFECT_RUN_MODE: EffectRunMode = 'host';
+
 /** 路径包含级别（L2） */
 export type PathContainment = 'strict' | 'soft' | 'none';
 
-/** shell 越界策略 */
+/** shell 工具策略（非「越界」；无 L4 时 deny=拒绝整个 shell） */
 export type ShellEscapePolicy = 'deny' | 'confirm' | 'allow';
 
 /** commit 策略 */
@@ -76,20 +82,30 @@ export type ConfirmEffect = (intent: {
 
 export type EffectConfirmChannel = 'engine' | 'host-gate';
 
+/** shell 记账深度（§5.6）：snapshot=采 before 可逆；off=只知情 */
+export type ShellJournalMode = 'snapshot' | 'off';
+
 /** 配置形状（可覆盖预设） */
 export interface EffectPolicyConfig {
-  mode: EffectRunMode;
+  /** 省略 = `DEFAULT_EFFECT_RUN_MODE`（host） */
+  mode?: EffectRunMode;
   /** 额外事务 root（绝对路径）；并入 allowRoots */
   transactionRoots?: string[];
   pathContainment?: PathContainment;
   shellEscape?: ShellEscapePolicy;
   processLimits?: boolean;
   commit?: EffectCommitPolicy;
-  /** 会话关闭策略；当前 schema 不暴露（未接 session-close 钩子），仅类型预留 */
+  /** commit=manual 时会话关闭/超时如何收残留 undo */
   onClose?: 'commit' | 'discard';
   effects?: EffectConfirmChannel;
   /** 覆盖模式推导的 toolIsolation */
   toolIsolation?: ToolIsolationMode;
+  /** undo 配额；缺省不限。撞顶停记 before，业务写继续 */
+  undoLimit?: { maxEntries?: number; maxBlobBytes?: number };
+  /** shell 记账深度；缺省 snapshot */
+  shellJournal?: ShellJournalMode;
+  /** shell 清点/快照预算；缺省不限 */
+  shellJournalLimit?: { maxFiles?: number; maxBytes?: number; maxFileSize?: number };
 }
 
 /** 展开后的有效策略 */
@@ -106,6 +122,9 @@ export interface EffectiveEffectPolicy {
   allowRoots: string[];
   /** 事务 root 语义标签 */
   transactionRoots: Array<'workspace' | 'memory' | 'host'>;
+  undoLimit?: { maxEntries?: number; maxBlobBytes?: number };
+  shellJournal: ShellJournalMode;
+  shellJournalLimit?: { maxFiles?: number; maxBytes?: number; maxFileSize?: number };
 }
 
 const MODE_DEFAULTS: Record<
@@ -122,6 +141,7 @@ const MODE_DEFAULTS: Record<
     commit: 'auto',
     onClose: 'commit',
     effects: 'engine',
+    shellJournal: 'snapshot',
   },
   project: {
     mode: 'project',
@@ -133,6 +153,7 @@ const MODE_DEFAULTS: Record<
     commit: 'auto',
     onClose: 'commit',
     effects: 'engine',
+    shellJournal: 'snapshot',
   },
   host: {
     mode: 'host',
@@ -143,6 +164,7 @@ const MODE_DEFAULTS: Record<
     commit: 'auto',
     onClose: 'commit',
     effects: 'engine',
+    shellJournal: 'snapshot',
   },
   untrusted: {
     mode: 'untrusted',
@@ -153,13 +175,14 @@ const MODE_DEFAULTS: Record<
     commit: 'auto',
     onClose: 'discard',
     effects: 'engine',
+    shellJournal: 'snapshot',
   },
 };
 
 /**
  * 展开 effectPolicy 为有效策略
  *
- * @param config - 用户配置（mode 必填，其余可覆盖）
+ * @param config - 用户配置（mode 可省略，缺省 `DEFAULT_EFFECT_RUN_MODE`）
  * @param baseWorkspace - 工具基路径（agent.workspace / RunConfig.cwd）
  * @returns 有效策略
  */
@@ -167,11 +190,12 @@ export function resolveEffectiveEffectPolicy(
   config: EffectPolicyConfig,
   baseWorkspace?: string,
 ): EffectiveEffectPolicy {
-  const d = MODE_DEFAULTS[config.mode];
+  const mode = config.mode ?? DEFAULT_EFFECT_RUN_MODE;
+  const d = MODE_DEFAULTS[mode];
   const extra = (config.transactionRoots ?? []).map((p) => p.trim()).filter(Boolean);
   const allowRoots = [...(baseWorkspace?.trim() ? [baseWorkspace.trim()] : []), ...extra];
   return {
-    mode: config.mode,
+    mode,
     toolIsolation: config.toolIsolation ?? d.toolIsolation,
     pathContainment: config.pathContainment ?? d.pathContainment,
     shellEscape: config.shellEscape ?? d.shellEscape,
@@ -185,6 +209,9 @@ export function resolveEffectiveEffectPolicy(
       'memory',
       ...extra.map(() => 'host' as const),
     ],
+    undoLimit: config.undoLimit,
+    shellJournal: config.shellJournal ?? 'snapshot',
+    shellJournalLimit: config.shellJournalLimit,
   };
 }
 

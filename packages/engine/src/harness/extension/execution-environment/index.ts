@@ -34,6 +34,19 @@ export type {
 } from './undo-log.js';
 export { isProbablyText, reverseAgentOverwrite, merge3Lines } from './undo-merge.js';
 export {
+  snapshotShellRoots,
+  captureShellInventory,
+  diffShellInventory,
+  journalShellDiff,
+  writeNotReversed,
+} from './shell-journal.js';
+export {
+  resolveEffectiveEffectPolicy,
+  isPathAllowed,
+  gateEffect,
+  DEFAULT_EFFECT_RUN_MODE,
+} from './effect-policy.js';
+export {
   runWithToolLimits,
   resolveToolTimeoutMs,
   ToolTimeoutError,

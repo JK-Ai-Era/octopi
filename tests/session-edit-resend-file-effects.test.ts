@@ -55,6 +55,32 @@ describe('edit-resend file effects (L3)', () => {
     await rm(home, { recursive: true, force: true });
   });
 
+  it('rejects truncate when fromIndex is not abortedTurn', async () => {
+    const t = Date.now();
+    const sessionId = 's-guard';
+    await store.save(sessionId, {
+      id: sessionId,
+      agentId: 'a1',
+      primaryAgentId: 'a1',
+      meta: {
+        id: sessionId,
+        agentId: 'a1',
+        channelId: 'web',
+        peerId: 'p',
+        status: 'idle',
+        createdAt: t,
+        sessionStartedAt: t,
+        lastInteractionAt: t,
+        updatedAt: t,
+      },
+      messages: [{ role: 'user', content: 'go', timestamp: t }],
+      turns: [],
+      metadata: {},
+      tasks: [],
+    });
+    await expect(gateway.truncateMessagesFrom(sessionId, 0)).rejects.toThrow(/edit_resend_only_last_aborted_turn/);
+  });
+
   it('truncate discards agent file effects and reports them', async () => {
     const t = Date.now();
     const sessionId = 's-fx';

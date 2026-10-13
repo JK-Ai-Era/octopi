@@ -82,6 +82,8 @@ export interface LoopToolResult {
   content: unknown;
   isError?: boolean;
   durationMs?: number;
+  /** 行动简述（人读/审批标题；arch/tool-call-purpose.md） */
+  purpose?: string;
   /** 标记为 no-op（未产生实际变化），Harness 层用于循环检测 */
   noop?: boolean;
   /**

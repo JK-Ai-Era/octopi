@@ -57,6 +57,8 @@ export interface ToolConversationItem extends BaseConversationItem {
   role: 'tool';
   toolName: string;
   toolCallId: string;
+  /** 行动简述（标题展示用） */
+  purpose?: string;
   status: 'running' | 'success' | 'error';
   summary?: string;
   expandable?: boolean;

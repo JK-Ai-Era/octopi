@@ -66,7 +66,13 @@ export class ApprovalManager {
       toolCall,
       riskLevel: riskLevel as ApprovalRequest['riskLevel'],
       riskDescription,
-      actionDescription: `${toolCall.name}(${JSON.stringify(toolCall.arguments).slice(0, 200)})`,
+      actionDescription: (() => {
+        const args = (toolCall.arguments ?? {}) as Record<string, unknown>;
+        const purpose = typeof args.purpose === 'string' ? args.purpose.trim() : '';
+        return purpose
+          ? `${toolCall.name}: ${purpose}`
+          : `${toolCall.name}(${JSON.stringify(toolCall.arguments).slice(0, 200)})`;
+      })(),
       createdAt: Date.now(),
       timeoutMs: this.config.timeoutMs ?? 60_000,
     };

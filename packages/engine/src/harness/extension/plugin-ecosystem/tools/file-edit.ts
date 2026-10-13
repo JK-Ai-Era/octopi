@@ -58,6 +58,9 @@ export function createFileEditTool(): RegisteredTool {
       if (isUnderAttachmentRoot(path, context.attachmentRoots)) {
         throw new Error('session attachments are read-only; cannot edit attachments root');
       }
+      if (/[/\\]sessions[/\\][^/\\]+[/\\]undo(?:[/\\]|$)/i.test(path)) {
+        throw new Error('session undo ledger is protected; cannot write to sessions undo dir');
+      }
       const oldText = args.old_text as string;
       const newText = args.new_text as string;
       const occurrence = (args.occurrence as string) ?? 'first';

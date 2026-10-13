@@ -302,6 +302,7 @@ harness/extension/execution-environment/
 ├── isolation.ts           # I5 toolIsolation cwd（none / session-subdir / session-lock）
 ├── effect-policy.ts       # ToolEffectPolicy 模式预设 + gateEffect（host-gate）
 ├── undo-log.ts            # P1 文件 turn undo（sessions/<sid>/undo/）
+├── shell-journal.ts       # shell 账本（before 快照 → 同一 undo log）
 ├── memory-undo.ts         # P2 记忆 journal + JournaledMemoryStore
 ├── resource-limits.ts     # P5 L1 timeoutMs 看门狗
 ├── types.ts               # 含 ResourceLimits（沙箱级）等契约
@@ -751,7 +752,7 @@ WebUI **不做**预算策略，只渲染 `known` / `source` / `contextWindow`。
 
 > 并发与 Run 作用域：同 Agent 多 Session 下，可变上下文只存在于 **RunScope**（见 [架构宪法](./north-star.md) I1）。`SessionAwareRunner` 不以共享 `Agent.context` 作为会话工作区。
 >
-> 工具效应（ToolEffectPolicy / I5）：配置 `effectPolicy`（模式 workspace|project|host|untrusted；缺省 workspace）；cwd 布局仍可由 `toolIsolation` 覆盖。编辑重发逆放 turn undo（文件+记忆）。详见 `arch/tool-effect-policy.md`。
+> 工具效应（ToolEffectPolicy / I5）：配置 `effectPolicy`（模式 workspace|project|host|untrusted；缺省 host）；cwd 布局仍可由 `toolIsolation` 覆盖。编辑重发逆放 turn undo（文件+记忆+shell snapshot）。工具调用必填 `purpose`。详见 `arch/tool-effect-policy.md` / `arch/tool-call-purpose.md`。
 > Session 锁（E2/E7）：`SessionLease` 接口，v1 为 `InProcessSessionLock`；分布式必须替换实现。
 > Session 数据（模型 2）：`primaryAgentId` + `preferredAgentId`（≠ primary）；compact 键 `(sessionId, agentId)`；ACL 角色目录见 `sessionAcl` 配置。
 > Gateway 默认：注入 Session ACL + 共享 SessionLease（单 agent primary 路径兼容；无 grant 的多 agent guest 会被拒绝）。

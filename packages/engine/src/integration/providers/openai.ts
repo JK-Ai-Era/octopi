@@ -290,7 +290,18 @@ export class OpenAIProvider implements ModelProvider {
       body.max_tokens = cap;
     }
     if (request.tools && request.tools.length > 0) {
-      body.tools = request.tools;
+      // 兼容接口可能拒绝 maxLength 等未知 schema 关键字
+      body.tools = request.tools.map((tool) => {
+        const params = tool?.function?.parameters as Record<string, unknown> | undefined;
+        if (!params) return tool;
+        return {
+          ...tool,
+          function: {
+            ...tool.function,
+            parameters: sanitizeOpenAiJsonSchema(params),
+          },
+        };
+      });
     }
 
     return body;
@@ -486,4 +497,26 @@ export class OpenAIProvider implements ModelProvider {
       default: return 'error';
     }
   }
+}
+
+
+/** 仅保留 OpenAI function calling 可识别的 JSON Schema 关键字 */
+function sanitizeOpenAiJsonSchema(node: unknown): unknown {
+  if (Array.isArray(node)) return node.map(sanitizeOpenAiJsonSchema);
+  if (!node || typeof node !== 'object') return node;
+  const src = node as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  if (typeof src.type === 'string') out.type = src.type;
+  if (typeof src.description === 'string') out.description = src.description;
+  if (Array.isArray(src.enum)) out.enum = src.enum;
+  if (src.properties && typeof src.properties === 'object') {
+    const props: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(src.properties as Record<string, unknown>)) {
+      props[k] = sanitizeOpenAiJsonSchema(v);
+    }
+    out.properties = props;
+  }
+  if (Array.isArray(src.required)) out.required = src.required.filter((x) => typeof x === 'string');
+  if (src.items !== undefined) out.items = sanitizeOpenAiJsonSchema(src.items);
+  return out;
 }

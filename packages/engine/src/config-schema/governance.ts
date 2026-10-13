@@ -30,9 +30,10 @@ export const SessionConfigSchema = z.object({
  *
  * 命名预设展开正交旋钮；agents[].effectPolicy 优先于顶层。
  * 注意：与 `agents[].tools`（工具 allow/deny）无关。
+ * `mode` 省略 = 产品缺省 **host**（本机自动化；严格场景显式 workspace）。
  */
 export const EffectPolicyConfigSchema = z.object({
-  mode: z.enum(['workspace', 'project', 'host', 'untrusted']),
+  mode: z.enum(['workspace', 'project', 'host', 'untrusted']).optional(),
   transactionRoots: z.array(z.string()).optional(),
   pathContainment: z.enum(['strict', 'soft', 'none']).optional(),
   shellEscape: z.enum(['deny', 'confirm', 'allow']).optional(),
@@ -42,6 +43,27 @@ export const EffectPolicyConfigSchema = z.object({
   onClose: z.enum(['commit', 'discard']).optional(),
   effects: z.enum(['engine', 'host-gate']).optional(),
   toolIsolation: z.enum(['none', 'session-subdir', 'session-lock']).optional(),
+  /** undo 配额；缺省不限 */
+  undoLimit: z
+    .object({
+      /** 0 = 不限 */
+      maxEntries: z.number().int().nonnegative().optional(),
+      /** 0 = 不限 */
+      maxBlobBytes: z.number().int().nonnegative().optional(),
+    })
+    .optional(),
+  /** shell 记账深度 */
+  shellJournal: z.enum(['snapshot', 'off']).optional(),
+  shellJournalLimit: z
+    .object({
+      /** 0 = 不限 */
+      maxFiles: z.number().int().nonnegative().optional(),
+      /** 0 = 不限 */
+      maxBytes: z.number().int().nonnegative().optional(),
+      /** 0 = 不限 */
+      maxFileSize: z.number().int().nonnegative().optional(),
+    })
+    .optional(),
 });
 
 export const ToolIsolationConfigSchema = z.enum(['none', 'session-subdir', 'session-lock']);

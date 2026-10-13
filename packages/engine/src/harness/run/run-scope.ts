@@ -37,8 +37,11 @@ export interface RunToolRuntime {
   effectChannel?: "engine" | "host-gate";
   /** L1 processLimits（false = 不强制 timeoutMs 看门狗） */
   processLimits?: boolean;
-  /** shell 越界策略（gateEffect） */
+  /** shell 工具策略（gateEffect；deny=拒绝 shell） */
   shellEscape?: "deny" | "confirm" | "allow";
+  /** shell 记账深度 */
+  shellJournal?: "snapshot" | "off";
+  shellJournalLimit?: { maxFiles?: number; maxBytes?: number; maxFileSize?: number };
 }
 
 /** 一次 Run 的作用域身份（I1） */

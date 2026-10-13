@@ -469,6 +469,13 @@ export interface RunToolEffectView {
     errors: number;
     lastDurationMs?: number;
   }>;
+  /** L3 效应账本（§5.6） */
+  undo?: {
+    entries: number;
+    truncated?: boolean;
+    notReversedReason?: string;
+    notReversedPaths?: number;
+  };
   notes?: string[];
 }
 

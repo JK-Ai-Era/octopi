@@ -68,6 +68,21 @@ export interface ToolFileEffects {
   writeFile(path: string, data: string | Uint8Array): Promise<void>;
   /** 追加写入 */
   appendFile(path: string, data: string | Uint8Array): Promise<void>;
+  /** 删除前记 before（shell rm / mv）；discard 恢复 */
+  recordDelete(path: string, before: string | Uint8Array): Promise<void>;
+  /** 标记新建（零 before）；discard 删除 */
+  recordCreate(path: string, after?: string | Uint8Array): Promise<void>;
+  /** 重命名记账（delete+create） */
+  recordRename(from: string, to: string): Promise<void>;
+  /** 显式 before/after 的覆盖记账（shell diff）；first before 不被覆盖 */
+  recordOverwrite(path: string, before: string | Uint8Array, after?: string | Uint8Array): Promise<void>;
+  /** 不可逆效应清单（§5.6）；写入 undo/not-reversed.json，不进 log.jsonl */
+  noteNotReversed(payload: {
+    reason: 'inventory_only' | 'budget_truncated' | 'no_roots' | 'shell_journal_off';
+    created?: string[];
+    modified?: string[];
+    deleted?: string[];
+  }): Promise<void>;
 }
 
 /** 记忆面效应域（ToolEffectPolicy L3；knowledge 不在此列） */
@@ -131,8 +146,12 @@ export interface ToolExecutionContext {
   effectChannel?: 'engine' | 'host-gate';
   /** L1：false 时不启用 timeoutMs 看门狗 */
   processLimits?: boolean;
-  /** shell 越界策略 */
+  /** shell 工具策略（deny=拒绝 shell；无 L4 时不能「只禁越界」） */
   shellEscape?: 'deny' | 'confirm' | 'allow';
+  /** shell 记账深度（§5.6） */
+  shellJournal?: 'snapshot' | 'off';
+  /** shell 快照预算；缺省不限 */
+  shellJournalLimit?: { maxFiles?: number; maxBytes?: number; maxFileSize?: number };
 }
 
 /** 工具处理函数 */

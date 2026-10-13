@@ -34,7 +34,7 @@ import type {
 
 import { ConversationAdapter } from '../conversation/adapter.js';
 import type { AdapterSnapshot } from '../conversation/adapter.js';
-import type { ConversationItem, ToolConversationItem, UserConversationItem, ViewMode } from '../conversation/types.js';
+import type { ConversationItem, SystemConversationItem, ToolConversationItem, UserConversationItem, ViewMode } from '../conversation/types.js';
 import {
   buildContextLayersSnapshot,
   type ContextLayersSnapshot,
@@ -173,6 +173,18 @@ export interface InspectorState {
   runMessagesLlm?: RunMessagesSnapshotDto | null;
   /** Observer 配置诊断 */
   observerStatus?: ObserverStatusDto | null;
+  /** 编辑重发效应回滚摘要（§5.4） */
+  editResendEffects?: {
+    restored: number;
+    keptUserEdits: number;
+    notReversed?: {
+      reason: string;
+      created?: string[];
+      modified?: string[];
+      deleted?: string[];
+    };
+    truncated?: boolean;
+  };
 }
 
 export interface ChatState {
@@ -214,6 +226,7 @@ export class OctopiRuntimeStore extends EventTarget {
   private readonly conversationAdapter = new ConversationAdapter();
   private static readonly MAX_CACHE_SIZE = 20;
   private readonly conversationCache = new Map<string, SessionCacheEntry>();
+  private pendingEditResendNotice?: SystemConversationItem;
 
   private connectionState: ConnectionState = 'idle';
   private agents: AgentSummary[] = [];
@@ -949,7 +962,44 @@ export class OctopiRuntimeStore extends EventTarget {
     if (idx == null) {
       throw new Error('没有可编辑重发的中止轮');
     }
-    await this.client.truncateMessagesFrom(sessionId, idx);
+    const truncatedResult = await this.client.truncateMessagesFrom(sessionId, idx);
+    // L3 效应回滚可见性（§5.4）：人看得到，模型看不到
+    const fx = truncatedResult.fileEffects;
+    if (fx) {
+      const restored = fx.discarded?.length ?? 0;
+      const kept = fx.keptUserEdits?.length ?? 0;
+      const notRev = fx.notReversed;
+      const notRevCount = notRev
+        ? (notRev.created?.length ?? 0) + (notRev.modified?.length ?? 0) + (notRev.deleted?.length ?? 0)
+        : 0;
+      const parts: string[] = [`已回滚 ${restored}`];
+      if (kept) parts.push(`保留用户改动 ${kept}`);
+      if (notRevCount || notRev) parts.push(`未回滚 ${notRevCount || 'shell 等效应'}`);
+      if (fx.truncated) parts.push('（undo 截断）');
+      const notice: SystemConversationItem = {
+        id: `edit-resend-fx-${Date.now()}`,
+        role: 'system',
+        kind: fx.truncated || notRev ? 'warning' : 'info',
+        message: `编辑重发：${parts.join(' · ')}`,
+        createdAt: Date.now(),
+        sessionId,
+        source: 'runtime',
+      };
+      // 稍后与 history 重建合并：先记在 inspector，重建后追加
+      this.chat.inspector = {
+        ...this.chat.inspector,
+        editResendEffects: {
+          restored,
+          keptUserEdits: kept,
+          notReversed: notRev,
+          truncated: Boolean(fx.truncated),
+        },
+      };
+      this.dispatch('inspector', new InspectorEvent('inspector', { inspector: this.chat.inspector }));
+      // 条带通知（不进 LLM 历史）
+      // 条带通知随后续 history 重建前展示；也写入 inspector 供检视
+      this.pendingEditResendNotice = notice;
+    }
 
     // 同会话 openSession 不会重建 conversation（live 权威）；这里必须从 store 重载
     // 并丢掉缓存里的中止残片，否则旧 tool/user 条目会被 cache 盖回来
@@ -970,9 +1020,14 @@ export class OctopiRuntimeStore extends EventTarget {
     } catch {
       items = [];
     }
+    if (this.pendingEditResendNotice) {
+      items = [...items, this.pendingEditResendNotice];
+      this.pendingEditResendNotice = undefined;
+    }
     this.chat.conversation = items;
     this.chat.tools = this.deriveTools(items);
     this.chat.streamingContent = '';
+    this.dispatch('conversation', new ConversationEvent('conversation', { items: this.chat.conversation }));
     this.chat.runStatus = 'idle';
     this.chat.tasks = [];
     this.engineActive = false;

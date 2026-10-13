@@ -246,6 +246,7 @@ export function adaptLoopEvent(
           hasError: !!event.result.isError,
           result: event.result.content,
           durationMs: event.result.durationMs,
+          purpose: event.result.purpose,
         },
       };
     case 'stream.fallback_to_sync':
@@ -339,6 +340,9 @@ export class SessionAwareRunner {
   private effectCommitManual = false;
   private effectProcessLimits = true;
   private effectShellEscape: "deny" | "confirm" | "allow" = "allow";
+  private effectShellJournal: "snapshot" | "off" = "snapshot";
+  private effectShellJournalLimit?: { maxFiles?: number; maxBytes?: number; maxFileSize?: number };
+  private effectUndoLimit?: { maxEntries?: number; maxBlobBytes?: number };
   private agent: Agent;
   private harness: ReliabilityHarness;
   private store: TypedSessionStore;
@@ -953,7 +957,7 @@ export class SessionAwareRunner {
           '../extension/execution-environment/effect-policy.js'
         );
         const eff = resolveEffectiveEffectPolicy(
-          this.config.effectPolicy ?? { mode: 'workspace' },
+          this.config.effectPolicy ?? {},
           this.config.agentWorkspace ?? effectiveRunConfig.cwd ?? undefined,
         );
         this.effectPathContainment = eff.pathContainment;
@@ -962,6 +966,9 @@ export class SessionAwareRunner {
         this.effectCommitManual = eff.commit === 'manual';
         this.effectProcessLimits = eff.processLimits;
         this.effectShellEscape = eff.shellEscape;
+        this.effectShellJournal = eff.shellJournal;
+        this.effectShellJournalLimit = eff.shellJournalLimit;
+        this.effectUndoLimit = eff.undoLimit;
       }
       // I5：工具效应 cwd —— RunConfig.cwd > agent.workspace；session-subdir 再拼 sessionId
       const isolationMode: ToolIsolationMode =
@@ -997,7 +1004,11 @@ export class SessionAwareRunner {
         '../extension/execution-environment/undo-log.js'
       );
       const fileUndo = this.config.sessionsDir
-        ? await TurnFileUndoLog.begin({ sessionsDir: this.config.sessionsDir, sessionId })
+        ? await TurnFileUndoLog.begin({
+            sessionsDir: this.config.sessionsDir,
+            sessionId,
+            undoLimit: this.effectUndoLimit,
+          })
         : undefined;
       turnFileUndo = fileUndo;
       const {
@@ -1030,6 +1041,8 @@ export class SessionAwareRunner {
           effectChannel: this.effectChannel,
           processLimits: this.effectProcessLimits,
           shellEscape: this.effectShellEscape,
+          shellJournal: this.effectShellJournal,
+          shellJournalLimit: this.effectShellJournalLimit,
         },
       };
 
@@ -1371,6 +1384,19 @@ export class SessionAwareRunner {
       let clearAbortedTurn = false;
       const abortedMidTurn = runAborted || (Boolean(signal?.aborted) && !hasTurnEnd);
       // L3：中止保留 undo（供编辑重发 discard）；其余出口 commit（继续对话=隐式提交）
+      if (turnFileUndo) {
+        // Observer tool.effect：效应账本摘要（§5.6）
+        this.emitObserved({
+          type: 'tool.effect.ledger',
+          timestamp: Date.now(),
+          agentId: _agentId,
+          sessionId,
+          data: {
+            entries: turnFileUndo.size,
+            truncated: turnFileUndo.truncated,
+          },
+        } as never);
+      }
       if (turnFileUndo && !abortedMidTurn && !this.effectCommitManual) {
         await turnFileUndo.commit();
         turnFileUndo = undefined;

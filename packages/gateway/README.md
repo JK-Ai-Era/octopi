@@ -14,10 +14,11 @@ Depends on `@octopi-agent/engine`. Built-in subsystems and strategies stay in en
 
 ## ToolEffectPolicy 接线（Gateway 侧）
 
-- **配置**：`effectPolicy`（顶层或 `agents[].effectPolicy`）注入 Runner；缺省 `workspace`（最严，shell `deny`）
+- **配置**：`effectPolicy`（顶层或 `agents[].effectPolicy`）注入 Runner；缺省 `host`（本机自动化；严格场景显式 `workspace`）
 - **confirmEffect**：`effects: "host-gate"` 时非事务效应交宿主；Gateway 默认接 `ask_user`，可覆盖
-- **编辑重发**：`POST /sessions/:id/messages/truncate` → 逆放本轮 agent 文件/记忆效应（用户手改保留）
-- **会话关闭**：`deleteSession` / `stop()` 按 `effectPolicy.onClose`（`commit` | `discard`）收残留 turn undo
+- **编辑重发**：`POST /sessions/:id/messages/truncate` → 仅接受 `abortedTurn.userMessageIndex`；逆放本轮 agent 效应（文件/记忆/shell），返回 `fileEffects`（含 `notReversed`/`truncated`）
+- **会话关闭**：`deleteSession` / `stop()` 按 `effectPolicy.onClose`（`commit` | `discard`）收残留 turn undo；`onClose` 可 per-agent
+- **doctor**：启动时 `scanOrphanUndo` 扫残留 `sessions/*/undo`
 
 详见 `@octopi-agent/engine` 与仓库 `arch/tool-effect-policy.md`。
 

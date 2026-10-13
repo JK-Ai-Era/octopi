@@ -507,6 +507,12 @@ export interface RunObservatorySnapshotDto {
     cwd?: string;
     isolation?: string;
     tools: Array<{ name: string; calls: number; errors: number; lastDurationMs?: number }>;
+    undo?: {
+      entries: number;
+      truncated?: boolean;
+      notReversedReason?: string;
+      notReversedPaths?: number;
+    };
     notes?: string[];
   };
   observer: { enabled: boolean; level: string; webPanel: boolean };
@@ -808,6 +814,13 @@ export class OctopiClient {
     fileEffects?: {
       discarded: Array<{ path: string; action: 'deleted' | 'restored' }>;
       keptUserEdits: Array<{ path: string; reason: string }>;
+      notReversed?: {
+        reason: string;
+        created?: string[];
+        modified?: string[];
+        deleted?: string[];
+      };
+      truncated?: boolean;
       entries: number;
     };
   }> {
@@ -820,6 +833,13 @@ export class OctopiClient {
       fileEffects?: {
         discarded: Array<{ path: string; action: 'deleted' | 'restored' }>;
         keptUserEdits: Array<{ path: string; reason: string }>;
+        notReversed?: {
+          reason: string;
+          created?: string[];
+          modified?: string[];
+          deleted?: string[];
+        };
+        truncated?: boolean;
         entries: number;
       };
     };

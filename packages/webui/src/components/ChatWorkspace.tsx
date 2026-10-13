@@ -194,7 +194,9 @@ function ToolCard({ item }: { item: ToolConversationItem }) {
         {hasDetails && (
           <span className={`expand-arrow ${expanded ? 'expand-arrow-open' : ''}`}>▶</span>
         )}
-        <span className="msg-tool-name" style={{ color: statusColor }}>{item.toolName}</span>
+        <span className="msg-tool-name" style={{ color: statusColor }}>
+          {item.purpose ? `${item.toolName}: ${item.purpose}` : item.toolName}
+        </span>
         <span className={item.status === 'error' ? 'status-error' : item.status === 'success' ? 'status-ok' : 'status-warn'}>{item.status}</span>
         <span className="small muted">{item.toolCallId}</span>
       </div>
@@ -248,7 +250,9 @@ function ToolTimelineCard({ item }: { item: ToolConversationItem }) {
           {hasDetails && (
             <span className={`expand-arrow ${expanded ? 'expand-arrow-open' : ''}`}>▶</span>
           )}
-          <span style={{ fontWeight: 600, color: statusColor }}>{item.toolName}</span>
+          <span style={{ fontWeight: 600, color: statusColor }}>
+            {item.purpose ? `${item.toolName}: ${item.purpose}` : item.toolName}
+          </span>
           <span className={`small ${item.status === 'success' ? 'status-ok' : item.status === 'error' ? 'status-error' : 'status-warn'}`}>{item.status}</span>
         </div>
         <span className="small muted">{item.toolCallId}</span>

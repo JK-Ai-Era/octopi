@@ -105,11 +105,50 @@
                   "session-subdir",
                   "session-lock"
                 ]
+              },
+              "undoLimit": {
+                "type": "object",
+                "properties": {
+                  "maxEntries": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "maxBlobBytes": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  }
+                }
+              },
+              "shellJournal": {
+                "type": "string",
+                "enum": [
+                  "snapshot",
+                  "off"
+                ]
+              },
+              "shellJournalLimit": {
+                "type": "object",
+                "properties": {
+                  "maxFiles": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "maxBytes": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "maxFileSize": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  }
+                }
               }
-            },
-            "required": [
-              "mode"
-            ]
+            }
           },
           "persona": {
             "anyOf": [
@@ -2463,11 +2502,50 @@
             "session-subdir",
             "session-lock"
           ]
+        },
+        "undoLimit": {
+          "type": "object",
+          "properties": {
+            "maxEntries": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "maxBlobBytes": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          }
+        },
+        "shellJournal": {
+          "type": "string",
+          "enum": [
+            "snapshot",
+            "off"
+          ]
+        },
+        "shellJournalLimit": {
+          "type": "object",
+          "properties": {
+            "maxFiles": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "maxBytes": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "maxFileSize": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          }
         }
-      },
-      "required": [
-        "mode"
-      ]
+      }
     },
     "sessionAcl": {
       "type": "object",

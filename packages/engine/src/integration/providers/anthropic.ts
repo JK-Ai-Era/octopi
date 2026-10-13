@@ -416,7 +416,7 @@ export class AnthropicProvider implements ModelProvider {
     return {
       name: fn?.name ?? tool.name,
       description: fn?.description ?? tool.description,
-      input_schema: fn?.parameters ?? tool.parameters ?? { type: 'object', properties: {} },
+      input_schema: stripSchemaKeywords(fn?.parameters ?? tool.parameters ?? { type: 'object', properties: {} }),
     };
   }
 
@@ -473,4 +473,26 @@ export class AnthropicProvider implements ModelProvider {
       return {};
     }
   }
+}
+
+
+/** 去掉部分 API 会拒绝的 JSON Schema 扩展关键字 */
+function stripSchemaKeywords(node: unknown): unknown {
+  if (Array.isArray(node)) return node.map(stripSchemaKeywords);
+  if (!node || typeof node !== 'object') return node;
+  const src = node as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  if (typeof src.type === 'string') out.type = src.type;
+  if (typeof src.description === 'string') out.description = src.description;
+  if (Array.isArray(src.enum)) out.enum = src.enum;
+  if (src.properties && typeof src.properties === 'object') {
+    const props: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(src.properties as Record<string, unknown>)) {
+      props[k] = stripSchemaKeywords(v);
+    }
+    out.properties = props;
+  }
+  if (Array.isArray(src.required)) out.required = src.required.filter((x) => typeof x === 'string');
+  if (src.items !== undefined) out.items = stripSchemaKeywords(src.items);
+  return out;
 }

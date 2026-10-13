@@ -35,6 +35,12 @@ import {
   resolveToolPath,
 } from './platform.js';
 
+/** 拒绝写会话 undo 账本（自拆台防护） */
+function isUnderSessionUndoRoot(target: string): boolean {
+  const norm = target.replace(/\\/g, '/').toLowerCase();
+  return norm.includes('/sessions/') && norm.includes('/undo');
+}
+
 /**
  * Shell 工具 — 执行 shell 命令
  *
@@ -95,6 +101,29 @@ export function createShellTool(options?: {
       );
       const timeout = (args.timeout as number) ?? 30_000;
 
+      // §5.6 shell 账本：roots 内 snapshot → 同一 undo log
+      const journalMode = context?.shellJournal ?? 'snapshot';
+      const journalRoots = (context?.pathRoots ?? []).filter(Boolean);
+      let shellBefore:
+        | Awaited<ReturnType<typeof import('../../execution-environment/shell-journal.js').snapshotShellRoots>>
+        | undefined;
+      let notReversedPayload:
+        | { reason: 'inventory_only' | 'budget_truncated' | 'no_roots' | 'shell_journal_off'; created?: string[]; modified?: string[]; deleted?: string[] }
+        | undefined;
+      if (journalMode === 'snapshot') {
+        if (journalRoots.length === 0) {
+          notReversedPayload = { reason: 'no_roots' };
+        } else {
+          const sj = await import('../../execution-environment/shell-journal.js');
+          shellBefore = await sj.snapshotShellRoots({
+            roots: journalRoots,
+            limit: context?.shellJournalLimit,
+          });
+        }
+      } else {
+        notReversedPayload = { reason: 'shell_journal_off' };
+      }
+
       const { spawn } = await import('node:child_process');
       const resolvedShell = resolvePlatformShell();
 
@@ -121,6 +150,38 @@ export function createShellTool(options?: {
         child.on('close', async (code) => {
           const durationMs = Date.now() - startTime;
           try {
+            // §5.6：after diff 入账本 / 不可逆清单
+            try {
+              const sj = await import('../../execution-environment/shell-journal.js');
+              const effects = context?.fileEffects;
+              if (shellBefore && effects) {
+                const afterCap = await sj.captureShellInventory({
+                  roots: journalRoots,
+                  limit: context?.shellJournalLimit,
+                });
+                const diff = await sj.journalShellDiff(
+                  effects,
+                  shellBefore.capture,
+                  afterCap,
+                  shellBefore.store,
+                );
+                // 截断/未采到 before 的路径不进 undo，只报 notReversed（§5.6 不装懂）
+                if (
+                  shellBefore.capture.truncated ||
+                  afterCap.truncated ||
+                  diff.notInventable.length > 0
+                ) {
+                  await effects.noteNotReversed({
+                    reason: 'budget_truncated',
+                    created: diff.notInventable,
+                  });
+                }
+              } else if (notReversedPayload && effects) {
+                await effects.noteNotReversed(notReversedPayload);
+              }
+            } catch {
+              // 记账失败不阻断 shell 业务结果
+            }
             const { applyToolOutputGate, resolveSupportBinding } = await import(
               '../../../context/capabilities/summary/index.js'
             );
@@ -342,6 +403,9 @@ export function createFileWriteTool(): RegisteredTool {
       });
       if (isUnderAttachmentRoot(path, context?.attachmentRoots)) {
         throw new Error('session attachments are read-only; cannot write to attachments root');
+      }
+      if (isUnderSessionUndoRoot(path)) {
+        throw new Error('session undo ledger is protected; cannot write to sessions undo dir');
       }
       const content = args.content as string;
       const append = args.append as boolean ?? false;

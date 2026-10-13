@@ -14,6 +14,13 @@ import {
 } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/tools/platform.js';
 
 describe('resolveEffectiveEffectPolicy', () => {
+  it('omitted mode defaults to host (product default)', () => {
+    const p = resolveEffectiveEffectPolicy({}, '/home/user');
+    expect(p.mode).toBe('host');
+    expect(p.shellEscape).toBe('allow');
+    expect(p.pathContainment).toBe('none');
+  });
+
   it('workspace mode: strict containment + shell deny (fail-closed until L4)', () => {
     const p = resolveEffectiveEffectPolicy({ mode: 'workspace' }, '/work/ws');
     expect(p.pathContainment).toBe('strict');
