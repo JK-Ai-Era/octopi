@@ -56,6 +56,7 @@ function makeMockAgent(replyContent: string): Agent {
     },
     setSessionCompactState: () => {},
     getSessionCompactState: () => undefined,
+    toolsForSession: () => [],
     setOnAfterTurn: () => {},
     notifyAfterTurn: async () => {},
     run: async function* (

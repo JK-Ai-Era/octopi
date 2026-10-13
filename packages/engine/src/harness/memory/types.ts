@@ -124,6 +124,11 @@ export interface MemoryStore {
   /** 软删除（治理默认路径） */
   softDelete(id: string, meta: { by: string; reason: SoftDeleteReason | string; winnerId?: string }): Promise<void>;
   undelete(id: string): Promise<void>;
+  /**
+   * 按原 id 恢复整行（L3 undo / 硬删除逆放）。
+   * 与 store() 不同：不重新生成 id。
+   */
+  importEntry(entry: MemoryEntry): Promise<void>;
   /** 治理批量读取 */
   listForGovern(filter?: { includeDeleted?: boolean }): Promise<MemoryEntry[]>;
   /** 按类型曲线衰减 idle 条目；返回本轮改动条数 */

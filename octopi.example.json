@@ -247,6 +247,10 @@
 
   "toolIsolation": "session-subdir",
 
+  "effectPolicy": {
+    "mode": "workspace"
+  },
+
   "fileSend": {
     "maxBytes": 2147483648,
     "maxReleasesPerSession": 0

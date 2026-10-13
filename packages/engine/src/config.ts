@@ -27,6 +27,8 @@ export interface AgentConfig {
   home?: string;
   /** 沙箱工作目录：agent 工具操作的 cwd，默认为 home 下的 workspace 子目录 */
   workspace?: string;
+  /** ToolEffectPolicy（P3） */
+  effectPolicy?: import('./harness/extension/execution-environment/effect-policy.js').EffectPolicyConfig;
   /**
    * Persona 配置（向后兼容：string 形式等价于 home）
    * - string: persona 目录路径（已废弃，请使用 home）
@@ -963,6 +965,8 @@ export interface HarnessConfig {
    * - `session-lock`：共享路径；同 sessionId 由 Runner 锁串行（不路径隔离）
    */
   toolIsolation?: 'none' | 'session-subdir' | 'session-lock';
+  /** ToolEffectPolicy 运行模式（P3） */
+  effectPolicy?: import('./harness/extension/execution-environment/effect-policy.js').EffectPolicyConfig;
   /**
    * Session ACL 角色目录（E6）
    *

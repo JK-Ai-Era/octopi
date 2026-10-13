@@ -116,6 +116,7 @@ describe('InProcessSessionLock (E2)', () => {
       setContextSessionId: () => {},
       setSessionCompactState: (..._a: unknown[]) => {},
       getSessionCompactState: (..._a: unknown[]) => undefined,
+      toolsForSession: () => [],
       setOnAfterTurn: () => {},
       notifyAfterTurn: async () => {},
       run: async function* (
@@ -165,6 +166,7 @@ describe('AgentRevision field slot (G2)', () => {
       setContextSessionId: () => {},
       setSessionCompactState: () => {},
       getSessionCompactState: () => undefined,
+    toolsForSession: () => [],
       setOnAfterTurn: () => {},
       notifyAfterTurn: async () => {},
       run: async function* (
@@ -225,6 +227,7 @@ describe('shared SessionLease + ACL on handle (review fixes)', () => {
         setContextSessionId: () => {},
         setSessionCompactState: (..._a: unknown[]) => {},
         getSessionCompactState: (..._a: unknown[]) => undefined,
+      toolsForSession: () => [],
         setOnAfterTurn: () => {},
         notifyAfterTurn: async () => {},
         run: async function* (
@@ -288,6 +291,7 @@ describe('shared SessionLease + ACL on handle (review fixes)', () => {
       setContextSessionId: () => {},
       setSessionCompactState: (..._a: unknown[]) => {},
       getSessionCompactState: (..._a: unknown[]) => undefined,
+      toolsForSession: () => [],
       setOnAfterTurn: () => {},
       notifyAfterTurn: async () => {},
       run: async function* () {
@@ -331,6 +335,7 @@ describe('shared SessionLease + ACL on handle (review fixes)', () => {
       setContextSessionId: () => {},
       setSessionCompactState: (..._a: unknown[]) => {},
       getSessionCompactState: (..._a: unknown[]) => undefined,
+      toolsForSession: () => [],
       setOnAfterTurn: () => {},
       notifyAfterTurn: async () => {},
       run: async function* (
@@ -385,6 +390,7 @@ describe('session status recovery after crash / error residue', () => {
       setContextSessionId: () => {},
       setSessionCompactState: (..._a: unknown[]) => {},
       getSessionCompactState: (..._a: unknown[]) => undefined,
+      toolsForSession: () => [],
       setOnAfterTurn: () => {},
       notifyAfterTurn: async () => {},
       run: async function* (

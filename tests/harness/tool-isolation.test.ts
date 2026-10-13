@@ -70,6 +70,7 @@ function makeMockAgent(opts?: {
     },
     setSessionCompactState: () => {},
     getSessionCompactState: () => undefined,
+    toolsForSession: () => [],
     setOnAfterTurn: () => {},
     notifyAfterTurn: async () => {},
     run: async function* (

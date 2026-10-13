@@ -8,6 +8,10 @@
  */
 
 import { Agent } from '../../../run/agent/index.js';
+import {
+  createUnconfiguredFileEffects,
+  createUnconfiguredMemoryEffects,
+} from '../../../extension/execution-environment/undo-log.js';
 import type { ModelProvider } from '@octopi-agent/core/interfaces/model-provider.js';
 import type { ErrorStrategy } from '@octopi-agent/core/interfaces/error-strategy.js';
 import type { RegisteredTool } from '@octopi-agent/core/types.js';
@@ -316,6 +320,8 @@ export class ThinkExecutor {
                 sessionId: 'subsystem',
                 agentId: 'subsystem',
                 messages: [],
+                fileEffects: createUnconfiguredFileEffects(),
+                memoryEffects: createUnconfiguredMemoryEffects(),
               });
               return {
                 toolCallId,

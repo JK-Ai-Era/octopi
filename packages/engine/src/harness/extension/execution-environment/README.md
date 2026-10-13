@@ -1,28 +1,72 @@
 # Execution Environment — 执行环境
 
-> Layer: Layer 2
+> Layer: Layer 2  
+> 规格权威：[`arch/tool-effect-policy.md`](../../../../../arch/tool-effect-policy.md)
 
-沙箱管理、工作区生命周期、文件操作、资源限制。
+沙箱管理、工具效应策略（ToolEffectPolicy）、turn 级 undo、资源限制、工作区生命周期。
 
-**核心理念**：Agent 执行代码需要隔离环境，防止对宿主系统造成不可逆影响。
+**核心理念**：Agent 的工具效应必须可约束、可撤销、可配置——约束（Containment）与可撤销（Recoverability）是两根正交的轴。
 
 ## 职责
 
-- ProcessSandbox — 进程级沙箱（spawn + 资源限制）
-- FileWorkspace — 工作区管理（git 集成、search、glob、diff、snapshot）
+| 模块 | 职责 |
+|------|------|
+| `effect-policy.ts` | 运行模式预设（`workspace` / `project` / `host` / `untrusted`）→ 有效策略；`gateEffect` |
+| `isolation.ts` | I5 工具 cwd 解析（`toolIsolation`：`none` / `session-subdir` / `session-lock`） |
+| `undo-log.ts` | **P1** 文件 turn undo（即时生效 + 本轮 undo log）；`sessions/<sid>/undo/` |
+| `undo-merge.ts` | 文本补丁逆放 / 二进制用户整文件优先 |
+| `memory-undo.ts` | **P2** 记忆面 journal（`JournaledMemoryStore` + `memory.jsonl`）；steward 不进 turn 事务 |
+| `resource-limits.ts` | **P5 / OP-17** 工具 `timeoutMs` 看门狗（`runWithToolLimits`） |
+| `sandbox.ts` | ProcessSandbox（L1/L4 执行器；容器槽位未实现） |
+| `workspace.ts` | FileWorkspace（快照/搜索；非 turn undo 主路径） |
+
+## ToolEffectPolicy 速查
+
+```jsonc
+{
+  "effectPolicy": {
+    "mode": "workspace",       // 缺省回落 workspace（最严）
+    "transactionRoots": [],    // 额外可 undo 根
+    "pathContainment": "strict", // L2：strict | soft | none
+    "shellEscape": "deny",     // deny=拒 shell | confirm=host-gate | allow
+    "processLimits": true,
+    "commit": "auto",          // auto | manual
+    "onClose": "commit",       // commit | discard（manual 下会话关闭）
+    "effects": "engine"        // engine | host-gate（confirmEffect）
+  }
+}
+```
+
+**预设缺省**：
+
+| mode | L2 | shellEscape | toolIsolation | onClose |
+|------|----|-------------|---------------|---------|
+| `workspace` | strict | **deny**（无 L4 时 fail-closed） | session-subdir | commit |
+| `project` | strict | allow（编码需 shell） | session-subdir | commit |
+| `host` | none | allow | none | commit |
+| `untrusted` | strict | **deny** | session-subdir | **discard** |
+
+**原理**：事务范围 ≈ 自动放行范围。文件/记忆写进 undo 可自动；shell / 根外效应按 `shellEscape` 与 `effects` 通道处置。无 L4 时无法「只禁 shell 越界」——`shellEscape: deny` 必须拒绝 shell 工具本身。
+
+## Turn undo（P1/P2）
+
+- 即时生效 + `sessions/<sid>/undo/`（`log.jsonl` + `memory.jsonl` + `blobs/<sha256>`）
+- **编辑重发**（`truncateMessagesFrom`）→ 逆放 **agent** 效应；用户手改保留
+- 文本 = 补丁逆放；二进制 = 用户整文件优先
+- commit（turn 结束 / 继续对话）→ 清 undo；`commit: manual` 时由 `onClose` 收尾
+- knowledge **非事务**；steward 异步写 **不进** turn journal
 
 ## 不做什么
 
 - 不做安全评估（那是 security 的事，但会接收安全策略的结果来决定隔离级别）
 - 不做工具注册
+- L4 容器/进程牢笼为 opt-in 槽位，未实现前不假装已提供
 
 ## 依赖
 
-- 契约：本域 `types.ts`（SandboxProvider / Workspace）
-- Core: types/messages（如需要）
+- 契约：`types.ts`（SandboxProvider / Workspace）+ `@octopi-agent/core` `ToolFileEffects` / `MemoryEffectJournal`
+- Core: types/messages
 
 ## 文件说明
 
-- sandbox.ts — ProcessSandbox
-- workspace.ts — FileWorkspace
-- index.ts — 统一导出
+见上表；`index.ts` 统一导出。

@@ -82,6 +82,55 @@ export {
   resolveToolIsolationCwd,
 } from './harness/extension/execution-environment/isolation.js';
 export type { ToolIsolationMode } from './harness/extension/execution-environment/isolation.js';
+export {
+  TurnFileUndoLog,
+  commitSessionFileUndo,
+  discardSessionFileUndo,
+  resolveSessionUndoPaths,
+  resolveSessionUndoOnClose,
+  createUnconfiguredFileEffects,
+  createUnconfiguredMemoryEffects,
+} from './harness/extension/execution-environment/undo-log.js';
+export {
+  TurnMemoryJournal,
+  JournaledMemoryStore,
+  createMemoryRestorer,
+  discardMemoryUndo,
+} from './harness/extension/execution-environment/memory-undo.js';
+export type {
+  MemoryUndoEntry,
+  MemoryEffectRestorer,
+  DiscardMemoryEffectsResult,
+} from './harness/extension/execution-environment/memory-undo.js';
+export type { MemoryEffectJournal, MemoryEffectDomain } from '@octopi-agent/core/types/tools.js';
+export {
+  resolveEffectiveEffectPolicy,
+  isPathAllowed,
+} from './harness/extension/execution-environment/effect-policy.js';
+export {
+  runWithToolLimits,
+  resolveToolTimeoutMs,
+  ToolTimeoutError,
+} from './harness/extension/execution-environment/resource-limits.js';
+export type {
+  EffectIntent,
+  ConfirmEffect,
+  ConfirmEffectDecision,
+} from './harness/extension/execution-environment/effect-policy.js';
+export type {
+  EffectRunMode,
+  EffectPolicyConfig,
+  EffectiveEffectPolicy,
+  PathContainment,
+  ShellEscapePolicy,
+} from './harness/extension/execution-environment/effect-policy.js';
+export type {
+  SessionUndoPaths,
+  FileUndoEntry,
+  DiscardFileEffectsResult,
+  DiscardConflictReason,
+} from './harness/extension/execution-environment/undo-log.js';
+export type { ToolFileEffects } from '@octopi-agent/core/types/tools.js';
 export { InProcessSessionLock } from './harness/run/concurrency/session-lease.js';
 export type { SessionLease } from './harness/run/concurrency/session-lease.js';
 export {

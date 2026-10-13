@@ -108,10 +108,13 @@ export interface SessionAwareRunnerConfig {
   /** 产品 Observer 通道（Run 现场快照；缺省不采集） */
   observerHub?: import('../observability/observer/hub.js').ObserverHub;
   /**
-   * 会话附件根基路径（OP-15）。通常 `OCTOPI_HOME/sessions`。
-   * 设置后 RunScope.toolRuntime.attachmentRoots = `<base>/<sid>/attachments`（只读）。
+   * 会话数据根目录（`OCTOPI_HOME/sessions`）。附件根 = `<sessionsDir>/<sid>/attachments`；
+   * turn 文件 undo = `<sessionsDir>/<sid>/undo`（ToolEffectPolicy L3）。
    */
-  sessionAttachmentsBaseDir?: string;
+  sessionsDir?: string;
+  /** ToolEffectPolicy（P3）；展开后驱动 toolIsolation / L2 */
+  effectPolicy?: import("../extension/execution-environment/effect-policy.js").EffectPolicyConfig;
+  confirmEffect?: import("../extension/execution-environment/effect-policy.js").ConfirmEffect;
   /** 附件注入参数（knowledge.attachments.inject；缺省用内建默认） */
   sessionAttachmentInject?: {
     fullTextMaxChars?: number;
@@ -329,6 +332,13 @@ export function adaptLoopEvent(
  * SessionAwareRunner
  */
 export class SessionAwareRunner {
+  /** 本 Runner 生效的 L2 级别（由 effectPolicy 展开） */
+  private effectPathContainment: "strict" | "soft" | "none" = "none";
+  private effectChannel: "engine" | "host-gate" = "engine";
+  private effectAllowRoots: string[] = [];
+  private effectCommitManual = false;
+  private effectProcessLimits = true;
+  private effectShellEscape: "deny" | "confirm" | "allow" = "allow";
   private agent: Agent;
   private harness: ReliabilityHarness;
   private store: TypedSessionStore;
@@ -571,6 +581,8 @@ export class SessionAwareRunner {
     runConfig: RunConfig,
     signal?: AbortSignal,
   ): AsyncGenerator<import('@octopi-agent/core/primitives/event-bus.js').AgentEvent> {
+    /** 本轮文件 undo（L3）；中止保留，其余出口 commit */
+    let turnFileUndo: import('../extension/execution-environment/undo-log.js').TurnFileUndoLog | undefined;
     // 1. 并发门控（如果配置了 SessionGate）；排队期间响应 abort
     const gate = this.config.sessionGate;
     let gateRelease: (() => void) | undefined;
@@ -935,6 +947,22 @@ export class SessionAwareRunner {
       // 兼容回退：无 ALS 消费方时的 contextSessionId（Map 键场景仍用显式 sessionId）
       this.agent.setContextSessionId(sessionId);
 
+      // P3：effectPolicy → L2 path containment
+      {
+        const { resolveEffectiveEffectPolicy } = await import(
+          '../extension/execution-environment/effect-policy.js'
+        );
+        const eff = resolveEffectiveEffectPolicy(
+          this.config.effectPolicy ?? { mode: 'workspace' },
+          this.config.agentWorkspace ?? effectiveRunConfig.cwd ?? undefined,
+        );
+        this.effectPathContainment = eff.pathContainment;
+        this.effectChannel = eff.effects;
+        this.effectAllowRoots = eff.allowRoots;
+        this.effectCommitManual = eff.commit === 'manual';
+        this.effectProcessLimits = eff.processLimits;
+        this.effectShellEscape = eff.shellEscape;
+      }
       // I5：工具效应 cwd —— RunConfig.cwd > agent.workspace；session-subdir 再拼 sessionId
       const isolationMode: ToolIsolationMode =
         effectiveRunConfig.toolIsolation
@@ -961,9 +989,22 @@ export class SessionAwareRunner {
 
       // Run 身份与 RunScope 对齐（Observer/审计共用，不另造第二套 ID）
       const runId = createRunId(sessionId, _agentId);
-      const attachmentRoots = this.config.sessionAttachmentsBaseDir
-        ? [join(this.config.sessionAttachmentsBaseDir, toSessionFileName(sessionId), 'attachments')]
+      const attachmentRoots = this.config.sessionsDir
+        ? [join(this.config.sessionsDir, toSessionFileName(sessionId), 'attachments')]
         : undefined;
+      // L3：本轮文件 undo（ToolEffectPolicy）。无 sessionsDir 时 fail-closed，禁止静默免记写盘。
+      const { TurnFileUndoLog, createUnconfiguredFileEffects } = await import(
+        '../extension/execution-environment/undo-log.js'
+      );
+      const fileUndo = this.config.sessionsDir
+        ? await TurnFileUndoLog.begin({ sessionsDir: this.config.sessionsDir, sessionId })
+        : undefined;
+      turnFileUndo = fileUndo;
+      const {
+        createUnconfiguredMemoryEffects: unconfMem,
+      } = await import('../extension/execution-environment/undo-log.js');
+      const fileEffects = fileUndo ?? createUnconfiguredFileEffects();
+      const memoryEffects = fileUndo?.memoryEffects ?? unconfMem();
       const runScope: RunScope = {
         sessionId,
         agentId: _agentId,
@@ -977,6 +1018,18 @@ export class SessionAwareRunner {
           cwd: resolvedToolCwd.cwd,
           isolation: resolvedToolCwd.mode,
           attachmentRoots,
+          fileEffects,
+          memoryEffects,
+          pathRoots: this.effectAllowRoots.length
+            ? this.effectAllowRoots
+            : resolvedToolCwd.cwd
+              ? [resolvedToolCwd.cwd]
+              : undefined,
+          pathContainment: this.effectPathContainment,
+          confirmEffect: this.config.confirmEffect,
+          effectChannel: this.effectChannel,
+          processLimits: this.effectProcessLimits,
+          shellEscape: this.effectShellEscape,
         },
       };
 
@@ -1008,7 +1061,7 @@ export class SessionAwareRunner {
 
         // OP-15：会话附件资料块（与 Knowledge grounding 同槽位气质，source 不同）
         let attachmentText: string | null = null;
-        if (this.config.sessionAttachmentsBaseDir) {
+        if (this.config.sessionsDir) {
           try {
             const {
               SessionAttachmentService,
@@ -1017,7 +1070,7 @@ export class SessionAwareRunner {
               createLlmIntentResolver,
             } = await import('../session/attachments/index.js');
             const attachSvc = new SessionAttachmentService({
-              sessionsDir: this.config.sessionAttachmentsBaseDir,
+              sessionsDir: this.config.sessionsDir,
             });
             const lastUser = [...session.messages].reverse().find((m) => m.role === 'user');
             const attachIds = Array.isArray(lastUser?.metadata?.attachmentIds)
@@ -1317,6 +1370,11 @@ export class SessionAwareRunner {
       // 迟到 abort / signal 竞态不得给已完成轮贴编辑重发。
       let clearAbortedTurn = false;
       const abortedMidTurn = runAborted || (Boolean(signal?.aborted) && !hasTurnEnd);
+      // L3：中止保留 undo（供编辑重发 discard）；其余出口 commit（继续对话=隐式提交）
+      if (turnFileUndo && !abortedMidTurn && !this.effectCommitManual) {
+        await turnFileUndo.commit();
+        turnFileUndo = undefined;
+      }
       if (abortedMidTurn) {
         let userIdx = -1;
         for (let i = session.messages.length - 1; i >= 0; i--) {
@@ -1370,6 +1428,11 @@ export class SessionAwareRunner {
     } catch (err) {
       observerEndReason = 'error';
       observerErrorMsg = err instanceof Error ? err.message : String(err);
+      // 引擎出错：无编辑重发入口，效应保留（commit undo）
+      if (turnFileUndo) {
+        await turnFileUndo.commit().catch(() => undefined);
+        turnFileUndo = undefined;
+      }
       // 引擎出错：状态机转到 error，持久化
       const sm = this.stateMachines.get(sessionId);
       if (sm?.canTransition('error')) {

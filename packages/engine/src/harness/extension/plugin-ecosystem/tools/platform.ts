@@ -32,9 +32,61 @@ export interface PlatformShell {
  * @param cwd - 工作目录；缺省为 `process.cwd()`
  * @returns 规范化后的绝对路径
  */
-export function resolveToolPath(rawPath: string, cwd?: string): string {
-  if (isAbsolute(rawPath)) return resolve(rawPath);
-  return resolve(cwd ?? process.cwd(), rawPath);
+export interface ResolveToolPathOptions {
+  /** L2 允许根；containment 非 none 时必须落在其下 */
+  allowRoots?: string[];
+  /** L2 级别；省略 = 不限制 */
+  containment?: 'strict' | 'soft' | 'none';
+}
+
+/**
+ * 解析工具入参路径：绝对路径原样返回，相对路径相对 cwd
+ *
+ * 使用 path.isAbsolute，同时覆盖 POSIX /foo、Windows 盘符与 UNC。
+ *
+ * @param rawPath - 工具入参路径
+ * @param cwd - 工作目录；缺省为 process.cwd()
+ * @param options - L2 路径包含（ToolEffectPolicy）
+ * @returns 规范化后的绝对路径
+ */
+export function resolveToolPath(
+  rawPath: string,
+  cwd?: string,
+  options?: ResolveToolPathOptions,
+): string {
+  const abs = isAbsolute(rawPath) ? resolve(rawPath) : resolve(cwd ?? process.cwd(), rawPath);
+  const containment = options?.containment ?? 'none';
+  if (containment !== 'none') {
+    const roots = options?.allowRoots ?? [];
+    if (roots.length === 0) {
+      // strict 无 root = fail-closed（与 isPathAllowed 一致）；soft 仅审计
+      if (containment === 'strict') {
+        throw new Error(`path_forbidden: "${rawPath}" effect roots not configured`);
+      }
+      return abs;
+    }
+    if (!isPathUnderRoots(abs, roots)) {
+      if (containment === 'strict') {
+        throw new Error(`path_forbidden: "${rawPath}" escapes effect roots`);
+      }
+      // soft：放行（审计由调用方/Observer 负责）
+    }
+  }
+  return abs;
+}
+
+/** 路径是否落在任一 root 之下（含 root 本身） */
+export function isPathUnderRoots(absPath: string, roots: string[]): boolean {
+  const win = process.platform === 'win32';
+  const norm = (s: string) => {
+    const r = resolve(s);
+    return win ? r.toLowerCase() : r;
+  };
+  const p = norm(absPath);
+  return roots.some((root) => {
+    const r = norm(root);
+    return p === r || p.startsWith(r.endsWith(sep) ? r : r + sep);
+  });
 }
 
 /**
@@ -49,6 +101,7 @@ export function resolveReadableToolPath(
   rawPath: string,
   cwd?: string,
   attachmentRoots?: string[],
+  options?: ResolveToolPathOptions,
 ): string {
   const roots = attachmentRoots ?? [];
   // 绝对路径原样；相对路径先试 attachments 根（文件名直呼）
@@ -63,7 +116,8 @@ export function resolveReadableToolPath(
       }
     }
   }
-  return resolveToolPath(rawPath, cwd);
+  // attachments 命中后返回；其余走 L2
+  return resolveToolPath(rawPath, cwd, options);
 }
 
 /**

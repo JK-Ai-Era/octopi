@@ -803,12 +803,26 @@ export class OctopiClient {
   async truncateMessagesFrom(
     sessionId: string,
     fromIndex: number,
-  ): Promise<{ messageCount: number }> {
+  ): Promise<{
+    messageCount: number;
+    fileEffects?: {
+      discarded: Array<{ path: string; action: 'deleted' | 'restored' }>;
+      keptUserEdits: Array<{ path: string; reason: string }>;
+      entries: number;
+    };
+  }> {
     const data = await this.postJson(
       `/sessions/${encodeURIComponent(sessionId)}/messages/truncate`,
       { fromIndex },
     );
-    return data?.data as { messageCount: number };
+    return data?.data as {
+      messageCount: number;
+      fileEffects?: {
+        discarded: Array<{ path: string; action: 'deleted' | 'restored' }>;
+        keptUserEdits: Array<{ path: string; reason: string }>;
+        entries: number;
+      };
+    };
   }
 
   async getSession(sessionId: string): Promise<SessionView> {

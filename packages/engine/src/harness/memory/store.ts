@@ -202,6 +202,10 @@ export class InMemoryMemoryStore implements MemoryStore {
     entry.deletedMeta = undefined;
   }
 
+  async importEntry(entry: MemoryEntry): Promise<void> {
+    this.entries.set(entry.id, { ...entry });
+  }
+
   async listForGovern(filter?: { includeDeleted?: boolean }): Promise<MemoryEntry[]> {
     return Array.from(this.entries.values()).filter(
       (e) => filter?.includeDeleted || !e.deleted,

@@ -75,7 +75,10 @@ export function createDocumentReadTool(options?: DocumentToolOptions): Registere
       }
       const rawPath = String(args.path ?? '');
       const cwd = context?.cwd ?? process.cwd();
-      const path = resolveReadableToolPath(rawPath, cwd, context?.attachmentRoots);
+      const path = resolveReadableToolPath(rawPath, cwd, context?.attachmentRoots, {
+        allowRoots: context?.pathRoots,
+        containment: context?.pathContainment,
+      });
 
       try {
         const result = await port.extract({
@@ -171,7 +174,10 @@ export function createDocumentProbeTool(options?: DocumentToolOptions): Register
       }
       const rawPath = String(args.path ?? '');
       const cwd = context?.cwd ?? process.cwd();
-      const path = resolveReadableToolPath(rawPath, cwd, context?.attachmentRoots);
+      const path = resolveReadableToolPath(rawPath, cwd, context?.attachmentRoots, {
+        allowRoots: context?.pathRoots,
+        containment: context?.pathContainment,
+      });
       try {
         const probe = await port.probe({ path, name: path });
         const caps = await port.capabilities();

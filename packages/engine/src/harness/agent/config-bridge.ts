@@ -287,6 +287,7 @@ async function buildAgent(
     subsystemAllowlist?: string[];
     subsystemDenylist?: string[];
     toolIsolation?: import('../../config.js').HarnessConfig['toolIsolation'];
+    effectPolicy?: import('../../config.js').HarnessConfig['effectPolicy'];
     sessionIdleExpiryMs?: number;
   },
 ): Promise<BuiltAgent> {
@@ -316,6 +317,12 @@ async function buildAgent(
   // ── Tool isolation (I5) ──
   if (shared.toolIsolation) {
     builder.toolIsolation(shared.toolIsolation);
+  }
+
+  // ── EffectPolicy (P3) ──
+  const effectPolicy = agentConfig.effectPolicy ?? shared.effectPolicy;
+  if (effectPolicy) {
+    builder.effectPolicy(effectPolicy);
   }
 
   // ── Context lease (opt-in) ──

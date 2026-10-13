@@ -187,7 +187,20 @@ export class DefaultToolBus implements ToolBus {
       throw new Error(`Tool "${name}" not found`);
     }
     this.validateArgs(name, args, tool.definition);
-    return tool.handler(args, context);
+    const { runWithToolLimits, resolveToolTimeoutMs } = await import(
+      '../../execution-environment/resource-limits.js'
+    );
+    return runWithToolLimits(
+      (signal) => tool.handler(args, { ...context, abortSignal: signal }),
+      {
+        timeoutMs:
+          context.processLimits !== false
+            ? resolveToolTimeoutMs(tool.definition)
+            : undefined,
+        abortSignal: context.abortSignal,
+        toolName: tool.definition.name,
+      },
+    );
   }
   /**
    * 获取全局注册的工具名集合（用于 SecurityGuard 的 registeredTools 校验）

@@ -21,6 +21,11 @@ import type {
   ToolCall,
 } from '@octopi-agent/core/types.js';
 import { DefaultToolBus } from '../extension/plugin-ecosystem/tools/tool-bus.js';
+import {
+  createUnconfiguredFileEffects,
+  createUnconfiguredMemoryEffects,
+} from '../extension/execution-environment/undo-log.js';
+import { JournaledMemoryStore } from '../extension/execution-environment/memory-undo.js';
 import type {
   ModelProvider,
 } from '@octopi-agent/core/interfaces/model-provider.js';
@@ -141,6 +146,14 @@ export interface ToolContextProvider {
     messages: import('@octopi-agent/core/types.js').Message[];
     cwd?: string;
     attachmentRoots?: string[];
+    fileEffects: import('@octopi-agent/core/types/tools.js').ToolFileEffects;
+    memoryEffects: import('@octopi-agent/core/types/tools.js').MemoryEffectJournal;
+    pathRoots?: string[];
+    pathContainment?: 'strict' | 'soft' | 'none';
+    confirmEffect?: import('@octopi-agent/core/types/tools.js').ToolExecutionContext['confirmEffect'];
+    effectChannel?: 'engine' | 'host-gate';
+    processLimits?: boolean;
+    shellEscape?: 'deny' | 'confirm' | 'allow';
   };
   setRuntime(sessionId: string, agentId: string, messages: import('@octopi-agent/core/types.js').Message[]): void;
 }
@@ -164,6 +177,8 @@ class RuntimeToolContextProvider implements ToolContextProvider {
   get() {
     // I1：优先 RunScope ALS（并发 session 下不可依赖单槽 setRuntime）
     const scope = getRunScope();
+    const unconfigured = createUnconfiguredFileEffects();
+    const unconfiguredMemory = createUnconfiguredMemoryEffects();
     if (scope?.toolRuntime) {
       return {
         sessionId: scope.toolRuntime.sessionId,
@@ -171,6 +186,14 @@ class RuntimeToolContextProvider implements ToolContextProvider {
         messages: scope.toolRuntime.messages,
         cwd: scope.toolRuntime.cwd ?? this.cwd,
         attachmentRoots: scope.toolRuntime.attachmentRoots,
+        fileEffects: scope.toolRuntime.fileEffects ?? unconfigured,
+        memoryEffects: scope.toolRuntime.memoryEffects ?? unconfiguredMemory,
+        pathRoots: scope.toolRuntime.pathRoots,
+        pathContainment: scope.toolRuntime.pathContainment,
+        confirmEffect: scope.toolRuntime.confirmEffect,
+        effectChannel: scope.toolRuntime.effectChannel,
+        processLimits: scope.toolRuntime.processLimits,
+        shellEscape: scope.toolRuntime.shellEscape,
       };
     }
     if (scope) {
@@ -179,9 +202,18 @@ class RuntimeToolContextProvider implements ToolContextProvider {
         agentId: scope.agentId,
         messages: this.messages,
         cwd: this.cwd,
+        fileEffects: unconfigured,
+        memoryEffects: unconfiguredMemory,
       };
     }
-    return { sessionId: this.sessionId, agentId: this.agentId, messages: this.messages, cwd: this.cwd };
+    return {
+      sessionId: this.sessionId,
+      agentId: this.agentId,
+      messages: this.messages,
+      cwd: this.cwd,
+      fileEffects: unconfigured,
+      memoryEffects: unconfiguredMemory,
+    };
   }
 }
 
@@ -208,7 +240,21 @@ function convertToAgentTool(tool: RegisteredTool, contextProvider: ToolContextPr
       const startTime = Date.now();
       try {
         const context = contextProvider.get();
-        const result = await tool.handler(args as Record<string, unknown>, { ...context, abortSignal: signal });
+        const { runWithToolLimits, resolveToolTimeoutMs } = await import(
+          '../extension/execution-environment/resource-limits.js'
+        );
+        const processLimitsEnabled = context.processLimits !== false;
+        const result = await runWithToolLimits(
+          (sig) =>
+            tool.handler(args as Record<string, unknown>, { ...context, abortSignal: sig }),
+          {
+            timeoutMs: processLimitsEnabled
+              ? resolveToolTimeoutMs(tool.definition)
+              : undefined,
+            abortSignal: signal,
+            toolName: tool.definition.name,
+          },
+        );
         return {
           toolCallId,
           name: tool.definition.name,
@@ -511,6 +557,8 @@ export class AgentBuilder {
   private _observerHub?: import('../observability/observer/hub.js').ObserverHub;
   /** 工具效应隔离（I5）；Runner 解析 toolRuntime.cwd */
   private _toolIsolation?: import('../extension/execution-environment/isolation.js').ToolIsolationMode;
+  private _effectPolicy?: import('../extension/execution-environment/effect-policy.js').EffectPolicyConfig;
+  private _confirmEffect?: import('../extension/execution-environment/effect-policy.js').ConfirmEffect;
 
   // MCP 配置
   private _mcpConfigs: import('../extension/plugin-ecosystem/mcp/types.js').McpServerConfig[] = [];
@@ -681,7 +729,11 @@ export class AgentBuilder {
 
   /** 注入 MemoryStore（每轮按 query 召回进 system prompt） */
   memoryStore(store: import('../memory/types.js').MemoryStore): this {
-    this._memoryStore = store;
+    // L3：写口记 turn journal（RunScope ALS）；turn 外（steward）无 journal 则直写
+    this._memoryStore = new JournaledMemoryStore(
+      store,
+      () => getRunScope()?.toolRuntime?.memoryEffects,
+    );
     return this;
   }
 
@@ -1006,6 +1058,18 @@ export class AgentBuilder {
    *
    * @param mode - `none` | `session-subdir` | `session-lock`
    */
+  /** P3：注入 ToolEffectPolicy */
+  effectPolicy(config: import('../extension/execution-environment/effect-policy.js').EffectPolicyConfig): this {
+    this._effectPolicy = config;
+    return this;
+  }
+
+  /** P4：宿主 confirmEffect（host-gate） */
+  confirmEffect(fn: import('../extension/execution-environment/effect-policy.js').ConfirmEffect): this {
+    this._confirmEffect = fn;
+    return this;
+  }
+
   toolIsolation(mode: import('../extension/execution-environment/isolation.js').ToolIsolationMode): this {
     this._toolIsolation = mode;
     return this;
@@ -1156,6 +1220,8 @@ export class AgentBuilder {
     const runner = new SessionAwareRunner(agent, harness, store, {
       ...this._runnerConfig,
       toolIsolation: this._toolIsolation ?? this._runnerConfig?.toolIsolation,
+      effectPolicy: this._effectPolicy ?? this._runnerConfig?.effectPolicy,
+      confirmEffect: this._confirmEffect ?? this._runnerConfig?.confirmEffect,
       agentWorkspace: this._workspace?.trim() ? this._workspace : this._runnerConfig?.agentWorkspace,
       sessionLease: this._runnerConfig?.sessionLease,
       sessionAcl: this._runnerConfig?.sessionAcl,

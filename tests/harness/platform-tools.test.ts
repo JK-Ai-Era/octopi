@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { writeFile, mkdir, rm } from 'node:fs/promises';
+import { writeFile, appendFile, mkdir, rm } from 'node:fs/promises';
 import { join, resolve, sep } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
@@ -14,15 +14,43 @@ import {
 } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/tools/platform.js';
 import { createShellTool } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/tools/builtin.js';
 import { createEnvInfoTool } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/tools/env-info.js';
-import type { ToolExecutionContext } from '@octopi-agent/core/types/tools.js';
+import { createUnconfiguredFileEffects, TurnFileUndoLog } from '@octopi-agent/engine/harness/extension/execution-environment/undo-log.js';
+import type { ToolExecutionContext, ToolFileEffects } from '@octopi-agent/core/types/tools.js';
+
+/** 测试用直写端口（不记 undo）；undo 专项测试改用 TurnFileUndoLog */
+function testFileEffects(): ToolFileEffects {
+  return {
+    async writeFile(path, data) {
+      await writeFile(path, data);
+    },
+    async appendFile(path, data) {
+      await appendFile(path, data);
+    },
+  };
+}
+
+function testMemoryEffects(): import('@octopi-agent/core/types/tools.js').MemoryEffectJournal {
+  return {
+    async recordInsert() {},
+    async recordUpdate() {},
+    async recordDelete() {},
+  };
+}
 
 function makeContext(overrides?: Partial<ToolExecutionContext>): ToolExecutionContext {
   return {
     sessionId: 'test-session',
     agentId: 'test-agent',
     messages: [],
+    fileEffects: testFileEffects(),
+    memoryEffects: testMemoryEffects(),
     ...overrides,
   };
+}
+
+async function makeUndoContext(sessionsDir: string): Promise<ToolExecutionContext> {
+  const undo = await TurnFileUndoLog.begin({ sessionsDir, sessionId: 'test-session' });
+  return makeContext({ fileEffects: undo });
 }
 
 describe('resolveToolPath', () => {

@@ -19,6 +19,7 @@
  */
 
 import type { RegisteredTool } from '@octopi-agent/core/types.js';
+import { gateEffect } from '../../execution-environment/effect-policy.js';
 
 import { createFileEditTool } from './file-edit.js';
 import { createFileSearchTool } from './file-search.js';
@@ -27,6 +28,7 @@ import { createEnvInfoTool } from './env-info.js';
 import { createDocumentProbeTool, createDocumentReadTool } from './document-tools.js';
 import {
   defaultPathEnv,
+  isPathUnderRoots,
   isUnderAttachmentRoot,
   resolvePlatformShell,
   resolveReadableToolPath,
@@ -83,6 +85,14 @@ export function createShellTool(options?: {
     handler: async (args, context) => {
       const command = args.command as string;
       const cwd = (args.cwd as string | undefined) ?? context?.cwd ?? process.cwd();
+      await gateEffect(
+        { kind: 'shell', command: args.command as string, cwd: typeof cwd === 'string' ? cwd : undefined },
+        {
+          effects: context?.effectChannel ?? 'engine',
+          confirmEffect: context?.confirmEffect,
+          shellEscape: context?.shellEscape,
+        },
+      );
       const timeout = (args.timeout as number) ?? 30_000;
 
       const { spawn } = await import('node:child_process');
@@ -91,7 +101,7 @@ export function createShellTool(options?: {
       return new Promise((resolve, reject) => {
         const startTime = Date.now();
         const child = spawn(resolvedShell.executable, [...resolvedShell.args, command], {
-          cwd: resolveToolPath(cwd, context?.cwd),
+          cwd: resolveToolPath(cwd, context?.cwd, { allowRoots: context?.pathRoots, containment: context?.pathContainment }),
           timeout,
           env: { ...process.env, PATH: defaultPathEnv() },
           windowsHide: true,
@@ -233,7 +243,10 @@ export function createFileReadTool(options?: {
 
       const rawPath = args.path as string;
       const cwd = context?.cwd ?? process.cwd();
-      const path = resolveReadableToolPath(rawPath, cwd, context?.attachmentRoots);
+      const path = resolveReadableToolPath(rawPath, cwd, context?.attachmentRoots, {
+        allowRoots: context?.pathRoots,
+        containment: context?.pathContainment,
+      });
       const offset = (args.offset as number) ?? 1;
       const limit = (args.limit as number) ?? 2000;
 
@@ -318,26 +331,46 @@ export function createFileWriteTool(): RegisteredTool {
       },
     },
     handler: async (args, context) => {
-      const { writeFile, appendFile, mkdir } = await import('node:fs/promises');
+      const { mkdir } = await import('node:fs/promises');
       const { dirname } = await import('node:path');
 
       const rawPath = args.path as string;
       const cwd = context?.cwd ?? process.cwd();
-      const path = resolveToolPath(rawPath, cwd);
+      const path = resolveToolPath(rawPath, cwd, {
+        allowRoots: context?.pathRoots,
+        containment: context?.pathContainment,
+      });
       if (isUnderAttachmentRoot(path, context?.attachmentRoots)) {
         throw new Error('session attachments are read-only; cannot write to attachments root');
       }
       const content = args.content as string;
       const append = args.append as boolean ?? false;
 
+      await gateEffect(
+        {
+          kind: 'file.write',
+          path,
+          mode: append ? 'append' : 'overwrite',
+          transactional: isPathUnderRoots(path, context?.pathRoots ?? []),
+        },
+        {
+          effects: context?.effectChannel ?? 'engine',
+          confirmEffect: context?.confirmEffect,
+        },
+      );
+
       try {
         // 确保父目录存在
         await mkdir(dirname(path), { recursive: true });
 
+        const effects = context.fileEffects;
+        if (!effects) {
+          throw new Error('file_effects_not_configured: file_write requires ToolExecutionContext.fileEffects');
+        }
         if (append) {
-          await appendFile(path, content);
+          await effects.appendFile(path, content);
         } else {
-          await writeFile(path, content);
+          await effects.writeFile(path, content);
         }
 
         return {
@@ -456,7 +489,10 @@ export function createFileListTool(options?: {
 
       const rawPath = (args.path as string | undefined) ?? '.';
       const cwd = context?.cwd ?? process.cwd();
-      const basePath = resolveReadableToolPath(rawPath, cwd, context?.attachmentRoots);
+      const basePath = resolveReadableToolPath(rawPath, cwd, context?.attachmentRoots, {
+        allowRoots: context?.pathRoots,
+        containment: context?.pathContainment,
+      });
       // 找文件意图（带 pattern）默认递归；显式 recursive:false 仍只列本层
       const hasPattern = Boolean((args.pattern as string | undefined)?.trim());
       const recursive = args.recursive === undefined && hasPattern

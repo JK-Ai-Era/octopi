@@ -11,7 +11,7 @@ Run · RunScope · SessionLease · Effect 执行 · Reliability · RunGuard · B
 
 | 位置 | 职责 |
 |------|------|
-| `runner.ts` | SessionAwareRunner：session 锁/lease、toolIsolation cwd、compactSession、可选 ACL |
+| `runner.ts` | SessionAwareRunner：session 锁/lease、toolIsolation cwd / effectPolicy（L2+undo+host-gate）、compactSession、可选 ACL |
 | `run-scope.ts` | RunScope ALS（I1）；`runId` / toolRuntime / agentRevision |
 | `agent/` | **`Agent.run()` 门面**（E5 唯一推荐生产入口） |
 | `reliability/` | 可靠性包装、HarnessLoopEvent、断路器、重试 |

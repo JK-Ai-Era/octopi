@@ -173,6 +173,12 @@ function registeredToolToAgentTool(tool: RegisteredTool): {
           agentId: scope?.agentId ?? 'unknown',
           messages: scope?.toolRuntime?.messages ?? [],
           abortSignal: signal,
+          fileEffects:
+            scope?.toolRuntime?.fileEffects
+            ?? (await import('@octopi-agent/engine')).createUnconfiguredFileEffects(),
+          memoryEffects:
+            scope?.toolRuntime?.memoryEffects
+            ?? (await import('@octopi-agent/engine')).createUnconfiguredMemoryEffects(),
         });
         return {
           toolCallId,
@@ -270,6 +276,8 @@ export class Gateway {
   /** 工具 */
   private tools: RegisteredTool[] = [];
   /** Agent 缓存（避免每条消建） */
+  /** 每 agent 记忆逆放器（L3 P2） */
+  private memoryRestorers = new Map<string, import('@octopi-agent/engine').MemoryEffectRestorer>();
   private agentCache = new Map<string, {
     agent: import('@octopi-agent/engine/harness/run/agent/index.js').Agent;
     runner: SessionAwareRunner;
@@ -630,8 +638,67 @@ export class Gateway {
     return 'disabled';
   }
 
+  /**
+   * 会话关闭策略（effectPolicy.onClose）：commit=manual 时残留 undo 的处理。
+   * 缺省 commit（保留效应）；discard = 逆放 agent 效应。
+   */
+  async applySessionClosePolicy(sessionId: string): Promise<'committed' | 'discarded' | 'none'> {
+    const { resolveSessionUndoOnClose, resolveEffectiveEffectPolicy } = await import(
+      '@octopi-agent/engine'
+    );
+    const { getOctopiHome } = await import('@octopi-agent/engine/paths.js');
+    const { join } = await import('node:path');
+    const sessionsDir = join(getOctopiHome(), 'sessions');
+    const onClose =
+      (this.config.effectPolicy?.onClose as 'commit' | 'discard' | undefined) ?? 'commit';
+    const agentId = await this.store
+      .load(sessionId)
+      .then((s) => s?.primaryAgentId ?? s?.agentId)
+      .catch(() => undefined);
+    const memoryRestorer = agentId ? this.memoryRestorers.get(agentId) : undefined;
+    return resolveSessionUndoOnClose({
+      sessionsDir,
+      sessionId,
+      onClose,
+      memoryRestorer,
+    });
+  }
+
+  /** 删除会话：先按 onClose 收掉残留 undo，再删存储 */
+  async deleteSession(sessionId: string): Promise<void> {
+    await this.applySessionClosePolicy(sessionId);
+    await this.store.delete(sessionId);
+  }
+
   async stop(): Promise<void> {
     if (!this.started) return;
+    // 进程退出：按 onClose 收掉所有残留 turn undo（缺省 commit）
+    try {
+      const { resolveSessionUndoOnClose, resolveSessionUndoPaths } = await import(
+        '@octopi-agent/engine'
+      );
+      const { getOctopiHome } = await import('@octopi-agent/engine/paths.js');
+      const { join } = await import('node:path');
+      const { readdir, stat } = await import('node:fs/promises');
+      const sessionsDir = join(getOctopiHome(), 'sessions');
+      const onClose =
+        (this.config.effectPolicy?.onClose as 'commit' | 'discard' | undefined) ?? 'commit';
+      const names = await readdir(sessionsDir).catch(() => [] as string[]);
+      for (const name of names) {
+        const undoRoot = join(sessionsDir, name, 'undo');
+        try {
+          await stat(undoRoot);
+        } catch {
+          continue;
+        }
+        await resolveSessionUndoOnClose({ sessionsDir, sessionId: name, onClose }).catch(
+          () => undefined,
+        );
+        void resolveSessionUndoPaths;
+      }
+    } catch {
+      // stop fail-open
+    }
 
     console.log('[Gateway] Stopping...');
     // 先断 SSE，再关 Knowledge Service（server.close 会等长连接排空）
@@ -1584,7 +1651,10 @@ export class Gateway {
    *
    * 与 Runner.handle 共 sessionLease，避免与 in-flight 写回竞态。
    */
-  async truncateMessagesFrom(sessionId: string, fromIndex: number): Promise<{ messageCount: number }> {
+  async truncateMessagesFrom(sessionId: string, fromIndex: number): Promise<{
+    messageCount: number;
+    fileEffects: import('@octopi-agent/engine').DiscardFileEffectsResult;
+  }> {
     const release = await this.sessionLease.acquire(sessionId);
     try {
       const session = await this.store.load(sessionId);
@@ -1605,7 +1675,18 @@ export class Gateway {
       await this.patchSessionMetadata(sessionId, (meta) => {
         delete meta.abortedTurn;
       });
-      return { messageCount: session.messages.length };
+      // L3: edit-resend reverses this turn's agent file effects (user hand-edits survive)
+      const { discardSessionFileUndo } = await import('@octopi-agent/engine');
+      const { getOctopiHome } = await import('@octopi-agent/engine/paths.js');
+      const { join } = await import('node:path');
+      const agentId = session.primaryAgentId ?? session.agentId;
+      const memoryRestorer = this.memoryRestorers.get(agentId);
+      const fileEffects = await discardSessionFileUndo(
+        join(getOctopiHome(), 'sessions'),
+        sessionId,
+        memoryRestorer,
+      );
+      return { messageCount: session.messages.length, fileEffects };
     } finally {
       release();
     }
@@ -3415,6 +3496,14 @@ export class Gateway {
     if (this.config.toolIsolation) {
       builder.toolIsolation(this.config.toolIsolation);
     }
+    // P3: effectPolicy（agents[] 覆盖顶层）
+    {
+      const agentEff = (agent as { effectPolicy?: unknown }).effectPolicy
+        ?? (this.config as { effectPolicy?: unknown }).effectPolicy;
+      if (agentEff) {
+        builder.effectPolicy(agentEff as never);
+      }
+    }
     // E1/E2：同进程内所?Runner 共享?session lease；E6：注?ACL + agent 天花?
     // OP-15：会话附件只读根（file 工具?
     const { getOctopiHome } = await import('@octopi-agent/engine/paths.js');
@@ -3426,7 +3515,7 @@ export class Gateway {
       // 上下文租约 opt-in：缺省关闭，续聊默认带全量窗口
       idleExpiryMs: this.config.session?.idleExpiryMs,
       observerHub: this.observerHub.isEnabled() ? this.observerHub : undefined,
-      sessionAttachmentsBaseDir: pathJoinForAttachments(getOctopiHome(), 'sessions'),
+      sessionsDir: pathJoinForAttachments(getOctopiHome(), 'sessions'),
       sessionAttachmentInject: {
         fullTextMaxChars: this.config.knowledge?.attachments?.inject?.fullTextMaxChars,
         intent: this.config.knowledge?.attachments?.inject?.intent,
@@ -3479,15 +3568,18 @@ export class Gateway {
             : false,
           vectorDimensions: useVec ? embRuntime?.dimensions : undefined,
         });
-        builder.memoryStore(
-          new SqliteMemoryStore(db, {
+        const memStoreForEffects = new SqliteMemoryStore(db, {
             embeddingProvider: embRuntime?.provider ?? null,
             vectorEngine: embRuntime?.vectorEngine ?? 'auto',
             minSimilarity: this.config.memory?.retrieval?.minSimilarity,
             similarityWeight: this.config.memory?.retrieval?.similarityWeight,
             minKeywordScore: this.config.memory?.retrieval?.minKeywordScore,
-          }),
-        );
+          });
+        builder.memoryStore(memStoreForEffects);
+        {
+          const { createMemoryRestorer } = await import('@octopi-agent/engine');
+          this.memoryRestorers.set(agent.id, createMemoryRestorer(memStoreForEffects));
+        }
         builder.wisdomStore(new SqliteWisdomStore(db));
         builder.cognitionStore(new SqliteConceptGraph(db, {
           embeddingProvider: embRuntime?.provider ?? null,
@@ -3625,6 +3717,31 @@ export class Gateway {
       onToolError: () => ({ action: 'skip', reason: 'Tool failed' }),
       onContextOverflow: () => ({ action: 'compact' }),
       onSecurityViolation: (v) => ({ action: 'block', reason: v.description }),
+    });
+
+    // P4 host-gate：非事务效应交宿主（ask_user UI；无人值守 fail-safe 拒绝）
+    builder.confirmEffect(async (intent) => {
+      const { getRunScope } = await import('@octopi-agent/engine/harness');
+      const scope = getRunScope();
+      const sessionId = scope?.sessionId ?? 'unknown';
+      const agentId = scope?.agentId ?? 'default';
+      const desc =
+        intent.kind === 'shell'
+          ? `shell: ${String(intent.command ?? '').slice(0, 120)}`
+          : intent.kind === 'file.write'
+            ? `write ${intent.path} (${intent.mode ?? 'overwrite'})`
+            : (intent.description ?? intent.kind);
+      try {
+        const answer = await this.askUser({
+          sessionId,
+          agentId,
+          question: `Allow effect? ${desc}`,
+          options: ['allow', 'deny'],
+        });
+        return String(answer).toLowerCase() === 'allow' ? 'allow' : 'deny';
+      } catch {
+        return 'deny';
+      }
     });
 
     // high 风险人工：接?ask_user UI（有交互则确认，无人值守 fail-safe 拒绝?

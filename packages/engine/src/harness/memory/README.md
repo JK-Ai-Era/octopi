@@ -15,6 +15,13 @@
   - 注意：session 历史索引（`sessions.index.db`）**已用** FTS5 trigram——与 Memory 检索**分轨**，勿互相「对齐」回退
 - system prompt 层组装（ContextLayer 1–7）在 `harness/context/`；全局宪法在 `harness/context/constitution/`
 
+## ToolEffectPolicy L3（P2）
+
+- `MemoryStore.importEntry`：按原 id 恢复整行（硬删除逆放）
+- `JournaledMemoryStore`（execution-environment/memory-undo）：写口记 turn journal；编辑重发可逆放
+- journal 来源 = RunScope ALS；**steward 异步写不进 turn 事务**（治理共识不回滚）
+- knowledge 非事务
+
 ## 不做什么
 
 - 不做上下文压缩（context）

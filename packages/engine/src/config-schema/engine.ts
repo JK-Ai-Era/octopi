@@ -32,6 +32,7 @@ import {
   SessionAclConfigSchema,
   SessionConfigSchema,
   ToolIsolationConfigSchema,
+  EffectPolicyConfigSchema,
 } from './governance.js';
 import { ObservabilityConfigSchema, ObserverConfigSchema } from './observability.js';
 import { WebSearchConfigSchema } from './web-search.js';
@@ -75,6 +76,7 @@ export const engineConfigSchema = z.object({
   session: SessionConfigSchema.optional(),
   /** 工具效应隔离策略（宪法 I5）；默认 none */
   toolIsolation: ToolIsolationConfigSchema.optional(),
+  effectPolicy: EffectPolicyConfigSchema.optional(),
   /** Session ACL 角色目录（E6）；缺省 = 内置五角色 */
   sessionAcl: SessionAclConfigSchema.optional(),
   /** send_file 外发限额（单文件大小 / 会话 release 次数） */

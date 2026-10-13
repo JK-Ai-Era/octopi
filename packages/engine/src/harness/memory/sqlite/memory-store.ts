@@ -646,6 +646,36 @@ export class SqliteMemoryStore implements MemoryStore {
     `).run(id);
   }
 
+  async importEntry(entry: MemoryEntry): Promise<void> {
+    this.db.raw.prepare(
+      `INSERT OR REPLACE INTO memories (
+        id, type, content, source, confidence, importance,
+        access_count, last_accessed_at, created_at, decay_factor, tags, embedding,
+        status, channel, future_use, anchors, evidence, deleted, as_of
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      entry.id,
+      mapLegacyType(entry.type),
+      entry.content,
+      entry.source,
+      entry.confidence,
+      entry.importance,
+      entry.accessCount ?? 0,
+      entry.lastAccessedAt ?? Date.now(),
+      entry.createdAt ?? Date.now(),
+      entry.decayFactor ?? 1,
+      JSON.stringify(entry.tags ?? []),
+      null,
+      entry.status ?? 'active',
+      entry.channel ?? 'model_inference',
+      entry.futureUse ?? null,
+      JSON.stringify(entry.anchors ?? []),
+      entry.evidence ?? null,
+      entry.deleted ? 1 : 0,
+      entry.asOf ?? null,
+    );
+  }
+
   async listForGovern(filter?: { includeDeleted?: boolean }): Promise<MemoryEntry[]> {
     const sql = filter?.includeDeleted
       ? 'SELECT * FROM memories'

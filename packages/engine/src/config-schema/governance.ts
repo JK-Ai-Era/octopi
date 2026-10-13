@@ -25,6 +25,25 @@ export const SessionConfigSchema = z.object({
  * - `session-subdir`：cwd = join(agent.workspace | RunConfig.cwd, sessionId)
  * - `session-lock`：共享路径；并发安全依赖 Runner 的 sessionId 锁（不路径隔离）
  */
+/**
+ * `effectPolicy` — ToolEffectPolicy 运行模式（P3）
+ *
+ * 命名预设展开正交旋钮；agents[].effectPolicy 优先于顶层。
+ * 注意：与 `agents[].tools`（工具 allow/deny）无关。
+ */
+export const EffectPolicyConfigSchema = z.object({
+  mode: z.enum(['workspace', 'project', 'host', 'untrusted']),
+  transactionRoots: z.array(z.string()).optional(),
+  pathContainment: z.enum(['strict', 'soft', 'none']).optional(),
+  shellEscape: z.enum(['deny', 'confirm', 'allow']).optional(),
+  processLimits: z.boolean().optional(),
+  commit: z.enum(['auto', 'manual']).optional(),
+  /** commit=manual 时，会话关闭/删除：commit=保留效应，discard=逆放 */
+  onClose: z.enum(['commit', 'discard']).optional(),
+  effects: z.enum(['engine', 'host-gate']).optional(),
+  toolIsolation: z.enum(['none', 'session-subdir', 'session-lock']).optional(),
+});
+
 export const ToolIsolationConfigSchema = z.enum(['none', 'session-subdir', 'session-lock']);
 
 /**

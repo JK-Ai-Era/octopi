@@ -11,6 +11,7 @@
 
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { Message } from '@octopi-agent/core/types.js';
+import type { ToolFileEffects } from '@octopi-agent/core/types/tools.js';
 import type { ToolIsolationMode } from '../extension/execution-environment/isolation.js';
 
 /** 工具执行时可见的 Run 运行时上下文 */
@@ -24,6 +25,20 @@ export interface RunToolRuntime {
   isolation?: ToolIsolationMode;
   /** 只读会话附件根（OP-15）；不改变 toolIsolation 语义 */
   attachmentRoots?: string[];
+  /** 本轮文件效应写入口（L3 undo；ToolEffectPolicy） */
+  fileEffects: ToolFileEffects;
+  /** 本轮记忆面 journal（L3 P2） */
+  memoryEffects: import("@octopi-agent/core/types/tools.js").MemoryEffectJournal;
+  /** L2 允许根 */
+  pathRoots?: string[];
+  /** L2 级别 */
+  pathContainment?: "strict" | "soft" | "none";
+  confirmEffect?: import("@octopi-agent/core/types/tools.js").ToolExecutionContext["confirmEffect"];
+  effectChannel?: "engine" | "host-gate";
+  /** L1 processLimits（false = 不强制 timeoutMs 看门狗） */
+  processLimits?: boolean;
+  /** shell 越界策略（gateEffect） */
+  shellEscape?: "deny" | "confirm" | "allow";
 }
 
 /** 一次 Run 的作用域身份（I1） */

@@ -57,6 +57,36 @@ export interface ToolDefinition {
   deprecatedMessage?: string;
 }
 
+/**
+ * 工具文件效应写入口（ToolEffectPolicy L3 / I5）。
+ *
+ * 实现必须在落盘前记 undo，使「编辑重发」可逆放本轮工具文件效应。
+ * 禁止提供“只写不记”的旁路实现——回滚能力不得可选。
+ */
+export interface ToolFileEffects {
+  /** 覆盖/新建写入（整文件字节） */
+  writeFile(path: string, data: string | Uint8Array): Promise<void>;
+  /** 追加写入 */
+  appendFile(path: string, data: string | Uint8Array): Promise<void>;
+}
+
+/** 记忆面效应域（ToolEffectPolicy L3；knowledge 不在此列） */
+export type MemoryEffectDomain = 'memory' | 'cognition' | 'wisdom';
+
+/**
+ * 记忆面效应 journal（ToolEffectPolicy L3）。
+ *
+ * 在 store 写口前记 before/身份，供编辑重发逆放。steward 异步写不进本轮 journal。
+ */
+export interface MemoryEffectJournal {
+  /** INSERT 逆放 = 按 id 删除 */
+  recordInsert(domain: MemoryEffectDomain, id: string): Promise<void>;
+  /** UPDATE/softDelete 等：逆放 = 恢复 before */
+  recordUpdate(domain: MemoryEffectDomain, id: string, before: unknown): Promise<void>;
+  /** 硬删除：逆放 = 恢复 before 整行 */
+  recordDelete(domain: MemoryEffectDomain, id: string, before: unknown): Promise<void>;
+}
+
 /** 工具执行上下文 */
 export interface ToolExecutionContext {
   sessionId: string;
@@ -69,6 +99,40 @@ export interface ToolExecutionContext {
    * 路径解析优先命中这些 root；见 arch/knowledge-session-attachments.md §7。
    */
   attachmentRoots?: string[];
+  /**
+   * 文件效应写入口（L3 undo）。文件写工具必须经此落盘。
+   * 由 Runner 注入 TurnFileUndoLog；缺失时文件写工具必须拒绝执行。
+   */
+  fileEffects: ToolFileEffects;
+  /**
+   * 记忆面效应 journal（L3）。memory 写工具/装饰器经此记账。
+   * 由 Runner 注入；缺失时记忆写必须拒绝执行（禁止静默免记）。
+   */
+  memoryEffects: MemoryEffectJournal;
+  /** L2 允许根（effectPolicy）；省略 = 不限制 */
+  pathRoots?: string[];
+  /** L2 级别 */
+  pathContainment?: 'strict' | 'soft' | 'none';
+  /**
+   * host-gate 效应确认（P4）。effects=host-gate 时非事务效应必须经此。
+   * 由 Runner 注入宿主回调；缺失时非事务效应拒绝执行。
+   */
+  confirmEffect?: (intent: {
+    kind: 'file.write' | 'shell' | 'memory.write' | 'other';
+    path?: string;
+    mode?: string;
+    transactional?: boolean;
+    command?: string;
+    cwd?: string;
+    domain?: string;
+    description?: string;
+  }) => Promise<'allow' | 'deny'>;
+  /** P4：engine | host-gate */
+  effectChannel?: 'engine' | 'host-gate';
+  /** L1：false 时不启用 timeoutMs 看门狗 */
+  processLimits?: boolean;
+  /** shell 越界策略 */
+  shellEscape?: 'deny' | 'confirm' | 'allow';
 }
 
 /** 工具处理函数 */

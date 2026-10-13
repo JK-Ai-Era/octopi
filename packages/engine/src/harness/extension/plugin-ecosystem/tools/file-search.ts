@@ -159,7 +159,10 @@ export function createFileSearchTool(): RegisteredTool {
 
       const rawRoot = args.path as string | undefined;
       const rootPath = rawRoot
-        ? resolveToolPath(rawRoot, context.cwd ?? process.cwd())
+        ? resolveToolPath(rawRoot, context.cwd ?? process.cwd(), {
+            allowRoots: context.pathRoots,
+            containment: context.pathContainment,
+          })
         : (context.cwd ?? process.cwd());
 
       const terms = collectPatternTerms(args);

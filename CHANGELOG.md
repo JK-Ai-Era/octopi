@@ -1,3 +1,21 @@
+## v0.73.0
+
+### feat(harness): ToolEffectPolicy — turn undo, run modes, host-gate, L1 limits
+
+**问题**：中止后「编辑重发」会丢掉调用历史，但 agent 已改动的文件/记忆无法回滚；工具效应面缺少可配置的约束（路径包含）、宿主确认通道与统一的工具超时。宪法 Reserved 位 ToolEffectPolicy（I5 沙箱/可撤销半边）长期空置。
+
+**调整**（spec: arch/tool-effect-policy.md）：
+- **P1 文件 turn undo**：即时生效 + `sessions/<sid>/undo/`（log.jsonl + 内容寻址 blob）；编辑重发（truncateMessagesFrom）只逆放 agent 效应，用户手改保留。文本=补丁逆放，二进制=用户整文件优先。`ToolFileEffects` 为必选写入口，禁止绕过 undo
+- **P2 记忆 journal**：`JournaledMemoryStore` + memory.jsonl；`MemoryStore.importEntry` 整行恢复；steward 异步写不进 turn 事务；knowledge 非事务
+- **P3 effectPolicy 模式 + L2**：`workspace|project|host|untrusted` 预设（缺省 **workspace**）；`resolveToolPath` 路径包含（strict 无 root fail-closed）；配置键 `effectPolicy`（避开 tools.ToolPolicySchema）
+- **P4 host-gate**：`confirmEffect(intent)`；事务内自动，非事务交宿主（Gateway 默认接 ask_user）；engine 通道不内置审批 UI
+- **P5 L1（合 OP-17）**：`runWithToolLimits` 强制 `definition.timeoutMs`（ToolBus + convertToAgentTool）；`processLimits` 可关
+- **shellEscape 语义**：无 L4 时无法「只禁越界」——`deny`=拒绝 shell（fail-closed）；预设 workspace/untrusted=deny，project/host=allow
+- **onClose**（manual commit）：deleteSession / stop() 按 commit|discard 收残留 undo
+- `toolIsolation` 保留为 cwd 布局（I5）；`sessionAttachmentsBaseDir` 更名 `sessionsDir`
+
+**测试**：file-undo-log / memory-undo-log / effect-policy / effect-confirm / resource-limits / on-close-policy / session-edit-resend-file-effects / review-fixes；全量套件通过（余预存环境性失败）。
+
 ## v0.72.2
 
 ### feat(memory): surface recall timestamps and as-of freshness

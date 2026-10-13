@@ -23,6 +23,10 @@ import { createBraveProvider } from '@octopi-agent/engine/integration/web-search
 import { createSerperProvider } from '@octopi-agent/engine/integration/web-search/serper.js';
 import { createMimoProvider } from '@octopi-agent/engine/integration/web-search/mimo.js';
 import { createToolSet } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/tools/tool-set.js';
+import {
+  createUnconfiguredFileEffects,
+  createUnconfiguredMemoryEffects,
+} from '@octopi-agent/engine/harness/extension/execution-environment/undo-log.js';
 import type { ToolExecutionContext } from '@octopi-agent/core/types/tools.js';
 
 function makeContext(overrides?: Partial<ToolExecutionContext>): ToolExecutionContext {
@@ -30,6 +34,8 @@ function makeContext(overrides?: Partial<ToolExecutionContext>): ToolExecutionCo
     sessionId: 's1',
     agentId: 'a1',
     messages: [],
+    fileEffects: createUnconfiguredFileEffects(),
+    memoryEffects: createUnconfiguredMemoryEffects(),
     ...overrides,
   };
 }

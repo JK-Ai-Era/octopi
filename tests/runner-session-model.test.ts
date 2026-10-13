@@ -44,6 +44,7 @@ function makeAgentStub(provider: ModelProvider) {
     setContextSessionId: () => {},
     setSessionCompactState: () => {},
     getSessionCompactState: () => undefined,
+    toolsForSession: () => [],
     setOnAfterTurn: () => {},
     notifyAfterTurn: async () => {},
     harness: {},

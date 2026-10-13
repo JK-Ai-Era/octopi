@@ -69,6 +69,7 @@ function makeMockAgent(opts: {
       else store.set(key, { ...state });
     },
     getSessionCompactState: (sessionId: string, agentId: string) => store.get(compactStateKey(sessionId, agentId)),
+    toolsForSession: () => [],
     setOnAfterTurn: () => {},
     notifyAfterTurn: async () => {},
     run: async function* (

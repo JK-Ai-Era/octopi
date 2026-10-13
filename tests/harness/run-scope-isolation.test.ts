@@ -90,6 +90,7 @@ describe('SessionAwareRunner concurrent sessions (I1)', () => {
       },
       setSessionCompactState: () => {},
       getSessionCompactState: () => undefined,
+    toolsForSession: () => [],
       setOnAfterTurn: () => {},
       notifyAfterTurn: async () => {},
       run: async function* (

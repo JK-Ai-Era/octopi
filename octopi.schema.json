@@ -40,6 +40,77 @@
           "workspace": {
             "type": "string"
           },
+          "effectPolicy": {
+            "type": "object",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "workspace",
+                  "project",
+                  "host",
+                  "untrusted"
+                ]
+              },
+              "transactionRoots": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "pathContainment": {
+                "type": "string",
+                "enum": [
+                  "strict",
+                  "soft",
+                  "none"
+                ]
+              },
+              "shellEscape": {
+                "type": "string",
+                "enum": [
+                  "deny",
+                  "confirm",
+                  "allow"
+                ]
+              },
+              "processLimits": {
+                "type": "boolean"
+              },
+              "commit": {
+                "type": "string",
+                "enum": [
+                  "auto",
+                  "manual"
+                ]
+              },
+              "onClose": {
+                "type": "string",
+                "enum": [
+                  "commit",
+                  "discard"
+                ]
+              },
+              "effects": {
+                "type": "string",
+                "enum": [
+                  "engine",
+                  "host-gate"
+                ]
+              },
+              "toolIsolation": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "session-subdir",
+                  "session-lock"
+                ]
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          },
           "persona": {
             "anyOf": [
               {
@@ -2325,6 +2396,77 @@
         "none",
         "session-subdir",
         "session-lock"
+      ]
+    },
+    "effectPolicy": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "workspace",
+            "project",
+            "host",
+            "untrusted"
+          ]
+        },
+        "transactionRoots": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "pathContainment": {
+          "type": "string",
+          "enum": [
+            "strict",
+            "soft",
+            "none"
+          ]
+        },
+        "shellEscape": {
+          "type": "string",
+          "enum": [
+            "deny",
+            "confirm",
+            "allow"
+          ]
+        },
+        "processLimits": {
+          "type": "boolean"
+        },
+        "commit": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "manual"
+          ]
+        },
+        "onClose": {
+          "type": "string",
+          "enum": [
+            "commit",
+            "discard"
+          ]
+        },
+        "effects": {
+          "type": "string",
+          "enum": [
+            "engine",
+            "host-gate"
+          ]
+        },
+        "toolIsolation": {
+          "type": "string",
+          "enum": [
+            "none",
+            "session-subdir",
+            "session-lock"
+          ]
+        }
+      },
+      "required": [
+        "mode"
       ]
     },
     "sessionAcl": {

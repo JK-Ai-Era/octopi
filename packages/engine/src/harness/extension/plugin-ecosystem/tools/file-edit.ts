@@ -12,7 +12,8 @@
  */
 
 import type { RegisteredTool } from '@octopi-agent/core/types.js';
-import { isUnderAttachmentRoot, resolveToolPath } from './platform.js';
+import { isPathUnderRoots, isUnderAttachmentRoot, resolveToolPath } from './platform.js';
+import { gateEffect } from '../../execution-environment/effect-policy.js';
 
 export function createFileEditTool(): RegisteredTool {
   return {
@@ -46,11 +47,14 @@ export function createFileEditTool(): RegisteredTool {
       },
     },
     handler: async (args, context) => {
-      const { readFile, writeFile } = await import('node:fs/promises');
+      const { readFile } = await import('node:fs/promises');
 
       const rawPath = args.path as string;
       const cwd = context.cwd ?? process.cwd();
-      const path = resolveToolPath(rawPath, cwd);
+      const path = resolveToolPath(rawPath, cwd, {
+        allowRoots: context.pathRoots,
+        containment: context.pathContainment,
+      });
       if (isUnderAttachmentRoot(path, context.attachmentRoots)) {
         throw new Error('session attachments are read-only; cannot edit attachments root');
       }
@@ -111,7 +115,23 @@ export function createFileEditTool(): RegisteredTool {
       const after = content.slice(firstIdx + oldText.length, firstIdx + oldText.length + 80);
 
       if (!dryRun) {
-        await writeFile(path, newContent);
+        await gateEffect(
+          {
+            kind: 'file.write',
+            path,
+            mode: 'edit',
+            transactional: isPathUnderRoots(path, context.pathRoots ?? []),
+          },
+          {
+            effects: context.effectChannel ?? 'engine',
+            confirmEffect: context.confirmEffect,
+          },
+        );
+        const effects = context.fileEffects;
+        if (!effects) {
+          throw new Error('file_effects_not_configured: file_edit requires ToolExecutionContext.fileEffects');
+        }
+        await effects.writeFile(path, newContent);
       }
 
       return {

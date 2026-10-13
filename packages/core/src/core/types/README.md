@@ -9,14 +9,16 @@
 ## 职责
 
 - messages.ts — Message、ContentBlock、ToolCall、ToolResult
-- agent-definition.ts — ModelInfo、ToolPolicy（Kernel；AgentDefinition/Persona/ModelConfig 在 harness/types）
+- agent-definition.ts — ModelInfo、ToolPolicy（Kernel）；AgentDefinition/Persona/ModelConfig 在 `harness/types`（注意：`ToolPolicy` = 工具 allow/deny，**不是** ToolEffectPolicy）
 - session.ts — SessionStatus、SessionMeta
 - turn.ts — TokenUsage、Turn
-- tools.ts — ToolDefinition、RegisteredTool、ToolHandler
+- tools.ts — ToolDefinition、RegisteredTool、ToolHandler、**ToolExecutionContext**
+  - `ToolFileEffects` / `MemoryEffectJournal`：ToolEffectPolicy L3 写入口（文件/记忆 undo）
+  - `confirmEffect` / `effectChannel` / `pathRoots` / `pathContainment` / `processLimits` / `shellEscape`：效应策略字段
 - queue-mode.ts — QueueMode
 - thinking-level.ts — ThinkingLevel
 
-测试编排词表（AgentEventDetail）与产品事件 Map 已迁 `harness/shared/events/`。
+测试编排词汇（AgentEventDetail）与产品事件 Map 已迁 `harness/shared/events/`。
 
 Skill 类型与 SkillManager 已迁至 harness/extension/plugin-ecosystem/skills（非 Kernel）。
 

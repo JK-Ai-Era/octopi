@@ -39,7 +39,7 @@ npm run dev            # tsc --watch
 
 **开发注意（宪法已落地的运行时语义）：**
 
-- `toolIsolation`（默认 `none`）：多 Session 写文件请配置 `session-subdir`（I5）
+- `effectPolicy`（缺省 `workspace`）：工具效应模式 + L2 + turn undo + host-gate；`toolIsolation` 仅 cwd 布局（I5）。多 Session 写文件用 `session-subdir` 或 `project` 模式
 - compact 键 = `(sessionId, agentId)`；勿用纯 sessionId 共享 Agent compact（E4）
 - 公用能力 `harness/context/capabilities/`：summary/compact **不是** LLM 工具面；tools 只消费 `SummaryPort`；prompt/policy/算法不得写进 `plugin-ecosystem/tools`；E4 会话 compact 状态不在 capabilities
 - 工具结果进主会话前：**L1 硬顶**（`maxReturnChars`）必须生效；禁止「先回原文再由 Agent 调 summary」作为防撑爆主路径
