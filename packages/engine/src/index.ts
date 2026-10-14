@@ -191,6 +191,15 @@ export type { SkillDefinition, SkillManager } from './harness/extension/plugin-e
 export type { AgentPersona, ModelConfig, AgentDefinition } from './harness/shared/types/agent-definition.js';
 
 export { DefaultToolBus } from './harness/extension/plugin-ecosystem/tools/tool-bus.js';
+export {
+  buildToolLlmParameters,
+  prepareHandlerArgs,
+  readToolCallPurpose,
+  resolveToolCallPurpose,
+  sanitizeToolJsonSchema,
+  toolDeclaresPurpose,
+  TOOL_PURPOSE_PARAM,
+} from './harness/agent/tool-purpose.js';
 
 export {
   createClientTool,

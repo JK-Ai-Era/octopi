@@ -32,6 +32,12 @@ import type {
 import type {
   AgentTool as LoopAgentTool,
 } from '@octopi-agent/core/loop/types.js';
+import {
+  buildToolLlmParameters,
+  prepareHandlerArgs,
+  resolveToolCallPurpose,
+  sanitizeToolJsonSchema,
+} from './tool-purpose.js';
 import { Agent } from '../run/agent/index.js';
 import type { AgentOptions } from '../run/agent/index.js';
 import { DEFAULT_RELIABILITY_CONFIG } from '../run/reliability/run-agent.js';
@@ -222,80 +228,33 @@ class RuntimeToolContextProvider implements ToolContextProvider {
 }
 
 /**
- * 将 RegisteredTool 转换为 AgentTool（新循环格式）
+ * 发给 LLM 的 JSON Schema 净化 + purpose 统一装配见 tool-purpose.ts（arch/tool-call-purpose.md）。
+ * 此处仅保留兼容别名。
  */
+const sanitizeLlmJsonSchema = sanitizeToolJsonSchema;
+
 /**
- * 发给 LLM 的 JSON Schema 只保留 OpenAI 兼容关键字。
- * maxLength/minLength/pattern 等仅作本地校验，部分兼容接口会因未知关键字 400。
+ * 将 RegisteredTool 转换为 AgentTool（新循环格式）
+ *
+ * purpose schema 必须经 buildToolLlmParameters 统一装配，
+ * 与 gateway 热更新路径（registeredToolToAgentTool）同构。
  */
-function sanitizeLlmJsonSchema(node: unknown): unknown {
-  if (Array.isArray(node)) return node.map(sanitizeLlmJsonSchema);
-  if (!node || typeof node !== 'object') return node;
-  const src = node as Record<string, unknown>;
-  const out: Record<string, unknown> = {};
-  if (typeof src.type === 'string') out.type = src.type;
-  if (typeof src.description === 'string') out.description = src.description;
-  if (Array.isArray(src.enum)) out.enum = src.enum;
-  if (src.properties && typeof src.properties === 'object') {
-    const props: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(src.properties as Record<string, unknown>)) {
-      props[k] = sanitizeLlmJsonSchema(v);
-    }
-    out.properties = props;
-  }
-  if (Array.isArray(src.required)) out.required = src.required.filter((x) => typeof x === 'string');
-  if (src.items !== undefined) out.items = sanitizeLlmJsonSchema(src.items);
-  return out;
-}
-
-/** 统一注入的行动简述参数（arch/tool-call-purpose.md） */
-const TOOL_PURPOSE_PARAM = {
-  type: 'string' as const,
-  description:
-    'One short honest line for humans and approvers: what this call does and why (verb + object + goal, max 120 chars). Example: "overwrite src/a.ts to fix timeout".',
-};
-
 function convertToAgentTool(tool: RegisteredTool, contextProvider: ToolContextProvider): LoopAgentTool {
   return {
     name: tool.definition.name,
     description: tool.definition.description,
-    parameters: sanitizeLlmJsonSchema({
-      type: 'object',
-      properties: {
-        ...Object.fromEntries(
-          Object.entries(tool.definition.parameters).map(([key, param]) => [
-            key,
-            {
-              type: param.type,
-              description: param.description,
-              ...(param.enum && { enum: param.enum }),
-              ...(param.properties && { properties: param.properties }),
-              ...(param.items && { items: param.items }),
-              ...(param.required && { required: param.required }),
-            },
-          ]),
-        ),
-        purpose: { ...TOOL_PURPOSE_PARAM },
-      },
-      required: [
-        ...Object.entries(tool.definition.parameters)
-          .filter(([, param]) => param.required)
-          .map(([key]) => key),
-        'purpose',
-      ],
-    }) as import('@octopi-agent/core/interfaces/model-provider.js').LLMToolDefinition['function']['parameters'],
+    parameters: buildToolLlmParameters(
+      tool.definition.parameters,
+    ) as import('@octopi-agent/core/interfaces/model-provider.js').LLMToolDefinition['function']['parameters'],
     execute: async (toolCallId: string, args: unknown, signal?: AbortSignal) => {
       const startTime = Date.now();
       try {
         const context = contextProvider.get();
         const rawArgs = (args ?? {}) as Record<string, unknown>;
-        const purpose = typeof rawArgs.purpose === 'string' ? rawArgs.purpose.trim() : '';
-        if (!purpose) {
-          throw new Error('purpose_required: every tool call needs a short honest purpose');
-        }
-        // purpose 只为人读/审批；剥离后再进 handler
-        const handlerArgs: Record<string, unknown> = { ...rawArgs };
-        delete handlerArgs.purpose;
+        // schema 已 required purpose；模型漏填时推导，不中断调用
+        const purpose = resolveToolCallPurpose(tool.definition.name, rawArgs);
+        // 注入型 purpose 只为人读/审批；工具自带 purpose 是真实入参，必须进 handler
+        const handlerArgs = prepareHandlerArgs(rawArgs, tool.definition);
 
         const { runWithToolLimits, resolveToolTimeoutMs } = await import(
           '../extension/execution-environment/resource-limits.js'

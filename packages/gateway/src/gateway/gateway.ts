@@ -76,6 +76,11 @@ import type { SystemIssue } from '@octopi-agent/engine/harness/observability/dia
 import { DefaultEventBus } from '@octopi-agent/core/primitives/event-bus.js';
 import { SessionAwareRunner } from '@octopi-agent/engine/harness/run/runner.js';
 import { getRunScope } from '@octopi-agent/engine/harness/run/run-scope.js';
+import {
+  buildToolLlmParameters,
+  prepareHandlerArgs,
+  resolveToolCallPurpose,
+} from '@octopi-agent/engine/harness/agent/tool-purpose.js';
 import { AgentRuntime, SessionRunnerDispatcher, ExplicitRouter } from '@octopi-agent/engine/harness/activation/index.js';
 import { dispatchChannelMessage } from '@octopi-agent/engine/integration/agent-runtime/channel-message-source.js';
 import { SessionAclService } from '@octopi-agent/engine/harness/governance/session-acl/service.js';
@@ -147,28 +152,23 @@ function registeredToolToAgentTool(tool: RegisteredTool): {
     content: unknown;
     isError?: boolean;
     durationMs?: number;
+    purpose?: string;
   }>;
 } {
   return {
     name: tool.definition.name,
     description: tool.definition.description,
-    parameters: {
-      type: 'object',
-      properties: Object.fromEntries(
-        Object.entries(tool.definition.parameters).map(([key, param]) => [
-          key,
-          { type: param.type, description: param.description, ...(param.enum && { enum: param.enum }) },
-        ]),
-      ),
-      required: Object.entries(tool.definition.parameters)
-        .filter(([, param]) => param.required)
-        .map(([key]) => key),
-    },
+    // 与 convertToAgentTool 同构：purpose 统一装配（arch/tool-call-purpose.md）
+    parameters: buildToolLlmParameters(tool.definition.parameters),
     execute: async (toolCallId, args, signal) => {
       const startTime = Date.now();
       try {
+        const rawArgs = (args ?? {}) as Record<string, unknown>;
+        // schema 已 required purpose；模型漏填时推导，不中断调用
+        const purpose = resolveToolCallPurpose(tool.definition.name, rawArgs);
+        const handlerArgs = prepareHandlerArgs(rawArgs, tool.definition);
         const scope = getRunScope();
-        const result = await tool.handler(args as Record<string, unknown>, {
+        const result = await tool.handler(handlerArgs, {
           sessionId: scope?.sessionId ?? 'unknown',
           agentId: scope?.agentId ?? 'unknown',
           messages: scope?.toolRuntime?.messages ?? [],
@@ -184,6 +184,7 @@ function registeredToolToAgentTool(tool: RegisteredTool): {
           toolCallId,
           name: tool.definition.name,
           content: result,
+          purpose,
           durationMs: Date.now() - startTime,
         };
       } catch (error) {

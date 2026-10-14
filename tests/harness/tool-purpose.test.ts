@@ -38,6 +38,139 @@ describe('tool purpose contract', () => {
     expect(echo).toBeTruthy();
     expect(echo?.parameters?.properties).toHaveProperty('purpose');
     expect(echo?.parameters?.required).toContain('purpose');
+    expect(echo?.parameters?.required?.filter((r) => r === 'purpose')).toHaveLength(1);
+  });
+
+  it('does not duplicate required purpose when the tool already declares purpose', async () => {
+    const { AgentBuilder } = await import('@octopi-agent/engine/harness/agent/builder.js');
+    const seen: Record<string, unknown>[] = [];
+    const tool: RegisteredTool = {
+      definition: {
+        name: 'photo_capture',
+        description: 'Take a photo',
+        parameters: {
+          purpose: { type: 'string', description: 'Why the photo is needed', required: true },
+        },
+      },
+      handler: async (args) => {
+        seen.push(args);
+        return { ok: true };
+      },
+    };
+
+    const builder = new AgentBuilder()
+      .model({ provider: 'mock', model: 'm' })
+      .memoryStore(new InMemoryMemoryStore())
+      .tool(tool as never);
+
+    const built = await builder.build({ mode: 'core' });
+    const tools = (built.agent.context.tools ?? []) as Array<{
+      name: string;
+      parameters?: { required?: string[]; properties?: Record<string, unknown> };
+      execute?: (id: string, args: unknown) => Promise<unknown>;
+    }>;
+    const photo = tools.find((t) => t.name === 'photo_capture');
+    expect(photo).toBeTruthy();
+    expect(photo?.parameters?.required?.filter((r) => r === 'purpose')).toHaveLength(1);
+    // 统一装配：purpose 始终是 TOOL_PURPOSE_PARAM（同名同义），且只出现一次
+    expect(photo?.parameters?.properties?.purpose).toMatchObject({ type: 'string' });
+
+    await photo?.execute?.('c1', { purpose: 'identify the plant' });
+    expect(seen).toHaveLength(1);
+    // 工具自带 purpose 是业务入参（device 同意/审计），必须进 handler
+    expect(seen[0]).toMatchObject({ purpose: 'identify the plant' });
+  });
+
+  it('buildToolLlmParameters always injects purpose once and first', async () => {
+    const { buildToolLlmParameters } = await import('@octopi-agent/engine/harness/agent/tool-purpose.js');
+    const schema = buildToolLlmParameters({
+      purpose: { type: 'string', description: 'Why the photo is needed', required: true },
+      path: { type: 'string', description: 'p', required: true },
+    }) as { properties?: Record<string, unknown>; required?: string[] };
+    expect(schema.properties?.purpose).toBeTruthy();
+    expect(schema.required?.filter((r) => r === 'purpose')).toHaveLength(1);
+    expect(schema.required).toContain('path');
+    // 不重复 required 的坏 schema（部分兼容接口 400 Invalid request parameters）
+    expect(new Set(schema.required).size).toBe(schema.required?.length);
+    // purpose 置首，降低模型漏填
+    expect(Object.keys(schema.properties ?? {})[0]).toBe('purpose');
+    expect(schema.required?.[0]).toBe('purpose');
+  });
+
+  it('derives fallback purpose when model omits it instead of failing the call', async () => {
+    const { AgentBuilder } = await import('@octopi-agent/engine/harness/agent/builder.js');
+    const seen: Record<string, unknown>[] = [];
+    const tool: RegisteredTool = {
+      definition: {
+        name: 'web_search',
+        description: 'Search the web',
+        parameters: {
+          query: { type: 'string', description: 'q', required: true },
+          limit: { type: 'number', description: 'n' },
+        },
+      },
+      handler: async (args) => {
+        seen.push(args);
+        return { ok: true };
+      },
+    };
+
+    const builder = new AgentBuilder()
+      .model({ provider: 'mock', model: 'm' })
+      .memoryStore(new InMemoryMemoryStore())
+      .tool(tool as never);
+
+    const built = await builder.build({ mode: 'core' });
+    const tools = (built.agent.context.tools ?? []) as Array<{
+      name: string;
+      parameters?: { required?: string[] };
+      execute?: (id: string, args: unknown) => Promise<{ content?: unknown; purpose?: string; isError?: boolean }>;
+    }>;
+    const ws = tools.find((t) => t.name === 'web_search');
+    expect(ws?.parameters?.required).toContain('purpose');
+
+    // 模型漏填 purpose：不得 purpose_required 中断
+    const result = await ws?.execute?.('c1', { query: '周杰伦 回到过去 总谱', limit: 10 });
+    expect(result?.isError).not.toBe(true);
+    expect(result?.purpose).toContain('web_search');
+    expect(result?.purpose).toContain('周杰伦');
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({ query: '周杰伦 回到过去 总谱' });
+    expect(seen[0]).not.toHaveProperty('purpose');
+  });
+
+  it('strips injected purpose before handler when tool does not declare purpose', async () => {
+    const { AgentBuilder } = await import('@octopi-agent/engine/harness/agent/builder.js');
+    const seen: Record<string, unknown>[] = [];
+    const tool: RegisteredTool = {
+      definition: {
+        name: 'echo_inject',
+        description: 'echo',
+        parameters: {
+          text: { type: 'string', description: 'text', required: true },
+        },
+      },
+      handler: async (args) => {
+        seen.push(args);
+        return { echoed: args.text };
+      },
+    };
+
+    const builder = new AgentBuilder()
+      .model({ provider: 'mock', model: 'm' })
+      .memoryStore(new InMemoryMemoryStore())
+      .tool(tool as never);
+
+    const built = await builder.build({ mode: 'core' });
+    const tools = (built.agent.context.tools ?? []) as Array<{
+      name: string;
+      execute?: (id: string, args: unknown) => Promise<unknown>;
+    }>;
+    const echo = tools.find((t) => t.name === 'echo_inject');
+    await echo?.execute?.('c1', { text: 'hi', purpose: 'test inject strip' });
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).not.toHaveProperty('purpose');
+    expect(seen[0]).toMatchObject({ text: 'hi' });
   });
 });
 

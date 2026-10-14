@@ -1,4 +1,34 @@
-﻿## v0.74.1
+## v0.74.3
+
+### fix(harness): unify tool purpose schema assembly and stop hard-failing on omitted purpose
+
+**问题**：
+1. purpose 注入不统一：`convertToAgentTool` 注入，但 gateway 热更新 `registeredToolToAgentTool` / `tool-bus.toLLMDefinitions` 不注入；模型看到的 tools schema 时有时无 `purpose`。
+2. 工具自带 `purpose`（如 `photo_capture`）时 `required: ["purpose","purpose"]`，部分兼容端点 `400 Invalid request parameters`。
+3. schema 虽标 `purpose` required，mimo 等模型仍会漏填；执行层 `purpose_required` 硬拒绝，`web_search` 整批失败。
+
+**修复**：
+- `harness/agent/tool-purpose.ts` 统一装配：`buildToolLlmParameters` 始终注入 purpose 且 required 只一份，并置于 schema 首位
+- 三条链路（convertToAgentTool / registeredToolToAgentTool / toLLMDefinitions）同构
+- 漏填 purpose 时 `resolveToolCallPurpose` 从工具名+关键参数推导标题，不再中断调用（purpose 仅人读/审批）
+- 注入型 purpose 进 handler 前剥离；工具自带 purpose（device 同意/审计）保留
+
+**测试**：`tests/harness/tool-purpose.test.ts` 覆盖统一 required、漏填回退、剥离语义。
+
+## v0.74.2
+
+### docs: prune resolved KNOWN-ISSUES entries after code audit
+
+**问题**：`docs/KNOWN-ISSUES.md` 上次清理停在 2026-10-01；其后 v0.60.0 路径归属 `realpath`、v0.73–0.74 ToolEffectPolicy 等已落地，条目与代码不一致；`AGENTS.md` 仍把已完成的 session directory de-coupling 列为 capability gap。
+
+**调整**：
+- **KNOWN-ISSUES**（英/中同步）：删除 `sourceOwnsPath` 未 `realpath` 的 symlink 条目（`ingest.ts` 已做 realpath 比较）；「工具 capability 收紧」改写为「session 级按工具授权」，注明 ToolEffectPolicy 模式/L2/undo/host-gate/L1 已于 v0.73–v0.74 落地，剩余缺口是 `SessionRights` 无 per-tool 位
+- **AGENTS.md**：capability-layer gaps 列表去掉 session directory de-coupling（v0.46.0 已完成），改为 session-ACL per-tool rights
+- 其余开放项与边界经源码核实仍成立，原样保留（含 DNS TOCTOU、credential_bindings 不强制、VACUUM 手工缩容等）
+
+**测试**：无行为变更；`docs/KNOWN-ISSUES.md` 与 `docs/KNOWN-ISSUES.zh.md` 双语同步。
+
+## v0.74.1
 
 ### docs: English-authoritative public docs with Chinese `.zh.md` twins
 

@@ -25,6 +25,7 @@ import type {
 } from '@octopi-agent/core/types.js';
 import type { ToolBus } from '@octopi-agent/core/interfaces/tool-bus.js';
 import type { LLMToolDefinition } from '@octopi-agent/core/interfaces/model-provider.js';
+import { buildToolLlmParameters } from '../../../agent/tool-purpose.js';
 
 /**
  * DefaultToolBus — 工具总线实现
@@ -124,22 +125,8 @@ export class DefaultToolBus implements ToolBus {
       function: {
         name: definition.definition.name,
         description: definition.definition.description,
-        parameters: {
-          type: 'object',
-          properties: Object.fromEntries(
-            Object.entries(definition.definition.parameters).map(([key, param]) => [
-              key,
-              {
-                type: param.type,
-                description: param.description,
-                ...(param.enum && { enum: param.enum }),
-              },
-            ]),
-          ),
-          required: Object.entries(definition.definition.parameters)
-            .filter(([, param]) => param.required)
-            .map(([key]) => key),
-        },
+        // 与 convertToAgentTool 同构：purpose 统一装配
+        parameters: buildToolLlmParameters(definition.definition.parameters),
       },
     }));
   }
