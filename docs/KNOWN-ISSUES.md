@@ -1,7 +1,7 @@
 # Known Issues
 
 > **Language note**: This English edition is the **working authority**. The Chinese translation is [`KNOWN-ISSUES.zh.md`](./KNOWN-ISSUES.zh.md). Keep both in sync.
-> Last updated: 2026-10-01 (cleaned resolved entries — this file keeps only **open items** and **existing boundaries**; resolved/closed issues live in `CHANGELOG` and the corresponding architecture docs)
+> Last updated: 2026-10-14 (cleaned resolved entries — this file keeps only **open items** and **existing boundaries**; resolved/closed issues live in `CHANGELOG` and the corresponding architecture docs)
 
 ## Session / ACL capability layer
 
@@ -13,7 +13,7 @@
 - `preferredOnly` (default true): `switch(mode=handoff)` requires `intent=admin_handoff`.
 - `filterHistory` / `appendRunAudit` / business grants remain host-callable; guest/handoff can read the same Session via first-class sessionId storage.
 
-**Still open:** distributed Session Lease implementation; tightening tool capabilities; role DB/console; Quota economic layer.
+**Still open:** distributed Session Lease implementation; session-ACL per-tool rights (ToolEffectPolicy modes / L2 containment / turn undo / host-gate / L1 limits landed in v0.73–v0.74; `SessionRights` still has no per-tool bits); role DB/console; Quota economic layer.
 
 ## Knowledge external-source outbound — known limits
 
@@ -51,5 +51,4 @@
 - **catalog topics sampling**: at most 128 paths per source.
 - **embed secret skip tombstone**: `dimensions=0` does not auto re-embed; changing policy needs reprocess.
 - **DNS TOCTOU / credential_bindings unenforced**: no IP pinning; very high threat models need a custom dispatcher.
-- **symlink**: `sourceOwnsPath` does not `realpath`; files linked out of the root may enter the index (low priority).
 - **`ingest.ts` size**: already split into job-control/queue/embed-runner/fts/vector-ann; watch/poll/parse still live in the main file.

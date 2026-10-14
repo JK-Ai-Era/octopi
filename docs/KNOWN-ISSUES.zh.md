@@ -1,7 +1,7 @@
 # 已知问题
 
 > **语言说明**：英文版见 [KNOWN-ISSUES.md](./KNOWN-ISSUES.md)。本文为中文对译，变更须双语同步。
-> 最后更新：2026-10-01（清理已解决条目——本文件仅保留**开放项**与**现存边界**；已解决/已关闭问题见 `CHANGELOG` 与对应架构文档）
+> 最后更新：2026-10-14（清理已解决条目——本文件仅保留**开放项**与**现存边界**；已解决/已关闭问题见 `CHANGELOG` 与对应架构文档）
 
 ## Session / ACL 能力层
 
@@ -13,7 +13,7 @@
 - `preferredOnly`（默认 true）：`switch(mode=handoff)` 需要 `intent=admin_handoff`。
 - `filterHistory` / `appendRunAudit` / 业务 grant 仍供宿主调用；guest/handoff 经 sessionId 一等存储可读同一 Session。
 
-**仍开放：** 分布式 Session Lease 实现；工具 capability 收紧；角色 DB/控制台；Quota 经济层。
+**仍开放：** 分布式 Session Lease 实现；session 级按工具授权（ToolEffectPolicy 模式 / L2 路径包含 / turn undo / host-gate / L1 限制已于 v0.73–v0.74 落地；`SessionRights` 仍无 per-tool 位）；角色 DB/控制台；Quota 经济层。
 
 ## Knowledge 外源出站 — 已知限制
 
@@ -51,5 +51,4 @@
 - **catalog topics 抽样**：每源最多 128 条 path。
 - **embed secret skip 墓碑**：`dimensions=0` 不自动重嵌；改策略后需 reprocess。
 - **DNS TOCTOU / credential_bindings 不强制**：无 IP 钉扎；极高威胁模型需 custom dispatcher。
-- **symlink**：`sourceOwnsPath` 未 `realpath`，root 内链出文件可能入索引（低优先级）。
 - **`ingest.ts` 体量**：已拆 job-control/queue/embed-runner/fts/vector-ann；watch/poll/parse 仍在主文件。
