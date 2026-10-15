@@ -12,13 +12,19 @@
  */
 
 import type { RegisteredTool } from '@octopi-agent/core/types.js';
-import { isPathUnderRoots, isUnderAttachmentRoot, resolveToolPath } from './platform.js';
+import {
+  isPathUnderRoots,
+  isUnderAttachmentRoot,
+  isUnderSessionUndoRoot,
+  resolveToolPath,
+} from './platform.js';
 import { gateEffect } from '../../execution-environment/effect-policy.js';
 
 export function createFileEditTool(): RegisteredTool {
   return {
     definition: {
       name: 'file_edit',
+      capabilities: ['fs-write', 'fs-read'],
       description: 'Edit a file by replacing specific text. More precise than file_write for targeted changes. Supports selecting which occurrence to replace and dry-run preview.',
       parameters: {
         path: {
@@ -58,7 +64,7 @@ export function createFileEditTool(): RegisteredTool {
       if (isUnderAttachmentRoot(path, context.attachmentRoots)) {
         throw new Error('session attachments are read-only; cannot edit attachments root');
       }
-      if (/[/\\]sessions[/\\][^/\\]+[/\\]undo(?:[/\\]|$)/i.test(path)) {
+      if (isUnderSessionUndoRoot(path, context.undoRoots)) {
         throw new Error('session undo ledger is protected; cannot write to sessions undo dir');
       }
       const oldText = args.old_text as string;

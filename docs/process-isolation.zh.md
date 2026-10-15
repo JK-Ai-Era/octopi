@@ -43,14 +43,30 @@ Windows 的写限制允许 `write-jailed-best-effort`（Job Object + 受限令�
 
 | 宿主条件 | 后端 | 典型剖面 |
 |----------|------|----------|
-| Linux 且 PATH 上有 `bwrap` | `linux-bwrap` | root-jailed / contained / env scrub |
+| Linux 且 PATH 上有 `bwrap` | `linux-bwrap` | root-jailed / contained / 网络默认 deny / env scrub |
 | Linux 无 `bwrap` | `supervised-spawn` | 可杀树 + cwd-pin + env scrub |
-| macOS 且有 `sandbox-exec` | `mac-seatbelt` | 写牢笼（Seatbelt profile） |
+| macOS 且有 `sandbox-exec` | `mac-seatbelt` | 写牢笼（执行时生成 Seatbelt profile） |
 | macOS 无 Seatbelt | `supervised-spawn` | 同 Linux 降级 |
 | Windows（未附带 Job helper） | `supervised-spawn` | `taskkill /T` 树杀 + env scrub |
 | 未知 / 嵌入式 | `supervised-spawn` | 同基线 |
 
 `SandboxResult.isolation` **始终**携带该次命令实际使用的剖面。
+
+内置 `shell` 工具 **始终**经 `ProcessSandbox` 执行（探测到 jail backend 则包牢笼，
+否则 supervised spawn），不存在第二条 spawn 路径。
+
+**牢笼根与网络（D4）**：`SandboxConfig.allowRoots`（缺省 cwd）在牢笼内 bind / 可写；
+网络姿态 `open | deny | allowlist`，**缺省 `deny`**。`allowlist` 本版仅留接口，
+按 `deny` 执行并如实注记。probe 与 execute 保持一致。
+
+**网络缺省（D4）**：`host`/`project` → `open`；`workspace`/`untrusted` → `deny`（reduced 恒 deny）。
+`allowlist` 仅接口，按 deny 执行并注记。
+
+**Jail 搭建失败（D7）**：`requireJail`（effective untrusted）抛 `untrusted_jail_failed`，禁止未沙箱执行；其它模式回落 supervised + `jail_setup_failed` + run 级 `securityDegraded`。
+
+**macOS Seatbelt（D3）**：执行时生成覆盖 `allowRoots` 与网络姿态的 profile，
+落盘后 `sandbox-exec -f <profile> -- …`。`OCTOPI_SB_PROFILE` 仅作宿主覆盖。
+仅在 profile **实际生效**时才报 `write-jailed`。
 
 **环境变量 deny-by-default**：所有后端只透传白名单（`PATH`、`HOME`、`TMP`、
 locale、shell/OS 基础项）。宿主密钥（`*_API_KEY`、`*_TOKEN` 等）**不会**
@@ -102,7 +118,16 @@ locale、shell/OS 基础项）。宿主密钥（`*_API_KEY`、`*_TOKEN` 等）**
 | `securityDegraded` | 如 `["no_process_jail", …]` |
 | UI / Observer | 一律展示 **effective** mode，不展示请求名 |
 
-`toolSurface: reduced` 保留 L2 内的内容工具，并 **剥离**：
+`toolSurface: reduced` 保留 L2 内的内容工具，并按 **能力标签**（`ToolDefinition.capabilities`）
+**剥离**（不看显示名）：
+
+- `exec`（shell 及任意执行器；并强制 `shellEscape: deny`）
+- `egress`（`http_request` / `web_search` / MCP·client 通道）
+- `send` / `dynamic-code`
+
+reduced 面上 **未标注工具一律拒绝**（unknown-reject）；内置工具已全部标注。
+
+旧版按工具名剥离的列表如下（已由能力标签取代）：
 
 - `shell` / 执行类工具（并强制 `shellEscape: deny`）
 - `http_request` 与 web/fetch 类
@@ -117,7 +142,7 @@ locale、shell/OS 基础项）。宿主密钥（`*_API_KEY`、`*_TOKEN` 等）**
 | 平台 | 说明 |
 |------|------|
 | **Linux** | 最强路径：`bwrap`（user namespace）真 root 牢笼；否则仅 supervised spawn。 |
-| **macOS** | 有 Seatbelt（`sandbox-exec`）则提供写牢笼；工作 root 外拒绝写入。 |
+| **macOS** | 有 Seatbelt（`sandbox-exec`）则提供写牢笼；执行时按 `allowRoots` 生成 profile（可用 `OCTOPI_SB_PROFILE` 覆盖）。 |
 | **Windows** | 纯 Node 无 mount namespace；树杀用 `taskkill /T`；写限制为 best-effort（ACL）。原生 Job Object helper 为后续增强。 |
 | **嵌入式** | 以探测结果为准。无牢笼时，第三方代码用 `refuse`。 |
 

@@ -46,18 +46,52 @@ upgrade and **no** fake jail.
 
 | Host condition | Backend | Typical profile |
 |----------------|---------|-----------------|
-| Linux + `bwrap` on PATH | `linux-bwrap` | root-jailed, contained, scrubbed env |
+| Linux + `bwrap` on PATH | `linux-bwrap` | root-jailed, contained, network deny (default), scrubbed env |
 | Linux without `bwrap` | `supervised-spawn` | killable + cwd-pin + scrubbed env |
-| macOS + `sandbox-exec` | `mac-seatbelt` | write-jailed (with Seatbelt profile) |
+| macOS + `sandbox-exec` | `mac-seatbelt` | write-jailed (profile generated at execute time) |
 | macOS without Seatbelt | `supervised-spawn` | same as Linux fallback |
 | Windows (no bundled Job helper) | `supervised-spawn` | tree kill via `taskkill /T`, scrubbed env |
 | Unknown / embedded | `supervised-spawn` | same baseline |
 
 `SandboxResult.isolation` always carries the profile used for that command.
 
-**Env hygiene is deny-by-default** on every backend: only an allowlist of keys
-(`PATH`, `HOME`, `TMP`, locale, shell/OS basics) is passed to the child. Host
-secrets (`*_API_KEY`, `*_TOKEN`, …) are **not** inherited via `process.env`.
+The built-in `shell` tool **always** runs through `ProcessSandbox` (jail backend
+when probed, supervised spawn otherwise). There is no second spawn path.
+
+**Jail roots and network (D4).** `SandboxConfig.allowRoots` (falls back to cwd)
+are bind-mounted / write-allowed inside the jail (`--bind-try`). Network posture
+is `open | deny | allowlist`. **Mode defaults:** `host` / `project` → `open`;
+`workspace` / `untrusted` → `deny` (reduced surface always `deny`).
+`allowlist` is interface-only and enforced as `deny` with an honest note.
+
+**macOS Seatbelt (D3).** At execute time Octopi generates a Seatbelt profile
+covering `allowRoots` and the network posture, writes it to a temp file (`0600`),
+and runs `sandbox-exec -f <profile> -- …`. `OCTOPI_SB_PROFILE` remains a host
+override. `write-jailed` is only reported when a profile is actually applied.
+
+**Jail setup failure (D7).** If a jail backend was selected but cannot be applied:
+`requireJail` (effective `untrusted`) **throws** `untrusted_jail_failed` instead of
+running unsandboxed; other modes fall back to supervised spawn, report
+`cwd-pin` + `jail_setup_failed`, and notify the run-level `securityDegraded` hook.
+
+**Privilege (`dropped`)** means the jail **denies privilege-gaining operations**
+(user namespace and/or Seatbelt `process-exec` denials for `sudo`/`su`/…).
+It does **not** require a different uid. Notes record `userns` vs
+`ops-denied; uid unchanged`.
+
+**Jail write mounts (2).** `allowRoots` ∪ cwd ∪ `os.tmpdir()` are writable in
+every mode; `$HOME` is writable only for `project` / `host`
+(`SandboxConfig.homeWrite`). **tmp writes are not journaled** (`notReversed`).
+System trees remain read-only.
+
+**untrusted egress** is always `deny` — `effectPolicy.network` cannot open it
+(product promise, same class as `pathContainment`).
+
+
+**Env hygiene is deny-by-default** on every backend: only keys the caller passes
+are filtered against a small allowlist (`PATH`, `HOME`, `TMP`, locale, shell/OS
+basics). Host `process.env` is never spread. The built-in `shell` tool currently
+passes only `PATH`. Host secrets (`*_API_KEY`, `*_TOKEN`) must not ride along.
 
 ---
 
@@ -106,11 +140,15 @@ system either refuses or **renames** the effective mode and **reduces power**.
 | `securityDegraded` | e.g. `["no_process_jail", …]` |
 | UI / Observer | Show **effective** mode, never the requested name |
 
-`toolSurface: reduced` keeps content tools under L2 and **strips**:
+`toolSurface: reduced` keeps content tools under L2 and **strips by capability
+tags** (`ToolDefinition.capabilities`), not by display name:
 
-- `shell` / exec-class tools (also forced `shellEscape: deny`)
-- `http_request` and web/fetch tools
-- MCP / client tools / `send_file`
+- `exec` (shell and any executor; also forced `shellEscape: deny`)
+- `egress` (`http_request`, `web_search`, MCP/client channels)
+- `send` / `dynamic-code`
+
+Unknown or untagged tools are **rejected** on the reduced surface
+(unknown-reject). Builtins are fully tagged.
 
 `onClose: discard` is kept as residue of untrusted intent.
 
@@ -121,7 +159,7 @@ system either refuses or **renames** the effective mode and **reduces power**.
 | Platform | Notes |
 |----------|-------|
 | **Linux** | Strongest path: `bwrap` (user namespaces) for a real root jail. Without it, supervised spawn only. |
-| **macOS** | Seatbelt via `sandbox-exec` when available; write jail outside the work root is denied in the profile. |
+| **macOS** | Seatbelt via `sandbox-exec` when available; a profile covering `allowRoots` is generated at execute time (host may override with `OCTOPI_SB_PROFILE`). |
 | **Windows** | No mount namespace in pure Node. Tree kill uses `taskkill /T`. Write jail is best-effort (ACLs). A native Job Object helper is a future enhancement. |
 | **Embedded** | Probe result is authoritative. If there is no jail, use `refuse` for third-party code. |
 

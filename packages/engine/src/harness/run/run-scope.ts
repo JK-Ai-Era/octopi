@@ -31,6 +31,16 @@ export interface RunToolRuntime {
   memoryEffects: import("@octopi-agent/core/types/tools.js").MemoryEffectJournal;
   /** L2 允许根 */
   pathRoots?: string[];
+  /** Session undo roots that file tools must not write (D6-a) */
+  undoRoots?: string[];
+  /** Jail network posture for shell/exec */
+  networkPolicy?: 'open' | 'deny' | 'allowlist';
+  /** D7 require jail */
+  requireJail?: boolean;
+  /** jail $HOME write (project/host) */
+  homeWrite?: boolean;
+  /** Run-level securityDegraded hook */
+  noteSecurityDegraded?: (reason: string) => void;
   /** L2 级别 */
   pathContainment?: "strict" | "soft" | "none";
   confirmEffect?: import("@octopi-agent/core/types/tools.js").ToolExecutionContext["confirmEffect"];

@@ -28,6 +28,7 @@ import { createHttpRequestTool } from './http.js';
 import { createEnvInfoTool } from './env-info.js';
 import { createDocumentProbeTool, createDocumentReadTool } from './document-tools.js';
 import {
+  isUnderSessionUndoRoot,
   defaultPathEnv,
   isPathUnderRoots,
   isUnderAttachmentRoot,
@@ -35,16 +36,7 @@ import {
   resolveReadableToolPath,
   resolveToolPath,
 } from './platform.js';
-import {
-  killProcessTree,
-  scrubEnv,
-} from '../../execution-environment/process-isolation.js';
 
-/** 拒绝写会话 undo 账本（自拆台防护） */
-function isUnderSessionUndoRoot(target: string): boolean {
-  const norm = target.replace(/\\/g, '/').toLowerCase();
-  return norm.includes('/sessions/') && norm.includes('/undo');
-}
 
 /**
  * Shell 工具 — 执行 shell 命令
@@ -52,7 +44,7 @@ function isUnderSessionUndoRoot(target: string): boolean {
  * 参数：
  * - command (string, required): 要执行的 shell 命令
  * - cwd (string, optional): 工作目录
- * - timeout (number, optional): 超时时间（毫秒，默认 30000）
+ * - timeout (number, optional): 超时时间（毫秒，默认 60000）
  *
  * 返回：
  * - stdout: 标准输出
@@ -75,6 +67,7 @@ export function createShellTool(options?: {
   return {
     definition: {
       name: 'shell',
+      capabilities: ['exec'],
       description: `LAST RESORT shell. Prefer a dedicated tool when one covers the job (file_read/file_list/file_write/file_edit/file_delete/file_mkdir/file_rename/file_copy/file_stat/file_rmdir/file_search/env_info and any task-specific tools). Use shell only when: no dedicated tool covers the operation, the dedicated tool is unavailable, or it still fails after a correct retry (wrong path/args → fix and retry the tool first). Never use shell instead of a working dedicated tool. Detected shell: ${shell.label}. ${syntaxHint}`,
       parameters: {
         command: {
@@ -88,10 +81,11 @@ export function createShellTool(options?: {
         },
         timeout: {
           type: 'number',
-          description: 'Timeout in milliseconds (default: 30000)',
+          description: 'Timeout in milliseconds (default: 60000)',
         },
       },
-      timeoutMs: 60_000,
+      // D1: tool-bus outer watchdog ceiling; ProcessSandbox enforces the real kill.
+      timeoutMs: 600_000,
     },
     handler: async (args, context) => {
       const command = args.command as string;
@@ -104,7 +98,11 @@ export function createShellTool(options?: {
           shellEscape: context?.shellEscape,
         },
       );
-      const timeout = (args.timeout as number) ?? 30_000;
+      // D1-a: ProcessSandbox owns child timeout/tree-kill; tool-bus is outer watchdog.
+      const requestedTimeout = Number(args.timeout);
+      const sandboxTimeoutMs = Number.isFinite(requestedTimeout) && requestedTimeout > 0
+        ? Math.min(Math.floor(requestedTimeout), 598_000)
+        : 60_000;
 
       // §5.6 shell 账本：roots 内 snapshot → 同一 undo log
       const journalMode = context?.shellJournal ?? 'snapshot';
@@ -129,121 +127,117 @@ export function createShellTool(options?: {
         notReversedPayload = { reason: 'shell_journal_off' };
       }
 
-      const { spawn } = await import('node:child_process');
       const resolvedShell = resolvePlatformShell();
-
-      return new Promise((resolve, reject) => {
-        const startTime = Date.now();
-        const child = spawn(resolvedShell.executable, [...resolvedShell.args, command], {
-          cwd: resolveToolPath(cwd, context?.cwd, { allowRoots: context?.pathRoots, containment: context?.pathContainment }),
-          timeout,
-          // Deny-by-default env: do not inherit API keys / tokens from the host process
-          env: scrubEnv({ PATH: defaultPathEnv() }),
-          windowsHide: true,
-          ...(process.platform === 'win32' ? {} : { detached: true }),
-        });
-        const killTree = () => killProcessTree(child);
-        if (timeout > 0) {
-          const killTimer = setTimeout(killTree, timeout);
-          child.on('close', () => clearTimeout(killTimer));
-        }
-
-        let stdout = '';
-        let stderr = '';
-
-        child.stdout.on('data', (data: Buffer) => {
-          stdout += data.toString();
-        });
-
-        child.stderr.on('data', (data: Buffer) => {
-          stderr += data.toString();
-        });
-
-        child.on('close', async (code) => {
-          const durationMs = Date.now() - startTime;
-          try {
-            // §5.6：after diff 入账本 / 不可逆清单
-            try {
-              const sj = await import('../../execution-environment/shell-journal.js');
-              const effects = context?.fileEffects;
-              if (shellBefore && effects) {
-                const afterCap = await sj.captureShellInventory({
-                  roots: journalRoots,
-                  limit: context?.shellJournalLimit,
-                });
-                const diff = await sj.journalShellDiff(
-                  effects,
-                  shellBefore.capture,
-                  afterCap,
-                  shellBefore.store,
-                );
-                // 截断/未采到 before 的路径不进 undo，只报 notReversed（§5.6 不装懂）
-                if (
-                  shellBefore.capture.truncated ||
-                  afterCap.truncated ||
-                  diff.notInventable.length > 0
-                ) {
-                  await effects.noteNotReversed({
-                    reason: 'budget_truncated',
-                    created: diff.notInventable,
-                  });
-                }
-              } else if (notReversedPayload && effects) {
-                await effects.noteNotReversed(notReversedPayload);
-              }
-            } catch {
-              // 记账失败不阻断 shell 业务结果
-            }
-            const { applyToolOutputGate, resolveSupportBinding } = await import(
-              '../../../context/capabilities/summary/index.js'
-            );
-            const support = options?.summary;
-            const binding = resolveSupportBinding('shell', support, 8000);
-            const applied = await applyToolOutputGate({
-              tool: 'shell',
-              rawBody: stdout,
-              support: { ...support, binding },
-              truncateHint: 'Re-run with a narrower command, or redirect large output to a file and file_read it.',
-            });
-            const stderrApplied = await applyToolOutputGate({
-              tool: 'shell',
-              rawBody: stderr,
-              support: { ...support, binding: { ...binding, maxReturnChars: Math.min(binding.maxReturnChars, 4000) } },
-              truncateHint: 'stderr truncated.',
-            });
-            resolve({
-              stdout: applied.body,
-              stderr: stderrApplied.body,
-              exitCode: code,
-              durationMs,
-              truncated: applied.bodyTruncated || stderrApplied.bodyTruncated,
-              rawStdoutLength: applied.rawLength,
-              shell: {
-                kind: resolvedShell.kind,
-                executable: resolvedShell.executable,
-              },
-            });
-          } catch {
-            // summary 模块不可用时的 L1 替代：裸 slice 硬顶，避免超大结果进主会话
-            resolve({
-              stdout: stdout.slice(0, 8000),
-              stderr: stderr.slice(0, 4000),
-              exitCode: code,
-              durationMs,
-              truncated: stdout.length > 8000 || stderr.length > 4000,
-              rawStdoutLength: stdout.length,
-              shell: {
-                kind: resolvedShell.kind,
-                executable: resolvedShell.executable,
-              },
-            });
-          }
-        });
-
-        child.on('error', (err) => {
-          reject(new Error(`Shell execution failed (${resolvedShell.label}): ${err.message}`));
-        });
+      const resolvedCwd = resolveToolPath(cwd, context?.cwd, {
+        allowRoots: context?.pathRoots,
+        containment: context?.pathContainment,
       });
+
+      // D2-a: always ProcessSandbox (jail backend when probed, else supervised).
+      const { createProcessSandbox } = await import('../../execution-environment/sandbox.js');
+      const sandbox = await createProcessSandbox({
+        forceEnvKeys: ['PATH'],
+      });
+      const sandboxResult = await sandbox.executeArgv(
+        [resolvedShell.executable, ...resolvedShell.args, command],
+        {
+          cwd: resolvedCwd,
+          env: { PATH: defaultPathEnv() },
+          allowRoots: [resolvedCwd, ...(context?.pathRoots ?? []).filter(Boolean)],
+          networkPolicy: context?.networkPolicy ?? 'deny',
+          requireJail: context?.requireJail,
+          homeWrite: context?.homeWrite,
+          noteSecurityDegraded: context?.noteSecurityDegraded,
+          signal: context?.abortSignal,
+          limits: {
+            timeoutMs: sandboxTimeoutMs,
+            maxOutputBytes: 16 * 1024 * 1024,
+          },
+        },
+      );
+
+      try {
+        // §5.6：after diff 入账本 / 不可逆清单
+        try {
+          const sj = await import('../../execution-environment/shell-journal.js');
+          const effects = context?.fileEffects;
+          if (shellBefore && effects) {
+            const afterCap = await sj.captureShellInventory({
+              roots: journalRoots,
+              limit: context?.shellJournalLimit,
+            });
+            const diff = await sj.journalShellDiff(
+              effects,
+              shellBefore.capture,
+              afterCap,
+              shellBefore.store,
+            );
+            if (
+              shellBefore.capture.truncated ||
+              afterCap.truncated ||
+              diff.notInventable.length > 0
+            ) {
+              await effects.noteNotReversed({
+                reason: 'budget_truncated',
+                created: diff.notInventable,
+              });
+            }
+          } else if (notReversedPayload && effects) {
+            await effects.noteNotReversed(notReversedPayload);
+          }
+        } catch {
+          // 记账失败不阻断 shell 业务结果
+        }
+        const { applyToolOutputGate, resolveSupportBinding } = await import(
+          '../../../context/capabilities/summary/index.js'
+        );
+        const support = options?.summary;
+        const binding = resolveSupportBinding('shell', support, 8000);
+        const applied = await applyToolOutputGate({
+          tool: 'shell',
+          rawBody: sandboxResult.stdout,
+          support: { ...support, binding },
+          truncateHint: 'Re-run with a narrower command, or redirect large output to a file and file_read it.',
+        });
+        const stderrApplied = await applyToolOutputGate({
+          tool: 'shell',
+          rawBody: sandboxResult.stderr,
+          support: { ...support, binding: { ...binding, maxReturnChars: Math.min(binding.maxReturnChars, 4000) } },
+          truncateHint: 'stderr truncated.',
+        });
+        return {
+          stdout: applied.body,
+          stderr: stderrApplied.body,
+          exitCode: sandboxResult.exitCode,
+          durationMs: sandboxResult.usage.elapsedMs,
+          truncated: applied.bodyTruncated || stderrApplied.bodyTruncated,
+          rawStdoutLength: applied.rawLength,
+          terminated: sandboxResult.terminated,
+          terminateReason: sandboxResult.terminateReason,
+          isolation: sandboxResult.isolation,
+          shell: {
+            kind: resolvedShell.kind,
+            executable: resolvedShell.executable,
+          },
+        };
+      } catch {
+        // summary 模块不可用时的 L1 替代：裸 slice 硬顶，避免超大结果进主会话
+        return {
+          stdout: sandboxResult.stdout.slice(0, 8000),
+          stderr: sandboxResult.stderr.slice(0, 4000),
+          exitCode: sandboxResult.exitCode,
+          durationMs: sandboxResult.usage.elapsedMs,
+          truncated: sandboxResult.stdout.length > 8000 || sandboxResult.stderr.length > 4000,
+          rawStdoutLength: sandboxResult.stdout.length,
+          terminated: sandboxResult.terminated,
+          terminateReason: sandboxResult.terminateReason,
+          isolation: sandboxResult.isolation,
+          shell: {
+            kind: resolvedShell.kind,
+            executable: resolvedShell.executable,
+          },
+        };
+      }
     },
   };
 }
@@ -275,6 +269,7 @@ export function createFileReadTool(options?: {
   return {
     definition: {
       name: 'file_read',
+      capabilities: ['fs-read'],
       description: 'Read the contents of a file. Supports text files. Use offset and limit for large files.',
       parameters: {
         path: {
@@ -385,6 +380,7 @@ export function createFileWriteTool(): RegisteredTool {
   return {
     definition: {
       name: 'file_write',
+      capabilities: ['fs-write'],
       description: 'Write content to a file. Creates the file if it doesn\'t exist, overwrites if it does. Use append mode to add to existing files.',
       parameters: {
         path: {
@@ -416,7 +412,7 @@ export function createFileWriteTool(): RegisteredTool {
       if (isUnderAttachmentRoot(path, context?.attachmentRoots)) {
         throw new Error('session attachments are read-only; cannot write to attachments root');
       }
-      if (isUnderSessionUndoRoot(path)) {
+      if (isUnderSessionUndoRoot(path, context?.undoRoots)) {
         throw new Error('session undo ledger is protected; cannot write to sessions undo dir');
       }
       const content = args.content as string;
@@ -473,6 +469,7 @@ export function createFileDeleteTool(): RegisteredTool {
   return {
     definition: {
       name: 'file_delete',
+      capabilities: ['fs-write'],
       description:
         'Delete a single file (not a directory). Use this instead of shell rm for files under allowed roots. The delete is journaled and can be undone on edit-resend.',
       parameters: {
@@ -495,7 +492,7 @@ export function createFileDeleteTool(): RegisteredTool {
       if (isUnderAttachmentRoot(path, context?.attachmentRoots)) {
         throw new Error('session attachments are read-only; cannot delete from attachments root');
       }
-      if (isUnderSessionUndoRoot(path)) {
+      if (isUnderSessionUndoRoot(path, context?.undoRoots)) {
         throw new Error('session undo ledger is protected; cannot delete from sessions undo dir');
       }
 
@@ -628,6 +625,7 @@ export function createFileListTool(options?: {
   return {
     definition: {
       name: 'file_list',
+      capabilities: ['fs-read'],
       description:
         'List files and directories. Relative paths resolve against the workspace cwd (see Runtime Workspace anchor) — not the disk root. path defaults to workspace. When pattern is set, recursive defaults to true so files in subdirectories (e.g. docs/) are found. Skips node_modules/.git. Output is capped.',
       parameters: {

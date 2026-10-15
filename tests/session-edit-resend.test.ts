@@ -97,13 +97,13 @@ describe('edit-resend (truncate aborted turn)', () => {
       },
       messages: [userMsg('u0', t), assistantMsg('a0', t + 1), userMsg('u1', t + 2)],
       turns: [],
-      metadata: { abortedTurn: { userMessageIndex: 2, at: t } },
+      metadata: { abortedTurn: { userMessageIndex: 0, at: t } },
       tasks: [],
-      // 租约点在 u1 之后
+      // 租约点在消息之后（大于 truncate 起点），用于验证 detach 随截断收缩
       contextDetachIndex: 2,
     });
 
-    // 从 u0（index 0）截断：detach 必须跟着收到 0
+    // 编辑重发只允许从 abortedTurn 起点截断；detach 必须跟着收到 fromIndex
     await gateway.truncateMessagesFrom('s-lease', 0);
     const session = await store.load('s-lease');
     expect(session!.messages).toHaveLength(0);

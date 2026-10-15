@@ -42,10 +42,25 @@ export interface ToolParameter {
 }
 
 /** 工具定义 */
+/**
+ * Capability tags on a tool. Security policy (reduced tool surface) keys off
+ * these, never off display names (D5-a).
+ */
+export type ToolCapability =
+  | 'exec'
+  | 'egress'
+  | 'send'
+  | 'dynamic-code'
+  | 'fs-read'
+  | 'fs-write'
+  | 'memory';
+
 export interface ToolDefinition {
   name: string;
   description: string;
   parameters: Record<string, ToolParameter>;
+  /** What this tool can do. Required for plugins; builtins are tagged. */
+  capabilities?: ToolCapability[];
   permissions?: string[];
   requiresConfirmation?: boolean;
   timeoutMs?: number;
@@ -126,6 +141,20 @@ export interface ToolExecutionContext {
   memoryEffects: MemoryEffectJournal;
   /** L2 允许根（effectPolicy）；省略 = 不限制 */
   pathRoots?: string[];
+  /**
+   * Session turn-undo roots (`sessions/<sid>/undo`) that tools must not write.
+   * Injected by the Runner via `resolveSessionUndoPaths`. When present, guards
+   * compare real path prefixes; when absent, tools use a path-segment fallback.
+   */
+  undoRoots?: string[];
+  /** Jail network posture (D4-c). Defaults from effect mode: host/project open, workspace/untrusted deny. */
+  networkPolicy?: 'open' | 'deny' | 'allowlist';
+  /** D7: refuse supervised fallback when the process jail cannot be applied. */
+  requireJail?: boolean;
+  /** Allow $HOME writes in jail (project/host). */
+  homeWrite?: boolean;
+  /** Execute-time degradation hook (run-level securityDegraded). */
+  noteSecurityDegraded?: (reason: string) => void;
   /** L2 级别 */
   pathContainment?: 'strict' | 'soft' | 'none';
   /**

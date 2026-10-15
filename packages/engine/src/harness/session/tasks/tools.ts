@@ -48,6 +48,7 @@ export function createTaskListTool(service: SessionTaskService): RegisteredTool 
   return {
     definition: {
       name: 'task_list',
+      capabilities: ['fs-read'],
       description:
         'List session tasks (goals and steps). Goals have no parent_id; steps have parent_id of their goal.',
       parameters: {
@@ -89,6 +90,7 @@ export function createTaskCreateTool(service: SessionTaskService): RegisteredToo
   return {
     definition: {
       name: 'task_create',
+      capabilities: ['fs-write'],
       description:
         'Create a session task. Without parent_id creates a user-level goal. With parent_id creates a step under an existing goal (depth 1 only).',
       parameters: {
@@ -116,6 +118,7 @@ export function createTaskPlanTool(service: SessionTaskService): RegisteredTool 
   return {
     definition: {
       name: 'task_plan',
+      capabilities: ['fs-write'],
       description: 'Create ordered steps for an existing goal in one call.',
       parameters: {
         goal_id: { type: 'string', description: 'Goal task id', required: true },
@@ -145,6 +148,7 @@ export function createTaskCompleteTool(service: SessionTaskService): RegisteredT
   return {
     definition: {
       name: 'task_complete',
+      capabilities: ['fs-write'],
       description: 'Mark a goal or step as done. Explicitly complete the goal when the whole job is finished.',
       parameters: {
         task_id: { type: 'string', description: 'Task id', required: true },
@@ -164,6 +168,7 @@ export function createTaskPauseTool(service: SessionTaskService): RegisteredTool
   return {
     definition: {
       name: 'task_pause',
+      capabilities: ['fs-write'],
       description: 'Pause an open task (goal or step).',
       parameters: {
         task_id: { type: 'string', description: 'Task id', required: true },
@@ -183,6 +188,7 @@ export function createTaskResumeTool(service: SessionTaskService): RegisteredToo
   return {
     definition: {
       name: 'task_resume',
+      capabilities: ['fs-write'],
       description: 'Resume a paused task.',
       parameters: {
         task_id: { type: 'string', description: 'Task id', required: true },
@@ -200,6 +206,7 @@ export function createTaskDropTool(service: SessionTaskService): RegisteredTool 
   return {
     definition: {
       name: 'task_drop',
+      capabilities: ['fs-write'],
       description: 'Drop/cancel a task. Dropping a goal also drops its open steps.',
       parameters: {
         task_id: { type: 'string', description: 'Task id', required: true },
@@ -219,6 +226,7 @@ export function createTaskNoteTool(service: SessionTaskService): RegisteredTool 
   return {
     definition: {
       name: 'task_note',
+      capabilities: ['fs-write'],
       description: 'Update the progress note on a task without changing status.',
       parameters: {
         task_id: { type: 'string', description: 'Task id', required: true },

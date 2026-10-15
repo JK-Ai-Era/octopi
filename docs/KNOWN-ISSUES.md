@@ -15,7 +15,7 @@
 
 **Still open:** distributed Session Lease implementation; session-ACL per-tool rights (ToolEffectPolicy modes / L2 containment / turn undo / host-gate / L1 limits landed in v0.73–v0.74; `SessionRights` still has no per-tool bits); role DB/console; Quota economic layer.
 
-**L4 process jail (v0.75.0):** capability contract + supervised spawn + bwrap/Seatbelt probe landed (`docs/process-isolation.md`). Still open: bundled Windows Job Object / restricted-token helper; container backend. `untrusted` without L4 refuses or degrades via `untrustedAdmission`.
+**L4 process jail (v0.75.0–0.76.0):** capability contract, supervised spawn, bwrap/Seatbelt, and **shell wired through ProcessSandbox** (`docs/process-isolation.md`). Still open: bundled Windows Job Object / restricted-token helper; container backend. `untrusted` without L4 refuses or degrades via `untrustedAdmission`.
 
 **EffectPolicy default (v0.75.0):** omitting `mode` now means `workspace` (secure-by-default). Scaffolds set `"mode": "host"` explicitly. Deployments that relied on implicit host must add `"effectPolicy": { "mode": "host" }`.
 

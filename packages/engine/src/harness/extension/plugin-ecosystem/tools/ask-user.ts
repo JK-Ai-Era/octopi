@@ -49,6 +49,7 @@ export function createAskUserTool(
   return {
     definition: {
       name: 'ask_user',
+      capabilities: [],
       description:
         'Ask the user a question and wait for their response. Use when you need clarification, confirmation, or a choice from the user. Optionally provide a list of suggested options. Do not use for things you can look up yourself.',
       parameters: {

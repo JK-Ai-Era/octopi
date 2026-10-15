@@ -30,6 +30,7 @@ export function createSessionSearchTool(options: SessionHistoryToolOptions): Reg
   return {
     definition: {
       name: 'session_search',
+      capabilities: ['fs-read'],
       description:
         'Search past session conversations (Information layer, not memory propositions). Returns session-grouped hits with snippet + `ref` for session_read. Prefer concrete entities (paths, error strings, names). Default excludes tool I/O and archived cold storage. Use memory_search for distilled conclusions; use this for original wording / what happened.',
       parameters: {
@@ -115,6 +116,7 @@ export function createSessionReadTool(options: SessionHistoryToolOptions): Regis
   return {
     definition: {
       name: 'session_read',
+      capabilities: ['fs-read'],
       description:
         'Open a window of past session messages around a hit (`ref` from session_search) or index. Returns transcript lines. Read-only. Use after session_search to recover original context.',
       parameters: {

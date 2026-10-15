@@ -27,7 +27,13 @@ export type ResourceIsolation = 'none' | 'best-effort' | 'os-enforced';
 /** Egress posture (not part of L4 process minimum) */
 export type NetworkIsolation = 'open' | 'deny' | 'allowlist';
 
-/** Privilege of the child */
+/**
+ * Privilege of the child.
+ * `dropped` = the jail **denies privilege-gaining OS operations**
+ * (user namespace and/or Seatbelt `process-exec` denials for sudo/su/…).
+ * This does **not** require a different uid — `notes` must record which
+ * mechanism applies (`userns` vs `ops-denied`).
+ */
 export type PrivilegeIsolation = 'same' | 'dropped';
 
 /** Whether host secrets can ride along in the environment */
@@ -197,25 +203,65 @@ async function which(cmd: string): Promise<string | null> {
  *
  * @returns isolation profile this process can offer
  */
+let cachedProbe: ProcessIsolationProfile | null = null;
+
+/** Reset probe cache (tests). */
+export function resetProcessIsolationProbeCache(): void {
+  cachedProbe = null;
+}
+
+/**
+ * One-shot bwrap usability smoke (user namespaces may be disabled in containers).
+ *
+ * @returns true when bwrap can actually spawn a jailed no-op
+ */
+async function bwrapUsable(bwrap: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const child = spawn(bwrap, ['--die-with-parent', '--unshare-all', '--ro-bind', '/', '/', '--', 'true'], {
+      stdio: 'ignore',
+      timeout: 2000,
+    });
+    child.on('error', () => resolve(false));
+    child.on('close', (code) => resolve(code === 0));
+  });
+}
+
 export async function probeProcessIsolation(): Promise<ProcessIsolationProfile> {
+  if (cachedProbe) return cachedProbe;
   const notes: string[] = [];
 
   if (process.platform === 'linux') {
     const bwrap = await which('bwrap');
     if (bwrap) {
-      return {
-        backend: 'linux-bwrap',
-        processTree: 'contained',
-        filesystem: 'root-jailed',
+      if (await bwrapUsable(bwrap)) {
+        cachedProbe = {
+          backend: 'linux-bwrap',
+          processTree: 'contained',
+          filesystem: 'root-jailed',
+          resources: 'best-effort',
+          // Default jail posture (D4-c); execute() honors SandboxConfig.networkPolicy
+          network: 'deny',
+          privilege: 'dropped',
+          envHygiene: 'scrubbed',
+          notes: [`bwrap=${bwrap}`, 'privilege=dropped (userns)'],
+        };
+        return cachedProbe;
+      }
+      notes.push(`bwrap=${bwrap} present but unusable (userns denied?); no process jail`);
+      cachedProbe = {
+        backend: 'supervised-spawn',
+        processTree: 'killable',
+        filesystem: 'cwd-pin',
         resources: 'best-effort',
         network: 'open',
-        privilege: 'dropped',
+        privilege: 'same',
         envHygiene: 'scrubbed',
-        notes: [`bwrap=${bwrap}`],
+        notes,
       };
+      return cachedProbe;
     }
     notes.push('linux: bwrap not found; no process jail');
-    return {
+    cachedProbe = {
       backend: 'supervised-spawn',
       processTree: 'killable',
       filesystem: 'cwd-pin',
@@ -225,24 +271,31 @@ export async function probeProcessIsolation(): Promise<ProcessIsolationProfile> 
       envHygiene: 'scrubbed',
       notes,
     };
+    return cachedProbe;
   }
 
   if (process.platform === 'darwin') {
     const sandboxExec = await which('sandbox-exec');
     if (sandboxExec) {
-      return {
+      // D3-b+: we generate a Seatbelt profile at execute time (allowRoots + network).
+      // write-jailed is therefore honest without OCTOPI_SB_PROFILE.
+      cachedProbe = {
         backend: 'mac-seatbelt',
         processTree: 'killable',
         filesystem: 'write-jailed',
         resources: 'best-effort',
-        network: 'open',
-        privilege: 'same',
+        network: 'deny',
+        privilege: 'dropped',
         envHygiene: 'scrubbed',
-        notes: [`sandbox-exec=${sandboxExec}`],
+        notes: [
+          `sandbox-exec=${sandboxExec}`,
+          'privilege=dropped (ops-denied; uid unchanged)',
+        ],
       };
+      return cachedProbe;
     }
     notes.push('darwin: sandbox-exec not found; no write jail');
-    return {
+    cachedProbe = {
       backend: 'supervised-spawn',
       processTree: 'killable',
       filesystem: 'cwd-pin',
@@ -252,6 +305,7 @@ export async function probeProcessIsolation(): Promise<ProcessIsolationProfile> 
       envHygiene: 'scrubbed',
       notes,
     };
+    return cachedProbe;
   }
 
   if (process.platform === 'win32') {
@@ -259,7 +313,7 @@ export async function probeProcessIsolation(): Promise<ProcessIsolationProfile> 
     notes.push(
       'win32: Job Object + restricted token not bundled; processTree via taskkill /T only',
     );
-    return {
+    cachedProbe = {
       backend: 'supervised-spawn',
       processTree: 'killable',
       filesystem: 'cwd-pin',
@@ -269,10 +323,11 @@ export async function probeProcessIsolation(): Promise<ProcessIsolationProfile> 
       envHygiene: 'scrubbed',
       notes,
     };
+    return cachedProbe;
   }
 
   notes.push(`${process.platform}: generic supervised spawn only`);
-  return {
+  cachedProbe = {
     backend: 'supervised-spawn',
     processTree: 'killable',
     filesystem: 'cwd-pin',
@@ -282,6 +337,7 @@ export async function probeProcessIsolation(): Promise<ProcessIsolationProfile> 
     envHygiene: 'scrubbed',
     notes,
   };
+  return cachedProbe;
 }
 
 /**

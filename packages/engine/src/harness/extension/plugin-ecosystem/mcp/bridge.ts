@@ -67,6 +67,8 @@ export function mcpToolToOctopiDefinition(
   return {
     name: `${serverId}${MCP_NAMESPACE_SEP}${mcpTool.name}`,
     description: mcpTool.description ?? '',
+    // D5: MCP talks to an external process — default egress (reduced surface strips it)
+    capabilities: ['egress'],
     parameters: params,
   };
 }

@@ -334,3 +334,29 @@ export function defaultPathEnv(): string {
   }
   return process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin';
 }
+
+/**
+ * True when `target` is the session undo ledger root or under it (D6-a).
+ * Prefers real root comparison against injected `undoRoots`; falls back to an
+ * exact `sessions/<id>/undo` path-shape match when the runner did not inject.
+ *
+ * @param target - absolute or relative path under consideration
+ * @param undoRoots - resolveSessionUndoPaths roots (optional)
+ * @returns whether the path is protected undo ledger
+ */
+export function isUnderSessionUndoRoot(target: string, undoRoots?: string[]): boolean {
+  const resolved = resolve(target);
+  const roots = (undoRoots ?? []).map((r) => r?.trim()).filter(Boolean);
+  const fold = (p: string) =>
+    process.platform === 'win32' ? p.toLowerCase() : p;
+  if (roots.length > 0) {
+    const norm = (p: string) => fold(resolve(p).replace(/\\/g, '/'));
+    const tNorm = norm(resolved);
+    return roots.some((root) => {
+      const r = norm(root);
+      return tNorm === r || tNorm.startsWith(r.endsWith('/') ? r : r + '/');
+    });
+  }
+  const norm = fold(resolved.replace(/\\/g, '/'));
+  return /\/sessions\/[^/]+\/undo(\/|$)/i.test(norm);
+}

@@ -34,6 +34,7 @@ export function createWebSearchTool(
   return {
     definition: {
       name: 'web_search',
+      capabilities: ['egress'],
       description:
         'Search the web for current information. Returns titles, URLs, and snippets. ' +
         'Use when you need up-to-date facts, documentation, news, or sources outside the local workspace.',

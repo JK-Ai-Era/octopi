@@ -102,3 +102,10 @@ export type {
   SandboxProvider, WorkspaceConfig, WorkspaceSnapshot, Workspace,
   SearchOptions, FileMatch,
 } from './types.js';
+export {
+  resolveToolCapabilities,
+  deniesReducedSurface,
+  BUILTIN_TOOL_CAPABILITIES,
+  REDUCED_DENIED_CAPABILITIES,
+} from './tool-capabilities.js';
+export type { ToolCapability } from './tool-capabilities.js';

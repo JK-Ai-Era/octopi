@@ -24,10 +24,29 @@ export interface SandboxConfig {
   env?: Record<string, string>;
   /** Resource limits */
   limits?: ResourceLimits;
-  /** Allowed network (CIDR or hostname) */
-  allowedNetwork?: string[];
-  /** Allowed filesystem paths */
-  allowedPaths?: string[];
+  /**
+   * Network posture for jail backends (bwrap / Seatbelt).
+   * Default when omitted: `deny` (D4-c). `allowlist` is interface-only this release
+   * and is enforced as `deny` with an honest note.
+   */
+  networkPolicy?: 'open' | 'deny' | 'allowlist';
+  /**
+   * Absolute roots the jail may read/write (bind mounts / Seatbelt write-allow).
+   * Falls back to `[cwd]` when omitted. Not a substitute for L2 path policy.
+   */
+  allowRoots?: string[];
+  /**
+   * D7: when true (untrusted / L4-required), jail backend must actually apply.
+   * Setup failure throws instead of falling back to supervised spawn.
+   */
+  requireJail?: boolean;
+  /**
+   * Allow `$HOME` writes inside the jail (project/host only per 2b).
+   * tmpdir is always writable (2a); not journaled (2c notReversed).
+   */
+  homeWrite?: boolean;
+  /** Run-level hook for execute-time degradation (falls back to isolation.notes). */
+  noteSecurityDegraded?: (reason: string) => void;
   /** Abort in-flight execution */
   signal?: AbortSignal;
 }

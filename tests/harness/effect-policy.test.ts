@@ -135,6 +135,19 @@ describe('resolveEffectiveEffectPolicy', () => {
     expect(isToolAllowedOnSurface('file_read', 'reduced')).toBe(true);
   });
 
+  it('capability tags beat names (B1 alias bypass is closed)', () => {
+    // Unknown name is rejected on reduced even if it is not on any denylist
+    expect(isToolAllowedOnSurface('bash_command', 'reduced')).toBe(false);
+    expect(isToolAllowedOnSurface('run_script', 'reduced')).toBe(false);
+    // Explicit tags decide
+    expect(isToolAllowedOnSurface('bash_command', 'reduced', ['exec'])).toBe(false);
+    expect(isToolAllowedOnSurface('my_helper', 'reduced', ['fs-read'])).toBe(true);
+    // explicit [] is authoritative: no dangerous caps → allowed on reduced
+    expect(isToolAllowedOnSurface('my_helper', 'reduced', [])).toBe(true);
+    // MCP-style names default to unknown → rejected
+    expect(isToolAllowedOnSurface('srv__browser_navigate', 'reduced')).toBe(false);
+  });
+
   it('overrides win over mode defaults', () => {
     const p = resolveEffectiveEffectPolicy(
       { mode: 'workspace', pathContainment: 'soft', shellEscape: 'allow', commit: 'manual' },

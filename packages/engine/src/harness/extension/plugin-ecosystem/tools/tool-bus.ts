@@ -17,6 +17,7 @@
  * @module harness/extension/plugin-ecosystem/tools/tool-bus
  */
 
+import { registerToolCapabilities } from '../../execution-environment/tool-capabilities.js';
 import type {
   RegisteredTool,
   ToolDefinition,
@@ -59,6 +60,7 @@ export class DefaultToolBus implements ToolBus {
       console.warn(`[ToolBus] global tool "${name}" explicitly replaced`);
     }
     this.globalTools.set(name, tool);
+    registerToolCapabilities(name, tool.definition.capabilities);
   }
 
   registerAll(tools: RegisteredTool[]): void {
@@ -72,6 +74,7 @@ export class DefaultToolBus implements ToolBus {
       this.agentTools.set(agentId, new Map());
     }
     this.agentTools.get(agentId)!.set(tool.definition.name, tool);
+    registerToolCapabilities(tool.definition.name, tool.definition.capabilities);
   }
 
   unregister(name: string, agentId?: string): boolean {

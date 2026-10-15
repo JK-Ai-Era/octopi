@@ -15,7 +15,7 @@
 
 **仍开放：** 分布式 Session Lease 实现；session 级按工具授权（ToolEffectPolicy 模式 / L2 路径包含 / turn undo / host-gate / L1 限制已于 v0.73–v0.74 落地；`SessionRights` 仍无 per-tool 位）；角色 DB/控制台；Quota 经济层。
 
-**L4 process 牢笼（v0.75.0）：** 能力契约 + supervised spawn + bwrap/Seatbelt 探测已落地（`docs/process-isolation.zh.md`）。仍开放：自带 Windows Job Object / 受限令牌 helper；container 后端。无 L4 时 `untrusted` 经 `untrustedAdmission` 拒绝或降级。
+**L4 process 牢笼（v0.75.0–0.76.0）：** 能力契约 + supervised spawn + bwrap/Seatbelt，且 **shell 已统一走 ProcessSandbox**（`docs/process-isolation.zh.md`）。仍开放：自带 Windows Job Object / 受限令牌 helper；container 后端。无 L4 时 `untrusted` 经 `untrustedAdmission` 拒绝或降级。
 
 **EffectPolicy 缺省（v0.75.0）：** 省略 `mode` 即 `workspace`（secure-by-default）。脚手架显式 `"mode": "host"`。原先依赖「未写 mode=host」的部署需补 `"effectPolicy": { "mode": "host" }`。
 

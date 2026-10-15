@@ -12,6 +12,7 @@ export function createEnvInfoTool(): RegisteredTool {
   return {
     definition: {
       name: 'env_info',
+      capabilities: ['fs-read'],
       description:
         'Get runtime environment information including OS, Node.js version, working directory, PATH, platform shell, and available package managers.',
       parameters: {},

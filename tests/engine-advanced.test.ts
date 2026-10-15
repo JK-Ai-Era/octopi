@@ -204,13 +204,14 @@ describe('错误分类和重试', () => {
     agent.context.messages = [createTestMessage('test')];
 
     const harness = createHarness();
+    // rate_limit 默认退避 1s+2s+3s≈6s，须覆盖重试窗，否则超时与断言无关
     const events = await collectEvents(agent, harness);
 
     // 应该有 agent_end(reason: 'error')
     const agentEnd = events.find(e => e.type === 'agent_end');
     expect(agentEnd).toBeDefined();
     expect((agentEnd as any).reason).toBe('error');
-  });
+  }, 20_000);
 
   it('onError 返回 abort 时应干净结束（不 throw），并带 agent_end(error)', async () => {
     const provider = createErrorProvider(new Error('boom'));

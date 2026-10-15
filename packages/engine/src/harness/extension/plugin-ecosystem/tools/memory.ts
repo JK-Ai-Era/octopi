@@ -46,6 +46,7 @@ export function createMemoryStoreTool(store: MemoryStore, options?: MemoryToolOp
   return {
     definition: {
       name: 'memory_store',
+      capabilities: ['memory'],
       description:
         'Store one atomic memory proposition for future sessions. Use only when salience checks pass. Types: fact | method | norm. If a search hit is obsolete/conflicting, set supersedes_id to that memory id (soft-delete old, write new). Never claim memory was saved without calling this tool.',
       parameters: {
@@ -223,6 +224,7 @@ export function createMemorySearchTool(store: MemoryStore): RegisteredTool {
   return {
     definition: {
       name: 'memory_search',
+      capabilities: ['memory'],
       description:
         'Search long-term memory propositions by text. Results include memory `id` for follow-up (e.g. memory_store.supersedes_id when replacing an obsolete conclusion) and `recordedAt`/`asOf` times — check them against Current datetime before trusting time-sensitive facts. Includes shadow entries (hypotheses only). Excludes soft-deleted entries. Use concrete entity names as query terms.',
       parameters: {

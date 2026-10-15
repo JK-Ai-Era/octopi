@@ -36,6 +36,7 @@ export function createHttpRequestTool(options?: HttpRequestToolOptions): Registe
   return {
     definition: {
       name: 'http_request',
+      capabilities: ['egress'],
       description:
         'Make an HTTP request to a URL. Supports GET, POST, PUT, PATCH, DELETE. Returns status, headers, and body (large bodies may be summarized). Useful for API calls, web scraping, and webhook testing.',
       parameters: {

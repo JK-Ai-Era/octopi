@@ -6,17 +6,18 @@
  * Destructive ops go through ToolFileEffects where a reversible journal is possible.
  */
 import type { RegisteredTool } from '@octopi-agent/core/types.js';
-import { isPathUnderRoots, isUnderAttachmentRoot, resolveToolPath } from './platform.js';
+import {
+  isPathUnderRoots,
+  isUnderAttachmentRoot,
+  resolveToolPath,
+  isUnderSessionUndoRoot,
+} from './platform.js';
 import { gateEffect } from '../../execution-environment/effect-policy.js';
 
-function isUnderSessionUndoRoot(target: string): boolean {
-  const norm = target.replace(/\\/g, '/').toLowerCase();
-  return norm.includes('/sessions/') && norm.includes('/undo');
-}
 
 function resolveSafePath(
   rawPath: string,
-  context: { cwd?: string; pathRoots?: string[]; pathContainment?: 'strict' | 'soft' | 'none'; attachmentRoots?: string[] } | undefined,
+  context: { cwd?: string; pathRoots?: string[]; pathContainment?: 'strict' | 'soft' | 'none'; attachmentRoots?: string[]; undoRoots?: string[] } | undefined,
   label: string,
 ): string {
   const cwd = context?.cwd ?? process.cwd();
@@ -27,7 +28,7 @@ function resolveSafePath(
   if (isUnderAttachmentRoot(path, context?.attachmentRoots)) {
     throw new Error(`session attachments are read-only; cannot ${label} under attachments root`);
   }
-  if (isUnderSessionUndoRoot(path)) {
+  if (isUnderSessionUndoRoot(path, context?.undoRoots)) {
     throw new Error(`session undo ledger is protected; cannot ${label} under sessions undo dir`);
   }
   return path;
@@ -51,6 +52,7 @@ export function createFileMkdirTool(): RegisteredTool {
   return {
     definition: {
       name: 'file_mkdir',
+      capabilities: ['fs-write'],
       description:
         'Create a directory. Creates parent directories when recursive=true (default). Cross-platform.',
       parameters: {
@@ -100,6 +102,7 @@ export function createFileRenameTool(): RegisteredTool {
   return {
     definition: {
       name: 'file_rename',
+      capabilities: ['fs-write'],
       description:
         'Rename or move a file or directory. Overwrites the destination if it exists (file) or fails if destination directory exists. File moves are journaled for undo; directory moves are not tree-undoable.',
       parameters: {
@@ -207,6 +210,7 @@ export function createFileCopyTool(): RegisteredTool {
   return {
     definition: {
       name: 'file_copy',
+      capabilities: ['fs-write', 'fs-read'],
       description:
         'Copy a file to a new path. Creates parent directories if needed. Does not copy directories (use shell only if policy allows).',
       parameters: {
@@ -295,6 +299,7 @@ export function createFileStatTool(): RegisteredTool {
   return {
     definition: {
       name: 'file_stat',
+      capabilities: ['fs-read'],
       description:
         'Get file or directory metadata (type, size, mtime). Returns exists=false when missing. Cross-platform.',
       parameters: {
@@ -336,6 +341,7 @@ export function createFileRmdirTool(): RegisteredTool {
   return {
     definition: {
       name: 'file_rmdir',
+      capabilities: ['fs-write'],
       description:
         'Remove an empty directory. Refuses non-empty directories (delete files first or use file_delete). Cross-platform.',
       parameters: {

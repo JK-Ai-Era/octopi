@@ -1,3 +1,42 @@
+## v0.76.0
+
+### feat(security): L4 execution wiring, jail roots/network, capability tool surface
+
+**问题**：`ProcessSandbox` 有完整实现却几乎不在生产 shell 路径使用；macOS probe 报 `write-jailed` 但无 `OCTOPI_SB_PROFILE` 时实际只 cwd-pin（谎报）；bwrap 只 bind cwd、网络声明不一致；`isToolAllowedOnSurface` 靠工具名黑名单，可被 `bash_command` 等别名绕过；undo 守护是 `includes('/undo')` 启发式。
+
+**拍板**（`arch/NEXT-STEPS.md` D1–D8）：超时归属 ProcessSandbox（默认 ≥60s，tool-bus 外层看门狗）；shell 永远走 ProcessSandbox；macOS 运行时生成 Seatbelt profile（含 allowRoots）；网络缺省 deny；工具能力标签 + reduced 面 unknown-reject；undo 真根比较；jail 失败按 mode 分叉；版本 v0.76.0。
+
+**调整**：
+
+- **`sandbox.ts`**：`runBwrap` bind 全部 `allowRoots`；网络 `open|deny|allowlist`（缺省 **deny**，allowlist 按 deny 注记）；`runSeatbelt` **运行时生成 profile**（allowRoots + 网络），`OCTOPI_SB_PROFILE` 仅宿主覆盖；执行失败回落 supervised 时 `filesystem` 诚实降为 `cwd-pin`
+- **`process-isolation.ts`**：probe 与执行对齐——bwrap/Seatbelt 默认 `network: deny`、真跑 jail 时 `privilege: dropped`（用户命名空间 / Seatbelt 剥夺特权操作）
+- **`types.ts`**：`SandboxConfig.allowRoots` / `networkPolicy`；默认 timeout 60s
+- **shell 工具**：**统一 `ProcessSandbox.executeArgv`**（D2-a）；去掉第三套 spawn/timer；默认 timeout **60s**；结果携带 `isolation`；definition.timeoutMs=600s 作外层 watchdog 上限
+- **`ToolDefinition.capabilities`**（D5-a）：`exec` / `egress` / `send` / `dynamic-code` / `fs-read` / `fs-write` / `memory`；**全部内置工具已标注**；`isToolAllowedOnSurface` 按能力标签判定，reduced 面 **unknown-reject**（MCP/未标注默认拒）
+- **undo 守护（D6-a）**：`isUnderSessionUndoRoot` 真根比较（`undoRoots` 由 Runner 注入 `resolveSessionUndoPaths`）；未注入时回退精确 `sessions/<id>/undo` 路径形；收拢 `builtin.ts` / `file-ops.ts` 两处拷贝
+
+**审查修复（Octopi / 内部 review）**：
+
+- **D7 P0**：`SandboxConfig.requireJail` — effective untrusted 在 jail 搭建失败时 **抛错拒绝未沙箱执行**；其它模式回落 supervised + `jail_setup_failed` + run 级 `securityDegraded`
+- **signal**：shell 传入 `abortSignal`，abort/watchdog 能杀子树；信号死亡不再报 `exitCode: 0`
+- **networkPolicy**：`effectPolicy.network`，**host/project 默认 open**，workspace/untrusted 默认 deny；shell 接到 `SandboxConfig.networkPolicy`；allowlist 注记诚实
+- **capabilities**：`registerToolCapabilities`（ToolBus 注册时记录）；显式 `[]` 权威；knowledge-client 补标；MCP 缺省 `egress`
+- **undo**：`file-edit` 收编 `isUnderSessionUndoRoot`；win32 大小写
+- **bwrap**：`--bind-try`；profile 文件 `0600`；allowRoots `resolve()` 绝对化
+- **文档**：EN 补齐 D2–D7；scrubEnv 表述与实现一致
+
+
+**拍板落地（1-B / 2a / 2b / 2c）**：
+
+- Seatbelt profile **禁提权 exec**（sudo/su/chroot…）；`privilege=dropped` 定义为 **ops-denied**（uid 可不变），notes 可审计
+- jail 写根：**tmp 全模式 rw**；**HOME 仅 project/host**（`homeWrite`）；**tmp 不进 undo**（`notReversed`）
+- **untrusted 网络恒 deny**（config 不可放开）；未标注注册不再吃 builtin 名表（影子名）
+- bwrap probe **冒烟**（userns 不可用则 supervised）；bwrap 运行时 setup 失败走 **同一 `jailSetupFailed`**
+
+**测试**：`process-jail-wiring.test.ts`（undo 真根、能力面、L4、requireJail、registry、Seatbelt profile、影子名）；effect-policy alias 绕过；既有 harness 套件通过。
+
+---
+
 ## v0.75.0
 
 ### feat(harness): L4 process isolation contract, supervised spawn, untrusted admission

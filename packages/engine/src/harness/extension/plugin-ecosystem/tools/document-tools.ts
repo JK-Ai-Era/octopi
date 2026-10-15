@@ -43,6 +43,7 @@ export function createDocumentReadTool(options?: DocumentToolOptions): Registere
   return {
     definition: {
       name: 'document_read',
+      capabilities: ['fs-read'],
       description:
         'Extract PDF/Office (docx/xlsx/pptx/legacy) to Markdown for reading. Prefer this over shell converters.',
       parameters: {
@@ -154,6 +155,7 @@ export function createDocumentProbeTool(options?: DocumentToolOptions): Register
   return {
     definition: {
       name: 'document_probe',
+      capabilities: ['fs-read'],
       description:
         'Detect document format and whether this deployment can extract it (without full parse).',
       parameters: {

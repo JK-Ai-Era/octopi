@@ -42,6 +42,7 @@ export {
 export type {
   ToolParameter,
   ToolDefinition,
+  ToolCapability,
   ToolExecutionContext,
   ToolHandler,
   RegisteredTool,

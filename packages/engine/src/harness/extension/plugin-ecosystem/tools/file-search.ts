@@ -84,6 +84,7 @@ export function createFileSearchTool(): RegisteredTool {
   return {
     definition: {
       name: 'file_search',
+      capabilities: ['fs-read'],
       description:
         'Search file contents (like grep/rg) with structured results. ' +
         'Provide `pattern` (one term) or `patterns` (any-of literals). ' +

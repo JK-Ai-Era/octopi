@@ -8,6 +8,10 @@
 import { isAbsolute, resolve } from 'node:path';
 import type { ToolIsolationMode } from './isolation.js';
 import {
+  deniesReducedSurface,
+  resolveToolCapabilities,
+} from './tool-capabilities.js';
+import {
   assessL4ProcessMinimum,
   type ProcessIsolationProfile,
 } from './process-isolation.js';
@@ -122,6 +126,11 @@ export interface EffectPolicyConfig {
   transactionRoots?: string[];
   pathContainment?: PathContainment;
   shellEscape?: ShellEscapePolicy;
+  /**
+   * Jail network posture (D4-c). Omitted = mode default:
+   * host/project → `open`, workspace/untrusted → `deny`.
+   */
+  network?: 'open' | 'deny' | 'allowlist';
   processLimits?: boolean;
   commit?: EffectCommitPolicy;
   /** commit=manual 时会话关闭/超时如何收残留 undo */
@@ -154,6 +163,8 @@ export interface EffectiveEffectPolicy {
   toolIsolation: ToolIsolationMode;
   pathContainment: PathContainment;
   shellEscape: ShellEscapePolicy;
+  /** Resolved jail network posture */
+  network: 'open' | 'deny' | 'allowlist';
   processLimits: boolean;
   commit: EffectCommitPolicy;
   onClose: 'commit' | 'discard';
@@ -184,6 +195,7 @@ const MODE_DEFAULTS: Record<EffectRunMode, ModePreset> = {
     pathContainment: 'strict',
     // 无 L4 时无法「只禁越界」：deny = 拒绝 shell 工具（fail-closed）
     shellEscape: 'deny',
+    network: 'deny',
     processLimits: true,
     commit: 'auto',
     onClose: 'commit',
@@ -196,6 +208,7 @@ const MODE_DEFAULTS: Record<EffectRunMode, ModePreset> = {
     pathContainment: 'strict',
     // 编码 agent 必须有 shell；文件侧靠 L2，shell FS 越界待 L4
     shellEscape: 'allow',
+    network: 'open',
     processLimits: true,
     commit: 'auto',
     onClose: 'commit',
@@ -207,6 +220,7 @@ const MODE_DEFAULTS: Record<EffectRunMode, ModePreset> = {
     toolIsolation: 'none',
     pathContainment: 'none',
     shellEscape: 'allow',
+    network: 'open',
     processLimits: true,
     commit: 'auto',
     onClose: 'commit',
@@ -218,6 +232,7 @@ const MODE_DEFAULTS: Record<EffectRunMode, ModePreset> = {
     toolIsolation: 'session-subdir',
     pathContainment: 'strict',
     shellEscape: 'deny',
+    network: 'deny',
     processLimits: true,
     commit: 'auto',
     onClose: 'discard',
@@ -308,6 +323,11 @@ export function resolveEffectiveEffectPolicy(
     pathContainment,
     // degraded untrusted must not leave shell allow as a hole
     shellEscape: toolSurface === 'reduced' ? 'deny' : (config.shellEscape ?? d.shellEscape),
+    // untrusted product promise: egress deny is not a config knob (like pathContainment)
+    network:
+      requestedMode === 'untrusted' || toolSurface === 'reduced'
+        ? 'deny'
+        : (config.network ?? d.network),
     processLimits: config.processLimits ?? d.processLimits,
     commit: config.commit ?? d.commit,
     onClose,
@@ -335,29 +355,16 @@ export function resolveEffectiveEffectPolicy(
 export function isToolAllowedOnSurface(
   toolName: string,
   surface: ToolSurface,
+  capabilities?: readonly string[] | null,
 ): boolean {
   if (surface === 'full') return true;
-  const n = toolName.toLowerCase();
-  // Reduced: no shell, no HTTP/web egress, no MCP/client power tools
-  const denied = [
-    'shell',
-    'bash',
-    'exec',
-    'execute',
-    'run_command',
-    'http_request',
-    'http',
-    'fetch',
-    'web_fetch',
-    'web_search',
-    'curl',
-    'wget',
-    'mcp',
-    'client_tool',
-    'send_file',
-  ];
-  return !denied.some((d) => n === d || n.startsWith(d + '.') || n.includes('mcp'));
+  // D5-a: capability tags, not names. Unknown on reduced = reject (unknown-reject).
+  const caps = resolveToolCapabilities(toolName, capabilities);
+  if (caps === null) return false;
+  return !deniesReducedSurface(caps);
 }
+
+
 
 /**
  * L2：路径是否落在 allowRoots 内

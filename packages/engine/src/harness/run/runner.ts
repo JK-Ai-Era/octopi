@@ -341,6 +341,9 @@ export class SessionAwareRunner {
   private effectMode = 'workspace';
   private effectCommitManual = false;
   private effectProcessLimits = true;
+  private effectNetwork: 'open' | 'deny' | 'allowlist' | undefined;
+  private effectRequireJail: boolean | undefined;
+  private effectHomeWrite: boolean | undefined;
   private effectShellEscape: "deny" | "confirm" | "allow" = "allow";
   private effectShellJournal: "snapshot" | "off" = "snapshot";
   private effectShellJournalLimit?: { maxFiles?: number; maxBytes?: number; maxFileSize?: number };
@@ -779,6 +782,9 @@ export class SessionAwareRunner {
         this.effectProcessLimits = eff.processLimits;
         this.effectShellEscape = eff.shellEscape;
         this.effectShellJournal = eff.shellJournal;
+        this.effectNetwork = eff.network;
+        this.effectRequireJail = eff.requestedMode === 'untrusted' && eff.mode === 'untrusted';
+        this.effectHomeWrite = eff.mode === 'project' || eff.mode === 'host';
         this.effectShellJournalLimit = eff.shellJournalLimit;
         this.effectUndoLimit = eff.undoLimit;
         // untrusted admission: reduced surface strips egress/exec tools
@@ -1030,9 +1036,13 @@ export class SessionAwareRunner {
       turnFileUndo = fileUndo;
       const {
         createUnconfiguredMemoryEffects: unconfMem,
+        resolveSessionUndoPaths,
       } = await import('../extension/execution-environment/undo-log.js');
       const fileEffects = fileUndo ?? createUnconfiguredFileEffects();
       const memoryEffects = fileUndo?.memoryEffects ?? unconfMem();
+      const undoRoots = this.config.sessionsDir
+        ? [resolveSessionUndoPaths(this.config.sessionsDir, sessionId).root]
+        : undefined;
       const runScope: RunScope = {
         sessionId,
         agentId: _agentId,
@@ -1048,6 +1058,16 @@ export class SessionAwareRunner {
           attachmentRoots,
           fileEffects,
           memoryEffects,
+          undoRoots,
+          networkPolicy: this.effectNetwork,
+          requireJail: this.effectRequireJail,
+          homeWrite: this.effectHomeWrite,
+          noteSecurityDegraded: (reason: string) => {
+            this.harness.securityDegraded = [
+              ...(this.harness.securityDegraded ?? []),
+              reason as never,
+            ];
+          },
           pathRoots: this.effectAllowRoots.length
             ? this.effectAllowRoots
             : resolvedToolCwd.cwd
