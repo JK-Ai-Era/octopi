@@ -105,12 +105,27 @@ export const FileSendConfigSchema = z.object({
   maxReleasesPerSession: z.number().int().nonnegative().optional(),
 });
 
+const ToolRightsShape = z.object({
+  /** allowlist；缺省 = 名字不限（仍受 deny 约束）。`'*'` = 全放行 */
+  allow: z.array(z.string().min(1)).optional(),
+  /** 工具名黑名单；`'*'` = 全拒绝 */
+  deny: z.array(z.string().min(1)).optional(),
+  /** 能力标签黑名单（D5-a） */
+  denyCapabilities: z.array(z.string().min(1)).optional(),
+});
+
+/**
+ * Role defaults/max rights. `toolRights` is always present after parse
+ * (omitted config → unrestricted empty bag) so TS `EffectiveSessionRights`
+ * matches without casts.
+ */
 const SessionEffectiveRightsSchema = z.object({
   canRun: z.boolean(),
   readScope: z.enum(['full', 'from_grant', 'summary_tail', 'none']),
   writeMemory: z.boolean(),
   canManageTasks: z.boolean(),
   canHandoff: z.boolean(),
+  toolRights: ToolRightsShape.default({ deny: [], denyCapabilities: [] }),
 });
 
 /**

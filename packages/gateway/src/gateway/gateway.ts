@@ -3765,6 +3765,7 @@ export class Gateway {
       sessionLease: this.sessionLease,
       sessionAcl: this.sessionAcl,
       agentMaxSessionRights: agent.maxSessionRights,
+      agentToolPolicy: agent.tools,
       // SEC-3c：credentials.requireBindings / untrusted 同源（tool context 与 store 一致）
       requireCredentialBindings:
         this.config.credentials?.requireBindings === true,

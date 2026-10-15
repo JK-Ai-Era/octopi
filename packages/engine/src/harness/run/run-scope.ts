@@ -54,6 +54,17 @@ export interface RunToolRuntime {
   /** shell 记账深度 */
   shellJournal?: "snapshot" | "off";
   shellJournalLimit?: { maxFiles?: number; maxBytes?: number; maxFileSize?: number };
+  /** SEC-2 session participant tool surface (per-run; not on shared harness) */
+  sessionToolRights?: {
+    allow?: string[];
+    deny?: string[];
+    denyCapabilities?: string[];
+  };
+  /** SEC-2 static agent tool policy (agents[].tools) */
+  agentToolPolicy?: {
+    allow?: string[];
+    deny?: string[];
+  };
 }
 
 /** 一次 Run 的作用域身份（I1） */

@@ -11,6 +11,14 @@ export {
   applyRightsOverlay,
   exceedsRightsCeiling,
 } from './rights.js';
+export {
+  EMPTY_TOOL_RIGHTS,
+  normalizeToolRights,
+  intersectToolRights,
+  toolRightsExceeds,
+  isToolAllowedByRights,
+  isToolPermitted,
+} from './tool-rights.js';
 export { SessionAclService } from './service.js';
 export type { AgentSessionAclHint } from './service.js';
 export type { PrincipalRef, SessionSwitchMode, SwitchSessionResult } from './types.js';

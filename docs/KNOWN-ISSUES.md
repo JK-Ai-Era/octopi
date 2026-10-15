@@ -13,7 +13,9 @@
 - `preferredOnly` (default true): `switch(mode=handoff)` requires `intent=admin_handoff`.
 - `filterHistory` / `appendRunAudit` / business grants remain host-callable; guest/handoff can read the same Session via first-class sessionId storage.
 
-**Still open:** distributed Session Lease implementation; session-ACL per-tool rights (ToolEffectPolicy modes / L2 containment / turn undo / host-gate / L1 limits landed in v0.73–v0.74; `SessionRights` still has no per-tool bits); role DB/console; Quota economic layer.
+**Still open:** distributed Session Lease implementation; role DB/console; Quota economic layer.
+
+**Session ACL per-tool rights (SEC-2, v0.78.0):** `SessionRights.toolRights` (`allow` / `deny` / `denyCapabilities`) intersects `agents[].tools` and `toolSurface` (narrow-only; deny wins). Enforced at tool listing and `beforeToolCall`. `agents[].maxSessionRights.toolRights` is an L1 ceiling; grant rejects expansions. Factory roles ship unrestricted tool surface; use custom roles for guest/readonly.
 
 **L4 process jail (v0.75.0–0.76.0):** capability contract, supervised spawn, bwrap/Seatbelt, and **shell wired through ProcessSandbox** (`docs/process-isolation.md`). Still open: bundled Windows Job Object / restricted-token helper; container backend. `untrusted` without L4 refuses or degrades via `untrustedAdmission`.
 

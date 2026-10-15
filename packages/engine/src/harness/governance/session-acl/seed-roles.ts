@@ -12,8 +12,17 @@ function rights(input: {
   writeMemory: boolean;
   canManageTasks: boolean;
   canHandoff: boolean;
+  toolRights?: SessionRoleDefinition['defaults']['toolRights'];
 }): SessionRoleDefinition['defaults'] {
-  return { ...input };
+  return {
+    canRun: input.canRun,
+    readScope: input.readScope,
+    writeMemory: input.writeMemory,
+    canManageTasks: input.canManageTasks,
+    canHandoff: input.canHandoff,
+    // Factory roles ship unrestricted tool surface (SEC-2: omit = no extra limit)
+    toolRights: input.toolRights ?? { allow: undefined, deny: [], denyCapabilities: [] },
+  };
 }
 
 /** Built-in five-role catalog (v1: no consultant) */

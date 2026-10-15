@@ -436,6 +436,46 @@ export async function* runAgentWithReliability(
           return { block: true, reason, terminate: false };
         }
       }
+      // SEC-2: session toolRights ∩ agent ToolPolicy (narrow-only, deny wins).
+      // Read from RunScope (per-run); harness is shared across concurrent sessions.
+      {
+        const scope = getRunScope();
+        const sessionRights = scope?.toolRuntime?.sessionToolRights;
+        const agentPolicy = scope?.toolRuntime?.agentToolPolicy;
+        if (sessionRights || agentPolicy) {
+          const { isToolPermitted } = await import(
+            '../../governance/session-acl/tool-rights.js'
+          );
+          if (
+            !isToolPermitted(ctx.toolCall.name, undefined, [
+              agentPolicy,
+              sessionRights,
+            ])
+          ) {
+            const reason = `tool_rights_denied: "${ctx.toolCall.name}" is not permitted for this session participant`;
+            state.pendingSecurityEvents.push({
+              type: 'security_blocked',
+              timestamp: Date.now(),
+              data: {
+                sessionId: scope?.sessionId,
+                agentId: scope?.agentId,
+                reason,
+                toolName: ctx.toolCall.name,
+                action: 'reject',
+                severity: 'high',
+                violations: [
+                  {
+                    type: 'unauthorized_tool',
+                    severity: 'high',
+                    description: reason,
+                  },
+                ],
+              },
+            });
+            return { block: true, reason, terminate: false };
+          }
+        }
+      }
       if (harness.security) {
         const toolCheck = harness.security.checkToolCall(ctx.toolCall);
         if (!toolCheck.isClean) {

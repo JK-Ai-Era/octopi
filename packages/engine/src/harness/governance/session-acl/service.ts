@@ -8,8 +8,10 @@ import type { Message } from '@octopi-agent/core/types.js';
 import {
   SessionRoleCatalog,
   computeEffectiveRights,
-  exceedsRightsCeiling,
 } from './rights.js';
+import {
+  toolRightsExceeds,
+} from './tool-rights.js';
 import type {
   AuthorizeRunResult,
   EffectiveSessionRights,
@@ -123,50 +125,35 @@ export class SessionAclService {
       };
     }
 
-    const candidate = computeEffectiveRights({
-      role,
-      agentMax,
-      participantRights: input.rights,
-      allowAgentInitiatedHandoff: this.allowAgentInitiatedHandoff,
-    });
-
-    // Illegal grant if candidate tries to exceed role.max ∩ agent.max on any field
+    // Ceiling = role.max ∩ agent.max (no participant overlay)
     const ceiling = computeEffectiveRights({
       role: { ...role, defaults: roleMax },
       agentMax,
       participantRights: undefined,
       allowAgentInitiatedHandoff: this.allowAgentInitiatedHandoff,
     });
-    if (exceedsRightsCeiling(candidate, ceiling) && input.rights) {
-      // overlay cannot legally raise above defaults∩max; computeEffective already ANDs
-      // but readScope overlay could raise — check explicitly
-      if (
-        input.rights.readScope &&
-        exceedsRightsCeiling(
-          {
-            ...candidate,
-            readScope: input.rights.readScope,
-          },
-          ceiling,
-        )
-      ) {
-        return { ok: false, reason: 'rights override exceeds role.max / agent.max' };
-      }
-    }
 
-    if (input.rights?.readScope) {
-      const rank: Record<string, number> = { none: 0, summary_tail: 1, from_grant: 2, full: 3 };
-      if (rank[input.rights.readScope]! > rank[ceiling.readScope]!) {
+    // Illegal grant at grant time: any explicit overlay field stronger than
+    // ceiling. Effective rights are later intersected and cannot exceed.
+    if (input.rights) {
+      const readRank: Record<string, number> = {
+        none: 0,
+        summary_tail: 1,
+        from_grant: 2,
+        full: 3,
+      };
+      const illegalRaise =
+        (input.rights.canRun === true && !ceiling.canRun) ||
+        (input.rights.writeMemory === true && !ceiling.writeMemory) ||
+        (input.rights.canManageTasks === true && !ceiling.canManageTasks) ||
+        (input.rights.canHandoff === true && !ceiling.canHandoff) ||
+        (input.rights.readScope !== undefined &&
+          readRank[input.rights.readScope]! > readRank[ceiling.readScope]!) ||
+        (input.rights.toolRights !== undefined &&
+          toolRightsExceeds(input.rights.toolRights, ceiling.toolRights));
+      if (illegalRaise) {
         return { ok: false, reason: 'rights override exceeds role.max / agent.max' };
       }
-    }
-    // boolean 提升不得越过 role.max ∩ agent.max
-    const illegalRaise =
-      (input.rights?.canRun === true && !ceiling.canRun) ||
-      (input.rights?.writeMemory === true && !ceiling.writeMemory) ||
-      (input.rights?.canManageTasks === true && !ceiling.canManageTasks);
-    if (illegalRaise) {
-      return { ok: false, reason: 'rights override exceeds role.max / agent.max' };
     }
 
     const participant: SessionParticipant = {

@@ -12,12 +12,23 @@ export const NetworkHostSchema = z.union([
 ]);
 
 /** Session 权利字段（ACL E6；agent.maxSessionRights / 角色 defaults） */
+export const ToolRightsSchema = z.object({
+  /** 工具名白名单；缺省/空 = 不限（仍受 deny 约束） */
+  allow: z.array(z.string().min(1)).optional(),
+  /** 工具名黑名单（优先于 allow） */
+  deny: z.array(z.string().min(1)).optional(),
+  /** 能力标签黑名单（exec / egress / send / dynamic-code / …，D5-a） */
+  denyCapabilities: z.array(z.string().min(1)).optional(),
+});
+
 export const SessionRightsSchema = z.object({
   canRun: z.boolean().optional(),
   readScope: z.enum(['full', 'from_grant', 'summary_tail', 'none']).optional(),
   writeMemory: z.boolean().optional(),
   canManageTasks: z.boolean().optional(),
   canHandoff: z.boolean().optional(),
+  /** SEC-2 per-tool surface；缺省不额外限制 */
+  toolRights: ToolRightsSchema.optional(),
 });
 
 export const InlinePersonaSchema = z.object({

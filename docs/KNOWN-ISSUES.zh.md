@@ -13,7 +13,9 @@
 - `preferredOnly`（默认 true）：`switch(mode=handoff)` 需要 `intent=admin_handoff`。
 - `filterHistory` / `appendRunAudit` / 业务 grant 仍供宿主调用；guest/handoff 经 sessionId 一等存储可读同一 Session。
 
-**仍开放：** 分布式 Session Lease 实现；session 级按工具授权（ToolEffectPolicy 模式 / L2 路径包含 / turn undo / host-gate / L1 限制已于 v0.73–v0.74 落地；`SessionRights` 仍无 per-tool 位）；角色 DB/控制台；Quota 经济层。
+**仍开放：** 分布式 Session Lease 实现；角色 DB/控制台；Quota 经济层。
+
+**Session ACL per-tool（SEC-2，v0.78.0）：** `SessionRights.toolRights`（`allow` / `deny` / `denyCapabilities`）与 `agents[].tools`、`toolSurface` **求交**（只收窄；deny 优先）。工具列表与 `beforeToolCall` 双闸强制。`agents[].maxSessionRights.toolRights` 为 L1 天花板，grant 拒绝非法拓宽。出厂角色工具面不限；guest/只读等用自定义角色表达。
 
 **L4 process 牢笼（v0.75.0–0.76.0）：** 能力契约 + supervised spawn + bwrap/Seatbelt，且 **shell 已统一走 ProcessSandbox**（`docs/process-isolation.zh.md`）。仍开放：自带 Windows Job Object / 受限令牌 helper；container 后端。无 L4 时 `untrusted` 经 `untrustedAdmission` 拒绝或降级。
 

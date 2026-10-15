@@ -8,8 +8,14 @@ import type {
   SessionAclConfig,
   SessionRoleDefinition,
   SessionRights,
+  ToolRights,
 } from './types.js';
 import { BUILTIN_SESSION_ROLES, L0_SESSION_RIGHTS_FLOOR } from './seed-roles.js';
+import {
+  intersectToolRights,
+  normalizeToolRights,
+  toolRightsExceeds,
+} from './tool-rights.js';
 
 const READ_SCOPE_RANK: Record<ReadScope, number> = {
   none: 0,
@@ -36,6 +42,7 @@ export function intersectRights(
     writeMemory: a.writeMemory && b.writeMemory,
     canManageTasks: a.canManageTasks && b.canManageTasks,
     canHandoff: a.canHandoff && b.canHandoff,
+    toolRights: intersectToolRights(a.toolRights, b.toolRights),
   };
 }
 
@@ -44,6 +51,7 @@ export function intersectRights(
  *
  * Binding fields that are set **replace** defaults (then clamped to max/L0/agentMax).
  * Binding may raise a default toward role.max; it may not exceed max (clamped later).
+ * `toolRights` is narrow-only at merge time via later intersection with ceilings.
  *
  * @param base - role defaults
  * @param overlay - participant override
@@ -53,13 +61,17 @@ export function applyRightsOverlay(
   base: EffectiveSessionRights,
   overlay?: SessionRights,
 ): EffectiveSessionRights {
-  if (!overlay) return { ...base };
+  if (!overlay) {
+    return { ...base, toolRights: intersectToolRights(undefined, base.toolRights) };
+  }
   return {
     canRun: overlay.canRun ?? base.canRun,
     readScope: overlay.readScope ?? base.readScope,
     writeMemory: overlay.writeMemory ?? base.writeMemory,
     canManageTasks: overlay.canManageTasks ?? base.canManageTasks,
     canHandoff: overlay.canHandoff ?? base.canHandoff,
+    // SEC-2 toolRights are narrow-only: overlay intersects base (never expands).
+    toolRights: intersectToolRights(base.toolRights, overlay.toolRights),
   };
 }
 
@@ -79,7 +91,8 @@ export function exceedsRightsCeiling(
     READ_SCOPE_RANK[value.readScope] > READ_SCOPE_RANK[ceiling.readScope] ||
     (value.writeMemory && !ceiling.writeMemory) ||
     (value.canManageTasks && !ceiling.canManageTasks) ||
-    (value.canHandoff && !ceiling.canHandoff)
+    (value.canHandoff && !ceiling.canHandoff) ||
+    toolRightsExceeds(value.toolRights, ceiling.toolRights)
   );
 }
 
@@ -95,18 +108,43 @@ export class SessionRoleCatalog {
    * @param config - sessionAcl config; omitted → builtin only
    */
   constructor(config?: SessionAclConfig) {
+    // Preserve deny-all `allow: []`; empty config allow stays unrestricted.
+    const copyFull = (r: EffectiveSessionRights): EffectiveSessionRights => ({
+      ...r,
+      toolRights: intersectToolRights(undefined, r.toolRights),
+    });
+    // max.toolRights omitted → inherit defaults (do not silently open the ceiling)
+    const copyMax = (
+      max: EffectiveSessionRights | undefined,
+      defaults: EffectiveSessionRights,
+    ): EffectiveSessionRights => {
+      if (!max) return copyFull(defaults);
+      const m = copyFull(max);
+      if (max.toolRights === undefined) {
+        m.toolRights = intersectToolRights(undefined, defaults.toolRights);
+      }
+      return m;
+    };
     for (const role of BUILTIN_SESSION_ROLES) {
-      this.roles.set(role.id, { ...role, defaults: { ...role.defaults }, max: role.max ? { ...role.max } : { ...role.defaults } });
+      const defaults = copyFull(role.defaults);
+      this.roles.set(role.id, {
+        ...role,
+        defaults,
+        max: copyMax(role.max, role.defaults),
+      });
     }
     if (config?.roles) {
       for (const role of config.roles) {
         const prev = this.roles.get(role.id);
+        const defaults = copyFull(role.defaults);
         this.roles.set(role.id, {
           id: role.id,
           description: role.description ?? prev?.description,
           isBuiltin: prev?.isBuiltin ?? false,
-          defaults: { ...role.defaults },
-          max: role.max ? { ...role.max } : (prev?.max ? { ...prev.max } : { ...role.defaults }),
+          defaults,
+          max: role.max
+            ? copyMax(role.max, role.defaults)
+            : (prev?.max ? copyFull(prev.max) : copyMax(undefined, role.defaults)),
         });
       }
     }
@@ -165,14 +203,21 @@ export function computeEffectiveRights(input: {
     writeMemory: input.agentMax?.writeMemory ?? true,
     canManageTasks: input.agentMax?.canManageTasks ?? true,
     canHandoff: input.agentMax?.canHandoff ?? true,
+    // undefined → unrestricted; preserve explicit allow:[] deny-all
+    toolRights: intersectToolRights(undefined, input.agentMax?.toolRights),
   };
   // L0：canHandoff 不是永久 false 交集项；由引擎策略 + role.max 决定（I3）
   const l0: EffectiveSessionRights = {
     ...L0_SESSION_RIGHTS_FLOOR,
+    toolRights: intersectToolRights(undefined, L0_SESSION_RIGHTS_FLOOR.toolRights),
     canHandoff: input.allowAgentInitiatedHandoff === true,
   };
+  const roleMaxFull: EffectiveSessionRights = {
+    ...roleMax,
+    toolRights: intersectToolRights(undefined, roleMax.toolRights),
+  };
   const effective = intersectRights(
-    intersectRights(intersectRights(l0, roleMax), agentCeiling),
+    intersectRights(intersectRights(l0, roleMaxFull), agentCeiling),
     merged,
   );
   return effective;

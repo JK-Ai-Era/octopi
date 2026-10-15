@@ -319,6 +319,32 @@
               },
               "canHandoff": {
                 "type": "boolean"
+              },
+              "toolRights": {
+                "type": "object",
+                "properties": {
+                  "allow": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "deny": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "denyCapabilities": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  }
+                }
               }
             }
           },
@@ -2615,6 +2641,36 @@
                   },
                   "canHandoff": {
                     "type": "boolean"
+                  },
+                  "toolRights": {
+                    "default": {
+                      "deny": [],
+                      "denyCapabilities": []
+                    },
+                    "type": "object",
+                    "properties": {
+                      "allow": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "deny": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "denyCapabilities": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      }
+                    }
                   }
                 },
                 "required": [
@@ -2648,6 +2704,36 @@
                   },
                   "canHandoff": {
                     "type": "boolean"
+                  },
+                  "toolRights": {
+                    "default": {
+                      "deny": [],
+                      "denyCapabilities": []
+                    },
+                    "type": "object",
+                    "properties": {
+                      "allow": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "deny": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "denyCapabilities": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      }
+                    }
                   }
                 },
                 "required": [

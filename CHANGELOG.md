@@ -1,3 +1,36 @@
+## v0.78.0
+
+### feat(security): SEC-2 SessionRights per-tool surface
+
+**问题**：`SessionRights` 只有 `canRun / readScope / writeMemory / canManageTasks / canHandoff`，无法表达「guest 禁 shell / 审核员只读工具 / handoff 后禁 http」。工具面授权散在 `tools.allow/deny`（per-agent）与 CapabilityEnforcer（per-plugin），与会话参与者不求交。
+
+**拍板**（`arch/security-open-issues.md` SEC-2）：粒度做工具名 allow/deny + `denyCapabilities`（D5-a），不做参数级；四轴 narrow-only 求交（deny 并集、allow 交集）；与 `maxSessionRights` 同格叠加（overlay 只收窄，grant 拒非法拓宽）；出厂五角色默认不限工具面。版本 v0.78.0。
+
+**调整**：
+
+- **`session-acl/tool-rights.ts`**：`ToolRights` 代数（normalize / intersect / exceeds / `isToolPermitted`）；能力标签 deny 与 `isToolAllowedOnSurface` 同语言。
+- **`session-acl/types.ts` + `rights.ts` + `service.ts`**：`SessionRights.toolRights` / `EffectiveSessionRights.toolRights` 进 E6 `L0 ∩ role.max ∩ agent.max ∩ binding`；`exceedsRightsCeiling` / grant illegal-raise 覆盖 toolRights。
+- **Runner `filterToolsForSessionRights`**：run 工具列表按 `agents[].tools ∩ sessionToolRights` 过滤；`run-agent.ts` `beforeToolCall` 硬闸（`tool_rights_denied`）防幻觉工具名。
+- **接线**：ReliabilityHarness `sessionToolRights` / `agentToolPolicy`；gateway 传 `agent.tools`；config-bridge 传 `agentConfig.tools` + `maxSessionRights`；`builder.runnerConfig` 改为浅合并。
+- **schema**：`SessionRightsSchema.toolRights` / `SessionEffectiveRightsSchema.toolRights`（`octopi.schema.json` 已再生）。
+- **文档**：`arch/security-open-issues.md` SEC-2 结论、`arch/session-acl.md` guest/readonly 示例、`arch/NEXT-STEPS.md`、`docs/KNOWN-ISSUES.*` EN+ZH。
+
+**审查修复（独立 review 后）**：
+
+- **allow 求交 fail-open**：不相交 allowlist 交集为空时曾被 normalize 成 unrestricted；现保留 `allow: []`=deny-all，仅输入侧空 allow 视为不限；`*` 参与交集。
+- **harness 竞态**：`sessionToolRights` 不再写共享 ReliabilityHarness；改挂 `RunScope.toolRuntime`（beforeToolCall 读 ALS），列表过滤用 run 局部变量。
+- **denyCapabilities fail-open**：能力未知（未标注工具）时改为拒绝，对齐 reduced unknown-reject。
+- **toolRightsExceeds 误杀**：窄 allowlist 无需复述 ceiling deny；按「是否放行 ceiling 所禁工具」判定。
+- **overlay 只收窄**：`applyRightsOverlay` 对 toolRights 改为与 defaults 求交（不再整包 replace）；`max.toolRights` 缺省继承 defaults，不静默放开。
+- **`deny: ['*']` = 全拒绝**（与 `allow: ['*']` 对称）；ToolBus.resolve 同步。不留兼容双语义。
+- **grant 校验收敛**：删除近乎死代码的 `exceedsRightsCeiling(candidate)` 块，统一为「raw overlay vs ceiling」一次判定。
+- **Zod/TS 对齐**：`SessionEffectiveRightsSchema.toolRights` 默认填空袋，解析后必有值，与 `EffectiveSessionRights` 必填一致。
+- **运行时回归**：beforeToolCall `tool_rights_denied` 拦截 + 双 session 并发 toolRights 不串扰。
+
+**测试**：`tests/harness/sec2-session-tool-rights.test.ts`（代数 / E6 求交 / grant 钳制 / authorizeRun / 回归）。harness 套件全绿。
+
+---
+
 ## v0.77.0
 
 ### feat(security): SEC-3 egress SSRF gate, connect-time DNS re-validation, credential bindings

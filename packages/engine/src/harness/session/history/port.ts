@@ -110,6 +110,7 @@ export function resolveHistoryAccess(
       writeMemory: true,
       canManageTasks: true,
       canHandoff: false,
+      toolRights: { allow: undefined, deny: [], denyCapabilities: [] },
     };
     const rights = computeEffectiveRights({
       role: { id: 'owner', defaults: ownerDefaults, max: ownerDefaults },

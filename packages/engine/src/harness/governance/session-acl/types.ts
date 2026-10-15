@@ -6,6 +6,25 @@
 /** Information visibility for a Run on a Session */
 export type ReadScope = 'full' | 'from_grant' | 'summary_tail' | 'none';
 
+/**
+ * Per-tool surface on a session (SEC-2).
+ *
+ * Omitted fields mean "no extra restriction on this axis". Layers
+ * **intersect** (narrow-only): deny lists union, allow lists intersect.
+ * `'*'` in `allow` or `deny` is a wildcard (all names).
+ * Capability denies strip any tool carrying that capability tag (D5-a).
+ * After normalization/intersection: `allow: undefined` = names unrestricted,
+ * `allow: []` = deny-all names (empty intersection, never folded open).
+ */
+export interface ToolRights {
+  /** Allowlist of tool names. `'*'` = all. Omitted = unrestricted names. */
+  allow?: string[];
+  /** Tool-name denials (always win). `'*'` = deny all names. */
+  deny?: string[];
+  /** Capability-tag denials (exec / egress / send / dynamic-code / …). */
+  denyCapabilities?: string[];
+}
+
 /** Session participation rights (partial overrides allowed) */
 export interface SessionRights {
   canRun?: boolean;
@@ -15,6 +34,8 @@ export interface SessionRights {
   canManageTasks?: boolean;
   /** Factory roles all false; host-controlled handoff only by default */
   canHandoff?: boolean;
+  /** Per-tool / per-capability surface (SEC-2); omit = no extra restriction */
+  toolRights?: ToolRights;
 }
 
 /** Full rights used for effective intersection */
@@ -24,6 +45,8 @@ export interface EffectiveSessionRights {
   writeMemory: boolean;
   canManageTasks: boolean;
   canHandoff: boolean;
+  /** Resolved tool surface (never undefined; empty = unrestricted) */
+  toolRights: ToolRights;
 }
 
 /** Role catalog entry (config seed or host override) */

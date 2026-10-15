@@ -44,6 +44,8 @@ import {
   InProcessSessionLock,
   type SessionLease,
 } from './concurrency/session-lease.js';
+import { isToolPermitted } from '../governance/session-acl/tool-rights.js';
+import { resolveToolCapabilities } from '../extension/execution-environment/tool-capabilities.js';
 
 /** 运行器配置 */
 export interface SessionAwareRunnerConfig {
@@ -105,6 +107,11 @@ export interface SessionAwareRunnerConfig {
    * 来自 AgentDefinition.maxSessionRights；authorizeRun 时取交集。
    */
   agentMaxSessionRights?: import('../governance/session-acl/types.js').SessionRights;
+  /**
+   * Agent 静态工具策略（agents[].tools allow/deny）。
+   * 与 sessionToolRights 求交；deny 优先（SEC-2）。
+   */
+  agentToolPolicy?: import('@octopi-agent/core/types.js').ToolPolicy;
   /** 产品 Observer 通道（Run 现场快照；缺省不采集） */
   observerHub?: import('../observability/observer/hub.js').ObserverHub;
   /**
@@ -654,6 +661,9 @@ export class SessionAwareRunner {
 
       // E6：可选 ACL（注入时才强制）；primary 自动 owner；带入 agent 天花板
       const acl = this.config.sessionAcl;
+      let sessionToolRights:
+        | import('../governance/session-acl/types.js').ToolRights
+        | undefined;
       if (acl) {
         const auth = acl.authorizeRun({
           session,
@@ -670,7 +680,11 @@ export class SessionAwareRunner {
           } as never;
           return;
         }
+        sessionToolRights = auth.rights?.toolRights;
       }
+      // SEC-2: keep rights on this run only (harness is shared across sessions)
+      const runToolRights = sessionToolRights;
+      const runToolPolicy = this.config.agentToolPolicy;
 
       // 4. 上下文租约（opt-in；只标截断点，不改 Discourse）
       this.applyContextLease(session);
@@ -835,7 +849,11 @@ export class SessionAwareRunner {
         systemPrompt: '',
         messages: session.messages,
         // 会话级 tool 面：Client Tool 无 live client 时不进 LLM 列表
-        tools: this.agent.toolsForSession(sessionId),
+        tools: this.filterToolsForSessionRights(
+          this.agent.toolsForSession(sessionId),
+          runToolRights,
+          runToolPolicy,
+        ),
       };
       // 播种压缩状态（E4 键 = sessionId × agentId）；供 convertToLlm / 重启重建
       this.agent.setSessionCompactState(
@@ -1088,6 +1106,8 @@ export class SessionAwareRunner {
           shellEscape: this.effectShellEscape,
           shellJournal: this.effectShellJournal,
           shellJournalLimit: this.effectShellJournalLimit,
+          sessionToolRights: runToolRights,
+          agentToolPolicy: runToolPolicy,
         },
       };
 
@@ -1676,6 +1696,25 @@ export class SessionAwareRunner {
    */
   private async acquireLock(sessionId: string, signal?: AbortSignal): Promise<() => void> {
     return this.sessionLease.acquire(sessionId, signal ? { signal } : undefined);
+  }
+
+  /**
+   * SEC-2: strip tools by agent ToolPolicy ∩ sessionToolRights (narrow-only).
+   * Listing filter; beforeToolCall repeats the same check as defense-in-depth.
+   * Rights are passed per-run (harness is shared across concurrent sessions).
+   */
+  private filterToolsForSessionRights(
+    tools: import('@octopi-agent/core/loop/types.js').AgentTool[],
+    sessionToolRights?: import('../governance/session-acl/types.js').ToolRights,
+    agentToolPolicy?: import('@octopi-agent/core/types.js').ToolPolicy,
+  ): import('@octopi-agent/core/loop/types.js').AgentTool[] {
+    if (!agentToolPolicy && !sessionToolRights) return tools;
+    return tools.filter((t) =>
+      isToolPermitted(t.name, resolveToolCapabilities(t.name), [
+        agentToolPolicy,
+        sessionToolRights,
+      ]),
+    );
   }
 
   /**

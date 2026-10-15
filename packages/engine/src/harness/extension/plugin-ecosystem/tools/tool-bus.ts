@@ -128,7 +128,12 @@ export class DefaultToolBus implements ToolBus {
       }
       if (policy.deny && policy.deny.length > 0) {
         const denySet = new Set(policy.deny);
-        tools = tools.filter(t => !denySet.has(t.definition.name));
+        // deny '*' = deny every tool (mirror allow '*')
+        if (denySet.has('*')) {
+          tools = [];
+        } else {
+          tools = tools.filter(t => !denySet.has(t.definition.name));
+        }
       }
     }
 

@@ -330,6 +330,14 @@ async function buildAgent(
     builder.runnerConfig({ idleExpiryMs: shared.sessionIdleExpiryMs });
   }
 
+  // SEC-2 / E6: agent tool policy + optional session rights ceiling
+  if (agentConfig.tools || agentConfig.maxSessionRights) {
+    builder.runnerConfig({
+      agentToolPolicy: agentConfig.tools,
+      agentMaxSessionRights: agentConfig.maxSessionRights,
+    });
+  }
+
   // ── Home / Persona ──
   // home 是 agent 文件态持久目录（persona/skills）；session 在 OCTOPI_HOME/sessions；
   // memory/wisdom 走 AgentDatabase SQLite，不在此目录树下。

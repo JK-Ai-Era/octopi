@@ -440,10 +440,17 @@ export {
   applyRightsOverlay,
   exceedsRightsCeiling,
   L0_SESSION_RIGHTS_FLOOR,
+  EMPTY_TOOL_RIGHTS,
+  normalizeToolRights,
+  intersectToolRights,
+  toolRightsExceeds,
+  isToolAllowedByRights,
+  isToolPermitted,
 } from './governance/session-acl/index.js';
 export type {
   SessionRights,
   EffectiveSessionRights,
+  ToolRights,
   SessionRoleDefinition,
   SessionParticipant,
   SessionAclConfig,

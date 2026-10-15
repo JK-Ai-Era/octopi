@@ -1080,9 +1080,9 @@ export class AgentBuilder {
     return this;
   }
 
-  /** 设置 Runner 配置 */
+  /** 设置 Runner 配置（浅合并，便于多次补充字段） */
   runnerConfig(config: SessionAwareRunnerConfig): this {
-    this._runnerConfig = config;
+    this._runnerConfig = { ...this._runnerConfig, ...config };
     if (config.observerHub) {
       this._observerHub = config.observerHub;
     }
@@ -1268,6 +1268,7 @@ export class AgentBuilder {
       sessionLease: this._runnerConfig?.sessionLease,
       sessionAcl: this._runnerConfig?.sessionAcl,
       agentMaxSessionRights: this._runnerConfig?.agentMaxSessionRights,
+      agentToolPolicy: this._runnerConfig?.agentToolPolicy,
       observerHub: this._observerHub ?? this._runnerConfig?.observerHub,
       sessionTaskService,
       events,
