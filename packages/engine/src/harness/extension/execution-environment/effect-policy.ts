@@ -55,6 +55,20 @@ export type EffectIntent =
       cwd?: string;
     }
   | {
+      /** project_run / package_install — executes workspace-defined scripts. Not shellEscape-gated. */
+      kind: 'runner';
+      command: string;
+      cwd?: string;
+      description?: string;
+    }
+  | {
+      /** Local VCS porcelain (git). Not shellEscape-gated. */
+      kind: 'vcs';
+      operation: string;
+      cwd?: string;
+      description?: string;
+    }
+  | {
       kind: 'memory.write';
       domain: 'memory' | 'cognition' | 'wisdom';
       transactional: true;
@@ -413,6 +427,8 @@ export async function gateEffect(
       );
     }
   }
+  // `runner` / `vcs` are dedicated allowlisted tools, not arbitrary shell.
+  // shellEscape gates the shell tool only — workspace stays capable of git/project scripts.
 
   if (options.effects !== 'host-gate') {
     // engine 通道：路径牢笼由 L2 承担；shell 已在上方按 shellEscape 处理

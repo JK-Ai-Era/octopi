@@ -6,7 +6,7 @@
  */
 
 import { accessSync, constants, existsSync, statSync } from 'node:fs';
-import { delimiter, isAbsolute, join, resolve, sep } from 'node:path';
+import { delimiter, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 
 /** 平台 shell 方言 */
 export type ShellKind = 'bash' | 'powershell' | 'cmd';
@@ -177,8 +177,16 @@ export function findExecutable(name: string): string | null {
     const hasOwnExt = pathExt.some((e) => lower.endsWith(e.toLowerCase()));
 
     for (const dir of dirs) {
-      const candidates = hasOwnExt ? [name] : [name, ...pathExt.map((e) => name + e)];
-      for (const candidate of candidates) {
+      // Prefer real PE via PATHEXT (.EXE/.COM) over extensionless shims and
+      // .CMD/.BAT (Node ≥18.20 refuses spawn of .cmd/.bat — CVE-2024-27980).
+      const ordered = hasOwnExt
+        ? [name]
+        : [
+            ...pathExt.filter((e) => !/^\.(cmd|bat)$/i.test(e)).map((e) => name + e),
+            ...pathExt.filter((e) => /^\.(cmd|bat)$/i.test(e)).map((e) => name + e),
+            name,
+          ];
+      for (const candidate of ordered) {
         const full = join(dir, candidate);
         if (isExecutableFile(full)) return full;
       }
@@ -201,6 +209,95 @@ export function findExecutable(name: string): string | null {
  */
 export function commandExists(name: string): boolean {
   return findExecutable(name) !== null;
+}
+
+/**
+ * Resolve a Node-based CLI (npm / pnpm / yarn) to a spawnable argv head.
+ *
+ * Windows never spawns `.cmd`/`.bat` directly (Node ≥18.20 throws EINVAL,
+ * CVE-2024-27980). Prefer `node <package-cli.js>` when the shim layout is
+ * known; otherwise fall back to the resolved path only when it is a real PE.
+ *
+ * @param name - tool name (`npm` | `pnpm` | `yarn`)
+ * @returns executable + prefix args inserted before user args
+ */
+export function resolveNodeToolCommand(name: string): {
+  executable: string;
+  prefixArgs: string[];
+} {
+  const found = findExecutable(name);
+  if (!found) {
+    throw new Error(
+      `${name}_not_found: "${name}" is not on PATH. Install it on the host or use package_edit / file tools instead.`,
+    );
+  }
+  const lower = found.toLowerCase();
+  const isCmdShim = lower.endsWith('.cmd') || lower.endsWith('.bat');
+  // Extensionless shims on Windows (e.g. the bash `npm` script) are not spawnable as PE.
+  const looksLikeScript =
+    process.platform === 'win32' && (isCmdShim || (!lower.endsWith('.exe') && !lower.endsWith('.com')));
+
+  if (!looksLikeScript) {
+    return { executable: found, prefixArgs: [] };
+  }
+
+  const dir = dirname(found);
+  const node = findExecutable('node') ?? process.execPath;
+  const jsCandidates = [
+    join(dir, 'node_modules', name, 'bin', `${name}-cli.js`),
+    join(dir, 'node_modules', name, 'bin', `${name}.js`),
+    join(dir, 'node_modules', name, 'bin', `${name}.cjs`),
+    join(dir, 'node_modules', name, 'lib', 'cli.js'),
+    join(dir, '..', 'node_modules', name, 'bin', `${name}-cli.js`),
+    join(dir, '..', 'lib', name, 'bin', `${name}-cli.js`),
+  ];
+  for (const candidate of jsCandidates) {
+    if (existsSync(candidate)) {
+      return { executable: node, prefixArgs: [candidate] };
+    }
+  }
+
+  throw new Error(
+    `${name}_windows_spawn_unsupported: cannot resolve "${found}" to a node JS entry (CVE-2024-27980 forbids spawning .cmd). Run the install manually on the host, or use a ${name} installed as a real PE.`,
+  );
+}
+
+/**
+ * Minimal platform env for child processes (allowlist-shaped; no secret inherit).
+ * Only keys already accepted by `scrubEnv` are included.
+ *
+ * @returns env map with PATH plus OS essentials when present
+ */
+export function defaultChildEnv(): Record<string, string> {
+  const keys = [
+    'HOME',
+    'USERPROFILE',
+    'HOMEDRIVE',
+    'HOMEPATH',
+    'TMP',
+    'TEMP',
+    'TMPDIR',
+    'LANG',
+    'LC_ALL',
+    'LC_CTYPE',
+    'TZ',
+    'SHELL',
+    'TERM',
+    'COMSPEC',
+    'PATHEXT',
+    'SYSTEMROOT',
+    'SystemRoot',
+    'WINDIR',
+    'windir',
+    'USER',
+    'LOGNAME',
+  ];
+  const out: Record<string, string> = { PATH: defaultPathEnv() };
+  for (const k of keys) {
+    const v = process.env[k];
+    if (v !== undefined) out[k] = v;
+  }
+  return out;
 }
 
 function unixShell(): PlatformShell {

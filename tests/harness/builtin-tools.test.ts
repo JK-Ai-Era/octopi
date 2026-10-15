@@ -570,7 +570,7 @@ describe('env_info', () => {
 // ── getBuiltinTools ──
 
 describe('getBuiltinTools', () => {
-  it('should return 14 pure builtin tools (zero dependency)', () => {
+  it('should return pure builtin tools (zero dependency) including git/package', () => {
     const tools = getBuiltinTools();
     const names = tools.map((t) => t.definition.name);
 
@@ -588,7 +588,13 @@ describe('getBuiltinTools', () => {
     expect(names).toContain('file_rmdir');
     expect(names).toContain('http_request');
     expect(names).toContain('env_info');
-    expect(tools.length).toBe(14);
+    expect(names).toContain('git_status');
+    expect(names).toContain('git_commit');
+    expect(names).toContain('package_edit');
+    expect(names).toContain('project_run');
+    expect(names).toContain('package_install');
+    // 14 legacy pure + 7 git_* + 3 package_*
+    expect(tools.length).toBe(24);
   });
 
   it('registers shell last so models prefer dedicated tools', () => {

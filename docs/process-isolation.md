@@ -1,4 +1,4 @@
-# Process Isolation & `untrusted`
+﻿# Process Isolation & `untrusted`
 
 > Public contract for process-level sandboxing (L4 process tier) and the
 > `untrusted` effect mode. Related: ToolEffectPolicy / invariant I5 in
@@ -11,21 +11,21 @@ missing.
 
 ---
 
-## 1. What “process sandbox” means here
+## 1. What —減rocess sandbox—?means here
 
 A process jail is a **capability profile**, not a single OS API. Every run reports
-the isolation it actually enforced — never the name of a class.
+the isolation it actually enforced —?never the name of a class.
 
 | Capability | Meaning |
 |------------|---------|
-| `processTree` | `supervised` / `killable` / `contained` — can the tree be killed as a unit? |
+| `processTree` | `supervised` / `killable` / `contained` —?can the tree be killed as a unit? |
 | `filesystem` | `none` / `cwd-pin` / `write-jailed` / `write-jailed-best-effort` / `root-jailed` |
 | `resources` | `none` / `best-effort` / `os-enforced` (time, output, memory) |
 | `network` | `open` / `deny` / `allowlist` (**not** part of the L4 floor) |
 | `privilege` | `same` / `dropped` |
 | `envHygiene` | `inherit` / `scrubbed` |
 
-**L4 process minimum** (must all hold to call a run “process-jailed”):
+**L4 process minimum** (must all hold to call a run —減rocess-jailed—?:
 
 1. `processTree` is `killable` or `contained`
 2. `filesystem` is `write-jailed`, `write-jailed-best-effort`, or `root-jailed`
@@ -60,13 +60,13 @@ when probed, supervised spawn otherwise). There is no second spawn path.
 
 **Jail roots and network (D4).** `SandboxConfig.allowRoots` (falls back to cwd)
 are bind-mounted / write-allowed inside the jail (`--bind-try`). Network posture
-is `open | deny | allowlist`. **Mode defaults:** `host` / `project` → `open`;
-`workspace` / `untrusted` → `deny` (reduced surface always `deny`).
+is `open | deny | allowlist`. **Mode defaults:** `host` / `project` → ?`open`;
+`workspace` / `untrusted` → ?`deny` (reduced surface always `deny`).
 `allowlist` is interface-only and enforced as `deny` with an honest note.
 
 **macOS Seatbelt (D3).** At execute time Octopi generates a Seatbelt profile
 covering `allowRoots` and the network posture, writes it to a temp file (`0600`),
-and runs `sandbox-exec -f <profile> -- …`. `OCTOPI_SB_PROFILE` remains a host
+and runs `sandbox-exec -f <profile> -- —. `OCTOPI_SB_PROFILE` remains a host
 override. `write-jailed` is only reported when a profile is actually applied.
 
 **Jail setup failure (D7).** If a jail backend was selected but cannot be applied:
@@ -75,16 +75,16 @@ running unsandboxed; other modes fall back to supervised spawn, report
 `cwd-pin` + `jail_setup_failed`, and notify the run-level `securityDegraded` hook.
 
 **Privilege (`dropped`)** means the jail **denies privilege-gaining operations**
-(user namespace and/or Seatbelt `process-exec` denials for `sudo`/`su`/…).
+(user namespace and/or Seatbelt `process-exec` denials for `sudo`/`su`/—?.
 It does **not** require a different uid. Notes record `userns` vs
 `ops-denied; uid unchanged`.
 
-**Jail write mounts (2).** `allowRoots` ∪ cwd ∪ `os.tmpdir()` are writable in
+**Jail write mounts (2).** `allowRoots` 鈭?cwd 鈭?`os.tmpdir()` are writable in
 every mode; `$HOME` is writable only for `project` / `host`
 (`SandboxConfig.homeWrite`). **tmp writes are not journaled** (`notReversed`).
 System trees remain read-only.
 
-**untrusted egress** is always `deny` — `effectPolicy.network` cannot open it
+**untrusted egress** is always `deny` —?`effectPolicy.network` cannot open it
 (product promise, same class as `pathContainment`).
 
 
@@ -105,11 +105,11 @@ passes only `PATH`. Host secrets (`*_API_KEY`, `*_TOKEN`) must not ride along.
 
 Three questions must all hold:
 
-1. **Containment** — cannot mutate outside transaction roots (L2 + shell policy)
-2. **Exfiltration** — cannot phone home or abuse host credentials (tool surface + env scrub)
-3. **Recoverability** — effects can be undone (L3 turn undo + `onClose: discard`)
+1. **Containment** —?cannot mutate outside transaction roots (L2 + shell policy)
+2. **Exfiltration** —?cannot phone home or abuse host credentials (tool surface + env scrub)
+3. **Recoverability** —?effects can be undone (L3 turn undo + `onClose: discard`)
 
-There is **no** “degraded untrusted” label. If process jail is missing, the
+There is **no** —渄egraded untrusted—?label. If process jail is missing, the
 system either refuses or **renames** the effective mode and **reduces power**.
 
 ---
@@ -137,15 +137,27 @@ system either refuses or **renames** the effective mode and **reduces power**.
 | `requestedMode` | `untrusted` (audit trail) |
 | `mode` (effective) | `workspace` |
 | `toolSurface` | `reduced` |
-| `securityDegraded` | e.g. `["no_process_jail", …]` |
+| `securityDegraded` | e.g. `["no_process_jail", —` |
 | UI / Observer | Show **effective** mode, never the requested name |
 
 `toolSurface: reduced` keeps content tools under L2 and **strips by capability
 tags** (`ToolDefinition.capabilities`), not by display name:
 
 - `exec` (shell and any executor; also forced `shellEscape: deny`)
-- `egress` (`http_request`, `web_search`, MCP/client channels)
+- `egress` (`http_request`, `web_search`, MCP/client channels, `package_install`)
 - `send` / `dynamic-code`
+- `runner` (`project_run` — executes workspace-defined scripts)
+
+**Not stripped:** `vcs` (local git porcelain: `git_status`/`git_diff`/`git_log`/
+`git_show`/`git_commit`/`git_branch`/`git_restore`). These tools spawn `git`
+with a fixed argv allowlist — not a shell — so workspace and untrusted agents
+can still review and commit without `shell`. Isolation measures: nonexistent
+`core.hooksPath`, `--no-verify` on commit, command-line `-c` overrides for
+`diff.external` / `gpg.program` / `core.sshCommand` / … (command line beats
+local `.git/config`), and `GIT_CONFIG_NOSYSTEM` + `GIT_CONFIG_GLOBAL/SYSTEM`
+pointed at `NUL`/`/dev/null`. Filter drivers (`filter.*`) discovered from config are pinned to `cat` before `git add`/`commit`, so a malicious `.gitattributes` cannot run clean/smudge/process.
+`shellEscape` gates the shell tool only; it does not block `vcs`/`runner`
+effect kinds.
 
 Unknown or untagged tools are **rejected** on the reduced surface
 (unknown-reject). Builtins are fully tagged.
@@ -234,7 +246,7 @@ DELETE /api/v1/sessions/:id/effect-roots?path=...
 - **Not** a container runtime; container isolation remains an opt-in slot.
 - **Not** syscall filtering (seccomp) as a product floor.
 - **Not** network isolation as part of L4 process minimum (`network: open` is common).
-- **Not** that supervised spawn equals a process jail — it does not.
-- **Not** that `untrusted` works on every host — it requires L4 or explicit degrade.
+- **Not** that supervised spawn equals a process jail —?it does not.
+- **Not** that `untrusted` works on every host —?it requires L4 or explicit degrade.
 
 For third-party skills and marketplace plugins, prefer `untrustedAdmission: refuse`.

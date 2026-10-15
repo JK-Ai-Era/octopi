@@ -24,6 +24,8 @@ import { gateEffect } from '../../execution-environment/effect-policy.js';
 import { createFileEditTool } from './file-edit.js';
 import { createFileSearchTool } from './file-search.js';
 import { createFileOpsTools } from './file-ops.js';
+import { createGitTools } from './git-tools.js';
+import { createPackageTools } from './package-tools.js';
 import { createHttpRequestTool } from './http.js';
 import { createEnvInfoTool } from './env-info.js';
 import { createDocumentProbeTool, createDocumentReadTool } from './document-tools.js';
@@ -68,7 +70,7 @@ export function createShellTool(options?: {
     definition: {
       name: 'shell',
       capabilities: ['exec'],
-      description: `LAST RESORT shell. Prefer a dedicated tool when one covers the job (file_read/file_list/file_write/file_edit/file_delete/file_mkdir/file_rename/file_copy/file_stat/file_rmdir/file_search/env_info and any task-specific tools). Use shell only when: no dedicated tool covers the operation, the dedicated tool is unavailable, or it still fails after a correct retry (wrong path/args → fix and retry the tool first). Never use shell instead of a working dedicated tool. Detected shell: ${shell.label}. ${syntaxHint}`,
+      description: `LAST RESORT shell. Prefer a dedicated tool when one covers the job (file_read/file_list/file_write/file_edit/file_delete/file_mkdir/file_rename/file_copy/file_stat/file_rmdir/file_search/env_info/git_status/git_diff/git_log/git_show/git_commit/git_branch/git_restore/package_edit/project_run/package_install and any task-specific tools). Use shell only when: no dedicated tool covers the operation, the dedicated tool is unavailable, or it still fails after a correct retry (wrong path/args → fix and retry the tool first). Never use shell instead of a working dedicated tool. Detected shell: ${shell.label}. ${syntaxHint}`,
       parameters: {
         command: {
           type: 'string',
@@ -827,6 +829,8 @@ export function getBuiltinTools(options?: {
     createFileEditTool(),
     createFileSearchTool(),
     ...createFileOpsTools(),
+    ...createGitTools(),
+    ...createPackageTools(),
     ...(options?.documentPort
       ? [
           createDocumentReadTool({

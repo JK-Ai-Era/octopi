@@ -1,7 +1,11 @@
 /**
  * Tool capability tags (D5-a). Reduced surface strips `exec` / `egress` /
- * `send` / `dynamic-code`. Name-based fallback is only for builtins that are
- * listed here; unknown tools are rejected on reduced (unknown-reject).
+ * `send` / `dynamic-code` / `runner`. Name-based fallback is only for builtins
+ * that are listed here; unknown tools are rejected on reduced (unknown-reject).
+ *
+ * `vcs` is intentionally **not** stripped: local git porcelain (fixed argv
+ * allowlist, hooks disabled) stays available so workspace/untrusted agents can
+ * still commit/diff without a shell.
  */
 
 import type { ToolCapability } from '@octopi-agent/core/types.js';
@@ -14,6 +18,8 @@ export const REDUCED_DENIED_CAPABILITIES = [
   'egress',
   'send',
   'dynamic-code',
+  /** project_run executes workspace-defined scripts (code execution) */
+  'runner',
 ] as const satisfies readonly ToolCapability[];
 
 /**
@@ -33,6 +39,18 @@ export const BUILTIN_TOOL_CAPABILITIES: Record<string, ToolCapability[]> = {
   file_rename: ['fs-write'],
   file_copy: ['fs-write', 'fs-read'],
   file_stat: ['fs-read'],
+  // Local VCS porcelain (spawn git argv allowlist; hooks disabled)
+  git_status: ['vcs', 'fs-read'],
+  git_diff: ['vcs', 'fs-read'],
+  git_log: ['vcs', 'fs-read'],
+  git_show: ['vcs', 'fs-read'],
+  git_commit: ['vcs', 'fs-write'],
+  git_branch: ['vcs', 'fs-write'],
+  git_restore: ['vcs', 'fs-write'],
+  // Package / project tooling
+  package_edit: ['fs-write', 'fs-read'],
+  project_run: ['runner'],
+  package_install: ['egress', 'runner'],
   document_read: ['fs-read'],
   document_probe: ['fs-read'],
   env_info: ['fs-read'],

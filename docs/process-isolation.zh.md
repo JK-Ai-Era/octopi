@@ -118,12 +118,22 @@ locale、shell/OS 基础项）。宿主密钥（`*_API_KEY`、`*_TOKEN` 等）**
 | `securityDegraded` | 如 `["no_process_jail", …]` |
 | UI / Observer | 一律展示 **effective** mode，不展示请求名 |
 
-`toolSurface: reduced` 保留 L2 内的内容工具，并按 **能力标签**（`ToolDefinition.capabilities`）
+﻿`toolSurface: reduced` 保留 L2 内的内容工具，并按 **能力标签**（`ToolDefinition.capabilities`）
 **剥离**（不看显示名）：
 
 - `exec`（shell 及任意执行器；并强制 `shellEscape: deny`）
-- `egress`（`http_request` / `web_search` / MCP·client 通道）
+- `egress`（`http_request` / `web_search` / MCP·client 通道 / `package_install`）
 - `send` / `dynamic-code`
+- `runner`（`project_run`——执行 workspace 定义的脚本）
+
+**不剥离**：`vcs`（本地 git porcelain：`git_status`/`git_diff`/`git_log`/
+`git_show`/`git_commit`/`git_branch`/`git_restore`）。这些工具以固定 argv
+allowlist 调用 `git`——不是 shell——因此 workspace / untrusted 下的 agent
+仍可审查与提交，而不必开 `shell`。隔离手段：不存在的 `core.hooksPath`、
+commit 带 `--no-verify`、命令行 `-c` 覆盖 `diff.external` / `gpg.program` /
+`core.sshCommand` 等（命令行优先于仓库 `.git/config`），以及
+`GIT_CONFIG_NOSYSTEM` + `GIT_CONFIG_GLOBAL/SYSTEM` 指向 `NUL`/`/dev/null`。
+会把配置里发现的 `filter.*` 驱动钉成 `cat` 后再 `git add`/`commit`，恶意 `.gitattributes` 无法执行 clean/smudge/process。`shellEscape` 只闸 shell 工具，不拦 `vcs`/`runner` 效应类型。
 
 reduced 面上 **未标注工具一律拒绝**（unknown-reject）；内置工具已全部标注。
 

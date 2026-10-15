@@ -64,7 +64,11 @@ export type ToolCapability =
   | 'dynamic-code'
   | 'fs-read'
   | 'fs-write'
-  | 'memory';
+  | 'memory'
+  /** Local VCS porcelain (fixed argv allowlist; no arbitrary shell) */
+  | 'vcs'
+  /** Project script runner (npm/pnpm/yarn run — executes workspace code) */
+  | 'runner';
 
 export interface ToolDefinition {
   name: string;
@@ -180,7 +184,7 @@ export interface ToolExecutionContext {
    * 由引擎 HitlDecisionCache 记账（宿主不缓存）——session 按 sessionId，always 按 agentId。
    */
   confirmEffect?: (intent: {
-    kind: 'file.write' | 'shell' | 'memory.write' | 'other';
+    kind: 'file.write' | 'shell' | 'memory.write' | 'other' | 'runner' | 'vcs';
     path?: string;
     mode?: string;
     transactional?: boolean;
