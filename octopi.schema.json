@@ -52,6 +52,13 @@
                   "untrusted"
                 ]
               },
+              "untrustedAdmission": {
+                "type": "string",
+                "enum": [
+                  "refuse",
+                  "degrade"
+                ]
+              },
               "transactionRoots": {
                 "type": "array",
                 "items": {
@@ -2447,6 +2454,13 @@
             "project",
             "host",
             "untrusted"
+          ]
+        },
+        "untrustedAdmission": {
+          "type": "string",
+          "enum": [
+            "refuse",
+            "degrade"
           ]
         },
         "transactionRoots": {

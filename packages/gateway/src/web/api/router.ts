@@ -49,6 +49,7 @@ export class WebApiRouter {
           data: {
             status: 'ok',
             agents: this.gateway.getRegisteredAgents(),
+            effectPolicy: this.gateway.getEffectPolicyStatus(),
           },
         });
       }
@@ -141,6 +142,80 @@ export class WebApiRouter {
         }
 
         return this.json(res, 200, { ok: true, data: session });
+      }
+
+      const effectRootsMatch = relativePath.match(
+        /^\/sessions\/([^/]+)\/effect-roots$/,
+      );
+      if (effectRootsMatch && method === 'GET') {
+        try {
+          const data = await this.gateway.getSessionEffectRoots(effectRootsMatch[1]);
+          return this.json(res, 200, { ok: true, data });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return this.json(res, msg.includes('not found') ? 404 : 400, {
+            ok: false,
+            error: msg,
+          });
+        }
+      }
+      if (effectRootsMatch && method === 'POST') {
+        const body = await this.readBody(req);
+        const path = typeof body?.path === 'string' ? body.path : '';
+        if (!path.trim()) {
+          return this.json(res, 400, { ok: false, error: 'path is required' });
+        }
+        try {
+          const data = await this.gateway.addSessionEffectRoot(
+            effectRootsMatch[1],
+            path,
+          );
+          return this.json(res, 200, { ok: true, data });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return this.json(res, msg.includes('not found') ? 404 : 400, {
+            ok: false,
+            error: msg,
+          });
+        }
+      }
+      if (effectRootsMatch && method === 'DELETE') {
+        const qPath = url.searchParams.get('path') ?? '';
+        const bodyPath = qPath || '';
+        if (!bodyPath.trim()) {
+          // also accept JSON body for hosts that cannot set DELETE query
+          const body = await this.readBody(req);
+          const path = typeof body?.path === 'string' ? body.path : '';
+          if (!path.trim()) {
+            return this.json(res, 400, { ok: false, error: 'path is required' });
+          }
+          try {
+            const data = await this.gateway.removeSessionEffectRoot(
+              effectRootsMatch[1],
+              path,
+            );
+            return this.json(res, 200, { ok: true, data });
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            return this.json(res, msg.includes('not found') ? 404 : 400, {
+              ok: false,
+              error: msg,
+            });
+          }
+        }
+        try {
+          const data = await this.gateway.removeSessionEffectRoot(
+            effectRootsMatch[1],
+            bodyPath,
+          );
+          return this.json(res, 200, { ok: true, data });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return this.json(res, msg.includes('not found') ? 404 : 400, {
+            ok: false,
+            error: msg,
+          });
+        }
       }
 
       if (sessionMatch && method === 'PATCH') {

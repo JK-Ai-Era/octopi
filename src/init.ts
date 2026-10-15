@@ -197,6 +197,11 @@ function generateDefaultConfig(homeDir: string, agentId: string = 'default'): ob
       injectionSensitivity: 'medium',
       allowedPaths: [],
     },
+    // 评估/本机自动化：显式 host（全能力）。嵌入/多租户请改 workspace|untrusted；
+    // 省略 mode 时 engine 缺省为 workspace（secure-by-default）。
+    effectPolicy: {
+      mode: 'host',
+    },
     channels: [
       {
         type: 'http',

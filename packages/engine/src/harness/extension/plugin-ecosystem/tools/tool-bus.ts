@@ -40,10 +40,23 @@ export class DefaultToolBus implements ToolBus {
 
   // ── 注册 ──
 
-  register(tool: RegisteredTool): void {
+  /**
+   * Register a global tool.
+   *
+   * Duplicate names throw by default: silent replace lets a later plugin
+   * shadow `file_write`/`shell` and bypass L2/undo. Intentional reload uses
+   * `{ replace: true }` (audited via console.warn).
+   */
+  register(tool: RegisteredTool, options?: { replace?: boolean }): void {
     const { name } = tool.definition;
-    if (this.globalTools.has(name)) {
-      throw new Error(`Global tool "${name}" already registered`);
+    const exists = this.globalTools.has(name);
+    if (exists && !options?.replace) {
+      throw new Error(
+        `Global tool "${name}" already registered (pass replace:true to override)`,
+      );
+    }
+    if (exists && options?.replace) {
+      console.warn(`[ToolBus] global tool "${name}" explicitly replaced`);
     }
     this.globalTools.set(name, tool);
   }

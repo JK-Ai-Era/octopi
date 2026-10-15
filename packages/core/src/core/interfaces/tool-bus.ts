@@ -34,10 +34,11 @@ export interface ToolBus {
   /**
    * 注册工具（全局）
    *
-   * 重复注册同名工具时抛出异常（严格模式）。
+   * 重复注册同名工具时抛出异常（严格模式，防插件影子覆盖）。
+   * 显式热替换传 `{ replace: true }`。
    * Agent 级注册使用 registerForAgent()，允许覆盖同名全局工具。
    */
-  register(tool: RegisteredTool): void;
+  register(tool: RegisteredTool, options?: { replace?: boolean }): void;
 
   /** 批量注册工具 */
   registerAll(tools: RegisteredTool[]): void;

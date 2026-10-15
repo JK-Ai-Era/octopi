@@ -754,7 +754,7 @@ WebUI **不做**预算策略，只渲染 `known` / `source` / `contextWindow`。
 
 > 并发与 Run 作用域：同 Agent 多 Session 下，可变上下文只存在于 **RunScope**（见 [架构宪法](./north-star.zh.md) I1）。`SessionAwareRunner` 不以共享 `Agent.context` 作为会话工作区。
 >
-> 工具效应（ToolEffectPolicy / I5）：配置 `effectPolicy`（模式 workspace|project|host|untrusted；缺省 host）；cwd 布局仍可由 `toolIsolation` 覆盖。编辑重发逆放 turn undo（文件+记忆+shell snapshot）。工具调用必填 `purpose`。详见 `arch/tool-effect-policy.md` / `arch/tool-call-purpose.md`。
+> 工具效应（ToolEffectPolicy / I5）：配置 `effectPolicy`（模式 workspace|project|host|untrusted）。**省略 `mode` 时引擎缺省 `workspace`（secure-by-default）**；脚手架（`octopi init` / example 配置）显式写 `"mode": "host"` 便于本机评估全能力。cwd 布局仍可由 `toolIsolation` 覆盖。编辑重发逆放 turn undo（文件+记忆+shell snapshot）。工具调用必填 `purpose`。进程隔离与 `untrusted` 准入见 [`process-isolation.zh.md`](./process-isolation.zh.md)。
 > Session 锁（E2/E7）：`SessionLease` 接口，v1 为 `InProcessSessionLock`；分布式必须替换实现。
 > Session 数据（模型 2）：`primaryAgentId` + `preferredAgentId`（≠ primary）；compact 键 `(sessionId, agentId)`；ACL 角色目录见 `sessionAcl` 配置。
 > Gateway 默认：注入 Session ACL + 共享 SessionLease（单 agent primary 路径兼容；无 grant 的多 agent guest 会被拒绝）。

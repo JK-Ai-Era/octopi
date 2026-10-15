@@ -106,8 +106,27 @@ export type { MemoryEffectJournal, MemoryEffectDomain } from '@octopi-agent/core
 export {
   resolveEffectiveEffectPolicy,
   isPathAllowed,
+  isToolAllowedOnSurface,
   DEFAULT_EFFECT_RUN_MODE,
+  readSessionEffectOverrides,
+  normalizeTransactionRoots,
+  mergeTransactionRoots,
+  SESSION_EFFECT_OVERRIDES_KEY,
 } from './harness/extension/execution-environment/effect-policy.js';
+export {
+  ProcessSandbox,
+  createProcessSandbox,
+  assessL4ProcessMinimum,
+  probeProcessIsolation,
+  scrubEnv,
+  killProcessTree,
+  supervisedSpawnProfile,
+} from './harness/extension/execution-environment/index.js';
+export type {
+  ProcessIsolationProfile,
+  IsolationBackend,
+  L4ProcessAssessment,
+} from './harness/extension/execution-environment/process-isolation.js';
 export {
   runWithToolLimits,
   resolveToolTimeoutMs,
@@ -117,6 +136,10 @@ export type {
   EffectIntent,
   ConfirmEffect,
   ConfirmEffectDecision,
+  UntrustedAdmission,
+  ToolSurface,
+  SecurityDegradation,
+  SessionEffectOverrides,
 } from './harness/extension/execution-environment/effect-policy.js';
 export type {
   EffectRunMode,

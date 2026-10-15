@@ -1,7 +1,7 @@
 # Execution Environment — 执行环境
 
 > Layer: Layer 2  
-> 规格权威：[`arch/tool-effect-policy.md`](../../../../../arch/tool-effect-policy.md)
+> 对外契约：`docs/process-isolation.md`（进程隔离 / `untrusted`）；效应模式见本页与 `packages/engine/README.md`
 
 沙箱管理、工具效应策略（ToolEffectPolicy）、turn 级 undo、资源限制、工作区生命周期。
 
@@ -18,7 +18,8 @@
 | `memory-undo.ts` | **P2** 记忆面 journal（`JournaledMemoryStore` + `memory.jsonl`）；steward 不进 turn 事务 |
 | `shell-journal.ts` | **§5.6** shell 账本：roots before 快照 → diff → 同一 undo log；`not-reversed.json` |
 | `resource-limits.ts` | **P5 / OP-17** 工具 `timeoutMs` 看门狗（`runWithToolLimits`） |
-| `sandbox.ts` | ProcessSandbox（L1/L4 执行器；容器槽位未实现） |
+| `sandbox.ts` | SupervisedSpawn（诚实 L1）+ 探测到的 bwrap/Seatbelt 后端；`SandboxResult.isolation` |
+| `process-isolation.ts` | **L4 能力契约**：`ProcessIsolationProfile` / L4 门槛 / probe / scrubEnv / 树杀 |
 | `workspace.ts` | FileWorkspace（快照/搜索；非 turn undo 主路径） |
 
 ## ToolEffectPolicy 速查
@@ -26,7 +27,7 @@
 ```jsonc
 {
   "effectPolicy": {
-    "mode": "host",           // 缺省 host（本机自动化）；严格场景用 workspace
+    "mode": "host",           // 评估/本机：显式 host；省略 mode = engine 缺省 workspace（安全）
     "transactionRoots": [],    // 额外可 undo 根
     "pathContainment": "strict", // L2：strict | soft | none
     "shellEscape": "deny",     // deny=拒 shell | confirm=host-gate | allow
@@ -40,7 +41,7 @@
 }
 ```
 
-**产品缺省 mode = host**（未配置 effectPolicy / 未写 mode 时）。下表为命名预设展开：
+**引擎缺省 `mode` = `workspace`**（未写 `mode` 时，secure-by-default）。**脚手架**（`octopi init` / `octopi.example.json`）显式写 `"mode": "host"`，便于评估全能力。下表为命名预设展开：
 
 | mode | L2 | shellEscape | toolIsolation | onClose |
 |------|----|-------------|---------------|---------|

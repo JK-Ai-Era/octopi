@@ -337,6 +337,8 @@ export class SessionAwareRunner {
   private effectPathContainment: "strict" | "soft" | "none" = "none";
   private effectChannel: "engine" | "host-gate" = "engine";
   private effectAllowRoots: string[] = [];
+  /** Effective effectPolicy.mode (for Runtime injection / UI) */
+  private effectMode = 'workspace';
   private effectCommitManual = false;
   private effectProcessLimits = true;
   private effectShellEscape: "deny" | "confirm" | "allow" = "allow";
@@ -754,8 +756,40 @@ export class SessionAwareRunner {
         }
       }
 
-      // Runtime 锚点：时间 + 工具工作目录（模型据此优先在 workspace 找文件，而非全盘扫）
-      // cwd 与下方 I5 toolRuntime.cwd 同源同构，保证 system prompt 与工具解析一致
+      // P3：effectPolicy → L2 path containment + session 临时 root
+      // 必须在 Runtime 注入之前，system prompt 才能带上 allowRoots / effectMode
+      {
+        const { resolveEffectiveEffectPolicy, readSessionEffectOverrides, mergeTransactionRoots } =
+          await import('../extension/execution-environment/effect-policy.js');
+        const { probeProcessIsolation } = await import(
+          '../extension/execution-environment/process-isolation.js'
+        );
+        const isolation = await probeProcessIsolation();
+        const eff = resolveEffectiveEffectPolicy(
+          this.config.effectPolicy ?? {},
+          this.config.agentWorkspace ?? effectiveRunConfig.cwd ?? undefined,
+          isolation,
+        );
+        const sessionExtraRoots = readSessionEffectOverrides(session.metadata).transactionRoots;
+        this.effectPathContainment = eff.pathContainment;
+        this.effectChannel = eff.effects;
+        this.effectAllowRoots = mergeTransactionRoots(eff.allowRoots, sessionExtraRoots);
+        this.effectMode = eff.mode;
+        this.effectCommitManual = eff.commit === 'manual';
+        this.effectProcessLimits = eff.processLimits;
+        this.effectShellEscape = eff.shellEscape;
+        this.effectShellJournal = eff.shellJournal;
+        this.effectShellJournalLimit = eff.shellJournalLimit;
+        this.effectUndoLimit = eff.undoLimit;
+        // untrusted admission: reduced surface strips egress/exec tools
+        this.harness.toolSurface = eff.toolSurface;
+        if (eff.securityDegraded.length > 0) {
+          this.harness.securityDegraded = eff.securityDegraded;
+        }
+      }
+
+      // Runtime 锚点：时间 + 工具工作目录 + 允许根/效应模式
+      // cwd 与下方 I5 toolRuntime.cwd 同源同构；allowRoots 含 session 临时 root
       {
         const runtimeIsolationMode: ToolIsolationMode =
           effectiveRunConfig.toolIsolation
@@ -773,6 +807,8 @@ export class SessionAwareRunner {
           ...effectiveRunConfig,
           injectedContext: withRuntimeEnvironmentInjection(effectiveRunConfig.injectedContext, {
             cwd: runtimeCwd,
+            allowRoots: this.effectAllowRoots,
+            effectMode: this.effectMode,
           }),
         };
       }
@@ -951,25 +987,6 @@ export class SessionAwareRunner {
       // 兼容回退：无 ALS 消费方时的 contextSessionId（Map 键场景仍用显式 sessionId）
       this.agent.setContextSessionId(sessionId);
 
-      // P3：effectPolicy → L2 path containment
-      {
-        const { resolveEffectiveEffectPolicy } = await import(
-          '../extension/execution-environment/effect-policy.js'
-        );
-        const eff = resolveEffectiveEffectPolicy(
-          this.config.effectPolicy ?? {},
-          this.config.agentWorkspace ?? effectiveRunConfig.cwd ?? undefined,
-        );
-        this.effectPathContainment = eff.pathContainment;
-        this.effectChannel = eff.effects;
-        this.effectAllowRoots = eff.allowRoots;
-        this.effectCommitManual = eff.commit === 'manual';
-        this.effectProcessLimits = eff.processLimits;
-        this.effectShellEscape = eff.shellEscape;
-        this.effectShellJournal = eff.shellJournal;
-        this.effectShellJournalLimit = eff.shellJournalLimit;
-        this.effectUndoLimit = eff.undoLimit;
-      }
       // I5：工具效应 cwd —— RunConfig.cwd > agent.workspace；session-subdir 再拼 sessionId
       const isolationMode: ToolIsolationMode =
         effectiveRunConfig.toolIsolation

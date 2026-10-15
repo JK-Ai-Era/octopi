@@ -570,19 +570,25 @@ describe('env_info', () => {
 // ── getBuiltinTools ──
 
 describe('getBuiltinTools', () => {
-  it('should return 8 pure builtin tools (zero dependency)', () => {
+  it('should return 14 pure builtin tools (zero dependency)', () => {
     const tools = getBuiltinTools();
     const names = tools.map((t) => t.definition.name);
 
     expect(names).toContain('shell');
     expect(names).toContain('file_read');
     expect(names).toContain('file_write');
+    expect(names).toContain('file_delete');
     expect(names).toContain('file_list');
     expect(names).toContain('file_edit');
     expect(names).toContain('file_search');
+    expect(names).toContain('file_mkdir');
+    expect(names).toContain('file_rename');
+    expect(names).toContain('file_copy');
+    expect(names).toContain('file_stat');
+    expect(names).toContain('file_rmdir');
     expect(names).toContain('http_request');
     expect(names).toContain('env_info');
-    expect(tools.length).toBe(8);
+    expect(tools.length).toBe(14);
   });
 
   it('registers shell last so models prefer dedicated tools', () => {

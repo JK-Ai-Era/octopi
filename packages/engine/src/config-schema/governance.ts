@@ -30,10 +30,16 @@ export const SessionConfigSchema = z.object({
  *
  * 命名预设展开正交旋钮；agents[].effectPolicy 优先于顶层。
  * 注意：与 `agents[].tools`（工具 allow/deny）无关。
- * `mode` 省略 = 产品缺省 **host**（本机自动化；严格场景显式 workspace）。
+ * **省略 `mode` = engine 缺省 workspace（secure-by-default）**；
+ * 评估/本机全能力请在配置里显式 `"mode": "host"`（init / example 即如此）。
  */
 export const EffectPolicyConfigSchema = z.object({
   mode: z.enum(['workspace', 'project', 'host', 'untrusted']).optional(),
+  /**
+   * untrusted 无 L4 process jail 时：refuse（缺省）拒绝运行；
+   * degrade 降 effectiveMode + toolSurface=reduced + securityDegraded。
+   */
+  untrustedAdmission: z.enum(['refuse', 'degrade']).optional(),
   transactionRoots: z.array(z.string()).optional(),
   pathContainment: z.enum(['strict', 'soft', 'none']).optional(),
   shellEscape: z.enum(['deny', 'confirm', 'allow']).optional(),

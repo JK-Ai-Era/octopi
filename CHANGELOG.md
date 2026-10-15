@@ -1,3 +1,96 @@
+## v0.75.0
+
+### feat(harness): L4 process isolation contract, supervised spawn, untrusted admission
+
+**问题**：`ProcessSandbox` 只是 `spawn+timeout`，却顶着 process 沙箱名；shell 继承 `{...process.env}` 会把 API key 递进子进程；`mode: untrusted` 在无 L4 牢笼时仍当 untrusted 用（假安全）。拍板：能力契约 + 平台探测 + 降级降能力不降墙（对外契约见 `docs/process-isolation.md`）。
+
+**调整**：
+
+- **`process-isolation.ts`**：`ProcessIsolationProfile`（processTree / filesystem / resources / network / privilege / envHygiene + backend）；`assessL4ProcessMinimum`（5 条门槛，**network 不进门槛**；Windows `write-jailed-best-effort` 可达标）；`probeProcessIsolation`（bwrap / sandbox-exec / supervised）；`scrubEnv` **deny-by-default**；`killProcessTree`（POSIX pgroup / Windows taskkill /T）
+- **`sandbox.ts`**：`SupervisedSpawn` 诚实上报 `filesystem: cwd-pin`；Linux bwrap / macOS Seatbelt 后端；`SandboxResult.isolation` 必带；不再默认 `sh` 写死
+- **`effectPolicy`**：`untrustedAdmission: refuse|degrade`（缺省 refuse）；`requestedMode` / `mode`（effective）/ `toolSurface` / `securityDegraded`；degrade = effectiveMode→workspace + toolSurface=reduced + shell 强制 deny + 保留 untrusted `onClose: discard`；**禁止 degraded 仍叫 untrusted**
+- **`isToolAllowedOnSurface`**：reduced 面剥离 shell / http / web / MCP / send_file
+- **Runner / ReliabilityHarness**：探测 isolation 后 resolve 策略；`toolSurface=reduced` 在 beforeToolCall 拦截越权工具（`security_blocked`）
+- **shell 工具**：`scrubEnv` + 进程树 kill，不再继承宿主密钥
+- **schema**：`effectPolicy.untrustedAdmission`
+
+**测试**：process-isolation（env scrub / L4 门槛 / honesty）；effect-policy untrusted refuse/degrade/toolSurface；既有 harness 套件 1147 绿。
+
+### feat(security): engine default mode=workspace + scaffold host + effectPolicy visibility
+
+**问题**：省略 `effectPolicy.mode` 时引擎缺省 `host`（shell 全开、无路径牢笼），多租户/Web 漏配即裸奔；评估场景又需要开箱全能力。
+
+**调整**（SEC-4，与 process isolation 同批）：
+
+- **引擎缺省** `DEFAULT_EFFECT_RUN_MODE`: `host` → **`workspace`**（省略字段 = 安全档）
+- **脚手架显式 host**：`octopi init` / `octopi.example.json` 写 `"effectPolicy": { "mode": "host" }`（评估/本机全能力；注释标明生产请改模式）
+- **可见性（C）**：`gateway.getEffectPolicyStatus()`；Web `/health` 与 channel health 暴露 `configuredMode` / `effectiveMode` / `engineDefaultMode` / `warnings`；Web 开启且 mode=host/project 时启动警告
+- **文档**：`project` 明确为编码模式而非隔离模式；引擎缺省 vs 脚手架对照表
+
+**迁移**：依赖「未写 mode = host」的部署请在配置中补 `"effectPolicy": { "mode": "host" }`。
+
+**测试**：effect-policy 缺省 workspace / 显式 host；schema 重生成。
+
+### feat(session): session-scoped temporary transactionRoots
+
+**问题**：`transactionRoots` 只能配在 agent/顶层；UI 无法在 **当前 session** 内临时追加可写根。
+
+**调整**：
+
+- **会话覆盖** `session.metadata.effectOverrides.transactionRoots`：**只追加**进 `allowRoots`，不放宽 pathContainment/shellEscape/mode
+- **路径校验**：必须绝对路径；`normalizeTransactionRoots` / `mergeTransactionRoots`
+- **Runner**：每次 handle 将 session 临时根 merge 进 `effectAllowRoots`
+- **REST**：`GET/POST/DELETE /sessions/:id/effect-roots`；Gateway `get/add/removeSessionEffectRoot`
+- **Web SDK**：`getSessionEffectRoots` / `addSessionEffectRoot` / `removeSessionEffectRoot`
+
+**语义**：会话内有效；只加不减配置 root；会话结束即失效。
+
+**WebUI**：右栏「目录」页签（`SessionEffectRootsPanel`）— 会话临时 root 增删 + 配置根只读列表；Agent 卡片显示 `effectMode` 徽标（agent/全局/缺省）。
+
+**上下文装配**：Runtime 注入增加 `Allowed roots` + `Effect mode`（含 session 临时 root）；effectPolicy 解析提前到注入之前。
+
+### feat(tools): file_delete with L2 containment and turn undo
+
+**问题**：内置工具面无 `file_delete`，agent 无法在允许根内删除文件（只能 shell，且 `workspace`/`untrusted` 下 shell 为 deny）。
+
+**调整**：
+
+- 新增 **`file_delete`**：单文件删除（拒目录）；`resolveToolPath` L2；拒 attachments / sessions undo 账本
+- **Turn undo**：`recordDelete` 记 before → 编辑重发可恢复；未配置 `fileEffects` fail-closed
+- `gateEffect` 与 file_write 同语义（非事务走 host-gate）
+- shell 描述提示优先 `file_delete`；SecurityGuard 既有 `file_delete` 硬边界继续生效
+
+**测试**：file-delete-tool（越界/目录/undo 账本/恢复）；builtin-tools 计数 9。
+
+### feat(tools): file_mkdir / file_rename / file_copy / file_stat / file_rmdir
+
+**问题**：文件夹与常用文件操作只能走 shell；`workspace`/`untrusted` 下 shell 为 deny，能力缺失。
+
+**调整**：
+
+- **`file_mkdir`**：创建目录（默认 recursive）
+- **`file_rename`**：文件/目录改名移动；文件走 `recordRename` 可撤销；目录 `reversible:false`
+- **`file_copy`**：复制文件（二进制安全；overwrite 可选）
+- **`file_stat`**：类型/大小/mtime；不存在返回 `exists:false`
+- **`file_rmdir`**：仅删空目录
+- 统一 L2 `resolveToolPath` + attachments/undo 自保护 + `gateEffect`；Node `fs/promises` 跨 Win/macOS/Linux
+
+**测试**：file-ops-tools 8 例；builtin-tools 计数 14。
+
+### fix(harness): review hardening — rename undo order, untrusted declarations, ToolBus replace
+
+**问题**（代码审查核实）：`file_rename` 先 `rm(dest)` 再记账导致目标不可恢复；degrade 后 `network_open` 因 `mode` 已改名而漏报；`readSessionEffectOverrides` 对脏 metadata throw 弄挂 run；`untrusted` 可被 config 放宽 `pathContainment`；`ToolBus` 静默 replace 允许影子覆盖；`run-agent` 重复 toolSurface 块。
+
+**根因修复**：
+
+- **file_rename**：journal（`recordRename` 读 dest before）**先于**任何 rm/rename
+- **untrusted 申报**：`network_open` 按 `requestedMode===untrusted` 判断；`pathContainment` 钉死 `strict`
+- **读路径容错**：`readSessionEffectOverrides` 跳过非法项；写路径仍严格校验
+- **ToolBus.register**：同名默认 **throw**；显式 `{ replace: true }` 才覆盖（接口同步）；Builder/Gateway 装配 **逐工具 try/catch**，单点失败不拖垮工具面
+- 删除 `run-agent` 重复 `toolSurface` 块
+
+**测试**：rename-overwrite undo 恢复 dest；degrade 含 `network_open`；untrusted 钉 strict；override 读路径 skip；ToolBus 重名 throw / replace。
+
 ## v0.74.3
 
 ### fix(harness): unify tool purpose schema assembly and stop hard-failing on omitted purpose

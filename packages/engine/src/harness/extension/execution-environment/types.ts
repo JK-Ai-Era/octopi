@@ -1,94 +1,105 @@
 /**
- * Execution Environment 接口定义
+ * Execution Environment interface contracts
  *
- * @layer harness/extension/execution-environment — 执行环境契约。
+ * @layer harness/extension/execution-environment
  */
 
-// ── 沙箱配置 ──
+import type { ProcessIsolationProfile } from './process-isolation.js';
 
-/** 沙箱隔离级别 */
+// ── Sandbox config ──
+
+/** Legacy coarse isolation level (prefer ProcessIsolationProfile) */
 export type IsolationLevel = 'none' | 'process' | 'container';
 
-/** 沙箱配置 */
+/** Sandbox config */
 export interface SandboxConfig {
-  /** 隔离级别 */
-  isolationLevel: IsolationLevel;
-  /** 工作目录 */
+  /** Requested isolation level (legacy knob) */
+  isolationLevel?: IsolationLevel;
+  /** Working directory */
   cwd?: string;
-  /** 环境变量 */
+  /**
+   * Explicit environment. Merged on top of the scrubbed allowlist.
+   * Never spreads `process.env` — secrets must not ride along.
+   */
   env?: Record<string, string>;
-  /** 资源限制 */
+  /** Resource limits */
   limits?: ResourceLimits;
-  /** 允许的网络访问（CIDR 或 hostname） */
+  /** Allowed network (CIDR or hostname) */
   allowedNetwork?: string[];
-  /** 允许的文件系统路径 */
+  /** Allowed filesystem paths */
   allowedPaths?: string[];
+  /** Abort in-flight execution */
+  signal?: AbortSignal;
 }
 
-/** 资源限制 */
+/** Resource limits */
 export interface ResourceLimits {
-  /** 最大执行时间（毫秒） */
+  /** Max wall time (ms) */
   timeoutMs?: number;
-  /** 最大内存（字节） */
+  /** Max memory (bytes) */
   maxMemoryBytes?: number;
-  /** 最大输出大小（字节） */
+  /** Max captured output (bytes) */
   maxOutputBytes?: number;
-  /** 最大 CPU 时间（毫秒） */
+  /** Max CPU time (ms) */
   maxCpuTimeMs?: number;
 }
 
-/** 资源使用统计 */
+/** Resource usage */
 export interface ResourceUsage {
-  /** 实际执行时间（毫秒） */
+  /** Elapsed wall time (ms) */
   elapsedMs: number;
-  /** 内存使用峰值（字节，-1 表示未知） */
+  /** Peak memory (bytes, -1 unknown) */
   peakMemoryBytes: number;
-  /** CPU 时间（毫秒，-1 表示未知） */
+  /** CPU time (ms, -1 unknown) */
   cpuTimeMs: number;
-  /** 输出大小（字节） */
+  /** Output size (bytes) */
   outputBytes: number;
 }
 
-// ── 沙箱执行结果 ──
+// ── Sandbox result ──
 
-/** 沙箱执行结果 */
+/** Sandbox execution result */
 export interface SandboxResult {
-  /** 退出码 */
+  /** Exit code */
   exitCode: number;
-  /** 标准输出 */
+  /** stdout */
   stdout: string;
-  /** 标准错误 */
+  /** stderr */
   stderr: string;
-  /** 是否被沙箱终止（超时、OOM 等） */
+  /** Terminated by sandbox (timeout, OOM, output cap) */
   terminated: boolean;
-  /** 终止原因 */
+  /** Terminate reason */
   terminateReason?: string;
-  /** 资源使用统计 */
+  /** Resource usage */
   usage: ResourceUsage;
+  /** Honest isolation actually applied for this run */
+  isolation: ProcessIsolationProfile;
 }
 
-// ── 沙箱提供者接口 ──
+// ── Sandbox provider ──
 
 /**
- * SandboxProvider — 沙箱提供者接口
- *
- * 在隔离环境中执行命令。不同实现可以提供不同级别的隔离：
- * - none: 直接执行（开发模式）
- * - process: 进程级隔离（spawn + resource limits）
- * - container: 容器级隔离（Docker/firejail）
+ * SandboxProvider — execute commands under an isolation profile.
+ * Implementations must report real capabilities via `isolation` / `probe()`.
  */
 export interface SandboxProvider {
-  /** 隔离级别 */
+  /** Legacy coarse level */
   readonly level: IsolationLevel;
 
+  /** Honest isolation profile for this provider */
+  probe(): Promise<ProcessIsolationProfile>;
+
   /**
-   * 在沙箱中执行命令
+   * Execute a shell command line (platform shell) under isolation.
    */
   execute(command: string, config?: SandboxConfig): Promise<SandboxResult>;
 
   /**
-   * 检查沙箱是否可用
+   * Execute an argv vector (preferred — no shell string parsing).
    */
+  executeArgv?(argv: string[], config?: SandboxConfig): Promise<SandboxResult>;
+
+  /** Whether this provider can run on the current host */
   isAvailable(): Promise<boolean>;
 }
 

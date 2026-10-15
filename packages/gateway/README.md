@@ -20,6 +20,6 @@ Depends on `@octopi-agent/engine`. Built-in subsystems and strategies stay in en
 - **会话关闭**：`deleteSession` / `stop()` 按 `effectPolicy.onClose`（`commit` | `discard`）收残留 turn undo；`onClose` 可 per-agent
 - **doctor**：启动时 `scanOrphanUndo` 扫残留 `sessions/*/undo`
 
-详见 `@octopi-agent/engine` 与仓库 `arch/tool-effect-policy.md`。
+详见 `@octopi-agent/engine` 与对外文档 `docs/process-isolation.md`。
 
 Part of [Octopi](https://github.com/JK-Ai-Era/octopi). Apache-2.0 — see `LICENSE` and `NOTICE`.

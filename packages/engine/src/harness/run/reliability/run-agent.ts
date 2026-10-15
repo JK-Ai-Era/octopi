@@ -406,7 +406,36 @@ export async function* runAgentWithReliability(
         // 简化实现：允许所有工具，让模型自行决策
         // 完整实现应检查工具类型（只读 vs 写入）
       }
-      // SecurityGuard 检查
+      // Tool surface (untrusted degrade): strip egress/exec tools
+      if (harness.toolSurface === 'reduced') {
+        const { isToolAllowedOnSurface } = await import(
+          '../../extension/execution-environment/effect-policy.js'
+        );
+        if (!isToolAllowedOnSurface(ctx.toolCall.name, 'reduced')) {
+          const scope = getRunScope();
+          const reason = `tool_surface_reduced: "${ctx.toolCall.name}" is not allowed when untrusted is degraded`;
+          state.pendingSecurityEvents.push({
+            type: 'security_blocked',
+            timestamp: Date.now(),
+            data: {
+              sessionId: scope?.sessionId,
+              agentId: scope?.agentId,
+              reason,
+              toolName: ctx.toolCall.name,
+              action: 'reject',
+              severity: 'high',
+              violations: [
+                {
+                  type: 'unauthorized_tool',
+                  severity: 'high',
+                  description: reason,
+                },
+              ],
+            },
+          });
+          return { block: true, reason, terminate: false };
+        }
+      }
       if (harness.security) {
         const toolCheck = harness.security.checkToolCall(ctx.toolCall);
         if (!toolCheck.isClean) {

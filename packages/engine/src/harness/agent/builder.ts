@@ -628,15 +628,31 @@ export class AgentBuilder {
     return this;
   }
 
-  /** 注册工具 */
+  /** 注册工具（同名默认拒绝；单工具失败不中断其余注册） */
   tool(tool: RegisteredTool): this {
     this._toolBus.register(tool);
     return this;
   }
 
-  /** 批量注册工具 */
+  /**
+   * 覆盖注册（显式）。用于热更新/替换同名工具，不可默默发生。
+   */
+  toolReplace(tool: RegisteredTool): this {
+    this._toolBus.register(tool, { replace: true });
+    return this;
+  }
+
+  /** 批量注册：逐个 try/catch，避免一个工具失败拖垮整表 */
   tools(...tools: RegisteredTool[]): this {
-    for (const t of tools) this.tool(t);
+    for (const t of tools) {
+      try {
+        this.tool(t);
+      } catch (err) {
+        console.warn(
+          `[AgentBuilder] tool register failed (${t.definition.name}): ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
     return this;
   }
 
@@ -1565,7 +1581,7 @@ export class AgentBuilder {
       this._initialPersonaContent = await this._personaResolver();
       systemPrompt = this._initialPersonaContent;
     }
-    if (!systemPrompt && this._toolBus.listForAgent('default').length > 0) {
+    if (!systemPrompt && this._toolBus.listForAgent(this._agentId ?? 'default').length > 0) {
       systemPrompt = this.buildDefaultSystemPrompt();
     }
 
@@ -1590,7 +1606,11 @@ export class AgentBuilder {
     this._contextProvider = new RuntimeToolContextProvider({
       cwd: this._workspace?.trim() ? this._workspace : undefined,
     });
-    const agentTools: LoopAgentTool[] = this._toolBus.listForAgent('default').map(t => convertToAgentTool(t, this._contextProvider));
+    const busAgentId = this._agentId ?? 'default';
+    const agentTools: LoopAgentTool[] = this._toolBus.listForAgent(busAgentId).map(t => convertToAgentTool(t, this._contextProvider));
+    console.log(
+      `[AgentBuilder] agent tools (${agentTools.length}): ${agentTools.map((t) => t.name).join(', ')}`,
+    );
 
     // 创建 Agent
     const agentOptions: AgentOptions = {
@@ -1758,7 +1778,7 @@ export class AgentBuilder {
     // 未注册工具硬边界：灌入工具面快照（空集 = 不校验，必须在 build 时接线）
     if (security.setRegisteredTools) {
       security.setRegisteredTools(
-        new Set(this._toolBus.listForAgent('default').map((t) => t.definition.name)),
+        new Set(this._toolBus.listForAgent(this._agentId ?? 'default').map((t) => t.definition.name)),
       );
     }
     const errorStrategy = this._errorStrategy ?? new DefaultErrorStrategy();
@@ -1843,7 +1863,7 @@ export class AgentBuilder {
    * 生成默认 systemPrompt，包含可用工具说明
    */
   private buildDefaultSystemPrompt(): string {
-    const toolList = this._toolBus.listForAgent('default')
+    const toolList = this._toolBus.listForAgent(this._agentId ?? 'default')
       .map(t => `- ${t.definition.name}: ${t.definition.description}`)
       .join('\n');
 
@@ -1854,7 +1874,7 @@ ${toolList}
 Every tool call must include a short honest purpose field (verb + object + goal, e.g. "read package.json to find test script") — humans and approvers see it as the call title.
 
 Tool selection (strict):
-1. Prefer a dedicated tool when one covers the job (file_read / file_list / file_write / file_edit / file_search / env_info, and any task-specific tool).
+1. Prefer a dedicated tool when one covers the job (file_read / file_list / file_write / file_edit / file_delete / file_mkdir / file_rename / file_copy / file_stat / file_rmdir / file_search / env_info, and any task-specific tool).
 2. If a dedicated-tool call fails because your arguments were wrong (bad path, bad params), fix the call and retry that tool — do not switch to shell for a call you can fix.
 3. Use shell only when: (a) no dedicated tool covers the operation, or (b) the dedicated tool is unavailable, or (c) it still fails after a correct retry and shell is the only remaining way to make progress.
 4. Do not prefer shell over a working dedicated tool for the same job.
@@ -1863,6 +1883,12 @@ Examples:
 - Read a file → file_read first (shell cat only if file_read is unavailable or still fails after a correct retry)
 - List directory → file_list first
 - Write/edit a file → file_write / file_edit first
+- Delete a file → file_delete first (not shell rm)
+- Create a folder → file_mkdir first
+- Rename/move → file_rename first
+- Copy a file → file_copy first
+- File info → file_stat first
+- Remove empty folder → file_rmdir first
 - Search file contents → file_search first
 - Operation with no dedicated tool → shell is acceptable`;
   }

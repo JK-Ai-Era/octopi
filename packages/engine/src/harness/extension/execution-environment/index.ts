@@ -5,7 +5,29 @@
  * 契约见 ./types.ts。
  */
 
-export { ProcessSandbox } from './sandbox.js';
+export {
+  ProcessSandbox,
+  createProcessSandbox,
+  assessL4ProcessMinimum,
+  supervisedSpawnProfile,
+} from './sandbox.js';
+export {
+  probeProcessIsolation,
+  scrubEnv,
+  killProcessTree,
+  L4_PROCESS_MINIMUM,
+} from './process-isolation.js';
+export type {
+  ProcessIsolationProfile,
+  IsolationBackend,
+  ProcessTreeIsolation,
+  FilesystemIsolation,
+  ResourceIsolation,
+  NetworkIsolation,
+  PrivilegeIsolation,
+  EnvHygiene,
+  L4ProcessAssessment,
+} from './process-isolation.js';
 export { FileWorkspace } from './workspace.js';
 export type { FileWorkspaceConfig } from './workspace.js';
 export {
@@ -43,8 +65,20 @@ export {
 export {
   resolveEffectiveEffectPolicy,
   isPathAllowed,
+  isToolAllowedOnSurface,
   gateEffect,
   DEFAULT_EFFECT_RUN_MODE,
+  readSessionEffectOverrides,
+  normalizeTransactionRoots,
+  mergeTransactionRoots,
+  SESSION_EFFECT_OVERRIDES_KEY,
+} from './effect-policy.js';
+export type {
+  UntrustedAdmission,
+  ToolSurface,
+  SecurityDegradation,
+  EffectiveEffectPolicy,
+  SessionEffectOverrides,
 } from './effect-policy.js';
 export {
   runWithToolLimits,

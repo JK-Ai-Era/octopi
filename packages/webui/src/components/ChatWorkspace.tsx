@@ -4,6 +4,7 @@ import { ContextRuntimePanel } from './ContextRuntimePanel';
 import { RunObservatoryPanel } from './RunObservatoryPanel';
 import { SessionCorpusMenu } from './SessionCorpusMenu';
 import { SessionAttachmentsPanel } from './SessionAttachmentsPanel';
+import { SessionEffectRootsPanel } from './SessionEffectRootsPanel';
 import { OctopiClient } from '@octopi-agent/gateway/web/sdk/client';
 import { OctopiRuntimeStore } from '@octopi-agent/gateway/web/runtime/store';
 import type {
@@ -574,7 +575,12 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
   const [apiKey, setApiKey] = useState('');
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [connection, setConnection] = useState('idle');
-  const [agents, setAgents] = useState<Array<{ id: string; model: { provider: string; model: string; contextWindow?: number } }>>([]);
+  const [agents, setAgents] = useState<Array<{
+    id: string;
+    model: { provider: string; model: string; contextWindow?: number };
+    effectMode?: string;
+    effectModeSource?: 'agent' | 'global' | 'default';
+  }>>([]);
   const [agentId, setAgentId] = useState('');
   const [toast, setToast] = useState<string | null>(null);
   const [modelCatalog, setModelCatalog] = useState<ModelCatalog>({ models: [], agents: [] });
@@ -616,7 +622,7 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
   const [commands, setCommands] = useState<CommandCatalogItemDto[]>([]);
   const [cmdSuggestIndex, setCmdSuggestIndex] = useState(0);
   const [openIssues, setOpenIssues] = useState<Array<{ id: string; severity: string; title: string; detail: string }>>([]);
-  const [rightTab, setRightTab] = useState<'context' | 'run' | 'tasks' | 'attachments' | 'file' | 'tools' | 'help'>('context');
+  const [rightTab, setRightTab] = useState<'context' | 'run' | 'tasks' | 'attachments' | 'roots' | 'file' | 'tools' | 'help'>('context');
   const [connectError, setConnectError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
@@ -1390,6 +1396,51 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
                   >
                     <div style={{ fontWeight: 600 }}>{a.id}</div>
                     <div className="small muted">{a.model.model}</div>
+                    <div
+                      className="small"
+                      style={{
+                        display: 'flex',
+                        gap: 6,
+                        alignItems: 'center',
+                        marginTop: 2,
+                        flexWrap: 'wrap',
+                      }}
+                    >
+                      <span
+                        className="small"
+                        style={{
+                          padding: '1px 6px',
+                          borderRadius: 4,
+                          border: '1px solid var(--border, #ccc)',
+                          background:
+                            a.effectMode === 'host'
+                              ? 'rgba(220, 80, 40, 0.12)'
+                              : a.effectMode === 'untrusted'
+                                ? 'rgba(80, 60, 200, 0.12)'
+                                : 'rgba(20, 140, 80, 0.1)',
+                          color:
+                            a.effectMode === 'host'
+                              ? '#b33'
+                              : a.effectMode === 'untrusted'
+                                ? '#446'
+                                : '#176',
+                        }}
+                        title={
+                          a.effectModeSource === 'agent'
+                            ? '来自 agents[].effectPolicy'
+                            : a.effectModeSource === 'global'
+                              ? '来自顶层 effectPolicy'
+                              : '引擎缺省（未配置 mode）'
+                        }
+                      >
+                        {a.effectMode ?? 'workspace'}
+                      </span>
+                      {a.effectModeSource && a.effectModeSource !== 'agent' && (
+                        <span className="small muted">
+                          {a.effectModeSource === 'global' ? '全局' : '缺省'}
+                        </span>
+                      )}
+                    </div>
                   </button>
                 ))}
                 {!agents.length && <div className="small muted">未发现可用 Agent</div>}
@@ -1882,6 +1933,12 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
               ) : null}
             </button>
             <button
+              className={rightTab === 'roots' ? 'btn-tab btn-tab-active' : 'btn-tab'}
+              onClick={() => setRightTab('roots')}
+            >
+              目录
+            </button>
+            <button
               className={rightTab === 'file' ? 'btn-tab btn-tab-active' : 'btn-tab'}
               onClick={() => setRightTab('file')}
             >
@@ -1954,6 +2011,14 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
               client={clientRef.current}
               sessionId={activeSessionId}
               reloadToken={attachmentsReload}
+              onToast={setToast}
+            />
+          )}
+
+          {rightTab === 'roots' && (
+            <SessionEffectRootsPanel
+              client={clientRef.current}
+              sessionId={activeSessionId}
               onToast={setToast}
             />
           )}

@@ -30,7 +30,7 @@ Does **not** include CLI, Gateway process plane, or Web UI. See [octopi](https:/
 ```jsonc
 {
   "effectPolicy": {
-    "mode": "project",        // workspace | project | host | untrusted；缺省 host
+    "mode": "workspace",      // workspace | project | host | untrusted；省略 = workspace（安全缺省）；评估/本机全能力请显式 host
     "pathContainment": "strict",
     "shellEscape": "allow",   // deny | confirm | allow
     "shellJournal": "snapshot", // snapshot | off；shell 前后 diff 进同一 undo log
@@ -51,7 +51,7 @@ Does **not** include CLI, Gateway process plane, or Web UI. See [octopi](https:/
 - **L1**：`definition.timeoutMs` 在 ToolBus / Loop 工具路径强制
 - **tool `purpose`**：LLM 调用必填行动简述（人读/审批标题）；发给模型的 schema 会剥离 `maxLength` 等扩展关键字
 
-详见 `harness/extension/execution-environment/README.md` 与仓库内 `arch/tool-effect-policy.md`。
+详见 `harness/extension/execution-environment/README.md` 与对外文档 `docs/process-isolation.md`。
 
 ```ts
 await new AgentBuilder()

@@ -958,7 +958,10 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
       apiKey: httpConfig?.apiKey,
       corsOrigins: httpConfig?.corsOrigins,
       onRequest: (req, res) => webApiRouter.handle(req, res),
-      healthExtras: () => ({ knowledge: gateway.getKnowledgeState() }),
+      healthExtras: () => ({
+        knowledge: gateway.getKnowledgeState(),
+        effectPolicy: gateway.getEffectPolicyStatus(),
+      }),
     }));
   }
 

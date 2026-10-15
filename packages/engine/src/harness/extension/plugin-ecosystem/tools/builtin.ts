@@ -3,7 +3,7 @@
  *
  * 提供框架默认的纯工具实现（零外部依赖，所有环境可用）：
  * - shell: 执行 shell 命令
- * - file_read / file_write / file_list: 文件读写列目录
+ * - file_read / file_write / file_list / file_delete: 文件读写删列目录
  * - file_edit: 结构化文件编辑（局部替换）
  * - file_search: 跨文件内容搜索
  * - http_request: HTTP 请求
@@ -13,7 +13,7 @@
  *
  * 安全注意事项：
  * - shell 工具可以执行任意命令，生产环境应限制命令白名单
- * - file_read/file_write/file_edit 应限制可访问的目录范围
+ * - file_read/file_write/file_edit/file_delete 应限制可访问的目录范围
  * - http_request 应限制可访问的域名
  * - 建议在 ToolPolicy 的 deny 列表中禁用不需要的工具
  */
@@ -23,6 +23,7 @@ import { gateEffect } from '../../execution-environment/effect-policy.js';
 
 import { createFileEditTool } from './file-edit.js';
 import { createFileSearchTool } from './file-search.js';
+import { createFileOpsTools } from './file-ops.js';
 import { createHttpRequestTool } from './http.js';
 import { createEnvInfoTool } from './env-info.js';
 import { createDocumentProbeTool, createDocumentReadTool } from './document-tools.js';
@@ -34,6 +35,10 @@ import {
   resolveReadableToolPath,
   resolveToolPath,
 } from './platform.js';
+import {
+  killProcessTree,
+  scrubEnv,
+} from '../../execution-environment/process-isolation.js';
 
 /** 拒绝写会话 undo 账本（自拆台防护） */
 function isUnderSessionUndoRoot(target: string): boolean {
@@ -70,7 +75,7 @@ export function createShellTool(options?: {
   return {
     definition: {
       name: 'shell',
-      description: `LAST RESORT shell. Prefer a dedicated tool when one covers the job (file_read/file_list/file_write/file_edit/file_search/env_info and any task-specific tools). Use shell only when: no dedicated tool covers the operation, the dedicated tool is unavailable, or it still fails after a correct retry (wrong path/args → fix and retry the tool first). Never use shell instead of a working dedicated tool. Detected shell: ${shell.label}. ${syntaxHint}`,
+      description: `LAST RESORT shell. Prefer a dedicated tool when one covers the job (file_read/file_list/file_write/file_edit/file_delete/file_mkdir/file_rename/file_copy/file_stat/file_rmdir/file_search/env_info and any task-specific tools). Use shell only when: no dedicated tool covers the operation, the dedicated tool is unavailable, or it still fails after a correct retry (wrong path/args → fix and retry the tool first). Never use shell instead of a working dedicated tool. Detected shell: ${shell.label}. ${syntaxHint}`,
       parameters: {
         command: {
           type: 'string',
@@ -132,9 +137,16 @@ export function createShellTool(options?: {
         const child = spawn(resolvedShell.executable, [...resolvedShell.args, command], {
           cwd: resolveToolPath(cwd, context?.cwd, { allowRoots: context?.pathRoots, containment: context?.pathContainment }),
           timeout,
-          env: { ...process.env, PATH: defaultPathEnv() },
+          // Deny-by-default env: do not inherit API keys / tokens from the host process
+          env: scrubEnv({ PATH: defaultPathEnv() }),
           windowsHide: true,
+          ...(process.platform === 'win32' ? {} : { detached: true }),
         });
+        const killTree = () => killProcessTree(child);
+        if (timeout > 0) {
+          const killTimer = setTimeout(killTree, timeout);
+          child.on('close', () => clearTimeout(killTimer));
+        }
 
         let stdout = '';
         let stderr = '';
@@ -450,6 +462,102 @@ export function createFileWriteTool(): RegisteredTool {
 }
 
 /**
+ * File Delete 工具 — 删除单个文件（不可删目录）
+ *
+ * 参数：
+ * - path (string, required): 文件路径
+ *
+ * 走 ToolFileEffects.recordDelete：记 before，编辑重发可恢复。
+ */
+export function createFileDeleteTool(): RegisteredTool {
+  return {
+    definition: {
+      name: 'file_delete',
+      description:
+        'Delete a single file (not a directory). Use this instead of shell rm for files under allowed roots. The delete is journaled and can be undone on edit-resend.',
+      parameters: {
+        path: {
+          type: 'string',
+          description: 'Path to the file to delete',
+          required: true,
+        },
+      },
+    },
+    handler: async (args, context) => {
+      const { readFile, rm, stat } = await import('node:fs/promises');
+
+      const rawPath = args.path as string;
+      const cwd = context?.cwd ?? process.cwd();
+      const path = resolveToolPath(rawPath, cwd, {
+        allowRoots: context?.pathRoots,
+        containment: context?.pathContainment,
+      });
+      if (isUnderAttachmentRoot(path, context?.attachmentRoots)) {
+        throw new Error('session attachments are read-only; cannot delete from attachments root');
+      }
+      if (isUnderSessionUndoRoot(path)) {
+        throw new Error('session undo ledger is protected; cannot delete from sessions undo dir');
+      }
+
+      let st;
+      try {
+        st = await stat(path);
+      } catch {
+        throw new Error(`File not found: ${path}`);
+      }
+      if (st.isDirectory()) {
+        throw new Error(
+          `file_delete targets a directory: ${path}. Delete files one by one, or use shell only if policy allows.`,
+        );
+      }
+
+      await gateEffect(
+        {
+          kind: 'file.write',
+          path,
+          mode: 'overwrite',
+          transactional: isPathUnderRoots(path, context?.pathRoots ?? []),
+        },
+        {
+          effects: context?.effectChannel ?? 'engine',
+          confirmEffect: context?.confirmEffect,
+        },
+      );
+
+      const effects = context?.fileEffects;
+      if (!effects) {
+        throw new Error('file_effects_not_configured: file_delete requires ToolExecutionContext.fileEffects');
+      }
+
+      let before: Uint8Array;
+      try {
+        before = await readFile(path);
+      } catch (error) {
+        throw new Error(
+          `Failed to read file before delete "${path}": ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+
+      try {
+        await effects.recordDelete(path, before);
+        await rm(path, { force: true });
+      } catch (error) {
+        throw new Error(
+          `Failed to delete file "${path}": ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+
+      return {
+        path,
+        deleted: true,
+        bytes: before.byteLength,
+        reversible: true,
+      };
+    },
+  };
+}
+
+/**
  * 编译 file_list.pattern：优先 glob（`*.md`），否则正则。
  * `new RegExp('*.md')` 会抛 Nothing to repeat，模型常写 glob。
  */
@@ -711,8 +819,10 @@ export function getBuiltinTools(options?: {
     createFileReadTool({ summary: options?.summary }),
     createFileListTool({ summary: options?.summary }),
     createFileWriteTool(),
+    createFileDeleteTool(),
     createFileEditTool(),
     createFileSearchTool(),
+    ...createFileOpsTools(),
     ...(options?.documentPort
       ? [
           createDocumentReadTool({

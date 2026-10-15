@@ -7,6 +7,7 @@ import { join, resolve } from 'node:path';
 import {
   resolveEffectiveEffectPolicy,
   isPathAllowed,
+  isToolAllowedOnSurface,
 } from '@octopi-agent/engine/harness/extension/execution-environment/effect-policy.js';
 import {
   resolveToolPath,
@@ -14,8 +15,17 @@ import {
 } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/tools/platform.js';
 
 describe('resolveEffectiveEffectPolicy', () => {
-  it('omitted mode defaults to host (product default)', () => {
+  it('omitted mode defaults to workspace (engine secure-by-default)', () => {
     const p = resolveEffectiveEffectPolicy({}, '/home/user');
+    expect(p.mode).toBe('workspace');
+    expect(p.requestedMode).toBe('workspace');
+    expect(p.shellEscape).toBe('deny');
+    expect(p.pathContainment).toBe('strict');
+    expect(p.toolIsolation).toBe('session-subdir');
+  });
+
+  it('explicit host keeps full capability (scaffold / local evaluation)', () => {
+    const p = resolveEffectiveEffectPolicy({ mode: 'host' }, '/home/user');
     expect(p.mode).toBe('host');
     expect(p.shellEscape).toBe('allow');
     expect(p.pathContainment).toBe('none');
@@ -44,11 +54,85 @@ describe('resolveEffectiveEffectPolicy', () => {
     expect(p.toolIsolation).toBe('none');
   });
 
-  it('untrusted: onClose discard + strict + shell deny', () => {
-    const p = resolveEffectiveEffectPolicy({ mode: 'untrusted' }, '/sandbox');
-    expect(p.pathContainment).toBe('strict');
+  it('untrusted: refuses without L4 process jail (default admission)', () => {
+    expect(() =>
+      resolveEffectiveEffectPolicy({ mode: 'untrusted' }, '/sandbox'),
+    ).toThrow(/untrusted_refused/);
+  });
+
+  it('untrusted + L4 profile: keeps untrusted mode and full surface', () => {
+    const p = resolveEffectiveEffectPolicy({ mode: 'untrusted' }, '/sandbox', {
+      backend: 'linux-bwrap',
+      processTree: 'contained',
+      filesystem: 'root-jailed',
+      resources: 'os-enforced',
+      network: 'deny',
+      privilege: 'dropped',
+      envHygiene: 'scrubbed',
+    });
+    expect(p.requestedMode).toBe('untrusted');
+    expect(p.mode).toBe('untrusted');
+    expect(p.toolSurface).toBe('full');
+    expect(p.securityDegraded).toEqual([]);
     expect(p.onClose).toBe('discard');
     expect(p.shellEscape).toBe('deny');
+    expect(p.pathContainment).toBe('strict');
+  });
+
+  it('untrusted degrade: renames effectiveMode, reduces surface, reports degraded', () => {
+    const p = resolveEffectiveEffectPolicy(
+      { mode: 'untrusted', untrustedAdmission: 'degrade', shellEscape: 'allow' },
+      '/sandbox',
+      {
+        backend: 'supervised-spawn',
+        processTree: 'killable',
+        filesystem: 'cwd-pin',
+        resources: 'best-effort',
+        network: 'open',
+        privilege: 'same',
+        envHygiene: 'scrubbed',
+      },
+    );
+    expect(p.requestedMode).toBe('untrusted');
+    expect(p.mode).toBe('workspace');
+    expect(p.toolSurface).toBe('reduced');
+    expect(p.securityDegraded).toContain('no_process_jail');
+    expect(p.securityDegraded).toContain('filesystem_not_jailed');
+    // open egress must be declared even after mode rename
+    expect(p.securityDegraded).toContain('network_open');
+    // degraded must not leave shell allow as a hole
+    expect(p.shellEscape).toBe('deny');
+    // discard-on-close is kept as untrusted intent residue
+    expect(p.onClose).toBe('discard');
+    expect(p.pathContainment).toBe('strict');
+  });
+
+  it('untrusted pins pathContainment even if config tries to loosen it', () => {
+    const p = resolveEffectiveEffectPolicy(
+      { mode: 'untrusted', untrustedAdmission: 'degrade', pathContainment: 'none' },
+      '/sandbox',
+      {
+        backend: 'supervised-spawn',
+        processTree: 'killable',
+        filesystem: 'cwd-pin',
+        resources: 'best-effort',
+        network: 'deny',
+        privilege: 'same',
+        envHygiene: 'scrubbed',
+      },
+    );
+    expect(p.pathContainment).toBe('strict');
+    expect(p.shellEscape).toBe('deny');
+  });
+
+  it('isToolAllowedOnSurface strips egress/exec on reduced', () => {
+    expect(isToolAllowedOnSurface('file_write', 'full')).toBe(true);
+    expect(isToolAllowedOnSurface('file_write', 'reduced')).toBe(true);
+    expect(isToolAllowedOnSurface('shell', 'reduced')).toBe(false);
+    expect(isToolAllowedOnSurface('http_request', 'reduced')).toBe(false);
+    expect(isToolAllowedOnSurface('web_search', 'reduced')).toBe(false);
+    expect(isToolAllowedOnSurface('send_file', 'reduced')).toBe(false);
+    expect(isToolAllowedOnSurface('file_read', 'reduced')).toBe(true);
   });
 
   it('overrides win over mode defaults', () => {

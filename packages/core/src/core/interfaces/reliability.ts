@@ -102,4 +102,11 @@ export interface ReliabilityHarness {
     sessionId?: string;
     agentId?: string;
   }) => Promise<boolean>;
+  /**
+   * Effective tool surface after untrusted admission (optional).
+   * `reduced` strips shell/http/MCP-style tools (ToolEffectPolicy).
+   */
+  toolSurface?: 'full' | 'reduced';
+  /** Machine-readable isolation degradations for this run (audit / UI) */
+  securityDegraded?: string[];
 }

@@ -24,42 +24,70 @@ export function formatRuntimeDatetimeInjection(now: Date = new Date()): string {
 }
 
 /**
- * 格式化工作目录的 runtime 注入文案
+ * 格式化工作目录与允许根的 runtime 注入文案
  *
- * 工具相对路径解析到该目录；模型检索用户文件时应优先在此搜索，
- * 而不是扫全盘或猜项目根。
+ * 工具相对路径解析到 cwd；模型检索/写入应优先在此，且写入路径应落在 allowRoots。
  *
  * @param cwd - 本 Run 的工具 cwd（agent.workspace / RunConfig.cwd）
+ * @param options - allowRoots（L2/事务根）与 effectMode（运行模式）
  * @returns 注入字符串（工作目录锚点块；cwd 为空时返回空串）
  */
-export function formatRuntimeWorkspaceInjection(cwd: string | undefined): string {
+export function formatRuntimeWorkspaceInjection(
+  cwd: string | undefined,
+  options?: { allowRoots?: string[]; effectMode?: string },
+): string {
   const trimmed = cwd?.trim();
   if (!trimmed) return '';
-  return [
+  const lines = [
     `Workspace: ${trimmed}`,
     'Relative tool paths resolve against this directory.',
     'Prefer searching here first for user files and task materials; do not scan the whole disk unless the user asks.',
     'User documents often live in subdirectories (e.g. docs/). To find a file by name, use file_list with a pattern (recursive by default) or give file_read the path under Workspace.',
-  ].join('\n');
+  ];
+  const roots = (options?.allowRoots ?? []).map((r) => r?.trim()).filter(Boolean);
+  if (roots.length > 0) {
+    lines.push(`Allowed roots (write/read under these): ${roots.join(', ')}`);
+    lines.push('Writes outside these roots are denied in strict containment; prefer paths under Allowed roots.');
+  }
+  const mode = options?.effectMode?.trim();
+  if (mode) {
+    lines.push(`Effect mode: ${mode}`);
+    if (mode === 'host') {
+      lines.push('host mode: broad host access (not a sandbox); still avoid destructive commands.');
+    } else if (mode === 'project') {
+      lines.push('project mode: coding mode — file L2 is strict, but shell may touch paths outside roots.');
+    } else if (mode === 'untrusted') {
+      lines.push('untrusted mode: stay inside allowed roots; shell and egress tools may be blocked.');
+    }
+  }
+  return lines.join('\n');
 }
 
 /**
- * 将 datetime（+ 可选 workspace）块拼入既有 injectedContext
+ * 将 datetime（+ 可选 workspace/roots）块拼入既有 injectedContext
  *
  * 锚点在前：datetime → workspace → 既有注入（tasks / guidance）。
  * 保留 `withRuntimeDatetimeInjection` 作为仅时间锚点的兼容入口。
  *
  * @param injectedContext - 本轮已有的注入（tasks / guidance 等），可为空
- * @param options - now 参考时刻；cwd 工具工作目录
+ * @param options - now 参考时刻；cwd 工具工作目录；allowRoots / effectMode
  * @returns 组合后的 injectedContext
  */
 export function withRuntimeEnvironmentInjection(
   injectedContext: string | undefined,
-  options?: { now?: Date; cwd?: string | undefined },
+  options?: {
+    now?: Date;
+    cwd?: string | undefined;
+    allowRoots?: string[];
+    effectMode?: string;
+  },
 ): string {
   const now = options?.now ?? new Date();
   const blocks = [formatRuntimeDatetimeInjection(now)];
-  const ws = formatRuntimeWorkspaceInjection(options?.cwd);
+  const ws = formatRuntimeWorkspaceInjection(options?.cwd, {
+    allowRoots: options?.allowRoots,
+    effectMode: options?.effectMode,
+  });
   if (ws) blocks.push(ws);
   const base = (injectedContext ?? '').trim();
   if (base) blocks.push(base);

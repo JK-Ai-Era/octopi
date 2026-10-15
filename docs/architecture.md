@@ -752,7 +752,7 @@ WebUI does **not** do budget policy; it only renders `known` / `source` / `conte
 
 > Concurrency and Run scope: under the same Agent across multiple Sessions, mutable context lives only in **RunScope** (see [Architecture Constitution](./north-star.md) I1). `SessionAwareRunner` does not use shared `Agent.context` as a session workspace.
 >
-> Tool effects (ToolEffectPolicy / I5): configure `effectPolicy` (modes workspace|project|host|untrusted; default host); cwd layout can still be overridden by `toolIsolation`. Edit-replay via turn undo (file + memory + shell snapshot). Tool calls must include `purpose`. See `arch/tool-effect-policy.md` / `arch/tool-call-purpose.md`.
+> Tool effects (ToolEffectPolicy / I5): configure `effectPolicy` (modes workspace|project|host|untrusted). Omitting `mode` defaults to **workspace** (secure-by-default); scaffolds (`octopi init` / example config) set `"mode": "host"` explicitly for local evaluation. Cwd layout can still be overridden by `toolIsolation`. Edit-replay via turn undo (file + memory + shell snapshot). Tool calls must include `purpose`. Process isolation and `untrusted` admission: [`process-isolation.md`](./process-isolation.md).
 > Session lock (E2/E7): `SessionLease` interface; v1 is `InProcessSessionLock`; distributed deployments must replace the implementation.
 > Session data (model 2): `primaryAgentId` + `preferredAgentId` (≠ primary); compact key `(sessionId, agentId)`; ACL role catalog under the `sessionAcl` config.
 > Gateway defaults: injects Session ACL + shared SessionLease (compatible with the single-agent primary path; multi-agent guests without a grant are rejected).

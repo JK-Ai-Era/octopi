@@ -48,6 +48,10 @@ export interface AgentSummary {
     model: string;
     contextWindow?: number;
   };
+  /** Effective effectPolicy.mode (workspace|project|host|untrusted) */
+  effectMode?: string;
+  /** agent | global | default */
+  effectModeSource?: 'agent' | 'global' | 'default';
 }
 
 export interface ModelCatalogItem {
@@ -854,6 +858,48 @@ export class OctopiClient {
   async renameSession(sessionId: string, title: string): Promise<SessionSummary> {
     const data = await this.patchJson(`/sessions/${encodeURIComponent(sessionId)}`, { title });
     return data?.data as SessionSummary;
+  }
+
+  /** Session temporary effect roots (append-only, session lifetime) */
+  async getSessionEffectRoots(sessionId: string): Promise<{
+    sessionId: string;
+    temporaryRoots: string[];
+    configuredRoots: string[];
+    mode?: string;
+  }> {
+    const data = await this.getJson(
+      `/sessions/${encodeURIComponent(sessionId)}/effect-roots`,
+    );
+    return data?.data as {
+      sessionId: string;
+      temporaryRoots: string[];
+      configuredRoots: string[];
+      mode?: string;
+    };
+  }
+
+  /** Append a session-temporary transaction root (absolute path) */
+  async addSessionEffectRoot(
+    sessionId: string,
+    path: string,
+  ): Promise<{ temporaryRoots: string[] }> {
+    const data = await this.postJson(
+      `/sessions/${encodeURIComponent(sessionId)}/effect-roots`,
+      { path },
+    );
+    return data?.data as { temporaryRoots: string[] };
+  }
+
+  /** Remove one session-temporary transaction root */
+  async removeSessionEffectRoot(
+    sessionId: string,
+    path: string,
+  ): Promise<{ temporaryRoots: string[] }> {
+    const qs = `?path=${encodeURIComponent(path)}`;
+    const data = await this.deleteJson(
+      `/sessions/${encodeURIComponent(sessionId)}/effect-roots${qs}`,
+    );
+    return data?.data as { temporaryRoots: string[] };
   }
 
   /** 会话附件列表 */

@@ -5,16 +5,23 @@
  * 见 arch/tool-effect-policy.md §7。
  */
 
+import { isAbsolute, resolve } from 'node:path';
 import type { ToolIsolationMode } from './isolation.js';
+import {
+  assessL4ProcessMinimum,
+  type ProcessIsolationProfile,
+} from './process-isolation.js';
 
 /** 命名运行模式 */
 export type EffectRunMode = 'workspace' | 'project' | 'host' | 'untrusted';
 
 /**
- * 产品缺省运行模式（未配置 `effectPolicy` / 未写 `mode` 时）。
- * `host`：本机自动化——shell allow、路径不设牢笼；严格场景显式 `workspace`。
+ * Engine default when `effectPolicy.mode` is omitted (secure-by-default).
+ * Scaffold/`octopi init` / `octopi.example.json` set `mode: "host"` explicitly
+ * so evaluation gets full capability; embedders who omit `mode` get `workspace`.
+ * See `docs/process-isolation.md`.
  */
-export const DEFAULT_EFFECT_RUN_MODE: EffectRunMode = 'host';
+export const DEFAULT_EFFECT_RUN_MODE: EffectRunMode = 'workspace';
 
 /** 路径包含级别（L2） */
 export type PathContainment = 'strict' | 'soft' | 'none';
@@ -85,10 +92,32 @@ export type EffectConfirmChannel = 'engine' | 'host-gate';
 /** shell 记账深度（§5.6）：snapshot=采 before 可逆；off=只知情 */
 export type ShellJournalMode = 'snapshot' | 'off';
 
+/** How to admit `untrusted` when L4 process jail is missing */
+export type UntrustedAdmission = 'refuse' | 'degrade';
+
+/** Effective tool surface after isolation admission */
+export type ToolSurface = 'full' | 'reduced';
+
+/** Machine-readable degradations (never silent) */
+export type SecurityDegradation =
+  | 'no_process_jail'
+  | 'network_open'
+  | 'env_inherit'
+  | 'privilege_same'
+  | 'filesystem_not_jailed';
+
 /** 配置形状（可覆盖预设） */
 export interface EffectPolicyConfig {
-  /** 省略 = `DEFAULT_EFFECT_RUN_MODE`（host） */
+  /**
+   * Omitted = `DEFAULT_EFFECT_RUN_MODE` (**workspace**, secure-by-default).
+   * Scaffold/config templates set `"mode": "host"` explicitly for local evaluation.
+   */
   mode?: EffectRunMode;
+  /**
+   * `untrusted` 无 L4 时：`refuse`（缺省，第三方）拒绝运行；
+   * `degrade` 降 effectiveMode + toolSurface=reduced + securityDegraded。
+   */
+  untrustedAdmission?: UntrustedAdmission;
   /** 额外事务 root（绝对路径）；并入 allowRoots */
   transactionRoots?: string[];
   pathContainment?: PathContainment;
@@ -110,7 +139,18 @@ export interface EffectPolicyConfig {
 
 /** 展开后的有效策略 */
 export interface EffectiveEffectPolicy {
+  /** Configured/requested mode (audit trail) */
+  requestedMode: EffectRunMode;
+  /**
+   * Effective mode after untrusted admission.
+   * Equals `requestedMode` when isolation is sufficient (or mode ≠ untrusted).
+   */
   mode: EffectRunMode;
+  untrustedAdmission: UntrustedAdmission;
+  /** `reduced` strips shell/http/MCP-style power when untrusted degrades */
+  toolSurface: ToolSurface;
+  /** Non-empty when isolation is weaker than requested */
+  securityDegraded: SecurityDegradation[];
   toolIsolation: ToolIsolationMode;
   pathContainment: PathContainment;
   shellEscape: ShellEscapePolicy;
@@ -127,10 +167,17 @@ export interface EffectiveEffectPolicy {
   shellJournalLimit?: { maxFiles?: number; maxBytes?: number; maxFileSize?: number };
 }
 
-const MODE_DEFAULTS: Record<
-  EffectRunMode,
-  Omit<EffectiveEffectPolicy, 'allowRoots' | 'transactionRoots'>
-> = {
+type ModePreset = Omit<
+  EffectiveEffectPolicy,
+  | 'allowRoots'
+  | 'transactionRoots'
+  | 'requestedMode'
+  | 'untrustedAdmission'
+  | 'toolSurface'
+  | 'securityDegraded'
+>;
+
+const MODE_DEFAULTS: Record<EffectRunMode, ModePreset> = {
   workspace: {
     mode: 'workspace',
     toolIsolation: 'session-subdir',
@@ -186,22 +233,84 @@ const MODE_DEFAULTS: Record<
  * @param baseWorkspace - 工具基路径（agent.workspace / RunConfig.cwd）
  * @returns 有效策略
  */
+/**
+ * Expand effectPolicy into an effective policy.
+ *
+ * `untrusted` requires an L4 process profile. When the host cannot offer it:
+ * - `untrustedAdmission: 'refuse'` (default) throws
+ * - `untrustedAdmission: 'degrade'` renames effectiveMode to workspace,
+ *   sets toolSurface=reduced, and records securityDegraded[] (never silent)
+ *
+ * @param config - user config (mode optional)
+ * @param baseWorkspace - tool base path
+ * @param isolation - probed process isolation (optional; treated as supervised if absent)
+ * @returns effective policy with requested vs effective mode
+ * @throws Error when untrusted is refused
+ */
 export function resolveEffectiveEffectPolicy(
   config: EffectPolicyConfig,
   baseWorkspace?: string,
+  isolation?: ProcessIsolationProfile,
 ): EffectiveEffectPolicy {
-  const mode = config.mode ?? DEFAULT_EFFECT_RUN_MODE;
+  const requestedMode = config.mode ?? DEFAULT_EFFECT_RUN_MODE;
+  const untrustedAdmission = config.untrustedAdmission ?? 'refuse';
+  let mode = requestedMode;
+  let toolSurface: ToolSurface = 'full';
+  const securityDegraded: SecurityDegradation[] = [];
+
+  if (requestedMode === 'untrusted') {
+    const profile = isolation;
+    const l4 = profile ? assessL4ProcessMinimum(profile) : { ok: false, missing: ['processTree'] as const };
+    if (!l4.ok) {
+      if (untrustedAdmission === 'refuse') {
+        throw new Error(
+          `untrusted_refused: L4 process jail unavailable (missing: ${l4.missing.join(', ')}). ` +
+            `Install bwrap/sandbox-exec or set effectPolicy.untrustedAdmission=degrade.`,
+        );
+      }
+      // degrade: rename + strip power, do not keep the untrusted label
+      mode = 'workspace';
+      toolSurface = 'reduced';
+      securityDegraded.push('no_process_jail');
+      if (profile?.filesystem === 'none' || profile?.filesystem === 'cwd-pin') {
+        securityDegraded.push('filesystem_not_jailed');
+      }
+      if (profile?.privilege === 'same') securityDegraded.push('privilege_same');
+      if (profile?.envHygiene === 'inherit') securityDegraded.push('env_inherit');
+    }
+    // Declare open egress whenever the host cannot close it — not only when
+    // effective mode is still named untrusted (degrade renames mode first).
+    if (isolation?.network === 'open') {
+      securityDegraded.push('network_open');
+    }
+  }
+
+  // Path jail is part of the untrusted promise; never loosen it from config.
   const d = MODE_DEFAULTS[mode];
+  const pathContainment: PathContainment =
+    requestedMode === 'untrusted'
+      ? 'strict'
+      : (config.pathContainment ?? d.pathContainment);
+
+  // untrusted intent residue: keep discard-on-close even when effectiveMode renames
+  const onClose =
+    config.onClose ??
+    (requestedMode === 'untrusted' ? MODE_DEFAULTS.untrusted.onClose : d.onClose);
   const extra = (config.transactionRoots ?? []).map((p) => p.trim()).filter(Boolean);
   const allowRoots = [...(baseWorkspace?.trim() ? [baseWorkspace.trim()] : []), ...extra];
   return {
+    requestedMode,
     mode,
+    untrustedAdmission,
+    toolSurface,
+    securityDegraded,
     toolIsolation: config.toolIsolation ?? d.toolIsolation,
-    pathContainment: config.pathContainment ?? d.pathContainment,
-    shellEscape: config.shellEscape ?? d.shellEscape,
+    pathContainment,
+    // degraded untrusted must not leave shell allow as a hole
+    shellEscape: toolSurface === 'reduced' ? 'deny' : (config.shellEscape ?? d.shellEscape),
     processLimits: config.processLimits ?? d.processLimits,
     commit: config.commit ?? d.commit,
-    onClose: config.onClose ?? d.onClose,
+    onClose,
     effects: config.effects ?? d.effects,
     allowRoots,
     transactionRoots: [
@@ -213,6 +322,41 @@ export function resolveEffectiveEffectPolicy(
     shellJournal: config.shellJournal ?? 'snapshot',
     shellJournalLimit: config.shellJournalLimit,
   };
+}
+
+/**
+ * Whether a tool is on the reduced surface (untrusted degrade).
+ * Reduced keeps content tools inside L2; strips egress and code-exec power.
+ *
+ * @param toolName - registered tool name
+ * @param surface - full or reduced
+ * @returns whether the tool may run
+ */
+export function isToolAllowedOnSurface(
+  toolName: string,
+  surface: ToolSurface,
+): boolean {
+  if (surface === 'full') return true;
+  const n = toolName.toLowerCase();
+  // Reduced: no shell, no HTTP/web egress, no MCP/client power tools
+  const denied = [
+    'shell',
+    'bash',
+    'exec',
+    'execute',
+    'run_command',
+    'http_request',
+    'http',
+    'fetch',
+    'web_fetch',
+    'web_search',
+    'curl',
+    'wget',
+    'mcp',
+    'client_tool',
+    'send_file',
+  ];
+  return !denied.some((d) => n === d || n.startsWith(d + '.') || n.includes('mcp'));
 }
 
 /**
@@ -291,3 +435,104 @@ export async function gateEffect(
     throw new Error(`effect_denied: ${intent.kind}`);
   }
 }
+
+// ── Session-scoped effect overrides (temporary transactionRoots) ──
+
+/**
+ * Session-only effect overrides. Append-only: may add allow roots for this
+ * session; must never loosen pathContainment / shellEscape.
+ */
+export interface SessionEffectOverrides {
+  /** Extra allow/transaction roots (absolute paths), merged into allowRoots */
+  transactionRoots?: string[];
+}
+
+const EFFECT_OVERRIDES_META_KEY = 'effectOverrides';
+
+/**
+ * Parse `session.metadata.effectOverrides` safely (read path).
+ *
+ * Invalid entries are **skipped**, not thrown: a poisoned/corrupt metadata bag
+ * must not abort run start. Strict validation belongs on the write API
+ * (`normalizeTransactionRoots`).
+ *
+ * @param metadata - session metadata bag
+ * @returns valid absolute roots only (empty when absent/invalid)
+ */
+export function readSessionEffectOverrides(
+  metadata: Record<string, unknown> | undefined,
+): SessionEffectOverrides {
+  const raw = metadata?.[EFFECT_OVERRIDES_META_KEY];
+  if (!raw || typeof raw !== 'object') return {};
+  const bag = raw as Record<string, unknown>;
+  const list = bag.transactionRoots;
+  if (!Array.isArray(list)) return {};
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const item of list) {
+    if (typeof item !== 'string') continue;
+    const t = item.trim();
+    if (!t || !isAbsolute(t)) continue;
+    const abs = resolve(t);
+    const key = process.platform === 'win32' ? abs.toLowerCase() : abs;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(abs);
+  }
+  return { transactionRoots: out };
+}
+
+/**
+ * Normalize and validate transaction root paths (absolute, non-empty).
+ *
+ * @param paths - raw paths
+ * @returns absolute normalized unique paths
+ * @throws Error when a path is empty or not absolute
+ */
+export function normalizeTransactionRoots(paths: string[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of paths) {
+    const t = typeof raw === 'string' ? raw.trim() : '';
+    if (!t) throw new Error('effect_root_empty: path must be a non-empty string');
+    // Require caller-supplied absolute paths (do not silently join cwd)
+    if (!isAbsolute(t)) {
+      throw new Error(`effect_root_not_absolute: ${t}`);
+    }
+    const abs = resolve(t);
+    const key = process.platform === 'win32' ? abs.toLowerCase() : abs;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(abs);
+  }
+  return out;
+}
+
+/**
+ * Append session roots to base allowRoots (dedupe; base wins on conflicts).
+ *
+ * @param baseRoots - roots from effectPolicy / workspace
+ * @param extraRoots - session temporary roots
+ * @returns combined unique list
+ */
+export function mergeTransactionRoots(
+  baseRoots: string[],
+  extraRoots: string[] | undefined,
+): string[] {
+  const out = [...baseRoots];
+  const seen = new Set(
+    out.map((p) => (process.platform === 'win32' ? p.toLowerCase() : p)),
+  );
+  for (const p of extraRoots ?? []) {
+    const key = process.platform === 'win32' ? p.toLowerCase() : p;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(p);
+  }
+  return out;
+}
+
+/**
+ * Metadata key used on SessionData.metadata / SessionStore.updateMetadata.
+ */
+export const SESSION_EFFECT_OVERRIDES_KEY = EFFECT_OVERRIDES_META_KEY;

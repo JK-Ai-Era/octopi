@@ -591,6 +591,19 @@ export class Gateway {
     console.log(`[Gateway] Agents: ${Array.from(this.agents.keys()).join(', ') || '(none)'}`);
     console.log(`[Gateway] Channels: ${Array.from(this.channels.keys()).join(', ') || '(none)'}`);
 
+    // SEC-4: surface unsafe effect mode when Web is on (visibility, not a hard stop)
+    const effStatus = this.getEffectPolicyStatus();
+    if (effStatus.configuredMode) {
+      console.log(`[Gateway] effectPolicy.mode: ${effStatus.configuredMode}`);
+    } else {
+      console.log(
+        `[Gateway] effectPolicy.mode: (unset) → engine default ${effStatus.engineDefaultMode}`,
+      );
+    }
+    for (const w of effStatus.warnings) {
+      console.warn(`[Gateway] WARNING ${w}`);
+    }
+
     // Knowledge 与 channel 并行拉起：HTTP 就绪时 /health 不必再读到启动窗口
     const knowledgeBoot = this.bootKnowledgeRuntime();
 
@@ -639,6 +652,152 @@ export class Gateway {
     if (this.knowledgeBootState === 'starting') return 'starting';
     if (this.knowledgeBootState === 'failed') return 'degraded';
     return 'disabled';
+  }
+
+  /**
+   * EffectPolicy visibility (SEC-4): configured vs engine default vs warnings.
+   * Engine default is workspace when `mode` is omitted; scaffold sets host explicitly.
+   */
+  getEffectPolicyStatus(): {
+    configuredMode?: string;
+    effectiveMode: string;
+    engineDefaultMode: string;
+    webEnabled: boolean;
+    warnings: string[];
+  } {
+    const configuredMode = this.config.effectPolicy?.mode;
+    const engineDefaultMode = 'workspace';
+    const effectiveMode = configuredMode ?? engineDefaultMode;
+    const webEnabled = !!(
+      (this.config as { web?: unknown }).web ||
+      (this.config as { webui?: unknown }).webui
+    );
+    const warnings: string[] = [];
+    if (webEnabled && effectiveMode === 'host') {
+      warnings.push(
+        'web_enabled_with_host_mode: full tool capability (shell, no path jail). Multi-tenant should use workspace|untrusted.',
+      );
+    }
+    if (webEnabled && effectiveMode === 'project') {
+      warnings.push(
+        'web_enabled_with_project_mode: coding mode, not an isolation mode (shell may touch paths outside roots).',
+      );
+    }
+    return { configuredMode, effectiveMode, engineDefaultMode, webEnabled, warnings };
+  }
+
+  /**
+   * Session effect roots (SEC / ToolEffectPolicy): configured roots + session temporary roots.
+   * Temporary roots are append-only and die with the session.
+   */
+  async getSessionEffectRoots(sessionId: string): Promise<{
+    sessionId: string;
+    temporaryRoots: string[];
+    configuredRoots: string[];
+    mode?: string;
+  }> {
+    const session = await this.store.load(sessionId);
+    if (!session) {
+      throw new Error(`Session "${sessionId}" not found`);
+    }
+    const { readSessionEffectOverrides } = await import('@octopi-agent/engine');
+    const temporaryRoots =
+      readSessionEffectOverrides(session.metadata).transactionRoots ?? [];
+
+    const agentId = session.primaryAgentId ?? session.agentId;
+    const agentCfg = (
+      this.config.agents as Array<{
+        id?: string;
+        workspace?: string;
+        effectPolicy?: { mode?: string; transactionRoots?: string[] };
+      }> | undefined
+    )?.find((a) => a.id === agentId);
+    const eff =
+      agentCfg?.effectPolicy ??
+      (this.config.effectPolicy as
+        | { mode?: string; transactionRoots?: string[] }
+        | undefined);
+    const workspace = agentCfg?.workspace?.trim() || undefined;
+    const extra = (eff?.transactionRoots ?? []).filter(Boolean);
+    const configuredRoots = [...(workspace ? [workspace] : []), ...extra];
+    return {
+      sessionId,
+      temporaryRoots,
+      configuredRoots,
+      mode: eff?.mode,
+    };
+  }
+
+  /**
+   * Append a session-temporary transaction root (does not loosen containment).
+   *
+   * @throws Error when session missing or path invalid
+   */
+  async addSessionEffectRoot(sessionId: string, rawPath: string): Promise<{
+    temporaryRoots: string[];
+  }> {
+    const { normalizeTransactionRoots, readSessionEffectOverrides, SESSION_EFFECT_OVERRIDES_KEY } =
+      await import('@octopi-agent/engine');
+    const session = await this.store.load(sessionId);
+    if (!session) {
+      throw new Error(`Session "${sessionId}" not found`);
+    }
+    const next = normalizeTransactionRoots([rawPath]);
+    const add = next[0]!;
+    await this.patchSessionMetadata(sessionId, (meta) => {
+      const cur = readSessionEffectOverrides(meta).transactionRoots ?? [];
+      const addKey = process.platform === 'win32' ? add.toLowerCase() : add;
+      const merged = cur.filter(
+        (p: string) => (process.platform === 'win32' ? p.toLowerCase() : p) !== addKey,
+      );
+      merged.push(add);
+      meta[SESSION_EFFECT_OVERRIDES_KEY] = {
+        ...((meta[SESSION_EFFECT_OVERRIDES_KEY] as object) ?? {}),
+        transactionRoots: merged,
+      };
+    });
+    return {
+      temporaryRoots:
+        readSessionEffectOverrides(
+          (await this.store.load(sessionId))?.metadata,
+        ).transactionRoots ?? [],
+    };
+  }
+
+  /**
+   * Remove one session-temporary transaction root.
+   */
+  async removeSessionEffectRoot(sessionId: string, rawPath: string): Promise<{
+    temporaryRoots: string[];
+  }> {
+    const { normalizeTransactionRoots, readSessionEffectOverrides, SESSION_EFFECT_OVERRIDES_KEY } =
+      await import('@octopi-agent/engine');
+    const session = await this.store.load(sessionId);
+    if (!session) {
+      throw new Error(`Session "${sessionId}" not found`);
+    }
+    const target = normalizeTransactionRoots([rawPath])[0]!;
+    const tKey = process.platform === 'win32' ? target.toLowerCase() : target;
+    await this.patchSessionMetadata(sessionId, (meta) => {
+      const cur = readSessionEffectOverrides(meta).transactionRoots ?? [];
+      const kept = cur.filter(
+        (p: string) => (process.platform === 'win32' ? p.toLowerCase() : p) !== tKey,
+      );
+      if (kept.length === 0) {
+        delete meta[SESSION_EFFECT_OVERRIDES_KEY];
+      } else {
+        meta[SESSION_EFFECT_OVERRIDES_KEY] = {
+          ...((meta[SESSION_EFFECT_OVERRIDES_KEY] as object) ?? {}),
+          transactionRoots: kept,
+        };
+      }
+    });
+    return {
+      temporaryRoots:
+        readSessionEffectOverrides(
+          (await this.store.load(sessionId))?.metadata,
+        ).transactionRoots ?? [],
+    };
   }
 
   /**
@@ -790,7 +949,16 @@ export class Gateway {
   }
 
   registerTool(tool: RegisteredTool, agentId?: string): void {
-    this.tools.push(tool);
+    const name = tool.definition.name;
+    // Dedupe by name: last explicit registration wins in the gateway list;
+    // ToolBus still refuses silent replace when building agents unless toolReplace.
+    const idx = this.tools.findIndex((t) => t.definition.name === name);
+    if (idx >= 0) {
+      console.warn(`[Gateway] tool "${name}" replaced in global list`);
+      this.tools[idx] = tool;
+    } else {
+      this.tools.push(tool);
+    }
   }
 
   registerProvider(provider: ModelProvider): void {
@@ -1166,8 +1334,31 @@ export class Gateway {
   // Web Runtime: read/write surface for REST skeleton
   // ================================================================
 
-  getRegisteredAgents(): Array<{ id: string; model: ModelConfig }> {
-    return Array.from(this.agents.entries()).map(([id, agent]) => ({ id, model: agent.model }));
+  getRegisteredAgents(): Array<{
+    id: string;
+    model: ModelConfig;
+    /** Effective effectPolicy.mode (agent → global → engine default workspace) */
+    effectMode: string;
+    /** Where the mode came from */
+    effectModeSource: 'agent' | 'global' | 'default';
+  }> {
+    const cfgAgents =
+      (this.config.agents as Array<{
+        id?: string;
+        effectPolicy?: { mode?: string };
+      }> | undefined) ?? [];
+    const globalMode = this.config.effectPolicy?.mode;
+    return Array.from(this.agents.entries()).map(([id, agent]) => {
+      const cfg = cfgAgents.find((a) => a.id === id);
+      const agentMode = cfg?.effectPolicy?.mode;
+      const effectMode = agentMode ?? globalMode ?? 'workspace';
+      const effectModeSource: 'agent' | 'global' | 'default' = agentMode
+        ? 'agent'
+        : globalMode
+          ? 'global'
+          : 'default';
+      return { id, model: agent.model, effectMode, effectModeSource };
+    });
   }
 
   /**
@@ -3703,7 +3894,14 @@ export class Gateway {
     for (const tool of this.tools) {
       const name = tool.definition.name;
       if (name === 'memory_store' || name === 'memory_search') continue;
-      builder.tool(tool);
+      try {
+        builder.tool(tool);
+      } catch (err) {
+        // One bad/duplicate tool must not abort the rest of the tool face
+        console.warn(
+          `[Gateway] tool register failed (${name}): ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
     }
 
     // Knowledge 工具?Knowledge Service Client（v2?
