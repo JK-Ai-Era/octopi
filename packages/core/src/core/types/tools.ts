@@ -149,6 +149,11 @@ export interface ToolExecutionContext {
   undoRoots?: string[];
   /** Jail network posture (D4-c). Defaults from effect mode: host/project open, workspace/untrusted deny. */
   networkPolicy?: 'open' | 'deny' | 'allowlist';
+  /**
+   * Credential binding strict mode (SEC-3c). true = empty bindings cannot resolve.
+   * Set for untrusted runs / credentials.requireBindings config.
+   */
+  requireCredentialBindings?: boolean;
   /** D7: refuse supervised fallback when the process jail cannot be applied. */
   requireJail?: boolean;
   /** Allow $HOME writes in jail (project/host). */

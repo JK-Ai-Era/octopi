@@ -897,11 +897,29 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
   }
 
   const documentPort = await gateway.getDocumentPort().catch(() => null);
+  // SEC-3c: named credentials for http_request.credential; requireBindings from config
+  const requireCredentialBindings = Boolean(config.credentials?.requireBindings);
+  const allowPrivateNetwork = Boolean(config.security?.network?.allowPrivateNetwork);
+  let credentialStore: import('@octopi-agent/engine/harness/governance/credentials/store.js').CredentialStore | null =
+    null;
+  try {
+    const { CredentialStore } = await import(
+      '@octopi-agent/engine/harness/governance/credentials/store.js'
+    );
+    credentialStore = await CredentialStore.openDefault(getOctopiHome(), {
+      requireBindings: requireCredentialBindings,
+    });
+  } catch (err) {
+    console.warn(`[CLI] CredentialStore unavailable: ${err instanceof Error ? err.message : String(err)}`);
+  }
   const { all } = createToolSet({
     webSearch: webSearchToolCfg,
     summary: summarySupport,
     sessionHistory: sessionHistoryPort,
     documentPort,
+    credentials: credentialStore,
+    network: { allowPrivateNetwork },
+    requireCredentialBindings,
     askUser: (question, options, context) =>
       gateway.askUser({
         sessionId: context.sessionId,

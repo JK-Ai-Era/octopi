@@ -134,6 +134,8 @@ export interface LocalWriteDeps {
   db: KnowledgeDatabase;
   documentConfig?: DocumentCapabilityConfig | null;
   embeddingProvider?: EmbeddingProvider | null;
+  /** source.authRef 解析（SEC-3c consumer 绑定强制） */
+  credentials?: import('../governance/credentials/store.js').CredentialStore | null;
   embed?: {
     enabled?: boolean;
     embedBatch?: number;
@@ -161,6 +163,7 @@ export class LocalKnowledgeWriteService implements KnowledgeWriteService {
       indexStore: this.index,
       documentConfig: deps.documentConfig ?? null,
       embeddingProvider: embed?.enabled === false ? null : (deps.embeddingProvider ?? null),
+      credentials: deps.credentials ?? null,
       ...(embed?.embedBatch != null ? { embedBatch: embed.embedBatch } : {}),
       ...(embed?.embedMinIntervalMs != null ? { embedMinIntervalMs: embed.embedMinIntervalMs } : {}),
       ...(embed?.embedConcurrency != null ? { embedConcurrency: embed.embedConcurrency } : {}),

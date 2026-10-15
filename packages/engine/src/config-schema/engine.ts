@@ -28,6 +28,7 @@ import {
 } from './substrate.js';
 import {
   FileSendConfigSchema,
+  CredentialsConfigSchema,
   SecurityConfigSchema,
   SessionAclConfigSchema,
   SessionConfigSchema,
@@ -72,6 +73,8 @@ export const engineConfigSchema = z.object({
   /** Wisdom 判断范式（maxim） */
   wisdom: WisdomConfigSchema.optional(),
   security: SecurityConfigSchema.optional(),
+  /** Named credential vault policy (SEC-3c requireBindings) */
+  credentials: CredentialsConfigSchema.optional(),
   channels: z.array(ChannelConfigSchema).optional(),
   session: SessionConfigSchema.optional(),
   /** 工具效应隔离策略（宪法 I5）；默认 none */

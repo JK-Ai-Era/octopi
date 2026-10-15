@@ -237,7 +237,10 @@ describe('http_request credential', () => {
       secretEnv: 'OCTOPI_TEST_HTTP_TOKEN',
     });
 
-    const tool = createHttpRequestTool({ credentials: creds });
+    const tool = createHttpRequestTool({
+      credentials: creds,
+      network: { allowPrivateNetwork: true },
+    });
     const result = await tool.handler(
       { url: `${base}/x`, method: 'GET', credential: 'http-demo' },
       {} as never,

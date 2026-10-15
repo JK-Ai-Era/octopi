@@ -23,9 +23,9 @@
 
 **状态：** OP-14 主线已落地；下列为有意保留的边界
 
-- **DNS TOCTOU**：`network-guard` 在 `lookup` 后校验 IP，但 `fetch` 由 undici 再次解析；未 pin 连接到已校验 IP。极高威胁模型需 custom dispatcher（后续）。
-- **`credential_bindings` 只记录不强制**：绑定用于审计/最小权限方向；`http_request.credential` 仍按名解析（未强制 consumer 白名单）。
-- **`http_request` 自身无 SSRF 门禁**：live-query 工具语义宽松；Knowledge ingest 走 `guardedFetch`。
+- **connect 时再校验，非真·IP 钉扎**（SEC-3，v0.77）：`network-guard` 在 connect `lookup` 再校验地址（Knowledge + `http_request`）。真钉扎 / hostname allowlist 需注入自定义 `lookup`/`filterAddresses` 或嵌入方 dispatcher；极高威胁模型请自备钉扎。
+- **`credential_bindings` 有绑定则强制**（SEC-3，v0.77）：绑定为空默认可解析（兼容）；绑定非空须命中 `consumer_kind`+`consumer_id`。`credentials.requireBindings: true`（或 `effectPolicy.mode=untrusted`）下无绑定即拒。
+- **`http_request` 已有 SSRF 门**（SEC-3，v0.77）：默认拒私网/环回/链路本地/metadata；内网目标需 `security.network.allowPrivateNetwork`，且 **metadata/链路本地（含 IPv4-mapped、`fe80::/10`）始终拒绝**。shell `curl`/`wget` 仍无出站门，除非 L4 jail `network: deny`。
 - **OAuth**：`oauth2_client` 仅当已换成 access token 时按 bearer。
 
 ## 会话附件（OP-15）— 已知限制
@@ -54,5 +54,5 @@
 - **`running` 槽**：UI「任务」= job 数；embed 并行是 job 内 lanes。
 - **catalog topics 抽样**：每源最多 128 条 path。
 - **embed secret skip 墓碑**：`dimensions=0` 不自动重嵌；改策略后需 reprocess。
-- **DNS TOCTOU / credential_bindings 不强制**：无 IP 钉扎；极高威胁模型需 custom dispatcher。
+- **仅 connect 时再校验**：无真·IP 钉扎；极高威胁模型需 custom dispatcher / lookup 注入。
 - **`ingest.ts` 体量**：已拆 job-control/queue/embed-runner/fts/vector-ann；watch/poll/parse 仍在主文件。

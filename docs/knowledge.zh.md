@@ -59,7 +59,9 @@ Session    临时语料  —— 随会话生灭（附件等）
 
 **活系统**（数据库、API、MCP 实时接口）不进 Knowledge，请用 Tool 查询（勿做镜像库）。
 
-外源访问密钥：源上只存 **`authRef`** → `OCTOPI_HOME/credentials/credentials.db`（命名凭证）。密钥明文不进 `knowledge.db` / `octopi.json`。公网默认拒私网（SSRF）；内网文档源可对源开 `network.allowPrivateNetwork`。
+外源访问密钥：源上只存 **`authRef`** → `OCTOPI_HOME/credentials/credentials.db`（命名凭证）。密钥明文不进 `knowledge.db` / `octopi.json`。公网默认拒私网（SSRF）；内网文档源可对源开 `network.allowPrivateNetwork`。即使放行私网，云 metadata / 链路本地（含 IPv4-mapped `::ffff:169.254.*` 与 `fe80::/10`）仍拒绝。
+
+**凭证绑定（最小权限）：** 若命名凭证存在 `credential_bindings` 记录，消费方必须命中（`knowledge_source` + 源 id，或 `tool` + `http_request`）。绑定为空时默认可解析；配置 `credentials.requireBindings: true`（或 `effectPolicy.mode=untrusted`）则无绑定即拒。
 
 ### 2.1 Knowledge Service（独立服务）
 

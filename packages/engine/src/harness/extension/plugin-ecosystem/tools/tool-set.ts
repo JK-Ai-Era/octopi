@@ -31,6 +31,12 @@ export interface ToolSetConfig {
   };
   /** Summary 公用能力（http_request / file_read L1/L2） */
   summary?: import('../../../context/capabilities/summary/index.js').ToolSummarySupport;
+  /** CredentialStore — http_request.credential（绑定强制见 store.resolve） */
+  credentials?: import('../../../governance/credentials/store.js').CredentialStore | null;
+  /** http_request 网络门禁（默认拒私网） */
+  network?: import('../../../knowledge/network-guard.js').NetworkGuardOptions;
+  /** 无绑定凭证拒绝（credentials.requireBindings / untrusted） */
+  requireCredentialBindings?: boolean;
   /** DocumentPort（document_read / document_probe） */
   documentPort?: import('./document-tools.js').DocumentToolOptions['documentPort'];
   /** Information 历史检索（session_search / session_read） */
@@ -48,6 +54,9 @@ export function createToolSet(config?: ToolSetConfig): ToolSet {
   const builtin = getBuiltinTools({
     summary: config?.summary,
     documentPort: config?.documentPort,
+    credentials: config?.credentials,
+    network: config?.network,
+    requireCredentialBindings: config?.requireCredentialBindings,
   });
   const extensions: RegisteredTool[] = [
     ...(config?.memoryStore ? createMemoryTools(config.memoryStore, config?.memory) : []),

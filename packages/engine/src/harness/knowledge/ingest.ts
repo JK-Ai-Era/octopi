@@ -679,7 +679,10 @@ export class KnowledgeIngest extends EventEmitter {
         `source ${source.id} has authRef "${source.authRef}" but CredentialStore is not configured`,
       );
     }
-    const resolved = await this.credentials.resolve(source.authRef);
+    const resolved = await this.credentials.resolve(source.authRef, {
+      kind: 'knowledge_source',
+      id: source.id,
+    });
     if (!resolved) {
       throw new Error(
         `credential "${source.authRef}" unavailable (missing secret, expired, or not found)`,

@@ -33,6 +33,10 @@ export interface GatewayConfig {
   toolIsolation?: 'none' | 'session-subdir' | 'session-lock';
   /** ToolEffectPolicy（P3/P4）；onClose 用于会话关闭时残留 undo */
   effectPolicy?: import('@octopi-agent/engine').EffectPolicyConfig;
+  /** 命名凭证库策略（SEC-3c）；requireBindings=true 时无绑定凭证不可 resolve */
+  credentials?: {
+    requireBindings?: boolean;
+  };
   /** Session ACL 角色目录（E6）；缺省内置五角色 */
   sessionAcl?: import('@octopi-agent/engine/harness/governance/session-acl/types.js').SessionAclConfig;
   /** send_file 外发限额；缺省 maxBytes=2GB，maxReleasesPerSession 不限 */

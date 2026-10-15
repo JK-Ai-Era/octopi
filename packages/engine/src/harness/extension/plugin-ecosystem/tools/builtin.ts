@@ -812,6 +812,12 @@ export function createFileListTool(options?: {
 export function getBuiltinTools(options?: {
   summary?: import('../../../context/capabilities/summary/index.js').ToolSummarySupport;
   documentPort?: import('./document-tools.js').DocumentToolOptions['documentPort'];
+  /** CredentialStore for http_request.credential（SEC-3c 接线） */
+  credentials?: import('../../../governance/credentials/store.js').CredentialStore | null;
+  /** http_request SSRF 门（allowPrivateNetwork 等） */
+  network?: import('../../../knowledge/network-guard.js').NetworkGuardOptions;
+  /** 无绑定凭证拒绝（部署/untrusted） */
+  requireCredentialBindings?: boolean;
 }): RegisteredTool[] {
   return [
     createFileReadTool({ summary: options?.summary }),
@@ -830,7 +836,12 @@ export function getBuiltinTools(options?: {
           createDocumentProbeTool({ documentPort: options.documentPort }),
         ]
       : []),
-    createHttpRequestTool({ summary: options?.summary }),
+    createHttpRequestTool({
+      summary: options?.summary,
+      credentials: options?.credentials,
+      network: options?.network,
+      requireBindings: options?.requireCredentialBindings,
+    }),
     createEnvInfoTool(),
     createShellTool({ summary: options?.summary }),
   ];

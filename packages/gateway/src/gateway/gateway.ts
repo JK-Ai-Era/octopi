@@ -3765,6 +3765,9 @@ export class Gateway {
       sessionLease: this.sessionLease,
       sessionAcl: this.sessionAcl,
       agentMaxSessionRights: agent.maxSessionRights,
+      // SEC-3c：credentials.requireBindings / untrusted 同源（tool context 与 store 一致）
+      requireCredentialBindings:
+        this.config.credentials?.requireBindings === true,
       // 上下文租约 opt-in：缺省关闭，续聊默认带全量窗口
       idleExpiryMs: this.config.session?.idleExpiryMs,
       observerHub: this.observerHub.isEnabled() ? this.observerHub : undefined,

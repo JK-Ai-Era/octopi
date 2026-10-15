@@ -10,6 +10,26 @@ export const SecurityConfigSchema = z.object({
   enforce: z.enum(['block', 'audit']).optional(),
   injectionSensitivity: z.enum(['low', 'medium', 'high']).optional(),
   allowedPaths: z.array(z.string()).optional(),
+  /**
+   * Tool/engine egress network guard (http_request, Knowledge default).
+   * Default rejects private/loopback/link-local/metadata (SSRF).
+   */
+  network: z
+    .object({
+      /** Explicitly allow private/loopback targets (lab / intranet). */
+      allowPrivateNetwork: z.boolean().optional(),
+    })
+    .optional(),
+});
+
+/**
+ * `credentials` — named credential vault policy (SEC-3c).
+ *
+ * Default: non-empty `credential_bindings` are enforced; empty bindings resolve freely.
+ * `requireBindings: true` (or untrusted effect mode) rejects unbound credentials.
+ */
+export const CredentialsConfigSchema = z.object({
+  requireBindings: z.boolean().optional(),
 });
 
 export const SessionConfigSchema = z.object({

@@ -51,7 +51,14 @@
   "security": {
     "enforce": "block",
     "injectionSensitivity": "medium",
-    "allowedPaths": []
+    "allowedPaths": [],
+    "network": {
+      "allowPrivateNetwork": false
+    }
+  },
+
+  "credentials": {
+    "requireBindings": false
   },
 
   "budgetPolicy": {

@@ -941,6 +941,14 @@ export interface HarnessConfig {
    *
    * 硬边界与 ToolCallRiskPolicy 始终执行；此处只调处置/范围/灵敏度。
    */
+  /**
+   * 命名凭证库策略（SEC-3c）
+   * 默认：有绑定则强制；无绑定可解析。requireBindings=true 时无绑定即拒。
+   */
+  credentials?: {
+    requireBindings?: boolean;
+  };
+
   security?: {
     /**
      * 风险命中后的处置（硬边界不受影响）
@@ -950,6 +958,14 @@ export interface HarnessConfig {
     enforce?: 'block' | 'audit';
     /** 注入检测灵敏度 */
     injectionSensitivity?: 'low' | 'medium' | 'high';
+    /**
+     * 工具/引擎出站网络门禁（http_request、Knowledge 默认）
+     * 默认拒私网/环回/metadata；内网目标需显式 allowPrivateNetwork
+     */
+    network?: {
+      /** 显式放行私网/环回（lab/内网）；metadata/链路本地始终拒绝 */
+      allowPrivateNetwork?: boolean;
+    };
     /** 绝对路径额外允许范围 */
     allowedPaths?: string[];
   };

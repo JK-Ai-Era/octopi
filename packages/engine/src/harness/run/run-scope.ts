@@ -35,6 +35,8 @@ export interface RunToolRuntime {
   undoRoots?: string[];
   /** Jail network posture for shell/exec */
   networkPolicy?: 'open' | 'deny' | 'allowlist';
+  /** Credential binding strict mode (SEC-3c); untrusted / config */
+  requireCredentialBindings?: boolean;
   /** D7 require jail */
   requireJail?: boolean;
   /** jail $HOME write (project/host) */

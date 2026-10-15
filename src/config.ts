@@ -132,6 +132,7 @@ export function toGatewayConfig(config: NormalizedHarnessConfig): GatewayConfig 
     toolIsolation: config.toolIsolation,
     sessionAcl: config.sessionAcl,
     fileSend: config.fileSend,
+    credentials: config.credentials,
     budgetPolicy: config.budgetPolicy,
     contextAssembler: config.context?.contextAssembler ?? config.contextAssembler,
     context: config.context,

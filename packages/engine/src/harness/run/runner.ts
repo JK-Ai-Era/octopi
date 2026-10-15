@@ -114,6 +114,8 @@ export interface SessionAwareRunnerConfig {
   sessionsDir?: string;
   /** ToolEffectPolicy（P3）；展开后驱动 toolIsolation / L2 */
   effectPolicy?: import("../extension/execution-environment/effect-policy.js").EffectPolicyConfig;
+  /** credentials.requireBindings（SEC-3c）：无绑定凭证不可 resolve */
+  requireCredentialBindings?: boolean;
   confirmEffect?: import("../extension/execution-environment/effect-policy.js").ConfirmEffect;
   /** 附件注入参数（knowledge.attachments.inject；缺省用内建默认） */
   sessionAttachmentInject?: {
@@ -343,6 +345,7 @@ export class SessionAwareRunner {
   private effectProcessLimits = true;
   private effectNetwork: 'open' | 'deny' | 'allowlist' | undefined;
   private effectRequireJail: boolean | undefined;
+  private effectRequireCredentialBindings = false;
   private effectHomeWrite: boolean | undefined;
   private effectShellEscape: "deny" | "confirm" | "allow" = "allow";
   private effectShellJournal: "snapshot" | "off" = "snapshot";
@@ -784,6 +787,9 @@ export class SessionAwareRunner {
         this.effectShellJournal = eff.shellJournal;
         this.effectNetwork = eff.network;
         this.effectRequireJail = eff.requestedMode === 'untrusted' && eff.mode === 'untrusted';
+        this.effectRequireCredentialBindings =
+          this.config.requireCredentialBindings === true ||
+          (eff.requestedMode === 'untrusted' && eff.mode === 'untrusted');
         this.effectHomeWrite = eff.mode === 'project' || eff.mode === 'host';
         this.effectShellJournalLimit = eff.shellJournalLimit;
         this.effectUndoLimit = eff.undoLimit;
@@ -1060,6 +1066,8 @@ export class SessionAwareRunner {
           memoryEffects,
           undoRoots,
           networkPolicy: this.effectNetwork,
+          requireCredentialBindings:
+            this.effectMode === 'untrusted' || this.effectRequireCredentialBindings,
           requireJail: this.effectRequireJail,
           homeWrite: this.effectHomeWrite,
           noteSecurityDegraded: (reason: string) => {

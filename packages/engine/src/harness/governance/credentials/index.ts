@@ -20,5 +20,6 @@ export type {
   CredentialMeta,
   CredentialWrite,
   ResolvedCredential,
+  ResolveCredentialOptions,
   SecretMode,
 } from './types.js';

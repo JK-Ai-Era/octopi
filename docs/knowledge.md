@@ -58,7 +58,9 @@ Source kinds:
 
 **Live systems** (databases, APIs, MCP live interfaces) do not enter Knowledge — query them with Tools (do not build a mirror database).
 
-External access credentials: a source stores only an **`authRef`** → `OCTOPI_HOME/credentials/credentials.db` (named credentials). Plaintext secrets never enter `knowledge.db` / `octopi.json`. Public-network defaults reject private networks (SSRF); internal document sources may set `network.allowPrivateNetwork` per source.
+External access credentials: a source stores only an **`authRef`** → `OCTOPI_HOME/credentials/credentials.db` (named credentials). Plaintext secrets never enter `knowledge.db` / `octopi.json`. Public-network defaults reject private networks (SSRF); internal document sources may set `network.allowPrivateNetwork` per source. Cloud metadata / link-local (including IPv4-mapped `::ffff:169.254.*` and `fe80::/10`) stay blocked even when private networks are allowed.
+
+**Credential bindings (least privilege):** if `credential_bindings` rows exist for a named credential, the consumer must match (`knowledge_source` + source id, or `tool` + `http_request`). Empty bindings resolve by default; set `credentials.requireBindings: true` in config (or use `effectPolicy.mode=untrusted`) so unbound credentials cannot resolve.
 
 ### 2.1 Knowledge Service (standalone service)
 

@@ -199,6 +199,7 @@ class RuntimeToolContextProvider implements ToolContextProvider {
         pathRoots: scope.toolRuntime.pathRoots,
         undoRoots: scope.toolRuntime.undoRoots,
         networkPolicy: scope.toolRuntime.networkPolicy,
+        requireCredentialBindings: scope.toolRuntime.requireCredentialBindings,
         requireJail: scope.toolRuntime.requireJail,
         homeWrite: scope.toolRuntime.homeWrite,
         noteSecurityDegraded: scope.toolRuntime.noteSecurityDegraded,

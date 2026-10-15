@@ -84,8 +84,21 @@ export type {
 export { ConnectorRegistry, RestConnector } from './connectors.js';
 export type { KnowledgeConnector, ConnectorContext, RestConnectorConfig } from './connectors.js';
 export { ConnectorFetcher } from './connector-fetcher.js';
-export { assertUrlAllowed, authHeadersForUrl, guardedFetch, isRestrictedIp } from './network-guard.js';
-export type { NetworkGuardOptions, FetchResult } from './network-guard.js';
+export {
+  assertUrlAllowed,
+  authHeadersForUrl,
+  createValidatingLookup,
+  guardedFetch,
+  guardedRequest,
+  isAlwaysBlockedIp,
+  isRestrictedIp,
+} from './network-guard.js';
+export type {
+  AddressFilter,
+  ConnectLookup,
+  FetchResult,
+  NetworkGuardOptions,
+} from './network-guard.js';
 export { htmlToStructuredText, looksLikeHtml } from './html.js';
 export { KnowledgeRetriever } from './retriever.js';
 export {

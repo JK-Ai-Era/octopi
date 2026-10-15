@@ -1,3 +1,32 @@
+## v0.77.0
+
+### feat(security): SEC-3 egress SSRF gate, connect-time DNS re-validation, credential bindings
+
+**问题**：`http_request` 裸 `fetch` 可打内网/云 metadata（提示注入后外联）；`assertUrlAllowed` 与 connect 之间存在 DNS TOCTOU；`credential_bindings` 只记账不强制；生产路径未把 `CredentialStore` 接进工具面。
+
+**拍板**（`arch/security-open-issues.md` SEC-3）：3b 按 bug 立即收口；3a 做 connect 时再校验（非真·IP 钉扎，留 lookup/filterAddresses 注入缝）；3c 默认「有绑定才约束」，`credentials.requireBindings` / untrusted 拧紧；shell curl 显式不承诺；不做出站 profile。版本 v0.77.0。
+
+**调整**：
+
+- **`network-guard.ts`**：`guardedRequest`（多 method）+ connect 时 `createValidatingLookup` 再校验；`lookup` / `filterAddresses` 嵌入方钉扎缝；**metadata/链路本地/未指定地址始终拒绝**（即使 `allowPrivateNetwork`）。
+- **`http_request`**：改走 `guardedRequest` SSRF 门；默认拒私网；`security.network.allowPrivateNetwork` 显式开内网；`networkPolicy=deny` 时强制拒私网。
+- **`CredentialStore.resolve`**：消费侧强制绑定（非空绑定须命中 `consumer`；`requireBindings` 下无绑定即拒）；Knowledge `authRef` 传 `knowledge_source:<id>`，工具传 `tool:http_request`。
+- **接线**：`createToolSet` / `getBuiltinTools` / daemon 注入 `CredentialStore`；`credentials.requireBindings` 配置；untrusted Run 自动 requireBindings。
+- **配置**：`security.network.allowPrivateNetwork`、`credentials.requireBindings`（schema + example）。
+- **文档**：`docs/KNOWN-ISSUES.*`、`docs/knowledge.*` 同步 EN+ZH；`arch/NEXT-STEPS.md` A 项闭环。
+
+**测试**：`tests/harness/sec3-network-credentials.test.ts`（SSRF / TOCTOU lookup / binding / requireBindings / 重定向复验 / 审查回归）。
+
+**审查加固（双 review 后）**：
+
+- **Critical**：IPv4-mapped IPv6（`::ffff:169.254.169.254` / `::ffff:a9fe:a9fe`）不再绕过 metadata 拒绝；`fe80::/10` 链路本地补全（不只 `fe80:` 前缀）。
+- **High**：`requireBindings` 只紧不松（OR store/config/tool/untrusted）；context 显式 `false` 不再覆盖 store 级加固；`credentials` / `security.network` 进 config 类型并经 `toGatewayConfig` → Runner 接线。
+- **High**：超限响应先落定 `bodyTruncated` 再断连（不再因 `destroy` 变成整体 reject/挂死）。
+- **Med+**：`accept-encoding` + gzip/deflate/br 解压（修 `fetch`→`http` 回归）。
+- **Med**：重定向 hop 只在实发 body 时带 `Content-Length`；307/308 保留 method+body；绝对时限（非空闲）；自定义 lookup/filterAddresses 输出仍过受限门；IP 字面量也走 filter 缝。
+
+---
+
 ## v0.76.0
 
 ### feat(security): L4 execution wiring, jail roots/network, capability tool surface

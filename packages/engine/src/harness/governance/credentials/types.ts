@@ -68,6 +68,18 @@ export interface ResolvedCredential {
   headers: Record<string, string>;
 }
 
+/**
+ * resolve 消费约束（SEC-3c）。
+ * - 绑定表非空 → consumer 必须命中，否则拒绝
+ * - 绑定表为空 → 默认可解析（兼容）；requireBindings=true 时拒绝
+ */
+export interface ResolveCredentialOptions {
+  /** 消费方（knowledge_source / tool / …）；绑定非空时必填 */
+  consumer?: CredentialConsumerRef | null;
+  /** 覆盖 store 级 requireBindings（untrusted 严档 / 配置） */
+  requireBindings?: boolean;
+}
+
 export function defaultCredentialHeaders(input: {
   kind: CredentialKind;
   username?: string;

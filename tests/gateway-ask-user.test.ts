@@ -2,7 +2,7 @@
  * Gateway ask_user pending questions
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { Gateway } from '@octopi-agent/gateway/gateway/gateway.js';
 import type { ModelProvider } from '@octopi-agent/core/interfaces/model-provider.js';
 import type { AgentDefinition } from '@octopi-agent/engine/harness/shared/types/agent-definition.js';
@@ -37,9 +37,20 @@ describe('Gateway ask_user questions', () => {
   let gateway: Gateway;
 
   beforeEach(async () => {
-    gateway = new Gateway({ agents: [makeAgent('assistant')] }, new InMemorySessionStore());
+    // ask_user 不依赖 Knowledge；manageLocal 默认会 fork 子进程抢 18280（EADDRINUSE flake）
+    gateway = new Gateway(
+      {
+        agents: [makeAgent('assistant')],
+        knowledge: { service: { manageLocal: false } },
+      },
+      new InMemorySessionStore(),
+    );
     gateway.registerProvider(makeProvider());
     await gateway.start();
+  });
+
+  afterEach(async () => {
+    await gateway.stop();
   });
 
   it('askUser → pending → resolve with answer', async () => {

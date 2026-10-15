@@ -2368,6 +2368,22 @@
           "items": {
             "type": "string"
           }
+        },
+        "network": {
+          "type": "object",
+          "properties": {
+            "allowPrivateNetwork": {
+              "type": "boolean"
+            }
+          }
+        }
+      }
+    },
+    "credentials": {
+      "type": "object",
+      "properties": {
+        "requireBindings": {
+          "type": "boolean"
         }
       }
     },

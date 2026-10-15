@@ -50,22 +50,34 @@ function rowToMeta(row: Record<string, unknown>): CredentialMeta {
 
 export class CredentialStore {
   private db: CredentialDatabase;
+  /** true 时无绑定的凭证不可 resolve（部署拧紧 / untrusted） */
+  private readonly requireBindings: boolean;
 
-  constructor(db: CredentialDatabase) {
+  constructor(db: CredentialDatabase, options?: { requireBindings?: boolean }) {
     this.db = db;
+    this.requireBindings = options?.requireBindings === true;
   }
 
-  static async open(options?: { dbPath?: string }): Promise<CredentialStore> {
+  static async open(options?: {
+    dbPath?: string;
+    requireBindings?: boolean;
+  }): Promise<CredentialStore> {
     const db = await CredentialDatabase.create(options);
-    return new CredentialStore(db);
+    return new CredentialStore(db, { requireBindings: options?.requireBindings });
   }
 
   /**
    * 按 OCTOPI_HOME 打开默认 credentials.db
    */
-  static async openDefault(octopiHome: string): Promise<CredentialStore> {
+  static async openDefault(
+    octopiHome: string,
+    options?: { requireBindings?: boolean },
+  ): Promise<CredentialStore> {
     const paths = resolveCredentialPaths(octopiHome);
-    return CredentialStore.open({ dbPath: paths.dbPath });
+    return CredentialStore.open({
+      dbPath: paths.dbPath,
+      requireBindings: options?.requireBindings,
+    });
   }
 
   get database(): CredentialDatabase {
@@ -187,12 +199,21 @@ export class CredentialStore {
   }
 
   /**
-   * 用时解析为请求头（短命；调用方禁止日志）
+   * 用时解析为请求头（短命；调用方禁止日志）。
+   * 消费侧强制 `credential_bindings`（SEC-3c）：绑定非空须命中 consumer；
+   * 绑定为空且 requireBindings 时拒绝。
    *
    * @param name - 凭证名
+   * @param consumer - 消费方；绑定非空时必填
+   * @param options - requireBindings 覆盖
    * @returns 解析结果；无档或无密钥材料时 null
+   * @throws 绑定策略拒绝时抛错（勿静默降级）
    */
-  async resolve(name: string): Promise<ResolvedCredential | null> {
+  async resolve(
+    name: string,
+    consumer?: import('./types.js').CredentialConsumerRef | null,
+    options?: import('./types.js').ResolveCredentialOptions,
+  ): Promise<ResolvedCredential | null> {
     const row = this.db.raw
       .prepare(`SELECT * FROM credentials WHERE name = ?`)
       .get(name) as Record<string, unknown> | undefined;
@@ -201,6 +222,30 @@ export class CredentialStore {
     const meta = rowToMeta(row);
     if (meta.expiresAt != null && meta.expiresAt < Date.now()) {
       return null;
+    }
+
+    // 只紧不松：显式 true 可收紧；false/undefined 不得覆盖 store 级 requireBindings
+    const require =
+      options?.requireBindings === true || this.requireBindings === true;
+    const bindings = this.listBindings(name);
+    if (require && bindings.length === 0) {
+      throw new Error(
+        `credential "${name}" has no bindings and requireBindings is enabled`,
+      );
+    }
+    if (bindings.length > 0) {
+      const ref = consumer ?? options?.consumer ?? null;
+      if (!ref) {
+        throw new Error(
+          `credential "${name}" is bound; consumer required to resolve`,
+        );
+      }
+      const hit = bindings.some((b) => b.kind === ref.kind && b.id === ref.id);
+      if (!hit) {
+        throw new Error(
+          `credential "${name}" is not bound to consumer ${ref.kind}:${ref.id}`,
+        );
+      }
     }
     const kind = meta.kind;
     let secret: string | null = null;

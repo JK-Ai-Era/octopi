@@ -2,13 +2,12 @@
  * http_request 工具 — HTTP 请求
  *
  * 让 Agent 能够主动发起 HTTP 请求，调用 REST API、获取网页内容。
- * 使用 Node.js 20+ 内置 fetch，零额外依赖。
+ *
+ * 出站：经 knowledge/network-guard SSRF 门（默认拒私网/环回/metadata；
+ * connect 时 lookup 再校验）。内网目标需 `network.allowPrivateNetwork` 显式开。
+ * 重定向每跳复验。shell `curl` 不经此路径（见 docs/KNOWN-ISSUES）。
  *
  * 超长响应：经 capabilities SummaryPort 做 L2 软净化 + L1 硬顶（见 arch/summary-compact.md §3.6）。
- *
- * 安全注意事项：
- * - 生产环境应通过 ToolPolicy 限制可访问的域名
- * - 内网访问默认允许，可通过 security guard 拦截
  */
 
 import type { RegisteredTool } from '@octopi-agent/core/types.js';
@@ -18,18 +17,28 @@ import {
   type ToolSummarySupport,
 } from '../../../context/capabilities/summary/index.js';
 import type { CredentialStore } from '../../../governance/credentials/store.js';
+import {
+  guardedRequest,
+  type NetworkGuardOptions,
+} from '../../../knowledge/network-guard.js';
 
 export interface HttpRequestToolOptions {
   /** Summary L1/L2 支持；未提供时仅使用内置 L1 binding */
   summary?: ToolSummarySupport;
   /** 凭证库（credential 参数按名注入 header，模型不见明文） */
   credentials?: CredentialStore | null;
+  /** SSRF 门选项（allowPrivateNetwork / timeout / maxRedirects…） */
+  network?: NetworkGuardOptions;
+  /** 强制 credential_bindings（空绑定即拒）；缺省随 store / Run 上下文 */
+  requireBindings?: boolean;
 }
+
+const HTTP_CONSUMER = { kind: 'tool', id: 'http_request' } as const;
 
 /**
  * 创建 http_request 工具
  *
- * @param options - 可选 SummaryPort / binding 配置注入
+ * @param options - 可选 SummaryPort / CredentialStore / network 门禁
  * @returns RegisteredTool
  */
 export function createHttpRequestTool(options?: HttpRequestToolOptions): RegisteredTool {
@@ -38,7 +47,7 @@ export function createHttpRequestTool(options?: HttpRequestToolOptions): Registe
       name: 'http_request',
       capabilities: ['egress'],
       description:
-        'Make an HTTP request to a URL. Supports GET, POST, PUT, PATCH, DELETE. Returns status, headers, and body (large bodies may be summarized). Useful for API calls, web scraping, and webhook testing.',
+        'Make an HTTP request to a URL. Supports GET, POST, PUT, PATCH, DELETE. Returns status, headers, and body (large bodies may be summarized). Useful for API calls, web scraping, and webhook testing. Private/loopback/metadata addresses are blocked unless explicitly allowed.',
       parameters: {
         url: {
           type: 'string',
@@ -58,7 +67,7 @@ export function createHttpRequestTool(options?: HttpRequestToolOptions): Registe
         credential: {
           type: 'string',
           description:
-            'Named credential from the credential store (auth headers injected server-side; secret never returned)',
+            'Named credential from the credential store (auth headers injected server-side; secret never returned). Subject to credential_bindings when bindings exist.',
         },
         body: {
           type: 'string',
@@ -92,72 +101,67 @@ export function createHttpRequestTool(options?: HttpRequestToolOptions): Registe
       },
       timeoutMs: 120_000,
     },
-    handler: async (args, _context) => {
+    handler: async (args, context) => {
       const url = args.url as string;
-      const method = (args.method as string) ?? 'GET';
+      const method = ((args.method as string) ?? 'GET').toUpperCase();
       const headers = (args.headers as Record<string, string>) ?? {};
       const credentialName = args.credential as string | undefined;
+
+      // jail network deny（workspace/untrusted）时强制不放行私网
+      const allowPrivateNetwork =
+        context?.networkPolicy === 'deny'
+          ? false
+          : (options?.network?.allowPrivateNetwork ?? false);
+
       if (credentialName) {
         const store = options?.credentials;
         if (!store) {
           throw new Error('credential parameter requires a configured CredentialStore');
         }
-        const resolved = await store.resolve(credentialName);
+        // 只紧不松：config/tool/context/untrusted 任一为 true 即强制
+        const requireBindings =
+          context?.requireCredentialBindings === true ||
+          options?.requireBindings === true;
+        const resolved = await store.resolve(credentialName, HTTP_CONSUMER, {
+          requireBindings: requireBindings ? true : undefined,
+        });
         if (!resolved) {
           throw new Error(`credential not found or secret unavailable: ${credentialName}`);
         }
-        // 凭证作底，显式 headers 可覆盖
+        // 凭证作底，显式 headers 可覆盖（头名统一小写，避免大小写双写）
         for (const [k, v] of Object.entries(resolved.headers)) {
-          if (headers[k] == null) headers[k] = v;
+          const lk = k.toLowerCase();
+          const has = Object.keys(headers).some((h) => h.toLowerCase() === lk);
+          if (!has) headers[k] = v;
         }
       }
+
       const body = args.body as string | undefined;
       const timeout = Math.min((args.timeout as number) ?? 30_000, 120_000);
       const maxResponseSize = (args.max_response_size as number) ?? 1_048_576;
       const summarizeArg = args.summarize as 'auto' | 'force' | 'off' | undefined;
 
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), timeout);
-
       try {
-        const response = await fetch(url, {
-          method,
-          headers,
-          body: body && ['POST', 'PUT', 'PATCH'].includes(method) ? body : undefined,
-          signal: controller.signal,
-        });
+        const response = await guardedRequest(
+          url,
+          {
+            ...options?.network,
+            allowPrivateNetwork,
+            method,
+            body,
+            timeoutMs: timeout,
+            maxResponseBytes: maxResponseSize,
+            headers: {
+              ...headers,
+            },
+          },
+          { headers },
+        );
 
-        clearTimeout(timer);
+        const responseBody = response.body;
+        const truncated = response.bodyTruncated === true;
 
-        const reader = response.body?.getReader();
-        let responseBody = '';
-        let truncated = false;
-
-        if (reader) {
-          const decoder = new TextDecoder();
-          let totalBytes = 0;
-
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-
-            totalBytes += value.byteLength;
-            responseBody += decoder.decode(value, { stream: true });
-
-            if (totalBytes >= maxResponseSize) {
-              truncated = true;
-              reader.cancel();
-              break;
-            }
-          }
-        }
-
-        const responseHeaders: Record<string, string> = {};
-        response.headers.forEach((value, key) => {
-          responseHeaders[key] = value;
-        });
-
-        const contentType = responseHeaders['content-type'] ?? responseHeaders['Content-Type'];
+        const contentType = response.headers['content-type'] ?? response.headers['Content-Type'];
         const support = options?.summary;
         // 统一从 support（含配置 toolBindings）解析，避免 tools 再写死默认 binding
         const binding = resolveSupportBinding('http_request', support, 8000);
@@ -178,7 +182,7 @@ export function createHttpRequestTool(options?: HttpRequestToolOptions): Registe
         return {
           status: response.status,
           statusText: response.statusText,
-          headers: responseHeaders,
+          headers: response.headers,
           body: applied.body,
           bodyTruncated: truncated || applied.bodyTruncated,
           bodySizeBytes: applied.rawSizeBytes,
@@ -188,7 +192,7 @@ export function createHttpRequestTool(options?: HttpRequestToolOptions): Registe
           url: response.url,
         };
       } catch (error) {
-        if (error instanceof Error && error.name === 'AbortError') {
+        if (error instanceof Error && /timeout/i.test(error.message)) {
           throw new Error(`Request to "${url}" timed out after ${timeout}ms`);
         }
         throw new Error(`HTTP request failed: ${error instanceof Error ? error.message : String(error)}`);

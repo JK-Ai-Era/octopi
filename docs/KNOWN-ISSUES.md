@@ -23,9 +23,9 @@
 
 **Status:** OP-14 mainline landed; the following are intentional boundaries
 
-- **DNS TOCTOU**: `network-guard` validates the IP after `lookup`, but `fetch` resolves again via undici; the connection is not pinned to the validated IP. Very high threat models need a custom dispatcher (later).
-- **`credential_bindings` records only, does not enforce**: bindings aim at audit / least privilege; `http_request.credential` still resolves by name (no consumer allowlist enforced).
-- **`http_request` itself has no SSRF gate**: live-query tool semantics are loose; Knowledge ingest goes through `guardedFetch`.
+- **Connect-time re-validation, not IP pinning** (SEC-3, v0.77): `network-guard` re-validates addresses at connect `lookup` (Knowledge + `http_request`). True IP pinning / hostname allowlists need a custom `lookup`/`filterAddresses` injection or embedder dispatcher. Very high threat models should supply their own pinning.
+- **`credential_bindings` are enforced when present** (SEC-3, v0.77): empty bindings resolve freely by default (compat); non-empty bindings require a matching `consumer_kind`+`consumer_id`. Set `credentials.requireBindings: true` (or run `effectPolicy.mode=untrusted`) to reject unbound credentials.
+- **`http_request` has an SSRF gate** (SEC-3, v0.77): default rejects private/loopback/link-local/metadata; enable `security.network.allowPrivateNetwork` for intranet targets. Metadata/link-local (including IPv4-mapped and `fe80::/10`) stay blocked even then. Shell `curl`/`wget` still has no egress gate unless L4 jail `network: deny`.
 - **OAuth**: `oauth2_client` is treated as bearer only when already exchanged for an access token.
 
 ## Session attachments (OP-15) — known limits
@@ -54,5 +54,5 @@
 - **`running` slot**: UI “tasks” = job count; embed parallelism is lanes within a job.
 - **catalog topics sampling**: at most 128 paths per source.
 - **embed secret skip tombstone**: `dimensions=0` does not auto re-embed; changing policy needs reprocess.
-- **DNS TOCTOU / credential_bindings unenforced**: no IP pinning; very high threat models need a custom dispatcher.
+- **Connect-time re-validation only**: no true IP pinning; very high threat models need custom dispatcher / lookup injection.
 - **`ingest.ts` size**: already split into job-control/queue/embed-runner/fts/vector-ann; watch/poll/parse still live in the main file.
