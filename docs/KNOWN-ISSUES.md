@@ -21,6 +21,8 @@
 
 **EffectPolicy default (v0.75.0):** omitting `mode` now means `workspace` (secure-by-default). Scaffolds set `"mode": "host"` explicitly. Deployments that relied on implicit host must add `"effectPolicy": { "mode": "host" }`.
 
+**HITL single model (SEC-7, v0.79.0):** the only confirm surfaces are `confirmHighRisk` and `confirmEffect`, both returning `HitlDecision` (`deny` / `approve` / `approve_session` / `approve_always`). The engine caches session/always approvals (`HitlDecisionCache`); hosts only express the decision. `approve_session` is keyed by `sessionId`; `approve_always` is keyed by `agentId` (agents with different trust levels do not share always-grants). Missing scope id degrades to one-shot. `ApprovalManager` / `ApprovalProvider` were removed. Gateway confirms go through `pendingApprovals` (Web `/approvals`); `askUser` is reserved for the `ask_user` tool. Unattended / no-hook / timeout stays fail-closed. Tool *output* high/critical still blocks with no confirm path. Cache key granularity is tool name / effect kind (not per-argument) by design.
+
 ## Knowledge external-source outbound — known limits
 
 **Status:** OP-14 mainline landed; the following are intentional boundaries

@@ -1,21 +1,22 @@
 /**
- * ToolEffectPolicy P4 — host-gate confirmEffect
+ * ToolEffectPolicy P4 — host-gate confirmEffect（SEC-7 HitlDecision）
  */
 import { describe, it, expect, vi } from 'vitest';
 
 import { gateEffect } from '@octopi-agent/engine/harness/extension/execution-environment/effect-policy.js';
 import type { ConfirmEffect } from '@octopi-agent/engine/harness/extension/execution-environment/effect-policy.js';
+import { HitlDecisionCache } from '@octopi-agent/engine/harness/governance/human-in-the-loop/decision-cache.js';
 
 describe('gateEffect host-gate', () => {
   it('auto-allows transactional file.write and memory.write', async () => {
-    const confirm = vi.fn(async () => 'allow' as const);
+    const confirm = vi.fn(async () => 'approve' as const);
     await gateEffect(
       { kind: 'file.write', path: '/ws/a', mode: 'create', transactional: true },
-      { effects: 'host-gate', confirmEffect: confirm },
+      { effects: 'host-gate', confirmEffect: confirm, hitlCache: new HitlDecisionCache() },
     );
     await gateEffect(
       { kind: 'memory.write', domain: 'memory', transactional: true },
-      { effects: 'host-gate', confirmEffect: confirm },
+      { effects: 'host-gate', confirmEffect: confirm, hitlCache: new HitlDecisionCache() },
     );
     expect(confirm).not.toHaveBeenCalled();
   });
@@ -24,11 +25,11 @@ describe('gateEffect host-gate', () => {
     const seen: unknown[] = [];
     const confirm: ConfirmEffect = async (intent) => {
       seen.push(intent);
-      return 'allow';
+      return 'approve';
     };
     await gateEffect(
       { kind: 'file.write', path: '/etc/x', mode: 'overwrite', transactional: false },
-      { effects: 'host-gate', confirmEffect: confirm },
+      { effects: 'host-gate', confirmEffect: confirm, hitlCache: new HitlDecisionCache() },
     );
     expect(seen).toHaveLength(1);
     expect((seen[0] as { path: string }).path).toBe('/etc/x');
@@ -39,7 +40,7 @@ describe('gateEffect host-gate', () => {
     await expect(
       gateEffect(
         { kind: 'shell', command: 'rm -rf /' },
-        { effects: 'host-gate', confirmEffect: confirm },
+        { effects: 'host-gate', confirmEffect: confirm, hitlCache: new HitlDecisionCache() },
       ),
     ).rejects.toThrow(/effect_denied/);
   });
@@ -54,7 +55,7 @@ describe('gateEffect host-gate', () => {
   });
 
   it('engine channel does not invoke confirmEffect', async () => {
-    const confirm = vi.fn(async () => 'allow' as const);
+    const confirm = vi.fn(async () => 'approve' as const);
     await gateEffect(
       { kind: 'shell', command: 'ls' },
       { effects: 'engine', confirmEffect: confirm },
@@ -69,11 +70,11 @@ describe('gateEffect host-gate', () => {
   it('shell is non-transactional under host-gate', async () => {
     const confirm: ConfirmEffect = async (intent) => {
       expect(intent.kind).toBe('shell');
-      return 'allow';
+      return 'approve';
     };
     await gateEffect(
       { kind: 'shell', command: 'echo hi', cwd: '/ws' },
-      { effects: 'host-gate', confirmEffect: confirm, shellEscape: 'confirm' },
+      { effects: 'host-gate', confirmEffect: confirm, shellEscape: 'confirm', hitlCache: new HitlDecisionCache() },
     );
   });
 

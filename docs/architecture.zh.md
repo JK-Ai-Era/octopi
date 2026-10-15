@@ -281,15 +281,12 @@ harness/governance/security/
 
 ### 3.4 Human-in-the-Loop — 人机交互 [新增]
 
-**职责**：审批请求管理、审批策略、用户决策缓存。
+**职责**：为两条 HITL 钩子（`confirmHighRisk` / `confirmEffect`）做确认决策缓存。单模型（SEC-7）：宿主只表达 `HitlDecision`；引擎记账 `approve_session` / `approve_always`。无独立审批管理器。
 
 ```
 harness/governance/human-in-the-loop/
-├── approval-manager.ts    # 审批请求管理
-├── approval-policy.ts     # 审批策略（auto / confirm-all / confirm-high-risk）
-├── decision-cache.ts      # 用户决策缓存
-├── feedback-collector.ts  # 用户反馈收集
-├── types.ts
+├── decision-cache.ts      # HitlDecisionCache + resolveHitlDecision
+├── types.ts               # HitlDecision 再导出
 └── index.ts
 ```
 

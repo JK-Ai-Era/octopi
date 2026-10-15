@@ -16,7 +16,7 @@ import type {
   ViewMode,
 } from '@octopi-agent/gateway/web/conversation/types';
 import type { RunStatus, InspectorState } from '@octopi-agent/gateway/web/runtime/store';
-import type { SessionTaskView, ModelCatalog, SessionModelView, CommandCatalogItemDto, PendingQuestion, ClientToolCallDto, ClientToolDescriptorDto } from '@octopi-agent/gateway/web/sdk/client';
+import type { SessionTaskView, ModelCatalog, SessionModelView, CommandCatalogItemDto, PendingQuestion, PendingApproval, ApprovalScope, ClientToolCallDto, ClientToolDescriptorDto } from '@octopi-agent/gateway/web/sdk/client';
 import { ClientToolCallCard, WebViewPreview, type RenderedWebView } from './ClientToolCallCard';
 import { FileCard, FilePreviewPanel, fileRefFromCall, fileRefFromToolResult, type FileRef } from './FileDelivery';
 // 浏览器侧直连 token 模块（不经 harness barrel / context/index，避免拉入 Node 专用依赖）
@@ -477,6 +477,56 @@ function QuestionCard({
   );
 }
 
+// ── SEC-7 HITL approval card ──
+
+function ApprovalCard({
+  approval,
+  onDecide,
+  deciding,
+}: {
+  approval: PendingApproval;
+  onDecide: (action: 'approve' | 'reject', scope?: ApprovalScope) => void;
+  deciding: boolean;
+}) {
+  const req = approval.request;
+  const isEffect = req.kind === 'effect';
+  return (
+    <div className="panel question-card" style={{ borderColor: 'var(--color-danger, #dc2626)', marginBottom: 12 }}>
+      <div style={{ fontWeight: 600, marginBottom: 8 }}>
+        <span style={{ color: 'var(--color-danger, #dc2626)' }}>
+          {isEffect ? '效应确认' : '高风险确认'}
+        </span>
+        <span style={{ marginLeft: 8, fontWeight: 400 }} className="small muted">
+          {req.actionDescription || req.toolName}
+        </span>
+      </div>
+      <div className="small muted" style={{ marginBottom: 8, whiteSpace: 'pre-wrap' }}>
+        {req.riskDescription}
+        {Object.keys(req.arguments ?? {}).length > 0 && (
+          <>{"\n"}Args: {JSON.stringify(req.arguments).slice(0, 200)}</>
+        )}
+      </div>
+      <div className="small muted" style={{ marginBottom: 8 }}>
+        「本会话允许」/「始终允许」按<b>工具/效应类型</b>记账（如全部 shell），不是仅这一次参数。
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+        <button className="btn-primary" disabled={deciding} onClick={() => onDecide('approve', 'once')}>
+          允许一次
+        </button>
+        <button className="btn-secondary" disabled={deciding} onClick={() => onDecide('approve', 'session')}>
+          本会话允许（{req.toolName}）
+        </button>
+        <button className="btn-secondary" disabled={deciding} onClick={() => onDecide('approve', 'always')}>
+          始终允许（{req.toolName}）
+        </button>
+        <button className="btn-secondary" disabled={deciding} onClick={() => onDecide('reject')}>
+          拒绝
+        </button>
+      </div>
+    </div>
+  );
+}
+
 const TASK_STATUS_ORDER: Record<SessionTaskView['status'], number> = {
   open: 0,
   paused: 1,
@@ -609,6 +659,8 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
   const [tasks, setTasks] = useState<SessionTaskView[]>([]);
   const [questions, setQuestions] = useState<PendingQuestion[]>([]);
   const [answeringQuestion, setAnsweringQuestion] = useState(false);
+  const [approvals, setApprovals] = useState<PendingApproval[]>([]);
+  const [decidingApproval, setDecidingApproval] = useState(false);
   const [clientToolCalls, setClientToolCalls] = useState<ClientToolCallDto[]>([]);
   const [renderedWebViews, setRenderedWebViews] = useState<RenderedWebView[]>([]);
   const [deliveredFiles, setDeliveredFiles] = useState<Array<{ ref: FileRef; createdAt: number }>>([]);
@@ -686,6 +738,9 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
     }) as EventListener);
     store.addEventListener('questions', ((e: CustomEvent) => {
       setQuestions(e.detail.questions ?? []);
+    }) as EventListener);
+    store.addEventListener('approval', ((e: CustomEvent) => {
+      setApprovals(e.detail.approvals ?? []);
     }) as EventListener);
     store.addEventListener('clientToolCalls', ((e: CustomEvent) => {
       const calls = (e.detail.calls ?? []) as ClientToolCallDto[];
@@ -778,7 +833,7 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
   useEffect(() => {
     if (!stickToBottomRef.current) return;
     scrollToBottom();
-  }, [conversationItems, stream, questions, clientToolCalls, renderedWebViews]);
+  }, [conversationItems, stream, questions, approvals, clientToolCalls, renderedWebViews]);
 
   // 切换会话时清掉待发附件，避免 A 的文件挂到 B
   useEffect(() => {
@@ -918,6 +973,7 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
     setStream(state.chat.streamingContent ?? '');
     setTasks(state.chat.tasks ?? []);
     setQuestions(state.chat.questions ?? []);
+    setApprovals(state.chat.approvals ?? []);
     setClientToolCalls(state.chat.clientToolCalls ?? []);
     setRenderedWebViews(webViewsFromCalls(state.chat.clientToolCalls ?? []));
     setDeliveredFiles([]);
@@ -1059,6 +1115,7 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
       setStream('');
       setTasks(store.getTasks());
       setQuestions(store.getQuestions());
+      setApprovals(store.getApprovals());
       setClientToolCalls(store.getClientToolCalls());
       void registerSampleClientTools(created.id);
       await store.refreshSessionModel();
@@ -1088,6 +1145,7 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
       setStream('');
       setTasks(store.getTasks());
       setQuestions(store.getQuestions());
+      setApprovals(store.getApprovals());
       setClientToolCalls(store.getClientToolCalls());
       void registerSampleClientTools(created.id);
       await store.refreshSessionModel();
@@ -1110,6 +1168,7 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
       setStream('');
       setTasks(store.getTasks());
       setQuestions(store.getQuestions());
+      setApprovals(store.getApprovals());
       setClientToolCalls(store.getClientToolCalls());
     } catch (error) {
       setActionError(error instanceof Error ? error.message : String(error));
@@ -1128,6 +1187,24 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
       setActionError(error instanceof Error ? error.message : String(error));
     } finally {
       setAnsweringQuestion(false);
+    }
+  };
+
+  const resolveApproval = async (
+    approvalId: string,
+    action: 'approve' | 'reject',
+    scope?: ApprovalScope,
+  ) => {
+    const store = storeRef.current;
+    if (!store) return;
+    enableStickToBottom();
+    setDecidingApproval(true);
+    try {
+      await store.resolveApproval(approvalId, { action, scope });
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setDecidingApproval(false);
     }
   };
 
@@ -1661,6 +1738,21 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
                           ? (idx, text) => void editAndResend(idx, text)
                           : undefined
                       }
+                    />
+                  ),
+                });
+              }
+
+              for (const a of approvals.filter((x) => x.status === 'pending')) {
+                nodes.push({
+                  id: a.id,
+                  at: a.createdAt || Date.now(),
+                  node: (
+                    <ApprovalCard
+                      key={a.id}
+                      approval={a}
+                      deciding={decidingApproval}
+                      onDecide={(action, scope) => void resolveApproval(a.id, action, scope)}
                     />
                   ),
                 });

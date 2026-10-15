@@ -57,7 +57,7 @@ Does **not** include CLI, Gateway process plane, or Web UI. See [octopi](https:/
 await new AgentBuilder()
   .workspace('/srv/agent-ws')
   .effectPolicy({ mode: 'project', shellEscape: 'allow' })
-  .confirmEffect(async (intent) => (intent.kind === 'shell' ? 'allow' : 'deny'))
+  .confirmEffect(async (intent) => (intent.kind === 'shell' ? 'approve' : 'deny'))
   .build();
 ```
 

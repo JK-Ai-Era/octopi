@@ -1,12 +1,14 @@
 /**
  * Human-in-the-Loop 领域 — 人机交互
  *
- * 职责：审批请求管理、审批策略、用户决策缓存。
- * 契约见 ./types.ts。
+ * 职责：确认决策缓存（session / always）+ 统一 resolve（SEC-7 单模型）。
+ * 强制面在 `confirmHighRisk` / `confirmEffect` 两条钩子，不在本目录另起生命周期。
  */
 
-export { ApprovalManager, createApprovalPolicy } from './approval-manager.js';
-export type { ApprovalManagerConfig } from './approval-manager.js';
-export type {
-  ApprovalLevel, ApprovalRequest, ApprovalDecision, ApprovalProvider, ApprovalPolicy,
-} from './types.js';
+export {
+  HitlDecisionCache,
+  defaultHitlCache,
+  resolveHitlDecision,
+} from './decision-cache.js';
+export type { HitlChannel, HitlCacheScope } from './decision-cache.js';
+export type { HitlDecision } from './types.js';

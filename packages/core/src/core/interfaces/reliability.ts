@@ -91,8 +91,8 @@ export interface ReliabilityHarness {
   /** P5: Context 压力回调（可选，用于 context wrap-up 判断） */
   getContextPressure?: () => { estimatedTokens: number; contextWindow?: number } | undefined;
   /**
-   * high 风险人工确认（可选）。
-   * 返回 true = 确认放行；false / 抛错 = 拒绝。
+   * high 风险人工确认（可选，SEC-7 单模型）。
+   * 返回 {@link HitlDecision}：`approve*` 放行（session/always 由引擎缓存）；`deny` / 抛错 = 拒绝。
    * 未提供时 high 回退为 reject（fail-safe，无人值守场景不放行）。
    */
   confirmHighRisk?: (req: {
@@ -101,7 +101,7 @@ export interface ReliabilityHarness {
     severity: string;
     sessionId?: string;
     agentId?: string;
-  }) => Promise<boolean>;
+  }) => Promise<import('../types/tools.js').HitlDecision>;
   /**
    * Effective tool surface after untrusted admission (optional).
    * `reduced` strips shell/http/MCP-style tools (ToolEffectPolicy).

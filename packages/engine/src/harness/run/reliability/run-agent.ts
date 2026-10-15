@@ -48,6 +48,7 @@ import { UsageLedger } from '../../governance/accounting/usage-ledger.js';
 import type { UsageLedgerSnapshot } from '../../governance/accounting/usage-ledger.js';
 import { nominalTotalTokens } from '@octopi-agent/core/types/turn.js';
 import { getRunScope } from '../run-scope.js';
+import { resolveHitlDecision } from '../../governance/human-in-the-loop/decision-cache.js';
 
 // ── 可靠性配置 ──
 
@@ -286,10 +287,11 @@ function hasStructuredPlanningOnlyFormat(text: string): boolean {
 // ── high 风险确认 ──
 
 /**
- * high 风险人工确认
+ * high 风险人工确认（SEC-7 单模型）
  *
- * - 有 `harness.confirmHighRisk`：请求确认，用户拒绝/异常 → false
- * - 无审批通道：回退 reject（false），无人值守不放行
+ * - 有 `harness.confirmHighRisk`：查 HitlDecisionCache → 调钩子（返回 HitlDecision）
+ * - 无审批通道 / 异常 / deny：回退 reject（false），无人值守不放行
+ * - `approve_session` / `approve_always` 由引擎缓存，同 session/进程免再问
  */
 async function confirmHighRiskDecision(
   harness: CoreReliabilityHarness,
@@ -299,19 +301,21 @@ async function confirmHighRiskDecision(
 ): Promise<boolean> {
   const confirm = harness.confirmHighRisk;
   if (!confirm) return false;
-  try {
-    const scope = getRunScope();
-    return await confirm({
-      toolCall,
-      reason,
-      severity,
-      sessionId: scope?.sessionId,
-      agentId: scope?.agentId,
-    });
-  } catch {
-    // 审批通道异常按拒绝处理（fail-safe）；此处吞掉仅因异常不改变「不放行」结论
-    return false;
-  }
+  const scope = getRunScope();
+  return resolveHitlDecision({
+    channel: 'high_risk',
+    key: toolCall.name,
+    sessionId: scope?.sessionId,
+    agentId: scope?.agentId,
+    ask: async () =>
+      await confirm({
+        toolCall,
+        reason,
+        severity,
+        sessionId: scope?.sessionId,
+        agentId: scope?.agentId,
+      }),
+  });
 }
 
 // ── 核心包装函数 ──

@@ -84,6 +84,8 @@ import {
 import { AgentRuntime, SessionRunnerDispatcher, ExplicitRouter } from '@octopi-agent/engine/harness/activation/index.js';
 import { dispatchChannelMessage } from '@octopi-agent/engine/integration/agent-runtime/channel-message-source.js';
 import { SessionAclService } from '@octopi-agent/engine/harness/governance/session-acl/service.js';
+import type { HitlDecision } from '@octopi-agent/core/types/tools.js';
+import { defaultHitlCache } from '@octopi-agent/engine/harness/governance/human-in-the-loop/decision-cache.js';
 import { InProcessSessionLock } from '@octopi-agent/engine/harness/run/concurrency/session-lease.js';
 import { ObserverHub } from '@octopi-agent/engine/harness/observability/observer/hub.js';
 import type {
@@ -94,15 +96,20 @@ import type {
 // Web REST 骨架?Gateway 扩展类型
 // ================================================================
 
-/** Pending approval 请求载荷 */
+/** Pending approval 请求载荷（SEC-7 单模型） */
 export interface PendingApprovalRequest {
   id: string;
+  /** high_risk 工具确认 | host-gate 效应确认 */
+  kind: 'high_risk' | 'effect';
   toolName: string;
   arguments: Record<string, unknown>;
   riskLevel: 'low' | 'medium' | 'high' | 'critical' | 'unknown';
   riskDescription: string;
   actionDescription: string;
 }
+
+/** 审批作用域（映射 HitlDecision） */
+export type ApprovalScope = 'once' | 'session' | 'always';
 
 /** Pending approval 视图 */
 export interface PendingApprovalView {
@@ -115,6 +122,7 @@ export interface PendingApprovalView {
   updatedAt?: number;
   decidedAt?: number;
   decisionReason?: string;
+  decisionScope?: ApprovalScope;
 }
 
 /** ask_user 待答视图 */
@@ -136,6 +144,22 @@ export interface PendingQuestionView {
  * 工具侧识?abort ，不得把空串当用户回?
  */
 export const ASK_USER_CANCELLED = '__ask_user_cancelled__';
+
+/** Normalized risk level for approval display (unknown severity → high, fail-safe) */
+function normalizeRiskLevel(
+  severity: string | undefined,
+): PendingApprovalRequest['riskLevel'] {
+  switch (severity) {
+    case 'low':
+    case 'medium':
+    case 'high':
+    case 'critical':
+    case 'unknown':
+      return severity;
+    default:
+      return 'high';
+  }
+}
 
 /** RegisteredTool → AgentTool（热更新已 build Agent 的 client tool） */
 function registeredToolToAgentTool(tool: RegisteredTool): {
@@ -291,9 +315,10 @@ export class Gateway {
   private circuitBreakers = new Map<string, CircuitBreaker>();
   /**  store 的异步初始化 Promise（未传入 store 时） */
   private _defaultStorePromise?: Promise<SessionStore<SessionData>>;
-  /** Web Runtime pending approvals */
+  /** Web Runtime pending approvals（confirmHighRisk / confirmEffect） */
   private pendingApprovals = new Map<string, PendingApprovalView>();
-  /** ask_user 待答（UI 答完 resolve 等待工具?*/
+  private approvalResolvers = new Map<string, (decision: HitlDecision) => void>();
+  /** ask_user 待答（UI 答完 resolve 等待工具） */
   private pendingQuestions = new Map<string, PendingQuestionView>();
   private questionResolvers = new Map<string, (answer: string) => void>();
   /** Client Tool（客户端能力 → tool 面）*/
@@ -832,12 +857,16 @@ export class Gateway {
 
   /** 删除会话：先按 onClose 收掉残留 undo，再删存储 */
   async deleteSession(sessionId: string): Promise<void> {
+    this.cancelPendingApprovals(sessionId);
+    this.cancelPendingQuestions(sessionId);
+    this.clearHitlSessionCache(sessionId);
     await this.applySessionClosePolicy(sessionId);
     await this.store.delete(sessionId);
   }
 
   async stop(): Promise<void> {
     if (!this.started) return;
+    this.cancelAllPendingHitl();
     // 进程退出：按 onClose 收掉所有残留 turn undo（缺省 commit）
     try {
       const { resolveSessionUndoOnClose, resolveSessionUndoPaths } = await import(
@@ -980,6 +1009,8 @@ export class Gateway {
    */
   abortSession(sessionId: string): void {
     this.cancelPendingQuestions(sessionId);
+    this.cancelPendingApprovals(sessionId);
+    this.clearHitlSessionCache(sessionId);
     this.clientTools.cancelSessionCalls(sessionId, 'session aborted');
     for (const agentId of this.agents.keys()) {
       this.runtime.abort(agentId, sessionId);
@@ -3097,34 +3128,171 @@ export class Gateway {
     return null;
   }
 
-  listPendingApprovals(): PendingApprovalView[] {
-    return Array.from(this.pendingApprovals.values());
+  listPendingApprovals(sessionId?: string): PendingApprovalView[] {
+    const all = Array.from(this.pendingApprovals.values());
+    return sessionId ? all.filter((a) => a.sessionId === sessionId) : all;
   }
 
-  createPendingApproval(input: { sessionId: string; agentId: string; request: PendingApprovalRequest }): PendingApprovalView {
+  /**
+   * 挂起审批并等待 UI 作答（SEC-7 唯一确认通道）。
+   * 无人值守 / 取消 → deny（fail-closed）。
+   */
+  requestApproval(input: {
+    sessionId: string;
+    agentId: string;
+    request: Omit<PendingApprovalRequest, 'id'>;
+    timeoutMs?: number;
+  }): Promise<HitlDecision> {
+    const id = randomUUID();
     const view: PendingApprovalView = {
-      id: randomUUID().slice(0, 8),
+      id,
       sessionId: input.sessionId,
       agentId: input.agentId,
-      request: input.request,
+      request: { ...input.request, id },
       status: 'pending',
       createdAt: Date.now(),
     };
-    this.pendingApprovals.set(view.id, view);
-    return view;
+    return new Promise<HitlDecision>((resolve) => {
+      let settled = false;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const finish = (decision: HitlDecision) => {
+        if (settled) return;
+        settled = true;
+        if (timer) clearTimeout(timer);
+        this.approvalResolvers.delete(id);
+        resolve(decision);
+      };
+      this.pendingApprovals.set(id, view);
+      this.approvalResolvers.set(id, finish);
+      // 先广播再淘汰：淘汰只会删更旧的条目，不会波及刚插入的 view
+      this.broadcastApprovalEvent(view);
+      this.evictOldApprovals(id);
+      const timeoutMs = input.timeoutMs ?? 120_000;
+      if (timeoutMs > 0) {
+        timer = setTimeout(() => {
+          const pending = this.pendingApprovals.get(id);
+          if (pending && pending.status === 'pending') {
+            pending.status = 'rejected';
+            pending.decisionReason = 'timeout';
+            pending.decidedAt = Date.now();
+            pending.updatedAt = pending.decidedAt;
+            this.broadcastApprovalEvent(pending);
+          }
+          finish('deny');
+        }, timeoutMs);
+        // 不阻塞进程退出；resolver 命中时 timer 成为 no-op
+        timer.unref?.();
+      }
+    });
   }
 
-  resolvePendingApproval(approvalId: string, input: { action: 'approve' | 'reject'; reason?: string }): PendingApprovalView | null {
+  resolvePendingApproval(
+    approvalId: string,
+    input: { action: 'approve' | 'reject'; scope?: ApprovalScope; reason?: string },
+  ): PendingApprovalView | null {
     const approval = this.pendingApprovals.get(approvalId);
-    if (!approval) return null;
+    if (!approval || approval.status !== 'pending') return null;
 
     const now = Date.now();
+    const scope: ApprovalScope =
+      input.action === 'approve' ? (input.scope ?? 'once') : 'once';
     approval.status = input.action === 'approve' ? 'approved' : 'rejected';
     approval.decisionReason = input.reason;
+    approval.decisionScope = input.action === 'approve' ? scope : undefined;
     approval.decidedAt = now;
     approval.updatedAt = now;
 
+    const decision: HitlDecision =
+      input.action !== 'approve'
+        ? 'deny'
+        : scope === 'session'
+          ? 'approve_session'
+          : scope === 'always'
+            ? 'approve_always'
+            : 'approve';
+    const finish = this.approvalResolvers.get(approvalId);
+    this.approvalResolvers.delete(approvalId);
+    finish?.(decision);
+    this.broadcastApprovalEvent(approval);
     return approval;
+  }
+
+  /** 会话结束时取消未决审批（fail-closed deny） */
+  cancelPendingApprovals(sessionId: string): void {
+    for (const [id, a] of this.pendingApprovals) {
+      if (a.sessionId !== sessionId || a.status !== 'pending') continue;
+      const now = Date.now();
+      a.status = 'rejected';
+      a.decisionReason = 'cancelled';
+      a.decidedAt = now;
+      a.updatedAt = now;
+      const finish = this.approvalResolvers.get(id);
+      this.approvalResolvers.delete(id);
+      finish?.('deny');
+      this.broadcastApprovalEvent(a);
+    }
+  }
+
+  /** 丢掉该 session 的 HITL session-scope 缓存（always 保留） */
+  private clearHitlSessionCache(sessionId: string): void {
+    defaultHitlCache.clearSession(sessionId);
+  }
+
+  /** 进程退出：全部未决审批 / 问题 fail-closed */
+  private cancelAllPendingHitl(): void {
+    for (const sessionId of new Set(
+      [...this.pendingApprovals.values(), ...this.pendingQuestions.values()].map((x) => x.sessionId),
+    )) {
+      this.cancelPendingApprovals(sessionId);
+      this.cancelPendingQuestions(sessionId);
+    }
+  }
+
+  /**
+   * 淘汰超额审批。`keepId` 为刚插入的条目，永不淘汰。
+   * 被淘汰的 pending 会标 rejected + 广播，避免 UI 残卡。
+   */
+  private evictOldApprovals(keepId: string): void {
+    const MAX_APPROVALS = 256;
+    if (this.pendingApprovals.size <= MAX_APPROVALS) return;
+    const terminal = [...this.pendingApprovals.values()]
+      .filter((a) => a.status !== 'pending')
+      .sort((a, b) => (a.updatedAt ?? a.createdAt) - (b.updatedAt ?? b.createdAt));
+    for (const a of terminal) {
+      if (this.pendingApprovals.size <= MAX_APPROVALS) break;
+      this.pendingApprovals.delete(a.id);
+    }
+    if (this.pendingApprovals.size > MAX_APPROVALS) {
+      const oldest = [...this.pendingApprovals.values()]
+        .filter((a) => a.status === 'pending' && a.id !== keepId)
+        .sort((a, b) => a.createdAt - b.createdAt);
+      for (const a of oldest) {
+        if (this.pendingApprovals.size <= MAX_APPROVALS) break;
+        const now = Date.now();
+        a.status = 'rejected';
+        a.decisionReason = 'evicted';
+        a.decidedAt = now;
+        a.updatedAt = now;
+        this.pendingApprovals.delete(a.id);
+        const finish = this.approvalResolvers.get(a.id);
+        this.approvalResolvers.delete(a.id);
+        finish?.('deny');
+        this.broadcastApprovalEvent(a);
+      }
+    }
+  }
+
+  private broadcastApprovalEvent(approval: PendingApprovalView): void {
+    const event = {
+      type: approval.status === 'pending' ? 'approval.pending' : 'approval.resolved',
+      sessionId: approval.sessionId,
+      timestamp: Date.now(),
+      data: { approval },
+    } as unknown as AgentEvent;
+    this.emitEvent(event);
+    for (const adapter of this.streamingAdapters) {
+      adapter.broadcastEvent(approval.sessionId, event);
+    }
   }
 
   // ================================================================
@@ -3983,54 +4151,62 @@ export class Gateway {
       onSecurityViolation: (v) => ({ action: 'block', reason: v.description }),
     });
 
-    // P4 host-gate：非事务效应交宿主（ask_user UI；无人值守 fail-safe 拒绝）
+    // P4 host-gate + SEC-7：非事务效应交宿主（pendingApprovals；无人值守 fail-safe 拒绝）
     builder.confirmEffect(async (intent) => {
       const { getRunScope } = await import('@octopi-agent/engine/harness');
       const scope = getRunScope();
-      const sessionId = scope?.sessionId ?? 'unknown';
-      const agentId = scope?.agentId ?? 'default';
+      // 无 RunScope/sessionId 时建卡 UI 不可见——直接 deny，避免空等超时
+      if (!scope?.sessionId) return 'deny';
+      const sessionId = scope.sessionId;
+      const agentId = scope.agentId ?? 'default';
       const desc =
         intent.kind === 'shell'
           ? `shell: ${String(intent.command ?? '').slice(0, 120)}`
           : intent.kind === 'file.write'
             ? `write ${intent.path} (${intent.mode ?? 'overwrite'})`
             : (intent.description ?? intent.kind);
-      try {
-        const answer = await this.askUser({
-          sessionId,
-          agentId,
-          question: `Allow effect? ${desc}`,
-          options: ['allow', 'deny'],
-        });
-        return String(answer).toLowerCase() === 'allow' ? 'allow' : 'deny';
-      } catch {
-        return 'deny';
-      }
+      return this.requestApproval({
+        sessionId,
+        agentId,
+        request: {
+          kind: 'effect',
+          toolName: intent.kind,
+          arguments: {
+            path: intent.path,
+            command: intent.command,
+            mode: intent.mode,
+            cwd: intent.cwd,
+            domain: intent.domain,
+            description: intent.description,
+          },
+          riskLevel: intent.kind === 'shell' ? 'high' : 'medium',
+          riskDescription: desc,
+          actionDescription: desc,
+        },
+      });
     });
 
-    // high 风险人工：接?ask_user UI（有交互则确认，无人值守 fail-safe 拒绝?
+    // high 风险人工：pendingApprovals（有交互则确认，无人值守 fail-safe 拒绝）
     builder.confirmHighRisk(async (req) => {
-      const sessionId = req.sessionId ?? 'unknown';
+      // 无 sessionId 时建卡 UI 不可见——直接 deny，避免空等超时
+      if (!req.sessionId) return 'deny';
+      const sessionId = req.sessionId;
       const agentId = req.agentId ?? 'default';
       const toolName = req.toolCall?.name ?? 'tool';
       const args = (req.toolCall?.arguments ?? {}) as Record<string, unknown>;
       const purpose = typeof args.purpose === 'string' ? args.purpose.trim() : '';
-      const argsPreview = JSON.stringify(args).slice(0, 200);
-      try {
-        const answer = await this.askUser({
-          sessionId,
-          agentId,
-          question:
-            `High-risk tool requires confirmation.\n` +
-            (purpose ? `Action: ${purpose}\n` : '') +
-            `Tool: ${toolName}\nArgs: ${argsPreview}\nRisk: ${req.reason}\n\n` +
-            `Allow this call?`,
-          options: ['yes', 'no'],
-        });
-        return answer.trim().toLowerCase() === 'yes' || answer.trim().toLowerCase() === 'y';
-      } catch {
-        return false;
-      }
+      return this.requestApproval({
+        sessionId,
+        agentId,
+        request: {
+          kind: 'high_risk',
+          toolName,
+          arguments: args,
+          riskLevel: normalizeRiskLevel(req.severity),
+          riskDescription: req.reason,
+          actionDescription: purpose ? `${toolName}: ${purpose}` : toolName,
+        },
+      });
     });
 
     // 构建（builder.observerHub 已注入；setObserverHub ?runnerConfig 传入的路径）

@@ -13,7 +13,7 @@ Principal · Intent · RoleDefinition · RoleBinding · Policy · Approval · Cr
 |------|------|
 | `session-acl/` | 角色目录（五角色出厂）、grant/revoke、`authorizeRun`、`switch(preferred\|handoff)`（E6/I3） |
 | `security/` | 硬边界 + RiskPolicy（安全不可绕过）；Shell 解析、降级策略 |
-| `human-in-the-loop/` | 审批请求、审批策略、决策缓存 |
+| `human-in-the-loop/` | HITL 确认决策缓存（`HitlDecisionCache`；SEC-7 单模型，无独立审批管理器） |
 | `credentials/` | 凭证保险库（crypto/db/store）；Knowledge 外源 `authRef` 落点 |
 | `accounting/` | UsageLedger + SessionLedger 用量账本 |
 

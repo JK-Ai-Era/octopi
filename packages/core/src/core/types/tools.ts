@@ -6,6 +6,17 @@
  * `ToolParameter` 保留字段用于参数校验：类型、必填、枚举、范围、长度、正则，以及嵌套对象与数组。
  */
 
+/**
+ * HITL 确认决策（SEC-7 单模型）。
+ *
+ * - `deny` / `approve`：仅本次（不缓存）
+ * - `approve_session`：本 session 内同 key 免再确认（key 含 sessionId）
+ * - `approve_always`：进程生命周期内同 agent 同 key 免再确认（key 含 agentId）
+ *
+ * 缺 scope id 时对应记忆降级为 one-shot（不放大授权）。
+ */
+export type HitlDecision = 'deny' | 'approve' | 'approve_session' | 'approve_always';
+
 /** 工具来源 */
 export interface ToolSource {
   /** 来源类型 */
@@ -165,6 +176,8 @@ export interface ToolExecutionContext {
   /**
    * host-gate 效应确认（P4）。effects=host-gate 时非事务效应必须经此。
    * 由 Runner 注入宿主回调；缺失时非事务效应拒绝执行。
+   * 返回 {@link HitlDecision}：`approve` 仅本次；`approve_session` / `approve_always`
+   * 由引擎 HitlDecisionCache 记账（宿主不缓存）——session 按 sessionId，always 按 agentId。
    */
   confirmEffect?: (intent: {
     kind: 'file.write' | 'shell' | 'memory.write' | 'other';
@@ -175,7 +188,7 @@ export interface ToolExecutionContext {
     cwd?: string;
     domain?: string;
     description?: string;
-  }) => Promise<'allow' | 'deny'>;
+  }) => Promise<HitlDecision>;
   /** P4：engine | host-gate */
   effectChannel?: 'engine' | 'host-gate';
   /** L1：false 时不启用 timeoutMs 看门狗 */

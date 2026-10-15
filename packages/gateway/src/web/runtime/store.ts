@@ -26,6 +26,7 @@ import type {
   OctopiClient,
   PendingApproval,
   PendingQuestion,
+  ApprovalScope,
   SessionModelView,
   SessionSummary,
   SessionTaskView,
@@ -381,6 +382,31 @@ export class OctopiRuntimeStore extends EventTarget {
     this.dispatch('questions', new QuestionsEvent('questions', { questions: this.chat.questions }));
   }
 
+  /** 当前会话待审批（SEC-7） */
+  getApprovals(): PendingApproval[] {
+    return this.chat.approvals;
+  }
+
+  /** 审批决策（once / session / always） */
+  async resolveApproval(
+    approvalId: string,
+    input: { action: 'approve' | 'reject'; scope?: ApprovalScope; reason?: string },
+  ): Promise<void> {
+    await this.client.resolveApproval(approvalId, input);
+    this.chat.approvals = this.chat.approvals.map((a) =>
+      a.id === approvalId
+        ? {
+            ...a,
+            status: input.action === 'approve' ? ('approved' as const) : ('rejected' as const),
+            decisionScope: input.action === 'approve' ? (input.scope ?? 'once') : undefined,
+            decisionReason: input.reason,
+            decidedAt: Date.now(),
+          }
+        : a,
+    );
+    this.dispatch('approval', new ApprovalEvent('approval', { approvals: this.chat.approvals }));
+  }
+
   /** 模型目录 */
   getModelCatalog(): ModelCatalog {
     return this.modelCatalog;
@@ -706,7 +732,7 @@ export class OctopiRuntimeStore extends EventTarget {
       }
     }
 
-    const approvals = await this.client.listApprovals();
+    const approvals = await this.client.listApprovals(sessionId);
     const questions = await this.client.listQuestions(sessionId);
     const clientToolCalls = await this.client.listClientToolCalls(sessionId);
 
@@ -1072,7 +1098,7 @@ export class OctopiRuntimeStore extends EventTarget {
       streamingContent: '',
       runStatus: 'idle',
       tools: [],
-      approvals: await this.client.listApprovals(),
+      approvals: await this.client.listApprovals(session.id),
       questions: await this.client.listQuestions(session.id),
       clientToolCalls: await this.client.listClientToolCalls(session.id),
       clientStreams: [],
@@ -1317,6 +1343,11 @@ export class OctopiRuntimeStore extends EventTarget {
     // ask_user 待答问题
     if (event.type === 'ask_user.pending' || event.type === 'ask_user.resolved') {
       this.applyQuestionEvent(event);
+    }
+
+    // SEC-7 HITL 审批
+    if (event.type === 'approval.pending' || event.type === 'approval.resolved') {
+      this.applyApprovalEvent(event);
     }
 
     // Client Tool pending / resolved
@@ -1809,6 +1840,23 @@ export class OctopiRuntimeStore extends EventTarget {
       ? next.filter((q) => q.sessionId === this.chat.sessionId)
       : next;
     this.dispatch('questions', new QuestionsEvent('questions', { questions: this.chat.questions }));
+  }
+
+  private applyApprovalEvent(event: AgentEventEnvelope): void {
+    const raw = event.data?.approval as PendingApproval | undefined;
+    if (!raw?.id) return;
+
+    const idx = this.chat.approvals.findIndex((a) => a.id === raw.id);
+    const next = [...this.chat.approvals];
+    if (idx >= 0) {
+      next[idx] = raw;
+    } else {
+      next.push(raw);
+    }
+    this.chat.approvals = this.chat.sessionId
+      ? next.filter((a) => a.sessionId === this.chat.sessionId)
+      : next;
+    this.dispatch('approval', new ApprovalEvent('approval', { approvals: this.chat.approvals }));
   }
 
   private applyClientToolCallEvent(event: AgentEventEnvelope): void {

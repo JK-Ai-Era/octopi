@@ -21,6 +21,8 @@
 
 **EffectPolicy 缺省（v0.75.0）：** 省略 `mode` 即 `workspace`（secure-by-default）。脚手架显式 `"mode": "host"`。原先依赖「未写 mode=host」的部署需补 `"effectPolicy": { "mode": "host" }`。
 
+**HITL 单模型（SEC-7，v0.79.0）：** 唯一确认面是 `confirmHighRisk` 与 `confirmEffect`，均返回 `HitlDecision`（`deny` / `approve` / `approve_session` / `approve_always`）。session/always 由引擎 `HitlDecisionCache` 记账，宿主只表达决策。`approve_session` 按 `sessionId` 分桶；`approve_always` 按 `agentId` 分桶（信任级不同的 agent 不共享 always）。缺 scope id 降级 one-shot。已删除 `ApprovalManager` / `ApprovalProvider`。Gateway 确认走 `pendingApprovals`（Web `/approvals`）；`askUser` 只留给 `ask_user` 工具。无人值守 / 无钩子 / 超时仍 fail-closed。工具**输出**侧 high/critical 仍直接拦、无确认语义。缓存 key 为工具名 / 效应类型（非按参数）——有意粗粒度。
+
 ## Knowledge 外源出站 — 已知限制
 
 **状态：** OP-14 主线已落地；下列为有意保留的边界

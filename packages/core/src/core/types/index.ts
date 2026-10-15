@@ -47,6 +47,7 @@ export type {
   ToolHandler,
   RegisteredTool,
   ToolSource,
+  HitlDecision,
 } from './tools.js';
 
 // ── 队列 / 思考级别 ──

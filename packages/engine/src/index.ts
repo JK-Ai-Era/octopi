@@ -387,9 +387,15 @@ export type {
 export type {
   MessageChannel, ProcessMessage,
 } from './harness/collaboration/multi-agent/message-channel-types.js';
+export type { HitlDecision } from '@octopi-agent/core/types/tools.js';
+export {
+  HitlDecisionCache,
+  defaultHitlCache,
+  resolveHitlDecision,
+} from './harness/governance/human-in-the-loop/decision-cache.js';
 export type {
-  ApprovalProvider, ApprovalPolicy, ApprovalRequest, ApprovalDecision,
-} from './harness/governance/human-in-the-loop/types.js';
+  HitlChannel, HitlCacheScope,
+} from './harness/governance/human-in-the-loop/decision-cache.js';
 export type {
   SandboxProvider, Workspace, IsolationLevel, SandboxConfig, SandboxResult,
 } from './harness/extension/execution-environment/types.js';

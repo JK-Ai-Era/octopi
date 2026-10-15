@@ -215,7 +215,13 @@ export type { SwarmTopology, SwarmConfig, SwarmAgent, SwarmTask, OrchestrationSt
 export { AgentRegistryEvents } from './collaboration/multi-agent/agent-registry-types.js';
 
 // ── HITL / Execution Environment ──
-export type { ApprovalLevel, ApprovalProvider, ApprovalPolicy, ApprovalRequest, ApprovalDecision } from './governance/human-in-the-loop/types.js';
+export type { HitlDecision } from '@octopi-agent/core/types/tools.js';
+export {
+  HitlDecisionCache,
+  defaultHitlCache,
+  resolveHitlDecision,
+} from './governance/human-in-the-loop/decision-cache.js';
+export type { HitlChannel, HitlCacheScope } from './governance/human-in-the-loop/decision-cache.js';
 export type { MessageChannel, ProcessMessage, MessageHandler } from './collaboration/multi-agent/message-channel-types.js';
 export type { SandboxProvider, Workspace, SandboxResult, IsolationLevel } from './extension/execution-environment/types.js';
 export type { EventSource, EventSourceDescriptor, ExternalEvent } from './activation/event-source-types.js';

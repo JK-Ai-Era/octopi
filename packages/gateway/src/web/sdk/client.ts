@@ -215,12 +215,15 @@ export interface SessionAttachmentDto {
 
 export interface ApprovalRequest {
   id: string;
+  kind: 'high_risk' | 'effect';
   toolName: string;
   arguments: Record<string, unknown>;
   riskLevel: 'low' | 'medium' | 'high' | 'critical' | 'unknown';
   riskDescription: string;
   actionDescription: string;
 }
+
+export type ApprovalScope = 'once' | 'session' | 'always';
 
 export interface PendingApproval {
   id: string;
@@ -232,6 +235,7 @@ export interface PendingApproval {
   updatedAt?: number;
   decidedAt?: number;
   decisionReason?: string;
+  decisionScope?: ApprovalScope;
 }
 
 /** ask_user 待答问题 */
@@ -1032,12 +1036,16 @@ export class OctopiClient {
     return (data?.data as ContextLayerHealthDto | null | undefined) ?? null;
   }
 
-  async listApprovals(): Promise<PendingApproval[]> {
-    const data = await this.getJson('/approvals');
+  async listApprovals(sessionId?: string): Promise<PendingApproval[]> {
+    const q = sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : '';
+    const data = await this.getJson(`/approvals${q}`);
     return (data?.data as PendingApproval[]) ?? [];
   }
 
-  async resolveApproval(approvalId: string, input: { action: 'approve' | 'reject'; reason?: string }): Promise<PendingApproval> {
+  async resolveApproval(
+    approvalId: string,
+    input: { action: 'approve' | 'reject'; scope?: ApprovalScope; reason?: string },
+  ): Promise<PendingApproval> {
     const data = await this.postJson(`/approvals/${encodeURIComponent(approvalId)}`, input);
     return data?.data as PendingApproval;
   }

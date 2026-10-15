@@ -279,15 +279,12 @@ The safety-guard subsystem is defined in `subsystems/safety-guard/` (config.yaml
 
 ### 3.4 Human-in-the-Loop
 
-**Responsibility**: approval-request management, approval policy, user-decision caching.
+**Responsibility**: confirm-decision caching for the two HITL hooks (`confirmHighRisk` / `confirmEffect`). Single model (SEC-7): hosts only express a `HitlDecision`; the engine remembers `approve_session` / `approve_always`. No separate approval manager.
 
 ```
 harness/governance/human-in-the-loop/
-├── approval-manager.ts    # approval request management
-├── approval-policy.ts     # approval policy (auto / confirm-all / confirm-high-risk)
-├── decision-cache.ts      # user decision cache
-├── feedback-collector.ts  # user feedback collection
-├── types.ts
+├── decision-cache.ts      # HitlDecisionCache + resolveHitlDecision
+├── types.ts               # HitlDecision re-exports
 └── index.ts
 ```
 

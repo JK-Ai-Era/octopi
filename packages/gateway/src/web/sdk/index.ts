@@ -14,6 +14,7 @@ export type {
   MessageRecord,
   MessagePage,
   PendingApproval,
+  ApprovalScope,
   PendingQuestion,
   AgentEventEnvelope,
   ClientStreamChannelDto,

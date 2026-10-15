@@ -979,9 +979,10 @@ export class WebApiRouter {
       }
 
       if (relativePath === '/approvals' && method === 'GET') {
+        const sessionId = url.searchParams.get('sessionId') ?? undefined;
         return this.json(res, 200, {
           ok: true,
-          data: this.gateway.listPendingApprovals(),
+          data: this.gateway.listPendingApprovals(sessionId),
         });
       }
 
@@ -991,9 +992,20 @@ export class WebApiRouter {
         if (!body?.action || !['approve', 'reject'].includes(body.action)) {
           return this.json(res, 400, { ok: false, error: 'action must be approve or reject' });
         }
+        const scope = body.scope;
+        if (
+          scope !== undefined &&
+          !['once', 'session', 'always'].includes(String(scope))
+        ) {
+          return this.json(res, 400, {
+            ok: false,
+            error: 'scope must be once, session, or always',
+          });
+        }
 
         const resolved = this.gateway.resolvePendingApproval(approvalMatch[1], {
           action: body.action,
+          scope: scope as 'once' | 'session' | 'always' | undefined,
           reason: body.reason,
         });
 

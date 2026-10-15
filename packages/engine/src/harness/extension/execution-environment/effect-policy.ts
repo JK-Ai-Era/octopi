@@ -6,6 +6,7 @@
  */
 
 import { isAbsolute, resolve } from 'node:path';
+import type { HitlDecision } from '@octopi-agent/core/types/tools.js';
 import type { ToolIsolationMode } from './isolation.js';
 import {
   deniesReducedSurface,
@@ -15,6 +16,8 @@ import {
   assessL4ProcessMinimum,
   type ProcessIsolationProfile,
 } from './process-isolation.js';
+import { resolveHitlDecision } from '../../governance/human-in-the-loop/decision-cache.js';
+import { getRunSessionId, getRunScope } from '../../run/run-scope.js';
 
 /** 命名运行模式 */
 export type EffectRunMode = 'workspace' | 'project' | 'host' | 'untrusted';
@@ -61,35 +64,16 @@ export type EffectIntent =
       description: string;
     };
 
-export type ConfirmEffectDecision = 'allow' | 'deny';
+export type ConfirmEffectDecision = HitlDecision;
 
 /**
  * host-gate 确认回调（P4）。engine 不内置审批 UI。
  * 宿主可自动放行 / 弹自己的确认框 / 策略引擎。
+ * 返回 {@link HitlDecision}；session/always 由引擎 HitlDecisionCache 记账。
  */
-export type ConfirmEffectIntent =
-  | EffectIntent
-  | {
-      kind: 'file.write' | 'shell' | 'memory.write' | 'other';
-      path?: string;
-      mode?: string;
-      transactional?: boolean;
-      command?: string;
-      cwd?: string;
-      domain?: string;
-      description?: string;
-    };
-
-export type ConfirmEffect = (intent: {
-  kind: 'file.write' | 'shell' | 'memory.write' | 'other';
-  path?: string;
-  mode?: string;
-  transactional?: boolean;
-  command?: string;
-  cwd?: string;
-  domain?: string;
-  description?: string;
-}) => Promise<ConfirmEffectDecision>;
+export type ConfirmEffect = NonNullable<
+  import('@octopi-agent/core/types/tools.js').ToolExecutionContext['confirmEffect']
+>;
 
 export type EffectConfirmChannel = 'engine' | 'host-gate';
 
@@ -403,6 +387,11 @@ export async function gateEffect(
     effects: EffectConfirmChannel;
     confirmEffect?: ConfirmEffect;
     shellEscape?: ShellEscapePolicy;
+    /** SEC-7：session-scope 缓存键；缺省尝试 RunScope */
+    sessionId?: string;
+    /** SEC-7：always-scope 缓存键（agent 分桶）；缺省尝试 RunScope */
+    agentId?: string;
+    hitlCache?: import('../../governance/human-in-the-loop/decision-cache.js').HitlDecisionCache;
   },
 ): Promise<void> {
   // 可事务化（可 undo）→ 自动
@@ -437,8 +426,16 @@ export async function gateEffect(
       'confirm_effect_missing: effectPolicy.effects=host-gate requires confirmEffect callback',
     );
   }
-  const d = await decide(intent);
-  if (d !== 'allow') {
+  // SEC-7：HitlDecision + 引擎缓存；失败路径 fail-closed
+  const allowed = await resolveHitlDecision({
+    cache: options.hitlCache,
+    channel: 'effect',
+    key: intent.kind,
+    sessionId: options.sessionId ?? getRunSessionId(),
+    agentId: options.agentId ?? getRunScope()?.agentId,
+    ask: () => decide(intent),
+  });
+  if (!allowed) {
     throw new Error(`effect_denied: ${intent.kind}`);
   }
 }
