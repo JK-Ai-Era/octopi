@@ -1,3 +1,12 @@
+## v0.81.1
+
+### fix(suit): init.ts header comment closes early on `*/`
+
+**问题**：`src/init.ts` 目录树注释里的 `timer_*/schedule_*` 含 `*/`，块注释被提前闭合，其后说明文字被当作代码解析，tsc/eslint 报出成片语法错。
+**修复**：改为 `timer_* / schedule_*`（中间加空格），不再触发注释闭合。
+
+---
+
 ## v0.81.0
 
 ### feat(schedules): SessionSchedule + timer_*/schedule_* — Agent 自发起定时
