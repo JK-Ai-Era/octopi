@@ -58,6 +58,7 @@ export default defineConfig({
   },
   test: {
     include: ['tests/**/*.test.ts'],
+    setupFiles: ['tests/setup/isolate-octopi-home.ts'],
     globals: true,
     coverage: {
       provider: 'v8',

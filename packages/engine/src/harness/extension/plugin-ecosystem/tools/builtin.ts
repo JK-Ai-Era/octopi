@@ -22,6 +22,7 @@ import type { RegisteredTool } from '@octopi-agent/core/types.js';
 import { gateEffect } from '../../execution-environment/effect-policy.js';
 
 import { createFileEditTool } from './file-edit.js';
+import { detectEol, toEol } from './eol.js';
 import { createFileSearchTool } from './file-search.js';
 import { createFileOpsTools } from './file-ops.js';
 import { createGitTools } from './git-tools.js';
@@ -417,7 +418,7 @@ export function createFileWriteTool(): RegisteredTool {
       if (isUnderSessionUndoRoot(path, context?.undoRoots)) {
         throw new Error('session undo ledger is protected; cannot write to sessions undo dir');
       }
-      const content = args.content as string;
+      let content = args.content as string;
       const append = args.append as boolean ?? false;
 
       await gateEffect(
@@ -436,6 +437,13 @@ export function createFileWriteTool(): RegisteredTool {
       try {
         // 确保父目录存在
         await mkdir(dirname(path), { recursive: true });
+
+        // 行尾跟随：覆写/追加已有文件时把内容换算成该文件主导行尾（新建文件保持原样）
+        const { readFile } = await import('node:fs/promises');
+        const existing = await readFile(path, 'utf8').catch(() => undefined);
+        if (existing !== undefined) {
+          content = toEol(content, detectEol(existing));
+        }
 
         const effects = context.fileEffects;
         if (!effects) {

@@ -13,6 +13,7 @@ import { gateEffect } from '../../execution-environment/effect-policy.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { resolveToolPath, isUnderAttachmentRoot, isUnderSessionUndoRoot } from './platform.js';
+import { detectEol, toEol } from './eol.js';
 import {
   assertSafeRef,
   requireExecutable,
@@ -383,6 +384,12 @@ export function createGitCommitTool(): RegisteredTool {
           description: 'Stage all tracked modifications (git add -A on given paths or repo)',
         },
         amend: { type: 'boolean', description: 'Amend the previous commit' },
+        eol: {
+          type: 'string',
+          description:
+            'EOL handling for staged text files: "normalize" (default; rewrite each staged file to the EOL convention of its HEAD blob before commit, avoiding whole-file line-ending churn) | "keep" (commit bytes as-is)',
+          enum: ['normalize', 'keep'],
+        },
       },
     },
     handler: async (args, context) => {
@@ -419,6 +426,36 @@ export function createGitCommitTool(): RegisteredTool {
         }
       }
 
+      // EOL 归一：工具 git 隔离全局配置（autocrlf 不可见），worktree 的 CRLF 会被
+      // 原样入库，与 HEAD blob 的行尾约定相悖时产生整文件 churn。跟随 HEAD blob 的
+      // 行尾约定重写已暂存文本文件（新文件 / 删除 / 二进制 / 非 UTF-8 不动）。
+      const eolNormalized: string[] = [];
+      if (args.eol !== 'keep') {
+        const staged = await runGit(context, cwd, ['diff', '--cached', '--name-only', '-z', 'HEAD']);
+        if (staged.exitCode === 0) {
+          const { readFile, writeFile } = await import('node:fs/promises');
+          const { join: joinPath } = await import('node:path');
+          for (const rel of staged.stdout.split('\0').map((s) => s.trim()).filter(Boolean)) {
+            const abs = joinPath(cwd, rel);
+            const workBuf = await readFile(abs).catch(() => undefined);
+            if (!workBuf || workBuf.includes(0)) continue;
+            let workText: string;
+            try {
+              workText = new TextDecoder('utf-8', { fatal: true }).decode(workBuf);
+            } catch {
+              continue;
+            }
+            const head = await runGit(context, cwd, ['show', `HEAD:${rel}`]);
+            if (head.exitCode !== 0) continue;
+            const normalized = toEol(workText, detectEol(head.stdout));
+            if (normalized === workText) continue;
+            await writeFile(abs, normalized);
+            await runGit(context, cwd, ['add', '--', rel]);
+            eolNormalized.push(rel);
+          }
+        }
+      }
+
       const commitArgs = ['commit', '--no-verify', '--no-gpg-sign', '-m', message];
       if (args.amend === true) commitArgs.push('--amend');
       if (resolvedPaths.length > 0) {
@@ -429,7 +466,7 @@ export function createGitCommitTool(): RegisteredTool {
         journal: true,
         timeoutMs: 60_000,
       });
-      return { ...toText(result), stage: 'commit', cwd, message };
+      return { ...toText(result), stage: 'commit', cwd, message, eolNormalized };
     },
   };
 }

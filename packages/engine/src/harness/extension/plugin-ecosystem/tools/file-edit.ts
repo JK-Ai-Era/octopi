@@ -19,6 +19,7 @@ import {
   resolveToolPath,
 } from './platform.js';
 import { gateEffect } from '../../execution-environment/effect-policy.js';
+import { detectEol, oldTextCandidates, toEol } from './eol.js';
 
 export function createFileEditTool(): RegisteredTool {
   return {
@@ -79,11 +80,19 @@ export function createFileEditTool(): RegisteredTool {
         throw new Error(`Failed to read file "${path}": ${error instanceof Error ? error.message : String(error)}`);
       }
 
+      // 行尾自适应匹配：多行 old_text（\n 书写）在 CRLF 文件上按字节匹配必然落空
+      const fileEol = detectEol(content);
+      const matchedOldText = oldTextCandidates(oldText).find((c) => content.includes(c));
+      if (matchedOldText === undefined) {
+        throw new Error(`old_text not found in "${path}". Ensure the text matches exactly including whitespace and indentation.`);
+      }
+      const insertText = toEol(newText, fileEol);
+
       // 查找所有匹配位置
       const positions: number[] = [];
       let searchFrom = 0;
       while (true) {
-        const idx = content.indexOf(oldText, searchFrom);
+        const idx = content.indexOf(matchedOldText, searchFrom);
         if (idx === -1) break;
         positions.push(idx);
         searchFrom = idx + 1;
@@ -114,14 +123,14 @@ export function createFileEditTool(): RegisteredTool {
       let newContent = content;
       const sortedIndices = [...indicesToReplace].sort((a, b) => b - a);
       for (const idx of sortedIndices) {
-        newContent = newContent.slice(0, idx) + newText + newContent.slice(idx + oldText.length);
+        newContent = newContent.slice(0, idx) + insertText + newContent.slice(idx + matchedOldText.length);
       }
 
       // 生成上下文预览（第一个替换点周围）
       const firstIdx = indicesToReplace[0];
       const before = content.slice(Math.max(0, firstIdx - 80), firstIdx);
-      const match = content.slice(firstIdx, firstIdx + oldText.length);
-      const after = content.slice(firstIdx + oldText.length, firstIdx + oldText.length + 80);
+      const match = content.slice(firstIdx, firstIdx + matchedOldText.length);
+      const after = content.slice(firstIdx + matchedOldText.length, firstIdx + matchedOldText.length + 80);
 
       if (!dryRun) {
         await gateEffect(

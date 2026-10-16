@@ -955,6 +955,8 @@ export class Gateway {
           sessionId: name,
           onClose,
           memoryRestorer: memRestorer,
+          // 本进程收尾只收残留；他人活跃进程（并行 daemon / 正在跑的测试）的 undo 不许动
+          skipLiveForeign: true,
         }).catch(() => undefined);
       }
     } catch {

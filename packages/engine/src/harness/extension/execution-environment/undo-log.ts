@@ -127,6 +127,43 @@ async function pathExists(p: string): Promise<boolean> {
   }
 }
 
+/** owner.json：跨进程所有权标记（清扫端据此跳过他人活跃 undo） */
+async function writeUndoOwner(paths: SessionUndoPaths): Promise<void> {
+  try {
+    await writeFile(
+      join(paths.root, 'owner.json'),
+      JSON.stringify({ pid: process.pid, startedAt: Date.now() }) + '\n',
+      'utf8',
+    );
+  } catch {
+    // owner 元数据失败不影响 undo 主流程；只是清扫端的保守性降低
+  }
+}
+
+/**
+ * undo 根是否属于「他人仍在运行的进程」。
+ *
+ * @param paths - 会话 undo 路径
+ * @returns owner pid 存活且非本进程 → true（清扫端应跳过）；无 owner / 已死 → false
+ */
+export async function isForeignLiveUndoOwner(paths: SessionUndoPaths): Promise<boolean> {
+  try {
+    const raw = await readFile(join(paths.root, 'owner.json'), 'utf8');
+    const owner = JSON.parse(raw) as { pid?: number };
+    if (typeof owner.pid !== 'number' || owner.pid === process.pid) return false;
+    try {
+      process.kill(owner.pid, 0);
+      return true;
+    } catch (err) {
+      // ESRCH = 进程已死（崩溃残留，可清扫）；EPERM = 活着但无权限（保守跳过）
+      return (err as NodeJS.ErrnoException).code === 'EPERM';
+    }
+  } catch {
+    // 无 owner（旧版本数据 / 损坏）：按残留处理，不阻止清扫
+    return false;
+  }
+}
+
 interface CoalescedEntry {
   op: 'create' | 'overwrite' | 'delete';
   path: string;
@@ -187,6 +224,7 @@ export class TurnFileUndoLog implements ToolFileEffects {
     }
     await mkdir(paths.blobsDir, { recursive: true });
     const log = new TurnFileUndoLog(paths, options.undoLimit);
+    await writeUndoOwner(paths);
     await log.flushLog();
     return log;
   }
@@ -410,7 +448,15 @@ export class TurnFileUndoLog implements ToolFileEffects {
         return undefined;
       }
     }
-    await writeFile(blobPath, data);
+    try {
+      await writeFile(blobPath, data);
+    } catch (err) {
+      // blobs 目录可能被外部清扫者删掉（另一进程收尾扫描误伤活 undo）：
+      // 自愈重建后重试一次；仍失败才是真 IO 故障，交给调用方 fail-closed。
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+      await mkdir(this.paths.blobsDir, { recursive: true });
+      await writeFile(blobPath, data);
+    }
     this.blobBytes += data.length;
     return hash;
   }
@@ -675,9 +721,12 @@ export async function resolveSessionUndoOnClose(options: {
   sessionId: string;
   onClose: 'commit' | 'discard';
   memoryRestorer?: import('./memory-undo.js').MemoryEffectRestorer;
+  /** true 时跳过属于他人活跃进程的 undo（进程收尾扫描用；显式删除不应开启） */
+  skipLiveForeign?: boolean;
 }): Promise<'committed' | 'discarded' | 'none'> {
   const paths = resolveSessionUndoPaths(options.sessionsDir, options.sessionId);
   if (!(await pathExists(paths.root))) return 'none';
+  if (options.skipLiveForeign && (await isForeignLiveUndoOwner(paths))) return 'none';
   if (options.onClose === 'discard') {
     await discardSessionFileUndo(options.sessionsDir, options.sessionId, options.memoryRestorer);
     return 'discarded';

@@ -1,3 +1,21 @@
+## v0.82.5
+
+### fix(tools): harden undo journal against external sweeps and make file/git tools EOL-aware
+
+**问题**：开发中反复出现 file_write/file_edit 集体 `ENOENT ... undo/blobs/<hash>`，整个 turn 文件写入全挂。探针复现实锤根因链：gateway 测试 `afterEach → Gateway.stop()` 的"进程退出收残留 undo"清扫打到真实 `~/.octopi/sessions`（测试未隔离 OCTOPI_HOME），且清扫者无法区分崩溃残留与他人进程正在用的活 undo；`TurnFileUndoLog.storeBlob` 又无自愈，目录被外人删掉后 journal 故障连坐业务写入。另有一类反复出现的行尾问题：file_edit 多行 old_text（`\n` 书写）在 CRLF 文件上静默匹配失败、插入 LF 造成混杂行尾；git 工具安全隔离使 autocrlf 不可见，CRLF 原样入库产生整文件 churn（shell git 预览干净、提交却翻转）。
+
+**修正**：
+
+- **测试隔离**：vitest setup 每个测试文件独立临时 `OCTOPI_HOME`（tests/setup/isolate-octopi-home.ts），测试不再触碰真实运行时目录
+- **undo 所有权**：`TurnFileUndoLog.begin()` 写 `owner.json`（pid）；`resolveSessionUndoOnClose` 增加 `skipLiveForeign`，`Gateway.stop()` 清扫跳过他人活跃进程的 undo（死进程 / 本进程残留照常收）
+- **storeBlob 自愈**：blobs 目录被外部删掉时重建重试一次，业务写不再被 journal 故障连坐
+- **file 工具行尾感知**（tools/eol.ts）：file_edit 匹配自动换算行尾候选项（消灭多行匹配静默失败），插入文本换算成文件主导行尾；file_write 覆写/追加已有文件保留其主导行尾，新建文件保持原样
+- **git_commit EOL 归一**：提交前把已暂存文本文件规整到其 HEAD blob 的行尾约定（新文件 / 删除 / 二进制 / 非 UTF-8 不动），`eol: 'keep'` 可关闭；结果返回 `eolNormalized` 清单
+
+**测试**：`tests/undo-eol-hardening.test.ts`（7）— storeBlob 自愈、owner/skipLiveForeign、file_edit/file_write 行尾、git_commit 归一与 keep；全量 283 绿（既有无关红：domains-catalog `session/schedules` 未登记）。
+
+---
+
 ## v0.82.4
 
 ### fix(loop): stop model-call idle watchdog tripping on long silent thinking
