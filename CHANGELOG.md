@@ -1,3 +1,12 @@
+## v0.82.2
+
+### docs: prune stale capability-gap item and refresh last-updated stamps
+
+**问题**：文档滞后审计发现：AGENTS.md 的 capability-layer gaps 列表仍把 session-ACL per-tool rights 列为开放缺口（v0.78.0 已落地）；KNOWN-ISSUES 双语头部日期戳停在 2026-10-14，落后于正文所记的 SEC-7（10-16）。
+**修正**：AGENTS.md 缺口列表删去该项（余 distributed Lease / quota / role DB）；KNOWN-ISSUES 英/中日期戳同步到 2026-10-16。
+
+---
+
 ## v0.82.1
 
 ### docs(readme): state v0.8x instead of stale v0.7x in status

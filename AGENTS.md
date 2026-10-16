@@ -221,7 +221,7 @@ npm run lint
 
 **Discipline:** red lights are the asset. For a **locator** miss, fix the arch path or add the code; mark **historical** / **proposal** references by context wording. **Never weaken the checker** (skip directories, allowlists, looser regex) just to turn a result green.
 
-**Where remaining work lives**: open research items in internal `arch/open-problems.md`; capability-layer gaps (distributed Lease, session-ACL per-tool rights, quota, role DB) in `docs/KNOWN-ISSUES.md`; short open-item list in `arch/NEXT-STEPS.md`.
+**Where remaining work lives**: open research items in internal `arch/open-problems.md`; capability-layer gaps (distributed Lease, quota, role DB) in `docs/KNOWN-ISSUES.md`; short open-item list in `arch/NEXT-STEPS.md`.
 
 ---
 
