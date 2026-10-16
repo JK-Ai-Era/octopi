@@ -489,6 +489,7 @@ export class Gateway {
       if (
         event.sessionId &&
         event.type !== 'llm_stream_delta' &&
+        event.type !== 'llm_thinking_delta' &&
         !Gateway.isTerminalWsEvent(event.type)
       ) {
         // WS 不广正文全文（content）；?UI ?REST 拉取
@@ -2111,21 +2112,51 @@ export class Gateway {
 
   async getSessionMessages(
     sessionId: string,
-    options: { limit: number; cursor?: string; agentId?: string },
-  ): Promise<{ messages: Array<Message & { index: number }>; nextCursor?: string }> {
+    options: {
+      limit: number;
+      cursor?: string;
+      agentId?: string;
+      /** backward = 从末尾向前取页（打开会话默认）；forward = 从头向后 */
+      direction?: 'forward' | 'backward';
+    },
+  ): Promise<{
+    messages: Array<Message & { index: number }>;
+    nextCursor?: string;
+    total: number;
+    hasMore: boolean;
+  }> {
     const session = await this.store.load(sessionId);
     if (!session) {
       throw new Error(`Session "${sessionId}" not found`);
     }
 
-    const offset = options.cursor ? Number(Buffer.from(options.cursor, 'base64').toString('utf-8')) : 0;
-    const slice = session.messages.slice(offset, offset + options.limit);
-    const nextOffset = offset + slice.length;
-    const nextCursor = nextOffset < session.messages.length ? Buffer.from(String(nextOffset)).toString('base64') : undefined;
+    const total = session.messages.length;
+    const decodeCursor = (c: string): number => Number(Buffer.from(c, 'base64').toString('utf-8'));
+    const encodeCursor = (n: number): string => Buffer.from(String(n)).toString('base64');
 
+    if (options.direction === 'backward') {
+      // cursor = 本页的 exclusive end 下标；缺省 = 末尾
+      const end = options.cursor ? decodeCursor(options.cursor) : total;
+      const safeEnd = Number.isFinite(end) ? Math.min(Math.max(end, 0), total) : total;
+      const start = Math.max(0, safeEnd - options.limit);
+      const slice = session.messages.slice(start, safeEnd);
+      return {
+        messages: slice.map((m, i) => ({ ...m, index: start + i })),
+        nextCursor: start > 0 ? encodeCursor(start) : undefined,
+        total,
+        hasMore: start > 0,
+      };
+    }
+
+    const offset = options.cursor ? decodeCursor(options.cursor) : 0;
+    const safeOffset = Number.isFinite(offset) ? Math.max(offset, 0) : 0;
+    const slice = session.messages.slice(safeOffset, safeOffset + options.limit);
+    const nextOffset = safeOffset + slice.length;
     return {
-      messages: slice.map((m, i) => ({ ...m, index: offset + i })),
-      nextCursor,
+      messages: slice.map((m, i) => ({ ...m, index: safeOffset + i })),
+      nextCursor: nextOffset < total ? encodeCursor(nextOffset) : undefined,
+      total,
+      hasMore: nextOffset < total,
     };
   }
 
@@ -3893,7 +3924,7 @@ export class Gateway {
         // 流式 delta + 须用 sessionKey 广播?
         // - delta 不在 bus ?
         // -  bus ?event.sessionId，匹配失败时 UI 会永远停?streaming
-        if (event.type === 'llm_stream_delta') {
+        if (event.type === 'llm_stream_delta' || event.type === 'llm_thinking_delta') {
           this.emitEvent(event as unknown as AgentEvent);
           for (const adapter of this.streamingAdapters) {
             adapter.broadcastEvent(sessionKey, event as unknown as AgentEvent);

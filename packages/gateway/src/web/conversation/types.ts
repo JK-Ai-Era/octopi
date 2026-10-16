@@ -48,6 +48,8 @@ export interface AssistantConversationItem extends BaseConversationItem {
   role: 'assistant';
   status: 'streaming' | 'completed' | 'error';
   content: string;
+  /** 思考过程（可折叠展示）；不进 content */
+  reasoning?: string;
   toolCalls?: string[];   // 关联的 toolCallId 列表
   toolResults?: string[]; // 关联的 tool result id 列表
   error?: string;
@@ -90,6 +92,7 @@ export type ViewMode = 'runtime' | 'history' | 'hybrid';
 export interface StreamingState {
   active: boolean;
   content: string;
+  reasoning?: string;
   assistantItemId?: string;
 }
 

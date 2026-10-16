@@ -118,19 +118,22 @@ pre { font-family: var(--font-mono); font-size: 13px; }
 .app-header-actions { display: flex; align-items: center; gap: 8px; }
 .btn-focus-active { background: var(--color-accent); border-color: var(--color-accent-border); }
 
-.app-main { flex: 1; min-height: 0; display: grid; grid-template-columns: var(--sidebar-w) 1fr var(--right-panel-w); overflow: hidden; position: relative; }
+.app-main { flex: 1; min-height: 0; display: grid; grid-template-columns: var(--sidebar-w) 1fr var(--right-panel-w); /* 行高锁死，侧栏 overflow-y:auto 才能滚动，不被内容撑破裁切 */
+  grid-template-rows: minmax(0, 1fr); overflow: hidden; position: relative; }
 .app-main-focus { grid-template-columns: var(--sidebar-w) minmax(200px, 0.7fr) minmax(360px, 1.6fr); }
 .app-main-focus .center-panel { opacity: 0.62; }
 
 /* ── Left Sidebar ── */
-.left-sidebar { padding: 12px; overflow-y: auto; overflow-x: hidden; border-right: 1px solid var(--color-border); display: flex; flex-direction: column; gap: 12px; min-width: 0; }
-.sidebar-section { padding: 12px; min-width: 0; overflow: hidden; }
+.left-sidebar { padding: 12px; overflow-y: auto; overflow-x: hidden; border-right: 1px solid var(--color-border); display: flex; flex-direction: column; gap: 12px; min-width: 0; min-height: 0; }
+.sidebar-section { padding: 12px; min-width: 0; overflow: hidden; flex-shrink: 0; }
 .sidebar-title { font-weight: 600; margin-bottom: 8px; }
 .agent-btn { text-align: left; width: 100%; min-width: 0; max-width: 100%; overflow: hidden; }
 .agent-btn-selected { background: var(--color-accent); border-color: var(--color-accent-border); }
 .session-btn { text-align: left; width: 100%; min-width: 0; max-width: 100%; overflow: hidden; }
 .session-btn > div { min-width: 0; max-width: 100%; }
 .session-btn-active { background: #f8fafc; }
+/* 历史会话列表：展开后独立滚动，展开/收起按钮留在列表外始终可见 */
+.session-list-scroll { display: grid; gap: 6px; max-height: min(48vh, 420px); overflow-y: auto; overflow-x: hidden; min-height: 0; }
 
 /* ── Center ── */
 .center-panel { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
@@ -213,6 +216,9 @@ pre { font-family: var(--font-mono); font-size: 13px; }
 .msg-assistant { margin-bottom: 12px; }
 .msg-assistant-header { font-size: var(--text-sm); color: var(--color-muted); margin-bottom: 4px; display: flex; align-items: center; gap: 6px; }
 .msg-assistant-body { padding: 10px; }
+.msg-reasoning { margin-bottom: 8px; border: 1px dashed var(--color-border); border-radius: 6px; padding: 4px 8px; }
+.msg-reasoning > summary { cursor: pointer; user-select: none; }
+.msg-reasoning-body { margin-top: 6px; max-height: 240px; overflow: auto; white-space: pre-wrap; }
 .msg-assistant-content { margin: 0; word-break: break-word; }
 .msg-assistant-content .md-root { white-space: normal; }
 .msg-assistant-content .md-paragraph { margin: 0 0 0.4em; }

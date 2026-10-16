@@ -371,13 +371,27 @@ function ConversationItemCard({
             {formatTimestamp(a.createdAt) && <span className="muted">{formatTimestamp(a.createdAt)}</span>}
           </div>
           <div className="panel msg-assistant-body" style={{ borderColor }}>
+            {a.reasoning && a.reasoning.trim() && (
+              <details className="msg-reasoning">
+                <summary className="small muted">思考过程</summary>
+                <div className="msg-reasoning-body small muted">
+                  <MarkdownMessage content={a.reasoning} />
+                </div>
+              </details>
+            )}
             <div className="msg-assistant-content">
-              {a.content ? <MarkdownMessage content={a.content} /> : '(空)' }
+              {a.content ? (
+                <MarkdownMessage content={a.content} />
+              ) : a.reasoning ? (
+                // 仅有思考时正文留白，思考已在上方折叠区
+                null
+              ) : a.error ? (
+                <span className="muted small">（出错，见下方）</span>
+              ) : (
+                '(空)'
+              )}
             </div>
             {a.error && <div className="small status-error" style={{ marginTop: 6 }}>{a.error}</div>}
-            {a.toolCalls && a.toolCalls.length > 0 && (
-              <div className="small muted" style={{ marginTop: 6 }}>工具: {a.toolCalls.join(', ')}</div>
-            )}
           </div>
         </div>
       );
@@ -938,6 +952,30 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
     if (!el) return;
     // 阈值内视为“在底部”：轻微布局抖动不会打断跟随
     stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight <= 48;
+
+    // 临近顶部：向前加载更早历史并拼在前面（纯展示；续聊走正常装配）
+    if (el.scrollTop < 80 && storeRef.current?.hasMoreHistory()) {
+      void loadMoreHistory();
+    }
+  };
+
+  const loadMoreHistory = async () => {
+    const el = scrollRef.current;
+    const store = storeRef.current;
+    if (!store || !store.hasMoreHistory()) return;
+    const prevHeight = el?.scrollHeight ?? 0;
+    const prevTop = el?.scrollTop ?? 0;
+    try {
+      await store.loadMoreHistory();
+    } catch {
+      // 展示分页失败不打断会话；下次滚动再试
+    }
+    // prepend 后把视口钉在原先那条消息上，避免跳动
+    if (el) {
+      requestAnimationFrame(() => {
+        el.scrollTop = prevTop + (el.scrollHeight - prevHeight);
+      });
+    }
   };
 
   // Auto-scroll：仅在用户仍贴近底部时跟随；上滑阅读中不打断
@@ -1655,7 +1693,7 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
             {actionError && <div className="small status-error" style={{ marginBottom: 8 }}>{actionError}</div>}
 
             <div className="sidebar-title">历史会话</div>
-            <div style={{ display: 'grid', gap: 6 }}>
+            <div className="session-list-scroll">
               {displayedSessions.map(s => (
                 renamingSessionId === s.id ? (
                   <div key={s.id} className="btn-secondary session-btn session-btn-active" style={{ display: 'grid', gap: 4 }}>
@@ -1691,25 +1729,25 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
                 )
               ))}
               {!agentSessions.length && <div className="small muted">暂无历史会话</div>}
-              {hiddenSessionCount > 0 && !showAllSessions && (
-                <button
-                  className="btn-ghost small"
-                  style={{ marginTop: 2, textAlign: 'center', width: '100%', color: 'var(--color-muted)' }}
-                  onClick={() => setShowAllSessions(true)}
-                >
-                  展开更多会话 ({hiddenSessionCount})
-                </button>
-              )}
-              {showAllSessions && agentSessions.length > VISIBLE_SESSION_COUNT && (
-                <button
-                  className="btn-ghost small"
-                  style={{ marginTop: 2, textAlign: 'center', width: '100%', color: 'var(--color-muted)' }}
-                  onClick={() => setShowAllSessions(false)}
-                >
-                  收起会话列表
-                </button>
-              )}
             </div>
+            {hiddenSessionCount > 0 && !showAllSessions && (
+              <button
+                className="btn-ghost small"
+                style={{ marginTop: 6, textAlign: 'center', width: '100%', color: 'var(--color-muted)' }}
+                onClick={() => setShowAllSessions(true)}
+              >
+                展开更多会话 ({hiddenSessionCount})
+              </button>
+            )}
+            {showAllSessions && agentSessions.length > VISIBLE_SESSION_COUNT && (
+              <button
+                className="btn-ghost small"
+                style={{ marginTop: 6, textAlign: 'center', width: '100%', color: 'var(--color-muted)' }}
+                onClick={() => setShowAllSessions(false)}
+              >
+                收起会话列表
+              </button>
+            )}
           </section>
         </aside>
 
@@ -1828,11 +1866,12 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
 
               for (const item of conversationItems) {
                 if (item.role === 'tool' && richToolNames.has(item.toolName)) continue;
-                // 空助手气泡不渲染（避免 (空) + 仅 toolCalls id）；工具调用卡片单独保留
+                // 纯工具调用、无正文/思考/错误的 assistant 不渲染气泡（工具卡片单独保留）
                 if (item.role === 'assistant') {
                   const a = item as AssistantConversationItem;
                   const hasText = Boolean(a.content && a.content.trim());
-                  if (!hasText && !a.error) continue;
+                  const hasReasoning = Boolean(a.reasoning && a.reasoning.trim());
+                  if (!hasText && !hasReasoning && !a.error) continue;
                 }
                 const isFirstUser = item.role === 'user' && item.id === firstUserItemId;
                 const userIdx =

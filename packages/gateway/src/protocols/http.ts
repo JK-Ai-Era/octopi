@@ -251,6 +251,7 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
   private deriveSessionState(sessionKey: string, event: AgentEvent): { type: 'state'; sessionId: string; state: string } | null {
     switch (event.type) {
       case 'llm_stream_delta':
+      case 'llm_thinking_delta':
       case 'model.call.start':
         return { type: 'state', sessionId: sessionKey, state: 'running' };
       case 'tool.exec.start':

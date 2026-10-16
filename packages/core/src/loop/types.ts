@@ -300,6 +300,7 @@ export type AgentLoopEvent =
     }
   | { type: 'assistant_message'; message: Message; timestamp: number }
   | { type: 'llm_stream_delta'; timestamp: number; data: { delta: string } }
+  | { type: 'llm_thinking_delta'; timestamp: number; data: { delta: string } }
   | { type: 'tool_start'; toolCall: ToolCall; timestamp: number }
   | { type: 'tool_end'; toolCall: ToolCall; result: LoopToolResult; timestamp: number }
   | { type: 'stream.fallback_to_sync'; timestamp: number; data: { reason: string } }

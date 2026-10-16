@@ -42,6 +42,7 @@ export async function* callModel(
   const requestStartTime = Date.now();
 
   let content = '';
+  let reasoning = '';
   const toolCallBuffers = new Map<number, { id: string; name: string; argsBuffer: string }>();
   let usage: TokenUsage | undefined;
   let finishReason: LLMResponse['finishReason'] | undefined;
@@ -166,6 +167,12 @@ export async function* callModel(
           const { done, value: chunk } = await watchdogRead();
           if (done) break;
 
+          if (chunk.type === 'reasoning' && chunk.content) {
+            // 思考增量：喂 watchdog（收包即复位）并供 UI 展示，绝不拼进 content
+            reasoning += chunk.content;
+            yield { type: 'llm_thinking_delta', timestamp: Date.now(), data: { delta: chunk.content } };
+          }
+
           if (chunk.type === 'content' && chunk.content) {
             content += chunk.content;
             yield { type: 'llm_stream_delta', timestamp: Date.now(), data: { delta: chunk.content } };
@@ -251,6 +258,7 @@ export async function* callModel(
 
   return {
     content,
+    reasoning: reasoning || undefined,
     toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
     usage,
     model: typeof model.defaultModel === 'string' ? model.defaultModel : 'unknown',

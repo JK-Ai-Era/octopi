@@ -247,6 +247,8 @@ export function adaptLoopEvent(
       };
     case 'llm_stream_delta':
       return { type: 'llm_stream_delta', timestamp: event.timestamp, agentId: meta.agentId, sessionId: meta.sessionId, data: event.data };
+    case 'llm_thinking_delta':
+      return { type: 'llm_thinking_delta', timestamp: event.timestamp, agentId: meta.agentId, sessionId: meta.sessionId, data: event.data };
     case 'tool_start':
       return { type: 'tool.exec.start', timestamp: event.timestamp, agentId: meta.agentId, sessionId: meta.sessionId, data: { toolCallId: event.toolCall.id, toolName: event.toolCall.name, args: event.toolCall.arguments } };
     case 'tool_end':
@@ -1383,7 +1385,7 @@ export class SessionAwareRunner {
           this.config.eventSink?.(adapted, meta);
           // 事件桥：循环事件同时广播到 EventBus
           // 跳过高频流式 delta（每 token 一次），避免 EventBus 拥塞
-          if (adapted.type !== 'llm_stream_delta') {
+          if (adapted.type !== 'llm_stream_delta' && adapted.type !== 'llm_thinking_delta') {
             this.emitObserved(adapted);
           }
         }

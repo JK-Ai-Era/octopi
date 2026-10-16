@@ -55,6 +55,9 @@ import type {
 /** 近 N 轮 layer timeline 上限 */
 const CONTEXT_TURN_HISTORY_MAX = 20;
 
+/** 打开会话时先取末尾一页；向上滚动再往前拼页（仅影响 UI 展示，不影响 LLM 装配） */
+const HISTORY_PAGE_SIZE = 100;
+
 function summaryFromSnapshot(snapshot: ContextLayersSnapshot): ContextLayerTurnSummaryDto {
   return {
     assembledAt: snapshot.assembledAt,
@@ -224,6 +227,9 @@ interface SessionCacheEntry {
   inspector: InspectorState;
   /** 后台会话的 runStatus；切回时恢复，避免只从 items 推导丢掉 waiting */
   runStatus: RunStatus;
+  /** 显示层历史分页游标（backward；cursor=exclusive end） */
+  historyCursor?: string;
+  historyHasMore?: boolean;
 }
 
 export class OctopiRuntimeStore extends EventTarget {
@@ -232,6 +238,10 @@ export class OctopiRuntimeStore extends EventTarget {
   private static readonly MAX_CACHE_SIZE = 20;
   private readonly conversationCache = new Map<string, SessionCacheEntry>();
   private pendingEditResendNotice?: SystemConversationItem;
+  /** 显示层历史分页（只影响 UI；续聊仍走服务端完整 Discourse 装配） */
+  private historyCursor: string | undefined;
+  private historyHasMore = false;
+  private historyLoading = false;
 
   private connectionState: ConnectionState = 'idle';
   private agents: AgentSummary[] = [];
@@ -723,6 +733,8 @@ export class OctopiRuntimeStore extends EventTarget {
       adapterState: this.conversationAdapter.getState(),
       inspector: { ...this.chat.inspector },
       runStatus: this.chat.runStatus,
+      historyCursor: this.historyCursor,
+      historyHasMore: this.historyHasMore,
     });
   }
 
@@ -740,6 +752,8 @@ export class OctopiRuntimeStore extends EventTarget {
           adapterState: { toolIndex: {}, streamingContent: '' },
           inspector: {},
           runStatus: 'idle',
+          historyCursor: undefined,
+          historyHasMore: false,
         });
       }
     }
@@ -793,9 +807,17 @@ export class OctopiRuntimeStore extends EventTarget {
 
     let conversationItems: ConversationItem[] = [];
     let viewMode: ViewMode = 'history';
+    let historyCursor: string | undefined;
+    let historyHasMore = false;
     try {
-      const page = await this.client.getSessionMessages(sessionId, { limit: 100 });
+      // 打开只取末尾一页；更早历史由向上滚动分页补齐（纯展示，不进 LLM 装配）
+      const page = await this.client.getSessionMessages(sessionId, {
+        limit: HISTORY_PAGE_SIZE,
+        direction: 'backward',
+      });
       conversationItems = ConversationAdapter.buildHistoryItems(page.messages, sessionId);
+      historyCursor = page.nextCursor;
+      historyHasMore = Boolean(page.hasMore);
     } catch {
       conversationItems = [];
     }
@@ -833,6 +855,8 @@ export class OctopiRuntimeStore extends EventTarget {
       if (cacheHasRuntimeActivity || cached.items.length > conversationItems.length) {
         // cache 只作运行时补充；editResendable 一律以服务端 abortedTurn 为准
         conversationItems = stripEditResendable(cached.items);
+        historyCursor = cached.historyCursor;
+        historyHasMore = cached.historyHasMore ?? false;
         if (abortedTurn && typeof abortedTurn.userMessageIndex === 'number') {
           const idx = abortedTurn.userMessageIndex;
           conversationItems = conversationItems.map((it) =>
@@ -904,6 +928,8 @@ export class OctopiRuntimeStore extends EventTarget {
       tasks,
       schedules,
     };
+    this.historyCursor = historyCursor;
+    this.historyHasMore = historyHasMore;
 
     // 打开会话时拉取最近一次 System 装配快照 + Agent 数据面健康
     // Observer REST 写回前必须确认 chat.sessionId 仍是本次 open 的目标
@@ -1145,6 +1171,8 @@ export class OctopiRuntimeStore extends EventTarget {
       tasks: [],
       schedules: [],
     };
+    this.historyCursor = undefined;
+    this.historyHasMore = false;
 
     this.client.sendSubscribe(session.id, session.agentId);
     await this.refreshSessions();
@@ -1168,6 +1196,56 @@ export class OctopiRuntimeStore extends EventTarget {
     this.dispatch('schedules', new SchedulesEvent('schedules', { schedules: this.chat.schedules ?? [] }));
 
     return session;
+  }
+
+  /** 显示层是否还有更早历史可向上加载 */
+  hasMoreHistory(): boolean {
+    return this.historyHasMore;
+  }
+
+  /**
+   * 向上滚动加载更早一页历史并 prepend 到对话列表。
+   * 纯展示逻辑：续聊仍由服务端按完整 Discourse 装配，不依赖 UI 已加载范围。
+   */
+  async loadMoreHistory(): Promise<{ loaded: number; hasMore: boolean }> {
+    const sessionId = this.chat.sessionId;
+    if (!sessionId || this.historyLoading) {
+      return { loaded: 0, hasMore: this.historyHasMore };
+    }
+    if (!this.historyHasMore || !this.historyCursor) {
+      return { loaded: 0, hasMore: false };
+    }
+    this.historyLoading = true;
+    try {
+      let cursor: string | undefined = this.historyCursor;
+      let hasMore: boolean = this.historyHasMore;
+      const olderItems: ConversationItem[] = [];
+      // 某页可能全是被过滤的 system/grounding：继续往前直到拼出可见条目或耗尽
+      for (let guard = 0; guard < 5 && hasMore && cursor; guard++) {
+        const page = await this.client.getSessionMessages(sessionId, {
+          limit: HISTORY_PAGE_SIZE,
+          direction: 'backward',
+          cursor,
+        });
+        const items = ConversationAdapter.buildHistoryItems(page.messages, sessionId);
+        if (items.length > 0) {
+          olderItems.unshift(...items);
+        }
+        cursor = page.nextCursor;
+        hasMore = Boolean(page.hasMore);
+        if (items.length > 0) break;
+      }
+      this.historyCursor = cursor;
+      this.historyHasMore = hasMore;
+      if (olderItems.length > 0) {
+        this.chat.conversation = [...olderItems, ...this.chat.conversation];
+        this.dispatch('chat', new ChatEvent('chat', { conversation: this.chat.conversation }));
+        this.dispatch('conversation', new ConversationEvent('conversation', { items: this.chat.conversation }));
+      }
+      return { loaded: olderItems.length, hasMore: this.historyHasMore };
+    } finally {
+      this.historyLoading = false;
+    }
   }
 
   async sendMessage(content: string, options?: { model?: string; attachmentIds?: string[] }): Promise<void> {
@@ -1428,7 +1506,8 @@ export class OctopiRuntimeStore extends EventTarget {
     if (
       event.type === 'engine.start' ||
       event.type === 'iteration.start' ||
-      event.type === 'llm_stream_delta'
+      event.type === 'llm_stream_delta' ||
+      event.type === 'llm_thinking_delta'
     ) {
       this.engineActive = true;
     } else if (
@@ -1806,7 +1885,7 @@ export class OctopiRuntimeStore extends EventTarget {
     if (event.type === 'engine.start' || event.type === 'iteration.start') {
       return 'waiting';
     }
-    if (event.type === 'llm_stream_delta') {
+    if (event.type === 'llm_stream_delta' || event.type === 'llm_thinking_delta') {
       return 'streaming';
     }
     if (event.type === 'stream.fallback_to_sync' || event.type === 'stream.fallback_failed') {

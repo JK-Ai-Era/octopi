@@ -217,6 +217,10 @@ export interface MessageRecord {
 export interface MessagePage {
   messages: MessageRecord[];
   nextCursor?: string;
+  /** session.messages 总数 */
+  total?: number;
+  /** backward 模式下是否还有更早消息 */
+  hasMore?: boolean;
 }
 
 /** 会话附件（OP-15） */
@@ -978,10 +982,18 @@ export class OctopiClient {
     return data?.data as { attachment: SessionAttachmentDto; sourceId: string; status: string };
   }
 
-  async getSessionMessages(sessionId: string, options?: { limit?: number; cursor?: string }): Promise<MessagePage> {
+  async getSessionMessages(
+    sessionId: string,
+    options?: {
+      limit?: number;
+      cursor?: string;
+      direction?: 'forward' | 'backward';
+    },
+  ): Promise<MessagePage> {
     const params = new URLSearchParams();
     if (options?.limit) params.set('limit', String(options.limit));
     if (options?.cursor) params.set('cursor', options.cursor);
+    if (options?.direction) params.set('direction', options.direction);
     const qs = params.toString();
     const data = await this.getJson(`/sessions/${encodeURIComponent(sessionId)}/messages${qs ? `?${qs}` : ''}`);
     return (data?.data as MessagePage) ?? { messages: [] };

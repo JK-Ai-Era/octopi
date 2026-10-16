@@ -66,15 +66,23 @@ export interface LLMRequest {
 /** LLM 响应 */
 export interface LLMResponse {
   content: string;
+  /** 推理模型的思考增量汇总；不进 content，不回灌 LLM 上下文 */
+  reasoning?: string;
   toolCalls?: ToolCall[];
   usage?: TokenUsage;
   model: string;
   finishReason: 'stop' | 'tool_calls' | 'length' | 'error';
 }
 
-/** LLM 流式 chunk */
+/**
+ * LLM 流式 chunk
+ *
+ * `reasoning` 与 `content` 严格分流：thinking 喂 watchdog / UI 展示，
+ * 绝不拼进 `LLMResponse.content` 或 assistant 正文。
+ */
 export interface LLMStreamChunk {
-  type: 'content' | 'tool_call' | 'done' | 'error';
+  type: 'content' | 'reasoning' | 'tool_call' | 'done' | 'error';
+  /** content 或 reasoning 的文本载荷 */
   content?: string;
   toolCall?: {
     id?: string;

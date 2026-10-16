@@ -756,3 +756,70 @@ describe('ConversationAdapter', () => {
     });
   });
 });
+
+describe('ConversationAdapter reasoning channel', () => {
+  const sid = 'reason-sid';
+
+  it('accumulates llm_thinking_delta into reasoning, not content', () => {
+    const adapter = new ConversationAdapter();
+    let items: ConversationItem[] = [];
+    items = adapter.injectUserMessage('q', sid, items);
+    let r = adapter.applyEvent({ type: 'llm_thinking_delta', data: { delta: '想一想' } }, sid, items);
+    items = r.items;
+    r = adapter.applyEvent({ type: 'llm_stream_delta', data: { delta: '答案' } }, sid, items);
+    items = r.items;
+    r = adapter.applyEvent({ type: 'turn.end', data: { content: '答案', phase: 'final' } }, sid, items);
+    items = r.items;
+
+    const ast = items.find((i) => i.role === 'assistant') as AssistantConversationItem;
+    expect(ast.content).toBe('答案');
+    expect(ast.reasoning).toBe('想一想');
+  });
+
+  it('buildHistoryItems maps metadata.reasoning onto assistant items', () => {
+    const msgs: MessageRecord[] = [
+      {
+        role: 'assistant',
+        content: '正文',
+        timestamp: 1000,
+        metadata: { reasoning: '内心戏' },
+      } as MessageRecord,
+    ];
+    const result = ConversationAdapter.buildHistoryItems(msgs, sid);
+    const ast = result[0] as AssistantConversationItem;
+    expect(ast.content).toBe('正文');
+    expect(ast.reasoning).toBe('内心戏');
+  });
+});
+
+describe('ConversationAdapter tool purpose', () => {
+  const sid = 'purpose-sid';
+
+  it('history maps toolResults.purpose and falls back to assistant toolCalls.arguments.purpose', () => {
+    const msgs = [
+      {
+        role: 'assistant',
+        content: '',
+        timestamp: 1000,
+        toolCalls: [
+          { id: 'tc1', name: 'file_read', arguments: { purpose: '查看配置文件', path: 'a.json' } },
+        ],
+      },
+      {
+        role: 'tool',
+        content: '',
+        timestamp: 1001,
+        toolResults: [
+          { toolCallId: 'tc2', name: 'file_write', result: 'ok', purpose: '写入修复补丁' },
+          { toolCallId: 'tc1', name: 'file_read', result: '{}' },
+        ],
+      },
+    ] as any[];
+    const result = ConversationAdapter.buildHistoryItems(msgs, sid);
+    const tools = result.filter((i) => i.role === 'tool') as ToolConversationItem[];
+    expect(tools).toHaveLength(2);
+    const byId = Object.fromEntries(tools.map((t) => [t.toolCallId, t]));
+    expect(byId.tc2.purpose).toBe('写入修复补丁');
+    expect(byId.tc1.purpose).toBe('查看配置文件');
+  });
+});

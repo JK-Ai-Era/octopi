@@ -28,6 +28,7 @@ export interface AdapterSnapshot {
   currentAssistantId?: string;
   toolIndex: Record<string, string>;
   streamingContent: string;
+  streamingReasoning?: string;
   lastTurnEndContent?: string;
   emptyWarnedSessions?: string[];
 }
@@ -85,6 +86,7 @@ export class ConversationAdapter {
   private currentAssistantId: string | undefined;
   private toolIndex: Record<string, string> = {}; // toolCallId → conversationItemId
   private streamingContent = '';
+  private streamingReasoning = '';
   /** 最近一次 turn.end 写入的 content 指纹；engine.start / 新流式会重置，用于去重重复投递 */
   private lastTurnEndContent: string | undefined;
   /** 已提示过 empty response 的 session（adapter 跨会话复用，不得互吞） */
@@ -108,6 +110,37 @@ export class ConversationAdapter {
     let changed = false;
 
     switch (event.type) {
+      // ── LLM thinking delta（思考过程，不进正文） ──
+      case 'llm_thinking_delta': {
+        const delta = String(event.data?.delta ?? '');
+        if (!delta) break;
+        this.streamingReasoning += delta;
+        this.lastTurnEndContent = undefined;
+        if (!this.currentAssistantId) {
+          const item: AssistantConversationItem = {
+            id: ConversationAdapter.makeId('ast'),
+            role: 'assistant',
+            createdAt: Date.now(),
+            sessionId,
+            source: 'runtime',
+            status: 'streaming',
+            content: '',
+            reasoning: this.streamingReasoning,
+            toolCalls: [],
+          };
+          this.currentAssistantId = item.id;
+          items = [...items, item];
+        } else {
+          items = items.map((it) =>
+            it.id === this.currentAssistantId && it.role === 'assistant'
+              ? { ...it, reasoning: this.streamingReasoning }
+              : it,
+          );
+        }
+        changed = true;
+        break;
+      }
+
       // ── LLM stream delta ──
       case 'llm_stream_delta': {
         const delta = String(event.data?.delta ?? '');
@@ -128,6 +161,7 @@ export class ConversationAdapter {
             source: 'runtime',
             status: 'streaming',
             content: this.streamingContent,
+            reasoning: this.streamingReasoning || undefined,
             toolCalls: [],
           };
           this.currentAssistantId = item.id;
@@ -147,6 +181,7 @@ export class ConversationAdapter {
       // ── Engine start：新 run 边界 ──
       case 'engine.start': {
         this.lastTurnEndContent = undefined;
+        this.streamingReasoning = '';
         this.emptyWarnedSessions.clear();
         break;
       }
@@ -255,7 +290,13 @@ export class ConversationAdapter {
         if (this.currentAssistantId) {
           items = items.map((it) =>
             it.id === this.currentAssistantId && it.role === 'assistant'
-              ? { ...it, status: 'completed' as const, content: content || (it as AssistantConversationItem).content }
+              ? {
+                  ...it,
+                  status: 'completed' as const,
+                  content: content || (it as AssistantConversationItem).content,
+                  reasoning:
+                    (it as AssistantConversationItem).reasoning || this.streamingReasoning || undefined,
+                }
               : it,
           );
           this.lastTurnEndContent = content || undefined;
@@ -272,6 +313,7 @@ export class ConversationAdapter {
               source: 'runtime',
               status: 'completed',
               content,
+              reasoning: this.streamingReasoning || undefined,
             };
             items = [...items, item];
             this.lastTurnEndContent = content;
@@ -295,6 +337,7 @@ export class ConversationAdapter {
         const hadStreaming = this.currentAssistantId !== undefined || this.streamingContent !== '';
         this.currentAssistantId = undefined;
         this.streamingContent = '';
+        this.streamingReasoning = '';
         if (hadStreaming) changed = true;
         break;
       }
@@ -586,6 +629,8 @@ export class ConversationAdapter {
     sessionId: string,
   ): ConversationItem[] {
     const items: ConversationItem[] = [];
+    /** toolCallId → purpose（assistant.toolCalls.arguments 先登记，tool 结果回填） */
+    const purposeByCallId = new Map<string, string>();
 
     for (const msg of messages) {
       const ts = msg.timestamp ?? Date.now();
@@ -610,6 +655,14 @@ export class ConversationAdapter {
           break;
         }
         case 'assistant': {
+          const meta = msg.metadata as { reasoning?: unknown } | undefined;
+          const rawCalls = (msg as { toolCalls?: Array<{ id?: string; arguments?: unknown }> }).toolCalls;
+          if (Array.isArray(rawCalls)) {
+            for (const tc of rawCalls) {
+              const p = extractPurposeFromArgs(tc?.arguments);
+              if (tc?.id && p) purposeByCallId.set(String(tc.id), p);
+            }
+          }
           const item: AssistantConversationItem = {
             id: ConversationAdapter.makeId('ast'),
             role: 'assistant',
@@ -618,6 +671,7 @@ export class ConversationAdapter {
             source: 'history',
             status: 'completed',
             content: extractText(msg.content),
+            reasoning: typeof meta?.reasoning === 'string' && meta.reasoning ? meta.reasoning : undefined,
             // 如果 MessageRecord 携带 toolCalls 元数据，提取 id 列表
             toolCalls: extractToolCallIds(msg),
           };
@@ -636,7 +690,7 @@ export class ConversationAdapter {
                 sessionId,
                 source: 'history',
                 toolName: tr.name ?? 'unknown',
-                purpose: extractPurposeFromArgs((tr as { args?: unknown }).args),
+                purpose: tr.purpose ?? purposeByCallId.get(tr.toolCallId ?? ''),
                 toolCallId: tr.toolCallId ?? `tc_${ts}`,
                 status: tr.isError ? 'error' : 'success',
                 result: tr.result,
@@ -646,6 +700,7 @@ export class ConversationAdapter {
             }
           } else {
             // fallback: 从 metadata/source 提取
+            const callId = extractToolCallId(msg);
             items.push({
               id: ConversationAdapter.makeId('tool'),
               role: 'tool',
@@ -653,7 +708,8 @@ export class ConversationAdapter {
               sessionId,
               source: 'history',
               toolName: extractToolName(msg),
-              toolCallId: extractToolCallId(msg),
+              purpose: purposeByCallId.get(callId),
+              toolCallId: callId,
               status: extractIsError(msg) ? 'error' : 'success',
               result: msg.content,
               expandable: true,
@@ -704,6 +760,7 @@ export class ConversationAdapter {
       currentAssistantId: this.currentAssistantId,
       toolIndex: { ...this.toolIndex },
       streamingContent: this.streamingContent,
+      streamingReasoning: this.streamingReasoning,
       lastTurnEndContent: this.lastTurnEndContent,
       emptyWarnedSessions: [...this.emptyWarnedSessions],
     };
@@ -714,6 +771,7 @@ export class ConversationAdapter {
     this.currentAssistantId = state.currentAssistantId;
     this.toolIndex = { ...state.toolIndex };
     this.streamingContent = state.streamingContent ?? '';
+    this.streamingReasoning = state.streamingReasoning ?? '';
     this.lastTurnEndContent = state.lastTurnEndContent;
     this.emptyWarnedSessions = new Set(state.emptyWarnedSessions ?? []);
   }
@@ -725,6 +783,7 @@ export class ConversationAdapter {
     this.currentAssistantId = undefined;
     this.toolIndex = {};
     this.streamingContent = '';
+    this.streamingReasoning = '';
     this.lastTurnEndContent = undefined;
   }
 }
@@ -747,9 +806,23 @@ function extractToolCallIds(msg: MessageRecord): string[] | undefined {
   return calls.map((c) => String(c.id ?? '')).filter(Boolean);
 }
 
-function extractToolResults(msg: MessageRecord): Array<{ toolCallId: string; name: string; result: unknown; error?: string; isError: boolean }> {
+function extractToolResults(msg: MessageRecord): Array<{
+  toolCallId: string;
+  name: string;
+  result: unknown;
+  error?: string;
+  isError: boolean;
+  purpose?: string;
+}> {
   // Gateway 存储的 tool 消息直接包含 toolResults 数组
-  const results = (msg as any).toolResults as Array<{ toolCallId?: string; name?: string; result?: unknown; error?: string; isError?: boolean }> | undefined;
+  const results = (msg as any).toolResults as Array<{
+    toolCallId?: string;
+    name?: string;
+    result?: unknown;
+    error?: string;
+    isError?: boolean;
+    purpose?: string;
+  }> | undefined;
   if (Array.isArray(results) && results.length > 0) {
     return results.map(r => ({
       toolCallId: String(r.toolCallId ?? ''),
@@ -757,6 +830,7 @@ function extractToolResults(msg: MessageRecord): Array<{ toolCallId: string; nam
       result: r.result,
       error: r.error,
       isError: Boolean(r.isError),
+      purpose: typeof r.purpose === 'string' && r.purpose.trim() ? r.purpose.trim() : undefined,
     }));
   }
   return [];

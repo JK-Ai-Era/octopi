@@ -93,6 +93,8 @@ export interface ToolResult {
   result: unknown;
   error?: string;
   durationMs?: number;
+  /** 行动简述 / 调用意图（UI 标题；取自 result.purpose 或 toolCall.arguments.purpose） */
+  purpose?: string;
   /** 标记为无操作（内容未变化），用于检测 tool-loop 死循环 */
   noop?: boolean;
 }

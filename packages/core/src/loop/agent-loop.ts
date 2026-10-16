@@ -194,6 +194,8 @@ export async function* agentLoop(
       content: response.content,
       toolCalls: response.toolCalls,
       timestamp: Date.now(),
+      // 思考过程仅落 metadata 供回放折叠展示；不进 content，不回灌 LLM
+      ...(response.reasoning ? { metadata: { reasoning: response.reasoning } } : {}),
     };
     currentContext.messages.push(assistantMessage);
     yield { type: 'assistant_message', message: assistantMessage, timestamp: Date.now() };
@@ -219,12 +221,21 @@ export async function* agentLoop(
         }
 
         // 一次 push 所有截断的工具错误结果
+        const purposeById = new Map(
+          (assistantMessage.toolCalls ?? []).map((tc) => [
+            tc.id,
+            typeof (tc.arguments as { purpose?: unknown } | undefined)?.purpose === 'string'
+              ? ((tc.arguments as { purpose: string }).purpose)
+              : undefined,
+          ]),
+        );
         const coreResults: CoreToolResult[] = errorResults.map(r => ({
           toolCallId: r.toolCallId,
           name: r.name,
           result: null,
           error: String(r.content),
           durationMs: r.durationMs,
+          purpose: r.purpose ?? purposeById.get(r.toolCallId),
         }));
         currentContext.messages.push({
           role: 'tool',
@@ -427,6 +438,7 @@ export async function* agentLoop(
       result: r.isError ? null : r.content,
       error: r.isError ? String(r.content) : undefined,
       durationMs: r.durationMs,
+      purpose: r.purpose,
       noop: r.noop,
     }));
     currentContext.messages.push({

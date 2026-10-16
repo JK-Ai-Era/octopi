@@ -1,3 +1,20 @@
+## v0.82.6
+
+### fix(web): separate reasoning from chat content, page session history, and tidy tool display
+
+**问题**：v0.82.4 把 `delta.reasoning_content` / `thinking_delta` 映射成 `type: 'content'`，思考过程被拼进 assistant 正文并推到 WebUI，回放里也变成「内心戏 + 答复」缝合怪。会话打开只拉 `limit: 100` 的**前** 100 条，长会话（实测 365 条）直接丢 2/3 记录；有 toolCalls 的空正文 assistant 被整条 `continue`，工具轮次在聊天流里消失。工具 `purpose` 未落入 `ToolResult`，历史回放从不存在的 `tr.args` 抠 purpose 恒为空；助手气泡还冗余显示「工具: id」。左侧历史会话列表因 `.app-main` 网格行高被内容撑开而无法滚动。
+
+**修正**：
+- **reasoning 通道**：`LLMStreamChunk` 增加 `type: 'reasoning'`；provider 输出 thinking 增量为 reasoning chunk；`call-model` 只喂 watchdog + 发 `llm_thinking_delta`，不拼进 `LLMResponse.content`；thinking 落 `message.metadata.reasoning` 供回放折叠展示
+- **历史分页**：`getSessionMessages` 支持 `direction=backward`（cursor=exclusive end）；打开会话取末尾 100 条，滚动临近顶部再向前拼页；**仅 UI 展示**，续聊仍走服务端完整 Discourse 装配
+- **气泡规则**：无正文且无思考/错误的 assistant 不渲染气泡，只留工具卡片；有正文/思考/错误才出气泡，且不再在气泡内重复「工具: …」
+- **purpose 贯通**：`ToolResult.purpose` 落盘（`result.purpose` 或 `toolCall.arguments.purpose`）；历史优先读 `toolResults.purpose`，再按 `toolCallId` 从 assistant `toolCalls.arguments` 回填
+- **侧栏滚动**：`.app-main` 锁 `grid-template-rows: minmax(0, 1fr)`，会话列表独立滚动，展开/收起按钮移出滚动区
+
+**测试**：`tests/reasoning-channel.test.ts`（2）— call-model 思考/正文分流与 empty_stream fallback；`tests/conversation-adapter.test.ts`（+2）— llm_thinking_delta、metadata.reasoning、tool purpose 映射；`tests/provider-reasoning-passthrough.test.ts`（5）— 改为期望 `type: 'reasoning'`。build + lint 绿；全量 2798 过（3 个既有无关红不变）。
+
+---
+
 ## v0.82.5
 
 ### fix(tools): harden undo journal against external sweeps and make file/git tools EOL-aware

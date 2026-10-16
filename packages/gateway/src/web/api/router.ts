@@ -237,7 +237,9 @@ export class WebApiRouter {
       if (messageMatch && method === 'GET') {
         const limit = Math.min(Math.max(Number(url.searchParams.get('limit') ?? '50'), 1), 200);
         const cursor = url.searchParams.get('cursor') ?? undefined;
-        const page = await this.gateway.getSessionMessages(messageMatch[1], { limit, cursor });
+        const directionRaw = url.searchParams.get('direction');
+        const direction = directionRaw === 'backward' || directionRaw === 'forward' ? directionRaw : undefined;
+        const page = await this.gateway.getSessionMessages(messageMatch[1], { limit, cursor, direction });
         return this.json(res, 200, { ok: true, data: page });
       }
 

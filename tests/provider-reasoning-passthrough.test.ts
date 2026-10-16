@@ -3,12 +3,12 @@
  *
  * Regression: long silent thinking periods starved the engine model-call
  * watchdog (`Model call idle timeout`) because reasoning deltas were dropped
- * before reaching the loop:
+ * before reaching the loop. Thinking must now surface as **separate**
+ * `type: 'reasoning'` chunks so the watchdog is fed without polluting
+ * `LLMResponse.content` / chat transcript.
+ *
  * - OpenAI-compatible providers emit `delta.reasoning` or `delta.reasoning_content`
- *   (field name varies across providers; MiMo & DeepSeek-style APIs use the latter)
  * - Anthropic extended thinking emits `content_block_delta` / `thinking_delta`
- * Dropped deltas also hid reasoning output from users. Both must surface as
- * content chunks (same semantic as the existing `delta.reasoning` passthrough).
  */
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
@@ -33,31 +33,31 @@ function parseOpenAIChunk(provider: OpenAIProvider, payload: Record<string, unkn
 describe('OpenAIProvider reasoning delta passthrough', () => {
   const provider = new OpenAIProvider({ apiKey: 'key', models: ['m1'] });
 
-  it('forwards delta.reasoning_content as content chunks', () => {
+  it('forwards delta.reasoning_content as reasoning chunks (not content)', () => {
     const chunks = parseOpenAIChunk(provider, {
       choices: [{ delta: { reasoning_content: '让我想想…' } }],
     });
 
-    expect(chunks).toEqual([{ type: 'content', content: '让我想想…' }]);
+    expect(chunks).toEqual([{ type: 'reasoning', content: '让我想想…' }]);
   });
 
-  it('forwards delta.reasoning as content chunks', () => {
+  it('forwards delta.reasoning as reasoning chunks (not content)', () => {
     const chunks = parseOpenAIChunk(provider, {
       choices: [{ delta: { reasoning: 'thinking…' } }],
     });
 
-    expect(chunks).toEqual([{ type: 'content', content: 'thinking…' }]);
+    expect(chunks).toEqual([{ type: 'reasoning', content: 'thinking…' }]);
   });
 
-  it('forwards content, reasoning and reasoning_content in one delta', () => {
+  it('forwards content, reasoning and reasoning_content in one delta with split types', () => {
     const chunks = parseOpenAIChunk(provider, {
       choices: [{ delta: { content: '答案', reasoning: 'r1', reasoning_content: 'r2' } }],
     });
 
     expect(chunks).toEqual([
       { type: 'content', content: '答案' },
-      { type: 'content', content: 'r1' },
-      { type: 'content', content: 'r2' },
+      { type: 'reasoning', content: 'r1' },
+      { type: 'reasoning', content: 'r2' },
     ]);
   });
 
@@ -91,7 +91,7 @@ describe('AnthropicProvider thinking_delta passthrough', () => {
     );
   }
 
-  it('forwards thinking_delta as content chunks', async () => {
+  it('forwards thinking_delta as reasoning chunks, text as content', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async () =>
@@ -113,7 +113,9 @@ describe('AnthropicProvider thinking_delta passthrough', () => {
       chunks.push(chunk);
     }
 
-    expect(chunks).toContainEqual({ type: 'content', content: '推理中…' });
+    expect(chunks).toContainEqual({ type: 'reasoning', content: '推理中…' });
     expect(chunks).toContainEqual({ type: 'content', content: '最终答案' });
+    expect(chunks.filter((c) => c.type === 'reasoning')).toHaveLength(1);
+    expect(chunks.filter((c) => c.type === 'content')).toHaveLength(1);
   });
 });
