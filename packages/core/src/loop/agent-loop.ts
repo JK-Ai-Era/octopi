@@ -28,6 +28,11 @@ import type { ToolResult as CoreToolResult } from '../core/types.js';
 import { callModel } from './call-model.js';
 import { classifyError } from './error-classifier.js';
 
+/** 模型调用默认空闲超时（chunk 间最大静默，含首 token 等待），毫秒 */
+export const DEFAULT_MODEL_CALL_IDLE_TIMEOUT_MS = 300_000;
+/** 模型调用默认绝对超时（单次调用总时长上限），毫秒 */
+export const DEFAULT_MODEL_CALL_ABSOLUTE_TIMEOUT_MS = 900_000;
+
 /**
  * Agent 核心循环
  *
@@ -58,8 +63,8 @@ export async function* agentLoop(
   } = config;
 
   const toolExecution = config.toolExecution ?? 'parallel';
-  const idleTimeoutMs = config.modelCallIdleTimeoutMs ?? 120_000;
-  const absoluteTimeoutMs = config.modelCallAbsoluteTimeoutMs ?? 300_000;
+  const idleTimeoutMs = config.modelCallIdleTimeoutMs ?? DEFAULT_MODEL_CALL_IDLE_TIMEOUT_MS;
+  const absoluteTimeoutMs = config.modelCallAbsoluteTimeoutMs ?? DEFAULT_MODEL_CALL_ABSOLUTE_TIMEOUT_MS;
 
   // systemPrompt 是引擎托管 system 消息的权威来源。
   // 不变量：托管 system 至多一条，且在 index 0。

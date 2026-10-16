@@ -774,6 +774,19 @@
         }
       }
     },
+    "modelCall": {
+      "type": "object",
+      "properties": {
+        "idleTimeoutMs": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "absoluteTimeoutMs": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        }
+      }
+    },
     "agentRuntime": {
       "type": "object",
       "properties": {

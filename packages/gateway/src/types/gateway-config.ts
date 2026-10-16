@@ -50,7 +50,10 @@ export interface GatewayConfig {
     captureToolArgs?: boolean;
     captureToolResults?: boolean;
   };
+  /** 模型调用空闲超时（chunk 间最大静默，含首 token 等待），毫秒 */
   modelCallIdleTimeoutMs?: number;
+  /** 模型调用绝对超时（单次调用总时长上限），毫秒 */
+  modelCallAbsoluteTimeoutMs?: number;
   /**
    * 激活宿主构造参数（coalesce 窗口在 new AgentRuntime 时固定）。
    * Schedule/Escalate 由 daemon 经 configureAgentRuntime 挂载。

@@ -252,6 +252,7 @@ export async function buildFromConfig(config: NormalizedHarnessConfig): Promise<
         subsystemDenylist: config.subsystems?.denylist,
         toolIsolation: config.toolIsolation,
         sessionIdleExpiryMs: config.session?.idleExpiryMs,
+        modelCallConfig: config.modelCall,
       });
       agents.set(agentConfig.id, built);
     } catch (err) {
@@ -289,6 +290,7 @@ async function buildAgent(
     toolIsolation?: import('../../config.js').HarnessConfig['toolIsolation'];
     effectPolicy?: import('../../config.js').HarnessConfig['effectPolicy'];
     sessionIdleExpiryMs?: number;
+    modelCallConfig?: import('../../config.js').ModelCallConfig;
   },
 ): Promise<BuiltAgent> {
   const builder = new AgentBuilder();
@@ -303,6 +305,11 @@ async function buildAgent(
     );
   }
   builder.model(provider);
+
+  // ── Model call watchdog 超时（modelCall 段） ──
+  if (shared.modelCallConfig) {
+    builder.modelCallTimeouts(shared.modelCallConfig);
+  }
 
   // ── Model Levels ──
   if (shared.levelMap) {

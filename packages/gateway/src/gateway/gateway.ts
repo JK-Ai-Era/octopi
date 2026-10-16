@@ -4037,6 +4037,16 @@ export class Gateway {
     if (this.config.toolIsolation) {
       builder.toolIsolation(this.config.toolIsolation);
     }
+    // 模型调用 watchdog 超时（modelCall 段；缺省引擎默认）
+    if (
+      this.config.modelCallIdleTimeoutMs !== undefined ||
+      this.config.modelCallAbsoluteTimeoutMs !== undefined
+    ) {
+      builder.modelCallTimeouts({
+        idleTimeoutMs: this.config.modelCallIdleTimeoutMs,
+        absoluteTimeoutMs: this.config.modelCallAbsoluteTimeoutMs,
+      });
+    }
     // P3: effectPolicy（agents[] 覆盖顶层）
     {
       const agentEff = (agent as { effectPolicy?: unknown }).effectPolicy

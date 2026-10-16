@@ -237,6 +237,11 @@
     "checkpointInterval": 15
   },
 
+  "modelCall": {
+    "idleTimeoutMs": 300000,
+    "absoluteTimeoutMs": 900000
+  },
+
   "agentRuntime": {
     "coalesceWindowMs": 400
   },

@@ -142,6 +142,8 @@ export function toGatewayConfig(config: NormalizedHarnessConfig): GatewayConfig 
     memory: config.memory,
     knowledge: config.knowledge,
     observer: config.observer,
+    modelCallIdleTimeoutMs: config.modelCall?.idleTimeoutMs,
+    modelCallAbsoluteTimeoutMs: config.modelCall?.absoluteTimeoutMs,
     embedding: config.models?.embedding,
     modelProviders: config.models?.providers,
     levels: config.levelMap ?? (config.models as ModelsConfig | undefined)?.level,

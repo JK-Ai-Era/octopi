@@ -51,6 +51,15 @@ export const RunGuardJsonConfigSchema = z.object({
   { message: 'minCheckpointInterval must be <= maxCheckpointInterval' },
 );
 
+// ── Model Call（引擎 watchdog 超时：流式 idle + 绝对上限）──
+
+export const ModelCallConfigSchema = z.object({
+  /** 流式 chunk 间最大静默（含首 token 等待），毫秒 */
+  idleTimeoutMs: z.number().positive().optional(),
+  /** 单次模型调用总时长上限，毫秒 */
+  absoluteTimeoutMs: z.number().positive().optional(),
+});
+
 // ── Agent Runtime（消息路径始终经 Runtime；Source 按配置块挂载）──
 
 export const AgentRuntimeJsonConfigSchema = z.object({

@@ -237,6 +237,8 @@ export class AnthropicProvider implements ModelProvider {
               const delta = data.delta as Record<string, unknown> | undefined;
               if (delta?.type === 'text_delta') {
                 yield { type: 'content', content: (delta.text as string) ?? '' };
+              } else if (delta?.type === 'thinking_delta') {
+                yield { type: 'content', content: (delta.thinking as string) ?? '' };
               } else if (delta?.type === 'input_json_delta') {
                 toolArgsBuffer += (delta.partial_json as string) ?? '';
               }

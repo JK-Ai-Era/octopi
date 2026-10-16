@@ -1,3 +1,20 @@
+## v0.82.4
+
+### fix(loop): stop model-call idle watchdog tripping on long silent thinking
+
+**问题**：复杂任务频繁出现 `Stream fallback to sync (Model call idle timeout: no data received from provider within timeout window)`。引擎模型调用看门狗的空闲窗口默认仅 120s（absolute 300s），而复杂任务的大上下文 prefill 与 reasoning 模型长思考会产生超过 120s 的流式静默期（含首 token 等待），一超即放弃流式回退同步。叠加两个触发源：provider 层把 `delta.reasoning_content`（MiMo / DeepSeek 系 OpenAI 兼容字段）与 Anthropic `thinking_delta` 静默丢弃，思考流对看门狗完全不可见；且 `modelCallIdleTimeoutMs` 在 gateway-config 仅声明未消费，octopi.json 无法调参，120s 实际写死。
+
+**修正**：
+
+- 默认超时上调为 idle 300s / absolute 900s，导出 `DEFAULT_MODEL_CALL_IDLE_TIMEOUT_MS` / `DEFAULT_MODEL_CALL_ABSOLUTE_TIMEOUT_MS`（core/loop/agent-loop）
+- 新增 `modelCall` 配置段（`idleTimeoutMs` / `absoluteTimeoutMs`）贯通全链：octopi.json（Zod schema + example）→ `toGatewayConfig`（GatewayConfig 补 `modelCallAbsoluteTimeoutMs`）→ `AgentBuilder.modelCallTimeouts()` → Agent loop config；serve 与 config-bridge 两条构建路径同接
+- OpenAI 兼容 provider 补 `delta.reasoning_content` 透传；Anthropic provider 对称补 `thinking_delta` 透传（与既有 `delta.reasoning` 同语义：思考增量进 content，喂饱 watchdog 且不再隐藏思考过程）
+- `octopi.schema.json` 经 `npm run build` 重新生成
+
+**测试**：`tests/model-call-timeouts.test.ts`（7）— 默认值、schema 校验、toGatewayConfig 映射、Agent options 透传；`tests/provider-reasoning-passthrough.test.ts`（5）— reasoning_content / reasoning / thinking_delta 透传；lint 与全量回归绿。
+
+---
+
 ## v0.82.3
 
 ### fix(config): pass effectPolicy through toGatewayConfig

@@ -784,6 +784,14 @@ export interface ModelsConfig {
 // ── 完整配置 ──
 
 /** 自主子系统配置（框架级：搜索路径与审计；子系统自身参数写在各自 config.yaml） */
+/** ModelCallConfig — octopi.json 中的 modelCall 字段（引擎模型调用 watchdog 超时） */
+export interface ModelCallConfig {
+  /** 流式 chunk 间最大静默（含首 token 等待），毫秒 */
+  idleTimeoutMs?: number;
+  /** 单次模型调用总时长上限，毫秒 */
+  absoluteTimeoutMs?: number;
+}
+
 export interface SubsystemsConfig {
   /** 审计日志目录（默认 ~/.octopi/audit） */
   auditDir?: string;
@@ -812,6 +820,8 @@ export interface HarnessConfig {
   budgetPolicy?: BudgetPolicyJsonConfig;
   /** 过程监督配置（行为监督；与 budget 组合） */
   runGuard?: RunGuardJsonConfig;
+  /** 模型调用 watchdog 超时（modelCall 段） */
+  modelCall?: ModelCallConfig;
   /** 激活宿主（long-lived；Schedule/Escalate 等） */
   agentRuntime?: AgentRuntimeJsonConfig;
   /** SessionSchedule 预算与兜底 tick */

@@ -10,6 +10,7 @@ import {
   AgentRuntimeJsonConfigSchema,
   BudgetPolicyJsonConfigSchema,
   ConcurrencyConfigSchema,
+  ModelCallConfigSchema,
   RunGuardJsonConfigSchema,
   SchedulesJsonConfigSchema,
 } from './run.js';
@@ -51,6 +52,7 @@ export const engineConfigSchema = z.object({
   plugins: PluginConfigSchema.optional(),
   budgetPolicy: BudgetPolicyJsonConfigSchema.optional(),
   runGuard: RunGuardJsonConfigSchema.optional(),
+  modelCall: ModelCallConfigSchema.optional(),
   agentRuntime: AgentRuntimeJsonConfigSchema.optional(),
   schedules: SchedulesJsonConfigSchema.optional(),
   contextEngine: ContextEngineConfigSchema.optional(),

@@ -461,6 +461,7 @@ export class OpenAIProvider implements ModelProvider {
       const chunks: LLMStreamChunk[] = [];
       if (delta.content) chunks.push({ type: 'content', content: delta.content });
       if (delta.reasoning) chunks.push({ type: 'content', content: delta.reasoning });
+      if (delta.reasoning_content) chunks.push({ type: 'content', content: delta.reasoning_content });
 
       if (delta.tool_calls) {
         for (const tc of delta.tool_calls) {

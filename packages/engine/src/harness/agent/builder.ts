@@ -517,6 +517,8 @@ export class AgentBuilder {
   private _runGuard?: RunGuard;
   private _runGuardConfig?: RunGuardConfig;
   private _checkpointInterval?: number;
+  /** 模型调用 watchdog 超时（undefined = 引擎默认） */
+  private _modelCallTimeouts?: { idleTimeoutMs?: number; absoluteTimeoutMs?: number };
   private _reliabilityConfig?: ReliabilityConfig;
 
   // Harness 组件
@@ -1040,6 +1042,12 @@ export class AgentBuilder {
       this._runGuardConfig = guardOrConfig as RunGuardConfig;
     }
     if (checkpointInterval !== undefined) this._checkpointInterval = checkpointInterval;
+    return this;
+  }
+
+  /** 设置模型调用 watchdog 超时（流式 idle + 绝对上限；缺省用引擎默认） */
+  modelCallTimeouts(timeouts: { idleTimeoutMs?: number; absoluteTimeoutMs?: number }): this {
+    this._modelCallTimeouts = timeouts;
     return this;
   }
 
@@ -1644,6 +1652,8 @@ export class AgentBuilder {
 
     // 创建 Agent
     const agentOptions: AgentOptions = {
+      modelCallIdleTimeoutMs: this._modelCallTimeouts?.idleTimeoutMs,
+      modelCallAbsoluteTimeoutMs: this._modelCallTimeouts?.absoluteTimeoutMs,
       model: this._model,
       systemPrompt,
       tools: agentTools,

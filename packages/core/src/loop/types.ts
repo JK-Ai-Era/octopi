@@ -258,9 +258,9 @@ export interface AgentLoopConfig extends ToolHooksConfig, TurnHooksConfig {
   observer?: LoopObserver;
 
   // ── 超时配置 ──
-  /** 模型调用空闲超时（默认 120s） */
+  /** 模型调用空闲超时（默认 300s，见 DEFAULT_MODEL_CALL_IDLE_TIMEOUT_MS） */
   modelCallIdleTimeoutMs?: number;
-  /** 模型调用绝对超时（默认 300s） */
+  /** 模型调用绝对超时（默认 900s，见 DEFAULT_MODEL_CALL_ABSOLUTE_TIMEOUT_MS） */
   modelCallAbsoluteTimeoutMs?: number;
 }
 
