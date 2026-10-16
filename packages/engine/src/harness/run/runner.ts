@@ -27,6 +27,7 @@ import type { StateMachine } from '@octopi-agent/core/primitives/state-machine.j
 import { HeuristicTokenEstimator } from '../context/index.js';
 import { extractLayerQuery } from '../context/layer-types.js';
 import { withRuntimeEnvironmentInjection } from '../context/runtime-datetime.js';
+import { loadRootInstructionsInjection } from '../context/root-instructions.js';
 import type { SessionTaskService } from '../session/tasks/service.js';
 import { extractTaskQueryHints, renderSessionTasksInjection } from '../session/tasks/render.js';
 import { createRunId, type RunScope } from './run-scope.js';
@@ -855,12 +856,16 @@ export class SessionAwareRunner {
           sessionId,
           baseCwd: runtimeBaseCwd,
         }).cwd;
+        const rootInstructions = await loadRootInstructionsInjection(this.effectAllowRoots, {
+          cwd: runtimeCwd,
+        });
         effectiveRunConfig = {
           ...effectiveRunConfig,
           injectedContext: withRuntimeEnvironmentInjection(effectiveRunConfig.injectedContext, {
             cwd: runtimeCwd,
             allowRoots: this.effectAllowRoots,
             effectMode: this.effectMode,
+            rootInstructions,
           }),
         };
       }

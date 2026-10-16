@@ -1,3 +1,34 @@
+## v0.82.0
+
+### feat(context): root AGENTS.md / CLAUDE.md as scoped runtime instructions
+
+**问题**：多 root 场景下，各项目目录里的 AGENTS.md / CLAUDE.md（工作方式约定）进不了 system prompt；Runtime 只列了 Allowed roots，模型不知道该目录下的本地规范。
+**拍板**：挂在 Runtime 层 workspace/roots 块之后（`root_instructions`），不新开 ContextLayer——这是 run 级、随 cwd/allowRoots 变化的活态信息；agent 自身的 `agents/<id>/AGENTS.md` 仍属 Persona，两者不混。
+
+**格式**（块开头含作用域与优先级说明）：
+```
+<root_instructions>
+Scope: each block applies ONLY to the root path named in its root attribute. …
+Priority: system rules and the agent persona take precedence. …
+
+<instruction_block root="/ws/project" source="AGENTS.md">
+…原文…
+</instruction_block>
+</root_instructions>
+```
+
+**行为**：
+- 只读 root 目录这一层的 AGENTS.md / CLAUDE.md（不递归）；同 root 两份都在时 AGENTS 在前、CLAUDE 追加
+- 多 root 各自成块，`root` 属性区分作用域；cwd 所属 root 排最前（`isPathInside`，win32 大小写归一）
+- 单文件 16KB / 合计 48KB：首份可截到合计上限，其后装不下的整份跳过（继续尝试更小的后续文件）
+- 正文结束标签中和（防恶意仓库逃逸出 instruction_block）；截断提示中的 path 走 XML 转义
+- 指纹缓存（mtimeMs:size + maxBytes），换上限或文件改写后不吐陈旧内容
+
+**接线**：`harness/context/root-instructions.ts`（新）→ `withRuntimeEnvironmentInjection` 增 `rootInstructions` → `SessionAwareRunner` 每 turn 加载并注入。
+**测试**：`tests/harness/runtime-root-instructions.test.ts`（23：作用域标签、双文件顺序、cwd 排序、大小写、逃逸、截断/预算、缓存失效）。
+
+---
+
 ## v0.81.1
 
 ### fix(suit): init.ts header comment closes early on `*/`

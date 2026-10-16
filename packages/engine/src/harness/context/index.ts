@@ -114,3 +114,10 @@ export {
   withRuntimeDatetimeInjection,
   withRuntimeEnvironmentInjection,
 } from './runtime-datetime.js';
+export {
+  clearRootInstructionCache,
+  formatRootInstructionsInjection,
+  loadRootInstructionDocs,
+  loadRootInstructionsInjection,
+} from './root-instructions.js';
+export type { RootInstructionDoc } from './root-instructions.js';

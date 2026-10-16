@@ -64,13 +64,13 @@ export function formatRuntimeWorkspaceInjection(
 }
 
 /**
- * 将 datetime（+ 可选 workspace/roots）块拼入既有 injectedContext
+ * 将 datetime（+ 可选 workspace/roots/约定）块拼入既有 injectedContext
  *
- * 锚点在前：datetime → workspace → 既有注入（tasks / guidance）。
+ * 锚点在前：datetime → workspace → root_instructions → 既有注入（tasks / guidance）。
  * 保留 `withRuntimeDatetimeInjection` 作为仅时间锚点的兼容入口。
  *
  * @param injectedContext - 本轮已有的注入（tasks / guidance 等），可为空
- * @param options - now 参考时刻；cwd 工具工作目录；allowRoots / effectMode
+ * @param options - now 参考时刻；cwd 工具工作目录；allowRoots / effectMode；rootInstructions 预格式化约定块
  * @returns 组合后的 injectedContext
  */
 export function withRuntimeEnvironmentInjection(
@@ -80,6 +80,7 @@ export function withRuntimeEnvironmentInjection(
     cwd?: string | undefined;
     allowRoots?: string[];
     effectMode?: string;
+    rootInstructions?: string;
   },
 ): string {
   const now = options?.now ?? new Date();
@@ -89,6 +90,8 @@ export function withRuntimeEnvironmentInjection(
     effectMode: options?.effectMode,
   });
   if (ws) blocks.push(ws);
+  const rootInst = options?.rootInstructions?.trim();
+  if (rootInst) blocks.push(rootInst);
   const base = (injectedContext ?? '').trim();
   if (base) blocks.push(base);
   return blocks.join('\n\n');
