@@ -1,3 +1,12 @@
+## v0.82.1
+
+### docs(readme): state v0.8x instead of stale v0.7x in status
+
+**问题**：README 状态一节（EN `Status & boundaries` / ZH `现状与边界`）仍写 "v0.7x"，落后于 lockstep 版本（0.82.x）。
+**修正**：改为 "v0.8x"，英/中双语同步。
+
+---
+
 ## v0.82.0
 
 ### feat(context): root AGENTS.md / CLAUDE.md as scoped runtime instructions

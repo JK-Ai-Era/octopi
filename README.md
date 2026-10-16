@@ -394,7 +394,7 @@ theater; it is how the invariants stay invariant.
 
 ## Status & boundaries
 
-Octopi is v0.7x and moving fast. Being honest about the edges:
+Octopi is v0.8x and moving fast. Being honest about the edges:
 
 - **Deployment assumption**: single process is the v1 reality; cross-process
   requires a distributed Session Lease (in-process lease exists today).
