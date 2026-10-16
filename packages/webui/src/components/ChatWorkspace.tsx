@@ -16,7 +16,7 @@ import type {
   ViewMode,
 } from '@octopi-agent/gateway/web/conversation/types';
 import type { RunStatus, InspectorState } from '@octopi-agent/gateway/web/runtime/store';
-import type { SessionTaskView, ModelCatalog, SessionModelView, CommandCatalogItemDto, PendingQuestion, PendingApproval, ApprovalScope, ClientToolCallDto, ClientToolDescriptorDto } from '@octopi-agent/gateway/web/sdk/client';
+import type { SessionTaskView, SessionScheduleView, ModelCatalog, SessionModelView, CommandCatalogItemDto, PendingQuestion, PendingApproval, ApprovalScope, ClientToolCallDto, ClientToolDescriptorDto } from '@octopi-agent/gateway/web/sdk/client';
 import { ClientToolCallCard, WebViewPreview, type RenderedWebView } from './ClientToolCallCard';
 import { FileCard, FilePreviewPanel, fileRefFromCall, fileRefFromToolResult, type FileRef } from './FileDelivery';
 // 浏览器侧直连 token 模块（不经 harness barrel / context/index，避免拉入 Node 专用依赖）
@@ -534,6 +534,95 @@ const TASK_STATUS_ORDER: Record<SessionTaskView['status'], number> = {
   dropped: 3,
 };
 
+function SchedulePanel({
+  schedules,
+  onControl,
+}: {
+  schedules: SessionScheduleView[];
+  onControl: (id: string, action: 'cancel' | 'pause' | 'resume') => void;
+}) {
+  if (!schedules.length) {
+    return (
+      <div className="tasks-empty">
+        <span className="tasks-empty-icon" aria-hidden>⏱</span>
+        暂无定时作业
+        <div style={{ marginTop: 6 }}>
+          对 Agent 说「2 小时后…」或「每天 9 点…」即可创建
+        </div>
+      </div>
+    );
+  }
+
+  const formatWhen = (ts: number) => {
+    try {
+      return new Date(ts).toLocaleString();
+    } catch {
+      return String(ts);
+    }
+  };
+
+  return (
+    <div className="task-list">
+      {schedules
+        .slice()
+        .sort((a, b) => {
+          const ao = a.status === 'active' || a.status === 'paused' ? 0 : 1;
+          const bo = b.status === 'active' || b.status === 'paused' ? 0 : 1;
+          if (ao !== bo) return ao - bo;
+          return a.nextFireAt - b.nextFireAt;
+        })
+        .map((s) => {
+        const isOpen = s.status === 'active' || s.status === 'paused';
+        return (
+          <article key={s.id} className={`task-card task-card-${s.status === 'active' ? 'open' : s.status}`}>
+            <div className="task-card-top">
+              <div className="task-card-title">
+                {s.title || s.prompt.slice(0, 40)}
+              </div>
+              <span className={`task-badge task-badge-${s.status === 'active' ? 'open' : s.status}`}>
+                {s.status}
+              </span>
+            </div>
+            <div className="task-meta-row" style={{ flexWrap: 'wrap', gap: 8 }}>
+              <span>
+                {s.kind === 'once'
+                  ? `once · ${formatWhen(s.fireAt ?? s.nextFireAt)}`
+                  : s.kind === 'interval'
+                    ? `every ${Math.round((s.intervalMs ?? 0) / 1000)}s`
+                    : `cron ${s.cron ?? ''}`}
+              </span>
+              <span>
+                run {s.runCount}
+                {s.maxRuns !== undefined ? `/${s.maxRuns}` : ''}
+              </span>
+              {s.status === 'active' && (
+                <span>next {formatWhen(s.nextFireAt)}</span>
+              )}
+            </div>
+            {s.lastError && <div className="task-note">{s.lastError}</div>}
+            {isOpen && (
+              <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                {s.status === 'active' ? (
+                  <button type="button" className="btn btn-small" onClick={() => onControl(s.id, 'pause')}>
+                    暂停
+                  </button>
+                ) : (
+                  <button type="button" className="btn btn-small" onClick={() => onControl(s.id, 'resume')}>
+                    恢复
+                  </button>
+                )}
+                <button type="button" className="btn btn-small" onClick={() => onControl(s.id, 'cancel')}>
+                  取消
+                </button>
+              </div>
+            )}
+          </article>
+        );
+      })}
+    </div>
+  );
+}
+
 function TaskPanel({ tasks }: { tasks: SessionTaskView[] }) {
   const goals = tasks
     .filter((t) => !t.parentId)
@@ -657,6 +746,7 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
   const [runStatus, setRunStatus] = useState<RunStatus>('idle');
   const [inspector, setInspector] = useState<InspectorState>({});
   const [tasks, setTasks] = useState<SessionTaskView[]>([]);
+  const [schedules, setSchedules] = useState<SessionScheduleView[]>([]);
   const [questions, setQuestions] = useState<PendingQuestion[]>([]);
   const [answeringQuestion, setAnsweringQuestion] = useState(false);
   const [approvals, setApprovals] = useState<PendingApproval[]>([]);
@@ -674,7 +764,7 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
   const [commands, setCommands] = useState<CommandCatalogItemDto[]>([]);
   const [cmdSuggestIndex, setCmdSuggestIndex] = useState(0);
   const [openIssues, setOpenIssues] = useState<Array<{ id: string; severity: string; title: string; detail: string }>>([]);
-  const [rightTab, setRightTab] = useState<'context' | 'run' | 'tasks' | 'attachments' | 'roots' | 'file' | 'tools' | 'help'>('context');
+  const [rightTab, setRightTab] = useState<'context' | 'run' | 'tasks' | 'schedules' | 'attachments' | 'roots' | 'file' | 'tools' | 'help'>('context');
   const [connectError, setConnectError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
@@ -710,8 +800,14 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
     store.addEventListener('sessions', ((e: CustomEvent) => {
       const list = (e.detail.sessions ?? []) as Array<{ id: string; lastInteractionAt?: number }>;
       setSessions(e.detail.sessions);
-      // 刷新后自动打开最近会话，否则回放文件卡片无从恢复
-      if (!activeSessionIdRef.current && list.length > 0) {
+      // 刷新后自动打开最近会话，否则回放文件卡片无从恢复。
+      // 若 store 已有活动会话（createSession 刚建完）或本组件已选中，禁止抢开旧会话。
+      const storeChatId = storeRef.current?.getState().chat.sessionId;
+      if (
+        !activeSessionIdRef.current &&
+        !storeChatId &&
+        list.length > 0
+      ) {
         const latest = [...list].sort(
           (a, b) => (b.lastInteractionAt ?? 0) - (a.lastInteractionAt ?? 0),
         )[0];
@@ -736,6 +832,9 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
     store.addEventListener('tasks', ((e: CustomEvent) => {
       setTasks(e.detail.tasks ?? []);
     }) as EventListener);
+    store.addEventListener('schedules', ((e: CustomEvent) => {
+      setSchedules(e.detail.schedules ?? []);
+    }) as EventListener);
     store.addEventListener('questions', ((e: CustomEvent) => {
       setQuestions(e.detail.questions ?? []);
     }) as EventListener);
@@ -745,13 +844,25 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
     store.addEventListener('clientToolCalls', ((e: CustomEvent) => {
       const calls = (e.detail.calls ?? []) as ClientToolCallDto[];
       setClientToolCalls(calls);
+      // 仅收集当前会话的文件，避免切会话后残留
+      const curId = activeSessionIdRef.current;
       setDeliveredFiles((prev) => {
-        const next = [...prev];
+        const next = curId
+          ? prev.filter((x) => {
+              const sid = (x.ref as { sessionId?: string }).sessionId;
+              return sid === undefined || sid === curId;
+            })
+          : [...prev];
         for (const c of calls) {
+          const callSid = (c as { sessionId?: string }).sessionId;
+          if (curId && callSid && callSid !== curId) continue;
           const ref = fileRefFromCall(c);
           if (!ref) continue;
           if (!next.some((x) => x.ref.fileId === ref.fileId)) {
-            next.push({ ref, createdAt: c.createdAt || Date.now() });
+            next.push({
+              ref: { ...ref, ...(callSid ? { sessionId: callSid } : {}) } as FileRef,
+              createdAt: c.createdAt || Date.now(),
+            });
           }
         }
         next.sort((a, b) => a.createdAt - b.createdAt);
@@ -972,6 +1083,7 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
     setRunStatus(state.chat.runStatus);
     setStream(state.chat.streamingContent ?? '');
     setTasks(state.chat.tasks ?? []);
+    setSchedules(state.chat.schedules ?? []);
     setQuestions(state.chat.questions ?? []);
     setApprovals(state.chat.approvals ?? []);
     setClientToolCalls(state.chat.clientToolCalls ?? []);
@@ -1111,12 +1223,19 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
       const created = await store.createSession(agentId, modelToApply ? { model: modelToApply } : undefined);
       stickToBottomRef.current = true;
       setActiveSessionId(created.id);
+      activeSessionIdRef.current = created.id;
       setRunStatus('idle');
       setStream('');
+      setConversationItems(store.getState().chat.conversation ?? []);
       setTasks(store.getTasks());
+      setSchedules(store.getSchedules());
       setQuestions(store.getQuestions());
       setApprovals(store.getApprovals());
       setClientToolCalls(store.getClientToolCalls());
+      // 新会话不得残留上一会话的文件卡片/预览
+      setRenderedWebViews([]);
+      setDeliveredFiles([]);
+      setFocusFileId(null);
       void registerSampleClientTools(created.id);
       await store.refreshSessionModel();
       const sm = store.getSessionModel();
@@ -2016,6 +2135,16 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
               })()}
             </button>
             <button
+              className={rightTab === 'schedules' ? 'btn-tab btn-tab-active' : 'btn-tab'}
+              onClick={() => setRightTab('schedules')}
+            >
+              日程
+              {(() => {
+                const n = schedules.filter((s) => s.status === 'active' || s.status === 'paused').length;
+                return n > 0 ? <span className="tab-count">{n}</span> : null;
+              })()}
+            </button>
+            <button
               className={rightTab === 'attachments' ? 'btn-tab btn-tab-active' : 'btn-tab'}
               onClick={() => setRightTab('attachments')}
             >
@@ -2095,6 +2224,28 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
                 只读列表，由 Agent 维护。对 Agent 说「把 xx 标为完成」即可更新。
               </div>
               <TaskPanel tasks={tasks} />
+            </div>
+          )}
+
+          {rightTab === 'schedules' && (
+            <div>
+              <div className="tasks-panel-header">
+                <div className="sidebar-title" style={{ marginBottom: 0 }}>会话日程</div>
+                <span className="small muted">
+                  {schedules.filter((s) => s.status === 'active' || s.status === 'paused').length} 未闭合
+                </span>
+              </div>
+              <div className="tasks-panel-hint">
+                由 Agent 用 schedule_* 登记；到点自动唤醒本会话执行。
+              </div>
+              <SchedulePanel
+                schedules={schedules}
+                onControl={(id, action) => {
+                  const store = storeRef.current;
+                  if (!store) return;
+                  void store.controlSchedule(id, action).catch(() => undefined);
+                }}
+              />
             </div>
           )}
 

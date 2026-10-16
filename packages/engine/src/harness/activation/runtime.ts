@@ -312,7 +312,13 @@ export class AgentRuntime {
       return { status: 'skipped', reason: 'runtime_stopped' };
     }
 
-    const request = buildRunRequest(agent, triggers, sessionId);
+    // I6：schedule 点火以 timer 主体入审计（arch/session-schedules.md）
+    const isScheduleWake = triggers.some((t) => t.type === 'schedule');
+    const request = buildRunRequest(agent, triggers, sessionId, {
+      actorType: isScheduleWake ? 'timer' : undefined,
+      actorId: isScheduleWake ? (triggers[0]?.metadata?.reason ?? triggers[0]?.id) : undefined,
+      intent: isScheduleWake ? 'schedule_wake' : undefined,
+    });
     const controller = new AbortController();
     const run: ActiveRun = {
       requestId: request.requestId,

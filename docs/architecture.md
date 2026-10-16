@@ -466,6 +466,22 @@ harness/session/tasks/
 
 Design baseline: [docs/task-system.md](./task-system.md).
 
+### 3.11b Session Schedules
+
+**Responsibility**: agent-initiated timers — in-turn `timer_*` waits and cross-turn `schedule_*` wake jobs (once / interval / cron).
+
+```
+harness/session/schedules/
+├── service.ts            # SessionScheduleService — sole write entry + arm/fire
+├── store.ts              # schedules.db (node:sqlite)
+├── render.ts             # <session_schedules> injection
+├── tools.ts              # timer_* + schedule_* tools
+├── types.ts              # SessionSchedule + state machine
+└── index.ts
+```
+
+Product baseline: [docs/session-schedules.md](./session-schedules.md).
+
 ### 3.12 Run Guard
 
 **Responsibility**: decide whether a single run has gone off the rails (continue / recover / stop).
@@ -840,6 +856,7 @@ The Gateway serve path is assembled via `builder.build()`; governance-type subsy
 - [Known Issues](./KNOWN-ISSUES.md) — public issue summary
 - `docs/plugin-system.md` — Plugin system detailed documentation
 - `docs/task-system.md` — SessionTask design baseline
+- `docs/session-schedules.md` — SessionSchedule / timer_* / schedule_* baseline
 - `docs/domains.md` — product domains and module ownership (run-guard / orchestration / AsyncTask see the Collaboration / Run domains)
 - `docs/CONTRIBUTING.md` — development guidelines
 - `docs/context-layer-contracts.md` — ContextLayer / Assembler contracts

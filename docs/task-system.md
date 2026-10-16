@@ -26,6 +26,8 @@ What is needed is not a new "task runtime", but:
 
 This is **not** a "working-memory domain" peer of Session, **not** an execution primitive (`AsyncTask`), **not** an orchestration instance, and **not** process supervision.
 
+It is also **not** a scheduler: timers and delayed agent wakes live in [session-schedules.md](./session-schedules.md) (`timer_*` / `schedule_*`).
+
 In one sentence: **the session task list hangs on Session; a goal is the user's delegation, and a step is an execution item under that delegation (depth = 1).**
 
 ---

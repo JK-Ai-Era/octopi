@@ -25,7 +25,8 @@ Agent 活在「当前对话」里。用户委托了一件多轮才能做完的�
 | **未闭合工作项** | **`Session.tasks`** | **本设计（SessionTask）** |
 | 跨会话沉淀 | Memory 子系统 | 长期记忆 |
 
-**不是**与 Session 并列的「工作记忆领域」，**不是**执行原语（`AsyncTask`），**不是**编排实例，**不是**过程监督。
+**不是**与 Session 并列的「工作记忆领域」，**不是**执行原语（`AsyncTask`），**不是**编排实例，**不是**过程监督。  
+也**不是**调度器：定时与延迟唤醒见 [session-schedules.zh.md](./session-schedules.zh.md)（`timer_*` / `schedule_*`）。
 
 一句话：**会话任务列表挂在 Session 上；goal 是用户委托，step 是该委托下的执行计划（depth=1）。**
 

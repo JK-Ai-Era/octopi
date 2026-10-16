@@ -136,6 +136,11 @@ export interface MemoryEffectJournal {
 export interface ToolExecutionContext {
   sessionId: string;
   agentId: string;
+  /**
+   * 本 episode 的 Run 标识（审计 / 作业归因，如 schedule.createdBy.runId）。
+   * 由 Runner 经 RunScope 注入。
+   */
+  runId?: string;
   messages: import('./messages.js').Message[];
   abortSignal?: AbortSignal;
   cwd?: string;

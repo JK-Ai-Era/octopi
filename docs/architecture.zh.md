@@ -468,6 +468,22 @@ harness/session/tasks/
 
 设计基准：[docs/task-system.zh.md](./task-system.zh.md)。
 
+### 3.11b Session Schedules — 会话日程
+
+**职责**：Agent 自发起定时——回合内 `timer_*` 等待 + 跨回合 `schedule_*` 唤醒作业（once / interval / cron）。
+
+```
+harness/session/schedules/
+├── service.ts            # SessionScheduleService — 唯一写入口 + arm/fire
+├── store.ts              # schedules.db（node:sqlite）
+├── render.ts             # <session_schedules> 注入
+├── tools.ts              # timer_* + schedule_* 工具
+├── types.ts              # SessionSchedule + 状态机
+└── index.ts
+```
+
+产品基准：[docs/session-schedules.zh.md](./session-schedules.zh.md)。
+
 ### 3.12 Run Guard — 过程监督
 
 **职责**：判断单次 run 是否跑飞（continue / recover / stop）。
@@ -842,6 +858,7 @@ Gateway serve 路径经 `builder.build()` 装配；治理类子系统 signal 仅
 - [已知问题](./KNOWN-ISSUES.zh.md) — 对外问题摘要
 - `docs/plugin-system.zh.md` — Plugin 系统详细文档
 - `docs/task-system.zh.md` — SessionTask 设计基准
+- `docs/session-schedules.zh.md` — SessionSchedule / timer_* / schedule_* 基准
 - `docs/domains.zh.md` — 产品域与模块归属（run-guard / orchestration / AsyncTask 见 Collaboration / Run 域）
 - `docs/CONTRIBUTING.zh.md` — 开发规范
 - `docs/context-layer-contracts.zh.md` — ContextLayer / Assembler 契约

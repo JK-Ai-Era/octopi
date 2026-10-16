@@ -11,6 +11,7 @@ import {
   BudgetPolicyJsonConfigSchema,
   ConcurrencyConfigSchema,
   RunGuardJsonConfigSchema,
+  SchedulesJsonConfigSchema,
 } from './run.js';
 import {
   CompactCapabilityConfigSchema,
@@ -51,6 +52,7 @@ export const engineConfigSchema = z.object({
   budgetPolicy: BudgetPolicyJsonConfigSchema.optional(),
   runGuard: RunGuardJsonConfigSchema.optional(),
   agentRuntime: AgentRuntimeJsonConfigSchema.optional(),
+  schedules: SchedulesJsonConfigSchema.optional(),
   contextEngine: ContextEngineConfigSchema.optional(),
   contextAssembler: ContextAssemblerConfigSchema.optional(),
   /** 公用能力 summary（capabilities） */

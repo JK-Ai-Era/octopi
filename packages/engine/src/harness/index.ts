@@ -252,6 +252,20 @@ export { validateSubsystemSpec } from './collaboration/autonomous-subsystem/boun
 // ── Session Tasks（会话任务，Session 聚合）──
 export { SessionTaskService, renderSessionTasksInjection, extractTaskQueryHints, createSessionTaskTools } from './session/tasks/index.js';
 export type { SessionTask, SessionTaskStatus, SessionTaskListFilter } from './session/tasks/index.js';
+export {
+  SessionScheduleService,
+  SessionScheduleStore,
+  renderSessionSchedulesInjection,
+  createSessionScheduleTools,
+  parseDurationMs,
+} from './session/schedules/index.js';
+export type {
+  SessionSchedule,
+  SessionScheduleStatus,
+  SessionScheduleServiceOptions,
+  SessionScheduleWakeup,
+  SessionScheduleNotify,
+} from './session/schedules/index.js';
 
 // ── Run Guard（过程监督）──
 // AgentSupervisor 已归档（arch/agent-runtime.md §10）

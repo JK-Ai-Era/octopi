@@ -65,6 +65,8 @@ import { summarizeLlmMessages } from '../observability/observer/types.js';
 import type { SessionStore } from '@octopi-agent/core/interfaces/session-store.js';
 import { SessionTaskService } from '../session/tasks/service.js';
 import { createSessionTaskTools } from '../session/tasks/tools.js';
+import { SessionScheduleService } from '../session/schedules/service.js';
+import { createSessionScheduleTools } from '../session/schedules/tools.js';
 import type { SessionData } from '../session/types.js';
 import { InMemorySessionStore } from '../session/in-memory-store.js';
 
@@ -149,6 +151,7 @@ export interface ToolContextProvider {
   get(): {
     sessionId: string;
     agentId: string;
+    runId?: string;
     messages: import('@octopi-agent/core/types.js').Message[];
     cwd?: string;
     attachmentRoots?: string[];
@@ -191,6 +194,7 @@ class RuntimeToolContextProvider implements ToolContextProvider {
       return {
         sessionId: scope.toolRuntime.sessionId,
         agentId: scope.toolRuntime.agentId,
+        runId: scope.runId,
         messages: scope.toolRuntime.messages,
         cwd: scope.toolRuntime.cwd ?? this.cwd,
         attachmentRoots: scope.toolRuntime.attachmentRoots,
@@ -216,6 +220,7 @@ class RuntimeToolContextProvider implements ToolContextProvider {
       return {
         sessionId: scope.sessionId,
         agentId: scope.agentId,
+        runId: scope.runId,
         messages: this.messages,
         cwd: this.cwd,
         fileEffects: unconfigured,
@@ -1169,6 +1174,23 @@ export class AgentBuilder {
       }
     }
 
+    // 会话日程：与 task_* 同构；进程内共用实例时经 runnerConfig 注入
+    let sessionScheduleService = this._runnerConfig?.sessionScheduleService;
+    if (!sessionScheduleService) {
+      sessionScheduleService = new SessionScheduleService({ events });
+      // 默认实例必须 open，否则 runner 注入 list() 会抛 not opened
+      await sessionScheduleService.open();
+    }
+    this._runnerConfig = {
+      ...this._runnerConfig,
+      sessionScheduleService,
+    };
+    if (!this._toolBus.getTool('schedule_set')) {
+      for (const t of createSessionScheduleTools(sessionScheduleService)) {
+        this._toolBus.register(t);
+      }
+    }
+
     // memory 工具必须在 buildCore 之前注册：Agent 构造时从 ToolBus 快照 tools
     if (this._memoryStore && !this._toolBus.getTool('memory_store')) {
       const { createMemoryTools } = await import('../extension/plugin-ecosystem/tools/memory.js');
@@ -1271,6 +1293,7 @@ export class AgentBuilder {
       agentToolPolicy: this._runnerConfig?.agentToolPolicy,
       observerHub: this._observerHub ?? this._runnerConfig?.observerHub,
       sessionTaskService,
+      sessionScheduleService,
       events,
       eventSink: this._telemetry?.onEvent
         ? (event, ctx) => this._telemetry?.onEvent?.(event, ctx)

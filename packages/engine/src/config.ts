@@ -443,6 +443,18 @@ export interface AgentRuntimeJsonConfig {
   agentSignal?: boolean;
 }
 
+/**
+ * SessionSchedule 预算 / 兜底（arch/session-schedules.md P1）
+ */
+export interface SchedulesJsonConfig {
+  /** 每会话未闭合作业上限；0 = 不限（默认 50） */
+  maxOpenPerSession?: number;
+  /** 每小时 wakeup 点火上限（进程级）；0 = 不限（默认 120） */
+  maxWakesPerHour?: number;
+  /** 兜底扫描间隔 ms（默认 60000）；0 = 关闭 */
+  tickIntervalMs?: number;
+}
+
 
 
 // ── 上下文引擎配置 ──
@@ -802,6 +814,8 @@ export interface HarnessConfig {
   runGuard?: RunGuardJsonConfig;
   /** 激活宿主（long-lived；Schedule/Escalate 等） */
   agentRuntime?: AgentRuntimeJsonConfig;
+  /** SessionSchedule 预算与兜底 tick */
+  schedules?: SchedulesJsonConfig;
   /** 上下文引擎配置 */
   contextEngine?: ContextEngineConfig;
   /** 公用能力 summary（harness/context/capabilities） */

@@ -1,3 +1,49 @@
+## v0.81.0
+
+### feat(schedules): SessionSchedule + timer_*/schedule_* — Agent 自发起定时
+
+**问题**：Agent 纯回合制，无法回合内短等、延后唤醒本会话、或周期自动跑 Run。
+
+**拍板**（arch/session-schedules.md）：
+- 阻塞 `timer_*` 与非阻塞 `schedule_*` **分族**，不按分钟切规则
+- 点火默认「注入本会话 + 完整 Run」；定时 Run 与交互同权
+- 周期跑 Run 只属 `schedule_*`；回合内短轮询 = LLM loop `timer_wait`
+
+**新增**（`harness/session/schedules/`）：
+- 状态机 5 态：`active|paused|completed|cancelled|failed` + 显式迁移表
+- 持久化 `~/.octopi/schedules.db`（node:sqlite；Service `open()` 惰性建库 + migrate）
+- 点火：先记账再 `void dispatch(Trigger)`（at-most-once）；`actorType:'timer'`
+- 上下文注入 `<session_schedules>`（Runtime 层，对齐 session_tasks）
+
+**工具**：
+| 工具 | 语义 |
+|------|------|
+| `timer_wait` / `timer_cancel` | 回合内阻塞等待（默认 max 10m / 硬顶 30m） |
+| `schedule_set` / `list` / `cancel` / `pause` / `resume` | once/interval/cron 作业，立刻 ack |
+
+**接线**：AgentBuilder 注册工具；SessionAwareRunner 注入；Gateway `start()` 打开 `schedules.db` 并 `setWakeup(runtime.dispatch)`；schedule 点火 Run 以 `actorType:'timer'` 入审计。
+
+**测试**：`tests/session-schedules.test.ts`（状态机、点火、pause/resume、工具往返、timer 上限）。
+
+**修复（未到点就执行）**：
+- `at` 落在过去或 Unix 秒被当成毫秒 → `setTimeout(0)` 立刻点火；现拒绝过去时间，秒/毫秒自动识别
+- 工具回执 / 描述 / `<session_schedules>` 明确 **禁止本回合直接执行 prompt**，打完 `schedule_set` 必须结束回合
+
+**修复（审查）**：
+- Builder 默认 `SessionScheduleService` 未 `open()` → `runner.handle()` 全线抛错；现自动 open，`list()` 未 open 时返回空
+- 点火 dispatch 失败曾 `throw` 跳过 re-arm 且产生 unhandledRejection；现 finally re-arm + 吞掉 timer 路径异常
+- `deleteSession` 级联 `purgeSession`；Gateway `start` 重试先 dispose 旧 Service
+- **setTimeout 溢出**：delay > 2^31−1ms（约 24.85 天）会被 Node 钳成 1ms 立刻点火；改为分段 arm，远期/长周期不再假触发
+- `timer_wait` 同会话并发互相覆盖取消源；改为 Set，`timer_cancel` 全部 abort
+
+**补全**：
+- `delivery: 'notify'` 真正落会话消息（Gateway `setNotify` → `store.save`），不再静默空转
+- `ToolExecutionContext.runId` + RunScope 贯通；`schedule_set` 写入 `createdBy.runId`（I6 审计链）
+- `failed` 可达：无法计算下次点火 / 记账失败时迁移；瞬时 dispatch 错误仍只写 `lastError`
+- `<session_schedules>` 区分 active / paused 文案，paused 不再暗示会自动唤醒
+
+---
+
 ## v0.80.0
 
 ### feat(tools): dedicated git/package tools for workspace without shell
@@ -652,7 +698,17 @@
 **修复**：
 
 - **P0**：`outcomes.evalAssisted/evalContested` 水位；`planConfidenceUpdate` 只吃增量；`recordOutcomes`/evaluate 写回水位；evaluate 跳过 superseded/retired；空跑幂等有测试
-- **P1**：`allowedMemoryIds` 交集拒幻觉溯源；`initialStatus` 白名单（distilled 不得 active）；`formAndAdmit` dryRun；`WisdomLayer.onInjected` → `touchApplied`（S1 applied）；formation 触发收紧（簇或晋升堆叠）；`wisdom.*` 进 Zod + HarnessConfig + hardCap 可配
+- **P2**：
+- REST：`GET /sessions/:id/schedules`，`POST …/schedules/:id/{cancel,pause,resume}`
+- WebUI 右侧「日程」页：列表 + 暂停/恢复/取消；SessionScheduleView 贯通 SDK/store
+- 日程 live 刷新：`session.schedule.*` 事件 upsert 面板
+- 新建会话立即切换：禁止 refreshSessions 抢开旧会话，并同步 `activeSessionIdRef`/会话内容
+
+**P1**：
+- `schedule_update`：改 prompt / title / max_runs / catch_up / 时间并 re-arm
+- 配置 `schedules.{maxOpenPerSession,maxWakesPerHour,tickIntervalMs}`（默认 50 / 120 / 60s）
+- 兜底 tick 扫 `next_fire_at<=now` 防 timer 丢失；同 `coalesceKey` 窗口内合并 dispatch
+- wakeup 小时预算：超限跳过 dispatch 仍记账（`fire_skipped`）`allowedMemoryIds` 交集拒幻觉溯源；`initialStatus` 白名单（distilled 不得 active）；`formAndAdmit` dryRun；`WisdomLayer.onInjected` → `touchApplied`（S1 applied）；formation 触发收紧（簇或晋升堆叠）；`wisdom.*` 进 Zod + HarnessConfig + hardCap 可配
 - **P2**：冲突扫描仅 active/strengthened；未知 kind 丢弃；supersedes 缺目标 reason 码；layer-health 计存活条目；排版收敛 `formatWisdomBody`
 
 **测试**：幂等 evaluate/水位、dryRun、幻觉溯源、状态白名单、touchApplied、确定性对立断言。全量 2378 绿。

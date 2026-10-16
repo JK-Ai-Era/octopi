@@ -60,6 +60,12 @@ export interface GatewayConfig {
     expectedMaxConcurrentRuns?: number;
     coalesceBufferLimit?: number;
   };
+  /** SessionSchedule 预算与兜底 tick */
+  schedules?: {
+    maxOpenPerSession?: number;
+    maxWakesPerHour?: number;
+    tickIntervalMs?: number;
+  };
   /** 产品 Observer 通道（Run 观测；生产可 summary/off） */
   observer?: import('@octopi-agent/engine/harness/observability/observer/types.js').ObserverConfig;
   /** system prompt 七层装配器调参（preview / content / budget ratio） */

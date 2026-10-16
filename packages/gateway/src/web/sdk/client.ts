@@ -130,6 +130,29 @@ export interface SessionTaskView {
   updatedAt: number;
 }
 
+/** 会话日程（UI 投影） */
+export interface SessionScheduleView {
+  id: string;
+  sessionId: string;
+  kind: 'once' | 'interval' | 'cron';
+  status: 'active' | 'paused' | 'completed' | 'cancelled' | 'failed';
+  nextFireAt: number;
+  fireAt?: number;
+  intervalMs?: number;
+  cron?: string;
+  runCount: number;
+  maxRuns?: number;
+  title?: string;
+  prompt: string;
+  delivery: 'wakeup' | 'notify';
+  catchUp: 'skip' | 'fire_once';
+  coalesceKey?: string;
+  createdAt: number;
+  createdByRunId?: string;
+  lastFireAt?: number;
+  lastError?: string;
+}
+
 /** Knowledge 源传输投影（管理面） */
 export interface KnowledgeSourceDto {
   id: string;
@@ -975,6 +998,37 @@ export class OctopiClient {
       `/sessions/${encodeURIComponent(sessionId)}/tasks${qs ? `?${qs}` : ''}`,
     );
     return (data?.data as SessionTaskView[]) ?? [];
+  }
+
+  /**
+   * 会话日程列表（UI 投影）
+   */
+  async getSessionSchedules(sessionId: string): Promise<SessionScheduleView[]> {
+    const data = await this.getJson(
+      `/sessions/${encodeURIComponent(sessionId)}/schedules`,
+    );
+    return (data?.data as SessionScheduleView[]) ?? [];
+  }
+
+  /**
+   * 日程控制：cancel / pause / resume
+   */
+  async controlSchedule(
+    sessionId: string,
+    scheduleId: string,
+    action: 'cancel' | 'pause' | 'resume',
+    reason?: string,
+  ): Promise<{ id: string; status: string; nextFireAt: number; runCount: number }> {
+    const data = await this.postJson(
+      `/sessions/${encodeURIComponent(sessionId)}/schedules/${encodeURIComponent(scheduleId)}/${action}`,
+      reason ? { reason } : {},
+    );
+    return data?.data as {
+      id: string;
+      status: string;
+      nextFireAt: number;
+      runCount: number;
+    };
   }
 
   async abortSession(sessionId: string): Promise<void> {

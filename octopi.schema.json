@@ -851,6 +851,23 @@
         }
       }
     },
+    "schedules": {
+      "type": "object",
+      "properties": {
+        "maxOpenPerSession": {
+          "type": "number",
+          "minimum": 0
+        },
+        "maxWakesPerHour": {
+          "type": "number",
+          "minimum": 0
+        },
+        "tickIntervalMs": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    },
     "contextEngine": {
       "type": "object",
       "properties": {

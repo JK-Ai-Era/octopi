@@ -71,6 +71,12 @@ export interface SessionAwareRunnerConfig {
    */
   sessionTaskService?: SessionTaskService;
   /**
+   * 会话日程服务（Agent 自发起定时）
+   *
+   * handle() 每轮注入未闭合 schedule；与 schedule_* 工具共用同一实例。
+   */
+  sessionScheduleService?: import('../session/schedules/service.js').SessionScheduleService;
+  /**
    * 解析 run 级模型快照（Gateway 注入；每 run 调用一次）
    *
    * `modelRef` 为空表示 agent 默认模型。
@@ -744,6 +750,26 @@ export class SessionAwareRunner {
           effectiveRunConfig = {
             ...runConfig,
             injectedContext: baseInjected ? `${baseInjected}\n\n${taskInjection}` : taskInjection,
+          };
+        }
+      }
+
+      // 6b. 会话日程注入（arch/session-schedules.md §8）
+      if (this.config.sessionScheduleService) {
+        const schedules = this.config.sessionScheduleService.list(session.id, {
+          activeOnly: true,
+        });
+        const { renderSessionSchedulesInjection } = await import(
+          '../session/schedules/render.js'
+        );
+        const scheduleInjection = renderSessionSchedulesInjection(schedules);
+        if (scheduleInjection) {
+          const baseInjected = effectiveRunConfig.injectedContext;
+          effectiveRunConfig = {
+            ...effectiveRunConfig,
+            injectedContext: baseInjected
+              ? `${baseInjected}\n\n${scheduleInjection}`
+              : scheduleInjection,
           };
         }
       }

@@ -241,6 +241,12 @@
     "coalesceWindowMs": 400
   },
 
+  "schedules": {
+    "maxOpenPerSession": 50,
+    "maxWakesPerHour": 120,
+    "tickIntervalMs": 60000
+  },
+
   "channels": [{
     "type": "http",
     "port": 18180,

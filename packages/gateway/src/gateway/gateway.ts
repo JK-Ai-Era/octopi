@@ -341,6 +341,8 @@ export class Gateway {
   private sessionAcl: SessionAclService;
   /** 进程内共?Session Lease（E1/E2）：?Runner 注入同一实例 */
   private sessionLease: import('@octopi-agent/engine/harness/run/concurrency/session-lease.js').InProcessSessionLock;
+  /** 会话日程（arch/session-schedules.md）；进程级单例 + schedules.db */
+  private sessionSchedules?: import('@octopi-agent/engine/harness/session/schedules/service.js').SessionScheduleService;
   /** 会话标题更新去重（同 session 并发只跑一次） */
   private titleUpdatePromises = new Map<string, Promise<void>>();
   /** 进行中又有新触发时的 trailing 标记 */
@@ -612,6 +614,61 @@ export class Gateway {
       return;
     }
 
+    // 会话日程：Service open() 惰性建库；wakeup 接 AgentRuntime（arch/session-schedules.md）
+    {
+      // start 重试时先拆掉旧实例，避免双 writer / 双 timer
+      this.sessionSchedules?.dispose();
+      this.sessionSchedules = undefined;
+      const { SessionScheduleService } = await import(
+        '@octopi-agent/engine/harness/session/schedules/service.js'
+      );
+      const { getOctopiHome } = await import('@octopi-agent/engine/paths.js');
+      const { join } = await import('node:path');
+      this.sessionSchedules = new SessionScheduleService({
+        dbPath: join(getOctopiHome(), 'schedules.db'),
+        events: this.gatewayBus,
+        ...(this.config.schedules?.maxOpenPerSession !== undefined
+          ? { maxOpenPerSession: this.config.schedules.maxOpenPerSession }
+          : {}),
+        ...(this.config.schedules?.maxWakesPerHour !== undefined
+          ? { maxWakesPerHour: this.config.schedules.maxWakesPerHour }
+          : {}),
+        ...(this.config.schedules?.tickIntervalMs !== undefined
+          ? { tickIntervalMs: this.config.schedules.tickIntervalMs }
+          : {}),
+      });
+      await this.sessionSchedules.open();
+      this.sessionSchedules.setWakeup((trigger) => {
+        void this.runtime.dispatch(trigger).catch((err) => {
+          console.error(
+            '[Gateway] session schedule wake dispatch failed:',
+            err instanceof Error ? err.message : err,
+          );
+        });
+      });
+      this.sessionSchedules.setNotify(async ({ schedule, content }) => {
+        // notify：只落会话消息，不 dispatch Run
+        const session = await this.store.load(schedule.sessionId);
+        if (!session) return;
+        session.messages.push({
+          role: 'user',
+          content,
+          timestamp: Date.now(),
+          agentId: schedule.agentId,
+          metadata: {
+            source: 'runtime',
+            origin: 'session_schedule',
+            scheduleId: schedule.id,
+            delivery: 'notify',
+            triggerType: 'schedule',
+          },
+        });
+        session.meta.updatedAt = Date.now();
+        await this.store.save(schedule.sessionId, session);
+      });
+      console.log('[Gateway] SessionScheduleService ready (schedules.db)');
+    }
+
     console.log('[Gateway] Starting...');
     console.log(`[Gateway] Agents: ${Array.from(this.agents.keys()).join(', ') || '(none)'}`);
     console.log(`[Gateway] Channels: ${Array.from(this.channels.keys()).join(', ') || '(none)'}`);
@@ -861,12 +918,15 @@ export class Gateway {
     this.cancelPendingQuestions(sessionId);
     this.clearHitlSessionCache(sessionId);
     await this.applySessionClosePolicy(sessionId);
+    this.sessionSchedules?.purgeSession(sessionId);
     await this.store.delete(sessionId);
   }
 
   async stop(): Promise<void> {
     if (!this.started) return;
     this.cancelAllPendingHitl();
+    this.sessionSchedules?.dispose();
+    this.sessionSchedules = undefined;
     // 进程退出：按 onClose 收掉所有残留 turn undo（缺省 commit）
     try {
       const { resolveSessionUndoOnClose, resolveSessionUndoPaths } = await import(
@@ -1985,6 +2045,66 @@ export class Gateway {
       throw new Error(`Session "${sessionId}" not found`);
     }
     return (session.tasks ?? []).map((t) => ({ ...t }));
+  }
+
+  /** 会话日程列表（只读投影，arch/session-schedules.md P2） */
+  async getSessionSchedules(
+    sessionId: string,
+  ): Promise<Array<Record<string, unknown>>> {
+    const session = await this.store.load(sessionId);
+    if (!session) {
+      throw new Error(`Session "${sessionId}" not found`);
+    }
+    const items = this.sessionSchedules?.list(sessionId, { activeOnly: false }) ?? [];
+    return items.map((s) => ({
+      id: s.id,
+      sessionId: s.sessionId,
+      kind: s.kind,
+      status: s.status,
+      nextFireAt: s.nextFireAt,
+      fireAt: s.fireAt,
+      intervalMs: s.intervalMs,
+      cron: s.cron,
+      runCount: s.runCount,
+      maxRuns: s.maxRuns,
+      title: s.payload.title,
+      prompt: s.payload.text,
+      delivery: s.payload.delivery,
+      catchUp: s.catchUp,
+      coalesceKey: s.coalesceKey,
+      createdAt: s.createdBy.at,
+      createdByRunId: s.createdBy.runId,
+      lastFireAt: s.lastFireAt,
+      lastError: s.lastError,
+    }));
+  }
+
+  /** 日程控制：cancel / pause / resume */
+  async controlSchedule(
+    sessionId: string,
+    scheduleId: string,
+    action: 'cancel' | 'pause' | 'resume',
+    reason?: string,
+  ): Promise<Record<string, unknown>> {
+    if (!this.sessionSchedules) {
+      throw new Error('SessionScheduleService not ready');
+    }
+    const existing = this.sessionSchedules.get(scheduleId);
+    if (!existing || existing.sessionId !== sessionId) {
+      throw new Error(`Schedule not found in session: ${scheduleId}`);
+    }
+    const next =
+      action === 'cancel'
+        ? this.sessionSchedules.cancel(scheduleId, reason)
+        : action === 'pause'
+          ? this.sessionSchedules.pause(scheduleId)
+          : this.sessionSchedules.resume(scheduleId);
+    return {
+      id: next.id,
+      status: next.status,
+      nextFireAt: next.nextFireAt,
+      runCount: next.runCount,
+    };
   }
 
   async getSessionMessages(
@@ -3932,6 +4052,7 @@ export class Gateway {
     builder.runnerConfig({
       sessionLease: this.sessionLease,
       sessionAcl: this.sessionAcl,
+      sessionScheduleService: this.sessionSchedules,
       agentMaxSessionRights: agent.maxSessionRights,
       agentToolPolicy: agent.tools,
       // SEC-3c：credentials.requireBindings / untrusted 同源（tool context 与 store 一致）

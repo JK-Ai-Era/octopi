@@ -18,6 +18,7 @@ export type {
   AgentEventEnvelope,
   MessageRecord,
   SessionTaskView,
+  SessionScheduleView,
   ModelCatalog,
   SessionModelView,
   CommandCatalogItemDto,

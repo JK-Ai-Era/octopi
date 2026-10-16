@@ -11,6 +11,7 @@ export type {
   SessionSummary,
   SessionView,
   SessionTaskView,
+  SessionScheduleView,
   MessageRecord,
   MessagePage,
   PendingApproval,

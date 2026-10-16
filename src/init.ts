@@ -9,6 +9,7 @@
  *     audit/                           ← 子系统审计日志
  *     plugins/                         ← plugin 目录
  *     sessions/                        ← Session 一等存储（JsonlSessionStore）
+ *     schedules.db                     ← SessionSchedule 作业表（timer_*/schedule_*）
  *     knowledge/                       ← Knowledge 服务数据面（knowledge.db 等）
  *     credentials/                     ← 集成凭证库（credentials.db；密文或 env 引用）
  *     agents/

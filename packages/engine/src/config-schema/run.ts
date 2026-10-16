@@ -79,6 +79,13 @@ export const AgentRuntimeJsonConfigSchema = z.object({
   agentSignal: z.boolean().optional(),
 });
 
+/** SessionSchedule 预算与兜底（arch/session-schedules.md P1） */
+export const SchedulesJsonConfigSchema = z.object({
+  maxOpenPerSession: z.number().min(0).optional(),
+  maxWakesPerHour: z.number().min(0).optional(),
+  tickIntervalMs: z.number().min(0).optional(),
+});
+
 // ── Concurrency ──
 
 const RateLimitSlotSchema = z.object({

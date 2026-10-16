@@ -431,6 +431,45 @@ export class WebApiRouter {
         }
       }
 
+      const schedulesMatch = relativePath.match(/^\/sessions\/([^/]+)\/schedules$/);
+      if (schedulesMatch && method === 'GET') {
+        try {
+          const data = await this.gateway.getSessionSchedules(schedulesMatch[1]);
+          return this.json(res, 200, { ok: true, data });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          if (/not found/i.test(message)) {
+            return this.json(res, 404, { ok: false, error: message });
+          }
+          throw err;
+        }
+      }
+
+      const scheduleActionMatch = relativePath.match(
+        /^\/sessions\/([^/]+)\/schedules\/([^/]+)\/(cancel|pause|resume)$/,
+      );
+      if (scheduleActionMatch && method === 'POST') {
+        const action = scheduleActionMatch[3] as 'cancel' | 'pause' | 'resume';
+        try {
+          const body = await this.readBody(req).catch(() => null);
+          const reason =
+            body && typeof body.reason === 'string' ? body.reason : undefined;
+          const data = await this.gateway.controlSchedule(
+            scheduleActionMatch[1],
+            scheduleActionMatch[2],
+            action,
+            reason,
+          );
+          return this.json(res, 200, { ok: true, data });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          if (/not found/i.test(message)) {
+            return this.json(res, 404, { ok: false, error: message });
+          }
+          return this.json(res, 400, { ok: false, error: message });
+        }
+      }
+
       const abortMatch = relativePath.match(/^\/sessions\/([^/]+)\/abort$/);
       if (abortMatch && method === 'POST') {
         this.gateway.abortSession(abortMatch[1]);

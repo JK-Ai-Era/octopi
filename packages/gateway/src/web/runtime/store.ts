@@ -30,6 +30,7 @@ import type {
   SessionModelView,
   SessionSummary,
   SessionTaskView,
+  SessionScheduleView,
   SessionView,
 } from '../sdk/client.js';
 
@@ -115,6 +116,7 @@ export class ClientStreamsEvent extends RuntimeEvent<{
 }> {}
 export class InspectorEvent extends RuntimeEvent<{ inspector: InspectorState }> {}
 export class TasksEvent extends RuntimeEvent<{ tasks: SessionTaskView[] }> {}
+export class SchedulesEvent extends RuntimeEvent<{ schedules: SessionScheduleView[] }> {}
 export class RuntimeErrorEvent extends RuntimeEvent<{ error: string }> {}
 export class RunStatusEvent extends RuntimeEvent<{ status: RunStatus }> {}
 export class ModelsEvent extends RuntimeEvent<{ catalog: ModelCatalog }> {}
@@ -207,6 +209,8 @@ export interface ChatState {
   inspector: InspectorState;
   /** 会话任务（goal/step），UI 只读 */
   tasks: SessionTaskView[];
+  /** 会话日程（timer/schedule），UI 只读 + 控制 */
+  schedules: SessionScheduleView[];
 }
 
 // ──────────────────────────────────────
@@ -287,6 +291,29 @@ export class OctopiRuntimeStore extends EventTarget {
   /** 当前会话任务列表 */
   getTasks(): SessionTaskView[] {
     return this.chat.tasks;
+  }
+
+  /** 当前会话日程列表 */
+  getSchedules(): SessionScheduleView[] {
+    return this.chat.schedules ?? [];
+  }
+
+  /** 控制日程并刷新列表 */
+  async controlSchedule(
+    scheduleId: string,
+    action: 'cancel' | 'pause' | 'resume',
+    reason?: string,
+  ): Promise<void> {
+    const sessionId = this.chat.sessionId;
+    if (!sessionId) return;
+    await this.client.controlSchedule(sessionId, scheduleId, action, reason);
+    try {
+      const schedules = await this.client.getSessionSchedules(sessionId);
+      this.chat.schedules = schedules;
+      this.dispatch('schedules', new SchedulesEvent('schedules', { schedules }));
+    } catch {
+      // 刷新失败不影响控制结果
+    }
   }
 
   /** 当前会话待答问题（ask_user） */
@@ -732,15 +759,23 @@ export class OctopiRuntimeStore extends EventTarget {
       }
     }
 
+    let schedules: SessionScheduleView[] = [];
+    try {
+      schedules = await this.client.getSessionSchedules(sessionId);
+    } catch {
+      schedules = [];
+    }
+
     const approvals = await this.client.listApprovals(sessionId);
     const questions = await this.client.listQuestions(sessionId);
     const clientToolCalls = await this.client.listClientToolCalls(sessionId);
 
     // ── 同会话重开：live 为权威，刷新 tasks/approvals/questions/clientToolCalls ──
     if (isSameSession) {
-      this.chat = { ...this.chat, tasks, approvals, questions, clientToolCalls };
+      this.chat = { ...this.chat, tasks, schedules, approvals, questions, clientToolCalls };
       this.dispatch('session', new SessionEvent('session', { session: this.currentSession }));
       this.dispatch('tasks', new TasksEvent('tasks', { tasks }));
+      this.dispatch('schedules', new SchedulesEvent('schedules', { schedules }));
       this.dispatch('approval', new ApprovalEvent('approval', { approvals }));
       this.dispatch('questions', new QuestionsEvent('questions', { questions }));
       this.dispatch(
@@ -867,6 +902,7 @@ export class OctopiRuntimeStore extends EventTarget {
       clientStreamSamples: new Map(),
       inspector: cached?.inspector ? { ...cached.inspector } : {},
       tasks,
+      schedules,
     };
 
     // 打开会话时拉取最近一次 System 装配快照 + Agent 数据面健康
@@ -953,6 +989,7 @@ export class OctopiRuntimeStore extends EventTarget {
     );
     this.dispatch('inspector', new InspectorEvent('inspector', { inspector: this.chat.inspector }));
     this.dispatch('tasks', new TasksEvent('tasks', { tasks: this.chat.tasks }));
+    this.dispatch('schedules', new SchedulesEvent('schedules', { schedules: this.chat.schedules ?? [] }));
     void this.refreshSessionModel();
 
     return view;
@@ -1056,6 +1093,7 @@ export class OctopiRuntimeStore extends EventTarget {
     this.dispatch('conversation', new ConversationEvent('conversation', { items: this.chat.conversation }));
     this.chat.runStatus = 'idle';
     this.chat.tasks = [];
+    this.chat.schedules = [];
     this.engineActive = false;
     this.dispatch('chat', new ChatEvent('chat', { conversation: items }));
     this.dispatch('conversation', new ConversationEvent('conversation', { items }));
@@ -1105,6 +1143,7 @@ export class OctopiRuntimeStore extends EventTarget {
       clientStreamSamples: new Map(),
       inspector: {},
       tasks: [],
+      schedules: [],
     };
 
     this.client.sendSubscribe(session.id, session.agentId);
@@ -1126,6 +1165,7 @@ export class OctopiRuntimeStore extends EventTarget {
     );
     this.dispatch('inspector', new InspectorEvent('inspector', { inspector: this.chat.inspector }));
     this.dispatch('tasks', new TasksEvent('tasks', { tasks: this.chat.tasks }));
+    this.dispatch('schedules', new SchedulesEvent('schedules', { schedules: this.chat.schedules ?? [] }));
 
     return session;
   }
@@ -1338,6 +1378,11 @@ export class OctopiRuntimeStore extends EventTarget {
     // 会话任务事件（只读面板）
     if (event.type === 'session.task.created' || event.type === 'session.task.updated' || event.type === 'session.task.snapshot') {
       this.applyTaskEvent(event);
+    }
+
+    // 会话日程事件（schedule_set / cancel / fire…）→ 刷新日程面板
+    if (typeof event.type === 'string' && event.type.startsWith('session.schedule.')) {
+      this.applyScheduleEvent(event);
     }
 
     // ask_user 待答问题
@@ -1824,6 +1869,70 @@ export class OctopiRuntimeStore extends EventTarget {
     this.dispatch('tasks', new TasksEvent('tasks', { tasks: this.chat.tasks }));
   }
 
+  /** session.schedule.* → upsert 日程并推送 UI */
+  private applyScheduleEvent(event: AgentEventEnvelope): void {
+    const raw = event.data?.schedule as
+      | {
+          id?: string;
+          sessionId?: string;
+          kind?: SessionScheduleView['kind'];
+          status?: SessionScheduleView['status'];
+          nextFireAt?: number;
+          fireAt?: number;
+          intervalMs?: number;
+          cron?: string;
+          runCount?: number;
+          maxRuns?: number;
+          payload?: {
+            title?: string;
+            text?: string;
+            delivery?: SessionScheduleView['delivery'];
+          };
+          catchUp?: SessionScheduleView['catchUp'];
+          coalesceKey?: string;
+          createdBy?: { at?: number; runId?: string };
+          lastFireAt?: number;
+          lastError?: string;
+        }
+      | undefined;
+    if (!raw?.id) return;
+
+    const view: SessionScheduleView = {
+      id: raw.id,
+      sessionId: raw.sessionId ?? this.chat.sessionId ?? '',
+      kind: raw.kind ?? 'once',
+      status: raw.status ?? 'active',
+      nextFireAt: raw.nextFireAt ?? 0,
+      runCount: raw.runCount ?? 0,
+      prompt: raw.payload?.text ?? '',
+      delivery: raw.payload?.delivery ?? 'wakeup',
+      catchUp: raw.catchUp ?? 'skip',
+      createdAt: raw.createdBy?.at ?? Date.now(),
+      ...(raw.fireAt !== undefined ? { fireAt: raw.fireAt } : {}),
+      ...(raw.intervalMs !== undefined ? { intervalMs: raw.intervalMs } : {}),
+      ...(raw.cron !== undefined ? { cron: raw.cron } : {}),
+      ...(raw.maxRuns !== undefined ? { maxRuns: raw.maxRuns } : {}),
+      ...(raw.payload?.title !== undefined ? { title: raw.payload.title } : {}),
+      ...(raw.coalesceKey !== undefined ? { coalesceKey: raw.coalesceKey } : {}),
+      ...(raw.createdBy?.runId !== undefined
+        ? { createdByRunId: raw.createdBy.runId }
+        : {}),
+      ...(raw.lastFireAt !== undefined ? { lastFireAt: raw.lastFireAt } : {}),
+      ...(raw.lastError !== undefined ? { lastError: raw.lastError } : {}),
+    };
+
+    const list = this.chat.schedules ?? [];
+    const idx = list.findIndex((s) => s.id === view.id);
+    const next = [...list];
+    if (idx >= 0) {
+      next[idx] = view;
+    } else {
+      next.push(view);
+    }
+    this.chat.schedules = next;
+    this.dispatch('schedules', new SchedulesEvent('schedules', { schedules: next }));
+  }
+
   private applyQuestionEvent(event: AgentEventEnvelope): void {
     const raw = event.data?.question as PendingQuestion | undefined;
     if (!raw?.id) return;
@@ -1952,6 +2061,7 @@ export class OctopiRuntimeStore extends EventTarget {
       clientStreamSamples: new Map(),
       inspector: {},
       tasks: [],
+      schedules: [],
     };
   }
 
