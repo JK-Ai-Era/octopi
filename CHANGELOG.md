@@ -1,3 +1,12 @@
+## v0.82.3
+
+### fix(config): pass effectPolicy through toGatewayConfig
+
+**问题**：`octopi serve` 的配置装配 `toGatewayConfig()`（src/config.ts）静默丢弃 `effectPolicy`——`resolvedAgents` 映射没有拷贝 `agents[].effectPolicy`（`AgentDefinition` 类型也缺该字段），顶层 `effectPolicy` 也没进 `GatewayConfig`。于是 gateway.buildAgent 的 `agent.effectPolicy ?? config.effectPolicy` 拿到 `undefined`，runner 回落引擎缺省 `DEFAULT_EFFECT_RUN_MODE = 'workspace'`：配置写的 `mode: "project"` / `transactionRoots` 全部不生效（Runtime banner 停在 `Effect mode: workspace`，shell 被 `shellEscape=deny` 拒绝）。config-bridge（嵌入路径）本就透传，唯 serve 装配断链。
+**修正**：`AgentDefinition` 增加可选 `effectPolicy` 字段；`toGatewayConfig` 在 agent 级与顶层两级透传（agents[] 覆盖顶层，与 gateway.buildAgent / getSessionEffectRoots / resolveSessionUndoOnClose 消费口径一致）。补回归测试 `tests/config-gateway-effect-policy.test.ts`（3 例）。
+
+---
+
 ## v0.82.2
 
 ### docs: prune stale capability-gap item and refresh last-updated stamps

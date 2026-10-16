@@ -47,6 +47,8 @@ export interface AgentDefinition {
    * handle authorize 时与角色 max / 绑定取交集。
    */
   maxSessionRights?: SessionRights;
+  /** ToolEffectPolicy 运行模式（P3）；agents[].effectPolicy 覆盖顶层 */
+  effectPolicy?: import('../../extension/execution-environment/effect-policy.js').EffectPolicyConfig;
   /** Knowledge 召回姿态（覆盖全局 knowledge.recall） */
   knowledge?: {
     recall?: 'off' | 'hint' | 'hybrid' | 'inject';

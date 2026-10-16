@@ -122,6 +122,7 @@ export function toGatewayConfig(config: NormalizedHarnessConfig): GatewayConfig 
     channelBindings: ac.channelBindings,
     maxSessionRights: ac.maxSessionRights,
     knowledge: ac.knowledge,
+    effectPolicy: ac.effectPolicy,
   }));
 
   const gatewayConfig: GatewayConfig = {
@@ -130,6 +131,7 @@ export function toGatewayConfig(config: NormalizedHarnessConfig): GatewayConfig 
       ? { dmScope: config.session.dmScope, idleExpiryMs: config.session.idleExpiryMs }
       : undefined,
     toolIsolation: config.toolIsolation,
+    effectPolicy: config.effectPolicy,
     sessionAcl: config.sessionAcl,
     fileSend: config.fileSend,
     credentials: config.credentials,
