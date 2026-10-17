@@ -93,11 +93,11 @@ interface CompactState {
   lastUsageMessageCount?: number;
   /** 估算校准比率 = actual / estimated（用于修正后续估算） */
   calibrationRatio?: number;
-  /** 上次主动摘要时的全量消息条数（用于判断是否需要再摘要） */
+  /** 上次主动压缩覆盖到的全量消息条数（语义摘要或机械降级均推进；用于判断是否需要再压缩） */
   lastProactiveMessageCount?: number;
-  /** 上次主动摘要后的视图 token 估算 */
+  /** 上次主动压缩后的视图 token 估算 */
   lastProactiveTokens?: number;
-  /** 上次主动 LLM 摘要时间戳（冷却） */
+  /** 上次真正发起 LLM 摘要调用的时间戳（仅 LLM 路径推进；用于冷却） */
   lastProactiveLlmAt?: number;
 }
 
@@ -423,8 +423,8 @@ export class DefaultContextEngine implements ContextEngine {
    *
    * 策略：
    * - 未超阈值：原样返回
-   * - 超阈值且需要新摘要（无 previousSummary / 新增消息够多）：LLM 压缩中间段
-   * - 超阈值但增量很小：用 previousSummary + head/tail 重建视图（零 LLM）
+   * - 超阈值且需要新一轮压缩（上次压缩后新增消息够多）：LLM 压缩中间段并产出语义摘要
+   * - 超阈值但增量很小或冷却中：零 LLM 重建视图（有摘要用摘要重建；无摘要机械重建）
    */
   private async applyProactiveCompact(params: {
     sessionId: string;
@@ -457,15 +457,30 @@ export class DefaultContextEngine implements ContextEngine {
     }
 
     const state = this.states.get(stateKey);
-    const head = messages.slice(0, protectFirstN);
-    const tail = messages.slice(-protectLastN);
 
-    // 增量很小：直接用上次摘要重建视图，避免每轮打 LLM
-    // 注意：只比「自上次摘要以来新增条数」，不要拿全量 token 和压缩后视图比
+    // 边界对齐（不拆 tool_call/tool_result 对）：head 不得停在带 toolCalls 的 assistant 上
+    // （其结果落入中间段，视图里会成悬空调用）；tail 不得起于 tool 结果（其调用在中间段，
+    // 会成孤儿结果）——两种形状都会被严格网关 400。
+    let headEnd = Math.min(protectFirstN, messages.length);
+    while (headEnd > 0 && (messages[headEnd - 1]?.toolCalls?.length ?? 0) > 0) {
+      headEnd--;
+    }
+    let tailStart = Math.max(0, messages.length - protectLastN);
+    while (tailStart > headEnd && this.isToolResultMessage(messages[tailStart]!)) {
+      tailStart--;
+    }
+    const head = messages.slice(0, headEnd);
+    const tail = messages.slice(tailStart);
+    const middle = this.semanticHistory(messages.slice(headEnd, tailStart));
+
+    // 判据：是否开启新一轮压缩 —— 只看「自上次压缩以来的新增条数」与冷却。
+    // 注意：只比「自上次压缩以来新增条数」，不要拿全量 token 和压缩后视图比；
+    // 也不要把「有无 previousSummary」当判据：压缩可能是机械截断（无摘要），
+    // 拿摘要存在与否当判据会让无摘要会话每轮重裁、复用分支永远进不去。
     const lastCount = state?.lastProactiveMessageCount;
     const newSinceLast = lastCount === undefined ? messages.length : messages.length - lastCount;
     const minNewForResummarize = Math.max(3, Math.floor(protectLastN * 0.25));
-    const needNewSummary = !state?.previousSummary || newSinceLast >= minNewForResummarize;
+    const needNewCompaction = newSinceLast >= minNewForResummarize;
 
     // 冷却：刚做过 LLM 摘要则优先缓存重建，降低单 turn 双摘要概率
     const cooldownMs = this.config.proactiveCooldownMs;
@@ -474,19 +489,47 @@ export class DefaultContextEngine implements ContextEngine {
       state?.lastProactiveLlmAt != null &&
       Date.now() - state.lastProactiveLlmAt < cooldownMs;
 
-    if (state?.previousSummary && (!needNewSummary || inCooldown)) {
-      // 摘要用 user 角色承载，避免中段 system 被严格网关拒绝
-      const summaryMsg: Message = {
-        role: 'user',
-        content: wrapContextSummary(state.previousSummary),
-        timestamp: Date.now(),
-        metadata: { source: 'contextSummary' as const },
-      };
-      const reduced = [...head, summaryMsg, ...tail];
+    const headTailTokens = estimator.estimateMessages(head) + estimator.estimateMessages(tail);
+    const targetMiddleTokens = Math.max(
+      200,
+      Math.floor(threshold * 0.55) - headTailTokens,
+    );
+
+    // 复用重建（零 LLM）：已压缩过，且增量小或在冷却期。
+    // 有语义摘要 → head + 摘要 + tail；无摘要（LLM 摘要曾失败降级）→ 机械重建。
+    if (state?.lastProactiveMessageCount != null && (!needNewCompaction || inCooldown)) {
+      let reduced: Message[];
+      if (state.previousSummary) {
+        // 摘要用 user 角色承载，避免中段 system 被严格网关拒绝
+        const summaryMsg: Message = {
+          role: 'user',
+          content: wrapContextSummary(state.previousSummary),
+          timestamp: Date.now(),
+          metadata: { source: 'contextSummary' as const },
+        };
+        reduced = [...head, summaryMsg, ...tail];
+      } else {
+        // 无语义摘要：机械重建（旧工具输出截断），不打 LLM、不推进摘要时间戳。
+        // 与分支 B 同语义：语义中间段为空（全为托管 system/grounding）时不裁剪，原样返回
+        if (middle.length === 0) {
+          return { messages };
+        }
+        try {
+          const compressed = await this.config.compressor.compress({
+            messages: middle,
+            targetTokens: targetMiddleTokens,
+            tokenEstimator: estimator,
+          });
+          reduced = [...head, ...compressed.result, ...tail];
+        } catch {
+          // 机械重建失败（应为纯计算，理论不可达）：不改视图，交回本轮原样上下文
+          return { messages };
+        }
+      }
       const reducedTokens = estimator.estimateMessages(reduced);
       // 只更新视图 token，**不要**改 lastProactiveMessageCount：
-      // 该字段表示「摘要覆盖到的全量条数」，只能在真正 LLM 摘要时推进。
-      // 若缓存重建也改成 messages.length，每轮 +1 会永远凑不满再摘要阈值。
+      // 该字段表示「压缩覆盖到的全量条数」，只能在真正完成一次压缩时推进。
+      // 若复用重建也改成 messages.length，每轮 +1 会永远凑不满再压缩阈值。
       this.states.set(stateKey, {
         ...state,
         lastProactiveTokens: reducedTokens,
@@ -512,19 +555,12 @@ export class DefaultContextEngine implements ContextEngine {
       return { messages: reduced };
     }
 
-    // 需要新摘要：压缩 head/tail 之间的中间段（语义历史，不含 grounding）
-    const middle = this.semanticHistory(
-      messages.slice(protectFirstN, messages.length - protectLastN),
-    );
+    // 需要新一轮压缩：压缩 head/tail 之间的中间段（语义历史，不含 grounding）。
+    // requireSummary：主交付是语义摘要（缓解长会话失忆），机械截断达标也必须补摘要——
+    // 否则 previousSummary 永远为空、复用分支永远进不去，每个 turn 都会重裁+发通知。
     if (middle.length === 0) {
       return { messages };
     }
-
-    const headTailTokens = estimator.estimateMessages(head) + estimator.estimateMessages(tail);
-    const targetMiddleTokens = Math.max(
-      200,
-      Math.floor(threshold * 0.55) - headTailTokens,
-    );
 
     const proactiveStart = Date.now();
     emit?.({
@@ -543,6 +579,7 @@ export class DefaultContextEngine implements ContextEngine {
         previousSummary: state?.previousSummary,
         summarize,
         tokenEstimator: estimator,
+        requireSummary: true,
       });
     } catch (err) {
       emit?.({
@@ -567,6 +604,8 @@ export class DefaultContextEngine implements ContextEngine {
       lastEstimatedTokens: reducedTokens,
       lastProactiveMessageCount: messages.length,
       lastProactiveTokens: reducedTokens,
+      // 本轮（requireSummary）真正发起过 LLM 摘要调用（成功或失败均算发起），
+      // 时间戳用于冷却；复用重建与纯机械降级不得推进此字段。
       lastProactiveLlmAt: Date.now(),
     });
 
@@ -586,19 +625,63 @@ export class DefaultContextEngine implements ContextEngine {
     };
   }
 
-  /** 从压缩结果中提取摘要正文（contextSummary 标记或 [Conversation Summary] 前缀） */
+  /**
+   * 从压缩结果中提取语义摘要正文（contextSummary 标记或 [Conversation Summary] 前缀）。
+   * 机械降级的占位说明（[Context truncated / [Context compressed / [Structural compact]）
+   * 不算语义摘要：把它们当摘要存入 previousSummary 会污染增量合并输入，
+   * 并让复用分支拿到假摘要、掩盖「从未真正摘要」的事实。
+   */
   private extractSummaryText(compressed: Message[]): string | undefined {
     for (const m of compressed) {
-      if (m.metadata?.source === 'contextSummary' && typeof m.content === 'string' && m.content.trim()) {
+      if (
+        m.metadata?.source === 'contextSummary' &&
+        typeof m.content === 'string' &&
+        m.content.trim() &&
+        !this.isMechanicalNotice(m.content)
+      ) {
         return m.content;
       }
     }
     for (const m of compressed) {
-      if (typeof m.content === 'string' && m.content.includes('[Conversation Summary]')) {
+      if (
+        typeof m.content === 'string' &&
+        m.content.includes('[Conversation Summary]') &&
+        !this.isMechanicalNotice(m.content)
+      ) {
         return m.content;
       }
     }
     return undefined;
+  }
+
+  /**
+   * 机械降级占位说明判别（非语义摘要）：首条实质行以占位标记开头即认定。
+   * 只看首行而非全文 includes——真实摘要引用这些字符串（如记录「曾发生截断」）不得被误杀。
+   *
+   * @param text - 候选摘要正文
+   * @returns 是否为机械占位说明
+   */
+  private isMechanicalNotice(text: string): boolean {
+    for (const raw of text.split('\n')) {
+      const line = raw.trim();
+      if (!line || line === '[Conversation Summary]') continue;
+      return (
+        line.startsWith('[Context truncated:') ||
+        line.startsWith('[Context compressed:') ||
+        line.startsWith('[Structural compact]')
+      );
+    }
+    return false;
+  }
+
+  /**
+   * 判断是否工具结果消息（视图边界对齐用）
+   *
+   * @param msg - 待判定消息
+   * @returns 是否为工具结果消息
+   */
+  private isToolResultMessage(msg: Message): boolean {
+    return msg.role === 'tool' || (msg.toolResults?.length ?? 0) > 0;
   }
 
   /**
@@ -671,7 +754,7 @@ export class DefaultContextEngine implements ContextEngine {
     summarize?: SummarizeFunction;
     estimator: TokenEstimator;
     compactTargetTokens?: number;
-  }): Promise<{ summary: string; tokensBefore: number; tokensAfter: number }> {
+  }): Promise<{ summary?: string; compacted: boolean; tokensBefore: number; tokensAfter: number }> {
     const { sessionId, messages, summarize, estimator } = params;
     const stateKey = params.stateKey ?? sessionId;
     const protectFirstN = this.config.protectFirstN;
@@ -681,7 +764,8 @@ export class DefaultContextEngine implements ContextEngine {
 
     if (messages.length <= protectFirstN + protectLastN) {
       return {
-        summary: state?.previousSummary ?? '',
+        summary: state?.previousSummary,
+        compacted: false,
         tokensBefore,
         tokensAfter: tokensBefore,
       };
@@ -704,10 +788,11 @@ export class DefaultContextEngine implements ContextEngine {
       },
     );
 
-    const summary =
-      outcome.summary ??
-      state?.previousSummary ??
-      `[Structural compact] dropped messages (contextWindow unknown)`;
+    // 与 extractSummaryText 同一不变量：机械占位说明不是语义摘要，不得进入 previousSummary
+    // （增量合并输入、复用重建依据、持久化快照来源）——否则占位会经快照恢复再次污染状态。
+    const semanticSummary =
+      outcome.summary && !this.isMechanicalNotice(outcome.summary) ? outcome.summary : undefined;
+    const summary = semanticSummary ?? state?.previousSummary;
     const tokensAfter = outcome.tokensAfter ?? tokensBefore;
 
     this.states.set(stateKey, {
@@ -719,7 +804,7 @@ export class DefaultContextEngine implements ContextEngine {
       lastProactiveLlmAt: summarize ? Date.now() : state?.lastProactiveLlmAt,
     });
 
-    return { summary, tokensBefore, tokensAfter };
+    return { summary, compacted: outcome.compacted, tokensBefore, tokensAfter };
   }
 
   /**
@@ -810,11 +895,11 @@ export class DefaultContextEngine implements ContextEngine {
     });
     return {
       ok: true,
-      compacted: Boolean(result.summary),
+      compacted: result.compacted,
       reason: 'structural',
       tokensBefore: result.tokensBefore,
       tokensAfter: result.tokensAfter,
-      summary: result.summary || undefined,
+      summary: result.summary,
     };
   }
 

@@ -65,8 +65,9 @@ export class HybridCompressor implements Compressor {
     // 计算当前 token 数
     const currentTokens = estimator.estimateMessages(messages);
 
-    // 如果已经在预算内，不需要压缩
-    if (currentTokens <= targetTokens) {
+    // 如果已经在预算内，不需要压缩。
+    // requireSummary 除外：主动摘要路径的主交付是语义摘要，达标也必须继续到摘要级。
+    if (currentTokens <= targetTokens && !params.requireSummary) {
       return {
         result: [...messages],
         estimatedTokens: currentTokens,
@@ -77,8 +78,8 @@ export class HybridCompressor implements Compressor {
     const preprocessed = this.preprocessToolResults(messages);
     const preprocessedTokens = estimator.estimateMessages(preprocessed);
 
-    // 如果预处理后已在预算内
-    if (preprocessedTokens <= targetTokens) {
+    // 如果预处理后已在预算内（requireSummary 时同样继续：机械截断不产出语义摘要）
+    if (preprocessedTokens <= targetTokens && !params.requireSummary) {
       return {
         result: preprocessed,
         estimatedTokens: preprocessedTokens,

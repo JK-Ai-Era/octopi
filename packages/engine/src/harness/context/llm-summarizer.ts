@@ -108,8 +108,9 @@ export class LLMSummaryCompressor implements Compressor {
     // 计算当前 token 数
     const currentTokens = estimator.estimateMessages(messages);
 
-    // 如果已经在预算内，不需要压缩
-    if (currentTokens <= targetTokens) {
+    // 如果已经在预算内，不需要压缩。
+    // requireSummary 除外：调用方要求语义摘要，不能以机械返回冒充已摘要。
+    if (currentTokens <= targetTokens && !params.requireSummary) {
       return {
         result: [...messages],
         estimatedTokens: currentTokens,
@@ -152,6 +153,11 @@ export class LLMSummaryCompressor implements Compressor {
         previousSummary,
         maxTokens: summaryTokens,
       });
+
+      // 空摘要（拒答/内容过滤）按失败处理：不得用空正文替换中间段、更不得冒充语义摘要
+      if (!summary || !summary.trim()) {
+        return this.fallbackTruncate(messages, targetTokens, estimator);
+      }
 
       // 摘要用 user 角色：中段 system 会被部分网关拒绝
       const summaryMessage: Message = {

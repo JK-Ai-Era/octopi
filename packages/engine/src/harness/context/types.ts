@@ -128,11 +128,11 @@ export interface AssembleParams {
  * 本快照用于重启后快速重建「应给 LLM 的视图」，避免立刻再打一次摘要。
  */
 export interface ContextCompactSnapshot {
-  /** 摘要正文（previousSummary） */
+  /** 语义摘要正文（previousSummary；机械降级占位说明不算，不入快照） */
   summary?: string;
-  /** 上次主动摘要时的全量消息条数 */
+  /** 上次主动压缩覆盖到的全量消息条数（语义摘要或机械降级均推进） */
   lastProactiveMessageCount?: number;
-  /** 上次主动摘要后的视图 token 估算 */
+  /** 上次主动压缩后的视图 token 估算 */
   lastProactiveTokens?: number;
 }
 
@@ -336,6 +336,16 @@ export interface CompressParams {
   previousSummary?: string;
   summarize?: SummarizeFunction;
   tokenEstimator?: TokenEstimator;
+  /**
+   * 要求产出语义摘要：设置后，机械截断（旧工具输出截断/兜底截断）即使已达标
+   * 也不得就此短路返回——必须尝试摘要级。主动摘要路径（applyProactiveCompact）使用：
+   * 否则压缩成功但永不产摘要，状态机的复用分支永远无法启用。
+   *
+   * 实现约定：仅约束「可摘要时不得走机械短路」；无摘要能力（如无 summarize）时
+   * 的机械降级结果是允许的，调用方以「结果中无语义摘要」识别降级
+   * （见 DefaultContextEngine.extractSummaryText）。
+   */
+  requireSummary?: boolean;
 }
 
 export interface CompressResult {

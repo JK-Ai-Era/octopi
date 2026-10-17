@@ -1,3 +1,22 @@
+## v0.83.6
+
+### fix(engine): make proactive compaction produce semantic summaries and gate recompaction honestly
+
+**问题**：超长会话（工具输出密集）在上下文约 600k 触发主动压缩后，**每个 run（实为每个 LLM turn）都重复机械裁剪**，UI 反复弹 `Context compacted (621930 → 222708 tokens, 15ms)`。根因链：① `HybridCompressor` 第一级「旧工具输出截断」达标即返回，**不产出语义摘要**（15ms 就是纯字符串替换的耗时）；② `applyProactiveCompact` 拿「有无 `previousSummary`」当再压缩判据 → 摘要永远为空 → `needNewSummary` 恒真 → 复用分支永远进不去，每个 turn 重裁一次、发一次非 cached 通知；③ 「LLM 摘要缓解长会话失忆」的产品目标**静默落空**——旧工具输出被换成占位符后没有任何摘要兜底；④ 机械占位说明（`[Context truncated: …]`/`[Context compressed: …]`/`[Structural compact] …`）还会被当成摘要存进 `previousSummary`，污染增量合并输入。落盘证据：该会话 `contextCompacts` 只有 `lastProactiveMessageCount/lastProactiveTokens`，`summary` 缺失。
+
+**修正（A 判据解耦 + B 真摘要，并经独立 review 补齐同族缺口）**：
+
+- **判据解耦**：`needNewCompaction = 自上次压缩以来新增条数 ≥ minNew`（只看增量与冷却，不再看有无摘要）；复用分支对**无摘要状态**也可用（机械重建零 LLM、`cached: true` 不刷 UI）——存量受损会话（summary 缺失的持久化快照）恢复后立即停止每 turn 机械重裁
+- **requireSummary 契约**：`CompressParams.requireSummary` 新增可选字段；主动摘要路径强制尝试语义摘要，`HybridCompressor`/`LLMSummaryCompressor` 的「已达标直接返回」短路在该模式下不生效——机械截断达标也必须补 LLM 摘要（产品意图）
+- **机械占位永不冒充摘要**（同族缺口一并封死）：`extractSummaryText`（proactive/overflow 共用）与 `structuralCompact` 状态写入统一过滤占位说明（首行前缀判别，不误杀引用了这些字样的真摘要）；LLM 失败/空摘要诚实降级机械视图并攒增量自动重试
+- **视图边界对齐**：head/tail 切分不再拆散 tool_call/tool_result 对（悬空调用/孤儿结果会被严格网关 400）；`summarize` 返回空正文按失败降级，不再用空正文替换中间段
+- **状态语义修正**：`lastProactiveMessageCount` 仅在真正完成压缩时推进（复用重建不推进）；`lastProactiveLlmAt` 仅在真正发起 LLM 摘要时推进（机械路径不写，冷却语义恢复诚实）
+- 回归测试 `tests/harness/proactive-compact-tool-heavy.test.ts`：真实 `HybridCompressor` + 工具输出密集历史走真实连线（仅 stub 外部 LLM），对照组先钉住缺陷触发面，覆盖一次性真摘要、小增量复用（cached 事件在场断言）、增量合并、失败/空摘要降级不污染、**重启恢复快照形状**（有计数无摘要）、工具配对形状校验
+
+**压缩节奏（如实说明）**：真实压缩（LLM 摘要）受「增量阈值（默认 ≥5 条新消息）+ 冷却（`proactiveCooldownMs`，默认 30s）」双闸约束，**冷却期内最多一次**；被消灭的是「无摘要的每 turn 机械重裁 + 通知刷屏」。工具密集、turn 间隔 >30s 的长会话仍会按该节奏产生真实压缩（每次带真摘要），这是「迭代式摘要」的设计节奏；若要进一步降频可调大 `proactiveCooldownMs`，或后续改 token 增量门槛（另议）。
+
+**跟进项（另议）**：`CompressResult` 缺 `llmUsed`/`summaryProduced` 标志（`lastProactiveLlmAt` 诚实性目前依赖默认 HybridCompressor 接线约定）；`capabilities/compact` 引擎的 head/tail 切片尚未做同样的边界对齐（手动压缩路径）。
+
 ## v0.83.5
 
 ### fix(engine,gateway,webui): persist context usage so reopening a session shows the real number
