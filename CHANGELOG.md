@@ -1,3 +1,17 @@
+## v0.83.1
+
+### perf(core,engine): stop persisting full-history snapshots in the turn ledger
+
+**问题**：`Turn.input: Message[]` 在每个 `turn_end` 向 `SessionData.turns` 写入一份**全量历史快照**（`session.messages.slice(0, -1)`），state.json 随会话长度**二次方膨胀**——实测某 400k 上下文会话的 state.json 达 **548MB**（407 份快照），`store.load` 全量 JSON.parse 直接把服务拖挂（打开历史会话崩溃的直接元凶）；且 `save` / `updateMetadata` 每次整体重写该文件，内存同步被这份冗余撑到 GB 级。
+
+**修正**：
+
+- `Turn` 改轻量轮次账本：删除 `input: Message[]`，代之以 `inputCount: number`（信息性计数）。输入正文的唯一权威是 messages JSONL（Discourse），审计/回放从 messages 取，不重复保存
+- 全库唯一消费方 `getSessionDetail.turnCount` 只用 `turns.length`，功能无损
+- `JsonlSessionStore` 读取即剥历史 `turns[].input`（`slimTurns`），存量文件首次 save 自然瘦身（防退化，非兼容层）
+- **迁移脚本** `scripts/slim-session-turns.mjs`（--dry-run / 原子写 / --backup）：已对存量 79 个 state.json 执行，**708.3MB → 2.6MB**（最大单文件 548MB → 861KB）
+- 回归测试 `tests/harness/turn-ledger-slim.test.ts`：真 `JsonlSessionStore` round-trip、换新实例重读、字段保全断言（枚举输入键逐一断言输出键存在）
+
 ## v0.83.0
 
 ### feat(collaboration): Delegation 委派契约层（L2）—— 子 agent 委派能力取代旧 multi-agent / orchestration 执行件

@@ -37,6 +37,19 @@ async function fileExists(path: string): Promise<boolean> {
   try { await access(path); return true; } catch { return false; }
 }
 
+/**
+ * 历史 state.json 的 turns[].input（全量历史快照）已废弃：读取即剥，
+ * 下次 save 自然瘦身。输入正文的唯一权威是 messages JSONL（Discourse）。
+ */
+function slimTurns(turns: unknown): SessionData['turns'] {
+  if (!Array.isArray(turns)) return [];
+  return turns.flatMap((t) => {
+    if (!t || typeof t !== 'object') return [];
+    const { input: _dropped, ...rest } = t as Record<string, unknown>;
+    return [rest as SessionData['turns'][number]];
+  });
+}
+
 export class JsonlSessionStore implements SessionStore<SessionData> {
   private readonly sessionsDir: string;
   private readonly index?: SessionIndexSink;
@@ -82,7 +95,8 @@ export class JsonlSessionStore implements SessionStore<SessionData> {
     const statePath = this.sessionStateFile(sessionId);
     if (!(await fileExists(statePath))) return null;
     try {
-      return JSON.parse(await readFile(statePath, 'utf-8'));
+      const parsed = JSON.parse(await readFile(statePath, 'utf-8'));
+      return { ...parsed, turns: slimTurns(parsed?.turns) };
     } catch {
       return null;
     }
@@ -169,7 +183,8 @@ export class JsonlSessionStore implements SessionStore<SessionData> {
     } = {};
     if (resolved.state) {
       try {
-        state = JSON.parse(await readFile(resolved.state, 'utf-8'));
+        const parsed = JSON.parse(await readFile(resolved.state, 'utf-8'));
+        state = { ...parsed, turns: slimTurns(parsed?.turns) };
       } catch { /* corrupt state, ignore */ }
     }
 

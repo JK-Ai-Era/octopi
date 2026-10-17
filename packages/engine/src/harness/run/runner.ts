@@ -1436,7 +1436,7 @@ export class SessionAwareRunner {
           if (content) {
             session.turns.push({
               id: `turn_${Date.now()}`,
-              input: session.messages.slice(0, -1),
+              inputCount: Math.max(0, session.messages.length - 1),
               output: { role: 'assistant', content, timestamp: Date.now(), agentId: _agentId },
               usage: lastUsage,
               durationMs: 0,
@@ -1480,7 +1480,7 @@ export class SessionAwareRunner {
           });
           session.turns.push({
             id: `turn_${Date.now()}`,
-            input: session.messages.slice(0, -1),
+            inputCount: Math.max(0, session.messages.length - 1),
             output: { role: 'assistant', content: fallbackContent, timestamp: Date.now(), agentId: _agentId },
             usage: lastUsage,
             durationMs: 0,

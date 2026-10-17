@@ -96,10 +96,17 @@ export function reportedPromptTokens(usage: TokenUsage): number {
   );
 }
 
-/** Turn — 一次完整的 Agent 调用 */
+/**
+ * Turn — 一次 Agent 轮次的账本记录
+ *
+ * 只记账不记正文：输入/输出消息的唯一权威是 Session.messages（Discourse），
+ * 此处不得再保存全量历史快照（曾因 `input: Message[]` 全量拷贝导致
+ * state.json 二次方膨胀）。审计/回放需要输入正文时从 messages 取。
+ */
 export interface Turn {
   id: string;
-  input: Message[];
+  /** 本轮输入消息条数（信息性计数；正文见 Session.messages） */
+  inputCount: number;
   output: Message;
   usage?: TokenUsage;
   durationMs: number;
