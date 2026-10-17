@@ -36,7 +36,7 @@ describe('ContextEngine wiring', () => {
   it('convertToLlm 使用 agent.contextSessionId（多 session 不串味）', async () => {
     const seen: string[] = [];
     const spyEngine: ContextEngine = {
-      info: { id: 'spy', name: 'spy', ownsCompaction: false },
+      info: { id: 'spy', name: 'spy' },
       async assemble(params: AssembleParams): Promise<AssembleResult> {
         seen.push(params.sessionId);
         return { messages: [], estimatedTokens: 0, systemPrompt: params.systemPrompt };
@@ -55,7 +55,7 @@ describe('ContextEngine wiring', () => {
 
   it('droppedSummary 注入 system 提示', async () => {
     const spyEngine: ContextEngine = {
-      info: { id: 'spy', name: 'spy', ownsCompaction: true },
+      info: { id: 'spy', name: 'spy' },
       async assemble(): Promise<AssembleResult> {
         return {
           messages: [{ role: 'user', content: 'hi' }],

@@ -700,7 +700,6 @@ describe('DefaultContextEngine', () => {
     it('should have correct info', () => {
       expect(engine.info.id).toBe('default');
       expect(engine.info.name).toBe('Default Context Engine');
-      expect(engine.info.ownsCompaction).toBe(true);
     });
   });
 
@@ -848,49 +847,6 @@ describe('DefaultContextEngine', () => {
           expect(typeof msg.content).toBe('string');
         }
       }
-    });
-  });
-
-  describe('compact', () => {
-    it('should reset compact state on force and report no compaction honestly', async () => {
-      // First assemble to create state
-      await engine.assemble({
-        sessionId: 'test',
-        messages: [createMessage('user', 'Hello')],
-        systemPrompt: 'Test',
-        tools: [],
-        tokenBudget: 100000,
-      });
-
-      const result = await engine.compact({
-        sessionId: 'test',
-        tokenBudget: 1000,
-        force: true,
-      });
-
-      expect(result.ok).toBe(true);
-      // 本引擎不持有消息存储：force 只重置压缩状态，不得谎报已压缩（真正压缩走 compactStructural）
-      expect(result.compacted).toBe(false);
-      expect(result.reason).toMatch(/state_reset/);
-    });
-
-    it('should not compact when under threshold', async () => {
-      // First assemble to create state
-      await engine.assemble({
-        sessionId: 'test',
-        messages: [createMessage('user', 'Hello')],
-        systemPrompt: 'Test',
-        tools: [],
-        tokenBudget: 100000,
-      });
-
-      const result = await engine.compact({
-        sessionId: 'test',
-        tokenBudget: 100000,
-        currentTokenCount: 100,
-      });
-
-      expect(result.compacted).toBe(false);
     });
   });
 

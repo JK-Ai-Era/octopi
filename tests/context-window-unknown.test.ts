@@ -33,20 +33,6 @@ describe('DefaultContextEngine — 未知 contextWindow', () => {
     expect(userCount).toBeGreaterThanOrEqual(20);
   });
 
-  it('compact 非 force 且无预算 → 跳过自动压缩', async () => {
-    const engine = new DefaultContextEngine();
-    await engine.assemble({
-      sessionId: 's2',
-      messages: msgs(10),
-      systemPrompt: 'sys',
-      tools: [],
-      contextWindow: 100000,
-    });
-    const r = await engine.compact({ sessionId: 's2' });
-    expect(r.compacted).toBe(false);
-    expect(r.reason).toMatch(/auto compact disabled|unknown/i);
-  });
-
   it('compactStructural 手动压缩不依赖 contextWindow', async () => {
     const engine = new DefaultContextEngine({
       protectFirstN: 2,

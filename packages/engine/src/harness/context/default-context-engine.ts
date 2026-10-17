@@ -24,7 +24,6 @@ import type {
   AssembleParams,
   AssembleResult,
   IngestParams,
-  CompactParams,
   CompactResult,
   AfterTurnParams,
   TokenEstimator,
@@ -63,8 +62,6 @@ export interface DefaultContextEngineConfig {
   protectFirstN?: number;
   /** 尾部保护消息数（默认 20） */
   protectLastN?: number;
-  /** 触发压缩的阈值比例（默认 0.5） */
-  compactThreshold?: number;
   /**
    * 主动摘要阈值：消息 token / messagesBudget 超过该比例时，
    * 在窗口硬溢出之前先做 LLM 摘要（缓解长会话失忆）。
@@ -117,7 +114,6 @@ export class DefaultContextEngine implements ContextEngine {
   readonly info: ContextEngineInfo = {
     id: 'default',
     name: 'Default Context Engine',
-    ownsCompaction: true,
   };
 
   private config: Required<Omit<DefaultContextEngineConfig, 'compactEngine'>> & {
@@ -137,7 +133,6 @@ export class DefaultContextEngine implements ContextEngine {
       router: config?.router ?? {},
       protectFirstN: config?.protectFirstN ?? 3,
       protectLastN: config?.protectLastN ?? 20,
-      compactThreshold: config?.compactThreshold ?? 0.5,
       proactiveCompactRatio: config?.proactiveCompactRatio ?? 0.6,
       proactiveCooldownMs: config?.proactiveCooldownMs ?? 30_000,
       compactEngine:
@@ -805,73 +800,6 @@ export class DefaultContextEngine implements ContextEngine {
     });
 
     return { summary, compacted: outcome.compacted, tokensBefore, tokensAfter };
-  }
-
-  /**
-   * 压缩存储
-   *
-   * 本引擎不持有消息存储（历史由调用方管理，ingest 为 no-op），无法真正压缩消息：
-   * 达到门槛（force / 阈值）时只**重置压缩状态**（下次 assemble 重建视图），
-   * 结果如实报告 `compacted: false` + `reason='state_reset'`。真正压缩消息走 compactStructural。
-   *
-   * - force / 门槛达标：重置压缩状态
-   * - 有 tokenBudget 且非 force：低于阈值跳过
-   * - 窗口未知且非 force、无 target：跳过自动压缩
-   */
-  async compact(params: CompactParams): Promise<CompactResult> {
-    const {
-      sessionId,
-      agentId,
-      tokenBudget,
-      compactTargetTokens,
-      force,
-      currentTokenCount,
-    } = params;
-    const stateKey = compactStateKey(sessionId, agentId);
-
-    const state = this.states.get(stateKey);
-    if (!state) {
-      return {
-        ok: true,
-        compacted: false,
-        reason: 'No state found for session',
-        tokensBefore: 0,
-      };
-    }
-
-    const tokensBefore =
-      currentTokenCount ?? state.lastEstimatedTokens ?? state.lastProactiveTokens ?? 0;
-
-    if (!force && tokenBudget != null && tokenBudget > 0) {
-      const threshold = Math.floor(tokenBudget * this.config.compactThreshold);
-      if (tokensBefore <= threshold) {
-        return {
-          ok: true,
-          compacted: false,
-          reason: `Tokens (${tokensBefore}) below threshold (${threshold})`,
-          tokensBefore,
-        };
-      }
-    }
-
-    // 窗口未知 + 非 force + 无显式 target：禁用自动压缩
-    if (!force && tokenBudget == null && compactTargetTokens == null) {
-      return {
-        ok: true,
-        compacted: false,
-        reason: 'contextWindow unknown; auto compact disabled (force/structural still available)',
-        tokensBefore,
-      };
-    }
-
-    this.states.delete(stateKey);
-
-    return {
-      ok: true,
-      compacted: false,
-      reason: `state_reset (${force ? 'forced' : 'threshold'}); holds no message storage - use compactStructural to compress messages`,
-      tokensBefore,
-    };
   }
 
   /**

@@ -19,8 +19,6 @@ export interface ContextEngineInfo {
   id: string;
   /** 引擎名称 */
   name: string;
-  /** 是否拥有压缩能力（外部引擎可能自行管理） */
-  ownsCompaction: boolean;
 }
 
 // ── Token 估算 ──
@@ -187,28 +185,6 @@ export interface IngestParams {
   message: Message;
 }
 
-// ── 压缩参数 ──
-
-export interface CompactParams {
-  sessionId: string;
-  /** E4：compact 键分量 */
-  agentId?: string;
-  /**
-   * Token 预算；未知 contextWindow 时可省略。
-   * 无预算且未 force 时跳过自动门槛判断；force 走结构压缩。
-   */
-  tokenBudget?: number;
-  /** 显式压缩目标（配置 context.compactTargetTokens） */
-  compactTargetTokens?: number;
-  /** 是否强制压缩（手动 / overflow 兜底）；force 不依赖 contextWindow */
-  force?: boolean;
-  /** 当前 token 数（可选，避免重复计算） */
-  currentTokenCount?: number;
-  /** 结构压缩用的头尾保护条数；未传用引擎配置 */
-  protectFirstN?: number;
-  protectLastN?: number;
-}
-
 // ── 压缩结果 ──
 
 export interface CompactResult {
@@ -244,7 +220,6 @@ export interface AfterTurnParams {
  *
  * 可选方法：
  * - ingest(): 存储消息
- * - compact(): 压缩存储
  * - afterTurn(): 更新状态（turn 为**本轮增量**消息）
  *
  * 本域契约（@layer harness/context）；Harness 提供 DefaultContextEngine。
@@ -269,27 +244,6 @@ export interface ContextEngine {
    * 某些引擎（如外部服务）可能需要这一步。
    */
   ingest?(params: IngestParams): Promise<void>;
-
-  /**
-   * 压缩存储（可选）
-   *
-   * 当存储超限时，压缩旧消息。
-   * 引擎可以选择摘要、截断、外部存储等方式。
-   */
-  compact?(params: CompactParams): Promise<CompactResult>;
-
-  /**
-   * 结构压缩（手动 / overflow）— 不依赖 contextWindow
-   * 头尾保护 + 中间段摘要
-   */
-  compactStructural?(input: {
-    sessionId: string;
-    /** E4：compact 键分量；缺省时内部状态键 = sessionId */
-    agentId?: string;
-    messages: Message[];
-    summarize?: SummarizeFunction;
-    compactTargetTokens?: number;
-  }): Promise<CompactResult>;
 
   /**
    * 每轮结束后更新状态（可选）

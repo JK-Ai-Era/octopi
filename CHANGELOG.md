@@ -1,3 +1,17 @@
+## v0.83.8
+
+### refactor(engine): drop the storage-compact contract and its dead config surface
+
+**问题**："compact" 名下混着三个职责，其中「压缩存储」是**错位职责**：`ContextEngine.compact()`（契约："当存储超限时，压缩旧消息"）属于存储层，而 ContextEngine 不持有消息存储（历史由调用方管理、`ingest` 为 no-op）——该入口永远无法兑现契约（v0.83.7 只把它改诚实，本次按职责归属移除）。同族死项：`context.compactThreshold`（唯一消费点是 compact() 的门槛判断）、`ContextEngineInfo.ownsCompaction`（设计为"外部引擎自述压缩能力"，从未有任何生产代码读取——实际接线用的是方法存在性探测）。另 `compactStructural?` 挂在接口上属"双头契约"：gateway 从未依赖接口声明，一直是鸭子类型探测方法存在性。
+
+**修正（契约瘦身，纯删除无行为变更）**：
+
+- 删除 `ContextEngine.compact?` + `CompactParams` 类型 + `DefaultContextEngine.compact()`（生产零调用）
+- **接口**删除 `compactStructural?` 声明——**能力保留在 `DefaultContextEngine` 公开方法**（活链路原样：`POST /sessions/:id/compact` → gateway 方法存在性接线 → runner `compactSession` 锁+持久化）；接口只留装配职责（`assemble` / `ingest?` / `afterTurn?`）
+- 删除 `context.compactThreshold` 配置（config-schema/config/config-bridge + `octopi.schema.json` 再生成核验归零）与 `ContextEngineInfo.ownsCompaction` 字段
+- 测试随行为移除（`describe('compact')` 与 compact() 专属用例、ownsCompaction 断言/fixture）；公共文档核验零提及，"视图压缩"职责表述保留不动
+- 此后职责边界：**视图压缩**（assemble 内 proactive/overflow）与**手动结构压缩**（`compactStructural`，Runner 编排锁与持久化）归 ContextEngine；**存储瘦身**归 Session 存储层（slimTurns / archives）
+
 ## v0.83.7
 
 ### fix(engine): report state reset honestly in DefaultContextEngine.compact

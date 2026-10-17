@@ -112,7 +112,6 @@ export function resolveContextEngine(config: ContextEngineConfig | undefined): C
     return new DefaultContextEngine({
       protectFirstN: config?.protectFirstN ?? 3,
       protectLastN: config?.protectLastN ?? 20,
-      compactThreshold: config?.compactThreshold ?? 0.5,
       proactiveCompactRatio: config?.proactiveCompactRatio ?? 0.6,
       proactiveCooldownMs: config?.proactiveCooldownMs ?? 30_000,
       budgetAllocator: new DefaultBudgetAllocator({

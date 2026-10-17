@@ -492,8 +492,6 @@ export interface ContextEngineConfig {
   protectFirstN?: number;
   /** 尾部保护消息数（默认 20） */
   protectLastN?: number;
-  /** 触发压缩的阈值比例（默认 0.5） */
-  compactThreshold?: number;
   /**
    * 主动摘要阈值：消息 token / messagesBudget 超过该比例时，
    * 在硬溢出前先 LLM 摘要（默认 0.6；0 = 关闭）

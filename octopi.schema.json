@@ -1002,11 +1002,6 @@
           "type": "number",
           "minimum": 0
         },
-        "compactThreshold": {
-          "type": "number",
-          "minimum": 0,
-          "maximum": 1
-        },
         "proactiveCompactRatio": {
           "type": "number",
           "minimum": 0,
