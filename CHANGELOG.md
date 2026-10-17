@@ -1,3 +1,9 @@
+## v0.83.4
+
+### fix(engine): cast legacy turn payloads through unknown in slimTurns
+
+v0.83.1 的 `slimTurns` 用 `rest as Turn` 直接断言被 tsc 拒绝（TS2352，两类型不重叠）——vitest 走 esbuild 转译不做类型检查，测试全绿但 `npm run build` 爆。改为经 `unknown` 中转断言；语义不变：读取端宽松（legacy 账本可能缺 `inputCount`，rest spread 保全其余键）、写入端严格（新账本必含 `inputCount`）。验证链补课：内容提交前必须 `npm run build`（tsc 类型检查）与 `npm test` 双绿。
+
 ## v0.83.3
 
 ### perf(engine): cache token estimates and tool-result serialization

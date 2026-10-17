@@ -40,13 +40,16 @@ async function fileExists(path: string): Promise<boolean> {
 /**
  * 历史 state.json 的 turns[].input（全量历史快照）已废弃：读取即剥，
  * 下次 save 自然瘦身。输入正文的唯一权威是 messages JSONL（Discourse）。
+ *
+ * 读取端宽松、写入端严格：legacy 账本可能缺 inputCount（旧格式无此字段），
+ * rest spread 保全其余键，仅类型层面放宽；新写入的账本必含 inputCount。
  */
 function slimTurns(turns: unknown): SessionData['turns'] {
   if (!Array.isArray(turns)) return [];
   return turns.flatMap((t) => {
     if (!t || typeof t !== 'object') return [];
     const { input: _dropped, ...rest } = t as Record<string, unknown>;
-    return [rest as SessionData['turns'][number]];
+    return [rest as unknown as SessionData['turns'][number]];
   });
 }
 
