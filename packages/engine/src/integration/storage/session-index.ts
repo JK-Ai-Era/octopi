@@ -9,7 +9,9 @@
  */
 
 import type { DatabaseSync } from 'node:sqlite';
+import { createHash } from 'node:crypto';
 import type { SessionData } from '@octopi-agent/engine/harness/session/types.js';
+import type { Message } from '@octopi-agent/core/types.js';
 import { extractSearchableFields } from '@octopi-agent/engine/harness/session/history/score.js';
 import type {
   SessionIndexBackend,
@@ -30,6 +32,33 @@ const INDEX_TEXT_SLICE = 2000;
 const SCHEMA_VERSION = 2;
 /** trigram 最少 3 码点；更短走 LIKE */
 const TRIGRAM_MIN_CHARS = 3;
+
+/**
+ * transient 消息（每轮剥旧插新的托管注入块）不是 Discourse 内容：
+ * UI 与 LLM 窗口都过滤它，索引同样排除——否则增量/全量两条路径口径漂移，
+ * 且剥离后残留幽灵词条。口径变更：session_search 不再命中临时注入块。
+ */
+function isTransientMessage(msg: Message): boolean {
+  const src = msg.metadata?.source;
+  return src === 'knowledgeGrounding' || src === 'sessionAttachment';
+}
+
+/**
+ * 已索引持久消息尾指纹：增量快路径的前缀未变判据。
+ *
+ * 消息内容不可变、历史只追加/截断，尾指纹一致 ⇒ 前缀未换（截断会使尾指纹
+ * 变化或条数变小，从而回退全量重建）。只 hash 可搜字段，成本 O(单条消息)。
+ */
+function tailFingerprint(msg: Message): string {
+  const h = createHash('sha1');
+  for (const f of extractSearchableFields(msg, true)) {
+    h.update(f.field);
+    h.update('\u0000');
+    h.update(f.text);
+    h.update('\u0000');
+  }
+  return h.digest('hex');
+}
 
 /**
  * 创建 SQLite 会话投影索引（node:sqlite，Node >= 24）。
@@ -135,6 +164,15 @@ class SqliteSessionIndex implements SessionIndexBackend {
         .prepare(`INSERT INTO index_meta (key, value) VALUES ('schema_version', ?)`)
         .run(String(SCHEMA_VERSION));
     }
+
+    // v2→v3 列迁移：增量 upsert 状态（indexed_count = 已索引持久消息条数，tail_fp = 尾指纹）
+    const cols = this.db.prepare(`PRAGMA table_info(sessions)`).all() as Array<{ name: string }>;
+    if (!cols.some((c) => c.name === 'indexed_count')) {
+      this.db.exec(`ALTER TABLE sessions ADD COLUMN indexed_count INTEGER`);
+    }
+    if (!cols.some((c) => c.name === 'tail_fp')) {
+      this.db.exec(`ALTER TABLE sessions ADD COLUMN tail_fp TEXT`);
+    }
   }
 
   private tryEnableFts(): boolean {
@@ -202,10 +240,18 @@ class SqliteSessionIndex implements SessionIndexBackend {
           source,
         );
 
-      this.db.prepare(`DELETE FROM messages WHERE session_id = ?`).run(sessionId);
-      if (this.fts) {
-        this.db.prepare(`DELETE FROM messages_fts WHERE session_id = ?`).run(sessionId);
-      }
+      // 增量快路径：持久消息序列只追加且尾指纹未变 → 只插新增；
+      // 否则（截断 / 尾指纹不符 / 首次）全量重建该会话。
+      // msg_index = 持久序列下标（transient 之外的稳定序号）；prefilter 只消费
+      // sessionId，msg_index 仅供内部定位，不等于 session.messages 全文下标。
+      const persisted = messages.filter((m) => !isTransientMessage(m));
+      const prevRow = this.db
+        .prepare(`SELECT indexed_count, tail_fp FROM sessions WHERE session_id = ?`)
+        .get(sessionId) as { indexed_count: number | null; tail_fp: string | null } | undefined;
+      const prevCount = prevRow?.indexed_count ?? 0;
+      const prefixIntact =
+        persisted.length >= prevCount &&
+        (prevCount === 0 || tailFingerprint(persisted[prevCount - 1]) === prevRow?.tail_fp);
 
       const insert = this.db.prepare(
         `INSERT OR REPLACE INTO messages (session_id, msg_index, role, agent_id, timestamp, field, text)
@@ -217,14 +263,25 @@ class SqliteSessionIndex implements SessionIndexBackend {
           )
         : null;
 
-      for (let i = 0; i < messages.length; i++) {
-        const msg = messages[i];
-        for (const f of extractSearchableFields(msg, true)) {
-          const text = f.text.slice(0, INDEX_TEXT_SLICE);
-          insert.run(sessionId, i, msg.role, msg.agentId ?? null, msg.timestamp ?? null, f.field, text);
-          insertFts?.run(text, sessionId, i, f.field);
+      const start = prefixIntact ? prevCount : 0;
+      if (!prefixIntact) {
+        this.db.prepare(`DELETE FROM messages WHERE session_id = ?`).run(sessionId);
+        if (this.fts) {
+          this.db.prepare(`DELETE FROM messages_fts WHERE session_id = ?`).run(sessionId);
         }
       }
+      for (let j = start; j < persisted.length; j++) {
+        const msg = persisted[j];
+        for (const f of extractSearchableFields(msg, true)) {
+          const text = f.text.slice(0, INDEX_TEXT_SLICE);
+          insert.run(sessionId, j, msg.role, msg.agentId ?? null, msg.timestamp ?? null, f.field, text);
+          insertFts?.run(text, sessionId, j, f.field);
+        }
+      }
+      const newFp = persisted.length ? tailFingerprint(persisted[persisted.length - 1]) : null;
+      this.db
+        .prepare(`UPDATE sessions SET indexed_count = ?, tail_fp = ? WHERE session_id = ?`)
+        .run(persisted.length, newFp, sessionId);
       this.db.exec('COMMIT');
     } catch (err) {
       this.db.exec('ROLLBACK');

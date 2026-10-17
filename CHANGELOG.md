@@ -1,3 +1,17 @@
+## v0.83.2
+
+### perf(engine): make session index upsert incremental
+
+**问题**：`upsertFromSession` 每次 save 都 `DELETE` 全部消息行后逐条重新 `INSERT`（含 FTS），且走 `node:sqlite` 同步 API 阻塞事件循环——长会话一次 save 秒级卡顿，全程 O(n²)。
+
+**修正**：
+
+- **增量快路径**：持久消息序列只追加且尾指纹未变 → 只插新增；截断（edit-resend）/ 尾指纹不符 / 首次 → 自动回退全量重建该会话。「截 N 追 M」漏检口由尾指纹判据封死
+- **transient 排除（行为变更）**：`knowledgeGrounding` / `sessionAttachment` 托管注入块不再进索引——与 UI / LLM 窗口的过滤口径对齐，增量/全量两条路径不再漂移，剥离后无幽灵词条（session_search 不再命中临时注入块）
+- `msg_index` 语义定为**持久序列下标**（transient 之外的稳定序号），避免剥离移位与主键冲突；prefilter 只消费 sessionId，不受影响
+- sessions 表增列 `indexed_count` / `tail_fp`（`ensureSchema` 自动 ALTER 迁移）
+- 回归测试 `tests/harness/session-index-incremental.test.ts`：每条断言带**增量 vs 全量重建对照组**（真 `SqliteSessionIndex` + 真 `JsonlSessionStore`），并以白盒探针钉住快路径真的生效（防退化成「每次全量」的假绿）
+
 ## v0.83.1
 
 ### perf(core,engine): stop persisting full-history snapshots in the turn ledger
