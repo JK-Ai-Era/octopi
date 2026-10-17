@@ -11,6 +11,7 @@ import { createSessionTaskTools } from '../../../session/tasks/tools.js';
 import { createAskUserTool } from './ask-user.js';
 import { createWebSearchTool } from './web-search.js';
 import { createSessionHistoryTools } from './session-history.js';
+import { createDelegationTools } from './delegation.js';
 
 export interface ToolSetConfig {
   memoryStore?: MemoryStore;
@@ -41,6 +42,8 @@ export interface ToolSetConfig {
   documentPort?: import('./document-tools.js').DocumentToolOptions['documentPort'];
   /** Information 历史检索（session_search / session_read） */
   sessionHistory?: SessionHistoryPort;
+  /** DelegateService — 委派编排（delegate_* 工具） */
+  delegation?: import('../../../collaboration/delegation/service.js').DelegateService;
 }
 
 export interface ToolSet {
@@ -76,6 +79,7 @@ export function createToolSet(config?: ToolSetConfig): ToolSet {
           summary: config?.summary,
         })
       : []),
+    ...(config?.delegation ? createDelegationTools(config.delegation) : []),
   ];
 
   return { builtin, extensions, all: [...builtin, ...extensions] };

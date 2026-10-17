@@ -38,12 +38,27 @@ import { createProviderSummarize, pickSummarizeProvider } from '../context/summa
 // ── 结果类型 ──
 
 import type { Agent } from '../run/agent/index.js';
+import { wireDelegation } from '../collaboration/delegation/wiring.js';
 
 export interface BuiltAgent {
   agent: Agent;
   runner: SessionAwareRunner;
   agentConfig: AgentConfig;
   runtime?: import('../collaboration/autonomous-subsystem/runtime.js').SubsystemRuntime;
+  /**
+   * 该 Agent 的事件总线。
+   *
+   * 跨 agent 的 notify（`arch/delegation.md` §7.1）必须落在**同一条**总线上，
+   * 否则 `AgentSignalSource` 收不到；跨 agent 场景请用 `buildFromConfig` 的
+   * `options.events` 提供共享总线，或自行 `builder.events(bus)` 注入。
+   */
+  events: import('@octopi-agent/core/primitives/event-bus.js').EventBus;
+  /** SessionStore（委派子 Run 预创建 child session 用；`arch/delegation.md` D7） */
+  store: import('@octopi-agent/core/interfaces/session-store.js').SessionStore<
+    import('../session/types.js').SessionData
+  >;
+  /** 后置注册工具（`delegate_*` 等运行期才可构造的工具） */
+  registerTools: (tools: import('@octopi-agent/core/types.js').RegisteredTool[]) => void;
 }
 
 // ── Provider 解析 ──
@@ -213,7 +228,10 @@ export async function resolveSubsystemSpecs(projectRoot?: string): Promise<Subsy
  * @param config - 完整配置
  * @returns agent id → BuiltAgent 的映射
  */
-export async function buildFromConfig(config: NormalizedHarnessConfig): Promise<Map<string, BuiltAgent>> {
+export async function buildFromConfig(
+  config: NormalizedHarnessConfig,
+  options?: BuildFromConfigOptions,
+): Promise<Map<string, BuiltAgent>> {
   const flatModels: NormalizedModelInfo[] = config.flatModels ?? [];
   // 1. 解析共享资源
   const providers = await resolveProviders(config);
@@ -258,6 +276,35 @@ export async function buildFromConfig(config: NormalizedHarnessConfig): Promise<
     } catch (err) {
       console.error(`[ConfigBridge] Failed to build agent "${agentConfig.id}":`, err);
       throw err;
+    }
+  }
+
+  // 4. 委派编排（arch/delegation.md §7/§14）
+  //    只有存在 agent 声明 delegation 策略时才接线；接线失败不阻断 agent 构建。
+  if (options?.delegation !== false) {
+    try {
+      wireDelegation(
+        config.agents.map((agentConfig) => {
+          const built = agents.get(agentConfig.id)!;
+          return {
+            agentId: agentConfig.id,
+            agent: built.agent,
+            runner: built.runner,
+            store: built.store,
+            traits: agentConfig.traits,
+            delegation: agentConfig.delegation as never,
+            persona:
+              typeof agentConfig.persona === 'string' ? agentConfig.persona : undefined,
+            registerTools: built.registerTools,
+          };
+        }),
+        {
+          events: options?.events,
+          maxActiveDelegationsPerSession: config.delegation?.maxActiveDelegationsPerSession,
+        },
+      );
+    } catch (err) {
+      console.warn('[ConfigBridge] delegation wiring skipped:', err);
     }
   }
 
@@ -561,7 +608,15 @@ async function buildAgent(
   const agent = built.agent;
   const runner = built.runner;
 
-  return { agent, runner, agentConfig, runtime: built.runtime };
+  return {
+    agent,
+    runner,
+    agentConfig,
+    runtime: built.runtime,
+    events: built.events,
+    store: built.store,
+    registerTools: built.registerTools,
+  };
 }
 
 /**
@@ -570,3 +625,23 @@ async function buildAgent(
  * @remarks 文件 IO / `loadConfig` 属于套件侧（arch/npm-package-split.md §10.3）。
  * 根包 `octopi` 提供 `buildFromConfigFile`；库嵌入请用 {@link buildFromConfig}。
  */
+
+/**
+ * `buildFromConfig` 可选项
+ *
+ * @remarks 定义置于文件尾亦生效（TS interface 提升）；保持单点定义。
+ */
+export interface BuildFromConfigOptions {
+  /**
+   * 跨 agent **共享**的事件总线。
+   *
+   * 委派 notify（`arch/delegation.md` §7.1）必须落在 `AgentSignalSource`
+   * 所监听的同一条总线上；多 agent 场景请传入共享总线。
+   * 缺省 = 各用自己 builder 建的总线，此时 **notify 不接线**（poll 通道仍可用）。
+   */
+  events?: import('@octopi-agent/core/primitives/event-bus.js').EventBus;
+  /**
+   * 委派编排开关。缺省 = 只要有 agent 声明 `delegation` 策略就接线。
+   */
+  delegation?: boolean;
+}

@@ -60,6 +60,13 @@ export interface RunToolRuntime {
     deny?: string[];
     denyCapabilities?: string[];
   };
+  /**
+   * 本 Run 的 effective session rights（E6 计算结果）。
+   *
+   * 供工具层读取以实现 D3「权限随调用传播」——委派时把**父的有效权限**
+   * 作为天花板传给子，子只能在父的权限内行事，不得借委派提权。
+   */
+  sessionRights?: import('../governance/session-acl/types.js').EffectiveSessionRights;
   /** SEC-2 static agent tool policy (agents[].tools) */
   agentToolPolicy?: {
     allow?: string[];

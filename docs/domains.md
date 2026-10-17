@@ -174,8 +174,8 @@ Eight layers × Scope cross product (I4). Compact **algorithm** lives in capabil
 |---|---|
 | **Question** | How do multiple Agents / subsystems coordinate? |
 | **Plane** | Collaboration |
-| **Owns** | Swarm, Subsystem, Signal, Workflow, AgentProcess, Discovery |
-| **Modules** | `multi-agent` `orchestration` `autonomous-subsystem` |
+| **Owns** | Delegation, Swarm, Subsystem, Signal, Workflow, AgentProcess, Discovery |
+| **Modules** | `delegation` `orchestration` `autonomous-subsystem` |
 | **Failure modes** | Coordination deadlock, lost signals, autonomous bodies out of bounds |
 | **Does not** | Human-level IAM; vertical business workflows |
 
@@ -210,7 +210,7 @@ Eight layers × Scope cross product (I4). Compact **algorithm** lives in capabil
 | Run, RunScope, SessionLease, Effect execution, Reliability, RunGuard, Budget | Run |
 | ContextLayer, Assembler, Token, MessageWindow | Context |
 | Tool, Effect, Plugin, Skill, MCP, Sandbox, Workspace | Extension |
-| Swarm, Subsystem, Signal, Workflow, AgentProcess | Collaboration |
+| Delegation, Swarm, Subsystem, Signal, Workflow, AgentProcess | Collaboration |
 
 ---
 

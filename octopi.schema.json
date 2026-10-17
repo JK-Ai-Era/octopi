@@ -361,6 +361,109 @@
                 ]
               }
             }
+          },
+          "traits": {
+            "description": "Trait tags for delegation discovery (e.g. [\"research\",\"general\"]). Free strings matched exactly; ONLY affects which agent a capability-based delegate_dispatch resolves to. Carries NO permission meaning — control tool access via `tools`, rights via `delegation.rightsCeiling`/`maxSessionRights`. Not related to tool capability tags (RegisteredTool.definition.capabilities).",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "delegation": {
+            "type": "object",
+            "properties": {
+              "callable": {
+                "default": true,
+                "description": "Whether this agent can BE delegated to (as a child agent). Default TRUE — agents are delegation-capable out of the box. Set false to restrict this agent to direct user conversation only.",
+                "type": "boolean"
+              },
+              "callableBy": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "canDelegate": {
+                "default": true,
+                "description": "Whether this agent GAINS the delegate_* tools (delegate_dispatch/list/get/cancel). Default TRUE. Set false to strip those tools from this agent.",
+                "type": "boolean"
+              },
+              "maxDepth": {
+                "description": "How many delegation levels may originate here. Default 1 = I may spawn one level, my children cannot delegate further. This is the runaway guard now that delegation is on by default; raise to 2+ only when nested delegation is wanted.",
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              "rightsCeiling": {
+                "type": "object",
+                "properties": {
+                  "canRun": {
+                    "type": "boolean"
+                  },
+                  "readScope": {
+                    "type": "string",
+                    "enum": [
+                      "full",
+                      "from_grant",
+                      "summary_tail",
+                      "none"
+                    ]
+                  },
+                  "writeMemory": {
+                    "type": "boolean"
+                  },
+                  "canManageTasks": {
+                    "type": "boolean"
+                  },
+                  "canHandoff": {
+                    "type": "boolean"
+                  },
+                  "toolRights": {
+                    "type": "object",
+                    "properties": {
+                      "allow": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "deny": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "denyCapabilities": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              "budget": {
+                "type": "object",
+                "properties": {
+                  "maxTurns": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  "maxTokens": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  "timeoutMs": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  }
+                }
+              }
+            }
           }
         },
         "required": [
@@ -3143,6 +3246,16 @@
               "api"
             ]
           }
+        }
+      }
+    },
+    "delegation": {
+      "type": "object",
+      "properties": {
+        "maxActiveDelegationsPerSession": {
+          "description": "Runaway guard: max un-closed delegations a parent session may hold at once. Default 8. Not a concurrency gate — hard concurrency stays in SessionGate only.",
+          "type": "number",
+          "exclusiveMinimum": 0
         }
       }
     },

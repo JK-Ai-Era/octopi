@@ -222,3 +222,50 @@ export function computeEffectiveRights(input: {
   );
   return effective;
 }
+
+/**
+ * readScope 从宽到严的次序（越靠后越受限）
+ *
+ * `arch/delegation.md` D3：子的 rights 只能收紧不能放宽。
+ */
+const READ_SCOPE_ORDER: readonly ReadScope[] = ['full', 'from_grant', 'summary_tail', 'none'];
+
+/**
+ * 取两个 `SessionRights` 中**更严**的一侧（逐轴收紧）
+ *
+ * 用于叠加一个额外的权利天花板（如委派时传入的 `rightsCeiling`，`arch/delegation.md` D3）：
+ * 结果在每一根轴上都不宽于任一入参。缺省轴（undefined）表示该轴无额外限制，不参与收紧。
+ *
+ * @param a - 第一层天花板（可缺省）
+ * @param b - 第二层天花板（可缺省）
+ * @returns 收紧后的天花板；两者皆缺省时返回 undefined
+ */
+export function tightenSessionRights(
+  a: SessionRights | undefined,
+  b: SessionRights | undefined,
+): SessionRights | undefined {
+  if (!a) return b ? { ...b } : undefined;
+  if (!b) return { ...a };
+
+  const pickBool = (x?: boolean, y?: boolean): boolean | undefined => {
+    if (x === undefined) return y;
+    if (y === undefined) return x;
+    return x && y;
+  };
+
+  const pickScope = (x?: ReadScope, y?: ReadScope): ReadScope | undefined => {
+    if (x === undefined) return y;
+    if (y === undefined) return x;
+    // 下标越大越受限
+    return READ_SCOPE_ORDER.indexOf(x) >= READ_SCOPE_ORDER.indexOf(y) ? x : y;
+  };
+
+  return {
+    canRun: pickBool(a.canRun, b.canRun),
+    readScope: pickScope(a.readScope, b.readScope),
+    writeMemory: pickBool(a.writeMemory, b.writeMemory),
+    canManageTasks: pickBool(a.canManageTasks, b.canManageTasks),
+    canHandoff: pickBool(a.canHandoff, b.canHandoff),
+    toolRights: intersectToolRights(a.toolRights, b.toolRights),
+  };
+}

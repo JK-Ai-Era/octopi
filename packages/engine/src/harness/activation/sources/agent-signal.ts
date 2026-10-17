@@ -18,6 +18,8 @@ export interface AgentSignal {
   sessionId?: string;
   payload: TriggerPayload;
   reason?: string;
+  /** 委派单 ID（collaboration/delegation）；透传到消息 metadata */
+  delegationId?: string;
 }
 
 export interface AgentSignalSourceConfig {
@@ -49,6 +51,7 @@ export class AgentSignalSource implements TriggerSource {
             sessionId?: string;
             content?: string;
             reason?: string;
+            delegationId?: string;
           };
           if (!data.toAgentId) return;
           const trigger = this.toTrigger({
@@ -57,6 +60,7 @@ export class AgentSignalSource implements TriggerSource {
             sessionId: data.sessionId,
             payload: { kind: 'system_note', content: data.content ?? data.reason ?? 'agent signal' },
             reason: data.reason,
+            delegationId: data.delegationId,
           });
           this.config.events?.emit({
             type: RuntimeEvents.AGENT_SIGNAL_EMITTED,
@@ -96,6 +100,7 @@ export class AgentSignalSource implements TriggerSource {
         source: this.id,
         reason: signal.reason,
         parentAgentId: signal.fromAgentId,
+        delegationId: signal.delegationId,
       },
     };
   }
@@ -120,6 +125,7 @@ export function emitAgentSignal(
           ? signal.payload.content
           : JSON.stringify(signal.payload)),
       reason: signal.reason,
+      delegationId: signal.delegationId,
     },
   });
 }

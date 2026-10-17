@@ -251,6 +251,19 @@ export class Agent {
     this._config = { ...this._config, convertToLlm: fn };
   }
 
+  /**
+   * 动态替换 getSteeringMessages（当前 turn 结束后注入的提示）
+   *
+   * 晚绑定入口：一个 Agent 实例服务多 session，回调必须经
+   * `getRunScope()` / `getRunSessionId()` 取**本 Run** 的身份，
+   * 不得直接闭包某个 sessionId（否则并发 session 串味，违反 I1）。
+   *
+   * @param fn - steering 消息提供者；undefined 清除
+   */
+  setSteeringMessages(fn?: AgentLoopConfig['getSteeringMessages']): void {
+    this._config = { ...this._config, getSteeringMessages: fn };
+  }
+
   /** 动态替换 transformContext */
   setTransformContext(fn?: AgentLoopConfig['transformContext']): void {
     this._config = { ...this._config, transformContext: fn };

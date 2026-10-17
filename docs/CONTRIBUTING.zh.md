@@ -85,9 +85,8 @@ npx vitest run -t "SecurityGuard"
 | Skill 管理 | SkillManager 两阶段加载 |
 | 工具系统 | ToolRegistry、工具版本管理 |
 | 自主子系统 | SubsystemRuntime、SenseEngine、ThinkExecutor、SignalBus |
-| 多智能体 | AgentSwarm、OrchestrationStrategy |
+| 委派 | DelegateService、DelegateTransport、AgentRegistry、RunnerChildRunPort |
 | 并发控制 | ProviderPool、SessionGate、RateLimiter |
-| 输出质量 | OutputQualityGate |
 | 可观测性 | TraceCollector、MetricsAggregator、ObserverBridge（Telemetry） |
 | Run Observatory | ObserverHub、resolveObserverConfig、security/memory/tool.effect 投影、store 会话守卫 |
 | 集成 | OpenAI/Anthropic Provider、MCP Client |

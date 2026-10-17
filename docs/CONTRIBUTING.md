@@ -85,9 +85,8 @@ npx vitest run -t "SecurityGuard"
 | Skill management | SkillManager two-phase loading |
 | Tool system | ToolRegistry, tool versioning |
 | Autonomous subsystem | SubsystemRuntime, SenseEngine, ThinkExecutor, SignalBus |
-| Multi-agent | AgentSwarm, OrchestrationStrategy |
+| Delegation | DelegateService, DelegateTransport, AgentRegistry, RunnerChildRunPort |
 | Concurrency | ProviderPool, SessionGate, RateLimiter |
-| Output quality | OutputQualityGate |
 | Observability | TraceCollector, MetricsAggregator, ObserverBridge (Telemetry) |
 | Run Observatory | ObserverHub, resolveObserverConfig, security/memory/tool.effect projections, store session guards |
 | Integration | OpenAI/Anthropic Provider, MCP Client |

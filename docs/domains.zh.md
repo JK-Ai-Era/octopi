@@ -174,8 +174,8 @@
 |---|---|
 | **问题** | 多 Agent / 子系统如何协同？ |
 | **平面** | Collaboration |
-| **独占概念** | Swarm、Subsystem、Signal、Workflow、AgentProcess、Discovery |
-| **模块** | `multi-agent` `orchestration` `autonomous-subsystem` |
+| **独占概念** | Delegation、Swarm、Subsystem、Signal、Workflow、AgentProcess、Discovery |
+| **模块** | `delegation` `orchestration` `autonomous-subsystem` |
 | **失败模式** | 协同死锁、信号丢失、自治体越界 |
 | **不做** | 人级 IAM；垂直业务流程 |
 
@@ -210,7 +210,7 @@
 | Run、RunScope、SessionLease、Effect 执行、Reliability、RunGuard、Budget | Run |
 | ContextLayer、Assembler、Token、MessageWindow | Context |
 | Tool、Effect、Plugin、Skill、MCP、Sandbox、Workspace | Extension |
-| Swarm、Subsystem、Signal、Workflow、AgentProcess | Collaboration |
+| Delegation、Swarm、Subsystem、Signal、Workflow、AgentProcess | Collaboration |
 
 ---
 

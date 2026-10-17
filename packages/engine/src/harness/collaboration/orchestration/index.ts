@@ -1,23 +1,32 @@
 /**
  * orchestration 领域统一导出（experimental）
  *
- * 确定性多步骤作业：workflow / scheduler / planner / strategy / quality / reflector。
- * 默认不进主路径；经 package 子路径 `octopi/harness/collaboration/orchestration` 访问。
+ * @layer harness/collaboration/orchestration
  *
- * 与 Session.tasks 的唯一合法耦合：长流水线启动时经 SessionTaskService.create
- * 登记一条对用户可见的任务；结束时 complete/drop。禁止反向 import。
+ * **范围收窄记录**（`arch/delegation.md` §12.2）：
+ * workflow / quality / strategy / planner / scheduler / async-task 已删除，
+ * 由新的 Delegation 委派契约（`collaboration/delegation`）取代执行语义。
+ * 保留：
+ * - `reflector/` — LLMReflector（高置信模式改写 Memory `method`，被知识分馏链测试保护）
+ * - `cognitive-loop.ts` — Planner/Reflector/ExecutionRecord/AgentState 契约
+ *
+ * 默认不进主路径；经 package 子路径 `octopi/harness/orchestration` 访问。
  */
 
-export * from './workflow/index.js';
-export * from './scheduler/index.js';
-export * from './planner/index.js';
-export * from './strategy/index.js';
-export * from './quality/index.js';
-export * from './reflector/index.js';
-export { AsyncTask, TaskTimeoutError, TaskCancelledError, spawnTask, TaskEvents } from './async-task.js';
-export type { TaskOptions, TaskExecutor } from './async-task.js';
-export type { AsyncTaskStore, AsyncTaskRecord, AsyncTaskStatus, AsyncTaskPriority, AsyncTaskFilter } from './async-task-store.js';
+// ── cognitive-loop 契约 ──
 export type {
-  Planner, Reflector, AgentState, AgentStats, Plan, PlanStep,
-  StepResult, ExecutionRecord, Assessment, Pattern,
+  Planner,
+  Reflector,
+  AgentState,
+  AgentStats,
+  Plan,
+  PlanStep,
+  StepResult,
+  ExecutionRecord,
+  Assessment,
+  Pattern,
 } from './cognitive-loop.js';
+
+// ── Reflector ──
+export { LLMReflector } from './reflector/index.js';
+export type { LLMReflectorConfig } from './reflector/index.js';

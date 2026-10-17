@@ -14,17 +14,15 @@
 
 ## 目录
 
-- workflow/ — WorkflowEngine
-- scheduler/ — TaskScheduler
-- planner/ — Rule / LLM / Hybrid planner
-- strategy/ — 任务分类 + 策略路由
-- quality/ — OutputQualityGate
 - reflector/ — LLMReflector
-- async-task.ts / async-task-store.ts — 异步工作单元（非 Kernel）
-- cognitive-loop.ts — Plan / Planner / Reflector 契约
+- cognitive-loop.ts — Plan / Planner / Reflector / ExecutionRecord / AgentState 契约
+
+> **2026-10-17 范围收窄**：`workflow/` / `scheduler/` / `planner/` / `strategy/` /
+> `quality/` / `async-task*` 已删除，执行语义改由 `collaboration/delegation/` 承接
+> （见 `arch/delegation.md` §12 与 `arch/domain-split.md` §6b）。
 
 ## 依赖
 
 - Core（Kernel：EventBus 等）
-- 契约定义在本域（cognitive-loop、async-task-store）
+- 契约定义在本域（cognitive-loop）
 - → SessionTaskService 仅单向可选适配（未内置）

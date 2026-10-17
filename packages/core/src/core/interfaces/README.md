@@ -26,6 +26,6 @@
 | Memory / Wisdom / Cognition | `harness/memory/types.ts` |
 | KnowledgeCatalogProvider | `harness/knowledge/types.ts` |
 | Planner / Reflector | `harness/collaboration/orchestration/cognitive-loop.ts` |
-| AsyncTask + Store | `harness/collaboration/orchestration/async-task*.ts` |
+| （AsyncTask + Store 已删除） | 见 `arch/domain-split.md` §6b |
 | Skill / AgentDefinition | harness plugin / types |
 | Registry / MCP / HITL / WebSearch / Sandbox / EventSource / MessageChannel | harness 各域 |

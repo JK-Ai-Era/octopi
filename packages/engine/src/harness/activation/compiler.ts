@@ -60,6 +60,9 @@ function compileOne(trigger: Trigger): Message {
     ...(trigger.metadata?.parentAgentId
       ? { parentAgentId: trigger.metadata.parentAgentId }
       : {}),
+    ...(trigger.metadata?.delegationId
+      ? { delegationId: trigger.metadata.delegationId }
+      : {}),
     ...(trigger.metadata?.attachments?.length
       ? { attachmentIds: trigger.metadata.attachments.map((a) => a.id) }
       : {}),

@@ -22,6 +22,28 @@ export interface SessionSwitchRecord extends PrincipalRef {
   reason?: string;
 }
 
+/**
+ * 委派产生的 Session 父子关联（I2 投影可重建）
+ *
+ * 子 agent 经委派（`arch/delegation.md`）起 Run 时落**独立 Session**，
+ * 并在此记录来源，使审计链不断（D7）。
+ *
+ * 刻意不塞 `metadata`：I2 要求 Discourse 权威可重建，
+ * 显式字段才好投影 / 检索 / 审计。
+ */
+export interface SessionSpawnLink {
+  /** 委派单 ID（`harness/collaboration/delegation`） */
+  delegationId: string;
+  /** 发起委派的 agentId */
+  parentAgentId: string;
+  /** 父 session ID */
+  parentSessionId: string;
+  /** 父 run ID */
+  parentRunId: string;
+  /** 委派链深度（根委派 = 1） */
+  depth?: number;
+}
+
 /** Session 生命周期状态（`extracted` 已废除：提炼进度归 memory.steward） */
 export type SessionLifecycleStatus = 'active' | 'recent' | 'archived';
 
@@ -66,6 +88,13 @@ export interface SessionData {
   preferredAgentId?: string;
   /** preferred / handoff 切换审计（I6 Principal 进审计） */
   switchAudit?: SessionSwitchRecord[];
+  /**
+   * 委派来源（`arch/delegation.md` D7）。
+   *
+   * 本 Session 由父 agent 的委派产生时写入；用户直接创建的 Session 无此字段。
+   * 父 Run 结束后子 Session **继续存在**（决策 C1），故关联必须持久化。
+   */
+  spawnBy?: SessionSpawnLink;
   meta: SessionMeta;
   messages: Message[];
   turns: Turn[];

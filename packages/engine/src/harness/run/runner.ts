@@ -14,6 +14,7 @@
 import type { Message, Turn, SessionStatus } from '@octopi-agent/core/types.js';
 import { getTextContent } from '@octopi-agent/core/types.js';
 import type { ToolContextProvider } from '../agent/builder.js';
+import { tightenSessionRights } from '../governance/session-acl/rights.js';
 import type { SessionStore } from '@octopi-agent/core/interfaces/session-store.js';
 import type { SessionData } from '../session/types.js';
 
@@ -171,6 +172,13 @@ export interface RunConfig {
   agentRevision?: string;
   contextWindow?: number;
   injectedContext?: string;
+  /**
+   * 本 Run 的权利天花板（`arch/delegation.md` D3：只能收紧不能放宽）。
+   *
+   * 与 Runner 的 `agentMaxSessionRights` **取交集**后进 `authorizeRun`；
+   * 委派子 Run 用它传 `DelegateRequest.rightsCeiling`。
+   */
+  rightsCeiling?: import('../governance/session-acl/types.js').SessionRights;
 }
 
 /**
@@ -673,11 +681,19 @@ export class SessionAwareRunner {
       let sessionToolRights:
         | import('../governance/session-acl/types.js').ToolRights
         | undefined;
+      // D3：本 Run 的 effective rights，供委派传播（只读，不改共享 harness）
+      let runSessionRights:
+        | import('../governance/session-acl/types.js').EffectiveSessionRights
+        | undefined;
       if (acl) {
         const auth = acl.authorizeRun({
           session,
           agentId: _agentId,
-          agentMax: this.config.agentMaxSessionRights,
+          // D3：Run 级天花板与模板天花板取交集，只收紧不放宽
+          agentMax: tightenSessionRights(
+            this.config.agentMaxSessionRights,
+            runConfig.rightsCeiling,
+          ),
         });
         if (!auth.ok) {
           yield {
@@ -690,6 +706,7 @@ export class SessionAwareRunner {
           return;
         }
         sessionToolRights = auth.rights?.toolRights;
+        runSessionRights = auth.rights;
       }
       // SEC-2: keep rights on this run only (harness is shared across sessions)
       const runToolRights = sessionToolRights;
@@ -1140,6 +1157,7 @@ export class SessionAwareRunner {
           shellJournal: this.effectShellJournal,
           shellJournalLimit: this.effectShellJournalLimit,
           sessionToolRights: runToolRights,
+          sessionRights: runSessionRights,
           agentToolPolicy: runToolPolicy,
         },
       };

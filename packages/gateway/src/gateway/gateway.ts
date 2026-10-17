@@ -300,9 +300,13 @@ export class Gateway {
   private providers = new Map<string, ModelProvider>();
   /** 工具 */
   private tools: RegisteredTool[] = [];
-  /** Agent 缓存（避免每条消建） */
   /** 每 agent 记忆逆放器（L3 P2） */
   private memoryRestorers = new Map<string, import('@octopi-agent/engine').MemoryEffectRestorer>();
+  /** 委派编排运行时（arch/delegation.md）惰性创建 */
+  private delegationRuntime?: import('@octopi-agent/engine/harness/collaboration/delegation/wiring.js').DelegationRuntime;
+  /** 委派未启用诊断日志只打一次 */
+  private delegationSkippedLogged = false;
+  /** Agent 缓存（避免每条消建） */
   private agentCache = new Map<string, {
     agent: import('@octopi-agent/engine/harness/run/agent/index.js').Agent;
     runner: SessionAwareRunner;
@@ -4014,6 +4018,57 @@ export class Gateway {
   }
 
   /**
+   * 获取或惰性创建委派编排运行时（arch/delegation.md §7/§14）。
+   *
+   * 所有 agent 共享 gatewayBus，因此 notify 通道天然可用
+   * （AgentSignalSource 挂在同一条总线上）。
+   *
+   * 任一 agent 声明了 delegation 策略才创建；否则返回 undefined，
+   * 不为未使用委派的部署付出开销。
+   *
+   * @returns 委派运行时；无 agent 声明委派策略时为 undefined
+   */
+  private async ensureDelegationRuntime(): Promise<
+    | import('@octopi-agent/engine/harness/collaboration/delegation/wiring.js').DelegationRuntime
+    | undefined
+  > {
+    if (this.delegationRuntime) return this.delegationRuntime;
+
+    // 先取模块：effectiveDelegationPolicy 在守卫里就要用
+    const { createDelegationRuntime, effectiveDelegationPolicy } = await import(
+      '@octopi-agent/engine/harness/collaboration/delegation/wiring.js'
+    );
+
+    // 委派**缺省默认开启**（arch/delegation.md §9.2）；只有全部 agent 显式关闭才不接线
+    const anyDelegating = [...this.agents.values()].some(
+      (a) => effectiveDelegationPolicy(a.delegation).canDelegate,
+    );
+    if (!anyDelegating) {
+      if (!this.delegationSkippedLogged) {
+        this.delegationSkippedLogged = true;
+        const declared = [...this.agents.values()].map((a) => ({
+          id: a.id,
+          delegation: a.delegation ?? null,
+        }));
+        console.log(
+          '[Gateway] Delegation tools NOT attached (no agent declares `delegation.canDelegate`). ' +
+            'Enable by adding to octopi.json → agents[].delegation: ' +
+            '{ "callable": true, "canDelegate": true, "maxDepth": 1 } ' +
+            `(current agents: ${JSON.stringify(declared)})`,
+        );
+      }
+      return undefined;
+    }
+
+    this.delegationRuntime = createDelegationRuntime({
+      events: this.gatewayBus,
+      maxActiveDelegationsPerSession: this.config.delegation?.maxActiveDelegationsPerSession,
+    });
+    console.log('[Gateway] Delegation runtime wired (shared gatewayBus, notify enabled)');
+    return this.delegationRuntime;
+  }
+
+  /**
    * ?Agent 构建 Agent + SessionAwareRunner（新架构?
    */
   private async buildAgent(agent: AgentDefinition): Promise<{
@@ -4021,6 +4076,7 @@ export class Gateway {
     runner: SessionAwareRunner;
     contextEngine?: import('@octopi-agent/engine/harness/context/types.js').ContextEngine;
     contextHealth?: (agentId?: string) => Promise<import('@octopi-agent/engine/harness/context/layer-health.js').ContextLayerHealth>;
+    registerTools: (tools: import('@octopi-agent/engine').RegisteredTool[]) => void;
   }> {
     // 获取?provider，并解析 agent 模型（含熔断?
     const rawProvider = this.providers.get(agent.model.provider);
@@ -4428,7 +4484,26 @@ export class Gateway {
     // Client Tool 会话可见性：无 live client 的 tool 不进该 session 的 LLM tool 面
     built.agent.setToolVisibilityFilter(this.clientTools.createVisibilityFilter());
 
-    return { agent: built.agent, runner: built.runner, contextEngine: built.contextEngine, contextHealth: built.contextHealth };
+    // 委派编排（arch/delegation.md §7/§14）：惰性构建，attach 后该 agent 可被委派/可发委派。
+    // 所有 agent 共享 gatewayBus，故 notify 通道天然通（AgentSignalSource 同源）。
+    (await this.ensureDelegationRuntime())?.attach({
+      agentId: agent.id,
+      agent: built.agent,
+      runner: built.runner,
+      store: this.store,
+      traits: agent.traits,
+      delegation: agent.delegation,
+      persona: typeof agent.persona === 'string' ? agent.persona : undefined,
+      registerTools: built.registerTools,
+    });
+
+    return {
+      agent: built.agent,
+      runner: built.runner,
+      contextEngine: built.contextEngine,
+      contextHealth: built.contextHealth,
+      registerTools: built.registerTools,
+    };
   }
 
   private resolveAgent(msg: ChannelMessage): AgentDefinition | undefined {

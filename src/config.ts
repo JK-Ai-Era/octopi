@@ -123,10 +123,15 @@ export function toGatewayConfig(config: NormalizedHarnessConfig): GatewayConfig 
     maxSessionRights: ac.maxSessionRights,
     knowledge: ac.knowledge,
     effectPolicy: ac.effectPolicy,
+    // 委派（arch/delegation.md §9.2）：特质标签 + 委派策略。
+    // 刻意显式列出——此对象字面量是 CLI→Gateway 的边界，漏字段即静默丢配置。
+    traits: ac.traits,
+    delegation: ac.delegation,
   }));
 
   const gatewayConfig: GatewayConfig = {
     agents: resolvedAgents,
+    delegation: config.delegation,
     session: config.session
       ? { dmScope: config.session.dmScope, idleExpiryMs: config.session.idleExpiryMs }
       : undefined,

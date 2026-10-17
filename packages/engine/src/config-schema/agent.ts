@@ -33,6 +33,80 @@ export const AgentConfigSchema = z.object({
       recall: z.enum(['off', 'hint', 'hybrid', 'inject']).optional(),
     })
     .optional(),
+  /**
+   * 特质标签（`arch/delegation.md` §9.2）。
+   *
+   * 供父 agent 按特质发现委派目标（`AgentRegistry.findByTrait`）。
+   * 自由字符串，只影响**委派寻址**，不含任何权限语义。
+   *
+   * 命名说明：刻意不叫 `capabilities` —— 该词已被工具安全标签
+   * （`RegisteredTool.definition.capabilities`，如 `'fs-read'`/`'exec'`）占用，
+   * 后者由 SecurityGuard 做安全拦截，两者语义无关（`docs/task-system.md` A2）。
+   */
+  traits: z
+    .array(z.string())
+    .optional()
+    .describe(
+      'Trait tags for delegation discovery (e.g. ["research","general"]). ' +
+        'Free strings matched exactly; ONLY affects which agent a capability-based ' +
+        'delegate_dispatch resolves to. Carries NO permission meaning — control tool ' +
+        'access via `tools`, rights via `delegation.rightsCeiling`/`maxSessionRights`. ' +
+        'Not related to tool capability tags (RegisteredTool.definition.capabilities).',
+    ),
+  /**
+   * 委派策略（`arch/delegation.md` §9.2）。
+   *
+   * **整段可省略**：省略即用 `DEFAULT_DELEGATION_POLICY`
+   * —— 委派**默认开启**（可被委派、可发委派、限一层）。
+   * 关闭必须显式写 `false`。
+   * 有此段且 `callable: true` 的 agent 即「子 agent 模板」；
+   * 无 `channelBindings` 的这类 agent 不会出现在用户对话面。
+   */
+  delegation: z
+    .object({
+      /** 能否被委派（默认 true） */
+      callable: z
+        .boolean()
+        .default(true)
+        .describe(
+          'Whether this agent can BE delegated to (as a child agent). Default TRUE — ' +
+            'agents are delegation-capable out of the box. Set false to restrict this agent ' +
+            'to direct user conversation only.',
+        ),
+      /** 允许哪些 agentId 调我（缺省 = 任意） */
+      callableBy: z.array(z.string()).optional(),
+      /** 我能不能再委派（默认 true） */
+      canDelegate: z
+        .boolean()
+        .default(true)
+        .describe(
+          'Whether this agent GAINS the delegate_* tools (delegate_dispatch/list/get/cancel). ' +
+            'Default TRUE. Set false to strip those tools from this agent.',
+        ),
+      /** 递归上限（默认 1 = 我能派子，子不能再派；runaway 兜底） */
+      maxDepth: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .describe(
+          'How many delegation levels may originate here. Default 1 = I may spawn one ' +
+            'level, my children cannot delegate further. This is the runaway guard now that ' +
+            'delegation is on by default; raise to 2+ only when nested delegation is wanted.',
+        ),
+      /** 被委派时的权利天花板（只能收紧不能放宽，D3） */
+      rightsCeiling: SessionRightsSchema.optional(),
+      /** 委派预算上限（请求预算与此取交集） */
+      budget: z
+        .object({
+          maxTurns: z.number().positive().optional(),
+          maxTokens: z.number().positive().optional(),
+          timeoutMs: z.number().positive().optional(),
+        })
+        .optional(),
+      // outputSchema：结构化输出契约，v1 留字段位不实现（arch/delegation.md O2）
+    })
+    .optional(),
 });
 
 export const PluginConfigSchema = z.object({

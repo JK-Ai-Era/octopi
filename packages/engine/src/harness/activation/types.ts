@@ -41,6 +41,8 @@ export interface Trigger {
     reason?: string;
     parentAgentId?: string;
     causalRunId?: string;
+    /** 委派单 ID（`collaboration/delegation`）；notify 通道透传，供 UI/下游过滤 */
+    delegationId?: string;
     /** 消息级模型覆盖（`provider/model` 或裸名） */
     modelOverride?: string;
     /** modelOverride 为裸名时的 provider */
@@ -128,7 +130,8 @@ export interface RuntimeAgent {
   /** Trigger → sessionId；缺省用 trigger.sessionId 或 `${agentId}:main` */
   resolveSession?: (trigger: Trigger) => string;
   discoverable?: boolean;
-  capabilities?: string[];
+  /** 特质标签（委派/路由发现用；无权限语义） */
+  traits?: string[];
 }
 
 // ── TriggerSource ──

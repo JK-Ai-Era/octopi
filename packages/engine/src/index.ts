@@ -273,10 +273,38 @@ export type {
 export { buildFromConfig } from './harness/agent/config-bridge.js';
 export type { BuiltAgent } from './harness/agent/config-bridge.js';
 
-export { DefaultAgentRegistry, AgentSwarm, RoundRobinStrategy, CapabilityStrategy, PipelineStrategy, SwarmEvents, AgentProcess, spawnAgentProcess, forkAgentProcess, AgentProcessEvents } from './harness/collaboration/multi-agent/index.js';
-export type { SwarmTopology, SwarmConfig, SwarmAgent, SwarmTask, OrchestrationStrategy, AgentProcessState, AgentProcessResult, AgentProcessAnnounce, AgentProcessConfig } from './harness/collaboration/multi-agent/index.js';
-export type { AgentRegistry, AgentInfo, AgentQuery, AgentRelation, AgentRelationType } from './harness/collaboration/multi-agent/agent-registry-types.js';
-export { AgentRegistryEvents } from './harness/collaboration/multi-agent/agent-registry-types.js';
+// ── Delegation（L2 委派契约层；arch/delegation.md）──
+export {
+  DefaultAgentRegistry,
+  DelegationStore,
+  DelegateService,
+  DelegateResolutionError,
+  InProcessTransport,
+  RunnerChildRunPort,
+  createChildRunExecutor,
+  createDelegationNotifier,
+  renderDelegationNotice,
+  wireDelegation,
+  createDelegationRuntime,
+  AgentRegistryEvents,
+  DelegationEvents,
+  DELEGATION_SCHEMA_VERSION,
+} from './harness/collaboration/delegation/index.js';
+export type {
+  Delegation,
+  DelegateRequest,
+  DelegateResult,
+  AgentHandle,
+  AgentRegistry,
+  AgentInfo,
+  AgentQuery,
+  AgentRelation,
+  AgentRelationType,
+  AgentDelegationPolicy,
+  DelegateTransport,
+  DelegatableAgent,
+  DelegationRuntime,
+} from './harness/collaboration/delegation/index.js';
 
 // ============================================================
 // Integration 层（engine 库能力）
@@ -367,7 +395,7 @@ export { getBuiltinModelInfo, mergeWithBuiltinInfo } from './builtin-model-info.
 export * from '@octopi-agent/core/types.js';
 export { getTextContent, hasMediaContent } from '@octopi-agent/core/types.js';
 
-export type { AsyncTaskStore, AsyncTaskRecord } from './harness/collaboration/orchestration/async-task-store.js';
+// （AsyncTaskStore 已随 orchestration 收窄删除，见 arch/delegation.md §12.2）
 export type {
   MemoryStore, MemoryEntry, MemoryType, MemoryQuery, MemoryStats,
   WisdomStore, WisdomEntry, WisdomStatus, WisdomOrigin, WisdomKind,
@@ -386,7 +414,7 @@ export type {
 } from './harness/extension/plugin-ecosystem/mcp/types.js';
 export type {
   MessageChannel, ProcessMessage,
-} from './harness/collaboration/multi-agent/message-channel-types.js';
+} from './harness/collaboration/delegation/message-channel-types.js';
 export type { HitlDecision } from '@octopi-agent/core/types/tools.js';
 export {
   HitlDecisionCache,

@@ -208,7 +208,7 @@ domains:
       - Discovery
     failure_mode: 协同死锁、信号丢失、自治体越界
     modules:
-      - multi-agent
+      - delegation
       - orchestration
       - autonomous-subsystem
     status: incomplete
@@ -283,6 +283,7 @@ module_catalog:
   - { id: session/tasks, domain: session }
   - { id: session/history, domain: session }
   - { id: session/attachments, domain: session }
+  - { id: session/schedules, domain: session }
 
   # Agent
   - { id: agent, domain: agent }
@@ -320,7 +321,7 @@ module_catalog:
   - { id: extension/execution-environment, domain: extension }
 
   # Collaboration
-  - { id: collaboration/multi-agent, domain: collaboration }
+  - { id: collaboration/delegation, domain: collaboration }
   - { id: collaboration/orchestration, domain: collaboration }
   - { id: collaboration/autonomous-subsystem, domain: collaboration }
 

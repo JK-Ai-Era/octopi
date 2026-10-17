@@ -92,6 +92,30 @@ export const engineConfigSchema = z.object({
   observer: ObserverConfigSchema,
   concurrency: ConcurrencyConfigSchema.optional(),
   webSearch: WebSearchConfigSchema.optional(),
+  /**
+   * 委派编排（`arch/delegation.md` §8）。
+   *
+   * `maxActiveDelegationsPerSession` 是**失控防护**，不是并发闸：
+   * 全局并发硬闸只在 SessionGate 一处（D9）。
+   */
+  delegation: z
+    .object({
+      /**
+       * 单个父 session 可同时挂载的未闭合委派上限。
+       *
+       * **失控防护**，不是并发闸（D9：并发硬闸只在 SessionGate 一处）。
+       * 默认 8 —— 委派已默认开启，必须有上限。
+       */
+      maxActiveDelegationsPerSession: z
+        .number()
+        .positive()
+        .optional()
+        .describe(
+          'Runaway guard: max un-closed delegations a parent session may hold at once. ' +
+            'Default 8. Not a concurrency gate — hard concurrency stays in SessionGate only.',
+        ),
+    })
+    .optional(),
 });
 
 export type EngineConfig = z.infer<typeof engineConfigSchema>;

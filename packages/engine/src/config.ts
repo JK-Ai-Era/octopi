@@ -61,6 +61,27 @@ export interface AgentConfig {
   knowledge?: {
     recall?: KnowledgeRecallMode;
   };
+  /** 特质标签（arch/delegation.md §9.2：供父 agent 按特质发现委派目标）；无权限语义 */
+  traits?: string[];
+  /** 委派策略（arch/delegation.md §9.2）；整段可省略 = 用 DEFAULT_DELEGATION_POLICY（委派默认开启）*/
+  delegation?: {
+    /** 能否被委派（默认 true；显式 false = 只能被用户直接对话） */
+    callable: boolean;
+    /** 允许哪些 agentId 调我（缺省 = 任意） */
+    callableBy?: string[];
+    /** 我能不能再委派、获得 delegate_* 工具（默认 true） */
+    canDelegate: boolean;
+    /** 递归上限（默认 1 = 我能派子，子不能再派；runaway 兜底） */
+    maxDepth?: number;
+    /** 被委派时的权利天花板（只能收紧不能放宽，D3） */
+    rightsCeiling?: import('@octopi-agent/engine/harness/governance/session-acl/types.js').SessionRights;
+    /** 委派预算上限（请求预算与此取交集） */
+    budget?: {
+      maxTurns?: number;
+      maxTokens?: number;
+      timeoutMs?: number;
+    };
+  };
 }
 
 /**
@@ -807,6 +828,13 @@ export interface SubsystemsConfig {
 export interface HarnessConfig {
   /** 自主子系统配置 */
   subsystems?: SubsystemsConfig;
+  /**
+   * 委派编排（arch/delegation.md §8）。
+   * `maxActiveDelegationsPerSession` 是失控防护，不是并发闸（D9）。
+   */
+  delegation?: {
+    maxActiveDelegationsPerSession?: number;
+  };
 
   /** Agent 列表 */
   agents: AgentConfig[];

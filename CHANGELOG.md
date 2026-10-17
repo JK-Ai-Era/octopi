@@ -1,3 +1,62 @@
+## v0.83.0
+
+### feat(collaboration): Delegation 委派契约层（L2）—— 子 agent 委派能力取代旧 multi-agent / orchestration 执行件
+
+**问题**：`harness/collaboration/` 下的 multi-agent（AgentSwarm / AgentProcess / DefaultAgentRegistry）与 orchestration（workflow / planner / scheduler / quality / strategy / async-task）是在宪法 `docs/north-star.md`（2026-09-21 定稿）成熟**之前**搭的框架，多处违反不变量且概念混乱：
+
+- `swarm.ts` `executeTask` / `process.ts` `_collectRun` 直接写 `agent.context.messages` / `.systemPrompt`，违反 **I1**（可变上下文只活在 RunScope），把共享 Agent 实例当多 session 工作区；`Agent.run()` 的文档自己标注这是「旧 multi-agent 路径」
+- 死字段：`SwarmConfig.maxConcurrency` / `taskTimeoutMs`（赋值后从不读取）、`SwarmAgent.runner`（声明未用）、`AgentProcessResult.usage`（`let usage` 从不赋值恒为 undefined）
+- `SimpleStepExecutor` 返回假数据（`Tool executed: …`）且用 `new Function` 求值条件表达式
+- **最关键的缺口**：LLM 侧完全没有子 agent 入口——52 个注册工具里无一能 spawn 子 agent，多 agent 只能由嵌入方写代码调用
+
+**修正**：
+
+- **新增 L2 委派契约层** `harness/collaboration/delegation/`（设计权威 `arch/delegation.md`）：
+  - `types.ts` — `Delegation` / `DelegateRequest` / `DelegateResult` / `AgentHandle` 纯 JSON 消息契约 + 状态机（D1/D5/D10）
+  - `registry-types.ts` + `registry.ts` — `AgentRegistry` 契约迁入并扩 `AgentDelegationPolicy`（callable / callableBy / canDelegate / maxDepth / rightsCeiling / budget）
+  - `store.ts` — `DelegationStore` 唯一写入口 + 状态机校验 + 委派链深度查询
+  - `transport.ts` — `DelegateTransport` **唯一分布式缝** + `InProcessTransport` + schema 版本闸（六条缝定死，见 `arch/delegation.md` §5）
+  - `service.ts` — `DelegateService` 非阻塞编排：目标解析（D2）/ 递归深度闸 / 失控防护 / cancel / 级联中止
+  - `child-run.ts` — 子 Run 端口 + `RunnerChildRunPort`（走 `SessionAwareRunner.handle()`，**修 I1 违规**）
+  - `notifier.ts` — notify 通道（复用 `AgentSignalSource`，不新造父子通道）
+  - `wiring.ts` — `createDelegationRuntime`（可增量 `attach`，适配 Gateway 惰性构建）+ `wireDelegation`（批量）
+- **4 个 `delegate_*` 工具**：`delegate_dispatch`（非阻塞，立即返回 delegationId）/ `delegate_list` / `delegate_get` / `delegate_cancel`，带 session 归属校验
+- **Session 父子关联**：`SessionData.spawnBy?: SessionSpawnLink`（D7 独立 session + 审计不断链；刻意不塞 `metadata`，I2 要求可重建）
+- **权利天花板**：`RunConfig.rightsCeiling` + `tightenSessionRights`（D3 与模板天花板取交集，**只收紧不放宽**）
+- **长 Run 可见性**：`Agent.setSteeringMessages()` 经 `getRunSessionId()`（RunScope ALS）注入 `<delegation_status>`，并发 session 不串味；全部终态且已投递后提示清空，在途期间显示累计计数
+- **配置面**：`agents[].traits` / `agents[].delegation`（callable / callableBy / canDelegate / maxDepth / rightsCeiling / budget）、`delegation.maxActiveDelegationsPerSession`（失控防护，**非并发闸**——并发硬闸仍只在 SessionGate 一处）
+- **删除旧件**（决策变更留档见 `arch/domain-split.md` §6b，因推翻 §6 已归档裁决而不得静默消失）：`multi-agent/`（swarm / process / registry 实现 / message-channel-types）、orchestration 的 workflow / quality / strategy / planner / scheduler / async-task / async-task-store
+- **保留**：`AgentRegistry` 契约（`arch/agent-runtime.md` 规划的 v2 CapabilityRouter 对接点）、`MessageChannel` 契约（迁 `delegation/`，归 L3/L4）、`orchestration/reflector/`（LLMReflector 高置信改写 Memory `method`，被 `tests/harness/knowledge.test.ts` 保护）、`cognitive-loop.ts` 的 `ExecutionRecord` / `AgentState` 契约
+
+**独立审查后的修复**（两份对抗性审查报告交叉核实，裁决见 `REVIEW-VERDICT-delegation.md`）：
+
+- **P0-1 `spawnBy` 生产持久化断链**：`JsonlSessionStore` 的四处字段白名单（`readStateData` / `readSession` state / `save` / `updateMetadata`）均不含 `spawnBy`，落盘即丢、重建不回，Gateway 生产路径 D7 父子审计链不可重建。已补齐 + Jsonl round-trip 测试。
+- **P0-2 递归深度闸是死代码**：`Delegation.childSessionId` 从无写入点（`createChildRunExecutor` 映射时丢弃），`findDepthByChildSession` 恒空 → `depth` 恒 1 → `depth_exceeded` 永不触发，可无限套娃。改为**服务方在起子 Run 之前生成并落库**（而非结束时回填——否则子运行期间发起的孙代委派仍查不到）+ 三代委派拦截测试（走生产 `resolveParentDepth`，不硬编码）。
+- **P0-3 D3 权限随调用传播未实现**：`rightsCeiling` 取的是子模板自我声明，父的有效权限全程不进链路，受限父可派全权子提权。改为经 `RunScope.toolRuntime.sessionRights`（`authorizeRun` 结果）取父 effective rights，与子模板天花板 `tightenSessionRights` 取交集后进请求。
+- **P1-1 deadline 路径重复投递**：`notify()` 无 `notified` 去重，timeout 落终态后定时器与 `finally` 各投一次。改为先同步占位再投递。
+- **P1-2 迟到结果静默丢弃 + 取消原因被污染**：deadline 抢先落 `timeout` 后子结果 `store.update` 因状态机非法整包抛错、output/usage 无痕消失；cancel 路径则被状态机文案 `Invalid delegation transition: …` 覆盖用户取消原因。拆出 `settleWithResult` / `settleWithFailure` / `noteLateOutcome`：已终态不覆盖、保留原 error、追加留痕并 warn。
+- **附带发现**：`DispatchDelegationInput.timeoutMs` 是死参数（只从 `budget.timeoutMs` 算 deadline，单独传被静默忽略）——由新回归测试当场抓出，已修。
+- **P2/P3**：`budget` 落库可审计、`DelegateRequest.cancelable` 补齐（D4 字面）、`artifacts` 未产出时省略而非假空数组（仓规 no fake-data stubs）、中止映射 `cancelled` 而非 `failed`、`parentMessages` 传快照而非活数组引用（D1）、工具 `capabilities` 归零（不再借 `fs-*` 语义，避免 `denyCapabilities` 误禁）、Gateway 透传 `maxActiveDelegationsPerSession`（消死配置）、`parentMessages` 类型从 `unknown[]` 收紧为 `Message[]`、三处 README 与 `spawnedBy`/`spawnBy` 命名对齐。
+
+**回归测试**：`tests/harness/delegation-review-fixes.test.ts`（16）刻意走真连线——真 `JsonlSessionStore` 往返、真 `resolveParentDepth`（不硬编码）、真 `DefaultSecurityGuard.checkToolCall` 穿透（含对照组）——正是上一轮「测了闸本身、没测连线」导致假绿的那类写法。
+
+**实际联调前的可用性修订**：
+
+- **🔴 修复配置静默丢弃**：`src/config.ts` 的 `toGatewayConfig()` 用显式对象字面量把 `AgentConfig` 映射成 `AgentDefinition`，其中**不含 `capabilities` / `delegation`** —— `octopi.json` 里配了也会在 CLI→Gateway 边界被丢掉，能力等于不可用。已补映射，并加**通用回归断言**：`Object.keys(AgentConfig)` 的每一个键映射后必须存在，今后加字段漏映射会自动失败。
+- **委派改为缺省默认开启**：未声明 `delegation` 的 agent 等价于 `DEFAULT_DELEGATION_POLICY = { callable: true, canDelegate: true, maxDepth: 1 }` —— 不配置即获得 `delegate_*` 工具、也可被委派。关闭必须显式 `false`。一律经 `effectiveDelegationPolicy()` 取生效值（registry 注册时归一化，消费方无需各自兜底）。
+- **默认开启配套的 runaway 兜底**：`maxActiveDelegationsPerSession` 原为「不限」，在默认开启下不可接受，改为缺省 **8**；`maxDepth` 缺省 1（我能派子，子不能再派）成为递归闸。
+- **`capabilities` 改名 `traits`**：原名与工具安全标签 `RegisteredTool.definition.capabilities`（`'fs-read'`/`'exec'`…，SecurityGuard 据此拦截）撞名，违反 `docs/task-system.md` A2「一个概念一个名字」。改名覆盖配置 schema / `AgentConfig` / `AgentDefinition` / `RuntimeAgent` / `AgentRegistry`（`findByCapability` → `findByTrait`）/ `DelegationTarget`（`capability` → `trait`）/ 工具参数全链路；**工具安全标签 `capabilities` 不动**。
+- **解析失败回传可用目标**：`trait` 无匹配 / `agentId` 不存在时返回 `{ ok: false, reason: 'not_found', available_targets: { traits[], agents[] }, hint }` —— 回传真实 registry 状态，让调用方一次改对（换 `agent: <id>` 或换 trait），而不是瞎猜重试。
+- **修复「先挑后验」**：`resolveTarget` 原先按 trait 挑 `candidates[0]` 后才在 `toHandle` 里检查 `callable`，导致「第一个命中但不可委派」会让整次委派失败而非落到下一个候选。改为先过滤 `callable` 再挑。
+- `traits` / `delegation.*` 补 `.describe()`：schema 之前无描述，编辑器补全说不出用途。
+- schema 默认值与运行时语义对齐（`callable` / `canDelegate` 改为 `default(true)`，此前写着 `default(false)` 与实际行为矛盾）。
+
+**边界**：notify 总线必须与 `AgentSignalSource` 同源——Gateway 路径天然满足（所有 agent 共享 `gatewayBus`）；库嵌入需传 `buildFromConfig(config, { events })`，否则 notify 不接线（`notifyWired: false`，poll 通道仍可用）。分布式传输（IPC / 网络 / 持久化重投 / 共识）不在本版范围。
+
+**测试**：`tests/harness/delegation.test.ts`（44）— 状态机 / Store 不别名 / Registry 策略过滤 / schema 版本闸 / 预算交集只收紧 / 递归深度闸 / 级联中止 / `tightenSessionRights`；`delegation-tools.test.ts`（20）— 子 Run 独立 session + `spawnBy`（D7）/ 走 `runner.handle()` 不写共享 context（D8）/ usage 跨轮归集（C2）/ fork 模式 / 工具归属校验；`delegation-notify.test.ts`（18）— notify 全链路到 `metadata.delegationId` / 不伪装真人 / 输出转义 / 状态提示 / 增量 attach。build + lint + `arch/check-sync.sh` 全绿；全量 `--no-file-parallelism` 280 文件 / 2740 测试全过（并行模式下的 38–49 个 timeout 经隔离复跑验证为机器资源争抢，非回归）。
+
+---
+
 ## v0.82.6
 
 ### fix(web): separate reasoning from chat content, page session history, and tidy tool display

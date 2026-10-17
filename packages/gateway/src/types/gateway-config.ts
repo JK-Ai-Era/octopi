@@ -9,6 +9,13 @@ import type { AgentDefinition } from '@octopi-agent/engine/harness/shared/types/
 export interface GatewayConfig {
   port?: number;
   agents: AgentDefinition[];
+  /**
+   * 委派编排（arch/delegation.md §8）。
+   * `maxActiveDelegationsPerSession` 是失控防护，不是并发闸（D9）。
+   */
+  delegation?: {
+    maxActiveDelegationsPerSession?: number;
+  };
   /** Run 安全阀/策略；见 arch/budget-redesign.md（无 nominal token hard） */
   budgetPolicy?: {
     maxIterations?: number;

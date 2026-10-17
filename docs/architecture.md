@@ -148,7 +148,7 @@ packages/core/src/core/
 
 Product event vocabulary lives in `harness/shared/events/` (AgentEventMap / AgentEvents / scenario-events).
 
-Domain contracts live **inside harness domains** (memory, mcp, multi-agent, orchestration, …), not in Core.
+Domain contracts live **inside harness domains** (memory, mcp, delegation, orchestration, …), not in Core.
 
 ### Layer 2: Harness — 10 product domains + cross-cutting/infrastructure
 
@@ -434,20 +434,26 @@ subsystems/
 
 **Supported sources**: framework built-ins, user-defined, npm packages (`@octopi-agent/subsystem-*` / `octopi-subsystem-*`)
 
-### 3.10 Multi-Agent orchestration
+### 3.10 Delegation (multi-Agent orchestration)
 
-**Responsibility**: Agent registration and discovery, multi-Agent collaborative orchestration, traceable Agent processes.
+**Responsibility**: delegate a task to another agent as a message contract — non-blocking, batchable, traceable, result-collectable. Agent registration and discovery.
 
 ```
-harness/collaboration/multi-agent/
+harness/collaboration/delegation/
+├── types.ts              # Delegation / DelegateRequest / DelegateResult (pure JSON, D1/D5)
+├── registry-types.ts     # AgentRegistry contract + AgentDelegationPolicy
 ├── registry.ts           # DefaultAgentRegistry
-├── swarm.ts              # AgentSwarm + orchestration strategies
-├── process.ts            # AgentProcess / spawn / fork
-├── types.ts
+├── store.ts              # DelegationStore — sole write entry
+├── transport.ts          # DelegateTransport + InProcessTransport (the only distributed seam)
+├── service.ts            # DelegateService — non-blocking orchestration
+├── child-run.ts          # RunnerChildRunPort — supervised child run (D7/D8)
+├── notifier.ts           # notify channel (reuses AgentSignalSource)
+├── wiring.ts             # createDelegationRuntime / wireDelegation
+├── message-channel-types.ts
 └── index.ts
 ```
 
-Core interfaces: none (contracts live in `harness/collaboration/multi-agent/agent-registry-types.ts`).
+Core interfaces: none (contracts live in `harness/collaboration/delegation/registry-types.ts`). `DelegateTransport` is the only distributed seam — v1 ships `InProcessTransport` only.
 
 Orthogonal to Autonomous Subsystem: Multi-Agent governs “how multiple Agent instances collaborate”; Autonomous Subsystem governs “how a subsystem senses and writes back to the main system”.
 
@@ -519,13 +525,13 @@ The Gateway message path goes through `runtime.dispatch`; SessionGate is the onl
 
 ```
 harness/collaboration/orchestration/
-├── workflow/             # WorkflowEngine — DAG orchestration
-├── scheduler/            # TaskScheduler
-├── planner/              # Rule/LLM/Hybrid planner
-├── strategy/             # task classification + strategy routing
-├── quality/              # OutputQualityGate
 ├── reflector/            # LLMReflector
+├── cognitive-loop.ts     # Planner/Reflector/ExecutionRecord/AgentState contracts
 └── index.ts
+
+> Scope narrowed 2026-10-17: `workflow/` / `scheduler/` / `planner/` / `strategy/` /
+> `quality/` / `async-task*` were removed — execution semantics now live in
+> `collaboration/delegation/` (see `arch/delegation.md` §12 and `arch/domain-split.md` §6b).
 ```
 
 Domain split: [`docs/domains.md`](./domains.md).
@@ -695,12 +701,12 @@ Session save: full messages + contextCompact snapshot
 | `SessionStore<T>` | `core/interfaces/session-store.ts` | JsonlSessionStore, InMemorySessionStore |
 | `SessionHistoryPort` | `harness/session/history/` | DefaultSessionHistoryPort (`session_search` / `session_read`) |
 | `SessionIndexBackend` | `integration/storage/session-index.ts` | SqliteSessionIndex (rebuildable projection, not authoritative) |
-| `AsyncTaskStore` | `harness/collaboration/orchestration/async-task-store.ts` | orchestration |
 | `RunGuard` | `core/interfaces/run-guard.ts` | DefaultRunGuard |
-| `AgentRegistry` | `harness/collaboration/multi-agent/agent-registry-types.ts` | DefaultAgentRegistry |
+| `AgentRegistry` | `harness/collaboration/delegation/registry-types.ts` | DefaultAgentRegistry |
+| `DelegateTransport` | `harness/collaboration/delegation/transport.ts` | InProcessTransport |
 | `McpClient` | `harness/extension/plugin-ecosystem/mcp/types.ts` | SdkMcpClient |
 | `EventSource` | `harness/activation/event-source-types.ts` | — |
-| `MessageChannel` | `harness/collaboration/multi-agent/message-channel-types.ts` | — |
+| `MessageChannel` | `harness/collaboration/delegation/message-channel-types.ts` | — |
 | `MemoryStore` etc. | `harness/memory/types.ts` | InMemory / Sqlite |
 | `KnowledgeCatalogProvider` | `harness/knowledge/types.ts` | (Tier 0 catalog) |
 | Knowledge Service / Client | `harness/knowledge/{http-app,serve,client}.ts` | sole writer of `knowledge.db`; Gateway does not open the db |
@@ -857,7 +863,7 @@ The Gateway serve path is assembled via `builder.build()`; governance-type subsy
 - `docs/plugin-system.md` — Plugin system detailed documentation
 - `docs/task-system.md` — SessionTask design baseline
 - `docs/session-schedules.md` — SessionSchedule / timer_* / schedule_* baseline
-- `docs/domains.md` — product domains and module ownership (run-guard / orchestration / AsyncTask see the Collaboration / Run domains)
+- `docs/domains.md` — product domains and module ownership (run-guard / delegation / orchestration see the Collaboration / Run domains)
 - `docs/CONTRIBUTING.md` — development guidelines
 - `docs/context-layer-contracts.md` — ContextLayer / Assembler contracts
 - `packages/webui/DESIGN.md` — WebUI (Playground) visual and eight-layer inspector design

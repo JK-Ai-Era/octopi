@@ -69,6 +69,7 @@ export class JsonlSessionStore implements SessionStore<SessionData> {
     primaryAgentId?: string;
     preferredAgentId?: string;
     switchAudit?: SessionData['switchAudit'];
+    spawnBy?: SessionData['spawnBy'];
     participants?: SessionData['participants'];
     contextDetachIndex?: SessionData['contextDetachIndex'];
     contextCompact?: SessionData['contextCompact'];
@@ -156,6 +157,7 @@ export class JsonlSessionStore implements SessionStore<SessionData> {
       primaryAgentId?: string;
       preferredAgentId?: string;
       switchAudit?: SessionData['switchAudit'];
+      spawnBy?: SessionData['spawnBy'];
       participants?: SessionData['participants'];
       contextDetachIndex?: SessionData['contextDetachIndex'];
       contextCompact?: SessionData['contextCompact'];
@@ -186,6 +188,7 @@ export class JsonlSessionStore implements SessionStore<SessionData> {
       primaryAgentId: state.primaryAgentId ?? meta?.primaryAgentId ?? agentId,
       preferredAgentId: state.preferredAgentId ?? meta?.preferredAgentId,
       switchAudit: state.switchAudit,
+      spawnBy: state.spawnBy,
       participants: state.participants,
       contextDetachIndex: state.contextDetachIndex,
       contextCompact: state.contextCompact,
@@ -272,6 +275,7 @@ export class JsonlSessionStore implements SessionStore<SessionData> {
         primaryAgentId: data.primaryAgentId ?? data.agentId,
         preferredAgentId: data.preferredAgentId,
         switchAudit: data.switchAudit ?? [],
+        spawnBy: data.spawnBy,
         participants: data.participants ?? [],
         contextDetachIndex: data.contextDetachIndex,
         contextCompact: data.contextCompact,
@@ -328,6 +332,7 @@ export class JsonlSessionStore implements SessionStore<SessionData> {
         primaryAgentId: prev?.primaryAgentId,
         preferredAgentId: prev?.preferredAgentId,
         switchAudit: prev?.switchAudit ?? [],
+        spawnBy: prev?.spawnBy,
         participants: prev?.participants ?? [],
         contextCompact: prev?.contextCompact,
         contextCompacts: prev?.contextCompacts,

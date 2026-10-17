@@ -150,7 +150,7 @@ packages/core/src/core/
 
 产品事件词表在 `harness/shared/events/`（AgentEventMap / AgentEvents / scenario-events）。
 
-Domain 契约在 **harness 领域内**（memory、mcp、multi-agent、orchestration…），不在 Core。
+Domain 契约在 **harness 领域内**（memory、mcp、delegation、orchestration…），不在 Core。
 
 ### Layer 2: Harness — 10 个产品域 + 横切/基建
 
@@ -436,20 +436,26 @@ subsystems/
 
 **支持来源**：框架内置、用户自定义、npm 包（`@octopi-agent/subsystem-*` / `octopi-subsystem-*`）
 
-### 3.10 Multi-Agent — 多 Agent 编排
+### 3.10 Delegation — 委派（多 Agent 编排）
 
-**职责**：Agent 注册与发现、多 Agent 协作编排、可追踪的 Agent 进程。
+**职责**：把任务以**消息契约**委派给另一个 agent —— 非阻塞、可批量、可追踪、可回收结果。外加 Agent 注册与发现。
 
 ```
-harness/collaboration/multi-agent/
+harness/collaboration/delegation/
+├── types.ts              # Delegation / DelegateRequest / DelegateResult（纯 JSON，D1/D5）
+├── registry-types.ts     # AgentRegistry 契约 + AgentDelegationPolicy
 ├── registry.ts           # DefaultAgentRegistry
-├── swarm.ts              # AgentSwarm + 编排策略
-├── process.ts            # AgentProcess / spawn / fork
-├── types.ts
+├── store.ts              # DelegationStore — 唯一写入口
+├── transport.ts          # DelegateTransport + InProcessTransport（唯一分布式缝）
+├── service.ts            # DelegateService — 非阻塞编排
+├── child-run.ts          # RunnerChildRunPort — 受监督子 Run（D7/D8）
+├── notifier.ts           # notify 通道（复用 AgentSignalSource）
+├── wiring.ts             # createDelegationRuntime / wireDelegation
+├── message-channel-types.ts
 └── index.ts
 ```
 
-Core 接口：无（契约在 `harness/collaboration/multi-agent/agent-registry-types.ts`）。
+Core 接口：无（契约在 `harness/collaboration/delegation/registry-types.ts`）。`DelegateTransport` 是唯一分布式缝——v1 只提供 `InProcessTransport`。
 
 与 Autonomous Subsystem 正交：Multi-Agent 管「多个 Agent 实例如何协作」；Autonomous Subsystem 管「子系统如何感知并回写主系统」。
 
@@ -521,13 +527,13 @@ Gateway 消息路径经 `runtime.dispatch`；SessionGate 为唯一并发硬闸�
 
 ```
 harness/collaboration/orchestration/
-├── workflow/             # WorkflowEngine — DAG 编排
-├── scheduler/            # TaskScheduler
-├── planner/              # Rule/LLM/Hybrid planner
-├── strategy/             # 任务分类 + 策略路由
-├── quality/              # OutputQualityGate
 ├── reflector/            # LLMReflector
+├── cognitive-loop.ts     # Planner/Reflector/ExecutionRecord/AgentState 契约
 └── index.ts
+
+> 2026-10-17 范围收窄：`workflow/` / `scheduler/` / `planner/` / `strategy/` /
+> `quality/` / `async-task*` 已移除——执行语义改由 `collaboration/delegation/` 承接
+> （见 `arch/delegation.md` §12 与 `arch/domain-split.md` §6b）。
 ```
 
 领域切分见 [`docs/domains.zh.md`](./domains.zh.md)。
@@ -697,12 +703,12 @@ Session save：全量 messages + contextCompact 快照
 | `SessionStore<T>` | `core/interfaces/session-store.ts` | JsonlSessionStore, InMemorySessionStore |
 | `SessionHistoryPort` | `harness/session/history/` | DefaultSessionHistoryPort（`session_search` / `session_read`） |
 | `SessionIndexBackend` | `integration/storage/session-index.ts` | SqliteSessionIndex（可重建投影，非权威） |
-| `AsyncTaskStore` | `harness/collaboration/orchestration/async-task-store.ts` | orchestration |
 | `RunGuard` | `core/interfaces/run-guard.ts` | DefaultRunGuard |
-| `AgentRegistry` | `harness/collaboration/multi-agent/agent-registry-types.ts` | DefaultAgentRegistry |
+| `AgentRegistry` | `harness/collaboration/delegation/registry-types.ts` | DefaultAgentRegistry |
+| `DelegateTransport` | `harness/collaboration/delegation/transport.ts` | InProcessTransport |
 | `McpClient` | `harness/extension/plugin-ecosystem/mcp/types.ts` | SdkMcpClient |
 | `EventSource` | `harness/activation/event-source-types.ts` | — |
-| `MessageChannel` | `harness/collaboration/multi-agent/message-channel-types.ts` | — |
+| `MessageChannel` | `harness/collaboration/delegation/message-channel-types.ts` | — |
 | `MemoryStore` 等 | `harness/memory/types.ts` | InMemory / Sqlite |
 | `KnowledgeCatalogProvider` | `harness/knowledge/types.ts` | （Tier 0 catalog） |
 | Knowledge Service / Client | `harness/knowledge/{http-app,serve,client}.ts` | 唯一写 `knowledge.db`；Gateway 不 open db |
@@ -859,7 +865,7 @@ Gateway serve 路径经 `builder.build()` 装配；治理类子系统 signal 仅
 - `docs/plugin-system.zh.md` — Plugin 系统详细文档
 - `docs/task-system.zh.md` — SessionTask 设计基准
 - `docs/session-schedules.zh.md` — SessionSchedule / timer_* / schedule_* 基准
-- `docs/domains.zh.md` — 产品域与模块归属（run-guard / orchestration / AsyncTask 见 Collaboration / Run 域）
+- `docs/domains.zh.md` — 产品域与模块归属（run-guard / delegation / orchestration 见 Collaboration / Run 域）
 - `docs/CONTRIBUTING.zh.md` — 开发规范
 - `docs/context-layer-contracts.zh.md` — ContextLayer / Assembler 契约
 - `packages/webui/DESIGN.md` — WebUI（Playground）视觉与八层检查器设计

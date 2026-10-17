@@ -385,6 +385,16 @@ export interface AgentBuildResult {
   /** 子系统运行时（memory.steward.* 等）；无子系统时为 undefined */
   runtime?: import('../collaboration/autonomous-subsystem/runtime.js').SubsystemRuntime;
   events: EventBus;
+  /** SessionStore（委派子 Run 预创建 child session 用；`arch/delegation.md` D7） */
+  store: SessionStore<SessionData>;
+  /**
+   * 后置注册工具（build 之后追加）。
+   *
+   * 走 `convertToAgentTool` + `Agent.registerTool`，后者会同步
+   * SecurityGuard 的未注册工具硬边界名单，安全面保持一致。
+   * 供委派 `delegate_*` 等运行期才可构造的工具使用。
+   */
+  registerTools: (tools: RegisteredTool[]) => void;
   /** ContextEngine 实例（手动压缩入口） */
   contextEngine?: import('../context/types.js').ContextEngine;
   contextHealth: (agentId?: string) => Promise<import('../context/layer-health.js').ContextLayerHealth>;
@@ -1546,6 +1556,15 @@ export class AgentBuilder {
         this._personaResolver,
     );
 
+    // 后置注册工具：走 convertToAgentTool + Agent.registerTool（自带 security 名单同步）
+    const registerTools = (tools: RegisteredTool[]): void => {
+      for (const t of tools) {
+        if (this._toolBus.getTool(t.definition.name)) continue;
+        this._toolBus.register(t);
+        agent.registerTool(convertToAgentTool(t, this._contextProvider));
+      }
+    };
+
     return {
       agent,
       harness,
@@ -1553,6 +1572,8 @@ export class AgentBuilder {
       mcpManager,
       runtime: subsystemRuntime,
       events,
+      store,
+      registerTools,
       contextEngine,
       contextHealth: async (agentId?: string) => {
         const { probeContextLayerHealth } = await import('../context/layer-health.js');

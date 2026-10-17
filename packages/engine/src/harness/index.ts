@@ -210,9 +210,58 @@ export type { McpClientFactory, McpManagerCallbacks, McpClient, McpManager, McpS
 export type { WebSearchProvider, WebSearchOptions, WebSearchResponse } from './extension/plugin-ecosystem/tools/web-search-types.js';
 
 // ── Multi-Agent ──
-export { DefaultAgentRegistry, AgentSwarm, RoundRobinStrategy, CapabilityStrategy, PipelineStrategy, SwarmEvents, AgentProcess, spawnAgentProcess, forkAgentProcess, AgentProcessEvents } from './collaboration/multi-agent/index.js';
-export type { SwarmTopology, SwarmConfig, SwarmAgent, SwarmTask, OrchestrationStrategy, AgentProcessState, AgentProcessResult, AgentProcessAnnounce, AgentProcessConfig, AgentRegistry, AgentInfo, AgentQuery, AgentRelation } from './collaboration/multi-agent/index.js';
-export { AgentRegistryEvents } from './collaboration/multi-agent/agent-registry-types.js';
+// ── Delegation（L2 委派契约层；arch/delegation.md）──
+export {
+  DefaultAgentRegistry,
+  DelegationStore,
+  DelegateService,
+  DelegateResolutionError,
+  InProcessTransport,
+  assertCompatibleSchema,
+  RunnerChildRunPort,
+  createChildRunExecutor,
+  buildChildSystemPrompt,
+  DEFAULT_DELEGATION_DIRECTIVE,
+  createDelegationNotifier,
+  renderDelegationNotice,
+  delegationReason,
+  wireDelegation,
+  createDelegationRuntime,
+  AgentRegistryEvents,
+  DelegationEvents,
+  DELEGATION_SCHEMA_VERSION,
+  isTerminalDelegationStatus,
+  isActiveDelegationStatus,
+} from './collaboration/delegation/index.js';
+export type {
+  Delegation,
+  DelegationStatus,
+  DelegationBudget,
+  DelegationContextMode,
+  DelegationParentRef,
+  DelegationTarget,
+  DelegateRequest,
+  DelegateResult,
+  AgentHandle,
+  AgentRegistry,
+  AgentInfo,
+  AgentQuery,
+  AgentRelation,
+  AgentRelationType,
+  AgentDelegationPolicy,
+  DelegateTransport,
+  LocalDelegateExecutor,
+  ChildRunPort,
+  ChildRunInput,
+  ChildRunOutput,
+  ChildRunTarget,
+  DelegatableAgent,
+  DelegationRuntime,
+  DelegationRuntimeOptions,
+  DispatchDelegationInput,
+  DelegateServiceConfig,
+  DelegationNotifier,
+} from './collaboration/delegation/index.js';
 
 // ── HITL / Execution Environment ──
 export type { HitlDecision } from '@octopi-agent/core/types/tools.js';
@@ -222,7 +271,7 @@ export {
   resolveHitlDecision,
 } from './governance/human-in-the-loop/decision-cache.js';
 export type { HitlChannel, HitlCacheScope } from './governance/human-in-the-loop/decision-cache.js';
-export type { MessageChannel, ProcessMessage, MessageHandler } from './collaboration/multi-agent/message-channel-types.js';
+export type { MessageChannel, ProcessMessage, MessageHandler } from './collaboration/delegation/message-channel-types.js';
 export type { SandboxProvider, Workspace, SandboxResult, IsolationLevel } from './extension/execution-environment/types.js';
 export type { EventSource, EventSourceDescriptor, ExternalEvent } from './activation/event-source-types.js';
 
@@ -537,7 +586,5 @@ export { createSessionStateMachine } from './session/state-machine.js';
 export { AgentEvents } from './shared/events/agent-event-map.js';
 export type { AgentEventMap, KnownAgentEventType, TypedAgentEvent } from './shared/events/agent-event-map.js';
 export type { LoopEndReason, AgentEventDetail, AgentEventListener } from './shared/events/scenario-events.js';
-export { AsyncTask, TaskTimeoutError, TaskCancelledError, spawnTask, TaskEvents } from './collaboration/orchestration/async-task.js';
-export type { TaskOptions, TaskExecutor } from './collaboration/orchestration/async-task.js';
-export type { AsyncTaskStore, AsyncTaskRecord, AsyncTaskStatus, AsyncTaskPriority, AsyncTaskFilter } from './collaboration/orchestration/async-task-store.js';
+// （AsyncTask / AsyncTaskStore 已随 orchestration 收窄删除，见 arch/delegation.md §12.2）
 export * from './run/budget/index.js';
