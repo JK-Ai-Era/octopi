@@ -810,7 +810,11 @@ export class DefaultContextEngine implements ContextEngine {
   /**
    * 压缩存储
    *
-   * - force / 无 tokenBudget：可走结构压缩（compactStructural）
+   * 本引擎不持有消息存储（历史由调用方管理，ingest 为 no-op），无法真正压缩消息：
+   * 达到门槛（force / 阈值）时只**重置压缩状态**（下次 assemble 重建视图），
+   * 结果如实报告 `compacted: false` + `reason='state_reset'`。真正压缩消息走 compactStructural。
+   *
+   * - force / 门槛达标：重置压缩状态
    * - 有 tokenBudget 且非 force：低于阈值跳过
    * - 窗口未知且非 force、无 target：跳过自动压缩
    */
@@ -864,8 +868,8 @@ export class DefaultContextEngine implements ContextEngine {
 
     return {
       ok: true,
-      compacted: true,
-      reason: force ? 'forced' : 'threshold',
+      compacted: false,
+      reason: `state_reset (${force ? 'forced' : 'threshold'}); holds no message storage - use compactStructural to compress messages`,
       tokensBefore,
     };
   }

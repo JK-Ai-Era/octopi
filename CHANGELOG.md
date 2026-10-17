@@ -1,3 +1,13 @@
+## v0.83.7
+
+### fix(engine): report state reset honestly in DefaultContextEngine.compact
+
+**问题**：`DefaultContextEngine.compact()` 达到门槛（force/阈值）时只做 `states.delete` 重置压缩状态，却返回 `compacted: true` 谎报「已压缩」——该引擎不持有消息存储（历史由调用方管理、`ingest` 为 no-op），此入口根本没有压缩消息的能力（假承诺，违反 no-fake-stubs 纪律）。生产手动压缩走 `compactStructural` / runner `compactSession`，此契约入口当前仅有测试消费。
+
+**修正**：门槛达标时如实返回 `compacted: false` + `reason: 'state_reset (forced|threshold); …'`，JSDoc 写明能力边界（只重置状态、真正压缩走 `compactStructural`）；测试改为描述该诚实行为（结果语义 = 状态重置而非压缩）。
+
+**另议**：`ContextEngine.compact` 契约口在生产无消费方，是否直接从端口移除（内部研发期不做兼容 shim）待定。
+
 ## v0.83.6
 
 ### fix(engine): make proactive compaction produce semantic summaries and gate recompaction honestly

@@ -852,7 +852,7 @@ describe('DefaultContextEngine', () => {
   });
 
   describe('compact', () => {
-    it('should compact when forced', async () => {
+    it('should reset compact state on force and report no compaction honestly', async () => {
       // First assemble to create state
       await engine.assemble({
         sessionId: 'test',
@@ -869,6 +869,9 @@ describe('DefaultContextEngine', () => {
       });
 
       expect(result.ok).toBe(true);
+      // 本引擎不持有消息存储：force 只重置压缩状态，不得谎报已压缩（真正压缩走 compactStructural）
+      expect(result.compacted).toBe(false);
+      expect(result.reason).toMatch(/state_reset/);
     });
 
     it('should not compact when under threshold', async () => {
