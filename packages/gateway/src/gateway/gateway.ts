@@ -1951,6 +1951,9 @@ export class Gateway {
     turnCount: number;
     taskCount?: number;
     abortedTurn?: { userMessageIndex: number; at?: number };
+    /** 最近一次 LLM 调用的上下文用量（runner 持久化；UI 重开会话恢复显示） */
+    contextTokens?: number;
+    contextWindow?: number;
   } | null> {
     const session = await this.store.load(sessionId);
     if (!session) return null;
@@ -1975,12 +1978,16 @@ export class Gateway {
         abortedTurn = raw;
       }
     }
+    const metaContextTokens = session.metadata?.contextTokens;
+    const metaContextWindow = session.metadata?.contextWindow;
     return {
       meta: session.meta,
       messageCount: session.messages.length,
       turnCount: session.turns.length,
       taskCount: session.tasks?.length ?? 0,
       abortedTurn,
+      contextTokens: typeof metaContextTokens === 'number' ? metaContextTokens : undefined,
+      contextWindow: typeof metaContextWindow === 'number' ? metaContextWindow : undefined,
     };
   }
 

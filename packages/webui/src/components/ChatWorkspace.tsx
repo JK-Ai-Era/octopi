@@ -19,9 +19,6 @@ import type { RunStatus, InspectorState } from '@octopi-agent/gateway/web/runtim
 import type { SessionTaskView, SessionScheduleView, ModelCatalog, SessionModelView, CommandCatalogItemDto, PendingQuestion, PendingApproval, ApprovalScope, ClientToolCallDto, ClientToolDescriptorDto } from '@octopi-agent/gateway/web/sdk/client';
 import { ClientToolCallCard, WebViewPreview, type RenderedWebView } from './ClientToolCallCard';
 import { FileCard, FilePreviewPanel, fileRefFromCall, fileRefFromToolResult, type FileRef } from './FileDelivery';
-// 浏览器侧直连 token 模块（不经 harness barrel / context/index，避免拉入 Node 专用依赖）
-import { estimateTextTokens } from '@octopi-agent/engine/harness/context/token-estimator';
-import { JSON_CHARS_PER_TOKEN } from '@octopi-agent/engine/harness/context/token-constants';
 import { looksLikeCodeOrMarkup } from '@octopi-agent/engine/harness/session/title';
 import { resolveDefaultBase } from '../gateway-base';
 
@@ -114,33 +111,6 @@ function formatTokens(n: number | undefined | null): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}m`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
   return String(n);
-}
-
-function estimateConversationTokens(items: ConversationItem[]): number {
-  let total = 0;
-  for (const item of items) {
-    switch (item.role) {
-      case 'user':
-        total += estimateTextTokens((item as UserConversationItem).content ?? '');
-        break;
-      case 'assistant':
-        total += estimateTextTokens((item as AssistantConversationItem).content ?? '');
-        break;
-      case 'tool': {
-        const t = item as ToolConversationItem;
-        total += estimateTextTokens(t.toolName ?? '');
-        total += estimateTextTokens(t.summary ?? '');
-        const argsStr = typeof t.args === 'string' ? t.args : t.args != null ? JSON.stringify(t.args) : '';
-        total += Math.ceil(argsStr.length / JSON_CHARS_PER_TOKEN);
-        const resultStr = typeof t.result === 'string' ? t.result : t.result != null ? JSON.stringify(t.result) : '';
-        total += Math.ceil(resultStr.length / JSON_CHARS_PER_TOKEN);
-        break;
-      }
-      default:
-        break;
-    }
-  }
-  return total;
 }
 
 function formatTimestamp(ts: number | undefined | null): string {
@@ -1550,9 +1520,9 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
   const hiddenSessionCount = agentSessions.length - displayedSessions.length;
 
   const isReconnecting = connection === 'reconnecting';
-  const contextTokens = typeof inspector.contextTokens === 'number'
-    ? inspector.contextTokens
-    : conversationItems.length > 0 ? estimateConversationTokens(conversationItems) : undefined;
+  // 只显示引擎真值（turn.end usage / 持久化恢复）；无值时不猜（新会话/未对话显示 '~'）。
+  // 不用「已加载消息」估算——那只是末页 100 条，会把 400k 的会话显示成 21.6k 误导人。
+  const contextTokens = typeof inspector.contextTokens === 'number' ? inspector.contextTokens : undefined;
   // 预算展示：只读引擎下发的 snapshot（catalog / sessionModel.resolved），UI 不做策略
   const selectedModelMeta =
     (sessionModel?.resolved?.id === effectiveModelId ? sessionModel.resolved : undefined)

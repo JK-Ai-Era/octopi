@@ -1,3 +1,18 @@
+## v0.83.5
+
+### fix(engine,gateway,webui): persist context usage so reopening a session shows the real number
+
+**问题**：重开会话后「上下文: 21.6k / 1.0m」显示错误，要再对话一次才正确。根因：① `turn.end` 的 `contextTokens`（usage 报告值/全量估算）只活在内存事件里，从未持久化，重启/冷打开无从恢复；② UI fallback 用 `estimateConversationTokens(conversationItems)` 充数，而 `conversationItems` 只是打开会话时拉的**末页 100 条**（`HISTORY_PAGE_SIZE=100`）——21.6k 就是末页消息的文本估算，400k 的历史其余部分、system prompt、工具定义全没算。
+
+**修正**：
+
+- **runner 收尾持久化**：`turn.end` 口径的 `contextTokens` / `contextWindow`（usage 报告值 ?? 分项和 ?? 全量估算）写入 `session.metadata`——与 save 同笔零额外 IO；**只记 turn.end 账**，compact 视图值不写入（口径守护有测试钉住）
+- **恢复链路**：`getSessionView` 带出两字段 → `SessionView` DTO → `openSession` 恢复进 inspector（持久值作底、运行时缓存优先覆盖）
+- **UI 不猜**：fallback 改为直接 `~`（大哥拍板），删除「末页消息估算」的 `estimateConversationTokens`——不再显示误导性数字
+- 回归测试 `tests/harness/context-usage-persist.test.ts`（真 `JsonlSessionStore` 换新实例重读、事件值与持久值同源一致、无 usage 时兜底估算也持久化、compact 口径守护）
+
+**顺带发现（另议）**：既有 `context-lease` 测试的 `runOnce` 在 `engine.end` 时 break，generator 提前回收**跳过 `store.save`**，其断言读的是内存对象引用突变（假绿）。新测试已改为完整耗尽 generator；旧测试的断言方式待加固。
+
 ## v0.83.4
 
 ### fix(engine): cast legacy turn payloads through unknown in slimTurns

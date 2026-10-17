@@ -924,7 +924,12 @@ export class OctopiRuntimeStore extends EventTarget {
       clientToolCalls,
       clientStreams: [],
       clientStreamSamples: new Map(),
-      inspector: cached?.inspector ? { ...cached.inspector } : {},
+      inspector: {
+        // 持久化的最近一次真值作底（重启/冷打开恢复显示）；运行时缓存（更新）优先
+        ...(typeof view.contextTokens === 'number' ? { contextTokens: view.contextTokens } : {}),
+        ...(typeof view.contextWindow === 'number' ? { contextWindow: view.contextWindow } : {}),
+        ...(cached?.inspector ?? {}),
+      },
       tasks,
       schedules,
     };

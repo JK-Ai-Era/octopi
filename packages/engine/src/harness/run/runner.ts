@@ -1359,6 +1359,9 @@ export class SessionAwareRunner {
       // 10. 运行 Agent（Agent.run = reliability 包装；context/runScope 为本 Run 私有）
       let streamedContent = '';
       let lastUsage: import('@octopi-agent/core/types/turn.js').TokenUsage | undefined = undefined;
+      /** 最近一次 turn.end 的上下文用量（供收尾持久化；compact 视图值不进此账） */
+      let lastContextTokens: number | undefined = undefined;
+      let lastContextWindow: number | undefined = undefined;
       const meta = { agentId: effectiveRunConfig.agentId ?? 'default', sessionId };
       const adaptState: { assistantContent: string; lastUserContent: string; stopReason?: string } = { assistantContent: '', lastUserContent: '' };
       /** 本轮起始消息下标（afterTurn 只传增量） */
@@ -1389,13 +1392,17 @@ export class SessionAwareRunner {
             if (rawUsage) {
               lastUsage = rawUsage;
             }
-            (adapted.data as Record<string, unknown>).contextTokens =
+            const contextTokens =
               lastUsage?.inputReportedTokens ??
               (lastUsage
                 ? lastUsage.inputUncachedTokens + lastUsage.inputCachedTokens + lastUsage.inputCacheWriteTokens
                 : undefined) ??
               estimator.estimateMessages(session.messages);
+            (adapted.data as Record<string, unknown>).contextTokens = contextTokens;
             (adapted.data as Record<string, unknown>).contextWindow = effectiveRunConfig.contextWindow;
+            // 记账供收尾持久化：UI 重开会话恢复显示（口径 = 实际 prompt / 全量估算）
+            lastContextTokens = contextTokens;
+            lastContextWindow = effectiveRunConfig.contextWindow;
           }
 
           yield adapted;
@@ -1546,6 +1553,15 @@ export class SessionAwareRunner {
       // 压缩状态写回 Session（E4 分桶 + primary 兼容视图）
       const compactSnap = this.agent.getSessionCompactState(sessionId, _agentId);
       writeSessionCompact(session, _agentId, compactSnap);
+      // 上下文用量随会话持久化：重开会话恢复显示（不靠 UI 用末页消息猜）。
+      // 只记 turn.end 口径（实际 prompt / 全量估算）；compact 视图值不写入。
+      if (lastContextTokens !== undefined || lastContextWindow !== undefined) {
+        session.metadata = {
+          ...session.metadata,
+          ...(lastContextTokens !== undefined ? { contextTokens: lastContextTokens } : {}),
+          ...(lastContextWindow !== undefined ? { contextWindow: lastContextWindow } : {}),
+        };
+      }
       await this.store.save(sessionId, session);
       if (clearAbortedTurn && this.store.updateMetadata) {
         await this.store.updateMetadata(sessionId, (meta) => {

@@ -116,6 +116,9 @@ export interface SessionView {
   taskCount?: number;
   /** 被中止的轮（编辑重发入口）；userMessageIndex 为 session.messages 下标 */
   abortedTurn?: { userMessageIndex: number; at?: number };
+  /** 最近一次 LLM 调用的上下文用量（runner 持久化；重开会话恢复显示，不再用末页消息估算） */
+  contextTokens?: number;
+  contextWindow?: number;
 }
 
 /** 会话任务（UI 只读）*/
