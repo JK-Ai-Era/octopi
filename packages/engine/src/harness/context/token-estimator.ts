@@ -19,6 +19,7 @@ import {
   estimateContentBlock,
   estimateToolCallTokens,
 } from './token-estimate-fns.js';
+import { toolResultBody } from './tool-result-body.js';
 import {
   TOOL_RESULT_CHARS_PER_TOKEN,
   JSON_CHARS_PER_TOKEN,
@@ -27,6 +28,14 @@ import {
 
 // Re-export for callers that only need text estimation
 export { estimateTextTokens } from './token-estimate-fns.js';
+
+/**
+ * 消息级 token 估算缓存（模块级：estimator 实例众多，实例级缓存无命中率）。
+ *
+ * 安全前提：消息内容写入后不可变（估算只读 content/toolCalls/toolResults）。
+ * 估算对同一消息是纯函数，跨实例结果必须一致。
+ */
+const messageTokensCache = new WeakMap<Message, number>();
 
 /**
  * 启发式 Token 估算器实现
@@ -42,6 +51,9 @@ export class HeuristicTokenEstimator implements TokenEstimator {
    * @returns 估算 token 数
    */
   estimateMessage(message: Message): number {
+    const cached = messageTokensCache.get(message);
+    if (cached !== undefined) return cached;
+
     let tokens = MESSAGE_OVERHEAD_TOKENS;
 
     if (typeof message.content === 'string') {
@@ -59,16 +71,12 @@ export class HeuristicTokenEstimator implements TokenEstimator {
     // 工具结果用更密集的比率（chars/2）
     if (message.toolResults) {
       for (const tr of message.toolResults) {
-        const body =
-          tr.error !== undefined
-            ? JSON.stringify({ error: tr.error })
-            : typeof tr.result === 'string'
-              ? tr.result
-              : JSON.stringify(tr.result ?? null);
+        const body = toolResultBody(tr);
         tokens += Math.ceil(estimateAdjustedChars(body) / TOOL_RESULT_CHARS_PER_TOKEN);
       }
     }
 
+    messageTokensCache.set(message, tokens);
     return tokens;
   }
 

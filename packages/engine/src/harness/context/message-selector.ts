@@ -141,6 +141,7 @@ export class DefaultMessageSelector implements MessageSelector {
     estimator: TokenEstimator,
   ): Message[] {
     const selected: Message[] = [];
+    const selectedSet = new Set<Message>();
     let usedTokens = 0;
 
     for (let i = 0; i < messages.length; i++) {
@@ -153,7 +154,7 @@ export class DefaultMessageSelector implements MessageSelector {
         const prevMsg = messages[i - 1];
         if (this.hasToolCall(prevMsg)) {
           // 确保 tool_call 已被选中
-          const prevInSelected = selected.includes(prevMsg);
+          const prevInSelected = selectedSet.has(prevMsg);
           if (!prevInSelected) {
             // tool_call 未被选中，跳过 tool_result
             continue;
@@ -166,6 +167,7 @@ export class DefaultMessageSelector implements MessageSelector {
       }
 
       selected.push(msg);
+      selectedSet.add(msg);
       usedTokens += msgTokens;
     }
 
@@ -183,6 +185,7 @@ export class DefaultMessageSelector implements MessageSelector {
     estimator: TokenEstimator,
   ): Message[] {
     const selected: Message[] = [];
+    const selectedSet = new Set<Message>();
     let usedTokens = 0;
 
     for (let i = messages.length - 1; i >= 0; i--) {
@@ -194,7 +197,7 @@ export class DefaultMessageSelector implements MessageSelector {
         const nextMsg = messages[i + 1];
         if (this.isToolResult(nextMsg)) {
           // 确保 tool_result 已被选中
-          const nextInSelected = selected.includes(nextMsg);
+          const nextInSelected = selectedSet.has(nextMsg);
           if (!nextInSelected) {
             // tool_result 未被选中，跳过 tool_call
             continue;
@@ -207,6 +210,7 @@ export class DefaultMessageSelector implements MessageSelector {
       }
 
       selected.unshift(msg);
+      selectedSet.add(msg);
       usedTokens += msgTokens;
     }
 

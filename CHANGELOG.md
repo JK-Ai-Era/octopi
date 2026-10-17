@@ -1,3 +1,16 @@
+## v0.83.3
+
+### perf(engine): cache token estimates and tool-result serialization
+
+**问题**：每次 LLM 调用（含每个工具回合）的 context 装配对全历史做 5+ 遍全量处理，其中 `estimateMessage` 对每条 `toolResults` 每次重新 `JSON.stringify` 并全文正则扫描，`buildLlmMessages` / 压缩器 / 摘要格式化又各自重复序列化同一批工具结果；`DefaultMessageSelector` 的 `selected.includes()` 为 O(n²)。
+
+**修正**：
+
+- 新增 `tool-result-body.ts`：工具结果正文序列化 WeakMap 缓存（消息内容写入后不可变是全库已核实的前提——无原地修改 content/toolCalls/toolResults，压缩器一律新建对象），四处重复 `JSON.stringify` 收敛到一处
+- `HeuristicTokenEstimator.estimateMessage` 消息级 WeakMap 缓存（模块级，跨 estimator 实例纯函数语义不变）
+- `DefaultMessageSelector` 边界对齐检查 `includes` → `Set`
+- 回归测试 `tests/harness/token-estimate-cache.test.ts`：缓存结果与绕过缓存的独立手算公式一致、跨实例一致
+
 ## v0.83.2
 
 ### perf(engine): make session index upsert incremental

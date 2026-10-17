@@ -21,6 +21,7 @@ import type {
   SummarizeFunction,
 } from './types.js';
 import { HeuristicTokenEstimator } from './token-estimator.js';
+import { toolResultBody } from './tool-result-body.js';
 
 /**
  * 结构化摘要模板
@@ -205,15 +206,7 @@ export class LLMSummaryCompressor implements Compressor {
       } else if (msg.role === 'tool' && msg.toolResults?.length) {
         // 工具结果消息（含 error，避免摘要丢失失败信息）
         const resultsStr = msg.toolResults
-          .map(tr => {
-            const body =
-              tr.error !== undefined
-                ? JSON.stringify({ error: tr.error })
-                : typeof tr.result === 'string'
-                  ? tr.result
-                  : JSON.stringify(tr.result ?? null);
-            return `  - ${tr.name}: ${body}`;
-          })
+          .map(tr => `  - ${tr.name}: ${toolResultBody(tr)}`)
           .join('\n');
         parts.push(`[${role}]\nTool Results:\n${resultsStr}`);
       } else if (content) {

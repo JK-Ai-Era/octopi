@@ -20,6 +20,7 @@ import type {
 } from './types.js';
 import { HeuristicTokenEstimator } from './token-estimator.js';
 import { LLMSummaryCompressor } from './llm-summarizer.js';
+import { toolResultBody } from './tool-result-body.js';
 import { TruncateCompressor } from './truncate-compressor.js';
 
 /**
@@ -140,12 +141,7 @@ export class HybridCompressor implements Compressor {
 
         // 旧的工具结果：截断冗长的输出
         const truncatedResults = msg.toolResults.map(tr => {
-          const body =
-            tr.error !== undefined
-              ? JSON.stringify({ error: tr.error })
-              : typeof tr.result === 'string'
-                ? tr.result
-                : JSON.stringify(tr.result ?? null);
+          const body = toolResultBody(tr);
           if (body.length > TOOL_RESULT_TRUNCATE_THRESHOLD) {
             // 错误结果截断 error 字段，成功结果截断 result 字段
             if (tr.error !== undefined) {

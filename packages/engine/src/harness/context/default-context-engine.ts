@@ -36,6 +36,7 @@ import type {
   ContextCompactSnapshot,
 } from './types.js';
 import { HeuristicTokenEstimator, estimateLLMMessages } from './token-estimator.js';
+import { toolResultBody } from './tool-result-body.js';
 import { DefaultMessageSelector } from './message-selector.js';
 import { HybridCompressor } from './hybrid-compressor.js';
 import { DefaultBudgetAllocator } from './budget-allocator.js';
@@ -942,12 +943,7 @@ export class DefaultContextEngine implements ContextEngine {
       // 错误必须进入 content：Loop 写历史时 result=null、error=文案，
       // 若只读 result 会变成 "null"，LLM 看不到失败原因。
       for (const tr of msg.toolResults ?? []) {
-        const content =
-          tr.error !== undefined
-            ? JSON.stringify({ error: tr.error })
-            : typeof tr.result === 'string'
-              ? tr.result
-              : JSON.stringify(tr.result ?? null);
+        const content = toolResultBody(tr);
         result.push({
           role: 'tool',
           content,
