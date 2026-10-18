@@ -18,7 +18,7 @@ import type { CliArgs } from './args.js';
 import { getOctopiHome, isInitialized, initOctopi, formatInitReport } from '../init.js';
 import { loadConfig, toGatewayConfig } from '../config.js';
 import { createToolSet } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/tools/tool-set.js';
-import type { ModelProviderConfig } from '@octopi-agent/engine/config.js';
+import { withTimingProbe, type ModelProviderConfig } from '@octopi-agent/engine/config.js';
 import type { ModelProvider } from '@octopi-agent/core/interfaces/model-provider.js';
 import { OpenAIProvider } from '@octopi-agent/engine/integration/providers/openai.js';
 import { AnthropicProvider } from '@octopi-agent/engine/integration/providers/anthropic.js';
@@ -376,22 +376,23 @@ export function createProvider(name: string, cfg: ModelProviderConfig): ModelPro
   }));
 
   if (apiType === 'anthropic') {
-    return new AnthropicProvider({
+    // [timing probe] 计时装饰器（诊断后随探针一起收）
+    return withTimingProbe(new AnthropicProvider({
       name,
       apiKey: cfg.apiKey,
       baseUrl: cfg.baseUrl,
       models,
       timeoutMs: cfg.timeoutSeconds ? cfg.timeoutSeconds * 1000 : undefined,
-    });
+    }));
   }
 
-  return new OpenAIProvider({
+  return withTimingProbe(new OpenAIProvider({
     name,
     apiKey: cfg.apiKey,
     baseUrl: cfg.baseUrl,
     models,
     timeoutMs: cfg.timeoutSeconds ? cfg.timeoutSeconds * 1000 : undefined,
-  });
+  }));
 }
 
 export async function ensureDaemonConfig(args: CliArgs): Promise<string | undefined> {

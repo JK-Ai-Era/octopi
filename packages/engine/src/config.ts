@@ -1267,6 +1267,91 @@ export interface NormalizedModelInfo {
 
 // ── Provider 工厂 ──
 
+// [timing probe] 长 session 首 run 延迟定位：LLM 调用计时装饰器（诊断后移除或转正）
+
+/**
+ * 估算请求规模（字符近似值，仅用于计时日志）
+ *
+ * @param request - LLM 请求
+ * @returns msgs/chars/toolChars 计数串
+ */
+function timingReqSize(request: {
+  messages: Array<{ content?: unknown }>;
+  tools?: unknown;
+}): string {
+  let chars = 0;
+  for (const m of request.messages ?? []) {
+    const c = m.content;
+    chars += typeof c === 'string' ? c.length : JSON.stringify(c ?? '').length;
+  }
+  const toolChars = request.tools ? JSON.stringify(request.tools).length : 0;
+  return `msgs=${request.messages?.length ?? 0} chars=${chars} toolChars=${toolChars}`;
+}
+
+/**
+ * 包一层计时探针：llm_start / llm_first_token（TTFT）/ llm_end
+ *
+ * @param inner - 真实 provider
+ * @returns 透传装饰器
+ */
+// [timing probe] 临时导出供 CLI daemon 的第二处 provider 工厂复用（诊断后随探针一起收）
+export function withTimingProbe(inner: ModelProvider): ModelProvider {
+  return {
+    name: inner.name,
+    defaultModel: inner.defaultModel,
+    models: inner.models,
+    isAvailable: () => inner.isAvailable(),
+    getModelInfo: (modelName: string) => inner.getModelInfo(modelName),
+    getModelInfos: () => inner.getModelInfos(),
+    chat: async (request) => {
+      const t0 = Date.now();
+      console.log(
+        `[timing] stage=llm_start ms=${t0} provider=${inner.name} mode=chat model=${request.model ?? inner.defaultModel ?? '?'} ${timingReqSize(request)}`,
+      );
+      try {
+        const res = await inner.chat(request);
+        console.log(
+          `[timing] stage=llm_end ms=${Date.now()} dur=${Date.now() - t0} provider=${inner.name} mode=chat outcome=ok finish=${res.finishReason ?? '?'} outChars=${(res.content ?? '').length}`,
+        );
+        return res;
+      } catch (err) {
+        console.log(
+          `[timing] stage=llm_end ms=${Date.now()} dur=${Date.now() - t0} provider=${inner.name} mode=chat outcome=error`,
+        );
+        throw err;
+      }
+    },
+    stream: async function* (request) {
+      const t0 = Date.now();
+      const model = request.model ?? inner.defaultModel ?? '?';
+      console.log(
+        `[timing] stage=llm_start ms=${t0} provider=${inner.name} mode=stream model=${model} ${timingReqSize(request)}`,
+      );
+      let first = true;
+      let outcome = 'abandoned';
+      try {
+        for await (const chunk of inner.stream(request)) {
+          if (first) {
+            first = false;
+            console.log(
+              `[timing] stage=llm_first_token ms=${Date.now()} ttft=${Date.now() - t0} provider=${inner.name} model=${model}`,
+            );
+          }
+          yield chunk;
+        }
+        outcome = 'ok';
+      } catch (err) {
+        outcome = 'error';
+        throw err;
+      } finally {
+        console.log(
+          `[timing] stage=llm_end ms=${Date.now()} dur=${Date.now() - t0} provider=${inner.name} mode=stream outcome=${outcome}`,
+        );
+      }
+    },
+  };
+}
+
 /**
  * 从 ModelProviderConfig 创建 ModelProvider 实例
  *
@@ -1280,9 +1365,9 @@ export async function createProviderFromConfig(name: string, pc: ModelProviderCo
 
   if (apiType === 'anthropic') {
     const { AnthropicProvider } = await import('./integration/providers/anthropic.js');
-    return new AnthropicProvider({ name, apiKey: pc.apiKey, baseUrl: pc.baseUrl, models, defaultModel, timeoutMs: pc.timeoutSeconds ? pc.timeoutSeconds * 1000 : undefined });
+    return withTimingProbe(new AnthropicProvider({ name, apiKey: pc.apiKey, baseUrl: pc.baseUrl, models, defaultModel, timeoutMs: pc.timeoutSeconds ? pc.timeoutSeconds * 1000 : undefined }));
   }
 
   const { OpenAIProvider } = await import('./integration/providers/openai.js');
-  return new OpenAIProvider({ name, apiKey: pc.apiKey, baseUrl: pc.baseUrl, models, defaultModel, timeoutMs: pc.timeoutSeconds ? pc.timeoutSeconds * 1000 : undefined });
+  return withTimingProbe(new OpenAIProvider({ name, apiKey: pc.apiKey, baseUrl: pc.baseUrl, models, defaultModel, timeoutMs: pc.timeoutSeconds ? pc.timeoutSeconds * 1000 : undefined }));
 }

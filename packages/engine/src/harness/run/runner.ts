@@ -619,6 +619,9 @@ export class SessionAwareRunner {
   ): AsyncGenerator<import('@octopi-agent/core/primitives/event-bus.js').AgentEvent> {
     /** 本轮文件 undo（L3）；中止保留，其余出口 commit */
     let turnFileUndo: import('../extension/execution-environment/undo-log.js').TurnFileUndoLog | undefined;
+    // [timing probe] 长 session 首 run 延迟定位（诊断后移除或转正）
+    const timingRunEnter = Date.now();
+    console.log(`[timing] stage=run_enter ms=${timingRunEnter} session=${sessionId}`);
     // 1. 并发门控（如果配置了 SessionGate）；排队期间响应 abort
     const gate = this.config.sessionGate;
     let gateRelease: (() => void) | undefined;
@@ -652,6 +655,9 @@ export class SessionAwareRunner {
       gateRelease?.();
       return;
     }
+
+    // [timing probe] 排队/等锁耗时 = wait
+    console.log(`[timing] stage=run_start ms=${Date.now()} session=${sessionId} wait=${Date.now() - timingRunEnter}`);
 
     const _agentId = runConfig.agentId ?? 'default';
 
@@ -1060,6 +1066,11 @@ export class SessionAwareRunner {
           pendingGrounding = null;
         }
       }
+
+      // [timing probe] system prompt 装配 + grounding 全部就绪；build = 组装耗时
+      console.log(
+        `[timing] stage=context_ready ms=${Date.now()} session=${sessionId} build=${Date.now() - timingRunEnter} msgs=${session.messages.length} sysChars=${(runContext.systemPrompt ?? '').length} grounding=${pendingGrounding ? pendingGrounding.tokens : 0}`,
+      );
 
       // 更新 harness 的 sessionId/agentId（checkpoint 回退；权威身份在 RunScope ALS）
       this.harness.sessionId = sessionId;
