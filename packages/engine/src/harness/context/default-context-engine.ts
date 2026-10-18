@@ -36,6 +36,14 @@ import type {
 } from './types.js';
 import { HeuristicTokenEstimator, estimateLLMMessages } from './token-estimator.js';
 import { toolResultBody } from './tool-result-body.js';
+import {
+  agedToolResultPointer,
+  computeToolResultAgingPlan,
+  resolveToolResultAgingOptions,
+  type ToolResultAgingConfig,
+  type ToolResultAgingOptions,
+  type ToolResultAgingPlan,
+} from './tool-result-aging.js';
 import { DefaultMessageSelector } from './message-selector.js';
 import { HybridCompressor } from './hybrid-compressor.js';
 import { DefaultBudgetAllocator } from './budget-allocator.js';
@@ -73,6 +81,12 @@ export interface DefaultContextEngineConfig {
    * 默认 30_000；0 表示不冷却。
    */
   proactiveCooldownMs?: number;
+  /**
+   * 历史工具结果批量冻结老化（F1-B2）：当前 run 永不老化、近 rawWindow 条跨轮原文、
+   * 更旧按 freezeBatch 成批降级为结构化指针（视图级、write-once、禁渐进）。
+   * 缺省启用（40 条 / 批 20 / 指针 400 字符）。
+   */
+  historyAging?: ToolResultAgingConfig;
   /** 公用能力 CompactEngine（缺省自动创建；算法委托，E4 状态仍在本引擎） */
   compactEngine?: CompactEngine;
 }
@@ -116,8 +130,9 @@ export class DefaultContextEngine implements ContextEngine {
     name: 'Default Context Engine',
   };
 
-  private config: Required<Omit<DefaultContextEngineConfig, 'compactEngine'>> & {
+  private config: Required<Omit<DefaultContextEngineConfig, 'compactEngine' | 'historyAging'>> & {
     compactEngine: CompactEngine;
+    historyAging: ToolResultAgingOptions;
   };
   private router: SmartRouter;
   private states: Map<string, CompactState> = new Map();
@@ -135,6 +150,7 @@ export class DefaultContextEngine implements ContextEngine {
       protectLastN: config?.protectLastN ?? 20,
       proactiveCompactRatio: config?.proactiveCompactRatio ?? 0.6,
       proactiveCooldownMs: config?.proactiveCooldownMs ?? 30_000,
+      historyAging: resolveToolResultAgingOptions(config?.historyAging),
       compactEngine:
         config?.compactEngine ??
         createCompactEngine({
@@ -182,6 +198,11 @@ export class DefaultContextEngine implements ContextEngine {
     // E4：引擎内部 compact 状态键 = (sessionId, agentId)
     const stateKey = compactStateKey(sessionId, agentId);
 
+    // F1-B2：老化计划基于**完整历史**（append-only）一次算好、随视图复用——
+    // 按裁剪视图重算会让已降级条目回原文、批量边界来回翻转（烧前缀缓存）。
+    // 估算（estimateLLMMessages）作用于老化后的 LLM 视图，尺子与实际请求一致。
+    const agingPlan = computeToolResultAgingPlan(messages, this.config.historyAging);
+
     // 窗口未知且无显式 compactTargetTokens：跳过基于预算的自动压缩/截断
     const budgetCap = params.tokenBudget ?? contextWindow ?? compactTargetTokens;
     const windowKnown = contextWindow != null && contextWindow > 0;
@@ -210,7 +231,7 @@ export class DefaultContextEngine implements ContextEngine {
     // 已有结构压缩摘要时，用 head + summary + tail 视图
     if (!windowKnown && !targetKnown && budgetCap == null) {
       const view = this.buildStructuralView(sessionId, messages, emit, stateKey);
-      const llmMessages = this.buildLlmMessages(view.messages, systemPrompt, tools);
+      const llmMessages = this.buildLlmMessages(view.messages, systemPrompt, tools, agingPlan);
       const rawEstimatedTokens = estimateLLMMessages(llmMessages);
       this.states.set(stateKey, {
         ...this.states.get(stateKey),
@@ -261,7 +282,7 @@ export class DefaultContextEngine implements ContextEngine {
 
     // 3. 如果没有溢出，不需要压缩
     if (selection.overflow.length === 0) {
-      const llmMessages = this.buildLlmMessages(selection.kept, systemPrompt, tools);
+      const llmMessages = this.buildLlmMessages(selection.kept, systemPrompt, tools, agingPlan);
       const rawEstimatedTokens = estimateLLMMessages(llmMessages);
       const estimatedTokens = this.calibrateTokens(sessionId, rawEstimatedTokens, stateKey);
 
@@ -382,12 +403,16 @@ export class DefaultContextEngine implements ContextEngine {
       ...overflowState,
       // 存摘要正文（而非 dropped 描述），供下次迭代更新
       previousSummary: this.extractSummaryText(compressedOverflow) ?? overflowState?.previousSummary,
-      lastEstimatedTokens: compressedTokens,
     });
 
-    // 8. 构建 LLM 消息
-    const llmMessages = this.buildLlmMessages(reassembled, systemPrompt, tools);
+    // 8. 构建 LLM 消息（校准基 = 老化后 LLM 视图估算——尺子必须量实际请求，
+    //    不能像旧代码存 raw Message 估算，否则 calibrationRatio 系统性漂移）
+    const llmMessages = this.buildLlmMessages(reassembled, systemPrompt, tools, agingPlan);
     const rawEstimatedTokens = estimateLLMMessages(llmMessages);
+    this.states.set(stateKey, {
+      ...this.states.get(stateKey),
+      lastEstimatedTokens: rawEstimatedTokens,
+    });
     const estimatedTokens = this.calibrateTokens(sessionId, rawEstimatedTokens, stateKey);
 
     return {
@@ -909,6 +934,7 @@ export class DefaultContextEngine implements ContextEngine {
     messages: Message[],
     systemPrompt: string,
     tools: LLMToolDefinition[],
+    aging: ToolResultAgingPlan,
   ): LLMMessage[] {
     const result: LLMMessage[] = [];
 
@@ -939,7 +965,7 @@ export class DefaultContextEngine implements ContextEngine {
       if (msg.metadata?.source === 'runtimeSnapshot' && i !== lastSnapshotIdx) {
         continue;
       }
-      result.push(...this.convertMessage(msg));
+      result.push(...this.convertMessage(msg, aging));
     }
 
     return result;
@@ -954,7 +980,7 @@ export class DefaultContextEngine implements ContextEngine {
    * - 工具结果消息
    * - 多模态消息
    */
-  private convertMessage(msg: Message): LLMMessage[] {
+  private convertMessage(msg: Message, aging?: ToolResultAgingPlan): LLMMessage[] {
     const result: LLMMessage[] = [];
 
     // 清理无效消息
@@ -967,7 +993,11 @@ export class DefaultContextEngine implements ContextEngine {
       // 错误必须进入 content：Loop 写历史时 result=null、error=文案，
       // 若只读 result 会变成 "null"，LLM 看不到失败原因。
       for (const tr of msg.toolResults ?? []) {
-        const content = toolResultBody(tr);
+        // F1-B2：老化条目降级为结构化指针（错误文案保真在指针内；tool_call 配对不动）
+        const content =
+          aging && aging.agedIds.has(tr.toolCallId)
+            ? agedToolResultPointer(tr, aging.argsById.get(tr.toolCallId), this.config.historyAging)
+            : toolResultBody(tr);
         result.push({
           role: 'tool',
           content,

@@ -502,6 +502,24 @@ export interface ContextEngineConfig {
    * 冷却期内优先缓存重建，降低单 turn 双摘要。
    */
   proactiveCooldownMs?: number;
+  /**
+   * 历史工具结果批量冻结老化（F1-B2）：当前 run 永不老化、近 rawWindow 条跨轮原文、
+   * 更旧按 freezeBatch 成批降级为结构化指针（视图级、write-once、禁渐进）。
+   */
+  historyAging?: {
+    /** 总开关（默认 true） */
+    enabled?: boolean;
+    /** 跨轮原文保留条数（默认 40） */
+    rawWindow?: number;
+    /**
+     * 批量冻结步长（默认 20；最小 1）。
+     * ⚠️ 1 = 逐候选即降级（等同渐进老化、每轮烧前缀缓存，仅调试用）；
+     * 生产取值应 ≥ 每轮工具结果数。
+     */
+    freezeBatch?: number;
+    /** 指针目标字符数（默认 400；是目标非硬顶） */
+    maxPointerChars?: number;
+  };
   /** 输出预留比例（默认 0.20） */
   outputRatio?: number;
   /** 输出预留最小值（默认 2000） */

@@ -47,15 +47,8 @@ export interface GroundingAssemblerOptions {
   hitLog?: KnowledgeHitLog;
 }
 
-/** 引擎载体 user 插槽（快照/grounding/附件/摘要）不是用户发言，query 不采信 */
-function isEngineCarrierSource(source: unknown): boolean {
-  return (
-    source === 'runtimeSnapshot' ||
-    source === 'knowledgeGrounding' ||
-    source === 'sessionAttachment' ||
-    source === 'contextSummary'
-  );
-}
+/** 引擎载体 user 插槽（快照/grounding/附件/摘要）不是用户发言，query 不采信（谓词见 context/layer-types） */
+import { isEngineCarrierSource } from '../context/layer-types.js';
 
 /**
  * v1 query：最近 user + 可选前 1–2 条 user；不用 assistant 长文

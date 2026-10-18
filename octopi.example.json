@@ -68,7 +68,13 @@
   "contextEngine": {
     "proactiveCompactRatio": 0.6,
     "proactiveCooldownMs": 30000,
-    "protectLastN": 20
+    "protectLastN": 20,
+    "historyAging": {
+      "enabled": true,
+      "rawWindow": 40,
+      "freezeBatch": 20,
+      "maxPointerChars": 400
+    }
   },
 
   "summary": {

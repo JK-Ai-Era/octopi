@@ -1,3 +1,29 @@
+## v0.84.2
+
+### feat(engine): batch-frozen aging of historical tool results (F1-B2)
+
+**问题**（F 节 F1-B2，方案 `arch/long-session-latency.md` §5 B2 + 缓存纪律 `arch/b0-cache-stable-context.md` §4）：长 session 每轮全额回灌历史工具结果（实测 ~607k 字符 ≈ 请求体量 91%）；B1 只压了源头单条体量，历史跨轮堆积仍线性增长。方案已拍板（40 条原文 / 400 字符指针），但**禁渐进老化**是硬约束——每轮在 recency 边界改写 1 条 = 边界→尾部整段（~65k token）烧前缀缓存（B0 稿 §4）。
+
+**修正**（视图级、零 LLM、write-once、批量冻结）：
+
+- 新模块 `harness/context/tool-result-aging.ts`：`computeToolResultAgingPlan`（完整历史两遍扫描定位真实 user 边界；候选按 `freezeBatch` 成批过冻结线）+ `agedToolResultPointer`（工具名 + 参数要点 + 结果轮廓 + re-run 提示；纯函数定形 + WeakMap 记忆化 = write-once）
+- **批量冻结**：老化边界只以 `freezeBatch`（缺省 20）为步长推进，冻结事件之间视图逐字节稳定（段间轮次全热）
+- **红线**：当前 run（最近真实 user 以来）永不老化；user/assistant 正文不动；tool_call 参数保留、配对不拆；**error 结果永不降级**（错误可追溯性优先）；不膨胀守卫（仅当指针严格小于原文才降级，小正文不降级）
+- 挂钩 `buildLlmMessages`（LLM 视图单点收口）：session 持久层保全量原文（视图级降级）；`estimateLLMMessages` 作用于老化视图——尺子与实际请求一致
+- 配置 `contextEngine.historyAging`（enabled / rawWindow / freezeBatch / maxPointerChars，缺省 true/40/20/400）：Zod + 手写接口 + config-bridge + `octopi.schema.json` + `octopi.example.json` 全链同步
+- `isEngineCarrierSource` 谓词抽到 `layer-types.ts` 共享（grounding.ts 去重复用）
+
+**独立评审修订**（fresh-eyes 子代理 6 条 findings 逐条核验，5 条采纳——报告是待核验声明，非命令）：
+
+- **[High] write-once 破坏（F1，评审以探针实证）**：计划原按「装配视图」重算——结构视图 / MessageSelector 裁剪后 `covered` 回缩、user 边界移位，已降级条目**翻转回原文**、批量边界来回抖动（恰在 B2 服务的长历史裁剪场景发生，且烧的是最该稳定的 head 区）。改为**按完整历史一次算好、随视图复用**（append-only ⇒ 老化集合单调、永不回原文）；补裁剪视图回归测试锁死
+- **[Medium] 不膨胀守卫比较器错位（F2）**：原按 `maxPointerChars` 与正文比较，但实际指针是另一长度——error 条目降级后反而变大、`maxPointerChars` 是死旋钮。改为**实际指针长度 < 正文**才降级；指针轮廓预算按 `maxPointerChars` 比例派生（旋钮真实生效）；error 结果直接排除出降级（含保真 error 的指针必然 ≥ 原文）
+- **[Medium-Low] 校准基泄漏（F3）**：溢出压缩路径 `lastEstimatedTokens` 存的是 raw Message 估算、实际请求却是老化视图 → `calibrationRatio` 系统性漂移（下界 0.5 ⇒ 估算可低估 2×）。改为存老化后 LLM 视图估算（与其他两路径同源）
+- **[Low] `freezeBatch:0` 静默解禁渐进老化（F4）**：配置面下限收紧为 1（0 回落缺省），文档明示「1 = 逐候选即降级、每轮烧缓存，仅调试用」
+- **[Low] 测试补强（F5）**：18 用例含裁剪视图 write-once 回归（F1 锁）、跨对象同字节确定性、error 永不降级、不膨胀精确拒绝、旋钮真实生效
+- 评审 F6 **记录不修（存量）**：MessageSelector tail 切片无 tool_call/result 配对对齐，接缝孤儿结果会丢 args——与 B2 同族但独立，入 NEXT-STEPS D 项
+
+**验证**：`tests/harness/tool-result-aging.test.ts` 18 用例全绿；context-engine 67 / context-window-unknown 3 / runtime-snapshot-replay 5 零回归；全量测试 4 个已知 macOS 基线失败不变；lint / build / check-sync 干净（3 红 = C6 基线）。收益口径按 §6 模拟：工具结果 + 参数 708k → 192k 量级（视内容分布）；实测回归指标待上线后按 `[timing]` chars 对照（F3 转正时一并观测）。
+
 ## v0.84.1
 
 ### feat(engine): apply locator-preserving L1 output cap to file_search

@@ -276,6 +276,16 @@ const ENGINE_CARRIER_SOURCES = new Set([
   'contextSummary',
 ]);
 
+/**
+ * 判断消息 source 是否为引擎载体插槽（非用户发言）
+ *
+ * @param source - `message.metadata.source`
+ * @returns true 表示机器插槽（快照/grounding/附件/摘要）
+ */
+export function isEngineCarrierSource(source: unknown): boolean {
+  return ENGINE_CARRIER_SOURCES.has(source as string);
+}
+
 export interface ExtractLayerQueryOptions {
   /**
    * 额外主题线索（会话任务标题/当前步骤等）。

@@ -191,6 +191,7 @@ Runner.handle
 - **运行时快照（E8）**：易变层产出 `runtimeSnapshot` → 尾部消息 `role: 'user'` + `metadata.source: 'runtimeSnapshot'`，以 `<runtime_snapshot>` 包裹；`buildLlmMessages` **只回放最近一条**快照（旧快照不回放——防陈旧择取固化）；session 日志保留（审计对齐托管 system）；Web 聊天回放隐藏
 - **视图权威（E8 防坑）**：runner 的 `baseMsgs` 视图（detach 切片 + 剥旧 turn 插槽 + 本轮插槽）必须**无条件**替换 `runContext.messages`——「长度相等=未变」之类的代理判据会在剥旧条数==插入条数时丢弃整张视图（快照丢失、被剥的旧插槽复活）
 - 无 metadata 的外部 system 消息仍原样保留
+- **历史老化（B2，视图级）**：跨轮工具结果超出近期窗口的部分，在 `buildLlmMessages` 内降级为结构化指针（工具名 + 参数要点 + 结果轮廓 + re-run 提示）——**仅视图级**，session 日志保全量原文。老化为**批量冻结**（边界只以 `freezeBatch` 为步长成批推进；绝不在 recency 边界逐轮改写——历史中部改写会烧掉前缀缓存）且 **write-once**（指针字节恒定；计划按完整历史计算，绝不按裁剪视图重算边界）。当前 run 与最近 `rawWindow` 条原文保留；**error 结果永不降级**（错误可追溯性优先）；仅当指针严格小于原文才降级。配置：`contextEngine.historyAging`
 
 **已接线（含 P1/P2 层扩展）：**
 

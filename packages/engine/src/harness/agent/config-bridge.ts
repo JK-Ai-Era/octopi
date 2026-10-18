@@ -114,6 +114,8 @@ export function resolveContextEngine(config: ContextEngineConfig | undefined): C
       protectLastN: config?.protectLastN ?? 20,
       proactiveCompactRatio: config?.proactiveCompactRatio ?? 0.6,
       proactiveCooldownMs: config?.proactiveCooldownMs ?? 30_000,
+      // F1-B2 老化：缺省与参数收敛在 resolveToolResultAgingOptions（引擎内）
+      historyAging: config?.historyAging,
       budgetAllocator: new DefaultBudgetAllocator({
         outputRatio: config?.outputRatio ?? 0.20,
         minOutputReserve: config?.minOutputReserve ?? 2000,
