@@ -72,22 +72,44 @@ export function createFileMkdirTool(): RegisteredTool {
       const path = resolveSafePath(args.path as string, context, 'mkdir');
       const recursive = (args.recursive as boolean) ?? true;
 
+      const st = await stat(path).catch(() => null);
+      if (st?.isDirectory()) {
+        return { path, created: false, existed: true };
+      }
+      if (st) {
+        throw new Error(`Path exists and is not a directory: ${path}`);
+      }
+      // Mirrors file_rmdir's gate shape: after this tool's existence checks
+      // (no-op calls never prompt) and before the mutation. transactional
+      // (in-roots) auto-allows; host-gate asks the host. Gate errors surface
+      // unwrapped (effect_denied stays identifiable).
+      await gateEffect(
+        {
+          kind: 'file.write',
+          path,
+          mode: 'create',
+          transactional: isPathUnderRoots(path, context?.pathRoots ?? []),
+        },
+        {
+          effects: context?.effectChannel ?? 'engine',
+          confirmEffect: context?.confirmEffect,
+        },
+      );
       try {
-        const st = await stat(path).catch(() => null);
-        if (st?.isDirectory()) {
-          return { path, created: false, existed: true };
-        }
-        if (st) {
-          throw new Error(`Path exists and is not a directory: ${path}`);
-        }
         await mkdir(path, { recursive });
-        return { path, created: true, existed: false };
       } catch (error) {
         if (error instanceof Error && /not a directory/.test(error.message)) throw error;
         throw new Error(
           `Failed to create directory "${path}": ${error instanceof Error ? error.message : String(error)}`,
         );
       }
+      return {
+        path,
+        created: true,
+        existed: false,
+        reversible: false,
+        note: 'directory creation is not journaled for turn undo',
+      };
     },
   };
 }

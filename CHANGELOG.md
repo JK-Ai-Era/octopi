@@ -1,3 +1,17 @@
+## v0.83.12
+
+### fix(engine): effect-gate file_mkdir symmetrically with file_rmdir
+
+**问题**（NEXT-STEPS D1）：七个 fs-write 工具里 `file_mkdir` 是唯一不走 `gateEffect` 的——write/edit/delete/rename/copy/rmdir 全都过效应闸，唯独建目录静默执行。默认 `pathContainment: strict` 下 L2 在门前就拦掉越界路径（补门是 no-op），但 `soft`/`none` + `effects: host-gate` 组合下，root 外的 `mkdir` 不经宿主确认直接执行，而 rmdir/copy/rename 同场景会弹确认——「删空目录要问、建目录不问」的授权不对称；审计/SEC-7 决策缓存也看不到 mkdir 事件。
+
+**修正**：
+
+- `file_mkdir` 在 `mkdir()` 前补 `gateEffect({ kind: 'file.write', path, mode: 'create', transactional: isPathUnderRoots(...) })`，与 `file_rmdir` 完全同构；事务内自动放行、host-gate 越界创建须宿主确认
+- 结构重排：存在性检查与门控错误**裸抛**（`effect_denied` 保持可识别，与 rmdir/copy/rename 一致），仅 `mkdir` 自身失败沿用 `Failed to create directory` 包装（ENOTDIR 裸抛等旧语义逐路径等价）；幂等早退（目录已存在）在门之前，不产生提示
+- 返回补 `reversible: false` + `note: 'directory creation is not journaled for turn undo'`（与 rmdir 的诚实注记对称）
+
+**验证**：`tests/harness/file-ops-tools.test.ts` 11 用例全过（新增 3：host-gate 越界创建提示且 deny 后无目录 + 意图字段锚定 + 裸抛契约锚定、事务内 mkdir/rmdir 均不提示（对称锚）、host-gate approve 建目录且幂等重调不再提示）；lint/build/全量 2803 过（4 个已知基线失败不变）。经独立子代理评审后收紧：错误契约用 `^effect_denied` 锚定、补 approve/幂等/对称锚用例。
+
 ## v0.83.11
 
 ### chore(release): release:prep now syncs package-lock.json version fields

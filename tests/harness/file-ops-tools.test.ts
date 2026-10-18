@@ -155,4 +155,66 @@ describe('file ops (cross-platform)', () => {
       );
     }
   });
+
+  it('file_mkdir is effect-gated: host-gate prompts for out-of-roots create, deny leaves no dir', async () => {
+    const tool = createFileMkdirTool();
+    const target = join(root, 'outside-mk');
+    const seen: unknown[] = [];
+    const confirm = async (intent: unknown): Promise<'deny'> => {
+      seen.push(intent);
+      return 'deny';
+    };
+    await expect(
+      tool.handler(
+        { path: target },
+        { ...ctx(), pathContainment: 'none', effectChannel: 'host-gate', confirmEffect: confirm },
+      ),
+      // anchored: gate errors must surface unwrapped (a wrapped
+      // `Failed to create directory …: effect_denied` would not match)
+    ).rejects.toThrow(/^effect_denied/);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({ kind: 'file.write', mode: 'create', transactional: false });
+    expect(await exists(target)).toBe(false);
+  });
+
+  it('file_mkdir in-roots create auto-allows without prompting (symmetric with rmdir)', async () => {
+    const tool = createFileMkdirTool();
+    let prompts = 0;
+    const confirm = async (): Promise<'approve'> => {
+      prompts += 1;
+      return 'approve';
+    };
+    const host = { ...ctx(), effectChannel: 'host-gate' as const, confirmEffect: confirm };
+    const r = await tool.handler({ path: join(ws, 'auto-dir') }, host);
+    expect(r).toMatchObject({ created: true, reversible: false });
+    expect(prompts).toBe(0);
+    expect(await exists(join(ws, 'auto-dir'))).toBe(true);
+    // symmetry anchor: file_rmdir in-roots is equally prompt-free under host-gate
+    await createFileRmdirTool().handler({ path: join(ws, 'auto-dir') }, host);
+    expect(prompts).toBe(0);
+  });
+
+  it('file_mkdir host-gate approve creates the dir; idempotent re-call does not prompt again', async () => {
+    const tool = createFileMkdirTool();
+    const target = join(root, 'approved-out');
+    let prompts = 0;
+    const confirm = async (): Promise<'approve'> => {
+      prompts += 1;
+      return 'approve';
+    };
+    const host = {
+      ...ctx(),
+      pathContainment: 'none' as const,
+      effectChannel: 'host-gate' as const,
+      confirmEffect: confirm,
+    };
+    const r = await tool.handler({ path: target }, host);
+    expect(r).toMatchObject({ created: true });
+    expect(await exists(target)).toBe(true);
+    expect(prompts).toBe(1);
+    // second call is a no-op early return: it must not prompt again
+    const r2 = await tool.handler({ path: target }, host);
+    expect(r2).toMatchObject({ existed: true });
+    expect(prompts).toBe(1);
+  });
 });
