@@ -835,7 +835,7 @@ export function getBuiltinTools(options?: {
     createFileWriteTool(),
     createFileDeleteTool(),
     createFileEditTool(),
-    createFileSearchTool(),
+    createFileSearchTool({ summary: options?.summary }),
     ...createFileOpsTools(),
     ...createGitTools(),
     ...createPackageTools(),

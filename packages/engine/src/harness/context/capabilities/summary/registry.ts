@@ -150,6 +150,16 @@ export function createDefaultToolBindings(): Record<string, ToolSummaryBinding> 
       informationalKinds: [],
       onFail: 'truncate_l1',
     },
+    // 搜索结果 = 定位符清单 + 预览体：L1 结构化收口在工具内（file+line 全保），
+    // L2 永不改写（摘要丢 file:line 保真度）
+    file_search: {
+      tool: 'file_search',
+      mode: 'never',
+      maxReturnChars: 8000,
+      kindFromSource: false,
+      informationalKinds: [],
+      onFail: 'truncate_l1',
+    },
     shell: {
       tool: 'shell',
       mode: 'never',

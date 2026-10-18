@@ -1,3 +1,19 @@
+## v0.84.1
+
+### feat(engine): apply locator-preserving L1 output cap to file_search
+
+**问题**（F 节 F1-B1，方案 `arch/long-session-latency.md` §5 B1）：工具结果是长 session 请求体量大头（实测 ≈607k/670k 字符 ≈91%），其中 `file_search` 242,723 字符（58 次）为最大单项、单条实测 72,683 字符——`max_results` 只限条数，单条 match 的 `content`/`before`/`after` 行长**无界**（超长行是单条膨胀元凶）；且 file_search 是内置读工具中唯一没接输出门的（`getBuiltinTools` 不传 summary、registry 无缺省 binding）。
+
+**修正**（机械收缩、零 LLM、定位符零损失）：
+
+- **结构化 L1 收缩** `shrinkMatchesForBudget`（file-search.ts 内）：超预算按序收缩——① 剥 before/after 上下文行 → ② `content` 行截 200 字符（`…[truncated]` 显式机械标记）→ ③ 预览只留前 K 条（其余 `…[preview omitted]` 占位，结构形状保持一致）。**file+line 清单任何阶段全保**；即使定位符清单自身超预算也全保（定位符零损失优先于预算）。不走字符串 gate——截断 JSON 会砍掉尾部定位符
+- **结果契约**：`truncated` 语义扩为「有信息被收起」，新增 `truncatedReason: 'max_results' | 'l1_cap' | 'max_results+l1_cap'`（联合类型，与 file_list 的 `truncatedReason` 先例对齐）；`outputCap`（stages/rawLength/budgetChars/contentPreviewChars/previewKept）仅收缩时出现；`hints` 增自纠引导（收窄 glob/path、降 max_results、或 file_read 原文）
+- **registry 缺省 binding** `file_search: mode:'never', maxReturnChars: 8000`——L2 永不改写搜索结果（LLM 摘要丢 file:line 保真度）；预算可经 `summary.tools.file_search.maxReturnChars` 覆盖
+- **根因修复（独立评审发现）**：`src/cli/daemon.ts` 的 `summary.tools` 转发是点名硬编码（只转 http_request/file_read），而配置 schema 的 `summary.tools.*` 是任意工具名 catchall——file_search/shell/file_list 的配置面全是断头。改为 `resolveSummaryToolBindings` 逐工具名泛化转发（全局 `maxReturnChars` 不混入工具覆盖），对称收口
+- **同类盘点**（§5 B1 分档）：定位符/列表类 file_search/file_list/shell → 8k 级低上限 ✓；内容承载类 file_read 36k、git_diff/git_show/project_run 不截（评审材料，历史膨胀交 B2）。git_log/git_status 仍未接线（列表类候选，不在实测 top3，留 B2 后按回归指标定夺）
+
+**验证**：新增 `tests/harness/file-search-l1-cap.test.ts` 8 用例（50k 超长行收缩+定位符完好、context 先剥不动 content、小预算 60 条定位符全保、定位符超预算兜底全保、小结果零扰动、计数/L1 原因区分与组合、registry 缺省 L1-only、daemon 配置路径端到端生效）；builtin-tools 44 过零回归；全量测试 4 个已知 macOS 基线失败不变（getProcessName/端口进程名沙箱固有、`/private/var` 别名、gap-scan 竞态断言）；lint/build 干净；check-sync 3 红 = C6 已知 locator 债。经独立子代理（fresh-eyes）评审后修订：daemon 配置断头根因修复 + 配置路径回归测试、stage 记账只记真实收缩、`truncatedReason` 联合类型、stage-3 注释对齐实现。
+
 ## v0.84.0
 
 ### feat(context): E8 cache-stable assembly placement — volatile blocks move to the message tail

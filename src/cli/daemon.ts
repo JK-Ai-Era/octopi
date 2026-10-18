@@ -395,6 +395,35 @@ export function createProvider(name: string, cfg: ModelProviderConfig): ModelPro
   }));
 }
 
+/**
+ * 从 `summary.tools` 配置推导 toolBindings 覆盖表（逐工具名转发，不点名硬编码）
+ *
+ * 配置 schema 的 `summary.tools.*` 是任意工具名的 catchall（ToolSummaryBindingConfigSchema）；
+ * 此处按工具名原样转发，`maxReturnChars` 为全局 L1 缺省、不算工具覆盖。
+ * 此前只点名转发 http_request/file_read，造成 file_search/shell/file_list 等配置面断头（F1-B1 评审 F1）。
+ *
+ * @param toolsCfg - `config.summary.tools`（形状经 config-schema 校验）
+ * @returns tool 名 → binding 覆盖表
+ */
+export function resolveSummaryToolBindings(
+  toolsCfg: Record<string, unknown> | undefined,
+): Record<
+  string,
+  Partial<import('@octopi-agent/engine/harness/context/capabilities/summary/index.js').ToolSummaryBinding>
+> {
+  type Binding = Partial<
+    import('@octopi-agent/engine/harness/context/capabilities/summary/index.js').ToolSummaryBinding
+  >;
+  const out: Record<string, Binding> = {};
+  for (const [tool, value] of Object.entries(toolsCfg ?? {})) {
+    if (tool === 'maxReturnChars') continue;
+    if (value !== null && typeof value === 'object') {
+      out[tool] = value as Binding;
+    }
+  }
+  return out;
+}
+
 export async function ensureDaemonConfig(args: CliArgs): Promise<string | undefined> {
   if (args.config) return args.config;
 
@@ -861,10 +890,7 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
         cacheEnabled,
         cacheTtlMs: summaryCfg?.cache?.ttlMs,
         maxReturnCharsDefault: toolsCfg?.maxReturnChars,
-        toolBindings: {
-          http_request: toolsCfg?.http_request as never,
-          file_read: toolsCfg?.file_read as never,
-        },
+        toolBindings: resolveSummaryToolBindings(toolsCfg as Record<string, unknown> | undefined),
       };
       const port = createSummaryPort(portOptions);
       // 根因修复：配置与 tools 共用同一 binding 解析表（toolBindings），不再 binding:undefined

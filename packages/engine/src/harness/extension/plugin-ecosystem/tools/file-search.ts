@@ -11,11 +11,17 @@
  * - 逐行流式扫描；`max_file_bytes` 安全阀（默认 50MB）跳过异常巨文件
  * - 上下文行（before/after）
  * - 结果数量限制
+ * - L1 输出硬顶（F1-B1）：结构化收缩、零 LLM，file+line 清单永远全保；
+ *   预算经 `summary.tools.file_search.maxReturnChars` 可调（缺省 8000）
  * - 忽略常见无关目录（node_modules, .git 等）
  * - 零结果时返回 diagnostics + hints，便于调用方自纠
  */
 
 import type { RegisteredTool } from '@octopi-agent/core/types.js';
+import {
+  resolveSupportBinding,
+  type ToolSummarySupport,
+} from '../../../context/capabilities/summary/index.js';
 import { resolveToolPath } from './platform.js';
 
 /** 单条匹配结果 */
@@ -42,15 +48,39 @@ interface SearchDiagnostics {
   maxFileBytes: number;
 }
 
+/** truncated 原因：条数截断（max_results）与/或 L1 预览体收缩（l1_cap） */
+type TruncatedReason = 'max_results' | 'l1_cap' | 'max_results+l1_cap';
+
 /** 搜索结果 */
 interface SearchResult {
   matches: SearchMatch[];
-  /** 返回的匹配条数；truncated=true 时可能还有更多未返回 */
+  /** 返回的匹配条数（= matches.length；max_results 截断时真实命中更多，见 truncatedReason） */
   totalMatches: number;
+  /** 有信息被收起：max_results（条数截断）和/或 l1_cap（预览体收缩） */
   truncated: boolean;
+  /** truncated 原因 */
+  truncatedReason?: TruncatedReason;
+  /** L1 结构化收缩记录；未收缩时不出现 */
+  outputCap?: SearchOutputCap;
   searchedFiles: number;
   diagnostics: SearchDiagnostics;
   hints: string[];
+}
+
+/** L1 输出收缩记录（仅在收缩发生时出现；file+line 清单永远全保） */
+interface SearchOutputCap {
+  /** 恒为 true */
+  applied: true;
+  /** 已执行的收缩阶段（按序）：剥上下文行 → content 行截断 → 预览只留前 K 条 */
+  stages: Array<'context_lines' | 'content_lines' | 'preview_cap'>;
+  /** 收缩前 matches 的 JSON 字符长度 */
+  rawLength: number;
+  /** matches 清单体预算（binding.maxReturnChars） */
+  budgetChars: number;
+  /** content 预览行字符上限 */
+  contentPreviewChars: number;
+  /** 保留完整 content 预览的条数（不影响 file+line 清单完整性） */
+  previewKept: number;
 }
 
 /** pattern 解析模式 */
@@ -75,12 +105,25 @@ const IGNORED_DIRS = new Set([
 /** 单文件读取安全阀默认值（50MB；可经 max_file_bytes 调整） */
 const DEFAULT_MAX_FILE_BYTES = 50_000_000;
 
+/** L1 收缩后 content 预览行的字符上限（超长行是单条膨胀元凶；定位符不受影响） */
+const CONTENT_PREVIEW_CHARS = 200;
+
+/** content 行机械截断标记（机械截断 ≠ 摘要改写） */
+const CONTENT_TRUNCATED_MARK = '…[truncated]';
+
+/** 预览整条省略占位（file+line 永远全保） */
+const PREVIEW_OMITTED = '…[preview omitted]';
+
+/** file_search L1 缺省预算（与 summary registry 缺省一致；可经 summary.tools.file_search.maxReturnChars 覆盖） */
+const DEFAULT_MAX_RETURN_CHARS = 8000;
+
 /**
  * 创建 file_search 工具
  *
+ * @param options - 可选 summary support（L1 预算 binding；file_search 恒不跑 L2）
  * @returns RegisteredTool
  */
-export function createFileSearchTool(): RegisteredTool {
+export function createFileSearchTool(options?: { summary?: ToolSummarySupport }): RegisteredTool {
   return {
     definition: {
       name: 'file_search',
@@ -293,10 +336,29 @@ export function createFileSearchTool(): RegisteredTool {
         maxFileBytes,
       });
 
+      // F1-B1：L1 结构化硬顶（零 LLM）。定位符（file+line）永远全保，只收缩预览体；
+      // 不走字符串 gate，避免截断 JSON 丢掉尾部定位符。
+      const binding = resolveSupportBinding('file_search', options?.summary, DEFAULT_MAX_RETURN_CHARS);
+      const shrunk = shrinkMatchesForBudget(allMatches, binding.maxReturnChars);
+      if (shrunk.cap) {
+        hints.push(buildOutputCapHint(shrunk.cap));
+      }
+
+      const truncatedReason: TruncatedReason | undefined =
+        truncated && shrunk.cap
+          ? 'max_results+l1_cap'
+          : truncated
+            ? 'max_results'
+            : shrunk.cap
+              ? 'l1_cap'
+              : undefined;
+
       return {
-        matches: allMatches,
+        matches: shrunk.matches,
         totalMatches: allMatches.length,
-        truncated,
+        truncated: truncated || Boolean(shrunk.cap),
+        truncatedReason,
+        outputCap: shrunk.cap,
         searchedFiles: filesSearched,
         diagnostics,
         hints,
@@ -696,6 +758,94 @@ function splitBraceAlts(body: string): string[] {
   }
   alts.push(current);
   return alts;
+}
+
+// ── L1 输出收缩（F1-B1：结构化硬顶，零 LLM） ──
+
+/**
+ * L1 结构化收缩：把 matches 清单体压进预算，定位符（file+line）永远全保
+ *
+ * 收缩顺序（arch/long-session-latency.md §5 B1）：
+ * 1. 剥 before/after 上下文行；
+ * 2. content 行截到 `contentPreviewChars`（显式截断标记）；
+ * 3. 预览只留前 K 条，其余保留 file+line + 省略占位。
+ * 即使 K=0 仍超预算，file+line 清单也全保（定位符零损失优先于预算）。
+ *
+ * @param matches - 原始命中列表
+ * @param budgetChars - matches 清单体的 JSON 字符预算
+ * @param contentPreviewChars - content 预览行字符上限
+ * @returns 收缩后的 matches 与收缩记录（未收缩时无 cap）
+ */
+function shrinkMatchesForBudget(
+  matches: SearchMatch[],
+  budgetChars: number,
+  contentPreviewChars: number = CONTENT_PREVIEW_CHARS,
+): { matches: SearchMatch[]; cap?: SearchOutputCap } {
+  const rawLength = JSON.stringify(matches).length;
+  if (rawLength <= budgetChars) return { matches };
+
+  const stages: SearchOutputCap['stages'] = [];
+  const makeCap = (previewKept: number): SearchOutputCap => ({
+    applied: true,
+    stages,
+    rawLength,
+    budgetChars,
+    contentPreviewChars,
+    previewKept,
+  });
+
+  // 阶段 1：剥 before/after 上下文行
+  const hadContext = matches.some((m) => (m.before?.length ?? 0) > 0 || (m.after?.length ?? 0) > 0);
+  let current: SearchMatch[] = matches.map((m) => ({ file: m.file, line: m.line, content: m.content }));
+  if (hadContext) stages.push('context_lines');
+  if (JSON.stringify(current).length <= budgetChars) {
+    return { matches: current, cap: makeCap(current.length) };
+  }
+
+  // 阶段 2：content 行截到 contentPreviewChars（超长行是单条膨胀元凶）
+  current = current.map((m) =>
+    m.content.length > contentPreviewChars
+      ? {
+          file: m.file,
+          line: m.line,
+          content: `${m.content.slice(0, contentPreviewChars)}${CONTENT_TRUNCATED_MARK}`,
+        }
+      : m,
+  );
+  stages.push('content_lines');
+  if (JSON.stringify(current).length <= budgetChars) {
+    return { matches: current, cap: makeCap(current.length) };
+  }
+
+  // 阶段 3：预览只留前 K 条；file+line 紧凑清单全保
+  stages.push('preview_cap');
+  for (let kept = current.length - 1; kept >= 0; kept--) {
+    const trial = current.map((m, i) =>
+      i < kept ? m : { file: m.file, line: m.line, content: PREVIEW_OMITTED },
+    );
+    if (JSON.stringify(trial).length <= budgetChars) {
+      return { matches: trial, cap: makeCap(kept) };
+    }
+  }
+  // 全部省略预览仍超预算：定位符清单按设计全保，接受超出
+  return {
+    matches: current.map((m) => ({ file: m.file, line: m.line, content: PREVIEW_OMITTED })),
+    cap: makeCap(0),
+  };
+}
+
+/**
+ * 构建 L1 收缩后的自纠提示
+ *
+ * @param cap - 收缩记录
+ * @returns 可操作提示（如何拿回完整内容）
+ */
+function buildOutputCapHint(cap: SearchOutputCap): string {
+  return (
+    `L1 output cap applied (${cap.stages.join('+')}): match bodies shrunk to fit maxReturnChars=${cap.budgetChars}; ` +
+    'the file+line list is complete. Narrow the glob/path or lower max_results for full lines, ' +
+    'or file_read the specific files.'
+  );
 }
 
 // ── hints ──
