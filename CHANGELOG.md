@@ -1,3 +1,17 @@
+## v0.83.11
+
+### chore(release): release:prep now syncs package-lock.json version fields
+
+**问题**（NEXT-STEPS D2）：`node scripts/release.mjs prep` 只写五个 `package.json`（version + 内部钉版），不碰 `package-lock.json`——lockfile 里 16 处版本面（顶层 `version`、`packages[""]`、四个 workspace 条目及其 `@octopi-agent/*` 内部钉版）长期静默漂移（自 v0.55.x 时代；packages 发 v0.83.9 时它还停在 0.83.8，v0.83.10 才手动补上）。发布清单靠人记的环节就是下一次漂移的入口。另：`prep` 的 Next 提示仍是旧流程文案（`git add -A` + 独立 `chore(release)` commit），与现行「代码 + 版本文件 + CHANGELOG 同 commit」约定矛盾，且 `git add -A` 会把无关未跟踪文件卷进提交。
+
+**修正**：
+
+- `prep()` 新增 `syncLockfile(version, lockKeys)`：按五个 workspace 的锁文件键（`""` + `packages/*`）同步 version 与内部钉版（dependencies/devDependencies/peerDependencies），**不触碰任何第三方条目**；fail-closed——仅「lockfile 真不存在」跳过并如实提示，JSON 损坏 / 缺 `packages` map / 缺 workspace 条目一律中止（不得半同步），成功才打同步日志
+- Next 提示改为现行约定：版本文件（含 lockfile）与代码、CHANGELOG 同 commit，显式列路径（避免 `git add -A`）；tag/发布独立执行
+- 同版本重跑 `prep` 幂等（零二次变更）
+
+**验证**：`prep 0.83.11` 后 lockfile diff 仅版本字段（16 处）；重跑幂等；`node scripts/release.mjs print` 正常。
+
 ## v0.83.10
 
 ### fix(engine): admit shared temp dirs (/tmp, /var/tmp) into the POSIX jail write face
