@@ -126,3 +126,189 @@ describe('P1-2 residual: untagged registration blocks builtin name map', () => {
     expect(isToolAllowedOnSurface('file_search', 'reduced')).toBe(true);
   });
 });
+
+describe('Seatbelt stdio devices + canonical jail roots', () => {
+  it('keeps stdio sinks writable while writes stay denied elsewhere', async () => {
+    const { buildSeatbeltProfile } = await import(
+      '@octopi-agent/engine/harness/extension/execution-environment/sandbox.js'
+    );
+    const sb = buildSeatbeltProfile(['/ws'], 'deny');
+    expect(sb).toContain('(deny file-write*)');
+    expect(sb).toContain('(allow file-write* (literal "/dev/null"))');
+    expect(sb).toContain('(allow file-write* (literal "/dev/zero"))');
+    expect(sb).toContain('(allow file-write* (literal "/dev/tty"))');
+    expect(sb).toContain('(allow file-write* (literal "/dev/stdout"))');
+    expect(sb).toContain('(allow file-write* (subpath "/dev/fd"))');
+  });
+
+  it.skipIf(process.platform === 'win32')(
+    'emits lexical and canonical root forms so symlink aliases match',
+    async () => {
+      const { resolveJailRoots } = await import(
+        '@octopi-agent/engine/harness/extension/execution-environment/sandbox.js'
+      );
+      const { mkdir, mkdtemp, realpath, symlink } = await import('node:fs/promises');
+      const { tmpdir } = await import('node:os');
+      const { join, resolve } = await import('node:path');
+
+      const base = await mkdtemp(join(tmpdir(), 'octopi-roots-'));
+      const real = join(base, 'real');
+      await mkdir(real);
+      const alias = join(base, 'alias');
+      await symlink(real, alias);
+      const stale = join(base, 'missing');
+
+      const roots = await resolveJailRoots(alias, { allowRoots: [stale] });
+      // lexical form of the alias root and its canonical twin both present
+      expect(roots).toContain(resolve(alias));
+      expect(roots).toContain(await realpath(real));
+      // stale root keeps its lexical form (bind-try tolerates missing paths)
+      expect(roots).toContain(resolve(stale));
+    },
+  );
+
+  it('stale-only roots keep lexical forms without throwing', async () => {
+    const { resolveJailRoots } = await import(
+      '@octopi-agent/engine/harness/extension/execution-environment/sandbox.js'
+    );
+    const { resolve } = await import('node:path');
+    const roots = await resolveJailRoots(resolve('/definitely/not/here-xyz'), {
+      allowRoots: ['/also/missing-xyz'],
+    });
+    expect(roots).toContain(resolve('/definitely/not/here-xyz'));
+    expect(roots).toContain(resolve('/also/missing-xyz'));
+  });
+});
+
+describe('D7 jail wrapper failure detection', () => {
+  const wrap = () =>
+    import('@octopi-agent/engine/harness/extension/execution-environment/sandbox.js');
+
+  it('recognizes wrapper-prefixed setup failures', async () => {
+    const { isJailWrapperSetupFailure } = await wrap();
+    expect(
+      isJailWrapperSetupFailure(
+        { exitCode: 71, stdout: '', stderr: 'sandbox-exec: sandbox_apply: Operation not permitted' },
+        'sandbox-exec',
+      ),
+    ).toBe(true);
+    expect(
+      isJailWrapperSetupFailure(
+        { exitCode: 2, stdout: '', stderr: 'bwrap: unshare: Operation not permitted' },
+        'bwrap',
+      ),
+    ).toBe(true);
+  });
+
+  it('never treats a user-command error as wrapper failure', async () => {
+    const { isJailWrapperSetupFailure } = await wrap();
+    // A sandbox write denial of a real command emits exactly this wording —
+    // re-running it unsandboxed would double-execute and escape the jail.
+    expect(
+      isJailWrapperSetupFailure(
+        { exitCode: 1, stdout: '', stderr: '/bin/bash: /dev/null: Operation not permitted' },
+        'sandbox-exec',
+      ),
+    ).toBe(false);
+    expect(
+      isJailWrapperSetupFailure(
+        { exitCode: 1, stdout: '', stderr: 'cat: /etc/shadow: Operation not permitted' },
+        'bwrap',
+      ),
+    ).toBe(false);
+    // command produced output: it clearly ran inside the jail
+    expect(
+      isJailWrapperSetupFailure(
+        { exitCode: 1, stdout: 'out', stderr: 'bwrap: unshare: Operation not permitted' },
+        'bwrap',
+      ),
+    ).toBe(false);
+  });
+
+  it('matches unprefixed bwrap uid-map helper failures for bwrap only', async () => {
+    const { isJailWrapperSetupFailure } = await wrap();
+    const err = { exitCode: 1, stdout: '', stderr: 'newuidmap: write to uid_map failed' };
+    expect(isJailWrapperSetupFailure(err, 'bwrap')).toBe(true);
+    expect(isJailWrapperSetupFailure(err, 'sandbox-exec')).toBe(false);
+  });
+});
+
+describe('review hardening: ordering, esc, detection semantics', () => {
+  const wrap = () =>
+    import('@octopi-agent/engine/harness/extension/execution-environment/sandbox.js');
+
+  it('device allows come after the blanket deny (SBPL last-match wins)', async () => {
+    const { buildSeatbeltProfile, SEATBELT_DEVICE_WRITE_ALLOW } = await wrap();
+    const sb = buildSeatbeltProfile(['/ws'], 'deny');
+    const denyAt = sb.indexOf('(deny file-write*)');
+    expect(denyAt).toBeGreaterThanOrEqual(0);
+    for (const dev of SEATBELT_DEVICE_WRITE_ALLOW) {
+      expect(sb.indexOf(`(allow file-write* (literal "${dev}"))`)).toBeGreaterThan(denyAt);
+    }
+    expect(sb.indexOf('(allow file-write* (subpath "/dev/fd"))')).toBeGreaterThan(denyAt);
+  });
+
+  it('locks the full stdio device set and excludes /dev/ptmx', async () => {
+    const { buildSeatbeltProfile, SEATBELT_DEVICE_WRITE_ALLOW } = await wrap();
+    expect([...SEATBELT_DEVICE_WRITE_ALLOW]).toEqual([
+      '/dev/null',
+      '/dev/zero',
+      '/dev/tty',
+      '/dev/stdin',
+      '/dev/stdout',
+      '/dev/stderr',
+    ]);
+    const sb = buildSeatbeltProfile(['/ws'], 'deny');
+    expect(sb).not.toContain('/dev/ptmx');
+    expect(sb).toContain('(allow file-write* (literal "/dev/stdin"))');
+    expect(sb).toContain('(allow file-write* (literal "/dev/stderr"))');
+  });
+
+  it('keeps () in paths intact and refuses newline paths', async () => {
+    const { buildSeatbeltProfile } = await wrap();
+    const sb = buildSeatbeltProfile(['/Users/x/My (Project)/ws'], 'deny');
+    expect(sb).toContain('(allow file-write* (subpath "/Users/x/My (Project)/ws"))');
+    expect(() => buildSeatbeltProfile(['/bad\npath'], 'deny')).toThrow(/seatbelt_path_invalid/);
+    expect(() => buildSeatbeltProfile(['/bad\rpath'], 'deny')).toThrow(/seatbelt_path_invalid/);
+  });
+
+  it('terminated runs are never wrapper setup failures', async () => {
+    const { isJailWrapperSetupFailure } = await wrap();
+    expect(
+      isJailWrapperSetupFailure(
+        {
+          exitCode: -1,
+          stdout: '',
+          stderr: 'sandbox-exec: sandbox_apply: Operation not permitted',
+          terminated: true,
+        },
+        'sandbox-exec',
+      ),
+    ).toBe(false);
+  });
+
+  it('signature must start a line; mid-line text is user output', async () => {
+    const { isJailWrapperSetupFailure } = await wrap();
+    expect(
+      isJailWrapperSetupFailure(
+        { exitCode: 1, stdout: '', stderr: 'error: saw sandbox-exec: weird in output' },
+        'sandbox-exec',
+      ),
+    ).toBe(false);
+    expect(
+      isJailWrapperSetupFailure(
+        { exitCode: 1, stdout: '', stderr: 'unshared the namespace' },
+        'bwrap',
+      ),
+    ).toBe(false);
+  });
+
+  it('relative roots resolve against the run cwd, names keep their spaces', async () => {
+    const { resolveJailRoots } = await wrap();
+    const { resolve } = await import('node:path');
+    const roots = await resolveJailRoots('/base/cwd', { allowRoots: ['rel', ' padded '] });
+    expect(roots).toContain(resolve('/base/cwd/rel'));
+    expect(roots).toContain(resolve('/base/cwd', ' padded '));
+    expect(roots).not.toContain(resolve('/base/cwd/padded'));
+  });
+});

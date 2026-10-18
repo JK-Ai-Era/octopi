@@ -63,10 +63,21 @@ Windows 的写限制允许 `write-jailed-best-effort`（Job Object + 受限令�
 `allowlist` 仅接口，按 deny 执行并注记。
 
 **Jail 搭建失败（D7）**：`requireJail`（effective untrusted）抛 `untrusted_jail_failed`，禁止未沙箱执行；其它模式回落 supervised + `jail_setup_failed` + run 级 `securityDegraded`。
+后端选择与探测对齐（bwrap 冒烟测试 / Seatbelt `sandbox_apply` 冒烟测试）：
+jail 完全无法生效时，mode 分叉发生在命令**运行之前**。wrapper 一旦运行过，
+疑似建笼失败也**绝不重新执行用户命令**（杜绝双重副作用；伪造 wrapper 报错
+换不来一次未沙箱执行）：`requireJail` 拒绝，其它模式如实上报 wrapper 结果
+并降级隔离声明（`cwd-pin`）+ run 级 `securityDegraded` 注记。识别只认行首
+wrapper 签名（`bwrap:` / `sandbox-exec:` / `newuidmap:` / `newgidmap:`），
+绝不匹配裸 `operation not permitted`。
 
 **macOS Seatbelt（D3）**：执行时生成覆盖 `allowRoots` 与网络姿态的 profile，
 落盘后 `sandbox-exec -f <profile> -- …`。`OCTOPI_SB_PROFILE` 仅作宿主覆盖。
-仅在 profile **实际生效**时才报 `write-jailed`。
+仅在 profile **实际生效**时才报 `write-jailed`。profile 同时放行 POSIX 标准 I/O
+设备写（`/dev/null`、`/dev/zero`、`/dev/tty`、`/dev/std*`、`/dev/fd`）——git 以
+O_RDWR 打开 `/dev/null`、shell 会重定向到它们，封死会瘫痪基础工具。jail 根同时
+按词法与规范（`realpath`）两种形态输出，保证子路径规则能穿透符号链接别名
+（macOS `/var` → `/private/var`、`/tmp` → `/private/tmp`）。
 
 **环境变量 deny-by-default**：所有后端只透传白名单（`PATH`、`HOME`、`TMP`、
 locale、shell/OS 基础项）。宿主密钥（`*_API_KEY`、`*_TOKEN` 等）**不会**

@@ -67,12 +67,26 @@ is `open | deny | allowlist`. **Mode defaults:** `host` / `project` → ?`open`;
 **macOS Seatbelt (D3).** At execute time Octopi generates a Seatbelt profile
 covering `allowRoots` and the network posture, writes it to a temp file (`0600`),
 and runs `sandbox-exec -f <profile> -- —. `OCTOPI_SB_PROFILE` remains a host
-override. `write-jailed` is only reported when a profile is actually applied.
+override. `write-jailed` is only reported when a profile is actually applied. The profile
+also keeps POSIX stdio sinks (`/dev/null`, `/dev/zero`, `/dev/tty`, `/dev/std*`,
+`/dev/fd`) writable — git opens `/dev/null` O_RDWR and shells redirect to it;
+a jail that blocks them breaks basic tooling. Jail roots are emitted in both
+their lexical and canonical (`realpath`) form so subpath rules match through
+symlink aliases (macOS `/var` → `/private/var`, `/tmp` → `/private/tmp`).
 
 **Jail setup failure (D7).** If a jail backend was selected but cannot be applied:
 `requireJail` (effective `untrusted`) **throws** `untrusted_jail_failed` instead of
 running unsandboxed; other modes fall back to supervised spawn, report
 `cwd-pin` + `jail_setup_failed`, and notify the run-level `securityDegraded` hook.
+Backend selection is probe-aligned (bwrap smoke test / Seatbelt `sandbox_apply`
+smoke test): when the jail cannot apply at all, the mode fork happens **before**
+the command runs. Once a wrapper has run, a suspected wrapper setup failure
+**never re-executes the user command** (no double side effects; a forged wrapper
+error cannot buy an unsandboxed run): `requireJail` refuses, other modes report
+the wrapper outcome with downgraded isolation (`cwd-pin`) and the run-level
+`securityDegraded` note. Detection only accepts line-start wrapper signatures
+(`bwrap:` / `sandbox-exec:` / `newuidmap:` / `newgidmap:`); bare
+`operation not permitted` is never matched.
 
 **Privilege (`dropped`)** means the jail **denies privilege-gaining operations**
 (user namespace and/or Seatbelt `process-exec` denials for `sudo`/`su`/—?.

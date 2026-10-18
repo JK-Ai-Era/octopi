@@ -226,6 +226,26 @@ async function bwrapUsable(bwrap: string): Promise<boolean> {
   });
 }
 
+/**
+ * One-shot Seatbelt usability smoke (`sandbox_apply` may be denied inside
+ * another sandbox). Probe and execute must agree: when no profile can be
+ * applied, the honest backend is supervised spawn from the start — never a
+ * wrapper run that then has to "recover".
+ *
+ * @param sandboxExec - resolved path to sandbox-exec
+ * @returns true when sandbox-exec can actually apply a profile
+ */
+async function sandboxExecUsable(sandboxExec: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const child = spawn(sandboxExec, ['-p', '(version 1)(allow default)', '--', '/usr/bin/true'], {
+      stdio: 'pipe',
+      timeout: 2000,
+    });
+    child.on('error', () => resolve(false));
+    child.on('close', (code) => resolve(code === 0));
+  });
+}
+
 export async function probeProcessIsolation(): Promise<ProcessIsolationProfile> {
   if (cachedProbe) return cachedProbe;
   const notes: string[] = [];
@@ -276,7 +296,7 @@ export async function probeProcessIsolation(): Promise<ProcessIsolationProfile> 
 
   if (process.platform === 'darwin') {
     const sandboxExec = await which('sandbox-exec');
-    if (sandboxExec) {
+    if (sandboxExec && (await sandboxExecUsable(sandboxExec))) {
       // D3-b+: we generate a Seatbelt profile at execute time (allowRoots + network).
       // write-jailed is therefore honest without OCTOPI_SB_PROFILE.
       cachedProbe = {
@@ -294,7 +314,13 @@ export async function probeProcessIsolation(): Promise<ProcessIsolationProfile> 
       };
       return cachedProbe;
     }
-    notes.push('darwin: sandbox-exec not found; no write jail');
+    if (sandboxExec) {
+      notes.push(
+        `sandbox-exec=${sandboxExec} present but sandbox_apply denied (nested sandbox?); no write jail`,
+      );
+    } else {
+      notes.push('darwin: sandbox-exec not found; no write jail');
+    }
     cachedProbe = {
       backend: 'supervised-spawn',
       processTree: 'killable',

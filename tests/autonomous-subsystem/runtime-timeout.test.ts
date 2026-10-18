@@ -39,7 +39,8 @@ describe('SubsystemRuntime timeout enforcement', () => {
   });
 
   it('marks run as timeout when handler exceeds maxDurationMs', async () => {
-    const tmpDir = `/tmp/octopi-timeout-test-${Date.now()}`;
+    const { tmpdir } = await import('node:os');
+    const tmpDir = `${tmpdir()}/octopi-timeout-test-${Date.now()}`;
     const runtime = new SubsystemRuntime({
       deps: {
         model: {} as any,

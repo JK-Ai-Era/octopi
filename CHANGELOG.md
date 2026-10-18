@@ -1,4 +1,23 @@
-## v0.83.8
+## v0.83.9
+
+### fix(engine): keep stdio sinks writable and canonicalize jail roots in the macOS Seatbelt sandbox
+
+**问题**（macOS 部署实测暴露；Windows 上开发未覆盖）：mac-seatbelt 沙箱下 `git_*` 工具全挂（`fatal: could not open '/dev/null' for reading and writing: Operation not permitted`）、bash `> /dev/null` 重定向失败、vitest/mktemp/xcrun 往 tmp 建临时文件被拒（`EPERM`）。根因链：① 生成的 Seatbelt profile 只对 allowRoots 放行 `file-write*`，而 git 以 O_RDWR 打开 `/dev/null`（`dup_dev_null`）、shell 把 stdio 重定向到设备节点——设备不在任何 jail root 下，一律被 `(deny file-write*)` 拒绝；② jail roots 只做词法 `resolve()`，macOS 上 `/var`→`/private/var`、`/tmp`→`/private/tmp` 是符号链接别名，Seatbelt 按 canonical 路径匹配 `(subpath …)`，规则永远打不中（tmp 写全灭）。vitest 全量套件在同一沙箱下另有 19 个存量失败均为此二根因的下游表现（`git init` 挂、`spawn stdio:'ignore'` 打不开 /dev/null 报 EPERM、`/tmp` 硬编码路径写不进）。
+
+**修正**：
+
+- **stdio 设备写放行**（仅 Seatbelt；Linux bwrap 自建 `/dev` 天然免疫）：profile 追加 `/dev/null`、`/dev/zero`、`/dev/tty`、`/dev/std{in,out,err}` 的 `file-write*` 放行与 `/dev/fd` 子树（dup'd stdio 路径）；**刻意不放行 `/dev/ptmx`**（牢笼内不给开 TTY）
+- **jail roots 双形态规范化**：`resolveJailRoots` 对每个根同时输出词法形态与 `realpath` 规范形态（去重；win32 沿用小写去重），`realpath` 失败保留词法形态（stale allowRoots 不得中断命令，bwrap `--bind-try` 容忍）；对 Linux bwrap 的 bind 同样更准确，Windows supervised 路径零回归
+- **D7 语义收紧为「探测对齐 + 绝不重跑」**（经独立复审驱动的安全收紧）：`probeProcessIsolation` 新增 Seatbelt `sandbox_apply` 冒烟探测（与 bwrap `bwrapUsable` 对称）——jail 完全无法生效（如嵌套沙箱）时从一开始就是 supervised-spawn、用户命令只执行一次；wrapper 运行后的疑似建笼失败**绝不重新执行用户命令**（此前 runBwrap 的回落重跑可被伪造 stderr 触发——双重执行 + 逃逸面），`requireJail` 抛 `untrusted_jail_failed`，其余如实上报 wrapper 结果 + 降级隔离声明（`cwd-pin`）+ `securityDegraded`；runSeatbelt 补齐运行期失败处理（此前只有 runBwrap 有——平行值不对称即缺口）
+- **`isJailWrapperSetupFailure` 重写**：只认**行首** wrapper 签名（`bwrap:` / `sandbox-exec:` / `newuidmap:` / `newgidmap:`），新增 `terminated` 守卫（超时/abort 击杀的命令不是建笼失败）；删除裸 `operation not permitted` 与 `unshare` 裸子串匹配（沙箱对用户命令的写拒绝恰好就是这个措辞，`unshared` 这类词都会误中）
+- **`esc()` 路径转义修正**：不再静默剥离 `()`/换行（会把子路径规则错指到另一目录），改为纯引号转义；路径含换行抛 `seatbelt_path_invalid`；`resolveJailRoots` 相对根按 run cwd 解析、不再裁剪首尾空格（合法目录名可含空格）
+- **requireJail 契约统一**：wrapper spawn 失败路径改为抛 `untrusted_jail_failed`（与 `run()`/D7 文档「throws」一致，此前 resolve 失败结果）
+- **构建流水线恢复 bin 执行位**（新增 `scripts/postbuild-bin.mjs`，接入 `npm run build` 尾部，按 `package.json#bin` 数据驱动）：`npm run clean` + tsc 重建会把 `dist/cli/index.js` 打回 0644（npm 安装时补的 +x 丢失），POSIX 上 `octopi` CLI 直接 `zsh: permission denied`——Windows 无执行位概念故从未暴露，属同类跨平台盲区
+- **测试跨平台**：autonomous-subsystem 三个测试文件 4 处硬编码 `/tmp/...` 改 `os.tmpdir()`（Windows 无 `/tmp`）；新增测试：设备放行断言、roots 词法/规范双形态（真符号链接对照）、stale roots 容忍、D7 判定含防误判（用户命令错误文本不得触发）与防逃逸断言；`tests/harness/process-jail-wiring.test.ts` 共 22 用例全绿
+
+**验证**：`npm run lint` 零告警；`npm run build`（strict tsc）全绿；`tests/harness/process-jail-wiring.test.ts` 22 用例全过。部署至工具宿主后实证：`git_*`、`> /dev/null`、`mktemp` 三项病灶全部复活，isolation notes 可见 roots 词法+规范双形态。无绕行复跑全量 **2799 过 / 4 失败 / 5 跳过**（修复前 2772 过 / 19 失败）；4 个剩余失败与本改动无关：2 个是「在沙箱内跑测试」的固有限制（`/bin/ps` 为 setuid，Seatbelt 拒绝 setuid exec——产品进程不在牢笼内，运行时正常；普通开发机/CI 通过），2 个为 knowledge 子系统存量疑点（purgePath/gap-scan，疑似 macOS 路径别名类，另排期）。`arch/check-sync.sh` 在修复后环境可正常评估：8 条红灯全部是 `collaboration/delegation`、`orchestration` 的 arch 地图存量漂移（与本改动无关）。
+
+
 
 ### refactor(engine): drop the storage-compact contract and its dead config surface
 

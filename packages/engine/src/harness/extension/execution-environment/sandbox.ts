@@ -7,7 +7,7 @@
  */
 
 import { spawn, type SpawnOptions } from 'node:child_process';
-import { unlink, writeFile } from 'node:fs/promises';
+import { realpath, unlink, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import type {
@@ -125,7 +125,7 @@ export class ProcessSandbox implements SandboxProvider {
       maxOutputBytes: number;
     },
   ): Promise<SandboxResult> {
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       const start = Date.now();
       let stdout = '';
       let stderr = '';
@@ -150,6 +150,15 @@ export class ProcessSandbox implements SandboxProvider {
         clearTimeout(timer);
         config?.signal?.removeEventListener('abort', onAbort);
         resolve(result);
+      };
+
+      /** Refusal path (requireJail contract: throw, never resolve-as-success). */
+      const fail = (err: Error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        config?.signal?.removeEventListener('abort', onAbort);
+        reject(err);
       };
 
       const kill = (reason: string) => {
@@ -206,20 +215,11 @@ export class ProcessSandbox implements SandboxProvider {
         const isJailWrapper =
           profile.backend === 'linux-bwrap' || profile.backend === 'mac-seatbelt';
         if (config?.requireJail && isJailWrapper) {
-          finish({
-            exitCode: -1,
-            stdout,
-            stderr: err.message,
-            terminated: true,
-            terminateReason: `untrusted_jail_failed: ${err.message}`,
-            usage,
-            isolation: {
-              ...profile,
-              filesystem: 'cwd-pin',
-              privilege: 'same',
-              notes: [...(profile.notes ?? []), `jail spawn failed: ${err.message}`],
-            },
-          });
+          fail(
+            new Error(
+              `untrusted_jail_failed: jail spawn failed: ${err.message} (requireJail=true; refuse unsandboxed execute)`,
+            ),
+          );
           return;
         }
         const honest: ProcessIsolationProfile = isJailWrapper
@@ -257,7 +257,7 @@ export class ProcessSandbox implements SandboxProvider {
     },
   ): Promise<SandboxResult> {
     // D4-c: bind every allowRoot; default network deny (--unshare-all).
-    const roots = resolveJailRoots(opts.cwd, config);
+    const roots = await resolveJailRoots(opts.cwd, config);
     const network = resolveNetworkPolicy(config);
     const bwrapArgs = [
       '--die-with-parent',
@@ -299,14 +299,13 @@ export class ProcessSandbox implements SandboxProvider {
       ],
     };
     const result = await this.runSupervised('bwrap', bwrapArgs, config, applied, opts);
-    // bwrap spawn OK but jail setup failed (e.g. userns disabled) — D7 fork
-    if (result.exitCode !== 0 && isJailWrapperSetupFailure(result)) {
-      return this.jailSetupFailed(
-        file,
-        args,
+    // D7 runtime case (post-execution): the wrapper failed to establish the
+    // jail even though the probe passed. Never re-execute the user command.
+    if (isJailWrapperSetupFailure(result, 'bwrap')) {
+      return this.jailWrapperRuntimeFailure(
+        result,
         config,
         profile,
-        opts,
         `bwrap setup failed (exit=${result.exitCode}): ${result.stderr.slice(0, 200)}`,
       );
     }
@@ -325,7 +324,7 @@ export class ProcessSandbox implements SandboxProvider {
       maxOutputBytes: number;
     },
   ): Promise<SandboxResult> {
-    const roots = resolveJailRoots(opts.cwd, config);
+    const roots = await resolveJailRoots(opts.cwd, config);
     const network = resolveNetworkPolicy(config);
 
     // Host override wins; otherwise generate a profile covering allowRoots (D3-b+).
@@ -367,13 +366,24 @@ export class ProcessSandbox implements SandboxProvider {
     };
 
     try {
-      return await this.runSupervised(
+      const result = await this.runSupervised(
         'sandbox-exec',
         ['-f', profilePath, '--', file, ...args],
         config,
         applied,
         opts,
       );
+      // D7 runtime case (post-execution): the wrapper failed to apply the
+      // jail even though the probe passed. Never re-execute the user command.
+      if (isJailWrapperSetupFailure(result, 'sandbox-exec')) {
+        return await this.jailWrapperRuntimeFailure(
+          result,
+          config,
+          profile,
+          `seatbelt apply failed (exit=${result.exitCode}): ${result.stderr.slice(0, 200)}`,
+        );
+      }
+      return result;
     } finally {
       if (generatedPath) {
         await unlink(generatedPath).catch(() => undefined);
@@ -416,6 +426,48 @@ export class ProcessSandbox implements SandboxProvider {
     return this.runSupervised(file, args, config, degraded, opts);
   }
 
+  /**
+   * D7 runtime case (after the wrapper has run): a jail setup failure is
+   * suspected. The user command is **never re-executed** — a forged wrapper
+   * error must not buy a second, unsandboxed run. `requireJail` refuses;
+   * other modes report the wrapper outcome with downgraded isolation and the
+   * run-level `securityDegraded` note (under-claiming is the safe direction).
+   *
+   * @param result - the wrapper's own outcome (command not re-run)
+   * @param config - execute config (requireJail / degradation hook)
+   * @param profile - probed isolation profile
+   * @param reason - wrapper failure summary for notes
+   * @returns the wrapper outcome with honestly downgraded isolation
+   */
+  private jailWrapperRuntimeFailure(
+    result: SandboxResult,
+    config: SandboxConfig | undefined,
+    profile: ProcessIsolationProfile,
+    reason: string,
+  ): Promise<SandboxResult> {
+    if (config?.requireJail) {
+      return Promise.reject(
+        new Error(`untrusted_jail_failed: ${reason} (requireJail=true; refuse unsandboxed execute)`),
+      );
+    }
+    config?.noteSecurityDegraded?.(`jail_setup_failed: ${reason}`);
+    return Promise.resolve({
+      ...result,
+      isolation: {
+        ...profile,
+        backend: 'supervised-spawn',
+        processTree: 'killable',
+        filesystem: 'cwd-pin',
+        privilege: 'same',
+        network: 'open',
+        notes: [
+          ...(profile.notes ?? []),
+          `jail_setup_failed: ${reason}; command not re-executed`,
+        ],
+      },
+    });
+  }
+
   private usage(start: number, stdout: string, stderr: string): ResourceUsage {
     return {
       elapsedMs: Date.now() - start,
@@ -435,23 +487,30 @@ function resolveNetworkPolicy(config: SandboxConfig | undefined): 'open' | 'deny
 }
 
 /**
- * Heuristic: wrapper failed to establish the jail (not the user command).
- * bwrap typically exits 2 with unshare/EPERM messages and empty stdout.
+ * Heuristic: the jail wrapper failed to establish the jail — the user command
+ * never ran. Detection only feeds refusal (`requireJail`) or an honest
+ * isolation downgrade; the user command is **never re-executed** on it, so a
+ * forged stderr cannot buy an unsandboxed run. Wrapper diagnostics carry the
+ * argv0 prefix at **line start** (bwrap's uid-map helpers report as
+ * `newuidmap:` / `newgidmap:`); bare substrings are not matched, and neither
+ * is "operation not permitted": a sandbox write denial of a real user command
+ * emits exactly that wording. A terminated run (timeout/abort) is never a
+ * setup failure.
+ *
+ * @param result - wrapper run result
+ * @param wrapper - which jail wrapper produced the result
+ * @returns true when the jail itself failed to apply
  */
-function isJailWrapperSetupFailure(result: {
-  exitCode: number;
-  stdout: string;
-  stderr: string;
-}): boolean {
+export function isJailWrapperSetupFailure(
+  result: { exitCode: number; stdout: string; stderr: string; terminated?: boolean },
+  wrapper: 'bwrap' | 'sandbox-exec',
+): boolean {
+  if (result.terminated) return false;
+  if (result.exitCode === 0) return false;
   if (result.stdout.length > 0) return false;
-  const err = result.stderr.toLowerCase();
-  return (
-    err.includes('unshare') ||
-    err.includes('operation not permitted') ||
-    (err.includes('no such file or directory') && err.includes('bwrap')) ||
-    err.includes('newuidmap') ||
-    err.includes('setting up uid map')
-  );
+  const prefixes =
+    wrapper === 'bwrap' ? ['bwrap:', 'newuidmap:', 'newgidmap:'] : ['sandbox-exec:'];
+  return result.stderr.split('\n').some((line) => prefixes.some((p) => line.startsWith(p)));
 }
 
 /** Extra note when caller asked for allowlist (interface-only). */
@@ -463,45 +522,85 @@ function networkPolicyNote(config: SandboxConfig | undefined, applied: 'open' | 
   return `network=${applied}`;
 }
 
-/** Jail roots: allowRoots ∪ {cwd}, absolute, deduped. */
 /**
  * Jail write mounts (2a/2b): allowRoots ∪ cwd ∪ tmpdir (always) ∪ home
  * when `config.homeWrite` (project/host). tmp is not journaled (2c).
+ *
+ * Each root is emitted in its lexical form **and**, when resolvable, its
+ * canonical (`realpath`) form: jail backends match canonical paths, so a root
+ * given through a symlink alias (macOS `/var` → `/private/var`, `/tmp` →
+ * `/private/tmp`) must appear canonicalized or its subpath rule never matches.
+ * Roots that fail to resolve keep the lexical form only (stale allowRoots must
+ * not abort the command; bwrap uses `--bind-try`).
+ *
+ * @param cwd - working directory (always a root; also the relative base for root paths)
+ * @param config - sandbox config (allowRoots / homeWrite)
+ * @returns absolute, deduped root paths (lexical + canonical variants)
  */
-function resolveJailRoots(cwd: string, config: SandboxConfig | undefined): string[] {
+export async function resolveJailRoots(
+  cwd: string,
+  config: SandboxConfig | undefined,
+): Promise<string[]> {
   const raw = [cwd, ...(config?.allowRoots ?? []), tmpdir()];
   if (config?.homeWrite) {
     raw.push(homedir());
   }
   const out: string[] = [];
   const seen = new Set<string>();
-  for (const p of raw) {
-    const s = resolve(p?.trim() ?? '');
-    if (!s || s === '.') continue;
+  const push = (candidate: string): void => {
+    // Relative roots resolve against the run cwd, not the host process cwd.
+    const s = resolve(cwd, candidate);
+    if (!s || s === '.') return;
     const key = process.platform === 'win32' ? s.toLowerCase() : s;
-    if (seen.has(key)) continue;
+    if (seen.has(key)) return;
     seen.add(key);
     out.push(s);
+  };
+  for (const p of raw) {
+    if (!p || p.trim() === '') continue;
+    push(p);
+    const canonical = await realpathSafe(resolve(cwd, p));
+    if (canonical) push(canonical);
   }
   return out.length > 0 ? out : [resolve(cwd), resolve(tmpdir())];
 }
 
 /**
- * Seatbelt profile: default allow, deny writes outside allowRoots.
- * Network deny unless policy is open. Paths are quote-escaped for the sb DSL.
+ * Canonicalize a path; null when it cannot be resolved (e.g. stale root).
+ *
+ * @param p - path to canonicalize
+ * @returns realpath or null
  */
+async function realpathSafe(p: string): Promise<string | null> {
+  try {
+    return await realpath(resolve(p));
+  } catch {
+    // Missing/unreadable root: keep the lexical form (bind-try tolerates).
+    return null;
+  }
+}
+
 /**
- * Seatbelt profile: default allow, deny writes outside roots, deny network,
- * and deny common privilege-gaining execs (1-B: privilege=dropped means
- * ops-denied, uid unchanged).
+ * Seatbelt profile: default allow, deny writes outside roots (stdio devices
+ * excepted), deny network unless open, and deny common privilege-gaining
+ * execs (1-B: privilege=dropped means ops-denied, uid unchanged).
+ * Paths are quote-escaped for the sb DSL.
  */
 export function buildSeatbeltProfile(
   roots: string[],
   network: 'open' | 'deny',
   extra?: { privilegeDenyExec?: string[] },
 ): string {
-  const esc = (p: string) =>
-    p.replace(/\\/g, '/').replace(/"/g, '\\"').replace(/[\r\n()]/g, '');
+  const esc = (p: string): string => {
+    // A newline would break out of the profile's string literal; refuse loudly
+    // instead of silently deleting characters from a real path.
+    if (p.includes('\n') || p.includes('\r')) {
+      throw new Error(`seatbelt_path_invalid: path contains newline: ${JSON.stringify(p)}`);
+    }
+    // Quote-escape only. () and spaces are inert inside SBPL strings; stripping
+    // them would point subpath rules at a different directory.
+    return p.split('\\').join('\\\\').split('"').join('\\"');
+  };
   const lines: string[] = ['(version 1)', '(allow default)'];
   if (network === 'deny') {
     lines.push('(deny network*)');
@@ -514,8 +613,29 @@ export function buildSeatbeltProfile(
   for (const root of roots) {
     lines.push(`(allow file-write* (subpath "${esc(root)}"))`);
   }
+  // stdio sinks must stay writable or basic tooling dies (git opens
+  // /dev/null O_RDWR; shells redirect > /dev/null). /dev/fd covers dup'd
+  // stdio paths (/dev/std{in,out,err} resolve there). Deliberately excludes
+  // /dev/ptmx — no TTY allocation inside the jail.
+  for (const dev of SEATBELT_DEVICE_WRITE_ALLOW) {
+    lines.push(`(allow file-write* (literal "${esc(dev)}"))`);
+  }
+  lines.push('(allow file-write* (subpath "/dev/fd"))');
   return lines.join('\n') + '\n';
 }
+
+/**
+ * POSIX stdio devices the jail must keep writable (macOS Seatbelt only;
+ * bwrap supplies its own /dev). Character sinks cannot escape the jail.
+ */
+export const SEATBELT_DEVICE_WRITE_ALLOW = [
+  '/dev/null',
+  '/dev/zero',
+  '/dev/tty',
+  '/dev/stdin',
+  '/dev/stdout',
+  '/dev/stderr',
+] as const;
 
 /** Common privilege-gaining binaries denied inside Seatbelt (1-B). */
 const DEFAULT_PRIVILEGE_DENY_EXEC = [
