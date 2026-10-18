@@ -109,7 +109,20 @@ describe('SessionAwareRunner concurrent sessions (I1)', () => {
           sessionId: scope!.sessionId,
           sharedWithAgent: ctx === (agent as { context: unknown }).context,
         });
-        const users = (ctx?.messages ?? []).filter((m) => m.role === 'user').map((m) => String(m.content));
+        // 隔离性判定只看**真实用户发言**；引擎载体 user 插槽（E8 快照/grounding/附件/摘要）
+        // 是机器生成内容，不含 session 标识属正常
+        const users = (ctx?.messages ?? [])
+          .filter((m) => {
+            if (m.role !== 'user') return false;
+            const src = (m.metadata as { source?: string } | undefined)?.source;
+            return !(
+              src === 'runtimeSnapshot' ||
+              src === 'knowledgeGrounding' ||
+              src === 'sessionAttachment' ||
+              src === 'contextSummary'
+            );
+          })
+          .map((m) => String(m.content));
         seenScopes.push({
           sessionId: scope!.sessionId,
           messagesAtStart: ctx?.messages.length ?? -1,

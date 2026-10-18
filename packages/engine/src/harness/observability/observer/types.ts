@@ -568,8 +568,10 @@ export function summarizeMessages(
  * @returns 是否隐藏
  */
 export function isHiddenFromChat(msg: Pick<Message, 'role' | 'content' | 'metadata'>): boolean {
-  if (msg.role !== 'system') return false;
   const source = (msg.metadata as { source?: string } | undefined)?.source;
+  // E8 易变快照：只进 LLM 上下文，不进聊天回放（与 ConversationAdapter 对齐）
+  if (source === 'runtimeSnapshot') return true;
+  if (msg.role !== 'system') return false;
   if (source === 'systemPrompt') return true;
   const text = extractMessageText(msg.content);
   return (

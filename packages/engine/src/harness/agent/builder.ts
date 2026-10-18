@@ -578,6 +578,8 @@ export class AgentBuilder {
     includeLayerPreview?: boolean;
     layerPreviewChars?: number;
     includeLayerContent?: boolean;
+    /** E8：易变快照组 token 预算（缺省不设上限） */
+    snapshotBudgetTokens?: number;
     layerShares?: Partial<Record<import('../context/layer-types.js').ContextLayerId, number>>;
   };
   /** 文件式 persona 的 run 时解析器（指纹缓存，改文件下一轮生效） */
@@ -901,6 +903,8 @@ export class AgentBuilder {
     includeLayerPreview?: boolean;
     layerPreviewChars?: number;
     includeLayerContent?: boolean;
+    /** E8：易变快照组 token 预算（缺省不设上限） */
+    snapshotBudgetTokens?: number;
     layerShares?: Partial<Record<import('../context/layer-types.js').ContextLayerId, number>>;
   }): this {
     this._contextAssemblerConfig = { ...this._contextAssemblerConfig, ...config };
@@ -1343,6 +1347,7 @@ export class AgentBuilder {
       cognitionStore,
       systemBudgetRatio: assemblerCfg?.systemBudgetRatio,
       systemBudgetTokens: assemblerCfg?.systemBudgetTokens,
+      snapshotBudgetTokens: assemblerCfg?.snapshotBudgetTokens,
       constitution: constitutionCfg,
       assemblerConfig: {
         layerShares: assemblerCfg?.layerShares,

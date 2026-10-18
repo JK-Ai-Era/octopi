@@ -47,6 +47,16 @@ export interface GroundingAssemblerOptions {
   hitLog?: KnowledgeHitLog;
 }
 
+/** 引擎载体 user 插槽（快照/grounding/附件/摘要）不是用户发言，query 不采信 */
+function isEngineCarrierSource(source: unknown): boolean {
+  return (
+    source === 'runtimeSnapshot' ||
+    source === 'knowledgeGrounding' ||
+    source === 'sessionAttachment' ||
+    source === 'contextSummary'
+  );
+}
+
 /**
  * v1 query：最近 user + 可选前 1–2 条 user；不用 assistant 长文
  */
@@ -55,7 +65,9 @@ export function resolveGroundingQuery(
   opts?: { includePriorUserTurns?: number; maxChars?: number },
 ): string {
   const prior = Math.max(0, opts?.includePriorUserTurns ?? 1);
-  const users = messages.filter((m) => m.role === 'user');
+  const users = messages.filter(
+    (m) => m.role === 'user' && !isEngineCarrierSource(m.metadata?.source),
+  );
   const recent = users.slice(-1 - prior);
   const parts = recent.map((m) => getTextContent(m.content).trim()).filter(Boolean);
   const joined = parts.join('\n');

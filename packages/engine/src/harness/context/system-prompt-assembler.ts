@@ -28,7 +28,22 @@ export interface SystemPromptAssembleInput {
   agentId?: string;
   messages: Message[];
   persona: string;
+  /**
+   * 运行时注入（**兼容旧契约**：datetime + 稳定锚点 + tasks/guidance 的合并形态）。
+   * 提供 `volatileContext` / `runtimeAnchors` 时本字段被忽略；
+   * 仅有本字段时整体按**易变**处理进快照（E8：来历不明的动态注入不得进 system 前缀）。
+   */
   injectedContext?: string;
+  /**
+   * 易变注入份（datetime / session tasks / guidance 等）——宪法 E8：
+   * 进本轮易变快照（消息尾部），**不进 system prompt**。优先于 `injectedContext`。
+   */
+  volatileContext?: string;
+  /**
+   * 稳定运行时锚点（workspace/roots/effectMode/root_instructions）——
+   * 留 system prompt（缓存稳定前缀）。
+   */
+  runtimeAnchors?: string;
   /** 显式配置的上下文窗口；未知时省略 */
   contextWindow?: number;
   /**
@@ -41,6 +56,11 @@ export interface SystemPromptAssembleInput {
 
 export interface SystemPromptAssembleOutput {
   systemPrompt: string;
+  /**
+   * 易变快照正文（E8，placement='snapshot' 的层）。
+   * 由调用方经本轮消息尾部的 content 插槽送达；无易变层时缺省。
+   */
+  runtimeSnapshot?: string;
   manifest?: AssembleManifest;
   /**
    * true = 未按 contextWindow 比例做层预算（窗口未知）。
@@ -57,6 +77,11 @@ export function createDefaultSystemPromptAssembler(options?: {
   systemBudgetRatio?: number;
   /** 显式 system 预算 token；与 contextWindow 无关（窗口未知时仍可用） */
   systemBudgetTokens?: number;
+  /**
+   * 易变快照组（placement='snapshot'）的 token 预算（E8）。
+   * 缺省不设上限（与历史行为一致）；部署调参经 `contextAssembler.snapshotBudgetTokens`。
+   */
+  snapshotBudgetTokens?: number;
   getSkillPromptText?: () => Promise<string> | string;
   memoryStore?: MemoryStore;
   /** Knowledge Tier 0 catalog（有哪些源）；内容命中不进 system */
@@ -122,7 +147,9 @@ export function createDefaultSystemPromptAssembler(options?: {
     },
     async assemble(input) {
       const hasPersona = Boolean((input.persona ?? '').trim());
-      const hasInjected = Boolean((input.injectedContext ?? '').trim());
+      const hasInjected = Boolean(
+        (input.injectedContext ?? '').trim() || (input.runtimeAnchors ?? '').trim(),
+      );
       let hasSkill = false;
       if (getSkillPromptText) {
         hasSkill = Boolean((await getSkillPromptText()).trim());
@@ -201,24 +228,65 @@ export function createDefaultSystemPromptAssembler(options?: {
           }),
         );
       }
+      // E8 双实例：稳定锚点（workspace/root_instructions）留 system；易变注入（datetime/tasks）进快照。
+      // volatileContext 优先（新契约）；仅 injectedContext 时整体按易变处理（E8 缺省）
       layers.push(
         new RuntimeLayer({
-          getText: () => input.injectedContext ?? '',
+          getText: () => input.runtimeAnchors ?? '',
         }),
       );
+      layers.push(
+        new RuntimeLayer({
+          getText: () => input.volatileContext ?? input.injectedContext ?? '',
+          placement: 'snapshot',
+        }),
+      );
+
+      // E8 双组装配：稳定层 → system prompt（含宪法 preamble）；易变层 → 本轮快照
+      const systemLayers = layers.filter((l) => (l.placement ?? 'system') !== 'snapshot');
+      const snapshotLayers = layers.filter((l) => l.placement === 'snapshot');
+      const layerQuery = extractLayerQuery(input.messages, { topicHints: input.topicHints });
 
       const result = await assembler.assemble({
         sessionId: input.sessionId,
         agentId: input.agentId,
         messages: input.messages,
         systemBudget,
-        layers,
+        layers: systemLayers,
         signal: input.signal,
-        query: extractLayerQuery(input.messages, { topicHints: input.topicHints }),
+        query: layerQuery,
         constitutionPreamble: passPreamblePerAssemble || resolvedPreamble ? resolvedPreamble : undefined,
       });
 
-      return { systemPrompt: result.systemPrompt, manifest: result.manifest, skippedBudget };
+      let runtimeSnapshot: string | undefined;
+      let manifest = result.manifest;
+      if (snapshotLayers.length > 0) {
+        const snapBudget =
+          options?.snapshotBudgetTokens != null && options.snapshotBudgetTokens > 0
+            ? options.snapshotBudgetTokens
+            : Number.MAX_SAFE_INTEGER;
+        const snap = await assembler.assemble({
+          sessionId: input.sessionId,
+          agentId: input.agentId,
+          messages: input.messages,
+          systemBudget: snapBudget,
+          layers: snapshotLayers,
+          signal: input.signal,
+          query: layerQuery,
+          constitutionPreamble: '',
+        });
+        runtimeSnapshot = snap.systemPrompt.trim() || undefined;
+        manifest = {
+          ...result.manifest,
+          usedSnapshotTokens: snap.manifest.usedTokens > 0 ? snap.manifest.usedTokens : undefined,
+          layers: [
+            ...result.manifest.layers.map((e) => ({ ...e, placement: e.placement ?? ('system' as const) })),
+            ...snap.manifest.layers.map((e) => ({ ...e, placement: 'snapshot' as const })),
+          ],
+        };
+      }
+
+      return { systemPrompt: result.systemPrompt, runtimeSnapshot, manifest, skippedBudget };
     },
   };
 }

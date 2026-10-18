@@ -1044,6 +1044,10 @@
           "type": "number",
           "exclusiveMinimum": 0
         },
+        "snapshotBudgetTokens": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
         "compactTargetTokens": {
           "type": "number",
           "exclusiveMinimum": 0
@@ -1872,6 +1876,10 @@
               "maximum": 0.5
             },
             "systemBudgetTokens": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "snapshotBudgetTokens": {
               "type": "number",
               "exclusiveMinimum": 0
             },

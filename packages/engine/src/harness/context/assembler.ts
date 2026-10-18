@@ -126,7 +126,7 @@ export class DefaultContextAssembler implements ContextAssembler {
   private readonly defaultLayerShares: Partial<Record<ContextLayerId, number>>;
   private readonly constitutionPreamble?: string;
   /** sessionId → layerId → fingerprint，用于跳过未变更层的重复 assemble */
-  private readonly fingerprints = new Map<string, Map<ContextLayerId, string | null>>();
+  private readonly fingerprints = new Map<string, Map<string, string | null>>();
 
   constructor(config?: DefaultContextAssemblerConfig) {
     this.structureReserve = config?.structureReserve ?? 150;
@@ -155,7 +155,12 @@ export class DefaultContextAssembler implements ContextAssembler {
       ...this.defaultLayerShares,
       ...params.layerShares,
     };
-    const preambleText = (this.constitutionPreamble ?? params.constitutionPreamble ?? '').trim();
+    // params 显式传入优先（含 '' = 明确不要 preamble，E8 快照组用）；缺省回退构造器配置
+    const preambleText = (
+      params.constitutionPreamble !== undefined
+        ? params.constitutionPreamble
+        : (this.constitutionPreamble ?? '')
+    ).trim();
 
     if (ordered.length === 0 || systemBudget <= 0) {
       // 宪法 preamble 不可丢：无层时仍返回 preamble
@@ -197,8 +202,10 @@ export class DefaultContextAssembler implements ContextAssembler {
         // 指纹未变则视为「本层无新内容」的轻量跳过：
         // 当前实现仍每轮调用 assemble（层可能依赖 query），
         // 指纹仅写入 manifest 供观测；缓存复用留给后续层实现。
+        // F9：键含 placement——双 RuntimeLayer 实例（system/snapshot）不共享键空间
+        const fpKey = `${layer.id}#${layer.placement === 'snapshot' ? 'snapshot' : 'system'}`;
         const fp = layer.fingerprint ? await layer.fingerprint(ctx) : null;
-        this.rememberFingerprint(sessionId, layer.id, fp);
+        this.rememberFingerprint(sessionId, fpKey, fp);
 
         let content: LayerContent | null = null;
         try {
@@ -347,7 +354,7 @@ export class DefaultContextAssembler implements ContextAssembler {
     return { systemPrompt, manifest };
   }
 
-  private rememberFingerprint(sessionId: string, layerId: ContextLayerId, fp: string | null): void {
+  private rememberFingerprint(sessionId: string, layerKey: string, fp: string | null): void {
     if (!this.fingerprints.has(sessionId) && this.fingerprints.size >= MAX_FINGERPRINT_SESSIONS) {
       // 简单 FIFO：丢掉最早插入的 session
       const oldest = this.fingerprints.keys().next().value;
@@ -358,7 +365,7 @@ export class DefaultContextAssembler implements ContextAssembler {
       m = new Map();
       this.fingerprints.set(sessionId, m);
     }
-    m.set(layerId, fp);
+    m.set(layerKey, fp);
   }
 
   /** 会话结束时清理指纹缓存 */
@@ -366,9 +373,9 @@ export class DefaultContextAssembler implements ContextAssembler {
     this.fingerprints.delete(sessionId);
   }
 
-  /** 读取某层最近指纹（调试/测试用） */
-  getFingerprint(sessionId: string, layerId: ContextLayerId): string | null | undefined {
-    return this.fingerprints.get(sessionId)?.get(layerId);
+  /** 读取某层最近指纹（调试/测试用）；layerKey 形如 `id#system` / `id#snapshot` */
+  getFingerprint(sessionId: string, layerKey: string): string | null | undefined {
+    return this.fingerprints.get(sessionId)?.get(layerKey);
   }
 }
 

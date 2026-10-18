@@ -680,13 +680,14 @@ export class DefaultContextEngine implements ContextEngine {
   }
 
   /**
-   * 压缩/摘要的语义输入：丢掉托管 system 与 knowledgeGrounding
-   * （grounding 每轮现算，不进 previousSummary）
+   * 压缩/摘要的语义输入：丢掉托管 system 与 knowledgeGrounding / runtimeSnapshot
+   * （grounding 与易变快照每轮现算，不进 previousSummary——防陈旧内容固化进摘要）
    */
   private semanticHistory(messages: Message[]): Message[] {
     return messages.filter((m) => {
       if (m.role === 'system' && m.metadata?.source === 'systemPrompt') return false;
       if (m.metadata?.source === 'knowledgeGrounding') return false;
+      if (m.metadata?.source === 'runtimeSnapshot') return false;
       return true;
     });
   }
@@ -918,10 +919,13 @@ export class DefaultContextEngine implements ContextEngine {
       result.push({ role: 'system', content: systemPrompt });
     }
 
-    // knowledgeGrounding：只保留最近一条（旧 grounding 不回放；每轮现算）
+    // knowledgeGrounding / runtimeSnapshot：只保留最近一条（旧的不回放；每轮现算）
     let lastGroundingIdx = -1;
+    let lastSnapshotIdx = -1;
     for (let i = 0; i < messages.length; i++) {
-      if (messages[i].metadata?.source === 'knowledgeGrounding') lastGroundingIdx = i;
+      const source = messages[i].metadata?.source;
+      if (source === 'knowledgeGrounding') lastGroundingIdx = i;
+      if (source === 'runtimeSnapshot') lastSnapshotIdx = i;
     }
 
     for (let i = 0; i < messages.length; i++) {
@@ -930,6 +934,9 @@ export class DefaultContextEngine implements ContextEngine {
         continue;
       }
       if (msg.metadata?.source === 'knowledgeGrounding' && i !== lastGroundingIdx) {
+        continue;
+      }
+      if (msg.metadata?.source === 'runtimeSnapshot' && i !== lastSnapshotIdx) {
         continue;
       }
       result.push(...this.convertMessage(msg));

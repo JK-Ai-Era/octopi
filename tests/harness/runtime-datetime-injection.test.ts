@@ -124,11 +124,18 @@ describe('SessionAwareRunner 注入 datetime', () => {
     }
 
     const system = String(captured[0]?.messages.find((m) => m.role === 'system')?.content ?? '');
+    // E8：persona/稳定锚点留 system；datetime 与调用方 injectedContext 进本轮快照（消息尾部）
     expect(system).toContain('You are test-agent.');
-    expect(system).toContain('Current datetime:');
-    expect(system).toContain('CALLER-INJECT');
+    expect(system).not.toContain('Current datetime:');
+    expect(system).not.toContain('CALLER-INJECT');
+    const snapshot = String(
+      captured[0]?.messages.find(
+        (m) => m.role === 'user' && String(m.content ?? '').includes('<runtime_snapshot>'),
+      )?.content ?? '',
+    );
+    expect(snapshot).toContain('Current datetime:');
+    expect(snapshot).toContain('CALLER-INJECT');
     // I1：装配结果在 Run 工作区；共享 agent.context 不再作为「当前会话 system」权威
-    expect(system.indexOf('Current datetime:')).toBeGreaterThan(-1);
   });
 
   it('配置 agent.workspace 时 system prompt 含 Workspace 锚点', async () => {

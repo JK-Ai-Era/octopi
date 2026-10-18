@@ -40,7 +40,12 @@ const TRIGRAM_MIN_CHARS = 3;
  */
 function isTransientMessage(msg: Message): boolean {
   const src = msg.metadata?.source;
-  return src === 'knowledgeGrounding' || src === 'sessionAttachment';
+  return (
+    src === 'knowledgeGrounding' ||
+    src === 'sessionAttachment' ||
+    // E8 易变快照：日志保留（审计）但非 Discourse 发言，索引不收（防幽灵词条/归因错误）
+    src === 'runtimeSnapshot'
+  );
 }
 
 /**

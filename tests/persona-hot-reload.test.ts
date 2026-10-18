@@ -256,9 +256,15 @@ describe('AgentBuilder + SessionAwareRunner 热更新', () => {
 
     const secondSystem = captured[1]?.messages.find((m) => m.role === 'system');
     const secondSystemText = String(secondSystem?.content ?? '');
-    // persona 删空后不再粘旧人格；runtime datetime 仍每轮注入（I1：以 LLM 所见 system 为准）
+    // persona 删空后不再粘旧人格；runtime 易变注入每轮仍生效，但 E8 后在快照消息里（不进 system）
     expect(secondSystemText).not.toContain('# Soul');
-    expect(secondSystemText).toContain('Current datetime:');
+    expect(secondSystemText).not.toContain('Current datetime:');
+    const secondSnapshot = String(
+      captured[1]?.messages.find(
+        (m) => m.role === 'user' && String(m.content ?? '').includes('<runtime_snapshot>'),
+      )?.content ?? '',
+    );
+    expect(secondSnapshot).toContain('Current datetime:');
     expect(security.setSystemPromptMock).toHaveBeenLastCalledWith('');
   });
 
@@ -316,7 +322,15 @@ describe('AgentBuilder + SessionAwareRunner 热更新', () => {
     })) {
       // drain
     }
-    expect(String(captured[0]?.messages.find((m) => m.role === 'system')?.content ?? '')).toContain('INJECT-A');
+    // E8：调用方 injectedContext 进快照消息，不进 system
+    expect(String(captured[0]?.messages.find((m) => m.role === 'system')?.content ?? '')).not.toContain('INJECT-A');
+    expect(
+      String(
+        captured[0]?.messages.find(
+          (m) => m.role === 'user' && String(m.content ?? '').includes('<runtime_snapshot>'),
+        )?.content ?? '',
+      ),
+    ).toContain('INJECT-A');
 
     // 模拟磁盘读失败
     runner.setSystemPromptResolver(async () => {
@@ -331,9 +345,13 @@ describe('AgentBuilder + SessionAwareRunner 热更新', () => {
     }
 
     const sys = String(captured[1]?.messages.find((m) => m.role === 'system')?.content ?? '');
+    // 失败回退仍用上次干净 persona；INJECT-B 在本轮快照，旧快照（INJECT-A）不回放
     expect(sys).toContain('# Soul v1');
-    expect(sys).toContain('INJECT-B');
+    expect(sys).not.toContain('INJECT-B');
     expect(sys).not.toContain('INJECT-A');
+    const req2Text = captured[1]?.messages.map((m) => String(m.content ?? '')).join('\n') ?? '';
+    expect(req2Text).toContain('INJECT-B');
+    expect(req2Text).not.toContain('INJECT-A');
 
     // 可观测性：warn + 轻量事件
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('persona resolve failed'));

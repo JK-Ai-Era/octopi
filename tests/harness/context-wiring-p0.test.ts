@@ -82,12 +82,59 @@ describe('createDefaultSystemPromptAssembler', () => {
       messages: [msg('hi')],
       persona: 'You are octopi.',
       injectedContext: '<session_tasks>open</session_tasks>',
+      runtimeAnchors: 'Workspace: /tmp',
       contextWindow: 32000,
     });
+    // E8：稳定锚点留 system prompt；易变注入（tasks）进本轮快照
     expect(result.systemPrompt).toContain('You are octopi.');
-    expect(result.systemPrompt).toContain('<session_tasks>');
+    expect(result.systemPrompt).toContain('Workspace: /tmp');
+    expect(result.systemPrompt).not.toContain('<session_tasks>');
+    expect(result.runtimeSnapshot).toContain('<session_tasks>');
     expect(result.manifest?.layers.find((l) => l.id === 'persona')?.included).toBe(true);
-    expect(result.manifest?.layers.find((l) => l.id === 'runtime')?.included).toBe(true);
+    expect(result.manifest?.layers.filter((l) => l.id === 'runtime' && l.included)).toHaveLength(2);
+    expect(
+      result.manifest?.layers.find((l) => l.id === 'runtime' && l.placement === 'snapshot')?.included,
+    ).toBe(true);
+    expect(result.manifest?.usedSnapshotTokens ?? 0).toBeGreaterThan(0);
+  });
+
+  it('快照组不携带宪法 preamble（不重复注入）', async () => {
+    const asm = createDefaultSystemPromptAssembler({ constitutionText: 'THE-CONST-PREAMBLE' });
+    const result = await asm.assemble({
+      sessionId: 's1',
+      messages: [msg('hi')],
+      persona: 'You are octopi.',
+      injectedContext: '<runtime>turn1</runtime>',
+      contextWindow: 32000,
+    });
+    expect(result.systemPrompt).toContain('THE-CONST-PREAMBLE');
+    expect(result.runtimeSnapshot).not.toContain('THE-CONST-PREAMBLE');
+    expect(result.runtimeSnapshot).toContain('<runtime>turn1</runtime>');
+  });
+
+  it('E8 缓存稳定：跨轮 systemPrompt 逐字节不变，易变内容只进快照', async () => {
+    const asm = createDefaultSystemPromptAssembler({ constitution: { mode: 'off' } });
+    const base = {
+      persona: 'You are octopi.',
+      runtimeAnchors: 'Workspace: /tmp',
+      contextWindow: 32000,
+    };
+    const r1 = await asm.assemble({
+      ...base,
+      sessionId: 's1',
+      messages: [msg('hi')],
+      injectedContext: '<runtime>turn1</runtime>',
+    });
+    const r2 = await asm.assemble({
+      ...base,
+      sessionId: 's1',
+      messages: [msg('hi'), msg('more')],
+      injectedContext: '<runtime>turn2</runtime>',
+    });
+    expect(r1.systemPrompt).toBe(r2.systemPrompt);
+    expect(r1.runtimeSnapshot).toContain('turn1');
+    expect(r2.runtimeSnapshot).toContain('turn2');
+    expect(r1.runtimeSnapshot).not.toBe(r2.runtimeSnapshot);
   });
 
   it('空 persona 且无注入时产出空 system（constitution off）', async () => {

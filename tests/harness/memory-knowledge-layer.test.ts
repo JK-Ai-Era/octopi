@@ -31,8 +31,10 @@ describe('Memory/Knowledge 层进 system prompt', () => {
       contextWindow: 32000,
     });
 
-    expect(result.systemPrompt).toContain('相关记忆');
-    expect(result.systemPrompt).toContain('TypeScript');
+    // E8：Memory 属易变快照（query 相关择取），进 runtimeSnapshot 而非 system prompt
+    expect(result.runtimeSnapshot).toContain('相关记忆');
+    expect(result.runtimeSnapshot).toContain('TypeScript');
+    expect(result.systemPrompt).not.toContain('相关记忆');
     expect(result.manifest?.layers.find((l) => l.id === 'memory')?.included).toBe(true);
   });
 
@@ -97,6 +99,6 @@ describe('Memory/Knowledge 层进 system prompt', () => {
       persona: '',
       contextWindow: 32000,
     });
-    expect(result.systemPrompt).toContain('vitest');
+    expect(result.runtimeSnapshot).toContain('vitest');
   });
 });

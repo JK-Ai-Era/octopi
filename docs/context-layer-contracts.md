@@ -55,6 +55,7 @@ Notes:
 - **order ≠ priority**: order decides left-to-right position in the system prompt; priority decides who is retained first when the total budget is insufficient.
 - **defaultShare**: historical reference values; they **no longer** drive Assembler quotas. For a per-layer limit, configure `contextAssembler.layerShares` (hard cap).
 - **runtime** is product layer 7 (system side, owned by Run); it absorbs the Runner's existing `injectedContext` (session tasks / subsystem guidance), sits near the conversation side; it is **not** Information.
+- **placement (E8)**: layers declare `placement: 'system' | 'snapshot'` (default `'system'`). Query-dependent picks (Memory / Cognition / Wisdom) and per-run dynamic injection (Runtime: datetime / tasks / guidance) are `'snapshot'`; stable fragments (Persona / Skill / Knowledge catalog / Runtime anchors: workspace / root instructions) stay `'system'`. `'snapshot'` layers assemble into the per-turn `runtimeSnapshot`, delivered at the message tail — **never** into the system prompt (constitution E8: cache-stable prefix).
 
 ---
 
@@ -67,6 +68,7 @@ interface ContextLayer {
   defaultShare: number;  // share normalized across enabled layers
   droppable: boolean;    // can the whole layer be dropped when over budget (persona=false)
   order: number;         // position in the system prompt
+  placement?: 'system' | 'snapshot';  // E8: 'snapshot' → per-turn runtimeSnapshot (message tail), never system prompt
 
   fingerprint?(ctx): Promise<string | null> | string | null;
   assemble(ctx: LayerAssembleContext): Promise<LayerContent | null>;
@@ -185,6 +187,8 @@ Runner.handle
 
 - Hosted system (`metadata.source === 'systemPrompt'`) is skipped in `buildLlmMessages`, avoiding double injection with the `systemPrompt` parameter
 - Compact summaries / truncation notes use **`role: 'user'`** + `metadata.source === 'contextSummary'`, producing no mid-conversation system
+- **Runtime snapshot (E8)**: volatile layers ship as `runtimeSnapshot` → tail message `role: 'user'` + `metadata.source: 'runtimeSnapshot'` wrapped in `<runtime_snapshot>`; `buildLlmMessages` replays **only the latest** snapshot (old snapshots are never replayed — stale retrieval picks must not be baked in); the session log keeps them (audit parity with hosted system); Web chat replay hides them
+- **View authority (E8 pitfall)**: the runner's `baseMsgs` view (detach slice + old turn-slot stripping + current slots) must **unconditionally** replace `runContext.messages` — a proxy check like "length unchanged ⇒ view unchanged" discards the whole view whenever stripped count equals inserted count (snapshot lost, stripped slots resurrected)
 - External system messages without metadata are kept as-is
 
 **Already wired (including P1/P2 layer extensions):**

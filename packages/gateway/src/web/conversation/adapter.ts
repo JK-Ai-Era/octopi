@@ -57,13 +57,16 @@ function asStringArray(value: unknown): string[] {
 }
 
 /**
- * 托管 system prompt / 明显的人格注入 / knowledge grounding，不应作为聊天记录回放
+ * 托管 system prompt / 明显的人格注入 / 引擎载体插槽（knowledgeGrounding / sessionAttachment / runtimeSnapshot），
+ * 不应作为聊天记录回放
  */
 function isHiddenSystemHistory(msg: MessageRecord): boolean {
   const meta = msg.metadata as { source?: string } | undefined;
   if (meta?.source === 'knowledgeGrounding') return true;
   // 会话附件资料块：只进 LLM 上下文，不进聊天回放
   if (meta?.source === 'sessionAttachment') return true;
+  // E8 易变快照（datetime/任务/检索择取）：只进 LLM 上下文，不进聊天回放
+  if (meta?.source === 'runtimeSnapshot') return true;
   if (msg.role !== 'system') return false;
   if (meta?.source === 'systemPrompt') return true;
   const text = extractText(msg.content);

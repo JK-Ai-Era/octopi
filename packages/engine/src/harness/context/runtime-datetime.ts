@@ -110,3 +110,43 @@ export function withRuntimeDatetimeInjection(
 ): string {
   return withRuntimeEnvironmentInjection(injectedContext, { now });
 }
+
+/**
+ * 拆分 runtime 注入为「稳定锚点」与「易变快照」两份（宪法 E8：缓存稳定前缀）
+ *
+ * 稳定份（workspace/roots/effectMode + root_instructions）留 system prompt；
+ * 易变份（datetime + 既有注入 tasks/guidance）进本轮快照（消息尾部 content 侧）。
+ * `withRuntimeEnvironmentInjection` 保留合并形态供旧路径（fallback 拼接）使用。
+ *
+ * @param injectedContext - 本轮已有注入（tasks / guidance 等），可为空
+ * @param options - now / cwd / allowRoots / effectMode / rootInstructions
+ * @returns anchors（稳定份）与 volatile（易变份）
+ */
+export function splitRuntimeEnvironmentInjection(
+  injectedContext: string | undefined,
+  options?: {
+    now?: Date;
+    cwd?: string | undefined;
+    allowRoots?: string[];
+    effectMode?: string;
+    rootInstructions?: string;
+  },
+): { anchors: string; volatile: string } {
+  const anchors: string[] = [];
+  const ws = formatRuntimeWorkspaceInjection(options?.cwd, {
+    allowRoots: options?.allowRoots,
+    effectMode: options?.effectMode,
+  });
+  if (ws) anchors.push(ws);
+  const rootInst = options?.rootInstructions?.trim();
+  if (rootInst) anchors.push(rootInst);
+
+  const volatileBlocks = [formatRuntimeDatetimeInjection(options?.now ?? new Date())];
+  const base = (injectedContext ?? '').trim();
+  if (base) volatileBlocks.push(base);
+
+  return {
+    anchors: anchors.join('\n\n'),
+    volatile: volatileBlocks.join('\n\n'),
+  };
+}

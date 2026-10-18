@@ -11,6 +11,7 @@ import type {
   ContextLayerId,
   LayerAssembleContext,
   LayerContent,
+  LayerPlacement,
 } from './layer-types.js';
 import {
   LAYER_DEFAULT_SHARE,
@@ -33,13 +34,15 @@ abstract class BaseLayer implements ContextLayer {
   readonly defaultShare: number;
   readonly droppable: boolean;
   readonly order: number;
+  readonly placement: LayerPlacement;
 
-  constructor(id: ContextLayerId, overrides?: Partial<Pick<ContextLayer, 'priority' | 'defaultShare' | 'droppable' | 'order'>>) {
+  constructor(id: ContextLayerId, overrides?: Partial<Pick<ContextLayer, 'priority' | 'defaultShare' | 'droppable' | 'order' | 'placement'>>) {
     this.id = id;
     this.priority = overrides?.priority ?? LAYER_PRIORITY[id];
     this.defaultShare = overrides?.defaultShare ?? LAYER_DEFAULT_SHARE[id];
     this.droppable = overrides?.droppable ?? id !== 'persona';
     this.order = overrides?.order ?? LAYER_ORDER[id];
+    this.placement = overrides?.placement ?? 'system';
   }
 
   abstract assemble(ctx: LayerAssembleContext): Promise<LayerContent | null>;
@@ -141,8 +144,10 @@ export class RuntimeLayer extends BaseLayer {
   constructor(options: {
     getText: (ctx: LayerAssembleContext) => Promise<string> | string;
     order?: number;
+    /** E8：稳定锚点（workspace/root_instructions）留 system；易变注入（datetime/tasks）标 snapshot */
+    placement?: LayerPlacement;
   }) {
-    super('runtime', { order: options.order });
+    super('runtime', { order: options.order, placement: options.placement ?? 'system' });
     this.getText = options.getText;
   }
 
@@ -281,7 +286,7 @@ export class MemoryLayer extends BaseLayer {
     order?: number;
     minSimilarity?: number;
   }) {
-    super('memory', { order: options.order });
+    super('memory', { order: options.order, placement: 'snapshot' });
     this.store = options.store;
     this.limit = options.limit ?? 5;
     this.minSimilarity = options.minSimilarity;
@@ -323,7 +328,7 @@ export class CognitionLayer extends BaseLayer {
   private readonly depth: number;
 
   constructor(options: { store: ConceptGraphStore; depth?: number; order?: number }) {
-    super('cognition', { order: options.order });
+    super('cognition', { order: options.order, placement: 'snapshot' });
     this.store = options.store;
     this.depth = options.depth ?? 2;
   }
@@ -408,7 +413,7 @@ export class WisdomLayer extends BaseLayer {
     scenarioMaxItems?: number;
     order?: number;
   }) {
-    super('wisdom', { order: options.order });
+    super('wisdom', { order: options.order, placement: 'snapshot' });
     this.select = options.select;
     this.onInjected = options.onInjected;
     this.coreMaxItems = options.coreMaxItems;

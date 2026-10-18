@@ -110,6 +110,15 @@ Scope axis:
 **Identity:** product eight layers = system-side ContextLayer (1–7, including runtime) + Information (message window).  
 Implementations need not add/remove `ContextLayerId` for narrative convenience; **implementations must obey ownership and cache keys**.
 
+**Assembly placement (cache-stable prefix, E8):** the system prompt holds only cache-stable
+fragments. Fragments that can change between runs of the same session — the Run-scope
+snapshot (datetime, session tasks / guidance) and query-dependent retrieval picks
+(Memory / Cognition / Wisdom) — are assembled at the **tail of the current turn's content**
+(message side), never into the system prompt. Rationale: serving latency and token pricing
+both depend on prefix-cache hits; one volatile block ahead of the message history
+invalidates the cache of everything after it. Placement is an assembly rule on the type×scope
+cross product — **not** a new layer; the eight-layer type axis (I4) is unchanged.
+
 ---
 
 ## 2. Long-term invariants (must be verifiable)
@@ -136,6 +145,7 @@ Implementations need not add/remove `ContextLayerId` for narrative convenience; 
 | **E5** | Loop stays stateless; sole production path: `Agent.run` / `runAgentWithReliability` + **per-run context**. |
 | **E6** | Effective role rights = `L0 floor ∩ role max ∩ Agent maxSessionRights ∩ binding overrides`; illegal grants are rejected at grant time. |
 | **E7** | Single process is the v1 deployment assumption; cross-process requires a real **Session Lease**; never pretend an in-memory lock is globally valid. |
+| **E8** | **Volatile context must not sit in the system prompt prefix.** System prompt = cache-stable fragments only; per-run volatile snapshots (Run scope / query-dependent picks) are delivered at the message tail (content side). Assembly keeps the request prefix byte-stable across turns unless a stable source actually changed. Verifiable: assembling twice with changed volatile inputs yields an identical systemPrompt. |
 
 ---
 
@@ -327,6 +337,7 @@ Implementation phases and internal topics live in the development-repo handoff m
 
 | Date | Content |
 |------|---------|
+| 2026-10-18 | **E8 added — cache-stable assembly placement** (volatile blocks move from the system prompt to the message tail). Eight-layer type axis unchanged (I4); this adds an *assembly placement* rule, not a new layer. Motivation: prefix-cache hits govern both TTFT and cost (measured: cache-busted requests 34–134s vs 3–5s warm; uncached input tokens billed at full price). |
 | 2026-09-27 | **English edition becomes the working authority**; Chinese moved to `docs/north-star.zh.md`. Public docs are English-authoritative with `*.zh.md` translations (bilingual sync required). I1–I6 / E1–E7 unchanged. |
 | 2026-09-26 | **Collaboration promoted to a formal product domain** (required for product completeness; implementation may be incomplete); landed `docs/domains.md` / `docs/domains.yaml` (10 product domains). I1–I6 / E1–E7 unchanged. |
 | 2026-09-26 | English peer translation of the constitution (post ontology/planes patch). |

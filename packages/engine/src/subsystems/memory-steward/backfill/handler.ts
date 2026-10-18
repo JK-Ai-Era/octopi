@@ -95,6 +95,17 @@ function messagesToText(session: any, maxChars = 8000): string {
   for (const m of msgs) {
     const kind = m?.metadata?.kind;
     if (kind === 'command' || kind === 'command_result') continue;
+    // 引擎载体插槽（快照/grounding/附件/摘要）不是实质 user/assistant 发言，
+    // 不得作为记忆抽取证据（快照含记忆原文回显，入证据即自我复制）
+    const src = m?.metadata?.source;
+    if (
+      src === 'runtimeSnapshot' ||
+      src === 'knowledgeGrounding' ||
+      src === 'sessionAttachment' ||
+      src === 'contextSummary'
+    ) {
+      continue;
+    }
     const role = m?.role;
     if (role !== 'user' && role !== 'assistant') continue;
     const content = typeof m?.content === 'string' ? m.content : JSON.stringify(m?.content ?? '');

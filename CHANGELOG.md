@@ -1,3 +1,35 @@
+## v0.84.0
+
+### feat(context): E8 cache-stable assembly placement — volatile blocks move to the message tail
+
+**问题**（F 节 B0，大哥 2026-10-18 拍板）：长 session 首 run 延迟过高（实测最差 TTFT 285s）。实验定因（`arch/long-session-latency.md` §2.3，11 次直连 provider 实测）：跨 run 首调用**必然**缓存失效——system prompt 含易变块（`Current datetime`、session tasks/guidance、Memory/Cognition/Wisdom 的 query 相关择取；实测 sysChars 跨 run 45,658→45,115），任一变化使其后消息历史的前缀缓存全部失效 → 全量冷 prefill（37.8 万 token，34s+）× 排队抽签（0~100s+）。动因是双重的：前缀缓存命中同时决定 **TTFT**（命中 3~5.5s vs 失效 34~134s）与**成本**（未命中输入 token 全价）。
+
+**修正**（宪法新增 **E8**：易变上下文不得位于 system prompt 前缀）：
+
+- 宪法 `docs/north-star.md`：§1.3 新增「Assembly placement (cache-stable prefix)」+ 工程不变量 **E8** + 变更记录（EN+ZH 同步）。八层类型轴不变（I4）——新增的是**装配位置**规则，不是新层
+- 契约 `ContextLayer.placement: 'system' | 'snapshot'`（缺省 `system`）；manifest 增 `placement` / `usedSnapshotTokens`；`docs/context-layer-contracts.md`(.zh) 同步
+- 层归属：Memory/Cognition/Wisdom（query 相关择取）与 Runtime 易变注入（datetime/tasks/guidance）→ `snapshot`；Persona/Skill/Knowledge catalog/Runtime 锚点（workspace/root_instructions）→ 留 `system`
+- 装配：`splitRuntimeEnvironmentInjection` 拆稳定/易变；双组装配（稳定组含宪法 preamble → `systemPrompt`，易变组 → `runtimeSnapshot`）；快照以 `role:'user'` + `metadata.source:'runtimeSnapshot'`、`<runtime_snapshot>` 包裹插到本轮 user 消息之前（沿 `contextSummary` 先例，避开中段 system 被严格网关 400 的既有坑）
+- 回放语义（防陈旧择取固化）：`buildLlmMessages` **只回放最近一条**快照（沿 `knowledgeGrounding`「旧的不回放」先例）；旧快照留 session 日志（审计对齐托管 system 先例）；Web 聊天回放隐藏；`semanticHistory` 剔除快照（不进 previousSummary）
+- 配置：`contextAssembler.snapshotBudgetTokens`（缺省不设上限 = 与历史行为一致）；Zod + `octopi.schema.json` 重新生成
+
+**收益（诚实口径）**：跨 run 首调用从全量冷 prefill（34s+）降至 **~3–6s**（含上一轮重灌 ~1–3s——旧快照不回放致尾部错位，与 grounding/attachment 既有 turn 级插槽重叠；彻底消除需陈旧内容回放，按能力红线暂不取）。排队尾巴 0~100s 属 provider 侧，本变更不消除。B1/B2/B3/C 按 `arch/long-session-latency.md` 后续推进。
+
+**验证**：新增缓存稳定性单测（同 session 跨轮装配 `systemPrompt` 逐字节相等、易变内容只进快照、旧快照不回放）；7 处旧断言随行为同改（persona-hot-reload / runtime-datetime-injection / memory-knowledge-layer / wisdom-cognition-layer / context-wiring-p0）；全量 2805 过（4 个已知 macOS 基线失败不变：getProcessName×2、`/private/tmp` 别名、gap-scan 竞态断言）；lint 干净；check-sync 3 红 = C6 已知 locator 债。
+
+**独立评审修订**（fresh-eyes 子代理 12 条 findings 逐条核实裁决后，同类问题一并收口）：
+
+- 快照不进 session 检索索引（`isTransientMessage` 补 `runtimeSnapshot`）——留日志（审计）≠ 进索引（幽灵词条/归因错误），与 grounding 既定口径一致
+- 检索 query / grounding query / 记忆抽取证据统一排除**引擎载体插槽**（快照/grounding/附件/摘要）——防「旧记忆择取被当用户发言」的自我强化漂移（grounding 同口径暴露系既有问题，同谓词一并收口）
+- `setSystemPromptAssembler` 契约兼容 shim：`injectedContext` 恢复合并语义（旧自定义 assembler 零能力丢失），新增 `volatileContext`（易变份）；仅 `injectedContext` 时按 E8 缺省整体进快照
+- 降级轮（assembler 异常/缺失）保持 E8 形态：锚点进 system、易变份走**新鲜**快照（旧快照不再被 last-only 回放到降级轮）
+- 观测面对账：`ContextLayersSnapshot` 双 runtime 条目不再互相覆盖（主行 system 份 + 附加行 snapshot 份），`placement` / `usedSnapshotTokens` 贯通 UI 视图；observer 同步隐藏快照
+- abort 用户消息定位排除快照/grounding 插槽；指纹缓存键含 placement（消除双实例键冲突隐患）
+- 补直接回归 `tests/harness/runtime-snapshot-replay.test.ts`（last-only 回放 / semanticHistory 排除 / query 净化，4 用例）
+- 收益口径校准：工具重轮次的上一轮重灌可达 ~65k token（跨 run 首调用上界 ~6–9s，非典型 ~3–6s），见 `arch/long-session-latency.md` §6
+- **根因修复（上线实测暴露）**：runner 视图替换判据 `baseMsgs.length !== session.messages.length`（「长度相等=视图未变」）在「剥旧插槽数 == 本轮插入数」时误判未变、丢弃整张视图——快照/grounding 插槽消失、被过滤的旧插槽复活（实测：快照组已装配 1549 token 却未进请求、01:38 陈旧快照被 last-only 回放）。改为**无条件视图替换**（baseMsgs 即 detach 切片+剥旧+插新的权威视图），回归测试精确复现「剥 1 插 1 计数相等」场景。存量潜伏（grounding/attachment 插槽时代即在，计数偶然抵消才触发），E8 使其高频化
+- **随行**：`[timing probe]` 诊断插桩以独立 chore commit 落库（长 session 延迟定位基线；F3 转正时替换为 observability）
+
 ## v0.83.12
 
 ### fix(engine): effect-gate file_mkdir symmetrically with file_rmdir

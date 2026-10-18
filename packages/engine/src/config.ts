@@ -604,6 +604,11 @@ export interface ContextAssemblerConfig {
   systemBudgetRatio?: number;
   /** 显式 system 预算 token（窗口未知时仍可用，优先于 ratio） */
   systemBudgetTokens?: number;
+  /**
+   * 易变快照组（E8，placement='snapshot' 层）的 token 预算。
+   * 缺省不设上限；设置后快照组超预算按层优先级截断/丢弃。
+   */
+  snapshotBudgetTokens?: number;
   /** 显式压缩目标 token；窗口未知时用于结构压缩/assemble 预算 */
   compactTargetTokens?: number;
   /**

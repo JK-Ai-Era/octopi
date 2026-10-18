@@ -56,6 +56,7 @@ Constitution + Layer Providers ──► ContextAssembler ──► systemPrompt
 - **order ≠ priority**：order 决定在 system prompt 中的先后；priority 决定总预算不够时谁先留下。
 - **defaultShare**：历史参考值，**不再**驱动 Assembler 配额；需要单层限制时配置 `contextAssembler.layerShares`（硬顶）。
 - **runtime** 是产品八层第 7 层（system 侧，归属 Run），收编现有 Runner 的 `injectedContext`（会话任务 / 子系统 guidance），靠近对话侧；**不是** Information。
+- **placement（E8）**：层声明 `placement: 'system' | 'snapshot'`（缺省 `'system'`）。query 相关择取（Memory / Cognition / Wisdom）与每 run 动态注入（Runtime：datetime / tasks / guidance）为 `'snapshot'`；稳定片段（Persona / Skill / Knowledge catalog / Runtime 锚点：workspace / root instructions）留 `'system'`。`'snapshot'` 层装配进每轮 `runtimeSnapshot`，经消息尾部送达——**绝不**进 system prompt（宪法 E8：缓存稳定前缀）。
 
 ---
 
@@ -68,6 +69,7 @@ interface ContextLayer {
   defaultShare: number;  // 启用层之间归一化后的份额
   droppable: boolean;    // 超预算能否整层丢弃（persona=false）
   order: number;         // system prompt 位置
+  placement?: 'system' | 'snapshot';  // E8：'snapshot' → 每轮 runtimeSnapshot（消息尾部），绝不进 system prompt
 
   fingerprint?(ctx): Promise<string | null> | string | null;
   assemble(ctx: LayerAssembleContext): Promise<LayerContent | null>;
@@ -186,6 +188,8 @@ Runner.handle
 
 - 托管 system（`metadata.source === 'systemPrompt'`）在 `buildLlmMessages` 中跳过，避免与 `systemPrompt` 参数重复注入
 - 压缩摘要 / 截断说明使用 **`role: 'user'`** + `metadata.source === 'contextSummary'`，不产生中段 system
+- **运行时快照（E8）**：易变层产出 `runtimeSnapshot` → 尾部消息 `role: 'user'` + `metadata.source: 'runtimeSnapshot'`，以 `<runtime_snapshot>` 包裹；`buildLlmMessages` **只回放最近一条**快照（旧快照不回放——防陈旧择取固化）；session 日志保留（审计对齐托管 system）；Web 聊天回放隐藏
+- **视图权威（E8 防坑）**：runner 的 `baseMsgs` 视图（detach 切片 + 剥旧 turn 插槽 + 本轮插槽）必须**无条件**替换 `runContext.messages`——「长度相等=未变」之类的代理判据会在剥旧条数==插入条数时丢弃整张视图（快照丢失、被剥的旧插槽复活）
 - 无 metadata 的外部 system 消息仍原样保留
 
 **已接线（含 P1/P2 层扩展）：**

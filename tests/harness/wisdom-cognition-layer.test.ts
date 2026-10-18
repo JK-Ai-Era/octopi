@@ -38,8 +38,10 @@ describe('Wisdom/Cognition 层接入默认 Assembler', () => {
       contextWindow: 32000,
     });
 
-    expect(result.systemPrompt).toContain('思维框架');
-    expect(result.systemPrompt).toContain('先核对契约');
+    // E8：Wisdom 属易变快照，进 runtimeSnapshot 而非 system prompt
+    expect(result.runtimeSnapshot).toContain('思维框架');
+    expect(result.runtimeSnapshot).toContain('先核对契约');
+    expect(result.systemPrompt).not.toContain('思维框架');
     const wisdom = result.manifest?.layers.find((l) => l.id === 'wisdom');
     expect(wisdom?.included).toBe(true);
   });
@@ -82,7 +84,7 @@ describe('Wisdom/Cognition 层接入默认 Assembler', () => {
       contextWindow: 32000,
     });
 
-    expect(result.systemPrompt).toContain('相关概念');
+    expect(result.runtimeSnapshot).toContain('相关概念');
     const cognition = result.manifest?.layers.find((l) => l.id === 'cognition');
     expect(cognition?.included).toBe(true);
   });

@@ -27,7 +27,7 @@ import { createSessionStateMachine } from '../session/state-machine.js';
 import type { StateMachine } from '@octopi-agent/core/primitives/state-machine.js';
 import { HeuristicTokenEstimator } from '../context/index.js';
 import { extractLayerQuery } from '../context/layer-types.js';
-import { withRuntimeEnvironmentInjection } from '../context/runtime-datetime.js';
+import { splitRuntimeEnvironmentInjection, withRuntimeEnvironmentInjection } from '../context/runtime-datetime.js';
 import { loadRootInstructionsInjection } from '../context/root-instructions.js';
 import type { SessionTaskService } from '../session/tasks/service.js';
 import { extractTaskQueryHints, renderSessionTasksInjection } from '../session/tasks/render.js';
@@ -404,12 +404,18 @@ export class SessionAwareRunner {
     messages: Message[];
     persona: string;
     injectedContext?: string;
+    /** E8：易变注入份（datetime/tasks/guidance）；优先于 injectedContext */
+    volatileContext?: string;
+    /** E8：稳定运行时锚点（留 system prompt） */
+    runtimeAnchors?: string;
     contextWindow?: number;
     /** 任务主题线索（Memory/Cognition 检索 query） */
     topicHints?: string;
     signal?: AbortSignal;
   }) => Promise<{
     systemPrompt: string;
+    /** E8：本轮易变快照（消息尾部插槽送达） */
+    runtimeSnapshot?: string;
     manifest?: import('../context/layer-types.js').AssembleManifest;
     skippedBudget?: boolean;
   }>;
@@ -563,6 +569,10 @@ export class SessionAwareRunner {
    *
    * 每轮在 persona resolve 与 injectedContext 计算完成后调用，
    * 替代原先的字符串拼接。未设置时保持旧路径（兼容）。
+   *
+   * E8 契约：`injectedContext` 保持合并形态（兼容旧 assembler，零能力丢失）；
+   * 拆分字段 `volatileContext`（易变份→快照）与 `runtimeAnchors`（稳定份→system）同时传入，
+   * 默认 assembler 优先用拆分字段；降级/无 assembler 路径同样产出快照（E8 形态不破）。
    */
   setSystemPromptAssembler(
     assembler: (input: {
@@ -571,10 +581,19 @@ export class SessionAwareRunner {
       messages: Message[];
       persona: string;
       injectedContext?: string;
+      /** E8：易变注入份（datetime/tasks/guidance）；优先于 injectedContext */
+      volatileContext?: string;
+      /** E8：稳定运行时锚点（留 system prompt） */
+      runtimeAnchors?: string;
       contextWindow?: number;
       topicHints?: string;
       signal?: AbortSignal;
-    }) => Promise<{ systemPrompt: string; manifest?: import('../context/layer-types.js').AssembleManifest }>,
+    }) => Promise<{
+      systemPrompt: string;
+      /** E8：本轮易变快照（消息尾部插槽送达） */
+      runtimeSnapshot?: string;
+      manifest?: import('../context/layer-types.js').AssembleManifest;
+    }>,
     clearSession?: (sessionId: string) => void,
   ): void {
     this.systemPromptAssembler = assembler;
@@ -868,6 +887,10 @@ export class SessionAwareRunner {
 
       // Runtime 锚点：时间 + 工具工作目录 + 允许根/效应模式
       // cwd 与下方 I5 toolRuntime.cwd 同源同构；allowRoots 含 session 临时 root
+      // E8：拆稳定锚点（留 system）与易变注入（进本轮快照）
+      let runtimeAnchorsText = '';
+      let runtimeVolatileText = '';
+      let runtimeSnapshotText: string | null = null;
       {
         const runtimeIsolationMode: ToolIsolationMode =
           effectiveRunConfig.toolIsolation
@@ -884,6 +907,14 @@ export class SessionAwareRunner {
         const rootInstructions = await loadRootInstructionsInjection(this.effectAllowRoots, {
           cwd: runtimeCwd,
         });
+        const runtimeSplit = splitRuntimeEnvironmentInjection(effectiveRunConfig.injectedContext, {
+          cwd: runtimeCwd,
+          allowRoots: this.effectAllowRoots,
+          effectMode: this.effectMode,
+          rootInstructions,
+        });
+        runtimeAnchorsText = runtimeSplit.anchors;
+        runtimeVolatileText = runtimeSplit.volatile;
         effectiveRunConfig = {
           ...effectiveRunConfig,
           injectedContext: withRuntimeEnvironmentInjection(effectiveRunConfig.injectedContext, {
@@ -988,11 +1019,16 @@ export class SessionAwareRunner {
             messages: session.messages,
             persona: basePrompt,
             injectedContext: effectiveRunConfig.injectedContext,
+            volatileContext: runtimeVolatileText,
+            runtimeAnchors: runtimeAnchorsText,
             contextWindow: effectiveRunConfig.contextWindow,
             topicHints,
             signal,
           });
           runContext.systemPrompt = assembled.systemPrompt;
+          runtimeSnapshotText = assembled.runtimeSnapshot?.trim()
+            ? assembled.runtimeSnapshot
+            : null;
           if (assembled.manifest) {
             const assembledAt = Date.now();
             this.emitObserved({
@@ -1016,7 +1052,9 @@ export class SessionAwareRunner {
           console.warn(
             `[octopi] system prompt assemble failed (session=${sessionId}): ${errMsg}; falling back to concat`,
           );
-          runContext.systemPrompt = this.concatSystemPrompt(basePrompt, effectiveRunConfig.injectedContext, personaFromResolver);
+          // F12：降级轮保持 E8 形态——锚点进 system，易变份走**新鲜**快照（防旧快照被 last-only 回放）
+          runContext.systemPrompt = this.concatSystemPrompt(basePrompt, runtimeAnchorsText, personaFromResolver);
+          runtimeSnapshotText = runtimeVolatileText.trim() ? runtimeVolatileText : null;
           this.emitObserved({
             type: 'context.layers.assembled',
             timestamp: Date.now(),
@@ -1039,7 +1077,9 @@ export class SessionAwareRunner {
           });
         }
       } else {
-        runContext.systemPrompt = this.concatSystemPrompt(basePrompt, effectiveRunConfig.injectedContext, personaFromResolver);
+        // F12：无 assembler 也保持 E8 形态（锚点进 system，易变份走快照）
+        runContext.systemPrompt = this.concatSystemPrompt(basePrompt, runtimeAnchorsText, personaFromResolver);
+        runtimeSnapshotText = runtimeVolatileText.trim() ? runtimeVolatileText : null;
       }
 
       // system prompt 终装后：turn 级 Knowledge grounding（消息侧插槽，不进 system）
@@ -1282,6 +1322,25 @@ export class SessionAwareRunner {
           }
           baseMsgs.splice(insertAt, 0, attachMsg);
         }
+        // E8：本轮易变快照（source='runtimeSnapshot'）——与 attach/grounding 同槽位，
+        // 插在最后一条 user 消息之前。日志保留（审计对齐托管 system 先例）；
+        // buildLlmMessages 只回放最近一条（旧快照不回放，防陈旧择取固化）。
+        if (runtimeSnapshotText) {
+          const snapshotMsg: Message = {
+            role: 'user',
+            content: `<runtime_snapshot>\n${runtimeSnapshotText}\n</runtime_snapshot>`,
+            timestamp: Date.now(),
+            metadata: { source: 'runtimeSnapshot' },
+          };
+          let insertAt = baseMsgs.length;
+          for (let i = baseMsgs.length - 1; i >= 0; i--) {
+            if (baseMsgs[i].role === 'user') {
+              insertAt = i;
+              break;
+            }
+          }
+          baseMsgs.splice(insertAt, 0, snapshotMsg);
+        }
         if (pendingGrounding && pendingGrounding.mode !== 'none' && pendingGrounding.text?.trim()) {
           const groundingMsg: Message = {
             role: 'user',
@@ -1302,15 +1361,13 @@ export class SessionAwareRunner {
             }
           }
           baseMsgs.splice(insertAt, 0, groundingMsg);
-          runContext.messages = baseMsgs;
-          if (runScope.toolRuntime) {
-            runScope.toolRuntime.messages = baseMsgs;
-          }
-        } else if (detachIdx > 0 || baseMsgs.length !== session.messages.length) {
-          runContext.messages = baseMsgs;
-          if (runScope.toolRuntime) {
-            runScope.toolRuntime.messages = baseMsgs;
-          }
+        }
+        // 视图（baseMsgs = detach 切片 + 剥旧插槽 + 本轮插槽）必须**无条件**成为 LLM 窗口：
+        // 旧判据「长度相等即视图未变」在「过滤条数 == 插入条数」时误判为未变，
+        // 整张视图被丢弃——快照/grounding 插槽消失、被过滤的旧插槽复活（E8 快照丢失即此因）。
+        runContext.messages = baseMsgs;
+        if (runScope.toolRuntime) {
+          runScope.toolRuntime.messages = baseMsgs;
         }
       }
 
@@ -1539,7 +1596,12 @@ export class SessionAwareRunner {
         let userIdx = -1;
         for (let i = session.messages.length - 1; i >= 0; i--) {
           const m = session.messages[i];
-          if (m.role === 'user' && m.metadata?.source !== 'sessionAttachment') {
+          if (
+            m.role === 'user' &&
+            m.metadata?.source !== 'sessionAttachment' &&
+            m.metadata?.source !== 'runtimeSnapshot' &&
+            m.metadata?.source !== 'knowledgeGrounding'
+          ) {
             userIdx = i;
             break;
           }

@@ -124,6 +124,14 @@ export interface LayerContent {
 // ── 层接口 ──
 
 /**
+ * 装配位置（宪法 E8：缓存稳定前缀）
+ *
+ * - `system`（缺省）：缓存稳定片段 → system prompt
+ * - `snapshot`：每 run 易变快照（Run 作用域 / query 相关择取）→ 消息尾部 content 侧
+ */
+export type LayerPlacement = 'system' | 'snapshot';
+
+/**
  * ContextLayer — 单层内容提供者
  *
  * 实现约束：
@@ -141,6 +149,14 @@ export interface ContextLayer {
   readonly droppable: boolean;
   /** system prompt 中的位置（小的在前） */
   readonly order: number;
+  /**
+   * 装配位置（宪法 E8）。缺省 `system`。
+   *
+   * 跨 run 可变的内容（query 相关检索择取、datetime、tasks/guidance 等）
+   * 必须标 `snapshot`：不得进入 system prompt 前缀，由调用方作为本轮
+   * 易变快照在消息尾部（content 侧）送达。
+   */
+  readonly placement?: LayerPlacement;
 
   /**
    * 变更指纹。与上次不同则强制重新 assemble；返回 null 表示每轮都重算。
@@ -161,6 +177,8 @@ export interface ContextLayer {
 /** 装配清单（可观测，不进入模型输入） */
 export interface LayerManifestEntry {
   id: ContextLayerId;
+  /** 装配位置（E8）；缺省 system */
+  placement?: LayerPlacement;
   included: boolean;
   tokens: number;
   /** 本层硬顶 token（仅 layerShares 配置过的层）；无单层上限时缺省 */
@@ -188,8 +206,10 @@ export interface AssembleManifest {
   systemBudget: number;
   /** 结构预留（分隔符等） */
   structureReserve?: number;
-  /** 实际使用的 token */
+  /** 实际使用的 token（system 组） */
   usedTokens: number;
+  /** 易变快照组实际使用的 token（E8；无 snapshot 层时缺省） */
+  usedSnapshotTokens?: number;
   /**
    * 显式配置的 layerShares 硬顶比例（未配置的层不出现）
    * 不再表示「启用层归一化后的全局配额」
@@ -244,6 +264,18 @@ export interface ContextAssembleParams {
 const ACK_LAYER_QUERY_RE =
   /^(好|好的|好呀|好吧|嗯+|行|可以|继续|接着|然后呢?|下一步|收到|开始吧?|没问题|就这样|ok+|okay|yes|yeah|yep|go(\s+on)?|proceed)[\s!！。.~～]*$/i;
 
+/**
+ * 引擎托管的 user 角色插槽（快照/grounding/附件/摘要）——不是用户发言。
+ * 检索 query 只采信真实用户文本；否则上轮快照（含旧记忆择取）会混入 query
+ * 造成择取自我强化漂移。
+ */
+const ENGINE_CARRIER_SOURCES = new Set([
+  'runtimeSnapshot',
+  'knowledgeGrounding',
+  'sessionAttachment',
+  'contextSummary',
+]);
+
 export interface ExtractLayerQueryOptions {
   /**
    * 额外主题线索（会话任务标题/当前步骤等）。
@@ -281,6 +313,7 @@ export function isThinLayerQuery(text: string): boolean {
  *
  * 默认取最近一条用户消息；若其为纯应答（「继续」「好」），回看最多 2 条更早的用户消息，
  * 并追加 `topicHints`（任务 focus）。独立新问题只用本句，不掺任务/上文，避免稀释主题。
+ * 引擎载体插槽（快照/grounding/附件/摘要）不算用户发言，一律跳过（防旧记忆择取混入 query）。
  *
  * @param messages - 会话消息（含本轮用户输入）
  * @param options - topicHints / maxChars
@@ -294,6 +327,8 @@ export function extractLayerQuery(
   for (let i = messages.length - 1; i >= 0 && userTexts.length < 3; i--) {
     const m = messages[i];
     if (m.role !== 'user') continue;
+    const src = (m.metadata as { source?: string } | undefined)?.source;
+    if (src && ENGINE_CARRIER_SOURCES.has(src)) continue;
     const text = userMessageText(m).trim();
     if (text) userTexts.push(text);
   }

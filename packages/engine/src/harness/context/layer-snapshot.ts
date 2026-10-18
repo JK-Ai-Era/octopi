@@ -29,6 +29,8 @@ export type LayerUiStatus =
 
 export interface LayerRuntimeView {
   id: ContextLayerId;
+  /** E8 装配位置（system/snapshot）；同 id 双实例时主行=system、附加行=snapshot */
+  placement?: 'system' | 'snapshot';
   status: LayerUiStatus;
   included: boolean;
   tokens: number;
@@ -51,6 +53,8 @@ export interface ContextLayersSnapshot {
   systemBudget: number;
   structureReserve?: number;
   usedTokens: number;
+  /** 易变快照组实际使用 token（E8；无 snapshot 层时缺省） */
+  usedSnapshotTokens?: number;
   shares: Partial<Record<ContextLayerId, number>>;
   query?: string;
   /** 恒为契约层顺序，便于 UI 直接渲染 */
@@ -80,17 +84,40 @@ export function buildContextLayersSnapshot(params: {
   fallbackError?: string;
 }): ContextLayersSnapshot {
   const { manifest } = params;
-  const entryById = new Map<ContextLayerId, LayerManifestEntry>();
+  // E8：同 id 可有 system/snapshot 双条目（如 runtime 双实例）——按 id#placement 分键；
+  // 主行（七层表）优先取 system 份，snapshot 份追加为附加行，观测面不丢内容
+  const entryByKey = new Map<string, LayerManifestEntry>();
   for (const entry of manifest.layers) {
-    entryById.set(entry.id, entry);
+    const placement = entry.placement === 'snapshot' ? 'snapshot' : 'system';
+    entryByKey.set(`${entry.id}#${placement}`, entry);
   }
+  const dualSnapshotExtras = manifest.layers.filter(
+    (e) => e.placement === 'snapshot' && entryByKey.has(`${e.id}#system`),
+  );
   const enabled =
     params.enabledLayerIds ??
     manifest.layers.map((l) => l.id);
   const enabledSet = new Set(enabled);
 
+  const toView = (entry: LayerManifestEntry): LayerRuntimeView => ({
+    id: entry.id,
+    placement: entry.placement === 'snapshot' ? 'snapshot' : 'system',
+    status: deriveLayerStatus(entry),
+    included: entry.included,
+    tokens: entry.tokens,
+    budgetTokens: entry.budgetTokens ?? 0,
+    priority: entry.priority,
+    order: entry.order,
+    droppable: entry.droppable ?? entry.id !== 'persona',
+    reason: entry.reason,
+    dropped: entry.dropped,
+    sources: entry.sources,
+    preview: entry.preview,
+    content: entry.content,
+  });
+
   const layers: LayerRuntimeView[] = ALL_LAYER_IDS.map((id) => {
-    const entry = entryById.get(id);
+    const entry = entryByKey.get(`${id}#system`) ?? entryByKey.get(`${id}#snapshot`);
     const droppable =
       entry?.droppable ?? (id !== 'persona');
     const base = {
@@ -118,22 +145,10 @@ export function buildContextLayersSnapshot(params: {
         budgetTokens: 0,
       };
     }
-    return {
-      id,
-      status: deriveLayerStatus(entry),
-      included: entry.included,
-      tokens: entry.tokens,
-      budgetTokens: entry.budgetTokens ?? 0,
-      priority: entry.priority,
-      order: entry.order,
-      droppable: entry.droppable ?? droppable,
-      reason: entry.reason,
-      dropped: entry.dropped,
-      sources: entry.sources,
-      preview: entry.preview,
-      content: entry.content,
-    };
+    return toView(entry);
   });
+  // 双生 snapshot 条目（如 runtime 易变份）追加为附加行，观测面不丢内容
+  layers.push(...dualSnapshotExtras.map(toView));
 
   return {
     sessionId: manifest.sessionId,
@@ -141,6 +156,7 @@ export function buildContextLayersSnapshot(params: {
     systemBudget: manifest.systemBudget,
     structureReserve: manifest.structureReserve,
     usedTokens: manifest.usedTokens,
+    usedSnapshotTokens: manifest.usedSnapshotTokens,
     shares: manifest.shares,
     query: params.query,
     layers,
