@@ -93,10 +93,13 @@ the wrapper outcome with downgraded isolation (`cwd-pin`) and the run-level
 It does **not** require a different uid. Notes record `userns` vs
 `ops-denied; uid unchanged`.
 
-**Jail write mounts (2).** `allowRoots` 鈭?cwd 鈭?`os.tmpdir()` are writable in
-every mode; `$HOME` is writable only for `project` / `host`
-(`SandboxConfig.homeWrite`). **tmp writes are not journaled** (`notReversed`).
-System trees remain read-only.
+**Jail write mounts (2).** `allowRoots` ∪ cwd ∪ `os.tmpdir()` are writable in
+every mode; on POSIX the shared temp dirs `/tmp` and `/var/tmp` (each in its
+lexical and canonical `realpath` form) are writable too — tools that hardcode
+`/tmp` regardless of `TMPDIR` must keep working inside the jail. `$HOME` is
+writable only for `project` / `host` (`SandboxConfig.homeWrite`). **tmp writes
+are not journaled** (`notReversed`); shared temp is world-writable, so treat
+anything left there as exposed. System trees remain read-only.
 
 **untrusted egress** is always `deny` —?`effectPolicy.network` cannot open it
 (product promise, same class as `pathContainment`).

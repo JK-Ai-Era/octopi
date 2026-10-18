@@ -79,6 +79,13 @@ O_RDWR 打开 `/dev/null`、shell 会重定向到它们，封死会瘫痪基础�
 按词法与规范（`realpath`）两种形态输出，保证子路径规则能穿透符号链接别名
 （macOS `/var` → `/private/var`、`/tmp` → `/private/tmp`）。
 
+**Jail 可写挂载（2）**：`allowRoots` ∪ cwd ∪ `os.tmpdir()` 在所有模式下可写；
+POSIX 下共享临时目录 `/tmp` 与 `/var/tmp`（各含词法与 `realpath` 规范两种形态）
+同样可写——硬编码 `/tmp`、无视 `TMPDIR` 的工具在牢笼内必须能继续工作。
+`$HOME` 仅 `project` / `host` 可写（`SandboxConfig.homeWrite`）。
+**tmp 写入不进日记**（`notReversed`）；共享临时区对所有用户可写，
+留在那里的一切应视为已暴露。系统树保持只读。
+
 **环境变量 deny-by-default**：所有后端只透传白名单（`PATH`、`HOME`、`TMP`、
 locale、shell/OS 基础项）。宿主密钥（`*_API_KEY`、`*_TOKEN` 等）**不会**
 通过 `process.env` 泄进子进程。

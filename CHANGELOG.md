@@ -1,3 +1,18 @@
+## v0.83.10
+
+### fix(engine): admit shared temp dirs (/tmp, /var/tmp) into the POSIX jail write face
+
+**问题**（NEXT-STEPS C4 拍板）：jail 可写面 = allowRoots ∪ cwd ∪ `os.tmpdir()` ∪ home（homeWrite），**不含共享临时目录**。env scrub 后子进程若无 `TMPDIR`，`os.tmpdir()` 解析成 `/tmp`；硬编码 `/tmp` 或回退 `/tmp` 的工具在牢笼内直接 `EPERM`（实测：vitest/vite `mkdir '/tmp/…/ssr'` 被拒）。仅靠 spawn 时透传 `TMPDIR` 治标不治本：无视 `TMPDIR` 的遗留程序、以及任何漏传 env 的执行路径（嵌入方自定义 executor 等）都会复发——兼容性不应押在部署环境的 env 配置上。
+
+**修正**：
+
+- `resolveJailRoots` 在 POSIX 下把 `/tmp`、`/var/tmp` 纳入可写临时面；随既有「词法 + `realpath` 双形态」发射自动覆盖 `/private/tmp`、`/private/var/tmp`（macOS 符号链接别名），Linux bwrap 的 `--bind-try` 同样受益
+- Windows 零变化（用户临时目录已由 `tmpdir()` 覆盖；无 `/tmp` 语义）
+- 沿用 **tmp writes not journaled（`notReversed`）** 语义不变；共享临时区对所有用户可写，留在其上的内容视为已暴露（`docs/process-isolation.md` EN+ZH 已记账）
+- journal/undo 不消费 jail roots，L3 撤销语义零变化；系统树保持只读
+
+**验证**：`tests/harness/process-jail-wiring.test.ts` 24 用例全过（新增 3：POSIX 共享 tmp 双形态 roots、win32 不含 POSIX tmp 路径、profile 由 resolveJailRoots 组合断言）；EN+ZH 文档同 commit 同步。经独立子代理对抗评审后加固：win32 用例原断言恒真（`resolve()` 会把 `/tmp` 解析成 `C:\tmp`，字面匹配锁不住守卫）改为断言真实解析形态；canonical 断言对齐生产容忍语义（不可解析时保留词法形态）；profile 断言补齐 `/var/tmp` 双形态。另同步 `package-lock.json` 版本字段（此前停在 0.83.8——`release:prep` 不刷 lockfile 的流程缺口，见 NEXT-STEPS D2）。
+
 ## v0.83.9
 
 ### fix(engine): keep stdio sinks writable and canonicalize jail roots in the macOS Seatbelt sandbox

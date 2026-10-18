@@ -523,8 +523,9 @@ function networkPolicyNote(config: SandboxConfig | undefined, applied: 'open' | 
 }
 
 /**
- * Jail write mounts (2a/2b): allowRoots ∪ cwd ∪ tmpdir (always) ∪ home
- * when `config.homeWrite` (project/host). tmp is not journaled (2c).
+ * Jail write mounts (2a/2b): allowRoots ∪ cwd ∪ tmpdir ∪ shared tmp on POSIX
+ * (`/tmp`, `/var/tmp` — always) ∪ home when `config.homeWrite` (project/host).
+ * tmp is not journaled (2c).
  *
  * Each root is emitted in its lexical form **and**, when resolvable, its
  * canonical (`realpath`) form: jail backends match canonical paths, so a root
@@ -542,6 +543,13 @@ export async function resolveJailRoots(
   config: SandboxConfig | undefined,
 ): Promise<string[]> {
   const raw = [cwd, ...(config?.allowRoots ?? []), tmpdir()];
+  if (process.platform !== 'win32') {
+    // Tools that hardcode /tmp or /var/tmp (ignoring TMPDIR) must keep working
+    // inside the jail; the canonical twins (/private/tmp, /private/var/tmp) are
+    // emitted by the lexical+realpath loop below. Shared tmp writes stay
+    // notReversed (2c) like tmpdir().
+    raw.push('/tmp', '/var/tmp');
+  }
   if (config?.homeWrite) {
     raw.push(homedir());
   }

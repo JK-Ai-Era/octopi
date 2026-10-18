@@ -167,6 +167,62 @@ describe('Seatbelt stdio devices + canonical jail roots', () => {
     },
   );
 
+  it.skipIf(process.platform === 'win32')(
+    'POSIX shared tmp dirs (/tmp, /var/tmp) are always writable roots',
+    async () => {
+      const { resolveJailRoots } = await import(
+        '@octopi-agent/engine/harness/extension/execution-environment/sandbox.js'
+      );
+      const { realpath } = await import('node:fs/promises');
+      const { resolve } = await import('node:path');
+
+      const roots = await resolveJailRoots(resolve('/base/cwd'), {});
+      for (const p of ['/tmp', '/var/tmp']) {
+        // lexical form always present
+        expect(roots).toContain(resolve(p));
+        // canonical twin when resolvable (macOS /tmp → /private/tmp,
+        // /var/tmp → /private/var/tmp); production tolerates unresolvable roots
+        const canonical = await realpath(p).catch(() => null);
+        if (canonical) expect(roots).toContain(canonical);
+      }
+    },
+  );
+
+  it.skipIf(process.platform !== 'win32')('win32 roots never contain POSIX tmp paths', async () => {
+    const { resolveJailRoots } = await import(
+      '@octopi-agent/engine/harness/extension/execution-environment/sandbox.js'
+    );
+    const { resolve } = await import('node:path');
+    const cwd = 'C:\\base\\cwd';
+    const roots = await resolveJailRoots(cwd, {});
+    // The platform guard must be load-bearing: without it, push() would resolve
+    // '/tmp' and '/var/tmp' against the drive root into exactly these entries.
+    expect(roots).not.toContain(resolve(cwd, '/tmp'));
+    expect(roots).not.toContain(resolve(cwd, '/var/tmp'));
+    expect(roots.filter((r) => /^c:\\(var\\)?tmp$/i.test(r))).toEqual([]);
+  });
+
+  it.skipIf(process.platform === 'win32')(
+    'seatbelt profile built from resolved roots allows shared tmp subpaths',
+    async () => {
+      const { buildSeatbeltProfile, resolveJailRoots } = await import(
+        '@octopi-agent/engine/harness/extension/execution-environment/sandbox.js'
+      );
+      const { realpath } = await import('node:fs/promises');
+      const { resolve } = await import('node:path');
+
+      const roots = await resolveJailRoots(resolve('/base/cwd'), {});
+      const sb = buildSeatbeltProfile(roots, 'deny');
+      // mirror of production esc(): quote-escape only
+      const esc = (p: string): string => p.split('\\').join('\\\\').split('"').join('\\"');
+      for (const p of ['/tmp', '/var/tmp']) {
+        expect(sb).toContain(`(allow file-write* (subpath "${esc(p)}"))`);
+        const canonical = await realpath(p).catch(() => null);
+        if (canonical) expect(sb).toContain(`(allow file-write* (subpath "${esc(canonical)}"))`);
+      }
+    },
+  );
+
   it('stale-only roots keep lexical forms without throwing', async () => {
     const { resolveJailRoots } = await import(
       '@octopi-agent/engine/harness/extension/execution-environment/sandbox.js'

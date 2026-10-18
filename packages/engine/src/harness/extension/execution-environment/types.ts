@@ -42,7 +42,8 @@ export interface SandboxConfig {
   requireJail?: boolean;
   /**
    * Allow `$HOME` writes inside the jail (project/host only per 2b).
-   * tmpdir is always writable (2a); not journaled (2c notReversed).
+   * tmpdir and, on POSIX, shared `/tmp` + `/var/tmp` are always writable (2a);
+   * tmp writes are not journaled (2c notReversed).
    */
   homeWrite?: boolean;
   /** Run-level hook for execute-time degradation (falls back to isolation.notes). */
