@@ -274,6 +274,8 @@ const ENGINE_CARRIER_SOURCES = new Set([
   'knowledgeGrounding',
   'sessionAttachment',
   'contextSummary',
+  /** reliability/steer 注入（wrap-up / planning / noop / truncate notice 等）——非用户发言 */
+  'engineHint',
 ]);
 
 /**

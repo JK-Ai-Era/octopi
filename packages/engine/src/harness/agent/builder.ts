@@ -1984,17 +1984,24 @@ export type CreateAgentConfig = {
 );
 
 export async function createAgent(config: CreateAgentConfig): Promise<{ agent: Agent; harness: ReliabilityHarness; runner: SessionAwareRunner; mcpManager: McpManager }> {
-  const builder = new AgentBuilder()
-    .model(config.model);
+  const builder = new AgentBuilder();
 
-  if (config.persona) builder.persona(config.persona);
-  if (config.tools) builder.tools(...config.tools);
   if (config.store) builder.store(config.store);
-  if (config.budget) builder.budget(config.budget);
   if (config.mcpClientFactory) builder.mcpClientFactory(config.mcpClientFactory);
   if (config.mcp) {
     for (const mcpConfig of config.mcp) builder.mcp(mcpConfig);
   }
+  if (config.tools) builder.tools(...config.tools);
+
+  // 标准组装与 Gateway / config-bridge 同源；嵌入路径未给 levelMap/contextEngine 时走 wire 缺省
+  const { wireAgentBuilder } = await import('./wire-agent-builder.js');
+  await wireAgentBuilder(builder, {
+    model: config.model,
+    agentId: 'default',
+    persona: config.persona,
+    providers: new Map([['default', config.model]]),
+    budgetConfig: config.budget,
+  });
 
   return builder.build();
 }

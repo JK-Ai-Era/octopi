@@ -36,6 +36,7 @@ import type {
 } from './types.js';
 import { HeuristicTokenEstimator, estimateLLMMessages } from './token-estimator.js';
 import { toolResultBody } from './tool-result-body.js';
+import { buildToolCallLedger } from './llm-summarizer.js';
 import {
   agedToolResultPointer,
   applyAgingToMessages,
@@ -51,6 +52,7 @@ import { DefaultBudgetAllocator } from './budget-allocator.js';
 import { SmartRouter } from './smart-router.js';
 import type { SmartRouterConfig } from './smart-router.js';
 import { compactStateKey } from './compact-key.js';
+import { isEngineCarrierSource } from './layer-types.js';
 import { createCompactEngine } from './capabilities/compact/index.js';
 import type { CompactEngine } from './capabilities/compact/index.js';
 
@@ -400,8 +402,11 @@ export class DefaultContextEngine implements ContextEngine {
         }
 
         default: {
-          // 兜底：直接截断
-          compressedOverflow = selection.overflow.slice(-4);
+          // 兜底：保守降级（head + 工具账本 + tail），禁止只留 4 条
+          compressedOverflow = await this.conservativeTruncate(
+            selection.overflow,
+            estimator,
+          );
           break;
         }
       }
@@ -413,8 +418,11 @@ export class DefaultContextEngine implements ContextEngine {
         error: err instanceof Error ? err.message : String(err),
         durationMs: Date.now() - overflowStart,
       });
-      // 压缩失败：截断兜底，不中断本轮
-      compressedOverflow = selection.overflow.slice(-4);
+      // 压缩失败：保守降级，不中断本轮
+      compressedOverflow = await this.conservativeTruncate(
+        selection.overflow,
+        estimator,
+      );
       droppedSummary = 'Context compact failed; fell back to truncation';
     }
 
@@ -480,10 +488,15 @@ export class DefaultContextEngine implements ContextEngine {
   /**
    * 主动摘要：消息 token 超过 messagesBudget × ratio 时，在硬溢出前压缩
    *
-   * 策略：
-   * - 未超阈值：原样返回
-   * - 超阈值且需要新一轮压缩（上次压缩后新增消息够多）：LLM 压缩中间段并产出语义摘要
-   * - 超阈值但增量很小或冷却中：零 LLM 重建视图（有摘要用摘要重建；无摘要机械重建）
+   * 语义（粘滞 + 总开关）：
+   * - **压缩视图粘滞**：一旦建立过压缩态（previousSummary 或 lastProactiveMessageCount），
+   *   后续装配优先复用 head+摘要/机械中间+tail，不因估算回落或 ratio=0 而打回全量
+   *   （全量请求会 bust 前缀缓存，且等于撤销已完成的压缩）。
+   * - **proactiveCompactRatio=0**：禁止**发起新的** LLM 压缩；**不**丢弃已有压缩视图。
+   * - 策略：
+   *   - 未超阈值且无压缩态：原样返回
+   *   - 超阈值且需要新一轮压缩（上次压缩后新增消息够多）：LLM 压缩中间段并产出语义摘要
+   *   - 已有压缩态且增量小或冷却中或禁新 LLM：零 LLM 重建视图
    */
   private async applyProactiveCompact(params: {
     sessionId: string;
@@ -499,11 +512,87 @@ export class DefaultContextEngine implements ContextEngine {
     const { sessionId, messages, messagesBudget, agingPlan, summarize, estimator, emit } = params;
     const stateKey = params.stateKey ?? sessionId;
     const ratio = this.config.proactiveCompactRatio;
+    const state = this.states.get(stateKey);
 
-    // proactiveCompactRatio=0 是两种模式共同的总开关（旧配置的禁用语义不破坏）
-    if (!summarize || ratio <= 0 || messages.length === 0) {
+    if (messages.length === 0) {
       return { messages };
     }
+
+    const protectFirstN = this.config.protectFirstN;
+    const protectLastN = this.config.protectLastN;
+
+    // 压缩态粘滞：有摘要或覆盖计数即认定「已压缩」，之后不回全量
+    const hasCompactView =
+      state?.lastProactiveMessageCount != null || !!state?.previousSummary;
+
+    // 边界对齐（不拆 tool_call/tool_result 对）——两形状都会被严格网关 400
+    const { headEnd, tailStart } = this.alignViewSplit(messages, protectFirstN, protectLastN);
+    const head = messages.slice(0, headEnd);
+    const tail = messages.slice(tailStart);
+    const middle = this.semanticHistory(messages.slice(headEnd, tailStart));
+
+    const headTailTokens = estimator.estimateMessages(head) + estimator.estimateMessages(tail);
+
+    /**
+     * 零 LLM 粘滞重建。
+     *
+     * 有语义摘要时：head + 摘要 + **摘要覆盖点之后的增量** + tail。
+     * 增量（上次 `lastProactiveMessageCount` 之后、已滑出 tail 的消息）不得被旧摘要顶掉——
+     * 否则长 tool turn 会丢当前 run 前半段工作记录。
+     *
+     * @param targetMiddleTokens - 增量段机械压缩预算
+     * @returns 重建视图；无法重建时返回 null
+     */
+    const rebuildStickyView = async (
+      targetMiddleTokens: number,
+    ): Promise<{ messages: Message[] } | null> => {
+      if (messages.length <= protectFirstN + protectLastN) {
+        return null;
+      }
+      if (state?.previousSummary) {
+        const summaryMsg: Message = {
+          role: 'user',
+          content: wrapContextSummary(state.previousSummary),
+          timestamp: Date.now(),
+          metadata: { source: 'contextSummary' as const },
+        };
+        // 摘要覆盖到 lastProactiveMessageCount；之后的消息是增量，必须保留
+        const coverUpTo = state.lastProactiveMessageCount ?? 0;
+        const sinceIdx = Math.max(coverUpTo, headEnd);
+        const sinceCompact = this.semanticHistory(messages.slice(sinceIdx, tailStart));
+        let extra: Message[] = sinceCompact;
+        if (sinceCompact.length > 0) {
+          const extraTokens = estimator.estimateMessages(sinceCompact);
+          if (extraTokens > targetMiddleTokens) {
+            try {
+              const compressedExtra = await this.config.compressor.compress({
+                messages: sinceCompact,
+                targetTokens: targetMiddleTokens,
+                tokenEstimator: estimator,
+              });
+              extra = compressedExtra.result;
+            } catch {
+              // 机械压缩失败：保留增量原文（宁可胖，不可丢）
+              extra = sinceCompact;
+            }
+          }
+        }
+        return { messages: [...head, summaryMsg, ...extra, ...tail] };
+      }
+      if (middle.length === 0) {
+        return null;
+      }
+      try {
+        const compressed = await this.config.compressor.compress({
+          messages: middle,
+          targetTokens: targetMiddleTokens,
+          tokenEstimator: estimator,
+        });
+        return { messages: [...head, ...compressed.result, ...tail] };
+      } catch {
+        return null;
+      }
+    };
 
     // F1-B3：尺子量**老化视图**（实际请求的保守上界）——raw 估算会把 B2 稳态误判超线（双机制打架）。
     // 压缩输入仍用原 messages（摘要质量需要原文）。
@@ -517,23 +606,41 @@ export class DefaultContextEngine implements ContextEngine {
     const targetLine = Math.ceil(this.config.targetTokens * this.config.compactFallbackRatio);
     const legacyLine = messagesBudget > 0 ? Math.floor(messagesBudget * ratio) : Number.POSITIVE_INFINITY;
     const threshold = this.config.targetTokens > 0 ? Math.min(targetLine, legacyLine) : legacyLine;
+
+    const targetMiddleTokens = Math.max(
+      200,
+      Math.floor(threshold * 0.55) - headTailTokens,
+    );
+
+    // 新 LLM 压缩闸门（方案 E）：
+    // - ratio=0 或无 summarize：禁止新 LLM，不丢已有压缩态
+    // - **turn 内**（最近真实 user 之后已有工具活动）：禁止新 LLM 摘要——
+    //   活动工作记录在 middle 里，摘要会吃掉当前 run；只允许机械分级
+    // - turn 边界（新 user 刚到、工具活动尚未开始）：才允许对更早历史做 LLM 摘要
+    const midTurn = isMidTurn(messages);
+    const allowNewLlmCompact = !!summarize && ratio > 0 && !midTurn;
+
+    // 未超线：无压缩态则原样；有压缩态则粘滞重建（禁止回全量）
     if (currentTokens <= threshold) {
-      return { messages };
+      if (!hasCompactView) {
+        return { messages };
+      }
+      const sticky = await rebuildStickyView(targetMiddleTokens);
+      if (!sticky) {
+        return { messages };
+      }
+      const reducedTokens = estimator.estimateMessages(sticky.messages);
+      this.states.set(stateKey, {
+        ...state,
+        lastProactiveTokens: reducedTokens,
+        lastEstimatedTokens: reducedTokens,
+      });
+      return { messages: sticky.messages };
     }
 
-    const protectFirstN = this.config.protectFirstN;
-    const protectLastN = this.config.protectLastN;
     if (messages.length <= protectFirstN + protectLastN) {
       return { messages };
     }
-
-    const state = this.states.get(stateKey);
-
-    // 边界对齐（不拆 tool_call/tool_result 对）——两形状都会被严格网关 400
-    const { headEnd, tailStart } = this.alignViewSplit(messages, protectFirstN, protectLastN);
-    const head = messages.slice(0, headEnd);
-    const tail = messages.slice(tailStart);
-    const middle = this.semanticHistory(messages.slice(headEnd, tailStart));
 
     // 判据：是否开启新一轮压缩 —— 只看「自上次压缩以来的新增条数」与冷却。
     // 注意：只比「自上次压缩以来新增条数」，不要拿全量 token 和压缩后视图比；
@@ -560,70 +667,46 @@ export class DefaultContextEngine implements ContextEngine {
       state?.lastProactiveLlmAt != null &&
       Date.now() - state.lastProactiveLlmAt < cooldownMs;
 
-    const headTailTokens = estimator.estimateMessages(head) + estimator.estimateMessages(tail);
-    const targetMiddleTokens = Math.max(
-      200,
-      Math.floor(threshold * 0.55) - headTailTokens,
-    );
-
-    // 复用重建（零 LLM）：已压缩过，且增量小或在冷却期。
-    // 有语义摘要 → head + 摘要 + tail；无摘要（LLM 摘要曾失败降级）→ 机械重建。
-    if (state?.lastProactiveMessageCount != null && (!needNewCompaction || inCooldown)) {
-      let reduced: Message[];
-      if (state.previousSummary) {
-        // 摘要用 user 角色承载，避免中段 system 被严格网关拒绝
-        const summaryMsg: Message = {
-          role: 'user',
-          content: wrapContextSummary(state.previousSummary),
-          timestamp: Date.now(),
-          metadata: { source: 'contextSummary' as const },
-        };
-        reduced = [...head, summaryMsg, ...tail];
-      } else {
-        // 无语义摘要：机械重建（旧工具输出截断），不打 LLM、不推进摘要时间戳。
-        // 与分支 B 同语义：语义中间段为空（全为托管 system/grounding）时不裁剪，原样返回
-        if (middle.length === 0) {
-          return { messages };
-        }
-        try {
-          const compressed = await this.config.compressor.compress({
-            messages: middle,
-            targetTokens: targetMiddleTokens,
-            tokenEstimator: estimator,
-          });
-          reduced = [...head, ...compressed.result, ...tail];
-        } catch {
-          // 机械重建失败（应为纯计算，理论不可达）：不改视图，交回本轮原样上下文
-          return { messages };
-        }
+    // 复用重建（零 LLM）：已压缩过，且增量小或在冷却期或禁止新 LLM。
+    if (
+      hasCompactView &&
+      (!allowNewLlmCompact || !needNewCompaction || inCooldown)
+    ) {
+      const sticky = await rebuildStickyView(targetMiddleTokens);
+      if (sticky) {
+        const reducedTokens = estimator.estimateMessages(sticky.messages);
+        // 只更新视图 token，**不要**改 lastProactiveMessageCount：
+        // 该字段表示「压缩覆盖到的全量条数」，只能在真正完成一次压缩时推进。
+        // 若复用重建也改成 messages.length，每轮 +1 会永远凑不满再压缩阈值。
+        this.states.set(stateKey, {
+          ...state,
+          lastProactiveTokens: reducedTokens,
+          lastEstimatedTokens: reducedTokens,
+        });
+        emit?.({
+          type: 'context.compact.start',
+          sessionId,
+          reason: 'proactive',
+          tokensBefore: currentTokens,
+          threshold,
+        });
+        emit?.({
+          type: 'context.compact.end',
+          sessionId,
+          reason: 'proactive',
+          tokensBefore: currentTokens,
+          tokensAfter: reducedTokens,
+          durationMs: 0,
+          cached: true,
+        });
+        return { messages: sticky.messages };
       }
-      const reducedTokens = estimator.estimateMessages(reduced);
-      // 只更新视图 token，**不要**改 lastProactiveMessageCount：
-      // 该字段表示「压缩覆盖到的全量条数」，只能在真正完成一次压缩时推进。
-      // 若复用重建也改成 messages.length，每轮 +1 会永远凑不满再压缩阈值。
-      this.states.set(stateKey, {
-        ...state,
-        lastProactiveTokens: reducedTokens,
-        lastEstimatedTokens: reducedTokens,
-      });
-      // 缓存重建极快，仍发 start/end 以便 UI 状态机一致（cached=true）
-      emit?.({
-        type: 'context.compact.start',
-        sessionId,
-        reason: 'proactive',
-        tokensBefore: currentTokens,
-        threshold,
-      });
-      emit?.({
-        type: 'context.compact.end',
-        sessionId,
-        reason: 'proactive',
-        tokensBefore: currentTokens,
-        tokensAfter: reducedTokens,
-        durationMs: 0,
-        cached: true,
-      });
-      return { messages: reduced };
+    }
+
+    // 禁新 LLM 且无粘滞视图：超线也只走机械（不打摘要 LLM）
+    if (!allowNewLlmCompact) {
+      const sticky = await rebuildStickyView(targetMiddleTokens);
+      return sticky ? { messages: sticky.messages } : { messages };
     }
 
     // 需要新一轮压缩：压缩 head/tail 之间的中间段（语义历史，不含 grounding）。
@@ -660,8 +743,9 @@ export class DefaultContextEngine implements ContextEngine {
         error: err instanceof Error ? err.message : String(err),
         durationMs: Date.now() - proactiveStart,
       });
-      // 主动摘要失败：不改视图，交给后续硬溢出路径处理
-      return { messages };
+      // 主动摘要失败：优先粘滞重建，其次不改视图
+      const sticky = await rebuildStickyView(targetMiddleTokens);
+      return sticky ? { messages: sticky.messages } : { messages };
     }
 
     const reduced = [...head, ...compressed.result, ...tail];
@@ -695,6 +779,37 @@ export class DefaultContextEngine implements ContextEngine {
       messages: reduced,
       droppedSummary: compressed.droppedSummary ?? 'Older turns proactively summarized',
     };
+  }
+
+  /**
+   * 保守降级（overflow **middle 替换体**）：工具账本说明 + 近尾
+   * 外层 head/tail 由 assemble 重组拼接，此处不得重复携带。
+   *
+   * @param messages - 待降级消息（overflow 段）
+   * @param _estimator - token 估算器（保留签名对称）
+   * @returns 降级后的消息列表
+   */
+  private async conservativeTruncate(
+    messages: Message[],
+    _estimator: TokenEstimator,
+  ): Promise<Message[]> {
+    const keepCount = Math.min(Math.max(6, Math.ceil(messages.length * 0.15)), messages.length);
+    const kept = messages.slice(-keepCount);
+    const dropped = messages.slice(0, messages.length - keepCount);
+    // 无可丢弃：原样返回（禁止「0 removed」假通知膨胀）
+    if (dropped.length === 0) {
+      return [...messages];
+    }
+    const body = buildToolCallLedger(dropped);
+    const notice: Message = {
+      role: 'user',
+      content: body
+        ? `[Context truncated: ${dropped.length} earlier messages removed to fit context window]\n[Tool call ledger — do NOT redo these unless explicitly asked]\n${body}`
+        : `[Context truncated: ${dropped.length} earlier messages removed to fit context window]`,
+      timestamp: Date.now(),
+      metadata: { source: 'contextSummary' as const },
+    };
+    return [notice, ...kept];
   }
 
   /**
@@ -1194,4 +1309,39 @@ export class DefaultContextEngine implements ContextEngine {
 
     return false;
   }
+}
+
+/**
+ * 是否处于 turn 内（最近真实 user 消息之后已有工具活动）
+ *
+ * 方案 E：turn 内 middle 全是当前 run 工作记录，禁止 LLM 摘要；
+ * turn 边界（新 user 刚落、尚无工具）才允许对更早历史做语义压缩。
+ *
+ * 「真实 user」= 无 agentId 归因，且非引擎载体（含 `engineHint` reliability 注入）。
+ * 多 agent 共线时带 agentId 的 user 不重置本边界（只认主对话发言）。
+ *
+ * @param messages - 全量消息
+ * @returns 是否 turn 内
+ */
+export function isMidTurn(messages: Message[]): boolean {
+  let lastGenuineUserIdx = -1;
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
+    if (msg.role !== 'user') continue;
+    if (msg.agentId) continue;
+    if (isEngineCarrierSource(msg.metadata?.source)) continue;
+    lastGenuineUserIdx = i;
+  }
+  if (lastGenuineUserIdx < 0) return false;
+  for (let i = lastGenuineUserIdx + 1; i < messages.length; i++) {
+    const msg = messages[i];
+    if (
+      msg.role === 'tool' ||
+      (msg.toolResults?.length ?? 0) > 0 ||
+      (msg.toolCalls?.length ?? 0) > 0
+    ) {
+      return true;
+    }
+  }
+  return false;
 }

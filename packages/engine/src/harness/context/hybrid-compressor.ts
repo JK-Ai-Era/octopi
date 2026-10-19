@@ -29,9 +29,10 @@ import { TruncateCompressor } from './truncate-compressor.js';
 const TOOL_RESULT_TRUNCATE_THRESHOLD = 200;
 
 /**
- * 工具结果截断后的占位符
+ * 工具结果截断后的占位符（中性归档措辞——禁止诱导重跑）
  */
-const TOOL_RESULT_PLACEHOLDER = '[Tool output truncated - too long to display. Use the tool again if needed.]';
+const TOOL_RESULT_PLACEHOLDER =
+  '[Tool output archived in session log — do NOT re-run unless the output is needed again.]';
 
 export class HybridCompressor implements Compressor {
   private llmCompressor: LLMSummaryCompressor;
@@ -46,8 +47,8 @@ export class HybridCompressor implements Compressor {
    * 压缩消息
    *
    * 策略：
-   * 1. 预处理：清除旧工具结果（无 LLM）
-   * 2. 如果有摘要函数，使用 LLM 摘要
+   * 1. 机械预处理（截断旧工具结果）——只作用于**丢弃体/机械路径**，不进 LLM 摘要输入
+   * 2. 如果有摘要函数，对**原文**做 LLM 摘要（F-b：禁止先打码再摘要）
    * 3. 否则使用截断
    */
   async compress(params: CompressParams): Promise<CompressResult> {
@@ -74,7 +75,7 @@ export class HybridCompressor implements Compressor {
       };
     }
 
-    // 第一级：清除旧工具结果（无 LLM）
+    // 机械预处理：仅给机械截断/残差用（F-b：不进摘要输入）
     const preprocessed = this.preprocessToolResults(messages);
     const preprocessedTokens = estimator.estimateMessages(preprocessed);
 
@@ -87,12 +88,12 @@ export class HybridCompressor implements Compressor {
       };
     }
 
-    // 第二级：LLM 摘要（如果可用）
+    // 第二级：LLM 摘要 —— 输入为原文（F-b）
     if (params.summarize) {
       try {
         const result = await this.llmCompressor.compress({
           ...params,
-          messages: preprocessed,
+          messages,
         });
         return result;
       } catch (err) {
@@ -101,7 +102,7 @@ export class HybridCompressor implements Compressor {
       }
     }
 
-    // 第三级：截断（兜底）
+    // 第三级：截断（兜底）——机械预处理后的丢弃体
     return this.truncateCompressor.compress({
       ...params,
       messages: preprocessed,
@@ -144,12 +145,9 @@ export class HybridCompressor implements Compressor {
         const truncatedResults = msg.toolResults.map(tr => {
           const body = toolResultBody(tr);
           if (body.length > TOOL_RESULT_TRUNCATE_THRESHOLD) {
-            // 错误结果截断 error 字段，成功结果截断 result 字段
+            // error 永不打码（错误可追溯性优先，与 B2 同红线）；只截断成功结果
             if (tr.error !== undefined) {
-              return {
-                ...tr,
-                error: TOOL_RESULT_PLACEHOLDER,
-              };
+              return tr;
             }
             return {
               ...tr,

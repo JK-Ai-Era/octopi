@@ -404,6 +404,7 @@ export async function* runAgentWithReliability(
             role: 'user',
             content: state.wrapUp.userMessage,
             timestamp: Date.now(),
+            metadata: { source: 'engineHint' },
           });
         }
         // wrap-up 窗口内：允许只读工具，阻止写入工具
@@ -635,6 +636,7 @@ export async function* runAgentWithReliability(
               role: 'user',
               content: `[System: ${relConfig.planningRetry.steerInstruction}]`,
               timestamp: Date.now(),
+              metadata: { source: 'engineHint' },
             });
             state.planningOnlySteerInjected = true;
           }
@@ -653,6 +655,7 @@ export async function* runAgentWithReliability(
               role: 'user',
               content: `[System: ${relConfig.emptyResponseRetry.steerInstruction}]`,
               timestamp: Date.now(),
+              metadata: { source: 'engineHint' },
             });
             state.emptyResponseSteerInjected = true;
           }
@@ -673,6 +676,7 @@ export async function* runAgentWithReliability(
               role: 'user',
               content: '[System: Multiple tool calls produced no result. Please try a different approach.]',
               timestamp: Date.now(),
+              metadata: { source: 'engineHint' },
             });
           } else {
             // 超过阈值：标记停止 + 立即检查点
@@ -736,6 +740,7 @@ export async function* runAgentWithReliability(
                   role: 'user',
                   content: `[System: ${loopResult.message} Stop calling tools and provide your final response based on the information gathered so far.]`,
                   timestamp: Date.now(),
+                  metadata: { source: 'engineHint' },
                 });
               }
             } else if (loopResult.level === 'warning') {
@@ -743,6 +748,7 @@ export async function* runAgentWithReliability(
                 role: 'user',
                 content: `[System: ${loopResult.message}]`,
                 timestamp: Date.now(),
+                metadata: { source: 'engineHint' },
               });
             }
           }
@@ -1206,6 +1212,7 @@ function executeRecoveryActions(
             role: 'user',
             content: `[System: ${removeCount} earlier messages omitted to fit context window.]`,
             timestamp: Date.now(),
+            metadata: { source: 'engineHint' },
           });
         }
         break;
@@ -1225,6 +1232,7 @@ function executeRecoveryActions(
             role: 'user',
             content: `[System: ${removed} recent messages cleared to recover from a stuck loop.]`,
             timestamp: Date.now(),
+            metadata: { source: 'engineHint' },
           });
         }
         break;
@@ -1234,6 +1242,7 @@ function executeRecoveryActions(
           role: 'user',
           content: `[System: ${action.hint}]`,
           timestamp: Date.now(),
+          metadata: { source: 'engineHint' },
         });
         break;
     }

@@ -219,7 +219,7 @@ export function agedToolResultPointer(
   const text =
     `[aged tool result · pointer] tool: ${tr.name ?? 'unknown'}; ` +
     `args: ${argsOutline}; ${errorOrResult}; ` +
-    'full output kept in session log — re-run this tool call to fetch it';
+    'full output kept in session log — do NOT re-run unless the output is needed again';
 
   pointerCache.set(tr as object, { fingerprint, text });
   return text;

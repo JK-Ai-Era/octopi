@@ -48,6 +48,11 @@ function buildToolHeavyHistory(rounds: number, resultChars: number): Message[] {
   return msgs;
 }
 
+/** 方案 E：turn 边界（新 user 刚落、尚无工具）才允许 LLM 摘要——历史末尾补一条 user */
+function atTurnBoundary(msgs: Message[]): Message[] {
+  return [...msgs, userMsg('next')];
+}
+
 interface CollectedEvent {
   type: string;
   cached?: boolean;
@@ -118,8 +123,8 @@ describe('主动压缩 × 工具输出密集历史（连线回归）', () => {
       emit: (e: { type: string; cached?: boolean }) => events.push({ type: e.type, cached: e.cached }),
     };
 
-    const r1 = await engine.assemble({ ...params, messages: base });
-    // B：机械截断达标也必须调 LLM 产出摘要（修复前：永不调用）
+    const r1 = await engine.assemble({ ...params, messages: atTurnBoundary(base) });
+    // B：机械截断达标也必须调 LLM 产出摘要（修复前：永不调用）；E：仅 turn 边界可打 LLM
     expect(summarize).toHaveBeenCalledTimes(1);
     // 摘要是语义正文，进入持久化快照
     expect(r1.compactState?.summary).toContain('proactive-summary');
@@ -139,7 +144,7 @@ describe('主动压缩 × 工具输出密集历史（连线回归）', () => {
 
     events.length = 0;
     // 增量攒够（≥3 条）→ 开启新一轮压缩，摘要按 previousSummary 增量合并
-    const grown = [...base, userMsg('n1'), userMsg('n2'), userMsg('n3')];
+    const grown = atTurnBoundary([...base, userMsg('n1'), userMsg('n2'), userMsg('n3')]);
     await engine.assemble({ ...params, messages: grown });
     expect(summarize).toHaveBeenCalledTimes(2);
     expect(nonCachedCompacts(events)).toHaveLength(1);
@@ -173,7 +178,7 @@ describe('主动压缩 × 工具输出密集历史（连线回归）', () => {
       emit: (e: { type: string; cached?: boolean }) => events.push({ type: e.type, cached: e.cached }),
     };
 
-    const r1 = await engine.assemble({ ...params, messages: base });
+    const r1 = await engine.assemble({ ...params, messages: atTurnBoundary(base) });
     expect(summarize).toHaveBeenCalledTimes(1);
     // 降级占位说明（[Context truncated…]）不得冒充语义摘要（修复前会被存进 previousSummary）
     expect(r1.compactState?.summary).toBeUndefined();
@@ -181,13 +186,13 @@ describe('主动压缩 × 工具输出密集历史（连线回归）', () => {
 
     events.length = 0;
     // +1 条 → 复用机械重建：不打 LLM、不发非 cached 事件
-    await engine.assemble({ ...params, messages: [...base, userMsg('tiny')] });
+    await engine.assemble({ ...params, messages: atTurnBoundary([...base, userMsg('tiny')]) });
     expect(summarize).toHaveBeenCalledTimes(1);
     expect(nonCachedCompacts(events)).toHaveLength(0);
 
     events.length = 0;
-    // 攒够增量 → 重试 LLM 摘要
-    await engine.assemble({ ...params, messages: [...base, userMsg('n1'), userMsg('n2'), userMsg('n3')] });
+    // 攒够增量 → 重试 LLM 摘要（turn 边界）
+    await engine.assemble({ ...params, messages: atTurnBoundary([...base, userMsg('n1'), userMsg('n2'), userMsg('n3')]) });
     expect(summarize).toHaveBeenCalledTimes(2);
     expect(nonCachedCompacts(events)).toHaveLength(1);
   });
@@ -253,7 +258,7 @@ describe('主动压缩 × 工具输出密集历史（连线回归）', () => {
       emit: (e: { type: string; cached?: boolean }) => events.push({ type: e.type, cached: e.cached }),
     };
 
-    const r1 = await engine.assemble({ ...params, messages: base });
+    const r1 = await engine.assemble({ ...params, messages: atTurnBoundary(base) });
     expect(summarize).toHaveBeenCalledTimes(1);
     // 空摘要不进状态（修复前：'[Conversation Summary]' 空壳会冒充语义摘要、中间段被空正文替换）
     expect(r1.compactState?.summary).toBeUndefined();

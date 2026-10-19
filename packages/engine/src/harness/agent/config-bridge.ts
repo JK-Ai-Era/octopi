@@ -20,20 +20,14 @@ import { SubsystemLoader } from '../collaboration/autonomous-subsystem/loader.js
 import type { SubsystemSpec } from '../collaboration/autonomous-subsystem/types.js';
 import { homedir } from 'node:os';
 import { resolve, join } from 'node:path';
-import { existsSync } from 'node:fs';
 import type { ModelProvider } from '@octopi-agent/core/interfaces/model-provider.js';
-import type { BudgetPolicyConfig } from '../run/budget/budget.js';
-import type { ReliabilityConfig } from '../run/reliability/run-agent.js';
 import { AgentBuilder } from './builder.js';
 import type { SessionAwareRunner } from '../run/runner.js';
-import type { SecurityGuardConfig } from '@octopi-agent/core/security-guard.js';
-import type { RunGuardJsonConfig } from '../../config.js';
-import { DefaultRunGuard } from '../run/run-guard/default-run-guard.js';
-import type { RunGuardConfig } from '../run/run-guard/default-run-guard.js';
-import type { ContextEngine } from '../context/types.js';
-import { DefaultContextEngine } from '../context/default-context-engine.js';
-import { DefaultBudgetAllocator } from '../context/budget-allocator.js';
-import { createProviderSummarize, pickSummarizeProvider } from '../context/summarize.js';
+import {
+  resolveSecurityConfig,
+  shouldAutoLoadSubsystems,
+  wireAgentBuilder,
+} from './wire-agent-builder.js';
 
 // ── 结果类型 ──
 
@@ -85,98 +79,6 @@ export async function resolveProviders(config: NormalizedHarnessConfig): Promise
 
 
 // ── 安全配置解析 ──
-
-/**
- * 从配置中解析安全策略（始终返回；无总开关）
- *
- * 硬边界与 ToolCallRiskPolicy 由 Guard/Builder 保证接线，
- * 这里只归一化处置、范围与灵敏度。
- */
-export function resolveSecurityConfig(config: HarnessConfig): SecurityGuardConfig {
-  const security = config.security ?? {};
-  return {
-    enforce: security.enforce ?? 'block',
-    injectionSensitivity: security.injectionSensitivity ?? 'medium',
-    allowedPaths: security.allowedPaths ?? [],
-  };
-}
-
-// ── 上下文引擎解析 ──
-
-/**
- * 从配置中创建 ContextEngine 实例
- */
-export function resolveContextEngine(config: ContextEngineConfig | undefined): ContextEngine {
-  if (!config || config.type === 'default') {
-    // 默认配置
-    return new DefaultContextEngine({
-      protectFirstN: config?.protectFirstN ?? 3,
-      protectLastN: config?.protectLastN ?? 20,
-      proactiveCompactRatio: config?.proactiveCompactRatio ?? 0.6,
-      proactiveCooldownMs: config?.proactiveCooldownMs ?? 30_000,
-      // F1-B2 老化：缺省与参数收敛在 resolveToolResultAgingOptions（引擎内）
-      historyAging: config?.historyAging,
-      // F1-B3 工作目标：缺省 20 万 / 兜底线 1.5×（引擎内）；0 = 退回窗口比例模式
-      targetTokens: config?.targetTokens,
-      compactFallbackRatio: config?.compactFallbackRatio,
-      budgetAllocator: new DefaultBudgetAllocator({
-        outputRatio: config?.outputRatio ?? 0.20,
-        minOutputReserve: config?.minOutputReserve ?? 2000,
-        maxOutputReserve: config?.maxOutputReserve ?? 8000,
-      }),
-    });
-  }
-
-  // 自定义类型（未来扩展）
-  throw new Error(`Unknown context engine type: ${config.type}`);
-}
-
-// ── RunGuard 解析 ──
-
-/**
- * 从配置中解析 RunGuard
- *
- * 解析 llmModel 字段：
- * - "model" → 使用主 provider
- * - "provider/model" → 使用指定 provider
- */
-export function resolveRunGuard(
-  config: RunGuardJsonConfig | undefined,
-  providers: Map<string, ModelProvider>,
-): DefaultRunGuard | undefined {
-  if (!config || config.enabled === false) return undefined;
-
-  // 解析审查用模型
-  let reviewModel: ModelProvider | undefined;
-  if (config.llmModel) {
-    const parts = config.llmModel.split('/');
-    if (parts.length === 2) {
-      // 格式: "provider/model"
-      const providerName = parts[0];
-      reviewModel = providers.get(providerName);
-      // 将 llmModel 改为只保留 model 部分
-      config = { ...config, llmModel: parts[1] };
-    } else {
-      // 格式: "model" → 使用第一个 provider
-      reviewModel = providers.values().next().value;
-    }
-  }
-
-  // 构建 RunGuardConfig
-  const runGuardConfig: RunGuardConfig = {
-    enabled: true,
-    checkpointInterval: config.checkpointInterval,
-    minCheckpointInterval: config.minCheckpointInterval,
-    maxCheckpointInterval: config.maxCheckpointInterval,
-    enableLLMReview: config.enableLLMReview,
-    llmReviewInterval: config.llmReviewInterval,
-    llmModel: config.llmModel,
-    hardLimit: config.hardLimit,
-    hardWallClockMs: config.hardWallClockMs,
-  };
-
-  return new DefaultRunGuard(runGuardConfig, reviewModel);
-}
 
 // ── 子系统加载 ──
 
@@ -322,9 +224,9 @@ async function buildAgent(
   agentConfig: AgentConfig,
   shared: {
     providers: Map<string, ModelProvider>;
-    securityConfig?: SecurityGuardConfig;
+    securityConfig?: import('@octopi-agent/core/security-guard.js').SecurityGuardConfig;
     budgetConfig?: import('../../config.js').BudgetPolicyJsonConfig;
-    runGuardConfig?: RunGuardJsonConfig;
+    runGuardConfig?: import('../../config.js').RunGuardJsonConfig;
     contextEngineConfig?: ContextEngineConfig;
     contextAssemblerConfig?: import('../../config.js').ContextAssemblerConfig;
     constitutionConfig?: import('../../config.js').ConstitutionConfig;
@@ -346,7 +248,7 @@ async function buildAgent(
 ): Promise<BuiltAgent> {
   const builder = new AgentBuilder();
 
-  // ── Model ──
+  // 解析主模型 provider（宿主可在此包装 circuit breaker；config-bridge 用原始 provider）
   const resolvedModel = resolveModelConfig(agentConfig.model, shared.flatModels);
   const provider = shared.providers.get(resolvedModel.provider);
   if (!provider) {
@@ -355,249 +257,44 @@ async function buildAgent(
       `Available: ${Array.from(shared.providers.keys()).join(', ') || '(none)'}`
     );
   }
-  builder.model(provider);
 
-  // ── Model call watchdog 超时（modelCall 段） ──
-  if (shared.modelCallConfig) {
-    builder.modelCallTimeouts(shared.modelCallConfig);
-  }
-
-  // ── Model Levels ──
-  if (shared.levelMap) {
-    builder.withModelLevels(shared.levelMap);
-  }
-
-  // ── Workspace ──
-  if (agentConfig.workspace) {
-    builder.workspace(agentConfig.workspace);
-  }
-
-  // ── Tool isolation (I5) ──
-  if (shared.toolIsolation) {
-    builder.toolIsolation(shared.toolIsolation);
-  }
-
-  // ── EffectPolicy (P3) ──
-  const effectPolicy = agentConfig.effectPolicy ?? shared.effectPolicy;
-  if (effectPolicy) {
-    builder.effectPolicy(effectPolicy);
-  }
-
-  // ── Context lease (opt-in) ──
-  if (shared.sessionIdleExpiryMs && shared.sessionIdleExpiryMs > 0) {
-    builder.runnerConfig({ idleExpiryMs: shared.sessionIdleExpiryMs });
-  }
-
-  // SEC-2 / E6: agent tool policy + optional session rights ceiling
-  if (agentConfig.tools || agentConfig.maxSessionRights) {
-    builder.runnerConfig({
-      agentToolPolicy: agentConfig.tools,
-      agentMaxSessionRights: agentConfig.maxSessionRights,
-    });
-  }
-
-  // ── Home / Persona ──
-  // home 是 agent 文件态持久目录（persona/skills）；session 在 OCTOPI_HOME/sessions；
-  // memory/wisdom 走 AgentDatabase SQLite，不在此目录树下。
-  const agentHome = agentConfig.home ?? (typeof agentConfig.persona === 'string' ? agentConfig.persona : undefined);
-  if (agentConfig.home) {
-    builder.agentHome(agentConfig.home);
-    builder.agentId(agentConfig.id);
-  } else if (agentHome && typeof agentConfig.persona === 'string') {
-    // 兼容旧 persona-as-home：extract 仍落在该目录
-    builder.agentHome(agentConfig.persona);
-    builder.agentId(agentConfig.id);
-  }
-  if (agentConfig.persona) {
-    if (typeof agentConfig.persona === 'string') {
-      // 文件式 persona：目录路径（已废弃，等价于 home）
-      builder.persona(agentConfig.persona);
-    }
-    // 内联 persona 不需要 builder 处理——systemPrompt 会在 run() 时传入
-  } else if (agentHome) {
-    // 没有显式 persona，从 home 目录加载
-    builder.persona(agentHome);
-  }
-
-  // ── Skills ──
-  const skillDir =
-    agentConfig.skillDirectory ??
-    (agentHome ? join(agentHome, 'skills') : undefined);
-  if (skillDir && existsSync(skillDir)) {
-    builder.skillDirectory(skillDir);
-  }
-
-  // ── Memory / Wisdom / Cognition / Knowledge（system prompt 层） ──
-  // 优先挂 agent home 下的 AgentDatabase；失败则跳过（不阻断 build）
-  if (agentHome) {
-    try {
-      const { AgentDatabase } = await import('../memory/sqlite/agent-db.js');
-      const { SqliteMemoryStore } = await import('../memory/sqlite/memory-store.js');
-      const { SqliteWisdomStore } = await import('../memory/sqlite/wisdom-store.js');
-      const { SqliteConceptGraph } = await import('../memory/sqlite/cognition-store.js');
-      const { resolveEmbeddingRuntime } = await import('../memory/sqlite/embedding-from-models.js');
-
-      const embRuntime = resolveEmbeddingRuntime(shared.modelsConfig);
-      const useVec = embRuntime && embRuntime.vectorEngine !== 'js';
-      const db = await AgentDatabase.create({
-        dbPath: join(agentHome, 'agent.db'),
-        sqliteVec: useVec
-          ? { extensionPath: embRuntime?.sqliteVecExtensionPath }
-          : false,
-        vectorDimensions: useVec ? embRuntime?.dimensions : undefined,
-      });
-      builder.memoryStore(
-        new SqliteMemoryStore(db, {
-          embeddingProvider: embRuntime?.provider ?? null,
-          vectorEngine: embRuntime?.vectorEngine ?? 'auto',
-          minSimilarity: shared.memoryConfig?.retrieval?.minSimilarity,
-          similarityWeight: shared.memoryConfig?.retrieval?.similarityWeight,
-          minKeywordScore: shared.memoryConfig?.retrieval?.minKeywordScore,
-        }),
-      );
-      const wis = shared.wisdomConfig;
-      if (wis?.enabled !== false) {
-        builder.wisdomStore(
-          new SqliteWisdomStore(db, { hardCap: wis?.capacity?.hardCap }),
-        );
-      }
-      const cog = shared.cognitionConfig;
-      if (cog?.enabled !== false) {
-        builder.cognitionStore(new SqliteConceptGraph(db, {
-          embeddingProvider: embRuntime?.provider ?? null,
-          mergeThreshold: cog?.identity?.mergeThreshold,
-          candidateBandHi: cog?.identity?.candidateBandHi,
-          stopNodes: cog?.capacity?.stopNodes,
-          stopEdges: cog?.capacity?.stopEdges,
-          causesMinIndependentMemories: cog?.relations?.causesMinIndependentMemories,
-        }));
-      }
-      // Knowledge catalog / 索引归独立 Knowledge 服务（arch/knowledge-layer.md）；P1 前不挂
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.warn(
-        `[ConfigBridge] memory/wisdom/cognition stores unavailable for agent home ${agentHome}: ${msg}`,
-      );
-      if (/node:sqlite|ERR_UNKNOWN_BUILTIN_MODULE|ERR_DLOPEN|NODE_MODULE_VERSION/i.test(msg)) {
-        console.warn(
-          `[ConfigBridge] hint: SQLite backend requires Node.js >= 24 with built-in node:sqlite (process.version=${process.version})`,
-        );
-      }
-    }
-  }
-
-  // ── Security（安全不可绕过：策略与 RiskPolicy 始终接线） ──
-  builder.securityPolicy(shared.securityConfig ?? {});
-  // 规则引擎：产生 tool_call.risk_unknown 后，由子系统目录加载的 safety-guard 兜底。
-  // 子系统自身参数（model/maxDurationMs 等）只写在其 config.yaml，不在本文件配置。
-  const { DefaultToolCallRiskPolicy } = await import('../governance/security/default-risk-policy.js');
-  builder.withRiskPolicy(new DefaultToolCallRiskPolicy({ cwd: agentConfig.workspace }));
-
-  // ── Budget + P2/P3 配置接线 ──
-  if (shared.budgetConfig) {
-    // 提取 BudgetPolicyEngine 配置（wall-clock / iteration / tool 上限）
-    const engineConfig: Partial<BudgetPolicyConfig> = {
-      maxWallClockMs: shared.budgetConfig.maxWallClockMs,
-      maxIterations: shared.budgetConfig.maxIterations,
-      maxToolCalls: shared.budgetConfig.maxToolCalls,
-    };
-    builder.budget(engineConfig);
-
-    // P2: wrap-up 配置
-    const wrapUpConfig: Record<string, unknown> = {};
-    if (shared.budgetConfig.wrapUpTurns !== undefined) {
-      wrapUpConfig.turns = shared.budgetConfig.wrapUpTurns;
-    }
-    if (shared.budgetConfig.onPolicyHit !== undefined) {
-      wrapUpConfig.onPolicyHit = shared.budgetConfig.onPolicyHit;
-    }
-    if (shared.budgetConfig.contextWrapUpRatio !== undefined) {
-      wrapUpConfig.contextRatio = shared.budgetConfig.contextWrapUpRatio;
-    }
-
-    // P3: policy 单位配置
-    const policyUnits = shared.budgetConfig.units;
-    const policyPricing = shared.budgetConfig.pricing;
-    const advisory = shared.budgetConfig.advisory;
-
-    // 如果有 P2/P3 配置，注入到 reliability
-    if (Object.keys(wrapUpConfig).length > 0 || policyUnits || policyPricing || advisory) {
-      builder.reliability({
-        wrapUp: Object.keys(wrapUpConfig).length > 0 ? wrapUpConfig as ReliabilityConfig['wrapUp'] : undefined,
-        policyUnits: policyUnits ? {
-          maxCost: policyUnits.maxCost,
-          maxUncachedInputTokens: policyUnits.maxUncachedInputTokens,
-          maxOutputTokens: policyUnits.maxOutputTokens,
-          maxLlmCalls: policyUnits.maxLlmCalls,
-        } : undefined,
-        policyPricing,
-        advisory: advisory as ReliabilityConfig['advisory'],
-      });
-    }
-  }
-
-  // ── Context Engine ──
-  const contextEngine = resolveContextEngine(shared.contextEngineConfig);
-  builder.contextEngine(contextEngine);
-
-  // ── Context Assembler（七层 system 装配） ──
-  if (shared.contextAssemblerConfig) {
-    builder.contextAssembler(shared.contextAssemblerConfig);
-  }
-  if (shared.constitutionConfig !== undefined) {
-    builder.constitution(shared.constitutionConfig);
-  }
-  if (shared.memoryConfig) {
-    builder.memoryConfig(shared.memoryConfig);
-  }
-
-  // ── 默认 summarize：capabilities 解析链（summary → mini → standard → 主模型）──
-  // 与 harness/context/capabilities/summary/resolver.ts 口径一致；legacy contextEngine.summaryModel 由 pick 之外路径覆盖时优先
-  if (provider) {
-    const { provider: summarizeProvider, model: summarizeModel } = pickSummarizeProvider(
-      shared.providers,
-      shared.levelMap,
-      provider,
-    );
-    builder.summarize(createProviderSummarize(summarizeProvider, { model: summarizeModel }));
-  }
-
-  // ── RunGuard ──
-  if (shared.runGuardConfig?.enabled !== false) {
-    const guard = resolveRunGuard(shared.runGuardConfig, shared.providers);
-    if (guard) {
-      builder.runGuard(guard);
-    }
-  }
-
-  // checkpointInterval：从 runGuard JSON 配置打通到 reliability 初始间隔
-  if (shared.runGuardConfig?.checkpointInterval !== undefined) {
-    builder.reliability({
-      checkpointInterval: shared.runGuardConfig.checkpointInterval,
-    });
-  }
-
-  // ── Subsystems ──
-  // 注册范围由 allow/deny 列表控制；builder.build 统一装配，此处只透传显式 specs / audit。
-  if (shared.subsystemSpecs && shared.subsystemSpecs.length > 0) {
-    for (const spec of shared.subsystemSpecs) {
-      builder.withSubsystem(spec);
-    }
-  }
-  if (shared.subsystemAuditDir) {
-    builder.withSubsystemAuditDir(shared.subsystemAuditDir);
-  }
-  if (shared.subsystemAllowlist?.length) {
-    builder.subsystemAllowlist(...shared.subsystemAllowlist);
-  }
-  if (shared.subsystemDenylist?.length) {
-    builder.subsystemDenylist(...shared.subsystemDenylist);
-  }
+  await wireAgentBuilder(builder, {
+    model: provider,
+    agentId: agentConfig.id,
+    workspace: agentConfig.workspace,
+    // legacy：string persona 等价 home（config-bridge 显式决定，不进 wire 隐式规则）
+    home:
+      agentConfig.home ??
+      (typeof agentConfig.persona === 'string' ? agentConfig.persona : undefined),
+    persona: agentConfig.persona,
+    skillDirectory: agentConfig.skillDirectory,
+    tools: agentConfig.tools,
+    maxSessionRights: agentConfig.maxSessionRights,
+    effectPolicy: agentConfig.effectPolicy ?? shared.effectPolicy,
+    toolIsolation: shared.toolIsolation,
+    sessionIdleExpiryMs: shared.sessionIdleExpiryMs,
+    modelCallTimeouts: shared.modelCallConfig,
+    providers: shared.providers,
+    levelMap: shared.levelMap,
+    modelsConfig: shared.modelsConfig,
+    contextEngineConfig: shared.contextEngineConfig,
+    contextAssemblerConfig: shared.contextAssemblerConfig,
+    constitutionConfig: shared.constitutionConfig,
+    memoryConfig: shared.memoryConfig,
+    cognitionConfig: shared.cognitionConfig,
+    wisdomConfig: shared.wisdomConfig,
+    securityConfig: shared.securityConfig,
+    budgetConfig: shared.budgetConfig,
+    runGuardConfig: shared.runGuardConfig,
+    subsystemSpecs: shared.subsystemSpecs,
+    subsystemAuditDir: shared.subsystemAuditDir,
+    subsystemAllowlist: shared.subsystemAllowlist,
+    subsystemDenylist: shared.subsystemDenylist,
+  });
 
   // ── Build ──
-  // 已有显式 specs 时不再重复自动发现，避免与 resolveSubsystemSpecs 双载
   const built = await builder.build({
-    autoLoadSubsystems: (shared.subsystemSpecs?.length ?? 0) === 0,
+    autoLoadSubsystems: shouldAutoLoadSubsystems(shared),
   });
 
   // ── 注入子系统运行时依赖 ──

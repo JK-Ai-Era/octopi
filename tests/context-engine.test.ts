@@ -606,7 +606,7 @@ describe('HybridCompressor', () => {
     const processedOldResult = result.result.find(m =>
       m.role === 'tool' && m.toolResults?.[0]?.toolCallId === 'call_1'
     );
-    expect(processedOldResult?.toolResults?.[0]?.result).toContain('truncated');
+    expect(processedOldResult?.toolResults?.[0]?.result).toContain('archived');
 
     // Recent tool result should be preserved
     const processedRecentResult = result.result.find(m =>

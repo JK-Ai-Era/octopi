@@ -81,8 +81,15 @@ export type { ChannelAdapter, ChannelMessage, ChannelReply } from './extension/p
 export { setRunTelemetryFactory, getRunTelemetryFactory } from './observability/run-telemetry.js';
 export type { RunTelemetry, RunTelemetryFactory } from './observability/run-telemetry.js';
 export { loadPersona, composePersonas, PersonaSource } from './agent/persona.js';
-export { buildFromConfig, resolveProviders, resolveSecurityConfig, resolveContextEngine, resolveRunGuard } from './agent/config-bridge.js';
+export { buildFromConfig, resolveProviders } from './agent/config-bridge.js';
 export type { BuiltAgent } from './agent/config-bridge.js';
+export {
+  wireAgentBuilder,
+  resolveSecurityConfig,
+  resolveContextEngine,
+  resolveRunGuard,
+} from './agent/wire-agent-builder.js';
+export type { AgentWireSpec } from './agent/wire-agent-builder.js';
 
 // ── Context Management ──
 export { DefaultContextEngine } from './context/default-context-engine.js';

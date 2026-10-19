@@ -4125,75 +4125,102 @@ export class Gateway {
       console.log(`[Gateway] Agent "${agent.id}" fallback chain: ${[agent.model.model, ...agent.model.fallbackModels.map(f => f.model)].join(' ?')}`);
     }
 
-    // 使用 AgentBuilder 构建；与 Runtime 同源 EventBus，Escalate/子系统事件才
-    const builder = new (await import('@octopi-agent/engine/harness/agent/builder.js')).AgentBuilder()
-      .model(finalProvider)
+    // ── 标准组装（与 config-bridge 同源）+ 宿主适配 ──
+    const { AgentBuilder } = await import('@octopi-agent/engine/harness/agent/builder.js');
+    const {
+      wireAgentBuilder,
+      resolveSecurityConfig,
+    } = await import('@octopi-agent/engine/harness/agent/wire-agent-builder.js');
+
+    const builder = new AgentBuilder()
       .store(this.store)
-      .workspace(agent.workspace ?? '')
       .events(this.gatewayBus);
 
-    if (this.config.toolIsolation) {
-      builder.toolIsolation(this.config.toolIsolation);
-    }
-    // 模型调用 watchdog 超时（modelCall 段；缺省引擎默认）
-    if (
-      this.config.modelCallIdleTimeoutMs !== undefined ||
-      this.config.modelCallAbsoluteTimeoutMs !== undefined
-    ) {
-      builder.modelCallTimeouts({
-        idleTimeoutMs: this.config.modelCallIdleTimeoutMs,
-        absoluteTimeoutMs: this.config.modelCallAbsoluteTimeoutMs,
-      });
-    }
-    // P3: effectPolicy（agents[] 覆盖顶层）
-    {
-      const agentEff = (agent as { effectPolicy?: unknown }).effectPolicy
-        ?? (this.config as { effectPolicy?: unknown }).effectPolicy;
-      if (agentEff) {
-        builder.effectPolicy(agentEff as never);
-      }
-    }
-    // E1/E2：同进程内所?Runner 共享?session lease；E6：注?ACL + agent 天花?
-    // OP-15：会话附件只读根（file 工具?
+    const { existsSync } = await import('node:fs');
+    const { join } = await import('node:path');
     const { getOctopiHome } = await import('@octopi-agent/engine/paths.js');
-    const { join: pathJoinForAttachments } = await import('node:path');
-    builder.runnerConfig({
-      sessionLease: this.sessionLease,
-      sessionAcl: this.sessionAcl,
-      sessionScheduleService: this.sessionSchedules,
-      agentMaxSessionRights: agent.maxSessionRights,
-      agentToolPolicy: agent.tools,
-      // SEC-3c：credentials.requireBindings / untrusted 同源（tool context 与 store 一致）
-      requireCredentialBindings:
-        this.config.credentials?.requireBindings === true,
-      // 上下文租约 opt-in：缺省关闭，续聊默认带全量窗口
-      idleExpiryMs: this.config.session?.idleExpiryMs,
-      observerHub: this.observerHub.isEnabled() ? this.observerHub : undefined,
-      sessionsDir: pathJoinForAttachments(getOctopiHome(), 'sessions'),
-      sessionAttachmentInject: {
-        fullTextMaxChars: this.config.knowledge?.attachments?.inject?.fullTextMaxChars,
-        intent: this.config.knowledge?.attachments?.inject?.intent,
-        intentTimeoutMs: this.config.knowledge?.attachments?.inject?.intentTimeoutMs,
-        emptyMessagePrompt: this.config.knowledge?.attachments?.inject?.emptyMessagePrompt,
+    const pathJoinForAttachments = join;
+
+    const wired = await wireAgentBuilder(builder, {
+      model: finalProvider,
+      agentId: agent.id,
+      workspace: agent.workspace,
+      home: agent.home,
+      persona:
+        typeof agent.persona === 'object' && agent.persona?.systemPrompt
+          ? { systemPrompt: agent.persona.systemPrompt }
+          : typeof agent.persona === 'string'
+            ? agent.persona
+            : undefined,
+      skillDirectory: agent.skillDirectory,
+      tools: agent.tools,
+      maxSessionRights: agent.maxSessionRights,
+      effectPolicy:
+        (agent as { effectPolicy?: import('@octopi-agent/engine').EffectPolicyConfig }).effectPolicy ??
+        this.config.effectPolicy,
+      toolIsolation: this.config.toolIsolation,
+      sessionIdleExpiryMs: this.config.session?.idleExpiryMs,
+      modelCallTimeouts:
+        this.config.modelCallIdleTimeoutMs !== undefined ||
+        this.config.modelCallAbsoluteTimeoutMs !== undefined
+          ? {
+              idleTimeoutMs: this.config.modelCallIdleTimeoutMs,
+              absoluteTimeoutMs: this.config.modelCallAbsoluteTimeoutMs,
+            }
+          : undefined,
+      providers: this.providers,
+      levelMap: this.config.levels,
+      modelsConfig: {
+        providers: this.config.modelProviders,
+        embedding: this.config.embedding,
+      },
+      contextEngineConfig: this.config.contextEngine,
+      contextAssemblerConfig:
+        this.config.context?.contextAssembler ?? this.config.contextAssembler,
+      constitutionConfig:
+        this.config.context?.constitution ?? this.config.constitution,
+      memoryConfig: this.config.memory,
+      securityConfig: resolveSecurityConfig({ security: this.config.security }),
+      budgetConfig: this.config.budgetPolicy,
+      runGuardConfig: this.config.runGuard,
+      extraRunnerConfig: {
+        sessionLease: this.sessionLease,
+        sessionAcl: this.sessionAcl,
+        sessionScheduleService: this.sessionSchedules,
+        requireCredentialBindings: this.config.credentials?.requireBindings === true,
+        observerHub: this.observerHub.isEnabled() ? this.observerHub : undefined,
+        sessionsDir: pathJoinForAttachments(getOctopiHome(), 'sessions'),
+        sessionAttachmentInject: {
+          fullTextMaxChars: this.config.knowledge?.attachments?.inject?.fullTextMaxChars,
+          intent: this.config.knowledge?.attachments?.inject?.intent,
+          intentTimeoutMs: this.config.knowledge?.attachments?.inject?.intentTimeoutMs,
+          emptyMessagePrompt: this.config.knowledge?.attachments?.inject?.emptyMessagePrompt,
+        },
+      },
+      errorStrategy: {
+        onModelError: (error: { reason: string; message: string }, attempt: number) => {
+          const retryable = ['rate_limit', 'timeout', 'network', 'server'];
+          if (retryable.includes(error.reason) && attempt < 3) {
+            const delayMs = (attempt + 1) * (error.reason === 'rate_limit' ? 1000 : 2000);
+            return { action: 'retry' as const, delayMs };
+          }
+          return { action: 'abort' as const, reason: error.message };
+        },
+        onToolError: () => ({ action: 'skip' as const, reason: 'Tool failed' }),
+        onContextOverflow: () => ({ action: 'compact' as const }),
+        onSecurityViolation: (v: { description: string }) => ({
+          action: 'block' as const,
+          reason: v.description,
+        }),
       },
     });
 
-    //  七层数据源：skills / memory / wisdom / cognition / knowledge / assembler 
-    // ?config-bridge 同构，保?serve  Web「上下文」能看到真实层数?
-    const { existsSync } = await import('node:fs');
-    const { join } = await import('node:path');
-    const skillDir =
-      agent.skillDirectory ?? (agent.home ? join(agent.home, 'skills') : undefined);
-    if (skillDir && existsSync(skillDir)) {
-      try {
-        const { DefaultSkillManager } = await import('@octopi-agent/engine/harness/extension/plugin-ecosystem/skills/manager.js');
-        const skillManager = new DefaultSkillManager();
-        await skillManager.discover(skillDir);
-        builder.skills(skillManager);
-        this.registerSkillCommands(skillManager);
-      } catch (err) {
-        console.warn(`[Gateway] skill discover failed for agent "${agent.id}": ${err instanceof Error ? err.message : String(err)}`);
-      }
+    // ── 宿主适配：user commands / knowledge / tools / approval ──
+    // skill 发现已由 wireAgentBuilder 完成（唯一 discover 出口）
+    if (wired.skillManager) {
+      this.registerSkillCommands(
+        wired.skillManager as import('@octopi-agent/engine/harness/extension/plugin-ecosystem/skills/types.js').SkillManager,
+      );
     }
     if (agent.home) {
       try {
@@ -4201,50 +4228,22 @@ export class Gateway {
       } catch (err) {
         console.warn(`[Gateway] user command load failed for agent "${agent.id}": ${err instanceof Error ? err.message : String(err)}`);
       }
-      builder.agentHome(agent.home);
-      builder.agentId(agent.id);
       try {
-        const { AgentDatabase } = await import('@octopi-agent/engine/harness/memory/sqlite/agent-db.js');
-        const { SqliteMemoryStore } = await import('@octopi-agent/engine/harness/memory/sqlite/memory-store.js');
-        const { SqliteWisdomStore } = await import('@octopi-agent/engine/harness/memory/sqlite/wisdom-store.js');
-        const { SqliteConceptGraph } = await import('@octopi-agent/engine/harness/memory/sqlite/cognition-store.js');
         const { resolveEmbeddingRuntime } = await import('@octopi-agent/engine/harness/memory/sqlite/embedding-from-models.js');
-
         const embRuntime = resolveEmbeddingRuntime({
           providers: this.config.modelProviders ?? {},
           embedding: this.config.embedding,
         });
-        const useVec = embRuntime && embRuntime.vectorEngine !== 'js';
-        const db = await AgentDatabase.create({
-          dbPath: join(agent.home, 'agent.db'),
-          sqliteVec: useVec
-            ? { extensionPath: embRuntime?.sqliteVecExtensionPath }
-            : false,
-          vectorDimensions: useVec ? embRuntime?.dimensions : undefined,
-        });
-        const memStoreForEffects = new SqliteMemoryStore(db, {
-            embeddingProvider: embRuntime?.provider ?? null,
-            vectorEngine: embRuntime?.vectorEngine ?? 'auto',
-            minSimilarity: this.config.memory?.retrieval?.minSimilarity,
-            similarityWeight: this.config.memory?.retrieval?.similarityWeight,
-            minKeywordScore: this.config.memory?.retrieval?.minKeywordScore,
-          });
-        builder.memoryStore(memStoreForEffects);
-        {
+        if (wired.memoryStore) {
           const { createMemoryRestorer } = await import('@octopi-agent/engine');
-          this.memoryRestorers.set(agent.id, createMemoryRestorer(memStoreForEffects));
+          this.memoryRestorers.set(
+            agent.id,
+            createMemoryRestorer(wired.memoryStore as never),
+          );
         }
-        builder.wisdomStore(new SqliteWisdomStore(db));
-        builder.cognitionStore(new SqliteConceptGraph(db, {
-          embeddingProvider: embRuntime?.provider ?? null,
-        }));
-        // Knowledge catalog → Knowledge Service（不得再写死 []）
         try {
           const agentIdForCatalog = agent.id;
           const kn = this.config.knowledge;
-          const catalogMax = kn?.catalog?.maxEntries;
-          const catalogGroup = kn?.catalog?.groupByScope;
-          const catalogProgress = kn?.catalog?.showProgress;
           builder.knowledgeCatalog(
             async () => {
               try {
@@ -4256,9 +4255,9 @@ export class Gateway {
               }
             },
             {
-              maxEntries: catalogMax,
-              groupByScope: catalogGroup,
-              showProgress: catalogProgress,
+              maxEntries: kn?.catalog?.maxEntries,
+              groupByScope: kn?.catalog?.groupByScope,
+              showProgress: kn?.catalog?.showProgress,
             },
           );
         } catch (kErr) {
@@ -4271,26 +4270,14 @@ export class Gateway {
             `[Gateway] memory embedding enabled: model=${embRuntime.model} vectorEngine=${embRuntime.vectorEngine}`,
           );
         } else {
-          console.log('[Gateway] memory embedding not configured ?keyword retrieval');
+          console.log('[Gateway] memory embedding not configured → keyword retrieval');
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         console.warn(`[Gateway] context stores unavailable for agent "${agent.id}": ${msg}`);
-        if (/node:sqlite|ERR_UNKNOWN_BUILTIN_MODULE|ERR_DLOPEN|NODE_MODULE_VERSION/i.test(msg)) {
-          console.warn(
-            `[Gateway] hint: SQLite backend requires Node.js >= 24 with built-in node:sqlite (process.version=${process.version}). Memory tools will be skipped until the runtime is upgraded.`,
-          );
-        }
       }
     }
-    if (this.config.context?.contextAssembler ?? this.config.contextAssembler) {
-      builder.contextAssembler(this.config.context?.contextAssembler ?? this.config.contextAssembler!);
-    }
-    if (this.config.context?.constitution ?? this.config.constitution) {
-      builder.constitution(this.config.context?.constitution ?? this.config.constitution ?? null);
-    }
 
-    // 注册工具（跳?memory_*：由 AgentBuilder  agent ?memoryStore 创建，保证与 MemoryLayer 同实例）
     console.log(`[Gateway] Building agent "${agent.id}" with ${this.tools.length} global tools: ${this.tools.map(t => t.definition.name).join(', ')}`);
     for (const tool of this.tools) {
       const name = tool.definition.name;
@@ -4298,14 +4285,12 @@ export class Gateway {
       try {
         builder.tool(tool);
       } catch (err) {
-        // One bad/duplicate tool must not abort the rest of the tool face
         console.warn(
           `[Gateway] tool register failed (${name}): ${err instanceof Error ? err.message : String(err)}`,
         );
       }
     }
 
-    // Knowledge 工具?Knowledge Service Client（v2?
     try {
       const rt = await this.getKnowledgeRuntime();
       if (rt.state === 'disabled') {
@@ -4320,7 +4305,6 @@ export class Gateway {
         }
         console.log('[Gateway] knowledge tools via service: knowledge_search, knowledge_read');
 
-        // turn 级 auto-ground（recall=off 则不装）
         const recall =
           (agent as { knowledge?: { recall?: string } }).knowledge?.recall ??
           this.config.knowledge?.recall ??
@@ -4358,33 +4342,9 @@ export class Gateway {
       );
     }
 
-    // 设置 systemPrompt：内?persona 固定烤入；文件式 persona ?builder.persona（run 时热更新?
-    if (typeof agent.persona === 'object' && agent.persona?.systemPrompt) {
-      builder.systemPrompt(agent.persona.systemPrompt);
-    } else if (agent.home) {
-      builder.persona(agent.home);
-    }
-
-    // 策略
-    builder.errorStrategy({
-      onModelError: (error, attempt) => {
-        const retryable = ['rate_limit', 'timeout', 'network', 'server'];
-        if (retryable.includes(error.reason) && attempt < 3) {
-          const delayMs = (attempt + 1) * (error.reason === 'rate_limit' ? 1000 : 2000);
-          return { action: 'retry', delayMs };
-        }
-        return { action: 'abort', reason: error.message };
-      },
-      onToolError: () => ({ action: 'skip', reason: 'Tool failed' }),
-      onContextOverflow: () => ({ action: 'compact' }),
-      onSecurityViolation: (v) => ({ action: 'block', reason: v.description }),
-    });
-
-    // P4 host-gate + SEC-7：非事务效应交宿主（pendingApprovals；无人值守 fail-safe 拒绝）
     builder.confirmEffect(async (intent) => {
       const { getRunScope } = await import('@octopi-agent/engine/harness');
       const scope = getRunScope();
-      // 无 RunScope/sessionId 时建卡 UI 不可见——直接 deny，避免空等超时
       if (!scope?.sessionId) return 'deny';
       const sessionId = scope.sessionId;
       const agentId = scope.agentId ?? 'default';
@@ -4415,9 +4375,7 @@ export class Gateway {
       });
     });
 
-    // high 风险人工：pendingApprovals（有交互则确认，无人值守 fail-safe 拒绝）
     builder.confirmHighRisk(async (req) => {
-      // 无 sessionId 时建卡 UI 不可见——直接 deny，避免空等超时
       if (!req.sessionId) return 'deny';
       const sessionId = req.sessionId;
       const agentId = req.agentId ?? 'default';
@@ -4438,7 +4396,6 @@ export class Gateway {
       });
     });
 
-    // 构建（builder.observerHub 已注入；setObserverHub ?runnerConfig 传入的路径）
     builder.observerHub(this.observerHub.isEnabled() ? this.observerHub : undefined);
     const built = await builder.build();
     built.runner.setObserverHub(this.observerHub.isEnabled() ? this.observerHub : undefined);

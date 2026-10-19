@@ -203,7 +203,7 @@ describe('tool-result-aging plan', () => {
     expect(p1).toContain('tool: file_read');
     expect(p1).toContain('src/a.ts');
     expect(p1).toContain('result: ');
-    expect(p1).toContain('re-run this tool call');
+    expect(p1).toContain('do NOT re-run');
   });
 
   it('should scale the pointer with maxPointerChars (the knob is real)', () => {

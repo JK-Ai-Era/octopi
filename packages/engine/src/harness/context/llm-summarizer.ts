@@ -24,16 +24,48 @@ import { HeuristicTokenEstimator } from './token-estimator.js';
 import { toolResultBody } from './tool-result-body.js';
 
 /**
- * 结构化摘要模板
+ * 工具调用账本（name+args 紧凑清单）——降级时的「做过什么」无损索引
+ *
+ * @param messages - 被降级丢弃的消息
+ * @returns 账本文本（可为空串）
+ */
+export function buildToolCallLedger(messages: Message[]): string {
+  const lines: string[] = [];
+  for (const msg of messages) {
+    for (const tc of msg.toolCalls ?? []) {
+      let args: string;
+      try {
+        args = JSON.stringify(tc.arguments ?? {});
+      } catch {
+        args = '[unserializable]';
+      }
+      if (args.length > 160) args = `${args.slice(0, 160)}…`;
+      lines.push(`- ${tc.name}(${args})`);
+    }
+    for (const tr of msg.toolResults ?? []) {
+      if (tr.error !== undefined) {
+        const err = tr.error.length > 120 ? `${tr.error.slice(0, 120)}…` : tr.error;
+        lines.push(`  ! ${tr.name ?? tr.toolCallId}: ${err}`);
+      }
+    }
+  }
+  return lines.join('\n');
+}
+
+/**
+ * 结构化摘要模板（F-d 硬约束：Done 逐条可核验 + 交接语防重做）
  */
 const SUMMARY_TEMPLATE = `## Conversation Summary
+
+> HANDOFF: Your working memory was compacted. First check Done/ToDo and the session task list (task_*). DO NOT redo work listed under Done.
 
 ### Goal
 [What the user is trying to accomplish]
 
 ### Progress
-#### Completed
-[What has been completed]
+#### Done
+- [each item MUST be] what was done + artifact path(s) / exact identifiers
+- ...
 
 #### In Progress
 [What is currently being worked on]
@@ -45,10 +77,10 @@ const SUMMARY_TEMPLATE = `## Conversation Summary
 [Important technical decisions and reasons]
 
 ### Relevant Files
-[Files read, modified, or created]
+[Files read, modified, or created — absolute or workspace-relative paths]
 
 ### Next Steps
-[What needs to be done next]
+[What needs to be done next; align with task_* list when present]
 
 ### Key Context
 [Specific values, error messages, configuration details]`;
@@ -64,6 +96,9 @@ Rules:
 3. Use the exact structure provided in the template
 4. If updating a previous summary, merge new information rather than replacing everything
 5. Keep the summary under {maxTokens} tokens
+6. HARD: Every Done item must state what was completed AND the artifact path or exact identifier
+7. HARD: Keep the HANDOFF line at the top unchanged in meaning — it prevents redoing finished work
+8. HARD: Do not invent paths or claim work that is not evidenced in the history
 
 Template:
 ${SUMMARY_TEMPLATE}`;
@@ -73,8 +108,10 @@ const UPDATE_INSTRUCTION = `You are updating an existing conversation summary. T
 Rules:
 1. Merge new information into the existing summary
 2. Remove outdated information
-3. Preserve the structure
-4. Keep the summary under {maxTokens} tokens
+3. Preserve the structure and the HANDOFF line
+4. Every Done item must state what was completed AND the artifact path or exact identifier
+5. Keep the summary under {maxTokens} tokens
+6. HARD: Do not invent paths or claim work that is not evidenced in the history
 
 Previous Summary:
 {previousSummary}`;
@@ -204,7 +241,7 @@ export class LLMSummaryCompressor implements Compressor {
 
     for (const msg of messages) {
       const role = msg.agentId ? `${msg.role.toUpperCase()}(${msg.agentId})` : msg.role.toUpperCase();
-      const content = getTextContent(msg.content);
+      const content = getTextContent(msg.content ?? '');
 
       if (msg.role === 'assistant' && msg.toolCalls?.length) {
         // 带工具调用的 assistant 消息
@@ -227,22 +264,38 @@ export class LLMSummaryCompressor implements Compressor {
   }
 
   /**
-   * 回退截断（当 LLM 摘要不可用时）
+   * 回退截断（当 LLM 摘要不可用时）——保守降级
+   *
+   * 作为 **middle 替换体**：账本说明 + 近尾若干条。
+   * 外层 head/tail 由调用方（applyProactiveCompact）拼接，此处不得重复携带。
    */
   private fallbackTruncate(
     messages: Message[],
-    targetTokens: number,
+    _targetTokens: number,
     estimator: TokenEstimator,
   ): CompressResult {
-    // 简单截断：保留最后几条消息
-    const keepCount = Math.min(4, messages.length);
+    // 近尾保留工具步上下文；更早的换成「账本」——禁止只留 4 条且无索引
+    const keepCount = Math.min(Math.max(6, Math.ceil(messages.length * 0.15)), messages.length);
     const kept = messages.slice(-keepCount);
-    const keptTokens = estimator.estimateMessages(kept);
+    const dropped = messages.slice(0, messages.length - keepCount);
+
+    // 无可丢弃：原样返回（禁止用「0 removed」假通知撑长视图）
+    if (dropped.length === 0) {
+      return {
+        result: [...messages],
+        estimatedTokens: estimator.estimateMessages(messages),
+      };
+    }
+
+    const ledger = buildToolCallLedger(dropped);
+    const notice = ledger
+      ? `[Context truncated: ${dropped.length} earlier messages removed to fit context window]\n[Tool call ledger — do NOT redo these unless explicitly asked]\n${ledger}\n[Check session task list via task_* before continuing]`
+      : `[Context truncated: ${dropped.length} earlier messages removed to fit context window]\n[Check session task list via task_* before continuing]`;
 
     // 插入截断说明（user 角色，避免中段 system）
     const summaryMessage: Message = {
       role: 'user',
-      content: `[Context truncated: ${messages.length - keepCount} earlier messages removed to fit context window]`,
+      content: notice,
       timestamp: Date.now(),
       metadata: { source: 'contextSummary' as const },
     };
@@ -253,7 +306,7 @@ export class LLMSummaryCompressor implements Compressor {
     return {
       result,
       estimatedTokens,
-      droppedSummary: `${messages.length - keepCount} messages truncated`,
+      droppedSummary: `${dropped.length} messages truncated`,
     };
   }
 }

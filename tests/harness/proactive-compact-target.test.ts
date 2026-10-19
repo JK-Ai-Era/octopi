@@ -65,8 +65,8 @@ describe('proactive compact at working target (F1-B3)', () => {
   });
 
   it('should compact over the fallback line even with a 1M window (decoupled from the window)', async () => {
-    // 当前 run 80 × 8000 字符 ≈ 320k token（当前 run 永不老化）> 30 万兜底线。
-    // 旧挂法（1M 窗口 × 0.6 ≈ 57 万）在此不会触发——工作目标解耦后必须触发。
+    // 当前 run 80 × 8000 字符（当前 run 永不老化）体量巨大。
+    // 方案 E：turn 内禁 LLM 摘要——超线走机械分级，不得打 summarize。
     const summarize = mockSummarize();
     const engine = new DefaultContextEngine({ proactiveCooldownMs: 0 });
     const messages = [
@@ -84,12 +84,18 @@ describe('proactive compact at working target (F1-B3)', () => {
       summarize,
     });
 
-    expect(summarize).toHaveBeenCalled();
-    expect(result.summary).toContain('proactive-hit');
+    // turn 内（工具活动中）不得 LLM 摘要
+    expect(summarize).not.toHaveBeenCalled();
+    // 但仍应通过机械分级把视图压下来（或至少不爆窗口）
+    expect(result.messages.length).toBeGreaterThan(0);
+    expect(result.estimatedTokens).toBeLessThan(1_048_576);
   });
 
   it('should respect targetTokens and compactFallbackRatio knobs', async () => {
-    const history = Array.from({ length: 40 }, () => toolTurn(1, 2000)).flat();
+    const history = [
+      ...Array.from({ length: 40 }, () => toolTurn(1, 2000)).flat(),
+      { role: 'user', content: 'next', timestamp: 1 } as Message,
+    ];
     // 40 × 2000 字符 = 80k chars ≈ 40k token（跨轮 39 条 < rawWindow 40：不触发老化，量的是原文）
 
     const strict = mockSummarize();
@@ -211,7 +217,10 @@ describe('proactive compact at working target (F1-B3)', () => {
   it('should not re-compact without material growth since the last compaction (occasional fallback)', async () => {
     const summarize = mockSummarize();
     const engine = new DefaultContextEngine({ proactiveCooldownMs: 0, targetTokens: 10_000 });
-    const base = Array.from({ length: 40 }, () => toolTurn(1, 2000)).flat();
+    const base = [
+      ...Array.from({ length: 40 }, () => toolTurn(1, 2000)).flat(),
+      { role: 'user', content: 'next', timestamp: 1 } as Message,
+    ];
 
     await engine.assemble({ sessionId: 's-h2', messages: base, systemPrompt: 'sys', tools: [], summarize });
     expect(summarize).toHaveBeenCalledTimes(1);

@@ -81,6 +81,12 @@ export interface GatewayConfig {
   /** system prompt 七层装配器调参（preview / content / budget ratio） */
   contextAssembler?: import('@octopi-agent/engine/config.js').ContextAssemblerConfig;
   context?: import('@octopi-agent/engine/config.js').HarnessConfig['context'];
+  /** contextEngine 段（主动压缩 / 老化 / 工作目标）；与 config-bridge 同源 */
+  contextEngine?: import('@octopi-agent/engine/config.js').ContextEngineConfig;
+  /** runGuard 段；与 config-bridge 同源 */
+  runGuard?: import('@octopi-agent/engine/config.js').RunGuardJsonConfig;
+  /** security 段；与 config-bridge 同源 */
+  security?: import('@octopi-agent/engine/config.js').HarnessConfig['security'];
   constitution?: import('@octopi-agent/engine/config.js').ConstitutionConfig;
   memory?: import('@octopi-agent/engine/config.js').HarnessConfig['memory'];
   /** Knowledge 全局缺省（agents[].knowledge.recall 覆盖） */

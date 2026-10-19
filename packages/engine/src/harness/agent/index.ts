@@ -16,5 +16,12 @@ export type {
   AgentBuildCoreResult,
 } from './builder.js';
 export { loadPersona, composePersonas, PersonaSource } from './persona.js';
-export { buildFromConfig, resolveProviders, resolveSecurityConfig } from './config-bridge.js';
+export { buildFromConfig, resolveProviders } from './config-bridge.js';
 export type { BuiltAgent } from './config-bridge.js';
+export {
+  wireAgentBuilder,
+  resolveSecurityConfig,
+  resolveContextEngine,
+  resolveRunGuard,
+} from './wire-agent-builder.js';
+export type { AgentWireSpec } from './wire-agent-builder.js';
