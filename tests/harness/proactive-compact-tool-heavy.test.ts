@@ -102,6 +102,7 @@ describe('主动压缩 × 工具输出密集历史（连线回归）', () => {
     const summarize = vi.fn(async () => '## Conversation Summary\nproactive-summary');
     const engine = new DefaultContextEngine({
       proactiveCompactRatio: 0.5,
+      targetTokens: 0,
       protectFirstN: 2,
       protectLastN: 4,
       proactiveCooldownMs: 0,
@@ -152,6 +153,7 @@ describe('主动压缩 × 工具输出密集历史（连线回归）', () => {
     });
     const engine = new DefaultContextEngine({
       proactiveCompactRatio: 0.5,
+      targetTokens: 0,
       protectFirstN: 2,
       protectLastN: 4,
       proactiveCooldownMs: 0,
@@ -194,6 +196,7 @@ describe('主动压缩 × 工具输出密集历史（连线回归）', () => {
     const summarize = vi.fn(async () => '## Conversation Summary\nrestored-summary');
     const engine = new DefaultContextEngine({
       proactiveCompactRatio: 0.5,
+      targetTokens: 0,
       protectFirstN: 2,
       protectLastN: 4,
       proactiveCooldownMs: 0,
@@ -231,6 +234,7 @@ describe('主动压缩 × 工具输出密集历史（连线回归）', () => {
     const summarize = vi.fn(async () => '');
     const engine = new DefaultContextEngine({
       proactiveCompactRatio: 0.5,
+      targetTokens: 0,
       protectFirstN: 2,
       protectLastN: 4,
       proactiveCooldownMs: 0,

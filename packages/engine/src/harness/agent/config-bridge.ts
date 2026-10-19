@@ -116,6 +116,9 @@ export function resolveContextEngine(config: ContextEngineConfig | undefined): C
       proactiveCooldownMs: config?.proactiveCooldownMs ?? 30_000,
       // F1-B2 老化：缺省与参数收敛在 resolveToolResultAgingOptions（引擎内）
       historyAging: config?.historyAging,
+      // F1-B3 工作目标：缺省 20 万 / 兜底线 1.5×（引擎内）；0 = 退回窗口比例模式
+      targetTokens: config?.targetTokens,
+      compactFallbackRatio: config?.compactFallbackRatio,
       budgetAllocator: new DefaultBudgetAllocator({
         outputRatio: config?.outputRatio ?? 0.20,
         minOutputReserve: config?.minOutputReserve ?? 2000,

@@ -166,10 +166,11 @@ Runner.handle
 
 **主动摘要（防长会话失忆）：**
 
-- `DefaultContextEngine.proactiveCompactRatio`（默认 `0.6`，`0` 关闭）
-- 消息 token 超过 `messagesBudget × ratio` 时，在硬溢出前压缩中间段
+- `DefaultContextEngine.targetTokens`（默认 `200000`）把 compact 兜底线与窗口解耦：兜底线 = `min(targetTokens × compactFallbackRatio, messagesBudget × proactiveCompactRatio)`（默认 `1.5` / `0.6`）——min 让小窗口仍走有门槛的温和 proactive（旧挂法 1M 窗口 × 0.6 ≈ 57 万 token 永不触发）。`targetTokens: 0` 退回旧窗口比例模式。触发判据量**老化请求体量**（实际发送内容的保守上界），B2 稳态不会误触发（防双机制打架，单测锁死）。再压缩还要求自上次压缩以来 token 实质增长（偶发兜底，不是周期性重压）
+- `DefaultContextEngine.proactiveCompactRatio`（默认 `0.6`）是旧模式的预算比例；`0` 仍是**两种模式共同的**总开关
+- 视图超兜底线时，在硬溢出前压缩中间段
 - 增量很小时用 `previousSummary + head/tail` 重建视图，不重复打 LLM
-- 配置：`octopi.json` → `contextEngine.proactiveCompactRatio`
+- 配置：`octopi.json` → `contextEngine.targetTokens` / `contextEngine.compactFallbackRatio` / `contextEngine.proactiveCompactRatio`
 
 **主动 LLM 摘要冷却（`proactiveCooldownMs`，默认 30s，`0` 关闭）：**
 

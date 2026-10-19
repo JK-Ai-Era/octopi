@@ -494,7 +494,7 @@ export interface ContextEngineConfig {
   protectLastN?: number;
   /**
    * 主动摘要阈值：消息 token / messagesBudget 超过该比例时，
-   * 在硬溢出前先 LLM 摘要（默认 0.6；0 = 关闭）
+   * 在硬溢出前先 LLM 摘要（默认 0.6；0 = 关闭——target/legacy 模式共同的总开关）
    */
   proactiveCompactRatio?: number;
   /**
@@ -520,6 +520,15 @@ export interface ContextEngineConfig {
     /** 指针目标字符数（默认 400；是目标非硬顶） */
     maxPointerChars?: number;
   };
+  /**
+   * 工作目标 token（与窗口解耦，F1-B3）：主动压缩兜底线 = targetTokens × compactFallbackRatio，
+   * 不再挂窗口比例。默认 200000；0 = 退回旧窗口比例模式（proactiveCompactRatio）。
+   */
+  targetTokens?: number;
+  /**
+   * compact 兜底线倍数（默认 1.5）。⚠️ 兜底线必须 > B2 老化稳态，否则双机制打架。
+   */
+  compactFallbackRatio?: number;
   /** 输出预留比例（默认 0.20） */
   outputRatio?: number;
   /** 输出预留最小值（默认 2000） */

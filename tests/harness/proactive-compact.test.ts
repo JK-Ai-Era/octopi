@@ -24,7 +24,7 @@ function mockSummarize() {
 describe('DefaultContextEngine proactiveCompactRatio', () => {
   it('未超阈值时不调用 summarize', async () => {
     const summarize = mockSummarize();
-    const engine = new DefaultContextEngine({ proactiveCompactRatio: 0.9 });
+    const engine = new DefaultContextEngine({ proactiveCompactRatio: 0.9, targetTokens: 0 });
     const msgs: Message[] = [];
     for (let i = 0; i < 8; i++) {
       msgs.push(userMsg(`short-${i}`));
@@ -44,6 +44,7 @@ describe('DefaultContextEngine proactiveCompactRatio', () => {
     const summarize = mockSummarize();
     const engine = new DefaultContextEngine({
       proactiveCompactRatio: 0.5,
+      targetTokens: 0,
       protectFirstN: 2,
       protectLastN: 4,
     });
@@ -74,6 +75,7 @@ describe('DefaultContextEngine proactiveCompactRatio', () => {
     const summarize = mockSummarize();
     const engine = new DefaultContextEngine({
       proactiveCompactRatio: 0.5,
+      targetTokens: 0,
       protectFirstN: 2,
       protectLastN: 4,
     });
@@ -106,7 +108,7 @@ describe('DefaultContextEngine proactiveCompactRatio', () => {
 
   it('proactiveCompactRatio=0 时关闭主动摘要', async () => {
     const summarize = mockSummarize();
-    const engine = new DefaultContextEngine({ proactiveCompactRatio: 0 });
+    const engine = new DefaultContextEngine({ proactiveCompactRatio: 0, targetTokens: 0 });
     const msgs: Message[] = [];
     for (let i = 0; i < 30; i++) {
       msgs.push(userMsg('x'.repeat(400)));
@@ -129,6 +131,7 @@ describe('DefaultContextEngine proactiveCompactRatio', () => {
     const summarize = mockSummarize();
     const engine = new DefaultContextEngine({
       proactiveCompactRatio: 0.5,
+      targetTokens: 0,
       protectFirstN: 2,
       protectLastN: 20,
       proactiveCooldownMs: 60_000,

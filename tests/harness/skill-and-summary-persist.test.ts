@@ -105,6 +105,7 @@ describe('压缩摘要 Session 持久化', () => {
   it('assemble 返回 summary 并可经 loadCompactState 恢复', async () => {
     const engine = new DefaultContextEngine({
       proactiveCompactRatio: 0.5,
+      targetTokens: 0,
       protectFirstN: 2,
       protectLastN: 4,
     });
@@ -128,6 +129,7 @@ describe('压缩摘要 Session 持久化', () => {
     // 新引擎实例（模拟进程重启），靠 loadCompactState 恢复 count + summary
     const engine2 = new DefaultContextEngine({
       proactiveCompactRatio: 0.5,
+      targetTokens: 0,
       protectFirstN: 2,
       protectLastN: 4,
     });
@@ -158,6 +160,7 @@ describe('压缩摘要 Session 持久化', () => {
   it('多轮压缩：count 只在 LLM 摘要时推进，缓存重建不重置', async () => {
     const engine = new DefaultContextEngine({
       proactiveCompactRatio: 0.5,
+      targetTokens: 0,
       protectFirstN: 2,
       protectLastN: 20, // minNewForResummarize = max(3, 5) = 5
       proactiveCooldownMs: 0, // 本用例验证多轮 LLM 摘要，关闭冷却
@@ -219,6 +222,7 @@ describe('压缩摘要 Session 持久化', () => {
     // 模拟进程重启：用最后一次 compactState 恢复
     const engine2 = new DefaultContextEngine({
       proactiveCompactRatio: 0.5,
+      targetTokens: 0,
       protectFirstN: 2,
       protectLastN: 20,
       proactiveCooldownMs: 0,

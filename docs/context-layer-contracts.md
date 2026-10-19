@@ -165,10 +165,11 @@ Runner.handle
 
 **Proactive summary (prevent long-session amnesia):**
 
-- `DefaultContextEngine.proactiveCompactRatio` (default `0.6`, `0` disables)
-- When message tokens exceed `messagesBudget × ratio`, compress the middle segment before hard overflow
+- `DefaultContextEngine.targetTokens` (default `200000`) decouples the compact fallback line from the window: the line is `min(targetTokens × compactFallbackRatio, messagesBudget × proactiveCompactRatio)` (defaults `1.5` / `0.6`) — the min keeps gated proactive summaries alive for small windows (the old window-derived line (1M × 0.6 ≈ 570k tokens) never fired). `targetTokens: 0` falls back to the legacy window-ratio mode. The trigger measures the **aged request payload** (a conservative upper bound of what is sent), so B2's steady state never trips it (double-mechanism guard, unit-locked). Re-compression additionally requires material token growth since the last compaction (occasional fallback, not periodic re-compression)
+- `DefaultContextEngine.proactiveCompactRatio` (default `0.6`) is the legacy mode's budget ratio; `0` remains the master kill switch in **both** modes
+- When the view exceeds the fallback line, compress the middle segment before hard overflow
 - When the increment is tiny, rebuild the view with `previousSummary + head/tail` instead of hitting the LLM again
-- Config: `octopi.json` → `contextEngine.proactiveCompactRatio`
+- Config: `octopi.json` → `contextEngine.targetTokens` / `contextEngine.compactFallbackRatio` / `contextEngine.proactiveCompactRatio`
 
 **Proactive LLM summary cooldown (`proactiveCooldownMs`, default 30s, `0` disables):**
 

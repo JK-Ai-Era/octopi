@@ -26,6 +26,10 @@ export const ContextEngineConfigSchema = z.object({
   proactiveCompactRatio: z.number().min(0).max(1).optional(),
   proactiveCooldownMs: z.number().min(0).optional(),
   historyAging: HistoryAgingConfigSchema.optional(),
+  /** 工作目标 token（与窗口解耦，F1-B3）；0 = 退回窗口比例模式（proactiveCompactRatio） */
+  targetTokens: z.number().int().nonnegative().optional(),
+  /** compact 兜底线倍数（默认 1.5；兜底线 = targetTokens × 倍数，须 > B2 老化稳态） */
+  compactFallbackRatio: z.number().positive().optional(),
   outputRatio: z.number().min(0).max(1).optional(),
   minOutputReserve: z.number().positive().optional(),
   maxOutputReserve: z.number().positive().optional(),

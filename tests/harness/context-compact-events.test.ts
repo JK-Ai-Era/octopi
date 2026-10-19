@@ -41,6 +41,7 @@ describe('DefaultContextEngine emit', () => {
     const events: ContextCompactEvent[] = [];
     const engine = new DefaultContextEngine({
       proactiveCompactRatio: 0.5,
+      targetTokens: 0,
       protectFirstN: 2,
       protectLastN: 4,
     });
@@ -71,6 +72,7 @@ describe('DefaultContextEngine emit', () => {
     const events: ContextCompactEvent[] = [];
     const engine = new DefaultContextEngine({
       proactiveCompactRatio: 0.5,
+      targetTokens: 0,
       protectFirstN: 2,
       protectLastN: 4,
     });

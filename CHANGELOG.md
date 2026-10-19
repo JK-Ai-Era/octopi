@@ -1,3 +1,28 @@
+## v0.84.3
+
+### feat(engine): decouple the compact working target from the context window (F1-B3)
+
+**问题**（F 节 F1-B3，根因 A1「尺子挂错地方」，方案 `arch/long-session-latency.md` §5 B3）：compact/summary 能力齐全但触发线挂在窗口上——1M 窗口 × 0.6 ≈ 57 万 token，实测 38 万 token 的会话永远摸不到，长会话失忆无兜底；窗口未知的部署则完全跳过 proactive。且触发判据量 raw Message 估算，与 F1-B2 老化后的实际请求不一致——不换尺则 B2 稳态（raw ~40 万）会每 turn 误触发 LLM 摘要（双机制打架）。
+
+**修正**：
+
+- **兜底线挂工作目标**：`contextEngine.targetTokens`（默认 200000，与窗口解耦）× `contextEngine.compactFallbackRatio`（默认 1.5）= 30 万兜底线；再取 **min(目标线, 窗口比例线)**——小窗口（≤ ~45 万，含 example 全部模型）仍走有门槛/冷却的温和 proactive，不被挤成死代码（否则无门槛的溢出路径每 turn 压缩=双机制打架换位置）。`targetTokens: 0` 退回旧窗口比例模式（legacy，逐字节旧行为）
+- **触发判据量老化视图**：`applyAgingToMessages` 物化 F1-B2 指针视图后估算（实际请求体量的保守上界）——B2 稳态在兜底线之下（数值锁单测）
+- **窗口无关兜底**：target 模式下窗口未知也执行兜底压缩（旧早退路径按 `targetTokens>0` 分流；legacy 保持旧跳过行为）
+- **增长门（target 模式）**：再压缩除消息增量外还要求全量口径较上次压缩实质增长（≥25% 阈值）——防持续超线会话每攒 5 条就全量重压（「偶发兜底」变「周期压缩」）。⚠️ 裁决记录：此门最初双模式生效，被既有拍板行为「攒够增量重试/补真摘要」的 3 个回归用例顶回——**legacy 重压节奏是既定契约，增长门只属于 target 新语义**
+- `buildStructuralView` 补 tool_call/result 配对对齐（与 applyProactiveCompact 抽共用 `alignViewSplit`）——消除 proactive/结构视图跨轮形状切换时的悬空调用/孤儿结果（严格网关 400 风险）
+- `compactFallbackRatio` 引擎侧钳制 ≥1（0 会压成压缩风暴而非禁用）；`proactiveCompactRatio: 0` 确认为两模式共同总开关（注释/文档同步）
+
+**独立评审修订**（fresh-eyes 子代理 6 组 findings 逐条核验：H1/H2 采纳、M1/M2/L1–L4 采纳，其中 H2 按「既有契约不动」收窄为 target 模式专属）：
+
+- [High] H1 缺省对小窗口的死代码化——min 钳制 + 小窗口 proactive 事件回归测试锁死
+- [High] H2 持续超线周期重压——增长门（target 模式）+「无实质增长不重压」回归测试；legacy「攒够增量」节奏不变
+- [Medium] 契约 5（窗口未知兜底）零覆盖——补 target 模式触发 + legacy 跳过保持两条测试；`context-window-unknown.test.ts` 过时头注释修正
+- [Medium] 视图形状跨轮翻转——buildStructuralView 配对对齐（存量 D6 同族一并收口于本路径；MessageSelector 侧仍留 D6）
+- [Low] 测量口径「实际请求」措辞过强——文档收敛为「保守上界」；`applyAgingToMessages` 改 role 无关；ratio 钳制；JSDoc/测试注释修正；`compactFallbackRatio` 旋钮补测试
+
+**验证**：`tests/harness/proactive-compact-target.test.ts` 8 用例（防打架数值锁 / 与窗口解耦 / 旋钮 / legacy 退回 / 总开关 / 小窗口存活 / 窗口未知双模式 / 增长门）全绿；proactive-compact × 3 + skill-and-summary-persist + context-compact-events + tool-result-aging 18 + context-window-unknown + context-engine 67 全绿零回归；全量 4 个已知 macOS 基线失败不变；lint/build 干净。配置全链（Zod/接口/bridge/schema/example）+ docs EN/ZH 同 commit。
+
 ## v0.84.2
 
 ### feat(engine): batch-frozen aging of historical tool results (F1-B2)

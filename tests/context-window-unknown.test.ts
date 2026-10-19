@@ -1,5 +1,6 @@
 /**
- * contextWindow 未知：自动压缩跳过 + 手动结构压缩仍可用
+ * contextWindow 未知：targetTokens=0（legacy）跳过自动压缩 + 手动结构压缩仍可用；
+ * targetTokens>0（缺省 20 万）时兜底压缩与窗口无关、照样执行（F1-B3）
  */
 
 import { describe, it, expect } from 'vitest';

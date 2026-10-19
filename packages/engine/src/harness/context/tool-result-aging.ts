@@ -154,6 +154,39 @@ export function computeToolResultAgingPlan(
 const pointerCache = new WeakMap<object, { fingerprint: string; text: string }>();
 
 /**
+ * 把老化计划物化为消息视图副本（新建对象，不改原消息）
+ *
+ * 供「量实际请求」的估算路径使用（F1-B3：主动压缩触发线必须量老化后的视图，
+ * 否则 B2 稳态的 raw 估算会每 turn 误触发 compact = 双机制打架）。
+ * 压缩/摘要输入仍用原消息（摘要质量需要原文）。
+ *
+ * @param messages - 完整历史消息
+ * @param plan - 老化计划
+ * @param opts - 老化配置（已解析）
+ * @returns 消息副本（老化条目的正文替换为指针；无老化条目时原样返回同一数组）
+ */
+export function applyAgingToMessages(
+  messages: Message[],
+  plan: ToolResultAgingPlan,
+  opts: ToolResultAgingOptions,
+): Message[] {
+  if (plan.agedIds.size === 0) return messages;
+  return messages.map((msg) => {
+    if (!msg.toolResults?.length) return msg;
+    let changed = false;
+    const results = msg.toolResults.map((tr) => {
+      if (!plan.agedIds.has(tr.toolCallId)) return tr;
+      changed = true;
+      return {
+        ...tr,
+        result: agedToolResultPointer(tr, plan.argsById.get(tr.toolCallId), opts),
+      };
+    });
+    return changed ? { ...msg, toolResults: results } : msg;
+  });
+}
+
+/**
  * 生成结构化摘要指针（机械、零 LLM、确定性）
  *
  * 布局：工具名 + args 轮廓（截断）+ result 轮廓（截断）+ re-run 提示；

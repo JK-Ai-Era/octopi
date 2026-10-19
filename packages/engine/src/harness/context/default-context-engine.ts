@@ -38,6 +38,7 @@ import { HeuristicTokenEstimator, estimateLLMMessages } from './token-estimator.
 import { toolResultBody } from './tool-result-body.js';
 import {
   agedToolResultPointer,
+  applyAgingToMessages,
   computeToolResultAgingPlan,
   resolveToolResultAgingOptions,
   type ToolResultAgingConfig,
@@ -73,7 +74,7 @@ export interface DefaultContextEngineConfig {
   /**
    * 主动摘要阈值：消息 token / messagesBudget 超过该比例时，
    * 在窗口硬溢出之前先做 LLM 摘要（缓解长会话失忆）。
-   * 默认 0.6；设为 0 关闭主动摘要。
+   * 默认 0.6；设为 0 关闭主动摘要（target 模式与 legacy 模式共同的总开关）。
    */
   proactiveCompactRatio?: number;
   /**
@@ -87,6 +88,17 @@ export interface DefaultContextEngineConfig {
    * 缺省启用（40 条 / 批 20 / 指针 400 字符）。
    */
   historyAging?: ToolResultAgingConfig;
+  /**
+   * 工作目标 token（与窗口解耦，F1-B3）。>0 时主动压缩兜底线 = targetTokens ×
+   * compactFallbackRatio，不再挂窗口比例（旧挂法 1M 窗口 × 0.6 ≈ 57 万 = 永不触发）。
+   * 默认 200000；0 = 退回旧窗口比例模式（proactiveCompactRatio）。
+   */
+  targetTokens?: number;
+  /**
+   * compact 兜底线倍数（默认 1.5）。⚠️ 兜底线必须 > B2 老化稳态，否则双机制打架
+   * （每 turn 触发 LLM 摘要）；由单测锁死。
+   */
+  compactFallbackRatio?: number;
   /** 公用能力 CompactEngine（缺省自动创建；算法委托，E4 状态仍在本引擎） */
   compactEngine?: CompactEngine;
 }
@@ -110,6 +122,8 @@ interface CompactState {
   lastProactiveTokens?: number;
   /** 上次真正发起 LLM 摘要调用的时间戳（仅 LLM 路径推进；用于冷却） */
   lastProactiveLlmAt?: number;
+  /** 上次 LLM 压缩时的全量口径 token（再压缩增长门基准，防持续超线会话周期性重压） */
+  lastProactiveFullTokens?: number;
 }
 
 // ── 引擎实现 ──
@@ -151,6 +165,12 @@ export class DefaultContextEngine implements ContextEngine {
       proactiveCompactRatio: config?.proactiveCompactRatio ?? 0.6,
       proactiveCooldownMs: config?.proactiveCooldownMs ?? 30_000,
       historyAging: resolveToolResultAgingOptions(config?.historyAging),
+      targetTokens: config?.targetTokens ?? 200_000,
+      // <1 或非法值回落缺省——0 会把兜底线压成 0（压缩风暴），不是「禁用」语义
+      compactFallbackRatio:
+        config?.compactFallbackRatio != null && config.compactFallbackRatio >= 1
+          ? config.compactFallbackRatio
+          : 1.5,
       compactEngine:
         config?.compactEngine ??
         createCompactEngine({
@@ -227,10 +247,28 @@ export class DefaultContextEngine implements ContextEngine {
       }
     }
 
-    // 未知窗口：无 token 预算 → 不 proactive、不按 budget 截消息
+    // 未知窗口：无 token 预算 → 不按 budget 截消息。
+    // F1-B3：targetTokens>0 时兜底压缩与窗口无关，窗口未知照样执行（工作目标解耦）；
+    // targetTokens=0（legacy）保持旧行为：跳过 proactive。
     // 已有结构压缩摘要时，用 head + summary + tail 视图
     if (!windowKnown && !targetKnown && budgetCap == null) {
-      const view = this.buildStructuralView(sessionId, messages, emit, stateKey);
+      const proactive =
+        this.config.targetTokens > 0
+          ? await this.applyProactiveCompact({
+              sessionId,
+              stateKey,
+              messages,
+              messagesBudget: 0,
+              agingPlan,
+              summarize,
+              estimator,
+              emit,
+            })
+          : { messages };
+      const view =
+        proactive.messages !== messages
+          ? { messages: proactive.messages, droppedSummary: proactive.droppedSummary }
+          : this.buildStructuralView(sessionId, messages, emit, stateKey);
       const llmMessages = this.buildLlmMessages(view.messages, systemPrompt, tools, agingPlan);
       const rawEstimatedTokens = estimateLLMMessages(llmMessages);
       this.states.set(stateKey, {
@@ -262,6 +300,7 @@ export class DefaultContextEngine implements ContextEngine {
       stateKey,
       messages,
       messagesBudget: budget.messagesBudget,
+      agingPlan,
       summarize,
       estimator,
       emit,
@@ -452,20 +491,32 @@ export class DefaultContextEngine implements ContextEngine {
     stateKey?: string;
     messages: Message[];
     messagesBudget: number;
+    agingPlan: ToolResultAgingPlan;
     summarize?: SummarizeFunction;
     estimator: TokenEstimator;
     emit?: ContextEmitFn;
   }): Promise<{ messages: Message[]; droppedSummary?: string }> {
-    const { sessionId, messages, messagesBudget, summarize, estimator, emit } = params;
+    const { sessionId, messages, messagesBudget, agingPlan, summarize, estimator, emit } = params;
     const stateKey = params.stateKey ?? sessionId;
     const ratio = this.config.proactiveCompactRatio;
 
+    // proactiveCompactRatio=0 是两种模式共同的总开关（旧配置的禁用语义不破坏）
     if (!summarize || ratio <= 0 || messages.length === 0) {
       return { messages };
     }
 
-    const currentTokens = estimator.estimateMessages(messages);
-    const threshold = Math.floor(messagesBudget * ratio);
+    // F1-B3：尺子量**老化视图**（实际请求的保守上界）——raw 估算会把 B2 稳态误判超线（双机制打架）。
+    // 压缩输入仍用原 messages（摘要质量需要原文）。
+    const currentTokens = estimator.estimateMessages(
+      applyAgingToMessages(messages, agingPlan, this.config.historyAging),
+    );
+    // F1-B3：兜底线挂工作目标（targetTokens × compactFallbackRatio），与窗口解耦——
+    // 旧挂法 1M 窗口 × 0.6 ≈ 57 万 = 永不触发（尺子挂错地方）。
+    // 小窗口再取 min（窗口比例线）：否则 proactive（有门槛/冷却）被挤死、溢出路径
+    // （无门槛）每 turn 压缩——双机制打架换位置（评审 H1）。窗口未知（messagesBudget=0）只用目标线。
+    const targetLine = Math.ceil(this.config.targetTokens * this.config.compactFallbackRatio);
+    const legacyLine = messagesBudget > 0 ? Math.floor(messagesBudget * ratio) : Number.POSITIVE_INFINITY;
+    const threshold = this.config.targetTokens > 0 ? Math.min(targetLine, legacyLine) : legacyLine;
     if (currentTokens <= threshold) {
       return { messages };
     }
@@ -478,17 +529,8 @@ export class DefaultContextEngine implements ContextEngine {
 
     const state = this.states.get(stateKey);
 
-    // 边界对齐（不拆 tool_call/tool_result 对）：head 不得停在带 toolCalls 的 assistant 上
-    // （其结果落入中间段，视图里会成悬空调用）；tail 不得起于 tool 结果（其调用在中间段，
-    // 会成孤儿结果）——两种形状都会被严格网关 400。
-    let headEnd = Math.min(protectFirstN, messages.length);
-    while (headEnd > 0 && (messages[headEnd - 1]?.toolCalls?.length ?? 0) > 0) {
-      headEnd--;
-    }
-    let tailStart = Math.max(0, messages.length - protectLastN);
-    while (tailStart > headEnd && this.isToolResultMessage(messages[tailStart]!)) {
-      tailStart--;
-    }
+    // 边界对齐（不拆 tool_call/tool_result 对）——两形状都会被严格网关 400
+    const { headEnd, tailStart } = this.alignViewSplit(messages, protectFirstN, protectLastN);
     const head = messages.slice(0, headEnd);
     const tail = messages.slice(tailStart);
     const middle = this.semanticHistory(messages.slice(headEnd, tailStart));
@@ -500,7 +542,16 @@ export class DefaultContextEngine implements ContextEngine {
     const lastCount = state?.lastProactiveMessageCount;
     const newSinceLast = lastCount === undefined ? messages.length : messages.length - lastCount;
     const minNewForResummarize = Math.max(3, Math.floor(protectLastN * 0.25));
-    const needNewCompaction = newSinceLast >= minNewForResummarize;
+    // 增长门（target 模式；防「偶发兜底」变「周期压缩」）：持续超线的会话全量口径不回落，
+    // 若只看消息增量，每攒 minNewForResummarize 条就全量重压（LLM 成本/延迟失控）。
+    // 只有全量口径较上次压缩实质增长（≥ 25% 阈值）才允许再打 LLM。
+    // legacy（targetTokens=0）保持既有「攒够增量重试」节奏不动。
+    const lastFull = state?.lastProactiveFullTokens;
+    const grownEnough =
+      this.config.targetTokens <= 0 ||
+      lastFull === undefined ||
+      currentTokens >= lastFull + Math.max(1, Math.floor(threshold * 0.25));
+    const needNewCompaction = newSinceLast >= minNewForResummarize && grownEnough;
 
     // 冷却：刚做过 LLM 摘要则优先缓存重建，降低单 turn 双摘要概率
     const cooldownMs = this.config.proactiveCooldownMs;
@@ -624,6 +675,7 @@ export class DefaultContextEngine implements ContextEngine {
       lastEstimatedTokens: reducedTokens,
       lastProactiveMessageCount: messages.length,
       lastProactiveTokens: reducedTokens,
+      lastProactiveFullTokens: currentTokens,
       // 本轮（requireSummary）真正发起过 LLM 摘要调用（成功或失败均算发起），
       // 时间戳用于冷却；复用重建与纯机械降级不得推进此字段。
       lastProactiveLlmAt: Date.now(),
@@ -705,6 +757,33 @@ export class DefaultContextEngine implements ContextEngine {
   }
 
   /**
+   * 视图切分边界对齐（不拆 tool_call/tool_result 对）
+   *
+   * head 不得停在带 toolCalls 的 assistant 上（其结果落入中间段，视图里会成悬空调用）；
+   * tail 不得起于 tool 结果（其调用在中间段，会成孤儿结果）——两种形状都会被严格网关 400。
+   *
+   * @param messages - 全量消息
+   * @param headCount - 期望头部条数
+   * @param tailCount - 期望尾部条数
+   * @returns 对齐后的 head 终点（不含）与 tail 起点（含）
+   */
+  private alignViewSplit(
+    messages: Message[],
+    headCount: number,
+    tailCount: number,
+  ): { headEnd: number; tailStart: number } {
+    let headEnd = Math.min(headCount, messages.length);
+    while (headEnd > 0 && (messages[headEnd - 1]?.toolCalls?.length ?? 0) > 0) {
+      headEnd--;
+    }
+    let tailStart = Math.max(0, messages.length - tailCount);
+    while (tailStart > headEnd && this.isToolResultMessage(messages[tailStart]!)) {
+      tailStart--;
+    }
+    return { headEnd, tailStart };
+  }
+
+  /**
    * 压缩/摘要的语义输入：丢掉托管 system 与 knowledgeGrounding / runtimeSnapshot
    * （grounding 与易变快照每轮现算，不进 previousSummary——防陈旧内容固化进摘要）
    */
@@ -737,8 +816,11 @@ export class DefaultContextEngine implements ContextEngine {
     if (messages.length <= protectFirstN + protectLastN) {
       return { messages };
     }
-    const head = messages.slice(0, protectFirstN);
-    const tail = messages.slice(-protectLastN);
+    // 边界对齐（不拆 tool_call/tool_result 对）：与 applyProactiveCompact 同款——
+    // 未对齐的 head/tail 会被严格网关 400
+    const { headEnd, tailStart } = this.alignViewSplit(messages, protectFirstN, protectLastN);
+    const head = messages.slice(0, headEnd);
+    const tail = messages.slice(tailStart);
     const summaryMsg: Message = {
       role: 'user',
       content: wrapContextSummary(summary),
