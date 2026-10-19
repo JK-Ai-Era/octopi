@@ -201,8 +201,9 @@ src/integration/tui/               # 套件产品壳
 ```
 harness/run/agent/
 ├── builder.ts            # AgentBuilder — Fluent API
+├── wire-agent-builder.ts # 唯一「配置 → Builder」组装（config-bridge / Gateway / createAgent 共用）
 ├── persona.ts            # 人格加载（根目录 AGENTS.md + persona/*.md）
-├── config-bridge.ts      # 配置文件 → 新架构桥接
+├── config-bridge.ts      # 配置文件 → 新架构桥接（薄封装：解析 model + wire + build）
 └── index.ts
 ```
 

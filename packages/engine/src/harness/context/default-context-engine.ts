@@ -76,7 +76,7 @@ export interface DefaultContextEngineConfig {
   /**
    * 主动摘要阈值：消息 token / messagesBudget 超过该比例时，
    * 在窗口硬溢出之前先做 LLM 摘要（缓解长会话失忆）。
-   * 默认 0.6；设为 0 关闭主动摘要（target 模式与 legacy 模式共同的总开关）。
+   * 默认 0.6；`0` = 禁止**新** LLM 压缩（两种模式同闸），**不**丢已有粘滞压缩视图。
    */
   proactiveCompactRatio?: number;
   /**
@@ -488,7 +488,7 @@ export class DefaultContextEngine implements ContextEngine {
   /**
    * 主动摘要：消息 token 超过 messagesBudget × ratio 时，在硬溢出前压缩
    *
-   * 语义（粘滞 + 总开关）：
+   * 语义（粘滞 + 禁新 LLM）：
    * - **压缩视图粘滞**：一旦建立过压缩态（previousSummary 或 lastProactiveMessageCount），
    *   后续装配优先复用 head+摘要/机械中间+tail，不因估算回落或 ratio=0 而打回全量
    *   （全量请求会 bust 前缀缓存，且等于撤销已完成的压缩）。

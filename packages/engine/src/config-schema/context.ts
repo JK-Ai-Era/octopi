@@ -23,6 +23,7 @@ export const ContextEngineConfigSchema = z.object({
   type: z.enum(['default', 'custom']).optional(),
   protectFirstN: z.number().min(0).optional(),
   protectLastN: z.number().min(0).optional(),
+  /** 0 = 禁新 LLM 压缩（不丢粘滞视图）；见 ContextEngineConfig JSDoc */
   proactiveCompactRatio: z.number().min(0).max(1).optional(),
   proactiveCooldownMs: z.number().min(0).optional(),
   historyAging: HistoryAgingConfigSchema.optional(),

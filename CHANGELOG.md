@@ -1,3 +1,17 @@
+## v0.85.1
+
+### docs(engine): sync contracts and comments with wireAgentBuilder + sticky compact semantics
+
+**问题**：v0.85.0 行为已变，但文档/注释仍写「`proactiveCompactRatio: 0` 总开关」、老化「re-run 提示」、组装只有 config-bridge/Gateway 两套——后人会按错误语义改代码（例如把粘滞视图当可丢弃、把引擎注入当用户发言）。
+
+**修正**：
+
+- `docs/context-layer-contracts.md` / `.zh.md`：`proactiveCompactRatio=0` = 禁新 LLM、不丢粘滞；粘滞重建含 `lastProactiveMessageCount` 之后增量；方案 E turn 内机械；middle 替换体降级/账本；F-b 原文摘要；error 不打码；`engineHint` 非用户发言；组装唯一出口 `wireAgentBuilder`
+- `docs/architecture.md` / `.zh.md`、`arch/dependency-map.md`：补 `wire-agent-builder.ts`；config-bridge 标明薄封装
+- `config.ts` / `default-context-engine.ts` / `config-schema/context.ts` / 相关测试头注释：与新语义对齐
+
+**验证**：`arch/check-sync.sh` 无新增问题；仅文档/注释变更。
+
 ## v0.85.0
 
 ### feat(engine): wireAgentBuilder 统一组装 + 压缩连续性根因修复

@@ -167,9 +167,11 @@ Runner.handle
 **主动摘要（防长会话失忆）：**
 
 - `DefaultContextEngine.targetTokens`（默认 `200000`）把 compact 兜底线与窗口解耦：兜底线 = `min(targetTokens × compactFallbackRatio, messagesBudget × proactiveCompactRatio)`（默认 `1.5` / `0.6`）——min 让小窗口仍走有门槛的温和 proactive（旧挂法 1M 窗口 × 0.6 ≈ 57 万 token 永不触发）。`targetTokens: 0` 退回旧窗口比例模式。触发判据量**老化请求体量**（实际发送内容的保守上界），B2 稳态不会误触发（防双机制打架，单测锁死）。再压缩还要求自上次压缩以来 token 实质增长（偶发兜底，不是周期性重压）
-- `DefaultContextEngine.proactiveCompactRatio`（默认 `0.6`）是旧模式的预算比例；`0` 仍是**两种模式共同的**总开关
-- 视图超兜底线时，在硬溢出前压缩中间段
-- 增量很小时用 `previousSummary + head/tail` 重建视图，不重复打 LLM
+- `DefaultContextEngine.proactiveCompactRatio`（默认 `0.6`）是旧模式的预算比例。**`0` 只禁止发起新的 LLM 压缩（两种模式同闸），不丢弃已有粘滞压缩视图**（`previousSummary` / `lastProactiveMessageCount` 仍重建 `head + 摘要 + 覆盖点之后增量 + tail`）。turn 内（最近真实 user 之后已有工具活动）也不新打 LLM 摘要（方案 E），只走机械分级（B2 老化 / 账本截断），避免吃掉活动工作记录
+- 视图超兜底线时，在硬溢出前压缩中间段（LLM 仅限 turn 边界；turn 内机械）
+- 增量很小（或 `proactiveCompactRatio=0`）时用 `previousSummary` + **`lastProactiveMessageCount` 之后的消息** + head/tail 重建，不重复打 LLM，也**绝不打回全量历史**
+- `fallbackTruncate` / 溢出降级是 **middle 替换体**：归档说明 + 工具调用账本（name+args）+ 近尾——禁止「只留 4 条」
+- LLM 摘要吃**原文**工具输出（F-b：机械打码只作用于丢弃体）；`error` 字段永不打码
 - 配置：`octopi.json` → `contextEngine.targetTokens` / `contextEngine.compactFallbackRatio` / `contextEngine.proactiveCompactRatio`
 
 **主动 LLM 摘要冷却（`proactiveCooldownMs`，默认 30s，`0` 关闭）：**
@@ -192,11 +194,12 @@ Runner.handle
 - **运行时快照（E8）**：易变层产出 `runtimeSnapshot` → 尾部消息 `role: 'user'` + `metadata.source: 'runtimeSnapshot'`，以 `<runtime_snapshot>` 包裹；`buildLlmMessages` **只回放最近一条**快照（旧快照不回放——防陈旧择取固化）；session 日志保留（审计对齐托管 system）；Web 聊天回放隐藏
 - **视图权威（E8 防坑）**：runner 的 `baseMsgs` 视图（detach 切片 + 剥旧 turn 插槽 + 本轮插槽）必须**无条件**替换 `runContext.messages`——「长度相等=未变」之类的代理判据会在剥旧条数==插入条数时丢弃整张视图（快照丢失、被剥的旧插槽复活）
 - 无 metadata 的外部 system 消息仍原样保留
-- **历史老化（B2，视图级）**：跨轮工具结果超出近期窗口的部分，在 `buildLlmMessages` 内降级为结构化指针（工具名 + 参数要点 + 结果轮廓 + re-run 提示）——**仅视图级**，session 日志保全量原文。老化为**批量冻结**（边界只以 `freezeBatch` 为步长成批推进；绝不在 recency 边界逐轮改写——历史中部改写会烧掉前缀缓存）且 **write-once**（指针字节恒定；计划按完整历史计算，绝不按裁剪视图重算边界）。当前 run 与最近 `rawWindow` 条原文保留；**error 结果永不降级**（错误可追溯性优先）；仅当指针严格小于原文才降级。配置：`contextEngine.historyAging`
+- **历史老化（B2，视图级）**：跨轮工具结果超出近期窗口的部分，在 `buildLlmMessages` 内降级为结构化指针（工具名 + 参数要点 + 结果轮廓 + **归档说明（勿重跑）**）——**仅视图级**，session 日志保全量原文。老化为**批量冻结**（边界只以 `freezeBatch` 为步长成批推进；绝不在 recency 边界逐轮改写——历史中部改写会烧掉前缀缓存）且 **write-once**（指针字节恒定；计划按完整历史计算，绝不按裁剪视图重算边界）。当前 run 与最近 `rawWindow` 条原文保留；**error 结果永不降级**（错误可追溯性优先）；仅当指针严格小于原文才降级。配置：`contextEngine.historyAging`
+- **引擎注入不是用户发言**：reliability 注入（wrap-up / planning steer / noop-hint / truncate notice）统一 `metadata.source: 'engineHint'`（入 `ENGINE_CARRIER_SOURCES`）。turn 边界判定（`isMidTurn`）与 B2「最近真实 user」扫描必须忽略它们——不得把 `[System: …]` 文案当成新 user 轮次
 
 **已接线（含 P1/P2 层扩展）：**
 
-- Builder 可注入 `wisdomStore` / `cognitionStore`；`config-bridge` 与 **Gateway.buildAgent** 在 agent home 的 `AgentDatabase` 上挂 Memory/Wisdom/Cognition/Knowledge，并 discover `skills/`
+- Builder 可注入 `wisdomStore` / `cognitionStore`；**`wireAgentBuilder`（config-bridge / Gateway / createAgent 共用）**在 agent home 的 `AgentDatabase` 上挂 Memory/Wisdom/Cognition，并 discover `skills/`（唯一 discover 出口）；Gateway 叠加 Knowledge catalog / tools
 - Gateway 为 agent 设置 `builder.agentHome(home)` + `builder.agentId(id)`，Memory SQLite（agent.db）挂在 agent home；**无** extract 落盘目录
 - 默认 `createDefaultSystemPromptAssembler` 在依赖存在时注册 Wisdom / Cognition 层
 - `octopi.json` → `contextAssembler.includeLayerPreview` 可在 manifest 写入层 preview（Web 上下文面板）

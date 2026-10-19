@@ -199,8 +199,9 @@ src/integration/tui/               # suite product shell
 ```
 harness/run/agent/
 ├── builder.ts            # AgentBuilder — Fluent API
+├── wire-agent-builder.ts # sole config → Builder assembly (config-bridge / Gateway / createAgent)
 ├── persona.ts            # persona loading (root AGENTS.md + persona/*.md)
-├── config-bridge.ts      # config file → new-architecture bridge
+├── config-bridge.ts      # config file → new-architecture bridge (thin: resolve model + wire + build)
 └── index.ts
 ```
 

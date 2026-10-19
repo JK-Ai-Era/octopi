@@ -494,7 +494,9 @@ export interface ContextEngineConfig {
   protectLastN?: number;
   /**
    * 主动摘要阈值：消息 token / messagesBudget 超过该比例时，
-   * 在硬溢出前先 LLM 摘要（默认 0.6；0 = 关闭——target/legacy 模式共同的总开关）
+   * 在硬溢出前先 LLM 摘要（默认 0.6）。
+   * `0` = **禁止发起新的** LLM 主动压缩（target/legacy 同闸）；**不**丢弃已有
+   * `previousSummary` 粘滞视图（粘滞重建仍生效）。turn 内（工具活动中）本就不打 LLM。
    */
   proactiveCompactRatio?: number;
   /**

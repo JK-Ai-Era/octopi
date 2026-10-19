@@ -5,7 +5,7 @@
  * - 触发线挂工作目标而非窗口（旧挂法 1M×0.6 ≈ 57 万 = 永不触发）
  * - 尺子量**老化视图**（实际请求）：raw 估算会把 B2 稳态误判超线 → 每 turn LLM 摘要 = 双机制打架
  * - ⚠️ 兜底线必须 > B2 老化稳态，单测锁死
- * - targetTokens=0 退回旧窗口比例模式；proactiveCompactRatio=0 仍是总开关
+ * - targetTokens=0 退回旧窗口比例模式；proactiveCompactRatio=0 禁新 LLM（不丢粘滞视图）
  */
 
 import { describe, it, expect, vi } from 'vitest';
