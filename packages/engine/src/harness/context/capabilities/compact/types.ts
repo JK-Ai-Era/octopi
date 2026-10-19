@@ -14,9 +14,14 @@ export type CompactMode =
   | 'head_tail_only'
   | 'auto';
 
+/**
+ * Compact 摘要函数契约：`options.previousSummary` 已嵌入 `messages` 正文
+ * （"Previous summary: …" 段），**返回值即完整更新后的摘要**（不与旧摘要拼接）。
+ */
 export type CompactSummarizeFn = (
   messages: LLMMessage[],
   options?: {
+    /** 上次摘要（已嵌入 messages 正文；仅作元信息回传） */
     previousSummary?: string;
     maxTokens?: number;
     instructions?: string;
@@ -33,7 +38,8 @@ export interface CompactOptions {
   protectTail?: number;
   targetTokens?: number;
   mode?: CompactMode;
-  /** conversation 策略或显式 policy / id；经 SummaryPort 时生效 */
+  /** conversation 策略或显式 policy / id；SummaryPort 与 summarizeFn 两路均生效
+   *（summarizeFn 路径经 buildSystemPrompt 产指令，要求 output:'text' 策略） */
   summarizePolicy?: SummaryPolicy | string;
   /** 兼容 ContextEngine 注入的 SummarizeFunction */
   summarizeFn?: CompactSummarizeFn;

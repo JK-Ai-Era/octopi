@@ -140,14 +140,18 @@ export interface ContextCompactSnapshot {
  * 由 Harness 层注入，ContextEngine 用它调用 LLM 生成摘要。
  * 这样 ContextEngine 不直接依赖 ModelProvider，保持解耦。
  *
- * @param messages - 要摘要的消息
+ * 契约（迭代式更新）：`options.previousSummary` 已按约定嵌入 `messages` 正文
+ * （"Previous summary: …" 段），实现方无需再读 opts 拼 prompt；**返回值即完整
+ * 更新后的摘要**，调用方不得再与旧摘要拼接。
+ *
+ * @param messages - 摘要请求消息（system 指令 + 用户正文；非原始对话序列）
  * @param options - 摘要选项
- * @returns 摘要文本
+ * @returns 完整更新后的摘要文本
  */
 export type SummarizeFunction = (
   messages: LLMMessage[],
   options?: {
-    /** 上次摘要（用于迭代式更新） */
+    /** 上次摘要（已嵌入 messages 正文；仅作元信息回传） */
     previousSummary?: string;
     /** 摘要 token 预算 */
     maxTokens?: number;

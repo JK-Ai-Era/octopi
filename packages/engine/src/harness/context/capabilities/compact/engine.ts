@@ -11,6 +11,7 @@ import { getTextContent } from '@octopi-agent/core/types.js';
 import type { LLMMessage } from '@octopi-agent/core/interfaces/model-provider.js';
 import { HeuristicTokenEstimator } from '../../token-estimator.js';
 import { buildPolicyRegistry } from '../summary/resolver.js';
+import { buildSystemPrompt } from '../summary/executor.js';
 import type { ContentUnit, SummaryPolicy } from '../summary/types.js';
 import type {
   CompactEngine,
@@ -29,10 +30,16 @@ function defaultEstimator(): CompactTokenEstimator {
   };
 }
 
+/** 中段摘要任务（summaryPort 与 summarizeFn 两路共用，保持指令对称） */
+const MIDDLE_SEGMENT_TASK =
+  'Summarize conversation middle segment: goal, progress, decisions, blockers, next steps, key values.';
+
 function formatMessagesAsText(messages: Message[]): string {
   const parts: string[] = [];
   for (const msg of messages) {
-    const role = msg.role.toUpperCase();
+    // 归因保留（模型 2）：多 agent 共线的摘要不得张冠李戴
+    // （惯例出处 session/history/port.ts renderMessage 的 role(agentId)；此处大写+方括号仅排版差异）
+    const role = msg.agentId ? `${msg.role.toUpperCase()}(${msg.agentId})` : msg.role.toUpperCase();
     const content = getTextContent(msg.content);
     if (msg.role === 'assistant' && msg.toolCalls?.length) {
       const calls = msg.toolCalls
@@ -57,13 +64,6 @@ function formatMessagesAsText(messages: Message[]): string {
     }
   }
   return parts.join('\n\n---\n\n');
-}
-
-function toLlmMessages(messages: Message[]): LLMMessage[] {
-  return messages.map((m) => ({
-    role: m.role,
-    content: getTextContent(m.content) || '',
-  }));
 }
 
 function asSummaryMessage(summary: string): Message {
@@ -108,6 +108,12 @@ export function createCompactEngine(options?: CreateCompactEngineOptions): Compa
       policy = opts.summarizePolicy;
     }
 
+    // 中段文本化为空（消息全无正文无工具）：不发空摘要请求——空 user / 空 New content
+    // 过不了严格网关，且会让模型凭空产出；按摘要失败降级（onSummarizeFail 接管）
+    if (!middleText.trim()) {
+      return { error: 'empty_middle' };
+    }
+
     if (port) {
       const unit: ContentUnit = {
         text: middleText,
@@ -116,22 +122,48 @@ export function createCompactEngine(options?: CreateCompactEngineOptions): Compa
         source: {},
         kind: 'conversation',
         policy: opts.summarizePolicy,
-        task: 'Summarize conversation middle segment: goal, progress, decisions, blockers, next steps, key values.',
+        task: MIDDLE_SEGMENT_TASK,
       };
-      const r = await port.extract(unit, {
-        signal: opts.signal,
-        previousSummary: opts.previousSummary,
-      });
-      return { summary: r.text, coverage: r.coverage };
+      try {
+        const r = await port.extract(unit, {
+          signal: opts.signal,
+          previousSummary: opts.previousSummary,
+        });
+        return { summary: r.text, coverage: r.coverage };
+      } catch (err) {
+        // 只吞 port.extract 的抛错（摘要器契约外失败：provider 报错/超时）——转 error
+        // 通道交给 onSummarizeFail 降级；try 内无其他可抛代码，无其他路径可至此
+        return { error: err instanceof Error ? err.message : String(err) };
+      }
     }
 
     if (summarizeFn) {
-      const llmMessages = middleMessages.length > 0 ? toLlmMessages(middleMessages) : [{ role: 'user', content: middleText }];
-      const text = await summarizeFn(llmMessages, {
-        previousSummary: opts.previousSummary,
-        maxTokens: opts.maxSummaryTokens ?? maxTokens,
-      });
-      return { summary: text, coverage: 'full' };
+      // 摘要请求 = policy 指令 + 文本化中段（单条 user），不把原始消息序列当对话发出：
+      // tool_call-only assistant / 缺 tool_call_id 的 tool 消息会被严格网关 400
+      // （"messages[0] assistant must provide content, reasoning_content or tool_calls"）。
+      // 文本化同时保住 toolCalls/toolResults 明细与多 agent 归因（formatMessagesAsText）。
+      // previousSummary 随内容进 prompt（与 summary executor / LLMSummaryCompressor 的
+      // 「迭代式更新」契约同款）：summarizeFn 返回即完整更新摘要，调用方不再事后拼接。
+      const system = buildSystemPrompt(policy, MIDDLE_SEGMENT_TASK, maxTokens);
+      const userContent = opts.previousSummary
+        ? `Previous summary:\n${opts.previousSummary}\n\n---\n\nNew content:\n${middleText}`
+        : middleText;
+      const llmMessages: LLMMessage[] = [
+        { role: 'system', content: system },
+        { role: 'user', content: userContent },
+      ];
+      try {
+        const text = await summarizeFn(llmMessages, {
+          previousSummary: opts.previousSummary,
+          maxTokens: opts.maxSummaryTokens ?? maxTokens,
+        });
+        return { summary: text, coverage: 'full' };
+      } catch (err) {
+        // 只吞 summarizeFn 的抛错（provider 报错/超时——用户实测形态："OpenAI API error
+        // 400: …"）——转 error 通道交给 onSummarizeFail 降级，不再穿透 compactCore
+        // 直达 HTTP 层变成手动压缩硬失败；try 内无其他可抛代码
+        return { error: err instanceof Error ? err.message : String(err) };
+      }
     }
 
     return { error: 'no_summarizer' };
@@ -218,16 +250,25 @@ export function createCompactEngine(options?: CreateCompactEngineOptions): Compa
             reason: 'summarize_failed_truncate',
             tokensBefore,
             tokensAfter: estimator.estimateMessages(view),
+            // 摘要失败时旧摘要仍有效：summary 字段保留之（与 structure_only 失败兜底同款）
+            summary: opts.previousSummary,
             view,
             droppedSummary: 'middle dropped; summarizer unavailable',
           };
         }
         const view = text.slice(0, 500);
-        return { ok: true, compacted: true, reason: 'summarize_failed_truncate', tokensBefore, view };
+        return {
+          ok: true,
+          compacted: true,
+          reason: 'summarize_failed_truncate',
+          tokensBefore,
+          summary: opts.previousSummary,
+          view,
+        };
       }
-      const summary = opts.previousSummary
-        ? mergeSummaries(opts.previousSummary, summarized.summary)
-        : summarized.summary;
+      // 摘要即完整更新（previousSummary 已随 prompt 交给 summarizeFn 合并；
+      // 与 LLMSummaryCompressor / summary executor 同一「迭代式更新」契约），不得再事后拼接
+      const summary = summarized.summary;
       if (!isMessages) {
         return {
           ok: true,
@@ -268,12 +309,13 @@ export function createCompactEngine(options?: CreateCompactEngineOptions): Compa
           reason: 'structure_truncate',
           tokensBefore,
           tokensAfter: estimator.estimateText(view),
+          // 摘要失败时旧摘要仍有效：summary 字段保留之（与 messages 失败兜底同款）
+          summary: opts.previousSummary,
           view,
         };
       }
-      const summary = opts.previousSummary
-        ? mergeSummaries(opts.previousSummary, summarized.summary)
-        : summarized.summary;
+      // 摘要即完整更新（同上：迭代式更新契约，不再事后拼接）
+      const summary = summarized.summary;
       const view = `${text.slice(0, 200)}\n\n[Conversation Summary]\n${summary}\n\n${text.slice(-200)}`;
       return {
         ok: true,
@@ -305,11 +347,11 @@ export function createCompactEngine(options?: CreateCompactEngineOptions): Compa
     const middleText = formatMessagesAsText(middle);
     const summarized = await summarizeMiddle(middleText, middle, opts, maxSummaryTokens);
 
+    // 摘要即完整更新（previousSummary 已随 prompt 交给 summarizeFn 合并）；
+    // 摘要失败时仍保留旧摘要兜底
     let summary = opts.previousSummary ?? '';
     if (summarized.summary) {
-      summary = opts.previousSummary
-        ? mergeSummaries(opts.previousSummary, summarized.summary)
-        : summarized.summary;
+      summary = summarized.summary;
     } else if (!summary) {
       const placeholder = `[Structural compact] dropped ${middle.length} middle messages`;
       if (onFail === 'keep_partial') {
@@ -350,12 +392,4 @@ export function createCompactEngine(options?: CreateCompactEngineOptions): Compa
     compactMessages: (messages, opts) => compactCore(messages, opts ?? {}),
     compactText: (text, opts) => compactCore(text, opts ?? {}),
   };
-}
-
-function mergeSummaries(previous: string, next: string): string {
-  const a = previous.trim();
-  const b = next.trim();
-  if (!a) return b;
-  if (!b) return a;
-  return `${a}\n\n${b}`;
 }

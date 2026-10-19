@@ -195,12 +195,15 @@ export class LLMSummaryCompressor implements Compressor {
 
   /**
    * 格式化消息为 LLM 可读的上下文
+   *
+   * 归因保留（模型 2）：多 agent 共线的摘要不得张冠李戴
+   * （惯例出处 session/history/port.ts renderMessage 的 role(agentId)；此处大写仅排版差异）。
    */
   private formatMessagesForSummary(messages: Message[]): string {
     const parts: string[] = [];
 
     for (const msg of messages) {
-      const role = msg.role.toUpperCase();
+      const role = msg.agentId ? `${msg.role.toUpperCase()}(${msg.agentId})` : msg.role.toUpperCase();
       const content = getTextContent(msg.content);
 
       if (msg.role === 'assistant' && msg.toolCalls?.length) {

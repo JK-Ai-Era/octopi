@@ -1,3 +1,21 @@
+## v0.84.4
+
+### fix(engine): manual compaction 400 — summarizer request shape + attribution + failure degradation
+
+**问题**：手动压缩报 `HTTP 400: "messages[0] assistant must provide content, reasoning_content or tool_calls"`。根因是 compact engine 的 `toLlmMessages` 把中段**原始消息序列当对话**转发给摘要模型——只留 role+正文、丢 toolCalls/toolResults/tool_call_id，「只有 tool_calls、正文为空」的 assistant 消息被 provider sanitize 成 `content:null` 且无 tool_calls，严格校验网关直接拒绝。自动压缩不炸是因为其 LLM 摘要走 `LLMSummaryCompressor`（格式化为纯文本单条 user）；手动压缩走 compact engine 的 summarizeFn 路径从未被真实工具轮次数据测过（compact 测试全用纯 user 消息）。非近期重构引入：`toLlmMessages` 自 v0.44.1 出生即如此；`a083ce3`（reasoning/content 分流）移除正文垫底后裸露。
+
+**修正**（`capabilities/compact/engine.ts`）：
+
+- **请求形态**：summarizeFn 路径改为「policy 指令（`buildSystemPrompt`）+ 文本化中段单条 user」，删除 `toLlmMessages`——文本化保留 toolCalls/toolResults 明细，杜绝空 assistant/缺 tool_call_id 形态
+- **迭代式合并**：`previousSummary` 随内容进 prompt（`Previous summary: … New content: …`，与 summary executor / LLMSummaryCompressor 同款），LLM 返回即完整更新摘要——删除 `mergeSummaries` 事后拼接（3 处调用点），消除 summaryPort 路径「executor 已在 prompt 合并、引擎又拼接」的双重合并
+- **多 agent 归因**（模型 2）：`formatMessagesAsText` / `formatMessagesForSummary`（llm-summarizer.ts 对称）保留 `role(agentId)`（惯例出处 session/history renderMessage）——多 agent 共线的摘要不再张冠李戴；E4 分桶（`(sessionId, agentId)`）与 semanticHistory 过滤不受影响
+- **失效降级**：`summarizeFn`/`port.extract` 抛错包 try/catch 转 error 通道（此前直达 HTTP 层，`onSummarizeFail:'truncate'` 对抛错不生效）；空文本化中段不发请求直接降级（空 user/占位内容都过不了严格网关）；全部失败分支保留 `previousSummary`（此前 4 处失败返回仅 1 处保留）
+- 契约注释修正：`SummarizeFunction`/`CompactSummarizeFn` 写明「previousSummary 已入 messages、返回即完整摘要」；`summarizePolicy` 生效范围更新
+
+**独立评审**（fresh-eyes 子代理：核心修复确认正确、mergeSummaries 语义删除无 consumer 受损、E4 多 agent 分桶与 round-trip 核验 OK；P1-1 抛错回退缺口 + P2-1/2/3/4/5/7/8 采纳修复；P2-5 引用勘误、P2-8 housekeeping 同 commit）。
+
+**验证**：`compact-summarize-request.test.ts` 7 用例（请求形态/严格网关安全/归因/迭代合并/空文本化降级/抛错降级×2）全绿；compact 相关 20 文件 249 用例全绿零回归；tsc/lint 干净。
+
 ## v0.84.3
 
 ### feat(engine): decouple the compact working target from the context window (F1-B3)
