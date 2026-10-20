@@ -55,12 +55,18 @@ Windows 的写限制允许 `write-jailed-best-effort`（Job Object + 受限令�
 内置 `shell` 工具 **始终**经 `ProcessSandbox` 执行（探测到 jail backend 则包牢笼，
 否则 supervised spawn），不存在第二条 spawn 路径。
 
-**牢笼根与网络（D4）**：`SandboxConfig.allowRoots`（缺省 cwd）在牢笼内 bind / 可写；
-网络姿态 `open | deny | allowlist`，**缺省 `deny`**。`allowlist` 本版仅留接口，
-按 `deny` 执行并如实注记。probe 与 execute 保持一致。
+**牢笼根与网络（D4）**：`SandboxConfig.allowRoots`（缺省 cwd）在牢笼内 bind / 可写
+（`--bind-try`）。网络姿态 `open | deny | allowlist`，**模式缺省**：
+`host`/`project` → `open`；`workspace`/`untrusted` → `deny`（reduced 恒 `deny`）。
+`allowlist` 仅接口，按 `deny` 执行并如实注记。
 
-**网络缺省（D4）**：`host`/`project` → `open`；`workspace`/`untrusted` → `deny`（reduced 恒 deny）。
-`allowlist` 仅接口，按 deny 执行并注记。
+**macOS Seatbelt（D3）**：执行时生成覆盖 `allowRoots` 与网络姿态的 profile，
+落盘后 `sandbox-exec -f <profile> -- …`。`OCTOPI_SB_PROFILE` 仅作宿主覆盖。
+仅在 profile **实际生效**时才报 `write-jailed`。profile 同时放行 POSIX 标准 I/O
+设备写（`/dev/null`、`/dev/zero`、`/dev/tty`、`/dev/std*`、`/dev/fd`）——git 以
+O_RDWR 打开 `/dev/null`、shell 会重定向到它们，封死会瘫痪基础工具。jail 根同时
+按词法与规范（`realpath`）两种形态输出，保证子路径规则能穿透符号链接别名
+（macOS `/var` → `/private/var`、`/tmp` → `/private/tmp`）。
 
 **Jail 搭建失败（D7）**：`requireJail`（effective untrusted）抛 `untrusted_jail_failed`，禁止未沙箱执行；其它模式回落 supervised + `jail_setup_failed` + run 级 `securityDegraded`。
 后端选择与探测对齐（bwrap 冒烟测试 / Seatbelt `sandbox_apply` 冒烟测试）：
@@ -71,13 +77,9 @@ jail 完全无法生效时，mode 分叉发生在命令**运行之前**。wrappe
 wrapper 签名（`bwrap:` / `sandbox-exec:` / `newuidmap:` / `newgidmap:`），
 绝不匹配裸 `operation not permitted`。
 
-**macOS Seatbelt（D3）**：执行时生成覆盖 `allowRoots` 与网络姿态的 profile，
-落盘后 `sandbox-exec -f <profile> -- …`。`OCTOPI_SB_PROFILE` 仅作宿主覆盖。
-仅在 profile **实际生效**时才报 `write-jailed`。profile 同时放行 POSIX 标准 I/O
-设备写（`/dev/null`、`/dev/zero`、`/dev/tty`、`/dev/std*`、`/dev/fd`）——git 以
-O_RDWR 打开 `/dev/null`、shell 会重定向到它们，封死会瘫痪基础工具。jail 根同时
-按词法与规范（`realpath`）两种形态输出，保证子路径规则能穿透符号链接别名
-（macOS `/var` → `/private/var`、`/tmp` → `/private/tmp`）。
+**特权（`dropped`）** 指牢笼**拒绝提权操作**（user namespace 和/或 Seatbelt
+`process-exec` 拒绝 `sudo`/`su`/…）。它**不要求**切换 uid。注记区分 `userns`
+与 `ops-denied; uid unchanged` 两种形态。
 
 **Jail 可写挂载（2）**：`allowRoots` ∪ cwd ∪ `os.tmpdir()` 在所有模式下可写；
 POSIX 下共享临时目录 `/tmp` 与 `/var/tmp`（各含词法与 `realpath` 规范两种形态）
@@ -85,6 +87,9 @@ POSIX 下共享临时目录 `/tmp` 与 `/var/tmp`（各含词法与 `realpath` �
 `$HOME` 仅 `project` / `host` 可写（`SandboxConfig.homeWrite`）。
 **tmp 写入不进日记**（`notReversed`）；共享临时区对所有用户可写，
 留在那里的一切应视为已暴露。系统树保持只读。
+
+**untrusted egress** 恒为 `deny` —— `effectPolicy.network` 无法打开它
+（产品承诺，与 `pathContainment` 同级）。
 
 **环境变量 deny-by-default**：所有后端只透传白名单（`PATH`、`HOME`、`TMP`、
 locale、shell/OS 基础项）。宿主密钥（`*_API_KEY`、`*_TOKEN` 等）**不会**
@@ -136,7 +141,7 @@ locale、shell/OS 基础项）。宿主密钥（`*_API_KEY`、`*_TOKEN` 等）**
 | `securityDegraded` | 如 `["no_process_jail", …]` |
 | UI / Observer | 一律展示 **effective** mode，不展示请求名 |
 
-﻿`toolSurface: reduced` 保留 L2 内的内容工具，并按 **能力标签**（`ToolDefinition.capabilities`）
+`toolSurface: reduced` 保留 L2 内的内容工具，并按 **能力标签**（`ToolDefinition.capabilities`）
 **剥离**（不看显示名）：
 
 - `exec`（shell 及任意执行器；并强制 `shellEscape: deny`）
@@ -154,12 +159,6 @@ commit 带 `--no-verify`、命令行 `-c` 覆盖 `diff.external` / `gpg.program`
 会把配置里发现的 `filter.*` 驱动钉成 `cat` 后再 `git add`/`commit`，恶意 `.gitattributes` 无法执行 clean/smudge/process。`shellEscape` 只闸 shell 工具，不拦 `vcs`/`runner` 效应类型。
 
 reduced 面上 **未标注工具一律拒绝**（unknown-reject）；内置工具已全部标注。
-
-旧版按工具名剥离的列表如下（已由能力标签取代）：
-
-- `shell` / 执行类工具（并强制 `shellEscape: deny`）
-- `http_request` 与 web/fetch 类
-- MCP / client tools / `send_file`
 
 `onClose: discard` 作为 untrusted 意图残留予以保留。
 

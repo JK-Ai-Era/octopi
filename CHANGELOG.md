@@ -1,3 +1,18 @@
+## v0.86.5
+
+### docs(process-isolation): repair mojibake in EN and sync ZH parity
+
+**问题**：英文权威版 `docs/process-isolation.md` 有 17 处转码损坏（smart quote / 破折号+空格 / 省略号被破坏，如标题 `What —減rocess sandbox—?means`、表格 `["no_process_jail", —`），并夹带行首 BOM。中文版与英文版漂移：缺「Privilege (dropped）」「untrusted egress」两段，多出已废弃的旧版按工具名剥离列表，「网络缺省（D4）」段重复且「缺省 `deny`」与模式缺省口径（host/project → open）自相矛盾，D3/D7 段落顺序与 EN 不一致。
+
+**修正**：
+
+- EN 17 处损坏逐处按语义 + ZH 对译还原（含 BOM 移除、`sandbox-exec -f <profile> -- …`、`["no_process_jail", …]`）
+- ZH 补入缺失的「特权（`dropped`）」「untrusted egress」两段（与 EN 相同位置），删除旧版按工具名剥离列表
+- ZH「牢笼根与网络（D4）」合并重复的「网络缺省（D4）」段，口径对齐 EN 权威（`host`/`project` → `open`；`workspace`/`untrusted` → `deny`），段落顺序对齐 EN
+- EN/ZH 同 commit 落地（docs 双语策略）
+
+**验证**：`git diff` 逐行自审无误伤；EN 文件汉字/异常字符扫描全净（`grep '[一-龥]'` 仅剩预期行）。
+
 ## v0.86.4
 
 ### fix(engine): path-A trigger keeps both lines, ratio=0 blocks new compression, fallback default 3
