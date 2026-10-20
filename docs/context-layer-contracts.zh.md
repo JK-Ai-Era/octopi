@@ -56,7 +56,7 @@ Constitution + Layer Providers ──► ContextAssembler ──► systemPrompt
 - **order ≠ priority**：order 决定在 system prompt 中的先后；priority 决定总预算不够时谁先留下。
 - **defaultShare**：历史参考值，**不再**驱动 Assembler 配额；需要单层限制时配置 `contextAssembler.layerShares`（硬顶）。
 - **runtime** 是产品八层第 7 层（system 侧，归属 Run），收编现有 Runner 的 `injectedContext`（会话任务 / 子系统 guidance），靠近对话侧；**不是** Information。
-- **placement（E8）**：层声明 `placement: 'system' | 'snapshot'`（缺省 `'system'`）。query 相关择取（Memory / Cognition / Wisdom）与每 run 动态注入（Runtime：datetime / tasks / guidance）为 `'snapshot'`；稳定片段（Persona / Skill / Knowledge catalog / Runtime 锚点：workspace / root instructions）留 `'system'`。`'snapshot'` 层装配进每轮 `runtimeSnapshot`，经消息尾部送达——**绝不**进 system prompt（宪法 E8：缓存稳定前缀）。
+- **placement（E8）**：层声明 `placement: 'system' | 'snapshot'`（缺省 `'system'`）。query 相关择取（Memory / Cognition / Wisdom）与每 run 动态注入（Runtime：datetime / tasks / guidance）为 `'snapshot'`；稳定片段（Persona / Skill / Knowledge catalog / Runtime 锚点：workspace / root instructions）留 `'system'`。`'snapshot'` 层装配进本轮用户消息（`<turn_start id>`）内的 **`<turn_context>`**——**绝不**进 system prompt（宪法 E8：缓存稳定前缀 + 历史全回放）。
 
 ---
 
@@ -69,7 +69,7 @@ interface ContextLayer {
   defaultShare: number;  // 启用层之间归一化后的份额
   droppable: boolean;    // 超预算能否整层丢弃（persona=false）
   order: number;         // system prompt 位置
-  placement?: 'system' | 'snapshot';  // E8：'snapshot' → 每轮 runtimeSnapshot（消息尾部），绝不进 system prompt
+  placement?: 'system' | 'snapshot';  // E8：'snapshot' → <turn_start> 用户消息内 turn_context，绝不进 system prompt
 
   fingerprint?(ctx): Promise<string | null> | string | null;
   assemble(ctx: LayerAssembleContext): Promise<LayerContent | null>;
@@ -191,8 +191,17 @@ Runner.handle
 
 - 托管 system（`metadata.source === 'systemPrompt'`）在 `buildLlmMessages` 中跳过，避免与 `systemPrompt` 参数重复注入
 - 压缩摘要 / 截断说明使用 **`role: 'user'`** + `metadata.source === 'contextSummary'`，不产生中段 system
-- **运行时快照（E8）**：易变层产出 `runtimeSnapshot` → 尾部消息 `role: 'user'` + `metadata.source: 'runtimeSnapshot'`，以 `<runtime_snapshot>` 包裹；`buildLlmMessages` **只回放最近一条**快照（旧快照不回放——防陈旧择取固化）；session 日志保留（审计对齐托管 system）；Web 聊天回放隐藏
-- **视图权威（E8 防坑）**：runner 的 `baseMsgs` 视图（detach 切片 + 剥旧 turn 插槽 + 本轮插槽）必须**无条件**替换 `runContext.messages`——「长度相等=未变」之类的代理判据会在剥旧条数==插入条数时丢弃整张视图（快照丢失、被剥的旧插槽复活）
+- **Turn 信封（E8 + 全回放）**：每条真实用户输入 **一次定形** 为
+  `<turn_start id="tN" at="…"> <turn_context authority="ephemeral" …>…槽位…</turn_context> <user_message>…</user_message> </turn_start>`。
+  turn 以尾标 `<turn_end id="tN"/>` 关闭（`metadata.source: 'turnEnd'`）。
+  易变槽位（runtime snapshot / knowledge grounding / session attachments）只存在于 `<turn_context>` 内。
+  `buildLlmMessages` **全回放历史**（append-only）：旧 turn_context 与 turn_end 留在请求中以保住前缀缓存。
+  陈旧择取靠 turn 作用域 +「以新为准」语义约束（且不进 `previousSummary`），**不靠删除**。
+  Web 聊天回放只显示 `<user_message>`，隐藏 `turnEnd`。
+- **视图权威**：runner 的 `baseMsgs` 视图（session 日志 detach 切片，含已定形 `turn_start` 用户消息）必须
+  **无条件**替换 `runContext.messages`。禁止剥除历史 turn 槽位——剥除是历史中部改写，每 user 轮打穿 provider 前缀缓存。
+- **压缩注记禁止进 system prompt**：`droppedSummary` / 截断说明只作观测（消息侧 `contextSummary` 已告知模型）。
+  请求头动态文本会使全缓存失效。
 - 无 metadata 的外部 system 消息仍原样保留
 - **历史老化（B2，视图级）**：跨轮工具结果超出近期窗口的部分，在 `buildLlmMessages` 内降级为结构化指针（工具名 + 参数要点 + 结果轮廓 + **归档说明（勿重跑）**）——**仅视图级**，session 日志保全量原文。老化为**批量冻结**（边界只以 `freezeBatch` 为步长成批推进；绝不在 recency 边界逐轮改写——历史中部改写会烧掉前缀缓存）且 **write-once**（指针字节恒定；计划按完整历史计算，绝不按裁剪视图重算边界）。当前 run 与最近 `rawWindow` 条原文保留；**error 结果永不降级**（错误可追溯性优先）；仅当指针严格小于原文才降级。配置：`contextEngine.historyAging`
 - **引擎注入不是用户发言**：reliability 注入（wrap-up / planning steer / noop-hint / truncate notice）统一 `metadata.source: 'engineHint'`（入 `ENGINE_CARRIER_SOURCES`）。turn 边界判定（`isMidTurn`）与 B2「最近真实 user」扫描必须忽略它们——不得把 `[System: …]` 文案当成新 user 轮次

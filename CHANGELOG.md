@@ -1,3 +1,21 @@
+## v0.86.0
+
+### feat(context): turn 信封 + 全回放装配（E8 扩展，前缀缓存硬约束）
+
+**问题**：provider 前缀缓存只认最长公共前缀。跨 user 轮的「插槽 last-only / 剥 grounding·attachment」使上一轮插槽点字节错位，**每轮重灌 10–65k**；`droppedSummary` 动态注记拼进 system 会在压缩轮打穿全请求；overflow 重组把旧 middle 插到新 middle 之后（乱序）；`lastProactiveMessageCount=messages.length` 把 tail 误算进摘要覆盖，滑出后丢消息且 compact 后约 `protectLastN` 轮每轮 bust。
+
+**修正**：
+
+- **Turn 信封（形态 B）**：用户消息一次定形为 `<turn_start id at>`（内含 ephemeral `<turn_context>` + `<user_message>`）；闭标 `<turn_end id/>`（`source:'turnEnd'`）。id `t1,t2,…` 单调；write-once。
+- **全回放 append-only**：删除 last-only 与 baseMsgs 剥槽；旧 turn_context / turn_end 留在请求。陈旧择取靠 turn 作用域 + boilerplate + system「Turns」总则 +「latest wins」隔离；`semanticHistory` 剥 turn_context、不进 `previousSummary`。
+- **droppedSummary 不进 system**（只观测）；消息侧 `contextSummary` 已承载压缩语义。
+- **P0-3** overflow 重组严格时间序：`protectHead → 压缩旧 middle → 新 middle → tail`。
+- **P0-4** 新增 `lastProactiveCoverEnd=tailStart`（sticky 增量起点）；`lastProactiveMessageCount` 仍为增长门用全量条数。
+- **cache 观测**：`turn.end` 附 `userTurnId` / `llmCallIndexInUserTurn` / `cachedInputTokens` / `cacheHitRatio`；`[cache]` 探针。
+- 宪法 E8 / `docs/context-layer-contracts.md`（EN+ZH）同步；新增 `turn-envelope.ts` 与回归测试。
+
+**验证**：`tests/harness/turn-envelope-replay.test.ts`、`tests/harness/compact-cover-order.test.ts`；既有 suite 按新契约更新。`npm run lint` 通过。审查修复：`coveredMessageCount` 类型链、`structuralCompact` cover 坐标与 `alignViewSplit` 对齐、多模态 `content` 归一化、user 正文 XML 转义、`abortedTurn` 跳过引擎载体、`compacted:false` 不推进增长门。
+
 ## v0.85.1
 
 ### docs(engine): sync contracts and comments with wireAgentBuilder + sticky compact semantics

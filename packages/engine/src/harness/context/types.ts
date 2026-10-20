@@ -128,8 +128,13 @@ export interface AssembleParams {
 export interface ContextCompactSnapshot {
   /** 语义摘要正文（previousSummary；机械降级占位说明不算，不入快照） */
   summary?: string;
-  /** 上次主动压缩覆盖到的全量消息条数（语义摘要或机械降级均推进） */
+  /** 上次主动压缩时的全量消息条数（再压缩增长门；≠摘要覆盖终点） */
   lastProactiveMessageCount?: number;
+  /**
+   * 摘要覆盖终点（下标，不含）= tailStart。
+   * sticky 增量起点；写成 messages.length 会把 tail 误算进覆盖 → 滑出丢消息。
+   */
+  lastProactiveCoverEnd?: number;
   /** 上次主动压缩后的视图 token 估算 */
   lastProactiveTokens?: number;
 }
@@ -198,6 +203,11 @@ export interface CompactResult {
   tokensBefore: number;
   tokensAfter?: number;
   summary?: string;
+  /**
+   * 摘要覆盖终点（下标，**不含**）= tailStart。
+   * sticky 重建的增量起点；写 `messages.length` 会把 tail 误算进覆盖 → 滑出后丢消息。
+   */
+  coveredMessageCount?: number;
 }
 
 // ── 轮次后参数 ──

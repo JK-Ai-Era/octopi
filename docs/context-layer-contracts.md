@@ -55,7 +55,7 @@ Notes:
 - **order ≠ priority**: order decides left-to-right position in the system prompt; priority decides who is retained first when the total budget is insufficient.
 - **defaultShare**: historical reference values; they **no longer** drive Assembler quotas. For a per-layer limit, configure `contextAssembler.layerShares` (hard cap).
 - **runtime** is product layer 7 (system side, owned by Run); it absorbs the Runner's existing `injectedContext` (session tasks / subsystem guidance), sits near the conversation side; it is **not** Information.
-- **placement (E8)**: layers declare `placement: 'system' | 'snapshot'` (default `'system'`). Query-dependent picks (Memory / Cognition / Wisdom) and per-run dynamic injection (Runtime: datetime / tasks / guidance) are `'snapshot'`; stable fragments (Persona / Skill / Knowledge catalog / Runtime anchors: workspace / root instructions) stay `'system'`. `'snapshot'` layers assemble into the per-turn `runtimeSnapshot`, delivered at the message tail — **never** into the system prompt (constitution E8: cache-stable prefix).
+- **placement (E8)**: layers declare `placement: 'system' | 'snapshot'` (default `'system'`). Query-dependent picks (Memory / Cognition / Wisdom) and per-run dynamic injection (Runtime: datetime / tasks / guidance) are `'snapshot'`; stable fragments (Persona / Skill / Knowledge catalog / Runtime anchors: workspace / root instructions) stay `'system'`. `'snapshot'` layers assemble into the per-turn `<turn_context>` **inside that turn’s user message** (`<turn_start id>`), never into the system prompt (constitution E8: cache-stable prefix + full-replay history).
 
 ---
 
@@ -68,7 +68,7 @@ interface ContextLayer {
   defaultShare: number;  // share normalized across enabled layers
   droppable: boolean;    // can the whole layer be dropped when over budget (persona=false)
   order: number;         // position in the system prompt
-  placement?: 'system' | 'snapshot';  // E8: 'snapshot' → per-turn runtimeSnapshot (message tail), never system prompt
+  placement?: 'system' | 'snapshot';  // E8: 'snapshot' → per-turn <turn_context> inside <turn_start> user message, never system prompt
 
   fingerprint?(ctx): Promise<string | null> | string | null;
   assemble(ctx: LayerAssembleContext): Promise<LayerContent | null>;
@@ -190,8 +190,18 @@ Runner.handle
 
 - Hosted system (`metadata.source === 'systemPrompt'`) is skipped in `buildLlmMessages`, avoiding double injection with the `systemPrompt` parameter
 - Compact summaries / truncation notes use **`role: 'user'`** + `metadata.source === 'contextSummary'`, producing no mid-conversation system
-- **Runtime snapshot (E8)**: volatile layers ship as `runtimeSnapshot` → tail message `role: 'user'` + `metadata.source: 'runtimeSnapshot'` wrapped in `<runtime_snapshot>`; `buildLlmMessages` replays **only the latest** snapshot (old snapshots are never replayed — stale retrieval picks must not be baked in); the session log keeps them (audit parity with hosted system); Web chat replay hides them
-- **View authority (E8 pitfall)**: the runner's `baseMsgs` view (detach slice + old turn-slot stripping + current slots) must **unconditionally** replace `runContext.messages` — a proxy check like "length unchanged ⇒ view unchanged" discards the whole view whenever stripped count equals inserted count (snapshot lost, stripped slots resurrected)
+- **Turn envelope (E8 + full replay)**: each real user input is **write-once** formatted as
+  `<turn_start id="tN" at="…"> <turn_context authority="ephemeral" …>…slots…</turn_context> <user_message>…</user_message> </turn_start>`.
+  The turn closes with a trailing `<turn_end id="tN"/>` message (`metadata.source: 'turnEnd'`).
+  Volatile slots (runtime snapshot / knowledge grounding / session attachments) live only inside `<turn_context>`.
+  `buildLlmMessages` **replays the full history** (append-only): old turn contexts and turn_end markers stay in the request
+  so the prefix cache holds. Stale retrieval picks are contained by turn scoping + “latest wins” semantics (and excluded
+  from `previousSummary`), not by deleting them. Web chat replay shows only `<user_message>` and hides `turnEnd`.
+- **View authority**: the runner’s `baseMsgs` view (detach slice of the session log, including baked `turn_start` user messages)
+  must **unconditionally** replace `runContext.messages`. Do not strip historical turn slots — stripping is a mid-history
+  rewrite and busts the provider prefix cache every user turn.
+- **Compact notices never enter the system prompt**: `droppedSummary` / truncation notes are observability only
+  (message-side `contextSummary` already tells the model). Dynamic text at the request head invalidates the entire cache.
 - External system messages without metadata are kept as-is
 - **History aging (B2, view-level)**: cross-turn tool results beyond the recent window degrade to structured pointers (tool name + args outline + result outline + archival note — **do not re-run**) inside `buildLlmMessages` only — the session log keeps the full output. Aging is **batch-frozen** (the boundary advances only in `freezeBatch` steps; no per-turn rewrite at the recency edge — a mid-history rewrite would burn the prefix cache) and **write-once** (pointer bytes are stable; the plan is computed over the full history, never re-derived from a trimmed view). The current run and the newest `rawWindow` results stay verbatim; **error results are never degraded** (error traceability first); a body is only degraded when the pointer is strictly smaller. Config: `contextEngine.historyAging`
 - **Engine hints are not user speech**: reliability injections (wrap-up / planning steer / noop-hint / truncate notice) are tagged `metadata.source: 'engineHint'` (in `ENGINE_CARRIER_SOURCES`). Turn-boundary detection (`isMidTurn`) and B2’s last-genuine-user scan ignore them — never treat `[System: …]` text as a new user turn

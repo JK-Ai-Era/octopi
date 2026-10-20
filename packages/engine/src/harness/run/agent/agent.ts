@@ -86,6 +86,7 @@ export class Agent {
   private _sessionCompactStates = new Map<string, {
     summary?: string;
     lastProactiveMessageCount?: number;
+    lastProactiveCoverEnd?: number;
     lastProactiveTokens?: number;
   }>();
   private _onAfterTurn?: (usage?: import('@octopi-agent/core/types/turn.js').TokenUsage, turn?: Message[]) => Promise<void>;
@@ -211,7 +212,12 @@ export class Agent {
   setSessionCompactState(
     sessionId: string,
     agentId: string,
-    state: { summary?: string; lastProactiveMessageCount?: number; lastProactiveTokens?: number } | undefined,
+    state: {
+      summary?: string;
+      lastProactiveMessageCount?: number;
+      lastProactiveCoverEnd?: number;
+      lastProactiveTokens?: number;
+    } | undefined,
   ): void {
     const key = compactStateKey(sessionId, agentId);
     if (state && (state.summary || state.lastProactiveMessageCount != null)) {
@@ -229,7 +235,12 @@ export class Agent {
    * @returns 快照；无则 undefined
    */
   getSessionCompactState(sessionId: string, agentId: string):
-    | { summary?: string; lastProactiveMessageCount?: number; lastProactiveTokens?: number }
+    | {
+        summary?: string;
+        lastProactiveMessageCount?: number;
+        lastProactiveCoverEnd?: number;
+        lastProactiveTokens?: number;
+      }
     | undefined {
     return this._sessionCompactStates.get(compactStateKey(sessionId, agentId));
   }

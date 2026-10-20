@@ -1732,6 +1732,7 @@ export class Gateway {
         tokensBefore: number;
         tokensAfter?: number;
         summary?: string;
+        coveredMessageCount?: number;
       }>;
     };
     const structural = engine as StructuralEngine | undefined;

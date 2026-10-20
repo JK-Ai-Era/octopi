@@ -322,7 +322,7 @@ describe('AgentBuilder + SessionAwareRunner 热更新', () => {
     })) {
       // drain
     }
-    // E8：调用方 injectedContext 进快照消息，不进 system
+    // E8：调用方 injectedContext 进 turn_context 快照，不进 system
     expect(String(captured[0]?.messages.find((m) => m.role === 'system')?.content ?? '')).not.toContain('INJECT-A');
     expect(
       String(
@@ -345,13 +345,14 @@ describe('AgentBuilder + SessionAwareRunner 热更新', () => {
     }
 
     const sys = String(captured[1]?.messages.find((m) => m.role === 'system')?.content ?? '');
-    // 失败回退仍用上次干净 persona；INJECT-B 在本轮快照，旧快照（INJECT-A）不回放
+    // 失败回退仍用上次干净 persona；INJECT-B 在本轮 turn_context，旧 INJECT-A 全回放在历史 turn_context
     expect(sys).toContain('# Soul v1');
     expect(sys).not.toContain('INJECT-B');
     expect(sys).not.toContain('INJECT-A');
     const req2Text = captured[1]?.messages.map((m) => String(m.content ?? '')).join('\n') ?? '';
     expect(req2Text).toContain('INJECT-B');
-    expect(req2Text).not.toContain('INJECT-A');
+    // 全回放：旧 turn_context 保留（append-only），但不得进入 system
+    expect(req2Text).toContain('INJECT-A');
 
     // 可观测性：warn + 轻量事件
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('persona resolve failed'));

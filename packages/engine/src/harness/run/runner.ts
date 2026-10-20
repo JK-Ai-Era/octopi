@@ -26,7 +26,17 @@ import type { ReliabilityHarness } from './reliability/run-agent.js';
 import { createSessionStateMachine } from '../session/state-machine.js';
 import type { StateMachine } from '@octopi-agent/core/primitives/state-machine.js';
 import { HeuristicTokenEstimator } from '../context/index.js';
-import { extractLayerQuery } from '../context/layer-types.js';
+import { extractLayerQuery, isEngineCarrierSource } from '../context/layer-types.js';
+import {
+  formatTurnEndContent,
+  formatTurnId,
+  formatTurnStartContent,
+  formatTurnContextXml,
+  isTurnEndContent,
+  isTurnStartContent,
+  joinSlotXml,
+  parseTurnIdFromContent,
+} from '../context/turn-envelope.js';
 import { splitRuntimeEnvironmentInjection, withRuntimeEnvironmentInjection } from '../context/runtime-datetime.js';
 import { loadRootInstructionsInjection } from '../context/root-instructions.js';
 import type { SessionTaskService } from '../session/tasks/service.js';
@@ -686,6 +696,8 @@ export class SessionAwareRunner {
     let observerEndReason: string | undefined;
     let observerErrorMsg: string | undefined;
     let hasTurnEnd = false;
+    /** 本 user turn 内第 N 次 LLM 调用（0-based；cache 观测） */
+    let llmCallIndexInUserTurn = 0;
 
     try {
       // 3. 加载或创建 session
@@ -755,7 +767,13 @@ export class SessionAwareRunner {
       // 4b. 绑定会话任务服务（工具与注入共用同一内存对象）
       this.config.sessionTaskService?.attachSession(session);
 
-      // 5. 追加用户消息
+      // 4c. turn 信封：补闭上一 turn；分配本 turn id（t1,t2,… 会话内单调）
+      this.ensurePreviousTurnClosed(session);
+      const turnSeq = Number(session.metadata?.turnSeq ?? 0) + 1;
+      const currentTurnId = formatTurnId(turnSeq);
+      session.metadata = { ...session.metadata, turnSeq };
+
+      // 5. 追加用户消息（正文稍后一次定形为 <turn_start>）
       session.messages.push(input);
       session.meta.lastInteractionAt = Date.now();
       session.meta.updatedAt = Date.now();
@@ -1223,23 +1241,16 @@ export class SessionAwareRunner {
         };
       }
       {
-        // turn 级：先剥历史 grounding，再视本轮 mode 决定是否插入
-        // mode=none 时不保留上轮 grounding（避免陈旧内容长期回放）
+        // turn 信封：槽位拼进本 turn user 消息（一次定形），全回放、不再剥插槽。
         // 上下文租约：detach 点之前的历史不进默认 LLM 窗口（Discourse 仍在 session.messages）
         const detachIdx = Math.min(
           Math.max(session.contextDetachIndex ?? 0, 0),
           session.messages.length,
         );
         contextLeasePrefix = session.messages.slice(0, detachIdx);
-        const baseMsgs = session.messages
-          .slice(detachIdx)
-          .filter(
-            (m) =>
-              m.metadata?.source !== 'knowledgeGrounding' &&
-              m.metadata?.source !== 'sessionAttachment',
-          );
+        const baseMsgs = session.messages.slice(detachIdx);
 
-        // OP-15：会话附件资料块（与 Knowledge grounding 同槽位气质，source 不同）
+        // OP-15：会话附件资料块（进 turn_context）
         let attachmentText: string | null = null;
         if (this.config.sessionsDir) {
           try {
@@ -1252,7 +1263,7 @@ export class SessionAwareRunner {
             const attachSvc = new SessionAttachmentService({
               sessionsDir: this.config.sessionsDir,
             });
-            const lastUser = [...session.messages].reverse().find((m) => m.role === 'user');
+            const lastUser = input;
             const attachIds = Array.isArray(lastUser?.metadata?.attachmentIds)
               ? (lastUser!.metadata!.attachmentIds as string[]).filter((x) => typeof x === 'string')
               : [];
@@ -1306,65 +1317,31 @@ export class SessionAwareRunner {
             );
           }
         }
-        if (attachmentText) {
-          const attachMsg: Message = {
-            role: 'user',
-            content: attachmentText,
-            timestamp: Date.now(),
-            metadata: { source: 'sessionAttachment' },
-          };
-          let insertAt = baseMsgs.length;
-          for (let i = baseMsgs.length - 1; i >= 0; i--) {
-            if (baseMsgs[i].role === 'user') {
-              insertAt = i;
-              break;
-            }
-          }
-          baseMsgs.splice(insertAt, 0, attachMsg);
-        }
-        // E8：本轮易变快照（source='runtimeSnapshot'）——与 attach/grounding 同槽位，
-        // 插在最后一条 user 消息之前。日志保留（审计对齐托管 system 先例）；
-        // buildLlmMessages 只回放最近一条（旧快照不回放，防陈旧择取固化）。
-        if (runtimeSnapshotText) {
-          const snapshotMsg: Message = {
-            role: 'user',
-            content: `<runtime_snapshot>\n${runtimeSnapshotText}\n</runtime_snapshot>`,
-            timestamp: Date.now(),
-            metadata: { source: 'runtimeSnapshot' },
-          };
-          let insertAt = baseMsgs.length;
-          for (let i = baseMsgs.length - 1; i >= 0; i--) {
-            if (baseMsgs[i].role === 'user') {
-              insertAt = i;
-              break;
-            }
-          }
-          baseMsgs.splice(insertAt, 0, snapshotMsg);
-        }
-        if (pendingGrounding && pendingGrounding.mode !== 'none' && pendingGrounding.text?.trim()) {
-          const groundingMsg: Message = {
-            role: 'user',
-            content: pendingGrounding.text,
-            timestamp: Date.now(),
-            metadata: {
-              source: 'knowledgeGrounding',
-              mode: pendingGrounding.mode,
-              query: pendingGrounding.query,
-              coverage: pendingGrounding.coverage,
-            },
-          };
-          let insertAt = baseMsgs.length;
-          for (let i = baseMsgs.length - 1; i >= 0; i--) {
-            if (baseMsgs[i].role === 'user') {
-              insertAt = i;
-              break;
-            }
-          }
-          baseMsgs.splice(insertAt, 0, groundingMsg);
-        }
-        // 视图（baseMsgs = detach 切片 + 剥旧插槽 + 本轮插槽）必须**无条件**成为 LLM 窗口：
-        // 旧判据「长度相等即视图未变」在「过滤条数 == 插入条数」时误判为未变，
-        // 整张视图被丢弃——快照/grounding 插槽消失、被过滤的旧插槽复活（E8 快照丢失即此因）。
+
+        const slotsXml = joinSlotXml([
+          {
+            tag: 'runtime_snapshot',
+            body: runtimeSnapshotText ? runtimeSnapshotText : '',
+          },
+          {
+            tag: 'session_attachments',
+            body: attachmentText ?? '',
+          },
+          {
+            tag: 'knowledge_grounding',
+            body:
+              pendingGrounding && pendingGrounding.mode !== 'none' && pendingGrounding.text?.trim()
+                ? pendingGrounding.text
+                : '',
+          },
+        ]);
+        const turnContextXml = formatTurnContextXml({
+          turnId: currentTurnId,
+          slotsXml,
+        });
+        this.bakeTurnStart(input, currentTurnId, turnContextXml);
+
+        // 视图 = detach 切片（含已定形 user）；全回放，无条件成为 LLM 窗口
         runContext.messages = baseMsgs;
         if (runScope.toolRuntime) {
           runScope.toolRuntime.messages = baseMsgs;
@@ -1468,6 +1445,24 @@ export class SessionAwareRunner {
               estimator.estimateMessages(session.messages);
             (adapted.data as Record<string, unknown>).contextTokens = contextTokens;
             (adapted.data as Record<string, unknown>).contextWindow = effectiveRunConfig.contextWindow;
+            // cache 观测：user 轮首调用 vs 同轮后续（跨轮前缀是否命中）
+            if (lastUsage) {
+              const cached = lastUsage.inputCachedTokens ?? 0;
+              const uncached = lastUsage.inputUncachedTokens ?? 0;
+              const cacheWrite = lastUsage.inputCacheWriteTokens ?? 0;
+              const prompt = lastUsage.inputReportedTokens ?? cached + uncached + cacheWrite;
+              const ratio = prompt > 0 ? cached / prompt : 0;
+              (adapted.data as Record<string, unknown>).userTurnId = currentTurnId;
+              (adapted.data as Record<string, unknown>).llmCallIndexInUserTurn = llmCallIndexInUserTurn;
+              (adapted.data as Record<string, unknown>).cachedInputTokens = cached;
+              (adapted.data as Record<string, unknown>).uncachedInputTokens = uncached;
+              (adapted.data as Record<string, unknown>).cacheHitRatio = ratio;
+              console.log(
+                `[cache] session=${sessionId} turn=${currentTurnId} call=${llmCallIndexInUserTurn}` +
+                  ` cached=${cached} uncached=${uncached} write=${cacheWrite} prompt=${prompt}` +
+                  ` ratio=${(ratio * 100).toFixed(1)}% cacheAware=${lastUsage.cacheAware}`,
+              );
+            }
             // 记账供收尾持久化：UI 重开会话恢复显示（口径 = 实际 prompt / 全量估算）
             lastContextTokens = contextTokens;
             lastContextWindow = effectiveRunConfig.contextWindow;
@@ -1504,6 +1499,7 @@ export class SessionAwareRunner {
           if (loopEvent.usage) {
             lastUsage = loopEvent.usage;
           }
+          llmCallIndexInUserTurn += 1;
           const turnMessages = runContext.messages.slice(turnStartIndex);
           await this.agent.notifyAfterTurn(lastUsage, turnMessages);
           turnStartIndex = runContext.messages.length;
@@ -1532,16 +1528,15 @@ export class SessionAwareRunner {
         }
       }
       // 租约点之前的历史必须保留（I2 Discourse）；窗口内为 runContext.messages（含本轮新消息）
-      const keptPrefix = contextLeasePrefix.filter(
-        (m) =>
-          m.metadata?.source !== 'knowledgeGrounding' &&
-          m.metadata?.source !== 'sessionAttachment',
-      );
+      // 全回放：不再剥 grounding/attachment（历史中部删改会打穿前缀缓存）
+      const keptPrefix = contextLeasePrefix;
       session.messages = [...keptPrefix, ...runContext.messages];
       // contextDetachIndex 是 messages 下标：写回重排后必须对齐 keptPrefix 长度
       if (typeof session.contextDetachIndex === 'number') {
         session.contextDetachIndex = keptPrefix.length;
       }
+      // turn 闭标（write-once）
+      this.appendTurnEnd(session, currentTurnId);
 
       // 11. 引擎异常退出时的 session 一致性修复（须在 Observer final 采样之前）
       if (!hasTurnEnd) {
@@ -1596,12 +1591,8 @@ export class SessionAwareRunner {
         let userIdx = -1;
         for (let i = session.messages.length - 1; i >= 0; i--) {
           const m = session.messages[i];
-          if (
-            m.role === 'user' &&
-            m.metadata?.source !== 'sessionAttachment' &&
-            m.metadata?.source !== 'runtimeSnapshot' &&
-            m.metadata?.source !== 'knowledgeGrounding'
-          ) {
+          // 与 isMidTurn / extractLayerQuery 同口径：引擎载体（含 turnEnd）不是真实 user
+          if (m.role === 'user' && !isEngineCarrierSource(m.metadata?.source)) {
             userIdx = i;
             break;
           }
@@ -1774,6 +1765,8 @@ export class SessionAwareRunner {
         tokensBefore: number;
         tokensAfter?: number;
         summary?: string;
+        /** 摘要覆盖终点（tailStart，不含） */
+        coveredMessageCount?: number;
       }>;
       summarize?: (
         messages: import('@octopi-agent/core/interfaces/model-provider.js').LLMMessage[],
@@ -1809,10 +1802,11 @@ export class SessionAwareRunner {
         compactTargetTokens: options.compactTargetTokens,
       });
 
-      if (result.ok && result.summary) {
+      if (result.ok && result.summary && result.compacted) {
         const snap: ContextCompactSnapshot = {
           summary: result.summary,
           lastProactiveMessageCount: session.messages.length,
+          lastProactiveCoverEnd: result.coveredMessageCount,
           lastProactiveTokens: result.tokensAfter,
         };
         this.agent.setSessionCompactState(sessionId, agentId, snap);
@@ -1884,6 +1878,83 @@ export class SessionAwareRunner {
       metadata: {},
       tasks: [],
     };
+  }
+
+  /**
+   * 补闭上一 turn（崩溃/中止后无 turn_end 时 write-once 追加）。
+   * 新 turn 禁止在 open 未闭时叠加。
+   */
+  private ensurePreviousTurnClosed(session: SessionData): void {
+    let lastStartId: string | undefined;
+    let lastStartIdx = -1;
+    for (let i = session.messages.length - 1; i >= 0; i--) {
+      const m = session.messages[i]!;
+      if (isTurnStartContent(m.content)) {
+        lastStartId = parseTurnIdFromContent(m.content);
+        lastStartIdx = i;
+        break;
+      }
+    }
+    if (!lastStartId) return;
+    for (let i = lastStartIdx + 1; i < session.messages.length; i++) {
+      const m = session.messages[i]!;
+      if (m.metadata?.source !== 'turnEnd') continue;
+      if (parseTurnIdFromContent(m.content) === lastStartId) return;
+    }
+    session.messages.push({
+      role: 'user',
+      content: formatTurnEndContent(lastStartId),
+      timestamp: Date.now(),
+      metadata: { source: 'turnEnd', turnId: lastStartId },
+    });
+  }
+
+  /**
+   * user 消息一次定形为 `<turn_start>…</turn_start>`（write-once）。
+   * @param userMessage - 本 turn 用户消息对象（session.messages 中的同一引用）
+   * @param turnId - 会话内单调 turn id
+   * @param turnContextXml - `<turn_context>…</turn_context>` 整段
+   * @throws 若已定形（禁止二次改写）
+   */
+  private bakeTurnStart(userMessage: Message, turnId: string, turnContextXml: string): void {
+    const content = userMessage.content;
+    const text = typeof content === 'string' ? content : getTextContent(content);
+    if (isTurnStartContent(text)) {
+      throw new Error(`turn_start already baked (turnId=${turnId}); user message is write-once`);
+    }
+    const xml = formatTurnStartContent({
+      turnId,
+      at: new Date().toISOString(),
+      turnContextXml,
+      userText: text,
+    });
+    if (typeof content === 'string' || content == null) {
+      userMessage.content = xml;
+    } else if (Array.isArray(content)) {
+      userMessage.content = [
+        { type: 'text', text: xml },
+        ...content.filter((b) => b.type !== 'text'),
+      ] as Message['content'];
+    }
+    userMessage.metadata = { ...userMessage.metadata, turnId };
+  }
+
+  /** 追加 turn 闭标（write-once；同 id 重复 → throw） */
+  private appendTurnEnd(session: SessionData, turnId: string): void {
+    const exists = session.messages.some(
+      (m) =>
+        m.metadata?.source === 'turnEnd' &&
+        parseTurnIdFromContent(m.content) === turnId,
+    );
+    if (exists) {
+      throw new Error(`turn_end already exists (turnId=${turnId})`);
+    }
+    session.messages.push({
+      role: 'user',
+      content: formatTurnEndContent(turnId),
+      timestamp: Date.now(),
+      metadata: { source: 'turnEnd', turnId },
+    });
   }
 
   /** 旧路径：persona + injectedContext 字符串拼接；结果返回给 runContext，不写共享 Agent */

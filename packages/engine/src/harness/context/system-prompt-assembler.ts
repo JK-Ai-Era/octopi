@@ -71,6 +71,28 @@ export interface SystemPromptAssembleOutput {
 
 const DEFAULT_SYSTEM_BUDGET_RATIO = 0.22;
 
+/**
+ * Turn 信封阅读规则（缓存稳定固定块；永远拼进 system）。
+ * 与 `turn-envelope.ts` 语法一一对应。
+ */
+export const TURN_SEMANTICS_MD = `## Turns (authoritative)
+
+- A **turn** is one \`<turn_start id="tN">\` user message plus every assistant/tool
+  message up to its matching \`<turn_end id="tN"/>\`.
+- \`<turn_context>\` is **turn-scoped condition** (time, tasks, retrieval picks).
+  It is NOT global memory. It expires outside that turn.
+- Older turns stay in the transcript frozen. For current work:
+  use the latest \`<turn_context>\`; older picks are historical snapshots only;
+  the transcript wins over any stale pick.
+- Never edit or delete \`<turn_start>\` / \`<turn_end>\` / past tool results.
+- If a tool needs old ephemeral detail, re-read the source (session log / files);
+  do not assume old picks are still true.`;
+
+function withTurnRules(systemPrompt: string): string {
+  const body = systemPrompt.trim();
+  return body ? `${TURN_SEMANTICS_MD}\n\n---\n\n${body}` : TURN_SEMANTICS_MD;
+}
+
 export function createDefaultSystemPromptAssembler(options?: {
   assembler?: ContextAssembler;
   assemblerConfig?: DefaultContextAssemblerConfig;
@@ -162,7 +184,7 @@ export function createDefaultSystemPromptAssembler(options?: {
       );
       const hasPreamble = Boolean(resolvedPreamble.trim());
       if (!hasPersona && !hasInjected && !hasSkill && !hasRetrieval && !hasPreamble) {
-        return { systemPrompt: '' };
+        return { systemPrompt: withTurnRules('') };
       }
 
       // contextWindow 未知且未配置 systemBudgetTokens：
@@ -286,7 +308,12 @@ export function createDefaultSystemPromptAssembler(options?: {
         };
       }
 
-      return { systemPrompt: result.systemPrompt, runtimeSnapshot, manifest, skippedBudget };
+      return {
+        systemPrompt: withTurnRules(result.systemPrompt),
+        runtimeSnapshot,
+        manifest,
+        skippedBudget,
+      };
     },
   };
 }

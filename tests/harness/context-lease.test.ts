@@ -90,6 +90,11 @@ function contents(messages: Message[]): string[] {
   return messages.map((m) => (typeof m.content === 'string' ? m.content : ''));
 }
 
+/** 含 turn_start 信封后，断言改为「任一条含子串」 */
+function anyIncludes(texts: string[], needle: string): boolean {
+  return texts.some((t) => t.includes(needle));
+}
+
 describe('context lease (idleExpiryMs opt-in)', () => {
   it('缺省关闭：闲置后续聊仍带全量历史进 LLM 窗口', async () => {
     const oldTs = Date.now() - 3 * 60 * 60 * 1000;
@@ -128,8 +133,8 @@ describe('context lease (idleExpiryMs opt-in)', () => {
 
     expect(sessions.get('s-full')?.contextDetachIndex ?? 0).toBe(0);
     const saved = sessions.get('s-full');
-    expect(contents(saved?.messages ?? [])).toContain('old');
-    expect(contents(saved?.messages ?? [])).toContain('hi');
+    expect(anyIncludes(contents(saved?.messages ?? []), 'old')).toBe(true);
+    expect(anyIncludes(contents(saved?.messages ?? []), 'hi')).toBe(true);
     // LLM 窗口含历史
     const window = llmWindows[0] ?? [];
     expect(window.some((c) => c.includes('old'))).toBe(true);
@@ -175,9 +180,9 @@ describe('context lease (idleExpiryMs opt-in)', () => {
     const saved = sessions.get('s-lease');
     // Discourse 保留全部
     const texts = contents(saved?.messages ?? []);
-    expect(texts).toContain('old-secret');
-    expect(texts).toContain('old-reply');
-    expect(texts).toContain('fresh');
+    expect(anyIncludes(texts, 'old-secret')).toBe(true);
+    expect(anyIncludes(texts, 'old-reply')).toBe(true);
+    expect(anyIncludes(texts, 'fresh')).toBe(true);
     // 租约点之后还有本轮产物
     expect(saved?.contextDetachIndex).toBe(2);
 
@@ -220,8 +225,8 @@ describe('context lease (idleExpiryMs opt-in)', () => {
 
     expect(sessions.get('s-recent')?.contextDetachIndex ?? 0).toBe(0);
     const texts = contents(sessions.get('s-recent')?.messages ?? []);
-    expect(texts).toContain('keep-me');
-    expect(texts).toContain('next');
+    expect(anyIncludes(texts, 'keep-me')).toBe(true);
+    expect(anyIncludes(texts, 'next')).toBe(true);
   });
 
   it('租约不触发 memory 硬收敛（无 session.lifecycle.updated→recent）', async () => {

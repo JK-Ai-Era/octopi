@@ -137,7 +137,7 @@ describe('createDefaultSystemPromptAssembler', () => {
     expect(r1.runtimeSnapshot).not.toBe(r2.runtimeSnapshot);
   });
 
-  it('空 persona 且无注入时产出空 system（constitution off）', async () => {
+  it('空 persona 且无注入时仍产出 Turn 总则（constitution off）', async () => {
     const asm = createDefaultSystemPromptAssembler({ constitution: { mode: 'off' } });
     const result = await asm.assemble({
       sessionId: 's1',
@@ -145,7 +145,8 @@ describe('createDefaultSystemPromptAssembler', () => {
       persona: '',
       contextWindow: 32000,
     });
-    expect(result.systemPrompt).toBe('');
+    expect(result.systemPrompt).toContain('## Turns (authoritative)');
+    expect(result.systemPrompt).not.toContain('<layer name="Persona">');
   });
 });
 

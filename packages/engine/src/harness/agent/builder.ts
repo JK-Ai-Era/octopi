@@ -1796,23 +1796,9 @@ export class AgentBuilder {
         contextWindow,
       };
 
-      // droppedSummary：并入已有 system，避免连续两条 system（严格网关）
-      const llmMessages = [...result.messages];
-      if (result.droppedSummary) {
-        const note = `[Context compacted] ${result.droppedSummary}`;
-        const sysIdx = llmMessages.findIndex((m) => m.role === 'system');
-        if (sysIdx >= 0) {
-          const sys = llmMessages[sysIdx]!;
-          const prev = typeof sys.content === 'string' ? sys.content : '';
-          llmMessages[sysIdx] = {
-            ...sys,
-            content: prev ? `${prev}\n\n${note}` : note,
-          };
-        } else {
-          llmMessages.unshift({ role: 'system', content: note });
-        }
-      }
-      return llmMessages;
+      // droppedSummary 不得进 system（动态注记打穿前缀缓存）。
+      // 本轮直接不投递；压缩语义由消息侧 contextSummary 承载。
+      return result.messages;
     });
     agent.setOnAfterTurn(async (usage, turn) => {
       const scope = getRunScope();

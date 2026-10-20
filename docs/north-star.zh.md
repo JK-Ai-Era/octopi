@@ -112,8 +112,10 @@ Scope 轴:
 
 **装配位置（缓存稳定前缀，E8）：** system prompt 只放**缓存稳定**片段。同一 session 跨 run 可能变化的片段
 ——Run 作用域快照（datetime、会话任务/指导）与 query 相关检索择取（Memory/Cognition/Wisdom）——
-装配在**本轮 content 尾部**（消息侧），绝不进 system prompt。理由：服务延迟与 token 计费都取决于前缀缓存命中；
-消息历史之前的任一易变块会使其后全部缓存失效。装配位置是类型×Scope 叉积上的**装配规则**，
+装入该 turn 用户消息（`<turn_start id>…</turn_start>`）内的 **turn 作用域 `<turn_context>`**，绝不进 system prompt。
+历史 **append-only / 全回放**：已关闭 turn 在请求中冻结（前缀逐字节稳定）；陈旧择取靠 turn 作用域 +「以新为准」隔离，
+**不靠删历史**。理由：服务延迟与 token 计费都取决于前缀缓存命中；消息历史之前的任一易变块、或历史中部的任一删除，
+都会使其后全部缓存失效。装配位置是类型×Scope 叉积上的**装配规则**，
 **不是**新层；八层类型轴（I4）不变。
 
 ---
@@ -142,7 +144,7 @@ Scope 轴:
 | **E5** | Loop 保持无状态；唯一生产路径：`Agent.run` / `runAgentWithReliability` + **per-run context**。 |
 | **E6** | 角色有效权限 = `L0 底线 ∩ 角色 max ∩ Agent maxSessionRights ∩ 绑定覆盖`；非法授予在 grant 时拒绝。 |
 | **E7** | 单进程是 v1 部署假设；跨进程必须实现 **Session Lease**，禁止假装内存锁全局有效。 |
-| **E8** | **易变上下文不得位于 system prompt 前缀。** system prompt 只含缓存稳定片段；每 run 的易变快照（Run 作用域 / query 相关择取）经消息尾部（content 侧）送达。装配必须保持请求前缀跨轮逐字节稳定，除非稳定源真的变了。可检验：易变输入变化时两次装配产出相同的 systemPrompt。 |
+| **E8** | **易变上下文不得位于 system prompt 前缀，且不得靠改写历史来「丢掉」它。** system prompt 只含缓存稳定片段；每 run 的易变快照（Run 作用域 / query 相关择取）位于 `<turn_start id>` 用户消息内的 turn 作用域 `<turn_context>`，并 **全回放**（append-only）。每个 user turn 由 `<turn_start id>` … 对应 `<turn_end id/>` 界定。陈旧择取靠 turn 作用域与「以新为准」约束，不靠历史中部删除。装配必须保持请求前缀跨轮逐字节稳定，除非稳定源真的变了。可检验：(1) 易变输入变化时两次装配产出相同的 systemPrompt；(2) 上一请求的消息字节是下一请求的真前缀（除尾部 turn 闭标）。 |
 
 ---
 
@@ -334,6 +336,7 @@ Agent & Substrate（跨 Run 持久）:
 
 | 日期 | 内容 |
 |------|------|
+| 2026-10-20 | **E8 扩展 — turn 信封 + 全回放**（`<turn_start id>` / `<turn_end id/>`，槽位在 turn 作用域 `<turn_context>` 内；历史 append-only）。取消 last-only 槽位回放与历史中部剥槽（每 user 轮打穿前缀）。陈旧择取由 ephemeral turn 作用域 + 以新为准约束，而非删除。另：压缩注记禁止拼进 system prompt（请求头动态文本烧掉全缓存）。 |
 | 2026-10-18 | **新增 E8 — 缓存稳定的装配位置**（易变块从 system prompt 移至消息尾部）。八层类型轴不变（I4）；这是*装配位置*规则，不是新层。动因：前缀缓存命中同时决定 TTFT 与成本（实测：缓存失效请求 34–134s vs 命中 3–5s；未命中输入 token 全价计费）。 |
 | 2026-09-27 | **英文版成为工作权威**；中文移至 `docs/north-star.zh.md`。对外文档一律英文权威 + `*.zh.md` 对译（变更须双语同步）。I1–I6 / E1–E7 未改。 |
 | 2026-09-26 | **Collaboration 升为正式产品域**（产品完整性必有；实现可 incomplete）；落地 `docs/domains.md` / `docs/domains.yaml`（10 产品域）。I1–I6 / E1–E7 未改。 |

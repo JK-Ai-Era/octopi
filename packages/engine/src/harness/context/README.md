@@ -57,6 +57,7 @@
 - token-estimator.ts / token-estimate-fns.ts / token-constants.ts — 估算（跨域经 `context/index.ts` 门面；浏览器可直连 token 模块）
 - knowledge/ — Knowledge Tier 0 catalog 契约（见 `arch/knowledge-layer.md`）
 - compact-key.ts — E4 compact 键 `(sessionId, agentId)`
+- turn-envelope.ts — turn 信封（`<turn_start>` / `<turn_end>` / `<turn_context>`；全回放 append-only）
 
 > 导出：`packages/engine/src/harness/context/index.ts` 与 `packages/engine/src/harness/index.ts`。
 > 七层内容组装以本目录 `ContextLayer` 契约为准；旧 `ContextIntelligence` 已删除。

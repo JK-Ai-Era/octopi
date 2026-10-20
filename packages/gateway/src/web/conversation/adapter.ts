@@ -13,6 +13,7 @@ import type {
   AgentEventEnvelope,
   MessageRecord,
 } from '../sdk/client.js';
+import { extractUserMessageText } from '@octopi-agent/engine/harness/context/turn-envelope.js';
 
 import type {
   ConversationItem,
@@ -67,11 +68,22 @@ function isHiddenSystemHistory(msg: MessageRecord): boolean {
   if (meta?.source === 'sessionAttachment') return true;
   // E8 易变快照（datetime/任务/检索择取）：只进 LLM 上下文，不进聊天回放
   if (meta?.source === 'runtimeSnapshot') return true;
+  // turn 闭标：机器边界，不进聊天气泡
+  if (meta?.source === 'turnEnd') return true;
   if (msg.role !== 'system') return false;
   if (meta?.source === 'systemPrompt') return true;
   const text = extractText(msg.content);
   // 无 metadata 的历史人格整段注入
   return text.length > 200 && /AGENTS\.md|Session Startup|Operating Instructions|Agent Persona/i.test(text);
+}
+
+/** turn_start 信封：UI 只显示用户原文（与 engine turn-envelope 同源） */
+function unwrapTurnStartUserText(content: unknown): string {
+  return extractUserMessageText(
+    typeof content === 'string' || Array.isArray(content)
+      ? (content as never)
+      : extractText(content),
+  );
 }
 
 // ──────────────────────────────────────
@@ -652,7 +664,7 @@ export class ConversationAdapter {
             sessionId,
             source: 'history',
             sourceIndex: (msg as { index?: number }).index,
-            content: extractText(msg.content),
+            content: unwrapTurnStartUserText(msg.content),
           };
           items.push(item);
           break;

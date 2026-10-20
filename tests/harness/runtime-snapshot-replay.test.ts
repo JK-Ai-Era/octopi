@@ -1,11 +1,10 @@
 /**
- * E8 快照回放语义与检索 query 净化（评审补充回归）
+ * Turn 全回放 + 检索 query 净化
  *
- * 锚定三条核心规则：
- * 1. buildLlmMessages 只回放最近一条 runtimeSnapshot（旧快照不进请求，防陈旧择取固化）
- * 2. semanticHistory 排除引擎载体（快照/grounding/托管 system/contextSummary 不进 previousSummary）
- * 3. 检索 query（extractLayerQuery / resolveGroundingQuery）只采信真实用户文本，
- *    不把上轮快照（含旧记忆择取）当用户发言——防择取自我强化漂移
+ * 锚定规则：
+ * 1. buildLlmMessages **全回放**（append-only）：旧快照/插槽一律进请求，保前缀缓存
+ * 2. semanticHistory 排除引擎载体 / 剥 turn_context（不进 previousSummary）
+ * 3. 检索 query 只采信 `<user_message>` / 真实用户文本
  */
 
 import { describe, it, expect } from 'vitest';
@@ -26,8 +25,8 @@ const snap = (text: string): Message =>
     metadata: { source: 'runtimeSnapshot' },
   });
 
-describe('runtimeSnapshot 回放语义（E8）', () => {
-  it('buildLlmMessages 只回放最近一条快照（旧快照不进请求）', async () => {
+describe('runtimeSnapshot 全回放（E8 + 全回放）', () => {
+  it('buildLlmMessages 全回放：旧快照也进请求（append-only）', async () => {
     const engine = new DefaultContextEngine();
     const messages = [
       msg('user', 'q1'),
@@ -45,7 +44,9 @@ describe('runtimeSnapshot 回放语义（E8）', () => {
     });
     const text = result.messages.map((m) => String(m.content ?? '')).join('\n');
     expect(text).toContain('FRESH-PICKS');
-    expect(text).not.toContain('OLD-PICKS');
+    expect(text).toContain('OLD-PICKS');
+    // 托管 system 不重复
+    expect(text).not.toContain('hosted-system');
   });
 
   it('semanticHistory 排除快照等引擎载体（不进 previousSummary）', () => {
@@ -97,8 +98,8 @@ describe('检索 query 净化（防择取自我强化）', () => {
   });
 });
 
-describe('E8 快照必须进入 LLM 窗口（视图替换回归）', () => {
-  it('剥旧插槽与新快照计数相等时，快照仍进请求（旧「长度相等」判据回归）', async () => {
+describe('全回放必须进入 LLM 窗口（视图替换回归）', () => {
+  it('旧插槽与本轮 turn_start 一并进请求（append-only，无剥除）', async () => {
     const captured: LLMRequest[] = [];
     const provider: ModelProvider = {
       name: 'mock',
@@ -122,9 +123,6 @@ describe('E8 快照必须进入 LLM 窗口（视图替换回归）', () => {
       },
     };
     const store = new InMemorySessionStore();
-    // 预置 1 条旧 knowledgeGrounding 插槽：本轮剥 1 条 + 插 1 条快照 → 长度相等，
-    // 旧判据（baseMsgs.length !== session.messages.length）会误判「视图未变」而丢弃整张视图
-    // ——快照消失、被过滤的旧插槽复活。锚定无条件视图替换的根因修复。
     await store.save('s1', {
       id: 's1',
       agentId: 'a',
@@ -164,9 +162,12 @@ describe('E8 快照必须进入 LLM 窗口（视图替换回归）', () => {
     const reqText = (captured[0]?.messages ?? [])
       .map((m) => String((m as { content?: unknown }).content ?? ''))
       .join('\n');
-    expect(reqText).toContain('<runtime_snapshot>');
+    expect(reqText).toContain('<turn_start');
     expect(reqText).toContain('Current datetime:');
-    // 旧插槽被过滤后不得复活（视图丢弃时它会随 session.messages 原样进请求）
-    expect(reqText).not.toContain('OLD-GROUND-TEXT');
+    expect(reqText).toContain('<user_message>');
+    // 全回放：旧插槽不得被剥除（剥除 = 历史中部改写 = 打穿前缀缓存）
+    expect(reqText).toContain('OLD-GROUND-TEXT');
+    expect(reqText).toContain('q1');
+    expect(reqText).toContain('q2');
   });
 });

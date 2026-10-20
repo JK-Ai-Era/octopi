@@ -28,6 +28,21 @@ export type {
 } from './types.js';
 export { DefaultContextEngine } from './default-context-engine.js';
 export type { DefaultContextEngineConfig } from './default-context-engine.js';
+export {
+  formatTurnId,
+  formatTurnStartContent,
+  formatTurnEndContent,
+  formatTurnContextXml,
+  extractUserMessageText,
+  stripTurnContextXml,
+  isTurnStartContent,
+  isTurnEndContent,
+  parseTurnIdFromContent,
+  joinSlotXml,
+  unwrapUserText,
+  messageText,
+  escapeUserMessageText,
+} from './turn-envelope.js';
 
 // ── Token 估算（跨域门面；浏览器侧可直连 token-estimator / token-constants） ──
 export { HeuristicTokenEstimator, estimateTextTokens, estimateLLMMessages } from './token-estimator.js';

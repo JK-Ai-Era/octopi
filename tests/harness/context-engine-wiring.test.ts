@@ -53,12 +53,15 @@ describe('ContextEngine wiring', () => {
     expect(seen).toEqual(['s1', 's2']);
   });
 
-  it('droppedSummary 注入 system 提示', async () => {
+  it('droppedSummary 不注入 system（前缀缓存：动态注记禁入 system）', async () => {
     const spyEngine: ContextEngine = {
       info: { id: 'spy', name: 'spy' },
       async assemble(): Promise<AssembleResult> {
         return {
-          messages: [{ role: 'user', content: 'hi' }],
+          messages: [
+            { role: 'system', content: 'sys' },
+            { role: 'user', content: 'hi' },
+          ],
           estimatedTokens: 10,
           systemPrompt: 'sys',
           droppedSummary: '丢掉了旧工具输出',
@@ -69,6 +72,7 @@ describe('ContextEngine wiring', () => {
     const { agent } = await builder.buildAgent();
     const llm = await agent.config.convertToLlm!([msg('x')]);
     expect(llm[0]?.role).toBe('system');
-    expect(String((llm[0] as { content?: string }).content)).toContain('丢掉了旧工具输出');
+    expect(String((llm[0] as { content?: string }).content)).not.toContain('丢掉了旧工具输出');
+    expect(String((llm[0] as { content?: string }).content)).toBe('sys');
   });
 });

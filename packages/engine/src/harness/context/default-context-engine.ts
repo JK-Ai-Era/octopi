@@ -53,6 +53,10 @@ import { SmartRouter } from './smart-router.js';
 import type { SmartRouterConfig } from './smart-router.js';
 import { compactStateKey } from './compact-key.js';
 import { isEngineCarrierSource } from './layer-types.js';
+import {
+  extractUserMessageText,
+  isTurnStartContent,
+} from './turn-envelope.js';
 import { createCompactEngine } from './capabilities/compact/index.js';
 import type { CompactEngine } from './capabilities/compact/index.js';
 
@@ -118,8 +122,16 @@ interface CompactState {
   lastUsageMessageCount?: number;
   /** 估算校准比率 = actual / estimated（用于修正后续估算） */
   calibrationRatio?: number;
-  /** 上次主动压缩覆盖到的全量消息条数（语义摘要或机械降级均推进；用于判断是否需要再压缩） */
+  /**
+   * 上次主动压缩时的全量条数（再压缩增长门 newSinceLast）。
+   * 摘要覆盖终点见 lastProactiveCoverEnd。
+   */
   lastProactiveMessageCount?: number;
+  /**
+   * 摘要覆盖终点（下标，不含）= tailStart。
+   * sticky 增量起点；若写成 messages.length 会把 tail 误算进覆盖，滑出后丢消息 + 每轮 bust。
+   */
+  lastProactiveCoverEnd?: number;
   /** 上次主动压缩后的视图 token 估算 */
   lastProactiveTokens?: number;
   /** 上次真正发起 LLM 摘要调用的时间戳（仅 LLM 路径推进；用于冷却） */
@@ -243,6 +255,8 @@ export class DefaultContextEngine implements ContextEngine {
             previousSummary: restored.summary ?? existing?.previousSummary,
             lastProactiveMessageCount:
               restored.lastProactiveMessageCount ?? existing?.lastProactiveMessageCount,
+            lastProactiveCoverEnd:
+              restored.lastProactiveCoverEnd ?? existing?.lastProactiveCoverEnd,
             lastProactiveTokens: restored.lastProactiveTokens ?? existing?.lastProactiveTokens,
           });
         }
@@ -426,13 +440,20 @@ export class DefaultContextEngine implements ContextEngine {
       droppedSummary = 'Context compact failed; fell back to truncation';
     }
 
-    // 6. 重组：head + compressed overflow + tail
-    //    kept = head + (部分 middle) + tail，tail 和 kept 有重叠
-    //    head = kept 中去掉 tail 的部分（包含 head + 部分 middle）
-    const head = selection.kept.length > selection.tail.length
-      ? selection.kept.slice(0, selection.kept.length - selection.tail.length)
-      : [];
-    const reassembled = [...head, ...compressedOverflow, ...selection.tail];
+    // 6. 重组（严格时间序）：protectHead → 压缩旧 middle → 未压新 middle → tail
+    //    kept = [protectHead, selectedMiddle, tail]；overflow = 较旧 middle。
+    //    禁止把 compressedOverflow 插在 selectedMiddle 之后（乱序会伤推理且每轮边界漂移打穿前缀）。
+    const tailLen = selection.tail.length;
+    const keptBody = selection.kept.slice(0, Math.max(0, selection.kept.length - tailLen));
+    const headCount = Math.min(this.config.protectFirstN, workingMessages.length);
+    const protectHead = keptBody.slice(0, Math.min(headCount, keptBody.length));
+    const selectedMiddle = keptBody.slice(protectHead.length);
+    const reassembled = [
+      ...protectHead,
+      ...compressedOverflow,
+      ...selectedMiddle,
+      ...selection.tail,
+    ];
 
     // 7. 更新状态
     const compressedTokens = estimator.estimateMessages(reassembled);
@@ -481,6 +502,7 @@ export class DefaultContextEngine implements ContextEngine {
     return {
       summary: state?.previousSummary,
       lastProactiveMessageCount: state?.lastProactiveMessageCount,
+      lastProactiveCoverEnd: state?.lastProactiveCoverEnd,
       lastProactiveTokens: state?.lastProactiveTokens,
     };
   }
@@ -556,8 +578,8 @@ export class DefaultContextEngine implements ContextEngine {
           timestamp: Date.now(),
           metadata: { source: 'contextSummary' as const },
         };
-        // 摘要覆盖到 lastProactiveMessageCount；之后的消息是增量，必须保留
-        const coverUpTo = state.lastProactiveMessageCount ?? 0;
+        // 摘要覆盖到 lastProactiveCoverEnd（tailStart）；之后的消息是增量，必须保留
+        const coverUpTo = state.lastProactiveCoverEnd ?? 0;
         const sinceIdx = Math.max(coverUpTo, headEnd);
         const sinceCompact = this.semanticHistory(messages.slice(sinceIdx, tailStart));
         let extra: Message[] = sinceCompact;
@@ -757,7 +779,9 @@ export class DefaultContextEngine implements ContextEngine {
       ...state,
       previousSummary: actualSummary,
       lastEstimatedTokens: reducedTokens,
+      // 增长门用全量条数；覆盖终点单独记 tailStart（tail 不在摘要内）
       lastProactiveMessageCount: messages.length,
+      lastProactiveCoverEnd: tailStart,
       lastProactiveTokens: reducedTokens,
       lastProactiveFullTokens: currentTokens,
       // 本轮（requireSummary）真正发起过 LLM 摘要调用（成功或失败均算发起），
@@ -899,16 +923,25 @@ export class DefaultContextEngine implements ContextEngine {
   }
 
   /**
-   * 压缩/摘要的语义输入：丢掉托管 system 与 knowledgeGrounding / runtimeSnapshot
-   * （grounding 与易变快照每轮现算，不进 previousSummary——防陈旧内容固化进摘要）
+   * 压缩/摘要的语义输入：丢掉托管 system 与 turn 信封元数据
+   * （turn_context picks 不进 previousSummary——防陈旧择取固化进摘要）；
+   * turn_start 只保留 <user_message> 正文。
    */
   private semanticHistory(messages: Message[]): Message[] {
-    return messages.filter((m) => {
-      if (m.role === 'system' && m.metadata?.source === 'systemPrompt') return false;
-      if (m.metadata?.source === 'knowledgeGrounding') return false;
-      if (m.metadata?.source === 'runtimeSnapshot') return false;
-      return true;
-    });
+    const out: Message[] = [];
+    for (const m of messages) {
+      if (m.role === 'system' && m.metadata?.source === 'systemPrompt') continue;
+      if (m.metadata?.source === 'turnEnd') continue;
+      if (m.metadata?.source === 'knowledgeGrounding') continue;
+      if (m.metadata?.source === 'runtimeSnapshot') continue;
+      if (m.metadata?.source === 'sessionAttachment') continue;
+      if (isTurnStartContent(m.content)) {
+        out.push({ ...m, content: extractUserMessageText(m.content) });
+        continue;
+      }
+      out.push(m);
+    }
+    return out;
   }
 
   /**
@@ -972,7 +1005,13 @@ export class DefaultContextEngine implements ContextEngine {
     summarize?: SummarizeFunction;
     estimator: TokenEstimator;
     compactTargetTokens?: number;
-  }): Promise<{ summary?: string; compacted: boolean; tokensBefore: number; tokensAfter: number }> {
+  }): Promise<{
+    summary?: string;
+    compacted: boolean;
+    tokensBefore: number;
+    tokensAfter: number;
+    coveredMessageCount?: number;
+  }> {
     const { sessionId, messages, summarize, estimator } = params;
     const stateKey = params.stateKey ?? sessionId;
     const protectFirstN = this.config.protectFirstN;
@@ -986,14 +1025,21 @@ export class DefaultContextEngine implements ContextEngine {
         compacted: false,
         tokensBefore,
         tokensAfter: tokensBefore,
+        coveredMessageCount: state?.lastProactiveCoverEnd,
       };
     }
 
+    // 覆盖坐标与 applyProactiveCompact / rebuildStickyView 同一系：
+    // 原始 messages 上 alignViewSplit → middle 语义历史 → 摘要；coverEnd = tailStart。
+    // 禁止对 semanticHistory(全量) 切 protectHead/Tail（过滤数组下标 ≠ 原始下标，会丢消息）。
+    const { headEnd, tailStart } = this.alignViewSplit(messages, protectFirstN, protectLastN);
+    const middle = this.semanticHistory(messages.slice(headEnd, tailStart));
+
     const outcome = await this.config.compactEngine.compactMessages(
-      this.semanticHistory(messages),
+      middle,
       {
-        protectHead: protectFirstN,
-        protectTail: protectLastN,
+        protectHead: 0,
+        protectTail: 0,
         targetTokens: params.compactTargetTokens,
         mode: 'structure_only',
         previousSummary: state?.previousSummary,
@@ -1017,12 +1063,19 @@ export class DefaultContextEngine implements ContextEngine {
       ...state,
       previousSummary: summary,
       lastProactiveMessageCount: messages.length,
+      lastProactiveCoverEnd: tailStart,
       lastProactiveTokens: tokensAfter,
       lastEstimatedTokens: tokensAfter,
       lastProactiveLlmAt: summarize ? Date.now() : state?.lastProactiveLlmAt,
     });
 
-    return { summary, compacted: outcome.compacted, tokensBefore, tokensAfter };
+    return {
+      summary,
+      compacted: outcome.compacted,
+      tokensBefore,
+      tokensAfter,
+      coveredMessageCount: tailStart,
+    };
   }
 
   /**
@@ -1055,6 +1108,7 @@ export class DefaultContextEngine implements ContextEngine {
       tokensBefore: result.tokensBefore,
       tokensAfter: result.tokensAfter,
       summary: result.summary,
+      coveredMessageCount: result.coveredMessageCount,
     };
   }
 
@@ -1142,24 +1196,11 @@ export class DefaultContextEngine implements ContextEngine {
       result.push({ role: 'system', content: systemPrompt });
     }
 
-    // knowledgeGrounding / runtimeSnapshot：只保留最近一条（旧的不回放；每轮现算）
-    let lastGroundingIdx = -1;
-    let lastSnapshotIdx = -1;
-    for (let i = 0; i < messages.length; i++) {
-      const source = messages[i].metadata?.source;
-      if (source === 'knowledgeGrounding') lastGroundingIdx = i;
-      if (source === 'runtimeSnapshot') lastSnapshotIdx = i;
-    }
-
+    // 全回放（append-only）：turn_context / turn_end / 历史槽位一律保留，
+    // 否则历史中部删改会打穿 provider 前缀缓存。
     for (let i = 0; i < messages.length; i++) {
       const msg = messages[i];
       if (msg.role === 'system' && msg.metadata?.source === 'systemPrompt') {
-        continue;
-      }
-      if (msg.metadata?.source === 'knowledgeGrounding' && i !== lastGroundingIdx) {
-        continue;
-      }
-      if (msg.metadata?.source === 'runtimeSnapshot' && i !== lastSnapshotIdx) {
         continue;
       }
       result.push(...this.convertMessage(msg, aging));

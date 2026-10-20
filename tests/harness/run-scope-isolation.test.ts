@@ -119,7 +119,8 @@ describe('SessionAwareRunner concurrent sessions (I1)', () => {
               src === 'runtimeSnapshot' ||
               src === 'knowledgeGrounding' ||
               src === 'sessionAttachment' ||
-              src === 'contextSummary'
+              src === 'contextSummary' ||
+              src === 'turnEnd'
             );
           })
           .map((m) => String(m.content));
@@ -168,28 +169,28 @@ describe('SessionAwareRunner concurrent sessions (I1)', () => {
     const contentsA = (sessA!.messages ?? []).map((m) => String(m.content));
     const contentsB = (sessB!.messages ?? []).map((m) => String(m.content));
 
-    expect(contentsA).toContain('hello-A');
-    expect(contentsA).toContain('reply-for-sA');
-    expect(contentsA).not.toContain('hello-B');
-    expect(contentsA).not.toContain('reply-for-sB');
+    expect(contentsA.some((c) => c.includes('hello-A'))).toBe(true);
+    expect(contentsA.some((c) => c.includes('reply-for-sA'))).toBe(true);
+    expect(contentsA.some((c) => c.includes('hello-B'))).toBe(false);
+    expect(contentsA.some((c) => c.includes('reply-for-sB'))).toBe(false);
 
-    expect(contentsB).toContain('hello-B');
-    expect(contentsB).toContain('reply-for-sB');
-    expect(contentsB).not.toContain('hello-A');
-    expect(contentsB).not.toContain('reply-for-sA');
+    expect(contentsB.some((c) => c.includes('hello-B'))).toBe(true);
+    expect(contentsB.some((c) => c.includes('reply-for-sB'))).toBe(true);
+    expect(contentsB.some((c) => c.includes('hello-A'))).toBe(false);
+    expect(contentsB.some((c) => c.includes('reply-for-sA'))).toBe(false);
 
     // Run 不得共享 Agent 单例 context
     for (const rc of runContexts) {
       expect(rc.sharedWithAgent).toBe(false);
     }
 
-    // 每次 run 的 user 内容只含本 session
+    // 每次 run 的 user 内容只含本 session（turn_start 信封内 <user_message>）
     for (const s of seenScopes) {
       if (s.sessionId === 'sA') {
-        expect(s.userContents.every((c) => c.includes('A') && !c.includes('B'))).toBe(true);
+        expect(s.userContents.every((c) => c.includes('hello-A') && !c.includes('hello-B'))).toBe(true);
       }
       if (s.sessionId === 'sB') {
-        expect(s.userContents.every((c) => c.includes('B') && !c.includes('A'))).toBe(true);
+        expect(s.userContents.every((c) => c.includes('hello-B') && !c.includes('hello-A'))).toBe(true);
       }
     }
 

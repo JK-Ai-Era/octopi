@@ -15,6 +15,7 @@
  */
 
 import type { Message } from '@octopi-agent/core/types.js';
+import { extractUserMessageText } from './turn-envelope.js';
 
 // ── 层标识 ──
 
@@ -276,6 +277,8 @@ const ENGINE_CARRIER_SOURCES = new Set([
   'contextSummary',
   /** reliability/steer 注入（wrap-up / planning / noop / truncate notice 等）——非用户发言 */
   'engineHint',
+  /** turn 闭标（`<turn_end id/>`）——不是用户发言 */
+  'turnEnd',
 ]);
 
 /**
@@ -299,14 +302,16 @@ export interface ExtractLayerQueryOptions {
 }
 
 function userMessageText(m: Message): string {
-  if (typeof m.content === 'string') return m.content;
-  if (Array.isArray(m.content)) {
-    return m.content
+  let text = '';
+  if (typeof m.content === 'string') text = m.content;
+  else if (Array.isArray(m.content)) {
+    text = m.content
       .filter((b): b is { type: 'text'; text: string } => b.type === 'text')
       .map((b) => b.text)
       .join(' ');
   }
-  return '';
+  // turn_start 信封：检索只采 <user_message>，不采 turn_context picks
+  return extractUserMessageText(text);
 }
 
 /**
