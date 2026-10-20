@@ -1,3 +1,18 @@
+## v0.86.4
+
+### fix(engine): path-A trigger keeps both lines, ratio=0 blocks new compression, fallback default 3
+
+**问题**：路径 A 触发线在 `proactiveCompactRatio: 0` 时被 `messagesBudget × 0` 打穿成 0，每轮把 middle 机械压到约 200 token，上下文钉在 ~50k（1M 窗口照样丢历史）；两条触发线里窗口比例线被称作 legacy，存在被当死代码清掉的风险；`compactFallbackRatio` 缺省 1.5 时刚过目标就压、压完只回到约目标附近，压缩收益过小。
+
+**修正**：
+
+- **两条触发线都保留**并取 `min`（刻意不用 legacy 命名）：目标线 `targetTokens × compactFallbackRatio` + 窗口比例线 `messagesBudget × proactiveCompactRatio`。窗口未知时只用目标线
+- **`proactiveCompactRatio=0` = 禁止发起新的路径 A 压缩**（不只禁 LLM）：无粘滞视图原样放行；有粘滞视图只重建、不打回全量
+- **`compactFallbackRatio` 缺省 1.5 → 3**：触发线 60 万（20 万 × 3），压缩成为有意义的收缩，而不是贴着目标反复压
+- 文档 EN/ZH、`octopi.example.json`、配置注释同步；测试补强 ratio=0 不压扁 middle 的强断言
+
+**验证**：`proactive-compact-target`（含 ratio=0 kill switch / 不压扁）、`compact-sticky`、`proactive-compact-tool-heavy`、`context-engine`、`compact-cover-order`、`summarize-cache-prefix`、`wire-agent-builder`、`proactive-compact`、`context-compact-events`、`compact-session-lock` 全绿。
+
 ## v0.86.3
 
 ### fix(core/engine): executionMode 声明源贯通 + fs 写工具串行 + undo 原子写

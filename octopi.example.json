@@ -70,7 +70,7 @@
     "proactiveCooldownMs": 30000,
     "protectLastN": 20,
     "targetTokens": 200000,
-    "compactFallbackRatio": 1.5,
+    "compactFallbackRatio": 3,
     "historyAging": {
       "enabled": true,
       "rawWindow": 40,

@@ -166,8 +166,11 @@ Runner.handle
 
 **主动摘要（防长会话失忆）：**
 
-- `DefaultContextEngine.targetTokens`（默认 `200000`）把 compact 兜底线与窗口解耦：兜底线 = `min(targetTokens × compactFallbackRatio, messagesBudget × proactiveCompactRatio)`（默认 `1.5` / `0.6`）——min 让小窗口仍走有门槛的温和 proactive（旧挂法 1M 窗口 × 0.6 ≈ 57 万 token 永不触发）。`targetTokens: 0` 退回旧窗口比例模式。触发判据量**老化请求体量**（实际发送内容的保守上界），B2 稳态不会误触发（防双机制打架，单测锁死）。再压缩还要求自上次压缩以来 token 实质增长（偶发兜底，不是周期性重压）
-- `DefaultContextEngine.proactiveCompactRatio`（默认 `0.6`）是旧模式的预算比例。**`0` 只禁止发起新的 LLM 压缩（两种模式同闸），不丢弃已有粘滞压缩视图**（`previousSummary` / `lastProactiveMessageCount` 仍重建 `head + 摘要 + 覆盖点之后增量 + tail`）。turn 内（最近真实 user 之后已有工具活动）也不新打 LLM 摘要（方案 E），只走机械分级（B2 老化 / 账本截断），避免吃掉活动工作记录
+- 路径 A 触发线**两条都保留**并取 `min`（刻意不用 legacy 命名，防被当成死代码清掉）：
+  - **目标线** `targetTokens × compactFallbackRatio`（默认 `200000` / `3`）——与窗口解耦，防长会话失忆（只挂窗口比例时 1M 窗口永不触发）
+  - **窗口比例线** `messagesBudget × proactiveCompactRatio`（默认 `0.6`）——防小窗口/已知窗口（如 256k）在硬溢出前仍未触发
+- `targetTokens: 0` 只挂窗口比例线。触发判据量**老化请求体量**（实际发送内容的保守上界），B2 稳态不会误触发（防双机制打架，单测锁死）。再压缩还要求自上次压缩以来 token 实质增长（偶发兜底，不是周期性重压）
+- `DefaultContextEngine.proactiveCompactRatio`（默认 `0.6`）是窗口比例线系数。**`0` 禁止发起新的路径 A 压缩（不只禁 LLM），不丢弃已有粘滞压缩视图**（`previousSummary` / `lastProactiveMessageCount` 仍重建 `head + 摘要 + 覆盖点之后增量 + tail`）。turn 内（最近真实 user 之后已有工具活动）也不新打 LLM 摘要（方案 E），只走机械分级（B2 老化 / 账本截断），避免吃掉活动工作记录
 - 视图超兜底线时，在硬溢出前压缩中间段（LLM 仅限 turn 边界；turn 内机械）
 - 增量很小（或 `proactiveCompactRatio=0`）时用 `previousSummary` + **`lastProactiveMessageCount` 之后的消息** + head/tail 重建，不重复打 LLM，也**绝不打回全量历史**
 - `fallbackTruncate` / 溢出降级是 **middle 替换体**：归档说明 + 工具调用账本（name+args）+ 近尾——禁止「只留 4 条」

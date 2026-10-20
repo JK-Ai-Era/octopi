@@ -23,13 +23,13 @@ export const ContextEngineConfigSchema = z.object({
   type: z.enum(['default', 'custom']).optional(),
   protectFirstN: z.number().min(0).optional(),
   protectLastN: z.number().min(0).optional(),
-  /** 0 = 禁新 LLM 压缩（不丢粘滞视图）；见 ContextEngineConfig JSDoc */
+  /** 0 = 禁新的路径 A 压缩（不只禁 LLM；不丢粘滞视图）；见 ContextEngineConfig JSDoc */
   proactiveCompactRatio: z.number().min(0).max(1).optional(),
   proactiveCooldownMs: z.number().min(0).optional(),
   historyAging: HistoryAgingConfigSchema.optional(),
-  /** 工作目标 token（与窗口解耦，F1-B3）；0 = 退回窗口比例模式（proactiveCompactRatio） */
+  /** 工作目标 token（与窗口解耦，F1-B3）；0 = 只挂窗口比例线（proactiveCompactRatio） */
   targetTokens: z.number().int().nonnegative().optional(),
-  /** compact 兜底线倍数（默认 1.5；兜底线 = targetTokens × 倍数，须 > B2 老化稳态） */
+  /** 目标线倍数（默认 3；目标线 = targetTokens × 倍数，须 > B2 老化稳态） */
   compactFallbackRatio: z.number().positive().optional(),
   outputRatio: z.number().min(0).max(1).optional(),
   minOutputReserve: z.number().positive().optional(),

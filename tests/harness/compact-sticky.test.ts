@@ -3,7 +3,7 @@
  *
  * 红线：
  * 1. 已有压缩态后，估算回落或 ratio=0 都不得打回全量历史
- * 2. ratio=0 只禁**新** LLM 压缩，不丢弃 previousSummary 视图
+ * 2. ratio=0 禁**新的路径 A 压缩**（不只禁 LLM），不丢弃 previousSummary 视图
  */
 
 import { describe, it, expect, vi } from 'vitest';
@@ -107,7 +107,7 @@ describe('压缩视图粘滞 / proactiveCompactRatio=0', () => {
     expect(text).toContain('Conversation Summary');
   });
 
-  it('无压缩态时 ratio=0 返回全量（不误造摘要）', async () => {
+  it('无压缩态时 ratio=0 返回全量（不误造摘要、不机械压扁）', async () => {
     const messages: Message[] = [userMsg('hello')];
     for (let i = 0; i < 10; i++) messages.push(...toolTurn(i, 'small'));
 
@@ -120,7 +120,9 @@ describe('压缩视图粘滞 / proactiveCompactRatio=0', () => {
       summarize: async () => 'should not be called',
       contextWindow: 1_000_000,
     });
+    // 强断言：未建压缩态时不得把 middle 机械压掉
     expect(result.messages.length).toBeGreaterThan(1);
+    expect(result.messages.length).toBeGreaterThanOrEqual(messages.length - 1);
   });
 });
 

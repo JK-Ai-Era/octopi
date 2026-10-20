@@ -78,9 +78,9 @@ export interface DefaultContextEngineConfig {
   /** 尾部保护消息数（默认 20） */
   protectLastN?: number;
   /**
-   * 主动摘要阈值：消息 token / messagesBudget 超过该比例时，
-   * 在窗口硬溢出之前先做 LLM 摘要（缓解长会话失忆）。
-   * 默认 0.6；`0` = 禁止**新** LLM 压缩（两种模式同闸），**不**丢已有粘滞压缩视图。
+   * 窗口比例线：消息 token / messagesBudget 超过该比例时，
+   * 在窗口硬溢出之前先做主动压缩（缓解长会话失忆 / 窗口到顶未触发）。
+   * 默认 0.6；`0` = 禁止**发起新的**路径 A 压缩（不只禁 LLM），**不**丢已有粘滞压缩视图。
    */
   proactiveCompactRatio?: number;
   /**
@@ -95,14 +95,16 @@ export interface DefaultContextEngineConfig {
    */
   historyAging?: ToolResultAgingConfig;
   /**
-   * 工作目标 token（与窗口解耦，F1-B3）。>0 时主动压缩兜底线 = targetTokens ×
-   * compactFallbackRatio，不再挂窗口比例（旧挂法 1M 窗口 × 0.6 ≈ 57 万 = 永不触发）。
-   * 默认 200000；0 = 退回旧窗口比例模式（proactiveCompactRatio）。
+   * 工作目标 token（与窗口解耦，F1-B3）。>0 时主动压缩目标线 = targetTokens ×
+   * compactFallbackRatio，并与窗口比例线取 min。
+   * 默认 200000；0 = 只挂窗口比例线（proactiveCompactRatio）。
    */
   targetTokens?: number;
   /**
-   * compact 兜底线倍数（默认 1.5）。⚠️ 兜底线必须 > B2 老化稳态，否则双机制打架
-   * （每 turn 触发 LLM 摘要）；由单测锁死。
+   * 目标线倍数（默认 3）。触发线 = targetTokens × compactFallbackRatio；
+   * 须 > B2 老化稳态，否则双机制打架（每 turn 触发压缩）。1.5 时刚过目标就压、
+   * 压完只回到约目标附近，压缩收益太小；3 让压缩成为有意义的收缩。
+   * ⚠️ 窗口比例线（messagesBudget × proactiveCompactRatio）始终并存，防小窗口到顶未触发。
    */
   compactFallbackRatio?: number;
   /** 公用能力 CompactEngine（缺省自动创建；算法委托，E4 状态仍在本引擎） */
@@ -180,11 +182,11 @@ export class DefaultContextEngine implements ContextEngine {
       proactiveCooldownMs: config?.proactiveCooldownMs ?? 30_000,
       historyAging: resolveToolResultAgingOptions(config?.historyAging),
       targetTokens: config?.targetTokens ?? 200_000,
-      // <1 或非法值回落缺省——0 会把兜底线压成 0（压缩风暴），不是「禁用」语义
+      // <1 或非法值回落缺省——0 会把目标线压成 0（压缩风暴），不是「禁用」语义
       compactFallbackRatio:
         config?.compactFallbackRatio != null && config.compactFallbackRatio >= 1
           ? config.compactFallbackRatio
-          : 1.5,
+          : 3,
       compactEngine:
         config?.compactEngine ??
         createCompactEngine({
@@ -265,7 +267,7 @@ export class DefaultContextEngine implements ContextEngine {
 
     // 未知窗口：无 token 预算 → 不按 budget 截消息。
     // F1-B3：targetTokens>0 时兜底压缩与窗口无关，窗口未知照样执行（工作目标解耦）；
-    // targetTokens=0（legacy）保持旧行为：跳过 proactive。
+    // targetTokens=0：只挂窗口比例线（proactiveCompactRatio）；该模式窗口未知时跳过 proactive。
     // 已有结构压缩摘要时，用 head + summary + tail 视图
     if (!windowKnown && !targetKnown && budgetCap == null) {
       const proactive =
@@ -520,16 +522,22 @@ export class DefaultContextEngine implements ContextEngine {
   }
 
   /**
-   * 主动摘要：消息 token 超过 messagesBudget × ratio 时，在硬溢出前压缩
+   * 主动压缩（路径 A）：消息 token 超过触发线时，在硬溢出前收缩
    *
-   * 语义（粘滞 + 禁新 LLM）：
+   * 触发线取两条线的 min（都保留，缺一不可）：
+   * - **目标线** targetTokens × compactFallbackRatio——与窗口解耦，防长会话失忆
+   * - **窗口比例线** messagesBudget × proactiveCompactRatio——防小窗口/已知窗口到顶仍未触发
+   *
+   * 语义（粘滞 + ratio=0 禁新压缩）：
    * - **压缩视图粘滞**：一旦建立过压缩态（previousSummary 或 lastProactiveMessageCount），
    *   后续装配优先复用 head+摘要/机械中间+tail，不因估算回落或 ratio=0 而打回全量
    *   （全量请求会 bust 前缀缓存，且等于撤销已完成的压缩）。
-   * - **proactiveCompactRatio=0**：禁止**发起新的** LLM 压缩；**不**丢弃已有压缩视图。
+   * - **proactiveCompactRatio=0**：禁止**发起新的**路径 A 压缩（不只禁 LLM）；
+   *   **不**丢弃已有压缩视图。
    * - 策略：
-   *   - 未超阈值且无压缩态：原样返回
-   *   - 超阈值且需要新一轮压缩（上次压缩后新增消息够多）：LLM 压缩中间段并产出语义摘要
+   *   - ratio=0：无压缩态原样返回；有压缩态仅粘滞重建
+   *   - 未超线且无压缩态：原样返回
+   *   - 超线且需要新一轮压缩（上次压缩后新增消息够多）：LLM 压缩中间段并产出语义摘要
    *   - 已有压缩态且增量小或冷却中或禁新 LLM：零 LLM 重建视图
    */
   private async applyProactiveCompact(params: {
@@ -646,13 +654,45 @@ export class DefaultContextEngine implements ContextEngine {
     const currentTokens = estimator.estimateMessages(
       applyAgingToMessages(messages, agingPlan, this.config.historyAging),
     );
-    // F1-B3：兜底线挂工作目标（targetTokens × compactFallbackRatio），与窗口解耦——
-    // 旧挂法 1M 窗口 × 0.6 ≈ 57 万 = 永不触发（尺子挂错地方）。
-    // 小窗口再取 min（窗口比例线）：否则 proactive（有门槛/冷却）被挤死、溢出路径
-    // （无门槛）每 turn 压缩——双机制打架换位置（评审 H1）。窗口未知（messagesBudget=0）只用目标线。
+
+    // 两条触发线（都保留；刻意不用 legacy 命名，防被当成死代码清掉）：
+    // - 目标线 targetLine = targetTokens × compactFallbackRatio：与窗口解耦（F1-B3），
+    //   防长会话失忆；1M 窗口只挂比例线会永不触发。
+    // - 窗口比例线 windowRatioLine = messagesBudget × proactiveCompactRatio：
+    //   防小窗口（256k 等）在摸到目标线之前就顶满。
+    // 窗口未知（messagesBudget=0）时比例线为 +∞，只用目标线。
     const targetLine = Math.ceil(this.config.targetTokens * this.config.compactFallbackRatio);
-    const legacyLine = messagesBudget > 0 ? Math.floor(messagesBudget * ratio) : Number.POSITIVE_INFINITY;
-    const threshold = this.config.targetTokens > 0 ? Math.min(targetLine, legacyLine) : legacyLine;
+    const windowRatioLine =
+      messagesBudget > 0 ? Math.floor(messagesBudget * ratio) : Number.POSITIVE_INFINITY;
+
+    // ratio=0：禁止发起新的路径 A 压缩（不只禁 LLM）。已有粘滞视图仍重建，不打回全量。
+    if (ratio <= 0) {
+      if (!hasCompactView) {
+        return { messages };
+      }
+      // 粘滞增量预算挂工作目标（不挂被禁用的比例线）
+      const stickyBase = this.config.targetTokens > 0 ? this.config.targetTokens : 20_000;
+      const stickyMiddleTokens = Math.max(
+        200,
+        Math.floor(stickyBase * 0.55) - headTailTokens,
+      );
+      const sticky = await rebuildStickyView(stickyMiddleTokens);
+      if (!sticky) {
+        return { messages };
+      }
+      const reducedTokens = estimator.estimateMessages(sticky.messages);
+      this.states.set(stateKey, {
+        ...state,
+        lastProactiveTokens: reducedTokens,
+        lastEstimatedTokens: reducedTokens,
+      });
+      return { messages: sticky.messages };
+    }
+
+    // 触发线：目标线与窗口比例线取 min——小窗口走有门槛/冷却的温和 A，
+    // 不被挤成死代码后交给无门槛的溢出路径每 turn 压缩（双机制打架换位置，评审 H1）。
+    const threshold =
+      this.config.targetTokens > 0 ? Math.min(targetLine, windowRatioLine) : windowRatioLine;
 
     const targetMiddleTokens = Math.max(
       200,
@@ -660,12 +700,12 @@ export class DefaultContextEngine implements ContextEngine {
     );
 
     // 新 LLM 压缩闸门（方案 E）：
-    // - ratio=0 或无 summarize：禁止新 LLM，不丢已有压缩态
+    // - 无 summarize 或 turn 内：禁止新 LLM，不丢已有压缩态
     // - **turn 内**（最近真实 user 之后已有工具活动）：禁止新 LLM 摘要——
     //   活动工作记录在 middle 里，摘要会吃掉当前 run；只允许机械分级
     // - turn 边界（新 user 刚到、工具活动尚未开始）：才允许对更早历史做 LLM 摘要
     const midTurn = isMidTurn(messages);
-    const allowNewLlmCompact = !!summarize && ratio > 0 && !midTurn;
+    const allowNewLlmCompact = !!summarize && !midTurn;
 
     // 未超线：无压缩态则原样；有压缩态则粘滞重建（禁止回全量）
     if (currentTokens <= threshold) {
@@ -699,7 +739,7 @@ export class DefaultContextEngine implements ContextEngine {
     // 增长门（target 模式；防「偶发兜底」变「周期压缩」）：持续超线的会话全量口径不回落，
     // 若只看消息增量，每攒 minNewForResummarize 条就全量重压（LLM 成本/延迟失控）。
     // 只有全量口径较上次压缩实质增长（≥ 25% 阈值）才允许再打 LLM。
-    // legacy（targetTokens=0）保持既有「攒够增量重试」节奏不动。
+    // targetTokens=0（只挂窗口比例线）保持既有「攒够增量重试」节奏不动。
     const lastFull = state?.lastProactiveFullTokens;
     const grownEnough =
       this.config.targetTokens <= 0 ||
@@ -750,7 +790,7 @@ export class DefaultContextEngine implements ContextEngine {
       }
     }
 
-    // 禁新 LLM 且无粘滞视图：超线也只走机械（不打摘要 LLM）
+    // 禁新路径 A（无 summarize / turn 内）且无粘滞视图：超线也只走机械（不打摘要 LLM）
     if (!allowNewLlmCompact) {
       const sticky = await rebuildStickyView(targetMiddleTokens);
       return sticky ? { messages: sticky.messages } : { messages };

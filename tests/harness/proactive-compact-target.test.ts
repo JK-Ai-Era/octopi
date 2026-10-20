@@ -1,11 +1,13 @@
 /**
- * F1-B3：工作目标与窗口解耦——compact 兜底线挂 targetTokens（缺省 20 万 × 1.5）
+ * 路径 A 两条触发线（都保留）：
+ * - 目标线 targetTokens × compactFallbackRatio（缺省 20 万 × 3 = 60 万，F1-B3 与窗口解耦）
+ * - 窗口比例线 messagesBudget × proactiveCompactRatio（防小窗口到顶未触发）
+ * 取 min；刻意不用 legacy 命名。
  *
  * 红线（arch/long-session-latency.md §5 B3）：
- * - 触发线挂工作目标而非窗口（旧挂法 1M×0.6 ≈ 57 万 = 永不触发）
- * - 尺子量**老化视图**（实际请求）：raw 估算会把 B2 稳态误判超线 → 每 turn LLM 摘要 = 双机制打架
- * - ⚠️ 兜底线必须 > B2 老化稳态，单测锁死
- * - targetTokens=0 退回旧窗口比例模式；proactiveCompactRatio=0 禁新 LLM（不丢粘滞视图）
+ * - 尺子量**老化视图**（实际请求）：raw 估算会把 B2 稳态误判超线 → 双机制打架
+ * - ⚠️ 触发线必须 > B2 老化稳态，单测锁死
+ * - targetTokens=0 只挂窗口比例线；proactiveCompactRatio=0 禁**新的路径 A 压缩**（不丢粘滞视图）
  */
 
 import { describe, it, expect, vi } from 'vitest';
@@ -59,8 +61,8 @@ describe('proactive compact at working target (F1-B3)', () => {
 
     expect(summarize).not.toHaveBeenCalled();
     expect(result.summary).toBeUndefined();
-    // 数值锁：稳态视图在兜底线（20 万 × 1.5 = 30 万）之下，且确实不小（非空跑）
-    expect(result.estimatedTokens).toBeLessThan(300_000);
+    // 数值锁：稳态视图在目标线（20 万 × 3 = 60 万）之下，且确实不小（非空跑）
+    expect(result.estimatedTokens).toBeLessThan(600_000);
     expect(result.estimatedTokens).toBeGreaterThan(50_000);
   });
 
@@ -106,7 +108,7 @@ describe('proactive compact at working target (F1-B3)', () => {
       tools: [],
       summarize: strict,
     });
-    expect(strict).toHaveBeenCalled(); // 兜底线 1.5 万 < 稳态 → 触发
+    expect(strict).toHaveBeenCalled(); // 目标线 3 万（1 万 × 缺省 3） < 稳态 → 触发
 
     const lax = mockSummarize();
     await new DefaultContextEngine({ proactiveCooldownMs: 0, targetTokens: 200_000 }).assemble({
@@ -116,7 +118,7 @@ describe('proactive compact at working target (F1-B3)', () => {
       tools: [],
       summarize: lax,
     });
-    expect(lax).not.toHaveBeenCalled(); // 兜底线 30 万 > 稳态 → 不触发
+    expect(lax).not.toHaveBeenCalled(); // 目标线 60 万（20 万 × 3） > 稳态 → 不触发
 
     const relaxed = mockSummarize();
     await new DefaultContextEngine({
@@ -130,10 +132,10 @@ describe('proactive compact at working target (F1-B3)', () => {
       tools: [],
       summarize: relaxed,
     });
-    expect(relaxed).not.toHaveBeenCalled(); // 兜底线 1 万 × 20 = 20 万 > 稳态 → 不触发
+    expect(relaxed).not.toHaveBeenCalled(); // 目标线 1 万 × 20 = 20 万 > 稳态 → 不触发
   });
 
-  it('should fall back to the legacy window-ratio trigger when targetTokens=0', async () => {
+  it('should use the window-ratio line when targetTokens=0', async () => {
     const summarize = mockSummarize();
     const engine = new DefaultContextEngine({
       proactiveCompactRatio: 0.5,
@@ -148,7 +150,7 @@ describe('proactive compact at working target (F1-B3)', () => {
     })) as Message[];
 
     await engine.assemble({
-      sessionId: 's-legacy',
+      sessionId: 's-window-ratio',
       messages,
       systemPrompt: 'sys',
       tools: [],
@@ -158,16 +160,16 @@ describe('proactive compact at working target (F1-B3)', () => {
     expect(summarize).toHaveBeenCalled();
   });
 
-  it('should keep proactiveCompactRatio=0 as the master kill switch in target mode', async () => {
+  it('should keep proactiveCompactRatio=0 as the kill switch for new path-A compression', async () => {
     const summarize = mockSummarize();
     const engine = new DefaultContextEngine({ proactiveCompactRatio: 0, proactiveCooldownMs: 0 });
-    // 同 test 2 的超线历史；ratio=0 即使 target 模式也不得触发
+    // 同超线历史；ratio=0 即使 target 模式也不得发起新压缩（含机械压扁）
     const messages = [
       ...Array.from({ length: 30 }, () => toolTurn(1, 200)).flat(),
       ...toolTurn(80, 8000),
     ];
 
-    await engine.assemble({
+    const result = await engine.assemble({
       sessionId: 's-kill',
       messages,
       systemPrompt: 'sys',
@@ -177,10 +179,31 @@ describe('proactive compact at working target (F1-B3)', () => {
       summarize,
     });
     expect(summarize).not.toHaveBeenCalled();
+    // 无粘滞视图时必须原样放行：禁止 middle 被机械压到 ~200 token
+    expect(result.messages.length).toBeGreaterThan(messages.length * 0.5);
+    expect(result.estimatedTokens).toBeGreaterThan(50_000);
+  });
+
+  it('ratio=0 must not crush middle history when no sticky view exists', async () => {
+    const engine = new DefaultContextEngine({ proactiveCompactRatio: 0, proactiveCooldownMs: 0 });
+    const messages: Message[] = [{ role: 'user', content: 'start', timestamp: 1 } as Message];
+    for (let i = 0; i < 20; i++) messages.push(...toolTurn(1, 2000));
+
+    const result = await engine.assemble({
+      sessionId: 's-ratio0-full',
+      messages,
+      systemPrompt: 'sys',
+      tools: [],
+      contextWindow: 1_048_576,
+      tokenBudget: 1_048_576,
+      summarize: async () => 'nope',
+    });
+    // 全量放行：条数接近原历史，且中间轮次仍在
+    expect(result.messages.length).toBeGreaterThanOrEqual(messages.length - 1);
   });
 
   it('should keep gated proactive summaries alive for small windows (line clamps to the window ratio line)', async () => {
-    // 小窗口（此处 tokenBudget 4000）：兜底线若只挂目标线（30 万），有门槛/冷却的 proactive
+    // 小窗口（此处 tokenBudget 4000）：触发线若只挂目标线（60 万），有门槛/冷却的 proactive
     // 会被挤成死代码、由无门槛的溢出路径每 turn 压缩（评审 H1）——min 钳制保住温和路径。
     const summarize = mockSummarize();
     const events: Array<{ type: string; reason?: string }> = [];
@@ -205,13 +228,13 @@ describe('proactive compact at working target (F1-B3)', () => {
     expect(events.some((e) => e.type === 'context.compact.start' && e.reason === 'proactive')).toBe(true);
   });
 
-  it('should keep the legacy unknown-window skip when targetTokens=0', async () => {
+  it('should skip proactive entirely on unknown window when targetTokens=0', async () => {
     const summarize = mockSummarize();
     const engine = new DefaultContextEngine({ proactiveCompactRatio: 0.5, targetTokens: 0 });
     const messages = Array.from({ length: 40 }, () => toolTurn(1, 2000)).flat();
 
     await engine.assemble({ sessionId: 's-unk-legacy', messages, systemPrompt: 'sys', tools: [], summarize });
-    expect(summarize).not.toHaveBeenCalled(); // 旧行为：窗口未知 → 完全跳过 proactive
+    expect(summarize).not.toHaveBeenCalled(); // targetTokens=0 且窗口未知 → 跳过 proactive
   });
 
   it('should not re-compact without material growth since the last compaction (occasional fallback)', async () => {

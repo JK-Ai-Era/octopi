@@ -493,9 +493,9 @@ export interface ContextEngineConfig {
   /** 尾部保护消息数（默认 20） */
   protectLastN?: number;
   /**
-   * 主动摘要阈值：消息 token / messagesBudget 超过该比例时，
-   * 在硬溢出前先 LLM 摘要（默认 0.6）。
-   * `0` = **禁止发起新的** LLM 主动压缩（target/legacy 同闸）；**不**丢弃已有
+   * 窗口比例线：消息 token / messagesBudget 超过该比例时，
+   * 在硬溢出前先主动压缩（默认 0.6）。
+   * `0` = **禁止发起新的**路径 A 压缩（不只禁 LLM；目标线/窗口比例线同闸）；**不**丢弃已有
    * `previousSummary` 粘滞视图（粘滞重建仍生效）。turn 内（工具活动中）本就不打 LLM。
    */
   proactiveCompactRatio?: number;
@@ -523,12 +523,13 @@ export interface ContextEngineConfig {
     maxPointerChars?: number;
   };
   /**
-   * 工作目标 token（与窗口解耦，F1-B3）：主动压缩兜底线 = targetTokens × compactFallbackRatio，
-   * 不再挂窗口比例。默认 200000；0 = 退回旧窗口比例模式（proactiveCompactRatio）。
+   * 工作目标 token（与窗口解耦，F1-B3）：目标线 = targetTokens × compactFallbackRatio，
+   * 与窗口比例线取 min。默认 200000；0 = 只挂窗口比例线（proactiveCompactRatio）。
    */
   targetTokens?: number;
   /**
-   * compact 兜底线倍数（默认 1.5）。⚠️ 兜底线必须 > B2 老化稳态，否则双机制打架。
+   * 目标线倍数（默认 3）。触发线 = targetTokens × compactFallbackRatio；
+   * 须 > B2 老化稳态，否则双机制打架。窗口比例线始终并存。
    */
   compactFallbackRatio?: number;
   /** 输出预留比例（默认 0.20） */
