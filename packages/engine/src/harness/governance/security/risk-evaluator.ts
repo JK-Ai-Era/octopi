@@ -24,22 +24,22 @@ import type {
   PathRisk,
 } from './risk-types.js';
 import { parseShellCommand, getRedirectTargets } from './shell-parser.js';
+import {
+  ensureTrailingSep,
+  isAbsolutePath,
+  isTempPath,
+  resetTempPathCache,
+  startsWithPathPrefix,
+} from './temp-path.js';
 
 // ── 路径分类 ──
 
 let cachedProtectedPaths: string[] | null = null;
-let cachedTempPrefixes: string[] | null = null;
 
-/** 仅测试用：环境变量变更后清空路径缓存 */
+/** 仅测试用：环境变量变更后清空路径缓存（protected + temp 两侧） */
 export function resetSecurityPathCache(): void {
   cachedProtectedPaths = null;
-  cachedTempPrefixes = null;
-}
-
-function ensureTrailingSep(p: string): string {
-  let n = p.replace(/\//g, '\\');
-  if (!n.endsWith('\\')) n += '\\';
-  return n;
+  resetTempPathCache();
 }
 
 /** 硬保护路径（不可逆损坏）—— 含动态 SystemRoot */
@@ -74,84 +74,9 @@ const SAFE_PSEUDO_DEVICES = new Set([
   '/dev/stdin', '/dev/stdout', '/dev/stderr', '/dev/tty',
 ]);
 
-/**
- * 临时目录前缀
- *
- * 必须在 PROTECTED 之前匹配：`C:\Windows\Temp` 虽在 `C:\Windows\` 下，
- * 但是可清空的临时区，应归 safe 而非 protected。
- */
-function getTempPrefixes(): string[] {
-  if (cachedTempPrefixes) return cachedTempPrefixes;
-  const prefixes = ['/tmp/', '/var/tmp/', '/private/var/tmp/'];
-  const userTemp = process.env.TEMP ?? process.env.TMP ?? process.env.Tmp;
-  if (userTemp) {
-    prefixes.push(ensureTrailingSep(userTemp));
-  }
-  prefixes.push('C:\\Windows\\Temp\\');
-  const systemRoot = process.env.SystemRoot ?? process.env.windir;
-  if (systemRoot) {
-    prefixes.push(ensureTrailingSep(systemRoot) + 'Temp\\');
-  }
-  // 用户 AppData Temp 回退（无 TEMP 环境变量时的静态路径）
-  const userProfile = process.env.USERPROFILE ?? process.env.HOME;
-  const home = userProfile ? userProfile.replace(/\//g, '\\') : homedir().replace(/\//g, '\\');
-  if (home) {
-    const base = home.endsWith('\\') ? home : home + '\\';
-    prefixes.push(base + 'AppData\\Local\\Temp\\');
-    prefixes.push(base + 'AppData\\Local\\Microsoft\\Windows\\Temp\\');
-  }
-  cachedTempPrefixes = prefixes;
-  return prefixes;
-}
-
-/** Windows 风格路径：盘符或 UNC */
-function isWindowsStylePath(p: string): boolean {
-  return /^[A-Za-z]:[\\/]/.test(p) || /^[A-Za-z]:$/.test(p) || p.includes('\\') || p.startsWith('\\\\');
-}
-
 /** 盘符根：`C:` / `C:\` / `D:/` */
 function isDriveRoot(p: string): boolean {
   return /^[A-Za-z]:[\\/]?$/i.test(p);
-}
-
-/** 绝对路径（POSIX + Windows 盘符/UNC），跨平台评估时用 */
-function isAbsolutePath(p: string): boolean {
-  return (
-    p.startsWith('/') ||
-    /^[A-Za-z]:[\\/]/.test(p) ||
-    /^[A-Za-z]:$/.test(p) ||
-    p.startsWith('\\\\')
-  );
-}
-
-/** 去掉末尾分隔符（保留根 `/` 或 `C:\`） */
-function stripTrailingSep(p: string): string {
-  if (p.length > 1 && (p.endsWith('/') || p.endsWith('\\'))) {
-    // `C:\` 保留
-    if (/^[A-Za-z]:[\\/]$/.test(p)) return p;
-    return p.slice(0, -1);
-  }
-  return p;
-}
-
-/**
- * 路径前缀匹配（路径段边界，拒绝 project 前缀绕过 project-evil）
- *
- * 要求 path === base 或 path 以 base + 分隔符 开头。
- * Windows 风格路径大小写不敏感、分隔符归一为 `\`。
- */
-function startsWithPathPrefix(path: string, prefix: string): boolean {
-  const isWin = isWindowsStylePath(path) || isWindowsStylePath(prefix);
-  if (isWin) {
-    const p = stripTrailingSep(path.replace(/\//g, '\\')).toLowerCase();
-    const b = stripTrailingSep(prefix.replace(/\//g, '\\')).toLowerCase();
-    if (p === b) return true;
-    return p.startsWith(b + '\\');
-  }
-  const p = stripTrailingSep(path);
-  const b = stripTrailingSep(prefix);
-  if (p === b) return true;
-  return p.startsWith(b + '/');
 }
 
 /**
@@ -207,7 +132,7 @@ function classifyPath(path: string, cwd?: string): PathRisk {
 
   // 临时目录 —— 必须在 PROTECTED 之前：
   // C:\Windows\Temp 落在 C:\Windows\ 前缀内，若先判 protected 则 TEMP 白名单成死代码
-  if (getTempPrefixes().some(p => startsWithPathPrefix(normalized, p))) {
+  if (isTempPath(normalized)) {
     return 'safe';
   }
 

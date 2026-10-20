@@ -1,3 +1,29 @@
+## v0.86.7
+
+### fix(engine): unify temp-path classification and harden CapabilityEnforcer.checkPathAccess
+
+**问题**（NEXT-STEPS C3 收口）：
+
+- 临时目录前缀清单三处手抄、各自漂移：`capability-enforcer.ts` 重复条件 `!startsWith('/tmp/') && !startsWith('/tmp/')`（疑似本意含 `/private/tmp/`）；`degradation.ts` 只认 `/tmp/`、`/var/tmp/`；`risk-evaluator.ts` 清单漏 `TMPDIR`（macOS 主力临时变量）与 `/private/tmp/` 别名
+- `checkPathAccess` 两个真实弱点：`sandbox` 分支 `startsWith('/tmp/')` 不折叠 `..`，`/tmp/../etc/passwd` **直接放行（穿越洞）**；`workspace` 分支「无 `..` 即放行」连 `/etc/passwd` 都放过
+
+**修正**：
+
+- 新增 `governance/security/temp-path.ts` 作为**单一来源**：POSIX 共享临时（`/tmp`、`/var/tmp` 词法 + `/private` 规范双形态，C4 拍板）+ `os.tmpdir()` + `TMPDIR/TEMP/TMP/Tmp` 兜底 + Windows 静态临时区；`isTempPath` 段边界匹配（`/tmpdir` 不假命中）。risk-evaluator / degradation / capability-enforcer 三处统一换用（risk-evaluator 分类逻辑等价迁出，仅剩清单扩容）
+- `checkPathAccess` 加固：`sandbox` 要求绝对路径 + `resolve` 折叠 `..` + `isTempPath`（堵穿越洞，相对路径 fail-closed 不再按进程 cwd 解析）；`workspace` 新增 `opts.workspaceRoot` 做真实包含判定（`resolve(root, path)` 相对路径锚定 root），**缺省 fail-closed**；Windows 风格路径包含判定大小写不敏感、分隔符归一
+- 测试：新增 `tests/harness/temp-path.test.ts`（分类/缓存配对/enforcer 穿越/degradation，平台中立不硬编码 `/tmp`）；`tests/security.test.ts`「路径遍历应该被阻止」同步新契约（行为变更同 PR 改测试）
+
+**行为边界变化（独立评审确认后如实记录）**：
+
+- `checkPathAccess` 是公开导出 API：`workspace` 语义从「无 `..` 即放行」变为「需 `workspaceRoot`，缺省拒绝」（安全收紧；生产代码无调用方，现存调用方为测试并已同步）
+- 临时判定面统一后：重定向覆盖 `/var/tmp`、`/private/*` 别名、`os.tmpdir()`、Windows Temp 不再出「建议备份」；`rm` 临时根本体（如 `rm -rf /tmp`）不再出 trash 建议（`classifyPath('/tmp')` 本就判 safe，此变化使降级建议与风险定级一致）
+- `isAbsolutePath` 比旧正则宽：裸盘符 `C:` 与 UNC 重定向目标现在会出备份建议
+- 匹配语义：POSIX 风格前缀**区分**大小写（旧实现经 Windows 分支归一为不敏感）；Windows 风格保持不敏感；env 兜底从「`TEMP ?? TMP ?? Tmp` 取首个」变为四键全部入列（超集）
+
+**验证**：`temp-path` / `security` / `harness/security` / `windows-security` 177 tests 全绿；五包 `tsc` 构建通过；eslint 通过；全量 suite 仅余 2 个 Seatbelt 沙箱固有限制失败（`ps`/getProcessName 类），与本改动无关。独立子评审逐行审查（H1/H2/M6/L7/L8 已修；M3/M4/M5/L9 采纳为上记边界变化）。
+
+
+
 ## v0.86.6
 
 ### test(knowledge/gateway): fix race-prone assertions and tmp hygiene

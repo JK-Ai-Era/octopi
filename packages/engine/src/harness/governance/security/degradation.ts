@@ -12,6 +12,7 @@ import type {
   SafeAlternative,
 } from './risk-types.js';
 import { parseShellCommand, getRedirectTargets } from './shell-parser.js';
+import { isAbsolutePath, isTempPath } from './temp-path.js';
 
 // ── 降级策略匹配 ──
 
@@ -118,11 +119,8 @@ function checkSafeDelete(parsed: ParsedCommand): SafeAlternative | null {
     if (targets.length === 0) continue;
 
     // 只对非 safe 路径建议 trash
-    // 临时目录（/tmp/）已经是 safe，不需要降级
-    const nonSafeTargets = targets.filter(t => {
-      const normalized = t.replace(/^~\//, process.env.HOME + '/');
-      return !normalized.startsWith('/tmp/') && !normalized.startsWith('/var/tmp/');
-    });
+    // 临时目录已是 safe（isTempPath 单一来源：/tmp、/var/tmp 及别名、TMPDIR、Windows Temp），不需要降级
+    const nonSafeTargets = targets.filter((t) => !isTempPath(t));
 
     if (nonSafeTargets.length === 0) continue;
 
@@ -219,10 +217,8 @@ function checkSafeRedirect(parsed: ParsedCommand): SafeAlternative | null {
   const targets = getRedirectTargets(parsed);
   for (const target of targets) {
     // 检查是否覆盖已有文件（这里无法确定文件是否存在，只对常见路径提供建议）
-    if (
-      (target.startsWith('/') && !target.startsWith('/tmp/')) ||
-      /^[A-Za-z]:[\\/]/.test(target) && !/^[A-Za-z]:[\\/]Windows[\\/]Temp[\\/]/i.test(target)
-    ) {
+    // 绝对路径且非临时目录 → 建议备份（isTempPath 单一来源；判定面随清单统一而扩充，见 CHANGELOG v0.86.7）
+    if (isAbsolutePath(target) && !isTempPath(target)) {
       return {
         description: `重定向到 ${target}，建议先备份`,
         steps: [

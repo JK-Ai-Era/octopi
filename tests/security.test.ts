@@ -72,8 +72,17 @@ describe('CapabilityEnforcer', () => {
     const enforcer = new CapabilityEnforcer(bus);
     enforcer.registerPlugin('test', PluginTrustLevel.OFFICIAL);
 
-    expect(enforcer.checkPathAccess('test', '/workspace/file').allowed).toBe(true);
-    expect(enforcer.checkPathAccess('test', '/workspace/../../../etc/passwd').allowed).toBe(false);
+    // 新契约：workspace 判定需 root，做包含判定；`..` 折叠后仍须落在 root 内
+    expect(
+      enforcer.checkPathAccess('test', '/workspace/file', { workspaceRoot: '/workspace' }).allowed,
+    ).toBe(true);
+    expect(
+      enforcer.checkPathAccess('test', '/workspace/../../../etc/passwd', { workspaceRoot: '/workspace' })
+        .allowed,
+    ).toBe(false);
+    // 根未知 fail-closed（旧实现「无 .. 即放行」会放行 /etc/passwd）
+    expect(enforcer.checkPathAccess('test', '/workspace/file').allowed).toBe(false);
+    expect(enforcer.checkPathAccess('test', '/etc/passwd', { workspaceRoot: '/workspace' }).allowed).toBe(false);
   });
 
   it('getTrustLevel 应该返回信任级别', () => {

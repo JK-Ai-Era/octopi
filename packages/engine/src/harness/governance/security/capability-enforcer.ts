@@ -8,7 +8,9 @@
 
 import type { ToolCall } from '@octopi-agent/core/types.js';
 import type { EventBus } from '@octopi-agent/core/primitives/event-bus.js';
+import { resolve } from 'node:path';
 import { AgentEvents } from '../../shared/events/agent-event-map.js';
+import { isAbsolutePath, isTempPath, startsWithPathPrefix } from './temp-path.js';
 
 // ── 信任级别 ──
 
@@ -109,8 +111,14 @@ export class CapabilityEnforcer {
 
   /**
    * 检查 Plugin 是否有权访问路径
+   *
+   * @param pluginId Plugin 标识（须先 registerPlugin）
+   * @param path 待访问路径；`workspace` 语义下相对路径锚定 `opts.workspaceRoot`（不锚进程 cwd），`sandbox` 语义下要求绝对路径
+   * @param opts workspaceRoot：`filesystem: 'workspace'` 的包含判定根；缺省 fail-closed
+   * @returns 放行或拒绝（含原因）
+   * @remarks 字符串级判定：不做 realpath，符号链接逃逸 / TOCTOU 不在本检查覆盖范围
    */
-  checkPathAccess(pluginId: string, path: string): AccessDecision {
+  checkPathAccess(pluginId: string, path: string, opts?: { workspaceRoot?: string }): AccessDecision {
     const entry = this.pluginCapabilities.get(pluginId);
     if (!entry) return { allowed: false, reason: `Plugin "${pluginId}" not registered` };
 
@@ -119,18 +127,33 @@ export class CapabilityEnforcer {
     switch (capabilities.filesystem) {
       case '*':
         return { allowed: true };
-      case 'workspace':
-        // 简单检查：路径不包含 ..
-        if (path.includes('..')) {
-          return { allowed: false, reason: 'Path traversal not allowed' };
+      case 'workspace': {
+        // 真实包含判定需要 workspace 根；根未知时 fail-closed（不装懂放行）
+        const root = opts?.workspaceRoot;
+        if (!root) {
+          return { allowed: false, reason: `Cannot verify "${path}": workspace root unknown` };
+        }
+        // 相对路径锚定 workspace root；resolve 折叠 `..`，防 `ws/../etc/passwd` 穿越
+        const resolvedRoot = resolve(root);
+        const resolvedPath = resolve(root, path);
+        // 段边界前缀匹配；Windows 风格路径大小写不敏感、分隔符归一（同 temp-path 匹配语义）
+        if (!startsWithPathPrefix(resolvedPath, resolvedRoot)) {
+          return { allowed: false, reason: `Path "${path}" outside workspace` };
         }
         return { allowed: true };
-      case 'sandbox':
-        // 只允许访问临时目录
-        if (!path.startsWith('/tmp/') && !path.startsWith('/tmp/')) {
+      }
+      case 'sandbox': {
+        // 只允许临时目录（isTempPath 单一来源）；相对路径无从锚定，fail-closed
+        if (!isAbsolutePath(path)) {
+          return { allowed: false, reason: `Path "${path}" must be absolute for sandbox access` };
+        }
+        // resolve 折叠 `..`，防 `/tmp/../etc/passwd` 穿越
+        const resolved = resolve(path);
+        if (!isTempPath(resolved)) {
           return { allowed: false, reason: `Path "${path}" outside sandbox` };
         }
         return { allowed: true };
+      }
       case 'none':
         return { allowed: false, reason: `Plugin "${pluginId}" has no filesystem access` };
       default:
