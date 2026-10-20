@@ -9,11 +9,14 @@
  * 见 arch/tool-effect-policy.md §5.6。
  */
 
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import {
   appendFile as fsAppendFile,
+  chmod,
   mkdir,
   readFile,
+  realpath,
+  rename,
   rm,
   stat,
   writeFile,
@@ -52,6 +55,28 @@ export function resolveSessionUndoPaths(sessionsDir: string, sessionId: string):
     logPath: join(root, 'log.jsonl'),
     blobsDir: join(root, 'blobs'),
   };
+}
+
+/**
+ * 原子覆写文件：tmp + rename，单次完整替换。
+ * 防两类撕裂：同路径并发写交错字节、进程中途死掉留半截文件。
+ * 语义差异（已接受）：rename 以新 inode 替换目标，断开既有硬链接；
+ * symlink 归一到实体（realpath）后落盘，保持 writeFile 穿透链接的语义；
+ * 既有文件的权限位经 chmod 保留；新建文件走默认 umask。
+ */
+async function writeFileAtomic(path: string, data: string | Uint8Array): Promise<void> {
+  const target = await realpath(path).catch(() => path);
+  const mode = await stat(target).then((s) => s.mode & 0o7777).catch(() => undefined);
+  const tmp = `${target}.octopi-tmp-${process.pid}-${randomBytes(6).toString('hex')}`;
+  try {
+    await writeFile(tmp, data);
+    if (mode !== undefined) await chmod(tmp, mode);
+    await rename(tmp, target);
+  } catch (err) {
+    // 吞掉临时文件清理失败：tmp 是无主残留，唯一后果是磁盘留垃圾；原始错误重抛
+    await rm(tmp, { force: true }).catch(() => undefined);
+    throw err;
+  }
 }
 
 /** 落盘条目（按路径 coalesce） */
@@ -130,10 +155,9 @@ async function pathExists(p: string): Promise<boolean> {
 /** owner.json：跨进程所有权标记（清扫端据此跳过他人活跃 undo） */
 async function writeUndoOwner(paths: SessionUndoPaths): Promise<void> {
   try {
-    await writeFile(
+    await writeFileAtomic(
       join(paths.root, 'owner.json'),
       JSON.stringify({ pid: process.pid, startedAt: Date.now() }) + '\n',
-      'utf8',
     );
   } catch {
     // owner 元数据失败不影响 undo 主流程；只是清扫端的保守性降低
@@ -323,10 +347,9 @@ export class TurnFileUndoLog implements ToolFileEffects {
     deleted?: string[];
   }): Promise<void> {
     await mkdir(this.paths.root, { recursive: true });
-    await writeFile(
+    await writeFileAtomic(
       join(this.paths.root, 'not-reversed.json'),
       JSON.stringify(payload) + '\n',
-      'utf8',
     );
   }
 
@@ -431,7 +454,7 @@ export class TurnFileUndoLog implements ToolFileEffects {
     if (mode === 'append') {
       await fsAppendFile(path, next);
     } else {
-      await writeFile(path, next);
+      await writeFileAtomic(path, next);
     }
     await this.flushLog();
   }
@@ -449,13 +472,13 @@ export class TurnFileUndoLog implements ToolFileEffects {
       }
     }
     try {
-      await writeFile(blobPath, data);
+      await writeFileAtomic(blobPath, data);
     } catch (err) {
       // blobs 目录可能被外部清扫者删掉（另一进程收尾扫描误伤活 undo）：
       // 自愈重建后重试一次；仍失败才是真 IO 故障，交给调用方 fail-closed。
       if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
       await mkdir(this.paths.blobsDir, { recursive: true });
-      await writeFile(blobPath, data);
+      await writeFileAtomic(blobPath, data);
     }
     this.blobBytes += data.length;
     return hash;
@@ -465,10 +488,9 @@ export class TurnFileUndoLog implements ToolFileEffects {
   private async persistTruncated(): Promise<void> {
     try {
       await mkdir(this.paths.root, { recursive: true });
-      await writeFile(
+      await writeFileAtomic(
         join(this.paths.root, 'meta.json'),
         JSON.stringify({ truncated: true }) + '\n',
-        'utf8',
       );
     } catch {
       // 元数据失败不阻断业务写
@@ -502,7 +524,7 @@ export class TurnFileUndoLog implements ToolFileEffects {
       });
     await mkdir(this.paths.root, { recursive: true });
     const body = lines.map((l) => JSON.stringify(l)).join('\n');
-    await writeFile(this.paths.logPath, body + (lines.length ? '\n' : ''), 'utf8');
+    await writeFileAtomic(this.paths.logPath, body + (lines.length ? '\n' : ''));
   }
 
   /** 提交：丢弃 undo，效应保留 */
@@ -658,7 +680,7 @@ async function revertEntry(
   if (!current) {
     if (agentDeleted) {
       // 工具删除 → 恢复 before
-      await writeFile(entry.path, before);
+      await writeFileAtomic(entry.path, before);
       result.discarded.push({ path: entry.path, action: 'restored' });
       return;
     }
@@ -673,7 +695,7 @@ async function revertEntry(
     // 工具删后文件又存在：用户重建则保留；与工具 after 一致则恢复
     const afterHash = entry.op === 'overwrite' ? entry.afterHash : undefined;
     if (afterHash && currentHash === afterHash) {
-      await writeFile(entry.path, before);
+      await writeFileAtomic(entry.path, before);
       result.discarded.push({ path: entry.path, action: 'restored' });
       return;
     }
@@ -683,7 +705,7 @@ async function revertEntry(
 
   const entryAfterHash = entry.op === 'overwrite' || entry.op === 'create' ? entry.afterHash : '';
   if (entryAfterHash && currentHash === entryAfterHash) {
-    await writeFile(entry.path, before);
+    await writeFileAtomic(entry.path, before);
     result.discarded.push({ path: entry.path, action: 'restored' });
     return;
   }
@@ -696,7 +718,7 @@ async function revertEntry(
     const after = await readFile(join(paths.blobsDir, afterRef), 'utf8');
     const rev = reverseAgentOverwrite(before.toString('utf8'), after, current.toString('utf8'));
     if (rev.kind === 'restored') {
-      await writeFile(entry.path, rev.content, 'utf8');
+      await writeFileAtomic(entry.path, rev.content);
       result.discarded.push({ path: entry.path, action: 'restored' });
       if (rev.skippedHunks > 0) {
         result.keptUserEdits.push({ path: entry.path, reason: 'merge_conflict' });

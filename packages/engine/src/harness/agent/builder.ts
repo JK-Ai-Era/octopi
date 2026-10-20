@@ -254,6 +254,7 @@ function convertToAgentTool(tool: RegisteredTool, contextProvider: ToolContextPr
   return {
     name: tool.definition.name,
     description: tool.definition.description,
+    executionMode: tool.executionMode,
     parameters: buildToolLlmParameters(
       tool.definition.parameters,
     ) as import('@octopi-agent/core/interfaces/model-provider.js').LLMToolDefinition['function']['parameters'],

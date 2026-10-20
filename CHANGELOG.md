@@ -1,3 +1,18 @@
+## v0.86.3
+
+### fix(core/engine): executionMode 声明源贯通 + fs 写工具串行 + undo 原子写
+
+**问题**（NEXT-STEPS fs 写工具串行声明 条目收口）：`RegisteredTool.executionMode` 没有声明源与透传通道（Loop `AgentTool.executionMode` 只写不读）；fs 写工具与共享 SessionData 写工具缺声明 → 整批 tool_call 被并行执行，同文件读改写互相覆盖（丢编辑）、任务列表并发丢更新；undo 日志批量 `writeFile` 覆写有撕裂面（并发交错/中途崩溃留半截）。
+
+**修正**：
+
+- `RegisteredTool.executionMode?` 成为唯一声明源（`packages/core/.../types/tools.ts`），经三处同构映射透传到 `AgentTool.executionMode`：`builder.convertToAgentTool` / `think.buildAgentTools` / `gateway.registeredToolToAgentTool`（后者导出为测试缝）
+- `file_write`/`file_edit`/`file_delete`/`file_mkdir`/`file_rename`/`file_copy`/`file_rmdir`/`package_edit` 全部声明 `executionMode: 'sequential'`：所在 tool_call 批次整体串行，防同路径并发读改写
+- 全部 `task_*` 写工具（`task_create`/`task_plan`/`task_complete`/`task_pause`/`task_resume`/`task_drop`/`task_note`）声明 `executionMode: 'sequential'`：写共享 SessionData（读改写整包存回），防并发丢更新
+- `file_write`/`file_edit` 描述补 stale-content 警告（整文件覆写无合并语义；旧视图内容须先重读）
+- undo-log 全部写工具收敛到 `writeFileAtomic`（tmp+rename）：undo.jsonl / after-blobs / meta.json / owner.json / not-reversed.json + revert 回写，防撕裂写
+- 新增 `tests/tool-execution-mode-passthrough.test.ts`：三通路透传 + 全部写工具串行声明回归
+
 ## v0.86.2
 
 ### feat(engine): cache-friendly summarization on the session model

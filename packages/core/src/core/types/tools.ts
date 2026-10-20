@@ -222,4 +222,10 @@ export interface RegisteredTool {
   handler: ToolHandler;
   /** 工具来源（用于权限控制和可观测性） */
   source?: ToolSource;
+  /**
+   * 执行模式（唯一声明源，透传 AgentTool.executionMode 供 Loop 调度器读取）。
+   * 声明 'sequential' 的工具所在 tool_call 批次整体串行执行（按 tool_calls 顺序）。
+   * fs 写工具必须声明：否则同一批次对同一文件的并发读改写互相覆盖（丢失编辑）。
+   */
+  executionMode?: 'parallel' | 'sequential';
 }

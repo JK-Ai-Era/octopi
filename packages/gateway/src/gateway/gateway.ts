@@ -162,9 +162,14 @@ function normalizeRiskLevel(
 }
 
 /** RegisteredTool → AgentTool（热更新已 build Agent 的 client tool） */
-function registeredToolToAgentTool(tool: RegisteredTool): {
+/**
+ * 将 RegisteredTool 转换为 Loop AgentTool（与 builder.convertToAgentTool、think.buildAgentTools 同构）。
+ * 导出供测试覆盖三处映射的 executionMode 透传一致性。
+ */
+export function registeredToolToAgentTool(tool: RegisteredTool): {
   name: string;
   description: string;
+  executionMode?: 'parallel' | 'sequential';
   parameters?: Record<string, unknown>;
   execute: (
     toolCallId: string,
@@ -183,6 +188,7 @@ function registeredToolToAgentTool(tool: RegisteredTool): {
     name: tool.definition.name,
     description: tool.definition.description,
     // 与 convertToAgentTool 同构：purpose 统一装配（arch/tool-call-purpose.md）
+    ...(tool.executionMode ? { executionMode: tool.executionMode } : {}),
     parameters: buildToolLlmParameters(tool.definition.parameters),
     execute: async (toolCallId, args, signal) => {
       const startTime = Date.now();

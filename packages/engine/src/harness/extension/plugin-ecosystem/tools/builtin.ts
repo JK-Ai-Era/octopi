@@ -384,7 +384,7 @@ export function createFileWriteTool(): RegisteredTool {
     definition: {
       name: 'file_write',
       capabilities: ['fs-write'],
-      description: 'Write content to a file. Creates the file if it doesn\'t exist, overwrites if it does. Use append mode to add to existing files.',
+      description: 'Write content to a file. Creates the file if it doesn\'t exist, overwrites if it does. Use append mode to add to existing files. A full overwrite has NO merge semantics: never build content from stale reads and never assume parallel writes to the same path merge — later sequential writes silently lose earlier changes.',
       parameters: {
         path: {
           type: 'string',
@@ -402,6 +402,8 @@ export function createFileWriteTool(): RegisteredTool {
         },
       },
     },
+    // 整文件覆写无合并语义：所在 tool_call 批次整体串行，防同路径并行写互相抹掉
+    executionMode: 'sequential',
     handler: async (args, context) => {
       const { mkdir } = await import('node:fs/promises');
       const { dirname } = await import('node:path');
@@ -490,6 +492,8 @@ export function createFileDeleteTool(): RegisteredTool {
         },
       },
     },
+    // fs 写工具：所在 tool_call 批次整体串行
+    executionMode: 'sequential',
     handler: async (args, context) => {
       const { readFile, rm, stat } = await import('node:fs/promises');
 

@@ -67,6 +67,8 @@ export function createFileMkdirTool(): RegisteredTool {
         },
       },
     },
+    // fs 写工具：所在 tool_call 批次整体串行
+    executionMode: 'sequential',
     handler: async (args, context) => {
       const { mkdir, stat } = await import('node:fs/promises');
       const path = resolveSafePath(args.path as string, context, 'mkdir');
@@ -140,6 +142,8 @@ export function createFileRenameTool(): RegisteredTool {
         },
       },
     },
+    // fs 写工具：所在 tool_call 批次整体串行
+    executionMode: 'sequential',
     handler: async (args, context) => {
       const { rename, stat, rm, readFile } = await import('node:fs/promises');
       const from = resolveSafePath(args.from as string, context, 'rename');
@@ -252,6 +256,8 @@ export function createFileCopyTool(): RegisteredTool {
         },
       },
     },
+    // fs 写工具：所在 tool_call 批次整体串行
+    executionMode: 'sequential',
     handler: async (args, context) => {
       const { copyFile, mkdir, stat, readFile } = await import('node:fs/promises');
       const { dirname } = await import('node:path');
@@ -374,6 +380,8 @@ export function createFileRmdirTool(): RegisteredTool {
         },
       },
     },
+    // fs 写工具：所在 tool_call 批次整体串行
+    executionMode: 'sequential',
     handler: async (args, context) => {
       const { rmdir, readdir, stat } = await import('node:fs/promises');
       const path = resolveSafePath(args.path as string, context, 'rmdir');

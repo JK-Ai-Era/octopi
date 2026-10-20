@@ -183,6 +183,8 @@ export function createPackageEditTool(): RegisteredTool {
         },
       },
     },
+    // 整文件读改写无合并语义：所在 tool_call 批次整体串行，防同路径并发读改写互相覆盖
+    executionMode: 'sequential',
     handler: async (args, context) => {
       const cwd = resolveCwd(context);
       const rawPath = (args.path as string | undefined) ?? 'package.json';

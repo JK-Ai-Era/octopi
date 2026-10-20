@@ -1,4 +1,4 @@
-﻿/**
+/**
  * git_* dedicated tools 鈥?local VCS porcelain without a shell.
  *
  * Spawn `git` with a fixed argv allowlist (never a command string). Isolation:
@@ -567,6 +567,8 @@ export function createGitRestoreTool(): RegisteredTool {
         worktree: { type: 'boolean', description: 'Restore working tree (default true when not staged-only)' },
       },
     },
+    // 覆写工作树文件（index）：所在 tool_call 批次整体串行，防与同路径写交错
+    executionMode: 'sequential',
     handler: async (args, context) => {
       const cwd = resolveCwd(context, args.cwd as string | undefined);
       const paths = Array.isArray(args.paths) ? (args.paths as string[]) : [];

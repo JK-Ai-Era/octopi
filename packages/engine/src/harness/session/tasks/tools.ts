@@ -105,6 +105,8 @@ export function createTaskCreateTool(service: SessionTaskService): RegisteredToo
         },
       },
     },
+    // 写共享 SessionData（读改写整包存回）：所在 tool_call 批次整体串行，防并发丢更新
+    executionMode: 'sequential',
     handler: async (args, context) => {
       const description = String(args.description ?? '');
       const parentId = args.parent_id ? String(args.parent_id) : undefined;
@@ -131,6 +133,8 @@ export function createTaskPlanTool(service: SessionTaskService): RegisteredTool 
         },
       },
     },
+    // 写共享 SessionData（读改写整包存回）：所在 tool_call 批次整体串行，防并发丢更新
+    executionMode: 'sequential',
     handler: async (args, context) => {
       const goalId = String(args.goal_id ?? '');
       const raw = args.steps;
@@ -155,6 +159,8 @@ export function createTaskCompleteTool(service: SessionTaskService): RegisteredT
         progress_note: { type: 'string', description: 'Optional short progress note' },
       },
     },
+    // 写共享 SessionData（读改写整包存回）：所在 tool_call 批次整体串行，防并发丢更新
+    executionMode: 'sequential',
     handler: async (args, context) => {
       const taskId = String(args.task_id ?? '');
       const progressNote = args.progress_note ? String(args.progress_note) : undefined;
@@ -175,6 +181,8 @@ export function createTaskPauseTool(service: SessionTaskService): RegisteredTool
         reason: { type: 'string', description: 'Optional reason' },
       },
     },
+    // 写共享 SessionData（读改写整包存回）：所在 tool_call 批次整体串行，防并发丢更新
+    executionMode: 'sequential',
     handler: async (args, context) => {
       const taskId = String(args.task_id ?? '');
       const reason = args.reason ? String(args.reason) : undefined;
@@ -194,6 +202,8 @@ export function createTaskResumeTool(service: SessionTaskService): RegisteredToo
         task_id: { type: 'string', description: 'Task id', required: true },
       },
     },
+    // 写共享 SessionData（读改写整包存回）：所在 tool_call 批次整体串行，防并发丢更新
+    executionMode: 'sequential',
     handler: async (args, context) => {
       const taskId = String(args.task_id ?? '');
       const task = await service.resume(context.agentId, context.sessionId, taskId);
@@ -213,6 +223,8 @@ export function createTaskDropTool(service: SessionTaskService): RegisteredTool 
         reason: { type: 'string', description: 'Optional reason' },
       },
     },
+    // 写共享 SessionData（读改写整包存回）：所在 tool_call 批次整体串行，防并发丢更新
+    executionMode: 'sequential',
     handler: async (args, context) => {
       const taskId = String(args.task_id ?? '');
       const reason = args.reason ? String(args.reason) : undefined;
@@ -233,6 +245,8 @@ export function createTaskNoteTool(service: SessionTaskService): RegisteredTool 
         progress_note: { type: 'string', description: 'Short progress note', required: true },
       },
     },
+    // 写共享 SessionData（读改写整包存回）：所在 tool_call 批次整体串行，防并发丢更新
+    executionMode: 'sequential',
     handler: async (args, context) => {
       const taskId = String(args.task_id ?? '');
       const progressNote = String(args.progress_note ?? '');

@@ -301,6 +301,7 @@ export class ThinkExecutor {
     return Array.from(tools.values()).map((t) => ({
       name: t.definition.name,
       description: t.definition.description,
+      executionMode: t.executionMode,
       parameters: {
         type: 'object' as const,
         properties: Object.fromEntries(
