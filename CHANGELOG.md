@@ -1,3 +1,18 @@
+## v0.86.2
+
+### feat(engine): cache-friendly summarization on the session model
+
+**问题**：摘要请求被重排成「新 system + formattedContext」再发给 summary/mini——与会话请求不同形、不同缓存域，每次冷 prefill 全量历史，既慢又贵。
+
+**修正**：
+
+- `CompressParams.llmPrefix`：摘要请求 = 会话同形 `system+history` **原样** + 尾部一条 user 指令（禁止改写 system/历史）
+- `LLMSummaryCompressor` / compact `summarizeFn` 优先 `llmPrefix`；`previousSummary` 只进尾部
+- **不再自动切 summary/mini**：`wire-agent-builder` 移除 `pickSummarizeProvider`；缺省 summarize 用 session 同 `provider+modelName`（前缀缓存同域）
+- 显式 `builder.summarize()` 仍可人工覆盖
+
+**验证**：`summarize-cache-prefix`（前缀逐条不变 + system 不改写）、`wire-agent-builder`（禁止自动切档）。
+
 ## v0.86.1
 
 ### fix(engine): file_search pipe-literal OR, binary sniff, single-file path

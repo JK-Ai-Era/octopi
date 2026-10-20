@@ -86,35 +86,31 @@ const SUMMARY_TEMPLATE = `## Conversation Summary
 [Specific values, error messages, configuration details]`;
 
 /**
- * 摘要指令
+ * 摘要指令（缓存友好：只作 **user 尾部** 追加，绝不改写 system/历史）。
+ * 规则与旧 SUMMARIZE_INSTRUCTION 对齐；模板不变。
  */
-const SUMMARIZE_INSTRUCTION = `You are a conversation summarizer. Your task is to create a concise, structured summary of the conversation history.
+function buildSummarizeTailInstruction(params: {
+  previousSummary?: string;
+  maxTokens: number;
+}): string {
+  const header = params.previousSummary
+    ? `You are updating an existing conversation summary. Merge the conversation above into the summary below.\n\nPrevious Summary:\n${params.previousSummary}`
+    : `You are a conversation summarizer. Create a concise, structured summary of the conversation above.`;
+  return `${header}
 
 Rules:
 1. Focus on factual information, not pleasantries
 2. Preserve specific details (file paths, error messages, code snippets)
 3. Use the exact structure provided in the template
 4. If updating a previous summary, merge new information rather than replacing everything
-5. Keep the summary under {maxTokens} tokens
+5. Keep the summary under ${params.maxTokens} tokens
 6. HARD: Every Done item must state what was completed AND the artifact path or exact identifier
 7. HARD: Keep the HANDOFF line at the top unchanged in meaning — it prevents redoing finished work
 8. HARD: Do not invent paths or claim work that is not evidenced in the history
 
 Template:
 ${SUMMARY_TEMPLATE}`;
-
-const UPDATE_INSTRUCTION = `You are updating an existing conversation summary. The previous summary is provided below, along with new conversation messages.
-
-Rules:
-1. Merge new information into the existing summary
-2. Remove outdated information
-3. Preserve the structure and the HANDOFF line
-4. Every Done item must state what was completed AND the artifact path or exact identifier
-5. Keep the summary under {maxTokens} tokens
-6. HARD: Do not invent paths or claim work that is not evidenced in the history
-
-Previous Summary:
-{previousSummary}`;
+}
 
 export class LLMSummaryCompressor implements Compressor {
   /**
@@ -157,32 +153,33 @@ export class LLMSummaryCompressor implements Compressor {
     // 计算摘要 token 预算
     const summaryTokens = this.calculateSummaryBudget(currentTokens);
 
-    // 格式化消息为 LLM 可读的上下文
+    // 格式化消息为 LLM 可读的上下文（仅无 llmPrefix 时的旁路）
     const formattedContext = this.formatMessagesForSummary(messages);
 
     // 构建 LLM 消息
-    const llmMessages: LLMMessage[] = [];
-
-    // 系统指令
-    if (previousSummary) {
-      llmMessages.push({
-        role: 'system',
-        content: UPDATE_INSTRUCTION
-          .replace('{previousSummary}', previousSummary)
-          .replace('{maxTokens}', String(summaryTokens)),
-      });
+    // 缓存优先：llmPrefix（会话 system+history 同形）+ 尾部 user 指令。
+    // 禁止改写 system / 重排历史——否则打穿 provider 前缀缓存。
+    let llmMessages: LLMMessage[];
+    if (params.llmPrefix && params.llmPrefix.length > 0) {
+      llmMessages = [
+        ...params.llmPrefix,
+        {
+          role: 'user',
+          content: buildSummarizeTailInstruction({
+            previousSummary,
+            maxTokens: summaryTokens,
+          }),
+        },
+      ];
     } else {
-      llmMessages.push({
-        role: 'system',
-        content: SUMMARIZE_INSTRUCTION.replace('{maxTokens}', String(summaryTokens)),
-      });
+      llmMessages = [
+        {
+          role: 'system',
+          content: buildSummarizeTailInstruction({ previousSummary, maxTokens: summaryTokens }),
+        },
+        { role: 'user', content: formattedContext },
+      ];
     }
-
-    // 用户消息（要摘要的内容）
-    llmMessages.push({
-      role: 'user',
-      content: formattedContext,
-    });
 
     try {
       // 调用 LLM 生成摘要

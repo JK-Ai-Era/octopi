@@ -148,8 +148,11 @@ describe('主动压缩 × 工具输出密集历史（连线回归）', () => {
     await engine.assemble({ ...params, messages: grown });
     expect(summarize).toHaveBeenCalledTimes(2);
     expect(nonCachedCompacts(events)).toHaveLength(1);
-    const mergeInput = String(summarize.mock.calls[1]?.[0]?.[0]?.content ?? '');
-    expect(mergeInput).toContain('proactive-summary');
+    const mergeCall = summarize.mock.calls[1]?.[0] ?? [];
+    // previousSummary 在尾部 user 指令里；system/历史前缀不得被改写
+    const mergeAll = mergeCall.map((m: { content?: unknown }) => String(m.content ?? '')).join('\n');
+    expect(mergeAll).toContain('proactive-summary');
+    expect(String(mergeCall[0]?.content ?? '')).toContain('sys');
   });
 
   it('摘要 LLM 失败：降级机械视图，不以占位说明冒充摘要；小增量复用、攒够重试（诚实降级）', async () => {

@@ -314,6 +314,11 @@ export interface CompressParams {
    * （见 DefaultContextEngine.extractSummaryText）。
    */
   requireSummary?: boolean;
+  /**
+   * 缓存前缀：与会话 LLM 请求**同形**的 system+history（buildLlmMessages 产物）。
+   * 摘要请求只许在其**尾部**追加指令；禁止改 system / 历史字节——否则打穿 provider 前缀缓存。
+   */
+  llmPrefix?: LLMMessage[];
 }
 
 export interface CompressResult {

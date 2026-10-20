@@ -38,7 +38,6 @@ import {
 import type { ContextEngine } from '../context/types.js';
 import { DefaultContextEngine } from '../context/default-context-engine.js';
 import { DefaultBudgetAllocator } from '../context/budget-allocator.js';
-import { createProviderSummarize, pickSummarizeProvider } from '../context/summarize.js';
 import type { AgentBuilder } from './builder.js';
 
 // ── 配置解析（唯一实现；供 wire 与公开导出共用） ──
@@ -321,13 +320,9 @@ export async function wireAgentBuilder(
     builder.memoryConfig(spec.memoryConfig);
   }
 
-  // ── summarize：summary → mini → standard → 主模型 ──
-  const { provider: summarizeProvider, model: summarizeModel } = pickSummarizeProvider(
-    spec.providers,
-    spec.levelMap,
-    spec.model,
-  );
-  builder.summarize(createProviderSummarize(summarizeProvider, { model: summarizeModel }));
+  // ── summarize：与会话同模型（前缀缓存同域）──
+  // 不自动切 summary/mini：换 provider/model = 换缓存域，全量历史冷 prefill。
+  // 显式 builder.summarize() 仍可覆盖；缺省走 AgentBuilder 的 session 模型路径。
 
   // ── RunGuard ──
   if (spec.runGuardConfig?.enabled !== false) {

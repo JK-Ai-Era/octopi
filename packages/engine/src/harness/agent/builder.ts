@@ -1700,8 +1700,11 @@ export class AgentBuilder {
       this._summarize ??
       (!this._disableAutoSummarize && this._model
         ? async (messages: import('@octopi-agent/core/interfaces/model-provider.js').LLMMessage[], opts?: { maxTokens?: number }) => {
-            const provider = getResolvedModel()?.provider ?? this._model!;
-            return createProviderSummarize(provider)(messages, opts);
+            // 与会话同 provider+model：前缀缓存同域。禁止自动切 summary/mini。
+            const snap = getResolvedModel();
+            const provider = snap?.provider ?? this._model!;
+            const model = snap?.modelName;
+            return createProviderSummarize(provider, { model })(messages, opts);
           }
         : undefined);
     agent.setConvertToLlm(async (messages) => {

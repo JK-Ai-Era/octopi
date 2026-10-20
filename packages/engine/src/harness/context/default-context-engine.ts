@@ -279,6 +279,8 @@ export class DefaultContextEngine implements ContextEngine {
               summarize,
               estimator,
               emit,
+              systemPrompt,
+              tools,
             })
           : { messages };
       const view =
@@ -320,6 +322,8 @@ export class DefaultContextEngine implements ContextEngine {
       summarize,
       estimator,
       emit,
+      systemPrompt,
+      tools,
     });
     const workingMessages = proactive.messages;
     const proactiveDroppedSummary = proactive.droppedSummary;
@@ -388,6 +392,13 @@ export class DefaultContextEngine implements ContextEngine {
     });
 
     try {
+      // 缓存前缀：本轮会话同形 system+history（与主动摘要同纪律）
+      const overflowLlmPrefix = this.buildLlmMessages(
+        workingMessages,
+        systemPrompt,
+        tools,
+        agingPlan,
+      );
       switch (routing.route) {
         case 'truncate_tool_results_only': {
           const compressed = await this.config.compressor.compress({
@@ -409,6 +420,7 @@ export class DefaultContextEngine implements ContextEngine {
             previousSummary,
             summarize,
             tokenEstimator: estimator,
+            llmPrefix: overflowLlmPrefix,
           });
           compressedOverflow = compressed.result;
           droppedSummary = compressed.droppedSummary;
@@ -530,8 +542,21 @@ export class DefaultContextEngine implements ContextEngine {
     summarize?: SummarizeFunction;
     estimator: TokenEstimator;
     emit?: ContextEmitFn;
+    /** 缓存前缀原料：与会话请求同形（system+tools+完整历史） */
+    systemPrompt: string;
+    tools: LLMToolDefinition[];
   }): Promise<{ messages: Message[]; droppedSummary?: string }> {
-    const { sessionId, messages, messagesBudget, agingPlan, summarize, estimator, emit } = params;
+    const {
+      sessionId,
+      messages,
+      messagesBudget,
+      agingPlan,
+      summarize,
+      estimator,
+      emit,
+      systemPrompt,
+      tools,
+    } = params;
     const stateKey = params.stateKey ?? sessionId;
     const ratio = this.config.proactiveCompactRatio;
     const state = this.states.get(stateKey);
@@ -749,6 +774,8 @@ export class DefaultContextEngine implements ContextEngine {
 
     let compressed: Awaited<ReturnType<Compressor['compress']>>;
     try {
+      // 缓存前缀 = 会话同形 system+history（禁止改字节）；摘要指令只挂在尾部
+      const llmPrefix = this.buildLlmMessages(messages, systemPrompt, tools, agingPlan);
       compressed = await this.config.compressor.compress({
         messages: middle,
         targetTokens: targetMiddleTokens,
@@ -756,6 +783,7 @@ export class DefaultContextEngine implements ContextEngine {
         summarize,
         tokenEstimator: estimator,
         requireSummary: true,
+        llmPrefix,
       });
     } catch (err) {
       emit?.({
@@ -1005,6 +1033,8 @@ export class DefaultContextEngine implements ContextEngine {
     summarize?: SummarizeFunction;
     estimator: TokenEstimator;
     compactTargetTokens?: number;
+    /** 缓存前缀：会话同形 system+history；有则摘要只尾部追加指令 */
+    llmPrefix?: LLMMessage[];
   }): Promise<{
     summary?: string;
     compacted: boolean;
@@ -1012,7 +1042,7 @@ export class DefaultContextEngine implements ContextEngine {
     tokensAfter: number;
     coveredMessageCount?: number;
   }> {
-    const { sessionId, messages, summarize, estimator } = params;
+    const { sessionId, messages, summarize, estimator, llmPrefix } = params;
     const stateKey = params.stateKey ?? sessionId;
     const protectFirstN = this.config.protectFirstN;
     const protectLastN = this.config.protectLastN;
@@ -1049,6 +1079,7 @@ export class DefaultContextEngine implements ContextEngine {
           ? Math.max(200, Math.floor(params.compactTargetTokens * 0.3))
           : undefined,
         onSummarizeFail: 'truncate',
+        llmPrefix,
       },
     );
 
@@ -1090,6 +1121,8 @@ export class DefaultContextEngine implements ContextEngine {
     messages: Message[];
     summarize?: SummarizeFunction;
     compactTargetTokens?: number;
+    /** 缓存前缀：会话同形 system+history */
+    llmPrefix?: LLMMessage[];
   }): Promise<CompactResult> {
     const estimator = this.config.tokenEstimator;
     const stateKey = compactStateKey(input.sessionId, input.agentId);
@@ -1100,6 +1133,7 @@ export class DefaultContextEngine implements ContextEngine {
       summarize: input.summarize,
       estimator,
       compactTargetTokens: input.compactTargetTokens,
+      llmPrefix: input.llmPrefix,
     });
     return {
       ok: true,

@@ -66,7 +66,7 @@ describe('wireAgentBuilder', () => {
     expect(engine.info.id).toBe('default');
   });
 
-  it('calls builder.withModelLevels / summarize / contextEngine with wired config', async () => {
+  it('does not auto-wire summarize to summary/mini (session-model cache domain)', async () => {
     const primary = mockProvider('xiaomi-coding');
     const providers = new Map<string, ModelProvider>([['xiaomi-coding', primary]]);
     const builder = new AgentBuilder();
@@ -90,20 +90,9 @@ describe('wireAgentBuilder', () => {
 
     // 真正锁接线：漏掉 withModelLevels 此处必红
     expect(spyLevels).toHaveBeenCalledWith(levels);
-    expect(spySummarize).toHaveBeenCalledTimes(1);
+    // 摘要走 AgentBuilder 缺省 session 模型；禁止 pickSummarizeProvider 自动切档
+    expect(spySummarize).not.toHaveBeenCalled();
     expect(spyCtx).toHaveBeenCalledTimes(1);
     expect(spySecurity).toHaveBeenCalledTimes(1);
-
-    // summarize 选型必须带真实模型 ID（非档位名）
-    const summarizeArg = spySummarize.mock.calls[0]?.[0];
-    expect(typeof summarizeArg).toBe('function');
-    const chatSpy = vi.spyOn(primary, 'chat');
-    await (summarizeArg as (m: unknown[], o?: unknown) => Promise<string>)(
-      [{ role: 'user', content: 'x' }],
-      { maxTokens: 10 },
-    );
-    const modelUsed = (chatSpy.mock.calls[0]?.[0] as { model?: string })?.model;
-    expect(modelUsed).toBe('mimo-v2.6-flash');
-    expect(modelUsed).not.toBe('mini');
   });
 });

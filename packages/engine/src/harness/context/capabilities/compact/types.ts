@@ -49,6 +49,11 @@ export interface CompactOptions {
   estimator?: CompactTokenEstimator;
   previousSummary?: string;
   maxSummaryTokens?: number;
+  /**
+   * 缓存前缀：会话 LLM 请求同形 system+history。
+   * summarizeFn 路径只许尾部追加指令；禁止改写前缀字节。
+   */
+  llmPrefix?: import('@octopi-agent/core/interfaces/model-provider.js').LLMMessage[];
   signal?: AbortSignal;
   emit?: (e: {
     type: 'compact.start' | 'compact.end' | 'compact.error';

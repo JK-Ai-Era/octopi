@@ -138,20 +138,30 @@ export function createCompactEngine(options?: CreateCompactEngineOptions): Compa
     }
 
     if (summarizeFn) {
-      // 摘要请求 = policy 指令 + 文本化中段（单条 user），不把原始消息序列当对话发出：
-      // tool_call-only assistant / 缺 tool_call_id 的 tool 消息会被严格网关 400
-      // （"messages[0] assistant must provide content, reasoning_content or tool_calls"）。
-      // 文本化同时保住 toolCalls/toolResults 明细与多 agent 归因（formatMessagesAsText）。
-      // previousSummary 随内容进 prompt（与 summary executor / LLMSummaryCompressor 的
-      // 「迭代式更新」契约同款）：summarizeFn 返回即完整更新摘要，调用方不再事后拼接。
-      const system = buildSystemPrompt(policy, MIDDLE_SEGMENT_TASK, maxTokens);
-      const userContent = opts.previousSummary
-        ? `Previous summary:\n${opts.previousSummary}\n\n---\n\nNew content:\n${middleText}`
-        : middleText;
-      const llmMessages: LLMMessage[] = [
-        { role: 'system', content: system },
-        { role: 'user', content: userContent },
-      ];
+      // 缓存优先：llmPrefix（会话同形 system+history）+ 尾部 user 指令。
+      // 禁止把指令塞进 system 或重排历史——否则打穿前缀缓存。
+      // 无 llmPrefix 时回退「policy system + 文本化中段」（旁路/旧调用）。
+      let llmMessages: LLMMessage[];
+      if (opts.llmPrefix && opts.llmPrefix.length > 0) {
+        const tail = opts.previousSummary
+          ? `${buildSystemPrompt(policy, MIDDLE_SEGMENT_TASK, maxTokens)}\n\nPrevious summary:\n${opts.previousSummary}`
+          : buildSystemPrompt(policy, MIDDLE_SEGMENT_TASK, maxTokens);
+        llmMessages = [
+          ...opts.llmPrefix,
+          { role: 'user', content: tail },
+        ];
+      } else {
+        // 摘要请求 = policy 指令 + 文本化中段（单条 user），不把原始消息序列当对话发出：
+        // tool_call-only assistant / 缺 tool_call_id 的 tool 消息会被严格网关 400。
+        const system = buildSystemPrompt(policy, MIDDLE_SEGMENT_TASK, maxTokens);
+        const userContent = opts.previousSummary
+          ? `Previous summary:\n${opts.previousSummary}\n\n---\n\nNew content:\n${middleText}`
+          : middleText;
+        llmMessages = [
+          { role: 'system', content: system },
+          { role: 'user', content: userContent },
+        ];
+      }
       try {
         const text = await summarizeFn(llmMessages, {
           previousSummary: opts.previousSummary,
@@ -159,9 +169,7 @@ export function createCompactEngine(options?: CreateCompactEngineOptions): Compa
         });
         return { summary: text, coverage: 'full' };
       } catch (err) {
-        // 只吞 summarizeFn 的抛错（provider 报错/超时——用户实测形态："OpenAI API error
-        // 400: …"）——转 error 通道交给 onSummarizeFail 降级，不再穿透 compactCore
-        // 直达 HTTP 层变成手动压缩硬失败；try 内无其他可抛代码
+        // 只吞 summarizeFn 的抛错（provider 报错/超时）——转 error 通道交给 onSummarizeFail 降级
         return { error: err instanceof Error ? err.message : String(err) };
       }
     }
