@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, mkdir, writeFile, rm, readFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, rm, readFile, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -72,7 +72,8 @@ describe('FileReleaseService', () => {
     });
     expect(fileRef.mime).toBe('text/markdown');
     expect(fileRef.sizeBytes).toBeGreaterThan(0);
-    expect(record.absPath).toBe(file);
+    // absPath 契约 = realpath 后的绝对路径（防 symlink 逃逸，见 FileReleaseRecord）
+    expect(record.absPath).toBe(await realpath(file));
 
     const content = await svc.readContent('s1', fileRef.fileId);
     expect(content.ok).toBe(true);

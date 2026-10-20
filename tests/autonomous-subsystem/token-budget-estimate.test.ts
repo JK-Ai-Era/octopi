@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { tmpdir } from 'node:os';
 import { estimateTextTokens } from '@octopi-agent/engine/harness/context/token-estimator.js';
 import { TokenBudgetExceededError } from '@octopi-agent/engine/harness/collaboration/autonomous-subsystem/think/executor.js';
 import { ThinkExecutor } from '@octopi-agent/engine/harness/collaboration/autonomous-subsystem/think/executor.js';
@@ -36,13 +37,13 @@ describe('token budget uses heuristic estimator (not raw char length)', () => {
     };
 
     await expect(
-      executor.execute(think, { workingDirectory: '/tmp' }, 'none', undefined, {}, {
+      executor.execute(think, { workingDirectory: tmpdir() }, 'none', undefined, {}, {
         tokenBudget: 1,
       }),
     ).rejects.toBeInstanceOf(TokenBudgetExceededError);
 
     await expect(
-      executor.execute(think, { workingDirectory: '/tmp' }, 'none', undefined, {}, {
+      executor.execute(think, { workingDirectory: tmpdir() }, 'none', undefined, {}, {
         tokenBudget: 10_000,
       }),
     ).resolves.toMatchObject({ output: { signals: [{ action: 'no-op' }] } });

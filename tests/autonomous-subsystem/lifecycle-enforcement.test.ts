@@ -37,7 +37,8 @@ describe('SubsystemRuntime lifecycle enforcement', () => {
 
   it('sets status to timeout when maxDurationMs exceeded', async () => {
     const { tmpdir } = await import('node:os');
-    const tmpDir = `${tmpdir()}/octopi-audit-timeout-${Date.now()}`;
+    const { mkdtempSync } = await import('node:fs');
+    const tmpDir = mkdtempSync(`${tmpdir()}/octopi-audit-timeout-`);
     const runtime = new SubsystemRuntime({
       deps: { model: {} as any, events, errorStrategy: {} as any, mainTools: new Map() },
       auditDir: tmpDir,

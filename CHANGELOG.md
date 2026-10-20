@@ -1,3 +1,21 @@
+## v0.86.6
+
+### test(knowledge/gateway): fix race-prone assertions and tmp hygiene
+
+**问题**（NEXT-STEPS C2/C5 收口）：
+
+- `knowledge-parse-gap.test.ts` 按 `status='queued'` 计数断言，worker 认领竞态下计数掉队（实测 4<5 失败）；`queuedBefore === 1` 有同样竞态
+- `gateway-file-release.test.ts` 拿词法路径断言 `record.absPath`，而 `FileReleaseRecord.absPath` 契约就是 realpath（macOS `/var` → `/private/var` 别名下必失败）——**产品无错，测试断言错**
+- 测试卫生：`token-budget-estimate.test.ts` 用 `workingDirectory: '/tmp'`（Windows 不可用）；`lifecycle-enforcement` / `runtime-timeout` / `runtime.test.ts` 4 处以 `${tmpdir()}/…${Date.now()}` 拼目录（并发可撞、留垃圾）
+
+**修正**：
+
+- gap-scan 断言改按「路径覆盖」计数（`COUNT(DISTINCT path)` 不限 status），并以 `ingest.idle()` 终态断言 5 个文件全部 `indexed`
+- file-release 断言改 `expect(record.absPath).toBe(await realpath(file))`——把契约写进断言
+- `workingDirectory` 改 `tmpdir()`；4 处临时目录改 `mkdtempSync`（沿用同目录 audit/loader 测试先例）
+
+**验证**：6 个测试文件 32 tests 全绿（knowledge-parse-gap / gateway-file-release / token-budget-estimate / lifecycle-enforcement / runtime-timeout / runtime）。
+
 ## v0.86.5
 
 ### docs(process-isolation): repair mojibake in EN and sync ZH parity

@@ -141,8 +141,8 @@ describe('SubsystemRuntime', () => {
   describe('audit', () => {
     it('writes audit records on execution', async () => {
       const { tmpdir } = await import('node:os');
-      const tmpDir = `${tmpdir()}/octopi-audit-test-` + Date.now();
-      const { mkdirSync } = await import('node:fs');
+      const { mkdirSync, mkdtempSync } = await import('node:fs');
+      const tmpDir = mkdtempSync(`${tmpdir()}/octopi-audit-test-`);
 
       const rt = new SubsystemRuntime({
         deps: { model: {} as any, events, errorStrategy: {} as any, mainTools: new Map() },
@@ -166,7 +166,8 @@ describe('SubsystemRuntime', () => {
 
     it('writes audit even on failure', async () => {
       const { tmpdir } = await import('node:os');
-      const tmpDir = `${tmpdir()}/octopi-audit-fail-test-` + Date.now();
+      const { mkdtempSync } = await import('node:fs');
+      const tmpDir = mkdtempSync(`${tmpdir()}/octopi-audit-fail-test-`);
 
       const rt = new SubsystemRuntime({
         deps: { model: {} as any, events, errorStrategy: {} as any, mainTools: new Map() },

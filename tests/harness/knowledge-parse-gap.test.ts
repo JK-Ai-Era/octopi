@@ -1,5 +1,7 @@
 /**
  * 缺口补扫不得被「队列里还有 parse_file」挡住 — watch 漏事件后应立刻补，而不是排空才一次入队
+ * 断言按「路径覆盖」计数（不限 status）：worker 认领会把 queued 转 running/done，
+ * 按 status='queued' 计数会在竞态下掉队。
  */
 import { describe, expect, it, vi } from 'vitest';
 import { mkdtemp, writeFile, mkdir, rm } from 'node:fs/promises';
@@ -42,6 +44,7 @@ describe('knowledge parse gap scan', () => {
     const { JobQueue } = await import('@octopi-agent/engine/harness/knowledge/job-queue.js');
     // 直接 enqueue 一条（会进 jobs 表）
     // KnowledgeIngest.enqueue 是 private；用 reprocessFiles 路径不行，这里手写 SQL 等价入队
+    void JobQueue;
     db.raw
       .prepare(
         `INSERT INTO knowledge_jobs (id, source_id, file_id, kind, path, priority, status, attempts, created_at, updated_at)
@@ -49,14 +52,16 @@ describe('knowledge parse gap scan', () => {
       )
       .run(src.id, join(corpus, 'f-0.md').replace(/\\/g, '/'), Date.now(), Date.now());
 
-    const queuedBefore = (
-      db.raw
-        .prepare(
-          `SELECT COUNT(*) AS n FROM knowledge_jobs WHERE source_id = ? AND kind = 'parse_file' AND status = 'queued'`,
-        )
-        .get(src.id) as { n: number }
-    ).n;
-    expect(queuedBefore).toBe(1);
+    // 按路径覆盖计数（不限 status）：worker 可能在断言间隙把 queued 认领成 running/done
+    const coveredPaths = (): number =>
+      (
+        db.raw
+          .prepare(
+            `SELECT COUNT(DISTINCT path) AS n FROM knowledge_jobs WHERE source_id = ? AND kind = 'parse_file'`,
+          )
+          .get(src.id) as { n: number }
+      ).n;
+    expect(coveredPaths()).toBe(1);
 
     // 触发缺口补扫：即使有 queued parse_file，也必须补上磁盘有、索引无的 4 个
     const added = await (
@@ -64,14 +69,12 @@ describe('knowledge parse gap scan', () => {
     ).ensureParseCoverage(src.id);
     expect(added).toBeGreaterThanOrEqual(4);
 
-    const queuedAfter = (
-      db.raw
-        .prepare(
-          `SELECT COUNT(*) AS n FROM knowledge_jobs WHERE source_id = ? AND kind = 'parse_file' AND status = 'queued'`,
-        )
-        .get(src.id) as { n: number }
-    ).n;
-    expect(queuedAfter).toBeGreaterThanOrEqual(5);
+    expect(coveredPaths()).toBeGreaterThanOrEqual(5);
+
+    // 终态：补扫产出的任务不丢不重，5 个文件全部完成索引
+    await ingest.idle();
+    const indexed = index.listFiles(src.id).filter((f) => f.status === 'indexed');
+    expect(indexed.length).toBeGreaterThanOrEqual(5);
 
     ingest.dispose();
     db.close();
