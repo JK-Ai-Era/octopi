@@ -503,7 +503,8 @@ describe('file_search regression (openclaw-style misses)', () => {
       makeContext({ cwd: tmpDir }),
     ) as any;
 
-    expect(result.diagnostics.patternMode).toBe('regex');
+    // auto 下 `a|b` = 分支字面 OR（非强信号正则）；仍应命中任一分支
+    expect(result.diagnostics.patternMode).toBe('literal');
     expect(result.totalMatches).toBeGreaterThan(0);
     const files = new Set(result.matches.map((m: any) => m.file));
     expect(files.has('README.md')).toBe(true);

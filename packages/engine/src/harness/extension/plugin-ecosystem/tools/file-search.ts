@@ -6,7 +6,11 @@
  *
  * 特性：
  * - pattern_mode: auto（默认）/ literal / regex；`patterns[]` 多词任一命中
- * - auto 仅认强信号（锚点/转义类/`.*`/`{n}`/词式 `a|b`），代码字面量保持 literal
+ * - auto 仅认强信号（锚点/转义类/`.*`/`{n}`），代码字面量保持 literal
+ * - auto 下 `a|b` 恒为「分支字面 OR」：分支 trim + 转义后以 `|` 连接（`.` 是字面点，非通配）；
+ *   任一分支为空（`foo|`、`|`）则整词按字面搜；要搜含竖线的字面文本用 pattern_mode=literal
+ * - 二进制嗅探：文件头 4KB 含 NUL 判为二进制跳过（无扩展名二进制如 .DS_Store 不漏入结果）
+ * - 结果含 matchedFiles 聚合（每文件命中数）与 diagnostics.root（实际搜索根，便于发现 path 传错）
  * - 路径感知 glob（支持 `**` / `*` / `?` / `{a,b}`，匹配 root 相对路径；`\` 转义）
  * - 逐行流式扫描；`max_file_bytes` 安全阀（默认 50MB）跳过异常巨文件
  * - 上下文行（before/after）
@@ -18,6 +22,7 @@
  */
 
 import type { RegisteredTool } from '@octopi-agent/core/types.js';
+import type { FileHandle } from 'node:fs/promises';
 import {
   resolveSupportBinding,
   type ToolSummarySupport,
@@ -35,6 +40,8 @@ interface SearchMatch {
 
 /** 搜索诊断（零结果自纠用） */
 interface SearchDiagnostics {
+  /** 实际搜索根（已解析），调用方核对 path 是否传错 */
+  root: string;
   patternMode: 'literal' | 'regex' | 'mixed';
   patterns: string[];
   compiledPatterns: string[];
@@ -45,6 +52,8 @@ interface SearchDiagnostics {
   filesSearched: number;
   filesSkipped: number;
   filesSkippedOversize: number;
+  /** 头 4KB 含 NUL 被判为二进制跳过的文件数 */
+  filesSkippedBinary: number;
   maxFileBytes: number;
 }
 
@@ -54,8 +63,13 @@ type TruncatedReason = 'max_results' | 'l1_cap' | 'max_results+l1_cap';
 /** 搜索结果 */
 interface SearchResult {
   matches: SearchMatch[];
-  /** 返回的匹配条数（= matches.length；max_results 截断时真实命中更多，见 truncatedReason） */
+  /**
+   * 返回的匹配条数（= matches.length）。max_results 截断时真实命中更多，
+   * 此字段是下界（见 truncatedReason），不是全量总数
+   */
   totalMatches: number;
+  /** 每文件命中数（按命中数降序、文件名升序；max_results 截断时只覆盖已返回的命中） */
+  matchedFiles: Array<{ file: string; matches: number }>;
   /** 有信息被收起：max_results（条数截断）和/或 l1_cap（预览体收缩） */
   truncated: boolean;
   /** truncated 原因 */
@@ -132,23 +146,29 @@ export function createFileSearchTool(options?: { summary?: ToolSummarySupport })
         'Search file contents (like grep/rg) with structured results. ' +
         'Provide `pattern` (one term) or `patterns` (any-of literals). ' +
         'Default pattern_mode=auto compiles as regex only on strong signals: ' +
-        'anchors (^…$), escapes (\\d \\w \\s), `.*`/`.+`, `{n}` quantifiers, or word alternation (`foo|bar`). ' +
+        'anchors (^…$), escapes (\\d \\w \\s), `.*`/`.+`, `{n}` quantifiers. ' +
+        'In auto, `a|b` is a literal OR of trimmed branches (`.` is a literal dot, not a wildcard); ' +
+        'an empty branch (`foo|`, `|`) falls back to whole-term literal. ' +
         'Code tokens stay literal: `arr[0]`, `useState()`, `a+b`, `C++`, `foo.bar`, `memory*`. ' +
         'Set pattern_mode="regex" or "literal" to force. ' +
         "Glob filters by root-relative path (always case-insensitive): '*.md' (any depth), 'src/**/*.ts', '**/memory*.md'. " +
         "`**` crosses directories, `*` does not. " +
+        'Path: a directory to walk recursively, or a single file path to search just that file. ' +
         'Empty results include diagnostics.hints for how to retry. ' +
         'Default case-insensitive content match; set case_sensitive=true for exact case. ' +
-        'Files are read as line streams; max_file_bytes (default 50MB) skips oversized files.',
+        'Files are read as line streams; max_file_bytes (default 50MB) skips oversized files. ' +
+        'Files whose first 4KB contains a NUL byte are treated as binary and skipped.',
       parameters: {
         pattern: {
           type: 'string',
           description:
-            'Single search term. Auto: regex only for ^ $ \\d .* {n} or word `a|b`; everything else is literal text.',
+            'Single search term. Auto: regex only for ^ $ \\d .* {n}; ' +
+            '`a|b` = literal OR of trimmed branches (empty branch → whole-term literal); ' +
+            'everything else is literal text.',
         },
         patterns: {
           type: 'array',
-          description: 'Multiple terms; a line matches if ANY term matches. Prefer this over `a|b` for OR-of-literals.',
+          description: 'Multiple terms; a line matches if ANY term matches.',
           items: { type: 'string', description: 'search term' },
           minItems: 1,
         },
@@ -198,8 +218,8 @@ export function createFileSearchTool(options?: { summary?: ToolSummarySupport })
       timeoutMs: 30_000,
     },
     handler: async (args, context) => {
-      const { readdir, stat } = await import('node:fs/promises');
-      const { join, relative, extname } = await import('node:path');
+      const { open, readdir, stat } = await import('node:fs/promises');
+      const { basename, extname, join, relative } = await import('node:path');
 
       const rawRoot = args.path as string | undefined;
       const rootPath = rawRoot
@@ -235,7 +255,77 @@ export function createFileSearchTool(options?: { summary?: ToolSummarySupport })
       let filesSearched = 0;
       let filesSkipped = 0;
       let filesSkippedOversize = 0;
+      let filesSkippedBinary = 0;
+      const perFileCounts = new Map<string, number>();
       let truncated = false;
+
+      async function considerFile(fullPath: string, relPath: string): Promise<void> {
+        if (truncated) return;
+        filesSeen += 1;
+
+        // glob 过滤：root 相对路径（无 `/` 的模式等价于任意深度 globstar）
+        if (fileFilter && !fileFilter.test(relPath)) return;
+        filesMatchedByGlob += 1;
+
+        // 扩展名粗判二进制，避免把不可读内容塞进结果
+        const ext = extname(fullPath).toLowerCase();
+        if (BINARY_EXTENSIONS.has(ext)) {
+          filesSkipped += 1;
+          return;
+        }
+
+        let size = 0;
+        try {
+          size = (await stat(fullPath)).size;
+        } catch {
+          // stat 失败（竞态删除/无权限）→ 跳过该文件
+          filesSkipped += 1;
+          return;
+        }
+        if (size > maxFileBytes) {
+          filesSkipped += 1;
+          filesSkippedOversize += 1;
+          return;
+        }
+
+        // 内容嗅探：头 4KB 含 NUL 视为二进制（扩展名粗判覆盖不到的 .bin/.dat/无后缀二进制）。
+        // NUL 在 UTF-8/UTF-16 文本中不出现，误判面可忽略；吞掉读失败并按可读处理（下行扫描自会兜底）。
+        if (size > 0) {
+          let handle: FileHandle | undefined;
+          try {
+            handle = await open(fullPath, 'r');
+            const buf = Buffer.alloc(Math.min(4096, size));
+            const { bytesRead } = await handle.read(buf, 0, buf.length, 0);
+            if (buf.subarray(0, bytesRead).includes(0)) {
+              filesSkipped += 1;
+              filesSkippedBinary += 1;
+              return;
+            }
+          } catch {
+            // 读失败：不计二进制，交由下方行扫描决定（其失败路径计 filesSkipped）
+          } finally {
+            await handle?.close().catch(() => {
+              // 关闭失败不影响搜索结果；句柄随进程回收
+            });
+          }
+        }
+
+        filesSearched += 1;
+        await searchFileLines({
+          fullPath,
+          relPath,
+          matchers: content.matchers,
+          contextLines,
+          onMatch: (match) => {
+            allMatches.push(match);
+            perFileCounts.set(match.file, (perFileCounts.get(match.file) ?? 0) + 1);
+            if (allMatches.length >= maxResults) {
+              truncated = true;
+            }
+          },
+          shouldStop: () => truncated,
+        });
+      }
 
       async function walk(dir: string): Promise<void> {
         if (truncated) return;
@@ -260,56 +350,22 @@ export function createFileSearchTool(options?: { summary?: ToolSummarySupport })
           }
 
           if (!entry.isFile()) continue;
-          filesSeen += 1;
-
           // 统一为 `/`，保证 Windows 相对路径也能过 glob
           const relPath = relative(rootPath, fullPath).split('\\').join('/');
-
-          // glob 过滤：root 相对路径（无 `/` 的模式等价于任意深度 globstar）
-          if (fileFilter && !fileFilter.test(relPath)) continue;
-          filesMatchedByGlob += 1;
-
-          // 扩展名粗判二进制，避免把不可读内容塞进结果
-          const ext = extname(entry.name).toLowerCase();
-          if (BINARY_EXTENSIONS.has(ext)) {
-            filesSkipped += 1;
-            continue;
-          }
-
-          let size = 0;
-          try {
-            size = (await stat(fullPath)).size;
-          } catch {
-            // stat 失败（竞态删除/无权限）→ 跳过该文件
-            filesSkipped += 1;
-            continue;
-          }
-          if (size > maxFileBytes) {
-            filesSkipped += 1;
-            filesSkippedOversize += 1;
-            continue;
-          }
-
-          filesSearched += 1;
-          await searchFileLines({
-            fullPath,
-            relPath,
-            matchers: content.matchers,
-            contextLines,
-            onMatch: (match) => {
-              allMatches.push(match);
-              if (allMatches.length >= maxResults) {
-                truncated = true;
-              }
-            },
-            shouldStop: () => truncated,
-          });
+          await considerFile(fullPath, relPath);
         }
       }
 
-      await walk(rootPath);
+      // path 可为目录（递归）或单文件（只搜该文件）
+      const rootInfo = await stat(rootPath).catch(() => null);
+      if (rootInfo?.isFile()) {
+        await considerFile(rootPath, basename(rootPath).split('\\').join('/'));
+      } else {
+        await walk(rootPath);
+      }
 
       const diagnostics: SearchDiagnostics = {
+        root: rootPath,
         patternMode: content.mode,
         patterns: content.sources,
         compiledPatterns: content.compiled,
@@ -320,8 +376,14 @@ export function createFileSearchTool(options?: { summary?: ToolSummarySupport })
         filesSearched,
         filesSkipped,
         filesSkippedOversize,
+        filesSkippedBinary,
         maxFileBytes,
       };
+
+      // 每文件命中聚合：降序（命中多的优先），同数按文件名升序
+      const matchedFiles = [...perFileCounts.entries()]
+        .map(([file, matches]) => ({ file, matches }))
+        .sort((a, b) => b.matches - a.matches || (a.file < b.file ? -1 : a.file > b.file ? 1 : 0));
 
       const hints = buildHints({
         totalMatches: allMatches.length,
@@ -356,6 +418,7 @@ export function createFileSearchTool(options?: { summary?: ToolSummarySupport })
       return {
         matches: shrunk.matches,
         totalMatches: allMatches.length,
+        matchedFiles,
         truncated: truncated || Boolean(shrunk.cap),
         truncatedReason,
         outputCap: shrunk.cap,
@@ -430,7 +493,7 @@ function resolveMaxFileBytes(args: Record<string, unknown>): number {
  *
  * 只认强信号。代码字面量保持 literal：
  * `arr[0]` / `useState()` / `a+b` / `C++` / `foo.bar` / `memory*` 均不为正则。
- * 词式交替（`foo|bar`）视为 OR 正则，对应模型常见写法。
+ * `|` 不是正则信号：`a|b` 走 compileAlternationLiteral 的分支字面 OR。
  *
  * @param term - 搜索词
  * @returns 是否像正则
@@ -441,21 +504,24 @@ function looksLikeRegex(term: string): boolean {
   if (/\\[dDwWsSbBnrptfv0-9.*+?^${}()|[\]\\]/.test(term)) return true;
   if (/\.\*|\.\+/.test(term)) return true;
   if (/\{\d+(?:,\d*)?\}/.test(term)) return true;
-  if (term.includes('|')) {
-    const branches = term.split('|');
-    return branches.length >= 2 && branches.every(isWordLikeBranch);
-  }
   return false;
 }
 
 /**
- * 交替分支是否为词式（可安全当作 OR 字面量正则）
+ * auto 模式下把 `a|b|c` 编译为「分支字面 OR」
  *
- * @param branch - `a|b` 的单个分支
- * @returns 是否不含正则元字符
+ * 分支各自 trim + 转义后以 `|` 连接（`.` 是字面点，不是通配），
+ * 对应模型自然写法 `foo()|a+b`。任一分支为空（`foo|`、`|`、`a||b`）
+ * 则放弃（返回 null），整词按字面搜——竖线在正则里是空分支语义，代码里几乎从不想要。
+ *
+ * @param term - 含 `|` 的搜索词
+ * @param flags - 正则标志（大小写敏感性由调用方给）
+ * @returns 分支字面 OR 正则；不适合作交替时 null（调用方按整词字面处理）
  */
-function isWordLikeBranch(branch: string): boolean {
-  return branch.length > 0 && /^[\w.\- /:']+$/.test(branch);
+function compileAlternationLiteral(term: string, flags: string): RegExp | null {
+  const branches = term.split('|').map((b) => b.trim());
+  if (branches.length < 2 || branches.some((b) => b.length === 0)) return null;
+  return new RegExp(branches.map((b) => escapeRegex(b)).join('|'), flags);
 }
 
 /**
@@ -497,6 +563,7 @@ function compileContentMatchers(
     else asRegex = looksLikeRegex(term);
 
     let re: RegExp | null = null;
+    let forcedLiteral = false;
     if (asRegex) {
       try {
         re = new RegExp(term, flags);
@@ -505,9 +572,14 @@ function compileContentMatchers(
           throw new Error(`Invalid pattern: ${error instanceof Error ? error.message : String(error)}`);
         }
         // auto 下像正则但编译失败 → 回退字面量
+        forcedLiteral = true;
         autoForcedLiteral = true;
         asRegex = false;
       }
+    }
+    if (!re && requested === 'auto' && !forcedLiteral && term.includes('|')) {
+      // auto 的 `a|b`：分支字面 OR（分支 trim + 转义，`.` 是字面点）；空分支 → 整词字面
+      re = compileAlternationLiteral(term, flags);
     }
     if (!re) {
       re = new RegExp(escapeRegex(term), flags);

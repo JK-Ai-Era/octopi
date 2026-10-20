@@ -1,3 +1,18 @@
+## v0.86.1
+
+### fix(engine): file_search pipe-literal OR, binary sniff, single-file path
+
+**问题**：auto 把 `a|b` 当强信号正则（`.` 元字符、空分支语义），与「代码字面量保持 literal」不一致；无后缀二进制（`.DS_Store` 等）漏进结果；描述宣称支持单文件 `path` 但 `walk` 只 `readdir` 目录；二进制嗅探用 `return` 会中断同目录后续扫描。
+
+**修正**：
+
+- auto 下 `a|b` = 分支 trim + 转义后的**字面 OR**（`.` 是字面点）；空分支整词 literal；`pattern_mode=literal` 仍可搜含 `|` 的字面文本
+- 头 4KB NUL 嗅探跳过二进制，并计 `filesSkippedBinary`
+- `path` 支持单文件；`diagnostics.root` 回报实际搜索根
+- 结果含 `matchedFiles` 聚合；二进制跳过改为 `considerFile` return，不再截断目录扫描
+
+**验证**：`tests/harness/builtin-tools.test.ts`（case1 改为 literal OR 契约）、`file-search-l1-cap` 全绿。
+
 ## v0.86.0
 
 ### feat(context): turn 信封 + 全回放装配（E8 扩展，前缀缓存硬约束）
