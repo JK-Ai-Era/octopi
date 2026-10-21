@@ -232,11 +232,14 @@ function printTransitions(
     if (diff.modelChanged) notes.push('MODEL CHANGED');
     if (diff.modeChanged) notes.push('MODE CHANGED');
     const suffix = notes.length ? `  [${notes.join(', ')}]` : '';
+    // 命中率 = 可复用前缀 / 本次请求体总字符：比绝对字符数更直观（「这次要重算多少」）
+    const nextChars = calls[i].request.chars;
+    const hitPct = nextChars > 0 ? (100 * diff.cacheableChars) / nextChars : 0;
     // tools/model 变化时 stableChars 仍是消息前缀量，但缓存实际一条都命中不了
     const cacheNote =
       diff.cacheableChars === diff.stableChars
-        ? `stable ${compactNum(diff.stableChars)} chars`
-        : `stable ${compactNum(diff.stableChars)} chars, cacheable ${compactNum(diff.cacheableChars)}`;
+        ? `stable ${compactNum(diff.stableChars)} chars, ${hitPct.toFixed(1)}% cacheable`
+        : `stable ${compactNum(diff.stableChars)} chars, cacheable ${compactNum(diff.cacheableChars)} (${hitPct.toFixed(1)}%)`;
 
     if (diff.stability === 'identical') {
       console.log(`${label}  identical (${cacheNote})${suffix}`);
@@ -260,6 +263,14 @@ function printTransitions(
     console.log(
       `${label}  DIVERGED at msg[${d.index}] role=${d.prevRole ?? '?'}→${d.nextRole ?? '?'} ` +
         `(len ${d.prevLen ?? '?'}→${d.nextLen ?? '?'}); prefix ${cacheNote}${suffix}`,
+    );
+    // 命中/未命中拆分：老化造成的「未命中」是自伤，必须能一眼看到规模
+    const missChars = Math.max(0, nextChars - diff.cacheableChars);
+    const tokensPerChar = estimateTokensPerChar(calls[i]);
+    console.log(
+      `        cache: hit ${compactNum(diff.cacheableChars)} chars (${hitPct.toFixed(1)}%) / ` +
+        `miss ${compactNum(missChars)} chars (${(100 - hitPct).toFixed(1)}%)` +
+        (tokensPerChar ? `  ≈ hit ${compactNum(diff.cacheableChars * tokensPerChar)} / miss ${compactNum(missChars * tokensPerChar)} tok` : ''),
     );
     // 批量改写（老化）与单点改写的处置完全不同：前者不是装配 bug，且失效范围到尾部
     if (diff.changedAfter > 0) {

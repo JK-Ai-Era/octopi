@@ -1,3 +1,24 @@
+## v0.86.17
+
+### feat(cli): `llm-diff` 输出缓存命中率与命中/未命中拆分
+
+**动机**：此前只报「燃烧 tokens」的绝对值，看不出「这次请求有多少能命中、多少要重算」。
+实测该 session 一次老化的真实比例是 **命中 82.4% / 未命中 17.6%**（未命中 ≈55k tok），
+这个比例比绝对量更直观，也直接回答「老化自伤了多少缓存」。
+
+**改动**：
+
+- 每行 transition 追加命中率：`stable 951k chars, 99.9% cacheable`
+  （分母是下次请求体的总字符数，不是 prefix 长度）
+- `DIVERGED` 事件多打一行拆分：
+  ```
+  cache: hit 150k chars (18.2%) / miss 673k chars (81.8%)  ≈ hit 51k / miss 228k tok
+  ```
+- token 换算复用 `estimateTokensPerChar`（基于该次调用的真实 usage 反推，非固定比率）
+
+**注意**：命中率是按字符估算的分母，与 provider 的 token 计费口径可能略有出入；
+`cached/input` 列仍是 provider 返回的真实 usage，两者互为校验。
+
 ## v0.86.16
 
 ### fix(engine): 命令参数不再被内容预算挤出；中长命令原样保留
