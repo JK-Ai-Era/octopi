@@ -165,6 +165,46 @@ describe('ConversationAdapter', () => {
       expect(result).toHaveLength(4);
       expect(result.map((i) => i.role)).toEqual(['user', 'assistant', 'user', 'assistant']);
     });
+
+    it('D8：contextSummary / engineHint 渲染为系统提示条，不冒充用户气泡', () => {
+      const msgs: MessageRecord[] = [
+        {
+          role: 'user',
+          content: '[System: planning steer] check plan first',
+          timestamp: 800,
+          metadata: { source: 'engineHint' },
+        },
+        {
+          role: 'user',
+          content: '之前讨论了 A 与 B 的取舍……',
+          timestamp: 810,
+          metadata: { source: 'contextSummary' },
+        },
+      ];
+      const result = ConversationAdapter.buildHistoryItems(msgs, sid);
+      expect(result).toHaveLength(2);
+      // 拍板 (b)：保留可见性，但必须是 system 提示条而非用户发言
+      expect(roleItems(result, 'user')).toHaveLength(0);
+      const hint = result[0] as SystemConversationItem;
+      const summary = result[1] as SystemConversationItem;
+      expect(hint.role).toBe('system');
+      expect(hint.kind).toBe('info');
+      expect(hint.message).toContain('[引擎提示]');
+      expect(hint.message).toContain('check plan first');
+      expect(summary.role).toBe('system');
+      expect(summary.message).toContain('[上下文摘要]');
+    });
+
+    it('D9：载体插槽/turn 闭标仍隐藏（共享谓词清单）', () => {
+      const msgs: MessageRecord[] = [
+        { role: 'user', content: 'snap', timestamp: 900, metadata: { source: 'runtimeSnapshot' } },
+        { role: 'user', content: 'gnd', timestamp: 901, metadata: { source: 'knowledgeGrounding' } },
+        { role: 'user', content: 'att', timestamp: 902, metadata: { source: 'sessionAttachment' } },
+        { role: 'user', content: '<turn_end id="t1" />', timestamp: 903, metadata: { source: 'turnEnd' } },
+      ];
+      const result = ConversationAdapter.buildHistoryItems(msgs, sid);
+      expect(result).toHaveLength(0);
+    });
   });
 
   // ──────────────────────────────────
@@ -764,31 +804,31 @@ describe('ConversationAdapter reasoning channel', () => {
     const adapter = new ConversationAdapter();
     let items: ConversationItem[] = [];
     items = adapter.injectUserMessage('q', sid, items);
-    let r = adapter.applyEvent({ type: 'llm_thinking_delta', data: { delta: '��һ��' } }, sid, items);
+    let r = adapter.applyEvent({ type: 'llm_thinking_delta', data: { delta: '��һ��' } }, sid, items);
     items = r.items;
-    r = adapter.applyEvent({ type: 'llm_stream_delta', data: { delta: '��' } }, sid, items);
+    r = adapter.applyEvent({ type: 'llm_stream_delta', data: { delta: '��' } }, sid, items);
     items = r.items;
-    r = adapter.applyEvent({ type: 'turn.end', data: { content: '��', phase: 'final' } }, sid, items);
+    r = adapter.applyEvent({ type: 'turn.end', data: { content: '��', phase: 'final' } }, sid, items);
     items = r.items;
 
     const ast = items.find((i) => i.role === 'assistant') as AssistantConversationItem;
-    expect(ast.content).toBe('��');
-    expect(ast.reasoning).toBe('��һ��');
+    expect(ast.content).toBe('��');
+    expect(ast.reasoning).toBe('��һ��');
   });
 
   it('buildHistoryItems maps metadata.reasoning onto assistant items', () => {
     const msgs: MessageRecord[] = [
       {
         role: 'assistant',
-        content: '����',
+        content: '����',
         timestamp: 1000,
-        metadata: { reasoning: '����Ϸ' },
+        metadata: { reasoning: '����Ϸ' },
       } as MessageRecord,
     ];
     const result = ConversationAdapter.buildHistoryItems(msgs, sid);
     const ast = result[0] as AssistantConversationItem;
-    expect(ast.content).toBe('����');
-    expect(ast.reasoning).toBe('����Ϸ');
+    expect(ast.content).toBe('����');
+    expect(ast.reasoning).toBe('����Ϸ');
   });
 });
 
@@ -802,7 +842,7 @@ describe('ConversationAdapter tool purpose', () => {
         content: '',
         timestamp: 1000,
         toolCalls: [
-          { id: 'tc1', name: 'file_read', arguments: { purpose: '�鿴�����ļ�', path: 'a.json' } },
+          { id: 'tc1', name: 'file_read', arguments: { purpose: '�鿴�����ļ�', path: 'a.json' } },
         ],
       },
       {
@@ -810,7 +850,7 @@ describe('ConversationAdapter tool purpose', () => {
         content: '',
         timestamp: 1001,
         toolResults: [
-          { toolCallId: 'tc2', name: 'file_write', result: 'ok', purpose: 'д���޸�����' },
+          { toolCallId: 'tc2', name: 'file_write', result: 'ok', purpose: 'д���޸�����' },
           { toolCallId: 'tc1', name: 'file_read', result: '{}' },
         ],
       },
@@ -819,7 +859,7 @@ describe('ConversationAdapter tool purpose', () => {
     const tools = result.filter((i) => i.role === 'tool') as ToolConversationItem[];
     expect(tools).toHaveLength(2);
     const byId = Object.fromEntries(tools.map((t) => [t.toolCallId, t]));
-    expect(byId.tc2.purpose).toBe('д���޸�����');
-    expect(byId.tc1.purpose).toBe('�鿴�����ļ�');
+    expect(byId.tc2.purpose).toBe('д���޸�����');
+    expect(byId.tc1.purpose).toBe('�鿴�����ļ�');
   });
 });

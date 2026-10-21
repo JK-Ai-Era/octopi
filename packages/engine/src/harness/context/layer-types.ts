@@ -291,6 +291,41 @@ export function isEngineCarrierSource(source: unknown): boolean {
   return ENGINE_CARRIER_SOURCES.has(source as string);
 }
 
+/**
+ * 聊天回放隐藏谓词（D9 收敛的唯一真源）。
+ *
+ * observer `isHiddenFromChat` 与 gateway `ConversationAdapter.isHiddenSystemHistory`
+ * 均委托本函数——两份手抄清单曾漂移（observer 漏 3 个 source），收敛后不再各自维护。
+ * 语义（D8 拍板后）：
+ * - 引擎载体插槽（knowledgeGrounding / sessionAttachment / runtimeSnapshot）与 turn 闭标：
+ *   只进 LLM 上下文，不进聊天回放；
+ * - `contextSummary` / `engineHint`：**不隐藏**——渲染为系统提示条（SystemConversationItem），不冒充用户气泡；
+ * - 托管 systemPrompt 与无 metadata 的历史人格整段注入（长度+关键词启发式）：隐藏。
+ *
+ * @param input - 消息的 role / metadata.source / 正文文本
+ * @returns true = 聊天回放跳过本条
+ */
+export function isChatReplayHidden(input: {
+  role?: string;
+  source?: string;
+  text: string;
+}): boolean {
+  if (
+    input.source === 'knowledgeGrounding' ||
+    input.source === 'sessionAttachment' ||
+    input.source === 'runtimeSnapshot' ||
+    input.source === 'turnEnd'
+  ) {
+    return true;
+  }
+  if (input.role !== 'system') return false;
+  if (input.source === 'systemPrompt') return true;
+  return (
+    input.text.length > 200 &&
+    /AGENTS\.md|Session Startup|Operating Instructions|Agent Persona/i.test(input.text)
+  );
+}
+
 export interface ExtractLayerQueryOptions {
   /**
    * 额外主题线索（会话任务标题/当前步骤等）。

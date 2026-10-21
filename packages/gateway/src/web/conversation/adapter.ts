@@ -14,6 +14,7 @@ import type {
   MessageRecord,
 } from '../sdk/client.js';
 import { extractUserMessageText } from '@octopi-agent/engine/harness/context/turn-envelope.js';
+import { isChatReplayHidden } from '@octopi-agent/engine/harness/context/layer-types.js';
 
 import type {
   ConversationItem,
@@ -58,23 +59,15 @@ function asStringArray(value: unknown): string[] {
 }
 
 /**
- * 托管 system prompt / 明显的人格注入 / 引擎载体插槽（knowledgeGrounding / sessionAttachment / runtimeSnapshot），
- * 不应作为聊天记录回放
+ * 托管 system prompt / 明显的人格注入 / 引擎载体插槽 / turn 闭标，不作为聊天记录回放。
+ * D9：判定委托共享谓词 isChatReplayHidden（engine layer-types），与 observer isHiddenFromChat 同源。
  */
 function isHiddenSystemHistory(msg: MessageRecord): boolean {
-  const meta = msg.metadata as { source?: string } | undefined;
-  if (meta?.source === 'knowledgeGrounding') return true;
-  // 会话附件资料块：只进 LLM 上下文，不进聊天回放
-  if (meta?.source === 'sessionAttachment') return true;
-  // E8 易变快照（datetime/任务/检索择取）：只进 LLM 上下文，不进聊天回放
-  if (meta?.source === 'runtimeSnapshot') return true;
-  // turn 闭标：机器边界，不进聊天气泡
-  if (meta?.source === 'turnEnd') return true;
-  if (msg.role !== 'system') return false;
-  if (meta?.source === 'systemPrompt') return true;
-  const text = extractText(msg.content);
-  // 无 metadata 的历史人格整段注入
-  return text.length > 200 && /AGENTS\.md|Session Startup|Operating Instructions|Agent Persona/i.test(text);
+  return isChatReplayHidden({
+    role: msg.role,
+    source: (msg.metadata as { source?: string } | undefined)?.source,
+    text: extractText(msg.content),
+  });
 }
 
 /** turn_start 信封：UI 只显示用户原文（与 engine turn-envelope 同源） */
@@ -657,6 +650,23 @@ export class ConversationAdapter {
 
       switch (msg.role) {
         case 'user': {
+          const source = (msg.metadata as { source?: string } | undefined)?.source;
+          // D8 拍板（b）：机器生成的压缩摘要 / 引擎提示不是用户发言——
+          // 渲染为系统提示条（保留可见性），不再冒充用户气泡
+          if (source === 'contextSummary' || source === 'engineHint') {
+            const text = unwrapTurnStartUserText(msg.content);
+            const item: SystemConversationItem = {
+              id: ConversationAdapter.makeId('sys'),
+              role: 'system',
+              createdAt: ts,
+              sessionId,
+              source: 'history',
+              kind: 'info',
+              message: source === 'contextSummary' ? `[上下文摘要] ${text}` : `[引擎提示] ${text}`,
+            };
+            items.push(item);
+            break;
+          }
           const item: UserConversationItem = {
             id: ConversationAdapter.makeId('usr'),
             role: 'user',

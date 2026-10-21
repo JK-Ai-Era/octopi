@@ -1,3 +1,21 @@
+## v0.86.20
+
+### fix(webui/engine): 机器消息不再冒充用户气泡（D8）；聊天隐藏谓词收敛单源（D9）
+
+**D8（大哥拍板 b，保留可见性）**：`contextSummary`（压缩摘要）/ `engineHint`（引擎提示）是机器生成消息，
+此前聊天回放画成 **user 气泡**（用户视角「我从没说过这句话」），与 G2 归因体系矛盾。现渲染为**系统提示条**
+（`SystemConversationItem(kind: info)`，标注「[上下文摘要]」/「[引擎提示]」）——不再冒充用户发言。
+消息→item 转换唯一入口 `ConversationAdapter.buildHistoryItems`（3 个调用点同口径）。
+
+**D9**：「聊天回放隐藏」判定收敛为 engine 单一真源 `isChatReplayHidden`（`harness/context/layer-types.ts`），
+observer `isHiddenFromChat` 与 `ConversationAdapter.isHiddenSystemHistory` 均委托——消除两份手抄清单
+再次漂移的风险（v0.86.19 修过的正是这类漂移）。
+
+**待拍板**：D7 槽位注入面三方案对比已写 `arch/slot-fence-options.md`（建议 A′ 定向转义），拍板后实施。
+
+**验证**：conversation-adapter 50（新增 D8/D9 用例 2）/ observer-channel 42 / conversation-history-system 3 全绿；
+全量 2974 通过（2 个已知 macOS 沙箱基线失败不变）；lint / build 干净。
+
 ## v0.86.19
 
 ### feat(webui/engine): 「上下文 / Run」两页签 E8 重设计（placement 双组 · 插槽归因 · 分账）

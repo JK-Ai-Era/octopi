@@ -11,6 +11,7 @@
 import type { ContentBlock } from '@octopi-agent/core/types.js';
 import type { ToolCall, ToolResult } from '@octopi-agent/core/types.js';
 import type { Message } from '@octopi-agent/core/types.js';
+import { isChatReplayHidden } from '../../context/layer-types.js';
 import {
   isTurnStartContent,
   messageText,
@@ -698,24 +699,13 @@ export function summarizeMessages(
  * @returns 是否隐藏
  */
 export function isHiddenFromChat(msg: Pick<Message, 'role' | 'content' | 'metadata'>): boolean {
-  const source = (msg.metadata as { source?: string } | undefined)?.source;
-  // 引擎载体插槽 / turn 边界：只进 LLM 上下文，不进聊天回放。
-  // 与 ConversationAdapter.isHiddenSystemHistory 同清单（contextSummary / engineHint 聊天仍显示，不在此列）
-  if (
-    source === 'runtimeSnapshot' ||
-    source === 'knowledgeGrounding' ||
-    source === 'sessionAttachment' ||
-    source === 'turnEnd'
-  ) {
-    return true;
-  }
-  if (msg.role !== 'system') return false;
-  if (source === 'systemPrompt') return true;
-  const text = extractMessageText(msg.content);
-  return (
-    text.length > 200 &&
-    /AGENTS\.md|Session Startup|Operating Instructions|Agent Persona/i.test(text)
-  );
+  // D9：判定委托共享谓词 isChatReplayHidden（layer-types），
+  // 与 ConversationAdapter.isHiddenSystemHistory 同源，清单不再两份手抄
+  return isChatReplayHidden({
+    role: msg.role,
+    source: (msg.metadata as { source?: string } | undefined)?.source,
+    text: extractMessageText(msg.content),
+  });
 }
 
 function extractMessageText(content: unknown): string {
