@@ -1,3 +1,17 @@
+## v0.86.9
+
+### fix(cli): `llm-diff` 默认选中对话 session，不再误命中子系统调用桶
+
+**问题**（首次实测发现）：摘要/任务快照这类子系统调用自建 RunScope，`sessionId` 退化为 `agentId`，于是落到以 agent
+命名的 dump 目录（如 `default/`）。`llm-diff` 无参数时按 `index.jsonl` 修改时间直选最近一个目录，而子系统桶往往
+比真实会话更晚写入——结果跑出来的是 2 条 8KB 的摘要调用，而不是 500 条消息的对话，默认行为直接把用户带偏。
+
+**实现**：`isSubsystemBucket()` 判定 `sessionId === agentId` 或 `_unscoped`；默认只在对话 session 中挑选，全部是
+子系统桶时才兜底（并可显式 `--session default` 查看）。候选列表把这类目录标注为
+`(subsystem calls, not a conversation)`。
+
+**测试**：新增 1 项回归（子系统桶更晚写入时，默认仍选中对话 session），共 27 项。
+
 ## v0.86.8
 
 ### feat(engine/cli): LLM wire dump + `octopi llm-diff`（前缀缓存断点定位）

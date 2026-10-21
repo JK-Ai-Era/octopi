@@ -32,6 +32,22 @@ interface SessionEntry {
 }
 
 /**
+ * 是否为子系统调用桶（非对话会话）
+ *
+ * 摘要/任务快照这类子系统调用自建 RunScope，sessionId 退化为 agentId，
+ * 于是落进以 agent 命名的目录。默认挑选会话时必须排除它们，否则「最近更新」
+ * 很容易命中的是子系统桶而不是正在对话的 session。
+ *
+ * @param entry - session 目录
+ * @returns true = 子系统桶
+ */
+function isSubsystemBucket(entry: SessionEntry): boolean {
+  if (entry.sessionId === '_unscoped') return true;
+  const first = readFirstWireDumpRequest(entry.dir);
+  return first != null && first.sessionId != null && first.sessionId === first.agentId;
+}
+
+/**
  * 执行 `llm-diff` 命令
  *
  * @param args - CLI 参数（session / --dir / --limit / --json）
@@ -46,23 +62,26 @@ export async function llmDiffCommand(args: CliArgs): Promise<void> {
   }
 
   const wanted = args.session ?? args.subcommand;
+  // 默认挑选「最近更新的对话 session」；子系统桶（sessionId == agentId）只在没有对话 session 时兜底
+  const conversationSessions = sessions.filter((s) => !isSubsystemBucket(s));
+  const defaultPool = conversationSessions.length > 0 ? conversationSessions : sessions;
   let picked: SessionEntry;
   if (wanted) {
     const resolved = resolveSession(wanted, sessions);
     if (!resolved.match) {
       if (resolved.candidates.length > 1) {
         console.log(`Session "${wanted}" is ambiguous — ${resolved.candidates.length} matches under ${rootDir}:`);
-        for (const s of resolved.candidates.slice(0, 20)) console.log(`  ${displaySessionId(s.dir, s.sessionId)}`);
+        for (const s of resolved.candidates.slice(0, 20)) console.log(`  ${describeSession(s)}`);
         console.log('Pass a longer id (or the exact directory name) to disambiguate.');
       } else {
         console.log(`Session "${wanted}" not found under ${rootDir}. Known sessions:`);
-        for (const s of sessions.slice(0, 20)) console.log(`  ${displaySessionId(s.dir, s.sessionId)}`);
+        for (const s of sessions.slice(0, 20)) console.log(`  ${describeSession(s)}`);
       }
       return;
     }
     picked = resolved.match;
   } else {
-    picked = sessions[0];
+    picked = defaultPool[0];
   }
 
   const limit = args.limit ?? DEFAULT_LIMIT;
@@ -278,6 +297,17 @@ function resolveSession(
 }
 
 /** 展示用 sessionId：优先索引里的真实值 */
+/**
+ * 列出候选 session 时标注子系统桶，避免用户以为那是对话
+ *
+ * @param entry - session 目录
+ * @returns 展示名
+ */
+function describeSession(entry: SessionEntry): string {
+  const base = displaySessionId(entry.dir, entry.sessionId);
+  return isSubsystemBucket(entry) ? `${base}  (subsystem calls, not a conversation)` : base;
+}
+
 function displaySessionId(dir: string, fallback: string): string {
   return readFirstWireDumpRequest(dir)?.sessionId ?? fallback;
 }

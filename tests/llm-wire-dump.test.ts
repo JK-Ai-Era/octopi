@@ -656,6 +656,34 @@ describe('llm-diff — CLI 边界', () => {
     expect(logs.join('\n')).toContain('sess-bbb');
   });
 
+  test('默认挑选对话 session，跳过 sessionId==agentId 的子系统桶', async () => {
+    // 子系统桶（摘要/任务快照）更晚写入，若按 mtime 直选会误命中它
+    const conv = createWireDumpSink({
+      dir: rootDir,
+      resolveContext: () => ({ sessionId: 'web-sess-1', agentId: 'default' }),
+    });
+    conv.capture({ provider: 'p', model: 'm', mode: 'chat', body: bodyOf([{ role: 'user', content: 'x' }]) })!
+      .finish({ outcome: 'ok', durationMs: 1 });
+    await conv.flush();
+
+    const subsystem = createWireDumpSink({
+      dir: rootDir,
+      resolveContext: () => ({ sessionId: 'default', agentId: 'default' }),
+    });
+    subsystem.capture({ provider: 'p', model: 'm', mode: 'chat', body: bodyOf([{ role: 'user', content: 'y' }]) })!
+      .finish({ outcome: 'ok', durationMs: 1 });
+    await subsystem.flush();
+
+    const logs: string[] = [];
+    vi.spyOn(console, 'log').mockImplementation((msg?: unknown) => {
+      logs.push(String(msg));
+    });
+    await llmDiffCommand({ command: 'llm-diff', dir: rootDir } as never);
+
+    expect(logs.join('\n')).toContain('session=web-sess-1');
+    expect(logs.join('\n')).not.toContain('session=default  ');
+  });
+
   test('--limit 只影响展示，前缀比对仍基于真实相邻调用', async () => {
     const sink = sinkFor('sess_limit');
     for (const content of ['a', 'b']) {
