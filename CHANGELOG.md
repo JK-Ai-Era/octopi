@@ -1,3 +1,31 @@
+## v0.86.18
+
+### fix(core/engine): 运行期 steering 消息不再写入会话历史（`Message.ephemeral`）
+
+**问题**（真实 session 实测）：委派状态提示 `<delegation_status>1 running</delegation_status>`
+在 `session.jsonl` 里累积了 **47 条**，而当时已无任何活跃 delegation。
+
+根因链：
+
+1. `delegation/wiring.ts` 每轮通过 `getSteeringMessages` 返回一条状态提示
+2. `core/loop/agent-loop.ts` 直接 `currentContext.messages.push(...steering)`，
+   而 `currentContext.messages` 就是 `session.messages`（同一数组引用）
+3. `runner.ts` 写回时 `session.messages = [...keptPrefix, ...runContext.messages]`
+   → 运行期临时提示被当成对话历史持久化
+
+后果：状态过期后仍占用上下文；一旦 delegation 状态频繁变化（queued→running→completed），
+每条变化都会打穿前缀缓存。
+
+**改动**：
+
+- `Message` 新增 `ephemeral?: boolean`（语义：本轮 LLM 可见，不落持久层）
+- `wiring.ts`：状态提示带 `ephemeral: true`
+- `agent-loop.ts`：同 run 内**原地删除**旧的 ephemeral 再追加新的——状态快照只保留最新一条，
+  不再随工具调用次数线性膨胀；原地操作保持 `session.messages` 数组引用不变
+- `runner.ts`：写回时过滤 `ephemeral !== true`
+
+**边界**：历史中已存在的 47 条不会自动清理（改写历史会打穿缓存）；新产生的不会再落盘。
+
 ## v0.86.17
 
 ### feat(cli): `llm-diff` 输出缓存命中率与命中/未命中拆分

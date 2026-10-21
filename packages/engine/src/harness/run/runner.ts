@@ -1529,8 +1529,11 @@ export class SessionAwareRunner {
       }
       // 租约点之前的历史必须保留（I2 Discourse）；窗口内为 runContext.messages（含本轮新消息）
       // 全回放：不再剥 grounding/attachment（历史中部删改会打穿前缀缓存）
+      // ephemeral 消息（委派状态等运行期 steering）只属于本次 Run，不落历史——
+      // 否则「当时的状态」会被固化成对话历史，过期后仍占用上下文并打穿前缀缓存。
       const keptPrefix = contextLeasePrefix;
-      session.messages = [...keptPrefix, ...runContext.messages];
+      const durableMessages = runContext.messages.filter((m) => m.ephemeral !== true);
+      session.messages = [...keptPrefix, ...durableMessages];
       // contextDetachIndex 是 messages 下标：写回重排后必须对齐 keptPrefix 长度
       if (typeof session.contextDetachIndex === 'number') {
         session.contextDetachIndex = keptPrefix.length;

@@ -488,6 +488,16 @@ export async function* agentLoop(
     // 检查 steering 消息
     const steering = getSteeringMessages ? await getSteeringMessages() : [];
     if (steering.length > 0) {
+      // ephemeral 是「当前状态快照」：同 run 内只保留最新一条，避免每次工具调用后
+      // 累积一份过期快照（既重复占上下文，也让历史随调用次数线性膨胀）。
+      // 原地删除以保持数组引用（session/runContext 共享同一 messages 数组）。
+      if (steering.some((m) => m.ephemeral === true)) {
+        for (let i = currentContext.messages.length - 1; i >= 0; i--) {
+          if (currentContext.messages[i].ephemeral === true) {
+            currentContext.messages.splice(i, 1);
+          }
+        }
+      }
       currentContext.messages.push(...steering);
     }
 

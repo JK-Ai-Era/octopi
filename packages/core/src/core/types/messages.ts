@@ -115,6 +115,14 @@ export interface Message {
    */
   agentId?: string;
   metadata?: Record<string, unknown>;
+  /**
+   * 仅属于当前 run 的瞬时消息（如委派状态提示、运行期 steering）。
+   *
+   * 语义：本轮 LLM 调用可见，但**不写入会话持久层**——它不是对话历史，
+   * 而是运行期提示。写回时由 Runner 过滤掉，避免把「当时的状态」固化成历史
+   * （会造成：状态过期后仍留在历史里、每次状态变化打穿前缀缓存）。
+   */
+  ephemeral?: boolean;
 }
 
 // ── 工具函数 ──

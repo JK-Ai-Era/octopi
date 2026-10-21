@@ -171,8 +171,10 @@ export function createDelegationRuntime(
           const sessionId = getRunSessionId(agent.agent.contextSessionId);
           if (!sessionId) return [];
           const hint = service.renderStatusHint(sessionId);
+          // ephemeral：本轮可见、不落历史。否则「当时的状态」会被固化进 session，
+          // 状态过期后仍留在上下文里，且每次状态变化都会打穿前缀缓存。
           return hint
-            ? [{ role: 'system' as const, content: hint, timestamp: Date.now() }]
+            ? [{ role: 'system' as const, content: hint, timestamp: Date.now(), ephemeral: true }]
             : [];
         });
       }
