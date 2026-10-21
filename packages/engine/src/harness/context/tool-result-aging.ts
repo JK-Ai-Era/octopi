@@ -12,9 +12,13 @@
  *   装配视图重算——视图收缩会让已降级条目回原文、批量边界来回翻转（评审 F1）；
  * - **视图级**：只影响发给 LLM 的消息视图（`buildLlmMessages`）；session 持久层保原文。
  *
- * 红线（§4 能力红线）：user / assistant 正文永不降级；tool_call 参数默认保留；
- * **error 结果永不降级**（错误可追溯性优先，字段保真）；不膨胀守卫——
- * 只有指针严格小于原文时才降级。
+ * 红线（§4 能力红线）：user / assistant **正文**永不降级；**error 结果永不降级**（错误可追溯性优先，
+ * 字段保真）；不膨胀守卫——只有指针严格小于原文时才降级。
+ *
+ * tool_call 参数（`ageToolArgs`，默认开）：**只对「结果已被老化」的那条调用**同步降级为键值摘要
+ * （长值换成长度标记，键名全保）。原因：参数是上下文中唯一无界增长的成分——结果老化成指针后
+ * 参数仍留原文，实测其总量可达指针本体的 1.1 倍，且随 session 线性增长。
+ * 降级不改变 tool_call ↔ tool_result 配对结构（`id`/`name` 不动，`arguments` 仍是合法 JSON）。
  *
  * @module harness/context/tool-result-aging
  */
@@ -30,13 +34,23 @@ export interface ToolResultAgingConfig {
   /** 跨轮原文保留条数（默认 40） */
   rawWindow?: number;
   /**
-   * 批量冻结步长：老化边界只成批推进（默认 20；最小 1）。
+   * 批量冻结步长：老化边界只成批推进（默认 40；最小 1）。
    * ⚠️ 1 = 逐候选即降级（等同渐进老化、每轮烧前缀缓存，仅调试用）；
    * 生产取值应 ≥ 每轮工具结果数，使冻结事件隔数轮一次。
+   * 默认 40 的实测依据：单轮工具结果数峰值 34、均值 15，批 20 会近乎每轮触发一次，
+   * 而每次燃烧量是常数级（rawWindow + 半批 + 当轮），小批次摊不动 → 回本点被拉到 100 次调用。
    */
   freezeBatch?: number;
   /** 指针目标字符数（默认 400；是目标非硬顶——error/固定骨架可超出） */
   maxPointerChars?: number;
+  /**
+   * 是否随结果老化同步降级该次调用的参数（默认 true）
+   *
+   * 只作用于「结果已被老化」的调用；当前 run 与 rawWindow 内的参数保持原文。
+   */
+  ageToolArgs?: boolean;
+  /** 参数摘要的目标字符数（默认 160） */
+  maxAgedArgChars?: number;
 }
 
 /** 老化配置（已解析、全字段非空） */
@@ -45,6 +59,8 @@ export interface ToolResultAgingOptions {
   rawWindow: number;
   freezeBatch: number;
   maxPointerChars: number;
+  ageToolArgs: boolean;
+  maxAgedArgChars: number;
 }
 
 /** 老化计划：一次装配内的降级判定（基于完整历史的纯函数结果，跨轮稳定） */
@@ -61,6 +77,13 @@ const RESULT_OUTLINE_RATIO = 0.45;
 /** 轮廓下限（小旋钮下仍可读） */
 const MIN_ARGS_OUTLINE_CHARS = 24;
 const MIN_RESULT_OUTLINE_CHARS = 48;
+/**
+ * 参数摘要中「原样保留」的单个值上限
+ *
+ * 只用来区分「标识性短值」（路径、命令、行号）与「载荷长值」（文件内容、diff 正文）。
+ * 64 足以容纳常见路径，又远小于任何文件内容。
+ */
+const ARG_VALUE_KEEP_CHARS = 64;
 const TRUNCATION_MARK = '…[truncated]';
 
 /**
@@ -71,14 +94,20 @@ const TRUNCATION_MARK = '…[truncated]';
  */
 export function resolveToolResultAgingOptions(input?: ToolResultAgingConfig): ToolResultAgingOptions {
   const rawWindow = Number.isInteger(input?.rawWindow) && (input?.rawWindow ?? -1) >= 0 ? (input!.rawWindow as number) : 40;
-  const freezeBatch = Number.isInteger(input?.freezeBatch) && (input?.freezeBatch ?? -1) >= 1 ? (input!.freezeBatch as number) : 20;
+  const freezeBatch = Number.isInteger(input?.freezeBatch) && (input?.freezeBatch ?? -1) >= 1 ? (input!.freezeBatch as number) : 40;
   const maxPointerChars =
     Number.isInteger(input?.maxPointerChars) && (input?.maxPointerChars ?? -1) > 0 ? (input!.maxPointerChars as number) : 400;
+  const maxAgedArgChars =
+    Number.isInteger(input?.maxAgedArgChars) && (input?.maxAgedArgChars ?? -1) > 0
+      ? (input!.maxAgedArgChars as number)
+      : 160;
   return {
     enabled: input?.enabled ?? true,
     rawWindow,
     freezeBatch,
     maxPointerChars,
+    ageToolArgs: input?.ageToolArgs ?? true,
+    maxAgedArgChars,
   };
 }
 
@@ -172,7 +201,20 @@ export function applyAgingToMessages(
 ): Message[] {
   if (plan.agedIds.size === 0) return messages;
   return messages.map((msg) => {
-    if (!msg.toolResults?.length) return msg;
+    let next = msg;
+
+    // 参数与结果同步老化：只动「结果已老化」的那条调用，配对结构不变
+    if (opts.ageToolArgs && msg.toolCalls?.length) {
+      let callsChanged = false;
+      const toolCalls = msg.toolCalls.map((tc) => {
+        if (!plan.agedIds.has(tc.id)) return tc;
+        callsChanged = true;
+        return { ...tc, arguments: agedToolArgDigest(tc.name, tc.arguments, opts) as typeof tc.arguments };
+      });
+      if (callsChanged) next = { ...next, toolCalls };
+    }
+
+    if (!msg.toolResults?.length) return next;
     let changed = false;
     const results = msg.toolResults.map((tr) => {
       if (!plan.agedIds.has(tr.toolCallId)) return tr;
@@ -182,7 +224,7 @@ export function applyAgingToMessages(
         result: agedToolResultPointer(tr, plan.argsById.get(tr.toolCallId), opts),
       };
     });
-    return changed ? { ...msg, toolResults: results } : msg;
+    return changed ? { ...next, toolResults: results } : next;
   });
 }
 
@@ -224,6 +266,69 @@ export function agedToolResultPointer(
   pointerCache.set(tr as object, { fingerprint, text });
   return text;
 }
+
+/**
+ * 参数摘要：把「结果已被老化」的工具调用参数降级为键值摘要
+ *
+ * 规则（机械、确定性、无 LLM）：
+ * 1. **键名全保**——LLM 需要知道调用了哪个路径/命令才能在必要时重跑；
+ * 2. 序列化长度超过 {@link ARG_VALUE_KEEP_CHARS} 的值替换为长度标记 `…[N chars]`；
+ * 3. 若仍是超预算，按「值从大到小、同大小按键名」顺序继续替换，保证确定性；
+ * 4. 兜底：键名太多装不下时退化为整体轮廓截断。
+ *
+ * 返回值仍是合法 JSON 值，调用方照常 `JSON.stringify`，因此 tool_call 结构不变。
+ *
+ * @param name - 工具名（兜底分支用于说明来源）
+ * @param args - 原始调用参数（任意 JSON 值）
+ * @param opts - 老化配置（已解析）
+ * @returns 摘要值（`ageToolArgs=false` 时原样返回）
+ */
+export function agedToolArgDigest(name: string, args: unknown, opts: ToolResultAgingOptions): unknown {
+  if (!opts.ageToolArgs || args == null) return args;
+  if (typeof args !== 'object' || Array.isArray(args)) {
+    return { _aged: `${name} arguments elided`, outline: truncateOutline(safeJson(args), opts.maxAgedArgChars) };
+  }
+
+  const cached = argDigestCache.get(args as object);
+  const fingerprint = `${opts.maxAgedArgChars}`;
+  if (cached && cached.fingerprint === fingerprint) return cached.value;
+
+  const entries = Object.entries(args as Record<string, unknown>).map(([k, v]) => ({
+    k,
+    v,
+    size: safeJson(v).length,
+  }));
+  const out: Record<string, unknown> = {};
+  for (const e of entries) {
+    out[e.k] = e.size > ARG_VALUE_KEEP_CHARS ? elidedMarker(e.size) : e.v;
+  }
+
+  // 仍超预算：先替换较大的值（同大小按键名，保证跨进程同字节）
+  const remaining = entries
+    .filter((e) => e.size <= ARG_VALUE_KEEP_CHARS)
+    .sort((a, b) => b.size - a.size || (a.k < b.k ? -1 : a.k > b.k ? 1 : 0));
+  let i = 0;
+  while (safeJson(out).length > opts.maxAgedArgChars && i < remaining.length) {
+    const e = remaining[i++];
+    out[e.k] = elidedMarker(e.size);
+  }
+
+  const value: unknown =
+    safeJson(out).length > opts.maxAgedArgChars
+      ? { _aged: `${name} arguments elided`, outline: truncateOutline(safeJson(args), opts.maxAgedArgChars) }
+      : out;
+
+  argDigestCache.set(args as object, { fingerprint, value });
+  return value;
+}
+
+/** 值被省略时的长度标记 */
+function elidedMarker(chars: number): string {
+  return `…[${chars} chars]`;
+}
+
+// 参数摘要 write-once 缓存：同 args 对象 + 同配置 → 同值（与 pointerCache 同理）
+const argDigestCache = new WeakMap<object, { fingerprint: string; value: unknown }>();
 
 /**
  * 结果轮廓：结果正文序列化的头部（机械截断，非摘要改写）

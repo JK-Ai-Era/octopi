@@ -39,6 +39,7 @@ import { toolResultBody } from './tool-result-body.js';
 import { buildToolCallLedger } from './llm-summarizer.js';
 import {
   agedToolResultPointer,
+  agedToolArgDigest,
   applyAgingToMessages,
   computeToolResultAgingPlan,
   resolveToolResultAgingOptions,
@@ -1319,17 +1320,24 @@ export class DefaultContextEngine implements ContextEngine {
       }
     } else if (msg.role === 'assistant' && msg.toolCalls?.length) {
       // 带工具调用的 assistant 消息
+      // F1-B2：与结果同步老化的参数降级为键值摘要（id/name 不动，arguments 仍是合法 JSON）
       result.push({
         role: 'assistant',
         content: getTextContent(msg.content) || null,
-        tool_calls: msg.toolCalls.map(tc => ({
-          id: tc.id,
-          type: 'function' as const,
-          function: {
-            name: tc.name,
-            arguments: JSON.stringify(tc.arguments),
-          },
-        })),
+        tool_calls: msg.toolCalls.map(tc => {
+          const args =
+            aging && this.config.historyAging.ageToolArgs && aging.agedIds.has(tc.id)
+              ? agedToolArgDigest(tc.name, tc.arguments, this.config.historyAging)
+              : tc.arguments;
+          return {
+            id: tc.id,
+            type: 'function' as const,
+            function: {
+              name: tc.name,
+              arguments: JSON.stringify(args),
+            },
+          };
+        }),
       });
     } else if (Array.isArray(msg.content)) {
       // 多模态消息：转换为 LLM 内容块格式

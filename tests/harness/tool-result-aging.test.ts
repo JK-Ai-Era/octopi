@@ -24,6 +24,8 @@ const OPTS = (over?: Partial<ToolResultAgingOptions>): ToolResultAgingOptions =>
   rawWindow: 40,
   freezeBatch: 20,
   maxPointerChars: 400,
+  ageToolArgs: true,
+  maxAgedArgChars: 160,
   ...over,
 });
 
@@ -229,7 +231,7 @@ describe('tool-result-aging plan', () => {
     expect(plan.agedIds.size).toBe(0);
     expect(resolveToolResultAgingOptions({ enabled: false }).enabled).toBe(false);
     expect(resolveToolResultAgingOptions({}).rawWindow).toBe(40);
-    expect(resolveToolResultAgingOptions({ freezeBatch: 0 }).freezeBatch).toBe(20); // 0 = 非法步长回落缺省
+    expect(resolveToolResultAgingOptions({ freezeBatch: 0 }).freezeBatch).toBe(40); // 0 = 非法步长回落缺省
   });
 });
 
@@ -322,5 +324,82 @@ describe('DefaultContextEngine — aged LLM view', () => {
     // error 结果即使过窗也保持原文（含错误文案），且视图内无任何指针
     expect(toolTexts.some((t) => t.includes('ENOENT'))).toBe(true);
     expect(toolTexts.some((t) => t.includes('[aged tool result'))).toBe(false);
+  });
+});
+
+describe('tool-call 参数随结果老化', () => {
+  /** 带大参数（模拟 file_edit 的 old/new 正文）的轮次 */
+  function argHeavyTurn(chars: number): Message[] {
+    seq += 1;
+    const call = {
+      id: `call-${seq}-0`,
+      name: 'file_edit',
+      arguments: {
+        path: `src/f${seq}.ts`,
+        old_string: 'a'.repeat(chars),
+        new_string: 'b'.repeat(chars),
+      },
+    };
+    return [
+      { role: 'user', content: `u${seq}`, timestamp: 0 } as Message,
+      { role: 'assistant', content: '', toolCalls: [call], timestamp: 0 } as Message,
+      {
+        role: 'tool',
+        content: '',
+        toolResults: [{ toolCallId: call.id, name: call.name, result: 'r'.repeat(chars * 2) }],
+        timestamp: 0,
+      } as Message,
+    ];
+  }
+
+  it('应按结果同步老化参数：键名保留、长值换成长度标记', async () => {
+    const engine = new DefaultContextEngine({ historyAging: { rawWindow: 0, freezeBatch: 1 } });
+    const messages = [...argHeavyTurn(1000), ...argHeavyTurn(1000), ...argHeavyTurn(10)];
+    const result = await engine.assemble({ sessionId: 's-args', messages, systemPrompt: 'sys', tools: [] });
+
+    const calls = result.messages.flatMap((m) => (m.tool_calls ?? []) as Array<{ function: { arguments: string } }>);
+    const agedCall = calls[0];
+    expect(agedCall).toBeDefined();
+    const args = JSON.parse(agedCall.function.arguments) as Record<string, unknown>;
+    // 键名全保（LLM 需要知道改了哪个文件）
+    expect(Object.keys(args).sort()).toEqual(['new_string', 'old_string', 'path']);
+    expect(args.path).toMatch(/^src\/f\d+\.ts$/);
+    // 载荷长值被替换为长度标记
+    expect(String(args.old_string)).toMatch(/^…\[\d+ chars\]$/);
+    expect(String(args.new_string)).toMatch(/^…\[\d+ chars\]$/);
+    // 摘要显著小于原文
+    expect(agedCall.function.arguments.length).toBeLessThan(200);
+  });
+
+  it('ageToolArgs=false 时参数保持原文（红线可回退）', async () => {
+    const engine = new DefaultContextEngine({
+      historyAging: { rawWindow: 0, freezeBatch: 1, ageToolArgs: false },
+    });
+    const messages = [...argHeavyTurn(1000), ...argHeavyTurn(1000), ...argHeavyTurn(10)];
+    const result = await engine.assemble({ sessionId: 's-args-off', messages, systemPrompt: 'sys', tools: [] });
+
+    const calls = result.messages.flatMap((m) => (m.tool_calls ?? []) as Array<{ function: { arguments: string } }>);
+    const args = JSON.parse(calls[0].function.arguments) as Record<string, unknown>;
+    expect(String(args.old_string)).toHaveLength(1000);
+  });
+
+  it('当前 run 与 rawWindow 内的参数不老化', async () => {
+    const engine = new DefaultContextEngine({ historyAging: { rawWindow: 5, freezeBatch: 1 } });
+    const messages = [...argHeavyTurn(500), ...argHeavyTurn(500)];
+    const result = await engine.assemble({ sessionId: 's-args-win', messages, systemPrompt: 'sys', tools: [] });
+
+    const calls = result.messages.flatMap((m) => (m.tool_calls ?? []) as Array<{ function: { arguments: string } }>);
+    for (const tc of calls) {
+      const args = JSON.parse(tc.function.arguments) as Record<string, unknown>;
+      expect(String(args.old_string)).toHaveLength(500);
+    }
+  });
+
+  it('摘要恒同字节（write-once，跨引擎重建一致）', async () => {
+    const engine = new DefaultContextEngine({ historyAging: { rawWindow: 0, freezeBatch: 1 } });
+    const messages = [...argHeavyTurn(700), ...argHeavyTurn(700), ...argHeavyTurn(5)];
+    const first = await engine.assemble({ sessionId: 's-args-stable', messages, systemPrompt: 'sys', tools: [] });
+    const second = await engine.assemble({ sessionId: 's-args-stable', messages, systemPrompt: 'sys', tools: [] });
+    expect(JSON.stringify(second.messages)).toBe(JSON.stringify(first.messages));
   });
 });

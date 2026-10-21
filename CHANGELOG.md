@@ -1,3 +1,40 @@
+## v0.86.13
+
+### feat(engine): tool_call 参数随结果同步老化；`freezeBatch` 缺省 20 → 40
+
+**问题**（真实 session 实测）：工具结果被老化成指针后，**该次调用的参数仍是原文**，而参数是上下文中唯一
+无界增长的成分——结果有界（指针恒定 400 目标），参数却随 session 线性增长。实测该 session：
+
+- 已老化结果的调用 358 次，其**参数总量 179,045 chars，是指针本体（157,955）的 1.1 倍**
+- 整个上下文的 assistant 参数 272,482 chars 中，**65.7% 属于「结果早已变指针」的调用**，纯历史残留
+- 燃烧（老化轮重新计费的后缀）里，assistant 参数占 **25%–40%**，是最大单项
+
+**实现**（`agedToolArgDigest`）：
+
+- 只对「结果已被老化」的那条调用生效（`plan.agedIds`），当前 run 与 `rawWindow` 内参数保持原文；
+- **键名全保**：LLM 需要知道改了哪个文件/跑什么命令才能决定是否重跑；
+- 载荷级长值（序列化 > 64 字符）替换为 `…[N chars]`；仍超预算时按「值从大到小、同大小按键名」
+  继续替换（确定性排序，保证跨进程同字节）；键名太多装不下才退化为整体轮廓截断；
+- `id`/`name` 不动、`arguments` 仍是合法 JSON → provider（OpenAI 字符串 / Anthropic `JSON.parse`）
+  与 tool_call ↔ tool_result 配对结构完全不变；
+- `applyAgingToMessages` 同步改写 `toolCalls`，保证**估算尺子与真实请求一致**（F1-B3 前提）。
+
+实测收益（对真实 wire body 重算）：参数 308,990 → 158,729 chars，**整个请求体降 17.0%**，
+约 **50k tokens/次调用**。
+
+**`freezeBatch` 缺省 20 → 40**：实测单轮工具结果数峰值 34、均值 15，批 20 近乎每轮触发一次老化；
+而每次老化燃烧量是常数级（rawWindow + 半批 + 当轮），小批次摊不动 → 回本点被拉到 ~100 次调用。
+批 40 使事件间隔约 2–3 轮。
+
+**配置**：`contextEngine.historyAging.{ageToolArgs,maxAgedArgChars}`（默认 `true` / `160`）。
+
+**测试**：新增 4 项（键名保留+长值标记、`ageToolArgs=false` 可回退、窗口内不老化、摘要 write-once
+跨重建一致），aging 合计 22 项；全量 2946 通过。
+
+**旁注（既存行为，未改动）**：`historyAging.enabled=false` 的调试路径下，装配结果会丢弃 14 条 turn
+载体消息（`turn_start`/`turn_context`/`turn_end`）；生产路径（enabled）完整保留全部 32 条。该差异与本次
+改动无关，留待单独确认。
+
 ## v0.86.12
 
 ### feat(cli): `llm-diff` 输出老化回本判定

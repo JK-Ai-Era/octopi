@@ -11,12 +11,20 @@ export const HistoryAgingConfigSchema = z.object({
   /** 跨轮原文保留条数（默认 40） */
   rawWindow: z.number().int().nonnegative().optional(),
   /**
-   * 批量冻结步长（默认 20；最小 1）。⚠️ 1 = 逐候选即降级（等同渐进老化、
+   * 批量冻结步长（默认 40；最小 1）。⚠️ 1 = 逐候选即降级（等同渐进老化、
    * 每轮烧前缀缓存，仅调试用）；生产取值应 ≥ 每轮工具结果数。
    */
   freezeBatch: z.number().int().min(1).optional(),
   /** 指针目标字符数（默认 400） */
   maxPointerChars: z.number().int().positive().optional(),
+  /**
+   * 是否随结果老化同步降级该次调用的参数（默认 true）
+   *
+   * 参数是上下文中唯一无界增长的成分；只作用于「结果已被老化」的调用。
+   */
+  ageToolArgs: z.boolean().optional(),
+  /** 参数摘要目标字符数（默认 160） */
+  maxAgedArgChars: z.number().int().positive().optional(),
 });
 
 export const ContextEngineConfigSchema = z.object({
