@@ -49,7 +49,12 @@ export interface ToolResultAgingConfig {
    * 只作用于「结果已被老化」的调用；当前 run 与 rawWindow 内的参数保持原文。
    */
   ageToolArgs?: boolean;
-  /** 参数摘要的目标字符数（默认 160） */
+  /**
+   * 参数摘要的目标字符数（默认 320；**只约束内容值**，键名与定位字段不计入）
+   *
+   * 定位字段（path/file/glob/pattern/cwd）与 command 头部是「这条调用碰了哪里」的唯一锚点，
+   * 恒定保留；预算过小只会让内容值更快退化，不会丢锚点。
+   */
   maxAgedArgChars?: number;
 }
 
@@ -100,7 +105,7 @@ export function resolveToolResultAgingOptions(input?: ToolResultAgingConfig): To
   const maxAgedArgChars =
     Number.isInteger(input?.maxAgedArgChars) && (input?.maxAgedArgChars ?? -1) > 0
       ? (input!.maxAgedArgChars as number)
-      : 160;
+      : 320;
   return {
     enabled: input?.enabled ?? true,
     rawWindow,
@@ -254,10 +259,12 @@ export function agedToolResultPointer(
   const argsBudget = Math.max(MIN_ARGS_OUTLINE_CHARS, Math.floor(opts.maxPointerChars * ARGS_OUTLINE_RATIO));
   const resultBudget = Math.max(MIN_RESULT_OUTLINE_CHARS, Math.floor(opts.maxPointerChars * RESULT_OUTLINE_RATIO));
   const argsOutline = truncateOutline(safeJson(args ?? {}), argsBudget);
+  // 结果轮廓只保留头部，若不给总量，读方会把「头部那几条」误当成全部（file_search 尤甚）
+  const resultBody = toolResultOutline(tr);
   const errorOrResult =
     tr.error !== undefined
       ? `error: ${tr.error}` // 防御性保真：错误文案不截断、不改写
-      : `result: ${truncateOutline(toolResultOutline(tr), resultBudget)}`;
+      : `result ${resultBody.length} chars: ${truncateOutline(resultBody, resultBudget)}`;
   const text =
     `[aged tool result · pointer] tool: ${tr.name ?? 'unknown'}; ` +
     `args: ${argsOutline}; ${errorOrResult}; ` +
@@ -300,21 +307,27 @@ export function agedToolArgDigest(name: string, args: unknown, opts: ToolResultA
   }));
   const out: Record<string, unknown> = {};
   for (const e of entries) {
-    out[e.k] = e.size > ARG_VALUE_KEEP_CHARS ? elidedMarker(e.size) : e.v;
+    out[e.k] = digestArgValue(e.k, e.v, e.size);
   }
 
-  // 仍超预算：先替换较大的值（同大小按键名，保证跨进程同字节）
-  const remaining = entries
-    .filter((e) => e.size <= ARG_VALUE_KEEP_CHARS)
+  // 预算只约束「内容值」，定位字段不计入：
+  // 否则一条绝对路径就能吃掉整个预算，反而先把唯一锚点挤掉（实测 path 均长 79，
+  // 若计入预算，file_edit 这类调用会退化成「看不到改了哪个文件」）。
+  const contentChars = (): number =>
+    safeJson(
+      Object.fromEntries(Object.entries(out).filter(([k]) => !isLocatorField(k))),
+    ).length;
+
+  const contentEntries = entries
+    .filter((e) => !isLocatorField(e.k))
     .sort((a, b) => b.size - a.size || (a.k < b.k ? -1 : a.k > b.k ? 1 : 0));
-  let i = 0;
-  while (safeJson(out).length > opts.maxAgedArgChars && i < remaining.length) {
-    const e = remaining[i++];
+  for (const e of contentEntries) {
+    if (contentChars() <= opts.maxAgedArgChars) break;
     out[e.k] = elidedMarker(e.size);
   }
 
   const value: unknown =
-    safeJson(out).length > opts.maxAgedArgChars
+    contentChars() > opts.maxAgedArgChars
       ? { _aged: `${name} arguments elided`, outline: truncateOutline(safeJson(args), opts.maxAgedArgChars) }
       : out;
 
@@ -325,6 +338,44 @@ export function agedToolArgDigest(name: string, args: unknown, opts: ToolResultA
 /** 值被省略时的长度标记 */
 function elidedMarker(chars: number): string {
   return `…[${chars} chars]`;
+}
+
+/**
+ * 定位字段：它们短、且是「这条调用到底碰了哪里」的唯一锚点，优先全保
+ *
+ * 实测：`path` 均长 79 字符（全保仅 +1.5% 请求体），而 `command` 均长 414
+ * （全保 +8.6%）。因此路径类全保、命令类只留头部。
+ */
+const LOCATOR_FIELDS = new Set(['path', 'file', 'glob', 'pattern', 'cwd']);
+
+/** 定位字段全保上限（超长的罕见路径才会退化为标记） */
+const LOCATOR_KEEP_CHARS = 200;
+
+/** 命令类字段保留的头部长度（其余用长度标记收尾） */
+const COMMAND_HEAD_CHARS = 100;
+
+/** 命令类字段名 */
+const COMMAND_FIELDS = new Set(['command', 'cmd']);
+
+function isLocatorField(key: string): boolean {
+  return LOCATOR_FIELDS.has(key);
+}
+
+/**
+ * 单个参数值的降级策略（确定性、与顺序无关）
+ *
+ * @param key - 字段名
+ * @param value - 字段值
+ * @param size - 值的 JSON 序列化长度
+ * @returns 保留原值、头部摘录或长度标记
+ */
+function digestArgValue(key: string, value: unknown, size: number): unknown {
+  if (size <= ARG_VALUE_KEEP_CHARS) return value;
+  if (isLocatorField(key) && size <= LOCATOR_KEEP_CHARS) return value;
+  if (COMMAND_FIELDS.has(key) && typeof value === 'string' && value.length > COMMAND_HEAD_CHARS) {
+    return `${value.slice(0, COMMAND_HEAD_CHARS)}…[+${value.length - COMMAND_HEAD_CHARS} chars]`;
+  }
+  return elidedMarker(size);
 }
 
 // 参数摘要 write-once 缓存：同 args 对象 + 同配置 → 同值（与 pointerCache 同理）

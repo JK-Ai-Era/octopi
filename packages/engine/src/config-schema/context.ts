@@ -23,7 +23,7 @@ export const HistoryAgingConfigSchema = z.object({
    * 参数是上下文中唯一无界增长的成分；只作用于「结果已被老化」的调用。
    */
   ageToolArgs: z.boolean().optional(),
-  /** 参数摘要目标字符数（默认 160） */
+  /** 参数摘要目标字符数（默认 320；过小会退化为整体轮廓、丢掉键名） */
   maxAgedArgChars: z.number().int().positive().optional(),
 });
 

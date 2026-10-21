@@ -206,7 +206,7 @@ Runner.handle
 - **压缩注记禁止进 system prompt**：`droppedSummary` / 截断说明只作观测（消息侧 `contextSummary` 已告知模型）。
   请求头动态文本会使全缓存失效。
 - 无 metadata 的外部 system 消息仍原样保留
-- **历史老化（B2，视图级）**：跨轮工具结果超出近期窗口的部分，在 `buildLlmMessages` 内降级为结构化指针（工具名 + 参数要点 + 结果轮廓 + **归档说明（勿重跑）**）——**仅视图级**，session 日志保全量原文。老化为**批量冻结**（边界只以 `freezeBatch` 为步长成批推进；绝不在 recency 边界逐轮改写——历史中部改写会烧掉前缀缓存）且 **write-once**（指针字节恒定；计划按完整历史计算，绝不按裁剪视图重算边界）。当前 run 与最近 `rawWindow` 条原文保留；**error 结果永不降级**（错误可追溯性优先）；仅当指针严格小于原文才降级。被老化调用的**参数**同步降级（`ageToolArgs`，默认开）：键名全保，只有载荷级长值收敛为 `…[N chars]`。参数是上下文中唯一无界增长的成分——结果变成指针后参数仍是原文（实测其总量达指针本体的 1.1 倍，随 session 长度线性增长）。`id`/`name` 不动、`arguments` 仍是合法 JSON，调用/结果配对结构不变。配置：`contextEngine.historyAging`
+- **历史老化（B2，视图级）**：跨轮工具结果超出近期窗口的部分，在 `buildLlmMessages` 内降级为结构化指针（工具名 + 参数要点 + 结果轮廓 + **归档说明（勿重跑）**）——**仅视图级**，session 日志保全量原文。老化为**批量冻结**（边界只以 `freezeBatch` 为步长成批推进；绝不在 recency 边界逐轮改写——历史中部改写会烧掉前缀缓存）且 **write-once**（指针字节恒定；计划按完整历史计算，绝不按裁剪视图重算边界）。当前 run 与最近 `rawWindow` 条原文保留；**error 结果永不降级**（错误可追溯性优先）；仅当指针严格小于原文才降级。被老化调用的**参数**同步降级（`ageToolArgs`，默认开）：键名恒保留，且**定位字段**（`path`/`file`/`glob`/`pattern`/`cwd`）与 `command` 头部恒为原文——它们是「这条调用碰了哪里」的唯一锚点，省略会使指针历史无法辨认（实测曾有 53% 的 `path` 被省略）。因此 `maxAgedArgChars` **只约束内容值**，定位字段不占该预算。指针正文同时携带结果总长（`result N chars:`），因为轮廓只保留头部——否则 `file_search` 指针会被读成「只匹配到显示的那几条」。参数是上下文中唯一无界增长的成分——结果变成指针后参数仍是原文（实测其总量达指针本体的 1.1 倍，随 session 长度线性增长）。`id`/`name` 不动、`arguments` 仍是合法 JSON，调用/结果配对结构不变。配置：`contextEngine.historyAging`
 - **引擎注入不是用户发言**：reliability 注入（wrap-up / planning steer / noop-hint / truncate notice）统一 `metadata.source: 'engineHint'`（入 `ENGINE_CARRIER_SOURCES`）。turn 边界判定（`isMidTurn`）与 B2「最近真实 user」扫描必须忽略它们——不得把 `[System: …]` 文案当成新 user 轮次
 
 **前缀稳定性验证（`octopi llm-diff`）：**

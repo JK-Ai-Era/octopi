@@ -12,6 +12,7 @@
 import { describe, it, expect } from 'vitest';
 import { DefaultContextEngine } from '@octopi-agent/engine/harness/context/default-context-engine.js';
 import {
+  agedToolArgDigest,
   agedToolResultPointer,
   computeToolResultAgingPlan,
   resolveToolResultAgingOptions,
@@ -204,8 +205,45 @@ describe('tool-result-aging plan', () => {
     // 结构：工具名 + 参数要点 + 结果轮廓 + re-run 提示
     expect(p1).toContain('tool: file_read');
     expect(p1).toContain('src/a.ts');
-    expect(p1).toContain('result: ');
+    expect(p1).toContain('result 800 chars: ');
     expect(p1).toContain('do NOT re-run');
+  });
+
+  it('定位字段全保：path/pattern/glob 与命令头部不被省略（唯一锚点）', () => {
+    const args = {
+      path: '/Users/jk/Projects/octopi/packages/engine/src/integration/providers/wire-dump-diff.ts',
+      old_text: 'x'.repeat(1200),
+      new_text: 'y'.repeat(1300),
+      purpose: 'expose unit payloads',
+    };
+    const out = agedToolArgDigest('file_edit', args, OPTS()) as Record<string, unknown>;
+
+    // 锚点必须可读（此前 path 会被省略成 …[82 chars]，导致无法辨认改的是哪个文件）
+    expect(out.path).toBe(args.path);
+    expect(String(out.path)).not.toContain('chars]');
+    // 正文仍被降级
+    expect(String(out.old_text)).toMatch(/^…\[\d+ chars\]$/);
+    expect(String(out.new_text)).toMatch(/^…\[\d+ chars\]$/);
+    // 未退化为整体轮廓（否则键名全丢）
+    expect(out._aged).toBeUndefined();
+
+    const cmd = agedToolArgDigest(
+      'shell',
+      { command: `cd /repo && ${'z'.repeat(400)}`, purpose: 'run tests' },
+      OPTS(),
+    ) as Record<string, unknown>;
+    // 命令保留头部（能看出「跑的是什么」），尾部用增量标记
+    expect(String(cmd.command).startsWith('cd /repo && zzz')).toBe(true);
+    expect(String(cmd.command)).toMatch(/…\[\+\d+ chars\]$/);
+    expect(String(cmd.command).length).toBeLessThan(130);
+  });
+
+  it('定位字段也装不下时才退化（宁可超预算也不丢锚点）', () => {
+    const longPath = `/${'p'.repeat(500)}/file.ts`;
+    const out = agedToolArgDigest('file_read', { path: longPath, extra: 'q'.repeat(2000) }, OPTS()) as Record<string, unknown>;
+    // 超过 LOCATOR_KEEP_CHARS(200) 的罕见超长路径退化为标记
+    expect(String(out.path)).toMatch(/^…\[\d+ chars\]$/);
+    expect(out.extra).toMatch(/^…\[\d+ chars\]$/);
   });
 
   it('should scale the pointer with maxPointerChars (the knob is real)', () => {
