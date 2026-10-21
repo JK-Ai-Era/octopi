@@ -365,6 +365,8 @@ export interface MemoryStats {
 /** System 装配 UI 快照（产品八层之 1）；与 harness/context/layer-snapshot 对齐。*/
 export interface LayerRuntimeViewDto {
   id: 'wisdom' | 'persona' | 'skill' | 'knowledge' | 'cognition' | 'memory' | 'runtime';
+  /** E8 装配位置；同 id 双实例时主行=system、附加行=snapshot（如 runtime 双份） */
+  placement?: 'system' | 'snapshot';
   status: 'idle' | 'included' | 'empty' | 'dropped' | 'error' | 'unregistered';
   included: boolean;
   tokens: number;
@@ -386,6 +388,8 @@ export interface ContextLayersSnapshotDto {
   systemBudget: number;
   structureReserve?: number;
   usedTokens: number;
+  /** 易变快照组实际使用 token（E8 分账；无 snapshot 层时缺省） */
+  usedSnapshotTokens?: number;
   shares: Partial<Record<LayerRuntimeViewDto['id'], number>>;
   query?: string;
   layers: LayerRuntimeViewDto[];
@@ -417,10 +421,17 @@ export interface ContextLayerHealthDto {
 /** 前 N 轮装配摘要（timeline 用） */
 export interface ContextLayerTurnSummaryDto {
   assembledAt?: number;
+  /** system 组用量 */
   usedTokens: number;
+  /** 易变快照组用量（E8 分账；无 snapshot 层时缺省） */
+  usedSnapshotTokens?: number;
   systemBudget: number;
+  /** system 组纳入（去重；双 runtime 时为主行） */
   included: LayerRuntimeViewDto['id'][];
   dropped: LayerRuntimeViewDto['id'][];
+  /** snapshot 组纳入/丢弃（与 included/dropped 可能同 id，如 runtime 双份） */
+  snapshotIncluded?: LayerRuntimeViewDto['id'][];
+  snapshotDropped?: LayerRuntimeViewDto['id'][];
 }
 
 export interface RunScopeViewDto {
@@ -449,6 +460,8 @@ export interface RunScopeViewDto {
 export interface RunMessagesSummaryDto {
   count: number;
   byRole: Record<string, number>;
+  /** 按归因 kind 计数（机器插槽与用户发言分开；WS 增量合并时可能缺省） */
+  byKind?: Record<string, number>;
   systemPromptCount: number;
   contextSummaryCount: number;
   hiddenFromChatCount: number;
@@ -566,6 +579,8 @@ export interface RunMessageViewDto {
   toolResults?: unknown[];
   metadata?: Record<string, unknown>;
   hiddenFromChat?: boolean;
+  /** 归因（机器插槽 vs 用户发言；权威类型 Observer `RunMessageAttribution`，UI 只渲染） */
+  attribution?: import('@octopi-agent/engine/harness/observability/observer/types.js').RunMessageAttribution;
   contentChars?: number;
   contentPreview?: string;
 }

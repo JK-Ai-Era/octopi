@@ -38,11 +38,13 @@ export {
   isTurnStartContent,
   isTurnEndContent,
   parseTurnIdFromContent,
+  parseTurnEnvelope,
   joinSlotXml,
   unwrapUserText,
   messageText,
   escapeUserMessageText,
 } from './turn-envelope.js';
+export type { TurnEnvelopeSlot, TurnEnvelopeParts } from './turn-envelope.js';
 
 // ── Token 估算（跨域门面；浏览器侧可直连 token-estimator / token-constants） ──
 export { HeuristicTokenEstimator, estimateTextTokens, estimateLLMMessages } from './token-estimator.js';

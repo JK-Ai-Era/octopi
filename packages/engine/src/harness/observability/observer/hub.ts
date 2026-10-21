@@ -10,6 +10,7 @@ import type { Message } from '@octopi-agent/core/types.js';
 import type { AgentEvent } from '@octopi-agent/core/primitives/event-bus.js';
 import {
   resolveObserverConfig,
+  attributeRunMessage,
   buildRunMessagesDiff,
   summarizeLlmMessages,
   type ObserverConfig,
@@ -355,6 +356,11 @@ export class ObserverHub {
               return {
                 index,
                 role: (m.role || 'unknown') as 'user' | 'assistant' | 'system' | 'tool',
+                // 归因与 summary.byKind 同源（attributeRunMessage），LLM 视图条目与汇总口径一致
+                attribution: attributeRunMessage({
+                  role: m.role as 'user' | 'assistant' | 'system' | 'tool',
+                  content: (m.content ?? '') as never,
+                }),
                 content: text,
                 contentChars: text.length,
                 contentPreview: text.slice(0, 200),

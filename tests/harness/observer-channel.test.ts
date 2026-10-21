@@ -9,10 +9,17 @@ import {
   shouldCaptureMessageFullText,
   summarizeMessages,
   summarizeLlmMessages,
+  attributeRunMessage,
+  attachFullContent,
   buildRunMessagesDiff,
   cloneMessages,
   isHiddenFromChat,
 } from '@octopi-agent/engine/harness/observability/observer/index.js';
+import {
+  formatTurnContextXml,
+  formatTurnEndContent,
+  formatTurnStartContent,
+} from '@octopi-agent/engine/harness/context/turn-envelope.js';
 import type { Message } from '@octopi-agent/core/types.js';
 import type { RunScope } from '@octopi-agent/engine/harness/run/run-scope.js';
 import { makeTokenUsage } from '@octopi-agent/core/types/turn.js';
@@ -152,6 +159,148 @@ describe('summarizeMessages', () => {
     ]);
     expect(s.systemPromptCount).toBe(1);
     expect(s.hiddenFromChatCount).toBe(0);
+    expect(s.byKind.system).toBe(1);
+    expect(s.byKind.user_speech).toBe(1);
+  });
+});
+
+describe('run message 归因（G2/G4）', () => {
+  const turnStart = formatTurnStartContent({
+    turnId: 't1',
+    at: '2026-10-21T00:00:00.000Z',
+    turnContextXml: formatTurnContextXml({
+      turnId: 't1',
+      slotsXml: [
+        '<runtime_snapshot>SNAP</runtime_snapshot>',
+        '<knowledge_grounding>GND</knowledge_grounding>',
+      ].join('\n'),
+    }),
+    userText: '真正的问题',
+  });
+
+  it('turn 信封 = 用户发言 + 机器槽位归因（不算纯 user）', () => {
+    const a = attributeRunMessage({ role: 'user', content: turnStart });
+    expect(a.speaker).toBe('human');
+    expect(a.kind).toBe('turn_envelope');
+    expect(a.turnId).toBe('t1');
+    expect(a.slots?.map((s) => s.tag)).toEqual(['runtime_snapshot', 'knowledge_grounding']);
+    expect(a.slots?.[0]?.chars).toBe('SNAP'.length);
+    expect(a.userChars).toBe('真正的问题'.length);
+  });
+
+  it('引擎载体插槽消息是 engine 归因且聊天隐藏', () => {
+    for (const source of ['runtimeSnapshot', 'knowledgeGrounding', 'sessionAttachment']) {
+      const a = attributeRunMessage({ role: 'user', content: 'x', metadata: { source } });
+      expect(a.speaker).toBe('engine');
+      expect(a.kind).toBe('carrier');
+      expect(a.source).toBe(source);
+      expect(isHiddenFromChat({ role: 'user', content: 'x', metadata: { source } })).toBe(true);
+    }
+  });
+
+  it('turnEnd = turn 边界（隐藏）；contextSummary / engineHint = engine 但聊天可见', () => {
+    const end = attributeRunMessage({
+      role: 'user',
+      content: formatTurnEndContent('t1'),
+      metadata: { source: 'turnEnd' },
+    });
+    expect(end.kind).toBe('turn_end');
+    expect(end.turnId).toBe('t1');
+    expect(
+      isHiddenFromChat({ role: 'user', content: formatTurnEndContent('t1'), metadata: { source: 'turnEnd' } }),
+    ).toBe(true);
+
+    const summary = attributeRunMessage({ role: 'user', content: 's', metadata: { source: 'contextSummary' } });
+    expect(summary.kind).toBe('context_summary');
+    expect(isHiddenFromChat({ role: 'user', content: 's', metadata: { source: 'contextSummary' } })).toBe(false);
+
+    const hint = attributeRunMessage({ role: 'user', content: 'h', metadata: { source: 'engineHint' } });
+    expect(hint.kind).toBe('engine_hint');
+    expect(isHiddenFromChat({ role: 'user', content: 'h', metadata: { source: 'engineHint' } })).toBe(false);
+  });
+
+  it('summarizeMessages byKind 把机器插槽与用户发言分开计数', () => {
+    const messages: Message[] = [
+      msg({ role: 'system', content: 'sp', metadata: { source: 'systemPrompt' } }),
+      msg({ role: 'user', content: turnStart }),
+      msg({ role: 'assistant', content: 'ok' }),
+      msg({ role: 'user', content: 'SNAP', metadata: { source: 'runtimeSnapshot' } }),
+    ];
+    const { summary, views } = summarizeMessages(messages);
+    expect(summary.byKind).toEqual({
+      hosted_system: 1,
+      turn_envelope: 1,
+      assistant: 1,
+      carrier: 1,
+    });
+    const total = Object.values(summary.byKind).reduce((a, b) => a + b, 0);
+    expect(total).toBe(summary.count);
+    expect(views[1]?.attribution?.kind).toBe('turn_envelope');
+    expect(views[3]?.attribution?.speaker).toBe('engine');
+  });
+
+  it('attachFullContent 补 turn 信封槽位正文（审计入口）', () => {
+    const messages: Message[] = [msg({ role: 'user', content: turnStart })];
+    const { views } = summarizeMessages(messages);
+    expect(views[0]?.attribution?.slots?.[0]?.body).toBeUndefined();
+    const full = attachFullContent(views, messages);
+    expect(full[0]?.attribution?.slots?.[0]?.body).toBe('SNAP');
+    expect(full[0]?.attribution?.slots?.[1]?.body).toBe('GND');
+    expect(full[0]?.content).toBe(turnStart);
+  });
+
+  it('source 优先：载体消息正文即信封形状也归 engine/carrier（评审 F1）', () => {
+    // 语料里整段引用了信封（正文以开标签起头，锚定嗅探会命中）：
+    // source 是机器插槽一等标识，必须先于一切内容嗅探
+    const a = attributeRunMessage({
+      role: 'user',
+      content: turnStart,
+      metadata: { source: 'knowledgeGrounding' },
+    });
+    expect(a.kind).toBe('carrier');
+    expect(a.speaker).toBe('engine');
+  });
+
+  it('用户发言中途回显闭标形状不判机器边界；整条闭标才走 legacy 降级（评审 F2）', () => {
+    const quoted = attributeRunMessage({
+      role: 'user',
+      content: '这段协议以 <turn_end id="t1" /> 收尾，然后用户继续说',
+    });
+    expect(quoted.kind).toBe('user_speech');
+    expect(quoted.speaker).toBe('human');
+
+    const legacyEnd = attributeRunMessage({
+      role: 'user',
+      content: '<turn_end id="t3" />',
+    });
+    expect(legacyEnd.kind).toBe('turn_end');
+    expect(legacyEnd.speaker).toBe('engine');
+    expect(legacyEnd.turnId).toBe('t3');
+  });
+
+  it('未知 role 不冒充用户发言（评审 F14）', () => {
+    const a = attributeRunMessage({ role: 'developer' as Message['role'], content: 'x' });
+    expect(a.speaker).toBe('engine');
+    expect(a.kind).toBe('system');
+  });
+
+  it('attachFullContent 同 tag 双槽位按序回填不串正文（评审 F13）', () => {
+    const xml = formatTurnStartContent({
+      turnId: 't1',
+      at: '2026-10-21T00:00:00.000Z',
+      turnContextXml: formatTurnContextXml({
+        turnId: 't1',
+        slotsXml: '<runtime_snapshot>ONE</runtime_snapshot>\n<runtime_snapshot>TWO</runtime_snapshot>',
+      }),
+      userText: 'x',
+    });
+    const messages: Message[] = [msg({ role: 'user', content: xml })];
+    const { views } = summarizeMessages(messages);
+    const full = attachFullContent(views, messages);
+    const slots = full[0]?.attribution?.slots ?? [];
+    expect(slots).toHaveLength(2);
+    expect(slots[0]?.body).toBe('ONE');
+    expect(slots[1]?.body).toBe('TWO');
   });
 });
 

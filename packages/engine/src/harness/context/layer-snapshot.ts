@@ -122,6 +122,9 @@ export function buildContextLayersSnapshot(params: {
       entry?.droppable ?? (id !== 'persona');
     const base = {
       id,
+      // 占位行（unregistered/idle）也带 placement：契约缺省 = query 择取层（memory/cognition/wisdom）
+      // 属快照组、其余属 system 组（layers.ts 各层构造 placement），否则 UI 分组会把它们错放进 System
+      placement: id === 'memory' || id === 'cognition' || id === 'wisdom' ? ('snapshot' as const) : ('system' as const),
       priority: entry?.priority ?? LAYER_PRIORITY[id],
       order: entry?.order ?? LAYER_ORDER[id],
       droppable,

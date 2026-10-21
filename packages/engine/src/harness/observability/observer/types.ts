@@ -11,6 +11,12 @@
 import type { ContentBlock } from '@octopi-agent/core/types.js';
 import type { ToolCall, ToolResult } from '@octopi-agent/core/types.js';
 import type { Message } from '@octopi-agent/core/types.js';
+import {
+  isTurnStartContent,
+  messageText,
+  parseTurnEnvelope,
+  parseTurnIdFromContent,
+} from '../../context/turn-envelope.js';
 
 /** Observer 观察通道 id */
 export type ObserverChannelId =
@@ -289,6 +295,39 @@ export function shouldCaptureMessageFullText(cfg: ResolvedObserverConfig): boole
 
 export type RunMessageViewRole = 'user' | 'assistant' | 'system' | 'tool';
 
+/**
+ * Run message 归因（G2/G4）：区分用户真实发言与引擎载体机器插槽。
+ *
+ * 机器插槽（turn 信封槽位 / 载体消息 / 摘要 / 引擎提示 / turn 闭标）**不是用户发言**——
+ * 本字段是检查器归因的唯一真源，UI 只渲染不自行判定。
+ */
+export interface RunMessageAttribution {
+  /** 发言方：human=用户真实发言（含 turn 信封内的用户原文）；engine=机器生成；llm=模型输出；tool=工具结果 */
+  speaker: 'human' | 'engine' | 'llm' | 'tool';
+  /** 细类 */
+  kind:
+    | 'user_speech'
+    | 'turn_envelope'
+    | 'carrier'
+    | 'context_summary'
+    | 'engine_hint'
+    | 'turn_end'
+    | 'hosted_system'
+    | 'system'
+    | 'assistant'
+    | 'tool';
+  /** 信封/闭标的 turn id（可解析出时） */
+  turnId?: string;
+  /** `metadata.source` 原值（carrier / summary / hint 等溯源） */
+  source?: string;
+  /** turn_envelope 内嵌槽位（机器生成块）；摘要视图只带 chars，正文由 attachFullContent 补 */
+  slots?: Array<{ tag: string; chars: number; body?: string }>;
+  /** turn_envelope 中真实用户正文字符数（无 user_message 块 = 0） */
+  userChars?: number;
+  /** turn_envelope 是否含 `<user_message>` 块（false = 信封不完整，UI 应标注而非把整封当用户原文） */
+  hasUserMessage?: boolean;
+}
+
 /** 单条 Run message 的 UI 视图 */
 export interface RunMessageView {
   index: number;
@@ -301,6 +340,8 @@ export interface RunMessageView {
   metadata?: Record<string, unknown>;
   /** 中栏对话是否会隐藏本条 */
   hiddenFromChat?: boolean;
+  /** 归因（机器插槽 vs 用户发言；见 RunMessageAttribution） */
+  attribution?: RunMessageAttribution;
   contentChars?: number;
   /** 摘要模式下的截断预览 */
   contentPreview?: string;
@@ -312,6 +353,8 @@ export type RunMessagesView = 'workspace' | 'llm';
 export interface RunMessagesSummary {
   count: number;
   byRole: Record<string, number>;
+  /** 按归因 kind 计数（RunMessageAttribution.kind）——机器插槽与用户发言在汇总层即分开 */
+  byKind: Record<string, number>;
   systemPromptCount: number;
   contextSummaryCount: number;
   hiddenFromChatCount: number;
@@ -509,6 +552,88 @@ export interface RunObservatorySnapshot {
   };
 }
 
+/**
+ * Run message 归因（G2/G4 唯一判定处）。
+ *
+ * 判定次序：**source 优先、内容兜底**——
+ * ① role 二值（assistant/tool）→ ② 引擎载体 source（turnEnd / 载体插槽 / contextSummary / engineHint，
+ * 语义真源 `harness/context/layer-types.ts` ENGINE_CARRIER_SOURCES）→ ③ system role →
+ * ④ 无 source + user role + 正文以信封开标签起头 = turn_envelope → ⑤ 其余 user_speech。
+ *
+ * source 优先是审计面的可靠性要求：载体消息正文来自不可信语料（知识/grounding/附件），
+ * 含信封字面量也不得被内容嗅探抢走归因（否则机器插槽挂上「用户发言」徽章）。
+ * turn_end 的内容兜底仅作 legacy 降级：无 source 且整条正文就是闭标形状才认。
+ *
+ * @param msg - 消息（role/content/metadata）
+ * @returns 归因
+ */
+export function attributeRunMessage(
+  msg: Pick<Message, 'role' | 'content' | 'metadata'>,
+): RunMessageAttribution {
+  const role = (msg.role ?? 'user') as RunMessageViewRole;
+  const source = (msg.metadata as { source?: string } | undefined)?.source;
+  const base = source !== undefined ? { source } : {};
+  // ① 模型/工具输出
+  if (role === 'assistant') return { speaker: 'llm', kind: 'assistant', ...base };
+  if (role === 'tool') return { speaker: 'tool', kind: 'tool', ...base };
+  // ② 引擎载体语义（source 是机器插槽的一等标识，先于一切内容嗅探）
+  if (source === 'turnEnd') {
+    return {
+      speaker: 'engine',
+      kind: 'turn_end',
+      turnId: parseTurnIdFromContent(msg.content),
+      ...base,
+    };
+  }
+  if (
+    source === 'runtimeSnapshot' ||
+    source === 'knowledgeGrounding' ||
+    source === 'sessionAttachment'
+  ) {
+    return { speaker: 'engine', kind: 'carrier', ...base };
+  }
+  if (source === 'contextSummary') return { speaker: 'engine', kind: 'context_summary', ...base };
+  if (source === 'engineHint') return { speaker: 'engine', kind: 'engine_hint', ...base };
+  // ③ system 消息
+  if (role === 'system') {
+    return {
+      speaker: 'engine',
+      kind: source === 'systemPrompt' ? 'hosted_system' : 'system',
+      ...base,
+    };
+  }
+  // ④ 内容兜底（仅无 source 的 user 消息）：正文以信封开标签起头 = 已定形 turn 信封
+  if (isTurnStartContent(msg.content)) {
+    const env = parseTurnEnvelope(msg.content);
+    return {
+      speaker: 'human',
+      kind: 'turn_envelope',
+      turnId: env?.turnId,
+      ...base,
+      slots: env?.slots.map((s) => ({ tag: s.tag, chars: s.body.length })),
+      userChars: env && env.hasUserMessage ? env.userText.length : 0,
+      hasUserMessage: env?.hasUserMessage,
+    };
+  }
+  // legacy 降级：无 source 且整条正文就是闭标形状（用户发言中途回显闭标不算）
+  if (source === undefined && isTurnEndShape(msg.content)) {
+    return {
+      speaker: 'engine',
+      kind: 'turn_end',
+      turnId: parseTurnIdFromContent(msg.content),
+      ...base,
+    };
+  }
+  // ⑤ 其余 user 发言（未知 role 落 engine/system，不冒充用户）
+  if (role === 'user') return { speaker: 'human', kind: 'user_speech', ...base };
+  return { speaker: 'engine', kind: 'system', ...base };
+}
+
+/** 整条正文就是 turn_end 闭标形状（legacy 降级用；用户发言中途回显不命中） */
+function isTurnEndShape(content: Message['content'] | undefined | null): boolean {
+  return /^\s*<turn_end[\s/>][^<]*\/?>\s*$/.test(messageText(content));
+}
+
 /** message 摘要统计 */
 export function summarizeMessages(
   messages: Message[],
@@ -516,6 +641,7 @@ export function summarizeMessages(
 ): { summary: RunMessagesSummary; views: RunMessageView[] } {
   const maxPreview = opts?.maxPreviewChars ?? 200;
   const byRole: Record<string, number> = {};
+  const byKind: Record<string, number> = {};
   const agentIds = new Set<string>();
   let systemPromptCount = 0;
   let contextSummaryCount = 0;
@@ -531,6 +657,8 @@ export function summarizeMessages(
     if (source === 'contextSummary') contextSummaryCount += 1;
     const hidden = isHiddenFromChat(m);
     if (hidden) hiddenFromChatCount += 1;
+    const attribution = attributeRunMessage(m);
+    byKind[attribution.kind] = (byKind[attribution.kind] ?? 0) + 1;
     const text = extractMessageText(m.content);
     chars += text.length;
     return {
@@ -542,6 +670,7 @@ export function summarizeMessages(
       toolCalls: m.toolCalls,
       toolResults: m.toolResults,
       hiddenFromChat: hidden,
+      attribution,
       contentChars: text.length,
       contentPreview: text.slice(0, maxPreview),
     };
@@ -551,6 +680,7 @@ export function summarizeMessages(
     summary: {
       count: messages.length,
       byRole,
+      byKind,
       systemPromptCount,
       contextSummaryCount,
       hiddenFromChatCount,
@@ -569,8 +699,16 @@ export function summarizeMessages(
  */
 export function isHiddenFromChat(msg: Pick<Message, 'role' | 'content' | 'metadata'>): boolean {
   const source = (msg.metadata as { source?: string } | undefined)?.source;
-  // E8 易变快照：只进 LLM 上下文，不进聊天回放（与 ConversationAdapter 对齐）
-  if (source === 'runtimeSnapshot') return true;
+  // 引擎载体插槽 / turn 边界：只进 LLM 上下文，不进聊天回放。
+  // 与 ConversationAdapter.isHiddenSystemHistory 同清单（contextSummary / engineHint 聊天仍显示，不在此列）
+  if (
+    source === 'runtimeSnapshot' ||
+    source === 'knowledgeGrounding' ||
+    source === 'sessionAttachment' ||
+    source === 'turnEnd'
+  ) {
+    return true;
+  }
   if (msg.role !== 'system') return false;
   if (source === 'systemPrompt') return true;
   const text = extractMessageText(msg.content);
@@ -607,7 +745,19 @@ export function attachFullContent(views: RunMessageView[], messages: Message[]):
   return views.map((v) => {
     const m = messages[v.index];
     if (!m) return v;
-    return { ...v, content: m.content };
+    const next: RunMessageView = { ...v, content: m.content };
+    // full 模式补 turn 信封槽位正文（审计入口：这轮模型看到了什么）
+    if (v.attribution?.kind === 'turn_envelope') {
+      const env = parseTurnEnvelope(m.content);
+      if (env) {
+        // 整组按解析顺序重建（不用 tag 当查找键：同 tag 双槽位会串正文）
+        next.attribution = {
+          ...v.attribution,
+          slots: env.slots.map((s) => ({ tag: s.tag, chars: s.body.length, body: s.body })),
+        };
+      }
+    }
+    return next;
   });
 }
 
@@ -654,15 +804,25 @@ export function summarizeLlmMessages(messages: Array<{
   content?: unknown;
 }>): RunMessagesSummary {
   const byRole: Record<string, number> = {};
+  const byKind: Record<string, number> = {};
   let chars = 0;
   for (const m of messages) {
     const role = m.role || 'unknown';
     byRole[role] = (byRole[role] ?? 0) + 1;
+    // 归因与 workspace 视图同源（LLM 出口消息无 metadata，信封/角色仍可判定）。
+    // 已知局限（F10）：source 型机器插槽（contextSummary/engineHint）在 LLM 出口丢失 metadata，
+    // 只能落 user_speech——byKind 与逐条 attribution 同用本函数，两侧口径一致不互斥
+    const attribution = attributeRunMessage({
+      role: m.role as Message['role'],
+      content: m.content as Message['content'],
+    });
+    byKind[attribution.kind] = (byKind[attribution.kind] ?? 0) + 1;
     chars += extractMessageText(m.content).length;
   }
   return {
     count: messages.length,
     byRole,
+    byKind,
     systemPromptCount: byRole.system ?? 0,
     contextSummaryCount: 0,
     // LLM 出口视图无「对话 UI 隐藏」语义；不把 system 条数冒充 hidden

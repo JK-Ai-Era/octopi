@@ -108,8 +108,8 @@
 ## 9. Workflow
 
 1. 读取最新 `ContextLayersSnapshot`（WS 优先，REST 兜底）。
-2. 渲染顶栏预算摘要（systemBudget / used / reserve）。
-3. 按 `order` 渲染 System 七层 band（产品 L1-L7）；Information（L8）单独 strip。
+2. 渲染预算摘要（E8 分账：systemBudget / usedTokens / usedSnapshotTokens）。
+3. 按 `placement` 分两组渲染 layer band：**System · 缓存稳定前缀**（跨轮逐字节稳定）与 **本轮快照 · 易变**（进 turn_context）；双 runtime 条目分行（锚点份 / 易变份）；Information（L8）单独 strip。
 4. 用 status → 徽章/色语义映射，禁止颜色-only。
 5. 选中层 → 详情：budget vs tokens、reason、dropped、sources、preview。
 6. 事件 `context.layers.*` 到达时局部刷新，避免整页重置滚动。

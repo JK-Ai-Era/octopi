@@ -1,3 +1,62 @@
+## v0.86.19
+
+### feat(webui/engine): 「上下文 / Run」两页签 E8 重设计（placement 双组 · 插槽归因 · 分账）
+
+**背景**：v0.84.0 E8 拆出「稳定 system prompt 前缀 + 本轮易变快照」后，DTO/事件已带新语义但 UI 未消费——
+快照层混在 system 语境、run messages 里机器插槽无归因（`arch/NEXT-STEPS.md` G 节）。
+设计稿：`arch/web-runtime-design.md` §16。
+
+**「上下文」页签（G1）**：
+
+- 按 `placement` 双组分栏：**System · 缓存稳定前缀**（标注「跨轮逐字节稳定 · 前缀缓存命中」）/
+  **本轮快照 · 易变**（标注「进 `<turn_context>`，不进 system prompt」）
+- 双 runtime 条目分行：「运行时 · 锚点份（system）」「运行时 · 易变份（snapshot）」，不再挤成一行
+- `usedTokens` / `usedSnapshotTokens` **分账**指标 + 各组独立预算条（快照组缺省无上限，不画假预算条）
+- 近轮 Timeline 双行（system 纳入 / 快照纳入），tooltip 分账；层详情 kv 增 placement
+
+**「Run」页签（G2/G3/G4）**：
+
+- **归因徽章体系**（G4）：用户发言 / turn 信封 / 引擎插槽·机器生成 / 上下文摘要 / 引擎提示 / turn 闭标 /
+  托管 system——机器插槽与用户真实发言、contextSummary 在时间线上明确分开
+- **turn 信封结构化**（G2）：`<user_message>` 用户原文 + `turn_context` 槽位块
+  （runtime_snapshot / session_attachments / knowledge_grounding）可展开正文——「这轮模型看到了什么」审计入口
+- 口径注脚常驻：hiddenFromChat = 聊天回放隐藏 ≠ 不可见（检查器必须可见）
+- **耗时区**（G3 轻量）：timeline 按事件前缀聚合 `durationMs`；`[timing]` 探针的 ttft / chars 段无运行时通道，
+  标注待 F3「探针转正」接入正式观测面（不展示未采集数据）
+
+**契约增量**（先契约后 UI）：
+
+- engine `turn-envelope.parseTurnEnvelope()`：信封唯一解析器（turnId / at / slots / userText）
+- engine observer：`RunMessageView.attribution`（speaker / kind / turnId / slots / userChars）、
+  `RunMessagesSummary.byKind`；`attributeRunMessage` 为归因唯一判定处，`attachFullContent` 补槽位正文
+- engine `isHiddenFromChat` 对齐 `ConversationAdapter.isHiddenSystemHistory`（补 knowledgeGrounding /
+  sessionAttachment / turnEnd——此前 hiddenFromChatCount 与「对话隐藏」徽章失真）
+- gateway Web SDK DTO 镜像：`LayerRuntimeViewDto.placement`、`ContextLayersSnapshotDto.usedSnapshotTokens`、
+  `ContextLayerTurnSummaryDto` 双组字段、`RunMessageViewDto.attribution`、`RunMessagesSummaryDto.byKind`
+- store `summaryFromSnapshot` 收敛为唯一推导处，并修双 runtime 条目 id 重复进 `included` 的问题
+
+**评审收口**（独立子代理评审 14 条发现，逐条核对后落地；报告见 `reviews/2026-10-22-e8-webui-review.md`）：
+
+- **归因次序改「source 优先、内容兜底」**（F1/F2）：机器插槽 source（turnEnd/载体/摘要/提示）先于一切内容嗅探，
+  载体语料整段引用信封形状也不会被抢走归因；turn_end 内容兜底只认「整条正文即闭标形状」的 legacy 消息，
+  用户发言中途回显闭标不判机器边界
+- **判形正则锚定正文开头**（F5 / NEXT-STEPS D7）：`isTurnStartContent` / `isTurnEndContent` 原为非锚定 substring——
+  正文任何位置出现标签字面量就被误判「已定形」，用户在聊天里打出标签会让 `bakeTurnStart` 写一次守卫当场炸；
+  现锚定 `^\s*<turn_start[\s>]`（消费方 runner/default-context-engine/observer 已核对，均作用于真信封）
+- **信封解析加固**（F4/§2）：坏信封（无 `user_message` 块）不再回退整段冒充用户原文（`hasUserMessage` + UI 标注）；
+  `turn_context` 取末块对齐 extractUserMessageText 口径；槽位白名单（runtime_snapshot / session_attachments /
+  knowledge_grounding）外的同形标签不进槽位；`at` 提取收紧到 start tag 内
+- **同 tag 双槽位按序回填**（F13）；**占位行补 placement**（F11，query 择取层占位不再错进 System 组）；
+  **llm 视图逐条 attribution** 与 summary.byKind 同源（F10）
+- **UI 假数据清零**（F7/F8/F9/F12）：structureReserve 缺失不臆造推导值、快照组文案不再断言配置态、
+  llm msgs 不回落 workspace 计数、0 用量层不出预算柱
+
+**待拍板（登记 NEXT-STEPS，未擅改）**：槽位正文同名标签注入面（F3，需协议层定转义/围栏方案）、
+contextSummary / engineHint 在聊天回放渲染成用户气泡（F5'，产品口径）、隐藏谓词两份实现收敛（F6）。
+
+**验证**：observer-channel 42 / turn-envelope-replay 16 全绿（新增锚定 2 + 解析加固 2 + 归因收口 4 用例）；
+全量 2972 通过（2 个已知 macOS 沙箱基线失败不变：getProcessName/ps 类，固有限制）；lint / build / arch check-sync 干净。
+
 ## v0.86.18
 
 ### fix(core/engine): 运行期 steering 消息不再写入会话历史（`Message.ephemeral`）

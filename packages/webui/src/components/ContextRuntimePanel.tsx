@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import type {
   LayerRuntimeViewDto,
 } from '@octopi-agent/gateway/web/sdk/client';
@@ -27,6 +27,22 @@ const STATUS_META: Record<LayerRuntimeViewDto['status'], { label: string; cls: s
   idle: { label: '待装配', cls: 'badge-idle' },
 };
 
+/** E8 装配位置语义标注（缓存卖点对用户可见） */
+const PLACEMENT_META: Record<'system' | 'snapshot', { label: string; cls: string; hint: string }> = {
+  system: {
+    label: '稳定 · system',
+    cls: 'ctx-placement-system',
+    hint: '缓存稳定前缀：跨轮逐字节稳定，前缀缓存命中（延迟与成本双赢）',
+  },
+  snapshot: {
+    label: '易变 · snapshot',
+    cls: 'ctx-placement-snapshot',
+    hint: '本轮易变快照：每轮重建，装配在消息尾部 turn_context，不进 system prompt',
+  },
+};
+
+type LayerRow = LayerRuntimeViewDto & { placement?: 'system' | 'snapshot' };
+
 function formatTokens(n: number | undefined | null): string {
   if (n == null || typeof n !== 'number' || !Number.isFinite(n)) return '未知';
   const value = n;
@@ -35,8 +51,18 @@ function formatTokens(n: number | undefined | null): string {
   return String(value);
 }
 
-function isWarnIncluded(layer: LayerRuntimeViewDto): boolean {
+function isWarnIncluded(layer: LayerRow): boolean {
   return layer.status === 'included' && Boolean(layer.reason);
+}
+
+function rowPlacement(layer: LayerRow): 'system' | 'snapshot' {
+  return layer.placement === 'snapshot' ? 'snapshot' : 'system';
+}
+
+/** 双 runtime 行的份标注（主行=锚点份，附加行=易变份） */
+function rowRoleLabel(layer: LayerRow): string | undefined {
+  if (layer.id !== 'runtime') return undefined;
+  return rowPlacement(layer) === 'snapshot' ? '易变份' : '锚点份';
 }
 
 export interface ContextRuntimePanelProps {
@@ -53,9 +79,11 @@ export interface ContextRuntimePanelProps {
 }
 
 /**
- * 八层上下文 Runtime 面板
+ * 八层上下文 Runtime 面板（E8 双组视图）
  *
  * 产品八层 = System ContextLayer（1–7，含 Runtime）+ Information（8，消息窗口）。
+ * E8：层按 placement 分两组——system（缓存稳定前缀）/ snapshot（本轮易变，content 尾部）；
+ * usedTokens / usedSnapshotTokens 分账；双 runtime 条目分行展示。
  * 只渲染 AssembleManifest 快照，不重算层状态。
  */
 export function ContextRuntimePanel({
@@ -69,20 +97,19 @@ export function ContextRuntimePanel({
   onRefreshLayers,
 }: ContextRuntimePanelProps) {
   const snapshot = inspector.contextLayers;
-  const [selectedId, setSelectedId] = useState<LayerRuntimeViewDto['id'] | null>(null);
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [showRaw, setShowRaw] = useState(false);
   const [loadingContent, setLoadingContent] = useState(false);
 
-  const layers = snapshot?.layers ?? [];
-  const selected = useMemo(() => {
-    if (!layers.length) return null;
-    return layers.find((l) => l.id === selectedId) ?? layers[0];
-  }, [layers, selectedId]);
+  const layers = (snapshot?.layers ?? []) as LayerRow[];
+  const rowKey = (l: LayerRow): string => `${l.id}#${rowPlacement(l)}`;
+  const selected = layers.length
+    ? (layers.find((l) => rowKey(l) === selectedKey) ?? layers[0])
+    : null;
 
-  const selectLayer = async (id: LayerRuntimeViewDto['id']) => {
-    setSelectedId(id);
-    const hit = layers.find((l) => l.id === id);
-    if (hit?.content || !onRefreshLayers) return;
+  const selectLayer = async (layer: LayerRow) => {
+    setSelectedKey(rowKey(layer));
+    if (layer.content || !onRefreshLayers) return;
     setLoadingContent(true);
     try {
       await onRefreshLayers();
@@ -91,7 +118,12 @@ export function ContextRuntimePanel({
     }
   };
 
-  const included = layers.filter((l) => l.included);
+  const systemRows = layers.filter((l) => rowPlacement(l) === 'system');
+  const snapshotRows = layers.filter((l) => rowPlacement(l) === 'snapshot');
+  const systemIncluded = systemRows.filter((l) => l.included);
+  const snapshotIncluded = snapshotRows.filter((l) => l.included);
+  const snapshotUsed = snapshot?.usedSnapshotTokens ?? 0;
+
   const compact = inspector.compact;
   const compactText = compact?.active
     ? `进行中（${compact.reason === 'proactive' ? '主动摘要' : '溢出'}）`
@@ -102,6 +134,69 @@ export function ContextRuntimePanel({
         : compact?.tokensAfter !== undefined
           ? `完成${compact.tokensBefore !== undefined ? `（${formatTokens(compact.tokensBefore)}→${formatTokens(compact.tokensAfter)}）` : ''}`
           : '无';
+
+  const renderBand = (layer: LayerRow) => {
+    const meta = LAYER_META[layer.id];
+    const status = STATUS_META[layer.status] ?? STATUS_META.idle;
+    const placement = PLACEMENT_META[rowPlacement(layer)];
+    const badgeCls = isWarnIncluded(layer) ? 'badge-warn' : status.cls;
+    const badgeLabel = isWarnIncluded(layer) ? '纳入·告警' : status.label;
+    const hasCap = layer.budgetTokens != null && layer.budgetTokens > 0;
+    const denom = rowPlacement(layer) === 'snapshot'
+      ? Math.max(snapshotUsed, 1)
+      : Math.max(snapshot?.usedTokens ?? 0, 1);
+    const pct = hasCap
+      ? Math.min(100, (layer.tokens / (layer.budgetTokens || 1)) * 100)
+      : layer.tokens > 0
+        ? Math.min(100, (layer.tokens / denom) * 100)
+        : 0;
+    return (
+      <button
+        key={rowKey(layer)}
+        type="button"
+        className={`ctx-band ${selected && rowKey(selected) === rowKey(layer) ? 'ctx-band-selected' : ''}`}
+        onClick={() => { void selectLayer(layer); }}
+      >
+        <div className="ctx-band-stripe" style={{ background: meta.hue }} />
+        <div className="ctx-band-body">
+          <div className="ctx-band-top">
+            <div className="ctx-band-name">
+              <span className="ctx-layer-n">L{meta.n}</span>
+              {meta.label} <span className="ctx-band-id">{layer.id}</span>
+              {rowRoleLabel(layer) && (
+                <span className="ctx-layer-note">运行时 · {rowRoleLabel(layer)}</span>
+              )}
+            </div>
+            <span className={`ctx-badge ${badgeCls}`}>{badgeLabel}</span>
+          </div>
+          <div className="ctx-band-meta">
+            <span className={`ctx-placement ${placement.cls}`}>{placement.label}</span>
+            <span>order {layer.order}</span>
+            <span>prio {layer.priority}</span>
+            <span>
+              {hasCap ? `cap ${formatTokens(layer.budgetTokens)}` : '无单层上限'}
+            </span>
+            <span>tokens {formatTokens(layer.tokens)}</span>
+            <span>{layer.droppable ? 'droppable' : 'keep'}</span>
+          </div>
+          <div className="ctx-tok-row">
+            <div className="ctx-tok-track">
+              <div
+                className="ctx-tok-fill"
+                style={{
+                  width: `${pct}%`,
+                  background: meta.hue,
+                }}
+              />
+            </div>
+            <div className="ctx-tok-label">
+              {hasCap ? `${Math.round(pct)}%` : 'pool'}
+            </div>
+          </div>
+        </div>
+      </button>
+    );
+  };
 
   return (
     <div className="ctx-runtime">
@@ -163,28 +258,52 @@ export function ContextRuntimePanel({
         <section className="panel sidebar-section">
           <div className="sidebar-title">近轮 Timeline</div>
           <div className="small muted" style={{ marginBottom: 6 }}>
-            每列一轮 · 色块=纳入 · L1–L7（System ContextLayer）
+            每列一轮 · 上行=system 纳入 · 下行=快照纳入 · L1–L7
           </div>
           <div className="ctx-timeline">
-            {(inspector.contextLayersTimeline ?? []).map((turn, idx) => (
-              <div key={idx} className="ctx-timeline-col" title={`used ${formatTokens(turn.usedTokens)} / ${formatTokens(turn.systemBudget)}`}>
-                <div className="ctx-timeline-label">T{idx + 1}</div>
-                <div className="ctx-timeline-bars">
-                  {(Object.keys(LAYER_META) as Array<keyof typeof LAYER_META>).map((id) => {
-                    const on = turn.included.includes(id);
-                    const bad = turn.dropped.includes(id);
-                    return (
-                      <div
-                        key={id}
-                        className={`ctx-timeline-cell ${on ? 'on' : bad ? 'bad' : ''}`}
-                        style={on ? { background: LAYER_META[id].hue } : undefined}
-                        title={`${LAYER_META[id].label} ${on ? '纳入' : bad ? '丢弃/失败' : '—'}`}
-                      />
-                    );
-                  })}
+            {(inspector.contextLayersTimeline ?? []).map((turn, idx) => {
+              const sysIds = turn.included;
+              const snapIds = turn.snapshotIncluded ?? [];
+              return (
+                <div
+                  key={idx}
+                  className="ctx-timeline-col"
+                  title={`system ${formatTokens(turn.usedTokens)}${turn.usedSnapshotTokens != null ? ` / 快照 ${formatTokens(turn.usedSnapshotTokens)}` : ''} / 预算 ${formatTokens(turn.systemBudget)}`}
+                >
+                  <div className="ctx-timeline-label">T{idx + 1}</div>
+                  <div className="ctx-timeline-bars">
+                    {(Object.keys(LAYER_META) as Array<keyof typeof LAYER_META>).map((id) => {
+                      const on = sysIds.includes(id);
+                      const bad = turn.dropped.includes(id);
+                      return (
+                        <div
+                          key={`sys-${id}`}
+                          className={`ctx-timeline-cell ${on ? 'on' : bad ? 'bad' : ''}`}
+                          style={on ? { background: LAYER_META[id].hue } : undefined}
+                          title={`system · ${LAYER_META[id].label} ${on ? '纳入' : bad ? '丢弃/失败' : '—'}`}
+                        />
+                      );
+                    })}
+                  </div>
+                  {(turn.snapshotIncluded != null || turn.usedSnapshotTokens != null) && (
+                    <div className="ctx-timeline-bars">
+                      {(Object.keys(LAYER_META) as Array<keyof typeof LAYER_META>).map((id) => {
+                        const on = snapIds.includes(id);
+                        const bad = (turn.snapshotDropped ?? []).includes(id);
+                        return (
+                          <div
+                            key={`snap-${id}`}
+                            className={`ctx-timeline-cell ${on ? 'on' : bad ? 'bad' : ''}`}
+                            style={on ? { background: LAYER_META[id].hue } : undefined}
+                            title={`快照 · ${LAYER_META[id].label} ${on ? '纳入' : bad ? '丢弃/失败' : '—'}`}
+                          />
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </section>
       )}
@@ -192,8 +311,8 @@ export function ContextRuntimePanel({
       <section className="ctx-panel">
         <div className="ctx-panel-header">
           <div>
-            <div className="sidebar-title" style={{ marginBottom: 0 }}>System 装配层（产品 1–7）</div>
-            <div className="small muted">AssembleManifest 为真源 · ContextLayer = 产品八层之 1–7</div>
+            <div className="sidebar-title" style={{ marginBottom: 0 }}>上下文装配 · E8 双组</div>
+            <div className="small muted">AssembleManifest 为真源 · 按 placement 分组（system / 本轮快照）</div>
           </div>
           <div className="small mono muted">
             {snapshot?.query ? `query: ${snapshot.query.slice(0, 36)}` : 'query: —'}
@@ -206,125 +325,127 @@ export function ContextRuntimePanel({
             <div className="v">{snapshot ? formatTokens(snapshot.systemBudget) : '—'}</div>
           </div>
           <div className="ctx-metric">
-            <div className="k">usedTokens</div>
+            <div className="k">used · system</div>
             <div className="v">{snapshot ? formatTokens(snapshot.usedTokens) : '—'}</div>
           </div>
           <div className="ctx-metric">
-            <div className="k">reserve</div>
-            <div className="v">{snapshot?.structureReserve != null ? String(snapshot.structureReserve) : '—'}</div>
+            <div className="k">used · 快照</div>
+            <div className="v">
+              {snapshot?.usedSnapshotTokens != null ? formatTokens(snapshot.usedSnapshotTokens) : '—'}
+            </div>
           </div>
           <div className="ctx-metric">
             <div className="k">included</div>
-            <div className="v">{snapshot ? `${included.length} / ${layers.length}` : '—'}</div>
+            <div className="v">
+              {snapshot
+                ? `${systemIncluded.length + snapshotIncluded.length} / ${layers.length}`
+                : '—'}
+            </div>
           </div>
         </div>
+        <div className="small muted" style={{ marginTop: 4 }}>
+          分账：system 组计入 usedTokens（缓存稳定前缀）；本轮快照组计入 usedSnapshotTokens（易变，缺省无预算上限）。
+        </div>
 
-        {snapshot && snapshot.systemBudget > 0 ? (
-          <div className="ctx-budget">
-            <div className="ctx-budget-bar">
-              {included.map((l) => {
-                const meta = LAYER_META[l.id];
-                const denom = Math.max(
-                  snapshot.systemBudget,
-                  snapshot.usedTokens,
-                  1,
-                );
-                const pct = (l.tokens / denom) * 100;
-                return (
-                  <div
-                    key={l.id}
-                    className="ctx-budget-seg"
-                    title={`${meta.label} ${l.tokens}`}
-                    style={{ width: `${Math.max(pct, 0.4)}%`, background: meta.hue }}
-                  />
-                );
-              })}
-            </div>
-            <div className="ctx-budget-legend">
-              {included.map((l) => (
-                <span key={l.id}>
-                  <i className="ctx-dot" style={{ background: LAYER_META[l.id].hue }} />
-                  {LAYER_META[l.id].label} {formatTokens(l.tokens)}
-                </span>
-              ))}
-              {!included.length && <span className="muted">本轮无层纳入</span>}
-            </div>
+        {/* ── System 组：缓存稳定前缀 ── */}
+        <div className="ctx-group">
+          <div className="ctx-group-header">
+            <div className="ctx-group-title">System · 缓存稳定前缀（产品 L1–L7）</div>
+            <span className="ctx-placement ctx-placement-system" title={PLACEMENT_META.system.hint}>
+              {PLACEMENT_META.system.label}
+            </span>
           </div>
-        ) : (
-          <div className="ctx-empty">
-            装配完成后，这里按 order 显示 System 契约层（产品第 1–7 层：Wisdom → Runtime）。
-            <br />
-            产品第 8 层 Information 不在本栈，见下方消息窗口面板。
-            <br />
-            未注册、空、丢弃是三种不同事实。
+          <div className="small muted" style={{ marginBottom: 6 }}>
+            跨轮逐字节稳定 · 前缀缓存命中 → 延迟与成本双赢（宪法 E8）
           </div>
-        )}
+          {snapshot && snapshot.systemBudget > 0 ? (
+            <div className="ctx-budget">
+              <div className="ctx-budget-bar">
+                {systemIncluded.filter((l) => l.tokens > 0).map((l) => {
+                  const meta = LAYER_META[l.id];
+                  const denom = Math.max(snapshot.systemBudget, snapshot.usedTokens, 1);
+                  const pct = (l.tokens / denom) * 100;
+                  return (
+                    <div
+                      key={rowKey(l)}
+                      className="ctx-budget-seg"
+                      title={`${meta.label}${rowRoleLabel(l) ? ` · ${rowRoleLabel(l)}` : ''} ${l.tokens}`}
+                      style={{ width: `${Math.max(pct, 0.4)}%`, background: meta.hue }}
+                    />
+                  );
+                })}
+              </div>
+              <div className="ctx-budget-legend">
+                {systemIncluded.map((l) => (
+                  <span key={rowKey(l)}>
+                    <i className="ctx-dot" style={{ background: LAYER_META[l.id].hue }} />
+                    {LAYER_META[l.id].label}
+                    {rowRoleLabel(l) ? ` · ${rowRoleLabel(l)}` : ''} {formatTokens(l.tokens)}
+                  </span>
+                ))}
+                {!systemIncluded.length && <span className="muted">本轮 system 组无层纳入</span>}
+              </div>
+            </div>
+          ) : (
+            <div className="ctx-empty">
+              装配完成后，这里按 order 显示 system 组契约层（缓存稳定前缀）。
+            </div>
+          )}
+          {systemRows.length > 0 && <div className="ctx-stack">{systemRows.map(renderBand)}</div>}
+        </div>
 
-        {layers.length > 0 && (
-          <div className="ctx-stack">
-            {layers.map((layer) => {
-              const meta = LAYER_META[layer.id];
-              const status = STATUS_META[layer.status] ?? STATUS_META.idle;
-              const badgeCls = isWarnIncluded(layer) ? 'badge-warn' : status.cls;
-              const badgeLabel = isWarnIncluded(layer) ? '纳入·告警' : status.label;
-              const hasCap = layer.budgetTokens != null && layer.budgetTokens > 0;
-              const pct = hasCap
-                ? Math.min(100, (layer.tokens / (layer.budgetTokens || 1)) * 100)
-                : snapshot && snapshot.usedTokens > 0
-                  ? Math.min(100, (layer.tokens / Math.max(snapshot.usedTokens, 1)) * 100)
-                  : layer.tokens > 0
-                    ? 100
-                    : 0;
-              return (
-                <button
-                  key={layer.id}
-                  type="button"
-                  className={`ctx-band ${selected?.id === layer.id ? 'ctx-band-selected' : ''}`}
-                  onClick={() => { void selectLayer(layer.id); }}
-                >
-                  <div className="ctx-band-stripe" style={{ background: meta.hue }} />
-                  <div className="ctx-band-body">
-                    <div className="ctx-band-top">
-                      <div className="ctx-band-name">
-                        <span className="ctx-layer-n">L{meta.n}</span>
-                        {meta.label} <span className="ctx-band-id">{layer.id}</span>
-                        {meta.note && <span className="ctx-layer-note">{meta.note}</span>}
-                      </div>
-                      <span className={`ctx-badge ${badgeCls}`}>{badgeLabel}</span>
-                    </div>
-                    <div className="ctx-band-meta">
-                      <span>order {layer.order}</span>
-                      <span>prio {layer.priority}</span>
-                      <span>
-                        {layer.budgetTokens != null && layer.budgetTokens > 0
-                          ? `cap ${formatTokens(layer.budgetTokens)}`
-                          : '无单层上限'}
-                      </span>
-                      <span>tokens {formatTokens(layer.tokens)}</span>
-                      <span>{layer.droppable ? 'droppable' : 'keep'}</span>
-                    </div>
-                    <div className="ctx-tok-row">
-                      <div className="ctx-tok-track">
-                        <div
-                          className="ctx-tok-fill"
-                          style={{
-                            width: `${pct}%`,
-                            background: meta.hue,
-                          }}
-                        />
-                      </div>
-                      <div className="ctx-tok-label">
-                        {layer.budgetTokens != null && layer.budgetTokens > 0
-                          ? `${Math.round(pct)}%`
-                          : 'pool'}
-                      </div>
-                    </div>
-                  </div>
-                </button>
-              );
-            })}
+        {/* ── 本轮快照组：易变 ── */}
+        <div className="ctx-group ctx-group-snapshot">
+          <div className="ctx-group-header">
+            <div className="ctx-group-title">本轮快照 · 易变（content 尾部）</div>
+            <span className="ctx-placement ctx-placement-snapshot" title={PLACEMENT_META.snapshot.hint}>
+              {PLACEMENT_META.snapshot.label}
+            </span>
           </div>
-        )}
+          <div className="small muted" style={{ marginBottom: 6 }}>
+            每轮重建 · 装配进本轮 <span className="mono">&lt;turn_context&gt;</span>（消息尾部），不进 system prompt；
+            含 query 择取（记忆/认知/智慧）与 Run 易变注入（datetime / 任务）
+          </div>
+          {snapshotRows.length > 0 ? (
+            <>
+              <div className="ctx-budget">
+                <div className="ctx-budget-bar ctx-budget-bar-snapshot">
+                  {snapshotIncluded.filter((l) => l.tokens > 0).map((l) => {
+                    const meta = LAYER_META[l.id];
+                    const denom = Math.max(snapshotUsed, 1);
+                    const pct = (l.tokens / denom) * 100;
+                    return (
+                      <div
+                        key={rowKey(l)}
+                        className="ctx-budget-seg"
+                        title={`${meta.label}${rowRoleLabel(l) ? ` · ${rowRoleLabel(l)}` : ''} ${l.tokens}`}
+                        style={{ width: `${Math.max(pct, 0.4)}%`, background: meta.hue }}
+                      />
+                    );
+                  })}
+                </div>
+                <div className="ctx-budget-legend">
+                  {snapshotIncluded.map((l) => (
+                    <span key={rowKey(l)}>
+                      <i className="ctx-dot" style={{ background: LAYER_META[l.id].hue }} />
+                      {LAYER_META[l.id].label}
+                      {rowRoleLabel(l) ? ` · ${rowRoleLabel(l)}` : ''} {formatTokens(l.tokens)}
+                    </span>
+                  ))}
+                  {!snapshotIncluded.length && <span className="muted">本轮快照组无层纳入</span>}
+                  <span className="muted">
+                    合计 {formatTokens(snapshotUsed)} tok · 预算未随快照下发（不画预算条）
+                  </span>
+                </div>
+              </div>
+              <div className="ctx-stack">{snapshotRows.map(renderBand)}</div>
+            </>
+          ) : (
+            <div className="ctx-empty">
+              无快照组条目：本会话快照为空，或该装配早于 E8（旧快照无 placement）。
+            </div>
+          )}
+        </div>
 
         <div className="ctx-section-title">Information · 消息窗口（产品第 8 层）</div>
         <div className="ctx-info-panel">
@@ -359,23 +480,23 @@ export function ContextRuntimePanel({
             <span>{inspector.truncatedTo != null ? String(inspector.truncatedTo) : '—'}</span>
           </div>
           <div className="small muted" style={{ marginTop: 8 }}>
-            分馏关系：Information（session）→ 提炼 → Memory / Cognition / Wisdom → 再作为 System 层片段注入。
+            分馏关系：Information（session）→ 提炼 → Memory / Cognition / Wisdom → 再作为快照择取注入本轮 turn_context。
             对话正文见中栏消息列表。
           </div>
         </div>
 
-        <div className="ctx-section-title">层详情 · System 契约层（L1–L7）</div>
+        <div className="ctx-section-title">层详情</div>
         <div className="ctx-detail">
           {!selected ? (
-            <div className="small muted">选择一层查看 budget / reason / sources / 正文。</div>
+            <div className="small muted">选择一层查看 placement / budget / reason / sources / 正文。</div>
           ) : (
             <>
               <div className="ctx-detail-title">
                 <i className="ctx-dot" style={{ background: LAYER_META[selected.id].hue }} />
                 <span className="ctx-layer-n">L{LAYER_META[selected.id].n}</span>
                 {LAYER_META[selected.id].label}
-                {LAYER_META[selected.id].note && (
-                  <span className="ctx-layer-note">{LAYER_META[selected.id].note}</span>
+                {rowRoleLabel(selected) && (
+                  <span className="ctx-layer-note">运行时 · {rowRoleLabel(selected)}</span>
                 )}
                 <span className={`ctx-badge ${(STATUS_META[selected.status] ?? STATUS_META.idle).cls}`}>
                   {(STATUS_META[selected.status] ?? STATUS_META.idle).label}
@@ -384,6 +505,10 @@ export function ContextRuntimePanel({
               <div className="ctx-kv">
                 <span className="k">id</span>
                 <span className="v">{selected.id}</span>
+                <span className="k">placement</span>
+                <span className={`v ${PLACEMENT_META[rowPlacement(selected)].cls}`}>
+                  {PLACEMENT_META[rowPlacement(selected)].label}
+                </span>
                 <span className="k">priority</span>
                 <span className="v">{selected.priority}</span>
                 <span className="k">order</span>
@@ -394,7 +519,11 @@ export function ContextRuntimePanel({
                 <span className="v">
                   {selected.budgetTokens != null && selected.budgetTokens > 0
                     ? `${formatTokens(selected.budgetTokens)}（硬顶）`
-                    : `无硬顶 · 共享 contentBudget ${snapshot ? formatTokens(Math.max(0, snapshot.systemBudget - (snapshot.structureReserve ?? 50))) : '—'}`}
+                    : rowPlacement(selected) === 'snapshot'
+                      ? '无硬顶 · 计入快照组'
+                      : snapshot?.structureReserve != null
+                        ? `无硬顶 · 共享 contentBudget ${formatTokens(Math.max(0, snapshot.systemBudget - snapshot.structureReserve))}`
+                        : '无硬顶 · contentBudget 未随快照下发'}
                 </span>
                 <span className="k">tokens</span>
                 <span className="v">{formatTokens(selected.tokens)}</span>

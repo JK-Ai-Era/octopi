@@ -112,14 +112,20 @@ export function stripTurnContextXml(content: string | Message['content'] | undef
     .trim();
 }
 
-/** 是否 turn_start 正文（接受 string 或 Message.content） */
+/**
+ * 是否 turn_start 正文（接受 string 或 Message.content）。
+ *
+ * 判形锚定到**正文开头**（允许前导空白）：真实信封由 formatTurnStartContent 定形、必然以开标签起头；
+ * 正文中途引用标签字面量（讨论协议/贴日志/知识语料）不得命中——否则普通 user 发言会被
+ * 写一次守卫误判「已定形」（NEXT-STEPS D7）。
+ */
 export function isTurnStartContent(content: string | Message['content'] | undefined | null): boolean {
-  return /<turn_start[\s>]/.test(messageText(content));
+  return /^\s*<turn_start[\s>]/.test(messageText(content));
 }
 
-/** 是否 turn_end 正文 */
+/** 是否 turn_end 正文（同 isTurnStartContent：锚定正文开头，防止字面量误判） */
 export function isTurnEndContent(content: string | Message['content'] | undefined | null): boolean {
-  return /<turn_end[\s/>]/.test(messageText(content));
+  return /^\s*<turn_end[\s/>]/.test(messageText(content));
 }
 
 /** 从 turn_start / turn_end 正文解析 id */
@@ -128,6 +134,72 @@ export function parseTurnIdFromContent(
 ): string | undefined {
   const m = /<turn_(?:start|end)\s[^>]*\bid="([^"]+)"/.exec(messageText(content));
   return m ? m[1] : undefined;
+}
+
+/** turn_context 内的槽位段（机器生成块，非用户发言） */
+export interface TurnEnvelopeSlot {
+  /** 槽位标签（runtime_snapshot / session_attachments / knowledge_grounding） */
+  tag: string;
+  /** 槽位正文（不含包裹标签，已 trim） */
+  body: string;
+}
+
+/** turn_start 信封解析结果 */
+export interface TurnEnvelopeParts {
+  /** `<turn_start id>`；缺失时 undefined */
+  turnId?: string;
+  /** `<turn_start at>`；缺失时 undefined */
+  at?: string;
+  /** turn_context 内槽位（boilerplate 不计；白名单外标签跳过；按出现顺序） */
+  slots: TurnEnvelopeSlot[];
+  /** `<user_message>` 正文（已解转义）；块缺失时为 ''（坏信封不回退整段原文冒充用户发言） */
+  userText: string;
+  /** 是否含 `<user_message>` 块（false = 信封不完整，UI 应标注而非把整封当用户原文） */
+  hasUserMessage: boolean;
+}
+
+/** joinSlotXml 的合法槽位标签（机器插槽唯一产生处；白名单外的同形标签视为正文噪音/注入尝试） */
+const SLOT_TAGS = new Set(['runtime_snapshot', 'session_attachments', 'knowledge_grounding']);
+
+/**
+ * 解析 turn_start 信封（槽位 + 用户原文）。
+ *
+ * 入口判形锚定正文开头（同 isTurnStartContent）；turn_context 取**最后一块**
+ * （与 extractUserMessageText 取最后一个 user_message 同口径）；槽位只认
+ * SLOT_TAGS 白名单（防正文伪影伪造任意槽位条目）。
+ *
+ * @param content - 消息正文（string 或 Message.content）
+ * @returns 信封解析结果；非 turn_start 正文返回 null
+ */
+export function parseTurnEnvelope(
+  content: string | Message['content'] | undefined | null,
+): TurnEnvelopeParts | null {
+  const raw = messageText(content);
+  if (!/^\s*<turn_start[\s>]/.test(raw)) return null;
+  const at = /\sat="([^"]*)"/.exec(raw.slice(0, raw.indexOf('>') + 1))?.[1];
+  const slots: TurnEnvelopeSlot[] = [];
+  const ctxRe = /<turn_context[^>]*>([\s\S]*?)<\/turn_context>/g;
+  let ctx = '';
+  let cm: RegExpExecArray | null;
+  while ((cm = ctxRe.exec(raw)) !== null) {
+    ctx = cm[1] ?? '';
+  }
+  const slotRe = /<([a-z][a-z0-9_-]*)>\n?([\s\S]*?)\n?<\/\1>/g;
+  let sm: RegExpExecArray | null;
+  while ((sm = slotRe.exec(ctx)) !== null) {
+    const tag = sm[1]!;
+    if (tag === 'boilerplate') continue;
+    if (!SLOT_TAGS.has(tag)) continue;
+    slots.push({ tag, body: sm[2]!.trim() });
+  }
+  const hasUserMessage = /<user_message>/.test(raw);
+  return {
+    turnId: parseTurnIdFromContent(raw),
+    at,
+    slots,
+    userText: hasUserMessage ? extractUserMessageText(raw) : '',
+    hasUserMessage,
+  };
 }
 
 /**

@@ -6,6 +6,7 @@ import type {
 import type { InspectorState } from '@octopi-agent/gateway/web/runtime/store';
 import type { TokenUsage } from '@octopi-agent/core/types/turn';
 import { nominalTotalTokens, reportedPromptTokens } from '@octopi-agent/core/types/turn';
+import { extractUserMessageText } from '@octopi-agent/engine/harness/context/turn-envelope.js';
 
 /** TokenUsage 是 cache-aware 七字段；展示统一走 core 汇总函数，禁止读旧 prompt/completion/total 字段 */
 function formatUsageBrief(usage: TokenUsage): string {
@@ -58,6 +59,37 @@ const ROLE_HUE: Record<string, string> = {
   user: '#64748b',
 };
 
+/**
+ * 归因徽章（G2/G4）：机器插槽与用户发言明确分开。
+ * 语义真源 = 引擎 `RunMessageAttribution`；此处只做展示映射。
+ */
+const ATTR_META: Record<
+  string,
+  { label: string; hue: string; cls: string; speaker: string }
+> = {
+  user_speech: { label: '用户发言', hue: '#64748b', cls: 'badge-idle', speaker: 'human' },
+  turn_envelope: { label: '用户发言 · turn 信封', hue: '#64748b', cls: 'badge-idle', speaker: 'human' },
+  carrier: { label: '引擎插槽 · 机器生成', hue: '#0d9488', cls: 'badge-carrier', speaker: 'engine' },
+  context_summary: { label: '上下文摘要 · 机器生成', hue: '#b45309', cls: 'badge-warn', speaker: 'engine' },
+  engine_hint: { label: '引擎提示 · 机器生成', hue: '#b45309', cls: 'badge-warn', speaker: 'engine' },
+  turn_end: { label: 'turn 闭标 · 机器边界', hue: '#9ca3af', cls: 'badge-empty', speaker: 'engine' },
+  hosted_system: { label: '托管 system · 不回放聊天', hue: '#c9a227', cls: 'badge-unregistered', speaker: 'engine' },
+  system: { label: 'system 注入', hue: '#c9a227', cls: 'badge-unregistered', speaker: 'engine' },
+  assistant: { label: '模型输出', hue: '#4f46e5', cls: 'badge-included', speaker: 'llm' },
+  tool: { label: '工具结果', hue: '#0d9488', cls: 'badge-empty', speaker: 'tool' },
+};
+
+/** turn_context 槽位标签（机器生成块） */
+const SLOT_LABEL: Record<string, string> = {
+  runtime_snapshot: '运行时快照 runtime_snapshot',
+  session_attachments: '会话附件 session_attachments',
+  knowledge_grounding: '知识检索 knowledge_grounding',
+};
+
+function slotLabel(tag: string): string {
+  return SLOT_LABEL[tag] ?? tag;
+}
+
 export interface RunObservatoryPanelProps {
   inspector: InspectorState;
   runStatus: string;
@@ -80,6 +112,8 @@ export function RunObservatoryPanel({
   const observerStatus = inspector.observerStatus;
   const [phase, setPhase] = useState<'final' | 'entry' | 'llm'>('final');
   const [expandedMsg, setExpandedMsg] = useState<number | null>(null);
+  /** 展开的机器槽位（`msgIndex:slotIndex`） */
+  const [expandedSlot, setExpandedSlot] = useState<string | null>(null);
   const [expandedEvent, setExpandedEvent] = useState<number | null>(null);
   const [showPreviewOnly, setShowPreviewOnly] = useState(true);
   const [filterHidden, setFilterHidden] = useState(false);
@@ -98,6 +132,25 @@ export function RunObservatoryPanel({
   const toolsDisplay = lifecycle?.toolCalls ?? guard?.totalToolCalls;
   const durationDisplay = lifecycle?.durationMs ?? guard?.elapsedMs;
   const endDisplay = lifecycle?.endReason ?? (runStatus === 'idle' && obs ? '—' : '');
+
+  // 耗时（G3 轻量）：按事件前缀聚合 timeline 的 durationMs；
+  // [timing] 探针的 ttft / chars 段无运行时通道（仅 gateway.log），待 F3 转正接入。
+  const timing = useMemo(() => {
+    const buckets: Record<string, { count: number; totalMs: number }> = {};
+    for (const ev of timeline) {
+      const cls = ev.type.startsWith('tool.')
+        ? 'tool'
+        : ev.type.startsWith('model.') || ev.type.startsWith('llm')
+          ? 'llm'
+          : ev.type.startsWith('turn.')
+            ? 'turn'
+            : 'engine';
+      const b = buckets[cls] ?? (buckets[cls] = { count: 0, totalMs: 0 });
+      b.count += 1;
+      if (typeof ev.durationMs === 'number') b.totalMs += ev.durationMs;
+    }
+    return buckets;
+  }, [timeline]);
 
   const summary = useMemo(() => {
     if (phase === 'llm') {
@@ -150,6 +203,10 @@ export function RunObservatoryPanel({
               Observer 通道 · Run 可变现场（I1）· 对话历史 ≠ run messages
               {observerStatus?.level ? ` · level=${observerStatus.level}` : ''}
               {observerStatus?.channels?.['context.llm'] === false ? ' · llm通道关' : ''}
+            </div>
+            <div className="small muted">
+              本页是「这轮模型看到了什么」的审计入口：hiddenFromChat = 聊天回放隐藏 ≠ 不可见，
+              机器插槽（快照/grounding/附件/摘要）在此必须可见并归因。
             </div>
           </div>
           <button
@@ -278,6 +335,37 @@ export function RunObservatoryPanel({
               <div className="small status-error" style={{ marginTop: 6 }}>{lifecycle.error}</div>
             )}
 
+            <div className="ctx-section-title">耗时 · timeline 聚合</div>
+            <div className="small muted" style={{ marginBottom: 4 }}>
+              按事件前缀聚合 <span className="mono">durationMs</span>（只有计时的节点被计入 Σ）。
+              <span className="mono">[timing]</span> 探针的 ttft / chars 段目前仅落 gateway.log、无运行时通道——
+              待 F3「探针转正」接入正式观测面后在此替换（不展示未采集的数据）。
+            </div>
+            <div className="ctx-metrics">
+              <div className="ctx-metric">
+                <div className="k">run total</div>
+                <div className="v">{formatMs(durationDisplay)}</div>
+              </div>
+              <div className="ctx-metric">
+                <div className="k">tool Σ</div>
+                <div className="v">
+                  {timing.tool ? `${formatMs(timing.tool.totalMs)} (${timing.tool.count})` : '—'}
+                </div>
+              </div>
+              <div className="ctx-metric">
+                <div className="k">llm Σ</div>
+                <div className="v">
+                  {timing.llm ? `${formatMs(timing.llm.totalMs)} (${timing.llm.count})` : '—'}
+                </div>
+              </div>
+              <div className="ctx-metric">
+                <div className="k">turn Σ</div>
+                <div className="v">
+                  {timing.turn ? `${formatMs(timing.turn.totalMs)} (${timing.turn.count})` : '—'}
+                </div>
+              </div>
+            </div>
+
             {(obs.guardMetrics || obs.llmSummary || obs.messagesDiff) && (
               <>
                 <div className="ctx-section-title">Guard · Metrics · LLM</div>
@@ -323,7 +411,9 @@ export function RunObservatoryPanel({
                 <div className="ctx-metrics" style={{ marginTop: 6 }}>
                   <div className="ctx-metric">
                     <div className="k">llm msgs</div>
-                    <div className="v">{obs.llmSummary?.count ?? messages?.summary?.count ?? '—'}</div>
+                    <div className="v" title="仅 LLM 出口口径；未采集时不回落 workspace 计数">
+                      {obs.llmSummary?.count ?? '—'}
+                    </div>
                   </div>
                   <div className="ctx-metric">
                     <div className="k">tool calls</div>
@@ -606,6 +696,16 @@ export function RunObservatoryPanel({
                 )}
               </div>
             )}
+            {summary?.byKind && Object.keys(summary.byKind).length > 0 && (
+              <div className="ctx-budget-legend" style={{ marginTop: 4 }}>
+                {Object.entries(summary.byKind).map(([kind, n]) => (
+                  <span key={kind}>
+                    <i className="ctx-dot" style={{ background: ATTR_META[kind]?.hue ?? '#64748b' }} />
+                    {ATTR_META[kind]?.label ?? kind} {n}
+                  </span>
+                ))}
+              </div>
+            )}
 
             <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
               {(['final', 'entry', 'llm'] as const).map((p) => (
@@ -681,42 +781,90 @@ export function RunObservatoryPanel({
               <div className="ctx-stack" style={{ marginTop: 8 }}>
                 {messageList.map((m) => {
                   const open = expandedMsg === m.index;
-                  const previewText =
-                    m.contentPreview ||
-                    contentToText(m.content).slice(0, 160) ||
-                    (m.toolCalls?.length
-                      ? `tools: ${m.toolCalls.map((t) => (t as { name?: string }).name ?? '?').join(', ')}`
-                      : '');
+                  const attr = m.attribution;
+                  const attrMeta = attr ? ATTR_META[attr.kind] : undefined;
+                  const isEnvelope = attr?.kind === 'turn_envelope';
+                  const hasBody = m.content != null;
+                  const envelopeUserText = isEnvelope && hasBody
+                    ? extractUserMessageText(m.content as never)
+                    : '';
+                  const previewText = isEnvelope
+                    ? (hasBody ? envelopeUserText : (m.contentPreview ?? ''))
+                    : m.contentPreview ||
+                      contentToText(m.content).slice(0, 160) ||
+                      (m.toolCalls?.length
+                        ? `tools: ${m.toolCalls.map((t) => (t as { name?: string }).name ?? '?').join(', ')}`
+                        : '');
                   return (
-                    <div key={m.index} className="ctx-band-shell">
+                    <div
+                      key={m.index}
+                      className={`ctx-band-shell ${attrMeta?.speaker === 'engine' ? 'ctx-band-carrier' : ''}`}
+                    >
                       <button
                         type="button"
                         className="ctx-band"
                         onClick={() => setExpandedMsg(open ? null : m.index)}
                       >
-                        <div className="ctx-band-stripe" style={{ background: ROLE_HUE[m.role] ?? '#64748b' }} />
+                        <div
+                          className="ctx-band-stripe"
+                          style={{ background: attrMeta?.hue ?? ROLE_HUE[m.role] ?? '#64748b' }}
+                        />
                         <div className="ctx-band-body">
                           <div className="ctx-band-top">
                             <div className="ctx-band-name">
                               <span className="ctx-band-id">#{m.index}</span> {m.role}
+                              {attr?.turnId && <span className="ctx-layer-note">{attr.turnId}</span>}
                               {m.agentId && <span className="ctx-layer-note">{m.agentId}</span>}
                             </div>
-                            <span className={`ctx-badge ${ROLE_BADGE[m.role] ?? 'badge-idle'}`}>
-                              {m.hiddenFromChat ? '对话隐藏' : phase === 'llm' ? 'LLM' : '工作区'}
+                            <span className={`ctx-badge ${attrMeta?.cls ?? ROLE_BADGE[m.role] ?? 'badge-idle'}`}>
+                              {attrMeta?.label ?? (phase === 'llm' ? 'LLM' : '工作区')}
                             </span>
                           </div>
                           <div className="ctx-band-meta">
-                            {m.metadata?.source != null && <span>source: {String(m.metadata.source)}</span>}
+                            {m.hiddenFromChat && (
+                              <span
+                                className="ctx-badge badge-empty"
+                                title="聊天回放隐藏 ≠ 不可见：检查器保留审计（G2 口径）"
+                              >
+                                对话隐藏
+                              </span>
+                            )}
+                            {isEnvelope && (attr?.slots?.length ?? 0) > 0 ? (
+                              attr!.slots!.map((s, si) => (
+                                <span key={`${s.tag}-${si}`} className="ctx-slot-chip" title="机器生成槽位">
+                                  {slotLabel(s.tag)} {s.chars}c
+                                </span>
+                              ))
+                            ) : m.metadata?.source != null ? (
+                              <span>source: {String(m.metadata.source)}</span>
+                            ) : null}
                             <span>{m.contentChars ?? 0} chars</span>
                             {m.timestamp && <span>{new Date(m.timestamp).toLocaleTimeString()}</span>}
                             <span className="muted">{open ? '收起' : '详情'}</span>
                           </div>
-                          {!open && previewText && (
+                          {!open && isEnvelope && (
+                            <div className="small" style={{ marginTop: 4, whiteSpace: 'pre-wrap' }}>
+                              <span className="ctx-slot-user">
+                                {attr?.hasUserMessage === false
+                                  ? '信封不完整（无 user_message 块）：'
+                                  : hasBody
+                                    ? '用户原文：'
+                                    : '预览（无正文档位）：'}
+                              </span>
+                              <span className="muted">
+                                {previewText.slice(0, 160) || '（空）'}
+                                {attr?.userChars != null
+                                  ? `（${attr.userChars} chars · 另含 ${attr.slots?.length ?? 0} 个机器槽位）`
+                                  : ''}
+                              </span>
+                            </div>
+                          )}
+                          {!open && !isEnvelope && previewText && (
                             <div className="small muted" style={{ marginTop: 4, whiteSpace: 'pre-wrap' }}>
                               {previewText.slice(0, 160)}
                             </div>
                           )}
-                          {!open && !previewText && (
+                          {!open && !isEnvelope && !previewText && (
                             <div className="small muted" style={{ marginTop: 4 }}>
                               （无文本预览{m.toolResults?.length ? '，见工具结果' : ''}）
                             </div>
@@ -731,6 +879,12 @@ export function RunObservatoryPanel({
                             <span className="v">{m.index}</span>
                             <span className="k">role</span>
                             <span className="v">{m.role}</span>
+                            <span className="k">speaker</span>
+                            <span className="v">{attr?.speaker ?? '—'}</span>
+                            <span className="k">kind</span>
+                            <span className="v">{attr?.kind ?? '—'}</span>
+                            <span className="k">turnId</span>
+                            <span className="v">{attr?.turnId || '—'}</span>
                             <span className="k">agentId</span>
                             <span className="v">{m.agentId || '—'}</span>
                             <span className="k">source</span>
@@ -740,9 +894,54 @@ export function RunObservatoryPanel({
                             <span className="k">chars</span>
                             <span className="v">{m.contentChars ?? '—'}</span>
                             <span className="k">hidden</span>
-                            <span className="v">{String(m.hiddenFromChat ?? false)}</span>
+                            <span className="v" title="聊天回放隐藏 ≠ 不可见">{String(m.hiddenFromChat ?? false)}</span>
                           </div>
-                          <div className="ctx-section-title" style={{ marginTop: 8 }}>内容</div>
+                          {isEnvelope && (
+                            <>
+                              <div className="ctx-section-title" style={{ marginTop: 8 }}>
+                                用户原文 · &lt;user_message&gt;
+                              </div>
+                              <div className="ctx-layer-content">
+                                <pre className="ctx-layer-content-body" style={{ whiteSpace: 'pre-wrap' }}>
+                                  {attr?.hasUserMessage === false
+                                    ? '（信封不完整：无 user_message 块，整封不是用户原文）'
+                                    : hasBody
+                                      ? (envelopeUserText || '（空）')
+                                      : '（快照未含正文：observer.level=full 且新跑一轮后可见）'}
+                                </pre>
+                              </div>
+                              <div className="ctx-section-title" style={{ marginTop: 8 }}>
+                                机器槽位 · turn_context（这轮模型看到了什么）
+                              </div>
+                              {(attr?.slots ?? []).map((s, si) => {
+                                const slotKey = `${m.index}:${si}`;
+                                const slotOpen = expandedSlot === slotKey;
+                                const body = typeof (s as { body?: string }).body === 'string'
+                                  ? (s as { body?: string }).body
+                                  : undefined;
+                                return (
+                                  <div key={slotKey} className="ctx-slot-block">
+                                    <button
+                                      type="button"
+                                      className="btn-ghost small"
+                                      onClick={() => setExpandedSlot(slotOpen ? null : slotKey)}
+                                    >
+                                      {slotLabel(s.tag)} · {s.chars} chars · {slotOpen ? '收起' : '展开'}
+                                    </button>
+                                    {slotOpen && (
+                                      <pre className="ctx-layer-content-body" style={{ whiteSpace: 'pre-wrap' }}>
+                                        {body ?? '（快照未含槽位正文：observer.level=full 且新跑一轮后可见）'}
+                                      </pre>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                              {!(attr?.slots ?? []).length && (
+                                <div className="small muted">无槽位（仅 boilerplate）。</div>
+                              )}
+                            </>
+                          )}
+                          <div className="ctx-section-title" style={{ marginTop: 8 }}>内容（原始消息文本）</div>
                           <div className="ctx-layer-content">
                             <div className="ctx-layer-content-meta">
                               <span className="mono muted">
