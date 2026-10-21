@@ -1,3 +1,20 @@
+## v0.86.25
+
+### fix(delegation): 送达回执 + surfaced 语义 —— dispatch 被丢不再误记已送达
+
+**问题**（v0.86.24 落地时留下的两个议题，大哥拍板收口）：
+1. `Delegation.notified` 一名双义：既表示「notify 推送送达」又表示「父经 delegate_get 取回」，且对 LLM 暴露为 `notified` 会让模型误读为「通知没发出去」。
+2. 「送达可证伪」只验证到接收端在线：推送 emit 成功后 dispatch 仍可能被丢（`no_agent` / `runtime_stopped`），此时消息从未变成父 session 里的内容，却已记「已送达」且提示消音——结果无声丢失。
+
+**改法**：
+- **LLM 面改 `surfaced`**：`delegate_get` / `delegate_list` / `delegate_cancel` 的 summary 输出 `surfaced`（= 结果是否已**送达**：notify 投递或 get 全文取回；list/cancel 只见概览不计）。存储字段 `notified` 不动（零迁移，webui 零消费已核实）。
+- **送达回执 + 乐观置位时序**：dropped 事件在 notify 投递的同步微任务链内**先于**投递续体到达，因此 `notify()` 改为**先乐观置位再投递**，投递失败或 dispatch 被丢（`runtime.trigger.dropped`）时由 `markUndelivered` 收回（与失败路径幂等）。最终语义不变：`notified` 只在结果真正送达时为 true。回滚方向安全：宁可提示多亮一次（父 get 消音），不可丢结果。
+- **不变量补齐**：「trigger 未送达必有 dropped 事件」——单目标 dispatch 的 skipped 出口（router 命中但目标未注册 / aborted 等）与 fan-out 全丢弃出口此前**不发** dropped 事件，现已对称补发；dropped 事件携带**裁剪** `triggerRef`（`TriggerRef = Omit<Trigger,'payload'>`：id/type/agentId/sessionId/metadata，不含 payload 正文——事件流经 onAll 转发给所有观察者，正文不得随之泄漏）。
+
+**评审**（两轮子 agent 对抗性评审 + 逐条验证）：一轮查出 **P0 时序竞态**（dropped 先于 markNotified 到达导致回滚必然失效，临时探针实证）——初版集成测试手工预置 notified 掩盖了真实时序，已重写为全真链路；二轮复核确认 P0 真实闭合（还原旧时序该用例必红 + 变异实验双向验证），并补钉两处测试质量缺陷（P0 用例加「dropped 确实带本单 delegationId 发生」正向对照；单目标用例改走 router 单目标未注册路径钉住补发分支——原用例走的是零目标旧出口）。已知残余（挂 O5，见 arch/delegation.md §7）：fan-out 混合结果、`RUN_FAILED` 不回滚；回滚与 `delegate_get`/`markUndelivered` 并发时提示可能多亮一次；store 纯内存不落盘；自定义**异步** notifier 投递期间提示会提前消音（默认同步 notifier 无此窗口）；dropped 订阅常驻 events 无 dispose（Gateway 单次合流，重复 createDelegationRuntime 会累积）。
+
+**验证**：`npm run build` / `npm run lint` 干净；全量 `npm test` 2996 tests 绿，3 个既有环境失败与 v0.86.24 相同（干净树可复现，与本次无关）。新增/重写用例：真实 notify 时序 dropped 回滚（P0 回归钉，旧时序必红）、无关 dropped 组合边界（无 delegationId / 不同单 / 未置位）、runtime 丢弃不变量 ×3（runtime_stopped / 单目标 skipped / fan-out 全丢弃，含 triggerRef 防泄漏断言）。delegation / delegation-notify / delegation-tools / agent-runtime-sources 全绿。
+
 ## v0.86.24
 
 ### fix(delegation): 委派结果自动回传断链修复 —— notify 推送默认接通，未送达不再被误标

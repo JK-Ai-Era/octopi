@@ -259,6 +259,95 @@ describe('hasAgentSignalReceiver 引用计数配平', () => {
   });
 });
 
+// ── 送达回执回滚（§7.1）：dispatch 被丢 → notified 回滚、提示恢复 ──
+
+describe('送达回执回滚（runtime.trigger.dropped）', () => {
+  it('真实 notify 时序下 dispatch 无目标被丢 → notified 最终 false、提示兜底', async () => {
+    const events = new DefaultEventBus();
+    const { AgentRuntime } = await import(
+      '@octopi-agent/engine/harness/activation/runtime.js'
+    );
+    // events 必须共享：dropped 事件经 runtime 的 events 进总线，wiring 订阅才收得到
+    const runtime = new AgentRuntime({ events });
+    runtime.addSource(new AgentSignalSource({ events }));
+    await runtime.start();
+    // 正向对照用：记录被丢 trigger 的 delegationId
+    const droppedIds: string[] = [];
+    events.on('runtime.trigger.dropped', (e) => {
+      const ref = (e as { data?: { triggerRef?: { metadata?: { delegationId?: string } } } })
+        .data?.triggerRef;
+      if (ref?.metadata?.delegationId) droppedIds.push(ref.metadata.delegationId);
+    });
+
+    const boss = fakeAgent('boss', { callable: true, canDelegate: true, maxDepth: 2 });
+    // worker 进委派 registry（过 resolveTarget），但不注册 activation runtime：
+    // notify 的 signal dispatch 找不到目标 → no_agent 丢弃
+    const worker = fakeAgent('worker', { callable: true, canDelegate: false });
+    const wiring = wireDelegation([boss, worker] as never, { events })!;
+    expect(wiring.notifyWired).toBe(true);
+
+    // 全真时序：建单 → 子跑失败 → notify（先乐观置位再投递）→ signal →
+    // dispatch → boss 未注册进 activation runtime → no_agent 丢弃 → 回滚。
+    // 禁止手工 markNotified 预置——那会掩盖「dropped 先于置位到达」的真实竞态
+    //（P0 回归：旧实现下本用例 notified 会停在 true）
+    const { delegation } = await wiring.service.dispatch({
+      parent: { agentId: 'boss', sessionId: 's-parent', runId: 'r-1' },
+      target: { agentId: 'worker' },
+      task: 't',
+      input: 'i',
+    });
+    await vi.waitFor(() =>
+      expect(['completed', 'failed']).toContain(
+        wiring.delegationStore.get(delegation.id)?.status,
+      ),
+    );
+    await vi.waitFor(() =>
+      expect(wiring.delegationStore.get(delegation.id)?.notified).toBe(false),
+    );
+    expect(wiring.service.renderStatusHint('s-parent')).not.toBe('');
+    // 正向对照：dropped 确实带着本单的 delegationId 发生过（否则「从未投递」
+    // 也会让 notified=false 成立，掩盖掉回滚本身失效的回归）
+    expect(droppedIds).toContain(delegation.id);
+    await runtime.stop();
+  });
+
+  it('无关 dropped 不回滚：无 delegationId、不同单、未置位的单', async () => {
+    const events = new DefaultEventBus();
+    const boss = fakeAgent('boss', { callable: true, canDelegate: true, maxDepth: 2 });
+    const wiring = wireDelegation([boss] as never, { events })!;
+    const mk = () => {
+      const d = wiring.delegationStore.create({
+        parent: { agentId: 'boss', sessionId: 's-parent', runId: 'r-1' },
+        target: { agentId: 'worker' },
+        task: 't',
+        input: 'i',
+      });
+      wiring.delegationStore.update(d.id, { status: 'completed', output: 'ok' });
+      return d;
+    };
+    const drop = (data: Record<string, unknown>) =>
+      events.emit({
+        type: 'runtime.trigger.dropped',
+        timestamp: Date.now(),
+        data,
+      });
+
+    const d1 = mk();
+    wiring.delegationStore.markNotified(d1.id);
+    // 无 delegationId → 忽略；不同 delegationId → 不得误伤 d1
+    drop({ triggerRef: { id: 't1', metadata: {} } });
+    drop({ triggerRef: { id: 't2', metadata: { delegationId: 'del-other' } } });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(wiring.delegationStore.get(d1.id)?.notified).toBe(true);
+
+    // 未置位的单：dropped 不得无中生有（仍 false，不抛）
+    const d2 = mk();
+    drop({ triggerRef: { id: 't3', metadata: { delegationId: d2.id } } });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(wiring.delegationStore.get(d2.id)?.notified).toBe(false);
+  });
+});
+
 // ── wireDelegation ──
 
 function fakeAgent(agentId: string, delegation?: { callable: boolean; canDelegate: boolean; maxDepth?: number }) {

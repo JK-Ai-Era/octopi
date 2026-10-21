@@ -202,6 +202,13 @@ export class AgentRuntime {
   ): Promise<DispatchResult | FanoutDispatchResult> {
     if (!this.started) {
       this.emitRuntime(RuntimeEvents.TRIGGER_DROPPED, {
+        triggerRef: {
+          id: trigger.id,
+          type: trigger.type,
+          agentId: trigger.agentId,
+          sessionId: trigger.sessionId,
+          metadata: trigger.metadata,
+        },
         triggerId: trigger.id,
         reason: 'runtime_stopped',
       });
@@ -218,6 +225,13 @@ export class AgentRuntime {
     const targets = await this.router.resolve(trigger, this.agents);
     if (targets.length === 0) {
       this.emitRuntime(RuntimeEvents.TRIGGER_DROPPED, {
+        triggerRef: {
+          id: trigger.id,
+          type: trigger.type,
+          agentId: trigger.agentId,
+          sessionId: trigger.sessionId,
+          metadata: trigger.metadata,
+        },
         triggerId: trigger.id,
         reason: 'no_agent',
       });
@@ -225,7 +239,24 @@ export class AgentRuntime {
     }
 
     if (targets.length === 1) {
-      return this.dispatchToTarget(trigger, targets[0]!, options);
+      const result = await this.dispatchToTarget(trigger, targets[0]!, options);
+      // 单目标丢弃也必须留下 TRIGGER_DROPPED（与 fan-out 对称）：
+      // 「trigger 未送达必有 dropped 事件」是委派送达回执（delegation §7.1）
+      // 依赖的不变量，缺事件 = 送达回执无法证伪
+      if (result.status === 'skipped') {
+        this.emitRuntime(RuntimeEvents.TRIGGER_DROPPED, {
+          triggerRef: {
+            id: trigger.id,
+            type: trigger.type,
+            agentId: trigger.agentId,
+            sessionId: trigger.sessionId,
+            metadata: trigger.metadata,
+          },
+          triggerId: trigger.id,
+          reason: result.reason,
+        });
+      }
+      return result;
     }
 
     // fan-out：串行；聚合为 FanoutDispatchResult（ran/aborted/failed 均不静默丢弃）
@@ -241,6 +272,13 @@ export class AgentRuntime {
 
     if (anyFailed) {
       this.emitRuntime(RuntimeEvents.TRIGGER_DROPPED, {
+        triggerRef: {
+          id: trigger.id,
+          type: trigger.type,
+          agentId: trigger.agentId,
+          sessionId: trigger.sessionId,
+          metadata: trigger.metadata,
+        },
         triggerId: trigger.id,
         reason: 'fanout_partial_failure',
         results: results.map((r) => ({ agentId: r.agentId, status: r.result.status })),
@@ -252,6 +290,18 @@ export class AgentRuntime {
         results[0]?.result.status === 'skipped'
           ? results[0].result.reason
           : 'no_agent';
+      this.emitRuntime(RuntimeEvents.TRIGGER_DROPPED, {
+        triggerRef: {
+          id: trigger.id,
+          type: trigger.type,
+          agentId: trigger.agentId,
+          sessionId: trigger.sessionId,
+          metadata: trigger.metadata,
+        },
+        triggerId: trigger.id,
+        reason,
+        results: results.map((r) => ({ agentId: r.agentId, status: r.result.status })),
+      });
       return { status: 'skipped', reason };
     }
     // anyRan（含 mixed ran + aborted/skipped）→ ran + 明细

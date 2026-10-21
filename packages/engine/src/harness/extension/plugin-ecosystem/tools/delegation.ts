@@ -40,7 +40,10 @@ function delegationSummary(d: Delegation) {
     deadline_at: d.deadlineAt,
     cancelable: d.cancelable,
     cascade: d.cascade,
-    notified: d.notified,
+    // surfaced = 结果已**送达**父：notify 投递成功或 delegate_get 全文取回。
+    // list/cancel 只见概览（可能截断）不计送达。存储字段名是 notified（历史
+    // 契约），LLM 面暴露 surfaced：对模型而言关心的是「结果送到了没有」。
+    surfaced: d.notified,
   };
 }
 

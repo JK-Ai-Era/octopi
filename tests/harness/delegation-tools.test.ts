@@ -506,9 +506,9 @@ describe('delegate_* tools', () => {
     const got = await byName.delegate_get.handler(
       { delegation_id: dispatched.delegation_id },
       CTX,
-    ) as { ok: boolean; notified: boolean };
+    ) as { ok: boolean; surfaced: boolean };
     expect(got.ok).toBe(true);
-    expect(got.notified).toBe(true);
+    expect(got.surfaced).toBe(true);
     expect(store.get(dispatched.delegation_id)?.notified).toBe(true);
     expect(service.renderStatusHint('s-parent')).toBe('');
   });
@@ -520,11 +520,11 @@ describe('delegate_* tools', () => {
 
     const listed = await byName.delegate_list.handler({}, CTX) as {
       total: number;
-      delegations: Array<{ notified: boolean }>;
+      delegations: Array<{ surfaced: boolean }>;
     };
     expect(listed.total).toBe(1);
     // 列表是只读概览：不置位（结果可能被截断，只有 get 取回全文才算送达）
-    expect(listed.delegations[0].notified).toBe(false);
+    expect(listed.delegations[0].surfaced).toBe(false);
     expect(store.list()[0].notified).toBe(false);
     expect(service.renderStatusHint('s-parent')).toContain('1 completed');
 

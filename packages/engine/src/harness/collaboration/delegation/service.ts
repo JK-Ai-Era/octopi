@@ -638,10 +638,16 @@ export class DelegateService {
 
     // 去重（审查 P1-1）：同步占位防并发双投；占位 ≠ 已送达
     this.notifying.add(delegationId);
+    // 乐观置位 + 回执回滚：dropped 事件在投递的同步微任务链内先于本 await
+    // 续体到达（no_agent 等早期丢弃），wiring 的回滚守卫要求 notified 已置位
+    // 才能收回——故先置位再投递；投递失败或 dispatch 被丢时由 markUndelivered
+    // 收回。最终语义不变：notified 只在结果真正送达时为 true。
+    this.store.markNotified(delegationId);
     try {
       await notifier(record);
-      this.store.markNotified(delegationId);
     } catch (err) {
+      // 投递失败收回乐观置位（与 dropped 回滚幂等）；委派单终态不受影响
+      this.store.markUndelivered(delegationId);
       // notify 失败不得影响委派单终态（poll + 状态提示兜底）。
       // 吞掉投递异常但必须留痕——否则「没配投递器」与「每单都投递失败」无法区分；
       // 委派单已是终态，notified 保持 false 留给提示兜底，重试交由上层/分布式议题（O5）。

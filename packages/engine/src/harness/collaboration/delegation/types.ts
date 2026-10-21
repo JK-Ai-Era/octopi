@@ -164,7 +164,11 @@ export interface Delegation {
   /** 是否父亡子亡（决策 C1：默认 false = 子继续跑） */
   cascade: boolean;
 
-  /** notify 通道是否已投递（§7.3 状态提示去重用） */
+  /**
+   * 结果是否已送达父（§7.3 提示去重）：notify 投递成功或父经 delegate_get
+   * 全文取回（markSurfaced）后置位；dispatch 被丢时回滚（markUndelivered）。
+   * 字段名沿用 notified（历史契约），语义是 surfaced（详见 tools summary）。
+   */
   notified: boolean;
 
   schemaVersion: number;

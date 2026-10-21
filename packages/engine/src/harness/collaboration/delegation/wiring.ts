@@ -36,6 +36,9 @@ import {
   createChildRunExecutor,
 } from './child-run.js';
 import { createDelegationNotifier } from './notifier.js';
+import { RuntimeEvents } from '../../activation/types.js';
+import type { TriggerRef } from '../../activation/types.js';
+import type { AgentEvent } from '@octopi-agent/core/primitives/event-bus.js';
 import { createDelegationTools } from '../../extension/plugin-ecosystem/tools/delegation.js';
 
 // 供 Gateway / 组装层经同一入口取生效策略
@@ -133,6 +136,23 @@ export function createDelegationRuntime(
   );
 
   const delegationStore = new DelegationStore(options.events);
+
+  // §7.1 送达回执：notify 投递（notified 置位）后 dispatch 被丢
+  // （`runtime.trigger.dropped`，事件携带 triggerRef → metadata.delegationId）时
+  // 回滚 notified，让 §7.3 状态提示重新兜底——不能让「推送进了总线但从未
+  // 变成父消息」被记成已送达。回滚方向安全：宁可提示多亮一次（父 get 消音）。
+  // 订阅与委派运行时同生命周期（常驻 events，无 dispose 语义）。
+  if (options.events) {
+    options.events.on(RuntimeEvents.TRIGGER_DROPPED, (event: AgentEvent) => {
+      const triggerRef = (event as { data?: { triggerRef?: TriggerRef } }).data
+        ?.triggerRef;
+      const delegationId = triggerRef?.metadata?.delegationId;
+      if (!delegationId) return;
+      if (delegationStore.get(delegationId)?.notified) {
+        delegationStore.markUndelivered(delegationId);
+      }
+    });
+  }
   const notifier =
     options.events && options.notifyPush !== false
       ? createDelegationNotifier({ events: options.events })

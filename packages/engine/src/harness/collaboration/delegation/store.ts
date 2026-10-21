@@ -280,6 +280,18 @@ export class DelegationStore {
     return this.update(delegationId, { notified: true });
   }
 
+  /**
+   * 回滚「已送达」标记（§7.1 送达回执）——notify 投递后 dispatch 被丢
+   * （`runtime.trigger.dropped`）时调用，让 §7.3 提示重新兜底。
+   * 回滚只在推断安全方向上发生：宁可提示多亮一次（父 get 消音），不可丢结果。
+   *
+   * @param delegationId - 委派单 ID
+   * @returns 更新后的委派单
+   */
+  markUndelivered(delegationId: string): Delegation {
+    return this.update(delegationId, { notified: false });
+  }
+
   private eventForStatus(status: DelegationStatus): string {
     switch (status) {
       case 'running':

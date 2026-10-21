@@ -22,6 +22,9 @@ export type TriggerPayload =
   | { kind: 'system_note'; content: string }
   | { kind: 'structured'; data: unknown };
 
+/** Trigger 的裁剪引用：用于事件回执等「只要关联、不要正文」的场合（dropped 事件） */
+export type TriggerRef = Omit<Trigger, 'payload'>;
+
 export interface Trigger {
   id: string;
   type: TriggerType;

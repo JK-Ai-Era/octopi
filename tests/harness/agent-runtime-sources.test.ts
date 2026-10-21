@@ -181,3 +181,92 @@ describe('RuntimeEvents 常量', () => {
     expect(RuntimeEvents.RUN_STARTED).toBe('runtime.run.started');
   });
 });
+
+// ── TRIGGER_DROPPED 不变量：trigger 未送达必有 dropped 事件（带裁剪 triggerRef） ──
+
+describe('TRIGGER_DROPPED 不变量', () => {
+  function refDrop(events: DefaultEventBus): Array<Record<string, unknown>> {
+    const drops: Array<Record<string, unknown>> = [];
+    events.on(RuntimeEvents.TRIGGER_DROPPED, (e) =>
+      drops.push((e as { data?: Record<string, unknown> }).data ?? {}),
+    );
+    return drops;
+  }
+
+  it('runtime_stopped：stop 后 dispatch → dropped 带 triggerRef（不含 payload 正文）', async () => {
+    const events = new DefaultEventBus();
+    const drops = refDrop(events);
+    const runtime = new AgentRuntime({ events });
+    await runtime.start();
+    await runtime.stop();
+
+    const trigger: Trigger = {
+      id: 'trig-1',
+      type: 'agent_signal',
+      agentId: 'a',
+      payload: { kind: 'system_note', content: 'should-not-leak' },
+      metadata: { delegationId: 'del-x' },
+    };
+    await runtime.dispatch(trigger);
+    expect(drops).toHaveLength(1);
+    expect(drops[0]!.reason).toBe('runtime_stopped');
+    const ref = drops[0]!.triggerRef as Record<string, unknown>;
+    expect(ref.id).toBe('trig-1');
+    expect((ref.metadata as { delegationId?: string }).delegationId).toBe('del-x');
+    // 防泄漏回归：正文不得进事件流（onAll 会转发给所有观察者）
+    expect(ref.payload).toBeUndefined();
+  });
+
+  it('单目标 skipped（router 命中但目标未注册）→ dropped 事件（本轮补发的出口）', async () => {
+    const events = new DefaultEventBus();
+    const drops = refDrop(events);
+    // router 返回恰好 1 个 target → 走单目标分支；agents 里没有 → dispatchToTarget
+    // skipped → 本轮补发的 TRIGGER_DROPPED（此前静默返回）
+    const runtime = new AgentRuntime({
+      events,
+      router: {
+        async resolve() {
+          return [{ agentId: 'ghost' }];
+        },
+      },
+    });
+    await runtime.start();
+
+    const trigger: Trigger = {
+      id: 'trig-2',
+      type: 'agent_signal',
+      agentId: 'ghost',
+      payload: { kind: 'system_note', content: 'x' },
+    };
+    const result = await runtime.dispatch(trigger);
+    expect(result.status).toBe('skipped');
+    expect(drops).toHaveLength(1);
+    expect((drops[0]!.triggerRef as { id?: string }).id).toBe('trig-2');
+    await runtime.stop();
+  });
+
+  it('fan-out 全丢弃 → dropped 带 results 明细', async () => {
+    const events = new DefaultEventBus();
+    const drops = refDrop(events);
+    const runtime = new AgentRuntime({
+      events,
+      router: {
+        async resolve() {
+          return [{ agentId: 'x' }, { agentId: 'y' }];
+        },
+      },
+    });
+    await runtime.start();
+
+    const trigger: Trigger = {
+      id: 'trig-3',
+      type: 'agent_signal',
+      payload: { kind: 'system_note', content: 'x' },
+    };
+    const result = await runtime.dispatch(trigger);
+    expect(result.status).toBe('skipped');
+    expect(drops).toHaveLength(1);
+    expect(Array.isArray(drops[0]!.results)).toBe(true);
+    await runtime.stop();
+  });
+});
