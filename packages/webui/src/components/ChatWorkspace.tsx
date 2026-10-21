@@ -336,7 +336,10 @@ function ConversationItemCard({
         <div className="msg-assistant">
           <div className="msg-assistant-header">
             <span>助手</span>
-            {a.status === 'streaming' && <span className="status-ok">· 流式输出中</span>}
+            {a.status === 'streaming' && (
+              // 仅思考流（llm_thinking_delta）阶段正文仍为空：显示「思考中」；正文出现后才进入「流式输出中」
+              <span className="status-ok">· {a.content.trim() ? '流式输出中' : '思考中'}</span>
+            )}
             {a.status === 'error' && <span className="status-error">· 错误</span>}
             {formatTimestamp(a.createdAt) && <span className="muted">{formatTimestamp(a.createdAt)}</span>}
           </div>

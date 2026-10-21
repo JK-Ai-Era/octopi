@@ -1,3 +1,17 @@
+## v0.86.23
+
+### fix(webui): reasoning 阶段状态文案改为「思考中」，正文开始输出后才显示「流式输出中」
+
+**问题**：助手气泡头部只看 `status === 'streaming'` 就渲染「流式输出中」，而 reasoning 流
+（`llm_thinking_delta`）同样把 item 置为 `streaming`、正文 `content` 仍为空——用户在想问题的阶段
+就被提示「流式输出中」，文案与真实阶段不符。
+
+**改法**：头部文案按正文是否已有内容区分——`content.trim()` 为空（只有思考流）显示「思考中」，
+正文出现后显示「流式输出中」。数据面未动：`llm_thinking_delta` / `llm_stream_delta` 的语义、
+adapter 的 `streamingContent` / `streamingReasoning` 分别累积保持原样，仅显示层按 content 判定阶段。
+
+**验证**：`packages/webui` `tsc -b && vite build` 通过；构建产物含两种文案。
+
 ## v0.86.22
 
 ### docs(readme): 八层上下文一节改写为 E8 装配结构（EN+ZH 同步）
