@@ -158,8 +158,35 @@ export interface TurnEnvelopeParts {
   hasUserMessage: boolean;
 }
 
-/** joinSlotXml 的合法槽位标签（机器插槽唯一产生处；白名单外的同形标签视为正文噪音/注入尝试） */
-const SLOT_TAGS = new Set(['runtime_snapshot', 'session_attachments', 'knowledge_grounding']);
+/**
+ * 槽位标签集（**转义清单的唯一真源**）：joinSlotXml 生产、escapeSlotBody 定向转义、
+ * parseTurnEnvelope 白名单三处同源引用——新增槽位必须进此表，转义与白名单随之生效。
+ * 白名单外的同形标签视为正文噪音 / 注入尝试。
+ */
+export const SLOT_TAGS = [
+  'runtime_snapshot',
+  'session_attachments',
+  'knowledge_grounding',
+] as const;
+export type SlotTag = (typeof SLOT_TAGS)[number];
+
+const SLOT_TAG_SET: ReadonlySet<string> = new Set(SLOT_TAGS);
+
+/**
+ * 槽位正文定向转义（D7 方案 A′）：把正文里的同名开/闭标签字面量转义为 XML 实体，
+ * 防语料（知识 / grounding / 附件）伪造闭合提前截断槽位、或伪造新槽位条目。
+ * 只动 `<tag>` / `</tag>` / `<tag ` 三种序列；其余内容（含其他合法 XML）原样保留。
+ *
+ * @param tag - 槽位标签（配合 SLOT_TAGS 使用）
+ * @param body - 槽位正文
+ * @returns 同名字面量已转义的正文
+ */
+export function escapeSlotBody(tag: string, body: string): string {
+  return body
+    .replaceAll(`</${tag}>`, `&lt;/${tag}&gt;`)
+    .replaceAll(`<${tag}>`, `&lt;${tag}&gt;`)
+    .replaceAll(`<${tag} `, `&lt;${tag} `);
+}
 
 /**
  * 解析 turn_start 信封（槽位 + 用户原文）。
@@ -189,7 +216,7 @@ export function parseTurnEnvelope(
   while ((sm = slotRe.exec(ctx)) !== null) {
     const tag = sm[1]!;
     if (tag === 'boilerplate') continue;
-    if (!SLOT_TAGS.has(tag)) continue;
+    if (!SLOT_TAG_SET.has(tag)) continue;
     slots.push({ tag, body: sm[2]!.trim() });
   }
   const hasUserMessage = /<user_message>/.test(raw);
@@ -204,12 +231,14 @@ export function parseTurnEnvelope(
 
 /**
  * 拼 turn_context 内的槽位 XML（runner 注入）。
+ * 正文经 escapeSlotBody 定向转义（D7 A′）：语料同名字面量不得产出解析器眼里的标签，
+ * 防提前闭合 / 伪造槽位；tag 必须属于 SLOT_TAGS（转义清单唯一真源）。
  * @param parts - 非空槽位段；空段被跳过
  */
 export function joinSlotXml(parts: Array<{ tag: string; body: string }>): string {
   return parts
     .filter((p) => p.body.trim().length > 0)
-    .map((p) => `<${p.tag}>\n${p.body.trim()}\n</${p.tag}>`)
+    .map((p) => `<${p.tag}>\n${escapeSlotBody(p.tag, p.body.trim())}\n</${p.tag}>`)
     .join('\n');
 }
 

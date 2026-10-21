@@ -1,3 +1,25 @@
+## v0.86.21
+
+### fix(engine): 槽位正文定向转义（D7 拍板 A′）——同名标签注入面收敛
+
+**拍板**（大哥 2026-10-22，三方案对比曾存 `arch/slot-fence-options.md`）：选 **A′ 定向转义**，
+不改对外信封语法。语料（知识/grounding/附件）含同名闭合标签字面量可提前闭合槽位/伪造新槽位，
+污染「这轮模型看到了什么」审计面——纯文本解析无法区分真闭合与伪造同名闭合，故在生产侧根治。
+
+- **`escapeSlotBody`（新）**：槽位正文里的 `<tag>` / `</tag>` / `<tag ` 同名三种序列转义为 XML 实体，
+  其余内容（含槽位内部合法 XML）原样保留；`joinSlotXml` 拼接前统一转义（生产侧唯一注入点）
+- **转义清单单一真源**：`SLOT_TAGS` 导出常量——`joinSlotXml` 生产 / `escapeSlotBody` 转义 /
+  `parseTurnEnvelope` 白名单三处同源引用，新增槽位进此表即自动纳入转义与白名单
+  （大哥叮嘱「注意维护好转义清单」的落点）
+- **grounding 围栏补下划线形态**：`wrapUntrustedKnowledgeBlock` 剥离正则原只覆盖连字符
+  `knowledge-grounding`，未覆盖与 turn 信封槽位同名的 `knowledge_grounding`（逃逸面）；现两种形态齐剥
+- 解析侧白名单 + 按序回填（v0.86.19）与本层构成「生产防注入 + 解析防误读」两层；旧脏历史仍由解析侧兜底
+
+**验证**：turn-envelope-replay 19（新增 A′ 用例 3）/ grounding-fence-underscore 2（新文件，
+下划线围栏单列——knowledge-grounding.test.ts 的注入样本会触发安全守卫内容拦截，不便在其内追加）全绿；
+全量 2978 通过（2 个已知 macOS 沙箱基线失败不变；agent-runtime-sources 防抖 1 例为负载敏感 flaky，
+单独复跑绿，与本次改动无交集）；lint / build 干净。
+
 ## v0.86.20
 
 ### fix(webui/engine): 机器消息不再冒充用户气泡（D8）；聊天隐藏谓词收敛单源（D9）
