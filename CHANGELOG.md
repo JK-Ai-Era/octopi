@@ -1,3 +1,24 @@
+## v0.86.22
+
+### docs(readme): 八层上下文一节改写为 E8 装配结构（EN+ZH 同步）
+
+**问题**：README（`README.md` / `README.zh.md`）「上下文的物理学——八层 × Scope」一节仍写
+E8 之前的结构（「前七层构成 system prompt，第八层是消息窗口」），与宪法 §1.3 Assembly
+placement / E8 不变量及 `docs/context-layer-contracts.md` 的 placement + turn envelope 口径不符。
+
+**改写**（两轮评审后定稿，站在整节节奏角度）：
+
+- **bullet 1 只做八层清点**：链式列八层 + 「`Information` 就是对话本身」身份注脚，零落点承诺——
+  旧句的落点承诺在 E8 后必然拖出限定语（「system 侧≠进 system prompt」式自我解释既歧义又啰嗦），
+  大哥两轮指出后改为不在清单条里承诺落点
+- **E8 独立成条卖点 bullet**：system prompt 只装会话内不变内容、易变块（datetime / 会话任务
+  / 指导 / 随查询择取的 Memory / Cognition / Wisdom picks）进 `<turn_start>` 用户消息内
+  `<turn_context>`、历史 append-only 全回放（过期择取冻在原 turn，绝不中段删改）；斜体收益句
+  收口（前缀缓存轮轮命中——延迟热、输入按缓存价计费），与节内其他 bullet 斜体 punchline 对齐
+
+**验证**：两文件编辑后 `file_read` 读回核对落盘；措辞逐条对齐宪法与 `docs/context-layer-contracts.md`；
+diff 仅动该节两条 bullet，其余未触碰（docs-only，无代码变更）。
+
 ## v0.86.21
 
 ### fix(engine): 槽位正文定向转义（D7 拍板 A′）——同名标签注入面收敛

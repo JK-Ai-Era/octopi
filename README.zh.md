@@ -104,7 +104,12 @@ Information ──蒸馏──► Memory ──织网──► Cognition ──�
 
 - **八层内容类型**按优先级装配：
   `Wisdom → Persona → Skill → Knowledge → Cognition → Memory → Runtime → Information`。
-  前七层构成 system prompt，第八层是消息窗口。
+  前七层是装配器拼出的内容，第八层 `Information` **就是**对话本身。
+- **缓存稳定的前缀（E8 装配位置）**——system prompt 只装整个会话内不变的内容；
+  一切易变的——datetime、会话任务/指导、随查询择取的 Memory / Cognition /
+  Wisdom——都放进该轮 `<turn_start>` 用户消息内 turn 级的 `<turn_context>`。
+  历史 append-only 全回放：过期择取冻在自己的 turn 里，绝不中段删改。
+  *收益：provider 前缀缓存轮轮命中——延迟热、输入按缓存价计费。*
 - **三条所有权带**——Agent 基质（跨会话持久）/ Run（易失，绝不回写模板）/ Session（一等连续性）。它*解释了*为什么多个 agent 可以共用一条对话线，却永不共享人格与记忆。
 - **形成 ≠ 装配。** 分馏链（知识怎么形成）与装配序（模型看到什么）是正交的两根轴——这一点，业界还没人把它说出口。
 - **带校准的 Token 计量**——三层估算（LLM 实测 → tokenizer → 启发式，中文约 1.5 token/字），再用实测平滑出 `calibrationRatio`。

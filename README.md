@@ -143,7 +143,15 @@ owned, budgeted pipeline**:
 
 - **Eight content layers**, assembled by priority:
   `Wisdom → Persona → Skill → Knowledge → Cognition → Memory → Runtime → Information`.
-  The first seven build the system prompt; the eighth is the message window.
+  Seven layers the assembler composes, plus `Information` — the conversation itself.
+- **A cache-stable prefix (E8 placement)** — the system prompt carries only what
+  stays constant through the session; everything volatile — datetime, session
+  tasks / guidance, query-dependent Memory / Cognition / Wisdom picks — rides in a
+  turn-scoped `<turn_context>` inside that turn's `<turn_start>` user message.
+  History is append-only and fully replayed: stale picks are frozen in their turn,
+  never edited away.
+  *Payoff: the provider's prefix cache hits turn after turn — warm latency at
+  cached-token prices.*
 - **Three ownership bands** — Agent substrate (persists across sessions) / Run
   (volatile, never written back to the template) / Session (first-class
   continuity). This *explains* why multiple agents can share one conversation
