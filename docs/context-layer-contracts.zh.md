@@ -209,6 +209,25 @@ Runner.handle
 - **历史老化（B2，视图级）**：跨轮工具结果超出近期窗口的部分，在 `buildLlmMessages` 内降级为结构化指针（工具名 + 参数要点 + 结果轮廓 + **归档说明（勿重跑）**）——**仅视图级**，session 日志保全量原文。老化为**批量冻结**（边界只以 `freezeBatch` 为步长成批推进；绝不在 recency 边界逐轮改写——历史中部改写会烧掉前缀缓存）且 **write-once**（指针字节恒定；计划按完整历史计算，绝不按裁剪视图重算边界）。当前 run 与最近 `rawWindow` 条原文保留；**error 结果永不降级**（错误可追溯性优先）；仅当指针严格小于原文才降级。配置：`contextEngine.historyAging`
 - **引擎注入不是用户发言**：reliability 注入（wrap-up / planning steer / noop-hint / truncate notice）统一 `metadata.source: 'engineHint'`（入 `ENGINE_CARRIER_SOURCES`）。turn 边界判定（`isMidTurn`）与 B2「最近真实 user」扫描必须忽略它们——不得把 `[System: …]` 文案当成新 user 轮次
 
+**前缀稳定性验证（`octopi llm-diff`）：**
+
+provider 前缀缓存只认**上一次请求**的字节前缀，所以装配视图（Observer `context.llm`）回答不了「断在哪」——
+它既没有 tools，也没有 provider 侧变换。开启 `observability.llmRequestDump.enabled: true` 后，每次 LLM 调用把
+逐字节的 wire body 落到 `<OCTOPI_HOME>/logs/llm-requests/<sessionId>/<id>.json`，同时写一份轻量
+`index.jsonl`（每消息 hash + 长度、`toolsHash`、usage、TTFT、结果）。
+
+```sh
+octopi llm-diff                      # 最近更新的 session，展示最近 20 次调用
+octopi llm-diff <sessionId> --limit 0 --json
+```
+
+相邻调用逐单元比对，判定为 `identical`、`append-only`（缓存安全）、`truncated`（尾部被删）或 `diverged`
+（历史中部改写）。分歧会给出首个不同消息的下标、role，以及该消息内部的字符偏移与前后片段。`tools` 变化单独
+标记——它同样会使缓存失效，但不影响消息前缀判定。
+
+dump **默认关闭**（写盘量 ≈ 请求字节 × 每轮调用次数）；`maxCallsPerSession`（默认 200）按 session 保留最新
+调用并同步压缩索引。身份取自 RunScope，因此同一 provider 跨 session 复用时共享同一个 sink。
+
 **已接线（含 P1/P2 层扩展）：**
 
 - Builder 可注入 `wisdomStore` / `cognitionStore`；**`wireAgentBuilder`（config-bridge / Gateway / createAgent 共用）**在 agent home 的 `AgentDatabase` 上挂 Memory/Wisdom/Cognition，并 discover `skills/`（唯一 discover 出口）；Gateway 叠加 Knowledge catalog / tools

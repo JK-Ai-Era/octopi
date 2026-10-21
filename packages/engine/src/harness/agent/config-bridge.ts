@@ -15,7 +15,7 @@
  */
 
 import type { HarnessConfig, AgentConfig, ContextEngineConfig, NormalizedModelInfo, ModelProviderConfig, NormalizedHarnessConfig } from '../../config.js';
-import { createProviderFromConfig, resolveModelConfig } from '../../config.js';
+import { createProviderFromConfig, createWireDumpSinkFromConfig, resolveModelConfig } from '../../config.js';
 import { SubsystemLoader } from '../collaboration/autonomous-subsystem/loader.js';
 import type { SubsystemSpec } from '../collaboration/autonomous-subsystem/types.js';
 import { homedir } from 'node:os';
@@ -64,10 +64,12 @@ export interface BuiltAgent {
  */
 export async function resolveProviders(config: NormalizedHarnessConfig): Promise<Map<string, ModelProvider>> {
   const providers = new Map<string, ModelProvider>();
+  // wire dump 是纯观测：未启用时 undefined，启用后 sink 在该层共享（单一写队列 + 单一环形计数）
+  const wireDump = await createWireDumpSinkFromConfig(config.observability?.llmRequestDump);
 
   for (const [name, pc] of Object.entries(config.models?.providers ?? {})) {
     try {
-      const provider = await createProviderFromConfig(name, pc as ModelProviderConfig);
+      const provider = await createProviderFromConfig(name, pc as ModelProviderConfig, { wireDump });
       providers.set(name, provider);
     } catch (err) {
       console.warn(`[ConfigBridge] Failed to create provider "${name}":`, err);

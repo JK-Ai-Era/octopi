@@ -17,6 +17,30 @@ export interface CliArgs {
   allowDeleteLegacyDirs?: boolean;
   /** doctor --restore [backupPath]；true = 最新备份 */
   restore?: boolean | string;
+  /** llm-diff：目标 session id（缺省 = 最近更新的 session） */
+  session?: string;
+  /** llm-diff：wire dump 根目录 */
+  dir?: string;
+  /** llm-diff：展示的调用条数（0 = 全部） */
+  limit?: number;
+}
+
+/**
+ * 读取 flag 的取值：缺值（或紧跟另一个 flag）时直接报错
+ *
+ * 这三个 flag 的值决定「看哪份数据」，猜错比报错更危险，因此不做静默回退。
+ *
+ * @param argv - 参数表
+ * @param index - 取值位置
+ * @param flag - flag 名（用于错误信息）
+ * @returns 取值
+ */
+function requireFlagValue(argv: string[], index: number, flag: string): string {
+  const value = argv[index];
+  if (value == null || value.startsWith('--')) {
+    throw new Error(`${flag} requires a value`);
+  }
+  return value;
 }
 
 export function parseArgs(argv: string[] = process.argv.slice(2)): CliArgs {
@@ -31,6 +55,9 @@ export function parseArgs(argv: string[] = process.argv.slice(2)): CliArgs {
   let allowDeleteLegacyDirs = false;
   let only: string[] | undefined;
   let restore: boolean | string | undefined;
+  let session: string | undefined;
+  let dir: string | undefined;
+  let limit: number | undefined;
   const positional: string[] = [];
 
   for (let i = 0; i < argv.length; i++) {
@@ -85,6 +112,21 @@ export function parseArgs(argv: string[] = process.argv.slice(2)): CliArgs {
         }
         break;
       }
+      case '--session':
+        session = requireFlagValue(argv, ++i, '--session');
+        break;
+      case '--dir':
+        dir = requireFlagValue(argv, ++i, '--dir');
+        break;
+      case '--limit': {
+        const raw = requireFlagValue(argv, ++i, '--limit');
+        // parseInt 会把 '12abc' 解成 12、负值在 llm-diff 里又被当成「全部」——都属静默误读
+        if (!/^\d+$/.test(raw)) {
+          throw new Error(`--limit expects a non-negative integer, got "${raw}"`);
+        }
+        limit = Number(raw);
+        break;
+      }
       default:
         positional.push(argv[i]!);
         break;
@@ -105,5 +147,8 @@ export function parseArgs(argv: string[] = process.argv.slice(2)): CliArgs {
     only,
     allowDeleteLegacyDirs,
     restore,
+    session,
+    dir,
+    limit,
   };
 }

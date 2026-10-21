@@ -4,6 +4,7 @@
  */
 import type { ToolPolicy } from '@octopi-agent/core/types.js';
 import type { ModelConfig as _ModelConfig } from './harness/shared/types/agent-definition.js';
+import { getRunScope } from './harness/run/run-scope.js';
 import type { ModelProvider } from '@octopi-agent/core/interfaces/model-provider.js';
 import { DEFAULT_CONTEXT_WINDOW } from '@octopi-agent/core/types/model-info.js';
 
@@ -1153,6 +1154,17 @@ export interface HarnessConfig {
     captureStreamDeltas?: boolean;
     /** 是否记录完整模型请求 */
     captureModelRequest?: boolean;
+    /**
+     * LLM wire dump：把 provider 实际发送的完整请求体按 session 落盘，用于比对前缀稳定性
+     *
+     * 默认关闭。落盘根目录缺省 `<OCTOPI_HOME>/logs/llm-requests`；
+     * 分析命令：`octopi llm-diff [sessionId]`。
+     *
+     * 生效路径：`octopi serve`（CLI daemon 自建共享 sink）。库嵌入方可把
+     * `createWireDumpSink()` 的结果经 `createProviderFromConfig(name, pc, { wireDump })` 注入。
+     * 配置面只含纯数据（不含 `resolveContext` 等运行时钩子）。
+     */
+    llmRequestDump?: import('./integration/providers/wire-dump.js').WireDumpConfig;
   };
 }
 
@@ -1388,21 +1400,67 @@ export function withTimingProbe(inner: ModelProvider): ModelProvider {
 }
 
 /**
+ * 按 `observability.llmRequestDump` 配置构造 wire dump sink
+ *
+ * 放在组合根（本文件）而非 Harness：Harness 不得依赖 Integration（层规则）。
+ * `octopi serve`（CLI daemon）与库嵌入（config-bridge）共用本函数，避免两套接线漂移。
+ * provider 被跨 session 复用，身份只能在调用瞬间从 RunScope 取。
+ *
+ * @param cfg - `observability.llmRequestDump` 配置段
+ * @returns sink；未启用时 undefined
+ */
+export async function createWireDumpSinkFromConfig(
+  cfg?: import('./integration/providers/wire-dump.js').WireDumpConfig,
+): Promise<import('./integration/providers/wire-dump.js').WireDumpSink | undefined> {
+  if (!cfg?.enabled) return undefined;
+  // 与 withWireDump 一致按需加载：dump 未启用时 fs/crypto 不进常规 provider 创建路径
+  const { createWireDumpSink } = await import('./integration/providers/wire-dump.js');
+  return createWireDumpSink({
+    dir: cfg.dir,
+    maxCallsPerSession: cfg.maxCallsPerSession,
+    maxBodyBytes: cfg.maxBodyBytes,
+    resolveContext: () => {
+      const scope = getRunScope();
+      return scope
+        ? { sessionId: scope.sessionId, agentId: scope.agentId, runId: scope.runId }
+        : undefined;
+    },
+  });
+}
+
+/**
  * 从 ModelProviderConfig 创建 ModelProvider 实例
  *
  * 根据 type 字段自动选择 OpenAI 或 Anthropic provider。
  * 使用动态 import 以支持 ESM。
+ *
+ * @param name - provider 名称
+ * @param pc - provider 配置
+ * @param options - 可选：wire dump sink（诊断用，见 `observability.llmRequestDump`）
+ * @returns provider 实例（计时探针 → wire dump → 原生 provider 的装饰链）
  */
-export async function createProviderFromConfig(name: string, pc: ModelProviderConfig): Promise<ModelProvider> {
+export async function createProviderFromConfig(
+  name: string,
+  pc: ModelProviderConfig,
+  options?: { wireDump?: import('./integration/providers/wire-dump.js').WireDumpSink },
+): Promise<ModelProvider> {
   const apiType = pc.api === 'anthropic-messages' ? 'anthropic' : 'openai';
   const models = pc.models.map(m => ({ name: m.name ?? m.id, contextWindow: m.contextWindow, maxOutputTokens: m.maxTokens }));
   const defaultModel = pc.models[0]?.name ?? pc.models[0]?.id;
 
+  let decorate: (inner: ModelProvider) => ModelProvider = withTimingProbe;
+  if (options?.wireDump) {
+    // 仅诊断路径才加载 wire dump（fs/crypto 不进入常规 provider 创建）
+    const { withWireDump } = await import('./integration/providers/wire-dump.js');
+    const sink = options.wireDump;
+    decorate = (inner: ModelProvider) => withTimingProbe(withWireDump(inner, sink));
+  }
+
   if (apiType === 'anthropic') {
     const { AnthropicProvider } = await import('./integration/providers/anthropic.js');
-    return withTimingProbe(new AnthropicProvider({ name, apiKey: pc.apiKey, baseUrl: pc.baseUrl, models, defaultModel, timeoutMs: pc.timeoutSeconds ? pc.timeoutSeconds * 1000 : undefined }));
+    return decorate(new AnthropicProvider({ name, apiKey: pc.apiKey, baseUrl: pc.baseUrl, models, defaultModel, timeoutMs: pc.timeoutSeconds ? pc.timeoutSeconds * 1000 : undefined }));
   }
 
   const { OpenAIProvider } = await import('./integration/providers/openai.js');
-  return withTimingProbe(new OpenAIProvider({ name, apiKey: pc.apiKey, baseUrl: pc.baseUrl, models, defaultModel, timeoutMs: pc.timeoutSeconds ? pc.timeoutSeconds * 1000 : undefined }));
+  return decorate(new OpenAIProvider({ name, apiKey: pc.apiKey, baseUrl: pc.baseUrl, models, defaultModel, timeoutMs: pc.timeoutSeconds ? pc.timeoutSeconds * 1000 : undefined }));
 }

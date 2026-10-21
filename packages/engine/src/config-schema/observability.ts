@@ -11,6 +11,22 @@ export const ObservabilityConfigSchema = z.object({
   traceDir: z.string().nullable().optional(),
   captureStreamDeltas: z.boolean().optional(),
   captureModelRequest: z.boolean().optional(),
+  /**
+   * LLM wire dump（前缀缓存比对）
+   *
+   * 默认关闭；开启后每个 LLM 调用落盘完整请求体 + 索引，可用 `octopi llm-diff` 比对。
+   */
+  llmRequestDump: z
+    .object({
+      enabled: z.boolean().optional(),
+      /** 落盘根目录（缺省 `<OCTOPI_HOME>/logs/llm-requests`） */
+      dir: z.string().optional(),
+      /** 每 session 保留调用数（环形，缺省 200） */
+      maxCallsPerSession: z.number().int().positive().max(5000).optional(),
+      /** 单次请求体落盘上限（字节，缺省 8_000_000） */
+      maxBodyBytes: z.number().int().positive().optional(),
+    })
+    .optional(),
 });
 
 /**

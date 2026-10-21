@@ -316,6 +316,20 @@ export class AnthropicProvider implements ModelProvider {
   // ===== 格式转换 =====
 
   /**
+   * 构造实际发送的请求体（wire dump 观测用）
+   *
+   * 与 chat/stream 共用 {@link toAnthropicRequest}，保证落盘内容与真实请求一致。
+   *
+   * @param request - 原始 LLM 请求
+   * @param mode - chat 或 stream
+   * @returns 实际发送的请求体
+   */
+  wireBodyFor(request: LLMRequest, mode: 'chat' | 'stream'): Record<string, unknown> {
+    const body = this.toAnthropicRequest(request);
+    return mode === 'stream' ? { ...body, stream: true } : body;
+  }
+
+  /**
    * OpenAI 格式 → Anthropic 格式
    */
   private toAnthropicRequest(request: LLMRequest): Record<string, unknown> {

@@ -209,6 +209,28 @@ Runner.handle
 - **History aging (B2, view-level)**: cross-turn tool results beyond the recent window degrade to structured pointers (tool name + args outline + result outline + archival note — **do not re-run**) inside `buildLlmMessages` only — the session log keeps the full output. Aging is **batch-frozen** (the boundary advances only in `freezeBatch` steps; no per-turn rewrite at the recency edge — a mid-history rewrite would burn the prefix cache) and **write-once** (pointer bytes are stable; the plan is computed over the full history, never re-derived from a trimmed view). The current run and the newest `rawWindow` results stay verbatim; **error results are never degraded** (error traceability first); a body is only degraded when the pointer is strictly smaller. Config: `contextEngine.historyAging`
 - **Engine hints are not user speech**: reliability injections (wrap-up / planning steer / noop-hint / truncate notice) are tagged `metadata.source: 'engineHint'` (in `ENGINE_CARRIER_SOURCES`). Turn-boundary detection (`isMidTurn`) and B2’s last-genuine-user scan ignore them — never treat `[System: …]` text as a new user turn
 
+**Verifying prefix stability (`octopi llm-diff`):**
+
+Provider prefix caches only match the **previous request's** byte prefix, so the assembled view (Observer `context.llm`)
+cannot tell you *where* a break happened — it has no tools and no provider-side transforms. Set
+`observability.llmRequestDump.enabled: true` and every LLM call writes its exact wire body to
+`<OCTOPI_HOME>/logs/llm-requests/<sessionId>/<id>.json`, plus a lightweight `index.jsonl` (per-message hash + length,
+`toolsHash`, usage, TTFT, outcome).
+
+```sh
+octopi llm-diff                      # most recently updated session, last 20 calls
+octopi llm-diff <sessionId> --limit 0 --json
+```
+
+Adjacent calls are compared unit by unit and classified as `identical`, `append-only` (cache safe), `truncated` (tail
+dropped) or `diverged` (mid-history rewrite). A divergence reports the first differing message index, its role, and the
+character offset inside that message with prev/next snippets. `tools` changes are flagged separately because they
+invalidate the cache too, without touching the message prefix.
+
+The dump is **off by default** (volume ≈ request bytes × calls per turn); `maxCallsPerSession` (default 200) keeps a
+per-session ring of the newest calls and compacts the index on eviction. Identity comes from the RunScope, so one
+process-wide sink serves every session that shares a provider.
+
 **Already wired (including P1/P2 layer extensions):**
 
 - Builder can inject `wisdomStore` / `cognitionStore`; **`wireAgentBuilder` (shared by config-bridge / Gateway / createAgent)** mounts Memory/Wisdom/Cognition on the agent-home `AgentDatabase` and discovers `skills/` (sole discover entry); Gateway layers Knowledge catalog / tools on top

@@ -32,6 +32,8 @@ Commands:
   webui restart     Restart the Web UI server
   webui status      Show Web UI server status
   plugin init       Scaffold a new plugin project
+  llm-diff [session]
+                    Compare dumped LLM requests and locate cache-prefix breaks
   help              Show this help message
 
 Options:
@@ -46,6 +48,9 @@ Options:
   --restore [path]      doctor: restore octopi.json from latest (or given) backup
   --allow-delete-legacy-dirs
                         doctor: with --fix layout, rename obsolete memory/wisdom/extract dirs
+  --session <id>        llm-diff: target session (default: most recently updated)
+  --dir <path>          llm-diff: wire dump root (default: ~/.octopi/logs/llm-requests)
+  --limit <n>           llm-diff: number of calls to show (0 = all, default 20)
   --help, -h            Show this help message
 
 Examples:

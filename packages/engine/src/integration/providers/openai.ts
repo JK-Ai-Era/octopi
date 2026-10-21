@@ -270,6 +270,22 @@ export class OpenAIProvider implements ModelProvider {
   // ================================================================
 
   /**
+   * 构造实际发送的请求体（wire dump 观测用）
+   *
+   * 与 chat/stream 共用 {@link buildRequestBody}，保证落盘内容与真实请求一致。
+   *
+   * @param request - 原始 LLM 请求
+   * @param mode - chat 或 stream
+   * @returns 实际发送的请求体
+   */
+  wireBodyFor(request: LLMRequest, mode: 'chat' | 'stream'): Record<string, unknown> {
+    const body = this.buildRequestBody(request);
+    return mode === 'stream'
+      ? { ...body, stream: true, stream_options: { include_usage: true } }
+      : body;
+  }
+
+  /**
    * 构建 OpenAI API 请求体
    */
   private buildRequestBody(request: LLMRequest): Record<string, unknown> {

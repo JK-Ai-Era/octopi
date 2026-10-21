@@ -1,3 +1,54 @@
+## v0.86.8
+
+### feat(engine/cli): LLM wire dump + `octopi llm-diff`（前缀缓存断点定位）
+
+**问题**：长 session 新 turn 仍慢。前缀缓存的判据是「本次请求输入前缀 vs 上一次请求逐字节一致」，但现有观测
+（Observer `context.llm`）只有 ContextEngine 出口的 `role/content` 视图：**没有 tools、没有 provider 侧变换**
+（Anthropic system 提升、OpenAI sanitize/flatten），同一 run 内后续调用还会覆盖前一次，因此无法回答「断在哪一条、
+哪个字节」。装配正确性（B0/E8/B2）与实测 TTFT 之间缺一层事实证据。
+
+**实现**：
+
+- 新增 `integration/providers/wire-dump.ts`：`createWireDumpSink()` 把每个 LLM 调用的**实际 wire body** 落盘为
+  `<dir>/<session>/<id>.json`，并追加轻量 `index.jsonl`（每消息 hash + 长度、`toolsHash`、`toolCount`、usage、
+  TTFT、耗时、outcome）。写入串行排队、fail-open（写盘失败不影响请求）。
+- 新增 `withWireDump(provider, sink)` 装饰器 + provider 侧 `wireBodyFor(request, mode)`：body 由**同一个 builder**
+  构造（OpenAI `buildRequestBody`、Anthropic `toAnthropicRequest`），装饰器只负责落盘与计时，chat/stream 主路径
+  未改动；不支持该能力的第三方 provider 原样透传。stream 的 TTFT 取首个 chunk，usage 取 `done` chunk。
+- 配置：`observability.llmRequestDump.{enabled,dir,maxCallsPerSession,maxBodyBytes}`（默认关闭；每 session 环形保留
+  最新 200 次调用，逐出时同步压缩索引）。身份取自 RunScope（`getRunScope`），provider 跨 session 复用也归属正确；
+  无 RunScope 的调用落 `_unscoped`。
+- 新增 `integration/providers/wire-dump-diff.ts`：读索引并**逐单元**比对相邻调用，判定
+  `identical` / `append-only` / `truncated` / `diverged`；分歧给出消息下标、role、消息内字符偏移与前后片段；
+  `tools`/`model`/`mode` 变化单独标记（tools 同样使缓存失效但不影响消息前缀）。
+- 新增 CLI 命令 `octopi llm-diff [sessionId] [--session] [--dir] [--limit N] [--json]`，缺省取最近更新的 session。
+- 接线：CLI daemon 的两处 provider 工厂共享同一 sink（单一写队列 + 单一环形计数）；`createProviderFromConfig`
+  增加可选 `wireDump` 参数供库嵌入方注入；`createWireDumpSinkFromConfig` 放在组合根 `config.ts`（Harness 不得依赖
+  Integration），daemon 与 config-bridge 共用，库嵌入路径同样按配置生效。
+
+**测试**：`tests/llm-wire-dump.test.ts`（26 项）——落盘 body 与实际发送一致、stream 的 TTFT/usage 回填、每 session
+环形上限与索引压缩、`_unscoped` 归属、append-only / truncated / diverged / system 首条断链 / tools 变化判定（含
+`cacheableChars` 归零）、Anthropic 顶层 system 的前缀单元顺序、session 列表倒序；真实 `OpenAIProvider` /
+`AnthropicProvider` 经 fetch 拦截断言 **wireBodyFor 与实际发出 body 逐字段相等**（chat + stream）；无 `done` 哨兵、
+裁剪后晚到 finish、重启按索引恢复计数（含 oversize）、oversize 不落 body、半行/乱序索引、CLI 参数与 session 歧义。
+
+**评审修复**（独立 fresh-eyes 评审后）：
+
+- stream 正常读完但服务端没发 `done` 哨兵（代理断流/兼容实现）不再误判为 `abandoned`，usage 改为任意 chunk 携带即采集。
+- 环形最多 N 条现在对索引真正成立：晚到的 `finish` 不再追加孤儿 result 行；重启后按 `index.jsonl` 的 request 行
+  恢复计数（oversize 调用没有 body 文件，旧实现漏计导致永不逐出）；id 增加 per-sink 随机实例段，避免同进程
+  多 sink 同毫秒撞 id（撞 id 会让裁剪把新行一起删掉）。
+- 配置契约对齐：`observability.llmRequestDump` 改用纯数据 `WireDumpConfig`（不再把 `resolveContext` 这类函数
+  泄进配置类型），zod / `octopi.schema.json` / TS 类型三者一致。
+- `cacheableChars`：tools/model 变化使整段缓存失效时归零（`stableChars` 仍反映消息前缀），CLI 同时展示两者。
+- CLI：`--session`/`--dir`/`--limit` 缺值或非法不再静默回退（负值曾被当成「全部」）；session 片段多命中时报歧义
+  并列候选；body 缺失区分 `oversize`（调大上限）与 `trimmed`（看更近的调用）。
+- 索引/差异可读性：`readFirstWireDumpRequest` 扫多行（首行为 result/半行也能匹配真实 sessionId）；差异片段用
+  `<|>` 标记断点，不再与省略号混淆；`len` 注释改为字符数（与 `stableChars` 同单位）。
+
+**已知边界**：装饰器与 provider 内部各构造一次 body（仅在开启 dump 时发生，属诊断路径的确定性重复构造）；
+dump 关闭时零开销；消费者持有 generator 既不中断也不继续时无法收尾（生成器固有限制，索引显示 `pending`）。
+
 ## v0.86.7
 
 ### fix(engine): unify temp-path classification and harden CapabilityEnforcer.checkPathAccess

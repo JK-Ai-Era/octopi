@@ -9,6 +9,7 @@ import { parseArgs } from './args.js';
 import { serveCommand, serveStopCommand } from './daemon.js';
 import { webuiCommand } from './webui.js';
 import { showHelp, initCommand, chatCommand, healthCommand, pluginCommand } from './commands.js';
+import { llmDiffCommand } from './llm-diff.js';
 import { doctorCommand } from './doctor/index.js';
 
 async function main(): Promise<void> {
@@ -56,6 +57,10 @@ async function main(): Promise<void> {
       break;
     case 'plugin':
       await pluginCommand(args);
+      break;
+    case 'llm-diff':
+    case 'llmDiff':
+      await llmDiffCommand(args);
       break;
     default:
       console.error(`Unknown command: ${args.command}`);
