@@ -270,9 +270,11 @@ function printTransitions(
     const prevBody = loadWireDumpBody(dir, calls[i - 1].request);
     const nextBody = loadWireDumpBody(dir, calls[i].request);
     const aging = reportWireAging(prevBody, nextBody);
-    if (aging && aging.agedInPlace > 0) {
+    if (aging && (aging.agedInPlace > 0 || aging.agedArgCharsSaved > 0)) {
+      const argNote =
+        aging.agedArgCharsSaved > 0 ? `, args -${compactNum(aging.agedArgCharsSaved)} chars` : '';
       console.log(
-        `        history aged into pointers: +${aging.agedInPlace} msg (total ${aging.prevPointers} → ${aging.nextPointers}), first at msg[${aging.firstAgedIndex}]`,
+        `        history aged into pointers: +${aging.agedInPlace} msg (total ${aging.prevPointers} → ${aging.nextPointers}), first at msg[${aging.firstAgedIndex}]${argNote}`,
       );
       printAgingPayback(calls, i, diff, aging, cacheDiscount, callsPerRun, callsAfterById);
     }

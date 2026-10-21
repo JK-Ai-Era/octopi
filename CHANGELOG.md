@@ -1,3 +1,19 @@
+## v0.86.14
+
+### fix(cli): `llm-diff` 回本判定计入参数老化收益
+
+**问题**：v0.86.13 让工具调用参数随结果同步老化，但 `reportWireAging` 仍只统计「tool 单元原文 → 指针」
+的收缩量——参数收缩发生在 **assistant 单元**内，完全没被计入。结果 `saved` 被低估约 6 倍，回本点被高估：
+
+- 修前：`saved 11k tok/call vs burned 226k tok → 183.8 calls`（看起来完全不划算）
+- 修后：`saved 71k tok/call vs burned 226k tok → 28.6 calls`（同一次调用）
+
+**实现**：新增 `measureArgShrink(prevBody, nextBody)`，按「同一 assistant 消息内同一位置的 tool_call」
+逐对比对参数序列化长度，只累计变短的部分（新增调用不计）。`WireAgingReport` 增 `agedArgCharsSaved`
+字段，`agedCharsSaved` 改为结果侧 + 参数侧合计；CLI 在老化行追加 `, args -178k chars`。
+
+**测试**：新增 2 项（结果+参数两侧收缩都计入、仅参数收缩无新老化时也能识别），wire dump 合计 36 项。
+
 ## v0.86.13
 
 ### feat(engine): tool_call 参数随结果同步老化；`freezeBatch` 缺省 20 → 40

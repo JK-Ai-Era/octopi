@@ -683,6 +683,64 @@ describe('wire dump — 老化（原文 → 指针）识别', () => {
 });
 
 describe('wire dump — 老化回本判定', () => {
+  test('参数老化收缩量也计入 saved（否则回本点被高估）', () => {
+    const prev = {
+      messages: [
+        { role: 'system', content: 'sys' },
+        {
+          role: 'assistant',
+          content: null,
+          tool_calls: [
+            {
+              id: 'c1',
+              type: 'function',
+              function: { name: 'file_edit', arguments: JSON.stringify({ path: 'a.ts', old_string: 'x'.repeat(900) }) },
+            },
+          ],
+        },
+        { role: 'tool', content: JSON.stringify({ ok: true, body: 'y'.repeat(600) }), tool_call_id: 'c1' },
+      ],
+    };
+    const next = {
+      messages: [
+        { role: 'system', content: 'sys' },
+        {
+          role: 'assistant',
+          content: null,
+          tool_calls: [
+            {
+              id: 'c1',
+              type: 'function',
+              function: { name: 'file_edit', arguments: JSON.stringify({ path: 'a.ts', old_string: '…[900 chars]' }) },
+            },
+          ],
+        },
+        { role: 'tool', content: '[aged tool result · pointer] tool: file_edit; args: {}; result: …', tool_call_id: 'c1' },
+      ],
+    };
+
+    const aging = reportWireAging(prev, next)!;
+    expect(aging.agedInPlace).toBe(1);
+    // 结果侧收缩 + 参数侧收缩都要计入
+    expect(aging.agedArgCharsSaved).toBeGreaterThan(800);
+    expect(aging.agedCharsSaved).toBeGreaterThan(aging.agedArgCharsSaved);
+  });
+
+  test('仅有参数收缩（无新老化）也要被识别', () => {
+    const mk = (args: string) => ({
+      messages: [
+        { role: 'assistant', content: null, tool_calls: [{ id: 'c1', type: 'function', function: { name: 'shell', arguments: args } }] },
+      ],
+    });
+    const aging = reportWireAging(
+      mk(JSON.stringify({ command: 'x'.repeat(500) })),
+      mk(JSON.stringify({ command: '…[500 chars]' })),
+    )!;
+    expect(aging.agedInPlace).toBe(0);
+    expect(aging.agedArgCharsSaved).toBeGreaterThan(400);
+    expect(aging.agedCharsSaved).toBe(aging.agedArgCharsSaved);
+  });
+
   test('回本点 = burned × (1−d) / (saved × d)', () => {
     // 省 1000 tok/call、烧 9000 tok、一折：9×9000/1000 = 81 次调用
     const payback = estimateAgingPayback({

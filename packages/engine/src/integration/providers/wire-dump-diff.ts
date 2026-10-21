@@ -267,11 +267,17 @@ export interface WireAgingReport {
   /** 首个被老化的单元下标；无老化时 -1 */
   firstAgedIndex: number;
   /**
-   * 本次老化净减掉的字符数（原文长度 − 指针长度，逐个被老化单元求和）
+   * 本次老化净减掉的字符数（原文长度 − 指针长度 + 参数收缩量）
    *
    * 这是老化带来的**持续收益**：此后每次调用都不必再发送这些字符。
    */
   agedCharsSaved: number;
+  /**
+   * 其中来自「工具调用参数摘要」的部分
+   *
+   * 参数老化发生在 assistant 单元内，不在「原文→指针」判定里，必须单独计息。
+   */
+  agedArgCharsSaved: number;
 }
 
 /** 老化回本判定输入 */
@@ -334,7 +340,70 @@ export function reportWireAging(
     }
   }
 
-  return { prevPointers, nextPointers, agedInPlace, firstAgedIndex, agedCharsSaved };
+  // 参数老化（与结果同步降级）：assistant 单元的 tool_call 参数也会缩短，
+  // 但这部分不在 tool 单元的「原文→指针」判定里，必须单独计息——否则回本点被高估。
+  const agedArgCharsSaved = measureArgShrink(prevBody, nextBody);
+
+  return {
+    prevPointers,
+    nextPointers,
+    agedInPlace,
+    firstAgedIndex,
+    agedCharsSaved: agedCharsSaved + agedArgCharsSaved,
+    agedArgCharsSaved,
+  };
+}
+
+/**
+ * 统计两次请求之间 assistant 工具调用参数的缩短量
+ *
+ * 按「同一 assistant 消息内同一位置的 tool_call」逐对比对；只累计变短的部分
+ * （参数被摘要替换）。新增调用的参数不计入。
+ *
+ * @param prevBody - 上次请求体
+ * @param nextBody - 本次请求体
+ * @returns 参数缩短的总字符数
+ */
+function measureArgShrink(prevBody: Record<string, unknown>, nextBody: Record<string, unknown>): number {
+  const prevMessages = Array.isArray(prevBody.messages) ? (prevBody.messages as unknown[]) : [];
+  const nextMessages = Array.isArray(nextBody.messages) ? (nextBody.messages as unknown[]) : [];
+  const limit = Math.min(prevMessages.length, nextMessages.length);
+  let saved = 0;
+
+  for (let i = 0; i < limit; i++) {
+    const prevCalls = toolCallsOf(prevMessages[i]);
+    const nextCalls = toolCallsOf(nextMessages[i]);
+    if (!prevCalls.length || prevCalls.length !== nextCalls.length) continue;
+    for (let c = 0; c < prevCalls.length; c++) {
+      const before = prevCalls[c];
+      const after = nextCalls[c];
+      if (before.id !== after.id) continue;
+      const delta = before.chars - after.chars;
+      if (delta > 0) saved += delta;
+    }
+  }
+  return saved;
+}
+
+/**
+ * 提取消息内每个 tool_call 的 id 与参数序列化长度
+ *
+ * @param msg - wire 消息
+ * @returns 调用元组（非 assistant / 无 tool_calls 时为空）
+ */
+function toolCallsOf(msg: unknown): Array<{ id: string; chars: number }> {
+  if (msg == null || typeof msg !== 'object') return [];
+  const calls = (msg as { tool_calls?: unknown }).tool_calls;
+  if (!Array.isArray(calls)) return [];
+  const out: Array<{ id: string; chars: number }> = [];
+  for (const call of calls as Array<{ id?: unknown; function?: { arguments?: unknown } }>) {
+    const args = call?.function?.arguments;
+    out.push({
+      id: typeof call?.id === 'string' ? call.id : '',
+      chars: typeof args === 'string' ? args.length : JSON.stringify(args ?? null).length,
+    });
+  }
+  return out;
 }
 
 /**
