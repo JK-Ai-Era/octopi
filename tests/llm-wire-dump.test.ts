@@ -15,6 +15,7 @@ import {
 } from '@octopi-agent/engine/integration/providers/wire-dump.js';
 import {
   compareWireCalls,
+  reportWireAging,
   explainWireDivergence,
   listWireDumpSessions,
   loadWireDumpBody,
@@ -611,6 +612,72 @@ describe('wire dump — 前缀单元顺序', () => {
 
     const sessions = listWireDumpSessions(rootDir);
     expect(sessions.map((s) => s.sessionId)).toEqual(['b', 'a']);
+  });
+});
+
+describe('wire dump — 老化（原文 → 指针）识别', () => {
+  const AGED = '[aged tool result · pointer] tool: file_read; args: {"path":"x"}';
+
+  test('单点改写 changedAfter=0；批量老化 changedAfter>0 且能定位首个老化位置', async () => {
+    const sink = sinkFor('sess_aging');
+    const original = [
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: 'q' },
+      { role: 'tool', content: '{"matches":["a","b"]}' },
+      { role: 'tool', content: '{"matches":["c","d"]}' },
+      { role: 'assistant', content: 'done' },
+    ];
+    const aged = [
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: 'q' },
+      { role: 'tool', content: AGED },
+      { role: 'tool', content: AGED },
+      { role: 'assistant', content: 'done' },
+    ];
+
+    for (const messages of [original, aged]) {
+      sink.capture({ provider: 'p', model: 'm', mode: 'chat', body: bodyOf(messages) })!
+        .finish({ outcome: 'ok', durationMs: 1 });
+      await sink.flush();
+    }
+
+    const dir = join(rootDir, 'sess_aging');
+    const calls = readWireDumpIndex(dir);
+    const diff = compareWireCalls(calls[0], calls[1]);
+    expect(diff.stability).toBe('diverged');
+    expect(diff.divergence?.index).toBe(2);
+    expect(diff.changedAfter).toBe(2); // msg[2] 与 msg[3] 都变了，不只首个分歧点
+
+    const aging = reportWireAging(
+      loadWireDumpBody(dir, calls[0].request)!,
+      loadWireDumpBody(dir, calls[1].request)!,
+    )!;
+    expect(aging.agedInPlace).toBe(2);
+    expect(aging.firstAgedIndex).toBe(2);
+    expect(aging.prevPointers).toBe(0);
+    expect(aging.nextPointers).toBe(2);
+  });
+
+  test('append-only 无老化时不误报', async () => {
+    const sink = sinkFor('sess_noaging');
+    const base = [
+      { role: 'system', content: 'sys' },
+      { role: 'tool', content: AGED },
+    ];
+    for (const messages of [base, [...base, { role: 'user', content: 'more' }]]) {
+      sink.capture({ provider: 'p', model: 'm', mode: 'chat', body: bodyOf(messages) })!
+        .finish({ outcome: 'ok', durationMs: 1 });
+      await sink.flush();
+    }
+
+    const calls = readWireDumpIndex(join(rootDir, 'sess_noaging'));
+    expect(compareWireCalls(calls[0], calls[1]).changedAfter).toBe(0);
+    const aging = reportWireAging(
+      loadWireDumpBody(join(rootDir, 'sess_noaging'), calls[0].request)!,
+      loadWireDumpBody(join(rootDir, 'sess_noaging'), calls[1].request)!,
+    )!;
+    expect(aging.agedInPlace).toBe(0);
+    expect(aging.nextPointers).toBe(1);
   });
 });
 

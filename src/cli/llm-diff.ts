@@ -15,6 +15,7 @@ import {
   compareWireCalls,
   loadWireDumpBody,
   explainWireDivergence,
+  reportWireAging,
   type WireCallSummary,
   type WirePrefixDiff,
 } from '@octopi-agent/engine/integration/providers/wire-dump-diff.js';
@@ -232,7 +233,21 @@ function printTransitions(calls: WireCallSummary[], diffs: Array<WirePrefixDiff 
       `${label}  DIVERGED at msg[${d.index}] role=${d.prevRole ?? '?'}→${d.nextRole ?? '?'} ` +
         `(len ${d.prevLen ?? '?'}→${d.nextLen ?? '?'}); prefix ${cacheNote}${suffix}`,
     );
-    const detail = loadDivergenceDetail(calls[i - 1], calls[i], dir, d.index);
+    // 批量改写（老化）与单点改写的处置完全不同：前者不是装配 bug，且失效范围到尾部
+    if (diff.changedAfter > 0) {
+      console.log(
+        `        ${diff.changedAfter} further msg(s) also differ after the break — invalidation extends to the tail`,
+      );
+    }
+    const prevBody = loadWireDumpBody(dir, calls[i - 1].request);
+    const nextBody = loadWireDumpBody(dir, calls[i].request);
+    const aging = reportWireAging(prevBody, nextBody);
+    if (aging && aging.agedInPlace > 0) {
+      console.log(
+        `        history aged into pointers: +${aging.agedInPlace} msg (total ${aging.prevPointers} → ${aging.nextPointers}), first at msg[${aging.firstAgedIndex}]`,
+      );
+    }
+    const detail = prevBody && nextBody ? explainWireDivergence(prevBody, nextBody, d.index) : null;
     if (detail) {
       console.log(`        offset ${detail.offset}  (<|> marks the first differing character)`);
       console.log(`        prev: ${detail.prevSnippet}`);
@@ -252,19 +267,6 @@ function unavailableReason(prev: WireCallSummary, next: WireCallSummary): string
     return ' — body exceeded maxBodyBytes and was never written; raise observability.llmRequestDump.maxBodyBytes';
   }
   return ' — trimmed by maxCallsPerSession or removed manually; hash-level diff above still holds';
-}
-
-/** 分歧消息内部的字符级差异 */
-function loadDivergenceDetail(
-  prev: WireCallSummary,
-  next: WireCallSummary,
-  dir: string,
-  index: number,
-): ReturnType<typeof explainWireDivergence> {
-  const prevBody = loadWireDumpBody(dir, prev.request);
-  const nextBody = loadWireDumpBody(dir, next.request);
-  if (!prevBody || !nextBody) return null;
-  return explainWireDivergence(prevBody, nextBody, index);
 }
 
 /**

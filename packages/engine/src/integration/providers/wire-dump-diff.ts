@@ -52,6 +52,13 @@ export interface WirePrefixDiff {
     prevLen?: number;
     nextLen?: number;
   };
+  /**
+   * 断点之后仍有内容变化的单元数
+   *
+   * 单点改写（如上一轮 assistant 文本被用户编辑）为 0；历史批量老化（多条原文被替换为
+   * 指针）会远大于 0——这类批量改写即使断点靠前，实际失效范围也覆盖到尾部。
+   */
+  changedAfter: number;
   toolsChanged: boolean;
   modelChanged: boolean;
   modeChanged: boolean;
@@ -209,6 +216,11 @@ export function compareWireCalls(prev: WireCallSummary, next: WireCallSummary): 
   let stableChars = 0;
   for (let i = 0; i < common; i++) stableChars += b.lens[i] ?? 0;
 
+  let changedAfter = 0;
+  for (let i = common; i < limit; i++) {
+    if (a.hashes[i] !== b.hashes[i]) changedAfter += 1;
+  }
+
   const toolsChanged = a.toolsHash !== b.toolsHash;
   const modelChanged = a.model !== b.model;
 
@@ -229,10 +241,63 @@ export function compareWireCalls(prev: WireCallSummary, next: WireCallSummary): 
           nextLen: b.lens[common],
         }
       : undefined,
+    changedAfter,
     toolsChanged,
     modelChanged,
     modeChanged: a.mode !== b.mode,
   };
+}
+
+/** 历史老化指针的固定前缀（见 harness/context 的 aging 输出） */
+const AGED_POINTER_MARKER = '[aged tool result · pointer]';
+
+/** 老化扫描结果 */
+export interface WireAgingReport {
+  /** prev 侧指针条数 */
+  prevPointers: number;
+  /** next 侧指针条数 */
+  nextPointers: number;
+  /**
+   * 本次新增的老化替换条数
+   *
+   * 统计「prev 侧该位置是原文、next 侧同一位置变成指针」的单元数——这正是前缀断裂
+   * 的真实来源，也是判断一次分歧是单点改写还是批量老化的依据。
+   */
+  agedInPlace: number;
+  /** 首个被老化的单元下标；无老化时 -1 */
+  firstAgedIndex: number;
+}
+
+/**
+ * 统计两次调用之间的历史老化（原文 → 指针）情况
+ *
+ * @param prevBody - 上次调用的请求体
+ * @param nextBody - 本次调用的请求体
+ * @returns 老化统计；任一侧 body 缺失时 null
+ */
+export function reportWireAging(
+  prevBody: Record<string, unknown> | null,
+  nextBody: Record<string, unknown> | null,
+): WireAgingReport | null {
+  if (!prevBody || !nextBody) return null;
+  const prevUnits = wireUnitPayloads(prevBody);
+  const nextUnits = wireUnitPayloads(nextBody);
+
+  const isPointer = (text: string): boolean => text.includes(AGED_POINTER_MARKER);
+  const prevPointers = prevUnits.filter((u) => isPointer(u.text)).length;
+  const nextPointers = nextUnits.filter((u) => isPointer(u.text)).length;
+
+  let agedInPlace = 0;
+  let firstAgedIndex = -1;
+  const limit = Math.min(prevUnits.length, nextUnits.length);
+  for (let i = 0; i < limit; i++) {
+    if (!isPointer(prevUnits[i].text) && isPointer(nextUnits[i].text)) {
+      agedInPlace += 1;
+      if (firstAgedIndex < 0) firstAgedIndex = i;
+    }
+  }
+
+  return { prevPointers, nextPointers, agedInPlace, firstAgedIndex };
 }
 
 /**

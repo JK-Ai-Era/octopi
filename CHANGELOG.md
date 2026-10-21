@@ -1,3 +1,21 @@
+## v0.86.10
+
+### feat(cli): `llm-diff` 区分单点改写与历史批量老化
+
+**问题**（首次真实 session 实测发现）：报出 `DIVERGED at msg[374]` 只说明**第一个**分歧点，无法回答
+「这是用户改了一条消息，还是历史老化批量替换」——而两者处置完全相反：前者要查装配，后者是设计内行为。
+实测该 session 的 t7→t8 边界上，首分歧在 msg[374]，但**其后另有 38 条消息同时变化**，也就是 38 条历史被
+替换成指针、失效范围一直到尾部；只看首个分歧点会严重低估影响面（实际 stable 295k / 460k，仅 64% 可复用）。
+
+**实现**：
+
+- `WirePrefixDiff.changedAfter`：断点之后仍 hash 不同的单元数（单点改写为 0）。
+- `reportWireAging(prevBody, nextBody)`：统计两侧指针条数，并定位「prev 是原文、next 变指针」的单元数与首个下标。
+- CLI 在 DIVERGED 分支追加两行诊断（仅在有值时输出）：
+  `N further msg(s) also differ after the break` / `history aged into pointers: +N msg (total X → Y), first at msg[i]`。
+
+**测试**：新增 2 项（批量老化 `changedAfter=2` 且定位首老化位置；append-only 不误报），共 29 项。
+
 ## v0.86.9
 
 ### fix(cli): `llm-diff` 默认选中对话 session，不再误命中子系统调用桶
