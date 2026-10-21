@@ -310,6 +310,10 @@ export class Gateway {
   private memoryRestorers = new Map<string, import('@octopi-agent/engine').MemoryEffectRestorer>();
   /** 委派编排运行时（arch/delegation.md）惰性创建 */
   private delegationRuntime?: import('@octopi-agent/engine/harness/collaboration/delegation/wiring.js').DelegationRuntime;
+  /** ensureDelegationRuntime 首建合流（防并发双建；仅缓存成功创建的 runtime） */
+  private delegationRuntimePromise?: Promise<
+    import('@octopi-agent/engine/harness/collaboration/delegation/wiring.js').DelegationRuntime | undefined
+  >;
   /** 委派未启用诊断日志只打一次 */
   private delegationSkippedLogged = false;
   /** Agent 缓存（避免每条消建） */
@@ -347,6 +351,12 @@ export class Gateway {
   /** 主（arch/agent-runtime.md）；消息?dispatch */
   private runtime: AgentRuntime;
   private gatewayBus: DefaultEventBus;
+  /** AgentSignalSource 已挂到 AgentRuntime（委派 notify 推送的接收端） */
+  private agentSignalMounted = false;
+  /** ensureAgentSignalSource in-flight 合流（成功后置 mounted；失败清缓存留重试口） */
+  private agentSignalSourcePromise?: Promise<void>;
+  /** agentRuntime.agentSignal === false：显式关闭推送（委派退化为 poll + 状态提示） */
+  private agentSignalPushDisabled = false;
   /** Session ACL（E6）；缺省内置?*/
   private sessionAcl: SessionAclService;
   /** 进程内共?Session Lease（E1/E2）：?Runner 注入同一实例 */
@@ -557,7 +567,11 @@ export class Gateway {
       runOnStart?: boolean;
     }>;
     escalate?: { defaultAgentId?: string; eventType?: string | string[] };
-    /** 挂载 AgentSignalSource Agent 通知?*/
+    /**
+     * 挂载 AgentSignalSource（agent_signal 通知）三态：
+     * true=挂载；false=显式关闭（委派 notify 推送随之关闭）；
+     * 缺省=本方法不挂载，委派接线时按需补挂（ensureDelegationRuntime）。
+     */
     agentSignal?: boolean;
   }): Promise<void> {
     if (cfg.schedule && cfg.schedule.length > 0) {
@@ -593,13 +607,44 @@ export class Gateway {
         `[Gateway] AgentRuntime EscalateBridge (defaultAgentId=${cfg.escalate.defaultAgentId ?? 'n/a'})`,
       );
     }
-    if (cfg.agentSignal) {
-      const { AgentSignalSource } = await import(
-        '@octopi-agent/engine/harness/activation/sources/agent-signal.js'
-      );
-      this.runtime.addSource(new AgentSignalSource({ events: this.gatewayBus }));
-      console.log('[Gateway] AgentRuntime AgentSignalSource');
+    // agentSignal 三态：true=挂载；false=显式关闭（委派 notify 推送随之关闭）；
+    // 缺省=此处不挂载，委派接线时按需补挂（ensureDelegationRuntime）。
+    // 注意：notifier 只在 ensureDelegationRuntime 首建 runtime 时按当时的
+    // agentSignalPushDisabled 决定，运行期重配推送开关不生效（当前无此路径）。
+    this.agentSignalPushDisabled = cfg.agentSignal === false;
+    const wantsAgentSignal =
+      cfg.agentSignal === true ||
+      (cfg.agentSignal !== false && !!cfg.escalate?.defaultAgentId);
+    if (wantsAgentSignal) {
+      await this.ensureAgentSignalSource();
     }
+  }
+
+  /**
+   * 幂等挂载 AgentSignalSource——委派 notify 推送的接收端。
+   *
+   * notify 链路：notifier -> emitAgentSignal(gatewayBus) -> AgentSignalSource
+   * -> Trigger -> 父 Run。接收端缺失时通知会发进无人监听的总线，因此
+   * 「装不装 notifier」必须与「挂没挂本 Source」保持一致（见 ensureDelegationRuntime）。
+   */
+  private async ensureAgentSignalSource(): Promise<void> {
+    if (this.agentSignalMounted) return;
+    // in-flight 合流：并发调用共用一次 import + 挂载；成功后才置 mounted
+    //（先置位会让 import/addSource 失败变成永久「假挂载」），失败清缓存留重试口
+    if (!this.agentSignalSourcePromise) {
+      this.agentSignalSourcePromise = (async () => {
+        const { AgentSignalSource } = await import(
+          '@octopi-agent/engine/harness/activation/sources/agent-signal.js'
+        );
+        this.runtime.addSource(new AgentSignalSource({ events: this.gatewayBus }));
+        this.agentSignalMounted = true;
+        console.log('[Gateway] AgentRuntime AgentSignalSource mounted');
+      })().catch((err) => {
+        this.agentSignalSourcePromise = undefined;
+        throw err;
+      });
+    }
+    await this.agentSignalSourcePromise;
   }
 
   // ================================================================
@@ -4036,8 +4081,9 @@ export class Gateway {
   /**
    * 获取或惰性创建委派编排运行时（arch/delegation.md §7/§14）。
    *
-   * 所有 agent 共享 gatewayBus，因此 notify 通道天然可用
-   * （AgentSignalSource 挂在同一条总线上）。
+   * notify 通道的接收端（AgentSignalSource）默认随委派接线补挂，
+   * 与 notifier 同源（gatewayBus）同生命周期；显式 agentSignal:false 时退化为
+   * poll + 状态提示兜底。
    *
    * 任一 agent 声明了 delegation 策略才创建；否则返回 undefined，
    * 不为未使用委派的部署付出开销。
@@ -4049,7 +4095,26 @@ export class Gateway {
     | undefined
   > {
     if (this.delegationRuntime) return this.delegationRuntime;
+    // 首建合流：并发 buildAgent 共用一次创建（防双 runtime / 重复挂工具）；
+    // 「无委派 agent」的结果不缓存，后续 agent 到达时重新判定
+    if (!this.delegationRuntimePromise) {
+      this.delegationRuntimePromise = this.wireDelegationRuntime()
+        .then((rt) => {
+          if (!rt) this.delegationRuntimePromise = undefined;
+          return rt;
+        })
+        .catch((err) => {
+          this.delegationRuntimePromise = undefined;
+          throw err;
+        });
+    }
+    return this.delegationRuntimePromise;
+  }
 
+  /** ensureDelegationRuntime 的实际构建（并发入口已由 promise 合流） */
+  private async wireDelegationRuntime(): Promise<
+    import('@octopi-agent/engine/harness/collaboration/delegation/wiring.js').DelegationRuntime | undefined
+  > {
     // 先取模块：effectiveDelegationPolicy 在守卫里就要用
     const { createDelegationRuntime, effectiveDelegationPolicy } = await import(
       '@octopi-agent/engine/harness/collaboration/delegation/wiring.js'
@@ -4076,11 +4141,37 @@ export class Gateway {
       return undefined;
     }
 
+    // notify 推送依赖接收端 AgentSignalSource；默认随委派接线补挂。
+    // 显式 agentSignal:false 或挂载失败时不装 notifier——发进无人监听总线的通知
+    // 不能被误标已送达（那正是曾经的断链故障），退化为 poll + 状态提示兜底。
+    let notifyPush = !this.agentSignalPushDisabled;
+    if (!notifyPush) {
+      console.warn(
+        '[Gateway] Delegation wired but notify push DISABLED (agentRuntime.agentSignal=false): ' +
+          'results surface via delegate_get/delegate_list or the <delegation_status> hint only',
+      );
+    } else {
+      try {
+        await this.ensureAgentSignalSource();
+      } catch (err) {
+        notifyPush = false;
+        console.warn(
+          '[Gateway] AgentSignalSource mount failed, delegation notify push off (poll + hint fallback): ' +
+            (err instanceof Error ? err.message : String(err)),
+        );
+      }
+    }
+
     this.delegationRuntime = createDelegationRuntime({
       events: this.gatewayBus,
+      notifyPush,
       maxActiveDelegationsPerSession: this.config.delegation?.maxActiveDelegationsPerSession,
     });
-    console.log('[Gateway] Delegation runtime wired (shared gatewayBus, notify enabled)');
+    console.log(
+      notifyPush
+        ? '[Gateway] Delegation runtime wired (shared gatewayBus, notify push on)'
+        : '[Gateway] Delegation runtime wired (notify push off: poll + hint fallback)',
+    );
     return this.delegationRuntime;
   }
 
@@ -4458,7 +4549,8 @@ export class Gateway {
     built.agent.setToolVisibilityFilter(this.clientTools.createVisibilityFilter());
 
     // 委派编排（arch/delegation.md §7/§14）：惰性构建，attach 后该 agent 可被委派/可发委派。
-    // 所有 agent 共享 gatewayBus，故 notify 通道天然通（AgentSignalSource 同源）。
+    // notify 通道：接收端 AgentSignalSource 默认随委派接线补挂（ensureDelegationRuntime），
+    // 与 notifier 同源同生命周期；显式 agentSignal:false 时退化为 poll + 状态提示。
     (await this.ensureDelegationRuntime())?.attach({
       agentId: agent.id,
       agent: built.agent,

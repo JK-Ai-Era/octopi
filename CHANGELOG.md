@@ -1,3 +1,24 @@
+## v0.86.24
+
+### fix(delegation): 委派结果自动回传断链修复 —— notify 推送默认接通，未送达不再被误标
+
+**问题**（大哥实测）：子 agent 完成任务后结果**不会自动回传**父 agent，父必须主动 `delegate_get` 才能拿到结果，连"有结果待取"的提示都没有。
+
+**根因**（三层叠加）：
+1. 委派默认开启（`arch/delegation.md` §9.2），但 notify 链路的接收端 `AgentSignalSource` 是 opt-in——仅 `agentRuntime.agentSignal: true` 或配置 `escalate.defaultAgentId` 才挂载。配置缺省时（如 `~/.octopi/octopi.json` 无 `agentRuntime` 块），notifier 发出的 `runtime.agent_signal` 在 `gatewayBus` 上**无人监听**，静默蒸发。
+2. `DelegateService.notify()` 在投递**前**就无条件 `markNotified()` 且吞掉投递异常——推送死了仍被标成"已送达"，§7.3 `<delegation_status>` 兜底提示也因"已通知"标记一并消失，两个通道全断。且 `bus.emit` 对有无监听者零反馈，「发出」从来就不等于「送达」。
+3. Gateway 无条件打 `notify enabled` 日志，掩盖断链。
+
+**改法**：
+- **默认接通**（行为变更）：Gateway 委派接线时默认补挂 `AgentSignalSource`。`agentRuntime.agentSignal` 三态：`true`=显式挂载 / `false`=显式关闭 / 缺省=随委派自动补挂（daemon 三态透传，挂载策略收口 Gateway；显式 `false` 现在压过 `escalate.defaultAgentId`）。非委派部署不受影响。接收端挂载失败也降级为 poll + 提示兜底，不崩委派。
+- **送达即可证伪**：`createDelegationNotifier` 投递前校验总线上有存活的接收端（`hasAgentSignalReceiver`，`AgentSignalSource` start/stop 引用计数登记），无接收端抛错按投递失败处理——不再把发进空总线的通知算作送达（库嵌入 `buildFromConfig` 路径同样被收口）。
+- **送达语义**：`notified` 只在结果真正送达父后置位——notify 投递成功，或父经 `delegate_get` 取回全文（新增 `DelegateService.markSurfaced`）。`delegate_list` 是只读概览**不置位**（结果可能被工具结果截断，宁可提示多留也不误消音）。投递失败保持未送达并**打 warn 留痕**；无投递器时直接不投递、无提示噪音。两种情况都由 `<delegation_status>` 提示兜底。
+- **接线防呆**：`ensureAgentSignalSource` 成功后才置挂载标志（失败留重试口），`ensureDelegationRuntime` 首建 promise 合流防并发双建；日志按 push on/off 二分，显式关闭时 warn 说明兜底模式，删除"notify enabled"无条件断言。
+
+**评审**（两轮子 agent 对抗性评审 + 逐条验证后定稿）：一轮查出「notifier 成功≠送达」的根因残留（探针实证）、「挂载标志先置位无回滚」、「list 置位可能误标」、「测试断言弱于声称（TRIGGER_RECEIVED 在路由前就发）」等，均已闭合；二轮复核增量并补齐「`stop()` 实例级计数配平」与「in-flight 占位去重」两处防御（均带回归测试）。`notified` 字段命名（送达 vs 已取回双语义）留作后续议题。
+
+**验证**：`npm run build`（五包 tsc 全过）、`npm run lint` 干净、`arch/check-sync.sh` 通过；delegation / delegation-notify / delegation-tools / agent-runtime-sources / gateway-agent-signal-mount 全绿。**新增 13 用例**：无接收端拒送达、无投递器留提示兜底 + `markSurfaced` 消音、`delegate_get` 取回即送达、`delegate_list` 只读不消音、deadline 迟到竞争 notifier 恰好一次、in-flight 占位拦并发双投、接收端计数配平、`notifyPush:false` 不装 notifier、gateway 三态挂载 ×5（真实 notifier → source → dispatch → 假父 dispatcher 捕获的端到端）；另**修改 3 个旧用例**（其中旧断言"失败也标已送达"是本 bug 的测试侧固化，一并纠正；「投递失败留提示兜底」即其改后语义）。全量 `npm test`：**2991 tests 绿**（3000 总），3 个既有环境失败（`cli-process-utils > getProcessName`、`cli-serve-preflight > identifyPortOccupant`、`harness/temp-path > Windows 临时区`）在干净树全量跑同样复现（前两者进程名探测受沙箱影响、后者 Windows 路径语义用例依赖全量顺序，单跑可绿），与本次无关。
+
 ## v0.86.23
 
 ### fix(webui): reasoning 阶段状态文案改为「思考中」，正文开始输出后才显示「流式输出中」

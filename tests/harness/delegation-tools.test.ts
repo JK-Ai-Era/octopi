@@ -493,6 +493,45 @@ describe('delegate_* tools', () => {
     });
   });
 
+  it('get marks a terminal delegation surfaced (§7.3 hint de-dup)', async () => {
+    const { byName, store, service } = makeToolHarness();
+    const dispatched = await byName.delegate_dispatch.handler(
+      { agent: 'worker', task: 't', input: 'i' },
+      CTX,
+    ) as { delegation_id: string };
+
+    await vi.waitFor(() => expect(store.get(dispatched.delegation_id)?.status).toBe('completed'));
+    expect(store.get(dispatched.delegation_id)?.notified).toBe(false);
+
+    const got = await byName.delegate_get.handler(
+      { delegation_id: dispatched.delegation_id },
+      CTX,
+    ) as { ok: boolean; notified: boolean };
+    expect(got.ok).toBe(true);
+    expect(got.notified).toBe(true);
+    expect(store.get(dispatched.delegation_id)?.notified).toBe(true);
+    expect(service.renderStatusHint('s-parent')).toBe('');
+  });
+
+  it('list stays read-only: the hint survives until delegate_get surfaces the result', async () => {
+    const { byName, store, service } = makeToolHarness();
+    await byName.delegate_dispatch.handler({ agent: 'worker', task: 't', input: 'i' }, CTX);
+    await vi.waitFor(() => expect(store.list()[0]?.status).toBe('completed'));
+
+    const listed = await byName.delegate_list.handler({}, CTX) as {
+      total: number;
+      delegations: Array<{ notified: boolean }>;
+    };
+    expect(listed.total).toBe(1);
+    // 列表是只读概览：不置位（结果可能被截断，只有 get 取回全文才算送达）
+    expect(listed.delegations[0].notified).toBe(false);
+    expect(store.list()[0].notified).toBe(false);
+    expect(service.renderStatusHint('s-parent')).toContain('1 completed');
+
+    await byName.delegate_get.handler({ delegation_id: store.list()[0].id }, CTX);
+    expect(store.list()[0].notified).toBe(true);
+  });
+
   it('depth gate applies through resolveParentDepth', async () => {
     const registry = new DefaultAgentRegistry();
     registry.register({

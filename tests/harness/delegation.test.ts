@@ -550,7 +550,7 @@ describe('DelegateService', () => {
     expect(notifier.mock.calls[0][0].id).toBe(delegation.id);
   });
 
-  it('a failing notify never corrupts the terminal state', async () => {
+  it('a failing notify never corrupts the terminal state and stays un-delivered (hint fallback)', async () => {
     const notifier = vi.fn(() => { throw new Error('notify channel down'); });
     const { service, store } = makeService({ transport: makeOkTransport(), notifier });
 
@@ -564,7 +564,115 @@ describe('DelegateService', () => {
     await vi.waitFor(() => expect(notifier).toHaveBeenCalled());
     const record = store.get(delegation.id)!;
     expect(record.status).toBe('completed');
-    expect(record.notified).toBe(true);
+    // 未送达不置位：终态留在状态提示里兜底，而不是无声消失
+    expect(record.notified).toBe(false);
+    expect(service.renderStatusHint(PARENT.sessionId)).toContain('1 completed');
+  });
+
+  it('without a notifier the terminal result stays un-delivered for the hint fallback', async () => {
+    const { service, store } = makeService({ transport: makeOkTransport() });
+
+    const { delegation } = await service.dispatch({
+      parent: PARENT,
+      target: { agentId: 'worker' },
+      task: 't',
+      input: 'i',
+    });
+
+    await vi.waitFor(() => expect(store.get(delegation.id)?.status).toBe('completed'));
+    expect(store.get(delegation.id)?.notified).toBe(false);
+    expect(service.renderStatusHint(PARENT.sessionId)).toContain('1 completed');
+
+    // 父经 poll 取回（markSurfaced）后，提示消音
+    service.markSurfaced(delegation.id);
+    expect(service.renderStatusHint(PARENT.sessionId)).toBe('');
+  });
+
+  it('deadline timeout racing a late completion calls the notifier exactly once', async () => {
+    const notifier = vi.fn();
+    let release!: (v: DelegateResult) => void;
+    const { service, store } = makeService({
+      // 子 Run 悬住直到人为放行：让 deadline 终态与迟到结果先后走两条 notify 路径
+      transport: new InProcessTransport(
+        (req) =>
+          new Promise<DelegateResult>((resolve) => {
+            release = (v) => resolve(v);
+            void req;
+          }),
+      ),
+      notifier,
+    });
+
+    const { delegation } = await service.dispatch({
+      parent: PARENT,
+      target: { agentId: 'worker' },
+      task: 't',
+      input: 'i',
+      timeoutMs: 10,
+    });
+
+    // deadline 先落 timeout 终态并触发唯一一次 notify
+    await vi.waitFor(() => expect(store.get(delegation.id)?.status).toBe('timeout'));
+    await vi.waitFor(() => expect(notifier).toHaveBeenCalledTimes(1));
+
+    // 迟到的子结果走 settleWithResult + finally notify：不得第二次投递
+    release({
+      delegationId: delegation.id,
+      status: 'completed',
+      output: 'late',
+      schemaVersion: DELEGATION_SCHEMA_VERSION,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(notifier).toHaveBeenCalledTimes(1);
+    expect(store.get(delegation.id)?.status).toBe('timeout');
+    expect(store.get(delegation.id)?.error).toContain('late result dropped');
+  });
+
+  it('an in-flight notify suppresses a concurrent second entry (no double delivery)', async () => {
+    let releaseNotify!: () => void;
+    const notifier = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseNotify = resolve;
+        }),
+    );
+    let releaseChild!: (v: DelegateResult) => void;
+    const { service, store } = makeService({
+      transport: new InProcessTransport(
+        (req) =>
+          new Promise<DelegateResult>((resolve) => {
+            releaseChild = (v) => resolve(v);
+            void req;
+          }),
+      ),
+      notifier,
+    });
+
+    const { delegation } = await service.dispatch({
+      parent: PARENT,
+      target: { agentId: 'worker' },
+      task: 't',
+      input: 'i',
+      timeoutMs: 10,
+    });
+
+    // deadline 触发 notify #1 并悬在投递中（in-flight 占位）
+    await vi.waitFor(() => expect(notifier).toHaveBeenCalledTimes(1));
+
+    // notify #1 未归时，迟到结果再走 finally notify：必须被占位守卫拦下
+    releaseChild({
+      delegationId: delegation.id,
+      status: 'completed',
+      output: 'late',
+      schemaVersion: DELEGATION_SCHEMA_VERSION,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(notifier).toHaveBeenCalledTimes(1);
+
+    // #1 投递完成后置已送达；全程只投一次
+    releaseNotify();
+    await vi.waitFor(() => expect(store.get(delegation.id)?.notified).toBe(true));
+    expect(notifier).toHaveBeenCalledTimes(1);
   });
 });
 

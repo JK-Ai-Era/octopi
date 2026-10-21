@@ -14,6 +14,7 @@ import type { Trigger } from '@octopi-agent/engine/harness/activation/types.js';
 import {
   AgentSignalSource,
   emitAgentSignal,
+  hasAgentSignalReceiver,
 } from '@octopi-agent/engine/harness/activation/sources/agent-signal.js';
 import { compileMessages } from '@octopi-agent/engine/harness/activation/compiler.js';
 import type { Delegation } from '@octopi-agent/engine/harness/collaboration/delegation/types.js';
@@ -186,6 +187,9 @@ describe('delegation notify channel', () => {
 describe('DelegateService notify', () => {
   it('fires the notifier exactly once per terminal delegation', async () => {
     const events = new DefaultEventBus();
+    // 投递器要求总线上有接收端（AgentSignalSource）；挂上后走真实投递路径
+    const source = new AgentSignalSource({ events });
+    await source.start(() => {});
     const notifier = createDelegationNotifier({ events });
     const spy = vi.fn((d: Delegation) => notifier(d));
 
@@ -219,6 +223,39 @@ describe('DelegateService notify', () => {
 
     await vi.waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
     expect(store.list()[0].notified).toBe(true);
+    await source.stop();
+  });
+
+  it('a notifier without a receiver refuses to claim delivery', () => {
+    const events = new DefaultEventBus();
+    // 总线上没有 AgentSignalSource：投递必须失败，否则会被误标已送达（断链根因）
+    const notifier = createDelegationNotifier({ events });
+    expect(() => notifier(makeDelegation())).toThrow(/no AgentSignalSource receiver/);
+  });
+});
+
+// ── hasAgentSignalReceiver 引用计数配平 ──
+
+describe('hasAgentSignalReceiver 引用计数配平', () => {
+  it('未 start / 二次 stop 不得误删兄弟 source 的接收端登记', async () => {
+    const events = new DefaultEventBus();
+    const a = new AgentSignalSource({ events });
+    await a.start(() => {});
+
+    const neverStarted = new AgentSignalSource({ events });
+    await neverStarted.stop();
+    expect(hasAgentSignalReceiver(events)).toBe(true);
+
+    await a.stop();
+    await a.stop();
+    expect(hasAgentSignalReceiver(events)).toBe(false);
+
+    // 重新挂载仍可恢复（stop → start 计数配平）
+    const b = new AgentSignalSource({ events });
+    await b.start(() => {});
+    expect(hasAgentSignalReceiver(events)).toBe(true);
+    await b.stop();
+    expect(hasAgentSignalReceiver(events)).toBe(false);
   });
 });
 
@@ -275,6 +312,15 @@ describe('wireDelegation', () => {
 
     expect(mk(undefined)?.notifyWired).toBe(false);
     expect(mk(new DefaultEventBus())?.notifyWired).toBe(true);
+  });
+
+  it('does not install the notifier when notifyPush is false (poll + hint fallback)', () => {
+    const boss = fakeAgent('boss', { callable: true, canDelegate: true, maxDepth: 2 });
+    const wiring = wireDelegation([boss] as never, {
+      events: new DefaultEventBus(),
+      notifyPush: false,
+    });
+    expect(wiring?.notifyWired).toBe(false);
   });
 
   it('attaches a delegation_status steering hook to delegating agents (§7.3)', () => {
@@ -367,6 +413,7 @@ describe('delegation_status hint', () => {
       delegation: { callable: true, canDelegate: false, maxDepth: 1 },
     });
     const store = new DelegationStore();
+    const delivered = vi.fn();
     const service = new DelegateService(
       store,
       registry,
@@ -376,7 +423,7 @@ describe('delegation_status hint', () => {
         output: 'ok',
         schemaVersion: DELEGATION_SCHEMA_VERSION,
       })),
-      {},
+      { notifier: delivered },
     );
 
     await service.dispatch({
@@ -386,8 +433,9 @@ describe('delegation_status hint', () => {
       input: 'i',
     });
 
-    // 终态 + 已 notify 后，提示不再重复（notify 通道已投递过）
+    // 终态 + notify 投递成功后，提示不再重复（notify 通道已送达）
     await vi.waitFor(() => expect(service.renderStatusHint('s-1')).toBe(''));
+    expect(delivered).toHaveBeenCalledTimes(1);
     expect(store.list()[0].notified).toBe(true);
   });
 });

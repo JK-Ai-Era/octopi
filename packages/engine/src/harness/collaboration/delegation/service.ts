@@ -87,7 +87,8 @@ export interface DelegateServiceConfig {
   maxActiveDelegationsPerSession?: number;
   /**
    * notify 投递器（P3 接 `emitAgentSignal`）。
-   * 缺省 = 不投递，委派单仍可通过 poll（`get`/`list`）取回。
+   * 缺省 = 不投递：委派单保持「未送达」，由 §7.3 状态提示与 poll
+   * （`get` 取回即 `markSurfaced`）兜底。
    */
   notifier?: DelegationNotifier;
   /**
@@ -179,6 +180,8 @@ export function intersectBudget(
  */
 export class DelegateService {
   private readonly inflight = new Map<string, AbortController>();
+  /** notify 投递中的委派单（同步占位去重；不是「已送达」标记） */
+  private readonly notifying = new Set<string>();
 
   constructor(
     private readonly store: DelegationStore,
@@ -618,20 +621,52 @@ export class DelegateService {
     });
   }
 
-  /** notify 通道触发点（§7.1）；投递器缺省时仅发本地事件 */
+  /**
+   * notify 通道触发点（§7.1）。
+   *
+   * `notified` 只在**结果真正送达父**后置位：notify 投递成功（投递器自带
+   * 接收端校验，发进空总线会抛错按失败处理），或父经 {@link markSurfaced}
+   * （delegate_get）取回。投递器缺省或投递失败时保持 false，
+   * 让 §7.3 状态提示兜底——否则通知会无声消失。
+   */
   private async notify(delegationId: string): Promise<void> {
     const record = this.store.get(delegationId);
     if (!record || !isTerminalDelegationStatus(record.status)) return;
-    // 去重（审查 P1-1）：先同步占位再投递，避免并发下同一委派单投两次
-    if (record.notified) return;
-    this.store.markNotified(delegationId);
+    if (record.notified || this.notifying.has(delegationId)) return;
+    const notifier = this.config.notifier;
+    if (!notifier) return;
 
+    // 去重（审查 P1-1）：同步占位防并发双投；占位 ≠ 已送达
+    this.notifying.add(delegationId);
     try {
-      await this.config.notifier?.(record);
-    } catch {
-      // notify 失败不得影响委派单终态（poll 通道兜底）；
-      // 这里吞掉投递异常：委派单已是终态，重试交由上层/分布式议题（O5）。
+      await notifier(record);
+      this.store.markNotified(delegationId);
+    } catch (err) {
+      // notify 失败不得影响委派单终态（poll + 状态提示兜底）。
+      // 吞掉投递异常但必须留痕——否则「没配投递器」与「每单都投递失败」无法区分；
+      // 委派单已是终态，notified 保持 false 留给提示兜底，重试交由上层/分布式议题（O5）。
+      console.warn(
+        `[Delegation] ${delegationId}: notify not delivered, un-surfaced kept for hint fallback: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    } finally {
+      this.notifying.delete(delegationId);
     }
+  }
+
+  /**
+   * 标记委派单结果已送达父（§7.3 状态提示据此消音）。
+   *
+   * 送达途径之二：父经 `delegate_get` 主动取回终态结果（工具面在返回结果前
+   * 调用）。`delegate_list` 是只读概览，不置位——列表结果可能被截断，
+   * 只有明确取回单条全文才算送达。途径之一是 notify 投递成功（服务内部置位）。
+   *
+   * @param delegationId - 委派单 ID
+   * @returns 更新后的委派单
+   */
+  markSurfaced(delegationId: string): Delegation {
+    return this.store.markNotified(delegationId);
   }
 }
 

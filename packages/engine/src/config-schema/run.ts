@@ -85,6 +85,11 @@ export const AgentRuntimeJsonConfigSchema = z.object({
       eventType: z.union([z.string(), z.array(z.string())]).optional(),
     })
     .optional(),
+  /**
+   * AgentSignalSource（agent_signal 通知）挂载三态：
+   * true=显式挂载；false=显式关闭（委派 notify 推送随之关闭，退化为 poll + 状态提示）；
+   * 缺省=委派接线时自动补挂（委派 notify 推送的接收端）。
+   */
   agentSignal: z.boolean().optional(),
 });
 

@@ -18,6 +18,7 @@ import type {
   DelegationContextMode,
   DelegationStatus,
 } from '../../../collaboration/delegation/types.js';
+import { isTerminalDelegationStatus } from '../../../collaboration/delegation/types.js';
 
 /** 委派单摘要（进 LLM 结果，字段名 snake_case 对齐其他工具） */
 function delegationSummary(d: Delegation) {
@@ -225,6 +226,8 @@ export function createDelegateListTool(service: DelegateService): RegisteredTool
         status,
         activeOnly,
       });
+      // 列表是只读概览：不 markSurfaced。结果可能被 ToolResultValidator 截断，
+      // 「标已送达」只留给明确取回单条全文的 delegate_get，宁可提示多留也不误消音
       return {
         delegations: items.map(delegationSummary),
         total: items.length,
@@ -262,7 +265,9 @@ export function createDelegateGetTool(service: DelegateService): RegisteredTool 
       if (record.parent.sessionId !== context.sessionId) {
         return { ok: false, error: `Delegation not owned by this session: ${id}` };
       }
-      return { ok: true, ...delegationSummary(record) };
+      // 终态结果经本工具进入父上下文即视为已送达（§7.3 状态提示消音）
+      const surfaced = isTerminalDelegationStatus(record.status) ? service.markSurfaced(id) : record;
+      return { ok: true, ...delegationSummary(surfaced) };
     },
   };
 }

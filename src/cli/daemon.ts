@@ -1010,13 +1010,11 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
 
   // ── Agent Runtime：按配置块挂载 Source（无 enabled 总开关；不写 schedule/escalate 即不挂）──
   const arCfg = config.agentRuntime;
-  // agentSignal：显式 true，或 escalate 已配置可用 defaultAgentId 时默认挂
-  const mountAgentSignal =
-    arCfg?.agentSignal === true || !!arCfg?.escalate?.defaultAgentId;
+  // agentSignal 三态透传（挂载策略在 Gateway：true=挂 false=显式关闭 缺省=委派接线时补挂）
   await gateway.configureAgentRuntime({
     schedule: arCfg?.schedule,
     escalate: arCfg?.escalate,
-    agentSignal: mountAgentSignal,
+    agentSignal: arCfg?.agentSignal,
   });
 
   const httpConfig = config.channels?.find((c: any) => c.type === 'http');

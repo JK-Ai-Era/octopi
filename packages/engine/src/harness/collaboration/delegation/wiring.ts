@@ -80,6 +80,12 @@ export interface DelegationRuntimeOptions {
    * Gateway 路径天然满足（共享 `gatewayBus`）；缺省 = **不接线 notify**（poll 仍可用）。
    */
   events?: EventBus;
+  /**
+   * notify 推送开关（缺省 true）。设 `false` 时不安装 notifier（即使有共享总线）——
+   * 用于接收端（`AgentSignalSource`）未挂载的部署：宁可退化为 poll + 状态提示，
+   * 也不能把发进无人监听总线的通知误标成已送达。
+   */
+  notifyPush?: boolean;
   /** 单父 session 未闭合委派上限（失控防护，§8） */
   maxActiveDelegationsPerSession?: number;
 }
@@ -127,11 +133,15 @@ export function createDelegationRuntime(
   );
 
   const delegationStore = new DelegationStore(options.events);
-  const notifyWired = Boolean(options.events);
+  const notifier =
+    options.events && options.notifyPush !== false
+      ? createDelegationNotifier({ events: options.events })
+      : undefined;
+  const notifyWired = notifier !== undefined;
 
   const service = new DelegateService(delegationStore, registry, transport, {
     maxActiveDelegationsPerSession: options.maxActiveDelegationsPerSession,
-    notifier: options.events ? createDelegationNotifier({ events: options.events }) : undefined,
+    notifier,
     // 父 session 深度：子 session 的深度 = 创建它的那张委派单的 depth（§10.4，权威查询）
     resolveParentDepth: (sessionId) => delegationStore.findDepthByChildSession(sessionId) ?? 0,
   });
