@@ -51,6 +51,8 @@ Options:
   --session <id>        llm-diff: target session (default: most recently updated)
   --dir <path>          llm-diff: wire dump root (default: ~/.octopi/logs/llm-requests)
   --limit <n>           llm-diff: number of calls to show (0 = all, default 20)
+  --cache-discount <r>  llm-diff: cache-hit price as a ratio of full price (default 0.1);
+                        used for the aging payback estimate
   --help, -h            Show this help message
 
 Examples:

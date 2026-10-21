@@ -266,6 +266,41 @@ export interface WireAgingReport {
   agedInPlace: number;
   /** 首个被老化的单元下标；无老化时 -1 */
   firstAgedIndex: number;
+  /**
+   * 本次老化净减掉的字符数（原文长度 − 指针长度，逐个被老化单元求和）
+   *
+   * 这是老化带来的**持续收益**：此后每次调用都不必再发送这些字符。
+   */
+  agedCharsSaved: number;
+}
+
+/** 老化回本判定输入 */
+export interface WireAgingPaybackInput {
+  /** 老化净减掉的字符数 */
+  agedCharsSaved: number;
+  /** 本次因断点失效而必须重算的字符数（请求尾部） */
+  burnedChars: number;
+  /** 该调用的 tokens/char（由真实 usage 推算；缺省 1/3 粗估） */
+  tokensPerChar: number;
+  /** 缓存命中价格相对全价的比例（0.1 = 一折）；0 表示无缓存 */
+  cacheDiscount: number;
+  /** 该次老化之后实际发生的调用次数（收益的真实摊薄面） */
+  callsAfter: number;
+}
+
+/** 老化回本判定结果 */
+export interface WireAgingPayback {
+  savedTokens: number;
+  burnedTokens: number;
+  /** 回本所需调用次数（Infinity = 收益为零或无缓存，永远回不来） */
+  paybackCalls: number;
+  /**
+   * 是否已由后续调用回本
+   *
+   * 老化收益是**持续性**的（此后每次调用都少读），因此以「之后实际发生了多少次调用」
+   * 对比回本点。未回本不代表亏——只要 session 还会继续，差额最终会被摊掉。
+   */
+  repaid: boolean;
 }
 
 /**
@@ -289,15 +324,50 @@ export function reportWireAging(
 
   let agedInPlace = 0;
   let firstAgedIndex = -1;
+  let agedCharsSaved = 0;
   const limit = Math.min(prevUnits.length, nextUnits.length);
   for (let i = 0; i < limit; i++) {
     if (!isPointer(prevUnits[i].text) && isPointer(nextUnits[i].text)) {
       agedInPlace += 1;
+      agedCharsSaved += prevUnits[i].text.length - nextUnits[i].text.length;
       if (firstAgedIndex < 0) firstAgedIndex = i;
     }
   }
 
-  return { prevPointers, nextPointers, agedInPlace, firstAgedIndex };
+  return { prevPointers, nextPointers, agedInPlace, firstAgedIndex, agedCharsSaved };
+}
+
+/**
+ * 估算一次老化的回本点
+ *
+ * 成本模型（把「老化」与「不老化」两条路径对比）：
+ * - 老化路径：本次调用要把失效尾部按**全价**重算一次 → 额外成本 `burned × (1 − discount)`
+ * - 不老化路径：被老化的原文此后每次调用都要重新发送，且作为热前缀按 `discount` 计价
+ *   → 每次调用节省 `saved × discount`
+ *
+ * 因此 `paybackCalls = burned × (1 − discount) / (saved × discount)`。
+ * discount=0.1（一折）时即 `9 × burned / saved`。
+ *
+ * @param input - 老化量 / 燃烧量 / 价格折扣 / 本轮调用次数
+ * @returns 回本判定；`paybackCalls` 为 Infinity 表示收益为零或无缓存
+ */
+export function estimateAgingPayback(input: WireAgingPaybackInput): WireAgingPayback {
+  const { agedCharsSaved, burnedChars, tokensPerChar, cacheDiscount, callsAfter } = input;
+  const savedTokens = agedCharsSaved * tokensPerChar;
+  const burnedTokens = burnedChars * tokensPerChar;
+
+  const discount = Math.min(Math.max(cacheDiscount, 0), 0.95);
+  const paybackCalls =
+    savedTokens > 0 && discount > 0
+      ? (burnedTokens * (1 - discount)) / (savedTokens * discount)
+      : Number.POSITIVE_INFINITY;
+
+  return {
+    savedTokens,
+    burnedTokens,
+    paybackCalls,
+    repaid: callsAfter >= paybackCalls,
+  };
 }
 
 /**

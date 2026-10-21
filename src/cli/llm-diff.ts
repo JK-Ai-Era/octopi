@@ -16,6 +16,7 @@ import {
   loadWireDumpBody,
   explainWireDivergence,
   reportWireAging,
+  estimateAgingPayback,
   type WireCallSummary,
   type WirePrefixDiff,
 } from '@octopi-agent/engine/integration/providers/wire-dump-diff.js';
@@ -23,6 +24,14 @@ import { defaultWireDumpDir } from '@octopi-agent/engine/integration/providers/w
 
 /** 默认展示的调用条数（长 session 调用数可达数百） */
 const DEFAULT_LIMIT = 20;
+
+/**
+ * 缓存命中相对全价的默认比例
+ *
+ * 各家定价不同（DeepSeek / OpenAI / Anthropic 的缓存读普遍在 5%–25%），取 0.1 作为
+ * 「一折」的中位假设；可用 `--cache-discount` 覆盖。这个值只影响回本估算，不影响比对本身。
+ */
+const DEFAULT_CACHE_DISCOUNT = 0.1;
 
 /** dump 根目录下的一个 session 目录 */
 interface SessionEntry {
@@ -95,6 +104,12 @@ export async function llmDiffCommand(args: CliArgs): Promise<void> {
   const sessionId = allCalls[0].request.sessionId ?? picked.sessionId;
   const calls = limit > 0 ? allCalls.slice(-limit) : allCalls;
 
+  // 后续调用数按**全量**索引计算：--limit 只影响展示，不应影响回本判定的摊薄面
+  const callsAfterById = new Map<string, number>();
+  allCalls.forEach((call, i) => {
+    callsAfterById.set(call.request.id, allCalls.length - 1 - i);
+  });
+
   const diffs: Array<WirePrefixDiff | null> = calls.map((call, i) => {
     const prev = i === 0 ? undefined : calls[i - 1];
     return prev ? compareWireCalls(prev, call) : null;
@@ -129,7 +144,7 @@ export async function llmDiffCommand(args: CliArgs): Promise<void> {
   console.log('');
   printTable(calls);
   console.log('');
-  printTransitions(calls, diffs, picked.dir);
+  printTransitions(calls, diffs, picked.dir, args.cacheDiscount ?? DEFAULT_CACHE_DISCOUNT, callsAfterById);
 
   const diverged = diffs.filter((d) => d?.stability === 'diverged').length;
   const appendOnly = diffs.filter((d) => d?.stability === 'append-only').length;
@@ -190,9 +205,22 @@ function bodyNote(call: WireCallSummary, oversize: boolean): string {
 }
 
 /** 逐对前缀比对 */
-function printTransitions(calls: WireCallSummary[], diffs: Array<WirePrefixDiff | null>, dir: string): void {
+function printTransitions(
+  calls: WireCallSummary[],
+  diffs: Array<WirePrefixDiff | null>,
+  dir: string,
+  cacheDiscount: number,
+  callsAfterById: Map<string, number>,
+): void {
   console.log('Prefix transitions (adjacent calls — provider cache judges the previous request prefix):');
   let printed = 0;
+
+  // 每个 run 的调用次数：仅用于「还需几次调用 ≈ 几个 run」的直观换算
+  const callsPerRun = new Map<string, number>();
+  for (const call of calls) {
+    const key = call.request.runId ?? '(none)';
+    callsPerRun.set(key, (callsPerRun.get(key) ?? 0) + 1);
+  }
 
   for (let i = 1; i < calls.length; i++) {
     const diff = diffs[i];
@@ -246,6 +274,7 @@ function printTransitions(calls: WireCallSummary[], diffs: Array<WirePrefixDiff 
       console.log(
         `        history aged into pointers: +${aging.agedInPlace} msg (total ${aging.prevPointers} → ${aging.nextPointers}), first at msg[${aging.firstAgedIndex}]`,
       );
+      printAgingPayback(calls, i, diff, aging, cacheDiscount, callsPerRun, callsAfterById);
     }
     const detail = prevBody && nextBody ? explainWireDivergence(prevBody, nextBody, d.index) : null;
     if (detail) {
@@ -259,6 +288,100 @@ function printTransitions(calls: WireCallSummary[], diffs: Array<WirePrefixDiff 
   }
 
   if (printed === 0) console.log('  (need at least two calls to compare)');
+}
+
+/**
+ * 输出老化回本判定
+ *
+ * 老化是一次性付费（重算失效尾部）+ 持续收益（此后每次调用少读）。判据是「回本需要多少次
+ * 调用」对比「之后实际发生了多少次调用」——后者是实测值，比按 turn 估算可靠（一个 turn
+ * 会跨多个 run，用 runId 分组会严重低估调用量）。
+ *
+ * @param calls - 调用列表
+ * @param index - 老化发生的调用下标（next 侧）
+ * @param diff - 该次前缀比对结果（提供实际失效字符量）
+ * @param aging - 老化统计（提供净减字符量）
+ * @param cacheDiscount - 缓存命中相对全价的比例
+ * @param callsPerRun - 各 run 的调用次数（用于「还需几轮」的直观换算）
+ * @param callsAfterById - 每次调用之后的剩余调用数
+ */
+function printAgingPayback(
+  calls: WireCallSummary[],
+  index: number,
+  diff: WirePrefixDiff,
+  aging: { agedCharsSaved: number },
+  cacheDiscount: number,
+  callsPerRun: Map<string, number>,
+  callsAfterById: Map<string, number>,
+): void {
+  const call = calls[index];
+  const request = call.request;
+
+  // tools/model 变化时整段前缀都失效，燃烧量取整个请求体
+  const burnedChars = Math.max(0, request.chars - diff.cacheableChars);
+  const tokensPerChar = estimateTokensPerChar(call);
+  const callsAfter = callsAfterById.get(request.id) ?? 0;
+
+  const payback = estimateAgingPayback({
+    agedCharsSaved: aging.agedCharsSaved,
+    burnedChars,
+    tokensPerChar,
+    cacheDiscount,
+    callsAfter,
+  });
+
+  if (!Number.isFinite(payback.paybackCalls)) {
+    console.log(
+      `        payback: saved ${compactNum(payback.savedTokens)} tok/call vs burned ${compactNum(payback.burnedTokens)} tok ` +
+        `— no positive return (cache-discount=${cacheDiscount})`,
+    );
+    return;
+  }
+
+  const verdict = payback.repaid
+    ? `repaid (${callsAfter} calls followed)`
+    : `needs ${approxTurnsText(payback.paybackCalls - callsAfter, callsPerRun, request.runId)} more`;
+  console.log(
+    `        payback: saved ${compactNum(payback.savedTokens)} tok/call vs burned ${compactNum(payback.burnedTokens)} tok ` +
+      `→ ${payback.paybackCalls.toFixed(1)} calls at ${Math.round(cacheDiscount * 100)}% cache price — ${verdict}`,
+  );
+}
+
+/**
+ * 把「还差多少次调用」换算成轮数
+ *
+ * @param remainingCalls - 还差的调用次数
+ * @param callsPerRun - 各 run 调用次数
+ * @param runId - 当前 run
+ * @returns 可读描述
+ */
+function approxTurnsText(
+  remainingCalls: number,
+  callsPerRun: Map<string, number>,
+  runId: string | undefined,
+): string {
+  const perRun = callsPerRun.get(runId ?? '(none)') ?? 0;
+  if (perRun <= 1) return `${remainingCalls.toFixed(1)} calls`;
+  return `${remainingCalls.toFixed(1)} calls (≈${(remainingCalls / perRun).toFixed(1)} runs)`;
+}
+
+/**
+ * 由真实 usage 推算 tokens/char
+ *
+ * 缺 usage（调用失败/未回填）时退回 1/3 的通用粗估，并保持与 chars 同口径。
+ *
+ * @param call - 调用摘要
+ * @returns tokens per char
+ */
+function estimateTokensPerChar(call: WireCallSummary): number {
+  const usage = call.result?.usage;
+  const promptTokens = usage
+    ? usage.inputCachedTokens + usage.inputUncachedTokens
+    : 0;
+  if (promptTokens > 0 && call.request.chars > 0) {
+    return promptTokens / call.request.chars;
+  }
+  return 1 / 3;
 }
 
 /** body 缺失的处置建议：oversize 要调大上限，裁剪需要看更近的调用 */

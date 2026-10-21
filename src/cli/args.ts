@@ -23,6 +23,8 @@ export interface CliArgs {
   dir?: string;
   /** llm-diff：展示的调用条数（0 = 全部） */
   limit?: number;
+  /** llm-diff：缓存命中相对全价的比例（0.1 = 一折），用于老化回本估算 */
+  cacheDiscount?: number;
 }
 
 /**
@@ -58,6 +60,7 @@ export function parseArgs(argv: string[] = process.argv.slice(2)): CliArgs {
   let session: string | undefined;
   let dir: string | undefined;
   let limit: number | undefined;
+  let cacheDiscount: number | undefined;
   const positional: string[] = [];
 
   for (let i = 0; i < argv.length; i++) {
@@ -127,6 +130,16 @@ export function parseArgs(argv: string[] = process.argv.slice(2)): CliArgs {
         limit = Number(raw);
         break;
       }
+      case '--cache-discount': {
+        const raw = requireFlagValue(argv, ++i, '--cache-discount');
+        // 必须是 (0, 1] 的小数：0 表示「无缓存」，会让回本估算恒为无穷，属误用
+        const parsed = Number(raw);
+        if (!/^(0?\.\d+|\d+(\.\d+)?)$/.test(raw) || parsed <= 0 || parsed > 1) {
+          throw new Error(`--cache-discount expects a ratio in (0, 1], got "${raw}"`);
+        }
+        cacheDiscount = parsed;
+        break;
+      }
       default:
         positional.push(argv[i]!);
         break;
@@ -150,5 +163,6 @@ export function parseArgs(argv: string[] = process.argv.slice(2)): CliArgs {
     session,
     dir,
     limit,
+    cacheDiscount,
   };
 }

@@ -1,3 +1,36 @@
+## v0.86.12
+
+### feat(cli): `llm-diff` 输出老化回本判定
+
+**问题**：判断「这次老化划不划得来」此前要手工算——从 dump 里取减掉的字符、燃烧的字符、tokens/char
+比率、缓存折扣和调用次数，五步缺一不可。实测中这个判断有反直觉结论（小批次净亏、大批次一轮回本），
+手工算极易得出与事实相反的结论。
+
+**成本模型**（`estimateAgingPayback`）：
+
+- 老化 = 一次性付费 + 持续收益：本次调用要把失效尾部按全价重算 → `burned × (1 − discount)`
+- 被老化的原文此后每次调用都不再发送，且本按命中价计价 → 每次节省 `saved × discount`
+- 因此 `paybackCalls = burned × (1 − discount) / (saved × discount)`；`discount=0.1` 时即 `9 × burned / saved`
+
+**摊薄面用实测值而非估算**：判据是「该次老化之后**实际**发生了多少次调用」，而不是「按 run 分组推算每轮
+调用量」。实测发现 `runId` 不等于 turn（一个 turn 会跨多个 run，本 session 有一轮 33 次调用分散在 3 个
+runId 上），按 run 分组会把调用量低估到 1，得出「需 19.8 轮」的错误结论。
+
+**输出**（仅在发生历史老化时追加）：
+
+```
+history aged into pointers: +38 msg (total 161 → 200), first at msg[374]
+payback: saved 25k tok/call vs burned 55k tok → 19.8 calls at 10% cache price — repaid (149 calls followed)
+```
+
+未回本时显示差额：`— needs 23.4 calls (≈0.7 runs) more`。
+
+**配置**：新增 `--cache-discount <ratio>`（默认 `0.1`），仅影响回本估算，不影响比对本身；校验区间 (0, 1]
+（`0` 会让回本恒为无穷，属误用）。`--limit` 只影响展示，回本判定始终按全量索引计算。
+
+**测试**：新增 5 项（回本公式、未回本判定、零老化 → Infinity、折扣单调性、`--cache-discount` 解析校验），
+共 34 项。
+
 ## v0.86.11
 
 ### fix(engine): `file_search` L1 收缩如实报告 stage，并锁定「定位符优先」契约

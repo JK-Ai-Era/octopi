@@ -227,6 +227,12 @@ dropped) or `diverged` (mid-history rewrite). A divergence reports the first dif
 character offset inside that message with prev/next snippets. `tools` changes are flagged separately because they
 invalidate the cache too, without touching the message prefix.
 
+When the divergence is caused by **history aging** (tool results rewritten as `[aged tool result · pointer]`), the report
+adds the aging cost/benefit: how many tokens the batch removed from every future call versus how many had to be
+recomputed once, and the resulting payback point in calls. `--cache-discount` (default `0.1`) sets the cache-hit price
+ratio used for that estimate. Aging pays when the batch removed enough tokens to amortise the one-off recompute — small
+batches can be net negative, which is exactly what the payback line surfaces.
+
 The dump is **off by default** (volume ≈ request bytes × calls per turn); `maxCallsPerSession` (default 200) keeps a
 per-session ring of the newest calls and compacts the index on eviction. Identity comes from the RunScope, so one
 process-wide sink serves every session that shares a provider.

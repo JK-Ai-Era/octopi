@@ -16,6 +16,7 @@ import {
 import {
   compareWireCalls,
   reportWireAging,
+  estimateAgingPayback,
   explainWireDivergence,
   listWireDumpSessions,
   loadWireDumpBody,
@@ -681,6 +682,56 @@ describe('wire dump — 老化（原文 → 指针）识别', () => {
   });
 });
 
+describe('wire dump — 老化回本判定', () => {
+  test('回本点 = burned × (1−d) / (saved × d)', () => {
+    // 省 1000 tok/call、烧 9000 tok、一折：9×9000/1000 = 81 次调用
+    const payback = estimateAgingPayback({
+      agedCharsSaved: 3000,
+      burnedChars: 27000,
+      tokensPerChar: 1 / 3,
+      cacheDiscount: 0.1,
+      callsAfter: 100,
+    });
+    expect(payback.savedTokens).toBeCloseTo(1000, 0);
+    expect(payback.burnedTokens).toBeCloseTo(9000, 0);
+    expect(payback.paybackCalls).toBeCloseTo(81, 0);
+    expect(payback.repaid).toBe(true);
+  });
+
+  test('后续调用不足时判为未回本', () => {
+    const payback = estimateAgingPayback({
+      agedCharsSaved: 3000,
+      burnedChars: 27000,
+      tokensPerChar: 1 / 3,
+      cacheDiscount: 0.1,
+      callsAfter: 10,
+    });
+    expect(payback.paybackCalls).toBeCloseTo(81, 0);
+    expect(payback.repaid).toBe(false);
+  });
+
+  test('老化量为零 → 永远回不来（Infinity）', () => {
+    const payback = estimateAgingPayback({
+      agedCharsSaved: 0,
+      burnedChars: 5000,
+      tokensPerChar: 1 / 3,
+      cacheDiscount: 0.1,
+      callsAfter: 999,
+    });
+    expect(payback.paybackCalls).toBe(Number.POSITIVE_INFINITY);
+    expect(payback.repaid).toBe(false);
+  });
+
+  test('折扣越大越容易回本（缓存越便宜，重算的机会成本越高）', () => {
+    const base = { agedCharsSaved: 3000, burnedChars: 9000, tokensPerChar: 1 / 3, callsAfter: 0 };
+    const cheap = estimateAgingPayback({ ...base, cacheDiscount: 0.05 });
+    const dear = estimateAgingPayback({ ...base, cacheDiscount: 0.5 });
+    expect(cheap.paybackCalls).toBeGreaterThan(dear.paybackCalls);
+    // 五折：(1-0.5)/0.5 = 1 → burnedTok 3000 / savedTok 1000 = 3 次
+    expect(dear.paybackCalls).toBeCloseTo(3, 1);
+  });
+});
+
 describe('llm-diff — CLI 边界', () => {
   test('--limit 接受 0 与正整数，拒绝非法值', () => {
     expect(parseArgs(['llm-diff', '--limit', '0']).limit).toBe(0);
@@ -688,6 +739,16 @@ describe('llm-diff — CLI 边界', () => {
     // 负值会被 llm-diff 当成「全部」，'12abc' 会被 parseInt 截成 12：都不能静默接受
     expect(() => parseArgs(['llm-diff', '--limit', '-5'])).toThrow(/--limit/);
     expect(() => parseArgs(['llm-diff', '--limit', '12abc'])).toThrow(/--limit/);
+  });
+
+  test('--cache-discount 只接受 (0, 1] 的比例', () => {
+    expect(parseArgs(['llm-diff', '--cache-discount', '0.1']).cacheDiscount).toBe(0.1);
+    expect(parseArgs(['llm-diff', '--cache-discount', '1']).cacheDiscount).toBe(1);
+    // 0 表示无缓存：回本估算将恒为 Infinity，属误用；>1 与非法串同理
+    expect(() => parseArgs(['llm-diff', '--cache-discount', '0'])).toThrow(/--cache-discount/);
+    expect(() => parseArgs(['llm-diff', '--cache-discount', '1.5'])).toThrow(/--cache-discount/);
+    expect(() => parseArgs(['llm-diff', '--cache-discount', 'cheap'])).toThrow(/--cache-discount/);
+    expect(() => parseArgs(['llm-diff', '--cache-discount'])).toThrow(/--cache-discount/);
   });
 
   test('--session / --dir 缺值时显式报错，不静默回退到最近 session', () => {
