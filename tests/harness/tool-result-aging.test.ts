@@ -209,6 +209,21 @@ describe('tool-result-aging plan', () => {
     expect(p1).toContain('do NOT re-run');
   });
 
+  it('命令头部不被内容预算挤出（多命令累加也不整体省略）', () => {
+    // 回归：command 头部原本参与内容预算，多条累加后会把头部整体省略成 …[105 chars]
+    const out = agedToolArgDigest(
+      'shell',
+      {
+        command: `cd /repo && npm test -- ${'a'.repeat(60)}`,
+        purpose: 'run tests',
+      },
+      OPTS({ maxAgedArgChars: 120 }),
+    ) as Record<string, unknown>;
+    expect(String(out.command).startsWith('cd /repo && npm test')).toBe(true);
+    // 85 字符 ≤ 头部上限 → 原样保留；关键是不能变成整体省略标记
+    expect(String(out.command)).not.toMatch(/^…\[\d+ chars\]$/);
+  });
+
   it('定位字段全保：path/pattern/glob 与命令头部不被省略（唯一锚点）', () => {
     const args = {
       path: '/Users/jk/Projects/octopi/packages/engine/src/integration/providers/wire-dump-diff.ts',

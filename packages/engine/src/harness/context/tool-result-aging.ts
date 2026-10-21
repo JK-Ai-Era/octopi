@@ -315,11 +315,11 @@ export function agedToolArgDigest(name: string, args: unknown, opts: ToolResultA
   // 若计入预算，file_edit 这类调用会退化成「看不到改了哪个文件」）。
   const contentChars = (): number =>
     safeJson(
-      Object.fromEntries(Object.entries(out).filter(([k]) => !isLocatorField(k))),
+      Object.fromEntries(Object.entries(out).filter(([k]) => !ANCHOR_FIELDS.has(k))),
     ).length;
 
   const contentEntries = entries
-    .filter((e) => !isLocatorField(e.k))
+    .filter((e) => !ANCHOR_FIELDS.has(e.k))
     .sort((a, b) => b.size - a.size || (a.k < b.k ? -1 : a.k > b.k ? 1 : 0));
   for (const e of contentEntries) {
     if (contentChars() <= opts.maxAgedArgChars) break;
@@ -348,6 +348,14 @@ function elidedMarker(chars: number): string {
  */
 const LOCATOR_FIELDS = new Set(['path', 'file', 'glob', 'pattern', 'cwd']);
 
+/**
+ * 锚点字段：不占用内容预算（否则定位信息会被内容载荷挤出）
+ *
+ * 定位字段与命令字段都属锚点——`command` 头部回答「跑了什么」，
+ * 若让它和 `old_text` 之类抢同一个预算，多条命令一累加就会把头部整体省略掉。
+ */
+const ANCHOR_FIELDS = new Set([...LOCATOR_FIELDS, 'command', 'cmd']);
+
 /** 定位字段全保上限（超长的罕见路径才会退化为标记） */
 const LOCATOR_KEEP_CHARS = 200;
 
@@ -372,7 +380,9 @@ function isLocatorField(key: string): boolean {
 function digestArgValue(key: string, value: unknown, size: number): unknown {
   if (size <= ARG_VALUE_KEEP_CHARS) return value;
   if (isLocatorField(key) && size <= LOCATOR_KEEP_CHARS) return value;
-  if (COMMAND_FIELDS.has(key) && typeof value === 'string' && value.length > COMMAND_HEAD_CHARS) {
+  if (COMMAND_FIELDS.has(key) && typeof value === 'string') {
+    // 短命令原样保留；长命令保留头部（头部才是「跑了什么」的判据）
+    if (value.length <= COMMAND_HEAD_CHARS) return value;
     return `${value.slice(0, COMMAND_HEAD_CHARS)}…[+${value.length - COMMAND_HEAD_CHARS} chars]`;
   }
   return elidedMarker(size);
