@@ -89,7 +89,7 @@ interface SearchOutputCap {
   stages: Array<'context_lines' | 'content_lines' | 'preview_cap'>;
   /** 收缩前 matches 的 JSON 字符长度 */
   rawLength: number;
-  /** matches 清单体预算（binding.maxReturnChars） */
+  /** matches 清单体预算（binding.maxReturnChars；定位符优先，必要时可超出） */
   budgetChars: number;
   /** content 预览行字符上限 */
   contentPreviewChars: number;
@@ -400,6 +400,9 @@ export function createFileSearchTool(options?: { summary?: ToolSummarySupport })
 
       // F1-B1：L1 结构化硬顶（零 LLM）。定位符（file+line）永远全保，只收缩预览体；
       // 不走字符串 gate，避免截断 JSON 丢掉尾部定位符。
+      // 注：预算只约束 matches 清单体；matchedFiles/diagnostics/hints 不进预算。
+      // file_search 不经过外层 applyToolOutputGate（否则会按字符腰斩 JSON），
+      // 因此超出预算是安全的——设计上定位符优先于预算。
       const binding = resolveSupportBinding('file_search', options?.summary, DEFAULT_MAX_RETURN_CHARS);
       const shrunk = shrinkMatchesForBudget(allMatches, binding.maxReturnChars);
       if (shrunk.cap) {
@@ -875,18 +878,23 @@ function shrinkMatchesForBudget(
   }
 
   // 阶段 2：content 行截到 contentPreviewChars（超长行是单条膨胀元凶）
-  current = current.map((m) =>
-    m.content.length > contentPreviewChars
-      ? {
-          file: m.file,
-          line: m.line,
-          content: `${m.content.slice(0, contentPreviewChars)}${CONTENT_TRUNCATED_MARK}`,
-        }
-      : m,
-  );
-  stages.push('content_lines');
-  if (JSON.stringify(current).length <= budgetChars) {
-    return { matches: current, cap: makeCap(current.length) };
+  // 只在真的截断了行时才计入 stages：否则 hint 会谎报 content_lines，
+  // 让调用方误以为要重跑窄命令拿回完整行（实际是被省略的预览，应 file_read）。
+  const contentTruncated = current.some((m) => m.content.length > contentPreviewChars);
+  if (contentTruncated) {
+    current = current.map((m) =>
+      m.content.length > contentPreviewChars
+        ? {
+            file: m.file,
+            line: m.line,
+            content: `${m.content.slice(0, contentPreviewChars)}${CONTENT_TRUNCATED_MARK}`,
+          }
+        : m,
+    );
+    stages.push('content_lines');
+    if (JSON.stringify(current).length <= budgetChars) {
+      return { matches: current, cap: makeCap(current.length) };
+    }
   }
 
   // 阶段 3：预览只留前 K 条；file+line 紧凑清单全保

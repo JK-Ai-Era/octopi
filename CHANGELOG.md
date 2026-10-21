@@ -1,3 +1,27 @@
+## v0.86.11
+
+### fix(engine): `file_search` L1 收缩如实报告 stage，并锁定「定位符优先」契约
+
+**背景**：B1（源头 L1 机械硬顶）已在此前版本落地——`file_search` 内部做结构化收缩（剥上下文行 →
+content 截 200 → 预览只留前 K 条，file+line 全保），且**不经过**外层 `applyToolOutputGate`
+（否则会按字符腰斩 JSON 丢定位符）。本次核对该实现时发现两个问题：
+
+**问题 1（真缺陷）**：阶段 2 无条件 `stages.push('content_lines')`。当所有 content 行都短于 200
+字符时，阶段 2 实际什么都没改，却仍被记入 `stages`，于是 hint 谎报
+`L1 output cap applied (content_lines+preview_cap)`。这会把调用方引向「重跑窄命令拿回完整行」，
+而真实情况是预览被省略、应当 `file_read` 具体文件。已改为仅在确有行被截断时记录。
+
+**问题 2（文档缺失）**：预算语义（只约束 matches 清单体，`matchedFiles`/`diagnostics`/`hints`
+不计入；超出预算是安全且有意的取舍）此前仅存在于实现细节中。补充注释与
+`budgetChars` 字段说明，避免后续把「超出预算」误当 bug 去收紧，从而牺牲定位符。
+
+**测试**：新增 2 项——stage 不谎报（短行场景只应出现 `preview_cap`）、定位符在预算装不下时
+仍全保（有意超预算）。合计 10 项。
+
+**已知边界（实测）**：该 session 中 `file_search` 32 条、仅 1 次触发结构化收缩（最长 7726 < 8000）；
+`shell` 107 条、1 次触发 L1（8000）；`file_read` 60 条、0 次（阈值 36000）。即 B1 已生效但触发率低，
+**当前长上下文的主要来源是条数而非单条大小**。
+
 ## v0.86.10
 
 ### feat(cli): `llm-diff` 区分单点改写与历史批量老化

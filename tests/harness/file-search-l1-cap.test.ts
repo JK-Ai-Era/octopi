@@ -226,4 +226,50 @@ describe('file_search L1 output cap', () => {
     expect(result.outputCap.previewKept).toBe(0);
     expect(result.matches.every((m: any) => typeof m.line === 'number')).toBe(true);
   });
+
+  it('should not claim the content_lines stage when no line was actually truncated', async () => {
+    // 每行 ~150 字符 < contentPreviewChars(200)：阶段 2 无事可做，只剩 preview_cap。
+    // 若谎报 content_lines，hint 会误导调用方去重跑窄命令，而真正需要的是 file_read。
+    let text = '';
+    for (let i = 0; i < 60; i++) text += `hitme row ${String(i).padStart(2, '0')} ${'y'.repeat(120)}\n`;
+    await writeFile(join(tmpDir, 'short-lines.txt'), text);
+
+    const tool = createFileSearchTool({
+      summary: { toolBindings: { file_search: { maxReturnChars: 4000 } } },
+    });
+    const result = (await tool.handler(
+      { pattern: 'hitme', path: tmpDir, max_results: 200 },
+      makeContext({ cwd: tmpDir }),
+    )) as any;
+
+    expect(result.outputCap.applied).toBe(true);
+    expect(result.outputCap.stages).toEqual(['preview_cap']);
+    expect(result.outputCap.stages).not.toContain('content_lines');
+    expect(result.matches.some((m: any) => m.content.includes('…[truncated]'))).toBe(false);
+    const capHint = result.hints.find((h: string) => h.includes('L1 output cap')) as string;
+    expect(capHint).toContain('preview_cap');
+    expect(capHint).not.toContain('content_lines');
+  });
+
+  it('should preserve all locators even when they alone exceed the budget', async () => {
+    // 预算小到连定位符都装不下：设计明确「定位符优先于预算」——
+    // 允许超出预算，但每条 file+line 必须完整保留。
+    let text = '';
+    for (let i = 0; i < 60; i++) text += `hitme row ${String(i).padStart(2, '0')} ${'y'.repeat(120)}\n`;
+    await writeFile(join(tmpDir, 'over-budget.txt'), text);
+
+    const tool = createFileSearchTool({
+      summary: { toolBindings: { file_search: { maxReturnChars: 1200 } } },
+    });
+    const result = (await tool.handler(
+      { pattern: 'hitme', path: tmpDir, max_results: 200 },
+      makeContext({ cwd: tmpDir }),
+    )) as any;
+
+    expect(result.outputCap.previewKept).toBe(0);
+    const locators = result.matches.map((m: any) => `${m.file}:${m.line}`);
+    expect(new Set(locators).size).toBe(60);
+    // 预览全省略后仍可能超出预算——这是有意的取舍，不是 bug
+    expect(result.matches.every((m: any) => m.content === '…[preview omitted]')).toBe(true);
+  });
 });
