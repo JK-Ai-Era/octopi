@@ -191,7 +191,7 @@ describe('DelegationStore', () => {
     expect(d.context).toBe('clean');
     expect(d.cancelable).toBe(true);
     expect(d.cascade).toBe(false);
-    expect(d.notified).toBe(false);
+    expect(d.deliveryState).toBe('pending');
     expect(d.schemaVersion).toBe(DELEGATION_SCHEMA_VERSION);
   });
 
@@ -223,7 +223,34 @@ describe('DelegationStore', () => {
     expect(() => store.update('del-nope', { status: 'running' })).toThrow(/not found/);
   });
 
-  it('filters by parent session, status, activeOnly, unnotifiedOnly', () => {
+  it('送达状态迁移发射 delegation.delivery_state 事件', async () => {
+    const { DefaultEventBus } = await import('@octopi-agent/core/primitives/event-bus.js');
+    const { DelegationEvents } = await import(
+      '@octopi-agent/engine/harness/collaboration/delegation/types.js'
+    );
+    const events = new DefaultEventBus();
+    const seen: string[] = [];
+    events.on(DelegationEvents.DELIVERY_STATE_CHANGED, (e) => {
+      seen.push(
+        ((e as { data?: { delegation?: { deliveryState?: string } } }).data?.delegation ?? {})
+          .deliveryState ?? '?',
+      );
+    });
+    const store = new DelegationStore(events);
+    const d = store.create({
+      parent: { agentId: 'main', sessionId: 's-1', runId: 'r-1' },
+      target: { agentId: 'worker' },
+      task: 't',
+      input: 'i',
+    });
+    store.markDelivering(d.id);
+    store.markSurfaced(d.id);
+    store.markUnsurfaced(d.id);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(seen).toEqual(['delivering', 'surfaced', 'pending']);
+  });
+
+  it('filters by parent session, status, activeOnly, unsurfacedOnly', () => {
     const store = new DelegationStore();
     const a = store.create({ parent: PARENT, target: { agentId: 'worker' }, task: 'a', input: 'i' });
     store.create({
@@ -238,10 +265,10 @@ describe('DelegationStore', () => {
     expect(store.list({ parentSessionId: 's-2' })).toHaveLength(1);
     expect(store.list({ activeOnly: true })).toHaveLength(2);
     expect(store.list({ status: 'queued' })).toHaveLength(1);
-    expect(store.list({ unnotifiedOnly: true })).toHaveLength(2);
+    expect(store.list({ unsurfacedOnly: true })).toHaveLength(2);
 
-    store.markNotified(a.id);
-    expect(store.list({ unnotifiedOnly: true })).toHaveLength(1);
+    store.markSurfaced(a.id);
+    expect(store.list({ unsurfacedOnly: true })).toHaveLength(1);
   });
 
   it('counts by status per parent session', () => {
@@ -565,7 +592,7 @@ describe('DelegateService', () => {
     const record = store.get(delegation.id)!;
     expect(record.status).toBe('completed');
     // 未送达不置位：终态留在状态提示里兜底，而不是无声消失
-    expect(record.notified).toBe(false);
+    expect(record.deliveryState).toBe('pending');
     expect(service.renderStatusHint(PARENT.sessionId)).toContain('1 completed');
   });
 
@@ -580,7 +607,7 @@ describe('DelegateService', () => {
     });
 
     await vi.waitFor(() => expect(store.get(delegation.id)?.status).toBe('completed'));
-    expect(store.get(delegation.id)?.notified).toBe(false);
+    expect(store.get(delegation.id)?.deliveryState).toBe('pending');
     expect(service.renderStatusHint(PARENT.sessionId)).toContain('1 completed');
 
     // 父经 poll 取回（markSurfaced）后，提示消音
@@ -628,6 +655,37 @@ describe('DelegateService', () => {
     expect(store.get(delegation.id)?.error).toContain('late result dropped');
   });
 
+  it('delivering 期间提示不消音，surfaced 才消音（异步投递窗口回归钉）', async () => {
+    let release!: () => void;
+    const { service, store } = makeService({
+      transport: makeOkTransport(),
+      notifier: () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    });
+
+    const { delegation } = await service.dispatch({
+      parent: PARENT,
+      target: { agentId: 'worker' },
+      task: 't',
+      input: 'i',
+    });
+
+    // 投递进行中（delivering）：不算送达，提示保持点亮
+    await vi.waitFor(() =>
+      expect(store.get(delegation.id)?.deliveryState).toBe('delivering'),
+    );
+    expect(service.renderStatusHint(PARENT.sessionId)).toContain('1 completed');
+
+    // 投递成功 → surfaced → 提示消音
+    release();
+    await vi.waitFor(() =>
+      expect(store.get(delegation.id)?.deliveryState).toBe('surfaced'),
+    );
+    expect(service.renderStatusHint(PARENT.sessionId)).toBe('');
+  });
+
   it('an in-flight notify suppresses a concurrent second entry (no double delivery)', async () => {
     let releaseNotify!: () => void;
     const notifier = vi.fn(
@@ -671,7 +729,7 @@ describe('DelegateService', () => {
 
     // #1 投递完成后置已送达；全程只投一次
     releaseNotify();
-    await vi.waitFor(() => expect(store.get(delegation.id)?.notified).toBe(true));
+    await vi.waitFor(() => expect(store.get(delegation.id)?.deliveryState).toBe('surfaced'));
     expect(notifier).toHaveBeenCalledTimes(1);
   });
 });

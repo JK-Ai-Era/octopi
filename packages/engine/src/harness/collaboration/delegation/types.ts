@@ -109,6 +109,9 @@ export interface DelegationParentRef {
   runId: string;
 }
 
+/** 结果送达父的状态机（§7.1 送达语义） */
+export type DelegationDeliveryState = 'pending' | 'delivering' | 'surfaced';
+
 /**
  * 委派单 —— 一次委派的全程记录
  *
@@ -165,11 +168,12 @@ export interface Delegation {
   cascade: boolean;
 
   /**
-   * 结果是否已送达父（§7.3 提示去重）：notify 投递成功或父经 delegate_get
-   * 全文取回（markSurfaced）后置位；dispatch 被丢时回滚（markUndelivered）。
-   * 字段名沿用 notified（历史契约），语义是 surfaced（详见 tools summary）。
+   * 结果送达父的状态（§7.3 提示去重，§7.1 送达回执）：
+   * - `pending`：未送达（投递未开始 / 失败 / 被丢回滚）
+   * - `delivering`：投递进行中（乐观占位；此间提示保持点亮）
+   * - `surfaced`：已送达（notify 投递成功或父经 delegate_get 全文取回）
    */
-  notified: boolean;
+  deliveryState: DelegationDeliveryState;
 
   schemaVersion: number;
 }
@@ -289,8 +293,8 @@ export const DelegationEvents = {
   CANCELLED: 'delegation.cancelled',
   /** 终态：timeout */
   TIMEOUT: 'delegation.timeout',
-  /** notify 已投递到父 session */
-  NOTIFIED: 'delegation.notified',
+  /** 送达状态迁移（delivering / surfaced / 回滚 pending） */
+  DELIVERY_STATE_CHANGED: 'delegation.delivery_state',
 } as const;
 
 /** 委派事件类型字面量 */

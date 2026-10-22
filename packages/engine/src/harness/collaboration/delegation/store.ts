@@ -26,6 +26,7 @@ import type {
   DelegationParentRef,
   DelegationStatus,
   DelegationTarget,
+  DelegationDeliveryState,
 } from './types.js';
 import {
   DELEGATION_SCHEMA_VERSION,
@@ -64,7 +65,7 @@ export interface UpdateDelegationPatch {
   startedAt?: number;
   completedAt?: number;
   deadlineAt?: number;
-  notified?: boolean;
+  deliveryState?: DelegationDeliveryState;
 }
 
 /** list 过滤 */
@@ -74,8 +75,8 @@ export interface DelegationListFilter {
   status?: DelegationStatus | DelegationStatus[];
   /** 仅未闭合（queued + running） */
   activeOnly?: boolean;
-  /** 仅未投递 notify 的（§7.3 状态提示去重） */
-  unnotifiedOnly?: boolean;
+  /** 仅结果未送达的（§7.3 状态提示去重；delivering 视为未送达） */
+  unsurfacedOnly?: boolean;
 }
 
 function now(): number {
@@ -135,7 +136,7 @@ export class DelegationStore {
       deadlineAt: input.deadlineAt,
       cancelable: input.cancelable ?? true,
       cascade: input.cascade ?? false,
-      notified: false,
+      deliveryState: 'pending',
       schemaVersion: DELEGATION_SCHEMA_VERSION,
     };
 
@@ -188,7 +189,10 @@ export class DelegationStore {
     if (patch.startedAt !== undefined) record.startedAt = patch.startedAt;
     if (patch.completedAt !== undefined) record.completedAt = patch.completedAt;
     if (patch.deadlineAt !== undefined) record.deadlineAt = patch.deadlineAt;
-    if (patch.notified !== undefined) record.notified = patch.notified;
+    if (patch.deliveryState !== undefined) {
+      record.deliveryState = patch.deliveryState;
+      this.emit(DelegationEvents.DELIVERY_STATE_CHANGED, record);
+    }
 
     // 进入终态时补 completedAt（若调用方未给）
     if (patch.status && isTerminalDelegationStatus(patch.status) && record.completedAt == null) {
@@ -224,8 +228,8 @@ export class DelegationStore {
     if (filter?.activeOnly) {
       results = results.filter((r) => !isTerminalDelegationStatus(r.status));
     }
-    if (filter?.unnotifiedOnly) {
-      results = results.filter((r) => !r.notified);
+    if (filter?.unsurfacedOnly) {
+      results = results.filter((r) => r.deliveryState !== 'surfaced');
     }
 
     return results.sort((a, b) => a.createdAt - b.createdAt).map((r) => ({ ...r }));
@@ -271,25 +275,37 @@ export class DelegationStore {
   }
 
   /**
-   * 标记 notify 已投递（§7.3 去重）
+   * 标记投递进行中（§7.1 乐观占位，pending → delivering）。
+   * 兼作并发去重位：投递期间同单的重复 notify 入口直接返回。
    *
    * @param delegationId - 委派单 ID
    * @returns 更新后的委派单
    */
-  markNotified(delegationId: string): Delegation {
-    return this.update(delegationId, { notified: true });
+  markDelivering(delegationId: string): Delegation {
+    return this.update(delegationId, { deliveryState: 'delivering' });
   }
 
   /**
-   * 回滚「已送达」标记（§7.1 送达回执）——notify 投递后 dispatch 被丢
+   * 标记结果已送达父（→ surfaced，§7.3 去重）：notify 投递成功
+   * 或父经 delegate_get 全文取回。
+   *
+   * @param delegationId - 委派单 ID
+   * @returns 更新后的委派单
+   */
+  markSurfaced(delegationId: string): Delegation {
+    return this.update(delegationId, { deliveryState: 'surfaced' });
+  }
+
+  /**
+   * 回滚送达标记（→ pending，§7.1 送达回执）——投递失败或 dispatch 被丢
    * （`runtime.trigger.dropped`）时调用，让 §7.3 提示重新兜底。
    * 回滚只在推断安全方向上发生：宁可提示多亮一次（父 get 消音），不可丢结果。
    *
    * @param delegationId - 委派单 ID
    * @returns 更新后的委派单
    */
-  markUndelivered(delegationId: string): Delegation {
-    return this.update(delegationId, { notified: false });
+  markUnsurfaced(delegationId: string): Delegation {
+    return this.update(delegationId, { deliveryState: 'pending' });
   }
 
   private eventForStatus(status: DelegationStatus): string {

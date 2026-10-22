@@ -54,7 +54,7 @@ function makeDelegation(overrides: Partial<Delegation> = {}): Delegation {
     createdAt: Date.now(),
     cancelable: true,
     cascade: false,
-    notified: false,
+    deliveryState: 'pending',
     schemaVersion: DELEGATION_SCHEMA_VERSION,
     ...overrides,
   };
@@ -222,7 +222,7 @@ describe('DelegateService notify', () => {
     });
 
     await vi.waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
-    expect(store.list()[0].notified).toBe(true);
+    expect(store.list()[0].deliveryState).toBe('surfaced');
     await source.stop();
   });
 
@@ -259,7 +259,12 @@ describe('hasAgentSignalReceiver 引用计数配平', () => {
   });
 });
 
-// ── 送达回执回滚（§7.1）：dispatch 被丢 → notified 回滚、提示恢复 ──
+// 微任务/事件链落定
+async function settle(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 20));
+}
+
+// ── 送达回执回滚（§7.1）：dispatch 被丢 → 送达标记回滚、提示恢复 ──
 
 describe('送达回执回滚（runtime.trigger.dropped）', () => {
   it('真实 notify 时序下 dispatch 无目标被丢 → notified 最终 false、提示兜底', async () => {
@@ -288,7 +293,7 @@ describe('送达回执回滚（runtime.trigger.dropped）', () => {
 
     // 全真时序：建单 → 子跑失败 → notify（先乐观置位再投递）→ signal →
     // dispatch → boss 未注册进 activation runtime → no_agent 丢弃 → 回滚。
-    // 禁止手工 markNotified 预置——那会掩盖「dropped 先于置位到达」的真实竞态
+    // 禁止手工预置送达标记——那会掩盖「dropped 先于置位到达」的真实竞态
     //（P0 回归：旧实现下本用例 notified 会停在 true）
     const { delegation } = await wiring.service.dispatch({
       parent: { agentId: 'boss', sessionId: 's-parent', runId: 'r-1' },
@@ -302,13 +307,66 @@ describe('送达回执回滚（runtime.trigger.dropped）', () => {
       ),
     );
     await vi.waitFor(() =>
-      expect(wiring.delegationStore.get(delegation.id)?.notified).toBe(false),
+      expect(wiring.delegationStore.get(delegation.id)?.deliveryState).toBe('pending'),
     );
     expect(wiring.service.renderStatusHint('s-parent')).not.toBe('');
     // 正向对照：dropped 确实带着本单的 delegationId 发生过（否则「从未投递」
     // 也会让 notified=false 成立，掩盖掉回滚本身失效的回归）
     expect(droppedIds).toContain(delegation.id);
     await runtime.stop();
+  });
+
+  it('fan-out 部分丢弃不回滚（有目标已受理即视为部分送达）', async () => {
+    const events = new DefaultEventBus();
+    const boss = fakeAgent('boss', { callable: true, canDelegate: true, maxDepth: 2 });
+    const wiring = wireDelegation([boss] as never, { events })!;
+    const d = wiring.delegationStore.create({
+      parent: { agentId: 'boss', sessionId: 's-parent', runId: 'r-1' },
+      target: { agentId: 'worker' },
+      task: 't',
+      input: 'i',
+    });
+    wiring.delegationStore.update(d.id, { status: 'completed', output: 'ok' });
+    wiring.delegationStore.markSurfaced(d.id);
+
+    events.emit({
+      type: 'runtime.trigger.dropped',
+      timestamp: Date.now(),
+      data: {
+        reason: 'fanout_partial_failure',
+        triggerRef: { id: 't-fan', metadata: { delegationId: d.id } },
+        results: [{ agentId: 'x', status: 'ran' }],
+      },
+    } as never);
+    await settle();
+    // 部分目标已 run（消息已进其上下文）→ 保持已送达
+    expect(wiring.delegationStore.get(d.id)?.deliveryState).toBe('surfaced');
+  });
+
+  it('dispose 后送达回执订阅释放，dropped 不再回滚', async () => {
+    const events = new DefaultEventBus();
+    const boss = fakeAgent('boss', { callable: true, canDelegate: true, maxDepth: 2 });
+    const wiring = wireDelegation([boss] as never, { events })!;
+    const d = wiring.delegationStore.create({
+      parent: { agentId: 'boss', sessionId: 's-parent', runId: 'r-1' },
+      target: { agentId: 'worker' },
+      task: 't',
+      input: 'i',
+    });
+    wiring.delegationStore.update(d.id, { status: 'completed', output: 'ok' });
+    wiring.delegationStore.markSurfaced(d.id);
+
+    wiring.dispose();
+    events.emit({
+      type: 'runtime.trigger.dropped',
+      timestamp: Date.now(),
+      data: {
+        reason: 'no_agent',
+        triggerRef: { id: 't-x', metadata: { delegationId: d.id } },
+      },
+    } as never);
+    await settle();
+    expect(wiring.delegationStore.get(d.id)?.deliveryState).toBe('surfaced');
   });
 
   it('无关 dropped 不回滚：无 delegationId、不同单、未置位的单', async () => {
@@ -333,18 +391,18 @@ describe('送达回执回滚（runtime.trigger.dropped）', () => {
       });
 
     const d1 = mk();
-    wiring.delegationStore.markNotified(d1.id);
+    wiring.delegationStore.markSurfaced(d1.id);
     // 无 delegationId → 忽略；不同 delegationId → 不得误伤 d1
     drop({ triggerRef: { id: 't1', metadata: {} } });
     drop({ triggerRef: { id: 't2', metadata: { delegationId: 'del-other' } } });
     await new Promise((resolve) => setTimeout(resolve, 10));
-    expect(wiring.delegationStore.get(d1.id)?.notified).toBe(true);
+    expect(wiring.delegationStore.get(d1.id)?.deliveryState).toBe('surfaced');
 
     // 未置位的单：dropped 不得无中生有（仍 false，不抛）
     const d2 = mk();
     drop({ triggerRef: { id: 't3', metadata: { delegationId: d2.id } } });
     await new Promise((resolve) => setTimeout(resolve, 10));
-    expect(wiring.delegationStore.get(d2.id)?.notified).toBe(false);
+    expect(wiring.delegationStore.get(d2.id)?.deliveryState).toBe('pending');
   });
 });
 
@@ -525,6 +583,6 @@ describe('delegation_status hint', () => {
     // 终态 + notify 投递成功后，提示不再重复（notify 通道已送达）
     await vi.waitFor(() => expect(service.renderStatusHint('s-1')).toBe(''));
     expect(delivered).toHaveBeenCalledTimes(1);
-    expect(store.list()[0].notified).toBe(true);
+    expect(store.list()[0].deliveryState).toBe('surfaced');
   });
 });

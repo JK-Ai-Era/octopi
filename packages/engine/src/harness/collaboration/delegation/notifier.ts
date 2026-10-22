@@ -73,7 +73,7 @@ export function delegationReason(delegation: Delegation): string {
  *
  * 投递前提：总线上有存活的 `AgentSignalSource` 接收端。`bus.emit` 对有无监听者
  * 零反馈，不校验就会把发进空总线的通知误标已送达（2026-10-22 断链根因）。
- * 无接收端时抛出，由 `DelegateService.notify` 按投递失败处理（留 `notified=false`
+ * 无接收端时抛出，由 `DelegateService.notify` 按投递失败处理（留 `deliveryState` 为 pending
  * 给状态提示兜底并打 warn）。
  *
  * @param config - 事件总线与渲染器

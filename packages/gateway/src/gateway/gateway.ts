@@ -1004,6 +1004,11 @@ export class Gateway {
     this.cancelAllPendingHitl();
     this.sessionSchedules?.dispose();
     this.sessionSchedules = undefined;
+    // 委派运行时持有送达回执订阅（常驻 gatewayBus）：停机回收 + 清缓存，
+    // 允许下次 start/接线重建（否则重复创建会累积订阅闭包）
+    this.delegationRuntime?.dispose();
+    this.delegationRuntime = undefined;
+    this.delegationRuntimePromise = undefined;
     // 进程退出：按 onClose 收掉所有残留 turn undo（缺省 commit）
     try {
       const { resolveSessionUndoOnClose, resolveSessionUndoPaths } = await import(

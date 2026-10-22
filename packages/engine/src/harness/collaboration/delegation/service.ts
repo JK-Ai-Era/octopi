@@ -180,9 +180,6 @@ export function intersectBudget(
  */
 export class DelegateService {
   private readonly inflight = new Map<string, AbortController>();
-  /** notify 投递中的委派单（同步占位去重；不是「已送达」标记） */
-  private readonly notifying = new Set<string>();
-
   constructor(
     private readonly store: DelegationStore,
     private readonly registry: AgentRegistry,
@@ -368,11 +365,11 @@ export class DelegateService {
   renderStatusHint(parentSessionId: string): string {
     const counts = this.store.countByStatus(parentSessionId);
     const active = counts.queued + counts.running;
-    const doneUnnotified = this.store
-      .list({ parentSessionId, unnotifiedOnly: true })
+    const doneUnsurfaced = this.store
+      .list({ parentSessionId, unsurfacedOnly: true })
       .filter((d) => isTerminalDelegationStatus(d.status));
 
-    if (active === 0 && doneUnnotified.length === 0) return '';
+    if (active === 0 && doneUnsurfaced.length === 0) return '';
 
     const parts: string[] = [];
     if (counts.completed > 0) parts.push(`${counts.completed} completed`);
@@ -624,40 +621,46 @@ export class DelegateService {
   /**
    * notify 通道触发点（§7.1）。
    *
-   * `notified` 只在**结果真正送达父**后置位：notify 投递成功（投递器自带
-   * 接收端校验，发进空总线会抛错按失败处理），或父经 {@link markSurfaced}
-   * （delegate_get）取回。投递器缺省或投递失败时保持 false，
+   * `deliveryState` 只在**结果真正送达父**时为 `surfaced`：notify 投递成功
+   * （投递器自带接收端校验，发进空总线会抛错按失败处理），或父经
+   * {@link markSurfaced}（delegate_get）取回。投递期间为 `delivering`
+   * （乐观占位，提示保持点亮）；投递器缺省 / 失败 / 被丢回滚时 `pending`，
    * 让 §7.3 状态提示兜底——否则通知会无声消失。
    */
   private async notify(delegationId: string): Promise<void> {
     const record = this.store.get(delegationId);
     if (!record || !isTerminalDelegationStatus(record.status)) return;
-    if (record.notified || this.notifying.has(delegationId)) return;
+    // 去重：仅 pending 可投递（delivering = 投递进行中占位，surfaced = 已送达）
+    if (record.deliveryState !== 'pending') return;
     const notifier = this.config.notifier;
     if (!notifier) return;
 
-    // 去重（审查 P1-1）：同步占位防并发双投；占位 ≠ 已送达
-    this.notifying.add(delegationId);
-    // 乐观置位 + 回执回滚：dropped 事件在投递的同步微任务链内先于本 await
-    // 续体到达（no_agent 等早期丢弃），wiring 的回滚守卫要求 notified 已置位
-    // 才能收回——故先置位再投递；投递失败或 dispatch 被丢时由 markUndelivered
-    // 收回。最终语义不变：notified 只在结果真正送达时为 true。
-    this.store.markNotified(delegationId);
+    // delivering 占位兼并发去重（替代旧 notifying Set）。dropped 事件在投递的
+    // 同步微任务链内先于本 await 续体到达（no_agent 等早期丢弃）：wiring 回滚
+    // delivering → pending 后，续体的条件置位自然跳过——无需 generation 即时序自洽。
+    this.store.markDelivering(delegationId);
     try {
       await notifier(record);
+      // 条件置位：仅当投递期间未被回滚（仍 delivering）才记已送达。
+      // 若 dropped 已回滚成 pending，或父已 get 先行 surfaced，均不得覆盖
+      //（catch 的条件回滚同理——两个方向都只动 delivering 自己的占位）。
+      if (this.store.get(delegationId)?.deliveryState === 'delivering') {
+        this.store.markSurfaced(delegationId);
+      }
     } catch (err) {
-      // 投递失败收回乐观置位（与 dropped 回滚幂等）；委派单终态不受影响
-      this.store.markUndelivered(delegationId);
+      // 投递失败条件回滚（仅 delivering，与成功路径的条件置位对称）：
+      // 不覆盖父 get 先行的 surfaced——否则已拿到结果的单会重新亮提示
+      if (this.store.get(delegationId)?.deliveryState === 'delivering') {
+        this.store.markUnsurfaced(delegationId);
+      }
       // notify 失败不得影响委派单终态（poll + 状态提示兜底）。
       // 吞掉投递异常但必须留痕——否则「没配投递器」与「每单都投递失败」无法区分；
-      // 委派单已是终态，notified 保持 false 留给提示兜底，重试交由上层/分布式议题（O5）。
+      // 委派单已是终态，未送达留待提示兜底，重试交由上层/分布式议题（§11）。
       console.warn(
         `[Delegation] ${delegationId}: notify not delivered, un-surfaced kept for hint fallback: ${
           err instanceof Error ? err.message : String(err)
         }`,
       );
-    } finally {
-      this.notifying.delete(delegationId);
     }
   }
 
@@ -672,7 +675,7 @@ export class DelegateService {
    * @returns 更新后的委派单
    */
   markSurfaced(delegationId: string): Delegation {
-    return this.store.markNotified(delegationId);
+    return this.store.markSurfaced(delegationId);
   }
 }
 

@@ -5,7 +5,7 @@
  * `AgentSignalSource` 是 opt-in（仅 `agentRuntime.agentSignal: true` 或
  * `escalate.defaultAgentId` 才挂载）。配置缺省时 notifier 的通知发进
  * 无人监听的 `gatewayBus` 静默蒸发，父 agent 永远收不到子结果，
- * 且 `markNotified` 误标已送达把兜底提示也吞掉。
+ * 且送达标记误置把兜底提示也吞掉。
  *
  * 本文件守住接线契约（端到端：真实 notifier 渲染 → AgentSignalSource →
  * dispatch → 假父 agent 的 dispatcher 捕获 RunRequest 载荷）：
@@ -81,7 +81,7 @@ function makeDelegation(): Delegation {
     createdAt: Date.now(),
     cancelable: true,
     cascade: false,
-    notified: false,
+    deliveryState: 'pending',
     schemaVersion: DELEGATION_SCHEMA_VERSION,
   } as Delegation;
 }
@@ -190,6 +190,44 @@ describe('Gateway agentSignal 挂载三态', () => {
     await settle();
     expect(capture.payloads).toEqual([]);
     await gateway.stop();
+  });
+
+  it('gateway.stop() 回收送达回执订阅：stop 后 dropped 不再回滚', async () => {
+    const gateway = await makeGateway();
+    gateway.registerAgent(agentDef('main'));
+    await gateway.start();
+    await gateway.configureAgentRuntime({});
+
+    const wiring = await wireDelegationLazy(gateway);
+    expect(wiring?.notifyWired).toBe(true);
+    const store = (wiring as unknown as { delegationStore: {
+      create(i: unknown): { id: string };
+      update(id: string, patch: unknown): unknown;
+      markSurfaced(id: string): unknown;
+      get(id: string): { deliveryState?: string } | undefined;
+    } }).delegationStore;
+    const d = store.create({
+      parent: { agentId: 'main', sessionId: 's-parent', runId: 'r-1' },
+      target: { agentId: 'child' },
+      task: 't',
+      input: 'i',
+    });
+    store.update(d.id, { status: 'completed', output: 'ok' });
+    store.markSurfaced(d.id);
+
+    // stop 走 dispose：回执订阅释放，此后 dropped 不得再动送达标记
+    await gateway.stop();
+    const bus = (gateway as unknown as { gatewayBus: DefaultEventBus }).gatewayBus;
+    bus.emit({
+      type: 'runtime.trigger.dropped',
+      timestamp: Date.now(),
+      data: {
+        reason: 'no_agent',
+        triggerRef: { id: 't-x', metadata: { delegationId: d.id } },
+      },
+    } as never);
+    await settle();
+    expect(store.get(d.id)?.deliveryState).toBe('surfaced');
   });
 
   it('无委派部署（全部 canDelegate:false）→ 不接线也不补挂', async () => {

@@ -21,9 +21,26 @@ import type {
   RuntimeEvent,
   RuntimeEventListener,
   Trigger,
+  TriggerRef,
   TriggerSource,
 } from './types.js';
 import { RuntimeEvents } from './types.js';
+
+/**
+ * Trigger → 事件回执用裁剪引用（不含 payload 正文）
+ *
+ * @param trigger - 完整 trigger
+ * @returns 裁剪引用（id/type/agentId/sessionId/metadata）
+ */
+function toTriggerRef(trigger: Trigger): TriggerRef {
+  return {
+    id: trigger.id,
+    type: trigger.type,
+    agentId: trigger.agentId,
+    sessionId: trigger.sessionId,
+    metadata: trigger.metadata,
+  };
+}
 
 export interface AgentRuntimeConfig {
   events?: EventBus;
@@ -215,13 +232,7 @@ export class AgentRuntime {
   ): Promise<DispatchResult | FanoutDispatchResult> {
     if (!this.started) {
       this.emitRuntime(RuntimeEvents.TRIGGER_DROPPED, {
-        triggerRef: {
-          id: trigger.id,
-          type: trigger.type,
-          agentId: trigger.agentId,
-          sessionId: trigger.sessionId,
-          metadata: trigger.metadata,
-        },
+        triggerRef: toTriggerRef(trigger),
         triggerId: trigger.id,
         reason: 'runtime_stopped',
       });
@@ -238,13 +249,7 @@ export class AgentRuntime {
     const targets = await this.router.resolve(trigger, this.agents);
     if (targets.length === 0) {
       this.emitRuntime(RuntimeEvents.TRIGGER_DROPPED, {
-        triggerRef: {
-          id: trigger.id,
-          type: trigger.type,
-          agentId: trigger.agentId,
-          sessionId: trigger.sessionId,
-          metadata: trigger.metadata,
-        },
+        triggerRef: toTriggerRef(trigger),
         triggerId: trigger.id,
         reason: 'no_agent',
       });
@@ -254,17 +259,12 @@ export class AgentRuntime {
     if (targets.length === 1) {
       const result = await this.dispatchToTarget(trigger, targets[0]!, options);
       // 单目标丢弃也必须留下 TRIGGER_DROPPED（与 fan-out 对称）：
-      // 「trigger 未送达必有 dropped 事件」是委派送达回执（delegation §7.1）
-      // 依赖的不变量，缺事件 = 送达回执无法证伪
+      // 「trigger 未被受理必有 dropped 事件」是委派送达回执（delegation §7.1）
+      // 依赖的不变量，缺事件 = 送达回执无法证伪。受理后 run 失败走 RUN_FAILED
+      // （消息可能已进父上下文，按已送达处理，不回执）
       if (result.status === 'skipped') {
         this.emitRuntime(RuntimeEvents.TRIGGER_DROPPED, {
-          triggerRef: {
-            id: trigger.id,
-            type: trigger.type,
-            agentId: trigger.agentId,
-            sessionId: trigger.sessionId,
-            metadata: trigger.metadata,
-          },
+          triggerRef: toTriggerRef(trigger),
           triggerId: trigger.id,
           reason: result.reason,
         });
@@ -285,13 +285,7 @@ export class AgentRuntime {
 
     if (anyFailed) {
       this.emitRuntime(RuntimeEvents.TRIGGER_DROPPED, {
-        triggerRef: {
-          id: trigger.id,
-          type: trigger.type,
-          agentId: trigger.agentId,
-          sessionId: trigger.sessionId,
-          metadata: trigger.metadata,
-        },
+        triggerRef: toTriggerRef(trigger),
         triggerId: trigger.id,
         reason: 'fanout_partial_failure',
         results: results.map((r) => ({ agentId: r.agentId, status: r.result.status })),
@@ -304,13 +298,7 @@ export class AgentRuntime {
           ? results[0].result.reason
           : 'no_agent';
       this.emitRuntime(RuntimeEvents.TRIGGER_DROPPED, {
-        triggerRef: {
-          id: trigger.id,
-          type: trigger.type,
-          agentId: trigger.agentId,
-          sessionId: trigger.sessionId,
-          metadata: trigger.metadata,
-        },
+        triggerRef: toTriggerRef(trigger),
         triggerId: trigger.id,
         reason,
         results: results.map((r) => ({ agentId: r.agentId, status: r.result.status })),
@@ -436,6 +424,9 @@ export class AgentRuntime {
         requestId: request.requestId,
         agentId: agent.agentId,
         sessionId,
+        // 回执关联：已受理的 trigger（run 失败但消息可能已进父上下文，
+        // 送达语义视为已送达，订阅方自行判定）
+        triggerRefs: request.triggers.map(toTriggerRef),
         error: message,
       });
       return { status: 'failed', error: message };

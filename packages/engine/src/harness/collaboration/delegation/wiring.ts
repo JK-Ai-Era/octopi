@@ -109,6 +109,11 @@ export interface DelegationRuntime {
    * 其余 agent 仅登记进 Registry 供被委派。
    */
   attach(agent: DelegatableAgent): void;
+  /**
+   * 释放运行时持有的宿主资源（送达回执订阅）。幂等。
+   * Gateway 热重建 / 停机时调用，防止重复 createDelegationRuntime 累积订阅。
+   */
+  dispose(): void;
 }
 
 /**
@@ -137,22 +142,28 @@ export function createDelegationRuntime(
 
   const delegationStore = new DelegationStore(options.events);
 
-  // §7.1 送达回执：notify 投递（notified 置位）后 dispatch 被丢
+  // §7.1 送达回执：notify 投递（deliveryState 置位）后 dispatch 被丢
   // （`runtime.trigger.dropped`，事件携带 triggerRef → metadata.delegationId）时
-  // 回滚 notified，让 §7.3 状态提示重新兜底——不能让「推送进了总线但从未
+  // 回滚送达标记，让 §7.3 状态提示重新兜底——不能让「推送进了总线但从未
   // 变成父消息」被记成已送达。回滚方向安全：宁可提示多亮一次（父 get 消音）。
-  // 订阅与委派运行时同生命周期（常驻 events，无 dispose 语义）。
-  if (options.events) {
-    options.events.on(RuntimeEvents.TRIGGER_DROPPED, (event: AgentEvent) => {
+  const droppedSubscription = options.events?.on(
+    RuntimeEvents.TRIGGER_DROPPED,
+    (event: AgentEvent) => {
       const triggerRef = (event as { data?: { triggerRef?: TriggerRef } }).data
         ?.triggerRef;
       const delegationId = triggerRef?.metadata?.delegationId;
       if (!delegationId) return;
-      if (delegationStore.get(delegationId)?.notified) {
-        delegationStore.markUndelivered(delegationId);
+      // fan-out 部分丢弃：有目标已受理（消息已进其上下文）→ 不回滚，
+      // 宁可漏提示也不消掉已送达部分（§7 送达语义）
+      const reason = (event as { data?: { reason?: string } }).data?.reason;
+      if (reason === 'fanout_partial_failure') return;
+      // delivering / surfaced 均可回滚 → pending（提示重新兜底）；
+      // 无送达记录（pending）不动
+      if (delegationStore.get(delegationId)?.deliveryState !== 'pending') {
+        delegationStore.markUnsurfaced(delegationId);
       }
-    });
-  }
+    },
+  );
   const notifier =
     options.events && options.notifyPush !== false
       ? createDelegationNotifier({ events: options.events })
@@ -174,6 +185,10 @@ export function createDelegationRuntime(
     registry,
     delegationStore,
     notifyWired,
+    dispose(): void {
+      // 回收送达回执订阅（幂等）；service/store 由 GC，不发终止事件
+      droppedSubscription?.dispose();
+    },
     get attached() {
       return [...attached];
     },

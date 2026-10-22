@@ -1,3 +1,25 @@
+## v0.86.29
+
+### refactor(delegation): 送达状态三态化（deliveryState）+ 送达回执收尾
+
+**问题**（「委派送达收尾」批次，收 v0.86.25 遗留项）：
+1. `notified` 一名双义未除根——存储字段与方法族 `markNotified` / `markSurfaced` / `markUndelivered` 三名混用；
+2. 乐观置位下 `notified=true` 的瞬时语义是「投递进行中**或**已送达」——自定义**异步** notifier 的投递窗口内 §7.3 提示提前消音、`surfaced` 提前为 true（评审 P2）；
+3. 不变量「trigger 未送达必有 dropped 事件」字面不成立（单目标 run 失败走 `RUN_FAILED`，消息可能已进父上下文）；
+4. fan-out 部分丢弃（`fanout_partial_failure`）会把已送达部分也回滚；
+5. 送达回执订阅无 dispose，重复 `createDelegationRuntime` 累积订阅闭包。
+
+**改法**：
+- `Delegation.notified: boolean` → **`deliveryState: 'pending' | 'delivering' | 'surfaced'`** 三态机；方法族统一 `markDelivering` / `markSurfaced` / `markUnsurfaced`；事件 `delegation.notified` → `delegation.delivery_state`；store filter `unnotifiedOnly` → `unsurfacedOnly`。LLM 面仍输出 `surfaced`（语义更准：delivering 期间不算）。
+- `notify()` 时序自洽：`delivering` 占位（兼并发去重，替代进程内 `notifying` Set）→ 投递 → **条件置位**（仍 `delivering` 才置 `surfaced`）——dropped 在投递同步微任务链内先到并回滚成 `pending` 时，续体自然跳过，无需 generation；失败路径**条件回滚**（仅 `delivering`，与条件置位对称，不覆盖父 get 先行的 `surfaced`）。**delivering 期间提示保持点亮**（修复异步窗口提前消音）。送达迁移发射 `delegation.delivery_state` 事件（`data.delegation`）。
+- `RUN_FAILED` 事件携带 `triggerRefs`（裁剪引用，供订阅方关联）；不变量修准为「trigger 未**被受理**必有 dropped 事件」——受理后 run 失败按已送达处理不回执。
+- fan-out `fanout_partial_failure` 不回滚（有目标已受理即视为部分送达，宁可漏提示不消掉已送达部分）。
+- `DelegationRuntime.dispose()`（幂等）回收送达回执订阅；`gateway.stop()` 接线并清缓存，允许热重建。
+
+**评审**（子 agent 对抗性评审 + 变异实验双向验证）：三态时序（dropped 先到/后到/并发 get 穿透）全部实测收敛正确；变异实验确认条件置位、去重守卫、triggerRefs、fan-out 跳过、dispose 各自被测试钉住。评审批出 4 项已全部修复：夹具残留 `notified` 两处（tests 不过类型检查是仓库级缺口——根 tsconfig exclude tests 且无 typecheck 脚本，留待拍板）；`DELIVERY_STATE_CHANGED` 死常量改为真发；catch 无条件回滚改条件回滚；补 2 条钉（gateway.stop dispose 接线、LLM 面 delivering 不报 surfaced）。
+
+**验证**：`npm run build` / `npm run lint` 干净；合并 main（含 webui 两批）后全量 `npm test` 3016 tests 绿（3 个既有环境失败与 main 相同）。测试：deliveryState 语义映射全套更新 + 新增 7 用例（delivering 提示回归钉——旧模型下必红、fan-out 混合不回滚、dispose 后不回滚、RUN_FAILED 带 triggerRefs、gateway stop dispose 接线、LLM 面 delivering 判定、送达迁移事件）。
+
 ## v0.86.28
 
 ### fix(webui): 会话卡片「…」按钮去按钮感 —— 去边框/底色，只留符号

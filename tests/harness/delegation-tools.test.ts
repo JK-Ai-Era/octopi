@@ -501,7 +501,7 @@ describe('delegate_* tools', () => {
     ) as { delegation_id: string };
 
     await vi.waitFor(() => expect(store.get(dispatched.delegation_id)?.status).toBe('completed'));
-    expect(store.get(dispatched.delegation_id)?.notified).toBe(false);
+    expect(store.get(dispatched.delegation_id)?.deliveryState).toBe('pending');
 
     const got = await byName.delegate_get.handler(
       { delegation_id: dispatched.delegation_id },
@@ -509,8 +509,25 @@ describe('delegate_* tools', () => {
     ) as { ok: boolean; surfaced: boolean };
     expect(got.ok).toBe(true);
     expect(got.surfaced).toBe(true);
-    expect(store.get(dispatched.delegation_id)?.notified).toBe(true);
+    expect(store.get(dispatched.delegation_id)?.deliveryState).toBe('surfaced');
     expect(service.renderStatusHint('s-parent')).toBe('');
+  });
+
+  it('LLM 面 delivering 期间 surfaced 为 false（异步投递窗口不误报）', async () => {
+    const { byName, store } = makeToolHarness();
+    const dispatched = (await byName.delegate_dispatch.handler(
+      { agent: 'worker', task: 't', input: 'i' },
+      CTX,
+    )) as { delegation_id: string };
+    await vi.waitFor(() =>
+      expect(store.get(dispatched.delegation_id)?.status).toBe('completed'),
+    );
+    // 模拟异步投递悬停（delivering）：LLM 面不得报 surfaced
+    store.update(dispatched.delegation_id, { deliveryState: 'delivering' });
+    const listed = (await byName.delegate_list.handler({}, CTX)) as {
+      delegations: Array<{ surfaced: boolean }>;
+    };
+    expect(listed.delegations[0]!.surfaced).toBe(false);
   });
 
   it('list stays read-only: the hint survives until delegate_get surfaces the result', async () => {
@@ -525,11 +542,11 @@ describe('delegate_* tools', () => {
     expect(listed.total).toBe(1);
     // 列表是只读概览：不置位（结果可能被截断，只有 get 取回全文才算送达）
     expect(listed.delegations[0].surfaced).toBe(false);
-    expect(store.list()[0].notified).toBe(false);
+    expect(store.list()[0].deliveryState).toBe('pending');
     expect(service.renderStatusHint('s-parent')).toContain('1 completed');
 
     await byName.delegate_get.handler({ delegation_id: store.list()[0].id }, CTX);
-    expect(store.list()[0].notified).toBe(true);
+    expect(store.list()[0].deliveryState).toBe('surfaced');
   });
 
   it('depth gate applies through resolveParentDepth', async () => {

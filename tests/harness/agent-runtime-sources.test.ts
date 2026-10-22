@@ -245,6 +245,39 @@ describe('TRIGGER_DROPPED 不变量', () => {
     await runtime.stop();
   });
 
+  it('run 失败（已受理）→ RUN_FAILED 带 triggerRefs 回执关联', async () => {
+    const events = new DefaultEventBus();
+    const fails: Array<Record<string, unknown>> = [];
+    events.on(RuntimeEvents.RUN_FAILED, (e) =>
+      fails.push((e as { data?: Record<string, unknown> }).data ?? {}),
+    );
+    const runtime = new AgentRuntime({ events });
+    runtime.registerAgent({
+      agentId: 'boom',
+      dispatcher: {
+        async *execute() {
+          throw new Error('run blew up');
+        },
+      },
+    });
+    await runtime.start();
+
+    const trigger: Trigger = {
+      id: 'trig-f',
+      type: 'agent_signal',
+      agentId: 'boom',
+      payload: { kind: 'system_note', content: 'x' },
+      metadata: { delegationId: 'del-f' },
+    };
+    const result = await runtime.dispatch(trigger);
+    expect(result.status).toBe('failed');
+    expect(fails).toHaveLength(1);
+    const refs = fails[0]!.triggerRefs as Array<{ id: string; metadata?: { delegationId?: string } }>;
+    expect(refs[0]!.id).toBe('trig-f');
+    expect(refs[0]!.metadata?.delegationId).toBe('del-f');
+    await runtime.stop();
+  });
+
   it('fan-out 全丢弃 → dropped 带 results 明细', async () => {
     const events = new DefaultEventBus();
     const drops = refDrop(events);
