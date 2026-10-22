@@ -1,6 +1,6 @@
 {
   "name": "octopi-agent",
-  "version": "0.86.29",
+  "version": "0.86.30",
   "description": "Octopi suite — CLI (bin: octopi), config IO, and dependency umbrella for core/engine/gateway/webui",
   "type": "module",
   "main": "dist/index.js",
@@ -30,12 +30,14 @@
     "release:print": "node scripts/release.mjs print",
     "dev": "tsc --watch",
     "test": "node --experimental-vm-modules node_modules/vitest/vitest.mjs run",
-    "lint": "eslint .",
+    "lint": "eslint . && node scripts/typecheck-tests.mjs",
     "test:coverage": "node --experimental-vm-modules node_modules/vitest/vitest.mjs run --coverage",
     "install:all": "npm install && npm --prefix packages/webui install",
     "build:web": "npm --prefix packages/webui run build",
     "serve": "node dist/cli/index.js serve fg",
-    "web": "npm --prefix packages/webui run dev"
+    "web": "npm --prefix packages/webui run dev",
+    "typecheck": "node scripts/typecheck-tests.mjs",
+    "typecheck:update-baseline": "node scripts/typecheck-tests.mjs --update"
   },
   "engines": {
     "node": ">=24"
@@ -64,10 +66,10 @@
   "dependencies": {
     "@earendil-works/pi-tui": "^0.78.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "@octopi-agent/core": "0.86.29",
-    "@octopi-agent/engine": "0.86.29",
-    "@octopi-agent/gateway": "0.86.29",
-    "@octopi-agent/webui": "0.86.29",
+    "@octopi-agent/core": "0.86.30",
+    "@octopi-agent/engine": "0.86.30",
+    "@octopi-agent/gateway": "0.86.30",
+    "@octopi-agent/webui": "0.86.30",
     "@types/ws": "^8.18.1",
     "chalk": "^5.6.2",
     "js-yaml": "^4.3.2",
