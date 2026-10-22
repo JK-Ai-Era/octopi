@@ -43,6 +43,12 @@ export interface SessionMeta {
    */
   titleSource?: 'snippet' | 'auto' | 'user';
   titleUpdatedAt?: number;
+  /**
+   * 置顶时间戳（epoch ms）；存在即置顶，历史列表置顶排序。
+   * 只读投影：权威数据在 `session.metadata.pinnedAt`（updateMetadata 通道，受 save 浅合并保护），
+   * 由 SessionStore 写入并投影到索引；不要直接改写本字段。
+   */
+  pinnedAt?: number;
 }
 
 /** Session 归属匹配输入（SessionMeta / SessionData 的 agent 投影） */

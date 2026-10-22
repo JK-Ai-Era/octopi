@@ -63,6 +63,11 @@ export class InMemorySessionStore implements SessionStore<SessionData> {
         primaryAgentId: s.primaryAgentId ?? s.meta.primaryAgentId,
         preferredAgentId: s.preferredAgentId ?? s.meta.preferredAgentId,
         participantAgentIds: toIndexPick(s).participantAgentIds,
+        // 与 JsonlSessionStore.buildIndexEntry 同规则：置顶权威在 metadata.pinnedAt
+        pinnedAt:
+          typeof s.metadata?.pinnedAt === 'number' && Number.isFinite(s.metadata.pinnedAt)
+            ? s.metadata.pinnedAt
+            : s.meta.pinnedAt,
       }));
   }
 

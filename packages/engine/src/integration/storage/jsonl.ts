@@ -37,6 +37,11 @@ async function fileExists(path: string): Promise<boolean> {
   try { await access(path); return true; } catch { return false; }
 }
 
+/** pinnedAt 投影：仅接受有限数值（epoch ms），其余视为未置顶 */
+function readPinnedAt(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
 /**
  * 历史 state.json 的 turns[].input（全量历史快照）已废弃：读取即剥，
  * 下次 save 自然瘦身。输入正文的唯一权威是 messages JSONL（Discourse）。
@@ -151,6 +156,9 @@ export class JsonlSessionStore implements SessionStore<SessionData> {
       lifecycle,
       endedAt: data.lifecycle?.endedAt ?? data.meta.endedAt,
       archivedAt: data.lifecycle?.archivedAt ?? data.meta.archivedAt,
+      // 置顶是用户数据：权威在 metadata.pinnedAt（受 save 浅合并保护，
+      // 长驻 run 对象的整包 save 抹不掉）；meta.pinnedAt 仅作旧数据回退
+      pinnedAt: readPinnedAt(data.metadata?.pinnedAt) ?? readPinnedAt(data.meta.pinnedAt),
     };
   }
 
@@ -364,7 +372,12 @@ export class JsonlSessionStore implements SessionStore<SessionData> {
         const index = await this.readMetaIndex();
         const entry = index[sessionId];
         if (entry) {
-          index[sessionId] = { ...entry, updatedAt: Date.now() };
+          index[sessionId] = {
+            ...entry,
+            // pinnedAt 投影与 buildIndexEntry 同规则（置顶/取消即时可见于 list）
+            pinnedAt: readPinnedAt(metadata.pinnedAt),
+            updatedAt: Date.now(),
+          };
           await this.writeMetaIndex(index);
         }
       } catch {

@@ -130,6 +130,9 @@ export class RuntimeEvent<T = unknown> extends Event {
 
 export class ConnectionEvent extends RuntimeEvent<{ state: ConnectionState; agents: AgentSummary[] }> {}
 export class SessionsEvent extends RuntimeEvent<{ sessions: SessionSummary[] }> {}
+/** 批量订阅上限：运行中 + 最近 N 条 + 当前会话（防长历史一次性全量订阅） */
+const SESSION_SUBSCRIBE_LIMIT = 50;
+
 export class SessionEvent extends RuntimeEvent<{ session: SessionView | null }> {}
 export class ChatEvent extends RuntimeEvent<{ conversation: ConversationItem[] }> {}
 export class ConversationEvent extends RuntimeEvent<{ items: ConversationItem[] }> {}
@@ -272,6 +275,8 @@ export class OctopiRuntimeStore extends EventTarget {
   private connectionState: ConnectionState = 'idle';
   private agents: AgentSummary[] = [];
   private sessions: SessionSummary[] = [];
+  /** 已发过 subscribe 的会话（WS 重建后清空重订） */
+  private subscribedSessions = new Set<string>();
   private currentSession: SessionView | null = null;
   private chat: ChatState = this.createEmptyChat();
   private modelCatalog: ModelCatalog = { models: [], agents: [] };
@@ -686,8 +691,54 @@ export class OctopiRuntimeStore extends EventTarget {
 
   async refreshSessions(agentId?: string): Promise<SessionSummary[]> {
     this.sessions = await this.client.listSessions(agentId);
+    this.syncSessionSubscriptions();
     this.dispatch('sessions', new SessionsEvent('sessions', { sessions: this.sessions }));
     return this.sessions;
+  }
+
+  /**
+   * 订阅会话事件（协议的 subscribedSessions 支持多会话）。
+   * 侧栏「运行中」标识 / 置顶 / 标题靠 WS 事件实时更新：未订阅的后台会话收不到事件，标识会失鲜。
+   *
+   * 订阅面收口：运行中 + 最近 SESSION_SUBSCRIBE_LIMIT 条 + 当前会话，避免长历史全量订阅。
+   * 列表订阅**不传 agentId**：服务端 subscribe 会把连接身份重指到 msg.agentId（历史行为，
+   * reply 路由依赖），批量订阅若携带 agentId 会让连接身份随列表末条漂移、串扰 matchesAgent。
+   */
+  private syncSessionSubscriptions(): void {
+    const candidates = new Map<string, SessionSummary>();
+    for (const s of this.sessions) {
+      if (s.running) candidates.set(s.id, s);
+    }
+    for (const s of [...this.sessions]
+      .sort((a, b) => (b.lastInteractionAt ?? 0) - (a.lastInteractionAt ?? 0))
+      .slice(0, SESSION_SUBSCRIBE_LIMIT)) {
+      candidates.set(s.id, s);
+    }
+    const currentId = this.chat.sessionId;
+    const current = currentId ? this.sessions.find((s) => s.id === currentId) : undefined;
+    if (current) candidates.set(current.id, current);
+    for (const s of candidates.values()) {
+      if (this.subscribedSessions.has(s.id)) continue;
+      if (s.id === currentId) {
+        this.subscribeSession(s.id, s.agentId);
+      } else {
+        this.subscribeSession(s.id);
+      }
+    }
+    if (currentId && !this.subscribedSessions.has(currentId)) {
+      // 当前会话可能不在列表（按 agent 过滤的列表）——单独订阅，保持既有带 agentId 语义
+      this.subscribeSession(currentId, this.chat.agentId);
+    }
+  }
+
+  /** 登记会话订阅（去重记账；失败下次 sync 重试） */
+  private subscribeSession(sessionId: string, agentId?: string): void {
+    try {
+      this.client.sendSubscribe(sessionId, agentId);
+      this.subscribedSessions.add(sessionId);
+    } catch {
+      // 未连接时登记失败；连接态恢复后 syncSessionSubscriptions 重试
+    }
   }
 
   /** 手动重命名会话标题 */
@@ -704,12 +755,83 @@ export class OctopiRuntimeStore extends EventTarget {
     this.dispatch('session', new SessionEvent('session', { session: this.currentSession }));
   }
 
-  /** 应用 session.updated（标题等）到本地列表 */
+  /** 置顶 / 取消置顶会话 */
+  async setSessionPinned(sessionId: string, pinned: boolean): Promise<void> {
+    const meta = await this.client.setSessionPinned(sessionId, pinned);
+    this.sessions = this.sessions.map((s) => (s.id === sessionId ? { ...s, ...meta } : s));
+    if (this.currentSession?.meta?.id === sessionId) {
+      this.currentSession = {
+        ...this.currentSession,
+        meta: { ...this.currentSession.meta, ...meta },
+      };
+    }
+    this.dispatch('sessions', new SessionsEvent('sessions', { sessions: this.sessions }));
+    this.dispatch('session', new SessionEvent('session', { session: this.currentSession }));
+  }
+
+  /**
+   * 删除会话：移出列表并丢弃其缓存；删的是当前会话时同步清空聊天态。
+   * Run 在途由服务端拒绝（409），此处不重复判定。
+   */
+  async deleteSession(sessionId: string): Promise<void> {
+    await this.client.deleteSession(sessionId);
+    this.dropSessionLocal(sessionId);
+  }
+
+  /** 会话消失后的本地清理（本端删除与 session.removed 广播共用） */
+  private dropSessionLocal(sessionId: string): void {
+    this.conversationCache.delete(sessionId);
+    this.subscribedSessions.delete(sessionId);
+    this.sessions = this.sessions.filter((s) => s.id !== sessionId);
+    const wasCurrent = this.chat.sessionId === sessionId;
+    if (wasCurrent) {
+      this.currentSession = null;
+      this.chat = this.createEmptyChat();
+      this.conversationAdapter.reset();
+      this.historyCursor = undefined;
+      this.historyHasMore = false;
+      this.engineActive = false;
+    }
+    this.dispatch('sessions', new SessionsEvent('sessions', { sessions: this.sessions }));
+    if (wasCurrent) {
+      this.dispatch('session', new SessionEvent('session', { session: null }));
+      this.dispatch('chat', new ChatEvent('chat', { conversation: [] }));
+      this.dispatch('conversation', new ConversationEvent('conversation', { items: [] }));
+      this.dispatch('viewMode', new ViewModeEvent('viewMode', { mode: 'history' }));
+      this.dispatch('tool', new ToolEvent('tool', { tools: [] }));
+      this.dispatch('stream', new StreamEvent('stream', { streaming: false, content: '' }));
+      this.dispatch('runStatus', new RunStatusEvent('runStatus', { status: 'idle' }));
+      this.dispatch('approval', new ApprovalEvent('approval', { approvals: [] }));
+      this.dispatch('questions', new QuestionsEvent('questions', { questions: [] }));
+      this.dispatch(
+        'clientToolCalls',
+        new ClientToolCallsEvent('clientToolCalls', { calls: [] }),
+      );
+      this.dispatch('inspector', new InspectorEvent('inspector', { inspector: {} }));
+      this.dispatch('tasks', new TasksEvent('tasks', { tasks: [] }));
+      this.dispatch('schedules', new SchedulesEvent('schedules', { schedules: [] }));
+    }
+  }
+
+  /**
+   * 会话级运行态记账（侧栏「运行中」标识）。
+   * WS state 事件由 deriveSessionState 推导：running/tools=在途，idle/aborted/error=终态。
+   */
+  private applySessionRunningState(sessionId: string, state: string): void {
+    const running = state === 'running' || state === 'tools';
+    const idx = this.sessions.findIndex((s) => s.id === sessionId);
+    if (idx < 0 || Boolean(this.sessions[idx].running) === running) return;
+    this.sessions = this.sessions.map((s, i) => (i === idx ? { ...s, running } : s));
+    this.dispatch('sessions', new SessionsEvent('sessions', { sessions: this.sessions }));
+  }
+
+  /** 应用 session.updated（标题 / 置顶等）到本地列表 */
   private applySessionMetaEvent(event: AgentEventEnvelope): void {
     const d = (event.data ?? {}) as {
       sessionId?: string;
       title?: string;
       titleSource?: 'snippet' | 'auto' | 'user';
+      pinnedAt?: number | null;
       updatedAt?: number;
     };
     const sid = d.sessionId ?? event.sessionId;
@@ -717,6 +839,8 @@ export class OctopiRuntimeStore extends EventTarget {
     const patch = {
       ...(d.title !== undefined ? { title: d.title } : {}),
       ...(d.titleSource !== undefined ? { titleSource: d.titleSource } : {}),
+      // null=取消置顶（键在场即覆盖；缺键不动）
+      ...('pinnedAt' in d ? { pinnedAt: d.pinnedAt ?? undefined } : {}),
       ...(d.updatedAt !== undefined ? { updatedAt: d.updatedAt } : {}),
     };
     let changed = false;
@@ -1023,7 +1147,7 @@ export class OctopiRuntimeStore extends EventTarget {
       // 快照端点不可用不阻塞会话打开
     }
 
-    this.client.sendSubscribe(sessionId, view.meta.agentId);
+    this.subscribeSession(sessionId, view.meta.agentId);
 
     this.dispatch('session', new SessionEvent('session', { session: this.currentSession }));
     this.dispatch('chat', new ChatEvent('chat', { conversation: this.chat.conversation }));
@@ -1199,7 +1323,7 @@ export class OctopiRuntimeStore extends EventTarget {
     this.historyCursor = undefined;
     this.historyHasMore = false;
 
-    this.client.sendSubscribe(session.id, session.agentId);
+    this.subscribeSession(session.id, session.agentId);
     await this.refreshSessions();
     void this.refreshSessionModel();
 
@@ -1391,14 +1515,18 @@ export class OctopiRuntimeStore extends EventTarget {
   private applyConnectionState(state: ConnectionState): void {
     this.connectionState = state;
     this.dispatch('connection', new ConnectionEvent('connection', { state, agents: this.agents }));
-    // 重连后必须重新订阅当前会话，否则服务端事件无法送达（长离开后 WS 重建）
-    if (state === 'connected' && this.chat.sessionId) {
-      try {
-        this.client.sendSubscribe(this.chat.sessionId, this.chat.agentId);
-      } catch {
-        // 订阅失败由后续 send / 重连路径兜底
-      }
+    if (state !== 'connected') {
+      // WS 重建后服务端订阅不保留；记账清空，恢复连接时全量重订
+      this.subscribedSessions.clear();
+      return;
     }
+    // 重连后必须重新订阅（当前会话 + 列表会话），否则服务端事件无法送达
+    this.syncSessionSubscriptions();
+    // 断线窗口内的事件会丢：以 REST 投影复核列表（running 等），
+    // 状态归 store 自持，不依赖宿主 UI 的刷新时机
+    void this.refreshSessions().catch(() => {
+      // 复核失败不阻塞连接恢复；下次刷新/操作自然纠偏
+    });
   }
 
   private applyWelcome(agents: AgentSummary[]): void {
@@ -1416,7 +1544,9 @@ export class OctopiRuntimeStore extends EventTarget {
 
   private applyExternalState(sessionId: string | undefined, state: string): void {
     if (!this.chat) return;
-    // 状态事件仅作用于当前会话；其他会话的状态不影响 UI
+    // 会话级运行态是全列表信号（侧栏标识），任何会话的状态都记账
+    if (sessionId) this.applySessionRunningState(sessionId, state);
+    // 对话态仅作用于当前会话；其他会话的状态不影响聊天 UI
     if (sessionId && this.chat.sessionId && sessionId !== this.chat.sessionId) return;
     switch (state) {
       case 'running':
@@ -1461,6 +1591,13 @@ export class OctopiRuntimeStore extends EventTarget {
     // 会话标题等展示元数据：只刷新列表/当前 meta
     if (event.type === 'session.updated') {
       this.applySessionMetaEvent(event);
+      return;
+    }
+
+    // 会话删除广播（本端发起的删除已走 deleteSession；此处覆盖其他端删除）
+    if (event.type === 'session.removed') {
+      const sid = (event.data as { sessionId?: string } | undefined)?.sessionId ?? eventSessionId;
+      if (sid) this.dropSessionLocal(sid);
       return;
     }
 

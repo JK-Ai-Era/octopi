@@ -135,6 +135,27 @@ pre { font-family: var(--font-mono); font-size: 13px; }
 /* 历史会话列表：展开后独立滚动，展开/收起按钮留在列表外始终可见 */
 .session-list-scroll { display: grid; gap: 6px; max-height: min(48vh, 420px); overflow-y: auto; overflow-x: hidden; min-height: 0; }
 
+/* ── 会话卡片：主按钮 + 右下角「…」菜单 ── */
+.session-card { position: relative; min-width: 0; }
+.session-card-title-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.session-card-title { flex: 1; min-width: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 「…」按钮占住右下角，meta 行让出位置 */
+.session-card-meta { padding-right: 26px; }
+.session-pin-chip { flex-shrink: 0; font-size: var(--text-xs); padding: 1px 6px; border-radius: 999px; background: var(--color-accent); border: 1px solid var(--color-accent-border); color: #3730a3; }
+.session-running-badge { flex-shrink: 0; display: inline-flex; align-items: center; gap: 4px; font-size: var(--text-xs); color: var(--color-ok); }
+.session-running-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--color-ok); animation: session-running-pulse 1.2s ease-in-out infinite; }
+@keyframes session-running-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+.session-menu-btn { position: absolute; right: 6px; bottom: 6px; width: 24px; height: 20px; padding: 0; line-height: 1; color: var(--color-muted); z-index: 30; }
+.session-menu-btn:hover { background: #f3f4f6; color: var(--color-text); }
+.session-menu-backdrop { position: fixed; inset: 0; z-index: 20; }
+/* fixed 定位（坐标由点击时锚点给出）：滚动容器会裁切 absolute 弹层 */
+.session-menu { position: fixed; z-index: 30; min-width: 132px; padding: 4px; display: grid; gap: 2px; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-md); box-shadow: 0 8px 24px rgba(17, 24, 39, 0.16); }
+.session-menu-item { text-align: left; border: none; background: transparent; padding: 7px 10px; border-radius: var(--radius-sm); font-size: var(--text-sm); }
+.session-menu-item:hover { background: #f3f4f6; }
+.session-menu-item-danger { color: var(--color-error); }
+.session-menu-item-danger:hover { background: #fef2f2; }
+
 /* ── Center ── */
 .center-panel { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
 .center-header { padding: 10px 14px; border-bottom: 1px solid var(--color-border); background: var(--color-surface); flex-shrink: 0; }

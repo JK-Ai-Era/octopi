@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { MarkdownMessage } from './MarkdownMessage';
 import { ContextRuntimePanel } from './ContextRuntimePanel';
 import { RunObservatoryPanel } from './RunObservatoryPanel';
@@ -722,9 +722,17 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
     lastInteractionAt: number;
     title?: string;
     titleSource?: 'snippet' | 'auto' | 'user';
+    /** 置顶时间戳；存在即置顶排序 */
+    pinnedAt?: number;
+    /** 实时运行态（服务端标注 + WS state 事件更新） */
+    running?: boolean;
   }>>([]);
   const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState('');
+  /** 「…」菜单展开的会话 id */
+  const [menuSessionId, setMenuSessionId] = useState<string | null>(null);
+  /** 「…」菜单锚点：开合时解析好的视口坐标（渲染不读 window，滚动/缩放即关闭） */
+  const [menuPos, setMenuPos] = useState<{ right: number; top: number } | null>(null);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const activeSessionIdRef = useRef<string | null>(null);
   const [conversationItems, setConversationItems] = useState<ConversationItem[]>([]);
@@ -800,6 +808,10 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
         )[0];
         if (latest) void openSession(latest.id);
       }
+    }) as EventListener);
+    store.addEventListener('session', ((e: CustomEvent) => {
+      // 会话被删除（本端或其他端 session.removed 广播）时清空活动会话 UI
+      if (!e.detail.session) clearActiveSessionUi();
     }) as EventListener);
     store.addEventListener('conversation', ((e: CustomEvent) => {
       setConversationItems(e.detail.items);
@@ -1220,6 +1232,102 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
     }
   };
 
+  const closeSessionMenu = () => {
+    setMenuSessionId(null);
+    setMenuPos(null);
+  };
+
+  const openSessionMenu = (e: React.MouseEvent<HTMLButtonElement>, sessionId: string) => {
+    if (menuSessionId === sessionId) {
+      closeSessionMenu();
+      return;
+    }
+    const rect = e.currentTarget.getBoundingClientRect();
+    const menuHeight = 76;
+    // 菜单锚在按钮上方展开；贴近视口顶部时翻转到下方（坐标此处解析完，渲染不读 window）
+    const openUpward = rect.top >= menuHeight + 8;
+    setMenuSessionId(sessionId);
+    setMenuPos({
+      right: Math.max(8, window.innerWidth - rect.right),
+      top: openUpward ? rect.top - menuHeight - 4 : rect.top + 26,
+    });
+  };
+
+  // 菜单是 fixed 定位的瞬态浮层：Esc 关闭；滚动/缩放后锚点失效即关闭
+  useEffect(() => {
+    if (!menuSessionId) return;
+    const close = () => closeSessionMenu();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') closeSessionMenu();
+    };
+    window.addEventListener('keydown', onKey);
+    window.addEventListener('resize', close);
+    window.addEventListener('scroll', close, true);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('resize', close);
+      window.removeEventListener('scroll', close, true);
+    };
+  }, [menuSessionId]);
+
+  const togglePinSession = async (sessionId: string, pinned: boolean) => {
+    const store = storeRef.current;
+    if (!store) return;
+    setActionError(null);
+    try {
+      await store.setSessionPinned(sessionId, pinned);
+      setToast(pinned ? '已置顶会话' : '已取消置顶');
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  /** 清空活动会话的 UI 态（删除会话后 / 远端删除广播）。useCallback：挂载期监听器长期持有，只碰稳定 setter/ref */
+  const clearActiveSessionUi = useCallback(() => {
+    setActiveSessionId(null);
+    activeSessionIdRef.current = null;
+    setRunStatus('idle');
+    setStream('');
+    setConversationItems([]);
+    setTasks([]);
+    setSchedules([]);
+    setQuestions([]);
+    setApprovals([]);
+    setClientToolCalls([]);
+    setRenderedWebViews([]);
+    setDeliveredFiles([]);
+    setFocusFileId(null);
+    setSessionModel(null);
+  }, []);
+
+  const removeSession = async (sessionId: string) => {
+    const store = storeRef.current;
+    if (!store) return;
+    let target = sessions.find((s) => s.id === sessionId);
+    // 服务端 409 兜底；这里先拦在途 Run 避免用户白确认。徽标可能失鲜（WS 终态丢失），
+    // 拒绝前先用服务端投影复核，防止陈旧「运行中」把删除永久卡死
+    if (target?.running) {
+      const fresh = await store.refreshSessions().catch(() => null);
+      target = fresh?.find((s) => s.id === sessionId) ?? target;
+      if (target.running) {
+        setActionError('会话正在运行中，请先停止运行，再删除。');
+        return;
+      }
+    }
+    const label = target ? sessionDisplayTitle(target) : sessionId;
+    if (!window.confirm(`删除会话「${label}」？消息记录与运行痕迹将一并删除，不可恢复。`)) return;
+    setActionError(null);
+    try {
+      await store.deleteSession(sessionId);
+      if (activeSessionIdRef.current === sessionId) {
+        clearActiveSessionUi();
+      }
+      setToast('会话已删除');
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
   const createSession = async () => {
     if (connection !== 'connected') { setActionError('请先连接 Gateway，再新建会话。'); return; }
     if (!agentId) { setActionError('请先选择一个 Agent，再新建会话。'); return; }
@@ -1516,7 +1624,12 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
     : connection === 'connecting' || connection === 'reconnecting' ? 'status-warn' : 'status-neutral';
 
   const agentSessions = sessions.filter(s => agentId ? s.agentId === agentId : true)
-    .sort((a, b) => (b.lastInteractionAt ?? 0) - (a.lastInteractionAt ?? 0));
+    .sort((a, b) => {
+      // 置顶优先，组内按最近交互倒序
+      const pinDelta = (b.pinnedAt ? 1 : 0) - (a.pinnedAt ? 1 : 0);
+      if (pinDelta !== 0) return pinDelta;
+      return (b.lastInteractionAt ?? 0) - (a.lastInteractionAt ?? 0);
+    });
 
   const VISIBLE_SESSION_COUNT = 5;
   const displayedSessions = showAllSessions ? agentSessions : agentSessions.slice(0, VISIBLE_SESSION_COUNT);
@@ -1687,18 +1800,64 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
                     </div>
                   </div>
                 ) : (
-                  <button
-                    key={s.id}
-                    className={`btn-secondary session-btn ${activeSessionId === s.id ? 'session-btn-active' : ''}`}
-                    onClick={() => openSession(s.id)}
-                    onDoubleClick={() => startRenameSession(s.id, s.title ?? sessionDisplayTitle(s))}
-                    title="单击打开 · 双击重命名"
-                  >
-                    <div style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {sessionDisplayTitle(s)}
-                    </div>
-                    <div className="small muted">{s.agentId} · {formatTimestamp(s.lastInteractionAt)}</div>
-                  </button>
+                  <div key={s.id} className="session-card">
+                    <button
+                      className={`btn-secondary session-btn ${activeSessionId === s.id ? 'session-btn-active' : ''}`}
+                      onClick={() => openSession(s.id)}
+                      onDoubleClick={() => startRenameSession(s.id, s.title ?? sessionDisplayTitle(s))}
+                      title="单击打开 · 双击重命名"
+                    >
+                      <div className="session-card-title-row">
+                        <span className="session-card-title">{sessionDisplayTitle(s)}</span>
+                        {s.pinnedAt != null && (
+                          <span className="session-pin-chip" title="已置顶">置顶</span>
+                        )}
+                        {s.running && (
+                          <span className="session-running-badge" title="会话正在运行中">
+                            <span className="session-running-dot" />
+                            运行中
+                          </span>
+                        )}
+                      </div>
+                      <div className="small muted session-card-meta">
+                        {s.agentId} · {formatTimestamp(s.lastInteractionAt)}
+                      </div>
+                    </button>
+                    <button
+                      className="session-menu-btn"
+                      title="更多操作"
+                      aria-label="会话操作菜单"
+                      aria-expanded={menuSessionId === s.id}
+                      onClick={(e) => openSessionMenu(e, s.id)}
+                    >
+                      …
+                    </button>
+                    {menuSessionId === s.id && menuPos && (
+                      <>
+                        <div className="session-menu-backdrop" onClick={closeSessionMenu} />
+                        <div
+                          className="session-menu"
+                          role="menu"
+                          style={{ right: menuPos.right, top: menuPos.top }}
+                        >
+                          <button
+                            className="session-menu-item"
+                            role="menuitem"
+                            onClick={() => { closeSessionMenu(); void togglePinSession(s.id, s.pinnedAt == null); }}
+                          >
+                            {s.pinnedAt == null ? '置顶会话' : '取消置顶'}
+                          </button>
+                          <button
+                            className="session-menu-item session-menu-item-danger"
+                            role="menuitem"
+                            onClick={() => { closeSessionMenu(); void removeSession(s.id); }}
+                          >
+                            删除会话
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
                 )
               ))}
               {!agentSessions.length && <div className="small muted">暂无历史会话</div>}

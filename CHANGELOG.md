@@ -1,3 +1,19 @@
+## v0.86.26
+
+### feat(webui): 历史会话卡片 —— 运行中标识 + 「…」菜单（置顶 / 删除）
+
+**需求**（大哥）：webui 左栏历史会话里正在跑的会话卡片要一眼可辨；卡片右下角加「…」小按钮，弹层菜单提供「删除会话」「置顶会话」。
+
+**改法**：
+- **运行中标识**：`GET /sessions` 列表项新增 `running` 投影（Gateway 按 `AgentRuntime.hasActiveRunForSession`（新增）实时标注，不落盘）；卡片标题行脉冲圆点「运行中」。实时性：WS `state` 事件按会话记账进 web store（`running/tools`=在途，`idle/aborted/error`=终态），并对列表会话**批量 subscribe**（协议 `subscribedSessions` 本就支持多会话；不订阅则后台会话事件不投递、标识失鲜）。订阅面收口：运行中 + 最近 50 + 当前，**批量订阅不带 agentId**（服务端 subscribe 会把连接身份重指到 `msg.agentId`，批量携带会随列表末条漂移、串扰 `matchesAgent`）。断连恢复后 store 自持：清订阅记账 → 重订 → REST 复核列表，不依赖宿主 UI 的刷新时机。根因级残余（agent 维度广播对 web 会话 id 失效）挂 `arch/NEXT-STEPS.md` G1，修好后撤掉批量订阅。
+- **置顶**：`SessionMeta.pinnedAt`（core 契约；**只读投影**）。权威数据写 `session.metadata.pinnedAt`（`patchSessionMetadata`/`updateMetadata` 通道）——**独立评审 P0**：初版写 `meta`，而长驻 run 对象的整包 `store.save` 会用陈旧 meta 回写索引，运行中置顶会在 turn 落盘时被静默抹掉（`jsonl.ts` 对 metadata 有浅合并保护、对 meta 没有，代码注释自证该丢更新类真实存在）；改走 metadata 通道 + `buildIndexEntry`/`updateMetadata` 投影回 `SessionMeta.pinnedAt` 后，陈旧 save 抹不掉（丢更新回归钉测试）。`PATCH /sessions/:id` 扩展 `{ pinned?: boolean }`（与 `{ title }` 同路由；提供 title 但非法显式 400，不静默忽略）；`session.updated` 广播携带 `pinnedAt`（null=取消）同步多端。列表置顶优先、组内按最近交互倒序，卡片带「置顶」角标。
+- **删除**：新增 `DELETE /sessions/:id`（复用 `gateway.deleteSession`：onClose 收 undo + 清 HITL + 删存储），**幂等**（已删视为成功，多端并发删除不互报错）。守卫：Run 在途拒绝（`session_running`→409）——在途删除会让落盘于删除之后的 Run 把会话写回来；**删前二次校验**收窄守卫到删除之间的准入窗口（根除需 admission 侧互斥，挂 NEXT-STEPS G3）。删除后广播 `session.removed`，其他已订阅端同步移卡片。UI：先拦运行中并以服务端投影复核（防失鲜徽标卡死删除），再 `confirm`；删的是当前会话时清空聊天态（远端删除广播同路清理）。
+- **交互**：「…」菜单 fixed 定位（滚动容器会裁切 absolute 弹层），坐标开合时解析、渲染不读 window；Esc / 滚动 / 缩放即关闭；贴近视口顶部自动向下翻。
+
+**评审**（子 agent 对抗性评审，13 条主张逐条核对后定稿）：**#1 major 属实**（上文置顶丢更新，已修 + 回归钉）；#2/#5/#6/#8/#9/#10 属实（删除竞态收窄、幂等化、失鲜徽标复核、重连复核、菜单渲染纯度/键盘、`clearActiveSessionUi` useCallback）；#3 属实（订阅无界 + 连接身份漂移 → 收口）；#4 与 #3/#7 同根（agent 维度广播失效 / 后台会话迟到 running 无终态守卫），按残余挂 NEXT-STEPS G1/G3；#11 测试缺口补齐可钉部分（丢更新回归钉、`running:true` 标注、`session.removed` 广播、幂等、unpin 清除、重连重订、Jsonl 投影往返），PATCH/DELETE 路由状态表测试缺 HTTP harness，挂 G4 顺带；#12 CHANGELOG（本条）；#13 定位 nit 不动。评审中「`pinnedAt` 经 `buildIndexEntry` spread 持久化、`JSON.stringify` 丢 undefined 键即真删」等结论核对为真。
+
+**验证**：新增 13 用例全绿（gateway 置顶/删除/守卫/广播/Jsonl 投影往返 ×6，web store 运行态记账/pinnedAt 传播/订阅收口/重连重订/unpin/远端删除/删除清态 ×7）；**全量 `npm test` 3010 绿**，2 个失败为已知沙箱固有环境失败（`getProcessName`、`cli-serve-preflight` 端口进程名探测——seatbelt 拒 setuid，与 v0.86.24/25 记载一致，干净树可复现）。core/engine/gateway tsc + webui 全程序类型检查 + root tsc + eslint + `arch/check-sync.sh` 全绿。**存量问题上报待拍板**：`npm run build` 的 webui `tsc -b` 步骤在 TS 6.0.3 下失败（TS5011/TS6059：webui tsconfig 缺显式 `rootDir`，跨包 paths 映射全数报错），干净 main 复现、与本次无关；本次 webui 验证走 `tsc --rootDir ..` 覆盖，修复落点（`rootDir: ".."` 或 `noEmit` 化）待大哥定夺。
+
 ## v0.86.25
 
 ### fix(delegation): 送达回执 + surfaced 语义 —— dispatch 被丢不再误记已送达

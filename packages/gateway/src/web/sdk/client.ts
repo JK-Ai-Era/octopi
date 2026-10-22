@@ -107,6 +107,10 @@ export interface SessionSummary {
   title?: string;
   titleSource?: 'snippet' | 'auto' | 'user';
   titleUpdatedAt?: number;
+  /** 置顶时间戳（epoch ms）；存在即置顶排序 */
+  pinnedAt?: number;
+  /** 实时运行态投影（服务端按活跃 Run 标注；不落盘） */
+  running?: boolean;
 }
 
 export interface SessionView {
@@ -907,6 +911,17 @@ export class OctopiClient {
   async renameSession(sessionId: string, title: string): Promise<SessionSummary> {
     const data = await this.patchJson(`/sessions/${encodeURIComponent(sessionId)}`, { title });
     return data?.data as SessionSummary;
+  }
+
+  /** 置顶 / 取消置顶会话（写 SessionMeta.pinnedAt） */
+  async setSessionPinned(sessionId: string, pinned: boolean): Promise<SessionSummary> {
+    const data = await this.patchJson(`/sessions/${encodeURIComponent(sessionId)}`, { pinned });
+    return data?.data as SessionSummary;
+  }
+
+  /** 删除会话（Run 在途时服务端返回 409） */
+  async deleteSession(sessionId: string): Promise<void> {
+    await this.deleteJson(`/sessions/${encodeURIComponent(sessionId)}`);
   }
 
   /** Session temporary effect roots (append-only, session lifetime) */

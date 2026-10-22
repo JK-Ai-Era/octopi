@@ -154,6 +154,19 @@ export class AgentRuntime {
   }
 
   /**
+   * 是否存在该会话的活跃 Run（不看 agent 归属）。
+   *
+   * @param sessionId - 会话 id
+   * @returns 该会话下任一 Run 在途即 true
+   */
+  hasActiveRunForSession(sessionId: string): boolean {
+    for (const run of this.activeRuns.values()) {
+      if (run.sessionId === sessionId) return true;
+    }
+    return false;
+  }
+
+  /**
    * 监听 Runtime 事件。
    * - `on(listener)`：全部事件
    * - `on(type, listener)`：按类型过滤（对齐 arch 签名）

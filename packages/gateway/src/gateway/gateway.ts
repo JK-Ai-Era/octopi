@@ -968,14 +968,35 @@ export class Gateway {
     });
   }
 
-  /** 删除会话：先按 onClose 收掉残留 undo，再删存储 */
+  /**
+   * 删除会话：先按 onClose 收掉残留 undo，再删存储。幂等：已不存在视为成功。
+   *
+   * @param sessionId - 目标会话
+   * @throws Run 在途（session_running: …）——在途删除会让落盘于删除之后的 Run 把会话写回来，必须先停再删。
+   *   残余竞态（已知，见 arch/NEXT-STEPS.md）：守卫与 store.delete 之间新准入的 Run 仍可能在删除后
+   *   落盘复活，admission 侧尚无删除互斥；窗口已用删前二次校验收窄，未根除。
+   */
   async deleteSession(sessionId: string): Promise<void> {
+    const session = await this.store.load(sessionId);
+    if (!session) {
+      // 幂等：删除已不存在的会话视为成功（多端并发删除不互相报错）
+      return;
+    }
+    if (this.runtime.hasActiveRunForSession(sessionId)) {
+      throw new Error(`session_running: cannot delete "${sessionId}" while a run is active`);
+    }
     this.cancelPendingApprovals(sessionId);
     this.cancelPendingQuestions(sessionId);
     this.clearHitlSessionCache(sessionId);
     await this.applySessionClosePolicy(sessionId);
     this.sessionSchedules?.purgeSession(sessionId);
+    // 删前二次校验，收窄守卫到删除之间的 Run 准入窗口
+    if (this.runtime.hasActiveRunForSession(sessionId)) {
+      throw new Error(`session_running: cannot delete "${sessionId}" while a run is active`);
+    }
     await this.store.delete(sessionId);
+    // 其他已订阅端同步移除卡片，避免点开已删会话才报错
+    this.broadcastSessionEvent('session.removed', sessionId, {});
   }
 
   async stop(): Promise<void> {
@@ -1847,8 +1868,13 @@ export class Gateway {
     return result;
   }
 
-  async listSessions(agentId?: string): Promise<SessionMeta[]> {
-    return this.store.list(agentId ? { agentId } : undefined);
+  /** 会话列表项：meta + 实时运行态投影（不落盘，供 UI 识别正在跑的会话） */
+  async listSessions(agentId?: string): Promise<Array<SessionMeta & { running: boolean }>> {
+    const sessions = await this.store.list(agentId ? { agentId } : undefined);
+    return sessions.map((meta) => ({
+      ...meta,
+      running: this.runtime.hasActiveRunForSession(meta.id),
+    }));
   }
 
   /**
@@ -1870,6 +1896,41 @@ export class Gateway {
     await this.store.save(sessionId, session);
     this.broadcastSessionUpdated(sessionId, applied, 'user');
     return session.meta;
+  }
+
+  /**
+   * 置顶 / 取消置顶会话（SessionMeta.pinnedAt；历史列表置顶排序）。
+   *
+   * 置顶是用户数据，写 `session.metadata.pinnedAt`（updateMetadata 通道）：
+   * 长驻 run 对象的整包 save 只浅合并 metadata、不抹本键；写 meta 会在 Run 落盘时被回写抹掉。
+   * 列表侧由 SessionStore 投影为 SessionMeta.pinnedAt。
+   *
+   * @param sessionId - 目标会话
+   * @param pinned - true=置顶（pinnedAt=now），false=取消置顶
+   * @returns 更新后的 SessionMeta
+   */
+  async setSessionPinned(sessionId: string, pinned: boolean): Promise<SessionMeta> {
+    const existing = await this.store.load(sessionId);
+    if (!existing) {
+      throw new Error(`Session "${sessionId}" not found`);
+    }
+    const at = Date.now();
+    await this.patchSessionMetadata(sessionId, (meta) => {
+      if (pinned) {
+        meta.pinnedAt = at;
+      } else {
+        // metadata 键 save 浅合并删不掉，必须 updateMetadata 真删
+        delete meta.pinnedAt;
+      }
+    });
+    const updated = await this.store.load(sessionId);
+    const pinnedAt = pinned ? at : undefined;
+    const meta: SessionMeta = { ...(updated?.meta ?? existing.meta), pinnedAt };
+    this.broadcastSessionMeta(sessionId, {
+      pinnedAt: pinnedAt ?? null,
+      updatedAt: Date.now(),
+    });
+    return meta;
   }
 
   /**
@@ -1944,11 +2005,25 @@ export class Gateway {
     title: string,
     titleSource: 'snippet' | 'auto' | 'user',
   ): void {
+    this.broadcastSessionMeta(sessionId, { title, titleSource });
+  }
+
+  /** 会话展示元数据变更广播（title / pinnedAt 等），消费方按需取键 */
+  private broadcastSessionMeta(sessionId: string, data: Record<string, unknown>): void {
+    this.broadcastSessionEvent('session.updated', sessionId, data);
+  }
+
+  /** 会话级广播（session.updated / session.removed），消费方按 type 与 data 取义 */
+  private broadcastSessionEvent(
+    type: string,
+    sessionId: string,
+    data: Record<string, unknown>,
+  ): void {
     const event = {
-      type: 'session.updated',
+      type,
       sessionId,
       timestamp: Date.now(),
-      data: { sessionId, title, titleSource, updatedAt: Date.now() },
+      data: { sessionId, updatedAt: Date.now(), ...data },
     } as unknown as AgentEvent;
     this.emitEvent(event);
     for (const adapter of this.streamingAdapters) {

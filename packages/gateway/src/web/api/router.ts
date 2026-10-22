@@ -220,15 +220,42 @@ export class WebApiRouter {
 
       if (sessionMatch && method === 'PATCH') {
         const body = await this.readBody(req);
-        if (typeof body?.title !== 'string' || !body.title.trim()) {
-          return this.json(res, 400, { ok: false, error: 'title is required' });
+        const title = typeof body?.title === 'string' && body.title.trim() ? body.title : undefined;
+        const pinned = typeof body?.pinned === 'boolean' ? body.pinned : undefined;
+        // 提供了 title 但非法：显式报错，不静默忽略调用方的字段
+        if (body?.title !== undefined && !title) {
+          return this.json(res, 400, { ok: false, error: 'title must not be empty' });
+        }
+        if (!title && pinned === undefined) {
+          return this.json(res, 400, { ok: false, error: 'title or pinned is required' });
         }
         try {
-          const meta = await this.gateway.renameSession(sessionMatch[1], body.title);
+          let meta;
+          if (pinned !== undefined) {
+            meta = await this.gateway.setSessionPinned(sessionMatch[1], pinned);
+          }
+          if (title) {
+            meta = await this.gateway.renameSession(sessionMatch[1], title);
+          }
           return this.json(res, 200, { ok: true, data: meta });
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           const code = msg.includes('not found') ? 404 : 400;
+          return this.json(res, code, { ok: false, error: msg });
+        }
+      }
+
+      if (sessionMatch && method === 'DELETE') {
+        try {
+          await this.gateway.deleteSession(sessionMatch[1]);
+          return this.json(res, 200, { ok: true, data: { id: sessionMatch[1] } });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          const code = msg.includes('session_running')
+            ? 409
+            : msg.includes('not found')
+              ? 404
+              : 400;
           return this.json(res, code, { ok: false, error: msg });
         }
       }
