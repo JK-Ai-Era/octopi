@@ -1243,7 +1243,6 @@ export class DefaultContextEngine implements ContextEngine {
    * 使用校准比率修正 token 估算
    *
    * 当有真实 usage 数据时，用 calibrationRatio 修正启发式估算值。
-   * 参考 OpenClaw 的 estimateContextTokens() 策略：
    * 优先用真实值，估算只做兜底，校准比率平滑修正偏差。
    */
   private calibrateTokens(sessionId: string, rawEstimated: number, stateKey?: string): number {

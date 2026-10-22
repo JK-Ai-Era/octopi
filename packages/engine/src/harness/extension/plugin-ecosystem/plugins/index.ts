@@ -1,5 +1,5 @@
 /**
- * Plugin System — 对齐 OpenClaw 的 Plugin 架构
+ * Plugin System
  *
  * 核心概念：
  * - Plugin = 能力的所有权边界（Provider/Channel/Tool/Hook 等）
@@ -9,8 +9,6 @@
  * - PluginLoader = 发现和加载 plugins
  * - PluginManager = 管理 plugin 生命周期和 hook 执行
  * - CapabilityRegistry = 能力注册中心
- *
- * 参考: https://docs.openclaw.ai/plugins/overview
  */
 
 // ── 定义和创建 ──

@@ -4,7 +4,7 @@
  * 不依赖 Message / LLMMessage 等领域类型，只做「内容 → token 数」。
  * 由 `token-estimator.ts` 组装为 `TokenEstimator` 实现，也可被同层模块直接复用。
  *
- * 三层策略（参考 OpenClaw）：
+ * 三层策略：
  * 1. 优先使用 LLM 返回的实际 token 数（外部回写）
  * 2. 次选：专用 tokenizer（如 tiktoken）- 未来扩展
  * 3. 兜底：启发式估算，按内容类型使用不同比率
@@ -21,7 +21,7 @@ import {
 } from './token-constants.js';
 
 // ── CJK 检测正则 ──
-// 参考 OpenClaw 的 NON_LATIN_RE，覆盖完整东亚字符范围
+// 非拉丁字符检测，覆盖完整东亚字符范围
 const NON_LATIN_RE =
   /[\u2E80-\u9FFF\uA000-\uA4FF\uAC00-\uD7AF\uF900-\uFAFF\uFF01-\uFF60\uFFE0-\uFFE6]/gu;
 
@@ -33,8 +33,6 @@ const CJK_SURROGATE_HIGH_RE = /[\uD840-\uD87E][\uDC00-\uDFFF]/g;
  *
  * 每个 CJK 字符计为 CHARS_PER_TOKEN 个等效字符，
  * 这样 `adjustedChars / CHARS_PER_TOKEN` 能得到准确的 token 估算。
- *
- * 参考 OpenClaw 的 estimateStringChars()。
  *
  * @param text 原始文本
  * @returns CJK 加权后的等效字符数

@@ -6,7 +6,7 @@
  * 2. LLM 摘要（如果可用）
  * 3. 截断（兜底）
  *
- * 参考 OpenClaw 的智能路由 + Hermes 的四阶段压缩算法。
+ * 智能路由 + 四阶段压缩算法。
  */
 
 import type { Message } from '@octopi-agent/core/types.js';

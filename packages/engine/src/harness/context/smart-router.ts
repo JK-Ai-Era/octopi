@@ -1,7 +1,7 @@
 /**
  * SmartRouter — 智能路由器
  *
- * 参考 OpenClaw 的 shouldPreemptivelyCompactBeforePrompt 策略。
+ * 预判性压缩策略：构建 prompt 前判断是否主动压缩。
  *
  * 四种路由：
  * 1. fits — 消息在预算内，不需要压缩

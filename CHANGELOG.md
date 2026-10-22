@@ -1,3 +1,25 @@
+## v0.86.38
+
+### refactor(plugin): 放弃 OpenClaw 插件兼容——兼容加载下线 + 全仓参考痕迹清理
+
+**拍板背景**（大哥 2026-10-23）：最初为接入最全的插件生态而对齐 OpenClaw 插件规范，但 4 个月间双方结构均已变化，兼容旧规范失去意义。决定**放弃 OpenClaw 插件兼容**，方向转为搭建完善自有插件系统、定自己的插件规范。待拍板遗留①（openclaw 兼容 provider 形状错标 `ModelProvider`）就此按废除兼容归口。
+
+**变更**：
+
+1. **兼容加载下线**（`plugin-ecosystem/plugins/loader.ts`，行为变更）：
+   - 删除 `openclaw.plugin.json` 备用 manifest 入口——plugin 目录只认 `octopi.plugin.json`；
+   - 删除 `package.json` 的 `pkg.openclaw.extensions` 入口解析——只认 `main` + 常规入口候选；
+   - 依赖缺失「不阻塞只警告」行为保持不变（错误处理语义待插件规范定）。
+2. **参考痕迹清理**（注释/文档，无行为变化）：`harness/context/*`（token 估算三层策略/分层比率/CJK 折算/安全余量/智能路由）、`plugin-ecosystem/plugins/*`（api/entry/capability/index/manager/manifest/loader）、`run/concurrency/tool-loop-detection-core.ts`、`src/init.ts`、`skills/manager.ts` 共 30 处「参考/对齐 OpenClaw」出处与文档链接移除；Hermes 压缩算法出处引用同批清除（压缩策略已演化，出处不再成立）；技术语义描述本身保留。
+3. **测试删除**：`tests/openclaw-compat.test.ts`（模拟 OpenClaw 插件注册模式的兼容测试）删除。该文件是 PluginApi 注册面唯一测试覆盖——测试缺口待插件模块开发时按自有契约补写（不复活兼容测试）。
+4. **有意保留**（报备）：`risk-evaluator.ts` 敏感路径清单的 `.openclaw`（安全防护行为，非兼容；磁盘残留目录仍可能含密钥）；`tests/harness/builtin-tools.test.ts` 的 `openclaw memory` 测试数据（file_search 回归场景，改则伤回归价值）；CHANGELOG 历史条目不动。
+
+**配套**：插件系统现状盘点 + 7 个开放问题（休眠 hook 补触发点、注册面收口、provider 契约推迟、legacyPluginIds 保留、enable/依赖语义、MCP 双轨、测试补齐）落 `arch/plugin-open-issues.md`（内部文档），**实施暂缓待拍板**。
+
+**验证**：`npm run lint` 全绿；`arch/check-sync.sh` 全绿；全量测试 3045 通过 / 2 失败 / 6 跳过——2 个失败为 `getProcessName` / `identifyPortOccupant`（沙箱固有限制：seatbelt 拒绝 setuid，沙箱内 ps 不可用，2026-10-18 已定性），与本次改动无关。
+
+---
+
 ## v0.86.37
 
 ### fix(config): serve 路径静默丢弃的顶层配置段全部接通 + subsystem 接线补全

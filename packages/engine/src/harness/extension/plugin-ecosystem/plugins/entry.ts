@@ -1,13 +1,8 @@
 /**
- * Plugin Entry — 对齐 OpenClaw 的 definePluginEntry
+ * Plugin Entry
  *
  * definePluginEntry 是创建 plugin 的标准方式。
  * 它定义了 plugin 的 id、name、register 回调等。
- *
- * 对齐 OpenClaw 的:
- *   import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
- *
- * 参考: https://docs.openclaw.ai/plugins/building-plugins
  */
 
 import type { PluginApi } from './api.js';
@@ -64,7 +59,7 @@ export interface OctopiPluginDefinition {
 /**
  * 定义一个 Plugin Entry
  *
- * 这是创建 plugin 的标准方式，对齐 OpenClaw 的 definePluginEntry。
+ * 这是创建 plugin 的标准方式。
  *
  * @param definition - Plugin 定义
  * @returns Plugin 定义对象
@@ -105,7 +100,6 @@ export function definePluginEntry(definition: OctopiPluginDefinition): OctopiPlu
  * Channel Plugin 定义
  *
  * 用于 channel 类型的 plugin。
- * 对齐 OpenClaw 的 defineChannelPluginEntry。
  */
 export interface OctopiChannelPluginDefinition extends OctopiPluginDefinition {
   /** Channel ID */
@@ -114,8 +108,6 @@ export interface OctopiChannelPluginDefinition extends OctopiPluginDefinition {
 
 /**
  * 定义一个 Channel Plugin Entry
- *
- * 对齐 OpenClaw 的 defineChannelPluginEntry。
  *
  * @param definition - Channel Plugin 定义
  * @returns Plugin 定义对象

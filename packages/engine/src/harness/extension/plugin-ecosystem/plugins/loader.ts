@@ -1,13 +1,11 @@
 /**
  * Plugin Loader — Plugin 发现和加载
  *
- * 对齐 OpenClaw 的 plugin loading pipeline：
+ * 加载流程：
  * 1. Discovery — 从配置路径发现候选 plugins
  * 2. Validation — 验证 manifest、检查 enable/disable 状态
  * 3. Loading — 进程内加载 plugin 代码
  * 4. Registration — 调用 register() 注册能力
- *
- * 参考: https://docs.openclaw.ai/plugins/architecture#architecture-overview
  */
 
 import * as path from 'node:path';
@@ -58,7 +56,7 @@ export interface PluginLoaderConfig {
 }
 
 /**
- * Plugin Entry 配置（来自 openclaw.json）
+ * Plugin Entry 配置（来自宿主配置）
  */
 export interface PluginEntryConfig {
   /** 是否启用 */
@@ -163,21 +161,10 @@ export class PluginLoader {
 
       const pluginDir = path.join(dirPath, entry.name);
       const manifestPath = path.join(pluginDir, 'octopi.plugin.json');
-
-      // 也检查 OpenClaw 格式的 manifest
-      const openclawManifestPath = path.join(pluginDir, 'openclaw.plugin.json');
-
-      let manifestFile: string | null = null;
-      if (existsSync(manifestPath)) {
-        manifestFile = manifestPath;
-      } else if (existsSync(openclawManifestPath)) {
-        manifestFile = openclawManifestPath;
-      }
-
-      if (!manifestFile) continue;
+      if (!existsSync(manifestPath)) continue;
 
       try {
-        const plugin = await this.loadPluginFromDir(pluginDir, manifestFile);
+        const plugin = await this.loadPluginFromDir(pluginDir, manifestPath);
         if (plugin) {
           plugins.push(plugin);
         }
@@ -275,11 +262,6 @@ export class PluginLoader {
     if (existsSync(pkgPath)) {
       try {
         const pkg = JSON.parse(await fs.readFile(pkgPath, 'utf-8'));
-        // openclaw 字段中的 extensions
-        if (pkg.openclaw?.extensions?.[0]) {
-          const ext = path.resolve(pluginDir, pkg.openclaw.extensions[0]);
-          if (existsSync(ext)) return ext;
-        }
         // main 字段
         if (pkg.main) {
           const main = path.resolve(pluginDir, pkg.main);
@@ -351,7 +333,7 @@ export class PluginLoader {
         for (const dep of plugin.manifest.requiresPlugins) {
           if (!plugins.some((p) => p.id === dep)) {
             console.warn(`[PluginLoader] Plugin "${plugin.id}" requires "${dep}" which is not loaded`);
-            // 不阻塞，只警告（对齐 OpenClaw 行为）
+            // 依赖缺失不阻塞加载，只警告
           }
         }
       }

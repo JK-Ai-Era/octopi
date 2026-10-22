@@ -1,7 +1,7 @@
 /**
  * Tool-call loop detection (no-progress pattern matching)
  *
- * 参考 OpenClaw 的 tool-loop-detection 设计：
+ * 设计要点：
  * - 不限制工具调用次数（多步工作是正常的）
  * - 检测"相同调用 + 相同结果"的无进展重复
  * - 使用 hash(tool_name + params + result) 作为指纹

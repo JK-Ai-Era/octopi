@@ -1,7 +1,7 @@
 /**
  * Token 估算常量
  *
- * 参考 OpenClaw 的分层比率策略，按内容类型使用不同估算比率。
+ * 分层比率策略，按内容类型使用不同估算比率。
  * 基于 tiktoken cl100k_base 经验值。
  */
 
@@ -19,7 +19,7 @@ export const JSON_CHARS_PER_TOKEN = 3;
 /** 消息结构开销（role + 分隔符 + 边界标记） */
 export const MESSAGE_OVERHEAD_TOKENS = 12;
 
-/** 安全余量系数：补偿估算不准，参考 OpenClaw 的 SAFETY_MARGIN */
+/** 安全余量系数：补偿估算不准 */
 export const SAFETY_MARGIN = 1.2;
 
 // ── 多媒体估算 ──

@@ -1,10 +1,8 @@
 /**
- * Plugin API — 对齐 OpenClaw 的 OpenClawPluginApi
+ * Plugin API
  *
  * 这是 plugin register() 回调中接收的 api 对象。
  * Plugin 通过它注册各种能力（provider、channel、tool、hook 等）。
- *
- * 参考: https://docs.openclaw.ai/plugins/sdk-overview#registration-api
  */
 
 import type { PluginManifest } from './manifest.js';
@@ -95,7 +93,6 @@ export interface PluginLogger {
 /**
  * Plugin API
  *
- * 对齐 OpenClaw 的 OpenClawPluginApi。
  * Plugin 在 register() 回调中使用此对象注册能力。
  */
 export class PluginApi {
@@ -173,7 +170,7 @@ export class PluginApi {
   }
 
   // ================================================================
-  // Capability Registration — 对齐 OpenClaw
+  // Capability Registration
   // ================================================================
 
   /**
@@ -199,7 +196,6 @@ export class PluginApi {
   /**
    * 注册 Agent Tool
    *
-   * 对齐 OpenClaw 的 api.registerTool()。
    * Tool 名称不能与核心 tool 冲突。
    *
    * @param tool - Tool 定义（包含 name、description、parameters）
@@ -235,7 +231,6 @@ export class PluginApi {
   /**
    * 注册 Hook
    *
-   * 对齐 OpenClaw 的 api.on()。
    * Hook handler 按 priority 降序执行，同 priority 按注册顺序。
    *
    * @param hookName - Hook 名称
@@ -297,7 +292,7 @@ export class PluginApi {
   }
 
   // ================================================================
-  // Extended Registration — 对齐 OpenClaw 更多能力注册
+  // Extended Registration
   // ================================================================
 
   /** 已注册的 web search providers */

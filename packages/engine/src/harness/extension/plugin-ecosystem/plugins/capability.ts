@@ -1,15 +1,12 @@
 /**
  * Capability Registry — 能力注册中心
  *
- * 对齐 OpenClaw 的 capability ownership model。
  * 每种能力类型有独立的注册表，plugin 是能力的所有权边界。
  *
  * 核心原则：
  * - plugin = 所有权边界（一个公司/功能的所有表面）
  * - capability = 核心合约，多个 plugin 可以实现或消费
  * - 冲突检测：同一 capability ID 不能被两个 plugin 注册
- *
- * 参考: https://docs.openclaw.ai/plugins/architecture#capability-ownership-model
  */
 
 import type { ModelProvider } from '@octopi-agent/core/interfaces/model-provider.js';

@@ -1,18 +1,15 @@
 /**
- * Plugin Manager — 对齐 OpenClaw 的 Plugin 管理系统
+ * Plugin Manager
  *
  * 这是 plugin 系统的顶层管理器，负责：
  * - 加载和管理所有 plugins
  * - 运行 hooks（支持 priority、timeout、拦截语义）
  * - 能力注册和查询
- * - 对齐 OpenClaw 的 hook catalog
  *
- * Hook 分类（对齐 OpenClaw）：
+ * Hook 分类：
  * - 拦截语义：返回值改变执行流程
  * - 观察语义：所有 plugin 都执行
  * - 上下文注入：返回 prependContext / systemPrompt 等
- *
- * 参考: https://docs.openclaw.ai/plugins/hooks
  */
 
 import type {
@@ -30,10 +27,10 @@ import { PluginLoader } from './loader.js';
 import { CapabilityRegistry } from './capability.js';
 
 // ================================================================
-// Hook Event Types — 对齐 OpenClaw Hook Catalog
+// Hook Event Types
 // ================================================================
 
-// ── OpenClaw 兼容 hooks ──
+// ── Hook 事件定义 ──
 
 /**
  * before_model_resolve 事件
@@ -225,7 +222,6 @@ export interface BeforeInstallEvent {
  * before_iteration 事件
  *
  * 每次 LLM 调用前触发（per-iteration）。
- * 与 OpenClaw 的 before_agent_reply（per-message）不同，
  * 这是 Octopi 独有的迭代级 hook。
  */
 export interface BeforeIterationEvent {
@@ -266,7 +262,6 @@ export interface BeforeIterationResult {
  * after_iteration 事件
  *
  * 每次 LLM 调用 + 工具执行完成后触发（per-iteration）。
- * 与 OpenClaw 的 after_tool_call（per-tool）不同，
  * 这是 Octopi 独有的迭代级 hook。
  */
 export interface AfterIterationEvent {
@@ -412,7 +407,6 @@ export interface InstallResult {
 /**
  * Plugin Manager
  *
- * 对齐 OpenClaw 的 plugin 管理系统。
  * 负责加载 plugins、运行 hooks、管理能力注册。
  */
 export class PluginManager {
@@ -463,13 +457,13 @@ export class PluginManager {
   }
 
   // ================================================================
-  // Hook Execution — 对齐 OpenClaw Hook Runner
+  // Hook Execution
   // ================================================================
 
   /**
    * 运行指定 hook
    *
-   * 对齐 OpenClaw 的 hook runner：
+   * 语义：
    * - 按 priority 降序执行
    * - 支持 per-handler timeout
    * - 拦截语义：返回非 null/undefined 的结果时中断后续 handlers

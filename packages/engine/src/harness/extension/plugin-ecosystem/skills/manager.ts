@@ -1,5 +1,5 @@
 /**
- * SkillManager — 两阶段加载实现（对齐 OpenClaw / Agent Skills 标准）
+ * SkillManager — 两阶段加载实现（对齐 Agent Skills 标准）
  *
  * 阶段 1（启动时）：
  *   discover() 扫描 skills/ 目录，只读 SKILL.md 的 frontmatter（name/description）

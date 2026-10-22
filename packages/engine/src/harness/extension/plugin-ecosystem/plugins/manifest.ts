@@ -1,10 +1,8 @@
 /**
- * Plugin Manifest — 对齐 OpenClaw 的 openclaw.plugin.json 格式
+ * Plugin Manifest
  *
  * Manifest 是 plugin 的声明式元数据，框架在不执行 plugin 代码的情况下
  * 就能读取和验证。这是 plugin 系统的基础。
- *
- * 参考: https://docs.openclaw.ai/plugins/manifest
  */
 
 /**
@@ -32,7 +30,6 @@ export interface JsonSchema {
 /**
  * Plugin Manifest
  *
- * 对齐 OpenClaw 的 openclaw.plugin.json 格式。
  * 所有字段都是声明式的，不需要执行 plugin 代码。
  */
 export interface PluginManifest {
