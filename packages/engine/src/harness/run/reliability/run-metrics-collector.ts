@@ -238,6 +238,7 @@ export class RunMetricsCollector {
       consecutiveIdenticalCalls: this.consecutiveIdenticalCalls,
       tokenGrowthRate,
       toolFailureRate,
+      toolCallsInWindow: this.recentToolCalls.length,
       uniqueToolsUsed: this.uniqueTools.size,
       hasProgress: this.hasProgress(),
       noopStreak: this.noopStreak,

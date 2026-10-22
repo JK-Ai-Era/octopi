@@ -90,6 +90,9 @@ interface RuleCheckResult {
 /** 指标生产者未提供 consecutiveIdenticalCalls 时只告警一次（防日志刷屏） */
 let warnedMissingIdenticalMetric = false;
 
+/** 指标生产者未提供 toolCallsInWindow 时只告警一次 */
+let warnedMissingWindowMetric = false;
+
 export class DefaultRunGuard implements RunGuard {
   private config: RunGuardConfig & {
     enabled: boolean;
@@ -316,15 +319,38 @@ export class DefaultRunGuard implements RunGuard {
       });
     }
 
-    // 规则 3: 工具失败率高
-    if (m.toolFailureRate > 0.5 && ctx.recentSummaries.length >= 3) {
+    // 规则 3: 工具失败率高 —— 只有「高失败率 + 完全无推进」才算 thrash
+    //
+    // 失败率高本身不是行为异常：编码类 run 里跑测试/编译得红是工作的组成部分
+    // （先写失败用例再实现、按错误信息反复调试），失败的调用与成功的编辑交替出现，
+    // hasProgress 为 true。旧判据只看 `toolFailureRate > 0.5`，会把这类正常 turn
+    // 判成 thrash → recover；同 kind 连续 3 次 recover 时还会 `clear_recent_turns`，
+    // 把 agent 刚做完的进度从上下文里抹掉，比直接 stop 更隐蔽。
+    //
+    // 真正的 thrash 特征是「失败没有换来任何推进」：窗口内失败占比过半，
+    // 且最近三轮没有任何成功工具或实质文本。
+    //
+    // 另需样本量下限：失败率是比值，只调用 2 次且都失败也是 100%，不构成证据。
+    const windowCalls = m.toolCallsInWindow;
+    if (windowCalls === undefined && !warnedMissingWindowMetric) {
+      warnedMissingWindowMetric = true;
+      console.warn(
+        '[RunGuard] CheckpointMetrics.toolCallsInWindow 缺失，high_failure_rate 判据暂不生效',
+      );
+    }
+    if (
+      m.toolFailureRate > 0.5 &&
+      (windowCalls ?? 0) >= 5 &&
+      !m.hasProgress &&
+      ctx.recentSummaries.length >= 3
+    ) {
       results.push({
         triggered: true,
         severity: 'medium',
         rule: 'high_failure_rate',
-        description: `工具失败率 ${(m.toolFailureRate * 100).toFixed(0)}%，执行质量下降`,
+        description: `工具失败率 ${(m.toolFailureRate * 100).toFixed(0)}%（窗口 ${windowCalls} 次）且最近无进展`,
         failureKind: 'thrash',
-        suggestedRecovery: [{ type: 'inject_hint', hint: '最近工具调用失败率较高。请检查工具使用方式是否正确，或考虑是否需要换一种方法。' }],
+        suggestedRecovery: [{ type: 'inject_hint', hint: '最近的工具调用大量失败，且没有取得任何进展。请停下来定位失败根因（读完整错误信息、确认前提假设是否正确），或向用户报告当前阻塞点。' }],
       });
     }
 

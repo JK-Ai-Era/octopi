@@ -53,6 +53,14 @@ export interface CheckpointMetrics {
   tokenGrowthRate: number;
   /** 最近 10 次工具调用的失败率（0-1） */
   toolFailureRate: number;
+  /**
+   * `toolFailureRate` 的样本量（窗口内实际记录的工具调用次数，上限 10）。
+   *
+   * 失败率是比值，样本过小时没有统计意义：只调用了 2 次且都失败也是 100%。
+   * 判据必须能区分「偶发失败」与「真实高失败率」。
+   * 可选：旧实现/外部 RunGuard 实现可不提供（缺失时相关判据不启用）。
+   */
+  toolCallsInWindow?: number;
   /** 使用了多少种不同工具 */
   uniqueToolsUsed: number;
   /** 最近几轮是否有实质进展（新内容或新工具调用） */

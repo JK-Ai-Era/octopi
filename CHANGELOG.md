@@ -1,3 +1,27 @@
+## v0.86.33
+
+### fix(run-guard): 失败率规则误杀 —— 「高失败率」不等于「thrash」
+
+**问题**：`high_failure_rate`（规则 3）只看 `toolFailureRate > 0.5` + 存在 ≥3 条轮次摘要。但失败率高本身不是行为异常——编码类 run 里跑测试/编译得红是工作的组成部分（先写失败用例再实现、按错误信息反复调试），失败的调用与成功的编辑交替出现。
+
+**误杀链**（与 v0.86.32 修的 `repeated_tool` 同族，但更隐蔽）：
+1. 高失败率 → `medium` / `thrash` → `recover`；
+2. 同 `failureKind` 连续 2 次 recover 后，recovery 升级为 `clear_recent_turns: 2`——**把 agent 刚做完的进度从上下文抹掉**，比直接 stop 更难诊断；
+3. 连续 3 次 → `stop`。
+
+**关键发现（窗口语义）**：`toolFailureRate` 是最近 10 条工具调用的比例。在这个窗口下，「失败率 > 0.5」与「无连续 2 次失败」不能共存（6F/4S 必然出现连续失败），而连续失败会先触发规则 2（`error_loop`，high）并抢先成为裁决 kind。因此 thrash **真正能独立生效的场景是小样本**：例如 2 次失败 + 1 次成功 = 67%，样本仅 3 条——恰恰是正常调试最常见的节奏。
+
+**改法**（判据收窄为「失败没有换来任何推进」）：
+- 新增 `CheckpointMetrics.toolCallsInWindow`（失败率窗口的实际样本量，可选字段），由 `RunMetricsCollector` 填充；缺失时打一次 `console.warn` 且判据不启用（宁可漏报，不退回旧判据误杀）。
+- 规则 3 追加两个必要条件：**样本量 ≥ 5**（失败率是比值，2 次全失败也是 100%，不构成证据）与 **`!hasProgress`**（最近三轮无任何成功工具或实质文本，才是真 thrash）。
+- 文案改为 `工具失败率 N%（窗口 M 次）且最近无进展`，recovery hint 改为「定位失败根因 / 报告阻塞点」，不再暗示「工具用法不对」。
+
+**测试**：`tests/run-guard.test.ts` 原有「应该检测工具失败率高」改为「高失败率 + 无进展」并为新条件补齐；新增 3 例防误杀（有进展不得 thrash、窗口 2 次全失败不得触发、字段缺失不得退回旧判据）。`tests/run-guard-escalation.e2e.test.ts` 新增真实 collector 驱动的小样本用例（断言 `toolFailureRate > 0.5`、`toolCallsInWindow === 3`、`hasProgress === true` 三个前提成立后仍须 `continue`）与 `toolCallsInWindow` 填充用例。**红绿对照**：还原旧判据后 4 条新用例全部失败，恢复后 31 例全绿。
+
+**验证**：`tsc` core/engine/gateway 干净；`tests` 类型门禁 0 新增（148 条存量基线不变）；eslint 干净；全量 `vitest` 3037 passed（3 failed 仍为已知环境限制：沙箱内 `ps` 不可用 ×2、Windows 临时路径用例 ×1）。
+
+**未做**：规则 2（`consecutiveErrors >= 3` → high/`blowup`）在「连续跑三个都红的测试」时同样会误杀，属同族但判据不同（连续失败 vs 比例），需单独设计「失败是否重复」的指标，本期未动。
+
 ## v0.86.32
 
 ### fix(run-guard): 长 turn 被静默掐断 —— 同名工具误判为循环 + 停止不可见 + 结束原因无日志

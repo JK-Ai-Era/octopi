@@ -62,6 +62,52 @@ describe('Guard recover → escalate stop（e2e 式）', () => {
     expect(stop.userMessage).toBeTruthy();
   });
 
+  it('小样本失败率高但有进展：不得判 thrash（旧判据会 recover）', async () => {
+    // 真实调试节奏：连续跑两个测试都红，然后一次编辑成功。
+    // 窗口只有 3 条记录 → 失败率 67%，但模型确实在推进。
+    // 旧判据（只看 toolFailureRate > 0.5）会判 thrash → recover，
+    // 同 kind 连续 3 次时还会 clear_recent_turns，抹掉刚做完的进度。
+    const guard = new DefaultRunGuard({ enableLLMReview: false, checkpointInterval: 5 });
+    const collector = new RunMetricsCollector();
+    for (let i = 0; i < 3; i++) {
+      collector.recordTurn({
+        role: 'assistant',
+        contentPreview: '',
+        tokenDelta: 0,
+        timestamp: Date.now(),
+      });
+    }
+    collector.recordToolResult('shell', false, false, {
+      args: { command: 'npx vitest run test-a' },
+      result: { exitCode: 1 },
+    });
+    collector.recordToolResult('shell', false, false, {
+      args: { command: 'npx vitest run test-b' },
+      result: { exitCode: 1 },
+    });
+    collector.recordToolResult('file_edit', true, false, {
+      args: { path: 'a.ts' },
+      result: { ok: true },
+    });
+
+    const ctx = collector.buildContext({});
+    // 前提：失败率确实过半，样本确实很小，且确实有进展
+    expect(ctx.metrics.toolFailureRate).toBeGreaterThan(0.5);
+    expect(ctx.metrics.toolCallsInWindow).toBe(3);
+    expect(ctx.metrics.hasProgress).toBe(true);
+
+    const verdict = await guard.checkpoint(ctx);
+    expect(verdict.action).toBe('continue');
+  });
+
+  it('collector 必须填充 toolCallsInWindow（否则失败率判据静默失效）', () => {
+    const collector = new RunMetricsCollector();
+    collector.recordToolResult('shell', true, false, { args: { command: 'a' }, result: { ok: true } });
+    collector.recordToolResult('shell', false, false, { args: { command: 'b' }, result: { exitCode: 1 } });
+    const ctx = collector.buildContext({});
+    expect(ctx.metrics.toolCallsInWindow).toBe(2);
+  });
+
   it('LLM 审查 prompt 含 recoveryHistory', async () => {
     const chat = vi.fn().mockResolvedValue({
       content: 'OK',

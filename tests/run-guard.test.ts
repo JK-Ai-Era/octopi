@@ -113,10 +113,10 @@ describe('DefaultRunGuard', () => {
       expect(verdict.reason).toContain('错误');
     });
 
-    it('应该检测工具失败率高', async () => {
+    it('应该检测工具失败率高且无进展（真 thrash）', async () => {
       const runGuard = new DefaultRunGuard({ enableLLMReview: false });
       const ctx = createContext({
-        metrics: createMetrics({ toolFailureRate: 0.6 }),
+        metrics: createMetrics({ toolFailureRate: 0.6, toolCallsInWindow: 10, hasProgress: false }),
         recentSummaries: [
           { role: 'tool', contentPreview: 'error', toolErrors: ['shell'], tokenDelta: 0, timestamp: Date.now() },
           { role: 'tool', contentPreview: 'error', toolErrors: ['shell'], tokenDelta: 0, timestamp: Date.now() },
@@ -128,6 +128,55 @@ describe('DefaultRunGuard', () => {
 
       expect(verdict.action).toBe('recover');
       expect(verdict.reason).toContain('失败率');
+    });
+
+    it('高失败率但有进展（TDD：测试红 / 编辑成功交替）不得判为 thrash', async () => {
+      const runGuard = new DefaultRunGuard({ enableLLMReview: false });
+      const ctx = createContext({
+        metrics: createMetrics({ toolFailureRate: 0.6, toolCallsInWindow: 10, hasProgress: true }),
+        recentSummaries: [
+          { role: 'tool', contentPreview: 'error', toolErrors: ['shell'], tokenDelta: 0, timestamp: Date.now() },
+          { role: 'tool', contentPreview: 'error', toolErrors: ['shell'], tokenDelta: 0, timestamp: Date.now() },
+          { role: 'tool', contentPreview: 'error', toolErrors: ['shell'], tokenDelta: 0, timestamp: Date.now() },
+        ],
+      });
+
+      const verdict = await runGuard.checkpoint(ctx);
+
+      expect(verdict.action).toBe('continue');
+      expect(verdict.reason ?? '').not.toContain('失败率');
+    });
+
+    it('窗口样本过小（2 次全失败 = 100%）不得判为 thrash', async () => {
+      const runGuard = new DefaultRunGuard({ enableLLMReview: false });
+      const ctx = createContext({
+        metrics: createMetrics({ toolFailureRate: 1, toolCallsInWindow: 2, hasProgress: false }),
+        recentSummaries: [
+          { role: 'tool', contentPreview: 'error', toolErrors: ['shell'], tokenDelta: 0, timestamp: Date.now() },
+          { role: 'tool', contentPreview: 'error', toolErrors: ['shell'], tokenDelta: 0, timestamp: Date.now() },
+          { role: 'tool', contentPreview: 'error', toolErrors: ['shell'], tokenDelta: 0, timestamp: Date.now() },
+        ],
+      });
+
+      const verdict = await runGuard.checkpoint(ctx);
+
+      expect(verdict.action).toBe('continue');
+    });
+
+    it('样本量字段缺失时不得退回旧判据（宁可漏报不误杀）', async () => {
+      const runGuard = new DefaultRunGuard({ enableLLMReview: false });
+      const ctx = createContext({
+        metrics: createMetrics({ toolFailureRate: 0.9, hasProgress: false }),
+        recentSummaries: [
+          { role: 'tool', contentPreview: 'error', toolErrors: ['shell'], tokenDelta: 0, timestamp: Date.now() },
+          { role: 'tool', contentPreview: 'error', toolErrors: ['shell'], tokenDelta: 0, timestamp: Date.now() },
+          { role: 'tool', contentPreview: 'error', toolErrors: ['shell'], tokenDelta: 0, timestamp: Date.now() },
+        ],
+      });
+
+      const verdict = await runGuard.checkpoint(ctx);
+
+      expect(verdict.action).toBe('continue');
     });
 
     it('应该检测 token 暴涨', async () => {
