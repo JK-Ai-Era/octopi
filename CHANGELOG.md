@@ -1,3 +1,15 @@
+## v0.86.27
+
+### fix(build): webui `tsc -b` 在 TS 6 下的 rootDir 门禁修复 —— `npm run build` 端到端恢复
+
+**问题**：`npm run build` 在 webui 步骤的 `tsc -b` 处失败（TS5011「common source directory is '..'，rootDir 必须显式设置」+ TS6059「file is not under rootDir」，跨包 `paths` 映射到 `packages/{core,engine,gateway}/src` 的文件全部报错），且失败构建会把 `.js` 生成物吐进 `packages/*/src`（`clean-dist` 的「stripped src junk」就是清这个）。干净 main 可复现——TS 升 6.0.3 后根目录推断规则收紧的**存量不兼容**，非近期改动引入（stash 对照实验核实）。此前 webui 能过是 `tsbuildinfo` 增量跳检的假绿，一旦重新检查即触发。
+
+**修法**：`packages/webui/tsconfig.json` 显式 `"rootDir": ".."`（TS5011 指名的正解）。程序包含跨包源文件，公共根就是 `packages/`；显式声明后 emit 全部落 `dist/` 镜像布局（vite 随后清空重建），**src 生成物污染一并根治**。`vite build` 的产物布局不受影响（bundler 从 src 打包）。
+
+**顺带修复（环境层，非仓库问题）**：验证中发现 `packages/webui/node_modules/@vitejs/plugin-react/` 是空目录（残缺安装），`vite build` 报 `ERR_MODULE_NOT_FOUND`——`npm install` 补齐即愈（疑与并行会话动 workspace node_modules 有关，lockfile 无 diff）。
+
+**验证**：`npm run build` 端到端全绿（clean → core → engine → gateway → webui `tsc -b` + vite 523 模块 → root tsc → 资产/schema/postbuild）；本次仅动 tsconfig 一行 + 版本文件，未触碰 TS 源码，既有 3010 绿测试面不受影响。
+
 ## v0.86.26
 
 ### feat(webui): 历史会话卡片 —— 运行中标识 + 「…」菜单（置顶 / 删除）
