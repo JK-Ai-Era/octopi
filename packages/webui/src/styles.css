@@ -146,7 +146,8 @@ pre { font-family: var(--font-mono); font-size: 13px; }
 .session-running-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--color-ok); animation: session-running-pulse 1.2s ease-in-out infinite; }
 @keyframes session-running-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 
-.session-menu-btn { position: absolute; right: 6px; bottom: 6px; width: 24px; height: 20px; padding: 0; line-height: 1; color: var(--color-muted); z-index: 30; }
+/* 「…」融进卡片：去边框/底色，仅悬停给出轻微反馈 */
+.session-menu-btn { position: absolute; right: 6px; bottom: 6px; width: 24px; height: 20px; padding: 0; line-height: 1; border: none; background: transparent; cursor: pointer; color: var(--color-muted); z-index: 30; }
 .session-menu-btn:hover { background: #f3f4f6; color: var(--color-text); }
 .session-menu-backdrop { position: fixed; inset: 0; z-index: 20; }
 /* fixed 定位（坐标由点击时锚点给出）：滚动容器会裁切 absolute 弹层 */

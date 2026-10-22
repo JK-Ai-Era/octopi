@@ -1,3 +1,9 @@
+## v0.86.28
+
+### fix(webui): 会话卡片「…」按钮去按钮感 —— 去边框/底色，只留符号
+
+**问题**（大哥反馈）：卡片右下角「…」带浏览器默认按钮边框+底色，看着突兀。**修法**：`.session-menu-btn` 显式 `border: none; background: transparent`（此前只重置了 padding/line-height，漏了 UA 默认 chrome），底色透出卡片本体；悬停保留轻微反馈（#f3f4f6）。纯样式，无行为变化；webui 构建过（vite ✓）。
+
 ## v0.86.27
 
 ### fix(build): webui `tsc -b` 在 TS 6 下的 rootDir 门禁修复 —— `npm run build` 端到端恢复
