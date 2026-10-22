@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { SubsystemRuntime } from '@octopi-agent/engine/harness/collaboration/autonomous-subsystem/runtime.js';
+import { DefaultToolBus } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/tools/tool-bus.js';
 import { DefaultEventBus } from '@octopi-agent/core/primitives/event-bus.js';
 import type { SubsystemSpec } from '@octopi-agent/engine/harness/collaboration/autonomous-subsystem/types.js';
 
@@ -35,7 +36,7 @@ describe('SubsystemRuntime', () => {
         model: {} as any,
         events,
         errorStrategy: {} as any,
-        mainTools: new Map(),
+        mainTools: new DefaultToolBus(),
       },
     });
     runtimes = [runtime];
@@ -145,7 +146,7 @@ describe('SubsystemRuntime', () => {
       const tmpDir = mkdtempSync(`${tmpdir()}/octopi-audit-test-`);
 
       const rt = new SubsystemRuntime({
-        deps: { model: {} as any, events, errorStrategy: {} as any, mainTools: new Map() },
+        deps: { model: {} as any, events, errorStrategy: {} as any, mainTools: new DefaultToolBus() },
         auditDir: tmpDir,
       });
 
@@ -170,7 +171,7 @@ describe('SubsystemRuntime', () => {
       const tmpDir = mkdtempSync(`${tmpdir()}/octopi-audit-fail-test-`);
 
       const rt = new SubsystemRuntime({
-        deps: { model: {} as any, events, errorStrategy: {} as any, mainTools: new Map() },
+        deps: { model: {} as any, events, errorStrategy: {} as any, mainTools: new DefaultToolBus() },
         auditDir: tmpDir,
       });
 

@@ -12,7 +12,7 @@ import { makeTokenUsage } from '@octopi-agent/core/types/turn.js';
 import { Agent } from '@octopi-agent/engine/harness/run/agent/agent.js';
 import { runAgentWithReliability } from '@octopi-agent/engine/harness/run/reliability/run-agent.js';
 import type { ReliabilityHarness } from '@octopi-agent/engine/harness/run/reliability/run-agent.js';
-import type { AgentLoopEvent } from '@octopi-agent/core/loop/types.js';
+import type { HarnessLoopEvent } from '@octopi-agent/engine/harness/run/reliability/harness-events.js';
 import type { ModelProvider, LLMRequest, LLMResponse, LLMStreamChunk } from '@octopi-agent/core/interfaces/model-provider.js';
 import type { Message, RegisteredTool } from '@octopi-agent/core/types.js';
 import { DefaultEventBus, NoopEventBus } from '@octopi-agent/core/primitives/event-bus.js';
@@ -27,6 +27,7 @@ function createSequentialProvider(responses: LLMResponse[]): ModelProvider {
     name: 'test',
     defaultModel: 'test',
     getModelInfo: () => null,
+    getModelInfos: () => [],
     async chat(_request: LLMRequest): Promise<LLMResponse> {
       return responses[Math.min(callIndex++, responses.length - 1)];
     },
@@ -56,9 +57,9 @@ function createHarness(overrides?: Partial<import('@octopi-agent/engine/harness/
   };
 }
 
-async function collectEvents(agent: Agent, harness?: ReliabilityHarness, signal?: AbortSignal): Promise<AgentLoopEvent[]> {
+async function collectEvents(agent: Agent, harness?: ReliabilityHarness, signal?: AbortSignal): Promise<HarnessLoopEvent[]> {
   const h = harness ?? createHarness();
-  const events: AgentLoopEvent[] = [];
+  const events: HarnessLoopEvent[] = [];
   for await (const e of runAgentWithReliability(agent.context, { model: agent.model }, h, signal)) {
     events.push(e);
   }

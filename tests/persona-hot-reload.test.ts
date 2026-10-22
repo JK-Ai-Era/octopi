@@ -48,6 +48,7 @@ function createMockProvider(onChat?: (req: LLMRequest) => void): ModelProvider {
     },
     isAvailable: async () => true,
     getModelInfo: () => null,
+    getModelInfos: () => [],
   };
 }
 

@@ -23,6 +23,7 @@ function createProvider(responses: LLMResponse[]): ModelProvider {
     name: 'test',
     defaultModel: 'test',
     getModelInfo: () => null,
+    getModelInfos: () => [],
     async chat(): Promise<LLMResponse> {
       return pick();
     },

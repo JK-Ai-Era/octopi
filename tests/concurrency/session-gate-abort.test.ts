@@ -25,6 +25,9 @@ function mockProvider(): ModelProvider {
     getModelInfo() {
       return null;
     },
+    getModelInfos() {
+      return [];
+    },
   };
 }
 

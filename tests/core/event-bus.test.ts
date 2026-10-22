@@ -32,7 +32,9 @@ describe('ThrottledEventBus trailing', () => {
   it('窗口内 burst 只透传首条，并在窗口结束补发最后一条', async () => {
     const inner = new DefaultEventBus();
     const received: AgentEvent[] = [];
-    inner.onAll((e) => received.push(e));
+    inner.onAll((e) => {
+      received.push(e);
+    });
 
     const bus = new ThrottledEventBus(inner, {
       intervals: { 'llm_stream_delta': 40 },

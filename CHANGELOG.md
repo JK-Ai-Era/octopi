@@ -1,3 +1,25 @@
+## v0.86.31
+
+### test(debt): tests 类型债清理第一批（T1）——基线 486 → 148，揪出 1 个死测试 + 3 处契约脱钩
+
+**范围**：`arch/NEXT-STEPS.md` T1「tests 类型债清理」的批次推进（486 → 148，还债 70%），按共性簇批量修 + 每批 `typecheck` 0 新增收敛基线 + 逐文件跑测试验证行为不变。
+
+**共性修复（高杠杆簇）**：
+- 新增共享夹具 `tests/helpers/tool-context.ts`（`makeToolContext` / `testFileEffects` / `testMemoryEffects`）：`ToolExecutionContext` 必填 `fileEffects`/`memoryEffects` 的合法替身（93 条裸 context 清零）；
+- mock provider 统一补 `getModelInfo/getModelInfos/isAvailable` 契约方法（~40 条）；`Map<any,any>` 冒充 `ToolBus` → 真实现 `new DefaultToolBus()`（15 条）；`ToolCall` 补 `id`（11 条）；
+- `HarnessLoopEvent`（超集）vs `AgentLoopEvent` 收集事件的类型纠偏（7 条）；`ModelInfo` import 路径纠偏（3 条）；
+- `res.json()` unknown 解析收口（knowledge-http-app 36 条单文件清零）；配置夹具注 `Record<string, unknown>`（迁移类测试，运行时会新增字段）。
+
+**顺带核对断言真实性（T1 既定要求）实锤 4 处**：
+1. **死测试复活**：`boundary-validator`「只配置 condition → 通过」的 `it(` 包装丢失，用例从未注册运行——补回包装后测试真实跑通；
+2. `openclaw-compat`：测试调用的 `supportsModel/complete` 是 OpenClaw 兼容形状，与核心 `ModelProvider` 是两套契约、prod 从不调用——测试侧显式换形标注（`OpenClawProviderShape`），契约归口问题待拍板；
+3. `delegation-tools`：D7 `spawnBy` 实际持久化 `childSessionId/childRunId` 但 `SessionSpawnLink` 类型未声明——显式标注 + 待拍板；
+4. `config-resolve`：`fallbackModels` 运行时收 `string | ModelConfig`（Zod union 同款）但 `ModelConfig` 类型只写 `ModelConfig[]`（`config.ts` 内有 `as any` 压着）——测试侧标注 + 待拍板。
+
+**验证**：每批 `npm run typecheck` 0 新增、基线多重集收敛（486→362→269→233→223→213→195→148）；受影响测试文件逐一 vitest 通过（累计 ~600+ 用例）；全量回归仅 2 失败均为沙箱固有限制（mac-seatbelt 拒 setuid exec，`ps` 不可用 → getProcessName 类必败，非本次改动）。
+
+**遗留下批**：余 148 条散布 ~100 文件（长尾小簇：`event.data` 可空、夹具缺字段、TS18046 unknown 断言等）；3 处 prod 契约缺口（上列 2/3/4）待拍板后归口。
+
 ## v0.86.30
 
 ### chore(tests): typecheck 门禁落地 —— 增量基线模式，只拦新增类型错误

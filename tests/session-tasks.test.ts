@@ -4,6 +4,7 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
+import { makeToolContext } from './helpers/tool-context.js';
 import { InMemorySessionStore } from '@octopi-agent/engine/integration/storage/memory.js';
 import { SessionTaskService } from '@octopi-agent/engine/harness/session/tasks/service.js';
 import { extractTaskQueryHints, renderSessionTasksInjection } from '@octopi-agent/engine/harness/session/tasks/render.js';
@@ -247,7 +248,7 @@ describe('task_* 工具', () => {
     return byName;
   }
 
-  const ctx = { sessionId: 's1', agentId: 'a1', messages: [] };
+  const ctx = makeToolContext({ sessionId: 's1', agentId: 'a1' });
 
   it('task_create / task_list / task_complete', async () => {
     const t = tools();

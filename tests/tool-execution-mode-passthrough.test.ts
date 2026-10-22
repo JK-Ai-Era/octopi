@@ -66,6 +66,7 @@ function createMockModelProvider(): ModelProvider {
     },
     isAvailable: vi.fn().mockResolvedValue(true),
     getModelInfo: () => null,
+    getModelInfos: () => [],
   };
 }
 

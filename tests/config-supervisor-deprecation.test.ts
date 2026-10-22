@@ -63,7 +63,7 @@ describe('loadConfig supervisor deprecation', () => {
     });
 
     const config = loadConfig(file);
-    expect((config as Record<string, unknown>).distributedIntelligence).toBeUndefined();
+    expect((config as unknown as Record<string, unknown>).distributedIntelligence).toBeUndefined();
     expect(warn.mock.calls.some(([msg]) => String(msg).includes('distributedIntelligence'))).toBe(true);
   });
 

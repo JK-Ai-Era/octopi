@@ -8,6 +8,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createLocalKnowledgeStack } from '@octopi-agent/engine/harness/knowledge/local-stack.js';
 
+/** knowledge HTTP API 响应 envelope（ok/data/error/detail 等），具体形状由各断言约束 */
+type JsonBody = Record<string, any>;
+
 async function withServer(
   fn: (base: string) => Promise<void>,
 ): Promise<void> {
@@ -39,7 +42,7 @@ describe('KnowledgeHttpApp', () => {
     await withServer(async (base) => {
       const h = await fetch(`${base}/health`);
       expect(h.status).toBe(200);
-      const j = await h.json();
+      const j = await h.json() as JsonBody;
       expect(j.ok).toBe(true);
 
       const bad = await fetch(`${base}/v1/sources`);
@@ -74,20 +77,20 @@ describe('KnowledgeHttpApp', () => {
         }),
       });
       expect(created.status).toBe(201);
-      const src = (await created.json()).data;
+      const src = (await created.json() as JsonBody).data;
 
       const listA = await (
         await fetch(`${base}/v1/sources`, {
           headers: { authorization: 'Bearer tok-a' },
         })
-      ).json();
+      ).json() as JsonBody;
       expect(listA.data.some((s: { id: string }) => s.id === src.id)).toBe(true);
 
       const listB = await (
         await fetch(`${base}/v1/sources`, {
           headers: { authorization: 'Bearer tok-b' },
         })
-      ).json();
+      ).json() as JsonBody;
       expect(listB.data.some((s: { id: string }) => s.id === src.id)).toBe(false);
 
       const del = await fetch(`${base}/v1/sources/${src.id}`, {
@@ -123,7 +126,7 @@ describe('KnowledgeHttpApp', () => {
         }),
       });
       expect(created.status).toBe(201);
-      const re = await fetch(`${base}/v1/sources/${(await created.json()).data.id}/reindex`, {
+      const re = await fetch(`${base}/v1/sources/${(await created.json() as JsonBody).data.id}/reindex`, {
         method: 'POST',
         headers: { authorization: 'Bearer tok-a' },
       });
@@ -135,7 +138,7 @@ describe('KnowledgeHttpApp', () => {
         { headers: { authorization: 'Bearer tok-a' } },
       );
       expect(s.status).toBe(200);
-      const body = await s.json();
+      const body = await s.json() as JsonBody;
       expect(Array.isArray(body.data?.hits)).toBe(true);
     });
   });
@@ -155,7 +158,7 @@ describe('KnowledgeHttpApp', () => {
         }),
       });
       expect(created.status).toBe(201);
-      const src = (await created.json()).data;
+      const src = (await created.json() as JsonBody).data;
 
       await fetch(`${base}/v1/principals/a-vis`, {
         method: 'PUT',
@@ -170,7 +173,7 @@ describe('KnowledgeHttpApp', () => {
 
       const before = await (
         await fetch(`${base}/v1/principals/a-vis/visibility`, { headers: h })
-      ).json();
+      ).json() as JsonBody;
       expect(before.data.assignedProjects).toContain('p-vis');
       expect(before.data.hiddenSourceIds ?? []).not.toContain(src.id);
 
@@ -186,7 +189,7 @@ describe('KnowledgeHttpApp', () => {
           displayName: 'g-hide',
         }),
       });
-      const gId = (await g.json()).data.id as string;
+      const gId = (await g.json() as JsonBody).data.id as string;
       await fetch(`${base}/v1/principals/a-vis/visibility`, {
         method: 'POST',
         headers: h,
@@ -194,7 +197,7 @@ describe('KnowledgeHttpApp', () => {
       });
       const after = await (
         await fetch(`${base}/v1/principals/a-vis/visibility`, { headers: h })
-      ).json();
+      ).json() as JsonBody;
       expect(after.data.hiddenSourceIds).toContain(gId);
       expect(after.data.assignedProjects).toContain('p-vis');
     });
@@ -215,13 +218,13 @@ describe('KnowledgeHttpApp', () => {
         }),
       });
       expect(created.status).toBe(201);
-      const srcId = (await created.json()).data.id as string;
+      const srcId = (await created.json() as JsonBody).data.id as string;
 
       // 有任务时 canAbort=true；中止后应变为 canResume=true / canAbort=false
       await fetch(`${base}/v1/sources/${srcId}/abort`, { method: 'POST', headers: h });
       const detail = await (
         await fetch(`${base}/v1/sources/${srcId}`, { headers: h })
-      ).json();
+      ).json() as JsonBody;
       expect(detail.data.jobControl.aborted).toBe(true);
       expect(detail.data.jobControl.canAbort).toBe(false);
       expect(detail.data.jobControl.canResume).toBe(true);
@@ -229,7 +232,7 @@ describe('KnowledgeHttpApp', () => {
       await fetch(`${base}/v1/sources/${srcId}/resume`, { method: 'POST', headers: h });
       const after = await (
         await fetch(`${base}/v1/sources/${srcId}`, { headers: h })
-      ).json();
+      ).json() as JsonBody;
       expect(after.data.jobControl.aborted).toBe(false);
     });
   });
@@ -249,18 +252,18 @@ describe('KnowledgeHttpApp', () => {
         }),
       });
       expect(created.status).toBe(201);
-      const srcId = (await created.json()).data.id as string;
+      const srcId = (await created.json() as JsonBody).data.id as string;
 
       await fetch(`${base}/v1/sources/${srcId}/abort`, { method: 'POST', headers: h });
       const resume = await fetch(`${base}/v1/jobs/resume`, { method: 'POST', headers: h });
       expect(resume.status).toBe(200);
-      const body = await resume.json();
+      const body = await resume.json() as JsonBody;
       expect(body.ok).toBe(true);
       expect(body.data).toHaveProperty('restoredCancelled');
 
       const abort = await fetch(`${base}/v1/jobs/abort`, { method: 'POST', headers: h });
       expect(abort.status).toBe(200);
-      expect((await abort.json()).data).toHaveProperty('cancelledQueued');
+      expect((await abort.json() as JsonBody).data).toHaveProperty('cancelledQueued');
     });
   });
 
@@ -279,18 +282,18 @@ describe('KnowledgeHttpApp', () => {
         }),
       });
       expect(created.status).toBe(201);
-      const sessSrcId = (await created.json()).data.id as string;
+      const sessSrcId = (await created.json() as JsonBody).data.id as string;
 
       const all = await (
         await fetch(`${base}/v1/sources?sessionId=sess-1`, { headers: h })
-      ).json();
+      ).json() as JsonBody;
       const ids = (all.data as Array<{ id: string; scopeRef: { level: string; key: string } }>).map(
         (s) => s.id,
       );
       expect(ids).toContain(sessSrcId);
       const notMine = await (
         await fetch(`${base}/v1/sources?sessionId=sess-other`, { headers: h })
-      ).json();
+      ).json() as JsonBody;
       const otherIds = (notMine.data as Array<{ id: string }>).map((s) => s.id);
       expect(otherIds).not.toContain(sessSrcId);
 
@@ -317,7 +320,7 @@ describe('KnowledgeHttpApp', () => {
       });
       const vis = await (
         await fetch(`${base}/v1/principals/a1/session-visibility?sessionId=s1`, { headers: h })
-      ).json();
+      ).json() as JsonBody;
       const targets = (vis.data as Array<{ targetId: string }>).map((v) => v.targetId);
       expect(targets).toContain('p-new');
       expect(targets).not.toContain('p-old');
@@ -351,24 +354,24 @@ describe('KnowledgeHttpApp', () => {
       });
       expect(g.status).toBe(201);
       expect(p.status).toBe(201);
-      const gId = (await g.json()).data.id as string;
-      const pId = (await p.json()).data.id as string;
+      const gId = (await g.json() as JsonBody).data.id as string;
+      const pId = (await p.json() as JsonBody).data.id as string;
 
       const globals = await (
         await fetch(`${base}/v1/sources?scopeLevel=global`, { headers: h })
-      ).json();
+      ).json() as JsonBody;
       const gIds = (globals.data as Array<{ id: string }>).map((s) => s.id);
       expect(gIds).toContain(gId);
       expect(gIds).not.toContain(pId);
 
       const projs = await (
         await fetch(`${base}/v1/sources?scopeLevel=project&projectKey=proj-x`, { headers: h })
-      ).json();
+      ).json() as JsonBody;
       const pIds = (projs.data as Array<{ id: string }>).map((s) => s.id);
       expect(pIds).toContain(pId);
       expect(pIds).not.toContain(gId);
 
-      const all = await (await fetch(`${base}/v1/sources`, { headers: h })).json();
+      const all = await (await fetch(`${base}/v1/sources`, { headers: h })).json() as JsonBody;
       const allIds = (all.data as Array<{ id: string }>).map((s) => s.id);
       expect(allIds).toContain(gId);
       expect(allIds).toContain(pId);
@@ -403,7 +406,7 @@ describe('KnowledgeHttpApp', () => {
       });
       expect(vis.status).toBe(200);
 
-      const got = await (await fetch(`${base}/v1/principals/a1/visibility`, { headers: h })).json();
+      const got = await (await fetch(`${base}/v1/principals/a1/visibility`, { headers: h })).json() as JsonBody;
       expect(got.data.assignedProjects).toContain('p1');
 
       const sv = await fetch(`${base}/v1/principals/a1/session-visibility`, {
@@ -418,7 +421,7 @@ describe('KnowledgeHttpApp', () => {
       });
       expect(sv.status).toBe(200);
 
-      const jobs = await (await fetch(`${base}/v1/jobs`, { headers: h })).json();
+      const jobs = await (await fetch(`${base}/v1/jobs`, { headers: h })).json() as JsonBody;
       expect(Array.isArray(jobs.data)).toBe(true);
     });
   });
@@ -445,7 +448,7 @@ describe('KnowledgeHttpApp', () => {
         }),
       });
       expect(created.status).toBe(201);
-      const src = (await created.json()).data;
+      const src = (await created.json() as JsonBody).data;
 
       // 不调用 /reindex：轮询 files/search 直到自动 ingest 落地
       let files: unknown[] = [];
@@ -456,7 +459,7 @@ describe('KnowledgeHttpApp', () => {
           await fetch(`${base}/v1/sources/${src.id}/files`, {
             headers: { authorization: 'Bearer tok-a' },
           })
-        ).json();
+        ).json() as JsonBody;
         files = Array.isArray(f.data) ? f.data : [];
         if (files.length > 0) break;
       }
@@ -466,7 +469,7 @@ describe('KnowledgeHttpApp', () => {
         `${base}/v1/principals/a1/search?q=${encodeURIComponent('index itself')}`,
         { headers: { authorization: 'Bearer tok-a' } },
       );
-      const body = await s.json();
+      const body = await s.json() as JsonBody;
       hits = body.data?.hits ?? [];
       expect(hits.length).toBeGreaterThan(0);
     });

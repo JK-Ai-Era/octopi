@@ -10,7 +10,8 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import type { AgentEvent } from '@octopi-agent/core/primitives/event-bus.js';
-import type { SessionData } from '@octopi-agent/engine/harness/session/types.js';
+import type { SessionData, SessionSpawnLink } from '@octopi-agent/engine/harness/session/types.js';
+import { makeToolContext } from '../helpers/tool-context.js';
 import type { TokenUsage } from '@octopi-agent/core/types/turn.js';
 
 import {
@@ -47,6 +48,9 @@ function makeMemoryStore() {
     data,
     async load(id: string) { return data.get(id) ?? null; },
     async save(id: string, session: SessionData) { data.set(id, session); },
+    async list() { return [...data.values()].map((s) => s.meta); },
+    async delete(id: string) { void data.delete(id); },
+    async exists(id: string) { return data.has(id); },
   };
 }
 
@@ -101,6 +105,7 @@ describe('RunnerChildRunPort', () => {
       task: 'research',
       input: 'raw',
       context: 'clean',
+      // 子会话/子 run 身份随 D7 一并持久化（SessionSpawnLink 类型未声明，见 T1 报告）
       spawnBy: {
         delegationId: 'del-1',
         childSessionId: 'cs-test-1',
@@ -108,7 +113,7 @@ describe('RunnerChildRunPort', () => {
         parentAgentId: 'main',
         parentSessionId: 's-parent',
         parentRunId: 'r-1',
-      },
+      } as SessionSpawnLink & { childSessionId: string; childRunId: string },
       systemPrompt: 'persona',
     });
 
@@ -243,7 +248,7 @@ describe('RunnerChildRunPort', () => {
       task: 'task-text',
       input: 'input-text',
       context: 'fork',
-      parentMessages: [{ role: 'user', content: 'prior context' }],
+      parentMessages: [{ role: 'user', content: 'prior context', timestamp: Date.now() }],
       spawnBy: { delegationId: 'del-6', parentAgentId: 'main', parentSessionId: 's', parentRunId: 'r' },
       systemPrompt: 'p',
     });
@@ -375,12 +380,7 @@ function makeToolHarness() {
   return { service, store, byName };
 }
 
-const CTX = {
-  agentId: 'main',
-  sessionId: 's-parent',
-  runId: 'r-1',
-  messages: [],
-} as never;
+const CTX = makeToolContext({ agentId: 'main', sessionId: 's-parent', runId: 'r-1' });
 
 describe('delegate_* tools', () => {
   it('registers exactly the four tools', () => {

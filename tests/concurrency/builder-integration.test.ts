@@ -1,12 +1,15 @@
 import { describe, it, expect } from 'vitest';
 import { AgentBuilder } from '@octopi-agent/engine/harness/agent/builder.js';
-import type { ModelProvider, LLMRequest, LLMResponse, ModelInfo } from '@octopi-agent/core/interfaces/model-provider.js';
+import type { ModelProvider, LLMRequest, LLMResponse } from '@octopi-agent/core/interfaces/model-provider.js';
+import type { ModelInfo } from '@octopi-agent/core/types.js';
 
 function createMockProvider(name: string, defaultModel = 'mock-model'): ModelProvider {
   return {
     name,
     defaultModel,
     getModelInfo: (_model: string): ModelInfo | null => null,
+    getModelInfos: (): ModelInfo[] => [],
+    isAvailable: async () => true,
     chat: async () => ({ content: `from ${name}`, model: defaultModel, finishReason: 'stop' as const }),
     stream: async function* () {
       yield { type: 'content' as const, content: `stream from ${name}` };

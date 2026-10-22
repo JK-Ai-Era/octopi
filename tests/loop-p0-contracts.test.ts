@@ -36,6 +36,7 @@ function createProvider(responses: LLMResponse[]): ModelProvider {
     name: 'test',
     defaultModel: 'test',
     getModelInfo: () => null,
+    getModelInfos: () => [],
     async chat(_req: LLMRequest): Promise<LLMResponse> {
       return pick();
     },
@@ -232,6 +233,7 @@ describe('finishReason=length 截断回灌', () => {
       name: 'test',
       defaultModel: 'test',
       getModelInfo: () => null,
+    getModelInfos: () => [],
       async chat(): Promise<LLMResponse> {
         return { content: 'x', model: 'test', finishReason: 'stop' };
       },
@@ -396,6 +398,7 @@ describe('消息边界规范化', () => {
       name: 'test',
       defaultModel: 'test',
       getModelInfo: () => null,
+    getModelInfos: () => [],
       async chat(req) {
         captured = req.messages;
         return { content: 'done', model: 'test', finishReason: 'stop' };
@@ -501,6 +504,7 @@ describe('非法 tool arguments', () => {
       name: 'test',
       defaultModel: 'test',
       getModelInfo: () => null,
+    getModelInfos: () => [],
       async chat() {
         return { content: 'x', model: 'test', finishReason: 'stop' };
       },

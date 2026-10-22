@@ -2,11 +2,12 @@
  * memory_store.supersedes_id 最小闭环：search 拿 id → store 冲突命题并软删旧条
  */
 import { describe, it, expect } from 'vitest';
+import { makeToolContext } from '../helpers/tool-context.js';
 import { InMemoryMemoryStore } from '@octopi-agent/engine/harness/memory/store.js';
 import { createMemoryStoreTool, createMemorySearchTool } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/tools/memory.js';
 import { loadConstitution } from '@octopi-agent/engine/harness/context/constitution/load-constitution.js';
 
-const ctx = { sessionId: 'sess-supersede' };
+const ctx = makeToolContext({ sessionId: 'sess-supersede' });
 
 describe('memory_store.supersedes_id', () => {
   it('search exposes id; store supersedes old conclusion (soft-delete)', async () => {

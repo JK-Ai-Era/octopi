@@ -3,6 +3,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { makeToolContext } from './helpers/tool-context.js';
 import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
 import { gzip } from 'node:zlib';
 import { promisify } from 'node:util';
@@ -42,7 +43,7 @@ function session(id: string, agentId: string, messages: SessionData['messages'])
 }
 
 function ctx(agentId: string, sessionId = 's-self'): ToolExecutionContext {
-  return { sessionId, agentId, messages: [] };
+  return makeToolContext({ sessionId, agentId });
 }
 
 describe('SessionHistoryPort', () => {

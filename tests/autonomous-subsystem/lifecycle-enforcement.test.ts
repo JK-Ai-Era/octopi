@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { SubsystemRuntime } from '@octopi-agent/engine/harness/collaboration/autonomous-subsystem/runtime.js';
+import { DefaultToolBus } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/tools/tool-bus.js';
 import { DefaultEventBus } from '@octopi-agent/core/primitives/event-bus.js';
 import type { SubsystemSpec } from '@octopi-agent/engine/harness/collaboration/autonomous-subsystem/types.js';
 
@@ -40,7 +41,7 @@ describe('SubsystemRuntime lifecycle enforcement', () => {
     const { mkdtempSync } = await import('node:fs');
     const tmpDir = mkdtempSync(`${tmpdir()}/octopi-audit-timeout-`);
     const runtime = new SubsystemRuntime({
-      deps: { model: {} as any, events, errorStrategy: {} as any, mainTools: new Map() },
+      deps: { model: {} as any, events, errorStrategy: {} as any, mainTools: new DefaultToolBus() },
       auditDir: tmpDir,
     });
     runtimes.push(runtime);
@@ -73,7 +74,7 @@ describe('SubsystemRuntime lifecycle enforcement', () => {
 
   it('delivers interrupted signal according to degradeOn policy', async () => {
     const runtime = new SubsystemRuntime({
-      deps: { model: {} as any, events, errorStrategy: {} as any, mainTools: new Map() },
+      deps: { model: {} as any, events, errorStrategy: {} as any, mainTools: new DefaultToolBus() },
     });
     runtimes.push(runtime);
 
@@ -100,7 +101,7 @@ describe('SubsystemRuntime lifecycle enforcement', () => {
 
   it('degrades when estimated input tokens exceed maxTokens (degradeOn=both)', async () => {
     const runtime = new SubsystemRuntime({
-      deps: { model: {} as any, events, errorStrategy: {} as any, mainTools: new Map() },
+      deps: { model: {} as any, events, errorStrategy: {} as any, mainTools: new DefaultToolBus() },
     });
     runtimes.push(runtime);
 

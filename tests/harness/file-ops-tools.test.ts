@@ -14,6 +14,7 @@ import {
   createFileRmdirTool,
 } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/tools/file-ops.js';
 import { TurnFileUndoLog } from '@octopi-agent/engine/harness/extension/execution-environment/undo-log.js';
+import { testMemoryEffects } from '../helpers/tool-context.js';
 
 async function exists(p: string): Promise<boolean> {
   try {
@@ -53,6 +54,7 @@ describe('file ops (cross-platform)', () => {
     pathContainment: 'strict' as const,
     effectChannel: 'engine' as const,
     fileEffects: undo,
+    memoryEffects: testMemoryEffects(),
     attachmentRoots: [] as string[],
   });
 

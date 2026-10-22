@@ -111,8 +111,7 @@ describe('validateSubsystemSpec', () => {
       expect(errors[0].message).toContain('mutually exclusive');
     });
 
-    '只配置 condition → 通过',
-    () => {
+    it('只配置 condition → 通过', () => {
       const spec = makeSpec({
         sense: {
           source: 'eventBus',
@@ -121,7 +120,7 @@ describe('validateSubsystemSpec', () => {
         },
       });
       expect(validateSubsystemSpec(spec)).toHaveLength(0);
-    };
+    });
   });
 
   describe('think.implementation 校验', () => {

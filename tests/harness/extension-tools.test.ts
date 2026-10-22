@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { makeToolContext } from '../helpers/tool-context.js';
 
 import { createToolSet } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/tools/tool-set.js';
 import { createMemoryTools } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/tools/memory.js';
@@ -75,13 +76,13 @@ describe('extension tools', () => {
         future_use: 'when writing store tests',
         anchors: ['persist', 'store'],
       },
-      { sessionId: 's1', agentId: 'a1', messages: [] },
+      makeToolContext({ sessionId: 's1', agentId: 'a1' }),
     )) as { stored: boolean };
     expect(stored.stored).toBe(true);
 
     const result = (await searchTool.handler(
       { query: 'persist' },
-      { sessionId: 's1', agentId: 'a1', messages: [] },
+      makeToolContext({ sessionId: 's1', agentId: 'a1' }),
     )) as { results: Array<{ content: string }>; total: number };
 
     expect(result.total).toBe(1);
@@ -96,7 +97,7 @@ describe('extension tools', () => {
     service.attachSession(session);
     const tools = createSessionTaskTools(service);
     const byName = Object.fromEntries(tools.map((t) => [t.definition.name, t]));
-    const ctx = { sessionId: 's1', agentId: 'a1', messages: [] };
+    const ctx = makeToolContext({ sessionId: 's1', agentId: 'a1' });
 
     const created = (await byName.task_create.handler(
       { description: 'write docs' },
@@ -122,7 +123,7 @@ describe('extension tools', () => {
     const tool = createAskUserTool(async () => 'answer');
     const result = (await tool.handler(
       { question: 'hi?' },
-      { sessionId: 's1', agentId: 'a1', messages: [] },
+      makeToolContext({ sessionId: 's1', agentId: 'a1' }),
     )) as { answer: string };
 
     expect(result.answer).toBe('answer');
@@ -136,7 +137,7 @@ describe('extension tools', () => {
     });
     const result = (await tool.handler(
       { question: 'pick', options: ['A', 'B'] },
-      { sessionId: 's9', agentId: 'a9', messages: [] },
+      makeToolContext({ sessionId: 's9', agentId: 'a9' }),
     )) as { answer: string };
 
     expect(result.answer).toBe('A');
@@ -147,7 +148,7 @@ describe('extension tools', () => {
     const tool = createAskUserTool(async () => 'x');
     const result = (await tool.handler(
       { question: '   ' },
-      { sessionId: 's1', agentId: 'a1', messages: [] },
+      makeToolContext({ sessionId: 's1', agentId: 'a1' }),
     )) as { answer: string | null; error?: string };
     expect(result.answer).toBeNull();
     expect(result.error).toContain('question');

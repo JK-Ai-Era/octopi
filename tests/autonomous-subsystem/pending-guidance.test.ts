@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { SubsystemRuntime } from '@octopi-agent/engine/harness/collaboration/autonomous-subsystem/runtime.js';
+import { DefaultToolBus } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/tools/tool-bus.js';
 import { DefaultEventBus } from '@octopi-agent/core/primitives/event-bus.js';
 import type { SubsystemSpec } from '@octopi-agent/engine/harness/collaboration/autonomous-subsystem/types.js';
 
@@ -41,7 +42,7 @@ describe('SubsystemRuntime.consumePendingGuidance', () => {
         model: {} as never,
         events,
         errorStrategy: {} as never,
-        mainTools: new Map(),
+        mainTools: new DefaultToolBus(),
       },
     });
   });

@@ -158,13 +158,14 @@ describe('resolveFallbackModels depth limit', () => {
   });
 
   it('should resolve string fallbackModels references', () => {
-    const inline: ModelConfig = {
+    // 输入形态允许 string 引用（Schema union）；ModelConfig 只表达解析后形状
+    const inline = {
       provider: 'openai',
       model: 'gpt-5.5',
       fallbackModels: ['openai/gpt-5.5'],
     };
 
-    const result = resolveModelConfig(inline, flatModels);
+    const result = resolveModelConfig(inline as unknown as ModelConfig, flatModels);
 
     expect(result.fallbackModels).toHaveLength(1);
     expect(result.fallbackModels![0].provider).toBe('openai');
@@ -188,13 +189,14 @@ describe('resolveFallbackModels depth limit', () => {
   });
 
   it('should throw for unresolvable fallback string reference', () => {
-    const inline: ModelConfig = {
+    // 输入形态允许 string 引用（Schema union）；ModelConfig 只表达解析后形状
+    const inline = {
       provider: 'openai',
       model: 'gpt-5.5',
       fallbackModels: ['nonexistent'],
     };
 
-    expect(() => resolveModelConfig(inline, flatModels))
+    expect(() => resolveModelConfig(inline as unknown as ModelConfig, flatModels))
       .toThrow('Cannot resolve fallback model "nonexistent"');
   });
 });

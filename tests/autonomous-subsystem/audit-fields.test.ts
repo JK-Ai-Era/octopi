@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, readdirSync, readFileSync } from 'node:fs';
+import { DefaultToolBus } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/tools/tool-bus.js';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { SubsystemRuntime } from '@octopi-agent/engine/harness/collaboration/autonomous-subsystem/runtime.js';
@@ -36,7 +37,7 @@ describe('SubsystemRuntime audit field completeness', () => {
   beforeEach(() => {
     events = new DefaultEventBus();
     runtime = new SubsystemRuntime({
-      deps: { model: {} as any, events, errorStrategy: {} as any, mainTools: new Map() },
+      deps: { model: {} as any, events, errorStrategy: {} as any, mainTools: new DefaultToolBus() },
       auditDir: tmpDir,
     });
   });

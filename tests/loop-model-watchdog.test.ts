@@ -82,6 +82,7 @@ function hangingProvider(probe: StreamProbe, chatImpl?: (req: LLMRequest) => Pro
     name: 'hanging',
     defaultModel: 'hanging',
     getModelInfo: () => null,
+    getModelInfos: () => [],
     async chat(req: LLMRequest): Promise<LLMResponse> {
       probe.chatCalls++;
       probe.chatSignal = req.signal;

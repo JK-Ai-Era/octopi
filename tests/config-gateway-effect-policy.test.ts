@@ -84,7 +84,7 @@ describe('toGatewayConfig agent field preservation (no silent drop)', () => {
       model: { provider: 'test', model: 'm1' },
       skillDirectory: 'C:/octopi/agents/default/skills',
       skills: ['docx'],
-      channelBindings: { http: [{ channel: 'im', userId: 'u1' }] },
+      channelBindings: { im: 'u1' },
       maxSessionRights: { canRun: true, readScope: 'full' },
       knowledge: { recall: 'hybrid' },
       effectPolicy: { mode: 'project' as const, transactionRoots: ['C:/Projects/octopi'] },
@@ -102,7 +102,7 @@ describe('toGatewayConfig agent field preservation (no silent drop)', () => {
   it('every key on AgentConfig survives the boundary mapping', () => {
     const ac = fullyPopulatedAgent();
     const gw = toGatewayConfig(minimalConfig({ agents: [ac] }));
-    const def = gw.agents[0] as Record<string, unknown>;
+    const def = gw.agents[0] as unknown as Record<string, unknown>;
 
     // 通用断言：输入有的键，输出必须有（新增字段漏映射会在此失败）
     const missing = Object.keys(ac).filter((k) => !(k in def));

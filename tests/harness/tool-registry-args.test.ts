@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { makeToolContext } from '../helpers/tool-context.js';
 import { DefaultToolBus } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/tools/tool-bus.js';
 
 function createRegistry() {
@@ -31,56 +32,56 @@ describe('DefaultToolBus 参数校验', () => {
   it('缺少必填参数时抛出错误', async () => {
     const registry = createRegistry();
     await expect(
-      registry.execute('format_text', {}, { sessionId: 's1', agentId: 'a1', messages: [] }),
+      registry.execute('format_text', {}, makeToolContext({ sessionId: 's1', agentId: 'a1' })),
     ).rejects.toThrow('missing required parameter');
   });
 
   it('参数类型不匹配时抛出错误', async () => {
     const registry = createRegistry();
     await expect(
-      registry.execute('format_text', { content: 123, mode: 'fast' }, { sessionId: 's1', agentId: 'a1', messages: [] }),
+      registry.execute('format_text', { content: 123, mode: 'fast' }, makeToolContext({ sessionId: 's1', agentId: 'a1' })),
     ).rejects.toThrow('must be string');
   });
 
   it('枚举值不合法时抛出错误', async () => {
     const registry = createRegistry();
     await expect(
-      registry.execute('format_text', { content: 'abc', mode: 'unknown' }, { sessionId: 's1', agentId: 'a1', messages: [] }),
+      registry.execute('format_text', { content: 'abc', mode: 'unknown' }, makeToolContext({ sessionId: 's1', agentId: 'a1' })),
     ).rejects.toThrow('must be one of');
   });
 
   it('数值范围不合法时抛出错误', async () => {
     const registry = createRegistry();
     await expect(
-      registry.execute('format_text', { content: 'abc', level: 9 }, { sessionId: 's1', agentId: 'a1', messages: [] }),
+      registry.execute('format_text', { content: 'abc', level: 9 }, makeToolContext({ sessionId: 's1', agentId: 'a1' })),
     ).rejects.toThrow('must be <= 3');
   });
 
   it('字符串长度不合法时抛出错误', async () => {
     const registry = createRegistry();
     await expect(
-      registry.execute('format_text', { content: 'abcde' }, { sessionId: 's1', agentId: 'a1', messages: [] }),
+      registry.execute('format_text', { content: 'abcde' }, makeToolContext({ sessionId: 's1', agentId: 'a1' })),
     ).rejects.toThrow('length must be <= 4');
   });
 
   it('正则不匹配时抛出错误', async () => {
     const registry = createRegistry();
     await expect(
-      registry.execute('format_text', { content: 'ABC' }, { sessionId: 's1', agentId: 'a1', messages: [] }),
+      registry.execute('format_text', { content: 'ABC' }, makeToolContext({ sessionId: 's1', agentId: 'a1' })),
     ).rejects.toThrow('must match pattern');
   });
 
   it('数组数量不满足约束时抛出错误', async () => {
     const registry = createRegistry();
     await expect(
-      registry.execute('format_text', { content: 'abc', tags: [] }, { sessionId: 's1', agentId: 'a1', messages: [] }),
+      registry.execute('format_text', { content: 'abc', tags: [] }, makeToolContext({ sessionId: 's1', agentId: 'a1' })),
     ).rejects.toThrow('must have >= 1 items');
   });
 
   it('嵌套对象必填字段缺失时抛出错误', async () => {
     const registry = createRegistry();
     await expect(
-      registry.execute('format_text', { content: 'abc', meta: {} }, { sessionId: 's1', agentId: 'a1', messages: [] }),
+      registry.execute('format_text', { content: 'abc', meta: {} }, makeToolContext({ sessionId: 's1', agentId: 'a1' })),
     ).rejects.toThrow('nested parameter "meta.key" is required');
   });
 
@@ -89,7 +90,7 @@ describe('DefaultToolBus 参数校验', () => {
     const result = await registry.execute(
       'format_text',
       { content: 'abc', level: 2, mode: 'fast', tags: ['x'], meta: { key: 'k' } },
-      { sessionId: 's1', agentId: 'a1', messages: [] },
+      makeToolContext({ sessionId: 's1', agentId: 'a1' }),
     );
     expect(result).toBe('ok');
   });

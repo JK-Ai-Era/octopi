@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ProviderPool } from '@octopi-agent/engine/harness/run/concurrency/provider-pool.js';
-import type { ModelProvider, LLMRequest, LLMResponse, LLMStreamChunk, ModelInfo } from '@octopi-agent/core/interfaces/model-provider.js';
+import type { ModelProvider, LLMRequest, LLMResponse, LLMStreamChunk } from '@octopi-agent/core/interfaces/model-provider.js';
+import type { ModelInfo } from '@octopi-agent/core/types.js';
 
 function createProvider(name: string, opts: { failChat?: boolean; available?: boolean } = {}): ModelProvider & { setAvailable(value: boolean): void } {
   let available = opts.available ?? true;

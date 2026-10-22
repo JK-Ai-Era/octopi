@@ -34,7 +34,8 @@ describe('StateMachine', () => {
       initial: 'idle',
       transitions: [{ from: 'idle', to: 'busy' }],
     });
-    expect(() => sm.transition('error')).toThrow(/Illegal state transition/);
+    // 故意传入未声明状态，验证运行时拒绝
+    expect(() => sm.transition('error' as 'idle')).toThrow(/Illegal state transition/);
     expect(sm.state).toBe('idle');
   });
 
@@ -67,7 +68,8 @@ describe('StateMachine', () => {
       initial: 'idle',
       transitions: [{ from: 'idle', to: 'busy' }],
     });
-    sm.force('error');
+    // force 故意设置未声明状态，验证绕过转换检查
+    sm.force('error' as 'idle');
     expect(sm.state).toBe('error');
   });
 });

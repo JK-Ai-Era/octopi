@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { makeToolContext } from '../helpers/tool-context.js';
 
 import {
   createClientTool,
@@ -144,7 +145,7 @@ describe('ClientToolRegistry', () => {
 });
 
 describe('createClientTool', () => {
-  const ctx = { sessionId: 's1', agentId: 'a1', messages: [] };
+  const ctx = makeToolContext({ sessionId: 's1', agentId: 'a1' });
 
   it('returns value result from invoker', async () => {
     const tool = createClientTool(noteForm, async () => ({

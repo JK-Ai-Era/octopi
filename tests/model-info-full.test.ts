@@ -288,6 +288,7 @@ describe('Agent model provider', () => {
       },
       isAvailable: vi.fn().mockResolvedValue(true),
       getModelInfo: vi.fn().mockReturnValue({ name: defaultModel ?? 'mock', contextWindow: 128000 }),
+      getModelInfos: vi.fn().mockReturnValue([{ name: defaultModel ?? 'mock', contextWindow: 128000 }]),
     };
   }
 

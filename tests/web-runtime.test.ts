@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { OctopiRuntimeStore } from '@octopi-agent/gateway/web/runtime/store.js';
+import type { OctopiClient } from '@octopi-agent/gateway/web/sdk/client.js';
 
 function createMockClient() {
   const state: {
@@ -54,13 +55,8 @@ function createMockClient() {
     state,
   };
 
-  return client as unknown as {
-    on: (events: Record<string, any>) => void;
-    connect: () => void;
-    listApprovals: () => Promise<any[]>;
-    listQuestions: (sessionId: string) => Promise<any[]>;
-    listClientToolCalls: (sessionId: string) => Promise<any[]>;
-    sendSubscribe: (sessionId: string, agentId?: string) => void;
+  // mock 辅助（emit*/state）与完整 OctopiClient 契约交叉：缺省方法由各测试按需挂载
+  return client as unknown as OctopiClient & {
     emitAccepted: (sessionId: string | undefined, messageId: string | undefined) => void;
     emitEvent: (sessionId: string | undefined, event: Record<string, unknown>) => void;
     emitState: (sessionId: string | undefined, s: string) => void;

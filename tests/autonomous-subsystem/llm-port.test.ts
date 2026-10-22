@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createSubsystemLLMPort, DEP_LLM_PORT, DEP_SUBSYSTEM_PROMPT } from '@octopi-agent/engine/harness/collaboration/autonomous-subsystem/think/llm-port.js';
+import { DefaultToolBus } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/tools/tool-bus.js';
 import { ModelResolver } from '@octopi-agent/engine/harness/collaboration/autonomous-subsystem/think/model-resolver.js';
 import { SubsystemRuntime } from '@octopi-agent/engine/harness/collaboration/autonomous-subsystem/runtime.js';
 import { DefaultEventBus } from '@octopi-agent/core/primitives/event-bus.js';
@@ -194,7 +195,7 @@ describe('SubsystemRuntime injects llmPort and cognitive prompt', () => {
         model: provider,
         events,
         errorStrategy: {} as never,
-        mainTools: new Map(),
+        mainTools: new DefaultToolBus(),
         modelLevels: {
           mini: { primary: 'mock/gpt-mini', fallback: ['mock/gpt-mini-fallback'] },
         },
@@ -228,7 +229,7 @@ describe('SubsystemRuntime injects llmPort and cognitive prompt', () => {
         model: provider,
         events,
         errorStrategy: {} as never,
-        mainTools: new Map(),
+        mainTools: new DefaultToolBus(),
       },
     });
 

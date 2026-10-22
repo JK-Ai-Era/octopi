@@ -2,6 +2,7 @@
  * P0/P1 — 补录失败语义、写路径去重、SUBSYSTEM.md 绑定、govern boost/晋升
  */
 import { describe, it, expect, vi } from 'vitest';
+import { makeToolContext } from '../helpers/tool-context.js';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -99,9 +100,9 @@ describe('write-path dedup (G5)', () => {
       channel: 'decision',
       anchors: ['npm'],
     };
-    const first = (await tool.handler(args, { sessionId: 's' })) as { stored: boolean; id: string };
+    const first = (await tool.handler(args, makeToolContext({ sessionId: 's' }))) as { stored: boolean; id: string };
     expect(first.stored).toBe(true);
-    const second = (await tool.handler(args, { sessionId: 's' })) as {
+    const second = (await tool.handler(args, makeToolContext({ sessionId: 's' }))) as {
       stored: boolean; reason?: string; existingId?: string; message?: string;
     };
     expect(second.stored).toBe(false);

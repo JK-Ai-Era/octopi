@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { SenseEngine } from '@octopi-agent/engine/harness/collaboration/autonomous-subsystem/sense/engine.js';
+import { DefaultToolBus } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/tools/tool-bus.js';
 import { SubsystemRuntime } from '@octopi-agent/engine/harness/collaboration/autonomous-subsystem/runtime.js';
 import { validateSubsystemSpec } from '@octopi-agent/engine/harness/collaboration/autonomous-subsystem/boundary/validator.js';
 import { DefaultEventBus } from '@octopi-agent/core/primitives/event-bus.js';
@@ -148,7 +149,7 @@ describe('SubsystemRuntime schedule source', () => {
         model: {} as never,
         events,
         errorStrategy: {} as never,
-        mainTools: new Map(),
+        mainTools: new DefaultToolBus(),
       },
     });
   });

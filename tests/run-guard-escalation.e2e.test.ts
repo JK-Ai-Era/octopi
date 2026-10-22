@@ -75,6 +75,7 @@ describe('Guard recover → escalate stop（e2e 式）', () => {
       },
       isAvailable: async () => true,
       getModelInfo: () => null,
+    getModelInfos: () => [],
     };
     const guard = new DefaultRunGuard(
       { enableLLMReview: true, llmReviewInterval: 1 },

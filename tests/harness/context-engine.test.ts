@@ -45,7 +45,7 @@ function makeAssembleParams(overrides?: Partial<AssembleParams>): AssembleParams
 describe('DefaultContextEngine', () => {
   describe('MessageSelector integration', () => {
     it('should use MessageSelector to split messages into zones', async () => {
-      const selectSpy = vi.fn<SelectResult['select']>().mockReturnValue({
+      const selectSpy = vi.fn<MessageSelector['select']>().mockReturnValue({
         kept: makeMessages(5),
         overflow: [],
         tail: makeMessages(2),
@@ -187,7 +187,7 @@ describe('DefaultContextEngine', () => {
     });
 
     it('should respect custom protectFirstN and protectLastN', async () => {
-      const selectSpy = vi.fn<SelectResult['select']>().mockReturnValue({
+      const selectSpy = vi.fn<MessageSelector['select']>().mockReturnValue({
         kept: makeMessages(5),
         overflow: [],
         tail: makeMessages(3),

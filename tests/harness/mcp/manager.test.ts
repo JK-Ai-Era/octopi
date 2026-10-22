@@ -3,6 +3,7 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
+import { makeToolContext } from '../../helpers/tool-context.js';
 import { DefaultMcpManager } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/mcp/manager.js';
 import type { McpClientFactory, McpManagerCallbacks } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/mcp/manager.js';
 import type { McpClient, McpServerCapabilities, McpToolDefinition, McpToolResult } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/mcp/types.js';
@@ -151,7 +152,7 @@ describe('DefaultMcpManager', () => {
       const result = await toolBus.execute(
         'test-server__read_file',
         { path: '/test.txt' },
-        { sessionId: 's1', agentId: 'a1', messages: [] },
+        makeToolContext({ sessionId: 's1', agentId: 'a1' }),
       );
 
       expect(result).toBe('result from read_file');
@@ -179,7 +180,7 @@ describe('DefaultMcpManager', () => {
         toolBus.execute(
           'error-server__fail_tool',
           {},
-          { sessionId: 's1', agentId: 'a1', messages: [] },
+          makeToolContext({ sessionId: 's1', agentId: 'a1' }),
         ),
       ).rejects.toThrow('Permission denied');
     });
@@ -275,7 +276,7 @@ describe('DefaultMcpManager', () => {
         toolBus.execute(
           'slow__slow_tool',
           {},
-          { sessionId: 's1', agentId: 'a1', messages: [] },
+          makeToolContext({ sessionId: 's1', agentId: 'a1' }),
         ),
       ).rejects.toThrow('timed out');
     });
@@ -299,7 +300,7 @@ describe('DefaultMcpManager', () => {
       await errManager.connectServer({ id: 'err', transport: 'stdio', command: 'echo' });
 
       await expect(
-        toolBus.execute('err__err_tool', {}, { sessionId: 's1', agentId: 'a1', messages: [] }),
+        toolBus.execute('err__err_tool', {}, makeToolContext({ sessionId: 's1', agentId: 'a1' })),
       ).rejects.toThrow('Permission denied\nFile not found');
     });
   });

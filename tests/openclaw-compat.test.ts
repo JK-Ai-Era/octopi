@@ -16,6 +16,29 @@ import { PluginApi } from '@octopi-agent/engine/harness/extension/plugin-ecosyst
 import { PluginManager } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/plugins/manager.js';
 import { definePluginEntry } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/plugins/entry.js';
 import type { LoadedPlugin } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/plugins/loader.js';
+import type { ModelProvider } from '@octopi-agent/core/interfaces/model-provider.js';
+
+/**
+ * OpenClaw 兼容层的 LLM provider 形状（`complete()` 推理 + `supportsModel()` 匹配），
+ * 与核心 ModelProvider（chat/stream/getModelInfos）是两套契约。
+ * `registerProvider` 的 `provider: ModelProvider` 声明与兼容层实际接受的形状脱钩
+ * （契约错位待拍板，见 T1 清理记录），测试在注册/取回边界显式换形。
+ */
+interface OpenClawProviderShape {
+  name: string;
+  models: string[];
+  supportsModel(model: string): boolean;
+  complete(request: unknown): Promise<{
+    content: string;
+    model: string;
+    usage?: import('@octopi-agent/core/types/turn.js').TokenUsage;
+  }>;
+}
+
+/** 取回已注册的 OpenClaw 形状 provider（绕开 getProviders() 的 ModelProvider 标称类型） */
+function getOpenClawProvider(pm: PluginManager, index = 0): OpenClawProviderShape {
+  return pm.getProviders()[index]!.provider as unknown as OpenClawProviderShape;
+}
 
 // ─────────────────────────────────────────────
 // 模拟 OpenClaw 插件的 register 逻辑
@@ -44,6 +67,7 @@ function createMockDuckDuckGoPlugin() {
             results: [
               { title: `Result for: ${query}`, url: `https://example.com?q=${query}`, snippet: 'Test result' },
             ],
+            query,
             provider: 'duckduckgo',
           };
         },
@@ -77,6 +101,7 @@ function createMockMoonshotPlugin() {
             results: [
               { title: `Moonshot: ${query}`, url: `https://moonshot.cn?q=${query}`, snippet: 'Moonshot result' },
             ],
+            query,
             provider: 'moonshot',
           };
         },
@@ -125,7 +150,7 @@ function createMockLMStudioPlugin() {
               usage: makeTokenUsage({ promptTokens: 10, completionTokens: 20 }),
             };
           },
-        },
+        } as unknown as ModelProvider,
       });
 
       // 模拟 memory embedding provider
@@ -176,7 +201,7 @@ function createMockOpenRouterPlugin() {
               usage: makeTokenUsage({ promptTokens: 100, completionTokens: 50 }),
             };
           },
-        },
+        } as unknown as ModelProvider,
       });
 
       // Media understanding
@@ -264,6 +289,8 @@ function createPluginManagerWithMockPlugins(
       api,
       registered: true,
       source: `test:${def.id}`,
+      // 合成插件，不经磁盘加载；rootDir 仅满足 LoadedPlugin 契约
+      rootDir: `/virtual/openclaw-compat/${def.id}`,
     };
   });
 
@@ -377,7 +404,7 @@ describe('OpenClaw Plugin 兼容性', () => {
       const plugin = createMockLMStudioPlugin();
       const pm = createPluginManagerWithMockPlugins([plugin]);
 
-      const provider = pm.getProviders()[0].provider;
+      const provider = getOpenClawProvider(pm);
       expect(provider.supportsModel('local-model-7b')).toBe(true);
       expect(provider.supportsModel('local-model-13b')).toBe(true);
       expect(provider.supportsModel('gpt-4o')).toBe(false);
@@ -387,7 +414,7 @@ describe('OpenClaw Plugin 兼容性', () => {
       const plugin = createMockLMStudioPlugin();
       const pm = createPluginManagerWithMockPlugins([plugin]);
 
-      const provider = pm.getProviders()[0].provider;
+      const provider = getOpenClawProvider(pm);
       const result = await provider.complete({
         model: 'local-model-7b',
         messages: [{ role: 'user', content: 'hello' }],
@@ -450,7 +477,7 @@ describe('OpenClaw Plugin 兼容性', () => {
       const plugin = createMockOpenRouterPlugin();
       const pm = createPluginManagerWithMockPlugins([plugin]);
 
-      const provider = pm.getProviders()[0].provider;
+      const provider = getOpenClawProvider(pm);
       expect(provider.supportsModel('anthropic/claude-3.5-sonnet')).toBe(true);
       expect(provider.supportsModel('openai/gpt-4o')).toBe(true);
       expect(provider.supportsModel('meta-llama/llama-3.1-405b')).toBe(true);
@@ -461,7 +488,7 @@ describe('OpenClaw Plugin 兼容性', () => {
       const plugin = createMockOpenRouterPlugin();
       const pm = createPluginManagerWithMockPlugins([plugin]);
 
-      const provider = pm.getProviders()[0].provider;
+      const provider = getOpenClawProvider(pm);
       const result = await provider.complete({
         model: 'anthropic/claude-3.5-sonnet',
         messages: [{ role: 'user', content: 'hello' }],
@@ -585,13 +612,13 @@ describe('OpenClaw Plugin 兼容性', () => {
 
       // LMStudio
       const lmstudio = providers.find((p) => p.id === 'lmstudio')!;
-      expect(lmstudio.provider.supportsModel('local-model-7b')).toBe(true);
-      expect(lmstudio.provider.supportsModel('anthropic/claude-3.5-sonnet')).toBe(false);
+      expect((lmstudio.provider as unknown as OpenClawProviderShape).supportsModel('local-model-7b')).toBe(true);
+      expect((lmstudio.provider as unknown as OpenClawProviderShape).supportsModel('anthropic/claude-3.5-sonnet')).toBe(false);
 
       // OpenRouter
       const openrouter = providers.find((p) => p.id === 'openrouter')!;
-      expect(openrouter.provider.supportsModel('anthropic/claude-3.5-sonnet')).toBe(true);
-      expect(openrouter.provider.supportsModel('local-model-7b')).toBe(false);
+      expect((openrouter.provider as unknown as OpenClawProviderShape).supportsModel('anthropic/claude-3.5-sonnet')).toBe(true);
+      expect((openrouter.provider as unknown as OpenClawProviderShape).supportsModel('local-model-7b')).toBe(false);
     });
   });
 

@@ -47,7 +47,7 @@ describe('config-migrations', () => {
   });
 
   it('migrates legacy budget to budgetPolicy（丢弃 maxTokens/soft）', () => {
-    const raw = { budget: { maxTokens: 1000, maxTimeMs: 60_000, softTokens: 100 } };
+    const raw: Record<string, unknown> = { budget: { maxTokens: 1000, maxTimeMs: 60_000, softTokens: 100 } };
     expect(applyBudgetMaxTimeMs(raw)).toBe(true);
     expect(raw.budget).toBeUndefined();
     expect(raw.budgetPolicy).toEqual({ maxWallClockMs: 60_000 });
@@ -64,7 +64,7 @@ describe('config-migrations', () => {
   });
 
   it('preserves apiKey placeholders when migrating top-level providers', () => {
-    const raw = {
+    const raw: Record<string, unknown> = {
       providers: [
         {
           type: 'openai',
@@ -78,7 +78,7 @@ describe('config-migrations', () => {
     };
     const result = applyConfigMigrations(raw);
     expect(result.changed).toBe(true);
-    const providers = (raw.models as Record<string, Record<string, unknown>>).providers!;
+    const providers = (raw.models as Record<string, Record<string, Record<string, unknown>>>).providers!;
     expect(providers.openai!.apiKey).toBe('${OPENAI_API_KEY}');
     expect(providers.openai!.api).toBe('openai-completions');
     expect(providers.openai!.models).toEqual([{ id: 'gpt-5.5', name: 'gpt-5.5' }]);
@@ -87,7 +87,7 @@ describe('config-migrations', () => {
 
   it('preserves literal apiKey byte-for-byte through migrations', () => {
     const secret = 'sk-live-abcdef1234567890';
-    const raw = {
+    const raw: Record<string, unknown> = {
       supervisor: { enabled: true },
       providers: [
         {
@@ -102,7 +102,7 @@ describe('config-migrations', () => {
       budget: { maxTimeMs: 1000 },
     };
     applyConfigMigrations(raw);
-    const providers = (raw.models as Record<string, Record<string, unknown>>).providers!;
+    const providers = (raw.models as Record<string, Record<string, Record<string, unknown>>>).providers!;
     expect(providers.openai!.apiKey).toBe(secret);
   });
 
@@ -139,7 +139,7 @@ describe('config-migrations', () => {
   });
 
   it('detects deprecated session.store and moves it to _legacy on apply', () => {
-    const raw = {
+    const raw: Record<string, unknown> = {
       session: {
         dmScope: 'per-peer',
         store: { type: 'jsonl', dataDir: './data/sessions' },
@@ -187,7 +187,7 @@ describe('redactConfig', () => {
           other: { apiKey: '${OPENAI_API_KEY}' },
         },
       },
-    }) as Record<string, Record<string, Record<string, string>>>;
+    }) as Record<string, Record<string, Record<string, Record<string, string>>>>;
     expect(redacted.models!.providers!.openai!.apiKey).toBe('sk-***');
     expect(redacted.models!.providers!.other!.apiKey).toBe('${OPENAI_API_KEY}');
     expect(JSON.stringify(redacted)).not.toContain('sk-live-abcdef1234567890');

@@ -14,7 +14,7 @@ import { makeTokenUsage } from '@octopi-agent/core/types/turn.js';
 import { Agent } from '@octopi-agent/engine/harness/run/agent/agent.js';
 import { runAgentWithReliability } from '@octopi-agent/engine/harness/run/reliability/run-agent.js';
 import type { ReliabilityHarness } from '@octopi-agent/engine/harness/run/reliability/run-agent.js';
-import type { AgentLoopEvent } from '@octopi-agent/core/loop/types.js';
+import type { HarnessLoopEvent } from '@octopi-agent/engine/harness/run/reliability/harness-events.js';
 import type { ModelProvider, LLMRequest, LLMResponse, LLMStreamChunk } from '@octopi-agent/core/interfaces/model-provider.js';
 import type { Message, RegisteredTool } from '@octopi-agent/core/types.js';
 
@@ -30,6 +30,7 @@ function createSequentialProvider(responses: LLMResponse[]): ModelProvider {
   return {
     name: 'test', defaultModel: 'test',
     getModelInfo: () => null,
+    getModelInfos: () => [],
     async chat(_request: LLMRequest): Promise<LLMResponse> {
       // stream fallback 到 chat 时，返回最近一次 stream 的响应
       if (lastStreamResponse) return lastStreamResponse;
@@ -84,8 +85,8 @@ function createHarness(config?: Partial<import('@octopi-agent/engine/harness/run
   };
 }
 
-async function collectEvents(agent: Agent, harness: ReliabilityHarness): Promise<AgentLoopEvent[]> {
-  const events: AgentLoopEvent[] = [];
+async function collectEvents(agent: Agent, harness: ReliabilityHarness): Promise<HarnessLoopEvent[]> {
+  const events: HarnessLoopEvent[] = [];
   for await (const e of runAgentWithReliability(agent.context, { model: agent.model }, harness)) {
     events.push(e);
   }
@@ -200,6 +201,7 @@ describe('Engine: empty response after tool execution', () => {
     const provider: ModelProvider = {
       name: 'test', defaultModel: 'test',
       getModelInfo: () => null,
+    getModelInfos: () => [],
       async chat(request: LLMRequest): Promise<LLMResponse> {
         capturedRequests.push(request);
         return { content: 'done', usage: makeTokenUsage({ promptTokens: 100, completionTokens: 5 }), model: 'test', finishReason: 'stop' };

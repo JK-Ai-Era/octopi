@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { SubsystemRuntime } from '@octopi-agent/engine/harness/collaboration/autonomous-subsystem/runtime.js';
+import { DefaultToolBus } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/tools/tool-bus.js';
 import { DefaultEventBus } from '@octopi-agent/core/primitives/event-bus.js';
 import type { SubsystemSpec } from '@octopi-agent/engine/harness/collaboration/autonomous-subsystem/types.js';
 
@@ -30,7 +31,7 @@ describe('SubsystemRuntime custom tools from definitions', () => {
 
   beforeEach(() => {
     runtime = new SubsystemRuntime({
-      deps: { model: {} as any, events, errorStrategy: {} as any, mainTools: new Map() },
+      deps: { model: {} as any, events, errorStrategy: {} as any, mainTools: new DefaultToolBus() },
     });
   });
 
@@ -50,7 +51,7 @@ describe('SubsystemRuntime custom tools from definitions', () => {
               definition: {
                 name: 'analyze',
                 description: 'analyze content',
-                parameters: { type: 'object', properties: {}, required: [] },
+                parameters: {},
               },
               handler,
             },

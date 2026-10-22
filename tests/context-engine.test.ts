@@ -314,7 +314,7 @@ describe('estimateLLMMessages shared block logic', () => {
         role: 'assistant' as const,
         content: '',
         tool_calls: [
-          { id: '1', type: 'function', function: { name: 'search', arguments: '{"q":"hi"}' } },
+          { id: '1', type: 'function' as const, function: { name: 'search', arguments: '{"q":"hi"}' } },
         ],
       },
     ];
@@ -862,7 +862,7 @@ describe('DefaultContextEngine', () => {
       });
 
       // Should not throw
-      await engine.afterTurn({
+      await engine.afterTurn!({
         sessionId: 'test',
         turn: [createMessage('assistant', 'Response')],
         usage: makeTokenUsage({ promptTokens: 100, completionTokens: 50 }),
@@ -881,7 +881,7 @@ describe('DefaultContextEngine', () => {
       const firstEstimate = result1.estimatedTokens;
 
       // afterTurn with real usage that's 2x the estimate
-      await engine.afterTurn({
+      await engine.afterTurn!({
         sessionId: 'calibrate-test',
         turn: [createMessage('assistant', 'Response')],
         usage: makeTokenUsage({ promptTokens: firstEstimate * 2, completionTokens: 50 }),
@@ -912,7 +912,7 @@ describe('DefaultContextEngine', () => {
       });
 
       // afterTurn with extremely high usage (100x)
-      await engine.afterTurn({
+      await engine.afterTurn!({
         sessionId: 'clamp-test',
         turn: [createMessage('assistant', 'Response')],
         usage: makeTokenUsage({ promptTokens: 100000, completionTokens: 50 }),
@@ -1092,7 +1092,7 @@ describe('ContextEngine Integration', () => {
     });
 
     // afterTurn
-    await engine.afterTurn({
+    await engine.afterTurn!({
       sessionId: 'state-test',
       turn: [createMessage('assistant', 'Response')],
       usage: makeTokenUsage({ promptTokens: 100, completionTokens: 50 }),

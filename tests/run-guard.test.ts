@@ -163,6 +163,7 @@ describe('DefaultRunGuard', () => {
         stream: async function* () { yield { type: 'done' }; },
         isAvailable: vi.fn().mockResolvedValue(true),
       getModelInfo: () => null,
+    getModelInfos: () => [],
       };
 
       const runGuard = new DefaultRunGuard(
@@ -184,6 +185,7 @@ describe('DefaultRunGuard', () => {
         stream: async function* () { yield { type: 'done' }; },
         isAvailable: vi.fn().mockResolvedValue(true),
       getModelInfo: () => null,
+    getModelInfos: () => [],
       };
 
       const runGuard = new DefaultRunGuard(
@@ -205,6 +207,7 @@ describe('DefaultRunGuard', () => {
         stream: async function* () { yield { type: 'done' }; },
         isAvailable: vi.fn().mockResolvedValue(true),
       getModelInfo: () => null,
+    getModelInfos: () => [],
       };
 
       const runGuard = new DefaultRunGuard(
@@ -226,6 +229,7 @@ describe('DefaultRunGuard', () => {
         stream: async function* () { yield { type: 'done' }; },
         isAvailable: vi.fn().mockResolvedValue(true),
       getModelInfo: () => null,
+    getModelInfos: () => [],
       };
 
       const runGuard = new DefaultRunGuard(
@@ -337,6 +341,7 @@ describe('DefaultRunGuard', () => {
         stream: async function* () { yield { type: 'done' }; },
         isAvailable: vi.fn().mockResolvedValue(true),
       getModelInfo: () => null,
+    getModelInfos: () => [],
       };
 
       const runGuard = createRunGuard({ checkpointInterval: 10 }, mockModel);
@@ -385,6 +390,7 @@ describe('DefaultRunGuard', () => {
         },
         isAvailable: vi.fn().mockResolvedValue(true),
       getModelInfo: () => null,
+    getModelInfos: () => [],
       };
 
       const { agent, harness } = await new AgentBuilder()
@@ -407,6 +413,7 @@ describe('DefaultRunGuard', () => {
         },
         isAvailable: vi.fn().mockResolvedValue(true),
       getModelInfo: () => null,
+    getModelInfos: () => [],
       };
 
       const { agent, harness } = await new AgentBuilder()

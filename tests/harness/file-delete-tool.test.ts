@@ -9,6 +9,7 @@ import { randomUUID } from 'node:crypto';
 
 import { createFileDeleteTool } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/tools/builtin.js';
 import { TurnFileUndoLog } from '@octopi-agent/engine/harness/extension/execution-environment/undo-log.js';
+import { testMemoryEffects } from '../helpers/tool-context.js';
 
 async function exists(p: string): Promise<boolean> {
   try {
@@ -47,6 +48,7 @@ describe('file_delete', () => {
     pathContainment: 'strict' as const,
     effectChannel: 'engine' as const,
     fileEffects: undo,
+    memoryEffects: testMemoryEffects(),
   });
 
   it('deletes a file under root and journals before for undo', async () => {
@@ -124,6 +126,7 @@ describe('file_delete undo restore', () => {
         pathContainment: 'strict',
         effectChannel: 'engine',
         fileEffects: undo,
+        memoryEffects: testMemoryEffects(),
       },
     );
     expect(await exists(f)).toBe(false);

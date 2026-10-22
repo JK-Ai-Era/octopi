@@ -3,6 +3,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
+import { makeToolContext } from './helpers/tool-context.js';
 import { ClientToolRegistry, ClientStreamTransport } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/client-tools/index.js';
 import type {
   ClientToolDescriptor,
@@ -139,7 +140,7 @@ describe('ClientToolHost', () => {
     const tool = registered.find((t) => t.definition.name === 'note_form')!;
     const p = tool.handler(
       { title: 'x', purpose: 'demo' },
-      { sessionId: 's1', agentId: 'a1', messages: [] },
+      makeToolContext({ sessionId: 's1', agentId: 'a1' }),
     );
     await Promise.resolve();
     const call = host.listSessionCalls('s1')[0]!;
@@ -168,7 +169,7 @@ describe('ClientToolHost', () => {
     const tool = registered.find((t) => t.definition.name === 'ocr_local')!;
     const p = tool.handler(
       { title: 'x' },
-      { sessionId: 's1', agentId: 'a1', messages: [] },
+      makeToolContext({ sessionId: 's1', agentId: 'a1' }),
     );
     await Promise.resolve();
     const call = host.listSessionCalls('s1')[0]!;
@@ -198,7 +199,7 @@ describe('ClientToolHost', () => {
     const tool = registered.find((t) => t.definition.name === 'note_form')!;
     const p = tool.handler(
       { title: 'x' },
-      { sessionId: 's1', agentId: 'a1', messages: [] },
+      makeToolContext({ sessionId: 's1', agentId: 'a1' }),
     );
     await Promise.resolve();
     const call = host.listSessionCalls('s1')[0]!;
@@ -236,7 +237,7 @@ describe('ClientToolHost', () => {
     const tool = registered.find((t) => t.definition.name === 'photo_capture')!;
     const p = tool.handler(
       { purpose: 'scan' },
-      { sessionId: 's1', agentId: 'a1', messages: [] },
+      makeToolContext({ sessionId: 's1', agentId: 'a1' }),
     );
     await Promise.resolve();
     const call = host.listSessionCalls('s1')[0]!;
@@ -279,7 +280,7 @@ describe('ClientToolHost', () => {
       ],
     });
     const tool = registered.find((t) => t.definition.name === 'page_metrics_watch')!;
-    const out = (await tool.handler({}, { sessionId: 's1', agentId: 'a1', messages: [] })) as {
+    const out = (await tool.handler({}, makeToolContext({ sessionId: 's1', agentId: 'a1' }))) as {
       kind: string;
       data: Record<string, unknown>;
     };
@@ -299,7 +300,7 @@ describe('ClientToolHost', () => {
     const tool = registered[0]!;
     const invokePromise = tool.handler(
       { title: 'hello' },
-      { sessionId: 's1', agentId: 'a1', messages: [] },
+      makeToolContext({ sessionId: 's1', agentId: 'a1' }),
     );
 
     // pending 事件已广播
@@ -343,7 +344,7 @@ describe('ClientToolHost', () => {
     expect(tool).toBeTruthy();
     const out = (await tool!.handler(
       { purpose: 'scan' },
-      { sessionId: 's1', agentId: 'a1', messages: [] },
+      makeToolContext({ sessionId: 's1', agentId: 'a1' }),
     )) as { error: string; hint?: string };
     expect(out.error).toBe('unsupported');
     expect(out.hint).toMatch(/sensitive/);
@@ -357,7 +358,7 @@ describe('ClientToolHost', () => {
       descriptors: [noteForm],
     });
     const tool = registered[0]!;
-    const p = tool.handler({ title: 't' }, { sessionId: 's1', agentId: 'a1', messages: [] });
+    const p = tool.handler({ title: 't' }, makeToolContext({ sessionId: 's1', agentId: 'a1' }));
     await Promise.resolve();
     host.cancelSessionCalls('s1');
     const out = (await p) as { error: string };
@@ -372,7 +373,7 @@ describe('ClientToolHost', () => {
       descriptors: [noteForm],
     });
     const tool = registered[0]!;
-    const p = tool.handler({ title: 't' }, { sessionId: 's1', agentId: 'a1', messages: [] });
+    const p = tool.handler({ title: 't' }, makeToolContext({ sessionId: 's1', agentId: 'a1' }));
     await Promise.resolve();
     host.unregisterClientTools({ sessionId: 's1', clientInstanceId: 'web-1' });
     const out = (await p) as { error: string };
@@ -413,7 +414,7 @@ describe('ClientToolHost', () => {
     const tool = registered[0]!;
     const p = tool.handler(
       { title: 't' },
-      { sessionId: 's1', agentId: 'a1', messages: [], abortSignal: ac.signal },
+      makeToolContext({ sessionId: 's1', agentId: 'a1', abortSignal: ac.signal }),
     );
     await Promise.resolve();
     expect(host.listSessionCalls('s1')).toHaveLength(1);
@@ -453,7 +454,7 @@ describe('ClientToolHost', () => {
         callId: 'ctc_persist1',
         ttlAt: Date.now() + 5_000,
       },
-      { sessionId: 's1', agentId: 'a1', messages: [] },
+      makeToolContext({ sessionId: 's1', agentId: 'a1' }),
     );
     await Promise.resolve();
     host.resolveCall('ctc_persist1', {
@@ -523,7 +524,7 @@ describe('ClientToolHost send_file release', () => {
         callId: 'ctc_send1',
         ttlAt: Date.now() + 5_000,
       },
-      { sessionId: 's1', agentId: 'a1', messages: [] },
+      makeToolContext({ sessionId: 's1', agentId: 'a1' }),
     );
     await Promise.resolve();
 
@@ -571,7 +572,7 @@ describe('ClientToolHost send_file release', () => {
         callId: 'ctc_send1',
         ttlAt: Date.now() + 5_000,
       },
-      { sessionId: 's1', agentId: 'a1', messages: [] },
+      makeToolContext({ sessionId: 's1', agentId: 'a1' }),
     );
     expect(outcome.status).toBe('error');
     if (outcome.status === 'error') {
@@ -597,7 +598,7 @@ describe('ClientToolHost send_file release', () => {
         callId: 'ctc_send1',
         ttlAt: Date.now() + 5_000,
       },
-      { sessionId: 's1', agentId: 'a1', messages: [] },
+      makeToolContext({ sessionId: 's1', agentId: 'a1' }),
     );
     expect(outcome.status).toBe('error');
     if (outcome.status === 'error') {

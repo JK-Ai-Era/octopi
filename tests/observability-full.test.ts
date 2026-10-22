@@ -90,8 +90,8 @@ describe('TraceLogger', () => {
       expect(event.ts).toBeTypeOf('number');
       expect(event.level).toBe(TraceLevel.INFO);
       expect(event.type).toBe('test.event');
-      expect(event.data.key).toBe('value');
-      expect(event.data.num).toBe(42);
+      expect(event.data!.key).toBe('value');
+      expect(event.data!.num).toBe(42);
     });
 
     it('should include sessionId and agentId when provided', () => {
@@ -114,8 +114,8 @@ describe('TraceLogger', () => {
       const lines = readTraceLines(tempDir);
       expect(lines[0].type).toBe('trace.start');
       expect(lines[lines.length - 1].type).toBe('trace.end');
-      expect(lines[lines.length - 1].data.eventCount).toBe(1);
-      expect(lines[lines.length - 1].data.durationMs).toBeGreaterThanOrEqual(0);
+      expect(lines[lines.length - 1]!.data!.eventCount).toBe(1);
+      expect(lines[lines.length - 1]!.data!.durationMs).toBeGreaterThanOrEqual(0);
     });
 
     it('should create output directory if it does not exist', () => {
@@ -287,7 +287,7 @@ describe('TraceCollector', () => {
     const lines = readTraceLines(tempDir);
     const emptyEvent = lines.find(l => l.type === 'empty.response');
     expect(emptyEvent).toBeDefined();
-    expect(emptyEvent?.data.messageCount).toBe(5);
+    expect(emptyEvent?.data!.messageCount).toBe(5);
   });
 
   it('should record context at DEBUG level', () => {
@@ -311,8 +311,8 @@ describe('TraceCollector', () => {
     const lines = readTraceLines(tempDir);
     const ctxEvent = lines.find(l => l.type === 'context.built');
     expect(ctxEvent).toBeDefined();
-    expect(ctxEvent?.data.messageCount).toBe(10);
-    expect(ctxEvent?.data.estimatedTokens).toBe(2500);
+    expect(ctxEvent?.data!.messageCount).toBe(10);
+    expect(ctxEvent?.data!.estimatedTokens).toBe(2500);
   });
 
   it('should not record context at INFO level', () => {
@@ -350,7 +350,7 @@ describe('TraceCollector', () => {
     const lines = readTraceLines(tempDir);
     const stateEvent = lines.find(l => l.type === 'session.state');
     expect(stateEvent).toBeDefined();
-    expect(stateEvent?.data.turnCount).toBe(3);
+    expect(stateEvent?.data!.turnCount).toBe(3);
   });
 
   it('should record tool context with args', () => {
@@ -372,9 +372,9 @@ describe('TraceCollector', () => {
     const lines = readTraceLines(tempDir);
     const toolEvent = lines.find(l => l.type === 'tool.exec.context');
     expect(toolEvent).toBeDefined();
-    expect(toolEvent?.data.toolName).toBe('file_write');
-    expect(toolEvent?.data.cwd).toBe('/workspace');
-    expect(toolEvent?.data.args).toEqual({ path: 'test.txt', content: 'hello' });
+    expect(toolEvent?.data!.toolName).toBe('file_write');
+    expect(toolEvent?.data!.cwd).toBe('/workspace');
+    expect(toolEvent?.data!.args).toEqual({ path: 'test.txt', content: 'hello' });
   });
 
   it('should exclude tool args when captureToolArgs is false', () => {
@@ -395,7 +395,7 @@ describe('TraceCollector', () => {
 
     const lines = readTraceLines(tempDir);
     const toolEvent = lines.find(l => l.type === 'tool.exec.context');
-    expect(toolEvent?.data.args).toBeUndefined();
+    expect(toolEvent?.data!.args).toBeUndefined();
   });
 
   it('should handle multiple turns in same collector', async () => {
@@ -424,8 +424,8 @@ describe('TraceCollector', () => {
     const lines = readTraceLines(tempDir);
     const turnStarts = lines.filter(l => l.type === 'turn.start');
     expect(turnStarts.length).toBe(2);
-    expect(turnStarts[0].data.turnId).toBe('turn_1');
-    expect(turnStarts[1].data.turnId).toBe('turn_2');
+    expect(turnStarts[0]!.data!.turnId).toBe('turn_1');
+    expect(turnStarts[1]!.data!.turnId).toBe('turn_2');
   });
 });
 

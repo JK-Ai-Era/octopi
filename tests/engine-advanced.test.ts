@@ -14,7 +14,7 @@ import { makeTokenUsage } from '@octopi-agent/core/types/turn.js';
 import { Agent } from '@octopi-agent/engine/harness/run/agent/agent.js';
 import { runAgentWithReliability } from '@octopi-agent/engine/harness/run/reliability/run-agent.js';
 import type { ReliabilityHarness } from '@octopi-agent/engine/harness/run/reliability/run-agent.js';
-import type { AgentLoopEvent } from '@octopi-agent/core/loop/types.js';
+import type { HarnessLoopEvent } from '@octopi-agent/engine/harness/run/reliability/harness-events.js';
 import type { ModelProvider, LLMRequest, LLMResponse, LLMStreamChunk } from '@octopi-agent/core/interfaces/model-provider.js';
 import type { Message } from '@octopi-agent/core/types.js';
 import { estimateTokens, estimateTextTokens } from '@octopi-agent/engine/harness/context/token-estimate-fns.js';
@@ -27,6 +27,7 @@ function createSequentialProvider(responses: LLMResponse[]): ModelProvider {
     name: 'test',
     defaultModel: 'test',
     getModelInfo: () => null,
+    getModelInfos: () => [],
     async chat(_request: LLMRequest): Promise<LLMResponse> {
       return responses[Math.min(callIndex++, responses.length - 1)];
     },
@@ -50,6 +51,7 @@ function createErrorProvider(error: Error, recoverWith?: LLMResponse): ModelProv
     name: 'test',
     defaultModel: 'test',
     getModelInfo: () => null,
+    getModelInfos: () => [],
     async chat(_request: LLMRequest): Promise<LLMResponse> {
       if (recoverWith && callCount > 0) return recoverWith;
       throw error;
@@ -104,9 +106,9 @@ function createHarness(overrides?: Partial<import('@octopi-agent/engine/harness/
   };
 }
 
-async function collectEvents(agent: Agent, harness?: ReliabilityHarness): Promise<AgentLoopEvent[]> {
+async function collectEvents(agent: Agent, harness?: ReliabilityHarness): Promise<HarnessLoopEvent[]> {
   const h = harness ?? createHarness();
-  const events: AgentLoopEvent[] = [];
+  const events: HarnessLoopEvent[] = [];
   for await (const e of runAgentWithReliability(agent.context, { model: agent.model }, h)) {
     events.push(e);
   }
@@ -167,6 +169,7 @@ describe('流式 tool call 多工具并行', () => {
       name: 'test',
       defaultModel: 'test',
       getModelInfo: () => null,
+    getModelInfos: () => [],
       async chat(_request: LLMRequest): Promise<LLMResponse> {
         return { content: 'done', usage: makeTokenUsage({ promptTokens: 5, completionTokens: 2 }), model: 'test', finishReason: 'stop' };
       },
@@ -219,7 +222,7 @@ describe('错误分类和重试', () => {
     const agent = new Agent({ model: provider, systemPrompt: 'test' });
     agent.context.messages = [createTestMessage('test')];
 
-    const events: AgentLoopEvent[] = [];
+    const events: HarnessLoopEvent[] = [];
     for await (const e of runAgentWithReliability(
       agent.context,
       { model: agent.model, onError: async () => 'abort' },
@@ -248,6 +251,7 @@ describe('错误分类和重试', () => {
       name: 'test',
       defaultModel: 'test',
       getModelInfo: () => null,
+    getModelInfos: () => [],
       async chat() {
         if (round <= 2) throw new Error('Timeout');
         return recoverResponse;
@@ -312,7 +316,7 @@ describe('错误分类和重试', () => {
     };
 
     // 使用自定义 onError 实现重试
-    const events: AgentLoopEvent[] = [];
+    const events: HarnessLoopEvent[] = [];
     for await (const e of runAgentWithReliability(
       agent.context,
       {
@@ -413,7 +417,7 @@ describe('引擎异常退出事件', () => {
     // 立即中止
     abortController.abort();
 
-    const events: AgentLoopEvent[] = [];
+    const events: HarnessLoopEvent[] = [];
     for await (const e of runAgentWithReliability(
       agent.context,
       { model: agent.model },

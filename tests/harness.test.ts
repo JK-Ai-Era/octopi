@@ -43,6 +43,7 @@ function createMockModelProvider(): ModelProvider {
     },
     isAvailable: vi.fn().mockResolvedValue(true),
       getModelInfo: () => null,
+    getModelInfos: () => [],
   };
 }
 
@@ -203,6 +204,7 @@ describe('SessionAwareRunner — 异常退出 session 一致性', () => {
       },
       isAvailable: vi.fn().mockResolvedValue(true),
       getModelInfo: () => null,
+    getModelInfos: () => [],
     };
 
     const testTool: RegisteredTool = {
@@ -245,6 +247,7 @@ describe('SessionAwareRunner — 异常退出 session 一致性', () => {
       },
       isAvailable: vi.fn().mockResolvedValue(true),
       getModelInfo: () => null,
+    getModelInfos: () => [],
     };
 
     const errorStrategy = {
@@ -293,6 +296,7 @@ describe('SessionAwareRunner — 异常退出 session 一致性', () => {
       },
       isAvailable: vi.fn().mockResolvedValue(true),
       getModelInfo: () => null,
+    getModelInfos: () => [],
     };
 
     const errorStrategy = {

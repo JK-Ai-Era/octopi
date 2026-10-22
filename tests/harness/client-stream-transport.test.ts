@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import { makeToolContext } from '../helpers/tool-context.js';
 import {
   ClientStreamTransport,
   createSinkStreamTool,
@@ -116,7 +117,7 @@ describe('stream domain tools', () => {
     });
     const out = (await tool.handler(
       { purpose: 'navigation' },
-      { sessionId: 's1', agentId: 'a1', messages: [] },
+      makeToolContext({ sessionId: 's1', agentId: 'a1' }),
     )) as { kind: string; data: Record<string, unknown> };
     expect(out.kind).toBe('value');
     expect(out.data.watchId).toBe('cs_watch');
@@ -143,7 +144,7 @@ describe('stream domain tools', () => {
         }),
       },
     );
-    const out = (await tool.handler({}, { sessionId: 's1', agentId: 'a1', messages: [] })) as {
+    const out = (await tool.handler({}, makeToolContext({ sessionId: 's1', agentId: 'a1' }))) as {
       kind: string;
       data: Record<string, unknown>;
     };
@@ -173,7 +174,7 @@ describe('stream domain tools', () => {
         }),
       },
     );
-    const ctx = { sessionId: 's1', agentId: 'a1', messages: [] };
+    const ctx = makeToolContext({ sessionId: 's1', agentId: 'a1' });
     const first = (await tool.handler({ samples: [0.1, 0.2] }, ctx)) as {
       data: Record<string, unknown>;
     };
@@ -215,7 +216,7 @@ describe('stream domain tools', () => {
         }),
       },
     );
-    const ctx = { sessionId: 's1', agentId: 'a1', messages: [] };
+    const ctx = makeToolContext({ sessionId: 's1', agentId: 'a1' });
     const a = (await tool.handler({}, ctx)) as { data: Record<string, unknown> };
     const b = (await tool.handler({}, ctx)) as { data: Record<string, unknown> };
     expect(a.data.watchId).toBe('cs_w1');
@@ -248,12 +249,12 @@ describe('stream domain tools', () => {
     );
     const open = (await tool.handler(
       { samples: [0.2] },
-      { sessionId: 's1', agentId: 'a1', messages: [] },
+      makeToolContext({ sessionId: 's1', agentId: 'a1' }),
     )) as { data: Record<string, unknown> };
     const playId = String(open.data.playId);
     const cross = (await tool.handler(
       { playId, samples: [0.9] },
-      { sessionId: 's2', agentId: 'a2', messages: [] },
+      makeToolContext({ sessionId: 's2', agentId: 'a2' }),
     )) as { error?: string };
     expect(cross.error).toBe('permission_denied');
 
@@ -270,7 +271,7 @@ describe('stream domain tools', () => {
     );
     const denied = (await stop.handler(
       { playId },
-      { sessionId: 's2', agentId: 'a2', messages: [] },
+      makeToolContext({ sessionId: 's2', agentId: 'a2' }),
     )) as { error?: string };
     expect(denied.error).toBe('permission_denied');
     expect(transport.get(playId)?.status).toBe('open');

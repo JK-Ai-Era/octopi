@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ProviderPool } from '@octopi-agent/engine/harness/run/concurrency/provider-pool.js';
-import type { ModelProvider, LLMRequest, LLMResponse, LLMStreamChunk, ModelInfo } from '@octopi-agent/core/interfaces/model-provider.js';
+import type { ModelProvider, LLMRequest, LLMResponse, LLMStreamChunk } from '@octopi-agent/core/interfaces/model-provider.js';
+import type { ModelInfo } from '@octopi-agent/core/types.js';
 
 // ── Mock Provider ──
 
@@ -15,6 +16,8 @@ function createMockProvider(opts: {
     name,
     defaultModel: opts.defaultModel ?? 'mock-model',
     getModelInfo: (_model: string): ModelInfo | null => null,
+    getModelInfos: (): ModelInfo[] => [],
+    isAvailable: async () => true,
     chat: opts.chatFn ?? (async () => ({
       content: `response from ${name}`,
       model: opts.defaultModel ?? 'mock-model',
