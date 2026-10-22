@@ -1,5 +1,18 @@
 export { getBuiltinTools } from './builtin.js';
 export { createGitTools } from './git-tools.js';
+export { runGit } from './git-runner.js';
+export type { RunGitOptions } from './git-runner.js';
+export { readGitStatusSnapshot, parsePorcelainV2 } from './git-status-snapshot.js';
+export type {
+  GitStatusSnapshot,
+  GitStatusSnapshotBody,
+  GitStatusSnapshotOptions,
+  GitStatusEntry,
+  GitStatusBranch,
+  GitStatusCounts,
+  GitStatusGroup,
+  GitStatusKind,
+} from './git-status-snapshot.js';
 export { createPackageTools } from './package-tools.js';
 export { createDocumentReadTool, createDocumentProbeTool } from './document-tools.js';
 export { createFileEditTool } from './file-edit.js';

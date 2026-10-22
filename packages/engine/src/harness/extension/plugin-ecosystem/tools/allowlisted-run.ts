@@ -20,6 +20,12 @@ export interface AllowlistedRunOptions {
   timeoutMs?: number;
   /** Journal write effects via shell-journal (default true for mutating tools) */
   journal?: boolean;
+  /**
+   * Apply the tool output gate (caps output toward model context). Default true.
+   * Structured consumers (UI snapshots) pass false and cap on their own terms —
+   * the gate cuts at a char budget and would slice parse records mid-stream.
+   */
+  applyOutputGate?: boolean;
 }
 
 export interface AllowlistedRunResult {
@@ -136,6 +142,24 @@ export async function runAllowlistedArgv(
     }
   } catch {
     // Journal failure must not drop the business result (matches shell tool).
+  }
+
+  if (options.applyOutputGate === false) {
+    // Structured consumers cap on their own terms (parse, then slice). The only
+    // stream cut left is the sandbox output cap, which kills the process *before*
+    // appending the offending chunk — so length heuristics cannot see it; the
+    // honest signal is the terminate reason (verified in sandbox.ts).
+    return {
+      stdout: sandboxResult.stdout,
+      stderr: sandboxResult.stderr,
+      exitCode: sandboxResult.exitCode,
+      durationMs: sandboxResult.usage.elapsedMs,
+      truncated: sandboxResult.terminated && sandboxResult.terminateReason === 'Output size limit exceeded',
+      rawStdoutLength: sandboxResult.stdout.length,
+      terminated: sandboxResult.terminated,
+      terminateReason: sandboxResult.terminateReason,
+      isolation: sandboxResult.isolation,
+    };
   }
 
   try {

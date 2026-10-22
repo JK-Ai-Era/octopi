@@ -20,6 +20,7 @@
 import type { RegisteredTool, SessionMeta } from '@octopi-agent/core/types.js';
 import type { AgentDefinition, ModelConfig } from '@octopi-agent/engine/harness/shared/types/agent-definition.js';
 import type { ChannelAdapter, ChannelMessage, ChannelReply } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/channel-types.js';
+import type { GitStatusSnapshot } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/tools/git-status-snapshot.js';
 import type { GatewayConfig } from '../types/gateway-config.js';
 
 import type { HookContext } from '@octopi-agent/engine/harness/shared/types/hook-context.js';
@@ -858,6 +859,19 @@ export class Gateway {
     configuredRoots: string[];
     mode?: string;
   }> {
+    return this.resolveSessionEffectRoots(sessionId);
+  }
+
+  /**
+   * Derive the session's effect roots (throws when the session is missing).
+   * Shared by the roots API and the git-status containment check.
+   */
+  private async resolveSessionEffectRoots(sessionId: string): Promise<{
+    sessionId: string;
+    temporaryRoots: string[];
+    configuredRoots: string[];
+    mode?: string;
+  }> {
     const session = await this.store.load(sessionId);
     if (!session) {
       throw new Error(`Session "${sessionId}" not found`);
@@ -888,6 +902,91 @@ export class Gateway {
       configuredRoots,
       mode: eff?.mode,
     };
+  }
+
+  /**
+   * Structured git status for one directory under this session's effect roots
+   * (WebUI Git tab). Read-only and context-free: git runs through the engine's
+   * hardened runner (the git_* tools' git-config isolation — hooks/filters
+   * neutralized, `--no-optional-locks`, so polling cannot disturb real git
+   * operations) but without a ToolExecutionContext, so session effectPolicy
+   * jail settings do not apply on this read-only surface.
+   *
+   * Fencing note: this is a capability boundary, not a security boundary — any
+   * caller allowed to add session effect roots can widen it. The fence validates
+   * the requested directory itself (lexical + realpath, symlink-proof); `git
+   * status` then reports the whole discovered work tree, which may reach above
+   * the requested directory (git semantics).
+   *
+   * @param sessionId - session whose roots fence the request
+   * @param rawPath - absolute directory path (a root or inside one; `~/` expanded)
+   * @param options - maxEntries cap passthrough
+   * @returns path echo (canonical) + snapshot (isRepo=false is a state, not an error)
+   * @throws Error `path_invalid` / `path_not_allowed` / `path_not_found` /
+   *          `git_not_found` / `git_status_failed`
+   */
+  async getSessionGitStatus(
+    sessionId: string,
+    rawPath: string,
+    options?: { maxEntries?: number },
+  ): Promise<GitStatusSnapshot & { path: string }> {
+    const roots = await this.resolveSessionEffectRoots(sessionId);
+    const path = await import('node:path');
+    const os = await import('node:os');
+    const fs = await import('node:fs/promises');
+    const expandHome = (p: string): string =>
+      p === '~'
+        ? os.homedir()
+        : p.startsWith('~/') || p.startsWith('~\\')
+          ? path.join(os.homedir(), p.slice(2))
+          : p;
+    const trimmed = rawPath.trim();
+    if (!trimmed || trimmed.includes('\0')) {
+      throw new Error('path_invalid: path must be non-empty and contain no NUL byte');
+    }
+    const expanded = expandHome(trimmed);
+    if (!path.isAbsolute(expanded)) {
+      throw new Error(`path_invalid: "${rawPath}" must be an absolute path`);
+    }
+    const lexTarget = path.resolve(expanded);
+    const casefold = (p: string) => (process.platform === 'win32' ? p.toLowerCase() : p);
+    const under = (parent: string, child: string): boolean => {
+      const rel = path.relative(casefold(parent), casefold(child));
+      return rel === '' || (rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
+    };
+    const rootsLex = [...roots.configuredRoots, ...roots.temporaryRoots].map((root) =>
+      path.resolve(expandHome(root)),
+    );
+    // 围栏先于存在性检查：越界路径一律 path_not_allowed，不泄露目标是否存在。
+    if (!rootsLex.some((r) => under(r, lexTarget))) {
+      throw new Error(`path_not_allowed: "${lexTarget}" is outside this session's roots`);
+    }
+    // Symlink-proof fence, second stage: containment must also hold on the
+    // canonical path — `/ws/link -> /etc` passes the lexical check but fails
+    // this one. git then runs at the validated canonical path, closing the
+    // check-vs-use race on the target side.
+    const realTarget = await fs.realpath(lexTarget).catch(() => {
+      // Swallows the fs error detail (ENOENT/EACCES/…): the picker only offers
+      // existing roots, so any realpath failure is stale or invalid picker
+      // state, reported uniformly as not-found (lexical fence already passed).
+      throw new Error(`path_not_found: "${lexTarget}" does not exist or is not readable`);
+    });
+    const rootsReal = await Promise.all(
+      rootsLex.map((lex) => fs.realpath(lex).catch(() => lex)),
+    );
+    if (!rootsReal.some((r) => under(r, realTarget))) {
+      throw new Error(`path_not_allowed: "${lexTarget}" resolves outside this session's roots`);
+    }
+    const st = await fs.stat(realTarget).catch(() => null);
+    if (!st) {
+      throw new Error(`path_not_found: "${lexTarget}" does not exist or is not readable`);
+    }
+    if (!st.isDirectory()) {
+      throw new Error(`path_not_found: "${lexTarget}" is not a directory`);
+    }
+    const { readGitStatusSnapshot } = await import('@octopi-agent/engine');
+    const snapshot = await readGitStatusSnapshot(realTarget, options);
+    return { path: realTarget, ...snapshot };
   }
 
   /**

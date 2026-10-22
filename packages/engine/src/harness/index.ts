@@ -184,6 +184,17 @@ export { validateManifest, parseManifest } from './extension/plugin-ecosystem/pl
 export type { PluginManifest, PluginContracts, ActivationConfig } from './extension/plugin-ecosystem/plugins/manifest.js';
 export { DefaultToolBus } from './extension/plugin-ecosystem/tools/tool-bus.js';
 export { getBuiltinTools, createShellTool, createFileReadTool, createFileWriteTool, createFileDeleteTool, createFileListTool } from './extension/plugin-ecosystem/tools/builtin.js';
+export { readGitStatusSnapshot, parsePorcelainV2 } from './extension/plugin-ecosystem/tools/git-status-snapshot.js';
+export type {
+  GitStatusSnapshot,
+  GitStatusSnapshotBody,
+  GitStatusSnapshotOptions,
+  GitStatusEntry,
+  GitStatusBranch,
+  GitStatusCounts,
+  GitStatusGroup,
+  GitStatusKind,
+} from './extension/plugin-ecosystem/tools/git-status-snapshot.js';
 export { DefaultSkillManager, FileSystemSkillSource } from './extension/plugin-ecosystem/skills/manager.js';
 export type { SkillSource, DiscoveredSkill } from './extension/plugin-ecosystem/skills/manager.js';
 export type { SkillDefinition, SkillManager } from './extension/plugin-ecosystem/skills/types.js';

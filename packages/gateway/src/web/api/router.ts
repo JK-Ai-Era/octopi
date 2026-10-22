@@ -218,6 +218,43 @@ export class WebApiRouter {
         }
       }
 
+      const gitStatusMatch = relativePath.match(/^\/sessions\/([^/]+)\/git-status$/);
+      if (gitStatusMatch && method === 'GET') {
+        const target = url.searchParams.get('path') ?? '';
+        if (!target.trim()) {
+          return this.json(res, 400, { ok: false, error: 'path is required' });
+        }
+        const maxEntriesRaw = url.searchParams.get('maxEntries');
+        const maxEntries = maxEntriesRaw === null ? undefined : Number(maxEntriesRaw);
+        if (
+          maxEntriesRaw !== null &&
+          !(Number.isInteger(maxEntries) && (maxEntries as number) >= 1 && (maxEntries as number) <= 2000)
+        ) {
+          return this.json(res, 400, {
+            ok: false,
+            error: 'maxEntries must be an integer in 1..2000',
+          });
+        }
+        try {
+          const data = await this.gateway.getSessionGitStatus(gitStatusMatch[1], target, {
+            maxEntries,
+          });
+          return this.json(res, 200, { ok: true, data });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          // 前缀码精确映射（消息文本不可作为契约）：git_* 是服务端问题 → 500；
+          // 资源缺失（会话 / 目录）→ 404；其余默认 500。
+          const code = msg.startsWith('path_not_allowed') || msg.startsWith('path_invalid')
+            ? 400
+            : msg.startsWith('git_')
+              ? 500
+              : msg.startsWith('path_not_found') || msg.includes('not found')
+                ? 404
+                : 500;
+          return this.json(res, code, { ok: false, error: msg });
+        }
+      }
+
       if (sessionMatch && method === 'PATCH') {
         const body = await this.readBody(req);
         const title = typeof body?.title === 'string' && body.title.trim() ? body.title : undefined;

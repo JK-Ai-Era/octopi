@@ -5,6 +5,7 @@ import { RunObservatoryPanel } from './RunObservatoryPanel';
 import { SessionCorpusMenu } from './SessionCorpusMenu';
 import { SessionAttachmentsPanel } from './SessionAttachmentsPanel';
 import { SessionEffectRootsPanel } from './SessionEffectRootsPanel';
+import { GitStatusPanel } from './GitStatusPanel';
 import { OctopiClient } from '@octopi-agent/gateway/web/sdk/client';
 import { OctopiRuntimeStore } from '@octopi-agent/gateway/web/runtime/store';
 import type {
@@ -759,7 +760,7 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
   const [commands, setCommands] = useState<CommandCatalogItemDto[]>([]);
   const [cmdSuggestIndex, setCmdSuggestIndex] = useState(0);
   const [openIssues, setOpenIssues] = useState<Array<{ id: string; severity: string; title: string; detail: string }>>([]);
-  const [rightTab, setRightTab] = useState<'context' | 'run' | 'tasks' | 'schedules' | 'attachments' | 'roots' | 'file' | 'tools' | 'help'>('context');
+  const [rightTab, setRightTab] = useState<'context' | 'run' | 'tasks' | 'schedules' | 'attachments' | 'roots' | 'git' | 'file' | 'tools' | 'help'>('context');
   const [connectError, setConnectError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
@@ -2331,6 +2332,12 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
               目录
             </button>
             <button
+              className={rightTab === 'git' ? 'btn-tab btn-tab-active' : 'btn-tab'}
+              onClick={() => setRightTab('git')}
+            >
+              Git
+            </button>
+            <button
               className={rightTab === 'file' ? 'btn-tab btn-tab-active' : 'btn-tab'}
               onClick={() => setRightTab('file')}
             >
@@ -2437,6 +2444,14 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
             />
           )}
 
+          {rightTab === 'git' && (
+            <GitStatusPanel
+              client={clientRef.current}
+              sessionId={activeSessionId}
+              agentId={agentId}
+            />
+          )}
+
           {rightTab === 'file' && (
             <FilePreviewPanel
               client={clientRef.current}
@@ -2479,6 +2494,7 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
                 <li>右栏「任务」：会话任务树；对 Agent 说「把 xx 标为完成」即可更新</li>
                 <li>右栏「附件」：本会话参考语料；可 file_read 深读</li>
                 <li>右栏「文件」：send_file 发送的文本文件；图片/音视频在对话中展示，可转存</li>
+                <li>右栏「Git」：选定目录的 git 工作区状态；默认 5s 轮询（可调/手动），切换目录即刷新</li>
                 <li>连接成功后自动刷新 Agent、模型目录和会话</li>
                 <li>Enter 发送，Shift+Enter 换行；输入法选词阶段不会误触</li>
               </ul>

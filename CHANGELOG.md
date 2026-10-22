@@ -1,3 +1,34 @@
+## v0.87.0
+
+### feat(webui): 右栏「Git」页签——选定目录的 git 工作区状态（只读轮询）
+
+**拍板背景**（大哥 2026-10-23）：此前获取项目 git 状态只能让 agent 走 git_* 工具查询，WebUI 无从观察。方案四点均拍板：未跟踪粒度 `normal`（目录折叠）、默认 5s 轮询、v1 只做状态不做 diff、版本走 minor。
+
+**变更**：
+
+1. **engine — git 执行器抽取 + 结构化快照**：
+   - `git-runner.ts`（新）：`runGit` 及安全前缀 / 隔离 env / filter 中和从 `git-tools.ts` **平移**（行为逐字不变），工具与 UI 共用同一加固执行路径（hooks 禁用、`--no-optional-locks`、filter.* 中和、GIT_CONFIG_* 隔离）。
+   - `git-status-snapshot.ts`（新）：`readGitStatusSnapshot(cwd)` 跑 `rev-parse --show-toplevel` + `status --porcelain=v2 -z --branch -unormal`；纯函数 `parsePorcelainV2` 解析 NUL 记录（1/2/u/? 全类型、rename 双路径、`(initial)`/`(detached)`、`branch.ab` ahead/behind）。entries 上限 500（`truncated` 标志），counts 全量；非仓库目录返回 `isRepo:false`（状态不是错误）。
+   - `allowlisted-run.ts`：新增 `applyOutputGate`（默认 true，工具行为不变；结构化消费方关闭 8k 模型上下文截断门、自管截断）与 `maxOutputBytes`。
+2. **gateway — 只读状态端点**：`GET /api/v1/sessions/:id/git-status?path=…`（`WebApiRouter` + `Gateway.getSessionGitStatus`）。路径围栏与 roots API 同源（抽 `resolveSessionEffectRoots` 共用）：必须绝对路径且落在会话 roots（configured + temporary）之内，`..` 逃逸 / 前缀诡计 / win32 大小写已处理；越界/非法 400、会话或目录缺失 404、git 缺失/失败 500。继承既有 Bearer 鉴权。SDK `OctopiClient.getSessionGitStatus` + `GitStatusView` DTO。
+3. **webui — `GitStatusPanel`**：右栏新页签「Git」。目录选择 = 会话/agent roots（配置根 + 会话临时根两组），localStorage 记住选择与轮询间隔（3/5/10/30s/手动，默认 5s）。轮询防护：in-flight 去重 + 序号防串台（旧目录慢响应不得覆盖新数据）+ `document.hidden` 暂停、回前台立即刷新 + 切目录立即刷新；页签卸载即停表。状态区分（DESIGN.md 反模式红线）：加载中 / 非 git 仓库 / 工作区干净 / 脏 / 刷新失败（保留上次成功结果 + 错误横幅）各为独立状态；冲突 → 已暂存 → 未暂存 → 未跟踪分组，XY 状态码 + rename `old → new`。
+
+**边界**（报备）：v1 只读（不做 commit/checkout/分支切换，写操作走 effect gate 另议）；未跟踪粒度 `normal` 与 git_status 工具的 `-uall` 有意不同（UI 可读性优先）；轮询而非 WS/fs.watch（明确需求，.git 目录监听跨平台坑多，将来可在同端点上加事件推送）；点击文件看 diff 留 v2。Web 端点为 context-free 只读面，**不套用** session effectPolicy 的 jail 档位（与 agent 工具的隔离差异，注释已如实标注）；roots 围栏是能力边界而非安全边界（可加会话临时根的调用方本就能扩根）。
+
+**独立评审**（子 agent 行级评审，P0=0 / P1=4 / P2=15，逐条核对后修复）：
+
+1. **符号链接逃逸（P1，安全）**：原围栏纯词法，root 内软链指向外部可通过校验。改为两段式：词法围栏先行（越界一律 `path_not_allowed`，不泄露存在性）→ realpath canonical 二段围栏（`/ws/link -> /etc` 拒绝），git 在校验过的 canonical 路径上执行（关掉 check-vs-use 竞态）。回归测试含 symlink 逃逸用例。
+2. **`truncated` 语义不诚实（P1）**：沙箱输出上限是「先 kill 不入缓冲」，长度启发式必然误判（已核实 sandbox.ts 实现）。改用 `terminated + terminateReason === 'Output size limit exceeded'` 真实信号；快照读取遇截断/被杀直接抛错，绝不把部分输出装成功；移除无调用方且文档失实的 `maxOutputBytes` 选项。
+3. **WebUI 默认轮询被静默吞掉（P1）**：`Number(null) === 0` 命中「手动」档，首次进入即不轮询并把 `0` 持久化。修复后首次进入默认 5s。
+4. **渲染身份键（P1）**：UI 原以 `snapshot.path === selected` 严格相等判断归属，非规范根字符串（尾斜杠/相对形式/win32 盘符）经服务端 resolve 后永假 → 永久「加载中」。改为按请求身份（sessionId|selected）渲染，不依赖服务端路径回显。
+5. **P2 修复**：`1 MM` 部分暂存按 git 分节语义出两行（暂存组 + 未暂存组，计数与列表不再矛盾）；格式漂移记录计入 `skippedRecords` 并在 UI 显式提示（>0 时不得宣称「工作区干净」）；无 `# branch.*` 头时 `branch` 为 null 而非全 null 对象；`generatedAt` 移到读取完成后；NUL 路径拒绝为 `path_invalid`（不再误报 404）；路由错误映射改**前缀码精确匹配**（`git_*` 一律 500，不被 stderr 文本里的 "not found" 降级）；`?maxEntries=` 查询参数（1..2000）打通硬编码上限；`~/` 路径展开（配置根与请求路径同规则）；runner 头注释职责划分修正。
+
+**留观未修**（记录）：Web 端点与工具的 jail 档位对齐（涉及 effectPolicy 语义，待拍板）；轮询无服务端缓存/速率限制（每轮询 4 个 git 进程 + 一次 session load，多标签页放大，本地调试面可接受）；`sandbox.ts` 输出上限的「字符数+字节数」混合比较（既有缺陷，另行处理）；`git-tools.ts` 历史乱码注释/行内 BOM（仓库既有现象，未动）；WebUI 组件无测试基建（`packages/webui` 无 vitest，interval 一类 bug 只能人工点检）。
+
+**验证**：新增 `tests/harness/git-status-snapshot.test.ts`（解析器 9 用例 + 真实仓库 6 用例）与 `tests/gateway-git-status-api.test.ts`（围栏 6 用例 + 路由映射）24/24 通过；全量 3069 通过 / 2 失败 / 6 跳过——2 个失败为 `getProcessName` / `identifyPortOccupant`（沙箱固有限制，2026-10-18 已定性），与本次无关。`npm run lint` 全绿；`arch/check-sync.sh` 全绿。
+
+---
+
 ## v0.86.38
 
 ### refactor(plugin): 放弃 OpenClaw 插件兼容——兼容加载下线 + 全仓参考痕迹清理

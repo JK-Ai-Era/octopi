@@ -247,6 +247,17 @@ export type {
 } from './harness/extension/plugin-ecosystem/client-tools/index.js';
 export { getBuiltinTools, createShellTool, createFileReadTool, createFileWriteTool, createFileListTool } from './harness/extension/plugin-ecosystem/tools/builtin.js';
 export { createToolSet } from './harness/extension/plugin-ecosystem/tools/tool-set.js';
+export { readGitStatusSnapshot, parsePorcelainV2 } from './harness/extension/plugin-ecosystem/tools/git-status-snapshot.js';
+export type {
+  GitStatusSnapshot,
+  GitStatusSnapshotBody,
+  GitStatusSnapshotOptions,
+  GitStatusEntry,
+  GitStatusBranch,
+  GitStatusCounts,
+  GitStatusGroup,
+  GitStatusKind,
+} from './harness/extension/plugin-ecosystem/tools/git-status-snapshot.js';
 export { createSummaryPort, applyToolOutputGate, createCompactEngine } from './harness/context/capabilities/index.js';
 export { createDefaultDocumentPort, createDocumentPortFromConfig, DocumentExtractError } from './harness/capabilities/document/index.js';
 export type { SummaryPort, SummaryPolicy, ContentUnit, ToolSummarySupport, CompactEngine } from './harness/context/capabilities/index.js';

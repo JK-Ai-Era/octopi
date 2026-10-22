@@ -30,6 +30,50 @@ export interface CommandCatalogItemDto {
   source: string;
 }
 
+/**
+ * Git 状态快照 DTO（WebUI Git 页签）。
+ * 权威实现：engine `harness/extension/plugin-ecosystem/tools/git-status-snapshot.ts`
+ * （Gateway.getSessionGitStatus 组装 path + snapshot）。
+ */
+export interface GitStatusEntryView {
+  kind: 'changed' | 'renamed' | 'copied' | 'untracked' | 'conflicted';
+  group: 'conflicted' | 'staged' | 'unstaged' | 'untracked';
+  /** 索引侧状态字符（'.' = 未暂存变化） */
+  x: string;
+  /** 工作树侧状态字符（'.' = 无未暂存变化） */
+  y: string;
+  path: string;
+  /** rename/copy 的源路径 */
+  origPath?: string;
+}
+
+export interface GitStatusBranchView {
+  /** HEAD oid；首个提交之前为 null（(initial)） */
+  oid: string | null;
+  /** 分支名；detached 时为 null */
+  head: string | null;
+  detached: boolean;
+  initial: boolean;
+  upstream: string | null;
+  ahead: number | null;
+  behind: number | null;
+}
+
+export interface GitStatusView {
+  path: string;
+  /** false = 目录不在任何 git 工作树内（是状态不是错误） */
+  isRepo: boolean;
+  repoRoot: string | null;
+  branch: GitStatusBranchView | null;
+  /** 全量计数（不受 entries 截断影响） */
+  counts: { conflicted: number; staged: number; unstaged: number; untracked: number };
+  entries: GitStatusEntryView[];
+  truncated: boolean;
+  /** 已知类型但解析失败的记录数（格式漂移信号，>0 时计数可能不完整） */
+  skippedRecords: number;
+  generatedAt: string;
+}
+
 export interface OctopiClientOptions {
   baseUrl: string;
   apiKey?: string;
@@ -952,6 +996,20 @@ export class OctopiClient {
       { path },
     );
     return data?.data as { temporaryRoots: string[] };
+  }
+
+  /** 结构化 git 状态（WebUI Git 页签轮询；只读，path 必须在会话 roots 内） */
+  async getSessionGitStatus(
+    sessionId: string,
+    path: string,
+    maxEntries?: number,
+  ): Promise<GitStatusView> {
+    const params = new URLSearchParams({ path });
+    if (maxEntries !== undefined) params.set('maxEntries', String(maxEntries));
+    const data = await this.getJson(
+      `/sessions/${encodeURIComponent(sessionId)}/git-status?${params.toString()}`,
+    );
+    return data?.data as GitStatusView;
   }
 
   /** Remove one session-temporary transaction root */
