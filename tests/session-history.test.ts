@@ -429,6 +429,7 @@ describe('P2 sessions.index.db projection', () => {
         agentId: 'agent-b',
         roleId: 'specialist',
         grantSeq: 1,
+        grantedAt: 2000,
         rights: { readScope: 'from_grant' },
       },
     ];

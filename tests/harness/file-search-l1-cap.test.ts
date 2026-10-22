@@ -25,6 +25,12 @@ function testFileEffects(): ToolFileEffects {
     async appendFile(path, data) {
       await writeFile(path, data, { flag: 'a' });
     },
+    // 记账类操作 no-op（本文件不验 undo）
+    async recordDelete() {},
+    async recordCreate() {},
+    async recordRename() {},
+    async recordOverwrite() {},
+    async noteNotReversed() {},
   };
 }
 

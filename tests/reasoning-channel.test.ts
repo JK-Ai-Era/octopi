@@ -36,8 +36,11 @@ function providerFromChunks(chunks: LLMStreamChunk[], final: Partial<LLMResponse
     async isAvailable() {
       return true;
     },
-    async getModelInfo() {
+    getModelInfo(_modelName: string) {
       return null;
+    },
+    getModelInfos() {
+      return [];
     },
   };
 }

@@ -191,7 +191,7 @@ describe('backfill binds SUBSYSTEM.md as systemPrompt', () => {
 
   it('passes cognitivePrompt + constitution into chat systemPrompt', async () => {
     const store = new InMemoryMemoryStore();
-    const chat = vi.fn(async () => ({
+    const chat = vi.fn(async (_req: unknown) => ({
       content: '[]',
       model: 'mini',
       finishReason: 'stop' as const,
@@ -220,7 +220,7 @@ describe('backfill binds SUBSYSTEM.md as systemPrompt', () => {
 
   it('falls back to local SUBSYSTEM.md when port has no cognitivePrompt', async () => {
     const store = new InMemoryMemoryStore();
-    const chat = vi.fn(async () => ({ content: '[]', model: 'mini', finishReason: 'stop' as const }));
+    const chat = vi.fn(async (_req: unknown) => ({ content: '[]', model: 'mini', finishReason: 'stop' as const }));
     const llmPort: SubsystemLLMPort = {
       cognitivePrompt: '',
       defaultModel: 'mini',
@@ -311,7 +311,7 @@ describe('govern boosts and promotion candidates', () => {
       status: 'active',
       evidence: '"retry 3 次后换 fallback"',
       anchors: ['retry', 'fallback'],
-      future_use: 'When retry exceeds 3 switch to fallback',
+      futureUse: 'When retry exceeds 3 switch to fallback',
     });
     await store.update(id, { accessCount: 4, lastAccessedAt: Date.now() });
 

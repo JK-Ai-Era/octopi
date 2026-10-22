@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { KnowledgeSourceStore } from '@octopi-agent/engine/harness/knowledge/source-store.js';
+import type { KnowledgeSourceId } from '@octopi-agent/engine/harness/knowledge/types.js';
 import { KnowledgeIngest } from '@octopi-agent/engine/harness/knowledge/ingest.js';
 import { KnowledgeRetriever } from '@octopi-agent/engine/harness/knowledge/retriever.js';
 import { GroundingAssembler, stripKnowledgeGrounding } from '@octopi-agent/engine/harness/knowledge/grounding.js';
@@ -60,8 +61,8 @@ describe('Knowledge E2E 验收', () => {
   let hits: KnowledgeHitLog;
   let purger: KnowledgePurger;
   let retriever: KnowledgeRetriever;
-  let globalSrcId: string;
-  let projectSrcId: string;
+  let globalSrcId: KnowledgeSourceId;
+  let projectSrcId: KnowledgeSourceId;
 
   beforeAll(async () => {
     root = await mkdtemp(join(tmpdir(), 'octopi-kn-e2e-'));

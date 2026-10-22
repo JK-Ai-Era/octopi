@@ -50,8 +50,7 @@ describe('createProviderSummarize', () => {
 
 describe('pickSummarizeProvider', () => {
   it('优先 mini level 对应的 provider', () => {
-    const mini = mockProvider();
-    mini.name = 'cheap';
+    const mini = { ...mockProvider(), name: 'cheap' };
     const main = mockProvider();
     const map = new Map<string, ModelProvider>([
       ['cheap', mini],

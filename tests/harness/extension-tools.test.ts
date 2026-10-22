@@ -92,7 +92,7 @@ describe('extension tools', () => {
   it('task tools should work with injected SessionTaskService', async () => {
     const sessionStore = new InMemorySessionStore();
     const session = createSession();
-    await sessionStore.save('a1', 's1', session);
+    await sessionStore.save('s1', session);
     const service = new SessionTaskService(sessionStore);
     service.attachSession(session);
     const tools = createSessionTaskTools(service);

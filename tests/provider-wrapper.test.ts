@@ -17,11 +17,12 @@ function createMockProvider(overrides?: Partial<ModelProvider>): ModelProvider {
     name: 'mock',
     chat: async (_req: LLMRequest): Promise<LLMResponse> => ({
       content: 'hello',
+      model: 'mock',
       finishReason: 'stop',
     }),
     stream: async function* (_req: LLMRequest) {
-      yield { delta: 'hello', done: false };
-      yield { delta: '', done: true, response: { content: 'hello', finishReason: 'stop' } };
+      yield { type: 'content' as const, content: 'hello' };
+      yield { type: 'done' as const, finishReason: 'stop' as const };
     },
     getModelInfo: (name: string): ModelInfo | null => ({
       name,
@@ -90,7 +91,7 @@ describe('wrapProviderWithCircuitBreaker', () => {
 
     const chunks: string[] = [];
     for await (const chunk of wrapped.stream!({ messages: [] })) {
-      if (chunk.delta) chunks.push(chunk.delta);
+      if (chunk.type === 'content' && chunk.content) chunks.push(chunk.content);
     }
     expect(chunks).toEqual(['hello']);
   });

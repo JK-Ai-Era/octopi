@@ -52,7 +52,7 @@ function assertStrictGatewaySafe(messages: LLMMessage[]): void {
 
 describe('手动压缩摘要请求形态（400 回归）', () => {
   it('中段含 tool_call-only assistant 时请求为 [system 指令, user 文本]，不再裸发对话序列', async () => {
-    const summarize = vi.fn(async () => 'mid-summary');
+    const summarize = vi.fn(async (_messages: unknown[], _options?: unknown) => 'mid-summary');
     const engine = createCompactEngine({ defaultProtectHead: 1, defaultProtectTail: 1 });
     // 中段（index 1..5）是典型工具轮次：assistant(tool_calls-only) + tool result 交替
     const messages: Message[] = [
@@ -89,7 +89,7 @@ describe('手动压缩摘要请求形态（400 回归）', () => {
   });
 
   it('多 agent 共线：assistant/tool 归因保留在摘要输入文本中', async () => {
-    const summarize = vi.fn(async () => 'mid-summary');
+    const summarize = vi.fn(async (_messages: unknown[], _options?: unknown) => 'mid-summary');
     const engine = createCompactEngine({ defaultProtectHead: 1, defaultProtectTail: 1 });
     const messages: Message[] = [
       userMsg('hi'),
@@ -116,7 +116,7 @@ describe('手动压缩摘要请求形态（400 回归）', () => {
   });
 
   it('previousSummary 随 prompt 迭代合并，返回值即完整摘要（不再事后拼接）', async () => {
-    const summarize = vi.fn(async () => 'FULL-UPDATED-SUMMARY');
+    const summarize = vi.fn(async (_messages: unknown[], _options?: unknown) => 'FULL-UPDATED-SUMMARY');
     const engine = createCompactEngine({ defaultProtectHead: 1, defaultProtectTail: 1 });
     const messages = Array.from({ length: 8 }, (_, i) => userMsg(`m${i}`));
     const out = await engine.compactMessages(messages, {
@@ -168,7 +168,7 @@ describe('手动压缩摘要请求形态（400 回归）', () => {
   });
 
   it('中段文本化为空（全无正文）→ summarizeFn 不被调用、旧摘要保留（不发空 user/占位内容）', async () => {
-    const summarize = vi.fn(async () => 'never');
+    const summarize = vi.fn(async (_messages: unknown[], _options?: unknown) => 'never');
     const engine = createCompactEngine({ defaultProtectHead: 1, defaultProtectTail: 1 });
     // 中段两条 assistant 消息正文为空且无 toolCalls（formatMessagesAsText 的 else-if(content) 跳过 → 文本化为空串）
     const messages: Message[] = [
@@ -193,7 +193,7 @@ describe('手动压缩摘要请求形态（400 回归）', () => {
   });
 
   it('摘要失败（summarizeFn 抛错）→ 失效降级保留旧摘要，不拼接半截摘要', async () => {
-    const summarize = vi.fn(async () => {
+    const summarize = vi.fn(async (_messages: unknown[], _options?: unknown) => {
       throw new Error('provider down');
     });
     const engine = createCompactEngine({ defaultProtectHead: 1, defaultProtectTail: 1 });
@@ -219,7 +219,7 @@ describe('手动压缩摘要请求形态（400 回归）', () => {
   });
 
   it('summary_only 摘要失败 → summary 字段同样保留旧摘要', async () => {
-    const summarize = vi.fn(async () => {
+    const summarize = vi.fn(async (_messages: unknown[], _options?: unknown) => {
       throw new Error('provider down');
     });
     const engine = createCompactEngine({ defaultProtectHead: 1, defaultProtectTail: 1 });

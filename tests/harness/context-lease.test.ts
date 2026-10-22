@@ -9,7 +9,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import { AgentBuilder } from '@octopi-agent/engine/harness/agent/builder.js';
 import type { ModelProvider } from '@octopi-agent/core/interfaces/model-provider.js';
-import type { LLMRequest, Message } from '@octopi-agent/core/types.js';
+import type { LLMRequest } from '@octopi-agent/core/interfaces/model-provider.js';
+import type { Message } from '@octopi-agent/core/types.js';
 import type { SessionData } from '@octopi-agent/engine/harness/session/types.js';
 import type { SessionStore } from '@octopi-agent/core/interfaces/session-store.js';
 

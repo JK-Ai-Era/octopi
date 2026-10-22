@@ -23,6 +23,7 @@ import {
 import type { Message } from '@octopi-agent/core/types.js';
 import type { RunScope } from '@octopi-agent/engine/harness/run/run-scope.js';
 import { makeTokenUsage } from '@octopi-agent/core/types/turn.js';
+import { testFileEffects, testMemoryEffects } from '../helpers/tool-context.js';
 
 function msg(partial: Partial<Message> & Pick<Message, 'role'>): Message {
   return {
@@ -316,6 +317,8 @@ describe('ObserverHub', () => {
       messages: [],
       cwd: '/tmp/work',
       isolation: 'none',
+      fileEffects: testFileEffects(),
+      memoryEffects: testMemoryEffects(),
     },
   };
 

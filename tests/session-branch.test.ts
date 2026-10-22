@@ -10,7 +10,7 @@ import { Gateway } from '@octopi-agent/gateway/gateway/gateway.js';
 import { InMemorySessionStore } from '@octopi-agent/engine/harness/session/in-memory-store.js';
 import type { Message } from '@octopi-agent/core/types.js';
 import type { SessionData } from '@octopi-agent/engine/harness/session/types.js';
-import type { GatewayConfig } from '@octopi-agent/core/types.js';
+import type { GatewayConfig } from '@octopi-agent/gateway/types/gateway-config.js';
 
 function userMsg(text: string, at = Date.now()): Message {
   return { role: 'user', content: text, timestamp: at };

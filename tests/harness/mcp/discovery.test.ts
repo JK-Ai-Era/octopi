@@ -7,6 +7,7 @@ import { mkdtemp, writeFile, rm, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { loadMcpServersFromDir } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/mcp/discovery.js';
+import type { McpHttpConfig, McpStdioConfig } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/mcp/types.js';
 
 describe('loadMcpServersFromDir', () => {
   let tempDir: string;
@@ -40,9 +41,9 @@ describe('loadMcpServersFromDir', () => {
     expect(configs).toHaveLength(2);
     expect(configs[0].id).toBe('filesystem');
     expect(configs[0].transport).toBe('stdio');
-    expect(configs[0].command).toBe('npx');
+    expect((configs[0] as McpStdioConfig).command).toBe('npx');
     expect(configs[1].id).toBe('github');
-    expect(configs[1].env).toEqual({ GITHUB_TOKEN: 'test' });
+    expect((configs[1] as McpStdioConfig).env).toEqual({ GITHUB_TOKEN: 'test' });
   });
 
   it('should return empty array for non-existent directory', async () => {
@@ -104,8 +105,8 @@ describe('loadMcpServersFromDir', () => {
     const configs = await loadMcpServersFromDir(tempDir);
     expect(configs).toHaveLength(1);
     expect(configs[0].transport).toBe('http');
-    expect(configs[0].url).toBe('https://example.com/mcp');
-    expect(configs[0].headers).toEqual({ Authorization: 'Bearer token' });
+    expect((configs[0] as McpHttpConfig).url).toBe('https://example.com/mcp');
+    expect((configs[0] as McpHttpConfig).headers).toEqual({ Authorization: 'Bearer token' });
   });
 
   it('should sort configs by filename', async () => {

@@ -24,6 +24,7 @@ function toolTurn(id: number, body: string): Message[] {
     },
     {
       role: 'tool',
+      content: '',
       timestamp: Date.now(),
       toolResults: [{ toolCallId: `tc-${id}`, name: 'file_read', result: body }],
     },
@@ -203,7 +204,7 @@ describe('审查修复：粘滞增量 / isMidTurn 注入 / 空丢弃', () => {
     });
 
     const text = after.messages.map((m) =>
-      typeof m.content === 'string' ? m.content : JSON.stringify(m.content ?? m.toolResults),
+      typeof m.content === 'string' ? m.content : JSON.stringify(m.content ?? (m as { toolResults?: unknown }).toolResults),
     ).join('\n');
     // 粘滞视图必须含摘要 + 增量痕迹（不得退回「只有 head+旧摘要+tail」）
     expect(text).toContain('Conversation Summary');
@@ -247,8 +248,9 @@ describe('审查 P2 红线补测', () => {
       userMsg('t'),
       {
         role: 'tool',
+        content: '',
         timestamp: Date.now(),
-        toolResults: [{ toolCallId: 'c1', name: 'file_read', error: err }],
+        toolResults: [{ toolCallId: 'c1', name: 'file_read', result: null, error: err }],
       },
     ];
     const out = await new HybridCompressor().compress({

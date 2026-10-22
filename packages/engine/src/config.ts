@@ -96,6 +96,19 @@ export type KnowledgeRecallMode = 'off' | 'hint' | 'hybrid' | 'inject';
 
 /** Knowledge 全局配置（agents[].knowledge 覆盖 recall 等） */
 export interface KnowledgeRuntimeConfig {
+  /** Knowledge Service 连接（v2：Gateway 不打开 knowledge.db）；对齐 KnowledgeConfigSchema */
+  service?: {
+    baseUrl?: string;
+    token?: string;
+    /** 缺省 true：serve 时拉起本地 Knowledge；false 则只连 baseUrl */
+    manageLocal?: boolean;
+    /** manageLocal 本地监听端口（缺省 18280） */
+    port?: number;
+    timeoutMs?: number;
+    connectTimeoutMs?: number;
+  };
+  /** true = Knowledge 不可用则 run 失败（默认 fail-open） */
+  required?: boolean;
   recall?: KnowledgeRecallMode;
   autoInject?: {
     minScore?: number;

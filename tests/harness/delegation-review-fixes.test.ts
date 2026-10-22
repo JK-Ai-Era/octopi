@@ -212,7 +212,7 @@ describe('P0-2 nested delegation is gated by maxDepth', () => {
           } as never;
         },
         handle(...args: unknown[]) {
-          return this._handle(...args);
+          return (this._handle as (...a: unknown[]) => unknown)(...args);
         },
       },
       store: {
@@ -327,7 +327,7 @@ describe('P0-3 parent effective rights propagate into the child ceiling (D3)', (
     const ceiling = request()!.rightsCeiling!;
     expect(ceiling.readScope).toBe('summary_tail');
     expect(ceiling.writeMemory).toBe(false);
-    expect(ceiling.toolRights.deny).toContain('file_write');
+    expect(ceiling.toolRights?.deny).toContain('file_write');
   });
 
   it('child template ceiling cannot widen the parent (only tighten)', async () => {
@@ -556,6 +556,9 @@ describe('regression guard: child ids are never undefined', () => {
         store: {
           async load(id: string) { return saved.get(id) ?? null; },
           async save(id: string, s: SessionData) { saved.set(id, s); },
+          async list() { return [...saved.values()].map((s) => s.meta); },
+          async delete(id: string) { void saved.delete(id); },
+          async exists(id: string) { return saved.has(id); },
         },
       }),
     });

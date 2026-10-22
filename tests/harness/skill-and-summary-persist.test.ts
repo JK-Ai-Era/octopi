@@ -250,21 +250,21 @@ describe('压缩摘要 Session 持久化', () => {
     const provider = mockProvider();
     const sessions = new Map<string, SessionData>();
     const store: SessionStore<SessionData> = {
-      async load(_agentId: string, sessionId: string) {
+      async load(sessionId) {
         return sessions.get(sessionId) ?? null;
       },
-      async save(_agentId: string, sessionId: string, data: SessionData) {
+      async save(sessionId, data) {
         sessions.set(sessionId, JSON.parse(JSON.stringify(data)) as SessionData);
       },
-      async delete(_agentId: string, sessionId: string) {
+      async delete(sessionId) {
         sessions.delete(sessionId);
       },
-      async list(agentId: string) {
+      async list(filter) {
         return [...sessions.values()]
-          .filter((s) => s.agentId === agentId)
+          .filter((s) => !filter?.agentId || s.agentId === filter.agentId)
           .map((s) => s.meta);
       },
-      async exists(_agentId: string, sessionId: string) {
+      async exists(sessionId) {
         return sessions.has(sessionId);
       },
     };

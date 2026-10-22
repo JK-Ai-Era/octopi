@@ -19,7 +19,8 @@ import {
   createMemoryRestorer,
   JournaledMemoryStore,
 } from '@octopi-agent/engine/harness/extension/execution-environment/memory-undo.js';
-import type { Message, GatewayConfig } from '@octopi-agent/core/types.js';
+import type { Message } from '@octopi-agent/core/types.js';
+import type { GatewayConfig } from '@octopi-agent/gateway/types/gateway-config.js';
 
 async function exists(p: string): Promise<boolean> {
   try {

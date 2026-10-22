@@ -317,7 +317,7 @@ describe('MemoryLayer auto-inject', () => {
     const layer = new MemoryLayer({ store, limit: 5 });
     const content = await layer.assemble({
       sessionId: 's1',
-      messages: [{ role: 'user', content: '附子 是什么？炖肉吃有什么好处和危害？' }],
+      messages: [{ role: 'user', timestamp: Date.now(), content: '附子 是什么？炖肉吃有什么好处和危害？' }],
       query: '附子 是什么？炖肉吃有什么好处和危害？',
       tokenBudget: 2000,
       systemBudget: 8000,
@@ -347,7 +347,7 @@ describe('MemoryLayer auto-inject', () => {
     const layer = new MemoryLayer({ store, limit: 5 });
     const content = await layer.assemble({
       sessionId: 's1',
-      messages: [{ role: 'user', content: '附子是什么？' }],
+      messages: [{ role: 'user', timestamp: Date.now(), content: '附子是什么？' }],
       query: '附子是什么？',
       tokenBudget: 2000,
       systemBudget: 8000,

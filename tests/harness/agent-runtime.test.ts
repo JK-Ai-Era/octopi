@@ -257,8 +257,9 @@ describe('AgentRuntime', () => {
     );
     expect(r.status).toBe('ran');
     if (r.status === 'ran') {
-      expect(r.agentId).toBe('a1');
-      expect(r.sessionId).toBe('a1:custom');
+      const single = r as { agentId: string; sessionId: string };
+      expect(single.agentId).toBe('a1');
+      expect(single.sessionId).toBe('a1:custom');
     }
     expect(d.calls).toHaveLength(1);
     expect(d.calls[0]?.messages[0]?.content).toBe('hi');
@@ -297,7 +298,9 @@ describe('AgentRuntime', () => {
   it('emit RuntimeEvents', async () => {
     const events: string[] = [];
     const bus = new DefaultEventBus();
-    bus.onAll((e) => events.push(e.type));
+    bus.onAll((e) => {
+      events.push(e.type);
+    });
     const runtime = new AgentRuntime({ events: bus });
     const seen: string[] = [];
     runtime.on((e) => seen.push(e.type));
@@ -323,7 +326,7 @@ describe('AgentRuntime', () => {
       trigger({ id: 't2', agentId: 'a1', sessionId: 's', coalesceKey: 'batch' }),
     );
     const results = await Promise.all([p1, p2]);
-    expect(results.every((r: DispatchResult) => r.status === 'ran')).toBe(true);
+    expect(results.every((r) => r.status === 'ran')).toBe(true);
     expect(d.calls).toHaveLength(1);
     expect(d.calls[0]?.triggers).toHaveLength(2);
     await runtime.stop();

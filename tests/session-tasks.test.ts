@@ -38,7 +38,7 @@ function createSession(id = 's1', agentId = 'a1'): SessionData {
 function createBus() {
   const events: AgentEvent[] = [];
   const bus: EventBus = {
-    emit(event) {
+    emit(event: AgentEvent) {
       events.push(event);
     },
     on() {

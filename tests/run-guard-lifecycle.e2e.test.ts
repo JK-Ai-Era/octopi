@@ -20,6 +20,7 @@ function failingToolModel(tokens = 50): ModelProvider {
       content: '',
       model: 'mock',
       toolCalls: [{ id: `c${++n}`, name: 'fail_tool', arguments: {} }],
+      finishReason: 'tool_calls' as const,
       usage: makeTokenUsage({ promptTokens: 5, completionTokens: 5 }),
     }),
     stream: async function* () {
@@ -35,6 +36,7 @@ function failingToolModel(tokens = 50): ModelProvider {
     },
     isAvailable: async () => true,
     getModelInfo: () => null,
+    getModelInfos: () => [],
   };
 }
 
@@ -64,7 +66,7 @@ describe('runAgentWithReliability + Guard 升级（真 e2e）', () => {
       minCheckpointInterval: 3,
       hardLimit: 12,
     });
-    const budget = new BudgetPolicyEngine(new DefaultEventBus(), {
+    const budget = new BudgetPolicyEngine({
       maxWallClockMs: 6 * 3_600_000,
     });
     const harness: ReliabilityHarness = {

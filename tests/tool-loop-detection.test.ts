@@ -98,6 +98,7 @@ describe('ToolLoopDetection', () => {
       }
       const result = detectNoProgressLoop(h, 'shell', { cmd: 'ls' }, { enabled: true, warningThreshold: 10 });
       expect(result.stuck).toBe(true);
+      if (!result.stuck) throw new Error('expected stuck loop');
       expect(result.level).toBe('warning');
     });
 
@@ -108,6 +109,7 @@ describe('ToolLoopDetection', () => {
       }
       const result = detectNoProgressLoop(h, 'shell', { cmd: 'ls' }, { enabled: true, criticalThreshold: 20 });
       expect(result.stuck).toBe(true);
+      if (!result.stuck) throw new Error('expected stuck loop');
       expect(result.level).toBe('critical');
     });
 
@@ -152,6 +154,7 @@ describe('ToolLoopDetection', () => {
       }
       const result = detectNoProgressLoop(h, 'shell', { cmd: 'ls' }, { enabled: true, globalCircuitBreakerThreshold: 30 });
       expect(result.stuck).toBe(true);
+      if (!result.stuck) throw new Error('expected stuck loop');
       expect(result.level).toBe('critical');
       expect(result.detector).toBe('global_circuit_breaker');
     });

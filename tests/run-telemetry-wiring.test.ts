@@ -13,37 +13,31 @@ import {
 } from '@octopi-agent/engine/harness/observability/run-telemetry.js';
 import { createRunTelemetry } from '@octopi-agent/engine/integration/observability/run-telemetry.js';
 import { InMemorySessionStore } from '@octopi-agent/engine/harness/session/in-memory-store.js';
-import type { ModelProvider, LLMStreamChunk } from '@octopi-agent/core/index.js';
+import type { ModelProvider } from '@octopi-agent/core/index.js';
+import type { LLMStreamChunk } from '@octopi-agent/core/interfaces/model-provider.js';
+import { makeTokenUsage } from '@octopi-agent/core/types/turn.js';
 import type { AgentEvent } from '@octopi-agent/core/primitives/event-bus.js';
 
 function mockProvider(): ModelProvider {
   return {
     name: 'mock',
     chat: async () => ({
-      message: { role: 'assistant' as const, content: 'hi' },
-      usage: {
-        inputUncachedTokens: 1,
-        inputCachedTokens: 0,
-        inputCacheWriteTokens: 0,
-        outputTokens: 2,
-      },
+      content: 'hi',
+      model: 'mock',
+      usage: makeTokenUsage({ promptTokens: 1, completionTokens: 2 }),
       finishReason: 'stop' as const,
     }),
     stream: async function* (): AsyncGenerator<LLMStreamChunk> {
-      yield { type: 'text_delta' as const, delta: 'hi' };
+      yield { type: 'content' as const, content: 'hi' };
       yield {
         type: 'done' as const,
-        message: { role: 'assistant' as const, content: 'hi' },
-        usage: {
-          inputUncachedTokens: 1,
-          inputCachedTokens: 0,
-          inputCacheWriteTokens: 0,
-          outputTokens: 2,
-        },
+        finishReason: 'stop' as const,
+        usage: makeTokenUsage({ promptTokens: 1, completionTokens: 2 }),
       };
     },
     isAvailable: async () => true,
     getModelInfo: () => ({ name: 'mock', contextWindow: 8000 }),
+    getModelInfos: () => [{ name: 'mock', contextWindow: 8000 }],
   };
 }
 

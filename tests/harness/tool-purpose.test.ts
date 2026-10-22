@@ -24,7 +24,7 @@ describe('tool purpose contract', () => {
     };
 
     const builder = new AgentBuilder()
-      .model({ provider: 'mock', model: 'm' })
+      .model('mock/m')
       .memoryStore(new InMemoryMemoryStore())
       .tool(tool as never);
 
@@ -59,7 +59,7 @@ describe('tool purpose contract', () => {
     };
 
     const builder = new AgentBuilder()
-      .model({ provider: 'mock', model: 'm' })
+      .model('mock/m')
       .memoryStore(new InMemoryMemoryStore())
       .tool(tool as never);
 
@@ -116,7 +116,7 @@ describe('tool purpose contract', () => {
     };
 
     const builder = new AgentBuilder()
-      .model({ provider: 'mock', model: 'm' })
+      .model('mock/m')
       .memoryStore(new InMemoryMemoryStore())
       .tool(tool as never);
 
@@ -157,7 +157,7 @@ describe('tool purpose contract', () => {
     };
 
     const builder = new AgentBuilder()
-      .model({ provider: 'mock', model: 'm' })
+      .model('mock/m')
       .memoryStore(new InMemoryMemoryStore())
       .tool(tool as never);
 

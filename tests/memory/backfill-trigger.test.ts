@@ -46,7 +46,7 @@ function makeSession(id: string, turns = 3): SessionData {
     messages,
     turns: [],
     metadata: {},
-  } as SessionData;
+  } as unknown as SessionData;
 }
 
 describe('memory.backfill.enabled config', () => {
@@ -215,7 +215,9 @@ describe('type-aware decay + semantic conflict + health', () => {
       });
     }
     const types: string[] = [];
-    events.onAll((e) => types.push(e.type));
+    events.onAll((e) => {
+      types.push(e.type);
+    });
     const { MemoryHealthProbe } = await import('@octopi-agent/engine/harness/memory/health-probe.js');
     const probe = new MemoryHealthProbe({
       events,
@@ -263,7 +265,9 @@ describe('BackfillTrigger emit paths', () => {
     const events = new DefaultEventBus();
     const coverage = new InMemoryBackfillCoverageStore();
     const received: Array<{ type: string; data?: Record<string, unknown> }> = [];
-    events.onAll((e) => received.push({ type: e.type, data: e.data }));
+    events.onAll((e) => {
+      received.push({ type: e.type, data: e.data });
+    });
 
     const trigger = new BackfillTrigger({
       events,
@@ -301,7 +305,9 @@ describe('BackfillTrigger emit paths', () => {
     const events = new DefaultEventBus();
     const coverage = new InMemoryBackfillCoverageStore();
     const types: string[] = [];
-    events.onAll((e) => types.push(e.type));
+    events.onAll((e) => {
+      types.push(e.type);
+    });
     const trigger = new BackfillTrigger({ events, coverage, idleScanMs: 10_000, gapScanMs: 10_000 });
     trigger.start();
 
@@ -335,7 +341,9 @@ describe('BackfillTrigger emit paths', () => {
       },
     };
     const received: Array<{ type: string; data?: Record<string, unknown> }> = [];
-    events.onAll((e) => received.push({ type: e.type, data: e.data }));
+    events.onAll((e) => {
+      received.push({ type: e.type, data: e.data });
+    });
     const trigger = new BackfillTrigger({
       events,
       coverage,
@@ -385,7 +393,9 @@ describe('BackfillTrigger emit paths', () => {
       },
     };
     const types: string[] = [];
-    events.onAll((e) => types.push(e.type));
+    events.onAll((e) => {
+      types.push(e.type);
+    });
 
     let now = Date.now();
     const trigger = new BackfillTrigger({

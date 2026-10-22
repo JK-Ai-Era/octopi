@@ -6,6 +6,7 @@ import { mkdtemp, mkdir, writeFile, rm, utimes } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { KnowledgeDatabase } from '@octopi-agent/engine/harness/knowledge/db.js';
+import type { KnowledgeSourceId } from '@octopi-agent/engine/harness/knowledge/types.js';
 import { KnowledgeSourceStore } from '@octopi-agent/engine/harness/knowledge/source-store.js';
 import { KnowledgeIndexStore } from '@octopi-agent/engine/harness/knowledge/index-store.js';
 import { KnowledgeIngest } from '@octopi-agent/engine/harness/knowledge/ingest.js';
@@ -73,7 +74,7 @@ describe('upsertFile 半写入完整性', () => {
     expect(chunkRows.n).toBe(0);
 
     // 半成品不得被搜到
-    expect(index.search('unique-token-abort', { sourceIds: [sourceId] })).toHaveLength(0);
+    expect(index.search('unique-token-abort', { sourceIds: [sourceId as KnowledgeSourceId] })).toHaveLength(0);
     // isFresh 不得误判为完成
     expect(index.isFresh(sourceId, path, 'hash-abort')).toBe(false);
   });
@@ -100,7 +101,7 @@ describe('upsertFile 半写入完整性', () => {
     const rec = index.getFile('src_pre', '/virtual/pre.md');
     expect(rec?.status).toBe('indexing');
     expect(rec?.chunkCount).toBe(0);
-    expect(index.search('unique-token-pre', { sourceIds: ['src_pre'] })).toHaveLength(0);
+    expect(index.search('unique-token-pre', { sourceIds: ['src_pre' as KnowledgeSourceId] })).toHaveLength(0);
   });
 
   it('完整写入后 isFresh 成立且可搜', async () => {
@@ -118,7 +119,7 @@ describe('upsertFile 半写入完整性', () => {
     expect(rec?.status).toBe('indexed');
     expect(rec?.chunkCount).toBe(3);
     expect(index.isFresh('src_ok', '/virtual/ok.md', 'hash-ok')).toBe(true);
-    expect(index.search('unique-token-ok', { sourceIds: ['src_ok'] }).length).toBeGreaterThan(0);
+    expect(index.search('unique-token-ok', { sourceIds: ['src_ok' as KnowledgeSourceId] }).length).toBeGreaterThan(0);
   });
 
   it('pruneMissing 归一 Windows 路径：keep 反斜杠不得误删', async () => {

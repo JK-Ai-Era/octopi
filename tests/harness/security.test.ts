@@ -287,6 +287,7 @@ describe('Risk Evaluator', () => {
 describe('Non-Shell Tool Evaluation', () => {
   it('file_write 到保护路径 → critical', () => {
     const result = evaluateRisk({
+      id: 'test-call',
       name: 'file_write',
       arguments: { path: '/System/Library/test.txt', content: 'hacked' },
     });
@@ -295,6 +296,7 @@ describe('Non-Shell Tool Evaluation', () => {
 
   it('file_read 到普通路径 → low', () => {
     const result = evaluateRisk({
+      id: 'test-call',
       name: 'read',
       arguments: { path: '/Users/dev/project/README.md' },
     });
@@ -303,6 +305,7 @@ describe('Non-Shell Tool Evaluation', () => {
 
   it('http_post → medium', () => {
     const result = evaluateRisk({
+      id: 'test-call',
       name: 'web_fetch',
       arguments: { url: 'https://api.example.com', method: 'POST' },
     });
@@ -311,6 +314,7 @@ describe('Non-Shell Tool Evaluation', () => {
 
   it('read 到 ~/.ssh/id_rsa → high', () => {
     const result = evaluateRisk({
+      id: 'test-call',
       name: 'read',
       arguments: { path: '/Users/dev/.ssh/id_rsa' },
     });
@@ -415,6 +419,7 @@ describe('Regression: 防止已知误判', () => {
     // macOS 上 /Users 是 firmlink → /System/Volumes/Data/Users
     // 真实路径以 /System/ 开头，但本质是用户目录
     const result = evaluateNonShellTool({
+      id: 'test-call',
       name: 'file_read',
       arguments: { path: '/System/Volumes/Data/Users/jk/Projects/octopi/CHANGELOG.md' },
     });
@@ -423,6 +428,7 @@ describe('Regression: 防止已知误判', () => {
 
   it('macOS APFS: /System/Volumes/Data/Users/ 文件写入不被拦截', () => {
     const result = evaluateNonShellTool({
+      id: 'test-call',
       name: 'file_write',
       arguments: { path: '/System/Volumes/Data/Users/jk/test.txt', content: 'hello' },
     });

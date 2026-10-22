@@ -16,7 +16,7 @@ import { Gateway } from '@octopi-agent/gateway/gateway/gateway.js';
 import { InMemorySessionStore } from '@octopi-agent/engine/harness/session/in-memory-store.js';
 import { JsonlSessionStore } from '@octopi-agent/engine/integration/storage/jsonl.js';
 import type { SessionData } from '@octopi-agent/engine/harness/session/types.js';
-import type { GatewayConfig } from '@octopi-agent/core/types.js';
+import type { GatewayConfig } from '@octopi-agent/gateway/types/gateway-config.js';
 
 function makeGateway(store: InMemorySessionStore): Gateway {
   return new Gateway(
@@ -111,7 +111,7 @@ describe('session pin & delete', () => {
 
   it('deleteSession 幂等删除并广播 session.removed；Run 在途拒绝且不删数据', async () => {
     const created = await gateway.createSession({ agentId: 'a1' });
-    const removed: string[] = [];
+    const removed: Array<string | undefined> = [];
     gateway.on((e) => {
       if (e.type === 'session.removed') {
         removed.push((e.data as { sessionId?: string })?.sessionId ?? e.sessionId);

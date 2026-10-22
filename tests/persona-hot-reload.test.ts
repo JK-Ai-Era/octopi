@@ -304,7 +304,9 @@ describe('AgentBuilder + SessionAwareRunner 热更新', () => {
     const { DefaultEventBus } = await import('@octopi-agent/core/primitives/event-bus.js');
     const bus = new DefaultEventBus();
     const failedEvents: Array<{ type: string; data?: Record<string, unknown> }> = [];
-    bus.on('persona.resolve.failed', (e) => failedEvents.push(e));
+    bus.on('persona.resolve.failed', (e) => {
+      failedEvents.push(e);
+    });
 
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 

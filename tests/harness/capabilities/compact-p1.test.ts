@@ -150,9 +150,9 @@ describe('memory summary cache', () => {
       policyId: 'p',
       kind: 'opaque' as const,
     };
-    cache.set('k1', r);
-    cache.set('k2', r);
-    cache.set('k3', r);
+    cache.set('k1', r, 60_000);
+    cache.set('k2', r, 60_000);
+    cache.set('k3', r, 60_000);
     expect(cache.get('k1')).toBeUndefined();
     expect(cache.get('k3')).toBeDefined();
   });

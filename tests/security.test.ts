@@ -60,7 +60,9 @@ describe('CapabilityEnforcer', () => {
     enforcer.registerPlugin('test', PluginTrustLevel.UNTRUSTED);
 
     const events: any[] = [];
-    bus.onAll((e) => events.push(e));
+    bus.onAll((e) => {
+      events.push(e);
+    });
 
     enforcer.checkToolAccess('test', 'shell');
 
@@ -287,7 +289,7 @@ describe('ToolGuard', () => {
     const agent = new Agent({
       model: provider as never,
       systemPrompt: 't',
-      tools: [{ name: 'file_read', description: 'd', parameters: { type: 'object', properties: {} }, execute: async () => ({}) }],
+      tools: [{ name: 'file_read', description: 'd', parameters: {}, execute: async (toolCallId) => ({ toolCallId, name: 'file_read', content: '' }) }],
     });
     agent.setHarness({
       config: {},
@@ -298,7 +300,7 @@ describe('ToolGuard', () => {
 
     agent.setTools([
       ...agent.tools,
-      { name: 'send_file', description: 'd', parameters: { type: 'object', properties: {} }, execute: async () => ({}) },
+      { name: 'send_file', description: 'd', parameters: {}, execute: async (toolCallId) => ({ toolCallId, name: 'send_file', content: '' }) },
     ]);
     expect(guard.checkToolCall({ id: '1', name: 'send_file', arguments: {} }).violations.some((v) => v.type === 'unauthorized_tool')).toBe(false);
     expect(guard.checkToolCall({ id: '1', name: 'not_a_tool', arguments: {} }).violations.some((v) => v.type === 'unauthorized_tool')).toBe(true);

@@ -259,7 +259,8 @@ describe('directory paths must not enter knowledge_files', async () => {
            VALUES ('kj_evil', ?, 'parse_file', ?, 1, 'queued', 0, ?, ?)`,
         )
         .run(src.id, outside, Date.now(), Date.now());
-      ingest.kick();
+      // kick 是内部调度触发器（无公开等价物），测试手动驱动队列
+      (ingest as unknown as { kick(): void }).kick();
       await ingest.idle(5_000);
 
       // 不得写入 knowledge_files / chunks

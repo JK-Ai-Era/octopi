@@ -19,6 +19,7 @@ function mockModel(tokensPerCall = 100): ModelProvider {
     chat: async () => ({
       content: 'done',
       model: 'mock',
+      finishReason: 'stop' as const,
       usage: makeTokenUsage({ promptTokens: 10, completionTokens: 10 }),
     }),
     stream: async function* () {
@@ -30,14 +31,14 @@ function mockModel(tokensPerCall = 100): ModelProvider {
     },
     isAvailable: async () => true,
     getModelInfo: () => null,
+    getModelInfos: () => [],
   };
 }
 
 describe('RunBudget（P0 安全阀）', () => {
   it('默认 wall-clock 安全阀为 6h，且不因 iteration/token hard', () => {
     expect(DEFAULT_BUDGET.maxWallClockMs).toBe(6 * 3_600_000);
-    const bus = new DefaultEventBus();
-    const budget = new BudgetPolicyEngine(bus);
+    const budget = new BudgetPolicyEngine();
     for (let i = 0; i < 5000; i++) budget.recordIteration();
     budget.consumeTokens(5_000_000);
     expect(budget.check()).toBe('ok');
@@ -45,7 +46,7 @@ describe('RunBudget（P0 安全阀）', () => {
   });
 
   it('consumeTokens 只累计 nominal，不触发 hard', () => {
-    const budget = new BudgetPolicyEngine(new DefaultEventBus());
+    const budget = new BudgetPolicyEngine();
     budget.consumeTokens(10_000_000);
     expect(budget.check()).toBe('ok');
     expect(budget.report().nominalTokens).toBe(10_000_000);
@@ -120,7 +121,7 @@ describe('reliability：默认不因 token 总和停止', () => {
     agent.context.messages.push({ role: 'user', content: 'go', timestamp: Date.now() });
     const harness: ReliabilityHarness = {
       config: {},
-      budget: new BudgetPolicyEngine(new DefaultEventBus()),
+      budget: new BudgetPolicyEngine(),
       sessionId: 's',
       agentId: 'a',
     };
@@ -196,6 +197,7 @@ describe('beforeToolCall hard 闸（iteration）', () => {
       chat: async () => ({
         content: '',
         model: 'm',
+        finishReason: 'tool_calls' as const,
         toolCalls: [{ id: `t${n}`, name: 'side_effect', arguments: {} }],
         usage: makeTokenUsage({ promptTokens: 1, completionTokens: 1 }),
       }),
@@ -209,6 +211,7 @@ describe('beforeToolCall hard 闸（iteration）', () => {
       },
       isAvailable: async () => true,
       getModelInfo: () => null,
+    getModelInfos: () => [],
     };
     const agent = new Agent({ model, systemPrompt: 't', tools });
     agent.context.messages.push({ role: 'user', content: 'go', timestamp: Date.now() });

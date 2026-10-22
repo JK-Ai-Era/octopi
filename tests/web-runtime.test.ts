@@ -264,7 +264,17 @@ describe('OctopiRuntimeStore', () => {
     const store = new OctopiRuntimeStore(client as any);
 
     (client as any).getSession = async () => ({
-      meta: { id: 's1', agentId: 'a1' },
+      meta: {
+        id: 's1',
+        agentId: 'a1',
+        channelId: 'web',
+        peerId: 'u1',
+        status: 'idle',
+        createdAt: 0,
+        sessionStartedAt: 0,
+        lastInteractionAt: 0,
+        updatedAt: 0,
+      },
       messageCount: 0,
       turnCount: 0,
     });
@@ -330,7 +340,17 @@ describe('ViewMode transitions', () => {
     const client = createMockClient();
     const store = new OctopiRuntimeStore(client);
     client.getSession = async () => ({
-      meta: { id: 's1', agentId: 'a1' },
+      meta: {
+        id: 's1',
+        agentId: 'a1',
+        channelId: 'web',
+        peerId: 'u1',
+        status: 'idle',
+        createdAt: 0,
+        sessionStartedAt: 0,
+        lastInteractionAt: 0,
+        updatedAt: 0,
+      },
       messageCount: 0,
       turnCount: 0,
     });
@@ -364,7 +384,17 @@ describe('ViewMode transitions', () => {
     const client = createMockClient();
     const store = new OctopiRuntimeStore(client);
     client.getSession = async () => ({
-      meta: { id: 's1', agentId: 'a1' },
+      meta: {
+        id: 's1',
+        agentId: 'a1',
+        channelId: 'web',
+        peerId: 'u1',
+        status: 'idle',
+        createdAt: 0,
+        sessionStartedAt: 0,
+        lastInteractionAt: 0,
+        updatedAt: 0,
+      },
       messageCount: 0,
       turnCount: 0,
     });
@@ -390,7 +420,17 @@ describe('ViewMode transitions', () => {
     const client = createMockClient();
     const store = new OctopiRuntimeStore(client);
     client.getSession = async () => ({
-      meta: { id: 's1', agentId: 'a1' },
+      meta: {
+        id: 's1',
+        agentId: 'a1',
+        channelId: 'web',
+        peerId: 'u1',
+        status: 'idle',
+        createdAt: 0,
+        sessionStartedAt: 0,
+        lastInteractionAt: 0,
+        updatedAt: 0,
+      },
       messageCount: 0,
       turnCount: 0,
     });
@@ -416,7 +456,17 @@ describe('ViewMode transitions', () => {
     const client = createMockClient();
     const store = new OctopiRuntimeStore(client);
     client.getSession = async () => ({
-      meta: { id: 's1', agentId: 'a1' },
+      meta: {
+        id: 's1',
+        agentId: 'a1',
+        channelId: 'web',
+        peerId: 'u1',
+        status: 'idle',
+        createdAt: 0,
+        sessionStartedAt: 0,
+        lastInteractionAt: 0,
+        updatedAt: 0,
+      },
       messageCount: 0,
       turnCount: 0,
     });
@@ -437,7 +487,17 @@ describe('ViewMode transitions', () => {
     const client = createMockClient();
     const store = new OctopiRuntimeStore(client);
     client.getSession = async () => ({
-      meta: { id: 's1', agentId: 'a1' },
+      meta: {
+        id: 's1',
+        agentId: 'a1',
+        channelId: 'web',
+        peerId: 'u1',
+        status: 'idle',
+        createdAt: 0,
+        sessionStartedAt: 0,
+        lastInteractionAt: 0,
+        updatedAt: 0,
+      },
       messageCount: 0,
       turnCount: 0,
     });
@@ -463,7 +523,17 @@ describe('ViewMode transitions', () => {
     const client = createMockClient();
     const store = new OctopiRuntimeStore(client);
     client.getSession = async () => ({
-      meta: { id: 's1', agentId: 'a1' },
+      meta: {
+        id: 's1',
+        agentId: 'a1',
+        channelId: 'web',
+        peerId: 'u1',
+        status: 'idle',
+        createdAt: 0,
+        sessionStartedAt: 0,
+        lastInteractionAt: 0,
+        updatedAt: 0,
+      },
       messageCount: 2,
       turnCount: 1,
     });
@@ -509,7 +579,17 @@ describe('Hybrid mode paths', () => {
   async function openHistorySession(client: any) {
     const store = new OctopiRuntimeStore(client);
     client.getSession = async () => ({
-      meta: { id: 's1', agentId: 'a1' },
+      meta: {
+        id: 's1',
+        agentId: 'a1',
+        channelId: 'web',
+        peerId: 'u1',
+        status: 'idle',
+        createdAt: 0,
+        sessionStartedAt: 0,
+        lastInteractionAt: 0,
+        updatedAt: 0,
+      },
       messageCount: 1,
       turnCount: 1,
     });
@@ -875,7 +955,17 @@ describe('send failure / abort / reconnect recovery', () => {
     const client = createMockClient();
     const store = new OctopiRuntimeStore(client);
     client.getSession = async () => ({
-      meta: { id: 's1', agentId: 'a1' },
+      meta: {
+        id: 's1',
+        agentId: 'a1',
+        channelId: 'web',
+        peerId: 'u1',
+        status: 'idle',
+        createdAt: 0,
+        sessionStartedAt: 0,
+        lastInteractionAt: 0,
+        updatedAt: 0,
+      },
       messageCount: 0,
       turnCount: 0,
     });
@@ -895,7 +985,17 @@ describe('send failure / abort / reconnect recovery', () => {
     const client = createMockClient();
     const store = new OctopiRuntimeStore(client);
     client.getSession = async () => ({
-      meta: { id: 's1', agentId: 'a1' },
+      meta: {
+        id: 's1',
+        agentId: 'a1',
+        channelId: 'web',
+        peerId: 'u1',
+        status: 'idle',
+        createdAt: 0,
+        sessionStartedAt: 0,
+        lastInteractionAt: 0,
+        updatedAt: 0,
+      },
       messageCount: 0,
       turnCount: 0,
     });
@@ -923,7 +1023,17 @@ describe('send failure / abort / reconnect recovery', () => {
     const client = createMockClient();
     const store = new OctopiRuntimeStore(client);
     client.getSession = async () => ({
-      meta: { id: 's1', agentId: 'a1' },
+      meta: {
+        id: 's1',
+        agentId: 'a1',
+        channelId: 'web',
+        peerId: 'u1',
+        status: 'idle',
+        createdAt: 0,
+        sessionStartedAt: 0,
+        lastInteractionAt: 0,
+        updatedAt: 0,
+      },
       messageCount: 0,
       turnCount: 0,
     });
@@ -950,7 +1060,17 @@ describe('send failure / abort / reconnect recovery', () => {
       const client = createMockClient();
       const store = new OctopiRuntimeStore(client);
       client.getSession = async () => ({
-        meta: { id: 's1', agentId: 'a1' },
+        meta: {
+        id: 's1',
+        agentId: 'a1',
+        channelId: 'web',
+        peerId: 'u1',
+        status: 'idle',
+        createdAt: 0,
+        sessionStartedAt: 0,
+        lastInteractionAt: 0,
+        updatedAt: 0,
+      },
         messageCount: 0,
         turnCount: 0,
       });
@@ -976,7 +1096,17 @@ describe('send failure / abort / reconnect recovery', () => {
       const client = createMockClient();
       const store = new OctopiRuntimeStore(client);
       client.getSession = async () => ({
-        meta: { id: 's1', agentId: 'a1' },
+        meta: {
+        id: 's1',
+        agentId: 'a1',
+        channelId: 'web',
+        peerId: 'u1',
+        status: 'idle',
+        createdAt: 0,
+        sessionStartedAt: 0,
+        lastInteractionAt: 0,
+        updatedAt: 0,
+      },
         messageCount: 0,
         turnCount: 0,
       });

@@ -118,10 +118,8 @@ describe('policy resolution', () => {
 });
 
 describe('model resolve chain', () => {
-  const main = mockProvider();
-  main.name = 'main';
-  const cheap = mockProvider();
-  cheap.name = 'cheap';
+  const main = { ...mockProvider(), name: 'main' };
+  const cheap = { ...mockProvider(), name: 'cheap' };
 
   it('优先 models.level.summary', () => {
     const r = resolveSummaryModel({

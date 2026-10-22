@@ -87,7 +87,9 @@ describe('压缩摘要使用 user 角色', () => {
     });
 
     const summaryMsgs = second.messages.filter(
-      (m) => m.metadata?.source === 'contextSummary' || String(m.content).includes('[Conversation Summary]'),
+      (m) =>
+        (m as { metadata?: { source?: string } }).metadata?.source === 'contextSummary' ||
+        String(m.content).includes('[Conversation Summary]'),
     );
     expect(summaryMsgs.length).toBeGreaterThan(0);
     expect(summaryMsgs[0]?.role).toBe('user');

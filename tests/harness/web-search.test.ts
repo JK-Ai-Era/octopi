@@ -326,7 +326,7 @@ describe('createToolSet with webSearch', () => {
 const originalFetch = globalThis.fetch;
 
 function mockFetchOnce(handler: (url: string, init?: RequestInit) => Response | Promise<Response>) {
-  globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+  globalThis.fetch = vi.fn(async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
     return handler(url, init);
   }) as typeof fetch;

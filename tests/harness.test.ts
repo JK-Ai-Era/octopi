@@ -22,9 +22,9 @@ import {
 import { BudgetPolicyEngine } from '@octopi-agent/engine/harness/run/budget/budget.js';
 import type {
   ModelProvider,
-  LLMStreamChunk,
   RegisteredTool,
 } from '@octopi-agent/core/index.js';
+import type { LLMStreamChunk } from '@octopi-agent/core/interfaces/model-provider.js';
 
 // ── Mock 工厂 ──
 

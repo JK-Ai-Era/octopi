@@ -1,3 +1,24 @@
+## v0.86.36
+
+### test(debt): tests 类型债清零（T1 收官）——基线 486 → 0，全量 typecheck 干净
+
+**范围**：`arch/NEXT-STEPS.md` T1 收官（自 v0.86.31 第一批后清完余下 148 条）。`tests/.typecheck-baseline.txt` 收敛为**空**：存量债清零，门禁自此只增不减地守住「tests 全程类型干净」。
+
+**第二/三批共性修复**：
+- `EffectiveSessionRights` 夹具补 `toolRights`、`SessionStore` 夹具对齐无 agentId 的新签名（load/save/delete/exists/list）；`ToolFileEffects` 内联双替身补齐记账方法；
+- mock 统一收口现行契约：`LLMResponse.finishReason/model`、`LLMStreamChunk`（type 判别，`delta/done` 旧形状改写）、`ModelProvider.getModelInfos`、`ToolResult.result`、`Message.content/timestamp`、`SessionParticipant.grantedAt`；
+- 一批「僵尸 API」清理：`BudgetPolicyEngine` 去掉早已不存在的 bus 参数、`sessionStore.save('a1','s1',…)` 旧三参、`AgentBuilder.model({...})` 改文档形式 `.model('mock/m')`、`RequestInfo` 改 `Parameters<typeof fetch>[0]`；
+- 判别联合收窄：`LoopDetectionResult`（stuck 卫兵）、`McpServerConfig`（stdio/http 换形访问）、`DispatchResult`；品牌类型 `KnowledgeSourceId` 显式换形；
+- 响应/事件 listener 返回值统一改语句（`void` 契约）、spy 声明带参数类型（修 `mock.calls[n][m]` 元组不可索引）。
+
+**根因修复（prod，1 处）**：`KnowledgeRuntimeConfig` 对齐 `KnowledgeConfigSchema` 补 `service`/`required` 可选字段——Zod 早已收 `knowledge.service.*`（端口缺省 18280），TS 类型未跟上，5 个 gateway 测试的合法配置被误报 excess property。附加可选字段，零破坏。
+
+**顺带核对断言语义**（T1 既定要求）：`provider-wrapper` 原在断言幽灵字段 `chunk.delta`（现行 `LLMStreamChunk` 无此字段，mock 用旧形状 `as ModelProvider` 压着）——改写为现行契约后「wrapper 透传流」语义照测；`knowledge-read-isolation` 删除契约外的 `gatewayId` 夹具字段；`steward-writepath` 笔误 `future_use` → `futureUse`。
+
+**验证**：`npm run typecheck` 0 错误（基线 0）；全量 vitest **3047 过 / 2 败**——2 败均为沙箱固有限制（mac-seatbelt 拒 setuid exec，`ps` 不可用 → getProcessName 类必败，与本批无关）；`npm run build` 全绿。
+
+**待拍板遗留**（已记 CHANGELOG v0.86.31，未在本批静默扩权）：① openclaw 兼容 provider 形状错标 `ModelProvider`；② D7 `spawnBy` 持久化 `childSessionId/childRunId` 但 `SessionSpawnLink` 未声明；③ `fallbackModels` 运行时收 `string | ModelConfig` 但 `ModelConfig` 类型只写 `ModelConfig[]`（`config.ts` 有 `as any`）；④ `SummaryCachePort.set` 的 `ttlMs` 接口必填、实现可选（本批测试侧显式传值绕开）。
+
 ## v0.86.35
 
 ### refactor(run-guard): 移除判据错位的 token_growth 与无效的 no_progress

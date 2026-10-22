@@ -12,9 +12,9 @@ import { describe, it, expect, vi } from 'vitest';
 import { makeTokenUsage } from '@octopi-agent/core/types/turn.js';
 import type {
   ModelProvider,
-  LLMStreamChunk,
   RegisteredTool,
 } from '@octopi-agent/core/index.js';
+import type { LLMStreamChunk } from '@octopi-agent/core/interfaces/model-provider.js';
 import { AgentBuilder } from '@octopi-agent/engine/harness/index.js';
 import {
   ThinkExecutor,

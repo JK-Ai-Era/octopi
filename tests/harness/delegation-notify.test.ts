@@ -166,7 +166,9 @@ describe('delegation notify channel', () => {
   it('emitAgentSignal carries delegationId end to end', async () => {
     const events = new DefaultEventBus();
     const seen: Array<Record<string, unknown>> = [];
-    events.on('runtime.agent_signal', (e) => seen.push((e.data ?? {}) as Record<string, unknown>));
+    events.on('runtime.agent_signal', (e) => {
+      seen.push((e.data ?? {}) as Record<string, unknown>);
+    });
 
     emitAgentSignal(events, {
       fromAgentId: 'child',

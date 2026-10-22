@@ -48,7 +48,6 @@ describe('adaptLoopEvent bridge map', () => {
       type: 'turn_end',
       hasToolCalls: true,
       phase: 'pre_tools',
-      timestamp: 1,
       usage: makeTokenUsage({ promptTokens: 10, completionTokens: 5 }),
     });
     expect(e?.type).toBe('turn.end');

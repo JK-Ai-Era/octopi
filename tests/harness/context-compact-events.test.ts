@@ -105,7 +105,9 @@ describe('Builder → EventBus 桥接', () => {
     const { agent, events } = await builder.build();
 
     const busEvents: AgentEvent[] = [];
-    events.onAll((e) => busEvents.push(e));
+    events.onAll((e) => {
+      busEvents.push(e);
+    });
 
     const msgs: Message[] = [];
     for (let i = 0; i < 40; i++) {

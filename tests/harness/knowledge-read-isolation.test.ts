@@ -43,7 +43,7 @@ describe('knowledge pure-read routing', () => {
       embeddingEnabled: true,
     });
 
-    store.createProject('p1', 'Proj', { tenantId: 'default', gatewayId: 'default' });
+    store.createProject('p1', 'Proj', { tenantId: 'default' });
     const src = store.register({
       kind: 'directory',
       location: '/data/docs',

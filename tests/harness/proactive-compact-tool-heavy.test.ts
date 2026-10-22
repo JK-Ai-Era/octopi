@@ -104,7 +104,7 @@ describe('主动压缩 × 工具输出密集历史（连线回归）', () => {
   });
 
   it('机械截断达标也产出语义摘要；后续小增量走复用分支不再重裁（B + A）', async () => {
-    const summarize = vi.fn(async () => '## Conversation Summary\nproactive-summary');
+    const summarize = vi.fn(async (_messages: Array<{ content?: unknown }>, _options?: unknown) => '## Conversation Summary\nproactive-summary');
     const engine = new DefaultContextEngine({
       proactiveCompactRatio: 0.5,
       targetTokens: 0,
@@ -156,7 +156,7 @@ describe('主动压缩 × 工具输出密集历史（连线回归）', () => {
   });
 
   it('摘要 LLM 失败：降级机械视图，不以占位说明冒充摘要；小增量复用、攒够重试（诚实降级）', async () => {
-    const summarize = vi.fn(async () => {
+    const summarize = vi.fn(async (_messages: Array<{ content?: unknown }>, _options?: unknown) => {
       throw new Error('llm down');
     });
     const engine = new DefaultContextEngine({
@@ -201,7 +201,7 @@ describe('主动压缩 × 工具输出密集历史（连线回归）', () => {
   });
 
   it('重启恢复的压缩快照（有计数无摘要）立即停止重裁，增量攒够才补真摘要（生产状态形状）', async () => {
-    const summarize = vi.fn(async () => '## Conversation Summary\nrestored-summary');
+    const summarize = vi.fn(async (_messages: Array<{ content?: unknown }>, _options?: unknown) => '## Conversation Summary\nrestored-summary');
     const engine = new DefaultContextEngine({
       proactiveCompactRatio: 0.5,
       targetTokens: 0,
@@ -239,7 +239,7 @@ describe('主动压缩 × 工具输出密集历史（连线回归）', () => {
   });
 
   it('summarize 返回空正文：按失败降级，不以空摘要替换中间段', async () => {
-    const summarize = vi.fn(async () => '');
+    const summarize = vi.fn(async (_messages: Array<{ content?: unknown }>, _options?: unknown) => '');
     const engine = new DefaultContextEngine({
       proactiveCompactRatio: 0.5,
       targetTokens: 0,

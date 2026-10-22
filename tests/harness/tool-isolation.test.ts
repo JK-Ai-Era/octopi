@@ -18,8 +18,9 @@ import {
 } from '@octopi-agent/engine/harness/extension/execution-environment/isolation.js';
 import { SessionAwareRunner } from '@octopi-agent/engine/harness/run/runner.js';
 import { withRunScope, getRunScope } from '@octopi-agent/engine/harness/run/run-scope.js';
+import { testFileEffects, testMemoryEffects } from '../helpers/tool-context.js';
 import { getRunScope as getScopeFromRunnerModule } from '@octopi-agent/engine/harness/run/run-scope.js';
-import type { Agent } from '@octopi-agent/engine/harness/agent/index.js';
+import type { Agent } from '@octopi-agent/engine/harness/run/agent/agent.js';
 import type { Message } from '@octopi-agent/core/types.js';
 import { InMemorySessionStore } from '@octopi-agent/engine/integration/storage/memory.js';
 import type { SessionData } from '@octopi-agent/engine/harness/session/types.js';
@@ -320,6 +321,8 @@ describe('RunScope ALS toolRuntime (I5)', () => {
           messages: [],
           cwd: '/ws/a1/s1',
           isolation: 'session-subdir',
+          fileEffects: testFileEffects(),
+          memoryEffects: testMemoryEffects(),
         },
       },
       worker(),

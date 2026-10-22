@@ -234,11 +234,16 @@ describe('createLlmIntentResolver', () => {
       '@octopi-agent/engine/harness/session/attachments/llm-intent.js'
     );
     const provider = {
+      name: 'test',
       chat: async () => ({
         content: '{"mode":"recall_tools","focus":"对 XX 的看法","reason":"local"}',
         model: 'test',
         finishReason: 'stop' as const,
       }),
+      stream: async function* () {},
+      isAvailable: async () => true,
+      getModelInfo: () => null,
+      getModelInfos: () => [],
     };
     const plan = await createLlmIntentResolver(provider)({
       userText: '帮我看一下这篇翻译稿中对 XX 的看法',

@@ -88,6 +88,7 @@ describe('rights math (E6)', () => {
         writeMemory: true,
         canManageTasks: true,
         canHandoff: false,
+        toolRights: {},
       },
       {
         canRun: true,
@@ -95,6 +96,7 @@ describe('rights math (E6)', () => {
         writeMemory: false,
         canManageTasks: true,
         canHandoff: false,
+        toolRights: {},
       },
     );
     expect(r.readScope).toBe('none');
@@ -108,6 +110,7 @@ describe('rights math (E6)', () => {
       writeMemory: false,
       canManageTasks: false,
       canHandoff: false,
+      toolRights: {},
     };
     expect(
       exceedsRightsCeiling(
@@ -161,6 +164,7 @@ describe('SessionAclService grant / authorizeRun (E6)', () => {
             writeMemory: false,
             canManageTasks: false,
             canHandoff: false,
+            toolRights: {},
           },
           max: {
             canRun: true,
@@ -168,6 +172,7 @@ describe('SessionAclService grant / authorizeRun (E6)', () => {
             writeMemory: false,
             canManageTasks: false,
             canHandoff: false,
+            toolRights: {},
           },
         },
       ],
@@ -277,6 +282,7 @@ describe('SessionAclService grant / authorizeRun (E6)', () => {
             writeMemory: false,
             canManageTasks: false,
             canHandoff: true,
+            toolRights: {},
           },
           max: {
             canRun: true,
@@ -284,6 +290,7 @@ describe('SessionAclService grant / authorizeRun (E6)', () => {
             writeMemory: false,
             canManageTasks: false,
             canHandoff: true,
+            toolRights: {},
           },
         },
       ],

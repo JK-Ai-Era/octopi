@@ -172,6 +172,7 @@ describe('switch preferred vs handoff (I3)', () => {
       writeMemory: false,
       canManageTasks: false,
       canHandoff: false,
+      toolRights: {},
     };
     expect(acl.filterHistory(s, rights, undefined)).toHaveLength(0);
   });
@@ -187,6 +188,7 @@ describe('switch preferred vs handoff (I3)', () => {
             writeMemory: false,
             canManageTasks: false,
             canHandoff: false,
+            toolRights: {},
           },
           max: {
             canRun: true,
@@ -194,6 +196,7 @@ describe('switch preferred vs handoff (I3)', () => {
             writeMemory: false,
             canManageTasks: false,
             canHandoff: false,
+            toolRights: {},
           },
         },
       ],
@@ -227,7 +230,7 @@ describe('Principal field slots on RunRequest (I6)', () => {
       agentId: 'a1',
       sessionId: 's1',
       payload: { messages: [{ role: 'user', content: 'hi', timestamp: Date.now() }] },
-    } as Trigger;
+    } as unknown as Trigger;
 
     const req = buildRunRequest(agent, [trigger], 's1', {
       actorId: 'user-9',

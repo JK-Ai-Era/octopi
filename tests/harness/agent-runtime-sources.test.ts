@@ -187,9 +187,9 @@ describe('RuntimeEvents 常量', () => {
 describe('TRIGGER_DROPPED 不变量', () => {
   function refDrop(events: DefaultEventBus): Array<Record<string, unknown>> {
     const drops: Array<Record<string, unknown>> = [];
-    events.on(RuntimeEvents.TRIGGER_DROPPED, (e) =>
-      drops.push((e as { data?: Record<string, unknown> }).data ?? {}),
-    );
+    events.on(RuntimeEvents.TRIGGER_DROPPED, (e) => {
+      drops.push((e as { data?: Record<string, unknown> }).data ?? {});
+    });
     return drops;
   }
 
@@ -248,9 +248,9 @@ describe('TRIGGER_DROPPED 不变量', () => {
   it('run 失败（已受理）→ RUN_FAILED 带 triggerRefs 回执关联', async () => {
     const events = new DefaultEventBus();
     const fails: Array<Record<string, unknown>> = [];
-    events.on(RuntimeEvents.RUN_FAILED, (e) =>
-      fails.push((e as { data?: Record<string, unknown> }).data ?? {}),
-    );
+    events.on(RuntimeEvents.RUN_FAILED, (e) => {
+      fails.push((e as { data?: Record<string, unknown> }).data ?? {});
+    });
     const runtime = new AgentRuntime({ events });
     runtime.registerAgent({
       agentId: 'boom',

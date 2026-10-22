@@ -15,7 +15,8 @@ import { AgentBuilder } from '@octopi-agent/engine/harness/agent/builder.js';
 import { JsonlSessionStore } from '@octopi-agent/engine/integration/storage/jsonl.js';
 import { makeTokenUsage } from '@octopi-agent/core/types/turn.js';
 import type { ModelProvider } from '@octopi-agent/core/interfaces/model-provider.js';
-import type { LLMRequest, LLMResponse, Message } from '@octopi-agent/core/types.js';
+import type { LLMRequest, LLMResponse } from '@octopi-agent/core/interfaces/model-provider.js';
+import type { Message } from '@octopi-agent/core/types.js';
 
 function mockProvider(response: Partial<LLMResponse>): ModelProvider {
   return {

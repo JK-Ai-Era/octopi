@@ -33,7 +33,7 @@ describe('HeuristicTokenEstimator message cache', () => {
       timestamp: 1,
       toolResults: [
         { toolCallId: 'c1', name: 'file_read', result: { content: 'x'.repeat(500) } },
-        { toolCallId: 'c2', name: 'shell', error: 'failed' },
+        { toolCallId: 'c2', name: 'shell', result: null, error: 'failed' },
       ],
     };
     const estimator = new HeuristicTokenEstimator();

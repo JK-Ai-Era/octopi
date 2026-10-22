@@ -78,7 +78,7 @@ describe('turn ledger slim (no full-history input snapshots)', () => {
     for (const key of Object.keys(legacyTurn)) {
       if (key === 'input') continue;
       expect(key in reloaded!.turns[0]).toBe(true);
-      expect((reloaded!.turns[0] as Record<string, unknown>)[key]).toEqual(legacyTurn[key]);
+      expect((reloaded!.turns[0] as unknown as Record<string, unknown>)[key]).toEqual(legacyTurn[key]);
     }
   });
 

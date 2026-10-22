@@ -71,7 +71,7 @@ describe('memory_store / memory_search time fields', () => {
     );
     expect(write).toMatchObject({ stored: true, asOf: expect.stringContaining('2026-02-15') });
 
-    const search = (await searchTool.handler({ query: 'Node 24' } as never)) as {
+    const search = (await searchTool.handler({ query: 'Node 24' } as never, { sessionId: 's1' } as never)) as {
       results: Array<{ recordedAt: string; asOf?: string; createdAt: number }>;
     };
     expect(search.results).toHaveLength(1);

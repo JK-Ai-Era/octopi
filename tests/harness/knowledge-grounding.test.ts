@@ -27,7 +27,7 @@ function user(text: string): Message {
 
 describe('resolveGroundingQuery', () => {
   it('取最近 user，可拼前一条 user', () => {
-    const msgs = [
+    const msgs: Message[] = [
       user('背景：项目用 TypeScript'),
       { role: 'assistant', content: '好的', timestamp: Date.now() },
       user('那限流怎么配？'),

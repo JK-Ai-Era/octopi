@@ -170,7 +170,7 @@ describe('E6 rights math with toolRights', () => {
       participantRights: { toolRights: { deny: ['file_delete'] } },
       allowAgentInitiatedHandoff: false,
     });
-    expect(effective.toolRights.deny.sort()).toEqual(['file_delete', 'http_request', 'shell']);
+    expect(effective.toolRights.deny?.sort()).toEqual(['file_delete', 'http_request', 'shell']);
     expect(effective.toolRights.denyCapabilities).toEqual(['egress']);
   });
 

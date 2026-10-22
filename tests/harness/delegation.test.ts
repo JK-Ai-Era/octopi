@@ -89,6 +89,9 @@ function makeMemoryStore() {
     data,
     async load(id: string) { return data.get(id) ?? null; },
     async save(id: string, session: SessionData) { data.set(id, session); },
+    async list() { return [...data.values()].map((s) => s.meta); },
+    async delete(id: string) { void data.delete(id); },
+    async exists(id: string) { return data.has(id); },
   };
 }
 
@@ -323,6 +326,8 @@ describe('InProcessTransport', () => {
     delegationId: 'del-1',
     from: PARENT,
     to: { agentId: 'worker' },
+    childSessionId: 'cs-1',
+    childRunId: 'cr-1',
     task: 't',
     input: 'i',
     context: 'clean',
@@ -768,8 +773,8 @@ describe('tightenSessionRights', () => {
       { toolRights: { allow: ['a', 'b', 'c'], deny: ['x'] } },
       { toolRights: { allow: ['b', 'c'], deny: ['y'] } },
     );
-    expect(r?.toolRights.allow).toEqual(['b', 'c']);
-    expect(r?.toolRights.deny).toEqual(expect.arrayContaining(['x', 'y']));
+    expect(r?.toolRights?.allow).toEqual(['b', 'c']);
+    expect(r?.toolRights?.deny).toEqual(expect.arrayContaining(['x', 'y']));
   });
 
   it('ignores undefined axes instead of forcing them shut', () => {
@@ -869,6 +874,8 @@ describe('rightsCeiling plumbing', () => {
       delegationId: 'del-rc',
       from: { agentId: 'main', sessionId: 's', runId: 'r' },
       to: { agentId: 'worker' },
+      childSessionId: 'cs-rc',
+      childRunId: 'cr-rc',
       task: 't',
       input: 'i',
       context: 'clean',

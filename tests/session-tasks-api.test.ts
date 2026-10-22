@@ -6,7 +6,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { Gateway } from '@octopi-agent/gateway/gateway/gateway.js';
 import { InMemorySessionStore } from '@octopi-agent/engine/integration/storage/memory.js';
 import type { SessionData } from '@octopi-agent/engine/harness/session/types.js';
-import type { GatewayConfig } from '@octopi-agent/core/types.js';
+import type { GatewayConfig } from '@octopi-agent/gateway/types/gateway-config.js';
 
 function makeSession(agentId: string, sessionId: string, tasks: SessionData['tasks']): SessionData {
   return {
