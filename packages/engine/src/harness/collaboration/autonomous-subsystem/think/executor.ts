@@ -27,7 +27,7 @@ import type {
   ActMode,
   InjectedDependencies,
 } from '../types.js';
-import type { ModelResolver } from './model-resolver.js';
+import { resolveProviderInstance, type ModelResolver } from './model-resolver.js';
 import { shouldFallbackModel } from './llm-port.js';
 import { estimateTextTokens } from '../../../context/index.js';
 
@@ -44,8 +44,10 @@ export class TokenBudgetExceededError extends Error {
 export interface ThinkExecutorConfig {
   /** 模型解析器 */
   modelResolver: ModelResolver;
-  /** 共享的 ModelProvider（实际的 LLM 调用能力） */
+  /** 主 ModelProvider 实例（未指名 provider / 未命中时回退） */
   modelProvider: ModelProvider;
+  /** 按名注册的 provider 映射（`provider/model` 引用解析用） */
+  providers?: Map<string, ModelProvider>;
   /** 共享的 ErrorStrategy */
   errorStrategy: ErrorStrategy;
 }
@@ -63,10 +65,12 @@ export interface ThinkExecutorConfig {
 export class ThinkExecutor {
   private modelResolver: ModelResolver;
   private modelProvider: ModelProvider;
+  private providers?: Map<string, ModelProvider>;
   private errorStrategy: ErrorStrategy;
 
   constructor(config: ThinkExecutorConfig) {
     this.modelResolver = config.modelResolver;
+    this.providers = config.providers;
     this.modelProvider = config.modelProvider;
     this.errorStrategy = config.errorStrategy;
   }
@@ -139,8 +143,7 @@ export class ThinkExecutor {
 
     this.ensureInputWithinBudget(input, options?.tokenBudget);
 
-    const modelRef = think.model ?? 'standard';
-    const resolved = this.modelResolver.resolve(modelRef);
+    const resolved = this.modelResolver.resolveRef(think.model);
 
     const agentTools = this.buildAgentTools(resolvedTools);
     const agent = new Agent({
@@ -180,7 +183,11 @@ export class ThinkExecutor {
         tokenUsage = undefined;
         // 每次 fallback 重置消息与模型，避免上一次 agentLoop 原地改写污染
         agent.context.messages = freshMessages();
-        agent.setModel(bindModelName(this.modelProvider, target.model));
+        // provider/model 说到做到：按解析出的 provider 名选实例，模型名显式才 bind
+        const activeProvider = resolveProviderInstance(target, this.providers, this.modelProvider);
+        agent.setModel(
+          target.model !== undefined ? bindModelName(activeProvider, target.model) : activeProvider,
+        );
 
         for await (const event of agent.run(options?.abortSignal)) {
           if (event.type === 'assistant_message') {

@@ -6,7 +6,16 @@
       "type": "object",
       "properties": {
         "auditDir": {
-          "type": "string"
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "boolean",
+              "const": false
+            }
+          ]
         },
         "allowlist": {
           "type": "array",

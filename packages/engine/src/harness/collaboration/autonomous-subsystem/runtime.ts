@@ -30,6 +30,7 @@ import type {
 } from './types.js';
 import { SenseEngine } from './sense/engine.js';
 import { MetricsStore } from './sense/metrics.js';
+import { SessionLifecycleBridge } from './sense/session-lifecycle-bridge.js';
 import { ThinkExecutor } from './think/executor.js';
 import type { ThinkExecutorConfig } from './think/executor.js';
 import { ModelResolver } from './think/model-resolver.js';
@@ -65,12 +66,14 @@ export type SubsystemTriggerResult =
 // ── SharedDeps ──
 
 export interface SharedDeps {
+  /** 主 provider 实例（resolved 未指名 provider / 未命中时回退） */
   model: ModelProvider;
   events: EventBus;
   errorStrategy: ErrorStrategy;
   mainTools: import('@octopi-agent/core/interfaces/tool-bus.js').ToolBus;
   modelLevels?: ModelLevelMap;
-  defaultModelProvider?: string;
+  /** 按名选择 provider（`think.model: "provider/model"` / levels.primary 的 provider 段） */
+  providers?: Map<string, ModelProvider>;
   /** 依赖注入注册表：名称 → 实现实例，供 runtimeInject.requires 解析 */
   injectRegistry?: Map<string, unknown>;
 }
@@ -98,6 +101,7 @@ export class SubsystemRuntime {
   private thinkExecutor: ThinkExecutor;
   private signalBus: SignalBus;
   private sessionManager: SubsystemSessionManager;
+  private sessionLifecycleBridge: SessionLifecycleBridge;
   private auditWriter?: AuditWriter;
   private modelResolver: ModelResolver;
   private subsystems = new Map<string, RegisteredSubsystem>();
@@ -117,23 +121,29 @@ export class SubsystemRuntime {
       events: config.deps.events,
     });
 
+    // levels 缺省为空：think.model 引用未配置的级别名时 fail-loud（见 ModelResolver），
+    // 不再用 'default/mini' 这类假缺省静默打错模型。
     this.modelResolver = new ModelResolver({
-      levels: config.deps.modelLevels ?? {
-        mini: { primary: 'default/mini' },
-        standard: { primary: 'default/standard' },
-        pro: { primary: 'default/pro' },
-      },
-      defaultProvider: config.deps.defaultModelProvider,
+      levels: config.deps.modelLevels ?? {},
     });
 
     this.thinkExecutor = new ThinkExecutor({
       modelResolver: this.modelResolver,
       modelProvider: config.deps.model,
+      providers: config.deps.providers,
       errorStrategy: config.deps.errorStrategy,
     });
 
     this.signalBus = new SignalBus({ events: config.deps.events });
     this.sessionManager = new SubsystemSessionManager();
+    // 会话生命周期 → metrics（session.lifecycle.* / session.idle.ms / session.extraction.*），
+    // schedule 模式条件（ctx 只有 metrics）依赖这些键感知空闲/生命周期。
+    // agentId 绑定：共享总线上多 agent 事件不互相污染。
+    this.sessionLifecycleBridge = new SessionLifecycleBridge(
+      config.deps.events,
+      this.senseEngine.metricsStore,
+      { agentId: config.agentId },
+    );
     config.deps.events.on('session.ended', (event) => {
       const data = (event.data ?? {}) as Record<string, unknown>;
       const agentId = (event.agentId as string) ?? (data.agentId as string);
@@ -383,6 +393,7 @@ export class SubsystemRuntime {
    * 清理所有资源
    */
   dispose(): void {
+    this.sessionLifecycleBridge.dispose();
     this.cancelPendingAbortTimers();
     this.senseEngine.dispose();
     this.sessionManager.dispose();
@@ -503,13 +514,14 @@ export class SubsystemRuntime {
         injectDeps[DEP_SUBSYSTEM_PROMPT] = entry.spec.think.systemPrompt;
       }
 
-      const resolved = this.modelResolver.resolve(entry.spec.think.model ?? 'standard');
+      const resolved = this.modelResolver.resolveRef(entry.spec.think.model);
       injectDeps[DEP_RESOLVED_MODEL] = resolved.primary.model;
       injectDeps[DEP_RESOLVED_MODELS] = resolved;
       injectDeps[DEP_LLM_PORT] = createSubsystemLLMPort({
         provider: this.deps.model,
+        providers: this.deps.providers,
         modelResolver: this.modelResolver,
-        modelRef: entry.spec.think.model ?? 'standard',
+        modelRef: entry.spec.think.model,
         cognitivePrompt: entry.spec.think.systemPrompt,
       });
 

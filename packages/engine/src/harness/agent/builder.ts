@@ -1427,8 +1427,10 @@ export class AgentBuilder {
           errorStrategy: this._errorStrategy ?? new DefaultErrorStrategy(),
           mainTools: this._toolBus,
           modelLevels: this._modelLevels,
+          providers: this._namedProviders.size > 0 ? this._namedProviders : undefined,
         },
         auditDir: this._subsystemAuditDir,
+        agentId: this._agentId,
       });
 
       const registeredIds = new Set<string>();
@@ -1457,7 +1459,11 @@ export class AgentBuilder {
         }
       }
 
-      // 依赖注入：memoryStore / wisdomStore / conceptGraphStore / sessionStore / constitution / backfillCoverage
+      // 依赖注入：modelProvider / memoryStore / wisdomStore / conceptGraphStore / sessionStore / constitution / backfillCoverage
+      // modelProvider = 主 provider 实例（legacy runtimeInject.requires；新代码用 llmPort）
+      if (this._model) {
+        subsystemRuntime.registerDependency('modelProvider', this._model);
+      }
       if (this._memoryStore) {
         subsystemRuntime.registerDependency('memoryStore', this._memoryStore);
       }

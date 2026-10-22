@@ -26,6 +26,11 @@ export interface SessionLifecycleBridgeOptions {
   enableIdle?: boolean;
   /** idle 更新间隔（毫秒，默认 15_000） */
   idleTickMs?: number;
+  /**
+   * 只跟踪该 agent 的会话事件（SubsystemRuntime 按 agentId 绑定）。
+   * 缺省不过滤（嵌入宿主单 agent 场景）。
+   */
+  agentId?: string;
 }
 
 // ── Session State ──
@@ -49,12 +54,14 @@ export class SessionLifecycleBridge {
   private tick?: ReturnType<typeof setInterval>;
   private enableIdle: boolean;
   private idleTickMs: number;
+  private agentId?: string;
 
   constructor(events: EventBus, metrics: MetricsStore, options?: SessionLifecycleBridgeOptions) {
     this.events = events;
     this.metrics = metrics;
     this.enableIdle = options?.enableIdle ?? true;
     this.idleTickMs = options?.idleTickMs ?? 15_000;
+    this.agentId = options?.agentId;
 
     // 订阅通用 session 生命周期事件（由 runner / plugin-manager 等发出）
     this.disposables.push(
@@ -69,6 +76,8 @@ export class SessionLifecycleBridge {
     // 可选：轮询计算 idle 指标（不触发子系统，仅更新指标快照）
     if (this.enableIdle) {
       this.tick = setInterval(() => this.refreshIdleMetrics(), this.idleTickMs);
+      // 指标刷新计时器不得拖住进程退出（与 schedule timers 同口径）
+      (this.tick as unknown as { unref?: () => void }).unref?.();
     }
   }
 
@@ -87,9 +96,13 @@ export class SessionLifecycleBridge {
     };
     this.state.set(input.sessionId, next);
 
-    // 更新指标
-    this.metrics.update(`session.lifecycle.${next.lifecycle ?? 'unknown'}`, 1);
+    // 「最新状态」类指标：换值即清同族旧值（不做 latching 计数，条件表达式读到的是当前态）
+    if (next.lifecycle) {
+      this.metrics.deletePrefix('session.lifecycle.');
+      this.metrics.update(`session.lifecycle.${next.lifecycle}`, 1);
+    }
     if (next.extractionStatus) {
+      this.metrics.deletePrefix('session.extraction.');
       this.metrics.update(`session.extraction.${next.extractionStatus}`, 1);
     }
   }
@@ -123,6 +136,9 @@ export class SessionLifecycleBridge {
 
   private onLifecycleUpdated(event: AgentEvent): void {
     const data = (event.data ?? {}) as Record<string, unknown>;
+    // agent 过滤：共享总线（gatewayBus）上多 agent 事件不互相污染指标
+    const eventAgentId = (event.agentId ?? data.agentId) as string | undefined;
+    if (this.agentId && eventAgentId && eventAgentId !== this.agentId) return;
     const sessionId = (event.sessionId ?? data.sessionId) as string | undefined;
     if (!sessionId) return;
 
@@ -136,6 +152,7 @@ export class SessionLifecycleBridge {
   }
 
   private onEngineEnd(event: AgentEvent): void {
+    if (this.agentId && event.agentId && event.agentId !== this.agentId) return;
     const sessionId = event.sessionId;
     if (!sessionId) return;
 
@@ -147,13 +164,16 @@ export class SessionLifecycleBridge {
   }
 
   private refreshIdleMetrics(): void {
-    // 仅做指标刷新，不做触发；触发由 SenseEngine 条件驱动
-    const now = Date.now();
+    // 仅做指标刷新，不做触发；触发由 SenseEngine 条件驱动。
+    // 多会话取「最近有交互」的会话：session.idle.ms 语义 = 该 agent 静默了多久
+    let newest: number | undefined;
     for (const [, s] of this.state) {
-      if (s.lastInteractionAt) {
-        const idleMs = now - s.lastInteractionAt;
-        this.metrics.update('session.idle.ms', idleMs);
+      if (s.lastInteractionAt && (newest === undefined || s.lastInteractionAt > newest)) {
+        newest = s.lastInteractionAt;
       }
+    }
+    if (newest !== undefined) {
+      this.metrics.update('session.idle.ms', Date.now() - newest);
     }
   }
 }

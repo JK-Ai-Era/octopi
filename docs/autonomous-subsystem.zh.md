@@ -131,8 +131,10 @@ sense:
     condition: "turn.count % 10 === 0"
 ```
 
-- 变量名映射到 `ctx.metrics[key]`，由主循环注入。
-- 支持多变量、点号分隔的 key（如 `sessionLifecycle === 'recent'`）。
+- 变量来源随 sense 模式而不同：
+  - **event 模式**：SenseContext 顶层字段（`sessionLifecycle` / `idleMs` / `lastInteractionAt` / `extractionStatus` / `agentId` / `sessionId`）由事件负载映射，可直接引用（如 `sessionLifecycle === 'recent'`）；`eventData.x` 读事件负载；其余标识符回落到 `ctx.metrics['id']`。
+  - **schedule 模式**：上下文**只有** metrics——请用指标键：`turn.count`（主循环逐轮注入）与 `session.idle.ms` / `session.lifecycle.*` / `session.extraction.*`（由 SessionLifecycleBridge 维护，已接入 `SubsystemRuntime`）。
+- 支持多变量、点号分隔的 key。
 - 与 `conditionRef` **互斥**。
 
 ### 5.2 代码引用 conditionRef
@@ -308,7 +310,16 @@ export async function handler(input, deps) {
 }
 ```
 
-`runtimeInject.requires` 仍用于业务依赖（如 `memoryStore`）。`modelProvider` 可继续使用；新代码优先 `llmPort`。
+`runtimeInject.requires` 仍用于业务依赖（如 `memoryStore`）。`modelProvider`（**主** provider 实例）可继续使用；新代码优先 `llmPort`。
+
+**模型解析（`think.model` / `llmPort.chat({ model })`）**：
+
+| 引用格式 | 含义 |
+|---------|------|
+| 级别名（`summary` / `mini` / `standard` / `pro`） | `models.level` 的 primary + fallback 链。级别名未配置时**直接报错**（`unresolved_model_level`），不会把别名当模型名发给 provider。 |
+| `provider/model` | 调用打到**具名 provider**（`models.providers`）。名字未注册时回退主 provider 并告警。 |
+| 裸模型名 | 主 provider + 该模型名。 |
+| 省略 | 已配置则用 `standard` 级别；否则用主 provider 的 `defaultModel`。 |
 
 **API trigger**：`SubsystemRuntime.trigger(id, senseCtx?)` → `{ triggered, status }`。可传 `eventData.bundle` 等 Sense 覆盖；`status` 为 run 终态（`failed`/`timeout` ≠ 业务成功）。
 
@@ -365,10 +376,10 @@ session:
 
 ## 10. 审计记录
 
-每次执行都会写入审计记录（无论成功失败），路径：
+每次执行都会写入审计记录（无论成功失败）。审计根目录缺省为 `<OCTOPI_HOME>/audit`；可在 `octopi.json` 用 `subsystems.auditDir` 覆盖，或设 `subsystems.auditDir: false` 显式关闭审计。路径：
 
 ```
-~/.octopi/audit/[agentId/]<subsystemId>/<date>.jsonl
+<auditRoot>/[agentId/]<subsystemId>/<date>.jsonl
 ```
 
 关键字段：

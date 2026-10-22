@@ -37,12 +37,12 @@ describe('ModelResolver with config-defined levels', () => {
     expect(result.fallback).toHaveLength(0);
   });
 
-  it('should fallback to default provider for bare model name', () => {
-    const resolver = new ModelResolver({ levels, defaultProvider: 'ollama' });
+  it('should resolve bare model name to the main provider (no provider name)', () => {
+    const resolver = new ModelResolver({ levels });
     const result = resolver.resolve('qwen3:4b');
 
     expect(result.fromLevel).toBe(false);
-    expect(result.primary).toEqual({ provider: 'ollama', model: 'qwen3:4b' });
+    expect(result.primary).toEqual({ provider: undefined, model: 'qwen3:4b' });
   });
 
   it('should support updating levels at runtime', () => {

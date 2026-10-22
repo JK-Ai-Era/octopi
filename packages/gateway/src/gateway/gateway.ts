@@ -292,6 +292,8 @@ export class Gateway {
   private channels = new Map<string, ChannelAdapter>();
   /** Plugin Manager */
   private pluginManager: PluginManager;
+  /** 插件发现幂等位：PluginLoader 不去重，重复 discover 会双注册 hooks/命令 */
+  private pluginsDiscovered = false;
   /** Session Store */
   private store!: SessionStore<SessionData>;
   /** Gateway 配置 */
@@ -385,7 +387,9 @@ export class Gateway {
   constructor(config: GatewayConfig, store?: SessionStore<SessionData>) {
     this.config = config;
     this.dmScope = config.session?.dmScope ?? 'main';
-    this.pluginManager = new PluginManager();
+    this.pluginManager = new PluginManager(
+      config.plugins?.loadPaths ? { loadPaths: config.plugins.loadPaths } : undefined,
+    );
     this.sessionAcl = new SessionAclService(config.sessionAcl);
     this.sessionLease = new InProcessSessionLock();
     this.issueRegistry = new IssueRegistry();
@@ -668,6 +672,26 @@ export class Gateway {
     if (this.started) {
       console.warn('[Gateway] Already started');
       return;
+    }
+
+    // 插件发现（docs/plugin-system.md）：扫描 plugins.loadPaths，注册 hooks / 命令。
+    // 幂等：PluginLoader.discover 不做去重，stop→start 重复 discover 会双注册 hooks/命令
+    if (!this.pluginsDiscovered) {
+      try {
+        const loaded = await this.pluginManager.discover();
+        this.pluginsDiscovered = true;
+        console.log(
+          loaded.length > 0
+            ? `[Gateway] plugins loaded: ${loaded.map((p) => p.id).join(', ')}`
+            : '[Gateway] plugins loaded: (none)',
+        );
+      } catch (err) {
+        // 吞掉发现期错误（单个插件坏包不阻断网关启动）；保留 warn 与插件名定位，
+        // pluginsDiscovered 不置位，下次 start 可重试
+        console.warn(
+          `[Gateway] plugin discovery failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
     }
 
     // 会话日程：Service open() 惰性建库；wakeup 接 AgentRuntime（arch/session-schedules.md）
@@ -4286,14 +4310,17 @@ export class Gateway {
     }
     const wrappedProvider: ModelProvider = defaultSnapshot.provider;
 
+    // 命名 provider 同样包 circuit breaker：wire 的 providers 映射喂 ProviderPool 与
+    // 子系统 provider/model 解析，必须与主 provider 同等待遇，不得绕过熔断
+    const wrappedProviders = new Map<string, import('@octopi-agent/core/interfaces/model-provider.js').ModelProvider>();
+    for (const [name, p] of this.providers) {
+      wrappedProviders.set(name, wrapProviderWithCircuitBreaker(p, this.getCircuitBreaker(name)));
+    }
+
     // 如果配置?fallbackModels，构?FallbackProvider（回 provider 也包?circuit breaker?
     let finalProvider: import('@octopi-agent/core/interfaces/model-provider.js').ModelProvider = wrappedProvider;
     if (agent.model.fallbackModels && agent.model.fallbackModels.length > 0) {
       const { FallbackProvider } = await import('@octopi-agent/engine/harness/run/reliability/fallback-provider.js');
-      const wrappedProviders = new Map<string, import('@octopi-agent/core/interfaces/model-provider.js').ModelProvider>();
-      for (const [name, p] of this.providers) {
-        wrappedProviders.set(name, wrapProviderWithCircuitBreaker(p, this.getCircuitBreaker(name)));
-      }
       finalProvider = new FallbackProvider(
         wrappedProvider,
         agent.model.model,
@@ -4346,7 +4373,7 @@ export class Gateway {
               absoluteTimeoutMs: this.config.modelCallAbsoluteTimeoutMs,
             }
           : undefined,
-      providers: this.providers,
+      providers: wrappedProviders,
       levelMap: this.config.levels,
       modelsConfig: {
         providers: this.config.modelProviders,
@@ -4358,9 +4385,15 @@ export class Gateway {
       constitutionConfig:
         this.config.context?.constitution ?? this.config.constitution,
       memoryConfig: this.config.memory,
+      cognitionConfig: this.config.cognition,
+      wisdomConfig: this.config.wisdom,
       securityConfig: resolveSecurityConfig({ security: this.config.security }),
       budgetConfig: this.config.budgetPolicy,
       runGuardConfig: this.config.runGuard,
+      subsystemAuditDir: this.config.subsystems?.auditDir,
+      subsystemAllowlist: this.config.subsystems?.allowlist,
+      subsystemDenylist: this.config.subsystems?.denylist,
+      concurrencyConfig: this.config.concurrency,
       extraRunnerConfig: {
         sessionLease: this.sessionLease,
         sessionAcl: this.sessionAcl,

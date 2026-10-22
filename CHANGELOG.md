@@ -1,3 +1,42 @@
+## v0.86.37
+
+### fix(config): serve 路径静默丢弃的顶层配置段全部接通 + subsystem 接线补全
+
+**根因**：`toGatewayConfig()`（src/config.ts，CLI→Gateway 显式映射边界）的顶层键无守卫——对象字面量漏字段即「octopi.json 配了也静默丢弃」（agent 级键在 v0.86.x 已有守卫，顶层键漏网）。本次逐键清点顶层配置键（`engineConfigSchema` 34 键 + compose 层 `gateway`/`web`），修复全部断链：
+
+- **`subsystems`**（auditDir/allowlist/denylist）：AuditWriter 从未构造 → `~/.octopi/audit` 永远为空（init 脚手架写的 `subsystems.auditDir` 是死配置）；allow/deny 不生效。
+- **`cognition` / `wisdom`**：steward 子系统参数不生效（wire 早已支持，GatewayConfig/映射/wire 调用三处全缺）。接通后已消费字段：`enabled`、`wisdom.capacity.hardCap`、`cognition.identity/relations`；其余子键（formation/evaluation/injection/govern/softCap 等）仍未接线，见 KNOWN-ISSUES。
+- **`documents` / `schedules` / `concurrency`**：gateway 已有消费代码但收不到配置；`concurrency` 顺带接通 `builder.concurrency`（ProviderPool/SessionGate 现可从配置到达，机制本就有测试）。
+- **`plugins.loadPaths`**：`new PluginManager()` 空 loadPaths 且**从未 `discover()`**——插件 hooks/命令在产品路径一直空转。现 gateway 启动时扫描 loadPaths 加载插件。
+
+**审计缺省开启**（业务完整）：缺省 `<OCTOPI_HOME>/audit`（`subsystems.auditDir` 覆盖；`auditDir: false` 显式关闭，schema/类型同步 `string | false`）；审计路径带 agentId 分区 `<auditRoot>/<agentId>/<subsystemId>/<date>.jsonl`（多 agent 不串目录，与 AuditReader 布局一致）；`wireAgentBuilder` 无条件接 `agentId`（原以 home 存在为前提）。
+
+**顶层映射守卫**：新增 `tests/config-gateway-top-level-mapping.test.ts`——`OctopiConfigSchema` 每个顶层键（含 compose 层 `gateway`/`web`）必须显式分类（`mapped` / `host-consumed` / `ignored(reason)`），漏映射、新增键未分类、分类表过期条目均自动红；`models` 段三路映射（providers/level/embedding）分别断言；`subsystems.auditDir:false` 边界语义有专门断言。
+
+**example 配置修复**：`octopi.example.json` 两个 `"memory"` 重复键（JSON 重复键后者胜，`retrieval` 段被静默吞掉）合并为一；补 `subsystems` 段。
+
+### fix(subsystem): SessionLifecycleBridge 接线 + `provider/model` 语义落地（删死旋钮）
+
+- **SessionLifecycleBridge 此前是死接线**（全仓仅测试实例化）：现 `SubsystemRuntime` 构造即挂（共享 SenseEngine metrics，`dispose()` 一并释放）——`session.lifecycle.*` / `session.extraction.*` / `session.idle.ms` 进 metrics，schedule 模式条件（ctx 只有 metrics）首次可按空闲/生命周期触发。
+- **`provider/model` 说到做到**：`think.model` / `llmPort.chat({model})` / fallback 链的 provider 段现在真正选择 provider 实例（`resolveProviderInstance`；未注册名字回退主 provider 并告警）。此前 provider 段被静默丢弃——agent 主力 anthropic 时 `models.level` 里 `openai/gpt-5-mini` 会被打到 anthropic。
+- **fail-loud 取代假缺省**：级别名（mini/standard/pro）未配置时报 `unresolved_model_level`（附已配置列表），不再把档位名当模型名发给 provider；删 `SharedDeps.defaultModelProvider`（全仓无人设置的死旋钮）与 runtime 里 `{mini: 'default/mini'}` 假缺省档位表；裸模型名 = 主 provider + 该模型名，省略 `think.model` = `standard` 档或主 provider `defaultModel`。
+- **`modelProvider` 依赖统一收口**：`runtimeInject.requires: ['modelProvider']` 在 `AgentBuilder.build` 注册（= 主 provider 实例），删 config-bridge 特例（两路径第二套接线清单清零）。
+- **文档同步（EN+ZH）**：`autonomous-subsystem` §5 条件变量来源（event 模式顶层字段 / schedule 模式 metrics 键）、§7.4 模型解析表与 `modelProvider` 语义、§10 审计缺省与关闭口；`KNOWN-ISSUES` 新增「已声明未接线」清单（`compact` 能力缺省键、`session.reset/maintenance`——schema 接受但无消费方，守卫测试分类 `ignored` 跟踪）。
+
+**独立 review 轮（sub-agent 复核）修复**：
+- **H1**：内置 `wisdom.steward.formation` 的 `think.model: summary` 落在 fail-loud 集合之外（会把档位名当模型名打出去）——级别名集合补 `summary`，init 脚手架补 `summary` 档、example 补 `pro` 档（四处档位表对齐 summary/mini/standard/pro）。
+- **M1**：SessionLifecycleBridge 指标原为全局 latching 且跨 agent 污染（共享 gatewayBus）——现按 `agentId` 过滤、`session.lifecycle.*`/`session.extraction.*` 改「最新状态」语义（换值清旧键）、`session.idle.ms` 取最近交互会话（= agent 静默时长）。
+- **M4**：`concurrency.providerPool` 与子系统 `provider/model` 解析原先拿到的是裸 provider（绕过熔断/FallbackProvider 包装）——gateway 现将命名 provider 统一包 circuit breaker 后再交 wire。
+- **M2/M3**：守卫升级到 `OctopiConfigSchema`（`gateway`/`web` 也必须分类）；`plugins` 段整段透传（`plugins.configs` 等子键不再丢在边界）；`models.mode`、`session` passthrough 附加键、wisdom/cognition 未消费子键、`gateway` 覆盖段记入 KNOWN-ISSUES「已声明未接线」。
+- **M5**：未注册 provider 名回退告警按名去重（防逐调用刷屏；fail-open 为拍板策略，docs §7.4 明示）。
+- **M6**：补真行为测试——llmPort 具名 provider 路由（命中具名 / 未注册回退）、审计端到端（`SubsystemRuntime` trigger → `<auditDir>/<agentId>/<subsystemId>/<date>.jsonl` 成功与失败路径落盘）。
+- **L1/L2/L3**：插件发现幂等位（stop→start 不双注册）；catch 注明吞掉原因；bridge idle 计时器 `unref`。
+- **M7**：example 移除 cwd 相对的 `auditDir: "./audit"`（与文档缺省 `<OCTOPI_HOME>/audit` 矛盾），靠缺省生效。
+
+**Breaking（embedder API，刻意不做兼容层）**：`ModelResolverConfig.defaultProvider` 与 `SharedDeps.defaultModelProvider` 删除；`ResolvedModel.provider/model` 可选化（undefined = 主 provider / provider 缺省模型）；`GatewayConfig.session.reset/maintenance` 死字段移除；级别名未配置从「静默当模型名」改为抛 `unresolved_model_level`。
+
+**验证**：`npm run build` 全绿（含 schema 重生成）；`npm run lint` 0 新增类型错误；全量 vitest **3062 过 / 2 败**（2 败为沙箱固有限制：mac-seatbelt 拒 setuid exec → `ps` 不可用 → getProcessName/processName 类必败，与本批无关）；`arch/check-sync.sh` 全过。新增/更新测试：wire 契约（audit 缺省/false/覆盖/allow-deny/agentId）、顶层映射守卫（`OctopiConfigSchema` 全量分类 + models 三路映射）、ModelResolver 新语义 + `resolveProviderInstance`、bridge 最新状态/agent 过滤/运行时指标注入、审计端到端 2 例、具名 provider 路由 2 例。
+
 ## v0.86.36
 
 ### test(debt): tests 类型债清零（T1 收官）——基线 486 → 0，全量 typecheck 干净

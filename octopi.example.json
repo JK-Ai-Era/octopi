@@ -6,7 +6,8 @@
     "level": {
       "summary": { "primary": "openai/gpt-5-mini" },
       "mini": { "primary": "openai/gpt-5-mini" },
-      "standard": { "primary": "openai/gpt-5.5" }
+      "standard": { "primary": "openai/gpt-5.5" },
+      "pro": { "primary": "openai/gpt-5.5" }
     },
     "providers": {
       "openai": {
@@ -93,14 +94,6 @@
     }
   },
 
-  "memory": {
-    "retrieval": {
-      "minSimilarity": 0.35,
-      "similarityWeight": 0.65,
-      "minKeywordScore": 3
-    }
-  },
-
   "documents": {
     "extract": {
       "enabled": true,
@@ -135,6 +128,11 @@
 
   "memory": {
     "profile": "embedded_interactive",
+    "retrieval": {
+      "minSimilarity": 0.35,
+      "similarityWeight": 0.65,
+      "minKeywordScore": 3
+    },
     "backfill": {
       "enabled": true,
       "idleDelayMs": 1200000,
@@ -154,6 +152,10 @@
     "confidence": {
       "injectMinScore": 0.55
     }
+  },
+
+  "subsystems": {
+    "denylist": []
   },
 
   "cognition": {

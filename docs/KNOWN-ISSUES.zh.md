@@ -60,3 +60,22 @@
 - **embed secret skip 墓碑**：`dimensions=0` 不自动重嵌；改策略后需 reprocess。
 - **仅 connect 时再校验**：无真·IP 钉扎；极高威胁模型需 custom dispatcher / lookup 注入。
 - **`ingest.ts` 体量**：已拆 job-control/queue/embed-runner/fts/vector-ann；watch/poll/parse 仍在主文件。
+
+## 配置键已声明但尚未接线（2026-10）
+
+**状态**：schema 接受这些键，但目前**没有任何消费方**——配置了也不生效。记录在此以免被误当作已接线的行为。顶层映射守卫（`tests/config-gateway-top-level-mapping.test.ts`）将其分类为 `ignored`；实现时请改判为 `mapped`。
+
+- **`compact`**（compact 能力缺省：`defaultProtectHead` / `defaultProtectTail` / `defaultTargetTokens` / `defaultMode`）：会话压缩实际读取 `contextEngine` 键（`protectFirstN` / `protectLastN` / `targetTokens`）；能力级缺省目前无消费方。
+- **`session.reset` / `session.maintenance`**（每日/空闲重置与存储清理旋钮）：`session` 是 passthrough schema 块，但 engine 与 gateway 均不消费这些字段（v0.86.37 已将其从 `GatewayConfig` 类型中作为死面移除）。
+
+以下不是缺陷——宿主层直接消费、刻意不经 `GatewayConfig` 的键：`channels`、`web`、`webSearch`、`summary`、`defaults`（由 `src/cli/daemon.ts` / `src/config.ts` 消费）。
+
+### mapped 段内部的子键缺口（2026-10，review 跟进）
+
+顶层映射守卫只查段级键；以下**子键** schema 接受但暂无消费方（配置了不生效）：
+
+- **`plugins.configs`**（按插件配置）：已透传过边界，但 `PluginLoader` 尚不读取。
+- **`models.mode`**（`merge` / `replace`）：无消费方；provider/模型合并行为目前固定。
+- **`session` passthrough 附加键**（`reset` / `maintenance` 及任何拼写错误的键）：`SessionConfigSchema` 是 `.passthrough()`；实际只消费 `dmScope` / `idleExpiryMs`。
+- **`wisdom.formation` / `wisdom.evaluation` / `wisdom.injection` / `wisdom.govern` / `wisdom.capacity.softCap`** 与 **`cognition.capacity` / `cognition.retrieval` / `cognition.consolidation`**：steward 调参目前写在各子系统 `config.yaml` 的 `metadata.config`；`octopi.json` 侧只消费 `*.enabled`、`wisdom.capacity.hardCap` 与 `cognition.identity.*` / `cognition.relations.*`。
+- **`gateway`**（顶层：`port` / `host` / `debugRest`）：规划中的 Gateway 覆盖段（`arch/npm-package-split.md`）；daemon 目前读 `args.port` / `channels[]` / `web`，配置它无效果（映射守卫分类为 `ignored`）。

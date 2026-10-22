@@ -11,11 +11,14 @@
  */
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
+import { join } from 'node:path';
 import { AgentBuilder } from '@octopi-agent/engine/harness/agent/builder.js';
 import {
   wireAgentBuilder,
   resolveContextEngine,
+  resolveSubsystemAuditDir,
 } from '@octopi-agent/engine/harness/agent/wire-agent-builder.js';
+import { getOctopiHome } from '@octopi-agent/engine/paths.js';
 import type { ModelProvider } from '@octopi-agent/core/interfaces/model-provider.js';
 
 function mockProvider(name: string): ModelProvider {
@@ -94,5 +97,71 @@ describe('wireAgentBuilder', () => {
     expect(spySummarize).not.toHaveBeenCalled();
     expect(spyCtx).toHaveBeenCalledTimes(1);
     expect(spySecurity).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ── 子系统接线契约（audit 缺省 / allow-deny / agentId） ──
+//
+// 回归背景：`octopi serve` 路径曾整段丢弃 `subsystems` 配置，导致 AuditWriter
+// 从未构造、audit 目录永远为空。锁住 wire 出口上的接线调用。
+
+describe('wireAgentBuilder subsystem wiring', () => {
+  it('defaults audit dir to <OCTOPI_HOME>/audit and passes allow/deny + agentId', async () => {
+    const primary = mockProvider('p');
+    const builder = new AgentBuilder();
+    const spyAudit = vi.spyOn(AgentBuilder.prototype, 'withSubsystemAuditDir');
+    const spyAllow = vi.spyOn(AgentBuilder.prototype, 'subsystemAllowlist');
+    const spyDeny = vi.spyOn(AgentBuilder.prototype, 'subsystemDenylist');
+    const spyAgentId = vi.spyOn(AgentBuilder.prototype, 'agentId');
+
+    await wireAgentBuilder(builder, {
+      model: primary,
+      agentId: 'agent-x',
+      providers: new Map(),
+      subsystemAllowlist: ['memory.steward.*'],
+      subsystemDenylist: ['safety-guard'],
+    });
+
+    expect(spyAudit).toHaveBeenCalledWith(join(getOctopiHome(), 'audit'));
+    expect(spyAllow).toHaveBeenCalledWith('memory.steward.*');
+    expect(spyDeny).toHaveBeenCalledWith('safety-guard');
+    // agentId 无条件接线（审计分区 / 工具域对称），不以 home 存在为前提
+    expect(spyAgentId).toHaveBeenCalledWith('agent-x');
+  });
+
+  it('subsystemAuditDir:false disables audit (no withSubsystemAuditDir call)', async () => {
+    const primary = mockProvider('p');
+    const builder = new AgentBuilder();
+    const spyAudit = vi.spyOn(AgentBuilder.prototype, 'withSubsystemAuditDir');
+
+    await wireAgentBuilder(builder, {
+      model: primary,
+      agentId: 'agent-x',
+      providers: new Map(),
+      subsystemAuditDir: false,
+    });
+
+    expect(spyAudit).not.toHaveBeenCalled();
+  });
+
+  it('explicit subsystemAuditDir overrides the default', async () => {
+    const primary = mockProvider('p');
+    const builder = new AgentBuilder();
+    const spyAudit = vi.spyOn(AgentBuilder.prototype, 'withSubsystemAuditDir');
+
+    await wireAgentBuilder(builder, {
+      model: primary,
+      agentId: 'agent-x',
+      providers: new Map(),
+      subsystemAuditDir: '/custom/audit',
+    });
+
+    expect(spyAudit).toHaveBeenCalledWith('/custom/audit');
+  });
+
+  it('resolveSubsystemAuditDir: default / override / false off switch', () => {
+    expect(resolveSubsystemAuditDir(undefined)).toBe(join(getOctopiHome(), 'audit'));
+    expect(resolveSubsystemAuditDir('/custom/audit')).toBe('/custom/audit');
+    expect(resolveSubsystemAuditDir(false)).toBeUndefined();
   });
 });

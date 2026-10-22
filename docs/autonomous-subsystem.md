@@ -130,8 +130,10 @@ sense:
     condition: "turn.count % 10 === 0"
 ```
 
-- Variable names map to `ctx.metrics[key]`, injected by the main loop.
-- Supports multiple variables and dot-separated keys (e.g. `sessionLifecycle === 'recent'`).
+- Variable sources depend on the sense mode:
+  - **event mode**: SenseContext top-level fields (`sessionLifecycle` / `idleMs` / `lastInteractionAt` / `extractionStatus` / `agentId` / `sessionId`) are mapped from the event payload and can be referenced directly (e.g. `sessionLifecycle === 'recent'`); `eventData.x` reads the payload; any other identifier falls back to `ctx.metrics['id']`.
+  - **schedule mode**: the context carries **only** metrics — use metric keys: `turn.count` (updated per turn by the main loop) and `session.idle.ms` / `session.lifecycle.*` / `session.extraction.*` (maintained by SessionLifecycleBridge, wired into `SubsystemRuntime`).
+- Supports multiple variables and dot-separated keys.
 - Mutually exclusive with `conditionRef`.
 
 ### 5.2 Code reference conditionRef
@@ -307,7 +309,16 @@ export async function handler(input, deps) {
 }
 ```
 
-`runtimeInject.requires` remains for business dependencies (e.g. `memoryStore`). `modelProvider` may still be used; prefer `llmPort` for new code.
+`runtimeInject.requires` remains for business dependencies (e.g. `memoryStore`). `modelProvider` (the **main** provider instance) may still be used; prefer `llmPort` for new code.
+
+**Model resolution (`think.model` / `llmPort.chat({ model })`)**:
+
+| Reference | Meaning |
+|-----------|---------|
+| level alias (`summary` / `mini` / `standard` / `pro`) | `models.level` primary + fallback chain. An alias that is not configured **fails loud** (`unresolved_model_level`) instead of being sent as a model name. |
+| `provider/model` | The call goes to the **named provider** (`models.providers`). An unregistered name falls back to the main provider with a warning. |
+| bare model name | Main provider with that model name. |
+| omitted | `standard` level if configured; otherwise the main provider's `defaultModel`. |
 
 **API trigger**: `SubsystemRuntime.trigger(id, senseCtx?)` → `{ triggered, status }`. Sense overrides such as `eventData.bundle` may be passed; `status` is the run terminal state (`failed`/`timeout` ≠ business success).
 
@@ -364,10 +375,10 @@ For subsystems with `session.scope=session`, the subsystem session is cleaned up
 
 ## 10. Audit records
 
-Every execution writes an audit record (success or failure). Path:
+Every execution writes an audit record (success or failure). The audit root defaults to `<OCTOPI_HOME>/audit`; override it with `subsystems.auditDir` in `octopi.json`, or set `subsystems.auditDir: false` to turn auditing off explicitly. Path:
 
 ```
-~/.octopi/audit/[agentId/]<subsystemId>/<date>.jsonl
+<auditRoot>/[agentId/]<subsystemId>/<date>.jsonl
 ```
 
 Key fields:

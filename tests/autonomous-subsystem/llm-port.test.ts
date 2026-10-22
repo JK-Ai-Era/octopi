@@ -36,7 +36,7 @@ const resolver = new ModelResolver({
     mini: { primary: 'mock/gpt-mini', fallback: ['mock/gpt-mini-fallback'] },
     standard: { primary: 'mock/gpt-std' },
   },
-  defaultProvider: 'mock',
+
 });
 
 describe('createSubsystemLLMPort', () => {
@@ -239,5 +239,47 @@ describe('SubsystemRuntime injects llmPort and cognitive prompt', () => {
     expect(deps[DEP_LLM_PORT]).toBeDefined();
     expect(deps[DEP_SUBSYSTEM_PROMPT]).toBeDefined();
     runtime.dispose();
+  });
+});
+
+// ── provider/model 具名路由（回归：provider 段曾被静默丢弃，一律打到主 provider） ──
+
+describe('named provider routing (provider/model refs)', () => {
+  it('routes to the registered named provider, not the main one', async () => {
+    const main = mockProvider('ok');
+    const named = mockProvider('ok');
+    const port = createSubsystemLLMPort({
+      provider: main,
+      providers: new Map([['openai', named as ModelProvider]]),
+      modelResolver: new ModelResolver({
+        levels: { mini: { primary: 'openai/gpt-5-mini' } },
+      }),
+      modelRef: 'mini',
+    });
+
+    await port.chat({ messages: [{ role: 'user', content: 'hi' }] });
+
+    expect(named.chat).toHaveBeenCalledTimes(1);
+    expect(main.chat).not.toHaveBeenCalled();
+    const req = named.chat.mock.calls[0]![0] as LLMRequest;
+    expect(req.model).toBe('gpt-5-mini');
+  });
+
+  it('falls back to the main provider when the named provider is unregistered', async () => {
+    const main = mockProvider('ok');
+    const port = createSubsystemLLMPort({
+      provider: main,
+      providers: new Map(),
+      modelResolver: new ModelResolver({
+        levels: { mini: { primary: 'missing/gpt-5-mini' } },
+      }),
+      modelRef: 'mini',
+    });
+
+    await port.chat({ messages: [{ role: 'user', content: 'hi' }] });
+
+    expect(main.chat).toHaveBeenCalledTimes(1);
+    const req = main.chat.mock.calls[0]![0] as LLMRequest;
+    expect(req.model).toBe('gpt-5-mini');
   });
 });

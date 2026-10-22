@@ -18,7 +18,11 @@ import type {
   LLMRequest,
   LLMResponse,
 } from '@octopi-agent/core/interfaces/model-provider.js';
-import type { ModelResolver, ResolvedModelWithFallback, ResolvedModel } from './model-resolver.js';
+import {
+  resolveProviderInstance,
+  type ModelResolver,
+  type ResolvedModelWithFallback,
+} from './model-resolver.js';
 
 /** 注入依赖键：统一 LLM 端口 */
 export const DEP_LLM_PORT = 'llmPort';
@@ -44,9 +48,9 @@ export interface SubsystemLLMPortChatRequest {
 export interface SubsystemLLMPort {
   /** SUBSYSTEM.md 正文（认知指令），可能为空 */
   readonly cognitivePrompt: string;
-  /** 默认模型名（primary） */
-  readonly defaultModel: string;
-  /** 默认 provider 名 */
+  /** 默认模型名（primary）；undefined = provider defaultModel */
+  readonly defaultModel?: string;
+  /** 主 provider 名 */
   readonly providerName: string;
   /** 完整解析结果（含 fallback） */
   readonly resolved: ResolvedModelWithFallback;
@@ -55,7 +59,10 @@ export interface SubsystemLLMPort {
 }
 
 export interface CreateSubsystemLLMPortOptions {
+  /** 主 provider 实例（resolved 未指名 provider / 未命中时回退） */
   provider: ModelProvider;
+  /** 按名注册的 provider 映射（`provider/model` 引用解析用） */
+  providers?: Map<string, ModelProvider>;
   modelResolver: ModelResolver;
   /** think.model 引用；缺省 'standard' */
   modelRef?: string;
@@ -94,19 +101,14 @@ export function shouldFallbackModel(err: unknown): boolean {
   return false;
 }
 
-function toResolvedModel(model: ResolvedModel): string {
-  // ModelProvider.chat 的 model 字段使用模型名；provider 由注入的 provider 实例决定
-  return model.model;
-}
-
 /**
  * 创建子系统 LLM 端口
  */
 export function createSubsystemLLMPort(
   options: CreateSubsystemLLMPortOptions,
 ): SubsystemLLMPort {
-  const { provider, modelResolver, modelRef, cognitivePrompt } = options;
-  const resolved = modelResolver.resolve(modelRef ?? 'standard');
+  const { provider, providers, modelResolver, modelRef, cognitivePrompt } = options;
+  const resolved = modelResolver.resolveRef(modelRef);
 
   const chat = async (request: SubsystemLLMPortChatRequest): Promise<LLMResponse> => {
     const system = request.systemPrompt ?? cognitivePrompt;
@@ -122,17 +124,19 @@ export function createSubsystemLLMPort(
 
     let lastErr: unknown;
     for (let i = 0; i < modelsToTry.length; i++) {
-      const modelName = toResolvedModel(modelsToTry[i]!);
+      const target = modelsToTry[i]!;
+      // provider/model 说到做到：按解析出的 provider 名选实例，未指名/未命中回退主 provider
+      const activeProvider = resolveProviderInstance(target, providers, provider);
       const llmRequest: LLMRequest = {
         messages,
-        model: modelName,
+        model: target.model ?? activeProvider.defaultModel,
         temperature: request.temperature,
         maxTokens: request.maxTokens,
         signal: request.signal,
       };
 
       try {
-        const response = await provider.chat(llmRequest);
+        const response = await activeProvider.chat(llmRequest);
         if (response.finishReason === 'error') {
           lastErr = new Error(response.content || 'LLM chat error');
           // 与 catch 路径同一策略：仅瞬时/可重试错误才换模型，避免鉴权/参数错白试

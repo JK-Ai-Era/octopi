@@ -48,6 +48,26 @@ export class MetricsStore {
   }
 
   /**
+   * 删除指标
+   *
+   * @param key - 指标名
+   */
+  delete(key: string): void {
+    this.metrics.delete(key);
+  }
+
+  /**
+   * 删除某前缀下的全部指标（如「最新状态」类标志换值时清旧值）
+   *
+   * @param prefix - 指标名前缀
+   */
+  deletePrefix(prefix: string): void {
+    for (const key of this.metrics.keys()) {
+      if (key.startsWith(prefix)) this.metrics.delete(key);
+    }
+  }
+
+  /**
    * 获取当前指标快照
    */
   snapshot(): Record<string, number> {

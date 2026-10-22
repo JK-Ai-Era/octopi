@@ -101,7 +101,7 @@ describe('RegisteredTool.executionMode 透传（三处同构映射）', () => {
 
   it('think 通路：buildAgentTools 保留 executionMode', () => {
     const executor = new ThinkExecutor({
-      modelResolver: new ModelResolver({ levels: {}, defaultProvider: 'mock' }),
+      modelResolver: new ModelResolver({ levels: {} }),
       modelProvider: {} as never,
       errorStrategy: {} as never,
     });

@@ -179,6 +179,7 @@ export async function buildFromConfig(
         toolIsolation: config.toolIsolation,
         sessionIdleExpiryMs: config.session?.idleExpiryMs,
         modelCallConfig: config.modelCall,
+        concurrencyConfig: config.concurrency,
       });
       agents.set(agentConfig.id, built);
     } catch (err) {
@@ -239,13 +240,14 @@ async function buildAgent(
     levelMap?: import('../../config.js').LevelMap;
     modelsConfig?: import('../../config.js').ModelsConfig;
     subsystemSpecs?: SubsystemSpec[];
-    subsystemAuditDir?: string;
+    subsystemAuditDir?: string | false;
     subsystemAllowlist?: string[];
     subsystemDenylist?: string[];
     toolIsolation?: import('../../config.js').HarnessConfig['toolIsolation'];
     effectPolicy?: import('../../config.js').HarnessConfig['effectPolicy'];
     sessionIdleExpiryMs?: number;
     modelCallConfig?: import('../../config.js').ModelCallConfig;
+    concurrencyConfig?: import('../../config.js').HarnessConfig['concurrency'];
   },
 ): Promise<BuiltAgent> {
   const builder = new AgentBuilder();
@@ -292,6 +294,7 @@ async function buildAgent(
     subsystemAuditDir: shared.subsystemAuditDir,
     subsystemAllowlist: shared.subsystemAllowlist,
     subsystemDenylist: shared.subsystemDenylist,
+    concurrencyConfig: shared.concurrencyConfig,
   });
 
   // ── Build ──
@@ -299,15 +302,8 @@ async function buildAgent(
     autoLoadSubsystems: shouldAutoLoadSubsystems(shared),
   });
 
-  // ── 注入子系统运行时依赖 ──
-  if (built.runtime) {
-    // 注入 modelProvider（取第一个可用的 provider）
-    const firstProvider = shared.providers.values().next().value;
-    if (firstProvider) {
-      built.runtime.registerDependency('modelProvider', firstProvider);
-    }
-    // memoryStore 已在 AgentBuilder.build 内注入；此处不重复 register
-  }
+  // 子系统运行时依赖（modelProvider / memoryStore / …）统一在 AgentBuilder.build 内注入；
+  // 此处不重复 register，避免两路径出现第二套接线清单。
   const agent = built.agent;
   const runner = built.runner;
 

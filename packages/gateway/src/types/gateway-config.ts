@@ -26,15 +26,6 @@ export interface GatewayConfig {
     dmScope?: 'main' | 'per-peer' | 'per-channel-peer';
     /** 上下文租约（毫秒）；显式配置才生效 */
     idleExpiryMs?: number;
-    reset?: {
-      dailyHour?: number;
-      idleMinutes?: number;
-    };
-    maintenance?: {
-      mode?: 'warn' | 'enforce';
-      pruneAfter?: string;
-      maxEntries?: number;
-    };
   };
   /** 工具效应隔离策略（宪法 I5）；默认 none */
   toolIsolation?: 'none' | 'session-subdir' | 'session-lock';
@@ -89,6 +80,16 @@ export interface GatewayConfig {
   security?: import('@octopi-agent/engine/config.js').HarnessConfig['security'];
   constitution?: import('@octopi-agent/engine/config.js').ConstitutionConfig;
   memory?: import('@octopi-agent/engine/config.js').HarnessConfig['memory'];
+  /** 子系统框架配置（审计目录 / allow / deny）；与 config-bridge 同源 */
+  subsystems?: import('@octopi-agent/engine/config.js').HarnessConfig['subsystems'];
+  /** 认知图（cognition.steward.* 子系统参数）；与 config-bridge 同源 */
+  cognition?: import('@octopi-agent/engine/config.js').HarnessConfig['cognition'];
+  /** Wisdom 判断范式（wisdom.steward.* 子系统参数）；与 config-bridge 同源 */
+  wisdom?: import('@octopi-agent/engine/config.js').HarnessConfig['wisdom'];
+  /** 插件段（docs/plugin-system.md：启动时扫描 loadPaths）；整段透传，子键不丢 */
+  plugins?: import('@octopi-agent/engine/config.js').HarnessConfig['plugins'];
+  /** 并发控制（ProviderPool / SessionGate）；与 config-bridge 同源 */
+  concurrency?: import('@octopi-agent/engine/config.js').HarnessConfig['concurrency'];
   /** Knowledge 全局缺省（agents[].knowledge.recall 覆盖） */
   knowledge?: import('@octopi-agent/engine/config.js').HarnessConfig['knowledge'];
   /** 公用能力 documents（DocumentPort 读抽取） */

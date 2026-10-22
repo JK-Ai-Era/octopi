@@ -861,8 +861,11 @@ export interface ModelCallConfig {
 }
 
 export interface SubsystemsConfig {
-  /** 审计日志目录（默认 ~/.octopi/audit） */
-  auditDir?: string;
+  /**
+   * 审计日志目录（默认 `~/.octopi/audit`）。
+   * `false` = 显式关闭子系统审计。
+   */
+  auditDir?: string | false;
   /** 允许注册：id / packageId / `memory.steward.*` 前缀 */
   allowlist?: string[];
   /** 禁止注册（deny 优先） */

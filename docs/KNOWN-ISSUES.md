@@ -60,3 +60,22 @@
 - **embed secret skip tombstone**: `dimensions=0` does not auto re-embed; changing policy needs reprocess.
 - **Connect-time re-validation only**: no true IP pinning; very high threat models need custom dispatcher / lookup injection.
 - **`ingest.ts` size**: already split into job-control/queue/embed-runner/fts/vector-ann; watch/poll/parse still live in the main file.
+
+## Config keys declared but not yet wired (2026-10)
+
+**Status:** the schema accepts these keys but no consumer exists yet — configuring them has **no effect**. Tracked here so they are not mistaken for wired behavior. The top-level mapping guard (`tests/config-gateway-top-level-mapping.test.ts`) classifies them as `ignored`; re-classify them as `mapped` when implementing.
+
+- **`compact`** (compact capability defaults: `defaultProtectHead` / `defaultProtectTail` / `defaultTargetTokens` / `defaultMode`): session compaction reads the `contextEngine` keys (`protectFirstN` / `protectLastN` / `targetTokens`) instead; the capability-level defaults currently have no consumer.
+- **`session.reset` / `session.maintenance`** (daily/idle reset and store-pruning knobs): `session` is a passthrough schema block, but neither the engine nor the gateway consumes these fields (they were removed from the `GatewayConfig` type as dead surface in v0.86.37).
+
+Not defects — host-consumed keys that intentionally bypass `GatewayConfig`: `channels`, `web`, `webSearch`, `summary`, `defaults` (consumed by `src/cli/daemon.ts` / `src/config.ts`).
+
+### Sub-key gaps inside sections classified `mapped` (2026-10, review follow-up)
+
+The top-level mapping guard checks section-level keys only; these **sub-keys** are accepted by the schema but have no consumer yet (configuring them has no effect):
+
+- **`plugins.configs`** (per-plugin config): passed through the boundary, but `PluginLoader` does not read it yet.
+- **`models.mode`** (`merge` / `replace`): no consumer; provider/model merging behavior is fixed.
+- **`session` passthrough extras** (`reset` / `maintenance` and any typo keys): `SessionConfigSchema` is `.passthrough()`; only `dmScope` / `idleExpiryMs` are consumed.
+- **`wisdom.formation` / `wisdom.evaluation` / `wisdom.injection` / `wisdom.govern` / `wisdom.capacity.softCap`** and **`cognition.capacity` / `cognition.retrieval` / `cognition.consolidation`**: steward tuning currently lives in each subsystem's `config.yaml` `metadata.config`; only `*.enabled`, `wisdom.capacity.hardCap` and `cognition.identity.*` / `cognition.relations.*` are consumed from `octopi.json`.
+- **`gateway`** (top-level: `port` / `host` / `debugRest`): planned Gateway override section (`arch/npm-package-split.md`); the daemon currently reads `args.port` / `channels[]` / `web` instead, so configuring it has no effect (the mapping guard classifies it `ignored`).

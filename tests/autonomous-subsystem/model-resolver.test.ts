@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { ModelResolver } from '@octopi-agent/engine/harness/collaboration/autonomous-subsystem/think/model-resolver.js';
+import {
+  ModelResolver,
+  resolveProviderInstance,
+} from '@octopi-agent/engine/harness/collaboration/autonomous-subsystem/think/model-resolver.js';
+import type { ModelProvider } from '@octopi-agent/core/interfaces/model-provider.js';
+
+const fakeProvider = (name: string): ModelProvider =>
+  ({ name, chat: async () => { throw new Error('no chat in tests'); } }) as unknown as ModelProvider;
 
 describe('ModelResolver', () => {
   const levels = {
@@ -77,20 +84,37 @@ describe('ModelResolver', () => {
   });
 
   describe('bare model name', () => {
-    it('resolves bare model name with default provider', () => {
-      const resolver = new ModelResolver({ levels, defaultProvider: 'openai-main' });
-      const result = resolver.resolve('gpt-4o-mini');
-
-      expect(result.fromLevel).toBe(false);
-      expect(result.primary).toEqual({ provider: 'openai-main', model: 'gpt-4o-mini' });
-      expect(result.fallback).toHaveLength(0);
-    });
-
-    it('uses "default" as default provider when not configured', () => {
+    it('resolves bare model name to main provider (no provider name)', () => {
       const resolver = new ModelResolver({ levels });
       const result = resolver.resolve('gpt-4o-mini');
 
-      expect(result.primary).toEqual({ provider: 'default', model: 'gpt-4o-mini' });
+      expect(result.fromLevel).toBe(false);
+      expect(result.primary).toEqual({ provider: undefined, model: 'gpt-4o-mini' });
+      expect(result.fallback).toHaveLength(0);
+    });
+
+    it('well-known level alias not configured fails loud', () => {
+      const resolver = new ModelResolver({ levels: {} });
+      expect(() => resolver.resolve('mini')).toThrow(/unresolved_model_level/);
+    });
+  });
+
+  describe('resolveRef', () => {
+    it('defaults to "standard" level when configured', () => {
+      const resolver = new ModelResolver({ levels });
+      const result = resolver.resolveRef();
+
+      expect(result.fromLevel).toBe(true);
+      expect(result.primary).toEqual({ provider: 'openai-main', model: 'gpt-5.5' });
+    });
+
+    it('falls back to main provider default model when no levels configured', () => {
+      const resolver = new ModelResolver({ levels: {} });
+      const result = resolver.resolveRef();
+
+      expect(result.fromLevel).toBe(false);
+      expect(result.primary.provider).toBeUndefined();
+      expect(result.primary.model).toBeUndefined();
     });
   });
 
@@ -120,5 +144,29 @@ describe('ModelResolver', () => {
       // mini should be overridden
       expect(resolver.resolve('mini').primary).toEqual({ provider: 'new-provider', model: 'new-mini' });
     });
+  });
+});
+
+describe('resolveProviderInstance', () => {
+  const main = fakeProvider('main');
+  const named = fakeProvider('openai');
+
+  it('returns the named provider when registered', () => {
+    const providers = new Map([['openai', named]]);
+    expect(
+      resolveProviderInstance({ provider: 'openai', model: 'gpt-5.5' }, providers, main),
+    ).toBe(named);
+  });
+
+  it('returns the main provider when no provider name is given', () => {
+    expect(
+      resolveProviderInstance({ provider: undefined, model: 'gpt-5.5' }, undefined, main),
+    ).toBe(main);
+  });
+
+  it('falls back to the main provider when the named provider is missing', () => {
+    expect(
+      resolveProviderInstance({ provider: 'missing', model: 'x' }, new Map(), main),
+    ).toBe(main);
   });
 });

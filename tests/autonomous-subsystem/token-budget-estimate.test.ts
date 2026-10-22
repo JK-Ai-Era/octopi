@@ -5,7 +5,7 @@ import { TokenBudgetExceededError } from '@octopi-agent/engine/harness/collabora
 import { ThinkExecutor } from '@octopi-agent/engine/harness/collaboration/autonomous-subsystem/think/executor.js';
 import { ModelResolver } from '@octopi-agent/engine/harness/collaboration/autonomous-subsystem/think/model-resolver.js';
 
-const resolver = new ModelResolver({ levels: {}, defaultProvider: 'mock' });
+const resolver = new ModelResolver({ levels: {} });
 const executor = new ThinkExecutor({
   modelResolver: resolver,
   modelProvider: {} as never,

@@ -31,6 +31,7 @@ import type { BudgetPolicyConfig } from '../run/budget/budget.js';
 import type { ReliabilityConfig } from '../run/reliability/run-agent.js';
 import type { SessionAwareRunnerConfig } from '../run/runner.js';
 import type { EffectPolicyConfig } from '../extension/execution-environment/effect-policy.js';
+import { getOctopiHome } from '../../paths.js';
 import {
   DefaultRunGuard,
   type RunGuardConfig,
@@ -41,6 +42,21 @@ import { DefaultBudgetAllocator } from '../context/budget-allocator.js';
 import type { AgentBuilder } from './builder.js';
 
 // ── 配置解析（唯一实现；供 wire 与公开导出共用） ──
+
+/**
+ * 解析子系统审计目录（docs/autonomous-subsystem.md §10）
+ *
+ * - `false` → 关闭审计（返回 undefined，不接 AuditWriter）
+ * - 字符串 → 显式目录
+ * - 缺省 → `<OCTOPI_HOME>/audit`（`OCTOPI_HOME` env 可重定向，测试可隔离）
+ *
+ * @param configured - 配置值（`subsystems.auditDir`）
+ * @returns 审计目录；undefined = 显式关闭
+ */
+export function resolveSubsystemAuditDir(configured: string | false | undefined): string | undefined {
+  if (configured === false) return undefined;
+  return configured ?? join(getOctopiHome(), 'audit');
+}
 
 /**
  * 从配置中解析安全策略（始终返回；无总开关）
@@ -175,8 +191,12 @@ export interface AgentWireSpec {
   budgetConfig?: BudgetPolicyJsonConfig | Partial<BudgetPolicyConfig>;
   runGuardConfig?: RunGuardJsonConfig;
 
+  /** 并发控制（ProviderPool / SessionGate）；与 config-bridge 同源 */
+  concurrencyConfig?: HarnessConfig['concurrency'];
+
   subsystemSpecs?: SubsystemSpec[];
-  subsystemAuditDir?: string;
+  /** 审计目录；缺省 `<OCTOPI_HOME>/audit`，`false` 显式关闭 */
+  subsystemAuditDir?: string | false;
   subsystemAllowlist?: string[];
   subsystemDenylist?: string[];
 
@@ -210,6 +230,14 @@ export async function wireAgentBuilder(
   // ── Model Levels（子系统 think.model / 摘要选型共用） ──
   if (spec.levelMap) {
     builder.withModelLevels(spec.levelMap);
+  }
+
+  // ── Providers 映射（子系统 provider/model 解析用；缺 provider 回退主模型） ──
+  builder.providers(spec.providers);
+
+  // ── 并发控制（ProviderPool / SessionGate） ──
+  if (spec.concurrencyConfig) {
+    builder.concurrency(spec.concurrencyConfig);
   }
 
   // ── Workspace ──
@@ -246,9 +274,10 @@ export async function wireAgentBuilder(
   // stores 只跟显式 home 走；string persona 只作 prompt 目录，不隐式开 agent.db
   //（config-bridge 需要 legacy persona-as-home 时应显式传 home）。
   const agentHome = spec.home;
+  // agentId 无条件接线（审计分区 / 工具域对称）；home 只决定 agent 文件态目录
+  builder.agentId(spec.agentId);
   if (spec.home) {
     builder.agentHome(spec.home);
-    builder.agentId(spec.agentId);
   }
   if (typeof spec.persona === 'string') {
     builder.persona(spec.persona);
@@ -343,8 +372,9 @@ export async function wireAgentBuilder(
       builder.withSubsystem(s);
     }
   }
-  if (spec.subsystemAuditDir) {
-    builder.withSubsystemAuditDir(spec.subsystemAuditDir);
+  const auditDir = resolveSubsystemAuditDir(spec.subsystemAuditDir);
+  if (auditDir) {
+    builder.withSubsystemAuditDir(auditDir);
   }
   if (spec.subsystemAllowlist?.length) {
     builder.subsystemAllowlist(...spec.subsystemAllowlist);
