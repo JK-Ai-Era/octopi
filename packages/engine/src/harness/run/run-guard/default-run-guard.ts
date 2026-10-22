@@ -392,28 +392,24 @@ export class DefaultRunGuard implements RunGuard {
       });
     }
 
-    // 规则 4: Token 暴涨
-    if (m.tokenGrowthRate > 0.5) {
-      results.push({
-        triggered: true,
-        severity: 'medium',
-        rule: 'token_growth',
-        description: `Token 增长率 ${(m.tokenGrowthRate * 100).toFixed(0)}%，上下文可能膨胀`,
-        failureKind: 'burn',
-        suggestedRecovery: [{ type: 'truncate_context', keepRecent: 6 }],
-      });
-    }
-
-    // 规则 5: 无进展
-    if (!m.hasProgress && (ctx.recentSummaries.length >= 3 || (m.noopStreak ?? 0) >= 3)) {
-      results.push({
-        triggered: true,
-        severity: (m.noopStreak ?? 0) >= 3 ? 'medium' : 'low',
-        rule: 'no_progress',
-        description: '最近几轮没有实质进展',
-        failureKind: 'stall',
-      });
-    }
+    // 规则 4（token_growth）与规则 5（no_progress）已移除，原因分别是判据错位与功能重复：
+    //
+    // - 旧规则 4 用 `tokenGrowthRate > 0.5` 判「上下文膨胀」，但该指标是
+    //   「最近半窗 token 消耗 ÷ 前一半 − 1」，衡量的是**消耗增速**而非上下文**绝对大小**。
+    //   实测两个长 turn 的上下文分别涨到 10 倍和 2 倍，该值仅 0.08 / 0.03 —— 真正的膨胀
+    //   它看不见；对「单轮读了个大文件」这种正常工作反而敏感。
+    //   而它想管的事已由 wrap-up 的 context 轴无条件处理（`relConfig.wrapUp.contextRatio`
+    //   默认 0.85，动作为进入收尾模式、让 agent 输出结论），比 `truncate_context` 更好：
+    //   后者用 `messages.splice()` 整段替换历史中部，会打穿前缀缓存（B0 红线）。
+    //   `tokenGrowthRate` 指标本身保留，仅作观测（run_guard_metrics），不参与裁决。
+    //
+    // - 旧规则 5 的两个分支都不生效：`low` 没有任何消费方（裁决只取 high/medium）；
+    //   `medium` 要求 `noopStreak >= 3`，而 run-agent 在 `consecutiveNoops >= noopThreshold`
+    //   时已设置 `_noopLoopStop` 并发出可见停止事件，`shouldStopAfterTurn` 直接结束 turn，
+    //   本规则只是重复判定，还会多注入一条 hint、污染 recoveryHistory。
+    //
+    // 结论：真正需要 Guard 的异常只有三类——同参同结果（无进展循环）、同参同错误（没换方法）、
+    // 高失败率且无推进（thrash）。上下文压力归 wrap-up / Budget，noop 归 run-agent。
 
     return results;
   }
@@ -468,8 +464,7 @@ ${summaryText}${taskLine}${recoveryLine}${signalsLine}
 - 迭代次数: ${ctx.iteration}
 - 连续错误: ${ctx.metrics.consecutiveErrors}
 - 连续同一错误: ${ctx.metrics.consecutiveIdenticalFailures ?? '(未提供)'}
-- 工具失败率: ${(ctx.metrics.toolFailureRate * 100).toFixed(0)}%
-- Token 增长率: ${(ctx.metrics.tokenGrowthRate * 100).toFixed(0)}%
+- 工具失败率: ${(ctx.metrics.toolFailureRate * 100).toFixed(0)}%（窗口 ${ctx.metrics.toolCallsInWindow ?? '?'} 次）
 - 是否有进展: ${ctx.metrics.hasProgress ? '是' : '否'}
 - 使用的不同工具数: ${ctx.metrics.uniqueToolsUsed}
 

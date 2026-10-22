@@ -1,3 +1,32 @@
+## v0.86.35
+
+### refactor(run-guard): 移除判据错位的 token_growth 与无效的 no_progress
+
+收尾 v0.86.32~34 的同类工作：三条规则已从「弱信号」改为「行为特征」，剩下两条经核查各有根因问题，故移除而非修补。
+
+**规则 4 `token_growth` 判据错位**：它用 `tokenGrowthRate > 0.5` 判「上下文膨胀」，但该指标是「最近半窗 token 消耗 ÷ 前一半 − 1」，衡量的是**消耗增速**，不是上下文**绝对大小**。用真实故障 session 日志实测：
+
+| session / turn | 上下文实际变化 | 该指标值 |
+|---|---|---|
+| `default-web-1792654908416` t1 | 24.5k → 241k（约 10×） | **0.08** |
+| `default-web-1792669399277` t2 | 126k → 242k（约 2×） | **0.03** |
+
+涨 10 倍它无感；反而对「单轮读了个大文件」这类正常波动敏感。
+
+更关键的是**它想管的事已有人管**：`run-agent` 的 wrap-up 在每次检查点无条件计算 `contextEstTokens / contextWindowTokens`（默认阈值 0.85），动作是进入收尾模式、让 agent 输出结论——比本规则的 `truncate_context` 更好。后者实现是 `messages.splice(systemEnd, removeCount, 摘要)`，**整段替换历史中部**，直接打穿前缀缓存（B0 红线），且 failureKind `burn` 连续升级后还会 `clear_recent_turns`。
+
+`tokenGrowthRate` 指标本身保留（`run_guard_metrics` 观测可见），只是不再参与裁决；LLM 审查 prompt 中也移除了该行，避免审查者基于错位指标下 `CONCERN/STOP`，同时给失败率补上窗口样本量。
+
+**规则 5 `no_progress` 两个分支都不生效**：
+1. `low` 无任何消费方（`checkpoint()` 只取 high/medium）——与 v0.86.31 移除的同名 low 死代码同一个坑。
+2. `medium` 要求 `noopStreak >= 3`，而 `run-agent` 在 `consecutiveNoops >= noopThreshold`（默认 3）时已设置 `_noopLoopStop` 并发出可见停止事件（v0.86.32 补的），`shouldStopAfterTurn` 直接结束 turn。本规则只是重复判定，还会多注入一条 hint、污染 `recoveryHistory`。
+
+**结果**：Guard 只保留三类真实异常——同参同结果（无进展循环）、同参同错误（没换方法）、高失败率且无推进（thrash）。上下文压力归 wrap-up / Budget，noop 归 run-agent，职责不再重叠。`RunFailureKind` 中的 `stall` 随之不再被产生（保留在 taxonomy 中）。
+
+**测试**：`tests/run-guard.test.ts` 原「应该检测 token 暴涨」改为「消耗增速不再触发裁决」（断言 `continue` 且 **不返回 `truncate_context`**）；新增「无进展不再单独触发裁决」。**红绿对照**：注入回旧规则后两条用例均失败，恢复后 40 例全绿。
+
+**验证**：`tsc` core/engine/gateway 干净；`tests` 类型门禁 0 新增（148 条存量基线不变）；eslint 干净；全量 `vitest` 3046 passed（3 failed 仍为已知环境限制：沙箱内 `ps` 不可用 ×2、Windows 临时路径用例 ×1；另有一次 `FileWatchSource` 防抖用例在并发下抖动，单独连跑 3 次均通过，与本次改动无关）。
+
 ## v0.86.34
 
 ### fix(run-guard): 错误循环按「错误是否重复」判，而非「失败了几次」

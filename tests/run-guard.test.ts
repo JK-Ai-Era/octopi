@@ -223,18 +223,35 @@ describe('DefaultRunGuard', () => {
       expect(verdict.action).toBe('continue');
     });
 
-    it('应该检测 token 暴涨', async () => {
+    it('Token 消耗增速不再触发裁决（判据与上下文膨胀无关，且不得截断历史）', async () => {
       const runGuard = new DefaultRunGuard({ enableLLMReview: false });
       const ctx = createContext({
-        metrics: createMetrics({ tokenGrowthRate: 0.6 }),
+        // 相邻半窗消耗翻倍：这是「读了个大文件」也会有的正常波动，
+        // 不是上下文膨胀证据；且真膨胀由 wrap-up context 轴处理。
+        metrics: createMetrics({ tokenGrowthRate: 0.9 }),
       });
 
       const verdict = await runGuard.checkpoint(ctx);
 
-      expect(verdict.action).toBe('recover');
-      expect(verdict.reason).toContain('Token');
-      expect(verdict.recoveryActions).toBeDefined();
-      expect(verdict.recoveryActions![0].type).toBe('truncate_context');
+      expect(verdict.action).toBe('continue');
+      // 关键：不得返回 truncate_context —— 它 splice 历史中部会打穿前缀缓存
+      expect(verdict.recoveryActions ?? []).toHaveLength(0);
+    });
+
+    it('无进展不再单独触发裁决（noop 由 run-agent 处理，且 low 无消费方）', async () => {
+      const runGuard = new DefaultRunGuard({ enableLLMReview: false });
+      const ctx = createContext({
+        metrics: createMetrics({ hasProgress: false, noopStreak: 5 }),
+        recentSummaries: [
+          { role: 'assistant', contentPreview: 'thinking', tokenDelta: 0, timestamp: Date.now() },
+          { role: 'assistant', contentPreview: 'thinking', tokenDelta: 0, timestamp: Date.now() },
+          { role: 'assistant', contentPreview: 'thinking', tokenDelta: 0, timestamp: Date.now() },
+        ],
+      });
+
+      const verdict = await runGuard.checkpoint(ctx);
+
+      expect(verdict.action).toBe('continue');
     });
 
     it('正常运行时应该返回 continue', async () => {
