@@ -101,16 +101,60 @@ describe('DefaultRunGuard', () => {
       expect(verdict.action).toBe('continue');
     });
 
-    it('应该检测错误循环', async () => {
+    it('应该检测同一错误反复重试（真 error loop）', async () => {
       const runGuard = new DefaultRunGuard({ enableLLMReview: false });
       const ctx = createContext({
-        metrics: createMetrics({ consecutiveErrors: 3 }),
+        metrics: createMetrics({ consecutiveErrors: 3, consecutiveIdenticalFailures: 3 }),
       });
 
       const verdict = await runGuard.checkpoint(ctx);
 
       expect(verdict.action).toBe('recover');
-      expect(verdict.reason).toContain('错误');
+      expect(verdict.reason).toContain('同一错误');
+    });
+
+    it('连续失败但错误各不相同（红-改-绿调试）不得判为 error loop', async () => {
+      const runGuard = new DefaultRunGuard({ enableLLMReview: false });
+      const ctx = createContext({
+        metrics: createMetrics({ consecutiveErrors: 3, consecutiveIdenticalFailures: 1, hasProgress: true }),
+      });
+
+      const verdict = await runGuard.checkpoint(ctx);
+
+      // 跑测试 A 红 → 修 → 跑测试 B 红 → 修：三次失败但每次错误不同，属正常调试
+      expect(verdict.action).toBe('continue');
+      expect(verdict.reason ?? '').not.toContain('error_loop');
+    });
+
+    it('连续 5 次不同错误仍不得判为 error loop（普通调试上限）', async () => {
+      const runGuard = new DefaultRunGuard({ enableLLMReview: false });
+      const ctx = createContext({
+        metrics: createMetrics({ consecutiveErrors: 5, consecutiveIdenticalFailures: 1, hasProgress: true }),
+      });
+
+      expect((await runGuard.checkpoint(ctx)).action).toBe('continue');
+    });
+
+    it('兜底：连续 8 次不同错误（工具整体不可用）仍要拦', async () => {
+      const runGuard = new DefaultRunGuard({ enableLLMReview: false });
+      const ctx = createContext({
+        metrics: createMetrics({ consecutiveErrors: 8, consecutiveIdenticalFailures: 1 }),
+      });
+
+      const verdict = await runGuard.checkpoint(ctx);
+
+      expect(verdict.action).toBe('recover');
+      expect(verdict.failureKind).toBe('blowup');
+      expect(verdict.reason).toContain('连续 8 次工具调用失败');
+    });
+
+    it('同错误字段缺失时只走兜底，不退回「连续失败即循环」', async () => {
+      const runGuard = new DefaultRunGuard({ enableLLMReview: false });
+      const ctx = createContext({
+        metrics: createMetrics({ consecutiveErrors: 3 }),
+      });
+
+      expect((await runGuard.checkpoint(ctx)).action).toBe('continue');
     });
 
     it('应该检测工具失败率高且无进展（真 thrash）', async () => {

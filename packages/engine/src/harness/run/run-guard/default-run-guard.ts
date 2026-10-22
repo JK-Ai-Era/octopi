@@ -93,6 +93,17 @@ let warnedMissingIdenticalMetric = false;
 /** 指标生产者未提供 toolCallsInWindow 时只告警一次 */
 let warnedMissingWindowMetric = false;
 
+/** 指标生产者未提供 consecutiveIdenticalFailures 时只告警一次 */
+let warnedMissingFailureMetric = false;
+
+/**
+ * 连续工具失败兜底阈值（错误内容各不相同时）
+ *
+ * 取高位：正常调试节奏是「跑测试红 → 改 → 再跑」，3~5 次连续失败很常见；
+ * 8 次连续失败且一次都没成功，更像是工具/环境整体不可用，而不是在探索。
+ */
+const ERROR_STREAK_SAFETY = 8;
+
 export class DefaultRunGuard implements RunGuard {
   private config: RunGuardConfig & {
     enabled: boolean;
@@ -299,23 +310,50 @@ export class DefaultRunGuard implements RunGuard {
       });
     }
 
-    // 规则 2: 错误循环
-    if (m.consecutiveErrors >= 3) {
+    // 规则 2: 错误循环 —— 判「错误是否重复」，不是「失败了几次」
+    //
+    // 旧判据 `consecutiveErrors >= 3` 只看连续失败次数：跑测试 A 红 → 改 → 跑测试 B 红
+    // → 改 → 跑测试 C 红，三次失败但每次错误都不同，这是正常调试节奏（红-改-绿循环），
+    // 却被判 high/blowup → recover，同 kind 连续 3 次后升级 stop。
+    //
+    // 「卡住」的真实特征是**同一个错误反复出现**：同一工具、同一参数、同一错误内容，
+    // 说明重试没有换方法。故判据改为 consecutiveIdenticalFailures。
+    //
+    // 保留一条兜底：完全不同错误也可能整体失败（例如工具被全局配置坏掉），
+    // 用较高的阈值兜住，普通调试节奏（3 个红测试）远达不到。
+    const identicalFailures = m.consecutiveIdenticalFailures;
+    if (identicalFailures === undefined && !warnedMissingFailureMetric) {
+      warnedMissingFailureMetric = true;
+      console.warn(
+        '[RunGuard] CheckpointMetrics.consecutiveIdenticalFailures 缺失，error_loop 判据退化为连续失败兜底',
+      );
+    }
+    if ((identicalFailures ?? 0) >= 3) {
       results.push({
         triggered: true,
         severity: 'high',
         rule: 'error_loop',
-        description: `连续 ${m.consecutiveErrors} 次错误，可能遇到了无法解决的问题`,
+        description: `同一错误连续 ${identicalFailures} 次（工具、参数、错误内容均未变化），重试没有换方法`,
         failureKind: 'blowup',
-        suggestedRecovery: [{ type: 'inject_hint', hint: '你已连续遇到多次错误。请停下来分析错误原因，考虑换一种方法，或向用户报告当前遇到的困难。' }],
+        suggestedRecovery: [{ type: 'inject_hint', hint: '你正在用同样的方式重试同一个失败。请改变做法：读完整错误信息、检查前提假设，或者换个工具/思路；确实解决不了就向用户报告。' }],
       });
-    } else if (m.consecutiveErrors >= 2) {
+    } else if ((identicalFailures ?? 0) >= 2) {
       results.push({
         triggered: true,
         severity: 'medium',
         rule: 'error_loop',
-        description: `连续 ${m.consecutiveErrors} 次错误`,
+        description: `同一错误连续 ${identicalFailures} 次`,
         failureKind: 'blowup',
+      });
+    } else if (m.consecutiveErrors >= ERROR_STREAK_SAFETY) {
+      // 连续失败但错误各不相同：可能是探索，也可能整体环境坏了。兜底阈值取高位。
+      results.push({
+        triggered: true,
+        severity: 'high',
+        rule: 'error_streak',
+        description: `连续 ${m.consecutiveErrors} 次工具调用失败（错误内容各不相同）`,
+        failureKind: 'blowup',
+        suggestedRecovery: [{ type: 'inject_hint', hint: '你已经连续多次工具调用失败。请先确认工具本身可用（最小示例验证），或向用户报告当前环境问题。' }],
       });
     }
 
@@ -429,6 +467,7 @@ ${summaryText}${taskLine}${recoveryLine}${signalsLine}
 当前指标：
 - 迭代次数: ${ctx.iteration}
 - 连续错误: ${ctx.metrics.consecutiveErrors}
+- 连续同一错误: ${ctx.metrics.consecutiveIdenticalFailures ?? '(未提供)'}
 - 工具失败率: ${(ctx.metrics.toolFailureRate * 100).toFixed(0)}%
 - Token 增长率: ${(ctx.metrics.tokenGrowthRate * 100).toFixed(0)}%
 - 是否有进展: ${ctx.metrics.hasProgress ? '是' : '否'}

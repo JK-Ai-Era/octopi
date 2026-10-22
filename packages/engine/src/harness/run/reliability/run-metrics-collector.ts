@@ -67,6 +67,9 @@ export class RunMetricsCollector {
   private lastCallFingerprint = '';
   private consecutiveIdenticalCalls = 0;
   private consecutiveErrors = 0;
+  /** 上一次失败调用的「名+参数+错误」指纹；用于识别同一错误反复重试 */
+  private lastFailureFingerprint = '';
+  private consecutiveIdenticalFailures = 0;
   private uniqueTools = new Set<string>();
   private recentToolCalls: Array<{ name: string; success: boolean }> = [];
   private turnSummaries: TurnSummary[] = [];
@@ -147,12 +150,29 @@ export class RunMetricsCollector {
     if (this.recentToolCalls.length > RECENT_TOOLS_MAX) this.recentToolCalls.shift();
     if (success) {
       this.consecutiveErrors = 0;
+      this.consecutiveIdenticalFailures = 0;
+      this.lastFailureFingerprint = '';
       if (!isNoop) {
         this.lastSuccessAt = this.globalIteration;
         this.noopStreak = 0;
       }
     } else {
       this.consecutiveErrors++;
+      // 错误是否「重复」：同工具 + 同参数 + 同错误内容。
+      // 连续失败但每次错误不同（跑测试 A 红 → 修 → 跑测试 B 红）属于探索，
+      // 不是卡住；只有同一错误反复出现才说明重试没有换方法。
+      const failureFingerprint = trace
+        ? [
+            hashToolCall(name, trace.args),
+            hashToolOutcome(name, trace.args, undefined, stripVolatileOutcome(trace.error)) ?? '',
+          ].join('|')
+        : '';
+      if (failureFingerprint && failureFingerprint === this.lastFailureFingerprint) {
+        this.consecutiveIdenticalFailures++;
+      } else {
+        this.consecutiveIdenticalFailures = failureFingerprint ? 1 : 0;
+        this.lastFailureFingerprint = failureFingerprint;
+      }
     }
     if (isNoop) this.noopStreak++;
   }
@@ -234,6 +254,7 @@ export class RunMetricsCollector {
 
     const metrics: CheckpointMetrics = {
       consecutiveErrors: this.consecutiveErrors,
+      consecutiveIdenticalFailures: this.consecutiveIdenticalFailures,
       consecutiveSameTool: this.consecutiveSameTool,
       consecutiveIdenticalCalls: this.consecutiveIdenticalCalls,
       tokenGrowthRate,
@@ -276,6 +297,7 @@ export class RunMetricsCollector {
     nominalTotalTokens: number;
     elapsedMs: number;
     consecutiveErrors: number;
+    consecutiveIdenticalFailures: number;
     consecutiveSameTool: number;
     consecutiveIdenticalCalls: number;
     noopStreak: number;
@@ -292,6 +314,7 @@ export class RunMetricsCollector {
       nominalTotalTokens: this.nominalTotalTokens,
       elapsedMs: Date.now() - this.startTime,
       consecutiveErrors: this.consecutiveErrors,
+      consecutiveIdenticalFailures: this.consecutiveIdenticalFailures,
       consecutiveSameTool: this.consecutiveSameTool,
       consecutiveIdenticalCalls: this.consecutiveIdenticalCalls,
       noopStreak: this.noopStreak,

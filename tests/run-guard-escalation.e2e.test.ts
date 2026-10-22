@@ -100,6 +100,60 @@ describe('Guard recover → escalate stop（e2e 式）', () => {
     expect(verdict.action).toBe('continue');
   });
 
+  it('同工具同参同错误 → consecutiveIdenticalFailures 累加', () => {
+    const collector = new RunMetricsCollector();
+    for (let i = 0; i < 4; i++) {
+      collector.recordToolResult('shell', false, false, {
+        args: { command: 'npx vitest run test-a' },
+        error: { exitCode: 1, stderr: 'AssertionError: expected 1 to be 2' },
+      });
+    }
+    const ctx = collector.buildContext({});
+    expect(ctx.metrics.consecutiveErrors).toBe(4);
+    expect(ctx.metrics.consecutiveIdenticalFailures).toBe(4);
+  });
+
+  it('同工具同参但错误内容不同 → 视为在探索，不累加', () => {
+    const collector = new RunMetricsCollector();
+    for (let i = 0; i < 4; i++) {
+      collector.recordToolResult('shell', false, false, {
+        args: { command: 'npx vitest run' },
+        error: { exitCode: 1, stderr: `AssertionError in test-${i}` },
+      });
+    }
+    const ctx = collector.buildContext({});
+    expect(ctx.metrics.consecutiveErrors).toBe(4);
+    expect(ctx.metrics.consecutiveIdenticalFailures).toBe(1);
+  });
+
+  it('错误指纹剥掉易变字段（durationMs 不得让同一错误变成不同错误）', () => {
+    const collector = new RunMetricsCollector();
+    for (let i = 0; i < 3; i++) {
+      collector.recordToolResult('shell', false, false, {
+        args: { command: 'broken' },
+        error: { exitCode: 1, stderr: 'command not found', durationMs: 100 + i },
+      });
+    }
+    expect(collector.buildContext({}).metrics.consecutiveIdenticalFailures).toBe(3);
+  });
+
+  it('成功一次即清空同错误计数', () => {
+    const collector = new RunMetricsCollector();
+    for (let i = 0; i < 3; i++) {
+      collector.recordToolResult('shell', false, false, {
+        args: { command: 'c' },
+        error: { exitCode: 1, stderr: 'same' },
+      });
+    }
+    collector.recordToolResult('file_edit', true, false, {
+      args: { path: 'a.ts' },
+      result: { ok: true },
+    });
+    const ctx = collector.buildContext({});
+    expect(ctx.metrics.consecutiveErrors).toBe(0);
+    expect(ctx.metrics.consecutiveIdenticalFailures).toBe(0);
+  });
+
   it('collector 必须填充 toolCallsInWindow（否则失败率判据静默失效）', () => {
     const collector = new RunMetricsCollector();
     collector.recordToolResult('shell', true, false, { args: { command: 'a' }, result: { ok: true } });

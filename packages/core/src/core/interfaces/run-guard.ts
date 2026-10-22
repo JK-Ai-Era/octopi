@@ -33,8 +33,17 @@ export interface TurnSummary {
 
 /** 检查点指标 */
 export interface CheckpointMetrics {
-  /** 连续错误数（模型错误 + 工具错误） */
+  /** 连续错误数（**仅工具调用失败**；模型/Provider 错误不计入，由 ProviderPool 自行处理） */
   consecutiveErrors: number;
+  /**
+   * 连续「同一错误」次数：工具名 + 参数 + 错误内容指纹一致。
+   *
+   * 这才是「卡住」的判据：同参同错重复 = 重试没有换方法。
+   * 反例是编码类 run 的正常节奏——跑测试 A 红、改、跑测试 B 红、改，
+   * 连续失败但每次错误都不同，说明在探索推进。
+   * 可选：旧实现/外部 RunGuard 实现可不提供（缺失时该判据不启用）。
+   */
+  consecutiveIdenticalFailures?: number;
   /**
    * 连续调用同一工具的次数（**仅工具名**，不含参数）。
    *

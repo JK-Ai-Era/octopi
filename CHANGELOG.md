@@ -1,3 +1,24 @@
+## v0.86.34
+
+### fix(run-guard): 错误循环按「错误是否重复」判，而非「失败了几次」
+
+**问题**：规则 2 用 `consecutiveErrors >= 3`（high / `blowup`）判错误循环。但该计数按**失败次数**算——跑测试 A 红 → 改 → 跑测试 B 红 → 改 → 跑测试 C 红，三次失败、每次错误各不相同，正是红-改-绿调试节奏，却被判 high 并进入 recover；同 kind 连续 3 次后升级 stop。
+
+**判据事实**：`consecutiveErrors` 在 `RunMetricsCollector` 中**只由工具失败递增**（`recordToolResult` 的 `!success` 分支）。core 注释原写「模型错误 + 工具错误」与实现不符，本次一并改正；模型/Provider 错误由 `ProviderPool` 自己的 `consecutiveErrors`（阈值 5）处理，不进 Guard 指标。
+
+**改法**：
+- 新增 `CheckpointMetrics.consecutiveIdenticalFailures`：连续「同一错误」次数，指纹 = 工具名 + 参数 + 错误内容（复用 `hashToolCall` / `hashToolOutcome`，错误对象同样剥离 `durationMs` 一类易变字段，否则同一条报错每次都判为不同）。
+- 规则 2 主判据改为 `consecutiveIdenticalFailures >= 3` → high/`error_loop`（「同一错误连续 N 次，重试没有换方法」），`>= 2` → medium。语义：**同参同错重复 = 卡住**；连续失败但错误不同 = 探索。
+- 保留兜底 `error_streak`：`consecutiveErrors >= 8`（`ERROR_STREAK_SAFETY`）→ high。连续 8 次工具失败且一次未成功，更像工具/环境整体不可用，而非普通调试；3~5 次连续失败远不触发。
+- 字段缺失时告警一次，仅走兜底，不退回旧判据（宁可漏报不误杀）。
+- LLM 审查 prompt 增加「连续同一错误」一行，让审查者看到诊断信号而非只有失败次数。
+
+**测试**：`tests/run-guard.test.ts` 原「应该检测错误循环」改为「同一错误反复重试」，另补 5 例：3 次/5 次不同错误不得判 error loop、8 次不同错误兜底必须拦、字段缺失不退回旧判据。`tests/run-guard-escalation.e2e.test.ts` 用真实 collector 补 4 例指纹行为：同参同错累加、同参异错不累加、易变字段不影响指纹、成功即清零。**红绿对照**：还原旧判据后 4 条防误杀用例全部失败，而「真 error loop」用例仍绿——证明新判据既止住误杀，也保留了检出能力。
+
+**验证**：`tsc` core/engine/gateway 干净；`tests` 类型门禁 0 新增（148 条存量基线不变）；eslint 干净；全量 `vitest` 3045 passed（3 failed 仍为已知环境限制：沙箱内 `ps` 不可用 ×2、Windows 临时路径用例 ×1）。
+
+**与 v0.86.32 / v0.86.33 的关系**：三条误杀规则同源——判据用了**弱信号**（同名、次数、比例）代替**行为特征**（是否无进展）。现三条分别改为：同参同结果（规则 1）、同参同错误（规则 2）、高失败率且无推进（规则 3）。
+
 ## v0.86.33
 
 ### fix(run-guard): 失败率规则误杀 —— 「高失败率」不等于「thrash」

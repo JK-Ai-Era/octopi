@@ -373,6 +373,8 @@ export interface RunGuardMetricsView {
   nominalTotalTokens: number;
   elapsedMs: number;
   consecutiveErrors: number;
+  /** 连续同一错误（名+参数+错误内容一致）——「卡住」的强信号 */
+  consecutiveIdenticalFailures?: number;
   consecutiveSameTool: number;
   /** 连续相同调用（名+参数+结果一致）——无进展循环的强信号 */
   consecutiveIdenticalCalls?: number;
