@@ -75,10 +75,10 @@ describe('DefaultRunGuard', () => {
   });
 
   describe('Layer 1: 规则检测', () => {
-    it('应该检测重复工具循环（高严重度）', async () => {
+    it('应该检测无进展重复调用（同名 + 同参 + 同结果，高严重度）', async () => {
       const runGuard = new DefaultRunGuard({ enableLLMReview: false });
       const ctx = createContext({
-        metrics: createMetrics({ consecutiveSameTool: 5 }),
+        metrics: createMetrics({ consecutiveSameTool: 5, consecutiveIdenticalCalls: 5 }),
       });
 
       const verdict = await runGuard.checkpoint(ctx);
@@ -89,16 +89,16 @@ describe('DefaultRunGuard', () => {
       expect(verdict.recoveryActions![0].type).toBe('inject_hint');
     });
 
-    it('应该检测重复工具循环（中严重度）', async () => {
+    it('仅同名不同参不得判为循环（回归：编码 turn 连续调用 shell/file_edit）', async () => {
       const runGuard = new DefaultRunGuard({ enableLLMReview: false });
       const ctx = createContext({
-        metrics: createMetrics({ consecutiveSameTool: 3 }),
+        metrics: createMetrics({ consecutiveSameTool: 12, consecutiveIdenticalCalls: 1 }),
       });
 
       const verdict = await runGuard.checkpoint(ctx);
 
-      expect(verdict.action).toBe('recover');
-      expect(verdict.reason).toContain('连续 3 次');
+      // 连续 12 次同名工具但参数各异 = 正常推进，不得进入 recover/stop
+      expect(verdict.action).toBe('continue');
     });
 
     it('应该检测错误循环', async () => {
@@ -260,7 +260,7 @@ describe('DefaultRunGuard', () => {
       const runGuard = new DefaultRunGuard({ enableLLMReview: false, minCheckpointInterval: 5 });
       const ctx = createContext({
         iteration: 30,
-        metrics: createMetrics({ consecutiveSameTool: 5 }),
+        metrics: createMetrics({ consecutiveIdenticalCalls: 5 }),
       });
 
       const verdict = await runGuard.checkpoint(ctx);
@@ -282,7 +282,7 @@ describe('DefaultRunGuard', () => {
         timestamp: Date.now(),
       }));
       const ctx = createContext({
-        metrics: createMetrics({ consecutiveSameTool: 5 }),
+        metrics: createMetrics({ consecutiveIdenticalCalls: 5 }),
         recoveryHistory,
       });
 
@@ -303,7 +303,7 @@ describe('DefaultRunGuard', () => {
         timestamp: Date.now(),
       }));
       const ctx = createContext({
-        metrics: createMetrics({ consecutiveSameTool: 5 }),
+        metrics: createMetrics({ consecutiveIdenticalCalls: 5 }),
         recoveryHistory,
       });
 

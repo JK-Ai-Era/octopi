@@ -35,8 +35,20 @@ export interface TurnSummary {
 export interface CheckpointMetrics {
   /** 连续错误数（模型错误 + 工具错误） */
   consecutiveErrors: number;
-  /** 连续调用同一工具的次数 */
+  /**
+   * 连续调用同一工具的次数（**仅工具名**，不含参数）。
+   *
+   * 弱信号：编码类 run 天然会连续调用 shell / file_edit 多次，
+   * 只允许作为低严重度观测，不得单独作为「循环」判据。
+   */
   consecutiveSameTool: number;
+  /**
+   * 连续「完全相同调用」次数：工具名 + 参数 + 结果三者指纹一致。
+   *
+   * 这才是无进展循环的判据（同调用同结果 = 没推进）。
+   * 可选：旧实现/外部 RunGuard 实现可不提供。
+   */
+  consecutiveIdenticalCalls?: number;
   /** 最近 5 轮 token 增长率（0-1，如 0.5 = 增长 50%） */
   tokenGrowthRate: number;
   /** 最近 10 次工具调用的失败率（0-1） */

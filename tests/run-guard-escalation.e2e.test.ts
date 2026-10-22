@@ -12,6 +12,7 @@ function metricsStuck() {
   return {
     consecutiveErrors: 0,
     consecutiveSameTool: 6,
+    consecutiveIdenticalCalls: 6,
     tokenGrowthRate: 0,
     toolFailureRate: 0.2,
     uniqueToolsUsed: 1,

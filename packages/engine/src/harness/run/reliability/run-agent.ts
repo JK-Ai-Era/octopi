@@ -682,6 +682,11 @@ export async function* runAgentWithReliability(
             // 超过阈值：标记停止 + 立即检查点
             (state as any)._noopLoopStop = true;
             state.forceCheckpoint = true;
+            // 停止必须可见：只置标志不发声时，用户看到的就是「跑着跑着没了」
+            state.runGuardStop = {
+              reason: `连续 ${state.consecutiveNoops} 次工具调用无任何返回（no-op 循环）`,
+              userMessage: `连续 ${state.consecutiveNoops} 次工具调用没有任何结果，判定为无效循环，本轮已停止。请换个做法或说明当前阻塞点。`,
+            };
             state.collector.noteExternalSignal({
               source: 'noop',
               level: 'critical',
@@ -695,7 +700,21 @@ export async function* runAgentWithReliability(
       }
 
       // 4. 工具循环检测
-      if (hasToolCalls && relConfig.loopDetection.enabled !== false) {
+      const loopDetectionEnabled = relConfig.loopDetection.enabled !== false;
+
+      // 4a. 指标记录与 loopDetection 开关解耦：RunGuard 的 repeated/identical 判据
+      //     不能因为关掉 loopDetection 就永远为 0（否则 Guard 静默失效）。
+      for (const result of ctx.toolResults) {
+        const tc = ctx.message.toolCalls?.find(t => t.id === result.toolCallId);
+        state.collector.recordToolResult(result.name, !result.isError, !!result.noop, {
+          // 与旁路 loop 检测器同口径：arguments 缺失时归一为 {}
+          args: tc?.arguments ?? {},
+          result: result.isError ? undefined : result.content,
+          error: result.isError ? result.content : undefined,
+        });
+      }
+
+      if (hasToolCalls && loopDetectionEnabled) {
         // 记录工具调用
         for (const result of ctx.toolResults) {
           // 从 message.toolCalls 中找到对应的 toolCall
@@ -734,6 +753,11 @@ export async function* runAgentWithReliability(
               if (state.loopCriticalTriggered) {
                 // 二次 critical：通过 shouldStopAfterTurn 停止
                 (state as any)._loopCriticalTwice = true;
+                // 停止必须可见：与 RunGuard 走同一事件通道
+                state.runGuardStop = {
+                  reason: `连续两轮检测到高危循环信号：${loopResult.message}`,
+                  userMessage: '检测到重复的高危循环迹象，本轮已停止。请换个做法或说明当前阻塞点。',
+                };
               } else {
                 state.loopCriticalTriggered = true;
                 ctx.context.messages.push({
@@ -752,11 +776,6 @@ export async function* runAgentWithReliability(
               });
             }
           }
-        }
-
-        // 更新追踪指标
-        for (const result of ctx.toolResults) {
-          state.collector.recordToolResult(result.name, !result.isError, !!result.noop);
         }
       }
 

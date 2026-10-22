@@ -87,6 +87,9 @@ interface RuleCheckResult {
  *
  * 两层智能监督：规则检测 + LLM 审查
  */
+/** 指标生产者未提供 consecutiveIdenticalCalls 时只告警一次（防日志刷屏） */
+let warnedMissingIdenticalMetric = false;
+
 export class DefaultRunGuard implements RunGuard {
   private config: RunGuardConfig & {
     enabled: boolean;
@@ -265,23 +268,31 @@ export class DefaultRunGuard implements RunGuard {
       });
     }
 
-    // 规则 1: 重复工具循环
-    if (m.consecutiveSameTool >= 5) {
+    // 规则 1: 无进展重复调用
+    //
+    // 判据只能是「工具名 + 参数 + 结果」三者一致（consecutiveIdenticalCalls）：
+    // 编码类 run 会连续多次调用 shell / file_edit，但每次参数不同（改一行→跑一次
+    // typecheck→再改），这属于正常推进。只看工具名的旧判据会把它误判为死循环，
+    // 连续 3 次 recover 后升级为 stop，把正常任务静默掐断。
+    //
+    // 纯「同名不同参」不再产生规则结果：裁决只消费 high/medium（见 checkpoint），
+    // 造一条 low 规则是死代码。需要观测时看 run_guard_metrics 的 consecutiveSameTool。
+    const identicalCalls = m.consecutiveIdenticalCalls;
+    if (identicalCalls === undefined && !warnedMissingIdenticalMetric) {
+      // 指标生产者未升级时判据会静默空转；宁可漏报也不能退回「同名即循环」的误杀。
+      warnedMissingIdenticalMetric = true;
+      console.warn(
+        '[RunGuard] CheckpointMetrics.consecutiveIdenticalCalls 缺失，repeated_identical_call 判据暂不生效',
+      );
+    }
+    if ((identicalCalls ?? 0) >= 5) {
       results.push({
         triggered: true,
         severity: 'high',
-        rule: 'repeated_tool',
-        description: `连续 ${m.consecutiveSameTool} 次调用同一工具，疑似陷入循环`,
+        rule: 'repeated_identical_call',
+        description: `连续 ${identicalCalls} 次相同调用（同一工具、同一参数、同一结果），无进展`,
         failureKind: 'loop',
-        suggestedRecovery: [{ type: 'inject_hint', hint: '你似乎在同一工具上反复调用。请分析当前状态，尝试不同的方法或向用户报告遇到的问题。' }],
-      });
-    } else if (m.consecutiveSameTool >= 3) {
-      results.push({
-        triggered: true,
-        severity: 'medium',
-        rule: 'repeated_tool',
-        description: `连续 ${m.consecutiveSameTool} 次调用同一工具`,
-        failureKind: 'loop',
+        suggestedRecovery: [{ type: 'inject_hint', hint: '你的调用参数与结果都没有变化，说明这个方法无法推进。请改变做法，或向用户报告当前阻塞点。' }],
       });
     }
 

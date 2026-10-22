@@ -78,6 +78,8 @@ export type RunGuardMetricsEvent = {
     elapsedMs: number;
     consecutiveErrors: number;
     consecutiveSameTool: number;
+    /** 连续相同调用（名+参数+结果一致）——无进展循环的强信号 */
+    consecutiveIdenticalCalls?: number;
     noopStreak: number;
     hasProgress: boolean;
     uniqueTools: string[];

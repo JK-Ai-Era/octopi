@@ -1,3 +1,30 @@
+## v0.86.32
+
+### fix(run-guard): 长 turn 被静默掐断 —— 同名工具误判为循环 + 停止不可见 + 结束原因无日志
+
+**现象**（`default-web-1792669399277`，2026-10-22）：t2 跑了 99 分钟 / 105 次 LLM 调用 / 155 次工具调用后，工具还在正常返回，突然只剩一条 `<turn_end id="t2"/>` 收口，任务中止；用户确认未做任何输入（无 abort、无错误、预算闸门都没到——`maxWallClockMs=10h`、迭代 105/1000、工具 155/5000、单次调用最长 83s 远低于 watchdog 300s/900s）。
+
+**根因链**：
+1. `DefaultRunGuard` 规则 1 用 `consecutiveSameTool >= 5` 判「循环」，而该指标**只数工具名**（`run-metrics-collector.ts`）。编码类 run 天然连续调用 `shell`/`file_edit`（改一行 → 跑 typecheck → 再改），参数每次不同却被判 high/loop → recover；连续 3 次后按升级阶梯 `stop`。这是把正常工作节奏误判为死循环。
+2. 停止路径只 `yield { type: 'run_guard_stopped', data: { reason, userMessage } }`，**从不落消息**；`run_guard.stopped` 在 webui 也无消费者。引擎拥有静默终止用户任务的权力，却没有任何可见凭证——比误判本身更严重。
+3. run 收口零日志（无 `run_end`、observer trace 未启用），事后只能靠反推落盘消息猜测终止原因。
+
+**改法**：
+- **判据**：新增 `CheckpointMetrics.consecutiveIdenticalCalls`（工具名 + 参数 + 结果三者指纹一致，复用 `hashToolCall`/`hashToolOutcome`；指纹前剥掉 `durationMs`/`isolation`/`rawStdoutLength` 等每次必然不同的元数据，否则 `shell` 结果永远不相等、判据对最主要的循环工具失效）。规则 1 改为 `identicalCalls >= 5` → high/`repeated_identical_call`。纯「同名不同参」不再产生规则结果——裁决只消费 high/medium，造一条 low 规则是死代码；需要观测时看 `run_guard_metrics.consecutiveSameTool`。指标生产者未提供新字段时打一次 `console.warn`，不静默空转。
+- **指标与开关解耦**：`recordToolResult` 移出 `loopDetection.enabled` 分支——关掉 loopDetection 后 RunGuard 判据曾永远为 0（静默失效）。参数归一为 `?? {}`，与旁路 loop 检测器同口径。
+- **可见性（终态才落消息）**：`adaptLoopEvent` 捕获 `stopMessage` / `stopDetail` / `loopEndReason`；runner 收口时若 `agent_end.reason === 'should_stop'`（唯一权威的「提前停止」信号）就落一条 `source='runStopped'` 消息 + `session.metadata.lastStop`。非终态信号不宣称已停止：`security_blocked` 单次拦截后 run 会继续跑完（`terminate: false`），`security_stopped` 文案只描述拦截事实；终态事件（RunGuard / Budget）用**赋值**覆盖而非 `??=`，避免"监督器判定停止：安全策略拦截…"这种串味文案。
+- **补上两条静默停止路径**：noop 超限（`_noopLoopStop`）与二次 loop critical（`_loopCriticalTwice`）此前只置标志、不发事件，live UI 完全看不到；现在都写 `state.runGuardStop`，与 RunGuard 走同一 `run_guard_stopped` 事件通道。
+- **上下文边界**：`runStopped` 登记为引擎载体（`isEngineCarrierSource`），且 `buildLlmMessages` 显式跳过——它进聊天回放与审计，不回灌 LLM（否则每次停止都在上下文里留痕）。
+- **UI**：`ConversationAdapter` 历史回放把 `runStopped` 渲染为 `warning` 系统提示条（不冒充用户气泡，`turnEnd` 仍隐藏）；live 路径新增 `run_guard.stopped` 提示条，`budget.exceeded` 优先使用引擎给出的 `userMessage`。
+- **观测**：`finally` 输出 `[timing] stage=run_end dur=… reason=… loopEnd=… stopReason=…`；`adaptState` 提升到 `try` 外层供其读取。
+- **`lastStop` 真删**：正常完成时先移除内存字段，持久化后再走 `updateMetadata` 删除——`save` 是 metadata 浅合并，只删内存对象删不掉磁盘键（照 `abortedTurn` 的既有写法）。
+
+**测试**：新增 `tests/harness/run-stop-visibility.test.ts`（15 例）：同名不同参不累加、同参同结果累加、同参不同结果视为有进展、连续 12 次同名不得 recover/stop、相同调用 5 次必 recover、**loopDetection 关闭时指标仍到 Guard（真实走 `runAgentWithReliability`，已做红绿对照：把记录移回开关分支内该用例失败）**、四类停止原因捕获、`should_stop` 才落消息而 `security_blocked` 后 `completed` 不误报、旧形状 `budget_exceeded` 带可读原因、`runStopped` 回放为 warning、`turnEnd` 仍隐藏、载体判定。既有 `run-guard.test.ts` / `run-guard-escalation.e2e.test.ts` 改到新判据，并新增「仅同名不得判为循环」回归。
+
+**已知未覆盖**：runner 的 `runStopped` 落盘门禁 / `lastStop` 写删只有类型与逻辑校验，没有端到端用例（需要完整 SessionAwareRunner 夹具）；`runStopped` 会进入标题生成 prompt 与 session 搜索索引（`title.ts` 只过滤 `metadata.kind`），影响很小，未在本期处理。
+
+**验证**：`tsc`（core/engine/gateway）干净；相关测试 101 passed；全量 `vitest` 运行有 3 个失败，均为已知环境限制（沙箱内 `ps` 不可用 ×2、Windows 临时路径用例 ×1），与本次改动无关；`tests/` 类型门禁无新增错误（剩余 5 条为本地 worktree 双份 `dist` 导致的 `ClientToolRegistry` 同名类型不兼容，主树无此问题）。
+
 ## v0.86.31
 
 ### test(debt): tests 类型债清理第一批（T1）——基线 486 → 148，揪出 1 个死测试 + 3 处契约脱钩

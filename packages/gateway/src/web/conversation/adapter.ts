@@ -367,6 +367,26 @@ export class ConversationAdapter {
         break;
       }
 
+      // ── 引擎主动终止：必须当场可见 ──
+      // 只广播事件不落提示条时，用户看到的就是「跑着跑着突然没了」。
+      case 'run_guard.stopped': {
+        const d = event.data as { reason?: string; userMessage?: string } | undefined;
+        const notice: SystemConversationItem = {
+          id: ConversationAdapter.makeId('sys'),
+          role: 'system',
+          createdAt: Date.now(),
+          sessionId,
+          source: 'runtime',
+          kind: 'warning',
+          message:
+            d?.userMessage ??
+            `引擎监督器判定停止：${d?.reason ?? '未知原因'}。可继续对话，让 agent 从当前状态接着做。`,
+        };
+        items = [...items, notice];
+        changed = true;
+        break;
+      }
+
       // ── Engine end / interrupted / aborted ──
       case 'engine.end':
       case 'interrupted':
@@ -536,7 +556,10 @@ export class ConversationAdapter {
 
       // ── Budget exceeded ──
       case 'budget.exceeded': {
-        const status = String(event.data?.status ?? 'exceeded');
+        const d = event.data as
+          | { status?: string; userMessage?: string; metric?: string }
+          | undefined;
+        const status = String(d?.status ?? 'exceeded');
         const notice: SystemConversationItem = {
           id: ConversationAdapter.makeId('sys'),
           role: 'system',
@@ -544,7 +567,10 @@ export class ConversationAdapter {
           sessionId,
           source: 'runtime',
           kind: 'warning',
-          message: `Budget ${status}`,
+          // 引擎给出了用户可读原因就照用；否则退回 Budget <status>
+          message:
+            d?.userMessage ??
+            `Budget ${status}${d?.metric ? `（${d.metric}）` : ''}。可继续对话，让 agent 从当前状态接着做。`,
         };
         items = [...items, notice];
         changed = true;
@@ -652,8 +678,9 @@ export class ConversationAdapter {
         case 'user': {
           const source = (msg.metadata as { source?: string } | undefined)?.source;
           // D8 拍板（b）：机器生成的压缩摘要 / 引擎提示不是用户发言——
-          // 渲染为系统提示条（保留可见性），不再冒充用户气泡
-          if (source === 'contextSummary' || source === 'engineHint') {
+          // 渲染为系统提示条（保留可见性），不再冒充用户气泡。
+          // runStopped：引擎主动终止 turn 的唯一可见凭证，必须渲染（warning 态）。
+          if (source === 'contextSummary' || source === 'engineHint' || source === 'runStopped') {
             const text = unwrapTurnStartUserText(msg.content);
             const item: SystemConversationItem = {
               id: ConversationAdapter.makeId('sys'),
@@ -661,8 +688,13 @@ export class ConversationAdapter {
               createdAt: ts,
               sessionId,
               source: 'history',
-              kind: 'info',
-              message: source === 'contextSummary' ? `[上下文摘要] ${text}` : `[引擎提示] ${text}`,
+              kind: source === 'runStopped' ? 'warning' : 'info',
+              message:
+                source === 'contextSummary'
+                  ? `[上下文摘要] ${text}`
+                  : source === 'runStopped'
+                    ? text
+                    : `[引擎提示] ${text}`,
             };
             items.push(item);
             break;

@@ -211,7 +211,22 @@ export interface RunConfig {
 export function adaptLoopEvent(
   event: HarnessLoopEvent,
   meta: { agentId: string; sessionId: string },
-  state: { assistantContent: string; lastUserContent?: string; stopReason?: string },
+  state: {
+    assistantContent: string;
+    lastUserContent?: string;
+    stopReason?: string;
+    /** 引擎为何终止（人类可读）；收口落一条 runStopped 消息，禁止静默停止 */
+    stopMessage?: string;
+    /** 判定细节（规则名/指标），供审计与日志 */
+    stopDetail?: string;
+    /**
+     * loop 的 `agent_end.reason`（completed / should_stop / aborted / error）。
+     *
+     * 是否真的「提前停止」只能看这里：`security_blocked` 单次拦截后 run 会继续，
+     * 只看它会把正常完成的 run 误报成停止。
+     */
+    loopEndReason?: string;
+  },
 ): import('@octopi-agent/core/primitives/event-bus.js').AgentEvent | null {
   switch (event.type) {
     case 'run_guard_metrics':
@@ -224,7 +239,12 @@ export function adaptLoopEvent(
       };
     case 'security_blocked':
       // 跟踪停止原因：security
+      //
+      // 注意：单次拦截**不是终态**——reject/confirm 路径 `terminate: false`，
+      // run 会继续跑完。所以这里只描述拦截事实，不宣称「已停止」；
+      // 是否真的停了由 loopEndReason 决定。
       state.stopReason = 'security_stopped';
+      state.stopMessage ??= '安全策略拦截了工具调用。';
       return {
         type: 'security.blocked',
         timestamp: event.timestamp,
@@ -235,6 +255,8 @@ export function adaptLoopEvent(
     case 'agent_start':
       return { type: 'engine.start', timestamp: event.timestamp, agentId: meta.agentId, sessionId: meta.sessionId, data: {} };
     case 'agent_end':
+      // 记录 loop 终止原因：是否「引擎主动提前停止」的唯一权威来源
+      state.loopEndReason = event.reason;
       // reason='error' 时映射为 engine.error（向后兼容旧引擎行为）
       if (event.reason === 'error') {
         return { type: 'engine.error', timestamp: event.timestamp, agentId: meta.agentId, sessionId: meta.sessionId, data: { error: event.error instanceof Error ? event.error.message : String(event.error ?? 'Unknown error') } };
@@ -289,7 +311,21 @@ export function adaptLoopEvent(
     case 'stream.fallback_failed':
       // 必须带 session 元数据：gatewayBus.onAll 以 event.sessionId 为 WS 广播前提
       return { type: event.type, timestamp: event.timestamp, agentId: meta.agentId, sessionId: meta.sessionId, data: event.data };
-    case 'budget_exceeded':
+    case 'budget_exceeded': {
+      // 预算 hard 终态（wall_clock / iteration / tool_calls）——也是「引擎主动停止」，
+      // 必须带来可读原因，否则收口只能落到「引擎判定停止」的空泛兜底。
+      //
+      // 终态事件用赋值（不用 ??=）：同一 turn 里若先有非终态信号（如 security_blocked），
+      // 最终文案必须归因到真正的停止闸门。
+      const budgetReason = event.data?.reason ?? 'wall_clock';
+      state.stopReason = 'policy_stopped';
+      state.stopDetail = budgetReason;
+      state.stopMessage =
+        budgetReason === 'wall_clock'
+          ? '本轮运行时间达到预算上限，已停止。'
+          : budgetReason === 'iteration'
+            ? '本轮迭代次数达到预算上限，已停止。'
+            : '本轮工具调用次数达到预算上限，已停止。';
       // 对齐 EventBus BUDGET_EXCEEDED；用户可见停止原因
       return {
         type: 'budget.exceeded',
@@ -298,6 +334,7 @@ export function adaptLoopEvent(
         sessionId: meta.sessionId,
         data: { ...event.data },
       };
+    }
     // P2 BudgetControlEvent 新形状
     case 'budget.wrap_up':
       return {
@@ -315,8 +352,10 @@ export function adaptLoopEvent(
         },
       };
     case 'budget.exceeded':
-      // 跟踪停止原因：context / policy
+      // 跟踪停止原因：context / policy（终态；覆盖此前非终态信号）
       state.stopReason = event.metric === 'context' ? 'context_stopped' : 'policy_stopped';
+      state.stopMessage = event.userMessage;
+      state.stopDetail = `${event.metric}${event.unit ? `/${event.unit}` : ''}`;
       return {
         type: 'budget.exceeded',
         timestamp: event.timestamp,
@@ -329,8 +368,10 @@ export function adaptLoopEvent(
         },
       };
     case 'run_guard_stopped':
-      // 跟踪停止原因：behavior
+      // 跟踪停止原因：behavior（终态；覆盖此前非终态信号）
       state.stopReason = 'behavior_stopped';
+      state.stopMessage = event.data.userMessage;
+      state.stopDetail = event.data.reason;
       return {
         type: 'run_guard.stopped',
         timestamp: event.timestamp,
@@ -694,8 +735,24 @@ export class SessionAwareRunner {
     let observerRunId = '';
     let observerFinalMessages: Message[] | undefined;
     let observerEndReason: string | undefined;
+    /**
+     * 桥接状态（assistant 文本 / 停止原因）。
+     *
+     * 声明在 try 之外：finally 的 run_end 观测要读 stopReason，
+     * 否则「run 为什么结束」在日志里不可见。
+     */
+    const adaptState: {
+      assistantContent: string;
+      lastUserContent: string;
+      stopReason?: string;
+      stopMessage?: string;
+      stopDetail?: string;
+      loopEndReason?: string;
+    } = { assistantContent: '', lastUserContent: '' };
     let observerErrorMsg: string | undefined;
     let hasTurnEnd = false;
+    /** 正常完成时需在持久化后真删 metadata.lastStop（save 浅合并删不掉） */
+    let clearLastStop = false;
     /** 本 user turn 内第 N 次 LLM 调用（0-based；cache 观测） */
     let llmCallIndexInUserTurn = 0;
 
@@ -1408,7 +1465,6 @@ export class SessionAwareRunner {
       let lastContextTokens: number | undefined = undefined;
       let lastContextWindow: number | undefined = undefined;
       const meta = { agentId: effectiveRunConfig.agentId ?? 'default', sessionId };
-      const adaptState: { assistantContent: string; lastUserContent: string; stopReason?: string } = { assistantContent: '', lastUserContent: '' };
       /** 本轮起始消息下标（afterTurn 只传增量） */
       let turnStartIndex = runContext.messages.length;
       /** 用户中止（编辑重发标记用） */
@@ -1538,6 +1594,62 @@ export class SessionAwareRunner {
       if (typeof session.contextDetachIndex === 'number') {
         session.contextDetachIndex = keptPrefix.length;
       }
+      // 引擎主动终止（RunGuard / Budget / Security）必须留下可见凭证：
+      // 只有事件、没有消息时，UI 看到的就是「跑着跑着突然结束」。
+      //
+      // 触发条件 = loop 的 agent_end.reason === 'should_stop'（唯一权威的「提前停止」信号）。
+      // 不能只看 stopReason：`security_blocked` 单次拦截后 run 会继续跑完，
+      // 那样会把正常完成的 run 误报成「已停止」。
+      //
+      // 该消息不进 LLM 上下文（buildLlmMessages 跳过 source=runStopped），
+      // 但进聊天回放（系统提示条）与 session 审计。
+      // 位置在 turn_end 之前：它属于被终止的这个 turn。
+      if (adaptState.loopEndReason === 'should_stop') {
+        const label =
+          adaptState.stopReason === 'behavior_stopped'
+            ? '引擎监督器判定停止'
+            : adaptState.stopReason === 'policy_stopped'
+              ? '资源策略停止'
+              : adaptState.stopReason === 'context_stopped'
+                ? '上下文压力停止'
+                : adaptState.stopReason === 'security_stopped'
+                  ? '安全策略停止'
+                  : '引擎判定停止';
+        const detail = adaptState.stopDetail ? `（${adaptState.stopDetail}）` : '';
+        const body =
+          adaptState.stopMessage ??
+          '本轮由引擎主动终止，未收到模型的收尾回复。可继续对话，让 agent 从当前状态接着做。';
+        const reason = adaptState.stopReason ?? 'engine_stopped';
+        session.messages.push({
+          role: 'user',
+          content: `${label}${detail}：${body}`,
+          timestamp: Date.now(),
+          metadata: {
+            source: 'runStopped',
+            turnId: currentTurnId,
+            stopReason: reason,
+            ...(adaptState.stopDetail ? { stopDetail: adaptState.stopDetail } : {}),
+          },
+        });
+        session.metadata = {
+          ...session.metadata,
+          lastStop: {
+            reason,
+            detail: adaptState.stopDetail,
+            message: body,
+            turnId: currentTurnId,
+            at: Date.now(),
+          },
+        };
+      } else if (session.metadata?.lastStop) {
+        // 正常完成的 run 必须清掉上次的停止标。
+        // 只从内存对象删不够：save 是 metadata 浅合并（{...prev, ...data}），
+        // 磁盘上的 lastStop 会被合并回来——持久化后再 updateMetadata 真删。
+        const { lastStop: _dropLastStop, ...restMeta } = session.metadata;
+        session.metadata = restMeta;
+        clearLastStop = true;
+      }
+
       // turn 闭标（write-once）
       this.appendTurnEnd(session, currentTurnId);
 
@@ -1635,6 +1747,11 @@ export class SessionAwareRunner {
           delete meta.abortedTurn;
         });
       }
+      if (clearLastStop && this.store.updateMetadata) {
+        await this.store.updateMetadata(sessionId, (meta) => {
+          delete meta.lastStop;
+        });
+      }
 
       // 通知子系统：本轮处理完成（保持 active，但刷新 lastInteractionAt）
       this._backfillTrigger?.noteActivity(sessionId, _agentId, session.meta.lastInteractionAt);
@@ -1693,6 +1810,15 @@ export class SessionAwareRunner {
       }
       throw err;
     } finally {
+      // [timing probe] run 收口必须留痕：本次事故里「run 结束原因」零日志，
+      // 只能靠反推落盘消息定位。reason = 观测口径，stopReason = 停止闸门。
+      console.log(
+        `[timing] stage=run_end ms=${Date.now()} session=${sessionId}` +
+          ` dur=${Date.now() - timingRunEnter}` +
+          ` reason=${observerEndReason ?? (signal?.aborted ? 'aborted' : 'unknown')}` +
+          ` loopEnd=${adaptState.loopEndReason ?? 'none'}` +
+          (adaptState.stopReason ? ` stopReason=${adaptState.stopReason}` : ''),
+      );
       // 清理 task service 的活 session 缓存（避免长时间运行进程内存泄漏）
       this.config.sessionTaskService?.detachSession(_agentId, sessionId);
 

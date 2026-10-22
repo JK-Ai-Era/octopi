@@ -11,6 +11,35 @@ import type {
   TurnSummary,
   RecoveryAttemptRecord,
 } from '@octopi-agent/core/interfaces/run-guard.js';
+import { hashToolCall, hashToolOutcome } from '../concurrency/tool-loop-detection-core.js';
+
+/**
+ * 指纹前剥掉「每次必然不同」的元数据字段
+ *
+ * `shell` 的结果对象带 `durationMs`、`rawStdoutLength`、`isolation`（含随机沙箱 profile
+ * 路径与临时目录名）——它们让同一条命令的两次调用结果永远不相等，指纹判据会整体失效。
+ * 只用于「无进展重复」判据，不改动工具返回值本身，也不影响既有 loop 检测器的语义。
+ */
+const VOLATILE_OUTCOME_KEYS = new Set([
+  'durationMs',
+  'elapsedMs',
+  'rawStdoutLength',
+  'rawLength',
+  'isolation',
+  'terminated',
+  'terminateReason',
+]);
+
+function stripVolatileOutcome(value: unknown, depth = 0): unknown {
+  if (depth > 6 || value === null || typeof value !== 'object') return value;
+  if (Array.isArray(value)) return value.map((v) => stripVolatileOutcome(v, depth + 1));
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    if (VOLATILE_OUTCOME_KEYS.has(k)) continue;
+    out[k] = stripVolatileOutcome(v, depth + 1);
+  }
+  return out;
+}
 
 /** 恢复尝试记录 */
 export type RecoveryAttempt = RecoveryAttemptRecord;
@@ -34,6 +63,9 @@ export class RunMetricsCollector {
   private nominalTotalTokens = 0;
   private lastToolName = '';
   private consecutiveSameTool = 0;
+  /** 上一次调用的「名+参数+结果」指纹；用于识别真正无进展的重复 */
+  private lastCallFingerprint = '';
+  private consecutiveIdenticalCalls = 0;
   private consecutiveErrors = 0;
   private uniqueTools = new Set<string>();
   private recentToolCalls: Array<{ name: string; success: boolean }> = [];
@@ -67,14 +99,48 @@ export class RunMetricsCollector {
     if (last) last.tokenDelta += delta;
   }
 
-  /** 记录工具结果 */
-  recordToolResult(name: string, success: boolean, isNoop = false): void {
+  /**
+   * 记录工具结果
+   *
+   * 两套计数刻意分开：
+   * - `consecutiveSameTool`：只看工具名（弱信号，仅观测）
+   * - `consecutiveIdenticalCalls`：名 + 参数 + 结果三者一致（无进展的强信号）
+   *
+   * 编码类 run 会连续调用同一工具但参数各不相同（改一行→跑一次 typecheck），
+   * 只看工具名会把它误判成死循环。
+   *
+   * @param name - 工具名
+   * @param success - 是否成功
+   * @param isNoop - 是否 no-op（无实际改动）
+   * @param trace - 本次调用的参数与结果（用于指纹；缺省则不计入相同调用）
+   */
+  recordToolResult(
+    name: string,
+    success: boolean,
+    isNoop = false,
+    trace?: { args?: unknown; result?: unknown; error?: unknown },
+  ): void {
     this.totalToolCalls++;
     if (name === this.lastToolName) {
       this.consecutiveSameTool++;
     } else {
       this.consecutiveSameTool = 1;
       this.lastToolName = name;
+    }
+    if (trace) {
+      const fingerprint = [
+        hashToolCall(name, trace.args),
+        hashToolOutcome(name, trace.args, stripVolatileOutcome(trace.result), trace.error) ?? '',
+      ].join('|');
+      if (fingerprint === this.lastCallFingerprint) {
+        this.consecutiveIdenticalCalls++;
+      } else {
+        this.consecutiveIdenticalCalls = 1;
+        this.lastCallFingerprint = fingerprint;
+      }
+    } else {
+      this.consecutiveIdenticalCalls = 0;
+      this.lastCallFingerprint = '';
     }
     this.uniqueTools.add(name);
     this.recentToolCalls.push({ name, success });
@@ -169,6 +235,7 @@ export class RunMetricsCollector {
     const metrics: CheckpointMetrics = {
       consecutiveErrors: this.consecutiveErrors,
       consecutiveSameTool: this.consecutiveSameTool,
+      consecutiveIdenticalCalls: this.consecutiveIdenticalCalls,
       tokenGrowthRate,
       toolFailureRate,
       uniqueToolsUsed: this.uniqueTools.size,
@@ -209,6 +276,7 @@ export class RunMetricsCollector {
     elapsedMs: number;
     consecutiveErrors: number;
     consecutiveSameTool: number;
+    consecutiveIdenticalCalls: number;
     noopStreak: number;
     hasProgress: boolean;
     uniqueTools: string[];
@@ -224,6 +292,7 @@ export class RunMetricsCollector {
       elapsedMs: Date.now() - this.startTime,
       consecutiveErrors: this.consecutiveErrors,
       consecutiveSameTool: this.consecutiveSameTool,
+      consecutiveIdenticalCalls: this.consecutiveIdenticalCalls,
       noopStreak: this.noopStreak,
       hasProgress: this.hasProgress(),
       uniqueTools: [...this.uniqueTools],

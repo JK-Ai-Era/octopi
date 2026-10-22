@@ -1273,9 +1273,14 @@ export class DefaultContextEngine implements ContextEngine {
 
     // 全回放（append-only）：turn_context / turn_end / 历史槽位一律保留，
     // 否则历史中部删改会打穿 provider 前缀缓存。
+    // 唯一例外：runStopped 是引擎停止的审计/展示凭据，不是对话内容——
+    // 它只进聊天回放（系统提示条），不回灌 LLM（否则每次停止都在上下文里留痕）。
     for (let i = 0; i < messages.length; i++) {
       const msg = messages[i];
       if (msg.role === 'system' && msg.metadata?.source === 'systemPrompt') {
+        continue;
+      }
+      if (msg.metadata?.source === 'runStopped') {
         continue;
       }
       result.push(...this.convertMessage(msg, aging));

@@ -279,6 +279,13 @@ const ENGINE_CARRIER_SOURCES = new Set([
   'engineHint',
   /** turn 闭标（`<turn_end id/>`）——不是用户发言 */
   'turnEnd',
+  /**
+   * 引擎主动停止的收口说明（RunGuard / Budget 裁决）。
+   *
+   * 引擎有权终止 turn，就必须留下用户可见的原因；这条既不是用户发言，
+   * 也不进 LLM 上下文（见 DefaultContextEngine.buildLlmMessages）。
+   */
+  'runStopped',
 ]);
 
 /**
@@ -299,7 +306,9 @@ export function isEngineCarrierSource(source: unknown): boolean {
  * 语义（D8 拍板后）：
  * - 引擎载体插槽（knowledgeGrounding / sessionAttachment / runtimeSnapshot）与 turn 闭标：
  *   只进 LLM 上下文，不进聊天回放；
- * - `contextSummary` / `engineHint`：**不隐藏**——渲染为系统提示条（SystemConversationItem），不冒充用户气泡；
+ * - `contextSummary` / `engineHint` / `runStopped`：**不隐藏**——渲染为系统提示条
+ *   （SystemConversationItem），不冒充用户气泡。`runStopped` 是引擎主动终止 turn
+ *   的唯一可见凭证，隐藏它等于允许静默掐断任务；
  * - 托管 systemPrompt 与无 metadata 的历史人格整段注入（长度+关键词启发式）：隐藏。
  *
  * @param input - 消息的 role / metadata.source / 正文文本
