@@ -147,4 +147,20 @@ describe('ProcessSandbox honesty', () => {
     expect(bytes).toBeGreaterThan(0); // 诚实截断：有部分捕获 + 显式终止信号
     expect(bytes).toBeLessThanOrEqual(100); // 字节口径：绝不超过上限
   });
+
+  it('跨块多字节字符用 StringDecoder 解码：stdout 无 U+FFFD，usage.outputBytes 等于原始字节', async () => {
+    const sb = new ProcessSandbox({ profile: supervisedSpawnProfile() });
+    // 把一个 3 字节汉字「中」(E4 B8 AD) 拆成两次写：逐块 toString 会解出 2+3 个替换符
+    const script =
+      "const b = Buffer.from('中'); process.stdout.write(b.subarray(0, 2)); setTimeout(() => { process.stdout.write(b.subarray(2)); }, 50);";
+    const result = await sb.executeArgv([process.execPath, '-e', script], {
+      cwd: process.cwd(),
+      limits: { timeoutMs: 10_000, maxOutputBytes: 4096 },
+    });
+    expect(result.terminated).toBe(false);
+    expect(result.stdout).toBe('中');
+    expect(result.stdout).not.toContain('\uFFFD');
+    // usage 按原始字节计，而不是按（可能含替换符的）文本字节重算
+    expect(result.usage.outputBytes).toBe(3);
+  });
 });

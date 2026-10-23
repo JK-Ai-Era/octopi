@@ -1,3 +1,21 @@
+## v0.89.1
+
+### fix(execution-environment): sandbox 跨块解码改 StringDecoder — 修「CJK 输出被写成 U+FFFD」
+
+**问题**：`sandbox.ts` 逐块 `data.toString('utf8')`。子进程输出在 64KB 分块边界上切断多字节字符时，每半个字符各自解成 U+FFFD——**污染的是 stdout/stderr 文本本身，不只是统计**。实测一个 3 字节汉字被拆成 2+1 两批到达，解出 `'\ufffd\ufffd'` 而非 `'中'`；长编译输出、`git diff` 等连续 CJK 场景会反复命中，被切断处若落在 JSON/文件名里即为数据损坏。
+
+`usage().outputBytes` 也因此虚高：它用 `Buffer.byteLength(文本)` 重算，而每个替换符是 3 字节。
+
+**处置**：
+
+1. 每流一个 `node:string_decoder` 的 `StringDecoder`；`close` / `error` 各冲刷一次 `decoder.end()`（截断流尾部输出 U+FFFD 是正确结果）；
+2. `usage()` 改按「已捕获原始字节」计数（新增 `stdoutCaptured`/`stderrCaptured`），不再从文本重算——统计与实际捕获字节一致；
+3. 上限触发口径不变（`stdoutBytes` 仍计含被丢弃块的全部收到字节）。
+
+**验证**：新增 `tests/harness/process-isolation.test.ts` 用例（把 `中` 拆成两次写 → 断言 `stdout === '中'`、无 U+FFFD、`usage.outputBytes === 3`）。**回退实验已证该用例有效**：仅把解码改回逐块 `toString` 时，此用例以 `expected '\ufffd\ufffd' to be '中'` 失败、其余 11 例仍绿。全量 3149 过 / 2 败（`getProcessName`、`identifyPortOccupant` 沙箱固有）/ 6 跳过；`lint` 绿。
+
+---
+
 ## v0.89.0
 
 ### feat(config)!: `agents[].home` / `skillDirectory` 纳入路径契约 — 修「`~` 建字面目录、相对路径把 agent.db 绑到启动目录」

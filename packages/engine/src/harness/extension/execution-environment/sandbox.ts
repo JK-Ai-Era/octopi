@@ -10,6 +10,7 @@ import { spawn, type SpawnOptions } from 'node:child_process';
 import { realpath, unlink, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { StringDecoder } from 'node:string_decoder';
 import type {
   SandboxProvider,
   SandboxConfig,
@@ -131,9 +132,24 @@ export class ProcessSandbox implements SandboxProvider {
       let stderr = '';
       // 输出上限按原始字节计（stdout/stderr 各自独立计）：字符数远小于字节数，
       // 旧口径会让上限推迟触发、放走 ~3x 字节。计数含被丢弃块，故已捕获文本恒 ≤
-      // 上限；usage().outputBytes 只计已捕获文本（单位同、数值可不同）。
+      // 上限；usage().outputBytes 只计已捕获字节（`captured*`，见下方 usage 调用）。
       let stdoutBytes = 0;
       let stderrBytes = 0;
+      // 已捕获原始字节：usage 的唯一口径。不能用 byteLength(文本) 代替——被切断的
+      // 多字节字符解码后是 3 字节的 U+FFFD，按文本重算会虚高（也说明必须用
+      // StringDecoder 跨块解码，逐块 toString 会让 stdout/stderr 文本本身被污染）。
+      let stdoutCaptured = 0;
+      let stderrCaptured = 0;
+      const stdoutDecoder = new StringDecoder('utf8');
+      const stderrDecoder = new StringDecoder('utf8');
+      let decodersFlushed = false;
+      /** 冲刷解码器尾部：未收尾的多字节字符在此输出（截断流输出 U+FFFD 是正确结果）。 */
+      const flushDecoders = (): void => {
+        if (decodersFlushed) return;
+        decodersFlushed = true;
+        stdout += stdoutDecoder.end();
+        stderr += stderrDecoder.end();
+      };
       let terminated = false;
       let terminateReason = '';
       let settled = false;
@@ -181,7 +197,8 @@ export class ProcessSandbox implements SandboxProvider {
           kill('Output size limit exceeded');
           return;
         }
-        stdout += data.toString('utf8');
+        stdoutCaptured += data.length;
+        stdout += stdoutDecoder.write(data);
       });
 
       proc.stderr?.on('data', (data: Buffer) => {
@@ -190,7 +207,8 @@ export class ProcessSandbox implements SandboxProvider {
           kill('Output size limit exceeded');
           return;
         }
-        stderr += data.toString('utf8');
+        stderrCaptured += data.length;
+        stderr += stderrDecoder.write(data);
       });
 
       const timer = setTimeout(() => {
@@ -198,7 +216,8 @@ export class ProcessSandbox implements SandboxProvider {
       }, opts.timeoutMs);
 
       proc.on('close', (exitCode, signal) => {
-        const usage = this.usage(start, stdout, stderr);
+        flushDecoders();
+        const usage = this.usage(start, stdoutCaptured, stderrCaptured);
         // null exitCode = signal death; never report that as success (exit 0)
         const code = typeof exitCode === 'number' ? exitCode : -1;
         finish({
@@ -218,7 +237,8 @@ export class ProcessSandbox implements SandboxProvider {
       });
 
       proc.on('error', (err) => {
-        const usage = this.usage(start, stdout, stderr);
+        flushDecoders();
+        const usage = this.usage(start, stdoutCaptured, stderrCaptured);
         const isJailWrapper =
           profile.backend === 'linux-bwrap' || profile.backend === 'mac-seatbelt';
         if (config?.requireJail && isJailWrapper) {
@@ -475,12 +495,12 @@ export class ProcessSandbox implements SandboxProvider {
     });
   }
 
-  private usage(start: number, stdout: string, stderr: string): ResourceUsage {
+  private usage(start: number, stdoutCaptured: number, stderrCaptured: number): ResourceUsage {
     return {
       elapsedMs: Date.now() - start,
       peakMemoryBytes: -1,
       cpuTimeMs: -1,
-      outputBytes: Buffer.byteLength(stdout, 'utf8') + Buffer.byteLength(stderr, 'utf8'),
+      outputBytes: stdoutCaptured + stderrCaptured,
     };
   }
 }
