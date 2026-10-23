@@ -1,8 +1,16 @@
+## v0.87.7
+
+### docs(changelog): 历史条目中的清单式未决项一并迁出
+
+v0.86.x 及更早条目中的清单式未决项（「待拍板遗留」清单、存量问题上报段等）迁至内部交接文档 `arch/NEXT-STEPS.md`。已闭环的开放项（openclaw provider 归口、`SessionSpawnLink` 声明、D7 槽位注入面、webui tsconfig `rootDir`、槽位注入面 F3 等）随迁移消失（落地记录见对应版本条目）；仍开放的三项登记为 `NEXT-STEPS` D8–D10（`ttlMs` 契约不一致、`fallbackModels` 残留、observer-channel 遗留待核）。叙事性提及（处置结果、当时状态描述）保留。
+
+---
+
 ## v0.87.6
 
 ### docs(changelog): 内部开放项清单迁至交接文档
 
-本日志只保留对外公示的变更内容（变更说明、破坏性提示、验证概况）；v0.87.0–v0.87.5 条目中的内部开放项（留观清单）迁至内部交接文档 `arch/NEXT-STEPS.md`，条目中的内部编号引用一并去除。历史条目未改动。
+本日志只保留对外公示的变更内容（变更说明、破坏性提示、验证概况）；v0.87.0–v0.87.5 条目中的内部开放项（留观清单）迁至内部交接文档 `arch/NEXT-STEPS.md`，条目中的内部编号引用一并去除。历史条目中的清单式未决项一并迁出，叙事性提及保留。
 
 ---
 
@@ -202,8 +210,6 @@
 
 **验证**：`npm run typecheck` 0 错误（基线 0）；全量 vitest **3047 过 / 2 败**——2 败均为沙箱固有限制（mac-seatbelt 拒 setuid exec，`ps` 不可用 → getProcessName 类必败，与本批无关）；`npm run build` 全绿。
 
-**待拍板遗留**（已记 CHANGELOG v0.86.31，未在本批静默扩权）：① openclaw 兼容 provider 形状错标 `ModelProvider`；② D7 `spawnBy` 持久化 `childSessionId/childRunId` 但 `SessionSpawnLink` 未声明；③ `fallbackModels` 运行时收 `string | ModelConfig` 但 `ModelConfig` 类型只写 `ModelConfig[]`（`config.ts` 有 `as any`）；④ `SummaryCachePort.set` 的 `ttlMs` 接口必填、实现可选（本批测试侧显式传值绕开）。
-
 ## v0.86.35
 
 ### refactor(run-guard): 移除判据错位的 token_growth 与无效的 no_progress
@@ -319,13 +325,13 @@
 
 **顺带核对断言真实性（T1 既定要求）实锤 4 处**：
 1. **死测试复活**：`boundary-validator`「只配置 condition → 通过」的 `it(` 包装丢失，用例从未注册运行——补回包装后测试真实跑通；
-2. `openclaw-compat`：测试调用的 `supportsModel/complete` 是 OpenClaw 兼容形状，与核心 `ModelProvider` 是两套契约、prod 从不调用——测试侧显式换形标注（`OpenClawProviderShape`），契约归口问题待拍板；
-3. `delegation-tools`：D7 `spawnBy` 实际持久化 `childSessionId/childRunId` 但 `SessionSpawnLink` 类型未声明——显式标注 + 待拍板；
-4. `config-resolve`：`fallbackModels` 运行时收 `string | ModelConfig`（Zod union 同款）但 `ModelConfig` 类型只写 `ModelConfig[]`（`config.ts` 内有 `as any` 压着）——测试侧标注 + 待拍板。
+2. `openclaw-compat`：测试调用的 `supportsModel/complete` 是 OpenClaw 兼容形状，与核心 `ModelProvider` 是两套契约、prod 从不调用——测试侧显式换形标注（`OpenClawProviderShape`），契约归口另行处理；
+3. `delegation-tools`：D7 `spawnBy` 实际持久化 `childSessionId/childRunId` 但 `SessionSpawnLink` 类型未声明——显式标注；
+4. `config-resolve`：`fallbackModels` 运行时收 `string | ModelConfig`（Zod union 同款）但 `ModelConfig` 类型只写 `ModelConfig[]`（`config.ts` 内有 `as any` 压着）——测试侧标注。
 
 **验证**：每批 `npm run typecheck` 0 新增、基线多重集收敛（486→362→269→233→223→213→195→148）；受影响测试文件逐一 vitest 通过（累计 ~600+ 用例）；全量回归仅 2 失败均为沙箱固有限制（mac-seatbelt 拒 setuid exec，`ps` 不可用 → getProcessName 类必败，非本次改动）。
 
-**遗留下批**：余 148 条散布 ~100 文件（长尾小簇：`event.data` 可空、夹具缺字段、TS18046 unknown 断言等）；3 处 prod 契约缺口（上列 2/3/4）待拍板后归口。
+**遗留下批**：余 148 条散布 ~100 文件（长尾小簇：`event.data` 可空、夹具缺字段、TS18046 unknown 断言等）。
 
 ## v0.86.30
 
@@ -363,7 +369,7 @@
 - fan-out `fanout_partial_failure` 不回滚（有目标已受理即视为部分送达，宁可漏提示不消掉已送达部分）。
 - `DelegationRuntime.dispose()`（幂等）回收送达回执订阅；`gateway.stop()` 接线并清缓存，允许热重建。
 
-**评审**（子 agent 对抗性评审 + 变异实验双向验证）：三态时序（dropped 先到/后到/并发 get 穿透）全部实测收敛正确；变异实验确认条件置位、去重守卫、triggerRefs、fan-out 跳过、dispose 各自被测试钉住。评审批出 4 项已全部修复：夹具残留 `notified` 两处（tests 不过类型检查是仓库级缺口——根 tsconfig exclude tests 且无 typecheck 脚本，留待拍板）；`DELIVERY_STATE_CHANGED` 死常量改为真发；catch 无条件回滚改条件回滚；补 2 条钉（gateway.stop dispose 接线、LLM 面 delivering 不报 surfaced）。
+**评审**（子 agent 对抗性评审 + 变异实验双向验证）：三态时序（dropped 先到/后到/并发 get 穿透）全部实测收敛正确；变异实验确认条件置位、去重守卫、triggerRefs、fan-out 跳过、dispose 各自被测试钉住。评审批出 4 项已全部修复：夹具残留 `notified` 两处（tests 不过类型检查是仓库级缺口——根 tsconfig exclude tests 且无 typecheck 脚本）；`DELIVERY_STATE_CHANGED` 死常量改为真发；catch 无条件回滚改条件回滚；补 2 条钉（gateway.stop dispose 接线、LLM 面 delivering 不报 surfaced）。
 
 **验证**：`npm run build` / `npm run lint` 干净；合并 main（含 webui 两批）后全量 `npm test` 3016 tests 绿（3 个既有环境失败与 main 相同）。测试：deliveryState 语义映射全套更新 + 新增 7 用例（delivering 提示回归钉——旧模型下必红、fan-out 混合不回滚、dispose 后不回滚、RUN_FAILED 带 triggerRefs、gateway stop dispose 接线、LLM 面 delivering 判定、送达迁移事件）。
 
@@ -399,7 +405,7 @@
 
 **评审**（子 agent 对抗性评审，13 条主张逐条核对后定稿）：**#1 major 属实**（上文置顶丢更新，已修 + 回归钉）；#2/#5/#6/#8/#9/#10 属实（删除竞态收窄、幂等化、失鲜徽标复核、重连复核、菜单渲染纯度/键盘、`clearActiveSessionUi` useCallback）；#3 属实（订阅无界 + 连接身份漂移 → 收口）；#4 与 #3/#7 同根（agent 维度广播失效 / 后台会话迟到 running 无终态守卫），按残余挂 NEXT-STEPS G1/G3；#11 测试缺口补齐可钉部分（丢更新回归钉、`running:true` 标注、`session.removed` 广播、幂等、unpin 清除、重连重订、Jsonl 投影往返），PATCH/DELETE 路由状态表测试缺 HTTP harness，挂 G4 顺带；#12 CHANGELOG（本条）；#13 定位 nit 不动。评审中「`pinnedAt` 经 `buildIndexEntry` spread 持久化、`JSON.stringify` 丢 undefined 键即真删」等结论核对为真。
 
-**验证**：新增 13 用例全绿（gateway 置顶/删除/守卫/广播/Jsonl 投影往返 ×6，web store 运行态记账/pinnedAt 传播/订阅收口/重连重订/unpin/远端删除/删除清态 ×7）；**全量 `npm test` 3010 绿**，2 个失败为已知沙箱固有环境失败（`getProcessName`、`cli-serve-preflight` 端口进程名探测——seatbelt 拒 setuid，与 v0.86.24/25 记载一致，干净树可复现）。core/engine/gateway tsc + webui 全程序类型检查 + root tsc + eslint + `arch/check-sync.sh` 全绿。**存量问题上报待拍板**：`npm run build` 的 webui `tsc -b` 步骤在 TS 6.0.3 下失败（TS5011/TS6059：webui tsconfig 缺显式 `rootDir`，跨包 paths 映射全数报错），干净 main 复现、与本次无关；本次 webui 验证走 `tsc --rootDir ..` 覆盖，修复落点（`rootDir: ".."` 或 `noEmit` 化）待大哥定夺。
+**验证**：新增 13 用例全绿（gateway 置顶/删除/守卫/广播/Jsonl 投影往返 ×6，web store 运行态记账/pinnedAt 传播/订阅收口/重连重订/unpin/远端删除/删除清态 ×7）；**全量 `npm test` 3010 绿**，2 个失败为已知沙箱固有环境失败（`getProcessName`、`cli-serve-preflight` 端口进程名探测——seatbelt 拒 setuid，与 v0.86.24/25 记载一致，干净树可复现）。core/engine/gateway tsc + webui 全程序类型检查 + root tsc + eslint + `arch/check-sync.sh` 全绿。
 
 ## v0.86.25
 
@@ -509,8 +515,6 @@ diff 仅动该节两条 bullet，其余未触碰（docs-only，无代码变更�
 observer `isHiddenFromChat` 与 `ConversationAdapter.isHiddenSystemHistory` 均委托——消除两份手抄清单
 再次漂移的风险（v0.86.19 修过的正是这类漂移）。
 
-**待拍板**：D7 槽位注入面三方案对比已写 `arch/slot-fence-options.md`（建议 A′ 定向转义），拍板后实施。
-
 **验证**：conversation-adapter 50（新增 D8/D9 用例 2）/ observer-channel 42 / conversation-history-system 3 全绿；
 全量 2974 通过（2 个已知 macOS 沙箱基线失败不变）；lint / build 干净。
 
@@ -566,9 +570,6 @@ observer `isHiddenFromChat` 与 `ConversationAdapter.isHiddenSystemHistory` 均�
   **llm 视图逐条 attribution** 与 summary.byKind 同源（F10）
 - **UI 假数据清零**（F7/F8/F9/F12）：structureReserve 缺失不臆造推导值、快照组文案不再断言配置态、
   llm msgs 不回落 workspace 计数、0 用量层不出预算柱
-
-**待拍板（登记 NEXT-STEPS，未擅改）**：槽位正文同名标签注入面（F3，需协议层定转义/围栏方案）、
-contextSummary / engineHint 在聊天回放渲染成用户气泡（F5'，产品口径）、隐藏谓词两份实现收敛（F6）。
 
 **验证**：observer-channel 42 / turn-envelope-replay 16 全绿（新增锚定 2 + 解析加固 2 + 归因收口 4 用例）；
 全量 2972 通过（2 个已知 macOS 沙箱基线失败不变：getProcessName/ps 类，固有限制）；lint / build / arch check-sync 干净。
