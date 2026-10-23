@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Functional smoke for git_* dedicated tools against a real temp repo.
  * Skips when git is not on PATH.
  */

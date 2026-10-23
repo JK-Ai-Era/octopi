@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Allowlisted argv runner — shared by dedicated tools (git / package).
  *
  * Not a shell: fixed executable + argv array, no interpolation. Spawns via

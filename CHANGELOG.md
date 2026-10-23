@@ -1,3 +1,21 @@
+## v0.88.1
+
+### chore(gateway/engine/tests): 清理用户可见乱码串、注释 mojibake 与行内 BOM
+
+**问题**：仓库存在三类历史编码残留（`arch/NEXT-STEPS.md` H7 记录的第一层）：
+
+1. **用户可见乱码**：`gateway.ts` 命令副作用失败的展示文本落在 ``失败?{msg}`` —— 反引号模板里 `{msg}` 不插值，用户永远看到字面量 `{msg}`，本该有的全角冒号与 `$` 一并被有损编码吃掉。
+2. **注释 mojibake**：`git-tools.ts` 8 处 `鈥?`（em-dash 的错解码）污染工具描述注释。
+3. **行内 / 文件头 BOM**：7 个文件各含一处 U+FEFF。其中 6 处是无意义的（5 个文件头 + `git-tools.ts` 函数体内的行首 BOM），1 处**有语义**——`knowledge-serve-child.ts` 的 `raw.replace(/^<BOM>/, '')` 用于剥掉 boot 文件的前导 BOM，删掉会静默失去该能力。
+
+**处置**：文本串恢复为 ``失败：${msg}``（同时修好插值）；8 处 `鈥?` 恢复为 `— `；6 处无意义 BOM 按字节剥离；有语义的那处改为显式 `/^\uFEFF/` 转义（语义等价，字符不可见性消除）。
+
+**范围说明**：这是 H7 的**第一层**（无行为变更 + 一处用户可见文案修复）。`gateway.ts`（114 行注释）与 `ingest.ts`（106 行注释）的大规模注释损坏仍在，需单独立项（含「找到有损写回环节」的根因任务），不在本提交内。
+
+**验证**：`npm run build` 全绿；`tests/harness/dedicated-tools*.test.ts` / `tests/autonomous-subsystem/session-end-cleanup.test.ts` / `tests/gateway-git-status-cache.test.ts` 28/28 通过；BOM 全仓扫描归零（`packages`/`src`/`tests`）；`/^\uFEFF/` 语义用 node 断言等价（命中前导 BOM、放过干净串）。
+
+---
+
 ## v0.88.0
 
 ### feat(core/engine/gateway): 转录增量落盘 + 在途 Run 盲窗 overlay — 修「运行中刷新浏览器后在途 turn 执行过程不可见」

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * package_edit / project_run / package_install — package-manager surface
  * without a shell.
  *

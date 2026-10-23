@@ -1660,7 +1660,7 @@ export class Gateway {
         result.status = 'error';
         result.display = {
           type: 'text',
-          text: `命令已接收，但执行副作用失败?{msg}`,
+          text: `命令已接收，但执行副作用失败：${msg}`,
         };
         return { ok: false, error: msg };
       }

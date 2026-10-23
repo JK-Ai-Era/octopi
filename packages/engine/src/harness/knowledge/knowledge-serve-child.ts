@@ -52,7 +52,7 @@ async function main(): Promise<void> {
     throw new Error('knowledge-serve-child: missing boot file path');
   }
   const raw = await readFile(bootPath, 'utf8');
-  const boot = JSON.parse(raw.replace(/^﻿/, '')) as BootFile;
+  const boot = JSON.parse(raw.replace(/^\uFEFF/, '')) as BootFile;
   try {
     await unlink(bootPath);
   } catch {

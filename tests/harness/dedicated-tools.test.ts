@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Dedicated tool surface (workspace / untrusted without shell):
  * - ToolCapability vcs/runner
  * - reduced surface keeps vcs, strips runner

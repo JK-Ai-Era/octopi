@@ -1,5 +1,5 @@
 /**
- * git_* dedicated tools 鈥?local VCS porcelain without a shell.
+ * git_* dedicated tools — local VCS porcelain without a shell.
  *
  * Spawn `git` with a fixed argv allowlist (never a command string). Isolation:
  * nonexistent `core.hooksPath`, `--no-verify`/`--no-gpg-sign` on commit,
@@ -45,7 +45,7 @@ function assertPathSafe(
   if (isUnderSessionUndoRoot(abs, context?.undoRoots)) {
     throw new Error(`session undo ledger is protected; cannot ${label} under sessions undo dir`);
   }
-﻿  return abs;
+  return abs;
 }
 
 /**
@@ -98,7 +98,7 @@ function toText(result: AllowlistedRunResult): Record<string, unknown> {
   };
 }
 
-/** git_status 鈥?porcelain working tree status */
+/** git_status — porcelain working tree status */
 export function createGitStatusTool(): RegisteredTool {
   return {
     definition: {
@@ -131,7 +131,7 @@ export function createGitStatusTool(): RegisteredTool {
   };
 }
 
-/** git_diff 鈥?unstaged / staged / vs-ref diff */
+/** git_diff — unstaged / staged / vs-ref diff */
 export function createGitDiffTool(): RegisteredTool {
   return {
     definition: {
@@ -183,7 +183,7 @@ export function createGitDiffTool(): RegisteredTool {
   };
 }
 
-/** git_log 鈥?commit history */
+/** git_log — commit history */
 export function createGitLogTool(): RegisteredTool {
   return {
     definition: {
@@ -226,7 +226,7 @@ export function createGitLogTool(): RegisteredTool {
   };
 }
 
-/** git_show 鈥?show a commit / tree / blob */
+/** git_show — show a commit / tree / blob */
 export function createGitShowTool(): RegisteredTool {
   return {
     definition: {
@@ -251,7 +251,7 @@ export function createGitShowTool(): RegisteredTool {
   };
 }
 
-/** git_commit 鈥?add paths + commit (hooks disabled) */
+/** git_commit — add paths + commit (hooks disabled) */
 export function createGitCommitTool(): RegisteredTool {
   return {
     definition: {
@@ -359,7 +359,7 @@ export function createGitCommitTool(): RegisteredTool {
   };
 }
 
-/** git_branch 鈥?list / create / switch / delete */
+/** git_branch — list / create / switch / delete */
 export function createGitBranchTool(): RegisteredTool {
   return {
     definition: {
@@ -431,7 +431,7 @@ export function createGitBranchTool(): RegisteredTool {
   };
 }
 
-/** git_restore 鈥?restore working tree / index paths */
+/** git_restore — restore working tree / index paths */
 export function createGitRestoreTool(): RegisteredTool {
   return {
     definition: {
