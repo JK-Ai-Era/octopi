@@ -57,7 +57,7 @@ export default defineConfig({
     ],
   },
   test: {
-    include: ['tests/**/*.test.ts'],
+    include: ['tests/**/*.test.ts', 'packages/webui/src/**/*.test.{ts,tsx}'],
     setupFiles: ['tests/setup/isolate-octopi-home.ts'],
     globals: true,
     coverage: {

@@ -1,3 +1,20 @@
+## v0.87.2
+
+### test(webui): webui 测试基建落地——vitest + Testing Library，覆盖 Git 页签纯逻辑
+
+**背景**（留观⑥，大哥 2026-10-23 拍板）：packages/webui 此前零测试基建，组件逻辑只能人工点检（v0.87.1 的 Number(null)===0 P1 即例证）；配置化评审再次点到 runtime-config 回落逻辑无覆盖。
+
+**变更**：
+
+1. 根 vitest `include` 扩到 `packages/webui/src/**/*.test.{ts,tsx}`（文件级 `@vitest-environment jsdom`），`npm test` 一体覆盖——不建第二套 runner。webui devDependencies 增 vitest（对齐根 ^4.1.7）+ @testing-library/react + @testing-library/dom + jsdom。
+2. 新增 10 用例（只测行为与状态语义，不做 UI 快照）：
+   - `runtime-config.test.ts`（4）：缺省/null 回落 5s、**0 哨兵不被回落吞掉**、1..3600 合法、越界/小数/字符串/NaN 回落；
+   - `GitStatusPanel.test.tsx`（6）：首拉渲染、切目录旧快照立即失效（身份键）、pollSeconds=0 无周期轮询、pollSeconds=5 周期轮询、**旧目录慢响应不覆盖新目录数据**（seq 守卫）、**刷新失败保留上次成功结果** + 错误横幅。
+
+**验证**：webui 10/10；全量 3086 过 / 2 败 / 6 跳过（2 败仍为 getProcessName/identifyPortOccupant 沙箱固有）；`npm run build`（tsc -b 一并 typecheck 测试文件）与 `npm run lint` 全绿。
+
+---
+
 ## v0.87.1
 
 ### fix(webui): Git 页签刷新抖动修复 + 轮询频率配置化（去 UI 下拉）
