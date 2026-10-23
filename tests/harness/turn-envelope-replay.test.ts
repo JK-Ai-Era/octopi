@@ -247,7 +247,7 @@ describe('escapeSlotBody / joinSlotXml（D7 A′ 定向转义）', () => {
   });
 });
 
-describe('判形锚定（NEXT-STEPS D7）', () => {
+describe('判形锚定（arch/open-problems.md D7）', () => {
   it('正文中途引用标签字面量不是信封/闭标（写一次守卫不误伤）', () => {
     expect(isTurnStartContent('讨论协议时提到 <turn_start id> 的写法')).toBe(false);
     expect(isTurnEndContent('贴一段日志：<turn_end id="t1" /> 结束')).toBe(false);

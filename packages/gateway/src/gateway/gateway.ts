@@ -1229,7 +1229,7 @@ export class Gateway {
    *
    * @param sessionId - 目标会话
    * @throws Run 在途（session_running: …）——在途删除会让落盘于删除之后的 Run 把会话写回来，必须先停再删。
-   *   残余竞态（已知，见 arch/NEXT-STEPS.md）：守卫与 store.delete 之间新准入的 Run 仍可能在删除后
+   *   残余竞态（已知，见 arch/open-problems.md OP-WEB-3）：守卫与 store.delete 之间新准入的 Run 仍可能在删除后
    *   落盘复活，admission 侧尚无删除互斥；窗口已用删前二次校验收窄，未根除。
    */
   async deleteSession(sessionId: string): Promise<void> {

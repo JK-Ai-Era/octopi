@@ -117,7 +117,7 @@ export function stripTurnContextXml(content: string | Message['content'] | undef
  *
  * 判形锚定到**正文开头**（允许前导空白）：真实信封由 formatTurnStartContent 定形、必然以开标签起头；
  * 正文中途引用标签字面量（讨论协议/贴日志/知识语料）不得命中——否则普通 user 发言会被
- * 写一次守卫误判「已定形」（NEXT-STEPS D7）。
+ * 写一次守卫误判「已定形」（arch/open-problems.md D7）。
  */
 export function isTurnStartContent(content: string | Message['content'] | undefined | null): boolean {
   return /^\s*<turn_start[\s>]/.test(messageText(content));

@@ -1,3 +1,18 @@
+## v0.89.5
+
+### docs(arch): 代码注释里的过期交接指针改指 `open-problems.md`
+
+`arch/NEXT-STEPS.md` 已收敛为 session 交接入口（问题清单全部迁入 `arch/open-problems.md`），但两处代码注释仍在指向旧的 NEXT-STEPS 条目：
+
+- `packages/gateway/src/gateway/gateway.ts`（`deleteSession`）：删前二次校验的残余竞态 → `arch/open-problems.md` **OP-WEB-3**；
+- `packages/engine/src/harness/context/turn-envelope.ts`（`isTurnStartContent`）/ `tests/harness/turn-envelope-replay.test.ts`（判形锚定用例名）：误判风险 → `arch/open-problems.md` **D7**。
+
+注释级改动，无行为变更。
+
+**验证**：`npm test`（全量）；`tsc` 无新增错误。
+
+---
+
 ## v0.89.4
 
 ### chore(schema): 补齐 legacy `persona` 的路径契约（v0.89.0 遗漏的生成文件）
