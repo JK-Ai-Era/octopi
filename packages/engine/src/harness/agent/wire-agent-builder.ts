@@ -14,6 +14,7 @@
 
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { expandHomePath } from '../../paths.js';
 import type { ModelProvider } from '@octopi-agent/core/interfaces/model-provider.js';
 import type { SecurityGuardConfig } from '@octopi-agent/core/security-guard.js';
 import type { ErrorStrategy } from '@octopi-agent/core/interfaces/error-strategy.js';
@@ -273,7 +274,9 @@ export async function wireAgentBuilder(
   // ── Home / Persona / Skills ──
   // stores 只跟显式 home 走；string persona 只作 prompt 目录，不隐式开 agent.db
   //（config-bridge 需要 legacy persona-as-home 时应显式传 home）。
-  const agentHome = spec.home;
+  // home/skillDirectory 在库边界展开 `~`（幂等）：`join()` 与 agent.db 路径都以它为基，
+  // 留一个未展开的 `~` 就会在进程 cwd 下建出字面 `~/…` 目录。
+  const agentHome = spec.home ? expandHomePath(spec.home.trim()) : undefined;
   // agentId 无条件接线（审计分区 / 工具域对称）；home 只决定 agent 文件态目录
   builder.agentId(spec.agentId);
   if (spec.home) {
@@ -287,8 +290,11 @@ export async function wireAgentBuilder(
     builder.persona(agentHome);
   }
 
-  const skillDir =
-    spec.skillDirectory ?? (agentHome ? join(agentHome, 'skills') : undefined);
+  const skillDir = spec.skillDirectory
+    ? expandHomePath(spec.skillDirectory.trim())
+    : agentHome
+      ? join(agentHome, 'skills')
+      : undefined;
   let skillManager: unknown;
   if (skillDir && existsSync(skillDir)) {
     try {

@@ -778,9 +778,10 @@ export class AgentBuilder {
    * 设置 Skill 目录（子目录内含 SKILL.md）
    *
    * build 时 discover，每轮以索引形式注入 system prompt（formatForPrompt）。
+   * `~` 形态在此展开（与 workspace / agentHome 同规，幂等）。
    */
   skillDirectory(dir: string): this {
-    this._skillDirectory = dir;
+    this._skillDirectory = expandHomePath(dir.trim());
     return this;
   }
 
@@ -1083,9 +1084,9 @@ export class AgentBuilder {
     return this;
   }
 
-  /** agent 文件态 home：extract 落盘、与 persona 目录解耦 */
+  /** agent 文件态 home：extract 落盘、与 persona 目录解耦；`~` 形态在此展开（与 workspace 同规） */
   agentHome(dir: string): this {
-    this._agentHome = dir;
+    this._agentHome = expandHomePath(dir.trim());
     return this;
   }
 

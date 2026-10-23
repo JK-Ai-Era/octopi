@@ -44,7 +44,9 @@
             "minLength": 1
           },
           "home": {
-            "type": "string"
+            "type": "string",
+            "minLength": 1,
+            "description": "Absolute path or ~-prefixed (~/…, ~\\…, bare ~); ~user is not supported"
           },
           "workspace": {
             "type": "string",
@@ -292,7 +294,9 @@
             }
           },
           "skillDirectory": {
-            "type": "string"
+            "type": "string",
+            "minLength": 1,
+            "description": "Absolute path or ~-prefixed (~/…, ~\\…, bare ~); ~user is not supported"
           },
           "skills": {
             "type": "array",

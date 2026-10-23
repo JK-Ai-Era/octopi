@@ -1539,15 +1539,19 @@ export class Gateway {
     this.commandSourcesReady = true;
     for (const agent of this.agents.values()) {
       if (!agent.home) continue;
+      // AgentDefinition 是宿主可编程注入的边界：`~` 在此展开（与 builder/config 同规），
+      // 否则 join() 会在进程 cwd 下拼出字面 `~/…` 目录。
+      const home = expandHomePath(agent.home.trim());
       try {
-        this.registerUserCommands(agent.id, join(agent.home, 'commands'));
+        this.registerUserCommands(agent.id, join(home, 'commands'));
       } catch (err) {
         console.warn(
           `[Gateway] user command load failed for agent "${agent.id}": ${err instanceof Error ? err.message : String(err)}`,
         );
       }
-      const skillDir =
-        agent.skillDirectory ?? join(agent.home, 'skills');
+      const skillDir = agent.skillDirectory
+        ? expandHomePath(agent.skillDirectory.trim())
+        : join(home, 'skills');
       try {
         if (existsSync(skillDir)) {
           const { DefaultSkillManager } = await import(
@@ -3643,7 +3647,7 @@ export class Gateway {
     const def = this.agents.get(agentId);
     if (def?.home) {
       const { probeAgentHomeHealth } = await import('@octopi-agent/engine/harness/context/layer-health.js');
-      return probeAgentHomeHealth(agentId, def.home);
+      return probeAgentHomeHealth(agentId, expandHomePath(def.home.trim()));
     }
     const { probeContextLayerHealth } = await import('@octopi-agent/engine/harness/context/layer-health.js');
     return probeContextLayerHealth({ agentId, personaLoaded: false });

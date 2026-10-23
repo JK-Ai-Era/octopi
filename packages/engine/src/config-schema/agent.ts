@@ -16,15 +16,21 @@ import { EffectPolicyConfigSchema } from './governance.js';
 
 export const AgentConfigSchema = z.object({
   id: z.string({ error: 'Agent must have an id' }).min(1, 'Agent id cannot be empty'),
-  home: z.string().optional(),
+  /**
+   * agent 文件态 home（persona / skills / agent.db 基线）。与 `workspace` 同规：
+   * 绝对路径或 `~` 形态——相对路径加载即拒，杜绝隐式 resolve 到进程 cwd。
+   */
+  home: ConfigPathSchema.optional(),
   /** 工具基路径：绝对路径或 ~ 形态（相对路径加载即拒，杜绝隐式 resolve 到进程 cwd） */
   workspace: ConfigPathSchema.optional(),
   /** ToolEffectPolicy 运行模式（P3）；与 tools allow/deny 无关 */
   effectPolicy: EffectPolicyConfigSchema.optional(),
-  persona: z.union([z.string(), InlinePersonaSchema]).optional(),
+  /** 文件式 persona 目录，或内联 systemPrompt。legacy string 形态等价 home（同路径契约） */
+  persona: z.union([ConfigPathSchema, InlinePersonaSchema]).optional(),
   model: z.union([z.string().min(1), ModelConfigSchema]),
   tools: ToolPolicySchema.optional(),
-  skillDirectory: z.string().optional(),
+  /** Skill 目录（缺省 `home/skills`）：与 `workspace`/`home` 同规（绝对或 `~` 形态，拒相对） */
+  skillDirectory: ConfigPathSchema.optional(),
   skills: z.array(z.string()).optional(),
   channelBindings: z.record(z.string(), z.string()).optional(),
   /** Session ACL 天花板（E6 L1）；与角色 max / 绑定取交集 */

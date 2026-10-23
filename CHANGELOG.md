@@ -1,3 +1,29 @@
+## v0.89.0
+
+### feat(config)!: `agents[].home` / `skillDirectory` 纳入路径契约 — 修「`~` 建字面目录、相对路径把 agent.db 绑到启动目录」
+
+**问题**：v0.87.5 给 `agents[].workspace` 与 `effectPolicy.transactionRoots` 定了「绝对路径或 `~` 形态、拒相对」的契约，`home` / `skillDirectory` 却仍是自由 `z.string()`。两个可实测的后果：
+
+1. `"home": "~/agents/x"` 不展开 → 字面创建 `./~/agents/x`，persona / skills / `agent.db` 全落错地方；
+2. `"home": "./agents/x"` 不校验 → 随进程 cwd 解析；daemon 换个启动目录就是换一份记忆库（`wireAgentBuilder` 的 `dbPath: join(agentHome,'agent.db')`）。
+
+第 2 条与 workspace 契约直接矛盾，且**静默**：没有任何报错，只是数据落在别处。
+
+**处置（三字段同规，方案 A）**：
+
+1. **schema**：`agents[].home`、`agents[].skillDirectory` 改 `ConfigPathSchema`（绝对或 `~` 形态，`~user/…` 与相对/空串一律拒）。legacy `persona` 字符串（等价 home 的弃用形态）同规——否则它是绕过口。
+2. **归一化单源**：`normalizeConfigPaths` 增补 `home` / `skillDirectory` / legacy `persona` 的 `~` 展开，`validateConfig` / `validateConfigOrThrow` / `loadConfig` 三个出口后置条件一致。
+3. **库边界兜底**（不经 `loadConfig` 的嵌入方）：`wireAgentBuilder` 展开 `home`/`skillDirectory` 后再 `join()`；`AgentBuilder.agentHome()` / `.skillDirectory()` 与既有 `.workspace()` 对称展开（幂等）。Gateway 侧 `ensureCommandSources` / health 探针同步展开（`AgentDefinition` 是宿主可编程注入面）。
+4. **模板与文档**：`octopi.example.json` 改用 `~/.octopi/agents/assistant`；`docs/process-isolation.md`（+`.zh.md`）路径契约表补齐三个字段与「为何拒相对」的因果说明。
+
+**破坏性变更**：相对路径（含 `"./agents/x"`、`""`）的 `home` / `skillDirectory` / legacy `persona` 现在**加载即报错**。迁移 = 补绝对路径或改 `~/…`；`home: ""` 用「省略该字段」代替。本机 `~/.octopi/octopi.json` 已是绝对路径，无迁移动作。
+
+**已知边界**：`octopi.schema.json` 能表达 `minLength: 1` 与说明文字（编辑器可提示），但**表达不了**「绝对或 `~` 形态」这条 `refine`——与既有 `workspace` 完全一致，真正的把关是运行时 fail-fast。
+
+**验证**：`tests/config-path-normalization.test.ts` 扩到 14 例（三字段 + legacy persona 的「拒相对 / 拒 `~user` / 拒空串 / 展开 `~`」、`loadConfig` 端到端展开与拒绝、canonical template 守卫）；全量 3147 过 / 2 败（仍为 `getProcessName`、`identifyPortOccupant` 沙箱固有）/ 6 跳过；`npm run build`、`npm run lint`、`arch/check-sync.sh` 全绿。
+
+---
+
 ## v0.88.1
 
 ### chore(gateway/engine/tests): 清理用户可见乱码串、注释 mojibake 与行内 BOM

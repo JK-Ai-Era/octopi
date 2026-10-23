@@ -42,9 +42,9 @@
 
   "agents": [{
     "id": "assistant",
-    "home": "./agents/assistant",
+    "home": "~/.octopi/agents/assistant",
     "workspace": "~/.octopi/workspace/assistant",
-    "skillDirectory": "./agents/assistant/skills",
+    "skillDirectory": "~/.octopi/agents/assistant/skills",
     "model": "openai/gpt-5.5",
     "tools": { "allow": ["*"] }
   }],

@@ -106,7 +106,14 @@ export interface ConfigValidationError {
 export function normalizeConfigPaths(config: z.infer<typeof OctopiConfigSchema>): void {
   const cfg = config as unknown as {
     effectPolicy?: { transactionRoots?: string[] };
-    agents?: Array<{ workspace?: string; effectPolicy?: { transactionRoots?: string[] } }>;
+    agents?: Array<{
+      home?: string;
+      workspace?: string;
+      skillDirectory?: string;
+      /** legacy：string 形态等价 home（见 config-bridge） */
+      persona?: string | { systemPrompt?: string };
+      effectPolicy?: { transactionRoots?: string[] };
+    }>;
   };
   const expandPolicy = (policy?: { transactionRoots?: string[] }): void => {
     if (policy?.transactionRoots) {
@@ -115,7 +122,14 @@ export function normalizeConfigPaths(config: z.infer<typeof OctopiConfigSchema>)
   };
   expandPolicy(cfg.effectPolicy);
   for (const agent of cfg.agents ?? []) {
+    // 三个路径字段同规（workspace / home / skillDirectory）：缺任一处都会让
+    // `~` 变成字面目录、或让相对路径绑到进程 cwd。legacy persona 字符串等价 home，同办。
+    if (agent.home) agent.home = expandHomePath(agent.home.trim());
     if (agent.workspace) agent.workspace = expandHomePath(agent.workspace.trim());
+    if (agent.skillDirectory) agent.skillDirectory = expandHomePath(agent.skillDirectory.trim());
+    if (typeof agent.persona === 'string') {
+      agent.persona = expandHomePath(agent.persona.trim());
+    }
     expandPolicy(agent.effectPolicy);
   }
 }

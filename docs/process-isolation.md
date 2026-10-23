@@ -240,10 +240,14 @@ Hosts can **append** extra allow/transaction roots for **the current session onl
 | Privilege | **Cannot loosen** `pathContainment` / `shellEscape` / mode |
 | Paths | Must be **absolute**; normalized; de-duplicated |
 
-> **Config-level paths** (`agents[].workspace`, `effectPolicy.transactionRoots`)
+> **Config-level paths** (`agents[].workspace`, `agents[].home`,
+> `agents[].skillDirectory`, `effectPolicy.transactionRoots`)
 > differ slightly: they must be an **absolute path or `~`-prefixed** (`~/…`,
 > `~\…`, or bare `~`; `~user/…` is not supported). `~` is expanded to the user
-> home directory at the policy/tool-cwd boundaries (trim → expand, idempotent).
+> home directory at the config/policy/tool-cwd/builder boundaries (trim →
+> expand, idempotent). Relative paths are rejected at load: `home` decides where
+> `persona/`, `skills/` and `agent.db` live, so resolving it against the process
+> cwd would silently bind an agent's memory store to the launch directory.
 > Session temporary roots above stay absolute-only.
 
 ```http

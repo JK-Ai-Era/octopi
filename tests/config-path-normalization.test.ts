@@ -48,14 +48,23 @@ describe('ConfigPathSchema（拒相对路径，fail fast）', () => {
     }
   });
 
-  it('AgentConfigSchema.workspace 与 EffectPolicyConfigSchema.transactionRoots 同规', () => {
-    const agent = (workspace: string) => ({
+  it('AgentConfigSchema.workspace / home / skillDirectory 与 EffectPolicyConfigSchema.transactionRoots 同规', () => {
+    const agent = (patch: Record<string, unknown>) => ({
       id: 'a',
-      workspace,
       model: { provider: 'mock', model: 'm' },
+      ...patch,
     });
-    expect(AgentConfigSchema.safeParse(agent('rel')).success).toBe(false);
-    expect(AgentConfigSchema.safeParse(agent('~/w')).success).toBe(true);
+    expect(AgentConfigSchema.safeParse(agent({ workspace: 'rel' })).success).toBe(false);
+    expect(AgentConfigSchema.safeParse(agent({ workspace: '~/w' })).success).toBe(true);
+    // home / skillDirectory：相对路径同样 fail fast（否则 agent.db / skills 会绑到进程 cwd）
+    for (const field of ['home', 'skillDirectory'] as const) {
+      expect(AgentConfigSchema.safeParse(agent({ [field]: 'rel' })).success, field).toBe(false);
+      expect(AgentConfigSchema.safeParse(agent({ [field]: './rel' })).success, field).toBe(false);
+      expect(AgentConfigSchema.safeParse(agent({ [field]: '~user/x' })).success, field).toBe(false);
+      expect(AgentConfigSchema.safeParse(agent({ [field]: '' })).success, field).toBe(false);
+      expect(AgentConfigSchema.safeParse(agent({ [field]: '~/x' })).success, field).toBe(true);
+      expect(AgentConfigSchema.safeParse(agent({ [field]: '/abs/x' })).success, field).toBe(true);
+    }
     expect(
       EffectPolicyConfigSchema.safeParse({ transactionRoots: ['rel'] }).success,
     ).toBe(false);
@@ -81,7 +90,7 @@ describe('loadConfig 路径归一化', () => {
   const dir = mkdtempSync(join(tmpdir(), 'octopi-cfgpath-'));
   afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
-  it('agents[].workspace 与两级 transactionRoots 的 ~ 形态全部展开', () => {
+  it('agents[].workspace / home / skillDirectory 与两级 transactionRoots 的 ~ 形态全部展开', () => {
     const p = join(dir, 'octopi.json');
     writeFileSync(
       p,
@@ -90,7 +99,9 @@ describe('loadConfig 路径归一化', () => {
         agents: [
           {
             id: 'a1',
+            home: '~/h',
             workspace: '~/w',
+            skillDirectory: '~/s',
             model: { provider: 'mock', model: 'm' },
             effectPolicy: { transactionRoots: ['~/t'] },
           },
@@ -100,11 +111,32 @@ describe('loadConfig 路径归一化', () => {
     );
     const config = loadConfig(p) as unknown as {
       effectPolicy?: { transactionRoots?: string[] };
-      agents: Array<{ workspace?: string; effectPolicy?: { transactionRoots?: string[] } }>;
+      agents: Array<{
+        workspace?: string;
+        home?: string;
+        skillDirectory?: string;
+        effectPolicy?: { transactionRoots?: string[] };
+      }>;
     };
+    expect(config.agents[0]!.home).toBe(join(homedir(), 'h'));
     expect(config.agents[0]!.workspace).toBe(join(homedir(), 'w'));
+    expect(config.agents[0]!.skillDirectory).toBe(join(homedir(), 's'));
     expect(config.agents[0]!.effectPolicy?.transactionRoots).toEqual([join(homedir(), 't')]);
     expect(config.effectPolicy?.transactionRoots).toEqual([join(homedir(), 'g')]);
+  });
+
+  it('相对 home / skillDirectory 加载即拒绝（不再隐式 resolve 到进程 cwd）', () => {
+    for (const field of ['home', 'skillDirectory'] as const) {
+      const p = join(dir, `bad-${field}.json`);
+      writeFileSync(
+        p,
+        JSON.stringify({
+          models: { providers: {} },
+          agents: [{ id: 'a1', [field]: 'relative', model: { provider: 'mock', model: 'm' } }],
+        }),
+      );
+      expect(() => loadConfig(p), field).toThrow();
+    }
   });
 
   it('相对 workspace 加载即拒绝（不再隐式 resolve 到进程 cwd）', () => {
@@ -142,6 +174,16 @@ describe('库调用面一致性（P1-1 / P2-3 / P2-4 修复锁）', () => {
     expect(eff.allowRoots).toContain(join(homedir(), 'x'));
     expect(eff.allowRoots).toContain(join(homedir(), 'ws'));
     expect(eff.allowRoots.some((r) => r.includes('~'))).toBe(false);
+  });
+
+  it('legacy persona 字符串与 home 同契约（拒相对 + 展开 ~）', () => {
+    expect(AgentConfigSchema.safeParse({ id: 'a', persona: 'rel', model: { provider: 'p', model: 'm' } }).success).toBe(false);
+    expect(AgentConfigSchema.safeParse({ id: 'a', persona: '~/p', model: { provider: 'p', model: 'm' } }).success).toBe(true);
+    const config = validateConfigOrThrow({
+      models: { providers: {} },
+      agents: [{ id: 'a1', persona: '~/p', model: { provider: 'p', model: 'm' } }],
+    }) as unknown as { agents: Array<{ persona?: string }> };
+    expect(config.agents[0]!.persona).toBe(join(homedir(), 'p'));
   });
 
   it('validateConfigOrThrow 后置条件：返回值已展开（与 loadConfig 同规）', () => {

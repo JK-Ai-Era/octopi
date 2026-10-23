@@ -221,9 +221,12 @@ Gateway `/health` 与 channel health 暴露 `effectPolicy`（`configuredMode` / 
 | 权限 | **不能放宽** `pathContainment` / `shellEscape` / mode |
 | 路径 | 必须是 **绝对路径**；规范化并去重 |
 
-> **配置级路径**（`agents[].workspace`、`effectPolicy.transactionRoots`）语义略有
+> **配置级路径**（`agents[].workspace`、`agents[].home`、
+> `agents[].skillDirectory`、`effectPolicy.transactionRoots`）语义略有
 > 不同：必须是**绝对路径或 `~` 形态**（`~/…`、`~\…`、纯 `~`；不支持 `~user/…`）。
-> `~` 在策略/工具 cwd 边界展开为用户主目录（trim → expand，幂等）。上方的会话
+> `~` 在配置/策略/工具 cwd/builder 边界展开为用户主目录（trim → expand，幂等）。
+> 相对路径加载即拒——`home` 决定 `persona/`、`skills/` 与 `agent.db` 的落点，
+> 按进程 cwd 解析会让 agent 的记忆库随启动目录漂移。上方的会话
 > 临时 root 仍然只收绝对路径。
 
 ```http
