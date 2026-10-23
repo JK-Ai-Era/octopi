@@ -5,24 +5,18 @@
  * 与 agent 的 git_* 工具同一安全执行路径）。目录选项 = 会话/agent roots
  * （configuredRoots + temporaryRoots），服务端按同一 roots 集合做围栏校验。
  *
- * 轮询语义：选中目录立即拉一次，之后按间隔轮询；切换目录立即刷新并作废旧响应；
- * document.hidden 时暂停轮询、回前台立即拉一次；页签卸载即停表。
+ * 轮询语义：选中目录立即拉一次，之后按 web.gitStatusPollSeconds 配置的间隔轮询
+ * （下发缺失回退 5s；0 = 不自动轮询——选中/切换目录与手动刷新仍即时）；切换目录
+ * 立即刷新并作废旧响应；document.hidden 时暂停轮询；页签卸载即停表。
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
   GitStatusBranchView,
   GitStatusEntryView,
   GitStatusView,
   OctopiClient,
 } from '@octopi-agent/gateway/web/sdk/client';
-
-const POLL_CHOICES = [
-  { label: '3s', seconds: 3 },
-  { label: '5s', seconds: 5 },
-  { label: '10s', seconds: 10 },
-  { label: '30s', seconds: 30 },
-  { label: '手动', seconds: 0 },
-];
+import { getGitStatusPollSeconds } from '../runtime-config';
 
 const GROUPS: Array<{ key: GitStatusEntryView['group']; label: string; color: string }> = [
   { key: 'conflicted', label: '冲突', color: 'var(--color-error)' },
@@ -34,8 +28,6 @@ const GROUPS: Array<{ key: GitStatusEntryView['group']; label: string; color: st
 function rootStorageKey(agentId: string | undefined): string {
   return `octopi.webui.git-status.root.${agentId || 'default'}`;
 }
-
-const INTERVAL_STORAGE_KEY = 'octopi.webui.git-status.interval';
 
 /** 分支徽章文本：detached / 初始仓库 / 分支 + upstream + ahead-behind */
 function branchLabel(b: GitStatusBranchView): string {
@@ -64,13 +56,13 @@ export function GitStatusPanel({
   const [roots, setRoots] = useState<{ configured: string[]; temporary: string[] } | null>(null);
   const [rootsError, setRootsError] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
-  const [intervalSec, setIntervalSec] = useState<number>(5);
   const [snapshot, setSnapshot] = useState<GitStatusView | null>(null);
   /** 快照所属的请求身份（sessionId|selected）——渲染只认它，不认服务端回显路径 */
   const [snapshotKey, setSnapshotKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
   const [updatedAt, setUpdatedAt] = useState<number | null>(null);
+  /** 轮询间隔（秒）：octopi.json web.gitStatusPollSeconds 下发，0 = 不自动轮询 */
+  const pollSeconds = useMemo(() => getGitStatusPollSeconds(), []);
   const seqRef = useRef(0);
   const inFlightRef = useRef(false);
 
@@ -110,7 +102,7 @@ export function GitStatusPanel({
     };
   }, [client, sessionId, agentId]);
 
-  // ── 选中目录 / 轮询间隔持久化 ──
+  // ── 选中目录持久化 ──
   useEffect(() => {
     if (!selected) return;
     try {
@@ -120,26 +112,6 @@ export function GitStatusPanel({
     }
   }, [selected, agentId]);
 
-  useEffect(() => {
-    try {
-      const saved = window.localStorage.getItem(INTERVAL_STORAGE_KEY);
-      // Number(null) === 0 会命中「手动」——必须先判 null，否则首次进入默认轮询被静默吞掉
-      if (saved !== null && POLL_CHOICES.some((c) => c.seconds === Number(saved))) {
-        setIntervalSec(Number(saved));
-      }
-    } catch {
-      // 默认 5s
-    }
-  }, []);
-
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(INTERVAL_STORAGE_KEY, String(intervalSec));
-    } catch {
-      // 忽略持久化失败
-    }
-  }, [intervalSec]);
-
   // ── 拉取：force=true 绕过 in-flight 去重（切目录/手动刷新） ──
   const refresh = useCallback(
     async (force: boolean) => {
@@ -147,7 +119,6 @@ export function GitStatusPanel({
       if (!force && inFlightRef.current) return;
       const seq = ++seqRef.current;
       inFlightRef.current = true;
-      setBusy(true);
       try {
         const data = await client.getSessionGitStatus(sessionId, selected);
         if (seq !== seqRef.current) return; // 过期响应不得覆盖新目录/新请求
@@ -159,32 +130,33 @@ export function GitStatusPanel({
         if (seq !== seqRef.current) return;
         setError(err instanceof Error ? err.message : String(err));
       } finally {
-        inFlightRef.current = false;
-        if (seq === seqRef.current) setBusy(false);
+        // 只有最新请求能落 latch：旧请求晚归不得误清，否则与下一次轮询叠出并发
+        if (seq === seqRef.current) inFlightRef.current = false;
       }
     },
     [client, sessionId, selected],
   );
 
-  // ── 轮询：选中目录/间隔变化即刷新一次；隐藏页签不轮询 ──
+  // ── 轮询：选中目录变化即刷新一次；隐藏页签不轮询；pollSeconds=0 不自动轮询 ──
   useEffect(() => {
     if (!selected) return;
     setError(null); // 目录/会话切换后，旧目录的错误横幅不得挂在新数据上
     void refresh(true);
-    if (intervalSec <= 0) return;
+    if (pollSeconds <= 0) return;
     const timer = window.setInterval(() => {
       if (!document.hidden) void refresh(false);
-    }, intervalSec * 1000);
+    }, pollSeconds * 1000);
     return () => window.clearInterval(timer);
-  }, [selected, intervalSec, refresh]);
+  }, [selected, pollSeconds, refresh]);
 
   useEffect(() => {
     const onVis = () => {
-      if (!document.hidden) void refresh(true);
+      // pollSeconds=0 = 不自动轮询：回前台也不自动拉（选中/切换目录与手动刷新除外）
+      if (!document.hidden && pollSeconds > 0) void refresh(true);
     };
     document.addEventListener('visibilitychange', onVis);
     return () => document.removeEventListener('visibilitychange', onVis);
-  }, [refresh]);
+  }, [refresh, pollSeconds]);
 
   if (!sessionId) {
     return <div className="small muted">请先打开会话。</div>;
@@ -207,7 +179,7 @@ export function GitStatusPanel({
         <button
           type="button"
           className="btn-ghost small"
-          disabled={!selected || busy}
+          disabled={!selected}
           onClick={() => void refresh(true)}
         >
           刷新
@@ -242,19 +214,6 @@ export function GitStatusPanel({
             </optgroup>
           )}
         </select>
-        <select
-          className="model-select"
-          style={{ width: 76 }}
-          value={String(intervalSec)}
-          onChange={(e) => setIntervalSec(Number(e.target.value))}
-          title="轮询间隔"
-        >
-          {POLL_CHOICES.map((c) => (
-            <option key={c.seconds} value={c.seconds}>
-              {c.label}
-            </option>
-          ))}
-        </select>
       </div>
 
       {rootsError && (
@@ -280,24 +239,18 @@ export function GitStatusPanel({
 
       {snap && (
         <>
-          <div
-            className="small"
-            style={{
-              display: 'flex',
-              flexWrap: 'wrap',
-              gap: 8,
-              alignItems: 'baseline',
-              marginBottom: 6,
-            }}
-          >
-            <code className="small" style={{ wordBreak: 'break-all', opacity: 0.85 }}>
+          <div style={{ marginBottom: 6 }}>
+            <code
+              className="small"
+              style={{ display: 'block', wordBreak: 'break-all', opacity: 0.85 }}
+            >
               {snap.repoRoot ?? snap.path}
             </code>
+            {/* 独立 nowrap 行：任何瞬态文字与长路径并排都会触发 flex 重排、整列抖动 */}
             {updatedAt && (
-              <span className="small muted">
+              <div className="small muted" style={{ whiteSpace: 'nowrap' }}>
                 更新于 {new Date(updatedAt).toLocaleTimeString()}
-                {busy ? ' · …' : ''}
-              </span>
+              </div>
             )}
           </div>
 

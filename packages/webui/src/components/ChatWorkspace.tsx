@@ -2494,7 +2494,7 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
                 <li>右栏「任务」：会话任务树；对 Agent 说「把 xx 标为完成」即可更新</li>
                 <li>右栏「附件」：本会话参考语料；可 file_read 深读</li>
                 <li>右栏「文件」：send_file 发送的文本文件；图片/音视频在对话中展示，可转存</li>
-                <li>右栏「Git」：选定目录的 git 工作区状态；默认 5s 轮询（可调/手动），切换目录即刷新</li>
+                <li>右栏「Git」：选定目录的 git 工作区状态；按 web.gitStatusPollSeconds 轮询（默认 5s，0=不自动轮询），切换目录即刷新</li>
                 <li>连接成功后自动刷新 Agent、模型目录和会话</li>
                 <li>Enter 发送，Shift+Enter 换行；输入法选词阶段不会误触</li>
               </ul>

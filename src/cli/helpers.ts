@@ -106,6 +106,27 @@ export interface StartWebUiOptions {
   port?: number;
   /** 网关端口：透传给 serve-webui 动态下发 /octopi-config.js（缺省不下发） */
   gatewayPort?: number;
+  /** Git 页签轮询间隔（秒）：透传给 serve-webui 下发（缺省不下发，前端回落默认） */
+  gitStatusPollSeconds?: number;
+}
+
+/**
+ * 组装 serve-webui 的 argv（纯函数，供测试锁定 0 哨兵语义）。
+ *
+ * @param distDir - WebUI dist 目录（argv[2]）
+ * @param options - host/port/gatewayPort/gitStatusPollSeconds 透传项
+ * @returns distDir 之后的 argv 段
+ */
+export function webUiServeArgs(distDir: string, options?: StartWebUiOptions): string[] {
+  const args = [distDir];
+  if (options?.hostArg) args.push('--host', options.hostArg);
+  if (options?.port) args.push('--port', String(options.port));
+  if (options?.gatewayPort) args.push('--gateway-port', String(options.gatewayPort));
+  // `!== undefined` 是 0 哨兵的保命线：0 = 不自动轮询，truthy 判断会把它静默吞掉
+  if (options?.gitStatusPollSeconds !== undefined) {
+    args.push('--git-status-poll-seconds', String(options.gitStatusPollSeconds));
+  }
+  return args;
 }
 
 export function startWebUi(distDir: string, options?: StartWebUiOptions): number | null {
@@ -114,11 +135,9 @@ export function startWebUi(distDir: string, options?: StartWebUiOptions): number
     ? serveJs
     : join(dirname(fileURLToPath(import.meta.url)), 'serve-webui.js');
   if (!existsSync(entry)) return null;
-  const args = [entry, distDir];
-  if (options?.hostArg) args.push('--host', options.hostArg);
-  if (options?.port) args.push('--port', String(options.port));
-  if (options?.gatewayPort) args.push('--gateway-port', String(options.gatewayPort));
-  return spawnDetached(process.execPath, args, { cwd: distDir });
+  return spawnDetached(process.execPath, [entry, ...webUiServeArgs(distDir, options)], {
+    cwd: distDir,
+  });
 }
 
 export async function stopWebUi(pid: number): Promise<void> {
@@ -138,6 +157,22 @@ export function gatewayConfigScript(port?: number): string {
   return port !== undefined
     ? `window.__OCTOPI_GATEWAY__=${JSON.stringify({ port })};\n`
     : 'window.__OCTOPI_GATEWAY__=null;\n';
+}
+
+/**
+ * `/octopi-config.js` 响应体（UI 行为旋钮段）：与网关地址一起下发。
+ *
+ * 唯一真相源是 `octopi.json`（`web.gitStatusPollSeconds` 等）；缺省下发 null，
+ * 前端走内置默认。与 `gatewayConfigScript` 分开发射——网关地址与 UI 行为是
+ * 两类语义，各归各的全局（`window.__OCTOPI_GATEWAY__` / `window.__OCTOPI_WEB__`）。
+ *
+ * @param web - UI 旋钮对象；undefined 时下发 null
+ * @returns JavaScript 赋值语句
+ */
+export function webConfigScript(web?: { gitStatusPollSeconds?: number }): string {
+  return web !== undefined
+    ? `window.__OCTOPI_WEB__=${JSON.stringify(web)};\n`
+    : 'window.__OCTOPI_WEB__=null;\n';
 }
 
 export function getWebUiPidPath(): string {

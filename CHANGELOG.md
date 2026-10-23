@@ -1,3 +1,20 @@
+## v0.87.1
+
+### fix(webui): Git 页签刷新抖动修复 + 轮询频率配置化（去 UI 下拉）
+
+**背景**（大哥 2026-10-23 反馈）：① 每次刷新短暂插入提示文字导致页面结构抖动；② 不要刷新频率下拉，改配置文件配置。
+
+**变更**：
+
+1. **抖动根因与修复**：头部是 flex-wrap 行，长 repo 路径（break-all）与「更新于…」并排，轮询时 `busy` 瞬态追加「 · …」→ flex 重排 → 长路径换行变化 → 整列高度抖动。修复：删掉瞬态文字；路径与「更新于」各自独立成行（时间行 nowrap），刷新不再改变任何行的宽度/高度。
+2. **轮询频率配置化**：新配置 `web.gitStatusPollSeconds`（0..3600 整数，0 = 不自动轮询——选中/切换目录与手动刷新仍即时，缺省 5）——octopi.json 单一真相源，经 `readConfigWebSettings` → `startWebUi(--git-status-poll-seconds)` → `serve-webui` → `/octopi-config.js` 新增 `window.__OCTOPI_WEB__` 段（与网关地址 `__OCTOPI_GATEWAY__` 分语义、分全局）→ webui `runtime-config.ts` 读取。UI 轮询下拉与 localStorage 间隔记忆移除；手动「刷新」按钮保留。`octopi.example.json` / `octopi.schema.json` 同步重生成。**改后需 `octopi webui restart` 生效**（值在 spawn 时烘进 argv，非热生效）。
+
+**独立评审**（P0=0 / P1=1 / P2=11，逐条核对后修复）：P1 非法值三级静默吸收 + 生效值不可观测——CLI 侧改 `console.warn` 显式告警 + 启动日志打印 `Git poll: Ns (config|default)`（与 `octopi serve start` 的硬校验对齐观感）；P2 修复 6 条：刷新按钮不再随轮询闪烁（去 busy 禁用态）、`0` 语义不再被回前台刷新破例（onVis 加哨兵）、边界校验收敛为 schema 单源（`isValidGitStatusPollSeconds`/常量导出，CLI+serve-webui 复用；浏览器包为手工镜像并标注同改）、argv 拼装抽纯函数 `webUiServeArgs` 补测试（0 哨兵锁定）、dev 桩补 `window.__OCTOPI_WEB__ = null`（契约对称）、inFlight latch 改 seq 守卫（旧请求晚归不误清）。留观未修：`readGitStatusPollSeconds` 测试面导出（与 `readGatewayPort` 对称既有形态）、webui 包无测试基建（runtime-config 回落逻辑仍靠人工）、`.claude/settings.local.json` 游离未入库（非本次产物，待定 ignore 策略）。
+
+**验证**：`tests/cli-webui-helpers.test.ts` 新增 7 用例（schema 边界、webConfigScript、readGitStatusPollSeconds、webUiServeArgs 含 0 哨兵）25/25 通过；全量 3076 过 / 2 败 / 6 跳过（2 败仍为 getProcessName/identifyPortOccupant 沙箱固有，与本次无关）；`npm run build`（含 schema 重生成）与 `npm run lint` 全绿。
+
+---
+
 ## v0.87.0
 
 ### feat(webui): 右栏「Git」页签——选定目录的 git 工作区状态（只读轮询）

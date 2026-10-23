@@ -3386,6 +3386,11 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 65535
+        },
+        "gitStatusPollSeconds": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3600
         }
       }
     }

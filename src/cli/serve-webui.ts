@@ -6,11 +6,14 @@
 import { createServer } from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
 import { join, normalize, extname, resolve, sep } from 'node:path';
-import { gatewayConfigScript } from './helpers.js';
+import { gatewayConfigScript, webConfigScript } from './helpers.js';
+import { isValidGitStatusPollSeconds } from '../config-schema/webui.js';
 
 const distArg = process.argv[2];
 if (!distArg) {
-  console.error('usage: serve-webui <distDir> [--host host] [--port port] [--gateway-port port]');
+  console.error(
+    'usage: serve-webui <distDir> [--host host] [--port port] [--gateway-port port] [--git-status-poll-seconds n]',
+  );
   process.exit(1);
 }
 
@@ -18,12 +21,17 @@ const distDir = resolve(distArg);
 let host = '127.0.0.1';
 let port = 8180;
 let gatewayPort: number | undefined;
+let gitStatusPollSeconds: number | undefined;
 for (let i = 3; i < process.argv.length; i++) {
   if (process.argv[i] === '--host' && process.argv[i + 1]) host = process.argv[++i];
   if (process.argv[i] === '--port' && process.argv[i + 1]) port = Number(process.argv[++i]);
   if (process.argv[i] === '--gateway-port' && process.argv[i + 1]) {
     const gp = Number(process.argv[++i]);
     if (Number.isInteger(gp) && gp >= 1 && gp <= 65535) gatewayPort = gp;
+  }
+  if (process.argv[i] === '--git-status-poll-seconds' && process.argv[i + 1]) {
+    const n = Number(process.argv[++i]);
+    if (isValidGitStatusPollSeconds(n)) gitStatusPollSeconds = n;
   }
 }
 
@@ -62,7 +70,12 @@ const server = createServer(async (req, res) => {
         'Content-Type': 'application/javascript; charset=utf-8',
         'Cache-Control': 'no-store',
       });
-      res.end(gatewayConfigScript(gatewayPort));
+      res.end(
+        gatewayConfigScript(gatewayPort) +
+          webConfigScript(
+            gitStatusPollSeconds !== undefined ? { gitStatusPollSeconds } : undefined,
+          ),
+      );
       return;
     }
     let file = safeJoin(distDir, req.url || '/');

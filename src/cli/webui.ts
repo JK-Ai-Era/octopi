@@ -22,6 +22,10 @@ import {
   removeWebUiPidFile,
 } from './helpers.js';
 import { findPidOnPort, isProcessAlive } from './process-utils.js';
+import {
+  DEFAULT_GIT_STATUS_POLL_SECONDS,
+  isValidGitStatusPollSeconds,
+} from '../config-schema/webui.js';
 
 export interface WebUiStartOptions {
   /** soft: 失败只警告，不 process.exit（供 serve start 使用） */
@@ -42,6 +46,7 @@ function readConfigWebSettings(configPath?: string): {
   host?: NetworkHostConfig;
   port?: number;
   gatewayPort?: number;
+  gitStatusPollSeconds?: number;
 } {
   try {
     let filePath: string;
@@ -54,7 +59,7 @@ function readConfigWebSettings(configPath?: string): {
     }
     if (!existsSync(filePath)) return {};
     const raw = JSON.parse(readFileSync(filePath, 'utf-8')) as {
-      web?: { dir?: unknown; host?: unknown; port?: unknown };
+      web?: { dir?: unknown; host?: unknown; port?: unknown; gitStatusPollSeconds?: unknown };
       channels?: unknown;
     };
     const dir = typeof raw.web?.dir === 'string' && raw.web.dir.trim() ? raw.web.dir.trim() : undefined;
@@ -62,6 +67,14 @@ function readConfigWebSettings(configPath?: string): {
       ? (raw.web.host.trim() as NetworkHostConfig)
       : undefined;
     const port = typeof raw.web?.port === 'number' ? raw.web.port : undefined;
+    const poll = raw.web?.gitStatusPollSeconds;
+    if (poll !== undefined && !isValidGitStatusPollSeconds(poll)) {
+      // 存在但非法：明确告警而非静默回落——另一入口 `octopi serve start` 走硬校验
+      // 拒启，两条入口不能一个吵一个静；生效值另在启动日志打印（webuiStartCommand）。
+      console.warn(
+        `⚠️  web.gitStatusPollSeconds 非法（${JSON.stringify(poll)}），忽略并使用默认 ${DEFAULT_GIT_STATUS_POLL_SECONDS}s`,
+      );
+    }
     const httpChannel = Array.isArray(raw.channels)
       ? (raw.channels.find(
           (c): c is Record<string, unknown> =>
@@ -74,6 +87,7 @@ function readConfigWebSettings(configPath?: string): {
       host,
       port: isValidPort(port) ? port : undefined,
       gatewayPort: isValidPort(gatewayPort) ? gatewayPort : undefined,
+      gitStatusPollSeconds: isValidGitStatusPollSeconds(poll) ? poll : undefined,
     };
   } catch {
     return {};
@@ -111,6 +125,18 @@ function readConfigWebDir(configPath?: string): string | undefined {
  */
 export function readGatewayPort(configPath?: string): number | undefined {
   return readConfigWebSettings(configPath).gatewayPort;
+}
+
+/**
+ * 读取 WebUI Git 页签轮询间隔（`web.gitStatusPollSeconds`）
+ *
+ * 供 serve-webui 下发 `/octopi-config.js`；缺省 undefined 时前端回落默认 5s。
+ *
+ * @param configPath 配置文件路径（缺省按 cwd / OCTOPI_HOME 查找）
+ * @returns 0..3600 的整数秒（0 = 仅手动），配置缺失/非法时为 undefined
+ */
+export function readGitStatusPollSeconds(configPath?: string): number | undefined {
+  return readConfigWebSettings(configPath).gitStatusPollSeconds;
 }
 
 /** 探测本机局域网 IPv4（用于启动提示） */
@@ -194,6 +220,7 @@ export async function webuiStartCommand(
     hostArg: listenHost,
     port,
     gatewayPort: webSettings.gatewayPort,
+    gitStatusPollSeconds: webSettings.gitStatusPollSeconds,
   });
   if (!pid) {
     if (soft) {
@@ -218,6 +245,9 @@ export async function webuiStartCommand(
     console.log(`   Access: local only (host=${listenHost})`);
     console.log(`   URL:    http://${listenHost === '0.0.0.0' ? '127.0.0.1' : listenHost}:${port}`);
   }
+  console.log(
+    `   Git poll: ${webSettings.gitStatusPollSeconds ?? DEFAULT_GIT_STATUS_POLL_SECONDS}s (${webSettings.gitStatusPollSeconds !== undefined ? 'config' : 'default'}, 0=不自动轮询)`,
+  );
   console.log(`\nUse 'octopi webui stop' to stop, 'octopi webui status' to check.`);
 
   // spawn 后父进程必须退出：Windows 上残留事件柄/Job 会让 CLI 挂住，

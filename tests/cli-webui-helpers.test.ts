@@ -15,8 +15,8 @@ import {
   removeWebUiPidFile,
   getWebUiPidPath,
 } from '../src/cli/helpers.js';
-import { resolveWebUiPort, findPidOnVitePorts, readGatewayPort } from '../src/cli/webui.js';
-import { gatewayConfigScript } from '../src/cli/helpers.js';
+import { resolveWebUiPort, findPidOnVitePorts, readGatewayPort, readGitStatusPollSeconds } from '../src/cli/webui.js';
+import { gatewayConfigScript, webConfigScript, webUiServeArgs } from '../src/cli/helpers.js';
 import { WebConfigSchema } from '../src/config-schema/webui.js';
 import { spawnDetached, killProcess, findPidOnPort, delay } from '../src/cli/process-utils.js';
 
@@ -123,6 +123,20 @@ describe('WebConfigSchema web.port', () => {
   });
 });
 
+describe('WebConfigSchema web.gitStatusPollSeconds', () => {
+  test('accepts 0..3600 integers (0 = manual) and rejects the rest', () => {
+    expect(WebConfigSchema.safeParse({ gitStatusPollSeconds: 5 }).success).toBe(true);
+    expect(WebConfigSchema.safeParse({ gitStatusPollSeconds: 0 }).success).toBe(true);
+    expect(WebConfigSchema.safeParse({ gitStatusPollSeconds: 3600 }).success).toBe(true);
+    expect(WebConfigSchema.safeParse({ gitStatusPollSeconds: -1 }).success).toBe(false);
+    expect(WebConfigSchema.safeParse({ gitStatusPollSeconds: 3601 }).success).toBe(false);
+    expect(WebConfigSchema.safeParse({ gitStatusPollSeconds: 1.5 }).success).toBe(false);
+    expect(WebConfigSchema.safeParse({ gitStatusPollSeconds: '5' }).success).toBe(false);
+    // 缺省可选：不配置时前端走内置默认
+    expect(WebConfigSchema.safeParse({}).success).toBe(true);
+  });
+});
+
 describe('resolveWebUiPort', () => {
   function writeConfig(web: Record<string, unknown>): string {
     const p = join(tempDir, 'octopi.json');
@@ -212,5 +226,75 @@ describe('readGatewayPort', () => {
     writeFileSync(p, JSON.stringify({ channels: [{ type: 'http', port: 70000 }] }));
     expect(readGatewayPort(p)).toBeUndefined();
     expect(readGatewayPort(join(tempDir, 'not-exists.json'))).toBeUndefined();
+  });
+});
+
+describe('webConfigScript（/octopi-config.js UI 旋钮下发）', () => {
+  test('serializes UI knobs for runtime injection', () => {
+    expect(webConfigScript({ gitStatusPollSeconds: 10 })).toBe(
+      'window.__OCTOPI_WEB__={"gitStatusPollSeconds":10};\n',
+    );
+    expect(webConfigScript({})).toBe('window.__OCTOPI_WEB__={};\n');
+  });
+
+  test('emits null when no knobs (frontend falls back to defaults)', () => {
+    expect(webConfigScript(undefined)).toBe('window.__OCTOPI_WEB__=null;\n');
+  });
+});
+
+describe('readGitStatusPollSeconds', () => {
+  test('reads web.gitStatusPollSeconds (0 = manual allowed)', () => {
+    const p = join(tempDir, 'poll.json');
+    writeFileSync(p, JSON.stringify({ web: { gitStatusPollSeconds: 10 } }));
+    expect(readGitStatusPollSeconds(p)).toBe(10);
+    writeFileSync(p, JSON.stringify({ web: { gitStatusPollSeconds: 0 } }));
+    expect(readGitStatusPollSeconds(p)).toBe(0);
+  });
+
+  test('returns undefined when missing or out of range', () => {
+    const p = join(tempDir, 'poll-bad.json');
+    writeFileSync(p, JSON.stringify({ web: {} }));
+    expect(readGitStatusPollSeconds(p)).toBeUndefined();
+    writeFileSync(p, JSON.stringify({ web: { gitStatusPollSeconds: 3601 } }));
+    expect(readGitStatusPollSeconds(p)).toBeUndefined();
+    writeFileSync(p, JSON.stringify({ web: { gitStatusPollSeconds: -1 } }));
+    expect(readGitStatusPollSeconds(p)).toBeUndefined();
+    writeFileSync(p, JSON.stringify({ web: { gitStatusPollSeconds: 1.5 } }));
+    expect(readGitStatusPollSeconds(p)).toBeUndefined();
+    writeFileSync(p, JSON.stringify({ web: { gitStatusPollSeconds: '5' } }));
+    expect(readGitStatusPollSeconds(p)).toBeUndefined();
+    expect(readGitStatusPollSeconds(join(tempDir, 'not-exists.json'))).toBeUndefined();
+  });
+});
+
+describe('webUiServeArgs（serve-webui argv 拼装）', () => {
+  test('0 哨兵必须透传（truthy 判断会把它吞成不下发）', () => {
+    expect(webUiServeArgs('/dist', { gitStatusPollSeconds: 0 })).toEqual([
+      '/dist',
+      '--git-status-poll-seconds',
+      '0',
+    ]);
+  });
+
+  test('缺省不带 flag；全量选项顺序稳定', () => {
+    expect(webUiServeArgs('/dist')).toEqual(['/dist']);
+    expect(
+      webUiServeArgs('/dist', {
+        hostArg: '127.0.0.1',
+        port: 8180,
+        gatewayPort: 18180,
+        gitStatusPollSeconds: 10,
+      }),
+    ).toEqual([
+      '/dist',
+      '--host',
+      '127.0.0.1',
+      '--port',
+      '8180',
+      '--gateway-port',
+      '18180',
+      '--git-status-poll-seconds',
+      '10',
+    ]);
   });
 });
