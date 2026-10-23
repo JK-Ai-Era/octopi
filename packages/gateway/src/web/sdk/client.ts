@@ -272,6 +272,8 @@ export interface MessagePage {
   total?: number;
   /** backward 模式下是否还有更早消息 */
   hasMore?: boolean;
+  /** 在途 Run 现场快照（盲窗 overlay）：未定形流式正文 / running 工具；Run 不活跃缺省 */
+  live?: import('../../protocols/live-run-tracker.js').LiveRunOverlay;
 }
 
 /** 会话附件（OP-15） */

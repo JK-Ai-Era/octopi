@@ -417,6 +417,8 @@ export class SessionAwareRunner {
   /** Effective effectPolicy.mode (for Runtime injection / UI) */
   private effectMode = 'workspace';
   private effectCommitManual = false;
+  /** store 缺 syncMessages 通道时只 warn 一次 */
+  private warnedMissingSync = false;
   private effectProcessLimits = true;
   private effectNetwork: 'open' | 'deny' | 'allowlist' | undefined;
   private effectRequireJail: boolean | undefined;
@@ -1404,6 +1406,17 @@ export class SessionAwareRunner {
         }
       }
 
+      // Run 进行中转录增量落盘：turn_start 定形后立即同步一次（此后新消息
+      // 定形随 loop 事件增量同步）。写失败不中断 Run（收尾 save 是权威写），
+      // 失败不推进已同步计数，下个事件重试。
+      const firstSynced = await this.persistRunMessages(
+        sessionId,
+        _agentId,
+        contextLeasePrefix,
+        runContext.messages,
+      );
+      let syncedMessageCount = firstSynced ? runContext.messages.length : 0;
+
       // Observer 通道：Run 现场快照（摘要进事件；全文由 Hub/REST 提供）
       if (this._observerHub?.isEnabled()) {
         observerRunId =
@@ -1477,6 +1490,20 @@ export class SessionAwareRunner {
       };
 
       for await (const loopEvent of this.agent.run(signal, undefined, agentRunOptions)) {
+        // 消息数组增长 = 有新消息定形/入列（流式 delta 不 push 消息，不触发）。
+        // 覆盖 assistant/tool/followUp/steering 全部 push 点：push 必发生在
+        // 某个事件 yield 之前，下一迭代开头即可看到。
+        if (runContext.messages.length !== syncedMessageCount) {
+          if (
+            await this.persistRunMessages(sessionId, _agentId, contextLeasePrefix, runContext.messages)
+          ) {
+            syncedMessageCount = runContext.messages.length;
+          }
+        } else if (loopEvent.type === 'turn_end') {
+          // 漂移兜底：turn 边界无条件对齐一次（旁路写者整包回退后即使暂无
+          // 新消息也能自愈；无漂移时幂等零写）
+          await this.persistRunMessages(sessionId, _agentId, contextLeasePrefix, runContext.messages);
+        }
         if (loopEvent.type === 'agent_end' && loopEvent.reason === 'aborted') {
           runAborted = true;
         }
@@ -2083,6 +2110,56 @@ export class SessionAwareRunner {
       timestamp: Date.now(),
       metadata: { source: 'turnEnd', turnId },
     });
+  }
+
+  /**
+   * Run 进行中转录增量落盘：把 durable 口径的历史对齐到存储。
+   *
+   * 口径与收尾合并一致（ephemeral 运行期消息不落历史）；调用方契约：
+   * turn_start 定形之后才可同步（bake 原地改写 user 消息）。尽力而为——
+   * 失败不中断 Run（收尾整包 save 是权威写），store 无 syncMessages 时跳过。
+   *
+   * @param sessionId - 会话 id
+   * @param agentId - 本 Run 身份（assistant/tool 归因，首次同步前补齐）
+   * @param keptPrefix - 上下文租约点之前的 Discourse 前缀（与收尾 keptPrefix 同源）
+   * @param runMessages - 本 Run 视图消息（含 ephemeral，此处过滤）
+   * @returns 是否成功对齐（false 时调用方不得推进已同步计数，待下个事件重试）
+   */
+  private async persistRunMessages(
+    sessionId: string,
+    agentId: string,
+    keptPrefix: readonly Message[],
+    runMessages: readonly Message[],
+  ): Promise<boolean> {
+    const sync = this.store.syncMessages;
+    if (!sync) {
+      if (!this.warnedMissingSync) {
+        this.warnedMissingSync = true;
+        console.warn(
+          '[octopi] SessionStore lacks syncMessages; run transcript incremental persist disabled (final save remains authoritative)',
+        );
+      }
+      return true; // 无通道 = 非失败，不需要重试
+    }
+    try {
+      // 模型 2 归因：assistant/tool 消息补齐本 Run 的 agentId。必须发生在该消息
+      // 首次同步之前（已同步前缀不得再原地修改）；收尾写回处保留同口径兜底循环。
+      for (const m of runMessages) {
+        if ((m.role === 'assistant' || m.role === 'tool') && m.agentId === undefined) {
+          m.agentId = agentId;
+        }
+      }
+      await sync.call(this.store, sessionId, [
+        ...keptPrefix,
+        ...runMessages.filter((m) => m.ephemeral !== true),
+      ]);
+      return true;
+    } catch (err) {
+      console.warn(
+        `[octopi] run transcript incremental persist failed (session=${sessionId}): ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return false;
+    }
   }
 
   /** 旧路径：persona + injectedContext 字符串拼接；结果返回给 runContext，不写共享 Agent */

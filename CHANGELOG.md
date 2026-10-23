@@ -1,3 +1,31 @@
+## v0.88.0
+
+### feat(core/engine/gateway): 转录增量落盘 + 在途 Run 盲窗 overlay — 修「运行中刷新浏览器后在途 turn 执行过程不可见」
+
+**问题**：turn 运行中刷新浏览器，当前 turn 已执行的过程全部不可见。因果链：会话转录只在 run 收尾整包 `store.save` 落盘（中途只增长在内存）+ WS 事件 fire-and-forget 无补发 + WebUI 运行时条目只活在内存 `conversationCache`（刷新即清零）。浏览器重建视图只认磁盘，于是在途 turn 成了盲窗。
+
+**关键辨析**：「turn_end 才提交」对文件效应 undo（L3 `TurnFileUndoLog`）是语义要求，但对**转录可见性**不是——消息级撤销走 `abortedTurn + truncateMessagesFrom`（对已落盘数据操作），转录提前落盘不破坏任何 undo 语义。两件事此前被同一个提交点绑住是实现耦合，本次解开。
+
+**A 面 — 转录增量落盘（根因修复）**：
+
+1. **`SessionStore.syncMessages(sessionId, messages)`**（新可选契约）：「把持久化消息序列对齐为给定序列」——增量追加优先，漂移（旁路整包 save / 外部改动 / 前缀分歧 / 冷缓存）退化为整文件对齐重写，幂等（同一引用前缀重复调用零写）。`JsonlSessionStore` 实现：`syncCaches`（字节数抓文件漂移 + 消息对象引用序列抓序列分歧）+ LRU 上限 64（防长驻进程钉住全量转录引用）+ 整文件对齐走 tmp+rename（读侧不撞半截转录）；`InMemorySessionStore` 同口径（不存在则跳过）。
+2. **runner 增量同步**：durable 口径与收尾合并逐字一致（`keptPrefix + runContext.messages.filter(非 ephemeral)`，ephemeral 永不落历史）。turn_start 定形（bake）后立即首同步；loop 每次迭代开头按「消息数组增长」触发（流式 delta 不 push 消息零成本）；turn 边界无条件对齐一次（旁路写者回退后即使暂无新消息也自愈）。写失败不中断 Run、不推进已同步计数（下个事件重试）；store 无该方法时 warn 一次降级（收尾 save 仍是权威写）。`assistant/tool` 的 agentId 归因下沉到首次同步之前（与收尾归因循环同口径，收尾保留兜底）。
+3. **顺带修好崩溃语义**：此前崩溃 = 整 turn 过程全丢（仅剩一条 streamedContent 兜底）；现在 = 至少丢最后一个未定形消息，配合既有 `ensurePreviousTurnClosed` 补闭。
+
+**C 面 — 在途 Run 盲窗 overlay（视图修复）**：
+
+1. **`LiveRunTracker`**（新，protocols）：在 WS 扇出口（`HttpChannelAdapter.broadcastEvent`，UI 可见事件必经点）聚合在途 Run 现场——流式正文/思考、running 工具、status。`turn.end` 清流式缓冲（与 `ConversationAdapter` 同语义，防重复气泡/跨轮粘连）；`engine.start` 整现场复位；终态（engine.end / aborted / engine.error / interrupted）清除；`model.call.error` 不清（provider 可恢复，Run 仍在途）；无关事件不建条目。
+2. **`GET /sessions/:id/messages` 附 `live` 快照**：未定形流式正文 + running 工具；Run 不活跃缺省。
+3. **WebUI hydration**：无本端缓存活性时用 `applyLiveRunOverlay`（纯函数）合成 running 工具条目 + streaming assistant 条目并恢复 `ConversationAdapter` 状态（WS 事件无缝续接）；同 toolCallId 以 history 为权威；二次应用幂等。**订阅窗口校准**：取快照到 WS 订阅建立之间夹着若干 await，窗口内 delta 会丢——订阅生效后重取一次 live 重合成。
+
+**独立评审**（fresh-eyes 子代理逐文件核对 + 实跑）：1 blocker（tracker 的 turn.end 缓冲语义与 adapter 分叉 → 每个 turn 边界重复气泡）+ 8 should-fix（sync 缓存内存上限、终态词表、订阅窗口、engine.start 复位、agentId 归因、漂移触发面、失败重试、原子对齐写）已全部核销修复；6 nit 采纳 4（契约措辞、注释、overlay 幂等、缺通道 warn）。
+
+**兼容性**：无破坏性变更。`syncMessages` 为可选方法（第三方 store 未实现只降级为收尾落盘，warn 一次）；messages API 响应仅新增可选字段。
+
+**验证**：新增 `tests/jsonl-sync-messages.test.ts`（10）、`tests/harness/run-transcript-incremental-persist.test.ts`（3，真 JsonlSessionStore + fake Agent 连线，中途快照带反向断言防假绿）、`tests/live-run-overlay.test.ts`（17）共 30 例；全量 3145 过 / 2 败 / 6 跳过（2 败仍为 getProcessName/identifyPortOccupant 沙箱固有，与改动无关）；`npm run build`、`npm run lint`、`arch/check-sync.sh` 全绿。
+
+---
+
 ## v0.87.7
 
 ### docs(changelog): 历史条目中的清单式未决项一并迁出

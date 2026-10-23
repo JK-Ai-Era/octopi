@@ -36,6 +36,7 @@ import type {
 
 import { ConversationAdapter } from '../conversation/adapter.js';
 import type { AdapterSnapshot } from '../conversation/adapter.js';
+import { applyLiveRunOverlay } from '../conversation/live-overlay.js';
 import type { ConversationItem, SystemConversationItem, ToolConversationItem, UserConversationItem, ViewMode } from '../conversation/types.js';
 import {
   buildContextLayersSnapshot,
@@ -959,6 +960,8 @@ export class OctopiRuntimeStore extends EventTarget {
     let viewMode: ViewMode = 'history';
     let historyCursor: string | undefined;
     let historyHasMore = false;
+    /** 在途 Run 盲窗快照（messages API 附带）；Run 不活跃缺省 */
+    let pageLive: import('../../protocols/live-run-tracker.js').LiveRunOverlay | undefined;
     try {
       // 打开只取末尾一页；更早历史由向上滚动分页补齐（纯展示，不进 LLM 装配）
       const page = await this.client.getSessionMessages(sessionId, {
@@ -968,6 +971,7 @@ export class OctopiRuntimeStore extends EventTarget {
       conversationItems = ConversationAdapter.buildHistoryItems(page.messages, sessionId);
       historyCursor = page.nextCursor;
       historyHasMore = Boolean(page.hasMore);
+      pageLive = page.live;
     } catch {
       conversationItems = [];
     }
@@ -1030,6 +1034,13 @@ export class OctopiRuntimeStore extends EventTarget {
       if (cached && cached.items.length === 0) {
         this.conversationCache.delete(sessionId);
       }
+      // 服务端在途 Run 盲窗 overlay：已定形消息由增量落盘保证在盘（history 权威），
+      // live 只补「未定形的流式正文 / running 工具」；恢复 adapter 状态让 WS 事件无缝续接
+      if (pageLive) {
+        const overlay = applyLiveRunOverlay(sessionId, conversationItems, pageLive);
+        conversationItems = overlay.items;
+        this.conversationAdapter.restoreState(overlay.adapterState);
+      }
     }
 
     // 兜底去重：同 toolCallId 只保留最后一条（历史与缓存可能各有一条）
@@ -1044,10 +1055,12 @@ export class OctopiRuntimeStore extends EventTarget {
 
     const tools = this.deriveTools(conversationItems);
     const hasRunningTool = tools.some(t => t.status === 'running');
-    const streamingContent = usedCacheItems ? (cached?.adapterState.streamingContent ?? '') : '';
+    const streamingContent = usedCacheItems
+      ? (cached?.adapterState.streamingContent ?? '')
+      : (pageLive?.streamingContent ?? '');
     // 优先用缓存里的 runStatus（含 waiting：工具结束后下一轮 LLM 尚未吐 token）。
-    // 仅从 items 推导会把 waiting 丢成 idle。
-    const cachedStatus = usedCacheItems ? cached?.runStatus : undefined;
+    // 仅从 items 推导会把 waiting 丢成 idle。无本端缓存时用服务端 live 快照。
+    const cachedStatus = usedCacheItems ? cached?.runStatus : pageLive?.status;
     const isActiveStatus =
       cachedStatus === 'tools' || cachedStatus === 'streaming' || cachedStatus === 'waiting' || cachedStatus === 'sending';
     const derivedRunStatus: RunStatus = hasRunningTool
@@ -1148,6 +1161,41 @@ export class OctopiRuntimeStore extends EventTarget {
     }
 
     this.subscribeSession(sessionId, view.meta.agentId);
+
+    // 订阅窗口校准：取 live 快照到订阅建立之间夹着若干 await，窗口内的流式
+    // delta 会永久丢失。订阅生效后重取一次 live，用最新现场重合成（applyLiveRunOverlay
+    // 幂等剔除旧合成条目）；Run 已结束则清干净合成残留。
+    if (pageLive) {
+      try {
+        const latest = await this.client.getSessionMessages(sessionId, {
+          limit: 1,
+          direction: 'backward',
+        });
+        const liveNow = latest.live ?? {
+          status: 'waiting' as const,
+          streamingContent: '',
+          streamingReasoning: '',
+          runningTools: [],
+        };
+        const overlay = applyLiveRunOverlay(sessionId, this.chat.conversation, liveNow);
+        this.chat.conversation = overlay.items;
+        this.chat.streamingContent = liveNow.streamingContent;
+        this.chat.tools = this.deriveTools(overlay.items);
+        this.chat.runStatus = overlay.items.some(
+          (it) => it.role === 'tool' && it.status === 'running',
+        )
+          ? 'tools'
+          : liveNow.streamingContent
+            ? 'streaming'
+            : latest.live
+              ? 'waiting'
+              : 'idle';
+        if (!latest.live) this.engineActive = false;
+        this.conversationAdapter.restoreState(overlay.adapterState);
+      } catch {
+        // 校准失败不影响会话打开（后续 WS 事件自愈）
+      }
+    }
 
     this.dispatch('session', new SessionEvent('session', { session: this.currentSession }));
     this.dispatch('chat', new ChatEvent('chat', { conversation: this.chat.conversation }));

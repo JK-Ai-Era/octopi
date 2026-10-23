@@ -54,6 +54,19 @@ export class InMemorySessionStore implements SessionStore<SessionData> {
     });
   }
 
+  /**
+   * 消息序列对齐。契约见 SessionStore.syncMessages；
+   * 内存后端直接替换消息数组（与 JsonlSessionStore 同口径：不存在则跳过）。
+   */
+  async syncMessages(sessionId: string, messages: readonly unknown[]): Promise<void> {
+    const prev = this.sessions.get(sessionId);
+    if (!prev) return;
+    this.sessions.set(sessionId, {
+      ...prev,
+      messages: messages.slice() as SessionData['messages'],
+    });
+  }
+
   async list(filter?: SessionListFilter): Promise<SessionMeta[]> {
     const values = Array.from(this.sessions.values());
     return values

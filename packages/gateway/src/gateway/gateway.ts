@@ -2520,11 +2520,14 @@ export class Gateway {
     nextCursor?: string;
     total: number;
     hasMore: boolean;
+    /** 在途 Run 现场快照（盲窗 overlay）：未定形的流式正文 / running 工具；Run 不活跃缺省 */
+    live?: import('../protocols/live-run-tracker.js').LiveRunOverlay;
   }> {
     const session = await this.store.load(sessionId);
     if (!session) {
       throw new Error(`Session "${sessionId}" not found`);
     }
+    const live = this.collectLiveRun(sessionId);
 
     const total = session.messages.length;
     const decodeCursor = (c: string): number => Number(Buffer.from(c, 'base64').toString('utf-8'));
@@ -2541,6 +2544,7 @@ export class Gateway {
         nextCursor: start > 0 ? encodeCursor(start) : undefined,
         total,
         hasMore: start > 0,
+        ...(live ? { live } : {}),
       };
     }
 
@@ -2553,7 +2557,17 @@ export class Gateway {
       nextCursor: nextOffset < total ? encodeCursor(nextOffset) : undefined,
       total,
       hasMore: nextOffset < total,
+      ...(live ? { live } : {}),
     };
+  }
+
+  /** 从流式 adapter 聚合在途 Run 现场（盲窗 overlay）；无流式 adapter 或 Run 不活跃返回 undefined */
+  private collectLiveRun(sessionId: string): import('../protocols/live-run-tracker.js').LiveRunOverlay | undefined {
+    for (const adapter of this.streamingAdapters) {
+      const live = adapter.getLiveRun?.(sessionId);
+      if (live) return live;
+    }
+    return undefined;
   }
 
   /**

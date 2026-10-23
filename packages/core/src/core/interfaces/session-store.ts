@@ -51,6 +51,23 @@ export interface SessionStore<T = unknown> {
     mutate: (meta: Record<string, unknown>) => void | Record<string, unknown>,
   ): Promise<void>;
 
+  /**
+   * 将持久化消息序列对齐为 `messages`（Run 进行中的转录增量落盘通道）。
+   *
+   * 语义 = 「load().messages 等于给定序列」：实现应优先增量追加，检测到漂移
+   * （旁路整包 save / 外部改动 / 前缀分歧）时退化为整文件对齐。幂等：重复
+   * 调用同一序列（同一引用前缀）不得产生额外写。
+   *
+   * 调用方契约：
+   * - 只传「已定形、应落历史」的消息（与收尾 `save` 的落历史口径一致，
+   *   ephemeral 运行期消息不得包含）；
+   * - 已同步前缀不得再原地修改消息对象（需要修改即视为新序列，实现按
+   *   分歧处理）。
+   *
+   * 与 `save` 同会话串行。元素仅按 JSON 序列化持久化，结构由 harness 层定义。
+   */
+  syncMessages?(sessionId: string, messages: readonly unknown[]): Promise<void>;
+
   /** 列出 session 元数据；可选按参与 agent 过滤 */
   list(filter?: SessionListFilter): Promise<SessionMeta[]>;
 

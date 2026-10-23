@@ -18,6 +18,7 @@
 
 import type { ChannelAdapter, ChannelMessage, ChannelReply } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/channel-types.js';
 import type { AgentEvent } from '@octopi-agent/core/primitives/event-bus.js';
+import { LiveRunTracker, type LiveRunOverlay } from './live-run-tracker.js';
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'node:http';
 import { WebSocketServer, WebSocket, type WebSocket as WS } from 'ws';
 
@@ -78,10 +79,17 @@ export interface StreamingChannelAdapter extends ChannelAdapter {
    * 向指定 session 的所有 WebSocket 客户端广播事件
    */
   broadcastEvent(sessionId: string, event: AgentEvent): void;
+  /**
+   * 在途 Run 现场快照（盲窗 overlay）；Run 不活跃返回 undefined。
+   * 由消费广播的 adapter 顺手聚合（run 事件的 WS 扇出口 = 必经点）。
+   */
+  getLiveRun?(sessionId: string): LiveRunOverlay | undefined;
 }
 
 export class HttpChannelAdapter implements StreamingChannelAdapter {
   name = 'http';
+  /** 在途 Run 现场快照（盲窗 overlay）；broadcastEvent 出口顺手聚合 */
+  private readonly liveRuns = new LiveRunTracker();
   private port: number;
   private host: string;
   private path: string;
@@ -224,6 +232,11 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
   }
 
   broadcastEvent(sessionKey: string, event: AgentEvent): void {
+    // 在途 Run 现场聚合（盲窗 overlay）：UI 可见事件必经此出口
+    this.liveRuns.observe(
+      String((event as { sessionId?: unknown }).sessionId ?? '') || sessionKey,
+      event as unknown as { type: string; data?: Record<string, unknown>; timestamp?: number },
+    );
     // sessionKey 格式：agentId:rest（由 Gateway 构建）；'*' = 系统级广播
     const payload = { type: 'event', sessionId: sessionKey, event };
     const data = JSON.stringify(payload);
@@ -246,6 +259,11 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
         }
       }
     }
+  }
+
+  /** 在途 Run 现场快照（盲窗 overlay）；Run 不活跃返回 undefined */
+  getLiveRun(sessionId: string): LiveRunOverlay | undefined {
+    return this.liveRuns.get(sessionId);
   }
 
   private deriveSessionState(sessionKey: string, event: AgentEvent): { type: 'state'; sessionId: string; state: string } | null {

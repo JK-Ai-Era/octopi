@@ -12,7 +12,7 @@
  * `sessions.json` parse 失败会拒绝写回，避免清空 meta。
  */
 
-import { access, mkdir, readFile, writeFile, unlink, rename } from 'node:fs/promises';
+import { access, mkdir, readFile, writeFile, unlink, rename, appendFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { SessionStore, SessionListFilter } from '@octopi-agent/core/interfaces/session-store.js';
 import type { SessionData } from '@octopi-agent/engine/harness/session/types.js';
@@ -42,6 +42,22 @@ function readPinnedAt(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
+/** 已同步序列上限（LRU）：缓存只服务于增量判定，不得把全会话转录常驻钉在堆里 */
+const MAX_SYNC_CACHES = 64;
+
+/**
+ * 已同步序列是否为给定序列的引用相等前缀。
+ * 调用方契约：已同步消息不再原地修改（原地修改 = 视为新序列，须由调用方
+ * 保证不发生在首同步之前，如 turn_start 定形）。
+ */
+function isRefPrefix(synced: readonly unknown[], incoming: readonly unknown[]): boolean {
+  if (incoming.length < synced.length) return false;
+  for (let i = 0; i < synced.length; i++) {
+    if (synced[i] !== incoming[i]) return false;
+  }
+  return true;
+}
+
 /**
  * 历史 state.json 的 turns[].input（全量历史快照）已废弃：读取即剥，
  * 下次 save 自然瘦身。输入正文的唯一权威是 messages JSONL（Discourse）。
@@ -61,8 +77,25 @@ function slimTurns(turns: unknown): SessionData['turns'] {
 export class JsonlSessionStore implements SessionStore<SessionData> {
   private readonly sessionsDir: string;
   private readonly index?: SessionIndexSink;
-  /** 同 sessionId 读改写串行（save / updateMetadata / delete） */
+  /** 同 sessionId 读改写串行（save / updateMetadata / syncMessages / delete） */
   private readonly writeQueues = new Map<string, Promise<void>>();
+  /**
+   * syncMessages 增量判定缓存：本实例最近一次写下的消息文件状态。
+   * size（字节数）抓「旁路整包 save / 外部改动」造成的文件漂移；refs（消息对象
+   * 引用序列）抓「同一实例的序列分歧」。任一不符即整文件对齐重写，自愈。
+   * LRU 上限防长驻进程把全量转录引用常驻堆内存。
+   */
+  private readonly syncCaches = new Map<string, { size: number; refs: readonly unknown[] }>();
+
+  /** 记录/刷新增量判定缓存（LRU：超限淘汰最旧条目） */
+  private noteSyncCache(sessionId: string, size: number, refs: readonly unknown[]): void {
+    this.syncCaches.delete(sessionId);
+    if (this.syncCaches.size >= MAX_SYNC_CACHES) {
+      const oldest = this.syncCaches.keys().next().value;
+      if (oldest !== undefined) this.syncCaches.delete(oldest);
+    }
+    this.syncCaches.set(sessionId, { size, refs });
+  }
 
   /**
    * @param options - sessionsDir + 可选 index
@@ -286,6 +319,8 @@ export class JsonlSessionStore implements SessionStore<SessionData> {
       // 不会出现索引有但数据没写完的不一致
       const jsonl = data.messages.map(msg => JSON.stringify(msg)).join('\n') + '\n';
       await writeFile(this.sessionFile(sessionId), jsonl);
+      // 全量重写后同步增量缓存（防止下一次 syncMessages 误判漂移）
+      this.noteSyncCache(sessionId, Buffer.byteLength(jsonl, 'utf-8'), data.messages.slice());
 
       // metadata 浅合并：长驻 run 对象上的陈旧/空 metadata 不得抹掉
       // 并发 updateMetadata 写入的键（clientToolCalls / fileReleases…）。
@@ -386,6 +421,46 @@ export class JsonlSessionStore implements SessionStore<SessionData> {
     });
   }
 
+  /**
+   * 消息序列对齐（Run 进行中转录增量落盘）。契约见 SessionStore.syncMessages。
+   *
+   * 增量判定：文件字节数与上次本实例写入一致，且给定序列以已同步序列为
+   * 引用相等前缀 → 只追加尾差；任一不成立（旁路整包 save / 外部改动 /
+   * 前缀分歧 / 冷缓存）→ 整文件对齐重写。漂移不是错误路径：旁路写者
+   * 整包 save 是常态动作，对齐即自愈。
+   */
+  async syncMessages(sessionId: string, messages: readonly unknown[]): Promise<void> {
+    return this.withWriteLock(sessionId, async () => {
+      await mkdir(this.sessionsDir, { recursive: true });
+      const path = this.sessionFile(sessionId);
+      const cache = this.syncCaches.get(sessionId);
+      let size = -1;
+      try {
+        size = (await stat(path)).size;
+      } catch {
+        // 文件不存在 → 走整文件对齐
+      }
+      // 增量通道不是会话创建通道：会话完全不存在时跳过（创建/重建由 save 负责）
+      if (size < 0 && !(await fileExists(this.sessionStateFile(sessionId)))) return;
+
+      if (cache && size === cache.size && isRefPrefix(cache.refs, messages)) {
+        const added = messages.slice(cache.refs.length);
+        if (added.length === 0) return;
+        const jsonl = added.map((m) => JSON.stringify(m)).join('\n') + '\n';
+        await appendFile(path, jsonl);
+        this.noteSyncCache(sessionId, size + Buffer.byteLength(jsonl, 'utf-8'), messages.slice());
+        return;
+      }
+
+      // 整文件对齐走 tmp+rename：读侧（浏览器刷新 load）不得撞见写半截的转录
+      const jsonl = messages.map((m) => JSON.stringify(m)).join('\n') + '\n';
+      const tmpPath = `${path}.${process.pid}.${Date.now()}.tmp`;
+      await writeFile(tmpPath, jsonl);
+      await rename(tmpPath, path);
+      this.noteSyncCache(sessionId, Buffer.byteLength(jsonl, 'utf-8'), messages.slice());
+    });
+  }
+
   async list(filter?: SessionListFilter): Promise<SessionMeta[]> {
     let entries = Object.values(await this.readMetaIndex());
     if (filter?.agentId) {
@@ -409,6 +484,7 @@ export class JsonlSessionStore implements SessionStore<SessionData> {
   async delete(sessionId: string): Promise<void> {
     return this.withWriteLock(sessionId, async () => {
       await this.removeSessionFiles(sessionId);
+      this.syncCaches.delete(sessionId);
       if (this.index) {
         try {
           await this.index.remove(sessionId);
