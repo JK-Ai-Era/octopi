@@ -175,7 +175,9 @@
           "persona": {
             "anyOf": [
               {
-                "type": "string"
+                "type": "string",
+                "minLength": 1,
+                "description": "Absolute path or ~-prefixed (~/…, ~\\…, bare ~); ~user is not supported"
               },
               {
                 "type": "object",

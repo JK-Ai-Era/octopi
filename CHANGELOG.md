@@ -1,3 +1,15 @@
+## v0.89.4
+
+### chore(schema): 补齐 legacy `persona` 的路径契约（v0.89.0 遗漏的生成文件）
+
+v0.89.0 把 `agents[].persona` 的字符串分支也改成 `ConfigPathSchema`，但改完 Zod 后漏跑 `npm run generate:schema` 就提交了——`octopi.schema.json` 里 `persona` 的 string 分支仍缺 `minLength` 与说明文字（`home` / `skillDirectory` 当时是对的）。
+
+本次只是重新生成补齐，无 Zod 变更。**教训**：`agent.ts` 改完要立即 `generate:schema`，别和后面的编辑批次混在一起（同批里我对 `persona` 的改动晚于生成步骤）。
+
+**验证**：`octopi.example.json` 仍过 `OctopiConfigSchema`（canonical template 守卫用例绿）；全量 3149 过 / 2 败（环境固有）/ 6 跳过。
+
+---
+
 ## v0.89.3
 
 ### docs(gateway/cli): 记录两项「判定不修」的理由，避免反复重开
