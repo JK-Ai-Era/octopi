@@ -1,3 +1,17 @@
+## v0.89.2
+
+### refactor(runner): 收编 `requireCredentialBindings` 的等价派生
+
+`runner.ts` 组装工具上下文时写的是 `effectMode === 'untrusted' || effectRequireCredentialBindings`，而 `effectRequireCredentialBindings` 在解析策略时已是 `config.requireCredentialBindings === true || requiresJail(eff)`。
+
+`requiresJail(eff)` 判的是 `requestedMode === 'untrusted' && mode === 'untrusted'`，且 `resolveEffectiveEffectPolicy` 里 `mode` 只从 `requestedMode` 起始、唯一改写是 untrusted 降级为 `workspace`（不会升高）——因此 `effectMode === 'untrusted'` 必然蕴含 `requiresJail`，前置判定恒被后面的项吸收。
+
+删掉该等价项，单一来源 `effectRequireCredentialBindings`，行为不变。
+
+**验证**：`tests/harness/effect-policy.test.ts` 新增用例锁住这条等价性（untrusted + L4 → `mode === 'untrusted'` 且 `requiresJail` true；degrade → `requestedMode` 仍 untrusted 但 `mode === 'workspace'`、`requiresJail` false；workspace/project/host 均不要求 jail），避免日后有人改动降级逻辑时这条推理静默失效。全量 3149 过 / 2 败（环境固有）/ 6 跳过。
+
+---
+
 ## v0.89.1
 
 ### fix(execution-environment): sandbox 跨块解码改 StringDecoder — 修「CJK 输出被写成 U+FFFD」

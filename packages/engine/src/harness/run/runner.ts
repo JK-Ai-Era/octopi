@@ -1261,8 +1261,9 @@ export class SessionAwareRunner {
           memoryEffects,
           undoRoots,
           networkPolicy: this.effectNetwork,
-          requireCredentialBindings:
-            this.effectMode === 'untrusted' || this.effectRequireCredentialBindings,
+          // 单源：effectRequireCredentialBindings 已在解析时含 requiresJail(eff)（= untrusted），
+          // 此处再判 effectMode 是等价冗余，已收编。
+          requireCredentialBindings: this.effectRequireCredentialBindings,
           requireJail: this.effectRequireJail,
           homeWrite: this.effectHomeWrite,
           noteSecurityDegraded: (reason: string) => {

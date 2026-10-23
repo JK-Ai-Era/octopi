@@ -80,6 +80,38 @@ describe('resolveEffectiveEffectPolicy', () => {
     expect(p.pathContainment).toBe('strict');
   });
 
+  it('生效 mode 为 untrusted ⟺ requiresJail（runner 据此省掉等价派生）', () => {
+    const l4 = {
+      backend: 'linux-bwrap',
+      processTree: 'contained',
+      filesystem: 'root-jailed',
+      resources: 'os-enforced',
+      network: 'deny',
+      privilege: 'dropped',
+      envHygiene: 'scrubbed',
+    } as const;
+    const untrustedL4 = resolveEffectiveEffectPolicy({ mode: 'untrusted' }, '/sandbox', { ...l4 });
+    expect(untrustedL4.mode).toBe('untrusted');
+    expect(requiresJail(untrustedL4)).toBe(true);
+
+    // degrade：requestedMode 仍是 untrusted，但 mode 已改名 → 不要求 jail
+    const degraded = resolveEffectiveEffectPolicy(
+      { mode: 'untrusted', untrustedAdmission: 'degrade' },
+      '/sandbox',
+      { ...l4, backend: 'supervised-spawn', processTree: 'killable', filesystem: 'cwd-pin', resources: 'best-effort', network: 'open', privilege: 'same' },
+    );
+    expect(degraded.requestedMode).toBe('untrusted');
+    expect(degraded.mode).toBe('workspace');
+    expect(requiresJail(degraded)).toBe(false);
+
+    // mode 只可能是 requestedMode 或降级后的 workspace，不会凭空升高
+    for (const mode of ['workspace', 'project', 'host'] as const) {
+      const p = resolveEffectiveEffectPolicy({ mode }, '/ws');
+      expect(requiresJail(p), mode).toBe(false);
+      expect(p.mode === 'untrusted').toBe(false);
+    }
+  });
+
   it('untrusted degrade: renames effectiveMode, reduces surface, reports degraded', () => {
     const p = resolveEffectiveEffectPolicy(
       { mode: 'untrusted', untrustedAdmission: 'degrade', shellEscape: 'allow' },
