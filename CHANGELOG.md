@@ -1,8 +1,16 @@
+## v0.87.6
+
+### docs(changelog): 内部开放项清单迁至交接文档
+
+本日志只保留对外公示的变更内容（变更说明、破坏性提示、验证概况）；v0.87.0–v0.87.5 条目中的内部开放项（留观清单）迁至内部交接文档 `arch/NEXT-STEPS.md`，条目中的内部编号引用一并去除。历史条目未改动。
+
+---
+
 ## v0.87.5
 
 ### fix(config): workspace / transactionRoots 拒绝相对路径，`~` 形态跨平台展开
 
-**背景**（留观②，大哥 2026-10-23 拍板「可以，~ 展开要注意 Windows、Linux、macOS 兼容」）：`agents[].workspace` 写成相对路径时被隐式 `resolve` 到进程 cwd，与预期目录可能不同且静默失效；`~/` 形态无展开语义。
+**背景**（大哥 2026-10-23 拍板，`~` 展开注意 Windows/Linux/macOS 兼容）：`agents[].workspace` 写成相对路径时被隐式 `resolve` 到进程 cwd，与预期目录可能不同且静默失效；`~/` 形态无展开语义。
 
 **变更**：
 
@@ -12,7 +20,7 @@
 
 **验证**：新增 12 用例全过（展开幂等与三平台形态含多段 `~\a\b`、放行/拒行矩阵、两个 schema 同规、policy 入口 allowRoots 展开含 trim 顺序、loadConfig 展开 + 相对拒绝、resolveToolIsolationCwd 与 allowRoots 同源、validateConfigOrThrow 后置条件、octopi.example.json 模板守卫）；全量 3115 过 / 2 败 / 6 跳过（2 败仍为 getProcessName/identifyPortOccupant 沙箱固有）；`npm run build`、`npm run lint`、`npm run generate:schema` 全绿。
 
-**独立评审**（P0=0 / P1=2 / P2=9，逐条核对后修复）：P1-1 `~` 展开此前只覆盖 CLI 加载路径，引擎直连（库嵌入/程序化 AgentBuilder）会 mkdir 出字面 `~` 目录、tool cwd 与 allowRoots 分叉——收口 `resolveToolIsolationCwd` + `builder.workspace()` setter（trim → expand，与 allowRoots 同源）；P1-2 `octopi.example.json` 的相对 workspace 被新校验判死——改 `~/.octopi/workspace/assistant` 并加模板守卫测试。P2 修复：多段 `~\a\b` 归一、win32 盘符相对路径（`\foo`）拒行、trim→expand 顺序、`validateConfig`/`validateConfigOrThrow` 与 `loadConfig` 后置条件统一（`normalizeConfigPaths`）、doctor/file-release/roots 输出等 raw 消费点补展开、三份内联 expandHome 收敛为 `paths.ts` 单源（zod-free，harness 不再借道 config-schema）、`.describe()` 进 JSON Schema、`docs/process-isolation.md` 双语补配置级 `~` 语义。留观：`home`/`skillDirectory` 仍是自由字符串（未校验未展开，本次拍板范围外，待定夺是否一并规范化）。
+**独立评审**（P0=0 / P1=2 / P2=9，逐条核对后修复）：P1-1 `~` 展开此前只覆盖 CLI 加载路径，引擎直连（库嵌入/程序化 AgentBuilder）会 mkdir 出字面 `~` 目录、tool cwd 与 allowRoots 分叉——收口 `resolveToolIsolationCwd` + `builder.workspace()` setter（trim → expand，与 allowRoots 同源）；P1-2 `octopi.example.json` 的相对 workspace 被新校验判死——改 `~/.octopi/workspace/assistant` 并加模板守卫测试。P2 修复：多段 `~\a\b` 归一、win32 盘符相对路径（`\foo`）拒行、trim→expand 顺序、`validateConfig`/`validateConfigOrThrow` 与 `loadConfig` 后置条件统一（`normalizeConfigPaths`）、doctor/file-release/roots 输出等 raw 消费点补展开、三份内联 expandHome 收敛为 `paths.ts` 单源（zod-free，harness 不再借道 config-schema）、`.describe()` 进 JSON Schema、`docs/process-isolation.md` 双语补配置级 `~` 语义。
 
 ---
 
@@ -20,7 +28,7 @@
 
 ### feat(gateway): git-status 读节流——per-path TTL 缓存 + 并发闸门
 
-**背景**（留观④，大哥 2026-10-23 拍板「做」）：每次轮询 = 4 个 git 进程 + 一次 session 读，多标签页线性放大；已鉴权调用方可刷爆 git spawn（`web.host=lan` 时即 DoS 面）。
+**背景**（大哥 2026-10-23 拍板）：每次轮询 = 4 个 git 进程 + 一次 session 读，多标签页线性放大；已鉴权调用方可刷爆 git spawn（`web.host=lan` 时即 DoS 面）。
 
 **变更**：
 
@@ -28,7 +36,7 @@
 2. 加 **单飞表 + 并发闸门**（上限 4，`createConcurrencyGate` 幂等令牌式、纯函数可单测）：同键并发共享同一次读（冷缓存并发不产生 busy）；不同键并发超限抛 `git_status_busy`，路由映射 **429 + Retry-After**；额度 finally 归还、句柄幂等不越减。隔离推导（`untrusted_refused`）先于节流执行——admission 拒绝不会被缓存旁路。
 3. 缓存工程完备性：单调时钟 TTL、惰性淘汰 + 条目上限 256、`stop()` 清理、payload 冻结；SDK 错误透出服务端 `error` 文案（429 不再裸吐 JSON）。WebUI 零改动。
 
-**独立评审**（P0=0 / P1=3 / P2=7，逐条核对后修复）：P1 即缓存键缺请求/隔离维度（maxEntries 串数据、untrusted fail-closed 被旁路、bwrap 错数据跨会话）与缺单飞（并发同路径制造新 429）——全部由「键含签名 + 单飞 + 先推导后节流」收口；P2 修复：闸门幂等令牌 + max 校验、单调时钟、淘汰/上限/stop 清理、`Retry-After` + 错误文案透出 + busy 前缀收紧（`git_status_busy:`）、测试改 `vi.waitFor` 消固定睡眠 + 补同键单飞/maxEntries 隔离/失败不缓存/命中不占额度四类缺口。留观：TTL/并发上限仍为代码常量（沿用 sandbox 16MB、工具 8k 输出门的护栏常量先例，如需配置化再议）。
+**独立评审**（P0=0 / P1=3 / P2=7，逐条核对后修复）：P1 即缓存键缺请求/隔离维度（maxEntries 串数据、untrusted fail-closed 被旁路、bwrap 错数据跨会话）与缺单飞（并发同路径制造新 429）——全部由「键含签名 + 单飞 + 先推导后节流」收口；P2 修复：闸门幂等令牌 + max 校验、单调时钟、淘汰/上限/stop 清理、`Retry-After` + 错误文案透出 + busy 前缀收紧（`git_status_busy:`）、测试改 `vi.waitFor` 消固定睡眠 + 补同键单飞/maxEntries 隔离/失败不缓存/命中不占额度四类缺口。
 
 **验证**：新增 7 用例全过（闸门令牌语义 1、缓存/单飞/键隔离/失败不缓存/命中不占额度 6）+ 路由 429/Retry-After 断言；全量 3103 过 / 2 败 / 6 跳过（2 败仍为 getProcessName/identifyPortOccupant 沙箱固有）；`npm run build` 与 `npm run lint` 全绿。
 
@@ -38,14 +46,14 @@
 
 ### fix(engine): git-status 端点隔离档位对齐 untrusted + sandbox 输出上限改字节计数
 
-**背景**（留观①⑤，大哥 2026-10-23 拍板「按建议修」）：① Web 端点的隔离档位与 agent 工具存在漂移——jail 建立失败时静默回落 supervised（fail-open），jail 根集合只有 cwd（bwrap 下上级 .git 不可见、子目录读会误报非仓库），且策略取自 `config.agents` 而非 runner 同源的运行时注册表；⑤ sandbox 输出上限比较是「字符数 + 字节数」混比，CJK 文本实际占用 ~3x 字符数，截断点不可预测。
+**背景**（大哥 2026-10-23 拍板）：① Web 端点的隔离档位与 agent 工具存在漂移——jail 建立失败时静默回落 supervised（fail-open），jail 根集合只有 cwd（bwrap 下上级 .git 不可见、子目录读会误报非仓库），且策略取自 `config.agents` 而非 runner 同源的运行时注册表；② sandbox 输出上限比较是「字符数 + 字节数」混比，CJK 文本实际占用 ~3x 字符数，截断点不可预测。
 
 **变更**：
 
-1. **隔离对齐（①）**：`effect-policy.ts` 抽出共享谓词 `requiresJail(eff)`（`requestedMode==='untrusted' && eff.mode==='untrusted'`），runner 两处原地同表达式（jail + credential bindings）收敛复用——判据单源，永不漂移。`readGitStatusSnapshot` 增 `requireJail`（fail-open→fail-closed：jail 建立失败由回落改为硬错误）与 `jailRoots`（`context.pathRoots`，围栏根集合作为 jail 根，修 bwrap 上级 .git 可见性）；gateway 端点策略来源改**运行时注册表优先**（`this.agents` → config.agents → 全局），经 `resolveEffectiveEffectPolicy` + `probeProcessIsolation()`（engine 自带模块级缓存）推导后传入。untrusted admission 拒绝（L4 不足）时端点抛 `untrusted_refused` 如实报错。
-2. **字节计数（⑤）**：`sandbox.ts` 输出累计改独立字节计数器（per-stream、含被丢弃块，已捕获文本恒 ≤ 上限），与 `usage().outputBytes` 单位口径一致；CJK 流回归测试锁定（旧口径放走 ~3x 字节）。
+1. **隔离对齐**：`effect-policy.ts` 抽出共享谓词 `requiresJail(eff)`（`requestedMode==='untrusted' && eff.mode==='untrusted'`），runner 两处原地同表达式（jail + credential bindings）收敛复用——判据单源，永不漂移。`readGitStatusSnapshot` 增 `requireJail`（fail-open→fail-closed：jail 建立失败由回落改为硬错误）与 `jailRoots`（`context.pathRoots`，围栏根集合作为 jail 根，修 bwrap 上级 .git 可见性）；gateway 端点策略来源改**运行时注册表优先**（`this.agents` → config.agents → 全局），经 `resolveEffectiveEffectPolicy` + `probeProcessIsolation()`（engine 自带模块级缓存）推导后传入。untrusted admission 拒绝（L4 不足）时端点抛 `untrusted_refused` 如实报错。
+2. **字节计数**：`sandbox.ts` 输出累计改独立字节计数器（per-stream、含被丢弃块，已捕获文本恒 ≤ 上限），与 `usage().outputBytes` 单位口径一致；CJK 流回归测试锁定（旧口径放走 ~3x 字节）。
 
-**独立评审**（P0=0 / P1=2 / P2=10，逐条核对后修复）：P1 即上述「策略来源双注册表」与「jail 根集合缺失」；P2 修复：公共 roots API 显式挑字段（不再外泄 effectPolicy 配置进 HTTP 契约）、`resolveEffectiveEffectPolicy` TSDoc 归位、execution-environment barrel 补 `requiresJail`、sandbox 注释方向修正（旧口径是**推迟**触发）、fail-open/fail-closed 措辞统一、拒绝路径断言加强（`untrusted_refused` + probeSpy）、CJK 用例加 ASCII 首字节消假失败、options 改 `...options` 展开 + 类型收敛 `EffectPolicyConfig`。留观：`runner.ts` 另有一处 `effectMode === 'untrusted'` 派生（与谓词等价，未收编）；多字节字符被分块切断时 `usage().outputBytes` 可轻微越限（U+FFFD 展开）。
+**独立评审**（P0=0 / P1=2 / P2=10，逐条核对后修复）：P1 即上述「策略来源双注册表」与「jail 根集合缺失」；P2 修复：公共 roots API 显式挑字段（不再外泄 effectPolicy 配置进 HTTP 契约）、`resolveEffectiveEffectPolicy` TSDoc 归位、execution-environment barrel 补 `requiresJail`、sandbox 注释方向修正（旧口径是**推迟**触发）、fail-open/fail-closed 措辞统一、拒绝路径断言加强（`untrusted_refused` + probeSpy）、CJK 用例加 ASCII 首字节消假失败、options 改 `...options` 展开 + 类型收敛 `EffectPolicyConfig`。
 
 **验证**：新增 10 用例全过（`requiresJail` 谓词 3、CJK 字节上限 1、gateway jail 接线 3 含 `untrusted_refused` 拒绝路径、引擎侧上下文传递 3）；全量 3096 过 / 2 败 / 6 跳过（2 败仍为 getProcessName/identifyPortOccupant 沙箱固有）；`npm run build` 与 `npm run lint` 全绿。
 
@@ -55,7 +63,7 @@
 
 ### test(webui): webui 测试基建落地——vitest + Testing Library，覆盖 Git 页签纯逻辑
 
-**背景**（留观⑥，大哥 2026-10-23 拍板）：packages/webui 此前零测试基建，组件逻辑只能人工点检（v0.87.1 的 Number(null)===0 P1 即例证）；配置化评审再次点到 runtime-config 回落逻辑无覆盖。
+**背景**（大哥 2026-10-23 拍板）：packages/webui 此前零测试基建，组件逻辑只能人工点检（v0.87.1 的 Number(null)===0 P1 即例证）；配置化评审再次点到 runtime-config 回落逻辑无覆盖。
 
 **变更**：
 
@@ -79,7 +87,7 @@
 1. **抖动根因与修复**：头部是 flex-wrap 行，长 repo 路径（break-all）与「更新于…」并排，轮询时 `busy` 瞬态追加「 · …」→ flex 重排 → 长路径换行变化 → 整列高度抖动。修复：删掉瞬态文字；路径与「更新于」各自独立成行（时间行 nowrap），刷新不再改变任何行的宽度/高度。
 2. **轮询频率配置化**：新配置 `web.gitStatusPollSeconds`（0..3600 整数，0 = 不自动轮询——选中/切换目录与手动刷新仍即时，缺省 5）——octopi.json 单一真相源，经 `readConfigWebSettings` → `startWebUi(--git-status-poll-seconds)` → `serve-webui` → `/octopi-config.js` 新增 `window.__OCTOPI_WEB__` 段（与网关地址 `__OCTOPI_GATEWAY__` 分语义、分全局）→ webui `runtime-config.ts` 读取。UI 轮询下拉与 localStorage 间隔记忆移除；手动「刷新」按钮保留。`octopi.example.json` / `octopi.schema.json` 同步重生成。**改后需 `octopi webui restart` 生效**（值在 spawn 时烘进 argv，非热生效）。
 
-**独立评审**（P0=0 / P1=1 / P2=11，逐条核对后修复）：P1 非法值三级静默吸收 + 生效值不可观测——CLI 侧改 `console.warn` 显式告警 + 启动日志打印 `Git poll: Ns (config|default)`（与 `octopi serve start` 的硬校验对齐观感）；P2 修复 6 条：刷新按钮不再随轮询闪烁（去 busy 禁用态）、`0` 语义不再被回前台刷新破例（onVis 加哨兵）、边界校验收敛为 schema 单源（`isValidGitStatusPollSeconds`/常量导出，CLI+serve-webui 复用；浏览器包为手工镜像并标注同改）、argv 拼装抽纯函数 `webUiServeArgs` 补测试（0 哨兵锁定）、dev 桩补 `window.__OCTOPI_WEB__ = null`（契约对称）、inFlight latch 改 seq 守卫（旧请求晚归不误清）。留观未修：`readGitStatusPollSeconds` 测试面导出（与 `readGatewayPort` 对称既有形态）、webui 包无测试基建（runtime-config 回落逻辑仍靠人工）、`.claude/settings.local.json` 游离未入库（非本次产物，待定 ignore 策略）。
+**独立评审**（P0=0 / P1=1 / P2=11，逐条核对后修复）：P1 非法值三级静默吸收 + 生效值不可观测——CLI 侧改 `console.warn` 显式告警 + 启动日志打印 `Git poll: Ns (config|default)`（与 `octopi serve start` 的硬校验对齐观感）；P2 修复 6 条：刷新按钮不再随轮询闪烁（去 busy 禁用态）、`0` 语义不再被回前台刷新破例（onVis 加哨兵）、边界校验收敛为 schema 单源（`isValidGitStatusPollSeconds`/常量导出，CLI+serve-webui 复用；浏览器包为手工镜像并标注同改）、argv 拼装抽纯函数 `webUiServeArgs` 补测试（0 哨兵锁定）、dev 桩补 `window.__OCTOPI_WEB__ = null`（契约对称）、inFlight latch 改 seq 守卫（旧请求晚归不误清）。
 
 **验证**：`tests/cli-webui-helpers.test.ts` 新增 7 用例（schema 边界、webConfigScript、readGitStatusPollSeconds、webUiServeArgs 含 0 哨兵）25/25 通过；全量 3076 过 / 2 败 / 6 跳过（2 败仍为 getProcessName/identifyPortOccupant 沙箱固有，与本次无关）；`npm run build`（含 schema 重生成）与 `npm run lint` 全绿。
 
@@ -109,8 +117,6 @@
 3. **WebUI 默认轮询被静默吞掉（P1）**：`Number(null) === 0` 命中「手动」档，首次进入即不轮询并把 `0` 持久化。修复后首次进入默认 5s。
 4. **渲染身份键（P1）**：UI 原以 `snapshot.path === selected` 严格相等判断归属，非规范根字符串（尾斜杠/相对形式/win32 盘符）经服务端 resolve 后永假 → 永久「加载中」。改为按请求身份（sessionId|selected）渲染，不依赖服务端路径回显。
 5. **P2 修复**：`1 MM` 部分暂存按 git 分节语义出两行（暂存组 + 未暂存组，计数与列表不再矛盾）；格式漂移记录计入 `skippedRecords` 并在 UI 显式提示（>0 时不得宣称「工作区干净」）；无 `# branch.*` 头时 `branch` 为 null 而非全 null 对象；`generatedAt` 移到读取完成后；NUL 路径拒绝为 `path_invalid`（不再误报 404）；路由错误映射改**前缀码精确匹配**（`git_*` 一律 500，不被 stderr 文本里的 "not found" 降级）；`?maxEntries=` 查询参数（1..2000）打通硬编码上限；`~/` 路径展开（配置根与请求路径同规则）；runner 头注释职责划分修正。
-
-**留观未修**（记录）：Web 端点与工具的 jail 档位对齐（涉及 effectPolicy 语义，待拍板）；轮询无服务端缓存/速率限制（每轮询 4 个 git 进程 + 一次 session load，多标签页放大，本地调试面可接受）；`sandbox.ts` 输出上限的「字符数+字节数」混合比较（既有缺陷，另行处理）；`git-tools.ts` 历史乱码注释/行内 BOM（仓库既有现象，未动）；WebUI 组件无测试基建（`packages/webui` 无 vitest，interval 一类 bug 只能人工点检）。
 
 **验证**：新增 `tests/harness/git-status-snapshot.test.ts`（解析器 9 用例 + 真实仓库 6 用例）与 `tests/gateway-git-status-api.test.ts`（围栏 6 用例 + 路由映射）24/24 通过；全量 3069 通过 / 2 失败 / 6 跳过——2 个失败为 `getProcessName` / `identifyPortOccupant`（沙箱固有限制，2026-10-18 已定性），与本次无关。`npm run lint` 全绿；`arch/check-sync.sh` 全绿。
 
