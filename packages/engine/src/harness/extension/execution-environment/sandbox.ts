@@ -129,6 +129,11 @@ export class ProcessSandbox implements SandboxProvider {
       const start = Date.now();
       let stdout = '';
       let stderr = '';
+      // 输出上限按原始字节计（stdout/stderr 各自独立计）：字符数远小于字节数，
+      // 旧口径会让上限推迟触发、放走 ~3x 字节。计数含被丢弃块，故已捕获文本恒 ≤
+      // 上限；usage().outputBytes 只计已捕获文本（单位同、数值可不同）。
+      let stdoutBytes = 0;
+      let stderrBytes = 0;
       let terminated = false;
       let terminateReason = '';
       let settled = false;
@@ -171,7 +176,8 @@ export class ProcessSandbox implements SandboxProvider {
       config?.signal?.addEventListener('abort', onAbort, { once: true });
 
       proc.stdout?.on('data', (data: Buffer) => {
-        if (stdout.length + data.length > opts.maxOutputBytes) {
+        stdoutBytes += data.length;
+        if (stdoutBytes > opts.maxOutputBytes) {
           kill('Output size limit exceeded');
           return;
         }
@@ -179,7 +185,8 @@ export class ProcessSandbox implements SandboxProvider {
       });
 
       proc.stderr?.on('data', (data: Buffer) => {
-        if (stderr.length + data.length > opts.maxOutputBytes) {
+        stderrBytes += data.length;
+        if (stderrBytes > opts.maxOutputBytes) {
           kill('Output size limit exceeded');
           return;
         }

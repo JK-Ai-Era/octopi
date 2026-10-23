@@ -7,6 +7,7 @@
  * format: NUL-separated records (no path quoting), rename/copy carry both
  * paths, and `# branch.*` headers give oid/head/upstream/ahead-behind.
  */
+import type { ToolExecutionContext } from '@octopi-agent/core/types.js';
 import { runGit } from './git-runner.js';
 
 /** How an entry is rendered/grouped in UI surfaces. */
@@ -87,6 +88,20 @@ export interface GitStatusSnapshotOptions {
    * 'all' lists every untracked file (parity with the git_status tool).
    */
   untracked?: 'normal' | 'all';
+  /**
+   * Hard-jail demand (untrusted parity with the git_* tools): a jail backend is
+   * always used when available — this flag turns jail-setup failure into a hard
+   * error instead of the supervised fallback (fail-open → fail-closed). Derive
+   * it via effect-policy's `requiresJail(resolvedPolicy)`.
+   */
+  requireJail?: boolean;
+  /**
+   * Roots visible inside the process jail (`context.pathRoots`). A jailed read
+   * only sees `cwd` without them — on bwrap (namespace binds listed roots only)
+   * a repo whose `.git` sits above `cwd` would silently look like isRepo:false.
+   * Pass the caller's allow-root set (the fence set).
+   */
+  jailRoots?: string[];
 }
 
 const DEFAULT_MAX_ENTRIES = 500;
@@ -251,8 +266,17 @@ export async function readGitStatusSnapshot(
   options?: GitStatusSnapshotOptions,
 ): Promise<GitStatusSnapshot> {
   const untracked = options?.untracked ?? 'normal';
+  // 最小上下文：只带 jail 诉求与 jail 根（快照本就 context-free——journal=false、
+  // 网络默认 deny）。pathRoots 决定 jail 内可见根（allowRoots = [cwd, ...pathRoots]）。
+  const context =
+    options?.requireJail || options?.jailRoots?.length
+      ? ({
+          ...(options?.requireJail ? { requireJail: true } : {}),
+          ...(options?.jailRoots?.length ? { pathRoots: options.jailRoots } : {}),
+        } as ToolExecutionContext)
+      : undefined;
 
-  const top = await runGit(undefined, cwd, ['rev-parse', '--show-toplevel'], {
+  const top = await runGit(context, cwd, ['rev-parse', '--show-toplevel'], {
     journal: false,
     applyOutputGate: false,
     timeoutMs: 15_000,
@@ -276,7 +300,7 @@ export async function readGitStatusSnapshot(
   }
 
   const st = await runGit(
-    undefined,
+    context,
     cwd,
     ['status', '--porcelain=v2', '-z', '--branch', `--untracked-files=${untracked}`],
     { journal: false, applyOutputGate: false, timeoutMs: 30_000 },

@@ -240,6 +240,19 @@ const MODE_DEFAULTS: Record<EffectRunMode, ModePreset> = {
 };
 
 /**
+ * Whether the resolved policy demands a process jail (untrusted that survived
+ * untrusted admission). Single predicate shared by the run path (runner) and
+ * host-side read surfaces (WebUI git status endpoint) so the isolation level
+ * never drifts between them.
+ *
+ * @param eff - resolved effective policy
+ * @returns true when untrusted was requested and remains effective
+ */
+export function requiresJail(eff: EffectiveEffectPolicy): boolean {
+  return eff.requestedMode === 'untrusted' && eff.mode === 'untrusted';
+}
+
+/**
  * 展开 effectPolicy 为有效策略
  *
  * @param config - 用户配置（mode 可省略，缺省 `DEFAULT_EFFECT_RUN_MODE`）

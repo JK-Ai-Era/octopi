@@ -64,6 +64,7 @@ export {
 } from './shell-journal.js';
 export {
   resolveEffectiveEffectPolicy,
+  requiresJail,
   isPathAllowed,
   isToolAllowedOnSurface,
   gateEffect,

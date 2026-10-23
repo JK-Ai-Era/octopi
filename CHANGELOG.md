@@ -1,3 +1,20 @@
+## v0.87.3
+
+### fix(engine): git-status 端点隔离档位对齐 untrusted + sandbox 输出上限改字节计数
+
+**背景**（留观①⑤，大哥 2026-10-23 拍板「按建议修」）：① Web 端点的隔离档位与 agent 工具存在漂移——jail 建立失败时静默回落 supervised（fail-open），jail 根集合只有 cwd（bwrap 下上级 .git 不可见、子目录读会误报非仓库），且策略取自 `config.agents` 而非 runner 同源的运行时注册表；⑤ sandbox 输出上限比较是「字符数 + 字节数」混比，CJK 文本实际占用 ~3x 字符数，截断点不可预测。
+
+**变更**：
+
+1. **隔离对齐（①）**：`effect-policy.ts` 抽出共享谓词 `requiresJail(eff)`（`requestedMode==='untrusted' && eff.mode==='untrusted'`），runner 两处原地同表达式（jail + credential bindings）收敛复用——判据单源，永不漂移。`readGitStatusSnapshot` 增 `requireJail`（fail-open→fail-closed：jail 建立失败由回落改为硬错误）与 `jailRoots`（`context.pathRoots`，围栏根集合作为 jail 根，修 bwrap 上级 .git 可见性）；gateway 端点策略来源改**运行时注册表优先**（`this.agents` → config.agents → 全局），经 `resolveEffectiveEffectPolicy` + `probeProcessIsolation()`（engine 自带模块级缓存）推导后传入。untrusted admission 拒绝（L4 不足）时端点抛 `untrusted_refused` 如实报错。
+2. **字节计数（⑤）**：`sandbox.ts` 输出累计改独立字节计数器（per-stream、含被丢弃块，已捕获文本恒 ≤ 上限），与 `usage().outputBytes` 单位口径一致；CJK 流回归测试锁定（旧口径放走 ~3x 字节）。
+
+**独立评审**（P0=0 / P1=2 / P2=10，逐条核对后修复）：P1 即上述「策略来源双注册表」与「jail 根集合缺失」；P2 修复：公共 roots API 显式挑字段（不再外泄 effectPolicy 配置进 HTTP 契约）、`resolveEffectiveEffectPolicy` TSDoc 归位、execution-environment barrel 补 `requiresJail`、sandbox 注释方向修正（旧口径是**推迟**触发）、fail-open/fail-closed 措辞统一、拒绝路径断言加强（`untrusted_refused` + probeSpy）、CJK 用例加 ASCII 首字节消假失败、options 改 `...options` 展开 + 类型收敛 `EffectPolicyConfig`。留观：`runner.ts` 另有一处 `effectMode === 'untrusted'` 派生（与谓词等价，未收编）；多字节字符被分块切断时 `usage().outputBytes` 可轻微越限（U+FFFD 展开）。
+
+**验证**：新增 10 用例全过（`requiresJail` 谓词 3、CJK 字节上限 1、gateway jail 接线 3 含 `untrusted_refused` 拒绝路径、引擎侧上下文传递 3）；全量 3096 过 / 2 败 / 6 跳过（2 败仍为 getProcessName/identifyPortOccupant 沙箱固有）；`npm run build` 与 `npm run lint` 全绿。
+
+---
+
 ## v0.87.2
 
 ### test(webui): webui 测试基建落地——vitest + Testing Library，覆盖 Git 页签纯逻辑

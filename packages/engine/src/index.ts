@@ -104,6 +104,7 @@ export type {
 export type { MemoryEffectJournal, MemoryEffectDomain } from '@octopi-agent/core/types/tools.js';
 export {
   resolveEffectiveEffectPolicy,
+  requiresJail,
   isPathAllowed,
   isToolAllowedOnSurface,
   DEFAULT_EFFECT_RUN_MODE,

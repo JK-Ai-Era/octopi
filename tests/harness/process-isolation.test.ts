@@ -131,4 +131,20 @@ describe('ProcessSandbox honesty', () => {
     expect(profile.envHygiene).toBe('scrubbed');
     expect(profile.backend).toBeTruthy();
   });
+
+  it('输出上限按字节计：CJK 流不得越过 maxOutputBytes（字符口径会放走 ~3x）', async () => {
+    const sb = new ProcessSandbox({ profile: supervisedSpawnProfile() });
+    // 先写 1 个 ASCII 字节保证有部分捕获；随后每 10ms 一个 3 字节汉字，确保分块到达
+    const script =
+      "process.stdout.write('x'); const s = '中'; let i = 0; const t = setInterval(() => { process.stdout.write(s); if (++i >= 200) clearInterval(t); }, 10);";
+    const result = await sb.executeArgv([process.execPath, '-e', script], {
+      cwd: process.cwd(),
+      limits: { timeoutMs: 10_000, maxOutputBytes: 100 },
+    });
+    expect(result.terminated).toBe(true);
+    expect(result.terminateReason).toBe('Output size limit exceeded');
+    const bytes = Buffer.byteLength(result.stdout, 'utf8');
+    expect(bytes).toBeGreaterThan(0); // 诚实截断：有部分捕获 + 显式终止信号
+    expect(bytes).toBeLessThanOrEqual(100); // 字节口径：绝不超过上限
+  });
 });

@@ -6,6 +6,7 @@ import { join, resolve } from 'node:path';
 
 import {
   resolveEffectiveEffectPolicy,
+  requiresJail,
   isPathAllowed,
   isToolAllowedOnSurface,
 } from '@octopi-agent/engine/harness/extension/execution-environment/effect-policy.js';
@@ -211,5 +212,25 @@ describe('L2 path containment', () => {
     expect(isPathAllowed(join(root, 'f'), [root], 'strict')).toBe(true);
     expect(isPathAllowed('/etc/f', [root], 'strict')).toBe(false);
     expect(isPathAllowed('/etc/f', [root], 'none')).toBe(true);
+  });
+});
+
+describe('requiresJail（runner 与 Web 观测面共享的 jail 谓词）', () => {
+  const eff = (requestedMode: string, mode: string) =>
+    ({ requestedMode, mode }) as Parameters<typeof requiresJail>[0];
+
+  it('untrusted 请求且仍生效 → 进 jail', () => {
+    expect(requiresJail(eff('untrusted', 'untrusted'))).toBe(true);
+  });
+
+  it('非 untrusted 请求 → 不进 jail', () => {
+    expect(requiresJail(eff('workspace', 'workspace'))).toBe(false);
+    expect(requiresJail(eff('host', 'host'))).toBe(false);
+    expect(requiresJail(eff('project', 'project'))).toBe(false);
+  });
+
+  it('untrusted 被 admission 降级 → 不进 jail（与 runner 判据一致）', () => {
+    expect(requiresJail(eff('untrusted', 'workspace'))).toBe(false);
+    expect(requiresJail(eff('untrusted', 'host'))).toBe(false);
   });
 });

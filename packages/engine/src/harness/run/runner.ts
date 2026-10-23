@@ -925,7 +925,7 @@ export class SessionAwareRunner {
       // P3：effectPolicy → L2 path containment + session 临时 root
       // 必须在 Runtime 注入之前，system prompt 才能带上 allowRoots / effectMode
       {
-        const { resolveEffectiveEffectPolicy, readSessionEffectOverrides, mergeTransactionRoots } =
+        const { resolveEffectiveEffectPolicy, readSessionEffectOverrides, mergeTransactionRoots, requiresJail } =
           await import('../extension/execution-environment/effect-policy.js');
         const { probeProcessIsolation } = await import(
           '../extension/execution-environment/process-isolation.js'
@@ -946,10 +946,9 @@ export class SessionAwareRunner {
         this.effectShellEscape = eff.shellEscape;
         this.effectShellJournal = eff.shellJournal;
         this.effectNetwork = eff.network;
-        this.effectRequireJail = eff.requestedMode === 'untrusted' && eff.mode === 'untrusted';
+        this.effectRequireJail = requiresJail(eff);
         this.effectRequireCredentialBindings =
-          this.config.requireCredentialBindings === true ||
-          (eff.requestedMode === 'untrusted' && eff.mode === 'untrusted');
+          this.config.requireCredentialBindings === true || requiresJail(eff);
         this.effectHomeWrite = eff.mode === 'project' || eff.mode === 'host';
         this.effectShellJournalLimit = eff.shellJournalLimit;
         this.effectUndoLimit = eff.undoLimit;

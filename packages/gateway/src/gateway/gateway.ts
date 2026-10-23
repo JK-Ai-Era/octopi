@@ -21,6 +21,7 @@ import type { RegisteredTool, SessionMeta } from '@octopi-agent/core/types.js';
 import type { AgentDefinition, ModelConfig } from '@octopi-agent/engine/harness/shared/types/agent-definition.js';
 import type { ChannelAdapter, ChannelMessage, ChannelReply } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/channel-types.js';
 import type { GitStatusSnapshot } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/tools/git-status-snapshot.js';
+import type { EffectPolicyConfig, ProcessIsolationProfile } from '@octopi-agent/engine';
 import type { GatewayConfig } from '../types/gateway-config.js';
 
 import type { HookContext } from '@octopi-agent/engine/harness/shared/types/hook-context.js';
@@ -859,7 +860,10 @@ export class Gateway {
     configuredRoots: string[];
     mode?: string;
   }> {
-    return this.resolveSessionEffectRoots(sessionId);
+    // 显式挑字段：私有 helper 多带 effectPolicyConfig/workspace，不得外泄进 HTTP 契约
+    const { sessionId: id, temporaryRoots, configuredRoots, mode } =
+      await this.resolveSessionEffectRoots(sessionId);
+    return { sessionId: id, temporaryRoots, configuredRoots, mode };
   }
 
   /**
@@ -871,6 +875,9 @@ export class Gateway {
     temporaryRoots: string[];
     configuredRoots: string[];
     mode?: string;
+    /** 原始 effectPolicy 配置（供 resolveEffectiveEffectPolicy 推导 jail 等） */
+    effectPolicyConfig?: EffectPolicyConfig;
+    workspace?: string;
   }> {
     const session = await this.store.load(sessionId);
     if (!session) {
@@ -881,19 +888,22 @@ export class Gateway {
       readSessionEffectOverrides(session.metadata).transactionRoots ?? [];
 
     const agentId = session.primaryAgentId ?? session.agentId;
+    // 策略来源与 runner 同源：运行时注册表（registerAgent → buildAgent）优先，
+    // config.agents 只是它的影子——两处不一致时以注册表为准，避免 untrusted 被
+    // 静默降级成全局策略（jail/围栏推导都吃这个结果）。
+    const agentDef = this.agents.get(agentId);
     const agentCfg = (
       this.config.agents as Array<{
         id?: string;
         workspace?: string;
-        effectPolicy?: { mode?: string; transactionRoots?: string[] };
+        effectPolicy?: EffectPolicyConfig;
       }> | undefined
     )?.find((a) => a.id === agentId);
-    const eff =
+    const eff: EffectPolicyConfig | undefined =
+      agentDef?.effectPolicy ??
       agentCfg?.effectPolicy ??
-      (this.config.effectPolicy as
-        | { mode?: string; transactionRoots?: string[] }
-        | undefined);
-    const workspace = agentCfg?.workspace?.trim() || undefined;
+      (this.config.effectPolicy as EffectPolicyConfig | undefined);
+    const workspace = (agentDef?.workspace ?? agentCfg?.workspace)?.trim() || undefined;
     const extra = (eff?.transactionRoots ?? []).filter(Boolean);
     const configuredRoots = [...(workspace ? [workspace] : []), ...extra];
     return {
@@ -901,6 +911,8 @@ export class Gateway {
       temporaryRoots,
       configuredRoots,
       mode: eff?.mode,
+      effectPolicyConfig: eff,
+      workspace,
     };
   }
 
@@ -909,8 +921,12 @@ export class Gateway {
    * (WebUI Git tab). Read-only and context-free: git runs through the engine's
    * hardened runner (the git_* tools' git-config isolation — hooks/filters
    * neutralized, `--no-optional-locks`, so polling cannot disturb real git
-   * operations) but without a ToolExecutionContext, so session effectPolicy
-   * jail settings do not apply on this read-only surface.
+   * operations). Isolation parity with the agent's tools: the jail backend is
+   * used whenever the host offers one (same as tool runs), the fence roots are
+   * passed as jail roots so bwrap namespaces still see the whole work tree, and
+   * the runner's shared `requiresJail(eff)` turns jail-setup failure into a
+   * hard error (fail-closed) for untrusted sessions instead of the supervised
+   * fallback. Other context knobs (homeWrite/network) stay off here.
    *
    * Fencing note: this is a capability boundary, not a security boundary — any
    * caller allowed to add session effect roots can widen it. The fence validates
@@ -984,8 +1000,26 @@ export class Gateway {
     if (!st.isDirectory()) {
       throw new Error(`path_not_found: "${lexTarget}" is not a directory`);
     }
-    const { readGitStatusSnapshot } = await import('@octopi-agent/engine');
-    const snapshot = await readGitStatusSnapshot(realTarget, options);
+    const {
+      readGitStatusSnapshot,
+      resolveEffectiveEffectPolicy,
+      requiresJail,
+      probeProcessIsolation,
+    } = await import('@octopi-agent/engine');
+    // 隔离对齐（留观①）：jail 后端可用即进（与工具同路径）；围栏根集合作为 jail
+    // roots 传入（bwrap 命名空间只挂列名根，缺了会把上级 .git 判成非仓库）；
+    // requiresJail(eff) 与 runner 同源，把 untrusted 的 jail 建立失败从
+    // 「回落 supervised」变成硬错误；untrusted+refuse 且 L4 不足时 resolve 即抛。
+    const eff = resolveEffectiveEffectPolicy(
+      roots.effectPolicyConfig ?? {},
+      roots.workspace,
+      await probeProcessIsolation(),
+    );
+    const snapshot = await readGitStatusSnapshot(realTarget, {
+      ...options,
+      requireJail: requiresJail(eff),
+      jailRoots: rootsLex,
+    });
     return { path: realTarget, ...snapshot };
   }
 
