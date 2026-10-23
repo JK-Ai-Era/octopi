@@ -26,7 +26,7 @@ export interface AgentConfig {
   id: string;
   /** Agent home 目录：persona、skills 的根目录（session 在 OCTOPI_HOME/sessions；memory/wisdom 走 AgentDatabase SQLite） */
   home?: string;
-  /** 沙箱工作目录：agent 工具操作的 cwd，默认为 home 下的 workspace 子目录 */
+  /** 沙箱工作目录：agent 工具操作的 cwd，默认为 home 下的 workspace 子目录；支持 ~ 形态（使用点展开） */
   workspace?: string;
   /** ToolEffectPolicy（P3） */
   effectPolicy?: import('./harness/extension/execution-environment/effect-policy.js').EffectPolicyConfig;

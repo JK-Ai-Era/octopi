@@ -47,7 +47,9 @@
             "type": "string"
           },
           "workspace": {
-            "type": "string"
+            "type": "string",
+            "minLength": 1,
+            "description": "Absolute path or ~-prefixed (~/…, ~\\…, bare ~); ~user is not supported"
           },
           "effectPolicy": {
             "type": "object",
@@ -71,7 +73,9 @@
               "transactionRoots": {
                 "type": "array",
                 "items": {
-                  "type": "string"
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Absolute path or ~-prefixed (~/…, ~\\…, bare ~); ~user is not supported"
                 }
               },
               "pathContainment": {
@@ -2693,7 +2697,9 @@
         "transactionRoots": {
           "type": "array",
           "items": {
-            "type": "string"
+            "type": "string",
+            "minLength": 1,
+            "description": "Absolute path or ~-prefixed (~/…, ~\\…, bare ~); ~user is not supported"
           }
         },
         "pathContainment": {

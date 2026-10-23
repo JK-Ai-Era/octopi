@@ -22,6 +22,7 @@ import type { AgentDefinition, ModelConfig } from '@octopi-agent/engine/harness/
 import type { ChannelAdapter, ChannelMessage, ChannelReply } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/channel-types.js';
 import type { GitStatusSnapshot } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/tools/git-status-snapshot.js';
 import type { EffectPolicyConfig, ProcessIsolationProfile } from '@octopi-agent/engine';
+import { expandHomePath } from '@octopi-agent/engine/paths.js';
 import type { GatewayConfig } from '../types/gateway-config.js';
 
 import type { HookContext } from '@octopi-agent/engine/harness/shared/types/hook-context.js';
@@ -492,11 +493,13 @@ export class Gateway {
       releaseFile: async (input) => {
         const agent = this.agents.get(input.agentId);
         const { resolve: pathResolve } = await import('node:path');
-        const { getOctopiHome: homeFn } = await import('@octopi-agent/engine/paths.js');
+        const { getOctopiHome: homeFn, expandHomePath } = await import('@octopi-agent/engine/paths.js');
         const { resolveSessionAttachmentsPaths } = await import(
           '@octopi-agent/engine/harness/session/attachments/paths.js'
         );
-        const workspace = agent?.workspace?.trim() ? pathResolve(agent.workspace) : undefined;
+        const workspace = agent?.workspace?.trim()
+          ? pathResolve(expandHomePath(agent.workspace.trim()))
+          : undefined;
         const sessionSubdir = workspace ? pathResolve(workspace, input.sessionId) : undefined;
         const sessionsDir = pathResolve(homeFn(), 'sessions');
         const attachmentsRoot = resolveSessionAttachmentsPaths(sessionsDir, input.sessionId).root;
@@ -941,7 +944,7 @@ export class Gateway {
     const agentId = session.primaryAgentId ?? session.agentId;
     // 策略来源与 runner 同源：运行时注册表（registerAgent → buildAgent）优先，
     // config.agents 只是它的影子——两处不一致时以注册表为准，避免 untrusted 被
-    // 静默降级成全局策略（jail/围栏推导都吃这个结果）。
+    // 静默降级成全局策略（jail/围栏推导都吃这个结果）。`~` 形态统一展开后输出。
     const agentDef = this.agents.get(agentId);
     const agentCfg = (
       this.config.agents as Array<{
@@ -954,8 +957,11 @@ export class Gateway {
       agentDef?.effectPolicy ??
       agentCfg?.effectPolicy ??
       (this.config.effectPolicy as EffectPolicyConfig | undefined);
-    const workspace = (agentDef?.workspace ?? agentCfg?.workspace)?.trim() || undefined;
-    const extra = (eff?.transactionRoots ?? []).filter(Boolean);
+    const workspaceRaw = (agentDef?.workspace ?? agentCfg?.workspace)?.trim() || undefined;
+    const workspace = workspaceRaw ? expandHomePath(workspaceRaw) : undefined;
+    const extra = (eff?.transactionRoots ?? [])
+      .filter(Boolean)
+      .map((r) => expandHomePath(r.trim()));
     const configuredRoots = [...(workspace ? [workspace] : []), ...extra];
     return {
       sessionId,
@@ -999,14 +1005,8 @@ export class Gateway {
   ): Promise<GitStatusSnapshot & { path: string }> {
     const roots = await this.resolveSessionEffectRoots(sessionId);
     const path = await import('node:path');
-    const os = await import('node:os');
     const fs = await import('node:fs/promises');
-    const expandHome = (p: string): string =>
-      p === '~'
-        ? os.homedir()
-        : p.startsWith('~/') || p.startsWith('~\\')
-          ? path.join(os.homedir(), p.slice(2))
-          : p;
+    const expandHome = expandHomePath;
     const trimmed = rawPath.trim();
     if (!trimmed || trimmed.includes('\0')) {
       throw new Error('path_invalid: path must be non-empty and contain no NUL byte');

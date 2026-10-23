@@ -6,6 +6,7 @@
  */
 
 import { isAbsolute, resolve } from 'node:path';
+import { expandHomePath } from '../../../paths.js';
 import type { HitlDecision } from '@octopi-agent/core/types/tools.js';
 import type { ToolIsolationMode } from './isolation.js';
 import {
@@ -120,7 +121,7 @@ export interface EffectPolicyConfig {
    * `degrade` 降 effectiveMode + toolSurface=reduced + securityDegraded。
    */
   untrustedAdmission?: UntrustedAdmission;
-  /** 额外事务 root（绝对路径）；并入 allowRoots */
+  /** 额外事务 root（绝对路径或 ~ 形态，入口 trim → expand）；并入 allowRoots */
   transactionRoots?: string[];
   pathContainment?: PathContainment;
   shellEscape?: ShellEscapePolicy;
@@ -278,6 +279,17 @@ export function resolveEffectiveEffectPolicy(
   baseWorkspace?: string,
   isolation?: ProcessIsolationProfile,
 ): EffectiveEffectPolicy {
+  // `~` 前缀收口展开（Windows/Linux/macOS 通用）：下游 allowRoots / tool cwd 只见
+  // 绝对路径；配置层（ConfigPathSchema）已先拒相对路径。顺序固定「trim → expand」，
+  // 库调用面传入带空白的 ` ~/x` 同样归一。
+  config = {
+    ...config,
+    ...(config.transactionRoots
+      ? { transactionRoots: config.transactionRoots.map((r) => expandHomePath(r.trim())) }
+      : {}),
+  };
+  baseWorkspace =
+    baseWorkspace !== undefined ? expandHomePath(baseWorkspace.trim()) : baseWorkspace;
   const requestedMode = config.mode ?? DEFAULT_EFFECT_RUN_MODE;
   const untrustedAdmission = config.untrustedAdmission ?? 'refuse';
   let mode = requestedMode;

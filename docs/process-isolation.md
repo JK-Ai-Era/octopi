@@ -240,6 +240,12 @@ Hosts can **append** extra allow/transaction roots for **the current session onl
 | Privilege | **Cannot loosen** `pathContainment` / `shellEscape` / mode |
 | Paths | Must be **absolute**; normalized; de-duplicated |
 
+> **Config-level paths** (`agents[].workspace`, `effectPolicy.transactionRoots`)
+> differ slightly: they must be an **absolute path or `~`-prefixed** (`~/…`,
+> `~\…`, or bare `~`; `~user/…` is not supported). `~` is expanded to the user
+> home directory at the policy/tool-cwd boundaries (trim → expand, idempotent).
+> Session temporary roots above stay absolute-only.
+
 ```http
 GET    /api/v1/sessions/:id/effect-roots
 POST   /api/v1/sessions/:id/effect-roots          { "path": "/data/scratch" }

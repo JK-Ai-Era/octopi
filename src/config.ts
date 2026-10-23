@@ -77,7 +77,7 @@ export function loadConfig(configPath?: string): NormalizedHarnessConfig {
     }
   }
 
-  // Zod schema 校验（结构化错误信息）
+  // Zod schema 校验（结构化错误信息）；路径归一化（`~` 展开）已由校验出口后置完成
   const config = validateConfigOrThrow(raw) as unknown as NormalizedHarnessConfig;
 
 

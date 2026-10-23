@@ -221,6 +221,11 @@ Gateway `/health` 与 channel health 暴露 `effectPolicy`（`configuredMode` / 
 | 权限 | **不能放宽** `pathContainment` / `shellEscape` / mode |
 | 路径 | 必须是 **绝对路径**；规范化并去重 |
 
+> **配置级路径**（`agents[].workspace`、`effectPolicy.transactionRoots`）语义略有
+> 不同：必须是**绝对路径或 `~` 形态**（`~/…`、`~\…`、纯 `~`；不支持 `~user/…`）。
+> `~` 在策略/工具 cwd 边界展开为用户主目录（trim → expand，幂等）。上方的会话
+> 临时 root 仍然只收绝对路径。
+
 ```http
 GET    /api/v1/sessions/:id/effect-roots
 POST   /api/v1/sessions/:id/effect-roots          { "path": "/data/scratch" }

@@ -4,6 +4,20 @@
  * @module
  */
 import { z } from 'zod';
+import { isConfigPathShape } from '../paths.js';
+
+// 路径语义的唯一实现在 zod-free 的 paths.ts（harness 运行时同样引用）；此处转出
+// 保持 schema 消费方的导入面不变。
+export { expandHomePath, isConfigPathShape } from '../paths.js';
+
+/** 配置路径字段（workspace / transactionRoots 等）：绝对路径或 ~ 形态 */
+export const ConfigPathSchema = z
+  .string()
+  .min(1)
+  .refine(isConfigPathShape, {
+    message: 'must be an absolute path or ~-prefixed (~/…, ~\\…, or bare ~)',
+  })
+  .describe('Absolute path or ~-prefixed (~/…, ~\\…, bare ~); ~user is not supported');
 
 /** 监听 host：local（默认仅本机）| lan（局域网）| 具体 IP/主机名 */
 export const NetworkHostSchema = z.union([

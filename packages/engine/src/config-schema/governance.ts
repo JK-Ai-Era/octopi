@@ -4,7 +4,7 @@
  * @module
  */
 import { z } from 'zod';
-import { SessionRightsSchema } from './shared.js';
+import { ConfigPathSchema, SessionRightsSchema } from './shared.js';
 
 export const SecurityConfigSchema = z.object({
   enforce: z.enum(['block', 'audit']).optional(),
@@ -60,7 +60,8 @@ export const EffectPolicyConfigSchema = z.object({
    * degrade 降 effectiveMode + toolSurface=reduced + securityDegraded。
    */
   untrustedAdmission: z.enum(['refuse', 'degrade']).optional(),
-  transactionRoots: z.array(z.string()).optional(),
+  /** 额外事务 root（绝对路径或 ~ 形态）；并入 allowRoots */
+  transactionRoots: z.array(ConfigPathSchema).optional(),
   pathContainment: z.enum(['strict', 'soft', 'none']).optional(),
   shellEscape: z.enum(['deny', 'confirm', 'allow']).optional(),
   processLimits: z.boolean().optional(),

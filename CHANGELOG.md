@@ -1,3 +1,21 @@
+## v0.87.5
+
+### fix(config): workspace / transactionRoots 拒绝相对路径，`~` 形态跨平台展开
+
+**背景**（留观②，大哥 2026-10-23 拍板「可以，~ 展开要注意 Windows、Linux、macOS 兼容」）：`agents[].workspace` 写成相对路径时被隐式 `resolve` 到进程 cwd，与预期目录可能不同且静默失效；`~/` 形态无展开语义。
+
+**变更**：
+
+1. **校验（fail fast）**：新增 `ConfigPathSchema`（绝对路径或 `~`/`~/x`/`~\x`；相对路径与 `~user/x` 直接拒）——`agents[].workspace` 与两级 `effectPolicy.transactionRoots` 逐项校验，加载即报错。JSON Schema 产物仅含 `minLength`（refine 不可表达），形态校验由加载期 Zod 兜底。
+2. **展开（跨平台）**：`expandHomePath`（`os.homedir()` + `join`，Windows 反斜杠形态一并展开，幂等）。收口两处同源：`resolveEffectiveEffectPolicy` 入口（覆盖 runner allowRoots / tool cwd / jail roots 等全部消费方）+ `loadConfig` 归一化（agents[].workspace、两级 transactionRoots）。
+3. **破坏性提示**：存量配置里的相对 `workspace` 从「静默 resolve」变为「加载即拒」——报错信息明确，改正为绝对路径或 `~/` 形态即可。
+
+**验证**：新增 12 用例全过（展开幂等与三平台形态含多段 `~\a\b`、放行/拒行矩阵、两个 schema 同规、policy 入口 allowRoots 展开含 trim 顺序、loadConfig 展开 + 相对拒绝、resolveToolIsolationCwd 与 allowRoots 同源、validateConfigOrThrow 后置条件、octopi.example.json 模板守卫）；全量 3115 过 / 2 败 / 6 跳过（2 败仍为 getProcessName/identifyPortOccupant 沙箱固有）；`npm run build`、`npm run lint`、`npm run generate:schema` 全绿。
+
+**独立评审**（P0=0 / P1=2 / P2=9，逐条核对后修复）：P1-1 `~` 展开此前只覆盖 CLI 加载路径，引擎直连（库嵌入/程序化 AgentBuilder）会 mkdir 出字面 `~` 目录、tool cwd 与 allowRoots 分叉——收口 `resolveToolIsolationCwd` + `builder.workspace()` setter（trim → expand，与 allowRoots 同源）；P1-2 `octopi.example.json` 的相对 workspace 被新校验判死——改 `~/.octopi/workspace/assistant` 并加模板守卫测试。P2 修复：多段 `~\a\b` 归一、win32 盘符相对路径（`\foo`）拒行、trim→expand 顺序、`validateConfig`/`validateConfigOrThrow` 与 `loadConfig` 后置条件统一（`normalizeConfigPaths`）、doctor/file-release/roots 输出等 raw 消费点补展开、三份内联 expandHome 收敛为 `paths.ts` 单源（zod-free，harness 不再借道 config-schema）、`.describe()` 进 JSON Schema、`docs/process-isolation.md` 双语补配置级 `~` 语义。留观：`home`/`skillDirectory` 仍是自由字符串（未校验未展开，本次拍板范围外，待定夺是否一并规范化）。
+
+---
+
 ## v0.87.4
 
 ### feat(gateway): git-status 读节流——per-path TTL 缓存 + 并发闸门

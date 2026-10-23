@@ -6,6 +6,7 @@
  */
 
 import { isAbsolute, join, resolve, sep } from 'node:path';
+import { expandHomePath } from '../../../paths.js';
 import { toSessionFileName } from '@octopi-agent/core/session-filename.js';
 
 /** 工具效应隔离模式（部署可配；schema 字段 `toolIsolation`） */
@@ -63,7 +64,10 @@ export function safeSessionDirSegment(sessionId: string): string {
  * @returns 工具 cwd 与生效模式
  */
 export function resolveToolIsolationCwd(input: ResolveToolIsolationCwdInput): ResolveToolIsolationCwdResult {
-  const base = input.baseCwd?.trim() ? input.baseCwd.trim() : undefined;
+  // `~` 形态在此展开（trim → expand）：toolRuntime.cwd 必须与 eff.allowRoots
+  // （resolveEffectiveEffectPolicy 同源展开）一致，否则 strict 匹配失败、
+  // session-subdir 会 mkdir 出字面 `~` 目录（留观② P1-1）。
+  const base = input.baseCwd?.trim() ? expandHomePath(input.baseCwd.trim()) : undefined;
   const mode = input.mode;
 
   if (mode === 'session-subdir' && base) {

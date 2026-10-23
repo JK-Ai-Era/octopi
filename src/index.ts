@@ -30,7 +30,7 @@ export * from '@octopi-agent/gateway';
 // ============================================================
 
 export { loadConfig, toGatewayConfig, buildFromConfigFile } from './config.js';
-export { validateConfig, validateConfigOrThrow, HarnessConfigSchema, OctopiConfigSchema } from './config-schema.js';
+export { validateConfig, validateConfigOrThrow, normalizeConfigPaths, HarnessConfigSchema, OctopiConfigSchema } from './config-schema.js';
 export type { ConfigValidationResult, ConfigValidationError } from './config-schema.js';
 
 // ============================================================

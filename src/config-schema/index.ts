@@ -10,6 +10,7 @@
 import { z } from 'zod';
 
 import { engineConfigSchema } from '@octopi-agent/engine/config-schema/engine.js';
+import { expandHomePath } from '@octopi-agent/engine/paths.js';
 import { GatewayOverrideConfigSchema } from '@octopi-agent/gateway/config-schema/gateway.js';
 import { WebConfigSchema } from './webui.js';
 
@@ -95,15 +96,41 @@ export interface ConfigValidationError {
 }
 
 /**
+ * 路径归一化后置条件：`~` 形态展开为主目录（Windows/Linux/macOS 通用，幂等，
+ * trim → expand）。`validateConfig` / `validateConfigOrThrow` / `loadConfig` 的
+ * 返回值都过这里——校验 API 与加载 API 后置条件一致，库调用方组合
+ * 「validate + buildFromConfig」不再踩未展开的 `~`（留观②）。
+ *
+ * @param config - 校验通过的配置对象（就地展开）
+ */
+export function normalizeConfigPaths(config: z.infer<typeof OctopiConfigSchema>): void {
+  const cfg = config as unknown as {
+    effectPolicy?: { transactionRoots?: string[] };
+    agents?: Array<{ workspace?: string; effectPolicy?: { transactionRoots?: string[] } }>;
+  };
+  const expandPolicy = (policy?: { transactionRoots?: string[] }): void => {
+    if (policy?.transactionRoots) {
+      policy.transactionRoots = policy.transactionRoots.map((p) => expandHomePath(p.trim()));
+    }
+  };
+  expandPolicy(cfg.effectPolicy);
+  for (const agent of cfg.agents ?? []) {
+    if (agent.workspace) agent.workspace = expandHomePath(agent.workspace.trim());
+    expandPolicy(agent.effectPolicy);
+  }
+}
+
+/**
  * 校验配置数据
  *
  * @param raw - 原始 JSON 对象
- * @returns 校验结果（包含结构化错误信息）
+ * @returns 校验结果（包含结构化错误信息；成功时 data 已路径归一化）
  */
 export function validateConfig(raw: unknown): ConfigValidationResult {
   const result = OctopiConfigSchema.safeParse(raw);
 
   if (result.success) {
+    normalizeConfigPaths(result.data);
     return { success: true, data: result.data };
   }
 

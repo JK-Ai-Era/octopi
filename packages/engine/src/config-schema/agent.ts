@@ -5,6 +5,7 @@
  */
 import { z } from 'zod';
 import {
+  ConfigPathSchema,
   InlinePersonaSchema,
   ModelConfigSchema,
   NetworkHostSchema,
@@ -16,7 +17,8 @@ import { EffectPolicyConfigSchema } from './governance.js';
 export const AgentConfigSchema = z.object({
   id: z.string({ error: 'Agent must have an id' }).min(1, 'Agent id cannot be empty'),
   home: z.string().optional(),
-  workspace: z.string().optional(),
+  /** 工具基路径：绝对路径或 ~ 形态（相对路径加载即拒，杜绝隐式 resolve 到进程 cwd） */
+  workspace: ConfigPathSchema.optional(),
   /** ToolEffectPolicy 运行模式（P3）；与 tools allow/deny 无关 */
   effectPolicy: EffectPolicyConfigSchema.optional(),
   persona: z.union([z.string(), InlinePersonaSchema]).optional(),

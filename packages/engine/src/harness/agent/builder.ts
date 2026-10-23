@@ -21,6 +21,7 @@ import type {
   ToolCall,
 } from '@octopi-agent/core/types.js';
 import { DefaultToolBus } from '../extension/plugin-ecosystem/tools/tool-bus.js';
+import { expandHomePath } from '../../paths.js';
 import {
   createUnconfiguredFileEffects,
   createUnconfiguredMemoryEffects,
@@ -1076,9 +1077,9 @@ export class AgentBuilder {
     return this;
   }
 
-  /** 设置 Agent 沙箱工作目录（注入到内置工具的 cwd） */
+  /** 设置 Agent 沙箱工作目录（注入到内置工具的 cwd）；`~` 形态在此展开（trim → expand） */
   workspace(dir: string): this {
-    this._workspace = dir;
+    this._workspace = expandHomePath(dir.trim());
     return this;
   }
 

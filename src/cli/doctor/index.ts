@@ -16,7 +16,7 @@ import {
 import { createInterface } from 'node:readline/promises';
 import { dirname, join, resolve } from 'node:path';
 import type { CliArgs } from '../args.js';
-import { getOctopiHome } from '@octopi-agent/engine/paths.js';
+import { expandHomePath, getOctopiHome } from '@octopi-agent/engine/paths.js';
 import { validateConfig } from '../../config-schema.js';
 import {
   applyConfigMigrations,
@@ -680,7 +680,9 @@ export function applyLayoutFixes(
     mkdirSync(agentHome, { recursive: true });
     mkdirSync(join(agentHome, 'skills'), { recursive: true });
     const workspace =
-      typeof a.workspace === 'string' && a.workspace ? resolve(a.workspace) : join(home, 'workspace', id);
+      typeof a.workspace === 'string' && a.workspace
+        ? resolve(expandHomePath(a.workspace.trim()))
+        : join(home, 'workspace', id);
     mkdirSync(workspace, { recursive: true });
 
     for (const { from, to } of LEGACY_PERSONA_MOVES) {
