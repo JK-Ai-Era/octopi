@@ -101,6 +101,12 @@ function isValidPort(port: number | undefined): port is number {
 /**
  * 解析 Web UI 监听端口：CLI `--port` > 配置 `web.port` > 默认 8180
  *
+ * 下方几个单字段访问器（本函数、`readConfigWebDir`、`readGatewayPort`、
+ * `readGitStatusPollSeconds`）都只是 `readConfigWebSettings` 的薄投影：生产路径
+ * 直接取整个 settings 对象（`startWebUi` → `webConfigScript`），这些投影存在是为
+ * 测试提供单点入口。**不要因为"生产无调用方"删掉它们**——收回导出只会逼测试绕过
+ * 公开面或丢掉按字段的边界覆盖，行为与维护成本都不会变好。
+ *
  * @param configPath 配置文件路径（缺省按 cwd / OCTOPI_HOME 查找）
  * @param override CLI 传入的端口（非法值忽略，回落配置/默认）
  * @returns 监听端口

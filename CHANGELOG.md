@@ -1,3 +1,16 @@
+## v0.89.3
+
+### docs(gateway/cli): 记录两项「判定不修」的理由，避免反复重开
+
+NEXT-STEPS H 节里两条低级别项评估后**决定不改**，理由写进代码（耐久位置），不再留在交接簿占「可领」位：
+
+1. **git-status 读节流参数保持代码常量**（`gateway.ts` 常量块）：TTL 只在多客户端/多标签页同键并发时有意义，单客户端已有前端 `inFlightRef` 自互斥；关键事实是 `web.gitStatusPollSeconds` 属**客户端轮询**参数（CLI 读后写进 `/octopi-config.js`），Gateway 进程不读 `web` 段——要开放得新开网关侧配置面。为三个调不动的护栏常量付这个成本不划算。
+2. **WebUI 配置单字段访问器保持导出**（`src/cli/webui.ts`）：`resolveWebUiPort` / `readConfigWebDir` / `readGatewayPort` / `readGitStatusPollSeconds` 生产路径都走 `readConfigWebSettings` 整对象，这些投影是**测试单点入口**而非死代码；收回导出只会逼测试绕过公开面或丢字段级边界覆盖。
+
+纯注释变更，无行为改动。
+
+---
+
 ## v0.89.2
 
 ### refactor(runner): 收编 `requireCredentialBindings` 的等价派生

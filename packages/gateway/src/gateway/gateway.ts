@@ -291,6 +291,11 @@ async function createDefaultStore(_agents: AgentDefinition[]): Promise<SessionSt
 /**
  * git-status 读缓存 TTL（毫秒，单调时钟）：短窗去重，多标签页/多客户端不重复
  * spawn git。资源护栏按代码常量管理（同 sandbox 16MB 上限、工具 8k 输出门先例）。
+ *
+ * 刻意不做成配置项：TTL 只在「多客户端/多标签页同键并发」时有意义，单客户端
+ * 下前端 `inFlightRef` 自互斥已足够；且 `web.gitStatusPollSeconds` 是**客户端轮询**
+ * 参数（CLI 读后写进 /octopi-config.js），Gateway 进程不读 `web` 段——真要开放
+ * 得新开网关侧配置面，为三个调不动的护栏常量付这个价不划算。
  */
 const GIT_STATUS_CACHE_TTL_MS = 1_000;
 
