@@ -723,7 +723,15 @@ function normalizeBaseUrl(baseUrl: string): string {
 async function parseJsonResponse<T = unknown>(response: Response): Promise<T> {
   if (!response.ok) {
     const text = await response.text().catch(() => '');
-    throw new Error(`HTTP ${response.status}: ${text || response.statusText}`);
+    // 服务端错误契约是 {ok:false,error}：优先透出 error 文案，避免调用方裸吐 JSON
+    let message = text || response.statusText;
+    try {
+      const parsed = JSON.parse(text) as { error?: unknown };
+      if (typeof parsed.error === 'string') message = parsed.error;
+    } catch {
+      // 非 JSON 错误体（代理页/网关截断）：保持原文
+    }
+    throw new Error(`HTTP ${response.status}: ${message}`);
   }
 
   return response.json() as Promise<T>;

@@ -152,15 +152,21 @@ describe('WebApiRouter git-status 路由映射', () => {
     handled: boolean;
     status: number;
     body: { ok: boolean; error?: string; data?: { path?: string } } | null;
+    headers: Record<string, string>;
   }
 
   async function call(router: WebApiRouter, url: string): Promise<CallResult> {
     const req = { url, method: 'GET', headers: { host: 'localhost' } } as unknown as IncomingMessage;
     let status = 0;
     let body: CallResult['body'] = null;
+    const headers: Record<string, string> = {};
     const res = {
       writeHead(code: number) {
         status = code;
+        return this;
+      },
+      setHeader(name: string, value: string) {
+        headers[name] = value;
         return this;
       },
       end(payload?: string) {
@@ -169,7 +175,7 @@ describe('WebApiRouter git-status 路由映射', () => {
       },
     } as unknown as ServerResponse;
     const handled = await router.handle(req, res);
-    return { handled, status, body };
+    return { handled, status, body, headers };
   }
 
   function stubRouter(
@@ -192,6 +198,7 @@ describe('WebApiRouter git-status 路由映射', () => {
       if (p === '/gone') throw new Error('path_not_found: x');
       if (p === '/nogit') throw new Error('git_not_found: x');
       if (p === '/boom') throw new Error('git_status_failed: x');
+      if (p === '/busy') throw new Error('git_status_busy: x');
       return {
         path: p,
         isRepo: false,
@@ -223,6 +230,9 @@ describe('WebApiRouter git-status 路由映射', () => {
     expect((await call(router, '/api/v1/sessions/missing/git-status?path=/x')).status).toBe(404);
     expect((await call(router, '/api/v1/sessions/s1/git-status?path=/nogit')).status).toBe(500);
     expect((await call(router, '/api/v1/sessions/s1/git-status?path=/boom')).status).toBe(500);
+    const busy = await call(router, '/api/v1/sessions/s1/git-status?path=/busy');
+    expect(busy.status).toBe(429);
+    expect(busy.headers['Retry-After']).toBe('5');
 
     // maxEntries 查询参数：透传 + 边界校验
     await call(router, '/api/v1/sessions/s1/git-status?path=/x&maxEntries=5');

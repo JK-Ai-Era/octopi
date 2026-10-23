@@ -242,15 +242,17 @@ export class WebApiRouter {
           return this.json(res, 200, { ok: true, data });
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
-          // 前缀码精确映射（消息文本不可作为契约）：git_* 是服务端问题 → 500；
-          // 资源缺失（会话 / 目录）→ 404；其余默认 500。
+          // 前缀码精确映射（消息文本不可作为契约）：git_status_busy → 429（可重试，
+          // 带 Retry-After）；其余 git_* 是服务端问题 → 500；资源缺失 → 404；默认 500。
           const code = msg.startsWith('path_not_allowed') || msg.startsWith('path_invalid')
             ? 400
-            : msg.startsWith('git_')
-              ? 500
-              : msg.startsWith('path_not_found') || msg.includes('not found')
-                ? 404
-                : 500;
+            : msg.startsWith('git_status_busy:')
+              ? (res.setHeader('Retry-After', '5'), 429)
+              : msg.startsWith('git_')
+                ? 500
+                : msg.startsWith('path_not_found') || msg.includes('not found')
+                  ? 404
+                  : 500;
           return this.json(res, code, { ok: false, error: msg });
         }
       }

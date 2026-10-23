@@ -287,9 +287,60 @@ async function createDefaultStore(_agents: AgentDefinition[]): Promise<SessionSt
   });
 }
 
+/**
+ * git-status 读缓存 TTL（毫秒，单调时钟）：短窗去重，多标签页/多客户端不重复
+ * spawn git。资源护栏按代码常量管理（同 sandbox 16MB 上限、工具 8k 输出门先例）。
+ */
+const GIT_STATUS_CACHE_TTL_MS = 1_000;
+
+/** git-status 并发上限（不同键的并发）：超出报 `git_status_busy`（429） */
+const GIT_STATUS_MAX_CONCURRENCY = 4;
+
+/** git-status 读缓存条目上限（超出淘汰最旧） */
+const GIT_STATUS_CACHE_MAX_ENTRIES = 256;
+
+/**
+ * 并发闸门：上限内发放一次性归还句柄，超出返回 null。
+ *
+ * @param max - 同时在飞的最大数量（必须为正整数）
+ * @returns tryAcquire 发放归还句柄（null=满）；句柄幂等，重复调用只归还一次
+ */
+export function createConcurrencyGate(max: number): {
+  tryAcquire: () => (() => void) | null;
+} {
+  if (!Number.isInteger(max) || max <= 0) {
+    throw new Error(`gate_invalid: max must be a positive integer (got ${String(max)})`);
+  }
+  let active = 0;
+  return {
+    tryAcquire: () => {
+      if (active >= max) return null;
+      active += 1;
+      let released = false;
+      return () => {
+        if (released) return;
+        released = true;
+        active -= 1;
+      };
+    },
+  };
+}
+
 export class Gateway {
   /** 已注册的 Agent */
   private agents = new Map<string, AgentDefinition>();
+  /** git-status 读缓存（key 含路径+隔离签名+maxEntries；单调时钟 TTL，超限淘汰最旧） */
+  private gitStatusCache = new Map<
+    string,
+    { expiresAtMono: number; payload: GitStatusSnapshot & { path: string } }
+  >();
+  /** git-status 单飞表：同键并发共享同一次读（缓存 miss 不各自 spawn git） */
+  private gitStatusInflight = new Map<
+    string,
+    Promise<GitStatusSnapshot & { path: string }>
+  >();
+  /** git-status 并发闸门（约束不同键的并发） */
+  private gitStatusGate = createConcurrencyGate(GIT_STATUS_MAX_CONCURRENCY);
   /** 已注册的 Channel Adapter */
   private channels = new Map<string, ChannelAdapter>();
   /** Plugin Manager */
@@ -1000,27 +1051,70 @@ export class Gateway {
     if (!st.isDirectory()) {
       throw new Error(`path_not_found: "${lexTarget}" is not a directory`);
     }
+    // ── 隔离对齐（留观①）：先推导后节流——untrusted admission 拒绝不得被缓存旁路。
+    // jail 后端可用即进（与工具同路径）；围栏根集合作为 jail roots 传入（bwrap
+    // 命名空间只挂列名根，缺了会把上级 .git 判成非仓库）；requiresJail(eff) 与
+    // runner 同源，把 untrusted 的 jail 建立失败从「回落 supervised」变成硬错误。
     const {
       readGitStatusSnapshot,
       resolveEffectiveEffectPolicy,
       requiresJail,
       probeProcessIsolation,
     } = await import('@octopi-agent/engine');
-    // 隔离对齐（留观①）：jail 后端可用即进（与工具同路径）；围栏根集合作为 jail
-    // roots 传入（bwrap 命名空间只挂列名根，缺了会把上级 .git 判成非仓库）；
-    // requiresJail(eff) 与 runner 同源，把 untrusted 的 jail 建立失败从
-    // 「回落 supervised」变成硬错误；untrusted+refuse 且 L4 不足时 resolve 即抛。
     const eff = resolveEffectiveEffectPolicy(
       roots.effectPolicyConfig ?? {},
       roots.workspace,
       await probeProcessIsolation(),
     );
-    const snapshot = await readGitStatusSnapshot(realTarget, {
-      ...options,
-      requireJail: requiresJail(eff),
-      jailRoots: rootsLex,
-    });
-    return { path: realTarget, ...snapshot };
+    const requireJail = requiresJail(eff);
+
+    // ── 读节流（留观④）──
+    // 键含请求维度（maxEntries）与隔离签名（requireJail + jailRoots）：不同会话的
+    // 隔离语义绝不互串——untrusted 的 fail-closed 判定、bwrap 可见性都不会被另一
+    // 会话的缓存条目旁路；同键并发走单飞共享一次读，闸门只约束不同键的并发。
+    const cacheKey = [
+      realTarget,
+      String(options?.maxEntries ?? 'default'),
+      requireJail ? 'jail' : 'open',
+      [...rootsLex].sort().join(','),
+    ].join('\0');
+    const cached = this.gitStatusCache.get(cacheKey);
+    if (cached) {
+      if (cached.expiresAtMono > performance.now()) return cached.payload;
+      this.gitStatusCache.delete(cacheKey); // 惰性淘汰
+    }
+    const inflight = this.gitStatusInflight.get(cacheKey);
+    if (inflight) return inflight;
+    const release = this.gitStatusGate.tryAcquire();
+    if (!release) {
+      throw new Error('git_status_busy: too many concurrent git status reads; retry shortly');
+    }
+    const task = (async () => {
+      try {
+        const snapshot = await readGitStatusSnapshot(realTarget, {
+          ...options,
+          requireJail,
+          jailRoots: rootsLex,
+        });
+        // 冻结防消费方原地变异污染缓存
+        const payload = Object.freeze({ path: realTarget, ...snapshot });
+        this.gitStatusCache.set(cacheKey, {
+          expiresAtMono: performance.now() + GIT_STATUS_CACHE_TTL_MS,
+          payload,
+        });
+        while (this.gitStatusCache.size > GIT_STATUS_CACHE_MAX_ENTRIES) {
+          const oldest = this.gitStatusCache.keys().next().value;
+          if (oldest === undefined) break;
+          this.gitStatusCache.delete(oldest);
+        }
+        return payload;
+      } finally {
+        release();
+        this.gitStatusInflight.delete(cacheKey);
+      }
+    })();
+    this.gitStatusInflight.set(cacheKey, task);
+    return task;
   }
 
   /**
@@ -1159,6 +1253,8 @@ export class Gateway {
   async stop(): Promise<void> {
     if (!this.started) return;
     this.cancelAllPendingHitl();
+    this.gitStatusCache.clear();
+    this.gitStatusInflight.clear();
     this.sessionSchedules?.dispose();
     this.sessionSchedules = undefined;
     // 委派运行时持有送达回执订阅（常驻 gatewayBus）：停机回收 + 清缓存，

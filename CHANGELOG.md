@@ -1,3 +1,21 @@
+## v0.87.4
+
+### feat(gateway): git-status 读节流——per-path TTL 缓存 + 并发闸门
+
+**背景**（留观④，大哥 2026-10-23 拍板「做」）：每次轮询 = 4 个 git 进程 + 一次 session 读，多标签页线性放大；已鉴权调用方可刷爆 git spawn（`web.host=lan` 时即 DoS 面）。
+
+**变更**：
+
+1. `getSessionGitStatus` 加 **per-key 1s TTL 读缓存**（key = canonical 路径 + `maxEntries` + 隔离签名（`requireJail` + jailRoots 排序），跨会话共享、不同隔离语义绝不互串）：TTL 内命中返回同一冻结 payload，多标签页/多客户端不重复 spawn git。
+2. 加 **单飞表 + 并发闸门**（上限 4，`createConcurrencyGate` 幂等令牌式、纯函数可单测）：同键并发共享同一次读（冷缓存并发不产生 busy）；不同键并发超限抛 `git_status_busy`，路由映射 **429 + Retry-After**；额度 finally 归还、句柄幂等不越减。隔离推导（`untrusted_refused`）先于节流执行——admission 拒绝不会被缓存旁路。
+3. 缓存工程完备性：单调时钟 TTL、惰性淘汰 + 条目上限 256、`stop()` 清理、payload 冻结；SDK 错误透出服务端 `error` 文案（429 不再裸吐 JSON）。WebUI 零改动。
+
+**独立评审**（P0=0 / P1=3 / P2=7，逐条核对后修复）：P1 即缓存键缺请求/隔离维度（maxEntries 串数据、untrusted fail-closed 被旁路、bwrap 错数据跨会话）与缺单飞（并发同路径制造新 429）——全部由「键含签名 + 单飞 + 先推导后节流」收口；P2 修复：闸门幂等令牌 + max 校验、单调时钟、淘汰/上限/stop 清理、`Retry-After` + 错误文案透出 + busy 前缀收紧（`git_status_busy:`）、测试改 `vi.waitFor` 消固定睡眠 + 补同键单飞/maxEntries 隔离/失败不缓存/命中不占额度四类缺口。留观：TTL/并发上限仍为代码常量（沿用 sandbox 16MB、工具 8k 输出门的护栏常量先例，如需配置化再议）。
+
+**验证**：新增 7 用例全过（闸门令牌语义 1、缓存/单飞/键隔离/失败不缓存/命中不占额度 6）+ 路由 429/Retry-After 断言；全量 3103 过 / 2 败 / 6 跳过（2 败仍为 getProcessName/identifyPortOccupant 沙箱固有）；`npm run build` 与 `npm run lint` 全绿。
+
+---
+
 ## v0.87.3
 
 ### fix(engine): git-status 端点隔离档位对齐 untrusted + sandbox 输出上限改字节计数
