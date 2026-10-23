@@ -211,3 +211,42 @@ describe('LLM tool schema sanitization', () => {
     expect(params?.properties?.path).not.toHaveProperty('minLength');
   });
 });
+
+describe('TOOL_PURPOSE_PARAM stub ↔ TOOL_PURPOSE_SYSTEM_NOTE（方案 S 防漂移）', () => {
+  it('schema stub 极短、详版+示例只在全局说明', async () => {
+    const { TOOL_PURPOSE_PARAM, TOOL_PURPOSE_SYSTEM_NOTE } =
+      await import('@octopi-agent/engine/harness/agent/tool-purpose.js');
+    // stub 只作兜底自解释，不应再重复详版（55×157 字符的重复文案已移入全局说明）
+    expect(TOOL_PURPOSE_PARAM.description.length).toBeLessThan(60);
+    // 详版要素齐全：动词+对象+目的、120 上限、示例、非空要求
+    expect(TOOL_PURPOSE_SYSTEM_NOTE).toContain('verb + object + goal');
+    expect(TOOL_PURPOSE_SYSTEM_NOTE).toContain('120');
+    expect(TOOL_PURPOSE_SYSTEM_NOTE).toContain('overwrite src/a.ts to fix timeout');
+    expect(TOOL_PURPOSE_SYSTEM_NOTE).toContain('purpose');
+    expect(TOOL_PURPOSE_SYSTEM_NOTE).toContain('MUST');
+  });
+
+  it('wire schema 的 purpose description 就是 stub 本体', async () => {
+    const { buildToolLlmParameters, TOOL_PURPOSE_PARAM } =
+      await import('@octopi-agent/engine/harness/agent/tool-purpose.js');
+    const schema = buildToolLlmParameters({
+      path: { type: 'string', description: 'p', required: true },
+    }) as { properties?: Record<string, { description?: string }> };
+    expect(schema.properties?.purpose?.description).toBe(TOOL_PURPOSE_PARAM.description);
+  });
+
+  it('file_search 参数 desc 承载去重下沉的语义单元（防再丢失）', async () => {
+    const { createFileSearchTool } =
+      await import('@octopi-agent/engine/harness/extension/plugin-ecosystem/tools/file-search.js');
+    const params = createFileSearchTool().definition.parameters;
+    // pattern：auto 正则触发面全集（anchors/转义类/转义元字符/.* .+/{n}）+ 字面反例
+    expect(params.pattern.description).toContain('anchors');
+    expect(params.pattern.description).toContain('\\w');
+    expect(params.pattern.description).toContain('.+');
+    expect(params.pattern.description).toContain('arr[0]');
+    // glob：裸名任意深度（实现 globToPathRegex 归一化 `**/<glob>` 的契约）
+    expect(params.glob.description).toContain('any depth');
+    // pattern_mode：强制档入口
+    expect(params.pattern_mode.description).toContain('force');
+  });
+});

@@ -222,6 +222,7 @@ export {
   sanitizeToolJsonSchema,
   toolDeclaresPurpose,
   TOOL_PURPOSE_PARAM,
+  TOOL_PURPOSE_SYSTEM_NOTE,
 } from './harness/agent/tool-purpose.js';
 
 export {

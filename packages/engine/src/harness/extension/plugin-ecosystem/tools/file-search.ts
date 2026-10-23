@@ -144,27 +144,20 @@ export function createFileSearchTool(options?: { summary?: ToolSummarySupport })
       capabilities: ['fs-read'],
       description:
         'Search file contents (like grep/rg) with structured results. ' +
-        'Provide `pattern` (one term) or `patterns` (any-of literals). ' +
-        'Default pattern_mode=auto compiles as regex only on strong signals: ' +
-        'anchors (^…$), escapes (\\d \\w \\s), `.*`/`.+`, `{n}` quantifiers. ' +
-        'In auto, `a|b` is a literal OR of trimmed branches (`.` is a literal dot, not a wildcard); ' +
-        'an empty branch (`foo|`, `|`) falls back to whole-term literal. ' +
-        'Code tokens stay literal: `arr[0]`, `useState()`, `a+b`, `C++`, `foo.bar`, `memory*`. ' +
-        'Set pattern_mode="regex" or "literal" to force. ' +
-        "Glob filters by root-relative path (always case-insensitive): '*.md' (any depth), 'src/**/*.ts', '**/memory*.md'. " +
-        "`**` crosses directories, `*` does not. " +
-        'Path: a directory to walk recursively, or a single file path to search just that file. ' +
+        'Provide `pattern` (one term) or `patterns` (any-of literals) — match semantics on those params. ' +
+        '`glob` filters by relative path (always case-insensitive; `**` crosses directories, `*` does not). ' +
+        '`path` = root dir to walk recursively, or one file to search. ' +
         'Empty results include diagnostics.hints for how to retry. ' +
-        'Default case-insensitive content match; set case_sensitive=true for exact case. ' +
-        'Files are read as line streams; max_file_bytes (default 50MB) skips oversized files. ' +
-        'Files whose first 4KB contains a NUL byte are treated as binary and skipped.',
+        'Default case-insensitive content match (`case_sensitive=true` for exact). ' +
+        'Files scanned as line streams; `max_file_bytes` skips larger files; first 4KB NUL ⇒ treated as binary.',
       parameters: {
         pattern: {
           type: 'string',
           description:
-            'Single search term. Auto: regex only for ^ $ \\d .* {n}; ' +
+            'Single search term. Auto: regex only on strong signals — anchors (^…$), ' +
+            'escapes (\\d \\w \\s \\b …) or escaped metachars, `.*`/`.+`, `{n}`; ' +
             '`a|b` = literal OR of trimmed branches (empty branch → whole-term literal); ' +
-            'everything else is literal text.',
+            'everything else is literal text (e.g. `arr[0]`, `C++`, `foo.bar`).',
         },
         patterns: {
           type: 'array',
@@ -180,11 +173,11 @@ export function createFileSearchTool(options?: { summary?: ToolSummarySupport })
           type: 'string',
           description:
             "Path glob relative to root (case-insensitive), e.g. '*.md', 'src/**/*.ts', '**/memory*.md'. " +
-            'Matches relative path; bare `*` does not cross directories.',
+            'Matches relative path; bare name (no `/`) matches at any depth; `*` does not cross directories.',
         },
         pattern_mode: {
           type: 'string',
-          description: 'How to compile pattern/patterns (default: auto)',
+          description: 'How to compile pattern/patterns (default: auto; set "regex"/"literal" to force)',
           enum: ['auto', 'literal', 'regex'],
         },
         regex: {

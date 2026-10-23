@@ -51,4 +51,29 @@ describe('constitution preamble assembly', () => {
     expect(out.systemPrompt).toContain('<layer name="Persona">\nonly-persona\n</layer>');
     expect(out.systemPrompt).not.toContain('# 宪法');
   });
+
+  it('purpose 全局说明恒在 system 稳定块（含 constitution off；方案 S）', async () => {
+    const { TOOL_PURPOSE_SYSTEM_NOTE } = await import('@octopi-agent/engine/harness/agent/tool-purpose.js');
+    for (const constitution of [{ mode: 'off' as const }, { mode: 'product' as const }]) {
+      const spa = createDefaultSystemPromptAssembler({ constitution });
+      const out = await spa.assemble({
+        sessionId: 's',
+        messages: [{ role: 'user', content: 'hi', timestamp: Date.now() } as any],
+        persona: 'persona-text',
+      });
+      expect(out.systemPrompt).toContain(TOOL_PURPOSE_SYSTEM_NOTE);
+      // 恰好一次：单一文案源，不得在装配面再冒出第二份（builder 兜底 prompt 已删重）
+      expect(out.systemPrompt.split(TOOL_PURPOSE_SYSTEM_NOTE).length - 1).toBe(1);
+      // 固定块在层正文之前（缓存稳定前缀）
+      expect(out.systemPrompt.indexOf(TOOL_PURPOSE_SYSTEM_NOTE))
+        .toBeLessThan(out.systemPrompt.indexOf('persona-text'));
+    }
+  });
+
+  it('空装配路径（无 persona/层）也带 purpose 全局说明', async () => {
+    const { TOOL_PURPOSE_SYSTEM_NOTE } = await import('@octopi-agent/engine/harness/agent/tool-purpose.js');
+    const spa = createDefaultSystemPromptAssembler({ constitution: { mode: 'off' } });
+    const out = await spa.assemble({ sessionId: 's', messages: [], persona: '' });
+    expect(out.systemPrompt).toContain(TOOL_PURPOSE_SYSTEM_NOTE);
+  });
 });

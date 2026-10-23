@@ -1,3 +1,18 @@
+## v0.89.6
+
+### feat(engine): purpose 说明文案全局化（方案 S）+ file_search 描述去重
+
+F2 工具 schema 压缩收口（大哥拍板：只落这两项，其余压缩「意义不大」撤销）。每请求工具 schema 约 52k 字符，其中同一段 157 字符的 purpose 填法说明在 55 个工具里各重复一遍（约 10.1k，占 19.4%）。
+
+1. **方案 S**：`TOOL_PURPOSE_PARAM.description` 缩为极短 stub（`Call purpose: what + why, ≤120 chars`），详版+示例以 `TOOL_PURPOSE_SYSTEM_NOTE`（`harness/agent/tool-purpose.ts` 唯一导出，`@octopi-agent/engine` 同步导出）由 `system-prompt-assembler.ts` 与 `TURN_SEMANTICS_MD` 同级拼入 system prompt 稳定前缀（缓存无损）。**契约不变**：purpose 全量必填（含只读工具）；委派子 session 经同一 assembler 自动继承。builder 兜底 system prompt 里的第三份 purpose 文案（措辞不一致）一并删除，保持单一文案源。
+2. **file_search desc↔param 去重**：pattern/pattern_mode/glob/max_file_bytes 语义移入参数 description 并按实现校准（auto 正则触发面补全转义类与 `.+`、glob 裸名任意深度、pattern_mode 强制档），工具 description 收缩为总览+跨参数规则（1,085 → 552 字符）。评审（独立子 agent）曾查出去重初稿丢失 2 处语义单元并使 schema 与实现不符，已修复并加单测锁住下沉语义。
+
+设计背景：`arch/tool-call-purpose.md`「演进（方案 S）」；评估史料：`arch/f2-schema-slim-eval.md`。
+
+**验证**：全量测试 3153 过 / 2 败（`getProcessName/ps` 类，沙箱固有限制，与本改动无因果链）/ 6 跳过；新增装配测试锁 purpose 全局说明恒在 system（含 `constitution.mode=off`）+ stub↔全局说明防漂移断言；`npm run lint` 绿；`arch/check-sync.sh` 绿。
+
+---
+
 ## v0.89.5
 
 ### docs(arch): 代码注释里的过期交接指针改指 `open-problems.md`

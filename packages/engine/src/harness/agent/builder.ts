@@ -1935,8 +1935,6 @@ export class AgentBuilder {
 
 ${toolList}
 
-Every tool call must include a short honest purpose field (verb + object + goal, e.g. "read package.json to find test script") — humans and approvers see it as the call title.
-
 Tool selection (strict):
 1. Prefer a dedicated tool when one covers the job (file_read / file_list / file_write / file_edit / file_delete / file_mkdir / file_rename / file_copy / file_stat / file_rmdir / file_search / env_info, and any task-specific tool).
 2. If a dedicated-tool call fails because your arguments were wrong (bad path, bad params), fix the call and retry that tool — do not switch to shell for a call you can fix.

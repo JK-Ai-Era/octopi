@@ -22,6 +22,7 @@ import { extractLayerQuery } from './layer-types.js';
 import type { ConceptGraphStore, MemoryStore, WisdomStore } from '../memory/types.js';
 import type { KnowledgeCatalogProvider } from '../knowledge/catalog-types.js';
 import { loadConstitution, type ConstitutionConfig } from './constitution/load-constitution.js';
+import { TOOL_PURPOSE_SYSTEM_NOTE } from '../agent/tool-purpose.js';
 
 export interface SystemPromptAssembleInput {
   sessionId: string;
@@ -88,9 +89,14 @@ export const TURN_SEMANTICS_MD = `## Turns (authoritative)
 - If a tool needs old ephemeral detail, re-read the source (session log / files);
   do not assume old picks are still true.`;
 
-function withTurnRules(systemPrompt: string): string {
+/**
+ * 缓存稳定固定块（永远拼进 system）：Turn 信封阅读规则置首，purpose 全局说明随后。
+ * purpose 详版+示例在此只写一次（方案 S）——schema 侧只留 TOOL_PURPOSE_PARAM 极短 stub。
+ */
+function withFixedProtocolBlocks(systemPrompt: string): string {
   const body = systemPrompt.trim();
-  return body ? `${TURN_SEMANTICS_MD}\n\n---\n\n${body}` : TURN_SEMANTICS_MD;
+  const head = `${TURN_SEMANTICS_MD}\n\n---\n\n${TOOL_PURPOSE_SYSTEM_NOTE}`;
+  return body ? `${head}\n\n---\n\n${body}` : head;
 }
 
 export function createDefaultSystemPromptAssembler(options?: {
@@ -184,7 +190,7 @@ export function createDefaultSystemPromptAssembler(options?: {
       );
       const hasPreamble = Boolean(resolvedPreamble.trim());
       if (!hasPersona && !hasInjected && !hasSkill && !hasRetrieval && !hasPreamble) {
-        return { systemPrompt: withTurnRules('') };
+        return { systemPrompt: withFixedProtocolBlocks('') };
       }
 
       // contextWindow 未知且未配置 systemBudgetTokens：
@@ -309,7 +315,7 @@ export function createDefaultSystemPromptAssembler(options?: {
       }
 
       return {
-        systemPrompt: withTurnRules(result.systemPrompt),
+        systemPrompt: withFixedProtocolBlocks(result.systemPrompt),
         runtimeSnapshot,
         manifest,
         skippedBudget,

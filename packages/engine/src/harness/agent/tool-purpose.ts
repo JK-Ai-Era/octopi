@@ -6,12 +6,21 @@
  */
 import type { ToolDefinition, ToolParameter } from '@octopi-agent/core/types.js';
 
-/** 统一注入的行动简述参数 */
+/**
+ * 统一注入的行动简述参数。
+ *
+ * description 只留极短 stub（schema 自解释兜底）；详版+示例在 TOOL_PURPOSE_SYSTEM_NOTE
+ * 全局说明（system prompt 稳定块）只写一次——55 个工具不再重复同一段 157 字符文案
+ * （方案 S，arch/tool-call-purpose.md「演进」）。
+ */
 export const TOOL_PURPOSE_PARAM = {
   type: 'string' as const,
-  description:
-    'One short honest line for humans and approvers: what this call does and why (verb + object + goal, max 120 chars). Example: "overwrite src/a.ts to fix timeout".',
+  description: 'Call purpose: what + why, ≤120 chars',
 };
+
+/** purpose 填法的全局说明（详版与示例唯一来源；system prompt 稳定块，缓存无损） */
+export const TOOL_PURPOSE_SYSTEM_NOTE = `### Tool call purpose
+Every tool call MUST include a \`purpose\` argument: one short honest line for humans and approvers — what the call does and why (verb + object + goal, max 120 chars). Example: "overwrite src/a.ts to fix timeout". Never leave it empty.`;
 
 /** 仅保留 OpenAI function calling 可识别的 JSON Schema 关键字 */
 export function sanitizeToolJsonSchema(node: unknown): unknown {
