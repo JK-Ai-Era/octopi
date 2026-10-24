@@ -31,7 +31,7 @@ describe('SubsystemRuntime', () => {
 
   beforeEach(() => {
     events = new DefaultEventBus();
-    runtime = new SubsystemRuntime({
+    runtime = new SubsystemRuntime({ securityEnforcement: { l4Available: true },
       deps: {
         model: {} as any,
         events,
@@ -145,7 +145,7 @@ describe('SubsystemRuntime', () => {
       const { mkdirSync, mkdtempSync } = await import('node:fs');
       const tmpDir = mkdtempSync(`${tmpdir()}/octopi-audit-test-`);
 
-      const rt = new SubsystemRuntime({
+      const rt = new SubsystemRuntime({ securityEnforcement: { l4Available: true },
         deps: { model: {} as any, events, errorStrategy: {} as any, mainTools: new DefaultToolBus() },
         auditDir: tmpDir,
       });
@@ -170,7 +170,7 @@ describe('SubsystemRuntime', () => {
       const { mkdtempSync } = await import('node:fs');
       const tmpDir = mkdtempSync(`${tmpdir()}/octopi-audit-fail-test-`);
 
-      const rt = new SubsystemRuntime({
+      const rt = new SubsystemRuntime({ securityEnforcement: { l4Available: true },
         deps: { model: {} as any, events, errorStrategy: {} as any, mainTools: new DefaultToolBus() },
         auditDir: tmpDir,
       });

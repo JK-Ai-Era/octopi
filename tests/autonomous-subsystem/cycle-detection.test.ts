@@ -150,7 +150,7 @@ describe('SubsystemRuntime.register cycle rejection', () => {
 
   beforeEach(() => {
     events = new DefaultEventBus();
-    runtime = new SubsystemRuntime({
+    runtime = new SubsystemRuntime({ securityEnforcement: { l4Available: true },
       deps: {
         model: {} as never,
         events,

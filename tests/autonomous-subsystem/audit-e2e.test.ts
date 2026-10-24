@@ -49,7 +49,7 @@ describe('audit end-to-end (trigger → JSONL)', () => {
   });
 
   function makeRuntime(): SubsystemRuntime {
-    return new SubsystemRuntime({
+    return new SubsystemRuntime({ securityEnforcement: { l4Available: true },
       deps: {
         model: {} as never,
         events: new DefaultEventBus(),

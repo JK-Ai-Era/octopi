@@ -26,7 +26,7 @@ describe('SubsystemRuntime session end cleanup', () => {
 
   beforeEach(() => {
     events = new DefaultEventBus();
-    runtime = new SubsystemRuntime({
+    runtime = new SubsystemRuntime({ securityEnforcement: { l4Available: true },
       deps: { model: {} as any, events, errorStrategy: {} as any, mainTools: new DefaultToolBus() },
     });
   });

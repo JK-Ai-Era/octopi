@@ -106,7 +106,7 @@ describe('SubsystemRuntime wires SessionLifecycleBridge', () => {
       '@octopi-agent/engine/harness/extension/plugin-ecosystem/tools/tool-bus.js'
     );
     const events = new DefaultEventBus({ debug: false });
-    const runtime = new SubsystemRuntime({
+    const runtime = new SubsystemRuntime({ securityEnforcement: { l4Available: true },
       deps: {
         model: {} as never,
         events,

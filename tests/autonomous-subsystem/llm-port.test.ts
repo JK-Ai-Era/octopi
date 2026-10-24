@@ -190,7 +190,7 @@ describe('SubsystemRuntime injects llmPort and cognitive prompt', () => {
   it('code handler receives llmPort, prompt, and resolved models', async () => {
     const provider = mockProvider('ok');
     const events = new DefaultEventBus();
-    const runtime = new SubsystemRuntime({
+    const runtime = new SubsystemRuntime({ securityEnforcement: { l4Available: true },
       deps: {
         model: provider,
         events,
@@ -224,7 +224,7 @@ describe('SubsystemRuntime injects llmPort and cognitive prompt', () => {
   it('injects llmPort even without runtimeInject block', async () => {
     const provider = mockProvider('ok');
     const events = new DefaultEventBus();
-    const runtime = new SubsystemRuntime({
+    const runtime = new SubsystemRuntime({ securityEnforcement: { l4Available: true },
       deps: {
         model: provider,
         events,

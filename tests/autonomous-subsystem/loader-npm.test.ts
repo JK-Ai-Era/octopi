@@ -58,7 +58,7 @@ describe('SubsystemLoader npm discovery', () => {
     writeSubsystem(join(projectDir, 'local-sub'), 'local.sub', { emits: ['local'] });
     writeSubsystem(join(npmDir, '@octopi-agent', 'subsystem-safe'), '@octopi-agent/subsystem-safe', { emits: ['safe'] });
 
-    const loader = new SubsystemLoader({ projectDir, npmDir });
+    const loader = new SubsystemLoader({ securityEnforcement: { l4Available: true }, projectDir, npmDir });
     const result = await loader.loadAll();
 
     expect(result.errors).toEqual([]);
@@ -70,7 +70,7 @@ describe('SubsystemLoader npm discovery', () => {
     const npmDir = join(tmpDir, 'project', 'node_modules');
     writeSubsystem(join(npmDir, 'octopi-subsystem-review'), 'octopi-subsystem-review');
 
-    const loader = new SubsystemLoader({ npmDir });
+    const loader = new SubsystemLoader({ securityEnforcement: { l4Available: true }, npmDir });
     const result = await loader.loadAll();
 
     expect(result.errors).toEqual([]);
@@ -83,7 +83,7 @@ describe('SubsystemLoader npm discovery', () => {
     mkdirSync(join(npmDir, 'lodash'), { recursive: true });
     writeFileSync(join(npmDir, 'lodash', 'package.json'), '{}');
 
-    const loader = new SubsystemLoader({ npmDir });
+    const loader = new SubsystemLoader({ securityEnforcement: { l4Available: true }, npmDir });
     const result = await loader.loadAll();
 
     expect(result.specs).toHaveLength(0);

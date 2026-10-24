@@ -42,7 +42,7 @@ describe('validateSubsystemSpec', () => {
         boundary: { visibility: 'structured', authority: 'observe', security: 'sandboxed' },
         act: { mode: 'none' },
       });
-      expect(validateSubsystemSpec(spec)).toHaveLength(0);
+      expect(validateSubsystemSpec(spec, { l4Available: true })).toHaveLength(0);
     });
 
     it('observe + block → 失败', () => {
@@ -50,7 +50,7 @@ describe('validateSubsystemSpec', () => {
         boundary: { visibility: 'structured', authority: 'observe', security: 'sandboxed' },
         act: { mode: 'block' },
       });
-      const errors = validateSubsystemSpec(spec);
+      const errors = validateSubsystemSpec(spec, { l4Available: true });
       expect(errors).toHaveLength(1);
       expect(errors[0].field).toBe('act.mode');
       expect(errors[0].message).toContain('observe');
@@ -62,7 +62,7 @@ describe('validateSubsystemSpec', () => {
         boundary: { visibility: 'structured', authority: 'suggest', security: 'sandboxed' },
         act: { mode: 'modify' },
       });
-      const errors = validateSubsystemSpec(spec);
+      const errors = validateSubsystemSpec(spec, { l4Available: true });
       expect(errors).toHaveLength(1);
       expect(errors[0].field).toBe('act.mode');
     });
@@ -72,7 +72,7 @@ describe('validateSubsystemSpec', () => {
         boundary: { visibility: 'structured', authority: 'act', security: 'sandboxed' },
         act: { mode: 'block' },
       });
-      expect(validateSubsystemSpec(spec)).toHaveLength(0);
+      expect(validateSubsystemSpec(spec, { l4Available: true })).toHaveLength(0);
     });
 
     it('act + inject → 通过', () => {
@@ -80,7 +80,7 @@ describe('validateSubsystemSpec', () => {
         boundary: { visibility: 'structured', authority: 'act', security: 'sandboxed' },
         act: { mode: 'inject' },
       });
-      expect(validateSubsystemSpec(spec)).toHaveLength(0);
+      expect(validateSubsystemSpec(spec, { l4Available: true })).toHaveLength(0);
     });
 
     it('override + block → 通过', () => {
@@ -88,7 +88,7 @@ describe('validateSubsystemSpec', () => {
         boundary: { visibility: 'full', authority: 'override', security: 'privileged' },
         act: { mode: 'block' },
       });
-      expect(validateSubsystemSpec(spec)).toHaveLength(0);
+      expect(validateSubsystemSpec(spec, { l4Available: true })).toHaveLength(0);
     });
   });
 
@@ -105,7 +105,7 @@ describe('validateSubsystemSpec', () => {
           isolation: 'structured',
         },
       });
-      const errors = validateSubsystemSpec(spec);
+      const errors = validateSubsystemSpec(spec, { l4Available: true });
       expect(errors).toHaveLength(1);
       expect(errors[0].field).toBe('sense.filter');
       expect(errors[0].message).toContain('mutually exclusive');
@@ -119,7 +119,7 @@ describe('validateSubsystemSpec', () => {
           isolation: 'structured',
         },
       });
-      expect(validateSubsystemSpec(spec)).toHaveLength(0);
+      expect(validateSubsystemSpec(spec, { l4Available: true })).toHaveLength(0);
     });
   });
 
@@ -132,7 +132,7 @@ describe('validateSubsystemSpec', () => {
           // handler 缺失
         },
       });
-      const errors = validateSubsystemSpec(spec);
+      const errors = validateSubsystemSpec(spec, { l4Available: true });
       expect(errors.some((e) => e.field === 'think.handler')).toBe(true);
     });
 
@@ -145,7 +145,7 @@ describe('validateSubsystemSpec', () => {
           // systemPrompt 缺失
         },
       });
-      const errors = validateSubsystemSpec(spec);
+      const errors = validateSubsystemSpec(spec, { l4Available: true });
       expect(errors.some((e) => e.field === 'think.systemPrompt')).toBe(true);
     });
 
@@ -159,7 +159,7 @@ describe('validateSubsystemSpec', () => {
           // preProcess 和 postProcess 都缺失
         },
       });
-      const errors = validateSubsystemSpec(spec);
+      const errors = validateSubsystemSpec(spec, { l4Available: true });
       expect(errors.some((e) => e.field === 'think')).toBe(true);
     });
 
@@ -174,7 +174,7 @@ describe('validateSubsystemSpec', () => {
         },
       });
       // 需要 authority=act 因为默认 act=none
-      expect(validateSubsystemSpec(spec)).toHaveLength(0);
+      expect(validateSubsystemSpec(spec, { l4Available: true })).toHaveLength(0);
     });
   });
 
@@ -183,7 +183,7 @@ describe('validateSubsystemSpec', () => {
       const spec = makeSpec({
         tools: { mode: 'subset' },
       });
-      const errors = validateSubsystemSpec(spec);
+      const errors = validateSubsystemSpec(spec, { l4Available: true });
       expect(errors.some((e) => e.field === 'tools.names')).toBe(true);
     });
 
@@ -191,7 +191,7 @@ describe('validateSubsystemSpec', () => {
       const spec = makeSpec({
         tools: { mode: 'custom' },
       });
-      const errors = validateSubsystemSpec(spec);
+      const errors = validateSubsystemSpec(spec, { l4Available: true });
       expect(errors.some((e) => e.field === 'tools.definitions')).toBe(true);
     });
   });
@@ -199,7 +199,7 @@ describe('validateSubsystemSpec', () => {
   describe('完整合法 spec', () => {
     it('最小合法 spec → 零错误', () => {
       const spec = makeSpec();
-      expect(validateSubsystemSpec(spec)).toHaveLength(0);
+      expect(validateSubsystemSpec(spec, { l4Available: true })).toHaveLength(0);
     });
 
     it('LLM 子系统完整合法 spec → 零错误', () => {
@@ -223,7 +223,32 @@ describe('validateSubsystemSpec', () => {
         session: { mode: 'persistent', scope: 'agent', ttl: '24h' },
         lifecycle: { maxDurationMs: 30000, maxConcurrent: 1, degradeOn: 'timeout' },
       });
-      expect(validateSubsystemSpec(spec)).toHaveLength(0);
+      expect(validateSubsystemSpec(spec, { l4Available: true })).toHaveLength(0);
+    });
+  });
+
+  describe('SEC-6: sandboxed 声明必须可兑现（fail-closed）', () => {
+    it('sandboxed + 无 L4 → 拒绝', () => {
+      const errors = validateSubsystemSpec(makeSpec(), { l4Available: false });
+      expect(errors.some((e) => e.field === 'boundary.security')).toBe(true);
+    });
+
+    it('sandboxed + 有 L4 → 放行', () => {
+      expect(validateSubsystemSpec(makeSpec(), { l4Available: true })).toHaveLength(0);
+    });
+
+    it('trusted + 无 L4 → 放行（advisory，不拦截）', () => {
+      const spec = makeSpec({
+        boundary: { visibility: 'structured', authority: 'observe', security: 'trusted' },
+      });
+      expect(validateSubsystemSpec(spec, { l4Available: false })).toHaveLength(0);
+    });
+
+    it('privileged + 无 L4 → 放行（advisory，不拦截）', () => {
+      const spec = makeSpec({
+        boundary: { visibility: 'structured', authority: 'observe', security: 'privileged' },
+      });
+      expect(validateSubsystemSpec(spec, { l4Available: false })).toHaveLength(0);
     });
   });
 });

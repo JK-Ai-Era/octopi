@@ -40,7 +40,7 @@ describe('SubsystemRuntime lifecycle enforcement', () => {
     const { tmpdir } = await import('node:os');
     const { mkdtempSync } = await import('node:fs');
     const tmpDir = mkdtempSync(`${tmpdir()}/octopi-audit-timeout-`);
-    const runtime = new SubsystemRuntime({
+    const runtime = new SubsystemRuntime({ securityEnforcement: { l4Available: true },
       deps: { model: {} as any, events, errorStrategy: {} as any, mainTools: new DefaultToolBus() },
       auditDir: tmpDir,
     });
@@ -73,7 +73,7 @@ describe('SubsystemRuntime lifecycle enforcement', () => {
   });
 
   it('delivers interrupted signal according to degradeOn policy', async () => {
-    const runtime = new SubsystemRuntime({
+    const runtime = new SubsystemRuntime({ securityEnforcement: { l4Available: true },
       deps: { model: {} as any, events, errorStrategy: {} as any, mainTools: new DefaultToolBus() },
     });
     runtimes.push(runtime);
@@ -100,7 +100,7 @@ describe('SubsystemRuntime lifecycle enforcement', () => {
   });
 
   it('degrades when estimated input tokens exceed maxTokens (degradeOn=both)', async () => {
-    const runtime = new SubsystemRuntime({
+    const runtime = new SubsystemRuntime({ securityEnforcement: { l4Available: true },
       deps: { model: {} as any, events, errorStrategy: {} as any, mainTools: new DefaultToolBus() },
     });
     runtimes.push(runtime);

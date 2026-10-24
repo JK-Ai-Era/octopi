@@ -30,7 +30,7 @@ describe('SubsystemRuntime custom tools from definitions', () => {
   let runtime: SubsystemRuntime;
 
   beforeEach(() => {
-    runtime = new SubsystemRuntime({
+    runtime = new SubsystemRuntime({ securityEnforcement: { l4Available: true },
       deps: { model: {} as any, events, errorStrategy: {} as any, mainTools: new DefaultToolBus() },
     });
   });

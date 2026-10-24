@@ -8,7 +8,8 @@ import type {
   SecurityLevel, ToolMode, SessionMode, SessionScope,
   SubsystemHandler, RuntimeInjectConfig, LifecycleResumeConfig, ObservabilityConfig,
 } from './types.js';
-import { validateSubsystemSpec } from './boundary/validator.js';
+import { validateSubsystemSpec, type SecurityEnforcementContext } from './boundary/validator.js';
+import { probeProcessIsolation, assessL4ProcessMinimum } from '../../extension/execution-environment/process-isolation.js';
 
 // js-yaml 自身未附带 d.ts；仅使用 load，避免为类型强装 @types（与当前 TS 版本 peer 冲突）
 // 惰性 require：包缺失时只在真正解析 YAML 时失败，不阻断模块 import
@@ -28,6 +29,11 @@ export interface SubsystemLoaderConfig {
   projectDir?: string;
   /** node_modules 目录（用于 npm 子系统发现） */
   npmDir?: string;
+  /**
+   * SEC-6 能力注入（测试/确定性场景）。缺省实测环境：
+   * `probeProcessIsolation()` + L4 process 最低线评估。
+   */
+  securityEnforcement?: SecurityEnforcementContext;
 }
 
 interface Frontmatter { [key: string]: unknown; }
@@ -43,12 +49,25 @@ export class SubsystemLoader {
   private userDir?: string;
   private projectDir?: string;
   private npmDir?: string;
+  private securityEnforcement?: SecurityEnforcementContext;
 
   constructor(config: SubsystemLoaderConfig) {
     this.builtinDir = config.builtinDir;
     this.userDir = config.userDir;
     this.projectDir = config.projectDir;
     this.npmDir = config.npmDir;
+    this.securityEnforcement = config.securityEnforcement;
+  }
+
+  /**
+   * SEC-6 能力解析：注入优先；缺省实测环境（L4 process 最低线评估）。
+   *
+   * @returns 宿主能力声明
+   */
+  private async resolveSecurityEnforcement(): Promise<SecurityEnforcementContext> {
+    if (this.securityEnforcement) return this.securityEnforcement;
+    const profile = await probeProcessIsolation();
+    return { l4Available: assessL4ProcessMinimum(profile).ok };
   }
 
   async loadAll(): Promise<LoadResult> {
@@ -238,7 +257,8 @@ export class SubsystemLoader {
         return { error: `Missing required explicit fields: ${missingExplicitFields.join(', ')}` };
       }
 
-      const errors = validateSubsystemSpec(spec);
+      const enforcement = await this.resolveSecurityEnforcement();
+      const errors = validateSubsystemSpec(spec, enforcement);
       if (errors.length > 0) {
         return { error: `Validation failed: ${errors.map((e) => `${e.field}: ${e.message}`).join('; ')}` };
       }

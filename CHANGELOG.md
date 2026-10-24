@@ -100,6 +100,18 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.90.9 (2026-10-25)
+
+### feat(subsystems): SEC-6 fail-closed——`sandboxed` 声明必须可兑现
+
+- **规则**：`validateSubsystemSpec` 新增必填 `SecurityEnforcementContext`（调用方显式声明宿主能力，校验器不替调用方猜环境）——声明 `boundary.security: sandboxed` 而环境不满足 L4 process 最低线（`assessL4ProcessMinimum`）时**拒绝加载**，「看起来已沙箱」不再可能。`trusted | privileged` 维持作者声明（advisory），不拦截。
+- **接线**：`SubsystemLoader` 缺省实测环境（`probeProcessIsolation`），可注入 `securityEnforcement`（测试/确定性场景）；`SubsystemRuntime` 构造必填能力声明，`agent/builder` 组合根实测后传入。
+- **文档**：`docs/autonomous-subsystem.md` + `.zh.md` security 段改为**执行语义**（EN+ZH 同步）。
+- **验证**：autonomous-subsystem 全套 27 文件 / 188 测试绿（含 SEC-6 新用例 6：validator 拒载/放行 ×4、loader 拒载/放行 ×2）；lint + typecheck 绿。
+- **行为变化（breaking note）**：无 L4 隔离的宿主上，声明 `sandboxed` 的子系统（含缺省值）将 fail-closed 拒载——这是 SEC-6 拍板语义；此类宿主需显式声明 `trusted`/`privileged`，或提供 bwrap/Seatbelt/Job。
+
+---
+
 ## v0.90.8 (2026-10-25)
 
 ### fix(knowledge): purge 别名形态漏删——Membership 按真实文件身份匹配

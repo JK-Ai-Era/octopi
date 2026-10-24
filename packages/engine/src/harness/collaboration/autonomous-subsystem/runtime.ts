@@ -46,7 +46,7 @@ import type { ModelLevelMap } from './types.js';
 import { SignalBus } from './signal/bus.js';
 import { SubsystemSessionManager } from './session/manager.js';
 import { AuditWriter } from './audit/writer.js';
-import { validateSubsystemSpec } from './boundary/validator.js';
+import { validateSubsystemSpec, type SecurityEnforcementContext } from './boundary/validator.js';
 import { buildAgentInput } from './sense/input-builder.js';
 
 // ── Trigger result ──
@@ -91,12 +91,15 @@ export interface SubsystemRuntimeConfig {
   deps: SharedDeps;
   auditDir?: string;
   agentId?: string;
+  /** SEC-6 宿主能力声明（必填）：`sandboxed` 声明只有在 L4 可用时才放行 */
+  securityEnforcement: SecurityEnforcementContext;
 }
 
 // ── SubsystemRuntime ──
 
 export class SubsystemRuntime {
   private deps: SharedDeps;
+  private securityEnforcement: SecurityEnforcementContext;
   private senseEngine: SenseEngine;
   private thinkExecutor: ThinkExecutor;
   private signalBus: SignalBus;
@@ -116,6 +119,7 @@ export class SubsystemRuntime {
 
   constructor(config: SubsystemRuntimeConfig) {
     this.deps = config.deps;
+    this.securityEnforcement = config.securityEnforcement;
 
     this.senseEngine = new SenseEngine({
       events: config.deps.events,
@@ -251,7 +255,7 @@ export class SubsystemRuntime {
    */
   register(spec: SubsystemSpec): string[] {
     // 校验
-    const errors = validateSubsystemSpec(spec);
+    const errors = validateSubsystemSpec(spec, this.securityEnforcement);
     if (errors.length > 0) {
       return errors.map((e) => `[${e.field}] ${e.message}`);
     }

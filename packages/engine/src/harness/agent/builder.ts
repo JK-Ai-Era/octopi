@@ -1422,6 +1422,11 @@ export class AgentBuilder {
     let subsystemRuntime: import('../collaboration/autonomous-subsystem/runtime.js').SubsystemRuntime | undefined;
     if (candidateSpecs.length > 0 || this._subsystemDir) {
       const { SubsystemRuntime } = await import('../collaboration/autonomous-subsystem/runtime.js');
+      const { probeProcessIsolation, assessL4ProcessMinimum } = await import(
+        '../extension/execution-environment/process-isolation.js'
+      );
+      const isolationProfile = await probeProcessIsolation();
+      const securityEnforcement = { l4Available: assessL4ProcessMinimum(isolationProfile).ok };
       subsystemRuntime = new SubsystemRuntime({
         deps: {
           model: agent.model,
@@ -1433,6 +1438,7 @@ export class AgentBuilder {
         },
         auditDir: this._subsystemAuditDir,
         agentId: this._agentId,
+        securityEnforcement,
       });
 
       const registeredIds = new Set<string>();

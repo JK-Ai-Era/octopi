@@ -45,13 +45,41 @@ describe('SubsystemLoader', () => {
     }
   }
 
+  describe('SEC-6 fail-closed: sandboxed 声明必须可兑现', () => {
+    it('无 L4 时拒绝加载 sandboxed 声明', async () => {
+      writeSub('sec6-sub', {
+        'config.yaml': VALID_CONFIG,
+        'handler.ts': 'export async function handler() { return { signals: [] }; }',
+      });
+      const result = await new SubsystemLoader({
+        securityEnforcement: { l4Available: false },
+        projectDir: tmpDir,
+      }).loadAll();
+      expect(result.specs).toHaveLength(0);
+      expect(result.errors.some((e) => e.error.includes('boundary.security'))).toBe(true);
+    });
+
+    it('有 L4 时放行 sandboxed 声明', async () => {
+      writeSub('sec6-ok', {
+        'config.yaml': VALID_CONFIG,
+        'handler.ts': 'export async function handler() { return { signals: [] }; }',
+      });
+      const result = await new SubsystemLoader({
+        securityEnforcement: { l4Available: true },
+        projectDir: tmpDir,
+      }).loadAll();
+      expect(result.errors).toEqual([]);
+      expect(result.specs).toHaveLength(1);
+    });
+  });
+
   describe('loadAll', () => {
     it('loads a code subsystem with handler.ts', async () => {
       writeSub('test-sub', {
         'config.yaml': VALID_CONFIG,
         'handler.ts': 'export async function handler() { return { signals: [] }; }',
       });
-      const result = await new SubsystemLoader({ projectDir: tmpDir }).loadAll();
+      const result = await new SubsystemLoader({ securityEnforcement: { l4Available: true }, projectDir: tmpDir }).loadAll();
       expect(result.specs).toHaveLength(1);
       expect(result.specs[0].id).toBe('test-sub');
       expect(result.specs[0].think.handler).toBeDefined();
@@ -64,7 +92,7 @@ describe('SubsystemLoader', () => {
         'SUBSYSTEM.md': '---\nname: llm-sub\nversion: 1.0.0\nmodel: mini\n---\n\n# Title\n\nYou are a test.',
         'config.yaml': LLM_CONFIG,
       });
-      const result = await new SubsystemLoader({ projectDir: tmpDir }).loadAll();
+      const result = await new SubsystemLoader({ securityEnforcement: { l4Available: true }, projectDir: tmpDir }).loadAll();
       expect(result.specs).toHaveLength(1);
       expect(result.specs[0].think.systemPrompt).toContain('You are a test.');
       expect(result.specs[0].think.model).toBe('mini');
@@ -72,7 +100,7 @@ describe('SubsystemLoader', () => {
 
     it('reports validation errors for code without handler', async () => {
       writeSub('bad-sub', { 'config.yaml': VALID_CONFIG });
-      const result = await new SubsystemLoader({ projectDir: tmpDir }).loadAll();
+      const result = await new SubsystemLoader({ securityEnforcement: { l4Available: true }, projectDir: tmpDir }).loadAll();
       expect(result.specs).toHaveLength(0);
       expect(result.errors).toHaveLength(1);
       expect(result.errors[0].error).toContain('think.handler');
@@ -80,7 +108,7 @@ describe('SubsystemLoader', () => {
 
     it('reports validation errors for llm without systemPrompt', async () => {
       writeSub('bad-llm', { 'config.yaml': LLM_CONFIG });
-      const result = await new SubsystemLoader({ projectDir: tmpDir }).loadAll();
+      const result = await new SubsystemLoader({ securityEnforcement: { l4Available: true }, projectDir: tmpDir }).loadAll();
       expect(result.specs).toHaveLength(0);
       expect(result.errors).toHaveLength(1);
       expect(result.errors[0].error).toContain('think.systemPrompt');
@@ -96,7 +124,7 @@ describe('SubsystemLoader', () => {
         'config.yaml': VALID_CONFIG.replace('test-sub', 'sub-a').replace('Test Subsystem', 'Project Version'),
         'handler.ts': handler,
       });
-      const result = await new SubsystemLoader({
+      const result = await new SubsystemLoader({ securityEnforcement: { l4Available: true },
         builtinDir: join(tmpDir, 'builtin'),
         projectDir: join(tmpDir, 'project'),
       }).loadAll();
@@ -110,12 +138,12 @@ describe('SubsystemLoader', () => {
         'handler.ts': 'export async function handler() { return { signals: [] }; }',
       });
       mkdirSync(join(tmpDir, 'not-a-sub'), { recursive: true });
-      const result = await new SubsystemLoader({ projectDir: tmpDir }).loadAll();
+      const result = await new SubsystemLoader({ securityEnforcement: { l4Available: true }, projectDir: tmpDir }).loadAll();
       expect(result.specs).toHaveLength(1);
     });
 
     it('returns empty when directories do not exist', async () => {
-      const result = await new SubsystemLoader({
+      const result = await new SubsystemLoader({ securityEnforcement: { l4Available: true },
         builtinDir: join(tmpDir, 'nonexistent'),
       }).loadAll();
       expect(result.specs).toHaveLength(0);
@@ -165,7 +193,7 @@ describe('SubsystemLoader', () => {
         'config.yaml': config,
         'handler.ts': 'export async function handler() { return { signals: [] }; }',
       });
-      const result = await new SubsystemLoader({ projectDir: tmpDir }).loadAll();
+      const result = await new SubsystemLoader({ securityEnforcement: { l4Available: true }, projectDir: tmpDir }).loadAll();
       expect(result.errors).toEqual([]);
       expect(result.specs).toHaveLength(1);
       const spec = result.specs[0];
@@ -180,7 +208,7 @@ describe('SubsystemLoader', () => {
       writeSub('bad-yaml', {
         'config.yaml': 'id: broken\n  sense: [\n',
       });
-      const result = await new SubsystemLoader({ projectDir: tmpDir }).loadAll();
+      const result = await new SubsystemLoader({ securityEnforcement: { l4Available: true }, projectDir: tmpDir }).loadAll();
       expect(result.specs).toHaveLength(0);
       expect(result.errors).toHaveLength(1);
       expect(result.errors[0].error).toContain('Failed to load');

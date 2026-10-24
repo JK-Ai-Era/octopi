@@ -77,7 +77,7 @@ boundary:
 
 The framework provides no defaults for these three fields. This is a design constraint — a subsystem's capability boundary must be declared explicitly.
 
-> **`boundary.security` status**: currently an author declaration and documentation contract. The runtime does **not yet** perform differentiated I/O checks or sandboxing by level. Hard constraints are carried by `authority` (limits act.mode) and `visibility` (trims input).
+> **`boundary.security` enforcement**: `sandboxed` is a hard promise — the loader refuses to load a `sandboxed` subsystem on a host without L4 process isolation (bwrap / Seatbelt / Job), so a subsystem can never "look sandboxed" while running unjailed (fail-closed). `trusted | privileged` remain **author declarations (advisory)**: the runtime does not perform differentiated I/O checks by these levels. Hard constraints are carried by `authority` (limits act.mode) and `visibility` (trims input).
 
 ---
 

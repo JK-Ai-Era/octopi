@@ -43,7 +43,7 @@ describe('SubsystemRuntime timeout enforcement', () => {
     const { tmpdir } = await import('node:os');
     const { mkdtempSync } = await import('node:fs');
     const tmpDir = mkdtempSync(`${tmpdir()}/octopi-timeout-test-`);
-    const runtime = new SubsystemRuntime({
+    const runtime = new SubsystemRuntime({ securityEnforcement: { l4Available: true },
       deps: {
         model: {} as any,
         events,

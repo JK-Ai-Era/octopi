@@ -9,6 +9,16 @@
 import type { AuthorityLevel, ActMode, SubsystemSpec } from '../types.js';
 
 /**
+ * SEC-6 执行上下文：声明必须可兑现。
+ * `sandboxed` 是加载器的硬承诺（环境须满足 L4 process 最低线）；
+ * `trusted | privileged` 是作者承诺（advisory，见 docs/autonomous-subsystem.md）。
+ */
+export interface SecurityEnforcementContext {
+  /** 环境是否满足 L4 process 最低线（`assessL4ProcessMinimum`） */
+  l4Available: boolean;
+}
+
+/**
  * authority 允许的 act.mode 集合
  */
 const AUTHORITY_ACT_MAP: Record<AuthorityLevel, Set<ActMode>> = {
@@ -32,15 +42,30 @@ export interface ValidationError {
  * 校验 SubsystemSpec 的内部一致性
  *
  * @param spec - 子系统规格
+ * @param enforcement - SEC-6 执行上下文（宿主能力声明，必填：校验器不替调用方猜环境）
  * @returns 校验错误数组，空数组表示通过
  */
-export function validateSubsystemSpec(spec: SubsystemSpec): ValidationError[] {
+export function validateSubsystemSpec(
+  spec: SubsystemSpec,
+  enforcement: SecurityEnforcementContext,
+): ValidationError[] {
   const errors: ValidationError[] = [];
 
   if (!spec.boundary) errors.push({ field: 'boundary', message: 'boundary is required' });
   if (!spec.signal) errors.push({ field: 'signal', message: 'signal is required' });
   if (!spec.act) errors.push({ field: 'act', message: 'act is required' });
   if (!spec.boundary || !spec.signal || !spec.act) return errors;
+
+  // ── SEC-6：`sandboxed` 声明必须可兑现（fail-closed）──
+  // `sandboxed` 是加载器的硬承诺：环境达不到 L4 process 最低线就拒绝加载，
+  // 绝不允许「看起来已沙箱」。`trusted | privileged` 是作者承诺（advisory），不在此拦截。
+  if (spec.boundary.security === 'sandboxed' && !enforcement.l4Available) {
+    errors.push({
+      field: 'boundary.security',
+      message:
+        'security "sandboxed" requires L4 process isolation (bwrap/Seatbelt/Job) in this environment; declare trusted/privileged explicitly or run where L4 exists',
+    });
+  }
 
   // ── act.mode 与 boundary.authority 交叉校验 ──
   const allowedModes = AUTHORITY_ACT_MAP[spec.boundary.authority];

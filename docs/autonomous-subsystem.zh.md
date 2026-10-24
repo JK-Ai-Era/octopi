@@ -78,7 +78,7 @@ boundary:
 
 框架不会为这三个字段提供默认值。这是设计约束——子系统的能力边界必须显式声明。
 
-> **`boundary.security` 现状**：目前是作者声明与文档契约，运行时**尚未**按级别做差异化 I/O 检查或沙箱。硬约束由 `authority`（限制 act.mode）与 `visibility`（裁剪输入）承担。
+> **`boundary.security` 执行语义**：`sandboxed` 是硬承诺——宿主没有 L4 进程级隔离（bwrap / Seatbelt / Job）时，加载器直接拒绝加载声明 `sandboxed` 的子系统，绝不允许「看起来已沙箱」而实际裸奔（fail-closed）。`trusted | privileged` 仍是**作者声明（advisory）**：运行时不按这两个级别做差异化 I/O 检查。硬约束仍由 `authority`（限制 act.mode）与 `visibility`（裁剪输入）承担。
 
 ---
 

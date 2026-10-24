@@ -119,6 +119,7 @@ describe('validator schedule interval', () => {
   it('rejects schedule without interval', () => {
     const errors = validateSubsystemSpec(
       makeSpec({ sense: { source: 'schedule', isolation: 'structured' } }),
+      { l4Available: true },
     );
     expect(errors.some((e) => e.field === 'sense.interval')).toBe(true);
   });
@@ -126,6 +127,7 @@ describe('validator schedule interval', () => {
   it('rejects schedule interval < 1000', () => {
     const errors = validateSubsystemSpec(
       makeSpec({ sense: { source: 'schedule', interval: 10, isolation: 'structured' } }),
+      { l4Available: true },
     );
     expect(errors.some((e) => e.field === 'sense.interval')).toBe(true);
   });
@@ -133,6 +135,7 @@ describe('validator schedule interval', () => {
   it('accepts schedule with interval >= 1000', () => {
     const errors = validateSubsystemSpec(
       makeSpec({ sense: { source: 'schedule', interval: 1000, isolation: 'structured' } }),
+      { l4Available: true },
     );
     expect(errors.filter((e) => e.field === 'sense.interval')).toEqual([]);
   });
@@ -144,7 +147,7 @@ describe('SubsystemRuntime schedule source', () => {
 
   beforeEach(() => {
     events = new DefaultEventBus();
-    runtime = new SubsystemRuntime({
+    runtime = new SubsystemRuntime({ securityEnforcement: { l4Available: true },
       deps: {
         model: {} as never,
         events,
