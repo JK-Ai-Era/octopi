@@ -1,13 +1,13 @@
 /**
- * Gateway ?核心守护进程
+ * Gateway — 核心守护进程
  *
- * 三层架构 Integration 层组?
- * 职责：组?Agent + 挂载适配?+ 管理生命周期?
+ * 三层架构 Integration 层组件。
+ * 职责：组装 Agent + 挂载协议适配器 + 管理生命周期。
  *
- * 架构?
- *   外部消息 ?Channel Adapter ?Gateway ?SessionAwareRunner ?Agent ?LLM
+ * 架构：
+ *   外部消息 → Channel Adapter → Gateway → SessionAwareRunner → Agent → LLM
  *
- * 使用方式?
+ * 使用方式：
  * ```ts
  * const gateway = new Gateway({ agents: [myAgent] });
  * gateway.registerProvider(openaiProvider);
@@ -97,7 +97,7 @@ import type {
   RunObservatorySnapshot,
 } from '@octopi-agent/engine/harness/observability/observer/types.js';
 
-// Web REST 骨架?Gateway 扩展类型
+// Web REST 骨架所需的 Gateway 扩展类型
 // ================================================================
 
 /** Pending approval 请求载荷（SEC-7 单模型） */
@@ -129,7 +129,7 @@ export interface PendingApprovalView {
   decisionScope?: ApprovalScope;
 }
 
-/** ask_user 待答视图 */
+/** ask_user 待答问题视图 */
 export interface PendingQuestionView {
   id: string;
   sessionId: string;
@@ -144,8 +144,8 @@ export interface PendingQuestionView {
 }
 
 /**
- * cancel 时回给等待方的哨?
- * 工具侧识?abort ，不得把空串当用户回?
+ * cancel 时回给等待方的哨兵值。
+ * 工具侧识别后抛 abort 错误，不得把空串当用户回答。
  */
 export const ASK_USER_CANCELLED = '__ask_user_cancelled__';
 
@@ -234,26 +234,26 @@ export function registeredToolToAgentTool(tool: RegisteredTool): {
   };
 }
 
-/** WebUI 模型条目（与 harness/run/model ModelCatalogEntry 对齐?*/
+/** WebUI 模型目录条目（与 harness/run/model ModelCatalogEntry 对齐） */
 export interface ModelCatalogItem {
   id: string;
   provider: string;
   model: string;
-  /** ?null（未知，不猜测） */
+  /** 未配置时为 null（未知，不猜测） */
   contextWindow: number | null;
   maxOutputTokens?: number;
   known: boolean;
   source: string;
 }
 
-/** Agent 模型 */
+/** Agent 默认模型摘要 */
 export interface AgentModelSummary {
   agentId: string;
-  /** agent 配置的默认模?id（`provider/model`?*/
+  /** agent 配置的默认模型 id（`provider/model`） */
   defaultModelId: string;
 }
 
-/** WebUI 模型 */
+/** WebUI 模型目录 */
 export interface ModelCatalog {
   models: ModelCatalogItem[];
   agents: AgentModelSummary[];
@@ -265,20 +265,20 @@ export interface ModelCatalog {
 export interface SessionModelView {
   sessionId: string;
   agentId: string;
-  /** 当前生效模型 id；null 表示沿用 agent  */
+  /** 当前生效模型 id；null 表示沿用 agent 默认 */
   modelId: string | null;
   defaultModelId: string;
-  /** 当前生效模型的能力快照（UI 止再猜窗口） */
+  /** 当前生效模型的能力快照（UI 只读，禁止再猜窗口） */
   resolved?: ModelCatalogItem;
 }
 
 // ================================================================
-//  Session Store（OCTOPI_HOME/sessions?
+// 默认 Session Store（OCTOPI_HOME/sessions）
 // ================================================================
 
 /**
- * 无显?store 时，?OCTOPI_HOME/sessions 创建持久?JSONL store?
- * 改回 SqliteSessionStore（已删除 arch/session-history-search.md?
+ * 无显式 store 时，在 OCTOPI_HOME/sessions 创建持久化 JSONL store。
+ * 禁止改回 SqliteSessionStore（已删除；见 arch/session-history-search.md）。
  */
 async function createDefaultStore(_agents: AgentDefinition[]): Promise<SessionStore<SessionData>> {
   const { getOctopiHome } = await import('@octopi-agent/engine/paths.js');
@@ -358,11 +358,11 @@ export class Gateway {
   private store!: SessionStore<SessionData>;
   /** Gateway 配置 */
   private config: GatewayConfig;
-  /** DM 作用?*/
+  /** DM 作用域 */
   private dmScope: string;
-  /** 已启?*/
+  /** 是否已启动 */
   private started = false;
-  /** 事件监听?*/
+  /** 事件监听器 */
   private listeners: Array<(event: AgentEvent) => void> = [];
   /** Provider */
   private providers = new Map<string, ModelProvider>();
@@ -378,18 +378,18 @@ export class Gateway {
   >;
   /** 委派未启用诊断日志只打一次 */
   private delegationSkippedLogged = false;
-  /** Agent 缓存（避免每条消建） */
+  /** Agent 缓存（避免每条消息重建） */
   private agentCache = new Map<string, {
     agent: import('@octopi-agent/engine/harness/run/agent/index.js').Agent;
     runner: SessionAwareRunner;
     contextEngine?: import('@octopi-agent/engine/harness/context/types.js').ContextEngine;
     contextHealth?: (agentId?: string) => Promise<import('@octopi-agent/engine/harness/context/layer-health.js').ContextLayerHealth>;
   }>();
-  /** 流式 adapter 引用（用于广件） */
+  /** 流式 adapter 引用（用于广播事件） */
   private streamingAdapters: StreamingChannelAdapter[] = [];
-  /** 每个 provider 的熔 */
+  /** 每个 provider 的熔断器 */
   private circuitBreakers = new Map<string, CircuitBreaker>();
-  /**  store 的异步初始化 Promise（未传入 store 时） */
+  /** 默认 store 的异步初始化 Promise（未传入 store 时） */
   private _defaultStorePromise?: Promise<SessionStore<SessionData>>;
   /** Web Runtime pending approvals（confirmHighRisk / confirmEffect） */
   private pendingApprovals = new Map<string, PendingApprovalView>();
@@ -403,14 +403,14 @@ export class Gateway {
   private clientTools!: ClientToolHost;
   private fileReleases!: FileReleaseService;
   private sessionMetaQueues = new Map<string, Promise<void>>();
-  /** 会话近一次七配快照（?content，仅 REST）；FIFO 防泄?*/
+  /** 会话最近一次七层装配快照（含 content，仅 REST）；FIFO 防泄漏 */
   private lastContextLayers = new Map<string, ContextLayersSnapshot>();
   private static readonly MAX_CONTEXT_LAYERS_SESSIONS = 256;
-  /** 产品 Observer 通道（Run 现场?*/
+  /** 产品 Observer 通道（Run 现场） */
   private observerHub: ObserverHub;
-  /** models.level ??WebUI 模型展示分级?*/
+  /** models.level — 供 WebUI 模型目录展示分级名 */
   private modelLevels?: Record<string, { primary: string; fallback?: string[] }>;
-  /** 主（arch/agent-runtime.md）；消息?dispatch */
+  /** 激活宿主（arch/agent-runtime.md）；消息路径经 dispatch */
   private runtime: AgentRuntime;
   private gatewayBus: DefaultEventBus;
   /** AgentSignalSource 已挂到 AgentRuntime（委派 notify 推送的接收端） */
@@ -419,9 +419,9 @@ export class Gateway {
   private agentSignalSourcePromise?: Promise<void>;
   /** agentRuntime.agentSignal === false：显式关闭推送（委派退化为 poll + 状态提示） */
   private agentSignalPushDisabled = false;
-  /** Session ACL（E6）；缺省内置?*/
+  /** Session ACL（E6）；缺省内置五角色 */
   private sessionAcl: SessionAclService;
-  /** 进程内共?Session Lease（E1/E2）：?Runner 注入同一实例 */
+  /** 进程内共享 Session Lease（E1/E2）：所有 Runner 注入同一实例 */
   private sessionLease: import('@octopi-agent/engine/harness/run/concurrency/session-lease.js').InProcessSessionLock;
   /** 会话日程（arch/session-schedules.md）；进程级单例 + schedules.db */
   private sessionSchedules?: import('@octopi-agent/engine/harness/session/schedules/service.js').SessionScheduleService;
@@ -437,11 +437,11 @@ export class Gateway {
   private knowledgeRuntimeRef?: import('./knowledge-runtime.js').GatewayKnowledgeRuntime;
   /** 启动过程状态：ref 未就绪时用，避免 /health 把 starting 误报成 disabled */
   private knowledgeBootState: 'idle' | 'starting' | 'failed' = 'idle';
-  /** 产品?*/
+  /** 产品问题面 */
   private issueRegistry: IssueRegistry;
-  /** 会话?/xxx 命令调用?*/
+  /** 会话内 /xxx 命令调用面 */
   private commandRouter: CommandRouter;
-  /** user/skill 命令载（载，不依?buildAgent?*/
+  /** user/skill 命令是否已装载（启动时装载，不依赖 buildAgent） */
   private commandSourcesReady = false;
 
   constructor(config: GatewayConfig, store?: SessionStore<SessionData>) {
@@ -551,7 +551,7 @@ export class Gateway {
         }
       },
     });
-    // Gateway EventBus：RuntimeEvents 进可观测总线，并?Gateway listeners（不变量 #6?
+    // Gateway EventBus：RuntimeEvents 进可观测总线，并转发到 Gateway listeners（不变量 #6）
     this.gatewayBus = new DefaultEventBus();
     this.observerHub = new ObserverHub(config.observer);
     this.runtime = new AgentRuntime({
@@ -568,17 +568,17 @@ export class Gateway {
       if (event.type === 'context.layers.assembled' && event.sessionId) {
         this.rememberContextLayers(event.sessionId, event);
       }
-      // Observer 通道：Runner ?emit 时直?Hub（避免与 bus  timeline/lifecycle?
-      // Gateway 留产?Context Map；不再二?ingestEvent
-      // 件（turn.end / engine.*）改?processMessage.onEvent ?sessionKey 广播?
-      // 这里跳过，避免双投；其余非流式事件仍?bus?
+      // Observer 通道：Runner 在 emit 时直采 Hub（避免与 bus 双计 timeline/lifecycle）
+      // Gateway 只保留产品 Context Map；不再二次 ingestEvent
+      // 终态事件（turn.end / engine.*）改由 processMessage.onEvent 用 sessionKey 广播，
+      // 这里跳过，避免双投；其余非流式事件仍走 bus。
       if (
         event.sessionId &&
         event.type !== 'llm_stream_delta' &&
         event.type !== 'llm_thinking_delta' &&
         !Gateway.isTerminalWsEvent(event.type)
       ) {
-        // WS 不广正文全文（content）；?UI ?REST 拉取
+        // WS 不广播层正文全文（content）；点选层时 UI 经 REST 拉取
         const out =
           event.type === 'context.layers.assembled'
             ? stripLayerContentFromEvent(event)
@@ -591,16 +591,16 @@ export class Gateway {
     if (store) {
       this.store = store;
     } else {
-      // 延迟化：时解析默认持久化 store
+      // 延迟初始化：启动时解析默认持久化 store
       this._defaultStorePromise = createDefaultStore(config.agents);
     }
 
-    // Issue ?WS 广播
+    // Issue → WS 广播
     this.issueRegistry.subscribe((ev) => this.broadcastIssue(ev));
     // doctor 兜底：崩溃残留 undo 目录
     void this.scanOrphanUndo().catch(() => undefined);
 
-    // 注册配置义的 agents
+    // 注册配置中定义的 agents
     for (const agent of config.agents) {
       this.agents.set(agent.id, agent);
     }
@@ -608,19 +608,19 @@ export class Gateway {
     this.modelLevels = config.levels;
   }
 
-  /** 设置 models.level 映射（daemon 时注入） */
+  /** 设置 models.level 映射（daemon 启动时注入） */
   setModelLevels(levels: Record<string, { primary: string; fallback?: string[] }> | undefined): void {
     this.modelLevels = levels;
   }
 
-  /** 主（Schedule/Escalate ?Source 挂载 */
+  /** 激活宿主（Schedule/Escalate 等 Source 挂载用） */
   getAgentRuntime(): AgentRuntime {
     return this.runtime;
   }
 
   /**
-   * 按配?Runtime Sources（Schedule / Escalate?
-   * 应在 start() 之前调用；与 gatewayBus 同源?
+   * 按配置挂载 Runtime Sources（Schedule / Escalate）。
+   * 应在 start() 之前调用；与 gatewayBus 同源。
    */
   async configureAgentRuntime(cfg: {
     schedule?: Array<{
@@ -719,7 +719,7 @@ export class Gateway {
 
 
   /**
-   *  store 已就解析 store 的异步初始化?
+   * 确保 store 已就绪（解析默认 store 的异步初始化）
    */
   private async ensureStore(): Promise<void> {
     if (this._defaultStorePromise) {
@@ -838,7 +838,7 @@ export class Gateway {
       });
     }
 
-    // Plugin 已注册命令合?+ user/skill 命令装载（必须在收消?
+    // Plugin 已注册命令合入 + user/skill 命令装载（必须在收消息前）
     try {
       this.registerPluginCommands();
     } catch (err) {
@@ -1301,7 +1301,7 @@ export class Gateway {
         }).catch(() => undefined);
       }
     } catch {
-      // stop fail-open
+      // stop 路径 fail-open，不阻断关闭
     }
 
     console.log('[Gateway] Stopping...');
@@ -1328,12 +1328,12 @@ export class Gateway {
       await adapter.stop();
     }
 
-    // 释放 Runner 后台 timer（BackfillTrigger / HealthProbe / SubsystemRuntime?
+    // 释放 Runner 后台 timer（BackfillTrigger / HealthProbe / SubsystemRuntime）
     for (const cached of this.agentCache.values()) {
       try {
         cached.runner.dispose();
       } catch {
-        // stop  fail-open，不阻断关闭
+        // stop 路径 fail-open，不阻断关闭
       }
     }
     this.agentCache.clear();
@@ -1355,15 +1355,15 @@ export class Gateway {
 
   registerChannel(adapter: ChannelAdapter): void {
     this.channels.set(adapter.name, adapter);
-    // 测是否支持流式广?
+    // 检测是否支持流式广播
     if ('broadcastEvent' in adapter && typeof adapter.broadcastEvent === 'function') {
       this.streamingAdapters.push(adapter as StreamingChannelAdapter);
     }
-    // 注册回调
+    // 注册中止回调
     if ('onAbort' in adapter) {
       (adapter as any).onAbort = (sessionId: string) => this.abortSession(sessionId);
     }
-    // 注册欢迎消息扩展（agent 信息 + 命令 + open issues?
+    // 注册欢迎消息扩展（agent 信息 + 命令目录 + open issues）
     if ('onWelcome' in adapter) {
       (adapter as any).onWelcome = () => {
         const agents = Array.from(this.agents.entries()).map(([id, agent]) => ({
@@ -1407,8 +1407,8 @@ export class Gateway {
   }
 
   /**
-   * 指定 session 在运行的 agent
-   * 归属：Runtime 持有 AbortController；Gateway （arch/agent-runtime.md §8.1?
+   * 中止指定 session 的正在运行的 agent
+   * 归属：Runtime 持有 AbortController；Gateway 转调（arch/agent-runtime.md §8.1）
    */
   abortSession(sessionId: string): void {
     this.cancelPendingQuestions(sessionId);
@@ -1421,7 +1421,7 @@ export class Gateway {
   }
 
   // ================================================================
-  // Commands / System Issues（arch/slash-commands.md · arch/system-issues.md?
+  // Commands / System Issues（arch/slash-commands.md · arch/system-issues.md）
   // ================================================================
 
   getIssueRegistry(): IssueRegistry {
@@ -1482,7 +1482,7 @@ export class Gateway {
     const host: BuiltinHost = {
       hasActiveRun: (sessionId, agentId) => this.runtime.hasActiveRun(agentId, sessionId),
       currentModel: (sessionId, agentId) => {
-        // 仅能读缓存；完整值走 view（execute 入参?
+        // 同步路径仅能读缓存；完整值走 view（execute 入参）
         void agentId;
         void sessionId;
         return undefined;
@@ -1510,10 +1510,10 @@ export class Gateway {
     return router;
   }
 
-  /** Skill command 桥接（启?/ buildAgent 发现 skill 后调冲突?Issue?*/
+  /** Skill command 桥接（启动 / buildAgent 发现 skill 后调用；冲突进 Issue） */
   registerSkillCommands(skills: import('@octopi-agent/engine/harness/extension/plugin-ecosystem/skills/types.js').SkillManager): void {
     const defs = skillCommandsFromManager(skills, (id) => skills.load(id));
-    // ref = skillId：同 skill 重载 upsert；不?skill ?command 名可冲突
+    // ref = skillId：同 skill 重载 upsert；不同 skill 同 command 名可冲突
     for (const skill of skills.list()) {
       if (!skill.command) continue;
       const def = defs.find((d) => d.name === skill.command);
@@ -1523,7 +1523,7 @@ export class Gateway {
     }
   }
 
-  /** 用户 commands/*.md（agent.home/commands?*/
+  /** 用户 commands/*.md（agent.home/commands） */
   registerUserCommands(agentId: string, directory: string): void {
     const loaded = loadUserCommandDefs(directory);
     for (const { definition, ref } of loaded) {
@@ -1537,8 +1537,8 @@ export class Gateway {
   }
 
   /**
-   * 时注册各 agent ?user/skill 命令?
-   * 必须在命决前完成?/help ?Loop 前看不到义命?
+   * 启动时注册各 agent 的 user/skill 命令。
+   * 必须在命令裁决前完成——否则 /help 进 Loop 前看不到自定义命令。
    */
   async ensureCommandSources(): Promise<void> {
     if (this.commandSourcesReady) return;
@@ -1575,7 +1575,7 @@ export class Gateway {
     }
   }
 
-  /** Plugin registerCommand ?Router（plugin load 后调 */
+  /** Plugin registerCommand → Router（plugin load 后调用） */
   registerPluginCommands(): void {
     for (const def of pluginCommandsFromManager(this.pluginManager)) {
       const r = this.commandRouter.register(def, `plugin:${def.name}`);
@@ -1616,7 +1616,7 @@ export class Gateway {
             this.abortSession(sessionId);
             break;
           case 'new_session': {
-            // 敛：把当前会话标 recent 并带 sessionText，供补录触发（不切换?
+            // 硬收敛：把当前会话标 recent 并带 sessionText，供补录触发（不阻塞切换）
             try {
               const old = await this.store.load(sessionId);
               if (old) {
@@ -1646,7 +1646,7 @@ export class Gateway {
                 });
               }
             } catch {
-              // 切换会话不因补录失败而中?
+              // 切换会话不因补录快照失败而中断
             }
             const meta = await this.createSession({ agentId });
             result.newSessionId = meta.id;
@@ -1659,14 +1659,14 @@ export class Gateway {
             await this.compactSession(sessionId, agentId);
             break;
           case 'set_preferred_agent':
-            // reserved；V1 不落?
+            // reserved；V1 不落地
             break;
           default:
             break;
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        // ?op 失败：收?error，仍继续后续 op / 避免 UI 
+        // 单 op 失败：收成 error，仍继续后续 op / 终态广播，避免 UI 卡死
         result.status = 'error';
         result.display = {
           type: 'text',
@@ -1707,7 +1707,7 @@ export class Gateway {
       session.meta.lastInteractionAt = now;
       await this.store.save(sessionId, session);
     } catch {
-      // 留痕失败不阻令结果回放（Discourse 投影建）
+      // 留痕失败不阻断命令结果回放（Discourse 投影可重建）
     }
   }
 
@@ -1725,10 +1725,10 @@ export class Gateway {
   }
 
   /**
-   * control 命令合成 turn.end Web/TUI ?streaming 并展?display ?
-   * 命令不进 Loop，不会由 Runner 产出 turn.end?
-   * **不带 error:true**oop ?turn.end+error 表示重试/waiting，会把命令结果打回运?
-   * type=text）转 Markdown 行；markdown 原样?
+   * control 命令终态：合成 turn.end，让 Web/TUI 清 streaming 并展示 display 文案。
+   * 命令不进 Loop，不会由 Runner 产出 turn.end。
+   * **不带 error:true**——Loop 的 turn.end+error 表示重试/waiting，会把命令结果打回运行态。
+   * 纯文本（type=text）转 Markdown 硬换行；markdown 原样。
    */
   private broadcastCommandTurnEnd(
     sessionId: string,
@@ -1763,7 +1763,7 @@ export class Gateway {
     } as unknown as AgentEvent;
     this.emitEvent(event);
     for (const adapter of this.streamingAdapters) {
-      // 系统级问题：广播给全?WS 会话
+      // 系统级问题：广播给全部 WS 会话
       adapter.broadcastEvent('*', event);
     }
   }
@@ -1800,9 +1800,9 @@ export class Gateway {
   }
 
   /**
-   * WebUI 模型
+   * WebUI 模型目录
    *
-   * @returns 已注?provider 的全部模?+ agent 模型 + level 映射
+   * @returns 已注册 provider 的全部模型 + agent 默认模型 + level 映射
    */
   getModelCatalog(): ModelCatalog {
     const seen = new Map<string, ModelCatalogItem>();
@@ -1811,7 +1811,7 @@ export class Gateway {
     const push = (entry: ModelCatalogItem, opts?: { preferAgentExplicit?: boolean }) => {
       const prev = seen.get(entry.id);
       if (prev) {
-        // agent 模型的配口优先（?session model 视图致）
+        // agent 默认模型的配置窗口优先（与 session model 视图一致）
         if (opts?.preferAgentExplicit && entry.known && entry.contextWindow != null) {
           seen.set(entry.id, entry);
           const idx = models.findIndex(m => m.id === entry.id);
@@ -1846,7 +1846,7 @@ export class Gateway {
     };
 
     for (const [providerName, provider] of this.providers) {
-      // provider.models 串模型（无能力字段）；必须入 catalog，窗口可?null
+      // provider.models 含纯字符串模型（无能力字段）；必须入 catalog，窗口可为 null
       const declaredNames = provider.models ?? [];
       const names = new Set<string>([
         ...declaredNames,
@@ -1866,7 +1866,7 @@ export class Gateway {
     const agents: AgentModelSummary[] = [];
     for (const [id, agent] of this.agents) {
       const defaultModelId = `${agent.model.provider}/${agent.model.model}`;
-      // agent 配置?explicit 窗口优先?provider 无能力条?
+      // agent 配置的 explicit 窗口优先于 provider 无能力条目
       push(catalogOf(agent.model.provider, agent.model.model, {
         contextWindow: agent.model.contextWindow,
         maxOutputTokens: agent.model.maxTokens,
@@ -1883,10 +1883,10 @@ export class Gateway {
   }
 
   /**
-   *  session 当前模型选择
+   * 查询 session 当前模型选择
    *
    * @param sessionId - 会话 id
-   * @param agentId - ?agent 过滤
+   * @param agentId - 可选 agent 过滤
    * @returns 模型视图；session 不存在时返回 null
    */
   async getSessionModel(sessionId: string, _agentId?: string): Promise<SessionModelView | null> {
@@ -1948,11 +1948,11 @@ export class Gateway {
   }
 
   /**
-   * 设置 session 级模
+   * 设置 session 级模型选择
    *
    * @param sessionId - 会话 id
-   * @param modelRef - `provider/model`、裸模型名或 null（恢?agent ?
-   * @param agentId - ?agent
+   * @param modelRef - `provider/model`、裸模型名或 null（恢复 agent 默认）
+   * @param agentId - 可选 agent
    * @returns 更新后的模型视图
    */
   async setSessionModel(
@@ -2019,14 +2019,14 @@ export class Gateway {
   }
 
   /**
-   * 手动结构压缩（不依赖 contextWindow?
+   * 手动结构压缩（不依赖 contextWindow）
    *
-   * ?SessionAwareRunner.handle **共用 session ?*（E1/E4?
-   * 权威互斥，不?status==='processing'；同 sessionId ?run/compact 排队?
-   * Compact ?= (sessionId, agentId)；全?messages 仍保留在 session store?
+   * 与 SessionAwareRunner.handle **共用 session 锁**（E1/E4）。
+   * 权威互斥是锁，不是 status==='processing'；同 sessionId 的 run/compact 排队。
+   * Compact 键 = (sessionId, agentId)；全量 messages 仍保留在 session store。
    *
    * @param sessionId - 会话 id
-   * @param agentId - ?agent（避免全 agent ；缺省用 session.agentId?
+   * @param agentId - 可选 agent（避免全 agent 扫描；缺省用 session.agentId）
    * @returns 压缩结果
    */
   async compactSession(
@@ -2045,7 +2045,7 @@ export class Gateway {
       throw new Error(`Session "${sessionId}" not found`);
     }
 
-    // E4：compact 用调用方 agentId（缺?primary）；不静默改?
+    // E4：compact 键使用调用方 agentId（缺省 primary）；不静默改键
     const effectiveAgentId = agentId ?? session.primaryAgentId ?? session.agentId;
     let cached = this.agentCache.get(effectiveAgentId);
     if (!cached) {
@@ -2112,7 +2112,7 @@ export class Gateway {
     const compactTargetTokens =
       this.config.context?.contextAssembler?.compactTargetTokens;
 
-    // D1：与 handle 共用 Runner session 锁；持久化走 Runner（E4 
+    // D1：与 handle 共用 Runner session 锁；持久化走 Runner（E4 键）
     return cached.runner.compactSession(sessionId, effectiveAgentId, {
       compactStructural: (input) =>
         structural.compactStructural!({
@@ -2305,7 +2305,7 @@ export class Gateway {
       throw new Error(`Agent "${options.agentId}" not found`);
     }
 
-    // 文件系统安全：避?`:` 等字符（Windows 文件名非法）
+    // sessionId 缺省则生成；未对传入值做 Windows 非法字符清洗（缺清洗为既有风险，另行处理）
     const sessionId = options.sessionId ?? `${options.agentId}-web-${Date.now()}`;
     const session: SessionData = {
       id: sessionId,
@@ -2334,7 +2334,7 @@ export class Gateway {
 
 
   /**
-   * 查找 session（sessionId 等；无需遍历 agent?
+   * 查找 session（sessionId 一等；无需遍历 agent）
    */
   private async findSession(sessionId: string): Promise<SessionData | null> {
     return this.store.load(sessionId);
@@ -2460,7 +2460,7 @@ export class Gateway {
   }
 
   /**
-   * 会话任务列表（只读，?UI?
+   * 会话任务列表（只读，供 UI）
    */
   async getSessionTasks(sessionId: string, _agentId?: string): Promise<SessionData['tasks']> {
     const session = await this.store.load(sessionId);
@@ -2659,19 +2659,19 @@ export class Gateway {
   }
 
   async getMemoryStats(): Promise<Record<string, unknown> | null> {
-    // 预留：当?Gateway ?MemoryStore，返?null 表示?
+    // 预留：当前 Gateway 未持有 MemoryStore，返回 null 表示未配置。
     return null;
   }
 
-  //  Knowledge 源注册（OCTOPI_HOME/knowledge/knowledge.db）─
+  // ── Knowledge 源注册（OCTOPI_HOME/knowledge/knowledge.db）──
 
-  /** 会话附件服务（OP-15；懒加载?*/
+  /** 会话附件服务（OP-15；懒加载） */
   private attachmentServicePromise?: Promise<
     import('@octopi-agent/engine/harness/session/attachments/service.js').SessionAttachmentService
   >;
 
   /**
-   * 会话附件服务（OCTOPI_HOME/sessions/&lt;sid&gt;/attachments?
+   * 会话附件服务（OCTOPI_HOME/sessions/&lt;sid&gt;/attachments）
    */
   async getAttachmentService(): Promise<
     import('@octopi-agent/engine/harness/session/attachments/service.js').SessionAttachmentService
@@ -2707,7 +2707,7 @@ export class Gateway {
   >;
 
   /**
-   * DocumentPort（documents.extract.enabled === false 时为 null?
+   * DocumentPort（documents.extract.enabled === false 时为 null）
    */
   async getDocumentPort(): Promise<
     import('@octopi-agent/engine/harness/capabilities/document/types.js').DocumentPort | null
@@ -2736,7 +2736,7 @@ export class Gateway {
   }
 
   /**
-   * 上传会话附件（JSON + base64 ?utf8 文本?
+   * 上传会话附件（JSON + base64 或 utf8 文本）
    */
   async uploadSessionAttachments(
     sessionId: string,
@@ -2754,7 +2754,7 @@ export class Gateway {
   }
 
   /**
-   * 删除单条会话附件（若?make-searchable 则顺?purge Knowledge source?
+   * 删除单条会话附件（若已 make-searchable 则顺带 purge Knowledge source）
    */
   async deleteSessionAttachment(sessionId: string, attachmentId: string): Promise<boolean> {
     const svc = await this.getAttachmentService();
@@ -2774,7 +2774,7 @@ export class Gateway {
   }
 
   /**
-   * 归入项目：移动到项目 directory 源（OP-15 promote?
+   * 归入项目：移动到项目 directory 源（OP-15 promote）
    */
   async promoteSessionAttachment(
     sessionId: string,
@@ -2825,14 +2825,14 @@ export class Gateway {
       // 不存在则继续 move
     }
     await rename(from, to);
-    // 若有抽取伴生且不同名，一并移?
+    // 若有抽取伴生且不同名，一并移动
     if (item.extractPath && item.extractPath !== item.path) {
       const fromExtract = join(svc.attachmentRoot(sessionId), item.extractPath);
       const toExtract = join(destDir, item.extractPath);
       try {
         await rename(fromExtract, toExtract);
       } catch {
-        // 伴生缺失不阻?promote
+        // 伴生缺失不阻断 promote
       }
     }
     const marked = await svc.markPromoted(sessionId, attachmentId, {
@@ -2843,7 +2843,7 @@ export class Gateway {
   }
 
   /**
-   * 附件升为注册 scopeRef=session ?Knowledge source ?ingest
+   * 附件升为可检索：注册 scopeRef=session 的 Knowledge source 并 ingest
    */
   async makeAttachmentSearchable(
     sessionId: string,
@@ -2891,7 +2891,7 @@ export class Gateway {
   }
 
   /**
-   * 解析 chat 消息附件指针（TriggerAttachmentRef?
+   * 解析 chat 消息附件指针（TriggerAttachmentRef）
    */
   async resolveAttachmentRefs(
     sessionId: string,
@@ -2922,7 +2922,7 @@ export class Gateway {
   }
 
   /**
-   * Knowledge Service 时（懒启manageLocal 或远?baseUrl?
+   * Knowledge Service 运行时（懒启动 manageLocal 或远程 baseUrl）。
    */
   async getKnowledgeRuntime(): Promise<
     import('./knowledge-runtime.js').GatewayKnowledgeRuntime
@@ -2978,8 +2978,8 @@ export class Gateway {
   }
 
   /**
-   * v2：Gateway **?*打开 knowledge.db；写/读一律经 Knowledge Service?
-   * 保留方法名仅作兼容编译面，调用应改为 getKnowledgeClient()?
+   * v2：Gateway **不再直接**打开 knowledge.db；写/读一律经 Knowledge Service。
+   * 保留方法名仅作兼容编译面，调用应改为 getKnowledgeClient()。
    */
   async getKnowledgeSourceStore(): Promise<never> {
     throw new Error('knowledge_disabled: use Knowledge Service (getKnowledgeClient)');
@@ -2997,12 +2997,12 @@ export class Gateway {
       throw new Error('knowledge_disabled');
     }
     if (rt.state === 'degraded') {
-      // 仍尝试调失败由上层降?
+      // 仍尝试调用，失败由上层降级
     }
     return client;
   }
 
-  /** SSE ?WS （knowledge.index.progress）；幂等 */
+  /** SSE → WS 转发（knowledge.index.progress）；幂等 */
   private knowledgeProgressForward?: () => void;
 
   async startKnowledgeProgressForwarding(): Promise<void> {
@@ -3024,7 +3024,7 @@ export class Gateway {
   }
 
   /**
-   * 知识源列???Knowledge Service
+   * 知识源列表 —— 经 Knowledge Service
    */
   async listKnowledgeSources(
     agentId: string,
@@ -3045,7 +3045,7 @@ export class Gateway {
   }
 
   /**
-   * 注册知识???Knowledge Service
+   * 注册知识源 —— 经 Knowledge Service
    */
   async createKnowledgeSource(
     input: import('@octopi-agent/engine/harness/knowledge/types.js').KnowledgeSourceInput,
@@ -3067,7 +3067,7 @@ export class Gateway {
   }
 
   /**
-   * 更新知识??Knowledge Service
+   * 更新知识源 —— 经 Knowledge Service
    */
   async updateKnowledgeSource(
     id: string,
@@ -3079,7 +3079,7 @@ export class Gateway {
   }
 
   /**
-   * 卸载知识??Knowledge Service（解?+ ?purge?
+   * 卸载知识源 —— 经 Knowledge Service（解绑 + purge）
    */
   async removeKnowledgeSource(id: string): Promise<boolean> {
     const client = await this.getKnowledgeClient();
@@ -3088,7 +3088,7 @@ export class Gateway {
   }
 
   /**
-   * Project 挂载 / Global 屏蔽（可?Knowledge Service
+   * Project 挂载 / Global 屏蔽 —— 经 Knowledge Service（可选）
    */
   async setKnowledgeVisibility(action: {
     op: 'assignProject' | 'unassignProject' | 'hide' | 'unhide';
@@ -3104,7 +3104,7 @@ export class Gateway {
   }
 
   /**
-   * Knowledge 注册表统??Knowledge Service
+   * Knowledge 注册表统计 —— 经 Knowledge Service
    */
   async getKnowledgeStats(agentId: string): Promise<Record<string, number>> {
     const client = await this.getKnowledgeClient();
@@ -3114,7 +3114,7 @@ export class Gateway {
   }
 
   /**
-   * 项目视图（先建项挂源?
+   * 项目登记视图（先建项目再挂源）
    */
   async listKnowledgeProjects(): Promise<
     Array<{
@@ -3193,7 +3193,7 @@ export class Gateway {
   }
 
   /**
-   * 源下索引文件列表 ?Knowledge Service
+   * 源下索引文件列表 —— 经 Knowledge Service
    */
   async listKnowledgeSourceFiles(sourceId: string): Promise<
     import('@octopi-agent/engine/harness/knowledge/index-store.js').IndexedFileRecord[]
@@ -3241,11 +3241,11 @@ export class Gateway {
   }
 
   /**
-   * 重做文件：强制重新解?分块/向量
+   * 重做文件：强制重新解析/分块/向量
    *
-   * @param sourceId - ?id
-   * @param opts.paths - 指定；或
-   * @param opts.filter - 按当前列表筛选批?
+   * @param sourceId - 源 id
+   * @param opts.paths - 指定路径；或
+   * @param opts.filter - 按当前列表筛选批量
    * @returns 入队条数
    */
   async reprocessKnowledgeFiles(
@@ -3281,7 +3281,7 @@ export class Gateway {
     return { ok: true, ...data };
   }
 
-  /** 级任?文件重做完成跟踪?*/
+  /** 路径级任务/文件状态（重做完成跟踪） */
   async knowledgePathJobStates(
     sourceId: string,
     paths: string[],
@@ -3325,7 +3325,7 @@ export class Gateway {
   }
 
   /**
-   * 按路径列 chunk理面?
+   * 按路径列 chunk（管理面预览）
    */
   async listKnowledgeChunks(agentId: string, sourceId: string, path: string): Promise<
     Array<{
@@ -3349,7 +3349,7 @@ export class Gateway {
   }
 
   /**
-   * 宿主直搜理面试搜；effective view?Knowledge Service
+   * 宿主直搜（管理面试搜；effective view）—— Knowledge Service
    */
   async searchKnowledge(
     query: string,
@@ -3365,7 +3365,7 @@ export class Gateway {
   }
 
   /**
-   * 会话视图 overlay ?Knowledge Service
+   * 会话视图 overlay —— 经 Knowledge Service
    */
   async getKnowledgeSessionVisibility(
     agentId: string,
@@ -3418,7 +3418,7 @@ export class Gateway {
   }
 
   /**
-   * Agent ?base 性摘要（排查图；不含会话 overlay?
+   * Agent 级 base 可见性摘要（排查辅视图；不含会话 overlay）
    */
   async getKnowledgeVisibility(agentId: string): Promise<{
     hiddenSourceIds: string[];
@@ -3482,7 +3482,7 @@ export class Gateway {
   }
 
   /**
-   * 提升来自 knowledge.promotion.metrics?
+   * 提升候选（阈值当前为 hit-log 代码内默认；knowledge.promotion.metrics 配置面未接线）
    */
   async getKnowledgePromotionCandidates(): Promise<
     import('@octopi-agent/engine/harness/knowledge/hit-log.js').PromotionCandidate[]
@@ -3492,16 +3492,14 @@ export class Gateway {
   }
 
   /**
-   * v2：ingest ?Knowledge Service 内；Gateway 不再持有
+   * v2：ingest 移入 Knowledge Service 内；Gateway 不再持有
    */
   async getKnowledgeIngest(): Promise<never> {
     throw new Error('knowledge_disabled: ingest runs in Knowledge Service');
   }
 
   /**
-   * 触发源索引（P2 Phase A）；?watch；索引排空后后台 auto-describe
-   *
-   * HTTP 不等待整?parse 完成会把请求挂住，且?UI 读库争用?
+   * 触发源索引 —— 经 Knowledge Service 委派；HTTP 即刻返回 indexing，不等待整库 parse 完成（大目录会挂住请求且与 UI 轮询读库争用）。
    */
   async reindexKnowledgeSource(
     sourceId: string,
@@ -3513,7 +3511,7 @@ export class Gateway {
   }
 
   /**
-   * 手动知识索引任务 ?Knowledge Service
+   * 手动知识索引任务（abort）—— 经 Knowledge Service
    */
   async abortKnowledgeJobs(sourceId?: string): Promise<{
     ok: true;
@@ -3542,7 +3540,7 @@ export class Gateway {
   }
 
   /**
-   * /继续索引 ?Knowledge Service
+   * /继续索引（resume）—— 经 Knowledge Service
    */
   async resumeKnowledgeJobs(sourceId?: string): Promise<{
     ok: true;
@@ -3561,10 +3559,10 @@ export class Gateway {
   /** 索引稳定后写 generatedDescription；长任务不靠 idle 超时 */
   private async describeAfterIndexIdle(sourceId: string): Promise<void> {
     try {
-      // 兜底：若已无队列量小文件）可立即描述；否则等 onSourceSettled
+      // 兜底：若本源已无队列（增量小文件）可立即描述；否则等 onSourceSettled
       await this.maybeAutoDescribe(sourceId);
     } catch {
-      /* describe 失败不影响索?*/
+      /* describe 失败不影响索引 */
     }
   }
 
@@ -3578,7 +3576,7 @@ export class Gateway {
     await client.describeSource(sourceId);
   }
 
-  /** 有可?LLM 时构?describe ；无则走?*/
+  /** 有可用 LLM 时构造 describe 端口；无则走启发式 */
   private buildKnowledgeDescribePort():
     | import('@octopi-agent/engine/harness/knowledge/describe.js').KnowledgeDescribePort
     | undefined {
@@ -3607,41 +3605,41 @@ export class Gateway {
   }
 
   /**
-   * 读取会话近一次七配快照（产品 Context 面板?
+   * 读取会话最近一次七层装配快照（产品 Context 面板）
    *
-   * 有权：Gateway Map = 产品（与 observer.level 无关终写入）?
-   * ObserverHub ?observer （Run 观测?
+   * 所有权：Gateway Map = 产品路径（与 observer.level 无关，始终写入）；
+   * ObserverHub 在 observer 开启时另行快照（Run 观测）。
    *
    * @param sessionId - 会话 id
-   * @returns ；尚配过则为 null
+   * @returns 快照；尚未装配过则为 null
    */
   getSessionContextLayers(sessionId: string): ContextLayersSnapshot | null {
     return this.lastContextLayers.get(sessionId) ?? null;
   }
 
   /**
-   * 产品 Observer Hub（Run 观测?
+   * 产品 Observer Hub（Run 观测）
    */
   getObserverHub(): ObserverHub {
     return this.observerHub;
   }
 
   /**
-   * 会话近一?Run 观测投影
+   * 会话最近一次 Run 观测投影
    *
    * @param sessionId - 会话 id
-   * @returns RunObservatorySnapshot；无记录或面板关 null
+   * @returns RunObservatorySnapshot；无记录或面板关闭时 null
    */
   getSessionRunObservatory(sessionId: string): RunObservatorySnapshot | null {
     return this.observerHub.getRunObservatory(sessionId);
   }
 
   /**
-   * Run messages （摘?+ 配置时的全文?
+   * Run messages 快照（摘要 + 配置允许时的全文）
    *
    * @param sessionId - 会话 id
    * @param options - phase / runId
-   * @returns ?null
+   * @returns 快照或 null
    */
   getSessionRunMessages(
     sessionId: string,
@@ -3651,13 +3649,13 @@ export class Gateway {
   }
 
   /**
-   * 读取 Agent 七层数据面健康（store 计数?
+   * 读取 Agent 七层数据面健康（store 计数）
    *
-   * 优先：已 build ?contextHealth probe
-   * ：按 agent.home 直接?skills / agent.db（不依赖懒构建）
+   * 优先：已 build 的 contextHealth probe
+   * 回退：按 agent.home 直接扫 skills / agent.db（不依赖懒构建）
    *
    * @param agentId - Agent id
-   * @returns 健康
+   * @returns 健康快照
    */
   async getAgentContextHealth(agentId: string): Promise<import('@octopi-agent/engine/harness/context/layer-health.js').ContextLayerHealth> {
     const cached = this.agentCache.get(agentId);
@@ -3674,10 +3672,10 @@ export class Gateway {
   }
 
   /**
-   * 产品 Context 面板终写?Map（与 observer.level 无关?
+   * 产品 Context 面板路径：始终写入 Map（与 observer.level 无关）。
    *
-   * Observer Hub 采样?**Runner.emitObserved**（以?Builder ContextEngine emit 回调）；
-   * Gateway ****?`hub.ingestEvent`，否?timeline/lifecycle 会双?
+   * Observer Hub 采样归 **Runner.emitObserved**（以及 Builder ContextEngine emit 回调）；
+   * Gateway **不要**再 `hub.ingestEvent`，否则 timeline/lifecycle 会双计。
    */
   private rememberContextLayers(sessionId: string, event: AgentEvent): void {
     const data = event.data as
@@ -3892,8 +3890,8 @@ export class Gateway {
   }
 
   /**
-   * ?ask_user 挂成 pending question，并等待 UI 作答?
-   * ?daemon / builder 注入 AskUserCallback 使用?
+   * 把 ask_user 挂成 pending question，并等待 UI 作答。
+   * 供 daemon / builder 注入 AskUserCallback 使用。
    */
   askUser(input: {
     sessionId: string;
@@ -3911,8 +3909,8 @@ export class Gateway {
       status: 'pending',
       createdAt: Date.now(),
     };
-    // 先注?waiter 再广emitEvent ?listener?
-    // ?listener 在事件里立即 resolvePendingQuestion，resolver 必须已在?
+    // 先注册 waiter 再广播：emitEvent 同步跑 listener，
+    // 若 listener 在事件里立即 resolvePendingQuestion，resolver 必须已在位
     return new Promise<string>((resolve) => {
       this.pendingQuestions.set(id, view);
       this.questionResolvers.set(id, resolve);
@@ -3921,7 +3919,7 @@ export class Gateway {
     });
   }
 
-  /** 用户作答：标?answered 并唤醒等待中?ask_user */
+  /** 用户作答：标记 answered 并唤醒等待中的 ask_user */
   resolvePendingQuestion(questionId: string, input: { answer: string }): PendingQuestionView | null {
     const q = this.pendingQuestions.get(questionId);
     if (!q || q.status !== 'pending') return null;
@@ -3940,8 +3938,8 @@ export class Gateway {
   }
 
   /**
-   * 会话时取消未答问题，避免工具?
-   * status ?cancelled（非用户作答）；工具侧应视为 abort/error，不得当用户回答?
+   * 会话中止时取消未答问题，避免工具悬挂。
+   * status 记 cancelled（非用户作答）；工具侧应视为 abort/error，不得当用户回答。
    */
   cancelPendingQuestions(sessionId: string): void {
     for (const [id, q] of this.pendingQuestions) {
@@ -3953,7 +3951,7 @@ export class Gateway {
       q.updatedAt = now;
       const resolve = this.questionResolvers.get(id);
       this.questionResolvers.delete(id);
-      // 哨兵唤醒：工具侧识别为取消，不当作用户回?
+      // 哨兵唤醒：工具侧识别为取消，不当作用户回答
       resolve?.(ASK_USER_CANCELLED);
       this.broadcastQuestionEvent(q);
     }
@@ -3970,7 +3968,7 @@ export class Gateway {
       if (this.pendingQuestions.size <= MAX_QUESTIONS) break;
       this.pendingQuestions.delete(q.id);
     }
-    // 情况：全?pending 也硬删最旧（ resolver，避唤醒?
+    // 极端情况：全是 pending 也硬删最旧（不碰 resolver，避免误唤醒）
     if (this.pendingQuestions.size > MAX_QUESTIONS) {
       const oldest = [...this.pendingQuestions.values()]
         .filter((q) => q.status === 'pending')
@@ -4206,7 +4204,7 @@ export class Gateway {
   }
 
   getSession(sessionId: string): SessionMeta | undefined {
-    // 化的 session  store?
+    // 历史 stub：实现已随 store 迁移移除，恒返 undefined（真源在 Knowledge Service / sessions 面）
     return undefined;
   }
 
@@ -4231,13 +4229,13 @@ export class Gateway {
       { sessionId: sessionKey, agentId: agent.id, message: msg },
     );
 
-    // 2b. 对话?/xxx 命令（Intent Ingress）：先于 dispatch?stop ?
-    //  user/skill 命令载（径兜底；start() 载）
+    // 2b. 对话内 /xxx 命令（Intent Ingress）：先于 dispatch；/stop 可抢占
+    // 确保 user/skill 命令已装载（热路径兜底；start() 已装载）
     await this.ensureCommandSources();
     let inboundContent = msg.content;
     {
       const view = this.buildSessionReadView(sessionKey, agent.id);
-      // 尽力补全 model（异 store?
+      // 尽力补全 model（异步读 store）
       try {
         const session = await this.store.load(sessionKey);
         const modelMeta = session?.metadata?.model as { provider?: string; model?: string } | undefined;
@@ -4247,7 +4245,7 @@ export class Gateway {
             : modelMeta.model;
         }
       } catch {
-        // view.model ?
+        // view.model 可缺省
       }
 
       const outcome = await this.commandRouter.execute({
@@ -4280,20 +4278,20 @@ export class Gateway {
           enterLoop: result.enterLoop === true,
         });
 
-        // prompt 展开：继 Loop
+        // prompt 展开：继续进 Loop
         if (result.enterLoop && result.messages?.length) {
           const joined = result.messages.map((m) => m.content).join('\n\n');
           inboundContent = joined;
         } else {
-          // control / client / ：不?Loop?
-          // 合成 turn.end 作终态；****?error:true（Loop 会把 UI 打回 waiting?
+          // control / client / 错误：不进 Loop。
+          // 合成 turn.end 作终态；**禁止**带 error:true（Loop 语义会把 UI 打回 waiting）
           this.broadcastCommandTurnEnd(
             sessionKey,
             result.display.text,
             result.display.type,
           );
 
-          // IM 复（Telegram 等无 WS 事件流的渠道?
+          // IM 短回复（Telegram 等无 WS 事件流的渠道）
           const adapter = this.channels.get(msg.channel);
           if (adapter && result.display.text) {
             try {
@@ -4304,7 +4302,7 @@ export class Gateway {
                 replyToId: msg.id,
               });
             } catch {
-              // IM 败不影响已广 command_result
+              // IM 发送失败不影响已广播的 command_result
             }
           }
           return;
@@ -4314,7 +4312,7 @@ export class Gateway {
       }
     }
 
-    // 3. 获取或构?Agent + SessionAwareRunner，并注册?Runtime
+    // 3. 获取或构建 Agent + SessionAwareRunner，并注册进 Runtime
     let cached = this.agentCache.get(agent.id);
     if (!cached) {
       cached = await this.buildAgent(agent);
@@ -4322,14 +4320,14 @@ export class Gateway {
     }
     const { runner } = cached;
 
-    //  Runtime 已注 agent ?dispatcher
+    // 确保 Runtime 已注册该 agent 的 dispatcher
     if (!this.runtime.listAgents().some((a) => a.agentId === agent.id)) {
       await this.registerRuntimeAgent(agent, runner);
     }
 
-    // 4?. 经激主执行（模型 A）；onEvent 做流式广不变?#6?
+    // 4–5. 经激活宿主执行（模型 A）；onEvent 做流式广播（不变量 #6）
     let finalContent = '';
-    // 会话附件指针（OP-15）：metadata.attachmentIds ?Trigger.attachments
+    // 会话附件指针（OP-15）：metadata.attachmentIds → Trigger.attachments
     let attachMetadata: Record<string, unknown> = {};
     const rawAttachIds = (msg.metadata as { attachmentIds?: unknown } | undefined)?.attachmentIds;
     if (Array.isArray(rawAttachIds) && rawAttachIds.length > 0) {
@@ -4354,10 +4352,10 @@ export class Gateway {
       resolveAgentId: () => agent.id,
       resolveSessionId: () => sessionKey,
       onEvent: (event) => {
-        // Runner：llm_stream_delta ?yield（不?bus）；其余事件还会 emit ?gatewayBus?
-        // 流式 delta + 须用 sessionKey 广播?
-        // - delta 不在 bus ?
-        // -  bus ?event.sessionId，匹配失败时 UI 会永远停?streaming
+        // Runner：llm_stream_delta 只 yield（不进 bus）；其余事件还会 emit 到 gatewayBus。
+        // 流式 delta + 终态必须用闭包 sessionKey 广播：
+        // - delta 不在 bus 上
+        // - 终态若只靠 bus 的 event.sessionId，匹配失败时 UI 会永远停在 streaming
         if (event.type === 'llm_stream_delta' || event.type === 'llm_thinking_delta') {
           this.emitEvent(event as unknown as AgentEvent);
           for (const adapter of this.streamingAdapters) {
@@ -4410,7 +4408,7 @@ export class Gateway {
       return;
     }
 
-    // 7. ?
+    // 7. 发送回复
     const adapter = this.channels.get(msg.channel);
     if (adapter && channelReply.content) {
       await adapter.send(channelReply);
@@ -4422,7 +4420,7 @@ export class Gateway {
     agent: AgentDefinition,
     runner: SessionAwareRunner,
   ): Promise<void> {
-    // 仅内?persona 写入 defaults；文件式 persona ?runner ?resolver 每轮解析
+    // 仅内联 persona 写入 defaults；文件式 persona 由 runner 的 resolver 每轮解析
     const runSystemPrompt =
       typeof agent.persona === 'object' ? agent.persona?.systemPrompt ?? '' : '';
     let contextWindow = agent.model.contextWindow;
@@ -4435,8 +4433,8 @@ export class Gateway {
       agentId: agent.id,
       dispatcher: new SessionRunnerDispatcher({
         runner,
-        // ?agent  model 写入 defaults?
-        // RunConfig.model ?*消息?*覆盖；会盖在 session.metadata.model
+        // 不要把 agent 默认 model 写入 defaults：
+        // RunConfig.model 只表示**消息级**覆盖；会话覆盖在 session.metadata.model
         runConfigDefaults: {
           agentId: agent.id,
           contextWindow,
@@ -4545,7 +4543,7 @@ export class Gateway {
   }
 
   /**
-   * ?Agent 构建 Agent + SessionAwareRunner（新架构?
+   * 为 Agent 构建 Agent + SessionAwareRunner（新架构）
    */
   private async buildAgent(agent: AgentDefinition): Promise<{
     agent: import('@octopi-agent/engine/harness/run/agent/index.js').Agent;
@@ -4554,7 +4552,7 @@ export class Gateway {
     contextHealth?: (agentId?: string) => Promise<import('@octopi-agent/engine/harness/context/layer-health.js').ContextLayerHealth>;
     registerTools: (tools: import('@octopi-agent/engine').RegisteredTool[]) => void;
   }> {
-    // 获取?provider，并解析 agent 模型（含熔断?
+    // 获取主 provider，并解析 agent 默认模型快照（含熔断包装）
     const rawProvider = this.providers.get(agent.model.provider);
     if (!rawProvider) {
       throw new Error(`LLM provider "${agent.model.provider}" not found.`);
@@ -4582,7 +4580,7 @@ export class Gateway {
       wrappedProviders.set(name, wrapProviderWithCircuitBreaker(p, this.getCircuitBreaker(name)));
     }
 
-    // 如果配置?fallbackModels，构?FallbackProvider（回 provider 也包?circuit breaker?
+    // 如果配置了 fallbackModels，构建 FallbackProvider（回退 provider 也包装 circuit breaker）
     let finalProvider: import('@octopi-agent/core/interfaces/model-provider.js').ModelProvider = wrappedProvider;
     if (agent.model.fallbackModels && agent.model.fallbackModels.length > 0) {
       const { FallbackProvider } = await import('@octopi-agent/engine/harness/run/reliability/fallback-provider.js');
@@ -4888,8 +4886,8 @@ export class Gateway {
         (hasMemoryTools ? ' [memory_store/search OK]' : ' [memory_store/search MISSING]'),
     );
 
-    //  Run 级模型快照解析（ B 入口）─
-    // ?run 调一次；provider 缺失返回 null，Runner  Agent 实例
+    // ── Run 级模型快照解析（方案 B 唯一入口）──
+    // 每 run 调一次；provider 缺失返回 null，Runner 回退 Agent 实例默认
     const wrap = (p: ModelProvider, providerName: string) =>
       wrapProviderWithCircuitBreaker(p, this.getCircuitBreaker(providerName));
 
@@ -4916,7 +4914,7 @@ export class Gateway {
       });
     });
 
-    // 会话任务事件 ?WebSocket（UI 实时面板?
+    // 会话任务事件 → WebSocket（UI 只读实时面板）
     const forwardTaskEvent = (event: { sessionId?: string; type: string; data?: unknown }) => {
       if (!event.sessionId) return;
       for (const adapter of this.streamingAdapters) {
@@ -4971,11 +4969,11 @@ export class Gateway {
   }
 
   private buildSessionKey(agent: AgentDefinition, msg: ChannelMessage): string {
-    // 使用消息 agentId Gateway 解析后的 agent.id?
-    // 这样 sessionKey ?WS session ?agentId 致，broadcastEvent ?
+    // 使用消息中的原始 agentId（而非 Gateway 解析后的 agent.id）
+    // 这样 sessionKey 和 WS session 的 agentId 一致，broadcastEvent 能正确匹配
     const agentId = (msg.metadata?.agentId as string) ?? agent.id;
 
-    // 优先使用客户来的 sessionId（WebUI 通过 REST API 创建?session?
+    // 优先使用客户端传来的 sessionId（WebUI 通过 REST API 创建的 session）
     const clientSessionId = msg.metadata?.sessionId as string | undefined;
     if (clientSessionId) {
       return clientSessionId;
@@ -5007,13 +5005,13 @@ export class Gateway {
       try {
         listener(event);
       } catch {
-        // listener 不应流程
+        // listener 错误不应中断流程
       }
     }
   }
 
   /**
-   * 获取或创?provider 熔断?
+   * 获取或创建 provider 熔断器
    */
   private getCircuitBreaker(providerName: string): CircuitBreaker {
     let cb = this.circuitBreakers.get(providerName);
@@ -5029,7 +5027,7 @@ export class Gateway {
   }
 
   /**
-   * 获取有熔?
+   * 获取所有熔断器状态
    */
   getCircuitBreakerStatus(): Record<string, { state: string; failureCount: number }> {
     const result: Record<string, { state: string; failureCount: number }> = {};
@@ -5041,10 +5039,10 @@ export class Gateway {
 }
 
 /**
- * WS 广播前剥?context.layers.assembled 里的?content
+ * WS 广播前剥离 context.layers.assembled 里的层正文 content
  *
- * Gateway 缓存/REST 仍保留全文；UI 时经 REST 拉取?
- * preview 保留?WS，便于未?
+ * Gateway 缓存/REST 仍保留全文；UI 点选层时经 REST 拉取。
+ * preview 保留在 WS，便于未点选时浏览摘要。
  */
 function stripLayerContentFromEvent(event: AgentEvent): AgentEvent {
   const data = event.data as

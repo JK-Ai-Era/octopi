@@ -91,7 +91,7 @@ function neutralizeClosingTags(text: string): string {
  */
 function truncateToBytes(text: string, maxBytes: number): string {
   let out = Buffer.from(text, 'utf-8').subarray(0, maxBytes).toString('utf-8');
-  out = out.replace(/�+$/, '').replace(/\r?\n[^\n]*$/, '');
+  out = out.replace(/\uFFFD+$/, '').replace(/\r?\n[^\n]*$/, '');
   return out;
 }
 

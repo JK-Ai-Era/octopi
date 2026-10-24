@@ -1,7 +1,7 @@
 /**
- * KnowledgeIngest ?解析/切块/索引队列（P2 Phase A?
+ * KnowledgeIngest — 解析/切块/索引队列（P2 Phase A）
  *
- * 原则：ingest 话并发，不作 turn 前置；队列背压不务；source 级锁?
+ * 原则：ingest 与对话并发，不作 turn 同步前置；队列背压不丢任务；source 级锁。
  */
 
 import { randomUUID, createHash } from 'node:crypto';
@@ -116,44 +116,44 @@ export interface KnowledgeIngestOptions {
   parseConcurrency?: number;
   /** 文档（PDF/Office）抽取并发（默认 2；大文件抢占 CPU/内存） */
   documentParseConcurrency?: number;
-  /** 队列深度上限（超出只，不务） */
+  /** 队列深度上限（超出只报警，不丢任务） */
   maxQueueDepth?: number;
-  /** fs watch debounce ms（默?2000?*/
+  /** fs watch debounce ms（默认 800） */
   debounceMs?: number;
-  /** 单文件大小兜底上限（格式分级?fileLimits?*/
+  /** 单文件大小兜底上限（可选；格式分级见 fileLimits） */
   maxFileBytes?: number;
   /**
-   * 按格式分级的文件 + 部分抽取策略?
-   * 机器资源不足时下?maxBytes / hardMaxFileBytes?
+   * 按格式分级的文件限额 + 部分抽取策略。
+   * 机器资源不足时下调 maxBytes / hardMaxFileBytes。
    */
   fileLimits?: KnowledgeFileLimitsInput;
-  /** 单文?parse 超时 ms（默?45000?*/
+  /** 单文件 parse 超时 ms（默认 45000） */
   parseTimeoutMs?: number;
-  /** Phase B embedding（未配则?*/
+  /** Phase B embedding（未配则纯关键词） */
   embeddingProvider?: EmbeddingProvider | null;
-  /** embed 批大小（ 32?*/
+  /** embed 批大小（默认 32） */
   embedBatch?: number;
-  /** embed 小间?ms（限速， 0?*/
+  /** embed 最小间隔 ms（限速，默认 0） */
   embedMinIntervalMs?: number;
-  /** embed 并发（默?parseConcurrency?*/
+  /** embed 并发（默认 4；与 parse 分槽） */
   embedConcurrency?: number;
-  /** 磁盘水位（默?false；仅不丢任务?*/
+  /** 磁盘水位告警（默认 false；仅告警不丢任务） */
   diskWatermarkAlert?: boolean;
-  /** 库（source.authRef 解析；可选） */
+  /** 凭证库（source.authRef 解析；可选） */
   credentials?: CredentialStore | null;
-  /** ?fetcher 覆盖（测?扩展?*/
+  /** 自定义 fetcher 覆盖（测试/扩展） */
   fetchers?: Partial<Record<'local' | 'url' | 'connector', SourceFetcher>>;
-  /** connector 注册?rest?*/
+  /** connector 注册表（默认含 rest） */
   connectors?: ConnectorRegistry;
-  /** poll 调度 tick ms（默?60s?*/
+  /** poll 调度 tick ms（默认 60s） */
   pollTickMs?: number;
-  /** 单源?poll 间隔 ms（默?15min?*/
+  /** 单源最小 poll 间隔 ms（默认 15min） */
   pollMinIntervalMs?: number;
-  /** 每轮 poll 理源数（成本上限，默?8?*/
+  /** 每轮 poll 最多处理源数（成本上限，默认 8） */
   maxPollPerTick?: number;
   /**
-   * DocumentPort：启用后 PDF/Office 等走抽取 ?Markdown 切块
-   * （缺?null = 维持 BINARY skip ?
+   * DocumentPort：启用后 PDF/Office 等走抽取 → Markdown 切块
+   * （缺省 null = 维持 BINARY skip 语义）
    */
   documentPort?: DocumentPort | null;
   /**
@@ -161,10 +161,10 @@ export interface KnowledgeIngestOptions {
    */
   documentConfig?: import('../capabilities/document/factory.js').DocumentCapabilityConfig | null;
   /**
-   * embedding 外发前敏感形态策略（ redact?
-   * - allow：原发（内网/模型?
-   * - redact：命 [REDACTED:rule] ?embed
-   * - skip：命不写向量（关仍可搜）
+   * embedding 外发前敏感形态策略（默认 redact）
+   * - allow：原文外发（内网/本地模型）
+   * - redact：命中替换为 [REDACTED:rule] 再 embed
+   * - skip：命中则不写向量（关键词仍可搜）
    */
   embedSecretPolicy?: EmbedSecretPolicy;
 }
@@ -179,7 +179,7 @@ export class KnowledgeIngest extends EventEmitter {
   private readonly debounceMs: number;
   private readonly maxFileBytes: number;
   private readonly fileLimits: KnowledgeFileLimits;
-  /** 单文?parse/fetch 超时（默?45s；大 Office 抽取会堵事件?*/
+  /** 单文件 parse/fetch 超时（默认 45s；大 Office 同步抽取会堵事件循环） */
   private readonly parseTimeoutMs: number;
   private readonly embedding: EmbeddingProvider | null;
   private readonly embedBatch: number;
@@ -199,12 +199,12 @@ export class KnowledgeIngest extends EventEmitter {
   private readonly embedRunner: EmbedRunner;
   private pollTimer: NodeJS.Timeout | null = null;
   private reconcileTimer: NodeJS.Timeout | null = null;
-  /** 源级：DB 权威 + ?AbortSignal（跨重启?*/
+  /** 源级中止：DB 权威 + 本进程 AbortSignal（跨重启） */
   private readonly jobControl: KnowledgeJobControl;
   private readonly jobQueue: JobQueue;
-  /** 源任务稳定（?queued/running）时回调 ?用于 auto-describe 等收?*/
+  /** 源任务稳定（无 queued/running）时回调 — 用于 auto-describe 等收尾 */
   onSourceSettled?: (sourceId: string) => void;
-  /**  parse 缺口时间 */
+  /** 上次 parse 缺口扫描时间 */
   private lastParseGapScanAt = new Map<string, number>();
   /** watch 突发后要求尽快缺口补扫（覆盖 60s 节流） */
   private gapScanUrgent = new Set<string>();
@@ -215,9 +215,9 @@ export class KnowledgeIngest extends EventEmitter {
   private runningEmbed = 0;
   private draining = false;
   private kickAgain = false;
-  /** source 级锁：同 source 不并?walk/parse 冲突?*/
+  /** source 级锁：同一 source 不并行 walk/parse 冲突写 */
   private sourceLocks = new Set<string>();
-  /** walk 发现的文件数（Phase A coverage 分母?*/
+  /** walk 发现的文件数（Phase A coverage 分母） */
   private discoveredFiles = new Map<string, number>();
   private watchers = new Map<string, FSWatcher>();
   private debounceTimers = new Map<string, NodeJS.Timeout>();
@@ -245,7 +245,7 @@ export class KnowledgeIngest extends EventEmitter {
     this.adapters = options.adapterRegistry ?? new FormatAdapterRegistry();
     this.parseConcurrency = options.parseConcurrency ?? 8;
     this.documentParseConcurrency = options.documentParseConcurrency ?? 2;
-    // watch 批量落盘时缩默窗，新增文件更?
+    // watch 批量落盘时缩短静默窗，新增文件更快入队
     this.debounceMs = options.debounceMs ?? 800;
     this.fileLimits = resolveKnowledgeFileLimits({
       ...options.fileLimits,
@@ -257,7 +257,7 @@ export class KnowledgeIngest extends EventEmitter {
     this.embedding = options.embeddingProvider ?? null;
     this.embedBatch = options.embedBatch ?? 32;
     this.embedMinIntervalMs = options.embedMinIntervalMs ?? 0;
-    // embed ?parse 分槽；缺?4 行打 embedding API
+    // embed 与 parse 分槽；缺省 4 路并行打 embedding API
     this.embedConcurrency = options.embedConcurrency ?? 4;
     this.diskWatermarkAlert = options.diskWatermarkAlert ?? false;
     this.credentials = options.credentials ?? null;
@@ -277,7 +277,7 @@ export class KnowledgeIngest extends EventEmitter {
       emitProgress: (evt) => this.emitProgress(evt),
       recordSecretHit: (input) => this.recordEmbedSecretHit(input),
     });
-    // embedding 外发（合规可查；非权量）
+    // embedding 外发审计（合规可查；非权威计量）
     this.sources.database.raw.exec(`
       CREATE TABLE IF NOT EXISTS knowledge_embed_secret_log (
         id         TEXT PRIMARY KEY,
@@ -297,19 +297,19 @@ export class KnowledgeIngest extends EventEmitter {
     this.pollTickMs = options.pollTickMs ?? 60_000;
     this.pollMinIntervalMs = options.pollMinIntervalMs ?? 15 * 60_000;
     this.maxPollPerTick = options.maxPollPerTick ?? 8;
-    // 崩溃/重启遗留?running 会堵?enqueue 去重并永久显?indexing
+    // 崩溃/重启遗留的 running 会堵住 enqueue 去重并永久显示 indexing
     this.reclaimOrphanRunningJobs();
-    // 历史：目录等非文件曾?no_adapter，启动即?
+    // 历史脏行：目录等非文件曾被标成 no_adapter，启动即清
     this.cleanupNonFileIndexRows();
   }
 
   private lastCleanupAt = 0;
 
   /**
-   * 清掉「非?knowledge_files （目录曾 no_adapter?
+   * 清掉「非普通文件」误入 knowledge_files 的行（目录曾被标 no_adapter）。
    *
-   * ?skipped/error 且无 chunk ：有 chunk 的仍?pruneMissing/磁盘对齐?
-   *  60s 节流，避免每?reconcile ?stat?
+   * 仅处理 skipped/error 且无 chunk 的行：有 chunk 的仍走 pruneMissing/磁盘对齐。
+   * 默认 60s 节流，避免每轮 reconcile 扫全表 stat。
    *
    * @param sourceId - 限定源；省略则全部源
    * @param opts.force - 忽略节流
@@ -342,7 +342,7 @@ export class KnowledgeIngest extends EventEmitter {
             removed += 1;
           }
         } catch {
-          // 不存留给 pruneMissing齐），避删有效但暂时不可见的文件
+          // 路径不存在：留给 pruneMissing（磁盘对齐），避免误删有效但暂时不可见的文件
         }
       }
     }
@@ -350,8 +350,8 @@ export class KnowledgeIngest extends EventEmitter {
   }
 
   /**
-   * 无跨进程 Lease：本进程时把历史 running 收回 queued?
-   * 仅构造时调用行中同进程的 running 法的?
+   * 无跨进程 Lease：本进程启动时把历史 running 收回 queued。
+   * 仅构造时调用——运行中同进程的 running 是合法的。
    */
   private reclaimOrphanRunningJobs(): void {
     this.jobQueue.reclaimOrphanRunning();
@@ -362,10 +362,10 @@ export class KnowledgeIngest extends EventEmitter {
   }
 
   /**
-   * 过滤：文档扩展名交给 worker 抽取，不 BINARY ?
+   * 过滤：文档扩展名交给 worker 抽取，不被 BINARY 短路。
    *
-   * @param p - 文件
-   * @returns 跳过
+   * @param p - 文件路径
+   * @returns 是否跳过
    */
   private shouldSkipFile(p: string): boolean {
     if (isDocumentPath(p)) return false;
@@ -398,11 +398,11 @@ export class KnowledgeIngest extends EventEmitter {
   }
 
   /**
-   * 归属：`parse_file` / 读文件只读源 root 内的?
-   * ?**realpath** 比较，防符号链接逃出 root?
+   * 路径归属：`parse_file` / 本地读文件只允许读源 root 内的路径。
+   * 并做 **realpath** 比较，防符号链接逃出 root。
    *
-   * @param source - 知识?
-   * @param path - 请求（本地绝对路径，
+   * @param source - 知识源
+   * @param path - 请求路径（本地绝对路径，或外源逻辑键）
    */
   private sourceOwnsPath(source: KnowledgeSource, path: string): boolean {
     if (source.kind === 'url' || source.kind === 'connector') {
@@ -412,12 +412,12 @@ export class KnowledgeIngest extends EventEmitter {
     const target = resolve(path);
     const eq = (a: string, b: string) =>
       process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b;
-    // 词法（路径不存在时也拒绝明显越界?
+    // 词法比较（路径不存在时也拒绝明显越界）
     if (!eq(root, target)) {
       const relLex = relative(root, target);
       if (!relLex || relLex.startsWith('..') || isAbsolute(relLex)) return false;
     }
-    // realpath ?symlink stat 失败回词法结果）
+    // realpath 比较（symlink stat 失败回词法结果）
     try {
       const rootReal = realpathSync(root);
       const targetReal = realpathSync(target);
@@ -430,10 +430,10 @@ export class KnowledgeIngest extends EventEmitter {
   }
 
   /**
-   * 全量/增量索引某源（Phase A?
+   * 全量/增量索引某源（Phase A）
    *
-   * @param opts.full - 显式重建（supersede 成任务）；poll/增量不打?
-   * @param opts.incremental - 增量（poll）：?active 任务则跳过本?
+   * @param opts.full - 显式重建（supersede 未完成任务）；poll/增量默认不打断在跑
+   * @param opts.incremental - 增量同步（poll）：有 active 任务则跳过本轮
    */
   async ingestSource(
     sourceId: string,
@@ -477,7 +477,7 @@ export class KnowledgeIngest extends EventEmitter {
     }
 
     if (this.sourceLocks.has(sourceId)) {
-      // 已有同源任务在跑：入?walk 即可（去重）
+      // 已有同源任务在跑：入队 walk 即可（去重）
       await this.enqueue(sourceId, 'walk_source', null, 1);
       return;
     }
@@ -487,21 +487,21 @@ export class KnowledgeIngest extends EventEmitter {
       this.sources.update(sourceId, { status: 'discovering' });
       this.emitProgress({ type: 'source', sourceId, status: 'discovering' });
 
-      // full 不再 clearSource：靠 keepPaths  prune，discover 失败不丢?
+      // full 不再 clearSource：靠本轮 keepPaths 差量 prune，discover 失败不丢库
       if (source.kind === 'url' || source.kind === 'connector') {
         await this.ingestRemoteSource(source);
         return;
       }
 
-      // watch 策略索引同时挂上 fs 监听（幂等；否则后续变更静默丢失?
+      // watch 策略索引同时挂上 fs 监听（幂等；否则后续变更静默丢失）
       this.startWatch(sourceId);
 
       const localDiscovery = await this.localFetcher.discover(source);
       const files = localDiscovery.docs;
       this.discoveredFiles.set(sourceId, files.length);
-      // 后不 prune、不入队（半?keep 删）
+      // 中止后不 prune、不入队（半截 keep 会误删）
       if (this.isAborted(sourceId)) return;
-      //  prune：仅 walk 完整时执行；出错/?keep 不完整会
+      // 差量 prune：仅 walk 完整时执行；出错/截断时 keep 不完整会误删
       if (localDiscovery.complete) {
         const localKeep = new Set(files.map((f) => f.path));
         // walk 成功且目录为空时允许清空 Membership（§6.2）
@@ -580,7 +580,7 @@ export class KnowledgeIngest extends EventEmitter {
       return;
     }
     const refs = discovered.docs;
-    // 条件 GET：带上已?etag/Last-Modified?04 则整文档跳过
+    // 条件 GET：带上已有 etag/Last-Modified，304 则整文档跳过
     const enriched = refs.map((ref) => {
       const existing = this.index.getFile(source.id, ref.path);
       return {
@@ -601,7 +601,7 @@ export class KnowledgeIngest extends EventEmitter {
     let okCount = 0;
     let unchanged = 0;
     for (const ref of enriched) {
-      // 后立刻停：不再写索引
+      // 中止后立刻停：不再外发、不再写索引
       if (this.isAborted(source.id)) {
         this.emitProgress({
           type: 'source',
@@ -614,7 +614,7 @@ export class KnowledgeIngest extends EventEmitter {
       try {
         const doc = await fetcher.fetch(source, ref, cred);
         if (!doc) {
-          // 304 / ：保持原索引
+          // 304 / 未变：保持原索引
           unchanged += 1;
           okCount += 1;
           continue;
@@ -638,8 +638,8 @@ export class KnowledgeIngest extends EventEmitter {
       }
     }
 
-    //  prune：仅?discover **完整** 时才；截?walk 失败?keep 不完整，prune ?
-    // 后不?prune：半?keep 删已入库文档
+    // 差量 prune：仅当 discover **完整** 时才可删；截断/walk 失败时 keep 不完整，prune 会误删
+    // 中止后不做 prune：半截 keep 会误删已入库文档
     if (!this.isAborted(source.id) && discovered.complete) {
       const keep = new Set(enriched.map((r) => r.path));
       const pruned = await this.index.pruneMissingAsync(source.id, keep, { allowEmptyKeep: true });
@@ -667,10 +667,10 @@ export class KnowledgeIngest extends EventEmitter {
   }
 
   /**
-   * 解析源凭证；配置?authRef ?**fail-closed**（解析失败则不抓，不降级匿名?
+   * 解析源凭证；配置了 authRef 时 **fail-closed**（解析失败则本轮不抓，不降级匿名）。
    *
-   * @returns ?null（仅当源?authRef?
-   * @throws authRef 配置了但无法解析时抛错，由调用方
+   * @returns 凭证或 null（仅当源未配置 authRef）
+   * @throws authRef 配置了但无法解析时抛错，由调用方中止本轮
    */
   private async resolveCred(source: KnowledgeSource): Promise<ResolvedCredential | null> {
     if (!source.authRef) return null;
@@ -692,9 +692,9 @@ export class KnowledgeIngest extends EventEmitter {
   }
 
   /**
-   * ?VirtualDocument 写入索引?/ 规范化后文本?
+   * 将 VirtualDocument 写入索引（外源 / 规范化后文本）
    *
-   * @returns 成功写入
+   * @returns 是否成功写入
    */
   async indexVirtualDoc(
     sourceId: string,
@@ -705,7 +705,7 @@ export class KnowledgeIngest extends EventEmitter {
       this.index.markFileSkipped(sourceId, doc.path, 'empty_content');
       return false;
     }
-    // 逻辑能无扩展名（connector id / URL path）：按 MIME / 内容启发式
+    // 逻辑键可能无扩展名（connector id / URL path）：按 MIME → 扩展名 → 内容形态回退
     let adapter = this.adapters.match(doc.path, doc.contentType);
     if (!adapter) {
       if (looksLikeHtml(doc.content, doc.contentType)) adapter = htmlAdapter;
@@ -753,7 +753,7 @@ export class KnowledgeIngest extends EventEmitter {
   }
 
   /**
-   * 单文（P0 道；完成 parse，不 await 全库?
+   * 单文件急索（P0 快车道；同步完成 parse，不 await 全库）
    */
   async ingestFileNow(sourceId: string, filePath: string): Promise<boolean> {
     const ok = await this.parseOne(sourceId, filePath);
@@ -762,17 +762,17 @@ export class KnowledgeIngest extends EventEmitter {
   }
 
   /**
-   * 重做指定文件：强制重?解析 ?分块 ?向量
+   * 重做指定文件：强制重新 解析 → 分块 → 向量
    *
-   * - 必须归属（防越权读盘）；外源逻辑 fetch_doc 重取
-   * - 失效 contentHash（忽?isFresh），?chunks 保留?upsert 成功
-   * - **于中 resume**：显式重?= 意图要跑活，不允许静默丢?
-   * - 等非文件：直接清，不入队
+   * - 路径必须归属本源（防越权读盘）；外源逻辑键走 fetch_doc 重取
+   * - 失效 contentHash（忽略 isFresh），旧 chunks 保留到 upsert 成功
+   * - **源处于中止态时自动 resume**：显式重做 = 意图要跑活，不允许静默丢弃
+   * - 目录等非文件：直接清脏行，不假装入队
    * - 完成后走既有 embed 链路
    *
-   * @param sourceId - ?id
-   * @param paths - 文件列表
-   * @returns queued=新入队；alreadyActive=已在队列/；cleanedNonFiles=清掉的目录脏行；rejected=越权/不属
+   * @param sourceId - 源 id
+   * @param paths - 文件路径列表
+   * @returns queued=新入队；alreadyActive=已在队列/执行；cleanedNonFiles=清掉的目录脏行；rejected=越权/不属本源
    */
   async reprocessFiles(
     sourceId: string,
@@ -807,7 +807,7 @@ export class KnowledgeIngest extends EventEmitter {
         continue;
       }
       if (isRemote) {
-        // 外源：path 重做 = 重新 fetch + 索引（不读本地盘?
+        // 外源：path 是逻辑键，重做 = 重新 fetch + 索引（不读本地盘）
         this.index.invalidateFileForReparse(sourceId, p);
         if (await this.enqueue(sourceId, 'fetch_doc', p, 1)) {
           queued += 1;
@@ -816,7 +816,7 @@ export class KnowledgeIngest extends EventEmitter {
         }
         continue;
       }
-      // /节点：清即可，没?
+      // 目录/设备节点：清脏行即可，没有「解析」可跑
       try {
         const st = statSync(p);
         if (!st.isFile()) {
@@ -825,7 +825,7 @@ export class KnowledgeIngest extends EventEmitter {
           continue;
         }
       } catch {
-        // 不存仍按文件流程 parse ?
+        // 路径不存在：仍按文件流程，让 parse 自清理
       }
       // 总是失效 hash：即使已在队列，跑起来也不能 isFresh 跳过
       this.index.invalidateFileForReparse(sourceId, p);
@@ -839,16 +839,16 @@ export class KnowledgeIngest extends EventEmitter {
     return { queued, alreadyActive, cleanedNonFiles, resumed, rejected };
   }
 
-  /** 上是否已?queued/running ?parse/fetch 任务 */
+  /** 路径上是否已有 queued/running 的 parse/fetch 任务 */
   private hasActiveParseJob(sourceId: string, path: string): boolean {
     return this.jobQueue.hasActivePathJob(sourceId, path);
   }
 
   /**
-   * 级任?文件UI 跟踪重做完成?
+   * 路径级任务/文件状态（UI 跟踪重做完成）
    *
-   * @param sourceId - ?id
-   * @param paths - 列表
+   * @param sourceId - 源 id
+   * @param paths - 路径列表
    */
   jobStateForPaths(
     sourceId: string,
@@ -887,10 +887,10 @@ export class KnowledgeIngest extends EventEmitter {
   }
 
   /**
-   * 按筛选批量重做（当前列表?status/ext/q 条件?
+   * 按筛选批量重做（当前列表的 status/ext/q 条件）
    *
-   * @param sourceId - ?id
-   * @param opts - 与文件列表筛选一?
+   * @param sourceId - 源 id
+   * @param opts - 与文件列表筛选一致
    * @returns 入队条数
    */
   async reprocessByFilter(
@@ -919,7 +919,7 @@ export class KnowledgeIngest extends EventEmitter {
       key,
       setTimeout(() => {
         this.debounceTimers.delete(key);
-        // 统一?stat：目?change 时不?parse ?no_adapter
+        // 统一先 stat：目录误报 change 时不得 parse 成 no_adapter
         void stat(filePath)
           .then(async (st) => {
             if (st.isFile()) {
@@ -945,7 +945,7 @@ export class KnowledgeIngest extends EventEmitter {
   }
 
   /**
-   *  watch（幂等）
+   * 启动目录 watch（幂等）
    */
   startWatch(sourceId: string): void {
     const source = this.sources.get(sourceId);
@@ -986,7 +986,7 @@ export class KnowledgeIngest extends EventEmitter {
   }
 
   /**
-   * 等待队列排空（测?管理?
+   * 等待队列排空（测试/管理）
    */
   async idle(timeoutMs = 30_000): Promise<void> {
     const start = Date.now();
@@ -1013,10 +1013,10 @@ export class KnowledgeIngest extends EventEmitter {
   }
 
   /**
-   * 手动索引任务（业务完整：停收 + 清队 + 打断在跑?
+   * 手动中止索引任务（业务完整：停收 + 清队 + 打断在跑）
    *
-   * @param opts.sourceId - 仅中源；省略则全部源
-   * @returns 取消
+   * @param opts.sourceId - 仅中止该源；省略则全部源
+   * @returns 取消统计
    */
   abortJobs(opts?: { sourceId?: string }): {
     cancelledQueued: number;
@@ -1035,11 +1035,11 @@ export class KnowledgeIngest extends EventEmitter {
     let abortedRunning = 0;
 
     for (const id of unique) {
-      // 1) DB 落中跨重+ 打断程信?
+      // 1) DB 落中止态（跨重启）+ 打断本进程信号
       const newly = this.jobControl.markAborted(id);
       if (newly) abortedRunning += 1;
 
-      // 2) 清空 queued ?cancelled（共?File ?parse 不杀：仍领则保留?
+      // 2) 清空 queued → cancelled（共享 File 的 parse 不杀：仍被领用则保留）
       const res = this.sources.database.raw
         .prepare(
           `UPDATE knowledge_jobs SET status = 'cancelled', last_error = 'aborted', updated_at = ?
@@ -1057,7 +1057,7 @@ export class KnowledgeIngest extends EventEmitter {
       cancelledQueued += Number(res.changes ?? 0);
     }
 
-    // 3) 看门狗不要再?aborted running 收回 queued（限定本次涉及的源）
+    // 3) 看门狗不要再把 aborted running 收回 queued（限定本次涉及的源）
     if (sid) {
       this.sources.database.raw
         .prepare(
@@ -1093,15 +1093,15 @@ export class KnowledgeIngest extends EventEmitter {
   }
 
   /**
-   * /继续索引（相轻）
+   * 恢复/继续索引（相对「重建」更轻）
    *
-   * - 清除该源?
-   * - ?cancelled 任务放回 queued
+   * - 清除该源中止态
+   * - 把 cancelled 任务放回 queued
    * - 若仍缺向量则排队 embed
-   * - 不重?walk 全量；需要全 reindex
+   * - 不重新 walk 全量；需要全量对齐请 reindex
    *
-   * @param opts.sourceId - 仅恢源；省略则全部源
-   * @returns 
+   * @param opts.sourceId - 仅恢复该源；省略则全部源
+   * @returns 恢复统计
    */
   resumeJobs(opts?: { sourceId?: string }): {
     restoredCancelled: number;
@@ -1120,10 +1120,10 @@ export class KnowledgeIngest extends EventEmitter {
     let restoredCancelled = 0;
     let embedQueued = 0;
     for (const id of ids) {
-      // 1) 清除态（DB + 新纪元信号）
+      // 1) 清除中止态（DB + 新纪元信号）
       this.beginAbortEpoch(id);
 
-      // 2) cancelled ?queued（用户中止时的活?
+      // 2) cancelled → queued（用户中止时被杀的活）
       const res = this.sources.database.raw
         .prepare(
           `UPDATE knowledge_jobs SET status = 'queued', last_error = NULL, updated_at = ?
@@ -1132,7 +1132,7 @@ export class KnowledgeIngest extends EventEmitter {
         .run(Date.now(), id);
       restoredCancelled += Number(res.changes ?? 0);
 
-      // 3) 仍缺向量则确?embed 在队
+      // 3) 仍缺向量则确保 embed 在队
       if (this.embedding) {
         const missing = this.index.listChunksMissingEmbedding(id, 1).length > 0;
         const active = this.countActiveJobs(id);
@@ -1153,17 +1153,17 @@ export class KnowledgeIngest extends EventEmitter {
     return { restoredCancelled, embedQueued };
   }
 
-  /** 的未（resume / supersede 后用；清 DB 态） */
+  /** 开启新的未中止纪元（resume / supersede 后用；清 DB 中止态） */
   private beginAbortEpoch(sourceId: string): void {
     this.jobControl.beginEpoch(sourceId);
   }
 
   /**
-   * 重建前作废本源未完成任务（supersede?
+   * 重建前作废本源未完成任务（supersede）
    *
-   * - queued ?cancelled（superseded_by_reindex?
-   * - running 打断（worker/出）
-   * - 随后 beginAbortEpoch，本建可继续?
+   * - queued → cancelled（superseded_by_reindex）
+   * - running 打断（worker/循环退出）
+   * - 随后 beginAbortEpoch，本轮重建可继续写
    */
   private supersedeSourceWork(sourceId: string): void {
     this.sources.database.raw
@@ -1173,7 +1173,7 @@ export class KnowledgeIngest extends EventEmitter {
       )
       .run(Date.now(), sourceId);
 
-    // 打断在跑 parse/embed；再新纪元（清中，避?walk ?abort 
+    // 打断在跑 parse/embed；再开新纪元（清中止态），避免 walk 自己被 abort 卡死
     this.jobControl.markAborted(sourceId);
     this.beginAbortEpoch(sourceId);
 
@@ -1254,12 +1254,12 @@ export class KnowledgeIngest extends EventEmitter {
   }
 
   /**
-   * 磁盘↔索齐：删掉已不存在的文件（?chunks/embeddings?
+   * 磁盘↔索引对齐：删掉已不存在的文件（含 chunks/embeddings）
    *
-   * 源用?discover walk ?keep 集（；失回并?stat?
-   * embed 前调避免给已移出文件的残 chunks 上向?
+   * 目录源用一次 discover walk 得 keep 集（快）；失败退回并行 stat。
+   * embed 前调用，避免给已移出文件的残 chunks 上向量。
    *
-   * @param sourceId - 知识?id
+   * @param sourceId - 知识源 id
    * @returns 删除的文件数
    */
   async pruneMissingOnDisk(sourceId: string): Promise<number> {
@@ -1271,11 +1271,11 @@ export class KnowledgeIngest extends EventEmitter {
       try {
         const found = await this.localFetcher.discover(source);
         if (!found.complete) {
-          // walk 不完整：?stat止用残缺 keep 清库
+          // walk 不完整：退回逐文件 stat，禁止用残缺 keep 清库
           removed = await this.pruneByStatScan(sourceId);
         } else {
           const keep = new Set(found.docs.map((f) => f.path));
-          // walk 完整：即使空也可清空（与逐文?stat 致）
+          // walk 完整：即使空目录也可清空（与逐文件 stat 语义一致）
           removed = await this.index.pruneMissingAsync(sourceId, keep, { allowEmptyKeep: true });
         }
       } catch {
@@ -1297,7 +1297,7 @@ export class KnowledgeIngest extends EventEmitter {
     return removed;
   }
 
-  /** 逐文?stat（file ?/ walk 失败）；限流 + 单文件 removeFile（勿对每个 gone 做 removePathTree LIKE） */
+  /** 逐文件 stat（file 源 / walk 失败回退）；限流 + 单文件 removeFile（勿对每个 gone 做 removePathTree LIKE） */
   private async pruneByStatScan(sourceId: string, concurrency = 4): Promise<number> {
     const files = this.index.listFiles(sourceId);
     let removed = 0;
@@ -1334,10 +1334,10 @@ export class KnowledgeIngest extends EventEmitter {
   }
 
   /**
-   * /继续 控制数（互斥按钮
+   * 中止/继续 控制面读数（互斥按钮用）
    *
-   * @param sourceId - ?id
-   * @returns 队列计数 + 已中?+ 仍缺向量
+   * @param sourceId - 源 id
+   * @returns 队列计数 + 是否已中止 + 是否仍缺向量
    */
   jobControlState(sourceId: string): KnowledgeJobControlState {
     return readJobControlState(this.sources.database, this.index, sourceId, {
@@ -1346,12 +1346,12 @@ export class KnowledgeIngest extends EventEmitter {
   }
 
   /**
-   * 任务对账（看门狗?不依赖单?ensureEmbedJob
+   * 任务对账（看门狗）— 不依赖单次 ensureEmbedJob
    *
-   * 解决「续去重吞掉 / 进程 /  partial」等静默停摆?
-   * 1. 回收超时 running（崩?孤儿?
-   * 2. 有缺向量且无 active embed ?排队
-   * 3. 无队缺口 ??coverage/status
+   * 解决「续跑被去重吞掉 / 进程中断 / 状态卡 partial」等静默停摆：
+   * 1. 回收超时 running（崩溃/挂死孤儿）
+   * 2. 有缺向量且无 active embed → 自动排队
+   * 3. 无队列、无缺口 → 刷 coverage/status
    */
   startReconciler(intervalMs = 15_000): void {
     if (this.reconcileTimer || this.disposed) return;
@@ -1375,20 +1375,20 @@ export class KnowledgeIngest extends EventEmitter {
     }
   }
 
-  /** 对账入口（也工调 */
+  /** 对账入口（也可手工调用） */
   async reconcileJobs(): Promise<void> {
     if (this.disposed) return;
-    // stale ?**大于** 时，否则合法的长 parse 收回后双?
+    // stale 阈值必须 **大于** 硬超时，否则合法的长 parse 会被收回后双跑
     this.reclaimStaleRunningJobs(this.fileLimits.maxParseTimeoutMs + 60_000);
     // path: 与 win:/unix: 身份分裂的零认领残留
     this.index.purgeOrphanPathIdentityFiles();
-    // 等历入项（轻量；非每
+    // 目录脏行等历史误入项（轻量；非每轮全表）
     this.cleanupNonFileIndexRows();
-    // ?job 定期清理，防表无?
+    // 终态 job 定期清理，防表无限增长
     this.cleanupTerminalJobs();
-    // 存量 FTS 后台补齐（分出事件循 rebuild?
+    // 存量 FTS 后台补齐（分批让出事件循环；构造期禁止同步 rebuild）
     void this.index.ensureFtsBackfill();
-    // 存量向量回填：小批量 + 让出事件?2000 条同步写（会 abort?
+    // 存量向量回填：小批量 + 让出事件循环，禁止 2000 条同步写（会堵死 abort）
     await this.index.backfillVecFromEmbeddings(25);
     for (const s of this.sources.list()) {
       if (s.status === 'removed' || s.status === 'disabled') continue;
@@ -1402,8 +1402,8 @@ export class KnowledgeIngest extends EventEmitter {
       ) {
         await this.ingestSource(s.id, { fromQueue: true }).catch(() => undefined);
       }
-      // 稳定态收尾（auto-describe 等）关键词部署同触发
-      // 先看 active，再 gap ；避免刚入队?gap job 挡住 settled
+      // 稳定态收尾（auto-describe 等）——纯关键词部署同样要触发
+      // 先看 active，再 gap；避免刚入队的 gap job 挡住 settled
       if (active.total === 0) {
         this.refreshCoverage(s.id, { force: true });
         try {
@@ -1414,7 +1414,7 @@ export class KnowledgeIngest extends EventEmitter {
       } else {
         this.flushCoverageDirty(s.id);
       }
-      // watch 漏事件 / skip 重试时补齐 parse（与配置 embedding 无关）
+      // watch 漏事件 / skip 可重试时补齐 parse（与是否配置 embedding 无关）
       // urgent（watch 突发）不走 60s 节流；否则批量拷贝后要等一整轮才补
       const lastGap = this.lastParseGapScanAt.get(s.id) ?? 0;
       const gapDue = this.gapScanUrgent.has(s.id) || Date.now() - lastGap > 60_000;
@@ -1439,12 +1439,12 @@ export class KnowledgeIngest extends EventEmitter {
     this.kick();
   }
 
-  /** ?job 清理（done/failed/cancelled 超过保留期） */
+  /** 终态 job 清理（done/failed/cancelled 超过保留期） */
   private cleanupTerminalJobs(retainMs = 24 * 60 * 60_000): void {
     this.jobQueue.cleanupTerminal(retainMs);
   }
 
-  /** running 超时（无 heartbeat）→ 收回 queued次失败的直接?failed，防毒文 */
+  /** running 超时（无 heartbeat）→ 收回 queued；多次失败的直接标 failed，防毒文件死循环 */
   private reclaimStaleRunningJobs(staleMs: number): void {
     this.jobQueue.reclaimStaleRunning(staleMs);
   }
@@ -1464,7 +1464,7 @@ export class KnowledgeIngest extends EventEmitter {
   }
 
   /**
-   *  poll 调度（幂等）；仅处理 sync.strategy=poll ?enabled 的源
+   * 启动 poll 调度（幂等）；仅处理 sync.strategy=poll 且 enabled 的源
    */
   startPolling(): void {
     if (this.pollTimer || this.disposed) return;
@@ -1478,7 +1478,7 @@ export class KnowledgeIngest extends EventEmitter {
         });
       });
     }, this.pollTickMs);
-    // 不阻止进?
+    // 不阻止进程退出
     this.pollTimer.unref?.();
   }
 
@@ -1490,9 +1490,9 @@ export class KnowledgeIngest extends EventEmitter {
   }
 
   /**
-   * 到期 poll 源并入队刷新（内容未变由 content-hash / 304 ?
+   * 扫描到期 poll 源并入队刷新（内容未变由 content-hash / 304 短路）
    *
-   * @returns 实际触发?sourceId 列表
+   * @returns 本轮实际触发的 sourceId 列表
    */
   async pollDueSources(): Promise<string[]> {
     if (this.disposed) return [];
@@ -1519,7 +1519,7 @@ export class KnowledgeIngest extends EventEmitter {
         status: 'poll_due',
         detail: source.sync.intervalMs?.toString(),
       });
-      // 入队，不 tick量：?active 则跳过， supersede 打断
+      // 异步入队，不阻塞 tick；增量：有 active 则跳过，禁止 supersede 打断
       void this.ingestSource(source.id, { incremental: true }).catch((err) => {
         this.emitProgress({
           type: 'error',
@@ -1532,7 +1532,7 @@ export class KnowledgeIngest extends EventEmitter {
     return triggered;
   }
 
-  //  内部 
+  // ── 内部 ──
 
   private hasQueuedJobs(): boolean {
     return this.jobQueue.hasQueuedJobs();
@@ -1619,7 +1619,7 @@ export class KnowledgeIngest extends EventEmitter {
   private kick(): void {
     if (this.disposed) return;
     if (this.draining) {
-      // 等待 drain 会再 kick；标记一次避免丢信号
+      // 等待中的 drain 会再 kick；标记一次避免丢信号
       this.kickAgain = true;
       return;
     }
@@ -1653,7 +1653,7 @@ export class KnowledgeIngest extends EventEmitter {
 
       const job = this.claimJob(kinds, (j) => this.acceptParseSlot(j));
       if (!job) {
-        // 队列清空：合并刷 parse/drop 标脏?coverage，避免每文件?COUNT
+        // 队列清空：合并刷新被 parse/drop 标脏的 coverage，避免每文件一次 COUNT
         this.flushCoverageDirty();
         return;
       }
@@ -1720,7 +1720,7 @@ export class KnowledgeIngest extends EventEmitter {
       return;
     }
     try {
-      // 归属闸门：任何会碰本地盘 / 外源逻辑 path 任务都必须属于本?
+      // 归属闸门：任何会碰本地盘 / 外源逻辑键的 path 任务都必须属于本源
       if (job.path && (job.kind === 'parse_file' || job.kind === 'fetch_doc')) {
         const owner = this.sources.get(job.source_id);
         if (owner && !this.sourceOwnsPath(owner, job.path)) {
@@ -1728,13 +1728,13 @@ export class KnowledgeIngest extends EventEmitter {
         }
       }
       if (job.kind === 'parse_file' && job.path) {
-        // 单文件解析硬超时：大 xlsx/pdf 抽取会堵死事件循超时随体?
+        // 单文件解析硬超时：大 xlsx/pdf 同步抽取会堵死事件循环；超时随体积放大
         let parseTimeoutMs = this.parseTimeoutMs;
         try {
           const st = await stat(job.path);
           if (st.isFile()) parseTimeoutMs = parseTimeoutForSize(st.size, this.fileLimits);
         } catch {
-          // 已删时交?parseOne ?
+          // 路径已删时交给 parseOne 自清理
         }
         this.heartbeatJob(job.id);
         await this.withTimeout(
@@ -1782,7 +1782,7 @@ export class KnowledgeIngest extends EventEmitter {
         if (!this.embedding) {
           const stillMissing = this.index.listChunksMissingEmbedding(job.source_id, 1).length > 0;
           if (stillMissing) {
-            // 空跑?done：迁移后缺向量却显示 queue=0
+            // 禁止空跑标 done：迁移后缺向量却显示 queue=0
             throw new Error('embedding_provider_missing');
           }
           return;
@@ -1792,7 +1792,7 @@ export class KnowledgeIngest extends EventEmitter {
           throw new Error('aborted');
         }
       }
-      // 统一收尾闸门：任?kind 后都不得?done
+      // 统一收尾闸门：任何 kind 中止后都不得标 done
       if (this.isAborted(job.source_id)) {
         throw new Error('aborted');
       }
@@ -1807,7 +1807,7 @@ export class KnowledgeIngest extends EventEmitter {
         path: job.path ?? undefined,
         status: 'done',
       });
-      // ?done 后再：否?enqueue 去重会把「自?active 而丢掉下?
+      // 标 done 后再续跑：否则 enqueue 去重会把「自己」当成 active 而丢掉下一棒
       if (job.kind === 'embed_source' && !this.isAborted(job.source_id)) {
         this.ensureEmbedJob(job.source_id);
         this.refreshCoverage(job.source_id, { force: true });
@@ -1815,7 +1815,7 @@ export class KnowledgeIngest extends EventEmitter {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       const aborted = message === 'aborted' || this.isAborted(job.source_id);
-      // 归属拒绝不是「文件解析失不得写入 knowledge_files
+      // 归属拒绝不是「文件解析失败」，不得写入 knowledge_files
       const ownership = message.includes('not owned by source');
       if (job.kind === 'parse_file' && job.path && !aborted && !ownership) {
         this.index.markFileError(job.source_id, job.path, message);
@@ -1835,8 +1835,8 @@ export class KnowledgeIngest extends EventEmitter {
   }
 
   /**
-   * 带截止时间的消执行：超时?abort signal，工作侧必须在副作用?
-   * 再用 Promise.race 包不消的 Promise会在超时后留下僵尸写?
+   * 带截止时间的可取消执行：超时会 abort signal，工作侧必须在副作用前检查。
+   * 禁止再用 Promise.race 包不可取消的 Promise——那会在超时后留下僵尸写入。
    */
   private async withTimeout<T>(
     work: (signal: AbortSignal) => Promise<T>,
@@ -1864,7 +1864,7 @@ export class KnowledgeIngest extends EventEmitter {
   }
 
   /**
-   * 外源单文?job：按逻辑?fetch + 索引
+   * 外源单文档 job：按逻辑键 fetch + 索引
    */
   private async fetchDocJob(sourceId: string, path: string, signal?: AbortSignal): Promise<void> {
     const source = this.sources.get(sourceId);
@@ -1894,7 +1894,7 @@ export class KnowledgeIngest extends EventEmitter {
     signal?: AbortSignal,
   ): Promise<boolean> {
     const source = this.sources.get(sourceId);
-    // 防御深度：即使队污染，也?root 外的文件
+    // 防御深度：即使队列被污染，也不读源 root 外的本地文件
     if (source && !this.sourceOwnsPath(source, filePath)) {
       throw new Error(`path not owned by source: ${filePath}`);
     }
@@ -1904,7 +1904,7 @@ export class KnowledgeIngest extends EventEmitter {
       return false;
     }
 
-    // 先确认是件：/节点不得?knowledge_files（历史上?no_adapter?
+    // 先确认是普通文件：目录/设备节点不得进 knowledge_files（历史上曾误标 no_adapter）
     let st;
     try {
       st = await stat(filePath);
@@ -1919,7 +1919,7 @@ export class KnowledgeIngest extends EventEmitter {
 
     const adapter = this.adapters.match(filePath);
     if (!adapter) {
-      // worker  DocumentPort；注?port 仅作 worker 不可用时的回
+      // 文档优先 worker 抽取；注意进程内 port 仅作 worker 不可用时的回退
       if (isDocumentPath(filePath)) {
         return this.parseDocumentFile(sourceId, filePath, signal);
       }
@@ -2009,12 +2009,12 @@ export class KnowledgeIngest extends EventEmitter {
   }
 
   /**
-   * PDF/Office：DocumentPort 抽取?Markdown 后走 markdownAdapter 切块?
-   * 新鲜度以原件字节 hash 为准?
+   * PDF/Office：DocumentPort 抽取为 Markdown 后走 markdownAdapter 切块。
+   * 新鲜度以原件字节 hash 为准。
    *
-   * @param sourceId - 知识?id
-   * @param filePath - 文件
-   * @returns 成功入索?
+   * @param sourceId - 知识源 id
+   * @param filePath - 本地文件路径
+   * @returns 是否成功入索引
    */
   private async parseDocumentFile(
     sourceId: string,
@@ -2069,12 +2069,12 @@ export class KnowledgeIngest extends EventEmitter {
       return true;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      // /超时不是「这件解析失必须上抛?job ?failed止静?done
+      // 中止/超时不是「这个文件解析失败」，必须上抛让 job 标 failed，禁止静默 done
       if (msg === 'aborted' || msg.startsWith('parse_timeout') || signal?.aborted) {
         throw err;
       }
       if (isDocumentExtractError(err)) {
-        // 结构化跳过（密码/老格?超大等），不挡整?
+        // 结构化跳过（密码/老格式/超大等），不挡整库
         const identKey = await this.identityKeyFor(filePath);
         this.index.markFileSkipped(
           sourceId,
@@ -2169,8 +2169,8 @@ export class KnowledgeIngest extends EventEmitter {
   /**
    * Phase B：嵌入待处理 chunk
    *
-   * ?job 内按 embedConcurrency ****多批调用 API?
-   * 失败/超时?re-enqueue，避?job ?done ?coverage 永久卡住?
+   * 单 job 内按 embedConcurrency **并行**多批调用 API；
+   * 失败/超时也 re-enqueue，避免 job 标 done 后 coverage 永久卡住。
    */
   private async embedPending(sourceId: string, maxRounds = 20, jobId?: string): Promise<void> {
     await this.embedRunner.embedPending(sourceId, maxRounds, jobId);
@@ -2197,7 +2197,7 @@ export class KnowledgeIngest extends EventEmitter {
       );
   }
 
-  /** 仍有缺向量则排队下一?embed_source（须在当?job ?done 之后调用?*/
+  /** 仍有缺向量则排队下一个 embed_source（须在当前 job 标 done 之后调用） */
   private ensureEmbedJob(sourceId: string): void {
     if (!this.embedding) return;
     if (this.isAborted(sourceId)) return;
@@ -2211,7 +2211,7 @@ export class KnowledgeIngest extends EventEmitter {
     this.jobQueue.heartbeat(jobId);
   }
 
-  /** parse 完成不立刻刷 coverage（O(N) 写放大）；标脏，drain/reconcile 时合并刷?*/
+  /** parse 完成不立刻刷 coverage（O(N) 写放大）；标脏，drain/reconcile 时合并刷新 */
   private coverageDirty = new Set<string>();
 
   private markCoverageDirty(sourceId: string): void {
@@ -2238,7 +2238,7 @@ export class KnowledgeIngest extends EventEmitter {
     const source = this.sources.get(sourceId);
     if (!source) return;
     const discovered = this.discoveredFiles.get(sourceId) ?? 0;
-    // Phase A：已落库文件（indexed+skipped+error? walk 发现?
+    // Phase A：已落库文件（indexed+skipped+error）/ walk 发现数
     const phaseA =
       discovered > 0
         ? Math.min(1, stats.files / discovered)
@@ -2307,7 +2307,7 @@ export class KnowledgeIngest extends EventEmitter {
     this.emit('knowledge.index.progress', out);
   }
 
-  /** 磁盘水位（仅，不务） */
+  /** 磁盘水位告警（仅告警，不丢任务） */
   private async warnDiskWatermark(sourceId: string): Promise<void> {
     try {
       const { statfs } = await import('node:fs/promises');

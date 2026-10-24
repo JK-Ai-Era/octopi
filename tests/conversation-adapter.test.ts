@@ -804,31 +804,31 @@ describe('ConversationAdapter reasoning channel', () => {
     const adapter = new ConversationAdapter();
     let items: ConversationItem[] = [];
     items = adapter.injectUserMessage('q', sid, items);
-    let r = adapter.applyEvent({ type: 'llm_thinking_delta', data: { delta: '��һ��' } }, sid, items);
+    let r = adapter.applyEvent({ type: 'llm_thinking_delta', data: { delta: '思考第一段' } }, sid, items);
     items = r.items;
-    r = adapter.applyEvent({ type: 'llm_stream_delta', data: { delta: '��' } }, sid, items);
+    r = adapter.applyEvent({ type: 'llm_stream_delta', data: { delta: '部分回复' } }, sid, items);
     items = r.items;
-    r = adapter.applyEvent({ type: 'turn.end', data: { content: '��', phase: 'final' } }, sid, items);
+    r = adapter.applyEvent({ type: 'turn.end', data: { content: '最终回复', phase: 'final' } }, sid, items);
     items = r.items;
 
     const ast = items.find((i) => i.role === 'assistant') as AssistantConversationItem;
-    expect(ast.content).toBe('��');
-    expect(ast.reasoning).toBe('��һ��');
+    expect(ast.content).toBe('最终回复');
+    expect(ast.reasoning).toBe('思考第一段');
   });
 
   it('buildHistoryItems maps metadata.reasoning onto assistant items', () => {
     const msgs: MessageRecord[] = [
       {
         role: 'assistant',
-        content: '����',
+        content: '这是一段回答',
         timestamp: 1000,
-        metadata: { reasoning: '����Ϸ' },
+        metadata: { reasoning: '合规的思考过程' },
       } as MessageRecord,
     ];
     const result = ConversationAdapter.buildHistoryItems(msgs, sid);
     const ast = result[0] as AssistantConversationItem;
-    expect(ast.content).toBe('����');
-    expect(ast.reasoning).toBe('����Ϸ');
+    expect(ast.content).toBe('这是一段回答');
+    expect(ast.reasoning).toBe('合规的思考过程');
   });
 });
 
@@ -842,7 +842,7 @@ describe('ConversationAdapter tool purpose', () => {
         content: '',
         timestamp: 1000,
         toolCalls: [
-          { id: 'tc1', name: 'file_read', arguments: { purpose: '�鿴�����ļ�', path: 'a.json' } },
+          { id: 'tc1', name: 'file_read', arguments: { purpose: '查看目标文件', path: 'a.json' } },
         ],
       },
       {
@@ -850,7 +850,7 @@ describe('ConversationAdapter tool purpose', () => {
         content: '',
         timestamp: 1001,
         toolResults: [
-          { toolCallId: 'tc2', name: 'file_write', result: 'ok', purpose: 'д���޸�����' },
+          { toolCallId: 'tc2', name: 'file_write', result: 'ok', purpose: '写入修改内容' },
           { toolCallId: 'tc1', name: 'file_read', result: '{}' },
         ],
       },
@@ -859,7 +859,7 @@ describe('ConversationAdapter tool purpose', () => {
     const tools = result.filter((i) => i.role === 'tool') as ToolConversationItem[];
     expect(tools).toHaveLength(2);
     const byId = Object.fromEntries(tools.map((t) => [t.toolCallId, t]));
-    expect(byId.tc2.purpose).toBe('д���޸�����');
-    expect(byId.tc1.purpose).toBe('�鿴�����ļ�');
+    expect(byId.tc2.purpose).toBe('写入修改内容');
+    expect(byId.tc1.purpose).toBe('查看目标文件');
   });
 });

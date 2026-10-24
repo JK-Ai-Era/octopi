@@ -38,7 +38,7 @@ describe('SubsystemRuntime session end cleanup', () => {
   it('deletes scoped subsystem session on session.ended', () => {
     runtime.register(makeSpec());
 
-    // 瑙﹀彂涓€娆★紝浠ュ垱寤?scoped subsystem session
+    // 触发一次，以创建 scoped subsystem session
     events.emit({
       type: 'session.lifecycle.updated',
       timestamp: Date.now(),

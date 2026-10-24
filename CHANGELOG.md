@@ -1,3 +1,19 @@
+## v0.90.4
+
+### fix(engine/gateway): 注释乱码大清理 371 行按 git 历史恢复 + 零容忍守卫测试（H7′）
+
+**问题**：`f75c90e`（Knowledge Service 拆分）一次性把 `packages/gateway/src/gateway/gateway.ts` 与 `packages/engine/src/harness/knowledge/ingest.ts` 的中文注释大面积写坏（多字节字符被截断成 ASCII `?`、偶发整词消失，约 350+ 行）；同类损坏在后续多个互不相关提交中反复出现。第二层（注释级）自 v0.88.1 起一直开放。
+
+**处置**：
+
+1. **恢复**（371 行）：以 `f75c90e^`（ingest）/ `83639dc`（gateway）等祖先版本为源，三批恢复——精确行映射 249 行 + 祖先版本匹配 97 行 + 掉字候选甄别修复 + 出生即乱码行语义重写（`Knowledge Service` 客户端方法群等历史无干净版的段落）；另修 `tests/conversation-adapter.test.ts`（U+FFFD 夹具）、`tests/autonomous-subsystem/session-end-cleanup.test.ts` 与 `tests/harness/capabilities/document-p05-wiring.test.ts`（GBK/中缀注释）、`root-instructions.ts`（字面 U+FFFD 改 `\uFFFD` 转义）、`file-identity.ts`（query 示例加反引号，守卫误报消除）。全程逐批 diff 审查：块级恢复经审查全部弃用（5 块均为合法代码改动非乱码）。
+2. **守卫**：新增 `tests/architecture/comment-mojibake.test.ts` 零容忍扫描（src/tests/docs/scripts 全树）——CJK+`?`、注释行可疑 `?`（剥离反引号代码段后按良性邻域判定，另含行尾 `?`、`?` 紧贴 JSDoc 收尾、`?` 紧跟字母三条收紧规则）、GBK 残留家族（`鈥`/`锟`/锟斤拷/欧元符邻 CJK/CJK 兼容形态区）、U+FFFD、BOM 五类签名；白名单仅 6 条（3 条正则量词 + 3 条 URL query 文档），测试文件自身豁免自扫。已知盲区：纯掉字损坏（无 `?` 残留）无模式可查，依赖评审发现，测试注释已声明。
+3. **根因结论**：写回链路（`file-edit`/`builtin`/`root-instructions`）为纯 UTF-8 字符串操作，无字节级截断点——「有损写回环节」假设排除；损坏签名（`?` 替换 + 随机掉字 + GBK 乱码混杂）指向模型生成侧抖动 + 整文件重写回声传播。防御落在守卫测试 + 编辑纪律（关键编辑后读回验证），不立项写回修复代码。
+
+**验证**：build / lint 全绿；全量 3177 过（2 败为沙箱环境伪影 `getProcessName`/`identifyPortOccupant`，seatbelt 固有；`temp-path` 补 `HOME` 后通过）；守卫测试对 HEAD 版本复算 483 处命中 → 0。独立子代理评审逐行核对：两大文件非注释行零变更、345/371 行与历史干净版逐字节一致（26 行为语义重写），P0/P1 全数处置。
+
+---
+
 ## v0.90.3
 
 ### fix(gateway): 中止轮编辑重发报「没有可编辑重发的中止轮」——abortedTurn 过期校验不再把引擎载体当新用户消息

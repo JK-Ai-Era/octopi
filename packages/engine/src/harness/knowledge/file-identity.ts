@@ -110,7 +110,7 @@ export function isPathPrefix(prefix: string, full: string): boolean {
 export function canonicalizeUrl(raw: string): string {
   const u = new URL(raw);
   u.hash = '';
-  // **保留 query**：?id=1 / ?id=2 大概率是不同文档（契约修订）
+  // **保留 query**：`?id=1` / `?id=2` 大概率是不同文档（契约修订）
   u.hostname = u.hostname.toLowerCase();
   if (
     (u.protocol === 'http:' && u.port === '80') ||

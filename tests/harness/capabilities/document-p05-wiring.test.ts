@@ -1,5 +1,5 @@
 /**
- * DocumentPort P0.5 ?knowledge ingest / session attachments 接线
+ * DocumentPort P0.5 — knowledge ingest / session attachments 接线
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
