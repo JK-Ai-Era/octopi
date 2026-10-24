@@ -100,6 +100,17 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.90.10 (2026-10-25)
+
+### refactor(context): `isUserAuthoredMessage` 拆双谓词 `isTurnAnchor` / `isHumanSpeech`
+
+- **拍板落地（2026-10-24）**：wake「开轮但不是人话」——`isTurnAnchor`（真人 + `source:'runtime'` 唤醒输入）给 turn 边界类消费方（isMidTurn / compact / tool-result-aging / gateway 中止锚点）；`isHumanSpeech`（仅真人）给人 类文本类消费方（title / grounding.latestUserText / backfill userTurns）。一个布尔不再混答两个语义问题。
+- **breaking note**：`layer-types.isUserAuthoredMessage` **移除**（内部 API，全仓 7 处消费方已改挂）；外部引用请改用上述两谓词之一。
+- **行为变化**：wake 提示词不再污染 session title 与 grounding 锚点；wake 仍开轮（isMidTurn 边界语义保持，唤醒驱动长会话的语义压缩边界不塌）。
+- **验证**：全量 suite 323 文件绿（新增 `message-speech-predicates` 5 用例）；仅余 2 个沙箱环境失败（`ps` 进程自省被拒，与本改动无关，正常终端/CI 可过）；build + lint + typecheck 绿。
+
+---
+
 ## v0.90.9 (2026-10-25)
 
 ### feat(subsystems): SEC-6 fail-closed——`sandboxed` 声明必须可兑现

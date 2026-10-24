@@ -61,7 +61,7 @@ describe('subsystem loader multi-spec package', () => {
       'sense: { source: schedule, interval: 60000, isolation: isolated }',
     ].join('\n'));
 
-    const loader = new SubsystemLoader({ builtinDir: root });
+    const loader = new SubsystemLoader({ securityEnforcement: { l4Available: true }, builtinDir: root });
     const result = await loader.loadAll();
     rmSync(root, { recursive: true, force: true });
 
@@ -73,7 +73,7 @@ describe('subsystem loader multi-spec package', () => {
   });
 
   it('ships built-in memory-steward package', async () => {
-    const loader = new SubsystemLoader({
+    const loader = new SubsystemLoader({ securityEnforcement: { l4Available: true },
       builtinDir: join(process.cwd(), 'packages', 'engine', 'src', 'subsystems'),
     });
     const result = await loader.loadAll();

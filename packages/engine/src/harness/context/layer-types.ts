@@ -299,20 +299,17 @@ export function isEngineCarrierSource(source: unknown): boolean {
 }
 
 /**
- * 真实用户发言判定（唯一真源，收敛五处手抄）。
+ * 轮次锚点判定（turn 边界类消费方：isMidTurn / compact / tool-result-aging）。
  *
- * f126dc9 后 turn_end / runStopped 等引擎载体也是 role=user，
- * 「role=user 即用户发言」不再成立。判为非发言的三类：
- * - 引擎载体插槽（快照/grounding/附件/摘要/turn 闭标…）
- * - schedule notify 便签（`delivery:'notify'`，机器提示，不开轮、不是输入）
- * 注意本谓词**不看 agentId**：isMidTurn 另有「无 agentId 归因」的收紧
- * （多 agent 共线语义），在其调用处叠加。`source:'runtime'` 的 activation
- * 唤醒输入**仍计发言**（它开轮且是该 turn 的输入；是否算人话待拍板）。
+ * 能开轮的输入 = 真实用户发言 + `source:'runtime'` 的 activation 唤醒输入
+ * （compiler 打标、确实开轮且是该 turn 的输入）；引擎载体插槽与 schedule
+ * notify 便签（`delivery:'notify'`）不开轮。2026-10-24 拍板拆分：wake
+ * 「开轮但不是人话」——两类消费方各取所需，一个布尔不再混答两个问题。
  *
  * @param msg - 消息（结构化入参，接受 Message 及其裁剪形态）
- * @returns true = 真实用户发言
+ * @returns true = 该消息能作为 turn 边界锚点
  */
-export function isUserAuthoredMessage(msg: {
+export function isTurnAnchor(msg: {
   role?: string;
   metadata?: { source?: unknown; delivery?: unknown };
 }): boolean {
@@ -321,6 +318,26 @@ export function isUserAuthoredMessage(msg: {
   // schedule notify 是机器便签（producer 见 gateway setNotify），不是用户输入
   if (msg.metadata?.delivery === 'notify') return false;
   return true;
+}
+
+/**
+ * 人话判定（人类文本类消费方：title / grounding.latestUserText / backfill userTurns）。
+ *
+ * 只有真实用户创作的文本才是「人话」：引擎载体插槽、schedule notify 便签、
+ * `source:'runtime'` 的 activation 唤醒输入（机器提示词）都会污染标题与 grounding 锚点。
+ * 注意本谓词**不看 agentId**：isMidTurn 另有「无 agentId 归因」的收紧
+ * （多 agent 共线语义），在其调用处叠加。
+ *
+ * @param msg - 消息（结构化入参，接受 Message 及其裁剪形态）
+ * @returns true = 真实用户创作的发言
+ */
+export function isHumanSpeech(msg: {
+  role?: string;
+  metadata?: { source?: unknown; delivery?: unknown };
+}): boolean {
+  if (!isTurnAnchor(msg)) return false;
+  // wake 是机器开轮输入：能锚定 turn，但不是人话
+  return msg.metadata?.source !== 'runtime';
 }
 
 /**

@@ -9,7 +9,7 @@
 import { createHash } from 'node:crypto';
 import type { Message } from '@octopi-agent/core/types.js';
 import { getTextContent } from '@octopi-agent/core/types.js';
-import { isUserAuthoredMessage } from '../context/layer-types.js';
+import { isHumanSpeech } from '../context/layer-types.js';
 
 export type BackfillCoverageStatus = 'pending' | 'skipped' | 'success' | 'failed';
 
@@ -122,7 +122,7 @@ export function measureSessionDensity(
     const ts = typeof m.timestamp === 'number' ? m.timestamp : 0;
     if (ts > lastTs) lastTs = ts;
     // 引擎载体（turn_end/runStopped…）也是 role=user，不计真实用户轮
-    if (isUserAuthoredMessage(m)) userTurns++;
+    if (isHumanSpeech(m)) userTurns++;
     if (m.role === 'assistant') assistantTurns++;
   }
   // 指纹含正文：避免同长度/同轮次但内容不同被当成 already_covered

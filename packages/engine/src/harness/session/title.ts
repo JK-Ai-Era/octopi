@@ -6,7 +6,7 @@
 
 import type { Message, SessionMeta } from '@octopi-agent/core/types.js';
 import { extractUserMessageText } from '../context/turn-envelope.js';
-import { isUserAuthoredMessage } from '../context/layer-types.js';
+import { isHumanSpeech } from '../context/layer-types.js';
 import type { SessionData } from './types.js';
 
 /** 首条有效用户消息达到该长度才可直接摘要 */
@@ -20,7 +20,7 @@ export const TITLE_MAX_CHARS = 40;
 
 /** 参与标题信号统计的用户消息（排除 slash 命令留痕与机器插槽；唯一谓词在 layer-types） */
 function isTitleRelevantUserMessage(msg: Message): boolean {
-  if (!isUserAuthoredMessage(msg)) return false;
+  if (!isHumanSpeech(msg)) return false;
   const kind = msg.metadata?.kind;
   if (kind === 'command' || kind === 'command_result') return false;
   return true;

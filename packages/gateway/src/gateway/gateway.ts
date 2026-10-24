@@ -48,7 +48,7 @@ import { join } from 'node:path';
 import { existsSync } from 'node:fs';
 import { CircuitBreaker } from '@octopi-agent/engine/harness/run/reliability/circuit-breaker.js';
 import { isTurnStartContent } from '@octopi-agent/engine/harness/context/turn-envelope.js';
-import { isUserAuthoredMessage } from '@octopi-agent/engine/harness/context/layer-types.js';
+import { isTurnAnchor } from '@octopi-agent/engine/harness/context/layer-types.js';
 import { wrapProviderWithCircuitBreaker } from '@octopi-agent/engine/harness/run/reliability/provider-wrapper.js';
 import { resolveModel, resolveModelRef, resolveCatalogEntry, parseModelRef } from '@octopi-agent/engine/harness/run/model/index.js';
 import { PluginManager } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/plugins/manager.js';
@@ -2364,7 +2364,7 @@ export class Gateway {
     return (
       !!msg &&
       msg.role === 'user' &&
-      (isTurnStartContent(msg.content) || isUserAuthoredMessage(msg))
+      (isTurnStartContent(msg.content) || isTurnAnchor(msg))
     );
   }
 

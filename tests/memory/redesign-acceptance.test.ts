@@ -272,7 +272,7 @@ describe('hybrid channel filter + supersede safety', () => {
 
 describe('loader packageId consistency', () => {
   it('single-spec package uses directory basename as packageId', async () => {
-    const loader = new SubsystemLoader({ builtinDir: join(process.cwd(), 'packages', 'engine', 'src', 'subsystems') });
+    const loader = new SubsystemLoader({ securityEnforcement: { l4Available: true }, builtinDir: join(process.cwd(), 'packages', 'engine', 'src', 'subsystems') });
     const { specs } = await loader.loadAll();
     const safety = specs.find((s) => s.id === 'safety-guard');
     expect(safety?.packageId).toBe('safety-guard');
@@ -281,7 +281,7 @@ describe('loader packageId consistency', () => {
   });
 
   it('does not discover removed memory.extractor package', async () => {
-    const loader = new SubsystemLoader({ builtinDir: join(process.cwd(), 'packages', 'engine', 'src', 'subsystems') });
+    const loader = new SubsystemLoader({ securityEnforcement: { l4Available: true }, builtinDir: join(process.cwd(), 'packages', 'engine', 'src', 'subsystems') });
     const { specs } = await loader.loadAll();
     expect(specs.map((s) => s.id)).not.toContain('memory.extractor');
     expect(existsSync(join(process.cwd(), 'packages', 'engine', 'src', 'subsystems', 'memory-extractor'))).toBe(false);

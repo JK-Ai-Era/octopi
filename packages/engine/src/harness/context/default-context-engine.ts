@@ -53,7 +53,7 @@ import { DefaultBudgetAllocator } from './budget-allocator.js';
 import { SmartRouter } from './smart-router.js';
 import type { SmartRouterConfig } from './smart-router.js';
 import { compactStateKey } from './compact-key.js';
-import { isUserAuthoredMessage } from './layer-types.js';
+import { isTurnAnchor } from './layer-types.js';
 import {
   extractUserMessageText,
   isTurnStartContent,
@@ -1455,9 +1455,9 @@ export function isMidTurn(messages: Message[]): boolean {
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i];
     // 「真实 user」收紧：agentId 归因的 user（appendCommandDiscourse）不重置边界，
-    // 载体过滤走唯一谓词 isUserAuthoredMessage
+    // 载体过滤走唯一谓词 isTurnAnchor
     if (msg.agentId) continue;
-    if (!isUserAuthoredMessage(msg)) continue;
+    if (!isTurnAnchor(msg)) continue;
     lastGenuineUserIdx = i;
   }
   if (lastGenuineUserIdx < 0) return false;
