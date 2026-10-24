@@ -65,6 +65,8 @@ interface WsSession {
   agentId?: string;
   /** 精确订阅的 session 列表 */
   subscribedSessions?: Set<string>;
+  /** agent 维度订阅（订阅该 agent 全部会话事件；与连接身份解耦，无漂移问题） */
+  subscribedAgents?: Set<string>;
   /** 发送队列（背压处理） */
   sendQueue: string[];
   /** 队列是否正在消费 */
@@ -76,9 +78,14 @@ interface WsSession {
  */
 export interface StreamingChannelAdapter extends ChannelAdapter {
   /**
-   * 向指定 session 的所有 WebSocket 客户端广播事件
+   * 向指定 session 的所有 WebSocket 客户端广播事件。
+   *
+   * @param sessionKey - 会话键（裸 sessionId 或 `agentId:rest`；`'*'` = 系统级广播）
+   * @param event - 事件本体
+   * @param agentId - 事件的 agent 维度（真实 agentId，不再从 sessionKey 猜测）。
+   *   缺省时回落 `event.agentId`；两者皆无则 agent 维度不命中（仅精确订阅可达）
    */
-  broadcastEvent(sessionId: string, event: AgentEvent): void;
+  broadcastEvent(sessionKey: string, event: AgentEvent, agentId?: string): void;
   /**
    * 在途 Run 现场快照（盲窗 overlay）；Run 不活跃返回 undefined。
    * 由消费广播的 adapter 顺手聚合（run 事件的 WS 扇出口 = 必经点）。
@@ -231,26 +238,34 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
     });
   }
 
-  broadcastEvent(sessionKey: string, event: AgentEvent): void {
+  broadcastEvent(sessionKey: string, event: AgentEvent, agentId?: string): void {
     // 在途 Run 现场聚合（盲窗 overlay）：UI 可见事件必经此出口
     this.liveRuns.observe(
       String((event as { sessionId?: unknown }).sessionId ?? '') || sessionKey,
       event as unknown as { type: string; data?: Record<string, unknown>; timestamp?: number },
     );
-    // sessionKey 格式：agentId:rest（由 Gateway 构建）；'*' = 系统级广播
+    // sessionKey 格式：裸 sessionId（Web）或 agentId:rest（chat 通道）；'*' = 系统级广播
     const payload = { type: 'event', sessionId: sessionKey, event };
     const data = JSON.stringify(payload);
     const statePayload = this.deriveSessionState(sessionKey, event);
     const stateData = statePayload ? JSON.stringify(statePayload) : undefined;
-    const agentId = sessionKey === '*' ? null : sessionKey.split(':')[0];
+    // agent 维度：显式 agentId（缺省回落事件自带的 agentId）；不再从 sessionKey 猜测——
+    // 裸 sessionId 的 split(':')[0] 永远匹配不上连接身份（OP-WEB-1 根因）
+    const eventAgentId =
+      agentId ?? (typeof (event as { agentId?: unknown }).agentId === 'string'
+        ? (event as { agentId: string }).agentId
+        : undefined);
 
     for (const session of this.wsSessions) {
       if (session.ws.readyState !== WebSocket.OPEN) continue;
 
       const matchesAll = sessionKey === '*';
       const matchesExact = session.subscribedSessions?.has(sessionKey) ?? false;
+      // 连接身份匹配（TUI/chat 通道：chat 绑定 agentId，key 形如 agentId:rest）
       const sessionAgentId = (session.agentId ?? session.sessionId ?? '').split(':')[0];
-      const matchesAgent = agentId !== null && sessionAgentId === agentId;
+      const matchesAgent =
+        eventAgentId != null &&
+        (sessionAgentId === eventAgentId || (session.subscribedAgents?.has(eventAgentId) ?? false));
 
       if (matchesAll || matchesExact || matchesAgent) {
         this.enqueueSend(session, data);
@@ -466,6 +481,14 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
     } else if (msg.type === 'abort') {
       console.log(`[WS] Abort requested for session ${msg.sessionId}`);
       this.onAbort?.(msg.sessionId);
+    } else if (msg.type === 'subscribe' && msg.agentId && !msg.sessionId) {
+      // agent 维度订阅：该 agent 全部会话事件。不触碰连接身份（session.agentId），
+      // 从根上消除「批量订阅随列表末条漂移连接身份」的问题（OP-WEB-1）
+      session.subscribedAgents ??= new Set<string>();
+      session.subscribedAgents.add(String(msg.agentId));
+      session.ws.send(JSON.stringify({ type: 'subscribed', agentId: String(msg.agentId) }));
+    } else if (msg.type === 'unsubscribe' && msg.agentId && !msg.sessionId) {
+      session.subscribedAgents?.delete(String(msg.agentId));
     } else if (msg.type === 'subscribe' && msg.sessionId) {
       session.subscribedSessions ??= new Set<string>();
       session.subscribedSessions.add(String(msg.sessionId));

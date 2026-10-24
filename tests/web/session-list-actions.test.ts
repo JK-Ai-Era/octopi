@@ -3,7 +3,7 @@
  *
  * - WS state 事件按会话记账 running（侧栏「运行中」标识的数据源）
  * - session.updated 的 pinnedAt 变更传播到列表（null=取消置顶）
- * - refreshSessions 订阅面收口（运行中 + 最近 N + 当前；批量订阅不带 agentId）
+ * - 事件订阅面：agent 维度订阅（OP-WEB-1，替代逐会话批量订阅）
  * - 断线重连后重订 + REST 复核列表
  * - setSessionPinned / deleteSession 更新列表；删当前会话清空聊天态；session.removed 广播同步
  */
@@ -20,6 +20,7 @@ interface MockClient extends OctopiClient {
   __emit(e: AgentEventEnvelope): void;
   __emitState(sessionId: string, state: string): void;
   __emitConnection(state: string): void;
+  __emitWelcome(agents: Array<{ id: string }>): void;
 }
 
 function session(id: string, over: Partial<SessionSummary> = {}): SessionSummary {
@@ -57,6 +58,7 @@ function mockClient(sessions: SessionSummary[]): MockClient {
     listClientToolCalls: vi.fn(async () => []),
     getSessionModel: vi.fn(async () => null),
     sendSubscribe: vi.fn(),
+    sendSubscribeAgent: vi.fn(),
     __emit(e: AgentEventEnvelope) {
       (listeners.onEvent as (s: string | undefined, e: AgentEventEnvelope) => void)?.(e.sessionId, e);
     },
@@ -65,6 +67,9 @@ function mockClient(sessions: SessionSummary[]): MockClient {
     },
     __emitConnection(state: string) {
       (listeners.onConnectionState as (s: string) => void)?.(state);
+    },
+    __emitWelcome(agents: Array<{ id: string }>) {
+      (listeners.onWelcome as (a: Array<{ id: string }>) => void)?.(agents);
     },
   } as unknown as MockClient;
 }
@@ -120,32 +125,35 @@ describe('OctopiRuntimeStore session list actions', () => {
     expect(store.getState().sessions.find((s) => s.id === 's1')?.pinnedAt).toBeUndefined();
   });
 
-  it('refreshSessions 订阅列表内会话（后台运行态靠 WS 事件实时送达；批量订阅不带 agentId）', async () => {
+  it('refreshSessions 订阅 agent 维度（替代逐会话批量订阅；后台会话事件实时送达）', async () => {
     const client = mockClient([session('s1'), session('s2')]);
     const store = new OctopiRuntimeStore(client);
+    client.__emitWelcome([{ id: 'a1' }]);
     await store.refreshSessions();
 
-    expect(client.sendSubscribe).toHaveBeenCalledWith('s1', undefined);
-    expect(client.sendSubscribe).toHaveBeenCalledWith('s2', undefined);
+    // agent 维度一次订阅覆盖该 agent 全部会话；不再逐会话 sendSubscribe
+    expect(client.sendSubscribeAgent).toHaveBeenCalledWith('a1');
+    expect(client.sendSubscribe).not.toHaveBeenCalled();
 
     // 重复刷新不重复订阅
-    (client.sendSubscribe as ReturnType<typeof vi.fn>).mockClear();
+    (client.sendSubscribeAgent as ReturnType<typeof vi.fn>).mockClear();
     await store.refreshSessions();
-    expect(client.sendSubscribe).not.toHaveBeenCalled();
+    expect(client.sendSubscribeAgent).not.toHaveBeenCalled();
   });
 
-  it('断线重连后重订会话并以 REST 复核列表（运行态纠偏）', async () => {
+  it('断线重连后重订 agent 维度并以 REST 复核列表（运行态纠偏）', async () => {
     const client = mockClient([session('s1')]);
     const store = new OctopiRuntimeStore(client);
+    client.__emitWelcome([{ id: 'a1' }]);
     await store.refreshSessions();
-    (client.sendSubscribe as ReturnType<typeof vi.fn>).mockClear();
+    (client.sendSubscribeAgent as ReturnType<typeof vi.fn>).mockClear();
     (client.listSessions as ReturnType<typeof vi.fn>).mockClear();
 
     client.__emitConnection('disconnected');
     client.__emitConnection('connected');
     await flushAsync();
 
-    expect(client.sendSubscribe).toHaveBeenCalledWith('s1', undefined);
+    expect(client.sendSubscribeAgent).toHaveBeenCalledWith('a1');
     expect(client.listSessions).toHaveBeenCalled();
   });
 

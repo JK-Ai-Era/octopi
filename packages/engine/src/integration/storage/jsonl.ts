@@ -18,7 +18,7 @@ import type { SessionStore, SessionListFilter } from '@octopi-agent/core/interfa
 import type { SessionData } from '@octopi-agent/engine/harness/session/types.js';
 import type { SessionMeta } from '@octopi-agent/core/types.js';
 import { toSessionFileName } from '@octopi-agent/core/session-filename.js';
-import { sessionMatchesAgent } from '@octopi-agent/core/types/session.js';
+import { readTitleState, sessionMatchesAgent } from '@octopi-agent/core/types/session.js';
 import type { SessionIndexSink } from './session-index.js';
 
 export interface JsonlSessionStoreOptions {
@@ -192,6 +192,9 @@ export class JsonlSessionStore implements SessionStore<SessionData> {
       // 置顶是用户数据：权威在 metadata.pinnedAt（受 save 浅合并保护，
       // 长驻 run 对象的整包 save 抹不掉）；meta.pinnedAt 仅作旧数据回退
       pinnedAt: readPinnedAt(data.metadata?.pinnedAt) ?? readPinnedAt(data.meta.pinnedAt),
+      // 标题是用户数据：权威在 metadata 三键（同 pinnedAt 通道，save 按 titleUpdatedAt 仲裁）；
+      // 投影必须覆盖 ...data.meta 展开带出的陈旧 meta.title，不做旧数据回退
+      ...readTitleState(data.metadata),
     };
   }
 
@@ -330,6 +333,20 @@ export class JsonlSessionStore implements SessionStore<SessionData> {
         ...(prevState?.metadata ?? {}),
         ...(data.metadata ?? {}),
       };
+      // 标题三键按 titleUpdatedAt 仲裁：浅合并只护「缺键」，不护「旧值」——
+      // 长驻 run 对象上 run 开始时的旧 trio 不得回滚运行期间 rename/标题生成写入的新 trio。
+      // incoming 缺时间戳视为陈旧（写端恒打三键；缺戳 = 半写/外来写），同样归磁盘胜
+      const fresh = readTitleState(prevState?.metadata);
+      const incomingTitle = readTitleState(data.metadata);
+      if (
+        fresh.titleUpdatedAt !== undefined &&
+        (incomingTitle.titleUpdatedAt === undefined ||
+          incomingTitle.titleUpdatedAt < fresh.titleUpdatedAt)
+      ) {
+        metadata.title = fresh.title;
+        metadata.titleSource = fresh.titleSource;
+        metadata.titleUpdatedAt = fresh.titleUpdatedAt;
+      }
 
       await writeFile(this.sessionStateFile(sessionId), JSON.stringify({
         agentId: data.agentId,
@@ -411,6 +428,8 @@ export class JsonlSessionStore implements SessionStore<SessionData> {
             ...entry,
             // pinnedAt 投影与 buildIndexEntry 同规则（置顶/取消即时可见于 list）
             pinnedAt: readPinnedAt(metadata.pinnedAt),
+            // 标题投影同规则（rename / 自动标题即时可见于 list）
+            ...readTitleState(metadata),
             updatedAt: Date.now(),
           };
           await this.writeMetaIndex(index);

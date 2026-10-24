@@ -31,6 +31,7 @@ import type {
   SessionIndexBackend,
 } from './types.js';
 import { formatHistoryRef, parseHistoryRef, messageText } from './types.js';
+import { isChatReplayHidden } from '../../context/layer-types.js';
 import {
   applyRoleWeight,
   authorAllows,
@@ -480,6 +481,18 @@ class DefaultSessionHistoryPort implements SessionHistoryPort {
   ): Array<{ index: number; message: Message }> {
     const all = session.messages ?? [];
     const indexed = all.map((message, index) => ({ index, message }));
+    // 聊天回放隐藏面（turn_end 载体 / 托管 systemPrompt…）不得作为 user/system 命中露出——
+    // 与 observer / ConversationAdapter 同一谓词（layer-types isChatReplayHidden）
+    const visible = indexed.filter(
+      ({ message }) =>
+        !isChatReplayHidden({
+          role: message.role,
+          source: typeof (message.metadata as { source?: unknown } | undefined)?.source === 'string'
+            ? String((message.metadata as { source?: unknown }).source)
+            : undefined,
+          text: messageText(message),
+        }),
+    );
     const scope = this.options.historyScope ?? 'participated';
 
     if (scope === 'participated' && agentId) {
@@ -495,7 +508,7 @@ class DefaultSessionHistoryPort implements SessionHistoryPort {
     }
 
     const acl = this.options.sessionAcl;
-    if (!acl || !agentId) return indexed;
+    if (!acl || !agentId) return visible;
 
     const access = resolveHistoryAccess(
       acl,
@@ -510,7 +523,7 @@ class DefaultSessionHistoryPort implements SessionHistoryPort {
       case 'none':
         return [];
       case 'full':
-        return indexed;
+        return visible;
       case 'from_grant': {
         const participant = access.participant;
         // 缺 seq/at 一律 fail-closed（E6）
@@ -518,12 +531,12 @@ class DefaultSessionHistoryPort implements SessionHistoryPort {
           return [];
         }
         const at = participant.grantedAt;
-        return indexed.filter(({ message }) => (message.timestamp ?? 0) >= at);
+        return visible.filter(({ message }) => (message.timestamp ?? 0) >= at);
       }
       case 'summary_tail':
-        return indexed.slice(-20);
+        return visible.slice(-20);
       default:
-        return indexed;
+        return visible;
     }
   }
 

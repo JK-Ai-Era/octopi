@@ -1,3 +1,26 @@
+## v0.90.5
+
+### fix(engine/gateway): 收口 OP-WEB-1/2/5——标题权威迁 metadata、中止锚点按 input 身份、广播显式 agentId、发言谓词单源化
+
+一批三中项收口（`arch/open-problems.md` OP-WEB-1/2/5），含独立子代理评审的 2 P0 + 3 P1 处置。
+
+**OP-WEB-5② title 污染（用户可见度最高）**：
+
+1. `session/title.ts` 的标题信号过滤引擎载体（turn_end/runStopped 等 role=user 机器插槽），`buildTitlePrompt` 用户侧收敛到 `isTitleRelevantUserMessage`（原另抄一份只滤 kind 的清单）。
+2. **评审 P0-1**：污染不止插槽——f126dc9 后真实用户消息的 content 就是 `<turn_start>` 整封，标题文本原样取信封 → prompt 里全是 turn_context 记忆快照、`buildSnippetTitle` 被信封形状判成载荷恒返 null（存量 sessions.json 80 条 snippet=0 实证）、信号闸门被信封长度打穿（寒暄也每轮打小模型）。修法：标题文本统一 `extractUserMessageText` 解包 `<user_message>` 原文（非信封原样返回），并在 `messageText` 一处收口；补 4 条真实信封形态用例。
+
+**OP-WEB-5③④ 谓词漂移收敛**：`layer-types.ts` 导出 `isUserAuthoredMessage` 唯一谓词（评审 P2-2：title 谓词同源化，不再第 6 处手抄），收敛 runner / default-context-engine（isMidTurn 保留 agentId 收紧）/ tool-result-aging / grounding / gateway 五处手抄；nit 三处同修：`grounding.latestUserText` 滤载体、`backfill-coverage.userTurns` 不计载体、`session/history/port.visibleMessages` 套 `isChatReplayHidden`（turn_end 不再作为 user 命中露出）。**评审 P1-1 部分落地**：schedule notify 便签（`delivery:'notify'`）明确不算用户发言（不污染 title/grounding/aging/backfill）；`source:'runtime'` 的 activation 唤醒输入仍计发言（它开轮且是 turn 输入）——「wake 提示算不算人话」影响 isMidTurn/compact 策略，**留待拍板**。
+
+**OP-WEB-2 标题丢更新（A 方案，权威迁 metadata）**：标题三键（title/titleSource/titleUpdatedAt）权威迁 `session.metadata`（updateMetadata 通道，与 pinnedAt 同款），`SessionMeta.title` 三键降为**只读投影**（core 类型注释即契约）；`renameSession`/`persistTitle` 改走 updateMetadata（顺带根除「标题整包 save 覆盖并发落盘消息」的窗口）；`SessionStore.save` 增标题三键**按 titleUpdatedAt 仲裁**（浅合并只护缺键不护旧值——长驻 run 对象整包 save 不回滚运行期间 rename；评审 P1-3：incoming 缺时间戳视为陈旧同样归磁盘胜）。**评审 P1-2**：`persistTitle` 的 shouldUpdateTitle/新鲜度守卫移入 mutate 闭包（写锁临界区内重读重判，load→patch 窗口的并发 rename 不被 auto 覆盖且不被推高 titleUpdatedAt）。**评审 P2-5**：InMemorySessionStore `load()` 补 title 投影（与 Jsonl 索引后端语义对齐）。**不做历史数据兼容**（拍板）：legacy `meta.title` 不迁移不回退，升级后首次 save 即按 metadata 权威投影——存量手改标题会退化为 snippet/auto，属接受的取舍。
+
+**OP-WEB-5① 编辑重发残余边界（正向口径 + 身份锚定）**：abortedTurn 四处口径统一——过期判定只认「后续开轮信封（role=user 的 turn_start）」（schedule notify 不再误判过期吃掉编辑重发入口）；**评审 P0-2（本批曾引入的回归，已修）**：runner 打标原按 turn_start 形状扫描，abort 抢在 bake 之前的窗口（push 后至定形前，含 LLM intent 等 await）会把标记误锚到**上一轮已完成的用户气泡**，编辑重发会截断整轮历史——改为按 `session.messages.lastIndexOf(input)` **对象身份**定位（input 恒为本轮用户气泡，定形前后都正确）；视图/截断守卫改「turn 输入」语义（开轮信封或定形前裸用户输入都算锚点，载体/notify/坏标记拒绝），并补裸输入锚点、notify 锚点拒绝两条回归。
+
+**OP-WEB-1 WS 广播 agentId 根因**：`broadcastEvent` 显式携带真实 agentId（第三参，缺省回落 `event.agentId`），彻底移除 `sessionKey.split(':')[0]` 猜测（裸 sessionId 的 Web 会话 agent 维度广播从不命中的根因）；13 个 gateway 调用点全部补齐真实 agentId（合成事件同时补 `agentId` 字段）；WS 协议增 `subscribe {agentId}` **agent 维度订阅**（`subscribedAgents` 集合，不改写连接身份——批量订阅随列表末条漂移连接身份的根因随之消失）；web store **撤掉批量精确订阅绕法**（运行中+最近 50+当前），改为 agent 维度 + 当前会话精确订阅，`sendSubscribeAgent/sendUnsubscribeAgent` 入 SDK。**已知取舍**：`StreamingChannelAdapter.broadcastEvent` 签名变更为三参（仓库内唯一实现已全量适配，第三方 adapter 两参调用 + 事件无 agentId 时 agent 维度不命中，仅精确订阅可达——CHANGELOG 即 breaking note）；agent 维度订阅面 = 该 agent 全部会话（无会话级 ACL，事件面较旧批量订阅有意扩大，单用户 Web 场景下即侧栏实时性所需）。
+
+**验证**：build / lint 全绿；全量测试除 2 个沙箱固有失败（`getProcessName`/`identifyPortOccupant`，seatbelt 禁 `ps`，`ps` 实测 `Operation not permitted`，与本 diff 无因果）外全过；新增回归 `tests/session-title-authority.test.ts`（rename 不被长驻 run 整包 save 回滚等 7 条）、`tests/ws-broadcast-routing.test.ts`（agent 维度路由/订阅协议 10 条）及标题信封形态 4 条、编辑重发锚点 3 条。独立子代理评审逐行过 diff：2 P0 + 3 P1 全数处置（P1-1 拆分：notify 部分落地，wake 语义留拍板），P2 中测试弱断言/谓词复用/load 投影落地，其余（legacy 标题取舍、adapter 签名、订阅面）以本条目为记录。
+
+---
+
 ## v0.90.4
 
 ### fix(engine/gateway): 注释乱码大清理 371 行按 git 历史恢复 + 零容忍守卫测试（H7′）

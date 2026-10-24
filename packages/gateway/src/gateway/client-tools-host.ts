@@ -40,6 +40,8 @@ export interface ClientToolHostDeps {
     sessionId: string;
     timestamp: number;
     data: Record<string, unknown>;
+    /** 事件的 agent 维度（WS agent 维度路由用；缺省仅精确订阅可达） */
+    agentId?: string;
   }) => void;
   /** 终态 call 持久化到 SessionStore（可选） */
   persistCall?: (call: ClientToolCall) => void | Promise<void>;
@@ -257,6 +259,7 @@ export class ClientToolHost {
             sessionId: pending.call.sessionId,
             timestamp: Date.now(),
             data: { call: publicCall(pending.call), reason: 'failover' },
+            agentId: pending.call.agentId,
           });
           continue;
         }
@@ -495,6 +498,7 @@ export class ClientToolHost {
         sessionId: call.sessionId,
         timestamp: call.createdAt,
         data: { call: publicCall(call) },
+        agentId: call.agentId,
       });
     });
 
@@ -529,6 +533,7 @@ export class ClientToolHost {
       sessionId: pending.call.sessionId,
       timestamp: Date.now(),
       data: { call: publicCall(pending.call) },
+      agentId: pending.call.agentId,
     });
 
     void Promise.resolve(this.deps.persistCall?.(pending.call)).catch(() => {

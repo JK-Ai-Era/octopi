@@ -5,6 +5,7 @@
  */
 
 import type { ModelProvider } from '@octopi-agent/core/interfaces/model-provider.js';
+import { readTitleState } from '@octopi-agent/core/types/session.js';
 import type { SessionData } from '@octopi-agent/engine/harness/session/types.js';
 import {
   buildSnippetTitle,
@@ -18,12 +19,18 @@ import { pickSummarizeProvider } from '@octopi-agent/engine/harness/context/summ
 
 export interface SessionTitleDeps {
   load(sessionId: string): Promise<SessionData | null>;
-  save(sessionId: string, data: SessionData): Promise<void>;
+  /** 标题是用户数据：写 `metadata` 三键（updateMetadata 通道，与 pinnedAt 同款），不整包 save */
+  patchMetadata(sessionId: string, mutate: (meta: Record<string, unknown>) => void): Promise<void>;
   providers: Map<string, ModelProvider>;
   modelLevels?: Record<string, { primary: string; fallback?: string[] }>;
   /** 兜底主模型 provider（level 未配置时） */
   resolveFallback(session: SessionData): { provider: ModelProvider; model?: string } | null;
-  onTitleUpdated(sessionId: string, title: string, titleSource: 'snippet' | 'auto'): void;
+  onTitleUpdated(
+    sessionId: string,
+    title: string,
+    titleSource: 'snippet' | 'auto',
+    agentId?: string,
+  ): void;
 }
 
 /**
@@ -39,7 +46,7 @@ export async function maybeUpdateSessionTitle(
 ): Promise<boolean> {
   const session = await deps.load(sessionId);
   if (!session) return false;
-  if (!shouldUpdateTitle(session.meta)) return false;
+  if (!shouldUpdateTitle(readTitleState(session.metadata))) return false;
 
   if (isTitleSignalReady(session)) {
     const generated = await generateTitleWithModel(session, deps);
@@ -52,7 +59,8 @@ export async function maybeUpdateSessionTitle(
   const snippet = buildSnippetTitle(session.messages);
   if (!snippet) return false;
   // 已是同一 snippet 则不写盘；但 titleSource 可能仍是空的旧数据
-  if (snippet === session.meta.title && session.meta.titleSource) return false;
+  const current = readTitleState(session.metadata);
+  if (snippet === current.title && current.titleSource) return false;
   console.warn(`[SessionTitle] snippet fallback: "${snippet}" (session=${sessionId})`);
   return persistTitle(sessionId, snippet, 'snippet', deps);
 }
@@ -60,22 +68,34 @@ export async function maybeUpdateSessionTitle(
 /**
  * 手动重命名（永不被自动覆盖）。
  *
- * @param session - 会话数据（原地改 meta）
+ * 标题是用户数据：权威写 `session.metadata` 三键（持久化走 updateMetadata 通道，
+ * 与 pinnedAt 同款，长驻 run 的整包 save 不回滚）；`session.meta` 三键只作
+ * 内存内投影（返回值 / 广播即时一致），不要拿它当权威读。
+ *
+ * @param session - 会话数据（原地写 metadata 三键与 meta 投影）
  * @param title - 用户输入标题
  * @returns 规范化后的标题；空串返回 null
  */
 export function applyUserTitle(session: SessionData, title: string): string | null {
   const t = normalizeGeneratedTitle(title) ?? title.replace(/\s+/g, ' ').trim().slice(0, 40);
   if (!t) return null;
+  const at = Date.now();
+  session.metadata = session.metadata ?? {};
+  session.metadata.title = t;
+  session.metadata.titleSource = 'user';
+  session.metadata.titleUpdatedAt = at;
   session.meta.title = t;
   session.meta.titleSource = 'user';
-  session.meta.titleUpdatedAt = Date.now();
-  session.meta.updatedAt = session.meta.titleUpdatedAt;
+  session.meta.titleUpdatedAt = at;
+  session.meta.updatedAt = at;
   return t;
 }
 
 /**
  * 写回标题前重读 session，避免用旧快照覆盖 Runner 刚写入的消息。
+ *
+ * 持久化走 updateMetadata 通道（不整包 save）：标题写入完全不触碰消息列表，
+ * 从根上消除「标题写回覆盖并发落盘消息」的窗口。
  */
 async function persistTitle(
   sessionId: string,
@@ -85,16 +105,24 @@ async function persistTitle(
 ): Promise<boolean> {
   const latest = await deps.load(sessionId);
   if (!latest) return false;
-  if (!shouldUpdateTitle(latest.meta)) return false;
-  if (latest.meta.title === title && latest.meta.titleSource === titleSource) return false;
 
   const now = Date.now();
-  latest.meta.title = title;
-  latest.meta.titleSource = titleSource;
-  latest.meta.titleUpdatedAt = now;
-  latest.meta.updatedAt = now;
-  await deps.save(sessionId, latest);
-  deps.onTitleUpdated(sessionId, title, titleSource);
+  let written = false;
+  await deps.patchMetadata(sessionId, (meta) => {
+    // 守卫在 updateMetadata 写锁临界区内重读重判：load→patch 之间的并发 rename
+    // 不得被自动标题覆盖（早判快照会漏掉这个窗口，且覆盖会把 titleUpdatedAt 推到
+    // now、令后续 save 仲裁也无法还原）
+    const current = readTitleState(meta);
+    if (!shouldUpdateTitle(current)) return;
+    if ((current.titleUpdatedAt ?? 0) > now) return;
+    if (current.title === title && current.titleSource === titleSource) return;
+    meta.title = title;
+    meta.titleSource = titleSource;
+    meta.titleUpdatedAt = now;
+    written = true;
+  });
+  if (!written) return false;
+  deps.onTitleUpdated(sessionId, title, titleSource, latest.agentId ?? latest.meta.agentId);
   return true;
 }
 

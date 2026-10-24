@@ -26,7 +26,7 @@ import type { ReliabilityHarness } from './reliability/run-agent.js';
 import { createSessionStateMachine } from '../session/state-machine.js';
 import type { StateMachine } from '@octopi-agent/core/primitives/state-machine.js';
 import { HeuristicTokenEstimator } from '../context/index.js';
-import { extractLayerQuery, isEngineCarrierSource } from '../context/layer-types.js';
+import { extractLayerQuery } from '../context/layer-types.js';
 import {
   formatTurnEndContent,
   formatTurnId,
@@ -1761,15 +1761,10 @@ export class SessionAwareRunner {
         turnFileUndo = undefined;
       }
       if (abortedMidTurn) {
-        let userIdx = -1;
-        for (let i = session.messages.length - 1; i >= 0; i--) {
-          const m = session.messages[i];
-          // 与 isMidTurn / extractLayerQuery 同口径：引擎载体（含 turnEnd）不是真实 user
-          if (m.role === 'user' && !isEngineCarrierSource(m.metadata?.source)) {
-            userIdx = i;
-            break;
-          }
-        }
+        // 中止轮的用户气泡 = 本轮 input 对象本身（push 于步骤 5，bake 之前就已在列）。
+        // 按对象身份定位而非形状扫描：abort 落在 bake 之前的窗口（上下文装配含 LLM intent）
+        // 时 input 尚未定形 turn_start，形状扫描会误锚到上一轮的开轮信封，截断掉整轮历史
+        const userIdx = session.messages.lastIndexOf(input);
         if (userIdx >= 0) {
           session.metadata = {
             ...session.metadata,

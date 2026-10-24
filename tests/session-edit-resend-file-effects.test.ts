@@ -21,6 +21,21 @@ import {
 } from '@octopi-agent/engine/harness/extension/execution-environment/memory-undo.js';
 import type { Message } from '@octopi-agent/core/types.js';
 import type { GatewayConfig } from '@octopi-agent/gateway/types/gateway-config.js';
+import { formatTurnStartContent } from '@octopi-agent/engine/harness/context/turn-envelope.js';
+
+/** 真实不变量：用户消息进会话即定形为 turn_start 信封（runner.bakeTurnStart） */
+function turnUser(text: string, at: number): Message {
+  return {
+    role: 'user',
+    content: formatTurnStartContent({
+      turnId: 't1',
+      at: new Date(at).toISOString(),
+      turnContextXml: '',
+      userText: text,
+    }),
+    timestamp: at,
+  };
+}
 
 async function exists(p: string): Promise<boolean> {
   try {
@@ -112,7 +127,7 @@ describe('edit-resend file effects (L3)', () => {
         updatedAt: t,
       },
       messages: [
-        { role: 'user', content: 'go', timestamp: t },
+        turnUser('go', t),
         { role: 'assistant', content: 'partial', timestamp: t + 1, agentId: 'a1' },
       ],
       turns: [],
@@ -157,7 +172,7 @@ describe('edit-resend file effects (L3)', () => {
         updatedAt: t,
       },
       messages: [
-        { role: 'user', content: 'go', timestamp: t },
+        turnUser('go', t),
         { role: 'assistant', content: 'x', timestamp: t + 1, agentId: 'a1' },
       ],
       turns: [],
@@ -213,7 +228,7 @@ describe('edit-resend file effects (L3)', () => {
         updatedAt: t,
       },
       messages: [
-        { role: 'user', content: 'go', timestamp: t },
+        turnUser('go', t),
         { role: 'assistant', content: 'x', timestamp: t + 1, agentId: 'a1' },
       ],
       turns: [],

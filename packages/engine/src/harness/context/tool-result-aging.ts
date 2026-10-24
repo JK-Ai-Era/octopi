@@ -24,7 +24,7 @@
  */
 
 import type { Message } from '@octopi-agent/core/types.js';
-import { isEngineCarrierSource } from './layer-types.js';
+import { isUserAuthoredMessage } from './layer-types.js';
 import { toolResultBody } from './tool-result-body.js';
 
 /** 老化配置（配置面输入；缺省见 {@link resolveToolResultAgingOptions}） */
@@ -147,7 +147,7 @@ export function computeToolResultAgingPlan(
   let lastGenuineUserIdx = -1;
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i];
-    if (msg.role === 'user' && !isEngineCarrierSource(msg.metadata?.source)) {
+    if (isUserAuthoredMessage(msg)) {
       lastGenuineUserIdx = i;
     }
     for (const tc of msg.toolCalls ?? []) {

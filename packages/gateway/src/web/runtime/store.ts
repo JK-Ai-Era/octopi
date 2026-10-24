@@ -131,8 +131,6 @@ export class RuntimeEvent<T = unknown> extends Event {
 
 export class ConnectionEvent extends RuntimeEvent<{ state: ConnectionState; agents: AgentSummary[] }> {}
 export class SessionsEvent extends RuntimeEvent<{ sessions: SessionSummary[] }> {}
-/** 批量订阅上限：运行中 + 最近 N 条 + 当前会话（防长历史一次性全量订阅） */
-const SESSION_SUBSCRIBE_LIMIT = 50;
 
 export class SessionEvent extends RuntimeEvent<{ session: SessionView | null }> {}
 export class ChatEvent extends RuntimeEvent<{ conversation: ConversationItem[] }> {}
@@ -276,8 +274,10 @@ export class OctopiRuntimeStore extends EventTarget {
   private connectionState: ConnectionState = 'idle';
   private agents: AgentSummary[] = [];
   private sessions: SessionSummary[] = [];
-  /** 已发过 subscribe 的会话（WS 重建后清空重订） */
+  /** 当前会话的精确订阅（WS 重建后清空重订） */
   private subscribedSessions = new Set<string>();
+  /** agent 维度订阅（该 agent 全部会话事件；WS 重建后清空重订） */
+  private subscribedAgents = new Set<string>();
   private currentSession: SessionView | null = null;
   private chat: ChatState = this.createEmptyChat();
   private modelCatalog: ModelCatalog = { models: [], agents: [] };
@@ -507,6 +507,8 @@ export class OctopiRuntimeStore extends EventTarget {
   async refreshAgents(): Promise<AgentSummary[]> {
     this.agents = await this.client.getAgents();
     this.dispatch('connection', new ConnectionEvent('connection', { state: this.connectionState, agents: this.agents }));
+    // agent 列表变化后校准 agent 维度订阅
+    this.syncSubscriptions();
     // 模型目录与 agent 列表同源刷新，UI 一次拿到默认模型映射
     try {
       this.modelCatalog = await this.client.getModels();
@@ -692,42 +694,36 @@ export class OctopiRuntimeStore extends EventTarget {
 
   async refreshSessions(agentId?: string): Promise<SessionSummary[]> {
     this.sessions = await this.client.listSessions(agentId);
-    this.syncSessionSubscriptions();
+    this.syncSubscriptions();
     this.dispatch('sessions', new SessionsEvent('sessions', { sessions: this.sessions }));
     return this.sessions;
   }
 
   /**
-   * 订阅会话事件（协议的 subscribedSessions 支持多会话）。
-   * 侧栏「运行中」标识 / 置顶 / 标题靠 WS 事件实时更新：未订阅的后台会话收不到事件，标识会失鲜。
+   * 事件订阅面：agent 维度（该 agent 全部会话事件）+ 当前会话精确订阅。
    *
-   * 订阅面收口：运行中 + 最近 SESSION_SUBSCRIBE_LIMIT 条 + 当前会话，避免长历史全量订阅。
-   * 列表订阅**不传 agentId**：服务端 subscribe 会把连接身份重指到 msg.agentId（历史行为，
-   * reply 路由依赖），批量订阅若携带 agentId 会让连接身份随列表末条漂移、串扰 matchesAgent。
+   * 侧栏「运行中」标识 / 置顶 / 标题靠 WS 事件实时更新：agent 维度覆盖后台会话，
+   * 无需逐会话批量订阅（旧绕法：运行中 + 最近 N + 当前，随列表膨胀；且订阅不能带
+   * agentId，防连接身份漂移）。agentId 显式路由后绕法撤销（OP-WEB-1）。
    */
-  private syncSessionSubscriptions(): void {
-    const candidates = new Map<string, SessionSummary>();
-    for (const s of this.sessions) {
-      if (s.running) candidates.set(s.id, s);
+  private syncSubscriptions(): void {
+    const agentIds = new Set<string>();
+    for (const a of this.agents) {
+      if (a.id) agentIds.add(a.id);
     }
-    for (const s of [...this.sessions]
-      .sort((a, b) => (b.lastInteractionAt ?? 0) - (a.lastInteractionAt ?? 0))
-      .slice(0, SESSION_SUBSCRIBE_LIMIT)) {
-      candidates.set(s.id, s);
-    }
-    const currentId = this.chat.sessionId;
-    const current = currentId ? this.sessions.find((s) => s.id === currentId) : undefined;
-    if (current) candidates.set(current.id, current);
-    for (const s of candidates.values()) {
-      if (this.subscribedSessions.has(s.id)) continue;
-      if (s.id === currentId) {
-        this.subscribeSession(s.id, s.agentId);
-      } else {
-        this.subscribeSession(s.id);
+    if (this.chat.agentId) agentIds.add(this.chat.agentId);
+    for (const id of agentIds) {
+      if (this.subscribedAgents.has(id)) continue;
+      try {
+        this.client.sendSubscribeAgent(id);
+        this.subscribedAgents.add(id);
+      } catch {
+        // 未连接时登记失败；连接态恢复后 syncSubscriptions 重试
       }
     }
+    const currentId = this.chat.sessionId;
     if (currentId && !this.subscribedSessions.has(currentId)) {
-      // 当前会话可能不在列表（按 agent 过滤的列表）——单独订阅，保持既有带 agentId 语义
+      // 当前会话精确订阅（连接身份 reply 路由依赖）；可能不在列表（按 agent 过滤的列表）
       this.subscribeSession(currentId, this.chat.agentId);
     }
   }
@@ -738,7 +734,7 @@ export class OctopiRuntimeStore extends EventTarget {
       this.client.sendSubscribe(sessionId, agentId);
       this.subscribedSessions.add(sessionId);
     } catch {
-      // 未连接时登记失败；连接态恢复后 syncSessionSubscriptions 重试
+      // 未连接时登记失败；连接态恢复后 syncSubscriptions 重试
     }
   }
 
@@ -1566,10 +1562,11 @@ export class OctopiRuntimeStore extends EventTarget {
     if (state !== 'connected') {
       // WS 重建后服务端订阅不保留；记账清空，恢复连接时全量重订
       this.subscribedSessions.clear();
+      this.subscribedAgents.clear();
       return;
     }
-    // 重连后必须重新订阅（当前会话 + 列表会话），否则服务端事件无法送达
-    this.syncSessionSubscriptions();
+    // 重连后必须重新订阅（当前会话 + agent 维度），否则服务端事件无法送达
+    this.syncSubscriptions();
     // 断线窗口内的事件会丢：以 REST 投影复核列表（running 等），
     // 状态归 store 自持，不依赖宿主 UI 的刷新时机
     void this.refreshSessions().catch(() => {
@@ -1580,6 +1577,8 @@ export class OctopiRuntimeStore extends EventTarget {
   private applyWelcome(agents: AgentSummary[]): void {
     this.agents = agents;
     this.dispatch('connection', new ConnectionEvent('connection', { state: this.connectionState, agents: this.agents }));
+    // agent 列表此刻才已知：补发 agent 维度订阅（连接态 sync 时可能尚未拿到 welcome）
+    this.syncSubscriptions();
   }
 
   private applyAccepted(sessionId?: string): void {

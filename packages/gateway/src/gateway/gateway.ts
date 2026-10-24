@@ -18,6 +18,7 @@
  */
 
 import type { RegisteredTool, SessionMeta } from '@octopi-agent/core/types.js';
+import { readTitleState } from '@octopi-agent/core/types/session.js';
 import type { AgentDefinition, ModelConfig } from '@octopi-agent/engine/harness/shared/types/agent-definition.js';
 import type { ChannelAdapter, ChannelMessage, ChannelReply } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/channel-types.js';
 import type { GitStatusSnapshot } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/tools/git-status-snapshot.js';
@@ -46,7 +47,8 @@ import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { existsSync } from 'node:fs';
 import { CircuitBreaker } from '@octopi-agent/engine/harness/run/reliability/circuit-breaker.js';
-import { isEngineCarrierSource } from '@octopi-agent/engine/harness/context/layer-types.js';
+import { isTurnStartContent } from '@octopi-agent/engine/harness/context/turn-envelope.js';
+import { isUserAuthoredMessage } from '@octopi-agent/engine/harness/context/layer-types.js';
 import { wrapProviderWithCircuitBreaker } from '@octopi-agent/engine/harness/run/reliability/provider-wrapper.js';
 import { resolveModel, resolveModelRef, resolveCatalogEntry, parseModelRef } from '@octopi-agent/engine/harness/run/model/index.js';
 import { PluginManager } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/plugins/manager.js';
@@ -456,15 +458,17 @@ export class Gateway {
     this.commandRouter = this.createCommandRouter();
     this.clientStreamTransport = new ClientStreamTransport({
       emitEvent: (event) => {
+        const agentId = (event as { agentId?: string }).agentId;
         const ev = {
           type: event.type,
           sessionId: event.sessionId,
           timestamp: event.timestamp,
+          ...(agentId ? { agentId } : {}),
           data: event.data,
         } as unknown as AgentEvent;
         this.emitEvent(ev);
         for (const adapter of this.streamingAdapters) {
-          adapter.broadcastEvent(event.sessionId, ev);
+          adapter.broadcastEvent(event.sessionId, ev, agentId);
         }
       },
     });
@@ -547,7 +551,7 @@ export class Gateway {
         const ev = event as unknown as AgentEvent;
         this.emitEvent(ev);
         for (const adapter of this.streamingAdapters) {
-          adapter.broadcastEvent(sessionId, ev);
+          adapter.broadcastEvent(sessionId, ev, event.agentId);
         }
       },
     });
@@ -584,7 +588,7 @@ export class Gateway {
             ? stripLayerContentFromEvent(event)
             : event;
         for (const adapter of this.streamingAdapters) {
-          adapter.broadcastEvent(event.sessionId, out as never);
+          adapter.broadcastEvent(event.sessionId, out as never, event.agentId);
         }
       }
     });
@@ -1253,7 +1257,7 @@ export class Gateway {
     }
     await this.store.delete(sessionId);
     // 其他已订阅端同步移除卡片，避免点开已删会话才报错
-    this.broadcastSessionEvent('session.removed', sessionId, {});
+    this.broadcastSessionEvent('session.removed', sessionId, {}, session.agentId ?? session.meta.agentId);
   }
 
   async stop(): Promise<void> {
@@ -1711,16 +1715,17 @@ export class Gateway {
     }
   }
 
-  private broadcastCommandResult(sessionId: string, payload: Record<string, unknown>): void {
+  private broadcastCommandResult(sessionId: string, payload: Record<string, unknown>, agentId?: string): void {
     const event = {
       type: 'command.result',
       sessionId,
       timestamp: Date.now(),
+      ...(agentId ? { agentId } : {}),
       data: payload,
     } as unknown as AgentEvent;
     this.emitEvent(event);
     for (const adapter of this.streamingAdapters) {
-      adapter.broadcastEvent(sessionId, event);
+      adapter.broadcastEvent(sessionId, event, agentId);
     }
   }
 
@@ -1734,6 +1739,7 @@ export class Gateway {
     sessionId: string,
     content: string,
     displayType: 'text' | 'markdown' | 'json' = 'text',
+    agentId?: string,
   ): void {
     const raw = content ?? '';
     const text = displayType === 'text' ? raw.split('\n').join('  \n') : raw;
@@ -1741,6 +1747,7 @@ export class Gateway {
       type: 'turn.end',
       sessionId,
       timestamp: Date.now(),
+      ...(agentId ? { agentId } : {}),
       data: {
         content: text,
         phase: 'final',
@@ -1750,7 +1757,7 @@ export class Gateway {
     } as unknown as AgentEvent;
     this.emitEvent(event);
     for (const adapter of this.streamingAdapters) {
-      adapter.broadcastEvent(sessionId, event);
+      adapter.broadcastEvent(sessionId, event, agentId);
     }
   }
 
@@ -2148,6 +2155,9 @@ export class Gateway {
   /**
    * 手动重命名会话标题（titleSource=user，永不被自动摘要覆盖）。
    *
+   * 标题是用户数据：写 `session.metadata` 三键（updateMetadata 通道，与 pinnedAt 同款），
+   * 长驻 run 的整包 save 不回滚；列表侧由 SessionStore 投影为 SessionMeta.title。
+   *
    * @param sessionId - 目标会话
    * @param title - 用户标题
    * @returns 更新后的 SessionMeta
@@ -2161,8 +2171,13 @@ export class Gateway {
     if (!applied) {
       throw new Error('title must not be empty');
     }
-    await this.store.save(sessionId, session);
-    this.broadcastSessionUpdated(sessionId, applied, 'user');
+    const trio = readTitleState(session.metadata);
+    await this.patchSessionMetadata(sessionId, (meta) => {
+      meta.title = trio.title;
+      meta.titleSource = trio.titleSource;
+      meta.titleUpdatedAt = trio.titleUpdatedAt;
+    });
+    this.broadcastSessionUpdated(sessionId, applied, 'user', session.agentId ?? session.meta.agentId);
     return session.meta;
   }
 
@@ -2197,7 +2212,7 @@ export class Gateway {
     this.broadcastSessionMeta(sessionId, {
       pinnedAt: pinnedAt ?? null,
       updatedAt: Date.now(),
-    });
+    }, existing.agentId ?? existing.meta.agentId);
     return meta;
   }
 
@@ -2217,11 +2232,12 @@ export class Gateway {
       try {
         await maybeUpdateSessionTitle(sessionId, {
           load: (id) => this.store.load(id),
-          save: (id, data) => this.store.save(id, data),
+          patchMetadata: (id, mutate) => this.patchSessionMetadata(id, mutate),
           providers: this.providers,
           modelLevels: this.modelLevels,
           resolveFallback: (session) => this.resolveTitleModelRef(session),
-          onTitleUpdated: (id, title, titleSource) => this.broadcastSessionUpdated(id, title, titleSource),
+          onTitleUpdated: (id, title, titleSource, agentId) =>
+            this.broadcastSessionUpdated(id, title, titleSource, agentId),
         });
       } catch (err) {
         // 标题是展示元数据；失败保持原标题，不阻断对话
@@ -2272,13 +2288,14 @@ export class Gateway {
     sessionId: string,
     title: string,
     titleSource: 'snippet' | 'auto' | 'user',
+    agentId?: string,
   ): void {
-    this.broadcastSessionMeta(sessionId, { title, titleSource });
+    this.broadcastSessionMeta(sessionId, { title, titleSource }, agentId);
   }
 
   /** 会话展示元数据变更广播（title / pinnedAt 等），消费方按需取键 */
-  private broadcastSessionMeta(sessionId: string, data: Record<string, unknown>): void {
-    this.broadcastSessionEvent('session.updated', sessionId, data);
+  private broadcastSessionMeta(sessionId: string, data: Record<string, unknown>, agentId?: string): void {
+    this.broadcastSessionEvent('session.updated', sessionId, data, agentId);
   }
 
   /** 会话级广播（session.updated / session.removed），消费方按 type 与 data 取义 */
@@ -2286,16 +2303,18 @@ export class Gateway {
     type: string,
     sessionId: string,
     data: Record<string, unknown>,
+    agentId?: string,
   ): void {
     const event = {
       type,
       sessionId,
       timestamp: Date.now(),
+      ...(agentId ? { agentId } : {}),
       data: { sessionId, updatedAt: Date.now(), ...data },
     } as unknown as AgentEvent;
     this.emitEvent(event);
     for (const adapter of this.streamingAdapters) {
-      adapter.broadcastEvent(sessionId, event);
+      adapter.broadcastEvent(sessionId, event, agentId);
     }
   }
 
@@ -2340,6 +2359,15 @@ export class Gateway {
     return this.store.load(sessionId);
   }
 
+  /** 中止标记锚点 = 某 turn 的用户输入：开轮信封（含 wake 等机器输入），或定形前的裸用户输入 */
+  private isTurnInput(msg: Message | undefined): boolean {
+    return (
+      !!msg &&
+      msg.role === 'user' &&
+      (isTurnStartContent(msg.content) || isUserAuthoredMessage(msg))
+    );
+  }
+
   async getSessionView(sessionId: string, _agentId?: string): Promise<{
     meta: SessionMeta;
     messageCount: number;
@@ -2359,22 +2387,22 @@ export class Gateway {
     if (raw && typeof raw.userMessageIndex === 'number') {
       const idx = raw.userMessageIndex;
       const msg = session.messages[idx];
-      // 过期标记：下标错位，或该用户气泡之后已有更新的用户消息（后续轮已盖过）
-      let hasNewerUser = false;
+      // 过期判定（正向口径）：只有开轮信封（turn_start）才计「新轮已盖过」。
+      // 引擎载体（turn_end / runStopped…）与 schedule notify（role=user 但不开轮）
+      // 不得据此判标记过期；开轮路径必打 turn_start 信封（runner.bakeTurnStart 无条件定形）
+      let hasNewerTurn = false;
       if (msg) {
         for (let i = idx + 1; i < session.messages.length; i++) {
           const later = session.messages[i];
-          // 与 Runner 打标同口径：引擎载体（turnEnd / runStopped / grounding…）
-          // 也是 role=user，但不是真实用户发言，不得据此判标记过期
-          if (later.role === 'user' && !isEngineCarrierSource(later.metadata?.source)) {
-            hasNewerUser = true;
+          if (later.role === 'user' && isTurnStartContent(later.content)) {
+            hasNewerTurn = true;
             break;
           }
         }
       }
-      // 被标记的下标本身也必须落在真实用户发言上：legacy 标记（f126dc9 之前
-      // 打标口径更宽）可能指向引擎载体，暴露出去会让截断点切在载体上
-      if (msg?.role === 'user' && !isEngineCarrierSource(msg.metadata?.source) && !hasNewerUser) {
+      // 被标记的下标本身必须是该 turn 的用户输入（开轮信封，或 abort 抢在定形前的裸输入）：
+      // legacy/损坏标记（指向载体或 notify）暴露出去会让截断点切错位置，重发叠出重复用户轮
+      if (this.isTurnInput(msg) && !hasNewerTurn) {
         abortedTurn = raw;
       }
     }
@@ -2422,13 +2450,13 @@ export class Gateway {
       if (!Number.isInteger(fromIndex) || fromIndex < 0 || fromIndex > session.messages.length) {
         throw new Error(`fromIndex out of range: ${fromIndex}`);
       }
-      // 与 view 同口径的写路径守卫：截断锚点必须是真实用户消息。
-      // legacy/损坏的 abortedTurn 元数据可能指向引擎载体，切在载体上会把
+      // 与 view 同口径的写路径守卫：截断锚点必须是该 turn 的用户输入。
+      // legacy/损坏的 abortedTurn 元数据可能指向引擎载体/notify，切在错误位置会把
       // 真正的中止残片留在历史里，重发叠出重复用户轮
       const anchor = session.messages[fromIndex];
-      if (!anchor || anchor.role !== 'user' || isEngineCarrierSource(anchor.metadata?.source)) {
+      if (!this.isTurnInput(anchor)) {
         throw new Error(
-          `edit_resend_only_last_aborted_turn: abortedTurn anchor is not a real user message`,
+          `edit_resend_only_last_aborted_turn: abortedTurn anchor is not a turn user message`,
         );
       }
       session.messages = session.messages.slice(0, fromIndex);
@@ -3871,12 +3899,13 @@ export class Gateway {
     const event = {
       type: approval.status === 'pending' ? 'approval.pending' : 'approval.resolved',
       sessionId: approval.sessionId,
+      agentId: approval.agentId,
       timestamp: Date.now(),
       data: { approval },
     } as unknown as AgentEvent;
     this.emitEvent(event);
     for (const adapter of this.streamingAdapters) {
-      adapter.broadcastEvent(approval.sessionId, event);
+      adapter.broadcastEvent(approval.sessionId, event, approval.agentId);
     }
   }
 
@@ -3984,12 +4013,13 @@ export class Gateway {
     const event = {
       type: question.status === 'pending' ? 'ask_user.pending' : 'ask_user.resolved',
       sessionId: question.sessionId,
+      agentId: question.agentId,
       timestamp: Date.now(),
       data: { question },
     } as unknown as AgentEvent;
     this.emitEvent(event);
     for (const adapter of this.streamingAdapters) {
-      adapter.broadcastEvent(question.sessionId, event);
+      adapter.broadcastEvent(question.sessionId, event, question.agentId);
     }
   }
 
@@ -4276,7 +4306,7 @@ export class Gateway {
           issueId: result.issueId,
           newSessionId: result.newSessionId,
           enterLoop: result.enterLoop === true,
-        });
+        }, (msg.metadata?.agentId as string | undefined) ?? agent.id);
 
         // prompt 展开：继续进 Loop
         if (result.enterLoop && result.messages?.length) {
@@ -4289,6 +4319,7 @@ export class Gateway {
             sessionKey,
             result.display.text,
             result.display.type,
+            (msg.metadata?.agentId as string | undefined) ?? agent.id,
           );
 
           // IM 短回复（Telegram 等无 WS 事件流的渠道）
@@ -4356,14 +4387,15 @@ export class Gateway {
         // 流式 delta + 终态必须用闭包 sessionKey 广播：
         // - delta 不在 bus 上
         // - 终态若只靠 bus 的 event.sessionId，匹配失败时 UI 会永远停在 streaming
+        const eventAgentId = (msg.metadata?.agentId as string | undefined) ?? agent.id;
         if (event.type === 'llm_stream_delta' || event.type === 'llm_thinking_delta') {
           this.emitEvent(event as unknown as AgentEvent);
           for (const adapter of this.streamingAdapters) {
-            adapter.broadcastEvent(sessionKey, event as unknown as AgentEvent);
+            adapter.broadcastEvent(sessionKey, event as unknown as AgentEvent, eventAgentId);
           }
         } else if (Gateway.isTerminalWsEvent(event.type)) {
           for (const adapter of this.streamingAdapters) {
-            adapter.broadcastEvent(sessionKey, event as unknown as AgentEvent);
+            adapter.broadcastEvent(sessionKey, event as unknown as AgentEvent, eventAgentId);
           }
         }
         if (event.type === 'turn.end' && event.data?.content) {
@@ -4915,10 +4947,10 @@ export class Gateway {
     });
 
     // 会话任务事件 → WebSocket（UI 只读实时面板）
-    const forwardTaskEvent = (event: { sessionId?: string; type: string; data?: unknown }) => {
+    const forwardTaskEvent = (event: { sessionId?: string; type: string; data?: unknown; agentId?: string }) => {
       if (!event.sessionId) return;
       for (const adapter of this.streamingAdapters) {
-        adapter.broadcastEvent(event.sessionId, event as any);
+        adapter.broadcastEvent(event.sessionId, event as any, event.agentId);
       }
     };
     for (const type of ['session.task.created', 'session.task.updated', 'session.task.snapshot']) {

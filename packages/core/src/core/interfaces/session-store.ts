@@ -37,6 +37,8 @@ export interface SessionStore<T = unknown> {
    * 对已存在会话，`metadata` 与磁盘现值浅合并（调用方键优先）；
    * **删 metadata 键必须走 `updateMetadata`**。长驻 run 对象上的陈旧
    * `metadata` 不得抹掉并发写入的键（如 clientToolCalls / fileReleases）。
+   * 标题三键（title / titleSource / titleUpdatedAt）例外：按 `titleUpdatedAt`
+   * 新旧仲裁——陈旧值不得回滚并发写入的更新标题（浅合并只护「缺键」，不护「旧值」）。
    */
   save(sessionId: string, data: T): Promise<void>;
 

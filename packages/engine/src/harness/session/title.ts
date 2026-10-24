@@ -5,7 +5,8 @@
  */
 
 import type { Message, SessionMeta } from '@octopi-agent/core/types.js';
-import { getTextContent } from '@octopi-agent/core/types.js';
+import { extractUserMessageText } from '../context/turn-envelope.js';
+import { isUserAuthoredMessage } from '../context/layer-types.js';
 import type { SessionData } from './types.js';
 
 /** 首条有效用户消息达到该长度才可直接摘要 */
@@ -17,17 +18,24 @@ export const TITLE_SNIPPET_MAX_CHARS = 24;
 /** 生成标题最大长度 */
 export const TITLE_MAX_CHARS = 40;
 
-/** 参与标题信号统计的用户消息（排除 slash 命令留痕） */
+/** 参与标题信号统计的用户消息（排除 slash 命令留痕与机器插槽；唯一谓词在 layer-types） */
 function isTitleRelevantUserMessage(msg: Message): boolean {
-  if (msg.role !== 'user') return false;
+  if (!isUserAuthoredMessage(msg)) return false;
   const kind = msg.metadata?.kind;
   if (kind === 'command' || kind === 'command_result') return false;
   return true;
 }
 
-/** 提取纯文本并压空白 */
+/**
+ * 提取纯文本并压空白。
+ *
+ * f126dc9 后真实用户消息的 content 是 `<turn_start>` 整封（含 turn_context
+ * 快照/grounding）：必须解包取 `<user_message>` 原文，否则标题信号被信封
+ * boilerplate 吃满、snippet 被信封形状误判为载荷（OP-WEB-5② 残留）。
+ * 非信封正文（assistant / 载体 / 便签）原样返回。
+ */
 function messageText(msg: Message): string {
-  return getTextContent(msg.content).replace(/\s+/g, ' ').trim();
+  return extractUserMessageText(msg.content).replace(/\s+/g, ' ').trim();
 }
 
 function safeDecodeURIComponent(s: string): string {
@@ -237,9 +245,15 @@ export function isWeakTitle(title: string | undefined): boolean {
 export function buildTitlePrompt(messages: Message[]): Array<{ role: 'system' | 'user'; content: string }> {
   const entries: Array<{ role: 'user' | 'assistant'; text: string }> = [];
   for (const msg of messages) {
-    if (msg.role !== 'user' && msg.role !== 'assistant') continue;
-    const kind = msg.metadata?.kind;
-    if (kind === 'command' || kind === 'command_result') continue;
+    if (msg.role === 'user') {
+      // 用户侧复用唯一谓词（载体/命令留痕过滤单源）
+      if (!isTitleRelevantUserMessage(msg)) continue;
+    } else if (msg.role === 'assistant') {
+      const kind = msg.metadata?.kind;
+      if (kind === 'command' || kind === 'command_result') continue;
+    } else {
+      continue;
+    }
     const text = titleText(msg);
     if (!text) continue;
     entries.push({ role: msg.role === 'user' ? 'user' : 'assistant', text });

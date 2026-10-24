@@ -47,8 +47,8 @@ export interface GroundingAssemblerOptions {
   hitLog?: KnowledgeHitLog;
 }
 
-/** 引擎载体 user 插槽（快照/grounding/附件/摘要）不是用户发言，query 不采信（谓词见 context/layer-types） */
-import { isEngineCarrierSource } from '../context/layer-types.js';
+/** 真实用户发言判定（载体插槽不是用户发言，query 不采信；谓词见 context/layer-types） */
+import { isUserAuthoredMessage } from '../context/layer-types.js';
 
 /**
  * v1 query：最近 user + 可选前 1–2 条 user；不用 assistant 长文
@@ -58,9 +58,7 @@ export function resolveGroundingQuery(
   opts?: { includePriorUserTurns?: number; maxChars?: number },
 ): string {
   const prior = Math.max(0, opts?.includePriorUserTurns ?? 1);
-  const users = messages.filter(
-    (m) => m.role === 'user' && !isEngineCarrierSource(m.metadata?.source),
-  );
+  const users = messages.filter((m) => isUserAuthoredMessage(m));
   const recent = users.slice(-1 - prior);
   const parts = recent.map((m) => getTextContent(m.content).trim()).filter(Boolean);
   const joined = parts.join('\n');
@@ -112,10 +110,10 @@ function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4);
 }
 
-/** 最近一条 user 的文本（skipIf 启发式只看本轮） */
+/** 最近一条真实用户发言的文本（skipIf 启发式只看本轮；载体插槽不计） */
 function latestUserText(messages: Message[]): string {
   for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i].role === 'user') {
+    if (isUserAuthoredMessage(messages[i])) {
       return getTextContent(messages[i].content);
     }
   }

@@ -9,7 +9,7 @@
 
 import type { SessionStore, SessionListFilter } from '@octopi-agent/core/interfaces/session-store.js';
 import type { SessionMeta, SessionAgentMatchPick } from '@octopi-agent/core/types.js';
-import { sessionMatchesAgent } from '@octopi-agent/core/types/session.js';
+import { readTitleState, sessionMatchesAgent } from '@octopi-agent/core/types/session.js';
 import type { SessionData } from './types.js';
 
 function toIndexPick(s: SessionData): SessionAgentMatchPick & { agentId: string } {
@@ -27,7 +27,11 @@ export class InMemorySessionStore implements SessionStore<SessionData> {
   private sessions = new Map<string, SessionData>();
 
   async load(sessionId: string): Promise<SessionData | null> {
-    return this.sessions.get(sessionId) ?? null;
+    const prev = this.sessions.get(sessionId);
+    if (!prev) return null;
+    // 与 JsonlSessionStore.load 同口径：meta 是投影（标题三键权威在 metadata，
+    // updateMetadata 写后 load().meta 立即新鲜，与索引后端行为一致）
+    return { ...prev, meta: { ...prev.meta, ...readTitleState(prev.metadata) } };
   }
 
   async save(sessionId: string, data: SessionData): Promise<void> {
@@ -37,6 +41,19 @@ export class InMemorySessionStore implements SessionStore<SessionData> {
       ...(prev?.metadata ?? {}),
       ...(data.metadata ?? {}),
     };
+    // 与 JsonlSessionStore 对齐：标题三键按 titleUpdatedAt 仲裁，陈旧值不回滚更新写入；
+    // incoming 缺时间戳视为陈旧（写端恒打三键），同样归磁盘胜
+    const freshTitle = readTitleState(prev?.metadata);
+    const incomingTitle = readTitleState(data.metadata);
+    if (
+      freshTitle.titleUpdatedAt !== undefined &&
+      (incomingTitle.titleUpdatedAt === undefined ||
+        incomingTitle.titleUpdatedAt < freshTitle.titleUpdatedAt)
+    ) {
+      metadata.title = freshTitle.title;
+      metadata.titleSource = freshTitle.titleSource;
+      metadata.titleUpdatedAt = freshTitle.titleUpdatedAt;
+    }
     this.sessions.set(sessionId, { ...data, id: sessionId, metadata });
   }
 
@@ -81,6 +98,8 @@ export class InMemorySessionStore implements SessionStore<SessionData> {
           typeof s.metadata?.pinnedAt === 'number' && Number.isFinite(s.metadata.pinnedAt)
             ? s.metadata.pinnedAt
             : s.meta.pinnedAt,
+        // 与 JsonlSessionStore.buildIndexEntry 同规则：标题权威在 metadata 三键（无旧数据回退）
+        ...readTitleState(s.metadata),
       }));
   }
 

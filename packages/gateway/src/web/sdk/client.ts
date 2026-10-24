@@ -1911,6 +1911,25 @@ export class OctopiClient {
     });
   }
 
+  /**
+   * agent 维度订阅：收该 agent 全部会话事件（不绑定连接身份，无漂移问题）。
+   * 用于侧栏列表实时性，替代逐会话批量订阅。
+   */
+  sendSubscribeAgent(agentId: string): void {
+    this.send({
+      type: 'subscribe',
+      agentId,
+    });
+  }
+
+  /** 取消 agent 维度订阅 */
+  sendUnsubscribeAgent(agentId: string): void {
+    this.send({
+      type: 'unsubscribe',
+      agentId,
+    });
+  }
+
   // ──────────────────────────────────
   // Internals
   // ──────────────────────────────────

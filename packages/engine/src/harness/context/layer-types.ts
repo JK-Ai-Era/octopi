@@ -299,6 +299,31 @@ export function isEngineCarrierSource(source: unknown): boolean {
 }
 
 /**
+ * 真实用户发言判定（唯一真源，收敛五处手抄）。
+ *
+ * f126dc9 后 turn_end / runStopped 等引擎载体也是 role=user，
+ * 「role=user 即用户发言」不再成立。判为非发言的三类：
+ * - 引擎载体插槽（快照/grounding/附件/摘要/turn 闭标…）
+ * - schedule notify 便签（`delivery:'notify'`，机器提示，不开轮、不是输入）
+ * 注意本谓词**不看 agentId**：isMidTurn 另有「无 agentId 归因」的收紧
+ * （多 agent 共线语义），在其调用处叠加。`source:'runtime'` 的 activation
+ * 唤醒输入**仍计发言**（它开轮且是该 turn 的输入；是否算人话待拍板）。
+ *
+ * @param msg - 消息（结构化入参，接受 Message 及其裁剪形态）
+ * @returns true = 真实用户发言
+ */
+export function isUserAuthoredMessage(msg: {
+  role?: string;
+  metadata?: { source?: unknown; delivery?: unknown };
+}): boolean {
+  if (msg.role !== 'user') return false;
+  if (isEngineCarrierSource(msg.metadata?.source)) return false;
+  // schedule notify 是机器便签（producer 见 gateway setNotify），不是用户输入
+  if (msg.metadata?.delivery === 'notify') return false;
+  return true;
+}
+
+/**
  * 聊天回放隐藏谓词（D9 收敛的唯一真源）。
  *
  * observer `isHiddenFromChat` 与 gateway `ConversationAdapter.isHiddenSystemHistory`

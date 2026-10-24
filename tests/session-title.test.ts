@@ -1,9 +1,11 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { Message } from '@octopi-agent/core/types.js';
+import { readTitleState } from '@octopi-agent/core/types/session.js';
 import type { SessionData } from '@octopi-agent/engine/harness/session/types.js';
 import {
   buildSnippetTitle,
   buildTitlePrompt,
+  collectTitleUserTexts,
   compactTitleText,
   isTitleSignalReady,
   isWeakTitle,
@@ -18,13 +20,38 @@ import {
   applyUserTitle,
   maybeUpdateSessionTitle,
 } from '@octopi-agent/gateway/gateway/session-title.js';
+import {
+  formatTurnContextXml,
+  formatTurnStartContent,
+} from '@octopi-agent/engine/harness/context/turn-envelope.js';
 
 function msg(role: Message['role'], content: string, metadata?: Record<string, unknown>): Message {
   return { role, content, timestamp: Date.now(), metadata };
 }
 
-function sessionWith(messages: Message[], meta: Partial<SessionData['meta']> = {}): SessionData {
+let turnSeq = 0;
+/** 真实形态用户消息：`<turn_start>` 信封（含 turn_context 记忆快照槽位，信封噪声远大于原文） */
+function envelopeMsg(text: string, metadata?: Record<string, unknown>): Message {
+  turnSeq += 1;
+  const turnId = `t${turnSeq}`;
   return {
+    role: 'user',
+    content: formatTurnStartContent({
+      turnId,
+      at: new Date().toISOString(),
+      turnContextXml: formatTurnContextXml({
+        turnId,
+        slotsXml: '<runtime_snapshot>\n[记忆] 与本问相关的记忆（5 条）：旧结论若干……\n</runtime_snapshot>',
+      }),
+      userText: text,
+    }),
+    timestamp: Date.now(),
+    metadata,
+  };
+}
+
+function sessionWith(messages: Message[], meta: Partial<SessionData['meta']> = {}): SessionData {
+  const session: SessionData = {
     id: 's1',
     agentId: 'default',
     meta: {
@@ -43,6 +70,19 @@ function sessionWith(messages: Message[], meta: Partial<SessionData['meta']> = {
     turns: [],
     metadata: {},
     tasks: [],
+  };
+  // 标题权威在 metadata 三键（meta 仅是投影）：helper 同步播种权威面
+  if (meta.title !== undefined) session.metadata.title = meta.title;
+  if (meta.titleSource !== undefined) session.metadata.titleSource = meta.titleSource;
+  if (meta.titleUpdatedAt !== undefined) session.metadata.titleUpdatedAt = meta.titleUpdatedAt;
+  return session;
+}
+
+/** updateMetadata 通道假实现：原地改 session.metadata（不触碰消息列表） */
+function patchInto(session: SessionData) {
+  return async (_id: string, mutate: (m: Record<string, unknown>) => void): Promise<void> => {
+    session.metadata = { ...session.metadata };
+    mutate(session.metadata);
   };
 }
 
@@ -90,6 +130,41 @@ describe('session title signal', () => {
       msg('user', '/model gpt-4o', { kind: 'command' }),
       msg('assistant', 'ok', { kind: 'command_result' }),
     ]);
+    expect(isTitleSignalReady(s)).toBe(false);
+    expect(buildSnippetTitle(s.messages)).toBeNull();
+  });
+
+  it('ignores engine carrier slots (turn_end / runStopped) as user speech', () => {
+    const s = sessionWith([
+      msg('user', '<turn_end id="t1"/>', { source: 'turnEnd' }),
+      msg('user', 'run stopped: budget_exceeded', { source: 'runStopped' }),
+    ]);
+    expect(collectTitleUserTexts(s.messages)).toEqual([]);
+    expect(isTitleSignalReady(s)).toBe(false);
+    expect(buildSnippetTitle(s.messages)).toBeNull();
+    const dialogue = buildTitlePrompt(s.messages).find((m) => m.role === 'user')!;
+    expect(dialogue.content).toBe('');
+  });
+
+  it('buildTitlePrompt keeps real user speech while dropping carriers', () => {
+    const prompt = buildTitlePrompt([
+      msg('user', '<turn_end id="t1"/>', { source: 'turnEnd' }),
+      msg('user', '帮我分析一下这个项目的依赖冲突应该怎么处理'),
+    ]);
+    const dialogue = prompt.find((m) => m.role === 'user')!;
+    expect(dialogue.content).toContain('依赖冲突');
+    expect(dialogue.content).not.toContain('turn_end');
+  });
+
+  it('schedule notify 便签（role=user + delivery:notify）不计用户发言', () => {
+    const s = sessionWith([
+      msg('user', '日程提醒：该做周报了', {
+        source: 'runtime',
+        origin: 'session_schedule',
+        delivery: 'notify',
+      }),
+    ]);
+    expect(collectTitleUserTexts(s.messages)).toEqual([]);
     expect(isTitleSignalReady(s)).toBe(false);
     expect(buildSnippetTitle(s.messages)).toBeNull();
   });
@@ -288,21 +363,21 @@ describe('maybeUpdateSessionTitle', () => {
       msg('user', '你好'),
       msg('assistant', '你好！'),
     ]);
-    const save = vi.fn(async () => {});
+    const patchMetadata = vi.fn(patchInto(session));
     const onTitleUpdated = vi.fn();
     const chat = vi.fn();
     const ok = await maybeUpdateSessionTitle('s1', {
       load: async () => session,
-      save,
+      patchMetadata,
       providers: new Map([['p', { chat, getModelInfo: () => undefined } as never]]),
       resolveFallback: () => ({ provider: { chat, getModelInfo: () => undefined } as never, model: 'mini' }),
       onTitleUpdated,
     });
     expect(ok).toBe(true);
     expect(chat).not.toHaveBeenCalled();
-    expect(session.meta.title).toBe('你好');
-    expect(session.meta.titleSource).toBe('snippet');
-    expect(onTitleUpdated).toHaveBeenCalledWith('s1', '你好', 'snippet');
+    expect(session.metadata.title).toBe('你好');
+    expect(session.metadata.titleSource).toBe('snippet');
+    expect(onTitleUpdated).toHaveBeenCalledWith('s1', '你好', 'snippet', 'default');
   });
 
   it('generates auto title when signal ready', async () => {
@@ -312,20 +387,20 @@ describe('maybeUpdateSessionTitle', () => {
     ]);
     const chat = vi.fn(async () => ({ content: '"会话标题自动生成方案"', model: 'mini', finishReason: 'stop' as const }));
     const provider = { chat, getModelInfo: () => undefined } as never;
-    const save = vi.fn(async () => {});
+    const patchMetadata = vi.fn(patchInto(session));
     const onTitleUpdated = vi.fn();
     const ok = await maybeUpdateSessionTitle('s1', {
       load: async () => session,
-      save,
+      patchMetadata,
       providers: new Map([['p', provider]]),
       resolveFallback: () => ({ provider, model: 'mini' }),
       onTitleUpdated,
     });
     expect(ok).toBe(true);
     expect(chat).toHaveBeenCalledOnce();
-    expect(session.meta.title).toBe('会话标题自动生成方案');
-    expect(session.meta.titleSource).toBe('auto');
-    expect(onTitleUpdated).toHaveBeenCalledWith('s1', '会话标题自动生成方案', 'auto');
+    expect(session.metadata.title).toBe('会话标题自动生成方案');
+    expect(session.metadata.titleSource).toBe('auto');
+    expect(onTitleUpdated).toHaveBeenCalledWith('s1', '会话标题自动生成方案', 'auto', 'default');
   });
 
   it('skips when user renamed', async () => {
@@ -333,16 +408,17 @@ describe('maybeUpdateSessionTitle', () => {
       [msg('user', '帮我写一个会话标题自动生成的设计方案，要求支持手动重命名')],
       { title: '我的标题', titleSource: 'user' },
     );
-    const save = vi.fn(async () => {});
+    const patchMetadata = vi.fn(patchInto(session));
     const ok = await maybeUpdateSessionTitle('s1', {
       load: async () => session,
-      save,
+      patchMetadata,
       providers: new Map(),
       resolveFallback: () => null,
       onTitleUpdated: vi.fn(),
     });
     expect(ok).toBe(false);
-    expect(save).not.toHaveBeenCalled();
+    expect(patchMetadata).not.toHaveBeenCalled();
+    expect(session.metadata.title).toBe('我的标题');
     expect(session.meta.title).toBe('我的标题');
   });
 
@@ -356,15 +432,15 @@ describe('maybeUpdateSessionTitle', () => {
     const provider = { chat, getModelInfo: () => undefined } as never;
     const ok = await maybeUpdateSessionTitle('s1', {
       load: async () => session,
-      save: async () => {},
+      patchMetadata: patchInto(session),
       providers: new Map([['p', provider]]),
       resolveFallback: () => ({ provider, model: 'mini' }),
       onTitleUpdated: vi.fn(),
     });
     expect(ok).toBe(true);
-    expect(session.meta.titleSource).toBe('snippet');
+    expect(session.metadata.titleSource).toBe('snippet');
     // 开场「帮我」被剥掉，snippet 落在事项上
-    expect(session.meta.title).toContain('写一个会话标题');
+    expect(String(session.metadata.title)).toContain('写一个会话标题');
   });
 
   it('upgrades greeting snippet to auto after later substantial turn', async () => {
@@ -383,8 +459,10 @@ describe('maybeUpdateSessionTitle', () => {
     const onTitleUpdated = vi.fn();
     const deps = {
       load: async () => store.current,
-      save: async (_id: string, data: SessionData) => {
-        store.current = data;
+      patchMetadata: async (_id: string, mutate: (m: Record<string, unknown>) => void) => {
+        const metadata = { ...store.current.metadata };
+        mutate(metadata);
+        store.current = { ...store.current, metadata };
       },
       providers: new Map([['p', provider]]),
       resolveFallback: () => ({ provider, model: 'mini' }),
@@ -393,8 +471,8 @@ describe('maybeUpdateSessionTitle', () => {
 
     // turn 1：仅打招呼 → snippet
     await maybeUpdateSessionTitle('s1', deps);
-    expect(store.current.meta.title).toBe('你好');
-    expect(store.current.meta.titleSource).toBe('snippet');
+    expect(store.current.metadata.title).toBe('你好');
+    expect(store.current.metadata.titleSource).toBe('snippet');
     expect(chat).not.toHaveBeenCalled();
 
     // turn 2：复杂提问 + 回复落盘
@@ -409,8 +487,8 @@ describe('maybeUpdateSessionTitle', () => {
 
     await maybeUpdateSessionTitle('s1', deps);
     expect(chat).toHaveBeenCalled();
-    expect(store.current.meta.title).toBe('二阶段交付核对');
-    expect(store.current.meta.titleSource).toBe('auto');
+    expect(store.current.metadata.title).toBe('二阶段交付核对');
+    expect(store.current.metadata.titleSource).toBe('auto');
   });
 
   it('upgrades greeting snippet even when model fails', async () => {
@@ -420,32 +498,80 @@ describe('maybeUpdateSessionTitle', () => {
       msg('user', '帮我核对二阶段场景上线收尾情况以及一阶段是否如期交付'),
       msg('assistant', '本地资料八月后断更…'),
     ]);
-    session.meta.title = '你好';
-    session.meta.titleSource = 'snippet';
+    session.metadata.title = '你好';
+    session.metadata.titleSource = 'snippet';
+    session.metadata.titleUpdatedAt = Date.now();
     const chat = vi.fn(async () => {
       throw new Error('model down');
     });
     const provider = { chat, getModelInfo: () => undefined } as never;
     const ok = await maybeUpdateSessionTitle('s1', {
       load: async () => session,
-      save: async () => {},
+      patchMetadata: patchInto(session),
       providers: new Map([['p', provider]]),
       resolveFallback: () => ({ provider, model: 'mini' }),
       onTitleUpdated: vi.fn(),
     });
     expect(ok).toBe(true);
-    expect(session.meta.title).not.toBe('你好');
-    expect(session.meta.titleSource).toBe('snippet');
+    expect(session.metadata.title).not.toBe('你好');
+    expect(session.metadata.titleSource).toBe('snippet');
+  });
+});
+
+describe('信封形态（f126dc9 真实数据）下的标题文本提取', () => {
+  it('snippet 从 turn_start 信封解包用户原文（不受 turn_context 噪声与信封形状误判）', () => {
+    // 开场客套「帮我」按 LEAD_IN 既有设计剥掉，snippet 落在事项上
+    const title = buildSnippetTitle([envelopeMsg('帮我核对二阶段场景上线收尾情况')]);
+    expect(title).toBe('核对二阶段场景上线收尾情况');
+  });
+
+  it('buildTitlePrompt 取 <user_message> 原文，不带信封/turn_context/记忆快照', () => {
+    const prompt = buildTitlePrompt([envelopeMsg('核对云锡二阶段交付')]);
+    const dialogue = prompt.find((m) => m.role === 'user')!;
+    expect(dialogue.content).toContain('核对云锡二阶段交付');
+    expect(dialogue.content).not.toContain('turn_start');
+    expect(dialogue.content).not.toContain('turn_context');
+    expect(dialogue.content).not.toContain('runtime_snapshot');
+  });
+
+  it('isTitleSignalReady 按用户原文长度而非信封长度（信封 boilerplate 不得放行寒暄）', () => {
+    expect(isTitleSignalReady(sessionWith([envelopeMsg('你好')]))).toBe(false);
+    expect(
+      isTitleSignalReady(sessionWith([envelopeMsg('帮我分析一下这个项目的依赖冲突应该怎么处理')])),
+    ).toBe(true);
+  });
+
+  it('信封形态端到端：snippet 兜底产出可读标题', async () => {
+    const session = sessionWith([envelopeMsg('帮我写一个会话标题自动生成的设计方案，要求支持手动重命名')]);
+    const chat = vi.fn(async () => {
+      throw new Error('model down');
+    });
+    const provider = { chat, getModelInfo: () => undefined } as never;
+    const ok = await maybeUpdateSessionTitle('s1', {
+      load: async () => session,
+      patchMetadata: patchInto(session),
+      providers: new Map([['p', provider]]),
+      resolveFallback: () => ({ provider, model: 'mini' }),
+      onTitleUpdated: vi.fn(),
+    });
+    expect(ok).toBe(true);
+    expect(session.metadata.titleSource).toBe('snippet');
+    expect(String(session.metadata.title)).toContain('写一个会话标题');
+    expect(String(session.metadata.title)).not.toContain('turn_start');
   });
 });
 
 describe('applyUserTitle', () => {
-  it('marks title as user-owned', () => {
+  it('marks title as user-owned (authority in metadata, meta is projection)', () => {
     const session = sessionWith([], { title: '旧', titleSource: 'auto' });
     const t = applyUserTitle(session, '  需求澄清  ');
     expect(t).toBe('需求澄清');
+    expect(session.metadata.title).toBe('需求澄清');
+    expect(session.metadata.titleSource).toBe('user');
+    expect(session.meta.title).toBe('需求澄清');
     expect(session.meta.titleSource).toBe('user');
     expect(shouldUpdateTitle(session.meta)).toBe(false);
+    expect(shouldUpdateTitle(readTitleState(session.metadata))).toBe(false);
   });
 
   it('rejects empty title', () => {
