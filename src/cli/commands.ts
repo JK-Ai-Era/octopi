@@ -7,7 +7,8 @@ import { fork } from 'node:child_process';
 import type { CliArgs } from './args.js';
 import { loadConfig } from '../config.js';
 import { initOctopi, getOctopiHome, isInitialized, formatInitReport } from '../init.js';
-import { readPidFile, writePidFile, removePidFile, isProcessAlive, ensureDaemonConfig, createProvider } from './daemon.js';
+import { readPidFile, writePidFile, removePidFile, isProcessAlive } from './daemon.js';
+import { createProviderFromConfig } from '@octopi-agent/engine/config.js';
 import { resolveGatewayUrl } from './helpers.js';
 
 export function showHelp(): void {
@@ -171,14 +172,13 @@ export async function healthCommand(args: CliArgs): Promise<void> {
 
   console.log('\n🏥 Health Check\n');
   for (const [providerName, providerCfg] of Object.entries(config.models?.providers ?? {})) {
-    const provider = createProvider(providerName, providerCfg);
-    if (provider) {
-      try {
-        const available = await provider.isAvailable();
-        console.log(`  ${providerName}: ${available ? '✅ OK' : '❌ FAIL'}`);
-      } catch {
-        console.log(`  ${providerName}: ❌ FAIL`);
-      }
+    try {
+      // 构造（含动态 import）与体检同置 try：单个 provider 失败只打 FAIL，不中断整轮体检
+      const provider = await createProviderFromConfig(providerName, providerCfg);
+      const available = await provider.isAvailable();
+      console.log(`  ${providerName}: ${available ? '✅ OK' : '❌ FAIL'}`);
+    } catch {
+      console.log(`  ${providerName}: ❌ FAIL`);
     }
   }
   console.log();

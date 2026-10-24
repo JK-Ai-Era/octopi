@@ -1357,8 +1357,8 @@ function timingReqSize(request: {
  * @param inner - 真实 provider
  * @returns 透传装饰器
  */
-// [timing probe] 临时导出供 CLI daemon 的第二处 provider 工厂复用（诊断后随探针一起收）
-export function withTimingProbe(inner: ModelProvider): ModelProvider {
+// [timing probe] 内部装饰器（F3-c 随探针转正退役）
+function withTimingProbe(inner: ModelProvider): ModelProvider {
   return {
     name: inner.name,
     defaultModel: inner.defaultModel,
@@ -1466,7 +1466,9 @@ export async function createProviderFromConfig(
 
   let decorate: (inner: ModelProvider) => ModelProvider = withTimingProbe;
   if (options?.wireDump) {
-    // 仅诊断路径才加载 wire dump（fs/crypto 不进入常规 provider 创建）
+    // 仅诊断路径才加载 wire dump（fs/crypto 不进入常规 provider 创建）。
+    // 装饰顺序必须是 probe(dump(real))：dump 需贴在真实 provider 上才能拿到 `wireBodyFor`
+    //（探针只转发固定成员）；也因此开启 dump 时探针的 dur 会包含 body 序列化/哈希的几毫秒。
     const { withWireDump } = await import('./integration/providers/wire-dump.js');
     const sink = options.wireDump;
     decorate = (inner: ModelProvider) => withTimingProbe(withWireDump(inner, sink));

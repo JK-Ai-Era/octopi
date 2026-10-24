@@ -18,14 +18,10 @@ import type { CliArgs } from './args.js';
 import { getOctopiHome, isInitialized, initOctopi, formatInitReport } from '../init.js';
 import { loadConfig, toGatewayConfig } from '../config.js';
 import { createToolSet } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/tools/tool-set.js';
-import { createWireDumpSinkFromConfig, withTimingProbe, type ModelProviderConfig } from '@octopi-agent/engine/config.js';
-import type { ModelProvider } from '@octopi-agent/core/interfaces/model-provider.js';
-import { OpenAIProvider } from '@octopi-agent/engine/integration/providers/openai.js';
-import { AnthropicProvider } from '@octopi-agent/engine/integration/providers/anthropic.js';
-import {
-  withWireDump,
-  type WireDumpConfig,
-  type WireDumpSink,
+import { createProviderFromConfig, createWireDumpSinkFromConfig } from '@octopi-agent/engine/config.js';
+import type {
+  WireDumpConfig,
+  WireDumpSink,
 } from '@octopi-agent/engine/integration/providers/wire-dump.js';
 import { Gateway } from '@octopi-agent/gateway/gateway/gateway.js';
 import { webuiStartCommand, webuiStopCommand } from './webui.js';
@@ -370,43 +366,6 @@ export function diagnoseStartupFailure(opts: {
   lines.push(`Full log: ${logPath}`);
   lines.push(`Foreground debug: octopi serve fg${configPath ? ` -c ${configPath}` : ''}`);
   return lines;
-}
-
-export function createProvider(
-  name: string,
-  cfg: ModelProviderConfig,
-  wireDump?: WireDumpSink,
-): ModelProvider | null {
-  const apiType = cfg.api === 'anthropic-messages' ? 'anthropic' : 'openai';
-  const models = cfg.models.map((m) => ({
-    name: m.name ?? m.id,
-    contextWindow: m.contextWindow,
-    maxOutputTokens: m.maxTokens,
-  }));
-
-  // [timing probe] 计时装饰器（诊断后随探针一起收）。顺序必须是 probe(dump(real))：
-  // dump 需要贴在真实 provider 上才能拿到 `wireBodyFor`（探针只转发固定成员）；
-  // 也因此开启 dump 时探针的 dur 会包含 body 序列化/哈希的那几毫秒。
-  const decorate = (inner: ModelProvider): ModelProvider =>
-    withTimingProbe(wireDump ? withWireDump(inner, wireDump) : inner);
-
-  if (apiType === 'anthropic') {
-    return decorate(new AnthropicProvider({
-      name,
-      apiKey: cfg.apiKey,
-      baseUrl: cfg.baseUrl,
-      models,
-      timeoutMs: cfg.timeoutSeconds ? cfg.timeoutSeconds * 1000 : undefined,
-    }));
-  }
-
-  return decorate(new OpenAIProvider({
-    name,
-    apiKey: cfg.apiKey,
-    baseUrl: cfg.baseUrl,
-    models,
-    timeoutMs: cfg.timeoutSeconds ? cfg.timeoutSeconds * 1000 : undefined,
-  }));
 }
 
 /**
@@ -838,11 +797,9 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
   const wireDump = await createWireDumpFromConfig(config);
 
   for (const [providerName, providerCfg] of Object.entries(config.models?.providers ?? {})) {
-    const provider = createProvider(providerName, providerCfg, wireDump);
-    if (provider) {
-      gateway.registerProvider(provider);
-      console.log(`[CLI] Registered provider: ${providerName} (${providerCfg.api})`);
-    }
+    const provider = await createProviderFromConfig(providerName, providerCfg, { wireDump });
+    gateway.registerProvider(provider);
+    console.log(`[CLI] Registered provider: ${providerName} (${providerCfg.api})`);
   }
 
   // memory 工具不在 Gateway 全局注册：AgentBuilder.build() 按各 agent 的 MemoryStore
@@ -875,11 +832,9 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
     const providerMap = new Map<string, import('@octopi-agent/core/interfaces/model-provider.js').ModelProvider>();
     let fallback: import('@octopi-agent/core/interfaces/model-provider.js').ModelProvider | undefined;
     for (const [providerName, providerCfg] of Object.entries(config.models?.providers ?? {})) {
-      const provider = createProvider(providerName, providerCfg, wireDump);
-      if (provider) {
-        providerMap.set(providerName, provider);
-        fallback = fallback ?? provider;
-      }
+      const provider = await createProviderFromConfig(providerName, providerCfg, { wireDump });
+      providerMap.set(providerName, provider);
+      fallback = fallback ?? provider;
     }
     if (fallback) {
       const summaryCfg = config.summary;

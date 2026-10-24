@@ -1,3 +1,16 @@
+## v0.89.7
+
+### refactor(cli): 统一双 provider 工厂到 createProviderFromConfig（F3-a）
+
+F3（`[timing]` 探针转正，规格 `arch/f3-timing-regularization.md`）第一批：删除 `src/cli/daemon.ts` 的第二套 provider 工厂 `createProvider`（同步、静态 import、不传 `defaultModel`），三处调用点（serve 注册 ×2、`octopi health`）改用组合根唯一的 `createProviderFromConfig`（`packages/engine/src/config.ts`）。wire dump 装饰链（probe → dump → real）从此只剩一份实现，daemon 侧被迫维护的「顺序必须是 probe(dump(real))」注释迁至统一工厂处。
+
+- **行为等价（独立评审逐条核对）**：`defaultModel` 差异是「显式传 `models[0].name ?? models[0].id` vs 构造器 `models[0]` 回退」，取值相同；models 映射 / timeout / 装饰链同构。新增 `tests/provider-factory-default-model.test.ts` 锚定此等价性（core loop 每次调用显式透传 `model.defaultModel`，漂移即路由错模型）。
+- **顺手修（评审 P3）**：`octopi health` 的 provider 构造（动态 import 新增的失败面）包进 try——单个失败打 `❌ FAIL`，不再中断整轮体检；`withTimingProbe` 收回模块内部（daemon 复用点已消失）；`commands.ts` 清掉未使用的 `ensureDaemonConfig` import。
+
+**验证**：`npm run build` 绿；新锚点测试 3 过 + `config-gateway-effect-policy` 6 过；eslint 触碰文件全绿；`tests/cli-serve-preflight` 唯一失败为既有 `getProcessName/ps` 沙箱固有限制（HEAD 干净树复跑同败，与本 diff 无因果）。
+
+---
+
 ## v0.89.6
 
 ### feat(engine): purpose 说明文案全局化（方案 S）+ file_search 描述去重
