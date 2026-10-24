@@ -100,6 +100,17 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.90.7 (2026-10-25)
+
+### chore(release): tag-per-commit rule + `.mailmap` identity normalization
+
+- **AGENTS.md 规则修正（tag 断档根因）**：`git tag v<X.Y.Z>` 从手动「Tag / publish」桶移入内容提交清单第 5 步——tag 归提交流程、不归发布流程（每版本必留锚点，发不发另说）；新增「Tag push」小节；publish 保持用户手动。
+- **`scripts/release.mjs` 同因同修**：release:prep 的 Next 提示原来同样教「tag 留到发布时」，与 AGENTS.md 一并改为「提交后立即打 tag」。
+- **`.mailmap`（OP-REL-2 选 B）**：318 条 `jk@…Mac-mini.local` 提交显示归一到 `JamesKwok <zqguo@qq.com>`（522/522 统一）；不改写历史，npm `gitHead` 追溯线完好。
+- **tag 补齐（OP-REL-1）**：补打 109 枚 lightweight tag（v0.70.8–v0.90.6，逐版本取引入提交）；`v0.86.38` 与 npm `gitHead`（`8cb26b34…`）逐字一致验证通过。
+
+---
+
 ## v0.90.6 (2026-10-24)
 
 ### docs(changelog): CHANGELOG 拆分归档——主文件只留索引与进行中 minor，338 条历史按 minor 迁入 `changelog/`

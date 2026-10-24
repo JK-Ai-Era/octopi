@@ -254,11 +254,13 @@ Version format is `X.Y.Z` (semantic versioning), updated as follows:
 2. Run `npm run release:prep -- <X.Y.Z>` (skip only if that version is already set on all five packages).
 3. Prepend a `## v<X.Y.Z> (YYYY-MM-DD)` section to `CHANGELOG.md` per **Changelog Discipline** (directly below the index table).
 4. Commit code + version files + CHANGELOG together.
+5. Tag the commit right away: `git tag v<X.Y.Z>` (if not already tagged). **Tagging belongs to the commit flow, not the release flow** — every version leaves a tag anchor whether or not it is ever published.
 
-**Tag / publish are separate** (do them when cutting a release or when the user asks):
+**Tag push** (batch, or when the user asks): `git push --tags` (or `git push --follow-tags` with the normal push). Tags are local until pushed; push them so GitHub Releases, other machines, and `git checkout vX.Y.Z` see the same anchors.
 
-1. `git tag v<X.Y.Z>` (if not already tagged for that version)
-2. Publish in dependency order (`node scripts/release.mjs print`): `core` → `engine` → `gateway` → `webui` → `octopi-agent`
+**Publish is separate and user-driven** (only when the user asks or when cutting a release):
+
+- Publish in dependency order (`node scripts/release.mjs print`): `core` → `engine` → `gateway` → `webui` → `octopi-agent`
 
 ### Changelog Discipline
 
