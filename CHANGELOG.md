@@ -100,6 +100,17 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.90.8 (2026-10-25)
+
+### fix(knowledge): purge 别名形态漏删——Membership 按真实文件身份匹配
+
+- **实证（C2′ 定向测试命中）**：purge 走 symlink / `/private/var` 别名形态后 `search` 仍命中——症状与 C2′ 原始疑点「purge 后 search 仍命中 1」逐字吻合；根因=Membership 匹配只认字面字符串，无真实文件身份判定。
+- **修复**：`file-identity.realIdentitySync`（realpath 归一身份键；相对路径拒绝按 cwd 猜身份）；`index-store` 单文件/子树解绑按真实身份匹配（字面快路径不变，别名才走 realpath 比对），`purgePath` 对实际命中的存储字面清 hit log。**大小写=不同身份，不 fold**（防大小写敏感平台误删他人文件）。
+- **验证**：定向 2 用例 + knowledge 全套 15/15 绿；lint + typecheck 绿。
+- **派生 D10**（open-problems）：`PurgeResult.purged` 恒 `true` 无实据，待收口。
+
+---
+
 ## v0.90.7 (2026-10-25)
 
 ### chore(release): tag-per-commit rule + `.mailmap` identity normalization

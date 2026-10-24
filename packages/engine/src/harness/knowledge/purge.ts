@@ -27,8 +27,10 @@ export class KnowledgePurger {
    * 单文件 purge（合规 / 用户要求抹掉）
    */
   purgePath(sourceId: string, path: string): PurgeResult {
-    this.index.purgePath(sourceId, path);
+    const matched = this.index.purgePath(sourceId, path);
     this.hits.clearForPath(sourceId, path);
+    // 别名形态命中的存储字面也要清痕（query 字面可能与存储字面不同）；clear 幂等
+    for (const stored of matched) this.hits.clearForPath(sourceId, stored);
     const describeStale = this.markDescribeStale(sourceId);
     return { sourceId, path, purged: true, describeStale };
   }

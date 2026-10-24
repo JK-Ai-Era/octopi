@@ -18,7 +18,7 @@ import { toVecBlob } from '../memory/sqlite/sqlite-vec.js';
 import { asChunkId, asSourceId } from './types.js';
 import type { KnowledgeChunkId, KnowledgeSourceId } from './types.js';
 import type { KnowledgeChunkDraft } from './adapters.js';
-import { normalizePathLexical } from './file-identity.js';
+import { normalizePathLexical, realIdentitySync } from './file-identity.js';
 
 const EMBEDDABLE_WHERE =
   "(f.adapter_id IS NULL OR f.adapter_id NOT IN ('code-tree'))";
@@ -694,51 +694,108 @@ export class KnowledgeIndexStore {
     return out;
   }
 
-  /** 解绑 path；File 仅在零认领时 purge（单文件同步语义，供测试/轻量路径） */
-  removeFile(sourceId: KnowledgeSourceId | string, path: string): void {
-    const logical = path.replace(/\\/g, '/');
-    const row = this.db.raw
+  /**
+   * Membership 视图解析：query 的 logical 形态 → 该真实文件在本 source 下的全部 logical_path。
+   * 快路径字面命中；未命中再按真实文件身份（realpath）比对——symlink / `/var`↔`/private/var`
+   * 别名视为同一 path（合规 purge 不得因路径形态不同而漏删）。
+   *
+   * @param sourceId - 源 id
+   * @param logical - 查询路径（已 slash 归一）
+   * @returns 命中的存储字面 logical_path 列表（可能含多种拼写形态）
+   */
+  private resolveMembershipPaths(sourceId: string, logical: string): string[] {
+    const exact = this.db.raw
       .prepare(
-        `SELECT file_id FROM knowledge_memberships WHERE source_id = ? AND logical_path = ?`,
+        `SELECT logical_path FROM knowledge_memberships WHERE source_id = ? AND logical_path = ?`,
       )
-      .get(String(sourceId), logical) as { file_id: string } | undefined;
-    this.db.raw
-      .prepare('DELETE FROM knowledge_memberships WHERE source_id = ? AND logical_path = ?')
-      .run(String(sourceId), logical);
-    if (!row) return;
-    const n = (
+      .all(sourceId, logical) as Array<{ logical_path: string }>;
+    if (exact.length > 0) return [...new Set(exact.map((r) => r.logical_path))];
+    const queryReal = realIdentitySync(logical);
+    if (queryReal === null) return [];
+    const rows = this.db.raw
+      .prepare('SELECT DISTINCT logical_path FROM knowledge_memberships WHERE source_id = ?')
+      .all(sourceId) as Array<{ logical_path: string }>;
+    const cache = new Map<string, string | null>();
+    return rows
+      .filter((r) => {
+        let id = cache.get(r.logical_path);
+        if (id === undefined) {
+          id = realIdentitySync(r.logical_path);
+          cache.set(r.logical_path, id);
+        }
+        return id !== null && id === queryReal;
+      })
+      .map((r) => r.logical_path);
+  }
+
+  /**
+   * 解绑 path；File 仅在零认领时 purge（单文件同步语义，供测试/轻量路径）。
+   * 按真实文件身份匹配（见 resolveMembershipPaths）。
+   *
+   * @returns 实际解绑的存储字面 logical_path（供 hit log 按真实字面清痕）
+   */
+  removeFile(sourceId: KnowledgeSourceId | string, path: string): string[] {
+    const logical = path.replace(/\\/g, '/');
+    const matched = this.resolveMembershipPaths(String(sourceId), logical);
+    if (matched.length === 0) return [];
+    const fileIds = new Set<string>();
+    for (const stored of matched) {
+      const row = this.db.raw
+        .prepare(
+          `SELECT file_id FROM knowledge_memberships WHERE source_id = ? AND logical_path = ?`,
+        )
+        .get(String(sourceId), stored) as { file_id: string } | undefined;
+      if (row) fileIds.add(row.file_id);
       this.db.raw
-        .prepare('SELECT COUNT(*) AS n FROM knowledge_memberships WHERE file_id = ?')
-        .get(row.file_id) as { n: number }
-    ).n;
-    if (n === 0) this.purgeFileRow(row.file_id);
+        .prepare('DELETE FROM knowledge_memberships WHERE source_id = ? AND logical_path = ?')
+        .run(String(sourceId), stored);
+    }
+    for (const fileId of fileIds) {
+      const n = (
+        this.db.raw
+          .prepare('SELECT COUNT(*) AS n FROM knowledge_memberships WHERE file_id = ?')
+          .get(fileId) as { n: number }
+      ).n;
+      if (n === 0) this.purgeFileRow(fileId);
+    }
+    return matched;
   }
 
   /**
    * 解绑 path + 可能的 purge（异步让出）。
    * 单文件 purge 也可能删数千 chunk——必须让出，否则 Engine 调度不了 HTTP 回包。
+   *
+   * @returns 实际解绑的存储字面 logical_path（供 hit log 按真实字面清痕）
    */
   async removeFileAsync(
     sourceId: KnowledgeSourceId | string,
     path: string,
     opts?: { yieldEvery?: number },
-  ): Promise<void> {
+  ): Promise<string[]> {
     const logical = path.replace(/\\/g, '/');
-    const row = this.db.raw
-      .prepare(
-        `SELECT file_id FROM knowledge_memberships WHERE source_id = ? AND logical_path = ?`,
-      )
-      .get(String(sourceId), logical) as { file_id: string } | undefined;
-    this.db.raw
-      .prepare('DELETE FROM knowledge_memberships WHERE source_id = ? AND logical_path = ?')
-      .run(String(sourceId), logical);
-    if (!row) return;
-    const n = (
+    const matched = this.resolveMembershipPaths(String(sourceId), logical);
+    if (matched.length === 0) return [];
+    const fileIds = new Set<string>();
+    for (const stored of matched) {
+      const row = this.db.raw
+        .prepare(
+          `SELECT file_id FROM knowledge_memberships WHERE source_id = ? AND logical_path = ?`,
+        )
+        .get(String(sourceId), stored) as { file_id: string } | undefined;
+      if (row) fileIds.add(row.file_id);
       this.db.raw
-        .prepare('SELECT COUNT(*) AS n FROM knowledge_memberships WHERE file_id = ?')
-        .get(row.file_id) as { n: number }
-    ).n;
-    if (n === 0) await this.purgeFileRowAsync(row.file_id, opts);
+        .prepare('DELETE FROM knowledge_memberships WHERE source_id = ? AND logical_path = ?')
+        .run(String(sourceId), stored);
+    }
+    for (const fileId of fileIds) {
+      const n = (
+        this.db.raw
+          .prepare('SELECT COUNT(*) AS n FROM knowledge_memberships WHERE file_id = ?')
+          .get(fileId) as { n: number }
+      ).n;
+      if (n === 0) await this.purgeFileRowAsync(fileId, opts);
+    }
+    return matched;
   }
 
   /**
@@ -767,6 +824,40 @@ export class KnowledgeIndexStore {
   }
 
   /**
+   * 子树成员收集：前缀 SQL 命中 ∪ 真实身份落在子树内的别名形态
+   * （防 `/var`↔`/private/var`、symlink 前缀漏删）。
+   *
+   * @param sourceId - 源 id
+   * @param prefix - 子树前缀（已 slash 归一、去尾斜杠）
+   * @returns 命中的存储字面 logical_path 列表（去重）
+   */
+  private collectTreeMembershipPaths(sourceId: string, prefix: string): string[] {
+    const rows = this.db.raw
+      .prepare(
+        `SELECT logical_path FROM knowledge_memberships
+         WHERE source_id = ? AND (logical_path = ? OR logical_path LIKE ? ESCAPE '\\')`,
+      )
+      .all(String(sourceId), prefix, `${prefix.replace(/[\\%_]/g, (c) => `\\${c}`)}/%`) as Array<{
+      logical_path: string;
+    }>;
+    const found = new Set(rows.map((r) => r.logical_path));
+    const prefixReal = realIdentitySync(prefix);
+    if (prefixReal !== null) {
+      const all = this.db.raw
+        .prepare('SELECT DISTINCT logical_path FROM knowledge_memberships WHERE source_id = ?')
+        .all(String(sourceId)) as Array<{ logical_path: string }>;
+      for (const r of all) {
+        if (found.has(r.logical_path)) continue;
+        const id = realIdentitySync(r.logical_path);
+        if (id !== null && (id === prefixReal || id.startsWith(`${prefixReal}/`))) {
+          found.add(r.logical_path);
+        }
+      }
+    }
+    return [...found];
+  }
+
+  /**
    * 删除 path 及子树：先收集 logical_path，再分批异步解绑 + purge。
    */
   async removePathTreeAsync(
@@ -775,32 +866,14 @@ export class KnowledgeIndexStore {
     opts?: { yieldEvery?: number },
   ): Promise<number> {
     const prefix = path.replace(/\\/g, '/').replace(/\/+$/, '');
-    const rows = this.db.raw
-      .prepare(
-        `SELECT logical_path FROM knowledge_memberships
-         WHERE source_id = ? AND (logical_path = ? OR logical_path LIKE ? ESCAPE '\\')`,
-      )
-      .all(String(sourceId), prefix, `${prefix.replace(/[\\%_]/g, (c) => `\\${c}`)}/%`) as Array<{
-      logical_path: string;
-    }>;
-    return this.removeFilesAsync(
-      sourceId,
-      rows.map((r) => r.logical_path),
-      opts,
-    );
+    return this.removeFilesAsync(sourceId, this.collectTreeMembershipPaths(String(sourceId), prefix), opts);
   }
 
   removePathTree(sourceId: KnowledgeSourceId | string, path: string): void {
     const prefix = path.replace(/\\/g, '/').replace(/\/+$/, '');
-    const rows = this.db.raw
-      .prepare(
-        `SELECT logical_path FROM knowledge_memberships
-         WHERE source_id = ? AND (logical_path = ? OR logical_path LIKE ? ESCAPE '\\')`,
-      )
-      .all(String(sourceId), prefix, `${prefix.replace(/[\\%_]/g, (c) => `\\${c}`)}/%`) as Array<{
-      logical_path: string;
-    }>;
-    for (const r of rows) this.removeFile(sourceId, r.logical_path);
+    for (const stored of this.collectTreeMembershipPaths(String(sourceId), prefix)) {
+      this.removeFile(sourceId, stored);
+    }
   }
 
   /**
@@ -853,8 +926,9 @@ export class KnowledgeIndexStore {
     }
   }
 
-  purgePath(sourceId: KnowledgeSourceId | string, path: string): void {
-    this.removeFile(sourceId, path);
+  /** 单文件 purge：透传真实身份匹配到的存储字面（供 hit log 清痕） */
+  purgePath(sourceId: KnowledgeSourceId | string, path: string): string[] {
+    return this.removeFile(sourceId, path);
   }
 
   /** 按 fileId 物理删除（membership 已清） */

@@ -7,6 +7,7 @@
 
 import { stat } from 'node:fs/promises';
 import { realpath } from 'node:fs/promises';
+import { realpathSync } from 'node:fs';
 import path from 'node:path';
 
 export type FileIdentityKind = 'unix' | 'win' | 'path' | 'url' | 'connector';
@@ -85,6 +86,29 @@ export async function normalizeFsPath(input: string): Promise<string> {
     return normalizePathLexical(real);
   } catch {
     return lexical;
+  }
+}
+
+/**
+ * 真实文件身份键（同步）：realpath 归一（解析 symlink 与 `/var`↔`/private/var` 等平台别名）。
+ * 供 Membership 匹配层做「同一真实文件」判定，勿按 cwd 猜身份。
+ *
+ * @param input - 路径（词法归一后必须是绝对路径）
+ * @returns realpath 归一形态；相对路径或盘上不存在时返回 null（此时调用方只信词法形态）
+ */
+export function realIdentitySync(input: string): string | null {
+  let lexical: string;
+  try {
+    lexical = normalizePathLexical(input);
+  } catch {
+    // 相对路径：拒绝按 cwd 解析（会把「old.md」猜成无关文件的身份）
+    return null;
+  }
+  try {
+    return normalizePathLexical(realpathSync(lexical));
+  } catch {
+    // 盘上不存在（已删文件/合成路径）：无别名可解析
+    return null;
   }
 }
 

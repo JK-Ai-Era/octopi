@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, afterEach } from 'vitest';
-import { mkdtemp, writeFile, mkdir, rm } from 'node:fs/promises';
+import { mkdtemp, writeFile, mkdir, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { KnowledgeSourceStore } from '@octopi-agent/engine/harness/knowledge/source-store.js';
@@ -117,6 +117,38 @@ describe('KnowledgeHitLog + purge + promotion', () => {
     ).toBe(0);
     expect(ctx.hits.stats().total).toBe(0);
     expect(ctx.store.get(ctx.srcId)?.generatedDescription).toBeUndefined();
+  });
+
+  it('C2′ 定向：purge 走别名路径（symlink/realpath 形态）不得漏删', async () => {
+    ctx = await setup();
+    // 别名前提：alias/old.md 与 docs/old.md 是同一真实文件，但路径串不同
+    await symlink(join(ctx.root, 'docs'), join(ctx.root, 'alias'), 'dir');
+    const aliasPath = join(ctx.root, 'alias', 'old.md');
+    const storedPath = join(ctx.root, 'docs', 'old.md');
+    expect(aliasPath).not.toBe(storedPath);
+
+    ctx.hits.record({
+      sourceId: ctx.srcId,
+      path: storedPath,
+      query: 'secret',
+      sessionId: 's1',
+    });
+
+    // 合规抹除按「真实文件身份」匹配：别名形态 purge 不得漏删内容与 hit 痕迹
+    ctx.purger.purgePath(ctx.srcId, aliasPath);
+    expect(
+      ctx.ingest.indexStore.search('secret-to-purge', { sourceIds: [ctx.srcId] }).length,
+    ).toBe(0);
+    expect(ctx.hits.stats().total).toBe(0);
+  });
+
+  it('C2′ 定向：大小写变体是不同身份（不做 case-fold，防大小写敏感平台误删他人文件）', async () => {
+    ctx = await setup();
+    // 精确身份语义：case 变体不命中该 path（Linux 上二者是真不同文件，fold 会误删）
+    ctx.purger.purgePath(ctx.srcId, join(ctx.root, 'docs', 'OLD.md'));
+    expect(
+      ctx.ingest.indexStore.search('secret-to-purge', { sourceIds: [ctx.srcId] }).length,
+    ).toBeGreaterThan(0);
   });
 
   it('purgeSource 清空整源 index', async () => {
