@@ -49,6 +49,9 @@ const DEFAULT_CONFIG: TraceLoggerConfig = {
   sync: false,
 };
 
+/** 进程内 trace 文件序号（同毫秒多实例防撞） */
+let fileSeq = 0;
+
 /**
  * TraceLogger
  */
@@ -66,28 +69,37 @@ export class TraceLogger {
     // 初始化导出器
     this.exporters = config?.exporters ?? [];
 
-    // 初始化文件输出（兼容旧的 outputDir 模式）
+    // 初始化文件输出（兼容旧的 outputDir 模式）。失败 fail-open：观测绝不影响业务构建
     if (this.config.outputDir) {
       const dir = this.config.outputDir;
-      if (!existsSync(dir)) {
-        mkdirSync(dir, { recursive: true });
+      try {
+        if (!existsSync(dir)) {
+          mkdirSync(dir, { recursive: true });
+        }
+
+        // 文件名唯一化：毫秒时间戳 + pid + 进程内序号（同秒多 agent / 多实例不共写一个文件）
+        const ts = new Date().toISOString().replace(/[:.]/g, '-');
+        const prefix = this.config.filePrefix ?? 'trace';
+        this.filePath = join(dir, `${prefix}-${ts}-${process.pid}-${++fileSeq}.jsonl`);
+
+        // 写入 trace 头部
+        this.writeToFile({
+          ts: this.startTime,
+          level: TraceLevel.INFO,
+          type: 'trace.start',
+          data: {
+            level: TRACE_LEVEL_NAMES[this.config.level],
+            outputDir: this.config.outputDir,
+            filePath: this.filePath,
+          },
+        });
+      } catch (err) {
+        // 目录不可用（非法路径/只读）：禁用文件通道并告警一次；writeToFile 的空 catch 是写期瞬时失败兜底
+        this.filePath = undefined;
+        console.warn(
+          `[observability] trace file output disabled (${dir}): ${err instanceof Error ? err.message : String(err)}`,
+        );
       }
-
-      const ts = new Date().toISOString().replace(/[:.]/g, '-').substring(0, 19);
-      const prefix = this.config.filePrefix ?? 'trace';
-      this.filePath = join(dir, `${prefix}-${ts}.jsonl`);
-
-      // 写入 trace 头部
-      this.writeToFile({
-        ts: this.startTime,
-        level: TraceLevel.INFO,
-        type: 'trace.start',
-        data: {
-          level: TRACE_LEVEL_NAMES[this.config.level],
-          outputDir: this.config.outputDir,
-          filePath: this.filePath,
-        },
-      });
     }
   }
 

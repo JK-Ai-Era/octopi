@@ -154,6 +154,9 @@ export class TraceCollector {
 
       case 'model.call.end':
         this.logger.info(TRACE_EVENTS.MODEL_CALL_END, {
+          model: event.data?.model,
+          // durationMs 是 F3 回归指标口径（long-session-latency §7）：白名单漏掉即断档
+          durationMs: event.data?.durationMs,
           contentLength: (event.data?.content as string)?.length ?? 0,
           toolCallCount: event.data?.toolCallCount ?? 0,
           usage: event.data?.usage,

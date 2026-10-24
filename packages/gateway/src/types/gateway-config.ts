@@ -42,12 +42,8 @@ export interface GatewayConfig {
     maxBytes?: number;
     maxReleasesPerSession?: number;
   };
-  trace?: {
-    outputDir?: string;
-    level?: 'ERROR' | 'WARN' | 'INFO' | 'DEBUG' | 'TRACE';
-    captureToolArgs?: boolean;
-    captureToolResults?: boolean;
-  };
+  /** 可观测性（trace 落盘 / 采集意图）；与 config-bridge 同源，接线见 engine `wireObservability` */
+  observability?: import('@octopi-agent/engine/config.js').HarnessConfig['observability'];
   /** 模型调用空闲超时（chunk 间最大静默，含首 token 等待），毫秒 */
   modelCallIdleTimeoutMs?: number;
   /** 模型调用绝对超时（单次调用总时长上限），毫秒 */

@@ -4593,6 +4593,10 @@ export class Gateway {
       .store(this.store)
       .events(this.gatewayBus);
 
+    // F3/D5：observability 配置 → 观测装配（trace 落盘 + 采集意图）
+    const { wireObservability } = await import('@octopi-agent/engine/config.js');
+    await wireObservability(builder, this.config.observability, { filePrefix: agent.id });
+
     const { existsSync } = await import('node:fs');
     const { join } = await import('node:path');
     const { getOctopiHome } = await import('@octopi-agent/engine/paths.js');
@@ -5020,16 +5024,6 @@ export class Gateway {
       result[name] = cb.snapshot();
     }
     return result;
-  }
-
-  /**
-   * 解析 trace 日志级别串为数字
-   */
-  private parseTraceLevel(level: string): number {
-    const levels: Record<string, number> = {
-      'ERROR': 1, 'WARN': 2, 'INFO': 3, 'DEBUG': 4, 'TRACE': 5,
-    };
-    return levels[level.toUpperCase()] ?? 3;
   }
 }
 

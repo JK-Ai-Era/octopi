@@ -1482,3 +1482,67 @@ export async function createProviderFromConfig(
   const { OpenAIProvider } = await import('./integration/providers/openai.js');
   return decorate(new OpenAIProvider({ name, apiKey: pc.apiKey, baseUrl: pc.baseUrl, models, defaultModel, timeoutMs: pc.timeoutSeconds ? pc.timeoutSeconds * 1000 : undefined }));
 }
+
+/**
+ * 按 `observability` 配置构造 RunTelemetry 工厂（F3/D5 接线，组合根）
+ *
+ * TraceCollector → TraceLogger 按 `outputDir` 逐条同步落 JSONL（即 `traceDir`，无缓冲丢失风险）；
+ * `level` / `consoleLevel` 与配置的 0–5 数值同构（FATAL=0 … TRACE=5，schema 已校验范围）。
+ * `consoleLevel` 缺省 null：trace 走文件通道，不向 gateway.log 混入控制台副本（要副本显式配置）。
+ *
+ * @param cfg - `observability` 配置段（level / consoleLevel / traceDir / capture*）
+ * @param options - 可选：trace 文件名前缀（多 agent 归属标识）
+ * @returns RunTelemetry 工厂（供 `AgentBuilder.telemetryFactory()` 注入）
+ */
+export async function createTelemetryFactoryFromConfig(
+  cfg: NonNullable<HarnessConfig['observability']>,
+  options?: { filePrefix?: string },
+): Promise<import('./harness/observability/run-telemetry.js').RunTelemetryFactory> {
+  const { createRunTelemetry } = await import('./integration/observability/run-telemetry.js');
+  const { TraceCollector } = await import('./integration/observability/trace-collector.js');
+  type TraceLevel = import('./integration/observability/trace-events.js').TraceLevel;
+  // 配置 0–5 与 TraceLevel 数值同构；schema 保证 0-5 整数
+  const level = (cfg.level ?? 3) as TraceLevel;
+  const consoleLevel = (cfg.consoleLevel ?? null) as TraceLevel | null;
+  // 前缀进文件名：非法字符替换，防 agentId 越界成路径
+  const filePrefix = options?.filePrefix?.replace(/[^\w.-]/g, '_');
+  return (traceOptions) =>
+    createRunTelemetry({
+      ...traceOptions,
+      collector: new TraceCollector({
+        ...traceOptions,
+        level,
+        consoleLevel,
+        outputDir: cfg.traceDir ?? null,
+        ...(filePrefix ? { filePrefix } : {}),
+      }),
+    });
+}
+
+/**
+ * 按 `observability` 配置接线 AgentBuilder 观测装配（F3/D5）
+ *
+ * - 落盘：`traceDir / level / consoleLevel` → TraceCollector → JSONL
+ * - 采集意图：`captureStreamDeltas / captureModelRequest` → `AgentBuilder.trace()`
+ * - 工厂显式注入，不依赖包入口 `setRunTelemetryFactory` 副作用
+ *   （serve / 子路径 import 时该副作用未必执行过，不能拿它当接线）
+ *
+ * @param builder - 目标 builder（`build()` 之前调用）
+ * @param cfg - `observability` 配置段；缺省时不做任何事
+ * @param options - 可选：trace 文件名前缀（一般传 agentId）
+ */
+export async function wireObservability(
+  builder: import('./harness/agent/builder.js').AgentBuilder,
+  cfg: HarnessConfig['observability'] | undefined,
+  options?: { filePrefix?: string },
+): Promise<void> {
+  if (!cfg) return;
+  builder.telemetryFactory(await createTelemetryFactoryFromConfig(cfg, options));
+  builder.trace({
+    captureStreamDeltas: cfg.captureStreamDeltas,
+    captureModelRequest: cfg.captureModelRequest,
+    // metrics 读取口未暴露（Builder 无 getTelemetry）且 LatencyTracker 无界：
+    // 暴露读取口前不启用，避免长驻 serve 只写不读的内存增长
+    enableMetrics: false,
+  });
+}

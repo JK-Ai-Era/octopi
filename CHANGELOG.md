@@ -1,3 +1,24 @@
+## v0.90.0
+
+### feat(engine): 接通 observability.traceDir 断头线，trace 正式落盘（F3-b / D5）
+
+`octopi.json` 的 `observability.traceDir/level` 此前流到 `gatewayConfig.trace` 后**无人消费**（gateway `parseTraceLevel` 孤儿方法、config-bridge 从不调 `AgentBuilder.trace()`、`createRunTelemetry` 在 serve 运行时从未启用）。本批按拍板「接上」（不删配置面）把链路接活：
+
+1. **组合根接线**：`packages/engine/src/config.ts` 新增 `createTelemetryFactoryFromConfig` / `wireObservability`——trace 落盘（TraceCollector → TraceLogger 逐条同步写 JSONL，无缓冲丢失）+ 采集意图进 `AgentBuilder.trace()`。工厂**显式注入**（`.telemetryFactory()`），不依赖包入口 `setRunTelemetryFactory` 副作用（serve 子路径 import 时该副作用未必执行过）。两条 agent 构建路径（`config-bridge.buildAgent` 库嵌入、`gateway.ts` serve 宿主路径）都挂接，文件名前缀带 agentId 归属。
+2. **死管道清理（D5 断头线本体）**：删 `toGatewayConfig` 的 `trace` 死映射（含一处 `as any`）、`GatewayConfig.trace` 字段、gateway `parseTraceLevel` 孤儿方法；`--verbose` 的 trace 意图（原死写入）改走 `observability` 通道，落 `<OCTOPI_HOME>/traces`（尊重 `OCTOPI_HOME`）。
+3. **回归指标断点修复**：`trace-collector` 的 `model.call.end` 事件白名单此前把 `durationMs` 吞掉——补 `model`/`durationMs`（`long-session-latency.md` §7 回归指标口径）。
+4. **评审修复**（独立子 agent 评审）：TraceLogger 文件名毫秒+pid+序号唯一化（同秒多 agent 不再共写一个文件）；mkdir 失败 fail-open（观测绝不影响业务构建）；metrics 暂不启用（读取口未暴露且 `LatencyTracker` 无界，避免长驻 serve 只写不读的内存增长）；顶层映射守卫测试同步。
+
+**口径说明**：`consoleLevel` 缺省 null（trace 走文件通道，不向 gateway.log 混入控制台副本）；`level` 是全局上限（0–5 与 TraceLevel 同构，顺带修掉旧 levelMap 缺 0 的映射缺陷）。
+
+**已知边界（F3-c 处理）**：`model.call.*` 行暂无 sessionId/agentId 归因、同一 agent 并发 session 的计时起点共享闭包变量、`turn.end`→`model.call.end` 的重复映射——三者都动 `LoopObserver` 契约，与 F3-c 的 `onLLMFirstToken` 同批处理。`captureModelRequest`/`captureToolResults` 两个采集开关仍无消费点（转 open-problems 跟踪）。
+
+**破坏性变更**：`GatewayConfig.trace`（公开类型字段，本就无人消费）删除，配置面迁移至 `observability` 段直通——版本升 **0.90.0**。
+
+**验证**：`npm run build` 绿；`config-observability-wiring`（7）/ `config-gateway-top-level-mapping`（5）/ `observability-full`（20）/ `observability`（8）/ `provider-factory-default-model`（3）共 43 项过；`npm run typecheck` 绿；`arch/check-sync.sh` 绿。
+
+---
+
 ## v0.89.7
 
 ### refactor(cli): 统一双 provider 工厂到 createProviderFromConfig（F3-a）

@@ -15,7 +15,7 @@
  */
 
 import type { HarnessConfig, AgentConfig, ContextEngineConfig, NormalizedModelInfo, ModelProviderConfig, NormalizedHarnessConfig } from '../../config.js';
-import { createProviderFromConfig, createWireDumpSinkFromConfig, resolveModelConfig } from '../../config.js';
+import { createProviderFromConfig, createWireDumpSinkFromConfig, resolveModelConfig, wireObservability } from '../../config.js';
 import { SubsystemLoader } from '../collaboration/autonomous-subsystem/loader.js';
 import type { SubsystemSpec } from '../collaboration/autonomous-subsystem/types.js';
 import { homedir } from 'node:os';
@@ -180,6 +180,7 @@ export async function buildFromConfig(
         sessionIdleExpiryMs: config.session?.idleExpiryMs,
         modelCallConfig: config.modelCall,
         concurrencyConfig: config.concurrency,
+        observabilityConfig: config.observability,
       });
       agents.set(agentConfig.id, built);
     } catch (err) {
@@ -248,6 +249,7 @@ async function buildAgent(
     sessionIdleExpiryMs?: number;
     modelCallConfig?: import('../../config.js').ModelCallConfig;
     concurrencyConfig?: import('../../config.js').HarnessConfig['concurrency'];
+    observabilityConfig?: import('../../config.js').HarnessConfig['observability'];
   },
 ): Promise<BuiltAgent> {
   const builder = new AgentBuilder();
@@ -296,6 +298,9 @@ async function buildAgent(
     subsystemDenylist: shared.subsystemDenylist,
     concurrencyConfig: shared.concurrencyConfig,
   });
+
+  // ── 观测装配（F3/D5）：observability 配置 → trace 落盘 + 采集意图 ──
+  await wireObservability(builder, shared.observabilityConfig, { filePrefix: agentConfig.id });
 
   // ── Build ──
   const built = await builder.build({

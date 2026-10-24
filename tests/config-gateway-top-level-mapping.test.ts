@@ -61,7 +61,7 @@ const CLASSIFICATION: Record<string, Classification> = {
   effectPolicy: { kind: 'mapped', target: 'effectPolicy' },
   sessionAcl: { kind: 'mapped', target: 'sessionAcl' },
   fileSend: { kind: 'mapped', target: 'fileSend' },
-  observability: { kind: 'mapped', target: 'trace' },
+  observability: { kind: 'mapped', target: 'observability' },
   observer: { kind: 'mapped', target: 'observer' },
   concurrency: { kind: 'mapped', target: 'concurrency' },
   webSearch: { kind: 'host-consumed', where: 'daemon web_search factory (src/cli/daemon.ts)' },

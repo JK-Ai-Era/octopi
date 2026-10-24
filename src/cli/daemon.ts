@@ -747,21 +747,21 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
 
   if (args.port) gatewayConfig.port = args.port;
 
-  if (args.verbose && !gatewayConfig.trace) {
-    const os = await import('node:os');
-    const path = await import('node:path');
-    gatewayConfig.trace = {
-      outputDir: path.join(os.homedir(), '.octopi', 'traces'),
-      level: 'DEBUG',
-    };
-    console.log('[CLI] Verbose mode: tracing enabled');
-  }
-
   // 与 Gateway 共享 SessionStore（history 检索与运行时同一真相源）
   const { getOctopiHome } = await import('@octopi-agent/engine/paths.js');
   const { join: joinPath } = await import('node:path');
   const { JsonlSessionStore } = await import('@octopi-agent/engine/integration/storage/jsonl.js');
   const home = getOctopiHome();
+
+  // --verbose 兜底 trace（仅在配置未含 observability 时；落 OCTOPI_HOME/traces）
+  if (args.verbose && !gatewayConfig.observability) {
+    gatewayConfig.observability = {
+      traceDir: joinPath(home, 'traces'),
+      level: 4,
+    };
+    console.log('[CLI] Verbose mode: tracing enabled');
+  }
+
   let sessionIndex: import('@octopi-agent/engine/integration/storage/session-index.js').SessionIndexBackend | undefined;
   // 先建无 index 的 store 供新鲜度校验；再挂投影
   const storeForRebuild = new JsonlSessionStore({
