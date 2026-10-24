@@ -19,7 +19,8 @@ const ModelCapabilitySchema = z.object({
 
 const ModelProviderConfigSchema = z.object({
   baseUrl: z.string().min(1),
-  apiKey: z.string().min(1),
+  /** API Key；省略 = upsert 时保留现有值；'' = 明确无鉴权（keyless，如 Ollama）；推荐 `${ENV_VAR}` 引用 */
+  apiKey: z.string().optional(),
   api: z.enum(['openai-completions', 'anthropic-messages']),
   models: z.array(ModelCapabilitySchema).min(1),
   timeoutSeconds: z.number().positive().optional(),

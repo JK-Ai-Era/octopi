@@ -514,8 +514,7 @@
                 "minLength": 1
               },
               "apiKey": {
-                "type": "string",
-                "minLength": 1
+                "type": "string"
               },
               "api": {
                 "type": "string",
@@ -573,7 +572,6 @@
             },
             "required": [
               "baseUrl",
-              "apiKey",
               "api",
               "models"
             ]

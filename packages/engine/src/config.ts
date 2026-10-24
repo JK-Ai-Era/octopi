@@ -752,8 +752,8 @@ export interface ModelCapability {
 export interface ModelProviderConfig {
   /** API 基础 URL */
   baseUrl: string;
-  /** API Key（支持 ${ENV_VAR} 语法） */
-  apiKey: string;
+  /** API Key（支持 ${ENV_VAR} 语法）；省略/空 = 不发鉴权（keyless） */
+  apiKey?: string;
   /** API 协议类型 */
   api: 'openai-completions' | 'anthropic-messages';
   /** 此 provider 下的模型列表 */
@@ -1392,11 +1392,11 @@ export async function createProviderFromConfig(
 
   if (apiType === 'anthropic') {
     const { AnthropicProvider } = await import('./integration/providers/anthropic.js');
-    return decorate(new AnthropicProvider({ name, apiKey: pc.apiKey, baseUrl: pc.baseUrl, models, defaultModel, timeoutMs: pc.timeoutSeconds ? pc.timeoutSeconds * 1000 : undefined }));
+    return decorate(new AnthropicProvider({ name, apiKey: pc.apiKey ?? '', baseUrl: pc.baseUrl, models, defaultModel, timeoutMs: pc.timeoutSeconds ? pc.timeoutSeconds * 1000 : undefined }));
   }
 
   const { OpenAIProvider } = await import('./integration/providers/openai.js');
-  return decorate(new OpenAIProvider({ name, apiKey: pc.apiKey, baseUrl: pc.baseUrl, models, defaultModel, timeoutMs: pc.timeoutSeconds ? pc.timeoutSeconds * 1000 : undefined }));
+  return decorate(new OpenAIProvider({ name, apiKey: pc.apiKey ?? '', baseUrl: pc.baseUrl, models, defaultModel, timeoutMs: pc.timeoutSeconds ? pc.timeoutSeconds * 1000 : undefined }));
 }
 
 /**

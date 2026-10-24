@@ -127,7 +127,8 @@ export class OpenAIProvider implements ModelProvider {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${this.apiKey}`,
+          // keyless 端点（apiKey 空）不发 Authorization
+          ...(this.apiKey ? { 'Authorization': `Bearer ${this.apiKey}` } : {}),
         },
         body: JSON.stringify(body),
         signal: controller.signal,
@@ -170,7 +171,8 @@ export class OpenAIProvider implements ModelProvider {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${this.apiKey}`,
+          // keyless 端点（apiKey 空）不发 Authorization
+          ...(this.apiKey ? { 'Authorization': `Bearer ${this.apiKey}` } : {}),
         },
         body: JSON.stringify(body),
         signal: controller.signal,

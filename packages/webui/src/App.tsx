@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import ChatWorkspace from './components/ChatWorkspace';
 import { KnowledgeAdminPanel } from './components/KnowledgeAdminPanel';
+import { ModelSettingsPanel } from './components/ModelSettingsPanel';
 
-type Surface = 'playground' | 'knowledge';
+type Surface = 'playground' | 'knowledge' | 'settings';
 
 export default function App() {
   const [inspectorFocus, setInspectorFocus] = useState(false);
@@ -29,6 +30,13 @@ export default function App() {
             >
               Knowledge
             </button>
+            <button
+              type="button"
+              className={surface === 'settings' ? 'btn-tab btn-tab-active' : 'btn-ghost'}
+              onClick={() => setSurface('settings')}
+            >
+              Settings
+            </button>
           </nav>
         </div>
         <div className="app-header-actions">
@@ -50,8 +58,10 @@ export default function App() {
           inspectorFocus={inspectorFocus}
           onAgentIdChange={setAgentId}
         />
-      ) : (
+      ) : surface === 'knowledge' ? (
         <KnowledgeAdminPanel agentId={agentId || 'default'} />
+      ) : (
+        <ModelSettingsPanel />
       )}
     </div>
   );

@@ -980,7 +980,20 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
     const { HttpChannelAdapter } = await import('@octopi-agent/gateway/protocols/http.js');
     const { WebApiRouter } = await import('@octopi-agent/gateway/web/api/router.js');
     const { resolveListenHost } = await import('@octopi-agent/engine/config.js');
-    const webApiRouter = new WebApiRouter({ gateway, basePath: '/api/v1' });
+    // 配置管理面（arch/config-hot-reload.md）：FileConfigService（IO）+ provider 工厂（带 wireDump）
+    const { ConfigApplyService } = await import('@octopi-agent/gateway/gateway/config-apply.js');
+    const { FileConfigService } = await import('../config-service.js');
+    const configApply = new ConfigApplyService({
+      gateway,
+      configAdmin: new FileConfigService({ configPath }),
+      providerFactory: (name, pc) =>
+        createProviderFromConfig(
+          name,
+          pc as unknown as import('@octopi-agent/engine/config.js').ModelProviderConfig,
+          { wireDump },
+        ),
+    });
+    const webApiRouter = new WebApiRouter({ gateway, basePath: '/api/v1', configApply });
     const listenHost = resolveListenHost(listenHostConfig);
     gateway.registerChannel(new HttpChannelAdapter({
       port: listenPort,

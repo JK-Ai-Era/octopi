@@ -387,6 +387,13 @@ export class Gateway {
     contextEngine?: import('@octopi-agent/engine/harness/context/types.js').ContextEngine;
     contextHealth?: (agentId?: string) => Promise<import('@octopi-agent/engine/harness/context/layer-health.js').ContextLayerHealth>;
   }>();
+  /**
+   * 热失效退役的 runner（arch/config-hot-reload.md §3：新 run 生效，在跑 run 跑完）。
+   * dispose 判据 = in-flight run 计数归零（dispatcher 包装跟踪）；长尾 30min 强制兜底（warn）。
+   */
+  private retiredRunners: SessionAwareRunner[] = [];
+  /** runner → in-flight run 计数（dispatcher 包装维护；退役 dispose 判据） */
+  private runnerInflight = new WeakMap<SessionAwareRunner, number>();
   /** 流式 adapter 引用（用于广播事件） */
   private streamingAdapters: StreamingChannelAdapter[] = [];
   /** 每个 provider 的熔断器 */
@@ -612,9 +619,14 @@ export class Gateway {
     this.modelLevels = config.levels;
   }
 
-  /** 设置 models.level 映射（daemon 启动时注入） */
+  /**
+   * 设置 models.level 映射（daemon 启动注入 / L0 热更新）；同步 GatewayConfig 影子
+   *
+   * @param levels - level 映射；undefined 仅清展示源（启动路径兼容）
+   */
   setModelLevels(levels: Record<string, { primary: string; fallback?: string[] }> | undefined): void {
     this.modelLevels = levels;
+    this.config.levels = levels;
   }
 
   /** 激活宿主（Schedule/Escalate 等 Source 挂载用） */
@@ -1341,6 +1353,14 @@ export class Gateway {
       }
     }
     this.agentCache.clear();
+    // 热失效退役 runner 兜底回收
+    for (const runner of this.retiredRunners.splice(0)) {
+      try {
+        runner.dispose();
+      } catch {
+        // stop 路径 fail-open，不阻断关闭
+      }
+    }
 
     await this.runtime.stop();
     await this.pluginManager.onGatewayStop();
@@ -1355,6 +1375,115 @@ export class Gateway {
   registerAgent(agent: AgentDefinition): void {
     this.agents.set(agent.id, agent);
     console.log(`[Gateway] Registered agent: ${agent.id}`);
+  }
+
+  // ================================================================
+  // 配置热应用（arch/config-hot-reload.md §3）
+  // ================================================================
+
+  /**
+   * 热失效 agent 构建缓存（L1）：**立即重建并覆盖注册**（runtime.registerAgent 为 upsert，
+   * 不摘除 → Schedule/触发派发零窗口，不丢排队触发）；在跑 run 用旧构建跑完（旧 runner
+   * 的 dispatcher 已被覆盖，in-flight 流仍由旧 runner 服务）。
+   *
+   * @param agentId - 失效的 agent id
+   */
+  async invalidateAgentBuild(agentId: string): Promise<void> {
+    const cached = this.agentCache.get(agentId);
+    if (cached) {
+      this.agentCache.delete(agentId);
+      this.retireRunner(cached.runner);
+    }
+    // 立即重建（新 provider/level/定义）+ 覆盖注册
+    const def = this.agents.get(agentId);
+    if (!def) return;
+    const fresh = await this.buildAgent(def);
+    this.agentCache.set(agentId, fresh);
+    await this.registerRuntimeAgent(def, fresh.runner);
+    console.log(`[Gateway] Rebuilt agent after config change: ${agentId}`);
+  }
+
+  /** 热失效全部 agent 构建（level 路由变更等影响面难精确枚举时） */
+  async invalidateAllAgentBuilds(): Promise<void> {
+    for (const agentId of [...this.agentCache.keys()]) {
+      await this.invalidateAgentBuild(agentId);
+    }
+  }
+
+  /**
+   * 热替换 provider（L2）：注册表替换 + 影子同步 + 失效引用它的 agent 构建。
+   *
+   * @param provider - 新 provider 实例（同名替换）
+   * @param providerConfig - 对应 raw 配置片段（同步 GatewayConfig 影子，供后续 build 用）
+   * @param referencedAgentIds - 引用该 provider 的 agent id（调用方经 findProviderReferences 计算）
+   */
+  async replaceProvider(
+    provider: ModelProvider,
+    providerConfig: Record<string, unknown>,
+    referencedAgentIds: string[],
+  ): Promise<void> {
+    this.providers.set(provider.name, provider);
+    if (this.config.modelProviders) {
+      this.config.modelProviders[provider.name] =
+        providerConfig as unknown as import('@octopi-agent/engine/config.js').ModelProviderConfig;
+    }
+    for (const agentId of referencedAgentIds) {
+      await this.invalidateAgentBuild(agentId);
+    }
+    console.log(`[Gateway] Hot-replaced provider: ${provider.name}`);
+  }
+
+  /**
+   * 热删除 provider（L2）：注册表/影子摘除 + 失效引用它的 agent 构建。
+   * 引用完整性（拒绝删除）由调用方经 findProviderReferences 把关。
+   *
+   * @param name - provider 名
+   * @param referencedAgentIds - 引用该 provider 的 agent id
+   */
+  async removeProvider(name: string, referencedAgentIds: string[]): Promise<void> {
+    this.providers.delete(name);
+    if (this.config.modelProviders) {
+      delete this.config.modelProviders[name];
+    }
+    for (const agentId of referencedAgentIds) {
+      await this.invalidateAgentBuild(agentId);
+    }
+    console.log(`[Gateway] Hot-removed provider: ${name}`);
+  }
+
+  /** 退役 runner：in-flight 计数归零即 dispose；30min 长尾强制兜底（warn 后仍回收） */
+  private retireRunner(runner: SessionAwareRunner): void {
+    this.retiredRunners.push(runner);
+    const tryDispose = (): void => {
+      const inflight = this.runnerInflight.get(runner) ?? 0;
+      if (inflight > 0) {
+        // 仍有 run 在旧构建上跑完（拍板语义：不抢锁、不断流）——稍后重查
+        const t = setTimeout(tryDispose, 5_000);
+        t.unref?.();
+        return;
+      }
+      this.disposeRetiredRunner(runner);
+    };
+    tryDispose();
+    const force = setTimeout(() => {
+      if (this.retiredRunners.includes(runner)) {
+        console.warn('[Gateway] retired runner force-disposed with runs possibly in-flight (>30min)');
+        this.disposeRetiredRunner(runner);
+      }
+    }, 30 * 60_000);
+    force.unref?.();
+  }
+
+  /** 退役 runner 回收（幂等；stop 兜底也走这里） */
+  private disposeRetiredRunner(runner: SessionAwareRunner): void {
+    const idx = this.retiredRunners.indexOf(runner);
+    if (idx < 0) return;
+    this.retiredRunners.splice(idx, 1);
+    try {
+      runner.dispose();
+    } catch {
+      // 退役回收 fail-open：dispose 只清后台 timer，失败不阻断
+    }
   }
 
   registerChannel(adapter: ChannelAdapter): void {
@@ -4463,18 +4592,50 @@ export class Gateway {
 
     this.runtime.registerAgent({
       agentId: agent.id,
-      dispatcher: new SessionRunnerDispatcher({
+      dispatcher: this.wrapInflightTracking(
         runner,
-        // 不要把 agent 默认 model 写入 defaults：
-        // RunConfig.model 只表示**消息级**覆盖；会话覆盖在 session.metadata.model
-        runConfigDefaults: {
-          agentId: agent.id,
-          contextWindow,
-          systemPrompt: runSystemPrompt,
-        },
-      }),
+        new SessionRunnerDispatcher({
+          runner,
+          // 不要把 agent 默认 model 写入 defaults：
+          // RunConfig.model 只表示**消息级**覆盖；会话覆盖在 session.metadata.model
+          runConfigDefaults: {
+            agentId: agent.id,
+            contextWindow,
+            systemPrompt: runSystemPrompt,
+          },
+        }),
+      ),
       resolveSession: (trigger) => trigger.sessionId ?? `${agent.id}:main`,
     });
+  }
+
+  /**
+   * 包装 dispatcher：execute 期间维护 runner 的 in-flight run 计数。
+   * 退役 runner 的 dispose 判据即此计数归零（拍板①：在跑 run 用旧构建跑完）。
+   *
+   * @param runner - 计数归属的 runner
+   * @param inner - 原 dispatcher
+   * @returns 包装后的 dispatcher（结构兼容 RunDispatcher）
+   */
+  private wrapInflightTracking(
+    runner: SessionAwareRunner,
+    inner: SessionRunnerDispatcher,
+  ): SessionRunnerDispatcher {
+    const tracker = this;
+    return {
+      execute(req: Parameters<SessionRunnerDispatcher['execute']>[0], signal?: AbortSignal) {
+        tracker.runnerInflight.set(runner, (tracker.runnerInflight.get(runner) ?? 0) + 1);
+        const iter = inner.execute(req, signal);
+        return (async function* () {
+          try {
+            yield* iter;
+          } finally {
+            // 完成 / 抛错 / 消费端提前 return 均收敛计数
+            tracker.runnerInflight.set(runner, (tracker.runnerInflight.get(runner) ?? 1) - 1);
+          }
+        })();
+      },
+    } as unknown as SessionRunnerDispatcher;
   }
 
   /**

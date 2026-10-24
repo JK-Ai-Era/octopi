@@ -7,23 +7,45 @@
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Gateway } from '../../gateway/gateway.js';
+import type { ConfigApplyService } from '../../gateway/config-apply.js';
+import { ConfigConflictError } from '@octopi-agent/engine/config-admin/port.js';
+import { listProviderPresets } from '@octopi-agent/engine/config-admin/model-presets.js';
 
 export interface WebApiRouterOptions {
   gateway: Gateway;
   basePath?: string;
   /** JSON 请求体大小上限（字节），默认 1MB。文件上传应使用独立端点。 */
   maxBodyBytes?: number;
+  /** 配置热应用服务（arch/config-hot-reload.md）；未注入时 /config/* 返回 503 */
+  configApply?: ConfigApplyService;
+}
+
+/**
+ * provider 名合法化：路径段安全 + JSON 键安全（拒 `__proto__` 等原型污染键）
+ *
+ * @param name - 路由捕获的 provider 名
+ * @throws 非法名抛错（业务 400）
+ */
+function assertValidProviderName(name: string): void {
+  if (
+    !/^[A-Za-z0-9._-]{1,64}$/.test(name) ||
+    ['__proto__', 'constructor', 'prototype'].includes(name)
+  ) {
+    throw new Error(`invalid provider name: ${name}`);
+  }
 }
 
 export class WebApiRouter {
   private gateway: Gateway;
   private basePath: string;
   private maxBodyBytes: number;
+  private configApply?: ConfigApplyService;
 
   constructor(options: WebApiRouterOptions) {
     this.gateway = options.gateway;
     this.basePath = options.basePath ?? '/api/v1';
     this.maxBodyBytes = options.maxBodyBytes ?? 1_048_576;
+    this.configApply = options.configApply;
   }
 
   async handle(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
@@ -66,6 +88,11 @@ export class WebApiRouter {
           ok: true,
           data: this.gateway.getModelCatalog(),
         });
+      }
+
+      // ── 配置管理面（arch/config-hot-reload.md）──
+      if (relativePath.startsWith('/config/')) {
+        return this.handleConfigAdmin(relativePath, method, req, res, url);
       }
 
       if (relativePath === '/providers' && method === 'GET') {
@@ -1426,6 +1453,93 @@ export class WebApiRouter {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       return this.json(res, 500, { ok: false, error: message });
+    }
+  }
+
+  /**
+   * 配置管理面路由（arch/config-hot-reload.md §4）：
+   * GET/PUT/DELETE /config/models… + POST …/test + GET /config/presets/models
+   */
+  private async handleConfigAdmin(
+    relativePath: string,
+    method: string,
+    req: IncomingMessage,
+    res: ServerResponse,
+    url: URL,
+  ): Promise<boolean> {
+    const apply = this.configApply;
+    if (!apply) {
+      return this.json(res, 503, { ok: false, error: 'config admin not wired' });
+    }
+    try {
+      if (relativePath === '/config/models' && method === 'GET') {
+        return this.json(res, 200, { ok: true, data: apply.getModelsView() });
+      }
+
+      if (relativePath === '/config/presets/models' && method === 'GET') {
+        return this.json(res, 200, { ok: true, data: listProviderPresets() });
+      }
+
+      if (relativePath === '/config/models/levels' && method === 'PUT') {
+        const body = await this.readBody(req);
+        const result = await apply.updateLevels(
+          body?.level ?? {},
+          typeof body?.hash === 'string' ? body.hash : '',
+        );
+        return this.json(res, 200, { ok: true, data: result });
+      }
+
+      const providerMatch = relativePath.match(/^\/config\/models\/providers\/([^/]+)$/);
+      if (providerMatch && method === 'PUT') {
+        const name = providerMatch[1]!;
+        assertValidProviderName(name);
+        const body = await this.readBody(req);
+        if (!body?.provider || typeof body.provider !== 'object') {
+          return this.json(res, 400, { ok: false, error: 'provider object is required' });
+        }
+        const result = await apply.upsertProvider(
+          name,
+          body.provider as Record<string, unknown>,
+          typeof body.hash === 'string' ? body.hash : '',
+        );
+        return this.json(res, 200, { ok: true, data: result });
+      }
+
+      if (providerMatch && method === 'DELETE') {
+        const name = providerMatch[1]!;
+        assertValidProviderName(name);
+        const hash = url.searchParams.get('hash') ?? '';
+        const result = await apply.deleteProvider(name, hash);
+        return this.json(res, 200, { ok: true, data: result });
+      }
+
+      const testMatch = relativePath.match(/^\/config\/models\/providers\/([^/]+)\/test$/);
+      if (testMatch && method === 'POST') {
+        const name = testMatch[1]!;
+        assertValidProviderName(name);
+        const body = await this.readBody(req);
+        const result = await apply.testProvider(name, (body?.provider ?? {}) as Record<string, unknown>);
+        return this.json(res, 200, { ok: true, data: result });
+      }
+
+      return this.json(res, 404, { ok: false, error: `unknown config endpoint: ${relativePath}` });
+    } catch (err) {
+      if (err instanceof ConfigConflictError) {
+        return this.json(res, 409, {
+          ok: false,
+          error: err.message,
+          data: { currentHash: err.currentHash },
+        });
+      }
+      // fs/内部错误（带 errno code）→ 500；校验失败 / 引用拒绝等业务拒绝 → 400 带原因
+      const errno = (err as NodeJS.ErrnoException | null)?.code;
+      if (errno) {
+        return this.json(res, 500, { ok: false, error: `internal error (${errno})` });
+      }
+      return this.json(res, 400, {
+        ok: false,
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   }
 

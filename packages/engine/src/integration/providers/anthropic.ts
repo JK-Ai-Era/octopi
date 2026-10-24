@@ -122,7 +122,7 @@ export class AnthropicProvider implements ModelProvider {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-api-key': this.apiKey,
+          ...(this.apiKey ? { 'x-api-key': this.apiKey } : {}),
           'anthropic-version': this.version,
         },
         body: JSON.stringify(anthropicRequest),
@@ -169,7 +169,7 @@ export class AnthropicProvider implements ModelProvider {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-api-key': this.apiKey,
+          ...(this.apiKey ? { 'x-api-key': this.apiKey } : {}),
           'anthropic-version': this.version,
         },
         body: JSON.stringify(anthropicRequest),
@@ -298,7 +298,7 @@ export class AnthropicProvider implements ModelProvider {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-api-key': this.apiKey,
+          ...(this.apiKey ? { 'x-api-key': this.apiKey } : {}),
           'anthropic-version': this.version,
         },
         body: JSON.stringify({

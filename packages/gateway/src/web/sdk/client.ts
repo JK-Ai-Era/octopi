@@ -745,6 +745,68 @@ function normalizeBaseUrl(baseUrl: string): string {
   return baseUrl.replace(/\/+$/, '');
 }
 
+// ──────────────────────────────────────
+// Config admin DTOs（arch/config-hot-reload.md §4）
+// ──────────────────────────────────────
+
+/** 脱敏后的密钥视图（绝不含明文） */
+export interface RedactedSecretDto {
+  configured: boolean;
+  /** `${VAR}` 形态 → 变量名；明文 → 'literal'；未配置 → null */
+  ref: string | null;
+}
+
+/** 脱敏后的 provider 视图 */
+export interface RedactedProviderDto {
+  name: string;
+  baseUrl: string;
+  api: string;
+  models: Array<Record<string, unknown>>;
+  timeoutSeconds?: number;
+  apiKey: RedactedSecretDto;
+}
+
+/** 模型配置视图 */
+export interface ConfigModelsViewDto {
+  providers: RedactedProviderDto[];
+  level: Record<string, unknown>;
+  hash: string;
+}
+
+/** 热应用结果 */
+export interface ConfigApplyResultDto {
+  hash: string;
+  applied: 'hot' | 'next-run';
+  affectedAgents: string[];
+  backupPath: string;
+}
+
+/** 模型清单发现/连通测试结果 */
+export interface DiscoverModelsResultDto {
+  ok: boolean;
+  models: Array<{ id: string; name?: string }>;
+  error?: string;
+}
+
+/** provider 预设条目（生成器/表单默认值） */
+export interface ModelPresetDto {
+  id: string;
+  label: string;
+  api: 'openai-completions' | 'anthropic-messages';
+  baseUrl: string;
+  apiKeyEnvHint: string;
+  docsUrl?: string;
+  models: Array<{
+    id: string;
+    name: string;
+    reasoning?: boolean;
+    input?: Array<'text' | 'image' | 'audio' | 'video'>;
+    contextWindow?: number;
+    maxTokens?: number;
+  }>;
+  custom?: boolean;
+}
+
 async function parseJsonResponse<T = unknown>(response: Response): Promise<T> {
   if (!response.ok) {
     const text = await response.text().catch(() => '');
@@ -2079,6 +2141,18 @@ export class OctopiClient {
     return parseJsonResponse(response);
   }
 
+  private async putJson<T = any>(path: string, body: unknown): Promise<T> {
+    const response = await fetch(`${this.restBase}${path}`, {
+      method: 'PUT',
+      headers: {
+        ...this.buildHeaders(),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body ?? {}),
+    });
+    return parseJsonResponse(response);
+  }
+
   private async patchJson<T = any>(path: string, body: unknown): Promise<T> {
     const response = await fetch(`${this.restBase}${path}`, {
       method: 'PATCH',
@@ -2097,6 +2171,88 @@ export class OctopiClient {
       headers: this.buildHeaders(),
     });
     return parseJsonResponse(response);
+  }
+
+  // ──────────────────────────────────
+  // Public API: Config admin（arch/config-hot-reload.md）
+  // ──────────────────────────────────
+
+  /** 模型配置视图（apiKey 脱敏）+ 乐观锁 hash */
+  async getConfigModels(): Promise<ConfigModelsViewDto> {
+    const res = await this.getJson<{ ok: boolean; data: ConfigModelsViewDto }>('/config/models');
+    return res.data;
+  }
+
+  /** provider 预设清单（生成器/表单默认值） */
+  async getModelPresets(): Promise<ModelPresetDto[]> {
+    const res = await this.getJson<{ ok: boolean; data: ModelPresetDto[] }>('/config/presets/models');
+    return res.data;
+  }
+
+  /**
+   * upsert provider（保存即热生效）
+   *
+   * @param name - provider 名
+   * @param provider - provider 配置（apiKey 可为 `${VAR}` 形态）
+   * @param hash - 乐观锁 hash
+   */
+  async upsertModelProvider(
+    name: string,
+    provider: Record<string, unknown>,
+    hash: string,
+  ): Promise<ConfigApplyResultDto> {
+    const res = await this.putJson<{ ok: boolean; data: ConfigApplyResultDto }>(
+      `/config/models/providers/${encodeURIComponent(name)}`,
+      { provider, hash },
+    );
+    return res.data;
+  }
+
+  /**
+   * 删除 provider（有 agent 引用时服务端拒绝）
+   *
+   * @param name - provider 名
+   * @param hash - 乐观锁 hash
+   */
+  async deleteModelProvider(name: string, hash: string): Promise<ConfigApplyResultDto> {
+    const res = await this.deleteJson<{ ok: boolean; data: ConfigApplyResultDto }>(
+      `/config/models/providers/${encodeURIComponent(name)}?hash=${encodeURIComponent(hash)}`,
+    );
+    return res.data;
+  }
+
+  /**
+   * 连通测试 + 模型清单拉取（不落盘；用表单当前值）
+   *
+   * @param name - provider 名（仅用于路由）
+   * @param provider - 待测 provider 配置
+   */
+  async testModelProvider(
+    name: string,
+    provider: Record<string, unknown>,
+  ): Promise<DiscoverModelsResultDto> {
+    const res = await this.postJson<{ ok: boolean; data: DiscoverModelsResultDto }>(
+      `/config/models/providers/${encodeURIComponent(name)}/test`,
+      { provider },
+    );
+    return res.data;
+  }
+
+  /**
+   * 更新 level 路由（L0 就地生效）
+   *
+   * @param level - level 映射
+   * @param hash - 乐观锁 hash
+   */
+  async updateModelLevels(
+    level: Record<string, { primary: string; fallback?: string[] }>,
+    hash: string,
+  ): Promise<ConfigApplyResultDto> {
+    const res = await this.putJson<{ ok: boolean; data: ConfigApplyResultDto }>(
+      '/config/models/levels',
+      { level, hash },
+    );
+    return res.data;
   }
 
   private buildHeaders(): Record<string, string> {

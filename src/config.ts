@@ -15,11 +15,40 @@ import type {
 import { flattenModels, resolveModelConfig } from '@octopi-agent/engine/config.js';
 import { validateConfigOrThrow } from './config-schema.js';
 import { applyLegacyBudget, detectConfigMigrations } from './config-migrations.js';
+import { expandEnvPlaceholders as expandEnvPlaceholdersShared } from '@octopi-agent/engine/config-admin/env.js';
 import { getOctopiHome } from './init.js';
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 
+
+/**
+ * `${ENV_VAR}` / `${ENV_VAR:-default}` 占位符展开（loadConfig 与 FileConfigService 共用）
+ *
+ * @param fileContent - 配置文件原始文本
+ * @returns 展开后的文本
+ */
+export function expandEnvPlaceholders(fileContent: string): string {
+  return expandEnvPlaceholdersShared(fileContent);
+}
+
+/**
+ * 配置迁移（loadConfig 与 FileConfigService 共用）：旧字段显式告警 + 内存迁移
+ *
+ * @param raw - 已展开占位符的配置对象（就地迁移）
+ */
+export function applyConfigMigrations(raw: Record<string, unknown>): void {
+  if (!raw || typeof raw !== 'object') return;
+  for (const finding of detectConfigMigrations(raw)) {
+    const hint = finding.hint ? ` ${finding.hint}` : '';
+    console.warn(`[config] ${finding.message}.${hint}`);
+  }
+  // 运行时内存迁移：legacy budget → budgetPolicy（丢弃 spend/soft）
+  applyLegacyBudget(raw);
+  if ('budget' in raw) {
+    delete raw.budget;
+  }
+}
 
 export function loadConfig(configPath?: string): NormalizedHarnessConfig {
   // 配置文件查找优先级：
@@ -53,29 +82,12 @@ export function loadConfig(configPath?: string): NormalizedHarnessConfig {
 
   const fileContent = readFileSync(filePath, 'utf-8');
 
-  // 支持 ${ENV_VAR} 和 ${ENV_VAR:-default} 环境变量替换
-  const expanded = fileContent.replace(/\$\{(\w+)(?::-(.*?))?\}/g, (_, key, defaultVal) => {
-    const val = process.env[key];
-    if (val !== undefined) return val;
-    if (defaultVal !== undefined) return defaultVal;
-    // 未设置且无默认值：返回空字符串（apiKey 等字段会在后续校验中报错）
-    return '';
-  });
+  const expanded = expandEnvPlaceholders(fileContent);
 
-  const raw = JSON.parse(expanded);
+  const raw = JSON.parse(expanded) as Record<string, unknown>;
 
   // 旧字段静默失效会很难排查：显式告警（写回落盘见 octopi doctor --fix）
-  if (raw && typeof raw === 'object') {
-    for (const finding of detectConfigMigrations(raw)) {
-      const hint = finding.hint ? ` ${finding.hint}` : '';
-      console.warn(`[config] ${finding.message}.${hint}`);
-    }
-    // 运行时内存迁移：legacy budget → budgetPolicy（丢弃 spend/soft）
-    applyLegacyBudget(raw as Record<string, unknown>);
-    if (raw && typeof raw === 'object' && 'budget' in (raw as object)) {
-      delete (raw as Record<string, unknown>).budget;
-    }
-  }
+  applyConfigMigrations(raw);
 
   // Zod schema 校验（结构化错误信息）；路径归一化（`~` 展开）已由校验出口后置完成
   const config = validateConfigOrThrow(raw) as unknown as NormalizedHarnessConfig;

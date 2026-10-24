@@ -1374,3 +1374,143 @@ button.ctx-band {
   color: #6b7280 !important;
   cursor: wait;
 }
+
+/* ── Settings / 模型配置面板（arch/config-hot-reload.md） ── */
+.set-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 20px 24px;
+  overflow-y: auto;
+  height: 100%;
+}
+.set-header {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+.set-header h2 {
+  margin: 0;
+  font-size: 18px;
+}
+.set-error {
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: rgba(220, 53, 69, 0.12);
+  color: #dc3545;
+  font-size: 13px;
+}
+.set-notice {
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: rgba(40, 167, 69, 0.12);
+  color: #28a745;
+  font-size: 13px;
+}
+.set-body {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+.set-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 200px;
+}
+.set-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid var(--border, #d8dbe0);
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+.set-item-active {
+  border-color: var(--accent, #4c7bd9);
+  background: rgba(76, 123, 217, 0.08);
+}
+.set-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  flex: 1;
+  min-width: 420px;
+}
+.set-presets {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.set-preset-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 8px;
+}
+.set-preset-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--border, #d8dbe0);
+  border-radius: 8px;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+.set-preset-card:hover {
+  border-color: var(--accent, #4c7bd9);
+  background: rgba(76, 123, 217, 0.06);
+}
+.set-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+}
+.set-input {
+  padding: 6px 8px;
+  border: 1px solid var(--border, #d8dbe0);
+  border-radius: 6px;
+  font-size: 13px;
+  background: transparent;
+}
+.set-models {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.set-models-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.set-model-row {
+  display: grid;
+  grid-template-columns: 2fr 2fr 1fr 1fr auto auto;
+  gap: 6px;
+  align-items: center;
+}
+.set-level-row {
+  display: grid;
+  grid-template-columns: 1fr 2fr 3fr auto;
+  gap: 6px;
+  align-items: center;
+  margin: 6px 0;
+}
+.set-actions {
+  display: flex;
+  gap: 8px;
+}
+.set-levels {
+  border-top: 1px solid var(--border, #d8dbe0);
+  padding-top: 12px;
+}
+.set-levels h3 {
+  margin: 0 0 4px 0;
+  font-size: 15px;
+}
