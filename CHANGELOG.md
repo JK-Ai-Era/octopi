@@ -100,6 +100,17 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.90.11 (2026-10-25)
+
+### fix(subsystems): safety-guard 显式声明 `trusted`——无 L4 宿主不再静默缺席安全闸
+
+- **拍板（2026-10-25，方案 A）**：第一方受审子系统如实声明——`safety-guard` 的 `boundary.security` 由 `sandboxed` 改为 `trusted`（它运行时本无独立 jail）；loader 缺省值**保持** `sandboxed`（第三方子系统仍 SEC-6 fail-closed 逼显式声明）。
+- **动机**：SEC-6 落地后，无 L4 宿主（如今日 Windows：`win-job` 后端未实现、probe=supervised-spawn）拒载 `sandboxed` 声明，内置 safety-guard 被拒载且 builder 仅记日志——安全闸静默缺席。改后内置 8 个子系统全部 `trusted`，任何平台全量可载。
+- **验证**：内置加载测试改为 `l4Available: false` 场景（即 Windows 语义）——39 文件 / 364 测试绿；safety-guard 与 memory-steward 全量加载断言通过。
+- **文档**：`docs/KNOWN-ISSUES.md` + `.zh.md` L4 段补 SEC-6 的 Windows 语义（EN+ZH 同步）；win-job 缺口原本就在该清单「Still open」中，未新增。
+
+---
+
 ## v0.90.10 (2026-10-25)
 
 ### refactor(context): `isUserAuthoredMessage` 拆双谓词 `isTurnAnchor` / `isHumanSpeech`

@@ -17,7 +17,7 @@
 
 **Session ACL per-tool（SEC-2，v0.78.0）：** `SessionRights.toolRights`（`allow` / `deny` / `denyCapabilities`）与 `agents[].tools`、`toolSurface` **求交**（只收窄；deny 优先）。工具列表与 `beforeToolCall` 双闸强制。`agents[].maxSessionRights.toolRights` 为 L1 天花板，grant 拒绝非法拓宽。出厂角色工具面不限；guest/只读等用自定义角色表达。
 
-**L4 process 牢笼（v0.75.0–0.76.0）：** 能力契约 + supervised spawn + bwrap/Seatbelt，且 **shell 已统一走 ProcessSandbox**（`docs/process-isolation.zh.md`）。仍开放：自带 Windows Job Object / 受限令牌 helper；container 后端。无 L4 时 `untrusted` 经 `untrustedAdmission` 拒绝或降级。
+**L4 process 牢笼（v0.75.0–0.76.0）：** 能力契约 + supervised spawn + bwrap/Seatbelt，且 **shell 已统一走 ProcessSandbox**（`docs/process-isolation.zh.md`）。仍开放：自带 Windows Job Object / 受限令牌 helper；container 后端。无 L4 时 `untrusted` 经 `untrustedAdmission` 拒绝或降级。声明 `boundary.security: sandboxed` 的子系统无 L4 时在加载期拒载（SEC-6 fail-closed，v0.90.9）——无牢笼后端的宿主（如今日 Windows）需显式声明 `trusted`/`privileged`；第一方内置子系统即如此声明。
 
 **EffectPolicy 缺省（v0.75.0）：** 省略 `mode` 即 `workspace`（secure-by-default）。脚手架显式 `"mode": "host"`。原先依赖「未写 mode=host」的部署需补 `"effectPolicy": { "mode": "host" }`。
 

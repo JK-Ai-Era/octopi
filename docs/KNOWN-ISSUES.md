@@ -17,7 +17,7 @@
 
 **Session ACL per-tool rights (SEC-2, v0.78.0):** `SessionRights.toolRights` (`allow` / `deny` / `denyCapabilities`) intersects `agents[].tools` and `toolSurface` (narrow-only; deny wins). Enforced at tool listing and `beforeToolCall`. `agents[].maxSessionRights.toolRights` is an L1 ceiling; grant rejects expansions. Factory roles ship unrestricted tool surface; use custom roles for guest/readonly.
 
-**L4 process jail (v0.75.0–0.76.0):** capability contract, supervised spawn, bwrap/Seatbelt, and **shell wired through ProcessSandbox** (`docs/process-isolation.md`). Still open: bundled Windows Job Object / restricted-token helper; container backend. `untrusted` without L4 refuses or degrades via `untrustedAdmission`.
+**L4 process jail (v0.75.0–0.76.0):** capability contract, supervised spawn, bwrap/Seatbelt, and **shell wired through ProcessSandbox** (`docs/process-isolation.md`). Still open: bundled Windows Job Object / restricted-token helper; container backend. `untrusted` without L4 refuses or degrades via `untrustedAdmission`. Subsystems declaring `boundary.security: sandboxed` are refused at load without L4 (SEC-6 fail-closed, v0.90.9) — on hosts without a jail backend (e.g. Windows today), declare `trusted`/`privileged` explicitly; first-party built-ins do exactly that.
 
 **EffectPolicy default (v0.75.0):** omitting `mode` now means `workspace` (secure-by-default). Scaffolds set `"mode": "host"` explicitly. Deployments that relied on implicit host must add `"effectPolicy": { "mode": "host" }`.
 

@@ -24,7 +24,9 @@ signal:
 boundary:
   visibility: structured
   authority: act
-  security: sandboxed
+  # 第一方受审代码：显式声明 trusted（如实降级，不假装 sandboxed）。
+  # 缺省值仍是 sandboxed——第三方子系统必须显式声明（SEC-6 fail-closed）。
+  security: trusted
 
 tools:
   mode: none

@@ -3,7 +3,7 @@ import { SubsystemLoader } from '@octopi-agent/engine/harness/collaboration/auto
 import { join } from 'node:path';
 
 it('loads safety-guard from subsystems/ directory', async () => {
-  const loader = new SubsystemLoader({ securityEnforcement: { l4Available: true },
+  const loader = new SubsystemLoader({ securityEnforcement: { l4Available: false },
     builtinDir: join(process.cwd(), 'packages', 'engine', 'src', 'subsystems'),
   });
   const result = await loader.loadAll();

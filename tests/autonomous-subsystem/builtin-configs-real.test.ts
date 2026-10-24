@@ -4,7 +4,7 @@ import { join } from 'node:path';
 
 describe('builtin subsystem configs', () => {
   it('loads memory-steward multi-spec package and safety-guard', async () => {
-    const loader = new SubsystemLoader({ securityEnforcement: { l4Available: true },
+    const loader = new SubsystemLoader({ securityEnforcement: { l4Available: false },
       builtinDir: join(process.cwd(), 'packages', 'engine', 'src', 'subsystems'),
     });
     const { specs, errors } = await loader.loadAll();
