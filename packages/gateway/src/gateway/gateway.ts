@@ -46,6 +46,7 @@ import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { existsSync } from 'node:fs';
 import { CircuitBreaker } from '@octopi-agent/engine/harness/run/reliability/circuit-breaker.js';
+import { isEngineCarrierSource } from '@octopi-agent/engine/harness/context/layer-types.js';
 import { wrapProviderWithCircuitBreaker } from '@octopi-agent/engine/harness/run/reliability/provider-wrapper.js';
 import { resolveModel, resolveModelRef, resolveCatalogEntry, parseModelRef } from '@octopi-agent/engine/harness/run/model/index.js';
 import { PluginManager } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/plugins/manager.js';
@@ -2362,13 +2363,18 @@ export class Gateway {
       let hasNewerUser = false;
       if (msg) {
         for (let i = idx + 1; i < session.messages.length; i++) {
-          if (session.messages[i].role === 'user') {
+          const later = session.messages[i];
+          // 与 Runner 打标同口径：引擎载体（turnEnd / runStopped / grounding…）
+          // 也是 role=user，但不是真实用户发言，不得据此判标记过期
+          if (later.role === 'user' && !isEngineCarrierSource(later.metadata?.source)) {
             hasNewerUser = true;
             break;
           }
         }
       }
-      if (msg?.role === 'user' && !hasNewerUser) {
+      // 被标记的下标本身也必须落在真实用户发言上：legacy 标记（f126dc9 之前
+      // 打标口径更宽）可能指向引擎载体，暴露出去会让截断点切在载体上
+      if (msg?.role === 'user' && !isEngineCarrierSource(msg.metadata?.source) && !hasNewerUser) {
         abortedTurn = raw;
       }
     }
@@ -2415,6 +2421,15 @@ export class Gateway {
       }
       if (!Number.isInteger(fromIndex) || fromIndex < 0 || fromIndex > session.messages.length) {
         throw new Error(`fromIndex out of range: ${fromIndex}`);
+      }
+      // 与 view 同口径的写路径守卫：截断锚点必须是真实用户消息。
+      // legacy/损坏的 abortedTurn 元数据可能指向引擎载体，切在载体上会把
+      // 真正的中止残片留在历史里，重发叠出重复用户轮
+      const anchor = session.messages[fromIndex];
+      if (!anchor || anchor.role !== 'user' || isEngineCarrierSource(anchor.metadata?.source)) {
+        throw new Error(
+          `edit_resend_only_last_aborted_turn: abortedTurn anchor is not a real user message`,
+        );
       }
       session.messages = session.messages.slice(0, fromIndex);
       // 租约下标必须随 messages 重写收缩，否则下一轮 LLM 窗口被裁空

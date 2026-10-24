@@ -1,3 +1,21 @@
+## v0.90.3
+
+### fix(gateway): 中止轮编辑重发报「没有可编辑重发的中止轮」——abortedTurn 过期校验不再把引擎载体当新用户消息
+
+**问题**：v0.88.0（f126dc9，turn 信封全回放）之后，在中止的末轮点编辑重发必报「没有可编辑重发的中止轮」。因果链：f126dc9 让 runner 在 run 收尾**无条件**补 turn 闭标（`appendTurnEnd`：`role:'user'` + `source:'turnEnd'`），引擎自停的 `runStopped` 同样是 `role:'user'`；而 gateway `getSessionView` 校验 `abortedTurn` 标记是否过期时，把标记下标之后**任何** `role==='user'` 的消息都当成「更新的用户发言」——中止轮的闭标载体永远排在被标记的用户消息之后，于是每条中止轮的标记都被判过期丢弃，UI 拿不到可编辑重发的锚点。runner 打标用 `role==='user' && !isEngineCarrierSource(...)`，gateway 校验与之不对称——同一「真实用户」谓词的两处手抄漂移（与 D9 收敛 `isChatReplayHidden` 同病）。
+
+**处置**：
+
+1. `getSessionView` 过期扫描改与 runner 打标同口径：`role==='user' && !isEngineCarrierSource(metadata?.source)` 才计为真实用户发言（谓词单源 `layer-types.ts`，不新抄清单）。
+2. 对称加固（独立评审 should-fix）：**标记锚点本身**也必须落在真实用户消息上——f126dc9 之前的 legacy 打标口径更宽，标记可能指向 engineHint/contextSummary/turnEnd 等载体；`truncateMessagesFrom` 写路径同步加锚点守卫，legacy/损坏元数据下截断点切在载体上会把真正的中止残片留在历史里、重发叠出重复用户轮。
+3. 回归用例 3 条：载体（runStopped→turnEnd，顺序镜像 runner 生产输出）不使标记过期且 truncate 端到端被接受；跳过不过度（载体之后出现真实用户消息仍判过期）；坏锚点（标记指向 turnEnd）不暴露 + truncate 拒绝。
+
+**已知边界（另立项，见 arch/NEXT-STEPS.md）**：`getSessionView` 的「真实用户」判定仍是负向排除（carrier 白名单），`source:'runtime'` 的 schedule notify 消息（role=user、不开新轮）落在中止标记之后仍会误判过期——正向判定（开轮信封 `isTurnStartContent`）需先核实所有开轮路径必打信封。同类漂移另有 engine `session/title.ts` 的 `isTitleRelevantUserMessage`（f126dc9 后 title prompt 会把 `<turn_end id/>` 当用户发言喂给小模型）与 5 处「真实用户」谓词重复待收敛。
+
+**验证**：`tests/session-edit-resend*.test.ts` 11/11 过（负控已做：回退谓词后新用例精确复现 `abortedTurn: undefined`）；`npm run lint` 绿；`npm run build` 全绿。独立子 agent 评审：无 blocker；4 项 should-fix 中锚点守卫本提交落地，其余 3 项属独立 bug/重构另立项。
+
+---
+
 ## v0.90.2
 
 ### feat(webui): ttft / chars 计时接进 Run 页签耗时区（F3-d，F3 收口）

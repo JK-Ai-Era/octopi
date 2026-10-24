@@ -173,4 +173,132 @@ describe('edit-resend (truncate aborted turn)', () => {
     const view = await gateway.getSessionView('s-stale');
     expect(view?.abortedTurn).toBeUndefined();
   });
+
+  it('中止轮后的 turnEnd/runStopped 引擎载体不算新用户消息，abortedTurn 仍可编辑重发', async () => {
+    const t = Date.now();
+    await store.save('s-carrier', {
+      id: 's-carrier',
+      agentId: 'a1',
+      primaryAgentId: 'a1',
+      meta: {
+        id: 's-carrier',
+        agentId: 'a1',
+        channelId: 'web',
+        peerId: 'p',
+        status: 'idle',
+        createdAt: t,
+        sessionStartedAt: t,
+        lastInteractionAt: t,
+        updatedAt: t,
+      },
+      messages: [
+        userMsg('wrong message', t),
+        assistantMsg('partial debris', t + 1),
+        // 与 Runner 收尾顺序一致：先 runStopped（引擎自停收口）后 appendTurnEnd（无条件闭标），
+        // 均为 role=user 的引擎载体
+        {
+          role: 'user',
+          content: '引擎判定停止：本轮由引擎主动终止',
+          timestamp: t + 2,
+          metadata: { source: 'runStopped', stopReason: 'behavior_stopped' },
+        } as Message,
+        {
+          role: 'user',
+          content: '<turn_end id="t1"/>',
+          timestamp: t + 3,
+          metadata: { source: 'turnEnd', turnId: 't1' },
+        } as Message,
+      ],
+      turns: [],
+      metadata: { abortedTurn: { userMessageIndex: 0, at: t + 4 } },
+      tasks: [],
+    });
+
+    const view = await gateway.getSessionView('s-carrier');
+    expect(view?.abortedTurn?.userMessageIndex).toBe(0);
+
+    // view 暴露后 truncate 必须被接受（编辑重发端到端不被拒）
+    const result = await gateway.truncateMessagesFrom('s-carrier', 0);
+    expect(result.messageCount).toBe(0);
+    const session = await store.load('s-carrier');
+    expect(session!.metadata.abortedTurn).toBeUndefined();
+  });
+
+  it('载体跳过不得过度：引擎载体之后出现真实用户消息仍判标记过期', async () => {
+    const t = Date.now();
+    await store.save('s-over-skip', {
+      id: 's-over-skip',
+      agentId: 'a1',
+      primaryAgentId: 'a1',
+      meta: {
+        id: 's-over-skip',
+        agentId: 'a1',
+        channelId: 'web',
+        peerId: 'p',
+        status: 'idle',
+        createdAt: t,
+        sessionStartedAt: t,
+        lastInteractionAt: t,
+        updatedAt: t,
+      },
+      messages: [
+        userMsg('aborted input', t),
+        assistantMsg('partial', t + 1),
+        {
+          role: 'user',
+          content: '<turn_end id="t1"/>',
+          timestamp: t + 2,
+          metadata: { source: 'turnEnd', turnId: 't1' },
+        } as Message,
+        userMsg('real follow-up', t + 3),
+        assistantMsg('done', t + 4),
+      ],
+      turns: [],
+      metadata: { abortedTurn: { userMessageIndex: 0, at: t + 5 } },
+      tasks: [],
+    });
+
+    const view = await gateway.getSessionView('s-over-skip');
+    expect(view?.abortedTurn).toBeUndefined();
+  });
+
+  it('legacy 标记指向引擎载体时不暴露、truncate 拒绝（锚点必须是真实用户消息）', async () => {
+    const t = Date.now();
+    await store.save('s-bad-anchor', {
+      id: 's-bad-anchor',
+      agentId: 'a1',
+      primaryAgentId: 'a1',
+      meta: {
+        id: 's-bad-anchor',
+        agentId: 'a1',
+        channelId: 'web',
+        peerId: 'p',
+        status: 'idle',
+        createdAt: t,
+        sessionStartedAt: t,
+        lastInteractionAt: t,
+        updatedAt: t,
+      },
+      messages: [
+        userMsg('real user turn', t),
+        assistantMsg('partial', t + 1),
+        {
+          role: 'user',
+          content: '<turn_end id="t1"/>',
+          timestamp: t + 2,
+          metadata: { source: 'turnEnd', turnId: 't1' },
+        } as Message,
+      ],
+      turns: [],
+      // 损坏/legacy 元数据：锚点落在引擎载体上（下标 2）
+      metadata: { abortedTurn: { userMessageIndex: 2, at: t + 3 } },
+      tasks: [],
+    });
+
+    const view = await gateway.getSessionView('s-bad-anchor');
+    expect(view?.abortedTurn).toBeUndefined();
+    await expect(gateway.truncateMessagesFrom('s-bad-anchor', 2)).rejects.toThrow(
+      /anchor is not a real user message/,
+    );
+  });
 });
