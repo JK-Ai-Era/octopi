@@ -194,8 +194,27 @@ export type OnErrorFn = (error: ClassifiedError) => Promise<'retry' | 'abort'>;
 // ============================================================
 
 export interface LoopObserver {
-  onLLMStart?(params: { model: string }): void;
-  onLLMEnd?(params: { model: string; usage?: TokenUsage }): void;
+  /** 每次 LLM 调用开始。callId 全进程唯一（同 agent 并发 run 的计时隔离键；实现永远传，缺省仅兼容旧调用方）；reqChars/toolChars 为请求规模字符近似（回归指标口径） */
+  onLLMStart?(params: {
+    model: string;
+    callId?: string;
+    reqChars?: number;
+    toolChars?: number;
+  }): void;
+  /** 首个输出 token 到达（TTFT；F3 `[timing]` 探针转正） */
+  onLLMFirstToken?(params: { model: string; callId?: string; ttftMs: number }): void;
+  /** LLM 调用结束（含 ttft/输出规模/停止原因，供 model.call.end 指标）；失败/中止路径也会触发（finishReason='error'） */
+  onLLMEnd?(params: {
+    model: string;
+    callId?: string;
+    usage?: TokenUsage;
+    /** 本次调用 TTFT；无输出 token（空响应）时缺省 */
+    ttftMs?: number;
+    /** 输出正文字符数（response.content） */
+    outChars?: number;
+    /** 停止原因（与 LLMResponse.finishReason 同构） */
+    finishReason?: string;
+  }): void;
   onToolStart?(params: { toolCall: ToolCall }): void;
   onToolEnd?(params: { toolCall: ToolCall; result: LoopToolResult }): void;
 }

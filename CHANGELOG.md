@@ -1,3 +1,24 @@
+## v0.90.1
+
+### feat(core): `[timing]` 探针 observability 化——LLM 计时转正 model.call.*（F3-c）
+
+探针主体转正（规格 `arch/f3-timing-regularization.md` §2 F3-c）。`[timing]` console 诊断输出全部移除（基线已落库，正式指标走 trace），计时语义归位到观测通道：
+
+1. **core LoopObserver 契约扩展**（向后兼容）：`onLLMStart` 增 `callId/reqChars/toolChars`、新增 `onLLMFirstToken(ttftMs)`、`onLLMEnd` 增 `callId/ttftMs/outChars/finishReason`（`callId` 可选，旧调用方不破坏）。**TTFT 计时点落在 `call-model.ts` 流消费处**（`onFirstChunk` 回调）：首个任意类型 chunk（含 tool_call / done）即计，与旧探针口径一致——评审发现初版只算正文/思考增量，tool_call-only 调用会被整体剔除出 p50/p95 样本集；sync fallback 以响应到位计。**失败/中止路径也收口 `onLLMEnd`**（`finishReason='error'`），否则 start 无配对 end、计时 Map 残留、错误调用耗时被系统性隐藏。
+2. **createRunTelemetry**：计时按 `callId` Map 隔离（修 F3-b 顺延的同 agent 并发 run 竞态；无 callId 旧调用方回退单键语义）；新增 `resolveContext` 注入——组合根经 RunScope ALS 给 `model.call.*` 行带 sessionId/agentId（归因）。无 start 记录时 `durationMs` 缺省，不伪造 0。
+3. **trace-collector**：`model.call.start/end` 白名单补 callId/ttft/reqChars/toolChars/outChars/finishReason（F3 回归指标口径）；`turn.end` 不再冒充 `model.call.end`（去 usage 双计与 durationMs=0 污染）；`wrap()` 收口行仅在事件流无 `turn.end` 时补（修去双计引出的 turn 统计翻倍回归）。**注意**：独立 `TraceCollector`（无 LoopObserver）消费者从此拿不到 `model.call.end`——usage/延迟取 `turn.end` 行。
+4. **run 级打点**：runner 三处探针（wait / build / run_end）转 `run.timing` 事件走 eventSink → trace，已注册 `AgentEvents.RUN_TIMING` / `AgentEventMap` / `TRACE_EVENTS.RUN_TIMING` 词表。**buildMs 口径修正**：从拿锁后起算（旧探针含排队等待，与 wait 双重计时）。`sysChars` 注记：E8 后不含易变快照（`arch/b0-cache-stable-context.md` §5 要求）。
+5. **withTimingProbe / timingReqSize 删除**：provider 装饰链只剩 wire dump；gateway `msg_in` 探针行删除（入站留痕由既有 `[Gateway] Inbound message` 日志承担）。
+6. **run 收口留痕**：console 保留一条完整 `[Runner] run end`（reason/loopEnd/stopReason/dur）——前次事故「run 结束原因零日志」的留痕不随探针删除（非 `[timing]` 副本，trace 未启用时的可诊断性兜底；独立评审确认不违背「console 探针干净移除」拍板字面，此处判断请大哥过目）。finally 内观测调用加护栏，异常不吞后续收口。
+
+**评审修复**（独立子 agent 评审 3 P1 + 5 P2 全部落地）：TTFT 口径不断档、错误路径计时收口、wrap 双行回归、callId 可选、Layer 0 去模块级计数器（callId 改时间+随机，无状态）、toolChars 空工具集口径对齐（`[]`→0）、观测回调 try/catch 护栏、durationMs 不伪造 0。**新增测试 7 条**：错误路径 start/end 成对、tool_call-only TTFT、并发计时隔离（相对断言抗抖动）、turn.end 去双计（record/wrap 双模式）、run.timing 三 stage 落盘。
+
+**口径说明**：TTFT = 调用发出 → 首个任意 chunk（含 tool_call；fallback 以 chat 响应到位计）；空响应无 token 时 ttftMs 缺省。`turn_end` 协议事件暂不携带计时（F3-d 将把 ttft/chars 接进 Run 页签耗时区）。
+
+**验证**：全量测试 3170 过 / 3 败（`getProcessName/ps` ×2 沙箱固有限制 + `FileWatchSource` 防抖并行时序抖动（隔离复跑 2/2 过），均与本 diff 无因果）/ 6 跳过；`npm run lint` 绿；`arch/check-sync.sh` 绿。
+
+---
+
 ## v0.90.0
 
 ### feat(engine): 接通 observability.traceDir 断头线，trace 正式落盘（F3-b / D5）

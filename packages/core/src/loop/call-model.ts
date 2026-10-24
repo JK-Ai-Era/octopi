@@ -36,10 +36,27 @@ export async function* callModel(
   messages: LLMMessage[],
   tools: LLMToolDefinition[],
   signal: AbortSignal | undefined,
-  timeouts: { idleTimeoutMs: number; absoluteTimeoutMs: number },
+  timeouts: {
+    idleTimeoutMs: number;
+    absoluteTimeoutMs: number;
+    /**
+     * 首个流 chunk 到达（TTFT 计时点，F3）。
+     * 口径与旧 `[timing]` 探针一致：任一 chunk（含 tool_call / done）都算首个；
+     * sync fallback 以 chat 响应到位（有正文或工具调用）计。
+     */
+    onFirstChunk?: (ttftMs: number) => void;
+  },
 ): AsyncGenerator<AgentLoopEvent, LLMResponse> {
-  const { idleTimeoutMs, absoluteTimeoutMs } = timeouts;
+  const { idleTimeoutMs, absoluteTimeoutMs, onFirstChunk } = timeouts;
   const requestStartTime = Date.now();
+  let firstChunkFired = false;
+  /** 首 chunk 计时（幂等）：流式首个任意 chunk 或 fallback 响应到位时触发 */
+  const fireFirstChunk = (): void => {
+    if (!firstChunkFired) {
+      firstChunkFired = true;
+      onFirstChunk?.(Date.now() - requestStartTime);
+    }
+  };
 
   let content = '';
   let reasoning = '';
@@ -95,6 +112,8 @@ export async function* callModel(
     };
     try {
       const response = await runChatWithWatchdog();
+      // fallback 口径：响应到位（有正文或工具调用）即首个输出（chat 无流式 chunk）
+      if (response.content || response.toolCalls?.length) fireFirstChunk();
       if (response.content) {
         yield { type: 'llm_stream_delta', timestamp: Date.now(), data: { delta: response.content } };
       }
@@ -166,6 +185,8 @@ export async function* callModel(
         while (true) {
           const { done, value: chunk } = await watchdogRead();
           if (done) break;
+          // 首个任意类型 chunk（含 tool_call/done）即 TTFT——与旧探针口径一致，样本不断档
+          fireFirstChunk();
 
           if (chunk.type === 'reasoning' && chunk.content) {
             // 思考增量：喂 watchdog（收包即复位）并供 UI 展示，绝不拼进 content

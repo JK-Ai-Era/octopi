@@ -58,6 +58,28 @@ export interface AgentEventMap {
       deleted?: string[];
     };
   };
+  /** Runner 收口计时（F3 `[timing]` 探针转正；wait/build/run_end 分段，事件旁路 eventSink） */
+  'run.timing': {
+    stage: 'run_start' | 'context_ready' | 'run_end';
+    /** 排队/等锁耗时（stage=run_start） */
+    waitMs?: number;
+    /** 上下文组装耗时，从拿锁后起算（stage=context_ready） */
+    buildMs?: number;
+    /** 消息数（stage=context_ready） */
+    msgs?: number;
+    /** system prompt 稳定前缀字符数（E8 后不含易变快照） */
+    sysChars?: number;
+    /** grounding 估算 tokens（stage=context_ready） */
+    groundingTokens?: number;
+    /** run 总耗时（stage=run_end） */
+    durMs?: number;
+    /** 观测口径结束原因（stage=run_end） */
+    reason?: string;
+    /** 循环结束原因（stage=run_end） */
+    loopEnd?: string;
+    /** 停止闸门原因（stage=run_end） */
+    stopReason?: string;
+  };
 
   // ── 预算 / 过程监督 ──
   'budget.exceeded': {
@@ -224,6 +246,9 @@ export const AgentEvents = {
   ENGINE_ERROR: 'engine.error',
   ITERATION_START: 'iteration.start',
   TURN_END: 'turn.end',
+
+  /** Runner 收口计时（F3 转正） */
+  RUN_TIMING: 'run.timing',
 
   TOOL_EXEC_START: 'tool.exec.start',
   TOOL_EXEC_END: 'tool.exec.end',

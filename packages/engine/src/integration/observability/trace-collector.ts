@@ -74,7 +74,9 @@ export class TraceCollector {
 
     this.logger.info(TRACE_EVENTS.TURN_START, { turnId }, ctx);
 
+    let sawTurnEnd = false;
     for await (const event of events) {
+      if (event.type === 'turn.end') sawTurnEnd = true;
       // 记录到 trace
       this.recordEvent(event, ctx, turnId);
 
@@ -82,7 +84,11 @@ export class TraceCollector {
       yield event;
     }
 
-    this.logger.info(TRACE_EVENTS.TURN_END, { turnId }, ctx);
+    // 收口行仅在事件流自身无 turn.end 时补——recordEvent 已把 turn.end 映射为 TURN_END，
+    // 再补一行即双计（turn 统计翻倍）
+    if (!sawTurnEnd) {
+      this.logger.info(TRACE_EVENTS.TURN_END, { turnId }, ctx);
+    }
   }
 
   /**
@@ -135,19 +141,22 @@ export class TraceCollector {
         this.logger.info(TRACE_EVENTS.TURN_START, { turnId }, base);
         break;
 
-      // Runner 词表：turn.end 携带 usage，映射为 model.call.end
+      // Runner 词表：turn.end 携带 usage。F3-c 起不再冒充 model.call.end
+      //（LoopObserver 的 model.call.end 才带 durationMs/ttft；两行各归各位，p50/p95 取数不双计）
       case 'turn.end':
-        this.logger.info(TRACE_EVENTS.MODEL_CALL_END, {
+        this.logger.info(TRACE_EVENTS.TURN_END, {
           contentLength: (event.data?.content as string)?.length ?? 0,
           usage: event.data?.usage,
           turnId,
         }, base);
-        this.logger.info(TRACE_EVENTS.TURN_END, { turnId }, base);
         break;
 
       case 'model.call.start':
         this.logger.info(TRACE_EVENTS.MODEL_CALL_START, {
           model: event.data?.model,
+          callId: event.data?.callId,
+          reqChars: event.data?.reqChars,
+          toolChars: event.data?.toolChars,
           turnId,
         }, base);
         break;
@@ -155,13 +164,22 @@ export class TraceCollector {
       case 'model.call.end':
         this.logger.info(TRACE_EVENTS.MODEL_CALL_END, {
           model: event.data?.model,
-          // durationMs 是 F3 回归指标口径（long-session-latency §7）：白名单漏掉即断档
+          callId: event.data?.callId,
+          // durationMs/ttftMs/reqChars 是 F3 回归指标口径（long-session-latency §7）：白名单漏掉即断档
           durationMs: event.data?.durationMs,
+          ttftMs: event.data?.ttftMs,
+          outChars: event.data?.outChars,
+          finishReason: event.data?.finishReason,
           contentLength: (event.data?.content as string)?.length ?? 0,
           toolCallCount: event.data?.toolCallCount ?? 0,
           usage: event.data?.usage,
           turnId,
         }, base);
+        break;
+
+      // Runner 收口计时（wait/build/run_end；`[timing]` 探针转正，F3）
+      case 'run.timing':
+        this.logger.info(TRACE_EVENTS.RUN_TIMING, event.data, base);
         break;
 
       case 'model.call.error':

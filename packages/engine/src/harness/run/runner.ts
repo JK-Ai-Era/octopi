@@ -691,9 +691,8 @@ export class SessionAwareRunner {
   ): AsyncGenerator<import('@octopi-agent/core/primitives/event-bus.js').AgentEvent> {
     /** 本轮文件 undo（L3）；中止保留，其余出口 commit */
     let turnFileUndo: import('../extension/execution-environment/undo-log.js').TurnFileUndoLog | undefined;
-    // [timing probe] 长 session 首 run 延迟定位（诊断后移除或转正）
+    // run 收口计时（`[timing]` 探针转正，F3）：wait/build/run_end 走 eventSink → trace
     const timingRunEnter = Date.now();
-    console.log(`[timing] stage=run_enter ms=${timingRunEnter} session=${sessionId}`);
     // 1. 并发门控（如果配置了 SessionGate）；排队期间响应 abort
     const gate = this.config.sessionGate;
     let gateRelease: (() => void) | undefined;
@@ -728,8 +727,16 @@ export class SessionAwareRunner {
       return;
     }
 
-    // [timing probe] 排队/等锁耗时 = wait
-    console.log(`[timing] stage=run_start ms=${Date.now()} session=${sessionId} wait=${Date.now() - timingRunEnter}`);
+    this.config.eventSink?.(
+      {
+        type: 'run.timing',
+        timestamp: Date.now(),
+        data: { stage: 'run_start', waitMs: Date.now() - timingRunEnter },
+      } as import('@octopi-agent/core/primitives/event-bus.js').AgentEvent,
+      { sessionId, agentId: runConfig.agentId ?? 'default' },
+    );
+    // buildMs 从拿锁后起算（含 wait 会双重计时；F3-d 耗时区按分段展示）
+    const runStartTs = Date.now();
 
     const _agentId = runConfig.agentId ?? 'default';
 
@@ -1183,9 +1190,22 @@ export class SessionAwareRunner {
         }
       }
 
-      // [timing probe] system prompt 装配 + grounding 全部就绪；build = 组装耗时
-      console.log(
-        `[timing] stage=context_ready ms=${Date.now()} session=${sessionId} build=${Date.now() - timingRunEnter} msgs=${session.messages.length} sysChars=${(runContext.systemPrompt ?? '').length} grounding=${pendingGrounding ? pendingGrounding.tokens : 0}`,
+      // system prompt 装配 + grounding 全部就绪；buildMs = 组装耗时。
+      // 口径注记（arch/b0-cache-stable-context.md §5）：sysChars 是稳定前缀规模，
+      // E8 后不含易变快照——勿与旧 `[timing]` 基线直接对比。
+      this.config.eventSink?.(
+        {
+          type: 'run.timing',
+          timestamp: Date.now(),
+          data: {
+            stage: 'context_ready',
+            buildMs: Date.now() - runStartTs,
+            msgs: session.messages.length,
+            sysChars: (runContext.systemPrompt ?? '').length,
+            groundingTokens: pendingGrounding ? pendingGrounding.tokens : 0,
+          },
+        } as import('@octopi-agent/core/primitives/event-bus.js').AgentEvent,
+        { sessionId, agentId: _agentId },
       );
 
       // 更新 harness 的 sessionId/agentId（checkpoint 回退；权威身份在 RunScope ALS）
@@ -1837,12 +1857,31 @@ export class SessionAwareRunner {
       }
       throw err;
     } finally {
-      // [timing probe] run 收口必须留痕：本次事故里「run 结束原因」零日志，
-      // 只能靠反推落盘消息定位。reason = 观测口径，stopReason = 停止闸门。
+      // run 收口：reason = 观测口径，stopReason = 停止闸门。
+      // 计时进 trace（run.timing）；console 保留一条完整生命周期日志——前次事故
+      // 「run 结束原因零日志、只能靠反推落盘消息定位」，该留痕不随探针删除。
+      const runEndReason = observerEndReason ?? (signal?.aborted ? 'aborted' : 'unknown');
+      const runEndDurMs = Date.now() - timingRunEnter;
+      try {
+        this.config.eventSink?.(
+          {
+            type: 'run.timing',
+            timestamp: Date.now(),
+            data: {
+              stage: 'run_end',
+              durMs: runEndDurMs,
+              reason: runEndReason,
+              loopEnd: adaptState.loopEndReason,
+              stopReason: adaptState.stopReason,
+            },
+          } as import('@octopi-agent/core/primitives/event-bus.js').AgentEvent,
+          { sessionId, agentId: _agentId },
+        );
+      } catch {
+        // finally 内的观测失败不得吞掉后续收口（detachSession / ObserverHub）
+      }
       console.log(
-        `[timing] stage=run_end ms=${Date.now()} session=${sessionId}` +
-          ` dur=${Date.now() - timingRunEnter}` +
-          ` reason=${observerEndReason ?? (signal?.aborted ? 'aborted' : 'unknown')}` +
+        `[Runner] run end session=${sessionId} reason=${runEndReason} dur=${runEndDurMs}ms` +
           ` loopEnd=${adaptState.loopEndReason ?? 'none'}` +
           (adaptState.stopReason ? ` stopReason=${adaptState.stopReason}` : ''),
       );

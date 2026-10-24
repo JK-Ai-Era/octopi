@@ -31,6 +31,7 @@ const MAP_KEYS = [
   'run.scope.messages',
   'run.scope.llm',
   'run.guard.metrics',
+  'run.timing',
   'security.blocked',
   'security.behavior_blocked',
   'task.created',

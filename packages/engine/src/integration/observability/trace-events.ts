@@ -62,6 +62,9 @@ export const TRACE_EVENTS = {
   SESSION_LOAD: 'session.load',
   SESSION_SAVE: 'session.save',
 
+  // Runner 收口计时（wait/build/run_end；F3 `[timing]` 探针转正）
+  RUN_TIMING: 'run.timing',
+
   // Level 2: WARN
   MODEL_RETRY: 'model.retry',
   MODEL_FALLBACK: 'model.fallback',

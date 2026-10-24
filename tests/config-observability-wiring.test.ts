@@ -60,10 +60,10 @@ describe('createTelemetryFactoryFromConfig 落盘', () => {
     });
 
     const observer = telemetry.createLoopObserver({});
-    observer.onLLMStart?.({ model: 'm1' });
+    observer.onLLMStart?.({ model: 'm1', callId: 'k1' });
     // 间隔数毫秒：durationMs 必须 > 0（=0 说明计时器失效也测不出）
     await new Promise((r) => setTimeout(r, 5));
-    observer.onLLMEnd?.({ model: 'm1' });
+    observer.onLLMEnd?.({ model: 'm1', callId: 'k1' });
     await telemetry.finalize?.();
 
     const files = readdirSync(dir).filter((f) => f.endsWith('.jsonl'));
@@ -90,8 +90,8 @@ describe('createTelemetryFactoryFromConfig 落盘', () => {
     const factory = await createTelemetryFactoryFromConfig({ traceDir: dir });
     const t1 = factory({ enableMetrics: true });
     const t2 = factory({ enableMetrics: true });
-    t1.createLoopObserver({}).onLLMStart?.({ model: 'a' });
-    t2.createLoopObserver({}).onLLMStart?.({ model: 'b' });
+    t1.createLoopObserver({}).onLLMStart?.({ model: 'a', callId: 'a1' });
+    t2.createLoopObserver({}).onLLMStart?.({ model: 'b', callId: 'b1' });
     await t1.finalize?.();
     await t2.finalize?.();
 
@@ -109,7 +109,7 @@ describe('createTelemetryFactoryFromConfig 落盘', () => {
       { type: 'context.built', timestamp: Date.now(), data: {} } as never,
       { sessionId: 's', agentId: 'a' },
     );
-    observer.onLLMStart?.({ model: 'm1' });
+    observer.onLLMStart?.({ model: 'm1', callId: 'k2' });
     await telemetry.finalize?.();
 
     const files = readdirSync(dir).filter((f) => f.endsWith('.jsonl'));

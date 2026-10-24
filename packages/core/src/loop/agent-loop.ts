@@ -34,6 +34,34 @@ export const DEFAULT_MODEL_CALL_IDLE_TIMEOUT_MS = 300_000;
 export const DEFAULT_MODEL_CALL_ABSOLUTE_TIMEOUT_MS = 900_000;
 
 /**
+ * 估算请求正文规模（字符近似值，回归指标口径；与旧 `[timing]` 探针的 chars 同算法）
+ *
+ * @param messages - LLM 请求消息
+ * @returns 字符近似总数
+ */
+function estimateRequestChars(messages: LLMMessage[]): number {
+  let chars = 0;
+  for (const m of messages) {
+    const c = (m as { content?: unknown }).content;
+    chars += typeof c === 'string' ? c.length : JSON.stringify(c ?? '').length;
+  }
+  return chars;
+}
+
+/**
+ * 观测回调护栏：回调异常不得打断 run（与 onTool* 既有 try/catch 同策略）
+ *
+ * @param fn - observer 回调
+ */
+function safeObserve(fn: () => void): void {
+  try {
+    fn();
+  } catch {
+    // 观测回调失败静默：业务循环不因回调缺陷中断
+  }
+}
+
+/**
  * Agent 核心循环
  *
  * @param context - 上下文工作区（循环内**原地**修改 messages）
@@ -149,16 +177,37 @@ export async function* agentLoop(
       : normalizeMessagesForLlm(currentContext.messages);
 
     // ── 3. 调用 LLM（带超时保护 + 流式输出） ──
-    observer?.onLLMStart?.({ model: currentModel.name });
+    // callId 无模块状态（时间 + 随机）：同 agent 并发 run 的计时隔离键
+    const llmCallId = `call_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+    safeObserve(() =>
+      observer?.onLLMStart?.({
+        model: currentModel.name,
+        callId: llmCallId,
+        reqChars: estimateRequestChars(llmMessages),
+        toolChars: toolDefs.length ? JSON.stringify(toolDefs).length : 0,
+      }),
+    );
 
     let response: LLMResponse;
+    /** 首个输出 token 延迟（TTFT）；无输出 token 时缺省（F3 指标口径） */
+    let ttftMs: number | undefined;
     try {
       const callResult = callModel(
         currentModel,
         llmMessages,
         toolDefs,
         signal,
-        { idleTimeoutMs, absoluteTimeoutMs },
+        {
+          idleTimeoutMs,
+          absoluteTimeoutMs,
+          // TTFT 计时点在 call-model 流消费处（首个任意类型 chunk，含 tool_call——与旧探针口径一致）
+          onFirstChunk: (ms) => {
+            ttftMs = ms;
+            safeObserve(() =>
+              observer?.onLLMFirstToken?.({ model: currentModel.name, callId: llmCallId, ttftMs: ms }),
+            );
+          },
+        },
       );
 
       // 透传流式事件
@@ -169,6 +218,16 @@ export async function* agentLoop(
       }
       response = result.value; // 最终的 LLMResponse
     } catch (llmError) {
+      // 失败/中止也收口计时：否则 start 无配对 end（孤儿行 + 计时 Map 残留），
+      // 错误调用的耗时会被系统性隐藏
+      safeObserve(() =>
+        observer?.onLLMEnd?.({
+          model: currentModel.name,
+          callId: llmCallId,
+          ttftMs,
+          finishReason: 'error',
+        }),
+      );
       // LLM 调用失败（stream + chat 都失败）：通知 onError，让 Harness 决定重试/中止
       // 不变量：业务错误永不 throw，始终以 agent_end 终态事件结束，保证用户可见
       const classified = classifyError(llmError);
@@ -185,7 +244,16 @@ export async function* agentLoop(
       return;
     }
 
-    observer?.onLLMEnd?.({ model: currentModel.name, usage: response.usage });
+    safeObserve(() =>
+      observer?.onLLMEnd?.({
+        model: currentModel.name,
+        callId: llmCallId,
+        usage: response.usage,
+        ttftMs,
+        outChars: (response.content ?? '').length,
+        finishReason: response.finishReason,
+      }),
+    );
     lastResponseUsage = response.usage;
 
     // ── 4. 构建 assistant 消息并加入历史 ──

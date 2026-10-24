@@ -5,7 +5,8 @@
  * 1. 「连续同名工具」不是循环判据——编码 turn 会连续调用 shell/file_edit，
  *    参数各异即正常推进；只有「名 + 参数 + 结果」全同才是无进展。
  * 2. 引擎有权终止 turn，就必须留下用户可见原因（runStopped 消息 + metadata）。
- * 3. run 收口必须留 [timing] stage=run_end 痕迹（原因可事后定位）。
+ * 3. run 收口必须留痕：`[Runner] run end` 生命周期日志 + trace `run.timing`(stage=run_end)
+ *    （原因可事后定位；F3 转正后计时进 trace，留痕语义不变）。
  */
 
 import { describe, it, expect } from 'vitest';

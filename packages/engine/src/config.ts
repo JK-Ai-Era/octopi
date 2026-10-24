@@ -1330,90 +1330,7 @@ export interface NormalizedModelInfo {
 
 // ── Provider 工厂 ──
 
-// [timing probe] 长 session 首 run 延迟定位：LLM 调用计时装饰器（诊断后移除或转正）
-
-/**
- * 估算请求规模（字符近似值，仅用于计时日志）
- *
- * @param request - LLM 请求
- * @returns msgs/chars/toolChars 计数串
- */
-function timingReqSize(request: {
-  messages: Array<{ content?: unknown }>;
-  tools?: unknown;
-}): string {
-  let chars = 0;
-  for (const m of request.messages ?? []) {
-    const c = m.content;
-    chars += typeof c === 'string' ? c.length : JSON.stringify(c ?? '').length;
-  }
-  const toolChars = request.tools ? JSON.stringify(request.tools).length : 0;
-  return `msgs=${request.messages?.length ?? 0} chars=${chars} toolChars=${toolChars}`;
-}
-
-/**
- * 包一层计时探针：llm_start / llm_first_token（TTFT）/ llm_end
- *
- * @param inner - 真实 provider
- * @returns 透传装饰器
- */
-// [timing probe] 内部装饰器（F3-c 随探针转正退役）
-function withTimingProbe(inner: ModelProvider): ModelProvider {
-  return {
-    name: inner.name,
-    defaultModel: inner.defaultModel,
-    models: inner.models,
-    isAvailable: () => inner.isAvailable(),
-    getModelInfo: (modelName: string) => inner.getModelInfo(modelName),
-    getModelInfos: () => inner.getModelInfos(),
-    chat: async (request) => {
-      const t0 = Date.now();
-      console.log(
-        `[timing] stage=llm_start ms=${t0} provider=${inner.name} mode=chat model=${request.model ?? inner.defaultModel ?? '?'} ${timingReqSize(request)}`,
-      );
-      try {
-        const res = await inner.chat(request);
-        console.log(
-          `[timing] stage=llm_end ms=${Date.now()} dur=${Date.now() - t0} provider=${inner.name} mode=chat outcome=ok finish=${res.finishReason ?? '?'} outChars=${(res.content ?? '').length}`,
-        );
-        return res;
-      } catch (err) {
-        console.log(
-          `[timing] stage=llm_end ms=${Date.now()} dur=${Date.now() - t0} provider=${inner.name} mode=chat outcome=error`,
-        );
-        throw err;
-      }
-    },
-    stream: async function* (request) {
-      const t0 = Date.now();
-      const model = request.model ?? inner.defaultModel ?? '?';
-      console.log(
-        `[timing] stage=llm_start ms=${t0} provider=${inner.name} mode=stream model=${model} ${timingReqSize(request)}`,
-      );
-      let first = true;
-      let outcome = 'abandoned';
-      try {
-        for await (const chunk of inner.stream(request)) {
-          if (first) {
-            first = false;
-            console.log(
-              `[timing] stage=llm_first_token ms=${Date.now()} ttft=${Date.now() - t0} provider=${inner.name} model=${model}`,
-            );
-          }
-          yield chunk;
-        }
-        outcome = 'ok';
-      } catch (err) {
-        outcome = 'error';
-        throw err;
-      } finally {
-        console.log(
-          `[timing] stage=llm_end ms=${Date.now()} dur=${Date.now() - t0} provider=${inner.name} mode=stream outcome=${outcome}`,
-        );
-      }
-    },
-  };
-}
+// ── 观测装配（F3/D5）──
 
 /**
  * 按 `observability.llmRequestDump` 配置构造 wire dump sink
@@ -1453,7 +1370,7 @@ export async function createWireDumpSinkFromConfig(
  * @param name - provider 名称
  * @param pc - provider 配置
  * @param options - 可选：wire dump sink（诊断用，见 `observability.llmRequestDump`）
- * @returns provider 实例（计时探针 → wire dump → 原生 provider 的装饰链）
+ * @returns provider 实例（wire dump → 原生 provider 的装饰链；LLM 计时已 observability 化进 model.call.*）
  */
 export async function createProviderFromConfig(
   name: string,
@@ -1464,14 +1381,13 @@ export async function createProviderFromConfig(
   const models = pc.models.map(m => ({ name: m.name ?? m.id, contextWindow: m.contextWindow, maxOutputTokens: m.maxTokens }));
   const defaultModel = pc.models[0]?.name ?? pc.models[0]?.id;
 
-  let decorate: (inner: ModelProvider) => ModelProvider = withTimingProbe;
+  let decorate: (inner: ModelProvider) => ModelProvider = (inner) => inner;
   if (options?.wireDump) {
     // 仅诊断路径才加载 wire dump（fs/crypto 不进入常规 provider 创建）。
-    // 装饰顺序必须是 probe(dump(real))：dump 需贴在真实 provider 上才能拿到 `wireBodyFor`
-    //（探针只转发固定成员）；也因此开启 dump 时探针的 dur 会包含 body 序列化/哈希的几毫秒。
+    // dump 必须贴在真实 provider 上才能拿到 `wireBodyFor`。
     const { withWireDump } = await import('./integration/providers/wire-dump.js');
     const sink = options.wireDump;
-    decorate = (inner: ModelProvider) => withTimingProbe(withWireDump(inner, sink));
+    decorate = (inner: ModelProvider) => withWireDump(inner, sink);
   }
 
   if (apiType === 'anthropic') {
@@ -1500,6 +1416,7 @@ export async function createTelemetryFactoryFromConfig(
 ): Promise<import('./harness/observability/run-telemetry.js').RunTelemetryFactory> {
   const { createRunTelemetry } = await import('./integration/observability/run-telemetry.js');
   const { TraceCollector } = await import('./integration/observability/trace-collector.js');
+  const { getRunScope } = await import('./harness/run/run-scope.js');
   type TraceLevel = import('./integration/observability/trace-events.js').TraceLevel;
   // 配置 0–5 与 TraceLevel 数值同构；schema 保证 0-5 整数
   const level = (cfg.level ?? 3) as TraceLevel;
@@ -1509,6 +1426,11 @@ export async function createTelemetryFactoryFromConfig(
   return (traceOptions) =>
     createRunTelemetry({
       ...traceOptions,
+      // model.call.* 归因：LoopObserver 路径经 RunScope ALS 取 sessionId/agentId（与 wire dump 同法）
+      resolveContext: () => {
+        const scope = getRunScope();
+        return scope ? { sessionId: scope.sessionId, agentId: scope.agentId } : {};
+      },
       collector: new TraceCollector({
         ...traceOptions,
         level,

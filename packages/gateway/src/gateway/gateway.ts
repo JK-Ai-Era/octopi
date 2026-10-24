@@ -4201,8 +4201,6 @@ export class Gateway {
 
   private async handleInboundMessage(msg: ChannelMessage): Promise<void> {
     console.log(`[Gateway] Inbound message from ${msg.channel}:${msg.senderId} ?"${msg.content.substring(0, 50)}..."`);
-    // [timing probe] 长 session 首 run 延迟定位（诊断后移除或转正）
-    console.log(`[timing] stage=msg_in ms=${Date.now()} channel=${msg.channel} sender=${msg.senderId}`);
 
     // 1. 找到 agent
     const agent = this.resolveAgent(msg);
