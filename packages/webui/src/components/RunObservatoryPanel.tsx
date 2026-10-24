@@ -133,8 +133,7 @@ export function RunObservatoryPanel({
   const durationDisplay = lifecycle?.durationMs ?? guard?.elapsedMs;
   const endDisplay = lifecycle?.endReason ?? (runStatus === 'idle' && obs ? '—' : '');
 
-  // 耗时（G3 轻量）：按事件前缀聚合 timeline 的 durationMs；
-  // [timing] 探针的 ttft / chars 段无运行时通道（仅 gateway.log），待 F3 转正接入。
+  // 耗时（G3 轻量）：按事件前缀聚合 timeline 的 durationMs
   const timing = useMemo(() => {
     const buckets: Record<string, { count: number; totalMs: number }> = {};
     for (const ev of timeline) {
@@ -150,6 +149,38 @@ export function RunObservatoryPanel({
       if (typeof ev.durationMs === 'number') b.totalMs += ev.durationMs;
     }
     return buckets;
+  }, [timeline]);
+
+  // F3 正式计时口径：run.timing（wait/build/run 分段）+ turn.end.llmTiming（ttft/chars）
+  const f3 = useMemo(() => {
+    let waitMs: number | undefined;
+    let buildMs: number | undefined;
+    let runDurMs: number | undefined;
+    const llm: Array<{ ttftMs?: number; durationMs?: number; reqChars?: number; outChars?: number }> = [];
+    for (const ev of timeline) {
+      const t = ev.timing;
+      if (!t) continue;
+      if (ev.type === 'run.timing') {
+        if (t.stage === 'run_start') waitMs = t.waitMs;
+        else if (t.stage === 'context_ready') buildMs = t.buildMs;
+        else if (t.stage === 'run_end') runDurMs = t.durMs;
+      } else if (ev.type === 'turn.end') {
+        llm.push({ ttftMs: t.ttftMs, durationMs: t.durationMs, reqChars: t.reqChars, outChars: t.outChars });
+      }
+    }
+    const ttfts = llm
+      .map((c) => c.ttftMs)
+      .filter((v): v is number => typeof v === 'number')
+      .sort((a, b) => a - b);
+    return {
+      waitMs,
+      buildMs,
+      runDurMs,
+      llmCalls: llm.length,
+      ttftList: ttfts,
+      ttftP50: ttfts.length ? ttfts[Math.ceil(ttfts.length * 0.5) - 1] : undefined,
+      last: llm[llm.length - 1],
+    };
   }, [timeline]);
 
   const summary = useMemo(() => {
@@ -335,17 +366,51 @@ export function RunObservatoryPanel({
               <div className="small status-error" style={{ marginTop: 6 }}>{lifecycle.error}</div>
             )}
 
-            <div className="ctx-section-title">耗时 · timeline 聚合</div>
+            <div className="ctx-section-title">耗时 · run 分段与 LLM 计时</div>
             <div className="small muted" style={{ marginBottom: 4 }}>
-              按事件前缀聚合 <span className="mono">durationMs</span>（只有计时的节点被计入 Σ）。
-              <span className="mono">[timing]</span> 探针的 ttft / chars 段目前仅落 gateway.log、无运行时通道——
-              待 F3「探针转正」接入正式观测面后在此替换（不展示未采集的数据）。
+              wait/build/run 分段来自 <span className="mono">run.timing</span>；ttft / chars 来自{' '}
+              <span className="mono">turn.end.llmTiming</span>（F3 探针转正后的正式观测口径；
+              空响应无 ttft，字段缺省即未采集）。run total 取 lifecycle（不含 wait；
+              trace 的 <span className="mono">run_end.durMs</span> 含 wait）。下排为事件前缀聚合。
             </div>
             <div className="ctx-metrics">
               <div className="ctx-metric">
-                <div className="k">run total</div>
-                <div className="v">{formatMs(durationDisplay)}</div>
+                <div className="k">wait</div>
+                <div className="v">{formatMs(f3.waitMs)}</div>
               </div>
+              <div className="ctx-metric">
+                <div className="k">build</div>
+                <div className="v">{formatMs(f3.buildMs)}</div>
+              </div>
+              <div className="ctx-metric">
+                <div className="k">run total</div>
+                <div className="v">{formatMs(durationDisplay ?? f3.runDurMs)}</div>
+              </div>
+              <div className="ctx-metric">
+                <div
+                  className="k"
+                  title={
+                    f3.ttftList.length
+                      ? `每次调用 ttft：${f3.ttftList.map((v) => `${v}ms`).join(' / ')}`
+                      : undefined
+                  }
+                >
+                  ttft p50
+                </div>
+                <div className="v">{formatMs(f3.ttftP50)}</div>
+              </div>
+              <div className="ctx-metric">
+                <div className="k">llm calls</div>
+                <div className="v">{f3.llmCalls || '—'}</div>
+              </div>
+              <div className="ctx-metric">
+                <div className="k">last req/out chars</div>
+                <div className="v">
+                  {f3.last ? `${f3.last.reqChars ?? '—'} / ${f3.last.outChars ?? '—'}` : '—'}
+                </div>
+              </div>
+            </div>
+            <div className="ctx-metrics">
               <div className="ctx-metric">
                 <div className="k">tool Σ</div>
                 <div className="v">

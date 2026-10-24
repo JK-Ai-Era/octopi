@@ -142,7 +142,8 @@ export class TraceCollector {
         break;
 
       // Runner 词表：turn.end 携带 usage。F3-c 起不再冒充 model.call.end
-      //（LoopObserver 的 model.call.end 才带 durationMs/ttft；两行各归各位，p50/p95 取数不双计）
+      //（LoopObserver 的 model.call.end 才带 durationMs/ttft；两行各归各位，p50/p95 取数不双计。
+      //  F3-d 起 turn.end 事件还带 llmTiming 供 UI timeline 展示，本白名单仍不落盘——trace 指标只认 model.call.*）
       case 'turn.end':
         this.logger.info(TRACE_EVENTS.TURN_END, {
           contentLength: (event.data?.content as string)?.length ?? 0,

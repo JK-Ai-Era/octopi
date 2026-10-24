@@ -529,6 +529,29 @@ export interface RunTimelineEventDto {
   durationMs?: number;
   reason?: string;
   usage?: import('@octopi-agent/core/types/turn.js').TokenUsage;
+  /** F3 计时段（turn.end 的 LLM 计时 / run.timing 的 wait/build/run_end 分段） */
+  timing?: {
+    stage?: string;
+    waitMs?: number;
+    buildMs?: number;
+    durMs?: number;
+    /** LLM 调用总耗时（turn.end.llmTiming） */
+    durationMs?: number;
+    /** LLM 调用标识（可关联 model.call.end 行） */
+    callId?: string;
+    ttftMs?: number;
+    reqChars?: number;
+    toolChars?: number;
+    outChars?: number;
+    finishReason?: string;
+    /** run.timing=run_end 附带 */
+    loopEnd?: string;
+    stopReason?: string;
+    /** run.timing=context_ready 附带（sysChars 为稳定前缀规模，E8 后不含易变快照） */
+    msgs?: number;
+    sysChars?: number;
+    groundingTokens?: number;
+  };
 }
 
 export interface RunObservatorySnapshotDto {

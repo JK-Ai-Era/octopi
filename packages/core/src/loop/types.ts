@@ -193,6 +193,23 @@ export type OnErrorFn = (error: ClassifiedError) => Promise<'retry' | 'abort'>;
 // 5. Observer 接口（简化版）
 // ============================================================
 
+/** LLM 调用计时摘要（F3：随 turn_end 透传到观测通道，Run 页签耗时区消费） */
+export interface LoopLLMTiming {
+  callId?: string;
+  /** 调用总耗时（发出请求 → 最终响应） */
+  durationMs?: number;
+  /** 首 token 延迟；无输出 token 时缺省 */
+  ttftMs?: number;
+  /** 请求正文字符近似（回归指标口径） */
+  reqChars?: number;
+  /** 工具定义字符近似（空工具集为 0） */
+  toolChars?: number;
+  /** 输出正文字符数 */
+  outChars?: number;
+  /** 停止原因（与 LLMResponse.finishReason 同构） */
+  finishReason?: string;
+}
+
 export interface LoopObserver {
   /** 每次 LLM 调用开始。callId 全进程唯一（同 agent 并发 run 的计时隔离键；实现永远传，缺省仅兼容旧调用方）；reqChars/toolChars 为请求规模字符近似（回归指标口径） */
   onLLMStart?(params: {
@@ -315,6 +332,8 @@ export type AgentLoopEvent =
       truncated?: boolean;
       stopped?: boolean;
       error?: boolean;
+      /** F3 LLM 计时摘要（本轮调用；随适配事件透传到观测通道/Run 页签耗时区） */
+      llmTiming?: LoopLLMTiming;
       usage?: TokenUsage;
     }
   | { type: 'assistant_message'; message: Message; timestamp: number }

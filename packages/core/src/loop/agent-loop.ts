@@ -20,6 +20,7 @@ import type {
   AgentLoopConfig,
   AgentLoopEvent,
   AgentTool,
+  LoopLLMTiming,
   LoopToolResult,
   BeforeToolCallResult,
   ClassifiedError,
@@ -179,18 +180,23 @@ export async function* agentLoop(
     // ── 3. 调用 LLM（带超时保护 + 流式输出） ──
     // callId 无模块状态（时间 + 随机）：同 agent 并发 run 的计时隔离键
     const llmCallId = `call_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+    const llmCallStartTs = Date.now();
+    const reqChars = estimateRequestChars(llmMessages);
+    const toolChars = toolDefs.length ? JSON.stringify(toolDefs).length : 0;
     safeObserve(() =>
       observer?.onLLMStart?.({
         model: currentModel.name,
         callId: llmCallId,
-        reqChars: estimateRequestChars(llmMessages),
-        toolChars: toolDefs.length ? JSON.stringify(toolDefs).length : 0,
+        reqChars,
+        toolChars,
       }),
     );
 
     let response: LLMResponse;
     /** 首个输出 token 延迟（TTFT）；无输出 token 时缺省（F3 指标口径） */
     let ttftMs: number | undefined;
+    /** 本轮 LLM 调用计时摘要（turn_end 透传到观测通道，F3-d） */
+    let llmTiming: LoopLLMTiming = { callId: llmCallId, reqChars, toolChars };
     try {
       const callResult = callModel(
         currentModel,
@@ -220,6 +226,14 @@ export async function* agentLoop(
     } catch (llmError) {
       // 失败/中止也收口计时：否则 start 无配对 end（孤儿行 + 计时 Map 残留），
       // 错误调用的耗时会被系统性隐藏
+      llmTiming = {
+        callId: llmCallId,
+        durationMs: Date.now() - llmCallStartTs,
+        ttftMs,
+        reqChars,
+        toolChars,
+        finishReason: 'error',
+      };
       safeObserve(() =>
         observer?.onLLMEnd?.({
           model: currentModel.name,
@@ -234,7 +248,7 @@ export async function* agentLoop(
       if (onError) {
         const action = await onError(classified);
         if (action === 'retry') {
-          yield { type: 'turn_end', hasToolCalls: false, phase: 'final', error: true, usage: lastResponseUsage };
+          yield { type: 'turn_end', hasToolCalls: false, phase: 'final', error: true, usage: lastResponseUsage, llmTiming };
           continue; // 重试当前迭代
         }
         // action === 'abort'
@@ -244,6 +258,15 @@ export async function* agentLoop(
       return;
     }
 
+    llmTiming = {
+      callId: llmCallId,
+      durationMs: Date.now() - llmCallStartTs,
+      ttftMs,
+      reqChars,
+      toolChars,
+      outChars: (response.content ?? '').length,
+      finishReason: response.finishReason,
+    };
     safeObserve(() =>
       observer?.onLLMEnd?.({
         model: currentModel.name,
@@ -321,13 +344,13 @@ export async function* agentLoop(
         if (shouldStopAfterTurn) {
           const stop = await shouldStopAfterTurn({ message: assistantMessage, toolResults: errorResults, context: currentContext });
           if (stop) {
-            yield { type: 'turn_end', hasToolCalls: true, phase: 'final', truncated: true, usage: lastResponseUsage };
+            yield { type: 'turn_end', hasToolCalls: true, phase: 'final', truncated: true, usage: lastResponseUsage, llmTiming };
             yield { type: 'agent_end', reason: 'should_stop', timestamp: Date.now() };
             return;
           }
         }
 
-        yield { type: 'turn_end', hasToolCalls: true, phase: 'final', truncated: true, usage: lastResponseUsage };
+        yield { type: 'turn_end', hasToolCalls: true, phase: 'final', truncated: true, usage: lastResponseUsage, llmTiming };
         continue;
       }
     }
@@ -346,7 +369,7 @@ export async function* agentLoop(
       if (shouldStopAfterTurn) {
         const stop = await shouldStopAfterTurn({ message: assistantMessage, toolResults: [], context: currentContext });
         if (stop) {
-          yield { type: 'turn_end', hasToolCalls: false, phase: 'final', usage: lastResponseUsage };
+          yield { type: 'turn_end', hasToolCalls: false, phase: 'final', usage: lastResponseUsage, llmTiming };
           yield { type: 'agent_end', reason: 'should_stop', timestamp: Date.now() };
           return;
         }
@@ -356,12 +379,12 @@ export async function* agentLoop(
       const followUps = getFollowUpMessages ? await getFollowUpMessages() : [];
       if (followUps.length > 0) {
         currentContext.messages.push(...followUps);
-        yield { type: 'turn_end', hasToolCalls: false, phase: 'final', usage: lastResponseUsage };
+        yield { type: 'turn_end', hasToolCalls: false, phase: 'final', usage: lastResponseUsage, llmTiming };
         continue;
       }
 
       // 无工具调用 + 无 followUp → 自然结束
-      yield { type: 'turn_end', hasToolCalls: false, phase: 'final', usage: lastResponseUsage };
+      yield { type: 'turn_end', hasToolCalls: false, phase: 'final', usage: lastResponseUsage, llmTiming };
       yield { type: 'agent_end', reason: 'completed', timestamp: Date.now() };
       return;
     }
@@ -369,7 +392,7 @@ export async function* agentLoop(
     // ── 7. 执行工具 ──
     // pre_tools：本轮 LLM 结束且 tool_calls 已入历史；工具即将执行。
     // 消费方勿把 pre_tools 当成「turn 已完整结束」。
-    yield { type: 'turn_end', hasToolCalls: true, phase: 'pre_tools', usage: lastResponseUsage };
+    yield { type: 'turn_end', hasToolCalls: true, phase: 'pre_tools', usage: lastResponseUsage, llmTiming };
 
     // 7a. 为每个工具调用发出 tool_start 事件
     for (const tc of toolCalls) {

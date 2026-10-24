@@ -1,3 +1,21 @@
+## v0.90.2
+
+### feat(webui): ttft / chars 计时接进 Run 页签耗时区（F3-d，F3 收口）
+
+F3 最后一批：`[timing]` 探针的 ttft / chars / wait / build 段正式接入 Run 观测面（`arch/f3-timing-regularization.md` §2 F3-d），耗时区「待 F3 转正接入」占位换正式面板。
+
+1. **通道**：core `turn_end` 协议事件增 `llmTiming`（`LoopLLMTiming`：durationMs/ttftMs/reqChars/toolChars/outChars/finishReason，7 处 yield 全携带，含错误/截断路径）→ runner 适配透传 → `AgentEventMap['turn.end']` 词表补字段。runner 三个 `run.timing` 事件改**双通道**分发（eventSink→trace + `emitObserved`→ObserverHub/EventBus），`TIMELINE_TYPES` 收 `run.timing`，`toTimelineNode` 映射 `timing` 段。
+2. **DTO**：`RunTimelineEventView` / `RunTimelineEventDto` 增 `timing`（additive，消费者盘点：web sdk / store / Run 页签；WS 广播对未知字段透传，回放不受影响）。
+3. **面板**：耗时区新增 wait / build / run total / **ttft p50** / llm calls / last req→out chars 六格（数据缺即显示 `—`，不造假）；原「按事件前缀聚合 Σ」保留为下排。ttft p50 取排序后中位样本；空响应无 ttft 的调用不入 ttft 序列（口径注脚常驻）。
+
+**实施注记**：hub 的 `TIMELINE_TYPES` 与 `SECURITY_EVENT_TYPES` 尾部同文，初版曾把 `run.timing` 误插进 security 表（被 ingest 分支当安全事件吞掉、timeline 不可见）——经独立复现脚本定位后归位。
+
+**评审修复**（独立子 agent 评审，P0/P1 全落）：**P0——三个 `run.timing` 事件缺 `sessionId/agentId`，被 hub.ingestEvent 入口丢弃（wait/build 生产恒空）**，直注 hub 的单点测试绕过真实链路未设防；**P1——`run_start/context_ready` 发射早于 `recordRunStart`**，首轮丢失、次轮起污染上一轮 run（Hub 侧投递推迟到 run 记录建立后，`run_end` 以 `observerRunId` 为闸，recordRunStart 前失败不发）。另修：ttft p50 改 nearest-rank（偶数样本不再偏大）、timeline 淘汰 pin 住 `run.timing`（长 run 不丢 wait/build）、timing 段补 `callId/loopEnd/stopReason/msgs/sysChars`、run total 口径注脚、ttft p50 悬停显示 per-call 列表（规格「列表/p50」验收）。**新增端到端回归锁** `tests/harness/run-timing-observer-hub.test.ts`（走 `SessionAwareRunner.handle()` 全链路：三段进 hub + 跨 run 不污染 + security 无污染）+ loop 级 `turn_end.llmTiming` 断言。
+
+**验证**：全量测试 3172 过 / 2 败（`getProcessName/ps` 沙箱固有 ×2，与本 diff 无因果）/ 6 跳过；`npm run lint` 绿；`npm run build`（含 webui）绿；`arch/check-sync.sh` 绿。
+
+---
+
 ## v0.90.1
 
 ### feat(core): `[timing]` 探针 observability 化——LLM 计时转正 model.call.*（F3-c）

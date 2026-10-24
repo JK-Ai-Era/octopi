@@ -29,6 +29,8 @@ export interface AgentEventMap {
     stopped?: boolean;
     error?: boolean;
     usage?: import('@octopi-agent/core/types/turn.js').TokenUsage;
+    /** F3 LLM 计时摘要（loop turn_end 透传；Run 页签耗时区消费） */
+    llmTiming?: import('@octopi-agent/core/loop/types.js').LoopLLMTiming;
     contextTokens?: number;
     contextWindow?: number;
   };

@@ -120,6 +120,7 @@ const TIMELINE_TYPES = new Set([
   'sensitive_data.detected',
   'security.blocked',
   'security.behavior_blocked',
+  'run.timing',
 ]);
 
 let runSeq = 0;
@@ -582,7 +583,18 @@ export class ObserverHub {
         record.timeline.push(node);
         const max = this.config.retention.timelineEvents;
         if (record.timeline.length > max) {
-          record.timeline.splice(0, record.timeline.length - max);
+          // 淘汰优先保留 run.timing（wait/build/run 分段是 run 级指标，不能随事件淘汰丢）
+          const excess = record.timeline.length - max;
+          let removed = 0;
+          for (let i = 0; i < record.timeline.length && removed < excess; i++) {
+            if (record.timeline[i].type !== 'run.timing') {
+              record.timeline.splice(i, 1);
+              i--;
+              removed++;
+            }
+          }
+          // 全是 run.timing 时按老规矩从头裁
+          if (removed < excess) record.timeline.splice(0, excess - removed);
         }
       }
 
@@ -1076,6 +1088,22 @@ function stripLayerPayload(
 
 function toTimelineNode(event: AgentEvent): RunTimelineEventView | null {
   const data = (event.data ?? {}) as Record<string, unknown>;
+  // F3 计时段：turn.end 带 llmTiming（LLM 调用计时）；run.timing 带 wait/build/run_end 分段
+  const timing: RunTimelineEventView['timing'] =
+    (data.llmTiming as RunTimelineEventView['timing'] | undefined) ??
+    (event.type === 'run.timing'
+      ? {
+          stage: data.stage as string | undefined,
+          waitMs: data.waitMs as number | undefined,
+          buildMs: data.buildMs as number | undefined,
+          durMs: data.durMs as number | undefined,
+          loopEnd: data.loopEnd as string | undefined,
+          stopReason: data.stopReason as string | undefined,
+          msgs: data.msgs as number | undefined,
+          sysChars: data.sysChars as number | undefined,
+          groundingTokens: data.groundingTokens as number | undefined,
+        }
+      : undefined);
   return {
     type: event.type,
     timestamp: event.timestamp,
@@ -1086,5 +1114,6 @@ function toTimelineNode(event: AgentEvent): RunTimelineEventView | null {
     durationMs: typeof data.durationMs === 'number' ? data.durationMs : undefined,
     reason: (data.reason ?? data.fallbackError) as string | undefined,
     usage: data.usage as RunTimelineEventView['usage'],
+    timing,
   };
 }

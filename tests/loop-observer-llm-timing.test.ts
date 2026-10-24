@@ -68,8 +68,9 @@ describe('agentLoop 计时回调（真实循环）', () => {
 
     const agent = new Agent({ model: streamingProvider(), harness: createHarness(), observer });
     agent.context.messages.push({ role: 'user', content: 'say hi', timestamp: Date.now() });
-    for await (const _ev of agent.run()) {
-      // drain
+    const loopEvents: Array<Record<string, unknown>> = [];
+    for await (const ev of agent.run()) {
+      loopEvents.push(ev as unknown as Record<string, unknown>);
     }
 
     expect(calls.start.length).toBeGreaterThanOrEqual(1);
@@ -93,6 +94,15 @@ describe('agentLoop 计时回调（真实循环）', () => {
     expect(end.ttftMs).toBe(first.ttftMs);
     expect(end.outChars).toBeGreaterThan(0);
     expect(end.finishReason).toBe('stop');
+
+    // F3-d：turn_end 协议事件携带 llmTiming（Run 页签耗时区的取数通道）
+    const turnEnd = loopEvents.find((e) => e.type === 'turn_end') as
+      | { llmTiming?: Record<string, unknown> }
+      | undefined;
+    expect(turnEnd?.llmTiming?.ttftMs).toBe(first.ttftMs);
+    expect(turnEnd?.llmTiming?.durationMs as number).toBeGreaterThan(0);
+    expect(turnEnd?.llmTiming?.reqChars).toBe(start.reqChars);
+    expect(turnEnd?.llmTiming?.outChars).toBe(end.outChars);
   });
 });
 

@@ -413,6 +413,46 @@ describe('ObserverHub', () => {
     expect(obs?.lifecycle?.endReason).toBe('completed');
   });
 
+  it('run.timing 与 turn.end.llmTiming 进 timeline（F3 计时口径）', () => {
+    const hub = new ObserverHub({ level: 'full' });
+    const runId = hub.recordRunStart({ scope, messages: [] });
+    hub.ingestEvent({
+      type: 'run.timing',
+      timestamp: Date.now(),
+      sessionId: 's1',
+      data: { stage: 'run_start', waitMs: 5 },
+    });
+    hub.ingestEvent({
+      type: 'turn.end',
+      timestamp: Date.now(),
+      sessionId: 's1',
+      data: {
+        hasToolCalls: false,
+        phase: 'final',
+        llmTiming: {
+          callId: 'c1',
+          durationMs: 40,
+          ttftMs: 12,
+          reqChars: 100,
+          toolChars: 0,
+          outChars: 7,
+          finishReason: 'stop',
+        },
+      },
+    });
+    const obs = hub.getRunById(runId);
+    const runTiming = obs?.timeline?.find((t) => t.type === 'run.timing');
+    expect(runTiming?.timing?.stage).toBe('run_start');
+    expect(runTiming?.timing?.waitMs).toBe(5);
+    const turnRow = obs?.timeline?.find((t) => t.type === 'turn.end');
+    expect(turnRow?.timing?.ttftMs).toBe(12);
+    expect(turnRow?.timing?.reqChars).toBe(100);
+    expect(turnRow?.timing?.outChars).toBe(7);
+    expect(turnRow?.timing?.durationMs).toBe(40);
+    // security 通道无污染（run.timing 不属于 SECURITY_EVENT_TYPES——曾误插，防复发）
+    expect(obs?.securityEvents ?? []).toHaveLength(0);
+  });
+
   it('disabled hub does not record', () => {
     const hub = new ObserverHub({ level: 'off' });
     expect(hub.isEnabled()).toBe(false);

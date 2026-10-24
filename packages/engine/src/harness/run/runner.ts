@@ -283,6 +283,7 @@ export function adaptLoopEvent(
           usage: event.usage,
           truncated: event.truncated,
           error: event.error,
+          llmTiming: event.llmTiming,
         },
       };
     case 'llm_stream_delta':
@@ -727,14 +728,18 @@ export class SessionAwareRunner {
       return;
     }
 
-    this.config.eventSink?.(
-      {
-        type: 'run.timing',
-        timestamp: Date.now(),
-        data: { stage: 'run_start', waitMs: Date.now() - timingRunEnter },
-      } as import('@octopi-agent/core/primitives/event-bus.js').AgentEvent,
-      { sessionId, agentId: runConfig.agentId ?? 'default' },
-    );
+    // run.timing 先落 trace（eventSink 时序保真）；Hub 侧投递推迟到 recordRunStart 之后——
+    // 否则 run_start/context_ready 早于 run 记录创建，会被 ingestEvent 归到上一轮 run
+    const pendingObservedTimings: import('@octopi-agent/core/primitives/event-bus.js').AgentEvent[] = [];
+    const runStartTiming = {
+      type: 'run.timing',
+      timestamp: Date.now(),
+      sessionId,
+      agentId: runConfig.agentId ?? 'default',
+      data: { stage: 'run_start', waitMs: Date.now() - timingRunEnter },
+    } as import('@octopi-agent/core/primitives/event-bus.js').AgentEvent;
+    this.config.eventSink?.(runStartTiming, { sessionId, agentId: runConfig.agentId ?? 'default' });
+    pendingObservedTimings.push(runStartTiming);
     // buildMs 从拿锁后起算（含 wait 会双重计时；F3-d 耗时区按分段展示）
     const runStartTs = Date.now();
 
@@ -1193,20 +1198,22 @@ export class SessionAwareRunner {
       // system prompt 装配 + grounding 全部就绪；buildMs = 组装耗时。
       // 口径注记（arch/b0-cache-stable-context.md §5）：sysChars 是稳定前缀规模，
       // E8 后不含易变快照——勿与旧 `[timing]` 基线直接对比。
-      this.config.eventSink?.(
-        {
-          type: 'run.timing',
-          timestamp: Date.now(),
-          data: {
-            stage: 'context_ready',
-            buildMs: Date.now() - runStartTs,
-            msgs: session.messages.length,
-            sysChars: (runContext.systemPrompt ?? '').length,
-            groundingTokens: pendingGrounding ? pendingGrounding.tokens : 0,
-          },
-        } as import('@octopi-agent/core/primitives/event-bus.js').AgentEvent,
-        { sessionId, agentId: _agentId },
-      );
+      const contextReadyTiming = {
+        type: 'run.timing',
+        timestamp: Date.now(),
+        sessionId,
+        agentId: _agentId,
+        data: {
+          stage: 'context_ready',
+          buildMs: Date.now() - runStartTs,
+          msgs: session.messages.length,
+          sysChars: (runContext.systemPrompt ?? '').length,
+          groundingTokens: pendingGrounding ? pendingGrounding.tokens : 0,
+        },
+      } as import('@octopi-agent/core/primitives/event-bus.js').AgentEvent;
+      this.config.eventSink?.(contextReadyTiming, { sessionId, agentId: _agentId });
+      // Hub 投递同样推迟到 recordRunStart 之后（见 run_start 处注释）
+      pendingObservedTimings.push(contextReadyTiming);
 
       // 更新 harness 的 sessionId/agentId（checkpoint 回退；权威身份在 RunScope ALS）
       this.harness.sessionId = sessionId;
@@ -1454,6 +1461,10 @@ export class SessionAwareRunner {
             messages: session.messages,
           }) || runId;
         if (observerRunId) {
+          // run 记录已建：补投 run_start/context_ready 到 Hub（此前投会被归到上一轮 run）
+          for (const pending of pendingObservedTimings.splice(0)) {
+            this.emitObserved(pending);
+          }
           const hubSnapshot = this._observerHub.getRunById(observerRunId);
           if (hubSnapshot) {
             this.emitObserved({
@@ -1863,20 +1874,22 @@ export class SessionAwareRunner {
       const runEndReason = observerEndReason ?? (signal?.aborted ? 'aborted' : 'unknown');
       const runEndDurMs = Date.now() - timingRunEnter;
       try {
-        this.config.eventSink?.(
-          {
-            type: 'run.timing',
-            timestamp: Date.now(),
-            data: {
-              stage: 'run_end',
-              durMs: runEndDurMs,
-              reason: runEndReason,
-              loopEnd: adaptState.loopEndReason,
-              stopReason: adaptState.stopReason,
-            },
-          } as import('@octopi-agent/core/primitives/event-bus.js').AgentEvent,
-          { sessionId, agentId: _agentId },
-        );
+        const runEndTiming = {
+          type: 'run.timing',
+          timestamp: Date.now(),
+          sessionId,
+          agentId: _agentId,
+          data: {
+            stage: 'run_end',
+            durMs: runEndDurMs,
+            reason: runEndReason,
+            loopEnd: adaptState.loopEndReason,
+            stopReason: adaptState.stopReason,
+          },
+        } as import('@octopi-agent/core/primitives/event-bus.js').AgentEvent;
+        this.config.eventSink?.(runEndTiming, { sessionId, agentId: _agentId });
+        // Hub 只收有 run 记录的 run_end（recordRunStart 前失败时不发，避免归到上一轮 run）
+        if (observerRunId) this.emitObserved(runEndTiming);
       } catch {
         // finally 内的观测失败不得吞掉后续收口（detachSession / ObserverHub）
       }
