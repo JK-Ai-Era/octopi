@@ -7,6 +7,20 @@
  * @module
  */
 
+export { assertSafeConfigName } from './name-guard.js';
+
+export {
+  BUILTIN_AGENT_ROLE_PRESETS,
+  getAgentRolePreset,
+  renderAgentRole,
+} from './agent-presets.js';
+export type {
+  AgentRolePreset,
+  AgentRoleSlots,
+  RenderedAgentRole,
+  EffectMode,
+} from './agent-presets.js';
+
 export {
   BUILTIN_MODEL_PRESETS,
   getProviderPreset,

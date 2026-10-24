@@ -964,22 +964,13 @@ export class Gateway {
       readSessionEffectOverrides(session.metadata).transactionRoots ?? [];
 
     const agentId = session.primaryAgentId ?? session.agentId;
-    // 策略来源与 runner 同源：运行时注册表（registerAgent → buildAgent）优先，
-    // config.agents 只是它的影子——两处不一致时以注册表为准，避免 untrusted 被
-    // 静默降级成全局策略（jail/围栏推导都吃这个结果）。`~` 形态统一展开后输出。
+    // 策略来源唯一权威：运行时注册表（registerAgent → buildAgent）。config.agents
+    // 影子查找已清理（P2）：注册表条目（AgentDefinition）自带 effectPolicy/workspace，
+    // 全局 config.effectPolicy 仅作缺省兜底。`~` 形态统一展开后输出。
     const agentDef = this.agents.get(agentId);
-    const agentCfg = (
-      this.config.agents as Array<{
-        id?: string;
-        workspace?: string;
-        effectPolicy?: EffectPolicyConfig;
-      }> | undefined
-    )?.find((a) => a.id === agentId);
     const eff: EffectPolicyConfig | undefined =
-      agentDef?.effectPolicy ??
-      agentCfg?.effectPolicy ??
-      (this.config.effectPolicy as EffectPolicyConfig | undefined);
-    const workspaceRaw = (agentDef?.workspace ?? agentCfg?.workspace)?.trim() || undefined;
+      agentDef?.effectPolicy ?? (this.config.effectPolicy as EffectPolicyConfig | undefined);
+    const workspaceRaw = agentDef?.workspace?.trim() || undefined;
     const workspace = workspaceRaw ? expandHomePath(workspaceRaw) : undefined;
     const extra = (eff?.transactionRoots ?? [])
       .filter(Boolean)
@@ -1226,8 +1217,9 @@ export class Gateway {
       .load(sessionId)
       .then((s) => s?.primaryAgentId ?? s?.agentId)
       .catch(() => undefined);
-    const agentEff = (this.config.agents as Array<{ id?: string; effectPolicy?: { onClose?: string } }> | undefined)
-      ?.find((a) => a.id === agentId)?.effectPolicy;
+    const agentEff = this.agents.get(agentId ?? '')?.effectPolicy as
+      | { onClose?: string }
+      | undefined;
     const onClose =
       (agentEff?.onClose as 'commit' | 'discard' | undefined)
       ?? (this.config.effectPolicy?.onClose as 'commit' | 'discard' | undefined)
@@ -1382,6 +1374,32 @@ export class Gateway {
   // ================================================================
 
   /**
+   * 下线 agent：摘注册表 + 摘 runtime dispatcher（触发不再派发）+ 退役构建缓存
+   * （home/persona 文件态保留；在跑 run 跑完自然结束）
+   *
+   * @param agentId - 要摘除的 agent id
+   */
+  removeAgent(agentId: string): void {
+    this.agents.delete(agentId);
+    this.runtime.unregisterAgent(agentId);
+    const cached = this.agentCache.get(agentId);
+    if (cached) {
+      this.agentCache.delete(agentId);
+      this.retireRunner(cached.runner);
+    }
+  }
+
+  /**
+   * 取注册表条目（配置热应用 persona 归属解析用）
+   *
+   * @param agentId - agent id
+   * @returns AgentDefinition；未注册返回 undefined
+   */
+  getAgentDefinition(agentId: string): AgentDefinition | undefined {
+    return this.agents.get(agentId);
+  }
+
+  /**
    * 热失效 agent 构建缓存（L1）：**立即重建并覆盖注册**（runtime.registerAgent 为 upsert，
    * 不摘除 → Schedule/触发派发零窗口，不丢排队触发）；在跑 run 用旧构建跑完（旧 runner
    * 的 dispatcher 已被覆盖，in-flight 流仍由旧 runner 服务）。
@@ -1479,6 +1497,7 @@ export class Gateway {
     const idx = this.retiredRunners.indexOf(runner);
     if (idx < 0) return;
     this.retiredRunners.splice(idx, 1);
+    this.runnerInflight.delete(runner);
     try {
       runner.dispose();
     } catch {
@@ -1916,15 +1935,10 @@ export class Gateway {
     /** Where the mode came from */
     effectModeSource: 'agent' | 'global' | 'default';
   }> {
-    const cfgAgents =
-      (this.config.agents as Array<{
-        id?: string;
-        effectPolicy?: { mode?: string };
-      }> | undefined) ?? [];
     const globalMode = this.config.effectPolicy?.mode;
     return Array.from(this.agents.entries()).map(([id, agent]) => {
-      const cfg = cfgAgents.find((a) => a.id === id);
-      const agentMode = cfg?.effectPolicy?.mode;
+      // 注册表唯一权威（P2 影子清理）：AgentDefinition 自带 effectPolicy
+      const agentMode = agent.effectPolicy?.mode;
       const effectMode = agentMode ?? globalMode ?? 'workspace';
       const effectModeSource: 'agent' | 'global' | 'default' = agentMode
         ? 'agent'
@@ -5145,6 +5159,13 @@ export class Gateway {
   }
 
   private resolveAgent(msg: ChannelMessage): AgentDefinition | undefined {
+    // 显式寻址优先（WebUI 侧栏选中的 agent / 触发器指定 agent）：metadata.agentId
+    // 命中注册表即用——否则向导新建的 agent 永远被 channelBindings/fallback 遮蔽（#14）。
+    const explicitId = msg.metadata?.agentId as string | undefined;
+    if (explicitId) {
+      const explicit = this.agents.get(explicitId);
+      if (explicit) return explicit;
+    }
     for (const agent of this.agents.values()) {
       if (agent.channelBindings) {
         const binding = agent.channelBindings[msg.channel];

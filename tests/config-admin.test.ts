@@ -4,7 +4,10 @@
 import { describe, it, expect } from 'vitest';
 import {
   BUILTIN_MODEL_PRESETS,
+  BUILTIN_AGENT_ROLE_PRESETS,
   getProviderPreset,
+  getAgentRolePreset,
+  renderAgentRole,
   expandProviderPreset,
   redactSecret,
   redactProvider,
@@ -146,5 +149,41 @@ describe('findProviderReferences', () => {
       agents: [{ id: 'a', model: 'openai/gpt-5.5' }],
     };
     expect(findProviderReferences(raw, 'anthropic')).toEqual([]);
+  });
+});
+
+describe('agent role presets', () => {
+  it('内置角色清单完整（6 角色，模板含插槽与安全组推荐）', () => {
+    const ids = BUILTIN_AGENT_ROLE_PRESETS.map((p) => p.id);
+    for (const required of ['general', 'researcher', 'coder', 'reviewer', 'writer', 'analyst']) {
+      expect(ids).toContain(required);
+    }
+    for (const preset of BUILTIN_AGENT_ROLE_PRESETS) {
+      expect(preset.template).toContain('{{agentName}}');
+      expect(preset.template).toContain('{{addressToUser}}');
+      expect(['workspace', 'project', 'host', 'untrusted']).toContain(preset.recommendedEffectMode);
+    }
+    // 安全组推荐按角色风险分层（coder 动代码 → project；其余只读/文字 → workspace）
+    expect(getAgentRolePreset('coder')!.recommendedEffectMode).toBe('project');
+    expect(getAgentRolePreset('researcher')!.recommendedEffectMode).toBe('workspace');
+  });
+
+  it('renderAgentRole 插槽渲染：无残留插槽 + 推荐默认值透出', () => {
+    const rendered = renderAgentRole('coder', { agentName: '小工', addressToUser: '大哥' });
+    expect(rendered.agentsMd).toContain('小工');
+    expect(rendered.agentsMd).toContain('大哥');
+    expect(rendered.agentsMd).not.toContain('{{');
+    expect(rendered.recommendedEffectMode).toBe('project');
+    expect(rendered.recommendedModelLevel).toBe('pro');
+    expect(rendered.recommendedTraits).toContain('engineering');
+  });
+
+  it('未知角色 / 空插槽 fail-loud', () => {
+    expect(() => renderAgentRole('nope', { agentName: 'x', addressToUser: 'y' })).toThrow(
+      /unknown agent role preset/,
+    );
+    expect(() => renderAgentRole('general', { agentName: '', addressToUser: 'y' })).toThrow(/agentName/);
+    expect(() => renderAgentRole('general', { agentName: 'x', addressToUser: '  ' })).toThrow(/addressToUser/);
+    expect(getAgentRolePreset('nope')).toBeUndefined();
   });
 });

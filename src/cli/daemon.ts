@@ -983,15 +983,29 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
     // 配置管理面（arch/config-hot-reload.md）：FileConfigService（IO）+ provider 工厂（带 wireDump）
     const { ConfigApplyService } = await import('@octopi-agent/gateway/gateway/config-apply.js');
     const { FileConfigService } = await import('../config-service.js');
+    const { AgentFileAdmin } = await import('../agent-admin.js');
+    const { resolveAgentDefinition, normalizeConfigRaw } = await import('../config.js');
+    const configService = new FileConfigService({ configPath });
     const configApply = new ConfigApplyService({
       gateway,
-      configAdmin: new FileConfigService({ configPath }),
+      configAdmin: configService,
       providerFactory: (name, pc) =>
         createProviderFromConfig(
           name,
           pc as unknown as import('@octopi-agent/engine/config.js').ModelProviderConfig,
           { wireDump },
         ),
+      agentFiles: new AgentFileAdmin(),
+      // raw agents[] 条目 → AgentDefinition：与启动解析同规（normalizeConfigRaw 同管线）。
+      // rawConfig 为写前预演的 would-be 全量 raw（fail-safe 预构造，见 config-apply）。
+      agentDefFactory: (rawEntry, rawConfig) => {
+        const normalized = normalizeConfigRaw(rawConfig);
+        const entry = normalized.agents.find((a) => a.id === rawEntry.id);
+        if (!entry) {
+          throw new Error(`agent not found in normalized config: ${String(rawEntry.id)}`);
+        }
+        return resolveAgentDefinition(entry, normalized);
+      },
     });
     const webApiRouter = new WebApiRouter({ gateway, basePath: '/api/v1', configApply });
     const listenHost = resolveListenHost(listenHostConfig);

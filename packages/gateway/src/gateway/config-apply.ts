@@ -6,16 +6,25 @@
  *
  * @module
  */
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import type { Gateway } from './gateway.js';
 import type { ModelProvider } from '@octopi-agent/core/interfaces/model-provider.js';
-import type { ConfigAdminPort } from '@octopi-agent/engine/config-admin/port.js';
+import type { AgentDefinition } from '@octopi-agent/engine/harness/shared/types/agent-definition.js';
 import {
+  ConfigConflictError,
+  type ConfigAdminPort,
+} from '@octopi-agent/engine/config-admin/port.js';
+import {
+  computeConfigHash,
   deleteJsonPath,
   findProviderReferences,
   getJsonPath,
   setJsonPath,
 } from '@octopi-agent/engine/config-admin/patch.js';
 import { expandEnvPlaceholders } from '@octopi-agent/engine/config-admin/env.js';
+import { assertSafeConfigName } from '@octopi-agent/engine/config-admin/name-guard.js';
+import { expandHomePath } from '@octopi-agent/engine/paths.js';
 import { redactProvider } from '@octopi-agent/engine/config-admin/redact.js';
 import {
   discoverProviderModels,
@@ -34,6 +43,18 @@ export interface ConfigApplyResult {
   backupPath: string;
 }
 
+/** agent 文件态端口（daemon 注入 AgentFileAdmin；gateway 不做文件路径语义） */
+export interface AgentFilesPort {
+  /** agent 文件态标准路径（与 octopi init 同源：home / workspace / skills） */
+  pathsOf(agentId: string): { home: string; workspace: string; skillDirectory: string };
+  /** 建文件态（幂等）；agentsMd 仅在 AGENTS.md 不存在时写（不覆盖既有 persona） */
+  scaffold(agentId: string, opts: { agentsMd?: string; workspace?: string }): Promise<void>;
+  /** 读 AGENTS.md（home 指定时按 agent 配置的 home 解析）；不存在返回 null */
+  readPersona(agentId: string, home?: string): string | null;
+  /** 写 AGENTS.md（home 指定时按 agent 配置的 home 解析） */
+  writePersona(agentId: string, content: string, home?: string): void;
+}
+
 /** ConfigApplyService 依赖（组合根注入） */
 export interface ConfigApplyServiceDeps {
   gateway: Gateway;
@@ -43,6 +64,26 @@ export interface ConfigApplyServiceDeps {
     name: string,
     providerConfig: Record<string, unknown>,
   ) => Promise<ModelProvider>;
+  /** agent 文件态端口（scaffold / persona 读写） */
+  agentFiles: AgentFilesPort;
+  /**
+   * raw agents[] 条目 → AgentDefinition（daemon 注入：包 normalize + resolveAgentDefinition）。
+   * **写盘前预构造**（fail-safe：构造失败不动盘）；rawConfig 为 would-be 全量 raw。
+   */
+  agentDefFactory: (
+    rawEntry: Record<string, unknown>,
+    rawConfig: Record<string, unknown>,
+  ) => AgentDefinition;
+}
+
+/** agent 创建请求 */
+export interface CreateAgentRequest {
+  /** agents[] 配置条目（与 octopi.json 同构） */
+  agent: Record<string, unknown>;
+  /** 初始 AGENTS.md 全文（角色模板渲染结果；缺省用脚手架默认模板） */
+  agentsMd?: string;
+  /** 乐观锁 hash */
+  hash: string;
 }
 
 /** 从 findProviderReferences 描述串提取 agent id（保守：同 agent 多引用只算一次） */
@@ -54,6 +95,12 @@ function extractAgentIds(refs: string[]): string[] {
   }
   return [...ids];
 }
+
+/**
+ * agent id 合法化：实现见 engine config-admin/name-guard.ts（单一实现点）
+ */
+
+/** `~` 展开复用 engine/paths 的单一实现（#15） */
 
 export class ConfigApplyService {
   private readonly deps: ConfigApplyServiceDeps;
@@ -192,5 +239,255 @@ export class ConfigApplyService {
       apiKey: expandEnvPlaceholders(rawKey),
       api: merged.api === 'anthropic-messages' ? 'anthropic-messages' : 'openai-completions',
     });
+  }
+
+  /**
+   * agent 列表视图（注册表唯一权威 + raw 条目补充）
+   *
+   * @returns 每个 agent 的 id / persona / model / effectMode / tools / traits + hash
+   */
+  getAgentsView(): {
+    agents: Array<{
+      id: string;
+      persona: { name: string; description: string };
+      model: unknown;
+      effectMode: string;
+      effectModeSource: 'agent' | 'global' | 'default';
+      tools: { allow: string[]; deny: string[] };
+      traits: string[];
+    }>;
+    hash: string;
+  } {
+    const { raw, hash } = this.deps.configAdmin.read();
+    const rawAgents = Array.isArray(raw.agents) ? (raw.agents as Array<Record<string, unknown>>) : [];
+    const registered = this.deps.gateway.getRegisteredAgents();
+    const agents = registered.map((reg) => {
+      const entry = rawAgents.find((a) => a.id === reg.id) ?? {};
+      const persona = (entry.persona ?? {}) as { name?: string; description?: string };
+      const tools = (entry.tools ?? {}) as { allow?: string[]; deny?: string[] };
+      return {
+        id: reg.id,
+        persona: { name: persona.name ?? reg.id, description: persona.description ?? '' },
+        model: reg.model,
+        effectMode: reg.effectMode,
+        effectModeSource: reg.effectModeSource,
+        tools: { allow: tools.allow ?? [], deny: tools.deny ?? [] },
+        traits: Array.isArray(entry.traits) ? (entry.traits as string[]) : [],
+      };
+    });
+    return { agents, hash };
+  }
+
+  /**
+   * 新增 agent（L1）：**预构造（fail-safe）→ 写盘 → scaffold → 注册 + 立即重建**
+   *
+   * 顺序保证：构造失败不动盘/文件；写盘失败不动文件态；scaffold 只在写盘成功后。
+   * 条目自动补全 home/workspace/skillDirectory（与 octopi init 同源，persona 才会被加载）。
+   *
+   * @param req - 创建请求（agents[] 条目 + 可选渲染后 AGENTS.md + hash）
+   * @returns 热应用结果（affectedAgents=[新 id]）
+   * @throws id 缺失/非法/重名、model 无法解析、{@link ConfigConflictError} 并发冲突、校验失败
+   */
+  async createAgent(req: CreateAgentRequest): Promise<ConfigApplyResult> {
+    const agentId = typeof req.agent.id === 'string' ? req.agent.id.trim() : '';
+    assertSafeConfigName(agentId);
+    const snapshot = this.deps.configAdmin.read();
+    const rawAgents = Array.isArray(snapshot.raw.agents) ? (snapshot.raw.agents as Array<Record<string, unknown>>) : [];
+    if (rawAgents.some((a) => a.id === agentId)) {
+      throw new Error(`agent already exists: ${agentId}`);
+    }
+
+    // 条目归一化 + 三字段补全（#16 id 归一；#1 home/workspace/skillDirectory）
+    const paths = this.deps.agentFiles.pathsOf(agentId);
+    const entry: Record<string, unknown> = { ...req.agent, id: agentId };
+    if (!entry.home) entry.home = paths.home;
+    if (!entry.workspace) entry.workspace = paths.workspace;
+    if (!entry.skillDirectory) entry.skillDirectory = paths.skillDirectory;
+
+    // 预构造（失败即中止，盘与文件态都不动）
+    const previewRaw = { ...snapshot.raw, agents: [...rawAgents, entry] };
+    const def = this.deps.agentDefFactory(entry, previewRaw);
+
+    // 写盘（乐观锁 + 全量校验）
+    const written = await this.deps.configAdmin.write((raw) => {
+      const agents = Array.isArray(raw.agents) ? (raw.agents as unknown[]) : [];
+      agents.push(entry);
+      raw.agents = agents;
+    }, req.hash);
+
+    // 文件态（写盘成功后；agentsMd 仅在 AGENTS.md 缺失时写，不覆盖既有 persona）
+    await this.deps.agentFiles.scaffold(agentId, {
+      agentsMd: req.agentsMd,
+      workspace: typeof entry.workspace === 'string' ? expandHomePath(entry.workspace) : undefined,
+    });
+
+    // 热应用：注册 + 立即重建（触发路径零窗口）
+    this.deps.gateway.registerAgent(def);
+    await this.deps.gateway.invalidateAgentBuild(agentId);
+    return {
+      hash: written.hash,
+      applied: 'next-run',
+      affectedAgents: [agentId],
+      backupPath: written.backupPath,
+    };
+  }
+
+  /**
+   * 更新 agent（L1）：**预构造 → 写盘（字段级合并）→ 注册 + 立即重建**
+   *
+   * 合并语义（UI 只发编辑字段，未展示字段如 home/skills/delegation 不丢）：
+   * - `effectPolicy` **二级合并**（只改发来的旋钮，高级旋钮保留）
+   * - 字段值 `null` = **删除该键**（如 `effectPolicy: null` 恢复继承全局）
+   * - 其余顶层字段整体替换（persona/tools 等对象由调用方发全量）
+   *
+   * @param agentId - agent id
+   * @param agentEntry - agents[] 条目变更字段（id 不可变）
+   * @param expectedHash - 乐观锁
+   * @returns 热应用结果
+   * @throws agent 不存在、id 不符、model 无法解析、{@link ConfigConflictError} 并发冲突
+   */
+  async updateAgent(
+    agentId: string,
+    agentEntry: Record<string, unknown>,
+    expectedHash: string,
+  ): Promise<ConfigApplyResult> {
+    assertSafeConfigName(agentId);
+    if (agentEntry.id !== undefined && agentEntry.id !== agentId) {
+      throw new Error(`agent id mismatch: ${agentId} != ${String(agentEntry.id)}`);
+    }
+    const snapshot = this.deps.configAdmin.read();
+    const rawAgents = Array.isArray(snapshot.raw.agents) ? (snapshot.raw.agents as Array<Record<string, unknown>>) : [];
+    const old = rawAgents.find((a) => a.id === agentId);
+    if (!old) throw new Error(`agent not found: ${agentId}`);
+
+    // 字段级合并（预计算一次；写入与构造用同一结果，两侧永不分歧）
+    const mergedEntry: Record<string, unknown> = { ...old };
+    for (const [key, value] of Object.entries(agentEntry)) {
+      if (value === null) {
+        delete mergedEntry[key];
+      } else if (
+        key === 'effectPolicy' &&
+        value &&
+        typeof value === 'object' &&
+        mergedEntry.effectPolicy &&
+        typeof mergedEntry.effectPolicy === 'object'
+      ) {
+        mergedEntry.effectPolicy = {
+          ...(mergedEntry.effectPolicy as Record<string, unknown>),
+          ...(value as Record<string, unknown>),
+        };
+      } else {
+        mergedEntry[key] = value;
+      }
+    }
+    mergedEntry.id = agentId;
+
+    // 预构造（失败即中止，盘不动）
+    const previewRaw = {
+      ...snapshot.raw,
+      agents: rawAgents.map((a) => (a.id === agentId ? mergedEntry : a)),
+    };
+    const def = this.deps.agentDefFactory(mergedEntry, previewRaw);
+
+    const written = await this.deps.configAdmin.write((raw) => {
+      const agents = Array.isArray(raw.agents) ? (raw.agents as Array<Record<string, unknown>>) : [];
+      const idx = agents.findIndex((a) => a.id === agentId);
+      if (idx < 0) throw new Error(`agent not found: ${agentId}`);
+      agents[idx] = mergedEntry;
+    }, expectedHash);
+
+    this.deps.gateway.registerAgent(def);
+    await this.deps.gateway.invalidateAgentBuild(agentId);
+    return {
+      hash: written.hash,
+      applied: 'next-run',
+      affectedAgents: [agentId],
+      backupPath: written.backupPath,
+    };
+  }
+
+  /**
+   * 下线 agent（L1）：写盘移除 → 注册表摘除（home/persona 文件态保留）
+   *
+   * @param agentId - agent id
+   * @param expectedHash - 乐观锁
+   * @returns 热应用结果
+   * @throws agent 不存在、{@link ConfigConflictError} 并发冲突
+   */
+  async deleteAgent(agentId: string, expectedHash: string): Promise<ConfigApplyResult> {
+    const written = await this.deps.configAdmin.write((raw) => {
+      const agents = Array.isArray(raw.agents) ? (raw.agents as Array<Record<string, unknown>>) : [];
+      const idx = agents.findIndex((a) => a.id === agentId);
+      if (idx < 0) throw new Error(`agent not found: ${agentId}`);
+      agents.splice(idx, 1);
+    }, expectedHash);
+    this.deps.gateway.removeAgent(agentId);
+    return {
+      hash: written.hash,
+      applied: 'next-run',
+      affectedAgents: [],
+      backupPath: written.backupPath,
+    };
+  }
+
+  /**
+   * 解析 persona 归属（#9）：注册表条目的 home 优先；inline persona（显式
+   * systemPrompt）不挂 AGENTS.md resolver，编辑无意义 → 拒绝
+   *
+   * @param agentId - agent id
+   * @returns persona 归属（home 路径或 inline 标记）
+   * @throws agent 不在注册表 / inline persona
+   */
+  private resolvePersonaTarget(agentId: string): { home: string | undefined } {
+    const def = this.deps.gateway.getAgentDefinition(agentId);
+    if (!def) {
+      throw new Error(`agent not found: ${agentId}`);
+    }
+    if (def.persona?.systemPrompt) {
+      throw new Error(
+        `agent "${agentId}" uses inline persona (persona.systemPrompt)：AGENTS.md 不生效，无法经此编辑`,
+      );
+    }
+    return { home: def.home || undefined };
+  }
+
+  /**
+   * 读 persona（AGENTS.md 全文）
+   *
+   * @param agentId - agent id
+   * @returns 内容 + 内容 hash（乐观锁）；文件不存在 content=null
+   * @throws agent 不在注册表 / inline persona
+   */
+  getPersona(agentId: string): { content: string | null; hash: string } {
+    assertSafeConfigName(agentId);
+    const { home } = this.resolvePersonaTarget(agentId);
+    const content = this.deps.agentFiles.readPersona(agentId, home);
+    return { content, hash: computeConfigHash(content ?? '') };
+  }
+
+  /**
+   * 写 persona（AGENTS.md）：写文件 + 立即重建（builder 指纹缓存自动重读）
+   *
+   * @param agentId - agent id
+   * @param content - AGENTS.md 全文
+   * @param expectedHash - 内容 hash（乐观锁）
+   * @returns 新内容 hash
+   * @throws agent 不在注册表 / inline persona / {@link ConfigConflictError} 并发冲突
+   */
+  async updatePersona(
+    agentId: string,
+    content: string,
+    expectedHash: string,
+  ): Promise<{ hash: string }> {
+    assertSafeConfigName(agentId);
+    const { home } = this.resolvePersonaTarget(agentId);
+    const current = this.deps.agentFiles.readPersona(agentId, home);
+    const currentHash = computeConfigHash(current ?? '');
+    if (currentHash !== expectedHash) {
+      throw new ConfigConflictError(currentHash);
+    }
+    this.deps.agentFiles.writePersona(agentId, content, home);
+    await this.deps.gateway.invalidateAgentBuild(agentId);
+    return { hash: computeConfigHash(content) };
   }
 }

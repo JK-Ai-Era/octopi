@@ -1213,6 +1213,7 @@ export function resolveModelConfig(
   modelRef: string | _ModelConfig,
   models: NormalizedModelInfo[],
   defaults?: Defaults,
+  levelMap?: Record<string, { primary: string; fallback?: string[] }>,
 ): _ModelConfig {
   // 仅当用户配置了 defaults.contextWindow 时才作为兜底；不自动猜 200k
   const defaultContextWindow = defaults?.contextWindow;
@@ -1224,6 +1225,17 @@ export function resolveModelConfig(
       resolved.contextWindow = defaultContextWindow;
     }
     resolved.fallbackModels = resolveFallbackModels(resolved.fallbackModels as any, models, defaults, 1);
+    return resolved;
+  }
+
+  // level 档位名（如 "standard"）→ 按 levelMap primary 解析（递归不传 levelMap，禁止 level→level 链）
+  const level = levelMap?.[modelRef];
+  if (level) {
+    const resolved = resolveModelConfig(level.primary, models, defaults);
+    const fallbacks = (level.fallback ?? []).map((f) => resolveModelConfig(f, models, defaults));
+    if (fallbacks.length > 0) {
+      resolved.fallbackModels = fallbacks;
+    }
     return resolved;
   }
 

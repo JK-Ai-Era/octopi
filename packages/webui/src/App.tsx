@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import ChatWorkspace from './components/ChatWorkspace';
 import { KnowledgeAdminPanel } from './components/KnowledgeAdminPanel';
-import { ModelSettingsPanel } from './components/ModelSettingsPanel';
+import { SettingsWorkspace } from './components/SettingsWorkspace';
 
 type Surface = 'playground' | 'knowledge' | 'settings';
 
@@ -61,7 +61,7 @@ export default function App() {
       ) : surface === 'knowledge' ? (
         <KnowledgeAdminPanel agentId={agentId || 'default'} />
       ) : (
-        <ModelSettingsPanel />
+        <SettingsWorkspace />
       )}
     </div>
   );

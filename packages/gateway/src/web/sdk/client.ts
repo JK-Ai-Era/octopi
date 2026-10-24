@@ -774,6 +774,34 @@ export interface ConfigModelsViewDto {
 }
 
 /** 热应用结果 */
+/** agent 视图（P2） */
+export interface ConfigAgentViewDto {
+  id: string;
+  persona: { name: string; description: string };
+  model: unknown;
+  effectMode: string;
+  effectModeSource: 'agent' | 'global' | 'default';
+  tools: { allow: string[]; deny: string[] };
+  traits: string[];
+}
+
+/** agent 列表视图 */
+export interface ConfigAgentsViewDto {
+  agents: ConfigAgentViewDto[];
+  hash: string;
+}
+
+/** agent 角色模板（生成器） */
+export interface AgentRolePresetDto {
+  id: string;
+  label: string;
+  description: string;
+  template: string;
+  recommendedEffectMode: 'workspace' | 'project' | 'host' | 'untrusted';
+  recommendedModelLevel?: string;
+  recommendedTraits?: string[];
+}
+
 export interface ConfigApplyResultDto {
   hash: string;
   applied: 'hot' | 'next-run';
@@ -2252,6 +2280,94 @@ export class OctopiClient {
       '/config/models/levels',
       { level, hash },
     );
+    return res.data;
+  }
+
+  // ──────────────────────────────────
+  // Public API: Config admin — agents (P2)
+  // ──────────────────────────────────
+
+  /** agent 列表 + hash */
+  async getConfigAgents(): Promise<ConfigAgentsViewDto> {
+    const res = await this.getJson<{ ok: boolean; data: ConfigAgentsViewDto }>('/config/agents');
+    return res.data;
+  }
+
+  /** 新增 agent（agents[] 条目 + 可选渲染后 AGENTS.md） */
+  async createConfigAgent(req: {
+    agent: Record<string, unknown>;
+    agentsMd?: string;
+    hash: string;
+  }): Promise<ConfigApplyResultDto> {
+    const res = await this.postJson<{ ok: boolean; data: ConfigApplyResultDto }>('/config/agents', req);
+    return res.data;
+  }
+
+  /** 更新 agent（**字段级合并**：只发变更字段；effectPolicy 二级合并保留高级旋钮；null=删键） */
+  async updateConfigAgent(
+    agentId: string,
+    agent: Record<string, unknown>,
+    hash: string,
+  ): Promise<ConfigApplyResultDto> {
+    const res = await this.putJson<{ ok: boolean; data: ConfigApplyResultDto }>(
+      `/config/agents/${encodeURIComponent(agentId)}`,
+      { agent, hash },
+    );
+    return res.data;
+  }
+
+  /** 下线 agent（home/persona 保留） */
+  async deleteConfigAgent(agentId: string, hash: string): Promise<ConfigApplyResultDto> {
+    const res = await this.deleteJson<{ ok: boolean; data: ConfigApplyResultDto }>(
+      `/config/agents/${encodeURIComponent(agentId)}?hash=${encodeURIComponent(hash)}`,
+    );
+    return res.data;
+  }
+
+  /** 读 persona（AGENTS.md 全文 + 内容 hash） */
+  async getAgentPersona(agentId: string): Promise<{ content: string | null; hash: string }> {
+    const res = await this.getJson<{ ok: boolean; data: { content: string | null; hash: string } }>(
+      `/config/agents/${encodeURIComponent(agentId)}/persona`,
+    );
+    return res.data;
+  }
+
+  /** 写 persona（AGENTS.md；保存即热生效） */
+  async updateAgentPersona(agentId: string, content: string, hash: string): Promise<{ hash: string }> {
+    const res = await this.putJson<{ ok: boolean; data: { hash: string } }>(
+      `/config/agents/${encodeURIComponent(agentId)}/persona`,
+      { content, hash },
+    );
+    return res.data;
+  }
+
+  /** agent 角色模板清单（生成器） */
+  async getAgentRolePresets(): Promise<AgentRolePresetDto[]> {
+    const res = await this.getJson<{ ok: boolean; data: AgentRolePresetDto[] }>(
+      '/config/presets/agent-roles',
+    );
+    return res.data;
+  }
+
+  /** 角色模板渲染（服务端单一渲染实现） */
+  async renderAgentRolePreset(
+    presetId: string,
+    slots: { agentName: string; addressToUser: string },
+  ): Promise<{
+    agentsMd: string;
+    recommendedEffectMode: AgentRolePresetDto['recommendedEffectMode'];
+    recommendedModelLevel?: string;
+    recommendedTraits?: string[];
+  }> {
+    const res = await this.postJson<{
+      ok: boolean;
+      data: {
+        agentsMd: string;
+        recommendedEffectMode: AgentRolePresetDto['recommendedEffectMode'];
+        recommendedModelLevel?: string;
+        recommendedTraits?: string[];
+      };
+    }>('/config/presets/agent-roles/render', { presetId, ...slots });
     return res.data;
   }
 

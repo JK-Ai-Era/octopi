@@ -90,9 +90,19 @@ export function loadConfig(configPath?: string): NormalizedHarnessConfig {
   applyConfigMigrations(raw);
 
   // Zod schema 校验（结构化错误信息）；路径归一化（`~` 展开）已由校验出口后置完成
-  const config = validateConfigOrThrow(raw) as unknown as NormalizedHarnessConfig;
+  const config = finalizeNormalizedConfig(validateConfigOrThrow(raw));
 
+  return config;
+}
 
+/**
+ * 校验输出 → 归一化配置（loadConfig 与 normalizeConfigRaw 共用收尾）
+ *
+ * @param validated - validateConfigOrThrow 的输出
+ * @returns 补齐 flatModels / levelMap 的归一化配置
+ */
+function finalizeNormalizedConfig(validated: unknown): NormalizedHarnessConfig {
+  const config = validated as NormalizedHarnessConfig;
   config.flatModels = flattenModels(config.models as ModelsConfig);
 
   // 提取 models.level 到顶层 levelMap（方便下游直接使用）
@@ -100,7 +110,6 @@ export function loadConfig(configPath?: string): NormalizedHarnessConfig {
   if (modelsConfig.level) {
     config.levelMap = modelsConfig.level;
   }
-
   return config;
 }
 
@@ -118,9 +127,33 @@ export async function buildFromConfigFile(configPath?: string): Promise<Map<stri
 
 
 
-export function toGatewayConfig(config: NormalizedHarnessConfig): GatewayConfig {
-  // 解析 agent model 配置：string 引用 → ModelConfig 对象
-  const resolvedAgents: AgentDefinition[] = config.agents.map(ac => ({
+/**
+ * raw 配置对象（未展开 `${ENV}`）→ 归一化配置（与 loadConfig 同一管线：展开 → 迁移 → 校验）
+ *
+ * 供配置热更的 agentDefFactory 复用；保证热更解析与启动解析同规。
+ *
+ * @param raw - raw 配置对象（占位符未展开）
+ * @returns 归一化配置（含 flatModels 等解析产物）
+ * @throws 校验失败抛错（fail-loud）
+ */
+export function normalizeConfigRaw(raw: Record<string, unknown>): NormalizedHarnessConfig {
+  const expanded = JSON.parse(expandEnvPlaceholders(JSON.stringify(raw))) as Record<string, unknown>;
+  applyConfigMigrations(expanded);
+  return finalizeNormalizedConfig(validateConfigOrThrow(expanded));
+}
+
+/**
+ * 单 agent 配置项 → AgentDefinition（toGatewayConfig 与配置热更共用）
+ *
+ * @param ac - agents[] 原始条目（已过校验）
+ * @param config - 归一化配置（提供 flatModels / defaults 解析 model 引用）
+ * @returns AgentDefinition（注册表条目形态）
+ */
+export function resolveAgentDefinition(
+  ac: NormalizedHarnessConfig['agents'][number],
+  config: NormalizedHarnessConfig,
+): AgentDefinition {
+  return {
     id: ac.id,
     home: ac.home ?? (typeof ac.persona === 'string' ? ac.persona : ''),
     workspace: ac.workspace,
@@ -128,7 +161,7 @@ export function toGatewayConfig(config: NormalizedHarnessConfig): GatewayConfig 
       ? { name: ac.persona.name ?? ac.id, description: ac.persona.description ?? '', systemPrompt: ac.persona.systemPrompt }
       : { name: ac.id, description: '', systemPrompt: '' },
     tools: ac.tools ? { allow: ac.tools.allow ?? [], deny: ac.tools.deny ?? [] } : { allow: [], deny: [] },
-    model: resolveModelConfig(ac.model, config.flatModels, config.defaults),
+    model: resolveModelConfig(ac.model, config.flatModels, config.defaults, config.levelMap),
     skillDirectory: ac.skillDirectory,
     skills: ac.skills,
     channelBindings: ac.channelBindings,
@@ -139,7 +172,12 @@ export function toGatewayConfig(config: NormalizedHarnessConfig): GatewayConfig 
     // 刻意显式列出——此对象字面量是 CLI→Gateway 的边界，漏字段即静默丢配置。
     traits: ac.traits,
     delegation: ac.delegation,
-  }));
+  };
+}
+
+export function toGatewayConfig(config: NormalizedHarnessConfig): GatewayConfig {
+  // 解析 agent model 配置：string 引用 → ModelConfig 对象
+  const resolvedAgents: AgentDefinition[] = config.agents.map(ac => resolveAgentDefinition(ac, config));
 
   const gatewayConfig: GatewayConfig = {
     agents: resolvedAgents,

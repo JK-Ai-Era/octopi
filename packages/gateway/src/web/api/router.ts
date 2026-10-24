@@ -9,7 +9,9 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Gateway } from '../../gateway/gateway.js';
 import type { ConfigApplyService } from '../../gateway/config-apply.js';
 import { ConfigConflictError } from '@octopi-agent/engine/config-admin/port.js';
+import { assertSafeConfigName } from '@octopi-agent/engine/config-admin/name-guard.js';
 import { listProviderPresets } from '@octopi-agent/engine/config-admin/model-presets.js';
+import { BUILTIN_AGENT_ROLE_PRESETS, renderAgentRole } from '@octopi-agent/engine/config-admin/agent-presets.js';
 
 export interface WebApiRouterOptions {
   gateway: Gateway;
@@ -21,19 +23,9 @@ export interface WebApiRouterOptions {
 }
 
 /**
- * provider 名合法化：路径段安全 + JSON 键安全（拒 `__proto__` 等原型污染键）
- *
- * @param name - 路由捕获的 provider 名
- * @throws 非法名抛错（业务 400）
+ * 配置名合法化（provider 名 / agent id 通用）：实现见 engine config-admin/name-guard.ts
+ * （单一实现点：拒路径穿越 `.`/`..`、原型污染键）
  */
-function assertValidProviderName(name: string): void {
-  if (
-    !/^[A-Za-z0-9._-]{1,64}$/.test(name) ||
-    ['__proto__', 'constructor', 'prototype'].includes(name)
-  ) {
-    throw new Error(`invalid provider name: ${name}`);
-  }
-}
 
 export class WebApiRouter {
   private gateway: Gateway;
@@ -1492,7 +1484,7 @@ export class WebApiRouter {
       const providerMatch = relativePath.match(/^\/config\/models\/providers\/([^/]+)$/);
       if (providerMatch && method === 'PUT') {
         const name = providerMatch[1]!;
-        assertValidProviderName(name);
+        assertSafeConfigName(name);
         const body = await this.readBody(req);
         if (!body?.provider || typeof body.provider !== 'object') {
           return this.json(res, 400, { ok: false, error: 'provider object is required' });
@@ -1507,7 +1499,7 @@ export class WebApiRouter {
 
       if (providerMatch && method === 'DELETE') {
         const name = providerMatch[1]!;
-        assertValidProviderName(name);
+        assertSafeConfigName(name);
         const hash = url.searchParams.get('hash') ?? '';
         const result = await apply.deleteProvider(name, hash);
         return this.json(res, 200, { ok: true, data: result });
@@ -1516,10 +1508,83 @@ export class WebApiRouter {
       const testMatch = relativePath.match(/^\/config\/models\/providers\/([^/]+)\/test$/);
       if (testMatch && method === 'POST') {
         const name = testMatch[1]!;
-        assertValidProviderName(name);
+        assertSafeConfigName(name);
         const body = await this.readBody(req);
         const result = await apply.testProvider(name, (body?.provider ?? {}) as Record<string, unknown>);
         return this.json(res, 200, { ok: true, data: result });
+      }
+
+      if (relativePath === '/config/presets/agent-roles/render' && method === 'POST') {
+        const body = await this.readBody(req);
+        const rendered = renderAgentRole(String(body?.presetId ?? ''), {
+          agentName: String(body?.agentName ?? ''),
+          addressToUser: String(body?.addressToUser ?? ''),
+        });
+        return this.json(res, 200, { ok: true, data: rendered });
+      }
+
+      if (relativePath === '/config/presets/agent-roles' && method === 'GET') {
+        return this.json(res, 200, { ok: true, data: BUILTIN_AGENT_ROLE_PRESETS });
+      }
+
+      // ── agent 配置面（P2，arch/config-hot-reload.md §4） ──
+      if (relativePath === '/config/agents' && method === 'GET') {
+        return this.json(res, 200, { ok: true, data: apply.getAgentsView() });
+      }
+
+      if (relativePath === '/config/agents' && method === 'POST') {
+        const body = await this.readBody(req);
+        if (!body?.agent || typeof body.agent !== 'object') {
+          return this.json(res, 400, { ok: false, error: 'agent object is required' });
+        }
+        const result = await apply.createAgent({
+          agent: body.agent as Record<string, unknown>,
+          agentsMd: typeof body.agentsMd === 'string' ? body.agentsMd : undefined,
+          hash: typeof body.hash === 'string' ? body.hash : '',
+        });
+        return this.json(res, 200, { ok: true, data: result });
+      }
+
+      const agentMatch = relativePath.match(/^\/config\/agents\/([^/]+)$/);
+      if (agentMatch && (method === 'PUT' || method === 'DELETE')) {
+        const agentId = agentMatch[1]!;
+        assertSafeConfigName(agentId);
+        if (method === 'PUT') {
+          const body = await this.readBody(req);
+          if (!body?.agent || typeof body.agent !== 'object') {
+            return this.json(res, 400, { ok: false, error: 'agent object is required' });
+          }
+          const result = await apply.updateAgent(
+            agentId,
+            body.agent as Record<string, unknown>,
+            typeof body.hash === 'string' ? body.hash : '',
+          );
+          return this.json(res, 200, { ok: true, data: result });
+        }
+        const hash = url.searchParams.get('hash') ?? '';
+        const result = await apply.deleteAgent(agentId, hash);
+        return this.json(res, 200, { ok: true, data: result });
+      }
+
+      const personaMatch = relativePath.match(/^\/config\/agents\/([^/]+)\/persona$/);
+      if (personaMatch) {
+        const agentId = personaMatch[1]!;
+        assertSafeConfigName(agentId);
+        if (method === 'GET') {
+          return this.json(res, 200, { ok: true, data: apply.getPersona(agentId) });
+        }
+        if (method === 'PUT') {
+          const body = await this.readBody(req);
+          if (typeof body?.content !== 'string') {
+            return this.json(res, 400, { ok: false, error: 'content (string) is required' });
+          }
+          const result = await apply.updatePersona(
+            agentId,
+            body.content,
+            typeof body.hash === 'string' ? body.hash : '',
+          );
+          return this.json(res, 200, { ok: true, data: result });
+        }
       }
 
       return this.json(res, 404, { ok: false, error: `unknown config endpoint: ${relativePath}` });

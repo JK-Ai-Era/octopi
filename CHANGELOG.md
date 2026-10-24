@@ -8,7 +8,8 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 | Segment | Location |
 |---------|----------|
-| v0.91 | this file (current) |
+| v0.92 | this file (current) |
+| v0.91 | [changelog/v0.91.md](./changelog/v0.91.md) |
 | v0.90 | [changelog/v0.90.md](./changelog/v0.90.md) |
 | v0.89 | [changelog/v0.89.md](./changelog/v0.89.md) |
 | v0.88 | [changelog/v0.88.md](./changelog/v0.88.md) |
@@ -101,14 +102,15 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
-## v0.91.0 (2026-10-25)
+## v0.92.0 (2026-10-25)
 
-### feat(config): WebUI 模型配置 CRUD + 保存即热生效（配置管理面 P1）
+### feat(config): WebUI agent 配置 CRUD + 保存即热生效 + 影子查找清零（配置管理面 P2）
 
-- **能力**：模型配置可在 WebUI 编辑（Settings → 模型）——provider 增删改、level 路由、连通测试、**拉取式发现**（`/v1/models` 自动填充模型清单）；保存即生效，无需重启。新增 `/api/v1/config/*` 写面（经既有鉴权闸门）+ Web SDK config 方法。
-- **架构**：`ConfigService`（文件 IO：乐观锁 hash、写前全量校验（与 loadConfig 同管线）、备份 `octopi.json.bak.<ts>`、tmp+rename 原子写保留文件权限 + fsync）+ `ApplyEngine`（分级热应用 L0–L2）。文件仍是唯一持久真相源；`packages/engine/src/config-admin/` 为纯逻辑层（预设 / 脱敏 / raw 段操作 / 发现 / `${ENV}` 展开唯一实现点）。规格：`arch/config-hot-reload.md`。
-- **热生效语义（拍板）**：新 run 生效，在跑 run 用旧构建跑完（agentCache 立即重建 + 覆盖注册，in-flight 计数归零才 dispose 退役 runner）；写盘失败不动运行时、provider 构造失败不动盘（两侧永不分歧）；apiKey 写回保留 `${VAR}` 占位符、UI 脱敏回显；手改文件并发由 hash 乐观锁拦下（409 + UI 自动重载最新内容）。
-- **预设（生成器原则）**：内置 8 家 provider 预设（OpenAI / Anthropic / DeepSeek / 通义 / Kimi / GLM / Gemini / Ollama）+ 自定义；预设只做表单默认值，展开落盘即标准配置，不进运行时、不造第二真相源。
-- **行为变化**：`apiKey` schema 改 optional——keyless 端点（如 Ollama）可保存使用，空 key 不发鉴权头；`${VAR}` 未解析不再拒保存（展开为空、请求时才 401），「写下去必能启动」不变式保持。
-- **验证**：新增 `tests/config-{admin,service,apply}.test.ts`（33 用例）；全量 suite 326 文件绿（余 2 个沙箱环境失败：`ps` 进程自省被拒，与本改动无关，正常终端/CI 可过）；build + lint + typecheck + `arch/check-sync.sh` 绿。独立评审 24 findings 全处置（9 major 全部修复，4 项有据接受/推迟见 `arch/config-hot-reload.md`）。
-- **breaking note**：`ModelProviderConfig.apiKey` 类型 `string` → `string | undefined`（工厂缺省 `''`）；`WebApiRouter` 新增可选 `configApply` 依赖（不传则 `/config/*` 503）。
+- **能力**：agent 可在 WebUI 管理（Settings → Agent）——新建向导（**角色模板生成器**：6 内置角色，选角色 → 填名字/称谓 → 生成可编辑 AGENTS.md 初稿 + 带出推荐安全组/模型档/特质）、编辑（模型 / **安全组四选一** workspace·project·host·untrusted + 继承全局 / tools / traits）、persona（AGENTS.md）编辑、下线（配置移除、home 保留）。保存即生效（新 run 用新构建）。
+- **影子查找清零（拍板落地）**：`gateway.ts` 运行时 `config.agents` 读取点全部改走注册表（`agents` Map 唯一权威）；`resolveAgentDefinition`/`normalizeConfigRaw` 抽取保证热更与启动解析同规。
+- **热应用语义**：预构造（fail-safe）→ 写盘 → scaffold → 注册 + 立即重建——构造失败不动盘/文件，写盘失败不动文件态；`updateAgent` **字段级合并**（effectPolicy 二级合并保留高级旋钮；`null`=删键恢复继承全局）；persona 内容 hash 乐观锁（409 可恢复：换锁保留编辑，再点保存=覆盖）。
+- **角色模板 = 生成器**（预设原则）：渲染产物是标准 AGENTS.md（服务端单一渲染实现 `/config/presets/agent-roles/render`）；推荐档位走 `resolveModelConfig` 新增的 **level 档位名解析**（`models.level` 键 → primary 递归，禁 level→level 链），agents[].model 可写档位名。
+- **安全修复（独立评审 4 blocker 全处置）**：agent id 与 provider 名共用 `assertSafeConfigName`（拒 `.`/`..` 路径穿越与原型污染键，router+服务层双防线）；创建条目自动补全 `home/workspace/skillDirectory`（persona 不再哑火、工具 cwd 不再是 undefined）；消息路由尊重 `metadata.agentId` 显式寻址（新建 agent 可被直接对话）；scaffold 不覆盖既有 AGENTS.md（重建同 id 不毁用户 persona）。
+- **验证**：新增 review blocker 回归锚 5 例（#1 三字段补全 / #3 预构造失败不动盘 / #4 穿越 id 拒绝 / #5 高级旋钮保留 / #6 null 删键）；相关 41 用例绿；全量 suite 326 文件绿（余 2 个沙箱环境失败：`ps` 自省被拒，与本改动无关）；build + lint + typecheck + `arch/check-sync.sh` 绿。独立评审 31 findings 处置：4 blocker + 10 major 全修，其余 minor 择修或记入遗留。
+- **遗留（评审未修项，P3/后续）**：schema 与 API 的 id 契约宽度差（手写 CJK id 可列出不可编辑）；Zod strip 静默吞未知键（`{"mod":"host"}` 类 typo 不报错）；删除最后一个 agent 无护栏；effectPolicy 放宽审计日志（spec §7，P3 分期）；`config.agents` 回归守卫测试；EffectMode 枚举双源；persona string 形态的展示名语义。
+- **breaking note**：`ConfigApplyServiceDeps` 增 `agentFiles`/`agentDefFactory`（factory 改两参 `(rawEntry, rawConfig)`，写前预演）；`AgentFilesPort` 增 `pathsOf`、persona 方法增 `home` 参数；`resolveModelConfig` 增可选 `levelMap` 参数。
