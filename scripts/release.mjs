@@ -116,7 +116,7 @@ function prep(version) {
   }
   syncLockfile(version, lockKeys);
   console.log('\nNext:');
-  console.log('  1. Update CHANGELOG.md under v' + version);
+  console.log('  1. Prepend "## v' + version + ' (YYYY-MM-DD)" to CHANGELOG.md below the index (AGENTS.md → Changelog Discipline)');
   console.log('  2. Commit code + version files (incl. package-lock.json) + CHANGELOG together');
   console.log('     (stage the intended paths explicitly; avoid `git add -A`)');
   console.log('  3. Tag/publish are separate — do them when cutting a release');
