@@ -210,7 +210,9 @@ reduced 面上 **未标注工具一律拒绝**（unknown-reject）；内置工�
     "privilegedAck": "…",             // 显式无笼表态（jail=none 必填）
     "shellEscape": "deny",            // deny | confirm | allow
     "pathContainment": "strict",      // strict | soft | none
-    "processLimits": true
+    "processLimits": true,
+    "opsAudit": "on",                 // ops 审计账本（安全字段：重启生效）；缺省 on
+    "opsAuditPath": "…/audit/ops.jsonl"   // 缺省 `<OCTOPI_HOME>/audit/ops.<agentId>.jsonl`
   }
 }
 ```
@@ -229,6 +231,28 @@ reduced 面上 **未标注工具一律拒绝**（unknown-reject）；内置工�
 
 已知边界：宿主侧**读**表面（WebUI git status 快照）只要探测到牢笼后端就保持上笼，
 不受 `jail` 意图影响——比 run 更严，属有意设计。
+
+**ops 审计账本（提权的前置条件）**：`opsAudit: "on"`（缺省）时每个 run 向防篡改
+JSONL 账本（缺省 `<OCTOPI_HOME>/audit/ops.<agentId>.jsonl`——按 agent 分文件，
+并发追加各为单写者，链严格成立；显式 `opsAuditPath` 共享文件需自担并发风险）追加：
+`ops.jail.state`（jail 意图 × 实测后端）、`ops.command.executed`（统一动作记录：argv、cwd、退出码、耗时、`escalated`、
+`confirmed`、jail 摘要、归属）、`ops.system_path.write`（效应 root 之外的写入）、`ops.policy.degraded`、
+`ops.config.security_changed`。账目
+成 hash 链（`verify()` 可查改写/插入/中段截断；**尾部截断与整文件删除需外部见证**——
+即 P5 外送档，见诚实性原则）。在此之上还有**安全配置漂移守卫**：启动期对安全相关字段
+（顶层 `effectPolicy`/`security`、per-agent `effectPolicy`/`tools`、插件加载路径）做指纹
+锚定，每个新 run 之前复核——配置文件的安全字段在磁盘上发生变化（例如 agent 改写自身
+配置）即**拒绝新 run**（`security_config_drift`）。重启 daemon 会以磁盘现状重新锚定——
+把**人工重启视作署名动作**；自动化署名随 ConfigService 写回通道落地。
+
+已知边界（如实声明，不夸大）：
+
+- shell 在效应 roots **之外**的写入无法从 shell 账本穷举（账本只清点 roots）。shell 无笼
+  （`jail: "none"`）运行时其审计记录带 `jail.unconfined: true`——读作「可能有写入且未逐条
+  列明」。文件工具的 roots 外写入会记 `ops.system_path.write` 且仍在 undo 账内。
+- 审计记录含**完整 argv**（保真优先于脱敏——命令行上的凭证会出现在审计里；脱敏是 P5 选项）。
+- 尚无轮转：账本持续增长，留待 P5 外送/轮转。
+- 账本是**单写者**语义：缺省按 agent 分文件（上段注）；多写者共享需外部串行化。
 
 仍然成立的关联语义：
 

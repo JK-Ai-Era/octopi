@@ -31,6 +31,8 @@ export interface GatewayConfig {
   toolIsolation?: 'none' | 'session-subdir' | 'session-lock';
   /** ToolEffectPolicy（P3/P4）；onClose 用于会话关闭时残留 undo */
   effectPolicy?: import('@octopi-agent/engine').EffectPolicyConfig;
+  /** ops P2 §4.3/§8.4：安全配置漂移守卫（宿主锚定 + run 起点复核，漂移拒新 run） */
+  securityIntegrity?: import('@octopi-agent/engine/harness/run/runner.js').SessionAwareRunnerConfig['securityIntegrity'];
   /** 命名凭证库策略（SEC-3c）；requireBindings=true 时无绑定凭证不可 resolve */
   credentials?: {
     requireBindings?: boolean;

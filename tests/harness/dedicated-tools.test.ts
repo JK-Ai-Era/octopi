@@ -74,18 +74,19 @@ describe('dedicated tool capabilities', () => {
 
 describe('gateEffect for runner/vcs', () => {
   it('does not apply shellEscape=deny to runner or vcs', async () => {
+    // 放行结论（confirmed/confirmSource）是审计契约的一部分（ops P2）
     await expect(
       gateEffect(
         { kind: 'runner', command: 'run test' },
         { effects: 'engine', shellEscape: 'deny' },
       ),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ confirmed: false, confirmSource: 'auto-engine' });
     await expect(
       gateEffect(
         { kind: 'vcs', operation: 'commit' },
         { effects: 'engine', shellEscape: 'deny' },
       ),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ confirmed: false, confirmSource: 'auto-engine' });
   });
 
   it('still rejects shell when shellEscape=deny', async () => {
@@ -110,7 +111,7 @@ describe('gateEffect for runner/vcs', () => {
           confirmEffect: async () => 'approve',
         },
       ),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ confirmed: true, confirmSource: 'host-gate' });
   });
 });
 

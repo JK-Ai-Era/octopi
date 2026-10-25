@@ -100,6 +100,10 @@ export const EffectPolicyConfigSchema = z.object({
   onJailUnavailable: z.enum(['refuse', 'degrade']).optional(),
   /** `jail: "none"` 时必填的显式表态（授权 ≠ 降级；§8.1） */
   privilegedAck: z.string().min(1).optional(),
+  /** ops 审计账本开关（安全字段：重启生效 + 宿主署名）；缺省 `on` */
+  opsAudit: z.enum(['on', 'off']).optional(),
+  /** ops 审计账本路径（缺省 `<OCTOPI_HOME>/audit/ops.<agentId>.jsonl`） */
+  opsAuditPath: z.string().min(1).optional(),
 }).superRefine((v, ctx) => {
   // 配置矛盾 fail-closed（§4.1）：拒绝启动，不做静默取舍
   if (v.jail === 'none') {

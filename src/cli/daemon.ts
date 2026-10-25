@@ -735,6 +735,25 @@ export async function serveCommand(args: CliArgs): Promise<void> {
 async function startGatewayBlocking(configPath: string | undefined, args: CliArgs): Promise<void> {
   const config = loadConfig(configPath);
   const gatewayConfig = toGatewayConfig(config);
+  // ops P2 §4.3/§8.4：daemon 持安全字段启动锚，run 起点复核，漂移拒新 run
+  // （取 raw 文件切面与复核同口径；agent 改写自身配置 = 自提权面）
+  {
+    const {
+      computeSecurityConfigFingerprint,
+      extractSecurityConfigSlice,
+      createFileSecurityIntegrity,
+    } = await import('@octopi-agent/engine/harness/agent/config-integrity.js');
+    const { readFileSync } = await import('node:fs');
+    const { resolveConfigFilePath } = await import('../config.js');
+    const filePath = resolveConfigFilePath(configPath);
+    const anchor = computeSecurityConfigFingerprint(
+      extractSecurityConfigSlice(readFileSync(filePath, 'utf8')),
+    );
+    gatewayConfig.securityIntegrity = {
+      fingerprint: anchor.fingerprint,
+      recheck: createFileSecurityIntegrity({ configPath: filePath, anchor }),
+    };
+  }
   // AgentRuntime 构造参数在 toGatewayConfig 已带上；此处仅防御显式覆盖
   if (config.agentRuntime) {
     gatewayConfig.agentRuntime = {

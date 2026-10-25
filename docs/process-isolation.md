@@ -240,7 +240,9 @@ Unknown or untagged tools are **rejected** on the reduced surface
     "privilegedAck": "…",             // explicit unjailed choice (required for jail=none)
     "shellEscape": "deny",            // deny | confirm | allow
     "pathContainment": "strict",      // strict | soft | none
-    "processLimits": true
+    "processLimits": true,
+    "opsAudit": "on",                 // ops audit journal (security field: restart-only); default on
+    "opsAuditPath": "…/audit/ops.jsonl"   // default `<OCTOPI_HOME>/audit/ops.<agentId>.jsonl`
   }
 }
 ```
@@ -265,6 +267,38 @@ failed-unjailed are distinguishable after the fact.
 Known boundary: host-side **read** surfaces (WebUI git status snapshot) keep jail
 wrapping whenever a backend is available, regardless of `jail` intent — stricter
 than the run, intentional.
+
+**Ops audit journal (prerequisite for privilege).** With `opsAudit: "on"` every
+run appends to a tamper-evident JSONL journal (`<OCTOPI_HOME>/audit/ops.<agentId>.jsonl`
+by default — one journal per agent so concurrent appends keep the chain strict;
+an explicit `opsAuditPath` makes the journal shared at your own risk): `ops.jail.state`
+(jail intent × probed backend), `ops.command.executed`
+(unified action record: argv, cwd, exit code, duration, `escalated`, `confirmed`,
+jail summary, origin), `ops.system_path.write` (writes outside the effect roots), `ops.policy.degraded`,
+and `ops.config.security_changed`.
+Entries form a hash chain (`verify()` detects edits, insertions, and mid-file
+truncation; **tail truncation or whole-file deletion needs an external witness** —
+that is the P5 export tier, per the honesty principle). On top of that, a
+**security-config drift guard** fingerprints the security-relevant fields
+(top-level `effectPolicy`/`security`, per-agent `effectPolicy`/`tools`, plugin
+load paths) at startup and re-checks before each new run: if the config file's
+security fields changed on disk (e.g. the agent editing its own config), the run
+is **refused** with `security_config_drift`. Restarting the daemon adopts
+whatever is on disk and re-anchors — treat the **human restart as the attestation
+act**; automated attestation lands with the ConfigService write-back.
+
+Known boundaries (honest scope, not oversell):
+
+- Shell writes **outside** the effect roots are not enumerable from the shell
+  journal (which only inventories roots). When shell runs unjailed
+  (`jail: "none"`), its audit record carries `jail.unconfined: true` — read it
+  as "writes were possible and are not itemized". File-tool writes outside the
+  roots are recorded (`ops.system_path.write`) and stay undo-backed.
+- Audit records contain the **full argv** (fidelity over redaction — a credential
+  on a command line is visible in the audit; redaction is a P5 option).
+- No rotation yet; the journal grows until P5 shipping/rotation.
+- The journal is **single-writer** per file: the default is one file per agent;
+  pointing several agents at one `opsAuditPath` needs external serialization.
 
 Related (still true):
 

@@ -96,7 +96,7 @@ export function createShellTool(options?: {
     handler: async (args, context) => {
       const command = args.command as string;
       const cwd = (args.cwd as string | undefined) ?? context?.cwd ?? process.cwd();
-      await gateEffect(
+      const gateResult = await gateEffect(
         { kind: 'shell', command: args.command as string, cwd: typeof cwd === 'string' ? cwd : undefined },
         {
           effects: context?.effectChannel ?? 'engine',
@@ -162,6 +162,39 @@ export function createShellTool(options?: {
           },
         },
       );
+
+      // ops P2 §7：统一动作记录（argv/cwd/退出码/耗时/确认态/jail）——审计失败不阻断业务
+      try {
+        const { isJailBackend } = await import('../../execution-environment/process-isolation.js');
+        context?.recordOpsEvent?.({
+          event: 'ops.command.executed',
+          data: {
+            tool: 'shell',
+            argv: [resolvedShell.executable, ...resolvedShell.args, command],
+            cwd: resolvedCwd,
+            exitCode: sandboxResult.exitCode,
+            durationMs: sandboxResult.usage.elapsedMs,
+            escalated: false,
+            // 确认态取闸门实际放行结论（通道配置≠本次决策；自动放行如实记 false）
+            confirmed: gateResult.confirmed,
+            confirmSource: gateResult.confirmSource,
+            jail: {
+              backend: sandboxResult.isolation.backend,
+              unconfined:
+                context?.disableJail === true || !isJailBackend(sandboxResult.isolation.backend),
+            },
+            // 注入源不明标记（§5 P2）：工具调用带 session/run 归属 = 已归因
+            originAttributed: Boolean(context?.sessionId),
+            origin: {
+              sessionId: context?.sessionId,
+              agentId: context?.agentId,
+              runId: context?.runId ?? null,
+            },
+          },
+        });
+      } catch {
+        // 审计回传失败不阻断 shell 业务结果（写失败的降级申报在 runner 侧）
+      }
 
       try {
         // §5.6：after diff 入账本 / 不可逆清单

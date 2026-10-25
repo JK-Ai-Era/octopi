@@ -26,6 +26,8 @@ import type { ReliabilityHarness } from './reliability/run-agent.js';
 import { createSessionStateMachine } from '../session/state-machine.js';
 import type { StateMachine } from '@octopi-agent/core/primitives/state-machine.js';
 import { HeuristicTokenEstimator } from '../context/index.js';
+import { OpsAuditJournal, type OpsAuditEvent } from '../extension/execution-environment/ops-audit.js';
+import { getOctopiHome } from '../../paths.js';
 import { extractLayerQuery } from '../context/layer-types.js';
 import {
   formatTurnEndContent,
@@ -98,6 +100,23 @@ export interface SessionAwareRunnerConfig {
     modelRef?: string;
     defaultProvider?: string;
   }) => import('./model/types.js').ResolvedModel | null;
+  /**
+   * ops 审计账本路径（ops P2）；缺省 `<OCTOPI_HOME>/audit/ops.<agentId>.jsonl`。
+   * 与 effectPolicy.opsAuditPath 同义；effectPolicy 优先。
+   */
+  opsAuditPath?: string;
+  /**
+   * 安全配置漂移守卫（ops P2 §4.3/§8.4 拍板：漂移拒新 run）。
+   * 宿主注入（通常 `createFileSecurityIntegrity`）；未注入 = 无守卫（库嵌入自担）。
+   */
+  securityIntegrity?: {
+    /** 启动期锚定的安全字段指纹（审计记录的「旧摘要」） */
+    fingerprint: string;
+    /** 复核当前安全配置（宿主实现，通常重读配置文件） */
+    recheck: () =>
+      | import('../agent/config-integrity.js').SecurityConfigDrift
+      | Promise<import('../agent/config-integrity.js').SecurityConfigDrift>;
+  };
   /**
    * 工具效应隔离策略（宪法 I5）
    *
@@ -425,6 +444,14 @@ export class SessionAwareRunner {
   private effectRequireJail: boolean | undefined;
   /** ops P0：jail 意图（auto/require/none）——none=授权无笼 */
   private effectJail: import('../extension/execution-environment/effect-policy.js').JailIntent | undefined;
+  /** ops P2：审计账本开关（effectPolicy.opsAudit；未解析时回落配置缺省 on） */
+  private effectOpsAudit: 'on' | 'off' | undefined;
+  /** ops P2：hash 链审计账本（懒建；写失败降级申报，不吞） */
+  private opsJournal?: OpsAuditJournal;
+  /** ops P2：账本缺省文件名的 agent 锚（每 runner 单 agent；handle 起点锚定） */
+  private opsAuditAgentId?: string;
+  /** ops P2：审计事件的 session 归属（写失败申报等无 run 载荷时用） */
+  private opsAuditSessionId?: string;
   private effectRequireCredentialBindings = false;
   private effectHomeWrite: boolean | undefined;
   private effectShellEscape: "deny" | "confirm" | "allow" = "allow";
@@ -503,6 +530,50 @@ export class SessionAwareRunner {
     this._events = config?.events;
     this._observerHub = config?.observerHub;
     this.resolveModelOverride = config?.resolveModelOverride;
+  }
+
+  /**
+   * ops 审计记账（ops P2）：写 hash 链账本。
+   *
+   * `opsAudit: off` 时整体静默（宿主的显式选择）；写失败降级为 securityDegraded
+   * 申报——P2 不 fail-closed 业务（与 §5.6 记账同策略），P3 提权通道再收紧为硬前置。
+   *
+   * @param event - §7 事件词表
+   * @param data - 事件载荷（hash 走 canonicalJson，键序无关）
+   */
+  private recordOpsAudit(event: OpsAuditEvent, data: Record<string, unknown>): void {
+    if ((this.effectOpsAudit ?? this.config.effectPolicy?.opsAudit ?? 'on') !== 'on') return;
+    if (!this.opsJournal) {
+      // 缺省按 agent 分文件：多 agent 并发追加同一文件会共享 tail → seq 撞号，
+      // verify 会误报断裂。分文件 = 各自单写者，链严格成立。
+      const path =
+        this.config.effectPolicy?.opsAuditPath ??
+        this.config.opsAuditPath ??
+        join(getOctopiHome(), 'audit', `ops.${this.opsAuditAgentId ?? 'unknown'}.jsonl`);
+      this.opsJournal = new OpsAuditJournal({ path });
+    }
+    try {
+      this.opsJournal.append(event, data);
+    } catch (err) {
+      // 只吞「写失败」这一类，转成降级申报；账本损坏（ops_audit_corrupt）同样走这里。
+      // 双通道：harness 字段会被下一次 run 起点重置抹掉，必须同时发在线事件（评审实证）
+      const reason = `ops_audit_write_failed: ${err instanceof Error ? err.message : String(err)}`;
+      this.harness.securityDegraded = [
+        ...(this.harness.securityDegraded ?? []),
+        reason as never,
+      ];
+      this.emitObserved({
+        type: 'ops.policy.degraded',
+        timestamp: Date.now(),
+        agentId: this.opsAuditAgentId,
+        sessionId: this.opsAuditSessionId,
+        data: {
+          degradation: [reason],
+          requestedVsEffective: { requestedMode: 'n/a', mode: 'n/a' },
+          origin: { sessionId: this.opsAuditSessionId, agentId: this.opsAuditAgentId ?? '' },
+        },
+      });
+    }
   }
 
   /**
@@ -941,6 +1012,38 @@ export class SessionAwareRunner {
       // P3：effectPolicy → L2 path containment + session 临时 root
       // 必须在 Runtime 注入之前，system prompt 才能带上 allowRoots / effectMode
       {
+        // ops P2：账本 agent/session 锚先于首笔账（漂移记录）落定
+        this.opsAuditAgentId = _agentId;
+        this.opsAuditSessionId = sessionId;
+        // ops P2 §4.3/§8.4：安全配置漂移守卫——先于解析与探测判定（漂移是配置事实）。
+        // 漂移 = 拒新 run + ops.config.security_changed，直至宿主重启/署名确认。
+        const integrity = await this.config.securityIntegrity?.recheck();
+        if (integrity && !integrity.ok) {
+          const driftData = {
+            changed: integrity.changed,
+            action: 'refuse_new_run',
+            // §7 要的旧→新摘要 + 来源/署名态：谁改的无法从文件判定（agent 写 vs 宿主写
+            // 同样是磁盘字节），如实记 unattributed + 未署名
+            previousFingerprint: this.config.securityIntegrity?.fingerprint ?? null,
+            currentFingerprint: integrity.currentFingerprint ?? null,
+            source: 'unattributed',
+            hostAttested: false,
+            origin: { sessionId, agentId: _agentId },
+          };
+          this.recordOpsAudit('ops.config.security_changed', driftData);
+          this.emitObserved({
+            type: 'ops.config.security_changed',
+            timestamp: Date.now(),
+            agentId: _agentId,
+            sessionId,
+            data: { ...driftData },
+          });
+          throw new Error(
+            `security_config_drift: security-relevant config changed on disk (changed: ${integrity.changed.join(', ')}); ` +
+              `restart required to re-attest (restart adopts what is on disk — treat the human restart as the attestation act; ` +
+              `automated attestation lands with the ConfigService write-back)`,
+          );
+        }
         const {
           resolveEffectiveEffectPolicy,
           readSessionEffectOverrides,
@@ -985,13 +1088,37 @@ export class SessionAwareRunner {
         // ops P0：run 开始即记录 jail 意图 × 实测后端——「授权」与「故障」的事后判据
         // （§4.2 ops.jail.state；不等失效才留痕）。进延迟投递队列：run 记录
         // （recordRunStart）建立后才归档，否则 Hub 会把它挂到上一轮 run 或直接丢弃。
+        const jailState = { ...buildOpsJailState(eff, isolation) };
         pendingObservedTimings.push({
           type: 'ops.jail.state',
           timestamp: Date.now(),
           agentId: _agentId,
           sessionId,
-          data: { ...buildOpsJailState(eff, isolation) },
+          data: jailState,
         });
+        // ops P2：账本是「事后可查」的持久面（Observer timeline 只是在线视图）
+        this.effectOpsAudit = eff.opsAudit;
+        // runId 此处尚未生成（createRunId 在工具 scope 装配前）；run 归属由
+        // pendingObservedTimings → run timeline 承担，账本记 session/agent 锚点
+        this.recordOpsAudit('ops.jail.state', {
+          ...jailState,
+          origin: { sessionId, agentId: _agentId },
+        });
+        if (eff.securityDegraded.length > 0) {
+          const degradedData = {
+            degradation: eff.securityDegraded,
+            requestedVsEffective: { requestedMode: eff.requestedMode, mode: eff.mode },
+            origin: { sessionId, agentId: _agentId },
+          };
+          this.recordOpsAudit('ops.policy.degraded', degradedData);
+          pendingObservedTimings.push({
+            type: 'ops.policy.degraded',
+            timestamp: Date.now(),
+            agentId: _agentId,
+            sessionId,
+            data: { ...degradedData },
+          });
+        }
       }
 
       // Runtime 锚点：时间 + 工具工作目录 + 允许根/效应模式
@@ -1287,7 +1414,16 @@ export class SessionAwareRunner {
         createUnconfiguredMemoryEffects: unconfMem,
         resolveSessionUndoPaths,
       } = await import('../extension/execution-environment/undo-log.js');
-      const fileEffects = fileUndo ?? createUnconfiguredFileEffects();
+      // ops P2：效应写口集中拦截 roots 外写入 → ops.system_path.write
+      // （单点覆盖全部文件工具与 shell 账本，不逐工具打补丁）
+      const { OpsAuditedFileEffects } = await import('../extension/execution-environment/ops-audit.js');
+      const fileEffects = new OpsAuditedFileEffects(fileUndo ?? createUnconfiguredFileEffects(), {
+        // roots 为空时 L2 回退 cwd——审计判定不得比 L2 更宽（全记 system_path 是误报）
+        roots: this.effectAllowRoots.length
+          ? this.effectAllowRoots
+          : [resolvedToolCwd.cwd ?? baseCwd ?? process.cwd()],
+        record: (event, data) => this.recordOpsAudit(event, data),
+      });
       const memoryEffects = fileUndo?.memoryEffects ?? unconfMem();
       const undoRoots = this.config.sessionsDir
         ? [resolveSessionUndoPaths(this.config.sessionsDir, sessionId).root]
@@ -1320,6 +1456,13 @@ export class SessionAwareRunner {
               ...(this.harness.securityDegraded ?? []),
               reason as never,
             ];
+          },
+          // ops P2：工具侧动作/越权写入 → 统一审计账本（core 钩子，存储归 runner）
+          recordOpsEvent: (record) => {
+            this.recordOpsAudit(
+              record.event as import('../extension/execution-environment/ops-audit.js').OpsAuditEvent,
+              record.data,
+            );
           },
           pathRoots: this.effectAllowRoots.length
             ? this.effectAllowRoots

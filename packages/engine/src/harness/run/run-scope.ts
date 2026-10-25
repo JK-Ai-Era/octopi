@@ -45,6 +45,8 @@ export interface RunToolRuntime {
   homeWrite?: boolean;
   /** Run-level securityDegraded hook */
   noteSecurityDegraded?: (reason: string) => void;
+  /** ops 审计回传（ops P2）：动作/越权写入 → 统一审计账本 */
+  recordOpsEvent?: (record: { event: string; data: Record<string, unknown> }) => void;
   /** L2 级别 */
   pathContainment?: "strict" | "soft" | "none";
   confirmEffect?: import("@octopi-agent/core/types/tools.js").ToolExecutionContext["confirmEffect"];

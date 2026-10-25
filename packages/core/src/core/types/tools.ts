@@ -184,6 +184,11 @@ export interface ToolExecutionContext {
   homeWrite?: boolean;
   /** Execute-time degradation hook (run-level securityDegraded). */
   noteSecurityDegraded?: (reason: string) => void;
+  /**
+   * ops 审计回传（ops P2）：工具侧把动作/越权写入记入统一审计账本。
+   * 失败不阻断业务（调用方降级通道处置），工具侧不感知存储。
+   */
+  recordOpsEvent?: (record: { event: string; data: Record<string, unknown> }) => void;
   /** L2 级别 */
   pathContainment?: 'strict' | 'soft' | 'none';
   /**

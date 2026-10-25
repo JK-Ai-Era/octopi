@@ -181,6 +181,7 @@ export async function buildFromConfig(
         modelCallConfig: config.modelCall,
         concurrencyConfig: config.concurrency,
         observabilityConfig: config.observability,
+        runnerConfig: options?.runnerConfig,
       });
       agents.set(agentConfig.id, built);
     } catch (err) {
@@ -250,9 +251,12 @@ async function buildAgent(
     modelCallConfig?: import('../../config.js').ModelCallConfig;
     concurrencyConfig?: import('../../config.js').HarnessConfig['concurrency'];
     observabilityConfig?: import('../../config.js').HarnessConfig['observability'];
+    /** 宿主注入的 Runner 附加配置（ops P2 securityIntegrity / opsAuditPath 等） */
+    runnerConfig?: import('../run/runner.js').SessionAwareRunnerConfig;
   },
 ): Promise<BuiltAgent> {
   const builder = new AgentBuilder();
+  if (shared.runnerConfig) builder.runnerConfig(shared.runnerConfig);
 
   // 解析主模型 provider（宿主可在此包装 circuit breaker；config-bridge 用原始 provider）
   const resolvedModel = resolveModelConfig(agentConfig.model, shared.flatModels);
@@ -348,4 +352,9 @@ export interface BuildFromConfigOptions {
    * 委派编排开关。缺省 = 只要有 agent 声明 `delegation` 策略就接线。
    */
   delegation?: boolean;
+  /**
+   * 宿主注入的 Runner 附加配置（浅合并进每个 agent）。
+   * ops P2：`securityIntegrity`（安全配置漂移守卫）与 `opsAuditPath` 走此通道。
+   */
+  runnerConfig?: import('../run/runner.js').SessionAwareRunnerConfig;
 }

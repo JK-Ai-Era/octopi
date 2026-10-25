@@ -53,33 +53,36 @@ export function applyConfigMigrations(raw: Record<string, unknown>): void {
   }
 }
 
-export function loadConfig(configPath?: string): NormalizedHarnessConfig {
-  // 配置文件查找优先级：
-  // 1. 明确指定的路径
-  // 2. 当前目录 ./octopi.json
-  // 3. OCTOPI_HOME/octopi.json（默认 ~/.octopi/octopi.json，与 getOctopiHome 一致）
-  let filePath: string;
+/**
+ * 解析配置文件绝对路径（loadConfig 与 buildFromConfigFile 共用单一查找优先级）。
+ *
+ * 查找优先级：1. 明确指定的路径 2. 当前目录 ./octopi.json 3. OCTOPI_HOME/octopi.json。
+ *
+ * @param configPath - 显式路径（可空）
+ * @returns 配置文件绝对路径
+ * @throws 找不到配置文件
+ */
+export function resolveConfigFilePath(configPath?: string): string {
   if (configPath) {
-    filePath = resolve(configPath);
-  } else if (existsSync(resolve('./octopi.json'))) {
-    filePath = resolve('./octopi.json');
-  } else {
-    const homeConfig = resolve(getOctopiHome(), 'octopi.json');
-    if (existsSync(homeConfig)) {
-      filePath = homeConfig;
-    } else {
-      throw new Error(
-        `Config file not found. Searched:\n` +
-        `  1. ${resolve('./octopi.json')}\n` +
-        `  2. ${homeConfig}\n\n` +
-        `Run 'octopi init' to create a new configuration.`
-      );
+    const explicit = resolve(configPath);
+    if (!existsSync(explicit)) {
+      throw new Error(`Config file not found: ${explicit}`);
     }
+    return explicit;
   }
+  if (existsSync(resolve('./octopi.json'))) return resolve('./octopi.json');
+  const homeConfig = resolve(getOctopiHome(), 'octopi.json');
+  if (existsSync(homeConfig)) return homeConfig;
+  throw new Error(
+    `Config file not found. Searched:\n` +
+    `  1. ${resolve('./octopi.json')}\n` +
+    `  2. ${homeConfig}\n\n` +
+    `Run 'octopi init' to create a new configuration.`
+  );
+}
 
-  if (!existsSync(filePath)) {
-    throw new Error(`Config file not found: ${filePath}`);
-  }
+export function loadConfig(configPath?: string): NormalizedHarnessConfig {
+  const filePath = resolveConfigFilePath(configPath);
 
   console.log(`[config] Loading config from ${filePath}`);
 
@@ -131,8 +134,26 @@ function finalizeNormalizedConfig(validated: unknown): NormalizedHarnessConfig {
  */
 export async function buildFromConfigFile(configPath?: string): Promise<Map<string, import('@octopi-agent/engine/harness/agent/config-bridge.js').BuiltAgent>> {
   const { buildFromConfig } = await import('@octopi-agent/engine/harness/agent/config-bridge.js');
-  const config = loadConfig(configPath);
-  return buildFromConfig(config);
+  const {
+    computeSecurityConfigFingerprint,
+    extractSecurityConfigSlice,
+    createFileSecurityIntegrity,
+  } = await import('@octopi-agent/engine/harness/agent/config-integrity.js');
+  const filePath = resolveConfigFilePath(configPath);
+  const config = loadConfig(filePath);
+  // ops P2 §4.3/§8.4：启动期锚定安全字段指纹（取 raw 文件切面，与复核同口径——
+  // 展开 ${VAR} 后的值与文件字面不同，混用会永久误报漂移）。run 起点复核，漂移拒新 run。
+  const anchor = computeSecurityConfigFingerprint(
+    extractSecurityConfigSlice(readFileSync(filePath, 'utf8')),
+  );
+  return buildFromConfig(config, {
+    runnerConfig: {
+      securityIntegrity: {
+        fingerprint: anchor.fingerprint,
+        recheck: createFileSecurityIntegrity({ configPath: filePath, anchor }),
+      },
+    },
+  });
 }
 
 

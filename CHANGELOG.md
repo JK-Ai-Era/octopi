@@ -101,6 +101,17 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 | v0.2 | [changelog/v0.2.md](./changelog/v0.2.md) |
 | v0.1 | [changelog/v0.1.md](./changelog/v0.1.md) |
 
+## v0.93.6 (2026-10-25)
+
+### feat(engine): ops 运维审计 —— hash 链账本 + 统一动作记录 + 安全配置漂移守卫（ops P2）
+
+- **内容**：(1) `OpsAuditJournal`：append-only JSONL + sha256 hash 链（canonicalJson 键序无关、tail 衔接校验、`verify()` 查改写/插入/中段截断/附加字段；fsync 耐久写；尾部截断与整文件删除需外部见证——P5 档，如实声明）；(2) `ops.command.executed` 统一动作记录（shell/allowlisted-run：argv/cwd/退出码/耗时/escalated/confirmed+confirmSource/jail 含 unconfined 声明/归属）；(3) `OpsAuditedFileEffects` 装饰器：效应 roots 外写入记 `ops.system_path.write`（rename 双端；undo 语义不受装饰影响）；(4) **安全配置漂移守卫**：启动锚定安全字段指纹（顶层 effectPolicy/security、per-agent effectPolicy/tools、插件加载路径），每个新 run 之前复核，漂移即拒（`security_config_drift`）+ `ops.config.security_changed`（旧→新指纹、来源如实 unattributed、hostAttested）；(5) `effectPolicy.opsAudit/opsAuditPath`（安全字段：重启生效）。
+- **决策/边界（诚实声明，docs 双语已列）**：审计缺省 `on`、按 agent 分账本（`ops.<agentId>.jsonl`，单写者）；shell 的 roots 外写入不可穷举追踪，`jail: none` 命令以 `unconfined` 声明「写入未入账」；argv 保真优先于脱敏（凭证可见，脱敏留 P5）；无轮转；重启=以磁盘现状重锚，人工重启即署名动作（自动化署名随 ConfigService）。
+- **修复（独立评审驱动）**：漂移守卫在 daemon 生产路径接线（评审 P0——此前只挂 buildFromConfigFile，serve 路径为死码）；账本读失败不再当空账（否则静默重链把账本写坏）；半行/损坏 → `ops_audit_corrupt` 拒绝续链且 `verify()` 不抛；`confirmed` 改取 gateEffect 实际放行结论（通道配置≠本次决策；未知记 null）；`reversible:false` 失实字段移除（root 外 fileEffects 写同样在 undo 账）；审计写失败双通道申报（harness+在线事件）；`gateEffect` 回传 `GateEffectResult`。
+- **验证**：全量 **3346 过 / 0 败 / 6 跳过**（新增 tests/harness/ops-audit.test.ts 11 用例 + ops-audit-runner.test.ts 2 用例：链/篡改/半行/续链/装饰器/指纹漂移/**runner 级漂移拒 run 集成**）；build / lint / arch 同步全绿。
+
+---
+
 ## v0.93.5 (2026-10-25)
 
 ### feat(engine): jail 可区分性 —— `effectPolicy.jail: auto|require|none`（ops P0 / OP-OPS-1）

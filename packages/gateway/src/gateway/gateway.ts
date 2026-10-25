@@ -4910,6 +4910,8 @@ export class Gateway {
       subsystemDenylist: this.config.subsystems?.denylist,
       concurrencyConfig: this.config.concurrency,
       extraRunnerConfig: {
+        // ops P2：安全配置漂移守卫（daemon 锚定；漂移拒新 run）
+        securityIntegrity: this.config.securityIntegrity,
         sessionLease: this.sessionLease,
         sessionAcl: this.sessionAcl,
         sessionScheduleService: this.sessionSchedules,

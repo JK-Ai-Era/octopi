@@ -117,6 +117,38 @@ export async function runAllowlistedArgv(
     },
   });
 
+  // ops P2 §7：统一动作记录（allowlisted exec 同契约；P3 提权通道复用此形态）
+  try {
+    const { isJailBackend } = await import('../../execution-environment/process-isolation.js');
+    context?.recordOpsEvent?.({
+      event: 'ops.command.executed',
+      data: {
+        tool: 'allowlisted_run',
+        argv: [executable, ...args],
+        cwd,
+        exitCode: sandboxResult.exitCode,
+        durationMs: sandboxResult.usage.elapsedMs,
+        escalated: false,
+        // 子步执行的确认态由所属工具的效应闸门承担，本层无从得知——记 null（未知），
+        // 不用 false/true 冒充
+        confirmed: null,
+        confirmSource: 'not-gated-here',
+        jail: {
+          backend: sandboxResult.isolation.backend,
+          unconfined: context?.disableJail === true || !isJailBackend(sandboxResult.isolation.backend),
+        },
+        originAttributed: Boolean(context?.sessionId),
+        origin: {
+          sessionId: context?.sessionId,
+          agentId: context?.agentId,
+          runId: context?.runId ?? null,
+        },
+      },
+    });
+  } catch {
+    // 审计回传失败不阻断业务结果（与下方 journal 同策略）
+  }
+
   // Journal after-diff (same contract as shell tool §5.6)
   try {
     const sj = await import('../../execution-environment/shell-journal.js');

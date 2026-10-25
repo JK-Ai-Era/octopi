@@ -212,6 +212,24 @@ export interface AgentEventMap {
   'run.guard.metrics': import('../../run/reliability/harness-events.js').RunGuardMetricsEvent['data'];
   /** ops P0：jail 意图 × 实测后端（授权 vs 故障的事后判据，run 开始即记录） */
   'ops.jail.state': import('../../extension/execution-environment/effect-policy.js').OpsJailState;
+  /** ops P2：run 级降级申报（securityDegraded 快照） */
+  'ops.policy.degraded': {
+    degradation: string[];
+    requestedVsEffective: { requestedMode: string; mode: string };
+    origin: { sessionId: string; agentId: string; runId?: string | null };
+  };
+  /** ops P2：安全配置漂移 → 拒新 run（§8.4） */
+  'ops.config.security_changed': {
+    changed: string[];
+    action: string;
+    /** 旧→新摘要（§7） */
+    previousFingerprint: string | null;
+    currentFingerprint: string | null;
+    /** 谁改的无法从文件判定（agent 写与宿主写同样是磁盘字节）→ 如实 unattributed */
+    source: 'unattributed';
+    hostAttested: boolean;
+    origin: { sessionId: string; agentId: string };
+  };
   'task.created': { taskId: string; taskType: string; status: string };
   'task.started': { taskId: string; taskType: string; status: string };
   'task.completed': { taskId: string; taskType: string; status: string };
@@ -280,6 +298,8 @@ export const AgentEvents = {
   RUN_SCOPE_LLM: 'run.scope.llm',
   RUN_GUARD_METRICS: 'run.guard.metrics',
   OPS_JAIL_STATE: 'ops.jail.state',
+  OPS_POLICY_DEGRADED: 'ops.policy.degraded',
+  OPS_CONFIG_SECURITY_CHANGED: 'ops.config.security_changed',
 
   TASK_CREATED: 'task.created',
   TASK_STARTED: 'task.started',

@@ -173,6 +173,10 @@ export interface EffectPolicyConfig {
   onJailUnavailable?: OnJailUnavailable;
   /** `jail: "none"` 时必填的显式表态（缺省拒绝启动；§8.1 二级确认） */
   privilegedAck?: string;
+  /** ops 审计账本开关（安全字段：重启生效 + 宿主署名，§4.3）；缺省 `on` */
+  opsAudit?: 'on' | 'off';
+  /** ops 审计账本路径（缺省 `<OCTOPI_HOME>/audit/ops.<agentId>.jsonl`） */
+  opsAuditPath?: string;
 }
 
 /** 展开后的有效策略 */
@@ -209,6 +213,10 @@ export interface EffectiveEffectPolicy {
   jail: JailIntent;
   /** jail 意图落空时的行为（refuse/degrade） */
   onJailUnavailable: OnJailUnavailable;
+  /** ops 审计账本开关（ops P2） */
+  opsAudit: 'on' | 'off';
+  /** ops 审计账本路径覆盖 */
+  opsAuditPath?: string;
 }
 
 type ModePreset = Omit<
@@ -221,6 +229,8 @@ type ModePreset = Omit<
   | 'securityDegraded'
   | 'jail'
   | 'onJailUnavailable'
+  | 'opsAudit'
+  | 'opsAuditPath'
 >;
 
 const MODE_DEFAULTS: Record<EffectRunMode, ModePreset> = {
@@ -495,6 +505,8 @@ export function resolveEffectiveEffectPolicy(
     shellJournalLimit: config.shellJournalLimit,
     jail,
     onJailUnavailable,
+    opsAudit: config.opsAudit ?? 'on',
+    opsAuditPath: config.opsAuditPath,
   };
 }
 
@@ -544,11 +556,20 @@ export function isPathAllowed(
   });
 }
 
+/** 闸门放行结论（ops P2：审计要「是否经确认」的事实，不是通道配置） */
+export interface GateEffectResult {
+  /** 是否经宿主确认（自动放行 = false；未过闸 = 不返回本值而是 throw） */
+  confirmed: boolean;
+  /** 放行来源：确认过 / 事务自动 / engine 内置策略 */
+  confirmSource: 'host-gate' | 'auto-transaction' | 'auto-engine';
+}
+
 /**
  * 效应闸（P4）：事务内自动放行；host-gate 交给宿主；engine 通道按内置策略。
  *
  * @param intent - 效应意图
  * @param options - 通道与回调
+ * @returns 放行结论（confirmed/confirmSource，审计用）
  * @throws Error 当拒绝执行时
  */
 export async function gateEffect(
@@ -563,10 +584,14 @@ export async function gateEffect(
     agentId?: string;
     hitlCache?: import('../../governance/human-in-the-loop/decision-cache.js').HitlDecisionCache;
   },
-): Promise<void> {
+): Promise<GateEffectResult> {
   // 可事务化（可 undo）→ 自动
-  if (intent.kind === 'memory.write' && intent.transactional) return;
-  if (intent.kind === 'file.write' && intent.transactional) return;
+  if (intent.kind === 'memory.write' && intent.transactional) {
+    return { confirmed: false, confirmSource: 'auto-transaction' };
+  }
+  if (intent.kind === 'file.write' && intent.transactional) {
+    return { confirmed: false, confirmSource: 'auto-transaction' };
+  }
 
   if (intent.kind === 'shell') {
     const esc = options.shellEscape ?? 'allow';
@@ -588,7 +613,7 @@ export async function gateEffect(
 
   if (options.effects !== 'host-gate') {
     // engine 通道：路径牢笼由 L2 承担；shell 已在上方按 shellEscape 处理
-    return;
+    return { confirmed: false, confirmSource: 'auto-engine' };
   }
 
   // host-gate：非事务效应交给宿主（自动放行 / 宿主 UI / 策略引擎）
@@ -610,6 +635,7 @@ export async function gateEffect(
   if (!allowed) {
     throw new Error(`effect_denied: ${intent.kind}`);
   }
+  return { confirmed: true, confirmSource: 'host-gate' };
 }
 
 // ── Session-scoped effect overrides (temporary transactionRoots) ──

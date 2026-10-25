@@ -33,6 +33,8 @@ const MAP_KEYS = [
   'run.guard.metrics',
   'run.timing',
   'ops.jail.state',
+  'ops.policy.degraded',
+  'ops.config.security_changed',
   'security.blocked',
   'security.behavior_blocked',
   'task.created',

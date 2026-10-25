@@ -209,6 +209,7 @@ class RuntimeToolContextProvider implements ToolContextProvider {
         disableJail: scope.toolRuntime.disableJail,
         homeWrite: scope.toolRuntime.homeWrite,
         noteSecurityDegraded: scope.toolRuntime.noteSecurityDegraded,
+        recordOpsEvent: scope.toolRuntime.recordOpsEvent,
         pathContainment: scope.toolRuntime.pathContainment,
         confirmEffect: scope.toolRuntime.confirmEffect,
         effectChannel: scope.toolRuntime.effectChannel,

@@ -47,6 +47,16 @@ export type IsolationBackend =
   | 'win-job'
   | 'container';
 
+/**
+ * 后端是否构成进程牢笼（vs supervised-spawn 这类「如实无笼」）。
+ *
+ * @param backend - 隔离画像后端
+ * @returns true = 真上笼
+ */
+export function isJailBackend(backend: IsolationBackend): boolean {
+  return backend === 'linux-bwrap' || backend === 'mac-seatbelt' || backend === 'win-job' || backend === 'container';
+}
+
 /** Honest isolation report for one execute/probe */
 export interface ProcessIsolationProfile {
   backend: IsolationBackend;
