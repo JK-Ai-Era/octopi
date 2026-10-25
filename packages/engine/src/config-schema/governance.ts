@@ -100,6 +100,28 @@ export const EffectPolicyConfigSchema = z.object({
   onJailUnavailable: z.enum(['refuse', 'degrade']).optional(),
   /** `jail: "none"` 时必填的显式表态（授权 ≠ 降级；§8.1） */
   privilegedAck: z.string().min(1).optional(),
+  /** 提权策略（ops P3）：`allowlist` 按 cmd+args 全等放行（full 档属 P4） */
+  escalation: z
+    .object({
+      policy: z.enum(['none', 'allowlist']).optional(),
+      via: z.enum(['sudo', 'direct']).optional(),
+      allow: z
+        .array(
+          // strict：未知子键拒绝启动（`confrim` 拼错 = 确认闸静默消失，§6.1 教训）
+          z
+            .object({
+              id: z.string().min(1).optional(),
+              cmd: z.string().min(1),
+              args: z.array(z.string()).optional(),
+              confirm: z.boolean().optional(),
+              cwd: z.string().min(1).optional(),
+            })
+            .strict(),
+        )
+        .optional(),
+    })
+    .strict()
+    .optional(),
   /** ops 审计账本开关（安全字段：重启生效 + 宿主署名）；缺省 `on` */
   opsAudit: z.enum(['on', 'off']).optional(),
   /** ops 审计账本路径（缺省 `<OCTOPI_HOME>/audit/ops.<agentId>.jsonl`） */
@@ -141,6 +163,45 @@ export const EffectPolicyConfigSchema = z.object({
       message:
         'jail=require/onJailUnavailable=refuse contradicts untrustedAdmission=degrade (same condition, opposite outcomes)',
     });
+  }
+  // ops P3：提权规则纯形状矛盾（TOCTOU/启动探测在 resolve 与 daemon 层）
+  if (v.escalation && v.escalation.policy !== undefined && v.escalation.policy !== 'none' && v.mode === 'untrusted') {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['escalation', 'policy'],
+      message: 'escalation cannot combine with mode=untrusted (untrusted promises a jail)',
+    });
+  }
+  if (v.escalation?.policy === 'allowlist') {
+    const rules = v.escalation.allow ?? [];
+    if (rules.length === 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['escalation', 'allow'],
+        message: 'escalation.policy=allowlist requires non-empty escalation.allow rules',
+      });
+    }
+    const seen = new Set<string>();
+    for (const [i, rule] of rules.entries()) {
+      const absolute = rule.cmd.startsWith('/') || /^[a-zA-Z]:[\\/]/.test(rule.cmd);
+      if (!absolute) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['escalation', 'allow', i, 'cmd'],
+          message: 'escalation rule cmd must be an absolute path (PATH resolution = replaceable binary)',
+        });
+      }
+      // 重复 (cmd,args)：后写的 confirm:true 会被先命中者静默忽略 → 查重拒绝
+      const dupKey = JSON.stringify([rule.cmd, rule.args ?? []]);
+      if (seen.has(dupKey)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['escalation', 'allow', i],
+          message: 'duplicate escalation rule (cmd,args) — the first match wins silently',
+        });
+      }
+      seen.add(dupKey);
+    }
   }
 });
 

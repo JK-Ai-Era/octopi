@@ -209,6 +209,15 @@ export interface ToolExecutionContext {
   }) => Promise<HitlDecision>;
   /** P4：engine | host-gate */
   effectChannel?: 'engine' | 'host-gate';
+  /**
+   * 提权策略（ops P3，resolved）：priv_exec 的全等匹配面。
+   * 请求者授权另由 toolRights deny('priv_exec') 表达（SEC-2 / §8.6）。
+   */
+  escalation?: {
+    policy: 'none' | 'allowlist';
+    via: 'sudo' | 'direct';
+    allow: Array<{ id?: string; cmd: string; args?: string[]; confirm?: boolean; cwd?: string }>;
+  };
   /** L1：false 时不启用 timeoutMs 看门狗 */
   processLimits?: boolean;
   /** shell 工具策略（deny=拒绝 shell；无 L4 时不能「只禁越界」） */

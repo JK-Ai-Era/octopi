@@ -29,7 +29,7 @@ export interface SecurityConfigDrift {
 }
 
 /**
- * 参与指纹的安全字段（§8.4：jail / escalation(预留) / effects / 审计开关 + 作用域面）。
+ * 参与指纹的安全字段（§8.4：jail / escalation / effects / 审计开关 + 作用域面）。
  * 键序无关；值走稳定序列化。
  */
 const EFFECT_POLICY_SECURITY_KEYS = [
@@ -45,6 +45,7 @@ const EFFECT_POLICY_SECURITY_KEYS = [
   'opsAudit',
   'opsAuditPath',
   'network',
+  'escalation',
 ] as const;
 
 const SECURITY_CONFIG_SECURITY_KEYS = ['enforce', 'injectionSensitivity', 'allowedPaths'] as const;

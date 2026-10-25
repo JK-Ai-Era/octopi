@@ -189,6 +189,59 @@
                 "type": "string",
                 "minLength": 1
               },
+              "escalation": {
+                "type": "object",
+                "properties": {
+                  "policy": {
+                    "type": "string",
+                    "enum": [
+                      "none",
+                      "allowlist"
+                    ]
+                  },
+                  "via": {
+                    "type": "string",
+                    "enum": [
+                      "sudo",
+                      "direct"
+                    ]
+                  },
+                  "allow": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "cmd": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "args": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "confirm": {
+                          "type": "boolean"
+                        },
+                        "cwd": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "required": [
+                        "cmd"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "additionalProperties": false
+              },
               "opsAudit": {
                 "type": "string",
                 "enum": [
@@ -2844,6 +2897,59 @@
         "privilegedAck": {
           "type": "string",
           "minLength": 1
+        },
+        "escalation": {
+          "type": "object",
+          "properties": {
+            "policy": {
+              "type": "string",
+              "enum": [
+                "none",
+                "allowlist"
+              ]
+            },
+            "via": {
+              "type": "string",
+              "enum": [
+                "sudo",
+                "direct"
+              ]
+            },
+            "allow": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "cmd": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "args": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "confirm": {
+                    "type": "boolean"
+                  },
+                  "cwd": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "cmd"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "additionalProperties": false
         },
         "opsAudit": {
           "type": "string",

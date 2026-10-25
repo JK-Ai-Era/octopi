@@ -101,6 +101,17 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 | v0.2 | [changelog/v0.2.md](./changelog/v0.2.md) |
 | v0.1 | [changelog/v0.1.md](./changelog/v0.1.md) |
 
+## v0.93.7 (2026-10-25)
+
+### feat(engine): 白名单提权 —— 独立 privileged 通道 `priv_exec`（ops P3）
+
+- **内容**：`escalation` 配置（`policy: none|allowlist` + `via: sudo|direct` + 全等规则；full 档留 P4）；`priv_exec` 工具经独立通道执行完整 argv（spawn + 独立进程组、不经 shell、不包 jail、env 钉死系统值、cwd 由规则钉住缺省 `/`、命令结束/超时**真树杀**）；确认闸复用 SEC-7 HitlDecision（缓存 key 含完整 argv 全等 + session/agent 归属；`approve_always` 在特权通道降格 `approve_session`）；启动期探测（`/usr/bin/sudo -n true` / geteuid 0 / win32 `fsutil dirty query`）失败**拒绝启动**；allowlist 二进制 TOCTOU 护栏；审计 `ops.escalation.requested/denied` + `ops.privileged.exec`；请求者授权按 §8.6 走 `toolRights`（内置角色非 owner 默认 `deny: ['priv_exec']`）。
+- **评审驱动修复（P0×1/P1×12 全核实）**：TOCTOU 护栏改查**有效目标**（`sudo -n <target>` 形态的真实二进制在 args[1]——此前只查 `cmd` 等于不查，文档示例形态反而全放行）；`via: sudo` 规则强制显式 `sudo -n <绝对目标>` 形态（via 不再与事实脱节）；护栏补符号链接穿透 + **父目录链可写即拒**（可写目录 + rename 可换 0555 文件）；`execFile` 不转发 `detached` 改用 `spawn` 真进程组树杀（含命令结束即树杀，防孤儿；收 `exit` 不被继承管道吊住）；cwd 不再取 agent 可写值；untrusted 与 escalation 组合拒绝；规则 `.strict()`（拼错 `confrim` 不再静默丢确认闸）+ 重复 (cmd,args) 查重 + 相对 cmd/win32 绝对路径；审计补 invalid_args 留痕与 `executed`（spawn 未成功 ≠ 执行失败）；启动探测覆盖 per-agent effectPolicy 且可写根口径统一。
+- **验证**：全量 **3365 过 / 0 败 / 6 跳过**（escalation.test.ts 19 用例：全等匹配/sudo 形态/TOCTOU 父目录链/树杀孤儿/跨会话缓存隔离/always 降格/探测 fail-closed）；build / lint / arch 同步全绿。
+- **已知边界（如实）**：探测只证「通道可用」不证「逐规则被 sudoers 授权」；Windows 暂仅 `via: direct`（mode 位无 POSIX 语义，护栏口径 = roots + 父目录链）；toolRights 拒绝（not_authorized）暂只落 `security_blocked`，ops 账目随 P5 参与者身份补齐。
+
+---
+
 ## v0.93.6 (2026-10-25)
 
 ### feat(engine): ops 运维审计 —— hash 链账本 + 统一动作记录 + 安全配置漂移守卫（ops P2）

@@ -241,6 +241,13 @@ Unknown or untagged tools are **rejected** on the reduced surface
     "shellEscape": "deny",            // deny | confirm | allow
     "pathContainment": "strict",      // strict | soft | none
     "processLimits": true,
+    "escalation": {                 // priv_exec allowlist (ops P3); policy: none | allowlist
+      "policy": "allowlist",
+      "via": "sudo",                 // sudo (argv spells `sudo -n` explicitly) | direct (root/elevated)
+      "allow": [
+        { "cmd": "/usr/bin/sudo", "args": ["-n", "/usr/bin/systemctl", "restart", "nginx"], "confirm": true }
+      ]
+    },
     "opsAudit": "on",                 // ops audit journal (security field: restart-only); default on
     "opsAuditPath": "…/audit/ops.jsonl"   // default `<OCTOPI_HOME>/audit/ops.<agentId>.jsonl`
   }
@@ -299,6 +306,26 @@ Known boundaries (honest scope, not oversell):
 - No rotation yet; the journal grows until P5 shipping/rotation.
 - The journal is **single-writer** per file: the default is one file per agent;
   pointing several agents at one `opsAuditPath` needs external serialization.
+
+**Privileged channel (`priv_exec`, P3).** Privilege escalation is a separate
+tool, not a mode side effect: engine-side `execFile` of the **exact** argv
+(absolute cmd + element-by-element args — no prefix/regex matching), no shell,
+no jail, scrubbed env, **cwd pinned by the rule (default `/`, never the agent's
+cwd)**, timeout + real tree-kill. `via: "sudo"` rules must spell the form
+explicitly (`sudo -n <absolute target>`) and the guard checks **every effective
+target** — the sudo binary *and* the real one after it. Relative-path arguments
+in a rule resolve against the pinned cwd: prefer absolute paths in rule args. The shell tool keeps its jail — a
+few allowlisted sudo commands never justify unleashing the whole shell channel.
+Four gates, all fail-closed: exact-rule match (mismatches are refused **and**
+audited as `ops.escalation.denied`), a HITL gate for `confirm: true` rules
+(SEC-7 decision model, cache key includes the full argv so one approval covers
+exactly one command), requester authorization via SEC-2 `toolRights.deny('priv_exec')`,
+and audit (`ops.escalation.requested` / `ops.privileged.exec`). Startup probes
+refuse to start when the declared escalation is not actually available
+(`sudo -n true` / root-or-elevated assertion), and allow rules whose binary sits
+in an agent-writable location or is writable by the agent uid are rejected
+(replaceable-binary TOCTOU). `policy: "full"` belongs to P4 (needs the persistent
+`PRIVILEGED` badge alongside `privilegedAck`).
 
 Related (still true):
 

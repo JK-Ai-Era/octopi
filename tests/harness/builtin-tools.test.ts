@@ -596,13 +596,14 @@ describe('getBuiltinTools', () => {
     expect(names).toContain('http_request');
     expect(names).toContain('env_info');
     expect(names).toContain('process_list');
+    expect(names).toContain('priv_exec');
     expect(names).toContain('git_status');
     expect(names).toContain('git_commit');
     expect(names).toContain('package_edit');
     expect(names).toContain('project_run');
     expect(names).toContain('package_install');
     // 15 legacy pure (含 process_list) + 7 git_* + 3 package_*
-    expect(tools.length).toBe(25);
+    expect(tools.length).toBe(26);
   });
 
   it('registers shell last so models prefer dedicated tools', () => {

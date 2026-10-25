@@ -211,6 +211,13 @@ reduced 面上 **未标注工具一律拒绝**（unknown-reject）；内置工�
     "shellEscape": "deny",            // deny | confirm | allow
     "pathContainment": "strict",      // strict | soft | none
     "processLimits": true,
+    "escalation": {                 // priv_exec 白名单（ops P3）；policy: none | allowlist
+      "policy": "allowlist",
+      "via": "sudo",                 // sudo（argv 显式写 `sudo -n`）| direct（root/elevated）
+      "allow": [
+        { "cmd": "/usr/bin/sudo", "args": ["-n", "/usr/bin/systemctl", "restart", "nginx"], "confirm": true }
+      ]
+    },
     "opsAudit": "on",                 // ops 审计账本（安全字段：重启生效）；缺省 on
     "opsAuditPath": "…/audit/ops.jsonl"   // 缺省 `<OCTOPI_HOME>/audit/ops.<agentId>.jsonl`
   }
@@ -253,6 +260,19 @@ JSONL 账本（缺省 `<OCTOPI_HOME>/audit/ops.<agentId>.jsonl`——按 agent �
 - 审计记录含**完整 argv**（保真优先于脱敏——命令行上的凭证会出现在审计里；脱敏是 P5 选项）。
 - 尚无轮转：账本持续增长，留待 P5 外送/轮转。
 - 账本是**单写者**语义：缺省按 agent 分文件（上段注）；多写者共享需外部串行化。
+
+**特权通道（`priv_exec`，P3）。** 提权是独立工具，不是 mode 副作用：引擎侧 `execFile`
+执行**全等** argv（绝对 cmd + args 逐项全等——不做前缀/正则匹配），不经 shell、不包 jail、
+env 消毒、**cwd 由规则钉住（缺省 `/`，绝不取 agent 的 cwd）**、超时真树杀。shell 工具保持
+原牢笼——几条白名单 sudo 不构成放开整个 shell 通道的理由。`via: "sudo"` 规则必须显式写
+`sudo -n <绝对目标>` 形态，护栏检查**每个有效目标**（sudo 本体与其后的真实二进制）；规则
+args 里的相对路径按钉住的 cwd 解析——规则参数建议一律绝对路径。
+四道闸全 fail-closed：全等规则匹配（未命中拒绝**并**记 `ops.escalation.denied`）、`confirm: true`
+规则的 HITL 确认（SEC-7 单模型，缓存 key 含完整 argv——一次批准只覆盖一条命令）、请求者授权
+（SEC-2 `toolRights.deny('priv_exec')`）、审计（`ops.escalation.requested` / `ops.privileged.exec`）。
+启动期探测拿不到声明的提权能力即**拒绝启动**（`sudo -n true` / root-or-elevated 断言）；规则
+二进制位于 agent 可写面或被 agent uid 可写则拒（可换二进制 TOCTOU）。`policy: "full"` 属 P4
+（除常驻 `PRIVILEGED` 标记外还需 `privilegedAck`，二者并用）。
 
 仍然成立的关联语义：
 

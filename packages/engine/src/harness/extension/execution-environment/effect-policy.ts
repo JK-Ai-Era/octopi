@@ -6,9 +6,16 @@
  */
 
 import { isAbsolute, resolve } from 'node:path';
+import { homedir, tmpdir } from 'node:os';
 import { expandHomePath } from '../../../paths.js';
 import type { HitlDecision } from '@octopi-agent/core/types/tools.js';
 import type { ToolIsolationMode } from './isolation.js';
+import type { EscalationPolicy, EscalationRule } from './privileged-exec.js';
+import {
+  checkEscalationBinary,
+  escalationRuleTargets,
+  escalationWritableRoots,
+} from './privileged-exec.js';
 import {
   deniesReducedSurface,
   resolveToolCapabilities,
@@ -107,6 +114,7 @@ export type JailIntent = 'auto' | 'require' | 'none';
 
 /** jail 意图落空时的行为：`refuse` 拒绝执行 | `degrade` 记 securityDegraded + 告警（禁止静默） */
 export type OnJailUnavailable = 'refuse' | 'degrade';
+export type { EscalationPolicy, EscalationRule };
 
 /** run 开始即记录的 jail 状态（意图 × 实测后端）——「授权」与「故障」的事后判据 */
 export interface OpsJailState {
@@ -173,6 +181,12 @@ export interface EffectPolicyConfig {
   onJailUnavailable?: OnJailUnavailable;
   /** `jail: "none"` 时必填的显式表态（缺省拒绝启动；§8.1 二级确认） */
   privilegedAck?: string;
+  /** 提权策略（§4/§5 P3）：`allowlist` 按 cmd+args 全等放行；缺省 `none`（P4 前无 full 档） */
+  escalation?: {
+    policy?: 'none' | 'allowlist';
+    via?: 'sudo' | 'direct';
+    allow?: EscalationRule[];
+  };
   /** ops 审计账本开关（安全字段：重启生效 + 宿主署名，§4.3）；缺省 `on` */
   opsAudit?: 'on' | 'off';
   /** ops 审计账本路径（缺省 `<OCTOPI_HOME>/audit/ops.<agentId>.jsonl`） */
@@ -213,6 +227,8 @@ export interface EffectiveEffectPolicy {
   jail: JailIntent;
   /** jail 意图落空时的行为（refuse/degrade） */
   onJailUnavailable: OnJailUnavailable;
+  /** 提权策略（ops P3，resolved） */
+  escalation: EscalationPolicy;
   /** ops 审计账本开关（ops P2） */
   opsAudit: 'on' | 'off';
   /** ops 审计账本路径覆盖 */
@@ -231,6 +247,7 @@ type ModePreset = Omit<
   | 'onJailUnavailable'
   | 'opsAudit'
   | 'opsAuditPath'
+  | 'escalation'
 >;
 
 const MODE_DEFAULTS: Record<EffectRunMode, ModePreset> = {
@@ -301,6 +318,36 @@ export function requiresJail(eff: EffectiveEffectPolicy): boolean {
   if (eff.jail === 'none') return false;
   if (eff.jail === 'require' || eff.onJailUnavailable === 'refuse') return true;
   return eff.requestedMode === 'untrusted' && eff.mode === 'untrusted';
+}
+
+/**
+ * 白名单提权全等匹配（§5 P3）：`cmd` 绝对路径比对 + `args` 逐项全等。
+ * 不做前缀/正则/插值——任何「宽松匹配」都会把 allowlist 变成任意命令通道。
+ *
+ * @param escalation - resolved 提权策略
+ * @param cmd - 请求的可执行文件（必须与规则逐字相同）
+ * @param args - 请求的 argv 尾部
+ * @returns 命中的规则与稳定 ruleId；未命中 null
+ */
+export function matchEscalationRule(
+  escalation: EscalationPolicy,
+  cmd: string,
+  args: readonly string[],
+): { rule: EscalationRule; ruleId: string } | null {
+  if (escalation.policy !== 'allowlist') return null;
+  for (let i = 0; i < escalation.allow.length; i += 1) {
+    const rule = escalation.allow[i]!;
+    const ruleArgs = rule.args ?? [];
+    if (
+      rule.cmd === cmd &&
+      ruleArgs.length === args.length &&
+      ruleArgs.every((a, idx) => a === args[idx])
+    ) {
+      // 显式 id 优先（下标 id 在规则重排后会断裂审计关联）
+      return { rule, ruleId: rule.id ?? `allow[${i}]` };
+    }
+  }
+  return null;
 }
 
 /**
@@ -458,6 +505,46 @@ export function resolveEffectiveEffectPolicy(
     }
   }
 
+  // ops P3：提权策略（§4.1）。纯配置矛盾 fail-closed；allowlist 二进制 TOCTOU 护栏
+  // 同步兜底（库路径无 daemon 启动探测时也不能放行可换二进制）。
+  const escalation: EscalationPolicy = {
+    policy: config.escalation?.policy ?? 'none',
+    via: config.escalation?.via ?? 'sudo',
+    allow: config.escalation?.allow ?? [],
+  };
+  if (escalation.policy !== 'none') {
+    if (requestedMode === 'untrusted') {
+      // untrusted 的产品承诺就是笼；「越笼」提权通道与之矛盾（§4.1 同类拒绝）
+      throw new Error('effect_policy_invalid: escalation cannot combine with mode=untrusted (untrusted promises a jail)');
+    }
+  }
+  if (escalation.policy === 'allowlist') {
+    if (escalation.allow.length === 0) {
+      throw new Error('effect_policy_invalid: escalation.policy=allowlist requires escalation.allow rules');
+    }
+    // 可写根统一口径（与 daemon 启动探测共用 escalationWritableRoots，防两处漂移）
+    const writableRoots = escalationWritableRoots({
+      workspaces: baseWorkspace !== undefined ? [baseWorkspace] : [],
+      transactionRoots: (config.transactionRoots ?? []).map((r) => expandHomePath(r)),
+    });
+    for (const rule of escalation.allow) {
+      if (!isAbsolute(rule.cmd)) {
+        throw new Error(`effect_policy_invalid: escalation rule cmd must be absolute, got ${JSON.stringify(rule.cmd)}`);
+      }
+      // 有效目标逐个过 TOCTOU 护栏（via: sudo 形态含 sudo 之后的真实二进制）
+      const targets = escalationRuleTargets(rule, escalation.via);
+      if ('invalid' in targets) {
+        throw new Error(`effect_policy_invalid: escalation rule rejected (${targets.invalid})`);
+      }
+      for (const target of targets.targets) {
+        const bad = checkEscalationBinary(target, writableRoots);
+        if (bad) {
+          throw new Error(`effect_policy_invalid: escalation rule rejected (${bad})`);
+        }
+      }
+    }
+  }
+
   // Path jail is part of the untrusted promise; never loosen it from config.
   const d = MODE_DEFAULTS[mode];
   const pathContainment: PathContainment =
@@ -505,6 +592,7 @@ export function resolveEffectiveEffectPolicy(
     shellJournalLimit: config.shellJournalLimit,
     jail,
     onJailUnavailable,
+    escalation,
     opsAudit: config.opsAudit ?? 'on',
     opsAuditPath: config.opsAuditPath,
   };

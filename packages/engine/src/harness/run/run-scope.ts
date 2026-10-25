@@ -51,6 +51,12 @@ export interface RunToolRuntime {
   pathContainment?: "strict" | "soft" | "none";
   confirmEffect?: import("@octopi-agent/core/types/tools.js").ToolExecutionContext["confirmEffect"];
   effectChannel?: "engine" | "host-gate";
+  /** 提权策略（ops P3，resolved）：priv_exec 全等匹配面 */
+  escalation?: {
+    policy: "none" | "allowlist";
+    via: "sudo" | "direct";
+    allow: Array<{ cmd: string; args?: string[]; confirm?: boolean }>;
+  };
   /** L1 processLimits（false = 不强制 timeoutMs 看门狗） */
   processLimits?: boolean;
   /** shell 工具策略（gateEffect；deny=拒绝 shell） */

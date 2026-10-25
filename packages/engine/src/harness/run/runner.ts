@@ -445,6 +445,9 @@ export class SessionAwareRunner {
   /** ops P0：jail 意图（auto/require/none）——none=授权无笼 */
   private effectJail: import('../extension/execution-environment/effect-policy.js').JailIntent | undefined;
   /** ops P2：审计账本开关（effectPolicy.opsAudit；未解析时回落配置缺省 on） */
+  /** ops P3：提权策略（resolved；priv_exec 全等匹配面） */
+  private effectEscalation?: import('../extension/execution-environment/effect-policy.js').EscalationPolicy;
+  /** ops P2：审计账本开关（effectPolicy.opsAudit；未解析时回落配置缺省 on） */
   private effectOpsAudit: 'on' | 'off' | undefined;
   /** ops P2：hash 链审计账本（懒建；写失败降级申报，不吞） */
   private opsJournal?: OpsAuditJournal;
@@ -1071,6 +1074,7 @@ export class SessionAwareRunner {
         this.effectShellJournal = eff.shellJournal;
         this.effectNetwork = eff.network;
         this.effectJail = eff.jail;
+        this.effectEscalation = eff.escalation;
         this.effectRequireJail = requiresJail(eff);
         // 严格凭证绑定只跟 untrusted 承诺走（历史语义）：jail=require/refuse 不得
         // 悄悄改变 host/project 的凭证行为
@@ -1472,6 +1476,7 @@ export class SessionAwareRunner {
           pathContainment: this.effectPathContainment,
           confirmEffect: this.config.confirmEffect,
           effectChannel: this.effectChannel,
+          escalation: this.effectEscalation,
           processLimits: this.effectProcessLimits,
           shellEscape: this.effectShellEscape,
           shellJournal: this.effectShellJournal,

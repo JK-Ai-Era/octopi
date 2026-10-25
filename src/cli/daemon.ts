@@ -734,6 +734,34 @@ export async function serveCommand(args: CliArgs): Promise<void> {
 
 async function startGatewayBlocking(configPath: string | undefined, args: CliArgs): Promise<void> {
   const config = loadConfig(configPath);
+  // ops P3 §4.1/拍板 #5：声明了提权就必须真的拿得到——启动期探测，失败拒绝启动，
+  // 禁止降级静默运行（allowlist 二进制 TOCTOU 护栏一并在此兜底）。
+  // 覆盖面 = 顶层 + 每 agent（agent 的 effectPolicy 整体覆盖顶层，漏了就是死码）。
+  {
+    const { probeEscalationReadiness, escalationWritableRoots } = await import(
+      '@octopi-agent/engine/harness/extension/execution-environment/privileged-exec.js'
+    );
+    const roots = escalationWritableRoots({
+      workspaces: [process.cwd()],
+      transactionRoots: (config.effectPolicy?.transactionRoots ?? []) as string[],
+    });
+    const candidates: Array<{ name: string; escalation: unknown }> = [
+      { name: '<top>', escalation: config.effectPolicy?.escalation },
+    ];
+    for (const agent of (config as { agents?: Array<{ id?: string; effectPolicy?: { escalation?: unknown } }> }).agents ?? []) {
+      if (agent.effectPolicy?.escalation) {
+        candidates.push({ name: agent.id ?? '<agent>', escalation: agent.effectPolicy.escalation });
+      }
+    }
+    for (const candidate of candidates) {
+      const ready = await probeEscalationReadiness(candidate.escalation as never, { writableRoots: roots });
+      if (!ready.ok) {
+        console.error(`✗ Escalation readiness probe failed (${candidate.name}) — refusing to start (no silent degradation):`);
+        console.error(`  ${ready.reason}`);
+        process.exit(1);
+      }
+    }
+  }
   const gatewayConfig = toGatewayConfig(config);
   // ops P2 §4.3/§8.4：daemon 持安全字段启动锚，run 起点复核，漂移拒新 run
   // （取 raw 文件切面与复核同口径；agent 改写自身配置 = 自提权面）

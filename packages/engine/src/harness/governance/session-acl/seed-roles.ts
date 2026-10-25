@@ -25,6 +25,17 @@ function rights(input: {
   };
 }
 
+/**
+ * 提权请求者授权（ops §8.6 拍板：T1 缺省仅 owner 可请求）：
+ * 非 owner 角色默认 deny `priv_exec`——缺权参与者在 toolRights 层即拒，
+ * 连确认闸都到不了。owner 显式不受限。
+ */
+const NON_OWNER_PRIVILEGE: SessionRoleDefinition['defaults']['toolRights'] = {
+  allow: undefined,
+  deny: ['priv_exec'],
+  denyCapabilities: [],
+};
+
 /** Built-in five-role catalog (v1: no consultant) */
 export const BUILTIN_SESSION_ROLES: SessionRoleDefinition[] = [
   {
@@ -48,6 +59,7 @@ export const BUILTIN_SESSION_ROLES: SessionRoleDefinition[] = [
       readScope: 'full',
       writeMemory: true,
       canManageTasks: true,
+      toolRights: NON_OWNER_PRIVILEGE,
       canHandoff: false,
     }),
   },
@@ -60,6 +72,7 @@ export const BUILTIN_SESSION_ROLES: SessionRoleDefinition[] = [
       readScope: 'full',
       writeMemory: false,
       canManageTasks: false,
+      toolRights: NON_OWNER_PRIVILEGE,
       canHandoff: false,
     }),
   },
@@ -72,6 +85,7 @@ export const BUILTIN_SESSION_ROLES: SessionRoleDefinition[] = [
       readScope: 'none',
       writeMemory: false,
       canManageTasks: false,
+      toolRights: NON_OWNER_PRIVILEGE,
       canHandoff: false,
     }),
   },
@@ -84,6 +98,7 @@ export const BUILTIN_SESSION_ROLES: SessionRoleDefinition[] = [
       readScope: 'full',
       writeMemory: true,
       canManageTasks: true,
+      toolRights: NON_OWNER_PRIVILEGE,
       canHandoff: false,
     }),
   },

@@ -58,6 +58,8 @@ export const BUILTIN_TOOL_CAPABILITIES: Record<string, ToolCapability[]> = {
   env_info: ['fs-read'],
   // 只读进程诊断（ops P1）：宿主内省（进程表/argv），reduced 面剥掉（host-read）
   process_list: ['host-read'],
+  // exec 标签：reduced 面剥掉提权通道（降能力不降墙）
+  priv_exec: ['exec'],
   http_request: ['egress'],
   web_search: ['egress'],
   ask_user: [],

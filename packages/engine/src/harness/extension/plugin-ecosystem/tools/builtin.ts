@@ -9,6 +9,7 @@
  * - http_request: HTTP 请求
  * - env_info: 运行环境信息
  * - process_list: 只读进程诊断（进程表/资源/祖先链）
+ * - priv_exec: 白名单提权执行（ops P3，全等匹配 + 确认闸）
  *
  * 所有有状态工具（memory、task、ask_user）通过 extension-tools 按需注入。
  *
@@ -31,6 +32,7 @@ import { createPackageTools } from './package-tools.js';
 import { createHttpRequestTool } from './http.js';
 import { createEnvInfoTool } from './env-info.js';
 import { createProcessListTool } from './process-tools.js';
+import { createPrivExecTool } from './privileged-tool.js';
 import { createDocumentProbeTool, createDocumentReadTool } from './document-tools.js';
 import {
   isUnderSessionUndoRoot,
@@ -903,6 +905,7 @@ export function getBuiltinTools(options?: {
     }),
     createEnvInfoTool(),
     createProcessListTool(),
+    createPrivExecTool(),
     createShellTool({ summary: options?.summary }),
   ];
 }

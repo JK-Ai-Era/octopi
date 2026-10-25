@@ -162,6 +162,12 @@ export interface ToolContextProvider {
     pathContainment?: 'strict' | 'soft' | 'none';
     confirmEffect?: import('@octopi-agent/core/types/tools.js').ToolExecutionContext['confirmEffect'];
     effectChannel?: 'engine' | 'host-gate';
+    /** 提权策略（ops P3，resolved） */
+    escalation?: {
+      policy: 'none' | 'allowlist';
+      via: 'sudo' | 'direct';
+      allow: Array<{ cmd: string; args?: string[]; confirm?: boolean }>;
+    };
     processLimits?: boolean;
     shellEscape?: 'deny' | 'confirm' | 'allow';
     shellJournal?: 'snapshot' | 'off';
@@ -213,6 +219,7 @@ class RuntimeToolContextProvider implements ToolContextProvider {
         pathContainment: scope.toolRuntime.pathContainment,
         confirmEffect: scope.toolRuntime.confirmEffect,
         effectChannel: scope.toolRuntime.effectChannel,
+        escalation: scope.toolRuntime.escalation,
         processLimits: scope.toolRuntime.processLimits,
         shellEscape: scope.toolRuntime.shellEscape,
         shellJournal: scope.toolRuntime.shellJournal,

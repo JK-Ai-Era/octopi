@@ -22,13 +22,16 @@ import { createHash } from 'node:crypto';
 import { dirname, resolve, sep } from 'node:path';
 import type { ToolFileEffects } from '@octopi-agent/core/types/tools.js';
 
-/** 审计事件词表（§7；P3 将补 ops.privileged.*） */
+/** 审计事件词表（§7） */
 export type OpsAuditEvent =
   | 'ops.jail.state'
   | 'ops.command.executed'
   | 'ops.system_path.write'
   | 'ops.policy.degraded'
-  | 'ops.config.security_changed';
+  | 'ops.config.security_changed'
+  | 'ops.escalation.requested'
+  | 'ops.escalation.denied'
+  | 'ops.privileged.exec';
 
 /** 账本条目（hash 链节点） */
 export interface OpsAuditEntry {
