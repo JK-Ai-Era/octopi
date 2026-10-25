@@ -91,6 +91,53 @@ export const EffectPolicyConfigSchema = z.object({
       maxFileSize: z.number().int().nonnegative().optional(),
     })
     .optional(),
+  /**
+   * 进程牢笼意图（ops P0）：auto（缺省，按模式派生，缺笼如实降级 + 告警）|
+   * require（拿不到即拒）| none（显式无笼，需 privilegedAck）。
+   */
+  jail: z.enum(['auto', 'require', 'none']).optional(),
+  /** jail 意图落空时：refuse 拒绝执行 | degrade（缺省）记 securityDegraded + 告警 */
+  onJailUnavailable: z.enum(['refuse', 'degrade']).optional(),
+  /** `jail: "none"` 时必填的显式表态（授权 ≠ 降级；§8.1） */
+  privilegedAck: z.string().min(1).optional(),
+}).superRefine((v, ctx) => {
+  // 配置矛盾 fail-closed（§4.1）：拒绝启动，不做静默取舍
+  if (v.jail === 'none') {
+    if (!v.privilegedAck?.trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['privilegedAck'],
+        message: 'jail=none requires privilegedAck (explicit unjailed choice)',
+      });
+    }
+    if (v.mode === 'untrusted') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['jail'],
+        message: 'jail=none cannot combine with mode=untrusted (untrusted promises a jail)',
+      });
+    }
+  }
+  if (v.jail === 'none' && v.onJailUnavailable === 'refuse') {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['onJailUnavailable'],
+      message: 'onJailUnavailable=refuse has no meaning under jail=none (remove it, or use jail=auto/require)',
+    });
+  }
+  // 注：effectPolicy.network 目前不在配置 schema（library-only）；jail=none 下
+  // network=deny/allowlist 的拒绝在 resolveEffectiveEffectPolicy 守卫
+  if (
+    (v.jail === 'require' || v.onJailUnavailable === 'refuse') &&
+    v.untrustedAdmission === 'degrade'
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['jail'],
+      message:
+        'jail=require/onJailUnavailable=refuse contradicts untrustedAdmission=degrade (same condition, opposite outcomes)',
+    });
+  }
 });
 
 export const ToolIsolationConfigSchema = z.enum(['none', 'session-subdir', 'session-lock']);

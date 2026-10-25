@@ -27,6 +27,17 @@ import {
   type ProcessIsolationProfile,
 } from './process-isolation.js';
 
+/**
+ * Run 级失笼降级的归一码前缀（ops P0）：probe 缺笼与运行时失笼共用 `no_process_jail`
+ * 前缀，消费面按前缀匹配即可覆盖全部失笼路径。
+ *
+ * @param detail - 失笼细节（jail_setup_failed / jail_spawn_failed / …）
+ * @returns 归一后的 securityDegraded 代码
+ */
+export function jailDegradationCode(detail: string): string {
+  return `no_process_jail: ${detail}`;
+}
+
 export interface ProcessSandboxOptions {
   /** Force a profile (tests). Otherwise probes on construct. */
   profile?: ProcessIsolationProfile;
@@ -97,6 +108,35 @@ export class ProcessSandbox implements SandboxProvider {
     const timeoutMs = config?.limits?.timeoutMs ?? 60_000;
     const maxOutputBytes = config?.limits?.maxOutputBytes ?? 10 * 1024 * 1024;
 
+    if (config?.disableJail && config?.requireJail) {
+      // 库契约守卫：两个都设 = 配置矛盾，绝不静默取舍
+      return Promise.reject(
+        new Error('sandbox_config_conflict: disableJail and requireJail are mutually exclusive'),
+      );
+    }
+    // 授权无笼（ops P0：jail=none + privilegedAck 已过配置闸）：显式注记，不是降级
+    if (config?.disableJail) {
+      return this.withExecDiagnostics(
+        this.runSupervised(
+          file,
+          args,
+          config,
+          {
+            ...profile,
+            backend: 'supervised-spawn',
+            processTree: 'killable',
+            filesystem: 'cwd-pin',
+            privilege: 'same',
+            network: 'open',
+            notes: [...(profile.notes ?? []), 'jail=disabled_by_config (privileged)'],
+          },
+          { cwd, env, timeoutMs, maxOutputBytes },
+        ),
+        cwd,
+        [],
+      );
+    }
+
     // Jail backends wrap the spawn; fall back to supervised spawn.
     if (profile.backend === 'linux-bwrap' && process.platform === 'linux') {
       return this.runBwrap(file, args, config, profile, { cwd, env, timeoutMs, maxOutputBytes });
@@ -107,12 +147,23 @@ export class ProcessSandbox implements SandboxProvider {
     if (config?.requireJail) {
       return Promise.reject(
         new Error(
-          `untrusted_jail_failed: no process jail backend (probe=${profile.backend}); refuse unsandboxed execute`,
+          `jail_required_unavailable: no process jail backend (probe=${profile.backend}); refuse unsandboxed execute`,
         ),
       );
     }
+    // jail 意图落空（auto+degrade）：逐条命令如实注记；run 级 securityDegraded
+    // 已由 resolveEffectiveEffectPolicy 记 `no_process_jail`（probe 期缺笼）
     return this.withExecDiagnostics(
-      this.runSupervised(file, args, config, profile, { cwd, env, timeoutMs, maxOutputBytes }),
+      this.runSupervised(
+        file,
+        args,
+        config,
+        {
+          ...profile,
+          notes: [...(profile.notes ?? []), 'jail=unavailable (supervised-spawn); running unsandboxed'],
+        },
+        { cwd, env, timeoutMs, maxOutputBytes },
+      ),
       cwd,
       [],
     );
@@ -281,7 +332,7 @@ export class ProcessSandbox implements SandboxProvider {
         if (config?.requireJail && isJailWrapper) {
           fail(
             new Error(
-              `untrusted_jail_failed: jail spawn failed: ${err.message} (requireJail=true; refuse unsandboxed execute)`,
+              `jail_required_unavailable: jail spawn failed: ${err.message} (requireJail=true; refuse unsandboxed execute)`,
             ),
           );
           return;
@@ -294,7 +345,10 @@ export class ProcessSandbox implements SandboxProvider {
               notes: [...(profile.notes ?? []), `jail spawn failed: ${err.message}`],
             }
           : profile;
-        if (isJailWrapper) config?.noteSecurityDegraded?.(`jail_spawn_failed: ${err.message}`);
+        // 归一码 no_process_jail（与 jailSetupFailed/jailWrapperRuntimeFailure 同前缀）
+        if (isJailWrapper) {
+          config?.noteSecurityDegraded?.(jailDegradationCode(`jail_spawn_failed: ${err.message}`));
+        }
         finish({
           exitCode: -1,
           stdout,
@@ -481,7 +535,7 @@ export class ProcessSandbox implements SandboxProvider {
   ): Promise<SandboxResult> {
     if (config?.requireJail) {
       return Promise.reject(
-        new Error(`untrusted_jail_failed: ${reason} (requireJail=true; refuse unsandboxed execute)`),
+        new Error(`jail_required_unavailable: ${reason} (requireJail=true; refuse unsandboxed execute)`),
       );
     }
     const degraded: ProcessIsolationProfile = {
@@ -493,7 +547,8 @@ export class ProcessSandbox implements SandboxProvider {
       network: 'open',
       notes: [...(profile.notes ?? []), `jail_setup_failed: ${reason}; supervised fallback`],
     };
-    config?.noteSecurityDegraded?.(`jail_setup_failed: ${reason}`);
+    // 归一码 no_process_jail：消费面按前缀匹配即可覆盖 probe 缺笼与运行时建笼失败两类路径
+    config?.noteSecurityDegraded?.(jailDegradationCode(`jail_setup_failed: ${reason}`));
     return this.runSupervised(file, args, config, degraded, opts);
   }
 
@@ -518,10 +573,11 @@ export class ProcessSandbox implements SandboxProvider {
   ): Promise<SandboxResult> {
     if (config?.requireJail) {
       return Promise.reject(
-        new Error(`untrusted_jail_failed: ${reason} (requireJail=true; refuse unsandboxed execute)`),
+        new Error(`jail_required_unavailable: ${reason} (requireJail=true; refuse unsandboxed execute)`),
       );
     }
-    config?.noteSecurityDegraded?.(`jail_setup_failed: ${reason}`);
+    // 归一码 no_process_jail（同 jailSetupFailed）
+    config?.noteSecurityDegraded?.(jailDegradationCode(`jail_setup_failed: ${reason}`));
     return Promise.resolve({
       ...result,
       isolation: {

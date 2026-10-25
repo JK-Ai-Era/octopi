@@ -101,6 +101,18 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 | v0.2 | [changelog/v0.2.md](./changelog/v0.2.md) |
 | v0.1 | [changelog/v0.1.md](./changelog/v0.1.md) |
 
+## v0.93.5 (2026-10-25)
+
+### feat(engine): jail 可区分性 —— `effectPolicy.jail: auto|require|none`（ops P0 / OP-OPS-1）
+
+- **内容**：新增 `jail`（牢笼意图）/ `onJailUnavailable`（refuse|degrade）/ `privilegedAck` 三个配置字段，核心目标是**授权无约束（jail=none）与被动失去约束（缺笼）必须可分辨**：`jail=none` 注记 `jail=disabled_by_config (privileged)` 且 `securityDegraded` 为空（授权）；probe 期缺笼一律记 run 级 `no_process_jail`（归一码 `no_process_jail: …` 覆盖 probe 缺笼与运行时失笼全部路径，`jailDegradationCode()` 单点构造）+ 逐条命令 `jail=unavailable` 注记；`require` / `refuse` fail-closed 抛 `jail_required_unavailable`。每 run 记 `ops.jail.state`（意图 × 实测后端 × authorized），经延迟投递队列在 run 记录建立后落 Observer run timeline（`AgentEventMap`/`TIMELINE_TYPES` 已登记）。
+- **决策（矛盾组合 fail-closed，schema + resolve 双闸）**：`jail=none` 缺 `privilegedAck`、`jail=none`+`untrusted`、`jail=none`+`onJailUnavailable=refuse`（死旋钮，拒绝而非静默忽略）、`jail=none`+显式 `network=deny/allowlist`（网络限制只由笼实施，无法兑现的承诺拒绝；解析网络姿势收敛 `open`）、（`jail=require`|`refuse`）+`untrustedAdmission=degrade`（同条件反结局）。
+- **fix(run)**：run 级 `securityDegraded` 改为每 run 无条件重置（此前跨 run 粘滞，会把授权 run 误记成降级——恰是本特性要消灭的误报）；严格凭证绑定判据回归 untrusted 语义（`jail=require` 不再改变 host/project 的凭证行为）。
+- **⚠️ breaking note**：运行时建笼失败的错误码 `untrusted_jail_failed` 更名为 **`jail_required_unavailable`**（旧名内嵌 "untrusted"，对 host+jail=require 误导）。按字符串匹配该错误的宿主需同步。
+- **验证**：全量 **3332 过 / 0 败 / 6 跳过**（新增 `tests/harness/jail-intent.test.ts` 23 用例：意图矩阵/矛盾矩阵/ops.jail.state 形状/授权注记/归一码契约/守卫）；build / lint / `arch/check-sync.sh` 全绿。独立评审 P0×1/P1×5/P2×11 全部核实处置（P0-1 事件归属与登记、P1-1 粘滞、P1-2 归一码遗漏、P1-3 校验矩阵缺口、P1-4 network 姿势均为评审驱动修复）。
+
+---
+
 ## v0.93.4 (2026-10-25)
 
 ### feat(engine): 只读进程诊断 —— `process_list` 工具 + 引擎侧 process-info（ops P1）

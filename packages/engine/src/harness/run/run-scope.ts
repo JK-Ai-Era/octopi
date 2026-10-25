@@ -39,6 +39,8 @@ export interface RunToolRuntime {
   requireCredentialBindings?: boolean;
   /** D7 require jail */
   requireJail?: boolean;
+  /** 授权无笼（effectPolicy.jail=none）：跳过 jail 包裹，注记 disabled_by_config */
+  disableJail?: boolean;
   /** jail $HOME write (project/host) */
   homeWrite?: boolean;
   /** Run-level securityDegraded hook */

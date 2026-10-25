@@ -121,6 +121,8 @@ const TIMELINE_TYPES = new Set([
   'security.blocked',
   'security.behavior_blocked',
   'run.timing',
+  // ops P0：jail 意图 × 实测后端（授权 vs 故障的事后判据），必须落 run timeline
+  'ops.jail.state',
 ]);
 
 let runSeq = 0;

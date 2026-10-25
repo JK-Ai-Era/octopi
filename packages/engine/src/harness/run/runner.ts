@@ -423,6 +423,8 @@ export class SessionAwareRunner {
   private effectProcessLimits = true;
   private effectNetwork: 'open' | 'deny' | 'allowlist' | undefined;
   private effectRequireJail: boolean | undefined;
+  /** ops P0：jail 意图（auto/require/none）——none=授权无笼 */
+  private effectJail: import('../extension/execution-environment/effect-policy.js').JailIntent | undefined;
   private effectRequireCredentialBindings = false;
   private effectHomeWrite: boolean | undefined;
   private effectShellEscape: "deny" | "confirm" | "allow" = "allow";
@@ -939,8 +941,13 @@ export class SessionAwareRunner {
       // P3：effectPolicy → L2 path containment + session 临时 root
       // 必须在 Runtime 注入之前，system prompt 才能带上 allowRoots / effectMode
       {
-        const { resolveEffectiveEffectPolicy, readSessionEffectOverrides, mergeTransactionRoots, requiresJail } =
-          await import('../extension/execution-environment/effect-policy.js');
+        const {
+          resolveEffectiveEffectPolicy,
+          readSessionEffectOverrides,
+          mergeTransactionRoots,
+          requiresJail,
+          buildOpsJailState,
+        } = await import('../extension/execution-environment/effect-policy.js');
         const { probeProcessIsolation } = await import(
           '../extension/execution-environment/process-isolation.js'
         );
@@ -960,17 +967,31 @@ export class SessionAwareRunner {
         this.effectShellEscape = eff.shellEscape;
         this.effectShellJournal = eff.shellJournal;
         this.effectNetwork = eff.network;
+        this.effectJail = eff.jail;
         this.effectRequireJail = requiresJail(eff);
+        // 严格凭证绑定只跟 untrusted 承诺走（历史语义）：jail=require/refuse 不得
+        // 悄悄改变 host/project 的凭证行为
         this.effectRequireCredentialBindings =
-          this.config.requireCredentialBindings === true || requiresJail(eff);
+          this.config.requireCredentialBindings === true ||
+          (eff.requestedMode === 'untrusted' && eff.mode === 'untrusted');
         this.effectHomeWrite = eff.mode === 'project' || eff.mode === 'host';
         this.effectShellJournalLimit = eff.shellJournalLimit;
         this.effectUndoLimit = eff.undoLimit;
         // untrusted admission: reduced surface strips egress/exec tools
         this.harness.toolSurface = eff.toolSurface;
-        if (eff.securityDegraded.length > 0) {
-          this.harness.securityDegraded = eff.securityDegraded;
-        }
+        // 无条件重置（空也要写）：harness 跨 run 共享，条件赋值会让上一轮的降级
+        // 粘到授权 run 上——「授权被记成降级」恰是 ops P0 要消灭的误报
+        this.harness.securityDegraded = [...eff.securityDegraded];
+        // ops P0：run 开始即记录 jail 意图 × 实测后端——「授权」与「故障」的事后判据
+        // （§4.2 ops.jail.state；不等失效才留痕）。进延迟投递队列：run 记录
+        // （recordRunStart）建立后才归档，否则 Hub 会把它挂到上一轮 run 或直接丢弃。
+        pendingObservedTimings.push({
+          type: 'ops.jail.state',
+          timestamp: Date.now(),
+          agentId: _agentId,
+          sessionId,
+          data: { ...buildOpsJailState(eff, isolation) },
+        });
       }
 
       // Runtime 锚点：时间 + 工具工作目录 + 允许根/效应模式
@@ -1292,6 +1313,7 @@ export class SessionAwareRunner {
           // 此处再判 effectMode 是等价冗余，已收编。
           requireCredentialBindings: this.effectRequireCredentialBindings,
           requireJail: this.effectRequireJail,
+          disableJail: this.effectJail === 'none',
           homeWrite: this.effectHomeWrite,
           noteSecurityDegraded: (reason: string) => {
             this.harness.securityDegraded = [

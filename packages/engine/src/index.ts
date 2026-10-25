@@ -105,6 +105,7 @@ export type { MemoryEffectJournal, MemoryEffectDomain } from '@octopi-agent/core
 export {
   resolveEffectiveEffectPolicy,
   requiresJail,
+  buildOpsJailState,
   isPathAllowed,
   isToolAllowedOnSurface,
   DEFAULT_EFFECT_RUN_MODE,
@@ -137,6 +138,9 @@ export type {
   ConfirmEffect,
   ConfirmEffectDecision,
   UntrustedAdmission,
+  JailIntent,
+  OnJailUnavailable,
+  OpsJailState,
   ToolSurface,
   SecurityDegradation,
   SessionEffectOverrides,

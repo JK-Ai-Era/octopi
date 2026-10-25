@@ -61,7 +61,7 @@ describe('L4 honesty', () => {
 });
 
 describe('D7 requireJail and network defaults', () => {
-  it('untrusted_jail_failed when requireJail and no backend can apply', async () => {
+  it('jail_required_unavailable when requireJail and no backend can apply', async () => {
     const { ProcessSandbox } = await import(
       '@octopi-agent/engine/harness/extension/execution-environment/sandbox.js'
     );
@@ -71,7 +71,7 @@ describe('D7 requireJail and network defaults', () => {
     const sb = new ProcessSandbox({ profile: supervisedSpawnProfile() });
     await expect(
       sb.execute('echo hi', { requireJail: true, limits: { timeoutMs: 2000 } }),
-    ).rejects.toThrow(/untrusted_jail_failed/);
+    ).rejects.toThrow(/jail_required_unavailable/);
   });
 
   it('registerToolCapabilities makes explicit [] authoritative', async () => {

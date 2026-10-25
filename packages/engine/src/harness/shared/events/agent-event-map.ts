@@ -210,6 +210,8 @@ export interface AgentEventMap {
   };
   /** RunMetricsCollector 快照（reliability → Observer） */
   'run.guard.metrics': import('../../run/reliability/harness-events.js').RunGuardMetricsEvent['data'];
+  /** ops P0：jail 意图 × 实测后端（授权 vs 故障的事后判据，run 开始即记录） */
+  'ops.jail.state': import('../../extension/execution-environment/effect-policy.js').OpsJailState;
   'task.created': { taskId: string; taskType: string; status: string };
   'task.started': { taskId: string; taskType: string; status: string };
   'task.completed': { taskId: string; taskType: string; status: string };
@@ -277,6 +279,7 @@ export const AgentEvents = {
   RUN_SCOPE_MESSAGES: 'run.scope.messages',
   RUN_SCOPE_LLM: 'run.scope.llm',
   RUN_GUARD_METRICS: 'run.guard.metrics',
+  OPS_JAIL_STATE: 'ops.jail.state',
 
   TASK_CREATED: 'task.created',
   TASK_STARTED: 'task.started',

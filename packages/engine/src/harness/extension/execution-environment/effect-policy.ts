@@ -98,6 +98,30 @@ export type ShellJournalMode = 'snapshot' | 'off';
 /** How to admit `untrusted` when L4 process jail is missing */
 export type UntrustedAdmission = 'refuse' | 'degrade';
 
+/**
+ * 进程牢笼意图（ops P0，`arch/ops-privileged-mode.md` §4）：
+ * `auto` = 按模式派生（缺笼如实降级）| `require` = 拿不到即拒 | `none` = 显式无笼（需 privilegedAck）。
+ * 「主动选择无约束」与「被动失去约束」必须可区分——授权 ≠ 降级。
+ */
+export type JailIntent = 'auto' | 'require' | 'none';
+
+/** jail 意图落空时的行为：`refuse` 拒绝执行 | `degrade` 记 securityDegraded + 告警（禁止静默） */
+export type OnJailUnavailable = 'refuse' | 'degrade';
+
+/** run 开始即记录的 jail 状态（意图 × 实测后端）——「授权」与「故障」的事后判据 */
+export interface OpsJailState {
+  /** 配置意图 */
+  intent: JailIntent;
+  /** 实测 ProcessIsolationProfile.backend */
+  backend: import('./process-isolation.js').IsolationBackend | 'unknown';
+  /** L4 最小判据是否成立（intent=none 时仅作事实上报） */
+  jailAvailable: boolean;
+  /** true = 授权态（显式 none / 笼按意图就位）；false = 故障或缺失（降级路径） */
+  authorized: boolean;
+  /** 本 run 的 securityDegraded 代码 */
+  degraded: string[];
+}
+
 /** Effective tool surface after isolation admission */
 export type ToolSurface = 'full' | 'reduced';
 
@@ -143,6 +167,12 @@ export interface EffectPolicyConfig {
   shellJournal?: ShellJournalMode;
   /** shell 清点/快照预算；缺省不限 */
   shellJournalLimit?: { maxFiles?: number; maxBytes?: number; maxFileSize?: number };
+  /** 进程牢笼意图；缺省 `auto`（按模式派生，缺笼如实降级 + 告警） */
+  jail?: JailIntent;
+  /** jail≠none 且笼不可用时：`refuse` 拒绝执行 | `degrade`（缺省）记 securityDegraded + 告警 */
+  onJailUnavailable?: OnJailUnavailable;
+  /** `jail: "none"` 时必填的显式表态（缺省拒绝启动；§8.1 二级确认） */
+  privilegedAck?: string;
 }
 
 /** 展开后的有效策略 */
@@ -175,6 +205,10 @@ export interface EffectiveEffectPolicy {
   undoLimit?: { maxEntries?: number; maxBlobBytes?: number };
   shellJournal: ShellJournalMode;
   shellJournalLimit?: { maxFiles?: number; maxBytes?: number; maxFileSize?: number };
+  /** 进程牢笼意图（auto/require/none） */
+  jail: JailIntent;
+  /** jail 意图落空时的行为（refuse/degrade） */
+  onJailUnavailable: OnJailUnavailable;
 }
 
 type ModePreset = Omit<
@@ -185,6 +219,8 @@ type ModePreset = Omit<
   | 'untrustedAdmission'
   | 'toolSurface'
   | 'securityDegraded'
+  | 'jail'
+  | 'onJailUnavailable'
 >;
 
 const MODE_DEFAULTS: Record<EffectRunMode, ModePreset> = {
@@ -241,16 +277,45 @@ const MODE_DEFAULTS: Record<EffectRunMode, ModePreset> = {
 };
 
 /**
- * Whether the resolved policy demands a process jail (untrusted that survived
- * untrusted admission). Single predicate shared by the run path (runner) and
- * host-side read surfaces (WebUI git status endpoint) so the isolation level
- * never drifts between them.
+ * Whether the resolved policy demands a process jail — fail-closed when the
+ * jail cannot be applied (ops P0: `jail: require`, `onJailUnavailable: refuse`,
+ * or untrusted that survived untrusted admission). Single predicate shared by
+ * the run path (runner) and host-side read surfaces (WebUI git status endpoint)
+ * so the isolation level never drifts between them.
  *
  * @param eff - resolved effective policy
- * @returns true when untrusted was requested and remains effective
+ * @returns true when a missing/broken jail must refuse execution
  */
 export function requiresJail(eff: EffectiveEffectPolicy): boolean {
+  // jail=none 是授权无笼：onJailUnavailable 对它无意义，不得误报「要求笼」
+  if (eff.jail === 'none') return false;
+  if (eff.jail === 'require' || eff.onJailUnavailable === 'refuse') return true;
   return eff.requestedMode === 'untrusted' && eff.mode === 'untrusted';
+}
+
+/**
+ * 构造 run 开始即记录的 `ops.jail.state`（意图 × 实测后端）。
+ * 「主动选择无约束」（authorized, intent=none）与「被动失去约束」
+ * （authorized=false, 缺笼降级）事后可分辨即靠这条记录。
+ *
+ * @param eff - 解析后的有效策略
+ * @param isolation - probe 到的隔离画像（缺省按「无笼」）
+ * @returns jail 状态记录
+ */
+export function buildOpsJailState(
+  eff: EffectiveEffectPolicy,
+  isolation?: ProcessIsolationProfile,
+): OpsJailState {
+  const l4 = isolation ? assessL4ProcessMinimum(isolation) : { ok: false };
+  const jailAvailable = l4.ok;
+  return {
+    intent: eff.jail,
+    backend: isolation?.backend ?? 'unknown',
+    jailAvailable,
+    // none = 授权无笼；其余意图下只有笼按意图就位才是授权态
+    authorized: eff.jail === 'none' || jailAvailable,
+    degraded: [...eff.securityDegraded],
+  };
 }
 
 /**
@@ -292,6 +357,39 @@ export function resolveEffectiveEffectPolicy(
     baseWorkspace !== undefined ? expandHomePath(baseWorkspace.trim()) : baseWorkspace;
   const requestedMode = config.mode ?? DEFAULT_EFFECT_RUN_MODE;
   const untrustedAdmission = config.untrustedAdmission ?? 'refuse';
+  // ops P0：jail 意图先解析；**纯配置矛盾 fail-closed 先于任何探测分支**——
+  // 矛盾是配置事实，不该被「先撞上缺笼」抢先抛成另一种错误
+  const jail: JailIntent = config.jail ?? 'auto';
+  const onJailUnavailable: OnJailUnavailable = config.onJailUnavailable ?? 'degrade';
+  if (jail === 'none') {
+    if (requestedMode === 'untrusted') {
+      throw new Error(
+        'effect_policy_invalid: jail=none cannot combine with mode=untrusted (untrusted promises a jail)',
+      );
+    }
+    if (!config.privilegedAck?.trim()) {
+      throw new Error(
+        'effect_policy_invalid: jail=none requires effectPolicy.privilegedAck (explicit unjailed choice)',
+      );
+    }
+    if (onJailUnavailable === 'refuse') {
+      // 死键 fail-loud：none 下该旋钮无指代，静默忽略会误导配置读者
+      throw new Error(
+        'effect_policy_invalid: onJailUnavailable=refuse has no meaning under jail=none (remove it, or use jail=auto/require)',
+      );
+    }
+    if (config.network === 'deny' || config.network === 'allowlist') {
+      // 网络限制只由 jail 实施：无笼时 deny/allowlist 是无法兑现的承诺，拒绝作假
+      throw new Error(
+        'effect_policy_invalid: network=deny/allowlist cannot be enforced under jail=none (network is jail-implemented only)',
+      );
+    }
+    // 授权无笼：不为 jail 记 securityDegraded（这是授权，不是降级）
+  } else if ((jail === 'require' || onJailUnavailable === 'refuse') && untrustedAdmission === 'degrade') {
+    throw new Error(
+      'effect_policy_invalid: jail=require/onJailUnavailable=refuse contradicts untrustedAdmission=degrade (same condition, opposite outcomes)',
+    );
+  }
   let mode = requestedMode;
   let toolSurface: ToolSurface = 'full';
   const securityDegraded: SecurityDegradation[] = [];
@@ -300,6 +398,15 @@ export function resolveEffectiveEffectPolicy(
     const profile = isolation;
     const l4 = profile ? assessL4ProcessMinimum(profile) : { ok: false, missing: ['processTree'] as const };
     if (!l4.ok) {
+      if (config.jail === 'require' || config.onJailUnavailable === 'refuse') {
+        // jail 意图 fail-closed 优先且错误码/建议指向 jail 旋钮（untrustedAdmission=degrade
+        // 与该组合矛盾，配置校验已拒，不能在这里推荐它）
+        throw new Error(
+          `jail_required_unavailable: effectPolicy.jail=${config.jail ?? 'auto'} ` +
+            `(onJailUnavailable=${config.onJailUnavailable ?? 'degrade'}) but no process jail ` +
+            `(missing: ${l4.missing.join(', ')}). Install bwrap/sandbox-exec, or set jail=none with privilegedAck.`,
+        );
+      }
       if (untrustedAdmission === 'refuse') {
         throw new Error(
           `untrusted_refused: L4 process jail unavailable (missing: ${l4.missing.join(', ')}). ` +
@@ -320,6 +427,24 @@ export function resolveEffectiveEffectPolicy(
     // effective mode is still named untrusted (degrade renames mode first).
     if (isolation?.network === 'open') {
       securityDegraded.push('network_open');
+    }
+  }
+
+  // ops P0：jail 可用性申报（纯配置矛盾已在上方先拒）。授权（none）≠ 降级（缺笼）。
+  if (jail !== 'none') {
+    const l4 = isolation
+      ? assessL4ProcessMinimum(isolation)
+      : { ok: false as const, missing: ['processTree'] as const };
+    if (!l4.ok) {
+      if (jail === 'require' || onJailUnavailable === 'refuse') {
+        throw new Error(
+          `jail_required_unavailable: effectPolicy.jail=${jail} (onJailUnavailable=${onJailUnavailable}) ` +
+            `but no process jail (missing: ${l4.missing.join(', ')}). ` +
+            `Install bwrap/sandbox-exec, or set jail=none with privilegedAck.`,
+        );
+      }
+      // degrade：run 级如实申报（untrusted 降级路径可能已记，去重）
+      if (!securityDegraded.includes('no_process_jail')) securityDegraded.push('no_process_jail');
     }
   }
 
@@ -347,10 +472,14 @@ export function resolveEffectiveEffectPolicy(
     // degraded untrusted must not leave shell allow as a hole
     shellEscape: toolSurface === 'reduced' ? 'deny' : (config.shellEscape ?? d.shellEscape),
     // untrusted product promise: egress deny is not a config knob (like pathContainment)
+    // jail=none：网络限制只由 jail 实施，无笼时 deny 是假承诺——显式配置已在上方拒绝，
+    // 未指定则如实取 open（§4.2 注记带 network=open）
     network:
       requestedMode === 'untrusted' || toolSurface === 'reduced'
         ? 'deny'
-        : (config.network ?? d.network),
+        : jail === 'none'
+          ? 'open'
+          : (config.network ?? d.network),
     processLimits: config.processLimits ?? d.processLimits,
     commit: config.commit ?? d.commit,
     onClose,
@@ -364,6 +493,8 @@ export function resolveEffectiveEffectPolicy(
     undoLimit: config.undoLimit,
     shellJournal: config.shellJournal ?? 'snapshot',
     shellJournalLimit: config.shellJournalLimit,
+    jail,
+    onJailUnavailable,
   };
 }
 

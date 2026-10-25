@@ -178,6 +178,8 @@ export interface ToolExecutionContext {
   requireCredentialBindings?: boolean;
   /** D7: refuse supervised fallback when the process jail cannot be applied. */
   requireJail?: boolean;
+  /** ops P0: authorized no-jail (effectPolicy.jail=none) — skip jail wrapping, note `disabled_by_config`. */
+  disableJail?: boolean;
   /** Allow $HOME writes in jail (project/host). */
   homeWrite?: boolean;
   /** Execute-time degradation hook (run-level securityDegraded). */

@@ -152,6 +152,7 @@ export function createShellTool(options?: {
           allowRoots: [resolvedCwd, ...(context?.pathRoots ?? []).filter(Boolean)],
           networkPolicy: context?.networkPolicy ?? 'deny',
           requireJail: context?.requireJail,
+          disableJail: context?.disableJail,
           homeWrite: context?.homeWrite,
           noteSecurityDegraded: context?.noteSecurityDegraded,
           signal: context?.abortSignal,

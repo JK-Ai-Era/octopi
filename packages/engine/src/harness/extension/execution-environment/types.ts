@@ -41,6 +41,13 @@ export interface SandboxConfig {
    */
   requireJail?: boolean;
   /**
+   * ops P0: authorized no-jail (`effectPolicy.jail: "none"`, privilegedAck
+   * already enforced at config resolution). Skips jail wrapping even when a
+   * backend is present and notes `jail=disabled_by_config (privileged)` —
+   * this is an authorization, never a degradation.
+   */
+  disableJail?: boolean;
+  /**
    * Allow `$HOME` writes inside the jail (project/host only per 2b).
    * tmpdir and, on POSIX, shared `/tmp` + `/var/tmp` are always writable (2a);
    * tmp writes are not journaled (2c notReversed).

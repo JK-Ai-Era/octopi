@@ -107,6 +107,7 @@ export async function runAllowlistedArgv(
     allowRoots: [cwd, ...journalRoots],
     networkPolicy: context?.networkPolicy ?? 'deny',
     requireJail: context?.requireJail,
+    disableJail: context?.disableJail,
     homeWrite: context?.homeWrite,
     noteSecurityDegraded: context?.noteSecurityDegraded,
     signal: context?.abortSignal,

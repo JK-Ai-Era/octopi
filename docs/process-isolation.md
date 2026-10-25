@@ -96,9 +96,12 @@ instead of silently degrading to `null`. Other useful non-setuid readers:
 `pgrep -fl`, `lsof`, `vm_stat`, and `libproc`'s `proc_pidinfo`/`proc_pidpath`.
 
 **Jail setup failure (D7).** If a jail backend was selected but cannot be applied:
-`requireJail` (effective `untrusted`) **throws** `untrusted_jail_failed` instead of
+`requireJail` (effective `untrusted`, `jail: "require"`, or
+`onJailUnavailable: "refuse"`) **throws** `jail_required_unavailable` instead of
 running unsandboxed; other modes fall back to supervised spawn, report
-`cwd-pin` + `jail_setup_failed`, and notify the run-level `securityDegraded` hook.
+`cwd-pin` + `jail_setup_failed`, and notify the run-level `securityDegraded` hook
+with the normalized code `no_process_jail: …` (consumers can match one prefix for
+both probe-time and runtime jail loss).
 Backend selection is probe-aligned (bwrap smoke test / Seatbelt `sandbox_apply`
 smoke test): when the jail cannot apply at all, the mode fork happens **before**
 the command runs. Once a wrapper has run, a suspected wrapper setup failure
@@ -232,12 +235,36 @@ Unknown or untagged tools are **rejected** on the reduced surface
   "effectPolicy": {
     "mode": "untrusted",              // workspace | project | host | untrusted
     "untrustedAdmission": "refuse",   // refuse | degrade (untrusted only)
+    "jail": "auto",                   // auto | require | none (none needs privilegedAck)
+    "onJailUnavailable": "degrade",   // refuse | degrade (jail != none)
+    "privilegedAck": "…",             // explicit unjailed choice (required for jail=none)
     "shellEscape": "deny",            // deny | confirm | allow
     "pathContainment": "strict",      // strict | soft | none
     "processLimits": true
   }
 }
 ```
+
+**Jail intent (authorization ≠ degradation).** `jail` separates "chose to run
+unjailed" from "lost the jail": `auto` applies the jail whenever a backend is
+available and, when none exists, records run-level `no_process_jail` (never
+silent) per `onJailUnavailable`; `require` / `onJailUnavailable: "refuse"` refuse
+to run instead (`jail_required_unavailable`); `none` is an **authorized**
+unjailed run — it requires `privilegedAck`, reports
+`jail=disabled_by_config (privileged)` with an empty `securityDegraded`, and
+stays refused on `untrusted`. Contradictory combinations are rejected at config
+load: `jail: none` without `privilegedAck`, `jail: none` + `untrusted`,
+`jail: none` + `onJailUnavailable: refuse` (a dead knob), `network: deny|
+allowlist` + `jail: none` (network is enforced by the jail only — an unenforceable
+promise is rejected; the resolved network posture collapses to `open`), and
+(`jail: require` | `onJailUnavailable: refuse`) + `untrustedAdmission: degrade`
+(same condition, opposite outcomes). Every run records `ops.jail.state`
+(intent × probed backend × `authorized`) so authorized-unjailed and
+failed-unjailed are distinguishable after the fact.
+
+Known boundary: host-side **read** surfaces (WebUI git status snapshot) keep jail
+wrapping whenever a backend is available, regardless of `jail` intent — stricter
+than the run, intentional.
 
 Related (still true):
 

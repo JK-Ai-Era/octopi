@@ -84,7 +84,7 @@ O_RDWR 打开 `/dev/null`、shell 会重定向到它们，封死会瘫痪基础�
 读取途径：`pgrep -fl`、`lsof`、`vm_stat`，以及 `libproc` 的
 `proc_pidinfo` / `proc_pidpath`。
 
-**Jail 搭建失败（D7）**：`requireJail`（effective untrusted）抛 `untrusted_jail_failed`，禁止未沙箱执行；其它模式回落 supervised + `jail_setup_failed` + run 级 `securityDegraded`。
+**Jail 搭建失败（D7）**：`requireJail`（effective untrusted、`jail: "require"` 或 `onJailUnavailable: "refuse"`）抛 `jail_required_unavailable`，禁止未沙箱执行；其它模式回落 supervised + `jail_setup_failed` + run 级 `securityDegraded`（归一码 `no_process_jail: …`，probe 期缺笼与运行时失笼可按同一前缀消费）。
 后端选择与探测对齐（bwrap 冒烟测试 / Seatbelt `sandbox_apply` 冒烟测试）：
 jail 完全无法生效时，mode 分叉发生在命令**运行之前**。wrapper 一旦运行过，
 疑似建笼失败也**绝不重新执行用户命令**（杜绝双重副作用；伪造 wrapper 报错
@@ -205,12 +205,30 @@ reduced 面上 **未标注工具一律拒绝**（unknown-reject）；内置工�
   "effectPolicy": {
     "mode": "untrusted",              // workspace | project | host | untrusted
     "untrustedAdmission": "refuse",   // refuse | degrade（仅 untrusted）
+    "jail": "auto",                   // auto | require | none（none 需 privilegedAck）
+    "onJailUnavailable": "degrade",   // refuse | degrade（jail != none）
+    "privilegedAck": "…",             // 显式无笼表态（jail=none 必填）
     "shellEscape": "deny",            // deny | confirm | allow
     "pathContainment": "strict",      // strict | soft | none
     "processLimits": true
   }
 }
 ```
+
+**Jail 意图（授权 ≠ 降级）**：`jail` 区分「主动选择无笼」与「被动失去牢笼」——
+`auto` 有笼后端就上笼，无后端时按 `onJailUnavailable` 记 run 级 `no_process_jail`（绝不静默）；
+`require` / `onJailUnavailable: "refuse"` 拿不到就拒绝运行（`jail_required_unavailable`）；
+`none` 是**授权**无笼——必须配 `privilegedAck`，注记 `jail=disabled_by_config (privileged)`
+且 `securityDegraded` 为空，`untrusted` 下禁止。矛盾组合在配置加载期直接拒绝：
+`jail: none` 缺 `privilegedAck`、`jail: none` + `untrusted`、`jail: none` +
+`onJailUnavailable: refuse`（死旋钮）、`network: deny|allowlist` + `jail: none`
+（网络限制只由牢笼实施——无法兑现的承诺直接拒绝，解析出的网络姿势收敛为 `open`）、
+（`jail: require` 或 `onJailUnavailable: refuse`）+ `untrustedAdmission: degrade`
+（同条件反结局）。每个 run 记录 `ops.jail.state`（意图 × 实测后端 × `authorized`），
+事后可分辨「授权无笼」与「故障无笼」。
+
+已知边界：宿主侧**读**表面（WebUI git status 快照）只要探测到牢笼后端就保持上笼，
+不受 `jail` 意图影响——比 run 更严，属有意设计。
 
 仍然成立的关联语义：
 

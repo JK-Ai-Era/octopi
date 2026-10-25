@@ -85,6 +85,7 @@ export {
 export {
   resolveEffectiveEffectPolicy,
   requiresJail,
+  buildOpsJailState,
   isPathAllowed,
   isToolAllowedOnSurface,
   gateEffect,
@@ -96,6 +97,9 @@ export {
 } from './effect-policy.js';
 export type {
   UntrustedAdmission,
+  JailIntent,
+  OnJailUnavailable,
+  OpsJailState,
   ToolSurface,
   SecurityDegradation,
   EffectiveEffectPolicy,

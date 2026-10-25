@@ -169,6 +169,25 @@
                     "maximum": 9007199254740991
                   }
                 }
+              },
+              "jail": {
+                "type": "string",
+                "enum": [
+                  "auto",
+                  "require",
+                  "none"
+                ]
+              },
+              "onJailUnavailable": {
+                "type": "string",
+                "enum": [
+                  "refuse",
+                  "degrade"
+                ]
+              },
+              "privilegedAck": {
+                "type": "string",
+                "minLength": 1
               }
             }
           },
@@ -2795,6 +2814,25 @@
               "maximum": 9007199254740991
             }
           }
+        },
+        "jail": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "require",
+            "none"
+          ]
+        },
+        "onJailUnavailable": {
+          "type": "string",
+          "enum": [
+            "refuse",
+            "degrade"
+          ]
+        },
+        "privilegedAck": {
+          "type": "string",
+          "minLength": 1
         }
       }
     },
