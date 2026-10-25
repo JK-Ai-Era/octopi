@@ -101,6 +101,20 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 | v0.2 | [changelog/v0.2.md](./changelog/v0.2.md) |
 | v0.1 | [changelog/v0.1.md](./changelog/v0.1.md) |
 
+## v0.93.3 (2026-10-25)
+
+### fix(cli): `getProcessName` 在 macOS 改走 lsof，牢笼内不再静默失效
+
+- **问题**：`getProcessName` 用 `ps -p <pid> -o comm=`，而 macOS 的 `ps` 是 setuid —— Seatbelt 直接拒绝 exec 任何 setuid 二进制（v0.93.2 已归因的 OS 不变量）。结果是**在牢笼内恒返回 null**：`octopi serve start` 的端口占用提示只能给 pid、给不出进程名，且 `getProcessName` / `identifyPortOccupant` 两条测试在沙箱内永远红，每次全量都要人肉判断是否为已知问题。
+- **修法**：darwin 上先用 `lsof -p <pid> -a -d txt -Fn`，取首个 `n` 条目。进程的**第一个 `txt` 描述符就是可执行映像**，后续条目是 dyld/mmap 的库（`/usr/lib/dyld` 等），因此取首个而非任一个。`lsof` 非 setuid，牢笼内外均可工作；`ps` 保留为兜底（覆盖 lsof 被裁剪的主机）。Win32 `tasklist`、其他 Unix `ps` 路径不变。
+- **语义保持**：macOS `ps -o comm=` 本就返回可执行文件完整路径，lsof 的 `n` 条目语义相同，调用方无需改动。
+- **解析独立可测**：抽出纯函数 `firstExecutableFromLsof()`，测试覆盖「取映像不取 dyld」与空输出/无 `n` 行返回 null 两类边界；另加一条 jail 韧性断言（沙箱内自身 pid 必须解析出绝对路径）。
+- **降级如实**：跨用户进程（如 root 的 launchd）lsof 无权读取 → 返回 null，与 `ps` 无权限时行为一致，仍属可接受的降级而非假装成功。
+- **顺带记录一个未修的同源缺陷**：`getAncestorPidSet()` 仍依赖 `ps -o ppid=`，牢笼内退化为「仅 self + ppid」，使 `killProcess` 的祖先护栏只认一层。lsof 不提供 ppid，macOS 上无干净的非 setuid 替代（`sysctl kern.proc.pid.*` 在现行 macOS 已移除，实测 `unknown oid`），故本次不改，事实留在 `docs/process-isolation{,.zh}.md`。
+- **验证**：全量 **3286 过 / 0 败 / 6 跳过**（此前 3280/2，两条恒红转绿）；实机端到端：自身 pid 与同用户他进程（llama-server）均解析出绝对路径，root 进程 `1` 与不存在的 pid 返回 null；`build` / `lint` / `typecheck` 全绿。
+
+---
+
 ## v0.93.2 (2026-10-25)
 
 ### fix(sandbox): exec 被拒时给出可操作归因（EPERM 不再无解释）

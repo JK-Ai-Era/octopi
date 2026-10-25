@@ -133,11 +133,59 @@ export function findPidOnPort(port: number): number | null {
     : findPidOnPortUnix(port);
 }
 
-/** 尽力获取进程可执行名（Windows: tasklist；Unix: ps）。失败返回 null */
+/**
+ * Pick the executable image out of `lsof -a -d txt -Fn` output.
+ *
+ * lsof prints one `n<name>` line per matching descriptor, in descriptor order.
+ * The first `txt` entry is the executable itself; every later one is a
+ * dyld/mmap'd library (`/usr/lib/dyld`, framework dylibs). Taking "the first n
+ * line" is therefore the executable, not "any n line".
+ *
+ * @param output - raw stdout of `lsof -p <pid> -a -d txt -Fn`
+ * @returns absolute executable path, or null when the output carries none
+ */
+export function firstExecutableFromLsof(output: string): string | null {
+  for (const line of output.split('\n')) {
+    if (!line.startsWith('n')) continue;
+    const path = line.slice(1).trim();
+    if (path) return path;
+  }
+  return null;
+}
+
+/**
+ * Read the executable path of a pid via `lsof` instead of `ps`.
+ *
+ * macOS ships `ps` setuid, and Seatbelt refuses to exec setuid binaries at all
+ * (see `docs/process-isolation.md`), so `ps` is unusable from inside the jail —
+ * including for the caller's own pid. `lsof` is not setuid and exposes the same
+ * fact: the first `txt` descriptor of a process is its executable image.
+ *
+ * @param pid - target pid
+ * @returns absolute executable path, or null when unavailable
+ */
+function getProcessNameDarwin(pid: number): string | null {
+  try {
+    const out = execFileSync('/usr/sbin/lsof', ['-p', String(pid), '-a', '-d', 'txt', '-Fn'], {
+      encoding: 'utf-8',
+      timeout: 5000,
+      stdio: 'pipe',
+    });
+    return firstExecutableFromLsof(out);
+  } catch {
+    // lsof exits non-zero for a vanished pid or a process owned by another
+    // user; null means "name unavailable", which never blocks the caller.
+    return null;
+  }
+}
+
+/**
+ * 尽力获取进程可执行名（Windows: tasklist；macOS: lsof；其他 Unix: ps）。失败返回 null
+ */
 export function getProcessName(pid: number): string | null {
   if (!Number.isInteger(pid) || pid <= 0) return null;
-  try {
-    if (process.platform === 'win32') {
+  if (process.platform === 'win32') {
+    try {
       const out = execFileSync('tasklist', ['/FI', `PID eq ${pid}`, '/FO', 'CSV', '/NH'], {
         encoding: 'utf-8',
         timeout: 5000,
@@ -146,7 +194,19 @@ export function getProcessName(pid: number): string | null {
       if (!out || out.startsWith('INFO')) return null;
       const name = out.split(',')[0]?.replace(/^"|"$/g, '').trim();
       return name || null;
+    } catch {
+      // 进程可能已退出或无权限查询：名字是锦上添花，缺失不阻塞主流程
+      return null;
     }
+  }
+  // darwin: lsof first — it works both inside and outside the jail, and the
+  // jailed case is the one that used to fail silently. ps stays as a fallback
+  // for hosts where lsof is stripped.
+  if (process.platform === 'darwin') {
+    const viaLsof = getProcessNameDarwin(pid);
+    if (viaLsof) return viaLsof;
+  }
+  try {
     const out = execFileSync('ps', ['-p', String(pid), '-o', 'comm='], {
       encoding: 'utf-8',
       timeout: 5000,

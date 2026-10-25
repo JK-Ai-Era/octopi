@@ -87,6 +87,14 @@ blaming them on `exec` would misdirect the caller. Attribution also runs on the
 supervised fallback (an enclosing jail refuses the exec but no profile of ours
 is in force, so no deny-list claim is made).
 
+**Working around a setuid denial.** The refusal is permanent, so the fix is to
+avoid needing the privileged binary rather than to retry it. Where Octopi itself
+read process state through `ps`, it now uses a non-setuid source: the CLI reads a
+process's executable image from `lsof -a -d txt -Fn` (first `txt` entry) on macOS,
+so `getProcessName` and `identifyPortOccupant` keep working inside the jail
+instead of silently degrading to `null`. Other useful non-setuid readers:
+`pgrep -fl`, `lsof`, `vm_stat`, and `libproc`'s `proc_pidinfo`/`proc_pidpath`.
+
 **Jail setup failure (D7).** If a jail backend was selected but cannot be applied:
 `requireJail` (effective `untrusted`) **throws** `untrusted_jail_failed` instead of
 running unsandboxed; other modes fall back to supervised spawn, report

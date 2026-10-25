@@ -10,6 +10,7 @@ import { createServer } from 'node:net';
 import {
   delay,
   findPidOnPort,
+  firstExecutableFromLsof,
   getProcessName,
   isProcessAlive,
   isSelfOrAncestorPid,
@@ -69,6 +70,27 @@ describe('process-utils', () => {
     expect(name).toBeTruthy();
     expect(name!.toLowerCase()).toContain('node');
     expect(getProcessName(-1)).toBeNull();
+  });
+
+  // macOS ships ps setuid and Seatbelt refuses to exec setuid binaries, so the
+  // name lookup must not depend on ps — otherwise it silently degrades to null
+  // inside the jail (and inside the agent runtime, which is the same jail).
+  test('getProcessName resolves the caller inside a setuid-exec jail', () => {
+    const name = getProcessName(process.pid);
+    expect(name).not.toBeNull();
+    // lsof reports the executable image, i.e. an absolute path on darwin.
+    if (process.platform === 'darwin') expect(name!.startsWith('/')).toBe(true);
+  });
+
+  test('firstExecutableFromLsof takes the image, not dyld', () => {
+    const output = ['p79654', 'ftxt', 'n/bin/bash', 'ftxt', 'n/usr/lib/dyld'].join('\n');
+    expect(firstExecutableFromLsof(output)).toBe('/bin/bash');
+  });
+
+  test('firstExecutableFromLsof returns null when nothing matched', () => {
+    expect(firstExecutableFromLsof('')).toBeNull();
+    expect(firstExecutableFromLsof('p123\n')).toBeNull();
+    expect(firstExecutableFromLsof('p123\nftxt\nn\n')).toBeNull();
   });
 
   test('resolveViteLaunch prefers vite.js entry', () => {

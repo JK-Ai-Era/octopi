@@ -77,6 +77,13 @@ O_RDWR 打开 `/dev/null`、shell 会重定向到它们，封死会瘫痪基础�
 归到 `exec` 上会把调用方带错路。supervised 回落路径同样归因（此时是外层牢笼在拒绝、
 并非本项目 profile 生效，因此不声明 deny 清单归因）。
 
+**setuid 拒绝的绕法**：拒绝是永久的，正确做法是避开特权二进制而不是重试。Octopi 自身
+原先经 `ps` 读进程状态的位置，现改用非 setuid 来源：CLI 在 macOS 上用
+`lsof -a -d txt -Fn`（取首个 `txt` 条目）读取进程的可执行映像，使 `getProcessName` /
+`identifyPortOccupant` 在牢笼内照常工作，而非静默降级为 `null`。其它可用的非 setuid
+读取途径：`pgrep -fl`、`lsof`、`vm_stat`，以及 `libproc` 的
+`proc_pidinfo` / `proc_pidpath`。
+
 **Jail 搭建失败（D7）**：`requireJail`（effective untrusted）抛 `untrusted_jail_failed`，禁止未沙箱执行；其它模式回落 supervised + `jail_setup_failed` + run 级 `securityDegraded`。
 后端选择与探测对齐（bwrap 冒烟测试 / Seatbelt `sandbox_apply` 冒烟测试）：
 jail 完全无法生效时，mode 分叉发生在命令**运行之前**。wrapper 一旦运行过，
