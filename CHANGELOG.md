@@ -8,7 +8,8 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 | Segment | Location |
 |---------|----------|
-| v0.92 | this file (current) |
+| v0.93 | this file (current) |
+| v0.92 | [changelog/v0.92.md](./changelog/v0.92.md) |
 | v0.91 | [changelog/v0.91.md](./changelog/v0.91.md) |
 | v0.90 | [changelog/v0.90.md](./changelog/v0.90.md) |
 | v0.89 | [changelog/v0.89.md](./changelog/v0.89.md) |
@@ -102,15 +103,21 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
-## v0.92.0 (2026-10-25)
+## v0.93.0 (2026-10-25)
 
-### feat(config): WebUI agent 配置 CRUD + 保存即热生效 + 影子查找清零（配置管理面 P2）
+### fix(config): 热应用 provider 未展开 ${ENV} 占位符（P1 遗留，独立评审 blocker）
 
-- **能力**：agent 可在 WebUI 管理（Settings → Agent）——新建向导（**角色模板生成器**：6 内置角色，选角色 → 填名字/称谓 → 生成可编辑 AGENTS.md 初稿 + 带出推荐安全组/模型档/特质）、编辑（模型 / **安全组四选一** workspace·project·host·untrusted + 继承全局 / tools / traits）、persona（AGENTS.md）编辑、下线（配置移除、home 保留）。保存即生效（新 run 用新构建）。
-- **影子查找清零（拍板落地）**：`gateway.ts` 运行时 `config.agents` 读取点全部改走注册表（`agents` Map 唯一权威）；`resolveAgentDefinition`/`normalizeConfigRaw` 抽取保证热更与启动解析同规。
-- **热应用语义**：预构造（fail-safe）→ 写盘 → scaffold → 注册 + 立即重建——构造失败不动盘/文件，写盘失败不动文件态；`updateAgent` **字段级合并**（effectPolicy 二级合并保留高级旋钮；`null`=删键恢复继承全局）；persona 内容 hash 乐观锁（409 可恢复：换锁保留编辑，再点保存=覆盖）。
-- **角色模板 = 生成器**（预设原则）：渲染产物是标准 AGENTS.md（服务端单一渲染实现 `/config/presets/agent-roles/render`）；推荐档位走 `resolveModelConfig` 新增的 **level 档位名解析**（`models.level` 键 → primary 递归，禁 level→level 链），agents[].model 可写档位名。
-- **安全修复（独立评审 4 blocker 全处置）**：agent id 与 provider 名共用 `assertSafeConfigName`（拒 `.`/`..` 路径穿越与原型污染键，router+服务层双防线）；创建条目自动补全 `home/workspace/skillDirectory`（persona 不再哑火、工具 cwd 不再是 undefined）；消息路由尊重 `metadata.agentId` 显式寻址（新建 agent 可被直接对话）；scaffold 不覆盖既有 AGENTS.md（重建同 id 不毁用户 persona）。
-- **验证**：新增 review blocker 回归锚 5 例（#1 三字段补全 / #3 预构造失败不动盘 / #4 穿越 id 拒绝 / #5 高级旋钮保留 / #6 null 删键）；相关 41 用例绿；全量 suite 326 文件绿（余 2 个沙箱环境失败：`ps` 自省被拒，与本改动无关）；build + lint + typecheck + `arch/check-sync.sh` 绿。独立评审 31 findings 处置：4 blocker + 10 major 全修，其余 minor 择修或记入遗留。
-- **遗留（评审未修项，P3/后续）**：schema 与 API 的 id 契约宽度差（手写 CJK id 可列出不可编辑）；Zod strip 静默吞未知键（`{"mod":"host"}` 类 typo 不报错）；删除最后一个 agent 无护栏；effectPolicy 放宽审计日志（spec §7，P3 分期）；`config.agents` 回归守卫测试；EffectMode 枚举双源；persona string 形态的展示名语义。
-- **breaking note**：`ConfigApplyServiceDeps` 增 `agentFiles`/`agentDefFactory`（factory 改两参 `(rawEntry, rawConfig)`，写前预演）；`AgentFilesPort` 增 `pathsOf`、persona 方法增 `home` 参数；`resolveModelConfig` 增可选 `levelMap` 参数。
+- **问题**：热更/回滚路径把 raw 占位符字面量（`${OPENAI_API_KEY}`）直接交给 provider 实例——`createProviderFromConfig` 不做展开，字面量原样进 `Authorization` 头，热应用的 provider 全部认证失败直到 daemon 重启。P1 旧测试错误固化了该行为（断言工厂收占位符），本次反转为回归锚（工厂/影子收**展开形态**，盘上永远保留占位符）。
+- **修法**：engine `expandEnvValues`（递归展开运行时形态）统一用于 `upsertProvider`/`rollbackTo`；`modelProviders` 影子同步为展开形态（与 startup 一致）。
+
+### feat(config): 配置审计/回滚/另存为模板/未知键 fail-loud（配置管理面 P3）
+
+- **审计**：每次配置/persona 变更写 `audit/config.jsonl`（JSONL：when/action/target/hashBefore/hashAfter/backupPath 回滚锚点）；sink 失败仅告警不阻断写（尽力而为）。
+- **回滚**：Settings 新增「备份 / 回滚」tab——列 `octopi.json.bak.*`、一键回滚（同一写回管线：校验 + 再备份 + 运行时全量重置 `resetRuntimeConfig`）；含 L3 段（channels/web/knowledge/embedding）差异时如实返回 `restart-required`；审计附变更段摘要（高危段回滚留痕）。
+- **护栏与安全**：拒绝删掉最后一个 agent（存在性优先、串行写区内断言）；`readBackup` realpath + `.bak.` 前缀双校验（防 symlink 逃逸）；备份名加随机防同毫秒碰撞；自定义模板 id 与内置角色冲突拒绝 + 清单去重。
+- **未知键 fail-loud**：`detectUnknownConfigKeys`（raw vs Zod 键树对比，剔除合法 legacy 键）——写路径拒 typo（Zod 会静默 strip），启动仅告警（存量兼容）。修「legacy 键（budget 等）误杀导致 P3 前备份无法回滚」。
+- **另存为模板**：agent 的 AGENTS.md → 自定义角色模板（`OCTOPI_HOME/templates/agent-roles.json`），向导渲染合并内置+自定义（自定义优先）；UI 新增「重置为预设默认值」（apiKey 不动）与 L3 需重启标注。
+- **热应用健壮性**：`invalidateAgentBuild` 构建失败降级为「注册保留 + 下条消息惰性重建」（批量热更/回滚循环不再中途断裂）；回滚运行时影子清理（防幽灵模型进目录）。
+- **验证**：新增回归锚（展开形态锚 / legacy 不误杀锚 / 模板冲突锚 / P3 护栏·审计·回滚·模板 7 例）；相关 49 用例绿；全量 suite 327 文件绿（余 2 个沙箱环境失败：`ps` 自省被拒）；build + lint + typecheck + `arch/check-sync.sh` 绿。独立评审 22 findings 处置：1 blocker + 8 major 全修，minor 择修（审计 who 字段、备份保留策略、diff 预览、守卫测试 AST 化等记遗留）。
+- **遗留（评审未修项）**：审计无 actor/who 字段；备份无保留上限；回滚无 diff 预览 UI；unknown-keys 对 passthrough 段（session 等）盲区；模板 store 非原子写；模板身份烘焙不插槽化（UI 已提示）；守卫测试可被特定写法绕过（建议 AST 化）。
+- **breaking note**：`ConfigApplyResult.applied` 联合补 `'restart-required'`；`ConfigAdminPort` 增可选 `listBackups`/`readBackup`；`src/config.ts` 的 `applyConfigMigrations` 保持 warn-only 语义（与 doctor 的全量 apply 区分，勿混用）。

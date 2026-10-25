@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { FileConfigService } from '../src/config-service.js';
 import { ConfigConflictError } from '../packages/engine/src/config-admin/port.js';
+import { detectUnknownConfigKeys, assertNoUnknownConfigKeys } from '../src/config-schema/unknown-keys.js';
 
 /** 最小合法配置（过 OctopiConfigSchema 校验） */
 function minimalConfig(): Record<string, unknown> {
@@ -127,5 +128,43 @@ describe('FileConfigService', () => {
     const final = service.read();
     expect(final.hash).toBe(r1.hash);
     expect((final.raw.session as { dmScope: string }).dmScope).toBe('main');
+  });
+});
+
+describe('unknown config keys（防 Zod strip 吞 typo）', () => {
+  it('detectUnknownConfigKeys：嵌套 typo 被揪出，合法键不误报', () => {
+    const raw = {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: 'https://api.openai.com/v1',
+            apiKey: '${K}',
+            api: 'openai-completions',
+            models: [{ id: 'gpt-5.5' }],
+            tieoutSeconds: 60, // typo：timeoutSeconds
+          },
+        },
+      },
+      agents: [{ id: 'assistant', model: 'openai/gpt-5.5', effctPolicy: { mode: 'host' } }], // typo：effectPolicy
+      channels: [{ type: 'http', port: 18180 }],
+    };
+    const unknown = detectUnknownConfigKeys(raw);
+    expect(unknown).toContain('models.providers.openai.tieoutSeconds');
+    expect(unknown).toContain('agents[0].effctPolicy');
+    expect(unknown).toHaveLength(2);
+  });
+
+  it('assertNoUnknownConfigKeys：typo 拒绝（写路径 fail-loud）', () => {
+    expect(() => assertNoUnknownConfigKeys(minimalConfig())).not.toThrow();
+    expect(() =>
+      assertNoUnknownConfigKeys({ ...minimalConfig(), notARealKey: 1 }),
+    ).toThrow(/unknown config key/);
+  });
+
+  it('#2 锚：legacy 键（budget 等迁移消费）不误杀——回滚到旧备份不被拒', () => {
+    // budget 是 legacy 键：迁移消费后不应算 typo（否则 P3 前的备份全部无法回滚）
+    const legacy = { ...minimalConfig(), budget: { dailyUsd: 10 } };
+    expect(detectUnknownConfigKeys(legacy)).toEqual([]);
+    expect(() => assertNoUnknownConfigKeys(legacy)).not.toThrow();
   });
 });

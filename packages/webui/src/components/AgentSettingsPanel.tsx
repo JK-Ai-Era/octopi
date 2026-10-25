@@ -529,6 +529,24 @@ export function AgentSettingsPanel() {
                 <button type="button" className="btn-secondary" onClick={saveAgent} disabled={busy}>
                   {busy ? '保存中…' : '保存配置'}
                 </button>
+                <button
+                  type="button"
+                  className="btn-ghost"
+                  onClick={async () => {
+                    const tplId = window.prompt('模板 id（字母/数字/._-，如 my-coder）：');
+                    if (!tplId) return;
+                    const label = window.prompt('模板显示名（可留空）：') ?? '';
+                    try {
+                      await client.saveAgentAsTemplate(selected, { id: tplId.trim(), label });
+                      setNotice(`已另存为角色模板 ${tplId.trim()}（新建向导可选）`);
+                    } catch (err) {
+                      await handleWriteError(err);
+                    }
+                  }}
+                  disabled={busy}
+                >
+                  另存为模板
+                </button>
                 <button type="button" className="btn-ghost" onClick={deleteAgent} disabled={busy}>
                   下线 agent
                 </button>

@@ -39,6 +39,7 @@ interface GatewayStub {
   invalidateAgentBuild: ReturnType<typeof vi.fn>;
   invalidateAllAgentBuilds: ReturnType<typeof vi.fn>;
   setModelLevels: ReturnType<typeof vi.fn>;
+  resetRuntimeConfig: ReturnType<typeof vi.fn>;
   getRegisteredAgents: ReturnType<typeof vi.fn>;
   getAgentDefinition: ReturnType<typeof vi.fn>;
 }
@@ -52,6 +53,7 @@ function makeGatewayStub(): GatewayStub {
     invalidateAgentBuild: vi.fn(),
     invalidateAllAgentBuilds: vi.fn(),
     setModelLevels: vi.fn(),
+    resetRuntimeConfig: vi.fn(),
     getRegisteredAgents: vi.fn(() => []),
     getAgentDefinition: vi.fn((id: string) => ({
       id,
@@ -167,13 +169,14 @@ describe('ConfigApplyService', () => {
     const raw = service.read().raw;
     const pc = (raw.models as { providers: Record<string, { apiKey: string }> }).providers.openai!;
     expect(pc.apiKey).toBe('${TEST_OPENAI_KEY}');
-    // 热替换用的 config 也带继承的 key（不给 provider 实例丢凭据）
+    // 热替换的 config（实例 + 影子）用**展开形态**（blocker#1：raw 占位符会进
+    // Authorization 头）；盘上保持占位符由上一断言锁定
     const [, appliedConfig] = gateway.replaceProvider.mock.calls[0]! as unknown as [
       unknown,
       Record<string, unknown>,
       string[],
     ];
-    expect(appliedConfig.apiKey).toBe('${TEST_OPENAI_KEY}');
+    expect(appliedConfig.apiKey).toBe('sk-test-env');
   });
 
   it('fail-safe：写失败（冲突）不动运行时', async () => {
@@ -479,5 +482,130 @@ describe('ConfigApplyService — review blocker 回归锚', () => {
     ).rejects.toThrow(/invalid config name/);
     expect(() => apply.getPersona('..')).toThrow(/invalid config name/);
     expect(agentFiles.scaffold).not.toHaveBeenCalled();
+  });
+});
+
+describe('ConfigApplyService — P3（护栏/回滚/审计/模板）', () => {
+  let dir: string;
+  let service: FileConfigService;
+  let gateway: GatewayStub;
+  let agentFiles: AgentFilesStub;
+  let apply: ConfigApplyService;
+  let auditEntries: Array<{ action: string; target?: string; backupPath?: string }>;
+  let templateStore: { presets: Array<Record<string, unknown>> };
+
+  beforeEach(() => {
+    process.env.TEST_OPENAI_KEY = 'sk-test-env';
+    dir = mkdtempSync(join(tmpdir(), 'octopi-config-p3-'));
+    const configPath = join(dir, 'octopi.json');
+    writeFileSync(configPath, `${JSON.stringify(minimalConfig(), null, 2)}\n`, 'utf-8');
+    service = new FileConfigService({ configPath });
+    gateway = makeGatewayStub();
+    agentFiles = makeAgentFilesStub();
+    auditEntries = [];
+    templateStore = { presets: [] };
+    apply = new ConfigApplyService({
+      gateway: gateway as unknown as Gateway,
+      configAdmin: service,
+      providerFactory: (async (name: string) => ({ name })) as never,
+      agentFiles: agentFiles as never,
+      agentDefFactory: (rawEntry) => ({ id: String(rawEntry.id) }) as never,
+      auditSink: (entry) => {
+        auditEntries.push(entry);
+      },
+      roleTemplates: {
+        list: () => templateStore.presets as never,
+        save: (preset) => {
+          templateStore.presets.push(preset as never);
+        },
+      },
+    });
+  });
+
+  afterEach(() => {
+    delete process.env.TEST_OPENAI_KEY;
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('护栏：拒绝删掉最后一个 agent', async () => {
+    const before = service.read();
+    // minimalConfig 只有 2 个 agent（assistant/solo）：先删一个，再删最后一个应拒绝
+    await apply.deleteAgent('solo', before.hash);
+    const mid = service.read();
+    await expect(apply.deleteAgent('assistant', mid.hash)).rejects.toThrow(/last agent/);
+    expect((service.read().raw.agents as unknown[]).length).toBe(1);
+  });
+
+  it('审计：provider upsert / agent 变更均留痕（含备份锚点）', async () => {
+    const before = service.read();
+    await apply.upsertProvider(
+      'newp',
+      { baseUrl: 'https://x.example.com/v1', apiKey: 'sk-x', api: 'openai-completions', models: [{ id: 'm' }] },
+      before.hash,
+    );
+    const actions = auditEntries.map((e) => e.action);
+    expect(actions).toContain('provider.upsert');
+    const entry = auditEntries.find((e) => e.action === 'provider.upsert')!;
+    expect(entry.target).toBe('newp');
+    expect(entry.backupPath).toContain('.bak.');
+  });
+
+  it('回滚：备份写回 + 运行时全量重置', async () => {
+    // 制造一次变更产生备份
+    const before = service.read();
+    await apply.upsertProvider(
+      'temp',
+      { baseUrl: 'https://t.example.com/v1', apiKey: 'sk-t', api: 'openai-completions', models: [{ id: 'm' }] },
+      before.hash,
+    );
+    const backups = apply.listBackups();
+    expect(backups.length).toBeGreaterThan(0);
+
+    // 回滚到写前备份（temp provider 消失）
+    const target = backups[backups.length - 1]!; // 最旧 = 变更前
+    const mid = service.read();
+    const result = await apply.rollbackTo(target.path, mid.hash);
+    expect(result.applied).toBe('next-run');
+    const providers = service.read().raw.models as { providers: Record<string, unknown> };
+    expect('temp' in providers.providers).toBe(false);
+    expect(gateway.resetRuntimeConfig).toHaveBeenCalledTimes(1);
+    expect(auditEntries.some((e) => e.action === 'config.rollback')).toBe(true);
+  });
+
+  it('另存为模板：AGENTS.md → 自定义模板（含安全组推荐）', async () => {
+    const before = service.read();
+    await apply.createAgent(
+      { agent: { id: 'helper', model: 'standard', effectPolicy: { mode: 'project' } }, agentsMd: '# my persona', hash: before.hash },
+    );
+    // stub 的注册表条目带上 effectPolicy（真实注册表来自 agentDefFactory）
+    gateway.getAgentDefinition.mockReturnValue({
+      id: 'helper',
+      home: undefined,
+      persona: { name: 'helper', description: '', systemPrompt: '' },
+      effectPolicy: { mode: 'project' },
+    });
+    const preset = apply.saveAgentAsTemplate('helper', { id: 'my-role', label: 'My Role' });
+    expect(preset.template).toBe('# my persona');
+    expect(preset.recommendedEffectMode).toBe('project');
+    expect(apply.listRolePresets().some((p) => p.id === 'my-role')).toBe(true);
+    expect(auditEntries.some((e) => e.action === 'template.save')).toBe(true);
+  });
+
+  it('渲染：自定义模板优先命中（renderRole）', async () => {
+    templateStore.presets.push({
+      id: 'custom-role',
+      label: 'Custom',
+      description: '',
+      template: 'Hello {{agentName}}, call user {{addressToUser}}',
+      recommendedEffectMode: 'workspace',
+    });
+    const rendered = apply.renderRole('custom-role', { agentName: 'bot', addressToUser: '大哥' });
+    expect(rendered.agentsMd).toBe('Hello bot, call user 大哥');
+  });
+
+  it('#8 锚：模板 id 与内置角色冲突拒绝', async () => {
+    const before = service.read();
+    await apply.createAgent({ agent: { id: 'helper', model: 'standard' }, agentsMd: '# p', hash: before.hash });
+    expect(() => apply.saveAgentAsTemplate('helper', { id: 'coder' })).toThrow(/冲突/);
   });
 });

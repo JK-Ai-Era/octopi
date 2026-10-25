@@ -245,7 +245,7 @@ export function getAgentRolePreset(id: string): AgentRolePreset | undefined {
 /**
  * 渲染角色模板（生成器语义：产出标准 AGENTS.md 初稿 + 推荐默认值）
  *
- * @param presetId - 角色 id
+ * @param presetId - 内置角色 id
  * @param slots - 插槽值（agent 名、对用户的称谓）
  * @returns 渲染结果（可继续手改后落盘）
  * @throws 未知 presetId 或插槽为空时抛错（fail-loud）
@@ -255,6 +255,18 @@ export function renderAgentRole(presetId: string, slots: AgentRoleSlots): Render
   if (!preset) {
     throw new Error(`unknown agent role preset: ${presetId}`);
   }
+  return renderRolePreset(preset, slots);
+}
+
+/**
+ * 渲染任意角色模板（内置或自定义模板共用核心）
+ *
+ * @param preset - 角色模板
+ * @param slots - 插槽值（agent 名、对用户的称谓）
+ * @returns 渲染结果
+ * @throws 插槽为空时抛错（fail-loud）
+ */
+export function renderRolePreset(preset: AgentRolePreset, slots: AgentRoleSlots): RenderedAgentRole {
   const agentName = slots.agentName.trim();
   const addressToUser = slots.addressToUser.trim();
   if (!agentName) throw new Error('agentName is required');

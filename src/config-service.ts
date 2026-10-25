@@ -7,8 +7,8 @@
  *
  * @module
  */
-import { closeSync, copyFileSync, existsSync, fsyncSync, openSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { closeSync, copyFileSync, existsSync, fsyncSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { basename, dirname, join, resolve, sep } from 'node:path';
 import { computeConfigHash } from '@octopi-agent/engine/config-admin/patch.js';
 import {
   ConfigConflictError,
@@ -18,6 +18,7 @@ import {
 } from '@octopi-agent/engine/config-admin/port.js';
 import { expandEnvPlaceholders, applyConfigMigrations } from './config.js';
 import { validateConfigOrThrow } from './config-schema.js';
+import { assertNoUnknownConfigKeys, detectUnknownConfigKeys } from './config-schema/unknown-keys.js';
 import { getOctopiHome } from './init.js';
 
 /** FileConfigService 构造选项 */
@@ -41,6 +42,44 @@ export class FileConfigService implements ConfigAdminPort {
   /** 配置文件绝对路径 */
   get path(): string {
     return this.configPath;
+  }
+
+  /**
+   * 列出配置备份（`octopi.json.bak.<ts>`，按时间倒序）
+   *
+   * @returns 备份清单（路径 / 修改时间 / 大小）
+   */
+  listBackups(): Array<{ path: string; mtimeMs: number; size: number }> {
+    const dir = dirname(this.configPath);
+    const prefix = `${basename(this.configPath)}.bak.`;
+    return readdirSync(dir, { withFileTypes: true })
+      .filter((e) => e.isFile() && e.name.startsWith(prefix))
+      .map((e) => {
+        const p = join(dir, e.name);
+        const st = statSync(p);
+        return { path: p, mtimeMs: st.mtimeMs, size: st.size };
+      })
+      .sort((a, b) => b.mtimeMs - a.mtimeMs);
+  }
+
+  /**
+   * 读备份内容（回滚源）
+   *
+   * @param backupPath - 备份路径（必须在配置目录内且是 `.bak.` 备份文件，防 symlink 逃逸）
+   * @returns 备份原文
+   * @throws 路径越界 / 非备份文件 / 不存在时抛错
+   */
+  readBackup(backupPath: string): string {
+    const dir = realpathSync(resolve(dirname(this.configPath)));
+    const resolved = realpathSync(resolve(backupPath)); // 解析 symlink（#3）
+    if (resolved !== dir && !resolved.startsWith(dir + sep)) {
+      throw new Error(`backup outside config dir: ${backupPath}`);
+    }
+    const prefix = `${basename(this.configPath)}.bak.`;
+    if (!basename(resolved).startsWith(prefix)) {
+      throw new Error(`not a config backup file: ${backupPath}`);
+    }
+    return readFileSync(resolved, 'utf-8');
   }
 
   /**
@@ -91,12 +130,14 @@ export class FileConfigService implements ConfigAdminPort {
 
     // 写前全量校验：与 loadConfig 同一管线（展开 → 迁移 → Zod + 交叉校验），
     // 保证写下去的配置一定能启动；失败即中止，盘上内容不变。
+    // 未知键 fail-loud（P3）：Zod 会静默 strip typo，这里显式拒绝（对 raw 检查，占位符形态照常识别）。
     const expanded = expandEnvPlaceholders(outText);
     const parsed = JSON.parse(expanded) as Record<string, unknown>;
     applyConfigMigrations(parsed);
+    assertNoUnknownConfigKeys(raw);
     validateConfigOrThrow(parsed);
 
-    const backupPath = `${this.configPath}.bak.${Date.now()}`;
+    const backupPath = `${this.configPath}.bak.${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
     copyFileSync(this.configPath, backupPath);
 
     // tmp + rename 原子写：保留原文件权限（配置含密钥，chmod 0600 不被降级）+ fsync

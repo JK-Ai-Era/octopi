@@ -11,7 +11,6 @@ import type { ConfigApplyService } from '../../gateway/config-apply.js';
 import { ConfigConflictError } from '@octopi-agent/engine/config-admin/port.js';
 import { assertSafeConfigName } from '@octopi-agent/engine/config-admin/name-guard.js';
 import { listProviderPresets } from '@octopi-agent/engine/config-admin/model-presets.js';
-import { BUILTIN_AGENT_ROLE_PRESETS, renderAgentRole } from '@octopi-agent/engine/config-admin/agent-presets.js';
 
 export interface WebApiRouterOptions {
   gateway: Gateway;
@@ -1516,15 +1515,42 @@ export class WebApiRouter {
 
       if (relativePath === '/config/presets/agent-roles/render' && method === 'POST') {
         const body = await this.readBody(req);
-        const rendered = renderAgentRole(String(body?.presetId ?? ''), {
+        const rendered = apply.renderRole(String(body?.presetId ?? ''), {
           agentName: String(body?.agentName ?? ''),
           addressToUser: String(body?.addressToUser ?? ''),
         });
         return this.json(res, 200, { ok: true, data: rendered });
       }
 
+      // ── 备份 / 回滚（P3） ──
+      if (relativePath === '/config/backups' && method === 'GET') {
+        return this.json(res, 200, { ok: true, data: apply.listBackups() });
+      }
+
+      if (relativePath === '/config/rollback' && method === 'POST') {
+        const body = await this.readBody(req);
+        const result = await apply.rollbackTo(
+          String(body?.backupPath ?? ''),
+          typeof body?.hash === 'string' ? body.hash : '',
+        );
+        return this.json(res, 200, { ok: true, data: result });
+      }
+
+      // ── 另存为角色模板（P3） ──
+      const saveTplMatch = relativePath.match(/^\/config\/agents\/([^/]+)\/save-as-template$/);
+      if (saveTplMatch && method === 'POST') {
+        assertSafeConfigName(saveTplMatch[1]!);
+        const body = await this.readBody(req);
+        const preset = apply.saveAgentAsTemplate(saveTplMatch[1]!, {
+          id: String(body?.id ?? ''),
+          label: typeof body?.label === 'string' ? body.label : undefined,
+          description: typeof body?.description === 'string' ? body.description : undefined,
+        });
+        return this.json(res, 200, { ok: true, data: preset });
+      }
+
       if (relativePath === '/config/presets/agent-roles' && method === 'GET') {
-        return this.json(res, 200, { ok: true, data: BUILTIN_AGENT_ROLE_PRESETS });
+        return this.json(res, 200, { ok: true, data: apply.listRolePresets() });
       }
 
       // ── agent 配置面（P2，arch/config-hot-reload.md §4） ──

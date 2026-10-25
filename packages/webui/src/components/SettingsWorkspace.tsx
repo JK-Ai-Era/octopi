@@ -4,8 +4,9 @@
 import { useState } from 'react';
 import { ModelSettingsPanel } from './ModelSettingsPanel';
 import { AgentSettingsPanel } from './AgentSettingsPanel';
+import { ConfigBackupPanel } from './ConfigBackupPanel';
 
-type SettingsTab = 'models' | 'agents';
+type SettingsTab = 'models' | 'agents' | 'backups';
 
 export function SettingsWorkspace() {
   const [tab, setTab] = useState<SettingsTab>('models');
@@ -26,9 +27,16 @@ export function SettingsWorkspace() {
         >
           Agent
         </button>
+        <button
+          type="button"
+          className={tab === 'backups' ? 'btn-tab btn-tab-active' : 'btn-ghost'}
+          onClick={() => setTab('backups')}
+        >
+          备份 / 回滚
+        </button>
       </nav>
       <div style={{ flex: 1, overflow: 'hidden' }}>
-        {tab === 'models' ? <ModelSettingsPanel /> : <AgentSettingsPanel />}
+        {tab === 'models' ? <ModelSettingsPanel /> : tab === 'agents' ? <AgentSettingsPanel /> : <ConfigBackupPanel />}
       </div>
     </div>
   );

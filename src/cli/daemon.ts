@@ -984,6 +984,8 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
     const { ConfigApplyService } = await import('@octopi-agent/gateway/gateway/config-apply.js');
     const { FileConfigService } = await import('../config-service.js');
     const { AgentFileAdmin } = await import('../agent-admin.js');
+    const { createConfigAuditSink } = await import('../config-audit.js');
+    const { FileRoleTemplateStore } = await import('../role-template-store.js');
     const { resolveAgentDefinition, normalizeConfigRaw } = await import('../config.js');
     const configService = new FileConfigService({ configPath });
     const configApply = new ConfigApplyService({
@@ -996,6 +998,8 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
           { wireDump },
         ),
       agentFiles: new AgentFileAdmin(),
+      auditSink: createConfigAuditSink(),
+      roleTemplates: new FileRoleTemplateStore(),
       // raw agents[] 条目 → AgentDefinition：与启动解析同规（normalizeConfigRaw 同管线）。
       // rawConfig 为写前预演的 would-be 全量 raw（fail-safe 预构造，见 config-apply）。
       agentDefFactory: (rawEntry, rawConfig) => {

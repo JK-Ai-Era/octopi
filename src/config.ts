@@ -15,6 +15,7 @@ import type {
 import { flattenModels, resolveModelConfig } from '@octopi-agent/engine/config.js';
 import { validateConfigOrThrow } from './config-schema.js';
 import { applyLegacyBudget, detectConfigMigrations } from './config-migrations.js';
+import { detectUnknownConfigKeys } from './config-schema/unknown-keys.js';
 import { expandEnvPlaceholders as expandEnvPlaceholdersShared } from '@octopi-agent/engine/config-admin/env.js';
 import { getOctopiHome } from './init.js';
 import { readFileSync, existsSync } from 'node:fs';
@@ -43,7 +44,9 @@ export function applyConfigMigrations(raw: Record<string, unknown>): void {
     const hint = finding.hint ? ` ${finding.hint}` : '';
     console.warn(`[config] ${finding.message}.${hint}`);
   }
-  // 运行时内存迁移：legacy budget → budgetPolicy（丢弃 spend/soft）
+  // 运行时内存迁移：legacy budget → budgetPolicy（丢弃 spend/soft）。
+  // 注意语义：loadConfig 是 warn-only（supervisor 等不重写内容，见 doctor 测试锚），
+  // 与 config-migrations.applyConfigMigrations（doctor --fix 的全量 apply）不同。
   applyLegacyBudget(raw);
   if ('budget' in raw) {
     delete raw.budget;
@@ -88,6 +91,13 @@ export function loadConfig(configPath?: string): NormalizedHarnessConfig {
 
   // 旧字段静默失效会很难排查：显式告警（写回落盘见 octopi doctor --fix）
   applyConfigMigrations(raw);
+  // 未知键告警（P3）：启动不拒（存量兼容），写回路径另行 fail-loud（见 config-service）
+  const unknownKeys = detectUnknownConfigKeys(raw);
+  if (unknownKeys.length > 0) {
+    console.warn(
+      `[config] 未知配置键（将被忽略）：${unknownKeys.join(', ')} —— 建议修正；WebUI 保存路径会拒绝这类 typo`,
+    );
+  }
 
   // Zod schema 校验（结构化错误信息）；路径归一化（`~` 展开）已由校验出口后置完成
   const config = finalizeNormalizedConfig(validateConfigOrThrow(raw));

@@ -59,4 +59,19 @@ export interface ConfigAdminPort {
     mutate: (raw: Record<string, unknown>) => void,
     expectedHash: string,
   ): Promise<ConfigAdminWriteResult>;
+
+  /**
+   * 列出配置备份（时间倒序；回滚 UI 用）
+   *
+   * @returns 备份清单；实现不支持时缺省空数组
+   */
+  listBackups?(): Array<{ path: string; mtimeMs: number; size: number }>;
+
+  /**
+   * 读备份内容（回滚源）
+   *
+   * @param backupPath - 备份路径
+   * @returns 备份原文
+   */
+  readBackup?(backupPath: string): string;
 }

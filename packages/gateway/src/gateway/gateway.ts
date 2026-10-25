@@ -1400,6 +1400,41 @@ export class Gateway {
   }
 
   /**
+   * 全量重置配置面运行时（回滚用）：providers / agents / levels 换成给定集合。
+   * 退役的 agent 构建走 retireRunner（in-flight 跑完再 dispose）。
+   *
+   * @param providers - provider 实例 + raw 配置（影子同步）
+   * @param agentDefs - agent 定义全集（调用方随后 registerAgent + invalidate）
+   * @param levels - level 映射（undefined = 清空）
+   */
+  resetRuntimeConfig(
+    providers: Array<{ name: string; config: Record<string, unknown>; instance: ModelProvider }>,
+    agentDefs: AgentDefinition[],
+    levels: Record<string, { primary: string; fallback?: string[] }> | undefined,
+  ): void {
+    for (const name of [...this.providers.keys()]) {
+      if (!providers.some((p) => p.name === name)) this.providers.delete(name);
+    }
+    for (const p of providers) {
+      this.providers.set(p.name, p.instance);
+      if (this.config.modelProviders) {
+        this.config.modelProviders[p.name] = p.config as unknown as import('@octopi-agent/engine/config.js').ModelProviderConfig;
+      }
+    }
+    // 影子同步清理（#5）：移除不在回滚集合中的 provider 影子（防幽灵模型进目录）
+    if (this.config.modelProviders) {
+      for (const name of Object.keys(this.config.modelProviders)) {
+        if (!providers.some((p) => p.name === name)) delete this.config.modelProviders[name];
+      }
+    }
+    for (const id of [...this.agents.keys()]) {
+      if (!agentDefs.some((d) => d.id === id)) this.removeAgent(id);
+    }
+    this.setModelLevels(levels);
+    console.log(`[Gateway] Runtime config reset: ${providers.length} providers, ${agentDefs.length} agents`);
+  }
+
+  /**
    * 热失效 agent 构建缓存（L1）：**立即重建并覆盖注册**（runtime.registerAgent 为 upsert，
    * 不摘除 → Schedule/触发派发零窗口，不丢排队触发）；在跑 run 用旧构建跑完（旧 runner
    * 的 dispatcher 已被覆盖，in-flight 流仍由旧 runner 服务）。
@@ -1415,10 +1450,16 @@ export class Gateway {
     // 立即重建（新 provider/level/定义）+ 覆盖注册
     const def = this.agents.get(agentId);
     if (!def) return;
-    const fresh = await this.buildAgent(def);
-    this.agentCache.set(agentId, fresh);
-    await this.registerRuntimeAgent(def, fresh.runner);
-    console.log(`[Gateway] Rebuilt agent after config change: ${agentId}`);
+    try {
+      const fresh = await this.buildAgent(def);
+      this.agentCache.set(agentId, fresh);
+      await this.registerRuntimeAgent(def, fresh.runner);
+      console.log(`[Gateway] Rebuilt agent after config change: ${agentId}`);
+    } catch (err) {
+      // 构建失败降级（#6 fail-honest）：注册表仍保留新 def，缓存留空由下一条消息
+      // 惰性重建——绝不让回滚/批量热更循环中途断裂（否则运行时半更新）。
+      console.warn(`[Gateway] eager rebuild failed for "${agentId}"（下次消息惰性重建）: ${String(err)}`);
+    }
   }
 
   /** 热失效全部 agent 构建（level 路由变更等影响面难精确枚举时） */

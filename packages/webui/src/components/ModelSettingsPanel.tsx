@@ -323,7 +323,7 @@ export function ModelSettingsPanel() {
       <div className="set-header">
         <h2>模型配置</h2>
         <span className="small muted">
-          保存即生效（新会话用新配置）· apiKey 不回显明文 · 修改会自动备份 octopi.json
+          保存即生效（新会话用新配置）· apiKey 不回显明文 · 修改会自动备份 octopi.json · 端口/服务级配置需重启，不在本面板
         </span>
       </div>
 
@@ -501,6 +501,24 @@ export function ModelSettingsPanel() {
                 <button type="button" className="btn-secondary" onClick={saveProvider} disabled={busy}>
                   {busy ? '保存中…' : '保存并生效'}
                 </button>
+                {selected !== '__new__' && presets.some((p) => p.id === selected) && (
+                  <button
+                    type="button"
+                    className="btn-ghost"
+                    onClick={() => {
+                      const preset = presets.find((p) => p.id === selected);
+                      if (preset) {
+                        applyPreset(preset);
+                        // #9 重置≠换钥：保留当前 apiKey 输入（含"留空=保留现有"语义）
+                        setForm((p) => ({ ...p, name: selected ?? p.name, apiKey: p.apiKey }));
+                        setNotice(`已填入「${preset.label}」预设默认值（apiKey 未动），确认后保存生效`);
+                      }
+                    }}
+                    disabled={busy}
+                  >
+                    重置为预设默认值
+                  </button>
+                )}
                 {selected !== '__new__' && (
                   <button type="button" className="btn-ghost" onClick={deleteProvider} disabled={busy}>
                     删除 provider

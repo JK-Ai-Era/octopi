@@ -16,13 +16,20 @@ import {
   type ConfigAdminPort,
 } from '@octopi-agent/engine/config-admin/port.js';
 import {
+  BUILTIN_AGENT_ROLE_PRESETS,
+  renderAgentRole,
+  renderRolePreset,
+  type AgentRolePreset,
+  type RenderedAgentRole,
+} from '@octopi-agent/engine/config-admin/agent-presets.js';
+import {
   computeConfigHash,
   deleteJsonPath,
   findProviderReferences,
   getJsonPath,
   setJsonPath,
 } from '@octopi-agent/engine/config-admin/patch.js';
-import { expandEnvPlaceholders } from '@octopi-agent/engine/config-admin/env.js';
+import { expandEnvPlaceholders, expandEnvValues } from '@octopi-agent/engine/config-admin/env.js';
 import { assertSafeConfigName } from '@octopi-agent/engine/config-admin/name-guard.js';
 import { expandHomePath } from '@octopi-agent/engine/paths.js';
 import { redactProvider } from '@octopi-agent/engine/config-admin/redact.js';
@@ -35,8 +42,8 @@ import {
 export interface ConfigApplyResult {
   /** 写后 hash（供后续编辑做乐观锁） */
   hash: string;
-  /** 生效方式：hot=立即 / next-run=新 run 生效 */
-  applied: 'hot' | 'next-run';
+  /** 生效方式：hot=立即 / next-run=新 run 生效 / restart-required=含 L3 段需重启 */
+  applied: 'hot' | 'next-run' | 'restart-required';
   /** 受影响 agent id（新 run 生效范围） */
   affectedAgents: string[];
   /** 备份文件路径 */
@@ -53,6 +60,30 @@ export interface AgentFilesPort {
   readPersona(agentId: string, home?: string): string | null;
   /** 写 AGENTS.md（home 指定时按 agent 配置的 home 解析） */
   writePersona(agentId: string, content: string, home?: string): void;
+}
+
+/** 审计记录（P3，arch/config-hot-reload.md §7：who/when/what + 可回滚锚点） */
+export interface ConfigAuditEntry {
+  /** ISO 时间 */
+  ts: string;
+  /** 动作：provider.upsert / provider.delete / agent.create / … */
+  action: string;
+  /** 目标（provider 名 / agent id） */
+  target?: string;
+  /** 摘要（人可读 diff 说明） */
+  summary: string;
+  /** 写前 hash */
+  hashBefore?: string;
+  /** 写后 hash */
+  hashAfter?: string;
+  /** 回滚锚点（备份路径） */
+  backupPath?: string;
+}
+
+/** 自定义角色模板存取端口（daemon 注入 FileRoleTemplateStore） */
+export interface RoleTemplateStorePort {
+  list(): import('@octopi-agent/engine/config-admin/agent-presets.js').AgentRolePreset[];
+  save(preset: import('@octopi-agent/engine/config-admin/agent-presets.js').AgentRolePreset): void;
 }
 
 /** ConfigApplyService 依赖（组合根注入） */
@@ -74,6 +105,10 @@ export interface ConfigApplyServiceDeps {
     rawEntry: Record<string, unknown>,
     rawConfig: Record<string, unknown>,
   ) => AgentDefinition;
+  /** 审计 sink（daemon 注入写 audit/config.jsonl；缺省仅 console 留痕） */
+  auditSink?: (entry: ConfigAuditEntry) => void;
+  /** 自定义角色模板存取（缺省仅内置模板） */
+  roleTemplates?: RoleTemplateStorePort;
 }
 
 /** agent 创建请求 */
@@ -110,6 +145,28 @@ export class ConfigApplyService {
    */
   constructor(deps: ConfigApplyServiceDeps) {
     this.deps = deps;
+  }
+
+  /**
+   * 写审计（P3）：sink 缺省时 console 留痕；sink 抛错不阻断业务（审计尽力而为）
+   *
+   * @param action - 动作名
+   * @param summary - 人可读摘要
+   * @param extra - 补充字段（target/hash/backupPath）
+   */
+  private audit(action: string, summary: string, extra?: Partial<ConfigAuditEntry>): void {
+    const entry: ConfigAuditEntry = {
+      ts: new Date().toISOString(),
+      action,
+      summary,
+      ...extra,
+    };
+    try {
+      this.deps.auditSink?.(entry);
+    } catch (err) {
+      console.warn(`[config-audit] sink failed: ${String(err)}`);
+    }
+    console.log(`[config-audit] ${action}${extra?.target ? ` ${extra.target}` : ''} — ${summary}`);
   }
 
   /**
@@ -156,7 +213,7 @@ export class ConfigApplyService {
       providerConfig.apiKey === undefined && existing && typeof existing === 'object'
         ? { ...providerConfig, apiKey: existing.apiKey }
         : providerConfig;
-    const provider = await this.deps.providerFactory(name, appliedConfig);
+    const provider = await this.deps.providerFactory(name, expandEnvValues(appliedConfig));
 
     // 2) 写盘（乐观锁 + 全量校验 + 备份）；失败 → 运行时未动
     let refsAfter: string[] = [];
@@ -167,7 +224,13 @@ export class ConfigApplyService {
 
     // 3) 热应用
     const affected = extractAgentIds(refsAfter);
-    await this.deps.gateway.replaceProvider(provider, appliedConfig, affected);
+    await this.deps.gateway.replaceProvider(provider, expandEnvValues(appliedConfig), affected);
+    this.audit('provider.upsert', `upsert provider（${appliedConfig.baseUrl ?? ''}）`, {
+      target: name,
+      hashBefore: expectedHash,
+      hashAfter: written.hash,
+      backupPath: written.backupPath,
+    });
     return { hash: written.hash, applied: 'next-run', affectedAgents: affected, backupPath: written.backupPath };
   }
 
@@ -189,6 +252,12 @@ export class ConfigApplyService {
       deleteJsonPath(raw, ['models', 'providers', name]);
     }, expectedHash);
     await this.deps.gateway.removeProvider(name, []);
+    this.audit('provider.delete', '删除 provider', {
+      target: name,
+      hashBefore: expectedHash,
+      hashAfter: written.hash,
+      backupPath: written.backupPath,
+    });
     return { hash: written.hash, applied: 'next-run', affectedAgents: [], backupPath: written.backupPath };
   }
 
@@ -212,6 +281,11 @@ export class ConfigApplyService {
     }, expectedHash);
     this.deps.gateway.setModelLevels(level);
     await this.deps.gateway.invalidateAllAgentBuilds();
+    this.audit('levels.update', `更新模型分级路由（${Object.keys(level).join(', ')}）`, {
+      hashBefore: expectedHash,
+      hashAfter: written.hash,
+      backupPath: written.backupPath,
+    });
     return { hash: written.hash, applied: 'next-run', affectedAgents: [], backupPath: written.backupPath };
   }
 
@@ -324,6 +398,12 @@ export class ConfigApplyService {
     // 热应用：注册 + 立即重建（触发路径零窗口）
     this.deps.gateway.registerAgent(def);
     await this.deps.gateway.invalidateAgentBuild(agentId);
+    this.audit('agent.create', `新增 agent（model=${String(entry.model ?? '')}，安全组=${String((entry.effectPolicy as { mode?: string } | undefined)?.mode ?? '全局')}）`, {
+      target: agentId,
+      hashBefore: req.hash,
+      hashAfter: written.hash,
+      backupPath: written.backupPath,
+    });
     return {
       hash: written.hash,
       applied: 'next-run',
@@ -398,6 +478,12 @@ export class ConfigApplyService {
 
     this.deps.gateway.registerAgent(def);
     await this.deps.gateway.invalidateAgentBuild(agentId);
+    this.audit('agent.update', `更新 agent 字段：${Object.keys(agentEntry).join(', ')}`, {
+      target: agentId,
+      hashBefore: expectedHash,
+      hashAfter: written.hash,
+      backupPath: written.backupPath,
+    });
     return {
       hash: written.hash,
       applied: 'next-run',
@@ -415,13 +501,26 @@ export class ConfigApplyService {
    * @throws agent 不存在、{@link ConfigConflictError} 并发冲突
    */
   async deleteAgent(agentId: string, expectedHash: string): Promise<ConfigApplyResult> {
+    assertSafeConfigName(agentId);
     const written = await this.deps.configAdmin.write((raw) => {
       const agents = Array.isArray(raw.agents) ? (raw.agents as Array<Record<string, unknown>>) : [];
       const idx = agents.findIndex((a) => a.id === agentId);
       if (idx < 0) throw new Error(`agent not found: ${agentId}`);
+      // 护栏（P3）：在串行写区内再断言（防并发双删）；存在性优先（未知 id 报 not found）
+      if (agents.length <= 1) {
+        throw new Error(
+          `refusing to remove the last agent ("${agentId}")：系统至少保留一个 agent；如需替换请先新建再删除`,
+        );
+      }
       agents.splice(idx, 1);
     }, expectedHash);
     this.deps.gateway.removeAgent(agentId);
+    this.audit('agent.delete', `下线 agent（home/persona 保留）`, {
+      target: agentId,
+      hashBefore: expectedHash,
+      hashAfter: written.hash,
+      backupPath: written.backupPath,
+    });
     return {
       hash: written.hash,
       applied: 'next-run',
@@ -488,6 +587,157 @@ export class ConfigApplyService {
     }
     this.deps.agentFiles.writePersona(agentId, content, home);
     await this.deps.gateway.invalidateAgentBuild(agentId);
+    this.audit('persona.update', '更新 AGENTS.md（新会话生效）', {
+      target: agentId,
+      hashAfter: computeConfigHash(content),
+    });
     return { hash: computeConfigHash(content) };
+  }
+
+  /**
+   * 列出配置备份（回滚 UI 用）
+   *
+   * @returns 备份清单（时间倒序）；端口不支持时返回空数组
+   */
+  listBackups(): Array<{ path: string; mtimeMs: number; size: number }> {
+    return this.deps.configAdmin.listBackups?.() ?? [];
+  }
+
+  /**
+   * 回滚到备份（P3）：预构造备份全量（fail-safe）→ 写盘 → 运行时全量重置
+   *
+   * @param backupPath - 备份路径（须在配置目录内）
+   * @param expectedHash - 乐观锁（当前配置 hash）
+   * @returns 热应用结果（affectedAgents=全部重建的 agent）
+   * @throws 备份损坏 / 构造失败（盘不动）、{@link ConfigConflictError} 并发冲突
+   */
+  async rollbackTo(backupPath: string, expectedHash: string): Promise<ConfigApplyResult> {
+    const backupText = this.deps.configAdmin.readBackup?.(backupPath);
+    if (backupText === undefined) {
+      throw new Error('config admin port does not support backups');
+    }
+    const backupRaw = JSON.parse(backupText) as Record<string, unknown>;
+    const beforeRaw = this.deps.configAdmin.read().raw;
+
+    // L3 段对比（#4）：channels/web/knowledge/embedding 不在热应用覆盖内 → 重启才生效
+    const l3Of = (r: Record<string, unknown>): string =>
+      JSON.stringify({
+        channels: r.channels ?? null,
+        web: r.web ?? null,
+        knowledge: r.knowledge ?? null,
+        embedding: ((r.models as Record<string, unknown> | undefined)?.embedding ?? null),
+      });
+    const l3Changed = l3Of(backupRaw) !== l3Of(beforeRaw);
+    // 变更段摘要（#7：高危段回滚要留痕，含 effectPolicy 放宽）
+    const changedSections = [...new Set([...Object.keys(backupRaw), ...Object.keys(beforeRaw)])].filter(
+      (k) => JSON.stringify(backupRaw[k] ?? null) !== JSON.stringify(beforeRaw[k] ?? null),
+    );
+
+    // 预构造全量（失败不动盘）
+    const modelsSection = (backupRaw.models ?? {}) as Record<string, unknown>;
+    const providersSection = (modelsSection.providers ?? {}) as Record<string, Record<string, unknown>>;
+    const providerInstances: Array<{ name: string; config: Record<string, unknown>; instance: ModelProvider }> = [];
+    for (const [name, cfg] of Object.entries(providersSection)) {
+      // 展开形态给实例与影子（blocker#1/#5）；盘上备份保持 raw
+      const runtimeCfg = expandEnvValues(cfg);
+      providerInstances.push({ name, config: runtimeCfg, instance: await this.deps.providerFactory(name, runtimeCfg) });
+    }
+    const agentEntries = Array.isArray(backupRaw.agents) ? (backupRaw.agents as Array<Record<string, unknown>>) : [];
+    const agentDefs = agentEntries.map((entry) => this.deps.agentDefFactory(entry, backupRaw));
+    const levels = modelsSection.level as Record<string, { primary: string; fallback?: string[] }> | undefined;
+
+    const written = await this.deps.configAdmin.write((raw) => {
+      for (const key of Object.keys(raw)) delete raw[key];
+      Object.assign(raw, backupRaw);
+    }, expectedHash);
+
+    // 运行时全量重置（新 run 用回滚后构建；在跑 run 跑完自然结束）
+    this.deps.gateway.resetRuntimeConfig(providerInstances, agentDefs, levels);
+    for (const def of agentDefs) {
+      this.deps.gateway.registerAgent(def);
+      await this.deps.gateway.invalidateAgentBuild(def.id);
+    }
+    this.audit(
+      'config.rollback',
+      `回滚到备份 ${backupPath}（变更段：${changedSections.join(', ') || '无'}${l3Changed ? '；含 L3 段需重启生效' : ''}）`,
+      {
+        hashBefore: expectedHash,
+        hashAfter: written.hash,
+        backupPath: written.backupPath,
+      },
+    );
+    return {
+      hash: written.hash,
+      applied: l3Changed ? 'restart-required' : 'next-run',
+      affectedAgents: agentDefs.map((d) => d.id),
+      backupPath: written.backupPath,
+    };
+  }
+
+  /**
+   * 另存为模板（P3）：从 agent 的 AGENTS.md 生成自定义角色模板
+   *
+   * 模板即 AGENTS.md 原文（插槽 `{{agentName}}`/`{{addressToUser}}` 可由用户后补）。
+   *
+   * @param agentId - 源 agent
+   * @param opts - 模板 id/label/description
+   * @returns 保存的角色模板
+   * @throws agent 不存在 / inline persona / 无 AGENTS.md / 模板 store 未接线
+   */
+  saveAgentAsTemplate(
+    agentId: string,
+    opts: { id: string; label?: string; description?: string },
+  ): AgentRolePreset {
+    assertSafeConfigName(opts.id);
+    if (BUILTIN_AGENT_ROLE_PRESETS.some((p) => p.id === opts.id)) {
+      throw new Error(`模板 id 与内置角色冲突：${opts.id}（换一个 id，或改内置模板源码）`);
+    }
+    const { home } = this.resolvePersonaTarget(agentId);
+    const content = this.deps.agentFiles.readPersona(agentId, home);
+    if (!content) {
+      throw new Error(`AGENTS.md 不存在：${agentId}，无内容可存为模板`);
+    }
+    const def = this.deps.gateway.getAgentDefinition(agentId);
+    const preset: AgentRolePreset = {
+      id: opts.id,
+      label: opts.label?.trim() || opts.id,
+      description: opts.description?.trim() || `从 agent「${agentId}」另存的角色模板`,
+      template: content,
+      recommendedEffectMode: (def?.effectPolicy?.mode as AgentRolePreset['recommendedEffectMode']) ?? 'workspace',
+    };
+    if (!this.deps.roleTemplates) {
+      throw new Error('role template store not wired');
+    }
+    this.deps.roleTemplates.save(preset);
+    this.audit('template.save', `另存为角色模板 ${opts.id}`, { target: agentId });
+    return preset;
+  }
+
+  /**
+   * 角色模板渲染（内置 + 自定义模板合并；服务端单一渲染实现）
+   *
+   * @param presetId - 模板 id（自定义优先命中）
+   * @param slots - 插槽值
+   * @returns 渲染结果
+   * @throws 未知模板 / 插槽为空
+   */
+  renderRole(
+    presetId: string,
+    slots: { agentName: string; addressToUser: string },
+  ): RenderedAgentRole {
+    const custom = this.deps.roleTemplates?.list().find((p) => p.id === presetId);
+    if (custom) return renderRolePreset(custom, slots);
+    return renderAgentRole(presetId, slots);
+  }
+
+  /**
+   * 角色模板清单（内置 + 自定义合并，自定义优先；同 id 去重防 React key 冲突）
+   *
+   * @returns 模板清单
+   */
+  listRolePresets(): AgentRolePreset[] {
+    const custom = this.deps.roleTemplates?.list() ?? [];
+    const customIds = new Set(custom.map((p) => p.id));
+    return [...custom, ...BUILTIN_AGENT_ROLE_PRESETS.filter((p) => !customIds.has(p.id))];
   }
 }

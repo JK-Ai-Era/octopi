@@ -804,7 +804,7 @@ export interface AgentRolePresetDto {
 
 export interface ConfigApplyResultDto {
   hash: string;
-  applied: 'hot' | 'next-run';
+  applied: 'hot' | 'next-run' | 'restart-required';
   affectedAgents: string[];
   backupPath: string;
 }
@@ -2345,6 +2345,36 @@ export class OctopiClient {
   async getAgentRolePresets(): Promise<AgentRolePresetDto[]> {
     const res = await this.getJson<{ ok: boolean; data: AgentRolePresetDto[] }>(
       '/config/presets/agent-roles',
+    );
+    return res.data;
+  }
+
+  /** 配置备份清单（P3 回滚 UI） */
+  async getConfigBackups(): Promise<Array<{ path: string; mtimeMs: number; size: number }>> {
+    const res = await this.getJson<{
+      ok: boolean;
+      data: Array<{ path: string; mtimeMs: number; size: number }>;
+    }>('/config/backups');
+    return res.data;
+  }
+
+  /** 回滚配置到备份（全量热重建） */
+  async rollbackConfig(backupPath: string, hash: string): Promise<ConfigApplyResultDto> {
+    const res = await this.postJson<{ ok: boolean; data: ConfigApplyResultDto }>('/config/rollback', {
+      backupPath,
+      hash,
+    });
+    return res.data;
+  }
+
+  /** 另存为角色模板（从 agent 的 AGENTS.md 生成） */
+  async saveAgentAsTemplate(
+    agentId: string,
+    opts: { id: string; label?: string; description?: string },
+  ): Promise<AgentRolePresetDto> {
+    const res = await this.postJson<{ ok: boolean; data: AgentRolePresetDto }>(
+      `/config/agents/${encodeURIComponent(agentId)}/save-as-template`,
+      opts,
     );
     return res.data;
   }
