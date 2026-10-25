@@ -68,6 +68,15 @@ O_RDWR 打开 `/dev/null`、shell 会重定向到它们，封死会瘫痪基础�
 按词法与规范（`realpath`）两种形态输出，保证子路径规则能穿透符号链接别名
 （macOS `/var` → `/private/var`、`/tmp` → `/private/tmp`）。
 
+**exec 被拒会归因**：`execve` 的 `Operation not permitted` 有两个成因，调用方在牢笼内
+无法分辨——Seatbelt 拒绝 exec 任何 **setuid** 二进制（OS 不变量：macOS 的 `ps`、`top`
+是 setuid，因此进程列表在笼内必然失败，改 profile 也放不开）；生成的 profile 显式
+拒绝**非** setuid 的特权助手（`chroot`、`dscl`）。Octopi 把首个可归因的拒绝写到两条
+如实通道：`isolation.notes` 里一行事实、`diagnostics.hints` 里一条可执行建议
+（`shell` 工具以 `hints` 字段透出）。写盘与网络拒绝措辞相同，**故意不归因**——
+归到 `exec` 上会把调用方带错路。supervised 回落路径同样归因（此时是外层牢笼在拒绝、
+并非本项目 profile 生效，因此不声明 deny 清单归因）。
+
 **Jail 搭建失败（D7）**：`requireJail`（effective untrusted）抛 `untrusted_jail_failed`，禁止未沙箱执行；其它模式回落 supervised + `jail_setup_failed` + run 级 `securityDegraded`。
 后端选择与探测对齐（bwrap 冒烟测试 / Seatbelt `sandbox_apply` 冒烟测试）：
 jail 完全无法生效时，mode 分叉发生在命令**运行之前**。wrapper 一旦运行过，
@@ -80,6 +89,13 @@ wrapper 签名（`bwrap:` / `sandbox-exec:` / `newuidmap:` / `newgidmap:`），
 **特权（`dropped`）** 指牢笼**拒绝提权操作**（user namespace 和/或 Seatbelt
 `process-exec` 拒绝 `sudo`/`su`/…）。它**不要求**切换 uid。注记区分 `userns`
 与 `ops-denied; uid unchanged` 两种形态。
+
+Seatbelt 的 deny 清单是**跨平台超集**，不是对运行主机的实测快照：每个提权助手都列出
+它在各发行版下的全部拼写（`/bin/su` 与 `/usr/bin/su`；`chroot` 的 `sbin` 与 `bin`），
+并覆盖现代提权面（`pkexec`、`doas`、`run0`、`sudoedit`）。SBPL 的 `literal` 是精确
+匹配，漏一个拼写就是一扇门；而死条目零成本（不报错、无运行开销）。**禁止按单机现状
+裁剪本表。** 该表刻意静态、不在启动时探测：profile 随主机变化会让同一份配置在不同
+机器上行为不同，这种调试成本高于无害条目的噪音。
 
 **Jail 可写挂载（2）**：`allowRoots` ∪ cwd ∪ `os.tmpdir()` 在所有模式下可写；
 POSIX 下共享临时目录 `/tmp` 与 `/var/tmp`（各含词法与 `realpath` 规范两种形态）

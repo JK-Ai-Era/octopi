@@ -368,3 +368,123 @@ describe('review hardening: ordering, esc, detection semantics', () => {
     expect(roots).not.toContain(resolve('/base/cwd/padded'));
   });
 });
+
+describe('privilege deny list is a cross-platform superset', () => {
+  const wrap = async () =>
+    await import('@octopi-agent/engine/harness/extension/execution-environment/sandbox.js');
+
+  it('every grouped path reaches the generated profile', async () => {
+    const { buildSeatbeltProfile, PRIVILEGE_DENY_EXEC_GROUPS, DEFAULT_PRIVILEGE_DENY_EXEC } = await wrap();
+    const profile = buildSeatbeltProfile(['/w'], 'deny');
+    for (const paths of Object.values(PRIVILEGE_DENY_EXEC_GROUPS)) {
+      for (const path of paths) {
+        expect(profile).toContain(`(deny process-exec (literal "${path}"))`);
+        expect(DEFAULT_PRIVILEGE_DENY_EXEC).toContain(path);
+      }
+    }
+  });
+
+  it('keeps every distribution spelling of the same helper', async () => {
+    const { DEFAULT_PRIVILEGE_DENY_EXEC } = await wrap();
+    // Seatbelt literal matching does not normalise bin vs sbin vs usr/bin, so a
+    // missing spelling on the target distribution is an open door.
+    for (const path of [
+      '/bin/su',
+      '/usr/bin/su',
+      '/usr/bin/sudo',
+      '/usr/sbin/chroot',
+      '/usr/bin/chroot',
+      '/sbin/chroot',
+      '/usr/bin/login',
+      '/bin/login',
+      '/usr/bin/newgrp',
+      '/usr/bin/sg',
+      '/usr/bin/pkexec',
+      '/usr/bin/doas',
+      '/usr/bin/run0',
+      '/usr/bin/sudoedit',
+    ]) {
+      expect(DEFAULT_PRIVILEGE_DENY_EXEC).toContain(path);
+    }
+  });
+
+  it('paths are absolute and unique across groups', async () => {
+    const { PRIVILEGE_DENY_EXEC_GROUPS } = await wrap();
+    const all = Object.values(PRIVILEGE_DENY_EXEC_GROUPS).flat();
+    for (const path of all) expect(path.startsWith('/')).toBe(true);
+    // A path listed under two capabilities means the table drifted.
+    expect(new Set(all).size).toBe(all.length);
+  });
+
+  it('host override still replaces the whole list', async () => {
+    const { buildSeatbeltProfile } = await wrap();
+    const profile = buildSeatbeltProfile(['/w'], 'deny', { privilegeDenyExec: ['/opt/custom'] });
+    expect(profile).toContain('(deny process-exec (literal "/opt/custom"))');
+    expect(profile).not.toContain('(deny process-exec (literal "/usr/bin/sudo"))');
+  });
+});
+
+describe('exec denial attribution (EPERM is not self-explanatory)', () => {
+  const wrap = async () =>
+    await import('@octopi-agent/engine/harness/extension/execution-environment/sandbox.js');
+
+  it('attributes setuid exec and names the OS invariant', async () => {
+    const { explainSeatbeltExecDenial } = await wrap();
+    const { stat } = await import('node:fs/promises');
+    // /bin/ps is setuid on every macOS release; skip where that does not hold.
+    const probe = await stat('/bin/ps').catch(() => null);
+    if (!probe || (probe.mode & 0o4000) === 0) return;
+    const denial = await explainSeatbeltExecDenial({
+      stderr: 'bash: line 1: /bin/ps: Operation not permitted\n',
+      cwd: '/tmp',
+    });
+    expect(denial?.kind).toBe('setuid-exec');
+    expect(denial?.target).toBe('/bin/ps');
+    expect(denial?.hint).toMatch(/macOS invariant/);
+    expect(denial?.note).toMatch(/^exec_denied: \/bin\/ps is setuid/);
+  });
+
+  it('distinguishes the explicit privilege deny list from the setuid rule', async () => {
+    const { explainSeatbeltExecDenial } = await wrap();
+    const denial = await explainSeatbeltExecDenial({
+      stderr: 'bash: line 1: /usr/sbin/chroot: Operation not permitted\n',
+      cwd: '/tmp',
+    });
+    expect(denial?.kind).toBe('privilege-deny');
+    expect(denial?.hint).toMatch(/privilege deny list/);
+  });
+
+  it('parses the zsh ordering too (path after the message)', async () => {
+    const { explainSeatbeltExecDenial } = await wrap();
+    const denial = await explainSeatbeltExecDenial({
+      stderr: 'zsh:1: operation not permitted: /usr/sbin/chroot\n',
+      cwd: '/tmp',
+    });
+    expect(denial?.kind).toBe('privilege-deny');
+  });
+
+  it('resolves a bare command name through the standard bin dirs', async () => {
+    const { explainSeatbeltExecDenial } = await wrap();
+    const denial = await explainSeatbeltExecDenial({
+      stderr: 'sh: chroot: Operation not permitted\n',
+      cwd: '/tmp',
+    });
+    expect(denial?.target).toBe('/usr/sbin/chroot');
+  });
+
+  it('leaves write denials unattributed instead of blaming exec', async () => {
+    const { explainSeatbeltExecDenial } = await wrap();
+    const denial = await explainSeatbeltExecDenial({
+      stderr: 'bash: line 1: /etc/hosts: Operation not permitted\n',
+      cwd: '/tmp',
+    });
+    expect(denial).toBeNull();
+  });
+
+  it('ignores stderr without EPERM', async () => {
+    const { explainSeatbeltExecDenial } = await wrap();
+    expect(
+      await explainSeatbeltExecDenial({ stderr: 'cat: /nope: No such file or directory\n', cwd: '/tmp' }),
+    ).toBeNull();
+  });
+});

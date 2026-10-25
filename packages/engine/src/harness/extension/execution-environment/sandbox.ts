@@ -7,7 +7,7 @@
  */
 
 import { spawn, type SpawnOptions } from 'node:child_process';
-import { realpath, unlink, writeFile } from 'node:fs/promises';
+import { realpath, stat, unlink, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
@@ -111,7 +111,44 @@ export class ProcessSandbox implements SandboxProvider {
         ),
       );
     }
-    return this.runSupervised(file, args, config, profile, { cwd, env, timeoutMs, maxOutputBytes });
+    return this.withExecDiagnostics(
+      this.runSupervised(file, args, config, profile, { cwd, env, timeoutMs, maxOutputBytes }),
+      cwd,
+      [],
+    );
+  }
+
+  /**
+   * Attribute a setuid/privilege exec denial on the caller's channels.
+   *
+   * A jail that does not apply (nested sandbox, wrapper missing) still refuses
+   * setuid exec when an **enclosing** jail is in force, so attribution cannot
+   * live only in `runSeatbelt`. `denyExec` stays empty there: without proof we
+   * own the profile, claiming a specific deny-list entry would be a guess.
+   *
+   * @param pending - result promise from whichever backend ran
+   * @param cwd - run cwd, used to resolve bare command names
+   * @param denyExec - deny list we know is in force (empty when unknown)
+   * @returns result, with one explanation attached when stderr was attributable
+   */
+  private withExecDiagnostics(
+    pending: SandboxResult | Promise<SandboxResult>,
+    cwd: string,
+    denyExec: readonly string[],
+  ): Promise<SandboxResult> {
+    if (process.platform !== 'darwin') return Promise.resolve(pending);
+    return Promise.resolve(pending).then(async (result) => {
+      const denial = await explainSeatbeltExecDenial({ stderr: result.stderr, cwd, denyExec });
+      if (!denial) return result;
+      return {
+        ...result,
+        isolation: {
+          ...result.isolation,
+          notes: [...(result.isolation.notes ?? []), denial.note],
+        },
+        diagnostics: { hints: [denial.hint] },
+      };
+    });
   }
 
   private runSupervised(
@@ -357,6 +394,8 @@ export class ProcessSandbox implements SandboxProvider {
     // Host override wins; otherwise generate a profile covering allowRoots (D3-b+).
     let profilePath = process.env.OCTOPI_SB_PROFILE;
     let generatedPath: string | undefined;
+    /** Deny list in force, or null when an external profile owns it (unknown). */
+    let denyExec: readonly string[] | null = null;
     if (!profilePath) {
       generatedPath = join(
         tmpdir(),
@@ -365,6 +404,7 @@ export class ProcessSandbox implements SandboxProvider {
       try {
         await writeFile(generatedPath, buildSeatbeltProfile(roots, network), { encoding: 'utf8', mode: 0o600 });
         profilePath = generatedPath;
+        denyExec = DEFAULT_PRIVILEGE_DENY_EXEC;
       } catch (err) {
         return this.jailSetupFailed(
           file,
@@ -410,7 +450,11 @@ export class ProcessSandbox implements SandboxProvider {
           `seatbelt apply failed (exit=${result.exitCode}): ${result.stderr.slice(0, 200)}`,
         );
       }
-      return result;
+      // A real command may have printed EPERM for reasons the caller cannot see
+      // from inside the jail (setuid exec is an OS invariant; privileged
+      // helpers are denied by the profile). Attribute it once, on the honest
+      // channels: isolation notes (what the jail did) + diagnostics (next step).
+      return this.withExecDiagnostics(result, opts.cwd, denyExec ?? []);
     } finally {
       if (generatedPath) {
         await unlink(generatedPath).catch(() => undefined);
@@ -672,16 +716,190 @@ export const SEATBELT_DEVICE_WRITE_ALLOW = [
   '/dev/stderr',
 ] as const;
 
-/** Common privilege-gaining binaries denied inside Seatbelt (1-B). */
-const DEFAULT_PRIVILEGE_DENY_EXEC = [
-  '/usr/bin/sudo',
-  '/bin/su',
-  '/usr/bin/su',
-  '/usr/sbin/chroot',
-  '/usr/bin/login',
-  '/usr/bin/newgrp',
-  '/usr/bin/dscl',
-];
+/**
+ * Privilege-gaining binaries, grouped by the capability they grant.
+ *
+ * This is a **cross-platform superset on purpose**, not a survey of the host
+ * running it. Two reasons:
+ *  - Seatbelt's `(literal ...)` matches a path string exactly; it does not
+ *    normalise `/bin` vs `/usr/bin` or `sbin` vs `bin`. Distributions disagree
+ *    on all of them (`su` is `/bin/su` on Debian, `/usr/bin/su` on macOS;
+ *    `chroot` lives under `/usr/sbin` on macOS and additionally under
+ *    `/usr/bin` / `/sbin` elsewhere). A missing spelling is an open door.
+ *  - A deny line for a path that does not exist on this host never matches and
+ *    costs nothing: no error, no runtime penalty. So the asymmetry is one-way —
+ *    dead entries are free, missing entries are a hole.
+ *
+ * **Do not trim this list by inspecting one machine.** Every entry that looks
+ * dead on macOS is live on some Linux distribution. New privilege-gaining
+ * helpers (`pkexec`, `doas`, `run0`, `sudoedit`) are inherited by every jail
+ * backend that shares this table, so the risk of a stale entry is the cheaper
+ * side of the trade.
+ */
+export const PRIVILEGE_DENY_EXEC_GROUPS = {
+  /** Full privilege switch to any user. */
+  su: ['/bin/su', '/usr/bin/su', '/sbin/su'],
+  /** Run a command as another user (sudo family). */
+  sudo: ['/usr/bin/sudo', '/bin/sudo', '/usr/local/bin/sudo'],
+  /** Edit a file as root through sudo. */
+  sudoedit: ['/usr/bin/sudoedit', '/bin/sudoedit'],
+  /** Polkit-mediated privilege escalation (desktop Linux). */
+  pkexec: ['/usr/bin/pkexec', '/usr/local/bin/pkexec'],
+  /** Minimal sudo replacement (OpenBSD, Alpine, some Linux). */
+  doas: ['/usr/bin/doas', '/usr/local/bin/doas', '/usr/local/sbin/doas'],
+  /** systemd-run privilege escalation (systemd >= 256). */
+  run0: ['/usr/bin/run0'],
+  /** Replace the session, bypassing the caller's credentials. */
+  login: ['/usr/bin/login', '/bin/login'],
+  /** Change the process group ID without a password. */
+  newgrp: ['/usr/bin/newgrp', '/bin/newgrp', '/usr/bin/sg', '/bin/sg'],
+  /** Start a process in a different root / namespace. */
+  chroot: ['/usr/sbin/chroot', '/usr/bin/chroot', '/sbin/chroot', '/bin/chroot'],
+  /** Read or modify the local directory service (macOS account DB). */
+  dscl: ['/usr/bin/dscl', '/usr/sbin/dscl'],
+} as const;
+
+/**
+ * Flat deny list in force unless the host overrides it.
+ *
+ * Derived from {@link PRIVILEGE_DENY_EXEC_GROUPS} so the grouped table stays
+ * the single source of truth.
+ */
+export const DEFAULT_PRIVILEGE_DENY_EXEC: readonly string[] = Object.values(
+  PRIVILEGE_DENY_EXEC_GROUPS,
+).flat();
+
+/**
+ * One denial the jail produced, attributed to the mechanism that caused it.
+ *
+ * Two mechanisms print `Operation not permitted`, and they need **different**
+ * advice:
+ *  - `setuid-exec` — the OS refuses `execve` of a setuid binary inside
+ *    Seatbelt. This is a kernel invariant: no profile edit can allow it. `ps`
+ *    and `top` are setuid on macOS, which is why process listing dies there.
+ *  - `privilege-deny` — an explicit `(deny process-exec ...)` line written by
+ *    `buildSeatbeltProfile` for privileged helpers that are **not** setuid
+ *    (`chroot`, `dscl`); the implicit setuid rule does not cover them.
+ *
+ * Write and network denials print the same EPERM wording but are left
+ * unattributed on purpose — blaming them on exec would misdirect the caller.
+ */
+export interface SeatbeltExecDenial {
+  /** Absolute path of the denied binary (PATH-resolved when reported bare). */
+  target: string;
+  /** Which mechanism refused the exec. */
+  kind: 'setuid-exec' | 'privilege-deny';
+  /** Factual one-liner for the isolation notes (what the jail did). */
+  note: string;
+  /** Actionable one-liner for the caller (what to do instead). */
+  hint: string;
+}
+
+/** POSIX binary directories searched for a bare command name. */
+const EXEC_LOOKUP_DIRS = ['/usr/bin', '/bin', '/usr/sbin', '/sbin', '/usr/local/bin'];
+
+/** Setuid file mode bit. */
+const SETUID_BIT = 0o4000;
+
+/** Cap on distinct paths probed from one stderr, to bound `stat` cost. */
+const EXEC_DENIAL_PROBE_LIMIT = 8;
+
+/**
+ * Locate a binary the shell named in an EPERM line.
+ *
+ * @param token - absolute path or bare command name from stderr
+ * @param cwd - base for relative paths
+ * @returns resolved absolute path with its mode, or null when nothing exists
+ */
+async function resolveExecutable(
+  token: string,
+  cwd: string,
+): Promise<{ path: string; mode: number } | null> {
+  const candidates = token.includes('/')
+    ? [resolve(cwd, token)]
+    : EXEC_LOOKUP_DIRS.map((dir) => join(dir, token));
+  for (const candidate of candidates) {
+    try {
+      const info = await stat(candidate);
+      if (info.isFile()) return { path: candidate, mode: info.mode };
+    } catch {
+      // Not in this directory — try the next candidate.
+    }
+  }
+  return null;
+}
+
+/**
+ * Extract the subject of each EPERM line.
+ *
+ * Shells disagree on where the path sits:
+ *  - bash/sh: `bash: line 1: /usr/bin/top: Operation not permitted`
+ *  - zsh:     `zsh:1: operation not permitted: /usr/bin/top`
+ *
+ * Deduped and capped: a pathological command can emit thousands of EPERM lines
+ * and each candidate costs up to one `stat` per lookup dir.
+ *
+ * @param stderr - captured stderr
+ * @returns distinct paths in emission order
+ */
+function extractDeniedTargets(stderr: string): string[] {
+  const targets = new Set<string>();
+  for (const raw of stderr.split('\n')) {
+    if (targets.size >= EXEC_DENIAL_PROBE_LIMIT) break;
+    const line = raw.trim();
+    if (!/operation not permitted/i.test(line)) continue;
+    const trailing = /(?:^|:)\s*([^\s:][^:\n]*?):\s*operation not permitted$/i.exec(line);
+    if (trailing?.[1]) {
+      targets.add(trailing[1].trim());
+      continue;
+    }
+    const leading = /operation not permitted:\s*(\S.*)$/i.exec(line);
+    if (leading?.[1]) targets.add(leading[1].trim());
+  }
+  return [...targets];
+}
+
+/**
+ * Attribute an exec denial inside the macOS jail so the caller can correct
+ * itself without re-discovering the sandbox's invariants by trial and error.
+ *
+ * @param args - captured stderr, run cwd, and the deny list written into the profile
+ * @returns the first attributable denial, or null when EPERM had another cause
+ */
+export async function explainSeatbeltExecDenial(args: {
+  stderr: string;
+  cwd: string;
+  /** Deny list actually emitted into the profile; defaults to the built-in one. */
+  denyExec?: readonly string[];
+}): Promise<SeatbeltExecDenial | null> {
+  const deny = new Set(args.denyExec ?? DEFAULT_PRIVILEGE_DENY_EXEC);
+  for (const token of extractDeniedTargets(args.stderr)) {
+    const found = await resolveExecutable(token, args.cwd);
+    if (!found) continue;
+    if (deny.has(found.path)) {
+      return {
+        target: found.path,
+        kind: 'privilege-deny',
+        note: `exec_denied: ${found.path} is on the jail privilege deny list`,
+        hint:
+          `exec_denied: ${found.path} is on the sandbox privilege deny list (buildSeatbeltProfile) — ` +
+          `privileged helpers are blocked by design inside the jail; do not retry, find an unprivileged route.`,
+      };
+    }
+    if ((found.mode & SETUID_BIT) !== 0) {
+      return {
+        target: found.path,
+        kind: 'setuid-exec',
+        note: `exec_denied: ${found.path} is setuid; seatbelt refuses setuid exec (macOS invariant)`,
+        hint:
+          `exec_denied: ${found.path} is setuid and seatbelt refuses setuid exec — a macOS invariant, ` +
+          `not configurable by the profile. Do not retry it; read the same state without exec'ing a ` +
+          `setuid binary (e.g. pgrep -fl, lsof, vm_stat, or libproc proc_pidinfo).`,
+      };
+    }
+  }
+  return null;
+}
 
 function resolveShell(): { executable: string; args: string[]; kind: 'bash' | 'powershell' | 'cmd' } {
   if (process.platform === 'win32') {

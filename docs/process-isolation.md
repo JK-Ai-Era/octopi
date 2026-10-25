@@ -74,6 +74,19 @@ a jail that blocks them breaks basic tooling. Jail roots are emitted in both
 their lexical and canonical (`realpath`) form so subpath rules match through
 symlink aliases (macOS `/var` → `/private/var`, `/tmp` → `/private/tmp`).
 
+**Exec denials are attributed.** `Operation not permitted` from an `execve` has
+two causes a caller cannot tell apart from inside the jail: Seatbelt refuses to
+exec any **setuid** binary (an OS invariant — `ps` and `top` are setuid on macOS,
+so process listing dies there, and no profile edit can allow it), and the
+generated profile explicitly denies privileged helpers that are *not* setuid
+(`chroot`, `dscl`). Octopi attributes the first attributable denial onto two
+honest channels: a factual line in `isolation.notes` and one actionable entry in
+`diagnostics.hints` (surfaced by the `shell` tool as `hints`). Write and network
+denials print the same wording and are deliberately left unattributed —
+blaming them on `exec` would misdirect the caller. Attribution also runs on the
+supervised fallback (an enclosing jail refuses the exec but no profile of ours
+is in force, so no deny-list claim is made).
+
 **Jail setup failure (D7).** If a jail backend was selected but cannot be applied:
 `requireJail` (effective `untrusted`) **throws** `untrusted_jail_failed` instead of
 running unsandboxed; other modes fall back to supervised spawn, report
@@ -92,6 +105,16 @@ the wrapper outcome with downgraded isolation (`cwd-pin`) and the run-level
 (user namespace and/or Seatbelt `process-exec` denials for `sudo`/`su`/…).
 It does **not** require a different uid. Notes record `userns` vs
 `ops-denied; uid unchanged`.
+
+The Seatbelt deny list is a **cross-platform superset**, not a survey of the
+running host: every helper is listed under all its distribution spellings
+(`/bin/su` *and* `/usr/bin/su`; `chroot` under `sbin` *and* `bin`), plus modern
+escalators (`pkexec`, `doas`, `run0`, `sudoedit`). SBPL `literal` matching is
+exact, so a missing spelling is an open door, while a dead entry costs nothing
+(no error, no runtime overhead). Never trim the table by inspecting one machine.
+The table is deliberately static rather than probed at start-up: a profile that
+changes with the host makes the same config behave differently per machine, and
+that debugging cost outweighs the noise of harmless entries.
 
 **Jail write mounts (2).** `allowRoots` ∪ cwd ∪ `os.tmpdir()` are writable in
 every mode; on POSIX the shared temp dirs `/tmp` and `/var/tmp` (each in their

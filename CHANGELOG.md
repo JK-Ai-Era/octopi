@@ -101,6 +101,26 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 | v0.2 | [changelog/v0.2.md](./changelog/v0.2.md) |
 | v0.1 | [changelog/v0.1.md](./changelog/v0.1.md) |
 
+## v0.93.2 (2026-10-25)
+
+### fix(sandbox): exec 被拒时给出可操作归因（EPERM 不再无解释）
+
+- **问题**：jail 内 `execve` 失败只打印 `Operation not permitted`，调用方无法区分两种成因，只能靠试错重发现沙箱不变量。实测代价：查一次进程内存占用用了 3 次无效尝试才绕过。
+- **两种成因**（措辞相同、建议相反）：`setuid-exec` —— Seatbelt 拒绝 exec 任何 setuid 二进制，是 OS 不变量（macOS 的 `ps`/`top` 即 setuid，故笼内进程列表必败，**改 profile 也放不开**）；`privilege-deny` —— 生成 profile 显式拒绝**非** setuid 的特权助手（`chroot`/`dscl`，隐式 setuid 规则覆盖不到）。
+- **通道**：`isolation.notes` 记事实（牢笼做了什么）+ 新增 `SandboxResult.diagnostics.hints`（下一步怎么办，`shell` 工具以 `hints` 字段透出，与 `file_search` 的 diagnostics 惯例一致）。不污染用户命令的 stderr。
+- **不误报**：写盘/网络拒绝措辞相同但**故意不归因**；反向实测写盘拒绝、正常命令、文件不存在均为 `hints=null`；病态 stderr 去重并限 8 个候选，避免无界 `stat`。
+- **supervised 回落也归因**：嵌套沙箱下 `sandbox_apply` 失败会走 supervised 路径（agent 自身日常处境），原本只在 `runSeatbelt` 内归因等于失效；改为共用挂载点。此时 `denyExec` 传空——外层牢笼在拒绝而非本项目 profile 生效，不做 deny 清单归因。
+
+### fix(sandbox): 特权 deny 清单改为跨平台超集（不再按单机裁剪）
+
+- **问题**：原清单只覆盖单一拼写，而 SBPL `literal` 是**精确字符串匹配**，不归一化 `bin` vs `sbin` vs `usr/bin`——Debian 的 `su` 在 `/bin/su`、macOS 在 `/usr/bin/su`，漏一个拼写就是一扇门。
+- **改法**：按能力分组（su/sudo/sudoedit/pkexec/doas/run0/login/newgrp/chroot/dscl），每组列出各发行版全部拼写；`DEFAULT_PRIVILEGE_DENY_EXEC` 由分组表派生，分组表为唯一真相源。补现代提权面 `pkexec`/`doas`/`run0`/`sudoedit`。
+- **决策记录**：**死条目是特性**——指向不存在路径的 deny 行永不匹配、零成本；而缺拼写的代价是安全洞。**不做**按主机探测动态生成：profile 随主机变化会让同一配置在不同机器行为不同，调试成本高于无害噪音。注释与 `docs/process-isolation{,.zh}.md` 均写明「禁止按单机现状裁剪」。
+- **测试**：新增 4 例——分组全路径进 profile、关键拼写逐一在场、路径绝对且跨组唯一、宿主覆盖仍整体替换；补上 `arch/open-problems.md:482` 指出的齐套性缺口（原先只断言 `sudo` 一条，挡不住漏拼写）。
+- **验证**：全量 3280 过 / 2 败（`getProcessName`、`identifyPortOccupant`，同一沙箱固有限制：笼内 `ps` 不可用，与本提交无关；另有 1 例 `FileWatchSource` 并行负载下防抖抖动，单跑通过）；`build` / `lint` / `typecheck` / `arch/check-sync.sh` 全绿。
+
+---
+
 ## v0.93.1 (2026-10-25)
 
 ### fix(config): 安全组卡片选中高亮不可见 + `$schema` 元数据误报

@@ -94,6 +94,19 @@ export interface SandboxResult {
   usage: ResourceUsage;
   /** Honest isolation actually applied for this run */
   isolation: ProcessIsolationProfile;
+  /** Structured diagnostics; absent when the run explained itself */
+  diagnostics?: SandboxDiagnostics;
+}
+
+/**
+ * Structured, machine-readable diagnostics for a sandboxed run.
+ *
+ * Hints exist so a caller can self-correct on the next attempt instead of
+ * re-discovering a sandbox invariant (mirrors `file_search` diagnostics).
+ */
+export interface SandboxDiagnostics {
+  /** Actionable self-correction hints, one line each */
+  hints?: string[];
 }
 
 // ── Sandbox provider ──

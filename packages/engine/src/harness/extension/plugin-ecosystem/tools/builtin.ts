@@ -55,6 +55,7 @@ import {
  * - exitCode: 退出码
  * - durationMs: 执行耗时
  * - shell: 实际使用的 shell（kind/executable）
+ * - hints: 沙箱归因提示（仅当 jail 拒绝并已归因时出现，如 setuid exec）
  */
 export function createShellTool(options?: {
   summary?: import('../../../context/capabilities/summary/index.js').ToolSummarySupport;
@@ -218,6 +219,9 @@ export function createShellTool(options?: {
           terminated: sandboxResult.terminated,
           terminateReason: sandboxResult.terminateReason,
           isolation: sandboxResult.isolation,
+          ...(sandboxResult.diagnostics?.hints?.length
+            ? { hints: sandboxResult.diagnostics.hints }
+            : {}),
           shell: {
             kind: resolvedShell.kind,
             executable: resolvedShell.executable,
@@ -235,6 +239,9 @@ export function createShellTool(options?: {
           terminated: sandboxResult.terminated,
           terminateReason: sandboxResult.terminateReason,
           isolation: sandboxResult.isolation,
+          ...(sandboxResult.diagnostics?.hints?.length
+            ? { hints: sandboxResult.diagnostics.hints }
+            : {}),
           shell: {
             kind: resolvedShell.kind,
             executable: resolvedShell.executable,
