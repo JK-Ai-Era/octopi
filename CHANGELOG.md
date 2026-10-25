@@ -101,6 +101,23 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 | v0.2 | [changelog/v0.2.md](./changelog/v0.2.md) |
 | v0.1 | [changelog/v0.1.md](./changelog/v0.1.md) |
 
+## v0.93.8 (2026-10-26)
+
+### fix(core): 未知工具错误带 did-you-mean 建议，纠正模型调用不存在工具的自我强化
+
+- **内容**：新增 Layer 0 纯函数 `tool-name-suggestion`（零依赖）；`prepareToolCall` 的未知工具分支改为 `Tool "x" not found. Did you mean "y"?`。判定四档：归一化全等 / 段序颠倒 / 段级后缀（`edit`→`file_edit`）/ 段级前缀（`ask`→`ask_user`）/ 编辑距离 ≤40%；前两档确定唯一目标即短路，其余多候选如实列出（`edit` 同时是 `file_edit` 与 `package_edit` 的尾段，猜死反而会引错），无可靠候选时保持原文案。
+- **背景（实测）**：95 个 session 中模型真实调用不存在的 `edit` 33 次（应为 `file_edit`），另有 8 次 `file_file_edit`；同一条 assistant 消息里可同时出现 `file_edit` 与 `edit`，说明意图正确、名字错误。错名被写进 transcript 后，wire dump 显示模型逐轮看着自己的错名继续模仿，一次幻觉滚成 30 次。
+- **决策**：纠正面收敛在 loop（候选集即模型实际可见的 `context.tools`）；`ToolBus.execute` 的同类改动经评审判定无生产调用者、且拿不到 ToolPolicy 过滤结果（会把无权调用的名字写进回执），**本次裁掉**，等出现真实调用方再做。
+- **验证**：新增 `tests/core/tool-name-suggestion.test.ts`（13 用例：简写/重复前缀/拼写错/段序颠倒/归一化全等不带噪声/无关名不给建议）、`tests/harness/constitution-tool-names.test.ts`（6 用例）；`tests/loop-p0-contracts.test.ts` 补 2 条端到端回执断言。相关三套 37 过；loop + context 套件 119 过；core/engine typecheck、eslint、`arch/check-sync.sh` 全绿。
+- **已知边界（如实）**：`suggestToolNames` 只纠正「名字」层面的错法，无法判断模型是否本意想调另一个工具；候选集较大且多个候选同分时（如 `read`）只列前两条，排序按同分短名优先，属启发式而非语义匹配。
+
+### fix(engine): 宪法 §E 工具命名如实化——点明 file_edit、去掉不存在的简写名
+
+- **内容**：`default-agents.md` §E 新增「按工具列表中的精确名调用」规则，点名 `file_read` / `file_write` / `file_edit` / `file_delete`，声明内置集没有 `edit` / `read` / `write`；`the ask tool` → `ask_user`，节标题与正文 `http` → `http_request`，检索表与 knowledge 段的 `file_*` → `file_read`，file 家族清单补全 `file_rmdir`；并区分「工具名不存在」与「内容找不到」两类 not found（后者应重读文件，而不是换工具——这是此前 `old_text not found` 后误退 shell 的根因之一）。
+- **背景**：宪法 §E 自述「只写决策规则、参数格式在工具描述里」，但 `file_edit` 全篇一次未被点名，模型只能靠先验把意图映射到工具名——这正是 `edit` 得以冒出的土壤；`ask` / `http` 是同病的潜伏形态（实测尚未发作：0 次）。
+- **验证**：`tests/harness/constitution-tool-names.test.ts` 钉住上述措辞与清单完整性，防止再退回简写。
+
+---
 ## v0.93.7 (2026-10-25)
 
 ### feat(engine): 白名单提权 —— 独立 privileged 通道 `priv_exec`（ops P3）

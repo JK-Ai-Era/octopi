@@ -17,6 +17,9 @@ export { callModel } from './call-model.js';
 // ── 错误分类 ──
 export { classifyError } from './error-classifier.js';
 
+// ── 未知工具名的近似建议 ──
+export { formatUnknownToolError, suggestToolNames } from './tool-name-suggestion.js';
+
 // ── 类型 ──
 export type {
   AgentContext,

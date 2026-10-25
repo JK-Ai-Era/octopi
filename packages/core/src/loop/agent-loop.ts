@@ -28,6 +28,7 @@ import type {
 import type { ToolResult as CoreToolResult } from '../core/types.js';
 import { callModel } from './call-model.js';
 import { classifyError } from './error-classifier.js';
+import { formatUnknownToolError, suggestToolNames } from './tool-name-suggestion.js';
 
 /** 模型调用默认空闲超时（chunk 间最大静默，含首 token 等待），毫秒 */
 export const DEFAULT_MODEL_CALL_IDLE_TIMEOUT_MS = 300_000;
@@ -675,12 +676,18 @@ async function prepareToolCall(
 > {
   const tool = context.tools?.find((t) => t.name === toolCall.name);
   if (!tool) {
+    // 错名往往只差命名空间前缀（edit → file_edit）：给出可执行的正确名，
+    // 否则模型会逐轮模仿自己上一轮的错名（该错误已写进 transcript）。
+    const suggestions = suggestToolNames(
+      toolCall.name,
+      (context.tools ?? []).map((t) => t.name),
+    );
     return {
       kind: 'immediate',
       result: {
         toolCallId: toolCall.id,
         name: toolCall.name,
-        content: `Error: Tool "${toolCall.name}" not found`,
+        content: `Error: ${formatUnknownToolError(toolCall.name, suggestions)}`,
         isError: true,
       },
     };

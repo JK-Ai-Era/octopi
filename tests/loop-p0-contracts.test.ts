@@ -720,3 +720,69 @@ describe('并行 tool_end 增量 yield 契约', () => {
     expect(endCount).toBe(1);
   });
 });
+
+describe('未知工具错误回执', () => {
+  it('简写错名 edit 回执带出规范名 file_edit（切断自我模仿回路）', async () => {
+    const editTool: AgentTool = {
+      name: 'file_edit',
+      description: 'edit part of a file',
+      execute: async (id) => ({ toolCallId: id, name: 'file_edit', content: 'ok' }),
+    };
+
+    const provider = createProvider([
+      {
+        content: '',
+        toolCalls: [{ id: 'c1', name: 'edit', arguments: { path: 'a.ts' } }],
+        model: 'test',
+        finishReason: 'tool_calls',
+      },
+      { content: 'done', model: 'test', finishReason: 'stop' },
+    ]);
+
+    const context: AgentContext = {
+      systemPrompt: '',
+      messages: [userMsg('go')],
+      tools: [editTool],
+    };
+
+    const events = await collect(context, baseConfig(provider));
+    const toolEnd = events.find(e => e.type === 'tool_end') as
+      | { result: { content: string; isError?: boolean } }
+      | undefined;
+    expect(toolEnd).toBeDefined();
+    expect(toolEnd!.result.isError).toBe(true);
+    expect(toolEnd!.result.content).toBe(
+      'Error: Tool "edit" not found. Did you mean "file_edit"?',
+    );
+  });
+
+  it('无相近候选时保持历史文案', async () => {
+    const provider = createProvider([
+      {
+        content: '',
+        toolCalls: [{ id: 'c1', name: 'quantum_flux', arguments: {} }],
+        model: 'test',
+        finishReason: 'tool_calls',
+      },
+      { content: 'done', model: 'test', finishReason: 'stop' },
+    ]);
+
+    const context: AgentContext = {
+      systemPrompt: '',
+      messages: [userMsg('go')],
+      tools: [
+        {
+          name: 'file_edit',
+          description: 'edit part of a file',
+          execute: async (id) => ({ toolCallId: id, name: 'file_edit', content: 'ok' }),
+        },
+      ],
+    };
+
+    const events = await collect(context, baseConfig(provider));
+    const toolEnd = events.find(e => e.type === 'tool_end') as
+      | { result: { content: string } }
+      | undefined;
+    expect(toolEnd!.result.content).toBe('Error: Tool "quantum_flux" not found');
+  });
+});
