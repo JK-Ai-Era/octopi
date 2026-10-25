@@ -21,6 +21,8 @@ export interface ConfigAdminWriteResult {
   hash: string;
   /** 备份文件路径 */
   backupPath: string;
+  /** 运行时会忽略的未知键路径（告警不阻断，UI 提供手动清理） */
+  warnings: string[];
 }
 
 /** 并发编辑冲突（expectedHash 与盘上内容不一致） */

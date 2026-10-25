@@ -101,6 +101,20 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 | v0.2 | [changelog/v0.2.md](./changelog/v0.2.md) |
 | v0.1 | [changelog/v0.1.md](./changelog/v0.1.md) |
 
+## v0.93.1 (2026-10-25)
+
+### fix(config): 安全组卡片选中高亮不可见 + `$schema` 元数据误报
+
+- **WebUI**：`.set-preset-card` 的 border/background 简写（定义在 `.set-item-active` 之后）覆盖了选中态样式——安全组/预设卡片点击后 state 正确更新但**视觉上无任何反馈**，表现为「没法选中」。补 `.set-preset-card.set-item-active` 高优先级规则（2px 描边 + 高亮底色）。
+- **未知键检测**：`$schema`（JSON Schema 关联键，VSCode 等工具写入）为合法元数据，加入白名单永不报。
+
+### feat(config): 未知键策略拍板「告警 + 手动清理」（方案3）
+
+- **行为变化**：写路径未知键**不再阻断保存**——`ConfigApplyResult.warnings` 随响应上抛（哪些键运行时会被忽略），配置原样保留（不静默删除用户数据）。启动路径告警不变。
+- **手动清理**：新增 `GET /config/unknown-keys` / `POST /config/cleanup-unknown-keys`；Settings 顶部黄条列出无效键（如 `security.preset`）+「清理无效键」按钮（确认后删除，删除前自动备份，审计 `config.cleanup` 留痕）。
+- **理由**（大哥拍板）：无关脏键不应阻断无关编辑（fail 降级），但 typo/失效键必须**可见**（loud 保留）；删除是显式动作，系统不替用户决定数据去留。
+- **验证**：新增锚 3 例（写不阻断 + warnings 上抛 + 显式清理审计）；相关 37 用例绿；全量 suite 327 文件绿（余 2 个沙箱环境失败）；build + lint + `arch/check-sync.sh` 绿。
+
 ---
 
 ## v0.93.0 (2026-10-25)

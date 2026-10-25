@@ -113,6 +113,7 @@ describe('ConfigApplyService', () => {
       providerFactory: providerFactory as never,
       agentFiles: agentFiles as never,
       agentDefFactory: (rawEntry) => ({ id: String(rawEntry.id) }) as never,
+      unknownKeys: { detect: () => [], parsePath: (p) => [p] },
     });
   });
 
@@ -280,6 +281,7 @@ describe('ConfigApplyService — agent CRUD（P2）', () => {
       providerFactory: (async (name: string) => ({ name })) as never,
       agentFiles: agentFiles as never,
       agentDefFactory: (rawEntry) => ({ id: String(rawEntry.id) }) as never,
+      unknownKeys: { detect: () => [], parsePath: (p) => [p] },
     });
   });
 
@@ -414,6 +416,7 @@ describe('ConfigApplyService — review blocker 回归锚', () => {
         if (factoryThrows) throw new Error('resolve failed');
         return { id: String(rawEntry.id) } as never;
       },
+      unknownKeys: { detect: () => [], parsePath: (p) => [p] },
     });
   });
 
@@ -513,6 +516,10 @@ describe('ConfigApplyService — P3（护栏/回滚/审计/模板）', () => {
       auditSink: (entry) => {
         auditEntries.push(entry);
       },
+      unknownKeys: {
+        detect: (raw) => ((raw as Record<string, unknown>).notARealKey !== undefined ? ['notARealKey'] : []),
+        parsePath: (p) => [p],
+      },
       roleTemplates: {
         list: () => templateStore.presets as never,
         save: (preset) => {
@@ -601,6 +608,18 @@ describe('ConfigApplyService — P3（护栏/回滚/审计/模板）', () => {
     });
     const rendered = apply.renderRole('custom-role', { agentName: 'bot', addressToUser: '大哥' });
     expect(rendered.agentsMd).toBe('Hello bot, call user 大哥');
+  });
+
+  it('方案3 锚：cleanupUnknownKeys 显式清理（删除前列清单 + 审计）', async () => {
+    const before = service.read();
+    await service.write((raw) => {
+      (raw as Record<string, unknown>).notARealKey = 1;
+    }, before.hash);
+    const mid = service.read();
+    const result = await apply.cleanupUnknownKeys(mid.hash);
+    expect(result.applied).toBe('hot');
+    expect('notARealKey' in service.read().raw).toBe(false);
+    expect(auditEntries.some((e) => e.action === 'config.cleanup')).toBe(true);
   });
 
   it('#8 锚：模板 id 与内置角色冲突拒绝', async () => {

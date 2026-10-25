@@ -985,6 +985,7 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
     const { FileConfigService } = await import('../config-service.js');
     const { AgentFileAdmin } = await import('../agent-admin.js');
     const { createConfigAuditSink } = await import('../config-audit.js');
+    const { detectUnknownConfigKeys, parseConfigPath } = await import('../config-schema/unknown-keys.js');
     const { FileRoleTemplateStore } = await import('../role-template-store.js');
     const { resolveAgentDefinition, normalizeConfigRaw } = await import('../config.js');
     const configService = new FileConfigService({ configPath });
@@ -1000,6 +1001,10 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
       agentFiles: new AgentFileAdmin(),
       auditSink: createConfigAuditSink(),
       roleTemplates: new FileRoleTemplateStore(),
+      unknownKeys: {
+        detect: (raw) => detectUnknownConfigKeys(raw),
+        parsePath: (path) => parseConfigPath(path),
+      },
       // raw agents[] 条目 → AgentDefinition：与启动解析同规（normalizeConfigRaw 同管线）。
       // rawConfig 为写前预演的 would-be 全量 raw（fail-safe 预构造，见 config-apply）。
       agentDefFactory: (rawEntry, rawConfig) => {

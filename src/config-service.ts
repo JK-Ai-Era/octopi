@@ -18,7 +18,7 @@ import {
 } from '@octopi-agent/engine/config-admin/port.js';
 import { expandEnvPlaceholders, applyConfigMigrations } from './config.js';
 import { validateConfigOrThrow } from './config-schema.js';
-import { assertNoUnknownConfigKeys, detectUnknownConfigKeys } from './config-schema/unknown-keys.js';
+import { detectUnknownConfigKeys } from './config-schema/unknown-keys.js';
 import { getOctopiHome } from './init.js';
 
 /** FileConfigService 构造选项 */
@@ -134,7 +134,9 @@ export class FileConfigService implements ConfigAdminPort {
     const expanded = expandEnvPlaceholders(outText);
     const parsed = JSON.parse(expanded) as Record<string, unknown>;
     applyConfigMigrations(parsed);
-    assertNoUnknownConfigKeys(raw);
+    // 未知键（P3 拍板方案3）：**告警不阻断**——warnings 随结果上抛，UI 提供手动
+    // 「清理无效键」；阻断会误伤与该键无关的编辑。校验仍拦结构性错误。
+    const warnings = detectUnknownConfigKeys(raw);
     validateConfigOrThrow(parsed);
 
     const backupPath = `${this.configPath}.bak.${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -152,7 +154,7 @@ export class FileConfigService implements ConfigAdminPort {
     }
     renameSync(tmpPath, this.configPath);
 
-    return { hash: computeConfigHash(outText), backupPath };
+    return { hash: computeConfigHash(outText), backupPath, warnings };
   }
 }
 

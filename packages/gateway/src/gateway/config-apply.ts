@@ -48,6 +48,8 @@ export interface ConfigApplyResult {
   affectedAgents: string[];
   /** 备份文件路径 */
   backupPath: string;
+  /** 运行时会忽略的未知键（告警不阻断；UI 提供手动清理） */
+  warnings?: string[];
 }
 
 /** agent 文件态端口（daemon 注入 AgentFileAdmin；gateway 不做文件路径语义） */
@@ -109,6 +111,11 @@ export interface ConfigApplyServiceDeps {
   auditSink?: (entry: ConfigAuditEntry) => void;
   /** 自定义角色模板存取（缺省仅内置模板） */
   roleTemplates?: RoleTemplateStorePort;
+  /** 未知键检测（根包注入：依赖 compose schema；检测 + 路径解析） */
+  unknownKeys: {
+    detect(raw: unknown): string[];
+    parsePath(path: string): Array<string | number>;
+  };
 }
 
 /** agent 创建请求 */
@@ -231,7 +238,7 @@ export class ConfigApplyService {
       hashAfter: written.hash,
       backupPath: written.backupPath,
     });
-    return { hash: written.hash, applied: 'next-run', affectedAgents: affected, backupPath: written.backupPath };
+    return { hash: written.hash, applied: 'next-run', affectedAgents: affected, backupPath: written.backupPath, warnings: written.warnings };
   }
 
   /**
@@ -258,7 +265,7 @@ export class ConfigApplyService {
       hashAfter: written.hash,
       backupPath: written.backupPath,
     });
-    return { hash: written.hash, applied: 'next-run', affectedAgents: [], backupPath: written.backupPath };
+    return { hash: written.hash, applied: 'next-run', affectedAgents: [], backupPath: written.backupPath, warnings: written.warnings };
   }
 
   /**
@@ -286,7 +293,7 @@ export class ConfigApplyService {
       hashAfter: written.hash,
       backupPath: written.backupPath,
     });
-    return { hash: written.hash, applied: 'next-run', affectedAgents: [], backupPath: written.backupPath };
+    return { hash: written.hash, applied: 'next-run', affectedAgents: [], backupPath: written.backupPath, warnings: written.warnings };
   }
 
   /**
@@ -409,6 +416,7 @@ export class ConfigApplyService {
       applied: 'next-run',
       affectedAgents: [agentId],
       backupPath: written.backupPath,
+      warnings: written.warnings,
     };
   }
 
@@ -489,6 +497,7 @@ export class ConfigApplyService {
       applied: 'next-run',
       affectedAgents: [agentId],
       backupPath: written.backupPath,
+      warnings: written.warnings,
     };
   }
 
@@ -526,6 +535,7 @@ export class ConfigApplyService {
       applied: 'next-run',
       affectedAgents: [],
       backupPath: written.backupPath,
+      warnings: written.warnings,
     };
   }
 
@@ -671,6 +681,7 @@ export class ConfigApplyService {
       applied: l3Changed ? 'restart-required' : 'next-run',
       affectedAgents: agentDefs.map((d) => d.id),
       backupPath: written.backupPath,
+      warnings: written.warnings,
     };
   }
 
@@ -739,5 +750,45 @@ export class ConfigApplyService {
     const custom = this.deps.roleTemplates?.list() ?? [];
     const customIds = new Set(custom.map((p) => p.id));
     return [...custom, ...BUILTIN_AGENT_ROLE_PRESETS.filter((p) => !customIds.has(p.id))];
+  }
+
+  /**
+   * 当前配置的未知键列表（UI 黄条 + 手动清理入口；方案3）
+   *
+   * @returns 未知键路径 + 当前 hash
+   */
+  getUnknownKeys(): { keys: string[]; hash: string } {
+    const { raw, hash } = this.deps.configAdmin.read();
+    return { keys: this.deps.unknownKeys.detect(raw), hash };
+  }
+
+  /**
+   * 清理未知键（显式动作：删除前列出清单，审计留痕）
+   *
+   * @param expectedHash - 乐观锁
+   * @returns 热应用结果（warnings 清空——已清）
+   * @throws {@link ConfigConflictError} 并发冲突
+   */
+  async cleanupUnknownKeys(expectedHash: string): Promise<ConfigApplyResult> {
+    let removed: string[] = [];
+    const written = await this.deps.configAdmin.write((raw) => {
+      removed = this.deps.unknownKeys.detect(raw);
+      // 从后往前删（agents[i].key 的数组下标在删除中保持稳定）
+      for (const path of [...removed].reverse()) {
+        deleteJsonPath(raw, this.deps.unknownKeys.parsePath(path));
+      }
+    }, expectedHash);
+    this.audit('config.cleanup', `清理未知键（${removed.join(', ') || '无'}）`, {
+      hashBefore: expectedHash,
+      hashAfter: written.hash,
+      backupPath: written.backupPath,
+    });
+    return {
+      hash: written.hash,
+      applied: 'hot',
+      affectedAgents: [],
+      backupPath: written.backupPath,
+      warnings: [],
+    };
   }
 }

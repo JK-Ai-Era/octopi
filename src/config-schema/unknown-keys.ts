@@ -12,6 +12,9 @@ import { OctopiConfigSchema } from './index.js';
 /** 合法过时键（迁移消费，不算 typo；与 loadConfig 的 warn-only 迁移语义一致） */
 const LEGACY_KEYS = new Set(['budget', 'supervisor', 'distributedIntelligence']);
 
+/** 合法元数据键（JSON Schema 关联等，VSCode 等工具写入，运行时本就忽略但绝非 typo） */
+const METADATA_KEYS = new Set(['$schema']);
+
 /**
  * 递归对比 raw 与 parsed 的键树，收集被 strip 的路径
  *
@@ -59,12 +62,12 @@ export function detectUnknownConfigKeys(raw: unknown): string[] {
   collectStripped(raw, parsed.data, '', unknown);
   return unknown.filter((path) => {
     const topLevel = path.split('.')[0]!.split('[')[0]!;
-    return !LEGACY_KEYS.has(topLevel);
+    return !LEGACY_KEYS.has(topLevel) && !METADATA_KEYS.has(topLevel);
   });
 }
 
 /**
- * 断言无未知配置键（写路径 fail-loud）
+ * 断言无未知配置键（显式校验场景用；配置写回路径已降级为告警，见方案3）
  *
  * @param raw - raw 配置对象
  * @throws 存在被丢弃的键时抛错（列出全部路径）
@@ -76,4 +79,25 @@ export function assertNoUnknownConfigKeys(raw: unknown): void {
       `unknown config key(s), would be silently discarded: ${unknown.join(', ')} — fix the typo or remove the key`,
     );
   }
+}
+
+/**
+ * 配置路径字符串 → 路径段数组（deleteJsonPath 用）
+ *
+ * 形如 `security.preset`、`agents[0].effctPolicy`、`models.providers.openai.x`。
+ *
+ * @param path - detectUnknownConfigKeys 输出的路径
+ * @returns 路径段（对象键字符串 / 数组下标数字）
+ */
+export function parseConfigPath(path: string): Array<string | number> {
+  const segments: Array<string | number> = [];
+  for (const part of path.split('.')) {
+    const m = /^([^[\]]*)((?:\[\d+\])*)$/.exec(part);
+    if (!m) throw new Error(`invalid config path: ${path}`);
+    if (m[1]) segments.push(m[1]);
+    for (const idx of m[2].matchAll(/\[(\d+)\]/g)) {
+      segments.push(Number(idx[1]));
+    }
+  }
+  return segments;
 }

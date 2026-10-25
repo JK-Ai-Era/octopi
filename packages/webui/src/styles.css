@@ -1375,7 +1375,13 @@ button.ctx-band {
   cursor: wait;
 }
 
-/* ── Settings / 模型配置面板（arch/config-hot-reload.md） ── */
+/* 卡片选中态必须胜过 .set-preset-card 的 border/background 简写（否则点击无视觉反馈） */
+.set-preset-card.set-item-active {
+  border-color: var(--accent, #4c7bd9);
+  border-width: 2px;
+  background: rgba(76, 123, 217, 0.14);
+}
+
 .set-panel {
   display: flex;
   flex-direction: column;

@@ -167,4 +167,28 @@ describe('unknown config keys（防 Zod strip 吞 typo）', () => {
     expect(detectUnknownConfigKeys(legacy)).toEqual([]);
     expect(() => assertNoUnknownConfigKeys(legacy)).not.toThrow();
   });
+
+  it('方案3 锚：写路径未知键不阻断——保存成功且 warnings 上抛', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'octopi-unknown-warn-'));
+    try {
+      const configPath = join(dir, 'octopi.json');
+      writeFileSync(configPath, `${JSON.stringify(minimalConfig(), null, 2)}\n`, 'utf-8');
+      const svc = new FileConfigService({ configPath });
+      const before = svc.read();
+      const result = await svc.write((raw) => {
+        (raw as Record<string, unknown>).notARealKey = 1;
+      }, before.hash);
+      // 保存成功（不抛），warnings 提示该键运行时会被忽略
+      expect(result.warnings).toContain('notARealKey');
+      // 盘上保留该键（不静默删除——用户数据，等显式清理）
+      expect('notARealKey' in svc.read().raw).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('$schema 等元数据键不报（误报修复锚）', () => {
+    const withMeta = { ...minimalConfig(), $schema: './octopi.schema.json' };
+    expect(detectUnknownConfigKeys(withMeta)).toEqual([]);
+  });
 });

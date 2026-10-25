@@ -807,6 +807,8 @@ export interface ConfigApplyResultDto {
   applied: 'hot' | 'next-run' | 'restart-required';
   affectedAgents: string[];
   backupPath: string;
+  /** 运行时会忽略的未知键（告警不阻断；UI 提供手动清理） */
+  warnings?: string[];
 }
 
 /** 模型清单发现/连通测试结果 */
@@ -2345,6 +2347,23 @@ export class OctopiClient {
   async getAgentRolePresets(): Promise<AgentRolePresetDto[]> {
     const res = await this.getJson<{ ok: boolean; data: AgentRolePresetDto[] }>(
       '/config/presets/agent-roles',
+    );
+    return res.data;
+  }
+
+  /** 未知键列表（告警不阻断；UI 黄条 + 手动清理） */
+  async getConfigUnknownKeys(): Promise<{ keys: string[]; hash: string }> {
+    const res = await this.getJson<{ ok: boolean; data: { keys: string[]; hash: string } }>(
+      '/config/unknown-keys',
+    );
+    return res.data;
+  }
+
+  /** 清理未知键（显式动作，删除前列出清单） */
+  async cleanupConfigUnknownKeys(hash: string): Promise<ConfigApplyResultDto> {
+    const res = await this.postJson<{ ok: boolean; data: ConfigApplyResultDto }>(
+      '/config/cleanup-unknown-keys',
+      { hash },
     );
     return res.data;
   }

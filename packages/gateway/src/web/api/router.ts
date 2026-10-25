@@ -1522,6 +1522,17 @@ export class WebApiRouter {
         return this.json(res, 200, { ok: true, data: rendered });
       }
 
+      // ── 未知键告警 + 手动清理（方案3） ──
+      if (relativePath === '/config/unknown-keys' && method === 'GET') {
+        return this.json(res, 200, { ok: true, data: apply.getUnknownKeys() });
+      }
+
+      if (relativePath === '/config/cleanup-unknown-keys' && method === 'POST') {
+        const body = await this.readBody(req);
+        const result = await apply.cleanupUnknownKeys(typeof body?.hash === 'string' ? body.hash : '');
+        return this.json(res, 200, { ok: true, data: result });
+      }
+
       // ── 备份 / 回滚（P3） ──
       if (relativePath === '/config/backups' && method === 'GET') {
         return this.json(res, 200, { ok: true, data: apply.listBackups() });
