@@ -43,7 +43,7 @@ describe('extension tools', () => {
       askUser: async () => 'ok',
     });
 
-    expect(builtin.length).toBe(24);
+    expect(builtin.length).toBe(25);
     expect(extensions.map((t) => t.definition.name)).toEqual(expect.arrayContaining([
       'memory_store',
       'memory_search',
@@ -58,9 +58,9 @@ describe('extension tools', () => {
 
   it('createToolSet with no config should return only builtin', () => {
     const { builtin, extensions, all } = createToolSet();
-    expect(builtin.length).toBe(24);
+    expect(builtin.length).toBe(25);
     expect(extensions.length).toBe(0);
-    expect(all.length).toBe(24);
+    expect(all.length).toBe(25);
   });
 
   it('memory tools should work with injected store', async () => {

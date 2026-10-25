@@ -198,7 +198,7 @@ export async function identifyPortOccupant(port: number): Promise<PortOccupant> 
       ...base,
       state: 'foreign',
       pid,
-      processName: getProcessName(pid) ?? undefined,
+      processName: (await getProcessName(pid)) ?? undefined,
     };
   }
 

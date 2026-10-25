@@ -101,6 +101,24 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 | v0.2 | [changelog/v0.2.md](./changelog/v0.2.md) |
 | v0.1 | [changelog/v0.1.md](./changelog/v0.1.md) |
 
+## v0.93.4 (2026-10-25)
+
+### feat(engine): 只读进程诊断 —— `process_list` 工具 + 引擎侧 process-info（ops P1）
+
+- **内容**：新增 `execution-environment/process-info.ts`（linux `/proc`、darwin/BSD `ps` 整表、win32 `Get-CimInstance` 三源枚举 + 祖先链行走 + 映像解析）与只读工具 `process_list`（`pid` 明细+祖先链+映像 / `pids`+`nameContains` 过滤列表，`matched`/`total`/`truncated` 记账）。零权限放松：不杀进程、不改状态。
+- **决策（能力标签）**：`process_list` 标 **`host-read`**（新增 `ToolCapability`）并进 `REDUCED_DENIED_CAPABILITIES`——引擎侧进程表/全量 argv 属宿主内省面（argv 是凭证泄漏面），untrusted 降级（reduced）会话剥掉，遵循「降能力不降墙」。
+- **决策（数据诚实）**：`cpuTimeMs` 只给累计 CPU 时间（占用率需采样语义，不混字段）；ps/CIM 表丢行计数入 `skipped` 并置 `complete:false`（禁止静默不全）；darwin `ps` 无 `thcount` 关键字（退列是常态路径）经探测缓存处理，`threads=null` 如实上报；`ps` 加 `-ww` + 最小 env（免疫 COLUMNS 截断 / PS_PERSONALITY 漂移）。
+- **实现要点**：spawn 一律异步 `execFile`（daemon 单线程，同步 spawn 挂起会冻结 gateway 与全部并发 session）；spawn 同步失败（牢笼拒 exec setuid 的 EPERM）吞成诚实降级 `{ ok:false }`，绝不把「看进程」的失败变成对调用方的拒绝。
+
+### fix(cli): `getAncestorPidSet` / `getProcessName` 收敛到引擎侧单一真相源
+
+- **问题**：`getAncestorPidSet` 逐级 `ps -o ppid=` 在牢笼内 exec 被拒，退化成「仅 self + ppid」（killProcess 祖先护栏只认一层，v0.93.3 记录的同源缺陷）；lsof 映像解析在 CLI 与工具侧存在双份。
+- **修法**：祖先链改走引擎侧 `buildAncestorChain` 行走链（/proc 或 ps 整表 + 内存行走），`getProcessName` 委托 `resolveProcessImage`；self+ppid 种子保留为行为下限。
+- **对外可见行为变化**：Linux 端口占用提示的进程名由 `ps comm`（短名）变为 `/proc/<pid>/exe`（全路径），与 macOS 对称（win32 不变）；`isSelfOrAncestorPid` / `getProcessName` 转为 async（仅 CLI 内部调用面）。
+- **验证**：全量 **3309 过 / 0 败 / 6 跳过**（新增 `tests/process-info.test.ts` 21 用例：解析器纯函数夹具（comm 含空格/括号、time 各形态、丢行记账）+ 行走链边界 + 过滤/记账 + 工具契约 + 牢笼降级双分支）；`build` / `lint` / `arch/check-sync.sh` 全绿。**已知边界**：「笼外宿主进程可见」由引擎侧读取保证，牢笼内测试只走降级分支，需真机复核一次；macOS `ps` 无 thcount，darwin `threads` 恒为 null（待 libproc 增强）。
+
+---
+
 ## v0.93.3 (2026-10-25)
 
 ### fix(cli): `getProcessName` 在 macOS 改走 lsof，牢笼内不再静默失效

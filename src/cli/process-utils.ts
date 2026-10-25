@@ -8,6 +8,10 @@
 import { execFileSync, spawn, type SpawnOptions } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import {
+  getAncestorPidChain,
+  resolveProcessImage,
+} from '@octopi-agent/engine/harness/extension/execution-environment/process-info.js';
 
 /** Promise 化延时，替代 Unix `sleep` 命令 */
 export function delay(ms: number): Promise<void> {
@@ -27,47 +31,21 @@ export function isProcessAlive(pid: number): boolean {
   }
 }
 
-/** 进程祖先链缓存（单次 CLI 调用内足够） */
-let ancestorChainCache: Set<number> | null = null;
+/** 进程祖先链缓存（单次 CLI 调用内足够；缓存 Promise 兼作单飞） */
+let ancestorChainCache: Promise<Set<number>> | null = null;
 
-function getAncestorPidSet(): Set<number> {
+function getAncestorPidSet(): Promise<Set<number>> {
   if (ancestorChainCache) return ancestorChainCache;
-  const chain = new Set<number>([process.pid]);
-  if (typeof process.ppid === 'number' && process.ppid > 0) chain.add(process.ppid);
-  try {
-    if (process.platform === 'win32') {
-      const script =
-        `$p=${process.pid}; while ($p -gt 0) { Write-Output $p; $c=Get-CimInstance Win32_Process -Filter "ProcessId=$p"; if (-not $c) { break }; $p=$c.ParentProcessId }`;
-      const out = execFileSync(
-        'powershell.exe',
-        ['-NoProfile', '-Command', script],
-        { encoding: 'utf-8', timeout: 4000, stdio: ['ignore', 'pipe', 'ignore'] },
-      );
-      for (const line of out.split(/\r?\n/)) {
-        const n = parseInt(line.trim(), 10);
-        if (Number.isInteger(n) && n > 0) chain.add(n);
-      }
-    } else {
-      let current = process.ppid;
-      const seen = new Set<number>();
-      while (typeof current === 'number' && current > 0 && !seen.has(current)) {
-        chain.add(current);
-        seen.add(current);
-        const parent = execFileSync('ps', ['-o', 'ppid=', '-p', String(current)], {
-          encoding: 'utf-8',
-          timeout: 2000,
-          stdio: ['ignore', 'pipe', 'ignore'],
-        }).trim();
-        const n = parseInt(parent, 10);
-        if (!Number.isInteger(n) || n <= 0 || n === current) break;
-        current = n;
-      }
-    }
-  } catch {
-    // 探测失败时至少保留 self + ppid
-  }
-  ancestorChainCache = chain;
-  return chain;
+  ancestorChainCache = (async () => {
+    const chain = new Set<number>([process.pid]);
+    if (typeof process.ppid === 'number' && process.ppid > 0) chain.add(process.ppid);
+    // v0.93.4：祖先链走引擎侧 process-info（/proc 或 ps 整表 + 内存行走链），
+    // 替换原先逐级 `ps -o ppid=`（牢笼内 exec 被拒，退化成「仅 self + ppid」）。
+    // 上面两行种子保留为行为下限：来源整体不可读时仍保住 self + ppid。
+    for (const pid of (await getAncestorPidChain(process.pid)).chain) chain.add(pid);
+    return chain;
+  })();
+  return ancestorChainCache;
 }
 
 /**
@@ -75,10 +53,13 @@ function getAncestorPidSet(): Set<number> {
  *
  * Windows `taskkill /T` 杀的是整棵进程树；若误把 CLI 的父进程（工具 shell）
  * 当成目标，会话会被连带干掉。杀进程前必须用本函数拦截。
+ *
+ * @param pid - 目标 PID
+ * @returns true = 拒杀（自身/祖先/非法 pid）
  */
-export function isSelfOrAncestorPid(pid: number): boolean {
+export async function isSelfOrAncestorPid(pid: number): Promise<boolean> {
   if (!Number.isInteger(pid) || pid <= 0) return true;
-  return getAncestorPidSet().has(pid);
+  return (await getAncestorPidSet()).has(pid);
 }
 
 function findPidOnPortUnix(port: number): number | null {
@@ -134,89 +115,18 @@ export function findPidOnPort(port: number): number | null {
 }
 
 /**
- * Pick the executable image out of `lsof -a -d txt -Fn` output.
+ * 尽力获取进程可执行映像（Windows: tasklist 名；macOS: lsof → ps；
+ * Linux: /proc/<pid>/exe → ps）。失败返回 null
  *
- * lsof prints one `n<name>` line per matching descriptor, in descriptor order.
- * The first `txt` entry is the executable itself; every later one is a
- * dyld/mmap'd library (`/usr/lib/dyld`, framework dylibs). Taking "the first n
- * line" is therefore the executable, not "any n line".
+ * v0.93.4：实现收敛到引擎侧 `resolveProcessImage`（ops P1 单一真相源，
+ * 同时供 process_list 工具使用）。**Linux 侧有意变更**：由 `ps comm`（短名）
+ * 变为 `/proc/<pid>/exe`（全路径），与 macOS 行为对称；调用方仅用于展示文案。
  *
- * @param output - raw stdout of `lsof -p <pid> -a -d txt -Fn`
- * @returns absolute executable path, or null when the output carries none
+ * @param pid - 目标 PID
+ * @returns 映像路径（拿不到路径的平台退化为进程名），不可解析时 null
  */
-export function firstExecutableFromLsof(output: string): string | null {
-  for (const line of output.split('\n')) {
-    if (!line.startsWith('n')) continue;
-    const path = line.slice(1).trim();
-    if (path) return path;
-  }
-  return null;
-}
-
-/**
- * Read the executable path of a pid via `lsof` instead of `ps`.
- *
- * macOS ships `ps` setuid, and Seatbelt refuses to exec setuid binaries at all
- * (see `docs/process-isolation.md`), so `ps` is unusable from inside the jail —
- * including for the caller's own pid. `lsof` is not setuid and exposes the same
- * fact: the first `txt` descriptor of a process is its executable image.
- *
- * @param pid - target pid
- * @returns absolute executable path, or null when unavailable
- */
-function getProcessNameDarwin(pid: number): string | null {
-  try {
-    const out = execFileSync('/usr/sbin/lsof', ['-p', String(pid), '-a', '-d', 'txt', '-Fn'], {
-      encoding: 'utf-8',
-      timeout: 5000,
-      stdio: 'pipe',
-    });
-    return firstExecutableFromLsof(out);
-  } catch {
-    // lsof exits non-zero for a vanished pid or a process owned by another
-    // user; null means "name unavailable", which never blocks the caller.
-    return null;
-  }
-}
-
-/**
- * 尽力获取进程可执行名（Windows: tasklist；macOS: lsof；其他 Unix: ps）。失败返回 null
- */
-export function getProcessName(pid: number): string | null {
-  if (!Number.isInteger(pid) || pid <= 0) return null;
-  if (process.platform === 'win32') {
-    try {
-      const out = execFileSync('tasklist', ['/FI', `PID eq ${pid}`, '/FO', 'CSV', '/NH'], {
-        encoding: 'utf-8',
-        timeout: 5000,
-        stdio: 'pipe',
-      }).trim();
-      if (!out || out.startsWith('INFO')) return null;
-      const name = out.split(',')[0]?.replace(/^"|"$/g, '').trim();
-      return name || null;
-    } catch {
-      // 进程可能已退出或无权限查询：名字是锦上添花，缺失不阻塞主流程
-      return null;
-    }
-  }
-  // darwin: lsof first — it works both inside and outside the jail, and the
-  // jailed case is the one that used to fail silently. ps stays as a fallback
-  // for hosts where lsof is stripped.
-  if (process.platform === 'darwin') {
-    const viaLsof = getProcessNameDarwin(pid);
-    if (viaLsof) return viaLsof;
-  }
-  try {
-    const out = execFileSync('ps', ['-p', String(pid), '-o', 'comm='], {
-      encoding: 'utf-8',
-      timeout: 5000,
-      stdio: 'pipe',
-    }).trim();
-    return out || null;
-  } catch {
-    // 进程可能已退出或无权限查询：名字是锦上添花，缺失不阻塞主流程
-    return null;
-  }
+export function getProcessName(pid: number): Promise<string | null> {
+  return resolveProcessImage(pid);
 }
 
 /**
@@ -233,7 +143,7 @@ export async function killProcess(
   const timeoutMs = options?.timeoutMs ?? 3000;
   if (!Number.isInteger(pid) || pid <= 0) return true;
   // 绝不杀自己/祖先：taskkill /T 会把 agent shell 一并带走
-  if (isSelfOrAncestorPid(pid)) {
+  if (await isSelfOrAncestorPid(pid)) {
     console.warn(`⚠️  Refusing to kill PID ${pid} (self/ancestor of current CLI process)`);
     return false;
   }

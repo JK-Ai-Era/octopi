@@ -64,6 +64,8 @@ export type ToolCapability =
   | 'dynamic-code'
   | 'fs-read'
   | 'fs-write'
+  /** Local host introspection beyond the workspace (process table, …) */
+  | 'host-read'
   | 'memory'
   /** Local VCS porcelain (fixed argv allowlist; no arbitrary shell) */
   | 'vcs'

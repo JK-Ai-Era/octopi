@@ -32,10 +32,13 @@ describe('dedicated tool capabilities', () => {
     expect(isToolAllowedOnSurface('project_run', 'reduced')).toBe(false);
     expect(isToolAllowedOnSurface('package_install', 'reduced')).toBe(false);
     expect(isToolAllowedOnSurface('shell', 'reduced')).toBe(false);
+    // host-read（进程表/argv）是宿主内省面：untrusted 降级会话不得拿到
+    expect(isToolAllowedOnSurface('process_list', 'reduced')).toBe(false);
   });
 
   it('runner is on the reduced denylist; vcs is not', () => {
     expect(REDUCED_DENIED_CAPABILITIES).toContain('runner');
+    expect(REDUCED_DENIED_CAPABILITIES).toContain('host-read');
     expect(REDUCED_DENIED_CAPABILITIES).not.toContain('vcs');
     expect(deniesReducedSurface(['vcs'])).toBe(false);
     expect(deniesReducedSurface(['runner'])).toBe(true);
@@ -48,6 +51,7 @@ describe('dedicated tool capabilities', () => {
     expect(CAPS_MAP.project_run).toEqual(['runner']);
     expect(CAPS_MAP.package_install).toEqual(['egress', 'runner']);
     expect(CAPS_MAP.package_edit).toEqual(['fs-write', 'fs-read']);
+    expect(CAPS_MAP.process_list).toEqual(['host-read']);
     expect(resolveToolCapabilities('git_log')).toEqual(['vcs', 'fs-read']);
   });
 

@@ -8,6 +8,7 @@
  * - file_search: 跨文件内容搜索
  * - http_request: HTTP 请求
  * - env_info: 运行环境信息
+ * - process_list: 只读进程诊断（进程表/资源/祖先链）
  *
  * 所有有状态工具（memory、task、ask_user）通过 extension-tools 按需注入。
  *
@@ -29,6 +30,7 @@ import { createGitTools } from './git-tools.js';
 import { createPackageTools } from './package-tools.js';
 import { createHttpRequestTool } from './http.js';
 import { createEnvInfoTool } from './env-info.js';
+import { createProcessListTool } from './process-tools.js';
 import { createDocumentProbeTool, createDocumentReadTool } from './document-tools.js';
 import {
   isUnderSessionUndoRoot,
@@ -72,7 +74,7 @@ export function createShellTool(options?: {
     definition: {
       name: 'shell',
       capabilities: ['exec'],
-      description: `LAST RESORT shell. Prefer a dedicated tool when one covers the job (file_read/file_list/file_write/file_edit/file_delete/file_mkdir/file_rename/file_copy/file_stat/file_rmdir/file_search/env_info/git_status/git_diff/git_log/git_show/git_commit/git_branch/git_restore/package_edit/project_run/package_install and any task-specific tools). Use shell only when: no dedicated tool covers the operation, the dedicated tool is unavailable, or it still fails after a correct retry (wrong path/args → fix and retry the tool first). Never use shell instead of a working dedicated tool. Detected shell: ${shell.label}. ${syntaxHint}`,
+      description: `LAST RESORT shell. Prefer a dedicated tool when one covers the job (file_read/file_list/file_write/file_edit/file_delete/file_mkdir/file_rename/file_copy/file_stat/file_rmdir/file_search/env_info/process_list/git_status/git_diff/git_log/git_show/git_commit/git_branch/git_restore/package_edit/project_run/package_install and any task-specific tools). Use shell only when: no dedicated tool covers the operation, the dedicated tool is unavailable, or it still fails after a correct retry (wrong path/args → fix and retry the tool first). Never use shell instead of a working dedicated tool. Detected shell: ${shell.label}. ${syntaxHint}`,
       parameters: {
         command: {
           type: 'string',
@@ -866,6 +868,7 @@ export function getBuiltinTools(options?: {
       requireBindings: options?.requireCredentialBindings,
     }),
     createEnvInfoTool(),
+    createProcessListTool(),
     createShellTool({ summary: options?.summary }),
   ];
 }

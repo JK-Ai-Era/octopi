@@ -28,6 +28,26 @@ export type {
   EnvHygiene,
   L4ProcessAssessment,
 } from './process-isolation.js';
+export {
+  listProcesses,
+  getAncestorPidChain,
+  resolveProcessImage,
+  buildAncestorChain,
+  selectProcesses,
+  parsePsProcessTable,
+  parseCpuTimeToMs,
+  parseProcPidEntry,
+  parsePowerShellProcessTable,
+  firstExecutableFromLsof,
+} from './process-info.js';
+export type {
+  ProcessInfoEntry,
+  ProcessListResult,
+  ListProcessesOptions,
+  SelectedProcesses,
+  AncestorChain,
+  TableParseResult,
+} from './process-info.js';
 export { FileWorkspace } from './workspace.js';
 export type { FileWorkspaceConfig } from './workspace.js';
 export {

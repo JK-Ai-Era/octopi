@@ -10,7 +10,6 @@ import { createServer } from 'node:net';
 import {
   delay,
   findPidOnPort,
-  firstExecutableFromLsof,
   getProcessName,
   isProcessAlive,
   isSelfOrAncestorPid,
@@ -32,12 +31,16 @@ describe('process-utils', () => {
     expect(isProcessAlive(-1)).toBe(false);
   });
 
-  test('isSelfOrAncestorPid blocks self and allows unrelated pid', () => {
-    expect(isSelfOrAncestorPid(process.pid)).toBe(true);
-    expect(isSelfOrAncestorPid(0)).toBe(true);
-    expect(isSelfOrAncestorPid(-5)).toBe(true);
+  test('isSelfOrAncestorPid blocks self and allows unrelated pid', async () => {
+    expect(await isSelfOrAncestorPid(process.pid)).toBe(true);
+    expect(await isSelfOrAncestorPid(0)).toBe(true);
+    expect(await isSelfOrAncestorPid(-5)).toBe(true);
+    // 父进程必须在祖先集内（v0.93.4 祖先链修复：引擎侧行走链 + self/ppid 种子）
+    if (typeof process.ppid === 'number' && process.ppid > 0) {
+      expect(await isSelfOrAncestorPid(process.ppid)).toBe(true);
+    }
     // 不存在的高位 pid 不应被当成祖先
-    expect(isSelfOrAncestorPid(2147483646)).toBe(false);
+    expect(await isSelfOrAncestorPid(2147483646)).toBe(false);
   });
 
   test('killProcess refuses self', async () => {
@@ -65,32 +68,21 @@ describe('process-utils', () => {
     expect(() => findPidOnPort(port)).not.toThrow();
   });
 
-  test('getProcessName returns executable name for own pid', () => {
-    const name = getProcessName(process.pid);
+  test('getProcessName returns executable name for own pid', async () => {
+    const name = await getProcessName(process.pid);
     expect(name).toBeTruthy();
     expect(name!.toLowerCase()).toContain('node');
-    expect(getProcessName(-1)).toBeNull();
+    expect(await getProcessName(-1)).toBeNull();
   });
 
   // macOS ships ps setuid and Seatbelt refuses to exec setuid binaries, so the
   // name lookup must not depend on ps — otherwise it silently degrades to null
   // inside the jail (and inside the agent runtime, which is the same jail).
-  test('getProcessName resolves the caller inside a setuid-exec jail', () => {
-    const name = getProcessName(process.pid);
+  test('getProcessName resolves the caller inside a setuid-exec jail', async () => {
+    const name = await getProcessName(process.pid);
     expect(name).not.toBeNull();
     // lsof reports the executable image, i.e. an absolute path on darwin.
     if (process.platform === 'darwin') expect(name!.startsWith('/')).toBe(true);
-  });
-
-  test('firstExecutableFromLsof takes the image, not dyld', () => {
-    const output = ['p79654', 'ftxt', 'n/bin/bash', 'ftxt', 'n/usr/lib/dyld'].join('\n');
-    expect(firstExecutableFromLsof(output)).toBe('/bin/bash');
-  });
-
-  test('firstExecutableFromLsof returns null when nothing matched', () => {
-    expect(firstExecutableFromLsof('')).toBeNull();
-    expect(firstExecutableFromLsof('p123\n')).toBeNull();
-    expect(firstExecutableFromLsof('p123\nftxt\nn\n')).toBeNull();
   });
 
   test('resolveViteLaunch prefers vite.js entry', () => {

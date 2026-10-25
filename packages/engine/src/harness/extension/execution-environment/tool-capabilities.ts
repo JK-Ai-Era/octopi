@@ -20,6 +20,8 @@ export const REDUCED_DENIED_CAPABILITIES = [
   'dynamic-code',
   /** project_run executes workspace-defined scripts (code execution) */
   'runner',
+  /** host introspection (process table/argv) — engine-side data bypasses the jail's "cannot see host processes" boundary */
+  'host-read',
 ] as const satisfies readonly ToolCapability[];
 
 /**
@@ -54,6 +56,8 @@ export const BUILTIN_TOOL_CAPABILITIES: Record<string, ToolCapability[]> = {
   document_read: ['fs-read'],
   document_probe: ['fs-read'],
   env_info: ['fs-read'],
+  // 只读进程诊断（ops P1）：宿主内省（进程表/argv），reduced 面剥掉（host-read）
+  process_list: ['host-read'],
   http_request: ['egress'],
   web_search: ['egress'],
   ask_user: [],

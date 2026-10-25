@@ -19,6 +19,7 @@ export { createFileEditTool } from './file-edit.js';
 export { createFileSearchTool } from './file-search.js';
 export { createHttpRequestTool } from './http.js';
 export { createEnvInfoTool } from './env-info.js';
+export { createProcessListTool } from './process-tools.js';
 export {
   commandExists,
   defaultPathEnv,
