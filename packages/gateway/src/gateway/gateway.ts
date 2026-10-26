@@ -125,6 +125,8 @@ export interface PendingApprovalView {
   request: PendingApprovalRequest;
   status: 'pending' | 'approved' | 'rejected';
   createdAt: number;
+  /** 引擎确认窗截止时刻（与 ops 审计 confirm_timeout 同一时刻口径；迟到点击记 rejected/late，不补记 approved） */
+  deadlineAt?: number;
   updatedAt?: number;
   decidedAt?: number;
   decisionReason?: string;
@@ -3976,13 +3978,18 @@ export class Gateway {
     timeoutMs?: number;
   }): Promise<HitlDecision | import('@octopi-agent/core/types/tools.js').ConfirmOutcome> {
     const id = randomUUID();
+    const timeoutMs = input.timeoutMs ?? 120_000;
+    const createdAt = Date.now();
     const view: PendingApprovalView = {
       id,
       sessionId: input.sessionId,
       agentId: input.agentId,
       request: { ...input.request, id },
       status: 'pending',
-      createdAt: Date.now(),
+      createdAt,
+      // 决策截止 = 引擎确认窗（timeoutMs）；窗口一关，迟到点击只记 rejected/late——
+      // 审批账本与 ops 审计（confirm_timeout）必须是同一个故事
+      deadlineAt: timeoutMs > 0 ? createdAt + timeoutMs : undefined,
     };
     return new Promise((resolve) => {
       let settled = false;
@@ -4002,9 +4009,11 @@ export class Gateway {
       this.broadcastApprovalEvent(view);
       this.evictOldApprovals(id);
       // ops P5 双通道：gateway 事件（上方广播）+ webhook 推送（失败只告警，另一通道仍在）
-      const timeoutMs = input.timeoutMs ?? 120_000;
       this.notifyHitlWebhook(view, timeoutMs);
       if (timeoutMs > 0) {
+        // 到点即 settle deny（fail-closed）；deadlineAt 同一时刻，之后的点击只会得到 rejected/late。
+        // 与引擎 askWithTimeout 同值：本进程定时器按注册序触发，引擎侧先注册必先定案，
+        // 故超时标签永远如实是 confirm_timeout，不会被 gateway 的 deny 抢标
         timer = setTimeout(() => {
           const pending = this.pendingApprovals.get(id);
           if (pending && pending.status === 'pending') {
@@ -4038,6 +4047,21 @@ export class Gateway {
     if (!approval || approval.status !== 'pending') return null;
 
     const now = Date.now();
+    // 迟到决策（引擎确认窗已关）：如实记 rejected/late 并记录点击者，绝不补记 approved——
+    // 否则审批账本说「批了」而 ops 审计说 confirm_timeout，两个故事（正是要治的病）
+    if (approval.deadlineAt !== undefined && now > approval.deadlineAt) {
+      approval.status = 'rejected';
+      approval.decisionReason = 'late';
+      approval.decidedAt = now;
+      approval.updatedAt = now;
+      approval.decidedBy = input.approver;
+      approval.decisionChannel = input.channel ?? 'gateway';
+      const lateFinish = this.approvalResolvers.get(approvalId);
+      this.approvalResolvers.delete(approvalId);
+      lateFinish?.('deny');
+      this.broadcastApprovalEvent(approval);
+      return approval;
+    }
     const scope: ApprovalScope =
       input.action === 'approve' ? (input.scope ?? 'once') : 'once';
     approval.status = input.action === 'approve' ? 'approved' : 'rejected';
@@ -4118,7 +4142,8 @@ export class Gateway {
       a.updatedAt = now;
       const finish = this.approvalResolvers.get(id);
       this.approvalResolvers.delete(id);
-      finish?.('deny');
+      // 取消 ≠ 人工拒绝：带来源标注（引擎据此如实报 aborted，不冒充人工拒绝）
+      finish?.({ decision: 'deny', reason: 'cancelled' });
       this.broadcastApprovalEvent(a);
     }
   }
@@ -4166,7 +4191,8 @@ export class Gateway {
         this.pendingApprovals.delete(a.id);
         const finish = this.approvalResolvers.get(a.id);
         this.approvalResolvers.delete(a.id);
-        finish?.('deny');
+        // 取消 ≠ 人工拒绝：带来源标注（同上）
+        finish?.({ decision: 'deny', reason: 'cancelled' });
         this.broadcastApprovalEvent(a);
       }
     }
@@ -5166,7 +5192,8 @@ export class Gateway {
     builder.confirmEffect(async (intent) => {
       const { getRunScope } = await import('@octopi-agent/engine/harness');
       const scope = getRunScope();
-      if (!scope?.sessionId) return 'deny';
+      // 无 run scope ≠ 人工拒绝：带来源标注回给引擎（错误面不得冒充人工拒绝）
+      if (!scope?.sessionId) return { decision: 'deny', reason: 'no_session_scope' };
       const sessionId = scope.sessionId;
       const agentId = scope.agentId ?? 'default';
       const desc =
@@ -5193,6 +5220,9 @@ export class Gateway {
           riskDescription: desc,
           actionDescription: desc,
         },
+        // 引擎确认窗原样作为卡片决策截止（deadlineAt）与 settle 时刻——引擎 askWithTimeout
+        // 先注册必先定案，超时标签如实是 confirm_timeout；窗口后的点击只得 rejected/late
+        ...(intent.timeoutMs !== undefined ? { timeoutMs: intent.timeoutMs } : {}),
       });
     });
 

@@ -19,6 +19,35 @@ export type HitlChannel = 'high_risk' | 'effect';
 /** Cached scope of a remembered approval */
 export type HitlCacheScope = 'session' | 'always';
 
+/** 非人工拒绝来源（人工决策不带此标注）；用于错误面与审计如实归因 */
+export type HitlDenyReason = 'no_channel' | 'channel_error' | 'aborted' | 'cancelled';
+
+/** ask 回调结果：裸决策或带来源/归因标注（同 key 并发合流共享） */
+export interface HitlAskResult {
+  decision: HitlDecision;
+  /** 确认窗到期（超时=拒绝，T1 硬约束） */
+  timedOut?: boolean;
+  /** 非人工拒绝来源 */
+  denyReason?: HitlDenyReason;
+  /** 拒绝来源细节（如宿主 reason 原文） */
+  denyDetail?: string;
+  /** 确认人署名（随 channel 判读可信度） */
+  approver?: string;
+  /** 确认通道 */
+  channel?: string;
+}
+
+/** HITL 决策结果（同 key 并发合流共享同一结果对象，杜绝各说各话） */
+export interface HitlOutcome {
+  allowed: boolean;
+  decision: HitlDecision;
+  timedOut: boolean;
+  denyReason?: HitlDenyReason;
+  denyDetail?: string;
+  approver?: string;
+  channel?: string;
+}
+
 interface SessionEntry {
   decision: 'approve';
   expiresAt: number;
@@ -50,7 +79,7 @@ export class HitlDecisionCache {
   private session = new Map<string, SessionEntry>();
   private always = new Map<string, 'approve'>();
   /** In-flight resolves, so concurrent same-key confirms share one ask() */
-  private inflight = new Map<string, Promise<boolean>>();
+  private inflight = new Map<string, Promise<HitlOutcome>>();
 
   /**
    * @param sessionTtlMs - how long `approve_session` stays valid (default 24h)
@@ -149,15 +178,27 @@ export class HitlDecisionCache {
 
   /**
    * Resolve through cache + host hook with in-flight de-dup.
-   * Concurrent callers for the same key share one `ask()`.
+   * Concurrent callers for the same key share one `ask()` and one outcome object
+   * (decision + timedOut + attribution — 合流者不得各自编造拒绝来源).
    */
   resolve(options: {
     channel: HitlChannel;
     key: string;
     sessionId?: string;
     agentId?: string;
-    ask: () => Promise<HitlDecision>;
+    ask: () => Promise<HitlDecision | HitlAskResult>;
   }): Promise<boolean> {
+    return this.resolveOutcome(options).then((outcome) => outcome.allowed);
+  }
+
+  /** 同 {@link resolve}，但回传完整结果（timedOut / 拒绝来源 / 归因），供错误面与审计口径一致。 */
+  resolveOutcome(options: {
+    channel: HitlChannel;
+    key: string;
+    sessionId?: string;
+    agentId?: string;
+    ask: () => Promise<HitlDecision | HitlAskResult>;
+  }): Promise<HitlOutcome> {
     const inflightKey = options.sessionId
       ? sessionKey(options.channel, options.sessionId, options.key)
       : options.agentId
@@ -166,46 +207,62 @@ export class HitlDecisionCache {
     const existing = this.inflight.get(inflightKey);
     if (existing) return existing;
 
-    const pending = this.resolveUncached(options).finally(() => {
+    const pending = this.resolveOutcomeUncached(options).finally(() => {
       this.inflight.delete(inflightKey);
     });
     this.inflight.set(inflightKey, pending);
     return pending;
   }
 
-  private async resolveUncached(options: {
+  private async resolveOutcomeUncached(options: {
     channel: HitlChannel;
     key: string;
     sessionId?: string;
     agentId?: string;
-    ask: () => Promise<HitlDecision>;
-  }): Promise<boolean> {
+    ask: () => Promise<HitlDecision | HitlAskResult>;
+  }): Promise<HitlOutcome> {
     const cached = this.get(options.channel, options.key, {
       sessionId: options.sessionId,
       agentId: options.agentId,
     });
-    if (cached === 'approve') return true;
+    if (cached === 'approve') {
+      return { allowed: true, decision: 'approve', timedOut: false };
+    }
 
-    let decision: HitlDecision;
+    let outcome: HitlOutcome;
     try {
-      decision = await options.ask();
+      const raw = await options.ask();
+      const result: HitlAskResult = typeof raw === 'string' ? { decision: raw } : raw;
+      outcome = {
+        allowed:
+          result.decision === 'approve' ||
+          result.decision === 'approve_session' ||
+          result.decision === 'approve_always',
+        decision: result.decision,
+        timedOut: result.timedOut ?? false,
+        ...(result.denyReason !== undefined ? { denyReason: result.denyReason } : {}),
+        ...(result.denyDetail !== undefined ? { denyDetail: result.denyDetail } : {}),
+        ...(result.approver !== undefined ? { approver: result.approver } : {}),
+        ...(result.channel !== undefined ? { channel: result.channel } : {}),
+      };
     } catch {
-      // 审批通道异常按拒绝处理（fail-safe）；此处吞掉仅因「异常不改变不放行」结论
-      return false;
+      // 审批通道异常按拒绝处理（fail-safe）；吞掉异常体只因「不放行」结论不变——
+      // 但来源如实标注 channel_error，异常绝不伪装成人工拒绝
+      outcome = { allowed: false, decision: 'deny', timedOut: false, denyReason: 'channel_error' };
     }
 
-    if (
-      decision === 'approve' ||
-      decision === 'approve_session' ||
-      decision === 'approve_always'
-    ) {
-      this.remember(decision, options.channel, options.key, {
-        sessionId: options.sessionId,
-        agentId: options.agentId,
-      });
-      return true;
+    if (outcome.allowed) {
+      this.remember(
+        outcome.decision as 'approve' | 'approve_session' | 'approve_always',
+        options.channel,
+        options.key,
+        {
+          sessionId: options.sessionId,
+          agentId: options.agentId,
+        },
+      );
     }
-    return false;
+    return outcome;
   }
 }
 
@@ -227,8 +284,26 @@ export async function resolveHitlDecision(options: {
   key: string;
   sessionId?: string;
   agentId?: string;
-  ask: () => Promise<HitlDecision>;
+  ask: () => Promise<HitlDecision | HitlAskResult>;
 }): Promise<boolean> {
+  return (await resolveHitlOutcome(options)).allowed;
+}
+
+/**
+ * 同 {@link resolveHitlDecision}，但回传完整结果（timedOut / 拒绝来源 / 归因）——
+ * 供调用方把错误面标注得与审计一致：超时 ≠ 人工拒绝 ≠ 通道故障，三者不得混为一谈。
+ *
+ * @param options - 同 resolveHitlDecision
+ * @returns 完整决策结果（同 key 并发合流共享同一对象）
+ */
+export async function resolveHitlOutcome(options: {
+  cache?: HitlDecisionCache;
+  channel: HitlChannel;
+  key: string;
+  sessionId?: string;
+  agentId?: string;
+  ask: () => Promise<HitlDecision | HitlAskResult>;
+}): Promise<HitlOutcome> {
   const cache = options.cache ?? defaultHitlCache;
-  return cache.resolve(options);
+  return cache.resolveOutcome(options);
 }

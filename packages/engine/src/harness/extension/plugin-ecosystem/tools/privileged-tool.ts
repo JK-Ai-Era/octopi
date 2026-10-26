@@ -32,7 +32,8 @@ import {
   type EscalationPolicy,
 } from '../../execution-environment/privileged-exec.js';
 import {
-  resolveHitlDecision,
+  resolveHitlOutcome,
+  type HitlAskResult,
   type HitlDecisionCache,
 } from '../../../governance/human-in-the-loop/decision-cache.js';
 
@@ -46,26 +47,37 @@ export interface CreatePrivExecToolOptions {
  * 确认闸计时（T1 硬约束：超时 = 拒绝，outcome 不可配）。
  * 超时后宿主再批也无效（decision 已按 deny 定案）——宁可重请求，不可放马后炮。
  *
- * @param ask - 宿主确认回调
- * @param timeoutMs - 超时毫秒
- * @returns 决策 + 是否超时（审计 why: confirm_timeout / confirm_denied 可分辨）
+ * @param ask - 宿主确认回调（可携带拒绝来源/归因标注）
+ * @param timeoutMs - 确认窗毫秒
+ * @param abortSignal - run 中止信号（中止即收闸，不再空等确认窗走完）
+ * @returns 决策 + 来源标注（审计 why: confirm_timeout / confirm_denied / channel_error / aborted 可分辨）
  */
 async function askWithTimeout(
-  ask: () => Promise<HitlDecision>,
+  ask: () => Promise<HitlAskResult>,
   timeoutMs: number,
-): Promise<{ decision: HitlDecision; timedOut: boolean }> {
+  abortSignal?: AbortSignal,
+): Promise<HitlAskResult> {
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<{ decision: HitlDecision; timedOut: boolean }>((res) => {
+  let onAbort: (() => void) | undefined;
+  const timeout = new Promise<HitlAskResult>((res) => {
     timer = setTimeout(() => res({ decision: 'deny', timedOut: true }), timeoutMs);
     timer.unref?.();
   });
+  const aborted = new Promise<HitlAskResult>((res) => {
+    if (!abortSignal) return;
+    onAbort = () => res({ decision: 'deny', denyReason: 'aborted' });
+    if (abortSignal.aborted) onAbort();
+    else abortSignal.addEventListener('abort', onAbort, { once: true });
+  });
   try {
     return await Promise.race([
-      ask().then((decision) => ({ decision, timedOut: false })),
+      ask().then((result) => ({ ...result, timedOut: result.timedOut ?? false })),
       timeout,
+      aborted,
     ]);
   } finally {
     if (timer) clearTimeout(timer);
+    if (onAbort) abortSignal?.removeEventListener('abort', onAbort);
   }
 }
 
@@ -107,7 +119,10 @@ export function createPrivExecTool(options?: CreatePrivExecToolOptions): Registe
           description: 'Arguments after cmd — must match the rule element-by-element (no prefix/regex matching)',
         },
       },
-      timeoutMs: 120_000,
+      // 不设工具总线看门狗（同 ask_user 先例）：真实时限全部内部强制——确认窗
+      // （dangerousCommands.timeoutMs，超时=拒绝）+ 执行超时（runPrivilegedExec 120s
+      // 树杀）。总线看门狗曾把 escalation_confirm_timeout 顶成 tool_timeout（错误语义
+      // 失真、诱导盲重试），且其阈值必须随配置漂移才成立——两处都错，故整块去掉。
     },
     handler: async (args, context) => {
       const cmd = args.cmd;
@@ -233,10 +248,9 @@ export function createPrivExecTool(options?: CreatePrivExecToolOptions): Registe
       let confirmedBy: string | undefined;
       let confirmChannel: string | undefined;
       if (needsConfirm) {
-        // 确认超时一律 deny（T1 硬约束，outcome 不可配）；超时/显式 deny 在审计里可分辨
+        // 确认超时一律 deny（T1 硬约束，outcome 不可配）；超时/人工拒绝/通道故障在审计里可分辨
         const confirmTimeoutMs = context?.dangerousCommands?.timeoutMs ?? 120_000;
-        let timedOut = false;
-        const allowed = await resolveHitlDecision({
+        const outcome = await resolveHitlOutcome({
           // 缓存 key 含完整 argv 全等（§5 P3）：一次 approve_session 只覆盖这一条命令
           key: `priv:${JSON.stringify(argv)}`,
           channel: 'effect',
@@ -244,42 +258,76 @@ export function createPrivExecTool(options?: CreatePrivExecToolOptions): Registe
           sessionId: context?.sessionId,
           agentId: context?.agentId,
           cache: options?.cache,
-          ask: async () => {
-            const outcome = await askWithTimeout(async () => {
-              const raw =
-                (await context?.confirmEffect?.({
-                  kind: 'shell',
-                  // 无歧义渲染：argv 数组的 JSON 形式（join(' ') 无法区分 args 边界与换行注入）
-                  command: JSON.stringify(argv),
-                  cwd: ruleCwd ?? '/',
-                })) ?? 'deny';
-              // 裸 HitlDecision 或 ConfirmOutcome（带归因）都合法
-              const normalized: { decision: HitlDecision; approver?: string; channel?: string } =
-                typeof raw === 'string' ? { decision: raw } : raw;
-              if (normalized.approver !== undefined) confirmedBy = normalized.approver;
-              if (normalized.channel !== undefined) confirmChannel = normalized.channel;
+          ask: () =>
+            askWithTimeout(async (): Promise<HitlAskResult> => {
+              const confirmEffect = context?.confirmEffect;
+              // 无确认通道 ≠ 人工拒绝：如实标注来源，fail-closed
+              if (!confirmEffect) {
+                return {
+                  decision: 'deny',
+                  denyReason: 'no_channel',
+                  denyDetail: 'confirmEffect hook absent',
+                };
+              }
+              const raw = await confirmEffect({
+                kind: 'shell',
+                // 无歧义渲染：argv 数组的 JSON 形式（join(' ') 无法区分 args 边界与换行注入）
+                command: JSON.stringify(argv),
+                cwd: ruleCwd ?? '/',
+                // 宿主卡片生命周期据此排在确认窗之后（严格晚 settle，防误标 confirm_denied）
+                timeoutMs: confirmTimeoutMs,
+              });
+              // 裸 HitlDecision 或 ConfirmOutcome（带归因/来源）都合法
+              const normalized: {
+                decision: HitlDecision;
+                approver?: string;
+                channel?: string;
+                reason?: string;
+              } = typeof raw === 'string' ? { decision: raw } : raw;
               // 特权通道保守语义：approve_always 永久放行特权 argv 过宽 → 降格 session 级
-              return normalized.decision === 'approve_always' ? 'approve_session' : normalized.decision;
-            }, confirmTimeoutMs);
-            timedOut = outcome.timedOut;
-            return outcome.decision;
-          },
+              const decision =
+                normalized.decision === 'approve_always' ? 'approve_session' : normalized.decision;
+              return {
+                decision,
+                ...(normalized.approver !== undefined ? { approver: normalized.approver } : {}),
+                ...(normalized.channel !== undefined ? { channel: normalized.channel } : {}),
+                // 宿主标注的非人工拒绝来源（如 no_session_scope）——不得冒充人工拒绝
+                ...(decision === 'deny' && normalized.reason !== undefined
+                  ? { denyReason: 'channel_error' as const, denyDetail: normalized.reason }
+                  : {}),
+              };
+            }, confirmTimeoutMs, context?.abortSignal),
         });
-        if (!allowed) {
+        if (outcome.approver !== undefined) confirmedBy = outcome.approver;
+        if (outcome.channel !== undefined) confirmChannel = outcome.channel;
+        if (!outcome.allowed) {
+          const why = outcome.timedOut
+            ? 'confirm_timeout'
+            : outcome.denyReason === 'aborted' || outcome.denyReason === 'cancelled'
+              ? 'aborted'
+              : outcome.denyReason !== undefined
+                ? 'channel_error'
+                : 'confirm_denied';
           context?.recordOpsEvent?.({
             event: 'ops.escalation.denied',
             data: {
               ruleId,
               argv,
-              why: timedOut ? 'confirm_timeout' : 'confirm_denied',
+              why,
+              ...(outcome.denyDetail !== undefined ? { reason: outcome.denyDetail } : {}),
               ...(dangerousPattern !== undefined ? { dangerous: dangerousPattern } : {}),
               origin,
             },
           });
+          const argvText = JSON.stringify(argv);
           throw new Error(
-            timedOut
-              ? `escalation_confirm_timeout: no decision within ${confirmTimeoutMs}ms — timeout is deny (not configurable): ${JSON.stringify(argv)}`
-              : `escalation_confirm_denied: ${JSON.stringify(argv)}`,
+            outcome.timedOut
+              ? `escalation_confirm_timeout: no decision within ${confirmTimeoutMs}ms — timeout is deny (not configurable). A human approval request is still pending on the confirm channel; do NOT retry this call until a human decides: ${argvText}`
+              : why === 'aborted'
+                ? `priv_exec_aborted: run aborted while awaiting confirmation — nothing was executed: ${argvText}`
+                : why === 'channel_error'
+                  ? `escalation_confirm_unavailable: confirm channel unavailable (${outcome.denyReason}${outcome.denyDetail ? `: ${outcome.denyDetail}` : ''}) — fail-closed deny, no human decision was reached: ${argvText}`
+                  : `escalation_confirm_denied: a human rejected this argv — do NOT retry this call on your own: ${argvText}`,
           );
         }
         confirmDecision = 'approved';

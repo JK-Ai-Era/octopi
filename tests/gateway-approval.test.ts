@@ -4,6 +4,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { Gateway } from '@octopi-agent/gateway/gateway/gateway.js';
+import { OctopiClient } from '@octopi-agent/gateway/web/sdk/client.js';
 import type { ModelProvider } from '@octopi-agent/core/interfaces/model-provider.js';
 import type { AgentDefinition } from '@octopi-agent/engine/harness/shared/types/agent-definition.js';
 import { InMemorySessionStore } from '@octopi-agent/engine/integration/storage/memory.js';
@@ -147,7 +148,8 @@ describe('Gateway HITL approvals', () => {
       request: approvalRequest(),
     });
     gateway.cancelPendingApprovals('s5');
-    await expect(pending).resolves.toBe('deny');
+    // 取消 ≠ 人工拒绝：结果带来源标注（reason: cancelled）
+    await expect(pending).resolves.toMatchObject({ decision: 'deny', reason: 'cancelled' });
     const a = gateway.listPendingApprovals('s5')[0]!;
     expect(a.status).toBe('rejected');
     expect(a.decisionReason).toBe('cancelled');
@@ -201,10 +203,66 @@ describe('Gateway HITL approvals', () => {
       request: approvalRequest(),
     });
     gateway.abortSession('sa');
-    await expect(p1).resolves.toBe('deny');
+    await expect(p1).resolves.toMatchObject({ decision: 'deny', reason: 'cancelled' });
     // sb still pending
     expect(gateway.listPendingApprovals('sb')[0]!.status).toBe('pending');
     gateway.cancelPendingApprovals('sb');
-    await expect(p2).resolves.toBe('deny');
+    await expect(p2).resolves.toMatchObject({ decision: 'deny', reason: 'cancelled' });
+  });
+
+  it('确认窗后迟到点击记 rejected/late 并记录点击者，绝不补记 approved（谎言窗口关闭）', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+      const pending = gateway.requestApproval({
+        sessionId: 'slate',
+        agentId: 'assistant',
+        request: approvalRequest(),
+        timeoutMs: 30,
+      });
+      // 时钟越过 deadlineAt，但 settle 定时器尚未触发——模拟事件循环被阻塞的间隙
+      vi.setSystemTime(new Date('2026-01-01T00:00:01Z'));
+      const id = gateway.listPendingApprovals('slate')[0]!.id;
+      const resolved = gateway.resolvePendingApproval(id, {
+        action: 'approve',
+        approver: 'owner',
+      });
+      expect(resolved?.status).toBe('rejected');
+      expect(resolved?.decisionReason).toBe('late');
+      expect(resolved?.decidedBy).toBe('owner');
+      vi.advanceTimersByTime(50);
+      await expect(pending).resolves.toBe('deny');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('SDK approval 署名透传（ops P5 确认人入账链路）', () => {
+  it('resolveApproval 将 approver 透传进 POST body（router→gateway 归因链的入口段）', async () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: unknown, init?: { body?: unknown }) => {
+        bodies.push(
+          init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {},
+        );
+        return new Response(JSON.stringify({ ok: true, data: { id: 'a1' } }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }),
+    );
+    try {
+      const client = new OctopiClient({ baseUrl: 'http://test.invalid' });
+      await client.resolveApproval('a1', {
+        action: 'approve',
+        scope: 'once',
+        approver: 'owner',
+      });
+      expect(bodies[0]).toMatchObject({ action: 'approve', scope: 'once', approver: 'owner' });
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

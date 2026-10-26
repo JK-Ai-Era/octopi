@@ -49,7 +49,12 @@ export type EffectCommitPolicy = 'auto' | 'manual';
 
 /** 效应确认通道 */
 /** 效应意图（host-gate confirmEffect 入参） */
-export type EffectIntent =
+export type EffectIntent = EffectIntentPayload & {
+  /** 引擎侧确认窗（毫秒）：宿主卡片生命周期须严格晚于它结束（见 core confirmEffect 契约） */
+  timeoutMs?: number;
+};
+
+type EffectIntentPayload =
   | {
       kind: 'file.write';
       path: string;

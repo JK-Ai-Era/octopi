@@ -1134,8 +1134,12 @@ export class WebApiRouter {
           action: body.action,
           scope: scope as 'once' | 'session' | 'always' | undefined,
           reason: body.reason,
-          // ops P5 确认人入账：谁批的（宿主/回执身份）、经哪条通道
-          approver: typeof body.approver === 'string' ? body.approver : undefined,
+          // ops P5 确认人入账：谁批的（署名，随 channel 判读可信度）、经哪条通道。
+          // web 无认证层：署名收口（trim + 长度上限），防任意字符串灌进审计账本
+          approver:
+            typeof body.approver === 'string' && body.approver.trim() !== ''
+              ? body.approver.trim().slice(0, 128)
+              : undefined,
           channel: body.channel === 'webhook' ? 'webhook' : 'gateway',
         });
 

@@ -1451,7 +1451,9 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
     enableStickToBottom();
     setDecidingApproval(true);
     try {
-      await store.resolveApproval(approvalId, { action, scope });
+      // 确认人署名（ops P5 确认人入审计）：按 §8.6 拍板审批面即 owner，故角色归因（非实名）；
+      // web 暂无认证层，多用户认证落地后应替换为认证身份，勿升级为编造的实名
+      await store.resolveApproval(approvalId, { action, scope, approver: 'owner' });
     } catch (error) {
       setActionError(error instanceof Error ? error.message : String(error));
     } finally {

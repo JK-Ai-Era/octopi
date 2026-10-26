@@ -1336,7 +1336,13 @@ export class OctopiClient {
 
   async resolveApproval(
     approvalId: string,
-    input: { action: 'approve' | 'reject'; scope?: ApprovalScope; reason?: string },
+    input: {
+      action: 'approve' | 'reject';
+      scope?: ApprovalScope;
+      reason?: string;
+      /** 确认人署名（ops P5 确认人入审计；宿主归因，未知省略不编造） */
+      approver?: string;
+    },
   ): Promise<PendingApproval> {
     const data = await this.postJson(`/approvals/${encodeURIComponent(approvalId)}`, input);
     return data?.data as PendingApproval;

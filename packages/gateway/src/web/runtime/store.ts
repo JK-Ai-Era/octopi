@@ -459,7 +459,13 @@ export class OctopiRuntimeStore extends EventTarget {
   /** 审批决策（once / session / always） */
   async resolveApproval(
     approvalId: string,
-    input: { action: 'approve' | 'reject'; scope?: ApprovalScope; reason?: string },
+    input: {
+      action: 'approve' | 'reject';
+      scope?: ApprovalScope;
+      reason?: string;
+      /** 确认人署名（ops P5；透传给 gateway 归因入审计） */
+      approver?: string;
+    },
   ): Promise<void> {
     await this.client.resolveApproval(approvalId, input);
     this.chat.approvals = this.chat.approvals.map((a) =>

@@ -105,6 +105,26 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.94.1 (2026-10-26)
+
+### fix(engine): 确认闸错误语义如实化（超时/拒绝/通道故障分家）+ 确认人归因落审计
+
+**背景**：T0 实测发现确认窗（`askWithTimeout`）、工具总线看门狗（`runWithToolLimits`）与 gateway 审批卡超时三者同为 120s 同秒竞速——超时场景 LLM 收到 `tool_timeout`（工具卡死）而审计记 `confirm_timeout`（确认超时拒绝），同一事件两个故事，且错误语义诱导盲目重试；非人工拒绝（无确认回调 / 通道异常 / 会话取消）在错误面一律冒充「人工拒绝」。
+
+- **竞速修复**：priv_exec 不再声明工具总线 `timeoutMs`（同 `ask_user` 先例——真实时限全部内部强制：确认窗 + 执行 120s 树杀，看门狗阈值须随配置漂移、注释当护栏等于「文档边界冒充强制」，故整块移除）；确认窗经 `confirmEffect` 意图新增 `timeoutMs`（additive）传给宿主，gateway 审批卡以同一截止时刻 `deadlineAt` 落账并到期 settle。窗口尽头超时如实抛 `escalation_confirm_timeout`（携带「勿盲重试、等人决策」语义）。
+- **拒绝来源如实**：拒绝分家标注——`confirm_denied`（人工）/ `channel_error` + `reason`（无确认回调、宿主回调异常、scope 缺失）/ `aborted`（run 中止或会话取消）；`ConfirmOutcome` 增 `reason`（非人工拒绝来源；无人工决策时携带）。审计 `ops.escalation.denied` why 枚举扩展 `channel_error` / `aborted`。**只有真实的人工拒绝才在错误面写 "a human rejected"**。
+- **迟到决策拒绝**：确认窗关闭后的点击记 `rejected/late`（含点击者），绝不补记 approved——审批账本与 ops 审计保持同一故事。
+- **确认人归因**：WebUI 审批署名 `owner` 经 store/SDK → router（`approver` 收口 trim + 128 字符上限）→ `ops.privileged.exec.confirmedBy` / `confirmChannel`。`ConfirmOutcome.approver` 契约措辞改为如实的「**署名**（随 channel 判读可信度，非认证实名）」——web 暂无认证层，LAN 部署署名可被仿冒，多用户认证落地后应换认证身份（KNOWN-ISSUES 已声明）。
+- **并发合流**：同 key 并发确认共享完整结果对象（decision + timedOut + 归因），第二发不再被误标「人工拒绝」。
+- **run 中止接入**：`abortSignal` 接入确认等待，中止即时收闸，不再空等确认窗走完。
+- `EffectIntent` 补 `timeoutMs` 与 core 契约对齐（宿主按 engine 类型写 handler 也能看到该字段）。
+
+**转后续（如实列账）**：host-gate 效应确认（file.write/shell/vcs 等）仍丢归因且把超时与拒绝合并成 `effect_denied`（`effect-policy.ts`，改动面大另立一役）；`priv_exec` 执行阶段的 abort 未接树杀信号（现有 120s 执行超时兜底）。**兼容性**：无破坏性变更（`confirmEffect` 意图新增可选 `timeoutMs`；取消路径的确认结果从裸 `deny` 变为带 `reason` 的 `ConfirmOutcome`，本为契约允许形状）。
+
+**验证**：新增 `tests/harness/escalation-confirm-gate.test.ts`（8 用例：超时标注 / 人工拒绝标注 / 归因入账 / 无确认回调 / 通道异常 / run 中止 / 无总线看门狗钉 / 并发合流）+ `gateway-approval` 迟到点击（假时钟构造 deadlineAt 间隙）与取消来源用例；全量测试套件、`npm run build`、`npm run lint` 全绿。
+
+---
+
 ## v0.94.0 (2026-10-26)
 
 ### feat(engine): ops P4 全量提权档 + P5 远程托管加固（OP-OPS 全阶段收束）

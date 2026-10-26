@@ -23,10 +23,16 @@ export type HitlDecision = 'deny' | 'approve' | 'approve_session' | 'approve_alw
  */
 export interface ConfirmOutcome {
   decision: HitlDecision;
-  /** 谁批的（宿主认证身份；未知时省略，绝不编造） */
+  /**
+   * 谁批的（**署名**，随 channel 判读可信度，非认证实名）：`gateway` = 本地控制台
+   * 按会话角色署名（web 无认证层，可被仿冒）、`webhook` = 回执方自证。未知时省略，
+   * 绝不凭空编造。
+   */
   approver?: string;
   /** 经哪条通道（`gateway` | `webhook` | …） */
   channel?: string;
+  /** 拒绝来源标注（如 `no_session_scope`）；无此字段 = 人工决策 */
+  reason?: string;
 }
 
 /** 工具来源 */
@@ -219,6 +225,9 @@ export interface ToolExecutionContext {
     cwd?: string;
     domain?: string;
     description?: string;
+    // 引擎侧确认窗（毫秒）：宿主卡片生命周期须严格晚于它结束，否则宿主超时先 settle
+    // 会把 confirm_timeout 误标成 confirm_denied（两个消费者看到两个故事）
+    timeoutMs?: number;
   }) => Promise<HitlDecision | ConfirmOutcome>;
   /** P4：engine | host-gate */
   effectChannel?: 'engine' | 'host-gate';
