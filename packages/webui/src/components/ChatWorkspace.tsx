@@ -22,6 +22,7 @@ import { ClientToolCallCard, WebViewPreview, type RenderedWebView } from './Clie
 import { FileCard, FilePreviewPanel, fileRefFromCall, fileRefFromToolResult, type FileRef } from './FileDelivery';
 import { looksLikeCodeOrMarkup } from '@octopi-agent/engine/harness/session/title';
 import { resolveDefaultBase } from '../gateway-base';
+import { getConsoleKey, setConsoleKey } from '../console-key';
 
 const DEFAULT_BASE = resolveDefaultBase();
 
@@ -711,7 +712,7 @@ export interface ChatWorkspaceProps {
 
 export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatWorkspaceProps) {
   const [baseUrl, setBaseUrl] = useState(DEFAULT_BASE);
-  const [apiKey, setApiKey] = useState('');
+  const [apiKey, setApiKey] = useState(() => getConsoleKey());
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [connection, setConnection] = useState('idle');
   const [agents, setAgents] = useState<Array<{
@@ -1700,9 +1701,17 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
               {showAdvanced && (
                 <label className="small">
                   Gateway API Key
-                  <input value={apiKey} onChange={e => setApiKey(e.target.value)} style={{ marginTop: 4 }} />
+                  <input
+                    value={apiKey}
+                    onChange={e => {
+                      setApiKey(e.target.value);
+                      setConsoleKey(e.target.value);
+                    }}
+                    style={{ marginTop: 4 }}
+                  />
                   <div className="small muted" style={{ marginTop: 4 }}>
-                    非 LLM Key。仅当 Gateway 配置了协议鉴权时需要填写。
+                    非 LLM Key。仅当 Gateway 配置了协议鉴权时需要填写。钥匙保存在本机浏览器
+                    （localStorage），换浏览器或清站点数据后需重填。
                   </div>
                 </label>
               )}

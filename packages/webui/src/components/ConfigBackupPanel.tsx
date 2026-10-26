@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { OctopiClient } from '@octopi-agent/gateway/web/sdk/client';
 import { resolveDefaultBase } from '../gateway-base';
+import { getConsoleKey } from '../console-key';
 
 interface BackupItem {
   path: string;
@@ -15,7 +16,10 @@ interface BackupItem {
 }
 
 export function ConfigBackupPanel() {
-  const client = useMemo(() => new OctopiClient({ baseUrl: resolveDefaultBase() }), []);
+  const client = useMemo(
+    () => new OctopiClient({ baseUrl: resolveDefaultBase(), apiKey: getConsoleKey() || undefined }),
+    [],
+  );
   const [backups, setBackups] = useState<BackupItem[]>([]);
   const [hash, setHash] = useState('');
   const [busy, setBusy] = useState(false);

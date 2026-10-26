@@ -12,6 +12,7 @@ import {
   type ConfigAgentsViewDto,
 } from '@octopi-agent/gateway/web/sdk/client';
 import { resolveDefaultBase } from '../gateway-base';
+import { getConsoleKey } from '../console-key';
 
 type EffectMode = 'workspace' | 'project' | 'host' | 'untrusted';
 
@@ -88,7 +89,10 @@ function isConflictError(err: unknown): boolean {
 }
 
 export function AgentSettingsPanel() {
-  const client = useMemo(() => new OctopiClient({ baseUrl: resolveDefaultBase() }), []);
+  const client = useMemo(
+    () => new OctopiClient({ baseUrl: resolveDefaultBase(), apiKey: getConsoleKey() || undefined }),
+    [],
+  );
 
   const [view, setView] = useState<ConfigAgentsViewDto | null>(null);
   const [rolePresets, setRolePresets] = useState<AgentRolePresetDto[]>([]);

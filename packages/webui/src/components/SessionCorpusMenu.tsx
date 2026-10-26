@@ -5,6 +5,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { OctopiClient, type KnowledgeSessionVisibilityItemDto } from '@octopi-agent/gateway/web/sdk/client';
 import { resolveDefaultBase } from '../gateway-base';
+import { getConsoleKey } from '../console-key';
 
 interface ProjectRow {
   projectKey: string;
@@ -22,7 +23,10 @@ export function SessionCorpusMenu({
   sessionId: string | null;
   onToast?: (msg: string) => void;
 }) {
-  const client = useMemo(() => new OctopiClient({ baseUrl: resolveDefaultBase() }), []);
+  const client = useMemo(
+    () => new OctopiClient({ baseUrl: resolveDefaultBase(), apiKey: getConsoleKey() || undefined }),
+    [],
+  );
   const [open, setOpen] = useState(false);
   const [projects, setProjects] = useState<ProjectRow[]>([]);
   const [overrides, setOverrides] = useState<KnowledgeSessionVisibilityItemDto[]>([]);

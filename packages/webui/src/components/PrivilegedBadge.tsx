@@ -11,6 +11,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { OctopiClient } from '@octopi-agent/gateway/web/sdk/client';
 import { resolveDefaultBase } from '../gateway-base';
+import { getConsoleKey } from '../console-key';
 
 const POLL_INTERVAL_MS = 60_000;
 
@@ -22,7 +23,10 @@ interface PrivilegedStatus {
 
 /** 常驻 PRIVILEGED 标记（app header 用） */
 export function PrivilegedBadge() {
-  const client = useMemo(() => new OctopiClient({ baseUrl: resolveDefaultBase() }), []);
+  const client = useMemo(
+    () => new OctopiClient({ baseUrl: resolveDefaultBase(), apiKey: getConsoleKey() || undefined }),
+    [],
+  );
   const [status, setStatus] = useState<PrivilegedStatus | null>(null);
 
   useEffect(() => {

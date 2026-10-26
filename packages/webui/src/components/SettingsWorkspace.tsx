@@ -5,6 +5,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { OctopiClient } from '@octopi-agent/gateway/web/sdk/client';
 import { resolveDefaultBase } from '../gateway-base';
+import { getConsoleKey } from '../console-key';
 import { ModelSettingsPanel } from './ModelSettingsPanel';
 import { AgentSettingsPanel } from './AgentSettingsPanel';
 import { ConfigBackupPanel } from './ConfigBackupPanel';
@@ -13,7 +14,10 @@ type SettingsTab = 'models' | 'agents' | 'backups';
 
 export function SettingsWorkspace() {
   const [tab, setTab] = useState<SettingsTab>('models');
-  const client = useMemo(() => new OctopiClient({ baseUrl: resolveDefaultBase() }), []);
+  const client = useMemo(
+    () => new OctopiClient({ baseUrl: resolveDefaultBase(), apiKey: getConsoleKey() || undefined }),
+    [],
+  );
   const [unknownKeys, setUnknownKeys] = useState<string[]>([]);
   const [unknownHash, setUnknownHash] = useState('');
   const [busy, setBusy] = useState(false);

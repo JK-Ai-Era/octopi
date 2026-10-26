@@ -11,6 +11,7 @@ import { SourceDetailPanel } from './SourceDetailPanel';
 import { AgentKnowledgeView } from './AgentKnowledgeView';
 import { OpFeedback, useOpFeedback } from './OpFeedback';
 import { resolveDefaultBase } from '../gateway-base';
+import { getConsoleKey } from '../console-key';
 
 type Panel = 'global' | 'projects' | 'agents' | 'search';
 
@@ -329,7 +330,10 @@ function GlobalHideList({
 }
 
 export function KnowledgeAdminPanel({ agentId }: { agentId: string }) {
-  const client = useMemo(() => new OctopiClient({ baseUrl: resolveDefaultBase() }), []);
+  const client = useMemo(
+    () => new OctopiClient({ baseUrl: resolveDefaultBase(), apiKey: getConsoleKey() || undefined }),
+    [],
+  );
   const [panel, setPanel] = useState<Panel>('global');
   const [globalSources, setGlobalSources] = useState<KnowledgeSourceDto[]>([]);
   const [projects, setProjects] = useState<ProjectRow[]>([]);

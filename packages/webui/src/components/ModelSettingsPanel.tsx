@@ -12,6 +12,7 @@ import {
   type ModelPresetDto,
 } from '@octopi-agent/gateway/web/sdk/client';
 import { resolveDefaultBase } from '../gateway-base';
+import { getConsoleKey } from '../console-key';
 
 interface ModelRow {
   id: string;
@@ -110,7 +111,10 @@ function isConflictError(err: unknown): boolean {
 }
 
 export function ModelSettingsPanel() {
-  const client = useMemo(() => new OctopiClient({ baseUrl: resolveDefaultBase() }), []);
+  const client = useMemo(
+    () => new OctopiClient({ baseUrl: resolveDefaultBase(), apiKey: getConsoleKey() || undefined }),
+    [],
+  );
 
   const [view, setView] = useState<ConfigModelsViewDto | null>(null);
   const [presets, setPresets] = useState<ModelPresetDto[]>([]);

@@ -105,6 +105,17 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.94.4 (2026-10-27)
+
+### fix(webui): 控制台凭据单一来源 + 本机持久化（切页签不再丢钥匙/401）
+
+- **病灶**：Gateway API Key 只活在 `ChatWorkspace` 的 `useState`——组件卸载即蒸发（切到 Settings 回来要重填），且 **8 个 `OctopiClient` 构造点里 7 个是 keyless**（`SettingsWorkspace` / 各 Settings 面板 / `SessionCorpusMenu` / `PrivilegedBadge`）——开 `channels.http.apiKey` 鉴权后这些页面全线 401。
+- **修复**：新增 `packages/webui/src/console-key.ts` 单一凭据来源（模块级 + localStorage 持久化，存储不可用时退化内存态、不假装已持久化）；八个构造点统一 `apiKey: getConsoleKey()`；输入框即输即存，提示语如实标注「钥匙存本机浏览器，换浏览器/清站点数据需重填」。
+- **安全口径**（已在模块注释与 UI 声明）：localStorage 对同源脚本可读（控制台渲染 agent 产出的 markdown，XSS 面真实存在）——LAN 个人控制台的易用性取舍；不做跨端同步。
+- **验证**：`npm run build`（webui `tsc -b` + vite）、全量 3433 通过、lint 清零。webui 组件层无单测机箱，行为验证走手工清单（填钥匙 → 切页签 → 重载页面 → 各页 200）。
+
+---
+
 ## v0.94.3 (2026-10-27)
 
 ### feat(gateway): web 面最小认证收口（署名取认证身份 + WS 事件面过滤）
