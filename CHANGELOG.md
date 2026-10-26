@@ -105,6 +105,18 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.94.3 (2026-10-27)
+
+### feat(gateway): web 面最小认证收口（署名取认证身份 + WS 事件面过滤）
+
+- **审批署名 credential-backed**：配置 `channels.http.apiKey` 后，审批 `confirmedBy` 记**持钥方**（`approverIdentity`，daemon 按 apiKey 有无注入），不再采信客户端自报；未配置时署名退回自报（LAN 可仿冒——**LAN 部署建议启用 `apiKey`**，KNOWN-ISSUES 已声明可信度口径）。这是评审 BLOCKER「`owner` 硬编码署名可仿冒」的收口：署名从"声明"升级为"凭钥可溯"；完整多用户认证留产品化阶段（拍板 2026-10-27）。
+- **WS 事件面过滤**：未认证 WS 连接不再收到任何广播（含 `*` 系统级事件）——WS 消息鉴权协议（首条 `{type:"auth"}`）本已存在，但广播循环不查 `authenticated`：审批卡靠订阅机制恰好漏不掉、系统级事件却漏给匿名连接（巧合≠设计，改为显式过滤）。
+- **timing-safe**：HTTP Bearer 与 WS auth 消息的 token 比较改常数时间（`timingSafeEqual`）。
+- **Node 网关客户端补 auth 消息**：`GatewayChatClient` 支持 `apiKey`，连接后按既有协议发 `{type:"auth"}`（此前部署开 apiKey 会让 TUI/桥接端收不到事件）。
+- **验证**：新增 `tests/gateway-ws-auth.test.ts`（未认证不漏 / auth 后正常收 / 署名优先于自报 3 用例）；`gateway-approval.test.ts` 超时断言随来源标注更新。全量 3433 通过、lint 清零。
+
+---
+
 ## v0.94.2 (2026-10-27)
 
 ### fix(engine): 效应确认语义对齐（归因/错误分家/缓存 key 含目标）+ exec 中止即时树杀

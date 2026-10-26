@@ -4023,7 +4023,8 @@ export class Gateway {
             pending.updatedAt = pending.decidedAt;
             this.broadcastApprovalEvent(pending);
           }
-          finish('deny');
+          // 超时 ≠ 人工拒绝：带 reason 回给引擎（effect 通道无引擎窗，靠它如实标注）
+          finish({ decision: 'deny', reason: 'timeout' });
         }, timeoutMs);
         // 不阻塞进程退出；resolver 命中时 timer 成为 no-op
         timer.unref?.();

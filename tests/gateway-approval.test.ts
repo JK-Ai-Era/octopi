@@ -165,7 +165,8 @@ describe('Gateway HITL approvals', () => {
         timeoutMs: 50,
       });
       vi.advanceTimersByTime(60);
-      await expect(pending).resolves.toBe('deny');
+      // 超时拒绝带来源标注（reason: timeout），不冒充人工拒绝
+      await expect(pending).resolves.toMatchObject({ decision: 'deny', reason: 'timeout' });
       const a = gateway.listPendingApprovals('s6')[0]!;
       expect(a.status).toBe('rejected');
       expect(a.decisionReason).toBe('timeout');

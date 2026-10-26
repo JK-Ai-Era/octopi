@@ -19,6 +19,11 @@ export interface WebApiRouterOptions {
   maxBodyBytes?: number;
   /** 配置热应用服务（arch/config-hot-reload.md）；未注入时 /config/* 返回 503 */
   configApply?: ConfigApplyService;
+  /**
+   * 认证身份署名（apiKey 闸验明的持钥方）：审批 confirmedBy 用它，
+   * 不信客户端自报。未配置 = 无认证部署，退回 body 自报（可仿冒）。
+   */
+  approverIdentity?: string;
 }
 
 /**
@@ -31,12 +36,14 @@ export class WebApiRouter {
   private basePath: string;
   private maxBodyBytes: number;
   private configApply?: ConfigApplyService;
+  private approverIdentity?: string;
 
   constructor(options: WebApiRouterOptions) {
     this.gateway = options.gateway;
     this.basePath = options.basePath ?? '/api/v1';
     this.maxBodyBytes = options.maxBodyBytes ?? 1_048_576;
     this.configApply = options.configApply;
+    this.approverIdentity = options.approverIdentity;
   }
 
   async handle(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
@@ -1134,12 +1141,13 @@ export class WebApiRouter {
           action: body.action,
           scope: scope as 'once' | 'session' | 'always' | undefined,
           reason: body.reason,
-          // ops P5 确认人入账：谁批的（署名，随 channel 判读可信度）、经哪条通道。
-          // web 无认证层：署名收口（trim + 长度上限），防任意字符串灌进审计账本
+          // ops P5 确认人入账：认证身份优先（apiKey 闸验明的持钥方，credential-backed）；
+          // 无认证部署退回客户端自报署名（trim + 长度上限收口；可仿冒，KNOWN-ISSUES 已声明）
           approver:
-            typeof body.approver === 'string' && body.approver.trim() !== ''
+            this.approverIdentity ??
+            (typeof body.approver === 'string' && body.approver.trim() !== ''
               ? body.approver.trim().slice(0, 128)
-              : undefined,
+              : undefined),
           channel: body.channel === 'webhook' ? 'webhook' : 'gateway',
         });
 

@@ -1113,7 +1113,14 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
         return resolveAgentDefinition(entry, normalized);
       },
     });
-    const webApiRouter = new WebApiRouter({ gateway, basePath: '/api/v1', configApply });
+    // 署名归因：apiKey 闸已验明持钥方 → 审批 confirmedBy 记 credential-backed 身份；
+    // 无认证部署退回客户端自报（可仿冒，KNOWN-ISSUES 已声明）
+    const webApiRouter = new WebApiRouter({
+      gateway,
+      basePath: '/api/v1',
+      configApply,
+      approverIdentity: httpConfig?.apiKey ? 'owner' : undefined,
+    });
     const listenHost = resolveListenHost(listenHostConfig);
     gateway.registerChannel(new HttpChannelAdapter({
       port: listenPort,

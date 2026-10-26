@@ -11,6 +11,8 @@ import WebSocket from 'ws';
 export interface GatewayClientOptions {
   /** Gateway URL，如 http://localhost:18180 */
   url: string;
+  /** Gateway apiKey（channels.http.apiKey）；配置后连接须先发 auth 消息 */
+  apiKey?: string;
 }
 
 export interface GatewayClientCallbacks {
@@ -57,6 +59,7 @@ export interface GatewayInfo {
  */
 export class GatewayChatClient {
   private url: string;
+  private apiKey?: string;
   private ws: WebSocket | null = null;
   private callbacks: GatewayClientCallbacks = {};
   private _connected = false;
@@ -68,6 +71,7 @@ export class GatewayChatClient {
   constructor(options: GatewayClientOptions) {
     // 去掉末尾斜杠
     this.url = options.url.replace(/\/$/, '');
+    this.apiKey = options.apiKey;
   }
 
   get connected(): boolean {
@@ -93,6 +97,10 @@ export class GatewayChatClient {
         this.ws = new WebSocket(wsUrl);
 
         this.ws.on('open', () => {
+          // 与 WebUI SDK 同一协议：首条消息送 auth（不进 URL，防泄漏）
+          if (this.apiKey) {
+            this.ws?.send(JSON.stringify({ type: 'auth', token: this.apiKey }));
+          }
           this._connected = true;
           this.callbacks.onConnected?.();
           resolve();

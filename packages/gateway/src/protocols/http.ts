@@ -20,7 +20,16 @@ import type { ChannelAdapter, ChannelMessage, ChannelReply } from '@octopi-agent
 import type { AgentEvent } from '@octopi-agent/core/primitives/event-bus.js';
 import { LiveRunTracker, type LiveRunOverlay } from './live-run-tracker.js';
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'node:http';
+import { timingSafeEqual } from 'node:crypto';
 import { WebSocketServer, WebSocket, type WebSocket as WS } from 'ws';
+
+/** timing-safe 字符串比较（防侧信道逐字节猜测 apiKey） */
+function safeEqual(a: string, b: string): boolean {
+  const ab = Buffer.from(a);
+  const bb = Buffer.from(b);
+  if (ab.length !== bb.length) return false;
+  return timingSafeEqual(ab, bb);
+}
 
 export interface HttpAdapterOptions {
   port: number;
@@ -258,6 +267,9 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
 
     for (const session of this.wsSessions) {
       if (session.ws.readyState !== WebSocket.OPEN) continue;
+      // 未认证不给任何事件（含 `*` 系统级广播）：订阅/身份都来自消息面，
+      // 已被未认证拒绝——这里是最后一道，别再依赖「订阅机制恰好漏不掉」
+      if (!session.authenticated) continue;
 
       const matchesAll = sessionKey === '*';
       const matchesExact = session.subscribedSessions?.has(sessionKey) ?? false;
@@ -420,7 +432,7 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
   private async handleWsMessage(session: WsSession, msg: any): Promise<void> {
     // Auth message: authenticate the session
     if (msg.type === 'auth') {
-      if (this.apiKey && msg.token === this.apiKey) {
+      if (this.apiKey && typeof msg.token === 'string' && safeEqual(msg.token, this.apiKey)) {
         session.authenticated = true;
         session.ws.send(JSON.stringify({ type: 'auth_ok' }));
       } else if (this.apiKey) {
@@ -522,7 +534,7 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
     const authHeader = req.headers.authorization ?? '';
     const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
 
-    if (token !== this.apiKey) {
+    if (!safeEqual(token, this.apiKey)) {
       res.writeHead(401, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'Unauthorized: invalid or missing API key' }));
       return false;
