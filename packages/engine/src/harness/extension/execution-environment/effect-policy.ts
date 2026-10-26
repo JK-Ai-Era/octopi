@@ -24,7 +24,7 @@ import {
   assessL4ProcessMinimum,
   type ProcessIsolationProfile,
 } from './process-isolation.js';
-import { resolveHitlDecision } from '../../governance/human-in-the-loop/decision-cache.js';
+import { resolveHitlOutcome } from '../../governance/human-in-the-loop/decision-cache.js';
 import { getRunSessionId, getRunScope } from '../../run/run-scope.js';
 
 /** 命名运行模式 */
@@ -718,6 +718,28 @@ export interface GateEffectResult {
   confirmed: boolean;
   /** 放行来源：确认过 / 事务自动 / engine 内置策略 */
   confirmSource: 'host-gate' | 'auto-transaction' | 'auto-engine';
+  /** ops P5 确认人署名（仅 host-gate 经人工批准时；缓存命中/自动放行如实缺省） */
+  confirmedBy?: string;
+  /** ops P5 确认通道（gateway | webhook | …） */
+  confirmChannel?: string;
+}
+
+/** 效应确认缓存 key（含目标）：一次点头只覆盖同一目标，不按 kind 一类放行 */
+function effectCacheKey(intent: EffectIntent): string {
+  switch (intent.kind) {
+    case 'file.write':
+      return `file.write:${intent.path}`;
+    case 'shell':
+      return `shell:${intent.command}`;
+    case 'runner':
+      return `runner:${intent.command}`;
+    case 'vcs':
+      return `vcs:${intent.operation}:${intent.cwd ?? ''}`;
+    case 'memory.write':
+      return `memory.write:${intent.domain}`;
+    case 'other':
+      return `other:${intent.description}`;
+  }
 }
 
 /**
@@ -725,8 +747,8 @@ export interface GateEffectResult {
  *
  * @param intent - 效应意图
  * @param options - 通道与回调
- * @returns 放行结论（confirmed/confirmSource，审计用）
- * @throws Error 当拒绝执行时
+ * @returns 放行结论（confirmed/confirmSource + 确认人归因，审计用）
+ * @throws Error 当拒绝执行时（`effect_confirm_timeout` 超时 / `effect_denied` 拒绝，语义分家）
  */
 export async function gateEffect(
   intent: EffectIntent,
@@ -779,23 +801,62 @@ export async function gateEffect(
       'confirm_effect_missing: effectPolicy.effects=host-gate requires confirmEffect callback',
     );
   }
-  // SEC-7：HitlDecision + 引擎缓存；失败路径 fail-closed
-  const allowed = await resolveHitlDecision({
+  // SEC-7：HitlDecision + 引擎缓存；失败路径 fail-closed。
+  // 缓存 key 含目标（B(c) 拍板 2026-10-26）：一次 approve_session 只覆盖同一目标，
+  // 不再按 kind 一类放行（旧「有意粗粒度」已翻案，见 KNOWN-ISSUES）
+  const outcome = await resolveHitlOutcome({
     cache: options.hitlCache,
     channel: 'effect',
-    key: intent.kind,
+    key: effectCacheKey(intent),
     sessionId: options.sessionId ?? getRunSessionId(),
     agentId: options.agentId ?? getRunScope()?.agentId,
-    // 宿主可返回裸 HitlDecision 或 ConfirmOutcome（带归因）；缓存只认决策
+    // 宿主可返回裸 HitlDecision 或 ConfirmOutcome（带归因/来源）；归因随结果回传审计
     ask: async () => {
       const raw = await decide(intent);
-      return typeof raw === 'string' ? raw : raw.decision;
+      const normalized: {
+        decision: HitlDecision;
+        approver?: string;
+        channel?: string;
+        reason?: string;
+      } = typeof raw === 'string' ? { decision: raw } : raw;
+      return {
+        decision: normalized.decision,
+        ...(normalized.approver !== undefined ? { approver: normalized.approver } : {}),
+        ...(normalized.channel !== undefined ? { channel: normalized.channel } : {}),
+        // 宿主标注的拒绝来源：timeout 归超时语义；其余归通道故障——不得冒充人工拒绝
+        ...(normalized.decision === 'deny' && normalized.reason === 'timeout'
+          ? { timedOut: true }
+          : {}),
+        ...(normalized.decision === 'deny' &&
+        normalized.reason !== undefined &&
+        normalized.reason !== 'timeout'
+          ? { denyReason: 'channel_error' as const, denyDetail: normalized.reason }
+          : {}),
+      };
     },
   });
-  if (!allowed) {
-    throw new Error(`effect_denied: ${intent.kind}`);
+  if (!outcome.allowed) {
+    // 错误面分家（与审计 why 同一口径）：超时 ≠ 人工拒绝 ≠ 通道故障，不得混为一谈
+    if (outcome.timedOut) {
+      throw new Error(
+        `effect_confirm_timeout: no decision for ${effectCacheKey(intent)} — timeout is deny; do NOT retry this call until a human decides`,
+      );
+    }
+    const provenance = outcome.denyReason
+      ? ` (${outcome.denyReason}${outcome.denyDetail ? `: ${outcome.denyDetail}` : ''})`
+      : '';
+    throw new Error(
+      `effect_denied: ${intent.kind}${provenance} — ${
+        outcome.denyReason ? 'no human decision was reached' : 'a human rejected this effect'
+      }`,
+    );
   }
-  return { confirmed: true, confirmSource: 'host-gate' };
+  return {
+    confirmed: true,
+    confirmSource: 'host-gate',
+    ...(outcome.approver !== undefined ? { confirmedBy: outcome.approver } : {}),
+    ...(outcome.channel !== undefined ? { confirmChannel: outcome.channel } : {}),
+  };
 }
 
 // ── Session-scoped effect overrides (temporary transactionRoots) ──

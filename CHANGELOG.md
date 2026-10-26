@@ -105,6 +105,19 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.94.2 (2026-10-27)
+
+### fix(engine): 效应确认语义对齐（归因/错误分家/缓存 key 含目标）+ exec 中止即时树杀
+
+- **归因回传**：host-gate 效应确认不再丢弃 `ConfirmOutcome`——`confirmedBy` / `confirmChannel` 随 `GateEffectResult` 进 `ops.command.executed`。此前只有 priv_exec 有确认人归因，file.write / shell / vcs 的批准永远无署名（同一字段一半世界是瞎的）。
+- **错误分家**：`effect_confirm_timeout`（超时，携带勿盲重试语义）/ `effect_denied`（人工拒绝、通道故障带来源）不再混为一谈；宿主 `reason: 'timeout'` 归超时语义、其余 reason 归通道故障，任何非人工来源都不冒充"人工拒绝"。
+- **缓存 key 含目标（设计翻案）**：效应确认缓存 key 从 `kind` 加细为 `kind + 目标`（path / command / operation / domain）——一次 `approve_session` 只覆盖同一目标，不再整类放行（旧语义下批准一个 file.write 即放行本会话全部写操作）。**推翻** KNOWN-ISSUES 旧「有意粗粒度」决定；`hitl-single-model.test.ts` 旧用例随行为同步改写。
+- **exec 中止即时树杀**：`runPrivilegedExec` 接 `abortSignal`，run 中止触发与执行超时同一条树杀收回路径（结果如实标 `aborted`），不再等 120s 兜底。
+- **同族堵漏**：审批卡超时的 settle 带 `reason: 'timeout'`——effect 通道没有引擎侧确认窗，靠它如实标注超时（此前会误标"人工拒绝"）。
+- **验证**：新增 `tests/harness/effect-confirm-gate.test.ts`（6 用例：归因 ×2 / 错误分家 ×3 / 缓存 key ×1）+ `escalation-confirm-gate.test.ts` 扩 exec-abort 用例；全量 3433 通过、`npm run lint` 清零。
+
+---
+
 ## v0.94.1 (2026-10-26)
 
 ### fix(engine): 确认闸错误语义如实化（超时/拒绝/通道故障分家）+ 确认人归因落审计

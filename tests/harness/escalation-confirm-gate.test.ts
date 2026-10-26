@@ -15,6 +15,7 @@
 import { describe, it, expect } from 'vitest';
 
 import { createPrivExecTool } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/tools/privileged-tool.js';
+import { runPrivilegedExec } from '@octopi-agent/engine/harness/extension/execution-environment/privileged-exec.js';
 import { HitlDecisionCache } from '@octopi-agent/engine/harness/governance/human-in-the-loop/decision-cache.js';
 import type { EscalationPolicy } from '@octopi-agent/engine/harness/extension/execution-environment/privileged-exec.js';
 import type { ToolExecutionContext } from '@octopi-agent/core/types/tools.js';
@@ -224,5 +225,25 @@ describe('并发合流与总线看门狗（F3/F5 回归钉）', () => {
       expect((r as PromiseRejectedResult).reason.message).toMatch(/escalation_confirm_timeout/);
       expect((r as PromiseRejectedResult).reason.message).not.toMatch(/a human rejected/);
     }
+  });
+});
+
+describe('exec 阶段 run 中止即时树杀（不等执行超时兜底）', () => {
+  it('abortSignal 触发立即收回，结果标 aborted', async () => {
+    const controller = new AbortController();
+    const started = Date.now();
+    const promise = runPrivilegedExec({
+      cmd: '/bin/sleep',
+      args: ['30'],
+      via: 'direct',
+      timeoutMs: 120_000,
+      abortSignal: controller.signal,
+    });
+    setTimeout(() => controller.abort(), 50);
+    const result = await promise;
+
+    expect(result.aborted).toBe(true);
+    expect(result.timedOut).toBe(false);
+    expect(Date.now() - started).toBeLessThan(5_000);
   });
 });

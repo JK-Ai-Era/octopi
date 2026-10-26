@@ -21,7 +21,9 @@
 
 **EffectPolicy 缺省（v0.75.0）：** 省略 `mode` 即 `workspace`（secure-by-default）。脚手架显式 `"mode": "host"`。原先依赖「未写 mode=host」的部署需补 `"effectPolicy": { "mode": "host" }`。
 
-**HITL 单模型（SEC-7，v0.79.0）：** 唯一确认面是 `confirmHighRisk` 与 `confirmEffect`，均返回 `HitlDecision`（`deny` / `approve` / `approve_session` / `approve_always`）。session/always 由引擎 `HitlDecisionCache` 记账，宿主只表达决策。`approve_session` 按 `sessionId` 分桶；`approve_always` 按 `agentId` 分桶（信任级不同的 agent 不共享 always）。缺 scope id 降级 one-shot。已删除 `ApprovalManager` / `ApprovalProvider`。Gateway 确认走 `pendingApprovals`（Web `/approvals`）；`askUser` 只留给 `ask_user` 工具。无人值守 / 无钩子 / 超时仍 fail-closed。确认意图携带 `timeoutMs`（引擎确认窗）供宿主对齐审批卡生命周期；拒绝如实记录来源（超时 / 人工拒绝 / 通道故障 / 取消），只有真实拒绝才标注人工拒绝。工具**输出**侧 high/critical 仍直接拦、无确认语义。缓存 key 为工具名 / 效应类型（非按参数）——有意粗粒度。
+**HITL 单模型（SEC-7，v0.79.0）：** 唯一确认面是 `confirmHighRisk` 与 `confirmEffect`，均返回 `HitlDecision`（`deny` / `approve` / `approve_session` / `approve_always`）。session/always 由引擎 `HitlDecisionCache` 记账，宿主只表达决策。`approve_session` 按 `sessionId` 分桶；`approve_always` 按 `agentId` 分桶（信任级不同的 agent 不共享 always）。缺 scope id 降级 one-shot。已删除 `ApprovalManager` / `ApprovalProvider`。Gateway 确认走 `pendingApprovals`（Web `/approvals`）；`askUser` 只留给 `ask_user` 工具。无人值守 / 无钩子 / 超时仍 fail-closed。确认意图携带 `timeoutMs`（引擎确认窗）供宿主对齐审批卡生命周期；拒绝如实记录来源（超时 / 人工拒绝 / 通道故障 / 取消），只有真实拒绝才标注人工拒绝。工具**输出**侧 high/critical 仍直接拦、无确认语义。缓存 key 粒度：high_risk 按工具名；效应确认自 v0.94.2 起按「效应类型 **+ 目标**」（path / command / operation / domain）——一次 `approve_session` 只覆盖同一目标，不再整类放行（旧「有意粗粒度」已于 2026-10-26 翻案）。
+
+审批归因可信度：配置 `channels.http.apiKey` 后 web 面凭钥准入，`confirmedBy` 记持钥方（credential-backed）；未配置时控制台对 LAN 敞开、署名为客户端自报（可仿冒）——**LAN 部署建议启用 `apiKey`**。完整多用户认证留产品化阶段。
 
 **运维特权通道（ops P3/P4）：** `priv_exec`（allowlist 全等 / `full` 全量档 + `privilegedAck` + 常驻 `PRIVILEGED` 标记 + root/elevated 声明闸）与危险命令减速带。**Windows 边界**：win-job 助手服务（OP-ISO-1）落地之前，Windows 上**没有物理隔离兜底**——那里的 P3/P4 本质是「elevated 进程 + 常驻标记 + 各级闸门」，**不得对外表述为沙箱**。`runas /savecred` 与计划任务提权旁路属有意不做（无人值守提权绝不依赖存储的同意）。
 

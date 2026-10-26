@@ -176,32 +176,23 @@ describe('resolveHitlDecision', () => {
 });
 
 describe('gateEffect + HitlDecisionCache', () => {
-  it('approve_session skips later shell confirms in the same session', async () => {
+  it('approve_session 覆盖同一命令；不同命令各自确认（缓存 key 含目标，2026-10-26 翻案）', async () => {
     const cache = new HitlDecisionCache();
     const confirm: ConfirmEffect = vi.fn(async () => 'approve_session' as const);
-    await gateEffect(
-      { kind: 'shell', command: 'ls' },
-      {
-        effects: 'host-gate',
-        confirmEffect: confirm,
-        shellEscape: 'confirm',
-        sessionId: 'sess-1',
-        agentId: 'agent-a',
-        hitlCache: cache,
-      },
-    );
-    await gateEffect(
-      { kind: 'shell', command: 'pwd' },
-      {
-        effects: 'host-gate',
-        confirmEffect: confirm,
-        shellEscape: 'confirm',
-        sessionId: 'sess-1',
-        agentId: 'agent-a',
-        hitlCache: cache,
-      },
-    );
-    expect(confirm).toHaveBeenCalledTimes(1);
+    const opts = {
+      effects: 'host-gate' as const,
+      confirmEffect: confirm,
+      shellEscape: 'confirm' as const,
+      sessionId: 'sess-1',
+      agentId: 'agent-a',
+      hitlCache: cache,
+    };
+    await gateEffect({ kind: 'shell', command: 'ls' }, opts);
+    // 同一目标：吃会话缓存，不再问
+    await gateEffect({ kind: 'shell', command: 'ls' }, opts);
+    // 不同目标：各自确认（旧「一类放行」已翻案）
+    await gateEffect({ kind: 'shell', command: 'pwd' }, opts);
+    expect(confirm).toHaveBeenCalledTimes(2);
   });
 
   it('approve_always does not leak across agents', async () => {

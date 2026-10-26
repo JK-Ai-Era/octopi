@@ -55,6 +55,8 @@ export interface PrivilegedExecOptions {
   /** 特权进程 cwd（缺省 `/`；规则可显式指定） */
   cwd?: string;
   timeoutMs?: number;
+  /** run 中止信号：触发即时树杀（与超时同一收回路径，不等 timeoutMs 兜底） */
+  abortSignal?: AbortSignal;
 }
 
 /** 提权执行结果 */
@@ -66,6 +68,8 @@ export interface PrivilegedExecResult {
   stderr: string;
   durationMs: number;
   timedOut: boolean;
+  /** run 中止即时树杀所致（区别于 timedOut：外部中止，不是命令超时） */
+  aborted?: boolean;
 }
 
 /** 启动探测结论 */
@@ -104,11 +108,14 @@ export function runPrivilegedExec(options: PrivilegedExecOptions): Promise<Privi
     let stdout = '';
     let stderr = '';
     let timedOut = false;
+    let aborted = false;
     let killer: ReturnType<typeof setTimeout> | undefined;
+    let onAbort: (() => void) | undefined;
     const done = (result: PrivilegedExecResult): void => {
       if (settled) return;
       settled = true;
       if (killer) clearTimeout(killer);
+      if (onAbort) options.abortSignal?.removeEventListener('abort', onAbort);
       resolveP(result);
     };
     try {
@@ -142,6 +149,23 @@ export function runPrivilegedExec(options: PrivilegedExecOptions): Promise<Privi
         }
       }, timeoutMs);
       killer.unref?.();
+      // run 中止即时树杀（与超时同一收回路径）：外部中止不等 timeoutMs 兜底
+      onAbort = () => {
+        aborted = true;
+        try {
+          killProcessTree(child);
+        } catch {
+          try {
+            child.kill('SIGKILL');
+          } catch {
+            // 进程已死：结果照常出
+          }
+        }
+      };
+      if (options.abortSignal) {
+        if (options.abortSignal.aborted) onAbort();
+        else options.abortSignal.addEventListener('abort', onAbort, { once: true });
+      }
       child.on('error', (err) => {
         // spawn 从未成功（ENOENT/EPERM…）= 未执行，区别于执行了但非零退出
         done({
@@ -151,6 +175,7 @@ export function runPrivilegedExec(options: PrivilegedExecOptions): Promise<Privi
           stderr: capOutput(stderr || errText(err)),
           durationMs: Date.now() - started,
           timedOut,
+          ...(aborted ? { aborted: true } : {}),
         });
       });
       // 收 `exit` 而非 `close`：后台子孙继承 stdio 管道时 close 会被吊住不返回
@@ -169,6 +194,7 @@ export function runPrivilegedExec(options: PrivilegedExecOptions): Promise<Privi
           stderr: capOutput(stderr),
           durationMs: Date.now() - started,
           timedOut,
+          ...(aborted ? { aborted: true } : {}),
         });
       });
     } catch (err) {

@@ -291,8 +291,14 @@ export function createPrivExecTool(options?: CreatePrivExecToolOptions): Registe
                 decision,
                 ...(normalized.approver !== undefined ? { approver: normalized.approver } : {}),
                 ...(normalized.channel !== undefined ? { channel: normalized.channel } : {}),
-                // 宿主标注的非人工拒绝来源（如 no_session_scope）——不得冒充人工拒绝
-                ...(decision === 'deny' && normalized.reason !== undefined
+                // 宿主标注的拒绝来源：timeout 归超时语义；其余（如 no_session_scope）
+                // 归通道故障——任何非人工来源都不得冒充人工拒绝
+                ...(decision === 'deny' && normalized.reason === 'timeout'
+                  ? { timedOut: true }
+                  : {}),
+                ...(decision === 'deny' &&
+                normalized.reason !== undefined &&
+                normalized.reason !== 'timeout'
                   ? { denyReason: 'channel_error' as const, denyDetail: normalized.reason }
                   : {}),
               };
@@ -340,6 +346,8 @@ export function createPrivExecTool(options?: CreatePrivExecToolOptions): Registe
         // cwd 钉住：规则显式或 `/`——agent 的 cwd 无权决定特权进程在哪解析相对路径
         cwd: ruleCwd ?? '/',
         timeoutMs: 120_000,
+        // run 中止即时树杀（不等执行超时兜底）
+        abortSignal: context?.abortSignal,
       });
 
       context?.recordOpsEvent?.({

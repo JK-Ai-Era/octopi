@@ -180,6 +180,11 @@ export function createShellTool(options?: {
             // 确认态取闸门实际放行结论（通道配置≠本次决策；自动放行如实记 false）
             confirmed: gateResult.confirmed,
             confirmSource: gateResult.confirmSource,
+            // ops P5：确认人归因（人工批准时随闸门回传；缓存命中/自动放行如实缺省）
+            ...(gateResult.confirmedBy !== undefined ? { confirmedBy: gateResult.confirmedBy } : {}),
+            ...(gateResult.confirmChannel !== undefined
+              ? { confirmChannel: gateResult.confirmChannel }
+              : {}),
             jail: {
               backend: sandboxResult.isolation.backend,
               unconfined:
