@@ -657,6 +657,22 @@ export async function serveRestartCommand(args: CliArgs): Promise<void> {
   await serveStartCommand(args);
 }
 
+/** 读运行中网关的特权状态（ops P4；不可达时如实返回 null，不编造） */
+async function fetchPrivilegedMarker(
+  port: number,
+): Promise<{ active: boolean; reasons: string[] } | null> {
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/api/v1/health`, {
+      signal: AbortSignal.timeout(2000),
+    });
+    if (!res.ok) return null;
+    const body = (await res.json()) as { data?: { privileged?: { active: boolean; reasons: string[] } } };
+    return body.data?.privileged ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export async function serveStatusCommand(args: Pick<CliArgs, 'port' | 'config'> = {}): Promise<void> {
   const pidFile = readPidFile();
   const resolved = resolveGatewayPid(args, args.config);
@@ -674,6 +690,13 @@ export async function serveStatusCommand(args: Pick<CliArgs, 'port' | 'config'> 
   if (pidFile?.config) console.log(`  Config:    ${pidFile.config}`);
   if (pidFile?.startedAt) console.log(`  Started:   ${pidFile.startedAt}`);
   console.log(`  Port:      ${resolved.port}`);
+  // ops P4 §8.1：CLI 常驻 PRIVILEGED 标记（与 WebUI 同源：运行中网关 /health 的 privileged 块）
+  if (alive) {
+    const privileged = await fetchPrivilegedMarker(resolved.port);
+    if (privileged?.active) {
+      console.log(`  Security:  ⚠️  PRIVILEGED (${privileged.reasons.join('; ')})`);
+    }
+  }
   console.log();
 
   if (!alive && pidFile) {
@@ -760,6 +783,33 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
         console.error(`  ${ready.reason}`);
         process.exit(1);
       }
+    }
+    // ops P4 §5 P4：root/elevated 部署语义——daemon 以高权限跑时没有 sudo，危险轴是
+    // 「笼不笼 × uid=0」，必须显式 privileged 声明（同 privilegedAck），拒绝静默特权态。
+    // 口径与 config-bridge 相同：agent.effectPolicy 整体覆盖顶层，无则回落顶层。
+    const { isProcessElevated, assertPrivilegedDeclaration } = await import(
+      '@octopi-agent/engine/harness/extension/execution-environment/privileged-exec.js'
+    );
+    const elevated = await isProcessElevated();
+    if (elevated) {
+      const declared: Array<{ name: string; ack?: string }> = [
+        { name: '<top>', ack: config.effectPolicy?.privilegedAck },
+        ...((config as { agents?: Array<{ id?: string; effectPolicy?: { privilegedAck?: string } }> }).agents ?? []).map(
+          (agent) => ({
+            name: agent.id ?? '<agent>',
+            ack: (agent.effectPolicy ?? config.effectPolicy)?.privilegedAck,
+          }),
+        ),
+      ];
+      for (const scope of declared) {
+        try {
+          assertPrivilegedDeclaration({ elevated, privilegedAck: scope.ack, scope: scope.name });
+        } catch (err) {
+          console.error(`✗ ${err instanceof Error ? err.message : String(err)}`);
+          process.exit(1);
+        }
+      }
+      console.log('⚠ PRIVILEGED: process is elevated (root/admin) — persistent PRIVILEGED marker is now in effect.');
     }
   }
   const gatewayConfig = toGatewayConfig(config);

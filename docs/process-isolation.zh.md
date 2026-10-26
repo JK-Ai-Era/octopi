@@ -207,16 +207,20 @@ reduced 面上 **未标注工具一律拒绝**（unknown-reject）；内置工�
     "untrustedAdmission": "refuse",   // refuse | degrade（仅 untrusted）
     "jail": "auto",                   // auto | require | none（none 需 privilegedAck）
     "onJailUnavailable": "degrade",   // refuse | degrade（jail != none）
-    "privilegedAck": "…",             // 显式无笼表态（jail=none 必填）
+    "privilegedAck": "…",             // 显式表态（jail=none 必填；root/elevated 部署同样必填）
     "shellEscape": "deny",            // deny | confirm | allow
     "pathContainment": "strict",      // strict | soft | none
     "processLimits": true,
-    "escalation": {                 // priv_exec 白名单（ops P3）；policy: none | allowlist
+    "escalation": {                 // priv_exec 提权通道（ops P3/P4）；policy: none | allowlist | full
       "policy": "allowlist",
       "via": "sudo",                 // sudo（argv 显式写 `sudo -n`）| direct（root/elevated）
       "allow": [
         { "cmd": "/usr/bin/sudo", "args": ["-n", "/usr/bin/systemctl", "restart", "nginx"], "confirm": true }
       ]
+    },
+    "dangerousCommands": {          // §6 减速带（不是安全边界）；安全字段：重启生效
+      "policy": "confirm",          // confirm | deny | off（缺省 confirm）
+      "timeoutMs": 120000           // 确认超时——超时一律 deny（outcome 不可配）
     },
     "opsAudit": "on",                 // ops 审计账本（安全字段：重启生效）；缺省 on
     "opsAuditPath": "…/audit/ops.jsonl"   // 缺省 `<OCTOPI_HOME>/audit/ops.<agentId>.jsonl`
@@ -271,8 +275,44 @@ args 里的相对路径按钉住的 cwd 解析——规则参数建议一律绝�
 规则的 HITL 确认（SEC-7 单模型，缓存 key 含完整 argv——一次批准只覆盖一条命令）、请求者授权
 （SEC-2 `toolRights.deny('priv_exec')`）、审计（`ops.escalation.requested` / `ops.privileged.exec`）。
 启动期探测拿不到声明的提权能力即**拒绝启动**（`sudo -n true` / root-or-elevated 断言）；规则
-二进制位于 agent 可写面或被 agent uid 可写则拒（可换二进制 TOCTOU）。`policy: "full"` 属 P4
-（除常驻 `PRIVILEGED` 标记外还需 `privilegedAck`，二者并用）。
+二进制位于 agent 可写面或被 agent uid 可写则拒（可换二进制 TOCTOU）。
+
+**全量档（`policy: "full"`，P4）——仅限显式指定机器的全量 sudo。** 全量档经同一条
+privileged 通道执行**任意** argv（`via: "sudo"` 下仍必须显式 `sudo -n <目标…>` 形态——
+裸跑等于非特权通道假象）。前提严格：`mode: "host"` + `jail: "none"` + `privilegedAck`
+三者齐备，其余组合一律按配置矛盾在加载期拒绝（`allowlist` 档不矛盾、保持原牢笼）。
+root 部署从另一侧受同一约束：高权限进程（root / Windows 管理员令牌，**行为探测**而非
+配置位）必须带显式 `privilegedAck`，否则拒绝启动。无论哪条路径，WebUI 与 CLI 都**常驻**
+显示 `PRIVILEGED` 标记（app header + Run 观测；`octopi serve status`）——它是
+`privilegedAck` 的常驻可见另一半，不是一次性 toast。
+
+**危险命令减速带（不是安全边界）。** `full` 档下命中保守分类表的 argv（`rm -rf`、
+`dd of=/dev/*`、`mkfs.*`、`iptables -F`、`systemctl disable`、`chmod -R`、`chown -R`、
+`truncate`）按 `dangerousCommands.policy` 走确认闸（缺省 `confirm`，另有 `deny` / `off`）；
+未命中一律放行（**不做「未知即危险」**）。确认超时**一律 deny**。它只拦**事故**不拦
+**攻击**：`sh -c 'rm -rf /'`、`python -c`、base64、重定向按构造即可绕过（已钉为测试
+用例）。真正的边界是权限范围 + 审计；闸门只给手滑减速。
+
+**远程加固（P5）。** 面向无人值守（T1）部署的四项宿主侧设施：
+
+- **异步确认，双通道。** 待确认经 gateway 通道（WS 广播 + `/approvals`）投递；配置了
+  `gateway.hitlWebhook` 时**同时**向 owner 端点推送 HMAC-SHA256 签名的 webhook。决策携带
+  **谁批的、经哪条通道**（`approver` / `channel: gateway|webhook`），随审批记录与 ops 审计
+  （`confirmedBy` / `confirmChannel`）一并定格。确认超时**一律 deny**（outcome 不可配）。
+- **审计外送（唯一不可抵赖档）。** 配置 `effectPolicy.opsAuditExportPath` 后，每条账目以信封
+  append-only 外送到 **agent 可写面之外**的宿主侧文件：`count`（= 账本 seq，缺号可查）+
+  `tailHash`（链尾锚点）+ 账目原样——宿主可在自己的副本上重放 `verifyOpsAuditChain`。
+  尾部截断 / 整文件删除就靠这一档自证。
+- **kill switch。** `octopi ops kill <agentId>` 写宿主侧哨兵（`<OCTOPI_HOME>/agents/<id>/KILL`）；
+  哨兵存在期间引擎拒绝 run **和**每一次工具调用——不依赖 LLM 判断、不需要 agent 配合、agent
+  无法自行解除。`octopi ops revive <agentId>` 恢复；`octopi ops status` 查看状态。
+- **请求者 ≠ 确认人。** 谁能**请求**提权由 SEC-2 `toolRights` 求交决定（T1 缺省仅 owner 角色）；
+  被 deny `priv_exec` 的参与者在**确认闸门之前**即拒并记 `not_authorized`——确认闸只回答
+  「这一次放不放」。
+
+Windows 边界（如实声明）：win-job 助手服务（OP-ISO-1）落地之前，Windows 上的 P3/P4
+本质是「elevated 进程 + 常驻 `PRIVILEGED` 标记 + 各级闸门」，**无物理隔离兜底**——
+不得对外表述为沙箱。
 
 仍然成立的关联语义：
 

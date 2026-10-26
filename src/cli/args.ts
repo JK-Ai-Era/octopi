@@ -5,6 +5,8 @@
 export interface CliArgs {
   command: string;
   subcommand?: string;
+  /** 第三个位置参数（如 `octopi ops kill <agentId>` 的 agentId） */
+  target?: string;
   config?: string;
   port?: number;
   help?: boolean;
@@ -149,6 +151,7 @@ export function parseArgs(argv: string[] = process.argv.slice(2)): CliArgs {
   return {
     command: positional[0] ?? 'help',
     subcommand: positional[1],
+    target: positional[2],
     config,
     port,
     help,

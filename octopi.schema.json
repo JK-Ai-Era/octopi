@@ -196,7 +196,8 @@
                     "type": "string",
                     "enum": [
                       "none",
-                      "allowlist"
+                      "allowlist",
+                      "full"
                     ]
                   },
                   "via": {
@@ -242,6 +243,25 @@
                 },
                 "additionalProperties": false
               },
+              "dangerousCommands": {
+                "type": "object",
+                "properties": {
+                  "policy": {
+                    "type": "string",
+                    "enum": [
+                      "confirm",
+                      "deny",
+                      "off"
+                    ]
+                  },
+                  "timeoutMs": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991
+                  }
+                },
+                "additionalProperties": false
+              },
               "opsAudit": {
                 "type": "string",
                 "enum": [
@@ -250,6 +270,10 @@
                 ]
               },
               "opsAuditPath": {
+                "type": "string",
+                "minLength": 1
+              },
+              "opsAuditExportPath": {
                 "type": "string",
                 "minLength": 1
               }
@@ -2905,7 +2929,8 @@
               "type": "string",
               "enum": [
                 "none",
-                "allowlist"
+                "allowlist",
+                "full"
               ]
             },
             "via": {
@@ -2951,6 +2976,25 @@
           },
           "additionalProperties": false
         },
+        "dangerousCommands": {
+          "type": "object",
+          "properties": {
+            "policy": {
+              "type": "string",
+              "enum": [
+                "confirm",
+                "deny",
+                "off"
+              ]
+            },
+            "timeoutMs": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "additionalProperties": false
+        },
         "opsAudit": {
           "type": "string",
           "enum": [
@@ -2959,6 +3003,10 @@
           ]
         },
         "opsAuditPath": {
+          "type": "string",
+          "minLength": 1
+        },
+        "opsAuditExportPath": {
           "type": "string",
           "minLength": 1
         }
@@ -3533,6 +3581,23 @@
         },
         "debugRest": {
           "type": "boolean"
+        },
+        "hitlWebhook": {
+          "type": "object",
+          "properties": {
+            "url": {
+              "type": "string",
+              "format": "uri"
+            },
+            "secret": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "url"
+          ],
+          "additionalProperties": false
         }
       },
       "additionalProperties": false

@@ -37,7 +37,11 @@ export interface EscalationRule {
 
 /** 提权策略（resolved） */
 export interface EscalationPolicy {
-  policy: 'none' | 'allowlist';
+  /**
+   * `none`（缺省）| `allowlist`（cmd+args 全等）| `full`（全量档，P4）。
+   * `full` 仅在 `jail: "none"` + `privilegedAck` + `mode: "host"` 下合法（§4.1）。
+   */
+  policy: 'none' | 'allowlist' | 'full';
   via: 'sudo' | 'direct';
   allow: EscalationRule[];
 }
@@ -323,7 +327,11 @@ export function escalationWritableRoots(options?: {
 export async function probeEscalationReadiness(
   config:
     | EscalationPolicy
-    | { policy?: 'none' | 'allowlist'; via?: 'sudo' | 'direct'; allow?: EscalationRule[] }
+    | {
+        policy?: 'none' | 'allowlist' | 'full';
+        via?: 'sudo' | 'direct';
+        allow?: EscalationRule[];
+      }
     | undefined,
   options?: { writableRoots?: readonly string[] },
 ): Promise<EscalationReadiness> {
@@ -333,7 +341,12 @@ export async function probeEscalationReadiness(
     allow: config?.allow ?? [],
   };
   if (escalation.policy === 'none') return { ok: true };
-  if (escalation.policy === 'allowlist' && escalation.allow.length === 0) {
+  if (escalation.policy === 'full') {
+    // 全量档（P4）没有 allowlist 面；带 allow 规则 = 配置死键（schema 已拒，库路径兜底）
+    if (escalation.allow.length > 0) {
+      return { ok: false, reason: 'escalation.policy=full takes no escalation.allow rules (exact-match list is an allowlist-only concept)' };
+    }
+  } else if (escalation.allow.length === 0) {
     return { ok: false, reason: 'escalation.policy=allowlist but effectPolicy.escalation.allow is empty' };
   }
   for (const rule of escalation.allow) {
@@ -377,4 +390,64 @@ export async function probeEscalationReadiness(
     return { ok: false, reason: `escalation.via=direct but geteuid()=${euid} (need 0)` };
   }
   return { ok: true };
+}
+
+/**
+ * 本进程是否已高权限（root / Windows elevated 管理员令牌）。
+ *
+ * POSIX 同步读 `geteuid()`；win32 走 `fsutil dirty query` 行为探测（与
+ * `probeEscalationReadiness` 的 direct 分支同口径，不读配置位、不猜 token）。
+ * 结果按进程生命期缓存（权限不可自行提升，探测一次即事实不变）。
+ *
+ * @returns true = 高权限进程
+ */
+export async function isProcessElevated(): Promise<boolean> {
+  if (cachedElevated !== undefined) return cachedElevated;
+  if (process.platform === 'win32') {
+    const fsutil = `${process.env.SystemRoot ?? 'C:\\Windows'}\\System32\\fsutil.exe`;
+    const probe = await runPrivilegedExec({
+      cmd: fsutil,
+      args: ['dirty', 'query', 'C:'],
+      via: 'direct',
+      timeoutMs: 5000,
+    });
+    cachedElevated = probe.exitCode === 0;
+  } else {
+    const euid = typeof process.geteuid === 'function' ? process.geteuid() : -1;
+    cachedElevated = euid === 0;
+  }
+  return cachedElevated;
+}
+
+let cachedElevated: boolean | undefined;
+
+/** 同步口径的高权限猜测（POSIX 可判；win32 同步不可判时如实返回 false 交由异步探测补） */
+export function isProcessElevatedSync(): boolean {
+  if (process.platform === 'win32') return false;
+  return typeof process.geteuid === 'function' ? process.geteuid() === 0 : false;
+}
+
+/**
+ * root/elevated 部署的显式 privileged 声明断言（§5 P4 root 部署语义）。
+ *
+ * daemon 以 root 跑时没有 sudo，危险轴变成「笼不笼 × uid=0」——启动期高权限进程
+ * 必须在 effectPolicy 里显式 `privilegedAck` 表态，拿不到声明就拒绝启动，
+ * 不允许「root 就这么跑着」的静默特权态。
+ *
+ * @param params.elevated - 进程是否高权限（`isProcessElevated` 探测值）
+ * @param params.privilegedAck - effectPolicy.privilegedAck（可缺省）
+ * @param params.scope - 出错信息里的配置面标识（如 `<top>` / agent id）
+ * @throws `privileged_declaration_required`（elevated 且无声明）
+ */
+export function assertPrivilegedDeclaration(params: {
+  elevated: boolean;
+  privilegedAck?: string;
+  scope: string;
+}): void {
+  if (!params.elevated) return;
+  if (params.privilegedAck?.trim()) return;
+  throw new Error(
+    `privileged_declaration_required (${params.scope}): process is elevated (root/admin) but ` +
+      `effectPolicy.privilegedAck is missing — declare the privileged deployment explicitly or run unprivileged`,
+  );
 }

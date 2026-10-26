@@ -51,12 +51,23 @@ export interface RunToolRuntime {
   pathContainment?: "strict" | "soft" | "none";
   confirmEffect?: import("@octopi-agent/core/types/tools.js").ToolExecutionContext["confirmEffect"];
   effectChannel?: "engine" | "host-gate";
-  /** 提权策略（ops P3，resolved）：priv_exec 全等匹配面 */
+  /** 提权策略（ops P3/P4，resolved）：priv_exec 匹配面（allowlist 全等 / full 全量） */
   escalation?: {
-    policy: "none" | "allowlist";
+    policy: "none" | "allowlist" | "full";
     via: "sudo" | "direct";
     allow: Array<{ cmd: string; args?: string[]; confirm?: boolean }>;
   };
+  /** 危险命令减速带 resolved（§6）：full 档 pre-exec 闸 + 确认超时（超时一律 deny） */
+  dangerousCommands?: {
+    policy: "confirm" | "deny" | "off";
+    timeoutMs: number;
+  };
+  /** 会话参与者身份（SEC-2 / ops P5）：提权审计 requester 入账 */
+  sessionParticipants?: Array<{ agentId: string; roleId: string }>;
+  /** kill switch 哨兵路径（ops P5）：beforeToolCall 逐工具闸的检查面 */
+  killSwitchPaths?: string[];
+  /** 特权部署标记（§5 P4/§8.1）：jail=none / full 档 / root 进程——UI 常驻 `PRIVILEGED` 数据源 */
+  privileged?: boolean;
   /** L1 processLimits（false = 不强制 timeoutMs 看门狗） */
   processLimits?: boolean;
   /** shell 工具策略（gateEffect；deny=拒绝 shell） */

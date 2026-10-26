@@ -33,6 +33,9 @@ Commands:
   webui restart     Restart the Web UI server
   webui status      Show Web UI server status
   plugin init       Scaffold a new plugin project
+  ops kill <id>     Kill switch: stop ALL execution of an agent (host-side, immediate)
+  ops revive <id>   Release the kill switch and resume execution
+  ops status [id]   Show kill-switch state for one or all agents
   llm-diff [session]
                     Compare dumped LLM requests and locate cache-prefix breaks
   help              Show this help message

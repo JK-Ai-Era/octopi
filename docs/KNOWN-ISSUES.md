@@ -23,6 +23,8 @@
 
 **HITL single model (SEC-7, v0.79.0):** the only confirm surfaces are `confirmHighRisk` and `confirmEffect`, both returning `HitlDecision` (`deny` / `approve` / `approve_session` / `approve_always`). The engine caches session/always approvals (`HitlDecisionCache`); hosts only express the decision. `approve_session` is keyed by `sessionId`; `approve_always` is keyed by `agentId` (agents with different trust levels do not share always-grants). Missing scope id degrades to one-shot. `ApprovalManager` / `ApprovalProvider` were removed. Gateway confirms go through `pendingApprovals` (Web `/approvals`); `askUser` is reserved for the `ask_user` tool. Unattended / no-hook / timeout stays fail-closed. Tool *output* high/critical still blocks with no confirm path. Cache key granularity is tool name / effect kind (not per-argument) by design.
 
+**Ops privileged channel (ops P3/P4):** `priv_exec` (allowlist exact-match / `full` tier with `privilegedAck` + persistent `PRIVILEGED` badge + root/elevated declaration gate) and the dangerous-command speed bump. **Windows boundary:** before the win-job helper service lands (OP-ISO-1) there is **no physical isolation floor** on Windows — P3/P4 there is "elevated process + persistent badge + gates" and must not be described as a sandbox. `runas /savecred` and scheduled-task privilege bypasses are deliberately absent (unattended escalation must never depend on stored consent).
+
 ## Knowledge external-source outbound — known limits
 
 **Status:** OP-14 mainline landed; the following are intentional boundaries

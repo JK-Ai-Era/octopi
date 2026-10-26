@@ -44,8 +44,12 @@ const EFFECT_POLICY_SECURITY_KEYS = [
   'toolIsolation',
   'opsAudit',
   'opsAuditPath',
+  // P5 审计外送也是安全面（换收口 = 换见证人）
+  'opsAuditExportPath',
   'network',
   'escalation',
+  // ops P4：危险命令减速带也是安全闸（改档 = 放松/收紧确认闸，须重启 + 宿主署名）
+  'dangerousCommands',
 ] as const;
 
 const SECURITY_CONFIG_SECURITY_KEYS = ['enforce', 'injectionSensitivity', 'allowedPaths'] as const;

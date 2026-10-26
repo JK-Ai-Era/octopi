@@ -369,6 +369,40 @@ export async function* runAgentWithReliability(
 
     // beforeToolCall：Budget hard 闸 + wrap-up 控制 + SecurityGuard 检查 + 原始回调
     beforeToolCall: async (ctx, signal) => {
+      // ops P5 kill switch：宿主侧急停，先于一切执行（不依赖 LLM/agent 合作，agent 无法解除）
+      {
+        const scope = getRunScope();
+        const killPaths = scope?.toolRuntime?.killSwitchPaths;
+        if (killPaths && killPaths.length > 0) {
+          const { checkKillSwitch } = await import(
+            '../../extension/execution-environment/kill-switch.js'
+          );
+          const killState = checkKillSwitch(killPaths);
+          if (killState.engaged) {
+            const reason = `kill_switch_active: agent execution is halted by the host sentinel (${killState.path})`;
+            state.pendingSecurityEvents.push({
+              type: 'security_blocked',
+              timestamp: Date.now(),
+              data: {
+                sessionId: scope?.sessionId,
+                agentId: scope?.agentId,
+                reason,
+                toolName: ctx.toolCall.name,
+                action: 'reject',
+                severity: 'high',
+                violations: [
+                  {
+                    type: 'unauthorized_tool',
+                    severity: 'high',
+                    description: reason,
+                  },
+                ],
+              },
+            });
+            return { block: true, reason, terminate: true };
+          }
+        }
+      }
       // Budget hard：阻止本批工具继续执行（turn_end 在工具之前 yield）
       if (budget && !state.budgetStop) {
         const hard = budget.checkHardOnly();
@@ -458,6 +492,27 @@ export async function* runAgentWithReliability(
             ])
           ) {
             const reason = `tool_rights_denied: "${ctx.toolCall.name}" is not permitted for this session participant`;
+            // ops P5/§8.6：提权请求者缺权 → **确认闸门之前**拒绝并留痕（not_authorized，
+            // 无弹窗）。工具 handler 根本不会执行——确认 ≠ 请求者可信。
+            if (ctx.toolCall.name === 'priv_exec') {
+              scope?.toolRuntime?.recordOpsEvent?.({
+                event: 'ops.escalation.denied',
+                data: {
+                  argv: [
+                    String((ctx.toolCall.arguments as { cmd?: unknown } | undefined)?.cmd ?? ''),
+                    ...(((ctx.toolCall.arguments as { args?: unknown } | undefined)?.args as string[] | undefined) ?? []),
+                  ],
+                  why: 'not_authorized',
+                  toolName: ctx.toolCall.name,
+                  origin: {
+                    sessionId: scope?.sessionId,
+                    agentId: scope?.agentId,
+                    runId: scope?.runId ?? null,
+                    participants: scope?.toolRuntime?.sessionParticipants ?? [],
+                  },
+                },
+              });
+            }
             state.pendingSecurityEvents.push({
               type: 'security_blocked',
               timestamp: Date.now(),

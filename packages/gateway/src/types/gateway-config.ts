@@ -37,6 +37,15 @@ export interface GatewayConfig {
   credentials?: {
     requireBindings?: boolean;
   };
+  /**
+   * HITL 异步确认 webhook 通道（ops P5 双通道之一；`gateway.hitlWebhook` 进程面覆盖）。
+   * 待确认推送 owner 侧端点（HMAC-SHA256 签名）；决策可回 REST（channel=webhook）。
+   * 超时 deny 不可配。
+   */
+  hitlWebhook?: {
+    url: string;
+    secret?: string;
+  };
   /** Session ACL 角色目录（E6）；缺省内置五角色 */
   sessionAcl?: import('@octopi-agent/engine/harness/governance/session-acl/types.js').SessionAclConfig;
   /** send_file 外发限额；缺省 maxBytes=2GB，maxReleasesPerSession 不限 */

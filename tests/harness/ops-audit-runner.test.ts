@@ -131,4 +131,42 @@ describe('ops 审计 × runner 集成', () => {
     const lines = body.split('\n').filter(Boolean);
     expect(lines.length).toBeGreaterThanOrEqual(1);
   });
+
+  it('审计外送：信封（count=seq + tailHash 锚点 + entry 原样）落宿主侧收口，链可重验', async () => {
+    home = await mkdtemp(join(tmpdir(), 'octopi-ops-export-'));
+    const store = new JsonlSessionStore({ sessionsDir: join(home, 'sessions') });
+    await store.save('s1', emptySession('s1'));
+    const journalPath = join(home, 'ops.jsonl');
+    const exportPath = join(home, 'witness', 'export.jsonl');
+    const runner = new SessionAwareRunner(scriptedAgent(), {} as never, store, {
+      opsAuditPath: journalPath,
+      opsAuditExportPath: exportPath,
+    });
+
+    for await (const _ev of runner.handle(
+      's1',
+      { role: 'user', content: 'hi', timestamp: Date.now() } as Message,
+      { agentId: 'a1' } as never,
+    )) {
+      // drain
+    }
+
+    const raw = await readFile(exportPath, 'utf8');
+    const envelopes = raw
+      .split('\n')
+      .filter(Boolean)
+      .map((l) => JSON.parse(l) as { count: number; tailHash: string; entry: { seq: number; hash: string } });
+    expect(envelopes.length).toBeGreaterThanOrEqual(1);
+    // count = 账本 seq（宿主按此查缺）；tailHash = 本条链尾锚点
+    for (const env of envelopes) {
+      expect(env.count).toBe(env.entry.seq);
+      expect(env.tailHash).toBe(env.entry.hash);
+    }
+    // entry 原样可重验链（宿主侧 verifyOpsAuditChain 直接重放）
+    const { verifyOpsAuditChain } = await import(
+      '@octopi-agent/engine/harness/extension/execution-environment/ops-audit.js'
+    );
+    const check = verifyOpsAuditChain(envelopes.map((e) => e.entry as never));
+    expect(check.ok).toBe(true);
+  });
 });

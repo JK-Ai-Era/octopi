@@ -498,6 +498,8 @@ export interface RunScopeViewDto {
     messagesCount: number;
     cwd?: string;
     isolation?: string;
+    /** ops P4：特权部署标记（jail=none / full 档 / root·elevated）——UI 常驻 PRIVILEGED */
+    privileged?: boolean;
   };
   resolvedModel?: {
     modelName?: string;
@@ -630,6 +632,8 @@ export interface RunObservatorySnapshotDto {
     runId?: string;
     cwd?: string;
     isolation?: string;
+    /** ops P4：特权部署标记（同 toolRuntime.privileged） */
+    privileged?: boolean;
     tools: Array<{ name: string; calls: number; errors: number; lastDurationMs?: number }>;
     undo?: {
       entries: number;
@@ -892,11 +896,17 @@ export class OctopiClient {
   // Public API: REST
   // ──────────────────────────────────
 
-  async health(): Promise<{ status: string; agents: AgentSummary[] }> {
+  async health(): Promise<{
+    status: string;
+    agents: AgentSummary[];
+    /** ops P4：特权部署状态（UI 常驻 PRIVILEGED 标记数据源） */
+    privileged?: { active: boolean; reasons: string[] };
+  }> {
     const data = await this.getJson('/health');
     return {
       status: String(data?.data?.status ?? data?.status ?? 'unknown'),
       agents: (data?.data?.agents as AgentSummary[]) ?? [],
+      privileged: (data?.data?.privileged as { active: boolean; reasons: string[] } | undefined) ?? undefined,
     };
   }
 

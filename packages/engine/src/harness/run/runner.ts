@@ -26,7 +26,7 @@ import type { ReliabilityHarness } from './reliability/run-agent.js';
 import { createSessionStateMachine } from '../session/state-machine.js';
 import type { StateMachine } from '@octopi-agent/core/primitives/state-machine.js';
 import { HeuristicTokenEstimator } from '../context/index.js';
-import { OpsAuditJournal, type OpsAuditEvent } from '../extension/execution-environment/ops-audit.js';
+import { OpsAuditJournal, OpsAuditFileExportSink, type OpsAuditEvent, type OpsAuditExportSink } from '../extension/execution-environment/ops-audit.js';
 import { getOctopiHome } from '../../paths.js';
 import { extractLayerQuery } from '../context/layer-types.js';
 import {
@@ -105,6 +105,16 @@ export interface SessionAwareRunnerConfig {
    * 与 effectPolicy.opsAuditPath 同义；effectPolicy 优先。
    */
   opsAuditPath?: string;
+  /**
+   * 审计外送收口路径（ops P5）；与 effectPolicy.opsAuditExportPath 同义，effectPolicy 优先。
+   * 宿主侧、agent 不可写面；缺省不外送。
+   */
+  opsAuditExportPath?: string;
+  /**
+   * kill switch 哨兵覆盖（ops P5）；缺省 `<OCTOPI_HOME>/agents/<agentId>/KILL`。
+   * 文件存在 = 停止该 agent 全部执行（run 准入 + 逐工具闸），宿主 `octopi ops kill` 写入。
+   */
+  killSwitchPath?: string;
   /**
    * 安全配置漂移守卫（ops P2 §4.3/§8.4 拍板：漂移拒新 run）。
    * 宿主注入（通常 `createFileSecurityIntegrity`）；未注入 = 无守卫（库嵌入自担）。
@@ -447,10 +457,19 @@ export class SessionAwareRunner {
   /** ops P2：审计账本开关（effectPolicy.opsAudit；未解析时回落配置缺省 on） */
   /** ops P3：提权策略（resolved；priv_exec 全等匹配面） */
   private effectEscalation?: import('../extension/execution-environment/effect-policy.js').EscalationPolicy;
+  /** ops P4：危险命令减速带 resolved（§6；full 档 pre-exec 闸 + 确认超时） */
+  private effectDangerousCommands?:
+    import('../extension/execution-environment/effect-policy.js').EffectiveEffectPolicy['dangerousCommands'];
+  /** ops P4：特权部署标记（jail=none / full 档 / root 进程）——UI 常驻 PRIVILEGED 数据源 */
+  private effectPrivileged: boolean | undefined;
+  /** ops P5：kill switch 哨兵路径（run 准入已查；逐工具闸复用同面） */
+  private killSwitchPaths: string[] = [];
   /** ops P2：审计账本开关（effectPolicy.opsAudit；未解析时回落配置缺省 on） */
   private effectOpsAudit: 'on' | 'off' | undefined;
   /** ops P2：hash 链审计账本（懒建；写失败降级申报，不吞） */
   private opsJournal?: OpsAuditJournal;
+  /** ops P5：审计外送收口（宿主侧见证副本；未配置则不外送） */
+  private opsExporter?: OpsAuditExportSink;
   /** ops P2：账本缺省文件名的 agent 锚（每 runner 单 agent；handle 起点锚定） */
   private opsAuditAgentId?: string;
   /** ops P2：审计事件的 session 归属（写失败申报等无 run 载荷时用） */
@@ -556,27 +575,63 @@ export class SessionAwareRunner {
       this.opsJournal = new OpsAuditJournal({ path });
     }
     try {
-      this.opsJournal.append(event, data);
+      const entry = this.opsJournal.append(event, data);
+      // ops P5 审计外送（原则 8：唯一不可抵赖档）：本地链防改写，外送防尾部截断/删除。
+      // 外送失败不回滚本地账（已落链），但必须降级申报——丢外送就是丢不可抵赖性。
+      const exporter = this.resolveOpsExporter();
+      if (exporter) {
+        try {
+          exporter.forward({
+            count: entry.seq,
+            tailHash: entry.hash,
+            entry,
+            forwardedAt: Date.now(),
+          });
+        } catch (exportErr) {
+          this.noteOpsDegradation(
+            `ops_audit_export_failed: ${exportErr instanceof Error ? exportErr.message : String(exportErr)}`,
+          );
+        }
+      }
     } catch (err) {
       // 只吞「写失败」这一类，转成降级申报；账本损坏（ops_audit_corrupt）同样走这里。
-      // 双通道：harness 字段会被下一次 run 起点重置抹掉，必须同时发在线事件（评审实证）
-      const reason = `ops_audit_write_failed: ${err instanceof Error ? err.message : String(err)}`;
-      this.harness.securityDegraded = [
-        ...(this.harness.securityDegraded ?? []),
-        reason as never,
-      ];
-      this.emitObserved({
-        type: 'ops.policy.degraded',
-        timestamp: Date.now(),
-        agentId: this.opsAuditAgentId,
-        sessionId: this.opsAuditSessionId,
-        data: {
-          degradation: [reason],
-          requestedVsEffective: { requestedMode: 'n/a', mode: 'n/a' },
-          origin: { sessionId: this.opsAuditSessionId, agentId: this.opsAuditAgentId ?? '' },
-        },
-      });
+      this.noteOpsDegradation(
+        `ops_audit_write_failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
+  }
+
+  /** 外送收口（懒建；仅配置了宿主侧收口路径时启用） */
+  private resolveOpsExporter(): OpsAuditExportSink | undefined {
+    const exportPath =
+      this.config.effectPolicy?.opsAuditExportPath ?? this.config.opsAuditExportPath;
+    if (!exportPath) return undefined;
+    if (!this.opsExporter) {
+      this.opsExporter = new OpsAuditFileExportSink({ path: exportPath });
+    }
+    return this.opsExporter;
+  }
+
+  /**
+   * 审计链路降级申报（写失败/外送失败）。
+   * 双通道：harness 字段会被下一次 run 起点重置抹掉，必须同时发在线事件（评审实证）。
+   */
+  private noteOpsDegradation(reason: string): void {
+    this.harness.securityDegraded = [
+      ...(this.harness.securityDegraded ?? []),
+      reason as never,
+    ];
+    this.emitObserved({
+      type: 'ops.policy.degraded',
+      timestamp: Date.now(),
+      agentId: this.opsAuditAgentId,
+      sessionId: this.opsAuditSessionId,
+      data: {
+        degradation: [reason],
+        requestedVsEffective: { requestedMode: 'n/a', mode: 'n/a' },
+        origin: { sessionId: this.opsAuditSessionId, agentId: this.opsAuditAgentId ?? '' },
+      },
+    });
   }
 
   /**
@@ -1047,6 +1102,35 @@ export class SessionAwareRunner {
               `automated attestation lands with the ConfigService write-back)`,
           );
         }
+        // ops P5 kill switch：宿主侧急停哨兵——run 准入即拒（不依赖 LLM 判断/agent 合作）
+        {
+          const { checkKillSwitch, defaultKillSwitchPath } = await import(
+            '../extension/execution-environment/kill-switch.js'
+          );
+          this.killSwitchPaths = [
+            this.config.killSwitchPath ?? defaultKillSwitchPath(_agentId),
+          ];
+          const killState = checkKillSwitch(this.killSwitchPaths);
+          if (killState.engaged) {
+            const killData = {
+              path: killState.path,
+              action: 'refuse_run',
+              origin: { sessionId, agentId: _agentId },
+            };
+            this.recordOpsAudit('ops.kill_switch.tripped', killData);
+            this.emitObserved({
+              type: 'ops.kill_switch.tripped',
+              timestamp: Date.now(),
+              agentId: _agentId,
+              sessionId,
+              data: { ...killData },
+            } as never);
+            throw new Error(
+              `kill_switch_active: agent execution is halted by the host sentinel (${killState.path}); ` +
+                `remove it (\`octopi ops revive <agentId>\`) to resume`,
+            );
+          }
+        }
         const {
           resolveEffectiveEffectPolicy,
           readSessionEffectOverrides,
@@ -1075,6 +1159,14 @@ export class SessionAwareRunner {
         this.effectNetwork = eff.network;
         this.effectJail = eff.jail;
         this.effectEscalation = eff.escalation;
+        this.effectDangerousCommands = eff.dangerousCommands;
+        // ops P4：特权部署标记 = 授权无笼 / full 档 / root·elevated 进程（§5 P4 root 部署语义）
+        {
+          const { isProcessElevated } = await import(
+            '../extension/execution-environment/privileged-exec.js'
+          );
+          this.effectPrivileged = eff.privileged || (await isProcessElevated());
+        }
         this.effectRequireJail = requiresJail(eff);
         // 严格凭证绑定只跟 untrusted 承诺走（历史语义）：jail=require/refuse 不得
         // 悄悄改变 host/project 的凭证行为
@@ -1477,6 +1569,14 @@ export class SessionAwareRunner {
           confirmEffect: this.config.confirmEffect,
           effectChannel: this.effectChannel,
           escalation: this.effectEscalation,
+          dangerousCommands: this.effectDangerousCommands,
+          privileged: this.effectPrivileged,
+          // ops P5「参与者身份入账」：提权请求/拒绝审计的 requester 载荷（SEC-2 角色绑定）
+          sessionParticipants: session.participants?.map((p) => ({
+            agentId: p.agentId,
+            roleId: p.roleId,
+          })),
+          killSwitchPaths: this.killSwitchPaths,
           processLimits: this.effectProcessLimits,
           shellEscape: this.effectShellEscape,
           shellJournal: this.effectShellJournal,

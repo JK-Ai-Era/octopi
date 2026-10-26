@@ -425,6 +425,8 @@ export interface RunToolRuntimeView {
   messagesCount: number;
   cwd?: string;
   isolation?: string;
+  /** ops P4：特权部署标记（jail=none / full 档 / root·elevated）——UI 常驻 `PRIVILEGED` */
+  privileged?: boolean;
 }
 
 export interface RunScopeView {
@@ -534,6 +536,8 @@ export interface RunToolEffectView {
   runId?: string;
   cwd?: string;
   isolation?: string;
+  /** ops P4：特权部署标记（同 RunToolRuntimeView.privileged） */
+  privileged?: boolean;
   tools: Array<{
     name: string;
     calls: number;

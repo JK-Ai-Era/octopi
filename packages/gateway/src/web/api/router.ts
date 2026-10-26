@@ -63,6 +63,8 @@ export class WebApiRouter {
             status: 'ok',
             agents: this.gateway.getRegisteredAgents(),
             effectPolicy: this.gateway.getEffectPolicyStatus(),
+            // ops P4：常驻 PRIVILEGED 标记（不是一次性 toast）的数据源
+            privileged: await this.gateway.getPrivilegedStatus(),
           },
         });
       }
@@ -1132,6 +1134,9 @@ export class WebApiRouter {
           action: body.action,
           scope: scope as 'once' | 'session' | 'always' | undefined,
           reason: body.reason,
+          // ops P5 确认人入账：谁批的（宿主/回执身份）、经哪条通道
+          approver: typeof body.approver === 'string' ? body.approver : undefined,
+          channel: body.channel === 'webhook' ? 'webhook' : 'gateway',
         });
 
         if (!resolved) {

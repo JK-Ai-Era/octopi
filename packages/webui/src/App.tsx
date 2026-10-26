@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import ChatWorkspace from './components/ChatWorkspace';
 import { KnowledgeAdminPanel } from './components/KnowledgeAdminPanel';
+import { PrivilegedBadge } from './components/PrivilegedBadge';
 import { SettingsWorkspace } from './components/SettingsWorkspace';
 
 type Surface = 'playground' | 'knowledge' | 'settings';
@@ -40,6 +41,8 @@ export default function App() {
           </nav>
         </div>
         <div className="app-header-actions">
+          {/* ops P4 §8.1：常驻 PRIVILEGED 标记（非一次性 toast） */}
+          <PrivilegedBadge />
           {surface === 'playground' && (
             <button
               type="button"

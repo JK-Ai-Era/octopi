@@ -43,7 +43,7 @@ import type { SessionData } from '@octopi-agent/engine/harness/session/types.js'
 import { applyUserTitle, maybeUpdateSessionTitle } from './session-title.js';
 import type { StreamingChannelAdapter } from '../protocols/http.js';
 import type { Message } from '@octopi-agent/core/types.js';
-import { randomUUID } from 'node:crypto';
+import { createHmac, randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { existsSync } from 'node:fs';
 import { CircuitBreaker } from '@octopi-agent/engine/harness/run/reliability/circuit-breaker.js';
@@ -129,6 +129,10 @@ export interface PendingApprovalView {
   decidedAt?: number;
   decisionReason?: string;
   decisionScope?: ApprovalScope;
+  /** ops P5：谁批的（宿主归因；未知缺省，不编造） */
+  decidedBy?: string;
+  /** ops P5：经哪条通道（gateway 事件 | webhook 回执） */
+  decisionChannel?: 'gateway' | 'webhook';
 }
 
 /** ask_user 待答问题视图 */
@@ -402,7 +406,10 @@ export class Gateway {
   private _defaultStorePromise?: Promise<SessionStore<SessionData>>;
   /** Web Runtime pending approvals（confirmHighRisk / confirmEffect） */
   private pendingApprovals = new Map<string, PendingApprovalView>();
-  private approvalResolvers = new Map<string, (decision: HitlDecision) => void>();
+  private approvalResolvers = new Map<
+    string,
+    (decision: HitlDecision | import('@octopi-agent/core/types/tools.js').ConfirmOutcome) => void
+  >();
   /** ask_user 待答（UI 答完 resolve 等待工具） */
   private pendingQuestions = new Map<string, PendingQuestionView>();
   private questionResolvers = new Map<string, (answer: string) => void>();
@@ -924,6 +931,34 @@ export class Gateway {
       );
     }
     return { configuredMode, effectiveMode, engineDefaultMode, webEnabled, warnings };
+  }
+
+  /**
+   * 特权部署状态（ops P4，`arch/ops-privileged-mode.md` §5 P4/§8.1）：
+   * WebUI / CLI 常驻 `PRIVILEGED` 标记的数据源。
+   *
+   * active = 任一 effectPolicy 授权无笼（`jail: none`）/ 全量提权（`escalation: full`）
+   * / 本进程高权限（root·elevated，行为探测而非配置位）。授权态 ≠ 降级：不进
+   * securityDegraded，只做常驻可见性。
+   */
+  async getPrivilegedStatus(): Promise<{ active: boolean; reasons: string[] }> {
+    const reasons: string[] = [];
+    const policies: Array<{ scope: string; policy?: EffectPolicyConfig }> = [
+      { scope: 'top', policy: this.config.effectPolicy },
+      ...Array.from(this.agents.entries()).map(([id, agent]) => ({
+        scope: id,
+        policy: (agent as { effectPolicy?: EffectPolicyConfig }).effectPolicy,
+      })),
+    ];
+    for (const { scope, policy } of policies) {
+      if (policy?.jail === 'none') reasons.push(`${scope}: jail=none`);
+      if (policy?.escalation?.policy === 'full') reasons.push(`${scope}: escalation=full`);
+    }
+    const { isProcessElevated } = await import(
+      '@octopi-agent/engine/harness/extension/execution-environment/privileged-exec.js'
+    );
+    if (await isProcessElevated()) reasons.push('process: elevated (root/admin)');
+    return { active: reasons.length > 0, reasons };
   }
 
   /**
@@ -3939,7 +3974,7 @@ export class Gateway {
     agentId: string;
     request: Omit<PendingApprovalRequest, 'id'>;
     timeoutMs?: number;
-  }): Promise<HitlDecision> {
+  }): Promise<HitlDecision | import('@octopi-agent/core/types/tools.js').ConfirmOutcome> {
     const id = randomUUID();
     const view: PendingApprovalView = {
       id,
@@ -3949,10 +3984,12 @@ export class Gateway {
       status: 'pending',
       createdAt: Date.now(),
     };
-    return new Promise<HitlDecision>((resolve) => {
+    return new Promise((resolve) => {
       let settled = false;
       let timer: ReturnType<typeof setTimeout> | undefined;
-      const finish = (decision: HitlDecision) => {
+      const finish = (
+        decision: HitlDecision | import('@octopi-agent/core/types/tools.js').ConfirmOutcome,
+      ) => {
         if (settled) return;
         settled = true;
         if (timer) clearTimeout(timer);
@@ -3964,7 +4001,9 @@ export class Gateway {
       // 先广播再淘汰：淘汰只会删更旧的条目，不会波及刚插入的 view
       this.broadcastApprovalEvent(view);
       this.evictOldApprovals(id);
+      // ops P5 双通道：gateway 事件（上方广播）+ webhook 推送（失败只告警，另一通道仍在）
       const timeoutMs = input.timeoutMs ?? 120_000;
+      this.notifyHitlWebhook(view, timeoutMs);
       if (timeoutMs > 0) {
         timer = setTimeout(() => {
           const pending = this.pendingApprovals.get(id);
@@ -3985,7 +4024,15 @@ export class Gateway {
 
   resolvePendingApproval(
     approvalId: string,
-    input: { action: 'approve' | 'reject'; scope?: ApprovalScope; reason?: string },
+    input: {
+      action: 'approve' | 'reject';
+      scope?: ApprovalScope;
+      reason?: string;
+      /** ops P5：谁批的（宿主归因；未知缺省） */
+      approver?: string;
+      /** ops P5：经哪条通道（缺省 gateway；webhook 回执标 webhook） */
+      channel?: 'gateway' | 'webhook';
+    },
   ): PendingApprovalView | null {
     const approval = this.pendingApprovals.get(approvalId);
     if (!approval || approval.status !== 'pending') return null;
@@ -3998,6 +4045,9 @@ export class Gateway {
     approval.decisionScope = input.action === 'approve' ? scope : undefined;
     approval.decidedAt = now;
     approval.updatedAt = now;
+    // 确认人身份入账（P5）：谁批的、经哪条通道——与决策一起定格
+    approval.decidedBy = input.approver;
+    approval.decisionChannel = input.channel ?? 'gateway';
 
     const decision: HitlDecision =
       input.action !== 'approve'
@@ -4009,9 +4059,52 @@ export class Gateway {
             : 'approve';
     const finish = this.approvalResolvers.get(approvalId);
     this.approvalResolvers.delete(approvalId);
-    finish?.(decision);
+    finish?.({
+      decision,
+      approver: input.approver,
+      channel: approval.decisionChannel,
+    });
     this.broadcastApprovalEvent(approval);
     return approval;
+  }
+
+  /**
+   * ops P5 双通道之 webhook：把待确认推送到 owner 侧端点（HMAC-SHA256 签名）。
+   * 失败只告警——gateway 通道（WS 广播 + `/approvals`）仍在；两通道全失时靠超时 deny 兜底。
+   */
+  private notifyHitlWebhook(view: PendingApprovalView, timeoutMs: number): void {
+    const hook = this.config.hitlWebhook;
+    if (!hook?.url) return;
+    const body = JSON.stringify({
+      approvalId: view.id,
+      sessionId: view.sessionId,
+      agentId: view.agentId,
+      request: view.request,
+      deadlineAt: Date.now() + timeoutMs,
+      decide: {
+        method: 'POST',
+        path: `/api/v1/approvals/${view.id}`,
+        fields: ['action', 'scope', 'approver'],
+        note: 'set channel=webhook on the decision so the approver is attributed to this channel',
+      },
+    });
+    void fetch(hook.url, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        ...(hook.secret
+          ? {
+              'x-octopi-signature': `sha256=${createHmac('sha256', hook.secret).update(body).digest('hex')}`,
+            }
+          : {}),
+      },
+      body,
+      signal: AbortSignal.timeout(5000),
+    }).catch((err) => {
+      console.warn(
+        `[Gateway] HITL webhook notify failed (${view.id}): ${err instanceof Error ? err.message : String(err)}`,
+      );
+    });
   }
 
   /** 会话结束时取消未决审批（fail-closed deny） */
@@ -5110,7 +5203,7 @@ export class Gateway {
       const toolName = req.toolCall?.name ?? 'tool';
       const args = (req.toolCall?.arguments ?? {}) as Record<string, unknown>;
       const purpose = typeof args.purpose === 'string' ? args.purpose.trim() : '';
-      return this.requestApproval({
+      const outcome = await this.requestApproval({
         sessionId,
         agentId,
         request: {
@@ -5122,6 +5215,8 @@ export class Gateway {
           actionDescription: purpose ? `${toolName}: ${purpose}` : toolName,
         },
       });
+      // high_risk 契约只认决策；确认人归因随审批记录走（PendingApprovalView）
+      return typeof outcome === 'string' ? outcome : outcome.decision;
     });
 
     builder.observerHub(this.observerHub.isEnabled() ? this.observerHub : undefined);

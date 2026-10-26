@@ -209,6 +209,12 @@ export function resolveAgentDefinition(
 export function toGatewayConfig(config: NormalizedHarnessConfig): GatewayConfig {
   // 解析 agent model 配置：string 引用 → ModelConfig 对象
   const resolvedAgents: AgentDefinition[] = config.agents.map(ac => resolveAgentDefinition(ac, config));
+  // `gateway` 进程面覆盖段（OctopiConfigSchema.gateway；类型面在 gateway 包，此处按形状取用）
+  const gatewayOverride = (
+    config as {
+      gateway?: { hitlWebhook?: GatewayConfig['hitlWebhook'] };
+    }
+  ).gateway;
 
   const gatewayConfig: GatewayConfig = {
     agents: resolvedAgents,
@@ -244,6 +250,7 @@ export function toGatewayConfig(config: NormalizedHarnessConfig): GatewayConfig 
     embedding: config.models?.embedding,
     modelProviders: config.models?.providers,
     levels: config.levelMap ?? (config.models as ModelsConfig | undefined)?.level,
+    hitlWebhook: gatewayOverride?.hitlWebhook,
   };
 
   if (config.agentRuntime) {

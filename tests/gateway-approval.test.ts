@@ -75,10 +75,21 @@ describe('Gateway HITL approvals', () => {
     expect(list[0]!.status).toBe('pending');
     expect(list[0]!.request.kind).toBe('high_risk');
 
-    const resolved = gateway.resolvePendingApproval(list[0]!.id, { action: 'approve' });
+    const resolved = gateway.resolvePendingApproval(list[0]!.id, {
+      action: 'approve',
+      approver: 'owner-alice',
+      channel: 'webhook',
+    });
     expect(resolved?.status).toBe('approved');
     expect(resolved?.decisionScope).toBe('once');
-    await expect(pending).resolves.toBe('approve');
+    // P5 确认人入账：决策带归因（谁批的/哪条通道），且随视图定格
+    expect(resolved?.decidedBy).toBe('owner-alice');
+    expect(resolved?.decisionChannel).toBe('webhook');
+    await expect(pending).resolves.toMatchObject({
+      decision: 'approve',
+      approver: 'owner-alice',
+      channel: 'webhook',
+    });
   });
 
   it('scope session/always map to approve_session/approve_always', async () => {
@@ -89,7 +100,7 @@ describe('Gateway HITL approvals', () => {
     });
     const id1 = gateway.listPendingApprovals('s2').find((a) => a.status === 'pending')!.id;
     gateway.resolvePendingApproval(id1, { action: 'approve', scope: 'session' });
-    await expect(p1).resolves.toBe('approve_session');
+    await expect(p1).resolves.toMatchObject({ decision: 'approve_session', channel: 'gateway' });
 
     const p2 = gateway.requestApproval({
       sessionId: 's2',
@@ -98,7 +109,7 @@ describe('Gateway HITL approvals', () => {
     });
     const id2 = gateway.listPendingApprovals('s2').find((a) => a.status === 'pending')!.id;
     gateway.resolvePendingApproval(id2, { action: 'approve', scope: 'always' });
-    await expect(p2).resolves.toBe('approve_always');
+    await expect(p2).resolves.toMatchObject({ decision: 'approve_always' });
   });
 
   it('reject maps to deny and ignores scope', async () => {
@@ -114,7 +125,7 @@ describe('Gateway HITL approvals', () => {
     });
     expect(resolved?.status).toBe('rejected');
     expect(resolved?.decisionScope).toBeUndefined();
-    await expect(pending).resolves.toBe('deny');
+    await expect(pending).resolves.toMatchObject({ decision: 'deny' });
   });
 
   it('double resolve returns null the second time', () => {

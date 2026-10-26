@@ -48,6 +48,7 @@ export type {
   RegisteredTool,
   ToolSource,
   HitlDecision,
+  ConfirmOutcome,
 } from './tools.js';
 
 // ── 队列 / 思考级别 ──

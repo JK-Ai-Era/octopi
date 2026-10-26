@@ -237,16 +237,20 @@ Unknown or untagged tools are **rejected** on the reduced surface
     "untrustedAdmission": "refuse",   // refuse | degrade (untrusted only)
     "jail": "auto",                   // auto | require | none (none needs privilegedAck)
     "onJailUnavailable": "degrade",   // refuse | degrade (jail != none)
-    "privilegedAck": "…",             // explicit unjailed choice (required for jail=none)
+    "privilegedAck": "…",             // explicit declaration (required for jail=none and for root/elevated runs)
     "shellEscape": "deny",            // deny | confirm | allow
     "pathContainment": "strict",      // strict | soft | none
     "processLimits": true,
-    "escalation": {                 // priv_exec allowlist (ops P3); policy: none | allowlist
+    "escalation": {                 // priv_exec channel (ops P3/P4); policy: none | allowlist | full
       "policy": "allowlist",
       "via": "sudo",                 // sudo (argv spells `sudo -n` explicitly) | direct (root/elevated)
       "allow": [
         { "cmd": "/usr/bin/sudo", "args": ["-n", "/usr/bin/systemctl", "restart", "nginx"], "confirm": true }
       ]
+    },
+    "dangerousCommands": {          // §6 speed bump (not a security boundary); security field: restart-only
+      "policy": "confirm",          // confirm | deny | off (default confirm)
+      "timeoutMs": 120000           // confirm timeout — timeout is always deny (outcome not configurable)
     },
     "opsAudit": "on",                 // ops audit journal (security field: restart-only); default on
     "opsAuditPath": "…/audit/ops.jsonl"   // default `<OCTOPI_HOME>/audit/ops.<agentId>.jsonl`
@@ -324,8 +328,58 @@ and audit (`ops.escalation.requested` / `ops.privileged.exec`). Startup probes
 refuse to start when the declared escalation is not actually available
 (`sudo -n true` / root-or-elevated assertion), and allow rules whose binary sits
 in an agent-writable location or is writable by the agent uid are rejected
-(replaceable-binary TOCTOU). `policy: "full"` belongs to P4 (needs the persistent
-`PRIVILEGED` badge alongside `privilegedAck`).
+(replaceable-binary TOCTOU).
+
+**Full tier (`policy: "full"`, P4) — full sudo on explicitly designated
+machines.** The full tier runs **any** argv through the same privileged channel
+(via `sudo -n <target…>` spelling is still mandatory under `via: "sudo"`; a bare
+command would pretend to be privileged without being). It is admitted only under
+`mode: "host"` + `jail: "none"` + `privilegedAck` — every other combination is a
+config contradiction rejected at load time (`allowlist` stays contradiction-free
+and keeps its jail). Root deployments get the same treatment from the other
+side: an elevated process (root / Windows admin token, detected by behavior, not
+by a config bit) must carry an explicit `privilegedAck` or the daemon refuses to
+start. Either way the UI and CLI show a **persistent `PRIVILEGED` badge**
+(header badge + run observatory; `octopi serve status`) — the standing
+counterpart of `privilegedAck`, not a one-time toast.
+
+**Dangerous-command speed bump (not a security boundary).** Under `full`, argv
+hitting a conservative table (`rm -rf`, `dd of=/dev/*`, `mkfs.*`, `iptables -F`,
+`systemctl disable`, `chmod -R`, `chown -R`, `truncate`) passes a HITL gate per
+`dangerousCommands.policy` (`confirm` default | `deny` | `off`); everything else
+runs — no "unknown = dangerous". A confirm timeout is **always deny**. This
+classifies *accidents*, not attacks: `sh -c 'rm -rf /'`, `python -c`, base64 and
+redirects all bypass it by construction (pinned as tests). The real boundary is
+the permission scope + the audit trail; the gate only slows down a misfire.
+
+**Remote hardening (P5).** Four host-side facilities for unattended (T1)
+deployments:
+
+- **Async confirm, dual channel.** Pending confirms are delivered over the
+  gateway channel (WS broadcast + `/approvals`) *and*, when
+  `gateway.hitlWebhook` is configured, an HMAC-SHA256-signed webhook POST to the
+  owner's endpoint. A decision carries **who approved and through which
+  channel** (`approver` / `channel: gateway|webhook`) — recorded on the approval
+  and in the ops audit (`confirmedBy` / `confirmChannel`). Confirm timeout is
+  **always deny** (the outcome is not configurable).
+- **Audit export (the only non-repudiable tier).** With
+  `effectPolicy.opsAuditExportPath` every entry is forwarded append-only to a
+  host-side file **outside the agent's writable surface**, wrapped in an envelope
+  carrying `count` (= journal seq — gaps are detectable) and `tailHash` (chain
+  anchor) plus the entry verbatim, so the host can replay `verifyOpsAuditChain`
+  on its own copy. This is what covers tail truncation / whole-file deletion.
+- **Kill switch.** `octopi ops kill <agentId>` writes a host-side sentinel
+  (`<OCTOPI_HOME>/agents/<id>/KILL`); the engine refuses the run *and* every tool
+  call while it exists — no LLM judgment, no agent cooperation, no self-release.
+  `octopi ops revive <agentId>` resumes. `octopi ops status` shows the state.
+- **Requester ≠ confirmer.** Who may *request* privilege is decided by SEC-2
+  `toolRights` intersection (T1: only the owner role by default); a participant
+  denied `priv_exec` is refused **before** the confirm gate with an audited
+  `not_authorized` — the confirm gate only answers "this one time".
+
+Windows boundary (honest): before the win-job helper service exists (OP-ISO-1),
+P3/P4 on Windows is "elevated process + persistent `PRIVILEGED` badge + gates"
+with **no physical isolation floor** — never describe it as a sandbox.
 
 Related (still true):
 

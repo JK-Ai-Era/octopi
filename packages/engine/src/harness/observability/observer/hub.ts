@@ -665,6 +665,7 @@ export class ObserverHub {
     const effect = record.toolEffect;
     effect.cwd = effect.cwd ?? record.scope.toolRuntime?.cwd;
     effect.isolation = effect.isolation ?? record.scope.toolRuntime?.isolation;
+    effect.privileged = effect.privileged ?? record.scope.toolRuntime?.privileged;
     let row = effect.tools.find((t) => t.name === toolName);
     if (!row) {
       row = { name: toolName, calls: 0, errors: 0 };

@@ -298,6 +298,10 @@ export function RunObservatoryPanel({
                 </span>
                 <span className="k">isolation</span>
                 <span className="v">{scope?.toolRuntime?.isolation || '—'}</span>
+                <span className="k">privileged</span>
+                <span className="v" style={scope?.toolRuntime?.privileged ? { color: '#c0392b', fontWeight: 700 } : undefined}>
+                  {scope?.toolRuntime?.privileged ? 'PRIVILEGED' : '—'}
+                </span>
                 <span className="k">systemPrompt</span>
                 <span className="v">
                   {scope?.systemPromptChars != null ? (
@@ -544,6 +548,10 @@ export function RunObservatoryPanel({
                   </span>
                   <span className="k">isolation</span>
                   <span className="v">{obs.toolEffect.isolation || '—'}</span>
+                  <span className="k">privileged</span>
+                  <span className="v" style={obs.toolEffect.privileged ? { color: '#c0392b', fontWeight: 700 } : undefined}>
+                    {obs.toolEffect.privileged ? 'PRIVILEGED' : '—'}
+                  </span>
                 </div>
                 {obs.toolEffect.tools.length > 0 && (
                   <div className="ctx-budget-legend" style={{ marginTop: 6 }}>

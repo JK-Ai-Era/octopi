@@ -179,18 +179,35 @@ export interface EffectPolicyConfig {
   jail?: JailIntent;
   /** jail≠none 且笼不可用时：`refuse` 拒绝执行 | `degrade`（缺省）记 securityDegraded + 告警 */
   onJailUnavailable?: OnJailUnavailable;
-  /** `jail: "none"` 时必填的显式表态（缺省拒绝启动；§8.1 二级确认） */
+  /** `jail: "none"` 时必填的显式表态（缺省拒绝启动；§8.1 二级确认）。root/elevated
+   *  部署同样要求此声明（§5 P4 root 部署语义，启动期断言）。 */
   privilegedAck?: string;
-  /** 提权策略（§4/§5 P3）：`allowlist` 按 cmd+args 全等放行；缺省 `none`（P4 前无 full 档） */
+  /** 提权策略（§4/§5 P3/P4）：`allowlist` 按 cmd+args 全等放行；`full` 全量档
+   *  （需 `jail: "none"` + `privilegedAck` + `mode: "host"`）；缺省 `none` */
   escalation?: {
-    policy?: 'none' | 'allowlist';
+    policy?: 'none' | 'allowlist' | 'full';
     via?: 'sudo' | 'direct';
     allow?: EscalationRule[];
+  };
+  /**
+   * 危险命令确认（§6：减速带而非安全边界）：命中保守分类表的 argv 要求确认。
+   * `policy`：`confirm`（缺省，走 HitlDecision）| `deny`（直接拒绝）| `off`（关闭分类）。
+   * `timeoutMs`：确认超时（超时一律 deny，不可配 outcome）；缺省 120000。
+   */
+  dangerousCommands?: {
+    policy?: 'confirm' | 'deny' | 'off';
+    timeoutMs?: number;
   };
   /** ops 审计账本开关（安全字段：重启生效 + 宿主署名，§4.3）；缺省 `on` */
   opsAudit?: 'on' | 'off';
   /** ops 审计账本路径（缺省 `<OCTOPI_HOME>/audit/ops.<agentId>.jsonl`） */
   opsAuditPath?: string;
+  /**
+   * 审计外送收口路径（P5 唯一不可抵赖档，原则 8）；缺省不外送。
+   * **必须放在 agent 可写面之外**（`~/.octopi` 在 host 模式可写面内——放那里等于没外送）。
+   * 每条账目以信封（count=seq + tailHash 锚点 + entry 原样）append-only 外送，宿主可重验链。
+   */
+  opsAuditExportPath?: string;
 }
 
 /** 展开后的有效策略 */
@@ -227,12 +244,22 @@ export interface EffectiveEffectPolicy {
   jail: JailIntent;
   /** jail 意图落空时的行为（refuse/degrade） */
   onJailUnavailable: OnJailUnavailable;
-  /** 提权策略（ops P3，resolved） */
+  /** 提权策略（ops P3/P4，resolved） */
   escalation: EscalationPolicy;
+  /**
+   * 特权部署标记（§5 P4 / §8.1）：`jail: "none"`（授权无笼）或 `escalation.policy: "full"`
+   * （全量提权）即为特权上下文。root/elevated 进程维度由启动期探测叠加（UI 常驻
+   * `PRIVILEGED` 标记的数据源）。**授权态 ≠ 降级**：此标记不进 securityDegraded。
+   */
+  privileged: boolean;
+  /** 危险命令减速带（§6）resolved：分类策略 + 确认超时（超时一律 deny） */
+  dangerousCommands: { policy: 'confirm' | 'deny' | 'off'; timeoutMs: number };
   /** ops 审计账本开关（ops P2） */
   opsAudit: 'on' | 'off';
   /** ops 审计账本路径覆盖 */
   opsAuditPath?: string;
+  /** 审计外送收口路径（P5；缺省不外送） */
+  opsAuditExportPath?: string;
 }
 
 type ModePreset = Omit<
@@ -247,7 +274,10 @@ type ModePreset = Omit<
   | 'onJailUnavailable'
   | 'opsAudit'
   | 'opsAuditPath'
+  | 'opsAuditExportPath'
   | 'escalation'
+  | 'privileged'
+  | 'dangerousCommands'
 >;
 
 const MODE_DEFAULTS: Record<EffectRunMode, ModePreset> = {
@@ -418,6 +448,31 @@ export function resolveEffectiveEffectPolicy(
   // 矛盾是配置事实，不该被「先撞上缺笼」抢先抛成另一种错误
   const jail: JailIntent = config.jail ?? 'auto';
   const onJailUnavailable: OnJailUnavailable = config.onJailUnavailable ?? 'degrade';
+  // ops P4 §4.1：full 档纯配置矛盾——同上原则，先于任何探测分支（矛盾是配置事实，
+  // 不该被「先撞上缺笼/缺 ack」抢先抛成另一种错误）
+  if (config.escalation?.policy === 'full') {
+    if (requestedMode !== 'host') {
+      throw new Error(
+        'effect_policy_invalid: escalation.policy=full requires mode=host (explicitly designated machine)',
+      );
+    }
+    if (jail !== 'none') {
+      throw new Error(
+        'effect_policy_invalid: escalation.policy=full requires jail=none (whole-shell freedom contradicts a jailed shell)',
+      );
+    }
+    if (!config.privilegedAck?.trim()) {
+      throw new Error(
+        'effect_policy_invalid: escalation.policy=full requires effectPolicy.privilegedAck (explicit privileged declaration)',
+      );
+    }
+    if ((config.escalation.allow ?? []).length > 0) {
+      // 死键 fail-loud：full 档没有 allowlist 面，静默忽略会误导配置读者
+      throw new Error(
+        'effect_policy_invalid: escalation.policy=full takes no escalation.allow rules (remove them, or use policy=allowlist)',
+      );
+    }
+  }
   if (jail === 'none') {
     if (requestedMode === 'untrusted') {
       throw new Error(
@@ -518,6 +573,7 @@ export function resolveEffectiveEffectPolicy(
       throw new Error('effect_policy_invalid: escalation cannot combine with mode=untrusted (untrusted promises a jail)');
     }
   }
+  // （full 档纯配置矛盾已在最前 fail-closed，此处只剩 allowlist 的 TOCTOU 护栏）
   if (escalation.policy === 'allowlist') {
     if (escalation.allow.length === 0) {
       throw new Error('effect_policy_invalid: escalation.policy=allowlist requires escalation.allow rules');
@@ -593,8 +649,15 @@ export function resolveEffectiveEffectPolicy(
     jail,
     onJailUnavailable,
     escalation,
+    // 特权上下文（§5 P4/§8.1）：授权态标记，不是降级；root/elevated 维度由启动期探测叠加
+    privileged: jail === 'none' || escalation.policy === 'full',
+    dangerousCommands: {
+      policy: config.dangerousCommands?.policy ?? 'confirm',
+      timeoutMs: config.dangerousCommands?.timeoutMs ?? 120_000,
+    },
     opsAudit: config.opsAudit ?? 'on',
     opsAuditPath: config.opsAuditPath,
+    opsAuditExportPath: config.opsAuditExportPath,
   };
 }
 
@@ -718,7 +781,11 @@ export async function gateEffect(
     key: intent.kind,
     sessionId: options.sessionId ?? getRunSessionId(),
     agentId: options.agentId ?? getRunScope()?.agentId,
-    ask: () => decide(intent),
+    // 宿主可返回裸 HitlDecision 或 ConfirmOutcome（带归因）；缓存只认决策
+    ask: async () => {
+      const raw = await decide(intent);
+      return typeof raw === 'string' ? raw : raw.decision;
+    },
   });
   if (!allowed) {
     throw new Error(`effect_denied: ${intent.kind}`);

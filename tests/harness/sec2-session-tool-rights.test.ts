@@ -411,6 +411,83 @@ describe('run-time gate (beforeToolCall) and concurrent sessions', () => {
     expect(String(blocked?.data?.reason ?? '')).toContain('tool_rights_denied');
   });
 
+  it('priv_exec 被 deny → 确认闸门之前拒绝（not_authorized 留痕，无弹窗）', async () => {
+    const { Agent } = await import('@octopi-agent/engine/harness/run/agent/agent.js');
+    const { runAgentWithReliability } = await import(
+      '@octopi-agent/engine/harness/run/reliability/run-agent.js'
+    );
+    const { withRunScope } = await import('@octopi-agent/engine/harness/run/run-scope.js');
+
+    let executed = 0;
+    let confirmAsks = 0;
+    const opsRecords: Array<{ event: string; data: Record<string, unknown> }> = [];
+    const agent = new Agent({
+      model: providerCalling('priv_exec', 'c-priv') as never,
+      systemPrompt: 'x',
+      tools: [
+        {
+          name: 'priv_exec',
+          description: 'privileged',
+          parameters: { type: 'object' as const, properties: {} },
+          execute: async () => {
+            executed += 1;
+            return { toolCallId: 'c-priv', name: 'priv_exec', content: 'ran' };
+          },
+        },
+      ],
+    });
+    agent.context.messages = [{ role: 'user', content: 'go', timestamp: Date.now() }];
+
+    const harness = {
+      config: {
+        planningRetry: { maxAttempts: 0, steerInstruction: '' },
+        emptyResponseRetry: { maxAttempts: 0, steerInstruction: '' },
+        noopThreshold: 99,
+        loopDetection: { enabled: false },
+      },
+    };
+
+    const events: Array<{ type: string; data?: Record<string, unknown> }> = [];
+    const gen = runAgentWithReliability(
+      agent.context,
+      { model: agent.model },
+      harness as never,
+    );
+    const toolRuntime = {
+      ...(stubToolRuntime({ deny: ['priv_exec'] }) as Record<string, unknown>),
+      sessionParticipants: [{ agentId: 'guest-1', roleId: 'guest' }],
+      confirmEffect: async () => {
+        confirmAsks += 1;
+        return 'approve';
+      },
+      recordOpsEvent: (r: { event: string; data: Record<string, unknown> }) => opsRecords.push(r),
+    } as never;
+    for await (const e of withRunScope(
+      {
+        sessionId: 's-priv-deny',
+        agentId: 'a',
+        toolRuntime,
+      },
+      gen,
+    )) {
+      events.push(e as { type: string; data?: Record<string, unknown> });
+    }
+
+    // §8.6：缺权参与者连确认闸都到不了——handler 未跑、确认从未询问
+    expect(executed).toBe(0);
+    expect(confirmAsks).toBe(0);
+    expect(events.some((e) => e.type === 'security_blocked')).toBe(true);
+    const denied = opsRecords.find(
+      (r) => r.event === 'ops.escalation.denied' && r.data.why === 'not_authorized',
+    );
+    expect(denied).toBeTruthy();
+    // 参与者身份入账（ops P5）：谁被拒、什么角色绑定
+    expect(denied?.data.origin).toMatchObject({
+      sessionId: 's-priv-deny',
+      participants: [{ agentId: 'guest-1', roleId: 'guest' }],
+    });
+  });
+
   it('concurrent sessions keep independent toolRights (no harness bleed)', async () => {
     const { Agent } = await import('@octopi-agent/engine/harness/run/agent/agent.js');
     const { runAgentWithReliability } = await import(

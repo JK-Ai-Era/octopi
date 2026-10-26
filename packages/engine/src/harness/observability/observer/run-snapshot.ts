@@ -53,6 +53,7 @@ export function buildRunScopeView(input: {
           messagesCount: scope.toolRuntime.messages?.length ?? 0,
           cwd: scope.toolRuntime.cwd,
           isolation: scope.toolRuntime.isolation,
+          privileged: scope.toolRuntime.privileged,
         }
       : undefined,
     resolvedModel: input.resolvedModel,

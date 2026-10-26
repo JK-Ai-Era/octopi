@@ -31,7 +31,8 @@ export type OpsAuditEvent =
   | 'ops.config.security_changed'
   | 'ops.escalation.requested'
   | 'ops.escalation.denied'
-  | 'ops.privileged.exec';
+  | 'ops.privileged.exec'
+  | 'ops.kill_switch.tripped';
 
 /** 账本条目（hash 链节点） */
 export interface OpsAuditEntry {
@@ -267,10 +268,70 @@ export class OpsAuditJournal {
   }
 }
 
-/** 工具上下文回传的事件输入（core 契约 shape） */
+/**
+ * 工具上下文回传的事件输入（core 契约 shape）
+ */
 export interface OpsEventInput {
   event: OpsAuditEvent;
   data: Record<string, unknown>;
+}
+
+/**
+ * 审计外送信封（P5 唯一不可抵赖档，原则 8）。
+ *
+ * 本地账本的 hash 链防「改写/插入」，但**尾部截断与整文件删除本地无法自证**——
+ * 那需要外部见证。外送档把每条账目（连同链证据）推到宿主可达的收口
+ * （宿主侧文件 / HTTP），宿主按 `count`（= 账本 seq）查缺、用 `entry` 原样重验链：
+ *
+ * - `count`：单调递增账目序号——外送流缺号 = 丢账可查；
+ * - `tailHash`：本条落链后的尾锚点——与宿主已收最后一条对得上才叫连续；
+ * - `entry`：账目原样（含 `prevHash`/`hash`，`verifyOpsAuditChain` 可直接重放）。
+ */
+export interface OpsAuditExportEnvelope {
+  count: number;
+  tailHash: string;
+  entry: OpsAuditEntry;
+  /** 外送时刻（epoch ms；账目 `ts` 是发生时刻，两者都留） */
+  forwardedAt: number;
+}
+
+/** 外送收口（append-only） */
+export interface OpsAuditExportSink {
+  forward(envelope: OpsAuditExportEnvelope): void;
+}
+
+/**
+ * 文件外送收口：宿主侧 append-only JSONL（每行一个信封）。
+ *
+ * 路径应放在 **agent 可写面之外**（`~/.octopi` 在 host 模式的可写面内——放那里
+ * 等于没外送）。写失败向上抛，由调用方降级申报，绝不静默丢外送。
+ */
+export class OpsAuditFileExportSink implements OpsAuditExportSink {
+  private readonly path: string;
+
+  /**
+   * @param options.path - 外送文件绝对路径（宿主侧，agent 不可写）
+   */
+  constructor(options: { path: string }) {
+    this.path = options.path;
+  }
+
+  /** 外送文件路径（诊断用） */
+  get filePath(): string {
+    return this.path;
+  }
+
+  /** @inheritdoc */
+  forward(envelope: OpsAuditExportEnvelope): void {
+    mkdirSync(dirname(this.path), { recursive: true });
+    const fd = openSync(this.path, 'a');
+    try {
+      writeSync(fd, `${JSON.stringify(envelope)}\n`);
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+  }
 }
 
 /**

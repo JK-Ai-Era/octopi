@@ -17,6 +17,18 @@
  */
 export type HitlDecision = 'deny' | 'approve' | 'approve_session' | 'approve_always';
 
+/**
+ * 确认结果（可带归因；ops P5「确认人身份入审计」）。
+ * 裸 {@link HitlDecision} 仍合法（无归因 = 审计如实缺省）。
+ */
+export interface ConfirmOutcome {
+  decision: HitlDecision;
+  /** 谁批的（宿主认证身份；未知时省略，绝不编造） */
+  approver?: string;
+  /** 经哪条通道（`gateway` | `webhook` | …） */
+  channel?: string;
+}
+
 /** 工具来源 */
 export interface ToolSource {
   /** 来源类型 */
@@ -194,7 +206,8 @@ export interface ToolExecutionContext {
   /**
    * host-gate 效应确认（P4）。effects=host-gate 时非事务效应必须经此。
    * 由 Runner 注入宿主回调；缺失时非事务效应拒绝执行。
-   * 返回 {@link HitlDecision}：`approve` 仅本次；`approve_session` / `approve_always`
+   * 返回 {@link HitlDecision} 或 {@link ConfirmOutcome}（带归因：谁批的/哪条通道，
+   * ops P5 入审计）：`approve` 仅本次；`approve_session` / `approve_always`
    * 由引擎 HitlDecisionCache 记账（宿主不缓存）——session 按 sessionId，always 按 agentId。
    */
   confirmEffect?: (intent: {
@@ -206,18 +219,31 @@ export interface ToolExecutionContext {
     cwd?: string;
     domain?: string;
     description?: string;
-  }) => Promise<HitlDecision>;
+  }) => Promise<HitlDecision | ConfirmOutcome>;
   /** P4：engine | host-gate */
   effectChannel?: 'engine' | 'host-gate';
   /**
-   * 提权策略（ops P3，resolved）：priv_exec 的全等匹配面。
+   * 提权策略（ops P3/P4，resolved）：priv_exec 的匹配面（allowlist 全等 / full 全量档）。
    * 请求者授权另由 toolRights deny('priv_exec') 表达（SEC-2 / §8.6）。
    */
   escalation?: {
-    policy: 'none' | 'allowlist';
+    policy: 'none' | 'allowlist' | 'full';
     via: 'sudo' | 'direct';
     allow: Array<{ id?: string; cmd: string; args?: string[]; confirm?: boolean; cwd?: string }>;
   };
+  /**
+   * 危险命令减速带 resolved（§6）：`full` 档 priv_exec 的 pre-exec 闸与确认超时共用。
+   * timeoutMs = 确认超时（超时一律 deny）；这是事故减速带，不是安全边界。
+   */
+  dangerousCommands?: {
+    policy: 'confirm' | 'deny' | 'off';
+    timeoutMs: number;
+  };
+  /**
+   * 会话参与者身份（SEC-2 / ops P5「参与者身份入账」）：提权请求/拒绝审计的
+   * requester 载荷。谁**能请求**由 toolRights 求交决定（确认 ≠ 请求者可信）。
+   */
+  sessionParticipants?: Array<{ agentId: string; roleId: string }>;
   /** L1：false 时不启用 timeoutMs 看门狗 */
   processLimits?: boolean;
   /** shell 工具策略（deny=拒绝 shell；无 L4 时不能「只禁越界」） */

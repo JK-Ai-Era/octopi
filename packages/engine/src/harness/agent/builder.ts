@@ -162,12 +162,12 @@ export interface ToolContextProvider {
     pathContainment?: 'strict' | 'soft' | 'none';
     confirmEffect?: import('@octopi-agent/core/types/tools.js').ToolExecutionContext['confirmEffect'];
     effectChannel?: 'engine' | 'host-gate';
-    /** 提权策略（ops P3，resolved） */
-    escalation?: {
-      policy: 'none' | 'allowlist';
-      via: 'sudo' | 'direct';
-      allow: Array<{ cmd: string; args?: string[]; confirm?: boolean }>;
-    };
+    /** 提权策略（ops P3/P4，resolved；与 core ToolExecutionContext 同源） */
+    escalation?: import('@octopi-agent/core/types/tools.js').ToolExecutionContext['escalation'];
+    /** 危险命令减速带 resolved（§6；与 core ToolExecutionContext 同源） */
+    dangerousCommands?: import('@octopi-agent/core/types/tools.js').ToolExecutionContext['dangerousCommands'];
+    /** 参与者身份（SEC-2 / ops P5；与 core ToolExecutionContext 同源） */
+    sessionParticipants?: import('@octopi-agent/core/types/tools.js').ToolExecutionContext['sessionParticipants'];
     processLimits?: boolean;
     shellEscape?: 'deny' | 'confirm' | 'allow';
     shellJournal?: 'snapshot' | 'off';
@@ -220,6 +220,8 @@ class RuntimeToolContextProvider implements ToolContextProvider {
         confirmEffect: scope.toolRuntime.confirmEffect,
         effectChannel: scope.toolRuntime.effectChannel,
         escalation: scope.toolRuntime.escalation,
+        dangerousCommands: scope.toolRuntime.dangerousCommands,
+        sessionParticipants: scope.toolRuntime.sessionParticipants,
         processLimits: scope.toolRuntime.processLimits,
         shellEscape: scope.toolRuntime.shellEscape,
         shellJournal: scope.toolRuntime.shellJournal,

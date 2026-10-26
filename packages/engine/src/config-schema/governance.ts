@@ -100,10 +100,10 @@ export const EffectPolicyConfigSchema = z.object({
   onJailUnavailable: z.enum(['refuse', 'degrade']).optional(),
   /** `jail: "none"` 时必填的显式表态（授权 ≠ 降级；§8.1） */
   privilegedAck: z.string().min(1).optional(),
-  /** 提权策略（ops P3）：`allowlist` 按 cmd+args 全等放行（full 档属 P4） */
+  /** 提权策略（ops P3/P4）：`allowlist` 按 cmd+args 全等放行；`full` 全量档（§4.1 严格前提） */
   escalation: z
     .object({
-      policy: z.enum(['none', 'allowlist']).optional(),
+      policy: z.enum(['none', 'allowlist', 'full']).optional(),
       via: z.enum(['sudo', 'direct']).optional(),
       allow: z
         .array(
@@ -122,10 +122,27 @@ export const EffectPolicyConfigSchema = z.object({
     })
     .strict()
     .optional(),
+  /**
+   * 危险命令减速带（§6：只拦事故不拦攻击）。命中保守分类表的 argv：
+   * `confirm`（缺省）走 HitlDecision 确认 | `deny` 直接拒绝 | `off` 关闭分类。
+   * `timeoutMs` 确认超时（超时一律 deny，outcome 不可配）；缺省 120000。
+   */
+  dangerousCommands: z
+    .object({
+      policy: z.enum(['confirm', 'deny', 'off']).optional(),
+      timeoutMs: z.number().int().positive().optional(),
+    })
+    .strict()
+    .optional(),
   /** ops 审计账本开关（安全字段：重启生效 + 宿主署名）；缺省 `on` */
   opsAudit: z.enum(['on', 'off']).optional(),
   /** ops 审计账本路径（缺省 `<OCTOPI_HOME>/audit/ops.<agentId>.jsonl`） */
   opsAuditPath: z.string().min(1).optional(),
+  /**
+   * 审计外送收口路径（P5 原则 8 唯一不可抵赖档）；缺省不外送。
+   * 必须放在 agent 可写面之外（放 `~/.octopi` 内等于没外送）。
+   */
+  opsAuditExportPath: z.string().min(1).optional(),
 }).superRefine((v, ctx) => {
   // 配置矛盾 fail-closed（§4.1）：拒绝启动，不做静默取舍
   if (v.jail === 'none') {
@@ -171,6 +188,38 @@ export const EffectPolicyConfigSchema = z.object({
       path: ['escalation', 'policy'],
       message: 'escalation cannot combine with mode=untrusted (untrusted promises a jail)',
     });
+  }
+  if (v.escalation?.policy === 'full') {
+    // §4.1 全量档：矛盾 fail-closed（v1 矛盾规则收缩到 full 档；allowlist 档不矛盾）
+    if (v.mode !== 'host') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['escalation', 'policy'],
+        message: 'escalation.policy=full requires mode=host (explicitly designated machine)',
+      });
+    }
+    if (v.jail !== 'none') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['escalation', 'policy'],
+        message: 'escalation.policy=full requires jail=none (whole-shell freedom contradicts a jailed shell)',
+      });
+    }
+    if (!v.privilegedAck?.trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['privilegedAck'],
+        message: 'escalation.policy=full requires privilegedAck (explicit privileged declaration)',
+      });
+    }
+    if ((v.escalation.allow ?? []).length > 0) {
+      // 死键 fail-loud：full 档没有 allowlist 面（§6.1 教训：静默忽略 = 误导配置读者）
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['escalation', 'allow'],
+        message: 'escalation.policy=full takes no escalation.allow rules (remove them, or use policy=allowlist)',
+      });
+    }
   }
   if (v.escalation?.policy === 'allowlist') {
     const rules = v.escalation.allow ?? [];
