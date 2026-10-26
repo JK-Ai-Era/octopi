@@ -4,7 +4,9 @@
  * 通过工厂函数接收 AskUserCallback（闭包注入），与 UI 层解耦。
  * 回调持有「等回答」的 Promise；Gateway/UI 提供答案后工具才返回。
  *
- * 超时在此自强制（definition.timeoutMs 仅作声明，工具总线不代为执行）。
+ * 无超时（2026-10-26 拍板）：需要用户确认的问题不能被时间自动跳过。
+ * 退出只有两路：会话中止（abortSignal）或 Gateway 取消（ASK_USER_CANCELLED 哨兵）。
+ * definition 不声明 timeoutMs，工具总线（runWithToolLimits）因此不设看门狗。
  */
 
 import type { RegisteredTool } from '@octopi-agent/core/types.js';
@@ -32,26 +34,18 @@ export type AskUserCallback = (
 /** Gateway cancel 哨兵（与 gateway.ASK_USER_CANCELLED 同值，避免 harness→integration 依赖） */
 export const ASK_USER_CANCELLED = '__ask_user_cancelled__';
 
-/** 默认等待用户回答的上限（与 definition.timeoutMs 对齐） */
-const DEFAULT_ASK_TIMEOUT_MS = 300_000;
-
 /**
  * 创建 ask_user 工具
  *
  * @param callback - 等待用户回答的回调（通常由 Gateway 挂 pending question）
- * @param options.timeoutMs - 等待上限；超时返回错误而不是悬挂
  */
-export function createAskUserTool(
-  callback: AskUserCallback,
-  options?: { timeoutMs?: number },
-): RegisteredTool {
-  const timeoutMs = options?.timeoutMs ?? DEFAULT_ASK_TIMEOUT_MS;
+export function createAskUserTool(callback: AskUserCallback): RegisteredTool {
   return {
     definition: {
       name: 'ask_user',
       capabilities: [],
       description:
-        'Ask the user a question and wait for their response. Use when you need clarification, confirmation, or a choice from the user. Optionally provide a list of suggested options. Do not use for things you can look up yourself.',
+        'Ask the user a question and wait for their response. Use when you need clarification, confirmation, or a choice from the user. Optionally provide a list of suggested options. Do not use for things you can look up yourself. There is no timeout — the question waits until the user answers, or the run is aborted.',
       parameters: {
         question: {
           type: 'string',
@@ -64,7 +58,6 @@ export function createAskUserTool(
           items: { type: 'string', description: 'An option' },
         },
       },
-      timeoutMs,
     },
     handler: async (args, context) => {
       const question = String(args.question ?? '').trim();
@@ -86,11 +79,9 @@ export function createAskUserTool(
       }
 
       const abortSignal = context?.abortSignal;
-      let timer: ReturnType<typeof setTimeout> | undefined;
 
       const answer = await new Promise<string>((resolve, reject) => {
         const cleanup = () => {
-          if (timer !== undefined) clearTimeout(timer);
           abortSignal?.removeEventListener('abort', onAbort);
         };
         const onAbort = () => {
@@ -105,11 +96,6 @@ export function createAskUserTool(
             return;
           }
         }
-
-        timer = setTimeout(() => {
-          cleanup();
-          reject(new Error(`ask_user timed out after ${timeoutMs}ms`));
-        }, timeoutMs);
 
         callback(question, options, ctx).then(
           (value) => {

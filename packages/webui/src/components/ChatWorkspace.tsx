@@ -409,18 +409,30 @@ function QuestionCard({
   question,
   onAnswer,
   answering,
+  onClose,
 }: {
   question: PendingQuestion;
   onAnswer: (answer: string) => void;
   answering: boolean;
+  onClose: () => void;
 }) {
   const [text, setText] = useState('');
 
   return (
     <div className="panel question-card" style={{ borderColor: 'var(--color-warn)', marginBottom: 12 }}>
-      <div style={{ fontWeight: 600, marginBottom: 8 }}>
-        <span style={{ color: 'var(--color-warn)' }}>待回答</span>
-        <span style={{ marginLeft: 8, fontWeight: 400 }} className="small muted">{question.question}</span>
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 8 }}>
+        <div style={{ fontWeight: 600, flex: 1 }}>
+          <span style={{ color: 'var(--color-warn)' }}>待回答</span>
+          <span style={{ marginLeft: 8, fontWeight: 400 }} className="small muted">{question.question}</span>
+        </div>
+        <button
+          className="btn-secondary"
+          disabled={answering}
+          title="中止任务并保留当前状态"
+          onClick={onClose}
+        >
+          关闭
+        </button>
       </div>
       {question.options && question.options.length > 0 && (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
@@ -2059,6 +2071,7 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
                       question={q}
                       answering={answeringQuestion}
                       onAnswer={(answer) => void answerQuestion(q.id, answer)}
+                      onClose={abort}
                     />
                   ),
                 });

@@ -1,10 +1,13 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { makeToolContext } from '../helpers/tool-context.js';
 
 import { createToolSet } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/tools/tool-set.js';
 import { createMemoryTools } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/tools/memory.js';
 import { createSessionTaskTools } from '@octopi-agent/engine/harness/session/tasks/tools.js';
-import { createAskUserTool } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/tools/ask-user.js';
+import {
+  createAskUserTool,
+  ASK_USER_CANCELLED,
+} from '@octopi-agent/engine/harness/extension/plugin-ecosystem/tools/ask-user.js';
 import { InMemoryMemoryStore } from '@octopi-agent/engine/harness/memory/store.js';
 import { InMemorySessionStore } from '@octopi-agent/engine/integration/storage/memory.js';
 import { SessionTaskService } from '@octopi-agent/engine/harness/session/tasks/service.js';
@@ -152,5 +155,58 @@ describe('extension tools', () => {
     )) as { answer: string | null; error?: string };
     expect(result.answer).toBeNull();
     expect(result.error).toContain('question');
+  });
+
+  it('ask_user definition should not declare timeoutMs (no bus watchdog)', () => {
+    const tool = createAskUserTool(async () => 'x');
+    expect(tool.definition.timeoutMs).toBeUndefined();
+  });
+
+  it('ask_user should keep waiting past the old 5-minute timeout', async () => {
+    vi.useFakeTimers();
+    try {
+      let release!: (v: string) => void;
+      const tool = createAskUserTool(
+        () => new Promise<string>((r) => { release = r; }),
+      );
+      const pending = tool.handler(
+        { question: 'q?' },
+        makeToolContext({ sessionId: 's1', agentId: 'a1' }),
+      );
+
+      // 越过旧默认 5min 超时窗口再加一小时：不得自动返回
+      await vi.advanceTimersByTimeAsync(61 * 60 * 1000);
+      let settled = false;
+      void pending.then(() => { settled = true; }, () => { settled = true; });
+      await Promise.resolve();
+      expect(settled).toBe(false);
+
+      release('late answer');
+      const result = (await pending) as { answer: string };
+      expect(result.answer).toBe('late answer');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('ask_user should surface gateway cancel sentinel as abort error', async () => {
+    const tool = createAskUserTool(async () => ASK_USER_CANCELLED);
+    const result = (await tool.handler(
+      { question: 'q?' },
+      makeToolContext({ sessionId: 's1', agentId: 'a1' }),
+    )) as { answer: string | null; error?: string };
+    expect(result.answer).toBeNull();
+    expect(result.error).toContain('aborted');
+  });
+
+  it('ask_user should fail when the run aborts while waiting', async () => {
+    const ac = new AbortController();
+    const tool = createAskUserTool(() => new Promise<string>(() => {}));
+    const pending = tool.handler(
+      { question: 'q?' },
+      makeToolContext({ sessionId: 's1', agentId: 'a1', abortSignal: ac.signal }),
+    );
+    ac.abort();
+    await expect(pending).rejects.toThrow('ask_user aborted');
   });
 });
