@@ -105,6 +105,65 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.95.1 (2026-10-27)
+
+### feat(providers): LLM 调用失败留痕——状态码、错误文本与流内保活计数
+
+- **问题**：一次 52 分钟的会话停滞只能靠「每次请求恰好 300s」反推原因，因为 `llm-requests` 索引的 result 行只有 `outcome: 'error'` 一个词，错误对象在 `wire-dump` 的 catch 里被直接丢弃。同时上游 SSE 的 `event: ping` 被解析循环静默忽略，无法区分「上游活着但排队不产出」与「连接已死」。
+- **`provider-diagnostics.ts`（新）**：观测数据经 **Symbol 键**挂在错误对象上（`httpStatus` / `streamDiag`）。不用普通属性是有意的——`classifyError` 会用字符串键 `status`/`statusCode`/`code`/`httpStatus` 提取状态码并据此改变重试决策（如 504 → timeout → 重试），诊断不得顺带改变行为。有测试锁定「附加后 `Object.keys(err)` 不变、分类结果不变」。
+- **`anthropic` / `openai` provider**：非 2xx 响应附加 HTTP 状态码；流内统计 `keepalives`（anthropic 的 `ping` 事件 / openai 的 SSE 注释行）、`contentChunks`、`bytes`、`sawEnd`，异常收尾时随错误抛出。
+- **`wire-dump`**：result 行新增 `error`（`name`/`message`/`httpStatus`/`code`/`keepalives`/`contentChunks`/`streamBytes`/`sawEnd`），消息截断 800 字符。
+- **验证**：新增 8 个测试；另以探针确认 engine watchdog 超时放弃流的路径确实落成 `outcome: 'error'` 并携带错误消息（而非 `abandoned`），故下次同类事故可直接读出「上游是否在发心跳」。
+- **行为不变**：本次只增观测，不改超时阈值、重试策略、fallback 选择与错误分类。
+
+### fix(reliability): 回退链单节点首块预算、timeout 重试收敛、重试可见与收尾口径
+
+承接同一起 52 分钟停滞事故的其余四个成因（观测之外的行为修复）：
+
+- **回退链独立预算（`FallbackProvider`）**：引擎 watchdog 把整条链当一次调用计时且只认内容 chunk，主 provider「连上但不产首块」（上游排队 / 长 prefill，期间只发 SSE ping）会独占整个窗口，备选模型一次机会都拿不到。现在链内每个节点各有「等首个内容 chunk」预算（`modelCall.fallbackAttemptTtftMs`，缺省 90s），**仅在存在下一候选时生效**；超时即 abort 该次尝试（子 AbortController，不波及父 signal）切下一节点；首块产出后预算不再起作用（流中途静默仍由外层 idle watchdog 负责）。失败节点进入降级窗口（`modelCall.fallbackDegradeTtlMs`，缺省等于该预算），后续调用排到最后——重试因此不再原地重撞同一节点。
+- **重试上限收敛到单一事实源**：`harness/run/reliability/model-error-policy.ts`。次数**保持原值**（`rate_limit`/`timeout`/`network` 3 次、`server` 2 次）——病因是「单次尝试无界」+「全程零反馈」，不是重试次数；砍次数只是压缩最坏时长，代价是削弱上游抖动时的自愈能力。此前 `AgentBuilder` 注入的 `DefaultErrorStrategy` 与 reliability 兜底分支各写一套数字，改一处线上仍是旧策略。
+- **重试可见**：新增 `model_retry` harness 事件（`attempt`/`maxAttempts`/`reason`/`delayMs`/`error`），经 Runner 桥接为 `engine.model_retry` 广播。此前重试期间零事件，前端发送看门狗 10s 内即被首个事件清掉，用户只能干等。
+- **收尾口径**：`observerEndReason` 此前为 `stopReason ?? (hasTurnEnd ? 'completed' : …)`，而 LLM 错误路径只设 `loopEndReason='error'`、不设 `stopReason`，导致彻底失败的 run 被记成 `completed`、会话落 `idle`——失败在 run.timing / Observer / 指标里全部隐身。现按 `error` / `aborted` 如实记录。
+- **超时口径自检**（`integration/providers/timeout-coherence.ts`）：启动期把三条超时的隐含优先级摊开告警——provider `timeoutSeconds` 超过 Node 内置 fetch 的 300s 上限（配置 900s 实际被截断，实测 chat 兜底 301s 失败即源于此）、provider 超时大于 `idleTimeoutMs`（引擎先断）、`idleTimeoutMs` 不低于 300s（与 undici 同级，会被更含糊地先断）、回退链最坏耗时超出 idle（最后一个候选拿不到机会）。只告警，不擅改配置。
+- **`classifyError` 幂等**：Loop 已把 `ClassifiedError` 交给 `onError`，Harness 再分类一次会把 `message` 抹成 `[object Object]`（日志与用户可见提示失真）。现已是分类结果则原样返回。
+- **验证**：全量 3487 测试通过；新增 24 个用例（首块预算切换/最后一棒不受预算约束/降级窗口过期与解除/父级 abort 不降级、重试上限与 `model_retry` 事件、收尾原因、超时自检四条规则）；lint 与 tests typecheck 清零；`arch/check-sync.sh` 通过。
+- **breaking / 行为变更**：`timeout` 类错误最多只重试 1 次（原 3 次）；回退链在存在备选时会于 90s 内切换节点（`modelCall.fallbackAttemptTtftMs` 可调）；失败节点在降级窗口内被排后。新增可选配置 `modelCall.fallbackAttemptTtftMs` / `modelCall.fallbackDegradeTtlMs`。
+- **`absoluteTimeoutMs` 语义未变**：它是单次调用上限（每次 `callModel` 重置），与「整轮重试序列上限」是两回事，本轮不擅自扩展其含义。
+
+#### 重试可见性补完（同日，第二轮）
+
+首轮把「产生 `engine.model_retry` 事件」当成「用户可见」交付，实际 WebUI 从未消费该事件（`store.ts` 中 `model_retry` 命中数为 0，落在 `switch` 的 `default: break` 上）。用户界面在整段重试期间仍只显示「等待响应」——与本轮要消灭的现象无本质差别。现补完：
+
+- **store 新增 `modelRetry` 状态**（`ModelRetryInfo`：attempt/maxAttempts/reason/delayMs/error/since）+ `modelRetry` 运行时事件；与 `runStatus` 分离——重试期间 `runStatus` 仍是 `waiting`（确实在等），重试是它的子状态，不覆盖阶段语义。
+- **WebUI 渲染**：等待占位改为「上游无响应，第 N/M 次重试（Ns 后发起）」+ 错误摘要，边框转警示色；此前这条占位就是用户盯了 52 分钟的「等待响应」。
+- **收口即清**：`llm_stream_delta` / `tool.exec.start` / `turn.end` / `engine.end` / `engine.error` / `aborted` 立刻清除角标，避免显示状态落后于真实状态。
+- **后台会话同步维护**：`SessionCacheEntry` 加 `modelRetry`，切走再切回不丢角标；仅在缓存仍活跃时恢复，防止「切走时在重试、回来时 run 已结束」留下僵尸角标。
+- **可中止**：退避等待走 `sleepUnlessAborted(signal)`，`/stop` 在 `waiting` 态可抢占——3 次重试之所以安全，前提正是「看得见 + 停得下」。
+- **不复用 `lastRetryLabel`**：该字段原属 planner / empty_response 重试（值为 `Empty response` / `Planning-only`）；模型重试改用独立字段 `lastModelRetryLabel`，避免两类重试在开发者面板混为一谈。
+- **Observer timeline 纳入** `engine.model_retry`，排查「为什么等这么久」时时间线可看出重试次数。
+- **验证**：新增 7 个 store 状态机用例 + 1 个 runner 桥接用例（`engine.model_retry` 字段完整、重试不被误记为终态）；全量 3502 通过；lint / typecheck / arch 清零。
+- **未闭环的一环（如实标注）**：`gateway broadcastEvent → WS → SDK client → store` 这一段是代码核实（广播与 client 分发均无类型白名单，直接透传），未做真实 WS 端到端实测——需要临时起一个独立端口实例；如需我用真实实例验证请说一声。
+
+#### 独立评审整改（同日）
+
+首轮提交前由独立 reviewer 对抗式复核，报告标为「需修改后提交」。逐条核实后确认并修复：
+
+- **重试通知曾被排在退避等待之后**（最核心）：`onError` 内 `await sleep(delayMs)` 使 generator 卡在 onError，外层无法排空队列——`rate_limit` 带 `Retry-After` 时等待期仍零反馈，正是本次要消灭的场景。改为「通知先 yield，再在排空处等待」，并让等待可被 abort 打断。有回归测试锁「首条通知 < 500ms 抵达」。
+- **`chat()` 误用首块预算**：非流式没有「首块」概念，原实现让合法的长响应在 90s 被判故障并降级。新增独立预算 `modelCall.fallbackChatAttemptMs`（缺省 240s，早于 undici 的 300s）。
+- **降级判定不看错误原因**：401/400/计费类错误与节点健康无关，原实现会把主节点无谓排后并静默换模型。改为仅在 `timeout`/`network`/`server`/`rate_limit` 上降级；由备选节点服务时输出可检索的 warn。
+- **流式成功路径只摘监听不 abort**：消费者 break/提前 return 时 socket 会挂到 undici `bodyTimeout`。`finally` 补 `attempt.abort()`。
+- **取消类错误污染熔断**：预算 abort / 用户取消会计入 `failureCount`，连续 5 次可熔断健康节点。改为不计入。
+- **`DefaultErrorStrategy` 已导出**，测试改为直接实例化生产类，不再手抄策略副本（防再次漂移）。
+- **`engine.model_retry` 补入 `AgentEventMap` / `AgentEvents` 词表**，消除词汇表漂移（WebUI 渲染仍属未做项）。
+- **修复 layering 违规**：预算标记一度被放进 integration 供 wire-dump 读取，触发 `harness → integration` 禁止方向。现定义在 harness（产生方），由 wire-dump（外层）导入读取，符合 integration→harness 的既有方向。
+- **超时自检默认不再刷告警**：判据由 `>=` 改 `>`，缺省 300s 不再每次启动都告警（否则告警会被忽略）。
+- **预算耗尽标记进入留痕**：`wire-dump` 的 `error.attemptBudgetMs` 使「节点只是慢」与「用户主动取消」在记录中可辨。
+- **示例配置同步**：`octopi.example.json` 补三个新字段（AGENTS.md 要求模板与 Zod 一致）。
+- **验证**：全量 3494 通过；lint / tests typecheck 清零；`arch/check-sync.sh` 全绿。
+
+
+---
+
 ## v0.95.0 (2026-10-27)
 
 ### feat(collaboration): delegation 结果与用户运行中插话的统一消息接续，全链路 Run 事件可见性

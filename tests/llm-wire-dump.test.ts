@@ -25,6 +25,13 @@ import {
 } from '@octopi-agent/engine/integration/providers/wire-dump-diff.js';
 import { OpenAIProvider } from '@octopi-agent/engine/integration/providers/openai.js';
 import { AnthropicProvider } from '@octopi-agent/engine/integration/providers/anthropic.js';
+import {
+  attachHttpStatus,
+  attachStreamDiag,
+  readHttpStatus,
+  readStreamDiag,
+} from '@octopi-agent/engine/integration/providers/provider-diagnostics.js';
+import { classifyError } from '@octopi-agent/core/loop/error-classifier.js';
 import { parseArgs } from '../src/cli/args.js';
 import { llmDiffCommand } from '../src/cli/llm-diff.js';
 
@@ -892,3 +899,187 @@ describe('llm-diff — CLI 边界', () => {
     expect(logs.join('\n')).toContain('need at least two calls');
   });
 });
+
+describe('wire dump — 失败留痕', () => {
+  /** 抛错 provider：body 照常构造，调用直接失败 */
+  class FailingProvider extends FakeProvider {
+    constructor(private readonly err: unknown) {
+      super([{ role: 'user', content: 'hi' }]);
+    }
+
+    async chat(): Promise<LLMResponse> {
+      throw this.err;
+    }
+
+    async *stream(): AsyncGenerator<LLMStreamChunk> {
+      throw this.err;
+    }
+  }
+
+  test('chat 失败：索引记录错误类型、消息与 HTTP 状态码', async () => {
+    const err = new Error('Anthropic API error (529): overloaded');
+    attachHttpStatus(err, 529);
+    const sink = sinkFor('sess_err_chat');
+    const wrapped = withWireDump(new FailingProvider(err), sink);
+
+    await expect(wrapped.chat({ messages: [] })).rejects.toThrow('overloaded');
+    await sink.flush();
+
+    const [call] = readWireDumpIndex(join(rootDir, 'sess_err_chat'));
+    expect(call.result?.outcome).toBe('error');
+    expect(call.result?.error?.message).toContain('overloaded');
+    expect(call.result?.error?.name).toBe('Error');
+    expect(call.result?.error?.httpStatus).toBe(529);
+  });
+
+  test('stream 失败：索引记录保活心跳与内容 chunk 数', async () => {
+    const err = new Error('Model call idle timeout: no data received');
+    attachStreamDiag(err, { keepalives: 12, contentChunks: 0, bytes: 4096, sawEnd: false });
+    const sink = sinkFor('sess_err_stream');
+    const wrapped = withWireDump(new FailingProvider(err), sink);
+
+    await expect(async () => {
+      for await (const _chunk of wrapped.stream({ messages: [] })) {
+        // 立即抛错，无 chunk 产出
+      }
+    }).rejects.toThrow('idle timeout');
+    await sink.flush();
+
+    const [call] = readWireDumpIndex(join(rootDir, 'sess_err_stream'));
+    expect(call.result?.error?.keepalives).toBe(12);
+    expect(call.result?.error?.contentChunks).toBe(0);
+    expect(call.result?.error?.streamBytes).toBe(4096);
+    expect(call.result?.error?.sawEnd).toBe(false);
+  });
+
+  test('错误消息超长时截断，避免撑爆索引', async () => {
+    const sink = sinkFor('sess_err_long');
+    const wrapped = withWireDump(new FailingProvider(new Error('x'.repeat(5000))), sink);
+
+    await expect(wrapped.chat({ messages: [] })).rejects.toThrow();
+    await sink.flush();
+
+    const [call] = readWireDumpIndex(join(rootDir, 'sess_err_long'));
+    expect(call.result?.error?.message.length).toBeLessThanOrEqual(801);
+  });
+});
+
+describe('provider 诊断 — 与错误分类决策隔离', () => {
+  test('附加 HTTP 状态码不改变错误对象的字符串键形状', () => {
+    const err = new Error('Anthropic API error (504): gateway timeout');
+    const before = Object.keys(err).sort();
+    attachHttpStatus(err, 504);
+
+    // classifyError 只读字符串键（status/statusCode/code/httpStatus）；
+    // Symbol 落在枚举之外，分类与重试决策保持原行为
+    expect(Object.keys(err).sort()).toEqual(before);
+    expect((err as unknown as Record<string, unknown>).status).toBeUndefined();
+    expect((err as unknown as Record<string, unknown>).httpStatus).toBeUndefined();
+    expect(readHttpStatus(err)).toBe(504);
+  });
+
+  test('504 仍按 message 文本分类，不因附加状态码改判 timeout', () => {
+    const err = new Error('Anthropic API error (504): gateway timeout');
+    const before = classifyError(err).reason;
+    attachHttpStatus(err, 504);
+    expect(classifyError(err).reason).toBe(before);
+  });
+
+  test('诊断信息只对附加过的错误可见', () => {
+    const plain = new Error('boom');
+    expect(readHttpStatus(plain)).toBeUndefined();
+    expect(readStreamDiag(plain)).toBeUndefined();
+    // 非对象抛出（throw 'string'）不得让附加/读取崩溃
+    expect(() => attachHttpStatus('boom', 500)).not.toThrow();
+    expect(readHttpStatus('boom')).toBeUndefined();
+  });
+});
+
+describe('anthropic provider — 流内保活统计', () => {
+  /** 按需产出 SSE 片段，耗尽后以连接错误收尾 */
+  function sseThenError(chunks: string[]): Response {
+    const encoder = new TextEncoder();
+    let i = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (i < chunks.length) {
+          controller.enqueue(encoder.encode(chunks[i++]));
+          return;
+        }
+        controller.error(new Error('socket hang up'));
+      },
+    });
+    return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } });
+  }
+
+  test('ping 不计入内容 chunk，断流后诊断随错误抛出', async () => {
+    const original = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      sseThenError([
+        'event: message_start\ndata: {"type":"message_start","message":{"id":"m"}}\n\n',
+        'event: ping\ndata: {"type":"ping"}\n\n',
+        'event: ping\ndata: {"type":"ping"}\n\n',
+        'event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"text_delta","text":"he"}}\n\n',
+      ])) as typeof fetch;
+
+    try {
+      const provider = new AnthropicProvider({
+        name: 'anthropic',
+        apiKey: 'k',
+        baseUrl: 'https://example.invalid',
+        models: [{ name: 'm', maxOutputTokens: 100 }],
+        defaultModel: 'm',
+      });
+
+      const seen: string[] = [];
+      let caught: unknown;
+      try {
+        for await (const chunk of provider.stream({ messages: [{ role: 'user', content: 'hi' } as never] })) {
+          seen.push(chunk.type);
+        }
+      } catch (err) {
+        caught = err;
+      }
+
+      expect(caught).toBeDefined();
+      expect(seen).toEqual(['content']);
+      const diag = readStreamDiag(caught);
+      expect(diag?.keepalives).toBe(2);
+      expect(diag?.contentChunks).toBe(1);
+      expect(diag?.sawEnd).toBe(false);
+      expect(diag?.bytes).toBeGreaterThan(0);
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+
+  test('非 2xx 响应把状态码交给诊断载体（不影响错误消息）', async () => {
+    const original = globalThis.fetch;
+    globalThis.fetch = (async () => new Response('overloaded', { status: 529 })) as typeof fetch;
+
+    try {
+      const provider = new AnthropicProvider({
+        name: 'anthropic',
+        apiKey: 'k',
+        baseUrl: 'https://example.invalid',
+        models: [{ name: 'm', maxOutputTokens: 100 }],
+        defaultModel: 'm',
+      });
+
+      await expect(provider.chat({ messages: [{ role: 'user', content: 'hi' } as never] })).rejects.toThrow(
+        'Anthropic API error (529): overloaded',
+      );
+      // 同一次调用再取一次错误对象，确认状态码可读
+      let caught: unknown;
+      try {
+        await provider.chat({ messages: [{ role: 'user', content: 'hi' } as never] });
+      } catch (err) {
+        caught = err;
+      }
+      expect(readHttpStatus(caught)).toBe(529);
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+});
+

@@ -24,6 +24,11 @@ import { join } from 'node:path';
 import type { TokenUsage } from '@octopi-agent/core/types/turn.js';
 import type { LLMRequest, ModelProvider } from '@octopi-agent/core/interfaces/model-provider.js';
 import { getOctopiHome } from '../../paths.js';
+import {
+  readHttpStatus,
+  readStreamDiag,
+} from './provider-diagnostics.js';
+import { readAttemptBudgetExhausted } from '../../harness/run/reliability/fallback-provider.js';
 
 /** 调用方身份（由 harness 侧解析，integration 不反向依赖 harness） */
 export interface WireDumpContext {
@@ -70,6 +75,35 @@ export interface WireCallResult {
   /** 首个 chunk 到达耗时（仅 stream） */
   ttftMs?: number;
   durationMs: number;
+  /** 失败原因（仅 error；由包装层从错误对象提取，观测专用） */
+  error?: WireCallErrorInfo;
+}
+
+/**
+ * 失败留痕
+ *
+ * 此前 result 记录只有 `outcome: 'error'`，一次 52 分钟停滞只能靠耗时反推原因。
+ * 这里补上错误类型、消息、HTTP 状态码与流内心跳计数，使「上游静默」可被直接读出。
+ */
+export interface WireCallErrorInfo {
+  /** 错误构造器名（TypeError / Error / AbortError …） */
+  name?: string;
+  /** 错误消息（截断，避免超长响应体撑爆索引） */
+  message: string;
+  /** 上游 HTTP 状态码（非 2xx 时由 provider 附加） */
+  httpStatus?: number;
+  /** 系统错误码（ECONNRESET / UND_ERR_SOCKET …） */
+  code?: string;
+  /** 流内保活心跳数：>0 表示上游连接活着但未产出内容 */
+  keepalives?: number;
+  /** 流内已产出的内容 chunk 数 */
+  contentChunks?: number;
+  /** 流内已读取字节数 */
+  streamBytes?: number;
+  /** 是否读到协议终止（done / EOF） */
+  sawEnd?: boolean;
+  /** 回退链单节点预算耗尽时的预算值（毫秒）；存在即「节点只是慢」，非用户取消 */
+  attemptBudgetMs?: number;
 }
 
 /** 单次调用的收尾句柄 */
@@ -127,6 +161,7 @@ export interface WireDumpResultRecord {
   outcome: 'ok' | 'error' | 'abandoned';
   durationMs: number;
   ttftMs?: number;
+  error?: WireCallErrorInfo;
   usage?: {
     inputCachedTokens: number;
     inputUncachedTokens: number;
@@ -138,6 +173,50 @@ export interface WireDumpResultRecord {
 }
 
 export type WireDumpIndexRecord = WireDumpRequestRecord | WireDumpResultRecord;
+
+/** 错误消息落盘上限（字符）：上游错误体可能带整段响应，撑爆索引无意义 */
+const MAX_ERROR_MESSAGE_CHARS = 800;
+
+/**
+ * 把错误提取成可落盘的留痕
+ *
+ * 只读取观测属性（Symbol 键），不解析 message 文本：分类决策依赖 message，
+ * 落盘侧再做正则解析会让「记录」与「决策」两套口径漂移。
+ *
+ * @param err - 调用失败时的原始错误
+ * @returns 可序列化的错误留痕
+ */
+export function describeWireError(err: unknown): WireCallErrorInfo {
+  const isError = err instanceof Error;
+  const message = isError ? err.message : String(err);
+  const info: WireCallErrorInfo = {
+    message: message.length > MAX_ERROR_MESSAGE_CHARS ? `${message.slice(0, MAX_ERROR_MESSAGE_CHARS)}…` : message,
+  };
+  if (isError && err.name) info.name = err.name;
+
+  if (typeof err === 'object' && err !== null) {
+    const code = (err as { code?: unknown }).code;
+    if (typeof code === 'string') info.code = code;
+  }
+
+  const httpStatus = readHttpStatus(err);
+  if (httpStatus !== undefined) info.httpStatus = httpStatus;
+
+  // 回退链单节点预算耗尽：与「用户主动取消」在留痕里必须可辨，
+  // 否则「节点只是慢」会被误读成「用户点了停止」。
+  const budgetMs = readAttemptBudgetExhausted(err);
+  if (budgetMs !== undefined) info.attemptBudgetMs = budgetMs;
+
+  const diag = readStreamDiag(err);
+  if (diag) {
+    info.keepalives = diag.keepalives;
+    info.contentChunks = diag.contentChunks;
+    info.streamBytes = diag.bytes;
+    info.sawEnd = diag.sawEnd;
+  }
+
+  return info;
+}
 
 /** 缺省落盘根目录 */
 export function defaultWireDumpDir(): string {
@@ -365,6 +444,7 @@ export function createWireDumpSink(options: WireDumpHookOptions = {}): WireDumpS
           outcome: result.outcome,
           durationMs: Math.max(0, Math.round(result.durationMs)),
           ttftMs: result.ttftMs != null ? Math.max(0, Math.round(result.ttftMs)) : undefined,
+          ...(result.error ? { error: result.error } : {}),
           usage: result.usage
             ? {
                 inputCachedTokens: result.usage.inputCachedTokens,
@@ -486,7 +566,7 @@ export function withWireDump(inner: ModelProvider, sink: WireDumpSink): ModelPro
         handle?.finish({ outcome: 'ok', usage: res.usage, durationMs: Date.now() - startedAt });
         return res;
       } catch (err) {
-        handle?.finish({ outcome: 'error', durationMs: Date.now() - startedAt });
+        handle?.finish({ outcome: 'error', durationMs: Date.now() - startedAt, error: describeWireError(err) });
         throw err;
       }
     },
@@ -502,6 +582,7 @@ export function withWireDump(inner: ModelProvider, sink: WireDumpSink): ModelPro
       let sawDone = false;
       let completed = false;
       let failed = false;
+      let failedErr: unknown;
       try {
         for await (const chunk of inner.stream(request)) {
           if (ttftMs == null) ttftMs = Date.now() - startedAt;
@@ -515,6 +596,7 @@ export function withWireDump(inner: ModelProvider, sink: WireDumpSink): ModelPro
         completed = true;
       } catch (err) {
         failed = true;
+        failedErr = err;
         throw err;
       } finally {
         handle.finish({
@@ -524,6 +606,7 @@ export function withWireDump(inner: ModelProvider, sink: WireDumpSink): ModelPro
           usage,
           ttftMs,
           durationMs: Date.now() - startedAt,
+          ...(failed ? { error: describeWireError(failedErr) } : {}),
         });
       }
     },

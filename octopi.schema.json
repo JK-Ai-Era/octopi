@@ -1016,6 +1016,18 @@
         "absoluteTimeoutMs": {
           "type": "number",
           "exclusiveMinimum": 0
+        },
+        "fallbackAttemptTtftMs": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "fallbackDegradeTtlMs": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "fallbackChatAttemptMs": {
+          "type": "number",
+          "exclusiveMinimum": 0
         }
       }
     },

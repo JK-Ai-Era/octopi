@@ -109,6 +109,30 @@ export type SecurityBlockedEvent = {
   };
 };
 
+/**
+ * 模型调用即将重试（用户可见）
+ *
+ * 背景：一次 52 分钟的会话停滞期间前端零反馈（发送看门狗 10s 内即被首个事件清掉），
+ * 用户只看到 runStatus 停在 waiting。该事件给重试窗口提供可观测锚点：
+ * 每次重试必须能被看见，且带「第几次 / 还剩几次 / 为什么 / 等多久」。
+ */
+export type ModelRetryEvent = {
+  type: 'model_retry';
+  timestamp: number;
+  data: {
+    /** 本次是第几次重试（从 1 起） */
+    attempt: number;
+    /** 该错误原因允许的最大重试次数 */
+    maxAttempts: number;
+    /** 分类后的错误原因（timeout / network / server / rate_limit …） */
+    reason: string;
+    /** 重试前等待时长 */
+    delayMs: number;
+    /** 错误摘要（截断，供 UI 直接展示） */
+    error: string;
+  };
+};
+
 /** Harness 层扩展事件 */
 export type HarnessLoopExtension =
   | BudgetExceededEvent
@@ -116,7 +140,8 @@ export type HarnessLoopExtension =
   | RunGuardRecoveredEvent
   | RunGuardStoppedEvent
   | RunGuardMetricsEvent
-  | SecurityBlockedEvent;
+  | SecurityBlockedEvent
+  | ModelRetryEvent;
 
 /** reliability 包装后的完整事件流 */
 export type HarnessLoopEvent = AgentLoopEvent | HarnessLoopExtension;

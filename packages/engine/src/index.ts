@@ -68,7 +68,7 @@ export { setRunTelemetryFactory, getRunTelemetryFactory } from './harness/observ
 export type { RunTelemetry, RunTelemetryFactory } from './harness/observability/run-telemetry.js';
 export { createRunTelemetry } from './integration/observability/run-telemetry.js';
 
-export { AgentBuilder, createAgent, isSubsystemAllowed, discoverSubsystemSpecs } from './harness/agent/builder.js';
+export { AgentBuilder, createAgent, DefaultErrorStrategy, isSubsystemAllowed, discoverSubsystemSpecs } from './harness/agent/builder.js';
 export type { AgentTraceOptions } from './harness/agent/builder.js';
 export type { AgentBuildOptions, AgentBuildResult, AgentBuildCoreResult } from './harness/agent/builder.js';
 export type { ChannelAdapter, ChannelMessage, ChannelReply } from './harness/extension/plugin-ecosystem/channel-types.js';

@@ -860,6 +860,12 @@ export interface ModelCallConfig {
   idleTimeoutMs?: number;
   /** 单次模型调用总时长上限，毫秒 */
   absoluteTimeoutMs?: number;
+  /** 回退链单节点等待首个内容 chunk 的上限，毫秒 */
+  fallbackAttemptTtftMs?: number;
+  /** 回退链失败节点的降级窗口，毫秒（缺省等于 fallbackAttemptTtftMs） */
+  fallbackDegradeTtlMs?: number;
+  /** 回退链单节点非流式整响应上限，毫秒（缺省 240000） */
+  fallbackChatAttemptMs?: number;
 }
 
 export interface SubsystemsConfig {

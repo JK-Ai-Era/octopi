@@ -25,6 +25,7 @@ import type {
 } from '@octopi-agent/core/interfaces/model-provider.js';
 import type { ToolCall, ModelInfo, TokenUsage } from '@octopi-agent/core/types.js';
 import { tokenUsageFromOpenAi } from './usage.js';
+import { attachHttpStatus, attachStreamDiag, createStreamDiag } from './provider-diagnostics.js';
 
 /**
  * OpenAI Provider 配置
@@ -137,7 +138,9 @@ export class OpenAIProvider implements ModelProvider {
 
       if (!response.ok) {
         const errorText = await response.text().catch(() => 'unknown error');
-        throw new Error(`OpenAI API error ${response.status}: ${errorText}`);
+        const httpError = new Error(`OpenAI API error ${response.status}: ${errorText}`);
+        attachHttpStatus(httpError, response.status);
+        throw httpError;
       }
 
       const data = await response.json() as any;
@@ -187,7 +190,9 @@ export class OpenAIProvider implements ModelProvider {
 
     if (!response.ok) {
       const errorText = await response.text().catch(() => 'unknown error');
-      throw new Error(`OpenAI API error ${response.status}: ${errorText}`);
+      const httpError = new Error(`OpenAI API error ${response.status}: ${errorText}`);
+      attachHttpStatus(httpError, response.status);
+      throw httpError;
     }
 
     const reader = response.body?.getReader();
@@ -197,6 +202,8 @@ export class OpenAIProvider implements ModelProvider {
 
     const decoder = new TextDecoder();
     let buffer = '';
+    // 流内观测：SSE 注释保活 vs 内容 chunk 的区分是「上游活着但不产出」与「连接已死」的唯一依据
+    const diag = createStreamDiag();
     const lastUsage: { current: TokenUsage | undefined } = { current: undefined };
     const lastFinishReason: { current: LLMResponse['finishReason'] | undefined } = { current: undefined };
 
@@ -216,24 +223,37 @@ export class OpenAIProvider implements ModelProvider {
     while (true) {
       const readPromise = reader.read();
       const { done, value } = await readPromise;
-      if (done) break;
+      if (done) {
+        diag.sawEnd = true;
+        break;
+      }
       resetIdleTimer();
+      diag.bytes += value.byteLength;
 
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split('\n');
       buffer = lines.pop() ?? '';
 
       for (const line of lines) {
+        // SSE 注释行（`: keepalive`）是标准保活手段：有字节到达但不构成内容
+        const trimmed = line.trim();
+        if (trimmed.startsWith(':') && trimmed.length > 1) diag.keepalives += 1;
         const chunks = this.parseSSELine(line, toolCallBuffers, lastUsage, lastFinishReason);
         for (const chunk of chunks) {
           if (chunk.type === 'done') {
+            diag.sawEnd = true;
             yield chunk;
             return;
           }
+          diag.contentChunks += 1;
           yield chunk;
         }
       }
     }
+    } catch (err) {
+      // 异常收尾把观测事实随错误带走（与 anthropic provider 对称）
+      attachStreamDiag(err, diag);
+      throw err;
     } finally {
       if (idleTimer) clearTimeout(idleTimer);
 
@@ -243,9 +263,11 @@ export class OpenAIProvider implements ModelProvider {
           const chunks = this.parseSSELine(line, toolCallBuffers, lastUsage, lastFinishReason);
           for (const chunk of chunks) {
             if (chunk.type === 'done') {
+              diag.sawEnd = true;
               yield chunk;
               return;
             }
+            diag.contentChunks += 1;
             yield chunk;
           }
         }

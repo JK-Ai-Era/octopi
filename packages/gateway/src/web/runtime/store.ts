@@ -117,6 +117,7 @@ export interface RuntimeEventMap {
   'tasks': TasksEvent;
   'error': RuntimeErrorEvent;
   'runStatus': RunStatusEvent;
+  'modelRetry': ModelRetryEvent;
   'models': ModelsEvent;
   'sessionModel': SessionModelEvent;
 }
@@ -150,6 +151,14 @@ export class TasksEvent extends RuntimeEvent<{ tasks: SessionTaskView[] }> {}
 export class SchedulesEvent extends RuntimeEvent<{ schedules: SessionScheduleView[] }> {}
 export class RuntimeErrorEvent extends RuntimeEvent<{ error: string }> {}
 export class RunStatusEvent extends RuntimeEvent<{ status: RunStatus }> {}
+/**
+ * 模型调用重试状态（用户可见）
+ *
+ * `null` 表示当前不在重试中。非 null 时 UI 必须显示「第 N/M 次重试」。
+ * 单独成一个事件而不复用 runStatus：重试期间 runStatus 仍是 waiting
+ * （确实在等上游），重试是它的子状态，不能覆盖阶段语义。
+ */
+export class ModelRetryEvent extends RuntimeEvent<{ retry: ModelRetryInfo | null }> {}
 export class ModelsEvent extends RuntimeEvent<{ catalog: ModelCatalog }> {}
 export class SessionModelEvent extends RuntimeEvent<{ sessionModel: SessionModelView | null }> {}
 
@@ -180,6 +189,22 @@ export interface CompactStatus {
   error?: string;
 }
 
+/** 模型调用重试的当前状态（用户可见，非调试信息） */
+export interface ModelRetryInfo {
+  /** 第几次重试（从 1 起） */
+  attempt: number;
+  /** 该错误原因允许的最大重试次数 */
+  maxAttempts: number;
+  /** 错误原因（timeout / network / rate_limit / server …） */
+  reason: string;
+  /** 本次退避等待时长 */
+  delayMs: number;
+  /** 触发重试的错误摘要 */
+  error: string;
+  /** 进入该次重试的时刻（epoch ms）；UI 用它显示「已等待 Ns」 */
+  since: number;
+}
+
 export interface InspectorState {
   contextTokens?: number;
   contextWindow?: number;
@@ -190,7 +215,10 @@ export interface InspectorState {
   lastToolName?: string;
   lastBlockedReason?: string;
   lastBudgetStatus?: string;
+  /** planner / empty_response 重试的类型标签（'Empty response' | 'Planning-only'） */
   lastRetryLabel?: string;
+  /** 模型调用重试标签（'Model retry 2/3 (timeout)'）；与 lastRetryLabel 分属不同重试机制 */
+  lastModelRetryLabel?: string;
   /** 上下文压缩状态（context.compact.*） */
   compact?: CompactStatus;
   /** System 装配快照（产品 L1–L7；context.layers.assembled / REST） */
@@ -238,6 +266,13 @@ export interface ChatState {
   /** 各 stream 最近样本（UI 用，有上限） */
   clientStreamSamples: Map<string, unknown[]>;
   inspector: InspectorState;
+  /**
+   * 模型重试状态：非 null 时 UI 显示「第 N/M 次重试」
+   *
+   * 与 inspector 分开是刻意的——inspector 是开发者面板，普通用户看不到；
+   * 而重试状态是用户必须知道的事（否则就是本次事故的「干等 52 分钟」）。
+   */
+  modelRetry: ModelRetryInfo | null;
   /** 会话任务（goal/step），UI 只读 */
   tasks: SessionTaskView[];
   /** 会话日程（timer/schedule），UI 只读 + 控制 */
@@ -255,6 +290,8 @@ interface SessionCacheEntry {
   inspector: InspectorState;
   /** 后台会话的 runStatus；切回时恢复，避免只从 items 推导丢掉 waiting */
   runStatus: RunStatus;
+  /** 后台会话的重试状态；与 runStatus 同理，切回时必须恢复，否则角标会丢 */
+  modelRetry: ModelRetryInfo | null;
   /** 显示层历史分页游标（backward；cursor=exclusive end） */
   historyCursor?: string;
   historyHasMore?: boolean;
@@ -890,6 +927,7 @@ export class OctopiRuntimeStore extends EventTarget {
       adapterState: this.conversationAdapter.getState(),
       inspector: { ...this.chat.inspector },
       runStatus: this.chat.runStatus,
+      modelRetry: this.chat.modelRetry,
       historyCursor: this.historyCursor,
       historyHasMore: this.historyHasMore,
     });
@@ -909,6 +947,7 @@ export class OctopiRuntimeStore extends EventTarget {
           adapterState: { toolIndex: {}, streamingContent: '' },
           inspector: {},
           runStatus: 'idle',
+          modelRetry: null,
           historyCursor: undefined,
           historyHasMore: false,
         });
@@ -1080,6 +1119,10 @@ export class OctopiRuntimeStore extends EventTarget {
     this.engineActive =
       derivedRunStatus === 'tools' || derivedRunStatus === 'streaming' || derivedRunStatus === 'waiting' || derivedRunStatus === 'sending';
 
+    // 重试状态与 runStatus 同理：只在缓存仍活跃时恢复，
+    // 否则「上次切走时正在重试、回来时 run 早已结束」会留下僵尸角标。
+    const restoredModelRetry = usedCacheItems && this.engineActive ? (cached?.modelRetry ?? null) : null;
+
     this.chat = {
       sessionId,
       agentId: view.meta.agentId,
@@ -1099,6 +1142,7 @@ export class OctopiRuntimeStore extends EventTarget {
         ...(typeof view.contextWindow === 'number' ? { contextWindow: view.contextWindow } : {}),
         ...(cached?.inspector ?? {}),
       },
+      modelRetry: restoredModelRetry,
       tasks,
       schedules,
     };
@@ -1346,6 +1390,7 @@ export class OctopiRuntimeStore extends EventTarget {
         adapterState: { toolIndex: {}, streamingContent: '' },
         inspector: {},
         runStatus: 'idle',
+        modelRetry: null,
       });
     }
 
@@ -1371,6 +1416,7 @@ export class OctopiRuntimeStore extends EventTarget {
       clientStreams: [],
       clientStreamSamples: new Map(),
       inspector: {},
+      modelRetry: null,
       tasks: [],
       schedules: [],
     };
@@ -1798,6 +1844,31 @@ export class OctopiRuntimeStore extends EventTarget {
         inspectorChanged = true;
         break;
       }
+      case 'engine.model_retry': {
+        // 重试窗口必须对用户可见：此前全程无事件，前端只能显示「思考中」干等。
+        // 这里同时写 inspector（开发者面板保留历史）与 chat.modelRetry（用户角标）。
+        const attempt = Number(event.data?.attempt ?? 1);
+        const maxAttempts = Number(event.data?.maxAttempts ?? attempt);
+        const reason = String(event.data?.reason ?? 'unknown');
+        const delayMs = Number(event.data?.delayMs ?? 0);
+        const errorText = String(event.data?.error ?? reason);
+        this.chat.modelRetry = {
+          attempt,
+          maxAttempts,
+          reason,
+          delayMs,
+          error: errorText,
+          since: Date.now(),
+        };
+        this.chat.inspector = {
+          ...this.chat.inspector,
+          lastModelRetryLabel: `Model retry ${attempt}/${maxAttempts} (${reason})`,
+          lastError: errorText,
+        };
+        inspectorChanged = true;
+        this.dispatch('modelRetry', new ModelRetryEvent('modelRetry', { retry: this.chat.modelRetry }));
+        break;
+      }
       case 'security.blocked':
       case 'security.behavior_blocked': {
         this.chat.inspector = { ...this.chat.inspector, lastBlockedReason: String(event.data?.reason ?? 'blocked') };
@@ -2028,6 +2099,25 @@ export class OctopiRuntimeStore extends EventTarget {
       }
       default: break;
     }
+
+    // 重试状态收口：一旦模型重新开始产出内容、本轮结束或 run 进入终态，
+    // 角标必须立刻消失——否则用户会以为「还在重试」而实际早已恢复。
+    if (this.chat.modelRetry) {
+      const retryClearing =
+        event.type === 'llm_stream_delta' ||
+        event.type === 'tool.exec.start' ||
+        event.type === 'turn.end' ||
+        event.type === 'engine.end' ||
+        event.type === 'engine.error' ||
+        event.type === 'model.call.error' ||
+        event.type === 'aborted' ||
+        event.type === 'interrupted';
+      if (retryClearing) {
+        this.chat.modelRetry = null;
+        this.dispatch('modelRetry', new ModelRetryEvent('modelRetry', { retry: null }));
+      }
+    }
+
     if (inspectorChanged) {
       this.dispatch('inspector', new InspectorEvent('inspector', { inspector: this.chat.inspector }));
     }
@@ -2088,8 +2178,42 @@ export class OctopiRuntimeStore extends EventTarget {
     // 后台也要跑同一套 runStatus 状态机，否则切回时 waiting 会丢成 idle
     const nextStatus = OctopiRuntimeStore.nextRunStatus(event, cached.runStatus);
 
+    // 后台会话同样维护重试状态：切回来时要能看到「还在重试」而不是干等
+    let nextRetry = cached.modelRetry;
+    if (event.type === 'engine.model_retry') {
+      const attempt = Number(event.data?.attempt ?? 1);
+      const maxAttempts = Number(event.data?.maxAttempts ?? attempt);
+      const reason = String(event.data?.reason ?? 'unknown');
+      nextRetry = {
+        attempt,
+        maxAttempts,
+        reason,
+        delayMs: Number(event.data?.delayMs ?? 0),
+        error: String(event.data?.error ?? reason),
+        since: Date.now(),
+      };
+    } else if (
+      event.type === 'llm_stream_delta' ||
+      event.type === 'tool.exec.start' ||
+      event.type === 'turn.end' ||
+      event.type === 'engine.end' ||
+      event.type === 'engine.error' ||
+      event.type === 'model.call.error' ||
+      event.type === 'aborted' ||
+      event.type === 'interrupted'
+    ) {
+      nextRetry = null;
+    }
+
     const inspectorChanged = inspector !== cached.inspector;
-    if (!result.changed && nextStatus === cached.runStatus && !inspectorChanged) return;
+    if (
+      !result.changed &&
+      nextStatus === cached.runStatus &&
+      !inspectorChanged &&
+      nextRetry === cached.modelRetry
+    ) {
+      return;
+    }
 
     this.conversationCache.set(sessionId, {
       items: result.changed ? result.items : cached.items,
@@ -2097,6 +2221,7 @@ export class OctopiRuntimeStore extends EventTarget {
       adapterState: result.changed ? adapter.getState() : cached.adapterState,
       inspector,
       runStatus: nextStatus,
+      modelRetry: nextRetry,
     });
   }
 
@@ -2367,6 +2492,7 @@ export class OctopiRuntimeStore extends EventTarget {
       clientStreams: [],
       clientStreamSamples: new Map(),
       inspector: {},
+      modelRetry: null,
       tasks: [],
       schedules: [],
     };

@@ -94,24 +94,26 @@ import type { SessionAwareRunnerConfig } from '../run/runner.js';
 import { DefaultMcpManager } from '../extension/plugin-ecosystem/mcp/manager.js';
 import type { McpManagerCallbacks, McpClientFactory } from '../extension/plugin-ecosystem/mcp/manager.js';
 import type { McpServerConfig, McpManager } from '../extension/plugin-ecosystem/mcp/types.js';
+import { maxAttemptsFor } from '../run/reliability/model-error-policy.js';
 
 // ── 默认实现 ──
 
-/** 默认错误策略（简单重试 + 中止） */
-class DefaultErrorStrategy implements ErrorStrategy {
+/** 默认错误策略（按原因分级重试 + 中止；上限见 MODEL_ERROR_MAX_ATTEMPTS） */
+export class DefaultErrorStrategy implements ErrorStrategy {
   onModelError(error: ClassifiedError, attempt: number): ErrorAction {
+    const maxAttempts = maxAttemptsFor(error.reason);
     // ── 可重试错误：限流、超时、网络、服务端 ──
-    if (error.reason === 'rate_limit' && attempt < 3) {
+    if (error.reason === 'rate_limit' && attempt < maxAttempts) {
       const delayMs = error.retryAfterMs ?? (attempt + 1) * 1000;
       return { action: 'retry', delayMs };
     }
-    if (error.reason === 'timeout' && attempt < 3) {
+    if (error.reason === 'timeout' && attempt < maxAttempts) {
       return { action: 'retry', delayMs: (attempt + 1) * 1000 };
     }
-    if (error.reason === 'network' && attempt < 3) {
+    if (error.reason === 'network' && attempt < maxAttempts) {
       return { action: 'retry', delayMs: (attempt + 1) * 1500 };
     }
-    if (error.reason === 'server' && attempt < 2) {
+    if (error.reason === 'server' && attempt < maxAttempts) {
       return { action: 'retry', delayMs: (attempt + 1) * 2000 };
     }
     // ── context_length：由引擎尝试 compact，这里返回 abort 让引擎决定 ──

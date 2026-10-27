@@ -59,7 +59,12 @@ export interface GatewayConfig {
   modelCallIdleTimeoutMs?: number;
   /** 模型调用绝对超时（单次调用总时长上限），毫秒 */
   modelCallAbsoluteTimeoutMs?: number;
-  /**
+  /** 回退链单节点等待首个内容 chunk 的上限，毫秒（仅在存在下一候选时生效） */
+  modelCallFallbackAttemptTtftMs?: number;
+  /** 回退链失败节点的降级窗口，毫秒（缺省等于 fallbackAttemptTtftMs） */
+  modelCallFallbackDegradeTtlMs?: number;
+  /** 回退链单节点非流式整响应上限，毫秒（缺省 240000） */
+  modelCallFallbackChatAttemptMs?: number;  /**
    * 激活宿主构造参数（coalesce 窗口在 new AgentRuntime 时固定）。
    * Schedule/Escalate 由 daemon 经 configureAgentRuntime 挂载。
    */

@@ -249,7 +249,10 @@
 
   "modelCall": {
     "idleTimeoutMs": 300000,
-    "absoluteTimeoutMs": 900000
+    "absoluteTimeoutMs": 900000,
+    "fallbackAttemptTtftMs": 90000,
+    "fallbackDegradeTtlMs": 90000,
+    "fallbackChatAttemptMs": 240000
   },
 
   "agentRuntime": {

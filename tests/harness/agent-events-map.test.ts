@@ -9,6 +9,7 @@ const MAP_KEYS = [
   'engine.start',
   'engine.end',
   'engine.error',
+  'engine.model_retry',
   'iteration.start',
   'turn.end',
   'tool.exec.start',

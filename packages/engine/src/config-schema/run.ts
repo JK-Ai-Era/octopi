@@ -58,6 +58,20 @@ export const ModelCallConfigSchema = z.object({
   idleTimeoutMs: z.number().positive().optional(),
   /** 单次模型调用总时长上限，毫秒 */
   absoluteTimeoutMs: z.number().positive().optional(),
+  /**
+   * 回退链单节点等待首个内容 chunk 的上限（毫秒）。
+   * 仅在存在下一个候选时生效：超时即切下一个模型，不再让慢节点独占整个 watchdog 窗口。
+   */
+  fallbackAttemptTtftMs: z.number().positive().optional(),
+  /** 回退链失败节点的降级窗口（毫秒）；缺省等于 fallbackAttemptTtftMs */
+  fallbackDegradeTtlMs: z.number().positive().optional(),
+  /**
+   * 回退链单节点非流式（chat）整响应上限（毫秒），缺省 240000。
+   *
+   * chat 没有「首块」概念，不能复用 fallbackAttemptTtftMs 的 90s：
+   * 合法的长响应会被误判为节点故障。取 240s 使其早于 undici 的 300s bodyTimeout。
+   */
+  fallbackChatAttemptMs: z.number().positive().optional(),
 });
 
 // ── Agent Runtime（消息路径始终经 Runtime；Source 按配置块挂载）──

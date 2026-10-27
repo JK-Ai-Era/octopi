@@ -22,12 +22,14 @@ import type {
   AgentContext,
   AgentLoopConfig,
   AgentLoopEvent,
+  ClassifiedError,
   LoopToolResult,
   TurnContext,
 } from '@octopi-agent/core/loop/types.js';
 import type { HarnessLoopEvent, PolicyUnit } from './harness-events.js';
 import { classifyError } from '@octopi-agent/core/loop/error-classifier.js';
 import { agentLoop } from '@octopi-agent/core/loop/agent-loop.js';
+import { maxAttemptsFor } from './model-error-policy.js';
 import type {
   ToolCallRecord,
   ToolLoopDetectionConfig,
@@ -194,6 +196,24 @@ interface ReliabilityState {
     timestamp: number;
     data: Record<string, unknown>;
   }>;
+  /**
+   * 模型调用重试通知：onError 不是 generator，无法直接 yield，
+   * 与 SecurityGuard 同策略入队，由主循环在下一个事件边界推出（onError 之后
+   * agentLoop 立即产出 turn_end，故通知紧随重试决策抵达消费方）。
+   */
+  /** 待执行的模型重试退避等待（毫秒）；在通知 yield 之后消费，保证「通知先于等待」 */
+  pendingRetryDelayMs: number;
+  pendingModelRetryEvents: Array<{
+    type: 'model_retry';
+    timestamp: number;
+    data: {
+      attempt: number;
+      maxAttempts: number;
+      reason: string;
+      delayMs: number;
+      error: string;
+    };
+  }>;
   // ── P2 wrap-up 控制梯 ──
   /** wrap-up 状态：false 表示未进入 wrap-up */
   wrapUp: false | {
@@ -207,6 +227,84 @@ interface ReliabilityState {
   // ── P3 advisory 告警 ──
   /** 已触发的 advisory（避免重复告警） */
   advisoryTriggered: Set<string>;
+}
+
+/**
+ * 入队一条「模型调用即将重试」通知
+ *
+ * onError 不是 generator，无法直接 yield；与 SecurityGuard 同策略入队，
+ * 由主循环在下一个事件边界推出。
+ *
+ * @param state - Run 状态（承载待推队列）
+ * @param error - 分类后的错误
+ * @param attempt - 本次尝试序号（从 0 起）
+ * @param delayMs - 重试前等待时长
+ */
+/**
+ * 入队一条「模型调用即将重试」通知，并登记待执行的退避等待
+ *
+ * onError 不是 generator，无法直接 yield；与 SecurityGuard 同策略入队，
+ * 由主循环在下一个事件边界推出。
+ *
+ * **等待不在这里执行**（2026-10-27 评审修正）：若在此 `await sleep(delayMs)`，
+ * generator 会卡在 onError 内，外层 for-await 没有任何事件可排空，
+ * 通知要等睡眠结束才送达——`rate_limit` 带 `Retry-After` 时用户在整个等待期仍是零反馈。
+ * 因此把退避时长登记到 state，由排空处在 `yield` 之后再 sleep。
+ *
+ * @param state - reliability 运行态
+ * @param error - 已分类错误
+ * @param attempt - 本次尝试序号（从 0 起）
+ * @param delayMs - 重试前需等待的时长
+ * @param maxAttempts - 该原因的允许重试次数（由调用方给出，避免表外原因显示 0）
+ */
+function pushRetryNotice(
+  state: ReliabilityState,
+  error: ClassifiedError,
+  attempt: number,
+  delayMs: number,
+  maxAttempts: number,
+): void {
+  state.pendingModelRetryEvents.push({
+    type: 'model_retry',
+    timestamp: Date.now(),
+    data: {
+      attempt: attempt + 1,
+      maxAttempts,
+      reason: error.reason,
+      delayMs,
+      error: (error.message || '').slice(0, 500),
+    },
+  });
+  // 多条通知合并成一次等待：取最大退避，避免退避时长被叠加放大
+  state.pendingRetryDelayMs = Math.max(state.pendingRetryDelayMs, delayMs);
+}
+
+/**
+ * 可被 abort 打断的等待
+ *
+ * `rate_limit` 的 `Retry-After` 可达数十秒；若用裸 `setTimeout`，
+ * 用户按下停止后仍要等满整个退避窗口才能生效。
+ *
+ * @param ms - 等待时长
+ * @param signal - 运行中止信号（可选）
+ * @returns 到时或被中止时 resolve（不 reject：中止由循环自身处理）
+ */
+async function sleepUnlessAborted(ms: number, signal?: AbortSignal): Promise<void> {
+  if (ms <= 0) return;
+  if (!signal) {
+    await new Promise((resolve) => setTimeout(resolve, ms));
+    return;
+  }
+  if (signal.aborted) return;
+  await new Promise<void>((resolve) => {
+    const done = (): void => {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', done);
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    signal.addEventListener('abort', done, { once: true });
+  });
 }
 
 function createInitialState(checkpointInterval = 15): ReliabilityState {
@@ -230,6 +328,8 @@ function createInitialState(checkpointInterval = 15): ReliabilityState {
     modelErrorAttempt: 0,
     pendingBudgetHardYield: false,
     pendingSecurityEvents: [],
+    pendingRetryDelayMs: 0,
+    pendingModelRetryEvents: [],
     wrapUp: false,
     advisoryTriggered: new Set(),
   };
@@ -932,30 +1032,24 @@ export async function* runAgentWithReliability(
       if (harness.errorStrategy) {
         const action = harness.errorStrategy.onModelError(classified, attempt);
         if (action.action === 'retry') {
-          if (action.delayMs > 0) {
-            await new Promise(resolve => setTimeout(resolve, action.delayMs));
-          }
+          const delayMs = action.delayMs ?? 0;
+          // maxAttempts 取「本次实际允许的重试次数」；自定义 strategy 对表外原因也重试时，
+          // 至少报 1（而不是 0），避免 UI 显示「第 1 次 / 共 0 次」
+          pushRetryNotice(state, classified, attempt, delayMs, Math.max(1, maxAttemptsFor(classified.reason)));
           return 'retry';
         }
         return 'abort';
       }
 
-      // 默认：重试 rate_limit / timeout / network / server（最多 3 次，避免无界重试）
-      // network 含对端断连（undici terminated / socket hang up），重试常可自愈
-      if (
-        classified.reason === 'rate_limit' ||
-        classified.reason === 'timeout' ||
-        classified.reason === 'network' ||
-        classified.reason === 'server'
-      ) {
-        if (attempt < 3) {
-          const delayMs = classified.retryAfterMs ?? (attempt + 1) * 1000;
-          if (delayMs > 0) {
-            await new Promise(resolve => setTimeout(resolve, delayMs));
-          }
-          return 'retry';
-        }
-        return 'abort';
+      // 默认：按错误原因分级重试（次数上限见 MODEL_ERROR_MAX_ATTEMPTS）
+      // network 含对端断连（undici terminated / socket hang up），重试常可自愈；
+      // timeout 只给 1 次——一次失败已经耗掉整个 watchdog 窗口（流 300s + 同步兜底 300s），
+      // 原样再来 3 轮正是 2026-10-27 那次 52 分钟黑屏的成因。
+      const maxAttempts = maxAttemptsFor(classified.reason);
+      if (attempt < maxAttempts) {
+        const delayMs = classified.retryAfterMs ?? (attempt + 1) * 1000;
+        pushRetryNotice(state, classified, attempt, delayMs, maxAttempts);
+        return 'retry';
       }
       return 'abort';
     },
@@ -967,6 +1061,18 @@ export async function* runAgentWithReliability(
     while (state.pendingSecurityEvents.length > 0) {
       const sec = state.pendingSecurityEvents.shift()!;
       yield sec as never;
+    }
+    // 模型重试通知（onError 入队，此处推出：重试窗口必须对用户可见）
+    while (state.pendingModelRetryEvents.length > 0) {
+      const retry = state.pendingModelRetryEvents.shift()!;
+      yield retry as never;
+    }
+    // 退避等待放在通知 yield 之后：消费方已看到「即将重试 + 等多久」，
+    // 而 agentLoop 此刻挂在 turn_end 之后未继续，下一次调用不会提前发起。
+    if (state.pendingRetryDelayMs > 0) {
+      const waitMs = state.pendingRetryDelayMs;
+      state.pendingRetryDelayMs = 0;
+      await sleepUnlessAborted(waitMs, signal);
     }
     // Observer：run 结束前附带 RunMetricsCollector 快照（P1 Guard 面板）
     if (event.type === 'agent_end') {

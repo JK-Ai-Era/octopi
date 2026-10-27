@@ -16,6 +16,19 @@ export interface AgentEventMap {
   'engine.start': { sessionId?: string };
   'engine.end': { reason: string };
   'engine.error': { error: string; reason?: string };
+  /**
+   * 模型调用即将重试（重试窗口对用户可见）
+   *
+   * 此前重试不产生任何事件：一次 52 分钟停滞期间前端零反馈。
+   * `attempt` 从 1 起；`delayMs` 是**即将**等待的退避时长（通知先于等待发出）。
+   */
+  'engine.model_retry': {
+    attempt: number;
+    maxAttempts: number;
+    reason: string;
+    delayMs: number;
+    error: string;
+  };
   'iteration.start': Record<string, never>;
   'llm.usage': {
     usage: import('@octopi-agent/core/types/turn.js').TokenUsage;
@@ -266,6 +279,7 @@ export const AgentEvents = {
   ENGINE_START: 'engine.start',
   ENGINE_END: 'engine.end',
   ENGINE_ERROR: 'engine.error',
+  ENGINE_MODEL_RETRY: 'engine.model_retry',
   ITERATION_START: 'iteration.start',
   TURN_END: 'turn.end',
 

@@ -282,6 +282,16 @@ export function adaptLoopEvent(
         sessionId: meta.sessionId,
         data: { ...(event.data as Record<string, unknown>) },
       };
+    case 'model_retry':
+      // 重试窗口对用户可见：52 分钟停滞期间前端零反馈，正是因为重试不产生任何事件。
+      // 不改 stopReason——重试不是终态，是否真停仍由 loopEndReason 决定。
+      return {
+        type: 'engine.model_retry',
+        timestamp: event.timestamp,
+        agentId: meta.agentId,
+        sessionId: meta.sessionId,
+        data: { ...(event.data as Record<string, unknown>) },
+      };
     case 'agent_start':
       return { type: 'engine.start', timestamp: event.timestamp, agentId: meta.agentId, sessionId: meta.sessionId, data: {} };
     case 'agent_end':
@@ -2129,7 +2139,17 @@ export class SessionAwareRunner {
       // Observer：记录最终 messages 与 endReason（真正 close 在 finally，保证异常也闭合）
       observerFinalMessages = session.messages;
       // P5: 使用 stopReason 区分终态（context_stopped / behavior_stopped / policy_stopped / security_stopped / completed）
-      observerEndReason = adaptState.stopReason ?? (hasTurnEnd ? 'completed' : 'no_turn_end');
+      // LLM 错误路径只设 loopEndReason='error'、不设 stopReason；若在此回落到 hasTurnEnd，
+      // 一次彻底失败会被记成 completed（run.timing / Observer / 指标全部失真）。
+      observerEndReason =
+        adaptState.stopReason ??
+        (adaptState.loopEndReason === 'error'
+          ? 'error'
+          : adaptState.loopEndReason === 'aborted'
+            ? 'aborted'
+            : hasTurnEnd
+              ? 'completed'
+              : 'no_turn_end');
 
       // 中止标记：仅在本轮**未完成**被掐断时打标（hasTurnEnd = 正常收尾）。
       // 迟到 abort / signal 竞态不得给已完成轮贴编辑重发。

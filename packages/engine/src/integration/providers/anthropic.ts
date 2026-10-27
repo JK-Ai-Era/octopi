@@ -26,6 +26,7 @@ import type {
 } from '@octopi-agent/core/interfaces/model-provider.js';
 import type { ToolCall, ModelInfo } from '@octopi-agent/core/types.js';
 import { tokenUsageFromAnthropic } from './usage.js';
+import { attachHttpStatus, attachStreamDiag, createStreamDiag } from './provider-diagnostics.js';
 
 export interface AnthropicProviderConfig {
   name?: string;
@@ -132,7 +133,9 @@ export class AnthropicProvider implements ModelProvider {
 
     if (!response.ok) {
       const error = await response.text();
-      throw new Error(`Anthropic API error (${response.status}): ${error}`);
+      const httpError = new Error(`Anthropic API error (${response.status}): ${error}`);
+      attachHttpStatus(httpError, response.status);
+      throw httpError;
     }
 
     const data = await response.json() as Record<string, unknown>;
@@ -185,7 +188,9 @@ export class AnthropicProvider implements ModelProvider {
 
     if (!response.ok) {
       const error = await response.text();
-      throw new Error(`Anthropic API error (${response.status}): ${error}`);
+      const httpError = new Error(`Anthropic API error (${response.status}): ${error}`);
+      attachHttpStatus(httpError, response.status);
+      throw httpError;
     }
 
     const reader = response.body?.getReader();
@@ -195,6 +200,8 @@ export class AnthropicProvider implements ModelProvider {
 
     const decoder = new TextDecoder();
     let buffer = '';
+    // 流内观测：ping 心跳 vs 内容 chunk 的区分是「上游活着但不产出」与「连接已死」的唯一依据
+    const diag = createStreamDiag();
     let currentToolId = '';
     let currentToolName = '';
     let toolArgsBuffer = '';
@@ -214,8 +221,12 @@ export class AnthropicProvider implements ModelProvider {
     try {
       while (true) {
         const { done, value } = await reader.read();
-        if (done) break;
+        if (done) {
+          diag.sawEnd = true;
+          break;
+        }
         resetIdleTimer();
+        diag.bytes += value.byteLength;
 
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split('\n');
@@ -227,7 +238,11 @@ export class AnthropicProvider implements ModelProvider {
           try {
             const data = JSON.parse(line.slice(6)) as Record<string, unknown>;
 
-            if (data.type === 'content_block_start') {
+            if (data.type === 'ping') {
+              // 上游保活心跳：连接仍活着，但没有任何产出。engine watchdog 只认内容 chunk，
+              // 因此这里单独计数，供失败留痕区分「排队/长 prefill」与「连接已死」。
+              diag.keepalives += 1;
+            } else if (data.type === 'content_block_start') {
               const block = data.content_block as Record<string, unknown> | undefined;
               if (block?.type === 'tool_use') {
                 currentToolId = block.id as string;
@@ -237,8 +252,10 @@ export class AnthropicProvider implements ModelProvider {
             } else if (data.type === 'content_block_delta') {
               const delta = data.delta as Record<string, unknown> | undefined;
               if (delta?.type === 'text_delta') {
+                diag.contentChunks += 1;
                 yield { type: 'content', content: (delta.text as string) ?? '' };
               } else if (delta?.type === 'thinking_delta') {
+                diag.contentChunks += 1;
                 yield { type: 'reasoning', content: (delta.thinking as string) ?? '' };
               } else if (delta?.type === 'input_json_delta') {
                 toolArgsBuffer += (delta.partial_json as string) ?? '';
@@ -247,6 +264,7 @@ export class AnthropicProvider implements ModelProvider {
               if (currentToolId) {
                 let args: Record<string, unknown> = {};
                 try { args = JSON.parse(toolArgsBuffer); } catch { /* ignore */ }
+                diag.contentChunks += 1;
                 yield {
                   type: 'tool_call',
                   toolCall: {
@@ -276,6 +294,7 @@ export class AnthropicProvider implements ModelProvider {
                 else finishReason = 'stop';
               }
             } else if (data.type === 'message_stop') {
+              diag.sawEnd = true;
               yield { type: 'done', usage: streamUsage, finishReason };
               return;
             }
@@ -284,6 +303,11 @@ export class AnthropicProvider implements ModelProvider {
           }
         }
       }
+    } catch (err) {
+      // 异常收尾把观测事实随错误带走：读取方在同一个 catch 窗口内取值，
+      // 不保留引用，避免长时间持有诊断对象。
+      attachStreamDiag(err, diag);
+      throw err;
     } finally {
       if (idleTimer) clearTimeout(idleTimer);
       reader.releaseLock();

@@ -16,7 +16,7 @@ import type {
   SystemConversationItem,
   ViewMode,
 } from '@octopi-agent/gateway/web/conversation/types';
-import type { RunStatus, InspectorState } from '@octopi-agent/gateway/web/runtime/store';
+import type { RunStatus, InspectorState, ModelRetryInfo } from '@octopi-agent/gateway/web/runtime/store';
 import type { SessionTaskView, SessionScheduleView, ModelCatalog, SessionModelView, CommandCatalogItemDto, PendingQuestion, PendingApproval, ApprovalScope, ClientToolCallDto, ClientToolDescriptorDto } from '@octopi-agent/gateway/web/sdk/client';
 import { ClientToolCallCard, WebViewPreview, type RenderedWebView } from './ClientToolCallCard';
 import { FileCard, FilePreviewPanel, fileRefFromCall, fileRefFromToolResult, type FileRef } from './FileDelivery';
@@ -753,6 +753,8 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
   const [viewMode, setViewMode] = useState<ViewMode>('history');
   const [stream, setStream] = useState('');
   const [runStatus, setRunStatus] = useState<RunStatus>('idle');
+  /** 模型重试状态：非 null 时显示「第 N/M 次重试」，让长等待可见 */
+  const [modelRetry, setModelRetry] = useState<ModelRetryInfo | null>(null);
   const [inspector, setInspector] = useState<InspectorState>({});
   const [tasks, setTasks] = useState<SessionTaskView[]>([]);
   const [schedules, setSchedules] = useState<SessionScheduleView[]>([]);
@@ -838,6 +840,9 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
     }) as EventListener);
     store.addEventListener('runStatus', ((e: CustomEvent) => {
       setRunStatus(e.detail.status);
+    }) as EventListener);
+    store.addEventListener('modelRetry', ((e: CustomEvent) => {
+      setModelRetry((e.detail.retry ?? null) as ModelRetryInfo | null);
     }) as EventListener);
     store.addEventListener('inspector', ((e: CustomEvent) => {
       setInspector(e.detail.inspector as InspectorState);
@@ -2179,10 +2184,22 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
               <div className="msg-assistant">
                 <div className="msg-assistant-header">
                   <span>助手</span>
-                  <span className="status-ok">· {runStatus === 'waiting' ? '等待响应' : '思考中…'}</span>
+                  {/* 重试中必须显式告知：否则用户看到的就是「等待响应」无限挂起 */}
+                  {modelRetry ? (
+                    <span className="status-warn">
+                      · 上游无响应，第 {modelRetry.attempt}/{modelRetry.maxAttempts} 次重试
+                      {modelRetry.delayMs > 0 ? `（${Math.round(modelRetry.delayMs / 1000)}s 后发起）` : ''}
+                    </span>
+                  ) : (
+                    <span className="status-ok">· {runStatus === 'waiting' ? '等待响应' : '思考中…'}</span>
+                  )}
                 </div>
-                <div className="panel msg-assistant-body" style={{ borderColor: '#93c5fd' }}>
-                  <div className="msg-assistant-content muted">（模型尚未返回内容）</div>
+                <div className="panel msg-assistant-body" style={{ borderColor: modelRetry ? '#fcd34d' : '#93c5fd' }}>
+                  <div className="msg-assistant-content muted">
+                    {modelRetry
+                      ? `（${modelRetry.reason}：${modelRetry.error.length > 160 ? `${modelRetry.error.slice(0, 160)}…` : modelRetry.error}）`
+                      : '（模型尚未返回内容）'}
+                  </div>
                 </div>
               </div>
             )}

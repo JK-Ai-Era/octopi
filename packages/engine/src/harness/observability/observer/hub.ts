@@ -103,6 +103,8 @@ const TIMELINE_TYPES = new Set([
   'engine.start',
   'engine.end',
   'engine.error',
+  // 模型重试：排查「为什么等了这么久」时，时间线必须能看出重试发生与次数
+  'engine.model_retry',
   'iteration.start',
   'turn.end',
   'tool.exec.start',

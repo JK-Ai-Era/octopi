@@ -775,6 +775,29 @@ export class Gateway {
       return;
     }
 
+    // 模型超时口径自检（2026-10-27 事故）：配置写 900s 却因 undici 默认 300s 从未生效。
+    // 只告警不改行为——把隐含的优先级关系摊到启动日志里。
+    {
+      const { checkTimeoutCoherence, logTimeoutCoherence } = await import(
+        '@octopi-agent/engine/integration/providers/timeout-coherence.js'
+      );
+      const providerTimeouts: Record<string, number | undefined> = {};
+      for (const [name, p] of Object.entries(this.config.modelProviders ?? {})) {
+        providerTimeouts[name] = p.timeoutSeconds;
+      }
+      const chainLengths = Array.from(this.agents.values()).map(
+        (a) => 1 + (a.model?.fallbackModels?.length ?? 0),
+      );
+      logTimeoutCoherence(
+        checkTimeoutCoherence({
+          idleTimeoutMs: this.config.modelCallIdleTimeoutMs,
+          providerTimeouts,
+          fallbackAttemptTtftMs: this.config.modelCallFallbackAttemptTtftMs,
+          maxFallbackChainLength: chainLengths.length > 0 ? Math.max(...chainLengths) : undefined,
+        }),
+      );
+    }
+
     // 插件发现（docs/plugin-system.md）：扫描 plugins.loadPaths，注册 hooks / 命令。
     // 幂等：PluginLoader.discover 不做去重，stop→start 重复 discover 会双注册 hooks/命令
     if (!this.pluginsDiscovered) {
@@ -5007,6 +5030,11 @@ export class Gateway {
         agent.model.model,
         agent.model.fallbackModels,
         wrappedProviders,
+        {
+          attemptTtftTimeoutMs: this.config.modelCallFallbackAttemptTtftMs,
+          attemptChatTimeoutMs: this.config.modelCallFallbackChatAttemptMs,
+          degradeTtlMs: this.config.modelCallFallbackDegradeTtlMs,
+        },
       );
       console.log(`[Gateway] Agent "${agent.id}" fallback chain: ${[agent.model.model, ...agent.model.fallbackModels.map(f => f.model)].join(' ?')}`);
     }

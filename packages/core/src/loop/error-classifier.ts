@@ -12,13 +12,31 @@
 import type { ClassifiedError, ErrorReason } from './types.js';
 
 /**
+ * 判定是否已是分类结果
+ *
+ * `Loop` 把 `ClassifiedError` 交给 `onError`，Harness 侧若再分类一次，
+ * `message` 会被 `String(obj)` 抹成 `[object Object]`（日志与用户可见提示失真）。
+ * 分类必须幂等。
+ *
+ * @param err - 任意错误值
+ * @returns 是否已是 `ClassifiedError`
+ */
+function isClassifiedError(err: unknown): err is ClassifiedError {
+  if (typeof err !== 'object' || err === null) return false;
+  const e = err as Record<string, unknown>;
+  return typeof e.reason === 'string' && typeof e.message === 'string' && 'originalError' in e;
+}
+
+/**
  * 分类错误
  *
  * 优先检查 HTTP 状态码（结构化信息），回退到消息文本匹配。
  * 文本匹配会拼接 `message` / `cause` / `code`，覆盖 undici 的
  * `TypeError: terminated`（cause: other side closed）一类被包装的断连错误。
+ * 已是分类结果时原样返回（幂等）。
  */
 export function classifyError(err: unknown): ClassifiedError {
+  if (isClassifiedError(err)) return err;
   const message = err instanceof Error ? err.message : String(err);
   const lower = collectErrorText(err);
 
