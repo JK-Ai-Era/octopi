@@ -195,6 +195,10 @@ describe('OctopiRuntimeStore', () => {
       type: 'turn.end',
       data: { content: 'ok', hasToolCalls: false, phase: 'final' },
     });
+    // turn.end 只收模型回合；插话/followUp 仍可在同 run 续接，engine.end 才是空闲边界
+    expect(store.getState().chat.runStatus).toBe('waiting');
+
+    client.emitEvent(undefined, { type: 'engine.end', data: {} });
     expect(store.getState().chat.runStatus).toBe('idle');
   });
 
@@ -223,7 +227,7 @@ describe('OctopiRuntimeStore', () => {
     expect(store.getState().chat.runStatus).toBe('streaming');
   });
 
-  it('ignores late running state after turn.end final', () => {
+  it('ignores late running state after engine.end', () => {
     const client = createMockClient();
     const store = new OctopiRuntimeStore(client as any);
 
@@ -235,6 +239,8 @@ describe('OctopiRuntimeStore', () => {
       type: 'turn.end',
       data: { content: 'hello', hasToolCalls: false, phase: 'final' },
     });
+    // 空闲边界是 engine.end（turn.end 后同 run 可能还有插话/followUp）
+    client.emitEvent(undefined, { type: 'engine.end', data: {} });
     expect(store.getState().chat.runStatus).toBe('idle');
 
     client.emitState(undefined, 'running');

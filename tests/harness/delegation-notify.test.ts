@@ -4,7 +4,7 @@
  * 覆盖 `arch/delegation.md` P3：
  * - 子终态 → `emitAgentSignal` → `AgentSignalSource` → Trigger
  * - Compiler 透传 `delegationId` 到消息 metadata
- * - `<delegation_completed …/>` 内容渲染
+ * - `<delegation_result …>` 内容渲染（统一信封，status 属性区分终态）
  * - `wireDelegation`：工具只挂给 canDelegate 的 agent + 状态提示接线
  */
 
@@ -65,7 +65,7 @@ function makeDelegation(overrides: Partial<Delegation> = {}): Delegation {
 describe('renderDelegationNotice', () => {
   it('renders a self-closing tag when there is no body', () => {
     const text = renderDelegationNotice(makeDelegation({ output: undefined }));
-    expect(text).toMatch(/^<delegation_completed /);
+    expect(text).toMatch(/^<delegation_result /);
     expect(text).toContain('id="del-abc"');
     expect(text).toContain('status="completed"');
     expect(text).toContain('agent="worker"');
@@ -77,11 +77,12 @@ describe('renderDelegationNotice', () => {
     expect(text).toContain('<output>found it</output>');
   });
 
-  it('switches to delegation_failed for non-completed statuses', () => {
-    expect(renderDelegationNotice(makeDelegation({ status: 'failed', output: undefined, error: 'boom' })))
-      .toContain('<delegation_failed');
+  it('keeps the unified envelope and reports the raw status', () => {
+    const failed = renderDelegationNotice(makeDelegation({ status: 'failed', output: undefined, error: 'boom' }));
+    expect(failed).toContain('<delegation_result');
+    expect(failed).toContain('status="failed"');
     expect(renderDelegationNotice(makeDelegation({ status: 'timeout', output: undefined })))
-      .toContain('<delegation_failed');
+      .toContain('status="timeout"');
   });
 
   it('escapes markup in untrusted child output', () => {
@@ -116,7 +117,8 @@ describe('delegation notify channel', () => {
     expect(t.agentId).toBe('main');
     expect(t.sessionId).toBe('s-parent');
     expect(t.payload.kind).toBe('system_note');
-    expect((t.payload as { content: string }).content).toContain('<delegation_completed');
+    expect((t.payload as { content: string }).content).toContain('<delegation_result');
+    expect((t.payload as { content: string }).content).toContain('status="completed"');
     expect(t.metadata?.delegationId).toBe('del-abc');
     expect(t.metadata?.parentAgentId).toBe('worker');
 
@@ -157,7 +159,8 @@ describe('delegation notify channel', () => {
     await vi.waitFor(() => expect(triggers.length).toBe(1));
 
     const content = (triggers[0].payload as { content: string }).content;
-    expect(content).toContain('<delegation_failed');
+    expect(content).toContain('<delegation_result');
+    expect(content).toContain('status="failed"');
     expect(content).toContain('<error>child exploded</error>');
 
     await source.stop();
@@ -224,6 +227,9 @@ describe('DelegateService notify', () => {
     });
 
     await vi.waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
+    // notify 成功只证明已投递；surfaced 由 Runner 确认「结果已进父上下文」时置位
+    expect(store.list()[0].deliveryState).toBe('delivering');
+    store.markSurfaced(store.list()[0].id);
     expect(store.list()[0].deliveryState).toBe('surfaced');
     await source.stop();
   });
@@ -415,11 +421,15 @@ function fakeAgent(agentId: string, delegation?: { callable: boolean; canDelegat
     agentId,
     agent: {
       contextSessionId: 'default',
-      setSteeringMessages(fn: unknown) {
+    },
+    runner: {
+      setSteeringProvider(fn: unknown) {
         self.steering = fn;
       },
+      setDelegationDeliveryAck(fn: unknown) {
+        self.deliveryAck = fn;
+      },
     },
-    runner: {},
     store: {},
     traits: [] as string[],
     delegation,
@@ -428,6 +438,7 @@ function fakeAgent(agentId: string, delegation?: { callable: boolean; canDelegat
       for (const t of tools) self.registered.push(t.definition.name);
     },
     steering: undefined as unknown,
+    deliveryAck: undefined as unknown,
   };
   return self;
 }
@@ -552,7 +563,7 @@ describe('delegation_status hint', () => {
     expect(service.renderStatusHint('s-other')).toBe('');
   });
 
-  it('does not repeat work already delivered through the notify channel', async () => {
+  it('keeps the hint until the result lands in the parent context', async () => {
     const registry = new DefaultAgentRegistry();
     registry.register({
       id: 'worker',
@@ -582,9 +593,13 @@ describe('delegation_status hint', () => {
       input: 'i',
     });
 
-    // 终态 + notify 投递成功后，提示不再重复（notify 通道已送达）
-    await vi.waitFor(() => expect(service.renderStatusHint('s-1')).toBe(''));
-    expect(delivered).toHaveBeenCalledTimes(1);
+    // notify 投递成功仍保留提示（surfaced 由「结果进父上下文」的 ack 确认），
+    // ack 后提示消音，不再重复已送达的工作
+    await vi.waitFor(() => expect(delivered).toHaveBeenCalledTimes(1));
+    expect(store.list()[0].deliveryState).toBe('delivering');
+    expect(service.renderStatusHint('s-1')).toContain('<delegation_status>');
+    store.markSurfaced(store.list()[0].id);
+    expect(service.renderStatusHint('s-1')).toBe('');
     expect(store.list()[0].deliveryState).toBe('surfaced');
   });
 });

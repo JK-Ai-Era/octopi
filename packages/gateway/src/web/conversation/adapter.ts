@@ -14,6 +14,7 @@ import type {
   MessageRecord,
 } from '../sdk/client.js';
 import { extractUserMessageText } from '@octopi-agent/engine/harness/context/turn-envelope.js';
+import type { Message } from '@octopi-agent/core/types.js';
 import { isChatReplayHidden } from '@octopi-agent/engine/harness/context/layer-types.js';
 
 import type {
@@ -62,6 +63,34 @@ function asStringArray(value: unknown): string[] {
  * 托管 system prompt / 明显的人格注入 / 引擎载体插槽 / turn 闭标，不作为聊天记录回放。
  * D9：判定委托共享谓词 isChatReplayHidden（engine layer-types），与 observer isHiddenFromChat 同源。
  */
+/** 委派结果通知（`<delegation_result …>`）→ 系统卡片文案（不冒充用户气泡） */
+function formatDelegationResultText(content: unknown): string {
+  const xml = extractText(
+    typeof content === 'string'
+      ? content
+      : Array.isArray(content)
+        ? (content as Message['content'])
+        : '',
+  );
+  // 属性只从信封首个标签解析：子产物正文里出现 `id="…"` 不得误当信封属性（评审 F11）
+  const envelopeHead = xml.indexOf('>') >= 0 ? xml.slice(0, xml.indexOf('>') + 1) : xml;
+  const attr = (name: string): string =>
+    new RegExp(`${name}="([^"]*)"`).exec(envelopeHead)?.[1] ?? '';
+  const unesc = (s: string): string =>
+    s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&amp;/g, '&');
+  const body =
+    /<output>([\s\S]*?)<\/output>/.exec(xml)?.[1] ??
+    /<error>([\s\S]*?)<\/error>/.exec(xml)?.[1] ??
+    '';
+  const head =
+    `[委派结果] ${attr('id')}` +
+    ` · ${attr('status') || 'completed'}` +
+    (attr('agent') ? ` · ${attr('agent')}` : '') +
+    (attr('task') ? ` · ${unesc(attr('task'))}` : '');
+  const excerpt = unesc(body).replace(/\s+/g, ' ').trim().slice(0, 200);
+  return excerpt ? `${head}\n${excerpt}` : head;
+}
+
 function isHiddenSystemHistory(msg: MessageRecord): boolean {
   return isChatReplayHidden({
     role: msg.role,
@@ -387,6 +416,29 @@ export class ConversationAdapter {
         break;
       }
 
+      // ── inbox 注入：委派结果实时卡片（人话由发送端乐观注入，不重复渲染）──
+      case 'session.inbox.appended': {
+        const msgs =
+          (event.data as { messages?: Array<{ role?: string; content?: unknown; metadata?: { delegationId?: unknown } }> } | undefined)
+            ?.messages ?? [];
+        const notices: SystemConversationItem[] = msgs
+          .filter((m) => m.metadata?.delegationId)
+          .map((m) => ({
+            id: `sys-delegation-${String((m.metadata as { delegationId?: unknown } | undefined)?.delegationId ?? ConversationAdapter.makeId('sys'))}`,
+            role: 'system' as const,
+            createdAt: Date.now(),
+            sessionId,
+            source: 'runtime' as const,
+            kind: 'info' as const,
+            message: formatDelegationResultText(m.content),
+          }));
+        if (notices.length) {
+          items = [...items, ...notices];
+          changed = true;
+        }
+        break;
+      }
+
       // ── Engine end / interrupted / aborted ──
       case 'engine.end':
       case 'interrupted':
@@ -676,7 +728,21 @@ export class ConversationAdapter {
 
       switch (msg.role) {
         case 'user': {
-          const source = (msg.metadata as { source?: string } | undefined)?.source;
+          const source = (msg.metadata as { source?: string; delegationId?: unknown } | undefined)?.source;
+          const delegationId = (msg.metadata as { delegationId?: unknown } | undefined)?.delegationId;
+          // 委派结果：异步工具结果信封（delegationId 入 metadata），系统卡片，不冒充用户气泡
+          if (delegationId) {
+            items.push({
+              id: `sys-delegation-${String(delegationId)}`,
+              role: 'system',
+              createdAt: ts,
+              sessionId,
+              source: 'history',
+              kind: 'info',
+              message: formatDelegationResultText(msg.content),
+            });
+            break;
+          }
           // D8 拍板（b）：机器生成的压缩摘要 / 引擎提示不是用户发言——
           // 渲染为系统提示条（保留可见性），不再冒充用户气泡。
           // runStopped：引擎主动终止 turn 的唯一可见凭证，必须渲染（warning 态）。

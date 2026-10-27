@@ -202,6 +202,8 @@ describe('P0-2 nested delegation is gated by maxDepth', () => {
         setSteeringMessages() { /* noop */ },
       },
       runner: {
+        setSteeringProvider() { /* noop */ },
+        setDelegationDeliveryAck() { /* noop */ },
         async *_handle() {
           yield {
             type: 'turn.end',

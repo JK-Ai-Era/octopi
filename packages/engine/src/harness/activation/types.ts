@@ -109,6 +109,18 @@ export interface RunAuditRecord {
 
 export interface RunDispatcher {
   execute(req: RunRequest, signal?: AbortSignal): AsyncIterable<AgentEvent>;
+  /** 可选：活跃 Run 接续；缺省保持原 Trigger 排队语义。 */
+  inbox?: {
+    offer(signal: import('./inbox.js').SessionInboxSignal): import('./inbox.js').InboxOfferResult;
+  };
+}
+
+/** dispatch 调用方选项 */
+export interface DispatchOptions {
+  /** Run 事件流转发（频道回复捕获等）；不变量 #6 */
+  onEvent?: (event: AgentEvent) => void;
+  /** 活跃 Run 接收即回执（早于 Run 结束）；run = 走新 Run。 */
+  onDelivery?: (delivery: 'steered' | 'run') => void;
 }
 
 // ── Router ──
@@ -155,6 +167,13 @@ export interface TriggerSource {
 export type DispatchResult =
   | { status: 'ran'; requestId: string; agentId: string; sessionId: string }
   | {
+      /** 已交活跃 Run 在下一消息边界接续（不开新 Run）。 */
+      status: 'accepted';
+      agentId: string;
+      sessionId: string;
+      delivery: 'steered';
+    }
+  | {
       status: 'skipped';
       reason: 'no_agent' | 'filtered' | 'runtime_stopped' | 'aborted';
     }
@@ -179,6 +198,8 @@ export const RuntimeEvents = {
   RUN_FAILED: 'runtime.run.failed',
   AGENT_SIGNAL_EMITTED: 'runtime.agent_signal.emitted',
   TRIGGER_DROPPED: 'runtime.trigger.dropped',
+  RUN_EVENT: 'runtime.run.event',
+  INBOX_ADMITTED: 'runtime.inbox.admitted',
 } as const;
 
 export type RuntimeEventType = (typeof RuntimeEvents)[keyof typeof RuntimeEvents];

@@ -402,6 +402,8 @@ export class Gateway {
   private runnerInflight = new WeakMap<SessionAwareRunner, number>();
   /** 流式 adapter 引用（用于广播事件） */
   private streamingAdapters: StreamingChannelAdapter[] = [];
+  /** RUN_EVENT 已广播的 Loop 事件对象（总线原始副本去重，防双投） */
+  private readonly wrappedRunEvents = new WeakSet<object>();
   /** 每个 provider 的熔断器 */
   private circuitBreakers = new Map<string, CircuitBreaker>();
   /** 默认 store 的异步初始化 Promise（未传入 store 时） */
@@ -590,12 +592,24 @@ export class Gateway {
       }
       // Observer 通道：Runner 在 emit 时直采 Hub（避免与 bus 双计 timeline/lifecycle）
       // Gateway 只保留产品 Context Map；不再二次 ingestEvent
-      // 终态事件（turn.end / engine.*）改由 processMessage.onEvent 用 sessionKey 广播，
-      // 这里跳过，避免双投；其余非流式事件仍走 bus。
+      // Runtime 的统一 run-event 是所有 Trigger（含后台续跑）的唯一 WS 扇出口。
+      // 内部 EventBus 不再承担流式/终态的客户端广播，避免两套可见性契约。
+      if (event.type === 'runtime.run.event' && event.sessionId) {
+        const runEvent = (event.data as { event?: AgentEvent } | undefined)?.event;
+        if (runEvent) {
+          this.wrappedRunEvents.add(runEvent);
+          for (const adapter of this.streamingAdapters) {
+            adapter.broadcastEvent(event.sessionId, runEvent, runEvent.agentId ?? event.agentId);
+          }
+        }
+        return;
+      }
+      // Loop 事件在总线上还有 emitObserved 的原始副本（同一对象）：
+      // 已由 RUN_EVENT 广播过，这里跳过；只有观测专属事件（run.timing /
+      // session.inbox.appended 等）继续走下面的广播分支。
+      if (this.wrappedRunEvents.has(event)) return;
       if (
         event.sessionId &&
-        event.type !== 'llm_stream_delta' &&
-        event.type !== 'llm_thinking_delta' &&
         !Gateway.isTerminalWsEvent(event.type)
       ) {
         // WS 不广播层正文全文（content）；点选层时 UI 经 REST 拉取
@@ -2444,6 +2458,41 @@ export class Gateway {
    *
    * @param sessionId - 目标会话
    */
+  /**
+   * steered 消息的晚到回复：被接续进活跃 Run 后，回答在后续 turn 才产生。
+   * 由事件转发触发、恰好发送一次（与同步回复路径互斥，评审 F3）。
+   */
+  private async sendLateChannelReply(
+    msg: ChannelMessage,
+    sessionKey: string,
+    agentId: string,
+    content: string,
+  ): Promise<void> {
+    try {
+      const channelReply: ChannelReply = {
+        channel: msg.channel,
+        conversationId: msg.conversationId,
+        content,
+        replyToId: msg.id,
+      };
+      const hookCtx: HookContext = { sessionId: sessionKey, agentId };
+      const sendBlock = await this.pluginManager.runHook<{ cancel?: boolean } | null>(
+        'message_sending',
+        { ...hookCtx, reply: channelReply },
+        null,
+      );
+      if (sendBlock?.cancel) return;
+      const adapter = this.channels.get(msg.channel);
+      if (adapter && channelReply.content) {
+        await adapter.send(channelReply);
+      }
+    } catch (err) {
+      console.warn(
+        `[Gateway] late channel reply failed (session=${sessionKey}): ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
   private scheduleSessionTitleUpdate(sessionId: string): void {
     if (this.titleUpdatePromises.has(sessionId)) {
       this.titleUpdatePending.add(sessionId);
@@ -4662,6 +4711,9 @@ export class Gateway {
 
     // 4–5. 经激活宿主执行（模型 A）；onEvent 做流式广播（不变量 #6）
     let finalContent = '';
+    // steered（插话进活跃 Run）：回复晚于 dispatch 返回，由事件转发触发晚到发送（评审 F3）
+    let steeredDelivery = false;
+    let steeredReplySent = false;
     // 会话附件指针（OP-15）：metadata.attachmentIds → Trigger.attachments
     let attachMetadata: Record<string, unknown> = {};
     const rawAttachIds = (msg.metadata as { attachmentIds?: unknown } | undefined)?.attachmentIds;
@@ -4683,27 +4735,23 @@ export class Gateway {
         ...msg,
         content: inboundContent,
         metadata: { ...(msg.metadata ?? {}), ...attachMetadata },
+        onDelivery: (delivery) => {
+          if (delivery === 'steered' || delivery === 'followup') steeredDelivery = true;
+        },
       },
       resolveAgentId: () => agent.id,
       resolveSessionId: () => sessionKey,
       onEvent: (event) => {
-        // Runner：llm_stream_delta 只 yield（不进 bus）；其余事件还会 emit 到 gatewayBus。
-        // 流式 delta + 终态必须用闭包 sessionKey 广播：
-        // - delta 不在 bus 上
-        // - 终态若只靠 bus 的 event.sessionId，匹配失败时 UI 会永远停在 streaming
-        const eventAgentId = (msg.metadata?.agentId as string | undefined) ?? agent.id;
-        if (event.type === 'llm_stream_delta' || event.type === 'llm_thinking_delta') {
-          this.emitEvent(event as unknown as AgentEvent);
-          for (const adapter of this.streamingAdapters) {
-            adapter.broadcastEvent(sessionKey, event as unknown as AgentEvent, eventAgentId);
-          }
-        } else if (Gateway.isTerminalWsEvent(event.type)) {
-          for (const adapter of this.streamingAdapters) {
-            adapter.broadcastEvent(sessionKey, event as unknown as AgentEvent, eventAgentId);
-          }
-        }
+        // WS 已由 runtime.run.event 统一广播；这里只采集频道最终回复。
         if (event.type === 'turn.end' && event.data?.content) {
           finalContent = event.data.content as string;
+          // steered 消息的回答晚于 dispatch 返回：首个终态 turn 恰好发一次（评审 F3）
+          const phase = (event.data as { phase?: string } | undefined)?.phase;
+          const isError = (event.data as { error?: boolean } | undefined)?.error === true;
+          if (steeredDelivery && !steeredReplySent && phase !== 'pre_tools' && !isError && finalContent) {
+            steeredReplySent = true;
+            void this.sendLateChannelReply(msg, sessionKey, agent.id, finalContent);
+          }
         }
       },
     });
@@ -4744,9 +4792,9 @@ export class Gateway {
       return;
     }
 
-    // 7. 发送回复
+    // 7. 发送回复（steered 的回复由晚到通道恰好发一次，这里不重复）
     const adapter = this.channels.get(msg.channel);
-    if (adapter && channelReply.content) {
+    if (!steeredDelivery && adapter && channelReply.content) {
       await adapter.send(channelReply);
       await this.pluginManager.runAllHooks('message_sent', { ...hookCtx, reply: channelReply });
     }
@@ -4771,6 +4819,7 @@ export class Gateway {
         runner,
         new SessionRunnerDispatcher({
           runner,
+          redispatch: (trigger, options) => this.runtime.dispatch(trigger, options),
           // 不要把 agent 默认 model 写入 defaults：
           // RunConfig.model 只表示**消息级**覆盖；会话覆盖在 session.metadata.model
           runConfigDefaults: {
@@ -4798,6 +4847,7 @@ export class Gateway {
   ): SessionRunnerDispatcher {
     const tracker = this;
     return {
+      inbox: inner.inbox,
       execute(req: Parameters<SessionRunnerDispatcher['execute']>[0], signal?: AbortSignal) {
         tracker.runnerInflight.set(runner, (tracker.runnerInflight.get(runner) ?? 0) + 1);
         const iter = inner.execute(req, signal);

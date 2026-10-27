@@ -42,6 +42,8 @@ export function renderDelegationNotice(delegation: Delegation): string {
     `status="${delegation.status}"`,
     `agent="${escapeAttr(delegation.resolvedAgentId ?? delegation.target.agentId ?? '')}"`,
     `task="${escapeAttr(truncate(delegation.task, 120))}"`,
+    `parent_run_id="${escapeAttr(delegation.parent.runId)}"`,
+    `child_run_id="${escapeAttr(delegation.childRunId ?? '')}"`,
   ];
   const body: string[] = [];
 
@@ -57,10 +59,9 @@ export function renderDelegationNotice(delegation: Delegation): string {
     );
   }
 
-  const tag = delegation.status === 'completed' ? 'delegation_completed' : 'delegation_failed';
   return body.length > 0
-    ? `<${tag} ${attrs.join(' ')}>${body.join('')}</${tag}>`
-    : `<${tag} ${attrs.join(' ')}/>`;
+    ? `<delegation_result ${attrs.join(' ')}>${body.join('')}</delegation_result>`
+    : `<delegation_result ${attrs.join(' ')}/>`;
 }
 
 /** 委派终态 → notify 通道 reason */

@@ -644,9 +644,8 @@ export class DelegateService {
       // 条件置位：仅当投递期间未被回滚（仍 delivering）才记已送达。
       // 若 dropped 已回滚成 pending，或父已 get 先行 surfaced，均不得覆盖
       //（catch 的条件回滚同理——两个方向都只动 delivering 自己的占位）。
-      if (this.store.get(delegationId)?.deliveryState === 'delivering') {
-        this.store.markSurfaced(delegationId);
-      }
+      // surfaced 由 Runner 把结果追加进父上下文时确认（见 wiring 的 deliveryAck）。
+      // 总线 emit / Runtime 受理只证明通知在投递，不证明父模型已经可见。
     } catch (err) {
       // 投递失败条件回滚（仅 delivering，与成功路径的条件置位对称）：
       // 不覆盖父 get 先行的 surfaced——否则已拿到结果的单会重新亮提示

@@ -205,19 +205,20 @@ export function createDelegationRuntime(
         status: 'idle',
       });
 
+      agent.runner.setDelegationDeliveryAck((delegationId) => {
+        if (delegationStore.get(delegationId)) delegationStore.markSurfaced(delegationId);
+      });
+
       // delegate_* 工具只挂给能委派的 agent（§9.3 命名委派）
       if (effectiveDelegationPolicy(agent.delegation).canDelegate) {
         agent.registerTools?.(delegateTools);
 
-        // §7.3：长 Run 每轮可见的委派状态提示。
-        // 经 RunScope ALS 取**本 Run** 的 sessionId，避免共享 Agent 实例串味（I1）。
-        agent.agent.setSteeringMessages(async () => {
+        // Runner 在每次 Agent.run 组合提示源；不覆盖用户/delegation 的 inbox 消费。
+        agent.runner.setSteeringProvider(async () => {
           const { getRunSessionId } = await import('../../run/run-scope.js');
           const sessionId = getRunSessionId(agent.agent.contextSessionId);
           if (!sessionId) return [];
           const hint = service.renderStatusHint(sessionId);
-          // ephemeral：本轮可见、不落历史。否则「当时的状态」会被固化进 session，
-          // 状态过期后仍留在上下文里，且每次状态变化都会打穿前缀缓存。
           return hint
             ? [{ role: 'system' as const, content: hint, timestamp: Date.now(), ephemeral: true }]
             : [];

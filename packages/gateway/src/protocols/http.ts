@@ -306,7 +306,8 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
       case 'turn.end': {
         // phase=pre_tools 表示工具即将执行，不能标 idle / streaming
         const phase = (event.data as { phase?: string } | undefined)?.phase;
-        return { type: 'state', sessionId: sessionKey, state: phase === 'pre_tools' ? 'tools' : 'idle' };
+        // turn 收尾窗口（插话/followUp 可续接）不是空闲：idle 只由 engine.end 派生（评审 F4）
+        return phase === 'pre_tools' ? { type: 'state', sessionId: sessionKey, state: 'tools' } : null;
       }
       case 'aborted':
         return { type: 'state', sessionId: sessionKey, state: 'aborted' };
@@ -472,17 +473,14 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
           session.subscribedSessions ??= new Set<string>();
           session.subscribedSessions.add(String(msg.sessionId));
         }
-        // accepted / running 必须在 await handler 之前发送。
-        // handler 会阻塞到整轮 Agent run 结束；若放在之后，
-        // 会在 engine.end 之后再注入 state=running，把已 idle 的 UI 打回 streaming。
-        session.ws.send(JSON.stringify({
-          type: 'accepted',
-          sessionId: String(msg.sessionId ?? channelMsg.conversationId),
-          messageId: channelMsg.id,
-        }));
-        if (msg.sessionId) {
-          session.ws.send(JSON.stringify({ type: 'state', sessionId: String(msg.sessionId), state: 'running' }));
-        }
+        channelMsg.onDelivery = (delivery) => {
+          session.ws.send(JSON.stringify({
+            type: 'accepted',
+            sessionId: String(msg.sessionId ?? channelMsg.conversationId),
+            messageId: channelMsg.id,
+            delivery,
+          }));
+        };
         await this.handler!(channelMsg);
       } catch (error) {
         session.ws.send(JSON.stringify({

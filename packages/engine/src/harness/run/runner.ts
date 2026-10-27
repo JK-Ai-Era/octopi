@@ -44,6 +44,7 @@ import { loadRootInstructionsInjection } from '../context/root-instructions.js';
 import type { SessionTaskService } from '../session/tasks/service.js';
 import { extractTaskQueryHints, renderSessionTasksInjection } from '../session/tasks/render.js';
 import { createRunId, type RunScope } from './run-scope.js';
+import type { SessionInboxEntry, SessionInboxBinding, SessionInboxRun } from '../activation/inbox.js';
 import {
   DEFAULT_TOOL_ISOLATION,
   resolveToolIsolationCwd,
@@ -731,6 +732,13 @@ export class SessionAwareRunner {
     this.toolContextProvider = provider;
   }
 
+  private steeringProvider?: () => Promise<Message[]>;
+
+  /** 注册一个运行期提示源（只进 steering 接缝）；单槽，后注册者覆盖前注册者。 */
+  setSteeringProvider(provider: (() => Promise<Message[]>) | undefined): void {
+    this.steeringProvider = provider;
+  }
+
   /**
    * 设置 persona 解析器
    *
@@ -806,6 +814,13 @@ export class SessionAwareRunner {
     this.groundingAssembler = assembler;
   }
 
+  /** 通知委派服务：结果已真正写入父上下文，而非仅仅发进事件总线。 */
+  setDelegationDeliveryAck(ack: ((delegationId: string) => void) | undefined): void {
+    this.delegationDeliveryAck = ack;
+  }
+
+  private delegationDeliveryAck?: (delegationId: string) => void;
+
   /**
    * 处理一条消息
    *
@@ -820,6 +835,8 @@ export class SessionAwareRunner {
     input: Message,
     runConfig: RunConfig,
     signal?: AbortSignal,
+    inboxBinding?: SessionInboxBinding,
+    initialInboxEntry?: SessionInboxEntry,
   ): AsyncGenerator<import('@octopi-agent/core/primitives/event-bus.js').AgentEvent> {
     /** 本轮文件 undo（L3）；中止保留，其余出口 commit */
     let turnFileUndo: import('../extension/execution-environment/undo-log.js').TurnFileUndoLog | undefined;
@@ -858,6 +875,7 @@ export class SessionAwareRunner {
       gateRelease?.();
       return;
     }
+    let inboxRun: SessionInboxRun | undefined;
 
     // run.timing 先落 trace（eventSink 时序保真）；Hub 侧投递推迟到 recordRunStart 之后——
     // 否则 run_start/context_ready 早于 run 记录创建，会被 ingestEvent 归到上一轮 run
@@ -869,8 +887,26 @@ export class SessionAwareRunner {
       agentId: runConfig.agentId ?? 'default',
       data: { stage: 'run_start', waitMs: Date.now() - timingRunEnter },
     } as import('@octopi-agent/core/primitives/event-bus.js').AgentEvent;
-    this.config.eventSink?.(runStartTiming, { sessionId, agentId: runConfig.agentId ?? 'default' });
-    pendingObservedTimings.push(runStartTiming);
+    try {
+      inboxRun = inboxBinding
+        ? inboxBinding.inbox.open(
+            sessionId,
+            runConfig.agentId ?? 'default',
+            inboxBinding.runId,
+            inboxBinding.entries,
+            { model: runConfig.model, provider: runConfig.modelProvider },
+          )
+        : undefined;
+      if (inboxRun && initialInboxEntry) inboxRun.take(initialInboxEntry.id);
+      this.config.eventSink?.(runStartTiming, { sessionId, agentId: runConfig.agentId ?? 'default' });
+      pendingObservedTimings.push(runStartTiming);
+    } catch (err) {
+      // open/eventSink 抛错不得跳过 release：否则锁泄漏 + inbox active 永不清（评审 F7）
+      inboxRun?.close();
+      release();
+      gateRelease?.();
+      throw err;
+    }
     // buildMs 从拿锁后起算（含 wait 会双重计时；F3-d 耗时区按分段展示）
     const runStartTs = Date.now();
 
@@ -972,8 +1008,15 @@ export class SessionAwareRunner {
       // 4c. turn 信封：补闭上一 turn；分配本 turn id（t1,t2,… 会话内单调）
       this.ensurePreviousTurnClosed(session);
       const turnSeq = Number(session.metadata?.turnSeq ?? 0) + 1;
-      const currentTurnId = formatTurnId(turnSeq);
+      let currentTurnId = formatTurnId(turnSeq);
       session.metadata = { ...session.metadata, turnSeq };
+      const closedInsertedTurnIds = new Set<string>();
+      const allocateInsertedTurnId = (): string => {
+        const seq = Number(session.metadata?.turnSeq ?? 0) + 1;
+        session.metadata = { ...session.metadata, turnSeq: seq };
+        const id = formatTurnId(seq);
+        return id;
+      };
 
       // 5. 追加用户消息（正文稍后一次定形为 <turn_start>）
       session.messages.push(input);
@@ -1713,6 +1756,11 @@ export class SessionAwareRunner {
         contextLeasePrefix,
         runContext.messages,
       );
+      if (firstSynced && initialInboxEntry) {
+        inboxRun?.inbox.ack(initialInboxEntry);
+        const delegationId = initialInboxEntry.message.metadata?.delegationId;
+        if (typeof delegationId === 'string') this.delegationDeliveryAck?.(delegationId);
+      }
       let syncedMessageCount = firstSynced ? runContext.messages.length : 0;
 
       // Observer 通道：Run 现场快照（摘要进事件；全文由 Hub/REST 提供）
@@ -1784,12 +1832,68 @@ export class SessionAwareRunner {
       /** 用户中止（编辑重发标记用） */
       let runAborted = false;
 
+      /** 被接续消息的收尾通道（频道回复捕获等）；消费后转发本 Run 全部事件 */
+      const entryObservers = new Set<(event: import('@octopi-agent/core/primitives/event-bus.js').AgentEvent) => void>();
+
       // resolvedModel 已在 system assembler 之前解析；此处只组装 run options
+      /** 已入 Run 视图、待转录同步确认的 inbox 条目（ack = 入上下文 + 同步成功） */
+      const pendingInboxAcks: SessionInboxEntry[] = [];
+      const flushInboxAcks = (): void => {
+        for (const entry of pendingInboxAcks.splice(0)) {
+          inboxRun?.inbox.ack(entry);
+          const delegationId = entry.message.metadata?.delegationId;
+          if (typeof delegationId === 'string') this.delegationDeliveryAck?.(delegationId);
+        }
+      };
       const agentRunOptions = {
         resolvedModel: resolvedModel ?? undefined,
         context: runContext,
         runScope,
+        consumeMessages: async (): Promise<Message[]> => {
+          const injected: Message[] = [];
+          if (inboxRun) {
+            for (const entry of inboxRun.drain()) {
+              // 每条注入输入（人话 / 委派结果）开启自己的 turn：
+              // 先闭上一 turn（write-once），再一次定形新 turn 信封（与 wake 路径同构）。
+              // 有序序列交还 Loop 统一 push 进 context.messages（不在此处直接入数组）。
+              injected.push(this.makeTurnEndMessage(currentTurnId));
+              closedInsertedTurnIds.add(currentTurnId);
+              currentTurnId = allocateInsertedTurnId();
+              entry.message.metadata = { ...entry.message.metadata, turnId: currentTurnId };
+              // 注入 turn 也带 runtime_snapshot（datetime 等）；附件/grounding 属 turn 1，不重复
+              this.bakeTurnStart(entry.message, currentTurnId, formatTurnContextXml({
+                turnId: currentTurnId,
+                slotsXml: joinSlotXml([{ tag: 'runtime_snapshot', body: runtimeSnapshotText ?? '' }]),
+              }));
+              injected.push(entry.message);
+              // ack 延到转录同步成功后统一 flush；同步失败/崩溃由 close 的
+              // unacked 重投兜底（at-least-once，见 SessionInbox）
+              pendingInboxAcks.push(entry);
+              if (entry.onEvent) entryObservers.add(entry.onEvent);
+            }
+          }
+          if (injected.length) {
+            this.emitObserved({
+              type: 'session.inbox.appended',
+              timestamp: Date.now(),
+              sessionId,
+              agentId: _agentId,
+              data: {
+                runId,
+                count: injected.length,
+                messages: injected
+                  .filter((m) => m.metadata?.source !== 'turnEnd')
+                  .map((m) => ({ role: m.role, content: m.content, metadata: m.metadata })),
+              },
+            });
+          }
+          return injected;
+        },
+        // 只读提示只进 steering 接缝：经 followUp 续命会让 run 被状态快照拖住（评审 F1）
+        steeringExtras: async (): Promise<Message[]> =>
+          this.steeringProvider ? this.steeringProvider() : [],
       };
+
 
       for await (const loopEvent of this.agent.run(signal, undefined, agentRunOptions)) {
         // 消息数组增长 = 有新消息定形/入列（流式 delta 不 push 消息，不触发）。
@@ -1800,11 +1904,17 @@ export class SessionAwareRunner {
             await this.persistRunMessages(sessionId, _agentId, contextLeasePrefix, runContext.messages)
           ) {
             syncedMessageCount = runContext.messages.length;
+            // 转录同步成功 = 注入消息已入父上下文且可恢复 → 确认送达
+            flushInboxAcks();
           }
         } else if (loopEvent.type === 'turn_end') {
           // 漂移兜底：turn 边界无条件对齐一次（旁路写者整包回退后即使暂无
           // 新消息也能自愈；无漂移时幂等零写）
-          await this.persistRunMessages(sessionId, _agentId, contextLeasePrefix, runContext.messages);
+          if (
+            await this.persistRunMessages(sessionId, _agentId, contextLeasePrefix, runContext.messages)
+          ) {
+            flushInboxAcks();
+          }
         }
         if (loopEvent.type === 'agent_end' && loopEvent.reason === 'aborted') {
           runAborted = true;
@@ -1852,6 +1962,17 @@ export class SessionAwareRunner {
             lastContextWindow = effectiveRunConfig.contextWindow;
           }
 
+          // 被接续消息的调用方收尾通道（如频道回复捕获）：转发本 Run 事件；
+          // 单通道故障不得中断事件流
+          for (const observer of entryObservers) {
+            try {
+              observer(adapted);
+            } catch (obsErr) {
+              console.warn(
+                `[octopi] inbox entry observer failed: ${obsErr instanceof Error ? obsErr.message : String(obsErr)}`,
+              );
+            }
+          }
           yield adapted;
           // Telemetry 旁路（含 stream delta；由 RunTelemetry 决定采样）
           this.config.eventSink?.(adapted, meta);
@@ -1978,8 +2099,10 @@ export class SessionAwareRunner {
         clearLastStop = true;
       }
 
-      // turn 闭标（write-once）
-      this.appendTurnEnd(session, currentTurnId);
+      // turn 闭标（write-once）。插话开启的旧 turn 在注入时已经闭合。
+      if (!closedInsertedTurnIds.has(currentTurnId)) {
+        this.appendTurnEnd(session.messages, currentTurnId);
+      }
 
       // 11. 引擎异常退出时的 session 一致性修复（须在 Observer final 采样之前）
       if (!hasTurnEnd) {
@@ -2065,6 +2188,8 @@ export class SessionAwareRunner {
         };
       }
       await this.store.save(sessionId, session);
+      // 收尾权威写成功：剩余注入条目一并确认（此后 close 不再重投）
+      flushInboxAcks();
       if (clearAbortedTurn && this.store.updateMetadata) {
         await this.store.updateMetadata(sessionId, (meta) => {
           delete meta.abortedTurn;
@@ -2201,6 +2326,7 @@ export class SessionAwareRunner {
           // 观测收口失败不阻断锁释放
         }
       }
+      inboxRun?.close();
       release();
       gateRelease?.();
     }
@@ -2412,9 +2538,19 @@ export class SessionAwareRunner {
     userMessage.metadata = { ...userMessage.metadata, turnId };
   }
 
+  /** 构造 turn 闭标消息（write-once 由调用处重复检查保证） */
+  private makeTurnEndMessage(turnId: string): Message {
+    return {
+      role: 'user',
+      content: formatTurnEndContent(turnId),
+      timestamp: Date.now(),
+      metadata: { source: 'turnEnd', turnId },
+    };
+  }
+
   /** 追加 turn 闭标（write-once；同 id 重复 → throw） */
-  private appendTurnEnd(session: SessionData, turnId: string): void {
-    const exists = session.messages.some(
+  private appendTurnEnd(messages: Message[], turnId: string): void {
+    const exists = messages.some(
       (m) =>
         m.metadata?.source === 'turnEnd' &&
         parseTurnIdFromContent(m.content) === turnId,
@@ -2422,12 +2558,7 @@ export class SessionAwareRunner {
     if (exists) {
       throw new Error(`turn_end already exists (turnId=${turnId})`);
     }
-    session.messages.push({
-      role: 'user',
-      content: formatTurnEndContent(turnId),
-      timestamp: Date.now(),
-      metadata: { source: 'turnEnd', turnId },
-    });
+    messages.push(this.makeTurnEndMessage(turnId));
   }
 
   /**

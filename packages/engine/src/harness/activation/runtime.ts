@@ -10,7 +10,7 @@
 import type { EventBus } from '@octopi-agent/core/index.js';
 import type { AgentEvent } from '@octopi-agent/core/primitives/event-bus.js';
 import { CoalesceBuffer } from './coalesce.js';
-import { buildRunRequest, resolveSessionId } from './compiler.js';
+import { buildRunRequest, compileMessages, resolveSessionId } from './compiler.js';
 import { ExplicitRouter } from './router.js';
 import type {
   AgentRouter,
@@ -213,7 +213,7 @@ export class AgentRuntime {
   /** 串行 dispatch 多条 Trigger */
   async dispatchMany(
     triggers: Trigger[],
-    options?: { onEvent?: (event: AgentEvent) => void },
+    options?: import('./types.js').DispatchOptions,
   ): Promise<Array<DispatchResult | FanoutDispatchResult>> {
     const results: Array<DispatchResult | FanoutDispatchResult> = [];
     for (const t of triggers) {
@@ -223,12 +223,13 @@ export class AgentRuntime {
   }
 
   /**
-   * 模型 A：await 至 Run 结束（或 skipped / failed）
+   * 模型 A：await 至 Run 结束（或 skipped / failed / accepted）
    * @param options.onEvent - 转发 Run 事件流（Gateway 流式广播）；不变量 #6
+   * @param options.onDelivery - 活跃 Run 接收即回执（早于 Run 结束）
    */
   async dispatch(
     trigger: Trigger,
-    options?: { onEvent?: (event: AgentEvent) => void },
+    options?: import('./types.js').DispatchOptions,
   ): Promise<DispatchResult | FanoutDispatchResult> {
     if (!this.started) {
       this.emitRuntime(RuntimeEvents.TRIGGER_DROPPED, {
@@ -256,8 +257,22 @@ export class AgentRuntime {
       return { status: 'skipped', reason: 'no_agent' };
     }
 
+    // 回执恒发一次：fan-out 多 target 时首个去向生效，其余静默
+    //（每 target 一帧 accepted 会与 channel/web 的「一次受理」契约冲突）
+    let deliveryFired = false;
+    const deliveryOptions: import('./types.js').DispatchOptions | undefined = options
+      ? {
+          ...options,
+          onDelivery: (delivery) => {
+            if (deliveryFired) return;
+            deliveryFired = true;
+            options.onDelivery?.(delivery);
+          },
+        }
+      : undefined;
+
     if (targets.length === 1) {
-      const result = await this.dispatchToTarget(trigger, targets[0]!, options);
+      const result = await this.dispatchToTarget(trigger, targets[0]!, deliveryOptions);
       // 单目标丢弃也必须留下 TRIGGER_DROPPED（与 fan-out 对称）：
       // 「trigger 未被受理必有 dropped 事件」是委派送达回执（delegation §7.1）
       // 依赖的不变量，缺事件 = 送达回执无法证伪。受理后 run 失败走 RUN_FAILED
@@ -275,12 +290,12 @@ export class AgentRuntime {
     // fan-out：串行；聚合为 FanoutDispatchResult（ran/aborted/failed 均不静默丢弃）
     const results: Array<{ agentId: string; result: DispatchResult }> = [];
     for (const target of targets) {
-      const result = await this.dispatchToTarget(trigger, target, options);
+      const result = await this.dispatchToTarget(trigger, target, deliveryOptions);
       results.push({ agentId: target.agentId, result });
     }
 
     const anyFailed = results.some((r) => r.result.status === 'failed');
-    const anyRan = results.some((r) => r.result.status === 'ran');
+    const anyRan = results.some((r) => r.result.status === 'ran' || r.result.status === 'accepted');
     const allSkipped = results.every((r) => r.result.status === 'skipped');
 
     if (anyFailed) {
@@ -312,10 +327,48 @@ export class AgentRuntime {
     return { status: 'skipped', reason: 'no_agent' };
   }
 
+  /**
+   * 路由目标的活跃 inbox 接收（human 与 delegation signal 共用）。
+   * 仅 message / agent_signal 可接续；其余类型与带附件/换模型输入走完整新 Run。
+   */
+  private offerToTarget(
+    trigger: Trigger,
+    target: RuntimeAgent,
+    sessionId: string,
+    onEvent?: (event: AgentEvent) => void,
+  ): import('./inbox.js').InboxOfferResult {
+    if (!target.dispatcher.inbox) return 'dispatched';
+    if (trigger.type !== 'message' && trigger.type !== 'agent_signal') return 'dispatched';
+    const [compiledMessage] = compileMessages([trigger]);
+    const human = trigger.type === 'message' && trigger.payload.kind === 'user_message';
+    const delegationId = trigger.metadata?.delegationId;
+    return target.dispatcher.inbox.offer({
+      agentId: target.agentId,
+      sessionId,
+      entryId: delegationId ?? trigger.id,
+      triggerType: trigger.type,
+      human,
+      modelOverride: trigger.metadata?.modelOverride,
+      modelProvider: trigger.metadata?.modelProvider,
+      trigger,
+      onEvent,
+      message: compiledMessage,
+      onAdmitted: (delivery) => {
+        this.emitRuntime(RuntimeEvents.INBOX_ADMITTED, {
+          triggerId: trigger.id,
+          agentId: target.agentId,
+          sessionId,
+          delegationId,
+          delivery,
+        });
+      },
+    });
+  }
+
   private async dispatchToTarget(
     trigger: Trigger,
     target: RouteTarget,
-    options?: { onEvent?: (event: AgentEvent) => void },
+    options?: import('./types.js').DispatchOptions,
   ): Promise<DispatchResult> {
     const agent = this.agents.get(target.agentId);
     if (!agent) {
@@ -326,6 +379,14 @@ export class AgentRuntime {
       ...trigger,
       sessionId: target.sessionId ?? trigger.sessionId,
     });
+    // 单一 offer 点：活跃 Run 接收 = 不再开新 Run（原 Trigger 不 dispatch，
+    // Run 关闭未消费时由 inbox 按原 Trigger 重投）
+    const offerResult = this.offerToTarget(trigger, agent, sessionId, options?.onEvent);
+    if (offerResult === 'steered' || offerResult === 'duplicate') {
+      options?.onDelivery?.('steered');
+      return { status: 'accepted', agentId: agent.agentId, sessionId, delivery: 'steered' };
+    }
+    options?.onDelivery?.('run');
 
     if (trigger.coalesceKey) {
       this.emitRuntime(RuntimeEvents.RUN_SCHEDULED, {
@@ -389,10 +450,21 @@ export class AgentRuntime {
 
     try {
       for await (const event of agent.dispatcher.execute(request, controller.signal)) {
+        // 所有 Trigger（含后台 signal）共用一个 run-event 出口；调用方的
+        // onEvent 只承担该次 dispatch 的业务收尾，不再是后台 Run 的唯一可见通道。
+        this.emitRuntime(RuntimeEvents.RUN_EVENT, {
+          requestId: request.requestId,
+          triggerId: triggers[0]?.id,
+          triggerType: triggers[0]?.type,
+          // 路由键必带：gateway 按 sessionId 扇出 WS（缺则整条流式/终态链路静默落空）
+          agentId: agent.agentId,
+          sessionId,
+          event,
+        });
         try {
           onEvent?.(event);
         } catch {
-          // 消费者（WS 广播等）异常不中断 Run
+          // 消费者（频道最终回复等）异常不中断 Run
         }
       }
 

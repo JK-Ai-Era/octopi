@@ -8,7 +8,8 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 | Segment | Location |
 |---------|----------|
-| v0.94 | this file (current) |
+| v0.95 | this file (current) |
+| v0.94 | [changelog/v0.94.md](./changelog/v0.94.md) |
 | v0.93 | [changelog/v0.93.md](./changelog/v0.93.md) |
 | v0.92 | [changelog/v0.92.md](./changelog/v0.92.md) |
 | v0.91 | [changelog/v0.91.md](./changelog/v0.91.md) |
@@ -104,90 +105,14 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
-## v0.94.5 (2026-10-27)
+## v0.95.0 (2026-10-27)
 
-### fix(providers): Anthropic 协议聚合并行工具结果 + 温度改由模型配置决定
+### feat(collaboration): delegation 结果与用户运行中插话的统一消息接续，全链路 Run 事件可见性
 
-- **病灶（A）**：`AnthropicProvider` 把每条 tool 消息各转成一条 `user` 消息，并行工具调用（一个 assistant 回合多个 `tool_use`）的历史因此变成 5 条连续 `user`——只有第一条 `tool_result` 紧邻 assistant，其余 `tool_use` 无配对结果，违反 Messages 协议。火山 coding plan 只回通用 `InvalidParameter`（`param` 为空），anthropic.com 才明确报「tool_use ids found without tool_result」。修复：新增 `toAnthropicMessages`，连续 tool 消息聚合为单条 `user`（多个 `tool_result` block），非 tool 的相邻 user 消息不合并。
-- **病灶（B）**：子系统与辅助调用写死温度默认值（summary 0.2、summarize 0.3、reflector 0.3、run-guard 0、attachments 0、cognition/memory/wisdom 0.2–0.3），遇到只接受特定温度的模型直接 400（火山 `kimi-k3.1-pro` 仅接受 `temperature` 0 或 1）。修复：这些调用点不再传温度；`ModelInfo.temperature` 新增并贯通 `ModelCapability` → `createProviderFromConfig` → 两个 provider，请求未显式指定时采用模型级配置，都未配置则不发送（交服务端默认）。
-- **配置**：`models.providers[].models[].temperature`（0–2）进入 schema 与运行时类型；此前该字段既不在 schema 也不被映射，属「写了也不生效」的死配置。
-- **验证**：`lint` 清零；全量测试通过；真实失败会话的 wire dump 回放——修复前 5 条 user 消息 → 400 通用 InvalidParameter，修复后 `user → assistant → user`（5 个 `tool_result` block）→ 200；模型级 `temperature: 1` 落盘为 `temperature=1` → 200。
-
----
-
-## v0.94.4 (2026-10-27)
-
-### fix(webui): 控制台凭据单一来源 + 本机持久化（切页签不再丢钥匙/401）
-
-- **病灶**：Gateway API Key 只活在 `ChatWorkspace` 的 `useState`——组件卸载即蒸发（切到 Settings 回来要重填），且 **8 个 `OctopiClient` 构造点里 7 个是 keyless**（`SettingsWorkspace` / 各 Settings 面板 / `SessionCorpusMenu` / `PrivilegedBadge`）——开 `channels.http.apiKey` 鉴权后这些页面全线 401。
-- **修复**：新增 `packages/webui/src/console-key.ts` 单一凭据来源（模块级 + localStorage 持久化，存储不可用时退化内存态、不假装已持久化）；八个构造点统一 `apiKey: getConsoleKey()`；输入框即输即存，提示语如实标注「钥匙存本机浏览器，换浏览器/清站点数据需重填」。
-- **安全口径**（已在模块注释与 UI 声明）：localStorage 对同源脚本可读（控制台渲染 agent 产出的 markdown，XSS 面真实存在）——LAN 个人控制台的易用性取舍；不做跨端同步。
-- **验证**：`npm run build`（webui `tsc -b` + vite）、全量 3433 通过、lint 清零。webui 组件层无单测机箱，行为验证走手工清单（填钥匙 → 切页签 → 重载页面 → 各页 200）。
-
----
-
-## v0.94.3 (2026-10-27)
-
-### feat(gateway): web 面最小认证收口（署名取认证身份 + WS 事件面过滤）
-
-- **审批署名 credential-backed**：配置 `channels.http.apiKey` 后，审批 `confirmedBy` 记**持钥方**（`approverIdentity`，daemon 按 apiKey 有无注入），不再采信客户端自报；未配置时署名退回自报（LAN 可仿冒——**LAN 部署建议启用 `apiKey`**，KNOWN-ISSUES 已声明可信度口径）。这是评审 BLOCKER「`owner` 硬编码署名可仿冒」的收口：署名从"声明"升级为"凭钥可溯"；完整多用户认证留产品化阶段（拍板 2026-10-27）。
-- **WS 事件面过滤**：未认证 WS 连接不再收到任何广播（含 `*` 系统级事件）——WS 消息鉴权协议（首条 `{type:"auth"}`）本已存在，但广播循环不查 `authenticated`：审批卡靠订阅机制恰好漏不掉、系统级事件却漏给匿名连接（巧合≠设计，改为显式过滤）。
-- **timing-safe**：HTTP Bearer 与 WS auth 消息的 token 比较改常数时间（`timingSafeEqual`）。
-- **Node 网关客户端补 auth 消息**：`GatewayChatClient` 支持 `apiKey`，连接后按既有协议发 `{type:"auth"}`（此前部署开 apiKey 会让 TUI/桥接端收不到事件）。
-- **验证**：新增 `tests/gateway-ws-auth.test.ts`（未认证不漏 / auth 后正常收 / 署名优先于自报 3 用例）；`gateway-approval.test.ts` 超时断言随来源标注更新。全量 3433 通过、lint 清零。
-
----
-
-## v0.94.2 (2026-10-27)
-
-### fix(engine): 效应确认语义对齐（归因/错误分家/缓存 key 含目标）+ exec 中止即时树杀
-
-- **归因回传**：host-gate 效应确认不再丢弃 `ConfirmOutcome`——`confirmedBy` / `confirmChannel` 随 `GateEffectResult` 进 `ops.command.executed`。此前只有 priv_exec 有确认人归因，file.write / shell / vcs 的批准永远无署名（同一字段一半世界是瞎的）。
-- **错误分家**：`effect_confirm_timeout`（超时，携带勿盲重试语义）/ `effect_denied`（人工拒绝、通道故障带来源）不再混为一谈；宿主 `reason: 'timeout'` 归超时语义、其余 reason 归通道故障，任何非人工来源都不冒充"人工拒绝"。
-- **缓存 key 含目标（设计翻案）**：效应确认缓存 key 从 `kind` 加细为 `kind + 目标`（path / command / operation / domain）——一次 `approve_session` 只覆盖同一目标，不再整类放行（旧语义下批准一个 file.write 即放行本会话全部写操作）。**推翻** KNOWN-ISSUES 旧「有意粗粒度」决定；`hitl-single-model.test.ts` 旧用例随行为同步改写。
-- **exec 中止即时树杀**：`runPrivilegedExec` 接 `abortSignal`，run 中止触发与执行超时同一条树杀收回路径（结果如实标 `aborted`），不再等 120s 兜底。
-- **同族堵漏**：审批卡超时的 settle 带 `reason: 'timeout'`——effect 通道没有引擎侧确认窗，靠它如实标注超时（此前会误标"人工拒绝"）。
-- **验证**：新增 `tests/harness/effect-confirm-gate.test.ts`（6 用例：归因 ×2 / 错误分家 ×3 / 缓存 key ×1）+ `escalation-confirm-gate.test.ts` 扩 exec-abort 用例；全量 3433 通过、`npm run lint` 清零。
-
----
-
-## v0.94.1 (2026-10-26)
-
-### fix(engine): 确认闸错误语义如实化（超时/拒绝/通道故障分家）+ 确认人归因落审计
-
-**背景**：T0 实测发现确认窗（`askWithTimeout`）、工具总线看门狗（`runWithToolLimits`）与 gateway 审批卡超时三者同为 120s 同秒竞速——超时场景 LLM 收到 `tool_timeout`（工具卡死）而审计记 `confirm_timeout`（确认超时拒绝），同一事件两个故事，且错误语义诱导盲目重试；非人工拒绝（无确认回调 / 通道异常 / 会话取消）在错误面一律冒充「人工拒绝」。
-
-- **竞速修复**：priv_exec 不再声明工具总线 `timeoutMs`（同 `ask_user` 先例——真实时限全部内部强制：确认窗 + 执行 120s 树杀，看门狗阈值须随配置漂移、注释当护栏等于「文档边界冒充强制」，故整块移除）；确认窗经 `confirmEffect` 意图新增 `timeoutMs`（additive）传给宿主，gateway 审批卡以同一截止时刻 `deadlineAt` 落账并到期 settle。窗口尽头超时如实抛 `escalation_confirm_timeout`（携带「勿盲重试、等人决策」语义）。
-- **拒绝来源如实**：拒绝分家标注——`confirm_denied`（人工）/ `channel_error` + `reason`（无确认回调、宿主回调异常、scope 缺失）/ `aborted`（run 中止或会话取消）；`ConfirmOutcome` 增 `reason`（非人工拒绝来源；无人工决策时携带）。审计 `ops.escalation.denied` why 枚举扩展 `channel_error` / `aborted`。**只有真实的人工拒绝才在错误面写 "a human rejected"**。
-- **迟到决策拒绝**：确认窗关闭后的点击记 `rejected/late`（含点击者），绝不补记 approved——审批账本与 ops 审计保持同一故事。
-- **确认人归因**：WebUI 审批署名 `owner` 经 store/SDK → router（`approver` 收口 trim + 128 字符上限）→ `ops.privileged.exec.confirmedBy` / `confirmChannel`。`ConfirmOutcome.approver` 契约措辞改为如实的「**署名**（随 channel 判读可信度，非认证实名）」——web 暂无认证层，LAN 部署署名可被仿冒，多用户认证落地后应换认证身份（KNOWN-ISSUES 已声明）。
-- **并发合流**：同 key 并发确认共享完整结果对象（decision + timedOut + 归因），第二发不再被误标「人工拒绝」。
-- **run 中止接入**：`abortSignal` 接入确认等待，中止即时收闸，不再空等确认窗走完。
-- `EffectIntent` 补 `timeoutMs` 与 core 契约对齐（宿主按 engine 类型写 handler 也能看到该字段）。
-
-**转后续（如实列账）**：host-gate 效应确认（file.write/shell/vcs 等）仍丢归因且把超时与拒绝合并成 `effect_denied`（`effect-policy.ts`，改动面大另立一役）；`priv_exec` 执行阶段的 abort 未接树杀信号（现有 120s 执行超时兜底）。**兼容性**：无破坏性变更（`confirmEffect` 意图新增可选 `timeoutMs`；取消路径的确认结果从裸 `deny` 变为带 `reason` 的 `ConfirmOutcome`，本为契约允许形状）。
-
-**验证**：新增 `tests/harness/escalation-confirm-gate.test.ts`（8 用例：超时标注 / 人工拒绝标注 / 归因入账 / 无确认回调 / 通道异常 / run 中止 / 无总线看门狗钉 / 并发合流）+ `gateway-approval` 迟到点击（假时钟构造 deadlineAt 间隙）与取消来源用例；全量测试套件、`npm run build`、`npm run lint` 全绿。
-
----
-
-## v0.94.0 (2026-10-26)
-
-### feat(engine): ops P4 全量提权档 + P5 远程托管加固（OP-OPS 全阶段收束）
-
-**P4 全量档（`escalation.policy: "full"`）**：任意 argv 经 privileged 通道执行（`via: sudo` 仍须显式 `sudo -n <目标…>` 形态，裸跑视为形态非法拒绝）；前提 fail-closed——`mode: "host"` + `jail: "none"` + `privilegedAck` 三者齐备，其余组合 schema 与 resolve 双口径拒绝启动（`allowlist` 档不矛盾、保持原牢笼）。root/elevated 部署（行为探测，非配置位）必须显式 `privilegedAck`，否则 daemon 拒启；`PRIVILEGED` 常驻标记落 `/health`、WebUI app header、Run 观测面、`octopi serve status`（§8.1 二级确认的可见半边，非一次性 toast）。
-
-**危险命令减速带（§6，不是安全边界）**：新增 `dangerous-commands.ts` 保守分类表（`rm -rf` / `dd of=/dev/*` / `mkfs.*` / `iptables -F` / `systemctl disable` / `chmod -R` / `chown -R` / `truncate`）与 `dangerousCommands: confirm|deny|off`（缺省 `confirm`，`timeoutMs` 缺省 120s）。定位**只拦事故不拦攻击**：`sh -c 'rm -rf /'`、`python -c`、重定向按构造绕过，已钉为测试用例。**决策**：full 档 pre-exec 闸 = 命中才确认（§0.3「危险命令默认要求确认」与 §6「不做未知即危险」共同限定），未命中放行不设闸；提权前缀（sudo/doas）剥除后分类。
-
-**P5 远程托管加固**：
-
-- **异步确认双通道**：gateway 通道（WS 广播 + `/approvals`）与 `gateway.hitlWebhook`（HMAC-SHA256 签名推送 owner 端点）并行投递；决策携带 `approver` / `channel`（gateway|webhook），随审批记录与 ops 审计定格（`confirmedBy` / `confirmChannel`）——确认人身份入账。确认超时**一律 deny**（outcome 不可配，`escalation_confirm_timeout` 可查）。
-- **审计外送（唯一不可抵赖档）**：`effectPolicy.opsAuditExportPath` 每条账目以信封 append-only 外送宿主侧文件（count=账本 seq，缺号可查 + tailHash 链尾锚点 + entry 原样），宿主可重放 `verifyOpsAuditChain` 自证尾部截断/整删。收口路径必须在 agent 可写面之外（放 `~/.octopi` 内等于没外送，文档已声明）。
-- **kill switch**：`octopi ops kill|revive|status <agentId>` 写/删宿主哨兵（`<OCTOPI_HOME>/agents/<id>/KILL`）；哨兵存在期间 run 准入与每一次工具调用全部拒绝（`ops.kill_switch.tripped` 入审计），不依赖 LLM 判断、不需要 agent 配合、agent 无法自行解除。
-- **请求者授权与确认分离（§8.6）**：被 SEC-2 toolRights deny 的参与者在**确认闸门之前**拒绝（`ops.escalation.denied` why `not_authorized`，确认回调零调用）；参与者身份（agentId/roleId 绑定）随 requester 入账。
-
-**安全字段面**（重启生效 + 漂移守卫新增锚定）：`dangerousCommands`、`opsAuditExportPath`。确认回调契约放宽为 `HitlDecision | ConfirmOutcome`（裸决策仍合法；无归因时审计如实缺省，不编造）。
-
-**验证**：全量 3409 测试通过；`escalation-p4.test.ts`（§4.1 矛盾矩阵 / §6 命中表 + 已知绕过 / 超时 deny / 形态守卫）、`kill-switch.test.ts`（哨兵 / run 准入 / 逐工具闸 / revive 即恢复）、`ops-audit-runner.test.ts`（外送信封 + 链重验）、`ops-p5-attribution.test.ts`（归因入账）、`sec2-session-tool-rights.test.ts`（闸门前拒 + 零弹窗）；`npm run lint` 清零；`arch/check-sync.sh` 通过。Windows「未 elevated + escalation → 拒启」为真机断言用例（非 Windows 环境跳过，不 mock）。
-
-**边界（如实声明，不夸大）**：Windows win-job（OP-ISO-1）前无物理隔离兜底，不得对外表述为沙箱（KNOWN-ISSUES）；审计 argv 不脱敏、账本无轮转；webhook 通知失败仅告警（双通道互备，全失靠超时 deny 兜底）；`ops.privileged.run`（privileged run 起止双账）尚未落地，留作监控增强。
+- **SessionInbox（新，`harness/activation/inbox.ts`）**：活跃持锁 Run 的消息接续队列。消息在 `Runtime.dispatch` 单一 offer 点尝试进入活跃 Run，于下一个合法消息边界（Loop steering/followUp 两接缝）消费；未消费或未确认则按原 Trigger 重投（at-least-once，delivered 去重）。无活跃 Run 走原唤醒路径，锁后 FIFO 不变——inbox 不是第二执行队列。
+- **用户插话**：Web 运行中可发普通文本插话（人话优先于机器结果排队）；附件 / 显式换模型仍走完整新 Run（保模型快照与附件装配）；会话级同模型选择不阻止接续（与活跃 Run 模型指纹比对，插话不静默退化为排队）。
+- **统一信封**：delegation 结果统一 `<delegation_result id status agent task>` 信封（子输出转义，属性只从信封标签解析）；wake 与 inbox 双路径同构开 turn（全回放 append-only；注入 turn 携带 runtime_snapshot）；前端历史与实时均渲染为系统卡片，不冒充用户气泡。
+- **送达语义**：`deliveryState.surfaced` 改为「结果已写入父上下文且转录同步成功」的 ack 置位（wake=首同步 ack / inbox=消费后同步 ack）；notify 投递成功**不**置位（投递 ≠ 父已可见），未确认条目由 Run 关闭回队重投。
+- **事件可见性**：所有 Trigger（含后台续跑）的 Run 事件统一经 `runtime.run.event` 广播 WS（载荷带 sessionId/agentId 路由键；对象同一性去重 bus 原始副本），修复后台续跑流式正文与终态前端必须刷新才可见的问题；频道 steered 消息由事件转发触发恰好一次晚到回复。
+- **breaking**：`turn.end` 不再派生 `state:idle` 帧 / `runStatus:idle`——`engine.end` 才是空闲边界（为 turn 收尾窗口的插话/followUp 保留 Run 归属）；`DispatchResult` 新增 `accepted`（消息已交活跃 Run，不开新 Run）；`Agent.run` options 新增 `consumeMessages`/`steeringExtras`，只读运行期提示只进 steering 接缝（经 followUp 会让 Run 被状态提示无限续命）。
+- **验证**：全量测试 3454 绿（新增 inbox 队列契约、Runner×Dispatcher 插话集成、评审回归等 30+ 用例）；lint 与 tests typecheck 清零；独立对抗式评审 11 findings（3 critical）全部修复并各配回归钉。

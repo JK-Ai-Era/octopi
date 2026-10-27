@@ -52,10 +52,25 @@ function handleWsMessage(adapter: HttpChannelAdapter, session: FakeWsSession, ms
   ).handleWsMessage(session, msg);
 }
 
+// 合成事件用仍在派生 state 帧的类型（llm_stream_delta → running）：
+// 本套件主题是路由计数；turn.end 不再派生 state 是 F4 契约，见下方独立用例
 const ev = (sessionId: string, agentId?: string) =>
-  ({ type: 'turn.end', sessionId, timestamp: 1, data: {} , ...(agentId ? { agentId } : {}) }) as never;
+  ({ type: 'llm_stream_delta', sessionId, timestamp: 1, data: { delta: 'x' } , ...(agentId ? { agentId } : {}) }) as never;
 
 describe('broadcastEvent agent 维度路由（OP-WEB-1）', () => {
+  it('turn.end 不再派生 state 帧；idle 只由 engine.end 派生（评审 F4）', () => {
+    const adapter = makeAdapter();
+    const { session, sent } = makeWsSession();
+    session.sessionId = 's-1';
+    session.agentId = 'a1';
+    attach(adapter, session);
+    adapter.broadcastEvent('s-1', { type: 'turn.end', sessionId: 's-1', timestamp: 1, data: {} } as never, 'a1');
+    expect(sent).toHaveLength(1); // 仅 event 帧，无 state
+    adapter.broadcastEvent('s-1', { type: 'engine.end', sessionId: 's-1', timestamp: 1, data: {} } as never, 'a1');
+    expect(sent).toHaveLength(3); // + event + state(idle)
+    expect(sent[2]).toContain('"state":"idle"');
+  });
+
   it('agent 维度订阅命中裸 sessionId 会话事件（旧 split 口径从不命中）', async () => {
     const adapter = makeAdapter();
     const { session, sent } = makeWsSession();

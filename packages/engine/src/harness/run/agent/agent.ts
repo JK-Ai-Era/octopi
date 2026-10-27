@@ -307,6 +307,10 @@ export class Agent {
       context?: AgentContext;
       /** 本 Run 身份（sessionId/agentId/systemPrompt/toolRuntime） */
       runScope?: import('../run-scope.js').RunScope;
+      /** 本 Run 的 steering/followUp 接续；与实例回调组合，不改共享配置。 */
+      consumeMessages?: () => Promise<Message[]>;
+      /** 只读运行期提示（如委派状态）：只进 steering 接缝，绝不经 followUp 续命。 */
+      steeringExtras?: () => Promise<Message[]>;
       /** @deprecated 旧路径：仅绑定 provider */
       model?: ModelProvider;
       /** @deprecated 旧路径：仅窗口 */
@@ -321,7 +325,27 @@ export class Agent {
     }
     const resolved = options?.resolvedModel;
     const loopModel = resolved?.provider ?? options?.model;
-    const config = loopModel ? { ...this._config, model: loopModel } : this._config;
+    const config = {
+      ...this._config,
+      ...(loopModel ? { model: loopModel } : {}),
+      ...(options?.consumeMessages || options?.steeringExtras ? (() => {
+        const consume = options.consumeMessages;
+        const extras = options.steeringExtras;
+        return {
+          getSteeringMessages: async () => [
+            ...(consume ? await consume() : []),
+            ...(extras ? await extras() : []),
+            ...(this._config.getSteeringMessages ? await this._config.getSteeringMessages() : []),
+          ],
+          getFollowUpMessages: async () => [
+            // followUp 是「续命」接缝：只喂真实输入；只读提示（ephemeral）
+            // 绝不能出现在这里——否则 run 会被状态快照无限续命（评审 F1）
+            ...((consume ? await consume() : [])).filter((m) => m.ephemeral !== true),
+            ...(this._config.getFollowUpMessages ? await this._config.getFollowUpMessages() : []),
+          ],
+        };
+      })() : {}),
+    };
     const context = options?.context ?? this._context;
     const runScope: import('../run-scope.js').RunScope = {
       sessionId: options?.runScope?.sessionId ?? this._contextSessionId,

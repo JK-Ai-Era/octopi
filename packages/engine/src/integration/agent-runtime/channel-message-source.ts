@@ -77,9 +77,27 @@ export async function dispatchChannelMessage(
   const { runtime, msg, resolveAgentId, resolveSessionId, onEvent } = options;
   const agentId = resolveAgentId(msg);
   if (!agentId) {
+    // 回执契约 = 恒发一次（liveness）；no_agent 的实际结果由上层 error/静默路径处理
+    msg.delivery = 'run';
+    msg.onDelivery?.('run');
     return { status: 'skipped', reason: 'no_agent' as const };
   }
   const sessionId = resolveSessionId(msg);
   const trigger = channelMessageToTrigger(msg, agentId, sessionId);
-  return runtime.dispatch(trigger, onEvent ? { onEvent } : undefined);
+  // 单一入口：dispatch 内部 offer；活跃 Run 接收即回执（早于 Run 结束）。
+  // 拒绝/早退路径（runtime_stopped 等）也要回执一次（liveness），错误走 error 通道。
+  let delivered = false;
+  const result = await runtime.dispatch(trigger, {
+    ...(onEvent ? { onEvent } : {}),
+    onDelivery: (delivery) => {
+      delivered = true;
+      msg.delivery = delivery;
+      msg.onDelivery?.(delivery);
+    },
+  });
+  if (!delivered) {
+    msg.delivery = 'run';
+    msg.onDelivery?.('run');
+  }
+  return result;
 }

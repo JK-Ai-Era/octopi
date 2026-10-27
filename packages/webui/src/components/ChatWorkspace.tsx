@@ -1475,17 +1475,15 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
       return;
     }
 
-    // /stop 可抢占（busy 也允许）
+    // /stop 可抢占（busy 也允许）；运行中普通发送 = 插话（steer 进活跃 Run）
     const isStop = text === '/stop' || text.startsWith('/stop ');
-    if (!isStop && (runStatus === 'streaming' || runStatus === 'waiting')) {
-      setActionError('Agent 正在运行——可点中止，或发送 /stop。');
-      return;
-    }
+    const interjecting =
+      !isStop && (runStatus === 'streaming' || runStatus === 'waiting' || runStatus === 'tools');
 
     setActionError(null);
     // 用户主动发起新一轮：恢复粘底跟随
     enableStickToBottom();
-    setRunStatus('waiting');
+    if (!interjecting) setRunStatus('waiting');
     try {
       await store.sendMessage(text, {
         attachmentIds: pendingAttachments.map((a) => a.id),

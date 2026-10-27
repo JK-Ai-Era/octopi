@@ -726,12 +726,13 @@ export interface WsEnvelope {
   agents?: AgentSummary[];
   event?: AgentEventEnvelope;
   state?: string;
+  delivery?: 'steered' | 'followup' | 'run';
 }
 
 export interface OctopiClientEvents {
   onConnectionState?: (state: ConnectionState) => void;
   onWelcome?: (agents: AgentSummary[]) => void;
-  onAccepted?: (sessionId: string | undefined, messageId: string | undefined) => void;
+  onAccepted?: (sessionId: string | undefined, messageId: string | undefined, delivery?: 'steered' | 'followup' | 'run') => void;
   onEvent?: (sessionId: string | undefined, event: AgentEventEnvelope) => void;
   onState?: (sessionId: string | undefined, state: string) => void;
   onError?: (error: Error) => void;
@@ -2136,7 +2137,7 @@ export class OctopiClient {
         this.listeners.onWelcome?.(this.lastWelcomeAgents);
         break;
       case 'accepted':
-        this.listeners.onAccepted?.(envelope.sessionId, envelope.messageId);
+        this.listeners.onAccepted?.(envelope.sessionId, envelope.messageId, envelope.delivery);
         break;
       case 'event':
         this.listeners.onEvent?.(envelope.sessionId, envelope.event ?? { type: 'unknown' });

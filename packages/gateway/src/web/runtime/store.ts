@@ -299,10 +299,14 @@ export class OctopiRuntimeStore extends EventTarget {
     this.client.on({
       onConnectionState: (state: ConnectionState) => this.applyConnectionState(state),
       onWelcome: (agents: AgentSummary[]) => this.applyWelcome(agents),
-      onAccepted: (sessionId: string | undefined, _messageId: string | undefined) => this.applyAccepted(sessionId),
+      onAccepted: (sessionId: string | undefined, _messageId: string | undefined, delivery?: 'steered' | 'followup' | 'run') => this.applyAccepted(sessionId, delivery),
       onEvent: (sessionId: string | undefined, event: AgentEventEnvelope) => this.applyEvent(sessionId, event),
       onState: (sessionId: string | undefined, state: string) => this.applyExternalState(sessionId, state),
-      onError: (error: Error) => this.emitRuntimeError(error.message),
+      onError: (error: Error) => {
+        // 错误也是一种响应：清发送看门狗，避免已收到错误仍显示「发送超时」
+        this.clearSendWatchdog();
+        this.emitRuntimeError(error.message);
+      },
     });
   }
 
@@ -1452,6 +1456,7 @@ export class OctopiRuntimeStore extends EventTarget {
       throw new Error('No active session');
     }
 
+    const interjecting = this.engineActive || ['waiting', 'streaming', 'tools'].includes(this.chat.runStatus);
     // 新一轮开始：清掉历史气泡上的编辑重发入口
     this.clearEditResendableFlags();
 
@@ -1459,9 +1464,11 @@ export class OctopiRuntimeStore extends EventTarget {
 
     this.setViewMode(this.chat.viewMode === 'history' ? 'hybrid' : 'runtime');
 
-    this.engineActive = true;
-    this.setRunStatus('sending');
-    this.chat.streamingContent = '';
+    if (!interjecting) {
+      this.engineActive = true;
+      this.setRunStatus('sending');
+      this.chat.streamingContent = '';
+    }
 
     this.dispatch('chat', new ChatEvent('chat', { conversation: this.chat.conversation }));
     this.dispatch('conversation', new ConversationEvent('conversation', { items: this.chat.conversation }));
@@ -1482,8 +1489,10 @@ export class OctopiRuntimeStore extends EventTarget {
       this.setRunStatus('error');
       throw err instanceof Error ? err : new Error(String(err));
     }
-    this.setRunStatus('waiting');
-    this.armSendWatchdog();
+    if (!interjecting) {
+      this.setRunStatus('waiting');
+      this.armSendWatchdog();
+    }
   }
 
   abort(): void {
@@ -1587,12 +1596,18 @@ export class OctopiRuntimeStore extends EventTarget {
     this.syncSubscriptions();
   }
 
-  private applyAccepted(sessionId?: string): void {
+  private applyAccepted(sessionId?: string, delivery?: 'steered' | 'followup' | 'run'): void {
     // 仅当前会话的 accepted 才更新 UI 状态
     if (sessionId && this.chat.sessionId && sessionId !== this.chat.sessionId) return;
     this.clearSendWatchdog();
     this.engineActive = true;
-    this.setRunStatus('waiting');
+    if (delivery === 'steered' || delivery === 'followup') {
+      if (this.chat.runStatus === 'sending' || this.chat.runStatus === 'idle') {
+        this.setRunStatus('waiting');
+      }
+    } else {
+      this.setRunStatus('waiting');
+    }
   }
 
   private applyExternalState(sessionId: string | undefined, state: string): void {
@@ -1732,10 +1747,7 @@ export class OctopiRuntimeStore extends EventTarget {
       event.type === 'engine.end' ||
       event.type === 'interrupted' ||
       (event.type === 'command.result' &&
-        !(event.data as { enterLoop?: boolean } | undefined)?.enterLoop) ||
-      (event.type === 'turn.end' &&
-        (event.data as { phase?: string; error?: boolean } | undefined)?.phase !== 'pre_tools' &&
-        !(event.data as { error?: boolean } | undefined)?.error)
+        !(event.data as { enterLoop?: boolean } | undefined)?.enterLoop)
     ) {
       this.engineActive = false;
     }
@@ -2118,7 +2130,8 @@ export class OctopiRuntimeStore extends EventTarget {
       if (data?.fromCommand) return 'idle';
       if (data?.phase === 'pre_tools') return 'tools';
       if (data?.error) return 'waiting';
-      return 'idle';
+      // turn 末可能紧接工具/插话；具体活跃态由后续 iteration.start 修正。
+      return 'waiting';
     }
     if (event.type === 'command.result') {
       const data = event.data as { enterLoop?: boolean; status?: string } | undefined;

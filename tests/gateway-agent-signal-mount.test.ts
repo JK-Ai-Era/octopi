@@ -140,7 +140,7 @@ describe('Gateway agentSignal 挂载三态', () => {
 
     fire(gateway);
     await settle();
-    expect(capture.payloads.some((c) => c.includes('<delegation_completed'))).toBe(true);
+    expect(capture.payloads.some((c) => c.includes('<delegation_result'))).toBe(true);
     await gateway.stop();
   });
 
@@ -172,7 +172,7 @@ describe('Gateway agentSignal 挂载三态', () => {
 
     fire(gateway);
     await settle();
-    expect(capture.payloads.some((c) => c.includes('<delegation_completed'))).toBe(true);
+    expect(capture.payloads.some((c) => c.includes('<delegation_result'))).toBe(true);
     await gateway.stop();
   });
 

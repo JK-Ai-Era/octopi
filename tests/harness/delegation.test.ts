@@ -65,11 +65,15 @@ function fakeAgent(
     agentId,
     agent: {
       contextSessionId: 'default',
-      setSteeringMessages(fn: unknown) {
+    },
+    runner: {
+      setSteeringProvider(fn: unknown) {
         self.steering = fn;
       },
+      setDelegationDeliveryAck(fn: unknown) {
+        self.deliveryAck = fn;
+      },
     },
-    runner: {},
     store: {},
     traits: [] as string[],
     delegation,
@@ -78,6 +82,7 @@ function fakeAgent(
       for (const t of tools) self.registered.push(t.definition.name);
     },
     steering: undefined as unknown,
+    deliveryAck: undefined as unknown,
   };
   return self;
 }
@@ -683,11 +688,16 @@ describe('DelegateService', () => {
     );
     expect(service.renderStatusHint(PARENT.sessionId)).toContain('1 completed');
 
-    // 投递成功 → surfaced → 提示消音
+    // 投递成功只证明已投递：仍停在 delivering，提示保持点亮
+    //（surfaced 由「结果进父上下文」的 ack 置位）
     release();
-    await vi.waitFor(() =>
-      expect(store.get(delegation.id)?.deliveryState).toBe('surfaced'),
-    );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(store.get(delegation.id)?.deliveryState).toBe('delivering');
+    expect(service.renderStatusHint(PARENT.sessionId)).toContain('1 completed');
+
+    // 入父上下文 ack → surfaced → 提示消音
+    store.markSurfaced(delegation.id);
+    expect(store.get(delegation.id)?.deliveryState).toBe('surfaced');
     expect(service.renderStatusHint(PARENT.sessionId)).toBe('');
   });
 
@@ -732,9 +742,12 @@ describe('DelegateService', () => {
     await new Promise((resolve) => setTimeout(resolve, 30));
     expect(notifier).toHaveBeenCalledTimes(1);
 
-    // #1 投递完成后置已送达；全程只投一次
+    // #1 投递完成（delivering 停在送达窗口，surfaced 等入父上下文 ack）；全程只投一次
     releaseNotify();
-    await vi.waitFor(() => expect(store.get(delegation.id)?.deliveryState).toBe('surfaced'));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(store.get(delegation.id)?.deliveryState).toBe('delivering');
+    store.markSurfaced(delegation.id);
+    expect(store.get(delegation.id)?.deliveryState).toBe('surfaced');
     expect(notifier).toHaveBeenCalledTimes(1);
   });
 });

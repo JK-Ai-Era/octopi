@@ -10,6 +10,8 @@
  * - Gateway / Integration 按部署形态挂载具体 adapter
  */
 
+export type ChannelMessageDelivery = 'steered' | 'followup' | 'run';
+
 export interface ChannelMessage {
   id: string;
   channel: string;
@@ -19,6 +21,10 @@ export interface ChannelMessage {
   conversationId: string;
   timestamp: number;
   metadata?: Record<string, unknown>;
+  /** Runtime 受理后的真实去向；宿主回执用，不进入模型。 */
+  delivery?: ChannelMessageDelivery;
+  /** 宿主传入；Runtime 实际受理后由 Gateway 调用。 */
+  onDelivery?: (delivery: ChannelMessageDelivery) => void;
 }
 
 export interface ChannelReply {
