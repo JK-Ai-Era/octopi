@@ -94,10 +94,11 @@ Security is not “add a security module”; every layer carries a security resp
 |-------|---------|------------------------|
 | `pre_tools` | This turn’s LLM returned tool_calls; messages are already in history; **tools have not run / are running** | Keep “in progress”; may show the tool list; **do not** set the run to idle |
 | `final` | This turn ends on a no-tool path (plain text / followUp / truncation re-feed / error retry) | May finalize the assistant message; may set idle |
+| `error: true` (with `final`) | This LLM attempt failed; emitted **only** mid-retry (the final failure goes straight to `agent_end reason='error'`) | `content` is this call’s **partial output, not an answer** — never send it as a reply / finalize it as a normal message; mark the bubble as error; keep the run in progress (a retry follows) |
 
 **Do not** treat every `turn_end` as “this run ended”. On the tool path there are `tool_*` events after `pre_tools`; on termination it may go straight to `agent_end` — **no** final `turn_end` is added afterwards.
 
-When the Runner maps this to EventBus `turn.end`, it carries `data.phase`. Web `runStatus`: `pre_tools → 'tools'`, `final → 'idle'`. TUI stays in processing on `pre_tools`.
+When the Runner maps this to EventBus `turn.end`, it carries `data.phase` and `data.error`. Web `runStatus`: `pre_tools → 'tools'`, `final → 'idle'`, `error → 'waiting'`. TUI stays in processing on `pre_tools` and on `error`.
 
 ```
 packages/core/src/loop/

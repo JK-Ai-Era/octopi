@@ -791,6 +791,7 @@ export class Gateway {
       logTimeoutCoherence(
         checkTimeoutCoherence({
           idleTimeoutMs: this.config.modelCallIdleTimeoutMs,
+          absoluteTimeoutMs: this.config.modelCallAbsoluteTimeoutMs,
           providerTimeouts,
           fallbackAttemptTtftMs: this.config.modelCallFallbackAttemptTtftMs,
           maxFallbackChainLength: chainLengths.length > 0 ? Math.max(...chainLengths) : undefined,
@@ -4767,14 +4768,21 @@ export class Gateway {
       onEvent: (event) => {
         // WS 已由 runtime.run.event 统一广播；这里只采集频道最终回复。
         if (event.type === 'turn.end' && event.data?.content) {
-          finalContent = event.data.content as string;
-          // steered 消息的回答晚于 dispatch 返回：首个终态 turn 恰好发一次（评审 F3）
-          const phase = (event.data as { phase?: string } | undefined)?.phase;
           const isError = (event.data as { error?: boolean } | undefined)?.error === true;
-          if (steeredDelivery && !steeredReplySent && phase !== 'pre_tools' && !isError && finalContent) {
-            steeredReplySent = true;
-            void this.sendLateChannelReply(msg, sessionKey, agent.id, finalContent);
+          // 失败尝试的 partial 不是回答：不得当最终回复外发（10-27 事故形态）
+          if (!isError) {
+            finalContent = event.data.content as string;
+            // steered 消息的回答晚于 dispatch 返回：首个终态 turn 恰好发一次（评审 F3）
+            const phase = (event.data as { phase?: string } | undefined)?.phase;
+            if (steeredDelivery && !steeredReplySent && phase !== 'pre_tools' && finalContent) {
+              steeredReplySent = true;
+              void this.sendLateChannelReply(msg, sessionKey, agent.id, finalContent);
+            }
           }
+        } else if (event.type === 'engine.error') {
+          // 彻底失败：频道必须收到失败提示，而不是静默或残句冒充回答
+          const errText = String((event.data as { error?: unknown } | undefined)?.error ?? '未知错误');
+          finalContent = `⚠️ 模型调用失败：${errText}。可稍后重试。`;
         }
       },
     });

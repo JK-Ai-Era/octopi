@@ -96,10 +96,11 @@ AI 在早期阶段，应用构建思路在不断发展。架构设计的核心�
 |-------|------|-------------|
 | `pre_tools` | 本轮 LLM 返回 tool_calls，消息已入历史，**工具尚未/正在执行** | 保持「进行中」；可展示工具列表；**不要**把 run 置为 idle |
 | `final` | 本轮无工具路径结束（纯文本 / followUp / 截断回灌 / 错误重试） | 可 finalize 助手消息；可置 idle |
+| `error: true`（与 `final` 同时） | 本次 LLM 调用失败；**只**出现在重试中途（彻底失败直接 `agent_end reason='error'`） | `content` 是本次调用的**部分流出，不是回答**——不得当回复外发/按正常消息 finalize；气泡标 error；保持 run 进行中（后面还有重试） |
 
 **不要**把每一次 `turn_end` 都当成「本轮 run 结束」。工具路径下 `pre_tools` 之后还有 `tool_*` 事件；终止时可能直接 `agent_end`，**不会再补** final turn_end。
 
-Runner 映射到 EventBus 的 `turn.end` 时会带上 `data.phase`。Web `runStatus`：`pre_tools → 'tools'`，`final → 'idle'`。TUI 在 `pre_tools` 时保持 processing。
+Runner 映射到 EventBus 的 `turn.end` 时会带上 `data.phase` 与 `data.error`。Web `runStatus`：`pre_tools → 'tools'`，`final → 'idle'`，`error → 'waiting'`。TUI 在 `pre_tools` 与 `error` 时保持 processing。
 
 ```
 packages/core/src/loop/

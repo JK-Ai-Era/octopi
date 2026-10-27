@@ -243,6 +243,16 @@ export function adaptLoopEvent(
   meta: { agentId: string; sessionId: string },
   state: {
     assistantContent: string;
+    /**
+     * 本次 LLM 调用（自上次 turn_end 起）流出的部分文本。
+     * 失败轮的正文只能来自这里——不得回落到上一次调用的完整回复冒充本次输出。
+     */
+    callStreamedContent?: string;
+    /** 最近一次 turn_end 的正文快照与错误标记，供 runner 落 turn 账本 */
+    lastTurnContent?: string;
+    lastTurnError?: boolean;
+    /** `agent_end.reason='error'` 时的错误文本，收口落失败凭证 */
+    errorMessage?: string;
     lastUserContent?: string;
     stopReason?: string;
     /** 引擎为何终止（人类可读）；收口落一条 runStopped 消息，禁止静默停止 */
@@ -299,7 +309,10 @@ export function adaptLoopEvent(
       state.loopEndReason = event.reason;
       // reason='error' 时映射为 engine.error（向后兼容旧引擎行为）
       if (event.reason === 'error') {
-        return { type: 'engine.error', timestamp: event.timestamp, agentId: meta.agentId, sessionId: meta.sessionId, data: { error: event.error instanceof Error ? event.error.message : String(event.error ?? 'Unknown error') } };
+        const errorText = event.error instanceof Error ? event.error.message : String(event.error ?? 'Unknown error');
+        // 收口要落失败凭证（runStopped 消息）；不在此留痕的话，重载会话后事故无影无踪
+        state.errorMessage = errorText;
+        return { type: 'engine.error', timestamp: event.timestamp, agentId: meta.agentId, sessionId: meta.sessionId, data: { error: errorText } };
       }
       return { type: 'engine.end', timestamp: event.timestamp, agentId: meta.agentId, sessionId: meta.sessionId, data: { reason: event.reason } };
     case 'turn_start':
@@ -307,16 +320,25 @@ export function adaptLoopEvent(
       return { type: 'iteration.start', timestamp: event.timestamp, agentId: meta.agentId, sessionId: meta.sessionId, data: {} };
     case 'assistant_message':
       state.assistantContent = typeof event.message.content === 'string' ? event.message.content : '';
+      // 完整消息已定稿，本次调用的部分流出功成身退（不得与正文叠加）
+      state.callStreamedContent = '';
       return null;
-    case 'turn_end':
+    case 'turn_end': {
       // phase 透传给 UI：pre_tools ≠ 本轮 run 结束（见 architecture.md）
+      // 正文口径：优先完整消息；失败轮（error=true）只有本次调用的部分流出，
+      // 不得回落到上一次调用的回复冒充本次输出
+      const turnContent = state.assistantContent || state.callStreamedContent || '';
+      state.lastTurnContent = turnContent;
+      state.lastTurnError = Boolean(event.error);
+      state.assistantContent = '';
+      state.callStreamedContent = '';
       return {
         type: 'turn.end',
         timestamp: Date.now(),
         agentId: meta.agentId,
         sessionId: meta.sessionId,
         data: {
-          content: state.assistantContent,
+          content: turnContent,
           userText: state.lastUserContent ?? '',
           hasToolCalls: event.hasToolCalls,
           phase: event.phase,
@@ -326,7 +348,9 @@ export function adaptLoopEvent(
           llmTiming: event.llmTiming,
         },
       };
+    }
     case 'llm_stream_delta':
+      state.callStreamedContent = (state.callStreamedContent ?? '') + String(event.data?.delta ?? '');
       return { type: 'llm_stream_delta', timestamp: event.timestamp, agentId: meta.agentId, sessionId: meta.sessionId, data: event.data };
     case 'llm_thinking_delta':
       return { type: 'llm_thinking_delta', timestamp: event.timestamp, agentId: meta.agentId, sessionId: meta.sessionId, data: event.data };
@@ -934,6 +958,10 @@ export class SessionAwareRunner {
      */
     const adaptState: {
       assistantContent: string;
+      callStreamedContent?: string;
+      lastTurnContent?: string;
+      lastTurnError?: boolean;
+      errorMessage?: string;
       lastUserContent: string;
       stopReason?: string;
       stopMessage?: string;
@@ -2018,13 +2046,17 @@ export class SessionAwareRunner {
           const turnMessages = runContext.messages.slice(turnStartIndex);
           await this.agent.notifyAfterTurn(lastUsage, turnMessages);
           turnStartIndex = runContext.messages.length;
-          const content = adaptState.assistantContent || streamedContent;
-          if (content) {
+          // 账本正文 = adaptLoopEvent 按调用算好的快照（失败轮只有本次调用的部分流出）；
+          // 失败轮必须带 error 标记，空正文也留账（审计价值），不得拿历史内容凑数
+          const content = adaptState.lastTurnContent ?? '';
+          const turnFailed = Boolean(adaptState.lastTurnError);
+          if (content || turnFailed) {
             session.turns.push({
               id: `turn_${Date.now()}`,
               inputCount: Math.max(0, session.messages.length - 1),
               output: { role: 'assistant', content, timestamp: Date.now(), agentId: _agentId },
-              usage: lastUsage,
+              // 失败轮没有 usage（loop 的 error turn_end 不带）；不得写上一次调用的用量
+              ...(turnFailed ? { error: true as const } : { usage: lastUsage }),
               durationMs: 0,
               model: effectiveRunConfig.model ?? 'unknown',
               timestamp: Date.now(),
@@ -2056,14 +2088,52 @@ export class SessionAwareRunner {
       // 引擎主动终止（RunGuard / Budget / Security）必须留下可见凭证：
       // 只有事件、没有消息时，UI 看到的就是「跑着跑着突然结束」。
       //
-      // 触发条件 = loop 的 agent_end.reason === 'should_stop'（唯一权威的「提前停止」信号）。
+      // 触发条件 = loop 的 agent_end.reason（'should_stop' 引擎主动停止 / 'error' LLM 彻底失败）。
       // 不能只看 stopReason：`security_blocked` 单次拦截后 run 会继续跑完，
       // 那样会把正常完成的 run 误报成「已停止」。
       //
       // 该消息不进 LLM 上下文（buildLlmMessages 跳过 source=runStopped），
       // 但进聊天回放（系统提示条）与 session 审计。
       // 位置在 turn_end 之前：它属于被终止的这个 turn。
-      if (adaptState.loopEndReason === 'should_stop') {
+      if (adaptState.loopEndReason === 'error') {
+        // LLM 彻底失败同样是「无回复收尾」：必须留下可见凭证，
+        // 否则重载会话后这次失败无影无踪（只剩一段被当成正常回复的部分文本）。
+        const body = adaptState.errorMessage ?? '未知错误';
+        session.messages.push({
+          role: 'user',
+          content: `模型调用失败：${body}。可继续对话让 agent 从当前状态接着做，或稍后重试。`,
+          timestamp: Date.now(),
+          metadata: {
+            source: 'runStopped',
+            turnId: currentTurnId,
+            stopReason: 'llm_error',
+          },
+        });
+        session.metadata = {
+          ...session.metadata,
+          lastStop: {
+            reason: 'llm_error',
+            message: body,
+            turnId: currentTurnId,
+            at: Date.now(),
+          },
+        };
+        // 最后一次失败尝试的 partial 也留账：abort 路径不再产 turn_end，
+        // 此处不记的话最后尝试的输出只剩前端 live 视图（重载即失）。
+        // !hasTurnEnd 的场景由下方「一致性修复」兜底，此处只补 hasTurnEnd 的缺口。
+        const finalPartial = adaptState.callStreamedContent ?? '';
+        if (hasTurnEnd && finalPartial) {
+          session.turns.push({
+            id: `turn_${Date.now()}`,
+            inputCount: Math.max(0, session.messages.length - 1),
+            output: { role: 'assistant', content: finalPartial, timestamp: Date.now(), agentId: _agentId },
+            durationMs: 0,
+            model: effectiveRunConfig.model ?? 'unknown',
+            timestamp: Date.now(),
+            error: true,
+          });
+        }
+      } else if (adaptState.loopEndReason === 'should_stop') {
         const label =
           adaptState.stopReason === 'behavior_stopped'
             ? '引擎监督器判定停止'
@@ -2117,13 +2187,19 @@ export class SessionAwareRunner {
       // 11. 引擎异常退出时的 session 一致性修复（须在 Observer final 采样之前）
       if (!hasTurnEnd) {
         const fallbackContent = streamedContent || '';
-        if (fallbackContent) {
-          session.messages.push({
-            role: 'assistant',
-            content: fallbackContent,
-            timestamp: Date.now(),
-            agentId: _agentId,
-          });
+        const failedRun = adaptState.loopEndReason === 'error';
+        // 失败 run 空正文也留账（与 error turn_end 口径一致）；正常/崩溃路径仍按有内容才记
+        if (fallbackContent || failedRun) {
+          // 失败 run 的部分流出不得冒充 assistant 回复入历史——失败凭证已由
+          // runStopped 消息承担；只落一条带 error 标记的 turn 账本保留审计。
+          if (!failedRun) {
+            session.messages.push({
+              role: 'assistant',
+              content: fallbackContent,
+              timestamp: Date.now(),
+              agentId: _agentId,
+            });
+          }
           session.turns.push({
             id: `turn_${Date.now()}`,
             inputCount: Math.max(0, session.messages.length - 1),
@@ -2132,6 +2208,7 @@ export class SessionAwareRunner {
             durationMs: 0,
             model: effectiveRunConfig.model ?? 'unknown',
             timestamp: Date.now(),
+            ...(failedRun ? { error: true } : {}),
           });
         }
       }

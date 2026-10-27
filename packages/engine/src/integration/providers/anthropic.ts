@@ -27,6 +27,7 @@ import type {
 import type { ToolCall, ModelInfo } from '@octopi-agent/core/types.js';
 import { tokenUsageFromAnthropic } from './usage.js';
 import { attachHttpStatus, attachStreamDiag, createStreamDiag } from './provider-diagnostics.js';
+import { createTimeoutDispatcher, providerFetch } from './fetch-timeout.js';
 
 export interface AnthropicProviderConfig {
   name?: string;
@@ -60,6 +61,10 @@ export class AnthropicProvider implements ModelProvider {
   private baseUrl: string;
   private version: string;
   private timeoutMs: number;
+  /** 与 timeoutMs 对齐的 fetch dispatcher（transport 不得在配置值之下提前掐断） */
+  private dispatcher: ReturnType<typeof createTimeoutDispatcher>;
+  /** HTTP transport（可注入替换供测试；默认 undici fetch，错误形态与内置 fetch 一致） */
+  private fetch: typeof providerFetch = providerFetch;
   readonly defaultModel: string;
 
   constructor(config: AnthropicProviderConfig) {
@@ -68,6 +73,7 @@ export class AnthropicProvider implements ModelProvider {
     this.baseUrl = (config.baseUrl ?? 'https://api.anthropic.com').replace(/\/$/, '');
     this.version = config.version ?? '2023-06-01';
     this.timeoutMs = config.timeoutMs ?? 120_000;
+    this.dispatcher = createTimeoutDispatcher(this.timeoutMs);
 
     // 仅使用用户配置的 ModelInfo；不合并 builtin 猜测 contextWindow
     const rawModels = config.models ?? [];
@@ -120,7 +126,7 @@ export class AnthropicProvider implements ModelProvider {
     }
 
     try {
-      const response = await fetch(`${this.baseUrl}/v1/messages`, {
+      const response = await this.fetch(`${this.baseUrl}/v1/messages`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -129,6 +135,7 @@ export class AnthropicProvider implements ModelProvider {
         },
         body: JSON.stringify(anthropicRequest),
         signal: controller.signal,
+        dispatcher: this.dispatcher,
       });
 
     if (!response.ok) {
@@ -169,7 +176,7 @@ export class AnthropicProvider implements ModelProvider {
 
     let response: Response;
     try {
-      response = await fetch(`${this.baseUrl}/v1/messages`, {
+      response = await this.fetch(`${this.baseUrl}/v1/messages`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -178,6 +185,7 @@ export class AnthropicProvider implements ModelProvider {
         },
         body: JSON.stringify(anthropicRequest),
         signal: controller.signal,
+        dispatcher: this.dispatcher,
       });
     } catch (err) {
       clearTimeout(connectTimer);
@@ -319,7 +327,7 @@ export class AnthropicProvider implements ModelProvider {
    */
   async isAvailable(): Promise<boolean> {
     try {
-      const response = await fetch(`${this.baseUrl}/v1/messages`, {
+      const response = await this.fetch(`${this.baseUrl}/v1/messages`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -331,6 +339,9 @@ export class AnthropicProvider implements ModelProvider {
           max_tokens: 1,
           messages: [{ role: 'user', content: 'hi' }],
         }),
+        // 探活与 openai 侧同口径：5s 上限 + 对齐 dispatcher，不挂到 provider 超时量级
+        signal: AbortSignal.timeout(5000),
+        dispatcher: this.dispatcher,
       });
       return response.ok || response.status === 400;
     } catch {

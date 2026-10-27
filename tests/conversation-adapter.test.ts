@@ -262,6 +262,35 @@ describe('ConversationAdapter', () => {
       expect(ast.content).toBe('streamed');
     });
 
+    it('失败轮（turn.end error:true）：部分流出标 error，不冒充 completed', () => {
+      let r = adapter.applyEvent({ type: 'llm_stream_delta', data: { delta: 'partial output' } }, sid, items);
+      items = r.items;
+      r = adapter.applyEvent({ type: 'turn.end', data: { content: 'partial output', error: true } }, sid, items);
+      items = r.items;
+
+      const ast = items[0] as AssistantConversationItem;
+      expect(ast.status).toBe('error');
+      expect(ast.content).toBe('partial output');
+      // 失败轮不是空响应：不得发 empty response 警告
+      expect(
+        items.some(
+          (i) => i.role === 'system' && (i as SystemConversationItem).message?.includes('empty response'),
+        ),
+      ).toBe(false);
+    });
+
+    it('失败轮无流式气泡时不得伪造 completed 回复', () => {
+      const r = adapter.applyEvent({ type: 'turn.end', data: { content: 'partial', error: true } }, sid, items);
+      items = r.items;
+
+      expect(items.some((i) => i.role === 'assistant')).toBe(false);
+      expect(
+        items.some(
+          (i) => i.role === 'system' && (i as SystemConversationItem).message?.includes('empty response'),
+        ),
+      ).toBe(false);
+    });
+
     it('ignores empty deltas', () => {
       const r = adapter.applyEvent({ type: 'llm_stream_delta', data: { delta: '' } }, sid, items);
       expect(r.changed).toBe(false);

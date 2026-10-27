@@ -105,6 +105,27 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.95.2 (2026-10-28)
+
+### fix(reliability): sync 兜底不再被 transport 300s 常量掐死；失败轮记账与凭证不再冒充正常回复
+
+**问题**（2026-10-27 官网会话连续卡死事故）：上游流式中段断流后，恢复链路 100% 失败且事故在记录里隐身——
+
+1. Node 内置 fetch（undici）的 `headersTimeout` / `bodyTimeout` 默认 300s 且不受 provider `timeoutSeconds` 影响：非流式 chat 一次超过 300s 的正常长生成（实测 380–447s）必被 transport 掐死成 `TypeError: fetch failed`，`Stream fallback to sync` 对长生成模型恢复率为 0（事故中每次兜底均 301–302s 死亡，单轮最坏停滞约 10 分钟）。
+2. 失败的 LLM 调用在账本里冒充正常回复：`turn_end`(error) 的 turn 记录用上一次调用的完整回复或整 run 累积的部分流出充当正文、无 error 标记；彻底失败的 run 收口后会话里没有任何失败痕迹（断句 partial 被存成正常 assistant 回复）。
+
+**修复**：
+
+- 新增 `integration/providers/fetch-timeout.ts`：provider transport 用 undici 自带 fetch + 与 `timeoutMs` 对齐的 Agent dispatcher（headers/body 同值；connect 保持 undici 默认 10s，死主机快速失败进重试）。Node 内置 fetch 与 npm undici 的 Agent 互操作不兼容（`invalid onRequestStart method`），故模型调用统一走 undici fetch；错误形态（`TypeError: fetch failed` + cause）与错误分类行为不变。anthropic/openai provider 增加可注入的 `fetch` 实例字段（测试注入 seam，替代 mock 全局 fetch）；`isAvailable` 探活与 openai 侧同口径（5s 上限 + 对齐 dispatcher）。
+- `timeout-coherence`：删除已过时的「undici 300s 截断」告警（`provider_timeout_capped` / `idle_above_undici_default` / `UNDICI_DEFAULT_TIMEOUT_MS`）。只对「写了也永远不会生效」的死配置告警：新增 `provider_timeout_exceeds_absolute`（provider 总超时 > `modelCall.absoluteTimeoutMs`，同量纲比较）；`idleTimeoutMs` 是按内容 chunk 重置的空闲窗口、与 provider 计时不同量纲，不再制造互相矛盾的双向建议。默认配置零告警（恢复反噪音回归测试）。
+- 失败留痕三条不变式：core `Turn` 新增 `error?: boolean`（失败轮 `output.content` = 该次调用已流出的部分文本，不得按正常回复回放；失败轮不写 `usage`——loop 的 error `turn_end` 也不再携带上一次成功调用的用量）；runner 按 LLM 调用追踪部分流出，失败轮 turn 记录带 `error: true` 且正文只含本次调用输出（不再串入历史回复/跨重试累积），最后一次失败尝试的 partial 与零输出失败轮同样留账；`agent_end.reason='error'` 收口落 `runStopped`（`stopReason: 'llm_error'`）持久化凭证；`!hasTurnEnd` 兜底在失败 run 不再伪造 assistant 回复入历史。
+- **`turn.end.error` 成为正式消费契约，全部用户可见面同步**：web adapter 失败气泡标 `error` 而非 `completed`、不再误报 empty response；TUI 失败轮残句标注「中断前的部分输出」、不再假报 empty、重试中不误置空闲；channel（微信/Telegram 等）不再把失败残句当最终回复外发、彻底失败改发失败提示；scenario-runner 丢弃失败尝试的 partial。契约文档（`docs/architecture.md` / `.zh.md`）与 `agent-event-map` 注释补齐 `error:true` 语义。
+- 测试改造：原 mock `globalThis.fetch` 的 provider 测试改为注入 `provider.fetch`——顺带消除 mock 失效时测试泄漏真实网络请求的问题。
+
+**不变**：`absoluteTimeoutMs` 维持「单次调用上限」语义；重试次数未动；sync fallback 仍走 `runChatWithWatchdog` 预算 `max(idle, remainingAbsolute)`。undici 超时计时器存在亚秒级合并迟滞（只会更宽不会更严），已在测试注释标注。
+
+**验证**：新增契约测试 17 个（dispatcher 两级超时真实慢服务器验证、provider 走注入 dispatcher 的结构锁、失败留痕不变式与五个边界：零输出失败轮 / 失败后重试成功的正文隔离 / 用户 abort 不产 llm_error 凭证 / 零 turn_end 彻底失败留账 / 失败轮不写 usage、adapter 失败气泡）；全量 350/352 测试文件绿（唯一失败 `tests/harness/temp-path.test.ts`「Windows 临时区」为 darwin 环境旧问题，未改动该模块、隔离运行同样失败）；eslint / tests typecheck / `arch/check-sync.sh` 清零。
+
 ## v0.95.1 (2026-10-27)
 
 ### feat(providers): LLM 调用失败留痕——状态码、错误文本与流内保活计数

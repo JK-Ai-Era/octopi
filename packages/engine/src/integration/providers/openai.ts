@@ -26,6 +26,7 @@ import type {
 import type { ToolCall, ModelInfo, TokenUsage } from '@octopi-agent/core/types.js';
 import { tokenUsageFromOpenAi } from './usage.js';
 import { attachHttpStatus, attachStreamDiag, createStreamDiag } from './provider-diagnostics.js';
+import { createTimeoutDispatcher, providerFetch } from './fetch-timeout.js';
 
 /**
  * OpenAI Provider 配置
@@ -64,12 +65,17 @@ export class OpenAIProvider implements ModelProvider {
   private baseUrl: string;
   readonly defaultModel: string;
   private timeoutMs: number;
+  /** 与 timeoutMs 对齐的 fetch dispatcher（transport 不得在配置值之下提前掐断） */
+  private dispatcher: ReturnType<typeof createTimeoutDispatcher>;
+  /** HTTP transport（可注入替换供测试；默认 undici fetch，错误形态与内置 fetch 一致） */
+  private fetch: typeof providerFetch = providerFetch;
 
   constructor(config: OpenAIProviderConfig) {
     this.name = config.name ?? 'openai';
     this.apiKey = config.apiKey;
     this.baseUrl = (config.baseUrl ?? 'https://api.openai.com/v1').replace(/\/$/, '');
     this.timeoutMs = config.timeoutMs ?? 60_000;
+    this.dispatcher = createTimeoutDispatcher(this.timeoutMs);
 
     // 仅使用用户配置的 ModelInfo；不合并 builtin 猜测 contextWindow
     const rawModels = config.models ?? [];
@@ -125,7 +131,7 @@ export class OpenAIProvider implements ModelProvider {
     }
 
     try {
-      const response = await fetch(`${this.baseUrl}/chat/completions`, {
+      const response = await this.fetch(`${this.baseUrl}/chat/completions`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -134,6 +140,7 @@ export class OpenAIProvider implements ModelProvider {
         },
         body: JSON.stringify(body),
         signal: controller.signal,
+        dispatcher: this.dispatcher,
       });
 
       if (!response.ok) {
@@ -171,7 +178,7 @@ export class OpenAIProvider implements ModelProvider {
 
     let response: Response;
     try {
-      response = await fetch(`${this.baseUrl}/chat/completions`, {
+      response = await this.fetch(`${this.baseUrl}/chat/completions`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -180,6 +187,7 @@ export class OpenAIProvider implements ModelProvider {
         },
         body: JSON.stringify(body),
         signal: controller.signal,
+        dispatcher: this.dispatcher,
       });
     } catch (err) {
       clearTimeout(connectTimer);
@@ -280,9 +288,10 @@ export class OpenAIProvider implements ModelProvider {
    */
   async isAvailable(): Promise<boolean> {
     try {
-      const response = await fetch(`${this.baseUrl}/models`, {
+      const response = await this.fetch(`${this.baseUrl}/models`, {
         headers: { 'Authorization': `Bearer ${this.apiKey}` },
         signal: AbortSignal.timeout(5000),
+        dispatcher: this.dispatcher,
       });
       return response.ok;
     } catch {

@@ -149,10 +149,8 @@ describe('Provider maxOutputTokens enforcement', () => {
       models: [{ name: 'gpt-5-mini', contextWindow: 128000, maxOutputTokens: 16384 }],
     });
 
-    // Intercept fetch to capture the request body
-    let capturedBody: Record<string, unknown> = {};
-    const origFetch = globalThis.fetch;
-    globalThis.fetch = vi.fn().mockResolvedValue({
+    // 注入 transport 桩件捕获请求体（provider 的 fetch 是实例字段）
+    const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: () => Promise.resolve({
         choices: [{ message: { content: 'hi' }, finish_reason: 'stop' }],
@@ -160,22 +158,19 @@ describe('Provider maxOutputTokens enforcement', () => {
         model: 'gpt-5-mini',
       }),
     } as any);
+    (provider as unknown as { fetch: unknown }).fetch = fetchMock;
 
-    try {
-      await provider.chat({
-        messages: [{ role: 'user', content: 'hello' }],
-        model: 'gpt-5-mini',
-        maxTokens: 50000, // exceeds 16384
-      });
+    await provider.chat({
+      messages: [{ role: 'user', content: 'hello' }],
+      model: 'gpt-5-mini',
+      maxTokens: 50000, // exceeds 16384
+    });
 
-      capturedBody = (globalThis.fetch as any).mock.calls[0][1]?.body;
-      if (typeof capturedBody === 'string') capturedBody = JSON.parse(capturedBody);
+    let capturedBody: Record<string, unknown> = fetchMock.mock.calls[0][1]?.body;
+    if (typeof capturedBody === 'string') capturedBody = JSON.parse(capturedBody);
 
-      // Should be capped to 16384
-      expect(capturedBody.max_tokens).toBe(16384);
-    } finally {
-      globalThis.fetch = origFetch;
-    }
+    // Should be capped to 16384
+    expect(capturedBody.max_tokens).toBe(16384);
   });
 
   it('OpenAI passes through maxTokens when under cap', async () => {
@@ -184,8 +179,7 @@ describe('Provider maxOutputTokens enforcement', () => {
       models: [{ name: 'gpt-5-mini', contextWindow: 128000, maxOutputTokens: 16384 }],
     });
 
-    const origFetch = globalThis.fetch;
-    globalThis.fetch = vi.fn().mockResolvedValue({
+    const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: () => Promise.resolve({
         choices: [{ message: { content: 'hi' }, finish_reason: 'stop' }],
@@ -193,19 +187,16 @@ describe('Provider maxOutputTokens enforcement', () => {
         model: 'gpt-5-mini',
       }),
     } as any);
+    (provider as unknown as { fetch: unknown }).fetch = fetchMock;
 
-    try {
-      await provider.chat({
-        messages: [{ role: 'user', content: 'hello' }],
-        model: 'gpt-5-mini',
-        maxTokens: 8000,
-      });
+    await provider.chat({
+      messages: [{ role: 'user', content: 'hello' }],
+      model: 'gpt-5-mini',
+      maxTokens: 8000,
+    });
 
-      const body = JSON.parse((globalThis.fetch as any).mock.calls[0][1]?.body);
-      expect(body.max_tokens).toBe(8000);
-    } finally {
-      globalThis.fetch = origFetch;
-    }
+    const body = JSON.parse(fetchMock.mock.calls[0][1]?.body);
+    expect(body.max_tokens).toBe(8000);
   });
 
   it('Anthropic uses maxOutputTokens as default when request.maxTokens absent', async () => {
@@ -214,8 +205,7 @@ describe('Provider maxOutputTokens enforcement', () => {
       models: [{ name: 'claude-sonnet-4-6', contextWindow: 200000, maxOutputTokens: 8192 }],
     });
 
-    const origFetch = globalThis.fetch;
-    globalThis.fetch = vi.fn().mockResolvedValue({
+    const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: () => Promise.resolve({
         content: [{ type: 'text', text: 'hi' }],
@@ -224,19 +214,16 @@ describe('Provider maxOutputTokens enforcement', () => {
         model: 'claude-sonnet-4-6',
       }),
     } as any);
+    (provider as unknown as { fetch: unknown }).fetch = fetchMock;
 
-    try {
-      await provider.chat({
-        messages: [{ role: 'user', content: 'hello' }],
-        model: 'claude-sonnet-4-6',
-      });
+    await provider.chat({
+      messages: [{ role: 'user', content: 'hello' }],
+      model: 'claude-sonnet-4-6',
+    });
 
-      const body = JSON.parse((globalThis.fetch as any).mock.calls[0][1]?.body);
-      // Should use maxOutputTokens (8192) instead of hardcoded 4096
-      expect(body.max_tokens).toBe(8192);
-    } finally {
-      globalThis.fetch = origFetch;
-    }
+    const body = JSON.parse(fetchMock.mock.calls[0][1]?.body);
+    // Should use maxOutputTokens (8192) instead of hardcoded 4096
+    expect(body.max_tokens).toBe(8192);
   });
 
   it('Anthropic caps request.maxTokens by maxOutputTokens', async () => {
@@ -245,8 +232,7 @@ describe('Provider maxOutputTokens enforcement', () => {
       models: [{ name: 'claude-sonnet-4-6', contextWindow: 200000, maxOutputTokens: 8192 }],
     });
 
-    const origFetch = globalThis.fetch;
-    globalThis.fetch = vi.fn().mockResolvedValue({
+    const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: () => Promise.resolve({
         content: [{ type: 'text', text: 'hi' }],
@@ -255,19 +241,16 @@ describe('Provider maxOutputTokens enforcement', () => {
         model: 'claude-sonnet-4-6',
       }),
     } as any);
+    (provider as unknown as { fetch: unknown }).fetch = fetchMock;
 
-    try {
-      await provider.chat({
-        messages: [{ role: 'user', content: 'hello' }],
-        model: 'claude-sonnet-4-6',
-        maxTokens: 20000,
-      });
+    await provider.chat({
+      messages: [{ role: 'user', content: 'hello' }],
+      model: 'claude-sonnet-4-6',
+      maxTokens: 20000,
+    });
 
-      const body = JSON.parse((globalThis.fetch as any).mock.calls[0][1]?.body);
-      expect(body.max_tokens).toBe(8192); // capped
-    } finally {
-      globalThis.fetch = origFetch;
-    }
+    const body = JSON.parse(fetchMock.mock.calls[0][1]?.body);
+    expect(body.max_tokens).toBe(8192); // capped
   });
 });
 

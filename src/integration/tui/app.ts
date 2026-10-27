@@ -322,8 +322,22 @@ export class TuiApp {
         const content = (event.data?.content as string) ?? '';
         const hasToolCalls = event.data?.hasToolCalls as boolean | undefined;
         const phase = (event.data?.phase as string | undefined) ?? 'final';
+        // 失败尝试（turn_end error=true 只出现在重试中途）：残句不得冒充正常回复，
+        // 也不算空响应；重试仍在进行，不置空闲
+        const isError = (event.data as { error?: boolean } | undefined)?.error === true;
         this.chatLog.clearTransientSystem();
-        if (this.streamedContent || content) {
+        if (isError) {
+          if (this.streamedContent || content) {
+            // 保留可见的部分输出，但明确标注为中断残句（非完整回复）
+            this.chatLog.finalizeAssistant(
+              `${this.streamedContent || content}\n\n*(⚠️ 本轮模型调用失败，以上为中断前的部分输出)*`,
+              'run',
+            );
+          } else {
+            this.chatLog.dropAssistant('run');
+          }
+          this.chatLog.addSystem('⚠️ 本轮模型调用失败');
+        } else if (this.streamedContent || content) {
           this.chatLog.finalizeAssistant(this.streamedContent || content, 'run');
         } else if (hasToolCalls) {
           // 工具执行回合：无文本内容是正常的，不显示警告
@@ -335,7 +349,10 @@ export class TuiApp {
         this.streamedContent = '';
 
         // pre_tools：工具即将执行，保持 processing，直到 final turn_end 或 agent_end
-        if (phase === 'final') {
+        // error：重试仍在进行，同样保持 processing（engine.error/aborted 才是终态）
+        if (isError) {
+          this.setStatus('retrying…');
+        } else if (phase === 'final') {
           this.isProcessing = false;
           this.setStatus('');
         } else {

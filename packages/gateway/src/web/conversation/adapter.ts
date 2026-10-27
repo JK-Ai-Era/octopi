@@ -324,12 +324,14 @@ export class ConversationAdapter {
         const content = String((raw != null && raw !== '') ? raw : (this.streamingContent ?? ''));
         const phase = String((event.data as { phase?: string } | undefined)?.phase ?? 'final');
         const hasToolCalls = Boolean((event.data as { hasToolCalls?: boolean } | undefined)?.hasToolCalls);
+        // 失败轮（重试中的某次尝试失败）：部分流出不得标成 completed 冒充回复
+        const isErrorTurn = Boolean((event.data as { error?: boolean } | undefined)?.error);
         if (this.currentAssistantId) {
           items = items.map((it) =>
             it.id === this.currentAssistantId && it.role === 'assistant'
               ? {
                   ...it,
-                  status: 'completed' as const,
+                  status: (isErrorTurn ? 'error' : 'completed') as 'completed' | 'error',
                   content: content || (it as AssistantConversationItem).content,
                   reasoning:
                     (it as AssistantConversationItem).reasoning || this.streamingReasoning || undefined,
@@ -338,7 +340,7 @@ export class ConversationAdapter {
           );
           this.lastTurnEndContent = content || undefined;
           changed = true;
-        } else if (content) {
+        } else if (content && !isErrorTurn) {
           // 非流式 / 无 streaming item：按 run 内 content 指纹去重（事件重放 / 双通道投递）
           // engine.start / llm_stream_delta 会重置指纹，不会误吞跨 turn 的同文回复
           if (content !== this.lastTurnEndContent) {
@@ -356,7 +358,12 @@ export class ConversationAdapter {
             this.lastTurnEndContent = content;
             changed = true;
           }
-        } else if (phase === 'final' && !hasToolCalls && !this.emptyWarnedSessions.has(sessionId)) {
+        } else if (
+          !isErrorTurn &&
+          phase === 'final' &&
+          !hasToolCalls &&
+          !this.emptyWarnedSessions.has(sessionId)
+        ) {
           // 最终轮无正文且无工具调用：模型空响应，必须对用户可见（与 TUI 对齐）
           const notice: SystemConversationItem = {
             id: ConversationAdapter.makeId('sys'),

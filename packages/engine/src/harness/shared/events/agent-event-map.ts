@@ -34,12 +34,14 @@ export interface AgentEventMap {
     usage: import('@octopi-agent/core/types/turn.js').TokenUsage;
   };
   'turn.end': {
+    /** 本次调用的正文；error=true 时 = 中断前的部分流出（不是回答，不得当回复外发） */
     content?: string;
     userText?: string;
     hasToolCalls: boolean;
     phase: 'pre_tools' | 'final';
     truncated?: boolean;
     stopped?: boolean;
+    /** 本次 LLM 调用失败（只出现在重试中途；彻底失败走 agent_end reason='error'） */
     error?: boolean;
     usage?: import('@octopi-agent/core/types/turn.js').TokenUsage;
     /** F3 LLM 计时摘要（loop turn_end 透传；Run 页签耗时区消费） */

@@ -10,7 +10,7 @@ import {
   DEFAULT_FALLBACK_ATTEMPT_TTFT_MS,
   readAttemptBudgetExhausted,
 } from '@octopi-agent/engine/harness/run/reliability/fallback-provider.js';
-import { checkTimeoutCoherence, UNDICI_DEFAULT_TIMEOUT_MS } from '@octopi-agent/engine/integration/providers/timeout-coherence.js';
+import { checkTimeoutCoherence } from '@octopi-agent/engine/integration/providers/timeout-coherence.js';
 import { classifyError } from '@octopi-agent/core/loop/error-classifier.js';
 
 /** 可编排的假 provider：记录每次调用，按脚本行为 */
@@ -371,29 +371,16 @@ describe('FallbackProvider — 失败节点降级（使重试不再原地重撞�
 });
 
 describe('超时口径一致性检查', () => {
-  test('provider 超时超过 undici 默认值 → 报「被截断」', () => {
-    const issues = checkTimeoutCoherence({
-      idleTimeoutMs: 300_000,
-      providerTimeouts: { volc: 900 },
-    });
-    const codes = issues.map((i) => i.code);
-    expect(codes).toContain('provider_timeout_capped');
-    expect(issues.find((i) => i.code === 'provider_timeout_capped')?.message).toContain('900');
+  test('provider 总超时超过 absolute → 报「永远不会生效」', () => {
+    const issues = checkTimeoutCoherence({ absoluteTimeoutMs: 900_000, providerTimeouts: { p: 1800 } });
+    expect(issues.map((i) => i.code)).toContain('provider_timeout_exceeds_absolute');
+    expect(issues.find((i) => i.code === 'provider_timeout_exceeds_absolute')?.message).toContain('1800000');
   });
 
-  test('provider 超时大于引擎 watchdog → 报「引擎先断」', () => {
-    const issues = checkTimeoutCoherence({ idleTimeoutMs: 120_000, providerTimeouts: { p: 300 } });
-    expect(issues.map((i) => i.code)).toContain('provider_timeout_exceeds_engine');
-  });
-
-  test('idle 超过 undici 默认值 → 提示两者同级会先被 undici 断', () => {
-    const issues = checkTimeoutCoherence({ idleTimeoutMs: UNDICI_DEFAULT_TIMEOUT_MS + 1, providerTimeouts: {} });
-    expect(issues.map((i) => i.code)).toContain('idle_above_undici_default');
-  });
-
-  test('缺省 idle（=300s）不告警：否则每次默认启动都刷一条，告警会被忽略', () => {
-    const issues = checkTimeoutCoherence({ idleTimeoutMs: UNDICI_DEFAULT_TIMEOUT_MS, providerTimeouts: {} });
-    expect(issues.map((i) => i.code)).not.toContain('idle_above_undici_default');
+  test('默认组合零告警（反噪音：默认启动不得刷屏）', () => {
+    // 缺省 absolute=900s + provider 默认 60s / 正好 900s：均不得告警
+    const issues = checkTimeoutCoherence({ providerTimeouts: { p: 60, q: 900 } });
+    expect(issues).toEqual([]);
   });
 
   test('回退链最坏耗时超过 idle → 报最后一个候选拿不到机会', () => {
@@ -409,6 +396,7 @@ describe('超时口径一致性检查', () => {
   test('自洽配置不产生告警', () => {
     const issues = checkTimeoutCoherence({
       idleTimeoutMs: 240_000,
+      absoluteTimeoutMs: 900_000,
       providerTimeouts: { p: 60 },
       fallbackAttemptTtftMs: 90_000,
       maxFallbackChainLength: 2,

@@ -249,7 +249,8 @@ export async function* agentLoop(
       if (onError) {
         const action = await onError(classified);
         if (action === 'retry') {
-          yield { type: 'turn_end', hasToolCalls: false, phase: 'final', error: true, usage: lastResponseUsage, llmTiming };
+          // 失败调用没有 usage：不得把上一次成功调用的用量冒充本次（无假数据）
+          yield { type: 'turn_end', hasToolCalls: false, phase: 'final', error: true, usage: undefined, llmTiming };
           continue; // 重试当前迭代
         }
         // action === 'abort'

@@ -112,4 +112,10 @@ export interface Turn {
   durationMs: number;
   model: string;
   timestamp: number;
+  /**
+   * 本轮 LLM 调用失败（重试中止或彻底失败）。
+   * 失败轮的 `output.content` 是该次调用已流出的部分文本，不是完整回复——
+   * 不得按正常回复回放。缺省 = 正常完成。
+   */
+  error?: boolean;
 }

@@ -266,67 +266,71 @@ describe('wire dump — 落盘', () => {
 });
 
 describe('wire dump — 与真实 provider 的实际发送体同源', () => {
-  /** 拦 fetch，返回失败响应：body 已在抛错前发出，足够比对 */
-  function captureFetch(): { bodies: Array<Record<string, unknown>>; restore: () => void } {
+  /**
+   * 注入 provider transport 桩件（provider.fetch 是实例字段），返回失败响应：
+   * body 已在抛错前发出，足够比对
+   */
+  function captureFetch(): {
+    bodies: Array<Record<string, unknown>>;
+    install: (provider: unknown) => void;
+  } {
     const bodies: Array<Record<string, unknown>> = [];
-    const original = globalThis.fetch;
-    globalThis.fetch = (async (_input: unknown, init?: { body?: unknown }) => {
+    const stub = (async (_input: unknown, init?: { body?: unknown }) => {
       bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
       return new Response('boom', { status: 500 });
     }) as typeof fetch;
-    return { bodies, restore: () => (globalThis.fetch = original) };
+    return {
+      bodies,
+      install: (provider: unknown) => {
+        (provider as { fetch: unknown }).fetch = stub;
+      },
+    };
   }
 
   test('OpenAIProvider chat：实际发出 body 等于 wireBodyFor(chat)', async () => {
     const cap = captureFetch();
-    try {
-      const provider = new OpenAIProvider({
-        name: 'openai',
-        apiKey: 'k',
-        baseUrl: 'https://example.invalid/v1',
-        models: [{ name: 'm', maxOutputTokens: 100 }],
-        defaultModel: 'm',
-      });
-      const request: LLMRequest = {
-        messages: [
-          { role: 'system', content: 'sys' } as never,
-          { role: 'user', content: 'hi' } as never,
-        ],
-        tools: [
-          { type: 'function', function: { name: 'f', description: 'd', parameters: { type: 'object' } } },
-        ],
-        maxTokens: 500,
-      };
-      await expect(provider.chat(request)).rejects.toThrow();
-      expect(cap.bodies).toHaveLength(1);
-      expect(cap.bodies[0]).toEqual(provider.wireBodyFor(request, 'chat'));
-    } finally {
-      cap.restore();
-    }
+    const provider = new OpenAIProvider({
+      name: 'openai',
+      apiKey: 'k',
+      baseUrl: 'https://example.invalid/v1',
+      models: [{ name: 'm', maxOutputTokens: 100 }],
+      defaultModel: 'm',
+    });
+    cap.install(provider);
+    const request: LLMRequest = {
+      messages: [
+        { role: 'system', content: 'sys' } as never,
+        { role: 'user', content: 'hi' } as never,
+      ],
+      tools: [
+        { type: 'function', function: { name: 'f', description: 'd', parameters: { type: 'object' } } },
+      ],
+      maxTokens: 500,
+    };
+    await expect(provider.chat(request)).rejects.toThrow();
+    expect(cap.bodies).toHaveLength(1);
+    expect(cap.bodies[0]).toEqual(provider.wireBodyFor(request, 'chat'));
   });
 
   test('OpenAIProvider stream：stream/stream_options 与实际发送一致', async () => {
     const cap = captureFetch();
-    try {
-      const provider = new OpenAIProvider({
-        name: 'openai',
-        apiKey: 'k',
-        baseUrl: 'https://example.invalid/v1',
-        models: [{ name: 'm', maxOutputTokens: 100 }],
-        defaultModel: 'm',
-      });
-      const request: LLMRequest = { messages: [{ role: 'user', content: 'hi' } as never] };
-      await expect(async () => {
-        for await (const _chunk of provider.stream(request)) {
-          // 500 响应会立刻抛错；body 已捕获
-        }
-      }).rejects.toThrow();
-      expect(cap.bodies).toHaveLength(1);
-      expect(cap.bodies[0]).toEqual(provider.wireBodyFor(request, 'stream'));
-      expect(cap.bodies[0]).toMatchObject({ stream: true, stream_options: { include_usage: true } });
-    } finally {
-      cap.restore();
-    }
+    const provider = new OpenAIProvider({
+      name: 'openai',
+      apiKey: 'k',
+      baseUrl: 'https://example.invalid/v1',
+      models: [{ name: 'm', maxOutputTokens: 100 }],
+      defaultModel: 'm',
+    });
+    cap.install(provider);
+    const request: LLMRequest = { messages: [{ role: 'user', content: 'hi' } as never] };
+    await expect(async () => {
+      for await (const _chunk of provider.stream(request)) {
+        // 500 响应会立刻抛错；body 已捕获
+      }
+    }).rejects.toThrow();
+    expect(cap.bodies).toHaveLength(1);
+    expect(cap.bodies[0]).toEqual(provider.wireBodyFor(request, 'stream'));
+    expect(cap.bodies[0]).toMatchObject({ stream: true, stream_options: { include_usage: true } });
   });
 
   test('AnthropicProvider chat/stream：system 提升与 stream 开关与实际发送一致', async () => {
@@ -346,21 +350,18 @@ describe('wire dump — 与真实 provider 的实际发送体同源', () => {
 
     for (const mode of ['chat', 'stream'] as const) {
       const cap = captureFetch();
-      try {
-        if (mode === 'chat') {
-          await expect(provider.chat(request)).rejects.toThrow();
-        } else {
-          await expect(async () => {
-            for await (const _chunk of provider.stream(request)) {
-              // 500 响应会立刻抛错
-            }
-          }).rejects.toThrow();
-        }
-        expect(cap.bodies).toHaveLength(1);
-        expect(cap.bodies[0]).toEqual(provider.wireBodyFor(request, mode));
-      } finally {
-        cap.restore();
+      cap.install(provider);
+      if (mode === 'chat') {
+        await expect(provider.chat(request)).rejects.toThrow();
+      } else {
+        await expect(async () => {
+          for await (const _chunk of provider.stream(request)) {
+            // 500 响应会立刻抛错
+          }
+        }).rejects.toThrow();
       }
+      expect(cap.bodies).toHaveLength(1);
+      expect(cap.bodies[0]).toEqual(provider.wireBodyFor(request, mode));
     }
   });
 });
@@ -1013,8 +1014,14 @@ describe('anthropic provider — 流内保活统计', () => {
   }
 
   test('ping 不计入内容 chunk，断流后诊断随错误抛出', async () => {
-    const original = globalThis.fetch;
-    globalThis.fetch = (async () =>
+    const provider = new AnthropicProvider({
+      name: 'anthropic',
+      apiKey: 'k',
+      baseUrl: 'https://example.invalid',
+      models: [{ name: 'm', maxOutputTokens: 100 }],
+      defaultModel: 'm',
+    });
+    (provider as unknown as { fetch: unknown }).fetch = (async () =>
       sseThenError([
         'event: message_start\ndata: {"type":"message_start","message":{"id":"m"}}\n\n',
         'event: ping\ndata: {"type":"ping"}\n\n',
@@ -1022,64 +1029,47 @@ describe('anthropic provider — 流内保活统计', () => {
         'event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"text_delta","text":"he"}}\n\n',
       ])) as typeof fetch;
 
+    const seen: string[] = [];
+    let caught: unknown;
     try {
-      const provider = new AnthropicProvider({
-        name: 'anthropic',
-        apiKey: 'k',
-        baseUrl: 'https://example.invalid',
-        models: [{ name: 'm', maxOutputTokens: 100 }],
-        defaultModel: 'm',
-      });
-
-      const seen: string[] = [];
-      let caught: unknown;
-      try {
-        for await (const chunk of provider.stream({ messages: [{ role: 'user', content: 'hi' } as never] })) {
-          seen.push(chunk.type);
-        }
-      } catch (err) {
-        caught = err;
+      for await (const chunk of provider.stream({ messages: [{ role: 'user', content: 'hi' } as never] })) {
+        seen.push(chunk.type);
       }
-
-      expect(caught).toBeDefined();
-      expect(seen).toEqual(['content']);
-      const diag = readStreamDiag(caught);
-      expect(diag?.keepalives).toBe(2);
-      expect(diag?.contentChunks).toBe(1);
-      expect(diag?.sawEnd).toBe(false);
-      expect(diag?.bytes).toBeGreaterThan(0);
-    } finally {
-      globalThis.fetch = original;
+    } catch (err) {
+      caught = err;
     }
+
+    expect(caught).toBeDefined();
+    expect(seen).toEqual(['content']);
+    const diag = readStreamDiag(caught);
+    expect(diag?.keepalives).toBe(2);
+    expect(diag?.contentChunks).toBe(1);
+    expect(diag?.sawEnd).toBe(false);
+    expect(diag?.bytes).toBeGreaterThan(0);
   });
 
   test('非 2xx 响应把状态码交给诊断载体（不影响错误消息）', async () => {
-    const original = globalThis.fetch;
-    globalThis.fetch = (async () => new Response('overloaded', { status: 529 })) as typeof fetch;
+    const provider = new AnthropicProvider({
+      name: 'anthropic',
+      apiKey: 'k',
+      baseUrl: 'https://example.invalid',
+      models: [{ name: 'm', maxOutputTokens: 100 }],
+      defaultModel: 'm',
+    });
+    (provider as unknown as { fetch: unknown }).fetch = (async () =>
+      new Response('overloaded', { status: 529 })) as typeof fetch;
 
+    await expect(provider.chat({ messages: [{ role: 'user', content: 'hi' } as never] })).rejects.toThrow(
+      'Anthropic API error (529): overloaded',
+    );
+    // 同一次调用再取一次错误对象，确认状态码可读
+    let caught: unknown;
     try {
-      const provider = new AnthropicProvider({
-        name: 'anthropic',
-        apiKey: 'k',
-        baseUrl: 'https://example.invalid',
-        models: [{ name: 'm', maxOutputTokens: 100 }],
-        defaultModel: 'm',
-      });
-
-      await expect(provider.chat({ messages: [{ role: 'user', content: 'hi' } as never] })).rejects.toThrow(
-        'Anthropic API error (529): overloaded',
-      );
-      // 同一次调用再取一次错误对象，确认状态码可读
-      let caught: unknown;
-      try {
-        await provider.chat({ messages: [{ role: 'user', content: 'hi' } as never] });
-      } catch (err) {
-        caught = err;
-      }
-      expect(readHttpStatus(caught)).toBe(529);
-    } finally {
-      globalThis.fetch = original;
+      await provider.chat({ messages: [{ role: 'user', content: 'hi' } as never] });
+    } catch (err) {
+      caught = err;
     }
+    expect(readHttpStatus(caught)).toBe(529);
   });
 });
 

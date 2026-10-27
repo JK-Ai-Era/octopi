@@ -11,7 +11,7 @@
  * - Anthropic extended thinking emits `content_block_delta` / `thinking_delta`
  */
 
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { OpenAIProvider } from '@octopi-agent/engine/integration/providers/openai.js';
 import { AnthropicProvider } from '@octopi-agent/engine/integration/providers/anthropic.js';
 import type {
@@ -72,10 +72,6 @@ describe('OpenAIProvider reasoning delta passthrough', () => {
 });
 
 describe('AnthropicProvider thinking_delta passthrough', () => {
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
-
   function sseResponse(events: Record<string, unknown>[]): Response {
     const encoder = new TextEncoder();
     return new Response(
@@ -92,19 +88,17 @@ describe('AnthropicProvider thinking_delta passthrough', () => {
   }
 
   it('forwards thinking_delta as reasoning chunks, text as content', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async () =>
-        sseResponse([
-          { type: 'message_start', message: { usage: { input_tokens: 1, output_tokens: 1 } } },
-          { type: 'content_block_delta', delta: { type: 'thinking_delta', thinking: '推理中…' } },
-          { type: 'content_block_delta', delta: { type: 'text_delta', text: '最终答案' } },
-          { type: 'message_stop' },
-        ]),
-      ),
+    const provider = new AnthropicProvider({ apiKey: 'key', models: ['claude-sonnet-4-6'], timeoutMs: 60_000 });
+    // 注入 transport 桩件（provider 的 fetch 是实例字段）
+    (provider as unknown as { fetch: unknown }).fetch = vi.fn(async () =>
+      sseResponse([
+        { type: 'message_start', message: { usage: { input_tokens: 1, output_tokens: 1 } } },
+        { type: 'content_block_delta', delta: { type: 'thinking_delta', thinking: '推理中…' } },
+        { type: 'content_block_delta', delta: { type: 'text_delta', text: '最终答案' } },
+        { type: 'message_stop' },
+      ]),
     );
 
-    const provider = new AnthropicProvider({ apiKey: 'key', models: ['claude-sonnet-4-6'], timeoutMs: 60_000 });
     const chunks: LLMStreamChunk[] = [];
     for await (const chunk of provider.stream({
       messages: [{ role: 'user', content: 'hi' }] as LLMMessage[],

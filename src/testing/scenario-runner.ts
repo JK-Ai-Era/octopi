@@ -293,8 +293,14 @@ export class ScenarioRunner {
       if (event.type === 'tool.exec.start') {
         toolCalls.push(event.data?.toolName as string);
       }
-      if (event.type === 'turn.end' && event.data?.content && !finalContent) {
-        finalContent = event.data.content as string;
+      if (event.type === 'turn.end') {
+        const isError = (event.data as { error?: boolean } | undefined)?.error === true;
+        if (isError) {
+          // 失败尝试的部分流出不是回答：丢弃，下一次尝试从零累计（与 runner 按调用口径一致）
+          finalContent = '';
+        } else if (event.data?.content && !finalContent) {
+          finalContent = event.data.content as string;
+        }
       }
     }
 

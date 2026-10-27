@@ -2,30 +2,31 @@
  * 模型超时口径一致性检查
  *
  * 背景（2026-10-27 事故）：三个超时各自为政，配置写了 900s 却完全不生效——
- * - engine watchdog `modelCall.idleTimeoutMs`（默认 300s）只认内容 chunk
- * - provider `timeoutSeconds`（按任意字节重置，SSE ping 也算）
- * - undici fetch 默认 headersTimeout / bodyTimeout 各 300s，绕过上述两者直接掐断
+ * engine watchdog `modelCall.idleTimeoutMs`（默认 300s）只认内容 chunk、
+ * provider `timeoutSeconds`（按任意字节重置）、undici fetch 默认
+ * headersTimeout / bodyTimeout 各 300s 三者互相踩踏。
  *
- * 结果：chat 兜底请求实测 301s 失败，而配置里写的是 900s；用户与排查者都被误导。
- * 本模块把这些隐含关系显式化成启动期告警——只告警、不改变行为，也不擅自改配置。
+ * 其中 transport 层已修复（`fetch-timeout.ts`：provider 为 fetch 显式传入
+ * dispatcher，headers/body 超时对齐自身 `timeoutMs`）。本模块负责剩余的
+ * **配置口径**自检——只告警、不改变行为，也不擅自改配置。
+ *
+ * 口径原则：只对「写了也永远不会生效」的配置告警。provider 总超时与引擎的
+ * `absoluteTimeoutMs`（单次调用总上限）是同一量纲；`idleTimeoutMs` 是按内容
+ * chunk 重置的空闲窗口，与 provider 计时不可直接比较（谁更小谁先生效都属
+ * 正常设计），因此不在此制造互相矛盾的双向建议。默认配置绝不告警。
  *
  * @module integration/providers/timeout-coherence
  */
 
-import { DEFAULT_MODEL_CALL_IDLE_TIMEOUT_MS } from '@octopi-agent/core/loop/agent-loop.js';
-
-/**
- * undici（Node 内置 fetch）默认超时
- *
- * `headersTimeout` 与 `bodyTimeout` 默认均为 300s，且不受 provider 层
- * `timeoutSeconds` 影响。高于此值的 provider 超时在 Node 内置 fetch 下无效。
- */
-export const UNDICI_DEFAULT_TIMEOUT_MS = 300_000;
+import {
+  DEFAULT_MODEL_CALL_ABSOLUTE_TIMEOUT_MS,
+  DEFAULT_MODEL_CALL_IDLE_TIMEOUT_MS,
+} from '@octopi-agent/core/loop/agent-loop.js';
 
 /** 一条配置一致性问题 */
 export interface TimeoutCoherenceIssue {
   /** 稳定机器码，供测试与文档引用 */
-  code: 'provider_timeout_capped' | 'provider_timeout_exceeds_engine' | 'idle_above_undici_default' | 'fallback_chain_exceeds_idle';
+  code: 'provider_timeout_exceeds_absolute' | 'fallback_chain_exceeds_idle';
   message: string;
 }
 
@@ -33,6 +34,8 @@ export interface TimeoutCoherenceIssue {
 export interface TimeoutCoherenceInput {
   /** `modelCall.idleTimeoutMs`（未配置时用引擎默认） */
   idleTimeoutMs?: number;
+  /** `modelCall.absoluteTimeoutMs`（未配置时用引擎默认） */
+  absoluteTimeoutMs?: number;
   /** provider 名 → 其 `timeoutSeconds` */
   providerTimeouts: Record<string, number | undefined>;
   /** `modelCall.fallbackAttemptTtftMs` */
@@ -50,37 +53,22 @@ export interface TimeoutCoherenceInput {
 export function checkTimeoutCoherence(input: TimeoutCoherenceInput): TimeoutCoherenceIssue[] {
   const issues: TimeoutCoherenceIssue[] = [];
   const idle = input.idleTimeoutMs ?? DEFAULT_MODEL_CALL_IDLE_TIMEOUT_MS;
+  const absolute = input.absoluteTimeoutMs ?? DEFAULT_MODEL_CALL_ABSOLUTE_TIMEOUT_MS;
 
   for (const [name, timeoutSeconds] of Object.entries(input.providerTimeouts)) {
     if (timeoutSeconds === undefined) continue;
     const providerTimeoutMs = timeoutSeconds * 1000;
 
-    if (providerTimeoutMs > UNDICI_DEFAULT_TIMEOUT_MS) {
+    // 同量纲比较：provider 总超时 vs 引擎单次调用总上限。
+    // 超过 absolute 意味着该 provider 超时在模型调用上永远不会生效——写了也是死配置。
+    if (providerTimeoutMs > absolute) {
       issues.push({
-        code: 'provider_timeout_capped',
+        code: 'provider_timeout_exceeds_absolute',
         message:
-          `provider "${name}" timeoutSeconds=${timeoutSeconds} (${providerTimeoutMs}ms) 超过 Node 内置 fetch 的 300000ms 默认上限，` +
-          `实际会被截断为 300000ms；若期望更长的连接寿命请调低该值并显式配置 modelCall.idleTimeoutMs。`,
+          `provider "${name}" timeoutSeconds=${timeoutSeconds} (${providerTimeoutMs}ms) 大于 modelCall.absoluteTimeoutMs (${absolute}ms)，` +
+          `引擎会先达到单次调用总上限：该 provider 超时在模型调用上永远不会生效。`,
       });
     }
-
-    if (providerTimeoutMs > idle) {
-      issues.push({
-        code: 'provider_timeout_exceeds_engine',
-        message:
-          `provider "${name}" timeoutSeconds=${timeoutSeconds} (${providerTimeoutMs}ms) 大于 modelCall.idleTimeoutMs (${idle}ms)，` +
-          `引擎 watchdog 会先断开：该 provider 超时配置不会生效。`,
-      });
-    }
-  }
-
-  if (idle > UNDICI_DEFAULT_TIMEOUT_MS) {
-    issues.push({
-      code: 'idle_above_undici_default',
-      message:
-        `modelCall.idleTimeoutMs (${idle}ms) 不小于 Node 内置 fetch 的 300000ms 默认 bodyTimeout：` +
-        `两者同级，实测会是 undici 先断开且错误信息更含糊（如 "terminated"），建议设为 240000ms 以下。`,
-    });
   }
 
   const chainLength = input.maxFallbackChainLength ?? 0;
