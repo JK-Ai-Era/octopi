@@ -449,6 +449,11 @@ export class AgentRuntime {
     });
 
     try {
+      // loop 终态如实镜像到 RUN_ENDED / DispatchResult：LLM 彻底失败以
+      // engine.error 事件收尾（不 throw），不得记成 completed——否则事故在
+      // 监控与 dispatch 结果里隐身（10-27 事故同族问题）
+      let endReason: 'completed' | 'should_stop' | 'aborted' | 'error' | undefined;
+      let endError: string | undefined;
       for await (const event of agent.dispatcher.execute(request, controller.signal)) {
         // 所有 Trigger（含后台 signal）共用一个 run-event 出口；调用方的
         // onEvent 只承担该次 dispatch 的业务收尾，不再是后台 Run 的唯一可见通道。
@@ -461,6 +466,19 @@ export class AgentRuntime {
           sessionId,
           event,
         });
+        if (event.type === 'engine.end') {
+          const reason = (event.data as { reason?: string } | undefined)?.reason;
+          if (endReason !== 'error') {
+            // error 粘滞：合批（coalesce）里前一条 entry 失败、后一条成功时
+            // 不得被翻回 completed——任一 entry 失败即整体失败
+            endReason = reason === 'should_stop' || reason === 'aborted' ? reason : 'completed';
+          }
+        } else if (event.type === 'engine.error') {
+          endReason = 'error';
+          const rawError = (event.data as { error?: unknown } | undefined)?.error;
+          // 与 runner 同口径取 message（自定义 dispatcher 直传 Error 时不留 "Error: " 前缀）
+          endError = rawError instanceof Error ? rawError.message : String(rawError ?? 'Unknown error');
+        }
         try {
           onEvent?.(event);
         } catch {
@@ -468,7 +486,8 @@ export class AgentRuntime {
         }
       }
 
-      if (controller.signal.aborted) {
+      // error 优先于 aborted：失败与中止同刻到达时，失败不得在监控里消失
+      if (controller.signal.aborted && endReason !== 'error') {
         this.emitRuntime(RuntimeEvents.RUN_ENDED, {
           requestId: request.requestId,
           agentId: agent.agentId,
@@ -482,8 +501,12 @@ export class AgentRuntime {
         requestId: request.requestId,
         agentId: agent.agentId,
         sessionId,
-        reason: 'completed',
+        reason: endReason ?? 'completed',
+        ...(endError ? { error: endError } : {}),
       });
+      if (endReason === 'error') {
+        return { status: 'failed', error: endError ?? 'unknown' };
+      }
       return {
         status: 'ran',
         requestId: request.requestId,

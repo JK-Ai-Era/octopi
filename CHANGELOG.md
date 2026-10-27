@@ -105,6 +105,32 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.95.3 (2026-10-28)
+
+### fix(reliability): 运行终态如实化、wire 取证补齐、失败残句留存与小修包
+
+**问题**（v0.95.2 评审遗留 + 旧测试失败）：
+
+1. activation runtime 对 LLM 彻底失败无感知（失败以 `engine.error` 事件收尾、不 throw），`RUN_ENDED` 恒报 `completed`、`DispatchResult` 恒报 `ran`——事故在监控/指标里隐身；合批（coalesce）内前一条 entry 失败会被后一条成功翻回 completed。
+2. wire 诊断只有聚合计数，回答不了「被掐前 300s 里 wire 到底动没动」（v0.95.2 CHANGELOG 留存的 `streamBytes` 疑点）；anthropic 侧 SSE 注释行心跳不计 `keepalives`，与 openai 口径不对称。
+3. 失败残句 live 视图可见但重载即失；委派子 run 把失败残句当「已交付结果」、把布尔 `error` 当错误文本（`String(true)='true'` 占位并挡住 `engine.error` 真消息）；非 signal 的 aborted 被当成功。
+4. `turnsTotal` 把重试中的失败尝试计成 turn（与 `llmCalls` 倒挂）、失败空输出计成 empty response；temp-path 测试与实现 home 推导不同源，env（HOME）被清洗时 darwin 必挂。
+
+**修复**：
+
+- runtime 捕获 loop 终态镜像到 `RUN_ENDED`（`reason`: completed/should_stop/aborted/error + error 文本取 `.message`）；LLM 彻底失败返回 `DispatchResult {status:'failed'}`；error 粘滞（合批任一 entry 失败即整体 failed）且优先于 aborted。频道失败提示恢复无条件覆盖（pre_tools 中间话术/部分成功正文不得冒充最终回答）。
+- wire 诊断加 `firstBytesAt`/`lastBytesAt`（`recordWireBytes` 统一计数，`describeWireError` 透传落盘）；anthropic 注释行心跳 trim 后判定，与 openai 同口径。
+- 残句并入 `runStopped`/`llm_error` 凭证消息（`LLM_ERROR_PARTIAL_MAX_CHARS=2000` 展示截断，完整残句在 turn 账本），且只在最后一个 turn 是失败轮时取用（上一轮成功回复不再被标成残句）；委派失败单不出 `output`、错误文本只认 Error/string。
+- metrics 新增 `failedTurns`，`turnsTotal`/`emptyResponses` 只计非失败 turn；`ModelProvider` 增加可选 `dispose?()`，provider 实现之并由 `gateway.stop()` 统一收口（热更替换**不**立即关旧 dispatcher——守「在跑 run 用旧配置跑完」；推迟回收随 config 热应用退役协调落地）；temp-path 导出 `currentUserHome` 单一来源（空串 env 回落 `homedir()`），测试与实现同源并补显式 env fixture。
+
+**行为披露**：
+
+- `RUN_ENDED.reason` 不再恒为 `completed`（新增 `should_stop`/`aborted`/`error` 取值）；`DispatchResult` 失败路径新增 `status:'failed'` 返回。
+- `turnsTotal` 语义变更：只计完整结束的 turn，失败尝试改计 `failedTurns`。
+- `ModelProvider` 接口新增可选 `dispose?()`（向后兼容）。
+
+**验证**：全量 351/352 测试文件绿（1 skipped），含新增回归（合批 error 粘滞、成功回复不被标残句、失败子 run 不出 output、wire 时间戳透传与 openai 注释行同口径、temp-path env fixture）；eslint / tests typecheck / `arch/check-sync.sh` 清零。
+
 ## v0.95.2 (2026-10-28)
 
 ### fix(reliability): sync 兜底不再被 transport 300s 常量掐死；失败轮记账与凭证不再冒充正常回复

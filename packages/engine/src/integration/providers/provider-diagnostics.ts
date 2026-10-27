@@ -26,12 +26,16 @@ export const STREAM_DIAG = Symbol.for('@octopi-agent/engine.provider.streamDiag'
  * - `keepalives === 0`：上游既无内容也无心跳，更像连接已死
  */
 export interface ProviderStreamDiag {
-  /** SSE ping / keepalive 心跳数（不计入内容 chunk） */
+  /** SSE ping / keepalive 心跳数（不计入内容 chunk；SSE 注释行同口径计入） */
   keepalives: number;
   /** 已产出的内容 chunk 数（content / reasoning / tool_call） */
   contentChunks: number;
   /** 已读取的原始字节数 */
   bytes: number;
+  /** 首个 wire 字节到达时刻（epoch ms）：区分「首包前静默」与「中段断流」 */
+  firstBytesAt?: number;
+  /** 最后一个 wire 字节到达时刻（epoch ms）：回答「被掐前 wire 到底动没动」 */
+  lastBytesAt?: number;
   /** 是否读到协议终止（done / [DONE] / EOF） */
   sawEnd: boolean;
 }
@@ -39,6 +43,22 @@ export interface ProviderStreamDiag {
 /** 创建一个空诊断累加器（原地累加，异常路径读同一对象） */
 export function createStreamDiag(): ProviderStreamDiag {
   return { keepalives: 0, contentChunks: 0, bytes: 0, sawEnd: false };
+}
+
+/**
+ * 记录一次 wire 读取（字节数 + 首末字节时刻）
+ *
+ * 时间戳是失败取证的关键：聚合计数回答不了「静默的 300s 里 wire 动没动」——
+ * 10-27 事故就卡在这个问题上（streamBytes 与生成速率物理上不相容）。
+ *
+ * @param diag - 诊断累加器
+ * @param byteLength - 本次读取的字节数
+ */
+export function recordWireBytes(diag: ProviderStreamDiag, byteLength: number): void {
+  const now = Date.now();
+  if (diag.firstBytesAt === undefined) diag.firstBytesAt = now;
+  diag.lastBytesAt = now;
+  diag.bytes += byteLength;
 }
 
 /** 非对象无法挂载 Symbol（`throw 'string'` 一类），静默跳过 */

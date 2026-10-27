@@ -195,12 +195,16 @@ export class RunnerChildRunPort implements ChildRunPort {
               usage?: TokenUsage;
               error?: unknown;
             };
-            if (typeof data.content === 'string' && data.content.length > 0) {
+            // 失败尝试的 content 是中断残句，不是委派结果；error 布尔标记也不是错误文本
+            //（String(true)='true' 会占位并挡住后面 engine.error 的真消息）
+            const failed = Boolean(data.error);
+            if (!failed && typeof data.content === 'string' && data.content.length > 0) {
               output = data.content;
             }
             addUsage(usage, data.usage);
-            if (data.error != null && error == null) {
-              error = data.error instanceof Error ? data.error.message : String(data.error);
+            if (error == null) {
+              if (data.error instanceof Error) error = data.error.message;
+              else if (typeof data.error === 'string' && data.error.length > 0) error = data.error;
             }
             break;
           }
@@ -209,6 +213,13 @@ export class RunnerChildRunPort implements ChildRunPort {
             const message =
               data.error instanceof Error ? data.error.message : String(data.error ?? 'unknown error');
             error = message;
+            break;
+          }
+          case 'engine.end': {
+            // 非 signal.aborted 触发的 aborted（loop 检测到取消）也要如实归中止，
+            // 不得走 default 当成功
+            const data = event.data as { reason?: unknown };
+            if (data.reason === 'aborted') aborted = true;
             break;
           }
           default:
@@ -221,13 +232,15 @@ export class RunnerChildRunPort implements ChildRunPort {
 
     if (signal?.aborted) aborted = true;
 
+    const finalError = aborted ? (error ?? 'aborted') : error;
     return {
       childSessionId,
       childRunId,
-      output,
+      // 失败/中止不出 output：前一轮成功正文或残句不得冒充「已交付结果」
+      ...(finalError ? {} : { output }),
       ...(artifacts.length > 0 ? { artifacts } : {}),
       usage,
-      error: aborted ? (error ?? 'aborted') : error,
+      error: finalError,
       aborted,
     };
   }

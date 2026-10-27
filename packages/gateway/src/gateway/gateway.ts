@@ -1429,6 +1429,17 @@ export class Gateway {
       }
     }
 
+    // 释放 provider transport（keep-alive dispatcher 的连接池）；
+    // 经 Promise 桥接，dispose 的同步/异步异常都落进 catch，不阻断关闭
+    for (const provider of this.providers.values()) {
+      try {
+        await Promise.resolve().then(() => provider.dispose?.());
+      } catch {
+        // stop 路径 fail-open，不阻断关闭
+      }
+    }
+    this.providers.clear();
+
     await this.runtime.stop();
     await this.pluginManager.onGatewayStop();
     this.started = false;
@@ -1662,6 +1673,10 @@ export class Gateway {
   }
 
   registerProvider(provider: ModelProvider): void {
+    // 热更替换（arch/config-hot-reload.md L2）不在此收口旧 provider：在跑 run 仍要
+    // 用旧配置跑完（拍板），立即关 dispatcher 会让旧 run 的下一次模型调用伪失败；
+    // 推迟回收属 config 热应用的退役协调（对齐 disposeRetiredRunner 的 in-flight 计数），
+    // 进程级收口由 stop() 兜底。
     this.providers.set(provider.name, provider);
     console.log(`[Gateway] Registered provider: ${provider.name}`);
   }
@@ -4779,11 +4794,9 @@ export class Gateway {
               void this.sendLateChannelReply(msg, sessionKey, agent.id, finalContent);
             }
           }
-        } else if (event.type === 'engine.error') {
-          // 彻底失败：频道必须收到失败提示，而不是静默或残句冒充回答
-          const errText = String((event.data as { error?: unknown } | undefined)?.error ?? '未知错误');
-          finalContent = `⚠️ 模型调用失败：${errText}。可稍后重试。`;
         }
+        // 彻底失败的提示统一由下方 dispatchResult.status==='failed' 分支兜底：
+        // 抛异常路径的 engine.error 不进事件流（onEvent 看不到），在此设哨兵会漏
       },
     });
 
@@ -4795,6 +4808,8 @@ export class Gateway {
               .map((r) => `${r.agentId}:${r.result.status}`)
               .join(',');
       console.error(`[Gateway] Error processing message:`, err);
+      // 失败提示无条件覆盖正文：pre_tools 中间话术 / 部分成功正文都不得冒充最终回答
+      //（engine.error 路径经 P1 已返回 status='failed'，抛异常路径同样落此分支）
       finalContent = `[Gateway Error] ${err}`;
     } else if (dispatchResult.status === 'skipped') {
       console.warn(`[Gateway] Dispatch skipped: ${dispatchResult.reason}`);

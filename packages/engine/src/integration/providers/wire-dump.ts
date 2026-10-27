@@ -100,6 +100,10 @@ export interface WireCallErrorInfo {
   contentChunks?: number;
   /** 流内已读取字节数 */
   streamBytes?: number;
+  /** 首个 wire 字节到达时刻（epoch ms）：区分「首包前静默」与「中段断流」 */
+  firstBytesAt?: number;
+  /** 最后一个 wire 字节到达时刻（epoch ms）：回答「被掐前 wire 到底动没动」 */
+  lastBytesAt?: number;
   /** 是否读到协议终止（done / EOF） */
   sawEnd?: boolean;
   /** 回退链单节点预算耗尽时的预算值（毫秒）；存在即「节点只是慢」，非用户取消 */
@@ -212,6 +216,8 @@ export function describeWireError(err: unknown): WireCallErrorInfo {
     info.keepalives = diag.keepalives;
     info.contentChunks = diag.contentChunks;
     info.streamBytes = diag.bytes;
+    info.firstBytesAt = diag.firstBytesAt;
+    info.lastBytesAt = diag.lastBytesAt;
     info.sawEnd = diag.sawEnd;
   }
 

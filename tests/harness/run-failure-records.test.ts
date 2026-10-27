@@ -254,4 +254,44 @@ describe('失败轮记账不冒充正常回复', () => {
     expect(session.turns[1].error).toBe(true);
     expect(session.turns[1].usage).toBeUndefined();
   });
+
+  it('残句并入失败凭证消息：重载后残句可见，且标明非完整回复', async () => {
+    const session = await runAndLoad([
+      { type: 'llm_stream_delta', timestamp: 1, data: { delta: '一段还没写完的输出' } },
+      { type: 'turn_end', timestamp: 2, hasToolCalls: false, phase: 'final', error: true, usage: undefined },
+      { type: 'agent_end', timestamp: 3, reason: 'error', error: new Error('upstream timeout') },
+    ]);
+
+    const proof = session.messages.find((m) => m.metadata?.source === 'runStopped');
+    expect(proof?.content).toContain('一段还没写完的输出');
+    expect(proof?.content).toContain('中断前的部分输出');
+    expect(proof?.content).toContain('非完整回复');
+  });
+
+  it('残句附带按上限截断；turn 账本仍保完整残句', async () => {
+    const longPartial = 'x'.repeat(3000);
+    const session = await runAndLoad([
+      { type: 'llm_stream_delta', timestamp: 1, data: { delta: longPartial } },
+      { type: 'turn_end', timestamp: 2, hasToolCalls: false, phase: 'final', error: true, usage: undefined },
+      { type: 'agent_end', timestamp: 3, reason: 'error', error: new Error('upstream timeout') },
+    ]);
+
+    const proof = session.messages.find((m) => m.metadata?.source === 'runStopped');
+    expect(proof?.content).toContain('已截断');
+    expect(session.turns.find((t) => t.error)?.output.content).toBe(longPartial);
+  });
+
+  it('成功轮 + 零 delta 失败：上一轮完整回复不得被标成「中断前的部分输出」', async () => {
+    const session = await runAndLoad([
+      { type: 'llm_stream_delta', timestamp: 1, data: { delta: '上一轮的完整回复' } },
+      { type: 'assistant_message', timestamp: 2, message: { role: 'assistant', content: '上一轮的完整回复', timestamp: 2 } },
+      { type: 'turn_end', timestamp: 3, hasToolCalls: false, phase: 'final', usage: undefined },
+      // 第二次调用零 delta 直接 abort（不产 turn_end）→ lastTurnContent 停在成功轮
+      { type: 'agent_end', timestamp: 4, reason: 'error', error: new Error('connect ECONNREFUSED') },
+    ]);
+
+    const proof = session.messages.find((m) => m.metadata?.source === 'runStopped');
+    expect(proof?.content).toContain('connect ECONNREFUSED');
+    expect(proof?.content).not.toContain('中断前的部分输出');
+  });
 });

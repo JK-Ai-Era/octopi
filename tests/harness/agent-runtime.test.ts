@@ -295,6 +295,73 @@ describe('AgentRuntime', () => {
     await runtime.stop();
   });
 
+  it('LLM 彻底失败（engine.error 事件收尾）→ RUN_ENDED reason=error + DispatchResult failed', async () => {
+    const events: Array<{ type: string; data?: Record<string, unknown> }> = [];
+    const runtime = new AgentRuntime();
+    runtime.on((e) => events.push(e));
+    const d: RunDispatcher = {
+      async *execute() {
+        yield { type: 'engine.error', timestamp: Date.now(), data: { error: 'upstream boom' } } as AgentEvent;
+      },
+    };
+    runtime.registerAgent(agent('a1', d));
+    await runtime.start();
+    const r = await runtime.dispatch(trigger({ id: 't1', agentId: 'a1' }));
+
+    // 失败不得记成 completed：DispatchResult 与 RUN_ENDED 都要如实
+    expect(r.status).toBe('failed');
+    if (r.status === 'failed' && 'error' in r) expect(r.error).toBe('upstream boom');
+    const ended = events.find((e) => e.type === RuntimeEvents.RUN_ENDED);
+    expect(ended?.data?.reason).toBe('error');
+    expect(ended?.data?.error).toBe('upstream boom');
+    await runtime.stop();
+  });
+
+  it('should_stop 终态如实镜像到 RUN_ENDED（DispatchResult 仍为 ran）', async () => {
+    const events: Array<{ type: string; data?: Record<string, unknown> }> = [];
+    const runtime = new AgentRuntime();
+    runtime.on((e) => events.push(e));
+    const d: RunDispatcher = {
+      async *execute() {
+        yield {
+          type: 'engine.end',
+          timestamp: Date.now(),
+          data: { reason: 'should_stop' },
+        } as AgentEvent;
+      },
+    };
+    runtime.registerAgent(agent('a1', d));
+    await runtime.start();
+    const r = await runtime.dispatch(trigger({ id: 't1', agentId: 'a1' }));
+
+    expect(r.status).toBe('ran');
+    const ended = events.find((e) => e.type === RuntimeEvents.RUN_ENDED);
+    expect(ended?.data?.reason).toBe('should_stop');
+    await runtime.stop();
+  });
+
+  it('合批内前一条失败、后一条成功：error 粘滞，RUN_ENDED 不得翻回 completed', async () => {
+    const events: Array<{ type: string; data?: Record<string, unknown> }> = [];
+    const runtime = new AgentRuntime();
+    runtime.on((e) => events.push(e));
+    // 模拟 coalesce 合批：dispatcher 逐 entry 执行，多个终态事件同流
+    const d: RunDispatcher = {
+      async *execute() {
+        yield { type: 'engine.error', timestamp: Date.now(), data: { error: 'entry1 boom' } } as AgentEvent;
+        yield { type: 'engine.end', timestamp: Date.now(), data: { reason: 'completed' } } as AgentEvent;
+      },
+    };
+    runtime.registerAgent(agent('a1', d));
+    await runtime.start();
+    const r = await runtime.dispatch(trigger({ id: 't1', agentId: 'a1' }));
+
+    expect(r.status).toBe('failed');
+    const ended = events.find((e) => e.type === RuntimeEvents.RUN_ENDED);
+    expect(ended?.data?.reason).toBe('error');
+    expect(ended?.data?.error).toBe('entry1 boom');
+    await runtime.stop();
+  });
+
   it('emit RuntimeEvents', async () => {
     const events: string[] = [];
     const bus = new DefaultEventBus();

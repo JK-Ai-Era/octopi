@@ -904,6 +904,57 @@ describe('rightsCeiling plumbing', () => {
   });
 });
 
+// ── 失败子 run 不出 output（失败不得冒充「已交付结果」） ──
+
+describe('failed child run never delivers stale output', () => {
+  it('失败单不出 output；错误文本取 engine.error 的 message（布尔 error 不得变成 "true"）', async () => {
+    const fake = {
+      async *handle(_s: string, _i: unknown, _runConfig: unknown, _sig?: AbortSignal) {
+        yield {
+          type: 'turn.end',
+          timestamp: Date.now(),
+          agentId: 'w',
+          sessionId: 's',
+          data: { content: '上一轮的完整回复' },
+        } as never;
+        yield {
+          type: 'turn.end',
+          timestamp: Date.now(),
+          agentId: 'w',
+          sessionId: 's',
+          data: { content: '失败残句', error: true },
+        } as never;
+        yield {
+          type: 'engine.error',
+          timestamp: Date.now(),
+          agentId: 'w',
+          sessionId: 's',
+          data: { error: new Error('upstream boom') },
+        } as never;
+      },
+    };
+    const store = makeMemoryStore();
+    const port = new RunnerChildRunPort({ resolve: () => ({ runner: fake, store }) });
+
+    const exec = createChildRunExecutor(port, { persona: 'p' });
+    const result = await exec({
+      delegationId: 'del-fail',
+      from: { agentId: 'main', sessionId: 's', runId: 'r' },
+      to: { agentId: 'worker' },
+      childSessionId: 'cs-fail',
+      childRunId: 'cr-fail',
+      task: 't',
+      input: 'i',
+      context: 'clean',
+      schemaVersion: DELEGATION_SCHEMA_VERSION,
+    });
+
+    expect(result.status).toBe('failed');
+    expect(result.error).toBe('upstream boom');
+    expect((result as { output?: string }).output).toBeUndefined();
+  });
+});
+
 // ── 先验后挑：不可委派的候选不得让整次委派失败 ──
 //
 // 缺陷背景：`resolveTarget` 原先 `findByTrait(...)` 后只过滤 `callableBy`，

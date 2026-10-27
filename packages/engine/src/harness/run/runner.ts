@@ -189,6 +189,13 @@ export interface SessionAwareRunnerConfig {
   ) => void;
 }
 
+/**
+ * 失败凭证消息中附带残句的截断上限（显示用途；完整残句在带 error 标记的 turn 账本）
+ *
+ * 展示型截断，与 wire-dump 的消息截断同性质——不是部署可变参数，故不进配置。
+ */
+export const LLM_ERROR_PARTIAL_MAX_CHARS = 2000;
+
 const DEFAULT_CONFIG: SessionAwareRunnerConfig = {
   // idleExpiryMs 缺省关闭：上下文租约 opt-in，续聊默认带全量窗口
 };
@@ -2026,10 +2033,7 @@ export class SessionAwareRunner {
           streamedContent += loopEvent.data.delta;
         }
 
-        // 捕获 assistant 消息内容
-        if (loopEvent.type === 'assistant_message') {
-          adaptState.assistantContent = typeof loopEvent.message.content === 'string' ? loopEvent.message.content : '';
-        }
+        // assistantContent 由 adaptLoopEvent 在 assistant_message 事件上单一写入
 
         // turn_start：重置本轮增量游标（afterTurn 只传本轮消息）
         if (loopEvent.type === 'turn_start') {
@@ -2099,9 +2103,21 @@ export class SessionAwareRunner {
         // LLM 彻底失败同样是「无回复收尾」：必须留下可见凭证，
         // 否则重载会话后这次失败无影无踪（只剩一段被当成正常回复的部分文本）。
         const body = adaptState.errorMessage ?? '未知错误';
+        // 残句并入凭证消息（显示用途，截断）：live 视图里用户看到过的部分输出
+        // 重载后不再消失；完整残句仍以带 error 标记的 turn 账本为准。
+        // 最后一次尝试若以 turn_end(error) 收尾，partial 在 lastTurnContent；
+        // 若直接 abort（无 turn_end），partial 还挂在 callStreamedContent 上。
+        const danglingPartial = adaptState.callStreamedContent ?? '';
+        // 回退只在「最后一个 turn 是失败轮」时启用：最终 abort 不产 turn_end 时
+        // lastTurnContent 会停留在上一轮**成功**的正文上，直接用会把完整回复
+        // 冒充成「中断前的部分输出」
+        const finalPartial = danglingPartial || (adaptState.lastTurnError ? (adaptState.lastTurnContent ?? '') : '');
+        const partialNote = finalPartial
+          ? `\n\n---\n中断前的部分输出（非完整回复）：\n${finalPartial.slice(0, LLM_ERROR_PARTIAL_MAX_CHARS)}${finalPartial.length > LLM_ERROR_PARTIAL_MAX_CHARS ? '\n…（已截断，完整残句见 turn 账本）' : ''}`
+          : '';
         session.messages.push({
           role: 'user',
-          content: `模型调用失败：${body}。可继续对话让 agent 从当前状态接着做，或稍后重试。`,
+          content: `模型调用失败：${body}。可继续对话让 agent 从当前状态接着做，或稍后重试。${partialNote}`,
           timestamp: Date.now(),
           metadata: {
             source: 'runStopped',
@@ -2120,13 +2136,12 @@ export class SessionAwareRunner {
         };
         // 最后一次失败尝试的 partial 也留账：abort 路径不再产 turn_end，
         // 此处不记的话最后尝试的输出只剩前端 live 视图（重载即失）。
-        // !hasTurnEnd 的场景由下方「一致性修复」兜底，此处只补 hasTurnEnd 的缺口。
-        const finalPartial = adaptState.callStreamedContent ?? '';
-        if (hasTurnEnd && finalPartial) {
+        // 只补「无 turn_end」的缺口；turn_end(error) 路径已在账本里，不得重复记。
+        if (hasTurnEnd && danglingPartial) {
           session.turns.push({
             id: `turn_${Date.now()}`,
             inputCount: Math.max(0, session.messages.length - 1),
-            output: { role: 'assistant', content: finalPartial, timestamp: Date.now(), agentId: _agentId },
+            output: { role: 'assistant', content: danglingPartial, timestamp: Date.now(), agentId: _agentId },
             durationMs: 0,
             model: effectiveRunConfig.model ?? 'unknown',
             timestamp: Date.now(),

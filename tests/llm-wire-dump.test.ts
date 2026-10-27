@@ -10,6 +10,7 @@ import type {
 } from '@octopi-agent/core/interfaces/model-provider.js';
 import {
   createWireDumpSink,
+  describeWireError,
   withWireDump,
   wireUnitPayloads,
 } from '@octopi-agent/engine/integration/providers/wire-dump.js';
@@ -1026,6 +1027,7 @@ describe('anthropic provider — 流内保活统计', () => {
         'event: message_start\ndata: {"type":"message_start","message":{"id":"m"}}\n\n',
         'event: ping\ndata: {"type":"ping"}\n\n',
         'event: ping\ndata: {"type":"ping"}\n\n',
+        ': heartbeat\n\n',
         'event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"text_delta","text":"he"}}\n\n',
       ])) as typeof fetch;
 
@@ -1042,10 +1044,50 @@ describe('anthropic provider — 流内保活统计', () => {
     expect(caught).toBeDefined();
     expect(seen).toEqual(['content']);
     const diag = readStreamDiag(caught);
-    expect(diag?.keepalives).toBe(2);
+    // 2 个 ping 事件 + 1 个 SSE 注释行心跳（与 openai 侧同口径）
+    expect(diag?.keepalives).toBe(3);
     expect(diag?.contentChunks).toBe(1);
     expect(diag?.sawEnd).toBe(false);
     expect(diag?.bytes).toBeGreaterThan(0);
+    // 首末字节时刻：失败取证要能回答「被掐前 wire 到底动没动」
+    expect(typeof diag?.firstBytesAt).toBe('number');
+    expect(typeof diag?.lastBytesAt).toBe('number');
+    expect(diag!.lastBytesAt! >= diag!.firstBytesAt!).toBe(true);
+    // 落盘前的最后一跳（describeWireError）也要透传两时间戳
+    const dumpInfo = describeWireError(caught);
+    expect(typeof dumpInfo.firstBytesAt).toBe('number');
+    expect(typeof dumpInfo.lastBytesAt).toBe('number');
+  });
+
+  test('openai 侧 SSE 注释行同样计 keepalives（两侧同口径）', async () => {
+    const provider = new OpenAIProvider({
+      name: 'openai',
+      apiKey: 'k',
+      baseUrl: 'https://example.invalid/v1',
+      models: [{ name: 'm', maxOutputTokens: 100 }],
+      defaultModel: 'm',
+    });
+    (provider as unknown as { fetch: unknown }).fetch = (async () =>
+      sseThenError([
+        ': heartbeat\n\n',
+        'data: {"choices":[{"delta":{"content":"he"}}]}\n\n',
+      ])) as typeof fetch;
+
+    let caught: unknown;
+    try {
+      for await (const _chunk of provider.stream({ messages: [{ role: 'user', content: 'hi' } as never] })) {
+        // drain
+      }
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(caught).toBeDefined();
+    const diag = readStreamDiag(caught);
+    expect(diag?.keepalives).toBe(1);
+    expect(diag?.contentChunks).toBe(1);
+    expect(typeof diag?.firstBytesAt).toBe('number');
+    expect(typeof diag?.lastBytesAt).toBe('number');
   });
 
   test('非 2xx 响应把状态码交给诊断载体（不影响错误消息）', async () => {

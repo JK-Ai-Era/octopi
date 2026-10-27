@@ -76,6 +76,19 @@ export function startsWithPathPrefix(path: string, prefix: string): boolean {
 }
 
 /**
+ * 当前用户 home（用户目录推导的单一来源）
+ *
+ * 实现与测试共用，防两侧推导漂移：env 被清洗（HOME 缺失）时实现落 `homedir()`、
+ * 测试若走 `?? ''` 就会分叉（曾在 darwin 上把测试打挂）。
+ *
+ * @returns 用户 home 目录（原始分隔符风格）
+ */
+export function currentUserHome(): string {
+  // `||` 而非 `??`：HOME 为空串时视为未设置，回落 homedir()（旧实现同语义）
+  return process.env.USERPROFILE || process.env.HOME || homedir();
+}
+
+/**
  * 临时目录前缀清单
  *
  * 必须在 PROTECTED 之前匹配：`C:\Windows\Temp` 虽在 `C:\Windows\` 下，
@@ -105,8 +118,7 @@ export function getTempPrefixes(): string[] {
     prefixes.push(ensureTrailingSep(systemRoot) + 'Temp\\');
   }
   // 用户 AppData Temp（无 TEMP 环境变量时的静态路径）
-  const userProfile = process.env.USERPROFILE ?? process.env.HOME;
-  const home = userProfile ? userProfile.replace(/\//g, '\\') : homedir().replace(/\//g, '\\');
+  const home = currentUserHome().replace(/\//g, '\\');
   if (home) {
     const base = home.endsWith('\\') ? home : home + '\\';
     prefixes.push(base + 'AppData\\Local\\Temp\\');

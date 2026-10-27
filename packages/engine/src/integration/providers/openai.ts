@@ -25,7 +25,12 @@ import type {
 } from '@octopi-agent/core/interfaces/model-provider.js';
 import type { ToolCall, ModelInfo, TokenUsage } from '@octopi-agent/core/types.js';
 import { tokenUsageFromOpenAi } from './usage.js';
-import { attachHttpStatus, attachStreamDiag, createStreamDiag } from './provider-diagnostics.js';
+import {
+  attachHttpStatus,
+  attachStreamDiag,
+  createStreamDiag,
+  recordWireBytes,
+} from './provider-diagnostics.js';
 import { createTimeoutDispatcher, providerFetch } from './fetch-timeout.js';
 
 /**
@@ -236,7 +241,7 @@ export class OpenAIProvider implements ModelProvider {
         break;
       }
       resetIdleTimer();
-      diag.bytes += value.byteLength;
+      recordWireBytes(diag, value.byteLength);
 
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split('\n');
@@ -300,6 +305,16 @@ export class OpenAIProvider implements ModelProvider {
   }
 
   // ================================================================
+
+  /**
+   * 释放 transport 资源（keep-alive dispatcher 的连接池）
+   *
+   * 热更替换（gateway.registerProvider）或宿主显式收口时调用；重复调用安全。
+   */
+  async dispose(): Promise<void> {
+    await this.dispatcher.close();
+  }
+
   // 内部方法
   // ================================================================
 

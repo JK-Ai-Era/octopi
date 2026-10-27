@@ -95,6 +95,8 @@ export interface MetricsSnapshot {
   sessionsActive: number;
   /** 总 turn 数 */
   turnsTotal: number;
+  /** 以失败告终的 turn 数（turn.end 带 error；含重试中失败尝试，失败不再是指标盲区） */
+  failedTurns: number;
   /** 空回复数 */
   emptyResponses: number;
   /** 重试次数 */
@@ -144,6 +146,7 @@ export class MetricsAggregator {
   // Session 指标
   private _sessionsActive = new Set<string>();
   private _turnsTotal = 0;
+  private _failedTurns = 0;
   private _emptyResponses = 0;
   private _retriesTotal = 0;
 
@@ -219,15 +222,21 @@ export class MetricsAggregator {
       }
 
       // ── Turn ──
-      case 'turn.start':
-        this._turnsTotal++;
-        break;
-
-      case 'turn.end':
-        if (!event.data?.content || (event.data.content as string).length === 0) {
-          this._emptyResponses++;
+      // 只计完整结束的 turn：重试中失败尝试的 turn_end(error) 不是用户语义上的轮次，
+      // 否则 turnsTotal 会把失败尝试计成 turn、与 llmCalls 倒挂；失败调用的空输出
+      // 也不是「空响应」。
+      case 'turn.end': {
+        const failed = Boolean((event.data as { error?: unknown } | undefined)?.error);
+        if (!failed) {
+          this._turnsTotal++;
+          if (!event.data?.content || (event.data.content as string).length === 0) {
+            this._emptyResponses++;
+          }
+        } else {
+          this._failedTurns++;
         }
         break;
+      }
 
       // ── 重试 ──
       case 'retry':
@@ -269,6 +278,7 @@ export class MetricsAggregator {
 
       sessionsActive: this._sessionsActive.size,
       turnsTotal: this._turnsTotal,
+      failedTurns: this._failedTurns,
       emptyResponses: this._emptyResponses,
       retriesTotal: this._retriesTotal,
 
@@ -298,6 +308,7 @@ export class MetricsAggregator {
     this._toolErrors.clear();
     this._sessionsActive.clear();
     this._turnsTotal = 0;
+    this._failedTurns = 0;
     this._emptyResponses = 0;
     this._retriesTotal = 0;
     this._snapshots = [];
@@ -324,7 +335,7 @@ export function formatMetricsSnapshot(snap: MetricsSnapshot): string {
   lines.push(`${'─'.repeat(50)}`);
   lines.push(`Uptime:         ${(snap.uptimeMs / 1000).toFixed(0)}s`);
   lines.push(`Sessions:       ${snap.sessionsActive} active`);
-  lines.push(`Turns:          ${snap.turnsTotal}`);
+  lines.push(`Turns:          ${snap.turnsTotal} (${snap.failedTurns} failed)`);
   lines.push(`Empty replies:  ${snap.emptyResponses}`);
   lines.push(`Retries:        ${snap.retriesTotal}`);
   lines.push('');

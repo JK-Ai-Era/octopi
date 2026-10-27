@@ -146,4 +146,10 @@ export interface ModelProvider {
    * 用于模型选择 UI、能力发现等场景。
    */
   getModelInfos(): ModelInfo[];
+
+  /**
+   * 释放 transport 资源（可选）：热更退役或宿主停机时收口连接池等底层资源。
+   * 实现必须重复调用安全；未实现的 provider 视为无可释放资源。
+   */
+  dispose?(): void | Promise<void>;
 }

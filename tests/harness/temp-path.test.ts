@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { DefaultEventBus } from '@octopi-agent/core/primitives/event-bus.js';
 import {
+  currentUserHome,
   isTempPath,
   resetTempPathCache,
 } from '@octopi-agent/engine/harness/governance/security/temp-path.js';
@@ -33,8 +34,8 @@ describe('isTempPath — 临时目录分类（单一来源）', () => {
   it('Windows 临时区（大小写不敏感、分隔符归一）', () => {
     expect(isTempPath('C:\\Windows\\Temp\\x')).toBe(true);
     expect(isTempPath('c:/windows/temp/x')).toBe(true);
-    // AppData 静态回退覆盖「当前用户」（USERPROFILE/HOME 推导，与原实现语义一致）
-    const home = (process.env.USERPROFILE ?? process.env.HOME ?? '').replace(/\//g, '\\');
+    // AppData 静态回退覆盖「当前用户」（与实现共用 currentUserHome 单一来源）
+    const home = currentUserHome().replace(/\//g, '\\');
     expect(isTempPath(`${home}\\AppData\\Local\\Temp\\x`)).toBe(true);
     expect(isTempPath('C:\\Windows\\System32\\x')).toBe(false);
     expect(isTempPath('C:\\Program Files\\x')).toBe(false);
@@ -43,6 +44,24 @@ describe('isTempPath — 临时目录分类（单一来源）', () => {
   it('os.tmpdir() 生效值即临时（macOS TMPDIR=/var/folders/…）', () => {
     expect(isTempPath(join(tmpdir(), 'x'))).toBe(true);
     resetTempPathCache();
+  });
+
+  it('env fixture：USERPROFILE 显式设定的语义（不依赖测试宿主的环境）', () => {
+    const prevUP = process.env.USERPROFILE;
+    const prevHome = process.env.HOME;
+    try {
+      process.env.USERPROFILE = 'C:\\Users\\fixture';
+      delete process.env.HOME;
+      resetTempPathCache();
+      expect(isTempPath('C:\\Users\\fixture\\AppData\\Local\\Temp\\x')).toBe(true);
+      expect(isTempPath('C:\\Users\\fixture\\Documents\\x')).toBe(false);
+    } finally {
+      if (prevUP === undefined) delete process.env.USERPROFILE;
+      else process.env.USERPROFILE = prevUP;
+      if (prevHome === undefined) delete process.env.HOME;
+      else process.env.HOME = prevHome;
+      resetTempPathCache();
+    }
   });
 });
 
