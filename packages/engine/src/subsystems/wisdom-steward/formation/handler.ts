@@ -198,7 +198,7 @@ async function handler(
     const res = await llmPort.chat({
       systemPrompt: systemPrompt || undefined,
       messages: [{ role: 'user', content: `${pack.text}${conceptHint}` }],
-      temperature: 0.3,
+      // 温度留空：由模型配置（ModelInfo.temperature）或服务端默认决定
       maxTokens: 2048,
     });
     if (res.finishReason === 'error') {

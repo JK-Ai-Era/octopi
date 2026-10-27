@@ -276,7 +276,7 @@ async function handler(input: SubsystemInput, deps?: InjectedDependencies): Prom
         role: 'user',
         content: `## Session evidence (session=${sessionId})\n${sessionText}\n\nExtract long-term memory propositions. Output strict JSON array only.`,
       }],
-      temperature: 0.2,
+      // 温度留空：由模型配置（ModelInfo.temperature）或服务端默认决定
       maxTokens: 2048,
     });
     if (res.finishReason === 'error') {

@@ -476,10 +476,10 @@ ${summaryText}${taskLine}${recoveryLine}${signalsLine}
 只回复一个词（OK/CONCERN/STOP），如果需要可以加冒号说明原因。`;
 
     try {
+      // 不指定温度：由模型配置（ModelInfo.temperature）或服务端默认决定
       const response = await this.model.chat({
         messages: [{ role: 'user', content: prompt }],
         model: this.config.llmModel || undefined,
-        temperature: 0,
       });
 
       const text = response.content.trim().toUpperCase();

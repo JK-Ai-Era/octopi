@@ -76,11 +76,12 @@ export class AnthropicProvider implements ModelProvider {
         this.models.push(entry);
       } else {
         this.models.push(entry.name);
-        if (entry.contextWindow != null || entry.maxOutputTokens != null) {
+        if (entry.contextWindow != null || entry.maxOutputTokens != null || entry.temperature != null) {
           this.modelInfoMap.set(entry.name, {
             name: entry.name,
             contextWindow: entry.contextWindow,
             maxOutputTokens: entry.maxOutputTokens,
+            temperature: entry.temperature,
           });
         }
       }
@@ -337,7 +338,7 @@ export class AnthropicProvider implements ModelProvider {
     const nonSystemMessages = request.messages.filter((m) => m.role !== 'system');
     const systemPrompt = systemMessages.map((m) => String(m.content ?? '')).join('\n\n');
 
-    const messages = nonSystemMessages.map((m) => this.toAnthropicMessage(m as any));
+    const messages = this.toAnthropicMessages(nonSystemMessages);
     const tools = request.tools?.map((t) => this.toAnthropicTool(t as any));
 
     // max_tokens: 请求值与模型能力取较小值，默认从 ModelInfo 取
@@ -359,12 +360,51 @@ export class AnthropicProvider implements ModelProvider {
     }
     if (request.temperature !== undefined) {
       anthropicRequest.temperature = request.temperature;
+    } else if (modelInfo?.temperature !== undefined) {
+      // 请求未指定时采用模型级配置；两者都未配置则不发送该参数（交给服务端默认）
+      anthropicRequest.temperature = modelInfo.temperature;
     }
     if (tools && tools.length > 0) {
       anthropicRequest.tools = tools;
     }
 
     return anthropicRequest;
+  }
+
+  /**
+   * 将消息列表转换为 Anthropic 消息列表（含 tool_result 聚合）
+   *
+   * Anthropic 协议要求：一个 assistant 回合发出的全部 `tool_use`，其 `tool_result`
+   * 必须位于**紧随其后的同一条 user 消息**内。引擎里并行工具调用的结果是一条 tool
+   * 消息携带多个 `toolResults`，而历史中相邻的 tool 消息也可能出现；逐条转换会产出
+   * 多条连续 user 消息，导致前面的 tool_use 无配对结果而被拒（火山等严格端点只回
+   * 通用 InvalidParameter，不指出 param）。
+   *
+   * @param messages - 非 system 消息列表
+   * @returns Anthropic 消息列表（连续 tool 消息已聚合为一条 user 消息）
+   */
+  private toAnthropicMessages(messages: LLMRequest['messages']): Record<string, unknown>[] {
+    const result: Record<string, unknown>[] = [];
+
+    for (let i = 0; i < messages.length; i++) {
+      const msg = messages[i] as unknown as Record<string, unknown>;
+      if (msg.role !== 'tool') {
+        result.push(this.toAnthropicMessage(msg));
+        continue;
+      }
+
+      // 连续 tool 消息合并：各条转换结果的内容块拼进同一条 user 消息
+      const blocks: unknown[] = [];
+      while (i < messages.length && (messages[i] as unknown as Record<string, unknown>).role === 'tool') {
+        const converted = this.toAnthropicMessage(messages[i] as unknown as Record<string, unknown>);
+        blocks.push(...(converted.content as unknown[]));
+        i++;
+      }
+      i--;
+      result.push({ role: 'user', content: blocks });
+    }
+
+    return result;
   }
 
   /**

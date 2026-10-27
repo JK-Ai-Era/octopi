@@ -78,11 +78,12 @@ export class OpenAIProvider implements ModelProvider {
         this.models.push(entry);
       } else {
         this.models.push(entry.name);
-        if (entry.contextWindow != null || entry.maxOutputTokens != null) {
+        if (entry.contextWindow != null || entry.maxOutputTokens != null || entry.temperature != null) {
           this.modelInfoMap.set(entry.name, {
             name: entry.name,
             contextWindow: entry.contextWindow,
             maxOutputTokens: entry.maxOutputTokens,
+            temperature: entry.temperature,
           });
         }
       }
@@ -296,11 +297,14 @@ export class OpenAIProvider implements ModelProvider {
       messages: this.flattenMessages(request.messages).map((msg) => this.sanitizeMessage(msg)),
     };
 
-    if (request.temperature !== undefined) {
-      body.temperature = request.temperature;
-    }
     // maxTokens: 请求值与模型能力取较小值
     const modelInfo = this.modelInfoMap.get(body.model as string);
+    if (request.temperature !== undefined) {
+      body.temperature = request.temperature;
+    } else if (modelInfo?.temperature !== undefined) {
+      // 请求未指定时采用模型级配置；两者都未配置则不发送该参数（交给服务端默认）
+      body.temperature = modelInfo.temperature;
+    }
     const cap = modelInfo?.maxOutputTokens;
     if (request.maxTokens !== undefined) {
       body.max_tokens = cap ? Math.min(request.maxTokens, cap) : request.maxTokens;

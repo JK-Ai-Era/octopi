@@ -744,6 +744,8 @@ export interface ModelCapability {
   contextWindow?: number;
   /** 最大输出 token 数 */
   maxTokens?: number;
+  /** 模型级采样温度：请求未显式指定时由 provider 采用；未配置则不发送 */
+  temperature?: number;
 }
 
 
@@ -1390,7 +1392,7 @@ export async function createProviderFromConfig(
   options?: { wireDump?: import('./integration/providers/wire-dump.js').WireDumpSink },
 ): Promise<ModelProvider> {
   const apiType = pc.api === 'anthropic-messages' ? 'anthropic' : 'openai';
-  const models = pc.models.map(m => ({ name: m.name ?? m.id, contextWindow: m.contextWindow, maxOutputTokens: m.maxTokens }));
+  const models = pc.models.map(m => ({ name: m.name ?? m.id, contextWindow: m.contextWindow, maxOutputTokens: m.maxTokens, temperature: m.temperature }));
   const defaultModel = pc.models[0]?.name ?? pc.models[0]?.id;
 
   let decorate: (inner: ModelProvider) => ModelProvider = (inner) => inner;

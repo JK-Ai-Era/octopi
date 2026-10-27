@@ -119,7 +119,8 @@ export async function executeSummary(params: ExecuteSummaryParams): Promise<Summ
     const res = await provider.chat({
       messages,
       model,
-      temperature: policy.temperature ?? 0.2,
+      // 未显式配置即不发送：由模型配置（ModelInfo.temperature）或服务端默认决定
+      temperature: policy.temperature,
       maxTokens: maxOut,
       signal: params.signal,
     });

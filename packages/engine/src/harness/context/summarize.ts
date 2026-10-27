@@ -31,7 +31,8 @@ export function createProviderSummarize(
     const response = await provider.chat({
       messages,
       model: options?.model,
-      temperature: options?.temperature ?? 0.3,
+      // 未显式配置即不发送：由模型配置（ModelInfo.temperature）或服务端默认决定
+      temperature: options?.temperature,
       maxTokens: opts?.maxTokens,
     });
     return response.content;

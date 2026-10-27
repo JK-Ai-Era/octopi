@@ -37,13 +37,13 @@ export class LLMReflector implements Reflector {
   private _model: ModelProvider;
   private _modelName?: string;
   private _memoryStore?: MemoryStore;
-  private _temperature: number;
+  private _temperature?: number;
 
   constructor(config: LLMReflectorConfig) {
     this._model = config.model;
     this._modelName = config.modelName;
     this._memoryStore = config.memoryStore;
-    this._temperature = config.temperature ?? 0.3;
+    this._temperature = config.temperature;
   }
 
   /**

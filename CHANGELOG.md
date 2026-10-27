@@ -102,6 +102,16 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 | v0.2 | [changelog/v0.2.md](./changelog/v0.2.md) |
 | v0.1 | [changelog/v0.1.md](./changelog/v0.1.md) |
 
+---
+
+## v0.94.5 (2026-10-27)
+
+### fix(providers): Anthropic 协议聚合并行工具结果 + 温度改由模型配置决定
+
+- **病灶（A）**：`AnthropicProvider` 把每条 tool 消息各转成一条 `user` 消息，并行工具调用（一个 assistant 回合多个 `tool_use`）的历史因此变成 5 条连续 `user`——只有第一条 `tool_result` 紧邻 assistant，其余 `tool_use` 无配对结果，违反 Messages 协议。火山 coding plan 只回通用 `InvalidParameter`（`param` 为空），anthropic.com 才明确报「tool_use ids found without tool_result」。修复：新增 `toAnthropicMessages`，连续 tool 消息聚合为单条 `user`（多个 `tool_result` block），非 tool 的相邻 user 消息不合并。
+- **病灶（B）**：子系统与辅助调用写死温度默认值（summary 0.2、summarize 0.3、reflector 0.3、run-guard 0、attachments 0、cognition/memory/wisdom 0.2–0.3），遇到只接受特定温度的模型直接 400（火山 `kimi-k3.1-pro` 仅接受 `temperature` 0 或 1）。修复：这些调用点不再传温度；`ModelInfo.temperature` 新增并贯通 `ModelCapability` → `createProviderFromConfig` → 两个 provider，请求未显式指定时采用模型级配置，都未配置则不发送（交服务端默认）。
+- **配置**：`models.providers[].models[].temperature`（0–2）进入 schema 与运行时类型；此前该字段既不在 schema 也不被映射，属「写了也不生效」的死配置。
+- **验证**：`lint` 清零；全量测试通过；真实失败会话的 wire dump 回放——修复前 5 条 user 消息 → 400 通用 InvalidParameter，修复后 `user → assistant → user`（5 个 `tool_result` block）→ 200；模型级 `temperature: 1` 落盘为 `temperature=1` → 200。
 
 ---
 

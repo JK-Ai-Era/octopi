@@ -56,7 +56,8 @@ export function createLlmIntentResolver(
         { role: 'system', content: INTENT_SYSTEM },
         { role: 'user', content: lines.join('\n') },
       ],
-      temperature: opts?.temperature ?? 0,
+      // 未显式配置即不发送：由模型配置（ModelInfo.temperature）或服务端默认决定
+      temperature: opts?.temperature,
       maxTokens: opts?.maxTokens ?? 300,
     });
 

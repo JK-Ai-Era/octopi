@@ -67,6 +67,72 @@ describe('AnthropicProvider', () => {
     expect(converted.content[2].is_error).toBe(true);
     expect(String(converted.content[2].content)).toContain('error');
   });
+
+  test('并行工具调用的多条 tool 消息聚合为单条 user 消息', () => {
+    const p = new AnthropicProvider({ apiKey: 'key' });
+    const body = p['toAnthropicRequest']({
+      model: 'claude-sonnet-4-6',
+      messages: [
+        { role: 'user', content: 'run two tools' },
+        {
+          role: 'assistant',
+          content: '',
+          tool_calls: [
+            { id: 'c1', type: 'function', function: { name: 'shell', arguments: '{}' } },
+            { id: 'c2', type: 'function', function: { name: 'file_read', arguments: '{}' } },
+          ],
+        },
+        { role: 'tool', toolResults: [{ toolCallId: 'c1', name: 'shell', result: 'r1' }] },
+        { role: 'tool', toolResults: [{ toolCallId: 'c2', name: 'file_read', result: 'r2' }] },
+      ],
+    }) as { messages: Array<{ role: string; content: unknown }> };
+
+    // user → assistant(tool_use ×2) → user(tool_result ×2)：连续 tool 消息不得拆成多条 user
+    expect(body.messages).toHaveLength(3);
+    expect(body.messages[2].role).toBe('user');
+    const blocks = body.messages[2].content as Array<Record<string, unknown>>;
+    expect(blocks).toHaveLength(2);
+    expect(blocks.map((b) => b.tool_use_id)).toEqual(['c1', 'c2']);
+  });
+
+  test('非 tool 的相邻 user 消息不被合并', () => {
+    const p = new AnthropicProvider({ apiKey: 'key' });
+    const body = p['toAnthropicRequest']({
+      model: 'claude-sonnet-4-6',
+      messages: [
+        { role: 'user', content: 'first' },
+        { role: 'user', content: 'second' },
+      ],
+    }) as { messages: Array<{ role: string; content: unknown }> };
+
+    expect(body.messages).toHaveLength(2);
+    expect(body.messages[0].content).toBe('first');
+    expect(body.messages[1].content).toBe('second');
+  });
+
+  test('模型级 temperature 在请求未指定时生效，请求级优先', () => {
+    const p = new AnthropicProvider({
+      apiKey: 'key',
+      models: [{ name: 'kimi-k3.1-pro', temperature: 1 }],
+    });
+    const messages = [{ role: 'user' as const, content: 'hi' }];
+
+    const fallback = p['toAnthropicRequest']({ model: 'kimi-k3.1-pro', messages }) as { temperature?: number };
+    expect(fallback.temperature).toBe(1);
+
+    const explicit = p['toAnthropicRequest']({ model: 'kimi-k3.1-pro', messages, temperature: 0 }) as { temperature?: number };
+    expect(explicit.temperature).toBe(0);
+  });
+
+  test('未配置 temperature 时不发送该参数', () => {
+    const p = new AnthropicProvider({ apiKey: 'key', models: ['claude-sonnet-4-6'] });
+    const body = p['toAnthropicRequest']({
+      model: 'claude-sonnet-4-6',
+      messages: [{ role: 'user', content: 'hi' }],
+    }) as Record<string, unknown>;
+
+    expect('temperature' in body).toBe(false);
+  });
 });
 
 describe('Provider 协议差异对比', () => {

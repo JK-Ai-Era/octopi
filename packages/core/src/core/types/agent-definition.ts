@@ -10,6 +10,8 @@ export interface ModelInfo {
   name: string;
   contextWindow?: number;
   maxOutputTokens?: number;
+  /** 模型级采样温度：请求未显式指定时由 provider 采用；未配置则不发送该参数 */
+  temperature?: number;
 }
 
 /** 工具策略 */

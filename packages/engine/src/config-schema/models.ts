@@ -15,6 +15,8 @@ const ModelCapabilitySchema = z.object({
   input: z.array(ModelInputTypeSchema).optional(),
   contextWindow: z.number().positive().optional(),
   maxTokens: z.number().positive().optional(),
+  /** 模型级采样温度：子系统与辅助调用未显式指定时采用；未配置则不发送 */
+  temperature: z.number().min(0).max(2).optional(),
 });
 
 const ModelProviderConfigSchema = z.object({
