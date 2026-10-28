@@ -105,6 +105,33 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.96.0 (2026-10-28)
+
+### feat(context): 交接式摘要——同形前缀 + 输出闸门 + 诚实失败语义
+
+- **定位改「会话交接」**（拍板：中段摘要的本质是把之前会话做的事说清楚、交接给后续对话，而非中段压缩编码）。摘要产出四段式交接书：①goal+状态 ②未决项与承诺 ③结论与拍板(含理由) ④证据指针。
+- **摘要请求 = 会话同形前缀 + 尾部交接指令**：llmPrefix 的 system 字节取自会话托管 system 消息（与真实请求逐字同源，缓存命中前提）；走**当前会话模型**（gateway 显式绑定 `bound.modelName`，缓存 per provider+model）；**无便宜档回落**（小模型窗口吃不下输入=换一种失控）。task 快照随指令尾部注入（B0：易变块不进 system）；指令含折叠区间边界（替换到第几条、尾部保留勿总结）。
+- **输出闸门**：对话体/工具调用形状 + 结构性回声判据（命中输入行 ≥3 或复读占输出 ≥60%，回声源=模型实际看到的文本投影）判污染 → 加严指令重试一次 → 仍污染按摘要失败降级，**坏摘要不落盘**（修根此前「摘要=原文续写」的事故形态）。
+- **失败语义（fresh 判定）**：无新语义摘要时不推进覆盖点/增长门/冷却（宁可胖不丢），`compacted:false` + `reason:summarize_failed:*` 如实透传；`[Coverage]` 覆盖行改装配时按覆盖点动态渲染，不再烘进摘要正文（不累积、不回喂）。
+- **窗口护栏**：摘要硬顶 = min(4×软目标, maxOutputTokens, 0.1×窗口, 窗口−输入)；前缀放不下回退文本化中段旁路（如实 cache-miss），仍放不下显式 `window_exhausted` 失败。软目标预算 clamp(2%, 2k, 8k)（P1c），`contextEngine.summaryBudget` 可配 ratio/min/max。
+- proactive/overflow 摘要路径接入**同一输出闸门**（污染 → 截断降级）。
+
+### fix(context): 手动结构压缩 slice(-0) 零保护视图陷阱与报数口径
+
+- `protectTail=0` 时 `slice(-0)` 返回全量数组，四条路径在「零保护」参数下把全量当中段残留——手动压缩报数虚高（「559.2k → 535.8k」的 after 是中段原文重复计数）。修复后零保护即零保留；text 路径补 `too_short` 守卫。
+- 报数口径 = 装配同源（`stickyViewMessages` 共享，度量=装配）；无语义摘要/失败不虚报（回退 `tokensBefore`）；不再写 `lastEstimatedTokens`（校准基只允许「实际请求」口径）。
+- 修复压缩后「覆盖点→尾部保护区」增量在回放视图静默消失（stickyViewMessages 增量位，宁可胖）。
+
+### fix(context): 收尾杂项
+
+- 能力级 compact 默认保护值与引擎同源（头 3→5）；`summarySoftTargetTokens`/`detectSummaryContamination` 自能力门面导出；conversation_default 抽取策略与四段式同构；`octopi.example.json` 补 `summaryBudget` 模板。
+
+**破坏性说明**：摘要输出改四段式交接书（旧「中段摘要」单段格式不再产出）；粘性视图头部保护默认 3→5（默认视图=首 5 + 摘要 + 尾 20）；压缩失败不再被上报为成功（此前 `compacted:true` + 假报数）。
+
+**已知遗留**：proactive 路径（LLMSummaryCompressor）仍用 Done/ToDo HANDOFF 模板，与四段式并存待统一；压缩旁路（cache-miss 回退）可观测性未暴露。
+
+---
+
 ## v0.95.4 (2026-10-28)
 
 ### fix(context): message-selector 负数保护数归一

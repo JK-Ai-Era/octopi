@@ -13,6 +13,7 @@
 import type { Message } from '@octopi-agent/core/types.js';
 import { getTextContent } from '@octopi-agent/core/types.js';
 import type { LLMMessage } from '@octopi-agent/core/interfaces/model-provider.js';
+import { detectSummaryContamination } from './capabilities/compact/index.js';
 import type {
   Compressor,
   CompressParams,
@@ -190,6 +191,17 @@ export class LLMSummaryCompressor implements Compressor {
 
       // 空摘要（拒答/内容过滤）按失败处理：不得用空正文替换中间段、更不得冒充语义摘要
       if (!summary || !summary.trim()) {
+        return this.fallbackTruncate(messages, targetTokens, estimator);
+      }
+
+      // 输出闸门（评审 F8）：proactive/overflow 与手动路径同一污染判据——续写污染
+      //（对话体/工具调用形状、成段回声）按失败处理，走截断降级（诚实降级，不落坏摘要）。
+      // 回声源 = 模型实际看到的会话文本投影（前缀内容 ∪ 文本化中段）。
+      const echoSource = [
+        ...(params.llmPrefix ?? []).map((m) => String(m.content ?? '')),
+        formattedContext,
+      ].join('\n');
+      if (detectSummaryContamination(summary, echoSource)) {
         return this.fallbackTruncate(messages, targetTokens, estimator);
       }
 

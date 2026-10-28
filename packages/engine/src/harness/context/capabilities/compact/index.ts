@@ -4,7 +4,7 @@
  * @module harness/context/capabilities/compact
  */
 
-export { createCompactEngine } from './engine.js';
+export { createCompactEngine, summarySoftTargetTokens, detectSummaryContamination } from './engine.js';
 export type {
   CompactEngine,
   CompactMode,

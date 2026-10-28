@@ -2469,6 +2469,8 @@ export class SessionAwareRunner {
           opts?: { maxTokens?: number },
         ) => Promise<string>;
         compactTargetTokens?: number;
+        /** task 快照：交接式摘要指令尾部注入 */
+        taskSnapshot?: string;
       }) => Promise<{
         ok: boolean;
         compacted: boolean;
@@ -2511,6 +2513,8 @@ export class SessionAwareRunner {
         messages: session.messages,
         summarize: options.summarize,
         compactTargetTokens: options.compactTargetTokens,
+        // 交接式摘要素材：task 快照（裸状态块，不含对话引导语）随指令尾部注入
+        taskSnapshot: renderSessionTasksInjection(session.tasks ?? [], { includeGuidance: false }),
       });
 
       if (result.ok && result.summary && result.compacted) {

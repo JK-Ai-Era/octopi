@@ -50,6 +50,24 @@ export interface CompactOptions {
   previousSummary?: string;
   maxSummaryTokens?: number;
   /**
+   * 摘要软目标预算（P1c 拍板缺省 clamp(2%, 2k, 8k)）：写进指令的「尽量控制在 N tokens」，
+   * 只作软目标——禁止把 provider max_tokens 设成 N（硬截断会产生静默半截摘要）。
+   */
+  summaryBudget?: { ratioPct?: number; minTokens?: number; maxTokens?: number };
+  /**
+   * 交接式摘要的注入素材：当前会话 task 快照（B0：易变块走 content 尾部指令，不进 system）。
+   */
+  taskSnapshot?: string;
+  /**
+   * 折叠区间（评审 F7）：告知摘要器「本次交接书将替换到第几条、尾部多少条原样保留」，
+   * 防止模型只总结眼前最近的尾部、漏掉真正要被折叠的旧中段。
+   */
+  foldRange?: { coveredThrough: number; total: number; preservedTail: number };
+  /** 会话模型窗口（评审 F5）：provider 多按 input+max_tokens ≤ window 校验，压缩恰在最满时触发 */
+  contextWindow?: number;
+  /** 会话模型输出上限（评审 F5）：保险丝不得越过模型自身的 max output */
+  maxOutputTokens?: number;
+  /**
    * 缓存前缀：会话 LLM 请求同形 system+history。
    * summarizeFn 路径只许尾部追加指令；禁止改写前缀字节。
    */
@@ -69,6 +87,9 @@ export interface CompactOutcome {
   tokensBefore: number;
   tokensAfter?: number;
   summary?: string;
+  /** 本次是否产出了**新的**语义摘要（评审 F1）：false 时 summary 只是旧摘要兜底，
+   *  调用方不得据此推进覆盖计数/覆盖点（否则未摘要的中段会被记成「已覆盖」）。 */
+  fresh?: boolean;
   coverage?: SummaryCoverage;
   /** Message[] 或纯文本结果，由入口决定 */
   view: Message[] | string;

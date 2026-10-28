@@ -1143,6 +1143,23 @@
           "type": "number",
           "minimum": 0
         },
+        "summaryBudget": {
+          "type": "object",
+          "properties": {
+            "ratioPct": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "minTokens": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "maxTokens": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            }
+          }
+        },
         "proactiveCompactRatio": {
           "type": "number",
           "minimum": 0,

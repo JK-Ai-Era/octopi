@@ -72,6 +72,7 @@
     "protectLastN": 20,
     "targetTokens": 200000,
     "compactFallbackRatio": 3,
+    "summaryBudget": { "ratioPct": 2, "minTokens": 2000, "maxTokens": 8000 },
     "historyAging": {
       "enabled": true,
       "rawWindow": 40,

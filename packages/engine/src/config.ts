@@ -502,10 +502,12 @@ export interface SchedulesJsonConfig {
 export interface ContextEngineConfig {
   /** 引擎类型（默认 'default'） */
   type?: 'default' | 'custom';
-  /** 头部保护消息数（默认 3） */
+  /** 头部保护消息数（默认 5） */
   protectFirstN?: number;
   /** 尾部保护消息数（默认 20） */
   protectLastN?: number;
+  /** 摘要软目标预算（P1c 缺省 clamp(2%, 2k, 8k)）：可配置 ratioPct/minTokens/maxTokens */
+  summaryBudget?: { ratioPct?: number; minTokens?: number; maxTokens?: number };
   /**
    * 窗口比例线：消息 token / messagesBudget 超过该比例时，
    * 在硬溢出前先主动压缩（默认 0.6）。

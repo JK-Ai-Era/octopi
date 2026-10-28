@@ -76,7 +76,7 @@ describe('手动压缩摘要请求形态（400 回归）', () => {
     // 形态：system 指令 + user 文本化中段，恰好两条
     expect(request).toHaveLength(2);
     expect(request[0]!.role).toBe('system');
-    expect(request[0]!.content).toContain('Summarize');
+    expect(request[0]!.content).toContain('handoff summary');
     expect(request[1]!.role).toBe('user');
     // 严格网关校验：请求内不存在空正文 assistant / 空正文消息
     assertStrictGatewaySafe(request);

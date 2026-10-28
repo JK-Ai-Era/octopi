@@ -63,7 +63,7 @@ describe('DefaultContextEngine', () => {
       // MessageSelector.select 应该被调用
       expect(selectSpy).toHaveBeenCalledOnce();
       expect(selectSpy.mock.calls[0][1]).toMatchObject({
-        protectFirstN: 3,  // 默认值
+        protectFirstN: 5,  // 默认值（交接快照头 5，2026-10-28 拍板）
         protectLastN: 20,  // 默认值
       });
     });

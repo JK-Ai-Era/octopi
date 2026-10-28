@@ -2346,6 +2346,9 @@ export class Gateway {
         messages: import('@octopi-agent/core/types.js').Message[];
         summarize?: (messages: import('@octopi-agent/core/interfaces/model-provider.js').LLMMessage[], opts?: { maxTokens?: number }) => Promise<string>;
         compactTargetTokens?: number;
+        taskSnapshot?: string;
+        contextWindow?: number;
+        maxOutputTokens?: number;
       }) => Promise<{
         ok: boolean;
         compacted: boolean;
@@ -2387,7 +2390,9 @@ export class Gateway {
           })
         : null;
     if (bound) {
-      summarize = createProviderSummarize(bound.provider);
+      // 会话模型绑定（评审 F6）：摘要必须走当前会话模型——丢了 modelName 会走 provider 默认
+      // 模型，既违背「走当前会话模型」拍板，也让同形前缀缓存（per provider+model）彻底失效
+      summarize = createProviderSummarize(bound.provider, { model: bound.modelName });
     }
 
     const compactTargetTokens =
@@ -2402,6 +2407,10 @@ export class Gateway {
           messages: input.messages,
           summarize: input.summarize,
           compactTargetTokens: input.compactTargetTokens,
+          taskSnapshot: input.taskSnapshot,
+          // 摘要请求窗口护栏（评审 F5）：窗口/输出上限随会话模型绑定注入，防最满时压缩被 400
+          contextWindow: bound?.contextWindow,
+          maxOutputTokens: bound?.maxOutputTokens,
         }),
       summarize,
       compactTargetTokens,

@@ -31,6 +31,14 @@ export const ContextEngineConfigSchema = z.object({
   type: z.enum(['default', 'custom']).optional(),
   protectFirstN: z.number().min(0).optional(),
   protectLastN: z.number().min(0).optional(),
+  /** 摘要软目标预算（P1c 缺省 clamp(2%, 2k, 8k)） */
+  summaryBudget: z
+    .object({
+      ratioPct: z.number().positive().optional(),
+      minTokens: z.number().positive().optional(),
+      maxTokens: z.number().positive().optional(),
+    })
+    .optional(),
   /** 0 = 禁新的路径 A 压缩（不只禁 LLM；不丢粘滞视图）；见 ContextEngineConfig JSDoc */
   proactiveCompactRatio: z.number().min(0).max(1).optional(),
   proactiveCooldownMs: z.number().min(0).optional(),

@@ -89,8 +89,9 @@ export function resolveContextEngine(config: ContextEngineConfig | undefined): C
   // 缺省 type = default：只给旋钮（如 proactiveCompactRatio）也必须落到默认引擎
   if (!config || config.type == null || config.type === 'default') {
     return new DefaultContextEngine({
-      protectFirstN: config?.protectFirstN ?? 3,
+      protectFirstN: config?.protectFirstN ?? 5,
       protectLastN: config?.protectLastN ?? 20,
+      summaryBudget: config?.summaryBudget,
       proactiveCompactRatio: config?.proactiveCompactRatio ?? 0.6,
       proactiveCooldownMs: config?.proactiveCooldownMs ?? 30_000,
       historyAging: config?.historyAging,

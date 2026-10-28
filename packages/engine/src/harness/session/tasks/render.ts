@@ -28,9 +28,13 @@ function stepProgressLine(goalId: string, all: SessionTask[]): string | null {
  * 仅包含未闭合 goal；step 只出现 rollup，不罗列全部描述。
  *
  * @param tasks - 会话全部任务（含 step）
+ * @param opts - includeGuidance=false 时省略末尾「说明」段（交接式摘要等非对话消费者用）
  * @returns 注入字符串；无活跃 goal 时返回空串
  */
-export function renderSessionTasksInjection(tasks: SessionTask[]): string {
+export function renderSessionTasksInjection(
+  tasks: SessionTask[],
+  opts?: { includeGuidance?: boolean },
+): string {
   const goals = tasks
     .filter((t) => !t.parentId && isActive(t.status))
     .sort((a, b) => a.createdAt - b.createdAt);
@@ -54,12 +58,14 @@ export function renderSessionTasksInjection(tasks: SessionTask[]): string {
     }
   }
 
-  lines.push('');
-  lines.push('说明：');
-  lines.push('- 用户要求继续或话题回归时，可恢复对应任务或先说明进展。');
-  lines.push('- 与当前消息无关时，优先处理当前消息，不要强行续做。');
-  lines.push('- 完成或放弃时请调用 task_complete / task_drop，保持列表与对话一致。');
-  lines.push('- 复杂任务可先 task_create 建目标，再用 task_plan 或 task_create(parent_id) 登记步骤。');
+  if (opts?.includeGuidance !== false) {
+    lines.push('');
+    lines.push('说明：');
+    lines.push('- 用户要求继续或话题回归时，可恢复对应任务或先说明进展。');
+    lines.push('- 与当前消息无关时，优先处理当前消息，不要强行续做。');
+    lines.push('- 完成或放弃时请调用 task_complete / task_drop，保持列表与对话一致。');
+    lines.push('- 复杂任务可先 task_create 建目标，再用 task_plan 或 task_create(parent_id) 登记步骤。');
+  }
   lines.push('</session_tasks>');
 
   return lines.join('\n');

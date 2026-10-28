@@ -123,15 +123,18 @@ export function createDefaultSummaryPolicies(): Record<string, SummaryPolicy> {
       id: 'conversation_default',
       contentKind: 'conversation',
       extract: {
+        // 与交接式摘要四段式同构（评审 F21）：Goal 区已给四段式结构，Include 不得再给出竞争结构
         include: [
-          'Goal of the conversation',
-          'Completed / in-progress / blocked work',
-          'Key decisions and reasons',
-          'Relevant files, errors, next steps',
+          'Goal & status',
+          'Open items & commitments',
+          'Conclusions & decisions (with rationale)',
+          'Evidence pointers',
         ],
-        exclude: ['Pleasantries'],
+        exclude: ['Pleasantries', 'Raw transcript / tool-call payloads'],
       },
       preserve: ['file paths', 'error messages', 'specific values'],
+      // budget 是 SummaryPort 抽取契约的硬顶（另一消费方）；摘要软目标/保险丝口径（P1c ⑤）
+      // 只约束 summarizeFn 路径，两套口径有意独立，见 compact/engine.ts summarySoftTargetTokens
       budget: { maxInputTokens: 24000, maxOutputTokens: 2000 },
       output: 'text',
       oversized: DEFAULT_OVERSIZE,

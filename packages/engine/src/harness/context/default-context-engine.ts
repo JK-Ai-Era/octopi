@@ -74,10 +74,12 @@ export interface DefaultContextEngineConfig {
   tokenEstimator?: TokenEstimator;
   /** 智能路由器配置 */
   router?: SmartRouterConfig;
-  /** 头部保护消息数（默认 3） */
+  /** 头部保护消息数（默认 5：交接快照的「任务前因」） */
   protectFirstN?: number;
-  /** 尾部保护消息数（默认 20） */
+  /** 尾部保护消息数（默认 20：进度锚，明确任务截止到哪） */
   protectLastN?: number;
+  /** 摘要软目标预算（P1c 缺省 clamp(2%, 2k, 8k)）：可配置 ratioPct/minTokens/maxTokens */
+  summaryBudget?: { ratioPct?: number; minTokens?: number; maxTokens?: number };
   /**
    * 窗口比例线：消息 token / messagesBudget 超过该比例时，
    * 在窗口硬溢出之前先做主动压缩（缓解长会话失忆 / 窗口到顶未触发）。
@@ -177,8 +179,9 @@ export class DefaultContextEngine implements ContextEngine {
       budgetAllocator: config?.budgetAllocator ?? new DefaultBudgetAllocator(),
       tokenEstimator,
       router: config?.router ?? {},
-      protectFirstN: config?.protectFirstN ?? 3,
+      protectFirstN: config?.protectFirstN ?? 5,
       protectLastN: config?.protectLastN ?? 20,
+      summaryBudget: config?.summaryBudget ?? {},
       proactiveCompactRatio: config?.proactiveCompactRatio ?? 0.6,
       proactiveCooldownMs: config?.proactiveCooldownMs ?? 30_000,
       historyAging: resolveToolResultAgingOptions(config?.historyAging),
@@ -191,7 +194,7 @@ export class DefaultContextEngine implements ContextEngine {
       compactEngine:
         config?.compactEngine ??
         createCompactEngine({
-          defaultProtectHead: config?.protectFirstN ?? 3,
+          defaultProtectHead: config?.protectFirstN ?? 5,
           defaultProtectTail: config?.protectLastN ?? 20,
           estimator: {
             estimateMessages: (m) => tokenEstimator.estimateMessages(m),
@@ -606,12 +609,10 @@ export class DefaultContextEngine implements ContextEngine {
         return null;
       }
       if (state?.previousSummary) {
-        const summaryMsg: Message = {
-          role: 'user',
-          content: wrapContextSummary(state.previousSummary),
-          timestamp: Date.now(),
-          metadata: { source: 'contextSummary' as const },
-        };
+        const summaryMsg: Message = this.contextSummaryMessage(
+          state.previousSummary,
+          state.lastProactiveCoverEnd,
+        );
         // 摘要覆盖到 lastProactiveCoverEnd（tailStart）；之后的消息是增量，必须保留
         const coverUpTo = state.lastProactiveCoverEnd ?? 0;
         const sinceIdx = Math.max(coverUpTo, headEnd);
@@ -1014,6 +1015,56 @@ export class DefaultContextEngine implements ContextEngine {
   }
 
   /**
+   * 摘要消息构造（装配/度量共用）——禁止在别处手抄此形状，防口径漂移
+   */
+  private contextSummaryMessage(summary: string, coveredEnd?: number): Message {
+    // 覆盖边界行（评审 F11）：按覆盖点动态渲染，不写进 previousSummary——
+    // 写进摘要文本会把过期数字烘死、随失败累积、还会被当 Previous summary 回喂模型。
+    const coverage =
+      coveredEnd && coveredEnd > 0
+        ? `\n\n[Coverage] This handoff covers the conversation up to message ${coveredEnd}; later messages appear verbatim and take precedence.`
+        : '';
+    return {
+      role: 'user',
+      content: wrapContextSummary(`${summary}${coverage}`),
+      timestamp: Date.now(),
+      metadata: { source: 'contextSummary' as const },
+    };
+  }
+
+  /**
+   * 粘性视图布局 = head + 摘要 + tail（压缩后请求视图的唯一实现，装配与度量共用）
+   *
+   * @param messages - 全量原始消息
+   * @param protectFirstN - 头部保护条数
+   * @param protectLastN - 尾部保护条数
+   * @param summary - 语义摘要正文
+   * @returns 视图消息列表；总长 ≤ 头尾保护无需压缩时返回 null
+   */
+  private stickyViewMessages(
+    messages: Message[],
+    protectFirstN: number,
+    protectLastN: number,
+    summary: string,
+    coveredEnd?: number,
+    extra?: Message[],
+  ): Message[] | null {
+    if (messages.length <= protectFirstN + protectLastN) {
+      return null;
+    }
+    // 边界对齐（不拆 tool_call/tool_result 对）：未对齐的 head/tail 会被严格网关 400
+    const { headEnd, tailStart } = this.alignViewSplit(messages, protectFirstN, protectLastN);
+    return [
+      ...messages.slice(0, headEnd),
+      this.contextSummaryMessage(summary, coveredEnd),
+      // 增量位：覆盖点之后、尾部保护区之前的「摘要没覆盖、tailStart 又前移」区间，
+      // 不显式保留会静默消失（评审 F12）。压缩时刻为空（coverEnd == tailStart），度量=装配不受影响
+      ...(extra ?? []),
+      ...messages.slice(tailStart),
+    ];
+  }
+
+  /**
    * 结构视图：有 previousSummary 时 head + summary + tail；否则原样
    * 用于 contextWindow 未知时的 assemble / 手动压缩后的回放
    */
@@ -1028,22 +1079,30 @@ export class DefaultContextEngine implements ContextEngine {
     if (!summary || messages.length === 0) {
       return { messages };
     }
-    const protectFirstN = this.config.protectFirstN;
-    const protectLastN = this.config.protectLastN;
-    if (messages.length <= protectFirstN + protectLastN) {
+    // 压缩时刻布局的唯一实现 stickyViewMessages（与 structuralCompact 的度量共用：度量=装配）。
+    // 本函数服务「压缩后回放」：覆盖点（lastProactiveCoverEnd）到当前尾部保护区之间是**增量**
+    // ——摘要没覆盖它们、tailStart 又随新消息前移，不显式保留会静默消失（评审 F12）。
+    // rebuildStickyView 是带增量压缩的异步版布局；这里同步保留增量原文（宁可胖，不可丢）。
+    const coverUpTo = state.lastProactiveCoverEnd ?? 0;
+    const { headEnd, tailStart: viewTailStart } = this.alignViewSplit(
+      messages,
+      this.config.protectFirstN,
+      this.config.protectLastN,
+    );
+    const increment = this.semanticHistory(
+      messages.slice(Math.max(coverUpTo, headEnd), viewTailStart),
+    );
+    const viewMsgs = this.stickyViewMessages(
+      messages,
+      this.config.protectFirstN,
+      this.config.protectLastN,
+      summary,
+      state.lastProactiveCoverEnd,
+      increment,
+    );
+    if (!viewMsgs) {
       return { messages };
     }
-    // 边界对齐（不拆 tool_call/tool_result 对）：与 applyProactiveCompact 同款——
-    // 未对齐的 head/tail 会被严格网关 400
-    const { headEnd, tailStart } = this.alignViewSplit(messages, protectFirstN, protectLastN);
-    const head = messages.slice(0, headEnd);
-    const tail = messages.slice(tailStart);
-    const summaryMsg: Message = {
-      role: 'user',
-      content: wrapContextSummary(summary),
-      timestamp: Date.now(),
-      metadata: { source: 'contextSummary' as const },
-    };
     emit?.({
       type: 'context.compact.start',
       sessionId,
@@ -1058,7 +1117,7 @@ export class DefaultContextEngine implements ContextEngine {
       cached: true,
     });
     return {
-      messages: [...head, summaryMsg, ...tail],
+      messages: viewMsgs,
       droppedSummary: 'Structural compact view (contextWindow unknown)',
     };
   }
@@ -1076,14 +1135,36 @@ export class DefaultContextEngine implements ContextEngine {
     compactTargetTokens?: number;
     /** 缓存前缀：会话同形 system+history；有则摘要只尾部追加指令 */
     llmPrefix?: LLMMessage[];
+    /** 同形前缀原料：systemPrompt 齐备且无现成 llmPrefix 时引擎内建（与 assemble 的 buildLlmMessages 同源） */
+    systemPrompt?: string;
+    tools?: LLMToolDefinition[];
+    /** task 快照：交接式摘要指令尾部注入（B0 易变块走 content 尾部，不进 system） */
+    taskSnapshot?: string;
+    /** 会话模型窗口/输出上限（评审 F5）：摘要请求硬顶按窗口钳制，防最满时压缩被 400 */
+    contextWindow?: number;
+    maxOutputTokens?: number;
   }): Promise<{
     summary?: string;
     compacted: boolean;
+    reason?: string;
     tokensBefore: number;
     tokensAfter: number;
     coveredMessageCount?: number;
   }> {
-    const { sessionId, messages, summarize, estimator, llmPrefix } = params;
+    const { sessionId, messages, summarize, estimator } = params;
+    // 同形前缀单源：优先调用方现成 llmPrefix；否则引擎内建。
+    // system 字节取自会话托管 system 消息（source==='systemPrompt'）——它就是上一轮请求的逐字
+    // system；重走 assembler 重建会有字节漂移（打穿缓存）。托管缺失时回落调用方 systemPrompt。
+    // aging 计划与 assemble 同式（完整历史一次算好，见 assemble 处注释）——禁止手抄视图。
+    const managedSystem = messages.find(
+      (m) => m.role === 'system' && m.metadata?.source === 'systemPrompt',
+    );
+    const systemText =
+      (managedSystem ? getTextContent(managedSystem.content) : '') || params.systemPrompt;
+    const agingPlan = computeToolResultAgingPlan(messages, this.config.historyAging);
+    const llmPrefix =
+      params.llmPrefix ??
+      (systemText ? this.buildLlmMessages(messages, systemText, params.tools ?? [], agingPlan) : undefined);
     const stateKey = params.stateKey ?? sessionId;
     const protectFirstN = this.config.protectFirstN;
     const protectLastN = this.config.protectLastN;
@@ -1116,20 +1197,59 @@ export class DefaultContextEngine implements ContextEngine {
         previousSummary: state?.previousSummary,
         summarizeFn: summarize,
         estimator,
-        maxSummaryTokens: params.compactTargetTokens
-          ? Math.max(200, Math.floor(params.compactTargetTokens * 0.3))
-          : undefined,
+        // 软目标预算（P1c clamp(2%,2k,8k)）交 compactCore 公式；可配置 ratio/min/max 经 summaryBudget
+        summaryBudget: this.config.summaryBudget,
+        taskSnapshot: params.taskSnapshot,
+        // 折叠区间（评审 F7）：摘要器须覆盖 middle 区间、不总结原样保留的尾部
+        foldRange: {
+          coveredThrough: tailStart,
+          total: messages.length,
+          preservedTail: protectLastN,
+        },
+        contextWindow: params.contextWindow,
+        maxOutputTokens: params.maxOutputTokens,
         onSummarizeFail: 'truncate',
         llmPrefix,
       },
     );
 
-    // 与 extractSummaryText 同一不变量：机械占位说明不是语义摘要，不得进入 previousSummary
-    // （增量合并输入、复用重建依据、持久化快照来源）——否则占位会经快照恢复再次污染状态。
-    const semanticSummary =
-      outcome.summary && !this.isMechanicalNotice(outcome.summary) ? outcome.summary : undefined;
-    const summary = semanticSummary ?? state?.previousSummary;
-    const tokensAfter = outcome.tokensAfter ?? tokensBefore;
+    // fresh（评审 F1）= 本次产出**新的**语义摘要。false 时 outcome.summary 只是旧摘要兜底：
+    // 不得推进覆盖点/覆盖计数（否则被丢弃的中段记成「已覆盖」，rebuildStickyView 的增量起点
+    // 越过后它们永远回不到视图），也不得给旧摘要再叠 [Coverage]（F11：覆盖行随失败累积）。
+    const fresh =
+      outcome.fresh === true &&
+      Boolean(outcome.summary) &&
+      !this.isMechanicalNotice(outcome.summary!);
+
+    if (!fresh) {
+      // 失败语义（F9/F10）：状态不推进（增长门/冷却不被失败重置），报数不虚降（tokensAfter
+      // = tokensBefore），compacted=false + reason 显式上报。宁可胖不丢：中段原文仍在视图
+      // （覆盖点未动），等下次成功摘要再折叠。
+      return {
+        summary: state?.previousSummary,
+        compacted: false,
+        reason: outcome.reason?.startsWith('summarize_failed')
+          ? outcome.reason
+          : `summarize_failed:${outcome.reason ?? 'no_output'}`,
+        tokensBefore,
+        tokensAfter: tokensBefore,
+        coveredMessageCount: state?.lastProactiveCoverEnd,
+      };
+    }
+
+    const summary = outcome.summary!;
+    // [Coverage] 覆盖行不写进 previousSummary（F11：会把过期数字烘进摘要文本、随失败累积、
+    // 还会被当 Previous summary 回喂）——由 contextSummaryMessage 在装配/度量时按覆盖点动态
+    // 渲染；两处同一渲染器，度量=装配严格同形。
+    const viewMsgs = this.stickyViewMessages(
+      messages,
+      protectFirstN,
+      protectLastN,
+      summary,
+      tailStart,
+    );
+    // fresh 路径 middle 非空必有视图；兜底回 tokensBefore（不虚报）
+    const tokensAfter = viewMsgs ? estimator.estimateMessages(viewMsgs) : tokensBefore;
 
     this.states.set(stateKey, {
       ...state,
@@ -1137,13 +1257,13 @@ export class DefaultContextEngine implements ContextEngine {
       lastProactiveMessageCount: messages.length,
       lastProactiveCoverEnd: tailStart,
       lastProactiveTokens: tokensAfter,
-      lastEstimatedTokens: tokensAfter,
+      // 校准基只写「实际请求」口径（见 assemble 处注释）：此处不量请求，故不写 lastEstimatedTokens
       lastProactiveLlmAt: summarize ? Date.now() : state?.lastProactiveLlmAt,
     });
 
     return {
       summary,
-      compacted: outcome.compacted,
+      compacted: true,
       tokensBefore,
       tokensAfter,
       coveredMessageCount: tailStart,
@@ -1164,6 +1284,14 @@ export class DefaultContextEngine implements ContextEngine {
     compactTargetTokens?: number;
     /** 缓存前缀：会话同形 system+history */
     llmPrefix?: LLMMessage[];
+    /** 同形前缀原料：与会话请求同源的 systemPrompt（tools 文档随 system 文本）；无 llmPrefix 时引擎内建 */
+    systemPrompt?: string;
+    tools?: LLMToolDefinition[];
+    /** task 快照：交接式摘要指令尾部注入 */
+    taskSnapshot?: string;
+    /** 会话模型窗口/输出上限（评审 F5）：摘要请求硬顶按窗口钳制 */
+    contextWindow?: number;
+    maxOutputTokens?: number;
   }): Promise<CompactResult> {
     const estimator = this.config.tokenEstimator;
     const stateKey = compactStateKey(input.sessionId, input.agentId);
@@ -1175,11 +1303,17 @@ export class DefaultContextEngine implements ContextEngine {
       estimator,
       compactTargetTokens: input.compactTargetTokens,
       llmPrefix: input.llmPrefix,
+      systemPrompt: input.systemPrompt,
+      tools: input.tools,
+      taskSnapshot: input.taskSnapshot,
+      contextWindow: input.contextWindow,
+      maxOutputTokens: input.maxOutputTokens,
     });
     return {
       ok: true,
       compacted: result.compacted,
-      reason: 'structural',
+      // 失败语义如实透传（评审 F10）：summarize_failed:* 不得被 'structural' 盖成成功
+      reason: result.reason ?? 'structural',
       tokensBefore: result.tokensBefore,
       tokensAfter: result.tokensAfter,
       summary: result.summary,
