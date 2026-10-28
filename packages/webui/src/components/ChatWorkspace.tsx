@@ -749,6 +749,11 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
   const [menuPos, setMenuPos] = useState<{ right: number; top: number } | null>(null);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const activeSessionIdRef = useRef<string | null>(null);
+  // 压缩提示属于单个 session 的一次动作：切走即清空，防跨 session 残留
+  useEffect(() => {
+    setCompactMsg(null);
+    setCompacting(false);
+  }, [activeSessionId]);
   const [conversationItems, setConversationItems] = useState<ConversationItem[]>([]);
   const [viewMode, setViewMode] = useState<ViewMode>('history');
   const [stream, setStream] = useState('');
@@ -1398,6 +1403,7 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
       const created = await store.branchSession(parent, beforeIndex);
       stickToBottomRef.current = true;
       setActiveSessionId(created.id);
+      activeSessionIdRef.current = created.id;
       setRunStatus('idle');
       setStream('');
       setTasks(store.getTasks());
@@ -1616,23 +1622,29 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
   const runManualCompact = async () => {
     const store = storeRef.current;
     if (!store || !activeSessionId) return;
+    const sid = activeSessionId;
     setCompacting(true);
     setCompactMsg(null);
+    // 压缩结果只属于发起时的 session：中途切走则不回显（防跨会话残留）
+    const show = (msg: string) => {
+      if (activeSessionIdRef.current === sid) setCompactMsg(msg);
+    };
     try {
       const r = await store.compactSession();
       if (!r.ok) {
-        setCompactMsg(r.reason || '压缩不可用');
+        show(r.reason || '压缩不可用');
       } else if (!r.compacted) {
-        setCompactMsg(r.reason || '未压缩');
+        show(r.reason || '未压缩');
       } else {
         const before = r.tokensBefore != null ? formatTokens(r.tokensBefore) : '?';
         const after = r.tokensAfter != null ? formatTokens(r.tokensAfter) : '?';
-        setCompactMsg(`已结构压缩 ${before} → ${after}`);
+        show(`已结构压缩 ${before} → ${after}（消息估算）`);
       }
     } catch (e) {
-      setCompactMsg(e instanceof Error ? e.message : String(e));
+      show(e instanceof Error ? e.message : String(e));
     } finally {
-      setCompacting(false);
+      // 与 show 同款守卫：A 会话的收尾不得清掉 B 会话进行中的压缩标志
+      if (activeSessionIdRef.current === sid) setCompacting(false);
     }
   };
 

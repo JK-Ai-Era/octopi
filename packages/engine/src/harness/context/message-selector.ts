@@ -49,16 +49,17 @@ export class DefaultMessageSelector implements MessageSelector {
     }
 
     // 1. 划分头部保护区域
-    const headCount = Math.min(protectFirstN, messages.length);
+    const headCount = Math.max(0, Math.min(protectFirstN, messages.length));
     const headMessages = messages.slice(0, headCount);
 
     // 2. 划分尾部保护区域（排除头部已保护的）
     const remainingAfterHead = messages.slice(headCount);
     const tailCount = Math.min(protectLastN, remainingAfterHead.length);
-    const tailMessages = remainingAfterHead.slice(-tailCount);
+    // slice(-0)===slice(0) 返回全量、slice(0,-0) 返回空：tailCount=0 时必须显式取空/全量
+    const tailMessages = tailCount > 0 ? remainingAfterHead.slice(-tailCount) : [];
 
     // 3. 中间区域（可压缩/丢弃）
-    const middleMessages = remainingAfterHead.slice(0, -tailCount);
+    const middleMessages = tailCount > 0 ? remainingAfterHead.slice(0, -tailCount) : remainingAfterHead;
 
     // 4. 计算各区域 token 数
     const headTokens = estimator.estimateMessages(headMessages);

@@ -394,6 +394,37 @@ describe('DefaultMessageSelector', () => {
       }
     });
 
+    it('protectLastN: 0 时不把全量当尾部保护（slice(-0) 回归）', () => {
+      const messages = Array.from({ length: 30 }, (_, i) =>
+        createMessage(i % 2 === 0 ? 'user' : 'assistant', `Message ${i} ${'x'.repeat(80)}`)
+      );
+
+      const result = selector.select(messages, {
+        maxTokens: 100, // 极小预算
+        protectFirstN: 0,
+        protectLastN: 0,
+      }, estimator);
+
+      // 尾部保护为 0 时不得整批进保护区：超预算部分应进 overflow 而非全量 kept
+      expect(result.overflow.length).toBeGreaterThan(0);
+      expect(result.kept.length).toBeLessThan(30);
+    });
+
+    it('protectFirstN 为负数时与 0 等价（边界归一，不走 slice 负数语义）', () => {
+      const messages = Array.from({ length: 6 }, (_, i) =>
+        createMessage(i % 2 === 0 ? 'user' : 'assistant', `m${i}-${'x'.repeat(120)}`)
+      );
+      const opts = (protectFirstN: number) => ({
+        maxTokens: 120, // 超预算，切分语义可观测
+        protectFirstN,
+        protectLastN: 1,
+      });
+      const neg = selector.select(messages, opts(-3), estimator);
+      const zero = selector.select(messages, opts(0), estimator);
+      expect(neg.kept).toEqual(zero.kept);
+      expect(neg.overflow).toEqual(zero.overflow);
+    });
+
     it('should protect last N messages', () => {
       const messages = Array.from({ length: 30 }, (_, i) =>
         createMessage(i % 2 === 0 ? 'user' : 'assistant', `Message ${i}`)

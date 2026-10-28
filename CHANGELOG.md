@@ -105,6 +105,21 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.95.4 (2026-10-28)
+
+### fix(context): message-selector 负数保护数归一
+
+- `headCount`/`tailCount` 负数按 0 处理（与 compact 引擎同规则），附「负数 ≡ 0」等价性回归测试。
+
+### fix(webui): 手动压缩提示按 session 隔离
+
+- `compactMsg` 切 session 即清空，异步结果只回显到发起 session，`compacting` 收尾同款守卫；报数标注「消息估算」以区分「上下文」实际口径。顺修 branch 分叉路径漏同步 `activeSessionIdRef` 的存量 bug。
+- 已知缺口：webui 无 ChatWorkspace 组件测试挂点，提示生命周期以手动复现验证。
+
+> 同批的 compactCore `slice(-0)` 零保护视图陷阱与「报数口径=装配同源」修复因与交接式摘要改造同文件重写，随 v0.96.0 落地（见其条目）。
+
+---
+
 ## v0.95.3 (2026-10-28)
 
 ### fix(reliability): 运行终态如实化、wire 取证补齐、失败残句留存与小修包
