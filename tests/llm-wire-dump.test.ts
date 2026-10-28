@@ -1115,3 +1115,134 @@ describe('anthropic provider — 流内保活统计', () => {
   });
 });
 
+
+describe('wire dump — 响应留痕', () => {
+  /** 内容过滤拒答：200 内联返回、正文被替换成罐头句（reasoning 照常）——错误面看不出来 */
+  class RefusalProvider extends FakeProvider {
+    async chat(_request: LLMRequest): Promise<LLMResponse> {
+      return {
+        content: 'The request was rejected because it was considered high risk',
+        model: this.defaultModel,
+        finishReason: 'stop',
+        usage: { ...USAGE },
+      };
+    }
+
+    async *stream(_request: LLMRequest): AsyncGenerator<LLMStreamChunk> {
+      yield { type: 'reasoning', content: 'thinking…' };
+      yield {
+        type: 'content',
+        content: 'The request was rejected because it was considered high risk',
+      };
+      yield { type: 'done', finishReason: 'stop', usage: { ...USAGE } };
+    }
+  }
+
+  test('chat 记录响应正文与 finishReason（200 内联拒答可定位）', async () => {
+    const provider = new RefusalProvider([{ role: 'user', content: 'hi' }]);
+    const sink = createWireDumpSink({
+      dir: rootDir,
+      resolveContext: () => ({ sessionId: 'sess_resp', agentId: 'default', runId: 'run-1' }),
+    });
+    const wrapped = withWireDump(provider, sink);
+
+    await wrapped.chat({ model: 'fake-model', messages: [] });
+    await sink.flush();
+
+    const calls = readWireDumpIndex(join(rootDir, 'sess_resp'));
+    expect(calls[0]?.result?.response?.text).toBe(
+      'The request was rejected because it was considered high risk',
+    );
+    expect(calls[0]?.result?.response?.finishReason).toBe('stop');
+  });
+
+  test('stream 只累积 content 正文，reasoning 不进响应留痕', async () => {
+    const provider = new RefusalProvider([{ role: 'user', content: 'hi' }]);
+    const sink = createWireDumpSink({
+      dir: rootDir,
+      resolveContext: () => ({ sessionId: 'sess_resp2', agentId: 'default', runId: 'run-1' }),
+    });
+    const wrapped = withWireDump(provider, sink);
+
+    for await (const _ of wrapped.stream({ model: 'fake-model', messages: [] })) {
+      // drain
+    }
+    await sink.flush();
+
+    const calls = readWireDumpIndex(join(rootDir, 'sess_resp2'));
+    expect(calls[0]?.result?.response?.text).toBe(
+      'The request was rejected because it was considered high risk',
+    );
+    expect(calls[0]?.result?.response?.text).not.toContain('thinking');
+    expect(calls[0]?.result?.response?.finishReason).toBe('stop');
+  });
+
+  test('响应正文按 maxResponseChars 截断，不撑爆索引', async () => {
+    const provider = new FakeProvider([{ role: 'user', content: 'hi' }]);
+    const sink = createWireDumpSink({
+      dir: rootDir,
+      maxResponseChars: 1,
+      resolveContext: () => ({ sessionId: 'sess_resp3', agentId: 'default', runId: 'run-1' }),
+    });
+    const wrapped = withWireDump(provider, sink);
+
+    await wrapped.chat({ model: 'fake-model', messages: [] });
+    await sink.flush();
+
+    const calls = readWireDumpIndex(join(rootDir, 'sess_resp3'));
+    expect(calls[0]?.result?.response?.text).toBe('o');
+  });
+
+  test('done 携带全文时仅在无 content 增量处采用，正文不重复', async () => {
+    class DoneWithFullText extends FakeProvider {
+      async *stream(_request: LLMRequest): AsyncGenerator<LLMStreamChunk> {
+        yield { type: 'content', content: 'ab' };
+        yield { type: 'done', content: 'abcdef', finishReason: 'stop', usage: { ...USAGE } };
+      }
+    }
+    const provider = new DoneWithFullText([{ role: 'user', content: 'hi' }]);
+    const sink = createWireDumpSink({
+      dir: rootDir,
+      resolveContext: () => ({ sessionId: 'sess_resp4', agentId: 'default', runId: 'run-1' }),
+    });
+    const wrapped = withWireDump(provider, sink);
+
+    for await (const _ of wrapped.stream({ model: 'fake-model', messages: [] })) {
+      // drain
+    }
+    await sink.flush();
+
+    const calls = readWireDumpIndex(join(rootDir, 'sess_resp4'));
+    // 有 content 增量时 done 全文不叠加（'ab' 而非 'ababcdef'）
+    expect(calls[0]?.result?.response?.text).toBe('ab');
+    expect(calls[0]?.result?.response?.finishReason).toBe('stop');
+  });
+
+  test('空正文不落 text 字段（chat 与 stream 同一对称形态）', async () => {
+    class ToolCallOnly extends FakeProvider {
+      async chat(_request: LLMRequest): Promise<LLMResponse> {
+        return {
+          content: '',
+          model: this.defaultModel,
+          finishReason: 'tool_calls',
+          usage: { ...USAGE },
+        };
+      }
+    }
+    const provider = new ToolCallOnly([{ role: 'user', content: 'hi' }]);
+    const sink = createWireDumpSink({
+      dir: rootDir,
+      resolveContext: () => ({ sessionId: 'sess_resp5', agentId: 'default', runId: 'run-1' }),
+    });
+    const wrapped = withWireDump(provider, sink);
+
+    await wrapped.chat({ model: 'fake-model', messages: [] });
+    await sink.flush();
+
+    const calls = readWireDumpIndex(join(rootDir, 'sess_resp5'));
+    const response = calls[0]?.result?.response as Record<string, unknown> | undefined;
+    expect(response?.finishReason).toBe('tool_calls');
+    // 空正文省略 text 键，而非落 text:''（与 stream 同形态，下游不得分叉解读）
+    expect(response && 'text' in response).toBe(false);
+  });
+});

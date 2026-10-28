@@ -23,6 +23,7 @@ import type {
   WireDumpConfig,
   WireDumpSink,
 } from '@octopi-agent/engine/integration/providers/wire-dump.js';
+import { startLoopWatchdog } from '@octopi-agent/engine/integration/observability/loop-watchdog.js';
 import { Gateway } from '@octopi-agent/gateway/gateway/gateway.js';
 import { webuiStartCommand, webuiStopCommand } from './webui.js';
 import {
@@ -1136,8 +1137,13 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
     }));
   }
 
+  // 事件循环停滞看门狗（2026-10-28 事故的自检器官）：worker 侧检测停滞 + 自动栈采样，
+  // 报告落 <OCTOPI_HOME>/logs/loop-watchdog.jsonl；阈值经 observability.loopWatchdog 配置
+  const loopWatchdog = startLoopWatchdog(config.observability?.loopWatchdog);
+
   const shutdown = async () => {
     console.log('\n[CLI] Shutting down...');
+    loopWatchdog.stop();
     await gateway.stop();
     removePidFile();
     process.exit(0);

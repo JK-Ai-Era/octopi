@@ -1191,6 +1191,14 @@ export interface HarnessConfig {
      * 配置面只含纯数据（不含 `resolveContext` 等运行时钩子）。
      */
     llmRequestDump?: import('./integration/providers/wire-dump.js').WireDumpConfig;
+    /**
+     * 事件循环停滞看门狗（缺省开启）
+     *
+     * worker 心跳检测主循环冻结（2026-10-28 事故的自检器官）；报告落
+     * `<OCTOPI_HOME>/logs/loop-watchdog.jsonl`，macOS 缺省自动 `sample` 抓阻塞栈。
+     * 存在合法长同步作业的部署应放宽 `stallThresholdMs`。
+     */
+    loopWatchdog?: import('./integration/observability/loop-watchdog.js').LoopWatchdogOptions;
   };
 }
 
@@ -1374,6 +1382,7 @@ export async function createWireDumpSinkFromConfig(
     dir: cfg.dir,
     maxCallsPerSession: cfg.maxCallsPerSession,
     maxBodyBytes: cfg.maxBodyBytes,
+    maxResponseChars: cfg.maxResponseChars,
     resolveContext: () => {
       const scope = getRunScope();
       return scope

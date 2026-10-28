@@ -5,8 +5,9 @@
  * - 开 turn：user 消息正文 = `<turn_start id at>…<user_message>…</user_message></turn_start>`
  * - 闭 turn：独立消息 `<turn_end id/>`，`metadata.source='turnEnd'`
  *
- * 不变式：每个 `turn_start.id` ⟺ 恰一条 `turn_end.id`；定形后字节冻结。
- * 正文经 XML 转义嵌入，用户原文不得截断信封。
+ * 不变式：每个信封（turn_start 与其 turn_end 之间）恰一枚闭标；id 会话内单调，
+ * 但崩溃续跑的历史数据可能同 id 多信封（计数器丢失遗留），以信封区间判形为准。
+ * 定形后字节冻结。正文经 XML 转义嵌入，用户原文不得截断信封。
  */
 
 import { getTextContent } from '@octopi-agent/core/types.js';

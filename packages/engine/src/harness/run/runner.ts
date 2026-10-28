@@ -1052,15 +1052,23 @@ export class SessionAwareRunner {
 
       // 4c. turn 信封：补闭上一 turn；分配本 turn id（t1,t2,… 会话内单调）
       this.ensurePreviousTurnClosed(session);
-      const turnSeq = Number(session.metadata?.turnSeq ?? 0) + 1;
+      // 计数器污染防护：非数值（NaN/null 经 JSON 往返）一律回退 0，防 'tNaN' 与静默复用
+      const prevTurnSeq = Number(session.metadata?.turnSeq ?? 0);
+      const turnSeq = (Number.isFinite(prevTurnSeq) ? prevTurnSeq : 0) + 1;
       let currentTurnId = formatTurnId(turnSeq);
       session.metadata = { ...session.metadata, turnSeq };
+      // 计数器分配即持久化：收尾整包 save 之前中断（冻结/被杀）会丢 turnSeq，
+      // 续跑随后复用已闭 turn 的 id（2026-10-28 事故链第一环）。
+      await this.persistTurnSeq(sessionId, turnSeq);
       const closedInsertedTurnIds = new Set<string>();
-      const allocateInsertedTurnId = (): string => {
-        const seq = Number(session.metadata?.turnSeq ?? 0) + 1;
+      const allocateInsertedTurnId = async (): Promise<string> => {
+        // consumeMessages 目前被 Loop 串行 await 调用（单消费者）；若未来并发化，
+        // 这里的 read-increment-write 会双分配同 seq——并发前必须换原子分配
+        const prevSeq = Number(session.metadata?.turnSeq ?? 0);
+        const seq = (Number.isFinite(prevSeq) ? prevSeq : 0) + 1;
         session.metadata = { ...session.metadata, turnSeq: seq };
-        const id = formatTurnId(seq);
-        return id;
+        await this.persistTurnSeq(sessionId, seq);
+        return formatTurnId(seq);
       };
 
       // 5. 追加用户消息（正文稍后一次定形为 <turn_start>）
@@ -1903,7 +1911,7 @@ export class SessionAwareRunner {
               // 有序序列交还 Loop 统一 push 进 context.messages（不在此处直接入数组）。
               injected.push(this.makeTurnEndMessage(currentTurnId));
               closedInsertedTurnIds.add(currentTurnId);
-              currentTurnId = allocateInsertedTurnId();
+              currentTurnId = await allocateInsertedTurnId();
               entry.message.metadata = { ...entry.message.metadata, turnId: currentTurnId };
               // 注入 turn 也带 runtime_snapshot（datetime 等）；附件/grounding 属 turn 1，不重复
               this.bakeTurnStart(entry.message, currentTurnId, formatTurnContextXml({
@@ -2664,17 +2672,61 @@ export class SessionAwareRunner {
     };
   }
 
-  /** 追加 turn 闭标（write-once；同 id 重复 → throw） */
+  /**
+   * 追加 turn 闭标（幂等收养，按信封区间判形）。
+   *
+   * turn_end 是状态标记（turn 已闭）而非事件：崩溃续跑时 ensurePreviousTurnClosed
+   * 会为上一个未闭信封补写闭标（它是第二处闭标写者，规则相近），同 id 的历史闭标
+   * 不算「本信封已闭」——只有本信封区间（最后一个同 id turn_start 之后）已存在
+   * 闭标才跳过。曾经的全局 write-once throw 把良性重复升级成 run error
+   * （loop 已 completed 仍被中止，2026-10-28 事故）。
+   *
+   * 边界：找不到同 id turn_start（lastStartIdx=-1，如 abort-before-bake）时按
+   * 「全序列已有一枚闭标即收养」处理——不动消息数组，交由下一轮修复器收敛。
+   *
+   * @param messages - 会话消息序列（append-only）
+   * @param turnId - 本 turn id
+   */
   private appendTurnEnd(messages: Message[], turnId: string): void {
+    let lastStartIdx = -1;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i]!;
+      if (isTurnStartContent(m.content) && parseTurnIdFromContent(m.content) === turnId) {
+        lastStartIdx = i;
+        break;
+      }
+    }
+    const envelopeStart = lastStartIdx + 1;
     const exists = messages.some(
-      (m) =>
+      (m, i) =>
+        i >= envelopeStart &&
         m.metadata?.source === 'turnEnd' &&
         parseTurnIdFromContent(m.content) === turnId,
     );
-    if (exists) {
-      throw new Error(`turn_end already exists (turnId=${turnId})`);
-    }
+    if (exists) return;
     messages.push(this.makeTurnEndMessage(turnId));
+  }
+
+  /**
+   * 尽力持久化 turnSeq 计数器（缺 updateMetadata 的 store 跳过，收尾整包 save 兜底）。
+   *
+   * 失败不中断 Run（幂等收养已兜住 id 复用的硬失败），但必须留痕：
+   * 2026-10-28 事故的事后诊断正困于「计数器丢失」无任何日志。
+   *
+   * @param sessionId - 会话 id
+   * @param turnSeq - 已分配的最新序号
+   */
+  private async persistTurnSeq(sessionId: string, turnSeq: number): Promise<void> {
+    if (!this.store.updateMetadata) return;
+    try {
+      await this.store.updateMetadata(sessionId, (meta) => {
+        meta.turnSeq = turnSeq;
+      });
+    } catch (err) {
+      // 吞掉但留痕：同会话串行互斥下无并发写者（分布式 lease 不覆盖 store 写锁——
+      // 跨进程部署的既有缺口），失败仅使续跑退化到幂等收养路径，不产生新失败面。
+      console.warn(`[Runner] persist turnSeq failed session=${sessionId} seq=${turnSeq}: ${String(err)}`);
+    }
   }
 
   /**

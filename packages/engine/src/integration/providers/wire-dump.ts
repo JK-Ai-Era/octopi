@@ -52,6 +52,8 @@ export interface WireDumpConfig {
   maxCallsPerSession?: number;
   /** 单次请求体落盘上限（字节，缺省 8_000_000）；超出则只写索引 */
   maxBodyBytes?: number;
+  /** 响应留痕（正文+finishReason）截断上限（字符，缺省 2_000） */
+  maxResponseChars?: number;
 }
 
 /** sink 构造选项 = 配置 + 运行时身份解析 */
@@ -77,6 +79,8 @@ export interface WireCallResult {
   durationMs: number;
   /** 失败原因（仅 error；由包装层从错误对象提取，观测专用） */
   error?: WireCallErrorInfo;
+  /** 响应留痕（成功也记；内容过滤拒答是 200 内联） */
+  response?: WireCallResponseInfo;
 }
 
 /**
@@ -108,6 +112,42 @@ export interface WireCallErrorInfo {
   sawEnd?: boolean;
   /** 回退链单节点预算耗尽时的预算值（毫秒）；存在即「节点只是慢」，非用户取消 */
   attemptBudgetMs?: number;
+}
+
+/**
+ * 响应留痕（成功也记）
+ *
+ * 内容过滤拒答常以 200 内联返回（reasoning 照常、正文被替换成罐头拒答），
+ * 错误面完全看不出来；不记响应正文就无法回答「为什么被判 high risk」。
+ */
+export interface WireCallResponseInfo {
+  /** 响应正文（截断至 maxResponseChars；content 增量累积，空正文不落字段） */
+  text?: string;
+  /** 推理增量汇总（同截断；部分拒答只留 reasoning，须一并留痕） */
+  reasoning?: string;
+  /** 结束原因（stop / tool_calls / length / error） */
+  finishReason?: string;
+}
+
+/**
+ * 响应留痕构造：正文/推理为空时不落字段——chat 与 stream 共用同一形态，
+ * 下游不得按 `text === ''` 与 `=== undefined` 分叉解读（对称性）。
+ *
+ * @param text - 响应正文
+ * @param reasoning - 推理汇总
+ * @param finishReason - 结束原因
+ * @returns 留痕对象；三项皆空时 undefined
+ */
+function buildWireResponse(
+  text: string,
+  reasoning: string,
+  finishReason: string | undefined,
+): WireCallResponseInfo | undefined {
+  const info: WireCallResponseInfo = {};
+  if (text.length > 0) info.text = text;
+  if (reasoning.length > 0) info.reasoning = reasoning;
+  if (finishReason !== undefined) info.finishReason = finishReason;
+  return Object.keys(info).length > 0 ? info : undefined;
 }
 
 /** 单次调用的收尾句柄 */
@@ -166,6 +206,7 @@ export interface WireDumpResultRecord {
   durationMs: number;
   ttftMs?: number;
   error?: WireCallErrorInfo;
+  response?: WireCallResponseInfo;
   usage?: {
     inputCachedTokens: number;
     inputUncachedTokens: number;
@@ -180,6 +221,9 @@ export type WireDumpIndexRecord = WireDumpRequestRecord | WireDumpResultRecord;
 
 /** 错误消息落盘上限（字符）：上游错误体可能带整段响应，撑爆索引无意义 */
 const MAX_ERROR_MESSAGE_CHARS = 800;
+
+/** 流式响应正文累积硬上限（字符）：装饰器层的内存护栏，最终截断在 sink 的 maxResponseChars */
+const RESPONSE_CAPTURE_HARD_CAP = 16_384;
 
 /**
  * 把错误提取成可落盘的留痕
@@ -286,6 +330,7 @@ export function createWireDumpSink(options: WireDumpHookOptions = {}): WireDumpS
   const rootDir = options.dir ?? defaultWireDumpDir();
   const maxCalls = options.maxCallsPerSession ?? 200;
   const maxBodyBytes = options.maxBodyBytes ?? 8_000_000;
+  const maxResponseChars = options.maxResponseChars ?? 2_000;
   const resolveContext = options.resolveContext;
 
   let seq = 0;
@@ -451,6 +496,19 @@ export function createWireDumpSink(options: WireDumpHookOptions = {}): WireDumpS
           durationMs: Math.max(0, Math.round(result.durationMs)),
           ttftMs: result.ttftMs != null ? Math.max(0, Math.round(result.ttftMs)) : undefined,
           ...(result.error ? { error: result.error } : {}),
+          ...(result.response
+            ? {
+                response: {
+                  ...result.response,
+                  ...(result.response.text != null
+                    ? { text: result.response.text.slice(0, maxResponseChars) }
+                    : {}),
+                  ...(result.response.reasoning != null
+                    ? { reasoning: result.response.reasoning.slice(0, maxResponseChars) }
+                    : {}),
+                },
+              }
+            : {}),
           usage: result.usage
             ? {
                 inputCachedTokens: result.usage.inputCachedTokens,
@@ -569,7 +627,12 @@ export function withWireDump(inner: ModelProvider, sink: WireDumpSink): ModelPro
       const startedAt = Date.now();
       try {
         const res = await inner.chat(request);
-        handle?.finish({ outcome: 'ok', usage: res.usage, durationMs: Date.now() - startedAt });
+        handle?.finish({
+          outcome: 'ok',
+          usage: res.usage,
+          durationMs: Date.now() - startedAt,
+          response: buildWireResponse(res.content, res.reasoning ?? '', res.finishReason),
+        });
         return res;
       } catch (err) {
         handle?.finish({ outcome: 'error', durationMs: Date.now() - startedAt, error: describeWireError(err) });
@@ -589,11 +652,26 @@ export function withWireDump(inner: ModelProvider, sink: WireDumpSink): ModelPro
       let completed = false;
       let failed = false;
       let failedErr: unknown;
+      /** 响应留痕累积（收尾统一截断；硬上限防流式长输出撑内存） */
+      let responseText = '';
+      let reasoningText = '';
+      let contentChunksSeen = 0;
+      let finishReason: string | undefined;
       try {
         for await (const chunk of inner.stream(request)) {
           if (ttftMs == null) ttftMs = Date.now() - startedAt;
           if (chunk.type === 'done') {
             sawDone = true;
+            finishReason = chunk.finishReason;
+          }
+          // done 携带全文的实现：仅当本流没有 content 增量时采用，避免正文重复一份
+          if (chunk.type === 'content' && typeof chunk.content === 'string') {
+            contentChunksSeen += 1;
+            responseText += chunk.content;
+          } else if (chunk.type === 'reasoning' && typeof chunk.content === 'string') {
+            reasoningText += chunk.content;
+          } else if (chunk.type === 'done' && typeof chunk.content === 'string' && contentChunksSeen === 0) {
+            responseText += chunk.content;
           }
           // usage 通常只在 done chunk 上；任何 chunk 携带都取，避免缺哨兵时丢掉已消耗额度
           if (chunk.usage) usage = chunk.usage;
@@ -605,6 +683,12 @@ export function withWireDump(inner: ModelProvider, sink: WireDumpSink): ModelPro
         failedErr = err;
         throw err;
       } finally {
+        // 单个超大 chunk 也能顶穿上限：截断必须在累积之后
+        const response = buildWireResponse(
+          responseText.slice(0, RESPONSE_CAPTURE_HARD_CAP),
+          reasoningText.slice(0, RESPONSE_CAPTURE_HARD_CAP),
+          finishReason,
+        );
         handle.finish({
           // 正常读完但服务端没发 done 哨兵（代理断流/兼容实现）不等于消费者放弃：
           // 判 abandoned 会把真实完成记成"提前中断"，并误报给 llm-diff
@@ -612,6 +696,7 @@ export function withWireDump(inner: ModelProvider, sink: WireDumpSink): ModelPro
           usage,
           ttftMs,
           durationMs: Date.now() - startedAt,
+          ...(response ? { response } : {}),
           ...(failed ? { error: describeWireError(failedErr) } : {}),
         });
       }

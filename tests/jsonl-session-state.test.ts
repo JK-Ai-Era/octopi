@@ -96,3 +96,33 @@ describe('JsonlSessionStore session state', () => {
     expect(loaded?.messages).toHaveLength(2);
   });
 });
+
+describe('JsonlSessionStore updateMetadata 字段保全', () => {
+  /**
+   * 2026-10-28 事故评审 B1：updateMetadata 的 state 重写曾漏掉 contextDetachIndex，
+   * 仅因写一次 metadata 就静默清掉租约截断点（续跑全量历史灌进 LLM 窗口）。
+   * 不变式：updateMetadata 后 state 字段集合与 save() 写入的一致。
+   */
+  it('updateMetadata 不清掉 save 写过的 state 字段（contextDetachIndex 等）', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'octopi-jsonl-'));
+    try {
+      const store = new JsonlSessionStore({ sessionsDir: join(home, 'sessions') });
+      const session = makeSession('s1', 'a1');
+      session.contextDetachIndex = 42;
+      await store.save('s1', session);
+
+      await store.updateMetadata('s1', (meta) => {
+        meta.turnSeq = 7;
+      });
+
+      const loaded = await store.load('s1');
+      expect(loaded?.contextDetachIndex).toBe(42);
+      expect(loaded?.metadata).toEqual({ source: 'test', turnSeq: 7 });
+      expect(loaded?.messages).toHaveLength(2);
+      expect(loaded?.tasks).toHaveLength(2);
+      expect(loaded?.agentId).toBe('a1');
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+});

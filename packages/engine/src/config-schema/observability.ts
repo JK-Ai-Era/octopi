@@ -25,6 +25,28 @@ export const ObservabilityConfigSchema = z.object({
       maxCallsPerSession: z.number().int().positive().max(5000).optional(),
       /** 单次请求体落盘上限（字节，缺省 8_000_000） */
       maxBodyBytes: z.number().int().positive().optional(),
+      /** 响应留痕（正文+finishReason）截断上限（字符，缺省 2_000） */
+      maxResponseChars: z.number().int().positive().optional(),
+    })
+    .optional(),
+  /**
+   * 事件循环停滞看门狗（缺省开启）
+   *
+   * worker 心跳检测主循环冻结，报告落 `<OCTOPI_HOME>/logs/loop-watchdog.jsonl`；
+   * macOS 缺省自动 `sample` 抓阻塞栈。存在合法长同步作业的部署应放宽
+   * `stallThresholdMs`（缺省 30_000）。
+   */
+  loopWatchdog: z
+    .object({
+      enabled: z.boolean().optional(),
+      /** 心跳间隔（毫秒，缺省 5_000） */
+      intervalMs: z.number().int().positive().optional(),
+      /** 主循环静默多久判停滞（毫秒，缺省 30_000） */
+      stallThresholdMs: z.number().int().positive().optional(),
+      /** 报告落盘路径（缺省 `<OCTOPI_HOME>/logs/loop-watchdog.jsonl`） */
+      reportFile: z.string().optional(),
+      /** 停滞时自动 `sample` 抓主线程栈（macOS 专属；缺省 true） */
+      captureSample: z.boolean().optional(),
     })
     .optional(),
 });

@@ -407,11 +407,14 @@ export class JsonlSessionStore implements SessionStore<SessionData> {
       await mkdir(this.sessionsDir, { recursive: true });
       await writeFile(this.sessionStateFile(sessionId), JSON.stringify({
         agentId: prev?.agentId,
-        primaryAgentId: prev?.primaryAgentId,
+        // 字段集必须与 save() 的 state 重写保持一致：漏写即静默清字段
+        //（contextDetachIndex 曾被漏掉——updateMetadata 后租约截断点归零，续跑全量灌窗）
+        primaryAgentId: prev?.primaryAgentId ?? prev?.agentId,
         preferredAgentId: prev?.preferredAgentId,
         switchAudit: prev?.switchAudit ?? [],
         spawnBy: prev?.spawnBy,
         participants: prev?.participants ?? [],
+        contextDetachIndex: prev?.contextDetachIndex,
         contextCompact: prev?.contextCompact,
         contextCompacts: prev?.contextCompacts,
         lifecycle: prev?.lifecycle,
