@@ -18,6 +18,9 @@ import {
 } from '@earendil-works/pi-tui';
 import { theme, editorTheme } from './theme.js';
 import { ChatLog } from './components.js';
+import { TuiGatewayApi, type TuiSessionItem } from './gateway-api.js';
+import { toChatEntries, formatSessionList, pickSession, type ChatEntry } from './history.js';
+import type { Message } from '@octopi-agent/core/types/messages.js';
 import type { AgentEvent } from '@octopi-agent/core/primitives/event-bus.js';
 import { GatewayChatClient } from '@octopi-agent/gateway/gateway/client.js';
 
@@ -105,6 +108,8 @@ export class TuiApp {
   private statusText: Text;
 
   private gatewayClient: GatewayChatClient | null = null;
+  private api: TuiGatewayApi;
+  private sessionItems: TuiSessionItem[] = [];
   private currentModel = '';
   private commandCatalog: SlashCommand[] = [];
   private openIssues: Array<{ id: string; severity: string; title: string; detail: string }> = [];
@@ -123,6 +128,7 @@ export class TuiApp {
 
   constructor(config: TuiAppConfig) {
     this.config = config;
+    this.api = new TuiGatewayApi({ baseUrl: config.gatewayUrl, apiKey: config.apiKey });
     this.sessionIdRef.current = `${config.agentId}:cli:${Date.now()}`;
 
     const terminal = new ProcessTerminal();
@@ -509,6 +515,122 @@ export class TuiApp {
     }
   }
 
+  // ── Client-local Commands（/clear /sessions /resume） ──
+
+  /** 客户端本地命令分发；命中返回 true，否则交引擎 CommandRouter */
+  private async handleLocalCommand(trimmed: string): Promise<boolean> {
+    if (trimmed === '/clear') {
+      this.chatLog.clear();
+      this.tui.requestRender();
+      return true;
+    }
+    if (trimmed === '/sessions') {
+      await this.showSessions();
+      return true;
+    }
+    if (trimmed === '/resume' || trimmed.startsWith('/resume ')) {
+      await this.resumeSession(trimmed.slice('/resume'.length).trim());
+      return true;
+    }
+    return false;
+  }
+
+  // ── Sessions（/sessions /resume） ──
+
+  private async showSessions(): Promise<void> {
+    try {
+      const sessions = await this.api.listSessions(this.config.agentId);
+      this.sessionItems = sessions;
+      if (sessions.length === 0) {
+        this.chatLog.addSystem('（暂无历史会话）');
+        this.tui.requestRender();
+        return;
+      }
+      this.chatLog.addSystem(`会话列表（共 ${sessions.length} 个；/resume <序号|id> 续接）：`);
+      for (const line of formatSessionList(sessions, {
+        currentId: this.sessionIdRef.current,
+        now: Date.now(),
+      })) {
+        this.chatLog.addSystem(line);
+      }
+    } catch (err) {
+      this.chatLog.addSystem(`❌ 获取会话列表失败: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    this.tui.requestRender();
+  }
+
+  private async resumeSession(arg: string): Promise<void> {
+    if (!arg) {
+      this.chatLog.addSystem('用法：/resume <序号|会话id>（/sessions 查看列表）');
+      this.tui.requestRender();
+      return;
+    }
+    try {
+      if (this.sessionItems.length === 0) {
+        this.sessionItems = await this.api.listSessions(this.config.agentId);
+      }
+      const target = pickSession(this.sessionItems, arg);
+      if (!target) {
+        this.chatLog.addSystem(`未找到会话：${arg}（/sessions 查看列表）`);
+        this.tui.requestRender();
+        return;
+      }
+      await this.loadHistory(target.id);
+      this.sessionIdRef.current = target.id;
+      this.streamedContent = '';
+      this.gatewayClient?.subscribe(target.id, this.config.agentId);
+    } catch (err) {
+      this.chatLog.addSystem(`❌ 续接会话失败: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    this.tui.requestRender();
+  }
+
+  /** 拉取最近历史（backward 翻页，最多 3 页 × 200 条）并渲染进 ChatLog */
+  private async loadHistory(sessionId: string): Promise<void> {
+    const collected: Array<Message & { index: number }> = [];
+    let cursor: string | undefined;
+    let total = 0;
+    for (let page = 0; page < 3; page++) {
+      const res = await this.api.getSessionMessages(sessionId, {
+        limit: 200,
+        direction: 'backward',
+        cursor,
+      });
+      total = res.total;
+      collected.unshift(...res.messages);
+      if (!res.hasMore || !res.nextCursor) break;
+      cursor = res.nextCursor;
+    }
+    this.chatLog.clearAll();
+    this.renderHistoryEntries(toChatEntries(collected));
+    this.chatLog.addSystem(
+      `🐙 Session → ${sessionId}（已加载最近 ${collected.length}/${total} 条消息）`,
+    );
+  }
+
+  private renderHistoryEntries(entries: ChatEntry[]): void {
+    let seq = 0;
+    for (const entry of entries) {
+      switch (entry.kind) {
+        case 'user':
+          this.chatLog.addUser(entry.text);
+          break;
+        case 'assistant':
+          this.chatLog.finalizeAssistant(entry.text, `hist-${seq++}`);
+          break;
+        case 'tool': {
+          const id = `hist-${seq++}`;
+          this.chatLog.startTool(id, entry.name, entry.args);
+          this.chatLog.updateToolResult(id, entry.result, { isError: entry.isError });
+          break;
+        }
+        case 'system':
+          this.chatLog.addSystem(entry.text);
+          break;
+      }
+    }
+  }
+
   // ── Send ──
 
   private async sendMessage(text: string): Promise<void> {
@@ -550,12 +672,8 @@ export class TuiApp {
       return;
     }
 
-    // Client-local：仅 /clear；其余命令交给引擎 CommandRouter
-    if (trimmed === '/clear') {
-      this.chatLog.clear();
-      this.tui.requestRender();
-      return;
-    }
+    // Client-local 命令：/clear /sessions /resume；其余交给引擎 CommandRouter
+    if (await this.handleLocalCommand(trimmed)) return;
 
     await this.sendMessage(trimmed);
   }
@@ -614,15 +732,24 @@ export class TuiApp {
   // ── Editor ──
 
   private setupEditorAutocomplete(): void {
-    const slashCommands: SlashCommand[] = this.commandCatalog.length
+    const clientCommands: SlashCommand[] = [
+      { name: 'clear', description: 'Clear screen' },
+      { name: 'sessions', description: 'List recent sessions' },
+      { name: 'resume', description: 'Resume session: /resume <n|id>' },
+    ];
+    const engineCommands: SlashCommand[] = this.commandCatalog.length
       ? this.commandCatalog
       : [
           { name: 'help', description: 'Show help' },
           { name: 'stop', description: 'Stop the active run' },
           { name: 'new', description: 'Start a new session' },
           { name: 'issues', description: 'List system issues' },
-          { name: 'clear', description: 'Clear screen' },
         ];
+    const clientNames = new Set(clientCommands.map((c) => c.name));
+    const slashCommands: SlashCommand[] = [
+      ...clientCommands,
+      ...engineCommands.filter((c) => !clientNames.has(c.name)),
+    ];
 
     this.editor.setAutocompleteProvider(
       new CombinedAutocompleteProvider(slashCommands, process.cwd()),

@@ -107,6 +107,18 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.97.6 (2026-10-30)
+
+### feat(tui): 会话续接——/sessions 列表 + /resume <序号|id> 加载历史
+
+- TUI 不再每次启动只能开新会话：客户端本地命令 `/sessions`（列表：序号/当前标记/运行中标记/标题/相对时间）与 `/resume <序号|id>`（切换会话并渲染最近历史）。
+- 数据面复用 WebUI 同款 REST：`GET /api/v1/sessions?agentId=` 与 `GET /api/v1/sessions/:id/messages`（backward 分页，最多 3×200 条），鉴权与 WS 同一凭据（Bearer channels.http.apiKey）；续接后经 WS `subscribe` 登记会话，在跑 run 的事件即刻可见（此后 chat 也会自动续订）。
+- 历史渲染映射（`tests/tui-session-resume.test.ts` 钉住）：user/assistant 正文成条、assistant toolCalls 与 role=tool 的 toolResults 渲染为工具卡片（error 标失败）、媒体块降级 `[image]`/`[file]` 占位、system 正文降级展示。
+- `GatewayChatClient` 新增 `subscribe`/`unsubscribe`（WS 协议既有消息类型，客户端此前无对应方法）。新模块：`src/integration/tui/gateway-api.ts`（REST 客户端，fetch 可注入）、`src/integration/tui/history.ts`（纯函数：条目转换/列表格式化/选择解析）。
+- 验证：新增 14 例行为测试 + WS auth 契约 4 例回归全绿；lint + 测试类型基线 0 新错；tsc 0 错误。
+
+---
+
 ## v0.97.5 (2026-10-30)
 
 ### fix(tui): 修复 TUI 发消息即报 Unauthorized——WS auth 凭据接入 GatewayChatClient

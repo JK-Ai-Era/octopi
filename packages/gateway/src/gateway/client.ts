@@ -170,6 +170,24 @@ export class GatewayChatClient {
     }));
   }
 
+  /** 订阅会话事件（续接历史会话即用；此后发 chat 也会自动续订） */
+  async subscribe(sessionId: string, agentId?: string): Promise<void> {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+
+    this.ws.send(JSON.stringify({
+      type: 'subscribe',
+      sessionId,
+      ...(agentId ? { agentId } : {}),
+    }));
+  }
+
+  /** 取消会话订阅 */
+  async unsubscribe(sessionId: string): Promise<void> {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+
+    this.ws.send(JSON.stringify({ type: 'unsubscribe', sessionId }));
+  }
+
   /** 检测 Gateway 是否可用 */
   static async detect(url: string): Promise<boolean> {
     try {
