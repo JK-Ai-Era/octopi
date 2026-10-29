@@ -107,6 +107,17 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.97.12 (2026-10-30)
+
+### feat(tui): /issues 详情视图——列表 + <序号|id> 详情展开
+
+- TUI 本地拦截 `/issues`：列表行 = 序号 + 严重度标记（🔴/🟠/🟡/🔵，未知 ⚪）+ 标题 + id；`/issues <序号|id>` 展开详情（id/severity + 详情正文逐行）。数据源 = gateway welcome 快照 + `system.issue` / `system.issue.resolved` 事件流。
+- **顺手补数据流缺口**：`system.issue` 事件此前只弹提示不登记 `openIssues`（只有 welcome 快照入册），运行中新发的问题 `/issues` 查不到——现按 id 去重登记，`resolved` 对应移除的语义完整闭环。
+- 展示与选择逻辑抽纯函数 `src/integration/tui/issues.ts`（无 IO）；新增 `tests/tui-issues.test.ts` 6 例（列表标记/未知严重度/序号与 id 选择/详情展开/空详情）。
+- 验证：定向测试 26 例绿；lint + 测试类型基线 0 新错；tsc 0 错误。
+
+---
+
 ## v0.97.11 (2026-10-30)
 
 ### fix(loop): content_filter 不再走 stream→sync 传输兜底——消除「Stream fallback to sync (拒答原文)」告警刷屏

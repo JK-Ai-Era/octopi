@@ -20,6 +20,7 @@ import { theme, editorTheme } from './theme.js';
 import { ChatLog } from './components.js';
 import { TuiGatewayApi, type TuiSessionItem } from './gateway-api.js';
 import { toChatEntries, formatSessionList, pickSession, type ChatEntry } from './history.js';
+import { formatIssueList, formatIssueDetail, findIssue, type TuiIssue } from './issues.js';
 import { reconnectDelay, DEFAULT_RECONNECT_PLAN } from './reconnect.js';
 import type { Message } from '@octopi-agent/core/types/messages.js';
 import type { AgentEvent } from '@octopi-agent/core/primitives/event-bus.js';
@@ -115,7 +116,7 @@ export class TuiApp {
   private sessionItems: TuiSessionItem[] = [];
   private currentModel = '';
   private commandCatalog: SlashCommand[] = [];
-  private openIssues: Array<{ id: string; severity: string; title: string; detail: string }> = [];
+  private openIssues: TuiIssue[] = [];
 
   private sessionIdRef = { current: '' };
   private toolsExpanded = false;
@@ -290,8 +291,18 @@ export class TuiApp {
       }
 
       case 'system.issue': {
-        const issue = event.data?.issue as { title?: string; detail?: string; severity?: string } | undefined;
+        const issue = event.data?.issue as Partial<TuiIssue> | undefined;
         if (issue?.title) {
+          // 登记进 openIssues（welcome 快照之后新发的问题也能被 /issues 查到/查详情）
+          this.openIssues = [
+            ...this.openIssues.filter((i) => i.id !== (issue.id ?? issue.title)),
+            {
+              id: issue.id ?? issue.title,
+              severity: issue.severity ?? 'warning',
+              title: issue.title,
+              detail: issue.detail ?? '',
+            },
+          ];
           this.chatLog.addSystem(`⚠️ [${issue.severity ?? 'warning'}] ${issue.title}`);
           if (issue.detail) this.chatLog.addSystem(`   ${issue.detail}`);
           this.tui.requestRender();
@@ -562,7 +573,7 @@ export class TuiApp {
     }
   }
 
-  // ── Client-local Commands（/clear /sessions /resume） ──
+  // ── Client-local Commands（/clear /sessions /resume /issues） ──
 
   /** 客户端本地命令分发；命中返回 true，否则交引擎 CommandRouter */
   private async handleLocalCommand(trimmed: string): Promise<boolean> {
@@ -579,7 +590,44 @@ export class TuiApp {
       await this.resumeSession(trimmed.slice('/resume'.length).trim());
       return true;
     }
+    if (trimmed === '/issues' || trimmed.startsWith('/issues ')) {
+      this.showIssues(trimmed.slice('/issues'.length).trim());
+      return true;
+    }
     return false;
+  }
+
+  // ── Issues（/issues） ──
+
+  /**
+   * 展示系统问题列表或单条详情（数据 = welcome 快照 + system.issue 事件流）。
+   *
+   * @param ref - 空 = 列表；序号（1 起）或问题 id = 详情
+   */
+  private showIssues(ref: string): void {
+    const issues = this.openIssues;
+    if (!ref) {
+      if (issues.length === 0) {
+        this.chatLog.addSystem('✅ 当前无 open 系统问题');
+      } else {
+        this.chatLog.addSystem(`系统问题（共 ${issues.length} 个；/issues <序号|id> 看详情）：`);
+        for (const line of formatIssueList(issues)) {
+          this.chatLog.addSystem(line);
+        }
+      }
+      this.tui.requestRender();
+      return;
+    }
+    const issue = findIssue(issues, ref);
+    if (!issue) {
+      this.chatLog.addSystem(`未找到系统问题：${ref}（/issues 看列表）`);
+      this.tui.requestRender();
+      return;
+    }
+    for (const line of formatIssueDetail(issue)) {
+      this.chatLog.addSystem(line);
+    }
+    this.tui.requestRender();
   }
 
   // ── Sessions（/sessions /resume） ──
@@ -831,6 +879,7 @@ export class TuiApp {
       { name: 'clear', description: 'Clear screen' },
       { name: 'sessions', description: 'List recent sessions' },
       { name: 'resume', description: 'Resume session: /resume <n|id>' },
+      { name: 'issues', description: 'System issues: /issues <n|id>' },
     ];
     const engineCommands: SlashCommand[] = this.commandCatalog.length
       ? this.commandCatalog
