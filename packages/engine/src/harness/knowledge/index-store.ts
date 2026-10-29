@@ -1175,14 +1175,34 @@ export class KnowledgeIndexStore {
     }
 
     if (!rows || rows.length === 0) {
-      const likeClauses: string[] = [];
-      const likeParams: string[] = [];
+      // 兜底匹配语义（B+）：SQL 子串取候选、按 token 分类给精确判定——
+      //   · 2–3 字符纯 ASCII 字母数字词：词边界命中（防跨词字母碰撞 be ⊂ obeswy）。
+      //     GLOB 字符类回溯较 LIKE 慢约 10×（20k chunk 实测 235ms vs 23ms），故仅此小类承担，
+      //     且只在 FTS 零命中时触发。不用「LIKE 取候选 + JS 边界校验」：LIMIT 窗口会被子串噪音
+      //     占满而丢真命中，GLOB 在 SQL 侧精确过滤无此问题。
+      //   · 其余 token（≥ SUBSTRING_FALLBACK_MIN_CHARS、非纯 ASCII 字母数字）：子串命中——
+      //     长词保留子词/词干召回（assembly → contextAssembly；其边界命中是子串命中的子集，
+      //     词边界子句纯冗余）；非 ASCII（CJK/韩/西里尔/混合）无词边界语义，显式并入子串。
+      // 边界 = 非 [a-z0-9] 字符（含 _/标点/CJK）：_ 与 FTS unicode61 切分一致；CJK 作为边界是
+      // **有意放宽**（「api接口」须能命中 api），并非对齐 unicode61（其视 foo文bar 为单 token）。
+      // GLOB 不变式由 ^[a-z0-9]+$ 守门：将来 tokenizer 放行 `-`/`.`/`*`/`[`/`]` 等也不会进 GLOB 分支。
+      const SUBSTRING_FALLBACK_MIN_CHARS = 4; // 3 字符（api/db）碰撞面大需边界保护；≥4 起子串的子词召回价值高于碰撞成本
+      const matchClauses: string[] = [];
+      const matchParams: string[] = [];
       for (const token of tokens) {
-        const like = `%${token.toLowerCase().replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
-        likeClauses.push(`LOWER(c.text) LIKE ? ESCAPE '\\'`);
-        likeParams.push(like);
-        likeClauses.push(`LOWER(m.logical_path) LIKE ? ESCAPE '\\'`);
-        likeParams.push(like);
+        if (token.length >= SUBSTRING_FALLBACK_MIN_CHARS || !/^[a-z0-9]+$/.test(token)) {
+          const likePattern = `%${token.toLowerCase().replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+          matchClauses.push(`LOWER(c.text) LIKE ? ESCAPE '\\'`);
+          matchParams.push(likePattern);
+          matchClauses.push(`LOWER(m.logical_path) LIKE ? ESCAPE '\\'`);
+          matchParams.push(likePattern);
+        } else {
+          const globPattern = `*[^a-z0-9]${token}[^a-z0-9]*`;
+          matchClauses.push(`(' ' || LOWER(c.text) || ' ') GLOB ?`);
+          matchParams.push(globPattern);
+          matchClauses.push(`(' ' || LOWER(m.logical_path) || ' ') GLOB ?`);
+          matchParams.push(globPattern);
+        }
       }
       rows = this.db.raw
         .prepare(
@@ -1192,10 +1212,10 @@ export class KnowledgeIndexStore {
            JOIN knowledge_files f ON f.id = c.file_id AND f.status <> 'indexing'
            JOIN knowledge_memberships m ON m.file_id = c.file_id
            WHERE m.source_id IN (${placeholders})
-             AND (${likeClauses.join(' OR ')})
-           LIMIT ?`,
+             AND (${matchClauses.join(' OR ')})
+           LIMIT ?`, // 已知限制：无 ORDER BY 的采样上限，OR 密集 token 可能挤掉稀有 token 行
         )
-        .all(...opts.sourceIds, ...likeParams, Math.max(limit * 8, 64)) as Row[];
+        .all(...opts.sourceIds, ...matchParams, Math.max(limit * 8, 64)) as Row[];
     }
 
     const byChunk = new Map<
@@ -1217,6 +1237,8 @@ export class KnowledgeIndexStore {
       let h = byChunk.get(r.id);
       if (!h) {
         if (byChunk.size >= limit * 3) continue;
+        // 打分仍是子串口径（scoreKeywordCoverage 共享 memory 域）：与匹配语义的差异是有意留待统一的
+        // 已知项（见 v0.97.2 CHANGELOG 遗留），本层不改共享打分契约。
         const score = scoreKeywordCoverage({ content: r.text, tags: r.logical_path }, tokenDetail);
         h = {
           chunkId: r.id,

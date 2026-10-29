@@ -14,7 +14,7 @@ export interface KeywordFields {
   evidence?: string | null;
 }
 
-const CJK_RE = /[㐀-䶿一-鿿豈-﫿぀-ヿ]/;
+export const CJK_RE = /[㐀-䶿一-鿿豈-﫿぀-ヿ]/;
 
 function isCjk(ch: string): boolean {
   return CJK_RE.test(ch);

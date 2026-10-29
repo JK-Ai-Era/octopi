@@ -6,10 +6,9 @@
  */
 
 import type { KnowledgeDatabase } from './db.js';
-import { tokenizeKeywordQuery } from '../memory/sqlite/keyword-search.js';
+import { CJK_RE, tokenizeKeywordQuery } from '../memory/sqlite/keyword-search.js';
 
 const TOKEN_SPLIT = /[^\p{L}\p{N}_]+/u;
-const CJK_RE = /[㐀-䶿一-鿿豈-﫿぀-ヿ]/;
 /** 超长 token（base64/uuid/hash/压缩 JS 标识）不进倒排，避免 FTS 膨胀 */
 const MAX_TOKEN_CHARS = 32;
 /** 单 chunk token 流上限，防止病态正文写爆 FTS */

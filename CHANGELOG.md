@@ -125,6 +125,20 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.97.3 (2026-10-30)
+
+### fix(knowledge): search 兜底匹配语义按 token 分类收紧（B+）——短词跨词碰撞消除
+
+- 兜底通道（FTS 零命中时）从「全 token `%tok%` 子串」改为分类语义：**2–3 字符纯 ASCII 字母数字词走词边界**（防跨词字母碰撞，如 `be`⊂`obeswy`）；**其余走子串**（≥4 字符保留子词/词干召回 `assembly`→`contextAssembly`；CJK/韩/西里尔/混合脚本无词边界语义，显式并入子串）。短词碰撞即 v0.97.1 flaky 事故的产品侧根因——该条的探针改名仅为止血，本条收根因。
+- **用户可见行为变化（对齐 FTS 整词语义）**：短词不再命中词内子串——`api` 不再命中 `rapid`/`apis`；≥4 字符子串召回不变（`test` 仍命中 `contest`，刻意取舍，两侧用例钉死）。`_` 视为边界（与 unicode61 切分一致）；CJK 作为边界是**有意放宽**（「api接口」须能命中 api）。
+- 性能：GLOB 词边界子句仅 2–3 字符纯 ASCII 小类承担（字符类回溯较 LIKE 慢约 10×，20k chunk 实测 235ms vs 23ms），长词/非 ASCII 的冗余 GLOB 已删。评审建议的「LIKE 取候选 + JS 边界校验」被否：LIMIT 窗口会被子串噪音占满而丢真命中。
+- GLOB 不变式（token 字符域 = 字母/数字/下划线）由 `^[a-z0-9]+$` 守门而非注释；CJK_RE 双份字面量合一（fts.ts 改 import 共享定义）。
+- 测试矩阵改**双通道**（FTS 可用 / 清空 FTS 纯兜底）同断言——上一版 7 例中 4 例被 FTS 短路并未真正验证兜底；补 3/4 长度阈值两侧与非 ASCII 子串固化用例（10 例 × 2 通道）。
+- **遗留跟进**（共享/结构性，另行立项）：① memory 侧 `buildKeywordLikeSql` 未转义 `_`/`%`（`get_user_id` 会误命中 `getXuserXid`）且仍是裸子串语义；② 打分 `scoreKeywordCoverage` 子串口径与匹配语义不一致（inject 地板建立在其上）；③ FTS 有命中即短路兜底，混合查询（`contextAssembly assembly`）拿不到长词子串召回。
+- 验证：匹配矩阵 20 用例双通道全绿；全量 3587 passed / 7 skipped；lint + 测试类型基线 0 新错；tsc engine 0 错误；arch/check-sync ✅。经独立子 agent 对抗性复审（1 High + 5 Med + 8 Low：H1/M1–M5/L1/L2/L6/L7 采纳，L3/L4/L5 留账如上）。
+
+---
+
 ## v0.97.1 (2026-10-29)
 
 ### test(suite): 修两支 flaky——探针词撞随机目录名 / watch 防抖固定短睡眠过紧
