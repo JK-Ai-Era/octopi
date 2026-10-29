@@ -5,6 +5,8 @@
  * TUI 只负责 UI 渲染和事件展示，所有引擎逻辑在 Gateway 侧。
  */
 
+import { readFileSync } from 'node:fs';
+import { resolve as resolvePath } from 'node:path';
 import {
   TUI,
   Text,
@@ -21,6 +23,8 @@ import { ChatLog } from './components.js';
 import { TuiGatewayApi, type TuiSessionItem } from './gateway-api.js';
 import { toChatEntries, formatSessionList, pickSession, type ChatEntry } from './history.js';
 import { formatIssueList, formatIssueDetail, findIssue, type TuiIssue } from './issues.js';
+import { searchMessages } from './search.js';
+import { expandFileReferences } from './attach.js';
 import { reconnectDelay, DEFAULT_RECONNECT_PLAN } from './reconnect.js';
 import type { Message } from '@octopi-agent/core/types/messages.js';
 import type { AgentEvent } from '@octopi-agent/core/primitives/event-bus.js';
@@ -594,6 +598,10 @@ export class TuiApp {
       this.showIssues(trimmed.slice('/issues'.length).trim());
       return true;
     }
+    if (trimmed === '/find' || trimmed.startsWith('/find ')) {
+      await this.searchHistory(trimmed.slice('/find'.length).trim());
+      return true;
+    }
     return false;
   }
 
@@ -680,12 +688,15 @@ export class TuiApp {
     this.tui.requestRender();
   }
 
-  /** 拉取最近历史（backward 翻页，最多 3 页 × 200 条）并渲染进 ChatLog */
-  private async loadHistory(sessionId: string): Promise<void> {
+  /** 向前翻页拉取历史（backward 从末尾取，最多 pages 页 × 200 条） */
+  private async fetchHistory(
+    sessionId: string,
+    pages: number,
+  ): Promise<{ messages: Array<Message & { index: number }>; total: number }> {
     const collected: Array<Message & { index: number }> = [];
     let cursor: string | undefined;
     let total = 0;
-    for (let page = 0; page < 3; page++) {
+    for (let page = 0; page < pages; page++) {
       const res = await this.api.getSessionMessages(sessionId, {
         limit: 200,
         direction: 'backward',
@@ -696,11 +707,46 @@ export class TuiApp {
       if (!res.hasMore || !res.nextCursor) break;
       cursor = res.nextCursor;
     }
+    return { messages: collected, total };
+  }
+
+  /** 拉取最近历史（最多 3 页 × 200 条）并渲染进 ChatLog */
+  private async loadHistory(sessionId: string): Promise<void> {
+    const { messages: collected, total } = await this.fetchHistory(sessionId, 3);
     this.chatLog.clearAll();
     this.renderHistoryEntries(toChatEntries(collected));
     this.chatLog.addSystem(
       `🐙 Session → ${sessionId}（已加载最近 ${collected.length}/${total} 条消息）`,
     );
+  }
+
+  /**
+   * 在会话历史文本中搜索（/find <词>）。
+   *
+   * @param query - 查询词（空参提示用法）
+   */
+  private async searchHistory(query: string): Promise<void> {
+    if (!query) {
+      this.chatLog.addSystem('用法：/find <关键词>（搜索当前会话历史，最多 5 页 × 200 条）');
+      this.tui.requestRender();
+      return;
+    }
+    try {
+      const { messages, total } = await this.fetchHistory(this.sessionIdRef.current, 5);
+      const hits = searchMessages(messages, query);
+      if (hits.length === 0) {
+        this.chatLog.addSystem(`在最近 ${messages.length}/${total} 条消息里没找到「${query}」`);
+        this.tui.requestRender();
+        return;
+      }
+      this.chatLog.addSystem(`「${query}」命中 ${hits.length} 条（搜了最近 ${messages.length}/${total} 条）：`);
+      for (const hit of hits) {
+        this.chatLog.addSystem(`#${hit.index} [${hit.role}] ${hit.snippet}`);
+      }
+    } catch (err) {
+      this.chatLog.addSystem(`❌ 历史搜索失败: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    this.tui.requestRender();
   }
 
   private renderHistoryEntries(entries: ChatEntry[]): void {
@@ -770,7 +816,40 @@ export class TuiApp {
     // Client-local 命令：/clear /sessions /resume；其余交给引擎 CommandRouter
     if (await this.handleLocalCommand(trimmed)) return;
 
-    await this.sendMessage(trimmed);
+    await this.sendMessage(this.expandAttachments(trimmed));
+  }
+
+  /**
+   * 展开消息里的 @path 文件引用（内联为附件文本）。
+   *
+   * @param text - 原消息文本
+   * @returns 展开后的消息（失败引用保持原文并逐条提示）
+   */
+  private expandAttachments(text: string): string {
+    const result = expandFileReferences(text, {
+      readFileText: (path) => {
+        try {
+          return readFileSync(resolvePath(path), 'utf8');
+        } catch {
+          return null;
+        }
+      },
+    });
+    for (const item of result.failed) {
+      const why =
+        item.reason === 'binary'
+          ? '二进制文件，未内联'
+          : item.reason === 'over_budget'
+            ? '超出附件总预算，未内联'
+            : '文件不存在或不可读';
+      this.chatLog.addSystem(`📎 ${item.path}: ${why}（引用保持原文）`);
+    }
+    for (const item of result.expanded) {
+      if (item.truncated) {
+        this.chatLog.addSystem(`📎 ${item.path}: 超长已截断（内联 ${item.chars} 字符）`);
+      }
+    }
+    return result.text;
   }
 
   // ── Abort ──
@@ -880,6 +959,7 @@ export class TuiApp {
       { name: 'sessions', description: 'List recent sessions' },
       { name: 'resume', description: 'Resume session: /resume <n|id>' },
       { name: 'issues', description: 'System issues: /issues <n|id>' },
+      { name: 'find', description: 'Search history: /find <query>' },
     ];
     const engineCommands: SlashCommand[] = this.commandCatalog.length
       ? this.commandCatalog

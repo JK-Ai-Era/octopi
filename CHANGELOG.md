@@ -107,6 +107,22 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.97.13 (2026-10-30)
+
+### feat(tui): /find 消息历史搜索
+
+- 客户端本地 `/find <关键词>`：在当前会话历史文本中大小写不敏感子串检索（复用 REST `getSessionMessages` backward 翻页，最多 5 页 × 200 条），输出 `#序号 [role] 片段`（长行按命中词取窗口带省略号，每消息记首个命中行，上限 20 条）。
+- 翻页逻辑抽 `fetchHistory`（`loadHistory` 复用，消除三份循环）；检索纯函数 `src/integration/tui/search.ts`（无 IO）。新增 `tests/tui-search.test.ts` 5 例。
+
+### feat(tui): @path 文件引用内联（附件语义）
+
+- 发送前把消息里的 `@path`（支持 `@"含空格路径"`）展开为 `[附件 path]` + 围栏代码块（按扩展名标注语言），agent 无需先跑工具即可看到文件内容；正文尾部标点自动剥离**且归还**（实测发现首版吞句号，已修并有测试钉住）。
+- 边界语义：读不到/二进制（含 NUL）/超总预算的引用**保持原文**并逐条提示（消息照发，不半途拦截）；单文件超限截断带标注（算展开、不算失败）。单文件 32k 字符 / 总预算 120k 字符。
+- 展开纯函数 `src/integration/tui/attach.ts`（文件读取注入，无 IO 依赖）；新增 `tests/tui-attach.test.ts` 6 例。
+- 验证：定向测试 38 例绿；lint + 测试类型基线 0 新错；tsc 0 错误。
+
+---
+
 ## v0.97.12 (2026-10-30)
 
 ### feat(tui): /issues 详情视图——列表 + <序号|id> 详情展开
