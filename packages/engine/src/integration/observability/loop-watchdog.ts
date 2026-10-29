@@ -10,6 +10,10 @@
  * 写 JSONL 报告 +（macOS）自动 `sample <pid>` 抓主线程栈。检测与取证全部发生在
  * worker 侧，不依赖已被冻结的事件循环。
  *
+ * 第二道闸：进程 RSS 越过 `footprintThresholdMb` 即同样落报告 + 采栈。停滞检测
+ * 只能证明「已经僵死」，内存失控则可能在冻死前给出一段可干预的窗口——2026-10-30
+ * 网关膨胀到 30.5G 的进程在采样完成后几分钟就被系统收走。
+ *
  * 设计约束：
  * - 观测 fail-open：看门狗自身的任何失败不得影响宿主（写盘/采样失败静默吞掉）。
  * - worker unref：不阻止进程退出；宿主应显式 `stop()` 收尾。
@@ -35,6 +39,13 @@ export interface LoopWatchdogOptions {
   reportFile?: string;
   /** 停滞时自动 `sample` 抓主线程栈（macOS 专属；缺省 true，测试关闭） */
   captureSample?: boolean;
+  /**
+   * 进程 RSS 阈值（MB，缺省 4096；传 0 关闭）
+   *
+   * 越过阈值即写 `footprint` 事件并采栈——不必等事件循环冻死。用于在内存
+   * 失控的早期抓住现场（滞回：跌回阈值的 80% 以下才复位，避免阈值附近反复采样）。
+   */
+  footprintThresholdMb?: number;
 }
 
 /** 看门狗句柄 */
@@ -57,6 +68,7 @@ const { spawnSync } = require('node:child_process');
 
 let lastPongAt = Date.now();
 let stalledSince = undefined;
+let footprintLatched = false;
 
 const writeReport = (record) => {
   try {
@@ -64,6 +76,26 @@ const writeReport = (record) => {
     appendFileSync(workerData.reportFile, JSON.stringify(record) + '\\n');
   } catch {
     // 观测 fail-open：报告写盘失败不得影响 worker 自身的监测
+  }
+};
+
+const captureStack = (tag) => {
+  if (!workerData.captureSample || process.platform !== 'darwin') return;
+  const sampleFile = workerData.sampleFile.replace('{{ts}}', tag + '-' + Date.now());
+  try {
+    const r = spawnSync('sample', [String(process.pid), '3', '-f', sampleFile], {
+      timeout: 15000,
+      stdio: 'ignore',
+    });
+    // spawnSync 失败不抛（ENOENT 等走返回值）：必须按返回值如实留痕，
+    // 否则「宣称采样成功」会把运维引向不存在的文件
+    if (r.error == null && r.status === 0) {
+      console.error('[LoopWatchdog] stack sample written: ' + sampleFile);
+    } else {
+      console.error('[LoopWatchdog] stack sample FAILED (' + (r.error ? r.error.message : 'exit ' + r.status) + '); run manually: sample ' + process.pid + ' 5 -f /tmp/octopi-hang.txt');
+    }
+  } catch (err) {
+    console.error('[LoopWatchdog] stack sample FAILED: ' + String(err) + '; run manually: sample ' + process.pid + ' 5 -f /tmp/octopi-hang.txt');
   }
 };
 
@@ -95,23 +127,36 @@ setInterval(() => {
       pid: process.pid,
     });
     console.error('[LoopWatchdog] event loop stalled: no heartbeat for ' + silentForMs + 'ms (pid ' + process.pid + ')');
-    if (workerData.captureSample && process.platform === 'darwin') {
-      const sampleFile = workerData.sampleFile.replace('{{ts}}', String(Date.now()));
-      try {
-        const r = spawnSync('sample', [String(process.pid), '3', '-f', sampleFile], {
-          timeout: 15000,
-          stdio: 'ignore',
-        });
-        // spawnSync 失败不抛（ENOENT 等走返回值）：必须按返回值如实留痕，
-        // 否则「宣称采样成功」会把运维引向不存在的文件
-        if (r.error == null && r.status === 0) {
-          console.error('[LoopWatchdog] stack sample written: ' + sampleFile);
-        } else {
-          console.error('[LoopWatchdog] stack sample FAILED (' + (r.error ? r.error.message : 'exit ' + r.status) + '); run manually: sample ' + process.pid + ' 5 -f /tmp/octopi-hang.txt');
-        }
-      } catch (err) {
-        console.error('[LoopWatchdog] stack sample FAILED: ' + String(err) + '; run manually: sample ' + process.pid + ' 5 -f /tmp/octopi-hang.txt');
-      }
+    captureStack('stall');
+  }
+
+  // 内存足迹阈值：在撑爆前留出干预窗口。
+  // 2026-10-30 事故里 footprint 涨到 30.5G 时主线程已被原生 h2 扩容循环吃满，
+  // 等到心跳消失再采样只是事后取证——进程几分钟后就被系统收走，无从止损。
+  // 滞回（跌回 80% 以下才复位）避免在阈值附近反复采样。
+  const thresholdMb = workerData.footprintThresholdMb;
+  if (thresholdMb > 0) {
+    const rssMb = Math.round(process.memoryUsage().rss / 1048576);
+    if (!footprintLatched && rssMb >= thresholdMb) {
+      footprintLatched = true;
+      writeReport({
+        event: 'footprint',
+        detectedAt: new Date().toISOString(),
+        rssMb,
+        thresholdMb,
+        pid: process.pid,
+      });
+      console.error('[LoopWatchdog] footprint ' + rssMb + 'MB >= threshold ' + thresholdMb + 'MB (pid ' + process.pid + ')');
+      captureStack('footprint');
+    } else if (footprintLatched && rssMb < thresholdMb * 0.8) {
+      footprintLatched = false;
+      writeReport({
+        event: 'footprint_recovered',
+        detectedAt: new Date().toISOString(),
+        rssMb,
+        thresholdMb,
+      });
+      console.error('[LoopWatchdog] footprint back under threshold: ' + rssMb + 'MB');
     }
   }
 }, workerData.intervalMs);
@@ -136,6 +181,7 @@ export function startLoopWatchdog(options: LoopWatchdogOptions = {}): LoopWatchd
       reportFile,
       captureSample: options.captureSample ?? true,
       sampleFile: `${reportFile}.sample-{{ts}}.txt`,
+      footprintThresholdMb: options.footprintThresholdMb ?? 4096,
     },
   });
   // 心跳应答（主循环冻结时此 handler 不再被调度——正是停滞信号）

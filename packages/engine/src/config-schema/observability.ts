@@ -47,6 +47,13 @@ export const ObservabilityConfigSchema = z.object({
       reportFile: z.string().optional(),
       /** 停滞时自动 `sample` 抓主线程栈（macOS 专属；缺省 true） */
       captureSample: z.boolean().optional(),
+      /**
+       * 进程 RSS 阈值（MB，缺省 4096；0 关闭）
+       *
+       * 越过即写 `footprint` 事件并采栈，用于在内存失控早期抓现场，
+       * 不必等事件循环冻死（2026-10-30 网关 30.5G 事故的教训）。
+       */
+      footprintThresholdMb: z.number().int().min(0).optional(),
     })
     .optional(),
 });

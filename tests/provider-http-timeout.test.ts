@@ -219,3 +219,23 @@ describe('provider 的 HTTP 经由对齐超时的 dispatcher 发出', () => {
     await expect(provider.chat({ messages: [] })).rejects.toThrow(/abort/i);
   });
 });
+
+/**
+ * 事故回归（2026-10-30）：网关进程 footprint 涨到 30.5G、主线程冻结在原生
+ * `Http2Session::SendPendingData → CopyDataIntoOutgoing`。undici 8.x 的
+ * `allowH2` 默认 true，只要端点 ALPN 协商到 h2 就进入该路径。
+ *
+ * 契约：模型调用的 dispatcher 必须关掉 h2，退回 HTTP/1.1。
+ */
+describe('createTimeoutDispatcher 不吃 undici 的 HTTP/2 默认值', () => {
+  it('dispatcher 的 allowH2 为 false', () => {
+    const dispatcher = createTimeoutDispatcher(1000);
+    // undici 把选项存在 [kOptions]（Symbol），只能经由内部字段断言
+    const opts = (dispatcher as unknown as Record<symbol, { allowH2?: boolean }>)[
+      Object.getOwnPropertySymbols(dispatcher).find((s) => String(s).includes('options'))!
+    ];
+    expect(opts?.allowH2).toBe(false);
+    void dispatcher.close();
+  });
+});
+

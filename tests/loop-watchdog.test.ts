@@ -110,4 +110,44 @@ describe('loop watchdog', () => {
     const events = readEvents(reportFile);
     expect(events.find((e) => e.event === 'stall')).toBeDefined();
   });
+
+  it('RSS 越过 footprint 阈值即落报告，滞回期内只报一次（不刷屏）', async () => {
+    const reportFile = setup();
+    const watchdog = startLoopWatchdog({
+      intervalMs: 50,
+      stallThresholdMs: 5_000,
+      reportFile,
+      captureSample: false,
+      // 进程 RSS 必然 > 1MB：无需真的分配几个 G，等价验证「越阈值即触发」
+      footprintThresholdMb: 1,
+    });
+    watchdogs.push(watchdog);
+
+    await sleep(400);
+
+    const events = readEvents(reportFile);
+    const footprint = events.filter((e) => e.event === 'footprint');
+    expect(footprint).toHaveLength(1);
+    expect(Number(footprint[0]!.rssMb)).toBeGreaterThanOrEqual(1);
+    expect(Number(footprint[0]!.thresholdMb)).toBe(1);
+    // 未冻死主循环：内存阈值与停滞检测互不干扰
+    expect(events.filter((e) => e.event === 'stall')).toHaveLength(0);
+    // 无降回 80% 以下 → 不应出现恢复事件
+    expect(events.filter((e) => e.event === 'footprint_recovered')).toHaveLength(0);
+  });
+
+  it('footprintThresholdMb=0 关闭内存阈值检测', async () => {
+    const reportFile = setup();
+    const watchdog = startLoopWatchdog({
+      intervalMs: 50,
+      stallThresholdMs: 5_000,
+      reportFile,
+      captureSample: false,
+      footprintThresholdMb: 0,
+    });
+    watchdogs.push(watchdog);
+
+    await sleep(300);
+    expect(readEvents(reportFile).filter((e) => e.event === 'footprint')).toHaveLength(0);
+  });
 });

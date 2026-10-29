@@ -107,6 +107,24 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.97.2 (2026-10-30)
+
+### fix(providers): 关闭模型调用的 HTTP/2，消除 h2 出站队列撑爆进程的失败模式
+
+- **事故**（2026-10-30 00:36）：网关进程 footprint 涨到 30.5G（机器 16G RAM），事件循环整体冻结约 5 分钟后被硬杀。watchdog 栈采样 1763/1763 全部停在 `Http2Session::SendPendingData → CopyDataIntoOutgoing → std::vector<NgHttp2StreamWrite>::__emplace_back_slow_path`。
+- **输入侧已排除**：8752 条 LLM 请求记录最大 body 2.0MB、均值 496KB；崩溃瞬间仅 2 个 in-flight（370KB / 212KB），无重试风暴；string body 经 `diagnostics_channel` 实测为单 chunk（不发生逐字符写）；200 次串行请求 RSS 零增长。h2 出站内存实测线性放大 3.0x（1MB→5.7x、8MB→3.27x、32MB→3.01x、64MB→3.00x），30.5G 需要约 10GB 提交量作对应输入——该输入不存在。
+- **根因**：undici 8.12.3 的 `allowH2` 默认为 `true`（ALPN `['http/1.1','h2']`），只要端点协商到 h2 就走 `client-h2.js`；`createTimeoutDispatcher` 未显式指定该值，于是所有 https provider 调用都落在 Node 内置 http2 路径上。触发条件未能本地复现（小流控窗口 / 中途 abort / 连跑 / 大 body 卡窗口均正常），按既有证据判定为库内非线性放大。
+- **修复**：`createTimeoutDispatcher` 显式 `allowH2: false`，模型调用退回 HTTP/1.1。端到端实测：默认配置服务端收到 `HTTP/2.0`，修复后收到 `HTTP/1.1`。代价可忽略——模型调用是「单请求 + 单条流式响应」，用不到 h2 多路复用，却要承担首部压缩与流控窗口状态机的全部失败面；HTTP/1.1 的 socket 背压成熟且线性。
+- 回归测试：`tests/provider-http-timeout.test.ts` 断言 dispatcher 的 `allowH2 === false`。
+
+### feat(observability): loopWatchdog 增加 RSS footprint 阈值，在撑爆前采栈
+
+- 新增配置 `observability.loopWatchdog.footprintThresholdMb`（缺省 4096，`0` 关闭）。worker 每个心跳周期读整进程 RSS，越阈值即写 `footprint` 事件并采栈，不必等事件循环冻死——停滞检测只能证明「已经僵死」，而 30.5G 那次的进程在采样完成后几分钟就被系统收走。
+- 滞回：跌回阈值 80% 以下才复位并发 `footprint_recovered`，避免阈值附近反复 spawn `sample`。采样文件名追加 `stall-` / `footprint-` tag 以区分来源。
+- 观测 fail-open 不变（写盘/采样失败静默吞掉，不影响宿主）；实测当前网关 RSS 386MB，缺省阈值留约 10 倍余量。
+
+---
+
 ## v0.97.1 (2026-10-29)
 
 ### test(suite): 修两支 flaky——探针词撞随机目录名 / watch 防抖固定短睡眠过紧

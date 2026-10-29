@@ -3312,6 +3312,11 @@
             },
             "captureSample": {
               "type": "boolean"
+            },
+            "footprintThresholdMb": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
             }
           }
         }
