@@ -14,6 +14,7 @@ const MAP_KEYS = [
   'turn.end',
   'tool.exec.start',
   'tool.exec.end',
+  'tool.exec.update',
   'budget.exceeded',
   'run_guard.stopped',
   'run_guard.recovered',

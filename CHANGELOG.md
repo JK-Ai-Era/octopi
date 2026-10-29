@@ -107,6 +107,25 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.97.10 (2026-10-30)
+
+### feat(reliability/tui): 内容过滤拒答韧性——罐头拒答识别为 content_filter 错误，自动重试 + 诚实收口
+
+- **背景**（2026-10-29 三案实测）：`xiaomi-coding` 网关内容安全层以 **200 内联返回**罐头拒答「The request was rejected because it was considered high risk」——reasoning 照常流出、正文被替换、finishReason=stop、outcome=ok，全链错误面无感，拒答语被当成助手回答落进历史（turn 直接结束，无重试无报错）。触发侧是输入（积累上下文的风险分，安全工程语境 + 500–750KB 大请求易踩），阈值抖动型——同上下文 2 分钟后重试即过。
+- **修复**（复用既有 onError/重试/收口链路，不另起炉灶）：
+  - Core 新增罐头拒答签名识别（`loop/canned-refusal.ts`：精确匹配 + 流式前缀判定 + `ContentFilterError`）；`classifyError` / `ErrorReason` 新增 `content_filter` 类目（name 派生与签名文本双通道识别，包装丢 name 也能辨）。
+  - Harness 新增 `guardRefusalProvider`（ModelProvider 装饰器，run-agent 在 loop 模型上装配）：响应「正文恰为罐头拒答且无工具调用」→ 抛 `ContentFilterError`。流式按**前缀扣发**（正常回答仅在签名前缀窗口短暂缓冲，脱离前缀立即冲刷；reasoning/tool_call 块不缓冲）；以签名开头但后接正文的合法引用不误杀。
+  - 重试语义：内容过滤多为阈值型误杀，`MODEL_ERROR_MAX_ATTEMPTS.content_filter = 2` + `DefaultErrorStrategy` 原样重试档——**同请求原样重发，不教模型换说法绕过审核**；callModel 既有 stream→sync 兜底天然充当首次重试。重试过程可见：`engine.model_retry`（reason=content_filter）事件，TUI 补上对应展示（此前该事件在 TUI 静默丢弃）。
+  - 诚实收口：重试耗尽走既有 llm_error 收口（「模型调用失败：内容安全拦截（content_filter）：…可继续对话让 agent 从当前状态接着做」）——拦截发生在消息进入历史之前，**罐头拒答永远不会落成助手回答**。
+  - 摘要/压缩路径：`detectSummaryContamination` 把罐头拒答判为污染 `canned_refusal`，交由既有「一次加严重试 → 二次抛错降级机械视图」链路——不再把拒答语存成摘要。
+- 验证：新增 `tests/content-filter-guard.test.ts` 14 例（签名识别/错误分类/守卫 chat+stream/loop 重试集成×2/摘要闸门）；全量测试套件绿；lint + 测试类型基线 0 新错；core/engine tsc 0 错误。
+
+### fix(test): 补齐 agent-events-map 同步清单的 tool.exec.update 条目
+
+- v0.97.9（`tool.exec.update` 事件）漏改 `tests/harness/agent-events-map.test.ts` 的手工同步清单（AgentEvents 常量 ↔ Map keys 双向契约），当时只跑定向测试未跑全量故未发现，本次全量验证逮住并补齐。教训：**跨层事件面改动（agent-event-map）必须全量套件过手**，定向绿不等于契约面全绿。
+
+---
+
 ## v0.97.9 (2026-10-30)
 
 ### feat(tools/tui): 工具部分输出通道全链接通——onUpdate 契约 → tool.exec.update → TUI 实时展示

@@ -17,6 +17,10 @@ export { callModel } from './call-model.js';
 // ── 错误分类 ──
 export { classifyError } from './error-classifier.js';
 
+// ── 内容过滤罐头拒答（签名识别 + ContentFilterError） ──
+
+export { isCannedRefusalText, isCannedRefusalPrefix, ContentFilterError } from './canned-refusal.js';
+
 // ── 未知工具名的近似建议 ──
 export { formatUnknownToolError, suggestToolNames } from './tool-name-suggestion.js';
 

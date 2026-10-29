@@ -116,6 +116,10 @@ export class DefaultErrorStrategy implements ErrorStrategy {
     if (error.reason === 'server' && attempt < maxAttempts) {
       return { action: 'retry', delayMs: (attempt + 1) * 2000 };
     }
+    // ── content_filter：内容过滤拒答多为阈值型误杀，原样重试常过；不教模型换说法绕过 ──
+    if (error.reason === 'content_filter' && attempt < maxAttempts) {
+      return { action: 'retry', delayMs: (attempt + 1) * 1000 };
+    }
     // ── context_length：由引擎尝试 compact，这里返回 abort 让引擎决定 ──
     if (error.reason === 'context_length') {
       return { action: 'abort', reason: `Context length exceeded: ${error.message}` };

@@ -33,6 +33,7 @@ export type ErrorReason =
   | 'network'
   | 'timeout'
   | 'server'
+  | 'content_filter'
   | 'unknown';
 
 /** 分类后的错误 */

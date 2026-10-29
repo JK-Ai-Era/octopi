@@ -28,6 +28,9 @@ export const MODEL_ERROR_MAX_ATTEMPTS: Readonly<Record<string, number>> = {
   timeout: 3,
   network: 3,
   server: 2,
+  // 内容过滤拒答多为阈值型误杀（同请求重试常过）；给 2 次原样重试，
+  // 仍被拦则如实收口（不教模型换说法绕过审核）
+  content_filter: 2,
 };
 
 /**

@@ -10,6 +10,7 @@
  */
 
 import type { ClassifiedError, ErrorReason } from './types.js';
+import { ContentFilterError, isCannedRefusalText } from './canned-refusal.js';
 
 /**
  * 判定是否已是分类结果
@@ -40,6 +41,14 @@ export function classifyError(err: unknown): ClassifiedError {
   const message = err instanceof Error ? err.message : String(err);
   const lower = collectErrorText(err);
 
+  // 0. 内容过滤拒答：显式错误类型优先（name 稳定，跨包装可辨）
+  if (
+    err instanceof ContentFilterError ||
+    (err instanceof Error && err.name === 'ContentFilterError')
+  ) {
+    return { reason: 'content_filter', message, originalError: err };
+  }
+
   // 1. 优先从 error 对象提取 HTTP 状态码
   const statusCode = extractStatusCode(err);
   let reason: ErrorReason = 'unknown';
@@ -50,7 +59,8 @@ export function classifyError(err: unknown): ClassifiedError {
 
   // 2. 回退到消息文本匹配
   if (reason === 'unknown') {
-    if (lower.includes('rate') && lower.includes('limit')) reason = 'rate_limit';
+    if (isCannedRefusalText(message)) reason = 'content_filter';
+    else if (lower.includes('rate') && lower.includes('limit')) reason = 'rate_limit';
     else if (lower.includes('context') && lower.includes('length')) reason = 'context_length';
     else if (lower.includes('auth') || lower.includes('401')) reason = 'auth';
     else if (lower.includes('billing') || lower.includes('429')) reason = 'rate_limit';

@@ -8,6 +8,7 @@
 
 import type { Message } from '@octopi-agent/core/types.js';
 import { getTextContent } from '@octopi-agent/core/types.js';
+import { isCannedRefusalText } from '@octopi-agent/core/loop/canned-refusal.js';
 import type { LLMMessage } from '@octopi-agent/core/interfaces/model-provider.js';
 import { HeuristicTokenEstimator } from '../../token-estimator.js';
 import { buildPolicyRegistry } from '../summary/resolver.js';
@@ -64,6 +65,11 @@ const TRANSCRIPT_SHAPE =
  * @returns 命中原因；干净返回 null
  */
 export function detectSummaryContamination(text: string, sourceText?: string): string | null {
+  // 内容过滤罐头拒答：网关 200 内联拒答（正文被替换成固定英文罐头）不是摘要，
+  // 一律判污染——交由既有的「一次加严重试 → 二次抛错降级」链路处理
+  if (isCannedRefusalText(text)) {
+    return 'canned_refusal';
+  }
   if (TRANSCRIPT_SHAPE.test(text)) {
     return 'transcript_shape';
   }

@@ -536,6 +536,21 @@ export class TuiApp {
         break;
       }
 
+      // ── 模型重试通知（含 content_filter 内容安全拦截的原样重试） ──
+      case 'engine.model_retry': {
+        const data = event.data as Record<string, unknown> | undefined;
+        const reason = String(data?.reason ?? 'unknown');
+        const attempt = String(data?.attempt ?? '?');
+        const maxAttempts = String(data?.maxAttempts ?? '?');
+        const delaySec = Math.ceil(Number(data?.delayMs ?? 0) / 1000);
+        this.chatLog.addSystem(
+          `🔁 模型重试（${reason}）第 ${attempt}/${maxAttempts} 次${delaySec > 0 ? `，${delaySec}s 后` : ''}...`,
+          { transient: true },
+        );
+        this.tui.requestRender();
+        break;
+      }
+
       case 'context.truncated': {
         const data = event.data as any;
         this.chatLog.addSystem(`✂️ Context truncated (${data?.from} → ${data?.to} messages)`);

@@ -171,6 +171,8 @@ export { RunMetricsCollector } from './run/reliability/run-metrics-collector.js'
 export { CircuitBreaker } from './run/reliability/circuit-breaker.js';
 export { wrapProviderWithCircuitBreaker } from './run/reliability/provider-wrapper.js';
 export { FallbackProvider } from './run/reliability/fallback-provider.js';
+export { guardRefusalProvider } from './run/reliability/refusal-guard.js';
+export { detectSummaryContamination } from './context/capabilities/compact/engine.js';
 
 // ── Plugin Ecosystem ──
 export { PluginManager } from './extension/plugin-ecosystem/plugins/manager.js';

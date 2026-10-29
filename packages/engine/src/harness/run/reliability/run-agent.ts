@@ -30,6 +30,7 @@ import type { HarnessLoopEvent, PolicyUnit } from './harness-events.js';
 import { classifyError } from '@octopi-agent/core/loop/error-classifier.js';
 import { agentLoop } from '@octopi-agent/core/loop/agent-loop.js';
 import { maxAttemptsFor } from './model-error-policy.js';
+import { guardRefusalProvider } from './refusal-guard.js';
 import type {
   ToolCallRecord,
   ToolLoopDetectionConfig,
@@ -455,6 +456,10 @@ export async function* runAgentWithReliability(
   const originalBeforeToolCall = config.beforeToolCall;
   const wrappedConfig: AgentLoopConfig = {
     ...config,
+
+    // 内容过滤拒答守卫：把「200 内联罐头拒答」转成 content_filter 模型错误，
+    // 复用 onError/重试链路（阈值型误杀原样重试常过；耗尽走诚实收口）
+    model: guardRefusalProvider(config.model),
 
     // getFollowUpMessages：返回 reliability 层注入的 steer 消息
     getFollowUpMessages: async () => {
