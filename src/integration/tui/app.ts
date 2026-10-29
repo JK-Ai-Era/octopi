@@ -20,6 +20,7 @@ import { theme, editorTheme } from './theme.js';
 import { ChatLog } from './components.js';
 import { TuiGatewayApi, type TuiSessionItem } from './gateway-api.js';
 import { toChatEntries, formatSessionList, pickSession, type ChatEntry } from './history.js';
+import { reconnectDelay, DEFAULT_RECONNECT_PLAN } from './reconnect.js';
 import type { Message } from '@octopi-agent/core/types/messages.js';
 import type { AgentEvent } from '@octopi-agent/core/primitives/event-bus.js';
 import { GatewayChatClient } from '@octopi-agent/gateway/gateway/client.js';
@@ -119,6 +120,8 @@ export class TuiApp {
   private sessionIdRef = { current: '' };
   private toolsExpanded = false;
   private lastCtrlCAt = 0;
+  private reconnectAttempts = 0;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private exitRequested = false;
   private isProcessing = false;
   private streamedContent = '';
@@ -239,15 +242,14 @@ export class TuiApp {
           if (this.streamedContent) {
             this.chatLog.finalizeAssistant(this.streamedContent + '\n\n*(connection lost)*', 'run');
           }
+          this.streamedContent = '';
           this.isProcessing = false;
           this.setStatus('disconnected');
         }
         this.tui.requestRender();
-        // 断连后自动退出，用户重新运行 octopi chat
+        // 断线自动重连（指数退避）；用户主动退出（exitRequested）不触发
         if (!this.exitRequested) {
-          this.chatLog.addSystem('Connection lost. Exiting...');
-          this.tui.requestRender();
-          setTimeout(() => this.requestExit(), 1500);
+          this.scheduleReconnect();
         }
       },
       onError: (err) => {
@@ -729,6 +731,54 @@ export class TuiApp {
 
     this.lastCtrlCAt = now;
     this.setStatus('press Ctrl+C again to exit');
+    this.tui.requestRender();
+  }
+
+  // ── Reconnect（断线自动重连，指数退避） ──
+
+  /**
+   * 调度下一次重连。reconnectTimer 守卫去重：一次失败尝试可能同时经
+   * connect() 的 reject 与 ws close 两条路径到达，只允许排一次。
+   */
+  private scheduleReconnect(): void {
+    if (this.exitRequested || this.reconnectTimer) return;
+
+    this.reconnectAttempts += 1;
+    const plan = DEFAULT_RECONNECT_PLAN;
+    if (this.reconnectAttempts > plan.maxAttempts) {
+      this.chatLog.addSystem(
+        `❌ 重连失败（连续 ${plan.maxAttempts} 次）。请检查 Gateway 后重新运行 octopi chat（--resume 可续接当前会话）`,
+      );
+      this.tui.requestRender();
+      setTimeout(() => this.requestExit(), 1500);
+      return;
+    }
+    const delayMs = reconnectDelay(this.reconnectAttempts, plan);
+    const secs = Math.ceil(delayMs / 1000);
+    this.chatLog.addSystem(
+      `🔌 ${secs}s 后重连（第 ${this.reconnectAttempts}/${plan.maxAttempts} 次）…`,
+    );
+    this.setStatus(`reconnecting in ${secs}s…`);
+    this.tui.requestRender();
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      void this.attemptReconnect();
+    }, delayMs);
+  }
+
+  private async attemptReconnect(): Promise<void> {
+    if (this.exitRequested || !this.gatewayClient) return;
+    this.setStatus('reconnecting…');
+    try {
+      await this.gatewayClient.connect();
+    } catch {
+      // 失败由 close → onDisconnected → scheduleReconnect 统一驱动（去重），这里不重复排
+      return;
+    }
+    this.reconnectAttempts = 0;
+    this.setStatus('');
+    // 断线期间的事件已缺失（在途 run 后续事件恢复可见）；可 /resume 或 --resume 重新加载历史
+    this.gatewayClient.subscribe(this.sessionIdRef.current, this.config.agentId);
     this.tui.requestRender();
   }
 

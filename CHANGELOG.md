@@ -107,6 +107,18 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.97.8 (2026-10-30)
+
+### feat(tui): 断线自动重连（指数退避），不再断开即退出
+
+- 断连后按指数退避自动重连（1s→2s→4s→8s→16s 封顶，连续 5 次失败才放弃退出并提示「--resume 可续接当前会话」）；用户主动退出（Ctrl+C / exit）不触发重连。此前行为是断开 1.5s 后无条件退出，LAN 上 Gateway 一次重启就丢整个 TUI 会话。
+- 去重语义：一次失败尝试会同时经 `connect()` reject 与 ws close 两条路径到达，`reconnectTimer` 守卫保证每次失败只排一次重连（否则次数翻倍、放弃提前）。
+- 重连成功后自动续订当前会话事件（`subscribe`）；断线窗口期的事件仍缺失——在途 run 如有疑问可 `/resume` 或 `--resume` 重载历史对齐（live overlay 回填列为后续增强）。
+- 顺带修正：断连收尾现在清空 `streamedContent` 残留（此前残留会拼进下一轮流式输出）。
+- 验证：新增 `tests/tui-reconnect.test.ts` 4 例（退避序列/封顶/归一/自定义计划）；lint + 测试类型基线 0 新错；tsc 0 错误。
+
+---
+
 ## v0.97.7 (2026-10-30)
 
 ### feat(cli/tui): chat 多 agent 与启动续接——`--agent <id>` / `--resume <id>`
