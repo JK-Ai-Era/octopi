@@ -242,6 +242,22 @@ export function resolveGatewayApiKey(config: Record<string, unknown>): string | 
   return typeof apiKey === 'string' && apiKey ? apiKey : undefined;
 }
 
+/**
+ * 按 `--agent` 选择 chat 目标 agent。
+ *
+ * @param agents - config.agents 列表
+ * @param requestedId - `--agent` 取值；缺省取第一个
+ * @returns 命中的 agent；列表为空或 id 不存在返回 undefined
+ */
+export function selectChatAgent<T extends { id: string }>(
+  agents: T[],
+  requestedId?: string,
+): T | undefined {
+  if (agents.length === 0) return undefined;
+  if (!requestedId) return agents[0];
+  return agents.find((a) => a.id === requestedId);
+}
+
 export function resolveGatewayUrl(config: Record<string, unknown>): string {
   const pidFile = readPidFile();
   if (pidFile && isProcessAlive(pidFile.pid) && pidFile.port) {

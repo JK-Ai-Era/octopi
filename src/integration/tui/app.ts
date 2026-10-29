@@ -32,6 +32,8 @@ export interface TuiAppConfig {
   gatewayUrl: string;
   /** Gateway apiKey（channels.http.apiKey）；配置后连接首条消息送 auth */
   apiKey?: string;
+  /** 启动即续接的会话 id（加载最近历史）；缺省开新会话 */
+  resumeSessionId?: string;
 }
 
 interface SlashCommand {
@@ -165,6 +167,21 @@ export class TuiApp {
 
     this.chatLog.addSystem(`🐙 Octopi Chat — ${this.currentModel || this.config.agentId}`);
     this.chatLog.addSystem(`Type /help for commands, Ctrl+C to exit.`);
+
+    // --resume <id>：启动即续接（历史加载失败则回退新会话，明确告知）
+    if (this.config.resumeSessionId) {
+      const target = this.config.resumeSessionId;
+      try {
+        await this.loadHistory(target);
+        this.sessionIdRef.current = target;
+        this.gatewayClient?.subscribe(target, this.config.agentId);
+      } catch (err) {
+        this.chatLog.addSystem(
+          `⚠️ 续接会话失败（${err instanceof Error ? err.message : String(err)}），已回退为新会话`,
+        );
+      }
+    }
+
     this.tui.requestRender();
 
     this.tui.start();

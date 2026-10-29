@@ -107,6 +107,16 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.97.7 (2026-10-30)
+
+### feat(cli/tui): chat 多 agent 与启动续接——`--agent <id>` / `--resume <id>`
+
+- `octopi chat` 不再固定 `config.agents[0]`：`--agent <id>` 按 id 选 agent（不存在时报错并列出可用 id，不静默回退）；`--resume <id>` 启动即续接既有会话（复用 v0.97.6 的历史加载通道），加载失败明确告知并回退新会话。
+- `selectChatAgent`（cli/helpers）为纯函数：缺省取第一个、按 id 精确命中、空列表/未命中返回 undefined 由调用方报错退出。
+- 验证：新增 `tests/cli-chat-args.test.ts` 6 例（flag 解析/缺值报错/选择语义）；相关回归 64 例全绿；lint + 测试类型基线 0 新错；tsc 0 错误。
+
+---
+
 ## v0.97.6 (2026-10-30)
 
 ### feat(tui): 会话续接——/sessions 列表 + /resume <序号|id> 加载历史

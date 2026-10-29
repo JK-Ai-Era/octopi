@@ -9,7 +9,7 @@ import { loadConfig } from '../config.js';
 import { initOctopi, getOctopiHome, isInitialized, formatInitReport } from '../init.js';
 import { readPidFile, writePidFile, removePidFile, isProcessAlive } from './daemon.js';
 import { createProviderFromConfig } from '@octopi-agent/engine/config.js';
-import { resolveGatewayUrl, resolveGatewayApiKey } from './helpers.js';
+import { resolveGatewayUrl, resolveGatewayApiKey, selectChatAgent } from './helpers.js';
 
 export function showHelp(): void {
   console.log(`
@@ -53,6 +53,8 @@ Options:
   --allow-delete-legacy-dirs
                         doctor: with --fix layout, rename obsolete memory/wisdom/extract dirs
   --session <id>        llm-diff: target session (default: most recently updated)
+  --agent <id>          chat: agent to chat with (default: first agent in config)
+  --resume <id>         chat: resume an existing session (loads recent history)
   --dir <path>          llm-diff: wire dump root (default: ~/.octopi/logs/llm-requests)
   --limit <n>           llm-diff: number of calls to show (0 = all, default 20)
   --cache-discount <r>  llm-diff: cache-hit price as a ratio of full price (default 0.1);
@@ -102,9 +104,14 @@ export async function ensureInitialized(args: CliArgs): Promise<string | undefin
 export async function chatCommand(args: CliArgs): Promise<void> {
   const configPath = await ensureInitialized(args);
   const config = loadConfig(configPath);
-  const agent = config.agents[0];
+  const agent = selectChatAgent(config.agents, args.agent);
   if (!agent) {
-    console.error('[Error] No agents defined in config');
+    const available = config.agents.map((a) => a.id).join(', ') || '(none)';
+    console.error(
+      args.agent
+        ? `[Error] Agent "${args.agent}" not found in config; available: ${available}`
+        : '[Error] No agents defined in config',
+    );
     process.exit(1);
   }
 
@@ -166,6 +173,7 @@ export async function chatCommand(args: CliArgs): Promise<void> {
     agentId: agent.id,
     gatewayUrl,
     apiKey: resolveGatewayApiKey(config as unknown as Record<string, unknown>),
+    resumeSessionId: args.resume,
   });
   await app.start();
 }

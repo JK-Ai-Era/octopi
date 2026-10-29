@@ -21,6 +21,10 @@ export interface CliArgs {
   restore?: boolean | string;
   /** llm-diff：目标 session id（缺省 = 最近更新的 session） */
   session?: string;
+  /** chat：目标 agent id（缺省 = config.agents[0]） */
+  agent?: string;
+  /** chat：启动即续接的会话 id（含历史加载） */
+  resume?: string;
   /** llm-diff：wire dump 根目录 */
   dir?: string;
   /** llm-diff：展示的调用条数（0 = 全部） */
@@ -60,6 +64,8 @@ export function parseArgs(argv: string[] = process.argv.slice(2)): CliArgs {
   let only: string[] | undefined;
   let restore: boolean | string | undefined;
   let session: string | undefined;
+  let agent: string | undefined;
+  let resume: string | undefined;
   let dir: string | undefined;
   let limit: number | undefined;
   let cacheDiscount: number | undefined;
@@ -120,6 +126,12 @@ export function parseArgs(argv: string[] = process.argv.slice(2)): CliArgs {
       case '--session':
         session = requireFlagValue(argv, ++i, '--session');
         break;
+      case '--agent':
+        agent = requireFlagValue(argv, ++i, '--agent');
+        break;
+      case '--resume':
+        resume = requireFlagValue(argv, ++i, '--resume');
+        break;
       case '--dir':
         dir = requireFlagValue(argv, ++i, '--dir');
         break;
@@ -164,6 +176,8 @@ export function parseArgs(argv: string[] = process.argv.slice(2)): CliArgs {
     allowDeleteLegacyDirs,
     restore,
     session,
+    agent,
+    resume,
     dir,
     limit,
     cacheDiscount,
