@@ -83,6 +83,8 @@ describe('DefaultContextEngine', () => {
       const compressSpy = vi.fn<Compressor['compress']>().mockResolvedValue({
         result: [],
         estimatedTokens: 0,
+        fresh: false,
+        summarizeAttempted: false,
       });
       const mockCompressor: Compressor = { compress: compressSpy };
 
@@ -119,6 +121,8 @@ describe('DefaultContextEngine', () => {
       const compressSpy = vi.fn<Compressor['compress']>().mockResolvedValue({
         result: [makeMessages(1, 'compressed')[0]],
         estimatedTokens: 50,
+        fresh: false,
+        summarizeAttempted: false,
       });
       const mockCompressor: Compressor = { compress: compressSpy };
 
@@ -160,6 +164,8 @@ describe('DefaultContextEngine', () => {
         compress: vi.fn().mockResolvedValue({
           result: [compressedMsg],
           estimatedTokens: 50,
+          fresh: false,
+          summarizeAttempted: false,
         }),
       };
 

@@ -14,6 +14,8 @@ export interface CreateProviderSummarizeOptions {
   model?: string;
   /** 摘要温度（默认 0.3，偏确定性） */
   temperature?: number;
+  /** 模型实际输出上限（评审 F6）：摘要硬顶的源头钳制，防大窗口下 0.1×W 顶穿 max_output_tokens */
+  maxOutputTokens?: number;
 }
 
 /**
@@ -33,7 +35,12 @@ export function createProviderSummarize(
       model: options?.model,
       // 未显式配置即不发送：由模型配置（ModelInfo.temperature）或服务端默认决定
       temperature: options?.temperature,
-      maxTokens: opts?.maxTokens,
+      // 源头钳制（评审 F6）：三条摘要路径（manual/proactive/overflow）共用本闭包，
+      // 硬顶不得越过模型实际输出上限，否则窗口钳制在大窗口下仍会顶穿被 provider 400
+      maxTokens:
+        options?.maxOutputTokens && options.maxOutputTokens > 0
+          ? Math.min(opts?.maxTokens ?? options.maxOutputTokens, options.maxOutputTokens)
+          : opts?.maxTokens,
     });
     return response.content;
   };

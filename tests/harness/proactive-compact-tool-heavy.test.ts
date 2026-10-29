@@ -181,10 +181,15 @@ describe('主动压缩 × 工具输出密集历史（连线回归）', () => {
       emit: (e: { type: string; cached?: boolean }) => events.push({ type: e.type, cached: e.cached }),
     };
 
-    const r1 = await engine.assemble({ ...params, messages: atTurnBoundary(base) });
+    const firstMessages = atTurnBoundary(base);
+    const r1 = await engine.assemble({ ...params, messages: firstMessages });
     expect(summarize).toHaveBeenCalledTimes(1);
     // 降级占位说明（[Context truncated…]）不得冒充语义摘要（修复前会被存进 previousSummary）
     expect(r1.compactState?.summary).toBeUndefined();
+    // 拆门语义（F8-F1 修正）：机械降级也推进增长门计数（「有计数无摘要」是生产状态形状），
+    // 语义覆盖终点不得推进——被丢的中段仍由 sticky 增量兜住（宁可胖不丢）
+    expect(r1.compactState?.lastProactiveMessageCount).toBe(firstMessages.length);
+    expect(r1.compactState?.lastProactiveCoverEnd).toBeUndefined();
     expect(nonCachedCompacts(events)).toHaveLength(1);
 
     events.length = 0;

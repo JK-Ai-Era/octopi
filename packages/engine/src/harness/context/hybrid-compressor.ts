@@ -60,6 +60,8 @@ export class HybridCompressor implements Compressor {
       return {
         result: [],
         estimatedTokens: 0,
+        fresh: false,
+        summarizeAttempted: false,
       };
     }
 
@@ -72,6 +74,8 @@ export class HybridCompressor implements Compressor {
       return {
         result: [...messages],
         estimatedTokens: currentTokens,
+        fresh: false,
+        summarizeAttempted: false,
       };
     }
 
@@ -85,6 +89,8 @@ export class HybridCompressor implements Compressor {
         result: preprocessed,
         estimatedTokens: preprocessedTokens,
         droppedSummary: 'Old tool outputs truncated',
+        fresh: false,
+        summarizeAttempted: false,
       };
     }
 

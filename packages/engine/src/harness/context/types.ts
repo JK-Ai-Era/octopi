@@ -60,7 +60,7 @@ export type ContextCompactReason = 'proactive' | 'overflow';
  * 避免 LLM 摘要耗时被误判为会话卡死。失败不中断本轮（引擎回退截断）。
  */
 export interface ContextCompactEvent {
-  type: 'context.compact.start' | 'context.compact.end' | 'context.compact.error';
+  type: 'context.compact.start' | 'context.compact.end' | 'context.compact.error' | 'context.compact.summarize_fallback';
   sessionId: string;
   reason?: ContextCompactReason;
   /** 压缩前估算 token */
@@ -73,6 +73,8 @@ export interface ContextCompactEvent {
   durationMs?: number;
   /** 走缓存摘要重建，未调 LLM */
   cached?: boolean;
+  /** summarize_fallback：cache-miss 旁路原因（no_prefix | window_guard | window_exhausted，F22） */
+  fallback?: string;
   error?: string;
 }
 
@@ -97,6 +99,8 @@ export interface AssembleParams {
   tokenBudget?: number;
   /** 模型上下文窗口（仅显式配置时传入） */
   contextWindow?: number;
+  /** 模型 max_output_tokens（评审 F8R-04）：摘要硬顶按输出上限钳制，防自动路径顶穿被 400 */
+  maxOutputTokens?: number;
   /**
    * 显式压缩目标 token（context.compactTargetTokens）。
    * 与 contextWindow 无关；未知窗口时仍可作手动/结构压缩的目标。
@@ -319,6 +323,17 @@ export interface CompressParams {
    * 摘要请求只许在其**尾部**追加指令；禁止改 system / 历史字节——否则打穿 provider 前缀缓存。
    */
   llmPrefix?: LLMMessage[];
+  /** 摘要软目标预算（P1c clamp(2%, 2k, 8k) 的可配置 ratio/min/max） */
+  summaryBudget?: { ratioPct?: number; minTokens?: number; maxTokens?: number };
+  /** 折叠区间（评审 F7）：交接书替换范围与原样保留尾部——计数语义 */
+  foldRange?: { replacedCount: number; total: number; preservedTail: number };
+  /** task 快照（B0：易变块走 content 尾部，不进 system） */
+  taskSnapshot?: string;
+  /** 会话模型窗口/输出上限（评审 F5）：摘要硬顶按窗口钳制 */
+  contextWindow?: number;
+  maxOutputTokens?: number;
+  /** 事件回调（F22：cache-miss 旁路可观测） */
+  emit?: (e: { type: 'compact.summarize_fallback'; reason?: string; cached?: boolean }) => void;
 }
 
 export interface CompressResult {
@@ -326,6 +341,11 @@ export interface CompressResult {
   result: Message[];
   /** 估算 token 数 */
   estimatedTokens: number;
+  /** 本次产出**新的**语义摘要（评审 F8-F1）：仅 true 时调用方才可推进覆盖点/previousSummary。
+   *  机械降级（截断/兜底/占位说明）必须显式 false——占位说明不得冒充语义摘要（fail-closed，F8R-01）。 */
+  fresh: boolean;
+  /** LLM 摘要调用是否真正发起过（成功/失败均算）：只在 true 时推进冷却时间戳（F8R-01）。 */
+  summarizeAttempted: boolean;
   /** 被丢弃的信息摘要 */
   droppedSummary?: string;
 }

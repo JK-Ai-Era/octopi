@@ -228,6 +228,7 @@ export class DefaultContextEngine implements ContextEngine {
       systemPrompt,
       tools,
       contextWindow,
+      maxOutputTokens,
       compactTargetTokens,
       signal,
       tokenEstimator,
@@ -250,10 +251,12 @@ export class DefaultContextEngine implements ContextEngine {
 
     const estimator = tokenEstimator ?? this.config.tokenEstimator;
 
-    // 0. 进程重启后从持久层恢复压缩状态（仅当内存态尚无摘要时）
+    // 进程重启后从持久层恢复压缩状态（仅当内存态完全没有压缩态时）。
+    // 「有计数无摘要」（机械降级轮后）也是压缩态：若只看 previousSummary，降级轮之后
+    // 每个 turn 都会重跑恢复、用持久化值覆盖内存里的增长门基数/覆盖终点（F8R-08）。
     if (loadCompactState) {
       const existing = this.states.get(stateKey);
-      if (!existing?.previousSummary) {
+      if (!existing?.previousSummary && existing?.lastProactiveMessageCount == null) {
         const restored = await loadCompactState(sessionId);
         if (restored?.summary || restored?.lastProactiveMessageCount != null) {
           this.states.set(stateKey, {
@@ -287,6 +290,8 @@ export class DefaultContextEngine implements ContextEngine {
               emit,
               systemPrompt,
               tools,
+              contextWindow,
+              maxOutputTokens,
             })
           : { messages };
       const view =
@@ -313,7 +318,7 @@ export class DefaultContextEngine implements ContextEngine {
     const tokenBudgetForAlloc = budgetCap;
     const budget = this.config.budgetAllocator.allocate({
       tokenBudget: tokenBudgetForAlloc,
-      contextWindow: windowKnown ? contextWindow : undefined,
+      contextWindow,
       systemPromptTokens: estimator.estimateText(systemPrompt),
       toolTokens: estimator.estimateTools(tools),
     });
@@ -330,6 +335,8 @@ export class DefaultContextEngine implements ContextEngine {
       emit,
       systemPrompt,
       tools,
+      contextWindow,
+      maxOutputTokens,
     });
     const workingMessages = proactive.messages;
     const proactiveDroppedSummary = proactive.droppedSummary;
@@ -382,6 +389,7 @@ export class DefaultContextEngine implements ContextEngine {
 
     let compressedOverflow: Message[];
     let droppedSummary: string | undefined;
+    let overflowFresh = false;
 
     // 计算溢出部分的压缩目标：head + selectedMiddle + tail 已占的 token
     // selection.estimatedTokens = head + selectedMiddle + tail 的 token 数
@@ -427,7 +435,27 @@ export class DefaultContextEngine implements ContextEngine {
             summarize,
             tokenEstimator: estimator,
             llmPrefix: overflowLlmPrefix,
+            // F8 统一契约：预算/折叠区间/窗口/事件与 manual、proactive 同源
+            summaryBudget: this.config.summaryBudget,
+            foldRange: {
+              replacedCount: selection.overflow.length,
+              total: workingMessages.length,
+              preservedTail: selection.tail.length,
+            },
+            contextWindow: params.contextWindow,
+            maxOutputTokens: params.maxOutputTokens,
+            emit: emit
+              ? (e) =>
+                  emit({
+                    type: 'context.compact.summarize_fallback',
+                    sessionId,
+                    reason: 'overflow',
+                    fallback: e.reason,
+                    cached: e.cached,
+                  })
+              : undefined,
           });
+          overflowFresh = compressed.fresh === true;
           compressedOverflow = compressed.result;
           droppedSummary = compressed.droppedSummary;
           break;
@@ -485,10 +513,13 @@ export class DefaultContextEngine implements ContextEngine {
       cached: false,
     });
     const overflowState = this.states.get(stateKey);
+    // fresh 门控（评审 F8-F1）：机械降级/失败产出不得冒充新摘要推进 previousSummary
     this.states.set(stateKey, {
       ...overflowState,
       // 存摘要正文（而非 dropped 描述），供下次迭代更新
-      previousSummary: this.extractSummaryText(compressedOverflow) ?? overflowState?.previousSummary,
+      previousSummary: overflowFresh
+        ? this.extractSummaryText(compressedOverflow) ?? overflowState?.previousSummary
+        : overflowState?.previousSummary,
     });
 
     // 8. 构建 LLM 消息（校准基 = 老化后 LLM 视图估算——尺子必须量实际请求，
@@ -557,6 +588,10 @@ export class DefaultContextEngine implements ContextEngine {
     /** 缓存前缀原料：与会话请求同形（system+tools+完整历史） */
     systemPrompt: string;
     tools: LLMToolDefinition[];
+    /** 会话模型窗口（评审 F5）：摘要硬顶按窗口钳制 */
+    contextWindow?: number;
+    /** 模型 max_output_tokens（F8R-04）：自动路径摘要硬顶按输出上限钳制 */
+    maxOutputTokens?: number;
   }): Promise<{ messages: Message[]; droppedSummary?: string }> {
     const {
       sessionId,
@@ -596,7 +631,7 @@ export class DefaultContextEngine implements ContextEngine {
      * 零 LLM 粘滞重建。
      *
      * 有语义摘要时：head + 摘要 + **摘要覆盖点之后的增量** + tail。
-     * 增量（上次 `lastProactiveMessageCount` 之后、已滑出 tail 的消息）不得被旧摘要顶掉——
+     * 增量（`lastProactiveCoverEnd` 之后、已滑出 tail 的消息）不得被旧摘要顶掉——
      * 否则长 tool turn 会丢当前 run 前半段工作记录。
      *
      * @param targetMiddleTokens - 增量段机械压缩预算
@@ -765,8 +800,9 @@ export class DefaultContextEngine implements ContextEngine {
       if (sticky) {
         const reducedTokens = estimator.estimateMessages(sticky.messages);
         // 只更新视图 token，**不要**改 lastProactiveMessageCount：
-        // 该字段表示「压缩覆盖到的全量条数」，只能在真正完成一次压缩时推进。
-        // 若复用重建也改成 messages.length，每轮 +1 会永远凑不满再压缩阈值。
+        // 该字段是「上次压缩轮（含机械降级）的全量条数」= 增长门基数 + 压缩态粘滞标记，
+        // 仅在真实压缩轮结束时推进（不含复用重建）。若复用重建也改成 messages.length，
+        // 每轮 +1 会永远凑不满再压缩阈值。
         this.states.set(stateKey, {
           ...state,
           lastProactiveTokens: reducedTokens,
@@ -826,6 +862,28 @@ export class DefaultContextEngine implements ContextEngine {
         tokenEstimator: estimator,
         requireSummary: true,
         llmPrefix,
+        // F8 统一契约：预算/折叠区间与手动路径同源
+        summaryBudget: this.config.summaryBudget,
+        foldRange: {
+          // 视图口径（与 manual 的 tailStart - headEnd 一致）：被替换的是 headEnd..tailStart
+          // 整段；middle 是 semanticHistory 过滤后的条数，含 turn 元数据时会偏小
+          replacedCount: tailStart - headEnd,
+          total: messages.length,
+          preservedTail: tail.length,
+        },
+        contextWindow: params.contextWindow,
+        maxOutputTokens: params.maxOutputTokens,
+        // F22：cache-miss 旁路透传可观测事件
+        emit: emit
+          ? (e) =>
+              emit({
+                type: 'context.compact.summarize_fallback',
+                sessionId,
+                reason: 'proactive',
+                fallback: e.reason,
+                cached: e.cached,
+              })
+          : undefined,
       });
     } catch (err) {
       emit?.({
@@ -845,18 +903,25 @@ export class DefaultContextEngine implements ContextEngine {
     const actualSummary =
       this.extractSummaryText(compressed.result) ?? state?.previousSummary;
 
+    // fresh（评审 F8-F1）= 本次产出**新的**语义摘要；false 时 actualSummary 只是旧摘要兜底：
+    // 机械降级丢掉的中段不得被记成「已覆盖」（否则 rebuildStickyView 增量起点越过后它们永远
+    // 回不到视图——静默失忆）：previousSummary 与覆盖终点只在 fresh 时推进（宁可胖不丢）。
+    const fresh = compressed.fresh === true;
     this.states.set(stateKey, {
       ...state,
-      previousSummary: actualSummary,
+      previousSummary: fresh ? actualSummary : state?.previousSummary,
       lastEstimatedTokens: reducedTokens,
-      // 增长门用全量条数；覆盖终点单独记 tailStart（tail 不在摘要内）
+      // 增长门计数随任何**完成的压缩轮**推进（含机械降级）——它是「自上次压缩新增条数」的
+      // 基数与压缩态粘滞标记；若只随 fresh 推进，无摘要会话每轮被判全量新增、复用分支
+      // 永远进不去（每 turn 重打 LLM）。「有计数无摘要」是生产状态形状（重启恢复快照
+      // 即此形状）。覆盖终点语义不同：只随 fresh 推进（被丢的中段由 sticky 增量兜住）。
       lastProactiveMessageCount: messages.length,
-      lastProactiveCoverEnd: tailStart,
+      ...(fresh ? { lastProactiveCoverEnd: tailStart } : {}),
       lastProactiveTokens: reducedTokens,
       lastProactiveFullTokens: currentTokens,
-      // 本轮（requireSummary）真正发起过 LLM 摘要调用（成功或失败均算发起），
-      // 时间戳用于冷却；复用重建与纯机械降级不得推进此字段。
-      lastProactiveLlmAt: Date.now(),
+      // 只在 LLM 摘要调用真正发起过时推进冷却时间戳（成功/失败均算发起，防打爆）；
+      // 复用重建与未发起调用的机械降级不得推进此字段
+      lastProactiveLlmAt: compressed.summarizeAttempted ? Date.now() : state?.lastProactiveLlmAt,
     });
 
     emit?.({
@@ -1135,6 +1200,8 @@ export class DefaultContextEngine implements ContextEngine {
     compactTargetTokens?: number;
     /** 缓存前缀：会话同形 system+history；有则摘要只尾部追加指令 */
     llmPrefix?: LLMMessage[];
+    /** F22：cache-miss 旁路事件出口（manual 单发压缩的可观测性，与 proactive/overflow 对称） */
+    emit?: ContextEmitFn;
     /** 同形前缀原料：systemPrompt 齐备且无现成 llmPrefix 时引擎内建（与 assemble 的 buildLlmMessages 同源） */
     systemPrompt?: string;
     tools?: LLMToolDefinition[];
@@ -1202,14 +1269,24 @@ export class DefaultContextEngine implements ContextEngine {
         taskSnapshot: params.taskSnapshot,
         // 折叠区间（评审 F7）：摘要器须覆盖 middle 区间、不总结原样保留的尾部
         foldRange: {
-          coveredThrough: tailStart,
+          replacedCount: tailStart - headEnd,
           total: messages.length,
-          preservedTail: protectLastN,
+          preservedTail: messages.length - tailStart,
         },
         contextWindow: params.contextWindow,
         maxOutputTokens: params.maxOutputTokens,
         onSummarizeFail: 'truncate',
         llmPrefix,
+        // F8R-06：manual 路 cache-miss 旁路同样可观测（no_prefix/window_guard/window_exhausted）
+        emit: params.emit
+          ? (e) =>
+              params.emit!({
+                type: 'context.compact.summarize_fallback',
+                sessionId: params.sessionId,
+                fallback: e.reason,
+                cached: e.cached,
+              })
+          : undefined,
       },
     );
 
@@ -1292,6 +1369,8 @@ export class DefaultContextEngine implements ContextEngine {
     /** 会话模型窗口/输出上限（评审 F5）：摘要请求硬顶按窗口钳制 */
     contextWindow?: number;
     maxOutputTokens?: number;
+    /** F22：cache-miss 旁路事件出口（manual 路可观测性，与 proactive/overflow 对称） */
+    emit?: ContextEmitFn;
   }): Promise<CompactResult> {
     const estimator = this.config.tokenEstimator;
     const stateKey = compactStateKey(input.sessionId, input.agentId);
@@ -1308,6 +1387,7 @@ export class DefaultContextEngine implements ContextEngine {
       taskSnapshot: input.taskSnapshot,
       contextWindow: input.contextWindow,
       maxOutputTokens: input.maxOutputTokens,
+      emit: input.emit,
     });
     return {
       ok: true,

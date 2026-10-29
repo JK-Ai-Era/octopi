@@ -19,6 +19,7 @@ import {
   summarySoftTargetTokens,
 } from '@octopi-agent/engine/harness/context/capabilities/compact/engine.js';
 import { renderSessionTasksInjection } from '@octopi-agent/engine/harness/session/tasks/render.js';
+import { LLMSummaryCompressor } from '@octopi-agent/engine/harness/context/llm-summarizer.js';
 
 function userMsg(text: string): Message {
   return { role: 'user', content: text, timestamp: Date.now() };
@@ -50,7 +51,7 @@ describe('交接式摘要：指令形态与注入', () => {
       summarizeFn: summarize,
       llmPrefix: prefix,
       taskSnapshot: '<session_tasks>\n- [t1] open | 批次2\n</session_tasks>',
-      foldRange: { coveredThrough: 5, total: 8, preservedTail: 3 },
+      foldRange: { replacedCount: 3, total: 8, preservedTail: 3 },
     });
 
     const request = summarize.mock.calls[0]![0] as LLMMessage[];
@@ -63,10 +64,10 @@ describe('交接式摘要：指令形态与注入', () => {
     expect(tail).toContain('Open items & commitments');
     expect(tail).toContain('Conclusions & decisions');
     expect(tail).toContain('Evidence pointers');
-    expect(tail).toContain('do not summarize the preserved tail');
+    expect(tail).toContain('keep the summary off the preserved one');
     // 折叠区间边界（评审 F7）：交接书替换到哪、哪些原样保留，模型必须先知道
     expect(tail).toContain('Fold boundary');
-    expect(tail).toContain('#5 of 8');
+    expect(tail).toContain('summarizes 3 older messages of 8');
     // task 快照在指令尾部（B0：易变块走 content 尾部）
     expect(tail).toContain('<session_tasks>');
     expect(tail.indexOf('<session_tasks>')).toBeGreaterThan(tail.indexOf('Evidence pointers'));
@@ -277,5 +278,125 @@ describe('闸门判据边界与窗口护栏（评审 F2/F3/F4/F5）', () => {
     const cap = (summarize.mock.calls[0]![1] as { maxTokens: number }).maxTokens;
     expect(cap).toBeLessThan(2000 * 4); // 保险丝被 0.1×window 钳制
     expect(cap).toBeGreaterThanOrEqual(256);
+  });
+});
+
+describe('F8 模板统一：跨路同源与降级标志（评审 F1/F5/F13）', () => {
+  it('两路尾部指令同源（F13 防双实现漂移）：compressor 与 compact 引擎同参同字', async () => {
+    const messages = [
+      userMsg('open item'),
+      userMsg('middle one'),
+      userMsg('middle two'),
+      userMsg('middle three'),
+      userMsg('middle four'),
+      userMsg('tail end'),
+    ];
+    const shared = {
+      previousSummary: 'OLD-SUM',
+      foldRange: { replacedCount: 4, total: 6, preservedTail: 1 },
+      taskSnapshot: '<session_tasks>T</session_tasks>',
+    };
+
+    let fromCompressor = '';
+    let compressorMax = 0;
+    await new LLMSummaryCompressor().compress({
+      messages,
+      targetTokens: 50,
+      ...shared,
+      // 同形状对照（都在 llmPrefix 分支比 tailUser）：compressor 无前缀走 textify 布局
+      // （尾部 user 是 New content 拼接），与引擎前缀分支的 tailUser 不同形，不可比
+      llmPrefix: [{ role: 'system', content: 'SYS' }],
+      summarize: async (msgs, opts) => {
+        fromCompressor = String(msgs[msgs.length - 1]!.content);
+        compressorMax = opts?.maxTokens ?? 0;
+        return CLEAN_HANDOFF;
+      },
+      requireSummary: true,
+    });
+
+    let fromEngine = '';
+    let engineMax = 0;
+    const engine = createCompactEngine();
+    await engine.compactMessages(messages, {
+      mode: 'structure_only',
+      protectHead: 0,
+      protectTail: 0,
+      ...shared,
+      llmPrefix: [{ role: 'system', content: 'SYS' }],
+      summarizeFn: async (msgs, opts) => {
+        fromEngine = String(msgs[msgs.length - 1]!.content);
+        engineMax = opts?.maxTokens ?? 0;
+        return CLEAN_HANDOFF;
+      },
+    });
+
+    expect(fromCompressor.length).toBeGreaterThan(0);
+    // 逐字同源（含预算行）：预算公式两路同传参（F8R-09 修正：原 strip 是 no-op，反而掩盖预算分叉）
+    expect(fromCompressor).toBe(fromEngine);
+    // 预算同源：软目标/硬顶/窗口钳制推导链两侧不许分叉
+    expect(compressorMax).toBe(engineMax);
+
+    // textify 分支同源：system 指令逐字一致（user 正文由两路各自 formatter 渲染，模板块仍单源）
+    let sysFromCompressor = '';
+    await new LLMSummaryCompressor().compress({
+      messages,
+      targetTokens: 50,
+      ...shared,
+      summarize: async (msgs) => {
+        sysFromCompressor = String(msgs[0]!.content);
+        return CLEAN_HANDOFF;
+      },
+      requireSummary: true,
+    });
+    let sysFromEngine = '';
+    await engine.compactMessages(messages, {
+      mode: 'structure_only',
+      protectHead: 0,
+      protectTail: 0,
+      ...shared,
+      summarizeFn: async (msgs) => {
+        sysFromEngine = String(msgs[0]!.content);
+        return CLEAN_HANDOFF;
+      },
+    });
+    expect(sysFromEngine.length).toBeGreaterThan(0);
+    expect(sysFromCompressor).toBe(sysFromEngine);
+  });
+
+  it('机械降级不冒充新摘要（F1）：fresh=false 且 summarizeAttempted 如实', async () => {
+    const compressor = new LLMSummaryCompressor();
+    const messages = [userMsg('a'.repeat(200)), userMsg('b'.repeat(200))];
+    const empty = await compressor.compress({
+      messages,
+      targetTokens: 50,
+      summarize: async () => '',
+      requireSummary: true,
+    });
+    expect(empty.fresh).toBe(false); // 空摘要按失败降级：调用方不得据此推进覆盖点
+    expect(empty.summarizeAttempted).toBe(true); // 调用确实发起过 → 冷却时间戳应推进
+
+    const noSummarizer = await compressor.compress({
+      messages,
+      targetTokens: 50,
+      requireSummary: true,
+    });
+    expect(noSummarizer.fresh).toBe(false);
+    expect(noSummarizer.summarizeAttempted).toBe(false); // 未发起调用：冷却不推进
+  });
+
+  it('cache-miss 旁路发出可观测事件（F5/F22）', async () => {
+    const events: Array<{ type: string; reason?: string }> = [];
+    const engine = createCompactEngine();
+    const messages = Array.from({ length: 8 }, (_, i) => userMsg(`m${i}-content`));
+    await engine.compactMessages(messages, {
+      mode: 'structure_only',
+      protectHead: 0,
+      protectTail: 0,
+      summarizeFn: async () => CLEAN_HANDOFF,
+      emit: (e) => events.push(e),
+    });
+    expect(
+      events.some((e) => e.type === 'compact.summarize_fallback' && e.reason === 'no_prefix'),
+    ).toBe(true);
   });
 });

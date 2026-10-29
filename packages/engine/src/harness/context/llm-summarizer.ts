@@ -7,13 +7,20 @@
  * 摘要策略：
  * 1. 将消息格式化为上下文
  * 2. 调用 LLM 生成结构化摘要
- * 3. 摘要 token 预算：contentTokens × 0.20（上下限：2000 - 12000）
+ * 3. 摘要预算（P1c/F8）：clamp(2%, 2k, 8k) 软目标写指令 + 4× 保险丝硬顶——与 compact 引擎同语义
  */
 
 import type { Message } from '@octopi-agent/core/types.js';
 import { getTextContent } from '@octopi-agent/core/types.js';
 import type { LLMMessage } from '@octopi-agent/core/interfaces/model-provider.js';
-import { detectSummaryContamination } from './capabilities/compact/index.js';
+import {
+  buildHandoverPrompt,
+  buildHandoverUserContent,
+  clampSummaryProviderCap,
+  detectSummaryContamination,
+  summarySoftTargetTokens,
+} from './capabilities/compact/index.js';
+import { estimateLLMMessages } from './token-estimator.js';
 import type {
   Compressor,
   CompressParams,
@@ -53,65 +60,7 @@ export function buildToolCallLedger(messages: Message[]): string {
   return lines.join('\n');
 }
 
-/**
- * 结构化摘要模板（F-d 硬约束：Done 逐条可核验 + 交接语防重做）
- */
-const SUMMARY_TEMPLATE = `## Conversation Summary
-
-> HANDOFF: Your working memory was compacted. First check Done/ToDo and the session task list (task_*). DO NOT redo work listed under Done.
-
-### Goal
-[What the user is trying to accomplish]
-
-### Progress
-#### Done
-- [each item MUST be] what was done + artifact path(s) / exact identifiers
-- ...
-
-#### In Progress
-[What is currently being worked on]
-
-#### Blocked
-[Any issues or blockers]
-
-### Key Decisions
-[Important technical decisions and reasons]
-
-### Relevant Files
-[Files read, modified, or created — absolute or workspace-relative paths]
-
-### Next Steps
-[What needs to be done next; align with task_* list when present]
-
-### Key Context
-[Specific values, error messages, configuration details]`;
-
-/**
- * 摘要指令（缓存友好：只作 **user 尾部** 追加，绝不改写 system/历史）。
- * 规则与旧 SUMMARIZE_INSTRUCTION 对齐；模板不变。
- */
-function buildSummarizeTailInstruction(params: {
-  previousSummary?: string;
-  maxTokens: number;
-}): string {
-  const header = params.previousSummary
-    ? `You are updating an existing conversation summary. Merge the conversation above into the summary below.\n\nPrevious Summary:\n${params.previousSummary}`
-    : `You are a conversation summarizer. Create a concise, structured summary of the conversation above.`;
-  return `${header}
-
-Rules:
-1. Focus on factual information, not pleasantries
-2. Preserve specific details (file paths, error messages, code snippets)
-3. Use the exact structure provided in the template
-4. If updating a previous summary, merge new information rather than replacing everything
-5. Keep the summary under ${params.maxTokens} tokens
-6. HARD: Every Done item must state what was completed AND the artifact path or exact identifier
-7. HARD: Keep the HANDOFF line at the top unchanged in meaning — it prevents redoing finished work
-8. HARD: Do not invent paths or claim work that is not evidenced in the history
-
-Template:
-${SUMMARY_TEMPLATE}`;
-}
+/** 模板/指令/合并语义已单源化到 capabilities/compact/handover.ts（F8 模板统一：四段式交接书）。 */
 
 export class LLMSummaryCompressor implements Compressor {
   /**
@@ -128,7 +77,7 @@ export class LLMSummaryCompressor implements Compressor {
 
     // 如果没有摘要函数，返回截断结果
     if (!summarize) {
-      return this.fallbackTruncate(messages, targetTokens, estimator);
+      return this.fallbackTruncate(messages, targetTokens, estimator, false);
     }
 
     // 如果没有消息需要压缩
@@ -136,6 +85,8 @@ export class LLMSummaryCompressor implements Compressor {
       return {
         result: [],
         estimatedTokens: 0,
+        fresh: false,
+        summarizeAttempted: false,
       };
     }
 
@@ -148,11 +99,19 @@ export class LLMSummaryCompressor implements Compressor {
       return {
         result: [...messages],
         estimatedTokens: currentTokens,
+        fresh: false,
+        summarizeAttempted: false,
       };
     }
 
-    // 计算摘要 token 预算
-    const summaryTokens = this.calculateSummaryBudget(currentTokens);
+    // F8 单一预算语义：P1c clamp(2%, 2k, 8k) 软目标写指令；provider 硬顶 = 4× 保险丝 + 窗口钳制
+    const softTarget = summarySoftTargetTokens(currentTokens, params.summaryBudget);
+    const prompt = buildHandoverPrompt({
+      maxTokens: softTarget,
+      previousSummary,
+      foldRange: params.foldRange,
+      taskSnapshot: params.taskSnapshot,
+    });
 
     // 格式化消息为 LLM 可读的上下文（仅无 llmPrefix 时的旁路）
     const formattedContext = this.formatMessagesForSummary(messages);
@@ -160,33 +119,56 @@ export class LLMSummaryCompressor implements Compressor {
     // 构建 LLM 消息
     // 缓存优先：llmPrefix（会话 system+history 同形）+ 尾部 user 指令。
     // 禁止改写 system / 重排历史——否则打穿 provider 前缀缓存。
-    let llmMessages: LLMMessage[];
-    if (params.llmPrefix && params.llmPrefix.length > 0) {
-      llmMessages = [
-        ...params.llmPrefix,
-        {
-          role: 'user',
-          content: buildSummarizeTailInstruction({
-            previousSummary,
-            maxTokens: summaryTokens,
-          }),
-        },
-      ];
-    } else {
-      llmMessages = [
-        {
-          role: 'system',
-          content: buildSummarizeTailInstruction({ previousSummary, maxTokens: summaryTokens }),
-        },
-        { role: 'user', content: formattedContext },
-      ];
+    const buildPrefixed = (): LLMMessage[] => [
+      ...params.llmPrefix!,
+      { role: 'user', content: prompt.tailUser },
+    ];
+    const buildTextify = (): LLMMessage[] => [
+      { role: 'system', content: prompt.instruction },
+      { role: 'user', content: buildHandoverUserContent(params, formattedContext) },
+    ];
+
+    let usePrefix = Boolean(params.llmPrefix?.length);
+    let llmMessages = usePrefix ? buildPrefixed() : buildTextify();
+    // 回声比对源 = 模型实际可见文本投影（评审 F8）：前缀模式只比前缀内容——formattedContext 是
+    // 文本化重渲染，模型并未看见，算进比对源只增误伤面；与 compact 引擎同判据
+    let echoSource = usePrefix
+      ? (params.llmPrefix ?? []).map((m) => String(m.content ?? '')).join('\n')
+      : formattedContext;
+
+    const hardCap = softTarget * 4;
+    const capOf = (msgs: LLMMessage[]): number =>
+      clampSummaryProviderCap({
+        hardCap,
+        // estimateLLMMessages 口径含 tool_calls/content block/消息开销——摘要恰在工具密集
+        // 会话触发，String(content) 口径会把 tool_calls 全漏掉、多模态块变 [object Object]
+        inputTokens: estimateLLMMessages(msgs),
+        contextWindow: params.contextWindow,
+        maxOutputTokens: params.maxOutputTokens,
+      });
+    let providerMaxTokens = capOf(llmMessages);
+    // F22 可观测：无前缀/被迫旁路 = cache-miss，如实上报，不静默换请求形状
+    if (!usePrefix) {
+      params.emit?.({ type: 'compact.summarize_fallback', reason: 'no_prefix', cached: false });
+    }
+    if (providerMaxTokens < 256 && usePrefix) {
+      usePrefix = false;
+      llmMessages = buildTextify();
+      echoSource = formattedContext;
+      providerMaxTokens = capOf(llmMessages);
+      params.emit?.({ type: 'compact.summarize_fallback', reason: 'window_guard', cached: false });
+    }
+    if (providerMaxTokens < 256) {
+      // F12 可观测：窗口穷尽是最终失败，事件如实上报（不止于换旁路时）
+      params.emit?.({ type: 'compact.summarize_fallback', reason: 'window_exhausted', cached: false });
+      return this.fallbackTruncate(messages, targetTokens, estimator, false);
     }
 
     try {
       // 调用 LLM 生成摘要
       const summary = await summarize(llmMessages, {
         previousSummary,
-        maxTokens: summaryTokens,
+        maxTokens: providerMaxTokens,
       });
 
       // 空摘要（拒答/内容过滤）按失败处理：不得用空正文替换中间段、更不得冒充语义摘要
@@ -196,11 +178,6 @@ export class LLMSummaryCompressor implements Compressor {
 
       // 输出闸门（评审 F8）：proactive/overflow 与手动路径同一污染判据——续写污染
       //（对话体/工具调用形状、成段回声）按失败处理，走截断降级（诚实降级，不落坏摘要）。
-      // 回声源 = 模型实际看到的会话文本投影（前缀内容 ∪ 文本化中段）。
-      const echoSource = [
-        ...(params.llmPrefix ?? []).map((m) => String(m.content ?? '')),
-        formattedContext,
-      ].join('\n');
       if (detectSummaryContamination(summary, echoSource)) {
         return this.fallbackTruncate(messages, targetTokens, estimator);
       }
@@ -220,6 +197,8 @@ export class LLMSummaryCompressor implements Compressor {
         result: [summaryMessage],
         estimatedTokens: summaryMessageTokens,
         droppedSummary: `Conversation compressed from ${currentTokens} to ~${summaryMessageTokens} tokens`,
+        fresh: true,
+        summarizeAttempted: true,
       };
     } catch (err) {
       // LLM 摘要失败，回退到截断
@@ -228,16 +207,6 @@ export class LLMSummaryCompressor implements Compressor {
     }
   }
 
-  /**
-   * 计算摘要 token 预算
-   *
-   * 公式：contentTokens × 0.20
-   * 上下限：2000 - 12000
-   */
-  private calculateSummaryBudget(contentTokens: number): number {
-    const budget = Math.floor(contentTokens * 0.20);
-    return Math.max(2000, Math.min(12000, budget));
-  }
 
   /**
    * 格式化消息为 LLM 可读的上下文
@@ -282,6 +251,7 @@ export class LLMSummaryCompressor implements Compressor {
     messages: Message[],
     _targetTokens: number,
     estimator: TokenEstimator,
+    summarizeAttempted = true,
   ): CompressResult {
     // 近尾保留工具步上下文；更早的换成「账本」——禁止只留 4 条且无索引
     const keepCount = Math.min(Math.max(6, Math.ceil(messages.length * 0.15)), messages.length);
@@ -293,6 +263,8 @@ export class LLMSummaryCompressor implements Compressor {
       return {
         result: [...messages],
         estimatedTokens: estimator.estimateMessages(messages),
+        fresh: false,
+        summarizeAttempted,
       };
     }
 
@@ -316,6 +288,8 @@ export class LLMSummaryCompressor implements Compressor {
       result,
       estimatedTokens,
       droppedSummary: `${dropped.length} messages truncated`,
+      fresh: false,
+      summarizeAttempted,
     };
   }
 }

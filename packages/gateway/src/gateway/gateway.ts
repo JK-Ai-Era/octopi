@@ -2349,6 +2349,14 @@ export class Gateway {
         taskSnapshot?: string;
         contextWindow?: number;
         maxOutputTokens?: number;
+        /** F22：cache-miss 旁路事件出口（ContextEmitFn 形状，经 observerHub 直采进 timeline） */
+        emit?: (event: {
+          type: string;
+          sessionId?: string;
+          reason?: string;
+          fallback?: string;
+          cached?: boolean;
+        }) => void;
       }) => Promise<{
         ok: boolean;
         compacted: boolean;
@@ -2392,7 +2400,10 @@ export class Gateway {
     if (bound) {
       // 会话模型绑定（评审 F6）：摘要必须走当前会话模型——丢了 modelName 会走 provider 默认
       // 模型，既违背「走当前会话模型」拍板，也让同形前缀缓存（per provider+model）彻底失效
-      summarize = createProviderSummarize(bound.provider, { model: bound.modelName });
+      summarize = createProviderSummarize(bound.provider, {
+        model: bound.modelName,
+        maxOutputTokens: bound.maxOutputTokens,
+      });
     }
 
     const compactTargetTokens =
@@ -2411,6 +2422,21 @@ export class Gateway {
           // 摘要请求窗口护栏（评审 F5）：窗口/输出上限随会话模型绑定注入，防最满时压缩被 400
           contextWindow: bound?.contextWindow,
           maxOutputTokens: bound?.maxOutputTokens,
+          // F22：manual 路 cache-miss 旁路事件直采 Hub（同 Builder ContextEngine emit 合同：
+          // ContextEngine 侧事件不经 Runner emitObserved，不直采 timeline 就永远看不到）
+          emit: (e) => {
+            const { type, sessionId: sid, ...data } = e;
+            try {
+              this.observerHub.ingestEvent({
+                type,
+                timestamp: Date.now(),
+                sessionId: sid ?? input.sessionId,
+                data,
+              });
+            } catch {
+              // 观测 fail-open
+            }
+          },
         }),
       summarize,
       compactTargetTokens,

@@ -178,6 +178,12 @@ export interface AgentEventMap {
     error: string;
     durationMs?: number;
   };
+  /** 摘要请求 cache-miss 旁路/穷尽可观测（F22）：no_prefix=无同形前缀，window_guard=前缀放不下改文本化旁路，window_exhausted=最终失败 */
+  'context.compact.summarize_fallback': {
+    reason?: 'proactive' | 'overflow';
+    fallback?: string;
+    cached?: boolean;
+  };
   /**
    * system prompt 七层装配完成（AssembleManifest 可观测快照）
    * UI 用此事件渲染 Context Runtime；不进入模型输入。

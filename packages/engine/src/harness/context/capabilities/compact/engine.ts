@@ -11,8 +11,14 @@ import { getTextContent } from '@octopi-agent/core/types.js';
 import type { LLMMessage } from '@octopi-agent/core/interfaces/model-provider.js';
 import { HeuristicTokenEstimator } from '../../token-estimator.js';
 import { buildPolicyRegistry } from '../summary/resolver.js';
-import { buildSystemPrompt } from '../summary/executor.js';
 import type { ContentUnit, SummaryPolicy } from '../summary/types.js';
+import {
+  HANDOVER_SUMMARY_TASK,
+  buildHandoverPrompt,
+  buildHandoverUserContent,
+  clampSummaryProviderCap,
+} from './handover.js';
+import { estimateLLMMessages } from '../../token-estimator.js';
 import type {
   CompactEngine,
   CompactMode,
@@ -30,24 +36,7 @@ function defaultEstimator(): CompactTokenEstimator {
   };
 }
 
-/** 中段摘要任务（summaryPort 与 summarizeFn 两路共用，保持指令对齐）。
- * 交接式摘要（2026-10-28 拍板）：把之前会话做的事说清楚、交接给后续对话，
- * 而非中段压缩编码——产出四段式交接书，由后续对话的 agent 消费。
- * 反回声纪律（评审 F15）：指令里不出现任何工具调用/角色标记字面量——负面示例
- * 会教坏模型并引发闸门自命中；证据允许单行短引用（F4：引用≠污染）。 */
-const MIDDLE_SEGMENT_TASK = [
-  'Write a handoff summary that lets a fresh agent continue this work seamlessly.',
-  'Structure (use exactly these four sections):',
-  '1. Goal & status - what the work is trying to accomplish and where it stands now.',
-  '2. Open items & commitments - unfinished tasks, promised follow-ups, what is waiting on whom.',
-  '3. Conclusions & decisions - settled outcomes and rulings, each with its rationale.',
-  '4. Evidence pointers - for the above: file paths, commit ids, test names, numbers to look up.',
-  'Write in the same language as the conversation.',
-  'Output ONLY the handoff summary as new prose - no dialogue transcript, no role-marker lines,',
-  'and no raw tool-call syntax of any kind (describe calls in words instead of replaying their',
-  'payloads). Do not quote or replay passages of the input; quoting a single evidence line',
-  '(a decision, an error string) verbatim is acceptable.',
-].join('\n');
+/** 摘要任务/指令/合并语义已单源化到 ./handover.ts（F8 模板统一）——此处仅保留算法与闸门。 */
 
 /** 重试仍污染时附加的加严指令（输出闸门二次机会用） */
 const STRICT_RETRY_SUFFIX =
@@ -227,7 +216,7 @@ export function createCompactEngine(options?: CreateCompactEngineOptions): Compa
         source: {},
         kind: 'conversation',
         policy: opts.summarizePolicy,
-        task: MIDDLE_SEGMENT_TASK,
+        task: HANDOVER_SUMMARY_TASK,
       };
       try {
         // 输出闸门与 summarizeFn 路径对齐：污染给一次加严重试，仍污染按失败降级（不静默存坏摘要）
@@ -237,7 +226,7 @@ export function createCompactEngine(options?: CreateCompactEngineOptions): Compa
         });
         if (detectSummaryContamination(r.text, middleText)) {
           r = await port.extract(
-            { ...unit, task: `${MIDDLE_SEGMENT_TASK}${STRICT_RETRY_SUFFIX}` },
+            { ...unit, task: `${HANDOVER_SUMMARY_TASK}${STRICT_RETRY_SUFFIX}` },
             { signal: opts.signal, previousSummary: opts.previousSummary },
           );
           const again = detectSummaryContamination(r.text, middleText);
@@ -254,38 +243,27 @@ export function createCompactEngine(options?: CreateCompactEngineOptions): Compa
     }
 
     if (summarizeFn) {
-      // task 快照（B0：易变块走 content 尾部）——挂在指令尾部，不进 system
-      const taskBlock = opts.taskSnapshot?.trim()
-        ? `\n\nCurrent session task list snapshot (live task store):\n${opts.taskSnapshot.trim()}`
-        : '';
-      // 折叠区间（评审 F7）：让模型知道「交接书将替换到哪、哪些原样保留」——否则它最可能
-      // 只总结眼前最近的部分，漏掉真正要被折叠的旧中段，事后 [Coverage] 反而把空白包装成已覆盖。
-      const foldBlock = opts.foldRange
-        ? `\n\nFold boundary: this handoff REPLACES messages up to #${opts.foldRange.coveredThrough} of ${opts.foldRange.total}. The last ${opts.foldRange.preservedTail} messages are preserved verbatim after the handoff - cover the replaced range in depth and do not summarize the preserved tail.`
-        : '';
-      const instruction = buildSystemPrompt(policy, MIDDLE_SEGMENT_TASK, maxTokens);
+      // 交接式契约单源（F8 模板统一）：模板/指令/合并语义全走 handover.ts——
+      // 与 LLMSummaryCompressor 逐字同构，previousSummary 只有一种格式在迭代合并
+      const prompt = buildHandoverPrompt({
+        maxTokens,
+        summarizePolicy: policy,
+        previousSummary: opts.previousSummary,
+        foldRange: opts.foldRange,
+        taskSnapshot: opts.taskSnapshot,
+      });
       // 缓存优先：llmPrefix（会话同形 system+history）+ 尾部 user 指令。
       // 禁止把指令塞进 system 或重排历史——否则打穿前缀缓存。
       const buildPrefixed = (): LLMMessage[] => [
         ...opts.llmPrefix!,
-        {
-          role: 'user',
-          content: `${instruction}${foldBlock}${
-            opts.previousSummary ? `\n\nPrevious summary:\n${opts.previousSummary}` : ''
-          }${taskBlock}`,
-        },
+        { role: 'user', content: prompt.tailUser },
       ];
       // 无 llmPrefix 回退「policy system + 文本化中段」（旁路/旧调用）：
       // tool_call-only assistant / 缺 tool_call_id 的 tool 消息会被严格网关 400。
-      const buildTextify = (): LLMMessage[] => {
-        const userContent = opts.previousSummary
-          ? `Previous summary:\n${opts.previousSummary}\n\n---\n\nNew content:\n${middleText}`
-          : middleText;
-        return [
-          { role: 'system', content: `${instruction}${foldBlock}` },
-          { role: 'user', content: `${userContent}${taskBlock}` },
-        ];
-      };
+      const buildTextify = (): LLMMessage[] => [
+        { role: 'system', content: prompt.instruction },
+        { role: 'user', content: buildHandoverUserContent(opts, middleText) },
+      ];
       // 回声比对源 = 模型实际看到的会话文本投影（评审 F2）：llmPrefix 分支含 head/middle/tail
       // 全量历史，只比 middleText 会漏掉 head/tail 区回声；指令本身不得进比对源（四段式标题
       // 会合法出现在输出里）。
@@ -300,25 +278,29 @@ export function createCompactEngine(options?: CreateCompactEngineOptions): Compa
       // provider 多按 input+max_tokens ≤ window 校验，压缩恰在会话最满时触发，保险丝可能把
       // 请求顶出窗口——放不下就改走文本化中段旁路（cache-miss 如实降级），仍放不下则如实失败。
       const hardCap = (opts.maxSummaryTokens ?? maxTokens) * 4;
-      const windowCapOf = (msgs: LLMMessage[]): number => {
-        if (!opts.contextWindow || opts.contextWindow <= 0) return hardCap;
-        const inputChars = msgs.reduce((n, m) => n + String(m.content ?? '').length, 0);
-        const inputTokens = Math.ceil(inputChars / 4);
-        const byWindow = Math.min(
-          opts.maxOutputTokens ?? Number.POSITIVE_INFINITY,
-          Math.floor(opts.contextWindow * 0.1),
-          opts.contextWindow - inputTokens - 256,
-        );
-        return Math.min(hardCap, Math.max(byWindow, 0));
-      };
+      const windowCapOf = (msgs: LLMMessage[]): number =>
+        clampSummaryProviderCap({
+          hardCap,
+          // estimateLLMMessages 口径含 tool_calls/content block/消息开销（同 llm-summarizer）
+          inputTokens: estimateLLMMessages(msgs),
+          contextWindow: opts.contextWindow,
+          maxOutputTokens: opts.maxOutputTokens,
+        });
       let providerMaxTokens = windowCapOf(llmMessages);
+      // F22 可观测：无前缀/被迫旁路 = cache-miss，如实上报，不静默换请求形状
+      if (!usePrefix) {
+        opts.emit?.({ type: 'compact.summarize_fallback', reason: 'no_prefix', cached: false });
+      }
       if (providerMaxTokens < 256 && usePrefix) {
         usePrefix = false;
         llmMessages = buildTextify();
         echoSource = middleText;
         providerMaxTokens = windowCapOf(llmMessages);
+        opts.emit?.({ type: 'compact.summarize_fallback', reason: 'window_guard', cached: false });
       }
       if (providerMaxTokens < 256) {
+        // F8R-06 可观测：最终失败也是 cache-miss 旁路结果，与 compressor 侧对称上报
+        opts.emit?.({ type: 'compact.summarize_fallback', reason: 'window_exhausted', cached: false });
         return { error: 'window_exhausted:summary request cannot fit the model window' };
       }
 

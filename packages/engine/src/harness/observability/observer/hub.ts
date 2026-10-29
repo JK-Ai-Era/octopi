@@ -115,6 +115,7 @@ const TIMELINE_TYPES = new Set([
   'context.compact.start',
   'context.compact.end',
   'context.compact.error',
+  'context.compact.summarize_fallback',
   'context.layers.assembled',
   'persona.resolve.failed',
   'injection.detected',

@@ -62,7 +62,7 @@ export interface CompactOptions {
    * 折叠区间（评审 F7）：告知摘要器「本次交接书将替换到第几条、尾部多少条原样保留」，
    * 防止模型只总结眼前最近的尾部、漏掉真正要被折叠的旧中段。
    */
-  foldRange?: { coveredThrough: number; total: number; preservedTail: number };
+  foldRange?: { replacedCount: number; total: number; preservedTail: number };
   /** 会话模型窗口（评审 F5）：provider 多按 input+max_tokens ≤ window 校验，压缩恰在最满时触发 */
   contextWindow?: number;
   /** 会话模型输出上限（评审 F5）：保险丝不得越过模型自身的 max output */
@@ -74,7 +74,7 @@ export interface CompactOptions {
   llmPrefix?: import('@octopi-agent/core/interfaces/model-provider.js').LLMMessage[];
   signal?: AbortSignal;
   emit?: (e: {
-    type: 'compact.start' | 'compact.end' | 'compact.error';
+    type: 'compact.start' | 'compact.end' | 'compact.error' | 'compact.summarize_fallback';
     reason?: string;
     cached?: boolean;
   }) => void;

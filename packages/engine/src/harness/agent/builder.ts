@@ -1732,7 +1732,11 @@ export class AgentBuilder {
             const snap = getResolvedModel();
             const provider = snap?.provider ?? this._model!;
             const model = snap?.modelName;
-            return createProviderSummarize(provider, { model })(messages, opts);
+            return createProviderSummarize(provider, {
+              model,
+              // F8R-04：源头钳制与 gateway 对齐——自动路径同样受模型输出上限约束
+              maxOutputTokens: snap?.maxOutputTokens,
+            })(messages, opts);
           }
         : undefined);
     agent.setConvertToLlm(async (messages) => {
@@ -1767,6 +1771,7 @@ export class AgentBuilder {
         tools,
         tokenBudget: contextWindow,
         contextWindow,
+        maxOutputTokens: snapshot?.maxOutputTokens,
         compactTargetTokens: this._contextAssemblerConfig?.compactTargetTokens,
         summarize: summarizeFn,
         loadCompactState: () => agent.getSessionCompactState(sessionId, agentId),

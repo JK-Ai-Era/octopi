@@ -42,8 +42,12 @@ describe('LLMSummaryCompressor 缓存前缀', () => {
     expect(captured.length).toBe(llmPrefix.length + 1);
     expect(captured[captured.length - 1]!.role).toBe('user');
     const tail = String(captured[captured.length - 1]!.content);
-    expect(tail).toContain('conversation summarizer');
-    expect(tail).toContain('HANDOFF');
+    // F8 统一契约：指令 = 交接式四段式（与手动压缩逐字同源），旧 Done/ToDo 模板不得回归
+    expect(tail).toContain('handoff summary');
+    expect(tail).toContain('Goal & status');
+    expect(tail).toContain('Evidence pointers');
+    expect(tail).toContain('does not redo it');
+    expect(tail).not.toContain('#### Done');
     // system 不得被改写或附加摘要指令
     expect(String(captured[0]!.content)).toBe('SESSION-SYS-EXACT');
   });
@@ -69,5 +73,25 @@ describe('LLMSummaryCompressor 缓存前缀', () => {
     expect(String(captured[0]!.content)).toBe('SYS');
     const tail = String(captured[captured.length - 1]!.content);
     expect(tail).toContain('PREV-SUM');
+    // F8：合并语义同源（防跨格式漂移）+ P1c 软目标行
+    expect(tail).toContain('merge the new work in');
+    expect(tail).toContain('Keep output under');
+  });
+
+  it('统一契约：预算语义 = clamp(2%, 2k, 8k) 软目标 + 4× 保险丝（F8）', async () => {
+    const compressor = new LLMSummaryCompressor();
+    let seen: { maxTokens?: number } = {};
+    // ~10k 字符 ≈ 2.5k tokens 输入 → 软目标 clamp(2%, 2k, 8k) = 2000 → 硬顶 4× = 8000
+    const messages = Array.from({ length: 10 }, (_, i) => userMsg(`m${i}-${'x'.repeat(1000)}`));
+    await compressor.compress({
+      messages,
+      targetTokens: 50,
+      summarize: async (_msgs, o) => {
+        seen = o ?? {};
+        return '1. Goal & status: ok.\n2. Open items: none.\n3. Conclusions: n/a.\n4. Evidence: none.';
+      },
+      requireSummary: true,
+    });
+    expect(seen.maxTokens).toBe(8000);
   });
 });

@@ -35,6 +35,8 @@ export class TruncateCompressor implements Compressor {
       return {
         result: [],
         estimatedTokens: 0,
+        fresh: false,
+        summarizeAttempted: false,
       };
     }
 
@@ -46,6 +48,8 @@ export class TruncateCompressor implements Compressor {
       return {
         result: [...messages],
         estimatedTokens: currentTokens,
+        fresh: false,
+        summarizeAttempted: false,
       };
     }
 
@@ -104,6 +108,9 @@ export class TruncateCompressor implements Compressor {
       result,
       estimatedTokens,
       droppedSummary: `${removedCount} messages removed (~${removedTokens} tokens)`,
+      // 纯截断不是语义摘要（F8R-01 显式契约）；调用方冷却语义：截断未发起 LLM
+      fresh: false,
+      summarizeAttempted: false,
     };
   }
 

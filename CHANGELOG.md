@@ -106,7 +106,21 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
-## v0.96.1 (2026-10-29)
+## v0.97.0 (2026-10-29)
+
+### feat(context): F8 摘要模板统一——交接契约单源 + 降级诚实语义全路径闭环
+
+- **交接契约单源**：新增 `capabilities/compact/handover.ts` 作为所有摘要路径（manual / proactive / overflow）的单一指令源——四段式任务文本（`HANDOVER_SUMMARY_TASK`）、prompt 构造（`buildHandoverPrompt`/`buildHandoverUserContent`）、预算钳制（`clampSummaryProviderCap`）全部收敛；`LLMSummaryCompressor` 并入该契约，删除其私有模板与重复估算实现。fold 文案改计数语义并算术闭合（`preservedHead = total − replacedCount − preservedTail`），三路 `foldRange` 生产者口径统一。
+- **降级诚实语义**：机械降级（截断/兜底/占位说明）不再推进语义覆盖点与 `previousSummary`（防「中段静默失忆」）；增长门计数（`lastProactiveMessageCount`）随任何完成的压缩轮推进，「有计数无摘要」成为合法压缩态（`loadCompactState` 恢复判据同步）；冷却时间戳只随真实发起过 LLM 推进。失败轮不虚降 token 报数。
+- **预算与窗口护栏**：摘要软目标预算（clamp(2%, 2k, 8k)）可配置（`summaryBudget`）；`maxOutputTokens` 全链路接线（`AssembleParams` → proactive/overflow/manual 透传 + provider 源头钳制），防最满时压缩请求顶穿模型输出上限被 400。token 估算统一 `estimateLLMMessages`（含 tool_calls/content block，CJK 感知）。
+- **可观测性（F22）**：新增 `context.compact.summarize_fallback` 事件（`fallback`: no_prefix / window_guard / `window_exhausted`，`reason` 区分 proactive/overflow/manual），三路 cache-miss 旁路形状可观测；manual 路经 gateway 直采 observerHub 进 timeline。
+- **测试**：跨路同源对照（compressor 与 compact 引擎同参同字，含预算行逐字 + maxTokens 同源断言）、降级标志行为、cache-miss 事件链、restart 恢复「有计数无摘要」形态等回归用例。
+
+**⚠️ Breaking**：`CompressResult.fresh` / `CompressResult.summarizeAttempted` 由可选改为**必填**（fail-closed：机械降级必须显式 `fresh: false`，占位说明不得冒充语义摘要）。自定义 `Compressor` 实现需为返回值补这两个字段，不再有缺省推断。
+
+- 验证：全量 3564 passed / 7 skipped；lint + 测试类型基线 0 新错；tsc engine/gateway 0 错误。经独立子 agent 对抗性复审（0 High / 4 Med / 5 Low 全部处置：9 项修复、2 项记 KNOWN-ISSUES 延后——自动路径 taskSnapshot 透传、summarize_fallback WebUI 消费端）。
+
+---
 
 ### fix(reliability): turn 信封收尾——turnSeq 分配即持久化 + 闭标幂等收养（中断续跑不再中止会话）
 
