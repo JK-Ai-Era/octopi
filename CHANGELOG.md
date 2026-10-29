@@ -107,6 +107,16 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.97.14 (2026-10-30)
+
+### test(tui): ChatLog 状态机与组件行为单测补齐
+
+- TUI 从零覆盖补到核心状态机有钉：流式助手消息 start/update/finalize/drop 去重语义（同 runId 建一次、落定后同 id 再 finalize 即新条目、drop 幂等）、工具卡片（重复 start 更新参数、部分输出→定形状态迁移、展开统一切换、clearTools 不殃及消息）、系统消息（coalesceConsecutive 合并计数、被打断不合并、transient 按批清除）、超量裁剪（maxComponents 下限 20、被裁组件引用同步失效、更新不复活）、clearAll 清场。
+- 新增 `tests/tui-chatlog.test.ts` 14 例；pi-tui 组件可无头实例化（vitest node 环境直接跑），私有态经显式 cast 断言。
+- 验证：定向 14 例绿；lint + 测试类型基线 0 新错；tsc 0 错误。
+
+---
+
 ## v0.97.13 (2026-10-30)
 
 ### feat(tui): /find 消息历史搜索
