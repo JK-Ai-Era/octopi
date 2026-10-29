@@ -128,6 +128,10 @@ export class ConversationAdapter {
   private lastTurnEndContent: string | undefined;
   /** 已提示过 empty response 的 session（adapter 跨会话复用，不得互吞） */
   private emptyWarnedSessions = new Set<string>();
+  /** 本次 run 内创建的 assistant item id（中止时按 run 圈定碎片范围） */
+  private runAssistantIds: string[] = [];
+  /** 本次 run 已收到中止信号（中止对碎片状态有最终解释权） */
+  private runAborted = false;
 
   // ──────────────────────────────────
   // Runtime events → item mutations
@@ -166,6 +170,7 @@ export class ConversationAdapter {
             toolCalls: [],
           };
           this.currentAssistantId = item.id;
+          this.runAssistantIds.push(item.id);
           items = [...items, item];
         } else {
           items = items.map((it) =>
@@ -202,6 +207,7 @@ export class ConversationAdapter {
             toolCalls: [],
           };
           this.currentAssistantId = item.id;
+          this.runAssistantIds.push(item.id);
           items = [...items, item];
         } else {
           // 追加到已有 streaming item
@@ -220,6 +226,8 @@ export class ConversationAdapter {
         this.lastTurnEndContent = undefined;
         this.streamingReasoning = '';
         this.emptyWarnedSessions.clear();
+        this.runAborted = false;
+        this.runAssistantIds = [];
         break;
       }
 
@@ -331,7 +339,11 @@ export class ConversationAdapter {
             it.id === this.currentAssistantId && it.role === 'assistant'
               ? {
                   ...it,
-                  status: (isErrorTurn ? 'error' : 'completed') as 'completed' | 'error',
+                  status: (this.runAborted
+                    ? 'aborted'
+                    : isErrorTurn
+                      ? 'error'
+                      : 'completed') as 'completed' | 'error' | 'aborted',
                   content: content || (it as AssistantConversationItem).content,
                   reasoning:
                     (it as AssistantConversationItem).reasoning || this.streamingReasoning || undefined,
@@ -355,6 +367,7 @@ export class ConversationAdapter {
               reasoning: this.streamingReasoning || undefined,
             };
             items = [...items, item];
+            this.runAssistantIds.push(item.id);
             this.lastTurnEndContent = content;
             changed = true;
           }
@@ -450,17 +463,33 @@ export class ConversationAdapter {
       case 'engine.end':
       case 'interrupted':
       case 'aborted': {
-        // 如果有未完成的 streaming assistant，标记为 completed
-        if (this.currentAssistantId) {
+        // 中止语义：用户主动停止不是错误。turn.end(error) 可能先到（碎片被标 error），
+        // 中止信号后到时翻成 aborted——中止对本轮碎片有最终解释权；已完成轮不动。
+        const isAbort =
+          event.type === 'aborted' ||
+          (event.type === 'engine.end' &&
+            String((event.data as { reason?: unknown } | undefined)?.reason ?? '') === 'aborted');
+        const firstAbortSignal = isAbort && !this.runAborted;
+        if (isAbort) {
+          this.runAborted = true;
+          items = items.map((it) =>
+            it.role === 'assistant' &&
+            this.runAssistantIds.includes(it.id) &&
+            (it.status === 'streaming' || it.status === 'error')
+              ? { ...it, status: 'aborted' as const }
+              : it,
+          );
+        } else if (this.currentAssistantId) {
+          // 非中止收尾：未完成的 streaming assistant 按 completed 落定
           items = items.map((it) =>
             it.id === this.currentAssistantId && it.role === 'assistant'
               ? { ...it, status: 'completed' as const }
               : it,
           );
-          this.currentAssistantId = undefined;
         }
+        this.currentAssistantId = undefined;
 
-        if (event.type === 'aborted') {
+        if (firstAbortSignal) {
           const notice: SystemConversationItem = {
             id: ConversationAdapter.makeId('sys'),
             role: 'system',

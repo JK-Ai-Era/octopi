@@ -107,6 +107,17 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.97.15 (2026-10-30)
+
+### fix(web): 中止态不再冒充「错误」——助手气泡新增「已中止」徽标
+
+- 症状（2026-10-30 实测）：用户点「中止」后，助手气泡显示「· 错误」徽标——用户主动停止被渲染成错误。
+- 语义修复：`AssistantConversationItem.status` 增加 `aborted`；ConversationAdapter 按 run 圈定本轮 assistant 碎片（`runAssistantIds`），中止信号（`aborted` / `engine.end{reason:'aborted'}`）对碎片有**最终解释权**——`turn.end(error)` 先到被标 error 的碎片，中止信号后到时翻成 `aborted`；已完成轮不受影响。中止通知（Run aborted）按信号去重防双条。
+- WebUI 徽标：`aborted` → 「· 已中止」（中性色），与「· 错误」（红）区分。
+- 测试：`tests/conversation-adapter.test.ts` 新增中止语义 4 例（error 先到翻 aborted / 重复信号单通知 / 正常轮不受污染 / 碎片范围限本次 run）；旧例「aborted mid-stream 标 completed」系旧误标语义，随行为同步更新。全量套件绿；lint + 测试类型基线 0 新错；tsc 0 错误；gateway/webui build 绿。
+
+---
+
 ## v0.97.14 (2026-10-30)
 
 ### test(tui): ChatLog 状态机与组件行为单测补齐

@@ -777,14 +777,14 @@ describe('ConversationAdapter', () => {
       expect(roleItems(items, 'tool')).toHaveLength(1);
     });
 
-    it('handles aborted mid-stream', () => {
+    it('handles aborted mid-stream（碎片标 aborted，不冒充 completed/error）', () => {
       let r = adapter.applyEvent({ type: 'llm_stream_delta', data: { delta: 'partial' } }, sid, items);
       items = r.items;
       r = adapter.applyEvent({ type: 'aborted' }, sid, items);
       items = r.items;
 
       const ast = items.find((i) => i.role === 'assistant') as AssistantConversationItem;
-      expect(ast.status).toBe('completed');
+      expect(ast.status).toBe('aborted');
 
       const sys = items.find((i) => i.role === 'system') as SystemConversationItem;
       expect(sys.kind).toBe('aborted');
@@ -890,5 +890,100 @@ describe('ConversationAdapter tool purpose', () => {
     const byId = Object.fromEntries(tools.map((t) => [t.toolCallId, t]));
     expect(byId.tc2.purpose).toBe('写入修改内容');
     expect(byId.tc1.purpose).toBe('查看目标文件');
+  });
+});
+
+// ──────────────────────────────────
+// 中止语义（用户主动停止 ≠ 错误）
+// ──────────────────────────────────
+
+describe('ConversationAdapter 中止语义', () => {
+  const sid = 'abort-session';
+
+  function ev(type: string, data?: Record<string, unknown>): AgentEventEnvelope {
+    return { type, timestamp: Date.now(), data: data ?? {} } as AgentEventEnvelope;
+  }
+
+  function run(
+    adapter: ConversationAdapter,
+    events: Array<{ type: string; data?: Record<string, unknown> }>,
+  ): ConversationItem[] {
+    let items: ConversationItem[] = [];
+    for (const e of events) {
+      const result = adapter.applyEvent(ev(e.type, e.data), sid, items);
+      items = result.items;
+    }
+    return items;
+  }
+
+  function assistants(items: ConversationItem[]): AssistantConversationItem[] {
+    return items.filter((i) => i.role === 'assistant') as AssistantConversationItem[];
+  }
+
+  function abortNotices(items: ConversationItem[]): SystemConversationItem[] {
+    return items.filter(
+      (i) => i.role === 'system' && (i as SystemConversationItem).kind === 'aborted',
+    ) as SystemConversationItem[];
+  }
+
+  it('turn.end(error) 先到、中止信号后到 → 碎片翻成 aborted（不是 error）', () => {
+    const adapter = new ConversationAdapter();
+    const items = run(adapter, [
+      { type: 'engine.start' },
+      { type: 'llm_thinking_delta', data: { delta: '正在想…' } },
+      { type: 'turn.end', data: { error: true, content: '', hasToolCalls: false, phase: 'final' } },
+      { type: 'engine.end', data: { reason: 'aborted' } },
+    ]);
+    const a = assistants(items);
+    expect(a).toHaveLength(1);
+    expect(a[0].status).toBe('aborted');
+    expect(abortNotices(items)).toHaveLength(1);
+  });
+
+  it('aborted 事件直接收尾（无 turn.end）→ 碎片标 aborted；重复信号只加一条通知', () => {
+    const adapter = new ConversationAdapter();
+    const items = run(adapter, [
+      { type: 'engine.start' },
+      { type: 'llm_stream_delta', data: { delta: '部分流出' } },
+      { type: 'aborted' },
+      { type: 'aborted' },
+    ]);
+    const a = assistants(items);
+    expect(a).toHaveLength(1);
+    expect(a[0].status).toBe('aborted');
+    expect(abortNotices(items)).toHaveLength(1);
+  });
+
+  it('正常收尾仍标 completed（中止语义不污染正常轮）', () => {
+    const adapter = new ConversationAdapter();
+    const items = run(adapter, [
+      { type: 'engine.start' },
+      { type: 'llm_stream_delta', data: { delta: '答案' } },
+      { type: 'turn.end', data: { error: false, content: '答案', hasToolCalls: false, phase: 'final' } },
+      { type: 'engine.end', data: { reason: 'completed' } },
+    ]);
+    const a = assistants(items);
+    expect(a).toHaveLength(1);
+    expect(a[0].status).toBe('completed');
+    expect(abortNotices(items)).toHaveLength(0);
+  });
+
+  it('中止只作用于本次 run 的碎片：此前已完成轮保持 completed', () => {
+    const adapter = new ConversationAdapter();
+    const items = run(adapter, [
+      // run 1：正常完成
+      { type: 'engine.start' },
+      { type: 'llm_stream_delta', data: { delta: '第一轮答案' } },
+      { type: 'turn.end', data: { error: false, content: '第一轮答案', hasToolCalls: false, phase: 'final' } },
+      { type: 'engine.end', data: { reason: 'completed' } },
+      // run 2：流式碎片被中止
+      { type: 'engine.start' },
+      { type: 'llm_stream_delta', data: { delta: '碎片' } },
+      { type: 'engine.end', data: { reason: 'aborted' } },
+    ]);
+    const a = assistants(items);
+    expect(a).toHaveLength(2);
+    expect(a[0].status).toBe('completed');
+    expect(a[1].status).toBe('aborted');
   });
 });

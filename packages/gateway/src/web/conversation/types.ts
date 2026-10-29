@@ -46,7 +46,8 @@ export interface UserConversationItem extends BaseConversationItem {
 
 export interface AssistantConversationItem extends BaseConversationItem {
   role: 'assistant';
-  status: 'streaming' | 'completed' | 'error';
+  /** 中止 = 用户主动停止（碎片轮），与 error（失败）语义分开 */
+  status: 'streaming' | 'completed' | 'error' | 'aborted';
   content: string;
   /** 思考过程（可折叠展示）；不进 content */
   reasoning?: string;

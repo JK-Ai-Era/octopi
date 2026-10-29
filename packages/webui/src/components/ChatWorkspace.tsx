@@ -343,6 +343,7 @@ function ConversationItemCard({
               <span className="status-ok">· {a.content.trim() ? '流式输出中' : '思考中'}</span>
             )}
             {a.status === 'error' && <span className="status-error">· 错误</span>}
+            {a.status === 'aborted' && <span className="status-neutral">· 已中止</span>}
             {formatTimestamp(a.createdAt) && <span className="muted">{formatTimestamp(a.createdAt)}</span>}
           </div>
           <div className="panel msg-assistant-body" style={{ borderColor }}>
