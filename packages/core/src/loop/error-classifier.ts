@@ -10,7 +10,7 @@
  */
 
 import type { ClassifiedError, ErrorReason } from './types.js';
-import { ContentFilterError, isCannedRefusalText } from './canned-refusal.js';
+import { isCannedRefusalText, isContentFilterError } from './canned-refusal.js';
 
 /**
  * 判定是否已是分类结果
@@ -42,10 +42,7 @@ export function classifyError(err: unknown): ClassifiedError {
   const lower = collectErrorText(err);
 
   // 0. 内容过滤拒答：显式错误类型优先（name 稳定，跨包装可辨）
-  if (
-    err instanceof ContentFilterError ||
-    (err instanceof Error && err.name === 'ContentFilterError')
-  ) {
+  if (isContentFilterError(err)) {
     return { reason: 'content_filter', message, originalError: err };
   }
 

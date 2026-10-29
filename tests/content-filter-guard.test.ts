@@ -181,7 +181,7 @@ describe('guardRefusalProvider（stream）', () => {
 });
 
 describe('agentLoop 集成（重试后真实回答落历史）', () => {
-  it('首答被拦 → 自动重试（同步兜底）→ 真实回答落历史，拒答语不入历史', async () => {
+  it('首答被拦 → 不走传输兜底，经 onError 可见重试 → 真实回答落历史', async () => {
     const guarded = guardRefusalProvider(
       createProvider([finalReply(REFUSAL), finalReply('真实回答')]),
     );
@@ -204,19 +204,19 @@ describe('agentLoop 集成（重试后真实回答落历史）', () => {
     const events: AgentLoopEvent[] = [];
     for await (const e of agentLoop(context, config)) events.push(e);
 
-    // 首答被拦后 callModel 走 stream→sync 兜底（同请求重发）；兜底即过时 onError 无需介入。
-    // 重试通道有两条（同步兜底 / onError 重试），任一走到都算兑现契约。
-    expect(events.some((e) => e.type === 'stream.fallback_to_sync')).toBe(true);
-    expect(reasons.length).toBeLessThanOrEqual(1);
+    // content_filter 不走 stream→sync 传输兜底（那会把错误原文当「Stream fallback」
+    // 告警刷给用户）；重试统一走 onError/model_retry 可见通道。
+    expect(reasons).toEqual(['content_filter']);
+    expect(events.some((e) => e.type === 'stream.fallback_to_sync')).toBe(false);
     const allText = context.messages.map((m) => JSON.stringify(m.content)).join('\n');
     expect(allText).toContain('真实回答');
     expect(allText).not.toContain(REFUSAL);
     expect(events.some((e) => e.type === 'agent_end')).toBe(true);
   });
 
-  it('重试仍被拦 → abort 收口，拒答语不入历史', async () => {
+  it('重试仍被拦 → 耗尽后 abort 收口，拒答语不入历史', async () => {
     const guarded = guardRefusalProvider(
-      createProvider([finalReply(REFUSAL), finalReply(REFUSAL)]),
+      createProvider([finalReply(REFUSAL), finalReply(REFUSAL), finalReply(REFUSAL)]),
     );
     const reasons: string[] = [];
     const context: AgentContext = {
@@ -228,16 +228,17 @@ describe('agentLoop 集成（重试后真实回答落历史）', () => {
       model: guarded,
       modelCallIdleTimeoutMs: 5_000,
       modelCallAbsoluteTimeoutMs: 10_000,
+      // 模拟重试预算：首次 retry，第二次 abort（对应 MODEL_ERROR_MAX_ATTEMPTS 口径）
       onError: async (error) => {
         reasons.push(error.reason);
-        return 'abort';
+        return reasons.length === 1 ? 'retry' : 'abort';
       },
     };
 
     const events: AgentLoopEvent[] = [];
     for await (const e of agentLoop(context, config)) events.push(e);
 
-    expect(reasons).toEqual(['content_filter']);
+    expect(reasons).toEqual(['content_filter', 'content_filter']);
     const allText = context.messages.map((m) => JSON.stringify(m.content)).join('\n');
     expect(allText).not.toContain(REFUSAL);
     expect(

@@ -107,6 +107,17 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.97.11 (2026-10-30)
+
+### fix(loop): content_filter 不再走 stream→sync 传输兜底——消除「Stream fallback to sync (拒答原文)」告警刷屏
+
+- **现象**（v0.97.10 上线后实测）：每次内容过滤拒答触发「流失败→同步兜底」，`conversation/adapter.ts` 把内部错误原文渲染成 `Stream fallback to sync (内容安全拦截（content_filter）：…)` 传输告警——一次拒答刷两条（stream+sync 各一），把内部重试细节当成传输故障推给用户。
+- **修正语义**：拒答不是传输故障。`call-model.ts` 对 `ContentFilterError` 直接抛出、不启动同步兜底，重试统一走 `onError → model_retry` 可见通道（TUI 🔁 / WebUI 角标，带次数与退避、可中止）。耗尽仍走 llm_error 诚实收口。**订正 v0.97.10 条目中「stream→sync 兜底天然充当首次重试」的表述——该路径已移除，重试次数口径 = 首次 + 2 次 model_retry。**
+- 新增 `isContentFilterError`（canned-refusal.ts）单一判定源，error-classifier 复用去重。
+- 验证：`tests/content-filter-guard.test.ts` 集成用例改钉新语义（断言不产生 `stream.fallback_to_sync`、onError 收到 content_filter、耗尽收口拒答不入历史，模拟真实重试预算 retry→abort）；全量套件绿；lint + 测试类型基线 0 新错；tsc 0 错误。
+
+---
+
 ## v0.97.10 (2026-10-30)
 
 ### feat(reliability/tui): 内容过滤拒答韧性——罐头拒答识别为 content_filter 错误，自动重试 + 诚实收口

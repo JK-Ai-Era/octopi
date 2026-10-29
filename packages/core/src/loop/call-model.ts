@@ -23,6 +23,7 @@ import type {
   LLMToolDefinition,
 } from '../core/interfaces/model-provider.js';
 import type { AgentLoopEvent } from './types.js';
+import { isContentFilterError } from './canned-refusal.js';
 
 /**
  * 调用模型（watchdog 模式，async generator）
@@ -234,6 +235,12 @@ export async function* callModel(
     } catch (err) {
       // 用户/引擎中止时不要启动同步 fallback（避免 abort 后又发起新请求）
       if (signal?.aborted) {
+        throw err;
+      }
+      // 内容过滤拒答不是传输故障：同步兜底只是把同一判定再问一遍，
+      // 且会把内部错误原文当「Stream fallback」传输告警刷给用户。
+      // 直接抛给 onError 走 model_retry 可见重试通道（带次数/退避，可中止）。
+      if (isContentFilterError(err)) {
         throw err;
       }
       return yield* fallbackToSync(err instanceof Error ? err.message : 'stream_error');

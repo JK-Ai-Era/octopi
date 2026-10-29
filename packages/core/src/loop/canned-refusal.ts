@@ -56,6 +56,19 @@ export function isCannedRefusalPrefix(text: string): boolean {
 }
 
 /**
+ * 判定错误是否为内容过滤拒答（ContentFilterError，或包装后 name 仍在的派生错误）。
+ *
+ * @param err - 任意错误值
+ * @returns 是内容过滤拒答时 true
+ */
+export function isContentFilterError(err: unknown): boolean {
+  return (
+    err instanceof ContentFilterError ||
+    (err instanceof Error && err.name === 'ContentFilterError')
+  );
+}
+
+/**
  * 内容过滤拒答错误（模型提供方安全层拦截）。
  *
  * `name` 稳定为 'ContentFilterError'：错误经包装/跨包传递后 classifyError 依 name 归类。
