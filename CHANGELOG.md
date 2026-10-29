@@ -125,6 +125,24 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.97.4 (2026-10-30)
+
+### fix(knowledge): search 落 weak-only 相关性地板——中文虚词二元组噪音拦截
+
+- 执行分词器既有契约（「weak 滑窗二元组单独命中不足以过相关性地板」——此前 knowledge search 无地板，契约悬空）：strong 命中直接过；weak-only 命中须过绝对相关性地板 0.3（`scoreKeywordCoverage` 口径）。
+- 语义取舍（边界有实测）：中文长段复合查询靠二元组重叠召回是本义——「会话签名校验」以 4/5 二元组重叠命中「校验会话签名」（≈0.57，过）；1–2 个虚词二元组擦边（的时/是的…≈0.14–0.29）判噪拦截。首版「strong-only 直滤」被 knowledge-e2e P2 拦下（把复合查询变成精确短语匹配、召回归零），据此改正为两分支地板——测试拦住了一次真实的矫枉过正。
+- B+ 判定抽为模块级单源（`isBoundaryToken`/`tokenMatchesBPlus`），兜底 SQL 子句与地板共用，防语义漂移。
+- 测试：知识匹配矩阵 +3 例 × 2 通道（weak 擦边挡 / 2 字 CJK 词护栏 / 虚词噪音挡+真命中过）；knowledge-e2e P2 即复合召回的行为锚。
+
+### fix(memory): buildKeywordLikeSql 转义 LIKE 通配符——`_`/`%` 是字面量
+
+- `get_user_id` 曾因 `_` 是单字符通配符而误命中 `getXuserXid`（任何单字符形态都中）；现转义 `\ _ %` 并加 `ESCAPE '\'`（与 knowledge 兜底同口径）。
+- 回归用真 SQLite（node:sqlite）行为钉死：`get_user_id` 只命中 `get_user_id`、`100%` 无通配命中。
+- 遗留不动（另立项）：memory 检索仍是裸子串语义（未纳入 B+ 词边界/地板体系）；knowledge 打分子串口径与匹配语义的差异见 v0.97.3。
+- 验证：全量 3594 passed / 7 skipped（含 e2e 复合召回锚）；lint + 测试类型基线 0 新错；tsc engine 0 错误；arch/check-sync ✅。
+
+---
+
 ## v0.97.3 (2026-10-30)
 
 ### fix(knowledge): search 兜底匹配语义按 token 分类收紧（B+）——短词跨词碰撞消除

@@ -207,9 +207,10 @@ export function buildKeywordLikeSql(tokens: string[]): { sql: string; params: st
   const clauses: string[] = [];
   const params: string[] = [];
   for (const token of tokens) {
-    const like = `%${token.toLowerCase()}%`;
+    // LIKE 通配符转义：`_`/`%` 对用户是字面量（get_user_id 不得命中 getXuserXid）
+    const like = `%${token.toLowerCase().replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
     for (const col of columns) {
-      clauses.push(`${col} LIKE ?`);
+      clauses.push(`${col} LIKE ? ESCAPE '\\'`);
       params.push(like);
     }
   }

@@ -23,6 +23,33 @@ import { normalizePathLexical, realIdentitySync } from './file-identity.js';
 const EMBEDDABLE_WHERE =
   "(f.adapter_id IS NULL OR f.adapter_id NOT IN ('code-tree'))";
 
+/** B+ 匹配语义分界：2–3 字符纯 ASCII 字母数字词用词边界，其余用子串（语义细节见 search 兜底注释）。 */
+const SUBSTRING_FALLBACK_MIN_CHARS = 4; // 3 字符（api/db）碰撞面大需边界保护；≥4 起子词召回价值高于碰撞成本
+
+/**
+ * weak-only 命中的绝对相关性地板（scoreKeywordCoverage 口径）。
+ * 中文长段查询靠二元组重叠召回是本义（「会话签名校验」须命中「校验会话签名」，4/5 重叠 ≈ 0.57），
+ * 但 1–2 个虚词二元组擦边是噪音（≈ 0.14–0.29）——界线 0.3。
+ */
+const WEAK_ONLY_SCORE_FLOOR = 0.3;
+
+/** B+ 分类单源：该 token 是否走词边界语义（兜底 SQL 子句与 JS 判定共用，防语义漂移）。 */
+function isBoundaryToken(token: string): boolean {
+  return token.length < SUBSTRING_FALLBACK_MIN_CHARS && /^[a-z0-9]+$/.test(token);
+}
+
+/** B+ 语义命中判定：token 是否命中 text/path（与兜底 SQL 子句同源的边界/子串语义）。 */
+function tokenMatchesBPlus(token: string, text: string, path: string): boolean {
+  const t = token.toLowerCase();
+  const textL = text.toLowerCase();
+  const pathL = path.toLowerCase();
+  if (isBoundaryToken(token)) {
+    const boundary = new RegExp(`(^|[^a-z0-9])${t}([^a-z0-9]|$)`);
+    return boundary.test(textL) || boundary.test(pathL);
+  }
+  return textL.includes(t) || pathL.includes(t);
+}
+
 export interface IndexedFileRecord {
   id: string;
   sourceId: KnowledgeSourceId | string;
@@ -1186,11 +1213,10 @@ export class KnowledgeIndexStore {
       // 边界 = 非 [a-z0-9] 字符（含 _/标点/CJK）：_ 与 FTS unicode61 切分一致；CJK 作为边界是
       // **有意放宽**（「api接口」须能命中 api），并非对齐 unicode61（其视 foo文bar 为单 token）。
       // GLOB 不变式由 ^[a-z0-9]+$ 守门：将来 tokenizer 放行 `-`/`.`/`*`/`[`/`]` 等也不会进 GLOB 分支。
-      const SUBSTRING_FALLBACK_MIN_CHARS = 4; // 3 字符（api/db）碰撞面大需边界保护；≥4 起子串的子词召回价值高于碰撞成本
       const matchClauses: string[] = [];
       const matchParams: string[] = [];
       for (const token of tokens) {
-        if (token.length >= SUBSTRING_FALLBACK_MIN_CHARS || !/^[a-z0-9]+$/.test(token)) {
+        if (!isBoundaryToken(token)) {
           const likePattern = `%${token.toLowerCase().replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
           matchClauses.push(`LOWER(c.text) LIKE ? ESCAPE '\\'`);
           matchParams.push(likePattern);
@@ -1258,7 +1284,15 @@ export class KnowledgeIndexStore {
       h.logicalPaths[r.source_id] = r.logical_path;
     }
 
+    // 弱命中地板（执行分词器既有契约：weak 滑窗二元组单独命中不足以过相关性地板）：
+    // strong 命中直接过；weak-only 命中须过 WEAK_ONLY_SCORE_FLOOR——防中文虚词二元组
+    // （的时/是的…）擦边命中灌满结果集，同时保住长段复合查询的二元组重叠召回。
     return [...byChunk.values()]
+      .filter(
+        (h) =>
+          tokenDetail.strong.some((t) => tokenMatchesBPlus(t, h.text, h.path)) ||
+          h.score >= WEAK_ONLY_SCORE_FLOOR,
+      )
       .sort((a, b) => b.score - a.score)
       .slice(0, limit)
       .map((h) => ({

@@ -121,5 +121,24 @@ for (const channel of ['FTS 可用', 'FTS 清空（纯兜底）'] as const) {
       const ko = await seed('/tmp/docs/ko.md', ['한국어 문서']);
       expect(ko.search('국어', { sourceIds: [SRC] }).length).toBeGreaterThan(0);
     });
+
+    it('weak-only 命中不过地板：上下文 的滑窗二元组命中（上下颠倒）被丢弃', async () => {
+      const dropped = await seed('/tmp/docs/reorder.md', ['把上下颠倒的顺序理顺']);
+      expect(dropped.search('上下文', { sourceIds: [SRC] })).toHaveLength(0);
+      const kept = await seed('/tmp/docs/assembly.md', ['这是上下文装配指南']);
+      expect(kept.search('上下文', { sourceIds: [SRC] }).length).toBeGreaterThan(0);
+    });
+
+    it('地板护栏：2 字 CJK 词（strong 无 weak）不受地板误伤', async () => {
+      const index = await seed('/tmp/docs/reorder2.md', ['把上下颠倒的顺序理顺']);
+      expect(index.search('上下', { sourceIds: [SRC] }).length).toBeGreaterThan(0);
+    });
+
+    it('虚词二元组噪音被地板拦下：上下文的时序 不命中 桌子上的时钟', async () => {
+      const noise = await seed('/tmp/docs/clock.md', ['桌子上的时钟滴答']);
+      expect(noise.search('上下文的时序', { sourceIds: [SRC] })).toHaveLength(0);
+      const real = await seed('/tmp/docs/seq.md', ['上下文的时序设计']);
+      expect(real.search('上下文的时序', { sourceIds: [SRC] }).length).toBeGreaterThan(0);
+    });
   });
 }

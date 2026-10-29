@@ -3,6 +3,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { DatabaseSync } from 'node:sqlite';
 import { AgentDatabase } from '@octopi-agent/engine/harness/memory/sqlite/agent-db.js';
 import { SqliteMemoryStore } from '@octopi-agent/engine/harness/memory/sqlite/memory-store.js';
 import { InMemoryMemoryStore } from '@octopi-agent/engine/harness/memory/store.js';
@@ -85,6 +86,28 @@ describe('scoreKeywordFields / buildKeywordLikeSql', () => {
     expect(sql).toContain('tags');
     expect(sql).toContain('future_use');
     expect(params.length).toBeGreaterThan(4);
+  });
+
+  it('LIKE 通配符转义：get_user_id 不再命中 getXuserXid，% 是字面量', () => {
+    const db = new DatabaseSync(':memory:');
+    try {
+      db.exec('CREATE TABLE m (content TEXT, future_use TEXT, tags TEXT, evidence TEXT, anchors TEXT)');
+      const ins = db.prepare('INSERT INTO m (content, future_use, tags, evidence, anchors) VALUES (?, ?, ?, ?, ?)');
+      ins.run('call getXuserXid helper', null, null, null, null);
+      ins.run('call get_user_id helper', null, null, null, null);
+
+      const underscore = buildKeywordLikeSql(['get_user_id']);
+      const rows = db
+        .prepare(`SELECT content FROM m WHERE 1=1 ${underscore.sql}`)
+        .all(...underscore.params) as { content: string }[];
+      expect(rows.map((r) => r.content)).toEqual(['call get_user_id helper']);
+
+      const percent = buildKeywordLikeSql(['100%']);
+      const none = db.prepare(`SELECT content FROM m WHERE 1=1 ${percent.sql}`).all(...percent.params);
+      expect(none).toHaveLength(0);
+    } finally {
+      db.close();
+    }
   });
 
   it('scoreKeywordCoverage 绝对分：全命中 1.0，半命中 ≈0.5，与结果集无关', () => {
