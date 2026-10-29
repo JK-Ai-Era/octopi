@@ -344,6 +344,19 @@ export class TuiApp {
         break;
       }
 
+      // ── 工具部分输出（展示通道；载荷已过出口扫描） ──
+      case 'tool.exec.update': {
+        const toolCallId = event.data?.toolCallId as string | undefined;
+        const content = event.data?.content;
+        if (toolCallId && content != null) {
+          const displayPartial =
+            typeof content === 'string' ? content : JSON.stringify(content, null, 2);
+          this.chatLog.updateToolPartial(toolCallId, displayPartial);
+          this.tui.requestRender();
+        }
+        break;
+      }
+
       // ── 回合结束 ──
       case 'turn.end': {
         const content = (event.data?.content as string) ?? '';

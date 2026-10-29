@@ -322,7 +322,12 @@ export class ThinkExecutor {
           .map(([key]) => key),
       },
       execute: t.handler
-        ? async (toolCallId: string, args: unknown) => {
+        ? async (
+            toolCallId: string,
+            args: unknown,
+            _signal?: AbortSignal,
+            onUpdate?: (partial: { content?: unknown }) => void,
+          ) => {
             try {
               const result = await t.handler!(args as Record<string, unknown>, {
                 sessionId: 'subsystem',
@@ -330,6 +335,8 @@ export class ThinkExecutor {
                 messages: [],
                 fileEffects: createUnconfiguredFileEffects(),
                 memoryEffects: createUnconfiguredMemoryEffects(),
+                // 与 convertToAgentTool 同构：工具部分输出通道（think 子系统 loop 未挂 onToolUpdate 时为空）
+                ...(onUpdate ? { onUpdate } : {}),
               });
               return {
                 toolCallId,

@@ -107,6 +107,19 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.97.9 (2026-10-30)
+
+### feat(tools/tui): 工具部分输出通道全链接通——onUpdate 契约 → tool.exec.update → TUI 实时展示
+
+- **背景**：Core `AgentTool.execute` 早有 `onUpdate`（部分输出）参数声明，但从未有调用方传入、无事件类型、UI 端 `setPartialResult` 是死代码——一条断链的契约。本次接通全链：Loop 传入 `onUpdate`（串行/并行两路径）→ `AgentLoopConfig.onToolUpdate`（新回调，与 `onTurnComplete` 同为 Harness 内部副作用通道）→ Runner 发射 `tool.exec.update` 事件（`eventSink` + EventBus 桥；WS/TUI/WebUI 可见）→ TUI 工具卡片实时显示部分输出。
+- **安全语义（本条的关键决策）**：部分输出是展示通道，但它也是**工具输出**——必须与 `afterToolCall` 同一 SecurityGuard 出口扫描口径，否则恶意工具可借部分输出绕过出口扫描。`run-agent` 对每笔部分输出过 `checkToolOutput`（与定形结果共享扫描助手，裁决口径单源），违规扣发；载荷截尾 4KB（最新片段才有展示价值），防 WS 载荷膨胀。
+- **生产端通道**：`ToolExecutionContext.onUpdate` 新增——三处同构映射（builder `convertToAgentTool`、gateway `registeredToolToAgentTool`、think `buildAgentTools`）全部转发；无转发器时不给工具假通道（传 undefined）。回调异常不中断工具执行。
+- **边界（诚实声明）**：本次是**通道完成**，还不是发射端完成——尚无内置工具产生部分输出（shell 等的逐块 stdout 需要 ProcessSandbox 流式回调，属执行环境改造，另行立项）；插件/内置工具从现在起可用 `context.onUpdate(...)` 发射，UI 即时可见。
+- 事件取舍：`tool.exec.update` 从回调直达事件出口（生成器无法在工具执行中 yield），不进 runner 的事件 yield 流——通道回复捕获等 generator 消费方收不到（展示性事件，可接受）；`tool.exec.end` 定形结果照旧全通道。
+- 验证：新增 `tests/loop-tool-update.test.ts` 4 例（串行/并行转发、假通道拒绝、回调异常不中断、定形结果不受影响）；loop 契约回归 21 例全绿；lint + 测试类型基线 0 新错；core/engine/gateway 三包 tsc 0 错误。
+
+---
+
 ## v0.97.8 (2026-10-30)
 
 ### feat(tui): 断线自动重连（指数退避），不再断开即退出

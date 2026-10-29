@@ -187,6 +187,7 @@ export function registeredToolToAgentTool(tool: RegisteredTool): {
     toolCallId: string,
     args: unknown,
     signal?: AbortSignal,
+    onUpdate?: (partial: { content?: unknown }) => void,
   ) => Promise<{
     toolCallId: string;
     name: string;
@@ -202,7 +203,7 @@ export function registeredToolToAgentTool(tool: RegisteredTool): {
     // 与 convertToAgentTool 同构：purpose 统一装配（arch/tool-call-purpose.md）
     ...(tool.executionMode ? { executionMode: tool.executionMode } : {}),
     parameters: buildToolLlmParameters(tool.definition.parameters),
-    execute: async (toolCallId, args, signal) => {
+    execute: async (toolCallId, args, signal, onUpdate) => {
       const startTime = Date.now();
       try {
         const rawArgs = (args ?? {}) as Record<string, unknown>;
@@ -215,6 +216,8 @@ export function registeredToolToAgentTool(tool: RegisteredTool): {
           agentId: scope?.agentId ?? 'unknown',
           messages: scope?.toolRuntime?.messages ?? [],
           abortSignal: signal,
+          // 工具部分输出通道（展示用途）；无转发器时不给工具假通道
+          ...(onUpdate ? { onUpdate } : {}),
           fileEffects:
             scope?.toolRuntime?.fileEffects
             ?? (await import('@octopi-agent/engine')).createUnconfiguredFileEffects(),

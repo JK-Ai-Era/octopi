@@ -57,6 +57,7 @@ export interface AgentOptions {
   shouldStopAfterTurn?: AgentLoopConfig['shouldStopAfterTurn'];
   onTurnComplete?: AgentLoopConfig['onTurnComplete'];
   prepareNextTurn?: AgentLoopConfig['prepareNextTurn'];
+  onToolUpdate?: AgentLoopConfig['onToolUpdate'];
   onError?: AgentLoopConfig['onError'];
 
   // ── 消息队列 ──
@@ -106,6 +107,7 @@ export class Agent {
       transformContext: options.transformContext,
       beforeToolCall: options.beforeToolCall,
       afterToolCall: options.afterToolCall,
+      onToolUpdate: options.onToolUpdate,
       shouldStopAfterTurn: options.shouldStopAfterTurn,
       onTurnComplete: options.onTurnComplete,
       prepareNextTurn: options.prepareNextTurn,
@@ -311,6 +313,8 @@ export class Agent {
       consumeMessages?: () => Promise<Message[]>;
       /** 只读运行期提示（如委派状态）：只进 steering 接缝，绝不经 followUp 续命。 */
       steeringExtras?: () => Promise<Message[]>;
+      /** 本 Run 的工具部分输出通道（tool.exec.update 展示事件的发射端） */
+      onToolUpdate?: AgentLoopConfig['onToolUpdate'];
       /** @deprecated 旧路径：仅绑定 provider */
       model?: ModelProvider;
       /** @deprecated 旧路径：仅窗口 */
@@ -328,6 +332,7 @@ export class Agent {
     const config = {
       ...this._config,
       ...(loopModel ? { model: loopModel } : {}),
+      ...(options?.onToolUpdate ? { onToolUpdate: options.onToolUpdate } : {}),
       ...(options?.consumeMessages || options?.steeringExtras ? (() => {
         const consume = options.consumeMessages;
         const extras = options.steeringExtras;

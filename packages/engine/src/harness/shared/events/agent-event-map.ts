@@ -64,6 +64,16 @@ export interface AgentEventMap {
     /** 行动简述 */
     purpose?: string;
   };
+  /**
+   * 工具执行中的部分输出（展示通道；不进对话历史、不参与 afterToolCall 定形）。
+   * 载荷已经过 SecurityGuard 出口扫描（与 tool.exec.end 同一判定），违规部分被扣发。
+   */
+  'tool.exec.update': {
+    toolCallId: string;
+    toolName: string;
+    /** 部分输出内容（对齐 LoopToolResult.content 语义；发射端已截断） */
+    content?: unknown;
+  };
   /** ToolEffectPolicy §5.6 效应账本摘要（turn 级；Observer tool.effect） */
   'tool.effect.ledger': {
     entries: number;
@@ -296,6 +306,7 @@ export const AgentEvents = {
 
   TOOL_EXEC_START: 'tool.exec.start',
   TOOL_EXEC_END: 'tool.exec.end',
+  TOOL_EXEC_UPDATE: 'tool.exec.update',
 
   INJECTION_DETECTED: 'injection.detected',
   POLICY_VIOLATED: 'policy.violated',

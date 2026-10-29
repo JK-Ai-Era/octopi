@@ -272,7 +272,7 @@ function convertToAgentTool(tool: RegisteredTool, contextProvider: ToolContextPr
     parameters: buildToolLlmParameters(
       tool.definition.parameters,
     ) as import('@octopi-agent/core/interfaces/model-provider.js').LLMToolDefinition['function']['parameters'],
-    execute: async (toolCallId: string, args: unknown, signal?: AbortSignal) => {
+    execute: async (toolCallId: string, args: unknown, signal?: AbortSignal, onUpdate?: (partial: { content?: unknown }) => void) => {
       const startTime = Date.now();
       try {
         const context = contextProvider.get();
@@ -288,7 +288,12 @@ function convertToAgentTool(tool: RegisteredTool, contextProvider: ToolContextPr
         const processLimitsEnabled = context.processLimits !== false;
         const result = await runWithToolLimits(
           (sig) =>
-            tool.handler(handlerArgs, { ...context, abortSignal: sig }),
+            tool.handler(handlerArgs, {
+              ...context,
+              abortSignal: sig,
+              // 工具部分输出通道（展示用途）；无转发器时不给工具假通道
+              ...(onUpdate ? { onUpdate } : {}),
+            }),
           {
             timeoutMs: processLimitsEnabled
               ? resolveToolTimeoutMs(tool.definition)

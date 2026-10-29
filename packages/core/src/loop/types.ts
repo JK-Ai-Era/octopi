@@ -246,6 +246,11 @@ export interface ToolHooksConfig {
   beforeToolCall?: BeforeToolCallFn;
   /** 工具执行后：结果修改/日志/验证。 */
   afterToolCall?: AfterToolCallFn;
+  /**
+   * 工具执行中：部分输出通知（展示通道副作用，不控制执行、不进对话历史）。
+   * 经 `AgentTool.execute` 的 `onUpdate` 参数转发给工具；回调异常不中断工具。
+   */
+  onToolUpdate?: (params: { toolCall: ToolCall; partial: Partial<LoopToolResult> }) => void;
   /** 工具执行模式：parallel（默认）或 sequential */
   toolExecution?: 'parallel' | 'sequential';
 }

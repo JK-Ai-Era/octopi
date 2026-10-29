@@ -340,4 +340,9 @@ export class ChatLog extends Container {
   updateToolResult(toolCallId: string, result: string, opts?: { isError?: boolean }): void {
     this.toolById.get(toolCallId)?.setResult(result, opts);
   }
+
+  /** 工具执行中的部分输出（tool.exec.update；折叠态只显示预览） */
+  updateToolPartial(toolCallId: string, result: string): void {
+    this.toolById.get(toolCallId)?.setPartialResult(result);
+  }
 }

@@ -1945,6 +1945,24 @@ export class SessionAwareRunner {
         // 只读提示只进 steering 接缝：经 followUp 续命会让 run 被状态快照拖住（评审 F1）
         steeringExtras: async (): Promise<Message[]> =>
           this.steeringProvider ? this.steeringProvider() : [],
+        // 工具部分输出（展示通道）：事件从回调直达事件出口——生成器无法在工具执行中
+        // yield，故不进事件 yield 流（generator 消费方如通道回复捕获收不到，属预期取舍）；
+        // WS/EventBus 消费方（TUI/WebUI）经 eventSink + emitObserved 正常可见。
+        onToolUpdate: (params: {
+          toolCall: import('@octopi-agent/core/types/messages.js').ToolCall;
+          partial: Partial<import('@octopi-agent/core/loop/types.js').LoopToolResult>;
+        }) => {
+          const { toolCall, partial } = params;
+          const updateEvent = {
+            type: 'tool.exec.update' as const,
+            timestamp: Date.now(),
+            agentId: meta.agentId,
+            sessionId: meta.sessionId,
+            data: { toolCallId: toolCall.id, toolName: toolCall.name, content: partial.content },
+          };
+          this.config.eventSink?.(updateEvent, meta);
+          this.emitObserved(updateEvent);
+        },
       };
 
 

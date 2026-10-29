@@ -698,28 +698,12 @@ export async function* runAgentWithReliability(
     afterToolCall: async (ctx, signal) => {
       // SecurityGuard 检查工具输出（字符串直扫；结构化结果序列化后扫，防 MCP/对象结果绕过）
       if (harness.security && ctx.result.content != null) {
-        const raw = ctx.result.content;
-        const scanText =
-          typeof raw === 'string'
-            ? raw
-            : (() => {
-                try {
-                  return JSON.stringify(raw);
-                } catch {
-                  return String(raw);
-                }
-              })();
         // 超大 payload 截断扫描，避免序列化字符串拖垮 checkToolOutput
         const outputCheck = harness.security.checkToolOutput(
-          scanText.length > 100_000 ? scanText.slice(0, 100_000) : scanText,
+          truncateForOutputScan(toolOutputScanText(ctx.result.content)),
         );
         if (!outputCheck.isClean) {
-          const action = severityToAction(
-            outputCheck.violations.reduce((worst, v) => {
-              const order = { critical: 4, high: 3, medium: 2, low: 1 };
-              return order[v.severity] > order[worst.severity] ? v : worst;
-            }, outputCheck.violations[0]).severity,
-          );
+          const action = severityToAction(worstOutputViolation(outputCheck.violations).severity);
           // 输出侧无「事前确认」语义：confirm/high 一律拦截该输出
           if (action === 'block' || action === 'reject' || action === 'confirm') {
             const reason = outputCheck.violations
@@ -741,6 +725,31 @@ export async function* runAgentWithReliability(
       }
       return undefined;
     },
+
+    // onToolUpdate：部分输出经 SecurityGuard 出口扫描后转发（展示通道）。
+    // 与 afterToolCall 同一判定口径（共享助手）——否则恶意工具可借部分输出绕过出口扫描；
+    // 违规部分扣发，最终结果仍走 afterToolCall 裁决。
+    onToolUpdate: config.onToolUpdate
+      ? (params) => {
+          const partial = params.partial;
+          if (harness.security && partial.content != null) {
+            const outputCheck = harness.security.checkToolOutput(
+              truncateForOutputScan(toolOutputScanText(partial.content)),
+            );
+            if (!outputCheck.isClean) return;
+          }
+          config.onToolUpdate!({
+            toolCall: params.toolCall,
+            partial: {
+              ...partial,
+              content:
+                typeof partial.content === 'string'
+                  ? capPartialTail(partial.content)
+                  : partial.content,
+            },
+          });
+        }
+      : undefined,
 
     // onTurnComplete：可靠性副作用（注入 steer 指令，不控制停止）
     onTurnComplete: async (ctx) => {
@@ -1427,4 +1436,63 @@ function executeRecoveryActions(
         break;
     }
   }
+}
+
+// ── 工具输出出口扫描（afterToolCall 与部分输出通道共用判定） ──
+
+/** 输出违规形状（SecurityGuard checkToolOutput 违规项） */
+interface OutputViolationLike {
+  severity: 'critical' | 'high' | 'medium' | 'low';
+}
+
+/**
+ * 工具输出扫描文本：字符串直扫；结构化结果序列化后扫（防 MCP/对象结果绕过）。
+ *
+ * @param content - 工具输出内容
+ * @returns 扫描文本
+ */
+function toolOutputScanText(content: unknown): string {
+  if (typeof content === 'string') return content;
+  try {
+    return JSON.stringify(content);
+  } catch {
+    return String(content);
+  }
+}
+
+/**
+ * 超大 payload 截断扫描，避免序列化字符串拖垮 checkToolOutput。
+ *
+ * @param text - 扫描文本
+ * @returns 截断后的扫描文本（前 100k）
+ */
+function truncateForOutputScan(text: string): string {
+  return text.length > 100_000 ? text.slice(0, 100_000) : text;
+}
+
+/**
+ * 最重违规（afterToolCall 与部分输出扣发共用同一裁决口径）。
+ *
+ * @param violations - 违规列表（非空；调用方已判 isClean=false）
+ * @returns 最重违规
+ */
+function worstOutputViolation<T extends OutputViolationLike>(violations: T[]): T {
+  const order: Record<OutputViolationLike['severity'], number> = {
+    critical: 4,
+    high: 3,
+    medium: 2,
+    low: 1,
+  };
+  return violations.reduce((worst, v) => (order[v.severity] > order[worst.severity] ? v : worst), violations[0]);
+}
+
+/**
+ * 部分输出载荷截断（保留尾部 4KB：流式输出的最新片段才有展示价值）。
+ *
+ * @param text - 部分输出文本
+ * @param maxChars - 上限（缺省 4096）
+ * @returns 尾部截断结果
+ */
+function capPartialTail(text: string, maxChars = 4096): string {
+  return text.length > maxChars ? text.slice(text.length - maxChars) : text;
 }

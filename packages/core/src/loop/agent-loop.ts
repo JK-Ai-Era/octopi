@@ -83,6 +83,7 @@ export async function* agentLoop(
     transformContext,
     beforeToolCall,
     afterToolCall,
+    onToolUpdate,
     shouldStopAfterTurn,
     onTurnComplete,
     prepareNextTurn,
@@ -421,7 +422,7 @@ export async function* agentLoop(
             durationMs: 0,
           };
         } else {
-          result = await executeOneTool(tc, currentContext, beforeToolCall, afterToolCall, observer, signal);
+          result = await executeOneTool(tc, currentContext, beforeToolCall, afterToolCall, observer, signal, onToolUpdate);
         }
         toolResults.push(result);
         yield { type: 'tool_end', toolCall: tc, result, timestamp: Date.now() };
@@ -455,7 +456,12 @@ export async function* agentLoop(
           try {
             // observer 异常不应导致 promise reject（否则 Promise.race 会中断收割循环）
             try { observer?.onToolStart?.({ toolCall: p.toolCall }); } catch { /* observer 异常不中断工具执行 */ }
-            const result = await p.tool.execute(p.toolCall.id, p.args, signal);
+            const result = await p.tool.execute(
+              p.toolCall.id,
+              p.args,
+              signal,
+              makeToolUpdateForwarder(onToolUpdate, p.toolCall),
+            );
             return { id: p.toolCall.id, result: { ...result, durationMs: Date.now() - startTime } };
           } catch (error) {
             return {
@@ -601,6 +607,25 @@ export async function* agentLoop(
 // ── 工具执行 ──
 
 /**
+ * 构造工具部分输出转发器（展示通道）。
+ *
+ * @param onToolUpdate - 配置层回调（缺省返回 undefined，不给工具假通道）
+ * @param toolCall - 本工具调用（回传身份）
+ * @returns 转发器；回调异常被吞（展示通道不得中断工具执行）
+ */
+function makeToolUpdateForwarder(
+  onToolUpdate: AgentLoopConfig['onToolUpdate'],
+  toolCall: ToolCall,
+): ((partial: Partial<LoopToolResult>) => void) | undefined {
+  if (!onToolUpdate) return undefined;
+  return (partial) => {
+    try {
+      onToolUpdate({ toolCall, partial });
+    } catch { /* 展示通道回调异常不中断工具执行 */ }
+  };
+}
+
+/**
  * 执行单个工具（prepare + execute + afterToolCall）
  */
 async function executeOneTool(
@@ -610,6 +635,7 @@ async function executeOneTool(
   afterToolCall: AgentLoopConfig['afterToolCall'],
   observer: AgentLoopConfig['observer'],
   signal?: AbortSignal,
+  onToolUpdate?: AgentLoopConfig['onToolUpdate'],
 ): Promise<LoopToolResult> {
   // Prepare
   const prepared = await prepareToolCall(toolCall, context, beforeToolCall, signal);
@@ -621,7 +647,12 @@ async function executeOneTool(
 
   let result: LoopToolResult;
   try {
-    const executed = await prepared.tool.execute(toolCall.id, prepared.args, signal);
+    const executed = await prepared.tool.execute(
+      toolCall.id,
+      prepared.args,
+      signal,
+      makeToolUpdateForwarder(onToolUpdate, toolCall),
+    );
     result = { ...executed, durationMs: Date.now() - startTime };
   } catch (error) {
     result = {

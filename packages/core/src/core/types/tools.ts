@@ -203,6 +203,14 @@ export interface ToolExecutionContext {
   /** Execute-time degradation hook (run-level securityDegraded). */
   noteSecurityDegraded?: (reason: string) => void;
   /**
+   * 工具部分输出通道（展示用途；如长命令的中间输出）。
+   *
+   * 经 Loop `AgentTool.execute` 的 `onUpdate` 转发，最终到达 UI 的
+   * `tool.exec.update` 事件；载荷会被 SecurityGuard 出口扫描扣发违规部分，
+   * 发射端应自行节流（如按输出块）且只传增量/尾部。
+   */
+  onUpdate?: (partial: { content?: unknown }) => void;
+  /**
    * ops 审计回传（ops P2）：工具侧把动作/越权写入记入统一审计账本。
    * 失败不阻断业务（调用方降级通道处置），工具侧不感知存储。
    */
