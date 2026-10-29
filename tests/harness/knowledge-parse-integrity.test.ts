@@ -236,8 +236,8 @@ describe('gap 扫描补 indexing + 入队层未变更跳过', () => {
     await mkdir(dir, { recursive: true });
     const keep = join(dir, 'keep.md');
     const gone = join(dir, 'gone.md');
-    await writeFile(keep, '# Keep\n\nstay searchable\n', 'utf8');
-    await writeFile(gone, '# Gone\n\nshould be pruned\n', 'utf8');
+    await writeFile(keep, '# Keep\n\nqqqkeepprobe\n', 'utf8');
+    await writeFile(gone, '# Gone\n\nqqqgoneprobe\n', 'utf8');
 
     const src = store.register({
       kind: 'directory',
@@ -248,7 +248,7 @@ describe('gap 扫描补 indexing + 入队层未变更跳过', () => {
 
     await ingest.ingestSource(src.id);
     await ingest.idle(10_000);
-    expect(ingest.indexStore.search('should be pruned', { sourceIds: [src.id] }).length).toBeGreaterThan(0);
+    expect(ingest.indexStore.search('qqqgoneprobe', { sourceIds: [src.id] }).length).toBeGreaterThan(0);
 
     await rm(gone, { force: true });
     // 模拟 watch 漏事件：不 drop_file，只靠对账
@@ -256,8 +256,8 @@ describe('gap 扫描补 indexing + 入队层未变更跳过', () => {
     await ingest.idle(10_000);
 
     expect(ingest.indexStore.getFile(src.id, gone)).toBeNull();
-    expect(ingest.indexStore.search('should be pruned', { sourceIds: [src.id] })).toHaveLength(0);
-    expect(ingest.indexStore.search('stay searchable', { sourceIds: [src.id] }).length).toBeGreaterThan(0);
+    expect(ingest.indexStore.search('qqqgoneprobe', { sourceIds: [src.id] })).toHaveLength(0);
+    expect(ingest.indexStore.search('qqqkeepprobe', { sourceIds: [src.id] }).length).toBeGreaterThan(0);
   });
 
   it('status=indexing 半成品：reconcile 缺口扫描补 parse', async () => {

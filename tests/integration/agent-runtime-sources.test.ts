@@ -81,12 +81,19 @@ describe('FileWatchSource', () => {
     // 通过 runtime.addSource + start 观察 dispatch
     runtime.addSource(source);
     await runtime.start();
+    // fs.watch 流启动是异步的（start 返回≠已装订）：留装订窗口，防首事件在监听就绪前丢失
+    await new Promise((r) => setTimeout(r, 100));
 
     writeFileSync(join(dir, 'a.txt'), '1');
     writeFileSync(join(dir, 'a.txt'), '2');
-    await new Promise((r) => setTimeout(r, 120));
+    // 事件送达延迟随平台/负载波动：轮询等防抖触发，固定短睡眠不得当硬上限
+    const deadline = Date.now() + 5_000;
+    while (calls.length === 0 && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 20));
+    }
     expect(calls.length).toBeGreaterThanOrEqual(1);
-    // 防抖后同文件应少于写盘次数
+    // 防抖静默窗后再验合并效果：同文件写盘 2 次，dispatch 不得超过写盘次数
+    await new Promise((r) => setTimeout(r, 250));
     expect(calls.length).toBeLessThanOrEqual(2);
 
     await runtime.stop();
