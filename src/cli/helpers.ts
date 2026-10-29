@@ -226,6 +226,22 @@ export function removeWebUiPidFile(): void {
   }
 }
 
+/**
+ * 解析 Gateway 控制台钥匙（channels[type=http].apiKey）
+ *
+ * WS 认证契约：apiKey 配置后，客户端连接须首条消息送 auth（GatewayChatClient 已支持）。
+ * TUI 与 Gateway 同机读同一份配置，无需像 WebUI 那样手工录入。
+ *
+ * @param config - 已加载的配置对象
+ * @returns apiKey 字符串；未配置或为空串时返回 undefined（无鉴权模式）
+ */
+export function resolveGatewayApiKey(config: Record<string, unknown>): string | undefined {
+  const channels = (config.channels ?? []) as Array<Record<string, unknown>>;
+  const httpChannel = channels.find((c) => c.type === 'http') as Record<string, unknown> | undefined;
+  const apiKey = httpChannel?.apiKey;
+  return typeof apiKey === 'string' && apiKey ? apiKey : undefined;
+}
+
 export function resolveGatewayUrl(config: Record<string, unknown>): string {
   const pidFile = readPidFile();
   if (pidFile && isProcessAlive(pidFile.pid) && pidFile.port) {

@@ -16,7 +16,7 @@ import {
   getWebUiPidPath,
 } from '../src/cli/helpers.js';
 import { resolveWebUiPort, findPidOnVitePorts, readGatewayPort, readGitStatusPollSeconds } from '../src/cli/webui.js';
-import { gatewayConfigScript, webConfigScript, webUiServeArgs } from '../src/cli/helpers.js';
+import { gatewayConfigScript, webConfigScript, webUiServeArgs, resolveGatewayApiKey } from '../src/cli/helpers.js';
 import { WebConfigSchema } from '../src/config-schema/webui.js';
 import { spawnDetached, killProcess, findPidOnPort, delay } from '../src/cli/process-utils.js';
 
@@ -296,5 +296,20 @@ describe('webUiServeArgs（serve-webui argv 拼装）', () => {
       '--git-status-poll-seconds',
       '10',
     ]);
+  });
+});
+
+describe('resolveGatewayApiKey（channels[type=http].apiKey 解析）', () => {
+  test('http 通道配置了 apiKey 时原样返回', () => {
+    expect(
+      resolveGatewayApiKey({ channels: [{ type: 'http', port: 18180, apiKey: 'k-1' }] }),
+    ).toBe('k-1');
+  });
+
+  test('未配置 / 空串 / 非 http 通道 / 无 channels 均返回 undefined', () => {
+    expect(resolveGatewayApiKey({ channels: [{ type: 'http', port: 18180 }] })).toBeUndefined();
+    expect(resolveGatewayApiKey({ channels: [{ type: 'http', apiKey: '' }] })).toBeUndefined();
+    expect(resolveGatewayApiKey({ channels: [{ type: 'ws', apiKey: 'k-1' }] })).toBeUndefined();
+    expect(resolveGatewayApiKey({})).toBeUndefined();
   });
 });

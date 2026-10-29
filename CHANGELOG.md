@@ -107,6 +107,18 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.97.5 (2026-10-30)
+
+### fix(tui): 修复 TUI 发消息即报 Unauthorized——WS auth 凭据接入 GatewayChatClient
+
+- **现象**：`octopi chat` 发消息即报「⚠️ Gateway error: Unauthorized: send auth message first」，TUI 完全不可用。
+- **根因**（因果链）：`channels.http.apiKey` 配置后 WS 会话要求首条消息送 auth（`259b4e7` 引入的鉴权门，与 WebUI console-key 同一协议）；`GatewayChatClient` 本身支持 `apiKey` 且有钥即自动送 auth，但 `chatCommand → TuiApp` 这条链从未传钥（`TuiAppConfig` 无该字段，构造只传 url）——客户端不发 auth，此后每条 chat 都被鉴权门拒绝。欢迎消息不设门禁，故表现为「连得上、一说话就报错」。典型的「协议改了、只有一个客户端跟上」：WebUI 走 console-key 手工录入，TUI 被漏掉。
+- **修复**：`src/cli/helpers.ts` 新增 `resolveGatewayApiKey`（读 `channels[type=http].apiKey`，与 `resolveGatewayUrl` 对称）；`chatCommand → TuiApp → GatewayChatClient` 全链传钥。TUI 与 Gateway 同机读同一份配置（daemon.ts 把 `httpConfig?.apiKey` 原样传给 adapter、不做 `${VAR}` 展开），两侧口径天然一致；WebUI 的手工录入链路不动（浏览器读不到服务端配置，各自合理）。
+- **回归测试**：新增 `tests/ws-auth-contract.test.ts`——GatewayChatClient ↔ HttpChannelAdapter 端到端 4 例契约（有钥通 / 无钥拒=本次症状原文 / 错钥 invalid token+断开 / 无鉴权通）；`resolveGatewayApiKey` 单测 2 例。既有 `tests/gateway-ws-auth.test.ts` 覆盖服务端拒匿名与广播不漏，本套件补客户端侧契约（TUI 实际依赖的那一环），此后 WS 协议任何一端掉链子都会红。
+- 验证：全量测试套件通过；lint + 测试类型基线 0 新错；`tsc --noEmit` 0 错误。
+
+---
+
 ## v0.97.2 (2026-10-30)
 
 ### fix(providers): 关闭模型调用的 HTTP/2，消除 h2 出站队列撑爆进程的失败模式

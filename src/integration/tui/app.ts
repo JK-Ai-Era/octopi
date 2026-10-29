@@ -27,6 +27,8 @@ export interface TuiAppConfig {
   agentId: string;
   /** Gateway URL（如 http://localhost:18180） */
   gatewayUrl: string;
+  /** Gateway apiKey（channels.http.apiKey）；配置后连接首条消息送 auth */
+  apiKey?: string;
 }
 
 interface SlashCommand {
@@ -172,7 +174,7 @@ export class TuiApp {
   // ── Gateway Connection ──
 
   private async connectGateway(): Promise<void> {
-    this.gatewayClient = new GatewayChatClient({ url: this.config.gatewayUrl });
+    this.gatewayClient = new GatewayChatClient({ url: this.config.gatewayUrl, apiKey: this.config.apiKey });
 
     this.gatewayClient.on({
       onEvent: (event) => this.handleAgentEvent(event),

@@ -9,7 +9,7 @@ import { loadConfig } from '../config.js';
 import { initOctopi, getOctopiHome, isInitialized, formatInitReport } from '../init.js';
 import { readPidFile, writePidFile, removePidFile, isProcessAlive } from './daemon.js';
 import { createProviderFromConfig } from '@octopi-agent/engine/config.js';
-import { resolveGatewayUrl } from './helpers.js';
+import { resolveGatewayUrl, resolveGatewayApiKey } from './helpers.js';
 
 export function showHelp(): void {
   console.log(`
@@ -165,6 +165,7 @@ export async function chatCommand(args: CliArgs): Promise<void> {
   const app = new TuiApp({
     agentId: agent.id,
     gatewayUrl,
+    apiKey: resolveGatewayApiKey(config as unknown as Record<string, unknown>),
   });
   await app.start();
 }
