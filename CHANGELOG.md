@@ -107,6 +107,22 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.97.21 (2026-10-30)
+
+### fix(tools): 路径包含改用 realpath——堵住符号链接对读写围栏的双向逃逸
+
+- 缺陷：`resolveToolPath` / `resolveReadableToolPath` 的 L2 包含判定基于 `resolve()` 纯词法规范化，不解析符号链接。允许根内一个指向根外的链接，字面上在根内 → 判定通过 → 随后的 `readFile` / `writeFile` 跟随链接落到根外。因此在 `pathContainment: 'strict'` + `pathRoots` 下，`file_read` 可读出根外内容（含根内 `.env`），`file_write` / `file_edit` / `file_delete` 可覆盖或删除根外文件。`file_search` / `file_list` 的遍历本就安全（`readdir withFileTypes` 下 symlink 既非 `isDirectory` 亦非 `isFile`），缺陷只在显式路径。
+- 触发条件不需要本地写权限：git 可以 `120000` 模式提交符号链接，pnpm workspace 的 `node_modules`、解压归档同理。原测试中 `symlink` 仅见于 gateway / jail / knowledge 四组，包含判定零覆盖。
+- 修复：新增 `realpathAllowMissing`（对不存在目标解析最深已存在祖先后拼回剩余段）、`containPath`（两侧 realpath 后比较，并**返回解析后的真实路径**给调用方做 fs 操作，消除检查与使用之间的窗口）、`lexicalUnderRoots`（无 syscall 的纯字符串比较，供两侧已 real 时复用）。`containment: 'none'` 保持直通、不引入 syscall。
+- 顺带修第二条逃逸：`resolveReadableToolPath` 的 attachments 分支命中时**直接返回候选、完全跳过 L2**，于是在附件树里种链接即可读出只读沙箱；现按 attachment root 自身做 realpath 包含。
+- **breaking note**：`containment !== 'none'` 时 `resolveToolPath` 返回真实路径，别名根（macOS `/var` → `/private/var`）下与输入词法不同；`file_delete` / `file_write` 等返回的 `path` 与 undo 记账均为真实路径。"根内链接指向根外"的用法开始报 `path_forbidden`（错误信息含真实路径）；正确出路是把真实目标显式加为 root，不提供绕过开关。
+- 记账侧同步（3 处，均在别名根下才会暴露）：`isPathUnderRoots`（事务判定，否则 `file_mkdir` 从自动放行退化成弹宿主确认）、`isUnderAttachmentRoot` / `isUnderSessionUndoRoot`（写保护，否则对只读附件树 fail-open）、`OpsAuditedFileEffects.underRoots`（否则每次根内写都记一条越权写假阳性）。
+- 独立审查补修的 blocker：**悬空符号链接**。最终组件是链接、目标不存在时，`realpath` 对整条路径与链接自身都抛 ENOENT，链接名被当作待创建文件名而放行，随后 `file_write` 跟随链接在根外创建文件（`ln -s ~/.ssh/authorized_keys dangling.txt` 提交进 PR 即可利用，无需竞态）。现拼回缺失段前先 `lstat`，区分"真的不存在"与"存在但无法解析"。
+- 验证：新增 `tests/harness/path-containment-symlink.test.ts` 19 例（读写删改、链接目录、悬空链接、不存在目标、`link/..` 组合、附件根、守卫别名根、strict 空根 fail-closed、soft/none 语义不回归）；修复前 12 例失败、修复后全绿。更新 `file-delete-tool` 返回路径断言 1 处。全量 3729 passed / 7 skipped；lint + typecheck + `arch/check-sync.sh` 绿。
+- 未覆盖（诚实标注）：硬链接（realpath 无法识别同 inode 不同名）；`O_NOFOLLOW` 未实现——返回真实路径只闭合"已存在前缀被替换"，未创建的尾段仍可被竞态利用（`file_write` 在检查后才 `mkdir`），且把 `root/sub` 换成链接只需 `root` 写权限。谁能写根内，谁就能参与竞态。
+
+---
+
 ## v0.97.20 (2026-10-30)
 
 ### fix(gateway): 无 console key 部署拦「升到 host」——堵死 agent 经 console 匿名提权

@@ -2,7 +2,7 @@
  * file_delete — L2 + undo + self-protection
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, writeFile, readFile, mkdir, access } from 'node:fs/promises';
+import { mkdtemp, writeFile, readFile, mkdir, access, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -56,8 +56,13 @@ describe('file_delete', () => {
     const f = join(ws, 'a.txt');
     await writeFile(f, 'hello', 'utf8');
     const tool = createFileDeleteTool();
+    // Resolve before deletion: realpath cannot run on a removed path.
+    const realF = await realpath(f);
     const result = await tool.handler({ path: f }, makeCtx(ws));
-    expect(result).toMatchObject({ deleted: true, path: f });
+    // The tool reports the real path it acted on, which may differ lexically
+    // from the input on aliased roots (macOS /var -> /private/var). Undo records
+    // the same real path, so restoration stays consistent.
+    expect(result).toMatchObject({ deleted: true, path: realF });
     expect(await exists(f)).toBe(false);
 
     // reverse via discard restores content

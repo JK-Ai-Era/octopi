@@ -17,7 +17,7 @@
  * 只追加不修改；写失败向上抛（调用方决定降级），绝不静默丢账。
  */
 
-import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, writeSync } from 'node:fs';
+import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, realpathSync, writeSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { dirname, resolve, sep } from 'node:path';
 import type { ToolFileEffects } from '@octopi-agent/core/types/tools.js';
@@ -364,8 +364,20 @@ export class OpsAuditedFileEffects implements ToolFileEffects {
 
   private underRoots(path: string): boolean {
     // resolve + sep 感知；win32 大小写不敏感卷按 toLowerCase 口径（对齐 isPathAllowed）
-    const norm = (p: string): string =>
-      process.platform === 'win32' ? resolve(p).toLowerCase() : resolve(p);
+    //
+    // 两侧都取真实路径：工具层（resolveToolPath）现在返回符号链接解析后的路径，
+    // 而 roots 来自配置原文。只解析目标会让别名根（macOS /var → /private/var、
+    // 符号链接过的 HOME）下的每一次根内写都被误报为 ops.system_path.write。
+    const norm = (p: string): string => {
+      const lexical = resolve(p);
+      let real = lexical;
+      try {
+        real = realpathSync(lexical);
+      } catch {
+        // 目标不存在或不可解析：退回词法口径，审计宁可少报也不虚构路径
+      }
+      return process.platform === 'win32' ? real.toLowerCase() : real;
+    };
     const target = norm(path);
     return this.roots.some((root) => {
       const base = norm(root);
