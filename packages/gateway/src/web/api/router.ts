@@ -1591,6 +1591,9 @@ export class WebApiRouter {
         if (!body?.agent || typeof body.agent !== 'object') {
           return this.json(res, 400, { ok: false, error: 'agent object is required' });
         }
+        if (this.refuseUnauthenticatedSecurityWrite(res, body.agent as Record<string, unknown>)) {
+          return true;
+        }
         const result = await apply.createAgent({
           agent: body.agent as Record<string, unknown>,
           agentsMd: typeof body.agentsMd === 'string' ? body.agentsMd : undefined,
@@ -1607,6 +1610,9 @@ export class WebApiRouter {
           const body = await this.readBody(req);
           if (!body?.agent || typeof body.agent !== 'object') {
             return this.json(res, 400, { ok: false, error: 'agent object is required' });
+          }
+          if (this.refuseUnauthenticatedSecurityWrite(res, body.agent as Record<string, unknown>)) {
+            return true;
           }
           const result = await apply.updateAgent(
             agentId,
@@ -1680,6 +1686,40 @@ export class WebApiRouter {
     }
 
     return JSON.parse(raw);
+  }
+
+  /**
+   * console 无认证部署下的提权闸（ops §8.4 / §4.3.1，大哥 2026-10-31 拍板 A2）。
+   *
+   * 威胁：console API 无法区分调用者是人还是 agent。无 apiKey 部署下，非 host agent
+   * （project 模式 `network=open`）可匿名调 `/config/agents` 把自己升到 host 完成提权——
+   * 正好绕开 §8.4 要防的自提权面（直写文件已被路径约束挡住，网络这条路没有）。
+   *
+   * **只拦真正提权**（A2）：无 console key 时，仅当写入把 agent 升到 `mode=host`（全权：
+   * 无 jail、可写 `~/.octopi`、network=open、escalation full）才 503。workspace /
+   * project / untrusted 互改、默认值、tools 编辑都是非全权面，放行——否则无 key 部署连
+   * 默认 workspace 新建都被拦（WebUI 新建总带 `effectPolicy.mode`）。host 改成别的 = 降权，同样放行。
+   *
+   * @param res - 响应对象（503 时已写响应）
+   * @param agentEntry - 待写的 agents[] 条目（create / update 共用）
+   * @returns true = 已响应 503（调用方直接 return）；false = 放行
+   */
+  private refuseUnauthenticatedSecurityWrite(
+    res: ServerResponse,
+    agentEntry: Record<string, unknown>,
+  ): boolean {
+    // 认证部署：持钥方 = 宿主管理身份，放行
+    if (this.approverIdentity) return false;
+    const ep = agentEntry.effectPolicy;
+    if (ep && typeof ep === 'object' && (ep as Record<string, unknown>).mode === 'host') {
+      this.json(res, 503, {
+        ok: false,
+        error:
+          'security_config_unauthenticated: setting effectPolicy.mode=host (full privilege) requires an authenticated console (configure apiKey); unauthenticated deployments escalate via host restart only',
+      });
+      return true;
+    }
+    return false;
   }
 
   private json(res: ServerResponse, status: number, payload: unknown): boolean {

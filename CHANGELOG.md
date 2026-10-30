@@ -107,6 +107,18 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.97.20 (2026-10-30)
+
+### fix(gateway): 无 console key 部署拦「升到 host」——堵死 agent 经 console 匿名提权
+
+- 背景：v0.97.19 落地 console 受控写署名通道后，console API 无法区分调用者是人还是 agent。无 apiKey 部署下，非 host agent（project 模式 `network=open`）可匿名调 `/config/agents` 把自己的 `effectPolicy.mode` 升到 host 完成提权——直写文件已被路径约束挡住，网络这条路没有。
+- 核实纠正：独立评审初判「host agent 可自提权」有误——host 已是全权（可写 `~/.octopi`、network=open、escalation full），改 mode 是**降权**，无提权价值；workspace（默认）`network=deny` 且可写面不含 `~/.octopi`，同样改不了。真实提权面只有「project 模式升到 host」这一个方向。
+- 修复（A2，大哥拍板）：router 层 `/config/agents` 的 POST/PUT，未配置 console key（`channels[type=http].apiKey` 缺失 → `approverIdentity` 为空）且写入把 agent 升到 `mode=host` 时直接 503（fail-closed）；workspace/project/untrusted 互改、默认值、tools 编辑放行——否则无 key 部署连默认 workspace 新建都被拦（WebUI 新建总带 `effectPolicy.mode`）。配 key 后全放行（署名通道 = 宿主管理身份）。
+- **breaking note**：无 console key 的部署若要经 WebUI/console 把 agent 升到 `host`，需先配 `channels[type=http].apiKey`，或走宿主重启确认；workspace/project/untrusted 的新建与编辑不受影响。
+- 验证：`tests/gateway-config-auth-gate.test.ts` 6 例（升 host 拦 / 非 host·tools·默认放行 / 认证放行）；全量套件 3710 passed；lint + build 绿。
+
+---
+
 ## v0.97.19 (2026-10-30)
 
 ### fix(gateway,engine): WebUI 建/改 agent 后新 run 被 security_config_drift 拒——console 受控写署名通道落地
